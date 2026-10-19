@@ -42,9 +42,11 @@ function distOf(q, a) {
 
 const verdictOf = (c, gate) => (c >= gate.act ? 'settled' : c >= gate.confirm ? 'lean' : 'uncertain');
 
-export function aggregate(q, votes, gate) {
+// `quorum`: fewer valid votes than this and the verdict is 'failed' (one model's parse must never stand for a panel).
+export function aggregate(q, votes, gate, quorum = 1) {
   const keys = keysOf(q);
-  const ok = votes.filter((v) => v?.dists?.[q.id]);
+  let ok = votes.filter((v) => v?.dists?.[q.id]);
+  if (ok.length < quorum) ok = [];
   const dist = Object.fromEntries(keys.map((k) => [k, 0]));
   for (const v of ok) for (const k of keys) dist[k] += v.dists[q.id][k] / ok.length;
   const top = keys.reduce((a, b) => (dist[b] > dist[a] ? b : a), keys[0]);
@@ -65,7 +67,7 @@ export function aggregate(q, votes, gate) {
 }
 
 /** Asks every decider all questions at once. onVote fires as each decider returns. */
-export async function ensemble({ voters, state, questions, gate = GATE, signal, onVote, account }) {
+export async function ensemble({ voters, state, questions, gate = GATE, signal, onVote, account, quorum = 1 }) {
   const t0 = Date.now();
   const votes = await Promise.all(voters.map(async (model, vi) => {
     const wire = Object.fromEntries(questions.map((q) => [q.id, toWire(q)]));
@@ -89,6 +91,6 @@ export async function ensemble({ voters, state, questions, gate = GATE, signal, 
       return null;
     }
   }));
-  const results = Object.fromEntries(questions.map((q) => [q.id, aggregate(q, votes, gate)]));
+  const results = Object.fromEntries(questions.map((q) => [q.id, aggregate(q, votes, gate, quorum)]));
   return { results, votes, ms: Date.now() - t0 };
 }

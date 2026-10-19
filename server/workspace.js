@@ -7,10 +7,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import net from 'node:net';
 import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { spawn, execFile, spawnSync } from 'node:child_process';
 import { projectDir } from './store.js';
 import { SECRET_FILES } from './keys.js';
 import { termEvent, lineSplitter, newJob, endJob } from './terminal.js';
+import { jobsAvailable, adoptPid, jobCount, killJob, closeJob } from './jobhost.js';
+import { snapshot, changesSince, objectFor, pruneObjects } from './snapshot.js';
 
 export const ALLOWED = ['node', 'npm', 'npx', 'python', 'python3', 'py', 'pip', 'pip3', 'deno', 'bun', 'pnpm', 'yarn', 'uv'];
 const BAD = /[&|<>^%`$;"'\r\n(){}!]/;
@@ -26,7 +29,7 @@ export const workspaceDir = (projectId) => {
 
 // The real location of a path that may not exist yet: its deepest existing folder resolved through links (and
 // Windows short names), plus the rest as written.
-function realish(p) {
+export function realish(p) {
   let head = p, tail = '';
   for (let i = 0; i < 64; i++) {
     try { return path.join(fs.realpathSync.native(head), tail); } catch { /* not there yet */ }
@@ -157,36 +160,124 @@ export function childEnv(extra = {}) {
   return { ...env, ...extra, FORCE_COLOR: '0', BROWSER: 'none' };
 }
 
-function spawnIn(root, cmd, args, env) {
-  const exe = checkCommand(cmd, args);
-  const line = [exe, ...args.map((a) => (/\s/.test(a) ? `"${a}"` : a))].join(' ');
-  return spawn(line, { cwd: root, shell: true, env: childEnv(env), windowsHide: true });
+// The command line for an allow-listed program and its plain arguments.
+export const lineOf = (cmd, args) => [checkCommand(cmd, args), ...args.map((a) => (/\s/.test(a) ? `"${a}"` : a))].join(' ');
+
+// Every command and server starts through jobgate.cjs, is put in its own Windows job (jobhost.js), and only then
+// starts running, so nothing it starts can escape Stop. `shell`: direct (Node's default shell), powershell, pwsh,
+// cmd or bash. Without the job host the process still runs, with proc.qxJob unset ("basic" Stop).
+const GATE = fileURLToPath(new URL('./jobgate.cjs', import.meta.url));
+async function launch(root, line, { shell = 'direct', env, memoryMB = 0 } = {}) {
+  const proc = spawn(process.execPath, [GATE, shell, line], { cwd: root, env: childEnv(env), windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+  proc.stdin.on('error', () => { /* the gate is gone */ });
+  if (proc.pid) {
+    const job = `c${proc.pid}x${Date.now().toString(36)}`;
+    try { if (await jobsAvailable()) { await adoptPid(job, proc.pid, memoryMB); proc.qxJob = job; } } catch { /* basic Stop */ }
+  }
+  proc.stdin.end('go\n');
+  return proc;
 }
 
-function killTree(proc) {
-  if (!proc || proc.exitCode != null) return;
-  if (process.platform === 'win32') execFile('taskkill', ['/pid', String(proc.pid), '/T', '/F'], () => {});
-  else try { process.kill(-proc.pid, 'SIGTERM'); } catch { proc.kill('SIGTERM'); }
+const exited = (proc, ms) => (proc.exitCode != null || proc.signalCode != null ? Promise.resolve() : new Promise((r) => { const t = setTimeout(r, ms); proc.once('exit', () => { clearTimeout(t); r(); }); }));
+function taskkillTree(pid) {
+  if (process.platform !== 'win32') { try { process.kill(-pid, 'SIGTERM'); } catch { try { process.kill(pid, 'SIGTERM'); } catch { /* gone */ } } return Promise.resolve(); }
+  return new Promise((r) => execFile('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true }, () => r()));
 }
+/**
+ * Ends a process and everything it started, then checks. Resolves to
+ * { left: processes still alive, names: their names, mode: 'jobs' (confirmed by the job) or 'basic' (process tree only) }.
+ */
+export async function endProc(proc) {
+  if (!proc) return { left: 0, names: [], mode: 'none' };
+  if (proc.qxJob) {
+    try {
+      const r = await killJob(proc.qxJob);
+      if (!r.left) { closeJob(proc.qxJob); proc.qxJob = null; }
+      return { left: r.left, names: r.names, mode: 'jobs' };
+    } catch { /* the job host went away: fall back to the tree */ }
+  }
+  if (proc.exitCode == null && proc.signalCode == null && proc.pid) await taskkillTree(proc.pid);
+  await exited(proc, 2000);
+  return { left: proc.exitCode == null && proc.signalCode == null ? 1 : 0, names: [], mode: 'basic' };
+}
+// After a command ends by itself: processes it left running (a detached child) are ended too, and named.
+async function sweep(proc) {
+  if (!proc.qxJob) return null;
+  try {
+    const c = await jobCount(proc.qxJob);
+    if (!c.active) { closeJob(proc.qxJob); return null; }
+    const k = await killJob(proc.qxJob);
+    if (!k.left) closeJob(proc.qxJob);
+    return { ended: c.names, left: k.left, names: k.names };
+  } catch { return null; }
+}
+/** How a Stop went, in one line for the terminal and the agent. */
+export function stopNote(r) {
+  if (!r) return '';
+  if (r.mode === 'basic') return r.left ? '⚠ stop sent, but the process may still be running (basic mode: no job host)' : '■ stopped (basic mode: detached processes may survive)';
+  return r.left ? `⚠ ${r.left} process${r.left > 1 ? 'es' : ''} did not stop: ${r.names.join(', ')}` : '■ stopped · 0 processes left';
+}
+
+// Agent commands get no keyboard, so tools that would stop to ask are told not to: no prompts, no MSBuild
+// processes left running (they make `dotnet build` look hung), no telemetry banners, no colour codes in logs.
+const NON_INTERACTIVE = { CI: '1', GIT_TERMINAL_PROMPT: '0', PIP_NO_INPUT: '1', MSBUILDDISABLENODEREUSE: '1', DOTNET_CLI_TELEMETRY_OPTOUT: '1',
+  DOTNET_NOLOGO: '1', NO_COLOR: '1', CARGO_TERM_COLOR: 'never', npm_config_yes: 'true', POWERSHELL_TELEMETRY_OPTOUT: '1' };
 
 // `term` ({ projectId, source, chatId }) sends the command and its output to the terminal feed as it runs.
-export function runCommand(root, cmd, args = [], { timeout = 180e3, signal, term } = {}) {
+export function runCommand(root, cmd, args = [], opts = {}) {
+  let line;
+  try { line = lineOf(cmd, (args || []).map(String)); } catch (e) { return Promise.reject(e); }
+  return runLine(root, line, { ...opts, shell: 'direct', label: opts.label || [cmd, ...(args || [])].join(' ') });
+}
+
+/**
+ * Runs one command line in `root` through `shell` and waits for it. Resolves to
+ * { code, out (last 8,000 chars), ms, timedOut, stopped: endProc result | null, leftovers: sweep result | null, log }.
+ * `logTo`: a file that gets the full output. `onStart(proc)`: called once it runs (for the tripwire).
+ */
+export function runLine(root, line, { shell = 'direct', timeout = 180e3, signal, term, label, memoryMB = 0, logTo, onStart } = {}) {
   return new Promise((resolve, reject) => {
-    let proc;
-    try { proc = spawnIn(root, cmd, (args || []).map(String)); } catch (e) { return reject(e); }
-    const t0 = Date.now();
-    const label = [cmd, ...(args || [])].join(' ');
-    const job = term ? newJob(term.projectId, label, term.source, () => killTree(proc)) : null;
-    const line = lineSplitter((text, stream) => termEvent(term.projectId, { kind: 'out', job, text, stream }));
-    if (job) termEvent(term.projectId, { kind: 'start', job, source: term.source, chatId: term.chatId, label, tab: term.tab, cwd: term.cwd });
-    let out = '';
-    const add = (stream) => (d) => { out += d.toString(); if (out.length > 40000) out = out.slice(-30000); if (job) line.push(d, stream); };
-    proc.stdout.on('data', add('out')); proc.stderr.on('data', add('err'));
-    const finish = (code, err) => { if (!job) return; line.flush('out'); termEvent(term.projectId, { kind: 'end', job, code, ms: Date.now() - t0, error: err }); endJob(job); };
-    const timer = setTimeout(() => { add('err')(`\n[stopped after ${Math.round(timeout / 1000)}s]\n`); killTree(proc); }, timeout);
-    signal?.addEventListener('abort', () => killTree(proc), { once: true });
-    proc.on('close', (code) => { clearTimeout(timer); finish(code); resolve({ code, out: out.slice(-8000), ms: Date.now() - t0 }); });
-    proc.on('error', (e) => { clearTimeout(timer); finish(null, e.message); reject(e); });
+    (async () => {
+      let proc;
+      try { proc = await launch(root, line, { shell, memoryMB, env: NON_INTERACTIVE }); } catch (e) { return reject(e); }
+      onStart?.(proc);
+      const t0 = Date.now();
+      label = label || line;
+      let stopping = null, timedOut = false;
+      const stop = (why) => (stopping ??= endProc(proc).then((r) => ({ ...r, why })));
+      const job = term ? newJob(term.projectId, label, term.source, () => stop('you')) : null;
+      const split = lineSplitter((text, stream) => termEvent(term.projectId, { kind: 'out', job, text, stream }));
+      if (job) termEvent(term.projectId, { kind: 'start', job, source: term.source, chatId: term.chatId, label, tab: term.tab, cwd: term.cwd });
+      let log = null;
+      if (logTo) { try { fs.mkdirSync(path.dirname(logTo), { recursive: true }); log = fs.createWriteStream(logTo); log.write(`> ${line}\n`); } catch { log = null; } }
+      let out = '';
+      const add = (stream) => (d) => { out += d.toString(); if (out.length > 40000) out = out.slice(-30000); log?.write(d); if (job) split.push(d, stream); };
+      const note = (text) => { out += `\n${text}\n`; log?.write(`\n${text}\n`); if (job) termEvent(term.projectId, { kind: 'out', job, text, stream: 'note' }); };
+      proc.stdout.on('data', add('out')); proc.stderr.on('data', add('err'));
+      const timer = setTimeout(() => { timedOut = true; note(`[stopped after ${Math.round(timeout / 1000)}s]`); stop('timeout'); }, timeout);
+      const onAbort = () => stop('stopped');
+      signal?.addEventListener('abort', onAbort, { once: true });
+      let done = false;
+      const finish = async (code, err) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
+        const stopped = stopping ? await stopping : null;
+        const leftovers = stopped ? null : await sweep(proc);
+        // Output pipes close once nothing holds them any more (a detached child can hold them until it ends).
+        await Promise.race([new Promise((r) => (proc.stdout.readableEnded ? r() : proc.stdout.once('close', r))), new Promise((r) => setTimeout(r, 1500))]);
+        if (job) split.flush('out');
+        if (stopped) note(stopNote(stopped));
+        if (leftovers) note(`(${leftovers.ended.length} process${leftovers.ended.length > 1 ? 'es' : ''} it left running ${leftovers.left ? 'could not all be ended' : 'were ended'}: ${leftovers.ended.join(', ')})`);
+        log?.end();
+        if (job) { termEvent(term.projectId, { kind: 'end', job, code, ms: Date.now() - t0, error: err, stopped: stopped ? { left: stopped.left, names: stopped.names, mode: stopped.mode } : undefined }); endJob(job); }
+        if (err != null && code == null) return reject(new Error(err));
+        resolve({ code, out: out.slice(-8000), ms: Date.now() - t0, timedOut, stopped, leftovers, log: logTo || null });
+      };
+      proc.on('exit', (code) => finish(code));
+      proc.on('error', (e) => finish(null, e.message));
+    })();
   });
 }
 
@@ -207,7 +298,7 @@ const view = (s) => ({ key: s.key, projectId: s.projectId, name: s.name, command
 export async function startServer({ projectId, name, cmd, args = [], port: fixed, source = 'agent', save = true }) {
   const root = workspaceDir(projectId);
   const key = `${projectId}/${slug(name)}`;
-  if (servers.has(key)) stopServer(key, source);
+  if (servers.has(key)) await stopServerWait(key, source);
   checkCommand(cmd, args.map(String));
   let port;
   if (fixed) {
@@ -226,9 +317,9 @@ export async function startServer({ projectId, name, cmd, args = [], port: fixed
     termEvent(projectId, { kind: 'out', job, server: s.name, text: line, stream });
   });
   termEvent(projectId, { kind: 'start', job, server: s.name, source, label: [cmd, ...real].join(' '), port });
-  s.proc = spawnIn(root, cmd, real, { PORT: String(port) });
+  s.proc = await launch(root, lineOf(cmd, real), { env: { PORT: String(port) } });
   s.proc.stdout.on('data', (d) => split.push(d, 'out')); s.proc.stderr.on('data', (d) => split.push(d, 'err'));
-  s.proc.on('close', (code) => { split.flush('out'); s.status = 'stopped'; s.code = code; termEvent(projectId, { kind: 'end', job, server: s.name, code }); });
+  s.proc.on('exit', (code) => { split.flush('out'); s.status = 'stopped'; s.code = code; termEvent(projectId, { kind: 'end', job, server: s.name, code }); });
   servers.set(key, s);
   const t0 = Date.now();
   while (Date.now() - t0 < 45e3) {
@@ -240,12 +331,20 @@ export async function startServer({ projectId, name, cmd, args = [], port: fixed
   return { ...view(s), log: s.log.slice(-40).join('\n') };
 }
 
-export function stopServer(key, by = 'agent') {
+/** Stops a server and everything it started; resolves to how it went ({ left, names, mode }), or null for no such server. */
+export async function stopServerWait(key, by = 'agent') {
   const s = servers.get(key);
-  if (!s) return false;
-  if (s.proc?.exitCode == null && s.status !== 'stopped') termEvent(s.projectId, { kind: 'out', job: `srv:${key}:${s.started}`, server: s.name, text: `■ stopped by ${by === 'you' ? 'you' : 'the agent'}`, stream: 'note' });
-  killTree(s.proc);
+  if (!s) return null;
+  const job = `srv:${key}:${s.started}`;
+  const live = s.proc?.exitCode == null && s.status !== 'stopped';
   s.status = 'stopped';
+  const r = await (s.stopping ??= endProc(s.proc));
+  if (live) termEvent(s.projectId, { kind: 'out', job, server: s.name, text: `${stopNote(r)} (stopped by ${by === 'you' ? 'you' : 'the agent'})`, stream: 'note' });
+  return r;
+}
+export function stopServer(key, by = 'agent') {
+  if (!servers.has(key)) return false;
+  stopServerWait(key, by);
   return true;
 }
 export const restartServer = (key, source = 'you') => { const s = servers.get(key); if (!s) throw new Error('unknown server'); return startServer({ projectId: s.projectId, name: s.name, cmd: s.cmd, args: s.args, port: s.fixed, source }); };
@@ -374,15 +473,17 @@ function dirSize(p) {
 export function agentSpace(root) {
   const dir = path.join(root, AGENT_DIR);
   const part = (name) => ({ name, ...dirSize(path.join(dir, name)) });
-  const parts = [part('scratch'), part('checkpoints'), part('trash')];
+  const parts = [part('scratch'), part('checkpoints'), part('trash'), part('objects')];
   const total = dirSize(dir);
   parts.push({ name: 'other', bytes: Math.max(0, total.bytes - parts.reduce((a, x) => a + x.bytes, 0)), files: Math.max(0, total.files - parts.reduce((a, x) => a + x.files, 0)) });
   return { dir, total: total.bytes, files: total.files, parts };
 }
-/** Clears one part the user picked: "scratch", "trash", or "checkpoints" (keeps the newest `keep` for undo). */
+/** Clears one part the user picked: "scratch", "trash", "checkpoints" (keeps the newest `keep` for undo), or
+ * "objects" (the snapshot store; the next command takes a full snapshot again). */
 export function clearAgentSpace(root, what, keep = 10) {
   const base = path.join(root, AGENT_DIR);
-  if (!['scratch', 'trash', 'checkpoints'].includes(what)) throw new Error('nothing to clear by that name');
+  if (!['scratch', 'trash', 'checkpoints', 'objects'].includes(what)) throw new Error('nothing to clear by that name');
+  if (what === 'objects') { try { fs.rmSync(path.join(base, 'snapindex.json'), { force: true }); } catch { /* gone */ } }
   const dir = path.join(base, what);
   if (!fs.existsSync(dir)) return 0;
   let list = fs.readdirSync(dir, { withFileTypes: true });
@@ -447,6 +548,39 @@ export function checkpoint(root, runId, rel) {
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(manifestPath, JSON.stringify(manifest));
 }
+// The same record, made after the fact: `before` is the file's copy from a snapshot (or null: it didn't exist).
+function recordBefore(root, runId, rel, before) {
+  if (!/^[\w-]+$/.test(String(runId))) return;
+  const dir = path.join(root, AGENT_DIR, 'checkpoints', runId);
+  const manifestPath = path.join(dir, 'manifest.json');
+  const manifest = fs.existsSync(manifestPath) ? JSON.parse(fs.readFileSync(manifestPath, 'utf8')) : { files: {} };
+  const key = String(rel).replaceAll('\\', '/');
+  if (key in manifest.files) return;
+  manifest.files[key] = !!before;
+  if (before) { const copy = path.join(dir, 'files', key); fs.mkdirSync(path.dirname(copy), { recursive: true }); fs.copyFileSync(before, copy); }
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+}
+
+/**
+ * Before a command: a snapshot of the project (null when snapshots are off or the project is over the size limit;
+ * `why` then says so). After it: commandChanges() puts what the command changed into the reply's checkpoint.
+ */
+export function snapBefore(root, opts = {}) {
+  try {
+    const s = snapshot(root, opts);
+    return s.over ? { snap: null, why: `the project is over the ${Math.round((opts.maxBytes ?? 1024 ** 3) / 1024 ** 2)} MB snapshot limit` } : { snap: s, why: '' };
+  } catch (e) { return { snap: null, why: e.message }; }
+}
+export function commandChanges(root, runId, before) {
+  const ch = changesSince(root, before);
+  for (const rel of [...ch.added, ...ch.modified, ...ch.deleted]) {
+    try { recordBefore(root, runId, rel, objectFor(root, before, rel)); } catch { /* best effort */ }
+  }
+  pruneObjects(root);
+  return { added: ch.added, modified: ch.modified, deleted: ch.deleted };
+}
+
 export function changedFiles(root, runId) {
   const m = path.join(root, AGENT_DIR, 'checkpoints', String(runId), 'manifest.json');
   return fs.existsSync(m) ? Object.keys(JSON.parse(fs.readFileSync(m, 'utf8')).files) : [];

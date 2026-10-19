@@ -1,0 +1,245 @@
+# QuorX desktop helper: reads and drives the windows of programs the agent started, through Windows UI Automation
+# (the structure screen readers use), with a picture of a window as the fallback. Its own process, apart from the job
+# host, because an app that opens a modal dialog can block a UI Automation call; every call that acts runs on a
+# separate thread with a time limit.
+# Every request names the process ids it may touch (QuorX passes the agent job's processes); a window owned by any
+# other process is refused, so the user's own windows are never read or clicked.
+# JSON lines on stdin/stdout:
+#   windows {pids}                       -> {windows: [{handle, pid, title}]}
+#   tree    {pids, handle, depth, max}   -> {text}   (interactive controls numbered [n])
+#   click   {pids, handle, ref}          -> {did}
+#   set     {pids, handle, ref, text}    -> {did}
+#   keys    {pids, handle, keys}         -> {did}   (SendKeys syntax: {ENTER}, ^s, %{F4} …)
+#   shot    {pids, handle}               -> {png}   (base64)
+#   close   {pids, handle}               -> {did}
+$ErrorActionPreference = 'Stop'
+Add-Type -ReferencedAssemblies UIAutomationClient, UIAutomationTypes, System.Drawing, System.Windows.Forms, WindowsBase -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Text;
+using System.Threading;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Windows.Automation;
+using System.Drawing;
+using System.Drawing.Imaging;
+
+public static class QxUia {
+  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
+  [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] static extern bool PrintWindow(IntPtr h, IntPtr hdc, uint flags);
+  [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
+  [DllImport("user32.dll")] static extern bool IsWindow(IntPtr h);
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
+  [DllImport("user32.dll")] static extern void mouse_event(uint f, uint x, uint y, uint d, UIntPtr e);
+  [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int cmd);
+  [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
+
+  static readonly Dictionary<long, List<AutomationElement>> Refs = new Dictionary<long, List<AutomationElement>>();
+  static readonly HashSet<string> Interactive = new HashSet<string>(new string[] { "Button", "Edit", "CheckBox", "RadioButton", "ComboBox", "ListItem", "MenuItem", "TabItem", "Hyperlink", "TreeItem", "Slider", "Spinner", "SplitButton", "DataItem", "Document" });
+
+  // A window may be used only if a process the agent started owns it.
+  public static void Check(long handle, int[] pids) {
+    IntPtr h = new IntPtr(handle);
+    if (!IsWindow(h)) throw new Exception("that window is gone: list the windows again");
+    uint pid; GetWindowThreadProcessId(h, out pid);
+    foreach (int p in pids) if (p == (int)pid) return;
+    throw new Exception("that window belongs to a program the agent did not start, so it is off limits");
+  }
+
+  public static string Windows(int[] pids) {
+    HashSet<int> set = new HashSet<int>(pids);
+    StringBuilder sb = new StringBuilder();
+    AutomationElementCollection all = AutomationElement.RootElement.FindAll(TreeScope.Children, Condition.TrueCondition);
+    foreach (AutomationElement w in all) {
+      try {
+        AutomationElement.AutomationElementInformation c = w.Current;
+        if (!set.Contains(c.ProcessId)) continue;
+        sb.Append(c.NativeWindowHandle).Append('\t').Append(c.ProcessId).Append('\t').Append((c.Name ?? "").Replace('\t', ' ').Replace('\n', ' ')).Append('\n');
+      } catch { }
+    }
+    return sb.ToString();
+  }
+
+  public static string Tree(long handle, int depth, int max) {
+    AutomationElement el = AutomationElement.FromHandle(new IntPtr(handle));
+    List<AutomationElement> list = new List<AutomationElement>();
+    StringBuilder sb = new StringBuilder();
+    int lines = 0;
+    System.Windows.Rect origin = el.Current.BoundingRectangle;
+    Walk(el, 0, 0, depth, max, list, sb, ref lines, origin);
+    Refs[handle] = list;
+    if (lines >= max) sb.Append("… (more controls not shown)\n");
+    return sb.ToString();
+  }
+
+  static string Clip(string s, int n) { if (s == null) return ""; s = s.Replace("\r", " ").Replace("\n", " "); return s.Length > n ? s.Substring(0, n) + "…" : s; }
+
+  static void Walk(AutomationElement e, int indent, int level, int depth, int max, List<AutomationElement> list, StringBuilder sb, ref int lines, System.Windows.Rect origin) {
+    if (lines >= max || level > depth) return;
+    AutomationElement.AutomationElementInformation c;
+    try { c = e.Current; } catch { return; }
+    string type = c.ControlType.ProgrammaticName.Replace("ControlType.", "");
+    string name = Clip(c.Name, 80);
+    bool inter = Interactive.Contains(type) && c.IsEnabled;
+    string val = null, toggle = null;
+    object p;
+    try { if (e.TryGetCurrentPattern(ValuePattern.Pattern, out p)) val = Clip(((ValuePattern)p).Current.Value, 80); } catch { }
+    try { if (e.TryGetCurrentPattern(TogglePattern.Pattern, out p)) toggle = ((TogglePattern)p).Current.ToggleState.ToString(); } catch { }
+    bool show = inter || name.Length > 0 || level == 0 || (val != null && val.Length > 0);
+    if (show) {
+      sb.Append(new string(' ', indent * 2));
+      if (inter) { list.Add(e); sb.Append('[').Append(list.Count).Append("] "); }
+      sb.Append(type);
+      if (name.Length > 0) sb.Append(" \"").Append(name).Append('"');
+      if (val != null && val.Length > 0 && val != name) sb.Append(" value=\"").Append(val).Append('"');
+      if (toggle != null) sb.Append(toggle == "On" ? " checked" : toggle == "Off" ? " unchecked" : " mixed");
+      if (!c.IsEnabled) sb.Append(" (disabled)");
+      if (c.IsOffscreen && level > 0) sb.Append(" (off screen)");
+      else if (inter && !c.BoundingRectangle.IsEmpty && !origin.IsEmpty) { System.Windows.Rect b = c.BoundingRectangle; sb.Append(" @").Append((int)(b.Left - origin.Left + b.Width / 2)).Append(",").Append((int)(b.Top - origin.Top + b.Height / 2)); }
+      sb.Append('\n');
+      lines++;
+    }
+    TreeWalker walker = TreeWalker.ControlViewWalker;
+    AutomationElement ch = null;
+    try { ch = walker.GetFirstChild(e); } catch { }
+    while (ch != null && lines < max) {
+      Walk(ch, show ? indent + 1 : indent, level + 1, depth, max, list, sb, ref lines, origin);
+      try { ch = walker.GetNextSibling(ch); } catch { break; }
+    }
+  }
+
+  static AutomationElement Ref(long handle, int r) {
+    List<AutomationElement> l;
+    if (!Refs.TryGetValue(handle, out l) || r < 1 || r > l.Count) throw new Exception("no control [" + r + "] in this window: read it again (the numbers change when the window changes)");
+    return l[r - 1];
+  }
+
+  // Runs a UI Automation call on its own thread; an app that opens a modal dialog can block it.
+  static bool Within(ThreadStart a, int ms) {
+    Exception err = null;
+    Thread t = new Thread(delegate () { try { a(); } catch (Exception x) { err = x; } });
+    t.IsBackground = true;
+    t.Start();
+    bool done = t.Join(ms);
+    if (err != null) throw err;
+    return done;
+  }
+
+  static string Busy(bool done, string did) { return done ? did : did + " (the app is still busy: it may have opened a dialog; list the windows)"; }
+
+  public static string Click(long handle, int r) {
+    AutomationElement e = Ref(handle, r);
+    object p;
+    if (e.TryGetCurrentPattern(InvokePattern.Pattern, out p)) { InvokePattern ip = (InvokePattern)p; return Busy(Within(delegate () { ip.Invoke(); }, 3000), "pressed"); }
+    if (e.TryGetCurrentPattern(TogglePattern.Pattern, out p)) { TogglePattern tp = (TogglePattern)p; return Busy(Within(delegate () { tp.Toggle(); }, 3000), "toggled"); }
+    if (e.TryGetCurrentPattern(SelectionItemPattern.Pattern, out p)) { SelectionItemPattern sp = (SelectionItemPattern)p; return Busy(Within(delegate () { sp.Select(); }, 3000), "selected"); }
+    if (e.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out p)) {
+      ExpandCollapsePattern ep = (ExpandCollapsePattern)p;
+      return Busy(Within(delegate () { if (ep.Current.ExpandCollapseState == ExpandCollapseState.Collapsed) ep.Expand(); else ep.Collapse(); }, 3000), "expanded or collapsed");
+    }
+    System.Windows.Rect rect = e.Current.BoundingRectangle;
+    if (rect.IsEmpty) throw new Exception("that control has no place on screen to click");
+    IntPtr h = new IntPtr(handle);
+    if (IsIconic(h)) ShowWindow(h, 9);
+    SetForegroundWindow(h); Thread.Sleep(200);
+    SetCursorPos((int)(rect.Left + rect.Width / 2), (int)(rect.Top + rect.Height / 2));
+    mouse_event(0x2, 0, 0, 0, UIntPtr.Zero); mouse_event(0x4, 0, 0, 0, UIntPtr.Zero);
+    return "clicked with the mouse (it has no button behaviour of its own)";
+  }
+
+  // A click at x,y inside the window (as in its picture): for apps whose controls UI Automation can't see.
+  public static string ClickAt(long handle, int x, int y) {
+    IntPtr h = new IntPtr(handle);
+    if (IsIconic(h)) ShowWindow(h, 9);
+    RECT r; GetWindowRect(h, out r);
+    if (x < 0 || y < 0 || x >= r.R - r.L || y >= r.B - r.T) throw new Exception("that point is outside the window");
+    SetForegroundWindow(h); Thread.Sleep(200);
+    SetCursorPos(r.L + x, r.T + y);
+    mouse_event(0x2, 0, 0, 0, UIntPtr.Zero); mouse_event(0x4, 0, 0, 0, UIntPtr.Zero);
+    return "clicked at " + x + "," + y;
+  }
+
+  public static string Set(long handle, int r, string text) {
+    AutomationElement e = Ref(handle, r);
+    object p;
+    if (e.TryGetCurrentPattern(ValuePattern.Pattern, out p)) {
+      ValuePattern vp = (ValuePattern)p;
+      if (vp.Current.IsReadOnly) throw new Exception("that field is read-only");
+      return Busy(Within(delegate () { vp.SetValue(text); }, 3000), "set its text");
+    }
+    IntPtr h = new IntPtr(handle);
+    SetForegroundWindow(h); Thread.Sleep(150);
+    e.SetFocus();
+    System.Windows.Forms.SendKeys.SendWait(Escape(text));
+    return "typed into it";
+  }
+
+  static string Escape(string s) {
+    StringBuilder b = new StringBuilder();
+    foreach (char ch in s) { if ("+^%~(){}[]".IndexOf(ch) >= 0) b.Append('{').Append(ch).Append('}'); else b.Append(ch); }
+    return b.ToString();
+  }
+
+  public static string Keys(long handle, string keys) {
+    IntPtr h = new IntPtr(handle);
+    if (IsIconic(h)) ShowWindow(h, 9);
+    SetForegroundWindow(h); Thread.Sleep(200);
+    System.Windows.Forms.SendKeys.SendWait(keys);
+    return "sent the keys";
+  }
+
+  public static string Shot(long handle) {
+    IntPtr h = new IntPtr(handle);
+    RECT r; GetWindowRect(h, out r);
+    int w = r.R - r.L, ht = r.B - r.T;
+    if (w <= 0 || ht <= 0 || IsIconic(h)) throw new Exception("the window is minimised or has no size");
+    using (Bitmap bmp = new Bitmap(w, ht)) {
+      using (Graphics g = Graphics.FromImage(bmp)) { IntPtr dc = g.GetHdc(); PrintWindow(h, dc, 2); g.ReleaseHdc(dc); }
+      using (MemoryStream ms = new MemoryStream()) { bmp.Save(ms, ImageFormat.Png); return Convert.ToBase64String(ms.ToArray()); }
+    }
+  }
+
+  public static string Close(long handle) {
+    AutomationElement e = AutomationElement.FromHandle(new IntPtr(handle));
+    object p;
+    if (e.TryGetCurrentPattern(WindowPattern.Pattern, out p)) { WindowPattern wp = (WindowPattern)p; return Busy(Within(delegate () { wp.Close(); }, 3000), "closed it"); }
+    throw new Exception("that window can't be closed this way");
+  }
+}
+'@
+[Console]::Out.WriteLine('{"ready":true}')
+[Console]::Out.Flush()
+while ($true) {
+  $line = [Console]::In.ReadLine()
+  if ($null -eq $line) { break }
+  if (-not $line.Trim()) { continue }
+  $id = $null
+  try {
+    $m = $line | ConvertFrom-Json
+    $id = $m.id
+    $out = @{ id = $id; ok = $true }
+    $pids = [int[]]@($m.pids | ForEach-Object { [int]$_ })
+    if ($m.op -ne 'windows') { [QxUia]::Check([long]$m.handle, $pids) }
+    switch ($m.op) {
+      'windows' {
+        $out.windows = @(([QxUia]::Windows($pids)) -split "`n" | Where-Object { $_ } | ForEach-Object { $p = $_ -split "`t", 3; @{ handle = [long]$p[0]; pid = [int]$p[1]; title = $p[2] } })
+      }
+      'tree' { $out.text = [QxUia]::Tree([long]$m.handle, [int]($(if ($m.depth) { $m.depth } else { 25 })), [int]($(if ($m.max) { $m.max } else { 250 }))) }
+      'click' { $out.did = [QxUia]::Click([long]$m.handle, [int]$m.ref) }
+      'clickxy' { $out.did = [QxUia]::ClickAt([long]$m.handle, [int]$m.x, [int]$m.y) }
+      'set' { $out.did = [QxUia]::Set([long]$m.handle, [int]$m.ref, [string]$m.text) }
+      'keys' { $out.did = [QxUia]::Keys([long]$m.handle, [string]$m.keys) }
+      'shot' { $out.png = [QxUia]::Shot([long]$m.handle) }
+      'close' { $out.did = [QxUia]::Close([long]$m.handle) }
+      default { throw "unknown op $($m.op)" }
+    }
+  } catch {
+    $msg = $_.Exception.Message
+    if ($_.Exception.InnerException) { $msg = $_.Exception.InnerException.Message }
+    $out = @{ id = $id; ok = $false; error = $msg }
+  }
+  [Console]::Out.WriteLine(($out | ConvertTo-Json -Compress -Depth 6))
+  [Console]::Out.Flush()
+}

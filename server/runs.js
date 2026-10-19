@@ -105,14 +105,14 @@ export function dropCheckpoint(id) { if (validRunId(id)) fs.rmSync(ckptFile(id),
 // Every reply's cost is written here when it ends, however it ends (finished, stopped, failed), so a
 // project's spend still counts replies whose chat was never saved with its cost or was deleted.
 const SCORE = path.join(HOME, 'logs', 'runs.jsonl');
-export const ledger = new Map(); // runId → { project, cost }
+export const ledger = new Map(); // runId → { project, cost, at (ms, when it ended) }
 try {
   for (const l of fs.readFileSync(SCORE, 'utf8').split('\n')) {
-    try { const r = JSON.parse(l); if (r.runId && r.project) ledger.set(r.runId, { project: r.project, cost: Number(r.cost) || 0 }); } catch { /* skip a bad line */ }
+    try { const r = JSON.parse(l); if (r.runId && r.project) ledger.set(r.runId, { project: r.project, cost: Number(r.cost) || 0, at: Date.parse(r.ts) || 0 }); } catch { /* skip a bad line */ }
   }
 } catch { /* no replies yet */ }
 export function recordRun(row) {
-  if (row.runId && row.project) ledger.set(row.runId, { project: row.project, cost: Number(row.cost) || 0 });
+  if (row.runId && row.project) ledger.set(row.runId, { project: row.project, cost: Number(row.cost) || 0, at: Date.parse(row.ts) || Date.now() });
   try { fs.mkdirSync(path.dirname(SCORE), { recursive: true }); fs.appendFileSync(SCORE, JSON.stringify(row) + '\n'); } catch { /* best effort */ }
 }
 /** Per-model totals over the last `days`: replies, how they ended, checks passed, steps, cost and time. */
