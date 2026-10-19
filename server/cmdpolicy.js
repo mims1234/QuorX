@@ -414,7 +414,9 @@ const LAUNCH = {
 // Commands that run whatever they are given: inside a script, each one makes the script opaque.
 const LAUNCHERS = new Set(['start-process', 'saps', 'start', 'invoke-expression', 'iex', 'invoke-command', 'icm', 'start-job', 'start-threadjob',
   'invoke-item', 'ii', 'cmd', 'powershell', 'pwsh', 'bash', 'sh', 'zsh', 'wsl', 'wscript', 'cscript', 'mshta', 'rundll32', 'eval', 'exec', 'source',
-  '.', 'xargs', 'forfiles', 'for', 'invoke-wmimethod', 'invoke-cimmethod', 'set-alias', 'new-alias', 'sal', 'nal', 'runas', 'explorer']);
+  '.', 'xargs', 'forfiles', 'for', 'invoke-wmimethod', 'invoke-cimmethod', 'set-alias', 'new-alias', 'sal', 'nal', 'runas', 'explorer', 'cross-env-shell']);
+// How deep QuorX follows scripts that run scripts; deeper than this, the script counts as one it can't read.
+const SCRIPT_DEPTH = 4;
 // .NET calls that start a program or run text as code.
 const LAUNCH_MEMBERS = /Diagnostics\.Process\]\s*::\s*Start|ProcessStartInfo|\[scriptblock\]\s*::\s*Create|\.(?:ShellExecute|InvokeScript|AddScript)\s*\(|InvokeCommand\s*\.\s*(?:InvokeScript|NewScriptBlock)/i;
 const isFile = (f) => { try { return fs.statSync(f).isFile(); } catch { return false; } };
@@ -444,6 +446,8 @@ function unwrap(s, lang) {
     let a = null;
     if (lang === 'sh' && ['then', 'else', 'do', 'if', 'elif', 'while', 'until', '!', '{', 'time', 'nohup'].includes(s.program)) a = s.args;
     else if (lang === 'bat' && s.program === 'else') a = s.args;
+    else if (s.program === 'cross-env') { a = s.args.slice(); while (a.length && /^[A-Za-z_]\w*=/.test(a[0].text)) a.shift(); }
+    else if (s.program === 'npx') { a = s.args.slice(); while (a.length && /^-/.test(a[0].text)) a.shift(); }
     else if (lang === 'bat' && s.program === 'call') { if (/^:/.test(s.args[0]?.text || '')) return null; a = s.args; }
     else if (lang === 'bat' && s.program === 'if') {
       a = s.args.slice();
@@ -524,13 +528,33 @@ async function readScript(abs, lang, c, depth, seen) {
   const sc = await scriptCommands(text, lang);
   if (sc.why) return { ...out, launch: `QuorX can’t read this script (${rel}): ${sc.why}` };
   if (sc.members.some((m) => LAUNCH_MEMBERS.test(m))) out.launch = runs;
-  const ic = { ...c };
-  for (const s of sc.segs) {
+  await judgeCommands(sc.segs, lang, { ...c }, rel, depth, out);
+  return out;
+}
+
+// The commands of a script (or a package.json script), one by one: a launcher makes it opaque, a script it runs is
+// read in turn, and the risky ones go to out.extra to be judged with the line.
+async function judgeCommands(segs, lang, ic, rel, depth, out) {
+  const runs = `this script (${rel}) runs other programs, so QuorX can’t check what it runs`;
+  for (const s of segs) {
     trackCd(s, ic);
-    const inner = scriptOf(s);
-    if (inner) {
-      // A script this one runs is read too (two levels down at most).
-      if (depth < 2) { const r = await inspectRun({ ...s, depth: depth + 1 }, ic, []); if (r) { out.launch ||= r.opaque; out.extra.push(...r.extra); } }
+    // concurrently "tsc -w" "npm:serve" and run-s / run-p / npm-run-all a b: each argument is a command or a script name.
+    if (['concurrently', 'run-s', 'run-p', 'npm-run-all'].includes(s.program)) {
+      const parts = [];
+      for (const a of s.args.filter((x) => !x.param && !/^-/.test(x.text))) {
+        const npmName = s.program === 'concurrently' ? a.text.match(/^(?:npm|yarn|pnpm|bun):(.+)$/)?.[1] : a.text;
+        if (npmName != null && /[*?{]/.test(npmName)) { out.launch ||= runs; continue; }
+        if (npmName != null) parts.push({ text: `npm run ${npmName}`, rawProgram: 'npm', program: 'npm', dynamicProgram: !a.static, args: [{ text: 'run', static: true }, { text: npmName, static: a.static }], redirects: [] });
+        else { const sc = await scriptCommands(a.text, lang); if (sc.why || !a.static) out.launch ||= runs; else parts.push(...sc.segs); }
+      }
+      await judgeCommands(parts, lang, ic, rel, depth, out);
+      continue;
+    }
+    if (scriptOf(s) || pkgRunOf(s)) {
+      // A script this one runs is read too, a few levels down; deeper than that it can't be checked.
+      if (depth + 1 >= SCRIPT_DEPTH) { out.launch ||= `${rel} runs scripts nested too deeply for QuorX to read them all`; continue; }
+      const r = await inspectRun({ ...s, depth: depth + 1 }, ic, []);
+      if (r) { out.launch ||= r.opaque; out.extra.push(...r.extra); }
       continue;
     }
     if (s.dynamicProgram || s.opaque || LAUNCHERS.has(s.program) || (s.program === 'new-object' && hasArg(s, '-comobject'))) { out.launch ||= runs; continue; }
@@ -540,7 +564,93 @@ async function readScript(abs, lang, c, depth, seen) {
       out.extra.push({ ...s, ctx: { ...ic }, shell: SHELL_OF[lang], via: rel, viaWhy: `inside ${rel}`, depth: depth + 1 });
     }
   }
-  return out;
+}
+
+// ---------- package.json scripts ----------
+// npm run x, npm test, yarn x, pnpm x, bun run x run a command line from package.json "scripts" (with its pre and post
+// hooks); a bare npm install or npm ci runs the install and prepare hooks. Those lines are read like a script's.
+const PKG_BUILTIN = {
+  yarn: new Set(['add', 'install', 'remove', 'upgrade', 'up', 'info', 'why', 'list', 'init', 'config', 'cache', 'global', 'link', 'unlink', 'publish', 'login',
+    'logout', 'version', 'versions', 'dlx', 'exec', 'workspaces', 'workspace', 'node', 'set', 'plugin', 'constraints', 'npm', 'pack', 'dedupe', 'explain',
+    'rebuild', 'bin', 'audit', 'outdated', 'owner', 'tag', 'team', 'policies', 'licenses', 'import', 'check', 'autoclean', 'create', 'help', 'upgrade-interactive']),
+  pnpm: new Set(['add', 'install', 'i', 'remove', 'rm', 'uninstall', 'update', 'up', 'list', 'ls', 'outdated', 'why', 'link', 'unlink', 'publish', 'pack',
+    'exec', 'dlx', 'create', 'init', 'store', 'config', 'env', 'setup', 'audit', 'licenses', 'import', 'rebuild', 'prune', 'fetch', 'deploy', 'patch',
+    'patch-commit', 'root', 'bin', 'server', 'doctor', 'help', 'dedupe', 'install-test', 'it', 'add-test', 'self-update']),
+  bun: new Set(['test', 'install', 'i', 'add', 'a', 'remove', 'rm', 'update', 'x', 'build', 'create', 'init', 'upgrade', 'pm', 'link', 'unlink', 'publish',
+    'outdated', 'patch', 'repl', 'exec', 'audit', 'info', 'why']),
+};
+const LIFECYCLE = ['preinstall', 'install', 'postinstall', 'preprepare', 'prepare', 'postprepare'];
+const PKG_DIR = new Set(['--prefix', '-C', '--dir', '--cwd']);
+const PKG_MULTI = new Set(['-w', '--workspace', '--filter', '-F', '--workspaces', '-ws', '-r', '--recursive', '--include-workspace-root']);
+const PKG_VALUED = new Set(['-w', '--workspace', '--filter', '-F', '--loglevel', '--registry', '--script-shell']);
+
+/** The package.json script a command runs: { pm, kind: 'run'|'install', name, extra: [args after the name], dir, multi } */
+function pkgRunOf(s) {
+  if (!['npm', 'pnpm', 'yarn', 'bun'].includes(s.program) || s.dynamicProgram) return null;
+  const pm = s.program, pos = []; let dir = null, multi = false, shell = false;
+  for (let i = 0; i < s.args.length; i++) {
+    const t = s.args[i].text, [flag, val] = t.split(/=(.*)/s);
+    if (/^-/.test(t) && pos.length) break; // flags after the script name belong to the script
+    if (PKG_DIR.has(flag)) { dir = val ?? s.args[++i]; continue; }
+    if (PKG_MULTI.has(flag)) multi = true;
+    if (flag === '--script-shell') shell = true;
+    if (PKG_VALUED.has(flag) && val == null) { i++; continue; }
+    if (/^-/.test(t)) continue;
+    pos.push({ text: t, i });
+  }
+  const w = pos.map((p) => low(p.text));
+  const at = (k, name) => ({ pm, kind: 'run', name, extra: s.args.slice(pos[k].i + 1).filter((a, j) => j || a.text !== '--'), dir, multi, shell });
+  const install = { pm, kind: 'install', name: 'install', extra: [], dir, multi, shell };
+  if (['run', 'run-script', 'rum', 'urn'].includes(w[0]) && w[1]) return { ...at(1, pos[1].text), ifScript: pm !== 'npm' }; // bun run x.ts runs a file
+  if (pm === 'npm' && ['test', 't', 'tst', 'start', 'stop', 'restart'].includes(w[0])) return at(0, { t: 'test', tst: 'test' }[w[0]] || w[0]);
+  if (pm === 'npm' && ['install', 'i', 'in', 'isntall', 'ci', 'clean-install'].includes(w[0]) && w.length === 1) return install;
+  if ((pm === 'yarn' && (!w.length || (w[0] === 'install' && w.length === 1))) || (pm === 'pnpm' && ['install', 'i'].includes(w[0]) && w.length === 1)) return install;
+  if (pm !== 'npm' && pm !== 'bun' && ['test', 't', 'start'].includes(w[0])) return at(0, w[0] === 't' ? 'test' : w[0]);
+  if (pm !== 'npm' && w[0] && !PKG_BUILTIN[pm].has(w[0])) return { ...at(0, pos[0].text), ifScript: true };
+  return null;
+}
+
+// The lines a package.json script run executes, from its scripts: [[key, line]].
+function pkgLines(run, scripts, pkgDir) {
+  const has = (k) => typeof scripts[k] === 'string';
+  const hooks = (n) => [`pre${n}`, n, `post${n}`].filter(has).map((k) => [k, scripts[k]]);
+  if (run.kind === 'install') return LIFECYCLE.filter(has).map((k) => [k, scripts[k]]);
+  if (run.name === 'restart' && !has('restart')) return [...hooks('stop'), ...hooks('start')];
+  if (run.name === 'start' && !has('start') && isFile(path.join(pkgDir, 'server.js'))) return [['start', 'node server.js']];
+  if (!has(run.name)) return [];
+  const extra = run.extra.map((a) => a.text).join(' ');
+  return hooks(run.name).map(([k, l]) => [k, k === run.name && extra ? `${l} ${extra}` : l]);
+}
+
+async function inspectPkg(s, run, c, written) {
+  if (run.multi || run.shell) return { opaque: 'it runs package scripts QuorX can’t find before it runs (other workspaces or another shell)', extra: [] };
+  let dir = c.cwd;
+  if (run.dir) {
+    const e = expandVars(typeof run.dir === 'string' ? run.dir : run.dir.text, c.env);
+    if (e.unresolved || (typeof run.dir !== 'string' && run.dir.static === false) || (!path.isAbsolute(e.path) && c.cwdUnknown)) return { opaque: 'QuorX can’t tell which package.json it runs, so it can’t read it first', extra: [] };
+    dir = path.resolve(c.cwd, e.path);
+  } else if (c.cwdUnknown) return { opaque: 'QuorX can’t tell which package.json it runs, so it can’t read it first', extra: [] };
+  // The nearest package.json at or above the folder, inside the project.
+  let pkg = null;
+  for (let d = dir; same(d, c.root) || inside(d, c.root); d = path.dirname(d)) {
+    const f = path.join(d, 'package.json');
+    if (written.some((w) => same(w, f))) return { opaque: `this command writes ${path.relative(c.root, f).replaceAll('\\', '/')} and then runs its scripts, so QuorX can’t read them first`, extra: [] };
+    if (isFile(f)) { pkg = f; break; }
+    if (same(d, c.root)) break;
+  }
+  if (!pkg) return null;
+  let scripts;
+  try { if (fs.statSync(pkg).size > SCRIPT_MAX) throw new Error('too big'); scripts = JSON.parse(fs.readFileSync(pkg, 'utf8')).scripts || {}; } catch { return null; }
+  if (run.ifScript && typeof scripts[run.name] !== 'string') return null;
+  const rel = path.relative(c.root, pkg).replaceAll('\\', '/');
+  const lang = WIN ? 'bat' : 'sh', depth = s.depth || 0, out = { launch: null, argv: false, extra: [] };
+  for (const [key, line] of pkgLines(run, scripts, path.dirname(pkg))) {
+    const where = `${rel} scripts.${key}`;
+    const sc = await scriptCommands(line, lang);
+    if (sc.why) { out.launch ||= `QuorX can’t read ${where}: ${sc.why}`; continue; }
+    await judgeCommands(sc.segs, lang, { ...c, cwd: path.dirname(pkg), cwdUnknown: false }, where, depth, out);
+  }
+  return { opaque: out.launch, extra: out.extra };
 }
 
 /**
@@ -549,6 +659,8 @@ async function readScript(abs, lang, c, depth, seen) {
  * written: files earlier commands of the same line write.
  */
 async function inspectRun(s, c, written) {
+  const pk = pkgRunOf(s);
+  if (pk) { const r = await inspectPkg(s, pk, c, written); if (r) return r; }
   const run = scriptOf(s);
   if (!run) return null;
   const unclear = { opaque: 'QuorX can’t tell which script it runs, so it can’t read it first', extra: [] };
@@ -633,7 +745,7 @@ export async function decide(line, ctx) {
   const queue = [...split.segs], written = [];
   while (queue.length) {
     const s = queue.shift();
-    if (!s.inspected && (s.depth || 0) < 3) {
+    if (!s.inspected && (s.depth || 0) <= SCRIPT_DEPTH) {
       s.inspected = true;
       const r = await inspectRun(s, s.ctx || c, written);
       if (r?.opaque) s.opaque ||= r.opaque;

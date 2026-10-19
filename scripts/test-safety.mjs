@@ -286,6 +286,51 @@ test('scripts: a launcher moved into a helper file, a script the same line write
   assert.equal((await decide('node $f', sctx())).segments[0].cls, 'opaque');
 });
 
+// package.json scripts: npm run x runs a command line the agent can write.
+put('web/package.json', JSON.stringify({ scripts: {
+  setup: 'rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal', build: 'tsc', prestart: 'node tools/main.mjs', start: 'node app.js',
+  wrap: 'node ../.quorx/scratch/run.mjs', dev: 'concurrently "tsc -w" "npm:setup"', env: 'cross-env NODE_ENV=production winget install Git.Git',
+  postinstall: 'choco install nodejs', a: 'npm run b', b: 'npm run a' } }));
+put('web/tools/main.mjs', "import { execFileSync } from 'node:child_process';\nexecFileSync('git', ['--version']);\n");
+put('web/app.js', "console.log('up')\n");
+const wctx = (over = {}) => sctx({ cwd: path.join(scripts, 'web'), ...over });
+
+test('scripts: package.json scripts are read, so an install hidden there shows as one', { skip: !WIN }, async () => {
+  for (const [line, shell] of [['npm run setup', 'powershell'], ['npm run setup', 'cmd'], ['yarn setup', 'powershell'], ['pnpm run setup', 'powershell'], ['bun run setup', 'powershell']]) {
+    const d = await decide(line, wctx({ shell }));
+    assert.equal(d.verdict, 'ask', line);
+    assert.equal(d.who, 'user', line);
+    const inst = d.segments.find((s) => s.cls === 'install');
+    assert.ok(inst?.global, `${line}: ${JSON.stringify(d.segments.map((s) => [s.text, s.cls]))}`);
+    assert.equal(inst.text, 'rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal');
+    assert.equal(inst.via, 'web/package.json scripts.setup');
+    assert.match(d.why, /rustup installs for the whole computer \(inside web\/package\.json scripts\.setup\)/);
+  }
+  assert.equal((await decide('npm run setup', wctx({ rules: [{ effect: 'allow', match: 'npm run*', by: 'button' }] }))).verdict, 'ask', 'Always allow npm run does not cover it');
+  // Through concurrently, cross-env and the install hooks of a bare npm ci.
+  for (const [line, prog] of [['npm run dev', 'rustup'], ['npm run env', 'winget'], ['npm ci', 'choco']]) {
+    assert.ok((await decide(line, wctx())).segments.some((s) => s.cls === 'install' && s.global && s.program === prog), line);
+  }
+});
+
+test('scripts: a plain package script stays a build, and the scripts it runs are read in turn', { skip: !WIN }, async () => {
+  const b = await decide('npm run build', wctx());
+  assert.deepEqual(b.segments.map((s) => s.cls), ['build'], '"build": "tsc" is a build');
+  assert.equal((await decide('npm run build', wctx({ rules: [{ effect: 'allow', match: 'npm run build*', by: 'button' }] }))).verdict, 'allow', 'Always allow still covers it');
+  const start = await decide('npm start', wctx());
+  assert.equal(start.segments.at(-1).cls, 'opaque', 'its prestart hook runs a script that runs other programs');
+  assert.match(start.why, /tools\/main\.mjs\) runs other programs/);
+  const wrap = await decide('npm run wrap -- winget install Git.Git', wctx());
+  assert.deepEqual(wrap.segments.map((s) => [s.cls, s.via]), [['install', '.quorx/scratch/run.mjs'], ['opaque', undefined]], 'arguments after -- reach the wrapper');
+  assert.match((await decide('npm run a', wctx())).why, /nested too deeply/);
+});
+
+test('scripts: a package.json the same line writes can\'t be read first', { skip: !WIN }, async () => {
+  const d = await decide("Set-Content package.json '{}'; npm run setup", wctx());
+  assert.equal(d.segments.at(-1).cls, 'opaque');
+  assert.match(d.why, /writes web\/package\.json and then runs its scripts/);
+});
+
 test('toolchain note: Rust that can\'t link gets the Build Tools line with the C++ part, and says to carry on after', async () => {
   const { toolchainNote, TOOLCHAINS } = await import('../server/toolchains.js');
   assert.match(TOOLCHAINS.find((t) => t.id === 'msvc').wingetArgs, /Workload\.VCTools/);
