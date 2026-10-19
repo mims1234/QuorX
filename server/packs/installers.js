@@ -119,7 +119,7 @@ export default {
     { id: 'winsdk', label: 'Windows SDK (MakeAppx, SignTool)', for: 'MSIX packages and signing', detect: findSdk, winget: 'Microsoft.WindowsSDK.10.0.26100', url: 'https://developer.microsoft.com/windows/downloads/windows-sdk/' },
   ],
   markers: [/\.wxs$/i, /\.wixproj$/i, /^Package\.appxmanifest$/i, /^AppxManifest\.xml$/i],
-  checks: [{ id: 'wix', tool: 'wix', ext: /\.(wxs|wxi|wxl)$/i, marker: wixDir, cmd: ({ dir }) => wixCommand(dir), parse: parseWix }],
+  checks: [{ id: 'wix', tool: 'wix', ext: /\.(wxs|wxi|wxl)$/i, marker: wixDir, cmd: (dir) => wixCommand(dir), parse: parseWix }],
   notes: () => {
     const w = WIX ? q(WIX) : 'wix';
     const sdk = SDK ? `MakeAppx and SignTool are in ${q(SDK.bin)}` : 'the Windows SDK (MakeAppx, SignTool) is not installed';

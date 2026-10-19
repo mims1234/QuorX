@@ -34,10 +34,10 @@ export async function languageChecks(root, changed, { have = [], signal, timeout
     const dirs = [...new Set(files.map((f) => projectDirOf(root, f, lang)).filter(Boolean))].slice(0, 3);
     for (const dir of dirs) {
       if (signal?.aborted) return { problems, ran };
-      // cmd is one line, or a function of the folder and its changed files that gives one or more lines (or none: the
-      // check can't run there, e.g. the engine version the project needs isn't installed).
+      // cmd is one line, or a function of the folder (and its changed files) that gives one or more lines, or none: the
+      // check can't run there (CMake's build folder, the engine version a project needs).
       const here = files.map((f) => path.resolve(root, f)).filter((f) => f.startsWith(path.resolve(dir) + path.sep)).map((f) => path.relative(dir, f));
-      const cmds = [].concat(typeof lang.cmd === 'function' ? (await lang.cmd({ dir, files: here })) || [] : lang.cmd);
+      const cmds = [].concat(typeof lang.cmd === 'function' ? (await lang.cmd(dir, { files: here })) || [] : lang.cmd);
       if (!cmds.length) continue;
       const limit = lang.timeout || timeout;
       const r = { code: 0, out: '', ms: 0, timedOut: false };

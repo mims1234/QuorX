@@ -90,7 +90,7 @@ export function parseGodot(out) {
 // Each changed script is parsed on its own (Godot reports the first error in each). A script can use another one's
 // class_name only through the project's class list in .godot/, which `--import` writes: so the project is imported
 // first when it never was, or when this reply added or renamed a class_name.
-function checkLines({ dir, files }) {
+function checkLines(dir, { files }) {
   if (!GODOT) return null;
   const gd = files.filter((f) => /\.gd$/i.test(f)).slice(0, 20);
   if (!gd.length) return null;
