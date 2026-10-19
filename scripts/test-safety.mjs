@@ -214,6 +214,123 @@ test('the Build Tools install is an install for the whole computer, and asks', a
   assert.notEqual(d.verdict, 'allow');
 });
 
+// ---------- commands hidden in scripts ----------
+// The real case: the agent wrote a Node script that runs whatever it is given, then ran a toolchain install through it.
+const WRAPPER = "import { spawn } from 'node:child_process';\nconst [cmd, ...args] = process.argv.slice(2);\nspawn(cmd, args, { stdio: 'inherit', shell: true }).on('exit', (c) => process.exit(c ?? 1));\n";
+const REAL = 'node .quorx/scratch/run.mjs rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal';
+const scripts = tmp('scripts');
+const put = (rel, text) => { fs.mkdirSync(path.dirname(path.join(scripts, rel)), { recursive: true }); fs.writeFileSync(path.join(scripts, rel), text); };
+put('.quorx/scratch/run.mjs', WRAPPER);
+put('app.js', "const name = process.argv[2] || 'world';\nconsole.log(`hello ${name}`);\n");
+put('wrap.py', 'import subprocess, sys\nsys.exit(subprocess.call(sys.argv[1:]))\n');
+put('open.ps1', "Write-Host 'opening'\nStart-Process notepad.exe\n");
+put('setup.ps1', "Write-Host 'setting up'\nwinget install --id Rustlang.Rustup -e\n");
+put('tools/main.mjs', "import { run } from './helper.mjs';\nrun(process.argv.slice(2));\n");
+put('tools/helper.mjs', "import { execFileSync } from 'child_process';\nexport const run = ([c, ...a]) => execFileSync(c, a);\n");
+const sctx = (over = {}) => ({ shell: 'powershell', root: scripts, rules: [], mode: 'strict', yolo: {}, ...over });
+
+test('scripts: a wrapper that runs its arguments is opaque, and what it runs is judged as a whole-computer install', { skip: !WIN }, async () => {
+  for (const shell of ['powershell', 'cmd']) {
+    const d = await decide(REAL, sctx({ shell }));
+    assert.equal(d.verdict, 'ask', shell);
+    assert.equal(d.who, 'user', shell);
+    const inst = d.segments.find((s) => s.cls === 'install');
+    assert.ok(inst, `${shell}: the forwarded command is a segment: ${JSON.stringify(d.segments.map((s) => [s.text, s.cls]))}`);
+    assert.equal(inst.text, 'rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal');
+    assert.ok(inst.global, 'whole computer');
+    assert.equal(inst.via, '.quorx/scratch/run.mjs');
+    assert.match(d.why, /rustup installs for the whole computer \(\.quorx\/scratch\/run\.mjs passes it on as a command\)/, 'the card leads with the install');
+    const script = d.segments.find((s) => s.program === 'node');
+    assert.equal(script.cls, 'opaque');
+    assert.match(script.why, /this script \(\.quorx\/scratch\/run\.mjs\) runs other programs, so QuorX can’t check what it runs/);
+  }
+  // A button rule for node can't lift it, YOLO's opaque box doesn't hand the install to the deciders, and a deny rule
+  // for rustup reaches the command through the script.
+  assert.equal((await decide(REAL, sctx({ rules: [{ effect: 'allow', match: 'node*', by: 'button' }] }))).verdict, 'ask');
+  const y = await decide(REAL, sctx({ mode: 'yolo', yolo: { opaque: true } }));
+  assert.equal(y.who, 'user', 'even in YOLO');
+  assert.equal((await decide(REAL, sctx({ rules: [{ effect: 'deny', match: 'rustup*' }] }))).verdict, 'deny');
+});
+
+test('scripts: a plain script that runs nothing else stays a normal build', { skip: !WIN }, async () => {
+  const d = await decide('node app.js Ada', sctx());
+  assert.deepEqual(d.segments.map((s) => s.cls), ['build'], 'reading its own arguments is fine when it runs nothing');
+  assert.equal((await decide('node app.js Ada', sctx({ mode: 'yolo' }))).who, 'deciders');
+  assert.equal((await decide('node app.js Ada', sctx({ rules: [{ effect: 'allow', match: 'node app.js*', by: 'button' }] }))).verdict, 'allow', 'Always allow still covers it');
+});
+
+test('scripts: a Python subprocess wrapper is caught the same way', { skip: !WIN }, async () => {
+  for (const [line, shell] of [['python wrap.py winget install Git.Git', 'powershell'], ['py -3 wrap.py winget install Git.Git', 'cmd']]) {
+    const d = await decide(line, sctx({ shell }));
+    assert.deepEqual(d.segments.map((s) => [s.cls, s.global]), [['install', true], ['opaque', false]], line);
+    assert.equal(d.segments[0].text, 'winget install Git.Git');
+    assert.match(d.segments[1].why, /wrap\.py\) runs other programs/);
+  }
+});
+
+test('scripts: PowerShell scripts that start programs are opaque; their installs show as commands of their own', { skip: !WIN }, async () => {
+  const open = await decide('.\\open.ps1', sctx());
+  assert.equal(open.segments[0].cls, 'opaque');
+  assert.match(open.why, /open\.ps1\) runs other programs/);
+  assert.equal((await decide('powershell -NoProfile -ExecutionPolicy Bypass -File open.ps1', sctx())).segments.at(-1).cls, 'opaque');
+  const setup = await decide('powershell -NoProfile -File setup.ps1', sctx());
+  const inst = setup.segments.find((s) => s.cls === 'install');
+  assert.ok(inst?.global && inst.via === 'setup.ps1', JSON.stringify(setup.segments.map((s) => [s.text, s.cls])));
+  assert.match(setup.why, /winget installs for the whole computer \(inside setup\.ps1\)/);
+});
+
+test('scripts: a launcher moved into a helper file, a script the same line writes, and a script from a variable', { skip: !WIN }, async () => {
+  const d = await decide('node tools/main.mjs rustup default stable', sctx());
+  assert.deepEqual(d.segments.map((s) => s.cls), ['install', 'opaque']);
+  assert.match((await decide('Set-Content x.js "1"; node x.js', sctx())).why, /writes x\.js and then runs it/);
+  assert.equal((await decide('node $f', sctx())).segments[0].cls, 'opaque');
+});
+
+// package.json scripts: npm run x runs a command line the agent can write.
+put('web/package.json', JSON.stringify({ scripts: {
+  setup: 'rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal', build: 'tsc', prestart: 'node tools/main.mjs', start: 'node app.js',
+  wrap: 'node ../.quorx/scratch/run.mjs', dev: 'concurrently "tsc -w" "npm:setup"', env: 'cross-env NODE_ENV=production winget install Git.Git',
+  postinstall: 'choco install nodejs', a: 'npm run b', b: 'npm run a' } }));
+put('web/tools/main.mjs', "import { execFileSync } from 'node:child_process';\nexecFileSync('git', ['--version']);\n");
+put('web/app.js', "console.log('up')\n");
+const wctx = (over = {}) => sctx({ cwd: path.join(scripts, 'web'), ...over });
+
+test('scripts: package.json scripts are read, so an install hidden there shows as one', { skip: !WIN }, async () => {
+  for (const [line, shell] of [['npm run setup', 'powershell'], ['npm run setup', 'cmd'], ['yarn setup', 'powershell'], ['pnpm run setup', 'powershell'], ['bun run setup', 'powershell']]) {
+    const d = await decide(line, wctx({ shell }));
+    assert.equal(d.verdict, 'ask', line);
+    assert.equal(d.who, 'user', line);
+    const inst = d.segments.find((s) => s.cls === 'install');
+    assert.ok(inst?.global, `${line}: ${JSON.stringify(d.segments.map((s) => [s.text, s.cls]))}`);
+    assert.equal(inst.text, 'rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal');
+    assert.equal(inst.via, 'web/package.json scripts.setup');
+    assert.match(d.why, /rustup installs for the whole computer \(inside web\/package\.json scripts\.setup\)/);
+  }
+  assert.equal((await decide('npm run setup', wctx({ rules: [{ effect: 'allow', match: 'npm run*', by: 'button' }] }))).verdict, 'ask', 'Always allow npm run does not cover it');
+  // Through concurrently, cross-env and the install hooks of a bare npm ci.
+  for (const [line, prog] of [['npm run dev', 'rustup'], ['npm run env', 'winget'], ['npm ci', 'choco']]) {
+    assert.ok((await decide(line, wctx())).segments.some((s) => s.cls === 'install' && s.global && s.program === prog), line);
+  }
+});
+
+test('scripts: a plain package script stays a build, and the scripts it runs are read in turn', { skip: !WIN }, async () => {
+  const b = await decide('npm run build', wctx());
+  assert.deepEqual(b.segments.map((s) => s.cls), ['build'], '"build": "tsc" is a build');
+  assert.equal((await decide('npm run build', wctx({ rules: [{ effect: 'allow', match: 'npm run build*', by: 'button' }] }))).verdict, 'allow', 'Always allow still covers it');
+  const start = await decide('npm start', wctx());
+  assert.equal(start.segments.at(-1).cls, 'opaque', 'its prestart hook runs a script that runs other programs');
+  assert.match(start.why, /tools\/main\.mjs\) runs other programs/);
+  const wrap = await decide('npm run wrap -- winget install Git.Git', wctx());
+  assert.deepEqual(wrap.segments.map((s) => [s.cls, s.via]), [['install', '.quorx/scratch/run.mjs'], ['opaque', undefined]], 'arguments after -- reach the wrapper');
+  assert.match((await decide('npm run a', wctx())).why, /nested too deeply/);
+});
+
+test('scripts: a package.json the same line writes can\'t be read first', { skip: !WIN }, async () => {
+  const d = await decide("Set-Content package.json '{}'; npm run setup", wctx());
+  assert.equal(d.segments.at(-1).cls, 'opaque');
+  assert.match(d.why, /writes web\/package\.json and then runs its scripts/);
+});
+
 test('toolchain note: Rust that can\'t link gets the Build Tools line with the C++ part, and says to carry on after', async () => {
   const { toolchainNote, TOOLCHAINS } = await import('../server/toolchains.js');
   assert.match(TOOLCHAINS.find((t) => t.id === 'msvc').wingetArgs, /Workload\.VCTools/);
@@ -530,6 +647,21 @@ test('jobs: installs never move to the background', { skip: !WIN }, async () => 
   const { bodies } = await agentRun((b, i) => [reply('', [['shell', { command: 'npm install left-pad', background: true }]]), reply('OK.')][i], { settings: { approval: 'strict' },
     onEvent: (e, id) => { if (e.t === 'approval' && e.mode === 'strict') setTimeout(() => answerApproval(id, e.id, { approve: true }), 10); } });
   assert.match(toolOut(bodies, 1), /only commands that build, run project code or read can run in the background/);
+});
+
+test('jobs: an install hidden in a wrapper script asks with no Always allow, and never runs in the background', { skip: !WIN }, async () => {
+  let card = null;
+  // The wrapper only prints what it was given, so nothing is installed even if this check ever failed.
+  const echo = "import { spawn } from 'node:child_process';\nconsole.log('would run', process.argv.slice(2).join(' '));\n";
+  const { bodies, events } = await agentRun((b, i) => [reply('', [['shell', { command: REAL, background: true }]]), reply('OK.')][i], {
+    prep: (d) => { fs.mkdirSync(path.join(d, '.quorx', 'scratch'), { recursive: true }); fs.writeFileSync(path.join(d, '.quorx', 'scratch', 'run.mjs'), echo); },
+    onEvent: (e, id) => { if (e.t === 'approval' && e.mode === 'strict') { card = e; setTimeout(() => answerApproval(id, e.id, { approve: true }), 10); } },
+  });
+  assert.ok(card, 'it asked');
+  assert.equal(card.noAlways, true, 'no Always allow');
+  assert.ok(card.policy.segments.some((s) => s.cls === 'install' && s.global && s.via === '.quorx/scratch/run.mjs'), 'the card shows the install');
+  assert.match(toolOut(bodies, 1), /only commands that build, run project code or read can run in the background/);
+  assert.ok(!events.some((e) => e.t === 'command'), 'nothing ran');
 });
 
 // ---------- the Running tab ----------
