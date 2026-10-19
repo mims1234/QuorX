@@ -45,16 +45,20 @@ const CATS = [
 // What each new chat starts with: every paid media tool off. Artifacts, code & servers and the browser are always on.
 const CHAT_TOOLS = ['image', 'video', 'music', 'speech'];
 // The quality tools: on by default (the best value in the build benchmark); each chat can switch them off in 🧰.
-const QUALITY_TOOLS = ['reviewer', 'deciders', 'helpers'];
-const DEFAULT_CHAT_TOOLS = { image: false, video: false, music: false, speech: false, reviewer: true, deciders: true, helpers: true };
+const QUALITY_TOOLS = ['reviewer', 'freshEyes', 'deciders', 'helpers'];
+const DEFAULT_CHAT_TOOLS = { image: false, video: false, music: false, speech: false, reviewer: true, freshEyes: true, deciders: true, helpers: true };
 const REVIEW_CHEAP = 'openai/gpt-6-luna', REVIEW_STRONG = 'anthropic/claude-sonnet-5.5', HELPER_DEFAULT = 'qwen/qwen3.7-flash', LOOK_DEFAULT = 'openai/gpt-6-luna-decisions';
 const reviewerModel = () => G.settings.reviewModel || (G.settings.reviewTier === 'strong' ? REVIEW_STRONG : REVIEW_CHEAP);
 const helperModel = () => G.settings.helperModel || HELPER_DEFAULT;
 const lookModel = () => (Array.isArray(G.settings.lookVoters) && G.settings.lookVoters[0]) || LOOK_DEFAULT;
+const freshModel = () => G.settings.freshEyesModel || (G.settings.freshEyesTier === 'strong' ? REVIEW_STRONG : helperModel());
 const QUALITY_INFO = {
   reviewer: { icon: '🔍', name: 'Reviewer', kind: 'chat', model: reviewerModel, perBuild: () => (G.settings.reviewModel ? 'priced by the model below' : G.settings.reviewTier === 'strong' ? '≈ $0.02 a build' : '≈ $0.003 a build'),
     note: 'Plays what was built and sends it back with bugs it reproduced.',
     tip: 'A separate model opens what was built, uses it like a person, and sends it back with bugs it reproduced (with the steps). In the build benchmark it caught a 2048 game that did not work (13 → 19 of 20). Cheap (gpt-6-luna) costs about $0.003 a build but sometimes fails good builds; Strong (Claude Sonnet 5.5) costs about $0.02 a build and agreed with the judge every time. Off: no second opinion: fastest and cheapest, but nothing catches a build that only looks done.' },
+  freshEyes: { icon: '👀', name: 'Fresh eyes', kind: 'chat', model: freshModel, perBuild: () => (G.settings.freshEyesTier === 'strong' && !G.settings.freshEyesModel ? '≈ $0.01 a look' : '≈ $0.001 a look'),
+    note: 'When the same problem comes back, a clean-context model diagnoses it.',
+    tip: 'The second time the same problem shows up (the same error, failed check, console error, or a bug sent back), a second model with a clean context reads the problem, the recent attempts and the relevant files, and tells the agent the likely cause, the evidence, how to fix it and what not to try again, before it digs further in the wrong direction. Fast and cheap by default (the helper model); Strong uses Claude Sonnet 5.5. At most 3 looks per reply.' },
   deciders: { icon: '⚖️', name: 'Deciders', kind: 'decision', model: lookModel, perBuild: () => '< $0.001 a build',
     note: 'Screenshot and click checks, look and decide.',
     tip: 'Fast judges that answer fixed yes/no questions from screenshots: is the page blank, is text cut off, did clicking Start change anything, what does your request leave out. They give the model eyes: in the build benchmark they caught a missing game-over screen and broken invoice lines. One decider answers; the others only when it is unsure. Under $0.001 a build. Off also removes the look and decide tools (and in YOLO the agent answers its own questions).' },
@@ -511,7 +515,7 @@ function downscale(file, max = 1568) {
 }
 async function addImages(c, files) {
   for (const f of [...files].filter((x) => x.type.startsWith('image/')).slice(0, 4 - c.images.length)) {
-    try { const full = await downscale(f); c.images.push({ full, thumb: await downscale(f, 160) }); } catch { /* skip */ }
+    try { const full = await downscale(f); c.images.push({ full, view: await downscale(f, 1024), thumb: await downscale(f, 160) }); } catch { /* skip */ }
   }
   renderAttachments(c);
 }
@@ -1350,6 +1354,54 @@ async function openFolderAsProject(btn, errEl) {
   G.landingProject = made.id;
   await newChat(made.id);
 }
+// ---------- looking at what you sent: pictures large (← → between them), files in the Files preview ----------
+function openViewer(build) {
+  let d = $('#lbDlg');
+  if (!d) {
+    d = document.createElement('dialog'); d.id = 'lbDlg'; d.className = 'lb-dlg';
+    d.innerHTML = '<div class="lb"><button type="button" class="lb-x" aria-label="Close" title="Close (Esc)">✕</button><div class="lb-body"></div></div>';
+    document.body.appendChild(d);
+    $('.lb-x', d).onclick = () => d.close();
+    d.addEventListener('mousedown', (e) => { d._down = e.target === d; });
+    d.addEventListener('click', (e) => { if (e.target === d && d._down) d.close(); });
+    d.addEventListener('close', () => { $('.lb-body', d).innerHTML = ''; d.onkeydown = null; });
+  }
+  build($('.lb-body', d), d);
+  if (!d.open) d.showModal();
+}
+function viewPictures(list, start) {
+  openViewer((body, d) => {
+    let i = start;
+    const draw = () => {
+      body.innerHTML = `<div class="lb-pic pv-checker"><img src="${esc(list[i])}" alt="picture ${i + 1}"></div>${list.length > 1 ? `<div class="lb-nav"><button type="button" class="lb-prev" aria-label="Previous">‹</button><span>${i + 1} of ${list.length}</span><button type="button" class="lb-next" aria-label="Next">›</button></div>` : ''}`;
+      const go = (k) => { i = (i + k + list.length) % list.length; draw(); };
+      const pv = $('.lb-prev', body), nx = $('.lb-next', body);
+      if (pv) pv.onclick = () => go(-1); if (nx) nx.onclick = () => go(1);
+      d.onkeydown = (e) => { if (list.length > 1 && e.key === 'ArrowLeft') go(-1); if (list.length > 1 && e.key === 'ArrowRight') go(1); };
+    };
+    draw();
+  });
+}
+document.addEventListener('click', (e) => {
+  const img = e.target.closest?.('.msg .u-imgs img');
+  if (img) {
+    const box = img.closest('.u-imgs'), thumbs = [...box.querySelectorAll('img')].map((x) => x.src);
+    let views = []; try { views = JSON.parse(box.dataset.views || '[]'); } catch { /* none kept */ }
+    viewPictures(thumbs.map((t, k) => views[k] || t), Number(img.dataset.k) || 0); // older messages kept only the small copy
+    return;
+  }
+  const doc = e.target.closest?.('.msg .u-doc[data-doc]');
+  if (doc) {
+    let dd = null; try { dd = JSON.parse(doc.dataset.doc); } catch { return; }
+    const c = focused(); if (!c) return;
+    G.filesProject = c.projectId;
+    openViewer((body) => {
+      if (!dd.rel) { body.innerHTML = `<div class="fx-empty big">${esc(dd.name)}<br><small>Sent before previews were kept: find it in Files → .quorx/uploads.</small></div>`; return; }
+      body.innerHTML = '<div class="lb-doc fview"></div>';
+      previewFile($('.lb-doc', body), { name: dd.rel, src: `/ws/${c.projectId}/${dd.rel.split('/').map(encodeURIComponent).join('/')}`, size: dd.size, full: dd.name });
+    });
+  }
+});
 // ---------- the app's own confirm / alert / prompt windows (instead of the browser's grey boxes) ----------
 // The first line of the message is the heading; the rest is the body (• lines become a list). A question that starts
 // with Delete / Remove / Clear / Discard gets a red button named after it; Enter confirms, Esc or a click outside cancels.
@@ -1679,7 +1731,7 @@ function renderComposerBar(c) {
 // ---------- usage (per chat): every model this chat paid for, grouped by kind of call ----------
 const USAGE_KIND = {
   writer: ['💬', 'Chat model'], strong: ['💬', 'Chat model (strong)'], summary: ['🗜', 'Summaries'], decider: ['⚖️', 'Deciders · checks, look, decide'],
-  reviewer: ['🔍', 'Reviewer'], helper: ['🧭', 'Helpers'],
+  reviewer: ['🔍', 'Reviewer'], helper: ['🧭', 'Helpers'], freshEyes: ['👀', 'Fresh eyes'],
   image: ['🖼', 'Pictures'], video: ['🎬', 'Video'], music: ['🎵', 'Music'], speech: ['🗣', 'Voice'], listen: ['🎤', 'Mic (speech to text)'], media: ['🎨', 'Media'],
 };
 function chatUsage(c) {
@@ -1775,6 +1827,7 @@ function qualitySettings(c) {
   const t = { ...DEFAULT_CHAT_TOOLS, ...c.tools };
   return {
     review: t.reviewer ? (G.settings.review && G.settings.review !== 'off' ? G.settings.review : 'builds') : 'off',
+    freshEyes: t.freshEyes !== false,
     deciders: !!t.deciders,
     helpers: !!t.helpers,
   };
@@ -1805,7 +1858,7 @@ function renderChatTools(c) {
         return `<label class="cmp-tp-row q-row" role="menuitemcheckbox" aria-checked="${onq}" title="${esc(q.tip)}">
           <span class="switch"><input type="checkbox" data-qtool="${k}" ${onq ? 'checked' : ''}><span class="slider"></span></span>
           <span class="cmp-tp-info"><span class="cmp-tp-top"><span class="cmp-tp-name">${q.icon} ${q.name} <span class="q-cost">${esc(q.perBuild())}</span></span><button type="button" class="cmp-tp-model q-pick" data-q="${k}" title="${esc(m)} · ${esc(priceOf(m))} (all chats)">${recDot(m, q.kind)} ${esc(short(m))} <small>${esc(shortPrice(m))}</small> <i>▾</i></button></span>
-          <span class="cmp-tp-note">${esc(q.note)}${k === 'reviewer' ? ` <span class="q-tier" role="group" aria-label="Reviewer strength">${[['cheap', 'Cheap'], ['strong', 'Strong']].map(([v, l]) => `<button type="button" class="q-tier-btn ${!G.settings.reviewModel && (G.settings.reviewTier || 'cheap') === v ? 'on' : ''}" data-tier="${v}" title="${v === 'cheap' ? 'gpt-6-luna: about $0.003 a build' : 'Claude Sonnet 5.5: about $0.02 a build, fewer needless rounds of fixing'}">${l}</button>`).join('')}</span>` : ''}</span></span></label>`;
+          <span class="cmp-tp-note">${esc(q.note)}${k === 'reviewer' || k === 'freshEyes' ? ` <span class="q-tier" role="group" aria-label="${q.name} strength">${[['cheap', 'Cheap'], ['strong', 'Strong']].map(([v, l]) => { const tierKey = k === 'reviewer' ? 'reviewTier' : 'freshEyesTier', modelKey = k === 'reviewer' ? 'reviewModel' : 'freshEyesModel'; return `<button type="button" class="q-tier-btn ${!G.settings[modelKey] && (G.settings[tierKey] || 'cheap') === v ? 'on' : ''}" data-q="${k}" data-tier="${v}" title="${v === 'cheap' ? (k === 'reviewer' ? 'gpt-6-luna: about $0.003 a build' : 'the helper model: fast, about $0.001 a look') : 'Claude Sonnet 5.5: stronger, about $0.01–0.02'}">${l}</button>`; }).join('')}</span>` : ''}</span></span></label>`;
       }).join('')}
       </div>
       <div class="cmp-tp-group">Paid media</div>
@@ -1834,12 +1887,12 @@ function renderChatTools(c) {
   // The quality tools: on/off for this chat; their models and the reviewer's strength apply to all chats.
   const reopen = () => { const keep = !menu.hidden; renderToolbars(); if (keep) $('.tools-btn', $('.toolbar', c.el.root))?.click(); };
   for (const cb of menu.querySelectorAll('input[data-qtool]')) cb.onchange = () => { c.tools[cb.dataset.qtool] = cb.checked; saveChat(c); reopen(); };
-  for (const b of menu.querySelectorAll('.q-tier-btn')) b.onclick = (e) => { e.preventDefault(); e.stopPropagation(); G.settings.reviewTier = b.dataset.tier; G.settings.reviewModel = ''; savePrefs(); reopen(); };
+  for (const b of menu.querySelectorAll('.q-tier-btn')) b.onclick = (e) => { e.preventDefault(); e.stopPropagation(); if (b.dataset.q === 'freshEyes') { G.settings.freshEyesTier = b.dataset.tier; G.settings.freshEyesModel = ''; } else { G.settings.reviewTier = b.dataset.tier; G.settings.reviewModel = ''; } savePrefs(); reopen(); };
   for (const b of menu.querySelectorAll('.q-pick')) b.onclick = async (e) => {
     e.preventDefault(); e.stopPropagation();
     const k = b.dataset.q, q = QUALITY_INFO[k];
-    const id = await pickModel(q.kind, q.model(), { context: k === 'reviewer' ? 'Reviewer (all chats): it must use tools and see images' : k === 'deciders' ? 'Decider for screenshot checks (all chats): it must read images' : 'Helper model (all chats): it must use tools' });
-    if (id) { if (k === 'reviewer') G.settings.reviewModel = id; else if (k === 'helpers') G.settings.helperModel = id; else G.settings.lookVoters = [id]; savePrefs(); }
+    const id = await pickModel(q.kind, q.model(), { context: k === 'freshEyes' ? 'Fresh eyes (all chats): it must use tools' : k === 'reviewer' ? 'Reviewer (all chats): it must use tools and see images' : k === 'deciders' ? 'Decider for screenshot checks (all chats): it must read images' : 'Helper model (all chats): it must use tools' });
+    if (id) { if (k === 'reviewer') G.settings.reviewModel = id; else if (k === 'freshEyes') G.settings.freshEyesModel = id; else if (k === 'helpers') G.settings.helperModel = id; else G.settings.lookVoters = [id]; savePrefs(); }
     reopen();
   };
   $('.tm-settings', menu).onclick = () => { close(); openSettings(); };
@@ -1904,7 +1957,7 @@ function renderMsg(c, m) {
   m.el = el;
   if (m.role === 'user') {
     el.className = 'msg user';
-    el.innerHTML = `<div class="utext"></div>${m.imgs?.length ? `<div class="u-imgs">${m.imgs.map((u) => `<img src="${u}" alt="attached image">`).join('')}</div>` : ''}${m.docs?.length ? `<div class="u-docs">${m.docs.map((d) => `<span class="u-doc" title="${esc(d.name)} · ${esc(docSize(d.size))}">${DOC_ICON[d.kind] || '📄'} ${esc(d.name)}</span>`).join('')}</div>` : ''}${m.ctx?.length ? `<div class="ctx-used">${m.ctx.map((t) => `<span>📎 ${esc(t)}</span>`).join('')}</div>` : ''}${m.at ? timeTag(m.at) : ''}`;
+    el.innerHTML = `<div class="utext"></div>${m.imgs?.length ? `<div class="u-imgs" data-views="${esc(JSON.stringify(m.imgViews || []))}">${m.imgs.map((u, k) => `<img src="${u}" alt="attached picture" data-k="${k}" title="Click to see it large">`).join('')}</div>` : ''}${m.docs?.length ? `<div class="u-docs">${m.docs.map((d) => `<button type="button" class="u-doc" data-doc="${esc(JSON.stringify(d))}" title="${esc(d.name)} · ${esc(docSize(d.size))} · click to preview">${DOC_ICON[d.kind] || '📄'} ${esc(d.name)}</button>`).join('')}</div>` : ''}${m.ctx?.length ? `<div class="ctx-used">${m.ctx.map((t) => `<span>📎 ${esc(t)}</span>`).join('')}</div>` : ''}${m.at ? timeTag(m.at) : ''}`;
     $('.utext', el).innerHTML = md(m.content);
     enhance($('.utext', el));
     el.insertAdjacentHTML('beforeend', `<div class="msg-tools u-tools"><button type="button" class="mt-btn mt-rewind" title="Rewind to here: this message and everything after it leave the chat, and it goes back in the box to edit. You choose whether file changes are undone too." aria-label="Rewind to here">${msgIcon('rewind')}</button><button type="button" class="mt-btn mt-copy" title="Copy this message" aria-label="Copy message">${msgIcon('copy')}</button></div>`);
@@ -2031,6 +2084,7 @@ function timelineItems(m) {
       if (x) x.res = String(e.result ?? ''); continue;
     }
     if (e.t === 'review_start') { rv = null; continue; }
+    if (e.t === 'fresh_eyes') { items.push({ kind: 'note', text: `👀 Fresh eyes (${short(e.model)}) ${e.ok ? `on a problem that came back: ${clip((e.report || '').split('\n')[0].replace(/^Cause:\s*/i, ''), 220)}` : 'looked but found nothing'}` }); continue; }
     if (e.t === 'helper_done') { const h = helpers.get(e.id); if (h) { h.label = `Helper ${e.id} ${e.ok ? 'reported back' : 'gave no report'} · ${e.steps} step${e.steps === 1 ? '' : 's'} · ${money(e.cost, 4)}`; h.done = true; } continue; }
     if (e.t === 'approval') {
       // Waiting for you: a card where it happened. Answered (or being checked): a badge on the tool call it was about.
@@ -2477,6 +2531,9 @@ function traceHTML(m) {
       const i = out.findLastIndex((h) => h.includes(`data-llm="${e.step}"`));
       if (i >= 0) out[i] = out[i].replace(`<span class="sub" data-llm="${e.step}"></span>`, `<div class="sub">${secs(e.ms)} · ${e.tokensOut} tokens out · ${money(e.cost, 5)}${e.provider ? ` · via <span class="tr-prov" title="The provider OpenRouter routed this call to">${esc(e.provider)}</span>` : ''}${e.model && e.model !== m.trace.find((x) => x.t === 'llm_start' && x.step === e.step)?.model ? ` · <b class="tr-fallback" title="The chat's model was unavailable, so OpenRouter used the fallback model">fallback ${esc(short(e.model))}</b>` : ''}${e.toolCalls.length ? ` · then ${e.toolCalls.join(', ')}` : ''}</div>${e.aside ? `<div class="aside">💬 ${esc(e.aside)}</div>` : ''}`);
     } else if (e.t === 'tool' && e.name !== 'decide') row(e.at, `${e.by === 'reviewer' ? '🧪 <span class="tr-rv">reviewer</span> ' : e.by === 'helper' ? `🤝 <span class="tr-hp">helper ${e.helper || ''}</span> ` : ''}${TOOL_NAME[e.name]?.split(' ')[0] || '🔧'} <b>${esc(e.name)}</b><div class="sub">${esc(argSummary(e))}</div>`, e.by === 'reviewer' ? 'browser' : 'tool');
+    else if (e.t === 'fresh_eyes_start') row(e.at, `👀 <b>Fresh eyes</b> ${esc(short(e.model))}: a problem came back, so a clean-context model takes a look<div class="sub">${(e.problems || []).map(esc).join('<br>')}</div>`, 'note');
+    else if (e.t === 'fresh_eyes') row(e.at, `👀 Fresh eyes ${e.ok ? 'diagnosed it' : 'found nothing'}${e.report ? `<div class="sub" style="white-space:pre-wrap">${esc(e.report)}</div>` : ''}`, e.ok ? 'ok' : 'warn');
+    else if (e.t === 'helper_start' && e.fresh) continue;
     else if (e.t === 'helper_start') row(e.at, `🤝 <b>Helper ${e.id}</b> ${esc(short(e.model))} starts, with a clean context<div class="sub">${esc(e.task)}</div>`, 'note');
     else if (e.t === 'helper_done') row(e.at, `🤝 Helper ${e.id} ${e.ok ? 'reported back' : 'gave no report'} · ${e.steps} step${e.steps === 1 ? '' : 's'} · ${secs(e.ms)} · ${money(e.cost, 4)}${e.chars ? ` · ${e.chars} characters returned` : ''}`, e.ok ? 'ok' : 'warn');
     else if (e.t === 'steer') row(e.at, `✉ <b>You</b> while it worked: ${esc(clip(e.text, 200))}`, 'ask');
@@ -2836,7 +2893,7 @@ async function runChat(c, text, ctx, imgs, { resumeOf, docs = [], more = 0, mode
   // After a compaction only the turns since the summary are sent, together with the summary.
   const history = a.messages.filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.error && (!a.summaryAt || (m.at || 0) >= a.summaryAt)).map((m) => ({ role: m.role, at: m.at, content: m.role === 'assistant' ? `${m.content}${m.note || ''}` : `${m.ctx?.length ? `[attached context: ${m.ctx.join(', ')}] ` : ''}${m.docs?.length ? `[attached files: ${m.docs.map((d) => d.name).join(', ')}; read them with read_doc / search_docs] ` : ''}${m.content}` }));
   const m = { role: 'assistant', content: '', at: Date.now(), trace: [], approvals: {}, questions: {}, arts: [], runId: `r${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, live: true, runActive: true };
-  const user = resumeOf ? null : { role: 'user', content: text, at: Date.now(), ...(ctx ? { ctx: ctx.titles } : {}), ...(imgs.length ? { imgs: imgs.map((x) => x.thumb) } : {}), ...(docs.length ? { docs: docs.map(({ id, name, kind, size, status }) => ({ id, name, kind, size, status })) } : {}) };
+  const user = resumeOf ? null : { role: 'user', content: text, at: Date.now(), ...(ctx ? { ctx: ctx.titles } : {}), ...(imgs.length ? { imgs: imgs.map((x) => x.thumb), imgViews: imgs.map((x) => x.view || x.full) } : {}), ...(docs.length ? { docs: docs.map(({ id, name, kind, size, status, rel }) => ({ rel, id, name, kind, size, status })) } : {}) };
   a.messages.push(...(user ? [user] : []), m);
   const box = c.el && G.panes.includes(c.id) ? $('.msgs', c.el.root) : null;
   if (box) { if (box.querySelector('.hint')) box.innerHTML = ''; if (user) box.appendChild(renderMsg(c, user)); box.appendChild(renderMsg(c, m)); c.follow = true; c.toEnd?.(); }
@@ -5300,7 +5357,11 @@ async function deskPlace(force) {
   const covered = !!document.querySelector('dialog[open], #paneSrvPop:not([hidden]), .oh-tip.on.covers, #replyInfoPop.covers:not([hidden])');
   const snap = $('.dsnap', d.ph);
   if (covered) {
-    if (d.shown) { const url = await window.ohDesktop.snapshot(d.sid).catch(() => null); if (url) { snap.src = url; snap.hidden = false; } window.ohDesktop.hideAll(); d.shown = false; }
+    if (d.shown) { const url = await window.ohDesktop.snapshot(d.sid).catch(() => null); if (url) { snap.src = url; snap.hidden = false; } }
+    // Hidden every time, not only when we think it's showing: a tab the app re-made under the same name may be
+    // showing without us knowing, and would sit on top of the servers list or a dialog.
+    window.ohDesktop.hideAll();
+    d.shown = false;
     return;
   }
   snap.hidden = true;
@@ -5355,6 +5416,8 @@ function deskAgentEvent(ev) {
   const chatId = ev.sid.slice(6), c = focused();
   const a = (G.agentTab ||= {})[chatId];
   if (ev.type === 'agent-tab' || ev.type === 'agent-lock') {
+    // A new agent tab (a new reply makes one under the same name) hasn't been placed or shown yet: forget the old one's place.
+    if (ev.type === 'agent-tab' && G.dsk?.sid === ev.sid) { G.dsk.rect = ''; G.dsk.shown = false; deskPlace(true); }
     if (a && ev.type === 'agent-lock') a.locked = ev.locked;
     if (c?.id === chatId) refreshAgentTab(c).then(() => { if (G.view.browser) renderPane(); });
     return;

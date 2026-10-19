@@ -1017,3 +1017,19 @@ test('a note sent while the agent works can carry pictures and context, and the 
   assert.match(note, /error log: boom/);
   assert.match(note, /attached 1 image/, 'the picture is passed on (this test model cannot see images, so it is told the deciders can)');
 });
+
+test('fresh eyes: the same problem twice gets a clean-context diagnosis before the next step', async () => {
+  const seen = [];
+  const { events, bodies, done } = await run((body, i) => {
+    if (/second pair of eyes/.test(String(body.messages[0].content))) return reply('Cause: a stray "=" with no value on line 1.\nEvidence: app.js:1.\nFix: give it a value.');
+    seen.push(i);
+    const own = seen.length - 1;
+    return [reply('', [['write_file', { path: 'app.js', content: 'const a = ;\n' }]]), reply('', [['write_file', { path: 'app.js', content: 'const a = ;\n' }]]), reply('', [['write_file', { path: 'app.js', content: 'const a = 1;\n' }]]), reply('Fixed.')][own];
+  }, { settings: { review: 'off', verify: false } });
+  assert.equal(of(events, 'fresh_eyes').length, 1, 'one fresh look');
+  assert.ok(of(events, 'fresh_eyes')[0].ok);
+  const after = bodies.find((b) => b.messages.some((m) => m.role === 'user' && /\[Fresh eyes:/.test(String(m.content))));
+  assert.ok(after, 'the diagnosis reaches the agent');
+  assert.match(JSON.stringify(after.messages), /stray/);
+  assert.equal(done.reply, 'Fixed.');
+});
