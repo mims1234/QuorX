@@ -1440,6 +1440,7 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
   }
 
   async function verifyWork(step) {
+    let browserNote = null;
     const changed = root ? changedFiles(root, filesId).filter((f) => CHECKED.test(f) && fs.existsSync(path.join(root, f))) : [];
     const htmlArts = [...touched.arts].filter((id) => arts.get(id)?.kind === 'html');
     if (!changed.length && !htmlArts.length && !touched.apps.size) return null;
@@ -1453,11 +1454,21 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
     }
     if (browserOn) {
       const targets = builtTargets();
-      let vt = null;
+      let vt = null, shared = false;
       try {
         for (const target of targets.slice(0, 4)) {
+          if (!vt) {
+            // The checks' own hidden browser; when it won't start on this computer, the agent's own tab (the desktop
+            // app's) does the checks. A browser that won't start is not a problem in the work: a note, never a send-back.
+            try { vt = await (deps.openTab || openTab)(); }
+            catch (e) {
+              if (signal.aborted) throw e;
+              const why = clip(e.message, 160);
+              if (req.chatId && !req.bench) { try { const t = await getTab(); if (t.desktop) { vt = t; shared = true; } } catch { /* none either */ } }
+              if (!vt) { browserNote = `the checks could not use a browser (${why}), so pages were not opened; only the files were checked`; break; }
+            }
+          }
           try {
-            vt ??= await (deps.openTab || openTab)();
             const sum = await vt.open(resolveTarget(target), { width: 1280 });
             await sleep(600, signal);
             const errs = vt.console.filter((l) => /^(exception|error)/.test(l) && !/favicon\.ico/i.test(l));
@@ -1473,7 +1484,7 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
             pages.push({ target, problems: 1 });
           }
         }
-      } finally { await vt?.close(); }
+      } finally { if (!shared) await vt?.close(); }
     }
     const ok = !problems.length;
     // What the design lint still finds in the finished files: counted for the scorecard, never a reason to send back.
@@ -1482,7 +1493,7 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
       const hits = [...changed.filter((f) => LINTED.test(f)).slice(0, 40).flatMap((f) => lintFile(root, f)), ...htmlArts.flatMap((id) => lintHtml(arts.get(id).html))];
       lint = { fix: hits.filter((h) => h.level === 'fix').length, consider: hits.filter((h) => h.level === 'consider').length, ids: [...new Set(hits.map((h) => h.id))] };
     }
-    emit({ t: 'verify', step, ok, files: changed.length, problems: problems.slice(0, 12), pages, lint, at: at() });
+    emit({ t: 'verify', step, ok, files: changed.length, problems: problems.slice(0, 12), pages, lint, ...(browserNote ? { note: browserNote } : {}), at: at() });
     return { ok, problems: problems.slice(0, 12), lint };
   }
 
@@ -2105,13 +2116,15 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
   function resolveTarget(t) {
     const target = String(t || '').trim();
     const base = `http://localhost:${runtime.port}`;
+    // Pages the agent made open from the pages address (their own origin, so storage works), if it is up.
+    const pages = runtime.pagePort ? `http://localhost:${runtime.pagePort}` : base;
     if (/^https?:\/\//i.test(target)) return target;
     if (target.startsWith('artifact:')) {
       const a = arts.get(target.slice(9));
       if (!a) throw new Error(`no artifact ${target.slice(9)}`);
-      if (a.kind === 'html') return base + hostHtml(a.html);
-      if (a.kind === 'md') return base + hostHtml(markdownHtml(a.title, a.md));
-      if (a.url?.startsWith('/')) return base + a.url;
+      if (a.kind === 'html') return pages + hostHtml(a.html);
+      if (a.kind === 'md') return pages + hostHtml(markdownHtml(a.title, a.md));
+      if (a.url?.startsWith('/')) return (/^\/(ws|art|preview)\//.test(a.url) ? pages : base) + a.url;
       if (a.url?.startsWith('http')) return a.url;
       throw new Error(`artifact ${a.id} is a ${a.kind}; open it by its site or app name instead`);
     }
@@ -2119,7 +2132,7 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
       // A site running from the launch file (serve.mjs) opens there: its own origin, so storage works.
       const entry = target.slice(5).replace(/^[/\\]+/, '') || 'index.html';
       const sv = listServers(projectId).find((x) => x.status !== 'stopped' && /\.quorx[/\\]serve\.mjs/.test(x.command || '') && x.url);
-      return sv ? new URL(entry, sv.url).href : `${base}/ws/${projectId}/${entry}`;
+      return sv ? new URL(entry, sv.url).href : `${pages}/ws/${projectId}/${entry}`;
     }
     if (target.startsWith('app:')) {
       // app:<server name>, or app:<server name>/<page> for a page on it.

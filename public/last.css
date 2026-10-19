@@ -1749,3 +1749,10 @@ dialog.lb-dlg::backdrop { background: rgba(3, 5, 5, .82); backdrop-filter: blur(
 .lb-nav button { width: 32px; height: 28px; border-radius: 7px; border: 1px solid var(--line); background: transparent; color: var(--text); font-size: 18px; cursor: pointer; }
 .lb-nav button:hover { background: var(--panel-2); }
 .lb-doc { flex: 1 1 auto; min-height: 0; padding-top: 4px; }
+
+/* ---------- pane tabs: icons only when the pane is too narrow for their names (the name is in each tab's tip) ---------- */
+#pane .pane-tabs.icons-only > [data-tab] { padding: 0 8px !important; gap: 3px !important; }
+#pane .pane-tabs.icons-only .pt-label { display: none; }
+#pane .pane-tabs.icons-only > [data-tab] .pt-ico { width: 16px; height: 16px; }
+#pane .pane-tabs .pt-spacer { flex: 1 1 0; min-width: 4px; }
+#pane .pane-tabs .pt-icon { flex: none; }

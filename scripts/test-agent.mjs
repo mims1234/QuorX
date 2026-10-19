@@ -516,6 +516,20 @@ test('a review that stays below the bar after the allowed rounds is shown in the
   assert.equal(done.stats.review.pass, false);
 });
 
+test('a browser that will not start is a note from the checks, never a problem sent back to the agent', async () => {
+  let b = 0;
+  const { events } = await run((body) => [
+    reply('', [['write_file', { path: 'index.html', content: PAGE }]]),
+    reply('', [['preview_site', { title: 'Game' }]]),
+    reply('Done.'),
+  ][b++], { settings: { tools: { browser: { on: true } }, review: 'off' }, openTab: async () => { throw new Error('msedge.exe did not start: it gave no answer within 30 s'); } });
+  const v = of(events, 'verify');
+  assert.equal(v.length, 1);
+  assert.equal(v[0].ok, true);
+  assert.match(v[0].note, /could not use a browser \(msedge\.exe did not start/);
+  assert.equal(of(events, 'sent_back').length, 0);
+});
+
 test('in "builds" mode there is no review without a plan; "off" never reviews', async () => {
   const script = () => { let b = 0; return (body) => [
     reply('', [['write_file', { path: 'index.html', content: PAGE }]]),

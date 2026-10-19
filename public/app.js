@@ -1354,6 +1354,27 @@ async function openFolderAsProject(btn, errEl) {
   G.landingProject = made.id;
   await newChat(made.id);
 }
+// ---------- the pane's tabs: icons only when their names don't fit (the servers and full-width buttons stay on) ----------
+(() => {
+  const bar = document.getElementById('paneTabs'); if (!bar || !window.ResizeObserver) return;
+  let w = -1;
+  const fit = () => {
+    if (bar.clientWidth === w) return; w = bar.clientWidth;
+    bar.classList.remove('icons-only');
+    if (bar.scrollWidth > bar.clientWidth + 1) bar.classList.add('icons-only');
+  };
+  new ResizeObserver(fit).observe(bar);
+  new MutationObserver(() => { w = -1; fit(); }).observe(bar, { subtree: true, childList: true, characterData: true }); // counts and dots change the width
+})();
+// ---------- pages the agent made: from the pages address when there is one ----------
+// There they have an origin of their own (not this app's), so localStorage and the like work and the frame can be
+// allowed its origin. Only on this computer: the pages address answers no other device.
+function pageUrl(u) {
+  const p = G.cfg?.pagePort;
+  if (!p || !/^\/(ws|art|preview)\//.test(u) || !/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname)) return u;
+  return `${location.protocol}//${location.hostname}:${p}${u}`;
+}
+const pageSandbox = (u) => `allow-scripts allow-forms allow-modals allow-popups allow-downloads${/^https?:/.test(u) && !u.startsWith(location.origin) ? ' allow-same-origin' : ''}`;
 // ---------- looking at what you sent: pictures large (← → between them), files in the Files preview ----------
 function openViewer(build) {
   let d = $('#lbDlg');
@@ -2561,7 +2582,7 @@ function traceHTML(m) {
     else if (e.t === 'trimmed') row(e.at, `✂ Trimmed ${Math.round(e.saved / 1000)}k characters of old file contents from this reply (${Math.round(e.size / 1000)}k left)`, 'note');
     else if (e.t === 'compacted_run') row(e.at, `🗜 Summarised the earlier part of this reply (${Math.round(e.size / 1000)}k characters left)`, 'note');
     else if (e.t === 'verify_start') row(e.at, `🔍 Checking the work before the final reply${e.files ? ` · ${e.files} changed file${e.files === 1 ? '' : 's'}` : ''}`, 'browser');
-    else if (e.t === 'verify') row(e.at, `${e.ok ? '✅ Checks passed' : `<span class="warn">⚠ Checks found ${e.problems.length} problem${e.problems.length === 1 ? '' : 's'}</span>`}${e.problems.length ? `<div class="sub">${e.problems.map(esc).join('<br>')}</div>` : ''}${e.lint && (e.lint.fix || e.lint.consider) ? `<div class="sub">🎨 design lint still notes ${e.lint.fix} to fix, ${e.lint.consider} to consider (${esc(e.lint.ids.join(', '))})</div>` : ''}${(e.pages || []).map((p) => `<div class="sub">opened ${esc(p.target)} · ${p.problems ? `${p.problems} problem${p.problems === 1 ? '' : 's'}` : 'no errors'}</div>${p.image ? `<img class="shot" src="${p.image}" alt="what the check saw" loading="lazy">` : ''}`).join('')}`, e.ok ? 'ok' : 'warn');
+    else if (e.t === 'verify') row(e.at, `${e.ok ? '✅ Checks passed' : `<span class="warn">⚠ Checks found ${e.problems.length} problem${e.problems.length === 1 ? '' : 's'}</span>`}${e.problems.length ? `<div class="sub">${e.problems.map(esc).join('<br>')}</div>` : ''}${e.lint && (e.lint.fix || e.lint.consider) ? `<div class="sub">🎨 design lint still notes ${e.lint.fix} to fix, ${e.lint.consider} to consider (${esc(e.lint.ids.join(', '))})</div>` : ''}${e.note ? `<div class="sub">ℹ ${esc(e.note)}</div>` : ''}${(e.pages || []).map((p) => `<div class="sub">opened ${esc(p.target)} · ${p.problems ? `${p.problems} problem${p.problems === 1 ? '' : 's'}` : 'no errors'}</div>${p.image ? `<img class="shot" src="${p.image}" alt="what the check saw" loading="lazy">` : ''}`).join('')}`, e.ok ? 'ok' : 'warn');
     else if (e.t === 'sent_back') row(e.at, `↩ ${e.by === 'reviewer' ? 'The reviewer sent it back' : 'Sent back'} to fix ${e.problems} problem${e.problems === 1 ? '' : 's'} (round ${e.round})${e.aside ? `<div class="aside">💬 ${esc(e.aside)}</div>` : ''}`, 'warn');
     else if (e.t === 'question') row(e.at, `❓ ${e.auto ? 'Asked (⚡ YOLO: the deciders answer for you)' : 'Asked you'}: <b>${esc(e.question)}</b><div class="sub">${e.questions ? e.questions.map((q, i) => `${i + 1}. ${esc(q.question)} (${q.options.map(esc).join(' · ')})`).join('<br>') : e.options.map(esc).join(' · ')}</div>`, 'ask');
     else if (e.t === 'answer') row(e.at, e.by === 'deciders' ? `⚖️ The deciders answered for you: <b>${esc(e.label || e.text || '')}</b>${e.confidence != null ? ` · ${Math.round(e.confidence * 100)}% sure` : ''}` : `💬 You answered: ${esc(e.label || e.text || '')}`, 'ok');
@@ -3125,7 +3146,8 @@ function renderPane() {
   const frame = (src, sandboxed) => {
     body.innerHTML = '';
     const f = document.createElement('iframe');
-    if (sandboxed) f.setAttribute('sandbox', 'allow-scripts allow-forms allow-modals allow-popups allow-downloads');
+    src = pageUrl(src);
+    if (sandboxed) f.setAttribute('sandbox', pageSandbox(src));
     // Until the page has loaded, the pane shows a themed placeholder instead of the frame's blank white (motion.css).
     body.classList.add('art-loading');
     const done = () => body.classList.remove('art-loading');
@@ -3284,7 +3306,7 @@ async function previewFile(view, { name, src, size, full, text, kind = previewKi
     return;
   }
   if (kind === 'md') return twoWay(async (body) => { const t = text ?? await fetch(src).then((r) => r.text()); body.innerHTML = `<div class="pv-md msg-md">${md(t)}</div>`; enhance(body); });
-  if (kind === 'html') return twoWay((body) => { body.innerHTML = `<iframe class="pv-frame" sandbox="allow-scripts allow-forms allow-modals allow-popups" src="${esc(src)}" title="${esc(name)}"></iframe>`; });
+  if (kind === 'html') return twoWay((body) => { const u = pageUrl(src); body.innerHTML = `<iframe class="pv-frame" sandbox="${pageSandbox(u)}" src="${esc(u)}" title="${esc(name)}"></iframe>`; });
   if (kind === 'binary') { view.innerHTML = head(meta) + `<div class="fx-empty big">${esc(name)}<br><small>A binary file: no preview. Open ↗ or open the folder to use it.</small></div>`; wire(); return; }
   // Text and code: the code viewer.
   const t = text ?? await fetch(src).then((r) => r.text());
