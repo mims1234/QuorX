@@ -1788,3 +1788,70 @@ img.shot, img.dsnap, .msg .msg-md img { cursor: zoom-in; }
 img.shot:hover, img.dsnap:hover, .msg .msg-md img:hover { outline: 2px solid var(--accent); outline-offset: 1px; }
 .lb-pic { display: grid !important; grid-template: minmax(0, 1fr) / minmax(0, 1fr); place-items: stretch !important; }
 .lb-pic img { width: 100%; height: 100%; max-width: none; max-height: none; object-fit: contain; border-radius: 6px; }
+
+/* ---------- a running reply's cost, climbing as it works ---------- */
+.foot .f-cost.live { color: var(--amber, #f59e0b); font-variant-numeric: tabular-nums; }
+.foot .f-cost.live::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 50%; background: currentColor; vertical-align: 1px; animation: livePulse 1.4s ease-in-out infinite; }
+.foot .f-dur.live { font-variant-numeric: tabular-nums; }
+.sb-chat-meta .cost.live { color: var(--amber, #f59e0b); }
+@keyframes livePulse { 50% { opacity: .35; } }
+:root.reduce-motion .foot .f-cost.live::before { animation: none; }
+
+/* ---------- approval cards: three real buttons; a note turns "no" into the button that sends it ---------- */
+.approval .acts { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.approval .acts button { white-space: nowrap; }
+.approval .acts button.no { border: 1px solid color-mix(in srgb, var(--bad) 60%, transparent) !important; background: transparent !important; color: var(--bad) !important; }
+.approval .acts button.no:hover:not(:disabled) { background: color-mix(in srgb, var(--bad) 14%, transparent) !important; }
+.approval .acts button.no.with-note { background: var(--bad) !important; border-color: var(--bad) !important; color: #fff !important; }
+
+/* ---------- the reply breakdown: the total cost is the headline ---------- */
+.fi-total { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; margin: 0 0 8px; padding: 0 0 8px; border-bottom: 1px solid var(--line); }
+.fi-total > span { font: 700 11px var(--font-ui); letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.fi-total > span i { display: block; margin-top: 2px; font: italic 500 10.5px var(--font-ui); letter-spacing: 0; text-transform: none; color: var(--amber, #f59e0b); }
+.fi-total > b { font: 800 19px/1 var(--mono); color: var(--amber, #f59e0b); font-variant-numeric: tabular-nums; }
+.fi-row b small { font-weight: 500; color: var(--muted); }
+
+
+/* ---------- the end of the Steps pane: the cost breakdown ---------- */
+.trace-cost { margin: 14px 0 6px; padding: 12px 14px; border: 1px solid var(--line); border-left: 3px solid var(--amber, #f59e0b); border-radius: 8px; background: var(--panel); font: 12px var(--font-ui); }
+.trace-cost .tc-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.trace-cost .tc-head span { font-weight: 700; color: var(--text); }
+.trace-cost .tc-head b { font: 800 18px/1 var(--mono); color: var(--amber, #f59e0b); font-variant-numeric: tabular-nums; }
+.trace-cost .tc-sub { margin-top: 4px; color: var(--muted); }
+.trace-cost .tc-table { width: 100%; margin-top: 10px; border-collapse: collapse; font: 11.5px var(--mono); table-layout: fixed; }
+.trace-cost .tc-table td { padding: 4px 0; border-top: 1px solid var(--line); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.trace-cost .tc-table td:first-child { width: 46%; color: var(--text); }
+.trace-cost .tc-table td:nth-child(2) { width: 9%; }
+.trace-cost .tc-table td i { font-style: normal; color: var(--muted); }
+.trace-cost .tc-table .tc-c { text-align: right; color: var(--amber, #f59e0b); font-variant-numeric: tabular-nums; }
+.trace-cost .tc-chat { display: flex; justify-content: space-between; gap: 12px; margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--line-strong, var(--line)); color: var(--muted); }
+.trace-cost .tc-chat b { font: 700 13px var(--mono); color: var(--amber, #f59e0b); }
+
+/* A zoomed pane page: scaled inside its box, never spilling past it. */
+.zoomed-frame { overflow: hidden !important; position: relative; }
+.zoomed-frame > iframe { flex: none !important; }
+
+/* ---------- the side panel hidden: chat only; the button at the top of the chat brings it back ---------- */
+@media (min-width: 901px) {
+  .layout.pane-hidden { grid-template-columns: minmax(0, 1fr) !important; }
+  .layout.pane-hidden .pane, .layout.pane-hidden #paneResizer { display: none !important; }
+  .layout.pane-hidden .work { grid-column: 1 / -1; width: auto !important; max-width: none !important; }
+}
+.chat-head .ch-showpane { display: none !important; }
+.layout.pane-hidden .chat-head .ch-showpane { display: inline-flex !important; }
+@media (max-width: 900px) { .layout.pane-hidden .chat-head .ch-showpane { display: none !important; } }
+#paneHideBtn svg, .ch-showpane svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ---------- home: the top is one compact row (logo + title, then the project and how to start), so more shows below ---------- */
+.landing { padding-top: 16px !important; gap: 12px !important; }
+.ld-hero { display: flex !important; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 10px 12px !important; padding: 0 0 4px !important; text-align: left !important; }
+.ld-hero .ld-mark { flex: none; width: 30px !important; height: 30px !important; border-radius: 8px !important; font-size: 13px !important; display: grid; place-items: center; box-shadow: none !important; margin: 0 !important; }
+.ld-hero h1 { margin: 0 !important; font-size: 18px !important; line-height: 1.2; white-space: nowrap; }
+.ld-hero > p:not(.ld-folder-err) { display: none; }
+.ld-hero .ld-start { margin: 0 0 0 auto !important; flex-wrap: nowrap; gap: 6px !important; }
+.ld-hero .ld-start > * { height: 32px !important; min-height: 0 !important; }
+.ld-hero .ld-start .ld-new, .ld-hero .ld-start .ld-folder { padding: 0 12px !important; font-size: 12.5px !important; box-shadow: none !important; }
+.ld-hero .ld-proj { min-width: 150px; max-width: 220px; }
+.ld-hero .ld-folder-err { flex-basis: 100%; text-align: right; }
+@media (max-width: 720px) { .ld-hero .ld-start { margin-left: 0 !important; flex-wrap: wrap; width: 100%; } .ld-hero .ld-proj { flex: 1 1 140px; max-width: none; } }
+.landing .ld-h { margin: 6px 0 0 !important; }

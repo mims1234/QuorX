@@ -585,7 +585,9 @@ function renderSidebar() {
     const shown = chats.filter((c) => !q || c.title.toLowerCase().includes(q) || String(c.preview || '').toLowerCase().includes(q));
     if (q && !shown.length) return '';
     // The server's total also counts replies that never reached a chat file (stopped, page closed, deleted).
-    const cost = p.spent ?? chats.reduce((s, c) => s + (c.cost || 0), 0);
+    // Replies running in this page add what they have spent so far (the server's figure for them was taken earlier).
+    const liveHere = chats.reduce((s, c) => s + liveOf(G.open.get(c.id)), 0);
+    const cost = (p.spent != null ? p.spent - (p.running || 0) : chats.reduce((s, c) => s + (c.cost || 0), 0)) + liveHere;
     const share = p.budget ? Math.min(1, cost / p.budget) : 0;
     const folded = (G.foldedProjects || []).includes(p.id) && !q;
     // A project with a chat working glows; with a chat open it's the current one; the rest fade back (see last.css).
@@ -606,7 +608,7 @@ function renderSidebar() {
           <div class="sb-chat-content">
             <div class="sb-chat-topline"><span class="sb-chat-title">${esc(c.title)}</span>${running ? '<span class="live-dot" title="Running"></span>' : ''}</div>
             ${waiting ? `<div class="sb-chat-prev"><b class="needs">${waiting === 'answer' ? 'Waiting for your answer' : waiting === 'budget' ? 'Waiting: project budget reached' : 'Waiting for your approval'}</b></div>` : running ? '<div class="sb-chat-prev"><i>Working…</i></div>' : ''}
-            <div class="sb-chat-meta" title="Last message ${esc(new Date(c.lastAt || c.updated || Date.now()).toLocaleString())}"><span>${ago(c.lastAt || c.updated || Date.now())}</span>${c.model ? `<span>· ${esc(short(c.model))}</span>` : ''}${c.cost ? `<span class="cost">· $${c.cost.toFixed(3)}</span>` : ''}</div>
+            <div class="sb-chat-meta" title="Last message ${esc(new Date(c.lastAt || c.updated || Date.now()).toLocaleString())}"><span>${ago(c.lastAt || c.updated || Date.now())}</span>${c.model ? `<span>· ${esc(short(c.model))}</span>` : ''}${c.cost || liveOf(G.open.get(c.id)) ? `<span class="cost${liveOf(G.open.get(c.id)) ? ' live' : ''}">· $${((c.cost || 0) + liveOf(G.open.get(c.id))).toFixed(3)}</span>` : ''}</div>
           </div>
           <div class="sb-chat-acts"><button type="button" class="sb-ren ico-rename" title="Rename chat" aria-label="Rename chat">${ICO.pencil}</button><button type="button" class="sb-del del ico-delete" title="Delete chat (moves it to data/trash)" aria-label="Delete chat">${ICO.trash}</button></div>
         </div>`;
@@ -1292,7 +1294,7 @@ function renderLanding(box) {
       <p class="ld-folder-err" role="alert" hidden></p>
     </div>
     ${G.starters?.length ? `<h2 class="ld-h">Start from a template</h2><div class="ld-starters">${G.starters.map((t) => `<button type="button" class="ld-starter" data-starter="${esc(t.name)}" title="${esc(t.description)}"><span class="ld-st-mark" style="--h:${hue(t.name)}">${esc(initials(starterName(t.name)))}</span><span class="ld-st-main"><b>${esc(starterName(t.name))}</b><small>${esc(t.description.split(/[:;(]/)[0].trim())}</small></span></button>`).join('')}</div>` : ''}
-    ${recent.length ? `<h2 class="ld-h">Recent chats</h2><div class="ld-recent">${recent.map((c) => `<button type="button" class="ld-chat" data-c="${esc(c.id)}"><span class="sb-chat-avatar" style="--h:${hue(c.title)}">${esc(initials(c.title))}</span><span class="ld-chat-main"><b>${esc(c.title)}</b><small><span class="ld-chat-proj" style="${projStyle(G.projects.find((x) => x.id === c.projectId) || { name: projName(c.projectId) })}">${esc(projName(c.projectId))}</span> · ${ago(c.lastAt || Date.now())}</small></span><span class="ld-cost">$${(c.cost || 0).toFixed(3)}</span></button>`).join('')}</div>` : ''}
+    ${recent.length ? `<h2 class="ld-h">Recent chats</h2><div class="ld-recent">${recent.map((c) => `<button type="button" class="ld-chat" data-c="${esc(c.id)}"><span class="ld-chat-main"><b>${esc(c.title)}</b><small><span class="ld-chat-proj" style="${projStyle(G.projects.find((x) => x.id === c.projectId) || { name: projName(c.projectId) })}">${esc(projName(c.projectId))}</span> · ${ago(c.lastAt || Date.now())}</small></span><span class="ld-cost">$${(c.cost || 0).toFixed(3)}</span></button>`).join('')}</div>` : ''}
     <h2 class="ld-h">Projects</h2>
     <div class="ld-projects">${projects.slice(0, G.landingAllProjects ? projects.length : 6).map((p) => {
       const n = G.chats.filter((c) => (c.projectId || 'scratch') === p.id && c.messages > 0).length, spent = p.spent || 0;
@@ -1459,6 +1461,119 @@ function ask(message, { ok, cancel = 'Cancel', danger, input = null, alertOnly =
   return new Promise((resolve) => {
     const [head, ...rest] = String(message || '').split('\n');
     const verb = ASK_VERBS[(head.match(/^\s*(\w+)/)?.[1] || '').toLowerCase()];
+// A reply that ended without its totals (the harness restarted, or the connection dropped for good) still paid for
+// the calls it made: their costs are in its steps, so the chat and the Costs window count them.
+// ---------- what a running reply has spent so far: sent after every model call, shown as it climbs ----------
+const liveOf = (c) => (c?.agent?.messages || []).reduce((s, m) => s + (m.role === 'assistant' && !m.stats && m.live ? m.liveCost || 0 : 0), 0);
+function liveFootHTML(m) {
+  return `<span class="f-cost live" title="Spent so far by this reply, updated after every model call">${money(m.liveCost, 5)}</span><span class="f-dur live" title="Model calls so far">${m.liveCalls || 0} call${m.liveCalls === 1 ? '' : 's'}</span>`;
+}
+let liveSideAt = 0, liveSideTimer = null;
+function liveSpend(c, m) {
+  // The reply's footer: just its numbers once it shows them (the rest of the reply is left alone).
+  const f = m.el && $('.foot', m.el);
+  if (f && $('.f-cost.live', f)) { $('.f-cost.live', f).textContent = money(m.liveCost, 5); const d = $('.f-dur.live', f); if (d) d.textContent = `${m.liveCalls || 0} call${m.liveCalls === 1 ? '' : 's'}`; }
+  else if (m.el) updateMsg(c, m);
+  renderChatHead(c);
+  // The sidebar at most every 1.5 s (it is redrawn whole).
+  const due = 1500 - (Date.now() - liveSideAt);
+  if (due <= 0) { liveSideAt = Date.now(); renderSidebar(); }
+  else if (!liveSideTimer) liveSideTimer = setTimeout(() => { liveSideTimer = null; liveSideAt = Date.now(); renderSidebar(); }, due);
+}
+function partialSpend(m) { if (partialSpendQuiet(m)) { G.sessionCost += m.stats.cost; renderSpend(); } }
+function partialSpendQuiet(m) {
+  if (m.stats || !m.trace?.length) return false;
+  const byModel = {};
+  let cost = 0, calls = 0, tokensOut = 0;
+  for (const e of m.trace) {
+    if ((e.t !== 'llm_done' && e.t !== 'helper_done') || !(Number(e.cost) >= 0)) continue;
+    const c = Number(e.cost) || 0, model = e.actual || e.model || '?';
+    cost += c; calls++; tokensOut += Number(e.tokensOut) || 0;
+    const b = (byModel[model] ||= { cost: 0, calls: 0, role: e.t === 'helper_done' ? 'helper' : 'writer' }); b.cost += c; b.calls++;
+  }
+  if (!calls) return false;
+  m.stats = { cost, llmCalls: calls, tokensOut, byModel, partial: true, fromSteps: true };
+  return true;
+}
+// ---------- the end of the Steps pane: what this reply cost (so far, while it runs), by model, and the chat's total ----------
+function traceCostHTML(c, m) {
+  const s = m.stats || (m.live && m.liveCost != null ? { cost: m.liveCost, byModel: m.liveByModel || {}, tokensIn: m.liveTokens?.[0], tokensOut: m.liveTokens?.[1], live: true } : null);
+  if (!s) return '';
+  const k = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n || 0));
+  const models = Object.entries(s.byModel || {}).sort((a, b) => (b[1].cost || 0) - (a[1].cost || 0));
+  const calls = models.reduce((n, [, v]) => n + (v.calls || 0), 0) || s.llmCalls || 0;
+  const t = chatTotals(c); // every reply in the chat (this one included, live or done) and calls outside replies
+  const rows = models.map(([id, v]) => `<tr><td><span class="tc-model" title="${esc(id)}">${esc(short(id))}</span>${v.role && v.role !== 'writer' ? ` <i>${esc(v.role)}</i>` : ''}</td><td>${v.calls || 0}×</td><td>${v.tokensIn || v.tokensOut ? `${k(v.tokensIn)} in · ${k(v.tokensOut)} out` : ''}</td><td class="tc-c">${money(v.cost || 0, 5)}</td></tr>`).join('');
+  return `<div class="trace-cost">
+    <div class="tc-head"><span>💲 ${s.live ? 'Spent so far' : s.partial ? 'This reply spent (it ended early)' : 'This reply cost'}</span><b>${money(s.cost || 0, 5)}</b></div>
+    <div class="tc-sub">${calls} model call${calls === 1 ? '' : 's'}${s.tokensIn ? ` · ${k(s.tokensIn)} tokens in` : ''}${s.tokensOut ? ` · ${k(s.tokensOut)} tokens out` : ''}${s.ms ? ` · ${secs(s.ms)}` : ''}${s.mediaSpent ? ` · media ${money(s.mediaSpent, 4)}` : ''}</div>
+    ${rows ? `<table class="tc-table"><tbody>${rows}</tbody></table>` : ''}
+    <div class="tc-chat"><span>Whole chat so far · ${t.replies} repl${t.replies === 1 ? 'y' : 'ies'}${t.msgs ? ` · ${t.msgs} message${t.msgs === 1 ? '' : 's'}` : ''}</span><b>${money(t.cost, 4)}</b></div>
+  </div>`;
+}
+// ---------- zoom: Ctrl + / − / 0 (and Ctrl+wheel) ----------
+// In the terminal they change its text size only, as in an editor's terminal. Elsewhere, in the desktop app they zoom
+// QuorX (remembered); in a browser the browser's own zoom does that. Browser tabs in the pane zoom on their own.
+const TERM_FONT = [9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 22, 24];
+function termFont(dir) {
+  let cur = 13; try { cur = Number(localStorage.getItem('oh-term-font')) || 13; } catch { /* default */ }
+  const i = TERM_FONT.indexOf(cur);
+  const next = dir === 'reset' ? 13 : TERM_FONT[Math.max(0, Math.min(TERM_FONT.length - 1, (i < 0 ? 4 : i) + (dir === 'in' ? 1 : -1)))];
+  try { localStorage.setItem('oh-term-font', String(next)); } catch { /* this session only */ }
+  for (const x of G.xt?.values() || []) { x.term.options.fontSize = next; try { x.fit.fit(); } catch { /* hidden */ } }
+  return next;
+}
+const zoomDir = (e) => (!(e.ctrlKey || e.metaKey) || e.altKey ? null : ['=', '+'].includes(e.key) || e.code === 'NumpadAdd' ? 'in' : ['-', '_'].includes(e.key) || e.code === 'NumpadSubtract' ? 'out' : e.key === '0' || e.code === 'Numpad0' ? 'reset' : null);
+const inTerminal = (el) => !!el?.closest?.('.xt-host');
+// Pages shown in the pane (artifacts, page previews) zoom on their own, in Chrome's steps, remembered. They're scaled
+// as a whole, laid out wider or narrower to match, like a browser's zoom; the page inside never notices.
+const PAGE_ZOOMS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
+let pageZoom = (() => { try { const z = Number(localStorage.getItem('oh-page-zoom')); return z >= 0.5 && z <= 2 ? z : 1; } catch { return 1; } })();
+function fitFrame(f) {
+  const z = pageZoom;
+  if (z === 1) { for (const p of ['width', 'height', 'transform', 'transform-origin', 'max-width']) f.style.removeProperty(p); f.parentElement?.classList.remove('zoomed-frame'); return; }
+  f.style.setProperty('width', `${100 / z}%`, 'important'); f.style.setProperty('max-width', 'none', 'important');
+  f.style.setProperty('height', `${100 / z}%`, 'important');
+  f.style.transform = `scale(${z})`; f.style.transformOrigin = '0 0';
+  f.parentElement?.classList.add('zoomed-frame');
+}
+const paneFrames = () => [...document.querySelectorAll('#paneBody iframe, .lb-doc iframe')];
+function zoomPages(dir) {
+  const i = PAGE_ZOOMS.findIndex((z) => Math.abs(z - pageZoom) < 0.01);
+  pageZoom = dir === 'reset' ? 1 : PAGE_ZOOMS[Math.max(0, Math.min(PAGE_ZOOMS.length - 1, (i < 0 ? 5 : i) + (dir === 'in' ? 1 : -1)))];
+  try { localStorage.setItem('oh-page-zoom', String(pageZoom)); } catch { /* this session only */ }
+  for (const f of paneFrames()) fitFrame(f);
+  return pageZoom;
+}
+// New frames (a different artifact, a re-drawn pane) come up at the remembered zoom.
+new MutationObserver((list) => { if (pageZoom === 1) return; for (const r of list) for (const n of r.addedNodes) { if (n.nodeName === 'IFRAME') fitFrame(n); else if (n.querySelectorAll) for (const f of n.querySelectorAll('iframe')) if (f.closest('#paneBody, .lb-doc')) fitFrame(f); } })
+  .observe(document.body, { childList: true, subtree: true });
+// What a zoom is for: the frame or terminal that has focus (keys), or that the mouse is over (wheel).
+let lastPointer = null;
+document.addEventListener('pointermove', (e) => { lastPointer = [e.clientX, e.clientY]; }, { capture: true, passive: true });
+const isPaneFrame = (el) => el?.nodeName === 'IFRAME' && !!el.closest('#paneBody, .lb-doc');
+function zoomTarget(kind) {
+  const el = kind === 'wheel' ? (lastPointer ? document.elementFromPoint(...lastPointer) : null) : document.activeElement;
+  return isPaneFrame(el) ? 'page' : inTerminal(el) ? 'terminal' : 'app';
+}
+function zoomFor(target, dir) {
+  if (target === 'terminal') return flashTip($('#paneBody .term-x') || document.body, `Terminal text ${termFont(dir)}px`);
+  if (target === 'page') { const z = zoomPages(dir); const f = paneFrames()[0]; return flashTip(f?.parentElement || document.body, `Page ${Math.round(z * 100)}%`); }
+  window.ohDesktop?.zoom?.(dir).then((f) => flashTip(document.body, `QuorX ${Math.round(f * 100)}%`)).catch(() => {});
+}
+// In the desktop app the keys and Ctrl+wheel arrive from the app (they reach it even inside a frame).
+window.ohDesktop?.on?.((ev) => { if (ev.type === 'zoom-key') zoomFor(zoomTarget('key'), ev.dir); if (ev.type === 'zoom-wheel') zoomFor(zoomTarget('wheel'), ev.dir); });
+// In a browser the page sees its own keys and wheel: the terminal and pane pages take theirs; the rest is the browser's zoom.
+document.addEventListener('keydown', (e) => {
+  const dir = zoomDir(e); if (!dir || window.ohDesktop?.zoom) return;
+  const t = zoomTarget('key'); if (t === 'app') return;
+  e.preventDefault(); e.stopPropagation(); zoomFor(t, dir);
+}, true);
+document.addEventListener('wheel', (e) => {
+  if (!(e.ctrlKey || e.metaKey)) return;
+  // The terminal's text, in the desktop app too (the page takes the wheel first, so the app never sees it).
+  if (inTerminal(e.target)) { e.preventDefault(); termFont(e.deltaY < 0 ? 'in' : 'out'); }
+}, { capture: true, passive: false });
     ok ??= alertOnly ? 'OK' : verb || 'OK';
     danger ??= !alertOnly && /^(Delete|Remove|Clear|Discard|Permanently)/i.test(head.trim());
     const d = document.createElement('dialog');
@@ -1711,7 +1826,7 @@ function wirePane(c, root, i) {
   $('.ch-pane', root).onclick = () => setMView(G.mview === 'preview' ? 'chat' : 'preview');
   const form = $('.composer', root), ta = $('.input', root);
   form.addEventListener('submit', () => setTimeout(() => fitInput(ta))); // the box shrinks back once it's cleared
-  form.onsubmit = (e) => { e.preventDefault(); const t = ta.value; if (/^\/\w+(\s|$)/.test(t.trim()) && runCommand(c, t.trim())) { ta.value = ''; return; } if (c.running?.runId && (t.trim() || c.images.length || c.docs?.length || c.ctx.length)) { ta.value = ''; steer(c, t.trim()); return; } if (t.trim() && !c.running) { if (folderMissing(c)) return; if ((c.docs || []).some((d) => d.busy)) { uiAlert('Some attached files are still being read. Send when their chips say they are ready.'); return; } ta.value = ''; send(c, t); } };
+  form.onsubmit = (e) => { e.preventDefault(); const t = ta.value; if (/^\/\w+(\s|$)/.test(t.trim()) && runCommand(c, t.trim())) { ta.value = ''; return; } if (c.running?.runId && (t.trim() || c.images.length || c.docs?.length || c.ctx.length)) { ta.value = ''; steer(c, t.trim()); return; } if ((t.trim() || c.images.length || c.docs?.length || c.ctx.length) && !c.running) { if (folderMissing(c)) return; if ((c.docs || []).some((d) => d.busy)) { uiAlert('Some attached files are still being read. Send when their chips say they are ready.'); return; } ta.value = ''; send(c, t); } };
   ta.onkeydown = (e) => { if (suggestKey(c, e)) return; if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); form.requestSubmit(); } };
   ta.oninput = () => { updateSuggest(c); fitInput(ta); };
   ta.onblur = () => setTimeout(() => hideSuggest(c), 150);
@@ -1726,8 +1841,9 @@ function wirePane(c, root, i) {
 }
 function chatTotals(c) {
   const done = c.agent.messages.filter((m) => m.role === 'assistant' && m.stats);
-  return { cost: done.reduce((s, m) => s + m.stats.cost, 0) + (c.agent.extraUsage || []).reduce((s, x) => s + (x.cost || 0), 0), replies: done.length, msgs: c.agent.messages.filter((m) => m.role === 'user').length };
+  return { cost: done.reduce((s, m) => s + m.stats.cost, 0) + (c.agent.extraUsage || []).reduce((s, x) => s + (x.cost || 0), 0) + liveOf(c), replies: done.length, msgs: c.agent.messages.filter((m) => m.role === 'user').length };
 }
+            <button type="button" class="ch-btn ch-showpane hdr-icon-btn" title="Show the side panel (artifacts, browser, steps, terminal, files)" aria-label="Show the side panel"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M15 4v16M11 9.5 8.5 12l2.5 2.5"/></svg></button>
 function renderChatHead(c) {
   if (!c.el) return;
   const p = G.projects.find((x) => x.id === c.projectId);
@@ -1790,6 +1906,7 @@ function chatUsage(c) {
   for (const x of c.agent.extraUsage || []) add(x.kind, x.model, { calls: 1, cost: x.cost });
   const list = [...rows.values()].sort((a, b) => b.cost - a.cost);
   return { replies, cost: list.reduce((n, r) => n + r.cost, 0), calls: list.reduce((n, r) => n + r.calls, 0), rows: list };
+  $('.ch-showpane', root).onclick = () => setPaneHidden(false);
 }
 function usageHTML(u, at) {
   const kinds = [...new Set(u.rows.map((r) => r.kind))].sort((a, b) => u.rows.filter((r) => r.kind === b).reduce((n, r) => n + r.cost, 0) - u.rows.filter((r) => r.kind === a).reduce((n, r) => n + r.cost, 0));
@@ -1806,6 +1923,7 @@ function usageHTML(u, at) {
     <div class="uc-foot">Only you see this. It is never sent to the agent.</div>
   </div>`;
 }
+  for (const m of c.agent.messages) if (m.role === 'assistant' && !m.stats && !m.live && m.trace?.length) partialSpendQuiet(m); // older replies that ended part-way
 // 📊 in the chat header: the live breakdown in a popover, with a button to pin a snapshot into the chat.
 function toggleUsage(c) {
   const head = $('.chat-head', c.el.root), pop = $('.usage-pop', head);
@@ -2370,6 +2488,7 @@ async function loadReview(c, m, slot) {
       if (x.error) return uiAlert(`Could not undo ${rel}: ${x.error}`);
       (m.undoneFiles ||= []).push(rel);
       if (!x.left) m.undone = true;
+    : !s && m.live && m.liveCost != null ? liveFootHTML(m)
       saveChat(c); updateMsg(c, m); refreshUndoable(c.projectId);
       const f = $('#paneBody iframe'); if (f && !f.srcdoc) f.src = f.src;
     };
@@ -2408,14 +2527,14 @@ function replyInfoHTML(s, when) {
   const models = Object.entries(s.byModel || {}).sort((a, b) => (b[1].cost || 0) - (a[1].cost || 0));
   return `<span class="f-info mt-btn" tabindex="0" role="button" aria-label="Reply details"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.3a2.5 2.5 0 0 1 4.8.9c0 1.7-2.4 2.2-2.4 3.6"/><circle cx="12" cy="17.2" r=".6" fill="currentColor"/></svg><span class="f-pop" role="tooltip">
     ${when ? row('When', esc(new Date(when).toLocaleString())) : ''}
-    ${row('Took', secs(s.ms))}${row('Cost', money(s.cost, 5))}
-    ${row('Model calls', s.llmCalls || 0)}
+    ${row('Took', secs(s.ms))}
+    ${row('Model calls', callsLine(s))}
     ${s.tokensIn || s.tokensOut ? row('Tokens in', k(s.tokensIn)) + row('Tokens out', k(s.tokensOut)) : ''}
     ${s.decide?.calls ? row('Decider questions', `${s.decide.questions} in ${s.decide.calls} call${s.decide.calls === 1 ? '' : 's'}`) : ''}
     ${s.plan?.of ? row('Plan', `${s.plan.done} of ${s.plan.of} done`) : ''}
     ${s.changed?.length ? row('Files changed', s.changed.length) : ''}
     ${s.mediaSpent ? row('Media', money(s.mediaSpent, 4)) : ''}
-    ${models.length ? `<span class="fi-h">By model</span>${models.map(([m, v]) => `<span class="fi-row fi-model"><span>${esc(short(m))}${v.role && v.role !== 'writer' ? ` <i>${esc(v.role)}</i>` : ''}</span><b>${v.calls}× · ${money(v.cost || 0, 4)}</b></span>`).join('')}` : ''}
+    ${models.length ? `<span class="fi-h">By model</span>${models.map(([m, v]) => `<span class="fi-row fi-model"><span>${esc(short(m))}${v.role && v.role !== 'writer' ? ` <i>${esc(v.role)}</i>` : ''}</span><b>${v.calls}× · ${money(v.cost || 0, 5)}</b></span>`).join('')}` : ''}
   </span></span>`;
 }
 // The breakdown opens above its ? and stays inside the window. It's drawn in one floating box on the page itself:
@@ -2483,11 +2602,21 @@ function undoChoice(all, changed) {
     for (const b of dlg.querySelectorAll('[data-v]')) b.onclick = () => done(b.dataset.v);
     dlg.showModal();
   });
+// Every model call the reply made (the writer's, and the deciders', reviewers' and helpers'), split by role.
+function callsLine(s) {
+  const by = {};
+  for (const v of Object.values(s.byModel || {})) by[v.role || 'writer'] = (by[v.role || 'writer'] || 0) + (v.calls || 0);
+  const total = Object.values(by).reduce((n, x) => n + x, 0);
+  if (!total) return String(s.llmCalls || 0);
+  const parts = Object.entries(by).sort((a, b) => (a[0] === 'writer' ? -1 : b[0] === 'writer' ? 1 : b[1] - a[1])).map(([r, n]) => `${n} ${r}${n === 1 ? '' : 's'}`);
+  return parts.length > 1 ? `${total} <small>(${esc(parts.join(', '))})</small>` : String(total);
+}
 }
 // Which replies in a project still have their undo copy (the newest ones only).
 async function refreshUndoable(projectId) {
   if (!projectId) return;
   const list = await getJ(`/api/checkpoints?project=${encodeURIComponent(projectId)}`);
+    <span class="fi-total"><span>Total cost${s.partial ? ' <i>so far: the reply ended early</i>' : ''}</span><b>${money(s.cost, 5)}</b></span>
   if (!Array.isArray(list)) return;
   (G.undoable ||= {})[projectId] = new Set(list.map((x) => x.runId));
   for (const c of G.open.values()) if (c.projectId === projectId && c.el) for (const m of c.agent.messages) if (m.stats?.changed?.length && !m.undone) updateMsg(c, m);
@@ -2527,7 +2656,7 @@ function renderTracePane(c, m) {
   for (const k of [...F]) if (!kinds.includes(k)) F.delete(k);
   const legend = TRACE_KINDS.filter(([k]) => kinds.includes(k)).map(([k, label]) => `<button type="button" class="tl-chip k-${k} ${F.has(k) ? 'on' : ''}" data-k="${k}" aria-pressed="${F.has(k)}" title="Highlight these steps (the rest dims)">${label}</button>`).join('')
     + (F.size ? '<button type="button" class="tl-all">Show all</button>' : '');
-  body.innerHTML = `<div class="trace trace-pane ${F.size ? 'focusing' : ''} ${[...F].map((k) => `f-${k}`).join(' ')}" data-run="${esc(m.runId)}"><div class="tp-legend">${legend}</div><div class="tp-q">${esc(clip(c.agent.messages[c.agent.messages.indexOf(m) - 1]?.content || '', 220))}</div><div class="steps">${traceHTML(m)}</div></div>`;
+  body.innerHTML = `<div class="trace trace-pane ${F.size ? 'focusing' : ''} ${[...F].map((k) => `f-${k}`).join(' ')}" data-run="${esc(m.runId)}"><div class="tp-legend">${legend}</div><div class="tp-q">${esc(clip(c.agent.messages[c.agent.messages.indexOf(m) - 1]?.content || '', 220))}</div><div class="steps">${traceHTML(m)}</div>${traceCostHTML(c, m)}</div>`;
   const now = $('.trace-pane', body);
   // Opening the steps starts at the latest one and follows new ones (and pictures that load late) while you stay at
   // the end; scrolling up stops following until you scroll back down or press ↓ Latest.
@@ -2704,7 +2833,7 @@ function shellCardHTML(a) {
     ${segs ? `<div class="sc-segs">${segs}</div>` : ''}
     ${(p.packages || []).length ? `<div class="sc-segs">${p.packages.map((k) => `<span class="sc-path" data-zone="${k.verdict === 'ok' ? 'inside' : k.verdict === 'missing' ? 'blocked' : 'unknown'}">📦 ${esc(k.name)} · ${esc(k.eco)} · ${k.verdict === 'ok' ? `${k.ageDays != null ? `${Math.round(k.ageDays / 365 * 10) / 10} years old` : 'exists'}${k.weekly != null ? ` · ${k.weekly.toLocaleString()}/week` : ''}` : esc(k.note)}</span>`).join('')}</div>` : ''}
     ${c.why ? `<div class="what">Why it asks: ${esc(c.why)}</div>` : ''}
-    <textarea rows="1" placeholder="If you deny it, say why (optional). The agent reads this and decides what to do."></textarea>
+    <textarea rows="1" placeholder="To deny it, you can add a note: why, or what to do instead. Enter denies and sends it."></textarea>
     <div class="acts"><button type="button" class="primary yes">Run once</button>${c.noAlways ? '' : '<button type="button" class="sc-always" aria-expanded="false">Always allow…</button>'}<button type="button" class="no">Deny</button></div>
     ${c.noAlways ? '<div class="sc-note">A button can’t make a rule for this kind of command. If you’re sure, type one yourself in ⚙ Settings → Safety & commands.</div>'
       : `<div class="sc-rule" hidden>
@@ -2759,7 +2888,7 @@ function approvalHTML(a, live = true) {
     ${head}${model}
     <div class="what">${c.free ? esc(c.what) : `“${esc(c.what)}”`}</div>
     ${c.why ? `<div class="what">Why: ${esc(c.why)}</div>` : ''}
-    ${waiting ? `<textarea rows="1" placeholder="If you decline, say why (optional). The agent reads this and decides what to do."></textarea>
+    ${waiting ? `<textarea rows="1" placeholder="To decline, you can add a note: why, or what to do instead. Enter declines and sends it."></textarea>
       <div class="acts"><button type="button" class="primary yes">${c.free ? 'Allow once' : `Approve ${money(c.est, 3)}`}</button><button type="button" class="always" title="Stop asking for this tool in this chat">Always allow</button><button type="button" class="no">Decline</button></div>`
       : o ? `<div class="outcome ${o.approve ? 'yes' : 'no'}">${o.approve ? '✅ Allowed' : '⛔ Declined'} by ${o.by === 'user' ? 'you' : esc(o.by)}${o.always ? ' · always allowed from now on' : ''}${o.approve && o.model && o.model !== c.model ? ` · switched to ${esc(short(o.model))}` : ''}${o.reason ? ` · ${esc(o.reason)}` : ''}</div>`
       : !live ? '<div class="outcome">Not answered: the reply ended</div>' : `<div class="outcome">⚡ ${c.tool === 'shell' ? 'The deciders are voting on this command…' : 'Deciders are checking whether this is needed and worth the price…'}</div>`}
@@ -2883,6 +3012,15 @@ function wireBudget(card, c, m) {
       card.querySelectorAll('button, input').forEach((b) => (b.disabled = true));
       await fetch('/api/raise-cap', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ runId: m.runId, id: card.dataset.id, to }) }).catch(() => {});
       return;
+// The note on an approval card goes with a "no": once there is one, the no button says so and Enter sends it.
+function noteLeadsToNo(card, label, no) {
+  const ta = $('textarea', card), b = $('.acts .no', card);
+  if (!ta || !b) return;
+  const sync = () => { const has = !!ta.value.trim(); b.textContent = has ? `${label} and send note` : label; b.classList.toggle('with-note', has); };
+  ta.addEventListener('input', sync);
+  ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (ta.value.trim() && !b.disabled) no(); } });
+  sync();
+}
     }
     const p = G.projects.find((x) => x.id === c.projectId);
     const r = await fetch(`/api/projects/${c.projectId}/budget`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ budget: Number(input.value), fromCard: true }) }).then((x) => x.json()).catch((e) => ({ error: e.message }));
@@ -2892,6 +3030,7 @@ function wireBudget(card, c, m) {
     refreshSidebar();
   };
   $('.stop-here', card).onclick = () => {
+  noteLeadsToNo(card, 'Deny', () => answer(false));
     card.querySelectorAll('button, input').forEach((b) => (b.disabled = true));
     fetch('/api/budget-stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ runId: m.runId, id: card.dataset.id }) }).catch(() => {});
   };
@@ -2946,6 +3085,7 @@ function wireQuestions(card, m) {
   for (const item of items) {
     const own = $('.own', item);
     for (const b of item.querySelectorAll('.opt')) b.onclick = () => { pick(item, b); own.value = ''; };
+  noteLeadsToNo(card, 'Decline', () => $('.no', card).click());
     own.oninput = () => { if (own.value.trim()) pick(item, null); };
     own.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); $('.send-all', card).click(); } };
   }
@@ -2996,13 +3136,14 @@ async function steer(c, text) {
 }
 async function send(c, text) {
   text = text.trim();
-  if (!text || c.running) return;
+  // A picture, a file or context on its own is a message too.
+  if (c.running || (!text && !c.images.length && !(c.docs || []).some((d) => d.id && !d.busy) && !c.ctx.length)) return;
   askNotifyPermission();
   const ctx =c.ctx.length ? { titles: c.ctx.map((x) => x.title), text: await contextText(c.ctx) } : null;
   const imgs = c.images.splice(0);
   const docs = (c.docs || []).splice(0).filter((d) => d.id && !d.busy);
   c.ctx = []; renderAttachments(c);
-  if (!c.title || c.title === 'New chat') { c.title = text.replace(/\s+/g, ' ').slice(0, 60); if (c.el) { $('.ch-name', c.el.root).value = c.title; } }
+  if ((!c.title || c.title === 'New chat') && text) { c.title = text.replace(/\s+/g, ' ').slice(0, 60); if (c.el) { $('.ch-name', c.el.root).value = c.title; } }
   runChat(c, text, ctx, imgs, { docs });
 }
 async function runChat(c, text, ctx, imgs, { resumeOf, docs = [], more = 0, model = '' } = {}) {
@@ -3048,13 +3189,13 @@ async function reattachRuns(c) {
 // ---------- notifications: a reply needs you, or ended, while QuorX is in the background ----------
 // ⚙ Appearance → Notifications. One notification per chat at a time (tag), so a busy chat doesn't pile them up.
 const NOTIFY_TITLE = { approval: 'Needs your approval', answer: 'Question for you', budget: 'Project budget reached', done: 'Reply finished', error: 'Reply stopped' };
-function notifyRun(c, kind, body = '') {
+const NOTIFY_MARK = { approval: '⏸', answer: '❓', budget: '💲', done: '✓', error: '✕' };
+function notifyRun(c, kind, body = '', meta = '') {
   const pref = uiOf(G.settings).notify;
   if (pref === 'off' || (pref === 'needs' && (kind === 'done' || kind === 'error'))) return;
-  if (!('Notification' in window) || Notification.permission !== 'granted') return;
   if (document.visibilityState === 'visible' && document.hasFocus()) return;
   try {
-    const n = new Notification(`${NOTIFY_TITLE[kind]} · ${c.title || 'Chat'}`, { body: String(body).slice(0, 180), tag: `oh-${c.id}`, silent: kind === 'done' });
+    const n = new Notification(title, { body: text, tag: `oh-${c.id}`, silent: kind === 'done' });
     n.onclick = () => { window.ohDesktop?.focusWindow?.(); window.focus(); if (!G.panes.includes(c.id)) showChat(c.id); n.close(); };
   } catch { /* some browsers only allow notifications from a service worker */ }
 }
@@ -3121,7 +3262,7 @@ async function followRun(c, m, open) {
         if (e.t === 'budget_done' && m.budgetAsk) { m.budgetAsk.outcome = e; c.waiting = false; refreshSidebar(); renderChatHead(c); }
         if (e.t === 'answer' && m.questions[e.id]) { const qc = m.questions[e.id].card; e.label = e.answers ? (e.defaults ? 'the recommended answers' : e.answers.map((x, i) => (x.choice != null ? qc.questions?.[i]?.options[x.choice] : x.text || '–')).join(' · ')) : e.choice != null ? qc.options[e.choice] : e.text; m.questions[e.id].answer = e; c.waiting = false; renderSidebar(); renderChatHead(c); }
         if (e.t === 'done') { m.doneAt = Date.now(); m.content = e.reply; m.note = e.historyNote; m.stats = e.stats; G.sessionCost += e.stats.cost; renderSpend(); loadScores(); }
-        if (e.t === 'error') m.error = e.msg;
+        if (e.t === 'error') { m.error = e.msg; if (e.stats && !m.stats) { m.stats = { ...e.stats, partial: true }; G.sessionCost += e.stats.cost || 0; renderSpend(); } }
         if (e.t === 'interrupted') { m.error = 'The harness restarted while this reply was running.'; m.resumable = !!e.resumable; }
         if (e.t === 'compacted') { a.summary = e.summary; a.summaryAt = e.cutoffAt; }
         if (e.t !== 'start') m.trace.push(e);
@@ -3148,7 +3289,7 @@ async function followRun(c, m, open) {
       const took = m.stats?.ms ?? (m.doneAt && m.at ? m.doneAt - m.at : 0);
       const cost = m.stats && !uiOf(G.settings).maskAmounts ? ` · ${money(m.stats.cost, 3)}` : '';
       if (m.error) note('error', m.error);
-      else note('done', `${took ? `Done in ${secs(took)}` : 'Done'}${cost}. ${String(m.content || '').replace(/[#*_`>]/g, '').slice(0, 120)}`);
+      else note('done', String(m.content || '').replace(/[#*_`>|]/g, '').slice(0, 200), `${took ? secs(took) : ''}${cost}`.replace(/^ · /, ''));
     }
     updateMsg(c, m); syncRunState(c); saveChat(c, true); refreshSidebar(); checkSpace(c, true); refreshUndoable(c.projectId); if (G.view.browser && focused() === c) renderPane();
     refreshBalance();
@@ -3200,7 +3341,7 @@ function openArtifact(c, id) {
 function paneVisible() {
   const c = focused();
   if (!c) return false;
-  if (!isPhone()) return true; // always there on a desktop: drag the divider to resize, ⤢ to make it full width
+  if (!isPhone()) return !G.paneHidden; // always there on a desktop: drag the divider to resize, ⤢ to make it full width
   // ◧ always wins: hidden means hidden, even with the explorer or a trace open (they come back with it).
   if (c.paneHidden === true) return false;
   if (G.view.files || G.view.trace || G.view.term || G.view.run || G.view.browser) return true;
@@ -3225,6 +3366,15 @@ function renderPane() {
   if (G.view.run) { setUrlBar(null); return renderRunningPane(c); }
   if (G.view.files) { setUrlBar(null); return renderFiles(c); }
   if (G.view.browser) return renderBrowser(c);
+  // Compact: the status (with how long and what it cost when done), then project · chat, then one short line.
+  const project = G.projects.find((p) => p.id === c.projectId)?.name || c.projectId || '';
+  const title = `${NOTIFY_MARK[kind] || '•'} ${NOTIFY_TITLE[kind] || 'QuorX'}${meta ? ` · ${meta}` : ''}`;
+  const line = String(body).replace(/\s+/g, ' ').trim();
+  const text = `${project ? `${project} · ` : ''}${c.title || 'Chat'}${line ? `
+${line.length > 110 ? `${line.slice(0, 109)}…` : line}` : ''}`;
+  // In the desktop app it comes from the app itself: QuorX's name and logo, and a click opens the chat.
+  if (window.ohDesktop?.notify) { window.ohDesktop.notify({ title, body: text, chatId: c.id, silent: kind === 'done' }).catch(() => {}); return; }
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
   if (G.view.trace) {
     setUrlBar(null);
     const tm = c.agent.messages.find((x) => x.runId === G.view.trace);
@@ -3271,6 +3421,7 @@ function renderPane() {
       : `<audio controls src="${u}"></audio><a href="${u}" download="${esc(a.id)}">Download</a>`;
     body.innerHTML = `<div class="media">${player}${cap}</div>`;
   }
+        if (e.t === 'spend') { m.liveCost = e.cost; m.liveCalls = e.calls; m.liveTokens = [e.tokensIn, e.tokensOut]; m.liveByModel = e.byModel || m.liveByModel; liveSpend(c, m); continue; }
 }
 // Sites and apps: check the project folder every 2.5 s while shown; reload the preview when it changed.
 function watchFolder(c) {
@@ -3310,6 +3461,7 @@ async function renderAppBar(c, a) {
   };
   $('.logs', bar).onclick = async () => {
     const pre = $('.log', bar);
+    else if (!m.stats) partialSpend(m);
     if (!pre.hidden) { pre.hidden = true; return; }
     pre.textContent = sv ? (await fetch(`/api/servers/log?key=${encodeURIComponent(sv.key)}`).then((r) => r.json())).log || '(no output yet)' : '(not running)';
     pre.hidden = false;
@@ -3369,6 +3521,14 @@ async function previewFile(view, { name, src, size, full, text, kind = previewKi
     view.innerHTML = head(meta) + `<div class="pv-stage pv-checker" title="Click for actual size"><img src="${esc(src)}" alt="${esc(name)}"></div>`; wire();
     const img = $('img', view), stage = $('.pv-stage', view);
     img.onload = () => { $('.pv-info', view).textContent = `${meta} · ${img.naturalWidth}×${img.naturalHeight}`; };
+// The side panel hidden (chat only), from its own button; the panel button at the top of a chat brings it back.
+// Remembered. Asking for something in it (🧭 Steps, a file, a preview) shows it again.
+function setPaneHidden(on, quiet) {
+  G.paneHidden = !!on;
+  $('.layout')?.classList.toggle('pane-hidden', G.paneHidden);
+  try { localStorage.setItem('oh-pane-hidden', G.paneHidden ? '1' : '0'); } catch { /* this session only */ }
+  if (!quiet) { syncLayout?.(); deskPlace?.(true); window.dispatchEvent(new Event('resize')); }
+}
     stage.onclick = () => stage.classList.toggle('actual');
     return;
   }
@@ -4475,7 +4635,7 @@ function setMView(v) {
   if (v === 'chats') renderSidebar();
 }
 // On a phone, a user action that shows something in the pane switches to the Preview view.
-const toPreview = () => { if (isPhone()) setMView('preview'); };
+const toPreview = () => { if (isPhone()) setMView('preview'); else if (G.paneHidden) setPaneHidden(false); };
 // Phones: the sidebar is a drawer over the chat; picking a chat closes it.
 function closeDrawer() { if ($('#sidebar').classList.contains('mobile-open')) { $('#sidebar').classList.remove('mobile-open'); syncLayout(); } }
 function syncLayout() {
@@ -5037,7 +5197,7 @@ async function mountXterm(t, u, box) {
   box.innerHTML = '<div class="fx-empty">Starting the terminal…</div>';
   try { await loadXterm(); } catch (e) { G.xtBusy.delete(k); u.plain = true; box.hidden = true; renderTermInput(t); return; }
   const el = document.createElement('div'); el.className = 'xt-host';
-  const term = new window.Terminal({ cursorBlink: true, fontFamily: getComputedStyle(document.documentElement).getPropertyValue('--mono').trim() || 'Consolas, monospace', fontSize: 13, lineHeight: 1.15, scrollback: 5000, allowProposedApi: false, theme: xtermTheme(), convertEol: false });
+  const term = new window.Terminal({ cursorBlink: true, fontFamily: getComputedStyle(document.documentElement).getPropertyValue('--mono').trim() || 'Consolas, monospace', fontSize: (() => { try { return Number(localStorage.getItem('oh-term-font')) || 13; } catch { return 13; } })(), lineHeight: 1.15, scrollback: 5000, allowProposedApi: false, theme: xtermTheme(), convertEol: false });
   const fit = new window.FitAddon.FitAddon(); term.loadAddon(fit);
   x = { term, fit, el, es: null, q: '', chain: Promise.resolve(), exited: false, projectId: t.projectId, tab: u.id };
   G.xt.set(k, x); G.xtBusy.delete(k);
@@ -5256,7 +5416,10 @@ function wirePaneChrome() {
   $('#paneSrvBtn').onclick = () => { const c = focused(); if (c?.el) toggleServers(c); };
   // ⤢ the pane takes the whole window (chat hidden); ⤡ puts the chat back. Remembered.
   const setMax = (on) => { G.paneMax = on; $('.layout').classList.toggle('pane-max', on); const b = $('#paneMaxBtn'); b.textContent = on ? '⤡' : '⤢'; b.title = on ? 'Show the chat again' : 'Make the pane full width (the chat hides until you press this again)'; b.setAttribute('aria-pressed', String(on)); try { localStorage.setItem('oh-pane-max', on ? '1' : ''); } catch { /* storage off */ } };
-  $('#paneMaxBtn').onclick = () => setMax(!G.paneMax);
+  $('#paneMaxBtn').onclick = () => { if (G.paneHidden) setPaneHidden(false); setMax(!G.paneMax); };
+  $('#paneHideBtn').onclick = () => { if (G.paneMax) setMax(false); setPaneHidden(true); };
+  let wasHidden = false; try { wasHidden = localStorage.getItem('oh-pane-hidden') === '1'; } catch { /* storage off */ }
+  setPaneHidden(wasHidden, true);
   let wasMax = false; try { wasMax = localStorage.getItem('oh-pane-max') === '1'; } catch { /* storage off */ }
   setMax(wasMax);
   for (const b of document.querySelectorAll('#paneTabs [data-tab]')) b.onclick = () => (paneTab() === b.dataset.tab && b.dataset.tab !== 'art' ? setPaneTab('art') : setPaneTab(b.dataset.tab));
@@ -5871,3 +6034,5 @@ async function restartHarness() {
 }
 $('#restartBtn')?.addEventListener('click', restartHarness);
 $('#staleNote')?.addEventListener('click', () => { if (!$('#restartBtn').disabled) restartHarness(); });
+  // A clicked notification opens its chat.
+  window.ohDesktop.on((ev) => { if (ev.type === 'notify-click' && ev.chatId && !G.panes.includes(ev.chatId)) showChat(ev.chatId); });

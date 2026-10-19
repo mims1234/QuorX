@@ -92,6 +92,20 @@ export const agentsOf = (c) => (c.agent ? [c.agent] : c.layouts?.[c.mode] || c.l
 // Each chat file is parsed once; the summary is reused until the file changes (by size and mtime).
 // The sidebar and the costs view both read these, so neither re-parses every chat on every request.
 const SUMMARIES = new Map(); // file name → { key, s }
+// What a reply cost: its totals, or for one that ended without them (an error, a dropped connection, a restart),
+// the calls it made, from its steps. Those were paid for, so they count like any other.
+function replySpend(m) {
+  if (m.stats) return { cost: m.stats.cost || 0, byModel: m.stats.byModel || {} };
+  // A reply still running is counted by the budget ledger as it goes, not here.
+  if (m.role !== 'assistant' || m.live || !Array.isArray(m.trace)) return null;
+  let cost = 0, n = 0; const byModel = {};
+  for (const e of m.trace) {
+    if ((e?.t !== 'llm_done' && e?.t !== 'helper_done') || !(Number(e.cost) >= 0)) continue;
+    const v = Number(e.cost) || 0, model = e.actual || e.model || '?';
+    cost += v; n++; (byModel[model] ||= { cost: 0 }).cost += v;
+  }
+  return n ? { cost, byModel } : null;
+}
 function summarise(c) {
   const lay = agentsOf(c);
   const msgs = lay.flatMap((col) => col.messages || []);
@@ -100,9 +114,9 @@ function summarise(c) {
   // Spend over time (for today / 7 days) and per model, plus calls made outside a reply (mic).
   const spend = [], models = {};
   for (const m of msgs) {
-    const cost = m.stats?.cost || 0;
+    const r = replySpend(m), cost = r?.cost || 0;
     if (cost) spend.push([m.doneAt || m.at || 0, cost]);
-    for (const [model, v] of Object.entries(m.stats?.byModel || {})) models[model] = (models[model] || 0) + (v.cost || 0);
+    for (const [model, v] of Object.entries(r?.byModel || {})) models[model] = (models[model] || 0) + (v.cost || 0);
   }
   for (const x of c.agent?.extraUsage || []) { spend.push([x.at || 0, x.cost || 0]); models[x.model] = (models[x.model] || 0) + (x.cost || 0); }
   return {
@@ -112,7 +126,7 @@ function summarise(c) {
     messages: msgs.filter((m) => m.role === 'user').length, cost: spend.reduce((n, [, v]) => n + v, 0),
     artifacts: lay.reduce((n, col) => n + Object.keys(col.artifacts || {}).length, 0), spend, models,
     // Replies whose cost is saved in this file (the budget ledger counts the others itself).
-    runIds: msgs.filter((m) => m.runId && m.stats).map((m) => m.runId),
+    runIds: msgs.filter((m) => m.runId && replySpend(m)).map((m) => m.runId),
   };
 }
 function summaries() {

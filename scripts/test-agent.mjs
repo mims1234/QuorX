@@ -47,6 +47,32 @@ test('a write that does not parse is reported at once, and the fix passes the fi
   assert.equal(done.reply, 'Done: app.js works.');
   assert.match(done.historyNote, /What I did: Write app\.js .*Checks passed/s);
 });
+test('a running reply sends what it has spent after every call, ending at its final cost', async () => {
+  const { events, done } = await run((body, i) => [
+    reply('', [['write_file', { path: 'a.txt', content: 'a' }]]),
+    reply('', [['write_file', { path: 'b.txt', content: 'b' }]]),
+    reply('Done.'),
+  ][i]);
+  const sp = of(events, 'spend');
+  assert.ok(sp.length >= 3, `spend events: ${sp.length}`);
+  for (let k = 1; k < sp.length; k++) assert.ok(sp[k].cost >= sp[k - 1].cost && sp[k].calls >= sp[k - 1].calls);
+  assert.ok(Math.abs(sp.at(-1).cost - done.stats.cost) < 1e-6);
+  assert.ok(events.indexOf(sp[0]) < events.indexOf(done));
+});
+
+test('a reply that ends part-way keeps what it spent', async () => {
+  const ac = new AbortController();
+  const err = await run((body, i) => {
+    if (i < 2) return reply('', [['write_file', { path: `f${i}.txt`, content: 'x' }]]);
+    ac.abort(); throw new Error('aborted'); // the connection went away mid-reply
+  }, { signal: ac.signal }).catch((e) => e);
+  assert.ok(err instanceof Error);
+  assert.equal(err.stats.partial, true);
+  assert.ok(err.stats.cost >= 0.0002 - 1e-9, `cost ${err.stats.cost}`);
+  assert.ok(err.stats.llmCalls >= 2);
+  assert.ok(Number.isFinite(err.stats.ms));
+});
+
 
 test('the finish gate sends the agent back when its work is broken', async () => {
   const { events, bodies, done } = await run((body, i) => [

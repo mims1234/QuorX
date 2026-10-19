@@ -40,7 +40,10 @@ export function startRun({ runId, chatId }, work) {
   };
   disk({ t: 'run', runId, chatId, at: 0 });
   Promise.resolve().then(() => work(emit, r.ac.signal))
-    .catch((e) => { if (!r.ac.signal.aborted) { console.error(e); emit({ t: 'error', msg: e.message }); } else emit({ t: 'error', msg: 'Stopped.', stopped: true }); })
+    .catch((e) => {
+      const spent = e?.stats ? { stats: e.stats } : {}; // what the reply had spent when it ended (server/agent.js)
+      if (!r.ac.signal.aborted) { console.error(e); emit({ t: 'error', msg: e.message, ...spent }); } else emit({ t: 'error', msg: 'Stopped.', stopped: true, ...spent });
+    })
     .finally(() => {
       flush();
       r.status = r.ac.signal.aborted ? 'stopped' : 'done';
