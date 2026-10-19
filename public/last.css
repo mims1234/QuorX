@@ -1782,3 +1782,9 @@ dialog.lb-dlg::backdrop { background: rgba(3, 5, 5, .82); backdrop-filter: blur(
 /* The version text gives way first; the update button keeps its words as long as it can. */
 .sb-foot .sb-version { flex: 1 1 0 !important; }
 .sb-foot .upd-note { flex: 0 1 auto; }
+
+/* ---------- pictures open large: every screenshot is clickable, and the viewer fills its box (small ones grow) ---------- */
+img.shot, img.dsnap, .msg .msg-md img { cursor: zoom-in; }
+img.shot:hover, img.dsnap:hover, .msg .msg-md img:hover { outline: 2px solid var(--accent); outline-offset: 1px; }
+.lb-pic { display: grid !important; grid-template: minmax(0, 1fr) / minmax(0, 1fr); place-items: stretch !important; }
+.lb-pic img { width: 100%; height: 100%; max-width: none; max-height: none; object-fit: contain; border-radius: 6px; }

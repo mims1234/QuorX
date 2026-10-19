@@ -1411,6 +1411,15 @@ document.addEventListener('click', (e) => {
     viewPictures(thumbs.map((t, k) => views[k] || t), Number(img.dataset.k) || 0); // older messages kept only the small copy
     return;
   }
+  // Screenshots in a reply's steps, the Steps pane, the judges' cards and pictures in a reply: large, with ‹ › between
+  // the others in the same reply (or the same Steps list).
+  const shot = e.target.closest?.('img.shot, img.dsnap, .msg .msg-md img');
+  if (shot && shot.src) {
+    const scope = shot.closest('.msg, .trace, #paneBody') || document.body;
+    const all = [...scope.querySelectorAll('img.shot, img.dsnap, .msg-md img')].filter((x) => x.src && x.offsetParent !== null || x === shot);
+    viewPictures(all.map((x) => x.src), Math.max(0, all.indexOf(shot)));
+    return;
+  }
   const doc = e.target.closest?.('.msg .u-doc[data-doc]');
   if (doc) {
     let dd = null; try { dd = JSON.parse(doc.dataset.doc); } catch { return; }
