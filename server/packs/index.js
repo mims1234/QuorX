@@ -14,7 +14,8 @@
 //   detect(root),                       // or a function, for projects whose marker sits deeper (Android)
 //   checks: [{ id, tool, ext, marker(dir), cmd, errors, tidy }], // compiler checks before the final reply (errors:
 //                                       // a pattern for its error lines, when the usual "error" match misses them;
-//                                       // tidy(line, dir): the line as the agent should read it)
+//                                       // tidy(line, dir): the line as the agent should read it; cmd may be a
+//                                       // function of { dir, files } when the folder decides it, null to skip)
 //   summaries: [{ cmd: /^dotnet test\b/, summarize(out) }], // a short summary put above a command's output
 //   debug: { exts: ['.cs'], tool, label, gate({ file, args }), start({ file, args, cwd, port }) },
 //   notes(have, root),                  // what the agent should know, when the project is this kind
@@ -53,7 +54,8 @@ export const packById = (id) => PACKS.find((p) => p.id === id);
 /** Every toolchain, each tagged with its pack. A toolchain two packs list (Node for TypeScript and Electron) counts once. */
 export function allToolchains() {
   const seen = new Map();
-  for (const p of PACKS) for (const t of p.toolchains || []) if (!seen.has(t.id)) seen.set(t.id, { ...t, pack: p.id, host: here(p) });
+  // host: whether a pack that works on this computer lists it (Xcode is only looked for on a Mac).
+  for (const p of PACKS) for (const t of p.toolchains || []) { if (!seen.has(t.id)) seen.set(t.id, { ...t, pack: p.id, host: here(p) }); else if (here(p)) seen.get(t.id).host = true; }
   return [...seen.values()];
 }
 
