@@ -4,6 +4,7 @@
 //   npm run test:ui                         both scenarios
 //   npm run test:ui -- --scenario settings  only the checks that need no key
 //   npm run test:ui -- --scenario cli       the agent builds a Rust command-line program
+//   npm run test:ui -- --scenario running   the Running tab: what runs, who started it, Stop and Stop all
 //   add --keep to leave the app open afterwards
 //
 // The test copy keeps its own chats, projects and keys in .uitest/home (git ignores it), and runs on port 5197, so
@@ -185,6 +186,65 @@ async function settingsScenario() {
   await js(`document.querySelector('#stCancel')?.click(); return true;`);
 }
 
+// While a reply works: answer the cards like a careful person would, with a screenshot of each, until it ends.
+async function workThrough(limitMs = 15 * 60e3) {
+  const seen = new Set(), allowedPrograms = new Set();
+  let lastMoment = Date.now();
+  const t0 = Date.now();
+  for (;;) {
+    if (Date.now() - t0 > limitMs) throw new Error(`the reply did not finish within ${Math.round(limitMs / 60e3)} minutes`);
+    const card = await js(`const c = document.querySelector('#chats .approval[data-id]'); if (!c) return null;
+      return { id: c.dataset.id, shell: c.classList.contains('shell-card'), question: c.classList.contains('question') || !!c.querySelector('.q-opts'), budget: c.classList.contains('budget-card'),
+        line: c.querySelector('.sc-line')?.innerText || c.querySelector('.q-text')?.innerText || c.innerText.slice(0, 160),
+        classes: [...c.querySelectorAll('.sc-cls')].map((x) => x.dataset.cls), always: !!c.querySelector('.sc-always'),
+        global: [...c.querySelectorAll('.sc-cls')].some((x) => /whole computer/.test(x.textContent)) };`);
+    if (card && !seen.has(card.id)) {
+      seen.add(card.id);
+      if (card.shell) {
+        // The program the card's rule is about: the part of the line that needs asking (not "cargo --version" in
+        // "cargo --version; rustc -vV"), as the card's "any … command" choice names it.
+        const program = String(await js(`return document.querySelector('#chats .approval[data-id=${JSON.stringify(card.id)}] .sc-pick[data-group="match"] button:nth-child(3)')?.dataset.v || ''`) || card.line.trim().split(/\s+/)[0]).replace(/\*$/, '').toLowerCase();
+        // Installs for the whole computer (rustup targets, npm -g, winget) change the PC outside the test copy: never.
+        const risky = card.global || card.classes.some((k) => ['external', 'opaque', 'discard', 'delete', 'never'].includes(k));
+        await moment(`Approval card: ${card.line.slice(0, 70)}`, `Classes: ${card.classes.join(', ') || '–'}${card.global ? ' (whole computer)' : ''}`);
+        if (risky) {
+          await fill(`#chats .approval[data-id=${q(card.id)}] textarea`, card.global ? 'No installs for the whole computer in this test. Work with what is installed, or tell me what is missing.' : 'Not in this test.');
+          await click(`#chats .approval[data-id=${q(card.id)}] .no`); await moment(card.global ? 'Denied (installs for the whole computer)' : 'Denied (risky class)');
+        }
+        else if (card.always && !allowedPrograms.has(program)) {
+          allowedPrograms.add(program);
+          await click(`#chats .approval[data-id=${q(card.id)}] .sc-always`);
+          await click(`#chats .approval[data-id=${q(card.id)}] .sc-pick[data-group="match"] button:nth-child(3)`);
+          await click(`#chats .approval[data-id=${q(card.id)}] .sc-pick[data-group="scope"] button[data-v="project"]`);
+          await moment(`Always allow any ${program} command in this project`, 'The rule the card will save, before pressing Allow and save.');
+          await click(`#chats .approval[data-id=${q(card.id)}] .sc-save`);
+        } else await click(`#chats .approval[data-id=${q(card.id)}] .yes`);
+      } else if (card.question) {
+        await moment(`The agent asks: ${card.line.slice(0, 70)}`);
+        // Take the agent's recommendation, except an install for the whole computer: then the first option that
+        // isn't one. A card with several questions has a radio group each and a Send answers button.
+        const picked = await js(`const c = document.querySelector('#chats .approval[data-id=${JSON.stringify(card.id)}]');
+          const groups = [...c.querySelectorAll('.q-opts')].filter((g) => g.querySelector('button.q-opt'));
+          const out = groups.map((g) => { const opts = [...g.querySelectorAll('button.q-opt')]; const cur = g.querySelector('.q-opt.chosen, .q-opt.rec') || opts[0];
+            const pick = /install/i.test(cur.textContent) ? (opts.find((o) => !/install/i.test(o.textContent)) || cur) : cur; pick.click(); return pick.textContent.trim().slice(0, 80); });
+          c.querySelector('.send-all')?.click(); return out;`);
+        await moment(`Answered: ${picked.join(' · ').slice(0, 140)}`);
+      } else if (card.budget) {
+        await moment('Budget card');
+        await click(`#chats .approval[data-id=${q(card.id)}] .raise`);
+      } else {
+        await moment(`Approval: ${card.line.slice(0, 70)}`);
+        await click(`#chats .approval[data-id=${q(card.id)}] .yes`);
+      }
+    }
+    const running = await js(`return !document.querySelector('#chats .stopBtn')?.hidden;`);
+    if (!running) break;
+    if (Date.now() - lastMoment > 45000) { lastMoment = Date.now(); await moment(`Working… ${Math.round((Date.now() - t0) / 1000)} s`); }
+    await sleep(1500);
+  }
+  return `${seen.size} card${seen.size === 1 ? '' : 's'} answered; rules saved for: ${[...allowedPrograms].join(', ') || 'none'}`;
+}
+
 // ---------- scenario: the agent builds a Rust command-line program ----------
 async function cliScenario() {
   const hasKey = async () => (await api('/api/config')).hasKey;
@@ -219,64 +279,7 @@ async function cliScenario() {
     await waitFor(`!document.querySelector('#chats .stopBtn')?.hidden`, 20000, 'the reply to start');
     return prompt;
   });
-  // While the reply works: answer the cards like a careful person would, with a screenshot of each.
-  const seen = new Set(), allowedPrograms = new Set();
-  let lastMoment = Date.now();
-  const t0 = Date.now();
-  await step('The agent works (cards answered as they come)', async () => {
-    for (;;) {
-      if (Date.now() - t0 > 15 * 60e3) throw new Error('the reply did not finish within 15 minutes');
-      const card = await js(`const c = document.querySelector('#chats .approval[data-id]'); if (!c) return null;
-        return { id: c.dataset.id, shell: c.classList.contains('shell-card'), question: c.classList.contains('question') || !!c.querySelector('.q-opts'), budget: c.classList.contains('budget-card'),
-          line: c.querySelector('.sc-line')?.innerText || c.querySelector('.q-text')?.innerText || c.innerText.slice(0, 160),
-          classes: [...c.querySelectorAll('.sc-cls')].map((x) => x.dataset.cls), always: !!c.querySelector('.sc-always'),
-          global: [...c.querySelectorAll('.sc-cls')].some((x) => /whole computer/.test(x.textContent)) };`);
-      if (card && !seen.has(card.id)) {
-        seen.add(card.id);
-        if (card.shell) {
-          // The program the card's rule is about: the part of the line that needs asking (not "cargo --version" in
-          // "cargo --version; rustc -vV"), as the card's "any … command" choice names it.
-          const program = String(await js(`return document.querySelector('#chats .approval[data-id=${JSON.stringify(card.id)}] .sc-pick[data-group="match"] button:nth-child(3)')?.dataset.v || ''`) || card.line.trim().split(/\s+/)[0]).replace(/\*$/, '').toLowerCase();
-          // Installs for the whole computer (rustup targets, npm -g, winget) change the PC outside the test copy: never.
-          const risky = card.global || card.classes.some((k) => ['external', 'opaque', 'discard', 'delete', 'never'].includes(k));
-          await moment(`Approval card: ${card.line.slice(0, 70)}`, `Classes: ${card.classes.join(', ') || '–'}${card.global ? ' (whole computer)' : ''}`);
-          if (risky) {
-            await fill(`#chats .approval[data-id=${q(card.id)}] textarea`, card.global ? 'No installs for the whole computer in this test. Work with what is installed, or tell me what is missing.' : 'Not in this test.');
-            await click(`#chats .approval[data-id=${q(card.id)}] .no`); await moment(card.global ? 'Denied (installs for the whole computer)' : 'Denied (risky class)');
-          }
-          else if (card.always && !allowedPrograms.has(program)) {
-            allowedPrograms.add(program);
-            await click(`#chats .approval[data-id=${q(card.id)}] .sc-always`);
-            await click(`#chats .approval[data-id=${q(card.id)}] .sc-pick[data-group="match"] button:nth-child(3)`);
-            await click(`#chats .approval[data-id=${q(card.id)}] .sc-pick[data-group="scope"] button[data-v="project"]`);
-            await moment(`Always allow any ${program} command in this project`, 'The rule the card will save, before pressing Allow and save.');
-            await click(`#chats .approval[data-id=${q(card.id)}] .sc-save`);
-          } else await click(`#chats .approval[data-id=${q(card.id)}] .yes`);
-        } else if (card.question) {
-          await moment(`The agent asks: ${card.line.slice(0, 70)}`);
-          // Take the agent's recommendation, except an install for the whole computer: then the first option that
-          // isn't one. A card with several questions has a radio group each and a Send answers button.
-          const picked = await js(`const c = document.querySelector('#chats .approval[data-id=${JSON.stringify(card.id)}]');
-            const groups = [...c.querySelectorAll('.q-opts')].filter((g) => g.querySelector('button.q-opt'));
-            const out = groups.map((g) => { const opts = [...g.querySelectorAll('button.q-opt')]; const cur = g.querySelector('.q-opt.chosen, .q-opt.rec') || opts[0];
-              const pick = /install/i.test(cur.textContent) ? (opts.find((o) => !/install/i.test(o.textContent)) || cur) : cur; pick.click(); return pick.textContent.trim().slice(0, 80); });
-            c.querySelector('.send-all')?.click(); return out;`);
-          await moment(`Answered: ${picked.join(' · ').slice(0, 140)}`);
-        } else if (card.budget) {
-          await moment('Budget card');
-          await click(`#chats .approval[data-id=${q(card.id)}] .raise`);
-        } else {
-          await moment(`Approval: ${card.line.slice(0, 70)}`);
-          await click(`#chats .approval[data-id=${q(card.id)}] .yes`);
-        }
-      }
-      const running = await js(`return !document.querySelector('#chats .stopBtn')?.hidden;`);
-      if (!running) break;
-      if (Date.now() - lastMoment > 45000) { lastMoment = Date.now(); await moment(`Working… ${Math.round((Date.now() - t0) / 1000)} s`); }
-      await sleep(1500);
-    }
-    return `${seen.size} card${seen.size === 1 ? '' : 's'} answered; rules saved for: ${[...allowedPrograms].join(', ') || 'none'}`;
-  });
+  await step('The agent works (cards answered as they come)', () => workThrough(15 * 60e3));
   let reply = '';
   await step('The final reply', async () => {
     // The reply's own text sits in .body of the last bot message (a usage line can come after it).
@@ -323,6 +326,67 @@ async function cliScenario() {
   await js(`document.querySelector('#stCancel')?.click(); return true;`).catch(() => {});
 }
 
+// ---------- scenario: the Running tab ----------
+// The agent starts a program that keeps running, a dev server runs, and a terminal tab is open; the Running tab lists
+// all three with who started them, and Stop / Stop all end them.
+async function runningScenario() {
+  if (!(await api('/api/config')).hasKey) { await step('The Running tab (needs a key)', async () => { throw new Error('no OpenRouter key in the test copy: run the cli scenario first, or add one'); }); return; }
+  let pid = null, dir = null;
+  await step('A project with a long-running program and a server', async () => {
+    const p = await testProject('running');
+    pid = p.id; dir = p.dir;
+    fs.writeFileSync(path.join(dir, 'ticker.js'), "let n = 0; setInterval(() => console.log(`tick ${++n}`), 2000); console.log('ticker started');\n");
+    fs.writeFileSync(path.join(dir, 'server.js'), "require('http').createServer((q, s) => s.end('hello from the test server')).listen(process.env.PORT || 0, () => console.log('listening on ' + (process.env.PORT || '?')));\n");
+    const s = await api('/api/servers/start', { projectId: pid, name: 'web', cmd: 'node', args: ['server.js'] });
+    if (s.error) throw new Error(s.error);
+    return `${p.name}: ticker.js and a server "web" at ${s.url || '(starting)'}`;
+  });
+  if (!pid) return;
+  await step('A new chat asks the agent to start the program and leave it running', async () => {
+    await click(`.sb-project[data-p=${q(pid)}] .sb-new`);
+    await waitFor(`document.querySelector('#chats .cmp-textarea')`, 15000, 'the message box');
+    await js(`const b = document.querySelector('#chats [data-approval="strict"]'); if (b && !b.classList.contains('on')) b.click(); return true;`);
+    await fill('#chats .cmp-textarea', 'Start `node ticker.js` with the shell tool and background: true. It keeps running on purpose: do not wait for it, read it or stop it. Then reply in one short line that it is running.');
+    await click('#chats .sendBtn');
+    await waitFor(`!document.querySelector('#chats .stopBtn')?.hidden`, 20000, 'the reply to start');
+    return 'Sent.';
+  });
+  await step('The agent starts it (cards answered as they come)', () => workThrough(5 * 60e3));
+  await step('A terminal tab of your own is open', async () => {
+    await click('#paneTabs [data-tab="term"]');
+    await sleep(2500);
+    return 'Opened the Terminal tab (its first tab starts a shell).';
+  });
+  await step('The Running tab lists everything, with who started it', async () => {
+    await click('#paneTabs [data-tab="run"]');
+    await waitFor(`document.querySelectorAll('#runPane .run-row').length >= 2`, 15000, 'the rows');
+    await sleep(3500); // one poll, so the times and the tab's count are fresh
+    const rows = await js(`return [...document.querySelectorAll('#runPane .run-row')].map((r) => ({ kind: r.dataset.kind, text: r.innerText.replace(/\\s+/g, ' ').slice(0, 160) }));`);
+    const kinds = rows.map((r) => r.kind);
+    for (const k of ['background', 'server']) if (!kinds.includes(k)) throw new Error(`no ${k} row; rows: ${JSON.stringify(rows)}`);
+    const bg = rows.find((r) => r.kind === 'background');
+    if (!/agent/.test(bg.text) || !/ticker/.test(bg.text)) throw new Error(`the background row doesn't say the agent started ticker.js: ${bg.text}`);
+    const count = await textOf('#paneTabs [data-tab="run"] .pt-n');
+    return `Tab count ${count}. ${rows.map((r) => `[${r.kind}] ${r.text}`).join('\n')}`;
+  });
+  await step('■ Stop on the background job ends it', async () => {
+    await click('#runPane .run-row[data-kind="background"] .run-stop');
+    await waitFor(`!document.querySelector('#runPane .run-row[data-kind="background"]')`, 20000, 'the row to go');
+    const left = await js(`return [...document.querySelectorAll('#runPane .run-row')].map((r) => r.dataset.kind);`);
+    return `Gone. Still running: ${left.join(', ') || 'nothing'}`;
+  });
+  await step('Stop all asks first, then ends the rest (your terminal stays)', async () => {
+    await click('#appBar .run-stopall');
+    await waitFor(`document.querySelector('.ask-dlg .ask-ok')`, 5000, 'the confirmation');
+    await moment('Stop all asks first');
+    await click('.ask-dlg .ask-ok');
+    await waitFor(`![...document.querySelectorAll('#runPane .run-row')].some((r) => r.dataset.kind !== 'your-term')`, 20000, 'everything to stop');
+    await sleep(3500);
+    const left = await js(`return [...document.querySelectorAll('#runPane .run-row')].map((r) => r.dataset.kind);`);
+    return `Left: ${left.join(', ') || 'nothing'}`;
+  });
+}
+
 // ---------- run ----------
 let failed = false;
 try {
@@ -330,6 +394,7 @@ try {
   await connect();
   if (SCENARIO === 'all' || SCENARIO === 'settings') await settingsScenario();
   if (SCENARIO === 'all' || SCENARIO === 'cli') await cliScenario();
+  if (SCENARIO === 'all' || SCENARIO === 'running') await runningScenario();
 } catch (e) {
   failed = true;
   steps.push({ title: 'The test could not run', ok: false, note: e.message, img: null, ms: 0 });

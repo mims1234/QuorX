@@ -280,7 +280,7 @@ test('deciders see the user’s words and the facts, never the agent’s reasons
 // ---------- the shell tool, end to end (scripted model, no network) ----------
 let rn = 0;
 const reply = (text, calls = []) => ({ text, toolCalls: calls.map(([name, args], i) => ({ id: `s${++rn}_${i}`, type: 'function', function: { name, arguments: JSON.stringify(args) } })), usage: { cost: 0 }, ms: 1, firstMs: 1, finishReason: 'stop' });
-async function agentRun(script, { settings = {}, prep, onEvent } = {}) {
+async function agentRun(script, { settings = {}, prep, onEvent, chatId } = {}) {
   const id = `sh${Date.now().toString(36)}${(rn++).toString(36)}`;
   // Each project gets its own parent folder, so the tripwire watches that and not the busy shared Temp folder.
   const dir = path.join(tmp('agent'), 'p'); fs.mkdirSync(dir);
@@ -290,7 +290,7 @@ async function agentRun(script, { settings = {}, prep, onEvent } = {}) {
   let i = 0;
   const chatStream = async (body) => { bodies.push(structuredClone(body)); return script(body, i++); };
   try {
-    await runAgent({ runId: id, projectId: id, text: 'build my app', setup: { model: 'test/model' }, settings: { approval: 'strict', mediaEnabled: false, verify: false, review: 'off', checks: { gap: false, shots: false, click: false }, tools: { browser: { on: false } }, ...settings } },
+    await runAgent({ runId: id, projectId: id, ...(chatId ? { chatId } : {}), text: 'build my app', setup: { model: 'test/model' }, settings: { approval: 'strict', mediaEnabled: false, verify: false, review: 'off', checks: { gap: false, shots: false, click: false }, tools: { browser: { on: false } }, ...settings } },
       (e) => { events.push(e); onEvent?.(e, id); }, new AbortController().signal, { chatStream, catalogue: [{ id: 'test/model', maxOut: 4000 }], quiet: true });
     return { events, bodies, dir, id };
   } finally {
@@ -499,6 +499,48 @@ test('jobs: installs never move to the background', { skip: !WIN }, async () => 
   const { bodies } = await agentRun((b, i) => [reply('', [['shell', { command: 'npm install left-pad', background: true }]]), reply('OK.')][i], { settings: { approval: 'strict' },
     onEvent: (e, id) => { if (e.t === 'approval' && e.mode === 'strict') setTimeout(() => answerApproval(id, e.id, { approve: true }), 10); } });
   assert.match(toolOut(bodies, 1), /only commands that build, run project code or read can run in the background/);
+});
+
+// ---------- the Running tab ----------
+test('running: a background job is listed with its chat; stopping it there ends it and tells the agent', { skip: !WIN }, async () => {
+  const { runningIn, stopRunning } = await import('../server/running.js');
+  let projectId = null, listed = null, stopped = null;
+  const { bodies } = await agentRun(async (b, i) => {
+    // Between the agent's steps, the user looks at the Running tab and stops the job.
+    if (i === 1) {
+      listed = runningIn(projectId).items.find((x) => x.kind === 'background');
+      stopped = listed ? await stopRunning(projectId, listed.id) : null;
+      return reply('', [['job_output', { job: listed?.bg || 'bg0', wait_s: 5 }]]);
+    }
+    return [reply('', [['shell', { command: 'node forever.js', background: true }]]), null, reply('Done.')][i];
+  }, {
+    chatId: 'chat-run-1',
+    prep: (d) => {
+      fs.writeFileSync(path.join(d, 'forever.js'), "console.log('serving'); setInterval(() => {}, 1000)");
+      fs.mkdirSync(path.join(d, '.quorx'), { recursive: true });
+      fs.writeFileSync(path.join(d, '.quorx', 'permissions.json'), JSON.stringify({ rules: [{ effect: 'allow', match: 'node forever.js*', by: 'user' }] }));
+    },
+    onEvent: (e, id) => { projectId = id; },
+  });
+  assert.ok(listed, 'listed in the Running tab');
+  assert.equal(listed.chatId, 'chat-run-1');
+  assert.equal(listed.source, 'agent');
+  assert.match(listed.label, /node forever\.js/);
+  assert.ok(stopped && !stopped.left, 'stopped with nothing left');
+  assert.match(toolOut(bodies, 2), /stopped/);
+  assert.ok(bodies[2].messages.some((m) => m.role === 'user' && /The user stopped bg\d+ \(node forever\.js\) from the Running tab/.test(m.content)), 'the agent was told');
+});
+
+test('running: any command that outlives the time limit moves to the background, not only builds', { skip: !WIN }, async () => {
+  const { bodies } = await agentRun((b, i) => [reply('', [['shell', { command: 'ping -n 8 127.0.0.1' }]]), reply('Done.')][i], {
+    settings: { safety: { timeout: 5 } },
+    prep: (d) => {
+      fs.mkdirSync(path.join(d, '.quorx'), { recursive: true });
+      fs.writeFileSync(path.join(d, '.quorx', 'permissions.json'), JSON.stringify({ rules: [{ effect: 'allow', match: 'ping*', by: 'user' }] }));
+    },
+  });
+  assert.match(toolOut(bodies, 1), /continues in the background as job bg\d+ instead of being stopped/);
+  assert.match(toolOut(bodies, 1), /Running tab/);
 });
 // ---------- loop detection (P1) ----------
 test('loops: the same failing call is nudged once, then the reply wraps up in YOLO', async () => {

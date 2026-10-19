@@ -30,7 +30,7 @@ export function ptyOpen(projectId, tab, cwd, cols = 100, rows = 30) {
     name: 'xterm-256color', cols: clampCols(cols), rows: clampRows(rows), cwd,
     env: childEnv({ TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'QuorX' }),
   });
-  const s = { term, buf: '', subs: new Set(), exited: false, code: null, cols, rows, shell: sh.name };
+  const s = { term, buf: '', subs: new Set(), exited: false, code: null, cols, rows, shell: sh.name, started: Date.now() };
   term.onData((d) => {
     s.buf += d;
     if (s.buf.length > KEEP) s.buf = s.buf.slice(s.buf.length - KEEP);
@@ -78,5 +78,8 @@ export function ptyClose(projectId, tab) {
   for (const cb of s.subs) cb({ exit: s.code ?? 0, closed: true });
   return true;
 }
+/** Your open terminal tabs in a project: [{ tab, shell, started }] (for the Running tab). */
+export const ptyList = (projectId) => [...SESS.entries()].filter(([k, s]) => k.startsWith(`${projectId}:`) && !s.exited)
+  .map(([k, s]) => ({ tab: k.slice(projectId.length + 1), shell: s.shell, started: s.started }));
 // The harness stopping ends every terminal it started.
 process.once('exit', () => { for (const s of SESS.values()) { try { s.term.kill(); } catch { /* gone */ } } });

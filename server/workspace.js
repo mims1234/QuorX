@@ -235,7 +235,7 @@ export function runCommand(root, cmd, args = [], opts = {}) {
  * { code, out (last 8,000 chars), ms, timedOut, stopped: endProc result | null, leftovers: sweep result | null, log }.
  * `logTo`: a file that gets the full output. `onStart(proc)`: called once it runs (for the tripwire).
  */
-export function runLine(root, line, { shell = 'direct', timeout = 180e3, signal, term, label, memoryMB = 0, logTo, onStart } = {}) {
+export function runLine(root, line, { shell = 'direct', timeout = 180e3, signal, term, label, memoryMB = 0, logTo, onStart, onJob } = {}) {
   return new Promise((resolve, reject) => {
     (async () => {
       let proc;
@@ -245,7 +245,8 @@ export function runLine(root, line, { shell = 'direct', timeout = 180e3, signal,
       label = label || line;
       let stopping = null, timedOut = false;
       const stop = (why) => (stopping ??= endProc(proc).then((r) => ({ ...r, why })));
-      const job = term ? newJob(term.projectId, label, term.source, () => stop('you')) : null;
+      const job = term ? newJob(term.projectId, label, term.source, () => stop('you'), { chatId: term.chatId, tab: term.tab }) : null;
+      if (job) onJob?.(job);
       const split = lineSplitter((text, stream) => termEvent(term.projectId, { kind: 'out', job, text, stream }));
       if (job) termEvent(term.projectId, { kind: 'start', job, source: term.source, chatId: term.chatId, label, tab: term.tab, cwd: term.cwd });
       let log = null;

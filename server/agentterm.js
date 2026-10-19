@@ -27,17 +27,22 @@ export const KEYS = { Enter: '\r', Tab: '\t', Esc: '\x1b', Escape: '\x1b', Up: '
   'Ctrl+C': '\x03', 'Ctrl+D': '\x04', 'Ctrl+Z': '\x1a', 'Ctrl+L': '\x0c', 'Ctrl+A': '\x01', 'Ctrl+E': '\x05', 'Ctrl+U': '\x15', 'Ctrl+W': '\x17',
   F1: '\x1bOP', F2: '\x1bOQ', F3: '\x1bOR', F4: '\x1bOS', F5: '\x1b[15~', F10: '\x1b[21~', 'Shift+Tab': '\x1b[Z', y: 'y', n: 'n', q: 'q' };
 
-const view = (s) => ({ id: s.id, label: s.label, running: !s.exited, code: s.code ?? null, cols: s.screen.cols, rows: s.screen.rows });
+const view = (s) => ({ id: s.id, projectId: s.projectId, chatId: s.chatId || null, label: s.label, running: !s.exited, code: s.code ?? null, cols: s.screen.cols, rows: s.screen.rows, started: s.started });
+/** The last few lines with something on them, as the screen shows them now (for the Running tab). */
+export function termTail(id, n = 4) {
+  const s = SESS.get(String(id)); if (!s) return [];
+  return s.screen.text().split('\n').map((l) => l.trimEnd()).filter((l) => l.trim()).slice(-n);
+}
 
 /** Starts a program in a new terminal session. Resolves once it is running inside its job. */
-export async function termStart({ projectId, cwd, line, shell = 'direct', cols = 100, rows = 30, env = {}, onExit }) {
+export async function termStart({ projectId, chatId = null, cwd, line, shell = 'direct', cols = 100, rows = 30, env = {}, onExit }) {
   if (!pty) throw new Error(`the agent terminal needs node-pty, which could not load (${loadError || 'not installed'})`);
   const id = `t${++seq}`;
   const goFile = path.join(os.tmpdir(), `qx-go-${process.pid}-${Date.now().toString(36)}-${seq}`);
   // useConptyDll: node-pty's bundled ConPTY, whose kill needs no console-list helper (that helper fails once the
   // console is gone), so a finished session can always be released.
   const term = pty.spawn(process.execPath, [GATE, shell, line], { name: 'xterm-256color', cols, rows, cwd, useConptyDll: process.platform === 'win32', env: { ...childEnv(env), QX_GO_FILE: goFile, TERM: 'xterm-256color' } });
-  const s = { id, projectId, label: line, term, screen: new Screen(cols, rows, (r) => { try { term.write(r); } catch { /* closed */ } }), raw: '', last: Date.now(), exited: false, code: null, job: null, started: Date.now() };
+  const s = { id, projectId, chatId, label: line, term, screen: new Screen(cols, rows, (r) => { try { term.write(r); } catch { /* closed */ } }), raw: '', last: Date.now(), exited: false, code: null, job: null, started: Date.now() };
   term.onData((d) => { s.screen.write(d); s.raw = (s.raw + d).slice(-60000); s.last = Date.now(); });
   term.onExit(({ exitCode }) => {
     s.exited = true; s.code = exitCode;

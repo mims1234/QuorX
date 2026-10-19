@@ -20,6 +20,7 @@ import { approvalJudge } from './approvals.js';
 import { startTripwire } from './tripwire.js';
 import { detectToolchains, toolchainNote } from './toolchains.js';
 import { startBackground, jobOutput, stopBackground, listBackground } from './bgjobs.js';
+import { markJob } from './terminal.js';
 import { termStart, termSend, termRead, termStop } from './agentterm.js';
 import { appWindows, readWindow, clickControl, clickAt, setControl, sendKeys, windowShot, closeWindow } from './uia.js';
 import { languageChecks } from './langchecks.js';
@@ -918,6 +919,11 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
     }
     run.steps++;
     deliverInbox(step);
+    if (run.userStops?.length) {
+      const s = run.userStops.splice(0);
+      messages.push({ role: 'user', content: `[The user stopped ${s.join(', ')} from the Running tab. Don't start it again unless they ask; carry on without it, or ask them what they want instead.]` });
+      emit({ t: 'note', level: 'info', msg: `You stopped ${s.join(', ')}; the agent was told.`, at: at() });
+    }
     if (run.freshQueue?.length) await freshEyes(step);
     const last = step === maxSteps - 1;
     // Out of steps: no more tools, and a plain request to wrap up so the run never ends silently.
@@ -2140,13 +2146,11 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
       // Only commands that read, write inside the project or build may keep running past the time limit.
       const quiet = d.segments.every((s) => ['read', 'write', 'build'].includes(s.cls) && !(s.paths || []).some((p) => p.zone !== 'inside'));
       if (args.background && !quiet) return 'Error: only commands that build, run project code or read can run in the background. Run this one normally.';
-      // Installs can take longer than the limit too (Visual Studio Build Tools, an SDK, a big npm install). Killing
-      // one part-way leaves a half-installed tool, so it continues in the background instead: a project install
-      // however it was allowed, one for the whole computer only when you allowed it on its card.
-      const installing = d.segments.some((s) => s.cls === 'install') && (g.by === 'you' || !d.segments.some((s) => s.global))
-        && d.segments.every((s) => ['read', 'write', 'build', 'install'].includes(s.cls) && !(s.paths || []).some((p) => p.zone !== 'inside'));
+      // A command that outlives the time limit moves to the background instead of being killed: a long build or an
+      // install (Visual Studio Build Tools, an SDK) stopped part-way is wasted work or a half-installed tool. It keeps
+      // its tripwire, the user sees it in the pane's Running tab and can stop it there, and the agent carries on.
       return execCommand({ line, shell, cwd, label: alias ? [args.command, ...argv].join(' ') : line, readOnly: d.segments.every((s) => s.cls === 'read'), decidedBy: g.by,
-        background: !!args.background, backgroundable: quiet || installing });
+        background: !!args.background, backgroundable: true });
     }
     if (name === 'terminal') {
       const act = String(args.action || '');
@@ -2160,7 +2164,7 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
         const g = await gateCommand(d, line, SF.shell);
         if (!g.ok) return g.text;
         const sb = SF.snapshots ? snapBefore(root, { maxBytes: SF.snapshotMaxMB * 1024 * 1024 }) : { snap: null };
-        const s = await termStart({ projectId, cwd, line, shell: SF.shell, cols: Number(args.cols) || 100, rows: Number(args.rows) || 30,
+        const s = await termStart({ projectId, chatId: req.chatId || null, cwd, line, shell: SF.shell, cols: Number(args.cols) || 100, rows: Number(args.rows) || 30,
           onExit: () => { if (sb.snap) { try { commandChanges(root, filesId, sb.snap); } catch { /* best effort */ } } } });
         notes.push(`opened terminal ${s.id}: ${clip(line, 60)}`);
         const scr = show(s.id, await termRead(s.id, 8000, 1000), line); // a shell can take a few seconds to start
@@ -2382,12 +2386,18 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
       if (proc) endProc(proc);
     } }) : null;
     const long = background || backgroundable;
+    let termJob = null;
     const runP = runLine(cwd, line, { shell, label, signal, timeout: long ? 24 * 3600e3 : SF.timeout * 1000, memoryMB: SF.memoryMB, logTo: path.join(root, logRel),
-      term: { projectId, source: 'agent', chatId: req.chatId }, onStart: (p) => { proc = p; if (bg) bg.proc = p; if (trip) endProc(p); } });
-    // A job that outlives this tool call keeps its tripwire, and records what it changed when it ends.
+      term: { projectId, source: 'agent', chatId: req.chatId }, onStart: (p) => { proc = p; if (bg) bg.proc = p; if (trip) endProc(p); }, onJob: (j) => { termJob = j; if (bg) { bg.termJob = j; markJob(j, { bg: bg.id }); } } });
+    // A job that outlives this tool call keeps its tripwire, and records what it changed when it ends. When you stop
+    // it from the page while this reply still works, the agent hears about it before its next step.
     const toBackground = (why) => {
-      bg = startBackground({ projectId, label: label || line, logTo: path.join(root, logRel), logRel, running: { promise: runP, proc },
-        onDone: (j) => { stopTripwire?.(); if (sb.snap) { try { commandChanges(root, filesId, sb.snap); } catch { /* best effort */ } } } });
+      bg = startBackground({ projectId, chatId: req.chatId || null, termJob, label: label || line, logTo: path.join(root, logRel), logRel, running: { promise: runP, proc },
+        onDone: (j, res) => {
+          stopTripwire?.();
+          if (sb.snap) { try { commandChanges(root, filesId, sb.snap); } catch { /* best effort */ } }
+          if (res?.stopped?.why === 'you') (run.userStops ||= []).push(`${j.id} (${clip(j.label, 80)})`);
+        } });
       emit({ t: 'command', command: label || line, background: bg.id, why, log: logRel, decidedBy, at: at() });
       aud({ kind: 'background', command: label || line, by: decidedBy, job: bg.id, why });
       notes.push(`started ${bg.id}: ${clip(label || line, 60)}`);
@@ -2407,7 +2417,9 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
       if (first === 'slow') {
         const j = toBackground(`still running after ${SF.timeout}s`);
         const o = await jobOutput(j.id, { max: 3000 });
-        return `Still running after ${SF.timeout}s, so it continues in the background as job ${j.id} instead of being stopped. Last output:\n${o.text || '(none yet)'}\nWait for it with job_output("${j.id}", wait_s up to 60); stop it with job_stop("${j.id}"). Full output: ${logRel}.`;
+        // Nobody can type into a background job: a command waiting at a prompt would wait for ever.
+        const asks = /\?\s*$|:\s*$|\(y\/n\)|\[y\/n\]|press any key|password/i.test(String(o.text || '').trimEnd().slice(-300));
+        return `Still running after ${SF.timeout}s, so it continues in the background as job ${j.id} instead of being stopped (the user sees it in the Running tab and may stop it). Last output:\n${o.text || '(none yet)'}\n${asks ? `It looks like it is waiting for input, which a background job never gets: stop it with job_stop("${j.id}") and run it again with a non-interactive flag (--yes, -y, /quiet), or in the terminal tool where you can answer.\n` : ''}Carry on with other work while it runs; check it with job_output("${j.id}", wait_s up to 60); stop it with job_stop("${j.id}"). Full output: ${logRel}.`;
       }
       r = first;
       stopTripwire?.();

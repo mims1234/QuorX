@@ -24,6 +24,7 @@ const SANDBOX_CSP = 'sandbox allow-scripts allow-forms allow-modals allow-popups
 import { listChats, getChat, saveChat, patchChat, trashChat, validId, listProjects, saveProject, forgetProject, setProjectColor, costSummary, costChats } from './server/store.js';
 import { ALLOWED, copyTemplate, workspaceDir, safePath, listFiles, listServers, stopServer, stopServerWait, restartServer, serverLog, startServer, restoreCheckpoint, listCheckpoints, pruneCheckpoints, undoConflicts, changedFiles, reviewFiles, reviewDiff, undoFile, checkCommand, runCommand, serverOverview, launchConfigs, saveLaunchConfig, removeLaunchConfig, ensureAgentDir, agentSpace, clearAgentSpace } from './server/workspace.js';
 import { followTerm, runningJobs, stopJob } from './server/terminal.js';
+import { runningIn, stopRunning, stopAllIn } from './server/running.js';
 import { decide as decideCommand, loadRules, saveRules, suggestedRules } from './server/cmdpolicy.js';
 import { jobHostStatus, jobsAvailable } from './server/jobhost.js';
 import { safetySettings } from './server/safety.js';
@@ -396,6 +397,18 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: shellClose(String(b.projectId || ''), String(b.tab || '').replace(/[^\w-]/g, '').slice(0, 40)) });
     }
     if (url.pathname === '/api/term/stop' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e4)); const r = await stopJob(String(b.job)); return json(res, 200, { ok: !!r, ...(r || {}) }); }
+    // ---- the Running tab: everything running in a project, and stopping any of it ----
+    if (url.pathname === '/api/running' && req.method === 'GET') {
+      const pid = url.searchParams.get('project');
+      if (!validId(pid)) return json(res, 400, { error: 'bad project id' });
+      try { return json(res, 200, runningIn(pid)); } catch (e) { return json(res, 200, { error: e.message, items: [], elsewhere: [] }); }
+    }
+    if ((url.pathname === '/api/running/stop' || url.pathname === '/api/running/stop-all') && req.method === 'POST') {
+      const b = JSON.parse(await readBody(req, 1e4));
+      if (!validId(b.projectId)) return json(res, 400, { error: 'bad project id' });
+      try { return json(res, 200, { ok: true, ...(url.pathname.endsWith('all') ? await stopAllIn(b.projectId) : await stopRunning(b.projectId, b.id)) }); }
+      catch (e) { return json(res, 200, { error: e.message }); }
+    }
 
     // ---- the agent's own folder (.quorx: scratch, undo checkpoints, trash): its size, and clearing it ----
     // ---- ⟳ restart (a fresh copy of this harness takes over the port) and stop: only from this computer ----
