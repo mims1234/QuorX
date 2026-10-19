@@ -69,7 +69,9 @@ export async function runBuildBench(arg) {
     decide: list(arg('decide', 'off')),
     mode: list(arg('mode', 'harness')),
     checks: list(arg('checks', 'on')),
+    fresh: list(arg('fresh', 'on')),
   };
+  for (const f of axes.fresh) if (!['on', 'off'].includes(f)) throw new Error(`--fresh ${f}: use on or off`);
   for (const m of axes.mode) if (!['harness', 'direct'].includes(m)) throw new Error(`--mode ${m}: use harness or direct`);
   for (const c of axes.checks) if (!['on', 'off'].includes(c)) throw new Error(`--checks ${c}: use on or off`);
   const ASK = Math.max(0, Math.min(10, Number(arg('ask', 0)) || 0));
@@ -141,7 +143,7 @@ export async function runBuildBench(arg) {
   const OUT = LOG.replace(/\.jsonl$/, '.json');
   // Runs already done in the file being resumed (skipped ones are tried again).
   const before = RESUME ? fs.readFileSync(RESUME, 'utf8').split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l)).filter((r) => !r.skipped) : [];
-  const doneBefore = (task, s, rep) => before.find((r) => r.builder === s.builder && r.task === task.id && (r.decide || 'off') === s.decide && (r.mode || 'harness') === s.mode && (r.checksOn || 'on') === s.checks && (r.rep || 0) === rep);
+  const doneBefore = (task, s, rep) => before.find((r) => r.builder === s.builder && r.task === task.id && (r.decide || 'off') === s.decide && (r.mode || 'harness') === s.mode && (r.checksOn || 'on') === s.checks && (r.fresh || 'on') === s.fresh && (r.rep || 0) === rep);
   if (RESUME) { fs.writeFileSync(RESUME, before.map((r) => JSON.stringify(r)).join('\n') + (before.length ? '\n' : '')); console.log(`resuming ${path.relative(ROOT, RESUME)}: ${before.length} run(s) already done`); }
   fs.mkdirSync(path.dirname(LOG), { recursive: true });
   const jobs = [];
@@ -178,7 +180,7 @@ export async function runBuildBench(arg) {
     let rec;
     try {
       const run = s.mode === 'direct' ? await direct({ task, s, dir, suffix: file.suffix || '', minutes: MINUTES, retries: RETRIES })
-        : await build({ task, s, pid, suffix: file.suffix || '', settings: { review: s.review, reviewModel: REVIEWER, reviewRounds: ROUNDS, reviewBar: BAR, helpers: s.helpers === 'on', maxSteps: STEPS, retries: RETRIES, askLimit: ASK, ...(s.checks === 'off' ? { checks: { gap: false, shots: false, click: false } } : {}) }, minutes: MINUTES, rep });
+        : await build({ task, s, pid, suffix: file.suffix || '', settings: { review: s.review, reviewModel: REVIEWER, reviewRounds: ROUNDS, reviewBar: BAR, helpers: s.helpers === 'on', maxSteps: STEPS, retries: RETRIES, askLimit: ASK, freshEyes: s.fresh !== 'off', ...(s.checks === 'off' ? { checks: { gap: false, shots: false, click: false } } : {}) }, minutes: MINUTES, rep });
       // The builder's model never answered (or kept failing): count it towards giving up on that model.
       const modelFailed = !!run.error && (!(run.stats.llmCalls > 0) || /rate.?limit|429|no endpoints|provider|overloaded|unavailable|timed? ?out|402|quota/i.test(run.error));
       failStreak.set(s.builder, modelFailed ? (failStreak.get(s.builder) || 0) + 1 : 0);
@@ -191,7 +193,7 @@ export async function runBuildBench(arg) {
       const variant = colOf(s, axes);
       const saved = PROJECT ? keepBuild(dir, path.join(PROJECT, 'builds', task.id, `${short(s.builder).replace(/[^a-z0-9.-]+/gi, '-')}__${variant.replace(/[^a-z0-9.-]+/gi, '-')}${REPEAT > 1 ? `__${rep + 1}` : ''}`)) : null;
       rec = { ts: new Date().toISOString(), set: 'build', setup: s.label, builder: s.builder, review: s.review, helpers: s.helpers, reasoning: s.reasoning, decide: s.decide, reviewer: REVIEWER, judge: JUDGE,
-        runId: `bench-build-${pid}`, mode: s.mode, checksOn: s.checks, col: variant, checkEvents: run.checks, deciderAnswers: run.deciderAnswers,
+        runId: `bench-build-${pid}`, fresh: s.fresh, freshLooks: run.fresh || [], mode: s.mode, checksOn: s.checks, col: variant, checkEvents: run.checks, deciderAnswers: run.deciderAnswers,
         tools: run.tools, toolCalls: Object.values(run.tools).reduce((a, b) => a + b, 0), toolErrors: run.toolErrors, helperTools: run.helperTools, deciders: { ...run.deciders, ...(st.decide || {}) }, questions: run.questions, llmRetries: run.retries, saved: saved && path.relative(PROJECT, saved).replace(/\\/g, '/'),
         task: task.id, cat: task.cat, rep, scores: j.scores, total: j.scores ? CORE_KEYS.reduce((a, k) => a + j.scores[k], 0) : 0, pass: !!j.pass, bar: BAR, bugs: j.bugs, summary: j.summary,
         judgeCost: j.cost || 0, judgeMs: j.ms || 0, cost: st.cost || 0, byRole: st.byRole || {}, calls: Object.values(callsByRole).reduce((a, b) => a + b, 0), callsByRole, builderCalls: st.llmCalls || 0,
@@ -248,6 +250,7 @@ async function build({ task, s, pid, suffix, settings, minutes, rep }) {
       if (e.t === 'llm_retry') ev.retries++;
       if (e.t === 'checks') ev.checks.push(e.kind === 'gap' ? { kind: 'gap', build: e.build, missing: e.rows.filter((r) => r.missing).map((r) => r.id) } : { kind: 'page', when: e.when, target: e.target, failed: e.rows.filter((r) => r.fail).map((r) => `${r.kind}.${r.id}`), asked: e.rows.length, clicked: e.clicked });
       if (e.t === 'answer' && e.by === 'deciders') ev.deciderAnswers.push({ text: e.text, confidence: e.confidence });
+      if (e.t === 'fresh_eyes') (ev.fresh ||= []).push({ problems: e.problems, report: e.report, ok: e.ok, step: e.step });
     }, ac.signal);
   } catch (e) { ev.error = ac.signal.aborted ? `stopped after ${minutes} min` : e.message; }
   finally { clearTimeout(timer); }
@@ -260,6 +263,7 @@ function colOf(s, axes) {
   const parts = [];
   if (axes.mode.length > 1) parts.push('harness');
   if (axes.checks.length > 1) parts.push(`checks ${s.checks}`);
+  if (axes.fresh.length > 1) parts.push(`fresh eyes ${s.fresh}`);
   if (axes.decide.length > 1 || !parts.length) parts.push(`decide ${s.decide}`);
   return parts.join(' · ');
 }

@@ -135,7 +135,7 @@ const server = http.createServer(async (req, res) => {
       return res.end(callbackPage(r));
     }
     if (req.method === 'GET' && url.pathname === '/api/stale') return json(res, 200, codeChanged());
-    if (req.method === 'GET' && url.pathname === '/api/config') return json(res, 200, { ...codeChanged(), version: VERSION, shell: shellInfo().name, pty: ptyAvailable(), defaults: DEFAULTS, checks: CHECKS, media: MEDIA, hasKey: !!currentKey(), browser: browserPath(), allowed: ALLOWED });
+    if (req.method === 'GET' && url.pathname === '/api/config') return json(res, 200, { ...codeChanged(), version: VERSION, pagePort: runtime.pagePort || null, shell: shellInfo().name, pty: ptyAvailable(), defaults: DEFAULTS, checks: CHECKS, media: MEDIA, hasKey: !!currentKey(), browser: browserPath(), allowed: ALLOWED });
 
     // ---- chat history (data/chats; delete = move to data/trash) ----
     if (url.pathname === '/api/chats' && req.method === 'GET') return json(res, 200, listChats());
@@ -195,7 +195,7 @@ const server = http.createServer(async (req, res) => {
       const ref = String(req.headers.referer || ''), base = `http://${req.headers.host}/`;
       const own = req.headers.origin === 'null' && [`ws/${wm[1]}/`, 'art/', 'preview/'].some((p) => ref.startsWith(base + p));
       const type = MIME[path.extname(file).toLowerCase()] || 'application/octet-stream';
-      res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-cache', ...(/html|svg|xml/.test(type) ? { 'Content-Security-Policy': SANDBOX_CSP } : {}), ...(own ? { 'Access-Control-Allow-Origin': 'null' } : {}) });
+      res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-cache', ...(/html|svg|xml/.test(type) && !req.pageOrigin ? { 'Content-Security-Policy': SANDBOX_CSP } : {}), ...(own ? { 'Access-Control-Allow-Origin': 'null' } : {}) });
       return fs.createReadStream(file).pipe(res);
     }
     // Open a project's folder in the computer's own file manager (File Explorer on Windows).
@@ -232,11 +232,13 @@ const server = http.createServer(async (req, res) => {
     if (am && req.method === 'GET') {
       if (!validId(am[1])) return json(res, 400, { error: 'bad chat id' });
       const content = artifactContent(am[1], am[2]);
-      if (!content) { res.writeHead(404, ARTIFACT_HEADERS); return res.end('<!doctype html><body style="font:14px system-ui;color:#889;background:#0b0f0d;padding:24px">This artifact is not available (the chat may have been deleted or cleared).</body>'); }
-      res.writeHead(200, ARTIFACT_HEADERS); return res.end(servedArtifact(content));
+      const headers = { ...ARTIFACT_HEADERS };
+      if (req.pageOrigin) delete headers['Content-Security-Policy'];
+      if (!content) { res.writeHead(404, headers); return res.end('<!doctype html><body style="font:14px system-ui;color:#889;background:#0b0f0d;padding:24px">This artifact is not available (the chat may have been deleted or cleared).</body>'); }
+      res.writeHead(200, headers); return res.end(servedArtifact(content));
     }
     const pm = url.pathname.match(/^\/preview\/page\/([a-z0-9]+)$/i);
-    if (pm) { const h = hostedHtml(pm[1]); if (h == null) return json(res, 404, { error: 'expired' }); res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': SANDBOX_CSP }); return res.end(h); }
+    if (pm) { const h = hostedHtml(pm[1]); if (h == null) return json(res, 404, { error: 'expired' }); res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', ...(req.pageOrigin ? {} : { 'Content-Security-Policy': SANDBOX_CSP }) }); return res.end(h); }
 
     // ---- skills (for the Settings list) and undo ----
     // ⚙ Settings → Setup check (server/setup-check.js). Fixes open winget on this computer, so only its own windows may ask.
@@ -628,7 +630,7 @@ function listen(port, triesLeft = 40) {
 // Stops this harness (dev servers and the headless browser stop with it). With restart, a fresh copy
 // starts first in the background, waits for the port, and takes over; its output goes to logs/harness.log.
 function shutDown(restart) {
-  server.close();
+  server.close(); pageServer.close();
   if (restart) {
     const logDir = path.join(HOME, 'logs'); fs.mkdirSync(logDir, { recursive: true });
     const out = fs.openSync(path.join(logDir, 'harness.log'), 'a');
@@ -636,5 +638,29 @@ function shutDown(restart) {
   }
   setTimeout(() => process.exit(0), 150);
 }
-server.once('listening', () => { runtime.port = server.address().port; console.log(`QuorX → http://localhost:${runtime.port}`); });
+server.once('listening', () => {
+  runtime.port = server.address().port; console.log(`QuorX → http://localhost:${runtime.port}`);
+  listenPages(runtime.port + 1000, 8);
+});
 listen(PORT);
+
+// Pages the agent made (project files, artifacts) also load from a second address on this computer. There they have
+// an origin of their own, so localStorage, IndexedDB, cookies and module scripts work as on any site. On the app's
+// own address they stay sandboxed (no storage), so they can't use this app's routes; on this one there are none:
+// only /ws, /art and /preview/page answer, and /api calls from here to the app are refused as cross-site.
+const pageServer = http.createServer((req, res) => {
+  let p = '';
+  try { p = new URL(req.url, 'http://x').pathname; } catch { /* below */ }
+  if (!isLoopback(req) || !['GET', 'HEAD'].includes(req.method) || !/^\/(ws|art|preview\/page)\//.test(p)) { res.writeHead(404, { 'Content-Type': 'text/plain' }); return res.end('Not here'); }
+  req.pageOrigin = true;
+  server.emit('request', req, res);
+});
+function listenPages(port, triesLeft) {
+  // The same port each time when it's free (storage belongs to an address, port included); else any free one.
+  pageServer.once('error', (e) => {
+    if (e.code === 'EADDRINUSE' && triesLeft > 0) return setTimeout(() => listenPages(port, triesLeft - 1), 300);
+    if (e.code === 'EADDRINUSE' && port) return listenPages(0, 0);
+    console.warn(`Pages address not available (${e.message}); agent pages stay sandboxed, without storage.`);
+  });
+  pageServer.listen(port, () => { runtime.pagePort = pageServer.address().port; });
+}

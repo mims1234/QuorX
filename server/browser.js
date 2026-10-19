@@ -10,18 +10,27 @@ import { spawn } from 'node:child_process';
 import { ROOT } from './openrouter.js';
 import { desktopReady, desktopCall, onTabEvents } from './desktop.js';
 
+const LOCAL = process.env.LOCALAPPDATA || '';
 const CANDIDATES = [
   process.env.AGENT_BROWSER,
   'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
   'C:/Program Files/Microsoft/Edge/Application/msedge.exe',
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
+  'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
+  // Chrome installed for one user only (no admin rights), and Brave.
+  LOCAL && path.join(LOCAL, 'Google/Chrome/Application/chrome.exe'),
+  LOCAL && path.join(LOCAL, 'Microsoft/Edge/Application/msedge.exe'),
+  'C:/Program Files/BraveSoftware/Brave-Browser/Application/brave.exe',
+  LOCAL && path.join(LOCAL, 'BraveSoftware/Brave-Browser/Application/brave.exe'),
+  LOCAL && path.join(LOCAL, 'Chromium/Application/chrome.exe'),
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
   '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
-  '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/microsoft-edge',
+  '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser', '/Applications/Chromium.app/Contents/MacOS/Chromium',
+  '/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/microsoft-edge', '/usr/bin/brave-browser', '/snap/bin/chromium',
 ].filter(Boolean);
 export const browserPath = () => CANDIDATES.find((p) => fs.existsSync(p)) || null;
 
-let chrome = null, starting = null;
+let chrome = null, starting = null, failed = null; // failed: { at, message } of the last start that didn't work
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const freePort = async () => { for (let p = 9333; p < 9400; p++) { const ok = await new Promise((r) => { const s = net.createServer().once('error', () => r(false)).once('listening', () => s.close(() => r(true))).listen(p, '127.0.0.1'); }); if (ok) return p; } throw new Error('no free debugging port'); };
 
@@ -29,28 +38,47 @@ const freePort = async () => { for (let p = 9333; p < 9400; p++) { const ok = aw
 // profile folder would fight over it, and all but one would fail with "the browser did not start".
 function ensureBrowser() {
   if (chrome && chrome.proc.exitCode == null) return Promise.resolve(chrome);
-  starting ??= launchBrowser().finally(() => { starting = null; });
+  // After a failed start, later callers hear why at once for two minutes instead of waiting for it to fail again.
+  if (failed && Date.now() - failed.at < 120e3) return Promise.reject(new Error(failed.message));
+  starting ??= launchBrowser().then((c) => { failed = null; return c; }, (e) => { failed = { at: Date.now(), message: e.message }; throw e; }).finally(() => { starting = null; });
   return starting;
 }
 async function launchBrowser() {
   const exe = browserPath();
-  if (!exe) throw new Error('No Edge or Chrome found. Set AGENT_BROWSER in .env to a Chromium-based browser.');
+  if (!exe) throw new Error('no Edge, Chrome or Brave found on this computer: install one, or set AGENT_BROWSER in .env to a Chromium-based browser');
+  try { return await startOnce(exe, ''); }
+  catch (e) {
+    // Once more with a fresh profile folder: a profile left locked by a browser that crashed is the usual cause.
+    try { return await startOnce(exe, `-${Date.now().toString(36)}`); }
+    catch { throw new Error(`${path.basename(exe)} did not start: ${e.message}`); }
+  }
+}
+async function startOnce(exe, suffix) {
   const port = await freePort();
   // A profile per harness process: two processes can't share one, and nothing from earlier runs leaks in.
-  const profile = path.join(os.tmpdir(), `quorx-browser-${process.pid}`);
+  const profile = path.join(os.tmpdir(), `quorx-browser-${process.pid}${suffix}`);
   fs.mkdirSync(profile, { recursive: true });
   const proc = spawn(exe, ['--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check',
     '--disable-extensions', '--disable-sync', '--mute-audio', '--hide-scrollbars', '--window-size=1280,800',
     // Every tab here works in the background: keep its timers and animation frames at full speed, so games and
     // animations really run while the agent, the checks or the judge look at them.
-    '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding', 'about:blank'], { stdio: 'ignore', windowsHide: true });
-  for (let i = 0; i < 60; i++) {
+    '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding', 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true });
+  // What the browser said on the way out, for the error (a policy that blocks remote debugging, a missing library…).
+  let said = '', spawnErr = null;
+  proc.stderr.on('data', (d) => { said = (said + d).slice(-2000); });
+  proc.on('error', (e) => { spawnErr = e; });
+  // Up to 30 s: a first start on a slow or busy computer (antivirus scanning the new profile) can take a while.
+  for (let i = 0; i < 120; i++) {
     try { const r = await fetch(`http://127.0.0.1:${port}/json/version`); if (r.ok) { chrome = { proc, port }; return chrome; } } catch { /* starting */ }
+    if (spawnErr) throw new Error(spawnErr.message);
+    if (proc.exitCode != null) throw new Error(`it closed at once (exit code ${proc.exitCode})${lastLine(said)}`);
     await sleep(250);
   }
   proc.kill();
-  throw new Error('the browser did not start');
+  throw new Error(`it gave no answer within 30 s${lastLine(said)}`);
 }
+// The browser's last meaningful message line, without its [pid:tid:time:LEVEL:file] prefix.
+const lastLine = (s) => { const l = String(s).split(/\r?\n/).map((x) => x.replace(/^\[[^\]]*\]\s*/, '').trim()).filter((x) => x && !/DevTools listening/i.test(x)).pop(); return l ? `: ${l.slice(0, 200)}` : ''; };
 process.on('exit', () => {
   try { chrome?.proc.kill(); } catch { /* gone */ }
   try { fs.rmSync(path.join(os.tmpdir(), `quorx-browser-${process.pid}`), { recursive: true, force: true }); } catch { /* still locked */ }

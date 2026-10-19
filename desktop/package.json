@@ -1,7 +1,7 @@
 {
   "name": "quorx-desktop",
   "productName": "QuorX",
-  "version": "0.1.0",
+  "version": "0.1.5",
   "private": true,
   "description": "QuorX desktop: an open-source AI agent with a quorum of models behind every call, with real Chromium tabs in the pane's Browser tab.",
   "type": "commonjs",

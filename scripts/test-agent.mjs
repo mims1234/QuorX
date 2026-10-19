@@ -516,6 +516,20 @@ test('a review that stays below the bar after the allowed rounds is shown in the
   assert.equal(done.stats.review.pass, false);
 });
 
+test('a browser that will not start is a note from the checks, never a problem sent back to the agent', async () => {
+  let b = 0;
+  const { events } = await run((body) => [
+    reply('', [['write_file', { path: 'index.html', content: PAGE }]]),
+    reply('', [['preview_site', { title: 'Game' }]]),
+    reply('Done.'),
+  ][b++], { settings: { tools: { browser: { on: true } }, review: 'off' }, openTab: async () => { throw new Error('msedge.exe did not start: it gave no answer within 30 s'); } });
+  const v = of(events, 'verify');
+  assert.equal(v.length, 1);
+  assert.equal(v[0].ok, true);
+  assert.match(v[0].note, /could not use a browser \(msedge\.exe did not start/);
+  assert.equal(of(events, 'sent_back').length, 0);
+});
+
 test('in "builds" mode there is no review without a plan; "off" never reviews', async () => {
   const script = () => { let b = 0; return (body) => [
     reply('', [['write_file', { path: 'index.html', content: PAGE }]]),
@@ -1016,4 +1030,20 @@ test('a note sent while the agent works can carry pictures and context, and the 
   assert.match(note, /while you were working: \\"it looks like this\\" \(with 1 picture\)/);
   assert.match(note, /error log: boom/);
   assert.match(note, /attached 1 image/, 'the picture is passed on (this test model cannot see images, so it is told the deciders can)');
+});
+
+test('fresh eyes: the same problem twice gets a clean-context diagnosis before the next step', async () => {
+  const seen = [];
+  const { events, bodies, done } = await run((body, i) => {
+    if (/second pair of eyes/.test(String(body.messages[0].content))) return reply('Cause: a stray "=" with no value on line 1.\nEvidence: app.js:1.\nFix: give it a value.');
+    seen.push(i);
+    const own = seen.length - 1;
+    return [reply('', [['write_file', { path: 'app.js', content: 'const a = ;\n' }]]), reply('', [['write_file', { path: 'app.js', content: 'const a = ;\n' }]]), reply('', [['write_file', { path: 'app.js', content: 'const a = 1;\n' }]]), reply('Fixed.')][own];
+  }, { settings: { review: 'off', verify: false } });
+  assert.equal(of(events, 'fresh_eyes').length, 1, 'one fresh look');
+  assert.ok(of(events, 'fresh_eyes')[0].ok);
+  const after = bodies.find((b) => b.messages.some((m) => m.role === 'user' && /\[Fresh eyes:/.test(String(m.content))));
+  assert.ok(after, 'the diagnosis reaches the agent');
+  assert.match(JSON.stringify(after.messages), /stray/);
+  assert.equal(done.reply, 'Fixed.');
 });

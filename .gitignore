@@ -5,3 +5,4 @@ data/
 workspaces/
 desktop/dist/
 .uitest/
+.claude/worktrees/

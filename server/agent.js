@@ -75,6 +75,10 @@ export const DEFAULTS = {
   maxSteps: 60,            // model calls per reply; a wrap-up nudge at 80% and trimming keep long builds on track
   continueRounds: 2,       // when the steps run out while the plan still has open items: extra rounds of half the step limit (0 = stop)
   fixSteps: 12,
+  freshEyes: true,         // when the same problem shows up a second time, a clean-context model diagnoses it before the next step
+  freshEyesModel: '',      // '' = the helper model (fast and cheap); 'strong' tier below uses the strong reviewer model
+  freshEyesTier: 'cheap',
+  freshEyesMax: 3,         // fresh looks per reply
   moreSteps: 30,           // "Keep going" on the out-of-steps card gives the reply this many more steps            // a build sent back to fix (by the checks or the reviewer) always has at least this many steps left to do it
   planFirst: 'off',        // 'off' · 'big' (big tasks: the agent shows its plan and waits for Go ahead) · 'always' (before any file change or command)
   planSteps: 0,            // the step limit once a reply makes a plan (0 = same as maxSteps; 80 made builds longer, not better, in the benchmark)
@@ -359,6 +363,14 @@ Score what you actually saw, not what the builder claims. ${bar} means acceptabl
 const HELPER_RULES = `
 Helpers: whenever you would otherwise read more than 2-3 files, or one big file (over about 500 lines), to explore a project or answer a broad question about its code ("where is X handled", "how does Y work", "which files touch Z"), use delegate instead of reading them yourself. A helper on a cheaper model reads and searches in its own context and returns a short report, so your context stays small and focused. Give it a precise task and say what to return (file paths, line numbers, short excerpts, a summary). Several delegate calls in one step run at the same time, so split independent questions. Helpers only read: make every change yourself. For one or two files you already know, just read them.`;
 
+const FRESH_EYES_SYSTEM = `You are a second pair of eyes for an AI coding agent that hit the same problem twice. It may be stuck in a wrong idea; you start clean.
+Find the most likely root cause. Search first (search_files), then read only the lines that matter. Use at most a few steps. Don't write or rewrite code.
+Answer in under 150 words, as:
+Cause: one sentence.
+Evidence: file:line and what it shows.
+Fix: 1–3 short bullets on what to change.
+Don't: what not to try again (if its attempts show a dead end).
+If you can't find it, say what to check next instead of guessing.`;
 const HELPER_SYSTEM = (n) => `You are a helper for another AI agent that is working in a project folder. You only read: list_files, read_file and search_files${n ? ', plus the attached documents (list_docs, read_doc, search_docs)' : ''}.
 Do the task you are given, efficiently: search before reading whole files, and read only what you need. Use at most a few steps.
 Finish with your report as a normal answer (no tool call): at most about 400 words, facts only from what you read, with file paths and line numbers (path:line) and short excerpts where they help. If something isn't there, say so. Don't suggest changes unless the task asks for them.`;
@@ -906,6 +918,7 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
     }
     run.steps++;
     deliverInbox(step);
+    if (run.freshQueue?.length) await freshEyes(step);
     const last = step === maxSteps - 1;
     // Out of steps: no more tools, and a plain request to wrap up so the run never ends silently.
     if (last && step > 0) messages.push({ role: 'user', content: '(You have reached the step limit for this reply. Do not call tools. Tell the user briefly what you did, what works, and what is left to do.)' });
@@ -1003,6 +1016,7 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
         if (r.text) asides.push(r.text);
         emit({ t: 'sent_back', step, round: run.verifyRounds, problems: v.problems.length, at: at() });
         roomToFix(step, 'The checks sent the build back');
+        noteProblems('verify', v.problems.map((x) => `- ${x}`).join('\n'), step);
         messages.push({ role: 'assistant', content: r.text || 'Done.' });
         messages.push({ role: 'user', content: `[The harness checked your work before your final reply and found ${v.problems.length} problem${v.problems.length > 1 ? 's' : ''}:\n${v.problems.map((x) => `- ${x}`).join('\n')}\nFix ${v.problems.length > 1 ? 'them' : 'it'}, then give your final reply. If something can't be fixed, say so plainly in that reply.]` });
         continue;
@@ -1021,6 +1035,7 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
             if (r.text) asides.push(r.text);
             emit({ t: 'sent_back', step, round: run.reviewRounds, problems: rv.bugs.length, by: 'reviewer', at: at() });
             roomToFix(step, 'The reviewer sent the build back');
+            noteProblems('review', rv.bugs.map((x) => `- ${x}`).join('\n'), step);
             messages.push({ role: 'assistant', content: r.text || 'Done.' });
             messages.push({ role: 'user', content: `[A separate reviewer (${short(rv.model)}) tested what you built, and it did not pass: every score must reach ${rv.bar} of 5.\nScores: ${scoreLine(rv.scores)}.\n${rv.bugs.length ? `Bugs it reproduced (severity, steps → what happened); fix these:\n${rv.bugs.map((x) => `- ${x}`).join('\n')}\n` : ''}${rv.minor?.length ? `Minor (fix only if quick):\n${rv.minor.map((x) => `- ${x}`).join('\n')}\n` : ''}${rv.summary ? `Its summary: ${rv.summary}\n` : ''}Fix these${run.plan ? ' and keep your plan current' : ''}, check your work, then give your final reply.]` });
             continue;
@@ -1265,6 +1280,9 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
     journal.push(`${clip(toolSummary(name, broken ? {} : args), 110)}${/^Error|declined/.test(first) ? ` → ${clip(first, 90)}` : name === 'run_command' || name === 'shell' ? ` → ${clip(first, 40)}` : ''}${/\nCheck found/.test(result) ? ' (check found problems)' : ''}`);
     emit({ t: 'tool_result', step, id: tc.id, name, result: clip(result, 600), at: at() });
     if (/^\s*Error/.test(String(result))) (run.errSteps ||= []).push(step);
+    // Attempts: what changes the work. A problem only counts as "back" if one happened since it was last seen.
+    if (['write_file', 'edit_file', 'append_file', 'delete_file', 'write_artifact', 'edit_artifact', 'run_command', 'shell', 'terminal', 'start_server'].includes(name)) (run.actionSteps ||= []).push(step);
+    noteProblems(name, String(result), step);
     if (!broken) result += await loopWatch(name, args, first, step);
     return result;
   }
@@ -1317,17 +1335,17 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
   // runs the real parsers, sees whether the dev servers it started are still up, and opens every
   // page or app this reply built in the headless browser to catch errors a user would hit.
   // ================= #6 helpers: a read-only job on a cheaper model, in a clean context =================
-  async function delegate(args, step) {
+  async function delegate(args, step, opts = {}) {
     const task = String(args.task || '').trim();
     if (!task) return 'Error: give the helper a task.';
     if (!root) return 'Error: helpers need a project folder.';
-    const model = String(S.helperModel || '').trim() || HELPER_MODEL;
+    const model = opts.model || String(S.helperModel || '').trim() || HELPER_MODEL;
     const id = (run.helperCount = (run.helperCount || 0) + 1), t0 = at(), cost0 = stats.cost;
-    const maxH = Math.max(2, Math.min(30, Number(S.helperSteps) || DEFAULTS.helperSteps));
+    const maxH = opts.steps || Math.max(2, Math.min(30, Number(S.helperSteps) || DEFAULTS.helperSteps));
     const tools = [...CODE_TOOLS.filter((t) => ['list_files', 'read_file'].includes(t.function.name)), PROJECT_TOOLS.find((t) => t.function.name === 'search_files'), ...(docsOn ? DOC_TOOLS : [])];
     const files = listFiles(root, 80).map((f) => f.path);
-    const hm = [{ role: 'system', content: HELPER_SYSTEM(docsOn) }, { role: 'user', content: `Project "${project.name}".${files.length ? ` Files (first ${files.length}): ${files.join(', ')}.` : ''}\n\nTask:\n${task}` }];
-    emit({ t: 'helper_start', step, id, model, task: clip(task, 400), at: at() });
+    const hm = [{ role: 'system', content: opts.system || HELPER_SYSTEM(docsOn) }, { role: 'user', content: `Project "${project.name}".${files.length ? ` Files (first ${files.length}): ${files.join(', ')}.` : ''}\n\nTask:\n${task}` }];
+    emit({ t: 'helper_start', step, id, model, task: clip(task, 400), fresh: !!opts.fresh, at: at() });
     let report = '', used = 0;
     for (let i = 0; i < maxH; i++) {
       const last = i === maxH - 1;
@@ -1337,14 +1355,14 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
       try { r = await reviewerCall(body); }
       catch (e) { if (signal.aborted) throw e; emit({ t: 'helper_done', step, id, ok: false, steps: used, cost: stats.cost - cost0, ms: at() - t0, at: at() }); return `Error: the helper (${short(model)}) failed: ${clip(e.message, 160)}. Do the job yourself.`; }
       used++;
-      account(r.usage, model, 'helper');
+      account(r.usage, model, opts.role || 'helper');
       if (!r.toolCalls.length) { report = String(r.text || '').trim(); break; }
       hm.push({ role: 'assistant', content: r.text || null, tool_calls: r.toolCalls });
       const results = await Promise.all(r.toolCalls.map(async (tc) => {
         let a = {};
         try { a = JSON.parse(tc.function.arguments || '{}'); } catch { return 'Error: arguments were not valid JSON.'; }
         const name = tc.function.name;
-        emit({ t: 'tool', step, name, args: a, by: 'helper', helper: id, at: at() });
+        emit({ t: 'tool', step, name, args: a, by: 'helper', helper: id, fresh: !!opts.fresh, at: at() });
         try {
           if (['list_files', 'read_file', 'search_files'].includes(name)) return await codeTool(name, a);
           if (docsOn && ['list_docs', 'read_doc', 'search_docs'].includes(name)) return await docTool(name, a);
@@ -1354,9 +1372,53 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
       r.toolCalls.forEach((tc, k) => hm.push({ role: 'tool', tool_call_id: tc.id, content: clip(results[k], 12000) }));
     }
     const cost = stats.cost - cost0;
-    emit({ t: 'helper_done', step, id, ok: !!report, model, steps: used, cost, ms: at() - t0, chars: report.length, at: at() });
+    emit({ t: 'helper_done', step, id, ok: !!report, model, steps: used, cost, ms: at() - t0, chars: report.length, fresh: !!opts.fresh, at: at() });
     if (!report) return `The helper (${short(model)}) used its ${maxH} steps without a report. Try a narrower task, or read the files yourself.`;
     return `Report from a helper (${short(model)}, ${used} step${used === 1 ? '' : 's'}, $${cost.toFixed(4)}):\n${clip(report, 6000)}`;
+  }
+
+  // ================= fresh eyes: the same problem twice → a clean-context diagnosis =================
+  // Each problem the agent meets gets a fingerprint (lower case, no numbers, first line). The second time a
+  // fingerprint shows up, a model with a clean context reads the problem, the recent attempts and the relevant
+  // files, and says what is really wrong, before the agent digs further in the wrong direction.
+  function noteProblems(source, text, step) {
+    if (S.freshEyes === false || !root || req.bench === true) return;
+    const lines = [];
+    if (['verify', 'review'].includes(source)) lines.push(...text.split('\n').map((l) => l.replace(/^-\s*/, '')).filter(Boolean));
+    else if (/^\s*Error/.test(text) && !['read_file', 'list_files', 'search_files', 'read_artifact', 'fetch_url', 'list_docs', 'read_doc', 'search_docs', 'look', 'decide', 'delegate', 'plan'].includes(source) && !/find text not found|matches \d+ times|no artifact|unknown tool/i.test(text)) lines.push(text.split('\n')[0]);
+    const check = text.match(/Check found \d+ problems?:\n([\s\S]*?)(\n[A-Z]|$)/); if (check) lines.push(...check[1].split('\n').map((l) => l.replace(/^-\s*/, '')).filter(Boolean));
+    const harness = text.match(/Harness checks[^\n]*found \d+ problems?:\n([\s\S]*?)(\nFix|$)/); if (harness) lines.push(...harness[1].split('\n').map((l) => l.replace(/^-\s*/, '')).filter(Boolean));
+    const cons = text.match(/Console errors: (.+)/); if (cons && !/^none/.test(cons[1])) lines.push(...cons[1].split(' | '));
+    for (const line of lines.slice(0, 8)) {
+      const key = line.toLowerCase().replace(/https?:\/\/\S+/g, 'URL').replace(/\d+/g, '#').replace(/["'`]/g, '').replace(/\s+/g, ' ').trim().slice(0, 140);
+      if (key.length < 8) continue;
+      const seen = (run.problemSeen ||= new Map()), prev = seen.get(key);
+      // The same problem reported again without an attempt in between (a check repeating it) is not "came back".
+      const tried = prev && (run.actionSteps || []).some((x) => x > prev.step && x <= step);
+      const n = !prev ? 1 : tried ? prev.n + 1 : prev.n;
+      seen.set(key, { n, text: clip(line, 600), source, step });
+      if (n === 2 && !(run.freshDone ||= new Set()).has(key)) { run.freshDone.add(key); (run.freshQueue ||= []).push({ key, text: line, source }); }
+    }
+  }
+  async function freshEyes(step) {
+    const max = Math.max(0, Math.min(10, Number(S.freshEyesMax ?? DEFAULTS.freshEyesMax)));
+    const queue = run.freshQueue.splice(0);
+    if ((run.freshCount || 0) >= max) return;
+    run.freshCount = (run.freshCount || 0) + 1;
+    const problems = queue.slice(0, 3);
+    // What the agent tried: its last tool calls, newest last.
+    const tried = [];
+    for (const m of messages.slice(-24)) for (const tc of m.tool_calls || []) tried.push(`${tc.function?.name}(${clip(tc.function?.arguments || '', 140)})`);
+    const changed = root ? changedFiles(root, filesId).slice(0, 20) : [];
+    const strong = S.freshEyesTier === 'strong';
+    const model = String(S.freshEyesModel || '').trim() || (strong ? (setup.model === REVIEW_STRONG ? REVIEW_STRONG_ALT : REVIEW_STRONG) : (String(S.helperModel || '').trim() || HELPER_MODEL));
+    const task = `An AI agent hit ${problems.length > 1 ? 'these problems' : 'this problem'} twice while working on: "${clip(userText, 500)}"\n\n${problems.map((p) => `Problem (${p.source}): ${clip(p.text, 900)}`).join('\n')}\n\nIts recent attempts, newest last:\n${tried.slice(-10).map((x) => `- ${x}`).join('\n') || '(none)'}${changed.length ? `\n\nFiles it changed in this reply: ${changed.join(', ')}` : ''}`;
+    emit({ t: 'fresh_eyes_start', step, model, problems: problems.map((p) => clip(p.text, 200)), at: at() });
+    const r = await delegate({ task }, step, { model, system: FRESH_EYES_SYSTEM, steps: 6, role: 'freshEyes', fresh: true });
+    const ok = /^Report from/.test(r);
+    const report = ok ? r.replace(/^Report from[^\n]*\n/, '') : '';
+    emit({ t: 'fresh_eyes', step, model, problems: problems.map((p) => clip(p.text, 200)), report: clip(report, 1500), ok, at: at() });
+    if (ok) messages.push({ role: 'user', content: `[Fresh eyes: you hit ${problems.length > 1 ? 'these problems' : 'this problem'} a second time, so a second model (${short(model)}) with a clean context looked at it:\n${problems.map((p) => `- ${clip(p.text, 300)}`).join('\n')}\n\nIts diagnosis:\n${clip(report, 2500)}\n\nCheck it against the code. If it fits, fix the cause it points to; don't repeat an attempt that already failed.]` });
   }
 
   // ================= #3 the plan: spec, to-do list and done checks, shown live =================
@@ -1513,6 +1575,7 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
   }
 
   async function verifyWork(step) {
+    let browserNote = null;
     const allChanged = root ? changedFiles(root, filesId) : [];
     const changed = allChanged.filter((f) => CHECKED.test(f) && fs.existsSync(path.join(root, f)));
     const compiled = allChanged.filter((f) => /\.(rs|cs|csproj|xaml|razor|go|ts|tsx|mts|cts)$/i.test(f));
@@ -1546,11 +1609,21 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
     }
     if (browserOn) {
       const targets = builtTargets();
-      let vt = null;
+      let vt = null, shared = false;
       try {
         for (const target of targets.slice(0, 4)) {
+          if (!vt) {
+            // The checks' own hidden browser; when it won't start on this computer, the agent's own tab (the desktop
+            // app's) does the checks. A browser that won't start is not a problem in the work: a note, never a send-back.
+            try { vt = await (deps.openTab || openTab)(); }
+            catch (e) {
+              if (signal.aborted) throw e;
+              const why = clip(e.message, 160);
+              if (req.chatId && !req.bench) { try { const t = await getTab(); if (t.desktop) { vt = t; shared = true; } } catch { /* none either */ } }
+              if (!vt) { browserNote = `the checks could not use a browser (${why}), so pages were not opened; only the files were checked`; break; }
+            }
+          }
           try {
-            vt ??= await (deps.openTab || openTab)();
             const sum = await vt.open(resolveTarget(target), { width: 1280 });
             await sleep(600, signal);
             const errs = vt.console.filter((l) => /^(exception|error)/.test(l) && !/favicon\.ico/i.test(l));
@@ -1566,7 +1639,7 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
             pages.push({ target, problems: 1 });
           }
         }
-      } finally { await vt?.close(); }
+      } finally { if (!shared) await vt?.close(); }
     }
     const ok = !problems.length;
     // What the design lint still finds in the finished files: counted for the scorecard, never a reason to send back.
@@ -1575,7 +1648,7 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
       const hits = [...changed.filter((f) => LINTED.test(f)).slice(0, 40).flatMap((f) => lintFile(root, f)), ...htmlArts.flatMap((id) => lintHtml(arts.get(id).html))];
       lint = { fix: hits.filter((h) => h.level === 'fix').length, consider: hits.filter((h) => h.level === 'consider').length, ids: [...new Set(hits.map((h) => h.id))] };
     }
-    emit({ t: 'verify', step, ok, files: changed.length, problems: problems.slice(0, 12), pages, lint, at: at() });
+    emit({ t: 'verify', step, ok, files: changed.length, problems: problems.slice(0, 12), pages, lint, ...(browserNote ? { note: browserNote } : {}), at: at() });
     return { ok, problems: problems.slice(0, 12), lint };
   }
 
@@ -2479,13 +2552,15 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
   function resolveTarget(t) {
     const target = String(t || '').trim();
     const base = `http://localhost:${runtime.port}`;
+    // Pages the agent made open from the pages address (their own origin, so storage works), if it is up.
+    const pages = runtime.pagePort ? `http://localhost:${runtime.pagePort}` : base;
     if (/^https?:\/\//i.test(target)) return target;
     if (target.startsWith('artifact:')) {
       const a = arts.get(target.slice(9));
       if (!a) throw new Error(`no artifact ${target.slice(9)}`);
-      if (a.kind === 'html') return base + hostHtml(a.html);
-      if (a.kind === 'md') return base + hostHtml(markdownHtml(a.title, a.md));
-      if (a.url?.startsWith('/')) return base + a.url;
+      if (a.kind === 'html') return pages + hostHtml(a.html);
+      if (a.kind === 'md') return pages + hostHtml(markdownHtml(a.title, a.md));
+      if (a.url?.startsWith('/')) return (/^\/(ws|art|preview)\//.test(a.url) ? pages : base) + a.url;
       if (a.url?.startsWith('http')) return a.url;
       throw new Error(`artifact ${a.id} is a ${a.kind}; open it by its site or app name instead`);
     }
@@ -2493,7 +2568,7 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
       // A site running from the launch file (serve.mjs) opens there: its own origin, so storage works.
       const entry = target.slice(5).replace(/^[/\\]+/, '') || 'index.html';
       const sv = listServers(projectId).find((x) => x.status !== 'stopped' && /\.quorx[/\\]serve\.mjs/.test(x.command || '') && x.url);
-      return sv ? new URL(entry, sv.url).href : `${base}/ws/${projectId}/${entry}`;
+      return sv ? new URL(entry, sv.url).href : `${pages}/ws/${projectId}/${entry}`;
     }
     if (target.startsWith('app:')) {
       // app:<server name>, or app:<server name>/<page> for a page on it.
