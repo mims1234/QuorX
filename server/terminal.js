@@ -19,6 +19,8 @@ export function termEvent(projectId, e) {
   const f = feed(projectId);
   const ev = { seq: ++f.seq, at: Date.now(), ...e };
   f.events.push(ev);
+  // A running job keeps its last few lines, for the Running tab.
+  if (e.kind === 'out' && e.job && JOBS.has(e.job) && String(e.text || '').trim()) { const t = JOBS.get(e.job).tail; t.push(String(e.text).slice(0, 300)); if (t.length > 4) t.shift(); }
   if (f.events.length > KEEP) f.events.splice(0, f.events.length - KEEP);
   for (const cb of f.subs) cb(ev);
 }
@@ -47,14 +49,17 @@ export function followTerm(projectId, from, cb) {
 }
 
 // Jobs that are still running, so the page can show a busy dot and a stop button.
-const JOBS = new Map(); // job → { projectId, abort, label, source, at }
+// `chatId`: the chat whose agent ran it; `bg`: the background job it became (set by markJob).
+const JOBS = new Map(); // job → { projectId, abort, label, source, at, chatId, tab, bg, tail }
 let jobN = 0;
-export function newJob(projectId, label, source, abort) {
+export function newJob(projectId, label, source, abort, { chatId = null, tab = null } = {}) {
   const job = `j${Date.now().toString(36)}${(++jobN).toString(36)}`;
-  JOBS.set(job, { projectId, label, source, abort, at: Date.now() });
+  JOBS.set(job, { projectId, label, source, abort, at: Date.now(), chatId, tab, bg: null, tail: [] });
   return job;
 }
 export const endJob = (job) => JOBS.delete(job);
+export const markJob = (job, patch) => { const j = JOBS.get(job); if (j) Object.assign(j, patch); };
 /** Stops a running job. Resolves to how it went ({ left, names, mode } for agent commands), or null if it isn't running. */
 export const stopJob = async (job) => { const j = JOBS.get(job); if (!j) return null; return (await j.abort?.()) || {}; };
-export const runningJobs = (projectId) => [...JOBS.entries()].filter(([, j]) => !projectId || j.projectId === projectId).map(([job, j]) => ({ job, label: j.label, source: j.source, at: j.at }));
+export const runningJobs = (projectId) => [...JOBS.entries()].filter(([, j]) => !projectId || j.projectId === projectId)
+  .map(([job, j]) => ({ job, projectId: j.projectId, label: j.label, source: j.source, at: j.at, chatId: j.chatId, tab: j.tab, bg: j.bg, tail: [...j.tail] }));

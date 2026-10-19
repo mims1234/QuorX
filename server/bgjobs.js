@@ -5,20 +5,24 @@
 // file. The agent reads new output with job_output and ends it with job_stop.
 import fs from 'node:fs';
 import { runLine, endProc, stopNote } from './workspace.js';
+import { markJob } from './terminal.js';
 
 const JOBS = new Map(); // id → job
 let seq = 0;
 
-const view = (j) => ({ id: j.id, label: j.label, status: j.status, code: j.code ?? null, started: j.started, ended: j.ended || null, log: j.logRel, pids: j.pids || null });
+// stoppedBy: 'you' when it was stopped from the page (the Running tab or the terminal), so the agent can be told.
+const view = (j) => ({ id: j.id, label: j.label, status: j.status, code: j.code ?? null, started: j.started, ended: j.ended || null, log: j.logRel, pids: j.pids || null,
+  chatId: j.chatId || null, termJob: j.termJob || null, stoppedBy: j.result?.stopped?.why || null });
 
 /**
- * Starts a command in the background (or adopts one already running: pass `running: { promise, proc }`).
- * `onDone(job, result)` runs when it ends, however it ends.
+ * Starts a command in the background (or adopts one already running: pass `running: { promise, proc }`, and
+ * `termJob`, its id in the terminal feed). `onDone(job, result)` runs when it ends, however it ends.
  */
-export function startBackground({ projectId, cwd, line, shell, label, logTo, logRel, term, memoryMB, onDone, running }) {
+export function startBackground({ projectId, chatId, cwd, line, shell, label, logTo, logRel, term, memoryMB, onDone, running, termJob }) {
   const id = `bg${++seq}`;
-  const job = { id, projectId, line, label: label || line, logTo, logRel, started: Date.now(), status: 'running', proc: running?.proc || null };
-  const p = running?.promise || runLine(cwd, line, { shell, label, timeout: 24 * 3600e3, memoryMB, logTo, term, onStart: (pr) => { job.proc = pr; } });
+  const job = { id, projectId, chatId, termJob, line, label: label || line, logTo, logRel, started: Date.now(), status: 'running', proc: running?.proc || null };
+  if (termJob) markJob(termJob, { bg: id });
+  const p = running?.promise || runLine(cwd, line, { shell, label, timeout: 24 * 3600e3, memoryMB, logTo, term, onStart: (pr) => { job.proc = pr; }, onJob: (tj) => { job.termJob = tj; markJob(tj, { bg: id }); } });
   job.promise = p.then((r) => { job.status = r.stopped ? 'stopped' : 'ended'; job.code = r.code; job.ended = Date.now(); job.result = r; onDone?.(job, r); return r; },
     (e) => { job.status = 'failed'; job.error = e.message; job.ended = Date.now(); onDone?.(job, null); });
   JOBS.set(id, job);

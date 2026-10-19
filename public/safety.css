@@ -64,3 +64,38 @@
 .mp-score[data-tone="ok"] { color: var(--ok); background: var(--ok-dim); }
 .mp-score[data-tone="warn"] { color: var(--warn); background: var(--warn-dim); }
 .mp-score[data-tone="bad"] { color: var(--bad); background: var(--bad-dim); }
+
+/* ---------- the pane's Running tab: everything running in the project, each with a Stop ----------
+   Kinds are tags (pill, no hover); actions are buttons (square-ish, press). */
+.run { display: grid; gap: 14px; padding: 12px 14px 18px; overflow: auto; height: 100%; align-content: start; }
+.run-group { display: grid; gap: 8px; }
+.run-group h4 { margin: 0; display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; font: 600 12px var(--font-ui); color: var(--text); text-transform: uppercase; letter-spacing: .04em; }
+.run-group h4 small { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--muted); }
+.run-n { font: 600 11px var(--mono); color: var(--accent); }
+.run-row { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); min-width: 0; }
+.run-row[data-kind="background"] { border-left: 3px solid var(--accent); }
+.run-row[data-kind="your-term"] { background: transparent; }
+.run-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.run-kind { flex: none; display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 999px; font: 600 11px var(--font-ui); cursor: default;
+  color: var(--muted); background: transparent; border: 1px solid var(--line); }
+.run-kind[data-kind="background"] { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.run-kind[data-kind="server"] { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
+.run-kind[data-kind="agent-term"] { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+.run-cmd { min-width: 0; flex: 1; font: 12px var(--mono); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: 12px; color: var(--muted); }
+.run-sep { opacity: .5; }
+.run-time { font-variant-numeric: tabular-nums; }
+.run-chat.linkish { background: none; border: 0; padding: 0; font: inherit; color: var(--accent); cursor: pointer; text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent); text-underline-offset: 2px; }
+.run-url { color: var(--accent); font: 12px var(--mono); }
+.run-tail { margin: 0; padding: 6px 8px; max-height: 6.5em; overflow: hidden; border-radius: 6px; background: var(--surface-inset, var(--bg)); border: 1px solid var(--line);
+  font: 11.5px/1.35 var(--mono); color: var(--muted); white-space: pre-wrap; word-break: break-word; }
+.run-acts { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.run-acts button { height: 26px; padding: 0 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--text); font: 600 12px var(--font-ui); cursor: pointer; }
+.run-acts button:hover { border-color: var(--accent); }
+.run-acts .danger, .appbar .run-stopall { color: var(--bad); border: 1px solid color-mix(in srgb, var(--bad) 45%, transparent); background: transparent; }
+.run-acts .danger:hover, .appbar .run-stopall:hover:not(:disabled) { background: var(--bad); color: #fff; }
+.appbar .run-stopall:disabled { opacity: .45; cursor: default; }
+.run-empty { padding: 18px 4px; font-size: 13px; color: var(--muted); line-height: 1.5; }
+.run-empty b { color: var(--text); }
+.run-else { font-size: 12px; color: var(--muted); padding-top: 4px; border-top: 1px dashed var(--line); }
+#paneTabs [data-tab="run"] .pt-n.busy { color: var(--accent); }

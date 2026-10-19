@@ -263,7 +263,7 @@ const COMMANDS = [
   ['fresh', 'New chat from a short brief of this one (on a model you pick)', (c, arg) => freshFromChat(c, arg)],
   ['continue', 'Carry on the last reply that ran out of steps', (c, arg) => continueLast(c, arg)],
   ['undo', 'Undo the file changes of the last reply', (c) => { const m = [...c.agent.messages].reverse().find((x) => x.stats?.changed?.length && !x.undone); m ? undoReply(c, m) : uiAlert('No reply with file changes to undo.'); }],
-  ['files', 'Browse this project\'s files', () => { G.view.files = true; syncLayout(); renderPane(); }],
+  ['files', 'Browse this project\'s files', () => { G.view.files = true; G.view.run = false; syncLayout(); renderPane(); }],
   ['notes', 'Open this project\'s AGENT.md notes', (c) => openNotes(c)],
   ['file', 'Attach files of any kind (documents, PDFs, sheets, images…)', (c) => $('.imgInput', c.el.root).click()],
   ['image', 'Attach images', (c) => $('.imgInput', c.el.root).click()],
@@ -326,7 +326,7 @@ function paletteItems(q) {
   return out.slice(0, 80);
 }
 async function openProjectFile(c, rel) {
-  G.view.files = true; syncLayout(); await renderFiles(c);
+  G.view.files = true; G.view.run = false; syncLayout(); await renderFiles(c);
   const btn = [...document.querySelectorAll('#paneBody .fl')].find((b) => b.dataset.p === rel);
   if (btn) { btn.click(); btn.scrollIntoView({ block: 'nearest' }); }
   if (isPhone()) setMView('preview');
@@ -488,7 +488,7 @@ function chooseSuggest(c, i, how = 'run') {
   ta.focus(); renderAttachments(c);
 }
 async function openNotes(c) {
-  G.view.files = true; syncLayout(); await renderFiles(c);
+  G.view.files = true; G.view.run = false; syncLayout(); await renderFiles(c);
   const btn = [...document.querySelectorAll('#paneBody .fl')].find((b) => b.dataset.p === 'AGENT.md');
   if (btn) btn.click(); else $('#paneBody .fview').textContent = 'No AGENT.md yet. The agent writes it when there is something worth recording.';
 }
@@ -3203,7 +3203,7 @@ function paneVisible() {
   if (!isPhone()) return true; // always there on a desktop: drag the divider to resize, ⤢ to make it full width
   // ◧ always wins: hidden means hidden, even with the explorer or a trace open (they come back with it).
   if (c.paneHidden === true) return false;
-  if (G.view.files || G.view.trace || G.view.term || G.view.browser) return true;
+  if (G.view.files || G.view.trace || G.view.term || G.view.run || G.view.browser) return true;
   if (c.paneHidden === false) return true; // shown with ◧, even with nothing built yet
   const mode = G.settings.ui?.paneMode || 'auto';
   if (mode === 'never' && c.paneHidden !== false) return false;
@@ -3222,6 +3222,7 @@ function renderPane() {
   if (!c) return;
   if (G.view.term) { setUrlBar(null); return renderTerm(c); }
   closeTermStream();
+  if (G.view.run) { setUrlBar(null); return renderRunningPane(c); }
   if (G.view.files) { setUrlBar(null); return renderFiles(c); }
   if (G.view.browser) return renderBrowser(c);
   if (G.view.trace) {
@@ -3763,7 +3764,7 @@ function settingsPanels(S) {
       const SF = { ...(d.safety || {}), ...(S.safety || {}) };
       return ['Safety & commands', 'How the agent’s commands are checked before they run, what Stop and Undo cover, and what ⚡ YOLO may approve on its own. Every command is split into its parts first; the strictest part decides.', [
         stCard('Shell', '', stRow('The agent’s shell', 'Windows PowerShell 5.1 is read by PowerShell’s own parser, so its commands can be checked exactly. cmd and Git Bash are checked with simpler rules, and Git Bash’s path translation caused the worst delete incidents in other agents.', stSeg('safety.shell', [['powershell', 'PowerShell 5.1'], ['pwsh', 'PowerShell 7'], ['cmd', 'cmd'], ['bash', 'Git Bash']], SF.shell))
-          + stRow('Time limit per command', 'Then the command, and everything it started, is stopped. Builds that take longer can be run in steps.', stStep('safety.timeout', SF.timeout, 5, 900, 5, 's'))
+          + stRow('Wait for a command', 'How long the agent waits for a command before it moves to the background. It keeps running there while the agent carries on; you see it, and can stop it, in the pane’s Running tab.', stStep('safety.timeout', SF.timeout, 5, 900, 5, 's'))
           + stRow('Memory cap per command', 'For the command and everything it starts, so a runaway build can’t starve your PC. 0 = no cap.', stStep('safety.memoryMB', SF.memoryMB, 0, 65536, 256, 'MB'))
           + stRow('Stop', 'How Stop ends a command.', '<span id="stStopMode" class="st-chip">checking…</span>')),
         stCard('Undo for commands', 'Before a command that can change files, QuorX snapshots the project (only changed files are read again), so ↶ Undo and Review changes cover what the command did. Not covered: files outside the project, ignored folders (node_modules, target, bin, obj…), pushes, installs and databases.',
@@ -4880,7 +4881,16 @@ function devAfter(projectId, r) {
 async function pollDev() {
   if (document.hidden) return;
   const ids = new Set(G.panes.map((id) => G.open.get(id)?.projectId).filter(Boolean));
-  for (const pid of ids) { if (G.projects.find((p) => p.id === pid)?.missing) continue; const r = await getJ(`/api/servers/overview?project=${encodeURIComponent(pid)}`); devBadges(pid, r); devAfter(pid, r); }
+  for (const pid of ids) {
+    if (G.projects.find((p) => p.id === pid)?.missing) continue;
+    const r = await getJ(`/api/servers/overview?project=${encodeURIComponent(pid)}`); devBadges(pid, r); devAfter(pid, r);
+    const run = await getJ(`/api/running?project=${encodeURIComponent(pid)}`);
+    if (run && !run.error) {
+      (G.runCount ||= {})[pid] = { n: run.items.filter((x) => x.kind !== 'your-term').length };
+      const fc = focused();
+      if (fc?.projectId === pid) { renderPaneTabs(fc); if (G.view.run) drawRunningPane(fc, run); }
+    }
+  }
 }
 setInterval(pollDev, 3000);
 
@@ -5197,7 +5207,7 @@ async function drawEmbedPick() {
 }
 
 // ---------- the pane as a small browser: tabs, an address bar, and the agent's own browser ----------
-const paneTab = () => (G.view.term ? 'term' : G.view.files ? 'files' : G.view.trace ? 'trace' : G.view.browser ? 'browser' : 'art');
+const paneTab = () => (G.view.run ? 'run' : G.view.term ? 'term' : G.view.files ? 'files' : G.view.trace ? 'trace' : G.view.browser ? 'browser' : 'art');
 const absUrl = (u) => (!u || u.startsWith('data:') ? '' : u.startsWith('/') ? location.origin + u : u);
 function artifactUrl(c, a) {
   if (a.kind === 'html' || a.kind === 'md') return `/art/${encodeURIComponent(c.id)}/${encodeURIComponent(a.id)}`;
@@ -5208,7 +5218,7 @@ function setPaneTab(tab) {
   const lastRun = [...c.agent.messages].reverse().find((m) => m.role === 'assistant' && m.runId);
   if (tab === 'trace') G.traceRun = G.traceRun && c.agent.messages.some((m) => m.runId === G.traceRun) ? G.traceRun : lastRun?.runId || null;
   if (tab === 'browser') refreshAgentTab(c).then((ch) => { if (ch && G.view.browser) renderPane(); });
-  G.view = { id: G.view.id, src: false, files: tab === 'files', term: tab === 'term', browser: tab === 'browser', trace: tab === 'trace' ? (G.traceRun || '(none)') : null };
+  G.view = { id: G.view.id, src: false, files: tab === 'files', term: tab === 'term', run: tab === 'run', browser: tab === 'browser', trace: tab === 'trace' ? (G.traceRun || '(none)') : null };
   c.paneHidden = false;
   syncLayout(); renderPane(); refreshTraceButtons(); toPreview();
 }
@@ -5218,8 +5228,12 @@ function renderPaneTabs(c) {
   for (const b of box.querySelectorAll('[data-tab]')) { const on = b.dataset.tab === t; b.classList.toggle('on', on); b.setAttribute('aria-selected', String(on)); }
   const n = planArts(c).length;
   $('[data-tab="art"] .pt-n', box).textContent = n || '';
-  const dev = c && G.devCount?.[c.projectId], busyN = dev ? dev.running + dev.busy : 0;
-  const tn = $('[data-tab="term"] .pt-n', box); tn.textContent = busyN || ''; tn.classList.toggle('busy', !!dev?.busy);
+  // How many things run is counted on the Running tab; the Terminal tab only turns amber while a command runs.
+  const dev = c && G.devCount?.[c.projectId];
+  const tn = $('[data-tab="term"] .pt-n', box); tn.textContent = ''; $('[data-tab="term"]', box).classList.toggle('busy', !!dev?.busy);
+  const rn = c && G.runCount?.[c.projectId];
+  const rb = $('[data-tab="run"]', box), rc = $('[data-tab="run"] .pt-n', box);
+  if (rc) { rc.textContent = rn?.n || ''; rc.classList.toggle('busy', !!rn?.n); rb.title = rn?.n ? `Running: ${rn.n} thing${rn.n > 1 ? 's' : ''} running in this project, each with a Stop` : 'Running: nothing runs in this project right now'; }
   const ag = c && G.agentTab?.[c.id];
   const dot = $('[data-tab="browser"] .pt-dot', box); dot.className = `pt-dot ${ag?.locked ? 'live' : ag || G.btabs?.length ? 'has' : ''}`;
   const fa = $('#followAgent'); if (fa) fa.checked = G.followAgent !== false;
@@ -5227,7 +5241,7 @@ function renderPaneTabs(c) {
 // The address bar: the served address of what is open, editable to look at any address yourself.
 function setUrlBar(url, { art = false } = {}) {
   const tab = paneTab(), wrap = $('#paneUrlWrap'), f = $('#paneUrl');
-  wrap.hidden = tab === 'term' || tab === 'files' || tab === 'trace';
+  wrap.hidden = tab === 'term' || tab === 'files' || tab === 'trace' || tab === 'run';
   $('#artSelect').hidden = !art;
   wrap.classList.toggle('art-mode', !!art);
   const full = absUrl(url);
@@ -5387,6 +5401,91 @@ async function drawRunning(c, r) {
   for (const b of box.querySelectorAll('[data-stop-key]')) b.onclick = async (e) => { e.stopPropagation(); b.disabled = true; await postJ('/api/servers/stop', { key: b.dataset.stopKey }); pollDev(); };
   for (const b of box.querySelectorAll('[data-stop-job]')) b.onclick = async (e) => { e.stopPropagation(); b.disabled = true; await postJ('/api/term/stop', { job: b.dataset.stopJob }); pollDev(); };
   for (const ch of box.querySelectorAll('[data-filter]')) ch.onclick = () => { const t = G.term; if (!t) return; t.filter = `srv:${ch.dataset.filter}`; renderTermInput(t); termDraw(t, true); };
+}
+
+// ---------- the Running tab: everything running in the project, each with a Stop ----------
+// The agent keeps going while its long commands, servers and terminals run; this is where you see them all and end
+// what you don't want. It refreshes with the pane's 3-second poll. Stopping something the agent started while its
+// reply still works tells the agent before its next step.
+const RUN_GROUPS = [
+  ['background', 'In the background', 'Commands that went on running after the agent moved on'],
+  ['command', 'Running now', 'Commands the agent or you are waiting on'],
+  ['agent-term', 'The agent’s terminals', 'Programs the agent drives with keys (prompts, menus, REPLs)'],
+  ['server', 'Servers', 'Dev servers and apps on a port'],
+  ['your-term', 'Your terminal tabs', 'Open shells in the Terminal tab'],
+];
+const RUN_KIND = { background: 'Background', command: 'Command', 'agent-term': 'Agent terminal', server: 'Server', 'your-term': 'Your terminal' };
+const dur = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`; };
+function renderRunningPane(c) {
+  const body = $('#paneBody'), bar = $('#appBar'), p = projectOf(c);
+  bar.hidden = false;
+  bar.innerHTML = `<span class="term-title"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg><b>Running</b></span><span class="dim">${esc(p?.name || c.projectId)}</span><span class="spacer"></span>
+    <button type="button" class="run-stopall danger" title="Stop every command, background job, server and agent terminal in this project (your terminal tabs stay open)" disabled>■ Stop all</button><button type="button" class="back" title="Close">✕ Close</button>`;
+  $('.back', bar).onclick = () => { G.view.run = false; syncLayout(); renderPane(); };
+  $('.run-stopall', bar).onclick = async (e) => {
+    const n = G.runCount?.[c.projectId]?.n || 0;
+    if (!n || !(await uiConfirm(`Stop everything running in this project?\n${n} thing${n > 1 ? 's' : ''}: commands, background jobs, servers and the agent’s terminals, with all they started. Your terminal tabs stay open. A reply that is working is told, and carries on without them.`, { ok: 'Stop all', danger: true }))) return;
+    e.target.disabled = true;
+    await postJ('/api/running/stop-all', { projectId: c.projectId });
+    refreshRunning(c);
+  };
+  body.innerHTML = '<div class="run" id="runPane"><div class="run-empty dim">Checking…</div></div>';
+  refreshRunning(c);
+}
+async function refreshRunning(c) {
+  const r = await getJ(`/api/running?project=${encodeURIComponent(c.projectId)}`);
+  if (r && !r.error) (G.runCount ||= {})[c.projectId] = { n: r.items.filter((x) => x.kind !== 'your-term').length };
+  renderPaneTabs(c);
+  drawRunningPane(c, r);
+}
+function runRowHTML(c, x) {
+  const chat = x.chatId && G.chats.find((h) => h.id === x.chatId);
+  const who = x.source === 'agent' ? `<span class="run-who agent">🤖 agent</span>` : x.source === 'you' ? '<span class="run-who you">👤 you</span>' : '';
+  const from = chat ? `<button type="button" class="run-chat linkish" data-chat="${esc(chat.id)}" title="Open the chat that started it">${esc(clip(chat.title || 'a chat', 34))}</button>` : '';
+  const port = x.url ? `<a class="run-url" href="${esc(x.url)}" target="_blank" rel="noopener" title="Open ${esc(x.url)}">:${esc(String(x.url).match(/:(\d+)/)?.[1] || '')}</a>` : '';
+  const tag = `<span class="run-kind" data-kind="${esc(x.kind)}">${esc(RUN_KIND[x.kind] || x.kind)}${x.bg ? ` · ${esc(x.bg)}` : ''}</span>`;
+  const label = x.kind === 'your-term' ? (G.term?.terms?.find((u) => u.id === x.tab)?.name || `Terminal ${String(x.tab || '').replace(/^u/, '')}`) + ` · ${x.label}` : x.label;
+  const acts = [
+    x.kind === 'server' && x.url ? `<button type="button" class="run-open" title="Open it in the pane's browser">Open</button>` : '',
+    x.kind !== 'agent-term' ? `<button type="button" class="run-out" title="Show its output in the Terminal tab">Output</button>` : '',
+    `<button type="button" class="run-stop danger" title="${x.kind === 'your-term' ? 'Close this terminal tab' : 'Stop it, and everything it started'}">${x.kind === 'your-term' ? '✕ Close' : '■ Stop'}</button>`,
+  ].join('');
+  return `<div class="run-row" data-id="${esc(x.id)}" data-kind="${esc(x.kind)}">
+    <div class="run-top"><i class="tr-dot ${x.status === 'starting' ? 'busy' : 'ok'}"></i>${tag}<code class="run-cmd" title="${esc(x.detail || x.label)}">${esc(label)}</code></div>
+    <div class="run-meta">${[who, from, x.started ? `<span class="run-time" title="Started ${esc(new Date(x.started).toLocaleString())}">${x.kind === 'your-term' ? 'open' : 'running'} ${dur(Date.now() - x.started)}</span>` : '', port].filter(Boolean).join('<span class="run-sep">·</span>')}</div>
+    ${x.tail?.length ? `<pre class="run-tail">${esc(x.tail.join('\n'))}</pre>` : ''}
+    <div class="run-acts">${acts}</div>
+  </div>`;
+}
+function drawRunningPane(c, r) {
+  const box = $('#runPane'); if (!box || !r) return;
+  if (r.error) { box.innerHTML = `<div class="run-empty bad">Could not list what runs: ${esc(r.error)}</div>`; return; }
+  const items = r.items || [];
+  const sa = $('#appBar .run-stopall'); if (sa) sa.disabled = !items.some((x) => x.kind !== 'your-term');
+  const groups = RUN_GROUPS.map(([k, title, hint]) => { const rows = items.filter((x) => x.kind === k); return rows.length ? `<section class="run-group" data-kind="${k}"><h4>${esc(title)} <span class="run-n">${rows.length}</span><small>${esc(hint)}</small></h4>${rows.map((x) => runRowHTML(c, x)).join('')}</section>` : ''; }).join('');
+  const pname = (id) => G.projects.find((p) => p.id === id)?.name || id;
+  const elsewhere = (r.elsewhere || []).length ? `<div class="run-else">Also running in other projects: ${r.elsewhere.map((e) => `<b>${esc(pname(e.projectId))}</b> (${e.count})`).join(', ')}</div>` : '';
+  const html = (groups || `<div class="run-empty"><b>Nothing is running in this project.</b><br>Long commands the agent starts keep running here in the background while it carries on; servers, the agent’s terminals and your terminal tabs show here too, each with a Stop.</div>`) + elsewhere;
+  // Redraw only when something changed (the times tick every poll), so a click is never lost to a redraw.
+  const sig = JSON.stringify(items.map((x) => [x.id, x.status, x.tail, x.chatId])) + elsewhere;
+  if (box.dataset.sig === sig) { for (const x of items) { const t = box.querySelector(`.run-row[data-id="${CSS.escape(x.id)}"] .run-time`); if (t && x.started) t.textContent = `${x.kind === 'your-term' ? 'open' : 'running'} ${dur(Date.now() - x.started)}`; } return; }
+  box.dataset.sig = sig;
+  box.innerHTML = html;
+  for (const row of box.querySelectorAll('.run-row')) {
+    const x = items.find((i) => i.id === row.dataset.id); if (!x) continue;
+    $('.run-stop', row).onclick = async (e) => {
+      e.target.disabled = true; e.target.textContent = 'Stopping…';
+      const res = await postJ('/api/running/stop', { projectId: c.projectId, id: x.id });
+      if (res.error) uiAlert(res.error);
+      else if (res.left) uiAlert(`${res.left} process${res.left > 1 ? 'es' : ''} did not stop: ${(res.names || []).join(', ')}`);
+      if (x.kind === 'your-term' && G.term?.projectId === c.projectId) { dropXterm?.(c.projectId, x.tab, true); G.term.terms = G.term.terms.filter((u) => u.id !== x.tab); }
+      refreshRunning(c); pollDev();
+    };
+    const out = $('.run-out', row);
+    if (out) out.onclick = () => openTerminal(c, x.kind === 'server' ? x.label : x.tab || (x.source === 'agent' ? 'agent' : 'all'));
+    const op = $('.run-open', row); if (op) op.onclick = () => showServerInPane(c, { url: x.url });
+    const ch = $('.run-chat', row); if (ch) ch.onclick = () => showChat(ch.dataset.chat);
+  }
 }
 
 // ---------- ↩ rewind to one of your messages, ⑂ remix a reply into a new chat ----------
