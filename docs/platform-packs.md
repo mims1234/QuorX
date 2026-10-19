@@ -40,13 +40,15 @@ export default {
   //    elsewhere.
   toolchains: [{ id: 'dotnet', label: '.NET SDK', for: 'C#: console apps, WPF, WinForms', probe: ['dotnet', ['--version']],
     re: /^(\d+\.\d+\.\d+)/m, winget: 'Microsoft.DotNet.SDK.8', brew: 'dotnet-sdk', url: 'https://dot.net',
+    // install: 'go install …'           // a command line, for tools that come without winget (shown by the Setup check)
     works: async () => ({ ok: true, why: '' }),   // optional: build something tiny
     brokenHint: 'what to offer the user when it is installed but cannot build', fixWith: 'msvc' }],
 
   // What marks a folder as this kind of project (file names, one folder deep), or detect(root) for deeper ones.
   markers: [/\.(csproj|sln)$/i],
 
-  // 2. Check: runs once per project folder the reply changed; only errors in changed files count.
+  // 2. Check: runs once per project folder the reply changed; only errors in changed files count. `cmd` can also be
+  //    a function of that folder (CMake's check builds whichever build folder the project already has).
   checks: [{ id: 'dotnet', tool: 'dotnet', ext: /\.(cs|xaml)$/i, marker: (dir) => hasFile(dir, /\.csproj$/i),
     cmd: 'dotnet build --nologo -v q -clp:NoSummary', errors: /\berror\b/i,
     tidy: (line, dir) => line }],                      // optional: an error line as the agent should read it
@@ -56,11 +58,14 @@ export default {
 
   // 4. Debug: a Debug Adapter Protocol server listening on `port`. QuorX connects, sets breakpoints, and sends
   //    configurationDone on the first continue, so the program doesn't run a line before the breakpoints are in.
-  //    start() may be async (build first); what the program prints comes back with the next state.
+  //    start() may be async: for compiled languages it builds the program and finds it, and `program` is set when
+  //    the agent names the built program itself. What the program prints comes back with the next state. Optional
+  //    plan fields: initWait (ms until the adapter is ready, for adapters that build first), evalContext ('watch'
+  //    for lldb), note (a sentence for the agent, such as "no debug info").
   debug: {
     exts: ['.cs'], label: 'C# (netcoredbg)',
-    gate: ({ file, args }) => `dotnet run`,            // the command the rules and the approval card judge
-    start: async ({ file, args, cwd, port }) => ({
+    gate: ({ file, args, cwd, program }) => `dotnet run`, // the command the rules and the approval card judge
+    start: async ({ file, args, cwd, port, program }) => ({
       line: `netcoredbg --interpreter=vscode --server=${port}`,
       adapterID: 'coreclr', request: 'launch', args: { program: 'bin/Debug/net8.0/app.dll', cwd, stopAtEntry: false },
       exceptions: ['user-unhandled'],                  // optional: the adapter's filters for stopping at exceptions
@@ -82,6 +87,33 @@ Rules of thumb:
   background so they are never cut off half-way.
 - **Debuggers start paused.** The agent only gets the debugger after plain debugging has failed twice.
 - **Keep notes short.** They go into the agent's instructions for every reply in that kind of project.
+
+## Debugging compiled programs
+
+The debug tool starts from a source file, which picks the language. For compiled languages QuorX then builds the
+program and finds it by itself, the way each toolchain describes its own output:
+
+| Language | Debugger | What runs |
+|---|---|---|
+| Go | Delve (`dlv dap`) | The package of the `.go` file (Delve builds it with debug info); a `_test.go` file runs its package's tests |
+| Rust | CodeLLDB when it is installed, else lldb-dap | `cargo build`, then the binary cargo reports for that file (`src/main.rs`, `src/bin/x.rs`), else the package's own binary |
+| C and C++ | lldb-dap (LLVM 18 and later; lldb-vscode in older builds) | `cmake --build` on the project's build folder, then the executable CMake's file API lists for that source file |
+
+When QuorX can't tell (two programs share a file, or there is no CMake project), the agent passes `program`, the
+built program to run. Delve installs with `go install github.com/go-delve/delve/cmd/dlv@latest`, which puts it in
+the user's Go bin folder for every project, so the agent asks first; lldb-dap comes with LLVM (`winget install
+LLVM.LLVM`, `brew install llvm`, `apt install lldb`).
+
+Every debugger stops by itself where the program fails: Delve on an unrecovered panic, LLDB on a crash, and in Rust
+on every panic (a breakpoint on std's `rust_panic`). For Rust, lldb-dap loads the formatters that ship with the
+toolchain (`lib/rustlib/etc`), so `String`, `Vec` and `Option` read as values.
+
+**Windows limits.** A program built by MSVC (or clang-cl) keeps its debug info in a `.pdb`. LLDB reads it, so
+breakpoints, the stack and plain variables work, but STL containers and Rust's `String` and `Vec` can show raw fields.
+GCC, Clang and Rust's GNU toolchain write DWARF, which LLDB reads fully. MinGW's gdb speaks the Debug Adapter Protocol
+only over its own input and output (`gdb -i dap`), which QuorX's debugger doesn't drive yet, so lldb-dap is the
+debugger for MinGW builds too. For a crash outside the debugger, Windows Error Reporting can keep a dump (the
+`LocalDumps` key, a setting for the whole computer, so the agent asks first); `lldb <program> -c <dump>` opens it.
 
 ## Testing a pack (no key needed)
 
@@ -120,7 +152,7 @@ Each is its own pull request, so people with that toolchain can test it on its o
 | Python desktop | tkinter and PyQt windows driven; pytest; debugpy set up in the project's own venv | Python 3 |
 | Electron | Apps started with their DevTools port and driven; main-process debugging | Node.js |
 | Tauri | Tauri 1 and 2 apps found; `cargo check` in `src-tauri`; `tauri dev` started with WebView2's DevTools port, so the window is read and clicked; panics and capability errors explained (Rust breakpoints come with the C/C++ pack's lldb-dap) | Rust with the MSVC linker (Build Tools with C++), the Tauri CLI, WebView2, Node.js |
-| Go and C/C++ | Delve and lldb-dap debugging; CMake build check; crash dumps read | Go, CMake, a C++ compiler, LLVM |
+| Go, C/C++ and Rust debugging | Delve and lldb-dap debugging; CMake build check; crashes caught under the debugger | Go and Delve, CMake and a C++ compiler, LLVM with lldb-dap, Rust with a linker |
 | Java and Kotlin | Gradle and Maven compile checks; JUnit; debugging | A JDK |
 | Android and Flutter | Emulator started and driven; Gradle and `flutter analyze` checks; Logcat crashes; Dart debugging | Android SDK, an emulator, Flutter |
 | QuorX on macOS | Stop, rules, snapshots and the desktop tool on a Mac (process groups, zsh, Accessibility) | A Mac |
