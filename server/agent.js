@@ -28,11 +28,11 @@ import { audit } from './audit.js';
 import { packagesOf, checkPackages } from './pkgguard.js';
 import { testChanges, TEST_FILE } from './testguard.js';
 import { debugStart, debugAttach, debugBreak, debugMove, debugState, debugEval, debugStop, stateText, debugLanguages, debugGateLine } from './debugger.js';
-import { isCheckedFile, packNotes } from './packs/index.js';
+import { isCheckedFile, packNotes, outputSummary } from './packs/index.js';
 import { devices as adbDevices, pickDevice, readScreen, tap as adbTap, typeText as adbType, key as adbKey, screenshot as adbShot, install as adbInstall, launch as adbLaunch, logcat as adbLog } from './android.js';
 import { listSkills, readSkill, saveSkill, listTemplates } from './skills.js';
 import { workspaceDir, listFiles, readFile, readText, writeFile, appendFile, editFile, editFileMulti, runCommand, runLine, lineOf, stopNote, endProc, startServer, stopServer, stopServerWait, serverFor, serverLog, listServers, launchConfigs, ensureAgentDir, agentSpace, SCRATCH, sealCheckpoint, pruneCheckpoints, ALLOWED } from './workspace.js';
-import { openTab, hostHtml } from './browser.js';
+import { openTab, hostHtml, startedWithDevtoolsPort } from './browser.js';
 import { adoptAgentTab, releaseAgentTab } from './userbrowser.js';
 import { setLiveArtifact, markdownHtml } from './artifacts.js';
 import { listDocs, docText, readDoc, searchDocs, DOC_DEFAULTS } from './docs.js';
@@ -2451,6 +2451,9 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
     if (ch && changed) parts.push(`Files it changed (Undo covers them): ${[...ch.added.map((f) => `+${f}`), ...ch.modified.map((f) => `~${f}`), ...ch.deleted.map((f) => `-${f}`)].slice(0, 30).join(', ')}${changed > 30 ? ` … and ${changed - 30} more` : ''}.`);
     else if (!sb.snap && !readOnly) parts.push(`No snapshot was taken (${sb.why}), so Undo can't restore what this command changed.`);
     parts.push(`Full output: ${logRel} (search it with search_files).`);
+    // A pack's summary (dotnet test's failed tests, say), read from the full log: the tail below may cut them off.
+    const sum = outputSummary(line, (() => { try { return fs.readFileSync(path.join(root, logRel), 'utf8').slice(-2e6); } catch { return r.out; } })());
+    if (sum) parts.push(sum);
     parts.push(r.out.slice(-4000) || '(no output)');
     return parts.join('\n');
   }
@@ -2633,7 +2636,7 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
   async function attachApp(target) {
     const port = Number(target.slice(4));
     if (!(Number.isInteger(port) && port >= 1024 && port <= 65535)) return 'Error: cdp:<port> needs a port between 1024 and 65535.';
-    const owned = listBackground(projectId).some((j) => j.status === 'running' && new RegExp(`--remote-debugging-port[= ]${port}(?!\\d)`).test(j.label));
+    const owned = listBackground(projectId).some((j) => j.status === 'running' && startedWithDevtoolsPort(j.label, port));
     if (!owned) return `Error: none of your running background jobs was started with --remote-debugging-port=${port}. Start the app with shell (background: true) and that flag first; QuorX only attaches to apps you started.`;
     let t = null;
     for (let i = 0; i < 20 && !t; i++) { try { t = await (deps.openTab || openTab)({ cdpPort: port }); } catch (e) { if (i === 19) return `Error: ${e.message}`; await sleep(500, signal); } }
