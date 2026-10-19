@@ -211,8 +211,8 @@ export default {
     get cmd() { return withEnv(gradleEnv(), GRADLE_CHECK); }, errors: GRADLE_ERRORS }],
   // Gradle's and logcat's long output, cut to what matters, after the agent runs them with the shell tool.
   summaries: [
-    { when: /\bgradlew(\.bat)?\b|\bgradle\b/i, summarize: gradleSummary },
-    { when: /\badb\b.*\blogcat\b/i, summarize: (out) => crashText(findCrash(out)) || null },
+    { cmd: /\bgradlew(\.bat)?\b|\bgradle\b/i, summarize: gradleSummary },
+    { cmd: /\badb\b.*\blogcat\b/i, summarize: (out) => crashText(findCrash(out)) || null },
   ],
   notes: (have) => {
     const sdk = sdkRoot(), jdk = studioJdk();

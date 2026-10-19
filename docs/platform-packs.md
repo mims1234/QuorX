@@ -48,24 +48,27 @@ export default {
 
   // 2. Check: runs once per project folder the reply changed; only errors in changed files count.
   checks: [{ id: 'dotnet', tool: 'dotnet', ext: /\.(cs|xaml)$/i, marker: (dir) => hasFile(dir, /\.csproj$/i),
-    cmd: 'dotnet build --nologo -v q -clp:NoSummary', errors: /\berror\b/i }],
+    cmd: 'dotnet build --nologo -v q -clp:NoSummary', errors: /\berror\b/i,
+    tidy: (line, dir) => line }],                      // optional: an error line as the agent should read it
+
+  // 3. Run: a short summary put above a command's output (failed tests, with their file and line).
+  summaries: [{ cmd: /^\s*dotnet\s+test\b/i, summarize: (out) => 'dotnet test: 1 failed, 7 passed …' }],
 
   // 4. Debug: a Debug Adapter Protocol server listening on `port`. QuorX connects, sets breakpoints, and sends
   //    configurationDone on the first continue, so the program doesn't run a line before the breakpoints are in.
+  //    start() may be async (build first); what the program prints comes back with the next state.
   debug: {
     exts: ['.cs'], label: 'C# (netcoredbg)',
     gate: ({ file, args }) => `dotnet run`,            // the command the rules and the approval card judge
-    start: ({ file, args, cwd, port }) => ({
+    start: async ({ file, args, cwd, port }) => ({
       line: `netcoredbg --interpreter=vscode --server=${port}`,
       adapterID: 'coreclr', request: 'launch', args: { program: 'bin/Debug/net8.0/app.dll', cwd, stopAtEntry: false },
+      exceptions: ['user-unhandled'],                  // optional: the adapter's filters for stopping at exceptions
       missing: 'netcoredbg is not installed: …',
     }),
     // An adapter that speaks DAP over stdin/stdout only (dart debug_adapter, lldb-dap) returns stdio: true and its
     // own command line; QuorX runs it behind a small bridge that listens on the port, inside the same job.
   },
-
-  // Long output cut to what matters: after the agent runs a matching command, the summary comes with its output.
-  summaries: [{ when: /\bdotnet\s+test\b/, summarize: (out) => 'Tests: 3 passed, 1 failed. - CartTests.Total: …' }],
 
   // 5. Explain: short, specific, for the agent. Only sent when the project is this kind.
   notes: (have) => 'build with dotnet build, run with dotnet run, test with dotnet test. …',
@@ -119,7 +122,7 @@ Each is its own pull request, so people with that toolchain can test it on its o
 | .NET | WinForms and WPF apps built and driven; `dotnet test`; debugging with netcoredbg | .NET 8 SDK, netcoredbg |
 | Python desktop | tkinter and PyQt windows driven; pytest; debugpy set up in the project's own venv | Python 3 |
 | Electron | Apps started with their DevTools port and driven; main-process debugging | Node.js |
-| Tauri | `cargo tauri` builds; the WebView2 window driven through its DevTools port; Rust debugging | Rust, Build Tools, WebView2 |
+| Tauri | Tauri 1 and 2 apps found; `cargo check` in `src-tauri`; `tauri dev` started with WebView2's DevTools port, so the window is read and clicked; panics and capability errors explained (Rust breakpoints come with the C/C++ pack's lldb-dap) | Rust with the MSVC linker (Build Tools with C++), the Tauri CLI, WebView2, Node.js |
 | Go and C/C++ | Delve and lldb-dap debugging; CMake build check; crash dumps read | Go, CMake, a C++ compiler, LLVM |
 | Java and Kotlin | Gradle and Maven compile checks; JUnit; debugging | A JDK |
 | Android and Flutter | Emulator started and driven; Gradle and `flutter analyze` checks; Logcat crashes; Dart debugging | Android SDK, an emulator, Flutter |
