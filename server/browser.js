@@ -92,13 +92,39 @@ async function desktopTransport(chatId) {
   };
 }
 
+// An app the agent started with a DevTools port (an Electron app run with --remote-debugging-port=N): its first
+// window. Closing the transport only disconnects; the app keeps running until its job is stopped.
+async function cdpTransport(port) {
+  let list;
+  try { list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json(); } catch { throw new Error(`nothing answers on DevTools port ${port} yet (is the app still starting?)`); }
+  const t = list.find((x) => x.type === 'page' && !/^devtools:/i.test(x.url)) || list.find((x) => x.type === 'page');
+  if (!t?.webSocketDebuggerUrl) throw new Error(`no app window on DevTools port ${port}`);
+  const ws = new WebSocket(t.webSocketDebuggerUrl);
+  await new Promise((r, j) => { ws.onopen = r; ws.onerror = () => j(new Error(`could not connect to the app on port ${port}`)); });
+  let seq = 0;
+  const waiting = new Map(), subs = new Set();
+  ws.onmessage = (ev) => {
+    const m = JSON.parse(ev.data);
+    if (m.id && waiting.has(m.id)) { const { res, rej } = waiting.get(m.id); waiting.delete(m.id); m.error ? rej(new Error(m.error.message)) : res(m.result); return; }
+    if (m.method) for (const fn of subs) fn(m.method, m.params);
+  };
+  return {
+    id: t.id, desktop: false, app: true, url: t.url, title: t.title,
+    send: (method, params = {}) => new Promise((res, rej) => { const id = ++seq; waiting.set(id, { res, rej }); ws.send(JSON.stringify({ id, method, params })); setTimeout(() => { if (waiting.has(id)) { waiting.delete(id); rej(new Error(`${method} timed out`)); } }, 20000); }),
+    onEvent: (fn) => subs.add(fn),
+    close: async () => { try { ws.close(); } catch { /* closed */ } },
+  };
+}
+
 /**
  * One tab with a small DevTools client. With `{ chatId }` and the desktop app linked, the tab is a real
- * view in the app (the pane shows it live); otherwise it is a tab of the headless browser.
+ * view in the app (the pane shows it live); otherwise it is a tab of the headless browser. With `{ cdpPort }` it is
+ * the window of an app the agent started (Electron), reached through that app's own DevTools port.
  */
-export async function openTab({ chatId } = {}) {
+export async function openTab({ chatId, cdpPort } = {}) {
   let tr = null;
-  if (chatId && desktopReady()) tr = await desktopTransport(chatId).catch(() => null);
+  if (cdpPort) tr = await cdpTransport(cdpPort);
+  else if (chatId && desktopReady()) tr = await desktopTransport(chatId).catch(() => null);
   // A desktop tab that doesn't answer quickly is dropped for a headless one, so the agent never hangs on it.
   if (tr) {
     const ok = await Promise.race([tr.send('Page.enable').then(() => true, () => false), new Promise((r) => setTimeout(() => r(false), 8000))]);
@@ -106,7 +132,7 @@ export async function openTab({ chatId } = {}) {
   }
   tr ||= await headlessTransport();
   const listeners = [];
-  const tab = { id: tr.id, desktop: tr.desktop, console: [], url: 'about:blank' };
+  const tab = { id: tr.id, desktop: tr.desktop, app: !!tr.app, console: [], url: tr.url || 'about:blank' };
   tr.onEvent((method, params) => {
     if (method === 'Runtime.consoleAPICalled' && ['error', 'warning'].includes(params.type) && !CONSOLE_NOISE.test(params.args.map((a) => a.value ?? a.description ?? '').join(' '))) tab.console.push(`${params.type}: ${params.args.map((a) => a.value ?? a.description ?? '').join(' ')}`.slice(0, 300));
     if (method === 'Runtime.exceptionThrown') tab.console.push(`exception: ${(params.exceptionDetails.exception?.description || params.exceptionDetails.text || '').split('\n')[0]}`.slice(0, 300));

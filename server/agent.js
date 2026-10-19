@@ -13,9 +13,23 @@ import { chat, chatStream, chatModels, imageModels, generateImage, speechModels,
 import { ensemble, GATE } from './decisions.js';
 import { runtime } from './openrouter.js';
 import { validId, listProjects, getChat } from './store.js';
-import { searchFiles, trashFile, checkpoint, changedFiles, copyTemplate } from './workspace.js';
+import { searchFiles, trashFile, checkpoint, changedFiles, copyTemplate, snapBefore, commandChanges, safePath, childEnv } from './workspace.js';
+import { SAFETY_DEFAULTS, safetySettings } from './safety.js';
+import { decide as decideCommand, loadRules, addRule, agentWriteBlocked } from './cmdpolicy.js';
+import { approvalJudge } from './approvals.js';
+import { startTripwire } from './tripwire.js';
+import { detectToolchains, toolchainNote } from './toolchains.js';
+import { startBackground, jobOutput, stopBackground, listBackground } from './bgjobs.js';
+import { termStart, termSend, termRead, termStop } from './agentterm.js';
+import { appWindows, readWindow, clickControl, clickAt, setControl, sendKeys, windowShot, closeWindow } from './uia.js';
+import { languageChecks } from './langchecks.js';
+import { audit } from './audit.js';
+import { packagesOf, checkPackages } from './pkgguard.js';
+import { testChanges, TEST_FILE } from './testguard.js';
+import { debugStart, debugBreak, debugMove, debugState, debugEval, debugStop, stateText } from './debugger.js';
+import { devices as adbDevices, pickDevice, readScreen, tap as adbTap, typeText as adbType, key as adbKey, screenshot as adbShot, install as adbInstall, launch as adbLaunch, logcat as adbLog } from './android.js';
 import { listSkills, readSkill, saveSkill, listTemplates } from './skills.js';
-import { workspaceDir, listFiles, readFile, readText, writeFile, appendFile, editFile, editFileMulti, runCommand, startServer, stopServer, serverFor, serverLog, listServers, launchConfigs, ensureAgentDir, agentSpace, SCRATCH, sealCheckpoint, pruneCheckpoints, ALLOWED } from './workspace.js';
+import { workspaceDir, listFiles, readFile, readText, writeFile, appendFile, editFile, editFileMulti, runCommand, runLine, lineOf, stopNote, endProc, startServer, stopServer, stopServerWait, serverFor, serverLog, listServers, launchConfigs, ensureAgentDir, agentSpace, SCRATCH, sealCheckpoint, pruneCheckpoints, ALLOWED } from './workspace.js';
 import { openTab, hostHtml } from './browser.js';
 import { adoptAgentTab, releaseAgentTab } from './userbrowser.js';
 import { setLiveArtifact, markdownHtml } from './artifacts.js';
@@ -24,7 +38,7 @@ import { groupCalls, numberedWindow, untrusted, trimTranscript, compactTranscrip
 import { checkFile, checkHtml, CHECKED, lintFile, lintHtml, LINTED } from './checks.js';
 import { checkSettings, askDeciders, saveShot, logCheck, votesFor, MAIN_CONTROL_JS, KEY_PAGE_JS, KEY_TRIES, CHECK_DEFAULTS, LOOK_DEFAULTS } from './harness-checks.js';
 import { saveCheckpoint, loadCheckpoint, dropCheckpoint, recordRun } from './runs.js';
-import { live, budgetState } from './budget.js';
+import { live, budgetState, spentToday } from './budget.js';
 import { blobData } from './blobs.js';
 import { ownAddresses } from './access.js';
 
@@ -40,9 +54,9 @@ const CAT_OF = Object.fromEntries(Object.entries(MEDIA).map(([k, v]) => [v.tool,
 // first, as in Strict. Reading tools (read_file, list_files, search_files, the plan…) never ask.
 export const YOLO_GROUPS = {
   files: ['write_file', 'append_file', 'edit_file', 'delete_file', 'scaffold'],
-  commands: ['run_command'],
+  commands: ['shell', 'run_command', 'terminal'],
   servers: ['start_server', 'stop_server', 'preview_site'],
-  browser: ['browser', 'look'],
+  browser: ['browser', 'look', 'desktop', 'android'],
   web: ['fetch_url'],
   media: Object.keys(CAT_OF),
   artifacts: ['write_artifact', 'edit_artifact'],
@@ -51,7 +65,7 @@ export const YOLO_GROUPS = {
   skills: ['save_skill'],
 };
 // Plan first (⚙ Agent loop): what waits for the plan's Go ahead.
-const PLAN_GATED = new Set([...YOLO_GROUPS.files, 'run_command', 'start_server']);
+const PLAN_GATED = new Set([...YOLO_GROUPS.files, 'shell', 'run_command', 'terminal', 'start_server']);
 const YOLO_GROUP_OF = Object.fromEntries(Object.entries(YOLO_GROUPS).flatMap(([g, names]) => names.map((n) => [n, g])));
 
 export const DEFAULTS = {
@@ -100,6 +114,9 @@ export const DEFAULTS = {
   yoloCheck: true,         // in yolo, the deciders still vote on whether a paid call is needed and fairly priced
   budget: 0.5,             // hard cap in $ for media per reply, enforced by code in both modes
   budgetGrace: 10,         // % over the project budget a running reply may spend to finish its work before it is force-stopped
+  safety: { ...SAFETY_DEFAULTS }, // the shell, snapshots, tripwire and decider rules (server/safety.js)
+  replyBudget: 1,          // $ cap for one reply, every model it calls counted (0 = none). Strict asks to raise it; YOLO stops
+  dailyBudget: 0,          // $ cap for today across all projects (0 = off)
   // Each category: on/off, up to 3 models, and who picks the model ('fixed' = the first one, 'agent' = the agent).
   tools: {
     artifacts: { on: true },
@@ -234,7 +251,10 @@ export function answerApproval(runId, id, answer) {
   const resolve = pending.get(`${runId}:${id}`);
   if (!resolve) return false;
   pending.delete(`${runId}:${id}`);
-  resolve({ approve: !!answer.approve, always: !!answer.always, reason: clip(answer.reason || '', 400), model: answer.model ? String(answer.model) : null, by: 'user' });
+  // A command card's "Always allow…" sends the rule to save: { match, scope: 'chat' | 'project' | 'everywhere' }.
+  const rule = answer.rule && typeof answer.rule.match === 'string' && ['chat', 'project', 'everywhere'].includes(answer.rule.scope)
+    ? { match: clip(answer.rule.match.trim(), 300), scope: answer.rule.scope } : null;
+  resolve({ approve: !!answer.approve, always: !!answer.always, reason: clip(answer.reason || '', 400), model: answer.model ? String(answer.model) : null, rule, by: 'user' });
   return true;
 }
 // A running reply can be changed while it works: its Strict / YOLO mode, and notes the user sends it.
@@ -257,6 +277,15 @@ export function steerRun(runId, text, extra = {}) {
 }
 // The project budget card (Strict): "Wrap up" ends the reply; raising the budget anywhere lets it go on.
 const budgetWaits = new Map();
+// A reply-cap or daily-cap card: "Raise and carry on" with the new amount (above what is spent).
+const capWaits = new Map();
+export function raiseCap(runId, id, to) {
+  const go = capWaits.get(`${runId}:${id}`);
+  const v = Math.round(Number(to) * 100) / 100;
+  if (!go || !(v > 0)) return false;
+  go(v);
+  return true;
+}
 export function answerBudget(runId, id) {
   const stop = budgetWaits.get(`${runId}:${id}`);
   if (!stop) return false;
@@ -294,7 +323,7 @@ Every picture, video, music or voice file you make is also saved into the projec
 Paid media tools you may use: ${cats.map((c) => `${MEDIA[c].tool} (${MEDIA[c].noun}${T[c].pick === 'agent' && T[c].models.length > 1 ? '; you choose the model' : ''})`).join(', ')}. They cost real money, so every call goes through an approval gate (${approval === 'yolo' ? 'an automatic check that judges whether the request needs it and the price is fair' : 'the user sees what you plan, the model and the cost, and approves, declines, or switches to another model'}). Always fill "why" with one plain sentence. Use media only when the user asks for it or it clearly adds value. When you choose a model, prefer the cheapest one that fits the request. If a call is declined, read the reason, adapt (another approach, a cheaper option, or no media), and never repeat the identical call.`;
 
 const CODE_RULES = `
-Project folder: you have your own folder on the user's machine for multi-file projects (apps, sites, scripts, games with assets). Use list_files, read_file, write_file and edit_file (exact find and replace). run_command runs ONE program in that folder with plain arguments (allowed: ${ALLOWED.join(', ')}; no shell operators, quotes, pipes or redirects); use it for installs, builds and tests. start_server starts a long-running dev server that opens in the user's Browser tab and is saved to the project's launch file (the user runs and stops it from the servers button): the server MUST listen on the port given in the PORT environment variable, or take {PORT} as an argument (for example: python -m http.server {PORT}). For a static site (HTML, CSS, JS and assets, no server code), write index.html and its files, then call preview_site: it runs the harness's small static server (.quorx/serve.mjs) as the launch entry "site", so it behaves like any other server. Never write your own static file server (serve.mjs, http.server scripts and the like): preview_site already does that, with no caching. Only an app with real server code (an API, a backend) gets its own server file, in the project itself, run with start_server. The launch file is .quorx/launch.json (read it with read_file); a page on a running server opens with browser target app:<server name>/<path>. Arguments can't contain quotes, brackets, $, %, ;, & or pipes: for anything more than a plain command, write a script file and run it (for example node check.mjs). Files longer than about 300 lines: write the first part with write_file, then add the rest with append_file in parts of about 300 lines; one huge call can be cut off. Never draft code in your thinking: thinking is not saved and is never shown to the tools, so plan briefly (the idea, the files, the main parts), then write the code straight into write_file / append_file calls. Use write_artifact for quick single-file pages; use the project folder when there are several files, dependencies or a server.
+Project folder: you have your own folder on the user's machine for multi-file projects (apps, sites, scripts, games with assets). Use list_files, read_file, write_file and edit_file (exact find and replace). shell runs a command line in that folder (any language or toolchain: installs, builds, tests, git); QuorX checks each command first and some ask the user, so run what the task needs and say why in your reply when a command is unusual. To delete files or folders use delete_file (it can be undone), not the shell. start_server starts a long-running dev server that opens in the user's Browser tab and is saved to the project's launch file (the user runs and stops it from the servers button): the server MUST listen on the port given in the PORT environment variable, or take {PORT} as an argument (for example: python -m http.server {PORT}). For a static site (HTML, CSS, JS and assets, no server code), write index.html and its files, then call preview_site: it runs the harness's small static server (.quorx/serve.mjs) as the launch entry "site", so it behaves like any other server. Never write your own static file server (serve.mjs, http.server scripts and the like): preview_site already does that, with no caching. Only an app with real server code (an API, a backend) gets its own server file, in the project itself, run with start_server. The launch file is .quorx/launch.json (read it with read_file); a page on a running server opens with browser target app:<server name>/<path>. Arguments can't contain quotes, brackets, $, %, ;, & or pipes: for anything more than a plain command, write a script file and run it (for example node check.mjs). Files longer than about 300 lines: write the first part with write_file, then add the rest with append_file in parts of about 300 lines; one huge call can be cut off. Never draft code in your thinking: thinking is not saved and is never shown to the tools, so plan briefly (the idea, the files, the main parts), then write the code straight into write_file / append_file calls. Use write_artifact for quick single-file pages; use the project folder when there are several files, dependencies or a server.
 Stay inside the project folder: never read, list or scan anything outside it (the user's home or other folders, the harness's own files and data, environment variables), and never call the harness's own server or its /api routes from your scripts. If something you need isn't in the folder or in your tool results, ask the user instead of searching for it.
 read_file returns numbered lines (the numbers are not part of the file); a long file comes in windows, so continue with offset. edit_file can apply several edits to one file at once with edits (all or none). After every write or edit the harness checks the file (Node parses JS, Python parses .py, plus JSON, CSS, and HTML scripts and links) and reports problems in the result: fix them before moving on.`;
 
@@ -369,7 +398,26 @@ const CODE_TOOLS = [
   { type: 'function', function: { name: 'append_file', description: 'Append content to the end of a file (creates it if missing). Use it to write large files in parts.', parameters: { type: 'object', required: ['path', 'content'], properties: { path: { type: 'string' }, content: { type: 'string' } } } } },
   { type: 'function', function: { name: 'edit_file', description: 'Replace an exact snippet in a file. "find" must match exactly once unless replace_all is true. For several changes to one file, pass edits instead: they are applied in order, all or none.', parameters: { type: 'object', required: ['path'], properties: { path: { type: 'string' }, find: { type: 'string' }, replace: { type: 'string' }, replace_all: { type: 'boolean' },
     edits: { type: 'array', maxItems: 20, items: { type: 'object', required: ['find', 'replace'], properties: { find: { type: 'string' }, replace: { type: 'string' }, replace_all: { type: 'boolean' } } } } } } } },
-  { type: 'function', function: { name: 'run_command', description: 'Run one program in your project folder and wait for it (max 3 minutes). Returns the exit code and the last output.', parameters: { type: 'object', required: ['command'], properties: { command: { type: 'string', description: `One of: ${ALLOWED.join(', ')}` }, args: { type: 'array', items: { type: 'string' }, description: 'Plain arguments, e.g. ["install", "express"]' } } } } },
+  { type: 'function', function: { name: 'shell', description: 'Run a command line in your project folder and wait for it. Any toolchain works: cargo, dotnet, go, cmake, gradle, python, node, npm, git… Before it runs, QuorX checks it: read-only commands run at once, others may ask the user (or, in YOLO, the deciders); system commands, deleting folders, and touching drive roots, the user profile or places above the project are refused. Input is closed, so pass non-interactive flags (--yes, -y, /quiet). Returns the exit code, the files it changed, the last output and a log file with all of it.', parameters: { type: 'object', required: ['command'], properties: {
+    command: { type: 'string', description: 'The whole command line in the project\'s shell (Windows PowerShell unless the user chose another), e.g. "cargo build --release" or "dotnet test"' },
+    cwd: { type: 'string', description: 'Optional subfolder of the project to run in, e.g. "app"' },
+    background: { type: 'boolean', description: 'Start it and return at once, for programs that keep running: a desktop app you want to test, a watcher, a long build. A build that outlives the time limit moves to the background by itself.' } } } } },
+  { type: 'function', function: { name: 'job_output', description: 'Output from a background job, and whether it is still running. Pass since (from the last call) to get only what is new; wait_s waits up to 60 s for the job to end (it returns as soon as it does).', parameters: { type: 'object', required: ['job'], properties: {
+    job: { type: 'string', description: 'The job id, e.g. "bg1"' }, since: { type: 'integer' }, wait_s: { type: 'integer', minimum: 0, maximum: 60 } } } } },
+  { type: 'function', function: { name: 'job_stop', description: 'Stop a background job and everything it started.', parameters: { type: 'object', required: ['job'], properties: { job: { type: 'string' } } } } },
+  { type: 'function', function: { name: 'terminal', description: 'Your own terminal, for programs that need one: prompts, menus, full-screen terminal apps, REPLs. start runs a command in a new terminal (checked like shell) and shows its screen; send types text and/or presses keys, then shows the screen; read shows it again (wait_s waits for it to change); stop ends it. The screen comes back as text, the way a person sees it (◂ marks the cursor line).', parameters: { type: 'object', required: ['action'], properties: {
+    action: { type: 'string', enum: ['start', 'send', 'read', 'stop'] }, command: { type: 'string', description: 'start: the command line' }, id: { type: 'string', description: 'send/read/stop: the terminal id, e.g. "t1"' },
+    text: { type: 'string', description: 'send: text to type' }, keys: { type: 'array', items: { type: 'string' }, description: 'send: keys to press after the text, in order: Enter, Tab, Esc, Up, Down, Left, Right, Backspace, Space, Ctrl+C, Ctrl+D, F1–F5, PageUp, PageDown, or a single character' },
+    wait_s: { type: 'integer', minimum: 0, maximum: 30 }, cols: { type: 'integer', minimum: 40, maximum: 200 }, rows: { type: 'integer', minimum: 10, maximum: 60 }, cwd: { type: 'string' } } } } },
+  { type: 'function', function: { name: 'debug', description: 'A debugger for Node (.js) and Python (.py) programs, for bugs that reading the trace and adding prints haven\'t found. start runs a file paused (args optional); break sets a breakpoint at file:line (condition optional); continue runs to the next breakpoint; step / into / out move one line; state shows where it is, the stack and the local variables; eval evaluates an expression where it stopped; stop ends it. Python needs debugpy (pip install debugpy).', parameters: { type: 'object', required: ['action'], properties: {
+    action: { type: 'string', enum: ['start', 'break', 'continue', 'step', 'into', 'out', 'state', 'eval', 'stop'] }, id: { type: 'string', description: 'The session id from start, e.g. "d1"' },
+    file: { type: 'string' }, args: { type: 'array', items: { type: 'string' } }, line: { type: 'integer' }, condition: { type: 'string' }, expr: { type: 'string' }, frame: { type: 'integer' } } } } },
+  { type: 'function', function: { name: 'android', description: 'Test an Android app on an emulator (adb). devices: what is connected. install {apk}: an APK from the project. launch {package}. read: the screen as text; interactive controls are numbered [n] with their position @x,y. tap {ref} or {x, y}. type {text}: into the focused field. key {key}: back, home, enter, tab, delete, up/down/left/right. screenshot: a picture for the user. log {package}: recent errors and the app\'s own log lines. Emulators only, unless the user allows phones.', parameters: { type: 'object', required: ['action'], properties: {
+    action: { type: 'string', enum: ['devices', 'install', 'launch', 'read', 'tap', 'type', 'key', 'screenshot', 'log'] }, device: { type: 'string' }, apk: { type: 'string' }, package: { type: 'string' },
+    ref: { type: 'integer' }, x: { type: 'integer' }, y: { type: 'integer' }, text: { type: 'string' }, key: { type: 'string' } } } } },
+  { type: 'function', function: { name: 'desktop', description: 'See and use a Windows desktop app you started (WPF, WinForms, Qt, tkinter, Electron, games…). Start it first with shell and background: true, then pass that job id. windows: its windows. read: a window\'s controls as text; interactive ones are numbered [n] with their position @x,y in the window. click {ref}: press a button, tick a box, pick an item. click_at {x, y}: a point in the window, for apps whose controls can\'t be read. type {ref, text}: set a text field. keys {keys}: keyboard input in SendKeys form ({ENTER}, {TAB}, ^s for Ctrl+S, %{F4} for Alt+F4). screenshot: a picture of the window for the user. close: close the window. After click, type and keys you get the window\'s controls again. Only windows of programs you started can be reached; clicks and keys bring that window to the front.', parameters: { type: 'object', required: ['action', 'job'], properties: {
+    action: { type: 'string', enum: ['windows', 'read', 'click', 'click_at', 'type', 'keys', 'screenshot', 'close'] }, job: { type: 'string', description: 'The background job that runs the app, e.g. "bg1"' },
+    window: { type: 'integer', description: 'A window handle from windows (default: its first window)' }, ref: { type: 'integer' }, x: { type: 'integer' }, y: { type: 'integer' }, text: { type: 'string' }, keys: { type: 'string' } } } } },
   { type: 'function', function: { name: 'start_server', description: 'Start (or restart) a long-running dev server in your project folder. It gets a free port in the PORT environment variable and as {PORT} in arguments, and opens in the user\'s Browser tab. Its command is saved to the project\'s launch file, so the user can start and stop it later; give only the name to rerun a saved one.', parameters: { type: 'object', required: ['name'], properties: { name: { type: 'string', description: 'Short name, e.g. "web"' }, command: { type: 'string', description: 'Leave out to rerun the saved launch config with this name' }, args: { type: 'array', items: { type: 'string' } } } } } },
   { type: 'function', function: { name: 'stop_server', description: 'Stop a dev server you started.', parameters: { type: 'object', required: ['name'], properties: { name: { type: 'string' } } } } },
   { type: 'function', function: { name: 'preview_site', description: 'Run a static site from your project folder (an HTML file and the files it loads) on a small local server, saved to the launch file as "site" (or the name you give), and open it in the user\'s Browser tab.', parameters: { type: 'object', required: ['title'], properties: { title: { type: 'string' }, name: { type: 'string', description: 'Launch entry name, default "site"' }, path: { type: 'string', description: 'Entry HTML file, default index.html' } } } } },
@@ -397,7 +445,7 @@ const FETCH_TOOL = { type: 'function', function: { name: 'fetch_url', descriptio
 export const BROWSER_TOOLS = [
   { type: 'function', function: { name: 'browser', description: 'Use a headless browser to open and test what you built, like a user would.', parameters: { type: 'object', required: ['action'], properties: {
     action: { type: 'string', enum: ['open', 'click', 'type', 'press', 'scroll', 'read'] },
-    target: { type: 'string', description: 'open: artifact:<id>, site:<path>, app:<server name>, or an http(s) URL' },
+    target: { type: 'string', description: 'open: artifact:<id>, site:<path>, app:<server name>, an http(s) URL, or cdp:<port> for an Electron app you started with shell (background: true) and --remote-debugging-port=<port>' },
     selector: { type: 'string', description: 'click/type: CSS selector' }, text: { type: 'string', description: 'click: visible text of the element · type: the text to type' },
     key: { type: 'string', description: 'press: Enter, Tab, Escape, Space, Backspace, ArrowUp/Down/Left/Right, or a character' },
     x: { type: 'number' }, y: { type: 'number' }, dy: { type: 'number', description: 'scroll: pixels down (negative = up)' },
@@ -567,6 +615,7 @@ async function runAgentInner(req, emit, signal, cleanups, deps) {
   const setup = req.bench ? { ...DEFAULTS.setups.C, ...(req.setup || {}) }
     : { model: req.setup?.model || DEFAULTS.chatModel, reasoning: req.setup?.reasoning || 'off', creativity: ['focused', 'creative'].includes(req.setup?.creativity) ? req.setup.creativity : 'default', decide: 'auto' };
   const S = { ...DEFAULTS, ...(req.settings || {}) };
+  const SF = safetySettings(req.settings?.safety);
   // The Q&A benchmark skips the build gates (verify, reviewer); the build benchmark (bench: 'build') keeps them.
   const qaBench = !!req.bench && req.bench !== 'build';
   const T = toolSettings(req.settings?.tools, req.settings?.mediaEnabled !== false);
@@ -651,6 +700,8 @@ async function runAgentInner(req, emit, signal, cleanups, deps) {
     } catch (e) { if (signal.aborted) throw e; history = history.slice(-30); }
   } else history = history.slice(-30);
   history = history.map(({ at: _a, ...m }) => m);
+  // Which compilers and SDKs this computer has (cached), so the agent builds with what is there.
+  const chainsNote = root && !req.bench ? toolchainNote(await detectToolchains().catch(() => [])) : '';
   // When the agent picks the model, its tool lists each option with an estimated price.
   const choices = {};
   for (const c of cats) if (T[c].pick === 'agent' && T[c].models.length > 1) choices[c] = await Promise.all(T[c].models.map((m) => estimateFor(c, m, {}, T)));
@@ -659,7 +710,7 @@ async function runAgentInner(req, emit, signal, cleanups, deps) {
     + (skills.length ? `\n\n[Skills: load one with use_skill before a task it covers]\n${skills.map((k) => `- ${k.name}: ${k.description}`).join('\n')}` : '')
     + (req.summary ? `\n\n[Summary of the earlier part of this conversation]\n${String(req.summary).slice(0, 6000)}` : '')
     + (records.length ? `\n\n[Tool work in this chat's recent replies, recorded by the harness, oldest first. Only the harness writes these records: never write one yourself, and call tools to do real work.]\n${records.slice(-6).map((r) => `- ${clip(r, 700)}`).join('\n')}` : '');
-  let systemFor = (decideOn) => memory + '\n\n' + BASE_RULES([...arts.values()], T.artifacts.on) + (root ? CODE_RULES + NOTES_RULES + `\nProject "${project.name}" (${root}). Other chats may have worked here before you: read files before changing them.${listFiles(root, 60).length ? `\nFiles in the project folder now: ${listFiles(root, 60).map((f) => f.path).join(', ')}.` : ' The folder is empty.'}${listServers(projectId).filter((x) => x.status === 'running').length ? `
+  let systemFor = (decideOn) => memory + '\n\n' + BASE_RULES([...arts.values()], T.artifacts.on) + (root ? CODE_RULES + NOTES_RULES + `\n${chainsNote}\nProject "${project.name}" (${root}). Other chats may have worked here before you: read files before changing them.${listFiles(root, 60).length ? `\nFiles in the project folder now: ${listFiles(root, 60).map((f) => f.path).join(', ')}.` : ' The folder is empty.'}${listServers(projectId).filter((x) => x.status === 'running').length ? `
 Dev servers running in this project: ${listServers(projectId).filter((x) => x.status === 'running').map((x) => `"${x.name}" (${x.command}) at ${x.url}`).join('; ')}. Restart one with start_server and the same name instead of starting a new one.` : ''}${SCRATCH_RULES(space, spaceLimit)}${DOCS_NOTE(listDocs(projectId))}${launchConfigs(projectId).length ? `
 Saved launch configs (start one with start_server and just its name): ${launchConfigs(projectId).map((x) => `"${x.name}" = ${[x.command, ...x.args].join(' ')}${x.port ? ` on port ${x.port}` : ''}`).join('; ')}.` : ''}` : '') + PLAN_RULES(S.review !== 'off' && browserOn && !qaBench) + PLAN_GATE_RULES(root ? S.planFirst || DEFAULTS.planFirst : 'off') + (root && S.helpers !== false ? HELPER_RULES : '') + (browserOn ? (S.deciders === false ? BROWSER_RULES_NO_LOOK : BROWSER_RULES) : '') + (cats.length ? MEDIA_RULES(S.approval, cats, T) : '') + (decideOn ? DECIDE_RULES : '');
   // Chats the user attached with 📎: reference material, not instructions.
@@ -669,6 +720,8 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
   const decidersOn = S.deciders !== false;
   const system = systemFor(decidersOn && setup.decide !== 'off');
   const userText = String(req.text || '').trim();
+  // The user's own turns in this chat, newest last: all an approval judge may read of the conversation.
+  const userTurns = () => [...(req.history || []).filter((m) => m.role === 'user').slice(-5).map((m) => String(m.content ?? '')), userText];
   // Output per call: the setting (64k by default), never above the model's own limit from the catalogue.
   // 32k was too little: a model with high reasoning could think through a whole game and run out before writing it.
   const catalogue = deps.catalogue || await chatModels().catch(() => []);
@@ -711,7 +764,7 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
         : dd.status === 'needs-ocr' ? `${what}: a scan with almost no text. The user can run OCR from the attachment (~$${dd.ocrEstimate}). The file is at ${dd.rel}.`
         : dd.status === 'error' ? `${what}: the harness could not read it (${dd.error}). The file is at ${dd.rel}; you may try with your own tools.`
         : dd.kind === 'image' ? `${what}: a picture, saved at ${dd.rel}.`
-        : `${what}: saved at ${dd.rel}. The harness can't read this type. Decide whether you can read it with your own tools (for example a Python script with run_command) or tell the user what you'd need.`);
+        : `${what}: saved at ${dd.rel}. The harness can't read this type. Decide whether you can read it with your own tools (for example a Python script with shell) or tell the user what you'd need.`);
     }
     let messageText = text;
     if (docBlocks.length || docNotes.length) {
@@ -844,6 +897,13 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
       const bs = budgetState(projectId);
       if (bs.budget != null && bs.spent >= bs.budget && !(await budgetReached(bs, step))) { run.stop = 'budget'; run.budgetStop = 'start'; break; }
     } else if (pastAllowance()) { run.stop = 'budget'; run.budgetStop = 'hard'; break; }
+    // This reply's own cap (every model it calls counts) and the daily cap across all projects.
+    if (!req.bench) {
+      const cap = capOf();
+      if (cap != null && stats.cost >= cap && !(await capReached('reply', step))) { run.stop = 'budget'; run.budgetStop = 'reply'; break; }
+      const day = Number(S.dailyBudget) > 0 ? Number(S.dailyBudget) : null;
+      if (day != null && spentToday() >= day && !(await capReached('day', step))) { run.stop = 'budget'; run.budgetStop = 'day'; break; }
+    }
     run.steps++;
     deliverInbox(step);
     const last = step === maxSteps - 1;
@@ -1008,6 +1068,8 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
     const pb = projectId && !req.bench ? budgetState(projectId) : null;
     if (pb?.budget != null && !run.budgetOver && pb.spent >= pb.budget) { run.budgetOver = run.budgetWarned = true; signals.push(`The project budget is used up ($${pb.spent.toFixed(2)} of $${pb.budget.toFixed(2)}). Finish the task you are on in as few steps as possible, add nothing new, then give your final reply. This reply is stopped at $${(pb.budget * (1 + grace)).toFixed(2)}.`); }
     else if (pb?.budget != null && !run.budgetWarned && pb.spent >= pb.budget * 0.85) { run.budgetWarned = true; signals.push(`The project budget is almost used up ($${pb.spent.toFixed(2)} of $${pb.budget.toFixed(2)}). Finish what you are doing and give your final reply.`); }
+    const rc = req.bench ? null : capOf();
+    if (rc != null && !run.capWarned && stats.cost >= rc * 0.85) { run.capWarned = true; signals.push(`This reply has used $${stats.cost.toFixed(2)} of its $${rc.toFixed(2)} cap (every model counts: you, deciders, helpers, checks). Finish what you are doing and give your final reply.`); }
     if (signals.length) emit({ t: 'note', level: 'info', msg: `Told the agent: ${signals.join(' ')}`, at: at() });
     const lastTool = messages.at(-1);
     if (lastTool?.role === 'tool') lastTool.content += `\n\n[${[...signals, `steps: ${step + 1} of ${maxSteps} used${run.plan ? ` · plan: ${run.plan.items.filter((x) => x.status === 'done').length} of ${run.plan.items.length} done` : ''}${pb?.budget != null ? ` · project budget: $${pb.spent.toFixed(3)} of $${pb.budget.toFixed(2)} used` : ''}${cats.length ? ` · media: $${stats.mediaSpent.toFixed(3)} of $${S.budget}` : ''}`].join(' ')}]`;
@@ -1023,7 +1085,13 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
     if (!lastReview.pass) reply += `\n\n**Reviewer (${short(lastReview.model)}): not passed yet.** Scores: ${scoreLine(lastReview.scores)}.${lastReview.bugs.length ? ` Still open:\n${lastReview.bugs.slice(0, 6).map((x) => `- ${x}`).join('\n')}` : ''}`;
   }
   if (run.plan) stats.plan = { done: run.plan.items.filter((x) => x.status === 'done').length, of: run.plan.items.length };
-  if (run.stop === 'budget') {
+  if (run.stop === 'budget' && (run.budgetStop === 'reply' || run.budgetStop === 'day')) {
+    const why = run.budgetStop === 'reply'
+      ? `This reply reached its $${capOf().toFixed(2)} cap ($${stats.cost.toFixed(3)} spent by every model it used), so it stopped.`
+      : `Today's spending across all projects reached the $${Number(S.dailyBudget).toFixed(2)} daily cap ($${spentToday().toFixed(3)}), so the reply stopped.`;
+    reply = `${reply.trim() ? `${reply.trim()}\n\n` : ''}⚠ ${why}${journal.length ? ` Done so far: ${clip(journal.slice(-12).join('; '), 600)}.` : ''} ${run.budgetStop === 'reply' ? 'Send a message to carry on (a new reply starts with a fresh cap), or raise the cap in ⚙ Settings → Budget & approvals.' : 'Raise the daily cap in ⚙ Settings → Budget & approvals, then send a message to carry on.'}`;
+    emit({ t: 'note', level: 'warn', msg: why, at: at() });
+  } else if (run.stop === 'budget') {
     const bs = budgetState(projectId);
     const why = run.budgetStop === 'hard'
       ? `This reply went past the project budget and its ${Math.round(grace * 100)}% allowance for finishing work ($${bs.spent.toFixed(3)} spent; budget $${bs.budget.toFixed(2)}, stop at $${(bs.budget * (1 + grace)).toFixed(2)}), so it was stopped${run.notRun ? ` and its last ${run.notRun} tool call${run.notRun > 1 ? 's were' : ' was'} not run` : ''}.`
@@ -1095,6 +1163,28 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
 
   // A new reply at the project budget. YOLO doesn't start it. Strict shows a card and waits: raising the budget (on the card or
   // in the sidebar) lets the reply go on, "Wrap up" ends it.
+  // The reply cap: ⚙ Budget's "Cap per reply" (0 = none), raised for this reply from its card.
+  function capOf() { const c = run.replyCap ?? (Number(S.replyBudget) > 0 ? Number(S.replyBudget) : null); return c; }
+  // A cap reached ('reply' or 'day'). Strict shows a card: raise this reply's cap (or the daily cap in ⚙) and carry
+  // on, or wrap up. YOLO stops, since nobody is there to raise it.
+  async function capReached(kind, step) {
+    if (S.approval !== 'strict') return false;
+    const id = `b${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`, key = `${runId}:${id}`;
+    const spent = kind === 'reply' ? stats.cost : spentToday(), cap = kind === 'reply' ? capOf() : Number(S.dailyBudget);
+    emit({ t: 'budget_ask', id, step, kind, spent, budget: cap, at: at() });
+    const go = await new Promise((resolve, reject) => {
+      const finish = (v) => { budgetWaits.delete(key); capWaits.delete(key); resolve(v); };
+      budgetWaits.set(key, () => finish(false));
+      capWaits.set(key, (raiseTo) => {
+        if (kind === 'reply') run.replyCap = raiseTo; else S.dailyBudget = raiseTo;
+        finish(true);
+      });
+      signal.addEventListener('abort', () => { budgetWaits.delete(key); capWaits.delete(key); reject(new Error('aborted')); }, { once: true });
+    });
+    emit({ t: 'budget_done', id, kind, raised: go, budget: kind === 'reply' ? capOf() : Number(S.dailyBudget), spent, at: at() });
+    return go;
+  }
+
   async function budgetReached(bs, step) {
     if (S.approval !== 'strict') return false;
     const id = `b${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`, key = `${runId}:${id}`;
@@ -1141,6 +1231,11 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
           emit({ t: 'note', level: 'warn', msg: `No provider matched the routing settings (${clip(e.message, 100)}); this reply uses OpenRouter's default routing.`, at: at() });
           continue;
         }
+        // The key's own spending limit or credits: stop and say so, never retry or switch models to get round it.
+        if ((e.status === 402 || e.status === 403) && /limit|credit|budget|guardrail|quota|insufficient/i.test(e.message)) {
+          e.message = `OpenRouter stopped this call: ${e.message}. The key's spending limit or its credits are used up, so QuorX stopped here instead of retrying. Raise the limit on openrouter.ai, or switch keys in ⚙ Settings → API keys, then send a message to carry on.`;
+          throw e;
+        }
         if (!retryable(e) || attempt >= tries) throw e;
         run.retries++;
         const wait = 1000 * 2 ** attempt;
@@ -1163,14 +1258,54 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
       emit({ t: 'note', level: 'warn', msg: finishReason === 'length' ? `Output hit the ${maxOut}-token limit; the ${name} call was cut off and not run. The agent was told to write in parts.` : `Malformed ${name} arguments; not run.`, at: at() });
     } else {
       try { result = await runTool(name, args, step); }
-      catch (e) { if (signal.aborted) throw e; result = `Error: ${e.message}`; }
+      catch (e) { if (signal.aborted) throw e; if (process.env.QX_DEBUG) console.error(e.stack); result = `Error: ${e.message}`; }
     }
     result = String(result ?? '');
     const first = result.split('\n')[0];
-    journal.push(`${clip(toolSummary(name, broken ? {} : args), 110)}${/^Error|declined/.test(first) ? ` → ${clip(first, 90)}` : name === 'run_command' ? ` → ${clip(first, 40)}` : ''}${/\nCheck found/.test(result) ? ' (check found problems)' : ''}`);
+    journal.push(`${clip(toolSummary(name, broken ? {} : args), 110)}${/^Error|declined/.test(first) ? ` → ${clip(first, 90)}` : name === 'run_command' || name === 'shell' ? ` → ${clip(first, 40)}` : ''}${/\nCheck found/.test(result) ? ' (check found problems)' : ''}`);
     emit({ t: 'tool_result', step, id: tc.id, name, result: clip(result, 600), at: at() });
     if (/^\s*Error/.test(String(result))) (run.errSteps ||= []).push(step);
+    if (!broken) result += await loopWatch(name, args, first, step);
     return result;
+  }
+
+  // Loop detection: the same call 4 times in the last 12, or the same error 3 times in a row. The first time the
+  // agent is told to change approach; the second time the user decides (keep going, and the reply isn't checked
+  // again, or stop and report). In YOLO nobody is there to ask, so the reply wraps up.
+  async function loopWatch(name, args, first, step) {
+    // Polling a job, ticking the plan, looking around a page and listing files repeat by nature.
+    if (run.loopOff || ['job_output', 'plan', 'look', 'browser', 'list_files', 'list_docs'].includes(name)) return '';
+    const key = `${name}:${JSON.stringify(args)}`;
+    const err = /^\s*(Error|Blocked|Refused)|declined/.test(first) ? first.slice(0, 160) : null;
+    const h = (run.callHist ??= []);
+    h.push({ key, err });
+    if (h.length > 12) h.shift();
+    const same = h.filter((x) => x.key === key).length;
+    const last3 = h.slice(-3);
+    const sameErr = last3.length === 3 && last3.every((x) => x.err && x.err === last3[0].err);
+    if (same < 4 && !sameErr) return '';
+    h.length = 0;
+    run.loops = (run.loops || 0) + 1;
+    const what = sameErr ? `got the same error 3 times in a row (“${clip(last3[0].err, 100)}”)` : `made the same ${name} call ${same} times`;
+    emit({ t: 'loop', what, count: run.loops, at: at() });
+    if (run.loops === 1) return `\n\n[QuorX: you have ${what}. Doing it again won't change the result. Stop and think: read the error, try a different approach, or ask the user.]`;
+    let keepGoing = false;
+    if (S.approval === 'strict') {
+      const id = `q${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+      const options = ['Keep going (stop checking this reply for loops)', 'Stop and report what is still wrong'];
+      emit({ t: 'question', id, question: `The agent seems stuck: it ${what}. Keep going?`, options, recommended: 1, at: at() });
+      const ans = await new Promise((resolve, reject) => {
+        questions.set(`${runId}:${id}`, resolve);
+        signal.addEventListener('abort', () => { questions.delete(`${runId}:${id}`); reject(new Error('aborted')); }, { once: true });
+      });
+      emit({ t: 'answer', id, choice: ans.choice, text: ans.text, at: at() });
+      keepGoing = ans.choice === 0 || (ans.choice == null && /keep|go on|continue/i.test(ans.text || ''));
+      if (ans.choice == null && ans.text) { run.loopNote = ans.text; }
+    }
+    if (keepGoing) { run.loopOff = true; return `\n\n[QuorX: the user says keep going${run.loopNote ? `: "${clip(run.loopNote, 200)}"` : ''}. You won't be checked for loops again in this reply.]`; }
+    maxSteps = Math.min(maxSteps, step + 2); // the next model call is the last one, with no tools
+    emit({ t: 'note', level: 'warn', msg: `The agent ${what} after a warning, so the reply is wrapping up${S.approval === 'strict' ? ' as you chose' : ' (YOLO: nobody to ask)'}.`, at: at() });
+    return `\n\n[QuorX: you are going in circles, so this reply ends now. Give your final reply: what you tried, what is still wrong, and what you would try next.]`;
   }
 
   // What the harness knows about this reply so far, for when the conversation must be compacted.
@@ -1378,12 +1513,32 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
   }
 
   async function verifyWork(step) {
-    const changed = root ? changedFiles(root, filesId).filter((f) => CHECKED.test(f) && fs.existsSync(path.join(root, f))) : [];
+    const allChanged = root ? changedFiles(root, filesId) : [];
+    const changed = allChanged.filter((f) => CHECKED.test(f) && fs.existsSync(path.join(root, f)));
+    const compiled = allChanged.filter((f) => /\.(rs|cs|csproj|xaml|razor|go|ts|tsx|mts|cts)$/i.test(f));
     const htmlArts = [...touched.arts].filter((id) => arts.get(id)?.kind === 'html');
-    if (!changed.length && !htmlArts.length && !touched.apps.size) return null;
-    emit({ t: 'verify_start', step, files: changed.length, at: at() });
+    const testsTouched = allChanged.some((f) => TEST_FILE.test(f.replaceAll('\\', '/')));
+    if (!changed.length && !compiled.length && !testsTouched && !htmlArts.length && !touched.apps.size) return null;
+    emit({ t: 'verify_start', step, files: changed.length + compiled.length, at: at() });
     const problems = [], pages = [];
     for (const f of changed.slice(0, 40)) problems.push(...await checkFile(root, f));
+    // Tests made easier to pass: fewer assertions, skipped tests, deleted test files. If the user didn't ask about
+    // tests, it goes back to the agent to restore or explain; either way the user sees it.
+    if (root && allChanged.length) {
+      const before = (rel) => { const m = path.join(root, '.quorx', 'checkpoints', filesId, 'files', rel); try { return fs.readFileSync(m, 'utf8'); } catch { return null; } };
+      const tg = testChanges(root, allChanged, before);
+      for (const x of tg) {
+        if (!run.testWarned?.has(x.note)) { (run.testWarned ??= new Set()).add(x.note); emit({ t: 'note', level: 'warn', msg: `Tests weakened? ${x.note}.`, at: at() }); }
+        if (!/\btests?\b|\bspec/i.test(userText)) problems.push(`${x.note}. Don't make tests pass by removing or skipping them: restore them and fix the code, or, if the test itself was wrong, say exactly why in your reply.`);
+      }
+    }
+    // Compilers for the languages a file-by-file check can't cover (only errors in files this reply changed).
+    if (compiled.length && !req.bench) {
+      const have = (await detectToolchains().catch(() => [])).filter((t) => t.found).map((t) => t.id);
+      const lc = await languageChecks(root, compiled, { have, signal });
+      if (lc.ran.length) emit({ t: 'note', level: 'info', msg: `Compiler checks: ${lc.ran.map((x) => `${x.lang} in ${x.dir} ${x.code === 0 ? 'passed' : x.timedOut ? 'timed out' : 'found errors'} (${Math.round(x.ms / 1000)}s)`).join('; ')}`, at: at() });
+      problems.push(...lc.problems);
+    }
     for (const id of htmlArts) problems.push(...await checkHtml(arts.get(id).html, { label: `artifact ${id}` }));
     for (const name of touched.apps) {
       const sv = serverFor(projectId, name);
@@ -1547,7 +1702,7 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
       pending.set(`${runId}:${card.id}`, resolve);
       signal.addEventListener('abort', () => { pending.delete(`${runId}:${card.id}`); reject(new Error('aborted')); }, { once: true });
     }).finally(() => openCards.delete(card.id));
-    if (ans.approve && ans.always) {
+    if (ans.approve && ans.always && card.tool !== 'shell') {
       allowed.add(card.tool); emit({ t: 'allow_always', tool: card.tool, at: at() });
       for (const [id, tool] of openCards) if (tool === card.tool) answerApproval(runId, id, { approve: true, reason: 'Covered by "Always allow" on another card.' });
     }
@@ -1561,6 +1716,11 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
     if (name === 'read_artifact') return `Read the source of \`${args.id}\``;
     if (name === 'decide') return `Ask the deciders ${Array.isArray(args.questions) ? args.questions.length : 0} question(s): ${(Array.isArray(args.questions) ? args.questions : []).map((q) => `"${clip(q?.ask, 70)}"`).join(', ')}`;
     if (name === 'run_command') return `Run in the project folder: ${[args.command, ...(args.args || [])].join(' ')}`;
+    if (name === 'shell') return `Run${args.background ? ' in the background' : ''}${args.cwd ? ` in ${args.cwd}` : ''}: ${clip(args.command, 300)}`;
+    if (name === 'job_output') return `Read the output of job ${args.job}${args.wait_s ? ` (waiting up to ${args.wait_s}s)` : ''}`;
+    if (name === 'job_stop') return `Stop job ${args.job}`;
+    if (name === 'terminal') return args.action === 'start' ? `Open a terminal: ${clip(args.command, 200)}` : args.action === 'send' ? `Terminal ${args.id}: type ${[args.text && `"${clip(args.text, 60)}"`, ...(args.keys || [])].filter(Boolean).join(' ')}` : `Terminal ${args.id}: ${args.action}`;
+    if (name === 'desktop') return `Desktop app ${args.job}: ${args.action}${args.ref ? ` [${args.ref}]` : ''}${args.x != null ? ` at ${args.x},${args.y}` : ''}${args.text ? ` "${clip(args.text, 60)}"` : ''}${args.keys ? ` ${clip(args.keys, 40)}` : ''}`;
     if (name === 'start_server') {
       const saved = !args.command && root && launchConfigs(projectId).find((x) => x.name.toLowerCase() === String(args.name || '').toLowerCase());
       return `Start server "${args.name}": ${saved ? `${[saved.command, ...saved.args].join(' ')} (saved launch config)` : [args.command, ...(args.args || [])].join(' ')}`;
@@ -1699,7 +1859,8 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
     const gated = gateRefusal(name); if (gated) return gated;
     // Strict asks before paid media (inside media(), with the price), helpers or decider checks only if the user chose that, or before
     // every tool when the user chose that. A plan asks once in Strict; ticking its items off later doesn't.
-    if (((S.approval === 'strict' && strictAsks(name) && !allowed.has(name)) || yoloAsks(name)) && !(name === 'plan' && run.plan)) {
+    // Commands have their own gate (the rule engine, in codeTool), so they never get a second, generic card.
+    if (((S.approval === 'strict' && strictAsks(name) && !allowed.has(name)) || yoloAsks(name)) && !(name === 'plan' && run.plan) && !['shell', 'run_command', 'terminal'].includes(name)) {
       const card = { id: newApprovalId(), tool: name, free: true, est: 0, what: toolSummary(name, args), why: '' };
       const ans = await askUser(card);
       emit({ t: 'approval_done', id: card.id, ...ans, at: at() });
@@ -1759,7 +1920,7 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
     if (name === 'decide') return decide(args, step);
     if (name === 'plan') return planTool(args, step);
     if (['browser', 'use_skill', 'fetch_url', 'ask_user', 'look'].includes(name) || CAT_OF[name]) return runToolRest(name, args, step);
-    if ([...CODE_TOOLS, ...PROJECT_TOOLS].some((t) => t.function.name === name)) return codeTool(name, args);
+    if (name === 'run_command' || [...CODE_TOOLS, ...PROJECT_TOOLS].some((t) => t.function.name === name)) return codeTool(name, args);
     if (['list_docs', 'read_doc', 'search_docs'].includes(name)) return docTool(name, args);
     if (name === 'delegate') return delegate(args, step);
     return `Error: unknown tool ${name}.`;
@@ -1860,7 +2021,11 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
   // ---------- project folder ----------
   async function codeTool(name, args) {
     if (!root) return 'Error: the project folder is switched off.';
-    if (['write_file', 'append_file', 'edit_file', 'delete_file'].includes(name) && args.path) checkpoint(root, filesId, args.path);
+    if (['write_file', 'append_file', 'edit_file', 'delete_file'].includes(name) && args.path) {
+      const no = agentWriteBlocked(args.path);
+      if (no) return `Refused: ${no}. Work in the project's own files instead.`;
+      checkpoint(root, filesId, args.path);
+    }
     if (name === 'search_files') { const hits = searchFiles(root, args.query, args.glob); return hits.length ? hits.map((h) => `${h.path}:${h.line}: ${h.text}`).join('\n') : `No matches for "${args.query}".`; }
     if (name === 'delete_file') { const to = trashFile(root, args.path); emit({ t: 'file', path: args.path, deleted: true, at: at() }); notes.push(`deleted ${args.path}`); return `Deleted ${args.path} (moved to ${to}).`; }
     if (name === 'scaffold') {
@@ -1884,10 +2049,123 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
       emit({ t: 'file', path: args.path, at: at() }); notes.push(`edited ${args.path}`);
       return `Edited ${args.path} (${n} replacement${n > 1 ? 's' : ''}${multi ? ` from ${args.edits.length} edits` : ''}).${await check('Fix it before going on.')}`;
     }
-    if (name === 'run_command') {
-      const r = await runCommand(root, args.command, (args.args || []).map(String), { signal, term: { projectId, source: 'agent', chatId: req.chatId } });
-      emit({ t: 'command', command: [args.command, ...(args.args || [])].join(' '), code: r.code, ms: r.ms, out: r.out.slice(-1500), at: at() });
-      return `Exit code ${r.code} after ${Math.round(r.ms / 1000)}s.\n${r.out.slice(-4000) || '(no output)'}`;
+    if (name === 'shell' || name === 'run_command') {
+      // run_command is the old form (one allow-listed program with plain arguments), kept for older chats.
+      const alias = name === 'run_command';
+      const argv = alias ? (args.args || []).map(String) : [];
+      const line = alias ? lineOf(args.command, argv) : String(args.command ?? '').trim();
+      const shell = alias ? 'direct' : SF.shell;
+      let cwd = root;
+      if (!alias && args.cwd) {
+        cwd = safePath(root, String(args.cwd));
+        if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) return `Error: no folder ${args.cwd} in the project.`;
+      }
+      const d = await decideCommand(line, { shell: shell === 'direct' ? 'cmd' : shell, root, cwd, env: childEnv(), rules: commandRules(), mode: S.approval,
+        yolo: { external: SF.yoloExternal, opaque: SF.yoloOpaque, outside: SF.yoloOutside } });
+      const g = await gateCommand(d, line, shell);
+      if (!g.ok) return g.text;
+      // Only commands that read, write inside the project or build may keep running past the time limit.
+      const quiet = d.segments.every((s) => ['read', 'write', 'build'].includes(s.cls) && !(s.paths || []).some((p) => p.zone !== 'inside'));
+      if (args.background && !quiet) return 'Error: only commands that build, run project code or read can run in the background. Run this one normally.';
+      return execCommand({ line, shell, cwd, label: alias ? [args.command, ...argv].join(' ') : line, readOnly: d.segments.every((s) => s.cls === 'read'), decidedBy: g.by,
+        background: !!args.background, backgroundable: quiet });
+    }
+    if (name === 'terminal') {
+      const act = String(args.action || '');
+      const show = (id, scr, did) => { emit({ t: 'terminal', id, action: act, command: did, screen: scr.screen, running: scr.session.running, at: at() }); return scr; };
+      if (act === 'start') {
+        const line = String(args.command ?? '').trim();
+        if (!line) return 'Error: start needs a command.';
+        let cwd = root;
+        if (args.cwd) { cwd = safePath(root, String(args.cwd)); if (!fs.existsSync(cwd)) return `Error: no folder ${args.cwd} in the project.`; }
+        const d = await decideCommand(line, { shell: SF.shell, root, cwd, env: childEnv(), rules: commandRules(), mode: S.approval, yolo: { external: SF.yoloExternal, opaque: SF.yoloOpaque, outside: SF.yoloOutside } });
+        const g = await gateCommand(d, line, SF.shell);
+        if (!g.ok) return g.text;
+        const sb = SF.snapshots ? snapBefore(root, { maxBytes: SF.snapshotMaxMB * 1024 * 1024 }) : { snap: null };
+        const s = await termStart({ projectId, cwd, line, shell: SF.shell, cols: Number(args.cols) || 100, rows: Number(args.rows) || 30,
+          onExit: () => { if (sb.snap) { try { commandChanges(root, filesId, sb.snap); } catch { /* best effort */ } } } });
+        notes.push(`opened terminal ${s.id}: ${clip(line, 60)}`);
+        const scr = show(s.id, await termRead(s.id, 8000, 1000), line); // a shell can take a few seconds to start
+        return `Terminal ${s.id} started: ${line}${scr.session.running ? '' : ` (it already ended, exit code ${scr.session.code})`}\nScreen:\n${scr.screen || '(empty)'}\n(send types and presses keys; read shows it again; stop ends it.)`;
+      }
+      if (act === 'send') { const r = show(args.id, await termSend(args.id, { text: args.text, keys: args.keys }), [args.text, ...(args.keys || [])].filter(Boolean).join(' ')); return `Terminal ${args.id}${r.session.running ? '' : ` (ended, exit code ${r.session.code})`}:\n${r.screen || '(empty)'}`; }
+      if (act === 'read') { const r = show(args.id, await termRead(args.id, Math.min(30, Number(args.wait_s) || 0) * 1000), ''); return `Terminal ${args.id}${r.session.running ? '' : ` (ended, exit code ${r.session.code})`}:\n${r.screen || '(empty)'}`; }
+      if (act === 'stop') { const r = await termStop(args.id); return r.already ? `Terminal ${args.id} had already ended (exit code ${r.code}).` : `Terminal ${args.id}: ${stopNote(r)}.`; }
+      return 'Error: action must be start, send, read or stop.';
+    }
+    if (name === 'android') {
+      const act = String(args.action || '');
+      if (act === 'devices') { const l = await adbDevices(); return l.length ? l.map((d) => `- ${d.serial}: ${d.state}${d.model ? ` (${d.model})` : ''} · ${d.emulator ? 'emulator' : 'physical phone'}`).join('\n') : 'Nothing is connected. Start an emulator (Android Studio → Device Manager, or emulator -avd <name>).'; }
+      const serial = await pickDevice(args.device, { phones: SF.androidPhones });
+      let out;
+      if (act === 'install') out = await adbInstall(serial, root, String(args.apk || ''));
+      else if (act === 'launch') { out = await adbLaunch(serial, String(args.package || '')); await sleep(1500, signal); out += `.\nScreen now:\n${(await readScreen(serial)).text}`; }
+      else if (act === 'read') out = (await readScreen(serial)).text || '(nothing on screen could be read: take a screenshot)';
+      else if (act === 'tap') { out = await adbTap(serial, args); await sleep(700, signal); out += `.\nScreen now:\n${(await readScreen(serial)).text}`; }
+      else if (act === 'type') { out = await adbType(serial, args.text); await sleep(400, signal); out += `.\nScreen now:\n${(await readScreen(serial)).text}`; }
+      else if (act === 'key') { out = await adbKey(serial, args.key); await sleep(600, signal); out += `.\nScreen now:\n${(await readScreen(serial)).text}`; }
+      else if (act === 'screenshot') { emit({ t: 'screenshot', action: 'android', target: `android:${serial}`, url: '', image: await adbShot(serial), at: at() }); out = 'Screenshot taken; the user sees it in the trace. Use read for the controls as text.'; }
+      else if (act === 'log') out = await adbLog(serial, args.package ? String(args.package) : '');
+      else return 'Error: unknown android action.';
+      emit({ t: 'android', device: serial, action: act, at: at() });
+      aud({ kind: 'android', command: `${act}${args.apk ? ` ${args.apk}` : args.package ? ` ${args.package}` : ''}`, by: 'tool', device: serial });
+      return out;
+    }
+    if (name === 'debug') {
+      const act = String(args.action || '');
+      // Earned: after a few failed tries (errors, a build sent back), or when the user turned it on for every reply.
+      if (S.debugger === 'off' && act === 'start') return 'The user has turned the debugger off. Debug with the shell: reproduce, read the trace, add prints.';
+      const earned = S.debugger === 'always' || (run.errSteps?.length || 0) >= 2 || (run.verifyRounds || 0) > 0 || (run.reviewRounds || 0) > 0 || run.debugOn;
+      if (act === 'start' && !earned) return 'Not yet: reproduce the bug, read the error\'s file and line, and add a print or log line to test your guess first. The debugger opens after a couple of failed tries (the user can turn it on for every reply).';
+      if (act === 'start') {
+        const file = String(args.file || '');
+        safePath(root, file);
+        const line = `debug ${file}`;
+        const d = await decideCommand(`${/\.py$/i.test(file) ? 'py -3' : 'node'} ${file} ${(args.args || []).join(' ')}`.trim(), { shell: 'cmd', root, cwd: root, env: childEnv(), rules: commandRules(), mode: S.approval, yolo: { external: SF.yoloExternal, opaque: SF.yoloOpaque, outside: SF.yoloOutside } });
+        const g = await gateCommand(d, line, 'cmd');
+        if (!g.ok) return g.text;
+        run.debugOn = true;
+        const logRel = `${SCRATCH}/logs/${runId}-debug-${(run.cmdSeq = (run.cmdSeq || 0) + 1)}.log`;
+        const s = await debugStart({ projectId, cwd: root, file, args: (args.args || []).map(String), logTo: path.join(root, logRel), logRel, term: { projectId, source: 'agent', chatId: req.chatId } });
+        aud({ kind: 'background', command: line, by: g.by, job: s.job, why: 'debugger' });
+        emit({ t: 'debug', id: s.id, action: 'start', file, at: at() });
+        return `Debug session ${s.id} (${s.kind}) started: ${file} is paused before its first line. Set breakpoints with break, then continue. Its output goes to ${logRel}.`;
+      }
+      let out;
+      if (act === 'break') out = await debugBreak(args.id, String(args.file || ''), Number(args.line), args.condition);
+      else if (['continue', 'step', 'into', 'out'].includes(act)) out = stateText(await debugMove(args.id, act));
+      else if (act === 'state') out = stateText(await debugState(args.id));
+      else if (act === 'eval') out = `${clip(args.expr, 200)} → ${await debugEval(args.id, String(args.expr || ''), Number(args.frame) || 0)}`;
+      else if (act === 'stop') { const r = await debugStop(args.id); out = r.already ? 'The program had already ended.' : stopNote(r); }
+      else return 'Error: unknown debug action.';
+      emit({ t: 'debug', id: args.id, action: act, text: clip(out, 1500), at: at() });
+      return out;
+    }
+    if (name === 'desktop') {
+      if (process.platform !== 'win32') return 'Error: the desktop tool works on Windows only.';
+      const act = String(args.action || ''), job = String(args.job || '');
+      const again = async (h) => { await sleep(450, signal); const r = await readWindow(job, h).catch((e) => ({ text: `(could not read it again: ${e.message})` })); return `\nWindow now:\n${r.text}`; };
+      if (act === 'windows') {
+        const w = await appWindows(job, 8000);
+        return w.length ? `Windows of ${job}:\n${w.map((x) => `- window ${x.handle}: "${x.title}" (process ${x.pid})`).join('\n')}` : `Job ${job} has no windows yet. It may still be starting (try again), or it isn't a windowed app (read its output with job_output).`;
+      }
+      if (act === 'read') { const r = await readWindow(job, args.window); emit({ t: 'desktop', job, action: act, window: r.handle, at: at() }); return `Window ${r.handle}:\n${r.text || '(no controls could be read: use screenshot and click_at)'}`; }
+      if (act === 'click') { const did = await clickControl(job, args.window, args.ref); emit({ t: 'desktop', job, action: act, did, at: at() }); return `${did}.${await again(args.window)}`; }
+      if (act === 'click_at') { const did = await clickAt(job, args.window, args.x, args.y); emit({ t: 'desktop', job, action: act, did, at: at() }); return `${did}.${await again(args.window)}`; }
+      if (act === 'type') { const did = await setControl(job, args.window, args.ref, args.text); emit({ t: 'desktop', job, action: act, did, at: at() }); return `${did}.${await again(args.window)}`; }
+      if (act === 'keys') { const did = await sendKeys(job, args.window, args.keys); emit({ t: 'desktop', job, action: act, did, at: at() }); return `${did}.${await again(args.window)}`; }
+      if (act === 'screenshot') { const img = await windowShot(job, args.window); emit({ t: 'screenshot', action: 'desktop', target: `desktop:${job}`, url: '', image: img, at: at() }); return 'Screenshot taken; the user sees it in the trace. Read the window for its controls as text.'; }
+      if (act === 'close') { const did = await closeWindow(job, args.window); return `${did}.`; }
+      return 'Error: unknown desktop action.';
+    }
+    if (name === 'job_output') {
+      const o = await jobOutput(args.job, { since: args.since ?? null, wait: Math.min(60, Math.max(0, Number(args.wait_s) || 0)) * 1000 });
+      const j = o.job;
+      return `Job ${j.id} (${clip(j.label, 80)}): ${j.status}${j.status !== 'running' ? `, exit code ${j.code ?? '(none)'}` : ''}.${o.more ? ' (Only the newest part is shown; the full output is in the log.)' : ''}\n${o.text || '(no new output)'}\nNext read from: since=${o.next}. Log: ${j.log}.`;
+    }
+    if (name === 'job_stop') {
+      const r = await stopBackground(args.job);
+      return r.already ? `Job ${args.job} already ${r.already}.` : `Job ${args.job}: ${r.note}.`;
     }
     if (name === 'start_server') {
       const saved = !args.command && launchConfigs(projectId).find((x) => x.name.toLowerCase() === String(args.name || '').toLowerCase());
@@ -1899,7 +2177,7 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
       touched.apps.add(String(args.name || 'app'));
       return `Server "${args.name}" is ${r.status} at ${r.url}; it opened in the user's Browser tab and is saved in the launch file. Check it with browser target app:${args.name}. Recent output:\n${r.log || '(none)'}`;
     }
-    if (name === 'stop_server') { const sv = serverFor(projectId, args.name); return sv && stopServer(sv.key) ? `Stopped "${args.name}".` : `No server named "${args.name}".`; }
+    if (name === 'stop_server') { const sv = serverFor(projectId, args.name); const r = sv && await stopServerWait(sv.key); return r ? `Stopped "${args.name}": ${stopNote(r)}.` : `No server named "${args.name}".`; }
     if (name === 'preview_site') {
       const entry = String(args.path || 'index.html').replace(/^[/\\]+/, '');
       readFile(root, entry, 10);
@@ -1922,6 +2200,159 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
       return `${opened}\n${found.problems.length ? `Harness checks (fixed questions the deciders answered from a screenshot) found ${found.problems.length} problem${found.problems.length > 1 ? 's' : ''}:\n${found.problems.map((x) => `- ${x}`).join('\n')}\nFix ${found.problems.length > 1 ? 'them' : 'it'}, then check again.` : 'Harness checks passed.'}`;
     }
     return `Error: unknown tool ${name}.`;
+  }
+
+  // ---------- commands: snapshot, run inside a job, record what changed ----------
+  // Every agent command goes through here. Before it runs (unless it only reads), the project is snapshotted, so
+  // what it adds, changes or deletes joins this reply's Undo and Review changes; its full output goes to a log
+  // file the agent can search; Stop and timeouts end everything it started and say how many processes are left.
+  // The rules for this chat's commands: the chat's own (kept by the page), the project's, then everywhere's.
+  // (Function declarations: the reply loop above calls these before this point of the function is reached.)
+  function chatRules() {
+    return (run.chatRules ??= (Array.isArray(req.cmdRules) ? req.cmdRules : []).filter((r) => r && typeof r.match === 'string').map((r) => ({ effect: r.effect || 'allow', match: r.match, by: r.by || 'button', scope: 'chat' })));
+  }
+  function commandRules() { return [...chatRules(), ...(root ? loadRules(root) : [])]; }
+  function slimPolicy(d) {
+    return { verdict: d.verdict, who: d.who, why: d.why, decidedBy: d.decidedBy, hint: d.hint, shell: d.shell, packages: d.packages,
+      segments: d.segments.map((s) => ({ text: clip(s.text, 300), cls: s.cls, verdict: s.verdict, why: s.why, global: s.global || undefined, suggest: s.suggest,
+        paths: (s.paths || []).slice(0, 8).map((p) => ({ path: p.resolved || p.raw, zone: p.zone, kind: p.kind })) })) };
+  }
+
+  // Every command decision and run goes to logs/audit.jsonl (who let it happen; see server/audit.js).
+  function aud(rec) { audit({ project: projectId, chat: req.chatId || null, run: runId, model: setup.model, mode: S.approval, ...rec }); }
+
+  // Before a command runs: the rule engine's verdict, then the user or (YOLO) the deciders when it asks.
+  // Returns { ok, by } to run it, or { ok: false, text } for the agent.
+  async function gateCommand(d, line, shell) {
+    // Installs: each package it names must exist on its registry; a very new or barely used one asks the user.
+    if (d.verdict !== 'deny' && d.segments.some((s) => s.cls === 'install')) {
+      const pk = await checkPackages(d.segments.filter((s) => s.cls === 'install').flatMap((s) => packagesOf(s.text))).catch(() => []);
+      const missing = pk.filter((p) => p.verdict === 'missing'), fresh = pk.filter((p) => p.verdict === 'new');
+      if (pk.length) emit({ t: 'packages', command: line, packages: pk, at: at() });
+      if (missing.length) {
+        Object.assign(d, { verdict: 'deny', who: null, why: missing.map((p) => p.note).join('; '), decidedBy: 'packages', hint: 'Check the exact package name in its documentation or registry before installing it.' });
+      } else if (fresh.length) {
+        Object.assign(d, { verdict: 'ask', who: 'user', why: `${fresh.map((p) => p.note).join('; ')}. New or barely used packages are a common way to slip in harmful code`, decidedBy: 'packages' });
+      }
+      d.packages = pk;
+    }
+    const policy = slimPolicy(d);
+    if (d.verdict === 'deny') {
+      emit({ t: 'command_blocked', command: line, policy, at: at() });
+      aud({ kind: 'blocked', command: line, why: d.why, by: d.decidedBy });
+      return { ok: false, text: `Blocked by QuorX: ${d.why}.${d.hint ? ` ${d.hint}` : ''} Don't retry it in another form; find another way, or ask the user.` };
+    }
+    const strictEvery = S.approval === 'strict' && (S.strictAsk || 'paid') === 'every';
+    const yoloAsksCommands = S.approval === 'yolo' && S.yoloAuto?.commands === false;
+    if (d.verdict === 'allow' && !strictEvery && !yoloAsksCommands) return { ok: true, by: d.decidedBy };
+    let who = d.verdict === 'allow' || S.approval !== 'yolo' || yoloAsksCommands || run.cmdEscalated ? 'user' : d.who;
+    const card = { id: newApprovalId(), tool: 'shell', free: true, est: 0, what: line, why: d.why, policy };
+    // Rules made by a button can't lift these, so the card doesn't offer "Always allow" for them.
+    card.noAlways = d.segments.some((s) => ['opaque', 'external', 'discard'].includes(s.cls) || s.global || (s.paths || []).some((p) => p.zone === 'outside' || p.zone === 'unknown'));
+    if (who === 'deciders') {
+      emit({ t: 'approval', ...card, mode: 'yolo', at: at() });
+      const facts = { command: line, shell, parts: d.segments.map((s) => ({ text: clip(s.text, 200), class: s.cls, touches: (s.paths || []).map((p) => `${p.resolved || p.raw} (${p.zone === 'inside' ? 'inside the project' : p.zone})`) })),
+        ...(d.packages?.length ? { packages: d.packages.map((p) => `${p.name} on ${p.eco}: ${p.exists ? `first published ${p.ageDays ?? '?'} days ago${p.weekly != null ? `, ${p.weekly} downloads last week` : ''}` : 'not checked'}`) } : {}) };
+      const j = await approvalJudge({ kind: 'command', userMessages: userTurns(), facts, voters: S.voters, chatModel: setup.model, gate: S.gate, signal, account, sf: SF,
+        log: { runId, chatId: req.chatId || null, project: projectId } });
+      if (j.approve === true) {
+        run.cmdBlockRow = 0;
+        emit({ t: 'approval_done', id: card.id, approve: true, by: 'deciders', reason: j.reason, votes: j.votes, at: at() });
+        aud({ kind: 'approved', command: line, by: 'deciders', reason: j.reason });
+        return { ok: true, by: 'deciders' };
+      }
+      if (j.approve === false) {
+        run.cmdBlockRow = (run.cmdBlockRow || 0) + 1; run.cmdBlocks = (run.cmdBlocks || 0) + 1;
+        emit({ t: 'approval_done', id: card.id, approve: false, by: 'deciders', reason: j.reason, votes: j.votes, at: at() });
+        aud({ kind: 'declined', command: line, by: 'deciders', reason: j.reason });
+        if (run.cmdBlockRow >= SF.escalateRow || run.cmdBlocks >= SF.escalateTotal) {
+          run.cmdEscalated = true;
+          emit({ t: 'note', level: 'warn', msg: `The deciders blocked ${run.cmdBlockRow >= SF.escalateRow ? `${run.cmdBlockRow} commands in a row` : `${run.cmdBlocks} commands in this reply`}, so from now on commands that need a vote ask you.`, at: at() });
+        }
+        return { ok: false, text: `${declined('shell', { by: 'deciders', reason: j.reason })}${run.cmdEscalated ? ' From now on such commands go to the user.' : ''}` };
+      }
+      card.why = j.reason;
+    }
+    const ans = await askUser({ ...card, mode: 'strict' });
+    if (ans.approve && ans.rule) {
+      const rule = { effect: 'allow', match: ans.rule.match, by: 'button' };
+      try {
+        if (ans.rule.scope === 'chat') chatRules().push({ ...rule, scope: 'chat' });
+        else addRule(ans.rule.scope, rule, root);
+        emit({ t: 'cmd_rule', rule: { ...rule, scope: ans.rule.scope }, at: at() });
+        aud({ kind: 'rule', rule: rule.match, scope: ans.rule.scope, by: 'user' });
+      } catch (e) { emit({ t: 'note', level: 'warn', msg: `The rule wasn't saved: ${e.message}`, at: at() }); }
+    }
+    emit({ t: 'approval_done', id: card.id, ...ans, at: at() });
+    aud({ kind: ans.approve ? 'approved' : 'declined', command: line, by: 'user', reason: ans.reason || undefined });
+    if (!ans.approve) return { ok: false, text: declined('shell', ans) };
+    return { ok: true, by: 'you' };
+  }
+
+  // background: start it and return at once (a GUI app, a watcher). backgroundable: a command that only reads, writes
+  // in the project or builds may outlive the time limit by moving to the background instead of being killed.
+  async function execCommand({ line, shell, label, cwd = root, readOnly = false, decidedBy, background = false, backgroundable = false }) {
+    const sb = readOnly ? { snap: null, why: 'read-only' } : !SF.snapshots ? { snap: null, why: 'snapshots are off' } : snapBefore(root, { maxBytes: SF.snapshotMaxMB * 1024 * 1024 });
+    const logRel = `${SCRATCH}/logs/${runId}-${run.cmdSeq = (run.cmdSeq || 0) + 1}.log`;
+    // The tripwire stops the command if many files vanish outside the project while it runs.
+    let proc = null, trip = null, bg = null;
+    const stopTripwire = SF.tripwire && !readOnly ? startTripwire({ root, files: SF.tripwireFiles, seconds: SF.tripwireSeconds, onTrip: (t) => {
+      trip = t;
+      emit({ t: 'tripwire', command: label || line, count: t.count, sample: t.sample, at: at() });
+      aud({ kind: 'tripwire', command: label || line, count: t.count, sample: t.sample });
+      emit({ t: 'note', level: 'warn', msg: `Tripwire: ${t.count} files vanished outside the project within ${SF.tripwireSeconds}s, so QuorX stopped “${clip(label || line, 80)}”. Check the Recycle Bin, or the folder's Previous Versions, for: ${t.sample.slice(0, 3).join(', ')}…`, at: at() });
+      if (proc) endProc(proc);
+    } }) : null;
+    const long = background || backgroundable;
+    const runP = runLine(cwd, line, { shell, label, signal, timeout: long ? 24 * 3600e3 : SF.timeout * 1000, memoryMB: SF.memoryMB, logTo: path.join(root, logRel),
+      term: { projectId, source: 'agent', chatId: req.chatId }, onStart: (p) => { proc = p; if (bg) bg.proc = p; if (trip) endProc(p); } });
+    // A job that outlives this tool call keeps its tripwire, and records what it changed when it ends.
+    const toBackground = (why) => {
+      bg = startBackground({ projectId, label: label || line, logTo: path.join(root, logRel), logRel, running: { promise: runP, proc },
+        onDone: (j) => { stopTripwire?.(); if (sb.snap) { try { commandChanges(root, filesId, sb.snap); } catch { /* best effort */ } } } });
+      emit({ t: 'command', command: label || line, background: bg.id, why, log: logRel, decidedBy, at: at() });
+      aud({ kind: 'background', command: label || line, by: decidedBy, job: bg.id, why });
+      notes.push(`started ${bg.id}: ${clip(label || line, 60)}`);
+      return bg;
+    };
+    let r;
+    if (background) {
+      const j = toBackground('started in the background');
+      const early = await Promise.race([runP, new Promise((x) => setTimeout(() => x(null), 2500))]);
+      if (!early) {
+        const o = await jobOutput(j.id, { max: 3000 });
+        return `Started in the background as job ${j.id} (it keeps running). Output so far:\n${o.text || '(none yet)'}\nRead more with job_output("${j.id}"); stop it with job_stop("${j.id}"). Full output: ${logRel}.`;
+      }
+      r = early;
+    } else if (backgroundable) {
+      const first = await Promise.race([runP, new Promise((x) => setTimeout(() => x('slow'), SF.timeout * 1000))]);
+      if (first === 'slow') {
+        const j = toBackground(`still running after ${SF.timeout}s`);
+        const o = await jobOutput(j.id, { max: 3000 });
+        return `Still running after ${SF.timeout}s, so it continues in the background as job ${j.id} instead of being stopped. Last output:\n${o.text || '(none yet)'}\nWait for it with job_output("${j.id}", wait_s up to 60); stop it with job_stop("${j.id}"). Full output: ${logRel}.`;
+      }
+      r = first;
+      stopTripwire?.();
+    } else {
+      try { r = await runP; } finally { stopTripwire?.(); }
+    }
+    if (background) stopTripwire?.();
+    let ch = null;
+    if (sb.snap) { try { ch = commandChanges(root, filesId, sb.snap); } catch { ch = null; } }
+    const changed = ch ? ch.added.length + ch.modified.length + ch.deleted.length : 0;
+    aud({ kind: 'ran', command: label || line, by: decidedBy, code: r.code, ms: r.ms, changed, stopped: r.stopped ? r.stopped.left : undefined, timedOut: r.timedOut || undefined });
+    if (changed) notes.push(`command changed ${changed} file${changed > 1 ? 's' : ''}`);
+    emit({ t: 'command', command: label || line, code: r.code, ms: r.ms, out: r.out.slice(-1500), log: logRel, timedOut: r.timedOut || undefined, decidedBy,
+      stopped: r.stopped ? { left: r.stopped.left, names: r.stopped.names, mode: r.stopped.mode } : undefined, leftovers: r.leftovers || undefined,
+      changes: ch || undefined, snap: sb.snap ? { files: sb.snap.count, ms: sb.snap.ms } : { off: sb.why }, at: at() });
+    const parts = [];
+    if (trip) parts.push(`QuorX's tripwire STOPPED this command: ${trip.count} files outside the project were removed within ${SF.tripwireSeconds}s (for example ${trip.sample.slice(0, 3).join(', ')}). Do not run it again. Tell the user at once what was removed, so they can restore it from the Recycle Bin or Previous Versions.`);
+    parts.push(`Exit code ${r.code ?? '(none)'} after ${Math.round(r.ms / 1000)}s.${r.timedOut ? ` It was stopped at the ${SF.timeout}s limit${/\?\s*$|:\s*$|\(y\/n\)|press any key/i.test(r.out.slice(-300)) ? ' while it seemed to wait for input: pass a non-interactive flag (e.g. --yes, -y, /quiet)' : ''}.` : ''}`);
+    if (ch && changed) parts.push(`Files it changed (Undo covers them): ${[...ch.added.map((f) => `+${f}`), ...ch.modified.map((f) => `~${f}`), ...ch.deleted.map((f) => `-${f}`)].slice(0, 30).join(', ')}${changed > 30 ? ` … and ${changed - 30} more` : ''}.`);
+    else if (!sb.snap && !readOnly) parts.push(`No snapshot was taken (${sb.why}), so Undo can't restore what this command changed.`);
+    parts.push(`Full output: ${logRel} (search it with search_files).`);
+    parts.push(r.out.slice(-4000) || '(no output)');
+    return parts.join('\n');
   }
 
   // ---------- research: read a public web page as text ----------
@@ -2088,7 +2519,27 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
     }
   }
   async function browserTool(args) {
+    const target = String(args.target || '').trim();
+    if (args.action === 'open' && /^cdp:/i.test(target)) return attachApp(target);
+    // Leaving an app's window for a page: a browser tab again (the app keeps running).
+    if (args.action === 'open' && tab?.app) { const old = tab; tab = null; await old.close().catch(() => {}); }
     return withTab((t) => browserStep(t, args));
+  }
+  // An Electron app's window, through the DevTools port it was started with. Only an app this agent started (a
+  // running background job whose command has that port), never another program that happens to have one open.
+  async function attachApp(target) {
+    const port = Number(target.slice(4));
+    if (!(Number.isInteger(port) && port >= 1024 && port <= 65535)) return 'Error: cdp:<port> needs a port between 1024 and 65535.';
+    const owned = listBackground(projectId).some((j) => j.status === 'running' && new RegExp(`--remote-debugging-port[= ]${port}(?!\\d)`).test(j.label));
+    if (!owned) return `Error: none of your running background jobs was started with --remote-debugging-port=${port}. Start the app with shell (background: true) and that flag first; QuorX only attaches to apps you started.`;
+    let t = null;
+    for (let i = 0; i < 20 && !t; i++) { try { t = await (deps.openTab || openTab)({ cdpPort: port }); } catch (e) { if (i === 19) return `Error: ${e.message}`; await sleep(500, signal); } }
+    if (tab && tab !== t && tab.app) await tab.close().catch(() => {});
+    tab = t; // a browser tab it replaces is already closed or handed back when the reply ends
+    cleanups.push(() => t.close());
+    const shot = await t.screenshot().catch(() => null);
+    if (shot) emit({ t: 'screenshot', action: 'open', target, url: t.url, image: shot, at: at() });
+    return pageReport(await t.summary(), `Attached to the app's window on DevTools port ${port}. click, type, press, scroll and look now act on the app; open another target to go back to a browser tab.`);
   }
   // The harness's own pages (the chat, settings, your terminals) are off limits to the agent's browser; its own work
   // served by the harness (/ws, /art, /preview) is fine.
@@ -2184,19 +2635,15 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
     }
     if (yoloAuto) {
       emit({ t: 'approval', ...card, at: at() });
-      const qs = [
-        { id: 'needed', type: 'noul', ask: `The user's request clearly asks for, or would clearly benefit from, this ${MEDIA[cat].noun}.` },
-        { id: 'fair', type: 'noul', ask: `Spending about $${plan.est.toFixed(3)} on this is reasonable for what the user asked.` },
-      ];
-      const state = { user_request: clip(userText, 600), agent_plan: `${tool}: ${what}`, agent_reason: card.why, estimated_cost_usd: +plan.est.toFixed(4) };
-      const d = await ensemble({ voters: S.voters, state, questions: qs, gate: S.gate, signal, account });
-      const pNeed = d.results.needed.dist.yes, pFair = d.results.fair.dist.yes;
-      const ok = pNeed >= 0.5 && pFair >= 0.5;
-      const ans = { approve: ok, by: 'deciders', pNeed, pFair,
-        reason: ok ? `Deciders approved: needed P=${pNeed.toFixed(2)}, fair price P=${pFair.toFixed(2)}.`
-          : `Deciders declined: ${pNeed < 0.5 ? `the request doesn't seem to need it (P=${pNeed.toFixed(2)})` : `the price doesn't seem worth it (P=${pFair.toFixed(2)})`}.` };
-      emit({ t: 'approval_done', id, ...ans, at: at() });
-      return { ...ans, plan };
+      // The judge sees the user's own words and the harness's facts; not the agent's "why" (agent-written text).
+      const j = await approvalJudge({ kind: 'media', userMessages: userTurns(), facts: { tool, model: plan.model, estimated_cost_usd: +plan.est.toFixed(4), prompt_written_by_agent: what },
+        voters: S.voters, chatModel: setup.model, gate: S.gate, signal, account, sf: SF, log: { runId, chatId: req.chatId || null, project: projectId } });
+      if (j.approve !== null) {
+        const ans = { approve: j.approve, by: 'deciders', pNeed: j.pNeed, pFair: j.pOther, reason: j.reason, votes: j.votes };
+        emit({ t: 'approval_done', id, ...ans, at: at() });
+        return { ...ans, plan };
+      }
+      card.why = j.reason; // a failed or split vote waits for the user, saying why
     }
     const ans = await askUser(card);
     // The user may have switched to another model in this category before approving.

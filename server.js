@@ -13,7 +13,7 @@ import { currentKey, PORT, runtime, ROOT, HOME, chatModels, decisionModels, imag
 import { listKeys, addKey, removeKey, setActive, renameKey, keyUsage, activeUsage, accountCredits, startSampling } from './server/keys.js';
 import { setupCheck, runFix } from './server/setup-check.js';
 import { startSignIn, signInStatus, cancelSignIn, finishByCallback, finishWithCode, callbackPage } from './server/oauth.js';
-import { runAgent, answerApproval, answerQuestion, answerBudget, setRunApproval, steerRun, DEFAULTS, MEDIA, briefFor, briefForChat } from './server/agent.js';
+import { runAgent, answerApproval, answerQuestion, answerBudget, raiseCap, setRunApproval, steerRun, DEFAULTS, MEDIA, briefFor, briefForChat } from './server/agent.js';
 import { CHECKS } from './server/harness-checks.js';
 import { startRun, getRun, stopRun, follow, runStatus, activeRuns, validRunId, scorecard } from './server/runs.js';
 import { setBudget, budgetState } from './server/budget.js';
@@ -22,8 +22,12 @@ import { ptyAvailable, ptyLoadError, ptyOpen, ptyWrite, ptyResize, ptyFollow, pt
 // Pages the agent wrote, served from this app's own address, get their own opaque origin: their requests to /api are refused.
 const SANDBOX_CSP = 'sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads';
 import { listChats, getChat, saveChat, patchChat, trashChat, validId, listProjects, saveProject, forgetProject, setProjectColor, costSummary, costChats } from './server/store.js';
-import { ALLOWED, copyTemplate, workspaceDir, safePath, listFiles, listServers, stopServer, restartServer, serverLog, startServer, restoreCheckpoint, listCheckpoints, pruneCheckpoints, undoConflicts, changedFiles, reviewFiles, reviewDiff, undoFile, checkCommand, runCommand, serverOverview, launchConfigs, saveLaunchConfig, removeLaunchConfig, ensureAgentDir, agentSpace, clearAgentSpace } from './server/workspace.js';
+import { ALLOWED, copyTemplate, workspaceDir, safePath, listFiles, listServers, stopServer, stopServerWait, restartServer, serverLog, startServer, restoreCheckpoint, listCheckpoints, pruneCheckpoints, undoConflicts, changedFiles, reviewFiles, reviewDiff, undoFile, checkCommand, runCommand, serverOverview, launchConfigs, saveLaunchConfig, removeLaunchConfig, ensureAgentDir, agentSpace, clearAgentSpace } from './server/workspace.js';
 import { followTerm, runningJobs, stopJob } from './server/terminal.js';
+import { decide as decideCommand, loadRules, saveRules, suggestedRules } from './server/cmdpolicy.js';
+import { jobHostStatus, jobsAvailable } from './server/jobhost.js';
+import { safetySettings } from './server/safety.js';
+import { readAudit } from './server/audit.js';
 import { pickFolder } from './server/pickfolder.js';
 import { userBrowse } from './server/userbrowser.js';
 import { openLink, linkReply } from './server/desktop.js';
@@ -291,7 +295,7 @@ const server = http.createServer(async (req, res) => {
       try { return json(res, 200, { servers: serverOverview(pid), jobs: runningJobs(pid) }); } catch (e) { return json(res, 200, { error: e.message, code: e.code, servers: [], jobs: [] }); }
     }
     if (url.pathname === '/api/servers/log' && req.method === 'GET') return json(res, 200, { log: serverLog(url.searchParams.get('key')) });
-    if (url.pathname === '/api/servers/stop' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e4)); return json(res, 200, { ok: stopServer(b.key, 'you') }); }
+    if (url.pathname === '/api/servers/stop' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e4)); const r = await stopServerWait(b.key, 'you'); return json(res, 200, { ok: !!r, ...(r || {}) }); }
     if (url.pathname === '/api/servers/start' && req.method === 'POST') {
       // Start a server you picked: a saved launch config by name, or an app's saved command.
       const b = JSON.parse(await readBody(req, 1e4));
@@ -315,6 +319,36 @@ const server = http.createServer(async (req, res) => {
       const pid = url.searchParams.get('project');
       if (!validId(pid)) return json(res, 400, { error: 'bad project id' });
       return json(res, 200, { ok: removeLaunchConfig(pid, url.searchParams.get('name')) });
+    }
+
+    // ---- command permissions: the rules the rule engine applies, per project and everywhere ----
+    if (url.pathname === '/api/permissions' && req.method === 'GET') {
+      const pid = url.searchParams.get('project');
+      const root = pid && validId(pid) ? workspaceDir(pid) : null;
+      const rules = loadRules(root);
+      return json(res, 200, { project: rules.filter((r) => r.scope === 'project'), everywhere: rules.filter((r) => r.scope === 'everywhere'),
+        suggested: root ? suggestedRules(root, rules) : [], stop: (await jobsAvailable(), jobHostStatus()), shell: shellInfo().name });
+    }
+    if (url.pathname === '/api/permissions' && req.method === 'POST') {
+      const b = JSON.parse(await readBody(req, 2e5));
+      if (b.scope === 'project' && !validId(b.projectId)) return json(res, 400, { error: 'bad project id' });
+      if (!['project', 'everywhere'].includes(b.scope)) return json(res, 400, { error: 'scope must be project or everywhere' });
+      try { return json(res, 200, { ok: true, rules: saveRules(b.scope, b.rules, b.scope === 'project' ? workspaceDir(b.projectId) : null) }); } catch (e) { return json(res, 200, { error: e.message }); }
+    }
+    if (url.pathname === '/api/audit' && req.method === 'GET') {
+      const pid = url.searchParams.get('project');
+      return json(res, 200, readAudit({ project: pid && validId(pid) ? pid : null, limit: Math.min(1000, Number(url.searchParams.get('limit')) || 200) }));
+    }
+    if (url.pathname === '/api/permissions/test' && req.method === 'POST') {
+      const b = JSON.parse(await readBody(req, 2e4));
+      const root = b.projectId && validId(b.projectId) ? workspaceDir(b.projectId) : process.cwd();
+      const S = safetySettings(b.safety);
+      try {
+        const d = await decideCommand(String(b.line || ''), { shell: S.shell, root, rules: [...(Array.isArray(b.chatRules) ? b.chatRules : []), ...loadRules(b.projectId && validId(b.projectId) ? root : null)],
+          mode: b.mode === 'yolo' ? 'yolo' : 'strict', yolo: { external: S.yoloExternal, opaque: S.yoloOpaque, outside: S.yoloOutside } });
+        return json(res, 200, { verdict: d.verdict, who: d.who, why: d.why, decidedBy: d.decidedBy, hint: d.hint, shell: d.shell,
+          segments: d.segments.map((s) => ({ text: s.text, cls: s.cls, verdict: s.verdict, who: s.who, why: s.why, decidedBy: s.decidedBy, paths: (s.paths || []).map((p) => ({ path: p.resolved || p.raw, zone: p.zone, kind: p.kind, why: p.why })) })) });
+      } catch (e) { return json(res, 200, { error: e.message }); }
     }
 
     // ---- terminal: live output of every command and server in a project; you can run commands too ----
@@ -359,7 +393,7 @@ const server = http.createServer(async (req, res) => {
       const b = JSON.parse(await readBody(req, 1e4));
       return json(res, 200, { ok: shellClose(String(b.projectId || ''), String(b.tab || '').replace(/[^\w-]/g, '').slice(0, 40)) });
     }
-    if (url.pathname === '/api/term/stop' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e4)); return json(res, 200, { ok: stopJob(String(b.job)) }); }
+    if (url.pathname === '/api/term/stop' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e4)); const r = await stopJob(String(b.job)); return json(res, 200, { ok: !!r, ...(r || {}) }); }
 
     // ---- the agent's own folder (.quorx: scratch, undo checkpoints, trash): its size, and clearing it ----
     // ---- ⟳ restart (a fresh copy of this harness takes over the port) and stop: only from this computer ----
@@ -523,6 +557,10 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && url.pathname === '/api/budget-stop') {
       const b = JSON.parse(await readBody(req, 1e4));
       return json(res, 200, { ok: answerBudget(b.runId, b.id) });
+    }
+    if (req.method === 'POST' && url.pathname === '/api/raise-cap') {
+      const b = JSON.parse(await readBody(req, 1e4));
+      return json(res, 200, { ok: raiseCap(b.runId, b.id, b.to) });
     }
     // A run belongs to the server, not to the page that started it: closing or reloading the page
     // leaves it working, and the page reattaches with /api/runs/<id>/events. Stop is explicit.

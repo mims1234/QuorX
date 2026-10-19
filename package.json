@@ -12,7 +12,7 @@
     "desktop:release": "npm --prefix desktop run release",
     "winget": "node scripts/winget-manifest.mjs",
     "release:bump": "npm --prefix desktop version patch --no-git-tag-version && node desktop/sync-version.js",
-    "test": "node --test scripts/test-loop.mjs scripts/test-agent.mjs scripts/test-security.mjs",
+    "test": "node --test --test-force-exit scripts/test-loop.mjs scripts/test-agent.mjs scripts/test-security.mjs scripts/test-safety.mjs",
     "scorecard": "node scripts/scorecard.mjs",
     "icons": "node scripts/make-icons.mjs"
   },

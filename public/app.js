@@ -1149,6 +1149,18 @@ function drawList() {
   if (PK.sel >= PK.list.length) PK.sel = 0;
   markSel(false);
 }
+// How each model has done in your own replies (logs/runs.jsonl, last 30 days): shown next to its price once it has
+// a few checked replies, so a cheap model that keeps failing looks like what it is.
+async function loadScores() {
+  const rows = await fetch('/api/scorecard?days=30').then((r) => r.json()).catch(() => []);
+  G.scores = Object.fromEntries((Array.isArray(rows) ? rows : []).map((r) => [r.model, r]));
+}
+function scoreBadge(id) {
+  const s = G.scores?.[id];
+  if (!s || s.checked < 3) return '';
+  const pct = Math.round((s.passed / s.checked) * 100), tone = pct >= 80 ? 'ok' : pct >= 50 ? 'warn' : 'bad';
+  return `<span class="mp-score" data-tone="${tone}" title="Your last 30 days: ${s.passed} of ${s.checked} replies passed QuorX's checks; ${s.replies} replies in all, about ${money(s.avgCost, 3)} and ${s.avgSteps} steps each.">✓ ${pct}% <small>of ${s.checked}</small></span>`;
+}
 function rowHTML(m, i) {
   const p = providerOf(m.id), fav = (G.favModels?.[m.kind] || []).includes(m.id);
   const caps = [(m.in || []).includes('image') && m.kind !== 'image' ? ['👁', 'Sees images'] : null, m.tools ? ['🧰', 'Uses tools'] : null, m.reasoning ? ['🧠', 'Reasoning'] : null, (m.in || []).includes('audio') ? ['🎙', 'Hears audio'] : null, m.voices?.length ? ['🗣', `${m.voices.length} voices`] : null].filter(Boolean);
@@ -1156,7 +1168,7 @@ function rowHTML(m, i) {
     <span class="mp-ava" style="--h:${hue(p)}" title="${esc(PROVIDER_NAME(p))}">${esc(initials(PROVIDER_NAME(p)))}</span>
     <span class="mp-main"><span class="mp-name">${recDot(m, PK.kind)} ${esc(cleanName(m))}${m.id === PK.current ? ' <span class="mp-tag cur">current</span>' : ''}</span><span class="mp-id">${esc(m.id)}</span></span>
     <span class="mp-caps">${caps.map(([i2, t]) => `<span title="${t}">${i2}</span>`).join('')}</span>
-    <span class="mp-meta">${m.ctx ? `<span title="Context window">${ctxText(m.ctx)}</span>` : ''}${m.created ? `<span title="${new Date(m.created * 1000).toLocaleDateString()}">${agoDate(m.created)}</span>` : ''}</span>
+    <span class="mp-meta">${scoreBadge(m.id)}${m.ctx ? `<span title="Context window">${ctxText(m.ctx)}</span>` : ''}${m.created ? `<span title="${new Date(m.created * 1000).toLocaleDateString()}">${agoDate(m.created)}</span>` : ''}</span>
     <span class="mp-price" title="${esc(priceText(m))}">${priceCell(m)}</span>
     <button type="button" class="mp-star ${fav ? 'on' : ''}" data-star="${esc(m.id)}" title="${fav ? 'Remove from favourites' : 'Add to favourites'}" aria-label="Favourite">${fav ? '★' : '☆'}</button>
   </div>`;
@@ -2493,7 +2505,22 @@ function traceHTML(m) {
     else if (e.t === 'approval_done') row(e.at, `${e.approve ? '✅ approved' : '⛔ declined'} by ${esc(e.by)}${e.reason ? `<div class="sub">${esc(e.reason)}</div>` : ''}`, e.approve ? 'ok' : 'err');
     else if (e.t === 'media_status') mediaStatus = e;
     else if (e.t === 'screenshot') row(e.at, `📸 browser ${esc(e.action)}${e.target ? ` ${esc(e.target)}` : ''}<div class="sub">${esc(e.url || '')}</div><img class="shot" src="${e.image}" alt="screenshot" loading="lazy">`, 'browser');
-    else if (e.t === 'command') row(e.at, `⌨️ <code>${esc(e.command)}</code> → exit ${e.code} · ${secs(e.ms)}${e.out ? `<details class="out"><summary>output</summary><pre>${esc(e.out)}</pre></details>` : ''}`, e.code ? 'err' : 'cmd');
+    else if (e.t === 'command' && e.background) row(e.at, `⏳ <code>${esc(e.command)}</code> → background job <b>${esc(e.background)}</b> · ${esc(e.why || '')}<div class="sub">It keeps running; its output goes to ${esc(e.log || 'its log')}. Stop it from the terminal, or the agent stops it with job_stop.</div>`, 'cmd');
+    else if (e.t === 'terminal') row(e.at, `🖥 terminal ${esc(e.id)} · ${esc(e.action)}${e.command ? ` <code>${esc(clip(e.command, 120))}</code>` : ''}${e.running === false ? ' · ended' : ''}${e.screen ? `<details class="out"><summary>screen</summary><pre>${esc(e.screen)}</pre></details>` : ''}`, 'cmd');
+    else if (e.t === 'debug') row(e.at, `🐞 debugger ${esc(e.id || '')} · ${esc(e.action)}${e.file ? ` <code>${esc(e.file)}</code>` : ''}${e.text ? `<details class="out"><summary>where it is</summary><pre>${esc(e.text)}</pre></details>` : ''}`, 'cmd');
+    else if (e.t === 'android') row(e.at, `📱 android ${esc(e.device)} · ${esc(e.action)}`, 'browser');
+    else if (e.t === 'packages') row(e.at, `📦 checked ${e.packages.length} package${e.packages.length === 1 ? '' : 's'} for <code>${esc(clip(e.command, 80))}</code><div class="sub">${e.packages.map((p) => `${esc(p.name)} (${esc(p.eco)}): ${p.verdict === 'ok' ? `exists${p.ageDays != null ? `, ${Math.round(p.ageDays / 36.5) / 10} years old` : ''}${p.weekly != null ? `, ${p.weekly.toLocaleString()}/week` : ''}` : esc(p.note)}`).join('<br>')}</div>`, e.packages.some((p) => p.verdict === 'missing') ? 'err' : 'cmd');
+    else if (e.t === 'desktop') row(e.at, `🪟 desktop app ${esc(e.job)} · ${esc(e.action)}${e.did ? `: ${esc(e.did)}` : ''}`, 'browser');
+    else if (e.t === 'command') {
+      const ch = e.changes, n = ch ? ch.added.length + ch.modified.length + ch.deleted.length : 0;
+      const by = !e.decidedBy ? '' : e.decidedBy === 'you' ? 'you allowed it' : e.decidedBy === 'deciders' ? 'the deciders allowed it' : e.decidedBy.startsWith('rule:') ? `your rule (${esc(e.decidedBy.slice(5))}) allowed it` : `runs without asking (${esc(e.decidedBy.replace(/^class:/, ''))})`;
+      const undo = n ? `changed ${n} file${n > 1 ? 's' : ''} · Undo covers project files` : e.snap?.off && e.snap.off !== 'read-only' ? `no snapshot (${esc(e.snap.off)}): Undo can't restore what it changed` : '';
+      const stop = e.stopped ? (e.stopped.left ? `⚠ ${e.stopped.left} process${e.stopped.left > 1 ? 'es' : ''} did not stop: ${esc((e.stopped.names || []).join(', '))}` : `■ stopped · 0 processes left${e.stopped.mode === 'basic' ? ' (basic mode)' : ''}`) : e.timedOut ? 'stopped at the time limit' : '';
+      row(e.at, `⌨️ <code>${esc(e.command)}</code> → exit ${e.code ?? '–'} · ${secs(e.ms)}<div class="sub">${[by, undo, stop, e.leftovers?.ended?.length ? `ended ${e.leftovers.ended.length} process${e.leftovers.ended.length > 1 ? 'es' : ''} it left running` : '', 'not covered: files outside the project, ignored folders (node_modules, target), pushes, installs, databases'].filter(Boolean).join(' · ')}</div>${ch && n ? `<details class="out"><summary>files</summary><pre>${esc([...ch.added.map((f) => `+ ${f}`), ...ch.modified.map((f) => `~ ${f}`), ...ch.deleted.map((f) => `- ${f}`)].join('\n'))}</pre></details>` : ''}${e.out ? `<details class="out"><summary>output</summary><pre>${esc(e.out)}</pre>${e.log ? `<div class="sub">Full log: ${esc(e.log)}</div>` : ''}</details>` : ''}`, e.code || e.stopped?.left ? 'err' : 'cmd');
+    }
+    else if (e.t === 'tripwire') row(e.at, `🚨 tripwire stopped <code>${esc(e.command)}</code>: ${e.count} files vanished outside the project<div class="sub">${(e.sample || []).map(esc).join('<br>')}<br>Look in the Recycle Bin, or right-click the folder → Properties → Previous Versions.</div>`, 'err');
+    else if (e.t === 'command_blocked') row(e.at, `⛔ blocked <code>${esc(e.command)}</code><div class="sub">${esc(e.policy?.why || '')}${e.policy?.hint ? ` · ${esc(e.policy.hint)}` : ''}</div>`, 'err');
+    else if (e.t === 'cmd_rule') row(e.at, `📏 rule saved: allow <code>${esc(e.rule.match)}</code> · ${esc({ chat: 'this chat', project: 'this project', everywhere: 'everywhere' }[e.rule.scope] || e.rule.scope)}`, 'ok');
     else if (e.t === 'file') row(e.at, `${e.deleted ? '🗑' : '📝'} ${esc(e.path)}${e.deleted ? ' · moved to trash' : e.bytes != null ? ` · ${e.bytes} bytes` : ' · edited'}`, 'file');
     else if (e.t === 'compacted') row(e.at, `🗜 Earlier turns summarised to keep the context small<details class="out"><summary>summary</summary><pre>${esc(e.summary)}</pre></details>`, 'note');
     else if (e.t === 'note') row(e.at, `<span class="${e.level === 'info' ? '' : 'warn'}">${e.level === 'info' ? 'ℹ' : '⚠'} ${esc(e.msg)}</span>`, e.level === 'info' ? 'note' : 'warn');
@@ -2567,7 +2594,7 @@ function approvalBadge(a, live) {
   const c = a.card, o = a.outcome;
   const state = o ? (o.approve ? 'yes' : 'no') : live ? 'wait' : 'none';
   const who = o ? `${o.approve ? 'Allowed' : 'Declined'} by ${o.by === 'user' ? 'you' : esc(o.by)}${o.always ? ' · always allowed from now on' : ''}${o.approve && o.model && o.model !== c.model ? ` · switched to ${esc(short(o.model))}` : ''}${o.reason ? ` · ${esc(o.reason)}` : ''}`
-    : live ? 'The deciders are checking whether this is needed and worth the price…' : 'Not answered: the reply ended';
+    : live ? (c.tool === 'shell' ? 'The deciders are voting on this command…' : 'The deciders are checking whether this is needed and worth the price…') : 'Not answered: the reply ended';
   const mark = { yes: '✓', no: '⛔', wait: '⚡', none: '·' }[state];
   const price = c.free ? '' : money(c.est, 3);
   return {
@@ -2575,9 +2602,56 @@ function approvalBadge(a, live) {
     detail: `<div class="tl-ap-detail ${state}">${who}${!c.free ? ` · ${esc(short(o?.model || c.model))}${c.detail ? ` · ${esc(c.detail)}` : ''}` : ''}${c.why ? `<div class="dim">Why: ${esc(c.why)}</div>` : ''}</div>`,
   };
 }
+// ---------- a command waiting for you: what it is, what it touches, why it asks, and how wide a rule to save ----------
+const CMD_CLASS = { read: 'reads only', write: 'writes in the project', build: 'runs project code', install: 'installs packages', external: 'leaves this computer',
+  opaque: 'can’t be checked', delete: 'deletes', discard: 'throws away work', never: 'never allowed', unknown: 'no rule covers it' };
+const CMD_ZONE = { inside: 'in the project', outside: 'outside the project', unknown: 'can’t be resolved', blocked: 'blocked', protected: 'protected' };
+function shellCardHTML(a) {
+  const c = a.card, p = c.policy || {};
+  const segs = (p.segments || []).map((s) => `<div class="sc-seg"><code>${esc(clip(s.text, 200))}</code><span class="sc-cls" data-cls="${esc(s.cls)}">${esc(CMD_CLASS[s.cls] || s.cls)}${s.global ? ' · whole computer' : ''}</span>${(s.paths || []).map((x) => `<span class="sc-path" data-zone="${esc(x.zone)}">${esc(CMD_ZONE[x.zone] || x.zone)} · ${esc(clip(x.path, 90))}</span>`).join('')}</div>`).join('');
+  const sug = (p.segments || []).find((s) => s.verdict !== 'allow')?.suggest || p.segments?.[0]?.suggest || { exact: c.what, prefix: c.what, program: c.what };
+  const seg = (group, opts) => `<div class="seg sc-pick" data-group="${group}">${opts.map(([v, l], i) => `<button type="button" data-v="${esc(v)}" class="${i === 0 ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+  return `<div class="approval shell-card" data-id="${esc(c.id)}" data-tool="shell">
+    <h4>⌨️ Run a command <small>(free${p.shell ? ` · ${esc(p.shell)}` : ''})</small></h4>
+    <pre class="sc-line">${esc(c.what)}</pre>
+    ${segs ? `<div class="sc-segs">${segs}</div>` : ''}
+    ${(p.packages || []).length ? `<div class="sc-segs">${p.packages.map((k) => `<span class="sc-path" data-zone="${k.verdict === 'ok' ? 'inside' : k.verdict === 'missing' ? 'blocked' : 'unknown'}">📦 ${esc(k.name)} · ${esc(k.eco)} · ${k.verdict === 'ok' ? `${k.ageDays != null ? `${Math.round(k.ageDays / 365 * 10) / 10} years old` : 'exists'}${k.weekly != null ? ` · ${k.weekly.toLocaleString()}/week` : ''}` : esc(k.note)}</span>`).join('')}</div>` : ''}
+    ${c.why ? `<div class="what">Why it asks: ${esc(c.why)}</div>` : ''}
+    <textarea rows="1" placeholder="If you deny it, say why (optional). The agent reads this and decides what to do."></textarea>
+    <div class="acts"><button type="button" class="primary yes">Run once</button>${c.noAlways ? '' : '<button type="button" class="sc-always" aria-expanded="false">Always allow…</button>'}<button type="button" class="no">Deny</button></div>
+    ${c.noAlways ? '<div class="sc-note">A button can’t make a rule for this kind of command. If you’re sure, type one yourself in ⚙ Settings → Safety & commands.</div>'
+      : `<div class="sc-rule" hidden>
+        <div class="sc-row"><span class="sc-k">What</span>${seg('match', [[sug.exact, 'This exact command'], [sug.prefix, `Starting with <code>${esc(sug.prefix.replace(/\*$/, ''))}</code>`], [sug.program, `Any <code>${esc(sug.program.replace(/\*$/, ''))}</code> command`]])}</div>
+        <div class="sc-row"><span class="sc-k">Where</span>${seg('scope', [['chat', 'This chat'], ['project', 'This project'], ['everywhere', 'Everywhere']])}</div>
+        <div class="sc-row"><span class="sc-k">Rule</span><code class="sc-preview">allow ${esc(sug.exact)}</code><button type="button" class="primary sc-save">Allow and save</button></div>
+        <div class="sc-warn" hidden>“Any” lets every use of this program run without asking, including ones that run other code.</div>
+      </div>`}
+  </div>`;
+}
+function wireShellCard(card, m) {
+  const id = card.dataset.id;
+  const answer = async (approve, rule) => {
+    card.querySelectorAll('button, textarea').forEach((b) => (b.disabled = true));
+    const reason = $('textarea', card)?.value.trim() || '';
+    await fetch('/api/approve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ runId: m.runId, id, approve, reason, ...(rule ? { rule } : {}) }) }).catch(() => {});
+  };
+  $('.yes', card).onclick = () => answer(true);
+  $('.no', card).onclick = () => answer(false);
+  const panel = $('.sc-rule', card), btn = $('.sc-always', card);
+  if (!panel || !btn) return;
+  const pick = (g) => $(`.sc-pick[data-group="${g}"] button.on`, card)?.dataset.v;
+  const show = () => {
+    $('.sc-preview', card).textContent = `allow ${pick('match')} · ${{ chat: 'in this chat', project: 'in this project', everywhere: 'everywhere' }[pick('scope')]}`;
+    $('.sc-warn', card).hidden = $('.sc-pick[data-group="match"] button:last-child', card) !== $('.sc-pick[data-group="match"] button.on', card);
+  };
+  btn.onclick = () => { panel.hidden = !panel.hidden; btn.setAttribute('aria-expanded', String(!panel.hidden)); show(); };
+  for (const b of card.querySelectorAll('.sc-pick button')) b.onclick = () => { for (const x of b.parentElement.children) x.classList.toggle('on', x === b); show(); };
+  $('.sc-save', card).onclick = () => answer(true, { match: pick('match'), scope: pick('scope') });
+}
 function approvalHTML(a, live = true) {
   const c = a.card, o = a.outcome;
   const waiting = !o && c.mode === 'strict' && live;
+  if (waiting && c.tool === 'shell' && c.policy) return shellCardHTML(a);
   const opts = c.options || [];
   const finalModel = o?.model || c.model;
   const name = TOOL_NAME[c.tool] || esc(c.tool);
@@ -2590,7 +2664,7 @@ function approvalHTML(a, live = true) {
     const state = o ? (o.approve ? 'yes' : 'no') : live ? 'wait' : 'none';
     const mark = { yes: '✓', no: '⛔', wait: '⚡', none: '·' }[state];
     const who = o ? `${o.approve ? 'Allowed' : 'Declined'} by ${o.by === 'user' ? 'you' : esc(o.by)}${o.always ? ' · always allowed from now on' : ''}${o.approve && o.model && o.model !== c.model ? ` · switched to ${esc(short(o.model))}` : ''}${o.reason ? ` · ${esc(o.reason)}` : ''}`
-      : live ? 'Deciders are checking whether this is needed and worth the price…' : 'Not answered: the reply ended';
+      : live ? (c.tool === 'shell' ? 'The deciders are voting on this command…' : 'Deciders are checking whether this is needed and worth the price…') : 'Not answered: the reply ended';
     return `<details class="approval-line ${state}"><summary title="${esc(who)}"><span class="al-mark">${mark}</span><b>${name}</b><span class="al-what">${esc(c.what)}</span><span class="al-price">${c.free ? 'free' : money(c.est, 3)}</span></summary>
       <div class="al-detail">${c.free ? '' : `<div>${esc(short(finalModel))} · ${esc(c.detail || '')}</div>`}<div>${esc(c.what)}</div>${c.why ? `<div>Why: ${esc(c.why)}</div>` : ''}<div class="al-who ${state}">${who}</div></div></details>`;
   }
@@ -2601,10 +2675,11 @@ function approvalHTML(a, live = true) {
     ${waiting ? `<textarea rows="1" placeholder="If you decline, say why (optional). The agent reads this and decides what to do."></textarea>
       <div class="acts"><button type="button" class="primary yes">${c.free ? 'Allow once' : `Approve ${money(c.est, 3)}`}</button><button type="button" class="always" title="Stop asking for this tool in this chat">Always allow</button><button type="button" class="no">Decline</button></div>`
       : o ? `<div class="outcome ${o.approve ? 'yes' : 'no'}">${o.approve ? '✅ Allowed' : '⛔ Declined'} by ${o.by === 'user' ? 'you' : esc(o.by)}${o.always ? ' · always allowed from now on' : ''}${o.approve && o.model && o.model !== c.model ? ` · switched to ${esc(short(o.model))}` : ''}${o.reason ? ` · ${esc(o.reason)}` : ''}</div>`
-      : !live ? '<div class="outcome">Not answered: the reply ended</div>' : `<div class="outcome">⚡ Deciders are checking whether this is needed and worth the price…</div>`}
+      : !live ? '<div class="outcome">Not answered: the reply ended</div>' : `<div class="outcome">⚡ ${c.tool === 'shell' ? 'The deciders are voting on this command…' : 'Deciders are checking whether this is needed and worth the price…'}</div>`}
   </div>`;
 }
 function wireApproval(card, m) {
+  if (card.classList.contains('shell-card')) return wireShellCard(card, m);
   const id = card.dataset.id;
   const sel = $('.pickModel', card);
   if (sel) sel.onchange = () => { $('.yes', card).textContent = `Approve ${money(Number(sel.selectedOptions[0].dataset.est), 3)}`; };
@@ -2699,9 +2774,14 @@ function wireOutOfSteps(card, c, m) {
 function budgetHTML(b, live = true) {
   const c = b.card, o = b.outcome, open = !o && live;
   const next = Math.ceil(Math.max(c.budget * 2, c.spent * 1.5) * 100) / 100;
-  return `<div class="approval budget-card ${open ? '' : 'done'}" ${open ? `data-id="${esc(c.id)}"` : ''}>
-    <h4>💵 Project budget reached · <span class="cost">${money(c.spent, 3)} of ${money(c.budget, 2)}</span></h4>
-    <div class="what">All chats in this project together have used up its budget. Raise it to let this reply carry on, or wrap up here.</div>
+  // kind: 'reply' (this reply's cap), 'day' (today's cap across projects), or the project budget.
+  const title = c.kind === 'reply' ? 'This reply’s cap reached' : c.kind === 'day' ? 'Today’s cap reached' : 'Project budget reached';
+  const what = c.kind === 'reply' ? 'Every model this reply used counts (the agent, deciders, helpers, checks, media). Raise its cap to let it carry on, or wrap up here. Your default cap is in ⚙ Settings → Budget & approvals.'
+    : c.kind === 'day' ? 'Today’s spending across all your projects reached your daily cap. Raise it for today to let this reply carry on, or wrap up here.'
+    : 'All chats in this project together have used up its budget. Raise it to let this reply carry on, or wrap up here.';
+  return `<div class="approval budget-card ${open ? '' : 'done'}" ${open ? `data-id="${esc(c.id)}" data-kind="${esc(c.kind || 'project')}"` : ''}>
+    <h4>💵 ${title} · <span class="cost">${money(c.spent, 3)} of ${money(c.budget, 2)}</span></h4>
+    <div class="what">${what}</div>
     ${open ? `<div class="acts own-row"><label class="what">Raise to $ <input type="number" class="own raise-to" min="${(Math.ceil(c.spent * 100) / 100).toFixed(2)}" step="0.5" value="${next.toFixed(2)}" aria-label="New budget in dollars"></label></div>
       <div class="acts"><button type="button" class="primary raise">Raise and carry on</button><button type="button" class="stop-here">Wrap up</button></div><div class="what err" hidden></div>`
       : `<div class="outcome ${o?.raised ? 'yes' : 'no'}">${o ? (o.raised ? `✅ Budget raised to ${o.budget == null ? 'no limit' : money(o.budget, 2)}; the reply carried on` : '⛔ Wrapped up at the budget') : 'Not answered: the reply ended'}</div>`}
@@ -2710,6 +2790,13 @@ function budgetHTML(b, live = true) {
 function wireBudget(card, c, m) {
   const err = $('.err', card), input = $('.raise-to', card);
   $('.raise', card).onclick = async () => {
+    if (card.dataset.kind === 'reply' || card.dataset.kind === 'day') {
+      const to = Number(input.value);
+      if (!(to > Number(input.min))) { err.textContent = `Raise it above ${money(Number(input.min), 2)}.`; err.hidden = false; return; }
+      card.querySelectorAll('button, input').forEach((b) => (b.disabled = true));
+      await fetch('/api/raise-cap', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ runId: m.runId, id: card.dataset.id, to }) }).catch(() => {});
+      return;
+    }
     const p = G.projects.find((x) => x.id === c.projectId);
     const r = await fetch(`/api/projects/${c.projectId}/budget`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ budget: Number(input.value), fromCard: true }) }).then((x) => x.json()).catch((e) => ({ error: e.message }));
     if (r.error) { err.textContent = `Could not raise it: ${r.error}.`; err.hidden = false; return; }
@@ -2842,8 +2929,8 @@ async function runChat(c, text, ctx, imgs, { resumeOf, docs = [], more = 0, mode
   if (box) { if (box.querySelector('.hint')) box.innerHTML = ''; if (user) box.appendChild(renderMsg(c, user)); box.appendChild(renderMsg(c, m)); c.follow = true; c.toEnd?.(); }
   const artifacts = Object.fromEntries(Object.entries(a.artifacts).map(([id, x]) => [id, x.kind === 'html' ? { kind: 'html', title: x.title, html: x.html, v: 1 } : x.kind === 'md' ? { kind: 'md', title: x.title, md: x.md || '', v: 1 } : { kind: x.kind, title: x.title, url: x.url?.startsWith('data:') ? undefined : x.url, v: 1 }]));
   const settings = { ...G.settings, approval: c.approval, tools: chatTools(c), ...qualitySettings(c) };
-  const body = resumeOf ? { runId: m.runId, chatId: c.id, resume: resumeOf, settings, allowed: a.allowed, ...(more ? { continue: more, ...(model ? { model } : {}) } : {}) }
-    : { runId: m.runId, chatId: c.id, projectId: c.projectId, chatTitle: c.title, setup: a.setup, settings, allowed: a.allowed, history, summary: a.summary || '', text, artifacts, context: ctx?.text || '', images: imgs.map((x) => x.full), docs: docs.map((d) => d.id) };
+  const body = resumeOf ? { runId: m.runId, chatId: c.id, resume: resumeOf, settings, allowed: a.allowed, cmdRules: a.cmdRules || [], ...(more ? { continue: more, ...(model ? { model } : {}) } : {}) }
+    : { runId: m.runId, chatId: c.id, projectId: c.projectId, chatTitle: c.title, setup: a.setup, settings, allowed: a.allowed, cmdRules: a.cmdRules || [], history, summary: a.summary || '', text, artifacts, context: ctx?.text || '', images: imgs.map((x) => x.full), docs: docs.map((d) => d.id) };
   // Saved straight away, so a reload finds the running reply and reattaches to it.
   saveChat(c, true);
   return followRun(c, m, (signal) => fetch('/api/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal, body: JSON.stringify(body) }));
@@ -2939,13 +3026,14 @@ async function followRun(c, m, open) {
         if (e.t === 'file' && G.watch?.chat === c.id) setTimeout(reloadPreview, 300);
         if (e.t === 'mode' && c.approval !== e.approval) { c.approval = e.approval; saveChat(c); renderComposerBar(c); }
         if (e.t === 'allow_always') { if (!a.allowed.includes(e.tool)) a.allowed.push(e.tool); renderAllowed(c); saveChat(c); }
+        if (e.t === 'cmd_rule' && e.rule?.scope === 'chat') { (a.cmdRules ??= []).push(e.rule); saveChat(c); }
         if (e.t === 'approval') { m.approvals[e.id] = { card: e }; if (e.mode === 'strict') { c.waiting = true; renderSidebar(); renderChatHead(c); note('approval', e.what || e.tool); } }
         if (e.t === 'approval_done' && m.approvals[e.id]) { m.approvals[e.id].outcome = e; c.waiting = false; renderSidebar(); renderChatHead(c); }
         if (e.t === 'question') { m.questions[e.id] = { card: e }; if (!e.auto) { c.waiting = 'answer'; renderSidebar(); renderChatHead(c); note('answer', e.question); } }
         if (e.t === 'budget_ask') { m.budgetAsk = { card: e }; c.waiting = 'budget'; renderSidebar(); renderChatHead(c); note('budget', 'Raise the budget to carry on, or wrap up.'); }
         if (e.t === 'budget_done' && m.budgetAsk) { m.budgetAsk.outcome = e; c.waiting = false; refreshSidebar(); renderChatHead(c); }
         if (e.t === 'answer' && m.questions[e.id]) { const qc = m.questions[e.id].card; e.label = e.answers ? (e.defaults ? 'the recommended answers' : e.answers.map((x, i) => (x.choice != null ? qc.questions?.[i]?.options[x.choice] : x.text || '–')).join(' · ')) : e.choice != null ? qc.options[e.choice] : e.text; m.questions[e.id].answer = e; c.waiting = false; renderSidebar(); renderChatHead(c); }
-        if (e.t === 'done') { m.doneAt = Date.now(); m.content = e.reply; m.note = e.historyNote; m.stats = e.stats; G.sessionCost += e.stats.cost; renderSpend(); }
+        if (e.t === 'done') { m.doneAt = Date.now(); m.content = e.reply; m.note = e.historyNote; m.stats = e.stats; G.sessionCost += e.stats.cost; renderSpend(); loadScores(); }
         if (e.t === 'error') m.error = e.msg;
         if (e.t === 'interrupted') { m.error = 'The harness restarted while this reply was running.'; m.resumable = !!e.resumable; }
         if (e.t === 'compacted') { a.summary = e.summary; a.summaryAt = e.cutoffAt; }
@@ -3457,7 +3545,7 @@ const UI_DEFAULTS = { density: 'comfortable', fontSize: 14, reduceMotion: 'syste
 const SETTINGS_NAV = [
   ['Harness', [['setup', '🧪', 'Setup check'], ['appearance', '🎨', 'Appearance'], ['layout', '🧱', 'Layout'], ['privacy', '🕶', 'Privacy & display']]],
   ['OpenRouter', [['keys', '🔑', 'API keys'], ['models', '🧠', 'Models & catalogue']]],
-  ['Agent', [['newchats', '✨', 'New chats'], ['loop', '🔁', 'Agent loop'], ['deciders', '⚖️', 'Deciders'], ['tools', '🧰', 'Tools & media'], ['budget', '💵', 'Budget & approvals'], ['skills', '🧩', 'Skills']]],
+  ['Agent', [['newchats', '✨', 'New chats'], ['loop', '🔁', 'Agent loop'], ['deciders', '⚖️', 'Deciders'], ['tools', '🧰', 'Tools & media'], ['budget', '💵', 'Budget & approvals'], ['safety', '🛡', 'Safety & commands'], ['skills', '🧩', 'Skills']]],
   ['Workspace', [['projects', '📁', 'Projects'], ['code', '💻', 'Code & servers'], ['docs', '📎', 'Documents']]],
   ['Data', [['usage', '📊', 'Usage & costs'], ['data', '🗄', 'Data & storage'], ['shortcuts', '⌨️', 'Shortcuts'], ['about', 'ℹ️', 'About']]],
 ];
@@ -3574,12 +3662,46 @@ function settingsPanels(S) {
     ]],
     tools: ['Tools & media', 'Up to 3 models per tool, and who picks the model for each call. Each chat turns tools on in its 🧰 menu.', ['<div id="catEditors"></div>']],
     budget: ['Budget & approvals', 'Limits on paid calls.', [
-      stCard('Paid calls', '', stRow('Budget per reply', 'A paid call that would go over this is stopped, in Strict and in YOLO.', stStep('budget', S.budget, 0, 20, 0.05, '$'))
+      stCard('Caps on every model', 'They count everything a reply calls: the agent, the deciders, helpers, screenshot checks and paid media.',
+        stRow('Cap per reply', 'At 85% the agent is told to wrap up. At the cap, 🔒 Strict asks you to raise it or wrap up; ⚡ YOLO stops. 0 = no cap.', stStep('replyBudget', S.replyBudget ?? d.replyBudget ?? 1, 0, 100, 0.25, '$'))
+        + stRow('Cap per day', 'Today’s spending across all projects. A reply that reaches it stops (Strict asks first). 0 = off. A separate OpenRouter key with its own daily limit is a good second fence for ⚡ YOLO.', stStep('dailyBudget', S.dailyBudget ?? d.dailyBudget ?? 0, 0, 1000, 1, '$'))),
+      stCard('Paid calls', '', stRow('Paid media per reply', 'A paid call that would go over this is stopped, in Strict and in YOLO.', stStep('budget', S.budget, 0, 20, 0.05, '$'))
         + stRow('Deciders check paid calls in ⚡ YOLO', 'Before each paid call: is it needed, is the price fair?', stSwitch('yoloCheck', S.yoloCheck !== false))),
       stCard('What ⚡ YOLO does by itself', 'Ticked: YOLO goes ahead without asking. Unticked: it asks you first, as Strict does (Always allow stops the asking for that chat). Reading files, listing and searching never ask.',
         YOLO_ROWS.map(([k, label, help]) => stRow(label, help, stSwitch(`yoloAuto.${k}`, S.yoloAuto?.[k] !== false))).join('')),
       stCard('Project budgets', 'Set a project\'s budget with the $ next to it in the sidebar.', stRow('Allowance to finish a reply', 'A new reply can\'t start once the project budget is used up. A reply already working may go this far past it to finish, then it is stopped. 0% stops it right at the budget.', stStep('budgetGrace', S.budgetGrace ?? 10, 0, 100, 5, '%'))),
     ]],
+    safety: (() => {
+      const SF = { ...(d.safety || {}), ...(S.safety || {}) };
+      return ['Safety & commands', 'How the agent’s commands are checked before they run, what Stop and Undo cover, and what ⚡ YOLO may approve on its own. Every command is split into its parts first; the strictest part decides.', [
+        stCard('Shell', '', stRow('The agent’s shell', 'Windows PowerShell 5.1 is read by PowerShell’s own parser, so its commands can be checked exactly. cmd and Git Bash are checked with simpler rules, and Git Bash’s path translation caused the worst delete incidents in other agents.', stSeg('safety.shell', [['powershell', 'PowerShell 5.1'], ['pwsh', 'PowerShell 7'], ['cmd', 'cmd'], ['bash', 'Git Bash']], SF.shell))
+          + stRow('Time limit per command', 'Then the command, and everything it started, is stopped. Builds that take longer can be run in steps.', stStep('safety.timeout', SF.timeout, 5, 900, 5, 's'))
+          + stRow('Memory cap per command', 'For the command and everything it starts, so a runaway build can’t starve your PC. 0 = no cap.', stStep('safety.memoryMB', SF.memoryMB, 0, 65536, 256, 'MB'))
+          + stRow('Stop', 'How Stop ends a command.', '<span id="stStopMode" class="st-chip">checking…</span>')),
+        stCard('Undo for commands', 'Before a command that can change files, QuorX snapshots the project (only changed files are read again), so ↶ Undo and Review changes cover what the command did. Not covered: files outside the project, ignored folders (node_modules, target, bin, obj…), pushes, installs and databases.',
+          stRow('Snapshot before each command', '', stSwitch('safety.snapshots', SF.snapshots))
+          + stRow('Pause snapshots past', 'A project bigger than this (not counting ignored folders) runs commands without a snapshot, and each command row says so.', stStep('safety.snapshotMaxMB', SF.snapshotMaxMB, 50, 100000, 50, 'MB'))),
+        stCard('Tripwire', 'While a command runs, QuorX watches your profile and the folders around the project. If many files vanish there, it stops the command and shows what it saw. It is a last line of defence, not a guarantee.',
+          stRow('Watch for mass deletes', '', stSwitch('safety.tripwire', SF.tripwire))
+          + stRow('Stop after', 'Files removed outside the project…', stStep('safety.tripwireFiles', SF.tripwireFiles, 2, 10000, 1, 'files'))
+          + stRow('Within', '…in this many seconds.', stStep('safety.tripwireSeconds', SF.tripwireSeconds, 1, 120, 1, 's'))),
+        stCard('What ⚡ YOLO’s deciders may approve', 'Builds, tests, local installs and unknown commands go to the deciders in YOLO. These stay with you unless you tick them. Blocked places (drive roots, your profile, system folders, folders above the project) are never allowed.',
+          stRow('Pushes, publishes and deploys', 'Anything that leaves this computer: git push, npm publish, curl, ssh…', stSwitch('safety.yoloExternal', SF.yoloExternal))
+          + stRow('Commands QuorX can’t check', 'python -c, cmd /c, iex, scripts built from text…', stSwitch('safety.yoloOpaque', SF.yoloOpaque))
+          + stRow('Deletes and writes outside the project', '', stSwitch('safety.yoloOutside', SF.yoloOutside))),
+        stCard('Debugger and devices', '',
+          stRow('Debugger for Node and Python', 'Research found a debugger helps strong models most after plain debugging fails, and can make weaker ones worse from the start. “After failed tries”: it opens once the agent has hit errors or had a build sent back.', stSeg('debugger', [['earned', 'After failed tries'], ['always', 'Always'], ['off', 'Off']], S.debugger || 'earned'))
+          + stRow('Let the android tool use a physical phone', 'Unticked, it uses emulators only: a phone holds your real accounts and data.', stSwitch('safety.androidPhones', SF.androidPhones))),
+        stCard('How the deciders vote on an action', 'They see your own messages and the facts QuorX worked out (the command, its parts, the real paths, the price), never the agent’s reasons or tool output. A decider can’t be the chat’s own model. A failed or split vote waits for you. Every vote is logged in logs/approvals.jsonl.',
+          stRow('Valid votes needed', 'Fewer than this and it asks you.', stStep('safety.quorum', SF.quorum, 1, 5))
+          + stRow('“The user asked for it” at least', 'Chance the deciders give that your messages ask for it.', stStep('safety.neededMin', SF.neededMin, 0.5, 1, 0.05))
+          + stRow('“It could do harm” at most', 'Damage outside the project, leaked data or keys, or cost.', stStep('safety.harmMax', SF.harmMax, 0, 0.5, 0.05))
+          + stRow('Pause after blocks in a row', 'Then commands that need a vote ask you for the rest of the reply.', stStep('safety.escalateRow', SF.escalateRow, 1, 20))
+          + stRow('…or blocks in one reply', '', stStep('safety.escalateTotal', SF.escalateTotal, 1, 200))),
+        stCard('Audit log', 'Every command the agent ran or was stopped from running, and who let it: a rule, you, the deciders, or the built-in classes. Votes are in logs/approvals.jsonl; this log is logs/audit.jsonl.', '<div id="stAudit"><div class="st-row-help">Loading…</div></div>'),
+        stCard('Command rules', 'Your rules, checked before the built-in classes: deny beats ask beats allow. A rule can always make a command stricter. Rules made with the “Always allow…” button never relax pushes, uncheckable commands or deletes outside the project; rules you type here can. Changes here save at once.', '<div id="stPerms"><div class="st-row-help">Loading rules…</div></div>'),
+      ]];
+    })(),
     skills: ['Skills', 'Playbooks the agent loads when a task fits. Agents can also save their own into a project.', ['<div id="skillList" class="st-skill-list"></div>']],
     projects: ['Projects', 'A project is a folder that many chats share. Changes here apply at once.', [`<div id="stProjects"></div>`]],
     docs: ['Documents', 'Files you attach with 📎. They are kept in the project folder\'s .quorx/uploads, which git ignores.', [
@@ -3593,7 +3715,7 @@ function settingsPanels(S) {
       stCard('PDFs', 'PDFs are read for free on this computer with pdftotext when it is installed (Git for Windows includes it); otherwise through OpenRouter\'s free parser. A scan with no text asks before OCR (mistral-ocr, about $2 per 1,000 pages).', ''),
     ]],
     code: ['Code & servers', 'What the agent may run on this computer.', [
-      stCard('Commands', 'Only these programs can be run, with plain arguments.', `<div class="st-chips">${(G.cfg.allowed || []).map((x) => `<span class="st-chip">${esc(x)}</span>`).join('')}</div>`),
+      stCard('Commands', 'The agent runs command lines in its shell. Each one is checked first: read-only commands run, others ask you (or the deciders in ⚡ YOLO), and system commands or deletes outside the project are blocked.', stRow('Rules, shell, Stop and Undo for commands', '', '<button type="button" class="st-btn secondary sm" data-act="openSafety">🛡 Safety & commands</button>')),
       stCard('Agent folder', 'The agent keeps research scripts, downloads, undo history and deleted files in .quorx/ inside each project folder. Git ignores it, so it never ends up in your repo.', stRow('Ask me when it grows past', 'The chat shows a notice with what to clear, and the agent asks before adding more.', stStep('agentSpaceMB', S.agentSpaceMB ?? 500, 50, 50000, 50, 'MB'))
         + stRow('Undo for the newest', 'Replies per project that keep ↶ Undo. Older undo copies are removed when a new reply starts.', stStep('undoKeep', S.undoKeep ?? 10, 1, 100, 1, 'replies'))
         + stRow('Undo kept for at most', 'Even among the newest replies, Undo goes after this long. For history that lasts, use git.', stStep('undoDays', S.undoDays ?? 7, 1, 90, 1, 'days'))),
@@ -3664,6 +3786,7 @@ function wireSettings() {
     if (act === 'pickDefModel') { const id = await pickModel('chat', S.model, { context: 'Default for new chats' }); if (id) { S.model = id; const b = $('#defModel'); b.dataset.id = id; b.innerHTML = `${esc(short(id))} <small>${esc(shortPrice(id))}</small>`; mark(); } }
     if (act === 'pickFallback') { const id = await pickModel('chat', S.fallbackModel || '', { context: 'Fallback when a chat’s model fails' }); if (id) { S.fallbackModel = id; mark(); drawSettings(); } }
     if (act === 'clearFallback') { S.fallbackModel = ''; mark(); drawSettings(); }
+    if (act === 'openSafety') { ST.cat = 'safety'; drawSettings(); }
     if (act === 'pickReviewer') { const id = await pickModel('chat', S.reviewModel || '', { context: 'Reviewer: tests what was built' }); if (id) { S.reviewModel = id; mark(); drawSettings(); } }
     if (act === 'clearReviewer') { S.reviewModel = ''; mark(); drawSettings(); }
     if (act === 'pickHelper') { const id = await pickModel('chat', S.helperModel || '', { context: 'Helper: read-only jobs' }); if (id) { S.helperModel = id; mark(); drawSettings(); } }
@@ -3697,6 +3820,7 @@ function wireSettings() {
     for (const inp of document.querySelectorAll('#skillList input[data-skill]')) inp.onchange = mark;
   }).catch(() => {});
   drawProjectsPanel();
+  drawPermsPanel();
   drawKeysPanel();
   drawSetupPanel();
   drawEmbedPick();
@@ -3843,6 +3967,83 @@ async function drawProjectsPanel() {
   const nb = $('[data-proj-new]', box); if (nb) nb.onclick = async () => { await editProject(null); drawProjectsPanel(); };
   // When the project settings window closes, show its changes here.
   const pd = $('#projDlg'); if (pd && !pd.dataset.refreshesPanel) { pd.dataset.refreshesPanel = '1'; pd.addEventListener('close', () => { if ($('#settings').open) drawProjectsPanel(); }); }
+}
+
+// ---------- Settings → Safety & commands: the command rules (server/cmdpolicy.js), saved at once ----------
+const PERMS = { project: null, testShell: null };
+const RULE_EFFECT = { allow: 'Allow', ask: 'Ask me', deny: 'Deny' };
+async function drawPermsPanel() {
+  const box = $('#stPerms'); if (!box) return;
+  const projects = G.projects || [];
+  PERMS.project ??= G.chats?.find((c) => c.id === G.panes?.[0])?.projectId || projects[0]?.id || null;
+  const r = await fetch(`/api/permissions${PERMS.project ? `?project=${encodeURIComponent(PERMS.project)}` : ''}`).then((x) => x.json()).catch((e) => ({ error: e.message }));
+  const sm = $('#stStopMode');
+  if (sm && r.stop) { sm.textContent = r.stop.mode === 'jobs' ? '✓ Job Objects: every process, confirmed' : '⚠ Basic: process tree only'; sm.title = r.stop.error || ''; }
+  if (r.error) { box.innerHTML = `<div class="st-row-help">Couldn't load the rules: ${esc(r.error)}</div>`; return; }
+  const list = (scope, rules) => rules.length ? rules.map((x, i) => `<div class="pr-rule" data-scope="${scope}" data-i="${i}">
+      <span class="pr-eff" data-eff="${esc(x.effect)}">${RULE_EFFECT[x.effect] || esc(x.effect)}</span><code>${esc(x.match)}</code>
+      <span class="pr-by">${x.by === 'button' ? 'from a card' : 'typed by you'}</span>
+      <button type="button" class="pp-btn del" data-pr-del title="Remove this rule" aria-label="Remove rule">${ICO.trash}</button></div>`).join('')
+    : '<div class="st-row-help">No rules yet.</div>';
+  box.innerHTML = `<div class="pr">
+    <div class="pr-head"><label>Project <select data-pr-project>${projects.map((p) => `<option value="${esc(p.id)}" ${p.id === PERMS.project ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label></div>
+    <h5>This project</h5><div class="pr-list">${list('project', r.project)}</div>
+    <h5>Everywhere</h5><div class="pr-list">${list('everywhere', r.everywhere)}</div>
+    ${r.suggested?.length ? `<h5>Suggested for this project <small>from the files it has</small></h5><div class="pr-list">${r.suggested.map((s) => `<div class="pr-rule sug"><span class="pr-eff" data-eff="allow">Allow</span><code>${esc(s.match)}</code><span class="pr-by">${esc(s.why)}</span><button type="button" class="st-btn secondary sm" data-pr-sug="${esc(s.match)}">＋ Add</button></div>`).join('')}</div>` : ''}
+    <h5>Add a rule</h5>
+    <div class="pr-add">
+      <div class="seg" data-pr-eff>${Object.entries(RULE_EFFECT).map(([k, l], i) => `<button type="button" data-v="${k}" class="${i === 0 ? 'on' : ''}">${l}</button>`).join('')}</div>
+      <input type="text" data-pr-match placeholder="cargo build*  ·  * matches anything">
+      <div class="seg" data-pr-scope><button type="button" data-v="project" class="on">This project</button><button type="button" data-v="everywhere">Everywhere</button></div>
+      <button type="button" class="st-btn primary sm" data-pr-add>Add</button>
+    </div>
+    <h5>Test a command <small>what would happen, and why · nothing runs</small></h5>
+    <div class="pr-test"><input type="text" data-pr-line placeholder="Remove-Item dist -Recurse"><div class="seg" data-pr-mode><button type="button" data-v="strict" class="on">🔒 Strict</button><button type="button" data-v="yolo">⚡ YOLO</button></div><button type="button" class="st-btn secondary sm" data-pr-test>Test</button></div>
+    <div class="pr-result" aria-live="polite"></div>
+  </div>`;
+  drawAuditPanel();
+  const rules = { project: r.project, everywhere: r.everywhere };
+  const save = async (scope, next) => {
+    const res = await fetch('/api/permissions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scope, projectId: PERMS.project, rules: next }) }).then((x) => x.json()).catch((e) => ({ error: e.message }));
+    if (res.error) $('.pr-result', box).textContent = `The rule wasn't saved: ${res.error}`; else drawPermsPanel();
+  };
+  const segVal = (sel) => $(`${sel} button.on`, box)?.dataset.v;
+  for (const g of box.querySelectorAll('.pr-add .seg, .pr-test .seg')) for (const b of g.children) b.onclick = () => { for (const x of g.children) x.classList.toggle('on', x === b); };
+  $('[data-pr-project]', box).onchange = (e) => { PERMS.project = e.target.value; drawPermsPanel(); };
+  for (const b of box.querySelectorAll('[data-pr-del]')) b.onclick = () => { const row = b.closest('.pr-rule'); const scope = row.dataset.scope; save(scope, rules[scope].filter((_, i) => i !== Number(row.dataset.i))); };
+  for (const b of box.querySelectorAll('[data-pr-sug]')) b.onclick = () => save('project', [...rules.project, { effect: 'allow', match: b.dataset.prSug, by: 'user' }]);
+  $('[data-pr-add]', box).onclick = () => {
+    const match = $('[data-pr-match]', box).value.trim();
+    if (!match) return $('[data-pr-match]', box).focus();
+    const scope = segVal('[data-pr-scope]');
+    save(scope, [...rules[scope], { effect: segVal('[data-pr-eff]'), match, by: 'user' }]);
+  };
+  $('[data-pr-test]', box).onclick = async () => {
+    const line = $('[data-pr-line]', box).value.trim(); if (!line) return;
+    const out = $('.pr-result', box);
+    out.textContent = 'Checking…';
+    const t = await fetch('/api/permissions/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: PERMS.project, line, mode: segVal('[data-pr-mode]'), safety: ST.draft?.safety || G.settings.safety }) }).then((x) => x.json()).catch((e) => ({ error: e.message }));
+    if (t.error) { out.textContent = t.error; return; }
+    const head = t.verdict === 'allow' ? '✓ Runs without asking' : t.verdict === 'deny' ? '⛔ Blocked' : t.who === 'deciders' ? '⚖ The deciders vote' : '✋ Asks you';
+    out.innerHTML = `<div class="pr-verdict" data-v="${esc(t.verdict)}"><b>${head}</b>${t.why ? ` · ${esc(t.why)}` : ''}${t.hint ? `<div class="st-row-help">${esc(t.hint)}</div>` : ''}</div>`
+      + t.segments.map((s) => `<div class="sc-seg"><code>${esc(s.text)}</code><span class="sc-cls" data-cls="${esc(s.cls)}">${esc(CMD_CLASS[s.cls] || s.cls)}</span><span class="pr-by">${esc(s.verdict)}${s.who ? ` · ${esc(s.who)}` : ''} · ${esc(s.decidedBy || '')}</span>${(s.paths || []).map((p) => `<span class="sc-path" data-zone="${esc(p.zone)}">${esc(CMD_ZONE[p.zone] || p.zone)} · ${esc(clip(p.path, 90))}${p.why ? ` (${esc(p.why)})` : ''}</span>`).join('')}</div>`).join('');
+  };
+}
+
+// The audit log for the project picked in the rules card: newest first.
+const AUDIT_KIND = { ran: ['ran', 'ok'], background: ['background', 'ok'], approved: ['allowed', 'ok'], declined: ['declined', 'warn'], blocked: ['blocked', 'bad'], rule: ['rule saved', 'ok'], tripwire: ['tripwire', 'bad'] };
+async function drawAuditPanel() {
+  const box = $('#stAudit'); if (!box) return;
+  const rows = await fetch(`/api/audit?limit=150${PERMS.project ? `&project=${encodeURIComponent(PERMS.project)}` : ''}`).then((x) => x.json()).catch(() => []);
+  if (!rows.length) { box.innerHTML = '<div class="st-row-help">Nothing yet for this project.</div>'; return; }
+  const by = (b) => (!b ? '' : b === 'you' || b === 'user' ? 'you' : b === 'deciders' ? 'the deciders' : b.startsWith('rule:') ? `your rule (${b.slice(5)})` : b.startsWith('class:') ? `built-in: ${b.slice(6)}` : b);
+  box.innerHTML = `<div class="au">${rows.map((r) => {
+    const [label, tone] = AUDIT_KIND[r.kind] || [r.kind, ''];
+    const when = new Date(r.ts);
+    const detail = r.kind === 'ran' ? `exit ${r.code ?? '–'}${r.changed ? ` · ${r.changed} file${r.changed > 1 ? 's' : ''} changed` : ''}${r.stopped != null ? ` · stopped, ${r.stopped} left` : ''}${r.timedOut ? ' · hit the time limit' : ''}`
+      : r.kind === 'rule' ? `allow ${esc(r.rule)} · ${esc(r.scope)}` : r.kind === 'tripwire' ? `${r.count} files vanished` : esc(r.why || r.reason || '');
+    return `<div class="au-row"><time title="${esc(when.toLocaleString())}">${esc(when.toLocaleDateString())} ${esc(when.toLocaleTimeString())}</time><span class="au-kind" data-tone="${tone}">${label}</span><code title="${esc(r.command || r.rule || '')}">${esc(clip(r.command || r.rule || '', 140))}</code><span class="au-by">${esc(by(r.by))}${r.mode ? ` · ${r.mode === 'yolo' ? '⚡' : '🔒'}` : ''}</span><span class="au-detail">${detail}</span></div>`;
+  }).join('')}</div>`;
 }
 
 // ---------- setup check panel (server/setup-check.js) ----------
@@ -4202,6 +4403,7 @@ function syncLayout() {
 // ---------- start-up ----------
 async function boot() {
   G.cfg = await fetch('/api/config').then((r) => r.json());
+  loadScores();
   const d = G.cfg.defaults;
   const saved = load();
   G.settings = { voters: d.voters, gate: d.gate, maxSteps: d.maxSteps, approval: d.approval, budget: d.budget, model: d.chatModel || d.setups.C.model, reasoning: 'off', ...(saved?.settings || {}) };
