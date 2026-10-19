@@ -13,7 +13,8 @@ import pack, { isElectron, electronBinary, packager } from '../electron.js';
 import { packsIn, packNotes } from '../index.js';
 import fs from 'node:fs';
 import { startBackground, stopBackground, getBackground, jobOutput, listBackground } from '../../bgjobs.js';
-import { openTab } from '../../browser.js';
+import { openTab, startedWithDevtoolsPort } from '../../browser.js';
+import { decide } from '../../cmdpolicy.js';
 import { debugAttach, debugBreak, debugMove, debugEval, debugStop } from '../../debugger.js';
 import { runAgent } from '../../agent.js';
 import { saveProject, forgetProject } from '../../store.js';
@@ -83,6 +84,7 @@ test('electron: a project is found from its package.json, with its binary and pa
   assert.equal(electronBinary(plain), null);
   const forge = project('electron-forge', { 'package.json': JSON.stringify({ dependencies: { electron: '30' }, devDependencies: { '@electron-forge/cli': '7' } }) });
   assert.equal(packager(forge).cmd, 'npx electron-forge make');
+  assert.match(pack.notes(new Set(), forge), /npx electron-forge start -- --remote-debugging-port=<port>/);
   const builder = project('electron-builder', { 'package.json': JSON.stringify({ devDependencies: { electron: '30', 'electron-builder': '24' }, build: { appId: 'x' } }) });
   assert.equal(packager(builder).tool, 'electron-builder');
 });
@@ -93,6 +95,24 @@ test('electron: the notes say how to start, drive, debug and package it', () => 
   for (const re of [/src\/main\.js/, /--remote-debugging-port=/, /cdp:<port>/, /job_output/, /ELECTRON_RUN_AS_NODE/, /--inspect=/, /debug attach/, /npx electron-builder/, /npm install/]) assert.match(n, re);
   assert.doesNotMatch(n, /\.(bat|cmd|ps1)\b/, 'commands run directly, never through wrapper scripts');
   assert.match(packNotes(dir, [{ id: 'node', found: true }]), /- Electron: /);
+});
+
+test('electron: the start commands the notes give are checked like builds, a script that launches Electron is not', async () => {
+  const dir = project('electron-rules', {
+    'package.json': JSON.stringify({ main: 'main.js', scripts: { start: 'electron .', dev: 'node scripts/dev.js' }, devDependencies: { electron: '30' } }),
+    'scripts/dev.js': "require('child_process').spawn(require('electron'), ['.'], { stdio: 'inherit' });\n",
+  });
+  const judge = (line, rules = []) => decide(line, { shell: 'powershell', root: dir, cwd: dir, env: process.env, rules, mode: 'strict' });
+  for (const line of ['npx electron . --remote-debugging-port=9400', 'npx electron . --inspect=9401 --remote-debugging-port=9400', 'npm start -- --remote-debugging-port=9400', 'npx electron-forge start -- --remote-debugging-port=9400']) {
+    const d = await judge(line);
+    assert.equal(d.verdict, 'ask', line);
+    assert.deepEqual(d.segments.map((s) => s.cls), ['build'], line);
+  }
+  assert.equal((await judge('npx electron . --remote-debugging-port=9400', [{ effect: 'allow', match: 'npx electron *', by: 'user' }])).verdict, 'allow');
+  assert.match((await judge('npm run dev')).why, /runs other programs, so QuorX can.t check/);
+  // QuorX attaches only to a port named in the job's own command.
+  assert.equal(startedWithDevtoolsPort('npx electron . --remote-debugging-port=9400', 9400), true);
+  assert.equal(startedWithDevtoolsPort('npm run dev', 9400), false);
 });
 
 test('electron: attach only reaches inspectors of the agent\'s own jobs', async () => {
