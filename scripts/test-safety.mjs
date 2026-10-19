@@ -239,7 +239,9 @@ test('packs: every pack loads, and every toolchain, check and debugger is still 
   for (const id of ['dotnet', 'go', 'rust', 'ts', ...(WIN ? ['godot', 'unity', 'wix'] : ['godot', 'unity'])]) assert.ok(checks.includes(id), id);
   for (const f of ['src/main.rs', 'App.xaml', 'Program.cs', 'cmd/main.go', 'src/app.tsx']) assert.ok(isCheckedFile(f), f);
   assert.ok(!isCheckedFile('README.md'));
-  for (const re of [/^Node \(\.js, \.mjs, \.cjs\)/, /Python \(debugpy\) \(\.py\)/, /Godot \(GDScript\) \(\.gd, \.tscn\)/]) assert.match(debugLanguages(), re);
+  assert.match(debugLanguages(), /^Node \(\.js, \.mjs, \.cjs\), /);
+  assert.match(debugLanguages(), /Python \(debugpy\) \(\.py\)/);
+  assert.match(debugLanguages(), /Godot \(GDScript\) \(\.gd, \.tscn\)/);
   assert.equal(debugGateLine('app.py', ['in put.txt']), `${WIN ? 'py -3' : 'python3'} app.py "in put.txt"`);
   assert.equal(debugGateLine('app.js', ['x']), 'node app.js x');
 });

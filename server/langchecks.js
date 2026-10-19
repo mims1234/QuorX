@@ -54,7 +54,8 @@ export async function languageChecks(root, changed, { have = [], signal, timeout
       const errorLine = lang.errors || /\berror\b|: error|error\[|\bE\d{4}\b|\.go:\d+:\d+:/i;
       const lines = lang.parse ? lang.parse(r.out, { dir, files: here }) : r.out.split(/\r?\n/).map((l) => l.trim()).filter((l) => errorLine.test(l));
       const hits = lines.filter((l) => [...mine].some((b) => l.toLowerCase().includes(b)));
-      for (const l of hits.slice(0, 8)) problems.push(`${lang.id}: ${l.slice(0, 300)}`);
+      // A pack may rewrite its error lines (shorter paths, one line per error) before the agent reads them.
+      for (const l of [...new Set(hits.map((h) => (lang.tidy ? lang.tidy(h, dir) : h)))].slice(0, 8)) problems.push(`${lang.id}: ${l.slice(0, 300)}`);
     }
   }
   return { problems, ran };
