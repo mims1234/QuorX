@@ -425,7 +425,8 @@ const CODE_TOOLS = [
     wait_s: { type: 'integer', minimum: 0, maximum: 30 }, cols: { type: 'integer', minimum: 40, maximum: 200 }, rows: { type: 'integer', minimum: 10, maximum: 60 }, cwd: { type: 'string' } } } } },
   { type: 'function', function: { name: 'debug', description: `A debugger for ${debugLanguages()} programs, for bugs that reading the trace and adding prints haven't found. start runs a file paused (args optional); break sets a breakpoint at file:line (condition optional); continue runs to the next breakpoint; step / into / out move one line; state shows where it is, the stack and the local variables; eval evaluates an expression where it stopped; stop ends it. Python needs debugpy (pip install debugpy).`, parameters: { type: 'object', required: ['action'], properties: {
     action: { type: 'string', enum: ['start', 'break', 'continue', 'step', 'into', 'out', 'state', 'eval', 'stop'] }, id: { type: 'string', description: 'The session id from start, e.g. "d1"' },
-    file: { type: 'string' }, args: { type: 'array', items: { type: 'string' } }, line: { type: 'integer' }, condition: { type: 'string' }, expr: { type: 'string' }, frame: { type: 'integer' } } } } },
+    file: { type: 'string' }, args: { type: 'array', items: { type: 'string' } }, line: { type: 'integer' }, condition: { type: 'string' }, expr: { type: 'string' }, frame: { type: 'integer' },
+    program: { type: 'string', description: 'start, for Go, C, C++ and Rust: the built program to run, only when QuorX cannot find it (it finds Go packages, Cargo binaries and CMake targets itself)' } } } } },
   { type: 'function', function: { name: 'android', description: 'Test an Android app on an emulator (adb). devices: what is connected. install {apk}: an APK from the project. launch {package}. read: the screen as text; interactive controls are numbered [n] with their position @x,y. tap {ref} or {x, y}. type {text}: into the focused field. key {key}: back, home, enter, tab, delete, up/down/left/right. screenshot: a picture for the user. log {package}: recent errors and the app\'s own log lines. Emulators only, unless the user allows phones.', parameters: { type: 'object', required: ['action'], properties: {
     action: { type: 'string', enum: ['devices', 'install', 'launch', 'read', 'tap', 'type', 'key', 'screenshot', 'log'] }, device: { type: 'string' }, apk: { type: 'string' }, package: { type: 'string' },
     ref: { type: 'integer' }, x: { type: 'integer' }, y: { type: 'integer' }, text: { type: 'string' }, key: { type: 'string' } } } } },
@@ -2206,15 +2207,17 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
         const file = String(args.file || '');
         safePath(root, file);
         const line = `debug ${file}`;
-        const d = await decideCommand(debugGateLine(file, (args.args || []).map(String)), { shell: 'cmd', root, cwd: root, env: childEnv(), rules: commandRules(), mode: S.approval, yolo: { external: SF.yoloExternal, opaque: SF.yoloOpaque, outside: SF.yoloOutside } });
+        const program = args.program ? String(args.program) : undefined;
+        if (program) safePath(root, program);
+        const d = await decideCommand(debugGateLine(file, (args.args || []).map(String), { program, cwd: root }), { shell: 'cmd', root, cwd: root, env: childEnv(), rules: commandRules(), mode: S.approval, yolo: { external: SF.yoloExternal, opaque: SF.yoloOpaque, outside: SF.yoloOutside } });
         const g = await gateCommand(d, line, 'cmd');
         if (!g.ok) return g.text;
         run.debugOn = true;
         const logRel = `${SCRATCH}/logs/${runId}-debug-${(run.cmdSeq = (run.cmdSeq || 0) + 1)}.log`;
-        const s = await debugStart({ projectId, cwd: root, file, args: (args.args || []).map(String), logTo: path.join(root, logRel), logRel, term: { projectId, source: 'agent', chatId: req.chatId } });
+        const s = await debugStart({ projectId, cwd: root, file, args: (args.args || []).map(String), program, logTo: path.join(root, logRel), logRel, term: { projectId, source: 'agent', chatId: req.chatId } });
         aud({ kind: 'background', command: line, by: g.by, job: s.job, why: 'debugger' });
         emit({ t: 'debug', id: s.id, action: 'start', file, at: at() });
-        return `Debug session ${s.id} (${s.kind}) started: ${file} is paused before its first line. Set breakpoints with break, then continue. Its output goes to ${logRel}.`;
+        return `Debug session ${s.id} (${s.kind}) started: ${file} is paused before its first line. Set breakpoints with break, then continue. Its output goes to ${logRel}.${s.note ? ` ${s.note}` : ''}`;
       }
       let out;
       if (act === 'break') out = await debugBreak(args.id, String(args.file || ''), Number(args.line), args.condition);
