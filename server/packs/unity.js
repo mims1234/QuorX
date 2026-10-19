@@ -69,7 +69,7 @@ const openInEditor = (dir) => {
 
 // The batchmode compile, when it can run: the project's editor version is installed, the project was imported once
 // (Library/ exists: a first import can take many minutes, so it isn't done before a reply), and it isn't open.
-function checkLine({ dir }) {
+function checkLine(dir) {
   const ed = editorFor(dir);
   if (!ed.exe || !fs.existsSync(path.join(dir, 'Library')) || openInEditor(dir)) return null;
   return `${q(ed.exe)} -batchmode -nographics -quit -projectPath ${q(dir)} -logFile -`;
