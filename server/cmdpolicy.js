@@ -2,6 +2,7 @@
 //   1. Split the line into commands. PowerShell lines go through PowerShell's own parser (jobhost.ps1 "parse");
 //      cmd, bash and zsh lines through small, conservative tokenizers. Anything they can't read is "opaque".
 //   2. Give each command a class (read, write, build, install, external, opaque, delete, discard, never, unknown).
+//      A script it runs from the project is read first: one that runs other programs is opaque (see "scripts").
 //   3. Resolve every path a delete or write touches to its real target (~, $env:X, %X%, junctions, 8.3 names).
 //      Drive roots, your profile and its folders, system folders (Windows, macOS and Linux ones), other people's
 //      profiles, folders above the project, the project folder itself, .git and QuorX's own files are blocked outright.
@@ -153,7 +154,7 @@ function splitCmd(line) {
 
 // Strips wrapper programs (env, timeout, nohup, xcrun …) off the front of a command's words, so the command they
 // run is the one judged. Words are { text, static }. Returns { words, why } (why: the wrapper turns text into a command).
-function unwrap(words) {
+function unwrapWords(words) {
   for (let n = 0; n < 8 && words.length && words[0].static !== false; n++) {
     const p = progName(words[0].text), w = WRAPPERS[p];
     if (!w) break;
@@ -193,7 +194,7 @@ function splitBash(line, zsh = false) {
       break;
     }
     while (toks.length && !toks[toks.length - 1].quoted && ['}', ']]'].includes(toks[toks.length - 1].text)) toks.pop();
-    const u = unwrap(toks);
+    const u = unwrapWords(toks);
     const s = segOf(u.words, redirects, text);
     if (s && u.why) s.opaque = u.why;
     if (s && !u.why && toks[0] && !toks[0].quoted && BLOCK_OPAQUE.has(toks[0].text)) s.opaque = `a ${toks[0].text} block runs commands with values QuorX can't know beforehand`;
@@ -262,7 +263,7 @@ async function splitPowerShell(line) {
     if (c.invocation && c.invocation !== 'Unknown' && !c.nameStatic) s.dynamicProgram = true;
     return s;
   });
-  return { segs, opaque: r.members.length ? `it calls .NET directly (${r.members[0].slice(0, 60)})` : null };
+  return { segs, opaque: r.members.length ? `it calls .NET directly (${r.members[0].slice(0, 60)})` : null, members: r.members };
 }
 
 // ---------- paths ----------
@@ -377,7 +378,7 @@ function sudoInner(s) {
     if (a[i].text === '--') { i++; break; }
     if (/^-[ughpCDrtUT]$/.test(a[i].text)) i++;
   }
-  return i < a.length ? segOf(unwrap(a.slice(i)).words, s.redirects, s.text) : null;
+  return i < a.length ? segOf(unwrapWords(a.slice(i)).words, s.redirects, s.text) : null;
 }
 // Programs that are never allowed, used only to read (systemctl status, crontab -l, diskutil list).
 function neverButRead(p, words) {
@@ -425,7 +426,7 @@ function classify(s, shell) {
   }
   // command -v and xcrun --find only find a program; with a command after them, that command is judged.
   if (p === 'command' || p === 'xcrun') {
-    const u = unwrap([{ text: s.rawProgram, static: true }, ...s.args]);
+    const u = unwrapWords([{ text: s.rawProgram, static: true }, ...s.args]);
     if (u.words.length === s.args.length + 1) return { cls: 'read', why: '' };
     return classify(segOf(u.words, s.redirects, s.text), shell);
   }
@@ -552,6 +553,317 @@ function pathsOf(s, c, ctx) {
   return out;
 }
 
+// ---------- scripts that run other programs ----------
+// A script hides what it runs: "node run.mjs rustup toolchain install …" looks like "node runs a project script".
+// So before a script inside the project runs, QuorX reads it (and the local files it loads). One that launches
+// programs (child_process, subprocess, Start-Process, & $x, cmd /c…) or builds code while running is opaque, and when
+// it reads its own arguments, those arguments are judged as a command of their own. PowerShell, batch and shell
+// scripts are split into their commands: the ones that change the system, install for the whole computer, reach
+// outside, throw work away or touch blocked paths become commands of the line.
+const SCRIPT_MAX = 1024 * 1024;
+const langOf = (f) => { const e = low(path.extname(String(f))); return /^\.(m?js|cjs|m?ts|cts)$/.test(e) ? 'js' : /^\.pyw?$/.test(e) ? 'py' : /^\.psm?1$/.test(e) ? 'ps' : /^\.(sh|bash)$/.test(e) ? 'sh' : /^\.(bat|cmd)$/.test(e) ? 'bat' : null; };
+const RUNNERS = { node: 'js', bun: 'js', deno: 'js', tsx: 'js', 'ts-node': 'js', python: 'py', python3: 'py', py: 'py', pythonw: 'py', bash: 'sh', sh: 'sh', zsh: 'sh', powershell: 'ps', pwsh: 'ps', cmd: 'bat' };
+const RUNNER_VALUED = new Set(['-r', '--require', '--import', '--loader', '--experimental-loader', '--env-file', '-C', '--conditions', '--title', '-W', '-X']);
+const SHELL_OF = { ps: 'powershell', sh: 'bash', bat: 'cmd' };
+const LAUNCH = {
+  js: {
+    programs: /['"`](?:node:)?(?:child_process|execa|cross-spawn|shelljs|zx(?:\/globals)?|node-pty|tinyexec|nano-spawn|sudo-prompt|@vscode\/sudo-prompt)['"`]|\bBun\s*\.\s*(?:spawn|spawnSync|\$)|\bDeno\s*\.\s*(?:Command|run)\b|\bprocess\s*\.\s*_?(?:linkedB|b)inding\s*\(\s*['"`](?:spawn_sync|process_wrap)/,
+    code: /(?<![\w$.])eval\s*\(|\bnew\s+Function\s*\(|['"`](?:node:)?vm['"`]/,
+    argv: /\bprocess\s*\.\s*argv\b|\bDeno\s*\.\s*args\b|\bBun\s*\.\s*argv\b/,
+  },
+  py: {
+    programs: /\b(?:subprocess|pexpect|plumbum|ctypes|win32api|win32process|win32com|pywinauto)\b|\bos\s*\.\s*(?:system|popen|exec\w*|spawn\w*|posix_spawn\w*|startfile|fork\w*)\s*\(|\bfrom\s+os\s+import\s+[^\n]*\b(?:system|popen|exec\w*|spawn\w*|posix_spawn\w*|startfile)\b|\bcreate_subprocess_(?:exec|shell)\b|\bpty\s*\.\s*spawn\b|^\s*(?:import|from)\s+sh\b/m,
+    code: /(?<![\w.])(?:exec|eval|compile|__import__)\s*\(|\bimportlib\b|\brunpy\b/,
+    argv: /\bsys\s*\.\s*argv\b|\bfrom\s+sys\s+import\s+[^\n]*\bargv\b/,
+  },
+  ps: { argv: /\$args\b|\bparam\s*\(/i },
+  sh: { argv: /\$\{?[@*1-9]/ },
+  bat: { argv: /%~?[1-9*]/ },
+};
+// Commands that run whatever they are given: inside a script, each one makes the script opaque.
+const LAUNCHERS = new Set(['start-process', 'saps', 'start', 'invoke-expression', 'iex', 'invoke-command', 'icm', 'start-job', 'start-threadjob',
+  'invoke-item', 'ii', 'cmd', 'powershell', 'pwsh', 'bash', 'sh', 'zsh', 'wsl', 'wscript', 'cscript', 'mshta', 'rundll32', 'eval', 'exec', 'source',
+  '.', 'xargs', 'forfiles', 'for', 'invoke-wmimethod', 'invoke-cimmethod', 'set-alias', 'new-alias', 'sal', 'nal', 'runas', 'explorer', 'cross-env-shell']);
+// How deep QuorX follows scripts that run scripts; deeper than this, the script counts as one it can't read.
+const SCRIPT_DEPTH = 4;
+// .NET calls that start a program or run text as code.
+const LAUNCH_MEMBERS = /Diagnostics\.Process\]\s*::\s*Start|ProcessStartInfo|\[scriptblock\]\s*::\s*Create|\.(?:ShellExecute|InvokeScript|AddScript)\s*\(|InvokeCommand\s*\.\s*(?:InvokeScript|NewScriptBlock)/i;
+const isFile = (f) => { try { return fs.statSync(f).isFile(); } catch { return false; } };
+
+/** The script a command runs, if it runs one: { file: arg, rest: [args after it], lang }. */
+function scriptOf(s) {
+  const raw = String(s.rawProgram || '').replace(/^["']|["']$/g, '');
+  if (!s.dynamicProgram && langOf(raw)) return { file: { text: raw, static: true }, rest: s.args, lang: langOf(raw) };
+  const a = s.args, lang = RUNNERS[s.program];
+  if (!lang) return null;
+  const at = (i) => (a[i] ? { file: a[i], rest: a.slice(i + 1), lang: langOf(a[i].text) || lang } : null);
+  if (s.program === 'powershell' || s.program === 'pwsh') { const i = a.findIndex((x) => /^-f(ile)?$/i.test(x.text)); return i >= 0 ? at(i + 1) : null; }
+  if (s.program === 'cmd') { const i = a.findIndex((x) => /^\/[ck]$/i.test(x.text)); return i >= 0 && langOf(a[i + 1]?.text) === 'bat' ? at(i + 1) : null; }
+  for (let i = 0; i < a.length; i++) {
+    const t = a[i].text;
+    if (RUNNER_VALUED.has(t)) { i++; continue; }
+    if (/^-/.test(t)) { if (['-m', '-c', '-e', '-p', '--eval', '--print', '-lc'].includes(low(t))) return null; continue; }
+    if ((s.program === 'deno' || s.program === 'bun') && ['run', 'test'].includes(low(t))) continue;
+    return at(i);
+  }
+  return null;
+}
+
+// Shell keywords in front of a command (then cargo build), and batch's if/call prefixes, are not the program.
+function unwrap(s, lang) {
+  for (let n = 0; s && n < 8; n++) {
+    let a = null;
+    if (lang === 'sh' && ['then', 'else', 'do', 'if', 'elif', 'while', 'until', '!', '{', 'time', 'nohup'].includes(s.program)) a = s.args;
+    else if (lang === 'bat' && s.program === 'else') a = s.args;
+    else if (s.program === 'cross-env') { a = s.args.slice(); while (a.length && /^[A-Za-z_]\w*=/.test(a[0].text)) a.shift(); }
+    else if (s.program === 'npx') { a = s.args.slice(); while (a.length && /^-/.test(a[0].text)) a.shift(); }
+    else if (lang === 'bat' && s.program === 'call') { if (/^:/.test(s.args[0]?.text || '')) return null; a = s.args; }
+    else if (lang === 'bat' && s.program === 'if') {
+      a = s.args.slice();
+      if (low(a[0]?.text) === '/i') a.shift();
+      if (low(a[0]?.text) === 'not') a.shift();
+      if (['exist', 'defined', 'errorlevel', 'cmdextversion'].includes(low(a[0]?.text))) a = a.slice(2);
+      else if (['equ', 'neq', 'lss', 'leq', 'gtr', 'geq'].includes(low(a[1]?.text))) a = a.slice(3);
+      else a = a.slice(1);
+    } else return s;
+    if (!a.length) return null;
+    const [p, ...rest] = a;
+    s = { ...s, rawProgram: p.text, program: progName(p.text), dynamicProgram: !p.static, args: rest };
+  }
+  return s;
+}
+
+// The commands of a PowerShell, shell or batch script: { segs, members, why } (why: it can't be read).
+async function scriptCommands(text, lang) {
+  if (lang === 'ps') { const sp = await splitPowerShell(text); return sp.members ? { segs: sp.segs, members: sp.members } : { segs: [], members: [], why: sp.opaque }; }
+  if (lang === 'sh') { const sp = splitBash(text.replace(/^\s*#.*$/gm, '')); return { segs: sp.segs.map((s) => unwrap(s, lang)).filter(Boolean), members: [], why: sp.opaque }; }
+  const segs = []; let why = null;
+  for (const l of text.split(/\r?\n/).map((x) => x.trim().replace(/^@/, ''))) {
+    if (!l || /^(rem\b|::|:)/i.test(l) || /^echo\s+(off|on)\s*$/i.test(l)) continue;
+    const sp = splitCmd(l); why ||= sp.opaque;
+    for (const s0 of sp.segs) {
+      const s = unwrap(s0, lang);
+      if (!s) continue;
+      if (/%~?[\d*]/.test(s.rawProgram)) s.dynamicProgram = true;
+      for (const a of s.args) if (/%~?[\d*]/.test(a.text)) a.static = false;
+      segs.push(s);
+    }
+  }
+  return { segs, members: [], why };
+}
+
+// Local modules a JS or Python script loads: a launcher moved into a helper file is still found.
+function localModules(text, abs, lang) {
+  const dir = path.dirname(abs), out = [];
+  if (lang === 'js') {
+    for (const m of text.matchAll(/(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)['"`](\.{1,2}\/[^'"`]+)['"`]/g)) {
+      const p = path.resolve(dir, m[1]);
+      const hit = [p, ...['.js', '.mjs', '.cjs', '.ts', '.mts'].map((x) => p + x), path.join(p, 'index.js')].find(isFile);
+      if (hit) out.push(hit);
+    }
+  } else if (lang === 'py') {
+    for (const m of text.matchAll(/^\s*(?:from\s+\.?([A-Za-z_]\w*)[\w.]*\s+import\b|import\s+([A-Za-z_][\w., ]*))/gm)) {
+      for (const name of m[1] ? [m[1]] : m[2].split(',').map((x) => x.trim().split(/[\s.]/)[0])) {
+        const hit = [path.join(dir, `${name}.py`), path.join(dir, name, '__init__.py')].find(isFile);
+        if (hit) out.push(hit);
+      }
+    }
+  }
+  return out.slice(0, 20);
+}
+
+// Reads one script: { launch: why it is opaque, or null; argv: it reads its own arguments; extra: commands to judge }.
+// null when there is no such file.
+async function readScript(abs, lang, c, depth, seen) {
+  const out = { launch: null, argv: false, extra: [] };
+  if (seen.has(low(abs)) || seen.size > 20) return out;
+  seen.add(low(abs));
+  let st; try { st = fs.statSync(abs); } catch { return null; }
+  if (st.isDirectory()) { const main = { js: 'index.js', py: '__main__.py' }[lang]; return main ? readScript(path.join(abs, main), lang, c, depth, seen) : null; }
+  const rel = path.relative(c.root, abs).replaceAll('\\', '/');
+  if (st.size > SCRIPT_MAX) return { ...out, launch: `this script (${rel}) is too big for QuorX to read first` };
+  const text = fs.readFileSync(abs, 'utf8');
+  const runs = `this script (${rel}) runs other programs, so QuorX can’t check what it runs`;
+  out.argv = LAUNCH[lang].argv.test(text);
+  if (lang === 'js' || lang === 'py') {
+    if (LAUNCH[lang].programs.test(text)) out.launch = runs;
+    else if (LAUNCH[lang].code.test(text)) out.launch = `this script (${rel}) runs code it builds while running, so QuorX can’t check what it runs`;
+    for (const f of localModules(text, abs, lang)) {
+      const r = await readScript(f, lang, c, depth, seen);
+      if (r) { out.launch ||= r.launch; out.argv ||= r.argv; }
+    }
+    return out;
+  }
+  const sc = await scriptCommands(text, lang);
+  if (sc.why) return { ...out, launch: `QuorX can’t read this script (${rel}): ${sc.why}` };
+  if (sc.members.some((m) => LAUNCH_MEMBERS.test(m))) out.launch = runs;
+  await judgeCommands(sc.segs, lang, { ...c }, rel, depth, out);
+  return out;
+}
+
+// The commands of a script (or a package.json script), one by one: a launcher makes it opaque, a script it runs is
+// read in turn, and the risky ones go to out.extra to be judged with the line.
+async function judgeCommands(segs, lang, ic, rel, depth, out) {
+  const runs = `this script (${rel}) runs other programs, so QuorX can’t check what it runs`;
+  for (const s of segs) {
+    trackCd(s, ic);
+    // concurrently "tsc -w" "npm:serve" and run-s / run-p / npm-run-all a b: each argument is a command or a script name.
+    if (['concurrently', 'run-s', 'run-p', 'npm-run-all'].includes(s.program)) {
+      const parts = [];
+      for (const a of s.args.filter((x) => !x.param && !/^-/.test(x.text))) {
+        const npmName = s.program === 'concurrently' ? a.text.match(/^(?:npm|yarn|pnpm|bun):(.+)$/)?.[1] : a.text;
+        if (npmName != null && /[*?{]/.test(npmName)) { out.launch ||= runs; continue; }
+        if (npmName != null) parts.push({ text: `npm run ${npmName}`, rawProgram: 'npm', program: 'npm', dynamicProgram: !a.static, args: [{ text: 'run', static: true }, { text: npmName, static: a.static }], redirects: [] });
+        else { const sc = await scriptCommands(a.text, lang); if (sc.why || !a.static) out.launch ||= runs; else parts.push(...sc.segs); }
+      }
+      await judgeCommands(parts, lang, ic, rel, depth, out);
+      continue;
+    }
+    if (scriptOf(s) || pkgRunOf(s)) {
+      // A script this one runs is read too, a few levels down; deeper than that it can't be checked.
+      if (depth + 1 >= SCRIPT_DEPTH) { out.launch ||= `${rel} runs scripts nested too deeply for QuorX to read them all`; continue; }
+      const r = await inspectRun({ ...s, depth: depth + 1 }, ic, []);
+      if (r) { out.launch ||= r.opaque; out.extra.push(...r.extra); }
+      continue;
+    }
+    if (s.dynamicProgram || s.opaque || LAUNCHERS.has(s.program) || (s.program === 'new-object' && hasArg(s, '-comobject'))) { out.launch ||= runs; continue; }
+    const k = classify(s, SHELL_OF[lang]);
+    const paths = pathsOf(s, k, ic);
+    if (k.cls === 'never' || (k.cls === 'install' && k.global) || ['external', 'discard'].includes(k.cls) || KILLERS.has(s.program) || paths.some((p) => p.zone === 'blocked' || p.zone === 'protected')) {
+      out.extra.push({ ...s, ctx: { ...ic }, shell: SHELL_OF[lang], via: rel, viaWhy: `inside ${rel}`, depth: depth + 1 });
+    }
+  }
+}
+
+// ---------- package.json scripts ----------
+// npm run x, npm test, yarn x, pnpm x, bun run x run a command line from package.json "scripts" (with its pre and post
+// hooks); a bare npm install or npm ci runs the install and prepare hooks. Those lines are read like a script's.
+const PKG_BUILTIN = {
+  yarn: new Set(['add', 'install', 'remove', 'upgrade', 'up', 'info', 'why', 'list', 'init', 'config', 'cache', 'global', 'link', 'unlink', 'publish', 'login',
+    'logout', 'version', 'versions', 'dlx', 'exec', 'workspaces', 'workspace', 'node', 'set', 'plugin', 'constraints', 'npm', 'pack', 'dedupe', 'explain',
+    'rebuild', 'bin', 'audit', 'outdated', 'owner', 'tag', 'team', 'policies', 'licenses', 'import', 'check', 'autoclean', 'create', 'help', 'upgrade-interactive']),
+  pnpm: new Set(['add', 'install', 'i', 'remove', 'rm', 'uninstall', 'update', 'up', 'list', 'ls', 'outdated', 'why', 'link', 'unlink', 'publish', 'pack',
+    'exec', 'dlx', 'create', 'init', 'store', 'config', 'env', 'setup', 'audit', 'licenses', 'import', 'rebuild', 'prune', 'fetch', 'deploy', 'patch',
+    'patch-commit', 'root', 'bin', 'server', 'doctor', 'help', 'dedupe', 'install-test', 'it', 'add-test', 'self-update']),
+  bun: new Set(['test', 'install', 'i', 'add', 'a', 'remove', 'rm', 'update', 'x', 'build', 'create', 'init', 'upgrade', 'pm', 'link', 'unlink', 'publish',
+    'outdated', 'patch', 'repl', 'exec', 'audit', 'info', 'why']),
+};
+const LIFECYCLE = ['preinstall', 'install', 'postinstall', 'preprepare', 'prepare', 'postprepare'];
+const PKG_DIR = new Set(['--prefix', '-C', '--dir', '--cwd']);
+const PKG_MULTI = new Set(['-w', '--workspace', '--filter', '-F', '--workspaces', '-ws', '-r', '--recursive', '--include-workspace-root']);
+const PKG_VALUED = new Set(['-w', '--workspace', '--filter', '-F', '--loglevel', '--registry', '--script-shell']);
+
+/** The package.json script a command runs: { pm, kind: 'run'|'install', name, extra: [args after the name], dir, multi } */
+function pkgRunOf(s) {
+  if (!['npm', 'pnpm', 'yarn', 'bun'].includes(s.program) || s.dynamicProgram) return null;
+  const pm = s.program, pos = []; let dir = null, multi = false, shell = false;
+  for (let i = 0; i < s.args.length; i++) {
+    const t = s.args[i].text, [flag, val] = t.split(/=(.*)/s);
+    if (/^-/.test(t) && pos.length) break; // flags after the script name belong to the script
+    if (PKG_DIR.has(flag)) { dir = val ?? s.args[++i]; continue; }
+    if (PKG_MULTI.has(flag)) multi = true;
+    if (flag === '--script-shell') shell = true;
+    if (PKG_VALUED.has(flag) && val == null) { i++; continue; }
+    if (/^-/.test(t)) continue;
+    pos.push({ text: t, i });
+  }
+  const w = pos.map((p) => low(p.text));
+  const at = (k, name) => ({ pm, kind: 'run', name, extra: s.args.slice(pos[k].i + 1).filter((a, j) => j || a.text !== '--'), dir, multi, shell });
+  const install = { pm, kind: 'install', name: 'install', extra: [], dir, multi, shell };
+  if (['run', 'run-script', 'rum', 'urn'].includes(w[0]) && w[1]) return { ...at(1, pos[1].text), ifScript: pm !== 'npm' }; // bun run x.ts runs a file
+  if (pm === 'npm' && ['test', 't', 'tst', 'start', 'stop', 'restart'].includes(w[0])) return at(0, { t: 'test', tst: 'test' }[w[0]] || w[0]);
+  if (pm === 'npm' && ['install', 'i', 'in', 'isntall', 'ci', 'clean-install'].includes(w[0]) && w.length === 1) return install;
+  if ((pm === 'yarn' && (!w.length || (w[0] === 'install' && w.length === 1))) || (pm === 'pnpm' && ['install', 'i'].includes(w[0]) && w.length === 1)) return install;
+  if (pm !== 'npm' && pm !== 'bun' && ['test', 't', 'start'].includes(w[0])) return at(0, w[0] === 't' ? 'test' : w[0]);
+  if (pm !== 'npm' && w[0] && !PKG_BUILTIN[pm].has(w[0])) return { ...at(0, pos[0].text), ifScript: true };
+  return null;
+}
+
+// The lines a package.json script run executes, from its scripts: [[key, line]].
+function pkgLines(run, scripts, pkgDir) {
+  const has = (k) => typeof scripts[k] === 'string';
+  const hooks = (n) => [`pre${n}`, n, `post${n}`].filter(has).map((k) => [k, scripts[k]]);
+  if (run.kind === 'install') return LIFECYCLE.filter(has).map((k) => [k, scripts[k]]);
+  if (run.name === 'restart' && !has('restart')) return [...hooks('stop'), ...hooks('start')];
+  if (run.name === 'start' && !has('start') && isFile(path.join(pkgDir, 'server.js'))) return [['start', 'node server.js']];
+  if (!has(run.name)) return [];
+  const extra = run.extra.map((a) => a.text).join(' ');
+  return hooks(run.name).map(([k, l]) => [k, k === run.name && extra ? `${l} ${extra}` : l]);
+}
+
+async function inspectPkg(s, run, c, written) {
+  if (run.multi || run.shell) return { opaque: 'it runs package scripts QuorX can’t find before it runs (other workspaces or another shell)', extra: [] };
+  let dir = c.cwd;
+  if (run.dir) {
+    const e = expandVars(typeof run.dir === 'string' ? run.dir : run.dir.text, c.env);
+    if (e.unresolved || (typeof run.dir !== 'string' && run.dir.static === false) || (!path.isAbsolute(e.path) && c.cwdUnknown)) return { opaque: 'QuorX can’t tell which package.json it runs, so it can’t read it first', extra: [] };
+    dir = path.resolve(c.cwd, e.path);
+  } else if (c.cwdUnknown) return { opaque: 'QuorX can’t tell which package.json it runs, so it can’t read it first', extra: [] };
+  // The nearest package.json at or above the folder, inside the project.
+  let pkg = null;
+  for (let d = dir; same(d, c.root) || inside(d, c.root); d = path.dirname(d)) {
+    const f = path.join(d, 'package.json');
+    if (written.some((w) => same(w, f))) return { opaque: `this command writes ${path.relative(c.root, f).replaceAll('\\', '/')} and then runs its scripts, so QuorX can’t read them first`, extra: [] };
+    if (isFile(f)) { pkg = f; break; }
+    if (same(d, c.root)) break;
+  }
+  if (!pkg) return null;
+  let scripts;
+  try { if (fs.statSync(pkg).size > SCRIPT_MAX) throw new Error('too big'); scripts = JSON.parse(fs.readFileSync(pkg, 'utf8')).scripts || {}; } catch { return null; }
+  if (run.ifScript && typeof scripts[run.name] !== 'string') return null;
+  const rel = path.relative(c.root, pkg).replaceAll('\\', '/');
+  const lang = WIN ? 'bat' : 'sh', depth = s.depth || 0, out = { launch: null, argv: false, extra: [] };
+  for (const [key, line] of pkgLines(run, scripts, path.dirname(pkg))) {
+    const where = `${rel} scripts.${key}`;
+    const sc = await scriptCommands(line, lang);
+    if (sc.why) { out.launch ||= `QuorX can’t read ${where}: ${sc.why}`; continue; }
+    await judgeCommands(sc.segs, lang, { ...c, cwd: path.dirname(pkg), cwdUnknown: false }, where, depth, out);
+  }
+  return { opaque: out.launch, extra: out.extra };
+}
+
+/**
+ * Reads the script a command runs, if it is in the project. Returns null, or { opaque: why, extra: [segments] }:
+ * the commands to judge alongside it (what it passes its arguments on to, and what its own lines do).
+ * written: files earlier commands of the same line write.
+ */
+async function inspectRun(s, c, written) {
+  const pk = pkgRunOf(s);
+  if (pk) { const r = await inspectPkg(s, pk, c, written); if (r) return r; }
+  const run = scriptOf(s);
+  if (!run) return null;
+  const unclear = { opaque: 'QuorX can’t tell which script it runs, so it can’t read it first', extra: [] };
+  if (!run.file.static) return unclear;
+  const e = expandVars(run.file.text, c.env);
+  if (e.unresolved || (!path.isAbsolute(e.path) && c.cwdUnknown)) return unclear;
+  let abs = path.resolve(c.cwd, e.path);
+  if (run.lang === 'js' && !path.extname(abs)) abs = ['.js', '.mjs', '.cjs'].map((x) => abs + x).find(isFile) || abs;
+  if (zoneOf(abs, c.root).zone !== 'inside') return null;
+  const rel = path.relative(c.root, abs).replaceAll('\\', '/');
+  if (written.some((w) => same(w, abs))) return { opaque: `this command writes ${rel} and then runs it, so QuorX can’t read it first`, extra: [] };
+  const depth = s.depth || 0;
+  const r = await readScript(abs, run.lang, c, depth, new Set());
+  if (!r) return null;
+  const extra = [...r.extra];
+  // It runs programs and reads its arguments: what it was given is judged as the command it will run.
+  const [p, ...rest] = run.rest;
+  if (r.launch && r.argv && p && !/^-/.test(p.text)) {
+    extra.unshift({ text: run.rest.map((a) => a.text).join(' '), rawProgram: p.text, program: progName(p.text), dynamicProgram: p.static === false,
+      args: rest.map((a) => ({ ...a, param: a.param ?? /^-{1,2}[a-z]/i.test(a.text) })), redirects: [], via: rel, viaWhy: `${rel} passes it on as a command`, depth: depth + 1 });
+  }
+  return { opaque: r.launch, extra };
+}
+
+// cd with a static target moves the folder later commands' relative paths start from.
+function trackCd(s, c) {
+  if (['cd', 'chdir', 'set-location', 'push-location'].includes(s.program)) {
+    const t = s.args.find((a) => !a.param);
+    const e = t ? expandVars(t.text, c.env) : null;
+    if (e && !e.unresolved && !c.cwdUnknown) c.cwd = path.resolve(c.cwd, e.path); else if (t) c.cwdUnknown = true;
+  }
+  if (s.program === 'pop-location') c.cwdUnknown = true;
+}
+
 // ---------- rules ----------
 export const ruleText = (s) => [s.program, ...s.args.map((a) => a.text)].join(' ').replace(/\s+/g, ' ').trim();
 const ruleRx = (m) => new RegExp(`^${String(m).trim().replace(/\s+/g, ' ').replace(/[.+^${}()|[\]\\?]/g, '\\$&').replace(/\*/g, '.*')}$`, 'i');
@@ -600,17 +912,21 @@ export async function decide(line, ctx) {
     const why = split.opaque || 'QuorX could not find a command in it';
     segments.push({ text, program: '', cls: 'opaque', why, verdict: 'ask', who: 'user', decidedBy: 'class:opaque', paths: [] });
   }
-  for (const s of split.segs) {
-    const k = classify(s, shell);
-    const paths = pathsOf(s, k, c);
-    const seg = { text: s.text, program: s.program, cls: k.cls, why: k.why, global: !!k.global, paths, rule: null, suggest: suggestions(s) };
-    // cd with a static target moves the folder later commands' relative paths start from.
-    if (['cd', 'chdir', 'set-location', 'push-location'].includes(s.program)) {
-      const t = s.args.find((a) => !a.param);
-      const e = t ? expandVars(t.text, c.env) : null;
-      if (e && !e.unresolved && !c.cwdUnknown) c.cwd = path.resolve(c.cwd, e.path); else if (t) c.cwdUnknown = true;
+  // Commands a script runs (see "scripts") join the queue just before the command that runs the script.
+  const queue = [...split.segs], written = [];
+  while (queue.length) {
+    const s = queue.shift();
+    if (!s.inspected && (s.depth || 0) <= SCRIPT_DEPTH) {
+      s.inspected = true;
+      const r = await inspectRun(s, s.ctx || c, written);
+      if (r?.opaque) s.opaque ||= r.opaque;
+      if (r?.extra.length) { queue.unshift(...r.extra, s); continue; }
     }
-    if (s.program === 'pop-location') c.cwdUnknown = true;
+    const k = classify(s, s.shell || shell);
+    const paths = pathsOf(s, k, s.ctx || c);
+    written.push(...paths.filter((p) => p.kind === 'write' && p.resolved).map((p) => p.resolved));
+    const seg = { text: s.text, program: s.program, cls: k.cls, why: k.why, global: !!k.global, paths, rule: null, suggest: suggestions(s), ...(s.via ? { via: s.via } : {}) };
+    if (!s.ctx) trackCd(s, c);
     let v = 'allow', who = null, by = `class:${k.cls}`, why = k.why;
     const blocked = paths.find((p) => p.zone === 'blocked' || p.zone === 'protected');
     const unknownPath = paths.find((p) => p.zone === 'unknown');
@@ -642,6 +958,7 @@ export async function decide(line, ctx) {
       }
     }
     if (ctx.mode !== 'yolo' && v === 'ask') who = 'user';
+    if (s.viaWhy) why = why ? `${why} (${s.viaWhy})` : s.viaWhy;
     Object.assign(seg, { verdict: v, who, decidedBy: by, why });
     segments.push(seg);
   }
