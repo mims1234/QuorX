@@ -34,7 +34,7 @@ export async function languageChecks(root, changed, { have = [], signal, timeout
     const dirs = [...new Set(files.map((f) => projectDirOf(root, f, lang)).filter(Boolean))].slice(0, 3);
     for (const dir of dirs) {
       if (signal?.aborted) return { problems, ran };
-      const r = await runLine(dir, lang.cmd, { shell: 'direct', timeout, signal, env: undefined });
+      const r = await runLine(dir, typeof lang.cmd === 'function' ? lang.cmd(dir) : lang.cmd, { shell: 'direct', timeout, signal, env: undefined });
       ran.push({ lang: lang.id, dir: path.relative(root, dir) || '.', code: r.code, ms: r.ms, timedOut: r.timedOut });
       if (r.timedOut) { problems.push(`${lang.id} check in ${path.relative(root, dir) || '.'} did not finish in ${Math.round(timeout / 1000)}s`); continue; }
       if (r.code === 0) continue;
