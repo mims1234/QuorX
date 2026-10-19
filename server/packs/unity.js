@@ -110,7 +110,23 @@ export function unityLogs(company = '<company>', product = '<product>') {
   return { editor: path.join(home, '.config', 'unity3d', 'Editor.log'), player: path.join(home, '.config', 'unity3d', company, product, 'Player.log') };
 }
 
+/**
+ * A summary for the output of a -runTests run: Unity's log names the results file ("Saving results to: …"), and
+ * that NUnit XML is summarised. '' when the output is not from a test run that saved results.
+ */
+export function testRunSummary(out) {
+  const file = /Saving results to:\s*(.+?\.xml)\s*$/im.exec(String(out || ''))?.[1];
+  if (!file) return '';
+  try { return `Unity tests: ${summarizeTestResults(fs.readFileSync(file.trim(), 'utf8'))}`; } catch { return ''; }
+}
+
 const isProject = (d) => fs.existsSync(path.join(d, 'ProjectSettings', 'ProjectVersion.txt'));
+// The Unity project in root: root itself or a folder one level down.
+const projectIn = (root) => {
+  if (!root) return null;
+  if (isProject(root)) return root;
+  try { const e = fs.readdirSync(root, { withFileTypes: true }).find((x) => x.isDirectory() && !x.name.startsWith('.') && isProject(path.join(root, x.name))); return e ? path.join(root, e.name) : null; } catch { return null; }
+};
 
 export default {
   id: 'unity',
@@ -122,17 +138,21 @@ export default {
       brokenHint: 'Editors are installed from Unity Hub (Installs → Install Editor), one per version; the user signs in there for a license.' },
   ],
   // ProjectSettings/ProjectVersion.txt, at the top or one folder down.
-  detect: (root) => isProject(root) || (() => { try { return fs.readdirSync(root, { withFileTypes: true }).some((e) => e.isDirectory() && !e.name.startsWith('.') && isProject(path.join(root, e.name))); } catch { return false; } })(),
+  detect: (root) => !!projectIn(root),
   checks: [{ id: 'unity', tool: 'unity', ext: /\.cs$/i, marker: isProject, cmd: checkLine, parse: parseUnity, timeout: 420e3 }],
-  notes: () => {
+  summaries: [{ cmd: /\bUnity(?:\.exe)?"?\s.*-runTests\b/i, summarize: testRunSummary }],
+  notes: (have, root) => {
     const eds = EDITORS.map((e) => e.version).join(', ');
     const logs = unityLogs();
-    return `editors installed: ${eds || 'none'}; a project needs the exact version in ProjectSettings/ProjectVersion.txt (another version means an upgrade: ask the user first). Each editor is <Hub's Editor folder>\\<version>\\Editor\\Unity.exe${EDITORS[0] ? ` (e.g. ${q(EDITORS[0].exe)})` : ''}. `
+    const dir = projectIn(root), ed = dir ? editorFor(dir) : null;
+    const mine = !ed?.version ? '' : ed.exe ? `This project needs Unity ${ed.version}: run ${q(ed.exe)}. `
+      : `This project needs Unity ${ed.version}, which is not installed: the user installs it from Unity Hub (opening it in another version upgrades the project: ask first). `;
+    return `${mine}editors installed: ${eds || 'none'}; a project needs the exact version in ProjectSettings/ProjectVersion.txt (another version means an upgrade: ask the user first). Each editor is <Hub's Editor folder>\\<version>\\Editor\\Unity.exe${EDITORS[0] ? ` (e.g. ${q(EDITORS[0].exe)})` : ''}. `
       + 'Batchmode needs a Unity license (the user signs in to Unity Hub; a Personal license is free)'
       + (licensed() ? '' : ': no license file was found here, so if the log says "No valid Unity Editor license", ask the user to activate one in Unity Hub') + '. '
       + 'The first open of a project imports every asset and can take 10+ minutes: run it as a background job (Unity.exe -batchmode -nographics -quit -projectPath . -logFile import.log) and wait for it. '
       + 'Before the final reply QuorX compiles changed .cs files with -batchmode -quit (only once Library/ exists and the project is not open in the editor: then the editor compiles it itself; read its Editor.log). Errors look like Assets/X.cs(12,5): error CS0103. '
-      + 'Tests: Unity.exe -batchmode -nographics -projectPath . -runTests -testPlatform EditMode (or PlayMode) -testResults TestResults.xml -logFile - (no -quit); read the <test-run> totals and each test-case with result="Failed". '
+      + 'Tests: Unity.exe -batchmode -nographics -projectPath . -runTests -testPlatform EditMode (or PlayMode) -testResults TestResults.xml -logFile - (no -quit); QuorX puts a summary of the results above the output, and the XML has each test-case with result="Failed". '
       + 'Build a Windows player with -buildWindows64Player build/Game.exe (with -quit), then run it as a background job; Unity draws its own UI, so drive it with desktop screenshots, clicks at coordinates and keys. '
       + `Logs: the editor's is ${logs.editor}; a game's Player.log is under ${path.dirname(path.dirname(path.dirname(logs.player)))}\\<company>\\<product>. Debug with Debug.Log and those logs: Unity's debugger is not one QuorX's debug tool can drive.`;
   },
