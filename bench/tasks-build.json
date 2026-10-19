@@ -1,0 +1,51 @@
+{
+  "about": "Build tasks for scripts/bench.mjs --set build. Each runs in its own throwaway project folder; a separate judge model plays the result in the headless browser and scores it. Ordered so that --limit 2 and 3 already mix a game, a dashboard and a form tool.",
+  "suffix": "\n\nPut it in the project folder as index.html plus any .js and .css files it loads. No build step, no server, no npm packages, no external libraries, fonts or network requests: it must work offline when index.html is opened. When it works, open it with preview_site.",
+  "tasks": [
+    {
+      "id": "snake_portals",
+      "cat": "game",
+      "prompt": "Make a Snake game with a twist: two linked portals appear on the board, and going into one comes out of the other. Arrow keys and WASD steer. Show the score and a best score that survives a reload, speed up as the snake grows, and have a start screen, a pause key (P) and a game-over screen with restart."
+    },
+    {
+      "id": "sales_dashboard",
+      "cat": "dashboard",
+      "prompt": "Build a sales dashboard page for a small shop, with 12 months of made-up data for 3 regions and 4 product lines built into the page. Show 4 KPI tiles (revenue, orders, average order value, best region) with change against the previous period, a monthly revenue line chart and a revenue-by-product bar chart drawn with SVG or canvas, and a sortable table of the rows. A region filter and a date-range picker must update every tile, chart and the table together."
+    },
+    {
+      "id": "invoice_builder",
+      "cat": "form",
+      "prompt": "Make an invoice builder: client name, email and address fields, an invoice number and date, and line items (description, quantity, unit price) that can be added and removed. Show a live subtotal, a discount (% or fixed), tax at an editable rate, and the total. Validate the fields (required, a real email, positive numbers) with clear messages next to each one, keep the draft across reloads, and add a print-friendly view of the finished invoice."
+    },
+    {
+      "id": "brick_breaker",
+      "cat": "game",
+      "prompt": "Make a brick breaker game with a paddle (mouse and arrow keys), at least 3 different levels of bricks, bricks that take more than one hit, and 2 power-ups that fall from broken bricks (for example a wider paddle and multi-ball). Show lives, score and the level, with a start screen, a pause and a game-over screen with restart."
+    },
+    {
+      "id": "memory_match",
+      "cat": "game",
+      "prompt": "Make a memory card matching game with a choice of 3 board sizes (4x4, 4x5, 6x6). Cards flip with an animation, matched pairs stay up, and a move counter and timer run. Keep the best result for each size across reloads, and show a win screen with the stats and a button to play again."
+    },
+    {
+      "id": "habit_tracker",
+      "cat": "form",
+      "prompt": "Build a habit tracker: add a habit with a name, a colour and how many days a week it should be done; tick days off on a 4-week grid; show each habit's current streak and its completion rate. Habits can be edited, reordered and deleted (with an undo). Everything is kept across reloads, and the page works on a phone-width screen as well as a desktop."
+    },
+    {
+      "id": "game_2048",
+      "cat": "game",
+      "prompt": "Make the game 2048: arrow keys and swipes move the tiles, equal tiles merge, and a new tile appears after each move. Animate the moves and merges, show the score and the best score (kept across reloads), add an undo for the last move, and show a win message at 2048 (with an option to keep going) and a game-over message with a new-game button."
+    },
+    {
+      "id": "space_dodger",
+      "cat": "game",
+      "prompt": "Make an arcade game where you fly a small ship and dodge falling asteroids of different sizes and speeds. The ship can shoot (Space) to break asteroids, the difficulty rises over time, and a shield pickup appears now and then. Show the score, the time survived and the best score, with a start screen, a pause and a game-over screen with restart. Draw everything on a canvas."
+    },
+    {
+      "id": "kanban_board",
+      "cat": "form",
+      "prompt": "Build a kanban board with To do, Doing and Done columns. Cards have a title, a description, a due date and a priority; they can be added, edited and deleted, dragged between and within columns, and filtered by a search box and by priority. Overdue cards are marked, column counts are shown, and the board is kept across reloads."
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+/* Motion tokens: one scale for every animation in the app (loaded last, after phone.css).
+   Enter with --ease-out; exits run at about 65% of the enter time. :root.reduce-motion (⚙ Appearance → Motion,
+   "Follow system" by default) sets them all to 0. New and edited rules should use these instead of literal times. */
+:root {
+  --dur-press: 100ms;  /* button press, ✓ checkbox, segmented control */
+  --dur-hover: 150ms;  /* hover, tooltips, copy confirmations */
+  --dur-menu: 200ms;   /* popovers, 🧰 menu, model picker, @ and / lists */
+  --dur-panel: 260ms;  /* side pane, sidebar collapse, Settings page */
+  --dur-view: 220ms;   /* chat switch and start screen (view transition) */
+  --ease-out: cubic-bezier(.22, 1, .36, 1);
+  --ease-in-out: cubic-bezier(.65, 0, .35, 1);
+}
+:root.reduce-motion { --dur-press: 0ms; --dur-hover: 0ms; --dur-menu: 0ms; --dur-panel: 0ms; --dur-view: 0ms; }
+
+/* Chat switch / home: a short cross-fade of the whole page (see withTransition in app.js). */
+::view-transition-old(root) { animation: oh-fade-out calc(var(--dur-view) * .65) var(--ease-out) both; }
+::view-transition-new(root) { animation: oh-fade-in var(--dur-view) var(--ease-out) both; }
+@keyframes oh-fade-out { to { opacity: 0; } }
+@keyframes oh-fade-in { from { opacity: 0; transform: translateY(4px); } }
+
+/* Artifact pane while a page loads: themed placeholder, then the page fades in (no white flash in dark theme). */
+.art-loading { position: relative; }
+.art-loading > iframe { opacity: 0; }
+.art-loading::before {
+  content: ""; position: absolute; inset: 16px; border-radius: 10px; pointer-events: none;
+  background:
+    linear-gradient(var(--panel-3, #1a201c) 0 0) 0 0 / 46% 18px no-repeat,
+    linear-gradient(var(--panel-3, #1a201c) 0 0) 0 38px / 88% 10px no-repeat,
+    linear-gradient(var(--panel-3, #1a201c) 0 0) 0 58px / 76% 10px no-repeat,
+    linear-gradient(var(--panel-3, #1a201c) 0 0) 0 78px / 82% 10px no-repeat,
+    linear-gradient(var(--panel-3, #1a201c) 0 0) 0 112px / 100% 120px no-repeat;
+  animation: oh-shimmer 1.4s var(--ease-in-out) infinite alternate;
+}
+iframe { transition: opacity var(--dur-hover) var(--ease-out); }
+@keyframes oh-shimmer { from { opacity: .45; } to { opacity: .9; } }
+:root.reduce-motion .art-loading::before { animation: none; opacity: .7; }

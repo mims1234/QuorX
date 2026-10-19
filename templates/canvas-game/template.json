@@ -1,0 +1,1 @@
+{ "description": "2D canvas plumbing only (no gameplay): delta-time loop, title / play / pause / game-over states, keyboard + mouse + touch input, WebAudio tones, particles and screen shake. You write the game in three hooks.", "start": null }

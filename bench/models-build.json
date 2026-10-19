@@ -1,0 +1,20 @@
+{
+  "about": "Builders for the model build benchmark (scripts/bench.mjs --set build --models bench/models-build.json), cheapest first. All support tool calls. Picked from the OpenRouter catalogue on 2026-10-19.",
+  "models": [
+    { "id": "nvidia/nemotron-3-ultra-550b-a55b:free", "tier": "free" },
+    { "id": "poolside/laguna-s-2.1:free", "tier": "free" },
+    { "id": "inception/mercury-2.5", "tier": "cheap" },
+    { "id": "deepseek/deepseek-v4.1-flash", "tier": "cheap" },
+    { "id": "z-ai/glm-5.3-flash", "tier": "cheap" },
+    { "id": "inclusionai/ling-3.1-flash", "tier": "cheap" },
+    { "id": "xiaomi/mimo-v2.6-flash", "tier": "cheap" },
+    { "id": "qwen/qwen3.8-flash", "tier": "cheap" },
+    { "id": "openai/gpt-6-luna", "tier": "cheap" },
+    { "id": "anthropic/claude-haiku-5.5", "tier": "cheap" },
+    { "id": "mistralai/mistral-large-4-0", "tier": "moderate" },
+    { "id": "x-ai/grok-4.7", "tier": "moderate" },
+    { "id": "anthropic/claude-sonnet-5.5", "tier": "moderate" },
+    { "id": "openai/gpt-6-astra", "tier": "frontier", "reasoning": "low" },
+    { "id": "anthropic/claude-opus-5.5", "tier": "frontier" }
+  ]
+}

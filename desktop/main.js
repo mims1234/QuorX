@@ -1,0 +1,449 @@
+// QuorX desktop: the same page in a window, plus real Chromium tabs for the pane's Browser tab.
+// The page draws the tab strip and the address bar; this process places a native browser view (a real
+// Chromium page: smooth scrolling, video and sound, sign-ins that last, downloads, DevTools) exactly
+// over the Browser tab's page area. Phones and ordinary browsers keep the streamed view.
+//
+// The server: if a harness already answers on its port, the window attaches to it (two servers on the
+// same data folder would fight). Otherwise it starts server.js with Electron's own Node.
+const { app, BrowserWindow, WebContentsView, Tray, Menu, nativeImage, ipcMain, session, shell, dialog } = require('electron');
+const path = require('node:path');
+const fs = require('node:fs');
+const { spawn } = require('node:child_process');
+const crypto = require('node:crypto');
+const { pngIcon } = require('./icon.js');
+const PKG = require('./package.json');
+
+// The harness's code: the repo while developing, the copy bundled in the installer once installed.
+const ROOT = app.isPackaged ? path.join(process.resourcesPath, 'app-server') : path.resolve(__dirname, '..');
+// Your data (chats, projects, keys, logs, .env): the repo while developing; once installed, a folder you
+// choose on first run (a new one in your profile by default), so updates never touch it.
+const CONFIG = () => path.join(app.getPath('userData'), 'config.json');
+const readConfig = () => { try { return JSON.parse(fs.readFileSync(CONFIG(), 'utf8')); } catch { return {}; } };
+const writeConfig = (c) => { fs.mkdirSync(path.dirname(CONFIG()), { recursive: true }); fs.writeFileSync(CONFIG(), JSON.stringify(c, null, 2)); };
+let HOME = null;
+const HIDDEN = process.argv.includes('--hidden'); // started at login: tray only
+let PORT = 5188;
+let server = null, origin = null, win = null, tray = null, quitting = false;
+
+// OH_USER_DATA: a separate settings folder, so a test copy can run next to your own (one copy per folder).
+if (process.env.OH_USER_DATA) app.setPath('userData', process.env.OH_USER_DATA);
+// Before the name QuorX the app was OpenHarness, with its settings in %APPDATA%\OpenHarness. The first start copies
+// what matters (which data folder to use and the browser tabs' sign-ins), so nothing has to be set up again. Chats
+// stay in the data folder those settings point to; the old folder itself is left alone.
+(function adoptOldSettings() {
+  if (process.env.OH_USER_DATA) return;
+  try {
+    const neu = app.getPath('userData'), old = path.join(app.getPath('appData'), 'OpenHarness');
+    if (fs.existsSync(path.join(neu, 'config.json')) || !fs.existsSync(path.join(old, 'config.json'))) return;
+    fs.mkdirSync(neu, { recursive: true });
+    const cfg = JSON.parse(fs.readFileSync(path.join(old, 'config.json'), 'utf8'));
+    if (/\/OpenHarness\/releases/i.test(cfg.updateUrl || '')) delete cfg.updateUrl; // the feed moved with the name
+    fs.writeFileSync(path.join(neu, 'config.json'), JSON.stringify(cfg, null, 2));
+    const from = path.join(old, 'Partitions');
+    if (fs.existsSync(from)) fs.cpSync(from, path.join(neu, 'Partitions'), { recursive: true, filter: (p) => !/[\\/](Cache|Code Cache|GPUCache|DawnCache|CacheStorage)([\\/]|$)/.test(p) });
+  } catch { /* then it starts fresh and asks where to keep the data */ }
+})();
+if (!app.requestSingleInstanceLock()) app.quit();
+// Windows shows the page's notifications ("Needs your approval", "Reply finished") under this app's name.
+if (process.platform === 'win32') app.setAppUserModelId('dev.quorx.desktop');
+app.on('second-instance', () => showWindow());
+
+function readEnvPort(dir) {
+  try { return (fs.readFileSync(path.join(dir, '.env'), 'utf8').match(/^\s*AGENT_PORT\s*=\s*(\d+)/m) || [])[1]; } catch { return null; }
+}
+async function chooseHome() {
+  if (!app.isPackaged) return null; // developing: the repo itself
+  const cfg = readConfig();
+  if (cfg.home && fs.existsSync(cfg.home)) return cfg.home;
+  const fresh = path.join(app.getPath('userData'), 'data-home');
+  const { response } = await dialog.showMessageBox({
+    type: 'question', title: 'QuorX', message: 'Where should QuorX keep your chats, projects and keys?',
+    detail: `A new folder in your profile is best for a fresh start:\n${fresh}\n\nOr pick an existing QuorX (or OpenHarness) folder, one with a data folder in it, to keep using its chats and projects.`,
+    buttons: ['New folder (recommended)', 'Use an existing folder…', 'Quit'], defaultId: 0, cancelId: 2, noLink: true,
+  });
+  if (response === 2) return false;
+  let home = fresh;
+  if (response === 1) {
+    const r = await dialog.showOpenDialog({ title: 'Pick your QuorX folder', properties: ['openDirectory'] });
+    if (r.canceled || !r.filePaths[0]) return chooseHome();
+    home = r.filePaths[0];
+  }
+  fs.mkdirSync(home, { recursive: true });
+  writeConfig({ ...cfg, home });
+  return home;
+}
+async function harnessAt(port) {
+  try { const r = await fetch(`http://localhost:${port}/api/config`, { signal: AbortSignal.timeout(1500) }); const j = await r.json(); return !!j && 'defaults' in j; } catch { return false; }
+}
+// Attach to a running harness, or start one and wait for its "→ http://localhost:<port>" line.
+async function startServer() {
+  if (await harnessAt(PORT)) return `http://localhost:${PORT}`;
+  server = spawn(process.execPath, [path.join(ROOT, 'server.js')], { cwd: ROOT, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', OH_DESKTOP: '1', AGENT_PORT: String(PORT), ...(HOME ? { OH_HOME: HOME } : {}) }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+  const logFile = fs.createWriteStream(path.join(app.getPath('userData'), 'server.log'), { flags: 'a' });
+  return new Promise((resolve, reject) => {
+    let done = false;
+    const onData = (d) => {
+      logFile.write(d);
+      const m = !done && String(d).match(/→\s*(http:\/\/localhost:\d+)/);
+      if (m) { done = true; resolve(m[1]); }
+    };
+    server.stdout.on('data', onData); server.stderr.on('data', (d) => logFile.write(d));
+    server.on('exit', (code) => { server = null; if (!done) reject(new Error(`the server stopped (code ${code}); see ${path.join(app.getPath('userData'), 'server.log')}`)); });
+    setTimeout(() => { if (!done) reject(new Error('the server did not start within 30 s')); }, 30e3);
+  });
+}
+
+const iconImage = (size = 32) => nativeImage.createFromBuffer(pngIcon(size));
+
+function showWindow() { if (!win) return; if (win.isMinimized()) win.restore(); win.show(); win.focus(); }
+function createWindow() {
+  win = new BrowserWindow({
+    width: 1440, height: 900, minWidth: 760, minHeight: 520, show: false, backgroundColor: '#070908', title: 'QuorX', icon: iconImage(64), autoHideMenuBar: true,
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false },
+  });
+  win.once('ready-to-show', () => { if (!HIDDEN) win.show(); });
+  win.loadURL(origin);
+  // The app window only shows the app; links elsewhere open in your browser.
+  // Same origin exactly (not just the same prefix), and only web and mail links go to the system: other schemes
+  // (file:, protocol handlers) are dropped.
+  win.webContents.on('will-navigate', (e, url) => {
+    let same = false; try { same = new URL(url).origin === new URL(origin).origin; } catch { /* not a URL */ }
+    if (same) return;
+    e.preventDefault();
+    if (/^(https?|mailto):/i.test(url)) shell.openExternal(url);
+  });
+  // Anything that opens a new window (↗, links in pages and artifacts) goes to your default browser.
+  win.webContents.setWindowOpenHandler(({ url }) => { if (/^(https?|mailto):/i.test(url)) shell.openExternal(url); return { action: 'deny' }; });
+  // ✕ keeps the harness running in the tray (phones on the LAN still reach it); Quit is in the tray menu.
+  win.on('close', (e) => { if (!quitting && server) { e.preventDefault(); win.hide(); } });
+  win.on('closed', () => { win = null; tabs.clear(); });
+}
+// Start at login: off by default; when on, the app starts hidden in the tray.
+const loginArgs = () => (app.isPackaged ? ['--hidden'] : [path.resolve(__dirname), '--hidden']);
+const loginItem = () => app.getLoginItemSettings({ path: process.execPath, args: loginArgs() }).openAtLogin;
+function setLoginItem(on) { app.setLoginItemSettings({ openAtLogin: !!on, path: process.execPath, args: loginArgs() }); if (tray) createTrayMenu(); return loginItem(); }
+function createTray() {
+  tray = new Tray(iconImage(16));
+  tray.setToolTip(`QuorX · ${origin}`);
+  createTrayMenu();
+  tray.on('click', showWindow);
+}
+function createTrayMenu() {
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: 'Open QuorX', click: showWindow },
+    { label: `Address: ${origin}`, enabled: false },
+    ...(HOME ? [{ label: 'Open the data folder', click: () => shell.openPath(HOME) }] : []),
+    { label: 'Restart the harness', click: async () => { const r = await restartHarness(); if (r.ok) win?.webContents.reload(); else dialog.showErrorBox('Restart failed', r.error); } },
+    { label: 'Start at login', type: 'checkbox', checked: loginItem(), click: (m) => setLoginItem(m.checked) },
+    { type: 'separator' },
+    { label: server ? 'Quit (stops the harness)' : 'Quit', click: () => { quitting = true; app.quit(); } },
+  ]));
+}
+
+// ---------- real browser tabs (one WebContentsView each) ----------
+// Your tabs share one persistent profile, so sign-ins last; they never get the app's bridge.
+const tabs = new Map(); // sid → { view, shown }
+const CHROME_UA = () => session.defaultSession.getUserAgent().replace(/\sElectron\/\S+/, '').replace(/\s(quorx-desktop|QuorX)\/\S+/i, '');
+let userSession = null;
+function browseSession() {
+  if (userSession) return userSession;
+  userSession = session.fromPartition('persist:browse');
+  userSession.setUserAgent(CHROME_UA());
+  // Downloads go to your Downloads folder; the page shows them under the address bar.
+  userSession.on('will-download', (_e, item, wc) => {
+    const sid = [...tabs].find(([, t]) => t.view.webContents === wc)?.[0] || null;
+    const file = uniquePath(path.join(app.getPath('downloads'), item.getFilename()));
+    item.setSavePath(file);
+    send({ sid, type: 'download', state: 'started', name: path.basename(file), file, total: item.getTotalBytes() });
+    item.on('updated', () => send({ sid, type: 'download', state: 'progress', name: path.basename(file), received: item.getReceivedBytes(), total: item.getTotalBytes() }));
+    item.once('done', (_ev, state) => send({ sid, type: 'download', state, name: path.basename(file), file }));
+  });
+  // Camera, microphone, location and the like: no for now (a prompt in the pane can come later); full screen and clipboard writes are fine.
+  userSession.setPermissionRequestHandler((_wc, perm, cb) => cb(['fullscreen', 'clipboard-sanitized-write', 'pointerLock'].includes(perm)));
+  return userSession;
+}
+function uniquePath(p) { if (!fs.existsSync(p)) return p; const { dir, name, ext } = path.parse(p); for (let i = 1; ; i++) { const q = path.join(dir, `${name} (${i})${ext}`); if (!fs.existsSync(q)) return q; } }
+function send(ev) { if (win && !win.isDestroyed()) win.webContents.send('oh-desktop', ev); }
+function tabFor(sid) {
+  let t = tabs.get(sid);
+  if (t) return t;
+  const view = new WebContentsView({ webPreferences: { session: browseSession(), sandbox: true, contextIsolation: true, nodeIntegration: false } });
+  view.setBackgroundColor('#ffffff');
+  view.setVisible(false);
+  win.contentView.addChildView(view);
+  t = { view, shown: false };
+  tabs.set(sid, t);
+  wireView(sid, view);
+  return t;
+}
+function wireView(sid, view) {
+  const wc = view.webContents;
+  const info = () => send({ sid, type: 'state', url: wc.getURL(), title: wc.getTitle(), loading: wc.isLoading(), canBack: wc.navigationHistory.canGoBack(), canForward: wc.navigationHistory.canGoForward() });
+  for (const ev of ['did-navigate', 'did-navigate-in-page', 'page-title-updated', 'did-start-loading', 'did-stop-loading']) wc.on(ev, info);
+  wc.on('did-fail-load', (_e, code, desc, url, main) => { if (main && code !== -3) send({ sid, type: 'error', url, message: desc }); });
+  wc.on('page-favicon-updated', (_e, icons) => send({ sid, type: 'favicon', icon: icons[0] || null }));
+  // Pop-ups open as new tabs in the pane.
+  wc.setWindowOpenHandler(({ url }) => { send({ sid, type: 'popup', url }); return { action: 'deny' }; });
+}
+// Only the app's own page may drive tabs.
+const fromApp = (e) => { try { return new URL(e.senderFrame.url).origin === new URL(origin).origin; } catch { return false; } };
+function handle(name, fn) { ipcMain.handle(`oh:${name}`, (e, ...a) => { if (!fromApp(e)) throw new Error('not allowed'); return fn(...a); }); }
+handle('open', (sid, url) => { if (!/^https?:\/\//i.test(String(url))) throw new Error('only http and https addresses'); tabFor(sid).view.webContents.loadURL(url).catch(() => {}); return true; });
+handle('bounds', (sid, r) => {
+  const t = tabs.get(sid); if (!t) return false;
+  const b = { x: Math.round(r.x), y: Math.round(r.y), width: Math.max(0, Math.round(r.width)), height: Math.max(0, Math.round(r.height)) };
+  // The same place again (the page asks often): nothing to do, so the page isn't laid out again.
+  if (t.bounds && t.bounds.x === b.x && t.bounds.y === b.y && t.bounds.width === b.width && t.bounds.height === b.height) { vlog('bounds skip', sid); return true; }
+  vlog('bounds', sid, JSON.stringify(b));
+  t.bounds = b;
+  placeView(t);
+  if (t.cover) t.cover.setBounds(b);
+  if (t.emu) applyEmu(t);
+  return true;
+});
+// What happens to the real tabs, with times: kept in <userData>/view-events.log (the last ~2000 lines), so a flicker
+// or a resize loop can be read back afterwards. Repeats that change nothing are logged as "skip".
+const VLOG = [];
+let vlogTimer = null;
+function vlog(...parts) {
+  VLOG.push(`${new Date().toISOString().slice(11, 23)} ${parts.join(' ')}`);
+  if (VLOG.length > 2000) VLOG.splice(0, VLOG.length - 2000);
+  if (!vlogTimer) vlogTimer = setTimeout(() => { vlogTimer = null; try { fs.writeFileSync(path.join(app.getPath('userData'), 'view-events.log'), VLOG.join('\n') + '\n'); } catch { /* best effort */ } }, 1000);
+}
+// The agent's page keeps the width it asked for (1280 for a desktop), scaled to the pane's width, and is made as
+// tall as the pane, so it fills the whole view (never shorter than the height it asked for). Its reports measure the
+// real screen, so the agent always knows how much it sees. Your own tabs fill the pane as they are.
+function fitEmu(t) {
+  const e = t.emu, b = t.bounds;
+  if (!e?.width || !e?.height) return null;
+  if (!b?.width || !b?.height) return { ...e, scale: 1 };
+  const scale = Math.min(1, b.width / e.width);
+  return { ...e, height: Math.max(e.height, Math.round(b.height / scale)), scale };
+}
+function placeView(t) {
+  const b = t.bounds; if (!b) return;
+  const f = fitEmu(t);
+  let r = b;
+  if (f) {
+    const w = Math.max(1, Math.round(f.width * f.scale)), h = Math.max(1, Math.min(b.height, Math.round(f.height * f.scale)));
+    r = { x: b.x + Math.round((b.width - w) / 2), y: b.y, width: w, height: h };
+  }
+  const key = `${r.x},${r.y},${r.width},${r.height}`;
+  if (t.viewRect === key) return; // already there
+  vlog('setBounds', key);
+  t.viewRect = key;
+  t.view.setBounds(r);
+}
+// Show one tab (or none): every other tab is hidden, so dialogs and other tabs are never covered by a stale one.
+// Only views whose visibility changes are touched (setting it again on a shown view can make it flash).
+handle('show', (sid) => { for (const [k, t] of tabs) { const on = k === sid; if (t.shown === on) continue; vlog(on ? 'show' : 'hide', k); t.shown = on; t.view.setVisible(on); t.cover?.setVisible(on); } return true; });
+handle('hideAll', () => { for (const [k, t] of tabs) { if (t.shown) vlog('hide (all)', k); t.shown = false; t.view.setVisible(false); t.cover?.setVisible(false); } return true; });
+handle('nav', (sid, op) => {
+  const t = tabs.get(sid); if (!t) return false;
+  const wc = t.view.webContents, h = wc.navigationHistory;
+  if (op === 'back' && h.canGoBack()) h.goBack(); else if (op === 'forward' && h.canGoForward()) h.goForward(); else if (op === 'reload') wc.reload(); else if (op === 'stop') wc.stop();
+  else if (op === 'devtools') wc.openDevTools({ mode: 'detach' });
+  return true;
+});
+handle('close', (sid) => closeTab(sid));
+function closeTab(sid) {
+  const t = tabs.get(sid); if (!t) return false;
+  try { if (t.view.webContents.debugger.isAttached()) t.view.webContents.debugger.detach(); } catch { /* gone */ }
+  if (win && !win.isDestroyed()) { win.contentView.removeChildView(t.view); if (t.cover) win.contentView.removeChildView(t.cover); }
+  t.view.webContents.close(); t.cover?.webContents.close();
+  tabs.delete(sid);
+  return true;
+}
+handle('snapshot', async (sid) => { const t = tabs.get(sid); if (!t || !t.shown) return null; return (await t.view.webContents.capturePage()).toDataURL(); });
+// ---------- updates: the app checks a feed, you press Update, it downloads, Restart installs ----------
+// The feed is any web address holding what a build makes (latest.yml, the installer, its .blockmap),
+// e.g. a GitHub release (https://github.com/<you>/<repo>/releases/latest/download). It comes from
+// package.json ("quorx.updateUrl") and can be changed in Settings. Works without code signing.
+let updater = null, update = { state: 'idle' };
+const updateUrl = () => (readConfig().updateUrl ?? PKG.quorx?.updateUrl ?? '').trim();
+function setUpdate(patch) { update = { ...update, ...patch }; send({ type: 'update', ...update }); }
+function getUpdater() {
+  if (updater || !app.isPackaged) return updater;
+  ({ autoUpdater: updater } = require('electron-updater'));
+  updater.autoDownload = false; // only when you press Update
+  updater.autoInstallOnAppQuit = true; // a downloaded update also installs the next time you quit
+  updater.on('checking-for-update', () => setUpdate({ state: 'checking', error: null }));
+  updater.on('update-available', (i) => setUpdate({ state: 'available', version: i.version, notes: typeof i.releaseNotes === 'string' ? i.releaseNotes.slice(0, 2000) : '', size: i.files?.[0]?.size || null }));
+  updater.on('update-not-available', () => setUpdate({ state: 'current', checked: Date.now() }));
+  updater.on('download-progress', (pr) => setUpdate({ state: 'downloading', percent: Math.round(pr.percent), speed: pr.bytesPerSecond }));
+  updater.on('update-downloaded', (i) => setUpdate({ state: 'ready', version: i.version }));
+  updater.on('error', (e) => setUpdate({ state: 'error', error: String(e?.message || e).split('\n')[0].slice(0, 300) }));
+  return updater;
+}
+async function checkUpdates() {
+  const u = getUpdater(), url = updateUrl();
+  if (!u) return setUpdate({ state: 'dev' });
+  if (!url) return setUpdate({ state: 'no-feed' });
+  if (['downloading', 'ready'].includes(update.state)) return update;
+  u.setFeedURL({ provider: 'generic', url });
+  try { await u.checkForUpdates(); } catch (e) { setUpdate({ state: 'error', error: String(e?.message || e).split('\n')[0].slice(0, 300) }); }
+  return update;
+}
+handle('update', async (op, arg) => {
+  if (op === 'state') return { ...update, current: app.getVersion(), url: updateUrl(), packaged: app.isPackaged };
+  if (op === 'check') return checkUpdates();
+  if (op === 'download') { if (update.state !== 'available') return update; setUpdate({ state: 'downloading', percent: 0 }); getUpdater().downloadUpdate().catch((e) => setUpdate({ state: 'error', error: String(e?.message || e).slice(0, 300) })); return update; }
+  if (op === 'install') { if (update.state !== 'ready') return update; quitting = true; setImmediate(() => getUpdater().quitAndInstall(false, true)); return update; }
+  if (op === 'setUrl') { const url = String(arg || '').trim(); if (url && !/^https?:\/\//i.test(url)) throw new Error('the feed must be an http(s) address'); writeConfig({ ...readConfig(), updateUrl: url }); update = { state: 'idle' }; return checkUpdates(); }
+  throw new Error(`unknown update step ${op}`);
+});
+// ⟳ Restart the harness. One this app runs: stop it and start it again. One it is attached to: ask it
+// to stop, then start our own, so from now on restarts (and the tray) are in this app's hands.
+let restarting = false;
+const waitFor = async (test, ms) => { for (const t0 = Date.now(); Date.now() - t0 < ms;) { if (await test()) return true; await new Promise((r) => setTimeout(r, 300)); } return false; };
+async function restartHarness() {
+  if (restarting) return { ok: false, error: 'already restarting' };
+  restarting = true;
+  try {
+    if (server) {
+      const old = server; server = null;
+      await new Promise((r) => { old.once('exit', r); try { if (process.platform === 'win32') spawn('taskkill', ['/pid', String(old.pid), '/T', '/F'], { windowsHide: true }); else old.kill(); } catch { r(); } setTimeout(r, 8000); });
+    } else {
+      await fetch(`${origin}/api/harness/stop`, { method: 'POST' }).catch(() => {});
+    }
+    if (!(await waitFor(async () => !(await harnessAt(PORT)), 15000))) throw new Error(`the harness on port ${PORT} did not stop`);
+    origin = await startServer();
+    if (tray) { tray.setToolTip(`QuorX · ${origin}`); createTrayMenu(); }
+    return { ok: true, origin, owns: !!server };
+  } catch (e) { return { ok: false, error: e.message }; }
+  finally { restarting = false; }
+}
+handle('restartHarness', () => restartHarness());
+handle('loginItem', (on) => (on === undefined ? loginItem() : setLoginItem(on)));
+handle('info', () => ({ version: app.getVersion(), packaged: app.isPackaged, home: HOME || ROOT, origin, ownsServer: !!server }));
+handle('openHome', () => { shell.openPath(HOME || ROOT); return true; });
+handle('focusWindow', () => { showWindow(); return true; }); // a clicked notification brings the window back from the tray
+handle('openExternal', (url) => { if (/^https?:\/\//i.test(String(url))) shell.openExternal(url); return true; });
+handle('showFile', (file) => { if (file && file.startsWith(app.getPath('downloads'))) shell.showItemInFolder(file); return true; });
+
+// ---------- the agent's tabs: real views driven by the harness (server/desktop.js, server/browser.js) ----------
+// The harness sends DevTools commands for the agent's tab; this process runs them on a real view in
+// the pane and sends back the page events the agent listens for. While the agent works, a see-through
+// cover stops your clicks and its (usually wider) page is scaled to fit; when it is done, the cover
+// lifts and the page takes the pane's size, ready for you.
+let agentSession = null;
+const agentSess = () => (agentSession ||= (() => { const s = session.fromPartition('persist:agent'); s.setUserAgent(CHROME_UA()); s.setPermissionRequestHandler((_wc, perm, cb) => cb(perm === 'fullscreen')); return s; })());
+const FORWARD = new Set(['Page.loadEventFired', 'Page.frameNavigated', 'Runtime.consoleAPICalled', 'Runtime.exceptionThrown', 'Log.entryAdded']);
+let linkToken = null, eventQueue = [], eventTimer = null;
+function postReply(body) { if (!origin || !linkToken) return; fetch(`${origin}/api/desktop/reply`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: linkToken, ...body }) }).catch(() => {}); }
+function queueEvent(e) { eventQueue.push(e); if (!eventTimer) eventTimer = setTimeout(() => { eventTimer = null; const events = eventQueue; eventQueue = []; postReply({ events }); }, 40); }
+// The agent's page is laid out at its own size; in a narrower pane it is shown scaled down to fit.
+function applyEmu(t) {
+  const f = fitEmu(t); if (!f) return;
+  const key = JSON.stringify(f);
+  if (t.sentEmu === key) { vlog('emu skip (pane)'); return; } // the same size again would make the page lay itself out (and flash) for nothing
+  vlog('emu (pane)', key);
+  t.sentEmu = key;
+  t.view.webContents.debugger.sendCommand('Emulation.setDeviceMetricsOverride', f).catch(() => { t.sentEmu = null; });
+  // A page with no background of its own still looks white to the agent (its checks judge what it sees).
+  t.view.webContents.debugger.sendCommand('Emulation.setDefaultBackgroundColorOverride', { color: { r: 255, g: 255, b: 255, a: 1 } }).catch(() => {});
+}
+const COVER = `data:text/html,${encodeURIComponent('<!doctype html><meta charset="utf-8"><body style="margin:0;height:100vh;background:transparent;cursor:not-allowed;font:600 12px system-ui;user-select:none"><div style="position:fixed;left:50%;bottom:12px;transform:translateX(-50%);padding:6px 12px;border-radius:8px;background:rgba(167,139,250,.18);border:1px solid rgba(167,139,250,.6);color:#c4b5fd;backdrop-filter:blur(6px);white-space:nowrap">🤖 The agent is using this page · watch only until its reply ends</div></body>')}`;
+const COMMANDS = {
+  async 'tab.create'({ chatId }) {
+    const sid = `agent-${String(chatId).replace(/[^\w-]/g, '').slice(0, 40)}`;
+    if (tabs.has(sid)) closeTab(sid);
+    const view = new WebContentsView({ webPreferences: { session: agentSess(), sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } });
+    // Dark around the agent's page when it is scaled down to fit a narrower pane (the page itself keeps a white default).
+    view.setBackgroundColor('#070908');
+    view.setVisible(false);
+    win.contentView.addChildView(view);
+    tabs.set(sid, { view, shown: false, agent: true, chatId, locked: false, emu: null, cover: null, bounds: null });
+    wireView(sid, view);
+    // A view has no page until something loads; its debugger would wait forever on the first command.
+    await view.webContents.loadURL('about:blank').catch(() => {});
+    const dbg = view.webContents.debugger;
+    dbg.attach('1.3');
+    dbg.on('message', (_e, method, params) => { if (FORWARD.has(method)) queueEvent({ tab: sid, method, params }); });
+    send({ sid, type: 'agent-tab', chatId });
+    return sid;
+  },
+  async 'tab.cdp'({ tab, method, params = {} }) {
+    const t = tabs.get(tab); if (!t) throw new Error('that tab is gone');
+    if (method === 'Emulation.setDeviceMetricsOverride') {
+      t.emu = { ...params }; delete t.emu.scale; placeView(t);
+      // The agent sets its page size on every page it opens; the same size again changes nothing.
+      const f = fitEmu(t), key = JSON.stringify(f);
+      if (t.sentEmu === key) { vlog('emu skip (agent)', tab); return {}; }
+      vlog('emu (agent)', tab, key);
+      t.sentEmu = key;
+      return t.view.webContents.debugger.sendCommand(method, f).catch((e) => { t.sentEmu = null; throw e; });
+    }
+    if (method === 'Emulation.clearDeviceMetricsOverride') { vlog('emu clear', tab); t.emu = null; t.sentEmu = null; placeView(t); }
+    if (method === 'Page.captureScreenshot' || method === 'Page.navigate') vlog(method, tab);
+    // The agent works in the page's own pixels (screenshots, element boxes), but its view may be shown shrunk to
+    // fit the pane, and mouse and touch input land in the view's pixels. Without this, clicks missed by 1/scale (~1.5×).
+    const f = t.emu && fitEmu(t);
+    if (f && f.scale !== 1 && (method === 'Input.dispatchMouseEvent' || method === 'Input.synthesizeTapGesture')) return t.view.webContents.debugger.sendCommand(method, { ...params, x: params.x * f.scale, y: params.y * f.scale });
+    if (f && f.scale !== 1 && method === 'Input.dispatchTouchEvent') return t.view.webContents.debugger.sendCommand(method, { ...params, touchPoints: (params.touchPoints || []).map((p) => ({ ...p, x: p.x * f.scale, y: p.y * f.scale })) });
+    // Screenshots at the page's own size, even while it is shown scaled down in the pane.
+    if (method === 'Page.captureScreenshot' && t.emu) return t.view.webContents.debugger.sendCommand(method, { ...params, clip: { x: 0, y: 0, width: t.emu.width, height: t.emu.height, scale: 1 } });
+    return t.view.webContents.debugger.sendCommand(method, params);
+  },
+  async 'tab.lock'({ tab, locked }) {
+    const t = tabs.get(tab); if (!t) return false;
+    t.locked = !!locked;
+    if (locked && !t.cover) {
+      t.cover = new WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true } });
+      t.cover.setBackgroundColor('#00000000');
+      t.cover.webContents.loadURL(COVER);
+      win.contentView.addChildView(t.cover); // added after the page, so it sits on top
+      if (t.bounds) t.cover.setBounds(t.bounds);
+      t.cover.setVisible(t.shown);
+    } else if (!locked && t.cover) { win.contentView.removeChildView(t.cover); t.cover.webContents.close(); t.cover = null; }
+    send({ sid: tab, type: 'agent-lock', locked: !!locked });
+    return true;
+  },
+  async 'tab.close'({ tab }) { return closeTab(tab); },
+};
+// Linked to the harness: commands come down an event stream; answers and page events go back by POST.
+// It reconnects when the harness restarts; an older harness without the link just keeps headless tabs.
+async function linkLoop() {
+  for (;;) {
+    try {
+      linkToken = crypto.randomBytes(18).toString('hex');
+      const r = await fetch(`${origin}/api/desktop/link?token=${linkToken}`);
+      if (r.ok) {
+        const reader = r.body.getReader(), dec = new TextDecoder();
+        let buf = '';
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          for (let i; (i = buf.indexOf('\n\n')) >= 0;) {
+            const line = buf.slice(0, i).split('\n').find((l) => l.startsWith('data: ')); buf = buf.slice(i + 2);
+            if (!line) continue;
+            const { id, cmd, args } = JSON.parse(line.slice(6));
+            Promise.resolve().then(() => { if (!COMMANDS[cmd]) throw new Error(`unknown command ${cmd}`); if (!win) throw new Error('the window is closed'); return COMMANDS[cmd](args || {}); })
+              .then((result) => postReply({ id, result }), (e) => postReply({ id, error: e.message }));
+          }
+        }
+      }
+    } catch { /* the harness is restarting */ }
+    await new Promise((res) => setTimeout(res, 3000));
+  }
+}
+
+app.whenReady().then(async () => {
+  HOME = await chooseHome();
+  if (HOME === false) { quitting = true; return app.quit(); }
+  PORT = Number(process.env.AGENT_PORT || readEnvPort(HOME || ROOT) || 5188);
+  try { origin = await startServer(); }
+  catch (e) { dialog.showErrorBox('QuorX could not start', e.message); quitting = true; return app.quit(); }
+  createWindow();
+  createTray();
+  linkLoop();
+  // Check for updates a little after start, then every 6 hours.
+  setTimeout(checkUpdates, 15000);
+  setInterval(checkUpdates, 6 * 3600e3);
+}).catch((e) => { console.error(e); app.quit(); });
+// Closing the window keeps the harness in the tray; the app ends only with Quit.
+app.on('window-all-closed', () => { if (!server) app.quit(); });
+app.on('activate', () => (win ? showWindow() : createWindow()));
+app.on('before-quit', () => { quitting = true; });
+app.on('quit', () => { if (server) { try { if (process.platform === 'win32') spawn('taskkill', ['/pid', String(server.pid), '/T', '/F'], { windowsHide: true }); else server.kill(); } catch { /* gone */ } } });

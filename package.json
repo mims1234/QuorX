@@ -1,0 +1,27 @@
+{
+  "name": "quorx",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "An open-source AI agent with a quorum of models behind every call. Any model, through OpenRouter.",
+  "scripts": {
+    "start": "node server.js",
+    "desktop": "npm --prefix desktop start",
+    "desktop:setup": "npm --prefix desktop install && node desktop/node_modules/electron/install.js",
+    "desktop:dist": "npm --prefix desktop run dist",
+    "desktop:release": "npm --prefix desktop run release",
+    "winget": "node scripts/winget-manifest.mjs",
+    "release:bump": "npm --prefix desktop version patch --no-git-tag-version && node desktop/sync-version.js",
+    "test": "node --test scripts/test-loop.mjs scripts/test-agent.mjs scripts/test-security.mjs",
+    "scorecard": "node scripts/scorecard.mjs",
+    "icons": "node scripts/make-icons.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "node-pty": "^1.1.0"
+  }
+}

@@ -1,0 +1,5 @@
+# Plain LF line endings in the repo for everyone (Windows checkouts included); images stay binary.
+* text=auto eol=lf
+*.png binary
+*.ico binary
+*.exe binary

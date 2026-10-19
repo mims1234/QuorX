@@ -1,0 +1,57 @@
+/* Phones and small tablets (≤ 900px): a dedicated layout. One full-screen view at a time, picked from a bottom tab bar:
+   Chats (projects and chats), Chat (the conversation), Preview (artifacts, explorer, trace), Settings. */
+.mnav { display: none; }
+@media (max-width: 900px) {
+  :root { --mnav-h: 58px; }
+  .mnav { display: grid; grid-template-columns: repeat(4, 1fr); position: fixed; left: 0; right: 0; bottom: 0; z-index: 120;
+    height: calc(var(--mnav-h) + env(safe-area-inset-bottom)); padding-bottom: env(safe-area-inset-bottom);
+    background: var(--panel); border-top: 1px solid var(--line-strong); box-shadow: 0 -8px 24px rgba(0, 0, 0, .35); }
+  .mnav button { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; border: 0; background: transparent; color: var(--muted); font: 600 10.5px var(--font-ui); cursor: pointer; min-height: 44px; }
+  .mnav .mn-ico { font-size: 18px; line-height: 1; filter: grayscale(.6); opacity: .8; }
+  .mnav button.on { color: var(--ok); }
+  .mnav button.on .mn-ico { filter: none; opacity: 1; }
+  .mnav button.on::before { content: ""; position: absolute; top: 0; left: 28%; right: 28%; height: 3px; border-radius: 0 0 3px 3px; background: var(--ok); }
+  .mnav .mn-dot { position: absolute; top: 9px; right: calc(50% - 16px); width: 8px; height: 8px; border-radius: 50%; background: var(--amber, #f59e0b); box-shadow: 0 0 0 2px var(--panel); }
+  .mnav .mn-dot[hidden] { display: none; }
+
+  /* the page stops above the bar; the top bar keeps only the brand, theme and settings */
+  body { height: 100dvh; overflow: hidden; }
+  .shell { height: calc(100dvh - 48px - var(--mnav-h) - env(safe-area-inset-bottom)); }
+  #sideBtn, .sidebar-backdrop { display: none !important; }
+
+  /* Chats: the sidebar is the whole screen (not a drawer) */
+  body[data-mview="chats"] .sidebar { position: fixed; top: 48px; left: 0; right: 0; bottom: calc(var(--mnav-h) + env(safe-area-inset-bottom)); width: 100% !important; transform: none; visibility: visible; box-shadow: none; border-right: 0; z-index: 90; }
+  body[data-mview="chats"] .sidebar .sb-expanded { display: flex !important; }
+  body[data-mview="chats"] .sidebar .sb-rail, body[data-mview="chats"] .sb-collapse-toggle { display: none !important; }
+  body[data-mview="chats"] .layout { visibility: hidden; }
+  body:not([data-mview="chats"]) .sidebar { transform: translateX(-100%); visibility: hidden; }
+
+  /* Chat: only the conversation */
+  body[data-mview="chat"] .layout, body[data-mview="chat"] .layout.nopane { grid-template-columns: minmax(0, 1fr) !important; grid-template-rows: minmax(0, 1fr) !important; }
+  body[data-mview="chat"] .pane, body[data-mview="chat"] #paneResizer { display: none !important; }
+  /* the pane's toggle is "go to Preview" on a phone, so it never looks switched on here */
+  body[data-mview="chat"] .ch-pane.active { background: transparent; border-color: transparent; color: var(--muted); }
+
+  /* Preview: only the pane, full height (even when the chat has nothing built yet) */
+  body[data-mview="preview"] .work, body[data-mview="preview"] #paneResizer { display: none !important; }
+  body[data-mview="preview"] .layout, body[data-mview="preview"] .layout.nopane { grid-template-columns: minmax(0, 1fr) !important; grid-template-rows: minmax(0, 1fr) !important; }
+  body[data-mview="preview"] .layout .pane, body[data-mview="preview"] .layout.nopane .pane { display: flex !important; height: 100% !important; min-height: 0; border-top: 0; }
+
+  /* phone header: buttons stay left, the model badge gives way first */
+  .dir-a-head .ch-split, .dir-a-head .ch-close { display: none !important; }
+}
+@media (max-width: 900px) {
+  /* the content always ends at the top of the bar */
+  .shell { height: calc(100dvh - 48px - var(--mnav-h) - env(safe-area-inset-bottom)) !important; max-height: calc(100dvh - 48px - var(--mnav-h) - env(safe-area-inset-bottom)); min-height: 0 !important; flex: none !important; }
+  .layout, .work, .chats, .chatpane { min-height: 0 !important; height: 100%; }
+  /* a tighter message box: the budget note goes, controls wrap in two rows */
+  .cmp-control-rack .cbar .mode-note { display: none !important; }
+  .chatpane .composer.composer-v2 { padding: 6px 8px 8px; }
+  .composer-v2 .composer-box { gap: 4px; padding: 6px 8px; }
+  .cmp-textarea { min-height: 38px !important; }
+}
+@media (max-width: 900px) {
+  /* the Chats view always wins over the old drawer rules */
+  body[data-mview="chats"] #sidebar.sidebar { transform: none !important; visibility: visible !important; transition: none !important; }
+  body[data-mview="chats"] #sidebar.sidebar .sb-expanded { display: flex !important; }
+}

@@ -1,0 +1,1 @@
+{ "description": "Node.js server with no dependencies: server.cjs serves public/ and a JSON /api route; listens on PORT", "start": { "command": "node", "args": ["server.cjs"] } }

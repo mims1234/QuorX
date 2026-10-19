@@ -1,0 +1,72 @@
+# Builds the Windows installer when a version tag is pushed, and publishes it as a GitHub release.
+# The release is the update feed: installed apps read latest.yml from releases/latest/download (desktop/package.json →
+# quorx.updateUrl), and winget points at that version's own release (quorx.winget.downloadBase).
+#
+# To release: npm run release:bump (raises the version everywhere), commit, then
+#   git tag v<version> && git push origin main v<version>
+# The tag must match desktop/package.json's version, or the build stops before doing anything.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write # create the release and upload its files
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    env:
+      WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }} # optional, see the last step
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Check the tag matches the app version
+        shell: pwsh
+        run: |
+          $tag = '${{ github.ref_name }}'.TrimStart('v')
+          $app = (Get-Content desktop/package.json -Raw | ConvertFrom-Json).version
+          if ($tag -ne $app) { Write-Error "The tag is v$tag but desktop/package.json says $app. Run npm run release:bump, commit, and tag that version."; exit 1 }
+          "VERSION=$app" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Install the harness (node-pty and xterm for the Terminal tab)
+        run: npm ci
+
+      - name: Install Electron and electron-builder
+        run: npm ci
+        working-directory: desktop
+
+      - name: Build the installer
+        # --publish never: this job uploads the files itself (electron-builder's generic provider can't publish).
+        run: npm --prefix desktop run dist -- --publish never
+
+      - name: Publish the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $d = 'desktop/dist'
+          gh release create '${{ github.ref_name }}' "$d/latest.yml" "$d/QuorX-Setup-$env:VERSION.exe" "$d/QuorX-Setup-$env:VERSION.exe.blockmap" `
+            --title "QuorX ${{ github.ref_name }}" --generate-notes
+
+      - name: Write the winget manifests for this version
+        run: npm run winget
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: winget-manifests-${{ env.VERSION }}
+          path: desktop/dist/winget/${{ env.VERSION }}
+
+      # After the first version is in winget-pkgs (submitted by hand once), later versions can go in by themselves:
+      # add a GitHub token with public_repo scope as the WINGET_TOKEN secret. Without it this step is skipped.
+      - name: Send the new version to winget-pkgs
+        if: env.WINGET_TOKEN != ''
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
+          ./wingetcreate.exe submit --token $env:WINGET_TOKEN "desktop/dist/winget/$env:VERSION"

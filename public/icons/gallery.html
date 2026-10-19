@@ -1,0 +1,9 @@
+<!doctype html><meta charset="utf-8"><title>QuorX icons</title>
+<style>body{font:13px system-ui;margin:16px;background:#070908;color:#ddd}.row{display:flex;flex-wrap:wrap;gap:10px}.c{width:120px;padding:8px;border:1px solid #1c2722;border-radius:8px;text-align:center}
+.light{background:#f6f8f7;color:#222}.c img.big{width:64px;height:64px}.c img.s{width:16px;height:16px;vertical-align:middle}.c img.m{width:24px;height:24px;vertical-align:middle}.e{font-size:16px}</style>
+<div id="d" class="row"></div><h3>light</h3><div id="l" class="row light" style="padding:10px"></div>
+<script type="module">
+import { ICONS } from './manifest.js';
+const card = (i) => `<div class="c"><img class="big" src="${i.slug}.svg" onerror="this.closest('.c').style.opacity=.25"><div><span class="e">${i.e[0]}</span> → <img class="m" src="${i.slug}.svg"> <img class="s" src="${i.slug}.svg"></div><small>${i.slug}</small></div>`;
+d.innerHTML = l.innerHTML = ICONS.map(card).join('');
+</script>

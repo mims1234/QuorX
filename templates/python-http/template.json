@@ -1,0 +1,1 @@
+{ "description": "Python server with no dependencies: app.py serves index.html and a JSON /api route; listens on PORT", "start": { "command": "python", "args": ["app.py"] } }

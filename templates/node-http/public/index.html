@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Node app</title>
+  <style>
+    :root { font-family: system-ui, sans-serif; color-scheme: light dark; }
+    body { max-width: 720px; margin: 40px auto; padding: 0 16px; line-height: 1.5; }
+    button { font: inherit; padding: 8px 14px; border-radius: 8px; border: 0; background: #1f7a4d; color: #fff; cursor: pointer; }
+    pre { background: color-mix(in srgb, currentColor 8%, transparent); padding: 12px; border-radius: 8px; overflow: auto; }
+  </style>
+</head>
+<body>
+  <h1>Node app</h1>
+  <p>Served by <code>server.cjs</code>. The button calls <code>/api/hello</code>.</p>
+  <button type="button" id="call">Call the API</button>
+  <pre id="out">(no response yet)</pre>
+  <script>
+    document.getElementById('call').onclick = async () => {
+      const r = await fetch('/api/hello');
+      document.getElementById('out').textContent = JSON.stringify(await r.json(), null, 2);
+    };
+  </script>
+</body>
+</html>

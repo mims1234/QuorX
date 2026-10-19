@@ -1,0 +1,7 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    { "name": "quorx", "runtimeExecutable": "node", "runtimeArgs": ["server.js"], "port": 5188 },
+    { "name": "quorx-alt", "runtimeExecutable": "node", "runtimeArgs": ["server.js"], "port": 5199, "env": { "AGENT_PORT": "5199" } }
+  ]
+}

@@ -1,0 +1,156 @@
+/* Chat header, Direction A "Breadcrumb + dominant title" (OpenDesign project agent-001-chat-header).
+   Top tier: project crumb · messages, then model and cost. Bottom tier: avatar, title, state, tools, ⋯ menu. */
+.chat-avatar-disc { width: 24px; height: 24px; border-radius: 50%; background: hsl(var(--h, 160) 45% 26%); border: 1px solid hsl(var(--h, 160) 55% 45%); color: #ffffff; font-size: 10.5px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; letter-spacing: -0.02em; }
+
+/* Universal Project Hue Badge */
+.proj-hue-tag { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; color: hsl(var(--ph, 150) 55% 55%); background: hsl(var(--ph, 150) 45% 30% / 0.16); border: 1px solid hsl(var(--ph, 150) 45% 45% / 0.35); padding: 1px 7px; border-radius: 4px; text-decoration: none; cursor: pointer; white-space: nowrap; transition: all 0.15s ease; }
+
+.proj-hue-tag:hover { background: hsl(var(--ph, 150) 45% 30% / 0.28); border-color: hsl(var(--ph, 150) 55% 55%); }
+
+.proj-hue-dot { width: 6px; height: 6px; border-radius: 2px; background: hsl(var(--ph, 150) 65% 55%); }
+
+/* Universal Cost Badge (Amber / Money) */
+.cost-badge-amber { display: inline-flex; align-items: center; gap: 4px; font-family: var(--mono); font-size: 11px; font-weight: 600; color: var(--amber); background: var(--amber-dim); border: 1px solid var(--amber-glow); padding: 2px 7px; border-radius: 4px; cursor: pointer; transition: all 0.15s ease; white-space: nowrap; }
+
+.cost-badge-amber:hover { background: var(--amber); color: #07090a; }
+
+/* Universal Model Badge (Violet / AI) */
+.model-badge-violet { display: inline-flex; align-items: center; gap: 4px; font-family: var(--mono); font-size: 10.5px; font-weight: 500; color: var(--violet); background: var(--violet-dim); border: 1px solid var(--violet-glow); padding: 1px 6px; border-radius: 4px; white-space: nowrap; }
+
+/* Live Beacon Dots */
+.live-beacon { width: 7px; height: 7px; border-radius: 50%; display: inline-block; position: relative; }
+
+.live-beacon.running { background: var(--ok); box-shadow: 0 0 8px var(--ok); animation: pulse-beacon 1.4s infinite cubic-bezier(0.4, 0, 0.6, 1); }
+
+.live-beacon.waiting { background: var(--amber); box-shadow: 0 0 8px var(--amber); animation: pulse-beacon-amber 1s infinite cubic-bezier(0.4, 0, 0.6, 1); }
+
+.live-beacon.idle { background: var(--dim); }
+
+0%, 100% { opacity: 1; transform: scale(1); }
+50% { opacity: 0.4; transform: scale(0.85); }
+@keyframes pulse-beacon { }
+
+0%, 100% { opacity: 1; transform: scale(1.1); }
+50% { opacity: 0.5; transform: scale(0.9); }
+@keyframes pulse-beacon-amber { }
+
+/* Shared Icon Buttons */
+.hdr-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: var(--radius-sm); background: transparent; border: 1px solid transparent; color: var(--muted); cursor: pointer; padding: 0; transition: all 0.15s ease; position: relative; flex-shrink: 0; }
+
+.hdr-icon-btn svg { width: 14px; height: 14px; stroke-width: 1.8; stroke: currentColor; fill: none; }
+
+.hdr-icon-btn:hover { background: var(--panel-2); color: var(--text); border-color: var(--line); }
+
+.hdr-icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.hdr-icon-btn.active { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
+
+.hdr-icon-btn.destructive:hover { background: var(--bad-dim); border-color: var(--bad); color: var(--bad); }
+
+/* Overflow Menu (⋯) Dropdown */
+.overflow-popover { position: absolute; top: calc(100% + 6px); right: 8px; z-index: 80; width: 220px; background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--radius); box-shadow: var(--shadow-pop); padding: 6px; display: grid; gap: 2px; animation: popFade 0.15s cubic-bezier(0.16, 1, 0.3, 1); }
+
+.overflow-popover[hidden] { display: none; }
+
+.overflow-item { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: var(--radius-sm); font-size: 12px; font-weight: 500; color: var(--text); background: transparent; border: none; cursor: pointer; text-align: left; width: 100%; transition: all 0.12s ease; }
+
+.overflow-item:hover { background: var(--panel-2); color: var(--text-bright); }
+
+.overflow-item svg { width: 14px; height: 14px; stroke-width: 1.8; stroke: currentColor; fill: none; flex-shrink: 0; }
+
+.overflow-item.destructive { color: var(--bad); }
+
+.overflow-item.destructive:hover { background: var(--bad-dim); color: var(--bad); }
+
+.overflow-divider { height: 1px; background: var(--line); margin: 4px 0; }
+
+/* Shared Usage Popover Simulation */
+
+/* ==========================================================================
+.dir-a-head { background: var(--panel); border-bottom: 1px solid var(--line); padding: 10px 14px; display: flex; flex-direction: column; gap: 6px; position: relative; transition: all 0.2s ease; }
+
+/* Tier 1: Context & Meta row */
+.dir-a-toprow { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11.5px; min-width: 0; }
+
+.dir-a-crumbs { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.dir-a-crumb-sep { color: var(--dim); font-size: 11px; }
+
+.dir-a-meta-chips { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+
+.dir-a-msgs-count { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+
+/* Tier 2: Title & Actions row */
+.dir-a-mainrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
+
+.dir-a-identity { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1 1 auto; }
+
+.dir-a-title-input { font-size: 14.5px; font-weight: 700; color: var(--text-bright); background: transparent; border: 1px solid transparent; border-radius: var(--radius-sm); padding: 3px 6px; margin-left: -6px; width: 100%; max-width: 480px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; outline: none; transition: all 0.15s ease; }
+
+.dir-a-title-input:hover { background: var(--panel-2); border-color: var(--line); }
+
+.dir-a-title-input:focus { background: var(--bg); border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+
+/* State Badge for Direction A */
+.dir-a-state-badge { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: var(--radius-pill); white-space: nowrap; flex-shrink: 0; }
+
+.dir-a-state-badge.idle { color: var(--dim); background: var(--panel-2); }
+
+.dir-a-state-badge.running { color: var(--ok); background: var(--ok-dim); border: 1px solid var(--ok); }
+
+.dir-a-state-badge.waiting { color: var(--amber); background: var(--amber-dim); border: 1px solid var(--amber); animation: pulse-border 1.5s infinite; }
+
+0%, 100% { border-color: var(--amber); box-shadow: 0 0 0 0 var(--amber-glow); }
+50% { border-color: #ffd166; box-shadow: 0 0 8px 1px var(--amber-glow); }
+@keyframes pulse-border { }
+
+.dir-a-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+
+.dir-a-actions-sep { width: 1px; height: 16px; background: var(--line); margin: 0 2px; }
+
+/* Split View Adjustments for Dir A (~480px) */
+.chats.split .dir-a-crumbs .crumb-extra { display: none; }
+.chats.split .dir-a-title-input { max-width: 240px; }
+
+/* Phone View Adjustments for Dir A (375px) */
+@keyframes pulse-beacon { }
+@keyframes pulse-beacon-amber { }
+@keyframes pulse-border { }
+
+@media (max-width: 600px) {
+  .dir-a-meta-chips .model-badge-violet { max-width: 80px; overflow: hidden; text-overflow: ellipsis; }
+  .dir-a-title-input { max-width: 150px; font-size: 13px; }
+  .dir-a-actions .hide-on-phone { display: none; }
+}
+
+/* fitting it into the app */
+.chat-head.dir-a-head { display: flex; flex-direction: column; align-items: stretch; gap: 6px; padding: 8px 12px; height: auto; }
+.dir-a-head .dir-a-title-input { max-width: none; }
+.dir-a-head .ch-proj-tag { max-width: 60%; overflow: hidden; text-overflow: ellipsis; text-transform: none; letter-spacing: 0; }
+.dir-a-head .ch-model-badge { max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+.dir-a-head .hdr-icon-btn { width: 28px; height: 28px; padding: 0; border-radius: 6px; }
+.dir-a-head .ch-more-pop { right: 10px; }
+.dir-a-head .usage-pop { top: calc(100% + 6px); }
+.dir-a-state-badge .live-beacon { width: 6px; height: 6px; }
+
+/* The header adapts to its own width (a chat can be full width, half of a split, or a phone). */
+.chatpane { container-type: inline-size; container-name: chat; }
+.dir-a-head .dir-a-title-input { flex: 1 1 auto; min-width: 60px; }
+.dir-a-head .ch-split-menu { display: none; }
+@container chat (max-width: 520px) {
+  .dir-a-head .dir-a-state-badge.idle { display: none !important; }
+  .dir-a-head .dir-a-actions { gap: 2px; }
+}
+@container chat (max-width: 380px) {
+  .dir-a-head .dir-a-msgs-count, .dir-a-head .dir-a-crumb-sep { display: none !important; }
+  .dir-a-head .ch-model-badge { max-width: 110px; }
+}
+
+/* Buttons on the LEFT, information on the right. The chat column's left edge stays put when the
+   artifact pane or a second chat opens or closes, so ◧ 🗂 📊 ⧉ ⋯ never move under the mouse. */
+.dir-a-head .dir-a-mainrow { justify-content: flex-start; }
+.dir-a-head .dir-a-actions { order: -1; margin-right: 6px; padding-right: 8px; border-right: 1px solid var(--line); gap: 2px; }
+.dir-a-head .dir-a-actions-sep { display: none !important; }
+.dir-a-head .dir-a-identity { flex: 1 1 auto; min-width: 0; }
+.dir-a-head .dir-a-state-badge { margin-left: auto; }
+.dir-a-head .ch-more-pop, .dir-a-head .usage-pop { left: 10px; right: auto; }

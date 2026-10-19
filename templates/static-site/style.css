@@ -1,0 +1,16 @@
+:root {
+  --bg: #f6f7f5; --panel: #ffffff; --text: #16201b; --muted: #5d6b64; --accent: #1f7a4d; --line: #dfe5e1;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0b0f0d; --panel: #131a17; --text: #e8eeea; --muted: #94a39b; --accent: #2fb36f; --line: #22302a; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); line-height: 1.5; }
+.site-head, .wrap { max-width: 960px; margin: 0 auto; padding: 24px 16px; }
+.site-head h1 { margin: 0 0 4px; font-size: clamp(28px, 5vw, 44px); }
+.lead { color: var(--muted); margin: 0; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 20px; }
+button { font: inherit; padding: 10px 16px; border-radius: 8px; border: 0; background: var(--accent); color: #fff; cursor: pointer; }
+button:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 50%, transparent); outline-offset: 2px; }
+code { background: color-mix(in srgb, var(--accent) 12%, transparent); padding: 1px 5px; border-radius: 4px; }

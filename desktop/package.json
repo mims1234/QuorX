@@ -1,0 +1,106 @@
+{
+  "name": "quorx-desktop",
+  "productName": "QuorX",
+  "version": "0.1.0",
+  "private": true,
+  "description": "QuorX desktop: an open-source AI agent with a quorum of models behind every call, with real Chromium tabs in the pane's Browser tab.",
+  "type": "commonjs",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "icon": "node make-icon.js",
+    "dist": "node make-icon.js && electron-builder --win nsis --x64",
+    "release": "npm version patch --no-git-tag-version && node sync-version.js && npm run dist"
+  },
+  "devDependencies": {
+    "electron": "^44.9.0",
+    "electron-builder": "^26.15.3"
+  },
+  "author": "QuorX",
+  "build": {
+    "appId": "dev.quorx.desktop",
+    "productName": "QuorX",
+    "copyright": "QuorX",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "icon.js",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "..",
+        "to": "app-server",
+        "filter": [
+          "server.js",
+          "package.json",
+          "server/**/*",
+          "public/**/*",
+          "skills/**/*",
+          "templates/**/*",
+          "README.md",
+          "node_modules/node-pty/package.json",
+          "node_modules/node-pty/lib/**/*",
+          "node_modules/node-pty/prebuilds/**/*",
+          "node_modules/@xterm/xterm/package.json",
+          "node_modules/@xterm/xterm/lib/xterm.js",
+          "node_modules/@xterm/xterm/css/**/*",
+          "node_modules/@xterm/addon-fit/package.json",
+          "node_modules/@xterm/addon-fit/lib/addon-fit.js"
+        ]
+      }
+    ],
+    "asar": true,
+    "electronLanguages": [
+      "en-US"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "QuorX",
+      "runAfterFinish": true,
+      "artifactName": "QuorX-Setup-${version}.exe"
+    },
+    "publish": [
+      {
+        "provider": "generic",
+        "url": "https://github.com/mims1234/QuorX/releases/latest/download"
+      }
+    ]
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  },
+  "quorx": {
+    "updateUrl": "https://github.com/mims1234/QuorX/releases/latest/download",
+    "_note": "Set updateUrl to where you publish releases (the files in dist: latest.yml, QuorX-Setup-<version>.exe and its .blockmap), e.g. https://github.com/<you>/<repo>/releases/latest/download. Users can change it in Settings → About.",
+    "winget": {
+      "packageIdentifier": "QuorX.QuorX",
+      "publisher": "QuorX",
+      "publisherUrl": "https://github.com/mims1234",
+      "packageUrl": "https://github.com/mims1234/QuorX",
+      "license": "Proprietary",
+      "licenseUrl": "",
+      "downloadBase": "https://github.com/mims1234/QuorX/releases/download/v{version}",
+      "_note": "For npm run winget (scripts/winget-manifest.mjs). downloadBase must be a permanent per-version https address with {version}, e.g. https://github.com/<you>/<repo>/releases/download/v{version}. Empty: a GitHub releases/latest/download updateUrl is turned into that."
+    }
+  }
+}

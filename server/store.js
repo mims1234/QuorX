@@ -1,0 +1,274 @@
+// Chat history and projects on disk: one JSON file per chat in data/chats, projects in
+// data/projects.json. Deleting a chat moves it to data/trash; project folders are never deleted.
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { HOME, ROOT } from './openrouter.js';
+import { externalize } from './blobs.js';
+
+const DIR = path.join(HOME, 'data', 'chats');
+const TRASH = path.join(HOME, 'data', 'trash');
+export const WORKSPACES = path.join(HOME, 'workspaces');
+fs.mkdirSync(DIR, { recursive: true });
+// Nothing new goes into the harness's own folder: projects live in folders the user picks. (workspaces/ only holds
+// projects from before that rule, until they get a folder.)
+const DOCS = [path.join(os.homedir(), 'Documents'), os.homedir()].find((d) => fs.existsSync(d));
+export const SCRATCH_HOME = path.join(DOCS, 'QuorX', 'Scratch');
+// True for a folder inside the harness itself (the app's folder or its data folder): projects may not live there.
+export const insideHarness = (d) => !!d && [HOME, ROOT].some((h) => { const a = path.resolve(d).toLowerCase(), b = path.resolve(h).toLowerCase(); return a === b || a.startsWith(b + path.sep); });
+
+export const validId = (id) => typeof id === 'string' && /^[a-z0-9][a-z0-9-]{2,63}$/i.test(id);
+
+// ---------- projects: a folder that many chats can work in ----------
+// path = null means the default folder workspaces/<id>; otherwise any folder the user chose.
+const PROJECTS = path.join(HOME, 'data', 'projects.json');
+export function listProjects() {
+  let list = [];
+  try { list = JSON.parse(fs.readFileSync(PROJECTS, 'utf8')); } catch { /* first run */ }
+  if (!list.some((p) => p.id === 'scratch')) list.unshift({ id: 'scratch', name: 'Scratch', path: null, created: Date.now() });
+  // A folder the user chose can be moved or deleted outside the app: say so instead of quietly making an empty one.
+  // needsFolder: a project whose files sit inside the harness (no folder picked, or one inside the app): it must pick a folder.
+  return list.map((p) => ({ ...p, dir: p.path || path.join(WORKSPACES, p.id), missing: !!p.path && !fs.existsSync(p.path), needsFolder: !p.path || insideHarness(p.path) }));
+}
+// Scratch moves out of the harness once: to Documents\QuorX\Scratch, with its old files copied over.
+(function adoptScratch() {
+  try {
+    let list = [];
+    try { list = JSON.parse(fs.readFileSync(PROJECTS, 'utf8')); } catch { /* first run */ }
+    const sc = list.find((p) => p.id === 'scratch');
+    if (sc?.path) return;
+    fs.mkdirSync(SCRATCH_HOME, { recursive: true });
+    const old = path.join(WORKSPACES, 'scratch');
+    if (fs.existsSync(old)) fs.cpSync(old, SCRATCH_HOME, { recursive: true, force: false, errorOnExist: false });
+    if (sc) sc.path = SCRATCH_HOME; else list.unshift({ id: 'scratch', name: 'Scratch', path: SCRATCH_HOME, created: Date.now() });
+    fs.mkdirSync(path.dirname(PROJECTS), { recursive: true });
+    fs.writeFileSync(PROJECTS, JSON.stringify(list, null, 2));
+  } catch { /* Scratch stays where it is until next start */ }
+})();
+const rawProjects = () => listProjects().map(({ dir: _d, missing: _m, needsFolder: _n, ...p }) => p);
+// A project is an existing folder on this computer, and its name is always that folder's name: it changes only
+// when the project moves to another folder. (Scratch keeps its built-in name and folder.)
+export function saveProject({ id, path: dir }) {
+  if (!validId(id)) throw new Error('bad project id');
+  const list = rawProjects();
+  const i = list.findIndex((p) => p.id === id);
+  if (dir) {
+    if (!path.isAbsolute(dir)) throw new Error('the folder must be an absolute path, e.g. D:/Coding/my-app');
+    const real = path.resolve(dir);
+    if (real === path.parse(real).root) throw new Error('pick a project folder, not a whole drive');
+    if (insideHarness(real)) throw new Error('that folder is inside QuorX itself: pick a folder of your own, outside the app');
+    if (!fs.existsSync(real) || !fs.statSync(real).isDirectory()) throw new Error(`there is no folder at ${real}: pick one that exists`);
+    dir = real;
+  } else if (i < 0 && id !== 'scratch') throw new Error('pick a folder on this PC for the project');
+  const name = dir ? path.basename(dir) : list[i]?.name || 'Scratch';
+  const p = { ...(list[i] || { created: Date.now() }), id, name: name.slice(0, 80), path: dir === undefined || dir === null || dir === '' ? list[i]?.path ?? null : dir };
+  // A project leaving the harness's folder: its files come along (copied, never overwriting; the old copy stays).
+  const from = i >= 0 && p.path && (!list[i].path || insideHarness(list[i].path)) ? list[i].path || path.join(WORKSPACES, id) : null;
+  if (from && fs.existsSync(from)) { try { fs.cpSync(from, p.path, { recursive: true, force: false, errorOnExist: false }); } catch { /* best effort */ } }
+  if (i >= 0) list[i] = p; else list.push(p);
+  fs.writeFileSync(PROJECTS, JSON.stringify(list, null, 2));
+  return { ...p, dir: p.path || path.join(WORKSPACES, id) };
+}
+// Deleting a project forgets it and moves its chats to data/trash. Its folder is never touched.
+export function forgetProject(id) {
+  if (id === 'scratch' || !listProjects().some((p) => p.id === id)) return false;
+  for (const c of listChats()) if (c.projectId === id) trashChat(c.id);
+  const list = rawProjects().filter((p) => p.id !== id);
+  fs.writeFileSync(PROJECTS, JSON.stringify(list, null, 2));
+  return true;
+}
+export function projectDir(id) {
+  const p = listProjects().find((x) => x.id === id);
+  if (!p) throw new Error(`no project ${id}`);
+  if (p.missing) throw Object.assign(new Error(`the folder of project "${p.name}" is missing (${p.dir}); it may have been moved, renamed or deleted. Reselect it in the project settings.`), { code: 'FOLDER_MISSING', projectId: id });
+  fs.mkdirSync(p.dir, { recursive: true });
+  return p.dir;
+}
+const file = (id) => path.join(DIR, `${id}.json`);
+// A chat holds one agent ({ setup, messages, artifacts }). Older saves had layouts of agent columns.
+export const agentsOf = (c) => (c.agent ? [c.agent] : c.layouts?.[c.mode] || c.layouts?.chat || []);
+
+// ---------- per-chat summaries, cached ----------
+// Each chat file is parsed once; the summary is reused until the file changes (by size and mtime).
+// The sidebar and the costs view both read these, so neither re-parses every chat on every request.
+const SUMMARIES = new Map(); // file name → { key, s }
+function summarise(c) {
+  const lay = agentsOf(c);
+  const msgs = lay.flatMap((col) => col.messages || []);
+  const all = c.agent ? msgs : Object.values(c.layouts || {}).flatMap((l) => l.flatMap((col) => col.messages || []));
+  const lastBot = [...msgs].reverse().find((m) => m.role === 'assistant' && m.content);
+  // Spend over time (for today / 7 days) and per model, plus calls made outside a reply (mic).
+  const spend = [], models = {};
+  for (const m of msgs) {
+    const cost = m.stats?.cost || 0;
+    if (cost) spend.push([m.doneAt || m.at || 0, cost]);
+    for (const [model, v] of Object.entries(m.stats?.byModel || {})) models[model] = (models[model] || 0) + (v.cost || 0);
+  }
+  for (const x of c.agent?.extraUsage || []) { spend.push([x.at || 0, x.cost || 0]); models[x.model] = (models[x.model] || 0) + (x.cost || 0); }
+  return {
+    id: c.id, title: String(c.title || 'New chat'), mode: c.mode, projectId: c.projectId || 'scratch', created: c.created, updated: c.updated,
+    lastAt: Math.max(0, ...all.map((m) => m.doneAt || m.at || 0)) || c.lastAt || c.created || c.updated,
+    agents: lay.map((col) => col.name), model: lay[0]?.setup?.model || null, preview: String(lastBot?.content || '').replace(/\s+/g, ' ').slice(0, 90),
+    messages: msgs.filter((m) => m.role === 'user').length, cost: spend.reduce((n, [, v]) => n + v, 0),
+    artifacts: lay.reduce((n, col) => n + Object.keys(col.artifacts || {}).length, 0), spend, models,
+    // Replies whose cost is saved in this file (the budget ledger counts the others itself).
+    runIds: msgs.filter((m) => m.runId && m.stats).map((m) => m.runId),
+  };
+}
+function summaries() {
+  const names = fs.readdirSync(DIR).filter((f) => f.endsWith('.json'));
+  const seen = new Set(names);
+  for (const k of SUMMARIES.keys()) if (!seen.has(k)) SUMMARIES.delete(k);
+  const out = [];
+  for (const f of names) {
+    try {
+      const st = fs.statSync(path.join(DIR, f)), key = `${st.size}:${st.mtimeMs}`;
+      let hit = SUMMARIES.get(f);
+      if (!hit || hit.key !== key) { hit = { key, s: summarise(JSON.parse(fs.readFileSync(path.join(DIR, f), 'utf8'))) }; SUMMARIES.set(f, hit); }
+      out.push(hit.s);
+    } catch { /* a file being written right now: skip it this time */ }
+  }
+  return out;
+}
+// A short summary per chat for the sidebar, without reading whole message histories into the page.
+export function listChats() {
+  return summaries().map(({ spend: _s, models: _m, runIds: _r, ...c }) => c).sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0));
+}
+// What a project's saved chats cost, and which replies those costs come from.
+export function projectChatsSpend(projectId) {
+  let cost = 0;
+  const runIds = new Set();
+  for (const c of summaries()) if (c.projectId === projectId) { cost += c.cost; for (const id of c.runIds) runIds.add(id); }
+  return { cost, runIds };
+}
+// The project's budget in dollars, or null for none. Checks (never below what is spent) are in budget.js.
+export function setProjectBudget(id, budget) {
+  const list = rawProjects();
+  const p = list.find((x) => x.id === id);
+  if (!p) throw new Error('no such project');
+  p.budget = budget;
+  fs.writeFileSync(PROJECTS, JSON.stringify(list, null, 2));
+  return p;
+}
+
+// The colour of the project's name ("#rrggbb"), or null for the automatic one picked from its name.
+export function setProjectColor(id, color) {
+  if (color != null && !/^#[0-9a-f]{6}$/i.test(color)) throw new Error('colour must look like #a1b2c3');
+  const list = rawProjects();
+  let p = list.find((x) => x.id === id);
+  if (!p && id === 'scratch') { p = listProjects().find((x) => x.id === 'scratch'); p = { id: p.id, name: p.name, path: p.path, created: p.created }; list.unshift(p); }
+  if (!p) throw new Error('no such project');
+  if (color) p.color = color.toLowerCase(); else delete p.color;
+  fs.writeFileSync(PROJECTS, JSON.stringify(list, null, 2));
+  return { id: p.id, color: p.color || null };
+}
+
+export function getChat(id) {
+  if (!validId(id) || !fs.existsSync(file(id))) return null;
+  return JSON.parse(fs.readFileSync(file(id), 'utf8'));
+}
+
+// ---------- saving: the whole chat, or only what changed ----------
+// Every write stamps the chat with a new `rev`. The page then sends only the messages and artifacts that changed
+// since the save it last heard back about (patchChat). If the file has moved on since (another tab, another
+// copy of the harness on the same data, an older page that saves whole chats), the patch is refused and the
+// page sends the whole chat again. The file stays one plain JSON chat either way.
+let revs = 0;
+const newRev = () => `${Date.now().toString(36)}-${(++revs).toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+// The last few chats written, so a patch needn't read and parse the file again while it is unchanged on disk.
+const LAST = new Map(); // id → { key, doc }
+const stamp = (id) => { try { const st = fs.statSync(file(id)); return `${st.size}:${st.mtimeMs}`; } catch { return null; } };
+function writeChat(id, doc) {
+  fs.writeFileSync(file(id) + '.tmp', JSON.stringify(doc));
+  fs.renameSync(file(id) + '.tmp', file(id));
+  LAST.delete(id); LAST.set(id, { key: stamp(id), doc });
+  if (LAST.size > 8) LAST.delete(LAST.keys().next().value);
+  return { id, updated: doc.updated, rev: doc.rev };
+}
+function currentChat(id) {
+  const hit = LAST.get(id);
+  return hit && hit.key && hit.key === stamp(id) ? hit.doc : getChat(id);
+}
+
+export function saveChat(id, chat) {
+  if (!validId(id)) throw new Error('bad chat id');
+  if (!chat || typeof chat !== 'object' || Array.isArray(chat)) throw new Error('a chat must be an object');
+  // The page always sends `created`; only an older page without it costs a read of the old file.
+  const created = Number(chat.created) || getChat(id)?.created || Date.now();
+  // Big pictures and media (older chats kept every screenshot inline) are stored once as blobs.
+  return writeChat(id, { ...externalize(chat), id, created, updated: Date.now(), rev: newRev() });
+}
+
+// A save of only what changed: { base: the rev it builds on, count: how many messages the chat has now,
+// messages: { index: message } for new or changed ones, artifacts: { id: artifact, or null when removed },
+// head: the rest of the chat (title, tools, the agent's setup...) only when that changed }.
+// Returns { stale: true } when the chat on disk is not the one the patch builds on; the page then saves it whole.
+export function patchChat(id, p) {
+  if (!validId(id)) throw new Error('bad chat id');
+  if (!p || typeof p !== 'object' || typeof p.base !== 'string' || !Number.isInteger(p.count) || p.count < 0) throw new Error('a patch needs base and count');
+  const old = currentChat(id);
+  if (!old || old.rev !== p.base || !old.agent) return { stale: true, rev: old?.rev || null };
+  const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+  if (p.head != null && !isObj(p.head)) throw new Error('head must be an object');
+  // Only the parts sent go through the blob store; the rest is on disk already.
+  const { messages: changed = {}, artifacts: arts = {}, head } = externalize({ messages: p.messages, artifacts: p.artifacts, head: p.head });
+  const messages = (old.agent.messages || []).slice(0, p.count);
+  for (const [k, m] of Object.entries(changed || {})) {
+    const i = Number(k);
+    if (!/^\d+$/.test(k) || i >= p.count || !isObj(m)) throw new Error(`bad message ${k}`);
+    messages[i] = m;
+  }
+  // A gap means the page and the file disagree about the messages: save whole instead of guessing.
+  // (Array.from, since some() skips the holes.)
+  if (messages.length !== p.count || Array.from(messages).some((m) => !m)) return { stale: true, rev: old.rev };
+  const artifacts = { ...(old.agent.artifacts || {}) };
+  for (const [k, a] of Object.entries(arts || {})) {
+    if (k === '__proto__') continue;
+    if (a === null) delete artifacts[k]; else if (isObj(a)) artifacts[k] = a; else throw new Error(`bad artifact ${k}`);
+  }
+  const top = head || old;
+  const created = Number(top.created) || old.created || Date.now();
+  return writeChat(id, { ...top, id, created, updated: Date.now(), rev: newRev(), agent: { ...(head ? head.agent : old.agent), messages, artifacts } });
+}
+
+export function trashChat(id) {
+  LAST.delete(id);
+  if (!validId(id) || !fs.existsSync(file(id))) return false;
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  fs.mkdirSync(TRASH, { recursive: true });
+  fs.renameSync(file(id), path.join(TRASH, `${id}-${stamp}.json`));
+  return true; // the project folder is shared with other chats, so it stays
+}
+
+// ---------- costs: per chat and per project, with today / last 7 days / all time ----------
+// The overview sends every project's totals but only its top `per` chats; the rest come a page at a time.
+function costRows() {
+  const now = Date.now(), dayStart = new Date(new Date().toDateString()).getTime(), weekAgo = now - 7 * 864e5;
+  return summaries().filter((c) => c.messages).map((c) => {
+    let today = 0, week = 0;
+    for (const [t, v] of c.spend) { if (t >= dayStart) today += v; if (t >= weekAgo) week += v; }
+    return { id: c.id, title: c.title, projectId: c.projectId, messages: c.messages, cost: c.cost, today, week, lastAt: c.lastAt, models: c.models };
+  });
+}
+const SORT = { cost: (a, b) => b.cost - a.cost, today: (a, b) => b.today - a.today || b.cost - a.cost, messages: (a, b) => b.messages - a.messages, name: (a, b) => a.title.localeCompare(b.title), recent: (a, b) => (b.lastAt || 0) - (a.lastAt || 0) };
+export function costSummary({ per = 5, sort = 'cost' } = {}) {
+  const rows = costRows(), by = SORT[sort] || SORT.cost;
+  const projects = Object.fromEntries(listProjects().map((p) => [p.id, { id: p.id, name: p.name, dir: p.dir, color: p.color || null, cost: 0, today: 0, week: 0, messages: 0, chatCount: 0, lastAt: 0, chats: [] }]));
+  const total = { cost: 0, today: 0, week: 0, chats: rows.length };
+  for (const r of rows) {
+    const p = projects[r.projectId] || (projects[r.projectId] = { id: r.projectId, name: `${r.projectId} (removed)`, cost: 0, today: 0, week: 0, messages: 0, chatCount: 0, chats: [] });
+    p.chats.push(r); p.chatCount++; p.lastAt = Math.max(p.lastAt || 0, r.lastAt || 0);
+    for (const k of ['cost', 'today', 'week', 'messages']) p[k] += r[k];
+    for (const k of ['cost', 'today', 'week']) total[k] += r[k];
+  }
+  for (const p of Object.values(projects)) p.chats = p.chats.sort(by).slice(0, Math.max(1, Math.min(50, per)));
+  const PSORT = { cost: (a, b) => b.cost - a.cost, today: (a, b) => b.today - a.today || b.cost - a.cost, messages: (a, b) => b.messages - a.messages, name: (a, b) => a.name.localeCompare(b.name), recent: (a, b) => (b.lastAt || 0) - (a.lastAt || 0) };
+  return { total, projects: Object.values(projects).filter((p) => p.chatCount).sort(PSORT[sort] || PSORT.cost) };
+}
+// One page of chats: in a project, or matching a search across all projects.
+export function costChats({ project, q = '', sort = 'cost', offset = 0, limit = 20 } = {}) {
+  q = String(q).trim().toLowerCase();
+  const list = costRows().filter((r) => (!project || r.projectId === project) && (!q || r.title.toLowerCase().includes(q))).sort(SORT[sort] || SORT.cost);
+  offset = Math.max(0, Number(offset) || 0); limit = Math.max(1, Math.min(100, Number(limit) || 20));
+  return { total: list.length, offset, chats: list.slice(offset, offset + limit) };
+}

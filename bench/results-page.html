@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Model Build Bench</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --card: #ffffff; --ink: #1d1d1b; --muted: #6b6b66; --line: #e3e2dd;
+    --good: #1f7a4d; --good-bg: #e3f3ea; --bad: #b3261e; --bad-bg: #fbe7e5; --mid: #8a6100; --mid-bg: #fbf1d9;
+    --skip: #77756f; --skip-bg: #efeee9; --accent: #3651c9; --money: #6a3fb5;
+    --t-free: #1f7a4d; --t-cheap: #3651c9; --t-moderate: #8a6100; --t-frontier: #b3261e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #151514; --card: #1f1f1d; --ink: #ecebe6; --muted: #a2a19a; --line: #34332f;
+      --good: #6fd19c; --good-bg: #183526; --bad: #ff8a80; --bad-bg: #3a1c1a; --mid: #f0c25a; --mid-bg: #3a3018;
+      --skip: #a2a19a; --skip-bg: #2a2a27; --accent: #8ea2ff; --money: #c3a3ff;
+      --t-free: #6fd19c; --t-cheap: #8ea2ff; --t-moderate: #f0c25a; --t-frontier: #ff8a80;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1200px; margin: 0 auto; padding: 24px 16px 60px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 16px; margin: 28px 0 8px; }
+  .sub { color: var(--muted); margin: 0 0 16px; }
+  .status { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 4px; }
+  .pill { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 3px 10px; font-size: 13px; }
+  .money { color: var(--money); font-variant-numeric: tabular-nums; font-weight: 600; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { padding: 7px 10px; text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { font-size: 12px; color: var(--muted); font-weight: 600; background: var(--card); position: sticky; top: 0; cursor: pointer; user-select: none; }
+  th:first-child, td:first-child { text-align: left; }
+  tr:last-child td { border-bottom: 0; }
+  .tier { display: inline-block; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; padding: 1px 6px; border-radius: 4px; border: 1px solid currentColor; margin-left: 6px; }
+  .tier.free { color: var(--t-free); } .tier.cheap { color: var(--t-cheap); } .tier.moderate { color: var(--t-moderate); } .tier.frontier { color: var(--t-frontier); }
+  .score { display: inline-block; min-width: 40px; text-align: center; border-radius: 6px; padding: 2px 6px; font-weight: 600; }
+  .score.good { background: var(--good-bg); color: var(--good); } .score.mid { background: var(--mid-bg); color: var(--mid); } .score.bad { background: var(--bad-bg); color: var(--bad); } .score.skip { background: var(--skip-bg); color: var(--skip); font-weight: 400; }
+  .delta.up { color: var(--good); } .delta.down { color: var(--bad); }
+  .grid td { text-align: center; }
+  .cell { cursor: pointer; border: 0; background: none; font: inherit; color: inherit; padding: 0; }
+  .cell:focus-visible { outline: 2px solid var(--accent); border-radius: 6px; }
+  .detail { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-top: 12px; }
+  .detail[hidden] { display: none; }
+  .detail h3 { margin: 0 0 6px; font-size: 15px; }
+  .detail ul { margin: 6px 0; padding-left: 18px; }
+  .tools { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+  .tool { font: 12px ui-monospace, Consolas, monospace; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px; }
+  a { color: var(--accent); }
+  .note { color: var(--muted); font-size: 13px; margin-top: 8px; }
+  table.qs { margin: 8px 0; font-size: 13px; } table.qs td, table.qs th { white-space: normal; text-align: left; vertical-align: top; }
+  .bucket { font-size: 12px; padding: 1px 6px; border-radius: 4px; background: var(--skip-bg); color: var(--skip); white-space: nowrap; }
+  .bucket.flipped { background: var(--good-bg); color: var(--good); } .bucket.confirmed { background: var(--mid-bg); color: var(--mid); }
+  .legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 13px; color: var(--muted); margin: 8px 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Model build benchmark</h1>
+  <p class="sub" id="sub"></p>
+  <div class="status" id="status"></div>
+
+  <h2>Leaderboard</h2>
+  <p class="note">Score = the judge's four scores added up (function, craft, design, originality; each 1–5, so 4–20). A build passes when every score is at least the bar. Columns are the setups compared, such as direct (one plain call, no tools) and harness (the full QuorX agent). Click a column to sort.</p>
+  <div class="card"><table id="board"></table></div>
+
+  <h2>Every build</h2>
+  <div class="legend"><span><span class="score good">16</span> passed</span><span><span class="score mid">12</span> scored, did not pass</span><span><span class="score bad">6</span> weak or broken</span><span><span class="score skip">—</span> not run / failed</span></div>
+  <div class="card"><table class="grid" id="grid"></table></div>
+  <div class="detail" id="detail" hidden></div>
+
+  <h2>Tool use</h2>
+  <p class="note">Tool calls the builder itself made per build (helpers and the judge not counted), how many came back as errors, how often it chose to ask the deciders a question when it could, and how often it had them check a screenshot (the look tool). Question outcomes: pointless (it was already sure and they agreed) · confirmed its unsure guess · <b>changed its answer</b> · unclear.</p>
+  <div class="card"><table id="tools"></table></div>
+</main>
+<script>
+const DATA = /*DATA*/null;
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const avg = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
+const short = (id) => String(id).split('/').pop();
+const money = (n) => (n == null ? '—' : n < 0.01 ? `$${n.toFixed(4)}` : `$${n.toFixed(3)}`);
+const cls = (r) => (!r || r.skipped || !r.scores ? 'skip' : r.pass ? 'good' : r.total >= 10 ? 'mid' : 'bad');
+
+function render() {
+  const D = DATA;
+  if (!D) { $('#sub').textContent = 'No results yet.'; return; }
+  const builders = Object.keys(D.models);
+  const colOf = (r) => r.col || `decide ${r.decide || 'off'}`;
+  const ORDER = ['direct', 'decide off', 'decide auto', 'decide force-first'];
+  const modes = [...new Set(D.results.map(colOf))].sort((a, b) => (ORDER.indexOf(a) + 1 || 99) - (ORDER.indexOf(b) + 1 || 99) || a.localeCompare(b));
+  const runs = D.results;
+  $('#sub').textContent = `${builders.length} models × ${D.tasks.length} tasks × ${modes.length} decider setting${modes.length > 1 ? 's' : ''} · judged by ${short(D.judge)} · pass bar ${D.bar}/5 on every score · updated ${new Date(D.at).toLocaleString()}`;
+  const doneN = runs.length, ran = runs.filter((r) => !r.skipped).length;
+  $('#status').innerHTML = `<span class="pill">${D.running ? '⏳ running' : '✓ finished'} · ${doneN}/${D.total} builds</span><span class="pill">${ran} built, ${doneN - ran} skipped</span><span class="pill">spent <span class="money">${money(D.spent)}</span>${D.cap ? ` of a <span class="money">$${D.cap}</span> cap` : ''}</span>`;
+
+  // Leaderboard
+  const of = (b, m) => runs.filter((r) => r.builder === b && (m == null || colOf(r) === m) && !r.skipped);
+  const scoreOf = (rs) => avg(rs.filter((r) => r.scores).map((r) => r.total));
+  const rows = builders.map((b) => {
+    const all = of(b), info = D.models[b];
+    const byMode = Object.fromEntries(modes.map((m) => [m, scoreOf(of(b, m))]));
+    const skipped = runs.filter((r) => r.builder === b && r.skipped);
+    return { b, info, all, byMode, score: scoreOf(all), passed: all.filter((r) => r.pass).length, n: all.length, cost: avg(all.map((r) => r.cost)), min: avg(all.map((r) => r.ms / 60000)), skipped: skipped.length, why: skipped[0]?.skipped };
+  });
+  const cols = [
+    ['Model', (r) => r.b, (r) => `${esc(short(r.b))}${r.info.tier ? `<span class="tier ${esc(r.info.tier)}">${esc(r.info.tier)}</span>` : ''}${r.skipped ? ` <span title="${esc(r.why)}">⚠</span>` : ''}`],
+    ['Score', (r) => r.score ?? -1, (r) => scoreChip(r.score, r.n ? r.passed === r.n : false)],
+    ...modes.map((m) => [m[0].toUpperCase() + m.slice(1), (r) => r.byMode[m] ?? -1, (r) => (r.byMode[m] == null ? '—' : r.byMode[m].toFixed(1))]),
+    ...(modes.length === 2 ? [['Δ', (r) => (r.byMode[modes[1]] ?? 0) - (r.byMode[modes[0]] ?? 0), (r) => { if (r.byMode[modes[0]] == null || r.byMode[modes[1]] == null) return '—'; const d = r.byMode[modes[1]] - r.byMode[modes[0]]; return `<span class="delta ${d > 0.05 ? 'up' : d < -0.05 ? 'down' : ''}">${d > 0 ? '+' : ''}${d.toFixed(1)}</span>`; }]] : []),
+    ['Passed', (r) => (r.n ? r.passed / r.n : -1), (r) => `${r.passed}/${r.n}`],
+    ['$ / build', (r) => r.cost ?? 0, (r) => `<span class="money">${money(r.cost)}</span>`],
+    ['Price in/out per M', (r) => r.info.price?.[0] ?? 0, (r) => (r.info.price ? `<span class="money">$${r.info.price[0]} / $${r.info.price[1]}</span>` : '—')],
+    ['Min / build', (r) => r.min ?? 0, (r) => (r.min == null ? '—' : r.min.toFixed(1))],
+  ];
+  table('#board', cols, rows, 1);
+
+  // Grid
+  const head = `<tr><th>Model</th>${D.tasks.map((t) => modes.map((m) => `<th title="${esc(t.prompt)}">${esc(t.id)}${modes.length > 1 ? `<br><small>${esc(m)}</small>` : ''}</th>`).join('')).join('')}</tr>`;
+  $('#grid').innerHTML = head + builders.map((b) => `<tr><td>${esc(short(b))}${D.models[b].tier ? `<span class="tier ${esc(D.models[b].tier)}">${esc(D.models[b].tier)}</span>` : ''}</td>${D.tasks.map((t) => modes.map((m) => {
+    const i = runs.findIndex((r) => r.builder === b && r.task === t.id && colOf(r) === m);
+    const r = runs[i];
+    if (!r) return '<td><span class="score skip">·</span></td>';
+    return `<td><button class="cell" data-i="${i}" type="button"><span class="score ${cls(r)}">${r.scores ? r.total : '—'}</span></button></td>`;
+  }).join('')).join('')}</tr>`).join('');
+  for (const c of document.querySelectorAll('.cell')) c.onclick = () => showDetail(runs[Number(c.dataset.i)]);
+
+  // Tools
+  const trows = builders.map((b) => {
+    const rs = of(b); const names = {};
+    for (const r of rs) for (const [k, v] of Object.entries(r.tools || {})) names[k] = (names[k] || 0) + v;
+    const auto = rs.filter((r) => r.decide !== 'off' && r.mode !== 'direct');
+    return { b, info: D.models[b], calls: avg(rs.map((r) => r.toolCalls || 0)), errs: avg(rs.map((r) => r.toolErrors || 0)), asks: auto.length ? avg(auto.map((r) => r.deciders?.asks || 0)) : null, looks: auto.length ? avg(auto.map((r) => r.deciders?.looks || 0)) : null, oc: rs.reduce((o, r) => { for (const [k, v] of Object.entries(r.deciders?.outcomes || {})) o[k] = (o[k] || 0) + v; return o; }, {}), qn: rs.reduce((n, r) => n + Object.values(r.deciders?.outcomes || {}).reduce((a, b) => a + b, 0), 0), askedRuns: auto.filter((r) => (r.deciders?.asks || 0) > 0).length, autoN: auto.length, retries: rs.reduce((a, r) => a + (r.retries || 0), 0), top: Object.entries(names).sort((x, y) => y[1] - x[1]).slice(0, 6) };
+  });
+  table('#tools', [
+    ['Model', (r) => r.b, (r) => `${esc(short(r.b))}${r.info.tier ? `<span class="tier ${esc(r.info.tier)}">${esc(r.info.tier)}</span>` : ''}`],
+    ['Tool calls / build', (r) => r.calls ?? 0, (r) => (r.calls == null ? '—' : r.calls.toFixed(1))],
+    ['Errors / build', (r) => r.errs ?? 0, (r) => (r.errs == null ? '—' : r.errs.toFixed(1))],
+    ['Asked deciders', (r) => r.asks ?? -1, (r) => (r.asks == null ? '—' : `${r.askedRuns}/${r.autoN} builds · ${r.asks.toFixed(1)} times each`)],
+    ['Question outcomes', (r) => r.flipped ?? -1, (r) => (r.qn ? `<span title="pointless / confirmed / changed its answer / unclear">${r.oc.theater || 0} · ${r.oc.confirmed || 0} · <b>${r.oc.flipped || 0}</b> · ${(r.oc.unclear || 0) + (r.oc.unmatched || 0)}</span>` : '—')],
+    ['Screenshot checks', (r) => r.looks ?? -1, (r) => (r.looks == null ? '—' : `${r.looks.toFixed(1)} per build`)],
+    ['Model retries', (r) => r.retries, (r) => r.retries],
+    ['Most used tools', () => 0, (r) => `<div class="tools" style="justify-content:flex-end">${r.top.map(([k, v]) => `<span class="tool">${esc(k)} ×${v}</span>`).join('')}</div>`],
+  ], trows, 1);
+}
+
+const BUCKET = { theater: 'pointless (it was sure, they agreed)', confirmed: 'confirmed its unsure guess', flipped: 'changed its answer', unclear: 'deciders unsure', unmatched: 'guess not an option', skipped: 'skipped' };
+function scoreChip(v, allPass) { return v == null ? '<span class="score skip">—</span>' : `<span class="score ${allPass ? 'good' : v >= 12 ? 'mid' : 'bad'}">${v.toFixed(1)}</span>`; }
+
+function table(sel, cols, rows, sortCol) {
+  const el = $(sel);
+  let sort = { i: sortCol, dir: -1 };
+  const draw = () => {
+    const sorted = [...rows].sort((a, b) => { const x = cols[sort.i][1](a), y = cols[sort.i][1](b); return (typeof x === 'string' ? x.localeCompare(y) : x - y) * sort.dir; });
+    el.innerHTML = `<tr>${cols.map((c, i) => `<th data-i="${i}">${esc(c[0])}${i === sort.i ? (sort.dir < 0 ? ' ▾' : ' ▴') : ''}</th>`).join('')}</tr>` + sorted.map((r) => `<tr>${cols.map((c) => `<td>${c[2](r)}</td>`).join('')}</tr>`).join('');
+    for (const th of el.querySelectorAll('th')) th.onclick = () => { const i = Number(th.dataset.i); sort = { i, dir: sort.i === i ? -sort.dir : (i === 0 ? 1 : -1) }; draw(); };
+  };
+  draw();
+}
+
+function showDetail(r) {
+  const d = $('#detail');
+  const keys = DATA.keys || ['function', 'craft', 'design', 'originality'];
+  d.hidden = false;
+  d.innerHTML = `<h3>${esc(short(r.builder))} · ${esc(r.task)} · ${esc(r.col || `deciders ${r.decide}`)}</h3>
+    ${(r.checkEvents || []).length ? `<p><b>Harness checks</b></p><ul>${r.checkEvents.map((c) => c.kind === 'gap' ? `<li>Gap check: ${c.build ? (c.missing.length ? `the request did not say ${esc(c.missing.join(', '))}` : 'nothing missing') : 'not a build'}</li>` : `<li>${esc(c.when)} · ${esc(c.target)}: ${c.failed.length ? `<b>${esc(c.failed.join(', '))}</b>` : 'all passed'} (${c.asked} checks${c.clicked ? `, clicked “${esc(c.clicked)}”` : ''})</li>`).join('')}</ul>` : ''}
+    ${(r.deciderAnswers || []).length ? `<p class="note">YOLO: the deciders answered ${r.deciderAnswers.length} question${r.deciderAnswers.length > 1 ? 's' : ''} for the user: ${r.deciderAnswers.map((a) => esc(a.text)).join(' · ')}</p>` : ''}
+    ${r.skipped ? `<p>Skipped: ${esc(r.skipped)}</p>` : ''}
+    ${r.scores ? `<p>${keys.map((k) => `${esc(k)} <b>${r.scores[k]}</b>`).join(' · ')} → <b>${r.total}</b>/20 ${r.pass ? '✓ passed' : '✗ did not pass'}</p>` : ''}
+    ${r.saved ? `<p><a href="${esc(r.saved)}/index.html" target="_blank" rel="noopener">Open the build ↗</a> <span class="note">(${esc(r.saved)})</span></p>` : ''}
+    ${r.summary ? `<p>${esc(r.summary)}</p>` : ''}
+    ${r.bugs?.length ? `<p><b>Bugs the judge found</b></p><ul>${r.bugs.map((b) => `<li>${esc(b)}</li>`).join('')}</ul>` : ''}
+    <p class="note">Cost <span class="money">${money(r.cost)}</span> + judge <span class="money">${money(r.judgeCost)}</span> · ${((r.ms || 0) / 60000).toFixed(1)} min · ${r.steps ?? 0} steps · ${r.toolCalls ?? 0} tool calls (${r.toolErrors ?? 0} errors) · ${r.helperTools ?? 0} by helpers · ${r.files ?? 0} files</p>
+    ${Object.keys(r.tools || {}).length ? `<div class="tools">${Object.entries(r.tools).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<span class="tool">${esc(k)} ×${v}</span>`).join('')}</div>` : ''}
+    ${r.deciders?.asks ? `<p><b>Asked the deciders ${r.deciders.asks} time${r.deciders.asks > 1 ? 's' : ''}</b>${r.deciders.looks ? ` (and ${r.deciders.looks} screenshot check${r.deciders.looks > 1 ? 's' : ''})` : ''}</p>${r.questions?.length ? `<table class="qs"><tr><th>Question</th><th>Its guess</th><th>Deciders</th><th>Outcome</th></tr>${r.questions.map((q) => `<tr><td>${esc(q.ask)}${q.options?.length ? `<br><small>${esc(q.options.join(' · '))}</small>` : ''}</td><td>${esc(q.guess ?? '—')}${q.guessConf != null ? ` <small>${Math.round(q.guessConf * 100)}%</small>` : ''}</td><td>${esc(q.pick ?? '—')}${q.confidence != null ? ` <small>${Math.round(q.confidence * 100)}%</small>` : ''}</td><td><span class="bucket ${esc(q.bucket)}">${esc(BUCKET[q.bucket] || q.bucket)}</span></td></tr>`).join('')}</table>` : `<ul>${(r.deciders.asked || []).map((q) => `<li>${esc(q)}</li>`).join('')}</ul>`}` : r.decide !== 'off' ? '<p class="note">Could ask the deciders, never did.</p>' : ''}
+    ${r.error ? `<p class="note">⚠ ${esc(r.error)}</p>` : ''}`;
+  d.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+render();
+</script>
+</body>
+</html>

@@ -1,0 +1,643 @@
+// Project folders, commands and dev servers for the agent, the way Claude Code works on a repo.
+// A project is one folder shared by all its chats (workspaces/<project> or a folder the user chose).
+// Paths can't leave it, commands
+// are limited to a list of developer programs with no shell metacharacters, and child processes get
+// an environment with API keys and tokens removed.
+import fs from 'node:fs';
+import path from 'node:path';
+import net from 'node:net';
+import crypto from 'node:crypto';
+import { spawn, execFile, spawnSync } from 'node:child_process';
+import { projectDir } from './store.js';
+import { SECRET_FILES } from './keys.js';
+import { termEvent, lineSplitter, newJob, endJob } from './terminal.js';
+
+export const ALLOWED = ['node', 'npm', 'npx', 'python', 'python3', 'py', 'pip', 'pip3', 'deno', 'bun', 'pnpm', 'yarn', 'uv'];
+const BAD = /[&|<>^%`$;"'\r\n(){}!]/;
+const SKIP = new Set(['node_modules', '.git', '__pycache__', '.venv', 'venv', '.next', 'dist', '.cache', '.quorx', '.openharness']); // .openharness: the folder's old name, until it moves
+
+// The project's folder. Its .openharness (or harness-made .agent) folder from before the rename becomes .quorx on first use.
+const migrated = new Set();
+export const workspaceDir = (projectId) => {
+  const root = projectDir(projectId);
+  if (!migrated.has(root) && migrateAgentDir(root) !== 'busy') migrated.add(root);
+  return root;
+};
+
+// The real location of a path that may not exist yet: its deepest existing folder resolved through links (and
+// Windows short names), plus the rest as written.
+function realish(p) {
+  let head = p, tail = '';
+  for (let i = 0; i < 64; i++) {
+    try { return path.join(fs.realpathSync.native(head), tail); } catch { /* not there yet */ }
+    const up = path.dirname(head);
+    if (up === head) break;
+    tail = tail ? path.join(path.basename(head), tail) : path.basename(head);
+    head = up;
+  }
+  return p;
+}
+const SECRET_REAL = () => SECRET_FILES.map((f) => realish(f).toLowerCase());
+export function safePath(root, rel) {
+  const r = String(rel || '').replace(/^[/\\]+/, '');
+  // Windows: "file.txt:stream" (an alternate data stream) or a device name would get around the checks below.
+  // (An absolute path with its drive letter, inside the project, is fine.)
+  if (process.platform === 'win32' && /:|(^|[/\\])(con|prn|aux|nul|com\d|lpt\d)(\.[^/\\]*)?$/i.test(r.replace(/^[a-z]:(?=[/\\])/i, ''))) throw new Error('that path is not allowed (no ":" or device names)');
+  const p = path.resolve(root, r);
+  if (p !== root && !p.startsWith(root + path.sep)) throw new Error('that path is outside the project folder');
+  // A link inside the project that points outside it is outside too.
+  const realRoot = realish(root), real = realish(p);
+  const within = (a, b) => (process.platform === 'win32' ? a.toLowerCase() : a) === (process.platform === 'win32' ? b.toLowerCase() : b) || (process.platform === 'win32' ? a.toLowerCase().startsWith(b.toLowerCase() + path.sep) : a.startsWith(b + path.sep));
+  if (!within(real, realRoot)) throw new Error('that path leads outside the project folder (through a link)');
+  // A project may point at any folder, even the harness itself: its secrets stay unreadable.
+  if (SECRET_REAL().includes(real.toLowerCase()) || SECRET_FILES.some((f) => p.toLowerCase() === f.toLowerCase())) throw new Error('that file holds API keys and is off limits');
+  return p;
+}
+
+// Inside .quorx only what the agent (and you) work with is listed; the harness's own records are not.
+const AGENT_VISIBLE = new Set(['scratch', 'skills', 'launch.json', 'serve.mjs']);
+export function listFiles(root, max = 300) {
+  const out = [];
+  const walk = (dir) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (out.length >= max) return;
+      if (e.name === '.quorx' && dir === root && e.isDirectory()) {
+        const ah = path.join(dir, e.name);
+        for (const k of fs.readdirSync(ah, { withFileTypes: true })) {
+          if (out.length >= max) return;
+          if (!AGENT_VISIBLE.has(k.name)) continue;
+          const p = path.join(ah, k.name);
+          if (k.isDirectory()) walk(p); else out.push({ path: path.relative(root, p).replaceAll('\\', '/'), size: fs.statSync(p).size });
+        }
+        continue;
+      }
+      if (SKIP.has(e.name)) { out.push({ path: path.relative(root, path.join(dir, e.name)).replaceAll('\\', '/') + '/ (skipped)', size: 0 }); continue; }
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else out.push({ path: path.relative(root, p).replaceAll('\\', '/'), size: fs.statSync(p).size });
+    }
+  };
+  if (fs.existsSync(root)) walk(root);
+  return out;
+}
+
+export function writeFile(root, rel, content) {
+  const p = safePath(root, rel);
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, String(content ?? ''));
+  return fs.statSync(p).size;
+}
+
+export function appendFile(root, rel, content) {
+  const p = safePath(root, rel);
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.appendFileSync(p, String(content ?? ''));
+  return fs.statSync(p).size;
+}
+
+export function readFile(root, rel, max = 60000) {
+  const p = safePath(root, rel);
+  if (!fs.existsSync(p)) throw new Error(`no file ${rel}`);
+  const s = fs.readFileSync(p, 'utf8');
+  return s.length > max ? `${s.slice(0, max)}\n… (${s.length - max} more characters)` : s;
+}
+
+// The whole text of a file, for read_file's numbered windows (binary or huge files are refused).
+export function readText(root, rel) {
+  const p = safePath(root, rel);
+  if (!fs.existsSync(p) || fs.statSync(p).isDirectory()) throw new Error(`no file ${rel}`);
+  if (fs.statSync(p).size > 5e6) throw new Error(`${rel} is over 5 MB; search it with search_files instead`);
+  const s = fs.readFileSync(p, 'utf8');
+  if (s.includes('\u0000')) throw new Error(`${rel} is a binary file`);
+  return s;
+}
+
+// Several exact replacements in one file, all or none: if any edit fails, the file is left as it was.
+export function editFileMulti(root, rel, edits) {
+  const p = safePath(root, rel);
+  if (!fs.existsSync(p)) throw new Error(`no file ${rel}`);
+  let s = fs.readFileSync(p, 'utf8'), total = 0;
+  for (const [i, e] of edits.slice(0, 20).entries()) {
+    const find = String(e?.find ?? ''), replace = String(e?.replace ?? '');
+    const count = find ? s.split(find).length - 1 : 0;
+    const where = `edit ${i + 1} of ${edits.length}`;
+    if (!count) throw new Error(`${where}: find text not found (no edits were applied); read the file to see its exact current contents`);
+    if (count > 1 && !e.replace_all) throw new Error(`${where}: find text matches ${count} times (no edits were applied); add more surrounding text or set replace_all`);
+    s = e.replace_all ? s.split(find).join(replace) : s.replace(find, () => replace);
+    total += count;
+  }
+  fs.writeFileSync(p, s);
+  return total;
+}
+
+export function editFile(root, rel, find, replace, all = false) {
+  const p = safePath(root, rel);
+  if (!fs.existsSync(p)) throw new Error(`no file ${rel}`);
+  const s = fs.readFileSync(p, 'utf8');
+  const count = s.split(find).length - 1;
+  if (!find || !count) throw new Error('find text not found; read the file to see its exact current contents');
+  if (count > 1 && !all) throw new Error(`find text matches ${count} times; add more surrounding text or set replace_all`);
+  fs.writeFileSync(p, all ? s.split(find).join(replace) : s.replace(find, () => replace));
+  return count;
+}
+
+// ---------- commands ----------
+// {PORT} in a server's arguments is the harness's own placeholder (replaced by the port before anything runs), so
+// its braces are not "brackets" here.
+export function checkCommand(cmd, args) {
+  const exe = String(cmd || '').trim().toLowerCase().replace(/\.(exe|cmd|bat)$/, '');
+  if (!ALLOWED.includes(exe)) throw new Error(`"${cmd}" is not allowed. Allowed programs: ${ALLOWED.join(', ')}`);
+  for (const a of args) if (BAD.test(String(a).replaceAll('{PORT}', '0'))) throw new Error(`argument "${a}" contains characters that are not allowed (& | < > ^ % \` $ ; quotes, brackets, !)`);
+  return exe;
+}
+
+// No secrets for code the agent wrote: drop anything that looks like a key, token or password.
+export function childEnv(extra = {}) {
+  const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/KEY|TOKEN|SECRET|PASSWORD|OPENROUTER|CREDENTIAL/i.test(k)));
+  return { ...env, ...extra, FORCE_COLOR: '0', BROWSER: 'none' };
+}
+
+function spawnIn(root, cmd, args, env) {
+  const exe = checkCommand(cmd, args);
+  const line = [exe, ...args.map((a) => (/\s/.test(a) ? `"${a}"` : a))].join(' ');
+  return spawn(line, { cwd: root, shell: true, env: childEnv(env), windowsHide: true });
+}
+
+function killTree(proc) {
+  if (!proc || proc.exitCode != null) return;
+  if (process.platform === 'win32') execFile('taskkill', ['/pid', String(proc.pid), '/T', '/F'], () => {});
+  else try { process.kill(-proc.pid, 'SIGTERM'); } catch { proc.kill('SIGTERM'); }
+}
+
+// `term` ({ projectId, source, chatId }) sends the command and its output to the terminal feed as it runs.
+export function runCommand(root, cmd, args = [], { timeout = 180e3, signal, term } = {}) {
+  return new Promise((resolve, reject) => {
+    let proc;
+    try { proc = spawnIn(root, cmd, (args || []).map(String)); } catch (e) { return reject(e); }
+    const t0 = Date.now();
+    const label = [cmd, ...(args || [])].join(' ');
+    const job = term ? newJob(term.projectId, label, term.source, () => killTree(proc)) : null;
+    const line = lineSplitter((text, stream) => termEvent(term.projectId, { kind: 'out', job, text, stream }));
+    if (job) termEvent(term.projectId, { kind: 'start', job, source: term.source, chatId: term.chatId, label, tab: term.tab, cwd: term.cwd });
+    let out = '';
+    const add = (stream) => (d) => { out += d.toString(); if (out.length > 40000) out = out.slice(-30000); if (job) line.push(d, stream); };
+    proc.stdout.on('data', add('out')); proc.stderr.on('data', add('err'));
+    const finish = (code, err) => { if (!job) return; line.flush('out'); termEvent(term.projectId, { kind: 'end', job, code, ms: Date.now() - t0, error: err }); endJob(job); };
+    const timer = setTimeout(() => { add('err')(`\n[stopped after ${Math.round(timeout / 1000)}s]\n`); killTree(proc); }, timeout);
+    signal?.addEventListener('abort', () => killTree(proc), { once: true });
+    proc.on('close', (code) => { clearTimeout(timer); finish(code); resolve({ code, out: out.slice(-8000), ms: Date.now() - t0 }); });
+    proc.on('error', (e) => { clearTimeout(timer); finish(null, e.message); reject(e); });
+  });
+}
+
+// ---------- dev servers ----------
+const servers = new Map();
+const portFree = (port) => new Promise((r) => { const s = net.createServer().once('error', () => r(false)).once('listening', () => s.close(() => r(true))).listen(port, '127.0.0.1'); });
+const portOpen = (port) => new Promise((r) => { const c = net.connect({ host: '127.0.0.1', port }); c.once('connect', () => { c.destroy(); r(true); }); c.once('error', () => r(false)); });
+async function freePort() {
+  const used = new Set([...servers.values()].map((s) => s.port));
+  for (let p = 5300; p < 6000; p++) if (!used.has(p) && await portFree(p)) return p;
+  throw new Error('no free port between 5300 and 5999');
+}
+const slug = (s) => String(s || 'app').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 30) || 'app';
+const view = (s) => ({ key: s.key, projectId: s.projectId, name: s.name, command: [s.cmd, ...s.args].join(' '), port: s.port, url: `http://localhost:${s.port}/`, status: s.status, started: s.started, code: s.code ?? null });
+
+/** Starts (or restarts) a named server in the agent's folder; it gets a free port as PORT and {PORT}
+ * (or the fixed `port` a launch config asks for). Its command is saved to the project's launch file. */
+export async function startServer({ projectId, name, cmd, args = [], port: fixed, source = 'agent', save = true }) {
+  const root = workspaceDir(projectId);
+  const key = `${projectId}/${slug(name)}`;
+  if (servers.has(key)) stopServer(key, source);
+  checkCommand(cmd, args.map(String));
+  let port;
+  if (fixed) {
+    port = Number(fixed);
+    if (!(Number.isInteger(port) && port > 0 && port < 65536)) throw new Error(`bad port ${fixed}`);
+    // A restart frees the port a moment after the old process is killed.
+    for (let i = 0; i < 10 && !await portFree(port); i++) await new Promise((r) => setTimeout(r, 300));
+    if (!await portFree(port)) throw new Error(`port ${port} is already in use (stop whatever is using it, or clear the fixed port in the launch config)`);
+  } else port = await freePort();
+  const real = args.map((a) => String(a).replaceAll('{PORT}', String(port)));
+  if (save) saveLaunchConfig(projectId, { name, command: cmd, args: args.map(String), port: fixed || null });
+  const s = { key, projectId, name: String(name || 'app'), cmd, args: args.map(String), fixed: fixed || null, port, status: 'starting', started: Date.now(), log: [], source };
+  const job = `srv:${key}:${s.started}`;
+  const split = lineSplitter((line, stream) => {
+    if (line.trim()) { s.log.push(line); if (s.log.length > 400) s.log.splice(0, s.log.length - 400); }
+    termEvent(projectId, { kind: 'out', job, server: s.name, text: line, stream });
+  });
+  termEvent(projectId, { kind: 'start', job, server: s.name, source, label: [cmd, ...real].join(' '), port });
+  s.proc = spawnIn(root, cmd, real, { PORT: String(port) });
+  s.proc.stdout.on('data', (d) => split.push(d, 'out')); s.proc.stderr.on('data', (d) => split.push(d, 'err'));
+  s.proc.on('close', (code) => { split.flush('out'); s.status = 'stopped'; s.code = code; termEvent(projectId, { kind: 'end', job, server: s.name, code }); });
+  servers.set(key, s);
+  const t0 = Date.now();
+  while (Date.now() - t0 < 45e3) {
+    if (s.status === 'stopped') break;
+    if (await portOpen(port)) { s.status = 'running'; termEvent(projectId, { kind: 'out', job, server: s.name, text: `● listening on http://localhost:${port}/`, stream: 'note' }); break; }
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  if (s.status === 'starting') s.status = 'not listening';
+  return { ...view(s), log: s.log.slice(-40).join('\n') };
+}
+
+export function stopServer(key, by = 'agent') {
+  const s = servers.get(key);
+  if (!s) return false;
+  if (s.proc?.exitCode == null && s.status !== 'stopped') termEvent(s.projectId, { kind: 'out', job: `srv:${key}:${s.started}`, server: s.name, text: `■ stopped by ${by === 'you' ? 'you' : 'the agent'}`, stream: 'note' });
+  killTree(s.proc);
+  s.status = 'stopped';
+  return true;
+}
+export const restartServer = (key, source = 'you') => { const s = servers.get(key); if (!s) throw new Error('unknown server'); return startServer({ projectId: s.projectId, name: s.name, cmd: s.cmd, args: s.args, port: s.fixed, source }); };
+export const listServers = (projectId) => [...servers.values()].filter((s) => !projectId || s.projectId === projectId).map(view);
+export const serverLog = (key) => servers.get(key)?.log.slice(-200).join('\n') ?? '';
+export const serverFor = (projectId, name) => servers.get(`${projectId}/${slug(name)}`);
+
+// ---------- launch configs: the project's saved run commands ----------
+// Kept in <project>/.quorx/launch.json (written whenever a server starts, editable by the user). A
+// Claude Code style .claude/launch.json in the folder is read too, so existing repos work as they are.
+const LAUNCH = '.quorx/launch.json';
+function readJson(p) { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; } }
+const cleanConfig = (c) => ({ name: String(c.name || 'app').trim().slice(0, 40) || 'app', command: String(c.command || '').trim(), args: (Array.isArray(c.args) ? c.args : []).map(String), port: Number(c.port) > 0 ? Number(c.port) : null });
+const isAllowed = (cmd) => ALLOWED.includes(String(cmd || '').trim().toLowerCase().replace(/\.(exe|cmd|bat)$/, ''));
+
+export function launchConfigs(projectId) {
+  const root = workspaceDir(projectId);
+  const own = (readJson(path.join(root, LAUNCH))?.configurations || []).filter((c) => c?.command).map((c) => ({ ...cleanConfig(c), from: LAUNCH }));
+  const claude = (readJson(path.join(root, '.claude', 'launch.json'))?.configurations || [])
+    .filter((c) => c?.runtimeExecutable && isAllowed(c.runtimeExecutable))
+    .map((c) => ({ ...cleanConfig({ name: c.name, command: c.runtimeExecutable, args: c.runtimeArgs, port: c.port }), from: '.claude/launch.json' }))
+    .filter((c) => !own.some((o) => slug(o.name) === slug(c.name)));
+  return [...own, ...claude];
+}
+/** Adds or replaces one config (by name; `oldName` renames). */
+export function saveLaunchConfig(projectId, cfg) {
+  const c = cleanConfig(cfg);
+  if (!c.command) throw new Error('a launch config needs a command');
+  checkCommand(c.command, c.args);
+  const file = path.join(workspaceDir(projectId), LAUNCH);
+  const list = readJson(file)?.configurations || [];
+  const at = list.findIndex((x) => slug(x.name) === slug(cfg.oldName || c.name));
+  const rest = list.filter((x) => slug(x.name) !== slug(c.name) && slug(x.name) !== slug(cfg.oldName || c.name));
+  rest.splice(at < 0 ? rest.length : Math.min(at, rest.length), 0, c);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ version: 1, configurations: rest }, null, 2));
+  return c;
+}
+export function removeLaunchConfig(projectId, name) {
+  const file = path.join(workspaceDir(projectId), LAUNCH);
+  const list = readJson(file)?.configurations;
+  if (!list) return false;
+  const left = list.filter((x) => slug(x.name) !== slug(name));
+  fs.writeFileSync(file, JSON.stringify({ version: 1, configurations: left }, null, 2));
+  return left.length < list.length;
+}
+// Saved configs and running servers together: what the server menu lists.
+export function serverOverview(projectId) {
+  const live = listServers(projectId);
+  const rows = launchConfigs(projectId).map((c) => {
+    const sv = live.find((x) => slug(x.name) === slug(c.name));
+    return { ...c, saved: true, key: `${projectId}/${slug(c.name)}`, status: sv?.status || 'stopped', url: sv && sv.status !== 'stopped' ? sv.url : null, started: sv?.started || null, code: sv?.code ?? null };
+  });
+  for (const sv of live) {
+    if (rows.some((r) => r.key === sv.key)) continue;
+    const s = servers.get(sv.key);
+    rows.push({ name: sv.name, command: s.cmd, args: s.args, port: s.fixed, saved: false, from: null, key: sv.key, status: sv.status, url: sv.status !== 'stopped' ? sv.url : null, started: sv.started, code: sv.code });
+  }
+  return rows;
+}
+
+// When the harness stops, stop every dev server it started (synchronously, so nothing is orphaned).
+function killAll() {
+  for (const s of servers.values()) {
+    if (!s.proc || s.proc.exitCode != null) continue;
+    if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(s.proc.pid), '/T', '/F'], { windowsHide: true });
+    else try { process.kill(-s.proc.pid, 'SIGTERM'); } catch { s.proc.kill('SIGTERM'); }
+  }
+}
+process.on('exit', killAll);
+for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => process.exit(0));
+
+// ---------- search, trash, checkpoints, templates ----------
+const AGENT_DIR = '.quorx'; // the harness's own notes inside a project: log, trash, checkpoints, skills, scratch
+export const SCRATCH = `${AGENT_DIR}/scratch`; // the agent's own space for research scripts, scrapes, downloads, throwaway tests
+
+// The agent's folder never ends up in the user's git repo: a .gitignore of "*" inside it makes git
+// skip the whole folder (itself included), without touching the user's own .gitignore.
+// Older projects keep their notes, undo history and skills. Before the name QuorX this folder was .openharness
+// (always the harness's), and before that .agent (the harness's only if it holds the harness's own parts; a .agent
+// folder from another tool is left exactly as it is). The launch file's paths move with it, so saved servers still start.
+const LEGACY_DIRS = ['.openharness', '.agent'];
+const HARNESS_PARTS = ['checkpoints', 'scratch', 'trash', 'launch.json', 'log.md', 'skills', 'uploads', 'plan.md'];
+export function migrateAgentDir(root) {
+  const neu = path.join(root, AGENT_DIR);
+  try {
+    if (fs.existsSync(neu)) return false;
+    for (const name of LEGACY_DIRS) {
+      const old = path.join(root, name);
+      if (!fs.existsSync(old)) continue;
+      if (name === '.agent') {
+        const gi = path.join(old, '.gitignore');
+        const ours = (fs.existsSync(gi) && /QuorX|OpenHarness/.test(fs.readFileSync(gi, 'utf8'))) || HARNESS_PARTS.filter((x) => fs.existsSync(path.join(old, x))).length >= 2;
+        if (!ours) continue;
+      }
+      fs.renameSync(old, neu);
+      const lj = path.join(neu, 'launch.json');
+      if (fs.existsSync(lj)) fs.writeFileSync(lj, fs.readFileSync(lj, 'utf8').replace(/\.(openharness|agent)([\\/]+)/g, `${AGENT_DIR}$2`));
+      return true;
+    }
+    return false;
+  } catch { return 'busy'; } // a file in use (e.g. a server still running from the old folder): try again next time
+}
+export function ensureAgentDir(root) {
+  const dir = path.join(root, AGENT_DIR);
+  fs.mkdirSync(path.join(dir, 'scratch'), { recursive: true });
+  const gi = path.join(dir, '.gitignore');
+  if (!fs.existsSync(gi)) fs.writeFileSync(gi, '# QuorX working files: never committed\n*\n');
+  return dir;
+}
+
+function dirSize(p) {
+  let bytes = 0, files = 0;
+  const walk = (d) => {
+    let list; try { list = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of list) {
+      const q = path.join(d, e.name);
+      if (e.isDirectory()) walk(q);
+      else try { bytes += fs.statSync(q).size; files++; } catch { /* gone */ }
+    }
+  };
+  walk(p);
+  return { bytes, files };
+}
+/** How much room the agent's folder takes, per part. */
+export function agentSpace(root) {
+  const dir = path.join(root, AGENT_DIR);
+  const part = (name) => ({ name, ...dirSize(path.join(dir, name)) });
+  const parts = [part('scratch'), part('checkpoints'), part('trash')];
+  const total = dirSize(dir);
+  parts.push({ name: 'other', bytes: Math.max(0, total.bytes - parts.reduce((a, x) => a + x.bytes, 0)), files: Math.max(0, total.files - parts.reduce((a, x) => a + x.files, 0)) });
+  return { dir, total: total.bytes, files: total.files, parts };
+}
+/** Clears one part the user picked: "scratch", "trash", or "checkpoints" (keeps the newest `keep` for undo). */
+export function clearAgentSpace(root, what, keep = 10) {
+  const base = path.join(root, AGENT_DIR);
+  if (!['scratch', 'trash', 'checkpoints'].includes(what)) throw new Error('nothing to clear by that name');
+  const dir = path.join(base, what);
+  if (!fs.existsSync(dir)) return 0;
+  let list = fs.readdirSync(dir, { withFileTypes: true });
+  if (what === 'checkpoints') list = list.filter((e) => e.isDirectory()).sort((a, b) => fs.statSync(path.join(dir, b.name)).mtimeMs - fs.statSync(path.join(dir, a.name)).mtimeMs).slice(keep);
+  let n = 0;
+  for (const e of list) { fs.rmSync(path.join(dir, e.name), { recursive: true, force: true }); n++; }
+  return n;
+}
+
+// "*.js", "src/**/*.css": ** spans folders, * and ? stay within one name.
+function globToRegExp(glob) {
+  let out = '';
+  const g = String(glob);
+  for (let i = 0; i < g.length; i++) {
+    const ch = g[i];
+    if (ch === '*' && g[i + 1] === '*') { out += '.*'; i++; }
+    else if (ch === '*') out += '[^/]*';
+    else if (ch === '?') out += '.';
+    else out += /[a-z0-9_\-/]/i.test(ch) ? ch : `\\${ch}`;
+  }
+  return new RegExp(`^${out}$`, 'i');
+}
+
+// Case-insensitive literal search across text files in the project.
+export function searchFiles(root, query, glob = '', max = 80) {
+  const q = String(query || '').toLowerCase();
+  if (!q) throw new Error('query is empty');
+  const rx = glob ? globToRegExp(glob) : null;
+  const out = [];
+  for (const f of listFiles(root, 2000)) {
+    if (out.length >= max || f.path.endsWith('(skipped)') || f.size > 1e6) continue;
+    if (rx && !rx.test(f.path) && !rx.test(path.basename(f.path))) continue;
+    let text; try { text = fs.readFileSync(path.join(root, f.path), 'utf8'); } catch { continue; }
+    if (text.includes('\u0000')) continue;
+    text.split(/\r?\n/).forEach((line, i) => { if (out.length < max && line.toLowerCase().includes(q)) out.push({ path: f.path, line: i + 1, text: line.trim().slice(0, 200) }); });
+  }
+  return out;
+}
+
+// Deleting never destroys: the file moves to .quorx/trash/<time>/<path>.
+export function trashFile(root, rel) {
+  const p = safePath(root, rel);
+  if (!fs.existsSync(p)) throw new Error(`no file ${rel}`);
+  const dest = path.join(root, AGENT_DIR, 'trash', new Date().toISOString().replace(/[:.]/g, '-'), rel);
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  fs.renameSync(p, dest);
+  return path.relative(root, dest).replaceAll('\\', '/');
+}
+
+// Before a run first touches a file, keep its previous version (or note that it didn't exist),
+// so the whole reply can be undone.
+export function checkpoint(root, runId, rel) {
+  if (!/^[\w-]+$/.test(String(runId))) return;
+  const dir = path.join(root, AGENT_DIR, 'checkpoints', runId);
+  const manifestPath = path.join(dir, 'manifest.json');
+  const manifest = fs.existsSync(manifestPath) ? JSON.parse(fs.readFileSync(manifestPath, 'utf8')) : { files: {} };
+  const key = String(rel).replaceAll('\\', '/');
+  if (key in manifest.files) return;
+  const p = safePath(root, rel);
+  manifest.files[key] = fs.existsSync(p);
+  if (manifest.files[key]) { const copy = path.join(dir, 'files', key); fs.mkdirSync(path.dirname(copy), { recursive: true }); fs.copyFileSync(p, copy); }
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+}
+export function changedFiles(root, runId) {
+  const m = path.join(root, AGENT_DIR, 'checkpoints', String(runId), 'manifest.json');
+  return fs.existsSync(m) ? Object.keys(JSON.parse(fs.readFileSync(m, 'utf8')).files) : [];
+}
+// Undo: put back every file a run changed; files it created move to the trash.
+export function restoreCheckpoint(root, runId, { only } = {}) {
+  if (!/^[\w-]+$/.test(String(runId))) throw new Error('bad run id');
+  const dir = path.join(root, AGENT_DIR, 'checkpoints', runId);
+  const manifestPath = path.join(dir, 'manifest.json');
+  if (!fs.existsSync(manifestPath)) throw new Error('nothing to undo for this reply');
+  const { files } = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  const restored = [];
+  for (const [rel, existed] of Object.entries(files)) {
+    if (only && !only.includes(rel)) { restored.push(`${rel} (kept: changed since)`); continue; }
+    const p = safePath(root, rel);
+    if (existed) { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.copyFileSync(path.join(dir, 'files', rel), p); restored.push(`${rel} (restored)`); }
+    else if (fs.existsSync(p)) { trashFile(root, rel); restored.push(`${rel} (removed)`); }
+  }
+  fs.renameSync(dir, `${dir}-undone-${Date.now()}`);
+  return restored;
+}
+
+// ---------- how long Undo lasts ----------
+// When a reply ends, its checkpoint is sealed with what each file looked like then, so a later Undo can
+// tell whether anything changed those files since (a later reply, or you). Only the newest replies keep
+// their Undo (default 10 per project, at most 7 days); older checkpoints are removed.
+const fileHash = (p) => { try { return crypto.createHash('sha1').update(fs.readFileSync(p)).digest('hex'); } catch { return null; } };
+const ckptDir = (root) => path.join(root, AGENT_DIR, 'checkpoints');
+function readManifest(root, runId) { try { return JSON.parse(fs.readFileSync(path.join(ckptDir(root), String(runId), 'manifest.json'), 'utf8')); } catch { return null; } }
+export function sealCheckpoint(root, runId) {
+  const m = readManifest(root, runId);
+  if (!m) return;
+  m.after = Object.fromEntries(Object.keys(m.files).map((rel) => [rel, fileHash(safePath(root, rel))]));
+  m.doneAt = Date.now();
+  fs.writeFileSync(path.join(ckptDir(root), String(runId), 'manifest.json'), JSON.stringify(m));
+}
+/** Replies in this project that can still be undone, newest first. */
+export function listCheckpoints(root) {
+  const dir = ckptDir(root);
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory() && !e.name.includes('-undone-')).map((e) => {
+    const m = readManifest(root, e.name);
+    const at = m?.doneAt || (() => { try { return fs.statSync(path.join(dir, e.name, 'manifest.json')).mtimeMs; } catch { return 0; } })();
+    return { runId: e.name, at, files: m ? Object.keys(m.files).length : 0 };
+  }).filter((x) => x.files).sort((a, b) => b.at - a.at);
+}
+/** Keeps the newest `keep` checkpoints that are at most `days` old; removes the rest and leftovers of undone ones. */
+export function pruneCheckpoints(root, { keep = 10, days = 7 } = {}) {
+  const dir = ckptDir(root);
+  if (!fs.existsSync(dir)) return [];
+  const oldest = Date.now() - Math.max(0.01, Number(days) || 7) * 864e5, removed = [];
+  const live = listCheckpoints(root);
+  const drop = new Set(live.filter((x, i) => i >= Math.max(1, Number(keep) || 10) || x.at < oldest).map((x) => x.runId));
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (!e.isDirectory()) continue;
+    if (drop.has(e.name) || e.name.includes('-undone-') || !live.some((x) => x.runId === e.name)) { fs.rmSync(path.join(dir, e.name), { recursive: true, force: true }); removed.push(e.name); }
+  }
+  return removed;
+}
+/** Files this reply changed that have changed again since it ended (by a later reply or by hand). */
+export function undoConflicts(root, runId) {
+  const m = readManifest(root, runId);
+  if (!m) throw new Error('nothing to undo for this reply (its undo history was cleared)');
+  const rels = Object.keys(m.files);
+  if (m.after) return rels.filter((rel) => fileHash(safePath(root, rel)) !== m.after[rel]);
+  // Older checkpoints have no seal: a later reply that touched the same file counts as a change.
+  const mine = listCheckpoints(root).find((x) => x.runId === String(runId))?.at || 0;
+  const later = listCheckpoints(root).filter((x) => x.at > mine).map((x) => readManifest(root, x.runId)).filter(Boolean);
+  return rels.filter((rel) => later.some((l) => rel in l.files));
+}
+
+// ---------- Review changes: what a reply did to each file, a diff, and Undo for one file ----------
+// "Before" is the reply's undo copy (or nothing, for a file it created); "now" is the file on disk, which may also
+// hold later changes (changedSince says so). Files undone one by one leave the checkpoint, so the reply's own
+// "Undo changes" then covers only the rest.
+const REVIEW_MAX = 400e3; // bytes per side: bigger files get counts from their sizes only, no diff
+const readOr = (p) => { try { return fs.readFileSync(p); } catch { return null; } };
+const isBinary = (buf) => !!buf && buf.subarray(0, 8000).includes(0);
+const linesOf = (buf) => { if (!buf) return []; const l = buf.toString('utf8').replace(/\r\n/g, '\n').split('\n'); if (l.at(-1) === '') l.pop(); return l; };
+// Line diff (Myers): common start and end trimmed, then the shortest edit script for what's left. Its cost grows
+// with the number of edits, not the file size; past 2,500 edits it shows the middle as replaced.
+function myers(A, B) {
+  const n = A.length, m = B.length, max = n + m, off = max + 1, v = new Int32Array(2 * max + 3), trace = [];
+  const at = (t, d, k) => t[k + d + 1];
+  for (let d = 0; d <= Math.min(max, 2500); d++) {
+    trace.push(v.slice(off - d - 1, off + d + 2));
+    for (let k = -d; k <= d; k += 2) {
+      let x = k === -d || (k !== d && v[off + k - 1] < v[off + k + 1]) ? v[off + k + 1] : v[off + k - 1] + 1, y = x - k;
+      while (x < n && y < m && A[x] === B[y]) { x++; y++; }
+      v[off + k] = x;
+      if (x >= n && y >= m) {
+        const ops = []; let X = n, Y = m;
+        for (let dd = d; dd >= 0; dd--) {
+          const t = trace[dd], kk = X - Y;
+          const pk = kk === -dd || (kk !== dd && at(t, dd, kk - 1) < at(t, dd, kk + 1)) ? kk + 1 : kk - 1;
+          const px = at(t, dd, pk), py = px - pk;
+          while (X > px && Y > py) { ops.push([' ', A[X - 1]]); X--; Y--; }
+          if (dd > 0) { if (X === px) ops.push(['+', B[Y - 1]]); else ops.push(['-', A[X - 1]]); }
+          X = px; Y = py;
+        }
+        return ops.reverse();
+      }
+    }
+  }
+  return null;
+}
+export function diffLines(a, b) {
+  let s = 0; while (s < a.length && s < b.length && a[s] === b[s]) s++;
+  let e = 0; while (e < a.length - s && e < b.length - s && a[a.length - 1 - e] === b[b.length - 1 - e]) e++;
+  const A = a.slice(s, a.length - e), B = b.slice(s, b.length - e);
+  const mid = myers(A, B) || [...A.map((l) => ['-', l]), ...B.map((l) => ['+', l])];
+  return [...a.slice(0, s).map((l) => [' ', l]), ...mid, ...a.slice(a.length - e).map((l) => [' ', l])];
+}
+// Changed lines with 3 lines of context, as hunks with old/new line numbers; at most `limit` lines in all.
+function hunksOf(ops, ctx = 3, limit = 1500) {
+  const hunks = []; let ln = [1, 1], cur = null, shown = 0;
+  const nums = ops.map(([t]) => { const r = [t === '+' ? null : ln[0], t === '-' ? null : ln[1]]; if (t !== '+') ln[0]++; if (t !== '-') ln[1]++; return r; });
+  const change = ops.map(([t], i) => (t !== ' ' ? i : -1)).filter((i) => i >= 0);
+  let k = 0;
+  for (let i = 0; i < ops.length; i++) {
+    while (k < change.length && change[k] < i - ctx) k++;
+    const near = k < change.length && change[k] <= i + ctx;
+    if (!near) { cur = null; continue; }
+    if (!cur) { cur = { lines: [] }; hunks.push(cur); }
+    if (shown >= limit) { cur.cut = true; break; }
+    cur.lines.push([ops[i][0], nums[i][0], nums[i][1], ops[i][1].slice(0, 2000)]); shown++;
+  }
+  return { hunks, cut: shown >= limit };
+}
+function reviewEntry(root, runId, m, rel) {
+  const dir = path.join(ckptDir(root), String(runId));
+  const existed = m.files[rel];
+  const before = existed ? readOr(path.join(dir, 'files', rel)) : null;
+  const now = readOr(safePath(root, rel));
+  const status = !existed ? (now ? 'added' : 'added then removed') : now ? 'modified' : 'deleted';
+  const changedSince = !!m.after && (now ? crypto.createHash('sha1').update(now).digest('hex') : null) !== m.after[rel];
+  const out = { path: rel, status, changedSince, binary: isBinary(before) || isBinary(now) };
+  if (out.binary || (before?.length || 0) > REVIEW_MAX || (now?.length || 0) > REVIEW_MAX) { out.large = !out.binary; return { out, before, now }; }
+  const ops = diffLines(linesOf(before), linesOf(now));
+  out.added = ops.filter(([t]) => t === '+').length; out.removed = ops.filter(([t]) => t === '-').length;
+  return { out, before, now, ops };
+}
+export function reviewFiles(root, runId) {
+  if (!/^[\w-]+$/.test(String(runId))) throw new Error('bad run id');
+  const m = readManifest(root, runId);
+  if (!m) throw new Error('This reply\'s undo copy is no longer kept, so its changes can\'t be reviewed.');
+  return { files: Object.keys(m.files).map((rel) => reviewEntry(root, runId, m, rel).out), undone: m.undoneFiles || [] };
+}
+export function reviewDiff(root, runId, rel) {
+  if (!/^[\w-]+$/.test(String(runId))) throw new Error('bad run id');
+  const m = readManifest(root, runId);
+  if (!m || !(rel in m.files)) throw new Error('This file is not in the reply\'s undo copy any more.');
+  const r = reviewEntry(root, runId, m, rel);
+  return { ...r.out, ...(r.ops ? hunksOf(r.ops) : { hunks: [] }) };
+}
+// Undo one file. If it changed again after the reply ended, the caller must pass force.
+export function undoFile(root, runId, rel, { force } = {}) {
+  if (!/^[\w-]+$/.test(String(runId))) throw new Error('bad run id');
+  const dir = path.join(ckptDir(root), String(runId)), mp = path.join(dir, 'manifest.json');
+  const m = readManifest(root, runId);
+  if (!m || !(rel in m.files)) throw new Error('This file is not in the reply\'s undo copy any more.');
+  const p = safePath(root, rel);
+  if (!force && m.after && fileHash(p) !== m.after[rel]) return { conflict: true };
+  // The version being replaced goes to .quorx/trash first, so undoing one file can itself be taken back by hand.
+  if (fs.existsSync(p)) trashFile(root, rel);
+  if (m.files[rel]) { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.copyFileSync(path.join(dir, 'files', rel), p); }
+  const result = m.files[rel] ? 'restored' : 'removed';
+  delete m.files[rel]; if (m.after) delete m.after[rel];
+  (m.undoneFiles ||= []).push(rel);
+  fs.writeFileSync(mp, JSON.stringify(m));
+  const left = Object.keys(m.files).length;
+  if (!left) fs.renameSync(dir, `${dir}-undone-${Date.now()}`);
+  return { ok: true, result, left };
+}
+
+// Copy a starter template into the project without overwriting anything.
+export function copyTemplate(root, templateDir) {
+  const written = [], skipped = [];
+  const walk = (dir) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const src = path.join(dir, e.name);
+      const rel = path.relative(templateDir, src);
+      if (e.isDirectory()) { walk(src); continue; }
+      if (rel === 'template.json') continue;
+      const dest = safePath(root, rel);
+      if (fs.existsSync(dest)) { skipped.push(rel.replaceAll('\\', '/')); continue; }
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.copyFileSync(src, dest);
+      written.push(rel.replaceAll('\\', '/'));
+    }
+  };
+  walk(templateDir);
+  return { written, skipped };
+}
