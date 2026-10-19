@@ -28,7 +28,7 @@ import { audit } from './audit.js';
 import { packagesOf, checkPackages } from './pkgguard.js';
 import { testChanges, TEST_FILE } from './testguard.js';
 import { debugStart, debugBreak, debugMove, debugState, debugEval, debugStop, stateText, debugLanguages, debugGateLine } from './debugger.js';
-import { isCheckedFile, packNotes } from './packs/index.js';
+import { isCheckedFile, packNotes, outputSummary } from './packs/index.js';
 import { devices as adbDevices, pickDevice, readScreen, tap as adbTap, typeText as adbType, key as adbKey, screenshot as adbShot, install as adbInstall, launch as adbLaunch, logcat as adbLog } from './android.js';
 import { listSkills, readSkill, saveSkill, listTemplates } from './skills.js';
 import { workspaceDir, listFiles, readFile, readText, writeFile, appendFile, editFile, editFileMulti, runCommand, runLine, lineOf, stopNote, endProc, startServer, stopServer, stopServerWait, serverFor, serverLog, listServers, launchConfigs, ensureAgentDir, agentSpace, SCRATCH, sealCheckpoint, pruneCheckpoints, ALLOWED } from './workspace.js';
@@ -2444,6 +2444,10 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
     if (ch && changed) parts.push(`Files it changed (Undo covers them): ${[...ch.added.map((f) => `+${f}`), ...ch.modified.map((f) => `~${f}`), ...ch.deleted.map((f) => `-${f}`)].slice(0, 30).join(', ')}${changed > 30 ? ` … and ${changed - 30} more` : ''}.`);
     else if (!sb.snap && !readOnly) parts.push(`No snapshot was taken (${sb.why}), so Undo can't restore what this command changed.`);
     parts.push(`Full output: ${logRel} (search it with search_files).`);
+    // A pack's summary (dotnet test's failed tests, say), read from the full log: the tail below may cut them off.
+    // JUnit's summary comes from the reports the run wrote in its folder, so the pack gets that folder and the start.
+    const sum = outputSummary(line, (() => { try { return fs.readFileSync(path.join(root, logRel), 'utf8').slice(-2e6); } catch { return r.out; } })(), { cwd, since: Date.now() - r.ms });
+    if (sum) parts.push(sum);
     parts.push(r.out.slice(-4000) || '(no output)');
     return parts.join('\n');
   }

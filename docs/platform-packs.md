@@ -115,7 +115,7 @@ Each is its own pull request, so people with that toolchain can test it on its o
 | Electron | Apps started with their DevTools port and driven; main-process debugging | Node.js |
 | Tauri | `cargo tauri` builds; the WebView2 window driven through its DevTools port; Rust debugging | Rust, Build Tools, WebView2 |
 | Go and C/C++ | Delve and lldb-dap debugging; CMake build check; crash dumps read | Go, CMake, a C++ compiler, LLVM |
-| Java and Kotlin | Gradle and Maven compile checks; JUnit; debugging | A JDK |
+| [Java and Kotlin](java-and-kotlin.md) | Gradle and Maven compile checks through the wrapper; JUnit summaries; Swing and JavaFX windows; debugging with the JDK alone | A JDK 17 or 21, Gradle or Maven |
 | Android and Flutter | Emulator started and driven; Gradle and `flutter analyze` checks; Logcat crashes; Dart debugging | Android SDK, an emulator, Flutter |
 | QuorX on macOS | Stop, rules, snapshots and the desktop tool on a Mac (process groups, zsh, Accessibility) | A Mac |
 | Apple apps | Xcode builds and tests, the iOS Simulator driven, crash reports read, Swift debugging with lldb-dap | A Mac with Xcode |

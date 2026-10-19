@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.example.CalcTest" tests="3" skipped="1" failures="1" errors="0" timestamp="2026-10-20T10:00:00" hostname="pc" time="0.031">
+  <properties/>
+  <testcase name="adds()" classname="com.example.CalcTest" time="0.012">
+    <failure message="org.opentest4j.AssertionFailedError: expected: &lt;4&gt; but was: &lt;5&gt;" type="org.opentest4j.AssertionFailedError">org.opentest4j.AssertionFailedError: expected: &lt;4&gt; but was: &lt;5&gt;
+	at app//org.junit.jupiter.api.AssertionFailureBuilder.build(AssertionFailureBuilder.java:151)
+	at app//org.junit.jupiter.api.AssertEquals.assertEquals(AssertEquals.java:150)
+	at app//org.junit.jupiter.api.Assertions.assertEquals(Assertions.java:531)
+	at app//com.example.CalcTest.adds(CalcTest.java:12)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+</failure>
+  </testcase>
+  <testcase name="subtracts()" classname="com.example.CalcTest" time="0.001"/>
+  <testcase name="divides()" classname="com.example.CalcTest" time="0.0">
+    <skipped/>
+  </testcase>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
