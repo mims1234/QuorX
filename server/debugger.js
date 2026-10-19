@@ -1,12 +1,26 @@
 // A real debugger for the agent: start a program paused, set breakpoints, step, read the stack and local variables,
 // evaluate an expression in a frame. Node programs use V8's inspector (the same DevTools protocol as the browser
-// tool); Python programs use debugpy through the Debug Adapter Protocol. The program runs as one of the agent's
-// background jobs, so it sits in a Windows job and Stop ends it. Research found a debugger helps strong models most
-// when it comes after plain debugging fails, and can make weaker ones worse when given from the start, so the agent
-// gets it only after a few failed tries (see agent.js).
+// tool). Every other language goes through the Debug Adapter Protocol, the one most debuggers speak (debugpy for
+// Python; netcoredbg, Delve, lldb-dap and others as platform packs add them): a pack says how to start its adapter
+// listening on a port, and this file talks DAP to it. The program runs as one of the agent's background jobs, so it
+// sits in a Windows job and Stop ends it. Research found a debugger helps strong models most when it comes after
+// plain debugging fails, and can make weaker ones worse when given from the start, so the agent gets it only after a
+// few failed tries (see agent.js).
 import net from 'node:net';
 import path from 'node:path';
 import { startBackground, stopBackground, getBackground } from './bgjobs.js';
+import { debugAdapters } from './packs/index.js';
+
+const NODE_EXTS = ['.js', '.mjs', '.cjs'];
+const adapterFor = (file) => debugAdapters().find((a) => a.exts.includes(path.extname(file).toLowerCase()));
+/** The languages the debug tool can run, for its description: "Node (.js, .mjs, .cjs), Python (.py), …". */
+export const debugLanguages = () => [`Node (${NODE_EXTS.join(', ')})`, ...debugAdapters().map((a) => `${a.label} (${a.exts.join(', ')})`)].join(', ');
+/** The command a debug session runs, as the rules and the approval card see it. */
+export function debugGateLine(file, args = []) {
+  if (NODE_EXTS.includes(path.extname(file).toLowerCase())) return ['node', file, ...args].join(' ');
+  const a = adapterFor(file);
+  return a?.gate ? a.gate({ file, args }) : [file, ...args].join(' ');
+}
 
 const SESS = new Map();
 let seq = 0;
@@ -60,17 +74,20 @@ async function nodeState(s) {
   return { state: 'paused', reason: s.paused.reason, frames, locals };
 }
 
-// ---------- Python: debugpy over the Debug Adapter Protocol ----------
-async function pySession(port) {
+// ---------- every other language: the Debug Adapter Protocol over a local port ----------
+// `plan` (from the pack): { adapterID, request: 'attach' | 'launch', args, missing } — attach to a program that waits
+// for the debugger (debugpy), or ask the adapter to launch it (netcoredbg, Delve, lldb-dap). Either way the program
+// doesn't run a line until configurationDone, which is sent on the first continue, after the breakpoints are set.
+async function dapSession(port, plan, kind) {
   let sock = null;
   for (let i = 0; i < 80 && !sock; i++) {
     sock = await new Promise((r) => { const c = net.connect({ host: '127.0.0.1', port }); c.once('connect', () => r(c)); c.once('error', () => r(null)); });
     if (!sock) await sleep(250);
   }
-  if (!sock) throw new Error('debugpy did not open its port (is it installed? pip install debugpy)');
+  if (!sock) throw new Error(plan.missing || `the ${kind} debugger did not open its port`);
   let buf = Buffer.alloc(0), seqN = 0;
   const waiting = new Map();
-  const s = { kind: 'python', sock, paused: null, thread: null, waiters: [], ended: false, events: [] };
+  const s = { kind, sock, paused: null, thread: null, waiters: [], ended: false, events: [] };
   sock.on('data', (d) => {
     buf = Buffer.concat([buf, d]);
     for (;;) {
@@ -96,14 +113,16 @@ async function pySession(port) {
     sock.write(`Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`);
     setTimeout(() => { if (waiting.delete(n)) rej(new Error(`${command} timed out`)); }, 15000);
   });
-  await s.send('initialize', { clientID: 'quorx', adapterID: 'python', linesStartAt1: true, columnsStartAt1: true, pathFormat: 'path' });
-  s.attach = s.send('attach', { justMyCode: true }); // answered only after configurationDone
-  for (let i = 0; i < 40 && !s.events.includes('initialized'); i++) await sleep(100);
+  await s.send('initialize', { clientID: 'quorx', clientName: 'QuorX', adapterID: plan.adapterID || kind, linesStartAt1: true, columnsStartAt1: true, pathFormat: 'path', supportsRunInTerminalRequest: false });
+  // Many adapters answer attach/launch only after configurationDone, so the answer is collected later.
+  s.attach = s.send(plan.request || 'attach', plan.args || {});
+  s.attach.catch(() => {});
+  for (let i = 0; i < 60 && !s.events.includes('initialized'); i++) await sleep(100);
   s.bps = new Map(); // file → [{ line, condition }]
   return s;
 }
-async function pyWait(s, ms = 10000) { if (s.paused || s.ended) return; await Promise.race([new Promise((r) => s.waiters.push(r)), sleep(ms)]); }
-async function pyState(s) {
+async function dapWait(s, ms = 10000) { if (s.paused || s.ended) return; await Promise.race([new Promise((r) => s.waiters.push(r)), sleep(ms)]); }
+async function dapState(s) {
   if (s.ended) return { state: 'ended' };
   if (!s.paused) return { state: 'running' };
   const st = await s.send('stackTrace', { threadId: s.thread, levels: 12 });
@@ -120,18 +139,25 @@ async function pyState(s) {
 }
 
 // ---------- the agent's interface ----------
-/** Starts `file` (a .js/.mjs/.cjs or .py file in cwd) paused under a debugger. Returns { id, job }. */
-export async function debugStart({ projectId, cwd, file, args = [], python = 'py -3', logTo, logRel, term }) {
+/**
+ * Starts `file` in cwd paused under a debugger: Node's inspector for .js/.mjs/.cjs, or the debug adapter a platform
+ * pack gives for its file type. `python` overrides the Python interpreter (tests). Returns { id, job, kind }.
+ */
+export async function debugStart({ projectId, cwd, file, args = [], python, logTo, logRel, term }) {
   const ext = path.extname(file).toLowerCase();
   const port = await freePort();
   const quoted = [file, ...args].map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(' ');
-  let kind, line;
-  if (['.js', '.mjs', '.cjs'].includes(ext)) { kind = 'node'; line = `node --inspect-brk=127.0.0.1:${port} ${quoted}`; }
-  else if (ext === '.py') { kind = 'python'; line = `${python} -m debugpy --listen 127.0.0.1:${port} --wait-for-client ${quoted}`; }
-  else throw new Error('the debugger works on Node (.js, .mjs, .cjs) and Python (.py) files');
+  let kind, line, plan = null;
+  if (NODE_EXTS.includes(ext)) { kind = 'node'; line = `node --inspect-brk=127.0.0.1:${port} ${quoted}`; }
+  else {
+    const a = adapterFor(file);
+    if (!a) throw new Error(`the debugger works on ${debugLanguages()} files`);
+    plan = await a.start({ file, args, cwd, port, ...(python ? { python } : {}) });
+    kind = a.pack; line = plan.line;
+  }
   const job = startBackground({ projectId, cwd, line, shell: 'direct', label: `debug ${file}`, logTo, logRel, term });
   let s;
-  try { s = kind === 'node' ? await nodeSession(port) : await pySession(port); } catch (e) { await stopBackground(job.id).catch(() => {}); throw e; }
+  try { s = kind === 'node' ? await nodeSession(port) : await dapSession(port, plan, kind); } catch (e) { await stopBackground(job.id).catch(() => {}); throw e; }
   const id = `d${++seq}`;
   SESS.set(id, Object.assign(s, { id, job: job.id, file, cwd, projectId })); // the same object its message handler updates
   return { id, job: job.id, kind };
@@ -163,18 +189,18 @@ export async function debugMove(id, how = 'continue', wait = 10000) {
     await nodeWait(s, wait);
     return nodeState(s);
   }
-  if (!s.configured) { s.configured = true; await s.send('configurationDone'); await s.attach.catch(() => {}); if (how === 'continue') { await pyWait(s, wait); return pyState(s); } }
+  if (!s.configured) { s.configured = true; await s.send('configurationDone'); await s.attach.catch(() => {}); if (how === 'continue') { await dapWait(s, wait); return dapState(s); } }
   const m = { continue: 'continue', step: 'next', into: 'stepIn', out: 'stepOut' }[how];
   if (!m) throw new Error('move must be continue, step, into or out');
   if (!s.paused) throw new Error('the program is running; pause it at a breakpoint first');
   s.paused = null;
   await s.send(m, { threadId: s.thread });
-  await pyWait(s, wait);
-  return pyState(s);
+  await dapWait(s, wait);
+  return dapState(s);
 }
 
 /** Where it is now: { state, reason, frames, locals }. */
-export const debugState = (id) => { const s = getD(id); return s.kind === 'node' ? nodeState(s) : pyState(s); };
+export const debugState = (id) => { const s = getD(id); return s.kind === 'node' ? nodeState(s) : dapState(s); };
 
 /** Evaluates an expression in the top frame (or `frame`). */
 export async function debugEval(id, expr, frame = 0) {
@@ -186,7 +212,7 @@ export async function debugEval(id, expr, frame = 0) {
     if (r.exceptionDetails) return `error: ${clip(r.exceptionDetails.exception?.description || r.exceptionDetails.text, 300)}`;
     return clip(r.result.description ?? JSON.stringify(r.result.value), 1500);
   }
-  const st = await pyState(s);
+  const st = await dapState(s);
   const r = await s.send('evaluate', { expression: String(expr), frameId: st.frames[frame]?.id, context: 'repl' });
   return clip(r.result, 1500);
 }

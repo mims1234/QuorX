@@ -27,7 +27,8 @@ import { languageChecks } from './langchecks.js';
 import { audit } from './audit.js';
 import { packagesOf, checkPackages } from './pkgguard.js';
 import { testChanges, TEST_FILE } from './testguard.js';
-import { debugStart, debugBreak, debugMove, debugState, debugEval, debugStop, stateText } from './debugger.js';
+import { debugStart, debugBreak, debugMove, debugState, debugEval, debugStop, stateText, debugLanguages, debugGateLine } from './debugger.js';
+import { isCheckedFile, packNotes } from './packs/index.js';
 import { devices as adbDevices, pickDevice, readScreen, tap as adbTap, typeText as adbType, key as adbKey, screenshot as adbShot, install as adbInstall, launch as adbLaunch, logcat as adbLog } from './android.js';
 import { listSkills, readSkill, saveSkill, listTemplates } from './skills.js';
 import { workspaceDir, listFiles, readFile, readText, writeFile, appendFile, editFile, editFileMulti, runCommand, runLine, lineOf, stopNote, endProc, startServer, stopServer, stopServerWait, serverFor, serverLog, listServers, launchConfigs, ensureAgentDir, agentSpace, SCRATCH, sealCheckpoint, pruneCheckpoints, ALLOWED } from './workspace.js';
@@ -422,7 +423,7 @@ const CODE_TOOLS = [
     action: { type: 'string', enum: ['start', 'send', 'read', 'stop'] }, command: { type: 'string', description: 'start: the command line' }, id: { type: 'string', description: 'send/read/stop: the terminal id, e.g. "t1"' },
     text: { type: 'string', description: 'send: text to type' }, keys: { type: 'array', items: { type: 'string' }, description: 'send: keys to press after the text, in order: Enter, Tab, Esc, Up, Down, Left, Right, Backspace, Space, Ctrl+C, Ctrl+D, F1–F5, PageUp, PageDown, or a single character' },
     wait_s: { type: 'integer', minimum: 0, maximum: 30 }, cols: { type: 'integer', minimum: 40, maximum: 200 }, rows: { type: 'integer', minimum: 10, maximum: 60 }, cwd: { type: 'string' } } } } },
-  { type: 'function', function: { name: 'debug', description: 'A debugger for Node (.js) and Python (.py) programs, for bugs that reading the trace and adding prints haven\'t found. start runs a file paused (args optional); break sets a breakpoint at file:line (condition optional); continue runs to the next breakpoint; step / into / out move one line; state shows where it is, the stack and the local variables; eval evaluates an expression where it stopped; stop ends it. Python needs debugpy (pip install debugpy).', parameters: { type: 'object', required: ['action'], properties: {
+  { type: 'function', function: { name: 'debug', description: `A debugger for ${debugLanguages()} programs, for bugs that reading the trace and adding prints haven't found. start runs a file paused (args optional); break sets a breakpoint at file:line (condition optional); continue runs to the next breakpoint; step / into / out move one line; state shows where it is, the stack and the local variables; eval evaluates an expression where it stopped; stop ends it. Python needs debugpy (pip install debugpy).`, parameters: { type: 'object', required: ['action'], properties: {
     action: { type: 'string', enum: ['start', 'break', 'continue', 'step', 'into', 'out', 'state', 'eval', 'stop'] }, id: { type: 'string', description: 'The session id from start, e.g. "d1"' },
     file: { type: 'string' }, args: { type: 'array', items: { type: 'string' } }, line: { type: 'integer' }, condition: { type: 'string' }, expr: { type: 'string' }, frame: { type: 'integer' } } } } },
   { type: 'function', function: { name: 'android', description: 'Test an Android app on an emulator (adb). devices: what is connected. install {apk}: an APK from the project. launch {package}. read: the screen as text; interactive controls are numbered [n] with their position @x,y. tap {ref} or {x, y}. type {text}: into the focused field. key {key}: back, home, enter, tab, delete, up/down/left/right. screenshot: a picture for the user. log {package}: recent errors and the app\'s own log lines. Emulators only, unless the user allows phones.', parameters: { type: 'object', required: ['action'], properties: {
@@ -713,8 +714,10 @@ async function runAgentInner(req, emit, signal, cleanups, deps) {
     } catch (e) { if (signal.aborted) throw e; history = history.slice(-30); }
   } else history = history.slice(-30);
   history = history.map(({ at: _a, ...m }) => m);
-  // Which compilers and SDKs this computer has (cached), so the agent builds with what is there.
-  const chainsNote = root && !req.bench ? toolchainNote(await detectToolchains().catch(() => [])) : '';
+  // Which compilers and SDKs this computer has (cached), so the agent builds with what is there, and what the platform
+  // packs know about the kinds of project in this folder (how to build, run, test and read crashes).
+  const chains = root && !req.bench ? await detectToolchains().catch(() => []) : [];
+  const chainsNote = root && !req.bench ? [toolchainNote(chains), packNotes(root, chains)].filter(Boolean).join('\n') : '';
   // When the agent picks the model, its tool lists each option with an estimated price.
   const choices = {};
   for (const c of cats) if (T[c].pick === 'agent' && T[c].models.length > 1) choices[c] = await Promise.all(T[c].models.map((m) => estimateFor(c, m, {}, T)));
@@ -1584,7 +1587,7 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
     let browserNote = null;
     const allChanged = root ? changedFiles(root, filesId) : [];
     const changed = allChanged.filter((f) => CHECKED.test(f) && fs.existsSync(path.join(root, f)));
-    const compiled = allChanged.filter((f) => /\.(rs|cs|csproj|xaml|razor|go|ts|tsx|mts|cts)$/i.test(f));
+    const compiled = allChanged.filter(isCheckedFile);
     const htmlArts = [...touched.arts].filter((id) => arts.get(id)?.kind === 'html');
     const testsTouched = allChanged.some((f) => TEST_FILE.test(f.replaceAll('\\', '/')));
     if (!changed.length && !compiled.length && !testsTouched && !htmlArts.length && !touched.apps.size) return null;
@@ -2203,7 +2206,7 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
         const file = String(args.file || '');
         safePath(root, file);
         const line = `debug ${file}`;
-        const d = await decideCommand(`${/\.py$/i.test(file) ? 'py -3' : 'node'} ${file} ${(args.args || []).join(' ')}`.trim(), { shell: 'cmd', root, cwd: root, env: childEnv(), rules: commandRules(), mode: S.approval, yolo: { external: SF.yoloExternal, opaque: SF.yoloOpaque, outside: SF.yoloOutside } });
+        const d = await decideCommand(debugGateLine(file, (args.args || []).map(String)), { shell: 'cmd', root, cwd: root, env: childEnv(), rules: commandRules(), mode: S.approval, yolo: { external: SF.yoloExternal, opaque: SF.yoloOpaque, outside: SF.yoloOutside } });
         const g = await gateCommand(d, line, 'cmd');
         if (!g.ok) return g.text;
         run.debugOn = true;
