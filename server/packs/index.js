@@ -12,8 +12,10 @@
 //                  winget, wingetArgs, brew, apt, url }],
 //   markers: [/\.csproj$/i],            // file names that mean "this folder is that kind of project"
 //   detect(root),                       // or a function, for projects whose marker sits deeper (Android)
-//   checks: [{ id, tool, ext, marker(dir), cmd, errors }], // compiler checks before the final reply (errors: a
-//                                       // pattern for its error lines, when the usual "error" match misses them)
+//   checks: [{ id, tool, ext, marker(dir), cmd, errors, tidy }], // compiler checks before the final reply (errors:
+//                                       // a pattern for its error lines, when the usual "error" match misses them;
+//                                       // tidy(line, dir): the line as the agent should read it)
+//   summaries: [{ cmd: /^dotnet test\b/, summarize(out) }], // a short summary put above a command's output
 //   debug: { exts: ['.cs'], tool, label, gate({ file, args, cwd }), start({ file, args, cwd, port }) },
 //   notes(have, root),                  // what the agent should know, when the project is this kind
 //   test: { needs: ['dotnet'] },        // its self-test (tests/<id>.test.mjs) runs when these are installed
@@ -60,6 +62,15 @@ export const allChecks = () => PACKS.filter(here).flatMap((p) => (p.checks || []
 
 /** Whether a compiler check covers this file: a change to it is checked before the final reply. */
 export const isCheckedFile = (rel) => allChecks().some((c) => c.ext.test(rel));
+
+/** A pack's summary of what a command printed (failed tests, say), to put above its output; '' when none applies. */
+export function outputSummary(line, out) {
+  for (const p of PACKS.filter(here)) for (const s of p.summaries || []) {
+    if (!s.cmd.test(String(line))) continue;
+    try { const t = s.summarize(String(out || '')); if (t) return t; } catch { /* a summary is a convenience */ }
+  }
+  return '';
+}
 
 /** Debuggers by file extension (Node's own inspector is built in; packs add the rest). */
 export const debugAdapters = () => PACKS.filter((p) => here(p) && p.debug).map((p) => ({ ...p.debug, pack: p.id, label: p.debug.label || p.label }));

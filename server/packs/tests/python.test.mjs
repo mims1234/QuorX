@@ -65,12 +65,12 @@ test('python: the project\'s venv is found and the debugger uses it', () => {
   const plain = project('py-novenv', { 'app.py': 'print(1)\n' });
   assert.equal(venvOf(plain), null);
   assert.equal(interpreter(plain).line, WIN ? 'py -3' : 'python3');
-  assert.equal(debugGateLine('app.py', ['in put.txt'], plain), `${WIN ? 'py -3' : 'python3'} app.py "in put.txt"`);
+  assert.equal(debugGateLine('app.py', ['in put.txt'], { cwd: plain }), `${WIN ? 'py -3' : 'python3'} app.py "in put.txt"`);
   assert.match(debugpyMissing(plain), /-m venv \.venv[\s\S]*-m pip install debugpy[\s\S]*Don't install it into the system's Python/);
   const dir = project('py-venv', { 'app.py': 'print(1)\n' });
   fakeVenv(dir);
   assert.deepEqual(venvOf(dir), { name: '.venv', python: VENV_PY, version: '3.11.4' });
-  assert.equal(debugGateLine('app.py', [], dir), `${VENV_PY} app.py`);
+  assert.equal(debugGateLine('app.py', [], { cwd: dir }), `${VENV_PY} app.py`);
   assert.equal(debugpyMissing(dir), `debugpy is not installed in this project's virtual environment (.venv). Install it there with: ${VENV_PY} -m pip install debugpy (a project install), then start the debugger again.`);
 });
 
