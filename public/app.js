@@ -5466,16 +5466,27 @@ function drawRunningPane(c, r) {
   const pname = (id) => G.projects.find((p) => p.id === id)?.name || id;
   const elsewhere = (r.elsewhere || []).length ? `<div class="run-else">Also running in other projects: ${r.elsewhere.map((e) => `<b>${esc(pname(e.projectId))}</b> (${e.count})`).join(', ')}</div>` : '';
   const html = (groups || `<div class="run-empty"><b>Nothing is running in this project.</b><br>Long commands the agent starts keep running here in the background while it carries on; servers, the agent’s terminals and your terminal tabs show here too, each with a Stop.</div>`) + elsewhere;
-  // Redraw only when something changed (the times tick every poll), so a click is never lost to a redraw.
-  const sig = JSON.stringify(items.map((x) => [x.id, x.status, x.tail, x.chatId])) + elsewhere;
-  if (box.dataset.sig === sig) { for (const x of items) { const t = box.querySelector(`.run-row[data-id="${CSS.escape(x.id)}"] .run-time`); if (t && x.started) t.textContent = `${x.kind === 'your-term' ? 'open' : 'running'} ${dur(Date.now() - x.started)}`; } return; }
+  // Rows are rebuilt only when what runs changes. Output and times update in place, so a Stop click never lands on a
+  // button that a redraw has just replaced (output changes every second or two).
+  const sig = JSON.stringify(items.map((x) => [x.id, x.status, x.chatId, !!x.tail?.length])) + elsewhere;
+  if (box.dataset.sig === sig) {
+    for (const x of items) {
+      const row = box.querySelector(`.run-row[data-id="${CSS.escape(x.id)}"]`); if (!row) continue;
+      const t = $('.run-time', row); if (t && x.started) t.textContent = `${x.kind === 'your-term' ? 'open' : 'running'} ${dur(Date.now() - x.started)}`;
+      const pre = $('.run-tail', row), text = (x.tail || []).join('\n'); if (pre && pre.textContent !== text) pre.textContent = text;
+    }
+    return;
+  }
   box.dataset.sig = sig;
   box.innerHTML = html;
   for (const row of box.querySelectorAll('.run-row')) {
     const x = items.find((i) => i.id === row.dataset.id); if (!x) continue;
-    $('.run-stop', row).onclick = async (e) => {
+    const stopBtn = $('.run-stop', row);
+    if ((G.runStopping ||= new Set()).has(x.id)) { stopBtn.disabled = true; stopBtn.textContent = 'Stopping…'; }
+    stopBtn.onclick = async (e) => {
       e.target.disabled = true; e.target.textContent = 'Stopping…';
-      const res = await postJ('/api/running/stop', { projectId: c.projectId, id: x.id });
+      G.runStopping.add(x.id);
+      const res = await postJ('/api/running/stop', { projectId: c.projectId, id: x.id }).finally(() => G.runStopping.delete(x.id));
       if (res.error) uiAlert(res.error);
       else if (res.left) uiAlert(`${res.left} process${res.left > 1 ? 'es' : ''} did not stop: ${(res.names || []).join(', ')}`);
       if (x.kind === 'your-term' && G.term?.projectId === c.projectId) { dropXterm?.(c.projectId, x.tab, true); G.term.terms = G.term.terms.filter((u) => u.id !== x.tab); }

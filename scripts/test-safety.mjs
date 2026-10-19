@@ -227,6 +227,36 @@ test('toolchain note: Rust that can\'t link gets the Build Tools line with the C
   assert.doesNotMatch(toolchainNote([{ id: 'rust', label: 'Rust (cargo)', found: true, works: true, version: '1.97.1' }]), /tell you when it is done/);
 });
 
+// ---------- platform packs ----------
+test('packs: every pack loads, and every toolchain, check and debugger is still there', async () => {
+  const { PACKS, PACK_ERRORS, allToolchains, allChecks, isCheckedFile } = await import('../server/packs/index.js');
+  const { debugLanguages, debugGateLine } = await import('../server/debugger.js');
+  assert.deepEqual(PACK_ERRORS, []);
+  assert.ok(PACKS.length >= 10);
+  const ids = allToolchains().map((t) => t.id);
+  for (const id of ['rust', 'dotnet', 'go', 'cmake', 'msvc', 'gcc', 'clang', 'java', 'gradle', 'maven', 'python', 'node', 'flutter', 'adb', 'git']) assert.ok(ids.includes(id), id);
+  assert.deepEqual(allChecks().map((c) => c.id).sort(), ['dotnet', 'go', 'rust', 'ts']);
+  for (const f of ['src/main.rs', 'App.xaml', 'Program.cs', 'cmd/main.go', 'src/app.tsx']) assert.ok(isCheckedFile(f), f);
+  assert.ok(!isCheckedFile('README.md'));
+  assert.match(debugLanguages(), /Node \(\.js, \.mjs, \.cjs\), Python \(debugpy\) \(\.py\)/);
+  assert.equal(debugGateLine('app.py', ['in put.txt']), `${WIN ? 'py -3' : 'python3'} app.py "in put.txt"`);
+  assert.equal(debugGateLine('app.js', ['x']), 'node app.js x');
+});
+
+test('packs: the agent gets notes for the kinds of project in its folder, including deep markers', async () => {
+  const { packsIn, packNotes } = await import('../server/packs/index.js');
+  const dir = tmp('packs');
+  fs.writeFileSync(path.join(dir, 'Cargo.toml'), '');
+  fs.mkdirSync(path.join(dir, 'web')); fs.writeFileSync(path.join(dir, 'web', 'package.json'), '{}');
+  fs.mkdirSync(path.join(dir, 'app', 'src', 'main'), { recursive: true }); fs.writeFileSync(path.join(dir, 'app', 'src', 'main', 'AndroidManifest.xml'), '<manifest/>');
+  fs.mkdirSync(path.join(dir, 'node_modules', 'x'), { recursive: true }); fs.writeFileSync(path.join(dir, 'node_modules', 'x', 'go.mod'), '');
+  assert.deepEqual(packsIn(dir).map((p) => p.id).sort(), ['android', 'node', 'rust'], 'node_modules is never scanned');
+  const n = packNotes(dir, []);
+  assert.match(n, /- Rust: build with cargo build/);
+  assert.match(n, /- Android: build with gradlew assembleDebug/);
+  assert.equal(packNotes(tmp('empty'), []), '');
+});
+
 // ---------- the hardened deciders ----------
 // A fake Decisions endpoint: each model answers P(yes) per question from `table`, or fails.
 async function withDeciders(table, fn) {

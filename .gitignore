@@ -6,3 +6,4 @@ workspaces/
 desktop/dist/
 .uitest/
 .claude/worktrees/
+pack-test-report.md

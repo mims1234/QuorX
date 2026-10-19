@@ -61,11 +61,16 @@ export async function setupCheck() {
     // Sandboxing: what fences the agent's commands. QuorX's own layers always apply; an OS sandbox is not built yet.
     { id: 'sandbox', label: 'Command sandbox', need: 'An operating-system fence around the agent’s commands, on top of QuorX’s own checks.', status: 'warn',
       detail: `Not in use yet. QuorX fences commands itself: the rule engine, real-path checks on deletes, Windows jobs (Stop ends everything), snapshots for Undo, and the tripwire. ${WIN ? `${wsl ? 'WSL 2 is installed, which a future version can use as a sandbox for Linux toolchains.' : 'WSL 2 isn’t installed.'} Windows Sandbox needs Windows Pro or Enterprise.` : ''}` },
-    // Toolchains: optional, each only for the languages that need it.
-    // Installed but unable to build (Rust with no C linker) is amber too, with the fix for what's missing.
-    ...chains.filter((c) => !['git', 'python', 'node'].includes(c.id)).map((c) => ({ id: `tc-${c.id}`, label: c.label, need: c.for, status: c.found && c.works ? 'ok' : 'warn',
-      detail: !c.found ? 'Not installed. Only needed for this kind of project.' : c.works ? `Version ${c.version}.` : `Version ${c.version}, but ${c.problem}.`,
-      fix: !c.found ? fix(`tc-${c.id}`) : !c.works && c.id === 'rust' && WIN ? fix('tc-msvc') : null })),
+    // Toolchains (from the platform packs): optional, each only for the languages that need it. Installed but unable
+    // to build (Rust with no C linker) is amber too, with the fix for what's missing (its pack's `fixWith`). Away from
+    // Windows there is no Install button: the detail names the brew or apt package instead.
+    ...chains.filter((c) => !['git', 'python', 'node'].includes(c.id)).map((c) => {
+      const t = TOOLCHAINS.find((x) => x.id === c.id) || {};
+      const how = !WIN && (process.platform === 'darwin' ? t.brew && `brew install ${t.brew}` : t.apt && `sudo apt install ${t.apt}`) || (!WIN && t.url) || '';
+      return { id: `tc-${c.id}`, label: c.label, need: c.for, status: c.found && c.works ? 'ok' : 'warn',
+        detail: !c.found ? `Not installed. Only needed for this kind of project.${how ? ` Install: ${how}` : ''}` : c.works ? `Version ${c.version}.` : `Version ${c.version}, but ${c.problem}.`,
+        fix: !c.found ? fix(`tc-${c.id}`) : !c.works && c.fixWith ? fix(`tc-${c.fixWith}`) : null };
+    }),
     { id: 'disk', label: 'Free space', need: 'Chats, run logs, uploads and undo copies.', status: free == null ? 'ok' : free < 2e9 ? 'warn' : 'ok', detail: free == null ? 'Not measured.' : `${gb(free)} free where QuorX keeps its data.` },
   ] };
 }
