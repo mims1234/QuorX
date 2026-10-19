@@ -89,7 +89,7 @@ async function dapSession(port, plan, kind) {
   if (!sock) throw new Error(plan.missing || `the ${kind} debugger did not open its port`);
   let buf = Buffer.alloc(0), seqN = 0;
   const waiting = new Map();
-  const s = { kind, sock, paused: null, thread: null, waiters: [], ended: false, events: [], evalContext: plan.evalContext || 'repl' };
+  const s = { kind, sock, paused: null, thread: null, waiters: [], ended: false, events: [], output: '', evalContext: plan.evalContext || 'repl' };
   sock.on('data', (d) => {
     buf = Buffer.concat([buf, d]);
     for (;;) {
@@ -104,6 +104,8 @@ async function dapSession(port, plan, kind) {
         s.events.push(m.event);
         if (m.event === 'stopped') { s.paused = m.body; s.thread = m.body.threadId; for (const w of s.waiters.splice(0)) w(); }
         if (m.event === 'continued') s.paused = null;
+        // What the program prints, when the adapter runs it (netcoredbg): what is new goes with the next state.
+        if (m.event === 'output' && m.body?.category !== 'telemetry') s.output = `${s.output}${m.body?.output || ''}`.slice(-4000);
         if (m.event === 'terminated' || m.event === 'exited') { s.ended = true; for (const w of s.waiters.splice(0)) w(); }
       }
     }
@@ -121,13 +123,17 @@ async function dapSession(port, plan, kind) {
   s.attach.catch((e) => { s.launchError = e.message; }); // a build that failed, a program that isn't there
   for (let i = 0; i < (plan.initWait || 6000) / 100 && !s.events.includes('initialized') && !s.ended && !s.launchError; i++) await sleep(100);
   if (s.launchError) { sock.destroy(); throw new Error(`the debugger could not start the program: ${s.launchError}`); }
+  // Stop where an exception the program doesn't catch is thrown, when the pack names the adapter's filter for it.
+  if (plan.exceptions) await s.send('setExceptionBreakpoints', { filters: plan.exceptions }).catch(() => {});
   s.bps = new Map(); // file → [{ line, condition }]
   return s;
 }
 async function dapWait(s, ms = 10000) { if (s.paused || s.ended) return; await Promise.race([new Promise((r) => s.waiters.push(r)), sleep(ms)]); }
 async function dapState(s) {
-  if (s.ended) return { state: 'ended' };
-  if (!s.paused) return { state: 'running' };
+  const output = s.output.trim().split(/\r?\n/).slice(-15).join('\n');
+  s.output = '';
+  if (s.ended) return { state: 'ended', output };
+  if (!s.paused) return { state: 'running', output };
   const st = await s.send('stackTrace', { threadId: s.thread, levels: 12 });
   const frames = st.stackFrames.map((f) => ({ fn: f.name, file: f.source?.path || '', line: f.line, id: f.id }));
   const locals = [];
@@ -138,7 +144,7 @@ async function dapState(s) {
       for (const x of v.variables.filter((y) => !/^(special|function) variables$/i.test(y.name)).slice(0, 30)) locals.push(`${x.name} = ${clip(x.value, 100)}`);
     }
   }
-  return { state: 'paused', reason: s.paused.reason, frames, locals };
+  return { state: 'paused', reason: s.paused.reason, frames, locals, output };
 }
 
 // ---------- the agent's interface ----------
@@ -179,7 +185,8 @@ export async function debugBreak(id, file, line, condition) {
   const list = [...(s.bps.get(abs) || []), { line: Number(line), ...(condition ? { condition } : {}) }];
   s.bps.set(abs, list);
   const r = await s.send('setBreakpoints', { source: { path: abs }, breakpoints: list });
-  return `breakpoint at ${path.basename(abs)}:${line}${r.breakpoints?.at(-1)?.verified === false ? ' (not verified: check the line has code)' : ''}`;
+  const bp = r.breakpoints?.at(-1);
+  return `breakpoint at ${path.basename(abs)}:${line}${bp?.verified === false ? ` (not verified: ${bp.message || 'check the line has code'})` : ''}`;
 }
 
 /** continue | step (over) | into | out. Waits up to `wait` ms for the next pause or the end, then returns the state. */
@@ -232,6 +239,7 @@ export async function debugStop(id) {
 
 /** Text for the agent. */
 export function stateText(st) {
-  if (st.state !== 'paused') return st.state === 'ended' ? 'The program has ended.' : 'The program is running (no breakpoint hit yet within the wait).';
-  return `Paused (${st.reason}) at ${path.basename(st.frames[0]?.file || '?')}:${st.frames[0]?.line}.\nStack:\n${st.frames.map((f, i) => `  ${i}. ${f.fn} (${path.basename(f.file)}:${f.line})`).join('\n')}\nLocals:\n${st.locals.length ? st.locals.map((l) => `  ${l}`).join('\n') : '  (none)'}`;
+  const out = st.output ? `\nNew program output:\n${st.output}` : '';
+  if (st.state !== 'paused') return `${st.state === 'ended' ? 'The program has ended.' : 'The program is running (no breakpoint hit yet within the wait).'}${out}`;
+  return `Paused (${st.reason}) at ${path.basename(st.frames[0]?.file || '?')}:${st.frames[0]?.line}.\nStack:\n${st.frames.map((f, i) => `  ${i}. ${f.fn} (${path.basename(f.file)}:${f.line})`).join('\n')}\nLocals:\n${st.locals.length ? st.locals.map((l) => `  ${l}`).join('\n') : '  (none)'}${out}`;
 }
