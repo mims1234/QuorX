@@ -4,3 +4,4 @@ node_modules/
 data/
 workspaces/
 desktop/dist/
+.claude/worktrees/
