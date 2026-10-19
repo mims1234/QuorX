@@ -66,7 +66,8 @@ export async function setupCheck() {
     // Windows there is no Install button: the detail names the brew or apt package instead.
     ...chains.filter((c) => !['git', 'python', 'node'].includes(c.id)).map((c) => {
       const t = TOOLCHAINS.find((x) => x.id === c.id) || {};
-      const how = !WIN && (process.platform === 'darwin' ? t.brew && `brew install ${t.brew}` : t.apt && `sudo apt install ${t.apt}`) || (!WIN && t.url) || '';
+      // `install`: a command line for tools that come without winget (Delve: go install), shown on every system.
+      const how = t.install || !WIN && (process.platform === 'darwin' ? t.brew && `brew install ${t.brew}` : t.apt && `sudo apt install ${t.apt}`) || (!WIN && t.url) || '';
       return { id: `tc-${c.id}`, label: c.label, need: c.for, status: c.found && c.works ? 'ok' : 'warn',
         detail: !c.found ? `Not installed. Only needed for this kind of project.${how ? ` Install: ${how}` : ''}` : c.works ? `Version ${c.version}.` : `Version ${c.version}, but ${c.problem}.`,
         fix: !c.found ? fix(`tc-${c.id}`) : !c.works && c.fixWith ? fix(`tc-${c.fixWith}`) : null };

@@ -34,7 +34,7 @@ export async function languageChecks(root, changed, { have = [], signal, timeout
     const dirs = [...new Set(files.map((f) => projectDirOf(root, f, lang)).filter(Boolean))].slice(0, 3);
     for (const dir of dirs) {
       if (signal?.aborted) return { problems, ran };
-      const r = await runLine(dir, lang.cmd, { shell: 'direct', timeout, signal, env: undefined });
+      const r = await runLine(dir, typeof lang.cmd === 'function' ? lang.cmd(dir) : lang.cmd, { shell: 'direct', timeout, signal, env: undefined });
       ran.push({ lang: lang.id, dir: path.relative(root, dir) || '.', code: r.code, ms: r.ms, timedOut: r.timedOut });
       if (r.timedOut) { problems.push(`${lang.id} check in ${path.relative(root, dir) || '.'} did not finish in ${Math.round(timeout / 1000)}s`); continue; }
       if (r.code === 0) continue;
@@ -42,7 +42,8 @@ export async function languageChecks(root, changed, { have = [], signal, timeout
       const errorLine = lang.errors || /\berror\b|: error|error\[|\bE\d{4}\b|\.go:\d+:\d+:/i;
       const lines = r.out.split(/\r?\n/).map((l) => l.trim()).filter((l) => errorLine.test(l));
       const hits = lines.filter((l) => [...mine].some((b) => l.toLowerCase().includes(b)));
-      for (const l of hits.slice(0, 8)) problems.push(`${lang.id}: ${l.slice(0, 300)}`);
+      // A pack may rewrite its error lines (shorter paths, one line per error) before the agent reads them.
+      for (const l of [...new Set(hits.map((h) => (lang.tidy ? lang.tidy(h, dir) : h)))].slice(0, 8)) problems.push(`${lang.id}: ${l.slice(0, 300)}`);
     }
   }
   return { problems, ran };
