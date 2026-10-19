@@ -32,7 +32,7 @@ import { isCheckedFile, packNotes } from './packs/index.js';
 import { devices as adbDevices, pickDevice, readScreen, tap as adbTap, typeText as adbType, key as adbKey, screenshot as adbShot, install as adbInstall, launch as adbLaunch, logcat as adbLog } from './android.js';
 import { listSkills, readSkill, saveSkill, listTemplates } from './skills.js';
 import { workspaceDir, listFiles, readFile, readText, writeFile, appendFile, editFile, editFileMulti, runCommand, runLine, lineOf, stopNote, endProc, startServer, stopServer, stopServerWait, serverFor, serverLog, listServers, launchConfigs, ensureAgentDir, agentSpace, SCRATCH, sealCheckpoint, pruneCheckpoints, ALLOWED } from './workspace.js';
-import { openTab, hostHtml } from './browser.js';
+import { openTab, hostHtml, startedWithDevtoolsPort } from './browser.js';
 import { adoptAgentTab, releaseAgentTab } from './userbrowser.js';
 import { setLiveArtifact, markdownHtml } from './artifacts.js';
 import { listDocs, docText, readDoc, searchDocs, DOC_DEFAULTS } from './docs.js';
@@ -2625,7 +2625,7 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
   async function attachApp(target) {
     const port = Number(target.slice(4));
     if (!(Number.isInteger(port) && port >= 1024 && port <= 65535)) return 'Error: cdp:<port> needs a port between 1024 and 65535.';
-    const owned = listBackground(projectId).some((j) => j.status === 'running' && new RegExp(`--remote-debugging-port[= ]${port}(?!\\d)`).test(j.label));
+    const owned = listBackground(projectId).some((j) => j.status === 'running' && startedWithDevtoolsPort(j.label, port));
     if (!owned) return `Error: none of your running background jobs was started with --remote-debugging-port=${port}. Start the app with shell (background: true) and that flag first; QuorX only attaches to apps you started.`;
     let t = null;
     for (let i = 0; i < 20 && !t; i++) { try { t = await (deps.openTab || openTab)({ cdpPort: port }); } catch (e) { if (i === 19) return `Error: ${e.message}`; await sleep(500, signal); } }

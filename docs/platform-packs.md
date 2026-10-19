@@ -113,7 +113,7 @@ Each is its own pull request, so people with that toolchain can test it on its o
 | .NET | WinForms and WPF apps built and driven; `dotnet test`; debugging with netcoredbg | .NET 8 SDK, netcoredbg |
 | Python desktop | tkinter and PyQt windows driven; pytest; debugpy set up in the project's own venv | Python 3 |
 | Electron | Apps started with their DevTools port and driven; main-process debugging | Node.js |
-| Tauri | `cargo tauri` builds; the WebView2 window driven through its DevTools port; Rust debugging | Rust, Build Tools, WebView2 |
+| Tauri | Tauri 1 and 2 apps found; `cargo check` in `src-tauri`; `tauri dev` started with WebView2's DevTools port, so the window is read and clicked; panics and capability errors explained (Rust breakpoints come with the C/C++ pack's lldb-dap) | Rust with the MSVC linker (Build Tools with C++), the Tauri CLI, WebView2, Node.js |
 | Go and C/C++ | Delve and lldb-dap debugging; CMake build check; crash dumps read | Go, CMake, a C++ compiler, LLVM |
 | Java and Kotlin | Gradle and Maven compile checks; JUnit; debugging | A JDK |
 | Android and Flutter | Emulator started and driven; Gradle and `flutter analyze` checks; Logcat crashes; Dart debugging | Android SDK, an emulator, Flutter |
