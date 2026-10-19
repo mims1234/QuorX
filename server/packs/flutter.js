@@ -116,8 +116,8 @@ export default {
     { id: 'dart', tool: 'dart', ext: /\.dart$/i, marker: isDartProject, cmd: 'dart analyze --no-fatal-warnings', errors: ANALYZE_ERRORS },
   ],
   summaries: [
-    { when: /\b(flutter|dart)(\.bat)?\s+test\b/i, summarize: testSummary },
-    { when: /\bflutter(\.bat)?\s+doctor\b/i, summarize: doctorSummary },
+    { cmd: /\b(flutter|dart)(\.bat)?\s+test\b/i, summarize: testSummary },
+    { cmd: /\bflutter(\.bat)?\s+doctor\b/i, summarize: doctorSummary },
   ],
   debug: {
     exts: ['.dart'], label: 'Dart and Flutter (debug_adapter)',
