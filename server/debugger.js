@@ -8,7 +8,7 @@
 // few failed tries (see agent.js).
 import net from 'node:net';
 import path from 'node:path';
-import { startBackground, stopBackground, getBackground } from './bgjobs.js';
+import { startBackground, stopBackground, getBackground, listBackground } from './bgjobs.js';
 import { debugAdapters } from './packs/index.js';
 
 const NODE_EXTS = ['.js', '.mjs', '.cjs'];
@@ -29,7 +29,7 @@ const freePort = () => new Promise((resolve, reject) => { const s = net.createSe
 const clip = (s, n = 120) => { const t = String(s ?? ''); return t.length > n ? `${t.slice(0, n)}…` : t; };
 
 // ---------- Node: V8 inspector over a WebSocket ----------
-async function nodeSession(port) {
+async function nodeSession(port, brk = true) {
   let target = null;
   for (let i = 0; i < 60 && !target; i++) { try { target = (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json())[0]; } catch { await sleep(250); } }
   if (!target?.webSocketDebuggerUrl) throw new Error('the program did not open its debugger port');
@@ -51,7 +51,7 @@ async function nodeSession(port) {
   await s.send('Runtime.enable');
   await s.send('Debugger.enable');
   await s.send('Runtime.runIfWaitingForDebugger').catch(() => {});
-  await nodeWait(s, 5000); // --inspect-brk stops on the first line once the debugger lets it run
+  if (brk) await nodeWait(s, 5000); // --inspect-brk stops on the first line once the debugger lets it run
   return s;
 }
 const fileOf = (url) => { try { return url.startsWith('file:') ? decodeURIComponent(new URL(url).pathname.replace(/^\/(\w:)/, '$1')) : url; } catch { return url; } };
@@ -162,6 +162,22 @@ export async function debugStart({ projectId, cwd, file, args = [], python, logT
   SESS.set(id, Object.assign(s, { id, job: job.id, file, cwd, projectId })); // the same object its message handler updates
   return { id, job: job.id, kind };
 }
+/**
+ * Attaches to the Node inspector of one of the agent's running background jobs: an Electron app's main process or a
+ * server started with --inspect=<port> (or --inspect-brk=<port>, which waits on its first line). Only a job of this
+ * project whose command opened that port, never another program's. Stop then only disconnects; the job keeps running.
+ */
+export async function debugAttach({ projectId, cwd, port }) {
+  port = Number(port);
+  if (!(Number.isInteger(port) && port >= 1024 && port <= 65535)) throw new Error('attach needs the inspector port (1024-65535) the program was started with');
+  const re = new RegExp(`--inspect(-brk)?[= ](?:[\\w.]+:)?${port}(?!\\d)`);
+  const job = listBackground(projectId).find((j) => j.status === 'running' && re.test(j.label));
+  if (!job) throw new Error(`none of your running background jobs was started with --inspect=${port}: start the program with shell (background: true) and that flag first`);
+  const s = await nodeSession(port, /--inspect-brk/.test(re.exec(job.label)[0]));
+  const id = `d${++seq}`;
+  SESS.set(id, Object.assign(s, { id, job: job.id, file: '', cwd, projectId, attached: true }));
+  return { id, job: job.id, kind: 'node', paused: !!s.paused };
+}
 const getD = (id) => { const s = SESS.get(String(id)); if (!s) throw new Error(`no debug session ${id}`); return s; };
 
 /** Sets a breakpoint at file:line (an optional condition: an expression in the program's language). */
@@ -169,7 +185,11 @@ export async function debugBreak(id, file, line, condition) {
   const s = getD(id);
   const abs = path.resolve(s.cwd, file);
   if (s.kind === 'node') {
-    const r = await s.send('Debugger.setBreakpointByUrl', { urlRegex: `${path.basename(abs).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, lineNumber: Number(line) - 1, ...(condition ? { condition } : {}) });
+    // The file's folders count too, not only its name: Electron's own loader is a main.js as well. Script URLs
+    // spell a space as %20, so each part matches either way.
+    const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const tail = abs.split(/[\\/]/).slice(-3).map((x) => (encodeURI(x) === x ? esc(x) : `(?:${esc(x)}|${esc(encodeURI(x))})`)).join('[\\\\/]');
+    const r = await s.send('Debugger.setBreakpointByUrl', { urlRegex: `${tail}$`, lineNumber: Number(line) - 1, ...(condition ? { condition } : {}) });
     return `breakpoint at ${path.basename(abs)}:${line}${r.locations?.length ? '' : ' (the file is not loaded yet: it will bind when it is)'}`;
   }
   const list = [...(s.bps.get(abs) || []), { line: Number(line), ...(condition ? { condition } : {}) }];
@@ -217,11 +237,13 @@ export async function debugEval(id, expr, frame = 0) {
   return clip(r.result, 1500);
 }
 
-/** Ends the program and the session. */
+/** Ends the program and the session (an attached session only disconnects). */
 export async function debugStop(id) {
   const s = getD(id);
+  if (s.attached && s.paused) await s.send('Debugger.resume').catch(() => {}); // the app goes on without the debugger
   try { s.kind === 'node' ? s.ws.close() : s.sock.destroy(); } catch { /* closed */ }
   SESS.delete(String(id));
+  if (s.attached) return { detached: true, job: s.job };
   const j = getBackground(s.job);
   return j && j.status === 'running' ? stopBackground(s.job) : { already: true };
 }

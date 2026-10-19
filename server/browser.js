@@ -138,7 +138,8 @@ async function cdpTransport(port) {
   };
   return {
     id: t.id, desktop: false, app: true, url: t.url, title: t.title,
-    send: (method, params = {}) => new Promise((res, rej) => { const id = ++seq; waiting.set(id, { res, rej }); ws.send(JSON.stringify({ id, method, params })); setTimeout(() => { if (waiting.has(id)) { waiting.delete(id); rej(new Error(`${method} timed out`)); } }, 20000); }),
+    // An app whose main process is stopped at a breakpoint doesn't answer for its windows either.
+    send: (method, params = {}) => new Promise((res, rej) => { const id = ++seq; waiting.set(id, { res, rej }); ws.send(JSON.stringify({ id, method, params })); setTimeout(() => { if (waiting.has(id)) { waiting.delete(id); rej(new Error(`the app did not answer ${method} within 10 s: if a debug session has it stopped at a breakpoint, read it with debug state and continue`)); } }, 10000); }),
     onEvent: (fn) => subs.add(fn),
     close: async () => { try { ws.close(); } catch { /* closed */ } },
   };
