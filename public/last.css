@@ -1765,3 +1765,20 @@ dialog.lb-dlg::backdrop { background: rgba(3, 5, 5, .82); backdrop-filter: blur(
 .sb-rail .rail-upd[data-state="error"] { background: transparent !important; border-color: var(--bad) !important; color: var(--bad) !important; }
 .sb-rail .rail-upd svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
 .sb-rail .rail-upd .ru-pct { font: 700 10px/1 var(--mono); }
+
+/* ---------- the update button: short, never wider than the sidebar's footer (no sideways scroll) ---------- */
+.sb-foot { overflow: hidden; }
+.sb-foot .sb-version { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sb-foot-btns { flex: 0 1 auto !important; min-width: 0; }
+.sb-foot-btns > .foot-ico, .sb-foot-btns > .top-btn { flex: none; }
+.upd-note { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 100%; overflow: hidden; }
+.upd-note[hidden] { display: none !important; }
+.upd-note svg { flex: none; width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+.upd-note .un-txt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sb-foot .upd-note { flex: 0 1 auto; height: 26px !important; padding: 0 9px !important; font-size: 11.5px !important; }
+/* Downloading: a bar that fills, with the text readable on both halves. */
+.upd-note[data-state="downloading"] { opacity: 1 !important; color: var(--text) !important; border-color: color-mix(in srgb, var(--ok) 55%, transparent) !important;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--ok) 38%, transparent) var(--p, 0%), color-mix(in srgb, var(--ok) 10%, transparent) var(--p, 0%)) !important; font-variant-numeric: tabular-nums; }
+/* The version text gives way first; the update button keeps its words as long as it can. */
+.sb-foot .sb-version { flex: 1 1 0 !important; }
+.sb-foot .upd-note { flex: 0 1 auto; }

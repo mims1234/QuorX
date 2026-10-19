@@ -5476,13 +5476,26 @@ function updateText(u) {
   const v = u.version ? `v${u.version}` : 'a new version';
   return { available: `⬆ Update to ${v}`, downloading: `⬇ Downloading ${v}… ${u.percent ?? 0}%`, ready: `↻ Restart to update to ${v}`, error: '⚠ Update failed' }[u.state] || '';
 }
+const UPD_ICO = {
+  available: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V6M6 11l6-6 6 6"/></svg>',
+  downloading: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v13M6 12l6 6 6-6"/></svg>',
+  ready: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>',
+  error: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4 2.5 20h19z"/><path d="M12 10v4.5M12 17.2v.3"/></svg>',
+};
 function drawUpdate(u) {
   const b = $('#updNote');
   if (b) {
     const t = updateText(u);
-    b.hidden = !t; b.textContent = t; b.dataset.state = u.state || '';
+    // Short on the button (it shares the sidebar's footer with three icons); the whole sentence is in its tip.
+    // While downloading, the button fills up like a progress bar.
+    const short = { available: `Update ${u.version ? `v${u.version}` : ''}`.trim(), downloading: `${u.percent ?? 0}%`, ready: 'Restart', error: 'Retry' }[u.state] || '';
+    b.hidden = !t; b.dataset.state = u.state || '';
+    b.innerHTML = t ? `${UPD_ICO[u.state] || ''}<span class="un-txt">${esc(short)}</span>` : '';
+    b.setAttribute('aria-label', t.replace(/^\S+\s/, ''));
+    b.style.setProperty('--p', `${Math.max(0, Math.min(100, u.percent ?? 0))}%`);
     b.disabled = u.state === 'downloading';
     b.title = u.state === 'error' ? `${u.error || ''}\nClick to try again.` : u.state === 'available' ? `Version ${u.version} is out (you have ${u.current || 'an older one'}). Click to download it${u.size ? ` (${Math.round(u.size / 1e6)} MB)` : ''}.${u.notes ? `\n\n${u.notes.replace(/<[^>]+>/g, '')}` : ''}` : u.state === 'ready' ? 'Restarts QuorX and installs the update. Your chats and projects stay as they are.' : '';
+    if (u.state === 'downloading') b.title = t;
   }
   // The folded sidebar shows it as an icon, coloured like the button: ⬆ out, ⬇ downloading (with its %), ↻ ready, ⚠ failed.
   const r = $('#railUpd');
@@ -5490,7 +5503,7 @@ function drawUpdate(u) {
     const t = updateText(u);
     r.hidden = !t; r.dataset.state = u.state || ''; r.disabled = u.state === 'downloading';
     r.dataset.tip = t.replace(/^\S+\s/, ''); r.setAttribute('aria-label', r.dataset.tip);
-    r.innerHTML = { available: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V6M6 11l6-6 6 6"/></svg>', downloading: `<span class="ru-pct">${u.percent ?? 0}</span>`, ready: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>', error: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4 2.5 20h19z"/><path d="M12 10v4.5M12 17.2v.3"/></svg>' }[u.state] || '';
+    r.innerHTML = u.state === 'downloading' ? `<span class="ru-pct">${u.percent ?? 0}</span>` : UPD_ICO[u.state] || '';
   }
   const s = $('#stDeskUpd');
   if (s) s.textContent = { dev: 'Running from the repo: updates come from git.', 'no-feed': 'No update feed set.', checking: 'Checking…', current: `Up to date (v${u.current || '?'}).`, available: `v${u.version} is available.`, downloading: `Downloading… ${u.percent ?? 0}%`, ready: `v${u.version} is downloaded: restart to install.`, error: `Couldn't check: ${u.error || 'unknown error'}` }[u.state] || `v${u.current || '?'}`;
