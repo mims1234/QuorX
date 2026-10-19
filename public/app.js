@@ -3763,9 +3763,12 @@ function settingsPanels(S) {
     safety: (() => {
       const SF = { ...(d.safety || {}), ...(S.safety || {}) };
       return ['Safety & commands', 'How the agent’s commands are checked before they run, what Stop and Undo cover, and what ⚡ YOLO may approve on its own. Every command is split into its parts first; the strictest part decides.', [
-        stCard('Shell', '', stRow('The agent’s shell', 'Windows PowerShell 5.1 is read by PowerShell’s own parser, so its commands can be checked exactly. cmd and Git Bash are checked with simpler rules, and Git Bash’s path translation caused the worst delete incidents in other agents.', stSeg('safety.shell', [['powershell', 'PowerShell 5.1'], ['pwsh', 'PowerShell 7'], ['cmd', 'cmd'], ['bash', 'Git Bash']], SF.shell))
+        stCard('Shell', '', stRow('The agent’s shell', G.cfg?.platform && G.cfg.platform !== 'win32'
+          ? 'Both are checked with the same rules: each command is split into its parts first, and anything that runs text as a command (eval, $(…), zsh’s glob qualifiers) asks you.'
+          : 'Windows PowerShell 5.1 is read by PowerShell’s own parser, so its commands can be checked exactly. cmd and Git Bash are checked with simpler rules, and Git Bash’s path translation caused the worst delete incidents in other agents.',
+        stSeg('safety.shell', G.cfg?.platform && G.cfg.platform !== 'win32' ? [['bash', 'bash'], ['zsh', 'zsh']] : [['powershell', 'PowerShell 5.1'], ['pwsh', 'PowerShell 7'], ['cmd', 'cmd'], ['bash', 'Git Bash']], SF.shell))
           + stRow('Wait for a command', 'How long the agent waits for a command before it moves to the background. It keeps running there while the agent carries on; you see it, and can stop it, in the pane’s Running tab.', stStep('safety.timeout', SF.timeout, 5, 900, 5, 's'))
-          + stRow('Memory cap per command', 'For the command and everything it starts, so a runaway build can’t starve your PC. 0 = no cap.', stStep('safety.memoryMB', SF.memoryMB, 0, 65536, 256, 'MB'))
+          + stRow('Memory cap per command', `For the command and everything it starts, so a runaway build can’t starve your PC. 0 = no cap.${G.cfg?.platform && G.cfg.platform !== 'win32' ? ' Windows only for now.' : ''}`, stStep('safety.memoryMB', SF.memoryMB, 0, 65536, 256, 'MB'))
           + stRow('Stop', 'How Stop ends a command.', '<span id="stStopMode" class="st-chip">checking…</span>')),
         stCard('Undo for commands', 'Before a command that can change files, QuorX snapshots the project (only changed files are read again), so ↶ Undo and Review changes cover what the command did. Not covered: files outside the project, ignored folders (node_modules, target, bin, obj…), pushes, installs and databases.',
           stRow('Snapshot before each command', '', stSwitch('safety.snapshots', SF.snapshots))
@@ -4067,7 +4070,7 @@ async function drawPermsPanel() {
   PERMS.project ??= G.chats?.find((c) => c.id === G.panes?.[0])?.projectId || projects[0]?.id || null;
   const r = await fetch(`/api/permissions${PERMS.project ? `?project=${encodeURIComponent(PERMS.project)}` : ''}`).then((x) => x.json()).catch((e) => ({ error: e.message }));
   const sm = $('#stStopMode');
-  if (sm && r.stop) { sm.textContent = r.stop.mode === 'jobs' ? '✓ Job Objects: every process, confirmed' : '⚠ Basic: process tree only'; sm.title = r.stop.error || ''; }
+  if (sm && r.stop) { sm.textContent = r.stop.mode === 'jobs' ? '✓ Job Objects: every process, confirmed' : r.stop.mode === 'groups' ? '✓ Process groups: every process, confirmed' : '⚠ Basic: process tree only'; sm.title = r.stop.error || ''; }
   if (r.error) { box.innerHTML = `<div class="st-row-help">Couldn't load the rules: ${esc(r.error)}</div>`; return; }
   const list = (scope, rules) => rules.length ? rules.map((x, i) => `<div class="pr-rule" data-scope="${scope}" data-i="${i}">
       <span class="pr-eff" data-eff="${esc(x.effect)}">${RULE_EFFECT[x.effect] || esc(x.effect)}</span><code>${esc(x.match)}</code>
