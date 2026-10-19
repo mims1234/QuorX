@@ -49,7 +49,9 @@ export function buildOf(dir) {
     if (up === d || (kind === 'maven' && !isMaven(up))) break;
     d = up;
   }
-  return { kind, dir, root, wrapper, kotlin: /kotlin/i.test(script), android: /com\.android\.|id\s*\(?\s*["']com\.android/.test(script) };
+  // Android modules are the android pack's (its own Gradle check): an Android plugin, or a manifest where Android keeps it.
+  const android = /com\.android\.|id\s*\(?\s*["']com\.android/.test(script) || exists(path.join(dir, 'src', 'main', 'AndroidManifest.xml'));
+  return { kind, dir, root, wrapper, kotlin: /kotlin/i.test(script), android };
 }
 
 /**

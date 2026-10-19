@@ -85,6 +85,8 @@ test('jvm: the check uses the project\'s own wrapper, found above a module', () 
   assert.equal(checkLine(mvn, { cached: () => true, has: () => false }), null, 'no Maven: no check');
   const android = project('jvm-android', { 'build.gradle': "plugins { id 'com.android.application' }\n" });
   assert.equal(checkLine(android, { has: () => true }), null, 'Android modules are the android pack\'s');
+  const manifest = project('jvm-android2', { 'build.gradle.kts': 'plugins { alias(libs.plugins.app) }\n', 'src/main/AndroidManifest.xml': '<manifest/>' });
+  assert.equal(checkLine(manifest, { has: () => true }), null, 'an Android module found by its manifest');
   assert.equal(mainClassOf('src/main/java/com/example/App.java', 'package com.example;\nclass App {}'), 'com.example.App');
   assert.equal(mainClassOf('src/main/kotlin/main.kt', 'package com.example\nfun main() {}'), 'com.example.MainKt');
   assert.equal(mainClassOf('Tool.kt', '@file:JvmName("ToolMain")\nfun main() {}'), 'ToolMain');
