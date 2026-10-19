@@ -66,7 +66,7 @@ export async function setupCheck() {
     // Toolchains (from the platform packs): optional, each only for the languages that need it. Installed but unable
     // to build (Rust with no C linker) is amber too, with the fix for what's missing (its pack's `fixWith`). Away from
     // Windows there is no Install button: the detail names the brew or apt package instead.
-    ...chains.filter((c) => !['git', 'python', 'node'].includes(c.id)).map((c) => {
+    ...chains.filter((c) => !['git', 'python', 'node'].includes(c.id) && c.host !== false).map((c) => {
       const t = TOOLCHAINS.find((x) => x.id === c.id) || {};
       const how = !WIN && (process.platform === 'darwin' ? t.brew && `brew install ${t.brew}` : t.apt && `sudo apt install ${t.apt}`) || (!WIN && t.url) || '';
       return { id: `tc-${c.id}`, label: c.label, need: c.for, status: c.found && c.works ? 'ok' : 'warn',

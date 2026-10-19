@@ -56,7 +56,12 @@ for (const p of PACKS.filter((x) => !only.length || only.includes(x.id))) {
   const file = path.join(ROOT, 'server', 'packs', 'tests', `${p.id}.test.mjs`);
   const needs = p.test?.needs || [];
   const missing = needs.filter((id) => !byId.get(id)?.found);
-  if (p.hosts && !p.hosts.includes(process.platform)) { rows.push({ p, status: 'not here', why: `works on ${p.hosts.join(', ')}` }); continue; }
+  if (p.hosts && !p.hosts.includes(process.platform)) {
+    // Its logic (parsers, rules, notes) is still tested here; the parts that need its system skip themselves.
+    const r = fs.existsSync(file) ? (log(`Testing ${p.label} (its logic only)…`), await runFile(file)) : null;
+    rows.push({ p, status: r?.fail ? 'failed' : 'not here', why: `works on ${p.hosts.join(', ')}${r ? '; only its logic was tested here' : ''}`, r });
+    continue;
+  }
   if (!fs.existsSync(file)) { rows.push({ p, status: 'no self-test', why: 'this pack has no self-test yet' }); continue; }
   if (missing.length) { rows.push({ p, status: 'not tested', why: `needs ${missing.map((id) => byId.get(id)?.label || id).join(', ')}` }); continue; }
   log(`Testing ${p.label}…`);
