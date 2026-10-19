@@ -300,8 +300,9 @@ function classify(s, shell) {
     if (['list', 'ls', 'view', 'info', 'outdated', 'why', 'explain', 'config', 'bin', 'root', 'prefix', 'audit', 'search', 'help'].includes(a1)) return { cls: 'read', why: '' };
     return { cls: 'build', why: '' };
   }
-  if (['pip', 'pip3', 'uv', 'poetry', 'pipenv'].includes(p) || ((p === 'python' || p === 'python3' || p === 'py') && words[0] === '-m' && ['pip', 'uv'].includes(words[1]))) {
-    const w = p.startsWith('py') && words[0] === '-m' ? low(s.args.filter((a) => !a.param)[1]?.text) : a1;
+  const pw = p === 'py' && /^-\d/.test(words[0]) ? words.slice(1) : words; // py -3 -m pip …: the launcher's version comes first
+  if (['pip', 'pip3', 'uv', 'poetry', 'pipenv'].includes(p) || ((p === 'python' || p === 'python3' || p === 'py') && pw[0] === '-m' && ['pip', 'uv'].includes(pw[1]))) {
+    const w = p.startsWith('py') && pw[0] === '-m' ? low(s.args.filter((a) => !a.param && !/^-\d/.test(a.text))[1]?.text) : a1;
     if (['list', 'show', 'freeze', 'check', 'tree', 'help'].includes(w)) return { cls: 'read', why: '' };
     if (['publish', 'upload'].includes(w)) return { cls: 'external', why: 'it publishes a package' };
     if (['install', 'add', 'sync', 'lock', 'update', 'download'].includes(w) || (p === 'uv' && w === 'pip')) return { cls: 'install', global: hasArg(s, '--user', '--system', '--global'), why: 'it installs packages' };

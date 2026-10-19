@@ -35,6 +35,9 @@ public static class QxUia {
   [DllImport("user32.dll")] static extern void mouse_event(uint f, uint x, uint y, uint d, UIntPtr e);
   [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int cmd);
   [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
+  [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
+  [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(POINT p);
+  [DllImport("user32.dll")] static extern int GetSystemMetrics(int i);
 
   static readonly Dictionary<long, List<AutomationElement>> Refs = new Dictionary<long, List<AutomationElement>>();
   static readonly HashSet<string> Interactive = new HashSet<string>(new string[] { "Button", "Edit", "CheckBox", "RadioButton", "ComboBox", "ListItem", "MenuItem", "TabItem", "Hyperlink", "TreeItem", "Slider", "Spinner", "SplitButton", "DataItem", "Document" });
@@ -132,21 +135,38 @@ public static class QxUia {
   public static string Click(long handle, int r) {
     AutomationElement e = Ref(handle, r);
     object p;
-    if (e.TryGetCurrentPattern(InvokePattern.Pattern, out p)) { InvokePattern ip = (InvokePattern)p; return Busy(Within(delegate () { ip.Invoke(); }, 3000), "pressed"); }
-    if (e.TryGetCurrentPattern(TogglePattern.Pattern, out p)) { TogglePattern tp = (TogglePattern)p; return Busy(Within(delegate () { tp.Toggle(); }, 3000), "toggled"); }
-    if (e.TryGetCurrentPattern(SelectionItemPattern.Pattern, out p)) { SelectionItemPattern sp = (SelectionItemPattern)p; return Busy(Within(delegate () { sp.Select(); }, 3000), "selected"); }
-    if (e.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out p)) {
-      ExpandCollapsePattern ep = (ExpandCollapsePattern)p;
-      return Busy(Within(delegate () { if (ep.Current.ExpandCollapseState == ExpandCollapseState.Collapsed) ep.Expand(); else ep.Collapse(); }, 3000), "expanded or collapsed");
+    // Tk (Python's tkinter) makes a button's events from the real mouse: Invoke answers "pressed" but the command never
+    // runs, and messages posted to the button are ignored. So a Tk button gets a real click, once it is the window there.
+    bool tk = false;
+    try { tk = AutomationElement.FromHandle(new IntPtr(handle)).Current.ClassName == "TkTopLevel"; } catch { }
+    if (!tk) {
+      if (e.TryGetCurrentPattern(InvokePattern.Pattern, out p)) { InvokePattern ip = (InvokePattern)p; return Busy(Within(delegate () { ip.Invoke(); }, 3000), "pressed"); }
+      if (e.TryGetCurrentPattern(TogglePattern.Pattern, out p)) { TogglePattern tp = (TogglePattern)p; return Busy(Within(delegate () { tp.Toggle(); }, 3000), "toggled"); }
+      if (e.TryGetCurrentPattern(SelectionItemPattern.Pattern, out p)) { SelectionItemPattern sp = (SelectionItemPattern)p; return Busy(Within(delegate () { sp.Select(); }, 3000), "selected"); }
+      if (e.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out p)) {
+        ExpandCollapsePattern ep = (ExpandCollapsePattern)p;
+        return Busy(Within(delegate () { if (ep.Current.ExpandCollapseState == ExpandCollapseState.Collapsed) ep.Expand(); else ep.Collapse(); }, 3000), "expanded or collapsed");
+      }
     }
     System.Windows.Rect rect = e.Current.BoundingRectangle;
     if (rect.IsEmpty) throw new Exception("that control has no place on screen to click");
     IntPtr h = new IntPtr(handle);
     if (IsIconic(h)) ShowWindow(h, 9);
     SetForegroundWindow(h); Thread.Sleep(200);
-    SetCursorPos((int)(rect.Left + rect.Width / 2), (int)(rect.Top + rect.Height / 2));
-    mouse_event(0x2, 0, 0, 0, UIntPtr.Zero); mouse_event(0x4, 0, 0, 0, UIntPtr.Zero);
-    return "clicked with the mouse (it has no button behaviour of its own)";
+    POINT at = new POINT { X = (int)(rect.Left + rect.Width / 2), Y = (int)(rect.Top + rect.Height / 2) };
+    if (tk && e.Current.NativeWindowHandle != 0 && WindowFromPoint(at) != new IntPtr(e.Current.NativeWindowHandle)) throw new Exception("another window covers that button, so a click would land there: close or move it, then click again");
+    if (!tk) { SetCursorPos(at.X, at.Y); mouse_event(0x2, 0, 0, 0, UIntPtr.Zero); mouse_event(0x4, 0, 0, 0, UIntPtr.Zero); }
+    else {
+      // Each event carries the point, so the user moving the mouse meanwhile can't send the press elsewhere; Tk must
+      // see the pointer enter the button before the press counts.
+      int vx = GetSystemMetrics(76), vy = GetSystemMetrics(77), vw = Math.Max(1, GetSystemMetrics(78) - 1), vh = Math.Max(1, GetSystemMetrics(79) - 1);
+      uint ax = (uint)((at.X - vx) * 65535L / vw), ay = (uint)((at.Y - vy) * 65535L / vh);
+      const uint ABS = 0x8000 | 0x4000 | 0x1; // absolute, on the whole desktop, with a move
+      mouse_event(ABS, ax, ay, 0, UIntPtr.Zero); Thread.Sleep(100);
+      mouse_event(ABS | 0x2, ax, ay, 0, UIntPtr.Zero); Thread.Sleep(50);
+      mouse_event(ABS | 0x4, ax, ay, 0, UIntPtr.Zero);
+    }
+    return tk ? "clicked with the mouse" : "clicked with the mouse (it has no button behaviour of its own)";
   }
 
   // A click at x,y inside the window (as in its picture): for apps whose controls UI Automation can't see.

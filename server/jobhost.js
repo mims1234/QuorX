@@ -32,6 +32,7 @@ export function psHost(file, { label = 'helper', readyMs = 20000, off = false } 
     let readyFn;
     h.ready = new Promise((r) => { readyFn = r; });
     const timer = setTimeout(() => { if (!h.ok) { lastError = `the ${label} did not start within ${readyMs / 1000} s`; disabled = true; readyFn(false); try { proc.kill(); } catch { /* gone */ } } }, readyMs);
+    // Replies are whole JSON lines, however long (a window's picture is one line of base64).
     const lines = lineSplitter((line) => {
       let m; try { m = JSON.parse(line); } catch { return; }
       if (m.ready) { h.ok = true; clearTimeout(timer); readyFn(true); return; }
@@ -39,7 +40,7 @@ export function psHost(file, { label = 'helper', readyMs = 20000, off = false } 
       if (!p) return;
       h.pending.delete(m.id);
       m.ok ? p.resolve(m) : p.reject(new Error(m.error || `${label} error`));
-    });
+    }, Infinity);
     let err = '';
     proc.stdout.on('data', (d) => lines.push(d));
     proc.stderr.on('data', (d) => { err = (err + d).slice(-2000); });

@@ -15,11 +15,11 @@ const NODE_EXTS = ['.js', '.mjs', '.cjs'];
 const adapterFor = (file) => debugAdapters().find((a) => a.exts.includes(path.extname(file).toLowerCase()));
 /** The languages the debug tool can run, for its description: "Node (.js, .mjs, .cjs), Python (.py), …". */
 export const debugLanguages = () => [`Node (${NODE_EXTS.join(', ')})`, ...debugAdapters().map((a) => `${a.label} (${a.exts.join(', ')})`)].join(', ');
-/** The command a debug session runs, as the rules and the approval card see it. */
-export function debugGateLine(file, args = []) {
+/** The command a debug session runs, as the rules and the approval card see it. `cwd`: where it will run. */
+export function debugGateLine(file, args = [], cwd) {
   if (NODE_EXTS.includes(path.extname(file).toLowerCase())) return ['node', file, ...args].join(' ');
   const a = adapterFor(file);
-  return a?.gate ? a.gate({ file, args }) : [file, ...args].join(' ');
+  return a?.gate ? a.gate({ file, args, cwd }) : [file, ...args].join(' ');
 }
 
 const SESS = new Map();
@@ -192,11 +192,26 @@ export async function debugMove(id, how = 'continue', wait = 10000) {
   if (!s.configured) { s.configured = true; await s.send('configurationDone'); await s.attach.catch(() => {}); if (how === 'continue') { await dapWait(s, wait); return dapState(s); } }
   const m = { continue: 'continue', step: 'next', into: 'stepIn', out: 'stepOut' }[how];
   if (!m) throw new Error('move must be continue, step, into or out');
+  // Running already (a window waiting for a click): continue just waits for the next stop, as Node's does.
+  if (!s.paused && how === 'continue') { await dapWait(s, wait); return dapState(s); }
   if (!s.paused) throw new Error('the program is running; pause it at a breakpoint first');
   s.paused = null;
   await s.send(m, { threadId: s.thread });
   await dapWait(s, wait);
   return dapState(s);
+}
+
+/**
+ * The debug session whose program runs as background job `job`, when it is paused (waiting up to `wait` ms for it to
+ * stop): { id, at: 'app.py:10' }, else null. A paused program's windows can't answer, so the desktop tool asks first.
+ */
+export async function debugPausedIn(job, wait = 0) {
+  const s = [...SESS.values()].find((x) => x.job === job && !x.ended);
+  if (!s) return null;
+  if (!s.paused && wait) await (s.kind === 'node' ? nodeWait(s, wait) : dapWait(s, wait));
+  if (!s.paused) return null;
+  const top = (await debugState(s.id).catch(() => null))?.frames?.[0];
+  return { id: s.id, at: top ? `${path.basename(top.file || '?')}:${top.line}` : '?' };
 }
 
 /** Where it is now: { state, reason, frames, locals }. */

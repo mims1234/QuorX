@@ -14,8 +14,8 @@
 //   detect(root),                       // or a function, for projects whose marker sits deeper (Android)
 //   checks: [{ id, tool, ext, marker(dir), cmd, errors }], // compiler checks before the final reply (errors: a
 //                                       // pattern for its error lines, when the usual "error" match misses them)
-//   debug: { exts: ['.cs'], tool, label, gate({ file, args }), start({ file, args, cwd, port }) },
-//   notes(have),                        // what the agent should know, when the project is this kind
+//   debug: { exts: ['.cs'], tool, label, gate({ file, args, cwd }), start({ file, args, cwd, port }) },
+//   notes(have, root),                  // what the agent should know, when the project is this kind
 //   test: { needs: ['dotnet'] },        // its self-test (tests/<id>.test.mjs) runs when these are installed
 // }
 import fs from 'node:fs';
@@ -82,6 +82,6 @@ export function packsIn(root) {
 /** What the agent should know about the kinds of project in `root`: each pack's notes, given what is installed. */
 export function packNotes(root, toolchains = []) {
   const have = new Set(toolchains.filter((t) => t.found).map((t) => t.id));
-  const notes = packsIn(root).map((p) => { const n = typeof p.notes === 'function' ? p.notes(have) : p.notes; return n ? `- ${p.label}: ${String(n).trim()}` : ''; }).filter(Boolean);
+  const notes = packsIn(root).map((p) => { const n = typeof p.notes === 'function' ? p.notes(have, root) : p.notes; return n ? `- ${p.label}: ${String(n).trim()}` : ''; }).filter(Boolean);
   return notes.length ? `What QuorX knows about the kinds of project in this folder:\n${notes.join('\n')}` : '';
 }
