@@ -302,7 +302,7 @@ test('a running reply past budget + 10% is force-stopped, and the tools of that 
 
 test('a running reply may pass the budget to finish its work (up to the allowance)', async () => {
   // 0.35 a call: 0.35, 0.70, 1.05 (past $1.00, under $1.10, so the reply goes on), then it finishes.
-  const { bodies, done } = await run((body, i) => (i < 3 ? costly('', [['list_files', {}]], 0.35) : costly('All done.', [], 0.35)), { budget: 1 });
+  const { bodies, done } = await run((body, i) => (i < 3 ? costly('', [['list_files', {}]], 0.35) : costly('All done.', [], 0.35)), { budget: 1, settings: { replyBudget: 0 } }); // the project budget alone
   assert.equal(bodies.length, 4);
   assert.match(toolResults(bodies[3]).at(-1), /The project budget is used up \(\$1\.05 of \$1\.00\)\. Finish the task you are on .*stopped at \$1\.10/);
   assert.equal(done.reply, 'All done.');

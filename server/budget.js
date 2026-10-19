@@ -34,6 +34,16 @@ export function budgetState(projectId) {
   return { budget, spent, left: budget == null ? null : budget - spent, running };
 }
 
+/** What every project together has spent today (local time): replies that ended today, plus replies running now. */
+export function spentToday(now = Date.now()) {
+  const d = new Date(now); d.setHours(0, 0, 0, 0);
+  const from = d.getTime();
+  let spent = 0;
+  for (const [id, r] of ledger) if ((r.at || 0) >= from && !live.has(id)) spent += r.cost;
+  for (const r of live.values()) spent += r.cost;
+  return spent;
+}
+
 /** Sets or removes (null) a project's budget. Refuses an amount below what the project has spent. */
 export function setBudget(projectId, value) {
   if (!listProjects().some((p) => p.id === projectId)) throw new Error('no such project');

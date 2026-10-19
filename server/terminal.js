@@ -55,5 +55,6 @@ export function newJob(projectId, label, source, abort) {
   return job;
 }
 export const endJob = (job) => JOBS.delete(job);
-export const stopJob = (job) => { const j = JOBS.get(job); if (!j) return false; j.abort?.(); return true; };
+/** Stops a running job. Resolves to how it went ({ left, names, mode } for agent commands), or null if it isn't running. */
+export const stopJob = async (job) => { const j = JOBS.get(job); if (!j) return null; return (await j.abort?.()) || {}; };
 export const runningJobs = (projectId) => [...JOBS.entries()].filter(([, j]) => !projectId || j.projectId === projectId).map(([job, j]) => ({ job, label: j.label, source: j.source, at: j.at }));

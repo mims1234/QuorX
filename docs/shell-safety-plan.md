@@ -1,6 +1,34 @@
 # Opening the shell safely: P0 implementation plan
 
-Status (2026-10-19): plan only, nothing built yet. It turns the six P0 items from the research report (`.agent/scratch/research/reports/Agent harness beyond web apps.md`) into concrete changes to this codebase. The rule behind all of it: **ship the guards together with the open shell, never after it.**
+Status (2026-10-19): **built** on the `worktree-safety-layer` branch, with tests in `scripts/test-safety.mjs`. Where the build differs from this plan:
+- **Stop:** the job host also parses PowerShell for the rule engine (one helper process, `server/jobhost.ps1`), and commands start through `server/jobgate.cjs`, which waits on stdin rather than on a go-file. Without the job host (not Windows, or PowerShell can't load it), Stop falls back to killing the process tree and says "basic mode". There is no periodic process-snapshot tracker.
+- **Commands that leave processes behind:** when a command ends, anything it started that is still running is ended too, and named in the result.
+- **Escalation:** after the deciders block 3 commands in a row (or 20 in a reply), the reply doesn't pause on a card. Instead, commands that need a vote ask you for the rest of that reply.
+- **Reply cap:** in Strict, the card raises the cap for this reply only (`/api/raise-cap`); the default cap is in ⚙ Budget & approvals.
+- **OpenRouter key limit:** a 402/403 limit error stops the reply with a clear message. Reading the key's limit into ⚙ Models isn't built.
+- **Not built yet:** a separate OpenRouter key per mode, and the backup-status chip next to YOLO.
+
+**P1 and P2, built on the same branch:**
+
+| Piece | Where | Tested on |
+|---|---|---|
+| Background jobs: long builds move to the background instead of being killed; `background: true`; `job_output`, `job_stop` | `server/bgjobs.js` | Node scripts |
+| Toolchain detection, in the agent's prompt and the Setup check (with winget installs) | `server/toolchains.js` | this PC |
+| Compiler checks before the final reply, reporting errors only in changed files: Rust, C#, Go, TypeScript | `server/langchecks.js` | a real cargo project |
+| Loop detection: a nudge first, then you decide (Strict), or the reply wraps up (YOLO) | `agent.js` `loopWatch` | scripted model |
+| The agent's own terminal for prompts and terminal apps: pty plus a screen emulator, inside a job | `server/agentterm.js`, `server/vtscreen.js` | a prompting Python program |
+| Electron apps: `browser open cdp:<port>`, only for apps the agent started | `server/browser.js` | a real Electron app |
+| Windows desktop apps: UI Automation tree, click, type, keys, window picture, click at a point; only windows of the agent's own jobs | `server/uia.js`, `server/uiahost.ps1` | WinForms (full tree) and tkinter (thin tree, positions only) |
+| Audit log of every command decision, with a viewer in ⚙ Safety | `server/audit.js` | scripted model |
+| Package guard: a made-up package is blocked; a new or barely used one asks the user | `server/pkgguard.js` | live npm, PyPI, crates.io and NuGet, plus a fake registry in tests |
+| Test guard: fewer assertions, skipped tests or a deleted test file are sent back | `server/testguard.js` | scripted model |
+| Your own pass rate next to each model's price | `app.js` `scoreBadge` | — |
+| Debugger for Node and Python, opened only after failed tries (setting: after failed tries, always, off) | `server/debugger.js` | Node; Python (debugpy) untested, debugpy isn't installed here |
+| Android over adb, emulators only unless you allow phones | `server/android.js` | the screen parser only; adb isn't installed here |
+
+**Not built:** an OS sandbox. Windows Sandbox needs Pro. MXC isn't documented for other apps. A low-integrity token would break toolchains that cache in your profile. The Setup check says so, and notes WSL 2 as a future option.
+
+The original plan follows. It turns the six P0 items from the research report (`.agent/scratch/research/reports/Agent harness beyond web apps.md`) into concrete changes to this codebase. The rule behind all of it: **ship the guards together with the open shell, never after it.**
 
 ## Where we start from
 
