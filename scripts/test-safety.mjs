@@ -235,10 +235,11 @@ test('packs: every pack loads, and every toolchain, check and debugger is still 
   assert.ok(PACKS.length >= 10);
   const ids = allToolchains().map((t) => t.id);
   for (const id of ['rust', 'dotnet', 'go', 'cmake', 'msvc', 'gcc', 'clang', 'java', 'gradle', 'maven', 'python', 'node', 'flutter', 'adb', 'git']) assert.ok(ids.includes(id), id);
-  assert.deepEqual(allChecks().map((c) => c.id).sort(), ['dotnet', 'go', 'rust', 'ts']);
+  const checks = allChecks().map((c) => c.id);
+  for (const id of ['dotnet', 'go', 'rust', 'ts', ...(WIN ? ['godot', 'unity', 'wix'] : ['godot', 'unity'])]) assert.ok(checks.includes(id), id);
   for (const f of ['src/main.rs', 'App.xaml', 'Program.cs', 'cmd/main.go', 'src/app.tsx']) assert.ok(isCheckedFile(f), f);
   assert.ok(!isCheckedFile('README.md'));
-  assert.match(debugLanguages(), /Node \(\.js, \.mjs, \.cjs\), Python \(debugpy\) \(\.py\)/);
+  for (const re of [/^Node \(\.js, \.mjs, \.cjs\)/, /Python \(debugpy\) \(\.py\)/, /Godot \(GDScript\) \(\.gd, \.tscn\)/]) assert.match(debugLanguages(), re);
   assert.equal(debugGateLine('app.py', ['in put.txt']), `${WIN ? 'py -3' : 'python3'} app.py "in put.txt"`);
   assert.equal(debugGateLine('app.js', ['x']), 'node app.js x');
 });

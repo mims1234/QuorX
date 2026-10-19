@@ -49,6 +49,9 @@ export default {
   // 2. Check: runs once per project folder the reply changed; only errors in changed files count.
   checks: [{ id: 'dotnet', tool: 'dotnet', ext: /\.(cs|xaml)$/i, marker: (dir) => hasFile(dir, /\.csproj$/i),
     cmd: 'dotnet build --nologo -v q -clp:NoSummary', errors: /\berror\b/i }],
+  //    When one fixed command isn't enough: cmd({ dir, files }) gives one or more lines for that folder and its
+  //    changed files (or null: the check can't run there), parse(out, { dir, files }) turns the output into
+  //    'file:line: message' lines (and runs even when the tool exits 0), and timeout sets a longer limit in ms.
 
   // 4. Debug: a Debug Adapter Protocol server listening on `port`. QuorX connects, sets breakpoints, and sends
   //    configurationDone on the first continue, so the program doesn't run a line before the breakpoints are in.
@@ -120,7 +123,30 @@ Each is its own pull request, so people with that toolchain can test it on its o
 | QuorX on macOS | Stop, rules, snapshots and the desktop tool on a Mac (process groups, zsh, Accessibility) | A Mac |
 | Apple apps | Xcode builds and tests, the iOS Simulator driven, crash reports read, Swift debugging with lldb-dap | A Mac with Xcode |
 | QuorX on Linux, Linux apps | The same safety layer on Linux; GTK and Qt apps driven through AT-SPI | Linux |
-| Game engines and installers | Godot and Unity checks and logs; MSIX and WiX packaging | Godot, Unity, WiX |
+| Game engines and installers | Godot script checks and debugging in the running game; Unity batchmode compile check, tests and logs; WiX build check; MSIX packing and test signing | Godot 4; Unity with a license; WiX v4+ or the Windows SDK |
 
 Apple apps need a Mac: Xcode, the iOS Simulator and Apple's signing only run on macOS. QuorX must run on that Mac too,
 which is why "QuorX on macOS" comes first. Both are written so Mac owners can test them with `npm run test:packs`.
+
+## Game engines and installers
+
+**Godot 4** (`godot.js`). QuorX finds the editor on PATH, in winget's package folder (winget installs Godot as a
+portable zip), in Scoop or Steam, or wherever `QX_GODOT` points. The check parses each changed `.gd` file with
+`godot --headless --path . --check-only --script res://<file>.gd`, after `--import` when the project's class list
+(`.godot/`) is missing or the reply declared a `class_name`. Debugging runs the editor headless with its Debug Adapter
+Protocol server (`godot --editor --headless --dap-port <port>`); the editor starts the game in its window once the
+breakpoints are set, so breakpoints, the stack, locals and expressions work in the running game. Logs are in
+`user://logs/godot.log`.
+
+**Unity** (`unity.js`). QuorX lists the editors Unity Hub installed and picks the one in
+`ProjectSettings/ProjectVersion.txt`. The check compiles with `Unity.exe -batchmode -nographics -quit -projectPath .
+-logFile -` and reads the `CSxxxx` errors. It runs only once the project has been imported (the first import can take
+10 minutes or more) and while the project isn't open in the editor. Batchmode needs a Unity license. Tests run with
+`-runTests`, which writes an NUnit XML file. Unity's own debugger is not one the debug tool can drive, so debugging
+here means `Debug.Log` and the editor's and the game's logs.
+
+**Windows installers** (`installers.js`). WiX v4 or later (`wix build`), and MakeAppx and SignTool from the Windows
+SDK or its `Microsoft.Windows.SDK.BuildTools` NuGet package. The check builds changed `.wxs` files into a throwaway
+MSI (a `.wixproj` builds with `dotnet build`). WiX 7 refuses to build until the user accepts its Open Source
+Maintenance Fee EULA: QuorX says so and leaves accepting it to the user. Signing is only ever with a test certificate
+made for the purpose. Installing changes the whole computer, so it always asks first.
