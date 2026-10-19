@@ -15,6 +15,8 @@
 //   checks: [{ id, tool, ext, marker(dir), cmd, errors }], // compiler checks before the final reply (errors: a
 //                                       // pattern for its error lines, when the usual "error" match misses them)
 //   debug: { exts: ['.cs'], tool, label, gate({ file, args }), start({ file, args, cwd, port }) },
+//   summaries: [{ when: /gradlew/, summarize(out) }], // a short summary of a command's long output (a crash, failed
+//                                       // tests), added after it when the agent runs that command
 //   notes(have),                        // what the agent should know, when the project is this kind
 //   test: { needs: ['dotnet'] },        // its self-test (tests/<id>.test.mjs) runs when these are installed
 // }
@@ -84,4 +86,19 @@ export function packNotes(root, toolchains = []) {
   const have = new Set(toolchains.filter((t) => t.found).map((t) => t.id));
   const notes = packsIn(root).map((p) => { const n = typeof p.notes === 'function' ? p.notes(have) : p.notes; return n ? `- ${p.label}: ${String(n).trim()}` : ''; }).filter(Boolean);
   return notes.length ? `What QuorX knows about the kinds of project in this folder:\n${notes.join('\n')}` : '';
+}
+
+/**
+ * What the packs make of a command's output (a failed Gradle build, a crash in logcat, failed tests), or ''. `out`
+ * is the text, or a function that reads it (only called when a pack has a summary for this command).
+ */
+export function outputSummary(line, out) {
+  const said = [];
+  let text = null;
+  const get = () => (text ??= String((typeof out === 'function' ? out() : out) || ''));
+  for (const p of PACKS.filter(here)) for (const s of p.summaries || []) {
+    if (!s.when.test(String(line))) continue;
+    try { const t = s.summarize(get(), line); if (t) said.push(t); } catch { /* a summary is a bonus */ }
+  }
+  return said.join('\n');
 }

@@ -28,8 +28,8 @@ import { audit } from './audit.js';
 import { packagesOf, checkPackages } from './pkgguard.js';
 import { testChanges, TEST_FILE } from './testguard.js';
 import { debugStart, debugBreak, debugMove, debugState, debugEval, debugStop, stateText, debugLanguages, debugGateLine } from './debugger.js';
-import { isCheckedFile, packNotes } from './packs/index.js';
-import { devices as adbDevices, pickDevice, readScreen, tap as adbTap, typeText as adbType, key as adbKey, screenshot as adbShot, install as adbInstall, launch as adbLaunch, logcat as adbLog } from './android.js';
+import { isCheckedFile, packNotes, outputSummary } from './packs/index.js';
+import { devices as adbDevices, pickDevice, readScreen, tap as adbTap, typeText as adbType, key as adbKey, screenshot as adbShot, install as adbInstall, launch as adbLaunch, logcat as adbLog, listAvds, startEmulator } from './android.js';
 import { listSkills, readSkill, saveSkill, listTemplates } from './skills.js';
 import { workspaceDir, listFiles, readFile, readText, writeFile, appendFile, editFile, editFileMulti, runCommand, runLine, lineOf, stopNote, endProc, startServer, stopServer, stopServerWait, serverFor, serverLog, listServers, launchConfigs, ensureAgentDir, agentSpace, SCRATCH, sealCheckpoint, pruneCheckpoints, ALLOWED } from './workspace.js';
 import { openTab, hostHtml } from './browser.js';
@@ -426,8 +426,8 @@ const CODE_TOOLS = [
   { type: 'function', function: { name: 'debug', description: `A debugger for ${debugLanguages()} programs, for bugs that reading the trace and adding prints haven't found. start runs a file paused (args optional); break sets a breakpoint at file:line (condition optional); continue runs to the next breakpoint; step / into / out move one line; state shows where it is, the stack and the local variables; eval evaluates an expression where it stopped; stop ends it. Python needs debugpy (pip install debugpy).`, parameters: { type: 'object', required: ['action'], properties: {
     action: { type: 'string', enum: ['start', 'break', 'continue', 'step', 'into', 'out', 'state', 'eval', 'stop'] }, id: { type: 'string', description: 'The session id from start, e.g. "d1"' },
     file: { type: 'string' }, args: { type: 'array', items: { type: 'string' } }, line: { type: 'integer' }, condition: { type: 'string' }, expr: { type: 'string' }, frame: { type: 'integer' } } } } },
-  { type: 'function', function: { name: 'android', description: 'Test an Android app on an emulator (adb). devices: what is connected. install {apk}: an APK from the project. launch {package}. read: the screen as text; interactive controls are numbered [n] with their position @x,y. tap {ref} or {x, y}. type {text}: into the focused field. key {key}: back, home, enter, tab, delete, up/down/left/right. screenshot: a picture for the user. log {package}: recent errors and the app\'s own log lines. Emulators only, unless the user allows phones.', parameters: { type: 'object', required: ['action'], properties: {
-    action: { type: 'string', enum: ['devices', 'install', 'launch', 'read', 'tap', 'type', 'key', 'screenshot', 'log'] }, device: { type: 'string' }, apk: { type: 'string' }, package: { type: 'string' },
+  { type: 'function', function: { name: 'android', description: 'Test an Android app on an emulator (adb). avds: the virtual devices this computer has. start {avd}: boot one as a background job (Stop ends it) and wait until it is ready. devices: what is connected. install {apk}: an APK from the project. launch {package}. read: the screen as text; interactive controls are numbered [n] with their position @x,y. tap {ref} or {x, y}. type {text}: into the focused field. key {key}: back, home, enter, tab, delete, up/down/left/right. screenshot: a picture for the user. log {package}: recent errors and the app\'s own log lines. Emulators only, unless the user allows phones.', parameters: { type: 'object', required: ['action'], properties: {
+    action: { type: 'string', enum: ['avds', 'start', 'devices', 'install', 'launch', 'read', 'tap', 'type', 'key', 'screenshot', 'log'] }, device: { type: 'string' }, avd: { type: 'string' }, apk: { type: 'string' }, package: { type: 'string' },
     ref: { type: 'integer' }, x: { type: 'integer' }, y: { type: 'integer' }, text: { type: 'string' }, key: { type: 'string' } } } } },
   { type: 'function', function: { name: 'desktop', description: 'See and use a Windows desktop app you started (WPF, WinForms, Qt, tkinter, Electron, games…). Start it first with shell and background: true, then pass that job id. windows: its windows. read: a window\'s controls as text; interactive ones are numbered [n] with their position @x,y in the window. click {ref}: press a button, tick a box, pick an item. click_at {x, y}: a point in the window, for apps whose controls can\'t be read. type {ref, text}: set a text field. keys {keys}: keyboard input in SendKeys form ({ENTER}, {TAB}, ^s for Ctrl+S, %{F4} for Alt+F4). screenshot: a picture of the window for the user. close: close the window. After click, type and keys you get the window\'s controls again. Only windows of programs you started can be reached; clicks and keys bring that window to the front.', parameters: { type: 'object', required: ['action', 'job'], properties: {
     action: { type: 'string', enum: ['windows', 'read', 'click', 'click_at', 'type', 'keys', 'screenshot', 'close'] }, job: { type: 'string', description: 'The background job that runs the app, e.g. "bg1"' },
@@ -2180,7 +2180,16 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
     }
     if (name === 'android') {
       const act = String(args.action || '');
-      if (act === 'devices') { const l = await adbDevices(); return l.length ? l.map((d) => `- ${d.serial}: ${d.state}${d.model ? ` (${d.model})` : ''} · ${d.emulator ? 'emulator' : 'physical phone'}`).join('\n') : 'Nothing is connected. Start an emulator (Android Studio → Device Manager, or emulator -avd <name>).'; }
+      if (act === 'devices') { const l = await adbDevices(); return l.length ? l.map((d) => `- ${d.serial}: ${d.state}${d.model ? ` (${d.model})` : ''} · ${d.emulator ? 'emulator' : 'physical phone'}`).join('\n') : 'Nothing is connected. Start an emulator: avds lists them, start {avd} boots one.'; }
+      if (act === 'avds') { const l = await listAvds(); return l.length ? `Virtual devices: ${l.join(', ')}. Boot one with start {avd}.` : 'This computer has no virtual devices (AVDs). Tell the user: one can be made in Android Studio → Device Manager, or with sdkmanager and avdmanager (a download of about 1.5 GB, so ask first).'; }
+      if (act === 'start') {
+        const logRel = `${SCRATCH}/logs/${runId}-emulator-${(run.cmdSeq = (run.cmdSeq || 0) + 1)}.log`;
+        const e = await startEmulator({ avd: String(args.avd || ''), projectId, chatId: req.chatId || null, cwd: root, logTo: path.join(root, logRel), logRel, term: { projectId, source: 'agent', chatId: req.chatId }, signal });
+        aud({ kind: 'background', command: `emulator ${args.avd}`, by: 'tool', job: e.job, why: 'android emulator' });
+        emit({ t: 'android', device: e.serial, action: act, at: at() });
+        return e.booted ? `${args.avd} is running as ${e.serial} (background job ${e.job}, ${e.note}). Pass device: "${e.serial}" when more than one is connected.`
+          : e.ended ? `Error: ${e.note}` : `${args.avd} is starting as ${e.serial} (background job ${e.job}) but is ${e.note}: check again with devices in a minute.`;
+      }
       const serial = await pickDevice(args.device, { phones: SF.androidPhones });
       let out;
       if (act === 'install') out = await adbInstall(serial, root, String(args.apk || ''));
@@ -2444,6 +2453,8 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
     if (ch && changed) parts.push(`Files it changed (Undo covers them): ${[...ch.added.map((f) => `+${f}`), ...ch.modified.map((f) => `~${f}`), ...ch.deleted.map((f) => `-${f}`)].slice(0, 30).join(', ')}${changed > 30 ? ` … and ${changed - 30} more` : ''}.`);
     else if (!sb.snap && !readOnly) parts.push(`No snapshot was taken (${sb.why}), so Undo can't restore what this command changed.`);
     parts.push(`Full output: ${logRel} (search it with search_files).`);
+    const sum = outputSummary(line, () => { try { return fs.readFileSync(path.join(root, logRel), 'utf8').slice(-400000); } catch { return r.out; } });
+    if (sum) parts.push(`In short:\n${sum}`);
     parts.push(r.out.slice(-4000) || '(no output)');
     return parts.join('\n');
   }

@@ -235,10 +235,11 @@ test('packs: every pack loads, and every toolchain, check and debugger is still 
   assert.ok(PACKS.length >= 10);
   const ids = allToolchains().map((t) => t.id);
   for (const id of ['rust', 'dotnet', 'go', 'cmake', 'msvc', 'gcc', 'clang', 'java', 'gradle', 'maven', 'python', 'node', 'flutter', 'adb', 'git']) assert.ok(ids.includes(id), id);
-  assert.deepEqual(allChecks().map((c) => c.id).sort(), ['dotnet', 'go', 'rust', 'ts']);
+  const checks = allChecks().map((c) => c.id);
+  for (const id of ['dotnet', 'go', 'rust', 'ts', 'android', 'flutter', 'dart']) assert.ok(checks.includes(id), id);
   for (const f of ['src/main.rs', 'App.xaml', 'Program.cs', 'cmd/main.go', 'src/app.tsx']) assert.ok(isCheckedFile(f), f);
   assert.ok(!isCheckedFile('README.md'));
-  assert.match(debugLanguages(), /Node \(\.js, \.mjs, \.cjs\), Python \(debugpy\) \(\.py\)/);
+  assert.match(debugLanguages(), /^Node \(\.js, \.mjs, \.cjs\), .*Python \(debugpy\) \(\.py\)/);
   assert.equal(debugGateLine('app.py', ['in put.txt']), `${WIN ? 'py -3' : 'python3'} app.py "in put.txt"`);
   assert.equal(debugGateLine('app.js', ['x']), 'node app.js x');
 });
@@ -253,7 +254,7 @@ test('packs: the agent gets notes for the kinds of project in its folder, includ
   assert.deepEqual(packsIn(dir).map((p) => p.id).sort(), ['android', 'node', 'rust'], 'node_modules is never scanned');
   const n = packNotes(dir, []);
   assert.match(n, /- Rust: build with cargo build/);
-  assert.match(n, /- Android: build with gradlew assembleDebug/);
+  assert.match(n, /- Android: build with \S*gradlew(\.bat)? assembleDebug/);
   assert.equal(packNotes(tmp('empty'), []), '');
 });
 
