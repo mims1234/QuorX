@@ -238,7 +238,8 @@ test('packs: every pack loads, and every toolchain, check and debugger is still 
   assert.deepEqual(allChecks().map((c) => c.id).sort(), ['dotnet', 'go', 'rust', 'ts']);
   for (const f of ['src/main.rs', 'App.xaml', 'Program.cs', 'cmd/main.go', 'src/app.tsx']) assert.ok(isCheckedFile(f), f);
   assert.ok(!isCheckedFile('README.md'));
-  assert.match(debugLanguages(), /Node \(\.js, \.mjs, \.cjs\), Python \(debugpy\) \(\.py\)/);
+  assert.match(debugLanguages(), /^Node \(\.js, \.mjs, \.cjs\), /);
+  assert.match(debugLanguages(), /Python \(debugpy\) \(\.py\)/);
   assert.equal(debugGateLine('app.py', ['in put.txt']), `${WIN ? 'py -3' : 'python3'} app.py "in put.txt"`);
   assert.equal(debugGateLine('app.js', ['x']), 'node app.js x');
 });
