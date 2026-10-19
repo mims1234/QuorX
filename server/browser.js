@@ -120,6 +120,12 @@ async function desktopTransport(chatId) {
   };
 }
 
+/**
+ * Whether a command line opens DevTools port `port`: Electron's --remote-debugging-port=N, or the same flag handed to
+ * WebView2 through WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS (a Tauri app), in any shell's way of setting it.
+ */
+export const startedWithDevtoolsPort = (line, port) => new RegExp(`--remote-debugging-port[= ]${Number(port)}(?!\\d)`).test(String(line || ''));
+
 // An app the agent started with a DevTools port (an Electron app run with --remote-debugging-port=N): its first
 // window. Closing the transport only disconnects; the app keeps running until its job is stopped.
 async function cdpTransport(port) {
