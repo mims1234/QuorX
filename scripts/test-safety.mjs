@@ -207,6 +207,26 @@ test('toolchains suggest build rules', () => {
   assert.ok(s.includes('cargo build*') && s.includes('dotnet build*'));
   assert.ok(!s.includes('cargo test*'), 'rules you already have are not suggested again');
 });
+test('the Build Tools install is an install for the whole computer, and asks', async () => {
+  const d = await decide('winget install --id Microsoft.VisualStudio.2022.BuildTools -e --override "--passive --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"', ctx({ shell: 'powershell' }));
+  assert.equal(d.segments[0].cls, 'install');
+  assert.ok(d.segments[0].global, 'whole computer');
+  assert.notEqual(d.verdict, 'allow');
+});
+
+test('toolchain note: Rust that can\'t link gets the Build Tools line with the C++ part, and says to carry on after', async () => {
+  const { toolchainNote, TOOLCHAINS } = await import('../server/toolchains.js');
+  assert.match(TOOLCHAINS.find((t) => t.id === 'msvc').wingetArgs, /Workload\.VCTools/);
+  const note = toolchainNote([
+    { id: 'rust', label: 'Rust (cargo)', found: true, works: false, version: '1.97.1', problem: 'no C linker' },
+    { id: 'go', label: 'Go', found: false, works: false },
+  ]);
+  assert.match(note, /can't build programs here/);
+  assert.match(note, /--add Microsoft\.VisualStudio\.Workload\.VCTools/);
+  assert.equal(note.match(/tell you when it is done/g)?.length, 1, 'the carry-on advice once');
+  assert.doesNotMatch(toolchainNote([{ id: 'rust', label: 'Rust (cargo)', found: true, works: true, version: '1.97.1' }]), /tell you when it is done/);
+});
+
 // ---------- the hardened deciders ----------
 // A fake Decisions endpoint: each model answers P(yes) per question from `table`, or fails.
 async function withDeciders(table, fn) {
@@ -366,6 +386,41 @@ test('tripwire: deletes inside the project do not trip it', { skip: !WIN }, asyn
   await new Promise((r) => setTimeout(r, 800));
   stop();
   assert.equal(tripped, null);
+});
+
+test('tripwire: files a command makes and then removes (installer temp folders) do not trip it', { skip: !WIN }, async () => {
+  const parent = tmp('tw3');
+  const project = path.join(parent, 'proj'); fs.mkdirSync(project);
+  let tripped = null;
+  const stop = startTripwire({ root: project, files: 25, seconds: 3, onTrip: (t) => { tripped = t; } });
+  await new Promise((r) => setTimeout(r, 300));
+  // Unpack-then-clean, the way rustup and other installers work: a temp folder full of files, slowly and all at once.
+  const unpack = path.join(parent, 'tmp-unpack'); fs.mkdirSync(unpack);
+  for (let i = 0; i < 40; i++) fs.writeFileSync(path.join(unpack, `f${i}.txt`), 'x');
+  await new Promise((r) => setTimeout(r, 300));
+  fs.rmSync(unpack, { recursive: true });
+  // And loose files made and removed at once, before the watcher's notices are handled.
+  for (let i = 0; i < 40; i++) { const f = path.join(parent, `t${i}.tmp`); fs.writeFileSync(f, 'x'); fs.rmSync(f); }
+  await new Promise((r) => setTimeout(r, 800));
+  stop();
+  assert.equal(tripped, null);
+});
+
+test('tripwire: moving a folder that was already there and then deleting it still trips it', { skip: !WIN }, async () => {
+  const parent = tmp('tw4');
+  const project = path.join(parent, 'proj'); fs.mkdirSync(project);
+  const docs = path.join(parent, 'docs'); fs.mkdirSync(docs);
+  for (let i = 0; i < 40; i++) fs.writeFileSync(path.join(docs, `f${i}.txt`), 'x');
+  await new Promise((r) => setTimeout(r, 400)); // the folder is older than the watch
+  let tripped = null;
+  const stop = startTripwire({ root: project, files: 25, seconds: 3, onTrip: (t) => { tripped = t; } });
+  await new Promise((r) => setTimeout(r, 300));
+  const moved = path.join(parent, 'moved'); fs.renameSync(docs, moved);
+  await new Promise((r) => setTimeout(r, 200));
+  for (let i = 0; i < 40; i++) fs.rmSync(path.join(moved, `f${i}.txt`));
+  await new Promise((r) => setTimeout(r, 800));
+  stop();
+  assert.ok(tripped, 'the tripwire fired');
 });
 
 test('tripwire: an agent command deleting next to the project is stopped part-way', { skip: !WIN }, async () => {

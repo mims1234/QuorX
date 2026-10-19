@@ -33,6 +33,12 @@ export function startTripwire({ root, files = 25, seconds = 3, onTrip, extraDirs
   const hits = [];
   let tripped = false;
   const watchers = [];
+  // What the command made itself: installers and compilers unpack into temp folders and delete them again (rustup
+  // in ~/.rustup, for one), which is not a runaway delete. Only things born after the watch started count, so moving
+  // one of your folders and then deleting it is still seen (a move keeps the folder's creation time).
+  const startedAt = Date.now() - 100;
+  const made = new Set();
+  const ours = (full) => { const p = norm(full); for (let d = p; ; d = path.dirname(d)) { if (made.has(d)) return true; if (path.dirname(d) === d) return false; } };
   for (const w of watchList) {
     const key = norm(w.dir);
     if (seen.has(key) || !fs.existsSync(w.dir)) continue;
@@ -44,7 +50,13 @@ export function startTripwire({ root, files = 25, seconds = 3, onTrip, extraDirs
         if (tripped || event !== 'rename' || !name) return;
         const full = path.join(w.dir, String(name));
         if (w.skip.some((s) => under(full, s)) && !under(full, path.join(project, '.git'))) return;
-        if (fs.existsSync(full)) return; // created or renamed into place, not removed
+        let st = null; try { st = fs.statSync(full); } catch { /* gone */ }
+        if (st) { if (st.birthtimeMs >= startedAt) made.add(norm(full)); return; } // created or renamed into place, not removed
+        if (ours(full)) return;
+        // A file made and removed before either notice was handled shows up twice as missing; a real delete of
+        // something that was already there shows up once. The second notice cancels the first.
+        const twice = hits.findIndex((h) => norm(h.path) === norm(full));
+        if (twice >= 0) { hits.splice(twice, 1); made.add(norm(full)); return; }
         const now = Date.now();
         hits.push({ at: now, path: full });
         while (hits.length && now - hits[0].at > seconds * 1000) hits.shift();

@@ -401,7 +401,7 @@ const CODE_TOOLS = [
   { type: 'function', function: { name: 'shell', description: 'Run a command line in your project folder and wait for it. Any toolchain works: cargo, dotnet, go, cmake, gradle, python, node, npm, git… Before it runs, QuorX checks it: read-only commands run at once, others may ask the user (or, in YOLO, the deciders); system commands, deleting folders, and touching drive roots, the user profile or places above the project are refused. Input is closed, so pass non-interactive flags (--yes, -y, /quiet). Returns the exit code, the files it changed, the last output and a log file with all of it.', parameters: { type: 'object', required: ['command'], properties: {
     command: { type: 'string', description: 'The whole command line in the project\'s shell (Windows PowerShell unless the user chose another), e.g. "cargo build --release" or "dotnet test"' },
     cwd: { type: 'string', description: 'Optional subfolder of the project to run in, e.g. "app"' },
-    background: { type: 'boolean', description: 'Start it and return at once, for programs that keep running: a desktop app you want to test, a watcher, a long build. A build that outlives the time limit moves to the background by itself.' } } } } },
+    background: { type: 'boolean', description: 'Start it and return at once, for programs that keep running: a desktop app you want to test, a watcher, a long build. A build, or an install the user allowed, that outlives the time limit moves to the background by itself.' } } } } },
   { type: 'function', function: { name: 'job_output', description: 'Output from a background job, and whether it is still running. Pass since (from the last call) to get only what is new; wait_s waits up to 60 s for the job to end (it returns as soon as it does).', parameters: { type: 'object', required: ['job'], properties: {
     job: { type: 'string', description: 'The job id, e.g. "bg1"' }, since: { type: 'integer' }, wait_s: { type: 'integer', minimum: 0, maximum: 60 } } } } },
   { type: 'function', function: { name: 'job_stop', description: 'Stop a background job and everything it started.', parameters: { type: 'object', required: ['job'], properties: { job: { type: 'string' } } } } },
@@ -2067,8 +2067,13 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
       // Only commands that read, write inside the project or build may keep running past the time limit.
       const quiet = d.segments.every((s) => ['read', 'write', 'build'].includes(s.cls) && !(s.paths || []).some((p) => p.zone !== 'inside'));
       if (args.background && !quiet) return 'Error: only commands that build, run project code or read can run in the background. Run this one normally.';
+      // Installs can take longer than the limit too (Visual Studio Build Tools, an SDK, a big npm install). Killing
+      // one part-way leaves a half-installed tool, so it continues in the background instead: a project install
+      // however it was allowed, one for the whole computer only when you allowed it on its card.
+      const installing = d.segments.some((s) => s.cls === 'install') && (g.by === 'you' || !d.segments.some((s) => s.global))
+        && d.segments.every((s) => ['read', 'write', 'build', 'install'].includes(s.cls) && !(s.paths || []).some((p) => p.zone !== 'inside'));
       return execCommand({ line, shell, cwd, label: alias ? [args.command, ...argv].join(' ') : line, readOnly: d.segments.every((s) => s.cls === 'read'), decidedBy: g.by,
-        background: !!args.background, backgroundable: quiet });
+        background: !!args.background, backgroundable: quiet || installing });
     }
     if (name === 'terminal') {
       const act = String(args.action || '');
