@@ -34,8 +34,8 @@ export async function languageChecks(root, changed, { have = [], signal, timeout
     const dirs = [...new Set(files.map((f) => projectDirOf(root, f, lang)).filter(Boolean))].slice(0, 3);
     for (const dir of dirs) {
       if (signal?.aborted) return { problems, ran };
-      // A check's command may depend on the folder (Xcode's scheme): a function of { dir, files }, null to skip it.
-      const cmd = typeof lang.cmd === 'function' ? lang.cmd({ dir, files: files.map((f) => path.relative(dir, path.join(root, f))) }) : lang.cmd;
+      // A check's command may depend on the folder (CMake's build folder, Xcode's scheme); null skips the folder.
+      const cmd = typeof lang.cmd === 'function' ? lang.cmd(dir) : lang.cmd;
       if (!cmd) continue;
       const r = await runLine(dir, cmd, { shell: 'direct', timeout, signal, env: undefined });
       ran.push({ lang: lang.id, dir: path.relative(root, dir) || '.', code: r.code, ms: r.ms, timedOut: r.timedOut });

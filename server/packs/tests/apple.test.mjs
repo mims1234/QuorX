@@ -147,7 +147,7 @@ test('apple: the check builds the project’s scheme for a simulator or the Mac,
   assert.equal(projectPlatform(PBX_MULTI), 'multi');
   assert.equal(projectPlatform('SDKROOT = xros;'), 'visionos');
   assert.equal(pickScheme(['AppTests', 'Widget'], null), 'Widget');
-  assert.equal(apple.checks.find((c) => c.id === 'xcode').cmd({ dir: ios, files: ['Counter/ContentView.swift'] }), xcodeCheckLine(ios));
+  assert.equal(apple.checks.find((c) => c.id === 'xcode').cmd(ios), xcodeCheckLine(ios));
 });
 
 test('apple: the notes say how to build, run in the simulator, read crashes and debug', () => {
@@ -223,7 +223,7 @@ test('apple: a Swift program builds and runs, and its crash report is read', asy
 
 test('apple: lldb-dap stops a Swift program at a breakpoint and reads a variable', async (t) => {
   if (onMac(t)) return;
-  const skip = (await skipUnless('swift')) || (await skipUnless('lldb-dap')); if (skip) return t.skip(skip);
+  const skip = (await skipUnless('swift')) || (await skipUnless('lldb')); if (skip) return t.skip(skip);
   const { debugStart, debugBreak, debugMove, debugStop } = await import('../../debugger.js');
   const dir = project('apple-dbg', pkg('var total = 0\nfor n in [3, 4, 5] {\n    total += n\n    print(total)\n}\n'));
   const s = await debugStart({ projectId: 'pack-test', cwd: dir, file: 'Sources/qxtool/main.swift' });

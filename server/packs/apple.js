@@ -1,6 +1,6 @@
 // Apple apps: iPhone, iPad and Mac apps (SwiftUI, UIKit, AppKit) built with Xcode, and Swift packages. Needs a Mac:
 // Xcode, the simulators and Apple's signing only run on macOS.
-// Detect: Xcode (and that it is the active developer folder, licensed and set up), the simulators, lldb-dap.
+// Detect: Xcode (and that it is the active developer folder, licensed and set up), the simulators (lldb-dap is the C and C++ pack's LLDB row).
 // Check: a quiet xcodebuild of the project's scheme for a simulator or the Mac, with signing off; swift build for
 // Swift packages. Run and drive: simctl (boot, install, launch, screenshot, logs), and the desktop tool on the
 // Simulator app or a Mac app. Crashes: the newest .ips report, summed up above the output of the run that crashed.
@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { MAC, run } from './_lib.js';
+import { findLldbDap, listenArgs } from './_lldb.js';
 import { parseSimctl, pickSimulator, buildErrors, tidyDiag, xcodeContainer, listSchemes, pickScheme, projectPlatform, projectBundleId, DESTINATIONS,
   xcodeCheckLine, parseIps, crashText, newestCrash, CRASHED } from './_apple.js';
 
@@ -45,16 +46,8 @@ async function simulators() {
   return rt.length ? rt.slice(0, 3).map((r) => r.name).join(', ') : null;
 }
 
-async function lldbDap() {
-  if (!MAC) return null;
-  const p = (await run('xcrun', ['--find', 'lldb-dap']))?.split('\n')[0];
-  if (!p || !fs.existsSync(p)) return null;
-  return /lldb-(\d+(?:\.\d+)+)/.exec((await run('xcrun', ['lldb', '--version'])) || '')?.[1] || 'found';
-}
-
 // ---------- debug ----------
-// lldb-dap listens on a port with --connection (LLVM 20 and later) or --port before.
-const listenArgs = (help, port) => (/--connection/.test(help || '') ? ['--connection', `listen://127.0.0.1:${port}`] : ['--port', String(port)]);
+// lldb-dap is found, and told to listen, as for C and C++ (_lldb.js): Xcode's comes from xcrun --find.
 const firstErrors = (out) => buildErrors(out).slice(0, 5).map((e) => (e.file ? `${path.basename(e.file)}:${e.line}: ${e.msg}` : e.msg)).join('; ') || String(out).trim().split('\n').slice(-3).join(' ');
 
 /** A Swift package's program: builds it, then the executable product whose sources hold `file` (or the first). */
@@ -88,8 +81,8 @@ async function buildSettings(dir, where, scheme, dest) {
  */
 async function debugPlan({ file, args = [], cwd, port }) {
   if (!MAC) throw new Error('debugging Apple apps needs a Mac');
-  const dap = (await run('xcrun', ['--find', 'lldb-dap']))?.split('\n')[0];
-  if (!dap || !fs.existsSync(dap)) throw new Error('lldb-dap is not here: it comes with Xcode 16 or later. Tell the user; updating Xcode is theirs to do (App Store).');
+  const dap = await findLldbDap();
+  if (!dap) throw new Error('lldb-dap is not here: it comes with Xcode 16 or later. Tell the user; updating Xcode is theirs to do (App Store).');
   const line = [quote(dap), ...listenArgs(await run(dap, ['--help']), port)].join(' ');
   const base = { line, adapterID: 'lldb-dap', missing: 'lldb-dap did not open its port', evalContext: 'watch' };
   const c = xcodeContainer(cwd);
@@ -178,13 +171,12 @@ export default {
       brokenHint: () => `The user fixes this in a terminal tab (it needs their password): ${fixLine || 'sudo xcode-select -s /Applications/Xcode.app'}. Then carry on.` },
     { id: 'swift', label: 'Swift', for: 'Swift packages and command-line tools', probe: ['swift', ['--version']], re: /Swift version (\d+\.\d+(?:\.\d+)?)/ },
     { id: 'simulator', label: 'Simulators', for: 'running iPhone and iPad apps without a phone', detect: simulators },
-    { id: 'lldb-dap', label: 'lldb-dap (Xcode)', for: 'debugging Swift and Objective-C', detect: lldbDap },
     { id: 'idb', label: 'idb', for: 'reading and tapping the simulator\'s screen from the command line (optional)', detect: async () => (MAC && /usage/i.test((await run('idb', ['--help'])) || '') ? 'found' : null), brew: 'facebook/fb/idb-companion', url: 'https://fbidb.io' },
   ],
   markers: [/\.xcodeproj$/, /\.xcworkspace$/, /^Package\.swift$/],
   checks: [
     // The dir's scheme is built for a simulator (or the Mac) with signing off: no device or certificate needed.
-    { id: 'xcode', tool: 'xcode', ext: /\.(swift|m|mm|h|metal)$/i, marker: (d) => !!xcodeContainer(d), cmd: (a) => xcodeCheckLine(typeof a === 'string' ? a : a.dir), tidy: tidyDiag },
+    { id: 'xcode', tool: 'xcode', ext: /\.(swift|m|mm|h|metal)$/i, marker: (d) => !!xcodeContainer(d), cmd: (dir) => xcodeCheckLine(dir), tidy: tidyDiag },
     { id: 'swiftpm', tool: 'swift', ext: /\.swift$/i, marker: (d) => fs.existsSync(path.join(d, 'Package.swift')) && !xcodeContainer(d), cmd: 'swift build -q', tidy: tidyDiag },
   ],
   summaries: [{ cmd: /\.ips\b/, summarize: ipsSummary }, { cmd: RUNS, summarize: crashSummary }],
