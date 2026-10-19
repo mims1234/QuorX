@@ -19,7 +19,7 @@ import { saveProject, forgetProject } from '../../store.js';
 const PY = process.env.QX_PYTHON || (WIN ? 'py' : 'python3');
 const PYARGS = process.env.QX_PYTHON ? [] : WIN ? ['-3'] : [];
 const SHELL = WIN && !process.env.QX_PYTHON;
-const can = (code) => spawnSync(PY, [...PYARGS, '-c', code], { shell: SHELL, stdio: 'ignore' }).status === 0;
+const can = (code) => spawnSync(PY, [...PYARGS, '-c', code], { stdio: 'ignore' }).status === 0; // no shell: code has spaces
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const VENV_PY = WIN ? '.venv\\Scripts\\python.exe' : '.venv/bin/python';
 const fakeVenv = (dir) => { fs.mkdirSync(path.dirname(path.join(dir, VENV_PY)), { recursive: true }); fs.writeFileSync(path.join(dir, '.venv', 'pyvenv.cfg'), 'home = x\nversion = 3.11.4\n'); fs.writeFileSync(path.join(dir, VENV_PY), ''); };
