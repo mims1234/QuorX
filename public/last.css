@@ -1756,3 +1756,12 @@ dialog.lb-dlg::backdrop { background: rgba(3, 5, 5, .82); backdrop-filter: blur(
 #pane .pane-tabs.icons-only > [data-tab] .pt-ico { width: 16px; height: 16px; }
 #pane .pane-tabs .pt-spacer { flex: 1 1 0; min-width: 4px; }
 #pane .pane-tabs .pt-icon { flex: none; }
+
+/* ---------- the update in the folded sidebar: an icon in the button's colours ---------- */
+.sb-rail .rail-upd[hidden] { display: none !important; }
+.sb-rail .rail-upd { background: var(--ok) !important; border: 1px solid var(--ok) !important; color: var(--ok-ink, #04140b) !important; }
+.sb-rail .rail-upd[data-state="ready"] { background: var(--accent) !important; border-color: var(--accent) !important; color: var(--accent-ink, #031317) !important; }
+.sb-rail .rail-upd[data-state="downloading"] { background: var(--ok-dim) !important; color: var(--ok) !important; cursor: progress; }
+.sb-rail .rail-upd[data-state="error"] { background: transparent !important; border-color: var(--bad) !important; color: var(--bad) !important; }
+.sb-rail .rail-upd svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.sb-rail .rail-upd .ru-pct { font: 700 10px/1 var(--mono); }

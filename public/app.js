@@ -5484,6 +5484,14 @@ function drawUpdate(u) {
     b.disabled = u.state === 'downloading';
     b.title = u.state === 'error' ? `${u.error || ''}\nClick to try again.` : u.state === 'available' ? `Version ${u.version} is out (you have ${u.current || 'an older one'}). Click to download it${u.size ? ` (${Math.round(u.size / 1e6)} MB)` : ''}.${u.notes ? `\n\n${u.notes.replace(/<[^>]+>/g, '')}` : ''}` : u.state === 'ready' ? 'Restarts QuorX and installs the update. Your chats and projects stay as they are.' : '';
   }
+  // The folded sidebar shows it as an icon, coloured like the button: ⬆ out, ⬇ downloading (with its %), ↻ ready, ⚠ failed.
+  const r = $('#railUpd');
+  if (r) {
+    const t = updateText(u);
+    r.hidden = !t; r.dataset.state = u.state || ''; r.disabled = u.state === 'downloading';
+    r.dataset.tip = t.replace(/^\S+\s/, ''); r.setAttribute('aria-label', r.dataset.tip);
+    r.innerHTML = { available: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V6M6 11l6-6 6 6"/></svg>', downloading: `<span class="ru-pct">${u.percent ?? 0}</span>`, ready: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>', error: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4 2.5 20h19z"/><path d="M12 10v4.5M12 17.2v.3"/></svg>' }[u.state] || '';
+  }
   const s = $('#stDeskUpd');
   if (s) s.textContent = { dev: 'Running from the repo: updates come from git.', 'no-feed': 'No update feed set.', checking: 'Checking…', current: `Up to date (v${u.current || '?'}).`, available: `v${u.version} is available.`, downloading: `Downloading… ${u.percent ?? 0}%`, ready: `v${u.version} is downloaded: restart to install.`, error: `Couldn't check: ${u.error || 'unknown error'}` }[u.state] || `v${u.current || '?'}`;
 }
@@ -5491,6 +5499,7 @@ if (DESK) {
   window.ohDesktop.on((ev) => { if (ev.type === 'update') drawUpdate(ev); });
   setTimeout(() => window.ohDesktop.update('state').then(drawUpdate).catch(() => {}), 1500);
   const ub = $('#updNote');
+  const rb = $('#railUpd'); if (rb) rb.onclick = () => ub?.click();
   if (ub) ub.onclick = async () => {
     const st = ub.dataset.state;
     if (st === 'available') drawUpdate(await window.ohDesktop.update('download'));
