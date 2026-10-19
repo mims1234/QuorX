@@ -96,3 +96,9 @@ test('godot: the debugger stops at a breakpoint in the running game and reads a 
     assert.match(await debugEval(s.id, 'lives * 10'), /20/);
   } finally { await debugStop(s.id).catch(() => {}); }
 });
+
+test('godot: the notes name this project\'s log folder', async () => {
+  const { packNotes } = await import('../index.js');
+  const dir = project('godot-notes', { 'project.godot': PROJECT });
+  assert.match(packNotes(dir, []), /QX Pack[\\/]logs/);
+});

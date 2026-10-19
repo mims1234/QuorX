@@ -139,11 +139,13 @@ export default {
       missing: GODOT ? 'the Godot editor did not open its debugger port (is project.godot in this folder?)' : 'Godot 4 was not found: install it or set QX_GODOT',
     }),
   },
-  notes: () => {
+  notes: (have, root) => {
     const g = GODOT ? q(GODOT) : 'godot';
+    let logs = '%APPDATA%\\Godot\\app_userdata\\<project name>\\logs';
+    try { logs = godotLogDir(fs.readFileSync(path.join(root, 'project.godot'), 'utf8')); } catch { /* the project is deeper, or there's no root */ }
     return `the Godot editor is ${GODOT ? `at ${g}` : 'not installed here'}. Before the final reply QuorX parses each changed .gd file (${g} --headless --path . --check-only --script res://<file>.gd; a script that uses another one's class_name needs \`--import\` first). `
       + `Run the game as a background job (shell, background: true): ${g} --path . (or a scene: ${g} --path . res://level.tscn); its window draws its own buttons, so the desktop tool sees only the window: drive it with screenshots, clicks at coordinates and keys. `
-      + 'Errors print to the job\'s output; the same log is in user://logs/godot.log (Windows: %APPDATA%\\Godot\\app_userdata\\<project name>\\logs). A SCRIPT ERROR\'s "at:" line names the res:// file and line. '
+      + `Errors print to the job's output; the same log is user://logs/godot.log, here ${logs}. A SCRIPT ERROR's "at:" line names the res:// file and line. `
       + `Tests: GUT runs with ${g} --headless --path . -s res://addons/gut/gut_cmdln.gd -gdir=res://test -gexit; GdUnit4 with its res://addons/gdUnit4/bin/GdUnitCmdTool.gd -a res://test. `
       + `Export needs the export templates (Editor → Manage Export Templates, a large download: ask first), then ${g} --headless --path . --export-release "<preset in export_presets.cfg>" build/game.exe. `
       + 'The debug tool works on a .gd file (it runs the main scene) or a .tscn scene: the editor runs headless and starts the game with breakpoints set.';

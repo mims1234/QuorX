@@ -113,3 +113,13 @@ test('unity: EditMode tests run and the results are summarised', async (t) => {
   assert.match(s, /2 tests: 1 passed, 1 failed/);
   assert.match(s, /ScoreTests\.Fails/);
 });
+
+test('unity: a -runTests command gets the results summarised above its output, and notes name the project\'s editor', async () => {
+  const { outputSummary, packNotes } = await import('../index.js');
+  const dir = project('unity-results', { 'TestResults.xml': XML, 'ProjectSettings/ProjectVersion.txt': 'm_EditorVersion: 2019.4.1f1\n' });
+  const log = `Running tests for EditMode\nSaving results to: ${path.join(dir, 'TestResults.xml')}\nTest run completed. Exiting with code 2 (Failed).\n`;
+  const s = outputSummary('"C:\\Program Files\\Unity\\Hub\\Editor\\6000.0.23f1\\Editor\\Unity.exe" -batchmode -projectPath . -runTests -testPlatform EditMode -testResults TestResults.xml -logFile -', log);
+  assert.match(s, /^Unity tests: 3 tests: 1 passed, 1 failed/);
+  assert.equal(outputSummary('Unity.exe -batchmode -quit -projectPath .', log), '', 'only test runs are summarised');
+  assert.match(packNotes(dir, []), /This project needs Unity 2019\.4\.1f1, which is not installed/);
+});
