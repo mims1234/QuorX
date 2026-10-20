@@ -39,6 +39,7 @@ import { hostedHtml, browserPath } from './server/browser.js';
 import { artifactContent, servedArtifact, ARTIFACT_HEADERS, folderStamp } from './server/artifacts.js';
 import { gate, hostAllowed, crossSiteApi, isLoopback, accessInfo, setLan, resetToken } from './server/access.js';
 import { serveBlob, startSweeping } from './server/blobs.js';
+import { newsRoute } from './server/news.js';
 import zlib from 'node:zlib';
 
 const PUBLIC = path.join(ROOT, 'public');
@@ -598,6 +599,12 @@ const server = http.createServer(async (req, res) => {
       if (!rm[2] && req.method === 'GET') return json(res, 200, runStatus(rm[1]));
     }
     if (url.pathname === '/api/runs' && req.method === 'GET') return json(res, 200, activeRuns());
+    // News (docs/news-format.md): What's new, articles and reports from news/, and the user's own numbers.
+    if (url.pathname === '/api/news' || url.pathname.startsWith('/api/news/')) {
+      const r = await newsRoute({ method: req.method, pathname: url.pathname, query: url.searchParams, body: req.method === 'POST' ? await readBody(req, 1e4) : '' });
+      if (r?.file) return sendStatic(req, res, r.file, r.type, r.headers);
+      if (r) return json(res, r.code, r.body);
+    }
     if (url.pathname === '/api/scorecard' && req.method === 'GET') return json(res, 200, scorecard(Number(url.searchParams.get('days')) || 14));
     const vm = url.pathname.match(/^\/vendor\/(xterm\.js|xterm\.css|addon-fit\.js)$/);
     if (vm && req.method === 'GET') {

@@ -1,0 +1,14 @@
+{
+  "tests": {
+    "type": "line",
+    "x": ["0.1.5", "PR 1", "PR 1 fix", "PR 2", "PR 3", "PRs 4–9", "PRs 12–13"],
+    "series": [{ "name": "Tests", "values": [129, 133, 135, 137, 139, 150, 176] }],
+    "unit": "tests"
+  },
+  "reach": {
+    "type": "pairs",
+    "title": "Reach, before the packs and now",
+    "x": ["Toolchains detected", "Compiler checks", "Debugger languages", "Pack self-tests"],
+    "series": [{ "name": "Before", "values": [15, 4, 2, 0] }, { "name": "Now", "values": [33, 13, 9, 15] }]
+  }
+}
