@@ -81,11 +81,10 @@ const G = {
   sessionCost: 0, sizes: {}, theme: null, sideHidden: false, balanceShown: false,
 };
 const focused = () => G.open.get(G.panes[G.focus]) || G.open.get(G.panes[0]);
-const anyRunning = () => [...G.open.values()].some((c) => c.running);
 
 // ---------- preferences (this browser) and chats (the server) ----------
 function savePrefs() {
-  try { localStorage.setItem(STORE, JSON.stringify({ settings: G.settings, templates: G.templates, sideHidden: G.sideHidden, projectOrder: G.projectOrder, foldedProjects: G.foldedProjects, favModels: G.favModels, recentModels: G.recentModels, budgetSeen: G.budgetSeen, spaceSeen: G.spaceSeen, followAgent: G.followAgent, pickerSort: G.pickerSort, panes: G.panes, sessionCost: G.sessionCost, sizes: G.sizes, theme: G.theme, chatOpts: !!G.chatOpts })); } catch { /* storage unavailable */ }
+  try { localStorage.setItem(STORE, JSON.stringify({ settings: G.settings, templates: G.templates, sideHidden: G.sideHidden, projectOrder: G.projectOrder, foldedProjects: G.foldedProjects, favModels: G.favModels, recentModels: G.recentModels, budgetSeen: G.budgetSeen, spaceSeen: G.spaceSeen, followAgent: G.followAgent, pickerSort: G.pickerSort, panes: G.panes, sessionCost: G.sessionCost, sizes: G.sizes, theme: G.theme })); } catch { /* storage unavailable */ }
 }
 // Preferences saved under the app's earlier names (OpenHarness, before that Agent-001) are read until the next save.
 function load() { try { return JSON.parse(localStorage.getItem(STORE) || localStorage.getItem('openharness-v1') || localStorage.getItem('agent001-v1') || 'null'); } catch { return null; } }
@@ -926,15 +925,6 @@ function projectSpendHTML(p, n, cost, share, chats = []) {
     ...(byCost.length > 8 ? [`${byCost.length - 8} more chats\t${usd(byCost.slice(8).reduce((t, c) => t + (c.cost || 0), 0))}`] : []),
     `Total\t${usd(cost)}`].join('\n');
   return `<span class="sb-budget sb-pinfo ${state}" data-tip-delay="900" title="${esc(tip)}">${info}</span>`;
-}
-function budgetLine(p, n, cost, share, acts = '') {
-  const usd = (v) => `$${v.toFixed(v < 1 ? 3 : 2)}`;
-  if (p.budget == null) return `<div class="sb-pstrip none"><div class="sb-pmeta"><span class="pm-chats">${n} chat${n === 1 ? '' : 's'}</span><span class="pm-dot">·</span><span class="pm-spent" title="Spent so far by this project's chats">${usd(cost)}</span><span class="pm-nolim">no limit</span></div>${acts}</div>`;
-  const pct = Math.round(share * 100), state = share >= 1 ? 'full' : share >= 0.85 ? 'near' : 'ok';
-  return `<div class="sb-pstrip ${state}"><button type="button" class="sb-budget sb-pmeter ${state}" title="${n} chat${n === 1 ? '' : 's'} · ${usd(cost)} of the $${p.budget.toFixed(2)} budget · ${state === 'full' ? 'budget reached' : `${pct}% used, $${Math.max(0, p.budget - cost).toFixed(2)} left`} · click for project settings">
-      <span class="pmm-top"><span class="pmm-used">${usd(cost)} <small>/ $${p.budget.toFixed(p.budget < 10 ? 2 : 0)}</small></span><span class="pmm-left">${state === 'full' ? 'Full' : `${pct}%`}</span></span>
-      <span class="pmm-bar"><i style="width:${Math.min(100, share * 100).toFixed(1)}%"></i></span>
-    </button>${acts}</div>`;
 }
 // A project's budget covers every chat in it. Edited in a compact panel under the project:
 // − / $ / ＋, quick +$1 +$5 +$10 ×2, never below what is already spent. Spend updates live; while a chat in
@@ -2300,7 +2290,6 @@ function renderComposerBar(c) {
     undoBtn.onclick = () => discard(false);
   }
   $('.model', slot).onclick = async () => { const id = await pickModel('chat', s.model, { context: `For “${clip(c.title, 40)}”` }); if (id) { s.model = id; saveChat(c); renderComposerBar(c); renderChatHead(c); } };
-  wireReasonMenu(c, bar);
   for (const b of bar.querySelectorAll('.lvl-b')) b.onclick = () => { c.agent.setup[b.closest('.lvl').dataset.key] = b.dataset.v; saveChat(c); renderComposerBar(c); };
   for (const b of bar.querySelectorAll('.qt-b')) b.onclick = () => {
     const k = b.dataset.k;
@@ -2369,30 +2358,8 @@ function postUsage(c) {
 }
 // Reasoning effort: a menu in the app's own style (not the system dropdown), aware of what the model supports.
 const REASON_INFO = { off: ['Off', 'Answers straight away. Fastest and cheapest.'], low: ['Low', 'A little thinking before answering.'], medium: ['Medium', 'Thinks through multi-step work.'], high: ['High', 'Thinks longest. Slowest and costs the most.'], default: ['Model default', 'Whatever the model does by default.'] };
-function reasonMenuHTML(s) {
-  const m = G.byId.get(s.model), unsupported = m && m.kind === 'chat' && m.reasoning === false;
-  const v = unsupported ? 'off' : s.reasoning || 'off';
-  return `<div class="rs-wrap" data-key="reasoning">
-    <button type="button" class="rs-btn cmp-reason-group ${unsupported ? 'na' : ''} ${v !== 'off' ? 'thinking' : ''}" aria-haspopup="listbox" aria-expanded="false" title="${unsupported ? 'This model has no reasoning setting' : 'How much the model thinks before answering'}">🧠 <span>${unsupported ? 'No reasoning' : `Reasoning: ${REASON_INFO[v][0].toLowerCase()}`}</span><i aria-hidden="true">▾</i></button>
-    <div class="rs-pop" role="listbox" aria-label="Reasoning" hidden>
-      <div class="rs-head">Reasoning for this chat${unsupported ? '<small>This model has no reasoning setting; these apply if you switch to one that does.</small>' : ''}</div>
-      ${Object.entries(REASON_INFO).map(([k, [name, note]]) => `<button type="button" class="rs-opt ${k === (s.reasoning || 'off') ? 'on' : ''}" role="option" aria-selected="${k === (s.reasoning || 'off')}" data-v="${k}"><span class="rs-name">${name}</span><span class="rs-note">${note}</span><span class="rs-check" aria-hidden="true">✓</span></button>`).join('')}
-    </div></div>`;
-}
 // Creativity (per chat): how varied the answers are. "Default" sends no temperature, so each model uses its own.
 const CREATIVITY_INFO = { default: ['Default', "The model's own setting. Right for most work."], focused: ['Focused', 'Steadier, more predictable answers. Good for fixes and data.'], creative: ['Creative', 'More varied ideas. Good for games, designs and writing.'] };
-function creativityMenuHTML(s) {
-  const v = CREATIVITY_INFO[s.creativity] ? s.creativity : 'default';
-  const m = G.byId.get(s.model), claudeThinking = /^anthropic\//.test(s.model) && (s.reasoning || 'off') !== 'off';
-  const noTemp = m && m.kind === 'chat' && m.temp === false;
-  const why = noTemp ? 'This model has no temperature setting, so this has no effect on it.' : claudeThinking ? 'Claude with reasoning on only takes Creative; Focused is skipped.' : '';
-  return `<div class="rs-wrap cr-wrap" data-key="creativity">
-    <button type="button" class="rs-btn cmp-creativity ${v !== 'default' ? 'thinking' : ''} ${noTemp ? 'na' : ''}" aria-haspopup="listbox" aria-expanded="false" title="How varied the answers are">🎨 <span>Creativity: ${CREATIVITY_INFO[v][0].toLowerCase()}</span><i aria-hidden="true">▾</i></button>
-    <div class="rs-pop" role="listbox" aria-label="Creativity" hidden>
-      <div class="rs-head">Creativity for this chat${why ? `<small>${why}</small>` : ''}</div>
-      ${Object.entries(CREATIVITY_INFO).map(([k, [name, note]]) => `<button type="button" class="rs-opt ${k === v ? 'on' : ''}" role="option" aria-selected="${k === v}" data-v="${k}"><span class="rs-name">${name}</span><span class="rs-note">${note}</span><span class="rs-check" aria-hidden="true">✓</span></button>`).join('')}
-    </div></div>`;
-}
 // Wires every dropdown in the message box (Reasoning, Creativity); each sets its own key on the chat's setup.
 // Reasoning and creativity as small level meters: an icon, then one step per option (lit up to the chosen one).
 // A for "model default". The option's name and what it does show on hover.
@@ -2417,19 +2384,6 @@ function quickToolsHTML(c) {
   const micOn = G.settings.tools.listen?.on !== false;
   const mic = btn('listen', '🎤', 'Mic · speech to text', ['Turns what you say into text in the message box', 'All chats; off hides the mic button'], micOn);
   return `<span class="qt-group">${q}</span><span class="qt-sep" aria-hidden="true"></span><span class="qt-group">${media}</span><span class="qt-sep" aria-hidden="true"></span><span class="qt-group">${mic}</span>`;
-}
-function wireReasonMenu(c, bar) { for (const wrap of bar.querySelectorAll('.rs-wrap')) wireSetupMenu(c, wrap); }
-function wireSetupMenu(c, wrap) {
-  const btn = $('.rs-btn', wrap), pop = $('.rs-pop', wrap), key = wrap.dataset.key || 'reasoning';
-  const close = () => { pop.hidden = true; btn.setAttribute('aria-expanded', 'false'); document.removeEventListener('pointerdown', outside, true); };
-  const outside = (e) => { if (!wrap.contains(e.target)) close(); };
-  btn.onclick = () => { if (!pop.hidden) return close(); pop.hidden = false; btn.setAttribute('aria-expanded', 'true'); document.addEventListener('pointerdown', outside, true); $('.rs-opt.on', pop)?.focus(); };
-  pop.onkeydown = (e) => {
-    const opts = [...pop.querySelectorAll('.rs-opt')], i = opts.indexOf(document.activeElement);
-    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); opts[(i + (e.key === 'ArrowDown' ? 1 : opts.length - 1)) % opts.length].focus(); }
-    if (e.key === 'Escape') { e.stopPropagation(); close(); btn.focus(); }
-  };
-  for (const o of pop.querySelectorAll('.rs-opt')) o.onclick = () => { c.agent.setup[key] = o.dataset.v; saveChat(c); close(); renderComposerBar(c); };
 }
 // The quality tools for one reply: on/off from this chat's 🧰, models and strength from ⚙ Settings.
 function qualitySettings(c) {
@@ -2626,9 +2580,6 @@ function drawReading(c, m) {
   const ed = $('.rd-edit', slot), dr = $('.rd-drop', slot);
   if (ed) ed.onclick = (e) => { e.preventDefault(); r.editing = true; drawReading(c, m); };
   if (dr) dr.onclick = (e) => { e.preventDefault(); r.removed = true; a.reading = null; push(''); saveChat(c); drawReading(c, m); };
-}
-function wireCopy(btn, text) {
-  btn.onclick = async () => { try { await navigator.clipboard.writeText(text() || ''); btn.textContent = '✓'; btn.classList.add('done'); } catch { btn.textContent = '!'; } setTimeout(() => { btn.textContent = '⧉'; btn.classList.remove('done'); }, 1300); };
 }
 // The model's thinking, shown above the reply: open while it thinks, folded once it answers.
 function drawThinking(m) {
@@ -2851,14 +2802,6 @@ function liveThinking(m, tl) {
     }
   }
 }
-// Notes you sent while the agent worked, and whether it has read them yet.
-function steerCardsHTML(m) {
-  const tr = m.trace || [];
-  const notes = tr.filter((e) => e.t === 'steer');
-  if (!notes.length) return '';
-  const read = tr.filter((e) => e.t === 'steer_delivered').reduce((n, e) => n + (e.count || 1), 0);
-  return notes.map((e, i) => `<div class="steer-card ${i < read ? 'read' : ''}"><span class="sc-who">You, while it worked</span><p>${esc(e.text)}</p><span class="sc-state">${i < read ? '✓ read by the agent' : '… it reads this at its next step'}</span></div>`).join('');
-}
 function updateMsg(c, m, { bodyOnly = false } = {}) {
   const el = m.el;
   if (!el) return;
@@ -3009,8 +2952,6 @@ async function loadReview(c, m, slot) {
     };
   }
 }
-const TRACE_PLAIN = new Set(['llm_start', 'llm_done', 'done', 'checks', 'mode']);
-const kTok = (n) => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n || 0);
 // Above each reply: the exact OpenRouter model id (copy it, or open its OpenRouter page) and the provider that ran
 // it. When a router answered (openrouter/free, openrouter/auto…), the model it picked follows the arrow.
 const orBase = (id) => String(id || '').replace(/:(free|beta|extended|thinking|online|nitro|floor|exacto)$/, '');
@@ -5333,7 +5274,7 @@ async function boot() {
   if ((G.settings.modelDefaultV || 0) < 2) { G.settings.model = d.chatModel || G.settings.model; G.settings.modelDefaultV = 2; }
   if ((G.settings.maxSteps || 0) < d.maxSteps) G.settings.maxSteps = d.maxSteps; // building and checking needs room
   G.settings.maxSteps = Math.min(120, G.settings.maxSteps);
-  G.sideHidden = !!saved?.sideHidden; G.chatOpts = !!saved?.chatOpts; G.projectOrder = saved?.projectOrder || []; G.foldedProjects = saved?.foldedProjects || []; G.favModels = saved?.favModels || {}; G.spaceSeen = saved?.spaceSeen || {}; G.followAgent = saved?.followAgent !== false; G.budgetSeen = saved?.budgetSeen || {}; G.recentModels = saved?.recentModels || {}; G.pickerSort = saved?.pickerSort || {}; G.sizes = saved?.sizes || {}; G.theme = saved?.theme || null;
+  G.sideHidden = !!saved?.sideHidden; G.projectOrder = saved?.projectOrder || []; G.foldedProjects = saved?.foldedProjects || []; G.favModels = saved?.favModels || {}; G.spaceSeen = saved?.spaceSeen || {}; G.followAgent = saved?.followAgent !== false; G.budgetSeen = saved?.budgetSeen || {}; G.recentModels = saved?.recentModels || {}; G.pickerSort = saved?.pickerSort || {}; G.sizes = saved?.sizes || {}; G.theme = saved?.theme || null;
   G.sessionCost = saved?.sessionCost || 0; G.templates = saved?.templates || [];
   applySizes(); applyTheme();
   const start = G.settings.ui?.sidebarStart || 'remember';
@@ -6112,16 +6053,6 @@ function wirePaneChrome() {
 
 // Every page the agent's browser showed in a reply: browser steps and look's vision checks.
 const isShot = (e) => !!e && !!e.image && (e.t === 'screenshot' || (e.t === 'decide_start' && e.look));
-function agentShots(c) {
-  for (const m of [...c.agent.messages].reverse()) {
-    if (m.role !== 'assistant') continue;
-    const shots = (m.trace || []).filter(isShot).map((e) => (e.t === 'screenshot'
-      ? { url: e.url || '', image: e.image, what: `${e.action || 'open'}${e.target ? ` ${e.target}` : ''}`, at: e.at }
-      : { url: String(e.state || '').replace(/^Screenshot of /, ''), image: e.image, what: 'look: checking it with the vision judges', at: e.at }));
-    if (shots.length) return { m, shots };
-  }
-  return null;
-}
 function onAgentBrowse(c, m) {
   if (focused() !== c) return;
   renderPaneTabs(c);

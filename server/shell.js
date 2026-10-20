@@ -108,7 +108,6 @@ export function shellStop(projectId, tab) {
   LAST_CWD.set(key, keep);
   return true;
 }
-export const shellCwd = (projectId, tab) => SHELLS.get(`${projectId}:${tab}`)?.cwd || LAST_CWD.get(`${projectId}:${tab}`) || null;
 
 // A closed terminal tab ends its shell.
 export function shellClose(projectId, tab) { const had = shellStop(projectId, tab); LAST_CWD.delete(`${projectId}:${tab}`); return had; }

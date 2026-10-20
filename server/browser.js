@@ -7,7 +7,6 @@ import path from 'node:path';
 import net from 'node:net';
 import crypto from 'node:crypto';
 import { spawn, execFile } from 'node:child_process';
-import { ROOT } from './openrouter.js';
 import { desktopReady, desktopCall, onTabEvents } from './desktop.js';
 
 const LOCAL = process.env.LOCALAPPDATA || '';

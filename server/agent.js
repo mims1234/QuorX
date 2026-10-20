@@ -9,7 +9,7 @@
 //                applies in both modes
 import fs from 'node:fs';
 import path from 'node:path';
-import { chat, chatStream, chatModels, imageModels, generateImage, speechModels, synthesize, composeMusic, musicModels, videoModels, generateVideo, ROOT, HOME } from './openrouter.js';
+import { chat, chatStream, chatModels, imageModels, generateImage, speechModels, synthesize, composeMusic, musicModels, videoModels, generateVideo, HOME } from './openrouter.js';
 import { ensemble, GATE } from './decisions.js';
 import { runtime } from './openrouter.js';
 import { enhanceRequest } from './enhancer.js';
@@ -33,7 +33,7 @@ import { isCheckedFile, packNotes, outputSummary } from './packs/index.js';
 import { devices as adbDevices, pickDevice, readScreen, tap as adbTap, typeText as adbType, key as adbKey, screenshot as adbShot, install as adbInstall, launch as adbLaunch, logcat as adbLog, listAvds, startEmulator } from './android.js';
 import { listSkills, readSkill, saveSkill, listTemplates } from './skills.js';
 import { projectDesign } from './design.js';
-import { workspaceDir, listFiles, readFile, readText, writeFile, appendFile, editFile, editFileMulti, runCommand, runLine, lineOf, stopNote, endProc, startServer, stopServer, stopServerWait, serverFor, serverLog, listServers, launchConfigs, ensureAgentDir, agentSpace, SCRATCH, sealCheckpoint, pruneCheckpoints, ALLOWED } from './workspace.js';
+import { workspaceDir, listFiles, readFile, readText, writeFile, appendFile, editFile, editFileMulti, runLine, lineOf, stopNote, endProc, startServer, stopServerWait, serverFor, serverLog, listServers, launchConfigs, ensureAgentDir, agentSpace, SCRATCH, sealCheckpoint, pruneCheckpoints } from './workspace.js';
 import { openTab, hostHtml, startedWithDevtoolsPort } from './browser.js';
 import { adoptAgentTab, releaseAgentTab } from './userbrowser.js';
 import { setLiveArtifact, markdownHtml } from './artifacts.js';

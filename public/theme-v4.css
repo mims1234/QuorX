@@ -4,7 +4,7 @@
    QUORX REDESIGN THEME V4 (v4/theme-v4.css)
    ==========================================================================
    Visual Grammar & Differentiation Overhaul for QuorX.
-   
+
    Problem addressed:
    Prior themes made almost every UI control look identical: dark rounded pills
    with hairline borders. Users could not distinguish at a glance between:
@@ -332,13 +332,7 @@ button, input, select, textarea, [role="button"] {
    ========================================================================== */
 
 /* --- Primary Actions --- */
-.cmp-send-btn,
-.sendBtn,
-#saveSettings,
-.st-btn.primary,
-.approval .yes,
-.approval .primary,
-.st-hero-form .st-btn.primary {
+.cmp-send-btn, .sendBtn, #saveSettings, .st-btn.primary, .approval .yes, .approval .primary {
   background: var(--ok) !important;
   color: var(--ok-ink) !important;
   font-family: var(--font-ui) !important;
@@ -388,17 +382,7 @@ button, input, select, textarea, [role="button"] {
 }
 
 /* --- Secondary Actions --- */
-.st-btn.secondary,
-.approval .always,
-.ch-split,
-.sb-split,
-.undo-btn,
-.undo,
-#stResetCat,
-#stCancel,
-#pkRefresh,
-.st-btn.ghost,
-button.ghost {
+.st-btn.secondary, .approval .always, .undo-btn, .undo, #stResetCat, #stCancel, #pkRefresh, .st-btn.ghost, button.ghost {
   background: var(--panel-2) !important;
   border: 1px solid var(--line) !important;
   border-radius: var(--radius-sm) !important;
@@ -425,18 +409,7 @@ button.ghost:hover {
 }
 
 /* --- Ghost Icon Tools (Square, borderless until hover) --- */
-.top-btn,
-.ch-btn,
-.pane-head .icon,
-.sb-pactions button,
-.sb-chat-acts button,
-.cmp-actions-left .cmp-act-btn,
-.imgBtn,
-.micBtn,
-.st-close-btn,
-.st-reveal-btn,
-#sbCollapseBtn,
-#newProjectBtn {
+.top-btn, .ch-btn, .pane-head .icon, .sb-chat-acts button, .cmp-actions-left .cmp-act-btn, .imgBtn, .micBtn, .st-close-btn, #sbCollapseBtn, #newProjectBtn {
   width: 28px !important;
   height: 28px !important;
   padding: 0 !important;
@@ -485,8 +458,6 @@ button.ghost:hover {
 }
 
 /* --- Status Pills (Dot + Text, Soft Tint, NO BORDER) --- */
-.ch-running-pill,
-.status-pill,
 .st-key-active-badge {
   display: inline-flex !important;
   align-items: center !important;
@@ -532,9 +503,7 @@ button.ghost:hover {
 }
 
 /* --- Tags & Badges (Flat, Rectangular, 4px Radius) --- */
-.ch-model-badge,
-.st-chip,
-.model-badge {
+.st-chip {
   font-family: var(--mono) !important;
   font-size: 11px !important;
   font-weight: 500 !important;
@@ -603,20 +572,7 @@ button.ghost:hover {
 }
 
 /* --- Money Numbers Everywhere (Amber, Monospace) --- */
-.cost,
-.ch-stats b.cost,
-.sb-pstats,
-.sb-ptotal,
-.sb-chat-meta .cost,
-.cmp-budget,
-.uc-cost,
-.uc-kpis b,
-.bal-tt-val,
-.bal-tt-row b,
-.st-stat-tile-val,
-.cost-bar + .mono,
-td.mono,
-.st-account-metric-val {
+.cost, .sb-chat-meta .cost, .uc-cost, .uc-kpis b, .cost-bar + .mono, td.mono {
   font-family: var(--mono) !important;
   color: var(--amber) !important;
   font-weight: 600 !important;
@@ -654,11 +610,7 @@ td.mono,
 }
 
 /* Dropdown Selects */
-select,
-#artSelect,
-.cmp-reason-select,
-.pickModel,
-#pkSort {
+select, #artSelect, .pickModel, #pkSort {
   background: var(--panel-2) !important;
   border: 1px solid var(--line) !important;
   border-radius: var(--radius-sm) !important;
@@ -768,21 +720,11 @@ select:focus {
   border-bottom: 1px solid var(--line);
 }
 
-.bal-tt-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-bright);
-}
-
 .bal-tt-row {
   display: flex;
   justify-content: space-between;
   font-size: 11.5px;
   padding: 2px 0;
-}
-
-.bal-tt-label {
-  color: var(--muted);
 }
 
 .bal-tt-foot {
@@ -814,12 +756,6 @@ aside.sidebar {
   overflow-y: auto;
 }
 
-.sb-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
 .sb-head #chatSearch {
   flex: 1;
   padding: 5px 9px;
@@ -827,22 +763,6 @@ aside.sidebar {
 }
 
 /* New Chat Primary Banner in Sidebar */
-.sb-new-chat {
-  width: 100%;
-  padding: 7px 12px;
-  font-size: 12.5px;
-  font-weight: 600;
-  background: var(--panel-2);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  color: var(--ok);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
 
 .sb-new-chat:hover {
   background: var(--ok-dim);
@@ -851,34 +771,10 @@ aside.sidebar {
 }
 
 /* Costs Banner */
-.sb-costs-entry {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 6px 10px;
-  background: var(--panel-2);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  color: var(--text);
-  font-size: 12px;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
 
 .sb-costs-entry:hover {
   background: var(--panel-3);
   border-color: var(--line-strong);
-}
-
-.sb-costs-pill {
-  font-family: var(--mono);
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--amber);
-  background: var(--amber-dim);
-  border: 1px solid var(--amber-line);
-  border-radius: var(--radius-xs);
-  padding: 1px 6px;
 }
 
 /* Project Group */
@@ -989,29 +885,7 @@ aside.sidebar {
   font-weight: 600 !important;
 }
 
-/* Chat Avatar */
-.sb-chat-avatar {
-  width: 26px;
-  height: 26px;
-  border-radius: var(--radius-sm);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  font-weight: 700;
-  font-family: var(--mono);
-  background: hsl(var(--h, 160) 35% 15%);
-  color: hsl(var(--h, 160) 80% 70%);
-  flex-shrink: 0;
-  position: relative;
-  transition: all 0.2s ease;
-}
-
 /* Running Chat: Pulsing Green Ring */
-.sb-chat.running .sb-chat-avatar {
-  box-shadow: 0 0 0 2px var(--ok), 0 0 8px var(--ok-glow);
-  animation: pulseRing 1.8s infinite ease-out;
-}
 
 @keyframes pulseRing {
   0% { box-shadow: 0 0 0 0 var(--ok); }
@@ -1177,16 +1051,6 @@ aside.sidebar.collapsed { width: 58px; }
   outline: none;
 }
 
-/* Center Meta & Stats */
-.ch-stats {
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--dim);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
 /* Right Actions Cluster */
 .ch-actions,
 .ch-acts {
@@ -1273,28 +1137,9 @@ aside.sidebar.collapsed { width: 58px; }
 }
 
 /* 2. Reasoning Select (Inset Well) */
-.cmp-reason-group {
-  display: inline-flex;
-  align-items: center;
-  background: var(--panel-2);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  padding: 0 4px 0 8px;
-  height: 26px;
-  gap: 4px;
-}
 
 .cmp-reason-group .label {
   font-size: 11px;
-}
-
-.cmp-reason-select {
-  background: transparent !important;
-  border: none !important;
-  color: var(--text) !important;
-  font-size: 11.5px !important;
-  padding: 0 14px 0 2px !important;
-  height: 100% !important;
 }
 
 /* 3. Strict / YOLO Track-Style Segmented Control */
@@ -1391,17 +1236,6 @@ aside.sidebar.collapsed { width: 58px; }
   color: var(--ok) !important;
   font-size: 11px !important;
   font-weight: 600 !important;
-}
-
-/* 5. Budget Note */
-.cmp-budget,
-.mode-note {
-  font-family: var(--mono) !important;
-  font-size: 11px !important;
-  font-weight: 600 !important;
-  color: var(--amber) !important;
-  margin-left: auto;
-  opacity: 0.9;
 }
 
 /* Tools Popover Menu */
@@ -2325,19 +2159,6 @@ aside.pane {
   padding: 14px;
   overflow: auto;
   background: var(--bg);
-}
-
-/* Code View Host */
-.cv-host {
-  height: 100%;
-  width: 100%;
-  font-family: var(--mono);
-  font-size: 12px;
-  line-height: 1.5;
-  background: var(--surface-inset);
-  color: var(--text);
-  overflow: auto;
-  padding: 14px;
 }
 
 /* ==========================================================================

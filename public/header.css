@@ -1,21 +1,14 @@
-/* Chat header, Direction A "Breadcrumb + dominant title" (OpenDesign project agent-001-chat-header).
-   Top tier: project crumb · messages, then model and cost. Bottom tier: avatar, title, state, tools, ⋯ menu. */
-.chat-avatar-disc { width: 24px; height: 24px; border-radius: 50%; background: hsl(var(--h, 160) 45% 26%); border: 1px solid hsl(var(--h, 160) 55% 45%); color: #ffffff; font-size: 10.5px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; letter-spacing: -0.02em; }
+
 
 /* Universal Project Hue Badge */
 .proj-hue-tag { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; color: hsl(var(--ph, 150) 55% 55%); background: hsl(var(--ph, 150) 45% 30% / 0.16); border: 1px solid hsl(var(--ph, 150) 45% 45% / 0.35); padding: 1px 7px; border-radius: 4px; text-decoration: none; cursor: pointer; white-space: nowrap; transition: all 0.15s ease; }
 
 .proj-hue-tag:hover { background: hsl(var(--ph, 150) 45% 30% / 0.28); border-color: hsl(var(--ph, 150) 55% 55%); }
 
-.proj-hue-dot { width: 6px; height: 6px; border-radius: 2px; background: hsl(var(--ph, 150) 65% 55%); }
-
 /* Universal Cost Badge (Amber / Money) */
 .cost-badge-amber { display: inline-flex; align-items: center; gap: 4px; font-family: var(--mono); font-size: 11px; font-weight: 600; color: var(--amber); background: var(--amber-dim); border: 1px solid var(--amber-glow); padding: 2px 7px; border-radius: 4px; cursor: pointer; transition: all 0.15s ease; white-space: nowrap; }
 
 .cost-badge-amber:hover { background: var(--amber); color: #07090a; }
-
-/* Universal Model Badge (Violet / AI) */
-.model-badge-violet { display: inline-flex; align-items: center; gap: 4px; font-family: var(--mono); font-size: 10.5px; font-weight: 500; color: var(--violet); background: var(--violet-dim); border: 1px solid var(--violet-glow); padding: 1px 6px; border-radius: 4px; white-space: nowrap; }
 
 /* Live Beacon Dots */
 .live-beacon { width: 7px; height: 7px; border-radius: 50%; display: inline-block; position: relative; }
@@ -48,19 +41,12 @@
 .hdr-icon-btn.destructive:hover { background: var(--bad-dim); border-color: var(--bad); color: var(--bad); }
 
 /* Overflow Menu (⋯) Dropdown */
-.overflow-popover { position: absolute; top: calc(100% + 6px); right: 8px; z-index: 80; width: 220px; background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--radius); box-shadow: var(--shadow-pop); padding: 6px; display: grid; gap: 2px; animation: popFade 0.15s cubic-bezier(0.16, 1, 0.3, 1); }
 
 .overflow-popover[hidden] { display: none; }
 
-.overflow-item { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: var(--radius-sm); font-size: 12px; font-weight: 500; color: var(--text); background: transparent; border: none; cursor: pointer; text-align: left; width: 100%; transition: all 0.12s ease; }
-
 .overflow-item:hover { background: var(--panel-2); color: var(--text-bright); }
 
-.overflow-item svg { width: 14px; height: 14px; stroke-width: 1.8; stroke: currentColor; fill: none; flex-shrink: 0; }
-
 .overflow-item.destructive { color: var(--bad); }
-
-.overflow-item.destructive:hover { background: var(--bad-dim); color: var(--bad); }
 
 .overflow-divider { height: 1px; background: var(--line); margin: 4px 0; }
 
@@ -109,7 +95,6 @@
 .dir-a-actions-sep { width: 1px; height: 16px; background: var(--line); margin: 0 2px; }
 
 /* Split View Adjustments for Dir A (~480px) */
-.chats.split .dir-a-crumbs .crumb-extra { display: none; }
 .chats.split .dir-a-title-input { max-width: 240px; }
 
 /* Phone View Adjustments for Dir A (375px) */
@@ -118,9 +103,7 @@
 @keyframes pulse-border { }
 
 @media (max-width: 600px) {
-  .dir-a-meta-chips .model-badge-violet { max-width: 80px; overflow: hidden; text-overflow: ellipsis; }
   .dir-a-title-input { max-width: 150px; font-size: 13px; }
-  .dir-a-actions .hide-on-phone { display: none; }
 }
 
 /* fitting it into the app */
@@ -136,7 +119,6 @@
 /* The header adapts to its own width (a chat can be full width, half of a split, or a phone). */
 .chatpane { container-type: inline-size; container-name: chat; }
 .dir-a-head .dir-a-title-input { flex: 1 1 auto; min-width: 60px; }
-.dir-a-head .ch-split-menu { display: none; }
 @container chat (max-width: 520px) {
   .dir-a-head .dir-a-state-badge.idle { display: none !important; }
   .dir-a-head .dir-a-actions { gap: 2px; }

@@ -102,7 +102,6 @@ const WRAPPERS = { env: { vals: ['-u', '--unset', '-C', '--chdir'], bad: ['-S', 
 // Value-taking parameters whose value is not a path.
 const VALUE_PARAMS = new Set(['-value', '-itemtype', '-type', '-encoding', '-filter', '-include', '-exclude', '-name', '-newname', '-depth', '-erroraction',
   '-ea', '-warningaction', '-wa', '-pattern', '-delimiter', '-inputobject', '-stream', '-credential', '-format']);
-const DEST_PARAMS = new Set(['-destination', '-dest', '-destinationpath', '-path', '-literalpath', '-lp', '-filepath', '-outfile', '-target']);
 
 // ---------- splitting a command line ----------
 // A segment: { text, program, rawProgram, args: [{ text, static, param?, value? }], redirects: [text], dynamicProgram, opaque?: why }

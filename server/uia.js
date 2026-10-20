@@ -31,7 +31,6 @@ const U = OS === 'win32' ? psHost('./uiahost.ps1', { label: 'desktop helper', re
   : OS === 'linux' ? lineHost(() => spawn('python3', ['-I', here('./atspihost.py')], { stdio: ['pipe', 'pipe', 'pipe'] }), { label: 'desktop helper', readyMs: 30000 })
   : lineHost(() => null, { why: `the desktop tool doesn't work on ${OS} yet` });
 export const desktopAvailable = U.available;
-export const desktopStatus = U.status;
 
 // The processes a job may show windows for: everything still alive in its job (Windows job or process group).
 async function pidsOf(jobId) {

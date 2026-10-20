@@ -15,7 +15,6 @@ import { jobsAvailable, adoptPid, killJob, closeJob } from './jobhost.js';
 const require = createRequire(import.meta.url);
 let pty = null, loadError = '';
 try { pty = require('node-pty'); } catch (e) { loadError = e.message; }
-export const agentTermAvailable = () => !!pty;
 
 const GATE = fileURLToPath(new URL('./jobgate.cjs', import.meta.url));
 const SESS = new Map();

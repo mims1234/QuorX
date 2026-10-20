@@ -180,15 +180,6 @@ export const decisionModels = () => cached('decisions', async () => {
   return j.data.map((m) => slim(m, 'decision'));
 });
 
-// The key's spend and remaining credit, for the page's spending tracker.
-export async function keyInfo() {
-  const r = await fetch(`${BASE}/api/v1/key`, { headers: headers() });
-  const j = await r.json();
-  if (!r.ok || j.error) throw new Error(j.error?.message || `HTTP ${r.status}`);
-  const d = j.data || {};
-  const spent = d.limit != null && d.limit_remaining != null ? d.limit - d.limit_remaining : null;
-  return { limit: d.limit ?? null, remaining: d.limit_remaining ?? null, usage: d.usage ?? spent, today: d.usage_daily ?? null, week: d.usage_weekly ?? null };
-}
 
 // ---------- images (dedicated Image API: /api/v1/images) ----------
 // The image catalogue (61+ models) merges capabilities from /images/models with prices from /models.

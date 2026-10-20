@@ -12,7 +12,6 @@ const require = createRequire(import.meta.url);
 let pty = null, loadError = '';
 try { pty = require('node-pty'); } catch (e) { loadError = e.message; }
 export const ptyAvailable = () => !!pty;
-export const ptyLoadError = () => loadError;
 
 const KEEP = 400_000; // characters of recent output kept per terminal, replayed when the page reconnects
 const SESS = new Map(); // `${projectId}:${tab}` → { term, buf, subs:Set, exited, code, cols, rows }

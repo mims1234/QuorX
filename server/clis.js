@@ -4,7 +4,7 @@
 // CLI's own flags limited to editing files there (no shell). More can be added in bench/clis.json, same shape.
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn, execFile } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -38,12 +38,6 @@ export function cliDefs() {
 function resolveBin(bin) {
   if (process.platform !== 'win32' || path.isAbsolute(bin)) return { cmd: bin, shell: false };
   return { cmd: bin, shell: true };
-}
-export function detectCli(def) {
-  return new Promise((resolve) => {
-    const { cmd, shell } = resolveBin(def.bin);
-    execFile(cmd, def.version, { timeout: 10000, windowsHide: true, shell }, (err, stdout) => resolve(err ? null : String(stdout).trim().split(/\r?\n/)[0].slice(0, 80)));
-  });
 }
 
 /** Runs one CLI in `cwd` with the prompt on stdin; resolves with { reply, cost, turns, error, code, ms }. */

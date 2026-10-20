@@ -3,9 +3,7 @@
 /* ---- header buttons: a count of running servers, a pulse while a command runs ---- */
 .hdr-count { position: absolute; top: -4px; right: -5px; min-width: 15px; height: 15px; padding: 0 4px; border-radius: 99px; background: var(--ok); color: var(--ok-ink, #04140b); font: 700 9.5px/15px var(--font-ui); text-align: center; }
 .hdr-count[hidden] { display: none; }
-.ch-servers.has-live { color: var(--ok); }
 .hdr-live { display: none; position: absolute; top: 3px; right: 3px; width: 7px; height: 7px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 0 0 var(--amber-glow, rgba(245, 158, 11, .4)); animation: devPulse 1.4s ease-out infinite; }
-.ch-term.busy .hdr-live { display: block; }
 .ch-term.busy { color: var(--amber); }
 @keyframes devPulse { 0% { box-shadow: 0 0 0 0 rgba(245, 158, 11, .55); } 100% { box-shadow: 0 0 0 7px rgba(245, 158, 11, 0); } }
 .ch-proj-tag.missing { color: var(--bad) !important; text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--bad) 60%, transparent); }
@@ -15,7 +13,7 @@
 .srv-pop[hidden] { display: none; }
 .srv-head { display: flex; align-items: center; gap: 8px; }
 .srv-head b { font-size: 13px; color: var(--text-bright, var(--text)); }
-.srv-h-ico svg, .srv-btn svg, .srv-icon svg, .term-title svg { width: 14px; min-width: 14px; height: 14px; flex: none; stroke: currentColor; stroke-width: 1.8; fill: none; vertical-align: -2px; }
+.srv-h-ico svg, .srv-btn svg, .term-title svg { width: 14px; min-width: 14px; height: 14px; flex: none; stroke: currentColor; stroke-width: 1.8; fill: none; vertical-align: -2px; }
 .srv-h-ico { color: var(--accent); display: inline-flex; }
 .srv-sub { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .srv-spacer { flex: 1; }
@@ -35,7 +33,6 @@
 .srv-cmd { font: 11px/1.45 var(--mono); color: var(--accent); background: var(--surface-inset, var(--bg)); border: 1px solid var(--line); border-radius: 5px; padding: 2px 6px; overflow-wrap: anywhere; justify-self: start; }
 .srv-port { color: var(--muted); }
 .srv-url { font: 11px var(--mono); color: var(--ok); text-decoration: none; justify-self: start; }
-.srv-url:hover { text-decoration: underline; }
 .srv-acts { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
 .srv-btn { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 10px; border-radius: 6px; border: 1px solid var(--line-strong); background: var(--panel-2); color: var(--text); font: 600 11.5px var(--font-ui); cursor: pointer; white-space: nowrap; }
 .srv-btn:hover { border-color: var(--accent); color: var(--text-bright, var(--text)); }
@@ -45,7 +42,6 @@
 .srv-btn.stop:hover { background: var(--bad-dim); }
 .srv-btn:disabled { opacity: .6; cursor: progress; }
 .srv-icon { width: 26px; height: 26px; border-radius: 6px; border: 1px solid transparent; background: transparent; color: var(--muted); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; }
-.srv-icon:hover { background: var(--panel-2); color: var(--text); border-color: var(--line); }
 .srv-icon.danger:hover { color: var(--bad); border-color: var(--bad-border, var(--bad)); }
 .srv-sec { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-top: 2px; }
 .srv-empty { font-size: 12px; color: var(--muted); padding: 14px 10px; text-align: center; border: 1px dashed var(--line-strong); border-radius: 8px; line-height: 1.6; }
@@ -65,7 +61,6 @@
 .appbar .term-title b { color: var(--text-bright, var(--text)); }
 .appbar .spacer { flex: 1; }
 .term-filters { display: inline-flex; gap: 4px; flex-wrap: wrap; }
-.term-chip { height: 22px !important; padding: 0 9px !important; border-radius: 99px; border: 1px solid var(--line-strong); background: transparent; color: var(--muted); font-size: 11px; cursor: pointer; }
 .term-chip.on { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
 .term { display: flex; flex-direction: column; height: 100%; background: var(--surface-inset, var(--bg)); }
 .term-out { flex: 1; overflow: auto; padding: 8px 0; font: 12px/1.5 var(--mono); outline: none; }
@@ -208,17 +203,12 @@ input.kx-name:focus { outline: none; border-color: var(--accent); background: va
 /* ---- Browser tab: what the agent's browser showed ---- */
 .bv-who { font-weight: 700; color: var(--violet); white-space: nowrap; }
 .bv-who.you { color: var(--amber); }
-.bv-what { font: 11.5px var(--mono); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
 .bv-step { color: var(--muted); font-size: 11px; white-space: nowrap; }
-.bv-live { color: var(--ok); font-weight: 700; }
 .bv-back { margin-left: auto; }
 .bview { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .bv-frame { flex: 1; min-height: 0; overflow: auto; display: flex; align-items: flex-start; justify-content: center; padding: 10px; background: var(--surface-inset, var(--bg)); }
-.bv-shot { max-width: 100%; height: auto; border: 1px solid var(--line-strong); border-radius: 6px; box-shadow: var(--shadow-sm); }
 .bv-strip { display: flex; gap: 6px; padding: 8px 10px; overflow-x: auto; border-top: 1px solid var(--line); background: var(--panel); flex: none; }
-.bv-thumb { position: relative; flex: none; width: 74px; height: 50px; padding: 0; border-radius: 5px; border: 1.5px solid var(--line-strong); background: var(--bg); overflow: hidden; cursor: pointer; }
 .bv-thumb img { width: 100%; height: 100%; object-fit: cover; object-position: top; display: block; }
-.bv-thumb span { position: absolute; left: 3px; bottom: 2px; font: 700 9.5px var(--mono); color: #fff; background: rgba(0, 0, 0, .6); border-radius: 3px; padding: 0 3px; }
 .bv-thumb.on { border-color: var(--accent); }
 
 /* ---- Terminal tab: what runs in the background ---- */
@@ -237,7 +227,6 @@ input.kx-name:focus { outline: none; border-color: var(--accent); background: va
 @media (max-width: 900px) {
   .pane-tabs { padding: 0 4px; }
   .pane-tabs [data-tab] { padding: 0 8px; font-size: 11.5px; }
-  .pt-follow span { display: none; }
   .pt-follow::after { content: 'Follow'; }
   .urlbar #artSelect { flex-basis: 120px; }
 }
@@ -276,12 +265,8 @@ input.kx-name:focus { outline: none; border-color: var(--accent); background: va
 .qmulti .acts { display: flex; gap: 8px; flex-wrap: wrap; padding-top: 4px; }
 
 /* ---- message actions next to ⧉: ↩ Rewind (your messages), ⑂ Remix (replies) ---- */
-.msg-act { position: absolute; top: 8px; right: 40px; z-index: 2; height: 26px; padding: 0 9px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel-2); color: var(--muted); font: 600 11.5px var(--font-ui); cursor: pointer; opacity: 0; transition: opacity .15s; white-space: nowrap; }
 .msg:hover .msg-act, .msg-act:focus-visible { opacity: 1; }
-.msg-act:hover { color: var(--text); border-color: var(--line-strong); }
 .msg-rewind:hover { color: var(--amber); border-color: var(--amber-line, var(--amber)); }
-.msg-remix:hover { color: var(--violet); border-color: var(--violet-line, var(--violet)); }
-@media (hover: none) { .msg-act, .msg-copy { opacity: .85; } }
 
 /* ---- Browser tab, your view in the harness's browser: a live picture you can click and type into ---- */
 .ubview { position: relative; height: 100%; overflow: hidden; outline: none; background: var(--surface-inset, var(--bg)); cursor: pointer; }
@@ -290,7 +275,6 @@ input.kx-name:focus { outline: none; border-color: var(--accent); background: va
 .ub-status { position: absolute; top: 8px; right: 8px; padding: 3px 9px; border-radius: 6px; background: var(--panel-overlay, var(--panel)); border: 1px solid var(--line-strong); font-size: 11px; color: var(--muted); }
 .ub-status[hidden] { display: none; }
 .bv-nav { width: 26px; height: 24px; padding: 0; }
-.bv-how { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bv-mode, .bv-back { white-space: nowrap; }
 .ub-keys { position: absolute; left: 0; top: 0; width: 1px; height: 1px; opacity: 0; border: 0; padding: 0; resize: none; pointer-events: none; }
 .ubview:focus-within { box-shadow: inset 0 0 0 2px var(--accent); }
@@ -331,7 +315,6 @@ input.kx-name:focus { outline: none; border-color: var(--accent); background: va
 .term-note[hidden], .term-in[hidden], .term-hint[hidden] { display: none !important; }
 
 /* ---- icon row under messages: copy / remix (replies, once done), rewind / copy (yours, on hover) ---- */
-.msg-copy, .msg-act { display: none !important; }
 .msg-tools { display: inline-flex; align-items: center; gap: 2px; margin-left: auto; }
 .mt-btn { display: inline-grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }
 .mt-btn svg { width: 15px; height: 15px; stroke: currentColor; stroke-width: 1.8; fill: none; stroke-linecap: round; stroke-linejoin: round; }
@@ -434,7 +417,6 @@ html:root body .msgs .msg.bot { padding-left: 18px !important; }
 .st-check-add { display: flex; gap: 8px; padding-top: 10px; border-top: 1px solid var(--line); }
 .st-check-add .st-input { flex: 1; min-width: 0; }
 
-
 /* ---------- header icons; the pane is always there (⤢ full width); 🖥 servers live in the pane's tab bar ---------- */
 .chat-head .ch-btn.phone-only { display: none !important; }
 @media (max-width: 900px) { .chat-head .ch-btn.phone-only { display: inline-flex !important; } }
@@ -455,7 +437,6 @@ html:root body .msgs .msg.bot { padding-left: 18px !important; }
 .ch-proj-tag .proj-folder-ico { width: 13px; height: 13px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linejoin: round; }
 .ch-proj-tag { cursor: pointer; }
 
-
 /* ---------- 🧰 quality tools: reviewer, deciders, helpers ---------- */
 .cmp-tp-group { padding: 8px 14px 2px; font: 600 11px var(--font-ui); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
 .cmp-tp-group span { text-transform: none; letter-spacing: 0; font-weight: 400; }
@@ -470,11 +451,9 @@ html:root body .msgs .msg.bot { padding-left: 18px !important; }
 .q-row .q-pick { white-space: nowrap; margin-left: auto; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .q-row .q-pick small { color: var(--muted); font-weight: 400; margin-left: 4px; }
 
-
 /* ---------- 🟢 🟡 🔴 model ratings ---------- */
 .rec { display: inline-block; font-size: 10px; line-height: 1; vertical-align: 1px; cursor: help; }
 .rec-legend { margin-left: 10px; color: var(--muted); font-size: 11.5px; white-space: nowrap; cursor: help; }
-
 
 /* ---------- ⏱ out of steps ---------- */
 .oos-acts { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -485,7 +464,6 @@ html:root body .msgs .msg.bot { padding-left: 18px !important; }
 .oos-acts .primary .oos-rec { background: rgb(0 0 0 / .28); color: #fff; }
 .oos-acts .primary small { color: inherit; opacity: .85; }
 .oos-card .what { color: var(--text); }
-
 
 /* ---------- 📝 prompt enhancer: its reading under the message it read ---------- */
 .msg.user .u-reading-slot:empty { display: none; }
@@ -509,7 +487,6 @@ html:root body .msgs .msg.bot { padding-left: 18px !important; }
 .u-reading.editing .rd-label small { display: block; color: var(--muted); font-weight: 400; margin-top: 2px; }
 .u-reading.editing textarea { width: 100%; box-sizing: border-box; margin: 6px 0; font: inherit; resize: vertical; }
 .u-reading.editing .acts { display: flex; gap: 6px; }
-
 
 /* ---------- ⚡ YOLO: a card that waits for you a few seconds ---------- */
 .aw { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; margin: 8px 0; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); font-size: 12.5px; position: relative; overflow: hidden; }

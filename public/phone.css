@@ -37,15 +37,12 @@
   body[data-mview="preview"] .layout, body[data-mview="preview"] .layout.nopane { grid-template-columns: minmax(0, 1fr) !important; grid-template-rows: minmax(0, 1fr) !important; }
   body[data-mview="preview"] .layout .pane, body[data-mview="preview"] .layout.nopane .pane { display: flex !important; height: 100% !important; min-height: 0; border-top: 0; }
 
-  /* phone header: buttons stay left, the model badge gives way first */
-  .dir-a-head .ch-split, .dir-a-head .ch-close { display: none !important; }
 }
 @media (max-width: 900px) {
   /* the content always ends at the top of the bar */
   .shell { height: calc(100dvh - 48px - var(--mnav-h) - env(safe-area-inset-bottom)) !important; max-height: calc(100dvh - 48px - var(--mnav-h) - env(safe-area-inset-bottom)); min-height: 0 !important; flex: none !important; }
   .layout, .work, .chats, .chatpane { min-height: 0 !important; height: 100%; }
   /* a tighter message box: the budget note goes, controls wrap in two rows */
-  .cmp-control-rack .cbar .mode-note { display: none !important; }
   .chatpane .composer.composer-v2 { padding: 6px 8px 8px; }
   .composer-v2 .composer-box { gap: 4px; padding: 6px 8px; }
   .cmp-textarea { min-height: 38px !important; }
