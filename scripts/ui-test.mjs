@@ -393,6 +393,11 @@ async function runningScenario() {
 // The sidebar's News entry shows a dot for updates you haven't read, What's new lists the versions, and the sample
 // article (a draft that uses every block) draws each block; Play walks its flow, and its compare switches.
 async function newsScenario() {
+  // A test result in the test copy's own logs, with a count unique to this run, for the Tests report's local block.
+  // Written before News first asks for it (the server keeps a view's answer for a few seconds).
+  const own = 100 + (Date.now() % 900);
+  fs.mkdirSync(path.join(HOME, 'logs'), { recursive: true });
+  fs.writeFileSync(path.join(HOME, 'logs', 'test-results.json'), JSON.stringify({ test: { at: new Date().toISOString(), total: own, pass: own, fail: 0, skipped: 0 } }));
   await step('QuorX opens with News unread', async () => {
     fs.rmSync(path.join(HOME, 'data', 'news.json'), { force: true }); // as if What's new was never opened
     await js('location.hash = ""; location.reload(); return true;').catch(() => {});
@@ -474,17 +479,14 @@ async function newsScenario() {
     const list = await api('/api/news');
     const slugs = (list.reports || []).map((x) => x.slug);
     for (const s of ['models', 'tests', 'platforms']) if (!slugs.includes(s)) throw new Error(`the ${s} report is not listed (${slugs.join(', ')})`);
-    // A test result in the test copy's own logs, which the Tests report's "Your own results" block reads.
-    fs.mkdirSync(path.join(HOME, 'logs'), { recursive: true });
-    fs.writeFileSync(path.join(HOME, 'logs', 'test-results.json'), JSON.stringify({ test: { at: new Date().toISOString(), total: 7, pass: 7, fail: 0, skipped: 0 } }));
     await js('location.hash = "#news/reports/tests"; return true;');
     await waitFor(`document.querySelector('#newsView .nb-local table') && !document.querySelector('#newsView .nb-slot')`, 15000, 'the report and its local block');
     const kinds = await js(`return [...new Set([...document.querySelectorAll('#newsView .nb')].map((e) => e.className.split(' ')[1]))];`);
     if (kinds.includes('nb-error')) throw new Error('a block could not be shown');
-    const own = (await textOf('#newsView .nb-local table')).replace(/\s+/g, ' ');
-    if (!/npm test 7 0/.test(own)) throw new Error(`the local block shows "${own}"`);
+    const shown = (await textOf('#newsView .nb-local table')).replace(/\s+/g, ' ');
+    if (!shown.includes(`npm test ${own} 0`)) throw new Error(`the local block shows "${shown}", not this run's ${own} passed`);
     await js(`document.querySelector('#newsView .nb-local').scrollIntoView({ block: 'center' }); return true;`);
-    return `Reports listed: ${slugs.join(', ')}. "${await textOf('#newsView .nw-article h1')}": ${kinds.join(', ')}. Your own results: ${own}`;
+    return `Reports listed: ${slugs.join(', ')}. "${await textOf('#newsView .nw-article h1')}": ${kinds.join(', ')}. Your own results: ${shown}`;
   });
   await step('Close News: back to Home', async () => {
     await click('#newsView .nw-close');
