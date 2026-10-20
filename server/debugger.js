@@ -10,6 +10,7 @@ import net from 'node:net';
 import path from 'node:path';
 import { startBackground, stopBackground, getBackground, listBackground } from './bgjobs.js';
 import { debugAdapters } from './packs/index.js';
+import { stdioLine } from './dapbridge.js';
 
 const NODE_EXTS = ['.js', '.mjs', '.cjs'];
 const adapterFor = (file) => debugAdapters().find((a) => a.exts.includes(path.extname(file).toLowerCase()));
@@ -163,7 +164,7 @@ export async function debugStart({ projectId, cwd, file, args = [], program, pyt
     const a = adapterFor(file);
     if (!a) throw new Error(`the debugger works on ${debugLanguages()} files`);
     plan = await a.start({ file, args, cwd, port, ...(program ? { program } : {}), ...(python ? { python } : {}) });
-    kind = a.pack; line = plan.line;
+    kind = a.pack; line = plan.stdio ? stdioLine(port, plan.line) : plan.line; // stdio: an adapter with no port of its own
   }
   const job = startBackground({ projectId, cwd, line, shell: 'direct', label: `debug ${file}`, logTo, logRel, term });
   let s;

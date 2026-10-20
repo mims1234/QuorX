@@ -74,6 +74,8 @@ export default {
       exceptions: ['user-unhandled'],                  // optional: the adapter's filters for stopping at exceptions
       missing: 'netcoredbg is not installed: …',
     }),
+    // An adapter that speaks DAP over stdin/stdout only (dart debug_adapter, lldb-dap) returns stdio: true and its
+    // own command line; QuorX runs it behind a small bridge that listens on the port, inside the same job.
   },
 
   // 5. Explain: short, specific, for the agent. Only sent when the project is this kind. `have` is the set of
@@ -166,6 +168,8 @@ That runs every self-test your computer can run and writes `pack-test-report.md`
 each pack's result. To test one pack: `npm run test:packs -- --pack dotnet`. To include the Python debugger and the
 pyflakes check, set `QX_PYTHON` to a Python that has debugpy and pyflakes (a venv: `pip install debugpy pyflakes`). To include the Electron app tests, set `QX_ELECTRON` to an Electron binary
 (`node_modules\electron\dist\electron.exe` in any Electron project), or run `npm run desktop:setup` once.
+The Android self-test uses an emulator that is already running, or boots your first virtual device (or the one named
+in `QX_ANDROID_AVD`) and stops it again.
 
 **Have a toolchain we can't test?** Run the kit and paste `pack-test-report.md` into the pack's pull request, or open
 a "Pack test report" issue. A pack moves from *wired* to *tested* once someone with the toolchain reports a pass, and
