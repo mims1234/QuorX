@@ -1,0 +1,96 @@
+# Promote release: turns a version that release.yml published as a pre-release into the latest release.
+# From then on releases/latest/download serves its latest.yml, so installed apps update to it, and it goes to winget.
+# Run it by hand (Actions → Promote release → Run workflow) once the pre-release has been tried. See docs/RELEASING.md.
+#
+# Hardening (as in release.yml): actions are pinned to commits, the version reaches scripts through env, never inline,
+# and the job waits for the "release" environment's approval before it can change anything.
+name: Promote release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to promote, like 0.2.7 (its pre-release must exist)
+        required: true
+        type: string
+
+permissions: {}
+
+# One change to which release is latest at a time (shared with pull.yml).
+concurrency:
+  group: release-channel
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: windows-latest
+    environment: release
+    permissions:
+      contents: write   # edit the release
+    env:
+      VERSION: ${{ inputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Check the pre-release
+        shell: pwsh
+        run: |
+          $v = $env:VERSION.Trim().TrimStart('v')
+          if ($v -notmatch '^\d+\.\d+\.\d+$') { Write-Error "The version must look like 1.2.3."; exit 1 }
+          $r = gh release view "v$v" --json tagName,isPrerelease,isDraft,assets | ConvertFrom-Json
+          if (-not $r) { Write-Error "There is no release v$v."; exit 1 }
+          if ($r.isDraft) { Write-Error "v$v is a draft."; exit 1 }
+          if (-not $r.isPrerelease) { Write-Error "v$v is not a pre-release: it is already promoted, or was never staged."; exit 1 }
+          $names = $r.assets.name
+          foreach ($f in 'latest.yml', "QuorX-Setup-$v.exe", "QuorX-Setup-$v.exe.blockmap", 'SHA256SUMS.txt') {
+            if ($names -notcontains $f) { Write-Error "v$v has no $f."; exit 1 }
+          }
+          $latest = gh release view --json tagName --jq .tagName
+          if ($latest -and [version]$latest.TrimStart('v') -gt [version]$v) { Write-Error "v$v is older than the latest release ($latest). To go back to an older version, use Pull release."; exit 1 }
+          "V=$v" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "PREVIOUS=$latest" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Download its files and check them against their checksums
+        shell: bash
+        run: |
+          mkdir -p dist
+          gh release download "v$V" --dir dist --pattern latest.yml --pattern "QuorX-Setup-$V.exe" --pattern SHA256SUMS.txt
+          cd dist
+          sha256sum -c --strict SHA256SUMS.txt
+          grep -qx "version: $V" latest.yml || { echo "::error::latest.yml is not for $V"; exit 1; }
+
+      - name: Make it the latest release
+        shell: pwsh
+        run: |
+          gh release edit "v$env:V" --prerelease=false --latest
+          $now = gh release view --json tagName --jq .tagName
+          if ($now -ne "v$env:V") { Write-Error "The latest release is $now, not v$env:V."; exit 1 }
+          "v$env:V is now the latest release (it was $env:PREVIOUS). Installed apps will offer it at their next update check." >> $env:GITHUB_STEP_SUMMARY
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: v${{ env.V }}
+          path: src
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      # After the first version is in winget-pkgs (submitted by hand once), later versions can go in by themselves:
+      # add a GitHub token with public_repo scope as the WINGET_TOKEN secret (in the release environment).
+      # The manifests point at this version's own release and pin the installer's hash, checked above.
+      # wingetcreate is a fixed version, checked against its published SHA-256 before it runs.
+      - name: Send the new version to winget-pkgs
+        shell: pwsh
+        env:
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: |
+          if (-not $env:WINGET_TOKEN) { "No WINGET_TOKEN: skipped."; exit 0 }
+          New-Item -ItemType Directory -Force src/desktop/dist | Out-Null
+          Copy-Item "dist/QuorX-Setup-$env:V.exe" src/desktop/dist/
+          node src/scripts/winget-manifest.mjs --version $env:V
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Invoke-WebRequest https://github.com/microsoft/winget-create/releases/download/v1.12.13.0/wingetcreate.exe -OutFile wingetcreate.exe
+          if ((Get-FileHash wingetcreate.exe -Algorithm SHA256).Hash.ToLower() -ne '24042bd37915805615e6cf969ac57c6439124c3fe85823327f5f3fb24bd9ffea') { Write-Error 'wingetcreate.exe does not match its published checksum'; exit 1 }
+          ./wingetcreate.exe submit --token $env:WINGET_TOKEN "src/desktop/dist/winget/$env:V"
