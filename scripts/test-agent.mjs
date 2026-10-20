@@ -1,6 +1,9 @@
 // The agent loop with a scripted model: no network, no money. node --test scripts/
 // Each test gets a throwaway project in the temp folder, removed afterwards.
 import { resolver } from '../server/safefetch.js';
+import { videoBody, editCommand, ffmpegMajor } from '../server/video.js';
+import { primeCatalogue } from '../server/openrouter.js';
+import { execFileSync } from 'node:child_process';
 import { tempDir } from './test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -17,7 +20,7 @@ const reply = (text, calls = [], finishReason = 'stop') => ({ text, toolCalls: c
 
 /** Runs one reply. `script(body, i)` returns the model's i-th answer (or throws). */
 // `budget` sets the project's budget and `spent` seeds what it has already spent (as a ledger row).
-async function run(script, { settings = {}, text = 'build it', resume, onEvent, signal, history, budget, spent, setup = {}, openTab, generateImage, ensemble, checks, chatId, prep, cont, images, comments, enhance, reading } = {}) {
+async function run(script, { settings = {}, text = 'build it', resume, onEvent, signal, history, budget, spent, setup = {}, openTab, generateImage, generateVideo, ensemble, checks, chatId, prep, cont, images, comments, enhance, reading } = {}) {
   const id = `t${Date.now().toString(36)}${(n++).toString(36)}`;
   const dir = tempDir('quorx-run-');
   saveProject({ id, name: 'test', path: dir });
@@ -29,7 +32,7 @@ async function run(script, { settings = {}, text = 'build it', resume, onEvent, 
   const chatStream = async (body, sig, onText) => { bodies.push(structuredClone(body)); const r = await script(body, i++); if (r.text && onText) onText(r.text); return r; };
   try {
     await runAgent({ runId: id, projectId: id, ...(chatId ? { chatId } : {}), ...(images ? { images } : {}), ...(comments ? { comments } : {}), text, resume, ...(cont ? { continue: cont } : {}), ...(reading ? { reading } : {}), history, setup: { model: 'test/model', ...setup }, settings: { approval: 'yolo', mediaEnabled: false, tools: { browser: { on: false } }, ...settings } },
-      (e) => { events.push(e); onEvent?.(e); }, signal || new AbortController().signal, { chatStream, catalogue: [{ id: 'test/model', maxOut: 4000 }], quiet: true, startServer: async ({ name, args }) => ({ key: `fake-${name}`, url: 'http://localhost:9/', status: 'running', command: ['node', ...(args || [])].join(' '), log: '' }), ...(openTab ? { openTab } : {}), ...(generateImage ? { generateImage } : {}), ...(ensemble ? { ensemble } : {}), ...(checks ? { checks } : {}), ...(enhance ? { enhance } : {}) });
+      (e) => { events.push(e); onEvent?.(e); }, signal || new AbortController().signal, { chatStream, catalogue: [{ id: 'test/model', maxOut: 4000 }], quiet: true, startServer: async ({ name, args }) => ({ key: `fake-${name}`, url: 'http://localhost:9/', status: 'running', command: ['node', ...(args || [])].join(' '), log: '' }), ...(openTab ? { openTab } : {}), ...(generateImage ? { generateImage } : {}), ...(generateVideo ? { generateVideo } : {}), ...(ensemble ? { ensemble } : {}), ...(checks ? { checks } : {}), ...(enhance ? { enhance } : {}) });
     return { events, bodies, dir, id, done: events.find((e) => e.t === 'done') };
   } finally { forgetProject(id); ledger.delete(`seed-${id}`); }
 }
@@ -770,6 +773,42 @@ test('a harness-made .agent folder becomes .quorx; another tool\'s .agent is lef
   assert.equal(fs.existsSync(path.join(theirs, '.quorx')), false);
 });
 
+test('renaming the old folder retries while a file in it is briefly locked, then says busy; other errors are raised', async () => {
+  const { migrateAgentDir } = await import('../server/workspace.js');
+  const real = fs.renameSync;
+  const make = () => { const d = tempDir('oh-mig-'); fs.mkdirSync(path.join(d, '.openharness', 'scratch'), { recursive: true }); return d; };
+  const failing = (n, code) => { let left = n; return (...a) => { if (left-- > 0) throw Object.assign(new Error(`${code}: locked`), { code }); return real(...a); }; };
+  try {
+    const a = make();
+    fs.renameSync = failing(2, 'EPERM'); // a scanner holds a file for a moment
+    assert.equal(migrateAgentDir(a), true);
+    assert.ok(fs.existsSync(path.join(a, '.quorx', 'scratch')));
+    const b = make();
+    fs.renameSync = failing(99, 'EBUSY'); // still in use after every retry
+    assert.equal(migrateAgentDir(b), 'busy');
+    assert.ok(fs.existsSync(path.join(b, '.openharness')), 'left as it was, for next time');
+    fs.renameSync = failing(1, 'EINVAL'); // a real error is not "busy"
+    assert.throws(() => migrateAgentDir(b), /EINVAL/);
+  } finally { fs.renameSync = real; }
+});
+
+test('a project whose old folder fails to move still opens, with the folder as it is (reported once)', async () => {
+  const { workspaceDir } = await import('../server/workspace.js');
+  const dir = tempDir('oh-mig-');
+  fs.mkdirSync(path.join(dir, '.openharness'), { recursive: true });
+  const id = `mig${Date.now().toString(36)}`;
+  saveProject({ id, name: 'mig', path: dir });
+  const real = fs.renameSync, log = console.error, said = [];
+  fs.renameSync = () => { throw Object.assign(new Error('EINVAL: odd'), { code: 'EINVAL' }); };
+  console.error = (m) => said.push(String(m));
+  try {
+    assert.equal(workspaceDir(id), dir);
+    assert.equal(workspaceDir(id), dir);
+    assert.equal(said.filter((m) => /couldn't move the old working folder/.test(m)).length, 1, 'said once');
+    assert.ok(fs.existsSync(path.join(dir, '.openharness')));
+  } finally { fs.renameSync = real; console.error = log; forgetProject(id); }
+});
+
 test('a project\'s .openharness folder (the name before QuorX) becomes .quorx, and its launch file follows', async () => {
   const { migrateAgentDir } = await import('../server/workspace.js');
   const dir = tempDir('oh-mig-');
@@ -1352,4 +1391,95 @@ test('cache-read and cache-write tokens from the usage go into the reply stats, 
   assert.equal(m.cachedIn, 2000, 'only calls that reported caching count toward the share');
   assert.equal(m.tokensIn, 3000);
   assert.equal(done.stats.cacheRead, 900);
+});
+
+// ---------- video: a picture as the first frame, and edit_video (no paid calls) ----------
+test('make_video body: a start picture goes in as the first frame, only for models that take one', () => {
+  const spec = { frames: ['first_frame', 'last_frame'], aspects: ['16:9', '9:16'] };
+  const ok = videoBody({ model: 'v/a', prompt: 'waves', secs: 5, res: '480p', spec, firstFrame: 'data:image/png;base64,AAA' });
+  assert.deepEqual(ok.body.frame_images, [{ type: 'image_url', image_url: { url: 'data:image/png;base64,AAA' }, frame_type: 'first_frame' }]);
+  assert.equal(ok.body.aspect_ratio, '16:9');
+  assert.equal(ok.body.duration, 5);
+  assert.match(videoBody({ model: 'v/b', prompt: 'x', spec: { frames: [] }, firstFrame: 'data:image/png;base64,AAA' }).error, /can't start from a picture/);
+  const near = videoBody({ model: 'v/c', prompt: 'x', spec: { aspects: ['16:9', '9:16'] }, aspect: '3:4' });
+  assert.equal(near.body.aspect_ratio, '9:16');
+  assert.match(near.note, /nearest shape, 9:16/);
+  assert.equal('frame_images' in videoBody({ model: 'v/a', prompt: 'x', spec }).body, false);
+});
+
+test('edit_video command: stills loop, clips can be cut, music loops under the voice, the graph goes in a file', () => {
+  const e = editCommand({ clips: [{ path: 'assets/a.png', seconds: 2 }, 'assets/b.mp4', { path: 'assets/c.mp4', seconds: 1.5 }], voice: 'assets/v.mp3', music: 'assets/m.mp3', musicVolume: 0.3, out: 'assets/edits/t.mp4', filterFile: '.quorx/edits/t.filter', ffmpegMajor: 9 });
+  assert.equal(e.line, 'ffmpeg -hide_banner -loglevel error -y -loop 1 -framerate 30 -t 2 -i "assets/a.png" -i "assets/b.mp4" -t 1.5 -i "assets/c.mp4" -i "assets/v.mp3" -stream_loop -1 -i "assets/m.mp3" -/filter_complex ".quorx/edits/t.filter" -map "[vout]" -map "[aout]" -c:a aac -b:a 192k -shortest -c:v libx264 -preset veryfast -crf 20 -r 30 -movflags +faststart "assets/edits/t.mp4"');
+  assert.match(e.filter, /\[v0\]\[v1\]\[v2\]concat=n=3:v=1:a=0\[vout\]/);
+  assert.match(e.filter, /\[3:a\]apad\[vo\];\n\[4:a\]volume=0\.3\[mu\];\n\[vo\]\[mu\]amix=inputs=2:duration=first:normalize=0\[aout\]/);
+  assert.match(e.filter, /scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720/);
+  const old = editCommand({ clips: ['a.mp4'], out: 'o.mp4', filterFile: 'f.txt', ffmpegMajor: 6, aspect: '9:16' });
+  assert.match(old.line, /-filter_complex_script "f\.txt" -map "\[vout\]" -an /);
+  assert.match(old.filter, /scale=720:1280/);
+  assert.match(editCommand({ clips: ['a b$x.mp4'], out: 'o.mp4', filterFile: 'f' }).error, /can't pass safely/);
+  assert.match(editCommand({ clips: ['notes.txt'], out: 'o.mp4', filterFile: 'f' }).error, /not a video or a picture/);
+  assert.match(editCommand({ clips: ['a.mp4'], out: 'o.mov', filterFile: 'f' }).error, /\.mp4/);
+  assert.equal(ffmpegMajor('9.0.2-full_build-www.gyan.dev'), 9);
+  assert.equal(ffmpegMajor('N-118000-gabc'), 0);
+});
+
+const TEST_VIDEO = { id: 'test/vid-start', name: 'Test video', kind: 'video', skus: { duration_seconds_480p: 0.02, cents_per_image_input: '1' }, resolutions: ['480p'], durations: [5], aspects: ['16:9', '9:16'], frames: ['first_frame'] };
+const TEST_VIDEO_TEXT = { ...TEST_VIDEO, id: 'test/vid-text', frames: [] };
+const videoSettings = (model) => ({ mediaEnabled: true, yoloCheck: false, tools: { browser: { on: false }, image: { on: false }, music: { on: false }, speech: { on: false }, video: { on: true, pick: 'fixed', models: [model], resolution: '480p', seconds: 5 } } });
+
+test('make_video starts from a project picture with a model that takes one', async () => {
+  primeCatalogue('videos', [TEST_VIDEO, TEST_VIDEO_TEXT]);
+  const sent = [];
+  const { bodies, events } = await run((body, i) => [
+    reply('', [['make_video', { prompt: 'the lighthouse beam sweeps across the sea', why: 'shot 1', start_image: 'assets/frame.png', aspect_ratio: '16:9' }]]),
+    reply('Done.'),
+  ][i], { settings: videoSettings('test/vid-start'), prep: (dir) => { fs.mkdirSync(path.join(dir, 'assets'), { recursive: true }); fs.writeFileSync(path.join(dir, 'assets', 'frame.png'), 'fake-png'); },
+    generateVideo: async (b) => { sent.push(b); return { url: `data:video/mp4;base64,${Buffer.from('mp4').toString('base64')}`, usage: { cost: 0.1 }, ms: 5 }; } });
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].frame_images[0].frame_type, 'first_frame');
+  assert.equal(sent[0].frame_images[0].image_url.url, `data:image/png;base64,${Buffer.from('fake-png').toString('base64')}`);
+  assert.match(toolResults(bodies[1]).at(-1), /starting from assets\/frame\.png/);
+  const card = of(events, 'approval')[0];
+  assert.ok(Math.abs(card.est - 0.11) < 1e-9, `5 s at $0.02 plus 1 cent for the picture: ${card.est}`);
+  assert.match(card.detail, /from the picture assets\/frame\.png/);
+  const tool = bodies[0].tools.find((t) => t.function.name === 'make_video');
+  assert.match(tool.function.parameters.properties.start_image.description, /test\/vid-start/);
+});
+
+test('make_video with a start picture and a text-only model is refused before any approval or charge', async () => {
+  primeCatalogue('videos', [TEST_VIDEO, TEST_VIDEO_TEXT]);
+  let called = 0;
+  const { bodies, events } = await run((body, i) => [
+    reply('', [['make_video', { prompt: 'waves', why: 'x', start_image: 'assets/frame.png' }]]),
+    reply('Done.'),
+  ][i], { settings: videoSettings('test/vid-text'), generateVideo: async () => { called++; return {}; } });
+  assert.match(toolResults(bodies[1]).at(-1), /^Error: test\/vid-text can't start from a picture\. None of the video models in use can/);
+  assert.equal(called, 0);
+  assert.equal(of(events, 'approval').length, 0);
+  assert.equal('start_image' in bodies[0].tools.find((t) => t.function.name === 'make_video').function.parameters.properties, false);
+});
+
+let hasFfmpeg = false;
+try { execFileSync('ffmpeg', ['-version'], { stdio: 'ignore' }); hasFfmpeg = true; } catch { /* not installed */ }
+test('edit_video joins a still, a clip and a voice-over into one mp4 in the project, through the command gate', { skip: !hasFfmpeg && 'ffmpeg is not installed' }, async () => {
+  let runId; const cards = [];
+  const { bodies, dir, events } = await run((body, i) => [
+    reply('', [['edit_video', { clips: [{ path: 'assets/still.png', seconds: 1 }, { path: 'assets/clip.mp4' }], voice: 'assets/voice.mp3', out: 'assets/edits/teaser.mp4' }]]),
+    reply('Done.'),
+  ][i], { settings: { approval: 'strict', mediaEnabled: true, tools: { browser: { on: false }, image: { on: true }, video: { on: false }, music: { on: false }, speech: { on: false } } },
+    prep: (d) => {
+      const a = path.join(d, 'assets'); fs.mkdirSync(a);
+      const ff = (...x) => execFileSync('ffmpeg', ['-loglevel', 'error', '-y', ...x], { cwd: a });
+      ff('-f', 'lavfi', '-i', 'testsrc=size=320x240:rate=10', '-frames:v', '1', 'still.png');
+      ff('-f', 'lavfi', '-i', 'testsrc=size=640x360:rate=24', '-t', '1', '-pix_fmt', 'yuv420p', 'clip.mp4');
+      ff('-f', 'lavfi', '-i', 'sine=frequency=440:duration=1', 'voice.mp3');
+    },
+    onEvent: (e) => { if (e.t === 'start') runId = e.runId; if (e.t === 'approval') { cards.push(e); setTimeout(() => answerApproval(runId, e.id, { approve: true }), 5); } } });
+  const result = toolResults(bodies[1]).at(-1);
+  assert.match(result, /^Saved the finished film as assets\/edits\/teaser\.mp4 \([\d.]+ MB, 1280×720, 2 clips, voice-over\)/, result);
+  assert.ok(fs.statSync(path.join(dir, 'assets', 'edits', 'teaser.mp4')).size > 1000);
+  assert.ok(fs.existsSync(path.join(dir, '.quorx', 'edits', 'teaser.filter')));
+  assert.equal(cards.length, 1, 'the ffmpeg line went through the command approval');
+  assert.match(JSON.stringify(cards[0]), /ffmpeg/);
+  assert.ok(of(events, 'file').some((e) => e.path === 'assets/edits/teaser.mp4'));
 });

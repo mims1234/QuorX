@@ -1,0 +1,8 @@
+date,description,amount,category
+2026-10-01,Pay,500.00,salary
+2026-10-02,Missing amount,,food
+2026-10-03,Lunch,-25.00,food
+2026-02-30,Bad date,-10.00,food
+2026-10-04,Not a number,-abc,fun
+2026-10-05,Short row
+2026-10-06,Snacks,-35.00,food

@@ -171,6 +171,7 @@ function showDetail(r) {
     ${r.scores ? `<p>${keys.map((k) => `${esc(k)} <b>${r.scores[k]}</b>`).join(' · ')} → <b>${r.total}</b>/20 ${r.pass ? '✓ passed' : '✗ did not pass'}</p>` : ''}
     ${r.saved ? `<p><a href="${esc(r.saved)}/index.html" target="_blank" rel="noopener">Open the build ↗</a> <span class="note">(${esc(r.saved)})</span></p>` : ''}
     ${r.summary ? `<p>${esc(r.summary)}</p>` : ''}
+    ${r.tests ? `<p><b>Hidden checks: ${r.tests.passed} of ${r.tests.total} passed</b></p>${r.tests.fails?.length ? `<ul>${r.tests.fails.map((x) => `<li>${esc(x.name)}${x.note ? `: ${esc(x.note)}` : ''}</li>`).join('')}</ul>` : ''}` : ''}
     ${r.bugs?.length ? `<p><b>Bugs the judge found</b></p><ul>${r.bugs.map((b) => `<li>${esc(b)}</li>`).join('')}</ul>` : ''}
     <p class="note">Cost <span class="money">${money(r.cost)}</span> + judge <span class="money">${money(r.judgeCost)}</span> · ${((r.ms || 0) / 60000).toFixed(1)} min · ${r.steps ?? 0} steps · ${r.toolCalls ?? 0} tool calls (${r.toolErrors ?? 0} errors) · ${r.helperTools ?? 0} by helpers · ${r.files ?? 0} files</p>
     ${Object.keys(r.tools || {}).length ? `<div class="tools">${Object.entries(r.tools).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<span class="tool">${esc(k)} ×${v}</span>`).join('')}</div>` : ''}

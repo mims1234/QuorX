@@ -92,7 +92,7 @@ what the toolkit READMEs describe. This is a reading of the source code, not a m
 |---|---|---|
 | Plan the whole film first | `plan` is required first for any build: spec, live to-do list, done-when checks. No shot-list fields yet. | Matches |
 | Sign-off before costly steps | Plan first (Go ahead / Stop here / Changes); build tools are refused until Go ahead. | Ahead |
-| Deterministic, seekable rendering | No frame renderer and no ffmpeg; `make_video` asks a paid model for a clip of up to 15 s. | Missing |
+| Deterministic, seekable rendering | No frame renderer yet. `make_video` asks a paid model for a clip of up to 15 s, optionally starting from a picture (first frame), and `edit_video` joins clips, stills, a voice-over and music with ffmpeg. | Partial |
 | Router, skills on demand | `use_skill` / `save_skill`; no video skill until this PR. | Matches |
 | Shot-recipe library | None. | Missing |
 | Lock style and references early | `DESIGN.md` + `tokens.css`, design lint, brand score, `extract_design`. Nothing for characters or locations. | Matches |
@@ -100,7 +100,7 @@ what the toolkit READMEs describe. This is a reading of the source code, not a m
 | Vision critique, rubric, hard limit | A separate reviewer plays the build, scores five topics against a bar, 1 send-back by default (3 at most); verdicts logged and compared with a judge. Reviews pages, not frames. | Ahead |
 | Critics split by topic, other model | One reviewer scores every topic, from another model family. | Partial |
 | Select against the original brief | The reviewer tests against the request and plan; the enhancer's reading reaches the judges. One candidate only. | Partial |
-| Editable output as tracks | None for video; Undo and Review changes cover files. | Missing |
+| Editable output as tracks | `edit_video` keeps its filter graph in `.quorx/edits/`, and Undo covers the finished file; no timeline editor. | Partial |
 | Confirm before posting | Paid media and risky commands need approval: the person, or in YOLO a quorum of deciders that never includes the chat's own model. | Ahead |
 | Video craft knowledge | One line on motion in `design-craft`. This PR adds `video-direction`. | Missing → this PR |
 

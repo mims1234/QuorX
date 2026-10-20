@@ -141,6 +141,8 @@ export async function decisions(model, state, questions, signal) {
 const cache = {};
 // Drops every cached catalogue, so the next request fetches fresh model lists and prices.
 export function clearCatalogues() { for (const k of Object.keys(cache)) delete cache[k]; }
+// Tests put a catalogue in place of the network's (videos, images, speech, music) so prices and parameters are known.
+export function primeCatalogue(key, list) { cache[key] = { v: list, at: Date.now() }; }
 async function cached(key, fn) {
   const c = cache[key];
   if (c && Date.now() - c.at < 3600e3) return c.v;

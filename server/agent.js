@@ -47,6 +47,7 @@ import { blobData } from './blobs.js';
 import { modelNotes } from './modelcards.js';
 import { ownAddresses } from './access.js';
 import { safeFetch } from './safefetch.js';
+import { videoBody, canStartFromImage, editCommand, ffmpegMajor } from './video.js';
 
 // The paid media categories and the tool each one gives the agent.
 export const MEDIA = {
@@ -71,7 +72,7 @@ export const YOLO_GROUPS = {
   skills: ['save_skill'],
 };
 // Plan first (⚙ Agent loop): what waits for the plan's Go ahead.
-const PLAN_GATED = new Set([...YOLO_GROUPS.files, 'shell', 'run_command', 'terminal', 'start_server']);
+const PLAN_GATED = new Set([...YOLO_GROUPS.files, 'shell', 'run_command', 'terminal', 'start_server', 'edit_video']);
 const YOLO_GROUP_OF = Object.fromEntries(Object.entries(YOLO_GROUPS).flatMap(([g, names]) => names.map((n) => [n, g])));
 
 export const DEFAULTS = {
@@ -256,6 +257,8 @@ export async function estimateFor(cat, model, args, T) {
     const secs = spec?.durations?.length ? spec.durations.reduce((a, b) => (Math.abs(b - want) < Math.abs(a - want) ? b : a)) : want;
     const seen = measured.get(`${model}|${res}|${secs}`);
     const p = seen ? { est: seen, basis: 'measured' } : videoPrice(spec, res, secs);
+    // Starting from a picture can cost extra per input picture (e.g. Grok Imagine: 1 cent).
+    if (args?.start_image && !seen && spec?.skus?.cents_per_image_input) p.est += Number(spec.skus.cents_per_image_input) / 100;
     return { model, ...p, detail: `${secs}s at ${res}`, res, secs };
   }
   if (cat === 'music') {
@@ -611,10 +614,20 @@ const TOOLS = ({ artifacts, decide, cats, choices, code, browser, skills, ask, d
     type: 'object', required: ['prompt', 'why'], properties: {
       prompt: { type: 'string', description: 'Vivid visual description' }, why: { type: 'string', description: 'One plain sentence: why this picture is worth it' },
       aspect_ratio: { type: 'string', enum: ['1:1', '16:9', '21:9', '9:16', '4:3', '3:4', '3:2', '2:3'], description: 'The shape, to fit where the picture goes: 16:9 or 21:9 for hero banners and desktop backgrounds, 9:16 for phone screens, 3:4 or 2:3 for portrait cards and posters, 1:1 square (default)' }, ...modelParam(choices.image) } } } }] : []),
-  ...(cats.includes('video') ? [{ type: 'function', function: { name: 'make_video', description: 'Generate a short video clip (paid, usually the most expensive tool; takes 30 seconds to a few minutes; needs approval). It opens as a video artifact.', parameters: {
+  ...(cats.includes('video') ? [{ type: 'function', function: { name: 'make_video', description: `Generate a short video clip (paid, usually the most expensive tool; takes 30 seconds to a few minutes; needs approval). It opens as a video artifact. For a film of several clips: make the key pictures first${choices.videoStart?.length ? ' and start each clip from one (start_image), so characters and style stay the same from shot to shot' : ''}; then join the clips, the voice-over and the music into one file${code ? ' with edit_video' : ''}.`, parameters: {
     type: 'object', required: ['prompt', 'why'], properties: {
       prompt: { type: 'string', description: 'What happens on screen: subject, action, camera, mood' }, why: { type: 'string' },
-      seconds: { type: 'integer', minimum: 1, maximum: 15, description: 'Length in seconds (shorter is cheaper)' }, ...modelParam(choices.video) } } } }] : []),
+      seconds: { type: 'integer', minimum: 1, maximum: 15, description: 'Length in seconds (shorter is cheaper)' },
+      aspect_ratio: { type: 'string', enum: ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'], description: '16:9 (default) for widescreen, 9:16 for phones' },
+      ...(choices.videoStart?.length ? { start_image: { type: 'string', description: `A picture to start the clip from (its first frame): a project path such as assets/generated/frame.png, artifact:<id>, or attached:1. Only these models take one: ${choices.videoStart.join(', ')}.` } } : {}),
+      ...modelParam(choices.video) } } } }] : []),
+  ...(code && cats.length ? [{ type: 'function', function: { name: 'edit_video', description: 'Join video clips and pictures (in order), a voice-over and music into one finished .mp4 in the project, with ffmpeg on this computer (free; it runs as a shell command, so the usual command rules and approval apply). The clips\' own sound is left out; the voice and the music run to the end of the picture.', parameters: {
+    type: 'object', required: ['clips', 'out'], properties: {
+      clips: { type: 'array', minItems: 1, maxItems: 40, items: { type: 'object', required: ['path'], properties: { path: { type: 'string', description: 'A video or picture in the project' }, seconds: { type: 'number', description: 'A picture shows this long (default 3); a video is cut to this length' } } } },
+      voice: { type: 'string', description: 'A voice-over audio file in the project' }, music: { type: 'string', description: 'A music file in the project (it loops under the picture)' },
+      music_volume: { type: 'number', minimum: 0, maximum: 1, description: 'Music loudness, 0.25 by default (under a voice)' },
+      aspect_ratio: { type: 'string', enum: ['16:9', '9:16', '1:1', '4:3', '3:4'], description: 'The frame of the finished film (default 16:9); every clip is fitted into it' },
+      out: { type: 'string', description: 'Where to save it, e.g. assets/edits/trailer.mp4' } } } } }] : []),
   ...(cats.includes('music') ? [{ type: 'function', function: { name: 'compose_music', description: 'Compose music (paid; needs approval). It opens as an audio artifact.', parameters: {
     type: 'object', required: ['prompt', 'why'], properties: {
       prompt: { type: 'string', description: 'Genre, mood, instruments, tempo; lyrics for a song with words' }, why: { type: 'string' }, ...modelParam(choices.music) } } } }] : []),
@@ -832,6 +845,8 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   // When the agent picks the model, its tool lists each option with an estimated price.
   const choices = {};
   for (const c of cats) if (T[c].pick === 'agent' && T[c].models.length > 1) choices[c] = await Promise.all(T[c].models.map((m) => estimateFor(c, m, {}, T)));
+  // The video models in use that can start a clip from a picture (the catalogue lists a first-frame input).
+  if (cats.includes('video')) choices.videoStart = (await videoModels().catch(() => [])).filter((m) => T.video.models.includes(m.id) && canStartFromImage(m)).map((m) => m.id);
   const memory = (projectNotes ? `\n\n[Project notes: AGENT.md]\n${projectNotes}` : root ? '\n\n[Project notes: there is no AGENT.md yet. Create one once there is something worth recording.]' : '')
     + (design ? `\n\n[Design system: ${design.md.trim() ? 'DESIGN.md' : 'tokens.css'}${design.md.trim() && design.tokens.trim() ? ' + tokens.css' : ''}, "${design.name}"]\n${design.md.trim() ? clip(design.md.trim(), 5000) : `tokens.css defines: ${clip(design.tokens.match(/--[\w-]+/g)?.join(', ') || '', 600)}`}\n(This is the project's chosen look: follow it for every page and screen you build here unless the user asks for something else, and don't ask the user to pick a style.${design.tokens.trim() ? ' tokens.css in the project root holds its values as CSS custom properties: link it before your own styles (<link rel="stylesheet" href="tokens.css">, with the right relative path) and use var() for every colour, font, radius and space instead of writing values. The design lint flags colours that are not in it.' : ''})` : '')
     + (workLog ? `\n\n[Work log: what recent chats changed here]\n${workLog}` : '')
@@ -1971,6 +1986,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       return `Start server "${args.name}": ${saved ? `${[saved.command, ...saved.args].join(' ')} (saved launch config)` : [args.command, ...(args.args || [])].join(' ')}`;
     }
     if (name === 'delegate') return `Ask a helper: "${clip(args.task, 160)}"`;
+    if (name === 'edit_video') return `Edit a film with ffmpeg: ${Array.isArray(args.clips) ? args.clips.length : 0} clips${args.voice ? ', a voice-over' : ''}${args.music ? ', music' : ''} → ${args.out}`;
     if (name === 'plan') return `Plan: ${clip(args.spec || '', 400)}${Array.isArray(args.items) ? `\nTo do: ${args.items.map((x) => x?.text).filter(Boolean).join(' · ')}` : ''}`;
     if (name === 'write_file') return `Write ${args.path} (${String(args.content || '').length} characters)`;
     if (name === 'append_file') return `Append ${String(args.content || '').length} characters to ${args.path}`;
@@ -2121,7 +2137,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     // Strict asks before paid media (inside media(), with the price), helpers or decider checks only if the user chose that, or before
     // every tool when the user chose that. A plan asks once in Strict; ticking its items off later doesn't.
     // Commands have their own gate (the rule engine, in codeTool), so they never get a second, generic card.
-    if (((S.approval === 'strict' && strictAsks(name) && !allowed.has(name)) || yoloAsks(name)) && !(name === 'plan' && run.plan) && !['shell', 'run_command', 'terminal'].includes(name)) {
+    if (((S.approval === 'strict' && strictAsks(name) && !allowed.has(name)) || yoloAsks(name)) && !(name === 'plan' && run.plan) && !['shell', 'run_command', 'terminal', 'edit_video'].includes(name)) {
       const card = { id: newApprovalId(), tool: name, free: true, est: 0, what: toolSummary(name, args), why: '' };
       const ans = await askUser(card);
       emit({ t: 'approval_done', id: card.id, ...ans, at: at() });
@@ -2184,6 +2200,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (name === 'run_command' || [...CODE_TOOLS, ...PROJECT_TOOLS].some((t) => t.function.name === name)) return codeTool(name, args);
     if (['list_docs', 'read_doc', 'search_docs'].includes(name)) return docTool(name, args);
     if (name === 'delegate') return delegate(args, step);
+    if (name === 'edit_video') return editVideo(args);
     return `Error: unknown tool ${name}.`;
   }
   async function docTool(name, args) {
@@ -3020,7 +3037,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     const what = cat === 'speech' ? clip(args.text, 200) : clip(args.prompt, 300);
     // Every model in the category with its price, so the user can switch before approving.
     const options = await Promise.all(T[cat].models.map((m) => estimateFor(cat, m, args, T)));
-    const card = { id, tool, cat, model: plan.model, est: plan.est, basis: plan.basis, detail: plan.detail, what, why: clip(args.why, 200), mode: S.approval,
+    const card = { id, tool, cat, model: plan.model, est: plan.est, basis: plan.basis, detail: `${plan.detail}${cat === 'video' && args.start_image ? `, from the picture ${clip(args.start_image, 120)}` : ''}`, what, why: clip(args.why, 200), mode: S.approval,
       pickedBy: T[cat].pick === 'agent' && T[cat].models.length > 1 ? 'agent' : 'settings', options: options.map(({ model, est, basis, detail }) => ({ model, est, basis, detail })) };
     const overBudget = (p) => stats.mediaSpent + p.est > S.budget;
     const budgetNo = (p) => ({ approve: false, by: 'budget', reason: `This would bring media spending to about $${(stats.mediaSpent + p.est).toFixed(3)}, over this reply's $${S.budget} budget.` });
@@ -3077,6 +3094,17 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     const cat = CAT_OF[name];
     if (!T[cat]?.on) return `Error: ${name} is switched off by the user.`;
     const plan = await estimateFor(cat, modelFor(cat, args), args, T);
+    // A start picture is read, and the model checked, before anyone is asked to pay for it.
+    let firstFrame = null;
+    if (cat === 'video' && args.start_image) {
+      const spec = (await videoModels().catch(() => [])).find((m) => m.id === plan.model);
+      if (!canStartFromImage(spec)) {
+        const can = (await videoModels().catch(() => [])).filter((m) => T.video.models.includes(m.id) && canStartFromImage(m)).map((m) => m.id);
+        return `Error: ${plan.model} can't start from a picture.${can.length ? ` These models can: ${can.join(', ')}${T.video.pick === 'agent' ? ' (pass one as model)' : ' (the user can make one the first choice in the video settings)'}.` : ' None of the video models in use can; leave out start_image.'}`;
+      }
+      firstFrame = await startPicture(String(args.start_image));
+      if (!firstFrame) return `Error: no picture at ${clip(args.start_image, 120)}. Give a PNG, JPEG or WebP in the project (e.g. assets/generated/frame.png), artifact:<id> of a picture, or attached:1.`;
+    }
     const ans = await approve(cat, args, plan);
     if (!ans.approve) {
       const who = ans.by === 'user' ? 'The user' : ans.by === 'budget' ? 'The budget check' : 'The automatic approval check';
@@ -3110,16 +3138,17 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     }
     if (cat === 'video') {
       const spec = (await videoModels().catch(() => [])).find((m) => m.id === p.model);
-      const body = { model: p.model, prompt: String(args.prompt || ''), duration: p.secs, resolution: p.res };
-      if (!spec?.aspects?.length || spec.aspects.includes('16:9')) body.aspect_ratio = '16:9';
-      emit({ t: 'note', level: 'info', msg: `Video job started on ${short(p.model)} (${p.detail}); this usually takes 30 seconds to a few minutes.`, at: at() });
-      const r = await generateVideo(body, signal, (status, ms) => emit({ t: 'media_status', tool: name, status, ms, at: at() }));
+      const vb = videoBody({ model: p.model, prompt: args.prompt, secs: p.secs, res: p.res, spec, aspect: args.aspect_ratio, firstFrame });
+      if (vb.error) return `Error: ${vb.error}. Nothing was charged.`; // the user switched to a model without picture input
+      const body = vb.body;
+      emit({ t: 'note', level: 'info', msg: `Video job started on ${short(p.model)} (${p.detail}${firstFrame ? ', from a picture' : ''}); this usually takes 30 seconds to a few minutes.`, at: at() });
+      const r = await (deps.generateVideo || generateVideo)(body, signal, (status, ms) => emit({ t: 'media_status', tool: name, status, ms, at: at() }));
       const cost = r.usage.cost ?? p.est;
       if (r.usage.cost) measured.set(`${p.model}|${p.res}|${p.secs}`, r.usage.cost);
       spend(cost, r.usage);
       const id = newId(`video ${clip(args.prompt, 30)}`);
       notes.push(`made video ${id}`);
-      return deliverMedia(id, r.url, 'mp4', { id, kind: 'video', title: clip(args.prompt, 40), url: r.url, v: 1, cost, ms: r.ms, model: p.model }, `Video made with ${p.model} ($${cost.toFixed(4)}, ${Math.round(r.ms / 1000)} s).${switched}`);
+      return deliverMedia(id, r.url, 'mp4', { id, kind: 'video', title: clip(args.prompt, 40), url: r.url, v: 1, cost, ms: r.ms, model: p.model }, `Video made with ${p.model} ($${cost.toFixed(4)}, ${Math.round(r.ms / 1000)} s)${firstFrame ? `, starting from ${clip(args.start_image, 80)}` : ''}.${vb.note}${switched}`);
     }
     if (cat === 'music') {
       const r = await composeMusic({ model: p.model, prompt: String(args.prompt || '') }, signal);
@@ -3135,6 +3164,41 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     const id = newId(`voice ${clip(args.text, 24)}`);
     notes.push(`spoke audio ${id}`);
     return deliverMedia(id, r.url, 'mp3', { id, kind: 'audio', title: `Voice: ${clip(args.text, 34)}`, url: r.url, v: 1, cost: p.est, ms: r.ms, model: p.model }, `Speech made with ${p.model} (≈$${p.est.toFixed(4)}, ${r.ms} ms).${switched}`);
+  }
+
+  // make_video's start picture as a data URL: a project file, a picture artifact, or one the user attached.
+  async function startPicture(ref) {
+    const r = /^(file|artifact|attached):/.test(ref) ? ref : `file:${ref}`;
+    if (r.startsWith('artifact:') && arts.get(r.slice(9))?.kind !== 'image') return null;
+    const [u] = await decideImages([r]);
+    return u && u.length < 14e6 ? u : null;
+  }
+
+  // edit_video: one finished film from clips, stills, a voice-over and music (server/video.js builds the ffmpeg line).
+  // It runs as a shell command, so the command rules, approval, snapshots and Stop all apply as usual.
+  async function editVideo(args) {
+    if (!root) return 'Error: the project folder is switched off.';
+    const ff = (await detectToolchains().catch(() => [])).find((t) => t.id === 'ffmpeg');
+    if (!ff?.found) return 'Error: ffmpeg is not installed on this computer, so clips can\'t be joined yet. Tell the user they can install FFmpeg from ⚙ Settings → Setup check (or ask to run its winget install), then call edit_video again; QuorX looks for it again on each reply.';
+    const inProject = (p) => { try { const full = safePath(root, String(p)); return fs.existsSync(full) && fs.statSync(full).isFile(); } catch { return false; } };
+    const clips = (Array.isArray(args.clips) ? args.clips : []).map((c) => (typeof c === 'string' ? { path: c } : c || {}));
+    for (const p of [...clips.map((c) => c.path), args.voice, args.music].filter(Boolean)) if (!inProject(p)) return `Error: no file ${clip(p, 120)} in the project. Use paths from list_files (made media is under assets/generated/).`;
+    const out = String(args.out || '').replace(/\\/g, '/');
+    let outFull;
+    try { outFull = safePath(root, out); } catch (e) { return `Refused: ${e.message}.`; }
+    const blocked = agentWriteBlocked(path.relative(root, outFull)); if (blocked) return `Refused: ${blocked}.`;
+    const filterRel = `.quorx/edits/${path.basename(out, '.mp4').replace(/[^\w.-]+/g, '-') || 'edit'}.filter`;
+    const e = editCommand({ clips, voice: args.voice || '', music: args.music || '', musicVolume: args.music_volume, aspect: args.aspect_ratio, out, filterFile: filterRel, ffmpegMajor: ffmpegMajor(ff.version) || 7 });
+    if (e.error) return `Error: ${e.error}`;
+    fs.mkdirSync(path.join(root, '.quorx', 'edits'), { recursive: true });
+    fs.writeFileSync(path.join(root, filterRel), e.filter);
+    fs.mkdirSync(path.dirname(outFull), { recursive: true });
+    checkpoint(root, filesId, out); // ↶ Undo removes it again
+    const result = await codeTool('shell', { command: e.line });
+    if (!fs.existsSync(outFull) || !fs.statSync(outFull).size) return `${result}\n\nThe edit did not produce ${out}. The filter graph is in ${filterRel}; read the error above, fix the inputs, and call edit_video again.`;
+    emit({ t: 'file', path: out, at: at() });
+    notes.push(`edited film ${out}`);
+    return `Saved the finished film as ${out} (${(fs.statSync(outFull).size / 1048576).toFixed(1)} MB, ${e.width}×${e.height}, ${clips.length} clips${args.voice ? ', voice-over' : ''}${args.music ? ', music' : ''}); the user sees it under Files. To check it, open site:${out} in the browser.\n${clip(result, 600)}`;
   }
 
   // With a project folder, made media is a file there (the user sees it under Files), not an artifact.
