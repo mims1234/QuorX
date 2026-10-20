@@ -141,7 +141,7 @@ chats and goes through the same rule engine as `shell`.
   Servers still start only from a short list of programs: node, npm, npx, python, pip, deno, bun, pnpm, yarn and uv.
   Commands of any kind go through `shell`.
 - **Skills and templates:** built-in playbooks in `skills/` (`web-app`, `design-craft`, `design-system`, `node-server`,
-  `canvas-game`, `ui-review`, `debug-loop`, `decide-well`) load with `use_skill`; the agent can save its own after a
+  `canvas-game`, `ui-review`, `debug-loop`, `decide-well`, `video-direction`) load with `use_skill`; the agent can save its own after a
   task that took several tries. `scaffold` copies a starter from `templates/` (static site, Node server, canvas game,
   Python server) without overwriting anything.
 - **Documents:** attach files of any kind. Text, code, PDF, Word, PowerPoint, Excel, OpenDocument, EPUB and HTML are
