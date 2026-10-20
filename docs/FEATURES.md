@@ -25,6 +25,10 @@ a real browser and your real toolchains, and shows how it got every answer.
   every process it started and confirms "0 processes left".
 - **A tripwire and spending caps.** A command that deletes many files outside the project is stopped. A cap per
   reply, an optional daily cap, project budgets and a media cap keep spending where you set it.
+- **Films from pictures, finished with ffmpeg.** A clip can start from a picture the agent made (or one in the project)
+  when the video model takes a first frame, so characters and style hold from shot to shot. `edit_video` then joins
+  clips, stills, a voice-over and music into one .mp4 in the project with ffmpeg, as an ordinary checked command.
+  Setup check offers to install ffmpeg when it is missing.
 - **16 platform packs** for apps beyond the web: Rust, Node and TypeScript, Python, .NET, Go, C and C++, Java and
   Kotlin, Android, Flutter, Electron, Tauri, Godot, Unity, Windows installers and Apple apps, plus one for every
   project. Each finds its toolchain (and whether it really builds here), compiles what a reply changed before the
