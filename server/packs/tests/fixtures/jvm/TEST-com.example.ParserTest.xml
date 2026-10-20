@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report.xsd" version="3.0.2" name="com.example.ParserTest" time="0.05" tests="2" errors="1" skipped="0" failures="0">
+  <properties>
+    <property name="java.version" value="21.0.4"/>
+  </properties>
+  <testcase name="parsesEmpty" classname="com.example.ParserTest" time="0.01">
+    <error message="Cannot invoke &quot;String.length()&quot; because &quot;s&quot; is null" type="java.lang.NullPointerException"><![CDATA[java.lang.NullPointerException: Cannot invoke "String.length()" because "s" is null
+	at com.example.Parser.parse(Parser.java:8)
+	at com.example.ParserTest.parsesEmpty(ParserTest.java:15)
+]]></error>
+  </testcase>
+  <testcase name="parsesOne" classname="com.example.ParserTest" time="0.001"/>
+</testsuite>

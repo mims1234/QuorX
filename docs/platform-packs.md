@@ -196,7 +196,7 @@ Each is its own pull request, so people with that toolchain can test it on its o
 | Electron | Apps started with their DevTools port and driven; main-process debugging (`debug attach`) | Node.js, an Electron binary |
 | Tauri | Tauri 1 and 2 apps found; `cargo check` in `src-tauri`; `tauri dev` started with WebView2's DevTools port, so the window is read and clicked; panics and capability errors explained (Rust breakpoints come with the C/C++ pack's lldb-dap) | Rust with the MSVC linker (Build Tools with C++), the Tauri CLI, WebView2, Node.js |
 | Go, C/C++ and Rust debugging | Delve and lldb-dap debugging; CMake build check; crashes caught under the debugger | Go and Delve, CMake and a C++ compiler, LLVM with lldb-dap, Rust with a linker |
-| Java and Kotlin | Gradle and Maven compile checks; JUnit; debugging | A JDK |
+| [Java and Kotlin](java-and-kotlin.md) | Gradle and Maven compile checks through the wrapper; JUnit summaries; Swing and JavaFX windows; debugging with the JDK alone | A JDK 17 or 21, Gradle or Maven |
 | Android and Flutter | Emulator started and driven; Gradle and `flutter analyze` checks; Logcat crashes; Dart debugging | Android SDK, an emulator, Flutter |
 | QuorX on macOS | Stop, rules, snapshots and the desktop tool on a Mac (process groups, zsh, Accessibility) | A Mac |
 | Apple apps | Xcode builds and tests, the iOS Simulator driven, crash reports read, Swift debugging with lldb-dap | A Mac with Xcode |

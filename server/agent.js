@@ -2479,7 +2479,8 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
     else if (!sb.snap && !readOnly) parts.push(`No snapshot was taken (${sb.why}), so Undo can't restore what this command changed.`);
     parts.push(`Full output: ${logRel} (search it with search_files).`);
     // A pack's summary (dotnet test's failed tests, say), read from the full log: the tail below may cut them off.
-    const sum = outputSummary(line, (() => { try { return fs.readFileSync(path.join(root, logRel), 'utf8').slice(-2e6); } catch { return r.out; } })());
+    // JUnit's summary comes from the reports the run wrote in its folder, so the pack gets that folder and the start.
+    const sum = outputSummary(line, (() => { try { return fs.readFileSync(path.join(root, logRel), 'utf8').slice(-2e6); } catch { return r.out; } })(), { cwd, since: Date.now() - r.ms });
     if (sum) parts.push(sum);
     parts.push(r.out.slice(-4000) || '(no output)');
     return parts.join('\n');
