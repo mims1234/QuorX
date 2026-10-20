@@ -41,6 +41,7 @@
           "server/**/*",
           "public/**/*",
           "news/**/*",
+          "design-systems/**/*",
           "scripts/news-check.mjs",
           "skills/**/*",
           "templates/**/*",

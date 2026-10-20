@@ -4,6 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { groupCalls, numberedWindow, untrusted, looksLikeInstruction, trimTranscript, compactTranscript, transcriptChars, withCacheMarks, retryable } from '../server/loop.js';
 import { checkFile, checkHtml, lintHtml, lintCss, lintFile } from '../server/checks.js';
 import { listDesignSystems, readDesignSystem, tokenColors, projectDesign, applyDesignSystem, saveProjectDesign } from '../server/design.js';
@@ -274,4 +275,17 @@ test('the MCP server lists tools, starts a reply as a chat, and reports its answ
     assert.match(w, /waiting for the user/); assert.match(w, /Answers come only from the user/);
     assert.equal((await tool('list_files', { project: 'nope' })).isError, true);
   } finally { child.kill(); srv.close(); }
+});
+
+test('the installer ships every top-level folder the server reads', () => {
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const filter = JSON.parse(fs.readFileSync(path.join(root, 'desktop', 'package.json'), 'utf8')).build.extraResources[0].filter;
+  const BENCH_ONLY = ['bench']; // read only by the benchmark scripts, which don't ship
+  const files = ['server.js', ...fs.readdirSync(path.join(root, 'server')).filter((f) => f.endsWith('.js')).map((f) => `server/${f}`)];
+  for (const f of files) {
+    for (const [, dir] of fs.readFileSync(path.join(root, f), 'utf8').matchAll(/path\.join\(ROOT, '([a-z-]+)'/g)) {
+      if (BENCH_ONLY.includes(dir)) continue;
+      assert.ok(filter.includes(`${dir}/**/*`), `${f} reads ${dir}/, which desktop/package.json doesn't ship`);
+    }
+  }
 });
