@@ -16,7 +16,6 @@ import { parseJUnitXml, junitSummary, readTestReports, summarizeTests, jvmProble
 
 const FIX = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'jvm');
 const fixture = (f) => fs.readFileSync(path.join(FIX, f), 'utf8');
-const has = (cmd, args) => spawnSync(cmd, args, { shell: WIN, stdio: 'ignore', timeout: 30000 }).status === 0;
 
 // ---------- no JDK needed ----------
 test('jvm: JUnit reports from Gradle and Maven are summarised', () => {
@@ -182,7 +181,7 @@ const SWING = [
 test('jvm: a Swing window is found and driven with keys (desktop tool)', { skip: !WIN && 'the desktop tool is Windows only' }, async (t) => {
   const skip = await skipUnless('java', { works: true }); if (skip) return t.skip(skip);
   const { startBackground, stopBackground, jobOutput } = await import('../../bgjobs.js');
-  const { appWindows, readWindow, sendKeys } = await import('../../uia.js');
+  const { appWindows, readWindow, sendKeys, clickAt } = await import('../../uia.js');
   const dir = project('jvm-swing', { 'Clicker.java': SWING });
   const java = /\s/.test(javaExe()) ? `"${javaExe()}"` : javaExe();
   const job = startBackground({ projectId: 'pack-test', cwd: dir, line: `${java} Clicker.java`, shell: 'direct', label: 'swing', logTo: path.join(dir, 'swing.log') });
@@ -192,16 +191,29 @@ test('jvm: a Swing window is found and driven with keys (desktop tool)', { skip:
     const w = (await appWindows(job.id, 20000)).find((x) => /QX Swing/.test(x.title));
     assert.ok(w, 'the desktop tool finds the window by its title');
     t.diagnostic(`UI Automation sees: ${(await readWindow(job.id, w.handle)).text.replace(/\s+/g, ' ').slice(0, 300)}`);
-    await sendKeys(job.id, w.handle, ' '); // Space presses the focused button
-    assert.match(await output(/clicked 1/, 15000), /clicked 1/, 'the key reached the button');
+    // Space presses the focused button; a window that has only just opened may not take keys yet, so try a few times.
+    for (let i = 0; i < 4 && !/clicked 1/.test(await output(/clicked 1/, i ? 3000 : 1000)); i++) await sendKeys(job.id, w.handle, ' ');
+    assert.match(await output(/clicked 1/, 3000), /clicked 1/, 'the key reached the button');
+    await clickAt(job.id, w.handle, 120, 70); // the button fills the window
+    assert.match(await output(/clicked 2/, 10000), /clicked 2/, 'click_at reached the button');
   } finally { await stopBackground(job.id).catch(() => {}); }
 });
 
-// A real build tool: Gradle on PATH, else Maven. Either runs the compiler check and a JUnit test.
+// A real build tool. QX_GRADLE (a Gradle launcher, e.g. a portable gradle-8.x\bin\gradle.bat) makes each test project
+// its own Gradle wrapper, the way most projects come (QX_GRADLE_DIST: that Gradle's zip, so the wrapper needn't download
+// it). Otherwise Gradle on PATH, else Maven.
 async function buildTool() {
+  if (process.env.QX_GRADLE) return 'wrapper';
   if ((await tool('gradle')).found) return 'gradle';
   if ((await tool('maven')).found) return 'maven';
   return null;
+}
+const GRADLEW = WIN ? '.\\gradlew.bat' : './gradlew';
+function makeWrapper(kind, dir) {
+  if (kind !== 'wrapper') return;
+  const dist = process.env.QX_GRADLE_DIST;
+  spawnSync(`"${process.env.QX_GRADLE}" wrapper -q${dist ? ` --gradle-distribution-url ${pathToFileURL(dist).href}` : ''}`, { cwd: dir, shell: true, stdio: 'ignore', timeout: 300e3 });
+  assert.ok(fs.existsSync(path.join(dir, WIN ? 'gradlew.bat' : 'gradlew')), 'Gradle made the project its wrapper');
 }
 const GRADLE = "plugins { id 'java' }\nrepositories { mavenCentral() }\ndependencies { testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'; testRuntimeOnly 'org.junit.platform:junit-platform-launcher' }\ntest { useJUnitPlatform() }\n";
 const POM = '<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion><groupId>qx</groupId><artifactId>qxpack</artifactId><version>1</version>'
@@ -210,13 +222,15 @@ const POM = '<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.
   + '<build><plugins><plugin><artifactId>maven-surefire-plugin</artifactId><version>3.2.5</version></plugin></plugins></build></project>';
 const CALC = 'package com.example;\n\npublic class Calc {\n  public static int add(int a, int b) { return a - b; }\n}\n';
 const CALC_TEST = 'package com.example;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport org.junit.jupiter.api.Test;\n\nclass CalcTest {\n  @Test void adds() {\n    assertEquals(4, Calc.add(2, 2));\n  }\n}\n';
-const files = (kind, calc) => ({ ...(kind === 'gradle' ? { 'build.gradle': GRADLE, 'settings.gradle': "rootProject.name = 'qxpack'\n" } : { 'pom.xml': POM }),
+const APP = 'package com.example;\n\npublic class App {\n  public static void main(String[] args) {\n    int x = Calc.add(7, 2);\n    System.out.println("x=" + x);\n  }\n}\n';
+const files = (kind, calc) => ({ ...(kind === 'maven' ? { 'pom.xml': POM } : { 'build.gradle': GRADLE, 'settings.gradle': "rootProject.name = 'qxpack'\n" }),
   'src/main/java/com/example/Calc.java': calc, 'src/test/java/com/example/CalcTest.java': CALC_TEST });
 
 test('jvm: the compiler check catches an error in a changed file (Gradle or Maven)', async (t) => {
   const skip = await skipUnless('java', { works: true }); if (skip) return t.skip(skip);
   const kind = await buildTool(); if (!kind) return t.skip('neither Gradle nor Maven is installed');
   const dir = project('jvm-build', files(kind, 'package com.example;\n\npublic class Calc {\n  public static int add(int a, int b) { int n = "three"; return a + b; }\n}\n'));
+  makeWrapper(kind, dir);
   const r = await languageChecks(dir, ['src/main/java/com/example/Calc.java'], { have: ['java'], timeout: 600e3 });
   assert.equal(r.ran[0]?.lang, 'jvm');
   assert.ok(r.problems.some((p) => /src\/main\/java\/com\/example\/Calc\.java:4/.test(p) && /incompatible types/i.test(p)), `problems: ${r.problems.join(' | ')} (ran: ${JSON.stringify(r.ran)})`);
@@ -225,12 +239,66 @@ test('jvm: the compiler check catches an error in a changed file (Gradle or Mave
 test('jvm: a failing JUnit test is summarised (Gradle or Maven)', async (t) => {
   const skip = await skipUnless('java', { works: true }); if (skip) return t.skip(skip);
   const kind = await buildTool(); if (!kind) return t.skip('neither Gradle nor Maven is installed');
-  if (!has(kind === 'gradle' ? 'gradle' : 'mvn', ['--version'])) return t.skip(`${kind} does not run`);
   const dir = project('jvm-junit', files(kind, CALC));
+  makeWrapper(kind, dir);
   const since = Date.now();
-  const line = kind === 'gradle' ? 'gradle test -q --console=plain' : 'mvn -q -B test';
+  const line = { wrapper: `${GRADLEW} test -q --console=plain`, gradle: 'gradle test -q --console=plain', maven: 'mvn -q -B test' }[kind];
   spawnSync(line, { cwd: dir, shell: true, stdio: 'ignore', timeout: 600e3 }); // fails: the test fails
   const s = outputSummary(line, '', { cwd: dir, since });
   assert.match(s, /JUnit: 1 tests, 1 failed/, s);
   assert.match(s, /CalcTest > adds(\(\))?: expected: <4> but was: <0> \(CalcTest\.java:8\)/, s);
+});
+
+test('jvm: the debugger builds a Gradle or Maven project and stops in it', async (t) => {
+  const skip = await skipUnless('java', { works: true }); if (skip) return t.skip(skip);
+  const kind = await buildTool(); if (!kind) return t.skip('neither Gradle nor Maven is installed');
+  const dir = project('jvm-dbgbuild', { ...files(kind, CALC), 'src/main/java/com/example/App.java': APP });
+  makeWrapper(kind, dir);
+  const s = await debugStart({ projectId: 'pack-test', cwd: dir, file: 'src/main/java/com/example/App.java' });
+  try {
+    assert.match(await debugBreak(s.id, 'src/main/java/com/example/App.java', 6), /breakpoint at App\.java:6/);
+    const st = await debugMove(s.id, 'continue', 600e3); // the build comes first
+    assert.equal(st.state, 'paused', 'stopped at the breakpoint after the build');
+    assert.match(st.frames[0].file, /App\.java$/);
+    assert.equal(await debugEval(s.id, 'x'), '5');
+    assert.equal(await debugEval(s.id, 'args.length'), '0');
+  } finally { await debugStop(s.id).catch(() => {}); }
+});
+
+const KT = (body) => `package demo\n\nfun total(items: List<Pair<Int, Int>>): Int {\n    var s = 0\n    for ((price, qty) in items) {\n        ${body}\n    }\n    return s\n}\n\nfun main() {\n    println(total(listOf(2 to 3, 5 to 2)))\n}\n`;
+
+test('jvm: Kotlin (Gradle plugin): the check reads its errors, the debugger stops in a .kt file', async (t) => {
+  const skip = await skipUnless('java', { works: true }); if (skip) return t.skip(skip);
+  const kind = await buildTool(); if (kind !== 'wrapper' && kind !== 'gradle') return t.skip('needs Gradle');
+  const dir = project('jvm-kotlin', { 'settings.gradle.kts': 'rootProject.name = "qxkt"\n', 'build.gradle.kts': 'plugins { kotlin("jvm") version "2.0.21" }\nrepositories { mavenCentral() }\n',
+    'src/main/kotlin/Main.kt': KT('s += "x"') });
+  makeWrapper(kind, dir);
+  const r = await languageChecks(dir, ['src/main/kotlin/Main.kt'], { have: ['java'], timeout: 600e3 });
+  assert.ok(r.problems.some((p) => /^jvm: src\/main\/kotlin\/Main\.kt:6:\d+: /.test(p)), `problems: ${r.problems.join(' | ')} (ran: ${JSON.stringify(r.ran)})`);
+  fs.writeFileSync(path.join(dir, 'src/main/kotlin/Main.kt'), KT('s += price * qty'));
+  const s = await debugStart({ projectId: 'pack-test', cwd: dir, file: 'src/main/kotlin/Main.kt' });
+  try {
+    await debugBreak(s.id, 'src/main/kotlin/Main.kt', 6);
+    let st = await debugMove(s.id, 'continue', 600e3);
+    assert.equal(st.state, 'paused', 'stopped in Main.kt');
+    assert.match(st.frames[0].file, /Main\.kt$/);
+    assert.equal(await debugEval(s.id, 'price'), '2');
+    st = await debugMove(s.id, 'continue', 30000);
+    assert.equal(await debugEval(s.id, 's'), '6');
+  } finally { await debugStop(s.id).catch(() => {}); }
+});
+
+test('jvm: the debugger stops where an uncaught exception is thrown, then the program ends', async (t) => {
+  const skip = await skipUnless('java', { works: true }); if (skip) return t.skip(skip);
+  const dir = project('jvmexc', { 'Boom.java': 'import java.util.*;\n\npublic class Boom {\n  public static void main(String[] args) {\n    List<String> names = new ArrayList<>(List.of("a", "b"));\n    String third = names.get(2);\n    System.out.println(third);\n  }\n}\n' });
+  const s = await debugStart({ projectId: 'pack-test', cwd: dir, file: 'Boom.java' });
+  try {
+    let st = await debugMove(s.id, 'continue', 60000);
+    assert.equal(st.state, 'paused', 'stopped at the exception, not before (class loading is not counted)');
+    assert.equal(st.reason, 'exception');
+    assert.ok(st.frames.some((f) => /Boom\.java$/.test(f.file) && f.line === 6), `frames: ${JSON.stringify(st.frames.map((f) => `${f.fn}:${f.line}`))}`);
+    assert.equal(await debugEval(s.id, 'names.size()', st.frames.findIndex((f) => /Boom\.java$/.test(f.file))), '2');
+    st = await debugMove(s.id, 'continue', 30000);
+    assert.equal(st.state, 'ended');
+  } finally { await debugStop(s.id).catch(() => {}); }
 });

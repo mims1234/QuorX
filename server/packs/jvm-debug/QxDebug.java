@@ -261,7 +261,7 @@ public class QxDebug {
     }
 
     void start(String main, String cp, List<String> progArgs, Path dir, Path work) throws Exception {
-      ListeningConnector lc = (ListeningConnector) Bootstrap.virtualMachineManager().listeningConnectors().stream()
+      ListeningConnector lc = Bootstrap.virtualMachineManager().listeningConnectors().stream()
         .filter(c -> c.name().equals("com.sun.jdi.SocketListen")).findFirst().orElseThrow(() -> new IOException("this JDK has no socket debugger connector"));
       Map<String, Connector.Argument> ca = lc.defaultArguments();
       ca.get("port").setValue("0");
@@ -457,7 +457,8 @@ public class QxDebug {
     Map<String, Object> sourceOf(Location loc) {
       try {
         String rel = loc.sourcePath();
-        for (Src s : sources.values()) if (s.path.toString().replace('\\', '/').endsWith(rel)) return obj("name", s.name, "path", s.path.toString());
+        // A file with breakpoints, by its name and package (Kotlin files needn't sit in their package's folder).
+        for (Src s : sources.values()) if (s.path.toString().replace('\\', '/').endsWith(rel) || fromSource(loc.declaringType(), s)) return obj("name", s.name, "path", s.path.toString());
         for (Path r : sourceRoots) { Path p = r.resolve(rel); if (Files.exists(p)) return obj("name", p.getFileName().toString(), "path", p.toString()); }
         return obj("name", loc.sourceName());
       } catch (AbsentInformationException e) { return null; }
@@ -671,11 +672,13 @@ public class QxDebug {
 
   // ---------- helpers ----------
   // A build tool's command: the project's wrapper, or the tool on PATH. On Windows a batch file runs through cmd,
-  // which mangles a quoted program path, so the wrapper is named relative to the folder it runs in (gradlew.bat,
-  // ..\mvnw.cmd: never a space in it).
+  // which mangles a quoted program path, so the wrapper is named relative to the folder it runs in (.\gradlew.bat,
+  // ..\mvnw.cmd: never a space in it). Always with a folder: cmd may be set not to look in the current one
+  // (NoDefaultCurrentDirectoryInExePath).
   static List<String> tool(Path wrapper, String name, Path runIn) {
     if (!Build.WIN) return new ArrayList<>(wrapper == null ? List.of(name) : List.of("sh", wrapper.toString()));
-    return new ArrayList<>(List.of("cmd.exe", "/d", "/c", wrapper == null ? name : runIn.relativize(wrapper).toString()));
+    String rel = wrapper == null ? name : runIn.relativize(wrapper).toString();
+    return new ArrayList<>(List.of("cmd.exe", "/d", "/c", wrapper != null && !rel.contains("\\") ? ".\\" + rel : rel));
   }
   static int runTool(List<String> cmd, Path dir, Logger each) throws Exception {
     Process p = new ProcessBuilder(cmd).directory(dir.toFile()).redirectErrorStream(true).start();
