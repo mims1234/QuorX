@@ -438,6 +438,8 @@ function classify(s, shell) {
     if (words.some((w) => inline.includes(w)) || (['cmd', 'bash', 'sh', 'zsh', 'powershell', 'pwsh'].includes(p) && !s.args.length)) return { cls: 'opaque', why: `${s.rawProgram} would run code QuorX can't read first` };
     if (['powershell', 'pwsh'].includes(p) && !hasArg(s, '-file', '-f')) return { cls: 'opaque', why: `${s.rawProgram} would run code QuorX can't read first` };
     if (['powershell', 'pwsh'].includes(p)) return { cls: 'build', script: true, why: '' }; // -File: a script file, like python app.py
+    // bash build.sh: a script file, read before it runs like ./build.sh (inspectRun); anything else is another shell.
+    if (['bash', 'sh', 'zsh'].includes(p) && /\.(sh|bash|zsh)$/i.test(s.args.find((a) => !a.param)?.text || '') && !s.args.some((a) => a.param && !/^-[ex]+$/.test(a.text))) return { cls: 'build', script: true, why: '' };
     if (['cmd', 'bash', 'sh', 'zsh', 'wsl'].includes(p)) return { cls: 'opaque', why: `${s.rawProgram} runs another shell` };
     // An interpreter with no script is a prompt: in the agent's terminal, whatever it types next runs unchecked.
     if (!s.args.some((a) => !a.param) && !words.some((w) => ['--version', '-v', '-V', '--help', '-h'].includes(w))) return { cls: 'opaque', why: `${s.rawProgram} with no script opens a prompt where anything typed runs unchecked` };
@@ -728,6 +730,9 @@ async function judgeCommands(segs, lang, ic, rel, depth, out) {
     }
     if (s.dynamicProgram || s.opaque || LAUNCHERS.has(s.program) || (s.program === 'new-object' && hasArg(s, '-comobject'))) { out.launch ||= runs; continue; }
     const k = classify(s, SHELL_OF[lang]);
+    // In a shell script, anything the rules can't read (open, awk, watch, find -exec …) runs other programs too.
+    // (PowerShell's Add-Type and COM, which WinForms and WPF scripts use, are judged by LAUNCHERS and members above.)
+    if (lang === 'sh' && k.cls === 'opaque') { out.launch ||= runs; continue; }
     const paths = pathsOf(s, k, ic);
     if (k.cls === 'never' || (k.cls === 'install' && k.global) || ['external', 'discard'].includes(k.cls) || KILLERS.has(s.program) || paths.some((p) => p.zone === 'blocked' || p.zone === 'protected')) {
       out.extra.push({ ...s, ctx: { ...ic }, shell: SHELL_OF[lang], via: rel, viaWhy: `inside ${rel}`, depth: depth + 1 });
