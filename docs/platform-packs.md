@@ -205,6 +205,8 @@ Each is its own pull request, so people with that toolchain can test it on its o
 
 Apple apps need a Mac: Xcode, the iOS Simulator and Apple's signing only run on macOS. QuorX must run on that Mac too,
 which is why "QuorX on macOS" comes first. Both are written so Mac owners can test them with `npm run test:packs`.
+How Stop, the rules, the off-limits folders and the desktop tool work on macOS and Linux is in
+[QuorX on macOS and Linux](macos-and-linux.md); `npm run test:packs -- --pack system` tests them.
 
 ## Game engines and installers
 

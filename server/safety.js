@@ -1,7 +1,8 @@
 // The safety layer's settings (docs/shell-safety-plan.md). Every value is editable in ⚙ Safety; these are the
 // defaults and the limits each one is held to.
+const WIN = process.platform === 'win32';
 export const SAFETY_DEFAULTS = {
-  shell: 'powershell',   // the agent's shell: 'powershell' (Windows PowerShell 5.1, parsed exactly) · 'pwsh' · 'cmd' · 'bash' (opt-in)
+  shell: WIN ? 'powershell' : 'bash', // the agent's shell: on Windows 'powershell' (5.1, parsed exactly) · 'pwsh' · 'cmd' · 'bash' (Git Bash, opt-in); elsewhere 'bash' · 'zsh'
   timeout: 180,          // seconds a command may run before it is stopped
   memoryMB: 0,           // memory cap for one command and everything it starts (0 = none)
   snapshots: true,       // snapshot the project before each command that can change files, so Undo covers it
@@ -23,7 +24,8 @@ export const SAFETY_DEFAULTS = {
 };
 
 const num = (v, d, lo, hi) => { const n = Number(v); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : d; };
-const SHELLS = ['powershell', 'pwsh', 'cmd', 'bash'];
+// PowerShell's parser runs in the Windows job host, so the PowerShell shells are Windows-only (and cmd is Windows').
+const SHELLS = WIN ? ['powershell', 'pwsh', 'cmd', 'bash'] : ['bash', 'zsh'];
 
 /** The safety settings for a reply: the page's values over the defaults, each held to its limits. */
 export function safetySettings(raw = {}) {

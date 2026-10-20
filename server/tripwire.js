@@ -2,13 +2,17 @@
 // outside AppData, the folders around the project, the project's .git) and stop the command if many files vanish
 // there in a short time. The rule engine can't see deletes made by the project's own code (a build script, a bug in
 // the agent's program); this catches the big ones after a few files instead of after hundreds of gigabytes.
-// Best effort by design: it only sees what Windows' change notifications report, and it reacts after the fact.
+// Best effort by design: it only sees what the system's change notifications report, and it reacts after the fact.
+// On Linux each folder needs its own watch (inotify), so a whole profile would mean thousands of watches for every
+// command: there your profile and the folders directly in it are watched one level deep, which still sees a mass
+// delete as it empties them.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
 const WIN = process.platform === 'win32';
-const norm = (p) => (WIN ? p.toLowerCase() : p);
+const LINUX = process.platform === 'linux';
+const norm = (p) => (WIN || process.platform === 'darwin' ? p.toLowerCase() : p);
 const under = (p, dir) => { const a = norm(p), b = norm(dir); return a === b || a.startsWith(b.endsWith(path.sep) ? b : b + path.sep); };
 
 /**
@@ -23,11 +27,18 @@ export function startTripwire({ root, files = 25, seconds = 3, onTrip, extraDirs
   // time) or a drive root (watching a whole drive is too much); your profile is still watched.
   const parent = path.dirname(project);
   const busyParent = norm(path.resolve(parent)) === norm(path.resolve(os.tmpdir())) || path.dirname(parent) === parent;
+  // Busy folders in the profile: AppData on Windows, Library on macOS, caches on Linux.
+  const busy = [path.join(home, 'AppData'), path.join(home, 'Library'), path.join(home, '.cache'), path.join(home, '.local', 'share', 'Trash')];
+  const shallow = (dir, skip) => {
+    let subs = [];
+    try { subs = fs.readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory() && !e.name.startsWith('.')).map((e) => path.join(dir, e.name)); } catch { /* unreadable */ }
+    return [{ dir, skip, deep: false }, ...subs.filter((d) => !skip.some((x) => under(d, x))).map((d) => ({ dir: d, skip, deep: false }))];
+  };
   const watchList = [
-    { dir: home, skip: [path.join(home, 'AppData'), project] },
-    ...(busyParent ? [] : [{ dir: parent, skip: [project] }]),
-    { dir: path.join(project, '.git'), skip: [] },
-    ...extraDirs.map((dir) => ({ dir, skip: [project] })),
+    ...(LINUX ? shallow(home, [...busy, project]) : [{ dir: home, skip: [...busy, project], deep: true }]),
+    ...(busyParent ? [] : [{ dir: parent, skip: [project], deep: !LINUX }]),
+    { dir: path.join(project, '.git'), skip: [], deep: true },
+    ...extraDirs.map((dir) => ({ dir, skip: [project], deep: !LINUX })),
   ];
   const seen = new Set();
   const hits = [];
@@ -43,15 +54,16 @@ export function startTripwire({ root, files = 25, seconds = 3, onTrip, extraDirs
     const key = norm(w.dir);
     if (seen.has(key) || !fs.existsSync(w.dir)) continue;
     // A folder inside another one already watched (e.g. the project's parent inside your profile) is covered.
-    if (watchList.some((o) => o !== w && seen.has(norm(o.dir)) && under(w.dir, o.dir) && !o.skip.some((s) => under(w.dir, s)))) continue;
+    if (watchList.some((o) => o !== w && o.deep && seen.has(norm(o.dir)) && under(w.dir, o.dir) && !o.skip.some((s) => under(w.dir, s)))) continue;
     seen.add(key);
     try {
-      const watcher = fs.watch(w.dir, { recursive: true, persistent: false }, (event, name) => {
+      const watcher = fs.watch(w.dir, { recursive: w.deep, persistent: false }, (event, name) => {
         if (tripped || event !== 'rename' || !name) return;
         const full = path.join(w.dir, String(name));
         if (w.skip.some((s) => under(full, s)) && !under(full, path.join(project, '.git'))) return;
         let st = null; try { st = fs.statSync(full); } catch { /* gone */ }
-        if (st) { if (st.birthtimeMs >= startedAt) made.add(norm(full)); return; } // created or renamed into place, not removed
+        // Created or renamed into place, not removed. (Some Linux file systems keep no birth time: the change time then.)
+        if (st) { if ((st.birthtimeMs || st.ctimeMs) >= startedAt) made.add(norm(full)); return; }
         if (ours(full)) return;
         // A file made and removed before either notice was handled shows up twice as missing; a real delete of
         // something that was already there shows up once. The second notice cancels the first.

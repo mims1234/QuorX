@@ -44,6 +44,14 @@ log('Checking which toolchains this computer has…');
 const chains = await detectToolchains(true);
 const byId = new Map(chains.map((t) => [t.id, t]));
 const rows = [];
+// QuorX's own safety layer on this system (Stop through process groups on macOS and Linux, the bash and zsh rules,
+// the folders that are off limits, the desktop tool's keys): `--pack system` runs only this.
+if (!only.length || only.includes('system')) {
+  const label = `QuorX on ${{ darwin: 'macOS', linux: 'Linux', win32: 'Windows' }[process.platform] || process.platform}: Stop, rules, desktop keys`;
+  log(`Testing ${label}…`);
+  const r = await runFile(path.join(ROOT, 'scripts', 'test-posix.mjs'));
+  rows.push({ p: { id: 'system', label }, status: r.fail ? 'failed' : r.pass ? 'passed' : 'skipped', r });
+}
 for (const p of PACKS.filter((x) => !only.length || only.includes(x.id))) {
   const file = path.join(ROOT, 'server', 'packs', 'tests', `${p.id}.test.mjs`);
   const needs = p.test?.needs || [];
