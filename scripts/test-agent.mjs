@@ -737,6 +737,42 @@ test('a harness-made .agent folder becomes .quorx; another tool\'s .agent is lef
   assert.equal(fs.existsSync(path.join(theirs, '.quorx')), false);
 });
 
+test('renaming the old folder retries while a file in it is briefly locked, then says busy; other errors are raised', async () => {
+  const { migrateAgentDir } = await import('../server/workspace.js');
+  const real = fs.renameSync;
+  const make = () => { const d = tempDir('oh-mig-'); fs.mkdirSync(path.join(d, '.openharness', 'scratch'), { recursive: true }); return d; };
+  const failing = (n, code) => { let left = n; return (...a) => { if (left-- > 0) throw Object.assign(new Error(`${code}: locked`), { code }); return real(...a); }; };
+  try {
+    const a = make();
+    fs.renameSync = failing(2, 'EPERM'); // a scanner holds a file for a moment
+    assert.equal(migrateAgentDir(a), true);
+    assert.ok(fs.existsSync(path.join(a, '.quorx', 'scratch')));
+    const b = make();
+    fs.renameSync = failing(99, 'EBUSY'); // still in use after every retry
+    assert.equal(migrateAgentDir(b), 'busy');
+    assert.ok(fs.existsSync(path.join(b, '.openharness')), 'left as it was, for next time');
+    fs.renameSync = failing(1, 'EINVAL'); // a real error is not "busy"
+    assert.throws(() => migrateAgentDir(b), /EINVAL/);
+  } finally { fs.renameSync = real; }
+});
+
+test('a project whose old folder fails to move still opens, with the folder as it is (reported once)', async () => {
+  const { workspaceDir } = await import('../server/workspace.js');
+  const dir = tempDir('oh-mig-');
+  fs.mkdirSync(path.join(dir, '.openharness'), { recursive: true });
+  const id = `mig${Date.now().toString(36)}`;
+  saveProject({ id, name: 'mig', path: dir });
+  const real = fs.renameSync, log = console.error, said = [];
+  fs.renameSync = () => { throw Object.assign(new Error('EINVAL: odd'), { code: 'EINVAL' }); };
+  console.error = (m) => said.push(String(m));
+  try {
+    assert.equal(workspaceDir(id), dir);
+    assert.equal(workspaceDir(id), dir);
+    assert.equal(said.filter((m) => /couldn't move the old working folder/.test(m)).length, 1, 'said once');
+    assert.ok(fs.existsSync(path.join(dir, '.openharness')));
+  } finally { fs.renameSync = real; console.error = log; forgetProject(id); }
+});
+
 test('a project\'s .openharness folder (the name before QuorX) becomes .quorx, and its launch file follows', async () => {
   const { migrateAgentDir } = await import('../server/workspace.js');
   const dir = tempDir('oh-mig-');
