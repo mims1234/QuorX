@@ -11,5 +11,5 @@ console.table(rows.map((r) => ({
   model: r.model, replies: r.replies,
   ended: Object.entries(r.stops).map(([k, v]) => `${k} ${v}`).join(', '),
   'checks passed': r.checked ? `${r.passed}/${r.checked}` : '–',
-  'avg steps': r.avgSteps, 'avg $': r.avgCost, 'avg s': r.avgSecs, retries: r.retries, 'trimmed replies': r.trimmed,
+  'avg steps': r.avgSteps, 'looks first': r.avgLooksFirst ?? '–', 'avg $': r.avgCost, 'avg s': r.avgSecs, retries: r.retries, 'trimmed replies': r.trimmed,
 })));
