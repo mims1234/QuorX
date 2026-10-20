@@ -18,7 +18,7 @@ const args = process.argv.slice(2);
 const flag = (name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : null; };
 
 // Who publishes it. Fill these in desktop/package.json → quorx.winget before the first submission.
-const W = { publisher: 'QuorX', publisherUrl: '', license: 'Proprietary', licenseUrl: '', packageUrl: '', ...(pkg.quorx?.winget || {}) };
+const W = { publisher: 'QuorX', publisherUrl: '', license: 'Apache-2.0', licenseUrl: '', packageUrl: '', ...(pkg.quorx?.winget || {}) };
 const ID = W.packageIdentifier || 'QuorX.QuorX';
 const version = flag('--version') || pkg.version;
 const exe = path.join(ROOT, 'desktop', 'dist', `QuorX-Setup-${version}.exe`);

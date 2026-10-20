@@ -3,6 +3,7 @@
   "productName": "QuorX",
   "version": "0.2.3",
   "private": true,
+  "license": "Apache-2.0",
   "description": "QuorX desktop: an open-source AI agent with a quorum of models behind every call, with real Chromium tabs in the pane's Browser tab.",
   "type": "commonjs",
   "main": "main.js",
@@ -101,8 +102,8 @@
       "publisher": "QuorX",
       "publisherUrl": "https://github.com/mims1234",
       "packageUrl": "https://github.com/mims1234/QuorX",
-      "license": "Proprietary",
-      "licenseUrl": "",
+      "license": "Apache-2.0",
+      "licenseUrl": "https://github.com/mims1234/QuorX/blob/main/LICENSE",
       "downloadBase": "https://github.com/mims1234/QuorX/releases/download/v{version}",
       "_note": "For npm run winget (scripts/winget-manifest.mjs). downloadBase must be a permanent per-version https address with {version}, e.g. https://github.com/<you>/<repo>/releases/download/v{version}. Empty: a GitHub releases/latest/download updateUrl is turned into that."
     }

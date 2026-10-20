@@ -140,3 +140,11 @@ More documents:
 | [docs/java-and-kotlin.md](docs/java-and-kotlin.md) | Gradle and Maven checks, JUnit summaries, Swing and JavaFX, debugging with the JDK |
 | [docs/desktop-browser-plan.md](docs/desktop-browser-plan.md) | Why the desktop app uses Electron, and how its real tabs work |
 | [docs/news-format.md](docs/news-format.md) | The format for QuorX's in-app News |
+
+## Licence
+
+QuorX is open source under the [Apache License 2.0](LICENSE): use it, change it, fork it and build on it, for
+personal or commercial work, as long as you keep the licence and the [NOTICE](NOTICE) with what you share.
+
+The licence covers the code, not the name. "QuorX" and its logo stay with the QuorX authors (section 6 of the
+licence), so a fork should go by its own name and logo.

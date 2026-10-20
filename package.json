@@ -2,6 +2,7 @@
   "name": "quorx",
   "version": "0.2.3",
   "private": true,
+  "license": "Apache-2.0",
   "type": "module",
   "description": "An open-source AI agent with a quorum of models behind every call. Any model, through OpenRouter.",
   "scripts": {
