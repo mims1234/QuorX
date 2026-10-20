@@ -252,3 +252,89 @@ test('data folder: 0.2.5 locked files are repaired at start, and the lock-down k
   assert.doesNotMatch(acl, /Users:|Everyone:|Authenticated Users:/i);
   fs.rmSync(home, { recursive: true, force: true });
 });
+
+// ---------- HTTPS for other devices (server/lantls.js) ----------
+test('other devices get HTTPS: one certificate per install, in the data folder, kept between starts', async () => {
+  const crypto = await import('node:crypto');
+  const { lanCert, KEY_FILE, CERT_FILE } = await import('../server/lantls.js');
+  const { SECRET_FILES } = await import('../server/keys.js');
+  const c = lanCert();
+  const data = path.join(process.env.OH_HOME, 'data');
+  for (const f of [KEY_FILE, CERT_FILE]) {
+    assert.ok(!path.relative(data, f).startsWith('..'), `${f} is in the data folder`);
+    assert.ok(fs.existsSync(f));
+  }
+  assert.ok(SECRET_FILES.includes(KEY_FILE), "the agent's file tools may never read the private key");
+  if (process.platform !== 'win32') assert.equal(fs.statSync(KEY_FILE).mode & 0o077, 0, 'the key is for this account only');
+  const x = new crypto.X509Certificate(fs.readFileSync(CERT_FILE));
+  assert.ok(x.verify(x.publicKey), 'self-signed');
+  assert.ok(x.checkPrivateKey(crypto.createPrivateKey(fs.readFileSync(KEY_FILE))));
+  assert.equal(x.ca, false);
+  assert.match(x.subjectAltName, /DNS:localhost/);
+  assert.match(x.subjectAltName, /IP Address:127\.0\.0\.1/);
+  assert.deepEqual(x.keyUsage, ['1.3.6.1.5.5.7.3.1'], 'for TLS servers only');
+  assert.ok(Date.parse(x.validTo) - Date.now() <= 826 * 86400e3, 'no longer than phones accept');
+  assert.match(c.fingerprint, /^([0-9A-F]{2}:){31}[0-9A-F]{2}$/);
+  assert.equal(c.fingerprint, x.fingerprint256);
+  assert.equal(lanCert().fingerprint, c.fingerprint, 'the same certificate next time, so the fingerprint you checked stays');
+});
+
+test('one port: other devices over TLS, this computer over plain http', async () => {
+  const http = await import('node:http');
+  const tls = await import('node:tls');
+  const { lanCert, serveLan } = await import('../server/lantls.js');
+  const { plainLan, setLanTls } = await import('../server/access.js');
+  setLanTls(true);
+  const app = http.createServer((rq, rs) => { if (plainLan(rq, rs, new URL(rq.url, 'http://x'))) return; rs.end(JSON.stringify({ tls: !!rq.socket.encrypted, url: rq.url })); });
+  const front = serveLan(app);
+  await new Promise((r) => front.listen(0, '127.0.0.1', r));
+  const port = front.address().port;
+  try {
+    const plain = await new Promise((ok, no) => http.get({ host: '127.0.0.1', port, path: '/api/x?y=1' }, (r) => { let d = ''; r.on('data', (b) => (d += b)); r.on('end', () => ok([r.statusCode, JSON.parse(d)])); }).on('error', no));
+    assert.deepEqual(plain, [200, { tls: false, url: '/api/x?y=1' }], 'loopback stays plain http');
+    const secure = await new Promise((ok, no) => {
+      const s = tls.connect({ host: '127.0.0.1', port, rejectUnauthorized: false, ALPNProtocols: ['http/1.1'] }, () => {
+        const fp = s.getPeerCertificate().fingerprint256;
+        let d = '';
+        s.on('data', (b) => (d += b)); s.on('end', () => ok({ fp, d }));
+        s.write('GET /p HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n');
+      });
+      s.on('error', no);
+    });
+    assert.equal(secure.fp, lanCert().fingerprint, 'the device sees the fingerprint Settings shows');
+    assert.match(secure.d, /^HTTP\/1\.1 200/);
+    assert.match(secure.d, /"tls":true/);
+  } finally { front.close(); app.close(); setLanTls(false); }
+});
+
+test('plain http from another device goes to https; a pairing link sent in plain is refused; cookies are Secure over TLS', async () => {
+  const { plainLan, setLanTls, gate, accessInfo, lanOn } = await import('../server/access.js');
+  const { lanCert } = await import('../server/lantls.js');
+  const url = (p) => new URL(p, 'http://x');
+  const rq = (ip, encrypted) => ({ headers: { host: '192.168.1.20:5188' }, socket: { remoteAddress: ip, encrypted } });
+  setLanTls(true);
+  try {
+    const r1 = res();
+    assert.equal(plainLan(rq('192.168.1.50'), r1, url('/chat/c1?x=1')), true);
+    assert.equal(r1.code, 308);
+    assert.equal(r1.headers.Location, 'https://192.168.1.20:5188/chat/c1?x=1');
+    const r2 = res();
+    assert.equal(plainLan(rq('192.168.1.50'), r2, url('/?pair=secret-token')), true);
+    assert.equal(r2.code, 403);
+    assert.ok(!r2.headers.Location && !r2.body.includes('secret-token'), 'the token is not sent on anywhere');
+    assert.equal(plainLan(rq('192.168.1.50', true), res(), url('/')), false, 'over TLS');
+    assert.equal(plainLan(rq('127.0.0.1'), res(), url('/')), false, 'this computer');
+    setLanTls(false);
+    assert.equal(plainLan(rq('192.168.1.50'), res(), url('/')), false, 'TLS not in use: nothing changes');
+    setLanTls(true);
+    setLan(true);
+    assert.equal(lanOn(), true);
+    const token = JSON.parse(fs.readFileSync(path.join(process.env.OH_HOME, 'data', 'access.json'), 'utf8')).token;
+    const r3 = res();
+    assert.equal(gate(rq('192.168.1.52', true), r3, url(`/?pair=${token}`)), true);
+    assert.match(r3.headers['Set-Cookie'], /; Secure/);
+    const info = accessInfo(5188);
+    assert.equal(info.fingerprint, lanCert().fingerprint);
+    for (const l of info.links) assert.match(l.url, /^https:\/\//);
+  } finally { setLanTls(false); }
+});

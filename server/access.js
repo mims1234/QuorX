@@ -2,7 +2,8 @@
 //   - this computer (loopback) always may;
 //   - other devices on the network (your phone on Wi-Fi) must be paired once: they open the pairing link shown in
 //     ⚙ Settings → About on this computer, which leaves a cookie. "New link" signs every paired device out.
-//     "Other devices" can also be switched off there entirely.
+//     "Other devices" can also be switched off there entirely. They connect over HTTPS (server/lantls.js); a plain
+//     HTTP request from another device is sent to the https address, and a pairing link sent in plain is refused.
 //   - the Host header must name this computer (localhost, an IP address, or its own name), so a web page can't
 //     reach the harness through DNS rebinding;
 //   - another site, or a page the agent built (served on a localhost port or sandboxed), can't call /api.
@@ -11,6 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { HOME } from './openrouter.js';
+import { lanFingerprint } from './lantls.js';
 
 const FILE = path.join(HOME, 'data', 'access.json');
 const COOKIE = 'oh_pair';
@@ -30,6 +32,26 @@ function save(s) {
 let state = load();
 
 export const isLoopback = (req) => /^(127\.|::1$|::ffff:127\.)/.test(req.socket.remoteAddress || '');
+
+// Whether the network side speaks TLS (server.js turns it on when it listens beyond this computer).
+let lanTls = false;
+export function setLanTls(on) { lanTls = !!on; }
+/**
+ * A plain HTTP request from another device while the network side has TLS: answered (true) with a redirect to the
+ * same address over https, or, for a pairing link, a page saying to use the https one (the token must not travel in
+ * plain text, so it isn't carried over). Requests from this computer and over TLS pass (false).
+ */
+export function plainLan(req, res, url) {
+  if (!lanTls || isLoopback(req) || req.socket.encrypted) return false;
+  if (url.searchParams.has('pair')) {
+    res.writeHead(403, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(PAGE('Use the https pairing link.', 'QuorX now connects other devices over HTTPS. On the computer running QuorX, open ⚙ Settings → About → Other devices and open the link shown there (it starts with https://). For safety, make a new link there too (New link…): this one was just sent unencrypted.'));
+    return true;
+  }
+  res.writeHead(308, { Location: `https://${req.headers.host || ''}${url.pathname}${url.search}`, 'Cache-Control': 'no-store' });
+  res.end();
+  return true;
+}
 
 // Names that mean this computer. IP literals are always fine: DNS rebinding needs a domain name.
 const NAMES = new Set(['localhost', ...[os.hostname().toLowerCase()].flatMap((h) => [h, `${h}.local`, `${h}.lan`, `${h}.home`]),
@@ -74,7 +96,7 @@ export function gate(req, res, url) {
     if (same(pair, state.token)) {
       fails.delete(ip);
       url.searchParams.delete('pair');
-      res.writeHead(302, { 'Set-Cookie': `${COOKIE}=${state.token}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Strict`, Location: `${url.pathname}${url.search}`, 'Cache-Control': 'no-store' });
+      res.writeHead(302, { 'Set-Cookie': `${COOKIE}=${state.token}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Strict${req.socket.encrypted ? '; Secure' : ''}`, Location: `${url.pathname}${url.search}`, 'Cache-Control': 'no-store' });
       res.end();
       return true;
     }
@@ -124,10 +146,15 @@ export function appGate(req, res, url) {
   return true;
 }
 
-/** The addresses other devices can use, each with the pairing link (for Settings, on this computer only). */
+/**
+ * The addresses other devices can use, each with the pairing link, and the certificate's SHA-256 fingerprint to
+ * compare on the device (for Settings, on this computer only). Links are https whenever other devices are on.
+ */
 export function accessInfo(port) {
   const ips = Object.values(os.networkInterfaces()).flat().filter((a) => a && !a.internal && a.family === 'IPv4').map((a) => a.address);
-  return { lan: state.lan, links: ips.map((ip) => ({ ip, url: `http://${ip}:${port}/?pair=${state.token}` })) };
+  const fingerprint = state.lan ? lanFingerprint() : null;
+  const scheme = fingerprint ? 'https' : 'http';
+  return { lan: state.lan, fingerprint, tls: lanTls, links: ips.map((ip) => ({ ip, url: `${scheme}://${ip}:${port}/?pair=${state.token}` })) };
 }
 /** Whether other devices may connect; when not, QuorX listens on this computer only. */
 export const lanOn = () => state.lan;

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pocket Budget</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Pocket Budget</h1>
+    <p class="balance">Balance <strong id="balance">0.00</strong></p>
+  </header>
+  <main>
+    <form id="entry-form">
+      <label>What <input id="desc" required maxlength="80" placeholder="Groceries"></label>
+      <label>Amount <input id="amount" type="number" min="0.01" step="0.01" required></label>
+      <label>Type
+        <select id="type"><option value="expense">Expense</option><option value="income">Income</option></select>
+      </label>
+      <label>Category
+        <select id="category">
+          <option value="food">Food</option><option value="rent">Rent</option><option value="fun">Fun</option>
+          <option value="salary">Salary</option><option value="other">Other</option>
+        </select>
+      </label>
+      <label>Date <input id="date" type="date" required></label>
+      <button type="submit">Add</button>
+    </form>
+    <div class="toolbar">
+      <label>Show
+        <select id="filter">
+          <option value="all">All</option><option value="food">Food</option><option value="rent">Rent</option>
+          <option value="fun">Fun</option><option value="salary">Salary</option><option value="other">Other</option>
+        </select>
+      </label>
+      <span id="count"></span>
+    </div>
+    <ul id="entries"></ul>
+  </main>
+  <script src="logic.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

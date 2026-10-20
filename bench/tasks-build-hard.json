@@ -1,0 +1,29 @@
+{
+  "about": "Harder build tasks for scripts/bench.mjs --set build --tasks bench/tasks-build-hard.json, for when bench/tasks-build.json sits at its ceiling. Each task can have: seed (a folder copied into the project before the build: an existing project to work on), verify (hidden checks run on the result; the share that pass caps the function score), needs (toolchains from the platform packs: a computer without one skips the task), kind \"code\" (no page to play: the judge reads the code and the hidden checks instead) and its own suffix.",
+  "suffix": "\n\nPut it in the project folder as index.html plus any .js and .css files it loads. No build step, no server, no npm packages, no external libraries, fonts or network requests: it must work offline when index.html is opened. When it works, open it with preview_site.",
+  "tasks": [
+    {
+      "id": "trip_planner",
+      "cat": "multipage",
+      "verify": "bench/build-hard/trip_planner/verify.mjs",
+      "prompt": "Build a group trip planner as a small multi-page site that shares one state. Three pages with the same nav bar: index.html lists the trips (create, rename and delete a trip, with a confirm before deleting); trip.html?id=<trip id> is one trip's plan, with its travellers (add and remove people) and its days, each with activities that have a time, a title and a cost paid by one traveller, and activities can be reordered within a day; budget.html shows, for every trip, the total cost, what each traveller paid and their share, and the fewest payments that settle who owes whom. All three pages load the same state.js, which keeps everything in localStorage and is the only code that reads or writes it. A change made on one page shows on the others, including in another tab that is already open, without a reload. A trip id in the address that doesn't exist shows a clear message with a link back to the trips."
+    },
+    {
+      "id": "fix_budget",
+      "cat": "fix",
+      "seed": "bench/build-hard/fix_budget/seed",
+      "verify": "bench/build-hard/fix_budget/verify.mjs",
+      "suffix": "\n\nThe project's files are already in the project folder. Keep its look, its files and its element ids; fix the code rather than rewriting the app. No external libraries or network requests. When it works, open index.html with preview_site.",
+      "prompt": "This project is Pocket Budget, a small budget tracker in the project folder (index.html, logic.js, app.js, style.css). Users report that it is broken: the balance at the top is a nonsense number once there are a few entries, deleting an entry sometimes removes a different one, and everything they entered is gone the next day. There may be more bugs than the ones reported. Find and fix every bug you can, test each fix in the browser, and tell me what was wrong."
+    },
+    {
+      "id": "py_ledger",
+      "cat": "cli",
+      "kind": "code",
+      "needs": ["python"],
+      "verify": "bench/build-hard/py_ledger/verify.mjs",
+      "suffix": "\n\nUse Python 3 and its standard library only (no pip installs). Put the files in the project folder, run your tests before you finish, and show a sample run.",
+      "prompt": "Write a command-line tool, ledger.py, for bank exports in CSV with the columns date,description,amount,category (date as YYYY-MM-DD, amount with a dot as the decimal mark, negative for spending; the header is line 1). Commands:\n- python ledger.py summary FILE prints three lines, income: X, spending: Y and net: Z, with 2 decimals (spending as a positive number).\n- python ledger.py months FILE prints one line per month, oldest first: the month as YYYY-MM, two spaces, and that month's net.\n- python ledger.py top FILE --n N prints the N categories with the most spending, largest first: the category, two spaces, the amount spent.\n- python ledger.py check FILE prints each bad row as line N: reason (a missing field, a date that isn't a real date, or an amount that isn't a number) and exits with 1 if there are any, else 0.\nThe other commands skip bad rows with a warning on stderr. Files may start with a UTF-8 BOM and have quoted fields that contain commas or quotes. --help works for the tool and for each command. An unknown command or a file that can't be read prints a one-line error on stderr (no traceback) and exits with 2. Add unit tests in test_ledger.py (unittest) that pass with python -m unittest test_ledger."
+    }
+  ]
+}
