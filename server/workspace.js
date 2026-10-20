@@ -23,7 +23,10 @@ const SKIP = new Set(['node_modules', '.git', '__pycache__', '.venv', 'venv', '.
 const migrated = new Set();
 export const workspaceDir = (projectId) => {
   const root = projectDir(projectId);
-  if (!migrated.has(root) && migrateAgentDir(root) !== 'busy') migrated.add(root);
+  if (!migrated.has(root)) {
+    // A failed move must never lock the user out of the project: say why once, and use the folder as it is.
+    try { if (migrateAgentDir(root) !== 'busy') migrated.add(root); } catch (e) { migrated.add(root); console.error(`QuorX couldn't move the old working folder in ${root}: ${e.message}`); }
+  }
   return root;
 };
 

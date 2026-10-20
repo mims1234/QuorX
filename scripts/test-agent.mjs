@@ -756,6 +756,23 @@ test('renaming the old folder retries while a file in it is briefly locked, then
   } finally { fs.renameSync = real; }
 });
 
+test('a project whose old folder fails to move still opens, with the folder as it is (reported once)', async () => {
+  const { workspaceDir } = await import('../server/workspace.js');
+  const dir = tempDir('oh-mig-');
+  fs.mkdirSync(path.join(dir, '.openharness'), { recursive: true });
+  const id = `mig${Date.now().toString(36)}`;
+  saveProject({ id, name: 'mig', path: dir });
+  const real = fs.renameSync, log = console.error, said = [];
+  fs.renameSync = () => { throw Object.assign(new Error('EINVAL: odd'), { code: 'EINVAL' }); };
+  console.error = (m) => said.push(String(m));
+  try {
+    assert.equal(workspaceDir(id), dir);
+    assert.equal(workspaceDir(id), dir);
+    assert.equal(said.filter((m) => /couldn't move the old working folder/.test(m)).length, 1, 'said once');
+    assert.ok(fs.existsSync(path.join(dir, '.openharness')));
+  } finally { fs.renameSync = real; console.error = log; forgetProject(id); }
+});
+
 test('a project\'s .openharness folder (the name before QuorX) becomes .quorx, and its launch file follows', async () => {
   const { migrateAgentDir } = await import('../server/workspace.js');
   const dir = tempDir('oh-mig-');
