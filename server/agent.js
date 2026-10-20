@@ -18,6 +18,7 @@ import { searchFiles, trashFile, checkpoint, changedFiles, copyTemplate, snapBef
 import { SAFETY_DEFAULTS, safetySettings } from './safety.js';
 import { decide as decideCommand, loadRules, addRule, agentWriteBlocked } from './cmdpolicy.js';
 import { approvalJudge } from './approvals.js';
+import { normalizePlan, pricePlan, itemLine, planFacts, matchPlan, usePlan } from './mediaplan.js';
 import { startTripwire } from './tripwire.js';
 import { detectToolchains, toolchainNote } from './toolchains.js';
 import { startBackground, jobOutput, stopBackground, listBackground } from './bgjobs.js';
@@ -364,7 +365,8 @@ Before your final reply the harness checks what you changed and opens what you b
 
 const MEDIA_RULES = (approval, cats, T) => `
 Every picture, video, music or voice file you make is also saved into the project folder under assets/generated/, and the tool result gives its exact path: use that path in your pages. Give each picture the aspect_ratio of the place it goes (16:9 or 21:9 for hero banners and desktop backgrounds, 3:4 for portrait cards, 9:16 for phone screens). Never search the disk, the harness or its server for these files.
-Paid media tools you may use: ${cats.map((c) => `${MEDIA[c].tool} (${MEDIA[c].noun}${T[c].pick === 'agent' && T[c].models.length > 1 ? '; you choose the model' : ''})`).join(', ')}. They cost real money, so every call goes through an approval gate (${approval === 'yolo' ? 'an automatic check that judges whether the request needs it and the price is fair' : 'the user sees what you plan, the model and the cost, and approves, declines, or switches to another model'}). Always fill "why" with one plain sentence. Use media only when the user asks for it or it clearly adds value. When you choose a model, prefer the cheapest one that fits the request. If a call is declined, read the reason, adapt (another approach, a cheaper option, or no media), and never repeat the identical call.`;
+Paid media tools you may use: ${cats.map((c) => `${MEDIA[c].tool} (${MEDIA[c].noun}${T[c].pick === 'agent' && T[c].models.length > 1 ? '; you choose the model' : ''})`).join(', ')}. They cost real money, so every call goes through an approval gate (${approval === 'yolo' ? 'an automatic check that judges whether the request needs it and the price is fair' : 'the user sees what you plan, the model and the cost, and approves, declines, or switches to another model'}). Always fill "why" with one plain sentence. Use media only when the user asks for it or it clearly adds value. When you choose a model, prefer the cheapest one that fits the request. If a call is declined, read the reason, adapt (another approach, a cheaper option, or no media), and never repeat the identical call.
+When the work needs several paid pieces (a trailer or short film: stills, clips, a voice-over, music), call media_plan first with every paid call you intend; it is approved once as a whole, and later calls that match it (same kind and model, within its count and price) run without another check.`;
 
 const CODE_RULES = `
 Project folder: you have your own folder on the user's machine for multi-file projects (apps, sites, scripts, games with assets). Use list_files, read_file, write_file and edit_file (exact find and replace). shell runs a command line in that folder (any language or toolchain: installs, builds, tests, git); QuorX checks each command first and some ask the user, so run what the task needs and say why in your reply when a command is unusual. To delete files or folders use delete_file (it can be undone), not the shell. start_server starts a long-running dev server that opens in the user's Browser tab and is saved to the project's launch file (the user runs and stops it from the servers button): the server MUST listen on the port given in the PORT environment variable, or take {PORT} as an argument (for example: python -m http.server {PORT}). For a static site (HTML, CSS, JS and assets, no server code), write index.html and its files, then call preview_site: it runs the harness's small static server (.quorx/serve.mjs) as the launch entry "site", so it behaves like any other server. Never write your own static file server (serve.mjs, http.server scripts and the like): preview_site already does that, with no caching. Only an app with real server code (an API, a backend) gets its own server file, in the project itself, run with start_server. The launch file is .quorx/launch.json (read it with read_file); a page on a running server opens with browser target app:<server name>/<path>. Arguments can't contain quotes, brackets, $, %, ;, & or pipes: for anything more than a plain command, write a script file and run it (for example node check.mjs). Such a script does the work itself: never write a script whose job is to run other programs (a wrapper that takes a command and runs it, or calls spawn, exec, subprocess or Start-Process). Run each command directly with shell instead: QuorX reads a script before it runs, and one that runs other programs always asks the user and can't run in the background. Files longer than about 300 lines: write the first part with write_file, then add the rest with append_file in parts of about 300 lines; one huge call can be cut off. Never draft code in your thinking: thinking is not saved and is never shown to the tools, so plan briefly (the idea, the files, the main parts), then write the code straight into write_file / append_file calls. Use write_artifact for quick single-file pages; use the project folder when there are several files, dependencies or a server.
@@ -609,6 +611,15 @@ const TOOLS = ({ artifacts, decide, cats, choices, code, browser, skills, ask, d
         options: { type: 'array', items: { type: 'string' }, description: 'choice: option labels ("label" or "label: meaning"). score: 3-5 ordered levels, lowest first.' },
         my_guess: { type: 'string', description: 'Your own answer before asking: "yes"/"no", an option label, or a score level' },
         my_confidence: { type: 'number', minimum: 0, maximum: 1, description: 'How sure you are of my_guess' } } } } } } } }] : []),
+  ...(cats.length ? [{ type: 'function', function: { name: 'media_plan', description: 'Before work that needs several paid media calls (e.g. a trailer: stills, clips, a voice-over, music), list them all here. The harness prices the plan and it is approved once; calls that then match it run without another approval. A new plan replaces the old one.', parameters: {
+    type: 'object', required: ['items', 'why'], properties: {
+      items: { type: 'array', minItems: 1, maxItems: 12, items: { type: 'object', required: ['kind', 'count', 'what'], properties: {
+        kind: { type: 'string', enum: cats }, count: { type: 'integer', minimum: 1, maximum: 20, description: 'How many calls of this kind' },
+        what: { type: 'string', description: 'Short: what these calls make (e.g. "one clip per scene")' },
+        ...(cats.includes('video') ? { seconds: { type: 'integer', minimum: 1, maximum: 30, description: 'video: seconds per clip' } } : {}),
+        ...(cats.includes('speech') ? { chars: { type: 'integer', minimum: 50, maximum: 1500, description: 'speech: characters per call' } } : {}),
+        model: { type: 'string', description: 'Only when you may choose the model; else the default is used' } } } },
+      why: { type: 'string', description: 'One plain sentence: what the plan makes' } } } } }] : []),
   ...(cats.includes('image') ? [{ type: 'function', function: { name: 'imagine', description: 'Generate a picture (paid; needs approval). It opens as an image artifact.', parameters: {
     type: 'object', required: ['prompt', 'why'], properties: {
       prompt: { type: 'string', description: 'Vivid visual description' }, why: { type: 'string', description: 'One plain sentence: why this picture is worth it' },
@@ -943,7 +954,7 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
   else if (resumed) maxSteps = Math.max(maxSteps, Number(resumed.maxSteps) || 0, resumed.step + 1 + 5); // a restart keeps the reply's (extended) limit, and always leaves room to act
   const planSteps = Math.max(0, Math.min(200, Number(S.planSteps ?? DEFAULTS.planSteps) || 0));
   const planFirst = root && ['big', 'always'].includes(S.planFirst) ? S.planFirst : 'off'; // no project folder: nothing to protect
-  const run = { stop: 'answered', steps: 0, retries: 0, trimmed: 0, tools: 0, lookStreak: 0, warned: false, verifyRounds: 0, questions: 0, cacheMarks: true, passReasoning: true, routing: true, plan: resumed?.plan || null, planGate: resumed?.plan ? 'approved' : null, reviewRounds: 0, reviews: [], inbox: [], linted: {} };
+  const run = { mediaPlan: null, stop: 'answered', steps: 0, retries: 0, trimmed: 0, tools: 0, lookStreak: 0, warned: false, verifyRounds: 0, questions: 0, cacheMarks: true, passReasoning: true, routing: true, plan: resumed?.plan || null, planGate: resumed?.plan ? 'approved' : null, reviewRounds: 0, reviews: [], inbox: [], linted: {} };
   runControls.set(runId, {
     // Switching to YOLO also approves the cards waiting right now (the budget caps still apply).
     setApproval: (mode) => {
@@ -1922,7 +1933,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     return !!g && S.yoloAuto?.[g] === false;
   }
   function strictAsks(name) {
-    if (CAT_OF[name] || name === 'ask_user') return false;
+    if (CAT_OF[name] || name === 'ask_user' || name === 'media_plan') return false;
     if ((S.strictAsk || 'paid') === 'every') return true;
     return (S.strictAskHelpers === true && name === 'delegate') || (S.strictAskDeciders === true && ['decide', 'look', 'extract_design'].includes(name));
   }
@@ -2190,7 +2201,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     }
     if (name === 'decide') return decide(args, step);
     if (name === 'plan') return planTool(args, step);
-    if (['browser', 'use_skill', 'fetch_url', 'ask_user', 'look', 'extract_design'].includes(name) || CAT_OF[name]) return runToolRest(name, args, step);
+    if (['browser', 'use_skill', 'fetch_url', 'ask_user', 'look', 'extract_design', 'media_plan'].includes(name) || CAT_OF[name]) return runToolRest(name, args, step);
     if (name === 'run_command' || [...CODE_TOOLS, ...PROJECT_TOOLS].some((t) => t.function.name === name)) return codeTool(name, args);
     if (['list_docs', 'read_doc', 'search_docs'].includes(name)) return docTool(name, args);
     if (name === 'delegate') return delegate(args, step);
@@ -2222,6 +2233,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (name === 'look') return look(args, step);
     if (name === 'extract_design') return extractDesign(args, step);
     if (CAT_OF[name]) return media(name, args, step);
+    if (name === 'media_plan') return mediaPlanTool(args);
     return `Error: unknown tool ${name}.`;
   }
 
@@ -3047,6 +3059,15 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
       emit({ t: 'approval', ...card, at: at() }); emit({ t: 'approval_done', id, ...ans, at: at() });
       return { ...ans, plan };
     }
+    // A call that fits the approved production plan needs no second vote.
+    const fit = matchPlan(run.mediaPlan, { cat, model: plan.model, est: plan.est });
+    if (fit.ok) {
+      usePlan(run.mediaPlan, fit.item, plan.est);
+      const ans = { approve: true, by: 'plan', reason: `Part of the approved production plan (${fit.item.used} of ${fit.item.count}${fit.item.what ? `: ${fit.item.what}` : ''}).` };
+      emit({ t: 'approval', ...card, at: at() }); emit({ t: 'approval_done', id, ...ans, at: at() });
+      return { ...ans, plan };
+    }
+    if (run.mediaPlan) card.offPlan = fit.why;
     if (S.approval === 'strict' && allowed.has(tool)) {
       const ans = { approve: true, by: 'always allow', reason: 'You chose to always allow this tool in this conversation.' };
       emit({ t: 'approval', ...card, at: at() }); emit({ t: 'approval_done', id, ...ans, at: at() });
@@ -3063,7 +3084,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
       emit({ t: 'approval', ...card, at: at() });
       // The judge sees the user's own words and the harness's facts; not the agent's "why" (agent-written text).
       const j = await approvalJudge({ kind: 'media', userMessages: userTurns(), reading: run.reading?.text, facts: { tool, model: plan.model, estimated_cost_usd: +plan.est.toFixed(4), prompt_written_by_agent: what },
-        voters: S.voters, chatModel: setup.model, gate: S.gate, signal, account, sf: SF, log: { runId, chatId: req.chatId || null, project: projectId } });
+        voters: S.voters, chatModel: setup.model, gate: S.gate, signal, account, sf: SF, log: { runId, chatId: req.chatId || null, project: projectId }, ...(deps.ensemble ? { ensembleFn: deps.ensemble } : {}) });
       if (j.approve !== null) {
         const ans = { approve: j.approve, by: 'deciders', pNeed: j.pNeed, pFair: j.pOther, reason: j.reason, votes: j.votes };
         emit({ t: 'approval_done', id, ...ans, at: at() });
@@ -3082,6 +3103,51 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     }
     emit({ t: 'approval_done', id, ...ans, model: final.model, at: at() });
     return { ...ans, plan: final };
+  }
+
+  // media_plan: the paid calls a piece of work needs, priced by the harness and approved once (server/mediaplan.js).
+  async function mediaPlanTool(args) {
+    const n = normalizePlan(args.items, cats);
+    if (n.error) return `Error: ${n.error}`;
+    const plan = await pricePlan(n.items, (it) => estimateFor(it.kind, modelFor(it.kind, { model: it.model }), { seconds: it.seconds, text: ' '.repeat(it.chars || 0) }, T));
+    const id = newApprovalId();
+    const calls = plan.items.reduce((s, x) => s + x.count, 0);
+    const card = { id, tool: 'media_plan', cat: 'plan', model: '', est: plan.total, basis: 'estimated', detail: `${calls} paid call${calls === 1 ? '' : 's'}`,
+      what: plan.items.map(itemLine).join('\n'), items: plan.items.map(({ kind, count, model, each, detail, what }) => ({ kind, count, model, each, detail, what })), why: clip(args.why, 200), mode: S.approval };
+    const done = (ans) => { emit({ t: 'approval_done', id, ...ans, at: at() }); return ans; };
+    const shown = () => emit({ t: 'approval', ...card, at: at() });
+    const pb = projectId && !req.bench ? budgetState(projectId) : null;
+    const cap = pb?.budget != null ? pb.budget * (1 + Math.max(0, Number(S.budgetGrace ?? DEFAULTS.budgetGrace)) / 100) : null;
+    let ans;
+    if (stats.mediaSpent + plan.total > S.budget) {
+      shown(); ans = done({ approve: false, by: 'budget', reason: `The plan comes to about $${plan.total.toFixed(3)}; with $${stats.mediaSpent.toFixed(3)} already spent that is over this reply's $${S.budget} media budget. Plan fewer, shorter or cheaper calls.` });
+    } else if (cap != null && pb.spent + plan.total > cap) {
+      shown(); ans = done({ approve: false, by: 'budget', reason: `The plan would bring the project to about $${(pb.spent + plan.total).toFixed(3)}, past its $${pb.budget.toFixed(2)} budget.` });
+    } else if (S.approval === 'strict' && allowed.has('media_plan')) {
+      shown(); ans = done({ approve: true, by: 'always allow', reason: 'You chose to always allow production plans in this conversation.' });
+    } else if (S.approval === 'yolo' && (S.yoloAuto?.media !== false || allowed.has('media_plan'))) {
+      shown();
+      if (S.yoloCheck === false) ans = done({ approve: true, by: 'yolo', reason: 'YOLO mode without checks: approved automatically (budget cap still applies).' });
+      else {
+        // Judged once, as a whole: the user's words, the enhancer's reading and the harness's prices; never the agent's "why".
+        const j = await approvalJudge({ kind: 'plan', userMessages: userTurns(), reading: run.reading?.text, facts: planFacts(plan, S.budget), voters: S.voters, chatModel: setup.model, gate: S.gate, signal, account, sf: SF,
+          log: { runId, chatId: req.chatId || null, project: projectId }, ...(deps.ensemble ? { ensembleFn: deps.ensemble } : {}) });
+        if (j.approve !== null) ans = done({ approve: j.approve, by: 'deciders', pNeed: j.pNeed, pFair: j.pOther, reason: j.reason, votes: j.votes });
+        else {
+          // Unsettled: the user may answer; the clock never approves a whole plan (each call is then judged on its own).
+          card.why = j.reason;
+          const waitMs = yoloWait();
+          ans = done(await askUser(card, waitMs ? { ms: waitMs, then: 'skip', onTimeout: () => ({ approve: false, by: 'timeout', reason: `No answer in ${Math.round(waitMs / 1000)}s (${j.reason}); each paid call is judged on its own instead.` }) } : null));
+        }
+      }
+    } else ans = done(await askUser(card));
+    if (!ans.approve) {
+      run.mediaPlan = null;
+      return `${ans.by === 'user' ? 'The user' : ans.by === 'budget' ? 'The budget check' : ans.by === 'timeout' ? 'Nobody' : 'The automatic approval check'} did not approve this plan${ans.reason ? `. Reason: "${ans.reason}"` : ''}. Each paid call will be judged on its own: adapt the plan (fewer or cheaper calls), or go on without it.`;
+    }
+    run.mediaPlan = { id, items: plan.items, total: plan.total, spent: 0 };
+    notes.push(`production plan approved (${calls} paid calls, about $${plan.total.toFixed(3)})`);
+    return `Plan approved (about $${plan.total.toFixed(3)} for ${calls} calls):\n${plan.items.map((x) => `- ${itemLine(x)}`).join('\n')}\nCalls that match it (same kind and model, within its count, not dearer than planned) run without another approval. Anything else is checked on its own. Budget caps still apply.`;
   }
 
   async function media(name, args, step) {

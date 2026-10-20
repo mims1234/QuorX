@@ -52,7 +52,7 @@ const BUCKET = {
   unclear: ['deciders unsure', 'The deciders could not settle it (low confidence).'],
   unmatched: ['guess unclear', 'The agent\'s guess did not match any option, so it can\'t be compared.'],
 };
-const TOOL_NAME = { imagine: '🖼 Make a picture', make_video: '🎬 Make a video', compose_music: '🎵 Compose music', speak: '🗣 Speak aloud',
+const TOOL_NAME = { media_plan: '🎞 Production plan', imagine: '🖼 Make a picture', make_video: '🎬 Make a video', compose_music: '🎵 Compose music', speak: '🗣 Speak aloud',
   write_artifact: '📄 Write a page', edit_artifact: '✏️ Edit a page', read_artifact: '👀 Read a page', decide: '⚖️ Ask the deciders',
   list_files: '🗂 List files', read_file: '👀 Read a file', write_file: '📝 Write a file', append_file: '📝 Append to a file', edit_file: '✏️ Edit a file',
   search_docs: '🔎 Search the attached documents', read_doc: '📄 Read an attached document', list_docs: '📎 List attached documents',
@@ -3404,7 +3404,7 @@ function approvalBadge(a, live) {
 const CMD_CLASS = { read: 'reads only', write: 'writes in the project', build: 'runs project code', install: 'installs packages', external: 'leaves this computer',
   opaque: 'can’t be checked', delete: 'deletes', discard: 'throws away work', never: 'never allowed', unknown: 'no rule covers it' };
 const CMD_ZONE = { inside: 'in the project', outside: 'outside the project', unknown: 'can’t be resolved', blocked: 'blocked', protected: 'protected' };
-const byName = (by) => (by === 'user' ? 'you' : by === 'timeout' ? 'no answer in time' : esc(by));
+const byName = (by) => (by === 'user' ? 'you' : by === 'timeout' ? 'no answer in time' : by === 'plan' ? 'the approved production plan' : esc(by));
 // ⚡ YOLO cards that wait for you a few seconds: a countdown, what happens when it ends, and "Wait for me".
 function waitHTML(card) {
   const w = card.wait;
@@ -3497,7 +3497,9 @@ function approvalHTML(a, live = true) {
   const finalModel = o?.model || c.model;
   const name = TOOL_NAME[c.tool] || esc(c.tool);
   const head = c.free ? `<h4>${name} <small>(free)</small></h4>` : `<h4>${name} · <span class="cost">${money(c.est, 3)}</span> <small>(${esc(c.basis || 'estimated')})</small></h4>`;
-  const model = c.free ? '' : waiting && opts.length > 1
+  // A production plan (media_plan): one row per kind of paid call, approved together.
+  const planRows = c.items ? `<ul class="ap-plan">${c.items.map((x) => `<li><b>${x.count} ×</b> ${esc({ image: '🖼 picture', video: '🎬 clip', music: '🎵 music', speech: '🗣 voice' }[x.kind] || x.kind)} · ${esc(short(x.model))}${x.detail ? ` · ${esc(x.detail)}` : ''}<span class="cost">${money(x.each * x.count, 3)}</span>${x.what ? `<div class="dim">${esc(x.what)}</div>` : ''}</li>`).join('')}</ul>` : '';
+  const model = c.free ? '' : c.items ? planRows : waiting && opts.length > 1
     ? `<label class="what">Model <select class="pickModel">${opts.map((x) => `<option value="${esc(x.model)}" data-est="${x.est}" ${x.model === c.model ? 'selected' : ''}>${esc(short(x.model))} · ${money(x.est, 3)} · ${esc(x.detail)}${x.model === c.model ? (c.pickedBy === 'agent' ? ' (agent’s choice)' : ' (your default)') : ''}</option>`).join('')}</select></label>`
     : `<div class="what">${esc(short(finalModel))} · ${esc(c.detail)}${c.pickedBy === 'agent' && finalModel === c.model ? ' · chosen by the agent' : ''}</div>`;
   // Answered (or no longer waiting): one line, ✓/⛔ + the tool + what it did + the price; click it for the details.
@@ -3507,12 +3509,12 @@ function approvalHTML(a, live = true) {
     const who = o ? `${o.approve ? 'Allowed' : 'Declined'} by ${byName(o.by)}${o.always ? ' · always allowed from now on' : ''}${o.approve && o.model && o.model !== c.model ? ` · switched to ${esc(short(o.model))}` : ''}${o.reason ? ` · ${esc(o.reason)}` : ''}`
       : live ? (c.tool === 'shell' ? 'The deciders are voting on this command…' : 'Deciders are checking whether this is needed and worth the price…') : 'Not answered: the reply ended';
     return `<details class="approval-line ${state}"><summary title="${esc(who)}"><span class="al-mark">${mark}</span><b>${name}</b><span class="al-what">${esc(c.what)}</span><span class="al-price">${c.free ? 'free' : money(c.est, 3)}</span></summary>
-      <div class="al-detail">${c.free ? '' : `<div>${esc(short(finalModel))} · ${esc(c.detail || '')}</div>`}<div>${esc(c.what)}</div>${c.why ? `<div>Why: ${esc(c.why)}</div>` : ''}<div class="al-who ${state}">${who}</div></div></details>`;
+      <div class="al-detail">${c.items ? planRows : `${c.free ? '' : `<div>${esc(short(finalModel))} · ${esc(c.detail || '')}</div>`}<div>${esc(c.what)}</div>`}${c.why ? `<div>Why: ${esc(c.why)}</div>` : ''}<div class="al-who ${state}">${who}</div></div></details>`;
   }
   return `<div class="approval ${o ? 'done' : ''} ${c.free ? 'free' : ''}" ${waiting ? `data-id="${esc(c.id)}" data-tool="${esc(c.tool)}"` : ''}>
     ${head}${model}
-    <div class="what">${c.free ? esc(c.what) : `“${esc(c.what)}”`}</div>
-    ${c.why ? `<div class="what">Why: ${esc(c.why)}</div>` : ''}
+    ${c.items ? '' : `<div class="what">${c.free ? esc(c.what) : `“${esc(c.what)}”`}</div>`}
+    ${c.why ? `<div class="what">Why: ${esc(c.why)}</div>` : ''}${c.items && waiting ? '<div class="what dim">Calls that match this plan then run without asking again; anything else asks on its own.</div>' : ''}
     ${waiting ? `${waitHTML(c)}<textarea rows="1" placeholder="To decline, you can add a note: why, or what to do instead. Enter declines and sends it."></textarea>
       <div class="acts"><button type="button" class="primary yes">${c.free ? 'Allow once' : `Approve ${money(c.est, 3)}`}</button><button type="button" class="always" title="Stop asking for this tool in this chat">Always allow</button><button type="button" class="no">Decline</button></div>`
       : o ? `<div class="outcome ${o.approve ? 'yes' : 'no'}">${o.approve ? '✅ Allowed' : '⛔ Declined'} by ${byName(o.by)}${o.always ? ' · always allowed from now on' : ''}${o.approve && o.model && o.model !== c.model ? ` · switched to ${esc(short(o.model))}` : ''}${o.reason ? ` · ${esc(o.reason)}` : ''}</div>`
