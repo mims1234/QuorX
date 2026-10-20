@@ -1,6 +1,25 @@
 {
   "versions": [
     {
+      "version": "0.2.3",
+      "date": "2026-10-20",
+      "title": "Read the request in full, and wait for you a moment",
+      "items": [
+        { "kind": "new", "text": "Prompt enhancer: a small model spells out what your request implies, shown under your message for you to correct." },
+        { "kind": "improved", "text": "The agent and the deciders read that reading, so a movie trailer's voice-over counts as asked for." },
+        { "kind": "new", "text": "In YOLO, a question or an unsettled approval waits 15 seconds for you before the deciders answer or it carries on." },
+        { "kind": "improved", "text": "Wait for me, or typing in the card, stops that clock; set the time in Settings under Budget & approvals." },
+        { "kind": "improved", "text": "A helper script the agent writes in its own scratch folder is judged on harm only, so the deciders no longer turn it down for not being asked for." },
+        { "kind": "improved", "text": "PowerShell lines that only work with text, such as $_.FullName.Replace(...), .IndexOf(...) and .Substring(...), count as reads and no longer wait for approval." },
+        { "kind": "improved", "text": "A plan that nobody has started after 10 steps gets a nudge to begin." },
+        { "kind": "fixed", "text": "An approval the deciders couldn't settle showed up as two identical cards." },
+        { "kind": "fixed", "text": "The placeholder left when old text is trimmed from the conversation could be written into a file. Such writes are refused now." },
+        { "kind": "fixed", "text": "Bugs the reviewer finds that a user would notice send the build back even when its scores pass." },
+        { "kind": "fixed", "text": "After the checks send a build back, the final reply keeps its answer to your message and adds what was fixed." },
+        { "kind": "improved", "text": "The cost card at the end of the steps is more compact." }
+      ]
+    },
+    {
       "version": "0.2.2",
       "date": "2026-10-20",
       "title": "News that reads as published writing",

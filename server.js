@@ -13,7 +13,7 @@ import { currentKey, PORT, runtime, ROOT, HOME, chatModels, decisionModels, imag
 import { listKeys, addKey, removeKey, setActive, renameKey, keyUsage, activeUsage, accountCredits, startSampling } from './server/keys.js';
 import { setupCheck, runFix } from './server/setup-check.js';
 import { startSignIn, signInStatus, cancelSignIn, finishByCallback, finishWithCode, callbackPage } from './server/oauth.js';
-import { runAgent, answerApproval, answerQuestion, answerBudget, raiseCap, setRunApproval, steerRun, DEFAULTS, MEDIA, briefFor, briefForChat } from './server/agent.js';
+import { runAgent, answerApproval, answerQuestion, answerBudget, raiseCap, setRunApproval, steerRun, setRunReading, holdCard, DEFAULTS, MEDIA, briefFor, briefForChat } from './server/agent.js';
 import { CHECKS } from './server/harness-checks.js';
 import { startRun, getRun, stopRun, follow, runStatus, activeRuns, validRunId, scorecard, readLog } from './server/runs.js';
 import { setBudget, budgetState } from './server/budget.js';
@@ -664,7 +664,7 @@ const server = http.createServer(async (req, res) => {
       if (!getRun(runId)) startRun({ runId, chatId: body.chatId }, (emit, signal) => runAgent(body, emit, signal));
       return stream(res, runId, 0);
     }
-    const rm = url.pathname.match(/^\/api\/runs\/([\w-]+)(?:\/(events|stop|mode|steer|brief|log))?$/);
+    const rm = url.pathname.match(/^\/api\/runs\/([\w-]+)(?:\/(events|stop|mode|steer|reading|hold|brief|log))?$/);
     if (rm && validRunId(rm[1])) {
       // A reply's events so far as one JSON list (the MCP server and run replay read this; the page streams /events).
       if (rm[2] === 'log' && req.method === 'GET') return json(res, 200, { ...runStatus(rm[1]), events: readLog(rm[1]) });
@@ -674,6 +674,8 @@ const server = http.createServer(async (req, res) => {
       if (rm[2] === 'stop' && req.method === 'POST') return json(res, 200, { ok: stopRun(rm[1]) });
       // While a reply runs: switch it between Strict and YOLO, or send it a note it reads at its next step.
       if (rm[2] === 'mode' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e4) || '{}'); return json(res, 200, { ok: setRunApproval(rm[1], b.approval) }); }
+      if (rm[2] === 'hold' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e4) || '{}'); return json(res, 200, { ok: holdCard(rm[1], String(b.id || '')) }); }
+      if (rm[2] === 'reading' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 2e4) || '{}'); return json(res, 200, { ok: setRunReading(rm[1], b.text) }); }
       if (rm[2] === 'steer' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 2e7) || '{}'); return json(res, 200, { ok: steerRun(rm[1], b.text, { images: b.images, docs: b.docs, context: b.context }) }); }
       if (!rm[2] && req.method === 'GET') return json(res, 200, runStatus(rm[1]));
     }

@@ -5,17 +5,17 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { runAgent, answerQuestion, answerApproval, answerBudget, setRunApproval, steerRun } from '../server/agent.js';
+import { runAgent, answerQuestion, answerApproval, answerBudget, setRunApproval, steerRun, holdCard } from '../server/agent.js';
 import { saveProject, forgetProject, setProjectBudget } from '../server/store.js';
 import { loadCheckpoint, dropCheckpoint, ledger } from '../server/runs.js';
-import { setBudget, projectSpend } from '../server/budget.js';
+import { setBudget, projectSpend, budgetState, live as liveRuns } from '../server/budget.js';
 
 let n = 0;
 const reply = (text, calls = [], finishReason = 'stop') => ({ text, toolCalls: calls.map(([name, args], i) => ({ id: `c${++n}_${i}`, type: 'function', function: { name, arguments: typeof args === 'string' ? args : JSON.stringify(args) } })), usage: { cost: 0.0001 }, ms: 1, firstMs: 1, finishReason });
 
 /** Runs one reply. `script(body, i)` returns the model's i-th answer (or throws). */
 // `budget` sets the project's budget and `spent` seeds what it has already spent (as a ledger row).
-async function run(script, { settings = {}, text = 'build it', resume, onEvent, signal, history, budget, spent, setup = {}, openTab, generateImage, ensemble, checks, chatId, prep, cont, images, comments } = {}) {
+async function run(script, { settings = {}, text = 'build it', resume, onEvent, signal, history, budget, spent, setup = {}, openTab, generateImage, ensemble, checks, chatId, prep, cont, images, comments, enhance, reading } = {}) {
   const id = `t${Date.now().toString(36)}${(n++).toString(36)}`;
   const dir = tempDir('quorx-run-');
   saveProject({ id, name: 'test', path: dir });
@@ -26,8 +26,8 @@ async function run(script, { settings = {}, text = 'build it', resume, onEvent, 
   let i = 0;
   const chatStream = async (body, sig, onText) => { bodies.push(structuredClone(body)); const r = await script(body, i++); if (r.text && onText) onText(r.text); return r; };
   try {
-    await runAgent({ runId: id, projectId: id, ...(chatId ? { chatId } : {}), ...(images ? { images } : {}), ...(comments ? { comments } : {}), text, resume, ...(cont ? { continue: cont } : {}), history, setup: { model: 'test/model', ...setup }, settings: { approval: 'yolo', mediaEnabled: false, tools: { browser: { on: false } }, ...settings } },
-      (e) => { events.push(e); onEvent?.(e); }, signal || new AbortController().signal, { chatStream, catalogue: [{ id: 'test/model', maxOut: 4000 }], quiet: true, startServer: async ({ name, args }) => ({ key: `fake-${name}`, url: 'http://localhost:9/', status: 'running', command: ['node', ...(args || [])].join(' '), log: '' }), ...(openTab ? { openTab } : {}), ...(generateImage ? { generateImage } : {}), ...(ensemble ? { ensemble } : {}), ...(checks ? { checks } : {}) });
+    await runAgent({ runId: id, projectId: id, ...(chatId ? { chatId } : {}), ...(images ? { images } : {}), ...(comments ? { comments } : {}), text, resume, ...(cont ? { continue: cont } : {}), ...(reading ? { reading } : {}), history, setup: { model: 'test/model', ...setup }, settings: { approval: 'yolo', mediaEnabled: false, tools: { browser: { on: false } }, ...settings } },
+      (e) => { events.push(e); onEvent?.(e); }, signal || new AbortController().signal, { chatStream, catalogue: [{ id: 'test/model', maxOut: 4000 }], quiet: true, startServer: async ({ name, args }) => ({ key: `fake-${name}`, url: 'http://localhost:9/', status: 'running', command: ['node', ...(args || [])].join(' '), log: '' }), ...(openTab ? { openTab } : {}), ...(generateImage ? { generateImage } : {}), ...(ensemble ? { ensemble } : {}), ...(checks ? { checks } : {}), ...(enhance ? { enhance } : {}) });
     return { events, bodies, dir, id, done: events.find((e) => e.t === 'done') };
   } finally { forgetProject(id); ledger.delete(`seed-${id}`); }
 }
@@ -293,6 +293,21 @@ test('strict mode: parallel reads each ask, and "Always allow" on one answers th
 
 // ---------- project budgets ----------
 const costly = (text, calls = [], cost = 0.6) => ({ ...reply(text, calls), usage: { cost } });
+
+test('a project with a reply running reports what it has spent so far in dollars, next to running: true', () => {
+  const id = `tr${Date.now().toString(36)}`;
+  saveProject({ id, name: 'running spend test', path: tempDir('quorx-r-') });
+  ledger.set(`done-${id}`, { project: id, cost: 0.15 });
+  liveRuns.set(`live-${id}`, { project: id, cost: 0.004 });
+  try {
+    const st = budgetState(id);
+    assert.equal(st.running, true);
+    assert.ok(Math.abs(st.runningCost - 0.004) < 1e-9);
+    assert.ok(Math.abs(st.spent - 0.154) < 1e-9);
+    // what the sidebar shows: the server's total without its running part, plus the page's own live figure
+    assert.ok(st.spent - st.runningCost + 0.004 > 0);
+  } finally { forgetProject(id); ledger.delete(`done-${id}`); liveRuns.delete(`live-${id}`); }
+});
 
 test('a budget can be raised or removed, never set below what the project has spent', () => {
   const id = `tb${Date.now().toString(36)}`;
@@ -1125,4 +1140,122 @@ test('a comment from the pane reaches the agent with the element, its note and i
   const alone = await run((body, i) => [reply('Done.')][i], { text: '', comments });
   const t2 = alone.bodies[0].messages.at(-1).content;
   assert.match(typeof t2 === 'string' ? t2 : t2[0].text, /^\(The user pointed at the element\(s\) below without a message/);
+});
+
+// ---------- the prompt enhancer: what a request plainly implies, for the agent and the deciders ----------
+test('the prompt enhancer reads a first request, tells the agent what it implies, and is paid for as its own role', async () => {
+  const asked = [];
+  const enhance = async (body) => { asked.push(body); return { message: { content: '{"goal":"A 30-second short movie","includes":["spoken narration (speech)","background music","sound effects"],"assumptions":["16:9 landscape"]}' }, usage: { cost: 0.0004 } }; };
+  const { events, bodies, done } = await run((body, i) => [reply('Done.')][i], { text: 'make a 30 sec movie about a cat', enhance });
+  assert.equal(asked.length, 1);
+  assert.match(asked[0].messages.at(-1).content, /make a 30 sec movie about a cat/);
+  const r = of(events, 'reading')[0];
+  assert.ok(r, 'a reading event');
+  assert.deepEqual(r.includes, ['spoken narration (speech)', 'background music', 'sound effects']);
+  const sent = JSON.stringify(bodies[0].messages.at(-1).content);
+  assert.match(sent, /prompt enhancer/);
+  assert.match(sent, /spoken narration \(speech\)/);
+  assert.ok(done.stats.byModel['qwen/qwen3.7-flash']?.role === 'enhancer');
+});
+
+test('the prompt enhancer reads only a chat\'s first request by default; later replies bring the kept reading', async () => {
+  let calls = 0;
+  const enhance = async () => { calls++; return { message: { content: '{"goal":"x","includes":[],"assumptions":[]}' }, usage: {} }; };
+  const history = [{ role: 'user', content: 'make a 30 sec movie' }, { role: 'assistant', content: 'Here it is.' }];
+  const { events } = await run((body, i) => [reply('Done.')][i], { text: 'now make it longer please', history, enhance, reading: 'Goal: a movie\nImplied:\n- narration' });
+  assert.equal(calls, 0);
+  assert.equal(of(events, 'reading').length, 0);
+  await run((body, i) => [reply('Done.')][i], { text: 'now make it longer please', history, enhance, settings: { enhancerWhen: 'every' } });
+  assert.equal(calls, 1);
+  await run((body, i) => [reply('Done.')][i], { text: 'make a 30 sec movie about a dog', enhance, settings: { enhancer: false } });
+  assert.equal(calls, 1);
+});
+
+test('the prompt enhancer: an unusable answer leaves the request as written', async () => {
+  const enhance = async () => ({ message: { content: 'Sure! Here is my reading.' }, usage: {} });
+  const { events, bodies } = await run((body, i) => [reply('Done.')][i], { text: 'make a landing page for my bakery', enhance });
+  assert.equal(of(events, 'reading').length, 0);
+  assert.doesNotMatch(JSON.stringify(bodies[0].messages.at(-1).content), /prompt enhancer/);
+});
+
+// ---------- ⚡ YOLO waits a few seconds for the user before the deciders answer ----------
+const pickSecond = async ({ voters, questions }) => {
+  const q = questions[0], keys = Object.keys(q.options);
+  return { results: { [q.id]: { pick: keys[1], dist: Object.fromEntries(keys.map((k, j) => [k, j === 1 ? 0.9 : 0.1 / (keys.length - 1)])), confidence: 0.88, agree: voters.length, n: voters.length, verdict: 'settled' } }, votes: [], ms: 5 };
+};
+const askSize = (body, i) => [reply('', [['ask_user', { question: 'Which board size should it start with?', options: ['Small', 'Large'] }]]), reply('Done.')][i];
+
+test('YOLO with a wait: the user sees the question first, and their answer wins over the deciders', async () => {
+  let asked = 0;
+  const { events, bodies } = await run(askSize, { settings: { approval: 'yolo', askLimit: 2, yoloWaitSecs: 5 }, ensemble: async (a) => { asked++; return pickSecond(a); },
+    onEvent: (e) => { if (e.t === 'question') { assert.ok(e.wait && e.wait.secs === 5 && e.wait.then === 'deciders' && !e.auto); setTimeout(() => answerQuestion(e.wait.runId, e.id, { choice: 0 }), 20); } } });
+  assert.equal(asked, 0, 'the deciders were not asked');
+  assert.match(toolResults(bodies[1])[0], /^The user chose: "Small"/);
+  assert.equal(of(events, 'answer')[0].by, undefined);
+});
+
+test('YOLO with a wait: no answer in time, so the deciders answer on the same card', async () => {
+  const { events, bodies } = await run(askSize, { settings: { approval: 'yolo', askLimit: 2, yoloWaitSecs: 1 }, ensemble: pickSecond });
+  assert.equal(of(events, 'question').length, 1, 'one card, not a second one for the deciders');
+  const ans = of(events, 'answer')[0];
+  assert.equal(ans.id, of(events, 'question')[0].id);
+  assert.equal(ans.by, 'deciders');
+  assert.equal(ans.choice, 1);
+  assert.match(toolResults(bodies[1])[0], /the user did not answer in time, so the deciders answered for the user: "Large"/);
+});
+
+test('YOLO with a wait: "Wait for me" stops the clock, and the card waits for the user', async () => {
+  let asked = 0, rid = null;
+  const { events, bodies } = await run(askSize, { settings: { approval: 'yolo', askLimit: 2, yoloWaitSecs: 1 }, ensemble: async (a) => { asked++; return pickSecond(a); },
+    onEvent: (e) => {
+      if (e.t === 'question') { rid = e.wait.runId; setTimeout(() => holdCard(rid, e.id), 50); }
+      if (e.t === 'card_held') setTimeout(() => answerQuestion(rid, e.id, { text: 'medium please' }), 1500);
+    } });
+  assert.equal(of(events, 'card_held').length, 1);
+  assert.equal(asked, 0);
+  assert.match(toolResults(bodies[1])[0], /in their own words: "medium please"/);
+});
+
+// ---------- 0.2.3: fixes found in a real build ----------
+test('a write that copies the harness trim note into a file is refused, and the file is not touched', async () => {
+  const note = '[931 characters written earlier; removed from the conversation to save space. The file is on disk: read_file if you need it again.]';
+  const { bodies, dir } = await run((body, i) => [
+    reply('', [['write_file', { path: 'app.js', content: 'const a = 1;\n' }]]),
+    reply('', [['write_file', { path: 'app.js', content: `const a = 1;\n${note}\n` }]]),
+    reply('Done.'),
+  ][i]);
+  assert.match(toolResults(bodies[2]).at(-1), /^Refused: this write_file call contains the harness's note/);
+  assert.equal(fs.readFileSync(path.join(dir, 'app.js'), 'utf8'), 'const a = 1;\n');
+});
+
+test('a plan nobody starts gets a nudge to begin after 10 steps', async () => {
+  const { events } = await run((body, i) => (i === 0 ? reply('', [['plan', { spec: 'A page.', items: [{ text: 'Write it', status: 'todo' }, { text: 'Check it', status: 'todo' }] }]])
+    : i < 13 ? reply('', [['list_files', {}]]) : reply('Done.')), { settings: { maxSteps: 30 } });
+  const nudge = of(events, 'note').find((e) => /no item is started yet/.test(e.msg));
+  assert.ok(nudge, 'the agent was told to start');
+});
+
+test('the reviewer sends back an annoying bug even when the scores pass', async () => {
+  let rv = 0, b = 0;
+  const { events, done } = await run((body) => {
+    if (body.model === 'openai/gpt-6-luna') {
+      rv++;
+      if (rv === 1 || rv === 3) return reply('', [['browser', { action: 'open', target: 'site:index.html' }]]);
+      if (rv === 2) return reply('', [['submit_review', { scores: { function: 4, craft: 4, design: 4, originality: 4 }, bugs: [{ did: 'Read the header and the hero', saw: 'The header says 37, the hero says 31', expected: 'One count', severity: 'annoying' }], summary: 'Good, but the counts differ.' }]]);
+      return reply('', [['submit_review', { scores: { function: 4, craft: 4, design: 4, originality: 4 }, bugs: [], summary: 'Good.' }]]);
+    }
+    return [
+      reply('', [['plan', { spec: 'A page.', items: [{ text: 'Build it', status: 'doing' }], done_when: ['It loads'] }]]),
+      reply('', [['write_file', { path: 'index.html', content: PAGE }]]),
+      reply('', [['preview_site', { title: 'Page' }]]),
+      reply('The page is ready: it lists all 37 plates, with a hero and a header that greet you.'),
+      reply('', [['write_file', { path: 'index.html', content: PAGE.replace('Start', 'Start now') }]]),
+      reply('Fixed the counts.'),
+    ][b++];
+  }, { settings: { tools: { browser: { on: true } } }, openTab: async () => fakeTab() });
+  assert.equal(of(events, 'review')[0].pass, true);
+  assert.equal(of(events, 'sent_back').filter((e) => e.by === 'reviewer').length, 1, 'sent back although it passed');
+  // The final reply keeps the answer written before the send-back, then the fix.
+  assert.match(done.reply, /^The page is ready: it lists all 37 plates/);
+  assert.match(done.reply, /\*\*After the checks:\*\* Fixed the counts\./);
 });

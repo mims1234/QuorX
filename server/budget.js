@@ -28,10 +28,11 @@ export const budgetOf = (projectId) => {
 /** Where a project stands: its budget (null = none), what is spent, and what is left. */
 export function budgetState(projectId) {
   const budget = budgetOf(projectId);
-  const { spent } = projectSpend(projectId);
-  // running: a reply in this project is working now (the sidebar editor stays locked until it finishes).
+  const { spent, running: runningCost } = projectSpend(projectId);
+  // running: a reply in this project is working now (the sidebar editor stays locked until it finishes);
+  // runningCost: what those replies have spent so far (part of spent), so a page showing its own live figure can swap it in.
   const running = [...live.values()].some((r) => r.project === projectId);
-  return { budget, spent, left: budget == null ? null : budget - spent, running };
+  return { budget, spent, left: budget == null ? null : budget - spent, running, runningCost };
 }
 
 /** What every project together has spent today (local time): replies that ended today, plus replies running now. */

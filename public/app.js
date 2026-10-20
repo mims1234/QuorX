@@ -45,14 +45,18 @@ const CATS = [
 // What each new chat starts with: every paid media tool off. Artifacts, code & servers and the browser are always on.
 const CHAT_TOOLS = ['image', 'video', 'music', 'speech'];
 // The quality tools: on by default (the best value in the build benchmark); each chat can switch them off in 🧰.
-const QUALITY_TOOLS = ['reviewer', 'freshEyes', 'deciders', 'helpers'];
-const DEFAULT_CHAT_TOOLS = { image: false, video: false, music: false, speech: false, reviewer: true, freshEyes: true, deciders: true, helpers: true };
+const QUALITY_TOOLS = ['enhancer', 'reviewer', 'freshEyes', 'deciders', 'helpers'];
+const DEFAULT_CHAT_TOOLS = { image: false, video: false, music: false, speech: false, enhancer: true, reviewer: true, freshEyes: true, deciders: true, helpers: true };
 const REVIEW_CHEAP = 'openai/gpt-6-luna', REVIEW_STRONG = 'anthropic/claude-sonnet-5.5', HELPER_DEFAULT = 'qwen/qwen3.7-flash', LOOK_DEFAULT = 'openai/gpt-6-luna-decisions';
 const reviewerModel = () => G.settings.reviewModel || (G.settings.reviewTier === 'strong' ? REVIEW_STRONG : REVIEW_CHEAP);
 const helperModel = () => G.settings.helperModel || HELPER_DEFAULT;
 const lookModel = () => (Array.isArray(G.settings.lookVoters) && G.settings.lookVoters[0]) || LOOK_DEFAULT;
+const enhancerModel = () => G.settings.enhancerModel || helperModel();
 const freshModel = () => G.settings.freshEyesModel || (G.settings.freshEyesTier === 'strong' ? REVIEW_STRONG : helperModel());
 const QUALITY_INFO = {
+  enhancer: { icon: '📝', name: 'Prompt enhancer', kind: 'chat', model: enhancerModel, perBuild: () => '< $0.0001 a request',
+    note: 'Spells out what your request implies, so the deciders don\'t read it too literally.',
+    tip: 'Before the agent starts, a cheap model reads your message (only your words) and writes what it plainly implies: "make a 30-second movie" implies voices or narration, music and sound effects, not just video. The agent builds to that, and in YOLO the deciders that approve paid tools read it beside your message, so they don\'t turn down the voice-over because you never typed "speech". It shows under your message: ✎ to correct it, ✕ to drop it. First message (default) or every message. Under $0.0001 a request (qwen3.7-flash).' },
   reviewer: { icon: '🔍', name: 'Reviewer', kind: 'chat', model: reviewerModel, perBuild: () => (G.settings.reviewModel ? 'priced by the model below' : G.settings.reviewTier === 'strong' ? '≈ $0.02 a build' : '≈ $0.003 a build'),
     note: 'Plays what was built and sends it back with bugs it reproduced.',
     tip: 'A separate model opens what was built, uses it like a person, and sends it back with bugs it reproduced (with the steps). In the build benchmark it caught a 2048 game that did not work (13 → 19 of 20). Cheap (gpt-6-luna) costs about $0.003 a build but sometimes fails good builds; Strong (Claude Sonnet 5.5) costs about $0.02 a build and agreed with the judge every time. Off: no second opinion: fastest and cheapest, but nothing catches a build that only looks done.' },
@@ -591,7 +595,8 @@ function renderSidebar() {
     // The server's total also counts replies that never reached a chat file (stopped, page closed, deleted).
     // Replies running in this page add what they have spent so far (the server's figure for them was taken earlier).
     const liveHere = chats.reduce((s, c) => s + liveOf(G.open.get(c.id)), 0);
-    const cost = (p.spent != null ? p.spent - (p.running || 0) : chats.reduce((s, c) => s + (c.cost || 0), 0)) + liveHere;
+    // (running is yes/no; runningCost is the dollars the server had counted for those replies)
+    const cost = Math.max(0, (p.spent != null ? p.spent - (Number(p.runningCost) || 0) : chats.reduce((s, c) => s + (c.cost || 0), 0)) + liveHere);
     const share = p.budget ? Math.min(1, cost / p.budget) : 0;
     const folded = (G.foldedProjects || []).includes(p.id) && !q;
     // A project with a chat working glows; with a chat open it's the current one; the rest fade back (see last.css).
@@ -988,7 +993,7 @@ function editBudget(p, suggest, mount) {
       if (!pop.isConnected) return clearInterval(poll);
       const list = await fetch('/api/projects').then((r) => r.json()).catch(() => null);
       const q = list?.find((x) => x.id === p.id);
-      if (q) { spent = q.spent || 0; serverBusy = !!q.running; Object.assign(p, { spent, budget: q.budget, running: q.running }); }
+      if (q) { spent = q.spent || 0; serverBusy = !!q.running; Object.assign(p, { spent, budget: q.budget, running: q.running, runningCost: q.runningCost }); }
       draw();
     }, 2000);
     const close = (v) => {
@@ -2054,7 +2059,7 @@ function keepAtBottom(c, msgs, root) {
   const nearEnd = () => msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 80;
   const toEnd = () => { if (!c.follow) return; msgs.scrollTop = msgs.scrollHeight; jump.hidden = true; };
   c.toEnd = toEnd;
-  msgs.addEventListener('scroll', () => { c.follow = nearEnd(); jump.hidden = c.follow; }, { passive: true });
+  followScroll(msgs, { get: () => c.follow, set: (v) => { c.follow = v; }, near: 80, onChange: (v) => { jump.hidden = v; } });
   jump.onclick = () => { c.follow = true; toEnd(); };
   if ('ResizeObserver' in window) {
     const ro = new ResizeObserver(() => toEnd());
@@ -2064,6 +2069,22 @@ function keepAtBottom(c, msgs, root) {
   toEnd();
   // Pictures, maths and code highlighting finish after the first paint: follow them too.
   setTimeout(toEnd, 300); setTimeout(toEnd, 1200);
+}
+// Keeps a scroll box at its end while following. Only your own scrolling (wheel, touch, keys, the scrollbar) stops
+// it; content that grows under it (a picture that loads late, maths that renders) moves it back to the end instead.
+function followScroll(box, { get, set, near = 60, onChange }) {
+  let userAt = 0, lastH = box.scrollHeight;
+  for (const ev of ['wheel', 'touchmove', 'keydown', 'pointerdown']) box.addEventListener(ev, () => { userAt = Date.now(); }, { passive: true });
+  box.addEventListener('scroll', () => {
+    const grew = box.scrollHeight !== lastH; lastH = box.scrollHeight;
+    const atEnd = box.scrollHeight - box.scrollTop - box.clientHeight < near;
+    if (atEnd) set(true);
+    else if (get() && grew && Date.now() - userAt > 500) box.scrollTop = box.scrollHeight;
+    else set(false);
+    onChange?.(get());
+  }, { passive: true });
+  // pictures that finish loading later
+  box.addEventListener('load', (e) => { if (e.target.tagName === 'IMG' && get()) box.scrollTop = box.scrollHeight; }, true);
 }
 // ---------- the chat panes ----------
 function renderPanes() {
@@ -2296,7 +2317,7 @@ function renderComposerBar(c) {
 // ---------- usage (per chat): every model this chat paid for, grouped by kind of call ----------
 const USAGE_KIND = {
   writer: ['💬', 'Chat model'], strong: ['💬', 'Chat model (strong)'], summary: ['🗜', 'Summaries'], decider: ['⚖️', 'Deciders · checks, look, decide'],
-  reviewer: ['🔍', 'Reviewer'], helper: ['🧭', 'Helpers'], freshEyes: ['👀', 'Fresh eyes'],
+  reviewer: ['🔍', 'Reviewer'], helper: ['🧭', 'Helpers'], freshEyes: ['👀', 'Fresh eyes'], enhancer: ['📝', 'Prompt enhancer'],
   image: ['🖼', 'Pictures'], video: ['🎬', 'Video'], music: ['🎵', 'Music'], speech: ['🗣', 'Voice'], listen: ['🎤', 'Mic (speech to text)'], media: ['🎨', 'Media'],
 };
 function chatUsage(c) {
@@ -2417,6 +2438,7 @@ function qualitySettings(c) {
   return {
     review: t.reviewer ? (G.settings.review && G.settings.review !== 'off' ? G.settings.review : 'builds') : 'off',
     freshEyes: t.freshEyes !== false,
+    enhancer: t.enhancer !== false,
     deciders: !!t.deciders,
     helpers: !!t.helpers,
   };
@@ -2446,8 +2468,8 @@ function renderChatTools(c) {
         const q = QUALITY_INFO[k], m = q.model(), onq = c.tools[k] !== false;
         return `<label class="cmp-tp-row q-row" role="menuitemcheckbox" aria-checked="${onq}" title="${esc(q.tip)}">
           <span class="switch"><input type="checkbox" data-qtool="${k}" ${onq ? 'checked' : ''}><span class="slider"></span></span>
-          <span class="cmp-tp-info"><span class="cmp-tp-top"><span class="cmp-tp-name">${q.icon} ${q.name} <span class="q-cost" title="${esc(q.perBuild())}">${esc(q.perBuild().replace(/\s+(a build|a look|a check|when used|each|per \w+).*$/i, ''))}</span></span><button type="button" class="cmp-tp-model q-pick" data-q="${k}" title="${esc(m)} · ${esc(priceOf(m))} (all chats)">${recDot(m, q.kind)} ${esc(short(m))} <small>${esc(shortPrice(m))}</small> <i>▾</i></button></span>
-          <span class="cmp-tp-note"><span class="cmp-tp-ntext">${esc(q.note)}</span>${k === 'reviewer' || k === 'freshEyes' ? `<span class="q-tier" role="group" aria-label="${q.name} strength">${[['cheap', 'Cheap'], ['strong', 'Strong']].map(([v, l]) => { const tierKey = k === 'reviewer' ? 'reviewTier' : 'freshEyesTier', modelKey = k === 'reviewer' ? 'reviewModel' : 'freshEyesModel'; return `<button type="button" class="q-tier-btn ${!G.settings[modelKey] && (G.settings[tierKey] || 'cheap') === v ? 'on' : ''}" data-q="${k}" data-tier="${v}" title="${v === 'cheap' ? (k === 'reviewer' ? 'gpt-6-luna: about $0.003 a build' : 'the helper model: fast, about $0.001 a look') : 'Claude Sonnet 5.5: stronger, about $0.01–0.02'}">${l}</button>`; }).join('')}</span>` : ''}</span></span></label>`;
+          <span class="cmp-tp-info"><span class="cmp-tp-top"><span class="cmp-tp-name">${q.icon} ${q.name} <span class="q-cost" title="${esc(q.perBuild())}">${esc(q.perBuild().replace(/\s+(a build|a look|a check|a request|when used|each|per \w+).*$/i, ''))}</span></span><button type="button" class="cmp-tp-model q-pick" data-q="${k}" title="${esc(m)} · ${esc(priceOf(m))} (all chats)">${recDot(m, q.kind)} ${esc(short(m))} <small>${esc(shortPrice(m))}</small> <i>▾</i></button></span>
+          <span class="cmp-tp-note"><span class="cmp-tp-ntext">${esc(q.note)}</span>${k === 'enhancer' ? `<span class="q-tier" role="group" aria-label="When the prompt enhancer reads">${[['first', 'First', 'First message: reads a chat\'s first message; later replies reuse that reading'], ['every', 'Every', 'Every message: reads each new message (under $0.0001 each)']].map(([v, l, tip]) => `<button type="button" class="q-when-btn ${(G.settings.enhancerWhen || 'first') === v ? 'on' : ''}" data-when="${v}" title="${tip}">${l}</button>`).join('')}</span>` : ''}${k === 'reviewer' || k === 'freshEyes' ? `<span class="q-tier" role="group" aria-label="${q.name} strength">${[['cheap', 'Cheap'], ['strong', 'Strong']].map(([v, l]) => { const tierKey = k === 'reviewer' ? 'reviewTier' : 'freshEyesTier', modelKey = k === 'reviewer' ? 'reviewModel' : 'freshEyesModel'; return `<button type="button" class="q-tier-btn ${!G.settings[modelKey] && (G.settings[tierKey] || 'cheap') === v ? 'on' : ''}" data-q="${k}" data-tier="${v}" title="${v === 'cheap' ? (k === 'reviewer' ? 'gpt-6-luna: about $0.003 a build' : 'the helper model: fast, about $0.001 a look') : 'Claude Sonnet 5.5: stronger, about $0.01–0.02'}">${l}</button>`; }).join('')}</span>` : ''}</span></span></label>`;
       }).join('')}
       </div>
       <div class="cmp-tp-group">Paid media</div>
@@ -2477,12 +2499,13 @@ function renderChatTools(c) {
   // The quality tools: on/off for this chat; their models and the reviewer's strength apply to all chats.
   const reopen = () => { const keep = !menu.hidden; renderToolbars(); if (keep) $('.tools-btn', $('.toolbar', c.el.root))?.click(); };
   for (const cb of menu.querySelectorAll('input[data-qtool]')) cb.onchange = () => { c.tools[cb.dataset.qtool] = cb.checked; saveChat(c); reopen(); };
+  for (const b of menu.querySelectorAll('.q-when-btn')) b.onclick = (e) => { e.preventDefault(); e.stopPropagation(); G.settings.enhancerWhen = b.dataset.when; savePrefs(); reopen(); };
   for (const b of menu.querySelectorAll('.q-tier-btn')) b.onclick = (e) => { e.preventDefault(); e.stopPropagation(); if (b.dataset.q === 'freshEyes') { G.settings.freshEyesTier = b.dataset.tier; G.settings.freshEyesModel = ''; } else { G.settings.reviewTier = b.dataset.tier; G.settings.reviewModel = ''; } savePrefs(); reopen(); };
   for (const b of menu.querySelectorAll('.q-pick')) b.onclick = async (e) => {
     e.preventDefault(); e.stopPropagation();
     const k = b.dataset.q, q = QUALITY_INFO[k];
-    const id = await pickModel(q.kind, q.model(), { context: k === 'freshEyes' ? 'Fresh eyes (all chats): it must use tools' : k === 'reviewer' ? 'Reviewer (all chats): it must use tools and see images' : k === 'deciders' ? 'Decider for screenshot checks (all chats): it must read images' : 'Helper model (all chats): it must use tools' });
-    if (id) { if (k === 'reviewer') G.settings.reviewModel = id; else if (k === 'freshEyes') G.settings.freshEyesModel = id; else if (k === 'helpers') G.settings.helperModel = id; else G.settings.lookVoters = [id]; savePrefs(); }
+    const id = await pickModel(q.kind, q.model(), { context: k === 'enhancer' ? 'Prompt enhancer (all chats): a fast, cheap model is enough' : k === 'freshEyes' ? 'Fresh eyes (all chats): it must use tools' : k === 'reviewer' ? 'Reviewer (all chats): it must use tools and see images' : k === 'deciders' ? 'Decider for screenshot checks (all chats): it must read images' : 'Helper model (all chats): it must use tools' });
+    if (id) { if (k === 'enhancer') G.settings.enhancerModel = id; else if (k === 'reviewer') G.settings.reviewModel = id; else if (k === 'freshEyes') G.settings.freshEyesModel = id; else if (k === 'helpers') G.settings.helperModel = id; else G.settings.lookVoters = [id]; savePrefs(); }
     reopen();
   };
   $('.tm-settings', menu).onclick = () => { close(); openSettings(); };
@@ -2550,6 +2573,8 @@ function renderMsg(c, m) {
     el.innerHTML = `<div class="utext"></div>${m.imgs?.length ? `<div class="u-imgs" data-views="${esc(JSON.stringify(m.imgViews || []))}">${m.imgs.map((u, k) => `<img src="${u}" alt="attached picture" data-k="${k}" title="Click to see it large">`).join('')}</div>` : ''}${m.docs?.length ? `<div class="u-docs">${m.docs.map((d) => `<button type="button" class="u-doc" data-doc="${esc(JSON.stringify(d))}" title="${esc(d.name)} · ${esc(docSize(d.size))} · click to preview">${DOC_ICON[d.kind] || '📄'} ${esc(d.name)}</button>`).join('')}</div>` : ''}${m.ctx?.length ? `<div class="ctx-used">${m.ctx.map((t) => `<span>📎 ${esc(t)}</span>`).join('')}</div>` : ''}${m.cmts?.length ? `<div class="ctx-used cmts-used">${m.cmts.map((x) => `<span title="${esc(x.selector)}">💬 ${esc(x.tag)} "${esc(clip(x.text || '', 40))}"${x.note ? `: ${esc(clip(x.note, 60))}` : ''}</span>`).join('')}</div>` : ''}${m.at ? timeTag(m.at) : ''}`;
     $('.utext', el).innerHTML = md(m.content);
     enhance($('.utext', el));
+    el.insertAdjacentHTML('beforeend', '<div class="u-reading-slot"></div>');
+    drawReading(c, m);
     el.insertAdjacentHTML('beforeend', `<div class="msg-tools u-tools"><button type="button" class="mt-btn mt-rewind" title="Rewind to here: this message and everything after it leave the chat, and it goes back in the box to edit. You choose whether file changes are undone too." aria-label="Rewind to here">${msgIcon('rewind')}</button><button type="button" class="mt-btn mt-copy" title="Copy this message" aria-label="Copy message">${msgIcon('copy')}</button></div>`);
     wireIconCopy($('.mt-copy', el), () => m.content);
     $('.mt-rewind', el).onclick = () => rewindTo(c, m);
@@ -2567,6 +2592,41 @@ function renderMsg(c, m) {
   $('.thinking > summary', el).addEventListener('click', () => { m.thinkOpen = !$('.thinking', el).open; });
   updateMsg(c, m);
   return el;
+}
+// ---------- 📝 the prompt enhancer's reading, under the message it read: correct it or drop it ----------
+function drawReading(c, m) {
+  const slot = m.el && $('.u-reading-slot', m.el), r = m.reading;
+  if (!slot) return;
+  if (!r) { slot.innerHTML = ''; return; }
+  const a = c.agent, latest = a.messages.filter((x) => x.role === 'user' && x.reading).at(-1) === m;
+  const push = (text) => { if (c.running?.runId) postJ(`/api/runs/${c.running.runId}/reading`, { text }).catch(() => {}); };
+  if (r.removed) {
+    slot.innerHTML = `<div class="u-reading off"><span>📝 Reading dropped: the agent and the deciders go by your words only.</span>${latest ? '<button type="button" class="rd-restore">↺ Use it again</button>' : ''}</div>`;
+    const rs = $('.rd-restore', slot);
+    if (rs) rs.onclick = () => { r.removed = false; a.reading = { text: r.text, at: Date.now() }; push(r.text); saveChat(c); drawReading(c, m); };
+    return;
+  }
+  if (r.editing) {
+    slot.innerHTML = `<div class="u-reading editing"><div class="rd-label">📝 How to read your request <small>The agent builds to this, and the deciders read it beside your message.</small></div>
+      <textarea class="rd-text" rows="${Math.min(14, r.text.split('\n').length + 2)}" spellcheck="true">${esc(r.text)}</textarea>
+      <div class="acts"><button type="button" class="primary rd-save">Save</button><button type="button" class="rd-cancel">Cancel</button></div></div>`;
+    const ta = $('.rd-text', slot); ta.focus();
+    $('.rd-cancel', slot).onclick = () => { r.editing = false; drawReading(c, m); };
+    $('.rd-save', slot).onclick = () => {
+      const text = ta.value.trim();
+      r.editing = false;
+      if (!text) { r.removed = true; a.reading = null; push(''); } else { r.text = text; r.edited = true; a.reading = { text, at: Date.now(), edited: true }; push(text); }
+      saveChat(c); drawReading(c, m);
+    };
+    return;
+  }
+  const brief = r.edited ? 'your corrected reading' : r.includes.length ? `implies ${r.includes.slice(0, 3).map((x) => clip(x, 40)).join(', ')}${r.includes.length > 3 ? `, +${r.includes.length - 3} more` : ''}` : 'nothing beyond what you wrote';
+  slot.innerHTML = `<details class="u-reading"><summary><span class="rd-sum">📝 Read as<span class="rd-brief">: ${esc(brief)}</span></span>${latest ? '<span class="rd-acts"><button type="button" class="rd-edit" title="Correct how your request is read: the agent and the deciders use your version">✎</button><button type="button" class="rd-drop" title="Don\'t use this reading: go by your words only">✕</button></span>' : ''}</summary>
+    <div class="rd-body">${r.edited ? `<div class="rd-plain">${esc(r.text)}</div>` : `<div class="rd-goal"><b>Goal</b> ${esc(r.goal)}</div>${r.includes.length ? `<div class="rd-h">Implied, though unsaid</div><ul>${r.includes.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}${r.assumptions.length ? `<div class="rd-h">Assumed (defaults)</div><ul class="rd-assumed">${r.assumptions.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}`}
+    <div class="rd-by">${r.edited ? 'Corrected by you' : `By ${esc(short(r.model || ''))}${r.cost ? ` · ${money(r.cost, 5)}` : ''}`} · the agent builds to this; in YOLO the deciders read it before approving paid tools</div></div></details>`;
+  const ed = $('.rd-edit', slot), dr = $('.rd-drop', slot);
+  if (ed) ed.onclick = (e) => { e.preventDefault(); r.editing = true; drawReading(c, m); };
+  if (dr) dr.onclick = (e) => { e.preventDefault(); r.removed = true; a.reading = null; push(''); saveChat(c); drawReading(c, m); };
 }
 function wireCopy(btn, text) {
   btn.onclick = async () => { try { await navigator.clipboard.writeText(text() || ''); btn.textContent = '✓'; btn.classList.add('done'); } catch { btn.textContent = '!'; } setTimeout(() => { btn.textContent = '⧉'; btn.classList.remove('done'); }, 1300); };
@@ -2652,7 +2712,7 @@ function callsLabel(calls) {
 // Walks the trace once: steps (thinking, what the agent said, its tool calls with results), reviewer and helper work,
 // and the cards and notes in between, all in the order they happened.
 function timelineItems(m) {
-  const tr = m.trace || [], items = [], helpers = new Map();
+  const tr = m.trace || [], items = [], helpers = new Map(), seenCards = new Set();
   let blk = null, rv = null;
   const newBlock = (step) => { blk = { kind: 'step', step, calls: [], aside: '', done: false }; items.push(blk); return blk; };
   for (let i = 0; i < tr.length; i++) {
@@ -2677,6 +2737,9 @@ function timelineItems(m) {
     if (e.t === 'fresh_eyes') { items.push({ kind: 'note', text: `👀 Fresh eyes (${short(e.model)}) ${e.ok ? `on a problem that came back: ${clip((e.report || '').split('\n')[0].replace(/^Cause:\s*/i, ''), 220)}` : 'looked but found nothing'}` }); continue; }
     if (e.t === 'helper_done') { const h = helpers.get(e.id); if (h) { h.label = `Helper ${e.id} ${e.ok ? 'reported back' : 'gave no report'} · ${e.steps} step${e.steps === 1 ? '' : 's'} · ${money(e.cost, 4)}`; h.done = true; } continue; }
     if (e.t === 'approval') {
+      // One card per approval: a YOLO vote that can't settle announces the same card again when it turns to you.
+      if (seenCards.has(e.id)) continue;
+      seenCards.add(e.id);
       // Waiting for you: a card where it happened. Answered (or being checked): a badge on the tool call it was about.
       const a = m.approvals?.[e.id], waiting = a && !a.outcome && a.card.mode === 'strict' && m.live;
       const pool = blk?.calls || [];
@@ -3126,7 +3189,7 @@ function renderTracePane(c, m) {
   jump.hidden = !!T[m.runId];
   jump.onclick = () => { T[m.runId] = true; jump.hidden = true; now.scrollTop = now.scrollHeight; };
   body.appendChild(jump);
-  now.addEventListener('scroll', () => { T[m.runId] = now.scrollHeight - now.scrollTop - now.clientHeight < 60; jump.hidden = T[m.runId]; }, { passive: true });
+  followScroll(now, { get: () => !!T[m.runId], set: (v) => { T[m.runId] = v; }, onChange: (v) => { jump.hidden = v; } });
   for (const b of now.querySelectorAll('.tl-chip')) b.onclick = () => { F.has(b.dataset.k) ? F.delete(b.dataset.k) : F.add(b.dataset.k); renderTracePane(c, m); };
   const all = $('.tl-all', now); if (all) all.onclick = () => { F.clear(); renderTracePane(c, m); };
 }
@@ -3242,6 +3305,8 @@ function traceHTML(m) {
       const i = out.findLastIndex((h) => h.includes(`data-llm="${e.step}"`));
       if (i >= 0) out[i] = out[i].replace(`<span class="sub" data-llm="${e.step}"></span>`, `<div class="sub">${secs(e.ms)} · <span class="tok-out">${e.tokensOut} tokens out</span> · ${money(e.cost, 5)}${e.provider ? ` · via <span class="tr-prov" title="The provider OpenRouter routed this call to">${esc(e.provider)}</span>` : ''}${e.model && e.model !== m.trace.find((x) => x.t === 'llm_start' && x.step === e.step)?.model ? ` · <b class="tr-fallback" title="The chat's model was unavailable, so OpenRouter used the fallback model">fallback ${esc(short(e.model))}</b>` : ''}${e.toolCalls.length ? ` · then ${e.toolCalls.join(', ')}` : ''}</div>${e.aside ? `<div class="aside">💬 ${esc(e.aside)}</div>` : ''}`);
     } else if (e.t === 'tool' && e.name !== 'decide') row(e.at, `${e.by === 'reviewer' ? '🧪 <span class="tr-rv">reviewer</span> ' : e.by === 'helper' ? `🤝 <span class="tr-hp">helper ${e.helper || ''}</span> ` : ''}${TOOL_NAME[e.name]?.split(' ')[0] || '🔧'} <b>${esc(e.name)}</b><div class="sub">${esc(argSummary(e))}</div>`, e.by === 'reviewer' ? 'browser' : 'tool');
+    else if (e.t === 'reading') row(e.at, `📝 <b>Prompt enhancer</b> ${esc(short(e.model))} read the request${e.late ? ' (too late for the first step; the deciders still use it)' : ''} · ${secs(e.ms)} · ${money(e.cost, 5)}<div class="sub" style="white-space:pre-wrap">${esc(e.text)}</div>`, 'note');
+    else if (e.t === 'reading_edit') row(e.at, e.text ? `📝 You corrected the reading<div class="sub" style="white-space:pre-wrap">${esc(e.text)}</div>` : '📝 You dropped the reading', 'note');
     else if (e.t === 'fresh_eyes_start') row(e.at, `👀 <b>Fresh eyes</b> ${esc(short(e.model))}: a problem came back, so a clean-context model takes a look<div class="sub">${(e.problems || []).map(esc).join('<br>')}</div>`, 'note');
     else if (e.t === 'fresh_eyes') row(e.at, `👀 Fresh eyes ${e.ok ? 'diagnosed it' : 'found nothing'}${e.report ? `<div class="sub" style="white-space:pre-wrap">${esc(e.report)}</div>` : ''}`, e.ok ? 'ok' : 'warn');
     else if (e.t === 'helper_start' && e.fresh) continue;
@@ -3258,7 +3323,8 @@ function traceHTML(m) {
     else if (e.t === 'decide_vote') rounds[e.round]?.votes.push(e);
     else if (e.t === 'decide_done') { if (rounds[e.round]) rounds[e.round].done = e; }
     else if (e.t === 'approval') row(e.at, e.free ? `✋ asks to use <b>${esc(e.tool)}</b>` : `💳 <b>${esc(e.tool)}</b> wants approval · ${money(e.est, 3)} (${esc(e.basis || 'estimated')})`, 'ask');
-    else if (e.t === 'approval_done') row(e.at, `${e.approve ? '✅ approved' : '⛔ declined'} by ${esc(e.by)}${e.reason ? `<div class="sub">${esc(e.reason)}</div>` : ''}`, e.approve ? 'ok' : 'err');
+    else if (e.t === 'card_held') row(e.at, '⏸ You stopped the clock: the card waits for you', 'note');
+    else if (e.t === 'approval_done') row(e.at, `${e.approve ? '✅ approved' : '⛔ declined'} by ${byName(e.by)}${e.reason ? `<div class="sub">${esc(e.reason)}</div>` : ''}`, e.approve ? 'ok' : 'err');
     else if (e.t === 'media_status') mediaStatus = e;
     else if (e.t === 'screenshot') row(e.at, `📸 browser ${esc(e.action)}${e.target ? ` ${esc(e.target)}` : ''}<div class="sub">${esc(e.url || '')}</div><img class="shot" src="${e.image}" alt="screenshot" loading="lazy">`, 'browser');
     else if (e.t === 'command' && e.background) row(e.at, `⏳ <code>${esc(e.command)}</code> → background job <b>${esc(e.background)}</b> · ${esc(e.why || '')}<div class="sub">It keeps running; its output goes to ${esc(e.log || 'its log')}. Stop it from the terminal, or the agent stops it with job_stop.</div>`, 'cmd');
@@ -3349,7 +3415,7 @@ function decideCard(r) {
 function approvalBadge(a, live) {
   const c = a.card, o = a.outcome;
   const state = o ? (o.approve ? 'yes' : 'no') : live ? 'wait' : 'none';
-  const who = o ? `${o.approve ? 'Allowed' : 'Declined'} by ${o.by === 'user' ? 'you' : esc(o.by)}${o.always ? ' · always allowed from now on' : ''}${o.approve && o.model && o.model !== c.model ? ` · switched to ${esc(short(o.model))}` : ''}${o.reason ? ` · ${esc(o.reason)}` : ''}`
+  const who = o ? `${o.approve ? 'Allowed' : 'Declined'} by ${byName(o.by)}${o.always ? ' · always allowed from now on' : ''}${o.approve && o.model && o.model !== c.model ? ` · switched to ${esc(short(o.model))}` : ''}${o.reason ? ` · ${esc(o.reason)}` : ''}`
     : live ? (c.tool === 'shell' ? 'The deciders are voting on this command…' : 'The deciders are checking whether this is needed and worth the price…') : 'Not answered: the reply ended';
   const mark = { yes: '✓', no: '⛔', wait: '⚡', none: '·' }[state];
   const price = c.free ? '' : money(c.est, 3);
@@ -3362,6 +3428,38 @@ function approvalBadge(a, live) {
 const CMD_CLASS = { read: 'reads only', write: 'writes in the project', build: 'runs project code', install: 'installs packages', external: 'leaves this computer',
   opaque: 'can’t be checked', delete: 'deletes', discard: 'throws away work', never: 'never allowed', unknown: 'no rule covers it' };
 const CMD_ZONE = { inside: 'in the project', outside: 'outside the project', unknown: 'can’t be resolved', blocked: 'blocked', protected: 'protected' };
+const byName = (by) => (by === 'user' ? 'you' : by === 'timeout' ? 'no answer in time' : esc(by));
+// ⚡ YOLO cards that wait for you a few seconds: a countdown, what happens when it ends, and "Wait for me".
+function waitHTML(card) {
+  const w = card.wait;
+  if (!w) return '';
+  if (w.held) return '<div class="aw held"><span class="aw-text">⏸ Waiting for you: nothing happens until you answer.</span></div>';
+  const then = { deciders: 'the deciders answer for you', run: 'it runs (the deciders saw little risk)', skip: 'it is skipped (the deciders weren\'t sure it is harmless)' }[w.then] || 'the reply carries on';
+  const left = Math.max(0, Math.ceil((w.until - Date.now()) / 1000));
+  return `<div class="aw" data-until="${w.until}" data-secs="${w.secs}" data-run="${esc(w.runId || '')}" data-id="${esc(card.id)}"><span class="aw-bar" aria-hidden="true"><i style="width:${Math.min(100, (left / (w.secs || 1)) * 100)}%"></i></span><span class="aw-text">⚡ No answer in <b class="aw-n">${left}</b>s and ${then}.</span><button type="button" class="aw-hold" title="Stop the clock: the card waits until you answer">Wait for me</button></div>`;
+}
+// One clock for every countdown on the page; "Wait for me", or starting to type in the card, stops it.
+setInterval(() => {
+  for (const el of document.querySelectorAll('.aw[data-until]')) {
+    const ms = Number(el.dataset.until) - Date.now(), n = $('.aw-n', el), bar = $('.aw-bar i', el);
+    if (n) n.textContent = String(Math.max(0, Math.ceil(ms / 1000)));
+    if (bar) bar.style.width = `${Math.max(0, Math.min(100, (ms / 1000 / (Number(el.dataset.secs) || 1)) * 100))}%`;
+    if (ms <= 0) { el.classList.add('done'); const t = $('.aw-text', el); if (t && !el.dataset.out) { el.dataset.out = '1'; t.textContent = '⚡ No answer in time: carrying on…'; } }
+  }
+}, 250);
+function holdWait(aw) {
+  if (!aw || aw.dataset.holding || !aw.dataset.until || Number(aw.dataset.until) <= Date.now()) return;
+  aw.dataset.holding = '1';
+  aw.classList.add('held');
+  aw.innerHTML = '<span class="aw-text">⏸ Waiting for you: nothing happens until you answer.</span>';
+  postJ(`/api/runs/${aw.dataset.run}/hold`, { id: aw.dataset.id }).catch(() => {});
+}
+document.addEventListener('click', (e) => { const b = e.target.closest?.('.aw-hold'); if (b) holdWait(b.closest('.aw')); });
+document.addEventListener('focusin', (e) => {
+  if (!e.target.matches?.('textarea, input[type="text"]')) return;
+  const card = e.target.closest('.approval');
+  if (card) holdWait($('.aw[data-until]', card));
+});
 function shellCardHTML(a) {
   const c = a.card, p = c.policy || {};
   const segs = (p.segments || []).map((s) => `<div class="sc-seg"><code>${esc(clip(s.text, 200))}</code><span class="sc-cls" data-cls="${esc(s.cls)}">${esc(CMD_CLASS[s.cls] || s.cls)}${s.global ? ' · whole computer' : ''}${s.via ? ` · run by ${esc(s.via)}` : ''}</span>${(s.paths || []).map((x) => `<span class="sc-path" data-zone="${esc(x.zone)}">${esc(CMD_ZONE[x.zone] || x.zone)} · ${esc(clip(x.path, 90))}</span>`).join('')}</div>`).join('');
@@ -3373,6 +3471,7 @@ function shellCardHTML(a) {
     ${segs ? `<div class="sc-segs">${segs}</div>` : ''}
     ${(p.packages || []).length ? `<div class="sc-segs">${p.packages.map((k) => `<span class="sc-path" data-zone="${k.verdict === 'ok' ? 'inside' : k.verdict === 'missing' ? 'blocked' : 'unknown'}">📦 ${esc(k.name)} · ${esc(k.eco)} · ${k.verdict === 'ok' ? `${k.ageDays != null ? `${Math.round(k.ageDays / 365 * 10) / 10} years old` : 'exists'}${k.weekly != null ? ` · ${k.weekly.toLocaleString()}/week` : ''}` : esc(k.note)}</span>`).join('')}</div>` : ''}
     ${c.why ? `<div class="what">Why it asks: ${esc(c.why)}</div>` : ''}
+    ${waitHTML(c)}
     <textarea rows="1" placeholder="To deny it, you can add a note: why, or what to do instead. Enter denies and sends it."></textarea>
     <div class="acts"><button type="button" class="primary yes">Run once</button>${c.noAlways ? '' : '<button type="button" class="sc-always" aria-expanded="false">Always allow…</button>'}<button type="button" class="no">Deny</button></div>
     ${c.noAlways ? '<div class="sc-note">A button can’t make a rule for this kind of command. If you’re sure, type one yourself in ⚙ Settings → Safety & commands.</div>'
@@ -3429,7 +3528,7 @@ function approvalHTML(a, live = true) {
   if (!waiting) {
     const state = o ? (o.approve ? 'yes' : 'no') : live ? 'wait' : 'none';
     const mark = { yes: '✓', no: '⛔', wait: '⚡', none: '·' }[state];
-    const who = o ? `${o.approve ? 'Allowed' : 'Declined'} by ${o.by === 'user' ? 'you' : esc(o.by)}${o.always ? ' · always allowed from now on' : ''}${o.approve && o.model && o.model !== c.model ? ` · switched to ${esc(short(o.model))}` : ''}${o.reason ? ` · ${esc(o.reason)}` : ''}`
+    const who = o ? `${o.approve ? 'Allowed' : 'Declined'} by ${byName(o.by)}${o.always ? ' · always allowed from now on' : ''}${o.approve && o.model && o.model !== c.model ? ` · switched to ${esc(short(o.model))}` : ''}${o.reason ? ` · ${esc(o.reason)}` : ''}`
       : live ? (c.tool === 'shell' ? 'The deciders are voting on this command…' : 'Deciders are checking whether this is needed and worth the price…') : 'Not answered: the reply ended';
     return `<details class="approval-line ${state}"><summary title="${esc(who)}"><span class="al-mark">${mark}</span><b>${name}</b><span class="al-what">${esc(c.what)}</span><span class="al-price">${c.free ? 'free' : money(c.est, 3)}</span></summary>
       <div class="al-detail">${c.free ? '' : `<div>${esc(short(finalModel))} · ${esc(c.detail || '')}</div>`}<div>${esc(c.what)}</div>${c.why ? `<div>Why: ${esc(c.why)}</div>` : ''}<div class="al-who ${state}">${who}</div></div></details>`;
@@ -3438,9 +3537,9 @@ function approvalHTML(a, live = true) {
     ${head}${model}
     <div class="what">${c.free ? esc(c.what) : `“${esc(c.what)}”`}</div>
     ${c.why ? `<div class="what">Why: ${esc(c.why)}</div>` : ''}
-    ${waiting ? `<textarea rows="1" placeholder="To decline, you can add a note: why, or what to do instead. Enter declines and sends it."></textarea>
+    ${waiting ? `${waitHTML(c)}<textarea rows="1" placeholder="To decline, you can add a note: why, or what to do instead. Enter declines and sends it."></textarea>
       <div class="acts"><button type="button" class="primary yes">${c.free ? 'Allow once' : `Approve ${money(c.est, 3)}`}</button><button type="button" class="always" title="Stop asking for this tool in this chat">Always allow</button><button type="button" class="no">Decline</button></div>`
-      : o ? `<div class="outcome ${o.approve ? 'yes' : 'no'}">${o.approve ? '✅ Allowed' : '⛔ Declined'} by ${o.by === 'user' ? 'you' : esc(o.by)}${o.always ? ' · always allowed from now on' : ''}${o.approve && o.model && o.model !== c.model ? ` · switched to ${esc(short(o.model))}` : ''}${o.reason ? ` · ${esc(o.reason)}` : ''}</div>`
+      : o ? `<div class="outcome ${o.approve ? 'yes' : 'no'}">${o.approve ? '✅ Allowed' : '⛔ Declined'} by ${byName(o.by)}${o.always ? ' · always allowed from now on' : ''}${o.approve && o.model && o.model !== c.model ? ` · switched to ${esc(short(o.model))}` : ''}${o.reason ? ` · ${esc(o.reason)}` : ''}</div>`
       : !live ? '<div class="outcome">Not answered: the reply ended</div>' : `<div class="outcome">⚡ ${c.tool === 'shell' ? 'The deciders are voting on this command…' : 'Deciders are checking whether this is needed and worth the price…'}</div>`}
   </div>`;
 }
@@ -3594,8 +3693,9 @@ function questionHTML(q, live = true) {
   return `<div class="approval question qbox ${a ? 'done' : ''}" ${a ? '' : `data-id="${esc(c.id)}" tabindex="-1"`}>
     <div class="q-head"><span class="q-badge">${c.gate === 'plan' ? 'Plan first' : 'Question'}</span><p class="q-text">${esc(c.question)}</p></div>
     ${a ? `<div class="q-opts answered">${c.options.map((o, i) => `<div class="q-opt ${i === picked ? 'picked' : 'faded'}"><span class="q-key">${i === picked ? '✓' : i + 1}</span><span class="q-label">${esc(o)}</span></div>`).join('')}
-        ${picked == null ? `<div class="q-opt ${missed ? 'missed' : 'picked'}"><span class="q-key">${missed ? '–' : '✓'}</span><span class="q-label">${missed ? 'Not answered: the reply ended' : `Your answer: ${esc(a.label || a.text || '')}`}</span></div>` : ''}</div>`
-      : `<div class="q-opts" role="group" aria-label="Answers">${c.options.map((o, i) => `<button type="button" class="opt q-opt" data-i="${i}"><span class="q-key">${i + 1}</span><span class="q-label">${esc(o)}</span></button>`).join('')}</div>
+        ${a.by === 'deciders' ? `<div class="q-opt ${picked == null ? 'missed' : 'picked'} by-deciders"><span class="q-key">⚖</span><span class="q-label">No answer in time: ${picked == null ? `${esc((a.text || 'the deciders could not settle it').replace(/^\w/, (x) => x.toLowerCase()))}, so the agent decides` : `the deciders picked this${a.confidence != null ? ` · ${Math.round(a.confidence * 100)}% sure` : ''}`}</span></div>`
+          : picked == null ? `<div class="q-opt ${missed ? 'missed' : 'picked'}"><span class="q-key">${missed ? '–' : '✓'}</span><span class="q-label">${missed ? 'Not answered: the reply ended' : `Your answer: ${esc(a.label || a.text || '')}`}</span></div>` : ''}</div>`
+      : `${waitHTML(c)}<div class="q-opts" role="group" aria-label="Answers">${c.options.map((o, i) => `<button type="button" class="opt q-opt" data-i="${i}"><span class="q-key">${i + 1}</span><span class="q-label">${esc(o)}</span></button>`).join('')}</div>
       <div class="own-row q-own"><input type="text" class="own" placeholder="${c.gate === 'plan' ? 'Or say what to change in the plan' : 'Or answer in your own words'}" aria-label="${c.gate === 'plan' ? 'What to change in the plan' : 'Your own answer'}"><button type="button" class="send-own">Send</button></div>`}
   </div>`;
 }
@@ -3605,12 +3705,13 @@ function questionsHTML(c, a) {
   if (a) {
     const got = a.answers || [];
     return `<div class="approval question qbox qmulti done">
-    <div class="q-head"><span class="q-badge">Questions · ${qs.length}</span><p class="q-text">${a.defaults ? 'You took the agent\'s recommendations' : a.answers ? 'Your answers' : 'Not answered: the reply ended'}</p></div>
-    ${qs.map((q, i) => { const g = got[i] || {}; const said = g.choice != null ? q.options[g.choice] : g.text ? `Your answer: ${g.text}` : 'No answer: the agent decides'; return `<div class="qm-item"><p class="qm-q"><span class="q-key">${i + 1}</span>${esc(q.question)}</p><div class="q-opt ${g.choice != null || g.text ? 'picked' : 'missed'}"><span class="q-key">${g.choice != null || g.text ? '✓' : '–'}</span><span class="q-label">${esc(said)}</span></div></div>`; }).join('')}
+    <div class="q-head"><span class="q-badge">Questions · ${qs.length}</span><p class="q-text">${a.by === 'deciders' ? 'No answer in time: the deciders answered (the agent decides the rest)' : a.defaults ? 'You took the agent\'s recommendations' : a.answers ? 'Your answers' : 'Not answered: the reply ended'}</p></div>
+    ${qs.map((q, i) => { const g = got[i] || {}; const said = g.choice != null ? q.options[g.choice] : a.by === 'deciders' ? 'The agent decides' : g.text ? `Your answer: ${g.text}` : 'No answer: the agent decides'; return `<div class="qm-item"><p class="qm-q"><span class="q-key">${i + 1}</span>${esc(q.question)}</p><div class="q-opt ${g.choice != null || g.text ? 'picked' : 'missed'}"><span class="q-key">${g.choice != null || g.text ? '✓' : '–'}</span><span class="q-label">${esc(said)}</span></div></div>`; }).join('')}
   </div>`;
   }
   return `<div class="approval question qbox qmulti" data-id="${esc(c.id)}" tabindex="-1">
     <div class="q-head"><span class="q-badge">Questions · ${qs.length}</span><p class="q-text">A few things to settle before the agent goes on. Its recommendation is selected; change what you like.</p></div>
+    ${waitHTML(c)}
     ${qs.map((q, i) => `<div class="qm-item" data-q="${i}">
       <p class="qm-q"><span class="q-key">${i + 1}</span>${esc(q.question)}</p>
       <div class="q-opts" role="radiogroup" aria-label="${esc(q.question)}">${q.options.map((o, j) => `<button type="button" class="opt q-opt ${j === q.recommended ? 'chosen' : ''}" role="radio" aria-checked="${j === q.recommended}" data-i="${j}"><span class="q-label">${esc(o)}</span>${j === q.recommended ? '<span class="qm-rec">recommended</span>' : ''}</button>`).join('')}</div>
@@ -3703,8 +3804,8 @@ async function runChat(c, text, ctx, imgs, { resumeOf, docs = [], more = 0, mode
   if (box) { if (box.querySelector('.hint')) box.innerHTML = ''; if (user) box.appendChild(renderMsg(c, user)); box.appendChild(renderMsg(c, m)); c.follow = true; c.toEnd?.(); }
   const artifacts = Object.fromEntries(Object.entries(a.artifacts).map(([id, x]) => [id, x.kind === 'html' ? { kind: 'html', title: x.title, html: x.html, v: 1 } : x.kind === 'md' ? { kind: 'md', title: x.title, md: x.md || '', v: 1 } : { kind: x.kind, title: x.title, url: x.url?.startsWith('data:') ? undefined : x.url, v: 1 }]));
   const settings = { ...G.settings, approval: c.approval, tools: chatTools(c), ...qualitySettings(c) };
-  const body = resumeOf ? { runId: m.runId, chatId: c.id, resume: resumeOf, settings, allowed: a.allowed, cmdRules: a.cmdRules || [], ...(more ? { continue: more, ...(model ? { model } : {}) } : {}) }
-    : { runId: m.runId, chatId: c.id, projectId: c.projectId, chatTitle: c.title, setup: a.setup, settings, allowed: a.allowed, cmdRules: a.cmdRules || [], history, summary: a.summary || '', text, artifacts, context: ctx?.text || '', images: imgs.map((x) => x.full), docs: docs.map((d) => d.id), ...(cmts.length ? { comments: cmts } : {}) };
+  const body = resumeOf ? { runId: m.runId, chatId: c.id, resume: resumeOf, settings, allowed: a.allowed, cmdRules: a.cmdRules || [], reading: a.reading?.text || '', ...(more ? { continue: more, ...(model ? { model } : {}) } : {}) }
+    : { runId: m.runId, chatId: c.id, projectId: c.projectId, chatTitle: c.title, setup: a.setup, settings, allowed: a.allowed, cmdRules: a.cmdRules || [], history, summary: a.summary || '', reading: a.reading?.text || '', text, artifacts, context: ctx?.text || '', images: imgs.map((x) => x.full), docs: docs.map((d) => d.id), ...(cmts.length ? { comments: cmts } : {}) };
   // Saved straight away, so a reload finds the running reply and reattaches to it.
   saveChat(c, true);
   return followRun(c, m, (signal) => fetch('/api/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal, body: JSON.stringify(body) }));
@@ -3814,6 +3915,7 @@ async function followRun(c, m, open) {
         if (e.t === 'allow_always') { if (!a.allowed.includes(e.tool)) a.allowed.push(e.tool); renderAllowed(c); saveChat(c); }
         if (e.t === 'cmd_rule' && e.rule?.scope === 'chat') { (a.cmdRules ??= []).push(e.rule); saveChat(c); }
         if (e.t === 'approval') { m.approvals[e.id] = { card: e }; if (e.mode === 'strict') { c.waiting = true; renderSidebar(); renderChatHead(c); note('approval', e.what || e.tool); } }
+        if (e.t === 'card_held') { const x = m.approvals?.[e.id] || m.questions?.[e.id]; if (x?.card?.wait) x.card.wait.held = true; }
         if (e.t === 'approval_done' && m.approvals[e.id]) { m.approvals[e.id].outcome = e; c.waiting = false; renderSidebar(); renderChatHead(c); }
         if (e.t === 'question') { m.questions[e.id] = { card: e }; if (!e.auto) { c.waiting = 'answer'; renderSidebar(); renderChatHead(c); note('answer', e.question); } }
         if (e.t === 'budget_ask') { m.budgetAsk = { card: e }; c.waiting = 'budget'; renderSidebar(); renderChatHead(c); note('budget', 'Raise the budget to carry on, or wrap up.'); }
@@ -3823,6 +3925,12 @@ async function followRun(c, m, open) {
         if (e.t === 'error') { m.error = e.msg; if (e.stats && !m.stats) { m.stats = { ...e.stats, partial: true }; G.sessionCost += e.stats.cost || 0; renderSpend(); } }
         if (e.t === 'interrupted') { m.error = 'The harness restarted while this reply was running.'; m.resumable = !!e.resumable; }
         if (e.t === 'compacted') { a.summary = e.summary; a.summaryAt = e.cutoffAt; }
+        if (e.t === 'reading') {
+          const u = a.messages[a.messages.indexOf(m) - 1];
+          a.reading = { text: e.text, at: Date.now() };
+          if (u?.role === 'user') { u.reading = { goal: e.goal, includes: e.includes || [], assumptions: e.assumptions || [], text: e.text, model: e.model, cost: e.cost }; drawReading(c, u); }
+          saveChat(c);
+        }
         if (e.t !== 'start') m.trace.push(e);
         if (isShot(e)) onAgentBrowse(c, m);
         redraw(false);
@@ -4476,7 +4584,8 @@ function settingsPanels(S) {
         stRow('Cap per reply', 'At 85% the agent is told to wrap up. At the cap, 🔒 Strict asks you to raise it or wrap up; ⚡ YOLO stops. 0 = no cap.', stStep('replyBudget', S.replyBudget ?? d.replyBudget ?? 1, 0, 100, 0.25, '$'))
         + stRow('Cap per day', 'Today’s spending across all projects. A reply that reaches it stops (Strict asks first). 0 = off. A separate OpenRouter key with its own daily limit is a good second fence for ⚡ YOLO.', stStep('dailyBudget', S.dailyBudget ?? d.dailyBudget ?? 0, 0, 1000, 1, '$'))),
       stCard('Paid calls', '', stRow('Paid media per reply', 'A paid call that would go over this is stopped, in Strict and in YOLO.', stStep('budget', S.budget, 0, 20, 0.05, '$'))
-        + stRow('Deciders check paid calls in ⚡ YOLO', 'Before each paid call: is it needed, is the price fair?', stSwitch('yoloCheck', S.yoloCheck !== false))),
+        + stRow('Deciders check paid calls in ⚡ YOLO', 'Before each paid call: is it needed, is the price fair?', stSwitch('yoloCheck', S.yoloCheck !== false))
+        + stRow('⚡ YOLO waits for you', 'When the agent asks a question, or the deciders can\'t settle an approval, the card waits this long so you can steer. Then the deciders answer (a question of taste goes back to the agent), or the approval carries on: a command runs only if the deciders saw little risk. "Wait for me" on the card, or typing in it, stops the clock. 0 = no wait.', stStep('yoloWaitSecs', S.yoloWaitSecs ?? 15, 0, 120, 5, 's'))),
       stCard('What ⚡ YOLO does by itself', 'Ticked: YOLO goes ahead without asking. Unticked: it asks you first, as Strict does (Always allow stops the asking for that chat). Reading files, listing and searching never ask.',
         YOLO_ROWS.map(([k, label, help]) => stRow(label, help, stSwitch(`yoloAuto.${k}`, S.yoloAuto?.[k] !== false))).join('')),
       stCard('Project budgets', 'Set a project\'s budget with the $ next to it in the sidebar.', stRow('Allowance to finish a reply', 'A new reply can\'t start once the project budget is used up. A reply already working may go this far past it to finish, then it is stopped. 0% stops it right at the budget.', stStep('budgetGrace', S.budgetGrace ?? 10, 0, 100, 5, '%'))),

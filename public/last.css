@@ -2575,3 +2575,14 @@ html body .trace.trace-pane .step .when { width: auto !important; white-space: n
 .st-head-version { display: inline-flex; align-items: center; gap: 5px; }
 .st-head-logo { width: 14px; height: 14px; flex: none; }
 .sb-version:not(:empty)::before { content: ""; display: inline-block; width: 12px; height: 12px; margin-right: 6px; vertical-align: -2px; background: url(brand/quorx-32.png) center / contain no-repeat; }
+/* the chat and the Steps pane decide themselves when to stay at the end: the browser must not shift them when a picture loads */
+.chatpane .msgs, .trace.trace-pane { overflow-anchor: none; }
+/* the cost card at the end of the steps: the same facts, a size smaller */
+.trace-cost { margin: 10px 0 4px !important; padding: 8px 10px !important; font-size: 11px !important; border-radius: 7px !important; }
+.trace-cost .tc-head span { font-size: 11.5px; }
+.trace-cost .tc-head b { font-size: 14px !important; }
+.trace-cost .tc-sub { margin-top: 2px !important; font-size: 10.5px; }
+.trace-cost .tc-table { margin-top: 6px !important; font-size: 10.5px !important; }
+.trace-cost .tc-table td { padding: 2px 0 !important; }
+.trace-cost .tc-chat { margin-top: 6px !important; padding-top: 5px !important; font-size: 10.5px; }
+.trace-cost .tc-chat b { font-size: 11.5px !important; }

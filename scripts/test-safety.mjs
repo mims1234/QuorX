@@ -576,6 +576,30 @@ test('shell: in YOLO a build goes to the deciders, who see only the user and the
     assert.ok(sent.length >= 2 && !JSON.stringify(sent).includes('I will run it'), 'the agent’s own words never reach the deciders');
   });
 });
+// ⚡ YOLO with a wait: a vote the deciders can't settle shows you the card for a few seconds, then carries on.
+const voteAll = (v) => Object.fromEntries(['typesafe/jev-1.14', 'liquid/d1-ultra', 'openai/gpt-6-luna-decisions'].map((m) => [m, v]));
+test('shell: in YOLO an unsettled vote waits for you, then runs when the deciders saw little risk', { skip: !WIN }, async () => {
+  await withDeciders(voteAll({ needed: 0.5, other: 0.03 }), async () => {
+    const { events, bodies } = await agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('Done.')][i], {
+      settings: { approval: 'yolo', yoloWaitSecs: 1 }, prep: (d) => fs.writeFileSync(path.join(d, 'build.js'), "console.log('built')") });
+    const card = of(events, 'approval').find((e) => e.mode === 'strict');
+    assert.ok(card?.wait && card.wait.then === 'run' && card.wait.secs === 1);
+    const done = of(events, 'approval_done')[0];
+    assert.equal(done.by, 'timeout');
+    assert.equal(done.approve, true);
+    assert.match(toolOut(bodies, 1), /built/);
+  });
+});
+test('shell: in YOLO an unsettled vote with a doubtful harm vote is skipped when nobody answers', { skip: !WIN }, async () => {
+  await withDeciders(voteAll({ needed: 0.9, other: 0.4 }), async () => {
+    const { events, bodies } = await agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('OK.')][i], {
+      settings: { approval: 'yolo', yoloWaitSecs: 1 }, prep: (d) => fs.writeFileSync(path.join(d, 'build.js'), "console.log('built')") });
+    const done = of(events, 'approval_done')[0];
+    assert.equal(done.by, 'timeout');
+    assert.equal(done.approve, false);
+    assert.doesNotMatch(toolOut(bodies, 1), /built/);
+  });
+});
 // ---------- tripwire ----------
 test('tripwire: many files vanishing next to the project trips it', { skip: !WIN }, async () => {
   const parent = tmp('tw');
@@ -1001,4 +1025,22 @@ test('packs: Go, C/C++ and Rust debug sessions launch through their adapter and 
     }
     await assert.rejects(debugStart({ projectId: 'native-test', cwd: dir, file: 'main.cpp', program: 'fail.exe' }), /could not start the program: could not find the program/);
   } finally { for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } }
+});
+
+// ---------- 0.2.3: read-only .NET calls and the agent's scratch scripts ----------
+test('rules: string methods in PowerShell count as reads, file and process calls do not', { skip: !WIN }, async () => {
+  const cls = async (line) => { const d = await decide(line, ctx()); return d.segments.map((s) => s.cls); };
+  assert.ok(!(await cls('Get-ChildItem -Recurse | ForEach-Object { $_.FullName.Replace("C:\\x\\", "") }')).includes('opaque'), 'FullName.Replace is a read');
+  assert.ok(!(await cls("$c = Get-Content index.html -Raw; $i = $c.IndexOf('<table'); $c.Substring($i, 400)")).includes('opaque'), 'IndexOf and Substring are reads');
+  assert.ok((await cls("Get-ChildItem | ForEach-Object { $_.Replace('a', 'b') }")).includes('opaque'), 'Replace on a file object stays opaque');
+  assert.ok((await cls("[IO.File]::WriteAllText('x.txt', 'y')")).includes('opaque'), 'a static file write stays opaque');
+});
+
+test('deciders: the agent\'s own scratch script is judged on harm only', async () => {
+  const notAsked = { needed: 0.05, other: 0.03 };
+  const r = await withDeciders({ a: notAsked, b: notAsked, c: notAsked }, (sent) => judge({ harmOnly: true, facts: { command: 'node .quorx/scratch/ids.mjs' } }).then((x) => ({ x, sent })));
+  assert.equal(r.x.approve, true);
+  assert.ok(r.sent.every((b) => Object.keys(b.questions).join() === 'other'), 'only the harm question is asked');
+  const harmful = { needed: 0.9, other: 0.9 };
+  assert.equal((await withDeciders({ a: harmful, b: harmful, c: harmful }, () => judge({ harmOnly: true }))).approve, false);
 });

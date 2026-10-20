@@ -12,6 +12,7 @@ import path from 'node:path';
 import { chat, chatStream, chatModels, imageModels, generateImage, speechModels, synthesize, composeMusic, musicModels, videoModels, generateVideo, ROOT, HOME } from './openrouter.js';
 import { ensemble, GATE } from './decisions.js';
 import { runtime } from './openrouter.js';
+import { enhanceRequest } from './enhancer.js';
 import { validId, listProjects, getChat } from './store.js';
 import { searchFiles, trashFile, checkpoint, changedFiles, copyTemplate, snapBefore, commandChanges, safePath, childEnv } from './workspace.js';
 import { SAFETY_DEFAULTS, safetySettings } from './safety.js';
@@ -82,6 +83,11 @@ export const DEFAULTS = {
   freshEyesModel: '',      // '' = the helper model (fast and cheap); 'strong' tier below uses the strong reviewer model
   freshEyesTier: 'cheap',
   freshEyesMax: 3,         // fresh looks per reply
+  yoloWaitSecs: 15,        // ⚡ YOLO: a question, or an approval the deciders can't settle, waits this long for the user, then the deciders answer / it carries on (0 = no wait)
+  enhancer: true,          // the prompt enhancer: a cheap model spells out what a request plainly implies, for the agent and the deciders
+  enhancerWhen: 'first',   // 'first' = a chat's first request · 'every' = every new request
+  enhancerModel: '',       // '' = the helper model
+  enhancerWaitMs: 10000,   // the reply waits this long for it; a later reading still reaches the deciders
   moreSteps: 30,           // "Keep going" on the out-of-steps card gives the reply this many more steps            // a build sent back to fix (by the checks or the reviewer) always has at least this many steps left to do it
   planFirst: 'off',        // 'off' · 'big' (big tasks: the agent shows its plan and waits for Go ahead) · 'always' (before any file change or command)
   planSteps: 0,            // the step limit once a reply makes a plan (0 = same as maxSteps; 80 made builds longer, not better, in the benchmark)
@@ -159,6 +165,11 @@ export function toolSettings(raw = {}, mediaEnabled = true) {
 
 const clip = (s, n) => { s = String(s ?? ''); return s.length > n ? s.slice(0, n) + '…' : s; };
 const short = (m) => String(m).split('/').pop();
+// Tools that put the agent's text into a file or an artifact, and the note trimming leaves in place of old text (loop.js).
+const WRITES_CONTENT = new Set(['write_file', 'append_file', 'edit_file', 'write_artifact', 'edit_artifact']);
+const SCRATCH_SCRIPT = /^\s*(?:node|python3?|py|deno|bun|tsx)\s+["']?(?:\.[/\\])?\.quorx[/\\]scratch[/\\][\w.-]+\.(?:mjs|cjs|js|ts|py)["']?(?:\s+[\w.:=/\\-]+)*\s*$/i;
+const PLAN_START_STEPS = 10; // steps after the plan before an agent that started none of it is told to begin
+const TRIM_NOTE = /\[\d+ characters written earlier; removed from the conversation to save space/;
 const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 40) || 'option';
 // Thinking is returned (exclude: false) so the page can show it; it is never sent back to the model.
 const REASONING = { off: { reasoning: { enabled: false } }, low: { reasoning: { effort: 'low', exclude: false } }, medium: { reasoning: { effort: 'medium', exclude: false } }, high: { reasoning: { effort: 'high', exclude: false } }, default: {} };
@@ -270,6 +281,21 @@ export function setRunApproval(runId, mode) {
   const ctl = runControls.get(runId);
   if (!ctl || !['strict', 'yolo'].includes(mode)) return false;
   ctl.setApproval(mode);
+  return true;
+}
+// ⚡ YOLO cards with a countdown: "Wait for me" (or starting to type) stops the clock, and the card waits for the user.
+const autoWaits = new Map();
+export function holdCard(runId, id) {
+  const hold = autoWaits.get(`${runId}:${id}`);
+  if (!hold) return false;
+  hold();
+  return true;
+}
+// The prompt enhancer's reading of the request, corrected by the user while the reply runs.
+export function setRunReading(runId, text) {
+  const ctl = runControls.get(runId);
+  if (!ctl) return false;
+  ctl.setReading(clip(String(text || '').trim(), 4000));
   return true;
 }
 export function steerRun(runId, text, extra = {}) {
@@ -898,6 +924,13 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
       emit({ t: 'mode', approval: mode, at: at() });
       if (mode === 'yolo') for (const [id] of openCards) answerApproval(runId, id, { approve: true, reason: 'Approved: the user switched this chat to YOLO.' });
     },
+    // The user corrected (or cleared) the prompt enhancer's reading: the agent hears it, the judges use it.
+    setReading: (text) => {
+      run.reading = text ? { text, edited: true } : null;
+      emit({ t: 'reading_edit', text, at: at() });
+      run.inbox.push(text ? `[The user corrected how the harness read their request. Go by this:
+${text}]` : '[The user dropped the harness reading of their request: go by their own words only.]');
+    },
     // A note from the user: shown at once, given to the agent at its next step.
     steer: (text, extra = {}) => {
       run.inbox.push({ text, ...extra });
@@ -956,6 +989,7 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
   // Harness checks that failed in this reply, so a later pass counts as fixed (and one still failing at the end, as still).
   const failedChecks = new Map();
   cleanups.push(async () => { for (const [, f] of failedChecks) logCheck({ kind: 'outcome', id: f.id, target: f.target, result: 'still', runId, bench: req.bench || null }); });
+  const reading = startReading();
   if (checksLive && !resumed && !handled && !qaBench && checkSettings(S).gap && userText.length >= 12) {
     const gap = await gapCheck().catch((e) => { if (signal.aborted) throw e; return null; });
     if (gap?.build) {
@@ -964,16 +998,17 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
         emit({ t: 'note', level: 'info', msg: `This looks like a build, so ${short(setup.model)} thinks (${S.buildThinking}) for this reply. Change it in ⚙ Agent loop → Thinking for builds.`, at: at() });
       }
       // In YOLO nobody can answer a question of taste (the deciders only guess), so the agent picks and says what it picked.
-      const yolo = S.approval === 'yolo';
-      const ask = yolo ? gap.missing.filter((m) => !gap.taste.includes(m)) : gap.missing;
-      const own = yolo ? gap.taste : [];
+      const yolo = S.approval === 'yolo', waitS = yoloWait() / 1000;
+      const ask = yolo && !waitS ? gap.missing.filter((m) => !gap.taste.includes(m)) : gap.missing;
+      const own = yolo && !waitS ? gap.taste : [];
       if (gap.missing.length) {
         addToRequest(`[Harness check: a first read says this request does not say ${gap.missing.join('; ')}. ${ask.length ? (askOn
-          ? `Ask about ${own.length ? 'these' : 'the ones that really matter'} with ask_user before you start (several at once in one card with questions, each with your recommendation)${yolo ? ' (in YOLO mode the deciders answer for the user)' : ''}, unless the request or the project already settles them: ${ask.join('; ')}.`
+          ? `Ask about ${own.length ? 'these' : 'the ones that really matter'} with ask_user before you start (several at once in one card with questions, each with your recommendation)${yolo ? (waitS ? ` (in YOLO mode the user has ${waitS} seconds to answer, then the deciders answer, or you decide a matter of taste)` : ' (in YOLO mode the deciders answer for the user)') : ''}, unless the request or the project already settles them: ${ask.join('; ')}.`
           : `Decide ${ask.join('; ')} yourself, sensibly.`) : ''}${own.length ? ` For ${own.join('; ')}: the user is not here to ask, so choose one clear, coherent direction yourself (don't ask about it).` : ''} Say in your reply what you chose.]`);
       }
     }
   }
+  await reading;
   // The project budget, shared by every chat in the project. A reply may not START once the budget is
   // used up (Strict asks to raise it, YOLO stops). A reply already working may finish past it, up to
   // budgetGrace % more, and is force-stopped beyond that.
@@ -1097,12 +1132,12 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
       if (v && !v.ok && run.verifyRounds < Math.max(0, Number(S.verifyRounds ?? DEFAULTS.verifyRounds)) && !last) {
         run.verifyRounds++;
         reply = replyBefore;
-        if (r.text) asides.push(r.text);
+        if (r.text) { asides.push(r.text); run.answerBefore ??= r.text; }
         emit({ t: 'sent_back', step, round: run.verifyRounds, problems: v.problems.length, at: at() });
         roomToFix(step, 'The checks sent the build back');
         noteProblems('verify', v.problems.map((x) => `- ${x}`).join('\n'), step);
         messages.push({ role: 'assistant', content: r.text || 'Done.' });
-        messages.push({ role: 'user', content: `[The harness checked your work before your final reply and found ${v.problems.length} problem${v.problems.length > 1 ? 's' : ''}:\n${v.problems.map((x) => `- ${x}`).join('\n')}\nFix ${v.problems.length > 1 ? 'them' : 'it'}, then give your final reply. If something can't be fixed, say so plainly in that reply.]` });
+        messages.push({ role: 'user', content: `[The harness checked your work before your final reply and found ${v.problems.length} problem${v.problems.length > 1 ? 's' : ''}:\n${v.problems.map((x) => `- ${x}`).join('\n')}\nFix ${v.problems.length > 1 ? 'them' : 'it'}, then give your final reply. If something can't be fixed, say so plainly in that reply. Your final reply replaces the one you just wrote, so keep its answer to the user's message and add a line on what you fixed.]` });
         continue;
       }
       if (v) stats.verify = { ok: v.ok, problems: v.problems.slice(0, 8), rounds: run.verifyRounds, lint: v.lint };
@@ -1113,15 +1148,18 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
           run.reviews.push(rv);
           // Below the bar but nothing it could reproduce: a low score alone doesn't send the build back.
           if (!rv.pass && !rv.bugs.length) emit({ t: 'note', level: 'info', msg: rv.minor?.length ? `The reviewer scored it below the bar, but its ${rv.minor.length} bug${rv.minor.length > 1 ? 's are' : ' is'} minor, so the build is not sent back.` : 'The reviewer scored it below the bar but reported no bug it could reproduce, so the build is not sent back.', at: at() });
-          if (!rv.pass && rv.bugs.length && run.reviewRounds < Math.max(0, Math.min(3, Number(S.reviewRounds ?? DEFAULTS.reviewRounds)))) {
+          // A bug that breaks the main use or that a user would notice goes back to the builder, even when the scores pass.
+          const reviewRoom = run.reviewRounds < Math.max(0, Math.min(3, Number(S.reviewRounds ?? DEFAULTS.reviewRounds)));
+          if (rv.bugs.length && !reviewRoom) emit({ t: 'note', level: 'warn', msg: `The reviewer found ${rv.bugs.length} bug${rv.bugs.length > 1 ? 's' : ''} to fix, but this reply has used its review rounds, so ${rv.bugs.length > 1 ? 'they go' : 'it goes'} into the reply instead.`, at: at() });
+          if (rv.bugs.length && reviewRoom) {
             run.reviewRounds++;
             reply = replyBefore;
-            if (r.text) asides.push(r.text);
+            if (r.text) { asides.push(r.text); run.answerBefore ??= r.text; }
             emit({ t: 'sent_back', step, round: run.reviewRounds, problems: rv.bugs.length, by: 'reviewer', at: at() });
             roomToFix(step, 'The reviewer sent the build back');
             noteProblems('review', rv.bugs.map((x) => `- ${x}`).join('\n'), step);
             messages.push({ role: 'assistant', content: r.text || 'Done.' });
-            messages.push({ role: 'user', content: `[A separate reviewer (${short(rv.model)}) tested what you built, and it did not pass: every score must reach ${rv.bar} of 5.\nScores: ${scoreLine(rv.scores)}.\n${rv.bugs.length ? `Bugs it reproduced (severity, steps → what happened); fix these:\n${rv.bugs.map((x) => `- ${x}`).join('\n')}\n` : ''}${rv.minor?.length ? `Minor (fix only if quick):\n${rv.minor.map((x) => `- ${x}`).join('\n')}\n` : ''}${rv.summary ? `Its summary: ${rv.summary}\n` : ''}Fix these${run.plan ? ' and keep your plan current' : ''}, check your work, then give your final reply.]` });
+            messages.push({ role: 'user', content: `[A separate reviewer (${short(rv.model)}) tested what you built${rv.pass ? ' and found bugs to fix' : `, and it did not pass: every score must reach ${rv.bar} of 5`}.\nScores: ${scoreLine(rv.scores)}.\n${rv.bugs.length ? `Bugs it reproduced (severity, steps → what happened); fix these:\n${rv.bugs.map((x) => `- ${x}`).join('\n')}\n` : ''}${rv.minor?.length ? `Minor (fix only if quick):\n${rv.minor.map((x) => `- ${x}`).join('\n')}\n` : ''}${rv.summary ? `Its summary: ${rv.summary}\n` : ''}Fix these${run.plan ? ' and keep your plan current' : ''}, check your work, then give your final reply. Your final reply replaces the one you just wrote, so keep its answer to the user's message and add a line on what you fixed.]` });
             continue;
           }
         }
@@ -1152,6 +1190,8 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
     if (run.lookStreak === 8) signals.push('You have only looked around for 8 steps in a row. Make the changes now.');
     // #6: three steps of reading files yourself → hand the rest of the exploring to helpers (once per reply).
     run.readStreak = r.toolCalls.every((c) => ['read_file', 'search_files', 'list_files'].includes(c.function.name)) ? (run.readStreak || 0) + 1 : 0;
+    // A plan nobody started: in a real build the agent read for 8 minutes with every item still "todo".
+    if (run.plan && run.planAt != null && !run.planNudged && step - run.planAt >= PLAN_START_STEPS && run.plan.items.every((x) => x.status === 'todo')) { run.planNudged = true; signals.push(`Your plan was made ${step - run.planAt} steps ago and no item is started yet. Mark the first item "doing" with plan and start writing it now; read more only where that item needs it.`); }
     if (run.readStreak === 3 && !run.helperNudged && S.helpers !== false && root) { run.helperNudged = true; signals.push('You have spent 3 steps reading files yourself. Hand the rest of the exploring to helpers with delegate (several at once for separate questions), and keep your own context for the answer and the changes.'); }
     const openItems = run.plan ? run.plan.items.filter((x) => x.status !== 'done') : [];
     const rounds = Math.max(0, Math.min(5, Number(S.continueRounds ?? DEFAULTS.continueRounds) || 0));
@@ -1178,6 +1218,9 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
 
   if (!handled && step >= maxSteps) run.stop = 'steps';
   if (!reply.trim()) reply = asides.join('\n\n');
+  // Sent back by the checks or the reviewer: a final reply that only reports the fix would lose the answer the user
+  // asked for, so the answer written before the send-back leads (unless the final reply already carries it).
+  else if (run.answerBefore && reply.trim().length < run.answerBefore.trim().length * 0.6) reply = `${run.answerBefore.trim()}\n\n**After the checks:** ${reply.trim()}`;
   const lastReview = run.reviews.at(-1);
   if (lastReview) {
     stats.review = { pass: lastReview.pass, scores: lastReview.scores, bar: lastReview.bar, rounds: run.reviewRounds, model: lastReview.model, bugs: lastReview.bugs.slice(0, 6), cost: run.reviews.reduce((a, x) => a + x.cost, 0) };
@@ -1513,6 +1556,7 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
     const doneWhen = Array.isArray(args.done_when) ? args.done_when.map((x) => clip(String(x), 200)).filter(Boolean).slice(0, 6) : null;
     run.plan = { spec: clip(String(args.spec || prev?.spec || '').trim(), 2000), items, doneWhen: doneWhen ?? prev?.doneWhen ?? [] };
     // A planned build gets the longer step limit (checks, previews and review take steps).
+    if (!prev) run.planAt = step;
     if (!prev && planSteps > maxSteps) { emit({ t: 'note', level: 'info', msg: `A planned build: the step limit for this reply goes from ${maxSteps} to ${planSteps}.`, at: at() }); maxSteps = planSteps; }
     if (root) {
       try {
@@ -1855,13 +1899,35 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
     return (S.strictAskHelpers === true && name === 'delegate') || (S.strictAskDeciders === true && ['decide', 'look', 'extract_design'].includes(name));
   }
   // Strict mode: pause on a card until the user answers. "Always allow" applies to the rest of the conversation.
-  async function askUser(card) {
-    emit({ t: 'approval', ...card, mode: 'strict', at: at() });
+  // ⚡ YOLO: how long a question or an unsettled approval waits for the user (0 = it doesn't). Benchmarks never wait,
+  // and scripted tests only when they set it.
+  function yoloWait() {
+    if (S.approval !== 'yolo' || req.bench || (deps.quiet && req.settings?.yoloWaitSecs == null)) return 0;
+    return Math.max(0, Math.min(600, Number(S.yoloWaitSecs ?? DEFAULTS.yoloWaitSecs) || 0)) * 1000;
+  }
+  // What the page needs for the countdown: when it ends, and what happens then.
+  function waitInfo(ms, then) { return { secs: Math.round(ms / 1000), until: Date.now() + ms, then, runId }; }
+  // The user's answer, or { timedOut: true } once ms pass. "Wait for me" (holdCard) stops the clock for good.
+  function userOrTimeout(id, ms, userP) {
+    if (!ms) return userP;
+    const key = `${runId}:${id}`;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { autoWaits.delete(key); resolve({ timedOut: true }); }, ms);
+      autoWaits.set(key, () => { clearTimeout(timer); autoWaits.delete(key); emit({ t: 'card_held', id, at: at() }); });
+      userP.then((v) => { clearTimeout(timer); autoWaits.delete(key); resolve(v); }, (e) => { clearTimeout(timer); autoWaits.delete(key); reject(e); });
+    });
+  }
+  // wait: { ms, then, onTimeout } for a ⚡ YOLO card the deciders couldn't settle: after ms, onTimeout() answers it.
+  async function askUser(card, wait = null) {
+    const ms = wait?.ms || 0;
+    emit({ t: 'approval', ...card, mode: 'strict', ...(ms ? { wait: waitInfo(ms, wait.then) } : {}), at: at() });
     openCards.set(card.id, card.tool);
-    const ans = await new Promise((resolve, reject) => {
+    const userP = new Promise((resolve, reject) => {
       pending.set(`${runId}:${card.id}`, resolve);
       signal.addEventListener('abort', () => { pending.delete(`${runId}:${card.id}`); reject(new Error('aborted')); }, { once: true });
-    }).finally(() => openCards.delete(card.id));
+    });
+    let ans = await userOrTimeout(card.id, ms, userP).finally(() => openCards.delete(card.id));
+    if (ans.timedOut) { pending.delete(`${runId}:${card.id}`); ans = wait.onTimeout(); }
     if (ans.approve && ans.always && card.tool !== 'shell') {
       allowed.add(card.tool); emit({ t: 'allow_always', tool: card.tool, at: at() });
       for (const [id, tool] of openCards) if (tool === card.tool) answerApproval(runId, id, { approve: true, reason: 'Covered by "Always allow" on another card.' });
@@ -1930,17 +1996,18 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
   }
 
   // YOLO: nobody is asked, so the whole decider panel answers the agent's question for the user.
-  async function deciderAnswers(id, question, options) {
-    emit({ t: 'question', id, question, options, auto: true, at: at() });
+  async function deciderAnswers(id, question, options, opts) { return (await deciderPick(id, question, options, opts)).msg; }
+  // shown: the user already sees this question on a card (⚡ YOLO with a wait). silent: no answer event (one of several).
+  async function deciderPick(id, question, options, { shown = false, silent = false } = {}) {
+    const say = (e, msg, choice = null) => { if (!silent) emit({ t: 'answer', id, ...e, at: at() }); return { msg, choice }; };
+    if (!shown) emit({ t: 'question', id, question, options, auto: true, at: at() });
     // Deciders switched off for this chat: nobody answers, the agent decides.
     if (S.deciders === false) {
-      emit({ t: 'answer', id, choice: null, text: 'The deciders are off in this chat: the agent decides', by: 'deciders', confidence: null, at: at() });
-      return 'YOLO mode: nobody is asked (the deciders are switched off in this chat). Decide yourself, and say in your reply what you chose.';
+      return say({ choice: null, text: 'The deciders are off in this chat: the agent decides', by: 'deciders', confidence: null }, `YOLO mode: ${shown ? 'the user did not answer in time, and' : 'nobody is asked, and'} the deciders are switched off in this chat. Decide yourself, and say in your reply what you chose.`);
     }
     // Taste (look, style, colours) belongs to the user: the deciders could only guess (18–67% sure in the benchmark).
     if (TASTE_Q.test(question)) {
-      emit({ t: 'answer', id, choice: null, text: 'A question of taste: the agent chooses', by: 'deciders', confidence: null, at: at() });
-      return 'YOLO mode: this is a question of taste, and the user is not here to answer it. Choose one clear, coherent direction yourself, and say in your reply what you chose so the user can change it.';
+      return say({ choice: null, text: 'A question of taste: the agent chooses', by: 'deciders', confidence: null }, `YOLO mode: this is a question of taste, and the user ${shown ? 'did not answer in time' : 'is not here to answer it'}. Choose one clear, coherent direction yourself, and say in your reply what you chose so the user can change it.`);
     }
     // "You decide" / "surprise me" options are not answers; the deciders pick among real ones.
     const real = options.filter((o) => !DEFER_OPT.test(o));
@@ -1954,10 +2021,11 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
     // Below "lean" the deciders are guessing: the agent decides.
     const label = r && ['settled', 'lean'].includes(r.verdict) && r.pick !== 'none_of_these' ? q.labels[r.pick] ?? r.pick : null;
     const choice = label == null ? null : options.findIndex((o) => o === label || slug(o) === r.pick);
-    emit({ t: 'answer', id, choice: choice >= 0 ? choice : null, text: label == null ? 'The deciders could not settle it' : label, by: 'deciders', confidence: r ? +r.confidence.toFixed(2) : null, at: at() });
+    const ev = { choice: choice >= 0 ? choice : null, text: label == null ? 'The deciders could not settle it' : label, by: 'deciders', confidence: r ? +r.confidence.toFixed(2) : null };
     if (checksLive) logCheck({ kind: 'ask', src: 'model', ask: question, options, pick: label, confidence: r ? +r.confidence.toFixed(3) : null, verdict: r?.verdict || 'failed', runId, chatId: req.chatId || null, project: projectId, builder: setup.model, bench: req.bench || null });
-    if (label == null) return 'YOLO mode: nobody is asked, and the deciders could not settle this for the user. Decide yourself, and say in your reply what you chose.';
-    return `YOLO mode: the deciders answered for the user: "${label}" (${Math.round(r.confidence * 100)}% sure, ${r.verdict}). Go with it, and mention the choice in your reply so the user can change it.`;
+    const who = shown ? 'the user did not answer in time, and' : 'nobody is asked, and';
+    if (label == null) return say(ev, `YOLO mode: ${who} the deciders could not settle this for the user. Decide yourself, and say in your reply what you chose.`);
+    return say(ev, `YOLO mode: ${shown ? 'the user did not answer in time, so ' : ''}the deciders answered for the user: "${label}" (${Math.round(r.confidence * 100)}% sure, ${r.verdict}). Go with it, and mention the choice in your reply so the user can change it.`, ev.choice);
   }
 
   // ask_user: one question, or several in one card, answered in the page. The reply waits; nothing is spent meanwhile.
@@ -1976,30 +2044,40 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
     const over = cut ? `\n(${cut} more question${cut > 1 ? 's were' : ' was'} not asked: this reply may ask ${limit} in all. Decide ${cut > 1 ? 'those' : 'that one'} yourself.)` : '';
     run.questions += list.length;
     const qid = () => `q${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
-    if (S.approval === 'yolo') {
+    const waitMs = yoloWait();
+    if (S.approval === 'yolo' && !waitMs) {
       const out = [];
       for (const q of list) out.push(await deciderAnswers(qid(), q.question, q.options));
       return (list.length === 1 ? out[0] : list.map((q, i) => `${i + 1}. ${q.question}\n${out[i]}`).join('\n')) + over;
     }
+    // Strict: the user answers. ⚡ YOLO with a wait: the user sees the card for a few seconds and may steer; if they
+    // don't answer, the deciders do (a question of taste goes back to the agent).
     const id = qid();
-    if (list.length > 1) return (await askMany(id, list)) + over;
-    const { question, options, recommended } = list[0];
-    emit({ t: 'question', id, question, options, ...(recommended != null ? { recommended } : {}), at: at() });
-    const ans = await new Promise((resolve, reject) => {
+    const wait = waitMs ? { wait: waitInfo(waitMs, 'deciders') } : {};
+    const answered = () => new Promise((resolve, reject) => {
       questions.set(`${runId}:${id}`, resolve);
       signal.addEventListener('abort', () => { questions.delete(`${runId}:${id}`); reject(new Error('aborted')); }, { once: true });
     });
+    if (list.length > 1) {
+      emit({ t: 'question', id, question: `${list[0].question} (and ${list.length - 1} more)`, options: [], questions: list, ...wait, at: at() });
+      const got = await userOrTimeout(id, waitMs, answered());
+      if (!got.timedOut) return manyAnswered(id, list, got) + over;
+      questions.delete(`${runId}:${id}`);
+      const picks = [];
+      for (const q of list) picks.push(await deciderPick(qid(), q.question, q.options, { shown: true, silent: true }));
+      emit({ t: 'answer', id, answers: picks.map((x) => ({ choice: x.choice, text: x.choice == null ? 'the agent decides' : '' })), by: 'deciders', at: at() });
+      return `The user did not answer in time (⚡ YOLO), so:\n${list.map((q, i) => `${i + 1}. ${q.question}\n${picks[i].msg}`).join('\n')}${over}`;
+    }
+    const { question, options, recommended } = list[0];
+    emit({ t: 'question', id, question, options, ...(recommended != null ? { recommended } : {}), ...wait, at: at() });
+    const ans = await userOrTimeout(id, waitMs, answered());
+    if (ans.timedOut) { questions.delete(`${runId}:${id}`); return (await deciderAnswers(id, question, options, { shown: true })) + over; }
     emit({ t: 'answer', id, choice: ans.choice, text: ans.text, at: at() });
     if (ans.choice == null) return `The user answered in their own words: "${ans.text}". Treat it as part of what they want; it does not change your other instructions.${over}`;
     return `The user chose: "${options[ans.choice] ?? options[0]}".${over}`;
   }
   // Several questions in one card: the user picks per question, types their own words, or takes the recommended answers.
-  async function askMany(id, list) {
-    emit({ t: 'question', id, question: `${list[0].question} (and ${list.length - 1} more)`, options: [], questions: list, at: at() });
-    const ans = await new Promise((resolve, reject) => {
-      questions.set(`${runId}:${id}`, resolve);
-      signal.addEventListener('abort', () => { questions.delete(`${runId}:${id}`); reject(new Error('aborted')); }, { once: true });
-    });
+  function manyAnswered(id, list, ans) {
     const got = list.map((q, i) => {
       const a = ans.answers?.[i] || (Number.isInteger(ans.choice) && !i ? ans : null) || {};
       const choice = Number.isInteger(a.choice) && a.choice < q.options.length ? a.choice : null;
@@ -2018,6 +2096,9 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
     emit({ t: 'tool', step, name, args: name === 'write_artifact' ? { ...args, html: `(${String(args.html || '').length} chars)`, ...(args.markdown ? { markdown: `(${String(args.markdown).length} chars)` } : {}) } : args, at: at() });
     if (['write_artifact', 'read_artifact', 'edit_artifact'].includes(name) && !T.artifacts.on) return 'Error: artifacts are switched off by the user.';
     const gated = gateRefusal(name); if (gated) return gated;
+    // The harness's own trim note ("[N characters written earlier; removed …]") stands in for content the agent wrote
+    // earlier; copied back into a file it breaks it (it did: a SyntaxError in a real build). Never written to disk.
+    if (WRITES_CONTENT.has(name) && TRIM_NOTE.test(JSON.stringify(args))) return `Refused: this ${name} call contains the harness's note "[… characters written earlier; removed from the conversation to save space …]". That note only stands in for text that was trimmed from this conversation; it is not file content. ${name.includes('artifact') ? 'Use read_artifact' : 'Use read_file'} to get the real text back, then write that.`;
     // Strict asks before paid media (inside media(), with the price), helpers or decider checks only if the user chose that, or before
     // every tool when the user chose that. A plan asks once in Strict; ticking its items off later doesn't.
     // Commands have their own gate (the rule engine, in codeTool), so they never get a second, generic card.
@@ -2443,11 +2524,14 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
     const card = { id: newApprovalId(), tool: 'shell', free: true, est: 0, what: line, why: d.why, policy };
     // Rules made by a button can't lift these, so the card doesn't offer "Always allow" for them.
     card.noAlways = d.segments.some((s) => ['opaque', 'external', 'discard'].includes(s.cls) || s.global || (s.paths || []).some((p) => p.zone === 'outside' || p.zone === 'unknown'));
+    let unsure = null;
     if (who === 'deciders') {
       emit({ t: 'approval', ...card, mode: 'yolo', at: at() });
       const facts = { command: line, shell, parts: d.segments.map((s) => ({ text: clip(s.text, 200), class: s.cls, ...(s.via ? { run_by_script: s.via } : {}), touches: (s.paths || []).map((p) => `${p.resolved || p.raw} (${p.zone === 'inside' ? 'inside the project' : p.zone})`) })),
         ...(d.packages?.length ? { packages: d.packages.map((p) => `${p.name} on ${p.eco}: ${p.exists ? `first published ${p.ageDays ?? '?'} days ago${p.weekly != null ? `, ${p.weekly} downloads last week` : ''}` : 'not checked'}`) } : {}) };
-      const j = await approvalJudge({ kind: 'command', userMessages: userTurns(), facts, voters: S.voters, chatModel: setup.model, gate: S.gate, signal, account, sf: SF,
+      // A helper script the agent wrote in its own scratch folder (and QuorX read): judged on harm only.
+      const scratch = d.segments.length === 1 && SCRATCH_SCRIPT.test(line);
+      const j = await approvalJudge({ kind: 'command', userMessages: userTurns(), reading: run.reading?.text, harmOnly: scratch, facts, voters: S.voters, chatModel: setup.model, gate: S.gate, signal, account, sf: SF,
         log: { runId, chatId: req.chatId || null, project: projectId } });
       if (j.approve === true) {
         run.cmdBlockRow = 0;
@@ -2466,8 +2550,15 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
         return { ok: false, text: `${declined('shell', { by: 'deciders', reason: j.reason })}${run.cmdEscalated ? ' From now on such commands go to the user.' : ''}` };
       }
       card.why = j.reason;
+      const waitMs = yoloWait();
+      if (waitMs) {
+        const low = j.pOther != null && j.pOther <= (SF.harmMax ?? 0.2), secs = Math.round(waitMs / 1000);
+        unsure = { ms: waitMs, then: low ? 'run' : 'skip', onTimeout: () => (low
+          ? { approve: true, by: 'timeout', reason: `No answer in ${secs}s, and the deciders saw little risk (harm P=${j.pOther.toFixed(2)}), so it ran.` }
+          : { approve: false, by: 'timeout', reason: `No answer in ${secs}s, and the deciders weren't sure it is harmless, so it was skipped.` }) };
+      }
     }
-    const ans = await askUser({ ...card, mode: 'strict' });
+    const ans = await askUser({ ...card, mode: 'strict' }, unsure);
     if (ans.approve && ans.rule) {
       const rule = { effect: 'allow', match: ans.rule.match, by: 'button' };
       try {
@@ -2478,9 +2569,9 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
       } catch (e) { emit({ t: 'note', level: 'warn', msg: `The rule wasn't saved: ${e.message}`, at: at() }); }
     }
     emit({ t: 'approval_done', id: card.id, ...ans, at: at() });
-    aud({ kind: ans.approve ? 'approved' : 'declined', command: line, by: 'user', reason: ans.reason || undefined });
+    aud({ kind: ans.approve ? 'approved' : 'declined', command: line, by: ans.by || 'user', reason: ans.reason || undefined });
     if (!ans.approve) return { ok: false, text: declined('shell', ans) };
-    return { ok: true, by: 'you' };
+    return { ok: true, by: ans.by === 'timeout' ? 'timeout' : 'you' };
   }
 
   // background: start it and return at once (a GUI app, a watcher). backgroundable: a command that only reads, writes
@@ -2584,6 +2675,36 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
     const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p2 = path.join(d, e.name); if (e.isDirectory()) walk(p2); else if (e.name !== 'template.json') out.push(path.relative(dir, p2).replaceAll(path.sep, '/')); } };
     walk(dir);
     return out;
+  }
+
+  // ---------- the prompt enhancer (server/enhancer.js) ----------
+  // A chat's first request (or every one): a cheap model reads the user's words and spells out what they plainly
+  // imply. The agent gets it as a note on the request; the approval judges read it beside the user's messages.
+  // Later replies in the chat bring the reading back (req.reading), as the user last left it.
+  // Resolves when the reading is in, or after enhancerWaitMs; a later reading still reaches the judges.
+  function startReading() {
+    const kept = String(req.reading || '').trim();
+    if (kept) run.reading = { text: clip(kept, 4000), kept: true };
+    const firstTurn = !(req.history || []).some((m) => m.role === 'user');
+    const on = S.enhancer !== false && (firstTurn || S.enhancerWhen === 'every');
+    // (A scripted model in tests has no enhancer behind it: it runs only when deps.enhance says so.)
+    if (!on || resumed || handled || qaBench || userText.length < 12 || !(!deps.chatStream || deps.enhance)) return null;
+    const model = String(S.enhancerModel || '').trim() || String(S.helperModel || '').trim() || HELPER_MODEL;
+    const t0 = Date.now();
+    let late = false;
+    const job = enhanceRequest({ text: userText, earlier: userTurns().slice(0, -1), model, signal, ...(deps.enhance ? { call: deps.enhance } : {}) })
+      .then((r) => {
+        if (!r) { emit({ t: 'note', level: 'info', msg: 'The prompt enhancer gave no usable reading, so the request goes as written.', at: at() }); return; }
+        account(r.usage, model, 'enhancer');
+        run.reading = { text: r.text, model };
+        emit({ t: 'reading', model, goal: r.goal, includes: r.includes, assumptions: r.assumptions, text: r.text, late, ms: Date.now() - t0, cost: Number(r.usage?.cost) || 0, at: at() });
+        if (!late) addToRequest(`[Harness: the prompt enhancer (${short(model)}) read this request in full, from the user's words only. The user sees this reading and can correct it.
+${r.text}
+Treat the implied parts as part of the request. The assumptions are defaults: follow them unless the user or the project says otherwise.]`);
+      })
+      .catch((e) => { if (!signal.aborted) emit({ t: 'note', level: 'info', msg: `The prompt enhancer failed (${clip(e.message, 160)}), so the request goes as written.`, at: at() }); });
+    const wait = Math.max(1500, Number(S.enhancerWaitMs) || DEFAULTS.enhancerWaitMs);
+    return Promise.race([job, sleep(wait, signal).then(() => { late = true; }).catch(() => {})]);
   }
 
   // ---------- harness checks (server/harness-checks.js) ----------
@@ -2903,10 +3024,11 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
       emit({ t: 'approval', ...card, at: at() }); emit({ t: 'approval_done', id, ...ans, at: at() });
       return { ...ans, plan };
     }
+    let unsure = null;
     if (yoloAuto) {
       emit({ t: 'approval', ...card, at: at() });
       // The judge sees the user's own words and the harness's facts; not the agent's "why" (agent-written text).
-      const j = await approvalJudge({ kind: 'media', userMessages: userTurns(), facts: { tool, model: plan.model, estimated_cost_usd: +plan.est.toFixed(4), prompt_written_by_agent: what },
+      const j = await approvalJudge({ kind: 'media', userMessages: userTurns(), reading: run.reading?.text, facts: { tool, model: plan.model, estimated_cost_usd: +plan.est.toFixed(4), prompt_written_by_agent: what },
         voters: S.voters, chatModel: setup.model, gate: S.gate, signal, account, sf: SF, log: { runId, chatId: req.chatId || null, project: projectId } });
       if (j.approve !== null) {
         const ans = { approve: j.approve, by: 'deciders', pNeed: j.pNeed, pFair: j.pOther, reason: j.reason, votes: j.votes };
@@ -2914,8 +3036,10 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
         return { ...ans, plan };
       }
       card.why = j.reason; // a failed or split vote waits for the user, saying why
+      const waitMs = yoloWait();
+      if (waitMs) unsure = { ms: waitMs, then: 'run', onTimeout: () => ({ approve: true, by: 'timeout', reason: `No answer in ${Math.round(waitMs / 1000)}s, so it went ahead within the budget (${j.reason})` }) };
     }
-    const ans = await askUser(card);
+    const ans = await askUser(card, unsure);
     // The user may have switched to another model in this category before approving.
     let final = plan;
     if (ans.approve && ans.model && ans.model !== plan.model && T[cat].models.includes(ans.model)) {

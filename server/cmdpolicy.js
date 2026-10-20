@@ -263,7 +263,30 @@ async function splitPowerShell(line) {
     if (c.invocation && c.invocation !== 'Unknown' && !c.nameStatic) s.dynamicProgram = true;
     return s;
   });
-  return { segs, opaque: r.members.length ? `it calls .NET directly (${r.members[0].slice(0, 60)})` : null, members: r.members };
+  const risky = r.members.filter((m) => !readOnlyMember(m));
+  return { segs, opaque: risky.length ? `it calls .NET directly (${risky[0].slice(0, 60)})` : null, members: r.members };
+}
+// .NET calls that only compute a value from text: listing a folder with $_.FullName.Replace(…), slicing a file with
+// $c.IndexOf(…) / .Substring(…), [Math]::Min(…). Anything else (a static call on another type, a method not listed)
+// still counts as code QuorX can't read. Replace on a bare variable stays out: FileInfo.Replace(a, b) replaces files.
+const READ_ONLY_METHODS = new Set(['substring', 'indexof', 'lastindexof', 'indexofany', 'trim', 'trimstart', 'trimend', 'tolower', 'toupper',
+  'tolowerinvariant', 'toupperinvariant', 'split', 'startswith', 'endswith', 'contains', 'padleft', 'padright', 'tostring', 'equals',
+  'compareto', 'normalize', 'gettype', 'replace']);
+const READ_ONLY_STATIC = /\[(?:math|system\.math)\]::(?:min|max|round|floor|ceiling|abs)\s*\(|\[(?:string|system\.string)\]::(?:join|isnullorempty|isnullorwhitespace|format|concat)\s*\(/gi;
+const STRING_PROPS = /\.(?:fullname|name|basename|extension|directoryname|line|path|text|value|filename)\s*\.replace\s*\($/i;
+export function readOnlyMember(text) {
+  const t = String(text).replace(READ_ONLY_STATIC, '(');
+  if (t.includes('::')) return false;
+  const calls = [...t.matchAll(/\.(\w+)\s*\(/g)];
+  if (!calls.length) return false;
+  return calls.every((m) => {
+    const name = m[1].toLowerCase();
+    if (!READ_ONLY_METHODS.has(name)) return false;
+    if (name !== 'replace') return true;
+    // Replace only on a string: a quoted literal, a file's name property, or the result of another string call.
+    const before = t.slice(0, m.index + m[0].length);
+    return STRING_PROPS.test(before) || /["')]\s*\.replace\s*\($/i.test(before);
+  });
 }
 
 // ---------- paths ----------
