@@ -503,6 +503,42 @@ function classify(s, shell) {
   if (['docker', 'podman'].includes(p) && ['push', 'login', 'logout'].includes(a1)) return { cls: 'external', why: `${p} ${a1} talks to a registry` };
   if (['docker', 'podman'].includes(p) && ['ps', 'images', 'version', 'info', 'logs', 'inspect'].includes(a1)) return { cls: 'read', why: '' };
   if (['docker', 'podman', 'docker-compose'].includes(p)) return { cls: 'unknown', why: `${p} can reach outside the project` };
+  // Apple's tools (most arrive through xcrun, which is unwrapped).
+  if (p === 'simctl') {
+    const plain = s.args.filter((a) => !a.param).map((a) => low(a.text));
+    if (['list', 'help', 'getenv', 'listapps', 'appinfo', 'get_app_container', 'pbpaste', 'pbinfo', 'bootstatus'].includes(a1)) return { cls: 'read', why: '' };
+    if (['erase', 'delete', 'unpair'].includes(a1)) return { cls: 'discard', why: `simctl ${a1} deletes a simulator or its data` };
+    if (a1 === 'runtime') return plain[1] === 'list' ? { cls: 'read', why: '' } : { cls: 'install', global: true, why: 'it adds or removes a simulator runtime for the whole computer' };
+    // spawn runs a program of this Mac inside the simulator's setting: only its log reader is known.
+    if (a1 === 'spawn') return plain[2] === 'log' ? { cls: 'read', why: '' } : { cls: 'opaque', why: 'simctl spawn runs another program' };
+    if (a1 === 'io') return { cls: 'write', why: '' }; // a screenshot or video: where it is written is checked
+    return { cls: 'build', why: '' };
+  }
+  if (p === 'xcodebuild') {
+    if (hasArg(s, '-downloadplatform', '-downloadallplatforms', '-importplatform', '-runfirstlaunch', '-license')) return { cls: 'install', global: true, why: 'it changes Xcode for the whole computer' };
+    if (hasArg(s, '-resolvepackagedependencies')) return { cls: 'install', why: 'it downloads Swift packages' };
+    const acts = ['build', 'test', 'archive', 'clean', 'analyze', 'install', 'build-for-testing', 'test-without-building', 'docbuild'];
+    if (hasArg(s, '-list', '-version', '-showsdks', '-showbuildsettings', '-showdestinations', '-checkfirstlaunchstatus', '-showtestplans') && !words.some((w) => acts.includes(w))) return { cls: 'read', why: '' };
+    return { cls: 'build', why: '' };
+  }
+  if (p === 'swift' && a1 === 'package') {
+    const w = low(s.args.filter((a) => !a.param)[1]?.text);
+    if (['resolve', 'update', 'add-dependency'].includes(w)) return { cls: 'install', why: 'it downloads Swift packages' };
+    if (w === 'publish') return { cls: 'external', why: 'it publishes a package' };
+    if (['describe', 'dump-package', 'show-dependencies', 'compute-checksum'].includes(w)) return { cls: 'read', why: '' };
+  }
+  if (p === 'swift' && a1 === 'sdk' && hasArg(s, 'install', 'remove')) return { cls: 'install', global: true, why: 'it installs a Swift SDK for the whole computer' };
+  if (p === 'plutil') return hasArg(s, '-p', '-lint', '-help', '-type') ? { cls: 'read', why: '' } : { cls: 'write', why: '' };
+  if (p === 'log') return ['show', 'stream', 'help'].includes(a1) ? { cls: 'read', why: '' } : { cls: 'never', why: 'it changes or erases the system log' };
+  if (['notarytool', 'altool'].includes(p)) return { cls: 'external', why: `${p} sends the app to Apple` };
+  if (p === 'devicectl') return a1 === 'list' ? { cls: 'read', why: '' } : { cls: 'external', why: 'devicectl works on a real iPhone, iPad or watch connected to this Mac' };
+  if (['pod', 'carthage'].includes(p)) {
+    if (p === 'pod' && a1 === 'trunk') return { cls: 'external', why: 'it publishes a pod' };
+    if (['install', 'update', 'bootstrap', 'repo'].includes(a1)) return { cls: 'install', why: `${p} ${a1} downloads dependencies` };
+    return { cls: 'build', why: '' };
+  }
+  if (['xcresulttool', 'dwarfdump', 'atos', 'symbols'].includes(p)) return { cls: 'read', why: '' };
+  if (['codesign', 'stapler', 'agvtool', 'xctrace', 'instruments', 'ibtool', 'actool', 'idb', 'lldb-dap', 'swift-format', 'swiftlint', 'xcbeautify'].includes(p)) return { cls: 'build', why: '' };
   if (p === 'flutter' || p === 'dart') { if (a1 === 'pub' && hasArg(s, 'publish')) return { cls: 'external', why: 'it publishes a package' }; if (a1 === 'pub') return { cls: 'install', why: 'it fetches packages' }; return { cls: 'build', why: '' }; }
   if (EXTERNAL.has(p)) {
     if (['curl', 'wget', 'invoke-webrequest', 'iwr', 'invoke-restmethod', 'irm'].includes(p)) {
@@ -1016,6 +1052,8 @@ const MARKERS = [
   ['package.json', ['npm run *', 'npm test*', 'npm ci*', 'npx tsc*']],
   [/^(pyproject\.toml|requirements\.txt|setup\.py)$/, ['pytest*', 'python -m pytest*', 'ruff*', 'mypy*']],
   ['pubspec.yaml', ['flutter build*', 'flutter test*', 'dart test*']],
+  [/\.(xcodeproj|xcworkspace)$/,['xcodebuild*', 'simctl boot*', 'simctl install*', 'simctl launch*', 'simctl terminate*']],
+  ['Package.swift', ['swift build*', 'swift test*', 'swift run*']],
 ];
 /** Build rules a project's files suggest, minus ones already present. [{ match, why }] */
 export function suggestedRules(root, existing = []) {
