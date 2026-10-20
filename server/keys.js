@@ -24,8 +24,10 @@ export function lockDown() {
       if (process.platform === 'win32') {
         const who = `${process.env.USERDOMAIN ? `${process.env.USERDOMAIN}\\` : ''}${process.env.USERNAME || ''}`;
         if (!process.env.USERNAME) continue;
+        // The folder only: files inside inherit its two entries. (/T rewrote each file with folder-only flags, which
+        // left files with no entries at all.)
         const dir = fs.statSync(p).isDirectory();
-        spawnSync('icacls', [p, '/inheritance:r', '/grant:r', `${who}:${dir ? '(OI)(CI)F' : 'F'}`, '/grant:r', `SYSTEM:${dir ? '(OI)(CI)F' : 'F'}`, ...(dir ? ['/T'] : []), '/Q'], { windowsHide: true, timeout: 20000 });
+        spawnSync('icacls', [p, '/inheritance:r', '/grant:r', `${who}:${dir ? '(OI)(CI)F' : 'F'}`, '/grant:r', `SYSTEM:${dir ? '(OI)(CI)F' : 'F'}`, '/Q'], { windowsHide: true, timeout: 20000 });
       } else fs.chmodSync(p, fs.statSync(p).isDirectory() ? 0o700 : 0o600);
     } catch { /* best effort: QuorX still runs */ }
   }
