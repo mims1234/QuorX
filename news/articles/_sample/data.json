@@ -1,0 +1,14 @@
+{
+  "tests": {
+    "type": "line",
+    "x": ["P0–P2", "linker", "v0.1.5", "Running", "packs", "#4–#9", "#12–#13"],
+    "series": [{ "name": "Tests", "values": [129, 133, 135, 137, 139, 150, 176] }],
+    "unit": "tests"
+  },
+  "reach": {
+    "type": "pairs",
+    "title": "Reach, before the packs and now",
+    "x": ["Toolchains detected", "Compiler checks", "Debugger languages", "Pack self-tests"],
+    "series": [{ "name": "Before", "values": [15, 4, 2, 0] }, { "name": "Now", "values": [33, 13, 9, 15] }]
+  }
+}

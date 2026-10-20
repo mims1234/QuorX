@@ -13,6 +13,7 @@
 <link rel="stylesheet" href="safety.css">
 <link rel="stylesheet" href="phone.css">
 <link rel="stylesheet" href="motion.css">
+<link rel="stylesheet" href="news.css">
 </head>
 <body>
 <!-- Top bar: app-wide controls only. Everything about one chat lives in that chat's header and composer. -->
@@ -40,6 +41,7 @@
       <button type="button" class="sb-nav-row nav-proj" id="newProjectBtn" title="New project: a folder that several chats can work in"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h6l2 2h10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 12v5M9.5 14.5h5"/></svg><span>New project</span></button>
       <button type="button" class="sb-nav-row nav-chat" id="newBtn" title="Start a new chat in the current project (the current one stays in your history)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/><path d="M12 8v5M9.5 10.5h5"/></svg><span>New chat</span></button>
       <button type="button" class="sb-nav-row nav-cost" id="costsBtn" title="What every project and chat has cost (open the breakdown)"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M14.5 9.2c-.5-.9-1.5-1.4-2.6-1.4-1.5 0-2.6.8-2.6 2s1.1 1.7 2.6 2c1.6.3 2.8.9 2.8 2.2 0 1.3-1.2 2.1-2.8 2.1-1.2 0-2.3-.5-2.8-1.5M12 6.2v1.6M12 16.2v1.6"/></svg><span>Spending</span><span class="sb-nav-amt" id="costsPill"></span></button>
+      <button type="button" class="sb-nav-row nav-news" id="newsBtn" title="News: what's new in QuorX, reports and articles"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h11v14H6a2 2 0 0 1-2-2V6a1 1 0 0 1 1-1z"/><path d="M16 9h3a1 1 0 0 1 1 1v7a2 2 0 0 1-4 0"/><path d="M8 9h5M8 12.5h5M8 16h3"/></svg><span>News</span><i class="nw-dot" id="newsDot" title="New updates since you last looked" hidden></i></button>
     </nav>
     <!-- Below the divider: hide the sidebar, and search the chats. -->
     <div class="sb-tools">
@@ -56,6 +58,7 @@
     <button type="button" class="sb-rail-btn rail-nav nav-proj" id="railProject" data-tip="New project" aria-label="New project"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h6l2 2h10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 12v5M9.5 14.5h5"/></svg></button>
     <button type="button" class="sb-rail-btn rail-nav nav-chat" id="railNew" data-tip="New chat" aria-label="New chat"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/><path d="M12 8v5M9.5 10.5h5"/></svg></button>
     <button type="button" class="sb-rail-btn rail-nav nav-cost" id="railCosts" data-tip="Spending" aria-label="Spending"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M14.5 9.2c-.5-.9-1.5-1.4-2.6-1.4-1.5 0-2.6.8-2.6 2s1.1 1.7 2.6 2c1.6.3 2.8.9 2.8 2.2 0 1.3-1.2 2.1-2.8 2.1-1.2 0-2.3-.5-2.8-1.5M12 6.2v1.6M12 16.2v1.6"/></svg></button>
+    <button type="button" class="sb-rail-btn rail-nav rail-news" id="railNews" data-tip="News" aria-label="News"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h11v14H6a2 2 0 0 1-2-2V6a1 1 0 0 1 1-1z"/><path d="M16 9h3a1 1 0 0 1 1 1v7a2 2 0 0 1-4 0"/><path d="M8 9h5M8 12.5h5M8 16h3"/></svg><i class="nw-dot" hidden></i></button>
     </div>
     <div class="rail-tools"><button type="button" class="sb-rail-btn rail-nav nav-search" id="railSearch" data-tip="Search chats" aria-label="Search chats"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6"/><path d="m15 15 5 5"/></svg></button></div>
     <!-- Only chats that are working right now, so you can jump back to them; the full list is in the expanded sidebar. -->

@@ -1,0 +1,79 @@
+{
+  "versions": [
+    {
+      "version": "0.2.0",
+      "date": "2026-10-20",
+      "title": "Every kind of app, with the safety to match",
+      "items": [
+        { "kind": "new", "text": "News in the sidebar: what's new in each version, reports and articles, with a dot when something is new.", "pr": 16 },
+        { "kind": "new", "text": "The agent works through a real shell, so it can build command-line programs and desktop apps, not only web pages.", "pr": 1 },
+        { "kind": "safety", "text": "Rules read every command before it runs; deleting your profile, a drive or a system folder is blocked however it is written.", "pr": 1 },
+        { "kind": "safety", "text": "Stop ends everything a command started and confirms nothing is left, and Undo now covers what commands change.", "pr": 1 },
+        { "kind": "safety", "text": "A tripwire stops a command part-way when many files outside the project disappear.", "pr": 1 },
+        { "kind": "safety", "text": "In YOLO the deciders vote on risky commands; they see only the facts, need a quorum, and never include the chat's own model.", "pr": 1 },
+        { "kind": "safety", "text": "Spending caps per reply and per day, and installs for the whole computer always ask you first.", "pr": 1 },
+        { "kind": "improved", "text": "QuorX checks that a toolchain can really build here before the agent starts, and says what is missing.", "pr": 1 },
+        { "kind": "new", "text": "The agent can answer prompts in terminal programs, click through Windows desktop apps and Android emulators, and use a debugger.", "pr": 1 },
+        { "kind": "new", "text": "A Running tab shows everything running in a project and who started it, with Stop on each and Stop all.", "pr": 2 },
+        { "kind": "improved", "text": "Long builds and installs move to the background instead of being cut off at a time limit.", "pr": 2 },
+        { "kind": "new", "text": "Platform packs: one file per kind of app tells QuorX how to detect, check, run, debug and explain it.", "pr": 3 },
+        { "kind": "new", "text": "Anyone can test the packs their computer supports with npm run test:packs, without an OpenRouter key.", "pr": 3 },
+        { "kind": "new", "text": ".NET: WinForms and WPF apps are built and driven, dotnet test failures are summed up, and netcoredbg debugs them.", "pr": 4 },
+        { "kind": "safety", "text": "Scripts that run other programs are read first and always ask, so a wrapper script can't hide what really runs.", "pr": 5 },
+        { "kind": "new", "text": "Tauri apps are built, and their window is read and clicked through WebView2.", "pr": 6 },
+        { "kind": "new", "text": "Go, C, C++ and Rust programs can be debugged with breakpoints, and C and C++ projects get a build check before the reply.", "pr": 7 },
+        { "kind": "new", "text": "Electron apps are driven through their DevTools port, and the debugger attaches to the main process.", "pr": 8 },
+        { "kind": "new", "text": "Godot and Unity projects are checked and their tests summed up; MSIX and WiX installers are built with test certificates only.", "pr": 9 },
+        { "kind": "new", "text": "Android emulators are started and driven, crashes point to your code's first line, and Flutter apps are checked and debugged.", "pr": 10 },
+        { "kind": "new", "text": "Java and Kotlin: Gradle and Maven compile checks, JUnit summaries, and a debugger built on the JDK's own.", "pr": 11 },
+        { "kind": "safety", "text": "QuorX runs safely on macOS and Linux: Stop ends whole process groups, rules read bash and zsh, and key folders are off limits.", "pr": 12 },
+        { "kind": "new", "text": "On a Mac, iPhone and Mac apps are built with Xcode, driven in the Simulator and debugged; crash reports are summed up.", "pr": 13 },
+        { "kind": "new", "text": "Python desktop apps use the project's own virtual environment, and tkinter and PyQt windows are driven and debugged.", "pr": 14 }
+      ]
+    },
+    {
+      "version": "0.1.5",
+      "date": "2026-10-19",
+      "title": "A compact update button",
+      "items": [
+        { "kind": "improved", "text": "The update button in the sidebar is short and fills up like a progress bar while the update downloads." }
+      ]
+    },
+    {
+      "version": "0.1.4",
+      "date": "2026-10-19",
+      "title": "Updates in the folded sidebar",
+      "items": [
+        { "kind": "improved", "text": "With the sidebar folded, a waiting update shows as an icon above restart, theme and settings." }
+      ]
+    },
+    {
+      "version": "0.1.3",
+      "date": "2026-10-19",
+      "title": "Page checks on more computers",
+      "items": [
+        { "kind": "fixed", "text": "A reply no longer fails its final check when the hidden browser won't start; it uses the agent's own tab or checks the files." },
+        { "kind": "fixed", "text": "QuorX finds Chrome installed for one user, 32-bit Chrome, Brave and Chromium, and says why a browser didn't start." },
+        { "kind": "improved", "text": "Pages the agent makes load from their own local address, so storage works in artifacts and project pages." },
+        { "kind": "improved", "text": "The side pane's tabs show only icons when the pane is narrow, and the servers button stays in view." }
+      ]
+    },
+    {
+      "version": "0.1.2",
+      "date": "2026-10-19",
+      "title": "Fresh eyes",
+      "items": [
+        { "kind": "new", "text": "When the same problem comes back, a second model with a clean context finds the likely cause before the next try." }
+      ]
+    },
+    {
+      "version": "0.1.0",
+      "date": "2026-10-19",
+      "title": "The first public version",
+      "items": [
+        { "kind": "new", "text": "QuorX runs any model through OpenRouter, with a quorum of decider models behind its choices." },
+        { "kind": "new", "text": "The agent builds web apps, sites and games, and opens each one in a browser to check it before it replies." }
+      ]
+    }
+  ]
+}
