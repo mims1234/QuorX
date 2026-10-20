@@ -15,6 +15,7 @@ import { execFileSync } from 'node:child_process';
 import { saveHooks, loadHooks, matchHooks, fileMatches, commandMatches, hookLine, cleanHook } from '../server/hooks.js';
 import { nextAfter, cleanWhen, cleanSchedule, describeWhen, createScheduler, saveSchedules as saveScheds, loadSchedules as loadScheds, GRACE_MS } from '../server/schedules.js';
 import { startScheduledChat } from '../server/schedrun.js';
+import { loadMemory, saveMemory, addMemory, checkMemory, looksSecret, memoryPrompt, memoryTokens, MEMORY_TOKENS } from '../server/memory.js';
 import { startRun, follow, getRun, readLog } from '../server/runs.js';
 import { getChat, saveChat as storeChat, listProjects } from '../server/store.js';
 
@@ -23,7 +24,7 @@ const reply = (text, calls = [], finishReason = 'stop') => ({ text, toolCalls: c
 
 /** Runs one reply. `script(body, i)` returns the model's i-th answer (or throws). */
 // `budget` sets the project's budget and `spent` seeds what it has already spent (as a ledger row).
-async function run(script, { settings = {}, text = 'build it', resume, onEvent, signal, history, budget, spent, setup = {}, openTab, generateImage, ensemble, checks, chatId, prep, cont, images, comments, enhance, reading } = {}) {
+async function run(script, { settings = {}, text = 'build it', resume, onEvent, signal, history, budget, spent, setup = {}, openTab, generateImage, ensemble, checks, chatId, prep, cont, images, comments, enhance, reading, catalogue } = {}) {
   const id = `t${Date.now().toString(36)}${(n++).toString(36)}`;
   const dir = tempDir('quorx-run-');
   saveProject({ id, name: 'test', path: dir });
@@ -35,7 +36,7 @@ async function run(script, { settings = {}, text = 'build it', resume, onEvent, 
   const chatStream = async (body, sig, onText) => { bodies.push(structuredClone(body)); const r = await script(body, i++); if (r.text && onText) onText(r.text); return r; };
   try {
     await runAgent({ runId: id, projectId: id, ...(chatId ? { chatId } : {}), ...(images ? { images } : {}), ...(comments ? { comments } : {}), text, resume, ...(cont ? { continue: cont } : {}), ...(reading ? { reading } : {}), history, setup: { model: 'test/model', ...setup }, settings: { approval: 'yolo', mediaEnabled: false, tools: { browser: { on: false } }, ...settings } },
-      (e) => { events.push(e); onEvent?.(e, id); }, signal || new AbortController().signal, { chatStream, catalogue: [{ id: 'test/model', maxOut: 4000 }], quiet: true, startServer: async ({ name, args }) => ({ key: `fake-${name}`, url: 'http://localhost:9/', status: 'running', command: ['node', ...(args || [])].join(' '), log: '' }), ...(openTab ? { openTab } : {}), ...(generateImage ? { generateImage } : {}), ...(ensemble ? { ensemble } : {}), ...(checks ? { checks } : {}), ...(enhance ? { enhance } : {}) });
+      (e) => { events.push(e); onEvent?.(e, id); }, signal || new AbortController().signal, { chatStream, catalogue: catalogue || [{ id: 'test/model', maxOut: 4000 }], quiet: true, startServer: async ({ name, args }) => ({ key: `fake-${name}`, url: 'http://localhost:9/', status: 'running', command: ['node', ...(args || [])].join(' '), log: '' }), ...(openTab ? { openTab } : {}), ...(generateImage ? { generateImage } : {}), ...(ensemble ? { ensemble } : {}), ...(checks ? { checks } : {}), ...(enhance ? { enhance } : {}) });
     return { events, bodies, dir, id, done: events.find((e) => e.t === 'done') };
   } finally { forgetProject(id); ledger.delete(`seed-${id}`); }
 }
@@ -1624,4 +1625,90 @@ test('a scheduled chat does not start when its project has reached its budget', 
     assert.deepEqual(notes, ['budget']);
     assert.throws(() => startScheduledChat({ ...s, projectId: 'nope' }, {}, schedDeps(() => reply('x'))), /no longer exists/);
   } finally { forgetProject(pid); ledger.delete(`seed-${pid}`); }
+});
+
+// ---------- memory across projects (server/memory.js) ----------
+
+const resetMemory = () => saveMemory({ on: true, items: [] });
+
+test('memory never keeps anything that looks like a secret', () => {
+  for (const s of ['my key is sk-or-v1-0123456789abcdef0123456789abcdef', 'token ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789', 'The password is hunter22', 'api key: 12345abcde', 'db at postgres://admin:s3cret@db.local/app',
+    'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abc', 'AKIAABCDEFGHIJKLMNOP', 'card 4111 1111 1111 1111', 'use Q2hhbmdlTWUhMTIzNDU2Nzg5MEFCQ0RFRg to sign in'])
+    assert.ok(looksSecret(s), `should be refused: ${s}`);
+  for (const s of ['I use pnpm, not npm', 'Prefer dark themes', 'Node 22.11.0 on Windows 11', 'Keep UI code in src/components/ui', 'Write commit messages in English, imperative mood', 'My GitHub handle is in package.json; never guess it'])
+    assert.equal(looksSecret(s), '', `should be allowed: ${s}`);
+  assert.match(checkMemory('The password is hunter22', { items: [] }), /never keeps secrets/);
+});
+
+test('memory has a hard size limit, checked again on every save', () => {
+  resetMemory();
+  try {
+    assert.ok(addMemory('I use pnpm, not npm').item);
+    assert.match(addMemory('i use PNPM, not npm').error, /already in memory/);
+    assert.match(addMemory('x'.repeat(201)).error, /at most 200 characters/);
+    const long = (k) => `Preference number ${k}: ${'keep things short and plain '.repeat(6)}`.slice(0, 190);
+    let k = 0, last;
+    while (!(last = addMemory(long(k++))).error) { /* fill it */ }
+    assert.match(last.error, /memory is full/);
+    const m = loadMemory();
+    assert.ok(memoryTokens(m.items) <= MEMORY_TOKENS, `${memoryTokens(m.items)} tokens`);
+    assert.throws(() => saveMemory({ items: [...m.items, { text: long(99) }] }), /memory is full/);
+    assert.throws(() => saveMemory({ items: [{ text: 'my token: abc123xyz' }] }), (e) => /never keeps secrets/.test(e.message) && !e.message.includes('abc123xyz'));
+    saveMemory({ on: false });
+    assert.equal(loadMemory().on, false);
+    assert.equal(loadMemory().items.length, m.items.length);
+    assert.equal(memoryPrompt(loadMemory(), { propose: true }), '');
+  } finally { resetMemory(); }
+});
+
+test('every chat gets the memory, and the prompt stays small; small models get the facts but no remember tool', async () => {
+  resetMemory();
+  try {
+    const sys = (b) => b.messages[0].content;
+    const tools = (b) => (b.tools || []).map((t) => t.function.name);
+    saveMemory({ on: false });
+    const off = await run(() => reply('Hi.'), { text: 'hello' });
+    assert.ok(!tools(off.bodies[0]).includes('remember'));
+    // Full memory: the prompt grows by the facts and one short rule, no more.
+    let k = 0;
+    saveMemory({ on: true, items: [] });
+    while (!addMemory(`Preference ${k++}: ${'plain words and short sentences please '.repeat(5)}`.slice(0, 180)).error) { /* fill it */ }
+    const full = await run(() => reply('Hi.'), { text: 'hello' });
+    const grew = sys(full.bodies[0]).length - sys(off.bodies[0]).length;
+    assert.ok(grew <= MEMORY_TOKENS * 4 + 600, `the prompt grew by ${grew} characters`);
+    assert.match(sys(full.bodies[0]), /\[About the user: facts and preferences they approved/);
+    assert.match(sys(full.bodies[0]), /- Preference 0: plain words/);
+    assert.ok(tools(full.bodies[0]).includes('remember'));
+    const toolDef = full.bodies[0].tools.find((t) => t.function.name === 'remember');
+    assert.ok(JSON.stringify(toolDef).length < 500);
+    // An 8k-context model: the facts, but no tool and no rule about it.
+    const small = await run(() => reply('Hi.'), { text: 'hello', catalogue: [{ id: 'test/model', maxOut: 2000, ctx: 8000, tools: true }] });
+    assert.match(sys(small.bodies[0]), /- Preference 0/);
+    assert.doesNotMatch(sys(small.bodies[0]), /propose it once with remember/);
+    assert.ok(!tools(small.bodies[0]).includes('remember'));
+  } finally { resetMemory(); }
+});
+
+test('the agent proposes a memory; it is saved only when you approve, even in YOLO, and never a secret', async () => {
+  resetMemory();
+  try {
+    const cards = [];
+    const answer = (yes) => (e, id) => { if (e.t === 'approval' && e.tool === 'remember') { cards.push(e); setTimeout(() => answerApproval(id, e.id, { approve: yes }), 5); } };
+    const yes = await run((b, i) => [reply('', [['remember', { text: 'Uses pnpm, not npm' }]]), reply('Noted.')][i], { text: 'I always use pnpm', onEvent: answer(true) });
+    assert.equal(yes.events.find((e) => e.t === 'start').approval, 'yolo');
+    assert.equal(cards[0].mode, 'strict');                           // the user's card, not the deciders'
+    assert.equal(cards[0].noAlways, true);
+    assert.match(toolResults(yes.bodies[1])[0], /^Saved to the user's memory/);
+    assert.deepEqual(loadMemory().items.map((x) => [x.text, x.by]), [['Uses pnpm, not npm', 'agent']]);
+    assert.ok(yes.events.some((e) => e.t === 'memory_saved'));
+    const no = await run((b, i) => [reply('', [['remember', { text: 'Prefers tabs' }]]), reply('OK.')][i], { text: 'tabs please', onEvent: answer(false) });
+    assert.match(toolResults(no.bodies[1])[0], /declined this remember call/);
+    assert.equal(loadMemory().items.length, 1);
+    const n0 = cards.length;
+    const secret = await run((b, i) => [reply('', [['remember', { text: 'API key is sk-or-v1-abcdef0123456789abcdef0123' }]]), reply('OK.')][i], { text: 'here is my key', onEvent: answer(true) });
+    assert.match(toolResults(secret.bodies[1])[0], /^Not saved: it looks like an API key/);
+    assert.equal(cards.length, n0, 'no card for a secret');
+    const many = await run((b, i) => [reply('', [['remember', { text: 'Likes A' }]]), reply('', [['remember', { text: 'Likes B' }]]), reply('', [['remember', { text: 'Likes C' }]]), reply('OK.')][i], { text: 'remember things', onEvent: answer(true) });
+    assert.match(toolResults(many.bodies[3]).at(-1), /at most 2 memory proposals per reply/);
+  } finally { resetMemory(); }
 });

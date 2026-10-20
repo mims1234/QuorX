@@ -13,7 +13,10 @@
         { "kind": "safety", "text": "Hooks are kept in QuorX's data folder, never in the project, and still go through your command rules, approvals and Stop.", "pr": 38 },
         { "kind": "new", "text": "Schedules: QuorX starts a chat on its own, like every weekday at 9 in a project, or once in an hour, with the prompt, model and mode you saved.", "pr": 39 },
         { "kind": "new", "text": "A run missed while the computer slept runs once when it wakes, labelled as missed, and you get a notice when a scheduled chat ends or waits for you.", "pr": 39 },
-        { "kind": "safety", "text": "Scheduled chats keep your budgets and caps, and use YOLO only when you chose YOLO for that schedule; Strict approvals wait for you.", "pr": 39 }
+        { "kind": "safety", "text": "Scheduled chats keep your budgets and caps, and use YOLO only when you chose YOLO for that schedule; Strict approvals wait for you.", "pr": 39 },
+        { "kind": "new", "text": "Memory: a short list of facts and preferences you approve, like I use pnpm, that every chat gets in every project; edit it in Settings." },
+        { "kind": "new", "text": "The agent can propose something to remember, and it is saved only when you say yes, in YOLO too." },
+        { "kind": "safety", "text": "Memory stays under 300 tokens for small models, refuses anything that looks like a key or password, and switches off with one checkbox." }
       ]
     },
     {
