@@ -1,4 +1,4 @@
-// Project folders, commands and dev servers for the agent, the way Claude Code works on a repo.
+// Project folders, commands and dev servers for the agent.
 // A project is one folder shared by all its chats (workspaces/<project> or a folder the user chose).
 // Paths can't leave it, commands
 // are limited to a list of developer programs with no shell metacharacters, and child processes get
@@ -356,7 +356,7 @@ export const serverFor = (projectId, name) => servers.get(`${projectId}/${slug(n
 
 // ---------- launch configs: the project's saved run commands ----------
 // Kept in <project>/.quorx/launch.json (written whenever a server starts, editable by the user). A
-// Claude Code style .claude/launch.json in the folder is read too, so existing repos work as they are.
+// A .claude/launch.json in the folder (the same format, from other tools) is read too, so existing repos work as they are.
 const LAUNCH = '.quorx/launch.json';
 function readJson(p) { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; } }
 const cleanConfig = (c) => ({ name: String(c.name || 'app').trim().slice(0, 40) || 'app', command: String(c.command || '').trim(), args: (Array.isArray(c.args) ? c.args : []).map(String), port: Number(c.port) > 0 ? Number(c.port) : null });
