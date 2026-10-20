@@ -111,7 +111,7 @@ test('file checks use real parsers', async () => {
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('a check that runs out of time is "couldn\x27t check", never a syntax error', async () => {
+test('a check that runs out of time is "couldn’t check", never a syntax error', async () => {
   const dir = tempDir('quorx-test-');
   const was = CHECK_TIMEOUTS.check;
   try {
