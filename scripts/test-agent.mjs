@@ -323,6 +323,25 @@ test('a budget can be raised or removed, never set below what the project has sp
   } finally { forgetProject(id); ledger.delete(`seed-${id}`); }
 });
 
+test('while a reply runs, the project says so and how much of what it spent is that reply', () => {
+  const id = `tr${Date.now().toString(36)}`;
+  saveProject({ id, name: 'running test', path: tempDir('quorx-b-') });
+  setProjectBudget(id, 10);
+  ledger.set(`seed-${id}`, { project: id, cost: 2.5 });
+  try {
+    assert.deepEqual(budgetState(id), { budget: 10, spent: 2.5, left: 7.5, running: false, runningCost: 0 });
+    liveRuns.set(`live-${id}`, { project: id, cost: 0.75 });
+    liveRuns.set(`other-${id}`, { project: 'elsewhere', cost: 5 });
+    const s = budgetState(id);
+    assert.equal(s.running, true);
+    assert.equal(s.runningCost, 0.75);
+    assert.equal(s.spent, 3.25);
+    assert.equal(s.left, 6.75);
+    // The sidebar takes the running reply out and adds what it has spent by now: the rest stays as it was.
+    assert.equal(s.spent - s.runningCost, 2.5);
+  } finally { forgetProject(id); ledger.delete(`seed-${id}`); liveRuns.delete(`live-${id}`); liveRuns.delete(`other-${id}`); }
+});
+
 test('YOLO: a project already at its budget makes no model call', async () => {
   let called = 0;
   const { done } = await run(() => { called++; return reply('hi'); }, { budget: 1, spent: 1 });

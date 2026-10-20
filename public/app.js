@@ -592,11 +592,10 @@ function renderSidebar() {
     const chats = all.filter((c) => (c.projectId || 'scratch') === p.id && (c.messages > 0 || G.panes.includes(c.id))).sort((a, b) => (b.lastAt || b.updated || 0) - (a.lastAt || a.updated || 0));
     const shown = chats.filter((c) => !q || c.title.toLowerCase().includes(q) || String(c.preview || '').toLowerCase().includes(q));
     if (q && !shown.length) return '';
-    // The server's total also counts replies that never reached a chat file (stopped, page closed, deleted).
-    // Replies running in this page add what they have spent so far (the server's figure for them was taken earlier).
+    // The server's total also counts replies that never reached a chat file (stopped, page closed, deleted), and
+    // replies running now as they stood when it was fetched: replies running in this page add what they have spent since.
     const liveHere = chats.reduce((s, c) => s + liveOf(G.open.get(c.id)), 0);
-    // (running is yes/no; runningCost is the dollars the server had counted for those replies)
-    const cost = Math.max(0, (p.spent != null ? p.spent - (Number(p.runningCost) || 0) : chats.reduce((s, c) => s + (c.cost || 0), 0)) + liveHere);
+    const cost = p.spent != null ? p.spent + Math.max(0, liveHere - (p.runningCost || 0)) : chats.reduce((s, c) => s + (c.cost || 0), 0) + liveHere;
     const share = p.budget ? Math.min(1, cost / p.budget) : 0;
     const folded = (G.foldedProjects || []).includes(p.id) && !q;
     // A project with a chat working glows; with a chat open it's the current one; the rest fade back (see last.css).
