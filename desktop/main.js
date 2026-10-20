@@ -21,6 +21,9 @@ const CONFIG = () => path.join(app.getPath('userData'), 'config.json');
 const readConfig = () => { try { return JSON.parse(fs.readFileSync(CONFIG(), 'utf8')); } catch { return {}; } };
 const writeConfig = (c) => { fs.mkdirSync(path.dirname(CONFIG()), { recursive: true }); fs.writeFileSync(CONFIG(), JSON.stringify(c, null, 2)); };
 let HOME = null;
+// The harness's app key (server/access.js): the window opens with it once, and the app's own calls carry it.
+const appKey = () => { try { return fs.readFileSync(path.join(HOME || ROOT, 'data', 'app-key'), 'utf8').trim(); } catch { return ''; } };
+const keyed = (h = {}) => ({ ...h, 'X-QuorX-Key': appKey() });
 const HIDDEN = process.argv.includes('--hidden'); // started at login: tray only
 let PORT = 5188;
 let server = null, origin = null, win = null, tray = null, quitting = false;
@@ -109,7 +112,7 @@ function createWindow() {
   // (inside a frame, which the page never hears keys from), the terminal, or QuorX itself (it calls back 'zoom').
   win.webContents.on('before-input-event', (e, input) => { const dir = zoomKey(input); if (dir) { e.preventDefault(); send({ type: 'zoom-key', dir }); } });
   win.webContents.on('zoom-changed', (_e, dir) => send({ type: 'zoom-wheel', dir }));
-  win.loadURL(origin);
+  win.loadURL(`${origin}/?k=${encodeURIComponent(appKey())}`);
   // The app window only shows the app; links elsewhere open in your browser.
   // Same origin exactly (not just the same prefix), and only web and mail links go to the system: other schemes
   // (file:, protocol handlers) are dropped.
@@ -289,7 +292,8 @@ handle('snapshot', async (sid) => { const t = tabs.get(sid); if (!t || !t.shown)
 // e.g. a GitHub release (https://github.com/<you>/<repo>/releases/latest/download). It comes from
 // package.json ("quorx.updateUrl") and can be changed in Settings. Works without code signing.
 let updater = null, update = { state: 'idle' };
-const updateUrl = () => (readConfig().updateUrl ?? PKG.quorx?.updateUrl ?? '').trim();
+// A saved feed that isn't https (an older setting) is ignored for the built-in one.
+const updateUrl = () => { const saved = String(readConfig().updateUrl ?? '').trim(); return (/^https:\/\//i.test(saved) ? saved : saved === '' && readConfig().updateUrl === '' ? '' : PKG.quorx?.updateUrl ?? '').trim(); };
 function setUpdate(patch) { update = { ...update, ...patch }; send({ type: 'update', ...update }); }
 function getUpdater() {
   if (updater || !app.isPackaged) return updater;
@@ -318,7 +322,9 @@ handle('update', async (op, arg) => {
   if (op === 'check') return checkUpdates();
   if (op === 'download') { if (update.state !== 'available') return update; setUpdate({ state: 'downloading', percent: 0 }); getUpdater().downloadUpdate().catch((e) => setUpdate({ state: 'error', error: String(e?.message || e).slice(0, 300) })); return update; }
   if (op === 'install') { if (update.state !== 'ready') return update; quitting = true; setImmediate(() => getUpdater().quitAndInstall(false, true)); return update; }
-  if (op === 'setUrl') { const url = String(arg || '').trim(); if (url && !/^https?:\/\//i.test(url)) throw new Error('the feed must be an http(s) address'); writeConfig({ ...readConfig(), updateUrl: url }); update = { state: 'idle' }; return checkUpdates(); }
+  if (op === 'setUrl') { const url = String(arg || '').trim(); // https only: an update replaces the app, so its feed must not be readable or changeable on the way.
+      if (url && !/^https:\/\//i.test(url)) throw new Error('the feed must be an https address');
+      if (url) { const ok = await dialog.showMessageBox(win, { type: 'warning', title: 'QuorX', message: 'Change where QuorX gets its updates?', detail: `New feed: ${url}\n\nUpdates from it replace the app. Only use a feed you trust.`, buttons: ['Change it', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true }); if (ok.response !== 0) return update; } writeConfig({ ...readConfig(), updateUrl: url }); update = { state: 'idle' }; return checkUpdates(); }
   throw new Error(`unknown update step ${op}`);
 });
 // ⟳ Restart the harness. One this app runs: stop it and start it again. One it is attached to: ask it
@@ -333,7 +339,7 @@ async function restartHarness() {
       const old = server; server = null;
       await new Promise((r) => { old.once('exit', r); try { if (process.platform === 'win32') spawn('taskkill', ['/pid', String(old.pid), '/T', '/F'], { windowsHide: true }); else old.kill(); } catch { r(); } setTimeout(r, 8000); });
     } else {
-      await fetch(`${origin}/api/harness/stop`, { method: 'POST' }).catch(() => {});
+      await fetch(`${origin}/api/harness/stop`, { method: 'POST', headers: keyed() }).catch(() => {});
     }
     if (!(await waitFor(async () => !(await harnessAt(PORT)), 15000))) throw new Error(`the harness on port ${PORT} did not stop`);
     origin = await startServer();
@@ -391,7 +397,7 @@ let agentSession = null;
 const agentSess = () => (agentSession ||= (() => { const s = session.fromPartition('persist:agent'); s.setUserAgent(CHROME_UA()); s.setPermissionRequestHandler((_wc, perm, cb) => cb(perm === 'fullscreen')); return s; })());
 const FORWARD = new Set(['Page.loadEventFired', 'Page.frameNavigated', 'Runtime.consoleAPICalled', 'Runtime.exceptionThrown', 'Log.entryAdded']);
 let linkToken = null, eventQueue = [], eventTimer = null;
-function postReply(body) { if (!origin || !linkToken) return; fetch(`${origin}/api/desktop/reply`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: linkToken, ...body }) }).catch(() => {}); }
+function postReply(body) { if (!origin || !linkToken) return; fetch(`${origin}/api/desktop/reply`, { method: 'POST', headers: keyed({ 'Content-Type': 'application/json' }), body: JSON.stringify({ token: linkToken, ...body }) }).catch(() => {}); }
 function queueEvent(e) { eventQueue.push(e); if (!eventTimer) eventTimer = setTimeout(() => { eventTimer = null; const events = eventQueue; eventQueue = []; postReply({ events }); }, 40); }
 // The agent's page is laid out at its own size; in a narrower pane it is shown scaled down to fit.
 function applyEmu(t) {
@@ -476,7 +482,7 @@ async function linkLoop() {
   for (;;) {
     try {
       linkToken = crypto.randomBytes(18).toString('hex');
-      const r = await fetch(`${origin}/api/desktop/link?token=${linkToken}`);
+      const r = await fetch(`${origin}/api/desktop/link?token=${linkToken}`, { headers: keyed() });
       if (r.ok) {
         const reader = r.body.getReader(), dec = new TextDecoder();
         let buf = '';

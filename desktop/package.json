@@ -14,7 +14,7 @@
     "release": "npm version patch --no-git-tag-version && node sync-version.js && npm run dist"
   },
   "devDependencies": {
-    "electron": "^44.9.0",
+    "electron": "^44.9.2",
     "electron-builder": "^26.15.3"
   },
   "author": "QuorX",
@@ -55,7 +55,11 @@
           "node_modules/@xterm/xterm/lib/xterm.js",
           "node_modules/@xterm/xterm/css/**/*",
           "node_modules/@xterm/addon-fit/package.json",
-          "node_modules/@xterm/addon-fit/lib/addon-fit.js"
+          "node_modules/@xterm/addon-fit/lib/addon-fit.js",
+          "node_modules/katex/package.json",
+          "node_modules/katex/dist/katex.min.js",
+          "node_modules/katex/dist/katex.min.css",
+          "node_modules/katex/dist/fonts/**/*"
         ]
       }
     ],

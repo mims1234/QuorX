@@ -19,9 +19,9 @@ const newToken = () => crypto.randomBytes(18).toString('base64url');
 function load() {
   try {
     const s = JSON.parse(fs.readFileSync(FILE, 'utf8'));
-    if (typeof s.token === 'string' && s.token.length >= 16) return { token: s.token, lan: s.lan !== false };
+    if (typeof s.token === 'string' && s.token.length >= 16) return { token: s.token, lan: s.lan === true };
   } catch { /* first run */ }
-  return save({ token: newToken(), lan: true });
+  return save({ token: newToken(), lan: false }); // other devices: off until you turn them on
 }
 function save(s) {
   try { fs.mkdirSync(path.dirname(FILE), { recursive: true }); fs.writeFileSync(FILE, JSON.stringify(s, null, 2)); } catch { /* read-only data folder: pairing lasts until restart */ }
@@ -74,7 +74,7 @@ export function gate(req, res, url) {
     if (same(pair, state.token)) {
       fails.delete(ip);
       url.searchParams.delete('pair');
-      res.writeHead(302, { 'Set-Cookie': `${COOKIE}=${state.token}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax`, Location: `${url.pathname}${url.search}`, 'Cache-Control': 'no-store' });
+      res.writeHead(302, { 'Set-Cookie': `${COOKIE}=${state.token}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Strict`, Location: `${url.pathname}${url.search}`, 'Cache-Control': 'no-store' });
       res.end();
       return true;
     }
@@ -86,11 +86,51 @@ export function gate(req, res, url) {
   return send(401, 'This device is not paired yet.', 'On the computer running QuorX, open ⚙ Settings → About → Other devices and open the pairing link on this device (copy it, or type it). You only do this once.');
 }
 
+// ---------- the app key: /api on this computer only for QuorX's own windows ----------
+// Being on this computer is not enough: programs the agent runs are on it too. The page proves itself with a cookie
+// it gets by opening the app link once (printed at start, opened by the desktop app itself); other programs can call
+// /api only if they read the key file in data/, which the agent's commands may not read.
+const KEY_FILE = path.join(HOME, 'data', 'app-key');
+const KEY_COOKIE = 'qx_app';
+export const appKey = (() => {
+  try { const k = fs.readFileSync(KEY_FILE, 'utf8').trim(); if (k.length >= 32) return k; } catch { /* first run */ }
+  const k = crypto.randomBytes(32).toString('base64url');
+  try { fs.mkdirSync(path.dirname(KEY_FILE), { recursive: true }); fs.writeFileSync(KEY_FILE, k, { mode: 0o600 }); } catch { /* lasts until restart */ }
+  return k;
+})();
+const keyCookie = (req) => String(req.headers.cookie || '').split(/;\s*/).map((c) => c.split('=')).find(([k]) => k === KEY_COOKIE)?.[1] || '';
+/** The app link: opening it once leaves the cookie. */
+export const appLink = (port) => `http://localhost:${port}/?k=${appKey}`;
+// Routes any caller may use: the version check the desktop app makes before it has the key, and nothing else.
+const OPEN = new Set(['/api/config', '/api/stale']);
+/**
+ * For requests from this computer: answers /api calls without the key (true), turns ?k= into the cookie (true), or
+ * lets the request through (false). Other devices are checked by gate() and their pairing cookie instead.
+ */
+export function appGate(req, res, url) {
+  if (!isLoopback(req)) return false;
+  const k = url.searchParams.get('k');
+  if (k != null && !url.pathname.startsWith('/api/')) {
+    url.searchParams.delete('k');
+    if (!same(k, appKey)) { res.writeHead(401, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(PAGE('That app link is not valid.', 'Open the link QuorX printed when it started, or the desktop app.')); return true; }
+    res.writeHead(302, { 'Set-Cookie': `${KEY_COOKIE}=${appKey}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Strict`, Location: `${url.pathname}${url.search}`, 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' });
+    res.end();
+    return true;
+  }
+  if (!url.pathname.startsWith('/api/') || OPEN.has(url.pathname)) return false;
+  if (same(keyCookie(req), appKey) || same(req.headers['x-quorx-key'], appKey)) return false;
+  res.writeHead(401, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ error: 'This QuorX needs its app link: open the link it printed when it started (or use the desktop app), then reload.', code: 'APP_KEY' }));
+  return true;
+}
+
 /** The addresses other devices can use, each with the pairing link (for Settings, on this computer only). */
 export function accessInfo(port) {
   const ips = Object.values(os.networkInterfaces()).flat().filter((a) => a && !a.internal && a.family === 'IPv4').map((a) => a.address);
   return { lan: state.lan, links: ips.map((ip) => ({ ip, url: `http://${ip}:${port}/?pair=${state.token}` })) };
 }
+/** Whether other devices may connect; when not, QuorX listens on this computer only. */
+export const lanOn = () => state.lan;
 export function setLan(on) { state = save({ ...state, lan: !!on }); return state.lan; }
 /** A new pairing link: every device paired with the old one is signed out. */
 export function resetToken() { state = save({ ...state, token: newToken() }); }

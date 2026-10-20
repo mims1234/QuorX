@@ -74,6 +74,7 @@ export function listFiles(root, max = 300) {
         }
         continue;
       }
+      if (e.isSymbolicLink()) continue; // a link can lead outside the project
       if (SKIP.has(e.name)) { out.push({ path: path.relative(root, path.join(dir, e.name)).replaceAll('\\', '/') + '/ (skipped)', size: 0 }); continue; }
       const p = path.join(dir, e.name);
       if (e.isDirectory()) walk(p);
@@ -156,7 +157,7 @@ export function checkCommand(cmd, args) {
 
 // No secrets for code the agent wrote: drop anything that looks like a key, token or password.
 export function childEnv(extra = {}) {
-  const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/KEY|TOKEN|SECRET|PASSWORD|OPENROUTER|CREDENTIAL/i.test(k)));
+  const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/KEY|TOKEN|SECRET|PASSW|PASSPHRASE|PWD_|OPENROUTER|CREDENTIAL|AUTH|COOKIE|SESSION_?(TOKEN|KEY|SECRET|ID$)|_PAT$|PRIVATE|DSN|DATABASE_URL|_URI$|CONNECTION_STRING|WEBHOOK|SSH_AUTH_SOCK|GPG_AGENT|CLIENT_ID|CLIENT_SECRET/i.test(k) || k === 'PWD' || k === 'OLDPWD'));
   return { ...env, ...extra, FORCE_COLOR: '0', BROWSER: 'none' };
 }
 
@@ -518,7 +519,13 @@ export function searchFiles(root, query, glob = '', max = 80) {
   for (const f of listFiles(root, 2000)) {
     if (out.length >= max || f.path.endsWith('(skipped)') || f.size > 1e6) continue;
     if (rx && !rx.test(f.path) && !rx.test(path.basename(f.path))) continue;
-    let text; try { text = fs.readFileSync(path.join(root, f.path), 'utf8'); } catch { continue; }
+    // Links can point outside the project (or at QuorX's own keys): skip them, and keep every read inside safePath.
+    let text;
+    try {
+      const p = safePath(root, f.path);
+      if (fs.lstatSync(p).isSymbolicLink()) continue;
+      text = fs.readFileSync(p, 'utf8');
+    } catch { continue; }
     if (text.includes('\u0000')) continue;
     text.split(/\r?\n/).forEach((line, i) => { if (out.length < max && line.toLowerCase().includes(q)) out.push({ path: f.path, line: i + 1, text: line.trim().slice(0, 200) }); });
   }

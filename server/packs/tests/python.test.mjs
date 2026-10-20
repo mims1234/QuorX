@@ -215,7 +215,8 @@ test('python: the agent debugs a tkinter app in the project\'s venv through its 
   const skip = await skipUnless('python'); if (skip) return t.skip(skip);
   if (!process.env.QX_PYTHON || !can('import debugpy, tkinter')) return t.skip('set QX_PYTHON to a Python with debugpy and tkinter');
   if (!(await desktopAvailable())) return t.skip('the desktop helper could not start');
-  const dir = project('py-agent', { 'app.py': TK_APP, '.quorx/permissions.json': JSON.stringify({ rules: [{ effect: 'allow', match: 'python app.py*', by: 'user' }] }) });
+  const dir = project('py-agent', { 'app.py': TK_APP });
+  saveRules('project', [{ effect: 'allow', match: 'python app.py*', by: 'user' }], dir);
   // A venv without pip that borrows QX_PYTHON's packages (debugpy) through a .pth file, so nothing is downloaded.
   execFileSync(WIN ? 'py' : 'python3', [...(WIN ? ['-3'] : []), '-m', 'venv', '--without-pip', '.venv'], { cwd: dir, stdio: 'pipe', timeout: 60000 });
   const site = execFileSync(PY, ['-c', 'import debugpy, os; print(os.path.dirname(os.path.dirname(debugpy.__file__)))'], { encoding: 'utf8' }).trim();

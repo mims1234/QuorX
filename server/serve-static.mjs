@@ -17,11 +17,16 @@ const TYPES = {
 };
 
 http.createServer((req, res) => {
+  // Only this computer's own names (a web page can't reach it by DNS tricks), and never dot files (.env, .git).
+  const host = String(req.headers.host || '').replace(/:d+$/, '').toLowerCase();
+  if (!['localhost', '127.0.0.1', '[::1]'].includes(host)) { res.writeHead(403).end('Not allowed'); return; }
   let rel;
   try { rel = decodeURIComponent(new URL(req.url, 'http://x').pathname); } catch { res.writeHead(400).end('Bad address'); return; }
   // The entry in a subfolder: send the browser there, so the page's relative links (js/main.js) resolve next to it.
   if (rel === '/' && entry.includes('/')) { res.writeHead(302, { Location: `/${entry.split('/').map(encodeURIComponent).join('/')}`, 'Cache-Control': 'no-store' }).end(); return; }
   if (rel === '/') rel = `/${entry}`;
+  const fwd = rel.split('\\').join('/');
+  if (/(^|\/)\.(?!well-known\/)/.test(fwd) && !/^\/\.quorx\/scratch\//.test(fwd)) { res.writeHead(404).end('Not found'); return; }
   const file = path.resolve(root, `.${rel}`);
   // Only files inside the project folder; of the harness's .quorx folder, only the agent's scratch (its test pages).
   const inside = file.slice(root.length);

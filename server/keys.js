@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -11,9 +12,24 @@ const DATA = path.join(HOME, 'data');
 const FILE = path.join(DATA, 'keys.json');
 const USAGE = path.join(DATA, 'key-usage.json');
 // Files the agent's file tools and the /ws file server must never read, whatever folder a project points at.
-export const SECRET_FILES = [path.join(ROOT, '.env'), path.join(HOME, '.env'), FILE, USAGE];
+export const SECRET_FILES = [path.join(ROOT, '.env'), path.join(HOME, '.env'), FILE, USAGE, path.join(DATA, 'app-key'), path.join(DATA, 'access.json')];
 const BASE = 'https://openrouter.ai';
 
+// The data folder (keys, the app key, chats) and .env belong to this account only. On a second drive Windows lets
+// every signed-in user change new folders, and elsewhere the default lets others read them.
+export function lockDown() {
+  const targets = [DATA, path.join(HOME, '.env'), path.join(ROOT, '.env')].filter((p, i, a) => a.indexOf(p) === i && fs.existsSync(p));
+  for (const p of targets) {
+    try {
+      if (process.platform === 'win32') {
+        const who = `${process.env.USERDOMAIN ? `${process.env.USERDOMAIN}\\` : ''}${process.env.USERNAME || ''}`;
+        if (!process.env.USERNAME) continue;
+        const dir = fs.statSync(p).isDirectory();
+        spawnSync('icacls', [p, '/inheritance:r', '/grant:r', `${who}:${dir ? '(OI)(CI)F' : 'F'}`, '/grant:r', `SYSTEM:${dir ? '(OI)(CI)F' : 'F'}`, ...(dir ? ['/T'] : []), '/Q'], { windowsHide: true, timeout: 20000 });
+      } else fs.chmodSync(p, fs.statSync(p).isDirectory() ? 0o700 : 0o600);
+    } catch { /* best effort: QuorX still runs */ }
+  }
+}
 const envKey = () => process.env.OPENROUTER_API_KEY || process.env.OPENROUTER_API_KEY_BOT || '';
 function load() {
   try { return JSON.parse(fs.readFileSync(FILE, 'utf8')); } catch { return { active: null, keys: [] }; }

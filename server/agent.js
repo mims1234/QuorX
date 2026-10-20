@@ -14,7 +14,7 @@ import { ensemble, GATE } from './decisions.js';
 import { runtime } from './openrouter.js';
 import { enhanceRequest } from './enhancer.js';
 import { validId, listProjects, getChat } from './store.js';
-import { searchFiles, trashFile, checkpoint, changedFiles, copyTemplate, snapBefore, commandChanges, safePath, childEnv } from './workspace.js';
+import { searchFiles, trashFile, checkpoint, changedFiles, copyTemplate, snapBefore, commandChanges, safePath, childEnv, realish } from './workspace.js';
 import { SAFETY_DEFAULTS, safetySettings } from './safety.js';
 import { decide as decideCommand, loadRules, addRule, agentWriteBlocked } from './cmdpolicy.js';
 import { approvalJudge } from './approvals.js';
@@ -45,6 +45,7 @@ import { saveCheckpoint, loadCheckpoint, dropCheckpoint, recordRun } from './run
 import { live, budgetState, spentToday } from './budget.js';
 import { blobData } from './blobs.js';
 import { ownAddresses } from './access.js';
+import { safeFetch } from './safefetch.js';
 
 // The paid media categories and the tool each one gives the agent.
 export const MEDIA = {
@@ -2265,7 +2266,10 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   async function codeTool(name, args) {
     if (!root) return 'Error: the project folder is switched off.';
     if (['write_file', 'append_file', 'edit_file', 'delete_file'].includes(name) && args.path) {
-      const no = agentWriteBlocked(args.path);
+      // Judged on where the path really lands (absolute, "..", links, trailing dots), not on how it was written.
+      let real;
+      try { real = path.relative(realish(root), realish(safePath(root, String(args.path)))).replace(/[. ]+(?=[\\/]|$)/g, ''); } catch (e) { return `Refused: ${e.message}.`; }
+      const no = agentWriteBlocked(real) || agentWriteBlocked(args.path);
       if (no) return `Refused: ${no}. Work in the project's own files instead.`;
       checkpoint(root, filesId, args.path);
     }
@@ -2657,10 +2661,11 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     let u;
     try { u = new URL(String(url)); } catch { return 'Error: not a valid URL.'; }
     if (u.protocol !== 'https:') return 'Error: only https:// pages can be fetched.';
-    if (/^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|0\.|\[?::1)/i.test(u.hostname)) return 'Error: local and private addresses are not allowed; use the browser tool for your own apps.';
     const ac = new AbortController(); const t = setTimeout(() => ac.abort(), 15000);
     try {
-      const r = await fetch(u, { signal: ac.signal, headers: { 'User-Agent': 'QuorX (fetch_url)', Accept: 'text/html,text/plain,application/json;q=0.9,*/*;q=0.5' } });
+      // Each hop is checked by the address it resolves to (server/safefetch.js).
+      const got = await safeFetch(u, { signal: ac.signal, headers: { 'User-Agent': 'QuorX (fetch_url)', Accept: 'text/html,text/plain,application/json;q=0.9,*/*;q=0.5' } });
+      const r = got.response; u = got.url;
       const type = r.headers.get('content-type') || '';
       let text = await r.text();
       if (/html/.test(type)) text = text.replace(/<(script|style|noscript|svg)[\s\S]*?<\/\1>/gi, ' ').replace(/<br\s*\/?>|<\/(p|div|li|h\d|tr)>/gi, '\n').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");

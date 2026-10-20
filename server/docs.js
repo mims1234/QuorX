@@ -27,7 +27,9 @@ const dirs = (projectId) => {
   fs.mkdirSync(up, { recursive: true }); fs.mkdirSync(idx, { recursive: true });
   return { root, up, idx, reg: path.join(up, 'docs.json') };
 };
-const readReg = (d) => { try { return JSON.parse(fs.readFileSync(d.reg, 'utf8')); } catch { return []; } };
+// Entries name a file in uploads/ only (the folder can arrive with a project, so a stray entry is dropped, not followed).
+const okEntry = (x) => x && typeof x.id === 'string' && /^[w-]{1,64}$/.test(x.id) && typeof x.file === 'string' && /^[w][w .()-]{0,190}$/.test(x.file) && !x.file.includes('..');
+const readReg = (d) => { try { const l = JSON.parse(fs.readFileSync(d.reg, 'utf8')); return Array.isArray(l) ? l.filter(okEntry) : []; } catch { return []; } };
 const writeReg = (d, list) => fs.writeFileSync(d.reg, JSON.stringify(list, null, 2));
 function update(projectId, id, patch) {
   const d = dirs(projectId), list = readReg(d), i = list.findIndex((x) => x.id === id);

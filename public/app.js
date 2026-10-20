@@ -8,6 +8,27 @@ const money = (c, d = 4) => `$${(Number(c) || 0).toFixed(d)}`;
 const secs = (ms) => `${((ms || 0) / 1000).toFixed(1)}s`;
 const short = (m) => String(m || '').split('/').pop();
 const pct = (p) => `${Math.round((p || 0) * 100)}%`;
+// Opened without the app link (server/access.js): every /api call is refused, so say how to sign this browser in.
+{
+  const raw = window.fetch.bind(window);
+  let shown = false;
+  window.fetch = async (...a) => {
+    const r = await raw(...a);
+    if (r.status === 401 && !shown && /^\/api\//.test(new URL(String(a[0]?.url || a[0]), location.href).pathname)) {
+      const j = await r.clone().json().catch(() => ({}));
+      if (j.code === 'APP_KEY') {
+        shown = true;
+        const d = document.createElement('div');
+        d.className = 'app-key-wall';
+        d.setAttribute('role', 'alert');
+        d.innerHTML = '<div><h2>Open QuorX with its app link</h2><p>QuorX now answers only its own windows. Open the link it printed when it started (the line that starts with “Open QuorX with this link once”), or use the desktop app. You only do this once per browser.</p><button type="button">Reload</button></div>';
+        d.querySelector('button').onclick = () => location.reload();
+        document.body.appendChild(d);
+      }
+    }
+    return r;
+  };
+}
 const ago = (t) => { const s = (Date.now() - t) / 1000; return s < 60 ? 'just now' : s < 3600 ? `${Math.round(s / 60)}m ago` : s < 86400 ? `${Math.round(s / 3600)}h ago` : `${Math.round(s / 86400)}d ago`; };
 // "14:32" today, "Yesterday 14:32", or "17 Oct 14:32".
 function stamp(t) {
@@ -4765,7 +4786,12 @@ async function drawDevices(info) {
         + stRow('', '', `<button type="button" class="st-btn ghost sm" id="stDevShow">${shown ? 'Hide' : 'Show'} links</button> <button type="button" class="st-btn danger sm" id="stDevReset" title="Every paired device has to pair again">New link…</button>`)
       : stRow('Pairing link', 'This computer has no network address right now (no Wi-Fi or cable).', ''))
       : ''));
-  $('#stLan').onchange = async (e) => drawDevices(await postJ('/api/access', { lan: e.target.checked }).catch(() => null));
+  $('#stLan').onchange = async (e) => {
+    const r = await postJ('/api/access', { lan: e.target.checked }).catch(() => null);
+    drawDevices(r);
+    // QuorX listens on this computer only while other devices are off; switching needs a restart to take effect.
+    if (r?.restart) uiAlert(`Restart QuorX to apply this\nOther devices ${r.lan ? 'can connect' : 'are refused'} after the next restart (⟳ in the sidebar).`);
+  };
   const show = $('#stDevShow'); if (show) show.onclick = () => { ST.revealDevices = !shown; drawDevices(info); };
   const reset = $('#stDevReset');
   if (reset) reset.onclick = async () => { if (await uiConfirm('Make a new pairing link? Every phone or computer paired with the old one has to pair again.')) drawDevices(await postJ('/api/access/reset', {}).catch(() => null)); };

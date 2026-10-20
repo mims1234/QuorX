@@ -9,7 +9,7 @@ import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { runLine, snapBefore, commandChanges, restoreCheckpoint, reviewFiles, agentSpace } from '../server/workspace.js';
 import { jobsAvailable, jobHostStatus } from '../server/jobhost.js';
-import { decide, agentWriteBlocked, suggestedRules } from '../server/cmdpolicy.js';
+import { decide, agentWriteBlocked, suggestedRules, saveRules, loadRules } from '../server/cmdpolicy.js';
 import { approvalJudge } from '../server/approvals.js';
 import { SAFETY_DEFAULTS } from '../server/safety.js';
 import { runAgent, answerApproval, raiseCap, answerQuestion } from '../server/agent.js';
@@ -541,7 +541,7 @@ test('shell: a build asks you; "Always allow" saves a rule, and the next run doe
   });
   assert.equal(asked, 1, 'asked once, then the rule covers it');
   assert.equal(fs.readFileSync(path.join(dir, 'out.txt'), 'utf8'), 'xx');
-  const saved = JSON.parse(fs.readFileSync(path.join(dir, '.quorx', 'permissions.json'), 'utf8')).rules;
+  const saved = loadRules(dir).filter((r) => r.scope === 'project');
   assert.equal(saved[0].match, 'node build.js*');
   assert.equal(saved[0].by, 'button');
   assert.ok(events.some((e) => e.t === 'cmd_rule'));
@@ -673,7 +673,7 @@ test('tripwire: an agent command deleting next to the project is stopped part-wa
       for (let i = 0; i < 200; i++) fs.writeFileSync(path.join(sibling, `f${i}.txt`), 'x');
       fs.writeFileSync(path.join(d, 'del.js'), `const fs=require('fs'),p=require('path'),dir=${JSON.stringify(sibling)};let i=0;const t=setInterval(()=>{if(i>=200){clearInterval(t);return;}fs.rmSync(p.join(dir,'f'+(i++)+'.txt'))},15);`);
       fs.mkdirSync(path.join(d, '.quorx'), { recursive: true });
-      fs.writeFileSync(path.join(d, '.quorx', 'permissions.json'), JSON.stringify({ rules: [{ effect: 'allow', match: 'node del.js*', by: 'user' }] }));
+      saveRules('project', [{ effect: 'allow', match: 'node del.js*', by: 'user' }], d);
     },
   });
   assert.match(toolOut(bodies, 1), /tripwire STOPPED this command/);
@@ -712,7 +712,7 @@ test('jobs: a long build moves to the background instead of being killed, and jo
     prep: (d) => {
       fs.writeFileSync(path.join(d, 'slow.js'), "console.log('start'); setTimeout(() => console.log('finished'), 7000)");
       fs.mkdirSync(path.join(d, '.quorx'), { recursive: true });
-      fs.writeFileSync(path.join(d, '.quorx', 'permissions.json'), JSON.stringify({ rules: [{ effect: 'allow', match: 'node slow.js*', by: 'user' }] }));
+      saveRules('project', [{ effect: 'allow', match: 'node slow.js*', by: 'user' }], d);
     },
   });
   assert.match(toolOut(bodies, 1), /continues in the background as job bg\d+/);
@@ -730,7 +730,7 @@ test('jobs: background: true returns at once and job_stop ends it', { skip: !WIN
     prep: (d) => {
       fs.writeFileSync(path.join(d, 'forever.js'), "console.log('up'); setInterval(() => {}, 1000)");
       fs.mkdirSync(path.join(d, '.quorx'), { recursive: true });
-      fs.writeFileSync(path.join(d, '.quorx', 'permissions.json'), JSON.stringify({ rules: [{ effect: 'allow', match: 'node forever.js*', by: 'user' }] }));
+      saveRules('project', [{ effect: 'allow', match: 'node forever.js*', by: 'user' }], d);
     },
   });
   assert.match(toolOut(bodies, 1), /Started in the background as job (bg\d+)[\s\S]*up/);
@@ -775,7 +775,7 @@ test('running: a background job is listed with its chat; stopping it there ends 
     prep: (d) => {
       fs.writeFileSync(path.join(d, 'forever.js'), "console.log('serving'); setInterval(() => {}, 1000)");
       fs.mkdirSync(path.join(d, '.quorx'), { recursive: true });
-      fs.writeFileSync(path.join(d, '.quorx', 'permissions.json'), JSON.stringify({ rules: [{ effect: 'allow', match: 'node forever.js*', by: 'user' }] }));
+      saveRules('project', [{ effect: 'allow', match: 'node forever.js*', by: 'user' }], d);
     },
     onEvent: (e, id) => { projectId = id; },
   });
@@ -793,7 +793,7 @@ test('running: any command that outlives the time limit moves to the background,
     settings: { safety: { timeout: 5 } },
     prep: (d) => {
       fs.mkdirSync(path.join(d, '.quorx'), { recursive: true });
-      fs.writeFileSync(path.join(d, '.quorx', 'permissions.json'), JSON.stringify({ rules: [{ effect: 'allow', match: 'ping*', by: 'user' }] }));
+      saveRules('project', [{ effect: 'allow', match: 'ping*', by: 'user' }], d);
     },
   });
   assert.match(toolOut(bodies, 1), /continues in the background as job bg\d+ instead of being stopped/);
@@ -819,7 +819,7 @@ test('loops: in Strict the user can say keep going, and it is not checked again'
   assert.equal(bodies.length, 13, 'it ran to the end');
 });
 // ---------- the agent's terminal and desktop apps (P1) ----------
-const allow = (d, match) => { fs.mkdirSync(path.join(d, '.quorx'), { recursive: true }); fs.writeFileSync(path.join(d, '.quorx', 'permissions.json'), JSON.stringify({ rules: [{ effect: 'allow', match, by: 'user' }] })); };
+const allow = (d, match) => { fs.mkdirSync(path.join(d, '.quorx'), { recursive: true }); saveRules('project', [{ effect: 'allow', match, by: 'user' }], d); };
 
 test('terminal: the agent answers a program’s prompts and reads its screen', { skip: !WIN }, async () => {
   const { bodies } = await agentRun((b, i) => [

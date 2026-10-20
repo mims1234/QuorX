@@ -30,7 +30,7 @@ export function releaseAgentTab(chatId, tab) {
 async function session(sid, w, h) {
   let s = sessions.get(sid);
   if (!s && sid.startsWith('agent-')) return null; // only the agent opens its tab
-  if (!s) { s = { tab: await openTab(), at: Date.now(), w: 1280, h: 800 }; sessions.set(sid, s); }
+  if (!s) { s = { tab: await openTab({ own: true }), at: Date.now(), w: 1280, h: 800 }; sessions.set(sid, s); }
   s.at = Date.now();
   if (s.locked || s.tab.desktop) { s.w = s.tab.size?.width || s.w; s.h = s.tab.size?.height || s.h; return s; } // never resize under the agent, or a real tab the app sizes
   const nw = w ? clampSize(w, 360, 1600, 1280) : s.w, nh = h ? clampSize(h, 300, 1400, 800) : s.h;

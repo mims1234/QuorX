@@ -133,9 +133,25 @@ function profileUsers(dirs) {
 
 // Two ways to reach a tab, with the same DevTools commands: the hidden headless browser (always
 // available), or a real tab in the desktop app's window (desktop/main.js, through server/desktop.js).
-async function headlessTransport() {
+// Your own tabs (the pane's Browser tab) live in a browser context of their own: their sign-ins and cookies are never
+// in the agent's tabs, which share the default one.
+let userContext = null;
+async function browserCall(port, method, params = {}) {
+  const v = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json();
+  const ws = new WebSocket(v.webSocketDebuggerUrl);
+  await new Promise((r, j) => { ws.onopen = r; ws.onerror = () => j(new Error('could not reach the browser')); });
+  try {
+    return await new Promise((r, j) => { ws.onmessage = (ev) => { const m = JSON.parse(ev.data); if (m.id === 1) (m.error ? j(new Error(m.error.message)) : r(m.result)); }; ws.send(JSON.stringify({ id: 1, method, params })); setTimeout(() => j(new Error(`${method} timed out`)), 10000); });
+  } finally { ws.close(); }
+}
+async function headlessTransport({ own = false } = {}) {
   const { port } = await ensureBrowser();
-  const t = await (await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, { method: 'PUT' })).json();
+  let t;
+  if (own) {
+    if (!userContext || userContext.port !== port) userContext = { port, id: (await browserCall(port, 'Target.createBrowserContext', { disposeOnDetach: false })).browserContextId };
+    const { targetId } = await browserCall(port, 'Target.createTarget', { url: 'about:blank', browserContextId: userContext.id });
+    t = { id: targetId, webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/page/${targetId}` };
+  } else t = await (await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, { method: 'PUT' })).json();
   const ws = new WebSocket(t.webSocketDebuggerUrl);
   await new Promise((r, j) => { ws.onopen = r; ws.onerror = () => j(new Error('could not connect to the browser tab')); });
   let seq = 0;
@@ -203,7 +219,7 @@ async function cdpTransport(port) {
  * view in the app (the pane shows it live); otherwise it is a tab of the headless browser. With `{ cdpPort }` it is
  * the window of an app the agent started (Electron), reached through that app's own DevTools port.
  */
-export async function openTab({ chatId, cdpPort } = {}) {
+export async function openTab({ chatId, cdpPort, own = false } = {}) {
   let tr = null;
   if (cdpPort) tr = await cdpTransport(cdpPort);
   else if (chatId && desktopReady()) tr = await desktopTransport(chatId).catch(() => null);
@@ -212,7 +228,7 @@ export async function openTab({ chatId, cdpPort } = {}) {
     const ok = await Promise.race([tr.send('Page.enable').then(() => true, () => false), new Promise((r) => setTimeout(() => r(false), 8000))]);
     if (!ok) { await tr.close(); tr = null; }
   }
-  tr ||= await headlessTransport();
+  tr ||= await headlessTransport({ own });
   const listeners = [];
   const tab = { id: tr.id, desktop: tr.desktop, app: !!tr.app, console: [], url: tr.url || 'about:blank' };
   tr.onEvent((method, params) => {

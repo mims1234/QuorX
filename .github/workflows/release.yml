@@ -5,38 +5,48 @@
 # To release: npm run release:bump (raises the version everywhere), commit, then
 #   git tag v<version> && git push origin main v<version>
 # The tag must match desktop/package.json's version, or the build stops before doing anything.
+#
+# Hardening: actions are pinned to commits; the build job can only read the repository (dependency install scripts
+# run there, with no tokens); only the publish job can write, and only after the "release" environment approves it
+# (Settings → Environments → release → required reviewers). The tag name reaches scripts through env, never inline.
 name: Release
 
 on:
   push:
     tags: ['v*']
 
-permissions:
-  contents: write     # create the release and upload its files
-  id-token: write     # sign the build attestation (proof the installer was built here, from this tag)
-  attestations: write
+permissions: {}
 
 jobs:
-  windows:
+  build:
     runs-on: windows-latest
-    env:
-      WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }} # optional, see the last step
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
 
       - name: Check the tag matches the app version
+        id: ver
         shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
-          $tag = '${{ github.ref_name }}'.TrimStart('v')
+          $tag = $env:TAG.TrimStart('v')
           $app = (Get-Content desktop/package.json -Raw | ConvertFrom-Json).version
+          if ($tag -notmatch '^\d+\.\d+\.\d+$') { Write-Error "The tag must look like v1.2.3."; exit 1 }
           if ($tag -ne $app) { Write-Error "The tag is v$tag but desktop/package.json says $app. Run npm run release:bump, commit, and tag that version."; exit 1 }
           "VERSION=$app" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "version=$app" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      - name: Install the harness (node-pty and xterm for the Terminal tab)
+      - name: Install the harness (node-pty, xterm, KaTeX)
         run: npm ci
 
       - name: Install Electron and electron-builder
@@ -44,11 +54,9 @@ jobs:
         working-directory: desktop
 
       - name: Build the installer
-        # --publish never: this job uploads the files itself (electron-builder's generic provider can't publish).
+        # --publish never: the publish job uploads the files itself (electron-builder's generic provider can't publish).
         run: npm --prefix desktop run dist -- --publish never
 
-      # Until the installer is code-signed: a checksum file to compare a download with, and a signed attestation that
-      # this workflow built it from this tag (check it with: gh attestation verify <file> --repo <owner>/<repo>).
       - name: Write the checksums
         shell: pwsh
         run: |
@@ -57,33 +65,66 @@ jobs:
           $lines | Set-Content "$d/SHA256SUMS.txt" -Encoding ascii
           Get-Content "$d/SHA256SUMS.txt"
 
-      - name: Attest where the installer was built
-        uses: actions/attest-build-provenance@v2
+      - name: Write the winget manifests for this version
+        run: npm run winget
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          subject-path: desktop/dist/QuorX-Setup-${{ env.VERSION }}.exe
+          name: release-files
+          path: |
+            desktop/dist/latest.yml
+            desktop/dist/QuorX-Setup-${{ steps.ver.outputs.version }}.exe
+            desktop/dist/QuorX-Setup-${{ steps.ver.outputs.version }}.exe.blockmap
+            desktop/dist/SHA256SUMS.txt
+            desktop/dist/winget/${{ steps.ver.outputs.version }}
+
+  publish:
+    needs: build
+    runs-on: windows-latest
+    environment: release
+    permissions:
+      contents: write     # create the release and upload its files
+      id-token: write     # sign the build attestation (proof the installer was built here, from this tag)
+      attestations: write
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-files
+          path: dist
+
+      - name: Check the files against their checksums
+        shell: pwsh
+        run: |
+          foreach ($line in Get-Content dist/SHA256SUMS.txt) {
+            $hash, $name = $line -split '\s+', 2
+            if ((Get-FileHash "dist/$name" -Algorithm SHA256).Hash.ToLower() -ne $hash) { Write-Error "$name does not match its checksum"; exit 1 }
+          }
+
+      - name: Attest where the installer was built
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: dist/QuorX-Setup-${{ env.VERSION }}.exe
 
       - name: Publish the release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $d = 'desktop/dist'
-          gh release create '${{ github.ref_name }}' "$d/latest.yml" "$d/QuorX-Setup-$env:VERSION.exe" "$d/QuorX-Setup-$env:VERSION.exe.blockmap" "$d/SHA256SUMS.txt" `
-            --title "QuorX ${{ github.ref_name }}" --generate-notes
-
-      - name: Write the winget manifests for this version
-        run: npm run winget
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: winget-manifests-${{ env.VERSION }}
-          path: desktop/dist/winget/${{ env.VERSION }}
+          gh release create $env:TAG "dist/latest.yml" "dist/QuorX-Setup-$env:VERSION.exe" "dist/QuorX-Setup-$env:VERSION.exe.blockmap" "dist/SHA256SUMS.txt" `
+            --repo $env:GITHUB_REPOSITORY --title "QuorX $env:TAG" --generate-notes
 
       # After the first version is in winget-pkgs (submitted by hand once), later versions can go in by themselves:
-      # add a GitHub token with public_repo scope as the WINGET_TOKEN secret. Without it this step is skipped.
+      # add a GitHub token with public_repo scope as the WINGET_TOKEN secret (in the release environment).
+      # wingetcreate is a fixed version, checked against its published SHA-256 before it runs.
       - name: Send the new version to winget-pkgs
-        if: env.WINGET_TOKEN != ''
         shell: pwsh
+        env:
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
         run: |
-          Invoke-WebRequest https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
-          ./wingetcreate.exe submit --token $env:WINGET_TOKEN "desktop/dist/winget/$env:VERSION"
+          if (-not $env:WINGET_TOKEN) { "No WINGET_TOKEN: skipped."; exit 0 }
+          Invoke-WebRequest https://github.com/microsoft/winget-create/releases/download/v1.12.13.0/wingetcreate.exe -OutFile wingetcreate.exe
+          if ((Get-FileHash wingetcreate.exe -Algorithm SHA256).Hash.ToLower() -ne '24042bd37915805615e6cf969ac57c6439124c3fe85823327f5f3fb24bd9ffea') { Write-Error 'wingetcreate.exe does not match its published checksum'; exit 1 }
+          ./wingetcreate.exe submit --token $env:WINGET_TOKEN "dist/winget/$env:VERSION"
