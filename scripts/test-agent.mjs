@@ -12,7 +12,7 @@ import { loadCheckpoint, dropCheckpoint, ledger } from '../server/runs.js';
 import { setBudget, projectSpend, budgetState, live as liveRuns } from '../server/budget.js';
 import { reviewCode, collectChanges, parseGitDiff, checkFindings, pickReviewer } from '../server/codereview.js';
 import { execFileSync } from 'node:child_process';
-import { saveHooks, loadHooks, matchHooks, fileMatches, commandMatches, hookLine, cleanHook } from '../server/hooks.js';
+import { saveHooks, loadHooks, matchHooks, fileMatches, commandMatches, hookLine, cleanHook, safeHookFile } from '../server/hooks.js';
 
 let n = 0;
 const reply = (text, calls = [], finishReason = 'stop') => ({ text, toolCalls: calls.map(([name, args], i) => ({ id: `c${++n}_${i}`, type: 'function', function: { name, arguments: typeof args === 'string' ? args : JSON.stringify(args) } })), usage: { cost: 0.0001 }, ms: 1, firstMs: 1, finishReason });
@@ -1549,6 +1549,24 @@ test('a failing before-command hook stops the agent\'s command; one that only re
   assert.ok(fs.existsSync(path.join(r2.dir, 'made.txt')));
   assert.equal(fs.readFileSync(path.join(r2.dir, 'hooklog.txt'), 'utf8'), 'after\n');
   assert.deepEqual(of(r2.events, 'hook').map((h) => [h.event, h.ok]), [['before_command', false], ['after_command', true]]);
+});
+
+test('a file name the agent chose never becomes part of a hook command', async () => {
+  for (const bad of ['a;echo pwned;.js', '$(x).js', 'a&calc&.js', 'a|b.js', '`x`.js', "a'b.js", 'dir/-rf.js']) assert.equal(safeHookFile(bad), false, bad);
+  for (const ok of ['src/app.js', 'my file.js', 'a-b_c.d@2x.js', 'v1,2=3+4.js']) assert.equal(safeHookFile(ok), true, ok);
+  const { events, dir } = await hookRun((body, i) => [
+    reply('', [['write_file', { path: 'a;echo pwned;.js', content: 'x' }]]),
+    reply('', [['write_file', { path: '$(x).js', content: 'x' }]]),
+    reply('', [['write_file', { path: 'fine.js', content: 'x' }]]),
+    reply('Done.'),
+  ][i], hookProject([{ event: 'after_write', command: 'node log.mjs {file}' }]));
+  const hooks = of(events, 'hook');
+  assert.deepEqual(hooks.map((h) => [h.skipped || false, h.command]), [[true, 'node log.mjs {file}'], [true, 'node log.mjs {file}'], [false, 'node log.mjs fine.js']]);
+  assert.ok(!of(events, 'command').some((e) => /pwned|\$\(x\)/.test(e.command)));
+  assert.equal(fs.readFileSync(path.join(dir, 'hooklog.txt'), 'utf8'), 'fine.js\n');
+  // The approval card says the file name came from the agent.
+  const card = of(events, 'approval').find((e) => e.what === 'node log.mjs fine.js');
+  assert.match(card.why, /with a file name the agent chose/);
 });
 
 test('hook commands go through the command policy: a blocked one never runs', async () => {
