@@ -136,7 +136,7 @@ const server = http.createServer(async (req, res) => {
       return res.end(callbackPage(r));
     }
     if (req.method === 'GET' && url.pathname === '/api/stale') return json(res, 200, codeChanged());
-    if (req.method === 'GET' && url.pathname === '/api/config') return json(res, 200, { ...codeChanged(), version: VERSION, pagePort: runtime.pagePort || null, shell: shellInfo().name, pty: ptyAvailable(), defaults: DEFAULTS, checks: CHECKS, media: MEDIA, hasKey: !!currentKey(), browser: browserPath(), allowed: ALLOWED });
+    if (req.method === 'GET' && url.pathname === '/api/config') return json(res, 200, { ...codeChanged(), version: VERSION, platform: process.platform, pagePort: runtime.pagePort || null, shell: shellInfo().name, pty: ptyAvailable(), defaults: DEFAULTS, checks: CHECKS, media: MEDIA, hasKey: !!currentKey(), browser: browserPath(), allowed: ALLOWED });
 
     // ---- chat history (data/chats; delete = move to data/trash) ----
     if (url.pathname === '/api/chats' && req.method === 'GET') return json(res, 200, listChats());
