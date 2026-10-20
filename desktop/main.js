@@ -345,6 +345,8 @@ async function checkUpdates() {
 handle('update', async (op, arg) => {
   if (op === 'state') return { ...update, current: app.getVersion(), url: updateUrl(), packaged: app.isPackaged };
   if (op === 'check') return checkUpdates();
+  // macOS installs updates only for signed apps, and this build isn't signed yet: the download page opens instead.
+  if (op === 'download' && process.platform === 'darwin' && update.state === 'available') { shell.openExternal(`${PKG.homepage}/releases/latest`); return update; }
   if (op === 'download') { if (update.state !== 'available') return update; setUpdate({ state: 'downloading', percent: 0 }); getUpdater().downloadUpdate().catch((e) => setUpdate({ state: 'error', error: String(e?.message || e).slice(0, 300) })); return update; }
   if (op === 'install') { if (update.state !== 'ready') return update; quitting = true; setImmediate(() => getUpdater().quitAndInstall(false, true)); return update; }
   if (op === 'setUrl') { const url = String(arg || '').trim(); // https only: an update replaces the app, so its feed must not be readable or changeable on the way.

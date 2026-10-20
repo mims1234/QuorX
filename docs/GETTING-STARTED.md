@@ -23,6 +23,28 @@ sha256sum -c --ignore-missing SHA256SUMS.txt
 If the two match, choose **More info → Run anyway**. Every installer is built from this repository's code by GitHub
 Actions ([the workflow](../.github/workflows/release.yml)), and you can always build or run QuorX from source instead.
 
+Or with winget, once QuorX is listed there: `winget install QuorX.QuorX`.
+
+## Install the app (macOS and Linux)
+
+From 0.2.7 each release also has:
+
+| | File | Updates itself |
+|---|---|---|
+| **macOS, Apple silicon** | `QuorX-<version>-mac-arm64.dmg` | Not yet (see below) |
+| **macOS, Intel** | `QuorX-<version>-mac-x64.dmg` | Not yet (see below) |
+| **Linux** | `QuorX-<version>-linux-x86_64.AppImage` | Yes |
+| **Debian, Ubuntu** | `quorx_<version>_amd64.deb` | Install the new deb |
+
+Check the file against `SHA256SUMS.txt` first: `sha256sum -c --ignore-missing SHA256SUMS.txt` (on macOS,
+`shasum -a 256 -c --ignore-missing SHA256SUMS.txt`).
+
+- **macOS:** open the dmg and drag QuorX to Applications. The app isn't signed or notarized yet, so the first time,
+  right-click QuorX → **Open** → **Open** (or System Settings → Privacy & Security → **Open Anyway**). macOS only installs
+  updates for signed apps, so until then QuorX tells you a new version is out and you download it the same way.
+- **AppImage:** `chmod +x QuorX-*.AppImage` and run it. Some distributions need `libfuse2` for AppImages.
+- **deb:** `sudo apt install ./quorx_<version>_amd64.deb`, then start QuorX from your app menu or with `quorx`.
+
 ## Run from source
 
 You need **Node.js 20 or newer** and an **OpenRouter** account.

@@ -1,4 +1,6 @@
-# Builds the Windows installer when a version tag is pushed, and publishes it as a GitHub pre-release.
+# Builds the installers when a version tag is pushed (Windows; macOS dmg + zip; Linux AppImage + deb), and publishes
+# them as a GitHub pre-release. Each platform has its own update feed next to the others: latest.yml (Windows),
+# latest-mac.yml and latest-linux.yml, all read by electron-updater from releases/latest/download.
 # Installed apps read latest.yml from releases/latest/download (desktop/package.json → quorx.updateUrl), and GitHub's
 # "latest" never points at a pre-release: a new version reaches people who download it by hand, not installed apps.
 # Once it looks good, the "Promote release" workflow (promote.yml) makes it the latest release, which starts
@@ -8,9 +10,11 @@
 #   git tag v<version> && git push origin main v<version>
 # The tag must match desktop/package.json's version, or the build stops before doing anything.
 #
-# Hardening: actions are pinned to commits; the build job can only read the repository (dependency install scripts
+# Hardening: actions are pinned to commits; the build jobs can only read the repository (dependency install scripts
 # run there, with no tokens); only the publish job can write, and only after the "release" environment approves it
 # (Settings → Environments → release → required reviewers). The tag name reaches scripts through env, never inline.
+# Code signing (Windows) is optional and happens in the publish job, only when its secrets exist: see
+# docs/RELEASING.md → Code signing. Without them the installer is published unsigned, as before.
 name: Release
 
 on:
@@ -78,14 +82,115 @@ jobs:
             desktop/dist/QuorX-Setup-${{ steps.ver.outputs.version }}.exe.blockmap
             desktop/dist/SHA256SUMS.txt
 
+  # macOS: an unsigned, un-notarized app for now (Gatekeeper asks once: right-click → Open). The zip is what
+  # electron-updater installs; the dmg is for people downloading by hand. Both Intel and Apple silicon.
+  build-mac:
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Check the tag matches the app version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          app=$(node -p "require('./desktop/package.json').version")
+          [ "${TAG#v}" = "$app" ] || { echo "::error::The tag is $TAG but desktop/package.json says $app."; exit 1; }
+
+      - name: Install the harness (node-pty, xterm, KaTeX)
+        run: npm ci
+
+      - name: Install Electron and electron-builder
+        run: npm ci
+        working-directory: desktop
+
+      - name: Build the dmg and zip
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npm --prefix desktop run dist:mac -- --publish never
+
+      - name: Write the checksums
+        working-directory: desktop/dist
+        run: |
+          shasum -a 256 latest-mac.yml QuorX-*-mac-*.dmg QuorX-*-mac-*.zip | sed 's/ \*/  /' > SHA256SUMS-mac.txt
+          cat SHA256SUMS-mac.txt
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-files-mac
+          if-no-files-found: error
+          path: |
+            desktop/dist/latest-mac.yml
+            desktop/dist/QuorX-*-mac-*.dmg
+            desktop/dist/QuorX-*-mac-*.dmg.blockmap
+            desktop/dist/QuorX-*-mac-*.zip
+            desktop/dist/QuorX-*-mac-*.zip.blockmap
+            desktop/dist/SHA256SUMS-mac.txt
+
+  # Linux: an AppImage (updates itself through electron-updater) and a deb. node-pty has no Linux prebuild, so
+  # npm ci compiles it here (the runner has the compilers); the build bundles node-pty/build/Release.
+  build-linux:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Check the tag matches the app version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          app=$(node -p "require('./desktop/package.json').version")
+          [ "${TAG#v}" = "$app" ] || { echo "::error::The tag is $TAG but desktop/package.json says $app."; exit 1; }
+
+      - name: Install the harness (node-pty, xterm, KaTeX)
+        run: npm ci
+
+      - name: Install Electron and electron-builder
+        run: npm ci
+        working-directory: desktop
+
+      - name: Build the AppImage and deb
+        run: npm --prefix desktop run dist:linux -- --publish never
+
+      - name: Write the checksums
+        working-directory: desktop/dist
+        run: |
+          sha256sum latest-linux.yml QuorX-*-linux-*.AppImage quorx_*.deb > SHA256SUMS-linux.txt
+          cat SHA256SUMS-linux.txt
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-files-linux
+          if-no-files-found: error
+          path: |
+            desktop/dist/latest-linux.yml
+            desktop/dist/QuorX-*-linux-*.AppImage
+            desktop/dist/quorx_*.deb
+            desktop/dist/SHA256SUMS-linux.txt
+
   publish:
-    needs: build
+    needs: [build, build-mac, build-linux]
     runs-on: windows-latest
     environment: release
     permissions:
       contents: write     # create the release and upload its files
       id-token: write     # sign the build attestation (proof the installer was built here, from this tag)
       attestations: write
+      actions: read       # code signing with SignPath only: it fetches the unsigned installer from this run
     env:
       VERSION: ${{ needs.build.outputs.version }}
       TAG: ${{ github.ref_name }}
@@ -102,10 +207,124 @@ jobs:
           if grep -q $'\r' SHA256SUMS.txt; then echo "::error::SHA256SUMS.txt has CRLF line endings"; exit 1; fi
           sha256sum -c --strict SHA256SUMS.txt
 
-      - name: Attest where the installer was built
+      # ---------- Windows code signing: optional, only when its secrets exist (docs/RELEASING.md → Code signing) ----------
+      # SignPath (free for open source): secret SIGNPATH_API_TOKEN; variables SIGNPATH_ORGANIZATION_ID,
+      # SIGNPATH_PROJECT_SLUG, SIGNPATH_SIGNING_POLICY_SLUG (and SIGNPATH_ARTIFACT_CONFIGURATION_SLUG if not the default).
+      # Azure Trusted Signing: secrets AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET; variables
+      # AZURE_SIGNING_ENDPOINT, AZURE_SIGNING_ACCOUNT, AZURE_CERTIFICATE_PROFILE.
+      - name: Look for code signing settings
+        id: signing
+        shell: pwsh
+        env:
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+          SIGNPATH_ORG: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+        run: |
+          $with = if ($env:SIGNPATH_API_TOKEN -and $env:SIGNPATH_ORG) { 'signpath' } elseif ($env:AZURE_CLIENT_SECRET -and $env:AZURE_ENDPOINT) { 'azure' } else { 'none' }
+          "with=$with" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          if ($with -eq 'none') { "No code signing secrets: the Windows installer is published unsigned." } else { "Signing the Windows installer with $with." }
+
+      - name: Hand the installer to SignPath
+        id: unsigned
+        if: steps.signing.outputs.with == 'signpath'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: unsigned-installer
+          path: dist/QuorX-Setup-${{ env.VERSION }}.exe
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Sign with SignPath
+        if: steps.signing.outputs.with == 'signpath'
+        uses: signpath/github-action-submit-signing-request@c92b958760219087e01f8d67a1669ed57afe2627 # v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed
+
+      - name: Take the signed installer
+        if: steps.signing.outputs.with == 'signpath'
+        shell: pwsh
+        run: |
+          $f = Get-ChildItem signed -Recurse -Filter "QuorX-Setup-$env:VERSION.exe" | Select-Object -First 1
+          if (-not $f) { Write-Error 'SignPath returned no installer'; exit 1 }
+          Copy-Item $f.FullName "dist/QuorX-Setup-$env:VERSION.exe" -Force
+
+      - name: Sign with Azure Trusted Signing
+        if: steps.signing.outputs.with == 'azure'
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_CERTIFICATE_PROFILE }}
+          files: ${{ github.workspace }}\dist\QuorX-Setup-${{ env.VERSION }}.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Check the signature
+        if: steps.signing.outputs.with != 'none'
+        shell: pwsh
+        run: |
+          $sig = Get-AuthenticodeSignature "dist/QuorX-Setup-$env:VERSION.exe"
+          if ($sig.Status -ne 'Valid') { Write-Error "The installer's signature is $($sig.Status): $($sig.StatusMessage)"; exit 1 }
+          "Signed by: $($sig.SignerCertificate.Subject)"
+
+      # Signing changed the installer's bytes: latest.yml (checked by installed apps), the blockmap and the checksums
+      # are written again for the signed file. Only electron-builder's own code runs (no install scripts).
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        if: steps.signing.outputs.with != 'none'
+        with:
+          path: src
+          persist-credentials: false
+          sparse-checkout: desktop
+
+      - name: Describe the signed installer
+        if: steps.signing.outputs.with != 'none'
+        shell: bash
+        run: |
+          npm ci --ignore-scripts --prefix src/desktop
+          node src/desktop/after-sign.js dist "QuorX-Setup-$VERSION.exe"
+          cd dist && sha256sum -c --strict SHA256SUMS.txt
+
+      # ---------- macOS and Linux: their files and checksums join the Windows ones ----------
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: release-files-*
+          path: dist
+          merge-multiple: true
+
+      - name: Check the macOS and Linux files, and add them to SHA256SUMS.txt
+        shell: bash
+        working-directory: dist
+        run: |
+          for f in SHA256SUMS-mac.txt SHA256SUMS-linux.txt; do
+            if grep -q $'\r' "$f"; then echo "::error::$f has CRLF line endings"; exit 1; fi
+            sha256sum -c --strict "$f"
+            cat "$f" >> SHA256SUMS.txt
+            rm "$f"
+          done
+          sha256sum -c --strict SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Attest where the installers were built
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
-          subject-path: dist/QuorX-Setup-${{ env.VERSION }}.exe
+          subject-path: |
+            dist/QuorX-Setup-${{ env.VERSION }}.exe
+            dist/QuorX-*-mac-*.dmg
+            dist/QuorX-*-mac-*.zip
+            dist/QuorX-*-linux-*.AppImage
+            dist/quorx_*.deb
 
       # A pre-release: releases/latest/download (the update feed) keeps serving the version before it until
       # "Promote release" runs. winget gets the new version then too, not here.
@@ -114,6 +333,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create $env:TAG "dist/latest.yml" "dist/QuorX-Setup-$env:VERSION.exe" "dist/QuorX-Setup-$env:VERSION.exe.blockmap" "dist/SHA256SUMS.txt" `
+          $more = Get-ChildItem dist -File | Where-Object { $_.Name -match '\.blockmap$|^latest-(mac|linux)\.yml$|-mac-.*\.(dmg|zip)$|-linux-.*\.AppImage$|^quorx_.*\.deb$' } | ForEach-Object { "dist/$($_.Name)" }
+          gh release create $env:TAG "dist/latest.yml" "dist/QuorX-Setup-$env:VERSION.exe" "dist/SHA256SUMS.txt" @more `
             --repo $env:GITHUB_REPOSITORY --title "QuorX $env:TAG" --generate-notes --prerelease --latest=false
           "Published $env:TAG as a pre-release. Installed apps don't see it until the Promote release workflow runs." >> $env:GITHUB_STEP_SUMMARY

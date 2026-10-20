@@ -33,6 +33,8 @@ the way a person would, and shows you every step it took.
 **Windows:** download the installer from the [latest release](https://github.com/mims1234/QuorX/releases/latest).
 It isn't code-signed yet, so Windows may warn you; [here's how to check the download](docs/GETTING-STARTED.md#install-the-app-windows).
 
+**macOS and Linux:** a dmg, an AppImage and a deb are on each release from 0.2.7 ([how to install them](docs/GETTING-STARTED.md#install-the-app-macos-and-linux)).
+
 **From source** (Windows, macOS, Linux), with Node.js 20+:
 
 ```bash
