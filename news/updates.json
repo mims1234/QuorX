@@ -1,6 +1,16 @@
 {
   "versions": [
     {
+      "version": "0.2.4",
+      "date": "2026-10-20",
+      "title": "Open source, under Apache 2.0",
+      "items": [
+        { "kind": "new", "text": "QuorX is open source under the Apache License 2.0: use it, change it and fork it, for personal or commercial work." },
+        { "kind": "fixed", "text": "A project's spend in the sidebar no longer goes below zero while a reply is running.", "pr": 29 },
+        { "kind": "fixed", "text": "The agent's own page in the Browser tab shows its picture after the reply, instead of a broken image.", "pr": 30 }
+      ]
+    },
+    {
       "version": "0.2.3",
       "date": "2026-10-20",
       "title": "Read the request in full, and wait for you a moment",
