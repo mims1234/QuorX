@@ -1,6 +1,15 @@
 {
   "versions": [
     {
+      "version": "0.2.2",
+      "date": "2026-10-20",
+      "title": "News that reads as published writing",
+      "items": [
+        { "kind": "improved", "text": "The reports, articles and What's new use neutral wording, written for anyone who reads them.", "pr": 27 },
+        { "kind": "improved", "text": "Numbers worked out from the computer's own logs are labelled On this computer, and still never leave it.", "pr": 27 }
+      ]
+    },
+    {
       "version": "0.2.1",
       "date": "2026-10-20",
       "title": "A logo of its own",

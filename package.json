@@ -1,6 +1,6 @@
 {
   "name": "quorx",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "type": "module",
   "description": "An open-source AI agent with a quorum of models behind every call. Any model, through OpenRouter.",
