@@ -353,8 +353,8 @@ test('packs: every pack loads, and every toolchain, check and debugger is still 
   const ids = allToolchains().map((t) => t.id);
   for (const id of ['rust', 'dotnet', 'go', 'cmake', 'msvc', 'gcc', 'clang', 'java', 'gradle', 'maven', 'python', 'node', 'flutter', 'adb', 'git']) assert.ok(ids.includes(id), id);
   const checks = allChecks().map((c) => c.id);
-  for (const id of ['cmake', 'dotnet', 'go', 'python', 'rust', 'ts', ...(WIN ? ['godot', 'unity', 'wix'] : ['godot', 'unity'])]) assert.ok(checks.includes(id), id);
-  for (const f of ['src/main.rs', 'App.xaml', 'Program.cs', 'cmd/main.go', 'src/app.tsx', 'src/main.cpp', 'include/app.hpp', 'app/main.py']) assert.ok(isCheckedFile(f), f);
+  for (const id of ['cmake', 'dotnet', 'go', 'python', 'rust', 'ts', 'android', 'flutter', 'dart', ...(WIN ? ['godot', 'unity', 'wix'] : ['godot', 'unity'])]) assert.ok(checks.includes(id), id);
+  for (const f of ['src/main.rs', 'App.xaml', 'Program.cs', 'cmd/main.go', 'src/app.tsx', 'src/main.cpp', 'include/app.hpp', 'app/main.py', 'app/src/main/java/com/qx/Main.kt', 'lib/main.dart']) assert.ok(isCheckedFile(f), f);
   assert.ok(!isCheckedFile('README.md'));
   assert.match(debugLanguages(), /^Node \(\.js, \.mjs, \.cjs\), /);
   assert.match(debugLanguages(), /Python \(debugpy\) \(\.py, \.pyw\)/);
@@ -373,7 +373,7 @@ test('packs: the agent gets notes for the kinds of project in its folder, includ
   assert.deepEqual(packsIn(dir).map((p) => p.id).sort(), ['android', 'node', 'rust'], 'node_modules is never scanned');
   const n = packNotes(dir, []);
   assert.match(n, /- Rust: build with cargo build/);
-  assert.match(n, /- Android: build with gradlew assembleDebug/);
+  assert.match(n, /- Android: build with \S*gradlew(\.bat)? assembleDebug/);
   assert.equal(packNotes(tmp('empty'), []), '');
 });
 
