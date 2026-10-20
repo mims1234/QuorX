@@ -763,6 +763,25 @@ test('Strict: the user approves the plan on one card, and its calls ask nothing 
   assert.deepEqual(of(events, 'approval_done').map((x) => x.by), ['user', 'plan', 'plan']);
 });
 
+test('a plan the deciders approved in YOLO stops covering calls once the user switches the reply to Strict', async () => {
+  const d = planDeciders();
+  let runId, switched = false;
+  const { events } = await run((body, i) => [
+    reply('', [['media_plan', { why: 'x', items: [{ kind: 'image', count: 3, what: 'frames' }] }]]),
+    reply('', [['imagine', { prompt: 'frame one', why: 'x' }]]),
+    reply('', [['imagine', { prompt: 'frame two', why: 'x' }]]),
+    reply('Done.'),
+  ][i], { settings: planSettings(), ensemble: d.fn, generateImage: async () => ({ images: [PLAN_PNG], usage: { cost: 0.01 }, ms: 1 }),
+    onEvent: (e) => {
+      if (e.t === 'start') runId = e.runId;
+      if (e.t === 'approval_done' && e.by === 'plan' && !switched) { switched = true; setRunApproval(runId, 'strict'); }
+      if (e.t === 'approval' && e.mode === 'strict' && switched) setTimeout(() => answerApproval(runId, e.id, { approve: true }), 5);
+    } });
+  assert.deepEqual(of(events, 'approval_done').map((x) => x.by), ['deciders', 'plan', 'user'], 'the second picture asked the user');
+  const card = of(events, 'approval').at(-1);
+  assert.match(card.offPlan, /approved by the deciders in YOLO, and this reply is now in Strict/);
+});
+
 test('a plan over the media budget is turned down before anyone is asked, and calls are then judged one by one', async () => {
   const d = planDeciders();
   const { events, bodies } = await run((body, i) => [

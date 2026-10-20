@@ -3059,8 +3059,10 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
       emit({ t: 'approval', ...card, at: at() }); emit({ t: 'approval_done', id, ...ans, at: at() });
       return { ...ans, plan };
     }
-    // A call that fits the approved production plan needs no second vote.
-    const fit = matchPlan(run.mediaPlan, { cat, model: plan.model, est: plan.est });
+    // A call that fits the approved production plan needs no second vote. In 🔒 Strict only a plan the user approved
+    // counts: a plan the deciders approved in YOLO stops covering calls once the user switches the reply to Strict.
+    const planOk = run.mediaPlan && (S.approval !== 'strict' || ['user', 'always allow'].includes(run.mediaPlan.by));
+    const fit = planOk ? matchPlan(run.mediaPlan, { cat, model: plan.model, est: plan.est }) : { ok: false, why: run.mediaPlan ? 'the plan was approved by the deciders in YOLO, and this reply is now in Strict' : 'no plan' };
     if (fit.ok) {
       usePlan(run.mediaPlan, fit.item, plan.est);
       const ans = { approve: true, by: 'plan', reason: `Part of the approved production plan (${fit.item.used} of ${fit.item.count}${fit.item.what ? `: ${fit.item.what}` : ''}).` };
@@ -3145,7 +3147,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
       run.mediaPlan = null;
       return `${ans.by === 'user' ? 'The user' : ans.by === 'budget' ? 'The budget check' : ans.by === 'timeout' ? 'Nobody' : 'The automatic approval check'} did not approve this plan${ans.reason ? `. Reason: "${ans.reason}"` : ''}. Each paid call will be judged on its own: adapt the plan (fewer or cheaper calls), or go on without it.`;
     }
-    run.mediaPlan = { id, items: plan.items, total: plan.total, spent: 0 };
+    run.mediaPlan = { id, items: plan.items, total: plan.total, spent: 0, by: ans.by };
     notes.push(`production plan approved (${calls} paid calls, about $${plan.total.toFixed(3)})`);
     return `Plan approved (about $${plan.total.toFixed(3)} for ${calls} calls):\n${plan.items.map((x) => `- ${itemLine(x)}`).join('\n')}\nCalls that match it (same kind and model, within its count, not dearer than planned) run without another approval. Anything else is checked on its own. Budget caps still apply.`;
   }
