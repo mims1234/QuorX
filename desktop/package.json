@@ -44,7 +44,7 @@
           "public/**/*",
           "news/**/*",
           "design-systems/**/*",
-          "models/cards/**/*",
+          "models/**/*",
           "scripts/news-check.mjs",
           "skills/**/*",
           "templates/**/*",
