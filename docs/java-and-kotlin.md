@@ -64,6 +64,13 @@ npm run test:packs -- --pack jvm
 ```
 
 Paste `pack-test-report.md` into the pull request. The self-test checks that QuorX sees a working JDK, a one-file
-program runs, the debugger stops at a breakpoint and reads variables, a Swing window is found and pressed with a key,
-the compiler check catches an error in a changed file, and a failing JUnit test is summarised. Five more tests (report
-parsing, error lines, the wrapper, the whole check through a stand-in `gradlew`) run without a JDK.
+program runs, the debugger stops at a breakpoint, steps and reads variables, it stops at an uncaught exception, a Swing
+window is found and pressed with a key and with `click_at`, the compiler check catches an error in a changed Java file
+and a Kotlin file, a failing JUnit test is summarised, and the debugger builds a Gradle project and stops in a `.java`
+and a `.kt` file. Five more tests (report parsing, error lines, the wrapper, the whole check through a stand-in
+`gradlew`) run without a JDK.
+
+Portable tools work too, without installing them or changing PATH: point `JAVA_HOME` at an unzipped JDK, and
+`QX_GRADLE` at an unzipped Gradle's `bin\gradle.bat`. The tests then give each test project its own Gradle wrapper,
+the way most projects come; set `QX_GRADLE_DIST` to that Gradle's zip so the wrapper doesn't download it again, and
+`GRADLE_USER_HOME` to keep Gradle's downloads in a folder of your choosing.
