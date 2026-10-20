@@ -47,19 +47,44 @@
           "scripts/news-check.mjs",
           "skills/**/*",
           "templates/**/*",
-          "README.md",
-          "node_modules/node-pty/package.json",
-          "node_modules/node-pty/lib/**/*",
-          "node_modules/node-pty/prebuilds/**/*",
-          "node_modules/@xterm/xterm/package.json",
-          "node_modules/@xterm/xterm/lib/xterm.js",
-          "node_modules/@xterm/xterm/css/**/*",
-          "node_modules/@xterm/addon-fit/package.json",
-          "node_modules/@xterm/addon-fit/lib/addon-fit.js",
-          "node_modules/katex/package.json",
-          "node_modules/katex/dist/katex.min.js",
-          "node_modules/katex/dist/katex.min.css",
-          "node_modules/katex/dist/fonts/**/*"
+          "README.md"
+        ]
+      },
+      {
+        "from": "../node_modules/node-pty",
+        "to": "app-server/node_modules/node-pty",
+        "filter": [
+          "package.json",
+          "lib/**/*",
+          "prebuilds/**/*",
+          "build/Release/*.node"
+        ]
+      },
+      {
+        "from": "../node_modules/@xterm/xterm",
+        "to": "app-server/node_modules/@xterm/xterm",
+        "filter": [
+          "package.json",
+          "lib/xterm.js",
+          "css/**/*"
+        ]
+      },
+      {
+        "from": "../node_modules/@xterm/addon-fit",
+        "to": "app-server/node_modules/@xterm/addon-fit",
+        "filter": [
+          "package.json",
+          "lib/addon-fit.js"
+        ]
+      },
+      {
+        "from": "../node_modules/katex",
+        "to": "app-server/node_modules/katex",
+        "filter": [
+          "package.json",
+          "dist/katex.min.js",
+          "dist/katex.min.css",
+          "dist/fonts/**/*"
         ]
       }
     ],
