@@ -1,0 +1,481 @@
+{
+  "generated": "2026-10-20",
+  "suites": [
+    {
+      "file": "scripts/test-loop.mjs",
+      "tests": 9
+    },
+    {
+      "file": "scripts/test-agent.mjs",
+      "tests": 72
+    },
+    {
+      "file": "scripts/test-security.mjs",
+      "tests": 7
+    },
+    {
+      "file": "scripts/test-safety.mjs",
+      "tests": 62
+    },
+    {
+      "file": "scripts/test-posix.mjs",
+      "tests": 26
+    },
+    {
+      "file": "scripts/test-news.mjs",
+      "tests": 8
+    }
+  ],
+  "packTests": [
+    {
+      "pack": "android",
+      "tests": 13
+    },
+    {
+      "pack": "apple",
+      "tests": 12
+    },
+    {
+      "pack": "cpp",
+      "tests": 3
+    },
+    {
+      "pack": "dotnet",
+      "tests": 11
+    },
+    {
+      "pack": "electron",
+      "tests": 8
+    },
+    {
+      "pack": "flutter",
+      "tests": 8
+    },
+    {
+      "pack": "go",
+      "tests": 3
+    },
+    {
+      "pack": "godot",
+      "tests": 8
+    },
+    {
+      "pack": "installers",
+      "tests": 6
+    },
+    {
+      "pack": "jvm",
+      "tests": 14
+    },
+    {
+      "pack": "node",
+      "tests": 1
+    },
+    {
+      "pack": "python",
+      "tests": 10
+    },
+    {
+      "pack": "rust",
+      "tests": 5
+    },
+    {
+      "pack": "tauri",
+      "tests": 8
+    },
+    {
+      "pack": "unity",
+      "tests": 7
+    }
+  ],
+  "uiScenarios": [
+    "settings",
+    "cli",
+    "running"
+  ],
+  "stats": {
+    "items": [
+      {
+        "label": "Tests npm test runs (first → now)",
+        "from": 86,
+        "to": 184
+      },
+      {
+        "label": "Pack self-tests (first → now)",
+        "from": 0,
+        "to": 117
+      }
+    ]
+  },
+  "historyChart": {
+    "type": "line",
+    "title": "Tests written, at each change merged into main",
+    "x": [
+      "first",
+      "v0.1.1",
+      "v0.1.2",
+      "v0.1.3",
+      "v0.1.4",
+      "v0.1.5",
+      "#2",
+      "#3",
+      "#4",
+      "#6",
+      "#5",
+      "#7",
+      "#8",
+      "#9",
+      "#14",
+      "#10",
+      "#12",
+      "#13",
+      "#11",
+      "#16",
+      "now"
+    ],
+    "series": [
+      {
+        "name": "npm test",
+        "values": [
+          86,
+          86,
+          87,
+          88,
+          88,
+          88,
+          137,
+          139,
+          139,
+          139,
+          148,
+          150,
+          150,
+          150,
+          150,
+          150,
+          176,
+          176,
+          176,
+          180,
+          184
+        ]
+      },
+      {
+        "name": "Pack self-tests",
+        "values": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          13,
+          22,
+          30,
+          30,
+          35,
+          43,
+          64,
+          72,
+          92,
+          92,
+          104,
+          117,
+          117,
+          117
+        ]
+      }
+    ]
+  },
+  "suitesChart": {
+    "type": "bar",
+    "title": "Tests in each npm test file",
+    "x": [
+      "loop",
+      "agent",
+      "security",
+      "safety",
+      "posix",
+      "news"
+    ],
+    "series": [
+      {
+        "name": "Tests",
+        "values": [
+          9,
+          72,
+          7,
+          62,
+          26,
+          8
+        ]
+      }
+    ]
+  },
+  "packsChart": {
+    "type": "bar",
+    "title": "Self-tests per pack",
+    "x": [
+      "android",
+      "apple",
+      "cpp",
+      "dotnet",
+      "electron",
+      "flutter",
+      "go",
+      "godot",
+      "installers",
+      "jvm",
+      "node",
+      "python",
+      "rust",
+      "tauri",
+      "unity"
+    ],
+    "series": [
+      {
+        "name": "Tests",
+        "values": [
+          13,
+          12,
+          3,
+          11,
+          8,
+          8,
+          3,
+          8,
+          6,
+          14,
+          1,
+          10,
+          5,
+          8,
+          7
+        ]
+      }
+    ]
+  },
+  "lastRun": {
+    "at": "2026-10-20T01:18:14.166Z",
+    "commit": "3d75802",
+    "total": 184,
+    "pass": 174,
+    "fail": 0,
+    "skipped": 10
+  },
+  "packRun": {
+    "at": "2026-10-20T01:19:30.310Z",
+    "commit": "3d75802",
+    "platform": "win32",
+    "toolchains": [
+      "Git 2.55.0",
+      "Node.js 22.23.1",
+      "Python 3 3.12.10",
+      "Rust (cargo) 1.97.1 (cannot build here)",
+      "WebView2 runtime 155.0.4283.62"
+    ]
+  },
+  "packMatrix": {
+    "levels": [
+      {
+        "id": "passed",
+        "label": "Passed"
+      },
+      {
+        "id": "failed",
+        "label": "Failed"
+      },
+      {
+        "id": "skipped",
+        "label": "Not tested here"
+      }
+    ],
+    "columns": [
+      "Pack",
+      "Result",
+      "Passed",
+      "Skipped",
+      "Why some were skipped"
+    ],
+    "rows": [
+      {
+        "level": "passed",
+        "cells": [
+          "QuorX on Windows: Stop, rules, desktop keys",
+          "passed",
+          "16",
+          "10",
+          "its toolchain is not on this computer"
+        ]
+      },
+      {
+        "level": "passed",
+        "cells": [
+          "Android",
+          "passed",
+          "11",
+          "2",
+          "its toolchain is not on this computer"
+        ]
+      },
+      {
+        "level": "skipped",
+        "cells": [
+          "Apple apps",
+          "not here",
+          "8",
+          "4",
+          "works on darwin; only its logic was tested here"
+        ]
+      },
+      {
+        "level": "skipped",
+        "cells": [
+          "Every project",
+          "no self-test",
+          "0",
+          "0",
+          "this pack has no self-test yet"
+        ]
+      },
+      {
+        "level": "skipped",
+        "cells": [
+          "C and C++",
+          "not tested",
+          "0",
+          "0",
+          "needs CMake"
+        ]
+      },
+      {
+        "level": "skipped",
+        "cells": [
+          ".NET (C#)",
+          "not tested",
+          "0",
+          "0",
+          "needs .NET SDK"
+        ]
+      },
+      {
+        "level": "passed",
+        "cells": [
+          "Electron",
+          "passed",
+          "8",
+          "0",
+          ""
+        ]
+      },
+      {
+        "level": "passed",
+        "cells": [
+          "Flutter and Dart",
+          "passed",
+          "5",
+          "3",
+          "its toolchain is not on this computer"
+        ]
+      },
+      {
+        "level": "skipped",
+        "cells": [
+          "Go",
+          "not tested",
+          "0",
+          "0",
+          "needs Go"
+        ]
+      },
+      {
+        "level": "passed",
+        "cells": [
+          "Godot",
+          "passed",
+          "4",
+          "4",
+          "its toolchain is not on this computer"
+        ]
+      },
+      {
+        "level": "passed",
+        "cells": [
+          "Windows installers",
+          "passed",
+          "3",
+          "3",
+          "its toolchain is not on this computer"
+        ]
+      },
+      {
+        "level": "passed",
+        "cells": [
+          "Java and Kotlin",
+          "passed",
+          "5",
+          "9",
+          "its toolchain is not on this computer"
+        ]
+      },
+      {
+        "level": "passed",
+        "cells": [
+          "Node.js and TypeScript",
+          "passed",
+          "1",
+          "0",
+          ""
+        ]
+      },
+      {
+        "level": "passed",
+        "cells": [
+          "Python",
+          "passed",
+          "6",
+          "4",
+          "its toolchain is not on this computer"
+        ]
+      },
+      {
+        "level": "passed",
+        "cells": [
+          "Rust",
+          "passed",
+          "3",
+          "2",
+          "its toolchain is not on this computer"
+        ]
+      },
+      {
+        "level": "passed",
+        "cells": [
+          "Tauri",
+          "passed",
+          "7",
+          "1",
+          "its toolchain is not on this computer"
+        ]
+      },
+      {
+        "level": "passed",
+        "cells": [
+          "Unity",
+          "passed",
+          "4",
+          "3",
+          "its toolchain is not on this computer"
+        ]
+      }
+    ]
+  },
+  "uiRun": {
+    "at": "2026-10-20T01:22:11.035Z",
+    "commit": "3d75802",
+    "scenario": "settings",
+    "passed": 9,
+    "total": 9
+  }
+}
