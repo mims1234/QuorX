@@ -15,6 +15,7 @@ import { setupCheck, runFix } from './server/setup-check.js';
 import { startSignIn, signInStatus, cancelSignIn, finishByCallback, finishWithCode, callbackPage } from './server/oauth.js';
 import { runAgent, answerApproval, answerQuestion, answerBudget, raiseCap, setRunApproval, steerRun, setRunReading, holdCard, DEFAULTS, MEDIA, briefFor, briefForChat, REVIEW_MODEL, REVIEW_ALT, REVIEW_STRONG, REVIEW_STRONG_ALT } from './server/agent.js';
 import { reviewCode, pickReviewer } from './server/codereview.js';
+import { loadHooks, saveHooks, HOOK_EVENTS } from './server/hooks.js';
 import { CHECKS } from './server/harness-checks.js';
 import { startRun, getRun, stopRun, follow, runStatus, activeRuns, validRunId, scorecard, readLog, recordRun } from './server/runs.js';
 import { setBudget, budgetState } from './server/budget.js';
@@ -415,6 +416,16 @@ const server = http.createServer(async (req, res) => {
       if (b.scope === 'project' && !validId(b.projectId)) return json(res, 400, { error: 'bad project id' });
       if (!['project', 'everywhere'].includes(b.scope)) return json(res, 400, { error: 'scope must be project or everywhere' });
       try { return json(res, 200, { ok: true, rules: saveRules(b.scope, b.rules, b.scope === 'project' ? workspaceDir(b.projectId) : null) }); } catch (e) { return json(res, 200, { error: e.message }); }
+    }
+    // ---- hooks: the user's commands around the agent's tool calls, per project, kept in the data folder ----
+    const hkm = url.pathname.match(/^\/api\/projects\/([a-z0-9-]+)\/hooks$/i);
+    if (hkm) {
+      if (!validId(hkm[1]) || !listProjects().some((p) => p.id === hkm[1])) return json(res, 400, { error: 'unknown project' });
+      if (req.method === 'GET') return json(res, 200, { hooks: loadHooks(workspaceDir(hkm[1])), events: HOOK_EVENTS });
+      if (req.method === 'POST') {
+        const b = JSON.parse(await readBody(req, 1e5) || '{}');
+        try { return json(res, 200, { ok: true, hooks: saveHooks(workspaceDir(hkm[1]), b.hooks) }); } catch (e) { return json(res, 200, { error: e.message }); }
+      }
     }
     if (url.pathname === '/api/audit' && req.method === 'GET') {
       const pid = url.searchParams.get('project');

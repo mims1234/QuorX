@@ -773,6 +773,12 @@ Every chat in this project reads, writes and runs programs in this folder.">${es
           <div id="pjDesign"><div class="kx-wait">Loading…</div></div>
         </details>
       </section>
+      <section class="pj-sec" id="pjHooksSec">
+        <details class="pj-fold" id="pjHooksFold">
+          <summary><h4>Hooks <small>commands QuorX runs around the agent's file writes and commands</small></h4><span class="pj-fold-state" id="pjHooksState">…</span><svg class="pj-fold-chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg></summary>
+          <div id="pjHooks"><div class="kx-wait">Loading…</div></div>
+        </details>
+      </section>
       <section class="pj-sec" id="pjBudgetSec">
         <div class="pj-sec-head"><h4>Budget <small>for all chats together</small></h4>
         <div class="pj-budget-mode"><button type="button" class="pj-mode ${p.budget == null ? 'on' : ''}" data-mode="none">No limit</button><button type="button" class="pj-mode ${p.budget != null ? 'on' : ''}" data-mode="set">Set a budget</button></div></div>
@@ -858,9 +864,62 @@ Every chat in this project reads, writes and runs programs in this folder.">${es
   $('#pjBudget', box).addEventListener('budget-saved', (e) => { const b = $('#pjKpis > div:nth-child(3) b', box); if (b) b.textContent = e.detail.budget != null ? `$${e.detail.budget.toFixed(2)}` : 'No limit'; });
   // Folded to one row: which design system (or none); the starters and editing open from it.
   mountDesign(p, $('#pjDesign', box)).then(() => { const st = $('#pjDesignState', box), cur = $('#pjDesign .ds-current b', box); if (st) { st.textContent = cur ? cur.textContent : 'None'; st.classList.toggle('none', !cur); } });
+  mountHooks(p, $('#pjHooks', box), (n) => { const st = $('#pjHooksState', box); if (st) { st.textContent = n ? `${n} on` : 'None'; st.classList.toggle('none', !n); } });
   if (!dlg.open) dlg.showModal();
+  if (focusOn === 'hooks') { $('#pjHooksFold', box).open = true; $('#pjHooksSec', box).scrollIntoView({ block: 'start' }); }
   if (focusOn === 'budget') $('#pjBudgetSec', box).scrollIntoView({ block: 'start' });
   if (focusOn === 'design') { $('#pjDesignFold', box).open = true; $('#pjDesignSec', box).scrollIntoView({ block: 'start' }); }
+}
+// Project settings → Hooks: commands QuorX runs around the agent's tool calls, in this order. Kept in QuorX's data
+// folder (never in the project), so a folder you open can't bring its own. Each still goes through the command rules.
+const HOOK_WHEN = { after_write: 'After a file write', before_command: 'Before a command', after_command: 'After a command' };
+const HOOK_MATCH_HINT = { after_write: 'files, e.g. *.ts, src/** (empty: every file)', before_command: 'commands, e.g. npm *, git push* (empty: every command)', after_command: 'commands, e.g. npm test* (empty: every command)' };
+async function mountHooks(p, el, onCount) {
+  if (!el) return;
+  if (p.missing || p.needsFolder) { el.innerHTML = '<p class="pj-hint">Pick a folder for this project first.</p>'; return; }
+  const r = await fetch(`/api/projects/${p.id}/hooks`).then((x) => x.json()).catch((e) => ({ error: e.message }));
+  if (r.error) { el.innerHTML = `<p class="pf-warn">Could not read the hooks: ${esc(r.error)}</p>`; return; }
+  let list = r.hooks, saved = JSON.stringify(list);
+  const draw = () => {
+    const dirty = JSON.stringify(list) !== saved;
+    el.innerHTML = `<p class="pj-hint">QuorX runs these commands itself around the agent's tool calls, top to bottom; the agent can't skip or change them. Each still goes through your command rules and Stop. <code>{file}</code> is the file just written.</p>
+      ${list.length ? `<ol class="hk-list">${list.map((h, i) => `<li class="hk-row ${h.on ? '' : 'off'}" data-i="${i}">
+        <div class="hk-top">
+          <select class="hk-event" aria-label="When this hook runs">${Object.entries(HOOK_WHEN).map(([v, l]) => `<option value="${v}" ${h.event === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+          <input class="hk-match" value="${esc(h.match)}" placeholder="${esc(HOOK_MATCH_HINT[h.event])}" aria-label="Which ${h.event === 'after_write' ? 'files' : 'commands'}" spellcheck="false">
+          <span class="hk-order"><button type="button" class="hk-up" title="Run earlier" aria-label="Move up" ${i ? '' : 'disabled'}>↑</button><button type="button" class="hk-down" title="Run later" aria-label="Move down" ${i < list.length - 1 ? '' : 'disabled'}>↓</button><button type="button" class="hk-del" title="Remove this hook" aria-label="Remove this hook">✕</button></span>
+        </div>
+        <input class="hk-cmd" value="${esc(h.command)}" placeholder="${h.event === 'after_write' ? 'npx eslint {file}' : 'npm test'}" aria-label="Command" spellcheck="false">
+        <div class="hk-opts">
+          <label class="sq-check" title="${h.event === 'before_command' ? 'When this hook fails, the agent\'s command does not run and the agent gets the hook\'s output' : 'When this hook fails, its output goes back to the agent to fix'}"><input type="checkbox" class="hk-feedback" ${h.feedback ? 'checked' : ''}><span>${h.event === 'before_command' ? 'Stop the command if it fails' : 'Tell the agent if it fails'}</span></label>
+          <label class="hk-time" title="The hook is stopped after this long">Time limit <input type="number" class="hk-timeout" min="1" max="600" value="${h.timeout}"> s</label>
+          <label class="sq-check" title="Switch this hook off without removing it"><input type="checkbox" class="hk-on" ${h.on ? 'checked' : ''}><span>On</span></label>
+        </div></li>`).join('')}</ol>` : '<p class="pj-hint hk-empty">No hooks yet. For example: after a file write, run <code>npm run lint</code>.</p>'}
+      <div class="hk-acts"><button type="button" class="kx-btn sm hk-add">+ Add hook</button><span class="hk-state">${dirty ? 'Not saved yet' : ''}</span><button type="button" class="kx-btn sm primary hk-save" ${dirty ? '' : 'disabled'}>Save hooks</button></div>`;
+    for (const row of el.querySelectorAll('.hk-row')) {
+      const i = Number(row.dataset.i), h = list[i];
+      const set = (k, v, redraw) => { h[k] = v; if (redraw) draw(); else { const dirtyNow = JSON.stringify(list) !== saved; $('.hk-save', el).disabled = !dirtyNow; $('.hk-state', el).textContent = dirtyNow ? 'Not saved yet' : ''; } };
+      $('.hk-event', row).onchange = (e) => set('event', e.target.value, true);
+      $('.hk-match', row).oninput = (e) => set('match', e.target.value);
+      $('.hk-cmd', row).oninput = (e) => set('command', e.target.value);
+      $('.hk-timeout', row).oninput = (e) => set('timeout', Math.max(1, Math.min(600, Number(e.target.value) || 60)));
+      $('.hk-feedback', row).onchange = (e) => set('feedback', e.target.checked);
+      $('.hk-on', row).onchange = (e) => { set('on', e.target.checked); row.classList.toggle('off', !e.target.checked); };
+      $('.hk-up', row).onclick = () => { [list[i - 1], list[i]] = [list[i], list[i - 1]]; draw(); };
+      $('.hk-down', row).onclick = () => { [list[i + 1], list[i]] = [list[i], list[i + 1]]; draw(); };
+      $('.hk-del', row).onclick = () => { list.splice(i, 1); draw(); };
+    }
+    $('.hk-add', el).onclick = () => { list.push({ event: 'after_write', match: '', command: '', timeout: 60, feedback: true, on: true }); draw(); el.querySelector('.hk-row:last-child .hk-cmd')?.focus(); };
+    $('.hk-save', el).onclick = async () => {
+      const res = await postJ(`/api/projects/${p.id}/hooks`, { hooks: list });
+      if (!res || res.error) { $('.hk-state', el).textContent = `Not saved: ${res?.error || 'no answer'}`; return; }
+      list = res.hooks; saved = JSON.stringify(list); draw();
+      $('.hk-state', el).textContent = '✓ Saved';
+      onCount?.(list.filter((h) => h.on).length);
+    };
+  };
+  draw();
+  onCount?.(list.filter((h) => h.on).length);
 }
 // Project settings → Design system: the project's DESIGN.md + tokens.css (edit, change, remove), or a starter to use.
 // Replacing or removing moves the old files to the project's .quorx/trash, so nothing is lost.
@@ -3375,6 +3434,7 @@ function traceHTML(m) {
       const stop = e.stopped ? (e.stopped.left ? `⚠ ${e.stopped.left} process${e.stopped.left > 1 ? 'es' : ''} did not stop: ${esc((e.stopped.names || []).join(', '))}` : `■ stopped · 0 processes left${e.stopped.mode === 'basic' ? ' (basic mode)' : ''}`) : e.timedOut ? 'stopped at the time limit' : '';
       row(e.at, `⌨️ <code>${esc(e.command)}</code> → exit ${e.code ?? '–'} · ${secs(e.ms)}<div class="sub">${[by, undo, stop, e.leftovers?.ended?.length ? `ended ${e.leftovers.ended.length} process${e.leftovers.ended.length > 1 ? 'es' : ''} it left running` : '', 'not covered: files outside the project, ignored folders (node_modules, target), pushes, installs, databases'].filter(Boolean).join(' · ')}</div>${ch && n ? `<details class="out"><summary>files</summary><pre>${esc([...ch.added.map((f) => `+ ${f}`), ...ch.modified.map((f) => `~ ${f}`), ...ch.deleted.map((f) => `- ${f}`)].join('\n'))}</pre></details>` : ''}${e.out ? `<details class="out"><summary>output</summary><pre>${esc(e.out)}</pre>${e.log ? `<div class="sub">Full log: ${esc(e.log)}</div>` : ''}</details>` : ''}`, e.code || e.stopped?.left ? 'err' : 'cmd');
     }
+    else if (e.t === 'hook') row(e.at, `🪝 hook <code>${esc(clip(e.command, 160))}</code> ${e.skipped ? 'did not run' : `→ ${e.ok ? 'ok' : e.timedOut ? 'stopped at its time limit' : `exit ${e.code ?? '–'}`} · ${secs(e.ms)}`}<div class="sub">${esc(HOOK_WHEN[e.event] || e.event)}${e.file ? `: ${esc(e.file)}` : ''}${e.skipped ? ` · ${esc(e.why || '')}` : e.told ? (e.event === 'before_command' ? ' · the command did not run; the agent sees why' : ' · the agent sees its output') : ''}</div>${e.out ? `<details class="out"${e.ok ? '' : ' open'}><summary>output</summary><pre>${esc(e.out)}</pre></details>` : ''}`, e.ok ? 'cmd' : 'err');
     else if (e.t === 'tripwire') row(e.at, `🚨 tripwire stopped <code>${esc(e.command)}</code>: ${e.count} files vanished outside the project<div class="sub">${(e.sample || []).map(esc).join('<br>')}<br>Look in the Recycle Bin, or right-click the folder → Properties → Previous Versions.</div>`, 'err');
     else if (e.t === 'command_blocked') row(e.at, `⛔ blocked <code>${esc(e.command)}</code><div class="sub">${esc(e.policy?.why || '')}${e.policy?.hint ? ` · ${esc(e.policy.hint)}` : ''}</div>`, 'err');
     else if (e.t === 'cmd_rule') row(e.at, `📏 rule saved: allow <code>${esc(e.rule.match)}</code> · ${esc({ chat: 'this chat', project: 'this project', everywhere: 'everywhere' }[e.rule.scope] || e.rule.scope)}`, 'ok');
