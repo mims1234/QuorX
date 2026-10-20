@@ -17,6 +17,7 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { detectToolchains } from '../server/toolchains.js';
+import { saveTestResult } from './test-results.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const WIN = process.platform === 'win32';
@@ -402,6 +403,7 @@ try {
 } finally {
   const r = report();
   log(`${r.passed} of ${r.total} steps passed. Report: ${r.file}`);
+  saveTestResult('ui', { scenario: SCENARIO, passed: r.passed, total: r.total, failed: steps.filter((s) => !s.moment && !s.ok).map((s) => s.title) });
   try { ws?.close(); } catch { /* closed */ }
   quit();
   process.exit(failed || r.passed < r.total ? 1 : 0);
