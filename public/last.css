@@ -2096,6 +2096,12 @@ body.top-in-sidebar .sb-titlebar #sbCollapseBtn { margin-left: 7px !important; }
 .fi-row.tok-in b { color: var(--tok-in); } .fi-row.tok-out b { color: var(--tok-out); }
 .fi-row .tok-dot { display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 2px; vertical-align: 1px; }
 .fi-row.tok-in .tok-dot { background: var(--tok-in); } .fi-row.tok-out .tok-dot { background: var(--tok-out); }
+/* Cache hits: the share of tokens in read from the provider's prompt cache; half or more shows green */
+.tok-cache { color: var(--dim); cursor: help; border-bottom: 1px dotted currentColor; white-space: nowrap; } .tok-cache.hit { color: var(--ok); }
+.uc-row { grid-template-columns: minmax(0, 1.3fr) minmax(0, 1.4fr) auto auto; }
+.uc-cache { font: 10.5px var(--mono); text-align: right; }
+.trace-cost .tc-table td:first-child { width: 38%; }
+.trace-cost .tc-table td.tc-cache { width: 17%; text-align: right; padding-right: 8px; }
 
 /* ---------- a calm project row: name ›, then settings and + on the right; the budget shows only on the open chat's project ---------- */
 .sb-project .sb-pname-wrap { display: flex; align-items: center; gap: 4px; min-width: 0; }
