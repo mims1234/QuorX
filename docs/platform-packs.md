@@ -73,8 +73,9 @@ export default {
     }),
   },
 
-  // 5. Explain: short, specific, for the agent. Only sent when the project is this kind.
-  notes: (have) => 'build with dotnet build, run with dotnet run, test with dotnet test. …',
+  // 5. Explain: short, specific, for the agent. Only sent when the project is this kind. `have` is the set of
+  //    toolchains found; `root` is the project folder, for notes that depend on it (which packager it uses).
+  notes: (have, root) => 'build with dotnet build, run with dotnet run, test with dotnet test. …',
 
   test: { needs: ['dotnet'] },          // the self-test runs when these toolchains are installed
 };
@@ -126,7 +127,8 @@ npm run test:packs
 
 That runs every self-test your computer can run and writes `pack-test-report.md`: your OS, the toolchains found, and
 each pack's result. To test one pack: `npm run test:packs -- --pack dotnet`. To include the Python debugger, set
-`QX_PYTHON` to a Python that has debugpy.
+`QX_PYTHON` to a Python that has debugpy. To include the Electron app tests, set `QX_ELECTRON` to an Electron binary
+(`node_modules\electron\dist\electron.exe` in any Electron project), or run `npm run desktop:setup` once.
 
 **Have a toolchain we can't test?** Run the kit and paste `pack-test-report.md` into the pack's pull request, or open
 a "Pack test report" issue. A pack moves from *wired* to *tested* once someone with the toolchain reports a pass, and
@@ -150,7 +152,7 @@ Each is its own pull request, so people with that toolchain can test it on its o
 | Commands hidden in scripts | Scripts that mainly launch other programs are marked "can't be checked"; the agent runs commands directly | Windows |
 | .NET | WinForms and WPF apps built and driven; `dotnet test`; debugging with netcoredbg | .NET 8 SDK, netcoredbg |
 | Python desktop | tkinter and PyQt windows driven; pytest; debugpy set up in the project's own venv | Python 3 |
-| Electron | Apps started with their DevTools port and driven; main-process debugging | Node.js |
+| Electron | Apps started with their DevTools port and driven; main-process debugging (`debug attach`) | Node.js, an Electron binary |
 | Tauri | Tauri 1 and 2 apps found; `cargo check` in `src-tauri`; `tauri dev` started with WebView2's DevTools port, so the window is read and clicked; panics and capability errors explained (Rust breakpoints come with the C/C++ pack's lldb-dap) | Rust with the MSVC linker (Build Tools with C++), the Tauri CLI, WebView2, Node.js |
 | Go, C/C++ and Rust debugging | Delve and lldb-dap debugging; CMake build check; crashes caught under the debugger | Go and Delve, CMake and a C++ compiler, LLVM with lldb-dap, Rust with a linker |
 | Java and Kotlin | Gradle and Maven compile checks; JUnit; debugging | A JDK |
