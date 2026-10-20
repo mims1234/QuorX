@@ -26,6 +26,14 @@ const quote = (a) => (/\s/.test(a) ? `"${a}"` : a);
 // "  error - lib/main.dart:12:5 - Undefined name 'foo'. - undefined_identifier" (dart analyze). Warnings and infos
 // don't fail the check: only errors send a reply back.
 export const ANALYZE_ERRORS = /^error\s*[•-]/i;
+/** An analyzer error as "lib/main.dart:12:5: Undefined name 'foo' (undefined_identifier)". */
+export function tidyAnalyzeLine(l) {
+  const t = String(l).trim();
+  const f = /^error\s*•\s*(.+?)\s*•\s*(\S+\.dart:\d+:\d+)\s*•\s*(\S+)$/.exec(t);
+  if (f) return `${f[2].replace(/\\/g, '/')}: ${f[1]} (${f[3]})`;
+  const d = /^error\s*-\s*(\S+\.dart:\d+:\d+)\s*-\s*(.+?)\s*-\s*(\S+)$/.exec(t);
+  return d ? `${d[1].replace(/\\/g, '/')}: ${d[2]} (${d[3]})` : l;
+}
 
 // ---------- flutter test (and dart test): which tests failed, and why ----------
 const PROGRESS = /^(\d+:\d\d) \+(\d+)(?: ~(\d+))?(?: -(\d+))?: (.*)$/;
@@ -111,9 +119,10 @@ export default {
     { id: 'dart', label: 'Dart SDK', for: 'Dart programs (Flutter brings its own)', probe: ['dart', ['--version']], re: /Dart SDK version: (\d+\.\d+\.\d+)/, brew: 'dart-sdk', url: 'https://dart.dev/get-dart' },
   ],
   markers: [/^pubspec\.yaml$/],
+  // flutter analyze fetches the project's packages first (flutter pub get), so it gets a longer limit.
   checks: [
-    { id: 'flutter', tool: 'flutter', ext: /\.dart$/i, marker: isFlutterProject, cmd: 'flutter analyze --no-fatal-infos --no-fatal-warnings', errors: ANALYZE_ERRORS },
-    { id: 'dart', tool: 'dart', ext: /\.dart$/i, marker: isDartProject, cmd: 'dart analyze --no-fatal-warnings', errors: ANALYZE_ERRORS },
+    { id: 'flutter', tool: 'flutter', ext: /\.dart$/i, marker: isFlutterProject, cmd: 'flutter analyze --no-fatal-infos --no-fatal-warnings', timeout: 240e3, errors: ANALYZE_ERRORS, tidy: tidyAnalyzeLine },
+    { id: 'dart', tool: 'dart', ext: /\.dart$/i, marker: isDartProject, cmd: 'dart analyze --no-fatal-warnings', errors: ANALYZE_ERRORS, tidy: tidyAnalyzeLine },
   ],
   summaries: [
     { cmd: /\b(flutter|dart)(\.bat)?\s+test\b/i, summarize: testSummary },

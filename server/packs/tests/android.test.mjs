@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
-import { parseLogcat, findCrash, crashText, parseAvdList, isAndroidProject, gradleSummary, GRADLE_ERRORS, sdkRoot, sdkTool } from '../android.js';
+import { parseLogcat, findCrash, crashText, parseAvdList, isAndroidProject, gradleSummary, GRADLE_ERRORS, tidyGradleLine, sdkRoot, sdkTool } from '../android.js';
 import { outputSummary, packsIn } from '../index.js';
 import { languageChecks } from '../../langchecks.js';
 
@@ -141,6 +141,17 @@ test('android: Kotlin, Java and resource errors count as errors', () => {
   assert.ok(!GRADLE_ERRORS.test('w: file:///C:/p/app/src/main/java/com/qx/MainActivity.kt:3:1 Parameter never used'));
 });
 
+test('android: error lines are tidied to the project-relative file, line and message', () => {
+  const dir = WIN ? 'C:\\p' : '/p';
+  const url = WIN ? 'file:///C:/p' : 'file:///p', abs = WIN ? 'C:\\p' : '/p';
+  assert.equal(tidyGradleLine(`e: ${url}/app/src/main/java/com/qx/MainActivity.kt:12:5 Unresolved reference 'cout'.`, dir), "app/src/main/java/com/qx/MainActivity.kt:12:5: Unresolved reference 'cout'.");
+  assert.equal(tidyGradleLine(`e: ${abs}${path.sep}app${path.sep}Main.kt: (7, 3): Expecting ')'`, dir), "app/Main.kt:7:3: Expecting ')'");
+  assert.equal(tidyGradleLine(`${abs}${path.sep}app${path.sep}Cart.java:7: error: cannot find symbol`, dir), 'app/Cart.java:7: cannot find symbol');
+  assert.equal(tidyGradleLine(`ERROR: ${abs}${path.sep}app${path.sep}res${path.sep}layout${path.sep}main.xml:5: AAPT: error: attribute android:txt not found.`, dir), 'app/res/layout/main.xml:5: attribute android:txt not found.');
+  assert.match(tidyGradleLine(`e: ${url}/other/X.kt:1:1 bad`, WIN ? 'C:\\q' : '/q'), /X\.kt:1:1: bad$/, 'a file outside the project keeps its full path');
+  assert.equal(tidyGradleLine('FAILURE: Build failed with an exception.', dir), 'FAILURE: Build failed with an exception.');
+});
+
 // A stand-in gradlew that fails like Gradle does on a Kotlin error, so the check runs without the SDK.
 test('android: the check before the final reply reports an error in the changed Kotlin file', async () => {
   const kt = 'app/src/main/java/com/qx/MainActivity.kt';
@@ -156,7 +167,7 @@ test('android: the check before the final reply reports an error in the changed 
   assert.equal(r.ran.length, 1, 'one Gradle run for the project');
   assert.equal(r.ran[0].dir, '.', 'it runs where gradlew is, not in the module');
   assert.equal(r.problems.length, 1, 'only the changed file\'s error counts');
-  assert.match(r.problems[0], /^android: e: .*MainActivity\.kt:5:9 Unresolved reference/);
+  assert.match(r.problems[0], /^android: .*MainActivity\.kt:5:9: Unresolved reference 'countt'\.$/);
   const none = await languageChecks(dir, [kt], { have: [] });
   assert.equal(none.ran.length, 0, 'no check without the SDK');
 });
