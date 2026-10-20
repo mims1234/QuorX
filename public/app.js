@@ -522,11 +522,13 @@ async function addImages(c, files) {
 function renderAttachments(c) {
   const box = c.el && $('.attachments', c.el.root);
   if (!box) return;
-  box.innerHTML = c.ctx.map((x, i) => `<span class="ctx-chip cmp-att-item ${x.type === 'file' ? 'file' : x.type === 'project' ? 'project' : 'chat'}" title="Attached as context for your next message">${x.type === 'file' ? '📄' : x.type === 'project' ? '' : '💬'} ${esc(x.title)}<button type="button" data-ctx="${i}" aria-label="Remove">✕</button></span>`).join('')
+  box.innerHTML = (c.comments || []).map((x, i) => `<span class="cmt-chip cmp-att-item" title="${esc(x.note || 'No note: the agent will ask what to change')}">${x.crop ? `<img src="${x.crop}" alt="">` : ''}<span class="cmt-what">💬 <b>${esc(x.tag)}</b> ${esc(clip(x.text || x.selector, 40))}</span><button type="button" data-cmt="${i}" aria-label="Remove this comment">✕</button></span>`).join('')
+    + c.ctx.map((x, i) => `<span class="ctx-chip cmp-att-item ${x.type === 'file' ? 'file' : x.type === 'project' ? 'project' : 'chat'}" title="Attached as context for your next message">${x.type === 'file' ? '📄' : x.type === 'project' ? '' : '💬'} ${esc(x.title)}<button type="button" data-ctx="${i}" aria-label="Remove">✕</button></span>`).join('')
     + c.images.map((x, i) => `<span class="img-chip cmp-att-item image"><img src="${x.thumb}" alt="attached image ${i + 1}"><button type="button" data-img="${i}" aria-label="Remove image">✕</button></span>`).join('')
     + (c.docs || []).map((d, i) => docChip(d, i)).join('');
   for (const b of box.querySelectorAll('[data-ctx]')) b.onclick = () => { c.ctx.splice(Number(b.dataset.ctx), 1); renderAttachments(c); };
   for (const b of box.querySelectorAll('[data-img]')) b.onclick = () => { c.images.splice(Number(b.dataset.img), 1); renderAttachments(c); };
+  for (const b of box.querySelectorAll('[data-cmt]')) b.onclick = () => { c.comments.splice(Number(b.dataset.cmt), 1); renderAttachments(c); };
   wireDocChips(c, box);
 }
 
@@ -580,8 +582,10 @@ function renderSidebar() {
     pl.dataset.dragScroll = '1';
     pl.addEventListener('dragover', (e) => { if (![...e.dataTransfer.types].includes('text/x-project')) return; const r = pl.getBoundingClientRect(), edge = 48; if (e.clientY < r.top + edge) pl.scrollTop -= 14; else if (e.clientY > r.bottom - edge) pl.scrollTop += 14; });
   }
-  $('#projectList').innerHTML = [...G.projects].sort((a, b) => rank(a) - rank(b)).map((p) => {
-    const chats = all.filter((c) => (c.projectId || 'scratch') === p.id && (c.messages > 0 || G.panes.includes(c.id)));
+  const pinRank = (p) => (p.pinned ? p.pinned : Infinity);
+  $('#projectList').innerHTML = G.projects.filter((p) => !p.archived).sort((a, b) => (pinRank(a) - pinRank(b)) || (rank(a) - rank(b))).map((p) => {
+    // Newest first: the chat you used last is at the top of its project.
+    const chats = all.filter((c) => (c.projectId || 'scratch') === p.id && (c.messages > 0 || G.panes.includes(c.id))).sort((a, b) => (b.lastAt || b.updated || 0) - (a.lastAt || a.updated || 0));
     const shown = chats.filter((c) => !q || c.title.toLowerCase().includes(q) || String(c.preview || '').toLowerCase().includes(q));
     if (q && !shown.length) return '';
     // The server's total also counts replies that never reached a chat file (stopped, page closed, deleted).
@@ -592,14 +596,10 @@ function renderSidebar() {
     const folded = (G.foldedProjects || []).includes(p.id) && !q;
     // A project with a chat working glows; with a chat open it's the current one; the rest fade back (see last.css).
     const working = chats.some((c) => G.open.get(c.id)?.running);
-    return `<div class="sb-project ${p.id === curProject ? 'current' : ''} ${working ? 'working' : ''} ${folded ? 'folded' : ''}" data-p="${esc(p.id)}" style="${projStyle(p)}">
+    return `<div class="sb-project ${p.id === curProject ? 'current' : ''} ${working ? 'working' : ''} ${folded ? 'folded' : ''} ${p.pinned ? 'pinned' : ''}" data-p="${esc(p.id)}" style="${projStyle(p)}">
       <div class="sb-ph" aria-expanded="${!folded}">
-        <div class="sb-pname-wrap"><button type="button" class="sb-fold" aria-expanded="${!folded}" title="${folded ? 'Show' : 'Hide'} this project's chats" aria-label="${folded ? 'Show' : 'Hide'} chats of ${esc(p.name)}"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg></button><b class="sb-pname" title="${esc(p.name)} · ${esc(p.dir)}">${esc(p.name)}</b>${p.missing ? '<button type="button" class="sb-missing" title="The project folder was moved, renamed or deleted: click to reselect it">⚠ missing</button>' : p.needsFolder ? '<button type="button" class="sb-missing needs" title="Pick a folder for this project: its files sit inside QuorX itself and are copied to the folder you pick" aria-label="Pick a folder for this project">📁</button>' : ''}${working ? '<span class="sb-pworking" title="A chat in this project is working" aria-label="Working"></span>' : ''}<span class="sb-grip" draggable="true" tabindex="0" role="button" title="Drag to move this project (or focus it and press ↑ / ↓)" aria-label="Move ${esc(p.name)}: drag, or press up or down"><svg viewBox="0 0 10 16" aria-hidden="true"><circle cx="2.5" cy="3" r="1.4"/><circle cx="7.5" cy="3" r="1.4"/><circle cx="2.5" cy="8" r="1.4"/><circle cx="7.5" cy="8" r="1.4"/><circle cx="2.5" cy="13" r="1.4"/><circle cx="7.5" cy="13" r="1.4"/></svg></span></div>
-        ${budgetLine(p, chats.length, cost, share, `<span class="sb-pacts sb-pactions">
-          <button type="button" class="ghost sb-new ico-add" title="New chat in ${esc(p.name)}" aria-label="New chat in ${esc(p.name)}">${ICO.plus}</button>
-          <button type="button" class="ghost sb-edit ico-settings" title="Project settings: name, folder, budget and what each chat cost" aria-label="Project settings">${ICO.gear}</button>
-          ${p.id !== 'scratch' ? `<button type="button" class="ghost sb-delp ico-delete" title="Delete this project (its chats move to trash; the folder is not touched)" aria-label="Delete project">${ICO.trash}</button>` : ''}
-        </span>`)}
+        <div class="sb-pname-wrap"><b class="sb-pname" title="${esc(p.name)} · ${esc(p.dir)}">${esc(p.name)}</b><button type="button" class="sb-fold" aria-expanded="${!folded}" title="${folded ? 'Show' : 'Hide'} this project's chats" aria-label="${folded ? 'Show' : 'Hide'} chats of ${esc(p.name)}"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg></button>${p.missing ? '<button type="button" class="sb-missing" title="The project folder was moved, renamed or deleted: click to reselect it">⚠ missing</button>' : p.needsFolder ? '<button type="button" class="sb-missing needs" title="Pick a folder for this project: its files sit inside QuorX itself and are copied to the folder you pick" aria-label="Pick a folder for this project">📁</button>' : ''}${working ? '<span class="sb-pworking" title="A chat in this project is working" aria-label="Working"></span>' : ''}<span class="sb-psp"></span><button type="button" class="sb-pin sb-picon ${p.pinned ? 'on' : ''}" aria-pressed="${!!p.pinned}" title="${p.pinned ? 'Unpin' : 'Pin to the top (up to 3)'}" aria-label="${p.pinned ? 'Unpin' : 'Pin'} ${esc(p.name)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4h6l-1 6 4 4H6l4-4z"/><path d="M12 14v6"/></svg></button><button type="button" class="sb-edit sb-picon" title="Project settings: budget, pin, archive, folder, colour" aria-label="Settings for ${esc(p.name)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg></button><button type="button" class="sb-new sb-picon" title="New chat in ${esc(p.name)}" aria-label="New chat in ${esc(p.name)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button><span class="sb-grip" draggable="true" tabindex="0" role="button" title="Drag to move this project (or focus it and press ↑ / ↓)" aria-label="Move ${esc(p.name)}: drag, or press up or down"><svg viewBox="0 0 10 16" aria-hidden="true"><circle cx="2.5" cy="3" r="1.4"/><circle cx="7.5" cy="3" r="1.4"/><circle cx="2.5" cy="8" r="1.4"/><circle cx="7.5" cy="8" r="1.4"/><circle cx="2.5" cy="13" r="1.4"/><circle cx="7.5" cy="13" r="1.4"/></svg></span></div>
+        ${p.id === curProject ? projectSpendHTML(p, chats.length, cost, share) : ''}
       </div>
       ${shown.map((c) => {
         const live = G.open.get(c.id);
@@ -615,6 +615,7 @@ function renderSidebar() {
       }).join('') || '<div class="sb-empty">No chats yet</div>'}
     </div>`;
   }).join('');
+  renderArchive(all);
   // The collapsed rail lists only the chats working right now (to jump back to them); the rest is in the full sidebar.
   const rail = [...all].filter((c) => G.open.get(c.id)?.running).slice(0, 8);
   $('#railList').innerHTML = rail.map((c) => {
@@ -632,11 +633,13 @@ function renderSidebar() {
   }
   for (const el of document.querySelectorAll('#projectList .sb-project')) {
     const p = G.projects.find((x) => x.id === el.dataset.p);
-    $('.sb-new', el).onclick = () => newChat(p.id);
-    $('.sb-edit', el).onclick = () => openProjectSettings(p);
+    $('.sb-new', el).onclick = (e) => { e.stopPropagation(); newChat(p.id); };
+    $('.sb-edit', el).onclick = (e) => { e.stopPropagation(); openProjectSettings(p); };
+    $('.sb-pin', el).onclick = (e) => { e.stopPropagation(); setProjectFlag(p, { pinned: !p.pinned }); };
     const miss = $('.sb-missing', el); if (miss) miss.onclick = () => editProject(p, { reselect: true });
     const meter = $('.sb-budget', el); if (meter) meter.onclick = () => openProjectSettings(p, 'budget');
     const del = $('.sb-delp', el); if (del) del.onclick = () => deleteProject(p);
+
     // Drag and drop to reorder projects: only the ⠿ grip drags, so the header's buttons stay easy to click.
     const ph = $('.sb-ph', el), grip = $('.sb-grip', el);
     ph.title = 'Click to fold or unfold its chats';
@@ -719,7 +722,12 @@ async function openProjectSettings(p0, focusOn) {
   box.innerHTML = `
     <header class="pj-head">
       <div class="pj-title" style="--h:${hue(p.name)}${p.color ? `;--pcx:${p.color}` : ''}"><b class="pj-name" title="The project is named after its folder; pick another folder to change it">${esc(p.name)}</b><small>Project settings</small></div>
-      <button type="button" class="mp-x pj-close" aria-label="Close">✕</button>
+      <div class="pj-head-acts">
+        <label class="pj-pick pj-hpick ${p.color ? 'on' : ''}" title="Name colour: pick any colour"><input type="color" value="${esc(p.color || autoHex(p.name))}" aria-label="Pick the name colour"><span class="pj-pick-sw" style="--sw:${esc(p.color || autoHex(p.name))}"></span><code class="pj-pick-hex">${esc(p.color || 'Auto')}</code></label>
+        <button type="button" class="pj-auto pj-hbtn ${p.color ? '' : 'on'}" title="Back to the automatic colour (from the name)" aria-label="Automatic name colour" ${p.color ? '' : 'hidden'}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.3-5.7"/><path d="M4 4v4h4"/></svg></button>
+        <button type="button" class="pj-pin pj-hbtn ${p.pinned ? 'on' : ''}" aria-pressed="${!!p.pinned}" title="${p.pinned ? 'Pinned to the top of the sidebar: click to unpin' : 'Pin to the top of the sidebar (up to 3)'}" aria-label="Pin to the top" ${p.archived ? 'disabled' : ''}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4h6l-1 6 4 4H6l4-4z"/><path d="M12 14v6"/></svg></button>
+        <button type="button" class="mp-x pj-close" aria-label="Close">✕</button>
+      </div>
     </header>
     <div class="pj-scroll">
       <section class="pj-sec">
@@ -727,16 +735,14 @@ async function openProjectSettings(p0, focusOn) {
         <div class="pj-folder-row"><div class="pj-folder ${p.missing ? 'missing' : ''}"><button type="button" class="pj-copy" title="Copy the folder path" aria-label="Copy the folder path">${msgIcon('copy')}</button><code class="blurable" title="${esc(p.dir)}
 Every chat in this project reads, writes and runs programs in this folder.">${esc(p.dir)}</code></div>
         ${p.missing ? '' : '<button type="button" class="kx-btn sm pj-open" title="Open in File Explorer">📂 Open</button>'}<button type="button" class="kx-btn sm pj-move">${p.missing ? 'Reselect…' : p.needsFolder ? 'Pick a folder…' : 'Change…'}</button></div>
+        ${p.github ? `<div class="pj-gh" data-gh="${esc(p.id)}">${ghLineHTML(p.github)}</div>` : ''}
         ${p.missing ? '<p class="pf-warn">⚠ This folder is missing: it was moved, renamed or deleted outside QuorX. Reselect it to keep working.</p>' : p.needsFolder ? '<p class="pf-warn">📁 This project\'s files sit inside QuorX itself. Pick a folder of your own: its files are copied there, and chats can work in it again.</p>' : ''}
       </section>
-      <section class="pj-sec">
-        <div class="pj-sec-head"><h4>Name colour <small>where the name shows</small></h4>
-          <div class="pj-colors" role="radiogroup" aria-label="Name colour">
-            <button type="button" class="pj-sw auto ${p.color ? '' : 'on'}" data-c="" role="radio" aria-checked="${!p.color}" title="Automatic: picked from the name" style="--sw:hsl(${hue(p.name)} 55% 55%)">Auto</button>
-            ${PROJ_COLORS.map((col) => `<button type="button" class="pj-sw ${p.color === col ? 'on' : ''}" data-c="${col}" role="radio" aria-checked="${p.color === col}" title="${col}" aria-label="Colour ${col}" style="--sw:${col}"></button>`).join('')}
-            <label class="pj-sw custom ${p.color && !PROJ_COLORS.includes(p.color) ? 'on' : ''}" title="Any colour" style="--sw:${p.color && !PROJ_COLORS.includes(p.color) ? p.color : 'transparent'}"><input type="color" value="${esc(p.color || '#2fb36f')}" aria-label="Pick any colour"><span aria-hidden="true">+</span></label>
-          </div>
-        </div>
+      <section class="pj-sec" id="pjDesignSec">
+        <details class="pj-fold" id="pjDesignFold">
+          <summary><h4>Design system <small>how the pages and apps chats build here look</small></h4><span class="pj-fold-state" id="pjDesignState">…</span><svg class="pj-fold-chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg></summary>
+          <div id="pjDesign"><div class="kx-wait">Loading…</div></div>
+        </details>
       </section>
       <section class="pj-sec" id="pjBudgetSec">
         <div class="pj-sec-head"><h4>Budget <small>for all chats together</small></h4>
@@ -747,30 +753,44 @@ Every chat in this project reads, writes and runs programs in this folder.">${es
         <div class="pj-sec-head"><h4>Costs <small>per chat</small></h4><div class="pj-kpis" id="pjKpis"></div></div>
         <div id="pjChats" class="pj-chats"><div class="kx-wait">Loading…</div></div>
       </section>
-      ${p.id !== 'scratch' ? `<section class="pj-sec danger"><div class="pj-row"><h4>Danger zone</h4><button type="button" class="kx-btn sm pj-del">🗑 Delete project</button><span class="pj-hint">Its chats move to the trash; the folder and files are not touched.</span></div></section>` : ''}
+      ${p.id !== 'scratch' ? `<section class="pj-sec danger"><div class="pj-row"><h4>Danger zone</h4><button type="button" class="kx-btn sm pj-archive" title="Archive: out of the sidebar and the start screen; find it again under Archived at the bottom of the sidebar">${p.archived ? 'Unarchive' : 'Archive'}</button><button type="button" class="kx-btn sm pj-del">🗑 Delete project</button><span class="pj-hint">Its chats move to the trash; the folder and files are not touched.</span></div></section>` : ''}
     </div>`;
   const close = () => dlg.close();
   $('.pj-close', box).onclick = close;
   const pjOpen = $('.pj-open', box); if (pjOpen) pjOpen.onclick = () => openFolder(p.id);
   const pjCopy = $('.pj-copy', box);
   pjCopy.onclick = () => navigator.clipboard?.writeText(p.dir).then(() => flashTip(pjCopy, 'Copied')).catch(() => flashTip(pjCopy, 'Could not copy'));
+  loadGhMeta(box);
   // Name colour: saved at once; the sidebar, start screen and chat headers follow.
   const setColor = async (color) => {
     const r = await postJ(`/api/projects/${p.id}/color`, { color: color || null }).catch((e) => ({ error: e.message }));
     if (r?.error) return uiAlert(`Could not change the colour: ${r.error}`);
     p.color = r.color || undefined;
     const gp = G.projects.find((x) => x.id === p.id); if (gp) gp.color = p.color;
-    for (const sw of box.querySelectorAll('.pj-sw')) { const on = sw.classList.contains('custom') ? !!p.color && !PROJ_COLORS.includes(p.color) : (sw.dataset.c || '') === (p.color || ''); sw.classList.toggle('on', on); sw.setAttribute('aria-checked', String(on)); }
-    const cus = $('.pj-sw.custom', box); if (cus) cus.style.setProperty('--sw', p.color && !PROJ_COLORS.includes(p.color) ? p.color : 'transparent');
+    const au = $('.pj-auto', box), pk = $('.pj-pick', box);
+    au.hidden = !p.color; pk.classList.toggle('on', !!p.color);
+    $('.pj-pick-sw', box).style.setProperty('--sw', p.color || autoHex(p.name)); $('.pj-pick-hex', box).textContent = p.color || 'Auto';
     const tt = $('.pj-title', box); if (p.color) tt.style.setProperty('--pcx', p.color); else tt.style.removeProperty('--pcx');
     refreshSidebar();
     for (const ch of G.open.values()) if (ch.projectId === p.id) renderChatHead(ch);
     const land = $('.landing'); if (land) renderLanding(land.parentElement);
   };
-  for (const sw of box.querySelectorAll('.pj-sw[data-c]')) sw.onclick = () => setColor(sw.dataset.c);
-  const picker = $('.pj-sw.custom input', box); picker.onchange = () => setColor(picker.value);
+  $('.pj-auto', box).onclick = () => setColor('');
+  // The picker previews as you drag and saves when you let go.
+  const picker = $('.pj-pick input', box);
+  picker.oninput = () => { $('.pj-pick-sw', box).style.setProperty('--sw', picker.value); $('.pj-pick-hex', box).textContent = picker.value; };
+  picker.onchange = () => setColor(picker.value);
   $('.pj-move', box).onclick = async () => { dlg.close(); await editProject(p, { reselect: p.missing || p.needsFolder }); };
   const del = $('.pj-del', box); if (del) del.onclick = async () => { dlg.close(); await deleteProject(p); };
+  const pin = $('.pj-pin', box);
+  if (pin) pin.onclick = async () => {
+    await setProjectFlag(p, { pinned: !p.pinned });
+    const now = G.projects.find((x) => x.id === p.id); p.pinned = now?.pinned;
+    pin.classList.toggle('on', !!p.pinned); pin.setAttribute('aria-pressed', String(!!p.pinned));
+    pin.dataset.ohTitle = p.pinned ? 'Pinned to the top of the sidebar: click to unpin' : 'Pin to the top of the sidebar (up to 3)';
+  };
+  const arc = $('.pj-archive', box);
+  if (arc) arc.onclick = async () => { const to = !p.archived; await setProjectFlag(p, { archived: to }); dlg.close(); };
   // budget: "No limit" or the editor
   const mountBudget = () => editBudget(p, undefined, $('#pjBudget', box));
   const setMode = async (mode) => {
@@ -807,10 +827,95 @@ Every chat in this project reads, writes and runs programs in this folder.">${es
   loadChats(false);
   // After a save: the Budget figure above the chat list follows.
   $('#pjBudget', box).addEventListener('budget-saved', (e) => { const b = $('#pjKpis > div:nth-child(3) b', box); if (b) b.textContent = e.detail.budget != null ? `$${e.detail.budget.toFixed(2)}` : 'No limit'; });
+  // Folded to one row: which design system (or none); the starters and editing open from it.
+  mountDesign(p, $('#pjDesign', box)).then(() => { const st = $('#pjDesignState', box), cur = $('#pjDesign .ds-current b', box); if (st) { st.textContent = cur ? cur.textContent : 'None'; st.classList.toggle('none', !cur); } });
   if (!dlg.open) dlg.showModal();
   if (focusOn === 'budget') $('#pjBudgetSec', box).scrollIntoView({ block: 'start' });
+  if (focusOn === 'design') { $('#pjDesignFold', box).open = true; $('#pjDesignSec', box).scrollIntoView({ block: 'start' }); }
+}
+// Project settings → Design system: the project's DESIGN.md + tokens.css (edit, change, remove), or a starter to use.
+// Replacing or removing moves the old files to the project's .quorx/trash, so nothing is lost.
+async function mountDesign(p, el) {
+  if (!el) return;
+  if (p.missing || p.needsFolder) { el.innerHTML = '<p class="pj-hint">Pick a folder for this project first.</p>'; return; }
+  const [cur, systems] = await Promise.all([
+    fetch(`/api/projects/${p.id}/design`).then((r) => r.json()).catch(() => ({ error: 'could not load' })),
+    fetch('/api/design-systems').then((r) => r.json()).catch(() => []),
+  ]);
+  const has = !!(cur.md || cur.tokens);
+  const swatch = (s) => `<span class="ds-sw" aria-hidden="true">${s.swatches.map((w) => `<i style="background:${esc(w.value)}" title="--${esc(w.token)} ${esc(w.value)}"></i>`).join('')}</span>`;
+  const grid = (replace) => `<div class="ds-grid" role="list">${systems.map((s) => `<div class="ds-card" role="listitem">
+      ${swatch(s)}
+      <div class="ds-name"><b>${esc(s.name)}</b><span class="tag">${s.dark === 'only' ? 'dark only' : s.dark === 'yes' ? 'light + dark' : 'light'}</span></div>
+      <p class="ds-desc">${esc(s.description)}</p>
+      <p class="ds-fonts">${esc(s.fonts.display)} · ${esc(s.fonts.body)}</p>
+      <button type="button" class="kx-btn sm ds-use" data-id="${esc(s.id)}">${replace ? 'Switch to this' : 'Use this'}</button>
+    </div>`).join('')}</div>`;
+  const hint = '<p class="pj-hint">Or make one from a reference: in a chat, ask "make a design system from https://…" or attach a screenshot and ask for one.</p>';
+  if (cur.error) { el.innerHTML = `<p class="pf-warn">Could not read the design files: ${esc(cur.error)}</p>`; return; }
+  el.innerHTML = has ? `
+    <div class="ds-current">
+      <div class="ds-cur-top"><b>${esc(cur.name || 'Project design system')}</b><span class="ds-files">${[cur.md ? 'DESIGN.md' : '', cur.tokens ? `tokens.css · ${cur.colors} colours` : ''].filter(Boolean).join(' · ')}</span></div>
+      <div class="ds-acts"><button type="button" class="kx-btn sm ds-edit">Edit DESIGN.md</button><button type="button" class="kx-btn sm ds-change">Change…</button><button type="button" class="kx-btn sm ds-remove">Remove</button></div>
+      <div class="ds-panel" hidden></div>
+    </div>`
+    : `<p class="pj-hint">None yet: each chat picks its own look. Pick a starter to give every chat in this project the same colours, type and components.</p>${grid(false)}${hint}`;
+  const panel = $('.ds-panel', el);
+  const reload = () => mountDesign(p, el);
+  const apply = async (id, overwrite) => {
+    const r = await postJ(`/api/projects/${p.id}/design`, { system: id, overwrite }).catch((e) => ({ error: e.message }));
+    if (r?.error) return uiAlert(`Could not use that design system: ${r.error}`);
+    if (r.applied === false) {
+      // A DESIGN.md or tokens.css is already there: confirm in place before replacing it.
+      const card = el.querySelector(`.ds-use[data-id="${CSS.escape(id)}"]`)?.closest('.ds-card');
+      const ask = document.createElement('div'); ask.className = 'ds-confirm';
+      ask.innerHTML = `<p>This project already has ${esc(r.exists.join(' and '))}. Replace ${r.exists.length > 1 ? 'them' : 'it'}? The old ${r.exists.length > 1 ? 'files go' : 'file goes'} to the project's trash.</p><div class="ds-acts"><button type="button" class="kx-btn primary sm ds-yes">Replace</button><button type="button" class="kx-btn sm ds-no">Cancel</button></div>`;
+      (card || el).appendChild(ask);
+      $('.ds-yes', ask).onclick = () => apply(id, true);
+      $('.ds-no', ask).onclick = () => ask.remove();
+      return;
+    }
+    reload();
+  };
+  for (const b of el.querySelectorAll('.ds-use')) b.onclick = () => apply(b.dataset.id, false);
+  if (!has) return;
+  $('.ds-edit', el).onclick = () => {
+    panel.hidden = false;
+    panel.innerHTML = `<textarea class="ds-text" spellcheck="false" aria-label="DESIGN.md">${esc(cur.md)}</textarea><div class="ds-acts"><button type="button" class="kx-btn primary sm ds-save">Save</button><button type="button" class="kx-btn sm ds-cancel">Cancel</button><span class="pj-hint">The previous version goes to the project's trash.</span></div>`;
+    const ta = $('.ds-text', panel); ta.focus();
+    $('.ds-cancel', panel).onclick = () => { panel.hidden = true; panel.innerHTML = ''; };
+    $('.ds-save', panel).onclick = async () => {
+      const r = await postJ(`/api/projects/${p.id}/design`, { md: ta.value }).catch((e) => ({ error: e.message }));
+      if (r?.error) return uiAlert(`Could not save DESIGN.md: ${r.error}`);
+      reload();
+    };
+  };
+  $('.ds-change', el).onclick = () => {
+    panel.hidden = false;
+    panel.innerHTML = `${grid(true)}${hint}`;
+    for (const b of panel.querySelectorAll('.ds-use')) b.onclick = () => apply(b.dataset.id, false);
+  };
+  $('.ds-remove', el).onclick = () => {
+    panel.hidden = false;
+    panel.innerHTML = `<div class="ds-confirm"><p>Remove this project's DESIGN.md and tokens.css? They move to the project's trash, and chats go back to picking their own look. Pages already built keep linking tokens.css until you change them.</p><div class="ds-acts"><button type="button" class="kx-btn primary sm ds-yes">Remove</button><button type="button" class="kx-btn sm ds-no">Keep</button></div></div>`;
+    $('.ds-no', panel).onclick = () => { panel.hidden = true; panel.innerHTML = ''; };
+    $('.ds-yes', panel).onclick = async () => {
+      const r = await postJ(`/api/projects/${p.id}/design`, { remove: true }).catch((e) => ({ error: e.message }));
+      if (r?.error) return uiAlert(`Could not remove the design files: ${r.error}`);
+      reload();
+    };
+  };
 }
 // The strip under a project's name: one box with its spend (a meter when it has a budget) and its + ⚙ 🗑 buttons.
+// The open chat's project: one line of what it has spent (of its budget), and a bar along the header's bottom edge.
+// Read-only: clicking it opens the project's budget settings.
+function projectSpendHTML(p, n, cost, share) {
+  const usd = (v) => `$${v.toFixed(v < 1 ? 3 : 2)}`;
+  const has = p.budget != null, pct = Math.round(share * 100), state = !has ? 'none' : share >= 1 ? 'full' : share >= 0.85 ? 'near' : 'ok';
+  const info = has ? `<b class="cost">${usd(cost)}</b> of $${p.budget.toFixed(p.budget < 10 ? 2 : 0)} · ${state === 'full' ? 'budget used up' : `${pct}%`} · ${n} chat${n === 1 ? '' : 's'}`
+    : `<b class="cost">${usd(cost)}</b> spent · no limit · ${n} chat${n === 1 ? '' : 's'}`;
+  return `<button type="button" class="sb-budget sb-pinfo ${state}" title="${has ? `${usd(cost)} of the $${p.budget.toFixed(2)} budget · ${state === 'full' ? 'budget reached' : `$${Math.max(0, p.budget - cost).toFixed(2)} left`}` : 'No budget set'} · open the budget settings">${info}</button>${has ? `<span class="sb-pbar ${state}" aria-hidden="true"><i style="width:${Math.min(100, share * 100).toFixed(1)}%"></i></span>` : ''}`;
+}
 function budgetLine(p, n, cost, share, acts = '') {
   const usd = (v) => `$${v.toFixed(v < 1 ? 3 : 2)}`;
   if (p.budget == null) return `<div class="sb-pstrip none"><div class="sb-pmeta"><span class="pm-chats">${n} chat${n === 1 ? '' : 's'}</span><span class="pm-dot">·</span><span class="pm-spent" title="Spent so far by this project's chats">${usd(cost)}</span><span class="pm-nolim">no limit</span></div>${acts}</div>`;
@@ -1274,52 +1379,206 @@ function placeChrome() {
 function goHome() { withTransition(showLanding); closeDrawer(); if (isPhone()) setMView('chat'); }
 function syncHome() { const on = !G.panes.length; for (const b of document.querySelectorAll('#homeBtn, #railHome')) { b.classList.toggle('active', on); b.setAttribute('aria-current', on ? 'page' : 'false'); } }
 function renderLanding(box) {
-  const recent = [...G.chats].filter((c) => c.messages > 0).sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0)).slice(0, 6);
+  const archived = new Set(G.projects.filter((p) => p.archived).map((p) => p.id));
+  const allRecent = [...G.chats].filter((c) => c.messages > 0 && !archived.has(c.projectId || 'scratch')).sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0));
+  // Six at a time, with ‹ › to page through the rest (the page you were on is kept while you're here).
+  const PAGE = 6, pages = (n) => Math.max(1, Math.ceil(n / PAGE));
+  G.ldChatPage = Math.min(G.ldChatPage || 0, pages(allRecent.length) - 1);
+  const recent = allRecent.slice(G.ldChatPage * PAGE, G.ldChatPage * PAGE + PAGE);
+  const pager = (key, page, n, what) => n > PAGE ? `<span class="ld-pg"><span class="ld-pg-n">${page * PAGE + 1}–${Math.min(n, page * PAGE + PAGE)} of ${n}</span><button type="button" class="ld-pg-b" data-pg="${key}" data-d="-1" aria-label="Previous ${what}" title="Previous ${what}" ${page === 0 ? 'disabled' : ''}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6"/></svg></button><button type="button" class="ld-pg-b" data-pg="${key}" data-d="1" aria-label="Next ${what}" title="Next ${what}" ${page >= pages(n) - 1 ? 'disabled' : ''}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button></span>` : '';
   const projName = (id) => G.projects.find((p) => p.id === id)?.name || id;
   // Projects you used most recently first; six show until you ask for the rest.
   const lastUsed = (id) => Math.max(0, ...G.chats.filter((c) => (c.projectId || 'scratch') === id).map((c) => c.lastAt || 0));
-  const projects = [...G.projects].sort((a, b) => lastUsed(b.id) - lastUsed(a.id));
-  const last = G.landingProject && G.projects.some((p) => p.id === G.landingProject) ? G.landingProject : (recent[0]?.projectId || 'scratch');
+  const projects = G.projects.filter((p) => !p.archived).sort((a, b) => ((a.pinned || Infinity) - (b.pinned || Infinity)) || (lastUsed(b.id) - lastUsed(a.id)));
+  const last = G.landingProject && G.projects.some((p) => p.id === G.landingProject) ? G.landingProject : (allRecent[0]?.projectId || 'scratch');
+  G.ldProjPage = Math.min(G.ldProjPage || 0, pages(projects.length) - 1);
+  const shownProjects = projects.slice(G.ldProjPage * PAGE, G.ldProjPage * PAGE + PAGE);
   box.innerHTML = `<section class="landing">
-    <div class="ld-hero">
-      <div class="ld-mark">◆</div>
-      <h1>What are we building?</h1>
-      <p>Start a chat in a project, or pick up where you left off.</p>
-      <div class="ld-start">
-        <label class="ld-proj"><span>📁</span><select id="ldProject" aria-label="Project">${G.projects.map((p) => `<option value="${esc(p.id)}" ${p.id === last ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>
-        <button type="button" class="ld-new">＋ New chat</button>
-        <span class="ld-or">or</span>
-        <button type="button" class="ld-folder" title="Pick any folder on this PC: a chat opens in its project (one is made for it if it has none)">📂 Open folder…</button>
-      </div>
-      <p class="ld-folder-err" role="alert" hidden></p>
-    </div>
-    ${G.starters?.length ? `<h2 class="ld-h">Start from a template</h2><div class="ld-starters">${G.starters.map((t) => `<button type="button" class="ld-starter" data-starter="${esc(t.name)}" title="${esc(t.description)}"><span class="ld-st-mark" style="--h:${hue(t.name)}">${esc(initials(starterName(t.name)))}</span><span class="ld-st-main"><b>${esc(starterName(t.name))}</b><small>${esc(t.description.split(/[:;(]/)[0].trim())}</small></span></button>`).join('')}</div>` : ''}
-    ${recent.length ? `<h2 class="ld-h">Recent chats</h2><div class="ld-recent">${recent.map((c) => `<button type="button" class="ld-chat" data-c="${esc(c.id)}"><span class="ld-chat-main"><b>${esc(c.title)}</b><small><span class="ld-chat-proj" style="${projStyle(G.projects.find((x) => x.id === c.projectId) || { name: projName(c.projectId) })}">${esc(projName(c.projectId))}</span> · ${ago(c.lastAt || Date.now())}</small></span><span class="ld-cost">$${(c.cost || 0).toFixed(3)}</span></button>`).join('')}</div>` : ''}
-    <h2 class="ld-h">Projects</h2>
-    <div class="ld-projects">${projects.slice(0, G.landingAllProjects ? projects.length : 6).map((p) => {
+    <header class="ld-brand"><span class="ld-mark" aria-hidden="true">◆</span><h1>Quor<span>X</span></h1><span class="ld-tag">What are we building?</span></header>
+    ${recent.length ? `<div class="ld-hrow"><h2 class="ld-h">Recent chats</h2>${pager('chat', G.ldChatPage, allRecent.length, 'chats')}</div><div class="ld-recent">${recent.map((c) => `<button type="button" class="ld-chat" data-c="${esc(c.id)}"><span class="ld-chat-main"><b>${esc(c.title)}</b><small><span class="ld-chat-proj" style="${projStyle(G.projects.find((x) => x.id === c.projectId) || { name: projName(c.projectId) })}">${esc(projName(c.projectId))}</span> · ${ago(c.lastAt || Date.now())}</small></span><span class="ld-cost">$${(c.cost || 0).toFixed(3)}</span></button>`).join('')}</div>` : ''}
+    <div class="ld-hrow"><h2 class="ld-h">Projects</h2>${pager('proj', G.ldProjPage, projects.length, 'projects')}</div>
+    <div class="ld-projects">${shownProjects.map((p) => {
       const n = G.chats.filter((c) => (c.projectId || 'scratch') === p.id && c.messages > 0).length, spent = p.spent || 0;
       const share = p.budget ? Math.min(1, spent / p.budget) : 0, state = share >= 1 ? 'full' : share >= 0.8 ? 'near' : 'ok';
       return `<div class="ld-project" style="${projStyle(p)}"><div class="ld-p-top"><b>${esc(p.name)}</b><button type="button" class="ld-p-set" data-set="${esc(p.id)}" title="Project settings">${ICO.gear}</button></div>
         <small>${n} chat${n === 1 ? '' : 's'} · $${spent.toFixed(3)}${p.budget != null ? ` of $${p.budget.toFixed(2)}` : ' · no limit'}</small>
+        ${p.github ? `<div class="ld-p-gh" data-gh="${esc(p.id)}">${ghLineHTML(p.github)}</div>` : ''}
         ${p.budget != null ? `<span class="ld-bar ${state}"><i style="width:${(share * 100).toFixed(1)}%"></i></span>` : ''}
         <button type="button" class="ld-p-new" data-new="${esc(p.id)}">＋ New chat here</button></div>`;
     }).join('')}</div>
-    ${projects.length > 6 ? `<button type="button" class="ld-more" aria-expanded="${!!G.landingAllProjects}">${G.landingAllProjects ? 'Show fewer' : `Show all ${projects.length} projects`}</button>` : ''}
     <p class="ld-tips">Tips: type <kbd>@</kbd> to add files or other chats as context, <kbd>/</kbd> for commands, and ⚙ for settings.</p>
+    <div class="ld-dock">
+    <div class="ld-sbox" id="ldStart">
+      <textarea class="ld-sb-input" id="ldStartText" rows="2" placeholder="What are we building? Describe it, or ask about your code…" aria-label="Your first message"></textarea>
+      <div class="ld-sb-row">
+        <button type="button" class="ld-chip" id="ldChip" aria-haspopup="menu" aria-expanded="false" title="Where this chat runs: a project, any folder, or a new project from a template"></button>
+        <span class="ld-sb-path blurable" id="ldChipPath"></span>
+        <span class="ld-sb-sp"></span>
+        <span class="ld-sb-hint">Enter to start · Shift+Enter for a new line</span>
+        <button type="button" class="ld-sb-send" id="ldStartGo" aria-label="Start the chat" title="Start the chat (Enter)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
+      </div>
+      <div class="ld-menu" id="ldMenu" role="menu" hidden></div>
+    </div>
+    <p class="ld-folder-err" role="alert" hidden></p>
+    </div>
   </section>`;
-  const more = $('.ld-more', box);
-  if (more) more.onclick = () => { const y = $('.landing', box).scrollTop; G.landingAllProjects = !G.landingAllProjects; renderLanding(box); $('.landing', box).scrollTop = y; };
-  $('.ld-new', box).onclick = () => { G.landingProject = $('#ldProject', box).value; newChat(G.landingProject); };
-  $('.ld-folder', box).onclick = () => openFolderAsProject($('.ld-folder', box), $('.ld-folder-err', box));
+  for (const b of box.querySelectorAll('[data-pg]')) b.onclick = () => {
+    const k = b.dataset.pg === 'chat' ? 'ldChatPage' : 'ldProjPage', y = $('.landing', box).scrollTop;
+    G[k] = Math.max(0, (G[k] || 0) + Number(b.dataset.d));
+    renderLanding(box); $('.landing', box).scrollTop = y;
+    $(`[data-pg="${b.dataset.pg}"][data-d="${b.dataset.d}"]`, box)?.focus(); // keep paging with the keyboard
+  };
+  wireStartBox(box, last, projects);
+  loadGhMeta(box);
   for (const b of box.querySelectorAll('.ld-chat')) b.onclick = () => { showChat(b.dataset.c); if (isPhone()) setMView('chat'); };
   for (const b of box.querySelectorAll('[data-new]')) b.onclick = () => newChat(b.dataset.new);
   for (const b of box.querySelectorAll('[data-set]')) b.onclick = () => openProjectSettings(G.projects.find((p) => p.id === b.dataset.set));
-  // A template card starts a NEW project in a folder of its own (never inside the project you used last).
-  for (const b of box.querySelectorAll('[data-starter]')) b.onclick = () => startFromTemplate(b.dataset.starter, b);
+}
+// ---------- pinned and archived projects ----------
+async function setProjectFlag(p, flags) {
+  const r = await postJ(`/api/projects/${encodeURIComponent(p.id)}/flags`, flags).catch((e) => ({ error: e.message }));
+  if (r?.error) return uiAlert(r.error.charAt(0).toUpperCase() + r.error.slice(1));
+  await refreshSidebar();
+}
+function renderArchive(all = G.chats) {
+  const box = $('#archiveBox'); if (!box) return;
+  const arch = G.projects.filter((p) => p.archived).sort((a, b) => (b.archived || 0) - (a.archived || 0));
+  box.hidden = !arch.length;
+  $('#archiveCount').textContent = arch.length;
+  const open = !!G.archiveOpen && arch.length > 0;
+  $('#archiveHead').setAttribute('aria-expanded', String(open)); $('#archiveBody').hidden = !open;
+  if (!open) return;
+  const q = $('#archiveSearch').value.trim().toLowerCase();
+  $('#archiveList').innerHTML = arch.map((p) => {
+    const chats = all.filter((c) => (c.projectId || 'scratch') === p.id && c.messages > 0).sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0));
+    const hits = q ? chats.filter((c) => c.title.toLowerCase().includes(q) || String(c.preview || '').toLowerCase().includes(q)) : [];
+    if (q && !p.name.toLowerCase().includes(q) && !hits.length) return '';
+    return `<div class="sb-arch-item" style="${projStyle(p)}"><div class="sb-arch-row"><b class="sb-arch-name">${esc(p.name)}</b><small>${chats.length} chat${chats.length === 1 ? '' : 's'} · <span class="cost">$${(p.spent || 0).toFixed(3)}</span></small><button type="button" class="ghost sb-unarch" data-p="${esc(p.id)}" title="Unarchive: back in the list above" aria-label="Unarchive ${esc(p.name)}"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9M12 18v-6M9.5 14.5 12 12l2.5 2.5"/></svg></button></div>
+      ${hits.slice(0, 6).map((c) => `<button type="button" class="sb-arch-chat" data-c="${esc(c.id)}" title="${esc(c.title)}">${esc(c.title)}<small>${ago(c.lastAt || c.updated || Date.now())}</small></button>`).join('')}</div>`;
+  }).join('') || '<div class="sb-empty">Nothing archived matches</div>';
+  for (const b of box.querySelectorAll('.sb-unarch')) b.onclick = () => setProjectFlag(G.projects.find((p) => p.id === b.dataset.p), { archived: false });
+  for (const b of box.querySelectorAll('.sb-arch-chat')) b.onclick = () => { showChat(b.dataset.c, G.focus); closeDrawer(); if (isPhone()) setMView('chat'); };
+}
+(() => {
+  const head = document.getElementById('archiveHead'), find = document.getElementById('archiveSearch');
+  if (head) head.onclick = () => { G.archiveOpen = !G.archiveOpen; renderArchive(); if (G.archiveOpen) find?.focus(); };
+  if (find) find.oninput = () => renderArchive();
+})();
+// ---------- a project's GitHub repo: a link, and (from GitHub, cached) public or private, person or organization ----------
+const GH_ICO = '<svg class="gh-mark" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>';
+const GH_BADGE = {
+  private: ['<path d="M7 11V8a5 5 0 0 1 10 0v3"/><rect x="5" y="11" width="14" height="9" rx="2"/>', 'Private'],
+  internal: ['<rect x="4" y="5" width="16" height="14" rx="2"/><path d="M4 10h16"/>', 'Internal'],
+  public: ['<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.6 3 2.6 15 0 18M12 3c-2.6 3-2.6 15 0 18"/>', 'Public'],
+  Organization: ['<path d="M4 21V6l8-3 8 3v15M9 21v-4h6v4M8 9h.01M12 9h.01M16 9h.01M8 13h.01M12 13h.01M16 13h.01"/>', 'Organization'],
+  User: ['<circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/>', 'Personal'],
+};
+const ghBadge = (k, title) => { const b = GH_BADGE[k]; return b ? `<span class="gh-b gh-${k.toLowerCase()}" title="${esc(title)}"><svg viewBox="0 0 24 24" aria-hidden="true">${b[0]}</svg><span class="gh-bl">${b[1]}</span></span>` : ''; };
+function ghLineHTML(g) {
+  return `<a class="gh-link" href="${esc(g.url)}" target="_blank" rel="noopener noreferrer" title="Open ${esc(g.owner)}/${esc(g.repo)} on GitHub">${GH_ICO}<span>${esc(g.owner)}/<b>${esc(g.repo)}</b></span></a><span class="gh-meta"></span>`;
+}
+// Asked once per project per page (the server keeps the answer for an hour).
+function loadGhMeta(scope) {
+  for (const el of scope.querySelectorAll('[data-gh]')) {
+    const id = el.dataset.gh, meta = $('.gh-meta', el);
+    if (!meta || meta.dataset.done) continue;
+    meta.dataset.done = '1';
+    ((G.ghMeta ||= {})[id] ||= getJ(`/api/projects/${encodeURIComponent(id)}/github`).catch(() => null)).then((r) => {
+      const g = r?.github; if (!g || !meta.isConnected) return;
+      const vis = g.visibility === 'private' ? ghBadge('private', g.guess ? 'Not public on GitHub (sign in the GitHub command line, gh, to see your private repos for sure)' : 'Private repository')
+        : g.visibility ? ghBadge(g.visibility, g.visibility === 'public' ? 'Public repository' : 'Visible inside its organization') : '';
+      const own = g.ownerType ? ghBadge(g.ownerType, g.ownerType === 'Organization' ? `Owned by the ${g.owner} organization` : `Owned by ${g.owner}`) : '';
+      meta.innerHTML = vis + own;
+    });
+  }
+}
+// ---------- the start box: the first message, and (on its chip) where the chat runs ----------
+// Enter starts a chat in the chip's project with what you typed (an empty box just opens one). The chip's menu holds
+// the other ways in: a recent project, any folder on this PC, or a new project from a template. Picking one only
+// changes the chip, so what you typed stays.
+function wireStartBox(box, first, projects) {
+  const ta = $('#ldStartText', box), chip = $('#ldChip', box), menu = $('#ldMenu', box), err = $('.ld-folder-err', box);
+  const proj = () => G.projects.find((p) => p.id === G.landingProject) || G.projects.find((p) => p.id === first) || G.projects[0];
+  if (!G.projects.some((p) => p.id === G.landingProject)) G.landingProject = first;
+  const drawChip = () => {
+    const p = proj();
+    chip.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><b class="ld-chat-proj" style="${projStyle(p)}">${esc(p?.name || 'Scratch')}</b><svg class="ld-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>`;
+    const dir = p?.dir || p?.path || '';
+    $('#ldChipPath', box).textContent = dir; $('#ldChipPath', box).title = dir;
+  };
+  drawChip();
+  ta.value = G.landingDraft || '';
+  const fit = () => { ta.style.height = 'auto'; ta.style.height = `${Math.min(ta.scrollHeight, Math.round(innerHeight * 0.3))}px`; };
+  fit();
+  ta.oninput = () => { G.landingDraft = ta.value; fit(); };
+  const go = async () => {
+    const p = proj(); if (!p) return;
+    const text = ta.value.trim();
+    G.landingProject = p.id; G.landingDraft = '';
+    const c = await newChat(p.id);
+    if (c && text) send(c, text);
+  };
+  ta.onkeydown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); go(); }
+    if (e.key === 'ArrowDown' && e.altKey) { e.preventDefault(); openMenu(); }
+  };
+  $('#ldStartGo', box).onclick = go;
+  // The chip's menu: recent projects (with what each has spent), then a folder, then templates.
+  const pick = (id) => { G.landingProject = id; drawChip(); closeMenu(); ta.focus(); };
+  const items = () => [...menu.querySelectorAll('.ld-mi:not([hidden])')];
+  const closeMenu = () => { menu.hidden = true; chip.setAttribute('aria-expanded', 'false'); document.removeEventListener('pointerdown', outside, true); };
+  const outside = (e) => { if (!menu.contains(e.target) && e.target !== chip && !chip.contains(e.target)) closeMenu(); };
+  const drawMenu = (showTemplates) => {
+    const cur = proj()?.id;
+    menu.innerHTML = `${projects.length > 8 ? '<input class="ld-mfind" type="search" placeholder="Find a project" aria-label="Find a project">' : ''}
+      <div class="ld-mh">Recent projects</div>
+      ${projects.map((p) => `<button type="button" class="ld-mi" role="menuitemradio" aria-checked="${p.id === cur}" data-pid="${esc(p.id)}" data-name="${esc(p.name.toLowerCase())}"><span class="ld-mck">${p.id === cur ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg>' : ''}</span><b class="ld-chat-proj" style="${projStyle(p)}">${esc(p.name)}</b><span class="ld-cost">$${(p.spent || 0).toFixed(3)}</span></button>`).join('')}
+      <div class="ld-msep"></div>
+      <button type="button" class="ld-mi ld-mi-act" role="menuitem" data-act="folder"><span class="ld-mck"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v1H3z"/><path d="M3 10h18l-2 9H5z"/></svg></span>Open a folder on this PC…</button>
+      ${G.starters?.length ? `<button type="button" class="ld-mi ld-mi-act" role="menuitem" data-act="templates" aria-expanded="${!!showTemplates}"><span class="ld-mck"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></span>New project from a template<svg class="ld-chev ld-mi-end" viewBox="0 0 24 24" aria-hidden="true"><path d="${showTemplates ? 'm6 9 6 6 6-6' : 'm9 6 6 6-6 6'}"/></svg></button>
+      ${showTemplates ? G.starters.map((t) => `<button type="button" class="ld-mi ld-mi-tpl" role="menuitem" data-starter="${esc(t.name)}" title="${esc(t.description)}"><span class="ld-mck"></span><span class="ld-mtpl"><b>${esc(starterName(t.name))}</b><small>${esc(t.description)}</small></span></button>`).join('') : ''}` : ''}`;
+    const find = $('.ld-mfind', menu);
+    if (find) find.oninput = () => { const q = find.value.trim().toLowerCase(); for (const b of menu.querySelectorAll('[data-pid]')) b.hidden = !!q && !b.dataset.name.includes(q); };
+    for (const b of menu.querySelectorAll('[data-pid]')) b.onclick = () => pick(b.dataset.pid);
+    const fb = $('[data-act="folder"]', menu);
+    if (fb) fb.onclick = async () => { const id = await openFolderAsProject(fb, err, { pickOnly: true }); if (id) { G.landingProject = id; renderSidebar(); liveStart(); } };
+    const tb = $('[data-act="templates"]', menu);
+    if (tb) tb.onclick = () => { drawMenu(!showTemplates); $('[data-act="templates"]', menu)?.focus(); };
+    for (const b of menu.querySelectorAll('[data-starter]')) b.onclick = async () => {
+      closeMenu();
+      const r = await startFromTemplate(b.dataset.starter, chip, { pickOnly: true });
+      if (!r) return;
+      G.landingProject = r.id;
+      if (!(G.landingDraft || '').trim()) G.landingDraft = r.text;
+      liveStart();
+    };
+  };
+  // After a folder or template pick the list refresh may have redrawn the home screen: bring the start box that is on
+  // screen now up to date (its chip shows the picked project, its menu is shut) and put the cursor back in it.
+  const liveStart = () => {
+    if (box.isConnected && $('#ldChip', box) === chip) { drawChip(); closeMenu(); ta.value = G.landingDraft || ''; fit(); }
+    else { const land = $('.landing'); if (land) renderLanding(land.parentElement); }
+    const t = $('#ldStartText'); if (t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); }
+  };
+  const openMenu = () => {
+    drawMenu(false);
+    menu.hidden = false; chip.setAttribute('aria-expanded', 'true');
+    document.addEventListener('pointerdown', outside, true);
+    ($('.ld-mfind', menu) || menu.querySelector('[aria-checked="true"]') || items()[0])?.focus();
+  };
+  chip.onclick = () => (menu.hidden ? openMenu() : closeMenu());
+  menu.onkeydown = (e) => {
+    const list = items(), at = list.indexOf(document.activeElement);
+    if (e.key === 'Escape') { e.preventDefault(); closeMenu(); chip.focus(); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); list[(at + 1) % list.length]?.focus(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); list[(at - 1 + list.length) % list.length]?.focus(); }
+    else if (e.key === 'Enter' && document.activeElement?.classList.contains('ld-mfind')) { e.preventDefault(); list[0]?.click(); }
+  };
+  if (!isPhone()) requestAnimationFrame(() => { if (box.isConnected && !document.querySelector('dialog[open]')) ta.focus(); });
 }
 // A template → a new project: pick where it goes, name its folder, and the harness makes <where>/<name>, copies the
 // template in and opens a chat there with the message started (you say what to build).
-async function startFromTemplate(tpl, btn) {
+async function startFromTemplate(tpl, btn, { pickOnly = false } = {}) {
   const label = btn.innerHTML;
   btn.disabled = true;
   const pick = await postJ('/api/pick-folder', { start: '' }).catch((e) => ({ error: e.message }));
@@ -1335,6 +1594,8 @@ async function startFromTemplate(tpl, btn) {
     if (r.error) return uiAlert(`Could not create the project\n${r.error}`);
     await refreshSidebar();
     G.landingProject = r.id;
+    const note = `This project starts from the ${starterName(tpl)} template (already copied into its folder: ${(r.written || []).slice(0, 6).join(', ')}${(r.written || []).length > 6 ? ', …' : ''}). Build: `;
+    if (pickOnly) return { id: r.id, text: note };
     const c = await newChat(r.id), inp = c?.el && $('.input', c.el.root);
     if (!inp) return;
     inp.value = `This project starts from the ${starterName(tpl)} template (already copied into its folder: ${(r.written || []).slice(0, 6).join(', ')}${(r.written || []).length > 6 ? ', …' : ''}). Build: `;
@@ -1348,7 +1609,7 @@ const starterName = (n) => ({ 'canvas-game': 'Canvas game', 'node-http': 'Node s
   || n.replace(/[-_]+/g, ' ').replace(/^./, (x) => x.toUpperCase());
 // 📂 Open folder…: the PC's own folder dialog. A folder that is already a project opens a chat there;
 // any other folder becomes a new project named after it. If the dialog can't open here, the New project window does.
-async function openFolderAsProject(btn, errEl) {
+async function openFolderAsProject(btn, errEl, { pickOnly = false } = {}) {
   const label = btn.textContent;
   btn.disabled = true; btn.textContent = 'Pick it in the window on your PC…'; if (errEl) errEl.hidden = true;
   const r = await postJ('/api/pick-folder', { start: '' }).catch((e) => ({ error: e.message }));
@@ -1361,25 +1622,194 @@ async function openFolderAsProject(btn, errEl) {
   if (!r.path) return; // closed without picking
   const norm = (d) => String(d || '').replace(/[\\/]+$/, '').replace(/\//g, '\\').toLowerCase();
   const known = G.projects.find((x) => norm(x.dir) === norm(r.path) || norm(x.path) === norm(r.path));
-  if (known) { G.landingProject = known.id; return newChat(known.id); }
+  if (known) { G.landingProject = known.id; return pickOnly ? known.id : newChat(known.id); }
   const made = await postJ('/api/projects', { id: `p${Date.now().toString(36)}`, name: baseName(r.path), path: r.path });
   if (made.error) { if (errEl) { errEl.textContent = made.error; errEl.hidden = false; } return; }
+  G.landingProject = made.id; // before the refresh: it redraws the start box, whose chip should show this project
   await refreshSidebar();
-  G.landingProject = made.id;
+  if (pickOnly) return made.id;
   await newChat(made.id);
 }
 // ---------- the pane's tabs: icons only when their names don't fit (the servers and full-width buttons stay on) ----------
 (() => {
   const bar = document.getElementById('paneTabs'); if (!bar || !window.ResizeObserver) return;
-  let w = -1;
-  const fit = () => {
-    if (bar.clientWidth === w) return; w = bar.clientWidth;
+  let w = -1, tm = 0;
+  // Icons only as soon as any tab's name stops fitting (tabs shrink before the bar overflows), with a little room to spare.
+  // Checked once the size has settled (the pane can be mid-resize when the size first changes).
+  const fit = () => { clearTimeout(tm); tm = setTimeout(check, 60); };
+  const check = () => {
+    w = bar.clientWidth;
     bar.classList.remove('icons-only');
-    if (bar.scrollWidth > bar.clientWidth + 1) bar.classList.add('icons-only');
+    // What the tabs and buttons need side by side (the spacer between them takes whatever is left, so it doesn't count).
+    const kids = [...bar.children].filter((k) => !k.classList.contains('pt-spacer') && k.getClientRects().length);
+    const gap = parseFloat(getComputedStyle(bar).columnGap) || 0, pad = parseFloat(getComputedStyle(bar).paddingLeft) + parseFloat(getComputedStyle(bar).paddingRight);
+    const need = kids.reduce((n, k) => n + k.scrollWidth, 0) + gap * Math.max(0, kids.length - 1) + pad;
+    const squeezed = [...bar.querySelectorAll('[data-tab]')].some((t) => t.scrollWidth > t.clientWidth + 1) || need > bar.clientWidth - 8;
+    if (squeezed) bar.classList.add('icons-only');
+    // The pane may still have been resizing: look again shortly, and once more if the width moved since.
+    setTimeout(() => { if (bar.clientWidth !== w) fit(); }, 250);
   };
-  new ResizeObserver(fit).observe(bar);
-  new MutationObserver(() => { w = -1; fit(); }).observe(bar, { subtree: true, childList: true, characterData: true }); // counts and dots change the width
+  const ro = new ResizeObserver(fit); ro.observe(bar);
+  const pane = document.getElementById('pane'); if (pane) { ro.observe(pane); pane.addEventListener('transitionend', fit); }
+  addEventListener('resize', fit);
+  new MutationObserver(() => fit()).observe(bar, { subtree: true, childList: true, characterData: true }); // counts and dots change the width
 })();
+// ---------- the row under the tabs (Stop all, Close, Replay…): its text buttons shrink to their symbol when it's tight ----------
+// A button whose label starts with a symbol (■ Stop all, ✕ Close, ⏵ Replay) keeps just the symbol, and its full label
+// moves to its tip. Undone as soon as there is room again.
+(() => {
+  const bar = document.getElementById('appBar'); if (!bar || !window.ResizeObserver) return;
+  let busy = false;
+  const SYM = /^([^\p{L}\p{N}\s]+)\s+(\S.*)$/u;
+  const fit = () => {
+    if (busy || bar.hidden) return;
+    busy = true;
+    try {
+      // Back to full labels (and their own tips) first, then measure.
+      for (const b of bar.querySelectorAll('button[data-full]')) {
+        if (b.dataset.html) b.innerHTML = b.dataset.html; else b.textContent = b.dataset.full;
+        b.classList.remove('sym-only'); b.removeAttribute('title');
+        if (b.dataset.tipOrig) b.dataset.ohTitle = b.dataset.tipOrig; else delete b.dataset.ohTitle;
+        delete b.dataset.full; delete b.dataset.html;
+      }
+      // The bar may be laid out as part of its parent row (display: contents): measure the row it sits in.
+      const row = getComputedStyle(bar).display === 'contents' ? bar.parentElement : bar;
+      const one = 34, tight = row.scrollWidth > row.clientWidth + 1 || row.getBoundingClientRect().height > one + 10;
+      if (!tight) return;
+      for (const b of bar.querySelectorAll('button')) {
+        const t = b.textContent.trim(); if (!t) continue;
+        const kids = [...b.children], m = t.match(SYM);
+        const iconOnlyKids = kids.length > 0 && kids.every((k) => k.matches('svg, img, .ico'));
+        if (b.dataset.tipOrig == null) b.dataset.tipOrig = b.dataset.ohTitle || b.getAttribute('title') || '';
+        let label;
+        if (iconOnlyKids) { label = t; b.dataset.html = b.innerHTML; b.dataset.full = t; for (const n of [...b.childNodes]) if (n.nodeType === 3) n.remove(); }
+        else if (m && !b.children.length) { label = m[2]; b.dataset.full = t; b.textContent = m[1]; }
+        else if ((b.classList.contains('back') || /^close$/i.test(t)) && !b.children.length) { label = t; b.dataset.full = t; b.textContent = '✕'; }
+        else continue;
+        b.classList.add('sym-only');
+        if (!b.getAttribute('aria-label')) b.setAttribute('aria-label', label);
+        const orig = b.dataset.tipOrig;
+        b.dataset.ohTitle = orig && orig !== label ? `${label}: ${orig}` : label;
+      }
+    } finally { busy = false; }
+  };
+  const ro = new ResizeObserver(() => fit()); ro.observe(bar); if (bar.parentElement) ro.observe(bar.parentElement);
+  addEventListener('resize', () => setTimeout(fit, 0));
+  new MutationObserver(() => { if (!busy) setTimeout(fit, 0); }).observe(bar, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden'] });
+})();
+// A reply that ended without its totals (the harness restarted, or the connection dropped for good) still paid for
+// the calls it made: their costs are in its steps, so the chat and the Costs window count them.
+// ---------- what a running reply has spent so far: sent after every model call, shown as it climbs ----------
+const liveOf = (c) => (c?.agent?.messages || []).reduce((s, m) => s + (m.role === 'assistant' && !m.stats && m.live ? m.liveCost || 0 : 0), 0);
+function liveFootHTML(m) {
+  return `<span class="f-cost live" title="Spent so far by this reply, updated after every model call">${money(m.liveCost, 5)}</span><span class="f-dur live" title="Model calls so far">${m.liveCalls || 0} call${m.liveCalls === 1 ? '' : 's'}</span>`;
+}
+let liveSideAt = 0, liveSideTimer = null;
+function liveSpend(c, m) {
+  // The reply's footer: just its numbers once it shows them (the rest of the reply is left alone).
+  const f = m.el && $('.foot', m.el);
+  if (f && $('.f-cost.live', f)) { $('.f-cost.live', f).textContent = money(m.liveCost, 5); const d = $('.f-dur.live', f); if (d) d.textContent = `${m.liveCalls || 0} call${m.liveCalls === 1 ? '' : 's'}`; }
+  else if (m.el) updateMsg(c, m);
+  renderChatHead(c);
+  // The sidebar at most every 1.5 s (it is redrawn whole).
+  const due = 1500 - (Date.now() - liveSideAt);
+  if (due <= 0) { liveSideAt = Date.now(); renderSidebar(); }
+  else if (!liveSideTimer) liveSideTimer = setTimeout(() => { liveSideTimer = null; liveSideAt = Date.now(); renderSidebar(); }, due);
+}
+function partialSpend(m) { if (partialSpendQuiet(m)) { G.sessionCost += m.stats.cost; renderSpend(); } }
+function partialSpendQuiet(m) {
+  if (m.stats || !m.trace?.length) return false;
+  const byModel = {};
+  let cost = 0, calls = 0, tokensOut = 0;
+  for (const e of m.trace) {
+    if ((e.t !== 'llm_done' && e.t !== 'helper_done') || !(Number(e.cost) >= 0)) continue;
+    const c = Number(e.cost) || 0, model = e.actual || e.model || '?';
+    cost += c; calls++; tokensOut += Number(e.tokensOut) || 0;
+    const b = (byModel[model] ||= { cost: 0, calls: 0, role: e.t === 'helper_done' ? 'helper' : 'writer' }); b.cost += c; b.calls++;
+  }
+  if (!calls) return false;
+  m.stats = { cost, llmCalls: calls, tokensOut, byModel, partial: true, fromSteps: true };
+  return true;
+}
+// ---------- the end of the Steps pane: what this reply cost (so far, while it runs), by model, and the chat's total ----------
+function traceCostHTML(c, m) {
+  const s = m.stats || (m.live && m.liveCost != null ? { cost: m.liveCost, byModel: m.liveByModel || {}, tokensIn: m.liveTokens?.[0], tokensOut: m.liveTokens?.[1], live: true } : null);
+  if (!s) return '';
+  const k = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n || 0));
+  const models = Object.entries(s.byModel || {}).sort((a, b) => (b[1].cost || 0) - (a[1].cost || 0));
+  const calls = models.reduce((n, [, v]) => n + (v.calls || 0), 0) || s.llmCalls || 0;
+  const t = chatTotals(c); // every reply in the chat (this one included, live or done) and calls outside replies
+  const rows = models.map(([id, v]) => `<tr><td><span class="tc-model" title="${esc(id)}">${esc(short(id))}</span>${v.role && v.role !== 'writer' ? ` <i>${esc(v.role)}</i>` : ''}</td><td>${v.calls || 0}×</td><td>${v.tokensIn || v.tokensOut ? `<span class="tok-in">${k(v.tokensIn)} in</span> · <span class="tok-out">${k(v.tokensOut)} out</span>` : ''}</td><td class="tc-c">${money(v.cost || 0, 5)}</td></tr>`).join('');
+  return `<div class="trace-cost">
+    <div class="tc-head"><span>💲 ${s.live ? 'Spent so far' : s.partial ? 'This reply spent (it ended early)' : 'This reply cost'}</span><b>${money(s.cost || 0, 5)}</b></div>
+    <div class="tc-sub">${calls} model call${calls === 1 ? '' : 's'}${s.tokensIn ? ` · <span class="tok-in">${k(s.tokensIn)} tokens in</span>` : ''}${s.tokensOut ? ` · <span class="tok-out">${k(s.tokensOut)} tokens out</span>` : ''}${s.ms ? ` · ${secs(s.ms)}` : ''}${s.mediaSpent ? ` · media ${money(s.mediaSpent, 4)}` : ''}</div>
+    ${rows ? `<table class="tc-table"><tbody>${rows}</tbody></table>` : ''}
+    <div class="tc-chat"><span>Whole chat so far · ${t.replies} repl${t.replies === 1 ? 'y' : 'ies'}${t.msgs ? ` · ${t.msgs} message${t.msgs === 1 ? '' : 's'}` : ''}</span><b>${money(t.cost, 4)}</b></div>
+  </div>`;
+}
+// ---------- zoom: Ctrl + / − / 0 (and Ctrl+wheel) ----------
+// In the terminal they change its text size only, as in an editor's terminal. Elsewhere, in the desktop app they zoom
+// QuorX (remembered); in a browser the browser's own zoom does that. Browser tabs in the pane zoom on their own.
+const TERM_FONT = [9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 22, 24];
+function termFont(dir) {
+  let cur = 13; try { cur = Number(localStorage.getItem('oh-term-font')) || 13; } catch { /* default */ }
+  const i = TERM_FONT.indexOf(cur);
+  const next = dir === 'reset' ? 13 : TERM_FONT[Math.max(0, Math.min(TERM_FONT.length - 1, (i < 0 ? 4 : i) + (dir === 'in' ? 1 : -1)))];
+  try { localStorage.setItem('oh-term-font', String(next)); } catch { /* this session only */ }
+  for (const x of G.xt?.values() || []) { x.term.options.fontSize = next; try { x.fit.fit(); } catch { /* hidden */ } }
+  return next;
+}
+const zoomDir = (e) => (!(e.ctrlKey || e.metaKey) || e.altKey ? null : ['=', '+'].includes(e.key) || e.code === 'NumpadAdd' ? 'in' : ['-', '_'].includes(e.key) || e.code === 'NumpadSubtract' ? 'out' : e.key === '0' || e.code === 'Numpad0' ? 'reset' : null);
+const inTerminal = (el) => !!el?.closest?.('.xt-host');
+// Pages shown in the pane (artifacts, page previews) zoom on their own, in Chrome's steps, remembered. They're scaled
+// as a whole, laid out wider or narrower to match, like a browser's zoom; the page inside never notices.
+const PAGE_ZOOMS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
+let pageZoom = (() => { try { const z = Number(localStorage.getItem('oh-page-zoom')); return z >= 0.5 && z <= 2 ? z : 1; } catch { return 1; } })();
+function fitFrame(f) {
+  const z = pageZoom;
+  if (z === 1) { for (const p of ['width', 'height', 'transform', 'transform-origin', 'max-width']) f.style.removeProperty(p); f.parentElement?.classList.remove('zoomed-frame'); return; }
+  f.style.setProperty('width', `${100 / z}%`, 'important'); f.style.setProperty('max-width', 'none', 'important');
+  f.style.setProperty('height', `${100 / z}%`, 'important');
+  f.style.transform = `scale(${z})`; f.style.transformOrigin = '0 0';
+  f.parentElement?.classList.add('zoomed-frame');
+}
+const paneFrames = () => [...document.querySelectorAll('#paneBody iframe, .lb-doc iframe')];
+function zoomPages(dir) {
+  const i = PAGE_ZOOMS.findIndex((z) => Math.abs(z - pageZoom) < 0.01);
+  pageZoom = dir === 'reset' ? 1 : PAGE_ZOOMS[Math.max(0, Math.min(PAGE_ZOOMS.length - 1, (i < 0 ? 5 : i) + (dir === 'in' ? 1 : -1)))];
+  try { localStorage.setItem('oh-page-zoom', String(pageZoom)); } catch { /* this session only */ }
+  for (const f of paneFrames()) fitFrame(f);
+  return pageZoom;
+}
+// New frames (a different artifact, a re-drawn pane) come up at the remembered zoom.
+new MutationObserver((list) => { if (pageZoom === 1) return; for (const r of list) for (const n of r.addedNodes) { if (n.nodeName === 'IFRAME') fitFrame(n); else if (n.querySelectorAll) for (const f of n.querySelectorAll('iframe')) if (f.closest('#paneBody, .lb-doc')) fitFrame(f); } })
+  .observe(document.body, { childList: true, subtree: true });
+// What a zoom is for: the frame or terminal that has focus (keys), or that the mouse is over (wheel).
+let lastPointer = null;
+document.addEventListener('pointermove', (e) => { lastPointer = [e.clientX, e.clientY]; }, { capture: true, passive: true });
+const isPaneFrame = (el) => el?.nodeName === 'IFRAME' && !!el.closest('#paneBody, .lb-doc');
+function zoomTarget(kind) {
+  const el = kind === 'wheel' ? (lastPointer ? document.elementFromPoint(...lastPointer) : null) : document.activeElement;
+  return isPaneFrame(el) ? 'page' : inTerminal(el) ? 'terminal' : 'app';
+}
+function zoomFor(target, dir) {
+  if (target === 'terminal') return flashTip($('#paneBody .term-x') || document.body, `Terminal text ${termFont(dir)}px`);
+  if (target === 'page') { const z = zoomPages(dir); const f = paneFrames()[0]; return flashTip(f?.parentElement || document.body, `Page ${Math.round(z * 100)}%`); }
+  window.ohDesktop?.zoom?.(dir).then((f) => flashTip(document.body, `QuorX ${Math.round(f * 100)}%`)).catch(() => {});
+}
+// In the desktop app the keys and Ctrl+wheel arrive from the app (they reach it even inside a frame).
+window.ohDesktop?.on?.((ev) => { if (ev.type === 'zoom-key') zoomFor(zoomTarget('key'), ev.dir); if (ev.type === 'zoom-wheel') zoomFor(zoomTarget('wheel'), ev.dir); });
+// In a browser the page sees its own keys and wheel: the terminal and pane pages take theirs; the rest is the browser's zoom.
+document.addEventListener('keydown', (e) => {
+  const dir = zoomDir(e); if (!dir || window.ohDesktop?.zoom) return;
+  const t = zoomTarget('key'); if (t === 'app') return;
+  e.preventDefault(); e.stopPropagation(); zoomFor(t, dir);
+}, true);
+document.addEventListener('wheel', (e) => {
+  if (!(e.ctrlKey || e.metaKey)) return;
+  // The terminal's text, in the desktop app too (the page takes the wheel first, so the app never sees it).
+  if (inTerminal(e.target)) { e.preventDefault(); termFont(e.deltaY < 0 ? 'in' : 'out'); }
+}, { capture: true, passive: false });
 // ---------- pages the agent made: from the pages address when there is one ----------
 // There they have an origin of their own (not this app's), so localStorage and the like work and the frame can be
 // allowed its origin. Only on this computer: the pages address answers no other device.
@@ -1461,119 +1891,6 @@ function ask(message, { ok, cancel = 'Cancel', danger, input = null, alertOnly =
   return new Promise((resolve) => {
     const [head, ...rest] = String(message || '').split('\n');
     const verb = ASK_VERBS[(head.match(/^\s*(\w+)/)?.[1] || '').toLowerCase()];
-// A reply that ended without its totals (the harness restarted, or the connection dropped for good) still paid for
-// the calls it made: their costs are in its steps, so the chat and the Costs window count them.
-// ---------- what a running reply has spent so far: sent after every model call, shown as it climbs ----------
-const liveOf = (c) => (c?.agent?.messages || []).reduce((s, m) => s + (m.role === 'assistant' && !m.stats && m.live ? m.liveCost || 0 : 0), 0);
-function liveFootHTML(m) {
-  return `<span class="f-cost live" title="Spent so far by this reply, updated after every model call">${money(m.liveCost, 5)}</span><span class="f-dur live" title="Model calls so far">${m.liveCalls || 0} call${m.liveCalls === 1 ? '' : 's'}</span>`;
-}
-let liveSideAt = 0, liveSideTimer = null;
-function liveSpend(c, m) {
-  // The reply's footer: just its numbers once it shows them (the rest of the reply is left alone).
-  const f = m.el && $('.foot', m.el);
-  if (f && $('.f-cost.live', f)) { $('.f-cost.live', f).textContent = money(m.liveCost, 5); const d = $('.f-dur.live', f); if (d) d.textContent = `${m.liveCalls || 0} call${m.liveCalls === 1 ? '' : 's'}`; }
-  else if (m.el) updateMsg(c, m);
-  renderChatHead(c);
-  // The sidebar at most every 1.5 s (it is redrawn whole).
-  const due = 1500 - (Date.now() - liveSideAt);
-  if (due <= 0) { liveSideAt = Date.now(); renderSidebar(); }
-  else if (!liveSideTimer) liveSideTimer = setTimeout(() => { liveSideTimer = null; liveSideAt = Date.now(); renderSidebar(); }, due);
-}
-function partialSpend(m) { if (partialSpendQuiet(m)) { G.sessionCost += m.stats.cost; renderSpend(); } }
-function partialSpendQuiet(m) {
-  if (m.stats || !m.trace?.length) return false;
-  const byModel = {};
-  let cost = 0, calls = 0, tokensOut = 0;
-  for (const e of m.trace) {
-    if ((e.t !== 'llm_done' && e.t !== 'helper_done') || !(Number(e.cost) >= 0)) continue;
-    const c = Number(e.cost) || 0, model = e.actual || e.model || '?';
-    cost += c; calls++; tokensOut += Number(e.tokensOut) || 0;
-    const b = (byModel[model] ||= { cost: 0, calls: 0, role: e.t === 'helper_done' ? 'helper' : 'writer' }); b.cost += c; b.calls++;
-  }
-  if (!calls) return false;
-  m.stats = { cost, llmCalls: calls, tokensOut, byModel, partial: true, fromSteps: true };
-  return true;
-}
-// ---------- the end of the Steps pane: what this reply cost (so far, while it runs), by model, and the chat's total ----------
-function traceCostHTML(c, m) {
-  const s = m.stats || (m.live && m.liveCost != null ? { cost: m.liveCost, byModel: m.liveByModel || {}, tokensIn: m.liveTokens?.[0], tokensOut: m.liveTokens?.[1], live: true } : null);
-  if (!s) return '';
-  const k = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n || 0));
-  const models = Object.entries(s.byModel || {}).sort((a, b) => (b[1].cost || 0) - (a[1].cost || 0));
-  const calls = models.reduce((n, [, v]) => n + (v.calls || 0), 0) || s.llmCalls || 0;
-  const t = chatTotals(c); // every reply in the chat (this one included, live or done) and calls outside replies
-  const rows = models.map(([id, v]) => `<tr><td><span class="tc-model" title="${esc(id)}">${esc(short(id))}</span>${v.role && v.role !== 'writer' ? ` <i>${esc(v.role)}</i>` : ''}</td><td>${v.calls || 0}×</td><td>${v.tokensIn || v.tokensOut ? `${k(v.tokensIn)} in · ${k(v.tokensOut)} out` : ''}</td><td class="tc-c">${money(v.cost || 0, 5)}</td></tr>`).join('');
-  return `<div class="trace-cost">
-    <div class="tc-head"><span>💲 ${s.live ? 'Spent so far' : s.partial ? 'This reply spent (it ended early)' : 'This reply cost'}</span><b>${money(s.cost || 0, 5)}</b></div>
-    <div class="tc-sub">${calls} model call${calls === 1 ? '' : 's'}${s.tokensIn ? ` · ${k(s.tokensIn)} tokens in` : ''}${s.tokensOut ? ` · ${k(s.tokensOut)} tokens out` : ''}${s.ms ? ` · ${secs(s.ms)}` : ''}${s.mediaSpent ? ` · media ${money(s.mediaSpent, 4)}` : ''}</div>
-    ${rows ? `<table class="tc-table"><tbody>${rows}</tbody></table>` : ''}
-    <div class="tc-chat"><span>Whole chat so far · ${t.replies} repl${t.replies === 1 ? 'y' : 'ies'}${t.msgs ? ` · ${t.msgs} message${t.msgs === 1 ? '' : 's'}` : ''}</span><b>${money(t.cost, 4)}</b></div>
-  </div>`;
-}
-// ---------- zoom: Ctrl + / − / 0 (and Ctrl+wheel) ----------
-// In the terminal they change its text size only, as in an editor's terminal. Elsewhere, in the desktop app they zoom
-// QuorX (remembered); in a browser the browser's own zoom does that. Browser tabs in the pane zoom on their own.
-const TERM_FONT = [9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 22, 24];
-function termFont(dir) {
-  let cur = 13; try { cur = Number(localStorage.getItem('oh-term-font')) || 13; } catch { /* default */ }
-  const i = TERM_FONT.indexOf(cur);
-  const next = dir === 'reset' ? 13 : TERM_FONT[Math.max(0, Math.min(TERM_FONT.length - 1, (i < 0 ? 4 : i) + (dir === 'in' ? 1 : -1)))];
-  try { localStorage.setItem('oh-term-font', String(next)); } catch { /* this session only */ }
-  for (const x of G.xt?.values() || []) { x.term.options.fontSize = next; try { x.fit.fit(); } catch { /* hidden */ } }
-  return next;
-}
-const zoomDir = (e) => (!(e.ctrlKey || e.metaKey) || e.altKey ? null : ['=', '+'].includes(e.key) || e.code === 'NumpadAdd' ? 'in' : ['-', '_'].includes(e.key) || e.code === 'NumpadSubtract' ? 'out' : e.key === '0' || e.code === 'Numpad0' ? 'reset' : null);
-const inTerminal = (el) => !!el?.closest?.('.xt-host');
-// Pages shown in the pane (artifacts, page previews) zoom on their own, in Chrome's steps, remembered. They're scaled
-// as a whole, laid out wider or narrower to match, like a browser's zoom; the page inside never notices.
-const PAGE_ZOOMS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
-let pageZoom = (() => { try { const z = Number(localStorage.getItem('oh-page-zoom')); return z >= 0.5 && z <= 2 ? z : 1; } catch { return 1; } })();
-function fitFrame(f) {
-  const z = pageZoom;
-  if (z === 1) { for (const p of ['width', 'height', 'transform', 'transform-origin', 'max-width']) f.style.removeProperty(p); f.parentElement?.classList.remove('zoomed-frame'); return; }
-  f.style.setProperty('width', `${100 / z}%`, 'important'); f.style.setProperty('max-width', 'none', 'important');
-  f.style.setProperty('height', `${100 / z}%`, 'important');
-  f.style.transform = `scale(${z})`; f.style.transformOrigin = '0 0';
-  f.parentElement?.classList.add('zoomed-frame');
-}
-const paneFrames = () => [...document.querySelectorAll('#paneBody iframe, .lb-doc iframe')];
-function zoomPages(dir) {
-  const i = PAGE_ZOOMS.findIndex((z) => Math.abs(z - pageZoom) < 0.01);
-  pageZoom = dir === 'reset' ? 1 : PAGE_ZOOMS[Math.max(0, Math.min(PAGE_ZOOMS.length - 1, (i < 0 ? 5 : i) + (dir === 'in' ? 1 : -1)))];
-  try { localStorage.setItem('oh-page-zoom', String(pageZoom)); } catch { /* this session only */ }
-  for (const f of paneFrames()) fitFrame(f);
-  return pageZoom;
-}
-// New frames (a different artifact, a re-drawn pane) come up at the remembered zoom.
-new MutationObserver((list) => { if (pageZoom === 1) return; for (const r of list) for (const n of r.addedNodes) { if (n.nodeName === 'IFRAME') fitFrame(n); else if (n.querySelectorAll) for (const f of n.querySelectorAll('iframe')) if (f.closest('#paneBody, .lb-doc')) fitFrame(f); } })
-  .observe(document.body, { childList: true, subtree: true });
-// What a zoom is for: the frame or terminal that has focus (keys), or that the mouse is over (wheel).
-let lastPointer = null;
-document.addEventListener('pointermove', (e) => { lastPointer = [e.clientX, e.clientY]; }, { capture: true, passive: true });
-const isPaneFrame = (el) => el?.nodeName === 'IFRAME' && !!el.closest('#paneBody, .lb-doc');
-function zoomTarget(kind) {
-  const el = kind === 'wheel' ? (lastPointer ? document.elementFromPoint(...lastPointer) : null) : document.activeElement;
-  return isPaneFrame(el) ? 'page' : inTerminal(el) ? 'terminal' : 'app';
-}
-function zoomFor(target, dir) {
-  if (target === 'terminal') return flashTip($('#paneBody .term-x') || document.body, `Terminal text ${termFont(dir)}px`);
-  if (target === 'page') { const z = zoomPages(dir); const f = paneFrames()[0]; return flashTip(f?.parentElement || document.body, `Page ${Math.round(z * 100)}%`); }
-  window.ohDesktop?.zoom?.(dir).then((f) => flashTip(document.body, `QuorX ${Math.round(f * 100)}%`)).catch(() => {});
-}
-// In the desktop app the keys and Ctrl+wheel arrive from the app (they reach it even inside a frame).
-window.ohDesktop?.on?.((ev) => { if (ev.type === 'zoom-key') zoomFor(zoomTarget('key'), ev.dir); if (ev.type === 'zoom-wheel') zoomFor(zoomTarget('wheel'), ev.dir); });
-// In a browser the page sees its own keys and wheel: the terminal and pane pages take theirs; the rest is the browser's zoom.
-document.addEventListener('keydown', (e) => {
-  const dir = zoomDir(e); if (!dir || window.ohDesktop?.zoom) return;
-  const t = zoomTarget('key'); if (t === 'app') return;
-  e.preventDefault(); e.stopPropagation(); zoomFor(t, dir);
-}, true);
-document.addEventListener('wheel', (e) => {
-  if (!(e.ctrlKey || e.metaKey)) return;
-  // The terminal's text, in the desktop app too (the page takes the wheel first, so the app never sees it).
-  if (inTerminal(e.target)) { e.preventDefault(); termFont(e.deltaY < 0 ? 'in' : 'out'); }
-}, { capture: true, passive: false });
     ok ??= alertOnly ? 'OK' : verb || 'OK';
     danger ??= !alertOnly && /^(Delete|Remove|Clear|Discard|Permanently)/i.test(head.trim());
     const d = document.createElement('dialog');
@@ -1608,7 +1925,12 @@ function fitInput(ta) {
   ta.style.height = `${Math.min(ta.scrollHeight + 2, Math.round(innerHeight * 0.4))}px`;
 }
 // A project's colours: --ph is the automatic hue from its name; --pcx is the colour you picked in its settings.
-const PROJ_COLORS = ['#2fb36f', '#1fc8db', '#60a5fa', '#a78bfa', '#f472b6', '#f59e0b', '#ef4444', '#e5e7eb'];
+// The automatic name colour as #rrggbb (what the picker starts from).
+function autoHex(name) {
+  const h = hue(name || '') / 360, s = 0.55, l = 0.55, k = (n) => (n + h * 12) % 12, a = s * Math.min(l, 1 - l);
+  const f = (n) => Math.round(255 * (l - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1)))).toString(16).padStart(2, '0');
+  return `#${f(0)}${f(8)}${f(4)}`;
+}
 const projStyle = (p) => `--ph:${hue(p?.name || '')}${p?.color ? `;--pcx:${p.color}` : ''}`;
 // ---------- tooltips: one themed tip for every title= and data-tip= on the page ----------
 // The browser's own grey tooltip is held back while the pointer is over an element (its title moves aside and comes
@@ -1636,7 +1958,7 @@ function showTip(t, override) {
       const el = document.createElement('div');
       const tab = l.indexOf('\t');
       if (i === 0) { el.className = 'tip-h'; el.textContent = l; }
-      else if (tab > 0) { el.className = 'tip-row'; const a = document.createElement('span'), b = document.createElement('b'); a.textContent = l.slice(0, tab); b.textContent = l.slice(tab + 1); el.append(a, b); }
+      else if (tab > 0) { el.className = 'tip-row'; const a = document.createElement('span'), b = document.createElement('b'); a.textContent = l.slice(0, tab); b.textContent = l.slice(tab + 1); if (/^\$\d/.test(b.textContent)) b.classList.add('money'); if (/^total$/i.test(a.textContent.trim())) el.classList.add('tip-total'); el.append(a, b); }
       else { el.className = 'tip-note'; el.textContent = l; }
       return el;
     }));
@@ -1763,6 +2085,7 @@ function renderPanes() {
           </div>
           <div class="ch-acts ch-actions dir-a-actions">
             <button type="button" class="ch-btn ch-pane hdr-icon-btn phone-only" title="Switch to what this chat built" aria-label="Artifact pane"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M13 3v18"/></svg></button>
+            <button type="button" class="ch-btn ch-panel hdr-icon-btn" aria-pressed="true" title="Side panel: artifacts, browser, steps, terminal, files (lit while it's open)" aria-label="Show or hide the side panel"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M15 4v16"/></svg></button>
             <button type="button" class="ch-btn ch-rename hdr-icon-btn" title="Rename this chat" aria-label="Rename chat"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4z"/></svg></button>
             <span class="dir-a-actions-sep"></span>
             <button type="button" class="ch-btn ch-delete hdr-icon-btn danger" title="Delete this chat (it moves to data/trash; the project's files stay)" aria-label="Delete chat"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12h10l1-12M9 7V4h6v3"/></svg></button>
@@ -1821,6 +2144,8 @@ function wirePane(c, root, i) {
   $('.ch-proj-tag', root).onclick = () => openFolder(c.projectId);
   // Rename and delete on the header; the project tag opens the folder (servers and the terminal live in the pane's tab bar).
   $('.ch-rename', root).onclick = () => { const n = $('.ch-name', root); n.focus(); n.select(); };
+  $('.ch-panel', root).onclick = () => { if (G.paneMax) $('#paneMaxBtn')?.click(); setPaneHidden(!G.paneHidden); };
+  { const pb = $('.ch-panel', root); pb.classList.toggle('on', !G.paneHidden); pb.setAttribute('aria-pressed', String(!G.paneHidden)); }
   $('.ch-delete', root).onclick = () => deleteChat(c.id);
   // On a phone ◧ switches between the chat and what it built; on a desktop the pane is always there.
   $('.ch-pane', root).onclick = () => setMView(G.mview === 'preview' ? 'chat' : 'preview');
@@ -1840,10 +2165,10 @@ function wirePane(c, root, i) {
   $('.stopBtn', root).onclick = () => c.running?.abort();
 }
 function chatTotals(c) {
+  for (const m of c.agent.messages) if (m.role === 'assistant' && !m.stats && !m.live && m.trace?.length) partialSpendQuiet(m); // older replies that ended part-way
   const done = c.agent.messages.filter((m) => m.role === 'assistant' && m.stats);
   return { cost: done.reduce((s, m) => s + m.stats.cost, 0) + (c.agent.extraUsage || []).reduce((s, x) => s + (x.cost || 0), 0) + liveOf(c), replies: done.length, msgs: c.agent.messages.filter((m) => m.role === 'user').length };
 }
-            <button type="button" class="ch-btn ch-showpane hdr-icon-btn" title="Show the side panel (artifacts, browser, steps, terminal, files)" aria-label="Show the side panel"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M15 4v16M11 9.5 8.5 12l2.5 2.5"/></svg></button>
 function renderChatHead(c) {
   if (!c.el) return;
   const p = G.projects.find((x) => x.id === c.projectId);
@@ -1906,7 +2231,6 @@ function chatUsage(c) {
   for (const x of c.agent.extraUsage || []) add(x.kind, x.model, { calls: 1, cost: x.cost });
   const list = [...rows.values()].sort((a, b) => b.cost - a.cost);
   return { replies, cost: list.reduce((n, r) => n + r.cost, 0), calls: list.reduce((n, r) => n + r.calls, 0), rows: list };
-  $('.ch-showpane', root).onclick = () => setPaneHidden(false);
 }
 function usageHTML(u, at) {
   const kinds = [...new Set(u.rows.map((r) => r.kind))].sort((a, b) => u.rows.filter((r) => r.kind === b).reduce((n, r) => n + r.cost, 0) - u.rows.filter((r) => r.kind === a).reduce((n, r) => n + r.cost, 0));
@@ -1923,7 +2247,6 @@ function usageHTML(u, at) {
     <div class="uc-foot">Only you see this. It is never sent to the agent.</div>
   </div>`;
 }
-  for (const m of c.agent.messages) if (m.role === 'assistant' && !m.stats && !m.live && m.trace?.length) partialSpendQuiet(m); // older replies that ended part-way
 // 📊 in the chat header: the live breakdown in a popover, with a button to pin a snapshot into the chat.
 function toggleUsage(c) {
   const head = $('.chat-head', c.el.root), pop = $('.usage-pop', head);
@@ -2117,7 +2440,7 @@ function renderMsg(c, m) {
   m.el = el;
   if (m.role === 'user') {
     el.className = 'msg user';
-    el.innerHTML = `<div class="utext"></div>${m.imgs?.length ? `<div class="u-imgs" data-views="${esc(JSON.stringify(m.imgViews || []))}">${m.imgs.map((u, k) => `<img src="${u}" alt="attached picture" data-k="${k}" title="Click to see it large">`).join('')}</div>` : ''}${m.docs?.length ? `<div class="u-docs">${m.docs.map((d) => `<button type="button" class="u-doc" data-doc="${esc(JSON.stringify(d))}" title="${esc(d.name)} · ${esc(docSize(d.size))} · click to preview">${DOC_ICON[d.kind] || '📄'} ${esc(d.name)}</button>`).join('')}</div>` : ''}${m.ctx?.length ? `<div class="ctx-used">${m.ctx.map((t) => `<span>📎 ${esc(t)}</span>`).join('')}</div>` : ''}${m.at ? timeTag(m.at) : ''}`;
+    el.innerHTML = `<div class="utext"></div>${m.imgs?.length ? `<div class="u-imgs" data-views="${esc(JSON.stringify(m.imgViews || []))}">${m.imgs.map((u, k) => `<img src="${u}" alt="attached picture" data-k="${k}" title="Click to see it large">`).join('')}</div>` : ''}${m.docs?.length ? `<div class="u-docs">${m.docs.map((d) => `<button type="button" class="u-doc" data-doc="${esc(JSON.stringify(d))}" title="${esc(d.name)} · ${esc(docSize(d.size))} · click to preview">${DOC_ICON[d.kind] || '📄'} ${esc(d.name)}</button>`).join('')}</div>` : ''}${m.ctx?.length ? `<div class="ctx-used">${m.ctx.map((t) => `<span>📎 ${esc(t)}</span>`).join('')}</div>` : ''}${m.cmts?.length ? `<div class="ctx-used cmts-used">${m.cmts.map((x) => `<span title="${esc(x.selector)}">💬 ${esc(x.tag)} "${esc(clip(x.text || '', 40))}"${x.note ? `: ${esc(clip(x.note, 60))}` : ''}</span>`).join('')}</div>` : ''}${m.at ? timeTag(m.at) : ''}`;
     $('.utext', el).innerHTML = md(m.content);
     enhance($('.utext', el));
     el.insertAdjacentHTML('beforeend', `<div class="msg-tools u-tools"><button type="button" class="mt-btn mt-rewind" title="Rewind to here: this message and everything after it leave the chat, and it goes back in the box to edit. You choose whether file changes are undone too." aria-label="Rewind to here">${msgIcon('rewind')}</button><button type="button" class="mt-btn mt-copy" title="Copy this message" aria-label="Copy message">${msgIcon('copy')}</button></div>`);
@@ -2200,7 +2523,7 @@ const TL_ONE = {
   delete_file: (a) => `Deleted ${a.path}`, list_files: () => 'Listed the files', search_files: (a) => `Searched for "${clip(a.query || '', 40)}"`,
   run_command: (a) => `Ran ${clip([a.command, ...(a.args || [])].join(' '), 50)}`, start_server: (a) => `Started the "${a.name}" server`, stop_server: (a) => `Stopped the "${a.name}" server`,
   preview_site: () => 'Opened the site preview', browser: (a) => (a.action === 'open' ? `Opened ${a.target}` : `Browser: ${a.action}${a.key ? ` ${a.key}` : ''}`),
-  look: () => 'Checked the page with the judges', decide: (a) => `Asked the deciders ${a.questions?.length || ''} question${a.questions?.length === 1 ? '' : 's'}`.replace('  ', ' '),
+  look: () => 'Checked the page with the judges', extract_design: (a) => `Read the look of ${clip(a.target || '', 50)}`, decide: (a) => `Asked the deciders ${a.questions?.length || ''} question${a.questions?.length === 1 ? '' : 's'}`.replace('  ', ' '),
   plan: () => 'Updated the plan', delegate: (a) => `Asked a helper: ${clip(a.task || '', 50)}`, imagine: () => 'Made a picture', make_video: () => 'Made a video',
   compose_music: () => 'Composed music', speak: () => 'Made a voice clip', write_artifact: (a) => `Wrote the page "${a.title || a.id}"`, edit_artifact: (a) => `Edited the page ${a.id}`,
   read_artifact: (a) => `Read the page ${a.id}`, use_skill: (a) => `Loaded the ${a.name} skill`, save_skill: (a) => `Saved the ${a.name} skill`, scaffold: (a) => `Used the ${a.template} template`,
@@ -2390,10 +2713,11 @@ function updateMsg(c, m, { bodyOnly = false } = {}) {
   // Artifacts are reached from the pane's dropdown and the Files view, not as chips under each reply.
   // Steps: a button under the reply; the list of steps opens in the side pane.
   const tb = $('.trace-btn', el);
-  // Only when there's something to see: a plain reply's trace is just the model call itself.
-  tb.hidden = !(m.trace || []).some((e) => !TRACE_PLAIN.has(e.t));
+  // On every reply, a direct one-step answer too: its steps are the model call and what it cost.
+  tb.hidden = !((m.trace || []).length || m.stats || m.live);
   const sum = traceSummary(m);
-  tb.title = traceTip(m);
+  // Once the reply has its numbers, hovering shows what it cost (the breakdown card) instead of the steps tip.
+  if (m.stats) tb.removeAttribute('title'); else tb.title = traceTip(m);
   tb.setAttribute('aria-label', G.traceRun === m.runId ? 'Close the steps' : `${sum} · open them in the side pane`);
   tb.classList.toggle('live', !!m.live);
   tb.classList.toggle('on', G.traceRun === m.runId);
@@ -2407,10 +2731,12 @@ function updateMsg(c, m, { bodyOnly = false } = {}) {
     : s?.stop === 'budget' ? (s.budgetStop === 'hard' ? '<span title="The reply went past the project budget and its allowance for finishing work (⚙ Settings → Budget & approvals), so it was stopped">stopped past the budget</span>'
       : '<span title="The project budget was used up, so the reply did not start; raise it with the $ next to the project in the sidebar">budget reached</span>') : '';
   $('.foot', el).innerHTML = !s && m.resumable && !m.live ? '<button type="button" class="resume-btn primary" title="Carry on from the last finished step">▶ Resume where it stopped</button>'
+    : !s && m.live && m.liveCost != null ? liveFootHTML(m)
     : s ? `<span class="f-cost" title="What the reply cost">${money(s.cost, 5)}</span><span class="f-dur" title="How long the reply took">${secs(s.ms)}</span>${checkTag}${stopTag}${s.changed?.length ? (m.undone ? `<span class="undone undo-undone">↶ ${m.undone === 'partial' ? 'changes undone, except files changed since' : 'changes undone'}</span>` : undoGone(c, m) ? `<span class="undo-gone" title="Undo is kept for the newest ${Number(G.settings?.undoKeep) || 10} replies in a project, for up to ${Number(G.settings?.undoDays) || 7} days (⚙ Settings → Code & servers). Older undo copies are removed.">↶ undo no longer kept</span>` : `<button type="button" class="undo undo-btn" title="Put back the files this reply changed: ${esc(s.changed.filter((f) => !m.undoneFiles?.includes(f)).join(', '))}">↶ Undo changes (${s.changed.length - (m.undoneFiles?.length || 0)})</button>`) : ''}` : '';
-  // Right side: ? (the breakdown on hover), 🧭 Steps, then copy and remix.
+  // Right side: 🧭 Steps (hover: what it cost; click: the steps, ending with the cost card), then copy and remix.
   const right = document.createElement('span'); right.className = 'f-right';
-  if (s) right.insertAdjacentHTML('beforeend', replyInfoHTML(s, when));
+  $('.f-pop', tb)?.remove(); tb.classList.toggle('has-info', !!s);
+  if (s) { const t = document.createElement('template'); t.innerHTML = replyInfoHTML(s, when); const pop = $('.f-pop', t.content); if (pop) tb.append(pop); }
   right.append(tb);
   $('.foot', el).append(right);
   if (s && !m.live && !m.runActive) {
@@ -2488,7 +2814,6 @@ async function loadReview(c, m, slot) {
       if (x.error) return uiAlert(`Could not undo ${rel}: ${x.error}`);
       (m.undoneFiles ||= []).push(rel);
       if (!x.left) m.undone = true;
-    : !s && m.live && m.liveCost != null ? liveFootHTML(m)
       saveChat(c); updateMsg(c, m); refreshUndoable(c.projectId);
       const f = $('#paneBody iframe'); if (f && !f.srcdoc) f.src = f.src;
     };
@@ -2521,15 +2846,25 @@ document.addEventListener('click', (e) => {
 });
 // ? on a reply: hover (or focus) shows what went into it: when, how long, the cost and tokens, model calls by model,
 // decider questions, the plan, files changed and media.
+// Every model call the reply made (the writer's, and the deciders', reviewers' and helpers'), split by role.
+function callsLine(s) {
+  const by = {};
+  for (const v of Object.values(s.byModel || {})) by[v.role || 'writer'] = (by[v.role || 'writer'] || 0) + (v.calls || 0);
+  const total = Object.values(by).reduce((n, x) => n + x, 0);
+  if (!total) return String(s.llmCalls || 0);
+  const parts = Object.entries(by).sort((a, b) => (a[0] === 'writer' ? -1 : b[0] === 'writer' ? 1 : b[1] - a[1])).map(([r, n]) => `${n} ${r}${n === 1 ? '' : 's'}`);
+  return parts.length > 1 ? `${total} <small>(${esc(parts.join(', '))})</small>` : String(total);
+}
 function replyInfoHTML(s, when) {
   const k = (n) => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n || 0);
   const row = (label, value) => `<span class="fi-row"><span>${label}</span><b>${value}</b></span>`;
   const models = Object.entries(s.byModel || {}).sort((a, b) => (b[1].cost || 0) - (a[1].cost || 0));
   return `<span class="f-info mt-btn" tabindex="0" role="button" aria-label="Reply details"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.3a2.5 2.5 0 0 1 4.8.9c0 1.7-2.4 2.2-2.4 3.6"/><circle cx="12" cy="17.2" r=".6" fill="currentColor"/></svg><span class="f-pop" role="tooltip">
+    <span class="fi-total"><span>Total cost${s.partial ? ' <i>so far: the reply ended early</i>' : ''}</span><b>${money(s.cost, 5)}</b></span>
     ${when ? row('When', esc(new Date(when).toLocaleString())) : ''}
     ${row('Took', secs(s.ms))}
     ${row('Model calls', callsLine(s))}
-    ${s.tokensIn || s.tokensOut ? row('Tokens in', k(s.tokensIn)) + row('Tokens out', k(s.tokensOut)) : ''}
+    ${s.tokensIn || s.tokensOut ? `<span class="fi-row tok-in"><span><i class="tok-dot"></i>Tokens in</span><b>${k(s.tokensIn)}</b></span><span class="fi-row tok-out"><span><i class="tok-dot"></i>Tokens out</span><b>${k(s.tokensOut)}</b></span>` : ''}
     ${s.decide?.calls ? row('Decider questions', `${s.decide.questions} in ${s.decide.calls} call${s.decide.calls === 1 ? '' : 's'}`) : ''}
     ${s.plan?.of ? row('Plan', `${s.plan.done} of ${s.plan.of} done`) : ''}
     ${s.changed?.length ? row('Files changed', s.changed.length) : ''}
@@ -2545,7 +2880,7 @@ function replyInfoBox() {
   return box;
 }
 function showReplyInfo(e) {
-  const f = e.target.closest?.('.f-info'); if (!f) return;
+  const f = e.target.closest?.('.f-info, .has-info'); if (!f) return;
   const src = $('.f-pop', f); if (!src) return;
   const box = replyInfoBox(), r = f.getBoundingClientRect();
   box.innerHTML = src.innerHTML; box.hidden = false;
@@ -2555,7 +2890,7 @@ function showReplyInfo(e) {
   avoidDesk(box);
 }
 function hideReplyInfo(e) {
-  const f = e.target.closest?.('.f-info'); if (!f || f.contains(e.relatedTarget)) return;
+  const f = e.target.closest?.('.f-info, .has-info'); if (!f || f.contains(e.relatedTarget)) return;
   const box = $('#replyInfoPop'); if (box) box.hidden = true;
 }
 document.addEventListener('pointerover', showReplyInfo);
@@ -2602,21 +2937,11 @@ function undoChoice(all, changed) {
     for (const b of dlg.querySelectorAll('[data-v]')) b.onclick = () => done(b.dataset.v);
     dlg.showModal();
   });
-// Every model call the reply made (the writer's, and the deciders', reviewers' and helpers'), split by role.
-function callsLine(s) {
-  const by = {};
-  for (const v of Object.values(s.byModel || {})) by[v.role || 'writer'] = (by[v.role || 'writer'] || 0) + (v.calls || 0);
-  const total = Object.values(by).reduce((n, x) => n + x, 0);
-  if (!total) return String(s.llmCalls || 0);
-  const parts = Object.entries(by).sort((a, b) => (a[0] === 'writer' ? -1 : b[0] === 'writer' ? 1 : b[1] - a[1])).map(([r, n]) => `${n} ${r}${n === 1 ? '' : 's'}`);
-  return parts.length > 1 ? `${total} <small>(${esc(parts.join(', '))})</small>` : String(total);
-}
 }
 // Which replies in a project still have their undo copy (the newest ones only).
 async function refreshUndoable(projectId) {
   if (!projectId) return;
   const list = await getJ(`/api/checkpoints?project=${encodeURIComponent(projectId)}`);
-    <span class="fi-total"><span>Total cost${s.partial ? ' <i>so far: the reply ended early</i>' : ''}</span><b>${money(s.cost, 5)}</b></span>
   if (!Array.isArray(list)) return;
   (G.undoable ||= {})[projectId] = new Set(list.map((x) => x.runId));
   for (const c of G.open.values()) if (c.projectId === projectId && c.el) for (const m of c.agent.messages) if (m.stats?.changed?.length && !m.undone) updateMsg(c, m);
@@ -2643,10 +2968,12 @@ function openTrace(c, m) {
 function closeTrace() { G.traceRun = null; G.view.trace = null; syncLayout(); renderPane(); refreshTraceButtons(); }
 function refreshTraceButtons() { for (const b of document.querySelectorAll('.trace-btn')) b.classList.remove('on'); const c = focused(); const m = c?.agent.messages.find((x) => x.runId === G.traceRun); if (m?.el) $('.trace-btn', m.el)?.classList.add('on'); }
 function renderTracePane(c, m) {
+  if (G.replay?.run === m.runId) return renderReplay(c, m);
   const body = $('#paneBody'), bar = $('#appBar');
   bar.hidden = false;
-  bar.innerHTML = `🧭 <b>Steps</b> <span class="dim">${esc(traceSummary(m).replace(/^Steps · /, ''))}</span> <button type="button" class="back" title="Close the trace">✕ Close</button>`;
+  bar.innerHTML = `🧭 <b>Steps</b> <span class="dim">${esc(traceSummary(m).replace(/^Steps · /, ''))}</span>${!m.live && m.runId ? '<button type="button" class="tp-replay" title="Watch this reply again, step by step, with a scrubber">⏵ Replay</button>' : ''} <button type="button" class="back" title="Close the trace">✕ Close</button>`;
   $('.back', bar).onclick = closeTrace;
+  const rp = $('.tp-replay', bar); if (rp) rp.onclick = () => startReplay(c, m);
   // Opening a trace starts at its latest step; redrawing the same one keeps your place (and follows new steps while you're at the end).
   const old = $('.trace-pane', body), same = !!old && old.dataset.run === m.runId;
   const top = same ? old.scrollTop : 0, atEnd = !same || old.scrollHeight - old.scrollTop - old.clientHeight < 40;
@@ -2675,6 +3002,91 @@ function renderTracePane(c, m) {
   for (const b of now.querySelectorAll('.tl-chip')) b.onclick = () => { F.has(b.dataset.k) ? F.delete(b.dataset.k) : F.add(b.dataset.k); renderTracePane(c, m); };
   const all = $('.tl-all', now); if (all) all.onclick = () => { F.clear(); renderTracePane(c, m); };
 }
+// ⏵ Replay: a finished reply's steps again, from the start, one event at a time with its real timing (sped up), with a
+// scrubber. J/K or ←/→ jump to the previous/next step, Space plays and pauses, Home/End go to the ends.
+const REPLAY_MARK = new Set(['llm_start', 'tool', 'review', 'review_start', 'verify', 'question', 'answer', 'approval', 'sent_back', 'check', 'lint', 'decide_start', 'done', 'error']);
+async function startReplay(c, m) {
+  let trace = m.trace || [];
+  // A reply whose steps the page never saw (started over MCP, or while the page was closed): QuorX's own log.
+  if (!trace.length && m.runId) { const r = await fetch(`/api/runs/${encodeURIComponent(m.runId)}/log`).then((x) => x.json()).catch(() => null); trace = r?.events || []; }
+  if (!trace.length) return uiAlert('This reply has no recorded steps to replay.');
+  stopReplay();
+  G.replay = { run: m.runId, trace, i: 0, playing: true, speed: 4, timer: null };
+  renderTracePane(c, m);
+  G.replay.keys = (e) => {
+    const R = G.replay; if (!R || R.run !== m.runId || /input|textarea|select/i.test(e.target?.tagName || '')) return;
+    if (e.key === 'j' || e.key === 'J' || e.key === 'ArrowLeft') { e.preventDefault(); replayStep(c, m, -1); }
+    else if (e.key === 'k' || e.key === 'K' || e.key === 'ArrowRight') { e.preventDefault(); replayStep(c, m, 1); }
+    else if (e.key === ' ') { e.preventDefault(); R.playing = !R.playing; replayTick(c, m); renderReplay(c, m); }
+    else if (e.key === 'Home') { e.preventDefault(); R.i = 0; R.playing = false; renderReplay(c, m); }
+    else if (e.key === 'End') { e.preventDefault(); R.i = R.trace.length; R.playing = false; renderReplay(c, m); }
+    else if (e.key === 'Escape') { stopReplay(); renderTracePane(c, m); }
+  };
+  document.addEventListener('keydown', G.replay.keys);
+  replayTick(c, m);
+}
+function stopReplay() {
+  const R = G.replay; if (!R) return;
+  clearTimeout(R.timer); if (R.keys) document.removeEventListener('keydown', R.keys);
+  G.replay = null;
+}
+function replayStep(c, m, dir) {
+  const R = G.replay; R.playing = false; clearTimeout(R.timer);
+  let i = R.i + dir;
+  while (i > 0 && i < R.trace.length && !REPLAY_MARK.has(R.trace[i - 1]?.t)) i += dir;
+  R.i = Math.max(0, Math.min(R.trace.length, i));
+  renderReplay(c, m);
+}
+function replayTick(c, m) {
+  const R = G.replay; if (!R) return;
+  clearTimeout(R.timer);
+  if (!R.playing) return;
+  if (R.i >= R.trace.length) { R.playing = false; return renderReplay(c, m); }
+  const gap = R.i ? Math.max(0, (R.trace[R.i]?.at || 0) - (R.trace[R.i - 1]?.at || 0)) : 0;
+  R.timer = setTimeout(() => { if (G.replay !== R) return; R.i++; renderReplay(c, m); replayTick(c, m); }, Math.max(25, Math.min(1500, gap / R.speed)));
+}
+function renderReplay(c, m) {
+  const R = G.replay, body = $('#paneBody'), bar = $('#appBar');
+  if (!body || G.traceRun !== m.runId) { stopReplay(); return; }
+  const n = R.trace.length, shown = R.trace.slice(0, R.i), at = shown.at(-1)?.at || 0, end = R.trace.at(-1)?.at || 0;
+  const marks = R.trace.map((e, k) => (REPLAY_MARK.has(e.t) ? k + 1 : null)).filter(Boolean);
+  const stepNo = marks.filter((k) => k <= R.i).length;
+  bar.hidden = false;
+  bar.innerHTML = `⏵ <b>Replay</b> <span class="dim">step ${stepNo} of ${marks.length} · ${secs(at)} of ${secs(end)}</span> <button type="button" class="back rp-exit" title="Back to all the steps (Esc)">✕ Exit replay</button>`;
+  $('.rp-exit', bar).onclick = () => { stopReplay(); renderTracePane(c, m); };
+  const old = $('.replay-pane', body);
+  if (!old) {
+    body.innerHTML = `<div class="replay-pane"><div class="rp-bar" role="toolbar" aria-label="Replay controls">
+      <button type="button" class="rp-btn" data-go="start" title="Back to the start (Home)" aria-label="Back to the start">⏮</button>
+      <button type="button" class="rp-btn" data-go="prev" title="Previous step (J or ←)" aria-label="Previous step">◀</button>
+      <button type="button" class="rp-btn rp-play" data-go="play" title="Play or pause (Space)" aria-label="Play or pause"></button>
+      <button type="button" class="rp-btn" data-go="next" title="Next step (K or →)" aria-label="Next step">▶</button>
+      <button type="button" class="rp-btn" data-go="end" title="To the end (End)" aria-label="To the end">⏭</button>
+      <input type="range" class="rp-range" min="0" max="${n}" step="1" aria-label="Position in the reply">
+      <div class="rp-speed" role="radiogroup" aria-label="Speed">${[1, 4, 16].map((s) => `<button type="button" class="rp-sp" data-sp="${s}" role="radio">${s}×</button>`).join('')}</div>
+    </div><div class="trace trace-pane rp-trace" data-run="${esc(m.runId)}"></div></div>`;
+    const p = $('.replay-pane', body);
+    for (const b of p.querySelectorAll('[data-go]')) b.onclick = () => {
+      const g = b.dataset.go;
+      if (g === 'prev') return replayStep(c, m, -1);
+      if (g === 'next') return replayStep(c, m, 1);
+      if (g === 'start') { G.replay.i = 0; G.replay.playing = false; }
+      if (g === 'end') { G.replay.i = G.replay.trace.length; G.replay.playing = false; }
+      if (g === 'play') { if (G.replay.i >= G.replay.trace.length) G.replay.i = 0; G.replay.playing = !G.replay.playing; }
+      renderReplay(c, m); replayTick(c, m);
+    };
+    $('.rp-range', p).oninput = (e) => { G.replay.i = Number(e.target.value); G.replay.playing = false; clearTimeout(G.replay.timer); renderReplay(c, m); };
+    for (const b of p.querySelectorAll('.rp-sp')) b.onclick = () => { G.replay.speed = Number(b.dataset.sp); renderReplay(c, m); replayTick(c, m); };
+  }
+  const p = $('.replay-pane', body);
+  $('.rp-play', p).textContent = R.playing ? '⏸' : '⏵';
+  const rg = $('.rp-range', p); rg.max = n; rg.value = R.i;
+  rg.style.setProperty('--pos', `${n ? (R.i / n) * 100 : 0}%`);
+  for (const b of p.querySelectorAll('.rp-sp')) { const on = Number(b.dataset.sp) === R.speed; b.classList.toggle('on', on); b.setAttribute('aria-checked', String(on)); }
+  const tp = $('.rp-trace', p);
+  tp.innerHTML = shown.length ? traceHTML({ ...m, trace: shown, live: R.i < n }) : '<div class="rp-empty">The reply starts here. Press ⏵ or K.</div>';
+  tp.scrollTop = tp.scrollHeight;
+}
 // The 🧭 Steps tip: what the reply did, as rows.
 function traceTip(m) {
   const s = m.stats, tr = m.trace || [];
@@ -2700,7 +3112,7 @@ function traceHTML(m) {
     if (e.t === 'llm_start') row(e.at, `🧠 <b>${esc(short(e.model))}</b> thinks<span class="sub" data-llm="${e.step}"></span>${m.thinking?.[e.step]?.trim() ? `<details class="think-trace"><summary>💭 Thinking · ${m.thinking[e.step].split(/\s+/).filter(Boolean).length} words</summary><div class="tt-body">${md(m.thinking[e.step])}</div></details>` : ''}`, 'think');
     else if (e.t === 'llm_done') {
       const i = out.findLastIndex((h) => h.includes(`data-llm="${e.step}"`));
-      if (i >= 0) out[i] = out[i].replace(`<span class="sub" data-llm="${e.step}"></span>`, `<div class="sub">${secs(e.ms)} · ${e.tokensOut} tokens out · ${money(e.cost, 5)}${e.provider ? ` · via <span class="tr-prov" title="The provider OpenRouter routed this call to">${esc(e.provider)}</span>` : ''}${e.model && e.model !== m.trace.find((x) => x.t === 'llm_start' && x.step === e.step)?.model ? ` · <b class="tr-fallback" title="The chat's model was unavailable, so OpenRouter used the fallback model">fallback ${esc(short(e.model))}</b>` : ''}${e.toolCalls.length ? ` · then ${e.toolCalls.join(', ')}` : ''}</div>${e.aside ? `<div class="aside">💬 ${esc(e.aside)}</div>` : ''}`);
+      if (i >= 0) out[i] = out[i].replace(`<span class="sub" data-llm="${e.step}"></span>`, `<div class="sub">${secs(e.ms)} · <span class="tok-out">${e.tokensOut} tokens out</span> · ${money(e.cost, 5)}${e.provider ? ` · via <span class="tr-prov" title="The provider OpenRouter routed this call to">${esc(e.provider)}</span>` : ''}${e.model && e.model !== m.trace.find((x) => x.t === 'llm_start' && x.step === e.step)?.model ? ` · <b class="tr-fallback" title="The chat's model was unavailable, so OpenRouter used the fallback model">fallback ${esc(short(e.model))}</b>` : ''}${e.toolCalls.length ? ` · then ${e.toolCalls.join(', ')}` : ''}</div>${e.aside ? `<div class="aside">💬 ${esc(e.aside)}</div>` : ''}`);
     } else if (e.t === 'tool' && e.name !== 'decide') row(e.at, `${e.by === 'reviewer' ? '🧪 <span class="tr-rv">reviewer</span> ' : e.by === 'helper' ? `🤝 <span class="tr-hp">helper ${e.helper || ''}</span> ` : ''}${TOOL_NAME[e.name]?.split(' ')[0] || '🔧'} <b>${esc(e.name)}</b><div class="sub">${esc(argSummary(e))}</div>`, e.by === 'reviewer' ? 'browser' : 'tool');
     else if (e.t === 'fresh_eyes_start') row(e.at, `👀 <b>Fresh eyes</b> ${esc(short(e.model))}: a problem came back, so a clean-context model takes a look<div class="sub">${(e.problems || []).map(esc).join('<br>')}</div>`, 'note');
     else if (e.t === 'fresh_eyes') row(e.at, `👀 Fresh eyes ${e.ok ? 'diagnosed it' : 'found nothing'}${e.report ? `<div class="sub" style="white-space:pre-wrap">${esc(e.report)}</div>` : ''}`, e.ok ? 'ok' : 'warn');
@@ -2844,6 +3256,15 @@ function shellCardHTML(a) {
       </div>`}
   </div>`;
 }
+// The note on an approval card goes with a "no": once there is one, the no button says so and Enter sends it.
+function noteLeadsToNo(card, label, no) {
+  const ta = $('textarea', card), b = $('.acts .no', card);
+  if (!ta || !b) return;
+  const sync = () => { const has = !!ta.value.trim(); b.textContent = has ? `${label} and send note` : label; b.classList.toggle('with-note', has); };
+  ta.addEventListener('input', sync);
+  ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (ta.value.trim() && !b.disabled) no(); } });
+  sync();
+}
 function wireShellCard(card, m) {
   const id = card.dataset.id;
   const answer = async (approve, rule) => {
@@ -2853,6 +3274,7 @@ function wireShellCard(card, m) {
   };
   $('.yes', card).onclick = () => answer(true);
   $('.no', card).onclick = () => answer(false);
+  noteLeadsToNo(card, 'Deny', () => answer(false));
   const panel = $('.sc-rule', card), btn = $('.sc-always', card);
   if (!panel || !btn) return;
   const pick = (g) => $(`.sc-pick[data-group="${g}"] button.on`, card)?.dataset.v;
@@ -2907,6 +3329,7 @@ function wireApproval(card, m) {
   $('.yes', card).onclick = () => answer(true);
   $('.always', card).onclick = () => answer(true, true);
   $('.no', card).onclick = () => answer(false);
+  noteLeadsToNo(card, 'Decline', () => $('.no', card).click());
 }
 
 // ---------- the project budget card (🔒 Strict, when a reply reaches the budget) ----------
@@ -3012,15 +3435,6 @@ function wireBudget(card, c, m) {
       card.querySelectorAll('button, input').forEach((b) => (b.disabled = true));
       await fetch('/api/raise-cap', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ runId: m.runId, id: card.dataset.id, to }) }).catch(() => {});
       return;
-// The note on an approval card goes with a "no": once there is one, the no button says so and Enter sends it.
-function noteLeadsToNo(card, label, no) {
-  const ta = $('textarea', card), b = $('.acts .no', card);
-  if (!ta || !b) return;
-  const sync = () => { const has = !!ta.value.trim(); b.textContent = has ? `${label} and send note` : label; b.classList.toggle('with-note', has); };
-  ta.addEventListener('input', sync);
-  ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (ta.value.trim() && !b.disabled) no(); } });
-  sync();
-}
     }
     const p = G.projects.find((x) => x.id === c.projectId);
     const r = await fetch(`/api/projects/${c.projectId}/budget`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ budget: Number(input.value), fromCard: true }) }).then((x) => x.json()).catch((e) => ({ error: e.message }));
@@ -3030,7 +3444,6 @@ function noteLeadsToNo(card, label, no) {
     refreshSidebar();
   };
   $('.stop-here', card).onclick = () => {
-  noteLeadsToNo(card, 'Deny', () => answer(false));
     card.querySelectorAll('button, input').forEach((b) => (b.disabled = true));
     fetch('/api/budget-stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ runId: m.runId, id: card.dataset.id }) }).catch(() => {});
   };
@@ -3085,7 +3498,6 @@ function wireQuestions(card, m) {
   for (const item of items) {
     const own = $('.own', item);
     for (const b of item.querySelectorAll('.opt')) b.onclick = () => { pick(item, b); own.value = ''; };
-  noteLeadsToNo(card, 'Decline', () => $('.no', card).click());
     own.oninput = () => { if (own.value.trim()) pick(item, null); };
     own.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); $('.send-all', card).click(); } };
   }
@@ -3137,28 +3549,30 @@ async function steer(c, text) {
 async function send(c, text) {
   text = text.trim();
   // A picture, a file or context on its own is a message too.
-  if (c.running || (!text && !c.images.length && !(c.docs || []).some((d) => d.id && !d.busy) && !c.ctx.length)) return;
+  if (c.running || (!text && !c.images.length && !(c.docs || []).some((d) => d.id && !d.busy) && !c.ctx.length && !c.comments?.length)) return;
   askNotifyPermission();
   const ctx =c.ctx.length ? { titles: c.ctx.map((x) => x.title), text: await contextText(c.ctx) } : null;
-  const imgs = c.images.splice(0);
+  const comments = (c.comments || []).splice(0);
+  const imgs = [...c.images.splice(0), ...comments.filter((x) => x.crop).map((x) => ({ thumb: x.crop, full: x.crop }))];
   const docs = (c.docs || []).splice(0).filter((d) => d.id && !d.busy);
   c.ctx = []; renderAttachments(c);
   if ((!c.title || c.title === 'New chat') && text) { c.title = text.replace(/\s+/g, ' ').slice(0, 60); if (c.el) { $('.ch-name', c.el.root).value = c.title; } }
-  runChat(c, text, ctx, imgs, { docs });
+  runChat(c, text, ctx, imgs, { docs, comments });
 }
-async function runChat(c, text, ctx, imgs, { resumeOf, docs = [], more = 0, model = '' } = {}) {
+async function runChat(c, text, ctx, imgs, { resumeOf, docs = [], more = 0, model = '', comments = [] } = {}) {
+  const cmts = comments.map(({ selector, tag, text: t, section, rect, url, note, crop }) => ({ selector, tag, text: t, section, rect, url, note, crop: !!crop }));
   const a = c.agent;
   // After a compaction only the turns since the summary are sent, together with the summary.
-  const history = a.messages.filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.error && (!a.summaryAt || (m.at || 0) >= a.summaryAt)).map((m) => ({ role: m.role, at: m.at, content: m.role === 'assistant' ? `${m.content}${m.note || ''}` : `${m.ctx?.length ? `[attached context: ${m.ctx.join(', ')}] ` : ''}${m.docs?.length ? `[attached files: ${m.docs.map((d) => d.name).join(', ')}; read them with read_doc / search_docs] ` : ''}${m.content}` }));
+  const history = a.messages.filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.error && (!a.summaryAt || (m.at || 0) >= a.summaryAt)).map((m) => ({ role: m.role, at: m.at, content: m.role === 'assistant' ? `${m.content}${m.note || ''}` : `${m.cmts?.length ? `[pointed at on the page: ${m.cmts.map((x) => `${x.tag} "${x.text}" (${x.selector})${x.note ? `: ${x.note}` : ''}`).join('; ')}] ` : ''}${m.ctx?.length ? `[attached context: ${m.ctx.join(', ')}] ` : ''}${m.docs?.length ? `[attached files: ${m.docs.map((d) => d.name).join(', ')}; read them with read_doc / search_docs] ` : ''}${m.content}` }));
   const m = { role: 'assistant', content: '', at: Date.now(), trace: [], approvals: {}, questions: {}, arts: [], runId: `r${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, live: true, runActive: true };
-  const user = resumeOf ? null : { role: 'user', content: text, at: Date.now(), ...(ctx ? { ctx: ctx.titles } : {}), ...(imgs.length ? { imgs: imgs.map((x) => x.thumb), imgViews: imgs.map((x) => x.view || x.full) } : {}), ...(docs.length ? { docs: docs.map(({ id, name, kind, size, status, rel }) => ({ rel, id, name, kind, size, status })) } : {}) };
+  const user = resumeOf ? null : { role: 'user', content: text, at: Date.now(), ...(cmts.length ? { cmts: cmts.map(({ crop, ...x }) => x) } : {}), ...(ctx ? { ctx: ctx.titles } : {}), ...(imgs.length ? { imgs: imgs.map((x) => x.thumb), imgViews: imgs.map((x) => x.view || x.full) } : {}), ...(docs.length ? { docs: docs.map(({ id, name, kind, size, status, rel }) => ({ rel, id, name, kind, size, status })) } : {}) };
   a.messages.push(...(user ? [user] : []), m);
   const box = c.el && G.panes.includes(c.id) ? $('.msgs', c.el.root) : null;
   if (box) { if (box.querySelector('.hint')) box.innerHTML = ''; if (user) box.appendChild(renderMsg(c, user)); box.appendChild(renderMsg(c, m)); c.follow = true; c.toEnd?.(); }
   const artifacts = Object.fromEntries(Object.entries(a.artifacts).map(([id, x]) => [id, x.kind === 'html' ? { kind: 'html', title: x.title, html: x.html, v: 1 } : x.kind === 'md' ? { kind: 'md', title: x.title, md: x.md || '', v: 1 } : { kind: x.kind, title: x.title, url: x.url?.startsWith('data:') ? undefined : x.url, v: 1 }]));
   const settings = { ...G.settings, approval: c.approval, tools: chatTools(c), ...qualitySettings(c) };
   const body = resumeOf ? { runId: m.runId, chatId: c.id, resume: resumeOf, settings, allowed: a.allowed, cmdRules: a.cmdRules || [], ...(more ? { continue: more, ...(model ? { model } : {}) } : {}) }
-    : { runId: m.runId, chatId: c.id, projectId: c.projectId, chatTitle: c.title, setup: a.setup, settings, allowed: a.allowed, cmdRules: a.cmdRules || [], history, summary: a.summary || '', text, artifacts, context: ctx?.text || '', images: imgs.map((x) => x.full), docs: docs.map((d) => d.id) };
+    : { runId: m.runId, chatId: c.id, projectId: c.projectId, chatTitle: c.title, setup: a.setup, settings, allowed: a.allowed, cmdRules: a.cmdRules || [], history, summary: a.summary || '', text, artifacts, context: ctx?.text || '', images: imgs.map((x) => x.full), docs: docs.map((d) => d.id), ...(cmts.length ? { comments: cmts } : {}) };
   // Saved straight away, so a reload finds the running reply and reattaches to it.
   saveChat(c, true);
   return followRun(c, m, (signal) => fetch('/api/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal, body: JSON.stringify(body) }));
@@ -3172,6 +3586,8 @@ async function reattachRuns(c) {
     following.add(m.runId);
     const st = await fetch(`/api/runs/${m.runId}`).then((r) => r.json()).catch(() => ({ status: 'unknown' }));
     if (st.status === 'unknown') { following.delete(m.runId); m.runActive = false; m.error ||= 'This reply was interrupted.'; saveChat(c); continue; }
+    // Another QuorX on the same data folder is running it right now: leave it be (it saves its own result).
+    if (st.status === 'elsewhere') { following.delete(m.runId); continue; }
     // Interrupted by a restart: offer Resume instead of replaying its whole log (it never ends, so it looped).
     // A reply that is running, or that finished while no one watched, is replayed to its end as before.
     if (st.status === 'interrupted') {
@@ -3194,6 +3610,15 @@ function notifyRun(c, kind, body = '', meta = '') {
   const pref = uiOf(G.settings).notify;
   if (pref === 'off' || (pref === 'needs' && (kind === 'done' || kind === 'error'))) return;
   if (document.visibilityState === 'visible' && document.hasFocus()) return;
+  // Compact: the status (with how long and what it cost when done), then project · chat, then one short line.
+  const project = G.projects.find((p) => p.id === c.projectId)?.name || c.projectId || '';
+  const title = `${NOTIFY_MARK[kind] || '•'} ${NOTIFY_TITLE[kind] || 'QuorX'}${meta ? ` · ${meta}` : ''}`;
+  const line = String(body).replace(/\s+/g, ' ').trim();
+  const text = `${project ? `${project} · ` : ''}${c.title || 'Chat'}${line ? `
+${line.length > 110 ? `${line.slice(0, 109)}…` : line}` : ''}`;
+  // In the desktop app it comes from the app itself: QuorX's name and logo, and a click opens the chat.
+  if (window.ohDesktop?.notify) { window.ohDesktop.notify({ title, body: text, chatId: c.id, silent: kind === 'done' }).catch(() => {}); return; }
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
   try {
     const n = new Notification(title, { body: text, tag: `oh-${c.id}`, silent: kind === 'done' });
     n.onclick = () => { window.ohDesktop?.focusWindow?.(); window.focus(); if (!G.panes.includes(c.id)) showChat(c.id); n.close(); };
@@ -3240,6 +3665,7 @@ async function followRun(c, m, open) {
         if (!chunk.startsWith('data:')) continue;
         let e; try { e = JSON.parse(chunk.slice(5)); } catch { continue; }
         if (e.t === 'think') { (m.thinking ??= {})[e.step] = (m.thinking[e.step] || '') + e.text; redraw(true); continue; }
+        if (e.t === 'spend') { m.liveCost = e.cost; m.liveCalls = e.calls; m.liveTokens = [e.tokensIn, e.tokensOut]; m.liveByModel = e.byModel || m.liveByModel; liveSpend(c, m); continue; }
         if (e.t === 'token') {
           if (e.step !== lastStep && m.content) m.content += '\n\n';
           if (e.step !== lastStep) stepStart = m.content.length;
@@ -3279,6 +3705,7 @@ async function followRun(c, m, open) {
     m.live = false; c.running = null; c.waiting = false;
     // The harness went away mid-reply (restarted or closed): wait for it, then reattach or offer Resume.
     if (lost) { m.error = 'Lost the connection to the harness; reconnecting…'; reconnect(c, m); }
+    else if (!m.stats) partialSpend(m);
     else {
       m.runActive = false;
       // A card or question still open when the reply ended can no longer be answered.
@@ -3338,6 +3765,19 @@ function openArtifact(c, id) {
   c.paneHidden = false;
   syncLayout(); renderPane();
 }
+// The side panel hidden (chat only), from its own button; the panel button at the top of a chat brings it back.
+// Remembered. Asking for something in it (🧭 Steps, a file, a preview) shows it again.
+// The side panel's toggle sits in each chat's header, next to rename: lit while the panel is open.
+function syncPaneToggles() {
+  for (const b of document.querySelectorAll('.ch-panel')) { b.classList.toggle('on', !G.paneHidden); b.setAttribute('aria-pressed', String(!G.paneHidden)); }
+}
+function setPaneHidden(on, quiet) {
+  G.paneHidden = !!on;
+  syncPaneToggles();
+  $('.layout')?.classList.toggle('pane-hidden', G.paneHidden);
+  try { localStorage.setItem('oh-pane-hidden', G.paneHidden ? '1' : '0'); } catch { /* this session only */ }
+  if (!quiet) { syncLayout?.(); deskPlace?.(true); window.dispatchEvent(new Event('resize')); }
+}
 function paneVisible() {
   const c = focused();
   if (!c) return false;
@@ -3366,15 +3806,6 @@ function renderPane() {
   if (G.view.run) { setUrlBar(null); return renderRunningPane(c); }
   if (G.view.files) { setUrlBar(null); return renderFiles(c); }
   if (G.view.browser) return renderBrowser(c);
-  // Compact: the status (with how long and what it cost when done), then project · chat, then one short line.
-  const project = G.projects.find((p) => p.id === c.projectId)?.name || c.projectId || '';
-  const title = `${NOTIFY_MARK[kind] || '•'} ${NOTIFY_TITLE[kind] || 'QuorX'}${meta ? ` · ${meta}` : ''}`;
-  const line = String(body).replace(/\s+/g, ' ').trim();
-  const text = `${project ? `${project} · ` : ''}${c.title || 'Chat'}${line ? `
-${line.length > 110 ? `${line.slice(0, 109)}…` : line}` : ''}`;
-  // In the desktop app it comes from the app itself: QuorX's name and logo, and a click opens the chat.
-  if (window.ohDesktop?.notify) { window.ohDesktop.notify({ title, body: text, chatId: c.id, silent: kind === 'done' }).catch(() => {}); return; }
-  if (!('Notification' in window) || Notification.permission !== 'granted') return;
   if (G.view.trace) {
     setUrlBar(null);
     const tm = c.agent.messages.find((x) => x.runId === G.view.trace);
@@ -3421,7 +3852,6 @@ ${line.length > 110 ? `${line.slice(0, 109)}…` : line}` : ''}`;
       : `<audio controls src="${u}"></audio><a href="${u}" download="${esc(a.id)}">Download</a>`;
     body.innerHTML = `<div class="media">${player}${cap}</div>`;
   }
-        if (e.t === 'spend') { m.liveCost = e.cost; m.liveCalls = e.calls; m.liveTokens = [e.tokensIn, e.tokensOut]; m.liveByModel = e.byModel || m.liveByModel; liveSpend(c, m); continue; }
 }
 // Sites and apps: check the project folder every 2.5 s while shown; reload the preview when it changed.
 function watchFolder(c) {
@@ -3461,7 +3891,6 @@ async function renderAppBar(c, a) {
   };
   $('.logs', bar).onclick = async () => {
     const pre = $('.log', bar);
-    else if (!m.stats) partialSpend(m);
     if (!pre.hidden) { pre.hidden = true; return; }
     pre.textContent = sv ? (await fetch(`/api/servers/log?key=${encodeURIComponent(sv.key)}`).then((r) => r.json())).log || '(no output yet)' : '(not running)';
     pre.hidden = false;
@@ -3521,14 +3950,6 @@ async function previewFile(view, { name, src, size, full, text, kind = previewKi
     view.innerHTML = head(meta) + `<div class="pv-stage pv-checker" title="Click for actual size"><img src="${esc(src)}" alt="${esc(name)}"></div>`; wire();
     const img = $('img', view), stage = $('.pv-stage', view);
     img.onload = () => { $('.pv-info', view).textContent = `${meta} · ${img.naturalWidth}×${img.naturalHeight}`; };
-// The side panel hidden (chat only), from its own button; the panel button at the top of a chat brings it back.
-// Remembered. Asking for something in it (🧭 Steps, a file, a preview) shows it again.
-function setPaneHidden(on, quiet) {
-  G.paneHidden = !!on;
-  $('.layout')?.classList.toggle('pane-hidden', G.paneHidden);
-  try { localStorage.setItem('oh-pane-hidden', G.paneHidden ? '1' : '0'); } catch { /* this session only */ }
-  if (!quiet) { syncLayout?.(); deskPlace?.(true); window.dispatchEvent(new Event('resize')); }
-}
     stage.onclick = () => stage.classList.toggle('actual');
     return;
   }
@@ -3695,7 +4116,10 @@ async function openCosts() {
 const cxModels = (models) => {
   const list = Object.entries(models || {}).sort((a, b) => b[1] - a[1]);
   if (!list.length) return '';
-  return `<span class="cx-mi" tabindex="0" title="${esc(list.map(([m, v]) => `${short(m)}  ${money(v, 4)}`).join('\n'))}" aria-label="${list.length} model${list.length === 1 ? '' : 's'}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 3 8l9 5 9-5z"/><path d="m3 13 9 5 9-5"/></svg>${list.length}</span>`;
+  const total = list.reduce((n, [, v]) => n + (v || 0), 0);
+  // A card: the models this chat used, most expensive first, each with what it cost, then the total.
+  const tip = [`${list.length} model${list.length === 1 ? '' : 's'} used`, ...list.map(([m, v]) => `${short(m)}\t${money(v, 4)}`), ...(list.length > 1 ? [`Total\t${money(total, 4)}`] : [])].join('\n');
+  return `<span class="cx-mi" tabindex="0" title="${esc(tip)}" aria-label="${list.length} model${list.length === 1 ? '' : 's'}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 3 8l9 5 9-5z"/><path d="m3 13 9 5 9-5"/></svg>${list.length}</span>`;
 };
 const costRow = (c, withProject, when) => `<tr><td><a href="#" data-open="${esc(c.id)}" title="${esc(c.title)}">${esc(c.title)}</a>${when && c.lastAt ? `<small class="cx-when">${ago(c.lastAt)}</small>` : ''}${withProject ? `<small class="cx-proj">${esc(G.projects.find((p) => p.id === c.projectId)?.name || c.projectId)}</small>` : ''}</td><td>${c.messages}</td><td class="cx-models">${cxModels(c.models)}</td><td class="mono">${money(c.today, 4)}</td><td class="mono cx-total">${money(c.cost, 4)}</td></tr>`;
 const costHead = '<thead><tr><th>Chat</th><th>Msgs</th><th>Models</th><th>Today</th><th>Total</th></tr></thead>';
@@ -3716,7 +4140,12 @@ async function drawCosts() {
     const shown = d.projects.slice(0, COSTS.projectsShown);
     list.innerHTML = (shown.length ? '<div class="cx-cols" aria-hidden="true"><span>Chat</span><span>Msgs</span><span>Models</span><span>Today</span><span>Total</span></div>' : '') + (shown.map((p) => `
       <details class="cost-proj" data-p="${esc(p.id)}" open>
-        <summary style="${projStyle(p)}"><b class="cx-pname">${esc(p.name)}</b><small class="cx-n">${p.chatCount} chat${p.chatCount === 1 ? '' : 's'}${p.lastAt ? ` · ${ago(p.lastAt)}` : ''}</small><span class="cost-bar"><i style="width:${(p.cost / max) * 100}%"></i></span><span class="mono">${money(p.cost, 3)}</span></summary>
+        <summary style="${projStyle(p)}"><b class="cx-pname">${esc(p.name)}</b><small class="cx-n">${p.chatCount} chat${p.chatCount === 1 ? '' : 's'}${p.lastAt ? ` · ${ago(p.lastAt)}` : ''}</small>${(() => {
+          // With a budget: what share of it is used (the line fills toward it). Without one: next to the biggest spender.
+          const b = G.projects.find((x) => x.id === p.id)?.budget, has = typeof b === 'number' && b > 0;
+          const share = has ? Math.min(1, p.cost / b) : p.cost / max, state = !has ? '' : share >= 1 ? 'full' : share >= 0.85 ? 'near' : 'ok';
+          return `<span class="cost-bar cx-line ${state}" title="${has ? `${money(p.cost, 3)} of the $${b.toFixed(2)} budget (${Math.round(share * 100)}%)` : `No budget · spent next to the project that spent the most (${money(p.cost, 3)} of ${money(max, 3)})`}"><i style="width:${share * 100}%"></i></span><span class="mono">${money(p.cost, 3)}</span>${has ? `<small class="cx-budget">of $${b.toFixed(b < 10 ? 2 : 0)} · ${state === 'full' ? 'used up' : `${Math.round(share * 100)}%`}</small>` : ''}`;
+        })()}</summary>
         <table class="cost-table cx-compact"><tbody>${p.chats.map((c) => costRow(c, false, true)).join('')}</tbody></table>
         ${p.chatCount > p.chats.length ? `<button type="button" class="cx-more" data-more="${esc(p.id)}" data-offset="${p.chats.length}">Show more (${p.chatCount - p.chats.length} more)</button>` : ''}
       </details>`).join('') || '<div class="cx-empty">No spending recorded yet.</div>')
@@ -5417,7 +5846,6 @@ function wirePaneChrome() {
   // ⤢ the pane takes the whole window (chat hidden); ⤡ puts the chat back. Remembered.
   const setMax = (on) => { G.paneMax = on; $('.layout').classList.toggle('pane-max', on); const b = $('#paneMaxBtn'); b.textContent = on ? '⤡' : '⤢'; b.title = on ? 'Show the chat again' : 'Make the pane full width (the chat hides until you press this again)'; b.setAttribute('aria-pressed', String(on)); try { localStorage.setItem('oh-pane-max', on ? '1' : ''); } catch { /* storage off */ } };
   $('#paneMaxBtn').onclick = () => { if (G.paneHidden) setPaneHidden(false); setMax(!G.paneMax); };
-  $('#paneHideBtn').onclick = () => { if (G.paneMax) setMax(false); setPaneHidden(true); };
   let wasHidden = false; try { wasHidden = localStorage.getItem('oh-pane-hidden') === '1'; } catch { /* storage off */ }
   setPaneHidden(wasHidden, true);
   let wasMax = false; try { wasMax = localStorage.getItem('oh-pane-max') === '1'; } catch { /* storage off */ }
@@ -5490,9 +5918,11 @@ function renderBrowser(c) {
     : `${t.agent ? `<span class="bv-who agent" title="${live ? "The agent's page: it is using it now, so you can only watch" : "The agent's page: it is done with it, so it is yours to use"}">🤖</span>${live ? '<span class="bv-lock" title="The agent is using this page: watch only">watching</span>' : ''}` : '<span class="bv-who you" title="Your tab">👤</span>'}
        ${!live && t.mode !== 'frame' && t.url ? `<button type="button" class="bv-nav" data-op="back" title="Back" aria-label="Back"${REAL && t.canBack === false ? ' disabled' : ''}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button><button type="button" class="bv-nav" data-op="forward" title="Forward" aria-label="Forward"${REAL && t.canForward === false ? ' disabled' : ''}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg></button>` : ''}
        ${REAL && t.url ? `<span class="bv-real ${t.loading ? 'loading' : ''}" title="A real Chromium tab in the desktop app">● real tab${t.loading ? ' · loading…' : ''}</span>` : ''}
-       <span class="spacer"></span>${REAL && t.url && !live ? '<button type="button" class="bv-dev" title="Open DevTools for this tab" aria-label="DevTools"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8l-4 4 4 4M16 8l4 4-4 4M13.5 5l-3 14"/></svg></button>' : ''}${!DESK && !t.agent && t.url ? `<button type="button" class="bv-mode ${t.mode === 'frame' ? 'on' : ''}" title="${t.mode === 'frame' ? 'Shown in a frame. Click to open it in the harness browser instead (for sites that refuse frames)' : 'Shown in the harness browser. Click to show it in a frame (works for your own served pages)'}" aria-label="Frame or harness browser"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/></svg></button>` : ''}${downloadsHTML()}`;
+       <span class="spacer"></span>${t.url ? `<button type="button" class="bv-cmt ${t.commenting ? 'on' : ''}" aria-pressed="${!!t.commenting}" title="Comment on part of this page: click an element, say what to change, and it goes with your next message">💬 ${t.commenting ? 'Done commenting' : 'Comment'}</button><button type="button" class="bv-exp" aria-haspopup="menu" title="Export this page as a PDF or one long picture, or the project's files as a ZIP">⤓ Export</button>` : ''}${REAL && t.url && !live ? '<button type="button" class="bv-dev" title="Open DevTools for this tab" aria-label="DevTools"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8l-4 4 4 4M16 8l4 4-4 4M13.5 5l-3 14"/></svg></button>' : ''}${!DESK && !t.agent && t.url ? `<button type="button" class="bv-mode ${t.mode === 'frame' ? 'on' : ''}" title="${t.mode === 'frame' ? 'Shown in a frame. Click to open it in the harness browser instead (for sites that refuse frames)' : 'Shown in the harness browser. Click to show it in a frame (works for your own served pages)'}" aria-label="Frame or harness browser"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/></svg></button>` : ''}${downloadsHTML()}`;
   for (const b of bar.querySelectorAll('.bv-nav')) b.onclick = () => (REAL ? window.ohDesktop.nav(t.sid, b.dataset.op) : ubCall(b.dataset.op));
   const dv = $('.bv-dev', bar); if (dv) dv.onclick = () => window.ohDesktop.nav(t.sid, 'devtools');
+  const cmb = $('.bv-cmt', bar); if (cmb) cmb.onclick = () => { t.commenting = !t.commenting; renderPane(); };
+  const exb = $('.bv-exp', bar); if (exb) exb.onclick = () => exportMenu(exb, c, t);
   const ex = $('.bv-ext', bar); if (ex) ex.onclick = () => window.ohDesktop.openExternal(t.url);
   wireDownloads(bar);
   const mb = $('.bv-mode', bar); if (mb) mb.onclick = () => { t.mode = t.mode === 'frame' ? 'remote' : 'frame'; t.opened = null; renderPane(); };
@@ -5502,6 +5932,7 @@ function renderBrowser(c) {
   $('.btab-new', body).onclick = () => { newBTab(''); renderPane(); $('#paneUrl').focus(); };
   const stage = $('.bstage', body);
   if (!t || !t.url) return newTabPage(c, stage);
+  if (t.commenting) return commentStage(c, t, stage);
   if (DESK && t.agent && t.desktop) { t.opened = t.url; return deskStage(t, stage); } // the agent's real tab: shown as it is, never reloaded
   if (DESK && !t.agent) return deskStage(t, stage);
   if (!t.agent && (t.mode || (t.mode = sameSite(t.url) ? 'frame' : 'remote')) === 'frame') {
@@ -5744,6 +6175,69 @@ function remixFrom(c, m) {
 
 // ---------- pages in the harness's browser (see server/userbrowser.js) ----------
 const sameSite = (u) => { try { const x = new URL(u); return x.origin === location.origin || /^(localhost|127\.0\.0\.1|\[::1\])$/.test(x.hostname); } catch { return false; } };
+// 💬 Comment mode: a live picture of the page (the tab's own one, or a copy of its page for frames and real tabs).
+// A click shows what is under it; a note turns it into a chip for the next message.
+async function commentStage(c, t, stage) {
+  const sid = t.agent || (!DESK && t.mode !== 'frame') ? t.sid : `cmt-${t.sid}`.slice(0, 60);
+  stage.innerHTML = `<div class="cmtview" tabindex="0"><img class="ub-shot" alt="The page to comment on"><div class="cmt-hl" hidden></div><div class="cmt-tip">💬 Click the part you want changed. Scroll to move around the page.</div><div class="cmt-pop" hidden></div></div>`;
+  const v = $('.cmtview', stage), img = $('.ub-shot', v), hl = $('.cmt-hl', v), pop = $('.cmt-pop', v);
+  const size = () => { const r = stage.getBoundingClientRect(); return { w: Math.round(r.width), h: Math.round(r.height) }; };
+  let view = { w: 1280, h: 800 };
+  const show = (res) => { if (res?.shot) { img.src = res.shot; view = { w: res.w || view.w, h: res.h || view.h }; } };
+  const first = await postJ('/api/ubrowser', { sid, op: sid === t.sid ? 'look' : 'open', url: t.url, ...size() });
+  if (first.error) { $('.cmt-tip', v).textContent = `⚠ ${first.error}`; return; }
+  show(first);
+  let dy = 0, dyT = null;
+  v.addEventListener('wheel', (e) => { e.preventDefault(); dy += e.deltaY; clearTimeout(dyT); dyT = setTimeout(async () => { const d = dy; dy = 0; hl.hidden = true; pop.hidden = true; await postJ('/api/ubrowser', { sid, op: 'scroll', dy: Math.round(d), ...size() }).catch(() => {}); show(await postJ('/api/ubrowser', { sid, op: 'look', ...size() })); }, 160); }, { passive: false });
+  img.onclick = async (e) => {
+    const sx = img.clientWidth / view.w, sy = img.clientHeight / view.h;
+    const res = await postJ('/api/ubrowser', { sid, op: 'inspect', x: e.offsetX / sx, y: e.offsetY / sy, ...size() });
+    if (res.error || !res.hit) { $('.cmt-tip', v).textContent = res.error ? `⚠ ${res.error}` : 'Nothing there to comment on. Try another spot.'; return; }
+    const h = res.hit, box = { left: h.rect.x * sx, top: h.rect.y * sy, width: h.rect.w * sx, height: h.rect.h * sy };
+    Object.assign(hl.style, { left: `${box.left}px`, top: `${box.top}px`, width: `${box.width}px`, height: `${box.height}px` }); hl.hidden = false;
+    pop.innerHTML = `<div class="cp-what">${res.crop ? `<img src="${res.crop}" alt="">` : ''}<div><b>${esc(h.tag)}</b> ${esc(clip(h.text || '(no text)', 60))}<div class="cp-sel" title="How the agent will find it">${esc(clip(h.selector, 70))}</div></div></div>
+      <textarea class="cp-note" rows="3" placeholder="What should change here? (optional)" aria-label="What should change here"></textarea>
+      <div class="cp-acts"><button type="button" class="kx-btn primary sm cp-add">Add to message</button><button type="button" class="kx-btn sm cp-cancel">Cancel</button></div>`;
+    pop.hidden = false;
+    const below = box.top + box.height + 8, room = v.clientHeight - below;
+    Object.assign(pop.style, { left: `${Math.max(8, Math.min(box.left, v.clientWidth - 300))}px`, top: `${room > 180 ? below : Math.max(8, box.top - 190)}px` });
+    const note = $('.cp-note', pop); note.focus();
+    const add = () => {
+      (c.comments ||= []).push({ ...h, note: note.value.trim(), crop: res.crop });
+      renderAttachments(c);
+      pop.hidden = true; hl.hidden = true;
+      $('.cmt-tip', v).textContent = `💬 ${c.comments.length} comment${c.comments.length > 1 ? 's' : ''} in your message box. Add more, or write your message and send it.`;
+    };
+    $('.cp-add', pop).onclick = add;
+    note.onkeydown = (ev) => { if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); add(); } if (ev.key === 'Escape') { pop.hidden = true; hl.hidden = true; } };
+    $('.cp-cancel', pop).onclick = () => { pop.hidden = true; hl.hidden = true; };
+  };
+}
+// ⤓ Export: the page as a PDF or one long PNG, or the project's files as a ZIP (without .quorx, node_modules or .git).
+function exportMenu(btn, c, t) {
+  document.querySelector('.exp-menu')?.remove();
+  const p = G.projects.find((x) => x.id === c.projectId);
+  const m = document.createElement('div'); m.className = 'exp-menu'; m.setAttribute('role', 'menu');
+  m.innerHTML = `<button type="button" role="menuitem" data-f="pdf">📄 PDF of this page</button><button type="button" role="menuitem" data-f="png">🖼 PNG of the whole page</button>${p && !p.missing && !p.needsFolder ? `<button type="button" role="menuitem" data-f="zip">🗜 ZIP of ${esc(p.name)}'s files</button>` : ''}<div class="exp-status" hidden></div>`;
+  document.body.appendChild(m);
+  { const r = btn.getBoundingClientRect(); m.style.top = `${r.bottom + 6}px`; m.style.left = `${Math.max(8, Math.min(r.right - 240, innerWidth - 248))}px`; }
+  const close = (e) => { if (!m.contains(e.target) && e.target !== btn) { m.remove(); document.removeEventListener('click', close, true); } };
+  setTimeout(() => document.addEventListener('click', close, true));
+  for (const b of m.querySelectorAll('[data-f]')) b.onclick = async () => {
+    const st = $('.exp-status', m); st.hidden = false; st.textContent = 'Making it…';
+    m.querySelectorAll('button').forEach((x) => (x.disabled = true));
+    try {
+      const r = await fetch('/api/export', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ format: b.dataset.f, url: t.url, projectId: c.projectId, width: t.w || 1280 }) });
+      if ((r.headers.get('content-type') || '').includes('json')) throw new Error((await r.json()).error || 'export failed');
+      const name = (r.headers.get('content-disposition') || '').match(/filename="([^"]+)"/)?.[1] || `export.${b.dataset.f}`;
+      const url = URL.createObjectURL(await r.blob());
+      const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60e3);
+      st.textContent = `Saved ${name}${r.headers.get('x-skipped') ? ` (${r.headers.get('x-skipped')} big files left out)` : ''}`;
+      setTimeout(() => m.remove(), 2500);
+    } catch (e) { st.textContent = `⚠ ${e.message}`; m.querySelectorAll('button').forEach((x) => (x.disabled = false)); }
+  };
+}
 function ubStatus(t) { const el = $('#paneBody .ub-status'); if (el) { el.textContent = t; el.hidden = !t; } }
 async function ubCall(op, a = {}) {
   const c = focused(), t = c && activeBTab(c);
@@ -5983,6 +6477,8 @@ function drawUpdate(u) {
 }
 if (DESK) {
   window.ohDesktop.on((ev) => { if (ev.type === 'update') drawUpdate(ev); });
+  // A clicked notification opens its chat.
+  window.ohDesktop.on((ev) => { if (ev.type === 'notify-click' && ev.chatId && !G.panes.includes(ev.chatId)) showChat(ev.chatId); });
   setTimeout(() => window.ohDesktop.update('state').then(drawUpdate).catch(() => {}), 1500);
   const ub = $('#updNote');
   const rb = $('#railUpd'); if (rb) rb.onclick = () => ub?.click();
@@ -6034,5 +6530,3 @@ async function restartHarness() {
 }
 $('#restartBtn')?.addEventListener('click', restartHarness);
 $('#staleNote')?.addEventListener('click', () => { if (!$('#restartBtn').disabled) restartHarness(); });
-  // A clicked notification opens its chat.
-  window.ohDesktop.on((ev) => { if (ev.type === 'notify-click' && ev.chatId && !G.panes.includes(ev.chatId)) showChat(ev.chatId); });

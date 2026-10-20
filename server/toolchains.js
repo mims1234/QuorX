@@ -20,7 +20,7 @@ async function rustBuilds() {
     if (fs.existsSync(path.join(dir, WIN ? 'main.exe' : 'main'))) return { ok: true, why: '' };
     const linker = /link(er|\.exe)|cc` not found|msvc/i.test(out || '');
     return { ok: false, why: linker ? 'no C linker: Rust needs the Visual Studio Build Tools with C++ to make programs on Windows' : `rustc could not build a test program (${String(out || 'no output').split(/\r?\n/).find((l) => /error/i.test(l)) || 'unknown error'})` };
-  } finally { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* in use */ } }
+  } finally { try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* in use */ } }
 }
 const ver = (re) => (o) => (o && re.test(o) ? o.match(re)[1] : null);
 

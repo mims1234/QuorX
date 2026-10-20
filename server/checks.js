@@ -71,7 +71,7 @@ export async function checkHtml(html, { label = 'page', dir = null } = {}) {
     if (type === 'module') {
       const tmp = path.join(os.tmpdir(), `quorx-check-${process.pid}-${Date.now()}-${n}.mjs`);
       try { fs.writeFileSync(tmp, code); out.push(...await checkJs(tmp, where)); }
-      finally { fs.rmSync(tmp, { force: true }); }
+      finally { try { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* still open */ } }
       continue;
     }
     if (type && !/javascript|ecmascript|^text\/jsx?$/.test(type)) continue; // shaders, templates, babel…
@@ -166,8 +166,10 @@ const INVENTED = [
 ];
 const FILLER = /lorem ipsum|dolor sit amet|\bfeature (?:one|two|three|1|2|3)\b|placeholder text|sample content|your (?:tagline|company name|text) here|insert (?:text|content) here/i;
 
-/** Design lint for CSS (a .css file, or the styles of a page). */
-export function lintCss(css) {
+const hex6 = (h) => { const x = h.toLowerCase().replace('#', ''); return `#${x.length === 3 || x.length === 4 ? x.slice(0, 3).split('').map((c) => c + c).join('') : x.slice(0, 6)}`; };
+
+/** Design lint for CSS (a .css file, or the styles of a page). `tokens`: the project's palette (a Set of #rrggbb), if it has one. */
+export function lintCss(css, { tokens = null } = {}) {
   const out = [];
   const plain = css.replace(/\/\*[\s\S]*?\*\//g, '');
   const indigo = INDIGO.filter((h) => plain.toLowerCase().includes(h));
@@ -185,16 +187,22 @@ export function lintCss(css) {
   // Colours written straight into rules instead of tokens (custom-property definitions are the tokens, so they don't count).
   const raw = new Set((plain.replace(/--[\w-]+\s*:[^;}]*/g, '').match(/#[0-9a-f]{3,8}\b/gi) || []).map((x) => x.toLowerCase()));
   if (raw.size > 12) out.push({ id: 'raw-hex', level: 'consider', msg: `${raw.size} different hex colours are used directly. Put the palette in :root tokens (--bg, --fg, --accent…) and use var().` });
+  // With a project design system: colours that are not in its tokens.css (custom properties a page defines itself count too).
+  if (tokens?.size) {
+    const own = new Set([...(plain.match(/--[\w-]+\s*:[^;}]*/g) || []).flatMap((d) => d.match(/#[0-9a-f]{3,8}\b/gi) || [])].map(hex6));
+    const off = [...new Set([...plain.matchAll(/#[0-9a-f]{3,8}\b/gi)].map((m) => hex6(m[0])))].filter((h) => !tokens.has(h) && !own.has(h));
+    if (off.length) out.push({ id: 'off-palette', level: 'consider', msg: `${off.length} colour${off.length > 1 ? 's are' : ' is'} not in the project's tokens.css (${off.slice(0, 5).join(', ')}${off.length > 5 ? '…' : ''}). Use its var(--…) tokens instead, or add the colour to tokens.css and DESIGN.md if the design really needs it.` });
+  }
   if (/outline\s*:\s*(?:none|0)\b/i.test(plain) && !/:focus(?:-visible|-within)?[^{]*\{[^}]*(?:outline|box-shadow|border)/i.test(plain)) out.push({ id: 'focus-removed', level: 'consider', msg: 'removes the focus outline with no :focus-visible style in its place, so keyboard users can\'t see where they are.' });
   if (PLACEHOLDER_IMG.test(plain)) out.push({ id: 'placeholder-images', level: 'consider', msg: 'loads pictures from a placeholder image site; they break offline and look generic. Use a CSS or SVG placeholder, or make a picture if the user wants one.' });
   return out;
 }
 
 /** Design lint for one HTML page: its styles, its markup and its visible text. */
-export function lintHtml(html) {
+export function lintHtml(html, opts = {}) {
   const css = [...html.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/gi)].map((m) => m[1]).join('\n')
     + '\n' + [...html.matchAll(/\bstyle\s*=\s*"([^"]*)"/gi)].map((m) => `x{${m[1]}}`).join('\n');
-  const out = lintCss(css);
+  const out = lintCss(css, opts);
   const has = (id) => out.some((x) => x.id === id);
   if (!has('default-indigo') && TW_INDIGO.test(html)) out.unshift({ id: 'default-indigo', level: 'fix', msg: `uses Tailwind's default indigo/violet classes (${html.match(TW_INDIGO)[0]}), the best-known sign of AI-made design. Pick an accent that fits the subject.` });
   if (!has('trust-gradient')) {
@@ -220,6 +228,15 @@ export function lintHtml(html) {
 }
 
 export const LINTED = /\.(html?|css)$/i;
+/** The colours a project's tokens.css defines (its design system), or null when it has none. */
+export function projectPalette(root) {
+  try {
+    const p = path.join(root, 'tokens.css');
+    if (!fs.existsSync(p)) return null;
+    const set = new Set((fs.readFileSync(p, 'utf8').match(/--[\w-]+\s*:[^;}]*/g) || []).flatMap((d) => d.match(/#[0-9a-f]{3,8}\b/gi) || []).map(hex6));
+    return set.size ? set : null;
+  } catch { return null; }
+}
 /** Design lint for one project file (HTML or CSS); an empty list for anything else or anything unreadable. */
 export function lintFile(root, rel) {
   const file = path.resolve(root, rel);
@@ -227,6 +244,8 @@ export function lintFile(root, rel) {
   try {
     if (!fs.existsSync(file) || fs.statSync(file).size > 2e6) return [];
     const text = fs.readFileSync(file, 'utf8');
-    return /\.css$/i.test(file) ? lintCss(text) : lintHtml(text);
+    // tokens.css itself is the palette; everything else is checked against it.
+    const tokens = path.relative(root, file).replaceAll('\\', '/') === 'tokens.css' ? null : projectPalette(root);
+    return /\.css$/i.test(file) ? lintCss(text, { tokens }) : lintHtml(text, { tokens });
   } catch { return []; }
 }

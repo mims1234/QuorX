@@ -177,6 +177,25 @@ export function setProjectColor(id, color) {
   return { id: p.id, color: p.color || null };
 }
 
+// Pinned (up to 3, kept at the top in the order they were pinned) and archived (out of the sidebar, the start screen
+// and the main search; found again under Archived). Archiving a project unpins it.
+export const MAX_PINNED = 3;
+export function setProjectFlags(id, { pinned, archived } = {}) {
+  const list = rawProjects();
+  let p = list.find((x) => x.id === id);
+  if (!p && id === 'scratch') { p = listProjects().find((x) => x.id === 'scratch'); p = { id: p.id, name: p.name, path: p.path, created: p.created }; list.unshift(p); }
+  if (!p) throw new Error('no such project');
+  if (archived === true) { p.archived = Date.now(); delete p.pinned; }
+  else if (archived === false) delete p.archived;
+  if (pinned === true && !p.pinned) {
+    if (p.archived) throw new Error('unarchive the project to pin it');
+    if (list.filter((x) => x.pinned && !x.archived).length >= MAX_PINNED) throw new Error(`up to ${MAX_PINNED} projects can be pinned: unpin one first`);
+    p.pinned = Date.now();
+  } else if (pinned === false) delete p.pinned;
+  fs.writeFileSync(PROJECTS, JSON.stringify(list, null, 2));
+  return { id: p.id, pinned: p.pinned || null, archived: p.archived || null };
+}
+
 export function getChat(id) {
   if (!validId(id) || !fs.existsSync(file(id))) return null;
   return JSON.parse(fs.readFileSync(file(id), 'utf8'));
