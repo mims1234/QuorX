@@ -47,7 +47,7 @@ export async function languageChecks(root, changed, { have = [], signal, timeout
         if (one.timedOut || signal?.aborted) break;
       }
       ran.push({ lang: lang.id, dir: path.relative(root, dir) || '.', code: r.code, ms: r.ms, timedOut: r.timedOut });
-      if (r.timedOut) { problems.push(`${lang.id} check in ${path.relative(root, dir) || '.'} did not finish in ${Math.round(limit / 1000)}s`); continue; }
+      if (r.timedOut) { problems.push(`${lang.id} check in ${path.relative(root, dir) || '.'} did not finish in ${Math.round(limit / 1000)}s${lang.timeoutHint ? `: ${lang.timeoutHint}` : ''}`); continue; }
       // parse(out, { dir, files }): a pack's own reader, for tools whose errors span lines or that exit 0 after an error (Godot).
       if (r.code === 0 && !lang.parse) continue;
       const mine = new Set(files.map((f) => path.basename(f).toLowerCase()));

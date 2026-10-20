@@ -16,8 +16,10 @@
 //                                       // a pattern for its error lines, when the usual "error" match misses them;
 //                                       // tidy(line, dir): the line as the agent should read it; cmd may be a
 //                                       // function (dir, { files }) giving one or more lines, or none to skip the
-//                                       // folder; timeout: ms; parse(out, { dir, files }): the error lines)
-//   summaries: [{ cmd: /^dotnet test\b/, summarize(out) }], // a short summary put above a command's output
+//                                       // folder; timeout: ms; parse(out, { dir, files }): the error lines;
+//                                       // timeoutHint: what to do when a first build is too slow)
+//   summaries: [{ cmd: /^dotnet test\b/, summarize(out, { cwd, since }) }], // a short summary put above a command's
+//                                       // output (since: when it started, for reports it wrote to disk)
 //   debug: { exts: ['.cs'], tool, label, gate({ file, args, cwd }), start({ file, args, cwd, port }) },
 //   notes(have, root),                  // what the agent should know, when the project is this kind
 //   test: { needs: ['dotnet'] },        // its self-test (tests/<id>.test.mjs) runs when these are installed
@@ -67,10 +69,10 @@ export const allChecks = () => PACKS.filter(here).flatMap((p) => (p.checks || []
 export const isCheckedFile = (rel) => allChecks().some((c) => c.ext.test(rel));
 
 /** A pack's summary of what a command printed (failed tests, say), to put above its output; '' when none applies. */
-export function outputSummary(line, out) {
+export function outputSummary(line, out, ctx = {}) {
   for (const p of PACKS.filter(here)) for (const s of p.summaries || []) {
     if (!s.cmd.test(String(line))) continue;
-    try { const t = s.summarize(String(out || '')); if (t) return t; } catch { /* a summary is a convenience */ }
+    try { const t = s.summarize(String(out || ''), ctx); if (t) return t; } catch { /* a summary is a convenience */ }
   }
   return '';
 }
