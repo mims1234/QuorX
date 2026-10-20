@@ -286,6 +286,8 @@ export const videoModels = () => cached('videos', async () => {
     id: m.id, name: m.name, kind: 'video', created: m.created || 0, ctx: null, in: ['text'], out: ['video'], price: [0, 0],
     skus: m.pricing_skus || {}, resolutions: m.supported_resolutions || [], durations: m.supported_durations || [],
     aspects: m.supported_aspect_ratios || [],
+    // first_frame / last_frame: the pictures it can start (or end) a clip from; audio: whether it makes sound.
+    frames: m.supported_frame_images || [], audio: m.generate_audio === true,
   }));
 });
 

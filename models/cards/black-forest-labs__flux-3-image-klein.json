@@ -1,0 +1,45 @@
+{
+  "id": "black-forest-labs/flux-3-image-klein",
+  "name": "Black Forest Labs: FLUX 3 Image Klein",
+  "kind": "image",
+  "refreshed": "2026-10-20",
+  "limits": {
+    "aspects": [
+      "21:9",
+      "2:1",
+      "16:9",
+      "3:2",
+      "7:5",
+      "4:3",
+      "5:4",
+      "1:1",
+      "4:5",
+      "3:4",
+      "5:7",
+      "2:3",
+      "9:16",
+      "1:2",
+      "9:21"
+    ],
+    "resolutions": [
+      "768",
+      "1K",
+      "1.5K",
+      "2K",
+      "4K"
+    ],
+    "images_in": true,
+    "per_image": null,
+    "price_per_m_image_tokens": 1.9162
+  },
+  "quirks": [],
+  "tips": [
+    "Lead with the subject, then setting, style, lighting and composition, in plain sentences.",
+    "Put any words that must appear in the picture in quotation marks.",
+    "Describe what you want; negative prompts are not used."
+  ],
+  "bench": "",
+  "sources": [
+    "https://docs.bfl.ai/guides/prompting_summary"
+  ]
+}

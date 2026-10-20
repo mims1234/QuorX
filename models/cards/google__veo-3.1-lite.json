@@ -1,0 +1,47 @@
+{
+  "id": "google/veo-3.1-lite",
+  "name": "Google: Veo 3.1 Lite",
+  "kind": "video",
+  "refreshed": "2026-10-20",
+  "limits": {
+    "durations": [
+      4,
+      6,
+      8
+    ],
+    "resolutions": [
+      "720p",
+      "1080p"
+    ],
+    "aspects": [
+      "16:9",
+      "9:16"
+    ],
+    "frames": [
+      "first_frame",
+      "last_frame"
+    ],
+    "audio": true,
+    "skus": {
+      "duration_seconds_with_audio": "0.08",
+      "duration_seconds_without_audio": "0.05",
+      "duration_seconds_with_audio_720p": "0.05",
+      "duration_seconds_without_audio_720p": "0.03"
+    }
+  },
+  "quirks": [
+    "Only 4, 6 or 8 seconds, and only 16:9 or 9:16.",
+    "Google lists the Veo 3.1 Preview models for shutdown on 22 Oct 2026 in its own API; check the catalogue if calls start failing."
+  ],
+  "tips": [
+    "Name specific subjects (\"a seasoned detective\", not \"a man\").",
+    "Name the camera movement, such as a slow dolly or a zoom.",
+    "Put sound and dialogue in their own sentences.",
+    "In a negative prompt, list what to leave out; don't write \"no\" or \"don't\"."
+  ],
+  "bench": "",
+  "sources": [
+    "https://docs.cloud.google.com/vertex-ai/generative-ai/docs/video/video-gen-prompt-guide",
+    "https://ai.google.dev/gemini-api/docs/video"
+  ]
+}

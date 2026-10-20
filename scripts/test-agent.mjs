@@ -6,6 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { loadCards, cardText, limitsLine, cardFile, CARDS_DIR, CARD_CHARS } from '../server/modelcards.js';
 import { runAgent, answerQuestion, answerApproval, answerBudget, setRunApproval, steerRun, holdCard } from '../server/agent.js';
 import { saveProject, forgetProject, setProjectBudget } from '../server/store.js';
 import { loadCheckpoint, dropCheckpoint, ledger } from '../server/runs.js';
@@ -59,6 +60,38 @@ test('a running reply sends what it has spent after every call, ending at its fi
   for (let k = 1; k < sp.length; k++) assert.ok(sp[k].cost >= sp[k - 1].cost && sp[k].calls >= sp[k - 1].calls);
   assert.ok(Math.abs(sp.at(-1).cost - done.stats.cost) < 1e-6);
   assert.ok(events.indexOf(sp[0]) < events.indexOf(done));
+});
+
+// ---------- model cards (models/cards/) ----------
+test('every shipped model card is well formed, cites its tips, and fits the agent in about 250 tokens', () => {
+  const cards = [...loadCards(true).values()];
+  assert.ok(cards.length >= 18, `cards: ${cards.length}`);
+  for (const c of cards) {
+    assert.ok(fs.existsSync(path.join(CARDS_DIR, cardFile(c.id))), `${c.id}: file name matches its id`);
+    assert.ok(['chat', 'decision', 'image', 'video', 'music', 'speech'].includes(c.kind), `${c.id}: kind ${c.kind}`);
+    assert.ok(c.limits && typeof c.limits === 'object', `${c.id}: limits`);
+    if (c.tips.length) assert.ok(c.sources.length && c.sources.every((u) => /^https:\/\//.test(u)), `${c.id}: tips cite https sources`);
+    assert.ok(cardText(c).length <= CARD_CHARS, `${c.id}: ${cardText(c).length} chars`);
+  }
+});
+
+test('a card reads as limits, quirks and tips, and drops tips first when it is too long', () => {
+  const c = { id: 'v/x', kind: 'video', limits: { durations: [4, 5, 6, 7, 8], resolutions: ['720p'], aspects: ['16:9'], frames: ['first_frame'], audio: true }, quirks: ['q1'], tips: ['t1', 't2'] };
+  assert.equal(cardText(c), '- v/x (video): 4-8 s · 720p · shapes 16:9 · starts from a picture · makes sound.\n  Quirk: q1\n  Tip: t1\n  Tip: t2');
+  assert.equal(cardText(c, 95), '- v/x (video): 4-8 s · 720p · shapes 16:9 · starts from a picture · makes sound.\n  Quirk: q1');
+  assert.match(limitsLine({ kind: 'chat', limits: { context: 1000000, max_output: 128000, tools: true, images_in: false } }), /^1M context · 128k max output · tool calls · text only$/);
+});
+
+test('the agent reads the cards of its own model and of the media models in use, and no others', async () => {
+  const { bodies } = await run(() => reply('Hi.'), { setup: { model: 'anthropic/claude-haiku-5.5' },
+    settings: { mediaEnabled: true, tools: { browser: { on: false }, image: { on: false }, music: { on: false }, speech: { on: false }, video: { on: true, pick: 'fixed', models: ['google/veo-3.1-lite', 'alibaba/wan-3.0'] } } } });
+  const sys = bodies[0].messages[0].content;
+  const text = typeof sys === 'string' ? sys : JSON.stringify(sys);
+  assert.match(text, /\[Model notes:/);
+  assert.match(text, /- anthropic\/claude-haiku-5\.5 \(chat\)/);
+  assert.match(text, /- google\/veo-3\.1-lite \(video\): 4, 6, 8 s/);
+  assert.doesNotMatch(text, /alibaba\/wan-3\.0 \(video\)/, 'only the first video model when the settings pick it');
+  assert.doesNotMatch(text, /QuorX build benchmark/, 'benchmark results are for the user, not the agent');
 });
 
 test('a reply that ends part-way keeps what it spent', async () => {

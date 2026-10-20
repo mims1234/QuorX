@@ -1,0 +1,29 @@
+{
+  "id": "anthropic/claude-haiku-5.5",
+  "name": "Anthropic: Claude Haiku 5.5",
+  "kind": "chat",
+  "refreshed": "2026-10-20",
+  "limits": {
+    "context": 1000000,
+    "max_output": 128000,
+    "tools": true,
+    "images_in": true,
+    "reasoning": true,
+    "price_per_m": [
+      0.1,
+      0.5
+    ]
+  },
+  "quirks": [
+    "In long agent prompts at low effort it can stop early and hand the task back (provider docs)."
+  ],
+  "tips": [
+    "Keep working until everything asked for is done; stop only when blocked or before a risky step.",
+    "Run a real check (tests, build, or the changed command) before reporting a change done.",
+    "Don't add features, docs or refactors nobody asked for; mention them at the end instead."
+  ],
+  "bench": "QuorX build benchmark (Oct 2026): through the harness 34 of 36 builds passed, 18.6 of 20, about $0.045 a build; one-shot 9 of 9 passed (18.3 of 20). Tool-call errors: 15 of 1,300 calls (1.2%).",
+  "sources": [
+    "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-haiku-5-5"
+  ]
+}
