@@ -1416,6 +1416,31 @@ test('/review finds uncommitted changes (untracked files too), then the branch a
   assert.equal(br.label, 'feature against main');
   assert.deepEqual(br.files.map((f) => f.path).sort(), ['app.js', 'new.js']);
   assert.throws(() => collectChanges(dir, { scope: 'branch', base: 'main;rm' }), /not a branch name/);
+  // A base that starts with "-" would be read by git as an option (e.g. -O<file>).
+  for (const base of ['-Oevil.txt', '--output=x', '-p']) assert.throws(() => collectChanges(dir, { scope: 'branch', base }), /not a branch name/);
+  assert.ok(!fs.existsSync(path.join(dir, 'evil.txt')));
+});
+
+test('/review never sends secrets: secrets files are skipped and keys in code are removed', async () => {
+  const dir = tempDir('quorx-cr-');
+  git(dir, 'init', '-q', '-b', 'main');
+  fs.writeFileSync(path.join(dir, 'app.js'), 'export const n = 1;\n');
+  gitCommit(dir, 'base');
+  const KEY = 'sk-or-v1-' + 'a1b2c3d4'.repeat(6), PEM = '-----BEGIN RSA PRIVATE KEY-----';
+  fs.writeFileSync(path.join(dir, 'app.js'), `export const n = 2;\nconst client = new Api({ apiKey: "${KEY}" });\nconst password = 'hunter2hunter2';\n`);
+  fs.writeFileSync(path.join(dir, '.env'), `OPENROUTER_API_KEY=${KEY}\nDB_SECRET=plainsecretvalue\n`);
+  fs.writeFileSync(path.join(dir, 'server.pem'), `${PEM}\nMIIEow\n`);
+  fs.writeFileSync(path.join(dir, 'notes.txt'), `${PEM}\nMIIEpA\n`);
+  const bodies = [];
+  const r = await reviewCode(dir, { scope: 'changes', model: 'test/reviewer', info: { tools: true } }, { chat: async (body) => { bodies.push(body); return findingsCall([]); } });
+  const sent = JSON.stringify(bodies);
+  assert.ok(!sent.includes(KEY), 'the key never reaches the model');
+  assert.doesNotMatch(sent, /hunter2hunter2|plainsecretvalue|PRIVATE KEY|MIIE/);
+  assert.doesNotMatch(sent, /### \.env|### server\.pem|### notes\.txt/);
+  assert.match(sent, /apiKey: \\"\[secret removed\]\\"/);
+  assert.deepEqual(r.secretFiles.sort(), ['.env', 'notes.txt', 'server.pem']);
+  assert.equal(r.redacted, 4); // each line is in the diff and in the whole file
+  assert.deepEqual(r.files, ['app.js']);
 });
 
 test('/review helpers: git diff parsing, finding checks, and the reviewer model setting', () => {

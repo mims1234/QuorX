@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { reviewFiles, reviewDiff, safePath } from './workspace.js';
+import { SECRET_FILE, findKey, redactSecrets } from './secrets.js';
 
 export const SEVERITIES = ['breaks', 'annoying', 'minor'];
 const MAX_FINDINGS = 12, MAX_FILES = 40, WHOLE_FILE_LINES = 400;
@@ -15,13 +16,16 @@ const SKIP = /(^|\/)(node_modules|\.git|\.quorx|dist|build|\.next|vendor)\/|(^|\
 const BINARY = /\.(png|jpe?g|gif|webp|ico|bmp|svg|mp3|mp4|wav|ogg|webm|woff2?|ttf|otf|zip|gz|pdf|exe|dll|so|dylib|wasm|db|sqlite)$/i;
 
 // ---------- the changes ----------
+const DIFF_FLAGS = ['--no-color', '--unified=3', '--no-ext-diff', '--no-textconv'];
+// A project's own .git/config can run programs on git diff (core.fsmonitor, diff drivers, textconv): those are off,
+// and revisions come after --end-of-options, so a name can never be read as an option.
 function git(root, args, max = 20e6) {
-  return execFileSync('git', ['-c', 'core.quotepath=off', ...args], { cwd: root, encoding: 'utf8', maxBuffer: max, timeout: 20e3, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
+  return execFileSync('git', ['-c', 'core.quotepath=off', '-c', 'core.fsmonitor=false', ...args], { cwd: root, encoding: 'utf8', maxBuffer: max, timeout: 20e3, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
 }
 const isRepo = (root) => { try { return git(root, ['rev-parse', '--is-inside-work-tree']).trim() === 'true'; } catch { return false; } };
 // The branch to compare against: main, else master, else what origin/HEAD points at.
 export function baseBranch(root) {
-  for (const b of ['main', 'master', 'origin/main', 'origin/master']) { try { git(root, ['rev-parse', '--verify', '--quiet', b]); return b; } catch { /* next */ } }
+  for (const b of ['main', 'master', 'origin/main', 'origin/master']) { try { git(root, ['rev-parse', '--verify', '--quiet', '--end-of-options', b]); return b; } catch { /* next */ } }
   try { return git(root, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD']).trim() || null; } catch { return null; }
 }
 
@@ -68,11 +72,12 @@ export function collectChanges(root, { scope = 'auto', runId = '', base = '' } =
   const repo = (want('changes') || want('branch')) && isRepo(root);
   if (!repo && scope !== 'reply') tried.push('the project folder is not a git repository');
   if (repo && want('changes')) {
-    const diff = git(root, ['diff', 'HEAD', '--no-color', '--unified=3', '--no-ext-diff']).toString();
+    const diff = git(root, ['diff', ...DIFF_FLAGS, '--end-of-options', 'HEAD']);
     const files = parseGitDiff(diff);
     // Untracked files are whole new files.
     for (const rel of git(root, ['ls-files', '--others', '--exclude-standard']).split('\n').map((x) => x.trim()).filter(Boolean)) {
       if (files.some((f) => f.path === rel)) continue;
+      if (SECRET_FILE.test(rel)) { files.push({ path: rel, status: 'added', secret: true, hunks: [] }); continue; } // never read
       const text = readOr(root, rel);
       files.push(text == null ? { path: rel, status: 'added', binary: true, hunks: [] } : { path: rel, status: 'added', hunks: [{ lines: text.split('\n').map((t, i) => ['+', null, i + 1, t]) }] });
     }
@@ -83,9 +88,9 @@ export function collectChanges(root, { scope = 'auto', runId = '', base = '' } =
     const b = String(base || '').trim() || baseBranch(root);
     if (!b) tried.push('there is no main branch to compare with');
     else {
-      if (!/^[\w./-]+$/.test(b)) throw new Error(`"${b}" is not a branch name.`);
+      if (!/^[\w.][\w./-]*$/.test(b)) throw new Error(`"${b}" is not a branch name.`);
       const head = git(root, ['rev-parse', '--abbrev-ref', 'HEAD']).trim();
-      const files = parseGitDiff(git(root, ['diff', `${b}...HEAD`, '--no-color', '--unified=3', '--no-ext-diff']));
+      const files = parseGitDiff(git(root, ['diff', ...DIFF_FLAGS, '--end-of-options', `${b}...HEAD`]));
       if (files.length) return { scope: 'branch', label: `${head} against ${b}`, files };
       tried.push(`${head} has no changes against ${b}`);
     }
@@ -111,24 +116,30 @@ function hunkText(f) {
 export function reviewBrief(root, changes, { chars = 60000 } = {}) {
   const files = changes.files.filter((f) => !SKIP.test(f.path)).slice(0, MAX_FILES);
   const skipped = changes.files.length - files.length;
-  const parts = [], shown = [];
-  let used = 0, cut = false;
+  const parts = [], shown = [], secretFiles = [];
+  let used = 0, cut = false, redacted = 0;
   for (const f of files) {
+    // Secrets files (.env, keys, credentials) are never sent, nor is a file holding a private key.
+    if (f.secret || SECRET_FILE.test(f.path) || f.hunks.some((h) => h.lines.some((l) => findKey(l[3]) === 'a private key'))) { secretFiles.push(f.path); continue; }
     if (f.binary || BINARY.test(f.path)) { parts.push(`### ${f.path} (${f.status}, binary: not shown)`); continue; }
     let block = `### ${f.path} (${f.status})\nDiff (+ added, - removed; the number is the line in the new file):\n${hunkText(f) || '(no line changes)'}`;
     const now = f.status === 'deleted' ? null : readOr(root, f.path);
     const lines = now?.replace(/\r?\n$/, '').split('\n') || [];
+    if (now && findKey(now) === 'a private key') { secretFiles.push(f.path); continue; }
     // The whole file helps the reviewer see what the change breaks elsewhere in it; only when it is short and new lines aren't the whole file already.
     if (now && f.status !== 'added' && lines.length <= WHOLE_FILE_LINES && used + block.length + now.length * 1.1 < chars * 0.8) {
       const w = String(lines.length).length;
       block += `\nWhole file now:\n${lines.map((t, i) => `${pad(i + 1, w)} | ${clip(t, 400)}`).join('\n')}`;
     }
+    // Keys and tokens in the code itself are replaced before anything leaves this computer.
+    const red = redactSecrets(block);
+    block = red.text; redacted += red.count;
     if (used + block.length > chars) { block = block.slice(0, Math.max(0, chars - used)); cut = true; }
     if (!block) break;
     parts.push(block); shown.push(f.path); used += block.length;
     if (cut) break;
   }
-  return { text: parts.join('\n\n'), shown, cut, skipped };
+  return { text: parts.join('\n\n'), shown, cut, skipped, secretFiles, redacted };
 }
 
 export const CODE_REVIEW_SYSTEM = `You review code changes and report real bugs. You did not write this code.
@@ -203,7 +214,7 @@ export async function reviewCode(root, opts, deps) {
   // A small window gets a small brief (about 4 characters a token, half the window for the request).
   const chars = Math.max(8000, Math.min(120000, Math.round((Number(info.ctx) || 64000) * 4 * 0.45)));
   const brief = reviewBrief(root, changes, { chars });
-  if (!brief.shown.length) { const e = new Error('Nothing to review: only binary, generated or lock files changed.'); e.empty = true; throw e; }
+  if (!brief.shown.length) { const e = new Error(`Nothing to review: only ${brief.secretFiles.length ? 'secrets files (never sent), ' : ''}binary, generated or lock files changed.`); e.empty = true; throw e; }
   const tools = info.tools !== false;
   const user = `Changes to review: ${changes.label}.${opts.ask ? `\nThe user asks you to look especially at: ${clip(opts.ask, 300)}` : ''}${brief.cut ? '\nThe diff was cut to fit; review what is shown.' : ''}\n\n${brief.text}\n\n${tools ? 'Call submit_findings once with what you found.' : 'Answer with only a JSON object: {"findings": [{"file", "line", "severity", "title", "why", "fix"}], "summary": "..."}'}`;
   const messages = [{ role: 'system', content: CODE_REVIEW_SYSTEM }, { role: 'user', content: user }];
@@ -231,7 +242,7 @@ export async function reviewCode(root, opts, deps) {
   }
   if (!parsed) throw new Error(`The reviewer (${opts.model}) did not return findings in a form QuorX can read.`);
   const { findings, dropped } = checkFindings(parsed.findings, changes, root);
-  return { scope: changes.scope, label: changes.label, files: brief.shown, skipped: brief.skipped, cut: brief.cut, findings, dropped: dropped.length, summary: clip(parsed.summary, 300), model: opts.model, cost, calls, ms: Date.now() - t0 };
+  return { scope: changes.scope, label: changes.label, files: brief.shown, skipped: brief.skipped, cut: brief.cut, secretFiles: brief.secretFiles, redacted: brief.redacted, findings, dropped: dropped.length, summary: clip(parsed.summary, 300), model: opts.model, cost, calls, ms: Date.now() - t0 };
 }
 
 // The reviewer model, chosen as the build reviewer is: a model picked in Settings, else the Cheap or Strong

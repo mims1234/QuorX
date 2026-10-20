@@ -2413,7 +2413,7 @@ async function codeReview(c, arg = '', { auto = false, runId = '' } = {}) {
   m.pending = false;
   if (!r || r.error) { m.error = r?.error || 'No answer from QuorX.'; m.empty = !!r?.empty; }
   else {
-    Object.assign(m, { label: r.label, scope: r.scope, files: r.files, cut: r.cut, skipped: r.skipped, dropped: r.dropped, summary: r.summary, model: r.model, cost: r.cost, ms: r.ms, findings: r.findings.map((x) => ({ ...x, pick: x.severity !== 'minor' })) });
+    Object.assign(m, { label: r.label, scope: r.scope, files: r.files, cut: r.cut, skipped: r.skipped, secretFiles: r.secretFiles || [], redacted: r.redacted || 0, dropped: r.dropped, summary: r.summary, model: r.model, cost: r.cost, ms: r.ms, findings: r.findings.map((x) => ({ ...x, pick: x.severity !== 'minor' })) });
     if (r.cost) (c.agent.extraUsage ||= []).push({ kind: 'codereview', model: r.model, cost: r.cost, at: Date.now(), runId: r.id });
   }
   // An automatic review that found nothing (or had nothing to read) leaves no card behind.
@@ -2427,7 +2427,7 @@ function codeReviewHTML(m) {
   const head = `<div class="cr-head"><b>🔎 Code review</b>${m.label ? `<span class="cr-scope">${esc(m.label)} · ${n} file${n === 1 ? '' : 's'}</span>` : ''}${m.auto ? '<span class="cr-auto" title="Run after a reply that changed code (⚙ Settings → Agent loop → Reviewer)">auto</span>' : ''}${m.model ? `<span class="cr-by" title="${esc(m.model)}">${esc(short(m.model))}${m.ms ? ` · ${secs(m.ms)}` : ''}</span>` : ''}${m.cost ? `<span class="cost cr-cost" title="What this review cost">${money(m.cost, 4)}</span>` : ''}</div>`;
   if (m.pending) return `<div class="cr-card">${head}<div class="cr-wait">Reading the changes…</div></div>`;
   if (m.error) return `<div class="cr-card">${head}<div class="cr-${m.empty ? 'none' : 'err'}">${esc(m.error)}</div></div>`;
-  const notes = [m.cut ? 'The diff was cut to fit the reviewer\'s context.' : '', m.skipped ? `${m.skipped} generated or lock file${m.skipped > 1 ? 's' : ''} skipped.` : '', m.dropped ? `${m.dropped} finding${m.dropped > 1 ? 's' : ''} about files that did not change ${m.dropped > 1 ? 'were' : 'was'} dropped.` : ''].filter(Boolean).join(' ');
+  const notes = [m.secretFiles?.length ? `Not sent to the reviewer: ${m.secretFiles.slice(0, 4).join(', ')}${m.secretFiles.length > 4 ? ` +${m.secretFiles.length - 4}` : ''} (looks like a secrets file).` : '', m.redacted ? `${m.redacted} key${m.redacted > 1 ? 's or tokens were' : ' or token was'} removed from the code before it was sent.` : '', m.cut ? 'The diff was cut to fit the reviewer\'s context.' : '', m.skipped ? `${m.skipped} generated or lock file${m.skipped > 1 ? 's' : ''} skipped.` : '', m.dropped ? `${m.dropped} finding${m.dropped > 1 ? 's' : ''} about files that did not change ${m.dropped > 1 ? 'were' : 'was'} dropped.` : ''].filter(Boolean).join(' ');
   if (!m.findings.length) return `<div class="cr-card">${head}<div class="cr-none">✓ No bugs found.${m.summary ? ` ${esc(m.summary)}` : ''}</div>${notes ? `<div class="cr-note">${esc(notes)}</div>` : ''}</div>`;
   const picked = m.findings.filter((x) => x.pick).length;
   return `<div class="cr-card">${head}${m.summary ? `<div class="cr-sum">${esc(m.summary)}</div>` : ''}<ol class="cr-list">${m.findings.map((x, i) => `<li class="cr-item sev-${x.severity}">
