@@ -52,6 +52,8 @@ export function buildErrors(out) {
   }
   return list;
 }
+/** A build's errors that point at a file, as lines (the compiler checks' parse). */
+export const diagLines = (out) => buildErrors(out).filter((e) => e.file).map((e) => `${e.file}:${e.line}${e.col ? `:${e.col}` : ''}: error: ${e.msg}`);
 /** An error line as the agent should read it: its path relative to the project folder. */
 export function tidyDiag(line, dir) {
   const d = parseDiag(line);

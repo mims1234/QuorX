@@ -15,7 +15,8 @@
 //   checks: [{ id, tool, ext, marker(dir), cmd, errors, tidy }], // compiler checks before the final reply (errors:
 //                                       // a pattern for its error lines, when the usual "error" match misses them;
 //                                       // tidy(line, dir): the line as the agent should read it; cmd may be a
-//                                       // function of the folder when the folder decides it, null to skip)
+//                                       // function (dir, { files }) giving one or more lines, or none to skip the
+//                                       // folder; timeout: ms; parse(out, { dir, files }): the error lines)
 //   summaries: [{ cmd: /^dotnet test\b/, summarize(out) }], // a short summary put above a command's output
 //   debug: { exts: ['.cs'], tool, label, gate({ file, args }), start({ file, args, cwd, port }) },
 //   notes(have, root),                  // what the agent should know, when the project is this kind

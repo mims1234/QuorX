@@ -27,7 +27,7 @@ import { languageChecks } from './langchecks.js';
 import { audit } from './audit.js';
 import { packagesOf, checkPackages } from './pkgguard.js';
 import { testChanges, TEST_FILE } from './testguard.js';
-import { debugStart, debugBreak, debugMove, debugState, debugEval, debugStop, stateText, debugLanguages, debugGateLine } from './debugger.js';
+import { debugStart, debugAttach, debugBreak, debugMove, debugState, debugEval, debugStop, stateText, debugLanguages, debugGateLine } from './debugger.js';
 import { isCheckedFile, packNotes, outputSummary } from './packs/index.js';
 import { devices as adbDevices, pickDevice, readScreen, tap as adbTap, typeText as adbType, key as adbKey, screenshot as adbShot, install as adbInstall, launch as adbLaunch, logcat as adbLog } from './android.js';
 import { listSkills, readSkill, saveSkill, listTemplates } from './skills.js';
@@ -427,9 +427,9 @@ const CODE_TOOLS = [
     action: { type: 'string', enum: ['start', 'send', 'read', 'stop'] }, command: { type: 'string', description: 'start: the command line' }, id: { type: 'string', description: 'send/read/stop: the terminal id, e.g. "t1"' },
     text: { type: 'string', description: 'send: text to type' }, keys: { type: 'array', items: { type: 'string' }, description: 'send: keys to press after the text, in order: Enter, Tab, Esc, Up, Down, Left, Right, Backspace, Space, Ctrl+C, Ctrl+D, F1–F5, PageUp, PageDown, or a single character' },
     wait_s: { type: 'integer', minimum: 0, maximum: 30 }, cols: { type: 'integer', minimum: 40, maximum: 200 }, rows: { type: 'integer', minimum: 10, maximum: 60 }, cwd: { type: 'string' } } } } },
-  { type: 'function', function: { name: 'debug', description: `A debugger for ${debugLanguages()} programs, for bugs that reading the trace and adding prints haven't found. start runs a file paused (args optional); break sets a breakpoint at file:line (condition optional); continue runs to the next breakpoint; step / into / out move one line; state shows where it is, the stack and the local variables; eval evaluates an expression where it stopped; stop ends it. Python needs debugpy (pip install debugpy).`, parameters: { type: 'object', required: ['action'], properties: {
-    action: { type: 'string', enum: ['start', 'break', 'continue', 'step', 'into', 'out', 'state', 'eval', 'stop'] }, id: { type: 'string', description: 'The session id from start, e.g. "d1"' },
-    file: { type: 'string' }, args: { type: 'array', items: { type: 'string' } }, line: { type: 'integer' }, condition: { type: 'string' }, expr: { type: 'string' }, frame: { type: 'integer' },
+  { type: 'function', function: { name: 'debug', description: `A debugger for ${debugLanguages()} programs, for bugs that reading the trace and adding prints haven't found. start runs a file paused (args optional); attach connects to the Node inspector of a background job you started with --inspect=<port> (an Electron app's main process, a server), and stop then only disconnects; break sets a breakpoint at file:line (condition optional); continue runs to the next breakpoint; step / into / out move one line; state shows where it is, the stack and the local variables; eval evaluates an expression where it stopped; stop ends it. Python needs debugpy (pip install debugpy).`, parameters: { type: 'object', required: ['action'], properties: {
+    action: { type: 'string', enum: ['start', 'attach', 'break', 'continue', 'step', 'into', 'out', 'state', 'eval', 'stop'] }, id: { type: 'string', description: 'The session id from start, e.g. "d1"' },
+    file: { type: 'string' }, args: { type: 'array', items: { type: 'string' } }, line: { type: 'integer' }, condition: { type: 'string' }, expr: { type: 'string' }, frame: { type: 'integer' }, port: { type: 'integer', description: 'attach: the --inspect port' },
     program: { type: 'string', description: 'start, for Go, C, C++ and Rust: the built program to run, only when QuorX cannot find it (it finds Go packages, Cargo binaries and CMake targets itself)' } } } } },
   { type: 'function', function: { name: 'android', description: 'Test an Android app on an emulator (adb). devices: what is connected. install {apk}: an APK from the project. launch {package}. read: the screen as text; interactive controls are numbered [n] with their position @x,y. tap {ref} or {x, y}. type {text}: into the focused field. key {key}: back, home, enter, tab, delete, up/down/left/right. screenshot: a picture for the user. log {package}: recent errors and the app\'s own log lines. Emulators only, unless the user allows phones.', parameters: { type: 'object', required: ['action'], properties: {
     action: { type: 'string', enum: ['devices', 'install', 'launch', 'read', 'tap', 'type', 'key', 'screenshot', 'log'] }, device: { type: 'string' }, apk: { type: 'string' }, package: { type: 'string' },
@@ -2204,9 +2204,9 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
     if (name === 'debug') {
       const act = String(args.action || '');
       // Earned: after a few failed tries (errors, a build sent back), or when the user turned it on for every reply.
-      if (S.debugger === 'off' && act === 'start') return 'The user has turned the debugger off. Debug with the shell: reproduce, read the trace, add prints.';
+      if (S.debugger === 'off' && (act === 'start' || act === 'attach')) return 'The user has turned the debugger off. Debug with the shell: reproduce, read the trace, add prints.';
       const earned = S.debugger === 'always' || (run.errSteps?.length || 0) >= 2 || (run.verifyRounds || 0) > 0 || (run.reviewRounds || 0) > 0 || run.debugOn;
-      if (act === 'start' && !earned) return 'Not yet: reproduce the bug, read the error\'s file and line, and add a print or log line to test your guess first. The debugger opens after a couple of failed tries (the user can turn it on for every reply).';
+      if ((act === 'start' || act === 'attach') && !earned) return 'Not yet: reproduce the bug, read the error\'s file and line, and add a print or log line to test your guess first. The debugger opens after a couple of failed tries (the user can turn it on for every reply).';
       if (act === 'start') {
         const file = String(args.file || '');
         safePath(root, file);
@@ -2223,12 +2223,19 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
         emit({ t: 'debug', id: s.id, action: 'start', file, at: at() });
         return `Debug session ${s.id} (${s.kind}) started: ${file} is paused before its first line. Set breakpoints with break, then continue. Its output goes to ${logRel}.${s.note ? ` ${s.note}` : ''}`;
       }
+      if (act === 'attach') {
+        // No new command runs: the job it attaches to was approved when it started.
+        const s = await debugAttach({ projectId, cwd: root, port: args.port });
+        run.debugOn = true;
+        emit({ t: 'debug', id: s.id, action: 'attach', file: `port ${args.port}`, at: at() });
+        return `Debug session ${s.id} attached to job ${s.job} on port ${args.port}: ${s.paused ? 'paused on its first line' : 'it keeps running'}. Set breakpoints with break, then continue (trigger the code from the app if it runs on a click). stop disconnects; job_stop ends the program.`;
+      }
       let out;
       if (act === 'break') out = await debugBreak(args.id, String(args.file || ''), Number(args.line), args.condition);
       else if (['continue', 'step', 'into', 'out'].includes(act)) out = stateText(await debugMove(args.id, act));
       else if (act === 'state') out = stateText(await debugState(args.id));
       else if (act === 'eval') out = `${clip(args.expr, 200)} → ${await debugEval(args.id, String(args.expr || ''), Number(args.frame) || 0)}`;
-      else if (act === 'stop') { const r = await debugStop(args.id); out = r.already ? 'The program had already ended.' : stopNote(r); }
+      else if (act === 'stop') { const r = await debugStop(args.id); out = r.detached ? `Disconnected; job ${r.job} keeps running.` : r.already ? 'The program had already ended.' : stopNote(r); }
       else return 'Error: unknown debug action.';
       emit({ t: 'debug', id: args.id, action: act, text: clip(out, 1500), at: at() });
       return out;
@@ -2605,9 +2612,10 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
     }
     throw new Error('target must be artifact:<id>, site:<path>, app:<name>, or an http(s) URL');
   }
-  // Pages from the outside web are labelled untrusted; the agent's own pages and apps are not.
+  // Pages from the outside web are labelled untrusted; the agent's own pages and apps are not (an app's window
+  // loaded from its own files, too).
   function pageReport(sum, did) {
-    const own = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//i.test(String(sum.url));
+    const own = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//i.test(String(sum.url)) || (tab?.app && /^file:/i.test(String(sum.url)));
     return `${did ? did + '\n' : ''}Title: ${sum.title || '(none)'} · URL: ${sum.url}${sum.scroll && sum.size ? ` · Scrolled to ${sum.scroll[1]} of ${sum.size[1]} px (the screenshot shows ${sum.scroll[1]}–${sum.scroll[1] + (sum.view?.[1] || 0)})` : ''}\nControls: ${sum.controls.join('; ') || '(none)'}\nConsole errors: ${tab.console.length ? tab.console.slice(-8).join(' | ') : 'none'}\nVisible text:\n${own ? sum.text || '(empty)' : untrusted(sum.text || '(empty)', sum.url)}`;
   }
   // The agent's tab can disappear (closed in the desktop app's pane, the app restarted). Drop it and open a fresh

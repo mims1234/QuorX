@@ -10,7 +10,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { MAC, run } from './_lib.js';
 import { findLldbDap, listenArgs } from './_lldb.js';
-import { parseSimctl, pickSimulator, buildErrors, tidyDiag, xcodeContainer, listSchemes, pickScheme, projectPlatform, projectBundleId, DESTINATIONS,
+import { parseSimctl, pickSimulator, buildErrors, diagLines, tidyDiag, xcodeContainer, listSchemes, pickScheme, projectPlatform, projectBundleId, DESTINATIONS,
   xcodeCheckLine, parseIps, crashText, newestCrash, CRASHED } from './_apple.js';
 
 const quote = (a) => (/[^\w@%+=:,./-]/.test(a) ? `'${String(a).replace(/'/g, "'\\''")}'` : a);
@@ -176,8 +176,10 @@ export default {
   markers: [/\.xcodeproj$/, /\.xcworkspace$/, /^Package\.swift$/],
   checks: [
     // The dir's scheme is built for a simulator (or the Mac) with signing off: no device or certificate needed.
-    { id: 'xcode', tool: 'xcode', ext: /\.(swift|m|mm|h|metal)$/i, marker: (d) => !!xcodeContainer(d), cmd: (dir) => xcodeCheckLine(dir), tidy: tidyDiag },
-    { id: 'swiftpm', tool: 'swift', ext: /\.swift$/i, marker: (d) => fs.existsSync(path.join(d, 'Package.swift')) && !xcodeContainer(d), cmd: 'swift build -q', tidy: tidyDiag },
+    // Errors are read by buildErrors (each once, warnings left out), then made relative by tidyDiag. A first build
+    // resolves Swift packages and indexes the SDK, so it gets ten minutes.
+    { id: 'xcode', tool: 'xcode', ext: /\.(swift|m|mm|h|metal)$/i, marker: (d) => !!xcodeContainer(d), cmd: (dir) => xcodeCheckLine(dir), timeout: 600e3, parse: diagLines, tidy: tidyDiag },
+    { id: 'swiftpm', tool: 'swift', ext: /\.swift$/i, marker: (d) => fs.existsSync(path.join(d, 'Package.swift')) && !xcodeContainer(d), cmd: 'swift build -q', timeout: 300e3, parse: diagLines, tidy: tidyDiag },
   ],
   summaries: [{ cmd: /\.ips\b/, summarize: ipsSummary }, { cmd: RUNS, summarize: crashSummary }],
   debug: {
