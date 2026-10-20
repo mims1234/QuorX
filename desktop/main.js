@@ -5,7 +5,7 @@
 //
 // The server: if a harness already answers on its port, the window attaches to it (two servers on the
 // same data folder would fight). Otherwise it starts server.js with Electron's own Node.
-const { app, BrowserWindow, WebContentsView, Tray, Menu, nativeImage, ipcMain, session, shell, dialog } = require('electron');
+const { app, BrowserWindow, WebContentsView, Tray, Menu, nativeImage, ipcMain, session, shell, dialog, Notification } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const { spawn } = require('node:child_process');
@@ -46,6 +46,7 @@ if (process.env.OH_USER_DATA) app.setPath('userData', process.env.OH_USER_DATA);
 if (!app.requestSingleInstanceLock()) app.quit();
 // Windows shows the page's notifications ("Needs your approval", "Reply finished") under this app's name.
 if (process.platform === 'win32') app.setAppUserModelId('dev.quorx.desktop');
+app.whenReady().then(() => registerToastName());
 app.on('second-instance', () => showWindow());
 
 function readEnvPort(dir) {
@@ -102,6 +103,12 @@ function createWindow() {
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false },
   });
   win.once('ready-to-show', () => { if (!HIDDEN) win.show(); });
+  // The zoom you left QuorX at; Ctrl+wheel on the app goes through the same steps (the page handles the keys).
+  win.webContents.on('did-finish-load', () => { const z = Number(readConfig().zoom); if (z >= 0.5 && z <= 2) win.webContents.setZoomFactor(z); });
+  // Zoom keys and Ctrl+wheel in the app go to the page, which knows what you're on: an artifact or a page preview
+  // (inside a frame, which the page never hears keys from), the terminal, or QuorX itself (it calls back 'zoom').
+  win.webContents.on('before-input-event', (e, input) => { const dir = zoomKey(input); if (dir) { e.preventDefault(); send({ type: 'zoom-key', dir }); } });
+  win.webContents.on('zoom-changed', (_e, dir) => send({ type: 'zoom-wheel', dir }));
   win.loadURL(origin);
   // The app window only shows the app; links elsewhere open in your browser.
   // Same origin exactly (not just the same prefix), and only web and mail links go to the system: other schemes
@@ -184,6 +191,26 @@ function wireView(sid, view) {
   wc.on('page-favicon-updated', (_e, icons) => send({ sid, type: 'favicon', icon: icons[0] || null }));
   // Pop-ups open as new tabs in the pane.
   wc.setWindowOpenHandler(({ url }) => { send({ sid, type: 'popup', url }); return { action: 'deny' }; });
+  // Ctrl + / − / 0 and Ctrl+wheel zoom the page in this tab only (QuorX itself keeps its size). Not the agent's
+  // own tab: its page size is set for what the agent measures and screenshots.
+  const zoomTab = (dir) => { const t = tabs.get(sid); if (!t || t.agent) return; wc.setZoomFactor(nextZoom(wc.getZoomFactor(), dir)); send({ sid, type: 'zoom', factor: wc.getZoomFactor() }); };
+  wc.on('before-input-event', (e, input) => { const dir = zoomKey(input); if (dir) { e.preventDefault(); zoomTab(dir); } });
+  wc.on('zoom-changed', (_e, dir) => zoomTab(dir));
+}
+// Zoom in Chrome's steps. zoomKey reads Ctrl + / − / 0 (with or without Shift, top row or keypad).
+const ZOOMS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
+function nextZoom(f, dir) {
+  if (dir === 'reset') return 1;
+  const i = ZOOMS.findIndex((z) => Math.abs(z - f) < 0.01);
+  if (i < 0) return dir === 'in' ? ZOOMS.find((z) => z > f) || 2 : [...ZOOMS].reverse().find((z) => z < f) || 0.5;
+  return ZOOMS[Math.max(0, Math.min(ZOOMS.length - 1, i + (dir === 'in' ? 1 : -1)))];
+}
+function zoomKey(input) {
+  if (input.type !== 'keyDown' || !(input.control || input.meta) || input.alt) return null;
+  if (['=', '+', 'Add'].includes(input.key) || input.code === 'Equal' || input.code === 'NumpadAdd') return 'in';
+  if (['-', '_', 'Subtract'].includes(input.key) || input.code === 'Minus' || input.code === 'NumpadSubtract') return 'out';
+  if (input.key === '0' || input.code === 'Digit0' || input.code === 'Numpad0') return 'reset';
+  return null;
 }
 // Only the app's own page may drive tabs.
 const fromApp = (e) => { try { return new URL(e.senderFrame.url).origin === new URL(origin).origin; } catch { return false; } };
@@ -191,14 +218,16 @@ function handle(name, fn) { ipcMain.handle(`oh:${name}`, (e, ...a) => { if (!fro
 handle('open', (sid, url) => { if (!/^https?:\/\//i.test(String(url))) throw new Error('only http and https addresses'); tabFor(sid).view.webContents.loadURL(url).catch(() => {}); return true; });
 handle('bounds', (sid, r) => {
   const t = tabs.get(sid); if (!t) return false;
-  const b = { x: Math.round(r.x), y: Math.round(r.y), width: Math.max(0, Math.round(r.width)), height: Math.max(0, Math.round(r.height)) };
+  // The page measures in its own pixels, which zooming QuorX scales; views are placed in the window's.
+  const z = win?.webContents.getZoomFactor() || 1;
+  const b = { x: Math.round(r.x * z), y: Math.round(r.y * z), width: Math.max(0, Math.round(r.width * z)), height: Math.max(0, Math.round(r.height * z)) };
   // The same place again (the page asks often): nothing to do, so the page isn't laid out again.
   if (t.bounds && t.bounds.x === b.x && t.bounds.y === b.y && t.bounds.width === b.width && t.bounds.height === b.height) { vlog('bounds skip', sid); return true; }
   vlog('bounds', sid, JSON.stringify(b));
   t.bounds = b;
-  placeView(t);
   if (t.cover) t.cover.setBounds(b);
-  if (t.emu) applyEmu(t);
+  // With a page size set, the page is rescaled first and the view placed once that is done (applyEmu).
+  if (t.emu) applyEmu(t); else placeView(t);
   return true;
 });
 // What happens to the real tabs, with times: kept in <userData>/view-events.log (the last ~2000 lines), so a flicker
@@ -317,7 +346,39 @@ handle('restartHarness', () => restartHarness());
 handle('loginItem', (on) => (on === undefined ? loginItem() : setLoginItem(on)));
 handle('info', () => ({ version: app.getVersion(), packaged: app.isPackaged, home: HOME || ROOT, origin, ownsServer: !!server }));
 handle('openHome', () => { shell.openPath(HOME || ROOT); return true; });
+// QuorX's own zoom (the page sends Ctrl + / − / 0 here unless they were for the terminal). Remembered between starts.
+handle('zoom', (dir) => {
+  if (!win) return 1;
+  const f = dir === 'get' ? win.webContents.getZoomFactor() : nextZoom(win.webContents.getZoomFactor(), dir);
+  if (dir !== 'get') { win.webContents.setZoomFactor(f); writeConfig({ ...readConfig(), zoom: f }); }
+  return f;
+});
 handle('focusWindow', () => { showWindow(); return true; }); // a clicked notification brings the window back from the tray
+// Notifications from the app itself (not the page's own), so they carry QuorX's name and logo. Clicking one brings
+// the window back and opens that chat. Each is kept until it closes: one collected early loses its click.
+const notes = new Set();
+handle('notify', (n = {}) => {
+  if (!Notification.isSupported()) return false;
+  const x = new Notification({ title: String(n.title || 'QuorX').slice(0, 90), body: String(n.body || '').slice(0, 240), icon: iconImage(256), silent: !!n.silent });
+  notes.add(x);
+  const drop = () => notes.delete(x);
+  x.on('click', () => { drop(); showWindow(); send({ type: 'notify-click', chatId: n.chatId || null }); });
+  x.on('close', drop); x.on('failed', drop);
+  x.show();
+  return true;
+});
+// Windows shows a notification under the name and icon registered for the app's ID. The installer's shortcut
+// registers them; run from the repo there is none, and Windows showed "Electron". This registers both for this user
+// (HKCU, the app's own ID only), once per start.
+function registerToastName() {
+  if (process.platform !== 'win32') return;
+  try {
+    const png = path.join(app.getPath('userData'), 'notify-icon.png');
+    fs.writeFileSync(png, pngIcon(256));
+    const key = String.raw`HKCU\Software\Classes\AppUserModelId\dev.quorx.desktop`;
+    for (const [name, value] of [['DisplayName', 'QuorX'], ['IconUri', png]]) spawn('reg', ['add', key, '/v', name, '/t', 'REG_SZ', '/d', value, '/f'], { stdio: 'ignore', windowsHide: true }).on('error', () => {});
+  } catch { /* the name stays Windows' default */ }
+}
 handle('openExternal', (url) => { if (/^https?:\/\//i.test(String(url))) shell.openExternal(url); return true; });
 handle('showFile', (file) => { if (file && file.startsWith(app.getPath('downloads'))) shell.showItemInFolder(file); return true; });
 
@@ -334,12 +395,12 @@ function postReply(body) { if (!origin || !linkToken) return; fetch(`${origin}/a
 function queueEvent(e) { eventQueue.push(e); if (!eventTimer) eventTimer = setTimeout(() => { eventTimer = null; const events = eventQueue; eventQueue = []; postReply({ events }); }, 40); }
 // The agent's page is laid out at its own size; in a narrower pane it is shown scaled down to fit.
 function applyEmu(t) {
-  const f = fitEmu(t); if (!f) return;
+  const f = fitEmu(t); if (!f) { placeView(t); return; }
   const key = JSON.stringify(f);
-  if (t.sentEmu === key) { vlog('emu skip (pane)'); return; } // the same size again would make the page lay itself out (and flash) for nothing
+  if (t.sentEmu === key) { vlog('emu skip (pane)'); placeView(t); return; } // the same size again would make the page lay itself out (and flash) for nothing
   vlog('emu (pane)', key);
   t.sentEmu = key;
-  t.view.webContents.debugger.sendCommand('Emulation.setDeviceMetricsOverride', f).catch(() => { t.sentEmu = null; });
+  t.view.webContents.debugger.sendCommand('Emulation.setDeviceMetricsOverride', f).then(() => placeView(t), () => { t.sentEmu = null; placeView(t); });
   // A page with no background of its own still looks white to the agent (its checks judge what it sees).
   t.view.webContents.debugger.sendCommand('Emulation.setDefaultBackgroundColorOverride', { color: { r: 255, g: 255, b: 255, a: 1 } }).catch(() => {});
 }
@@ -355,6 +416,10 @@ const COMMANDS = {
     win.contentView.addChildView(view);
     tabs.set(sid, { view, shown: false, agent: true, chatId, locked: false, emu: null, cover: null, bounds: null });
     wireView(sid, view);
+    // A new page can come up in a fresh renderer that has lost the page size and scale (the agent's pages and the
+    // sites it runs are on other addresses). Sent again once per page, or the page showed unscaled and cut off,
+    // offset in its shrunk view, until something re-sent the size (clicking the Browser tab did).
+    view.webContents.on('did-navigate', () => { const t = tabs.get(sid); if (t?.emu) { vlog('emu again (new page)', sid); t.sentEmu = null; applyEmu(t); } });
     // A view has no page until something loads; its debugger would wait forever on the first command.
     await view.webContents.loadURL('about:blank').catch(() => {});
     const dbg = view.webContents.debugger;
@@ -366,13 +431,17 @@ const COMMANDS = {
   async 'tab.cdp'({ tab, method, params = {} }) {
     const t = tabs.get(tab); if (!t) throw new Error('that tab is gone');
     if (method === 'Emulation.setDeviceMetricsOverride') {
-      t.emu = { ...params }; delete t.emu.scale; placeView(t);
+      t.emu = { ...params }; delete t.emu.scale;
       // The agent sets its page size on every page it opens; the same size again changes nothing.
       const f = fitEmu(t), key = JSON.stringify(f);
-      if (t.sentEmu === key) { vlog('emu skip (agent)', tab); return {}; }
+      if (t.sentEmu === key) { vlog('emu skip (agent)', tab); placeView(t); return {}; }
       vlog('emu (agent)', tab, key);
       t.sentEmu = key;
-      return t.view.webContents.debugger.sendCommand(method, f).catch((e) => { t.sentEmu = null; throw e; });
+      // The page takes its new size and scale first, then the view moves to fit it: the other way round, the view
+      // showed the page unscaled (cut off and offset) until the scale arrived.
+      const r = await t.view.webContents.debugger.sendCommand(method, f).catch((e) => { t.sentEmu = null; throw e; });
+      placeView(t);
+      return r;
     }
     if (method === 'Emulation.clearDeviceMetricsOverride') { vlog('emu clear', tab); t.emu = null; t.sentEmu = null; placeView(t); }
     if (method === 'Page.captureScreenshot' || method === 'Page.navigate') vlog(method, tab);
@@ -429,7 +498,15 @@ async function linkLoop() {
   }
 }
 
+// The (hidden) menu, without Electron's zoom shortcuts: Ctrl + / − / 0 are QuorX's own (the app, each browser tab,
+// the terminal), and the menu's would zoom the app a second time.
+function appMenu() {
+  const t = process.platform === 'darwin' ? [{ role: 'appMenu' }] : [];
+  t.push({ role: 'editMenu' }, { label: 'View', submenu: [{ role: 'reload' }, { role: 'forceReload' }, { role: 'toggleDevTools' }, { type: 'separator' }, { role: 'togglefullscreen' }] }, { role: 'windowMenu' });
+  return Menu.buildFromTemplate(t);
+}
 app.whenReady().then(async () => {
+  Menu.setApplicationMenu(appMenu());
   HOME = await chooseHome();
   if (HOME === false) { quitting = true; return app.quit(); }
   PORT = Number(process.env.AGENT_PORT || readEnvPort(HOME || ROOT) || 5188);

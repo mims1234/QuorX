@@ -1,4 +1,4 @@
-// Small helpers the platform packs share. (Files starting with "_" are not packs.)
+﻿// Small helpers the platform packs share. (Files starting with "_" are not packs.)
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
@@ -24,4 +24,4 @@ export const VS_LINE = `winget install --id ${VS_BUILD_TOOLS.winget} -e ${VS_BUI
 
 /** A fresh temporary folder for a probe build; removed by the caller with `rm`. */
 export const tempDir = (prefix) => fs.mkdtempSync(path.join(process.env.TEMP || process.env.TMPDIR || '/tmp', `qx-${prefix}-`));
-export const rm = (dir) => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* in use */ } };
+export const rm = (dir) => { try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* in use */ } };

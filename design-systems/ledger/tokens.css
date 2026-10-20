@@ -1,0 +1,70 @@
+/* Ledger tokens. Link this file first (<link rel="stylesheet" href="tokens.css">) and use var() everywhere. */
+@import url("https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@600;700&family=Barlow:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap");
+
+:root {
+  /* colour */
+  --bg: #f4f5f7;
+  --surface: #ffffff;
+  --surface-2: #eceff3;
+  --fg: #1b2330;
+  --muted: #5a6577;
+  --line: #dde1e7;
+  --accent: #1c64c4;
+  --accent-ink: #ffffff;
+  --up: #1b7f3b;
+  --down: #c0261f;
+  --ok: #1b7f3b;
+  --warn: #9a5f00;
+  --bad: #c0261f;
+  --focus: #1c64c4;
+  --chart-1: #1c64c4;
+  --chart-2: #d0661a;
+  --chart-3: #2e8f6e;
+  --chart-4: #8c5bb5;
+  /* type */
+  --font-display: "Barlow Semi Condensed", "Arial Narrow", system-ui, sans-serif;
+  --font-body: "Barlow", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+  --text-sm: 0.8125rem;
+  --text-base: 0.9375rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.5rem;
+  --text-2xl: 2rem;
+  --text-3xl: 2.5rem;
+  --leading: 1.5;
+  /* space and shape */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 40px;
+  --radius: 8px;
+  --radius-sm: 4px;
+  --shadow: 0 1px 2px rgba(27, 35, 48, 0.06);
+  --max: 1440px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f141b;
+    --surface: #161d27;
+    --surface-2: #1d2633;
+    --fg: #e3e8ef;
+    --muted: #93a0b2;
+    --line: #283244;
+    --accent: #5aa2f8;
+    --accent-ink: #061629;
+    --up: #5ccf84;
+    --down: #ff7a70;
+    --ok: #5ccf84;
+    --warn: #f0b04e;
+    --bad: #ff7a70;
+    --focus: #5aa2f8;
+    --chart-1: #5aa2f8;
+    --chart-2: #f08d4a;
+    --chart-3: #4fc49b;
+    --chart-4: #b48ae0;
+    --shadow: none;
+  }
+}

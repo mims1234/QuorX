@@ -135,12 +135,16 @@ ${steps.map((s) => `<section class="st"><h2><span class="${s.moment ? 'mo' : s.o
 // ---------- scenario: settings (no key needed) ----------
 // A project of the test's own, in a fresh folder under your Temp folder (QuorX refuses project folders inside its
 // own code). Never Scratch: its folder is your real Documents\QuorX\Scratch.
+// Forgotten and removed when the test ends (see the end of this file), unless --keep leaves the app open.
+const made = { projects: [], paths: [] };
 async function testProject(label) {
   const dir = path.join(os.tmpdir(), 'quorx-uitest', `${label}-${STAMP}`);
   fs.mkdirSync(dir, { recursive: true });
+  made.paths.push(dir);
   const id = `uitest-${label}-${Date.now().toString(36)}`.toLowerCase().replace(/[^a-z0-9-]/g, '-');
   const p = await api('/api/projects', { id, path: dir });
   if (p.error) throw new Error(p.error);
+  made.projects.push(p.id);
   await js('location.reload(); return true;').catch(() => {});
   await sleep(1500);
   await waitFor(`document.querySelector('.sb-project[data-p=${q(p.id)}]')`, 20000, 'the project in the sidebar');
@@ -309,6 +313,7 @@ async function cliScenario() {
       throw new Error(`no ${path.relative(dir, exe)} was built`);
     }
     const sample = path.join(os.tmpdir(), `qx-wc-${STAMP}.txt`);
+    made.paths.push(sample);
     fs.writeFileSync(sample, 'one two three\nfour five\n');
     const r = spawnSync(exe, [sample], { encoding: 'utf8' });
     const nums = (r.stdout.match(/\d+/g) || []).map(Number);
@@ -511,8 +516,13 @@ try {
 } finally {
   const r = report();
   log(`${r.passed} of ${r.total} steps passed. Report: ${r.file}`);
+  if (!KEEP) for (const id of made.projects) await js(`await fetch(${q(`/api/projects/${id}`)}, { method: 'DELETE' }); return true;`).catch(() => {});
   saveTestResult('ui', { scenario: SCENARIO, passed: r.passed, total: r.total, failedNames: steps.filter((s) => !s.moment && !s.ok).map((s) => s.title) });
   try { ws?.close(); } catch { /* closed */ }
   quit();
+  if (!KEEP) {
+    for (const p of made.paths) { try { fs.rmSync(p, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); } catch { /* still locked */ } }
+    try { fs.rmdirSync(path.join(os.tmpdir(), 'quorx-uitest')); } catch { /* not empty: another run's, or locked */ }
+  }
   process.exit(failed || r.passed < r.total ? 1 : 0);
 }

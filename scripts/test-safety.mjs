@@ -1,6 +1,6 @@
 // Tests for the P0 safety layer: Stop that ends every process, snapshots that let Undo cover commands, the
 // rule engine, the delete guard, the hardened deciders and the budgets.
-import './test-home.mjs';
+import { tempDir } from './test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -19,7 +19,7 @@ import { listTerms, termStop } from '../server/agentterm.js';
 import { saveProject, forgetProject } from '../server/store.js';
 
 const WIN = process.platform === 'win32';
-const tmp = (name) => fs.mkdtempSync(path.join(os.tmpdir(), `qx-${name}-`));
+const tmp = (name) => tempDir(`qx-${name}-`);
 const pingsLeft = () => (WIN ? (execSync('tasklist /FI "IMAGENAME eq PING.EXE" /NH').toString().match(/PING\.EXE/gi) || []).length : 0);
 
 test('stop: the job host starts on Windows', { skip: !WIN }, async () => {

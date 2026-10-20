@@ -13,6 +13,7 @@ description: Build a multi-file web app or site (HTML, CSS, JS) in the project f
    - Use CSS custom properties for colours (in `:root`), and support `prefers-color-scheme`.
    - Mobile-first: no fixed widths over 100%, `max-width` containers, a 16px side gutter, and no horizontal scrolling at 390px.
    - Semantic HTML (`header`, `main`, `button`, `label`), with visible focus styles.
+   - Give each main section and repeated block a short `data-qx-id` (`data-qx-id="hero"`, `"pricing"`, `"tour-card"`). When the user comments on part of the page, you get its selector, and these names keep it findable after edits.
 6. **Preview:** `preview_site` with `index.html`.
 7. **Check it yourself:**
    - `browser open site:index.html`, then click through the main flow.

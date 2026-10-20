@@ -43,6 +43,7 @@ if (process.env.QX_GO_FILE) {
   const wait = setInterval(() => {
     if (!fs.existsSync(file) && Date.now() - t0 < 15000) return;
     clearInterval(wait);
+    try { fs.rmSync(file, { force: true }); } catch { /* agentterm.js removes it when the program ends */ }
     const env = { ...process.env };
     delete env.QX_GO_FILE;
     const opts = { stdio: 'inherit', windowsHide: false, env };

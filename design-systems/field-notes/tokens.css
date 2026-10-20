@@ -1,0 +1,61 @@
+/* Field Notes tokens. Link this file first (<link rel="stylesheet" href="tokens.css">) and use var() everywhere. */
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap");
+
+:root {
+  /* colour */
+  --bg: #fafaf7;
+  --surface: #ffffff;
+  --surface-2: #f0f1ec;
+  --fg: #1f2421;
+  --muted: #5b625d;
+  --line: #dcdfd8;
+  --grid: #eceee8;
+  --accent: #2f6f4a;
+  --accent-ink: #ffffff;
+  --accent-2: #8a5a00;
+  --ok: #2f6f4a;
+  --warn: #8a5a00;
+  --bad: #b3261e;
+  --focus: #2f6f4a;
+  /* type */
+  --font-display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+  --text-sm: 0.8125rem;
+  --text-base: 0.9375rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.5rem;
+  --text-2xl: 2rem;
+  --text-3xl: 2.75rem;
+  --leading: 1.55;
+  /* space and shape */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 20px;
+  --space-5: 32px;
+  --space-6: 56px;
+  --radius: 3px;
+  --radius-sm: 2px;
+  --shadow: none;
+  --max: 1080px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #151816;
+    --surface: #1c201d;
+    --surface-2: #232825;
+    --fg: #e4e7e2;
+    --muted: #9aa39c;
+    --line: #333a35;
+    --grid: #202521;
+    --accent: #6fbf8e;
+    --accent-ink: #0d1a12;
+    --accent-2: #e0b04f;
+    --ok: #6fbf8e;
+    --warn: #e0b04f;
+    --bad: #ff8a80;
+    --focus: #6fbf8e;
+  }
+}

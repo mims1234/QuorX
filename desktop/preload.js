@@ -21,6 +21,8 @@ contextBridge.exposeInMainWorld('ohDesktop', {
   restartHarness: () => call('restartHarness'),
   openHome: () => call('openHome'),
   focusWindow: () => call('focusWindow'),
+  notify: (n) => call('notify', n),
+  zoom: (dir) => call('zoom', dir),
   openExternal: (url) => call('openExternal', url),
   showFile: (file) => call('showFile', file),
   on: (fn) => { listeners.add(fn); return () => listeners.delete(fn); },

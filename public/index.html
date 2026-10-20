@@ -45,10 +45,18 @@
     </nav>
     <!-- Below the divider: hide the sidebar, and search the chats. -->
     <div class="sb-tools">
-      <button type="button" class="sb-collapse-toggle" id="sbCollapseBtn" title="Collapse the sidebar to a slim rail" aria-controls="sidebar">☰</button>
+      <button type="button" class="sb-collapse-toggle" id="sbCollapseBtn" title="Collapse the sidebar to a slim rail (the same button brings it back)" aria-pressed="true" aria-controls="sidebar">☰</button>
       <label class="sb-search"><span aria-hidden="true">⌕</span><input id="chatSearch" placeholder="Search chats" aria-label="Search chats"></label>
     </div>
     <div class="sb-list" id="projectList"></div>
+    <!-- Archived projects: out of the list above and its search; found again here, with a search of their own. -->
+    <div class="sb-archive" id="archiveBox" hidden>
+      <button type="button" class="sb-arch-head" id="archiveHead" aria-expanded="false"><svg class="sb-arch-chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg>Archived <span class="sb-arch-n" id="archiveCount"></span></button>
+      <div class="sb-arch-body" id="archiveBody" hidden>
+        <label class="sb-search sb-arch-search"><span aria-hidden="true">⌕</span><input id="archiveSearch" placeholder="Search archived projects and chats" aria-label="Search archived projects and chats"></label>
+        <div class="sb-arch-list" id="archiveList"></div>
+      </div>
+    </div>
     <div class="sb-foot" id="sbFoot"><div class="sb-version" id="appVersion" title="QuorX version"></div><div class="sb-foot-btns" id="sbFootBtns"></div></div>
   </div>
   <div class="sb-rail">

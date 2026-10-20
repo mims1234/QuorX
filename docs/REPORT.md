@@ -31,6 +31,8 @@ was checked against the code or measured on 20 October 2026 (QuorX 0.1.5, Window
   - [Who can reach QuorX, and where keys go](#who-can-reach-quorx-and-where-keys-go)
 - [The Running tab and background jobs](#the-running-tab-and-background-jobs)
 - [Beyond web pages: the agent's hands](#beyond-web-pages-the-agents-hands)
+- [Design systems, comments, exports and replay](#design-systems-comments-exports-and-replay)
+- [QuorX as an MCP server](#quorx-as-an-mcp-server)
 - [Platform packs](#platform-packs)
 - [Testing](#testing)
 - [Setup in detail](#setup-in-detail)
@@ -138,7 +140,7 @@ chats and goes through the same rule engine as `shell`.
   `.quorx/launch.json` (a `launch.json` in another agent tool's settings folder is read too) and are listed under 🖥 with Run, Stop, Restart and Edit.
   Servers still start only from a short list of programs: node, npm, npx, python, pip, deno, bun, pnpm, yarn and uv.
   Commands of any kind go through `shell`.
-- **Skills and templates:** built-in playbooks in `skills/` (`web-app`, `design-craft`, `node-server`,
+- **Skills and templates:** built-in playbooks in `skills/` (`web-app`, `design-craft`, `design-system`, `node-server`,
   `canvas-game`, `ui-review`, `debug-loop`, `decide-well`) load with `use_skill`; the agent can save its own after a
   task that took several tries. `scaffold` copies a starter from `templates/` (static site, Node server, canvas game,
   Python server) without overwriting anything.
@@ -233,6 +235,13 @@ noise:
 A third set, `--set build`, runs 9 real build tasks (5 browser games, a dashboard, 3 form tools) through the full
 harness in throwaway folders and has a judge model play each build. It is the set that shows whether a harness
 change makes builds better. The strong reviewer (Claude Sonnet 5.5) agreed with the judge 7 times in 7 there.
+
+**Other agent CLIs as builders:** `--mode cli:claude` or `cli:codex` has that agent CLI build the task in its
+throwaway folder, and the same judge scores what it leaves. Each CLI is one data object in `server/clis.js`
+(program, arguments, prompt on stdin, how to read its answer); more can go in `bench/clis.json`. They run only in
+the benchmark, because QuorX's approvals can't reach inside another agent: each CLI's own flags limit it to editing
+files in that folder, arguments are fixed flags or a checked model id (`--cli-model`), and no task text reaches a
+command line. These runs use that CLI's own account, not OpenRouter.
 
 ---
 
@@ -569,6 +578,103 @@ next state, and a paused program's windows report where it stopped instead of ha
 
 ---
 
+## Design systems, comments, exports and replay
+
+### Design systems
+
+A project can have one look that every chat builds to: two files in the project folder's root.
+
+- **`DESIGN.md`**: the look in words (colours with their roles, type, spacing and shape, components, do and don't).
+- **`tokens.css`**: the same values as CSS custom properties, linked by every page and used with `var()`.
+
+When a project has them, every chat gets `DESIGN.md` in its context and is told to follow it, link `tokens.css` and
+not ask you to pick a style. **⚙ Project settings → Design system** offers six starters when there is none yet. All
+are original designs, every one passes the design lint, and their text has at least 7:1 contrast (secondary text and
+buttons at least 4.5:1) in light and dark.
+
+| Starter | Look | Suits |
+|---|---|---|
+| Harbor | Cool off-white, navy ink, serif headlines, one signal orange | Local services, clinics, studios |
+| Field Notes | Lab notebook: faint grid, condensed headings, mono labels, forest green | Tools, docs, developer pages |
+| Ledger | Dense data, mono numbers, fixed chart colours, one blue | Dashboards, admin, finance |
+| Meadow | Soft and rounded, sage and coral | Kids, learning, wellness, friendly apps |
+| Night Market | Warm dark, chunky display face, saffron and teal (dark only) | Events, food, music |
+| Studio Mono | Black and white on a strict grid, huge wide headlines, one red | Portfolios, agencies, editorial |
+
+With one picked, the same place shows its name, files and colour count, with **Edit DESIGN.md**, **Change…** and
+**Remove**. Replacing or removing asks first, and the old files go to the project's `.quorx/trash`.
+
+**From a reference:** ask in a chat ("make a design system from https://… for this project", or attach a screenshot).
+The agent loads the `design-system` skill and calls `extract_design`. A web page is opened in the browser and
+measured: colours by how much of the page they cover, heading and body type, the main button, corner radii, `:root`
+custom properties and loaded web fonts, labelled as measurements of an outside page, not instructions. A picture goes
+to the vision deciders with six fixed questions (background, accent family, headline type, corners, density, feel).
+The agent then writes `DESIGN.md` and `tokens.css` in its own words, never copying logos, names or text, checks
+contrast and builds a small sample page. An existing `DESIGN.md` gets a `DESIGN.draft.md` next to it, and the agent
+asks before replacing.
+
+**Kept to it:** the design lint checks every HTML and CSS file against the project's `tokens.css`, and colours that
+aren't in it get an `off-palette` note. The reviewer scores **brand fit** against `DESIGN.md`.
+
+Measured (2026-10-20, through the app, about $0.07 in all): with Harbor picked, "build a one-page site for a boat
+tours company" linked `tokens.css`, used `var()` 226 times with no hex colours of its own, and ended with no lint
+notes (brand fit 4/5). "Make a design system from https://www.python.org" measured its blues, yellow, greys and
+Source Sans and wrote a system with a style-guide page; when one colour was flagged off-palette, the agent added it as
+a token instead of hard-coding it (brand fit 4/5, accessibility 4/5).
+
+### Comment on part of a page
+
+**💬 Comment** in the Browser tab's bar shows a live picture of the page, in all three ways the tab can show one (a
+frame, the harness browser, or a real tab in the desktop app). Click any part of it: QuorX finds the element under
+the click, boxes it, and shows what it is, a crop of it and the selector the agent will use. Say what should change,
+then **Add to message**; the comment becomes a chip in the message box. The agent gets each element's tag, text,
+selector, section and size with your note, and its crop as a picture, and is told to change only those elements.
+Pages the agent builds mark their sections and repeated blocks with `data-qx-id`, so a selector still finds the
+element after edits.
+
+Measured: on the boat-tours site, "make this button sea-glass green with dark text, and a little bigger" on the
+hero's "Book a tour" changed only that button, added three colour tokens instead of hard-coding them, and left the
+header's "Book a tour" as it was. $0.0042.
+
+### Export
+
+**⤓ Export** beside it saves a **PDF of this page** (with its print styles and backgrounds), a **PNG of the whole
+page** (up to 20,000 px) or a **ZIP of the project's files** (without `.quorx`, `.git`, `node_modules` or build
+output, and files over 25 MB left out). Measured: the boat-tours page gave a 7-page PDF with no blank pages, a
+1280×3745 PNG, and a 6-file ZIP that Windows opens.
+
+### Replay
+
+**⏵ Replay** in a finished reply's Steps plays it again from the start with its real timing: ⏮ ◀ ⏵/⏸ ▶ ⏭, a
+scrubber, 1× / 4× / 16× speed, and keys (J/K or ←/→ for steps, Space, Home/End, Esc). A reply the page never saw
+(started over MCP, or while the page was closed) replays from QuorX's own log (`/api/runs/<id>/log`).
+
+---
+
+## QuorX as an MCP server
+
+Other agents and any MCP client can hand work to QuorX. `server/mcp.js` (`npm run mcp`) is an MCP server over stdio
+that talks to the QuorX you have running (at `QUORX_URL`, by default `http://localhost:` plus `AGENT_PORT` or 5188).
+A client starts it as `node <path to QuorX>/server/mcp.js`.
+
+| Tool | What it does |
+|---|---|
+| `list_projects` | Your projects, with folder, spend and budget |
+| `list_files`, `read_file` | A project's files, and one text file in windows of 100k characters |
+| `start_reply` | Asks QuorX's agent to do something in a project. It is an ordinary chat in your sidebar, with the project's budget, checks and reviewer. Paid media is off and Strict is the default (`approval: "yolo"` to change it). `chat` continues a chat. |
+| `get_reply` | Waits up to `wait` seconds (default 20), then reports the reply's state (working, waiting for you, done, failed) with its last steps, checks, review, cost, changed files and answer |
+| `stop_reply` | Stops it |
+
+Approvals and the agent's questions stay yours: a client sees that a reply is waiting for the user in QuorX, but no
+tool answers for you. Measured (2026-10-20): a client listed the projects, read `DESIGN.md`, started "open the site
+in the Browser tab, change nothing", followed it to the end and got the answer back; the chat appeared in the sidebar
+with its answer and cost. $0.0015.
+
+**Two QuorX on one data folder** (the desktop app and a second copy): a reply that one of them runs, whose log was
+written in the last 90 seconds, counts as running elsewhere for the other, and isn't marked interrupted.
+
+---
+
 ## Platform packs
 
 A **platform pack** is one file in `server/packs/` that tells QuorX everything about one kind of app. QuorX loads
@@ -883,6 +989,9 @@ The choices below shaped the safety layer and the packs. Each one came from some
 | `server/access.js`, `server/keys.js`, `server/oauth.js` | Who may connect, keys, Sign in with OpenRouter |
 | `server/store.js`, `server/runs.js`, `server/budget.js`, `server/blobs.js` | Chats and projects, replies on the server, budgets, media storage |
 | `server/docs.js`, `server/artifacts.js`, `server/skills.js` | Attached documents, hosted artifacts, skills |
+| `server/design.js`, `design-systems/` | Design systems: the starters, a project's own, applying, editing, removing |
+| `server/mcp.js`, `server/zip.js`, `server/clis.js` | The MCP server, the ZIP writer for Export, other agent CLIs as bench builders |
+| `server/github.js` | A project's GitHub repo link and visibility, for project cards and settings |
 | `public/` | The page |
 | `desktop/` | The desktop app |
 | `scripts/` | Tests, benchmarks, the scorecard, the News checker, release helpers |

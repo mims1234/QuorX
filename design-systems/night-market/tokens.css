@@ -1,0 +1,43 @@
+/* Night Market tokens (dark only). Link this file first (<link rel="stylesheet" href="tokens.css">) and use var() everywhere. */
+@import url("https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Work+Sans:wght@400;500;600&display=swap");
+
+:root {
+  color-scheme: dark;
+  /* colour */
+  --bg: #141014;
+  --surface: #1e181d;
+  --surface-2: #2a2128;
+  --fg: #f5ece3;
+  --muted: #b8aba0;
+  --line: #3a2e36;
+  --accent: #f2a516;
+  --accent-ink: #1a1206;
+  --accent-2: #2ec4b6;
+  --accent-2-ink: #04201d;
+  --ok: #7ed492;
+  --warn: #f2a516;
+  --bad: #ff7a7a;
+  --focus: #2ec4b6;
+  /* type */
+  --font-display: "Bricolage Grotesque", "Arial Black", system-ui, sans-serif;
+  --font-body: "Work Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: ui-monospace, Consolas, monospace;
+  --text-sm: 0.875rem;
+  --text-base: 1.0625rem;
+  --text-lg: 1.375rem;
+  --text-xl: 1.875rem;
+  --text-2xl: 2.75rem;
+  --text-3xl: 4.25rem;
+  --leading: 1.6;
+  /* space and shape */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 16px;
+  --space-4: 28px;
+  --space-5: 48px;
+  --space-6: 88px;
+  --radius: 14px;
+  --radius-sm: 999px;
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  --max: 1200px;
+}

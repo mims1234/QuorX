@@ -1,5 +1,5 @@
 // Tests for the harness's own protections: who may connect, file paths, commands, and media kept as blobs.
-import './test-home.mjs';
+import { tempDir } from './test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -44,8 +44,8 @@ test('other devices must pair; this computer never has to', () => {
 });
 
 test('file paths stay inside the project: links, streams and device names too', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'oh-sec-'));
-  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'oh-out-'));
+  const root = tempDir('oh-sec-');
+  const outside = tempDir('oh-out-');
   try {
     assert.equal(safePath(root, 'a/b.txt'), path.join(root, 'a', 'b.txt'));
     assert.equal(safePath(root, path.join(root, 'c.txt')), path.join(root, 'c.txt'), 'an absolute path inside the project');

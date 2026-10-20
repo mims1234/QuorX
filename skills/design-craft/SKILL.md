@@ -9,7 +9,9 @@ Use this for anything with a visible interface: landing pages, tools, dashboards
 
 ## 1. Commit to one direction first
 - **Decide the visual direction yourself.** Don't ask the user to pick a style, palette or font, and don't offer "which of these feels right?" lists. Choosing is part of the job.
-- Order of sources: what the user said > the project's existing styles (read its CSS or `DESIGN.md` if there is one) > your own choice from the subject, audience and tone.
+- Order of sources: what the user said > the project's design system (`DESIGN.md` + `tokens.css`, shown in your context when there is one) > the project's existing styles > your own choice from the subject, audience and tone.
+- With a design system: link `tokens.css` and use its `var(--…)` tokens for everything. Don't restyle it; the direction is already decided.
+- Without one, if the user wants a consistent look across several pages or chats, suggest a starter in Project settings → Design system, or offer to write one (load `design-system`).
 - Write the direction in one line in your plan's spec (for example "warm paper background, serif headings, one rust accent, dense editorial layout"), then build against it. Say it in your reply too, so the user can ask for another.
 - One direction that is a real bet beats a safe mix. Don't hedge with "or we could…" alternatives.
 
@@ -48,6 +50,10 @@ Use this for anything with a visible interface: landing pages, tools, dashboards
 - Respect `prefers-reduced-motion`. Motion should explain a change, not decorate.
 - Tap targets at least 40px on phones.
 
-## 8. Check
+## 8. Comments from the user
+- When a message says the user pointed at an element, change that element (found by its selector, text or `data-qx-id`) and leave the rest alone, unless they ask for more.
+- Mark sections and repeated blocks with `data-qx-id` so later comments can find them.
+
+## 9. Check
 - After building, `look` at 1280px and 390px with checks like "The page has one clear main action", "Headings and body text use different, deliberate type", "Nothing is cut off or overlapping".
 - Read the design lint notes in your tool results and fix the "fix" ones unless the user asked for that pattern.
