@@ -70,6 +70,64 @@ test('{PORT} is allowed in server arguments; shell characters are not', () => {
   assert.throws(() => checkCommand('cmd', ['/c', 'dir']), /not allowed/);
 });
 
+test('a whole command line in command says how to split it, not that the program is not allowed', () => {
+  assert.throws(() => checkCommand('node hub/server.mjs', []), /use command "node" with args \["hub\/server\.mjs"\]/);
+  assert.throws(() => checkCommand('npm run dev', ['--', '--port', '{PORT}']), /use command "npm" with args \["run","dev","--","--port","\{PORT\}"\]/);
+  assert.throws(() => checkCommand('cmd /c dir', []), /"cmd \/c dir" is not allowed/);
+});
+
+test('the static site server answers this computer on its port', async () => {
+  const src = fs.readFileSync(new URL('../server/serve-static.mjs', import.meta.url), 'utf8');
+  const strip = new Function(`return ${src.match(/\.replace\((\/[^/]+\/), ''\)/)[1]}`)();
+  assert.equal('localhost:5300'.replace(strip, ''), 'localhost');
+  assert.equal('[::1]:8080'.replace(strip, ''), '[::1]');
+});
+
+test('a finished reply keeps its result: from the server when it ends, and over a save that lacks it', async () => {
+  const { saveChat, patchChat, getChat, settleReply } = await import('../server/store.js');
+  const user = { role: 'user', content: 'go', at: 1 };
+  const running = { role: 'assistant', content: '', at: 2, runId: 'run-settle-1', trace: [{ t: 'llm_start', step: 0 }], live: false, runActive: true };
+  const first = saveChat('settle-chat', { title: 'Settle', projectId: 'scratch', created: 1, agent: { setup: {}, messages: [user, running], artifacts: {} } });
+  const stats = { cost: 0.01, steps: 3 };
+  assert.equal(settleReply('settle-chat', 'run-settle-1', { t: 'done', reply: 'All done.', historyNote: '[note]', stats }), true);
+  let m = getChat('settle-chat').agent.messages[1];
+  assert.equal(m.content, 'All done.'); assert.deepEqual(m.stats, stats); assert.equal(m.runActive, false);
+  assert.equal(m.trace.length, 1, 'the steps the page saved stay');
+  // Already settled (or saved by the page): left alone.
+  assert.equal(settleReply('settle-chat', 'run-settle-1', { t: 'done', reply: 'other', stats }), false);
+  // A page with an old copy of that reply (no text, no totals) saves whole, then patches: the result stays.
+  saveChat('settle-chat', { title: 'Settle', projectId: 'scratch', created: 1, agent: { setup: {}, messages: [user, { ...running, runActive: false, trace: [1, 2] }], artifacts: {} } });
+  m = getChat('settle-chat').agent.messages[1];
+  assert.equal(m.content, 'All done.'); assert.equal(m.stats.cost, 0.01); assert.deepEqual(m.trace, [1, 2], 'the newer steps are kept');
+  const rev = getChat('settle-chat').rev;
+  patchChat('settle-chat', { base: rev, count: 2, messages: { 1: { ...running, content: '', error: 'Lost the connection' } } });
+  m = getChat('settle-chat').agent.messages[1];
+  assert.equal(m.content, 'All done.'); assert.equal(m.error, undefined);
+  // A page that has the text keeps its own; a different run in the same place is not touched.
+  saveChat('settle-chat', { title: 'Settle', projectId: 'scratch', created: 1, agent: { setup: {}, messages: [user, { ...running, content: 'Edited', stats: { cost: 0.02 } }, { ...running, runId: 'run-settle-2' }], artifacts: {} } });
+  const ms = getChat('settle-chat').agent.messages;
+  assert.equal(ms[1].content, 'Edited'); assert.equal(ms[2].content, ''); assert.equal(ms[2].stats, undefined);
+  // A failed run records its error once.
+  assert.equal(settleReply('settle-chat', 'run-settle-2', { t: 'error', msg: 'boom' }), true);
+  assert.equal(getChat('settle-chat').agent.messages[2].error, 'boom');
+  assert.ok(first.rev);
+});
+
+test('a run cut off by a restart is interrupted at once, not "elsewhere" for 90 seconds', async () => {
+  const { runStatus } = await import('../server/runs.js');
+  const dir = path.join(process.env.OH_HOME, 'data', 'runs');
+  const log = (id, pid) => fs.writeFileSync(path.join(dir, `${id}.jsonl`), `${JSON.stringify({ t: 'run', runId: id, chatId: 'c', ...(pid ? { pid } : {}), at: 0 })}\n${JSON.stringify({ t: 'llm_start', step: 0 })}\n`);
+  log('cut-dead', 2 ** 22 + 12345); // no such process
+  fs.writeFileSync(path.join(dir, 'cut-dead.ckpt.json'), '{}');
+  assert.deepEqual([runStatus('cut-dead').status, runStatus('cut-dead').resumable], ['interrupted', true]);
+  log('cut-self', process.pid); // this process wrote it and has no such run: it restarted with the same pid
+  assert.equal(runStatus('cut-self').status, 'interrupted');
+  log('cut-other', process.ppid); // a live QuorX that isn't this one
+  assert.equal(runStatus('cut-other').status, 'elsewhere');
+  log('cut-old'); // an older log without a pid: the 90-second rule
+  assert.equal(runStatus('cut-old').status, 'elsewhere');
+});
+
 test('big data URLs become blobs, the original is untouched, and a blob reads back', () => {
   const png = `data:image/png;base64,${Buffer.alloc(40000, 7).toString('base64')}`;
   const ev = { t: 'screenshot', image: png, nested: [{ after: png }], small: 'data:image/png;base64,AAAA' };
