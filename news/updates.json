@@ -6,6 +6,8 @@
       "title": "Open source, under Apache 2.0",
       "items": [
         { "kind": "new", "text": "QuorX is open source under the Apache License 2.0: use it, change it and fork it, for personal or commercial work." },
+        { "kind": "new", "text": "Each release lists the installer's SHA-256 checksum and a signed proof that GitHub built it from this repository." },
+        { "kind": "improved", "text": "A shorter README with the trailer, plus pages on getting started, features, privacy and security." },
         { "kind": "fixed", "text": "A project's spend in the sidebar no longer goes below zero while a reply is running.", "pr": 29 },
         { "kind": "fixed", "text": "The agent's own page in the Browser tab shows its picture after the reply, instead of a broken image.", "pr": 30 }
       ]
