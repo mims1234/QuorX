@@ -74,7 +74,7 @@ export const ARTIFACT_HEADERS = {
 export function folderStamp(root) {
   let latest = 0, n = 0;
   for (const f of listFiles(root, 400)) {
-    if (f.path.endsWith('(skipped)')) continue;
+    if (/skipped\)$/.test(f.path)) continue;
     try { const t = fs.statSync(path.join(root, f.path)).mtimeMs; if (t > latest) latest = t; n++; } catch { /* removed meanwhile */ }
   }
   return { stamp: Math.round(latest), files: n };
