@@ -17,6 +17,9 @@
 //                                  the files (no tools, no checks), the way you would use it in a plain chat;
 //                                  cli:claude, cli:codex (or one from bench/clis.json) = that agent CLI builds in the
 //                                  task's folder, limited to editing files there · --cli-model <id> passes a model to it
+//            --tasks bench/tasks-build-hard.json  harder tasks: a multi-page app, bugs to fix in an existing project, a
+//                                  Python command-line tool (skipped on a computer without Python); hidden checks cap
+//                                  their function score
 //            --checks on,off       the harness checks (gap check, screenshot and click checks) · --ask n: ask_user per reply
 //                                  (in this YOLO bench the deciders answer) · default 0
 //
@@ -30,12 +33,15 @@ import os from 'node:os';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runAgent, DEFAULTS, REVIEW_MODEL, REVIEW_KEYS, CORE_KEYS, REVIEW_SYSTEM, BROWSER_TOOLS, SUBMIT_REVIEW } from '../server/agent.js';
+import { runAgent, answerApproval, DEFAULTS, REVIEW_MODEL, REVIEW_KEYS, CORE_KEYS, REVIEW_SYSTEM, BROWSER_TOOLS, SUBMIT_REVIEW } from '../server/agent.js';
 import { chatStream, chatModels, runtime } from '../server/openrouter.js';
 import { saveProject, forgetProject, projectDir } from '../server/store.js';
 import { safePath, listServers, stopServer } from '../server/workspace.js';
 import { openTab, hostHtml, hostedHtml } from '../server/browser.js';
 import { cliDefs, runCli } from '../server/clis.js';
+import { allToolchains } from '../server/packs/index.js';
+import { spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const MIME = { '.html': 'text/html; charset=utf-8', '.htm': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
@@ -92,6 +98,10 @@ export async function runBuildBench(arg) {
   for (const h of axes.helpers) if (!['on', 'off'].includes(h)) throw new Error(`--helpers ${h}: use on or off`);
   for (const r of axes.reasoning) if (!['off', 'low', 'medium', 'high'].includes(r)) throw new Error(`--reasoning ${r}: use off, low, medium or high`);
   if (!tasks.length) throw new Error('no build tasks match --only / --cat');
+  // A task that needs a toolchain (from the platform packs) this computer lacks is skipped, not failed.
+  const tools = new Map();
+  for (const t of tasks) for (const id of t.needs || []) if (!tools.has(id)) tools.set(id, probeToolchain(id));
+  for (const t of tasks) { const miss = (t.needs || []).filter((id) => !tools.get(id)?.ok); if (miss.length) t.missing = `needs ${miss.map((id) => tools.get(id)?.label || id).join(', ')}, not on this computer`; }
 
   // Every combination of the axes is one setup; its label names only the axes that vary.
   const setups = [{}];
@@ -176,36 +186,42 @@ export async function runBuildBench(arg) {
     const prev = doneBefore(task, s, rep);
     if (prev) { done++; spent += prev.cost + (prev.judgeCost || 0); finished.push(prev); return prev; }
     CAP = capNow();
-    if (gaveUp.has(s.builder) || spent >= CAP) {
-      const rec = skip(task, s, rep, gaveUp.get(s.builder) || `spending cap $${CAP} reached`);
+    if (task.missing || gaveUp.has(s.builder) || spent >= CAP) {
+      const rec = skip(task, s, rep, task.missing || gaveUp.get(s.builder) || `spending cap $${CAP} reached`);
       fs.appendFileSync(LOG, JSON.stringify(rec) + '\n'); done++; finished.push(rec);
       console.log(`${String(done).padStart(3)}/${jobs.length} ${pad(s.label, 22)} ${pad(task.id, 18)} skipped: ${rec.skipped}`);
       return rec;
     }
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), `quorx-bench-${task.id.replace(/_/g, '-')}-`));
     const pid = `bench-${stamp.slice(11, 19).replace(/-/g, '')}-${Math.random().toString(36).slice(2, 7)}-${i}`;
+    // A task with a seed starts from an existing project (one with bugs to fix, say).
+    if (task.seed) fs.cpSync(path.resolve(ROOT, task.seed), dir, { recursive: true });
     saveProject({ id: pid, path: dir });
     live.set(pid, dir);
+    const suffix = task.suffix ?? file.suffix ?? '';
     let rec;
     try {
-      const run = s.cli ? await cliBuild({ task, s, dir, suffix: file.suffix || '', minutes: MINUTES, model: CLI_MODEL })
-        : s.mode === 'direct' ? await direct({ task, s, dir, suffix: file.suffix || '', minutes: MINUTES, retries: RETRIES })
-        : await build({ task, s, pid, suffix: file.suffix || '', settings: { review: s.review, reviewModel: REVIEWER, reviewRounds: ROUNDS, reviewBar: BAR, helpers: s.helpers === 'on', maxSteps: STEPS, retries: RETRIES, askLimit: ASK, freshEyes: s.fresh !== 'off', ...(s.checks === 'off' ? { checks: { gap: false, shots: false, click: false } } : {}) }, minutes: MINUTES, rep });
+      const run = s.cli ? await cliBuild({ task, s, dir, suffix, minutes: MINUTES, model: CLI_MODEL })
+        : s.mode === 'direct' ? await direct({ task, s, dir, suffix, minutes: MINUTES, retries: RETRIES })
+        : await build({ task, s, pid, suffix, settings: { review: s.review, reviewModel: REVIEWER, reviewRounds: ROUNDS, reviewBar: BAR, helpers: s.helpers === 'on', maxSteps: STEPS, retries: RETRIES, askLimit: ASK, freshEyes: s.fresh !== 'off', ...(s.checks === 'off' ? { checks: { gap: false, shots: false, click: false } } : {}) }, minutes: MINUTES, rep });
       // The builder's model never answered (or kept failing): count it towards giving up on that model.
       const modelFailed = !!run.error && (!(run.stats.llmCalls > 0) || /rate.?limit|429|no endpoints|provider|overloaded|unavailable|timed? ?out|402|quota/i.test(run.error));
       failStreak.set(s.builder, modelFailed ? (failStreak.get(s.builder) || 0) + 1 : 0);
       if (failStreak.get(s.builder) >= GIVEUP) gaveUp.set(s.builder, `gave up on ${short(s.builder)} after ${GIVEUP} failed runs in a row (${clip(run.error, 120)})`);
       const targets = targetsFor(run.arts, dir);
-      const j = JUDGE === 'off' ? fromReview(run.stats.review, BAR) : await judge({ task, targets, pid, arts: run.arts, model: JUDGE, bar: BAR, catalogue });
+      const tests = task.verify ? await hiddenChecks({ task, dir, pid, tools }) : null;
+      const j = JUDGE === 'off' ? fromReview(run.stats.review, BAR) : task.kind === 'code' ? await judgeCode({ task, dir, tests, model: JUDGE, bar: BAR })
+        : await judge({ task, targets, pid, arts: run.arts, model: JUDGE, bar: BAR, catalogue });
+      capByTests(j, tests, BAR);
       const st = run.stats;
       const callsByRole = {};
       for (const m of Object.values(st.byModel || {})) callsByRole[m.role] = (callsByRole[m.role] || 0) + m.calls;
       const variant = colOf(s, axes);
       const saved = PROJECT ? keepBuild(dir, path.join(PROJECT, 'builds', task.id, `${short(s.builder).replace(/[^a-z0-9.-]+/gi, '-')}__${variant.replace(/[^a-z0-9.-]+/gi, '-')}${REPEAT > 1 ? `__${rep + 1}` : ''}`)) : null;
       rec = { ts: new Date().toISOString(), set: 'build', setup: s.label, builder: s.builder, review: s.review, helpers: s.helpers, reasoning: s.reasoning, decide: s.decide, reviewer: REVIEWER, judge: JUDGE,
-        runId: `bench-build-${pid}`, fresh: s.fresh, freshLooks: run.fresh || [], mode: s.mode, checksOn: s.checks, col: variant, checkEvents: run.checks, deciderAnswers: run.deciderAnswers,
+        runId: `bench-build-${pid}`, unanswered: run.unanswered || 0, fresh: s.fresh, freshLooks: run.fresh || [], mode: s.mode, checksOn: s.checks, col: variant, checkEvents: run.checks, deciderAnswers: run.deciderAnswers,
         tools: run.tools, toolCalls: Object.values(run.tools).reduce((a, b) => a + b, 0), toolErrors: run.toolErrors, helperTools: run.helperTools, deciders: { ...run.deciders, ...(st.decide || {}) }, questions: run.questions, llmRetries: run.retries, saved: saved && path.relative(PROJECT, saved).replace(/\\/g, '/'),
-        task: task.id, cat: task.cat, rep, scores: j.scores, total: j.scores ? CORE_KEYS.reduce((a, k) => a + j.scores[k], 0) : 0, pass: !!j.pass, bar: BAR, bugs: j.bugs, summary: j.summary,
+        task: task.id, cat: task.cat, rep, tests, scores: j.scores, total: j.scores ? CORE_KEYS.reduce((a, k) => a + j.scores[k], 0) : 0, pass: !!j.pass, bar: BAR, bugs: j.bugs, summary: j.summary,
         judgeCost: j.cost || 0, judgeMs: j.ms || 0, cost: st.cost || 0, byRole: st.byRole || {}, calls: Object.values(callsByRole).reduce((a, b) => a + b, 0), callsByRole, builderCalls: st.llmCalls || 0,
         ms: st.ms || run.ms, steps: st.steps || 0, stop: st.stop || (run.error ? 'error' : null), sentBack: run.sentBack, plan: run.plan, planDone: st.plan || null,
         inLoopReviews: run.reviews, verify: st.verify || null, targets, files: listBuilt(dir), changed: (st.changed || []).length, error: run.error, dir: KEEP ? dir : null, reply: clip(run.reply, 1500) };
@@ -216,7 +232,7 @@ export async function runBuildBench(arg) {
     fs.appendFileSync(LOG, JSON.stringify(rec) + '\n');
     done++; spent += rec.cost + (rec.judgeCost || 0); finished.push(rec);
     if (PROJECT) { try { writeResultsPage(PROJECT, { models: modelInfo, tasks, setups, bar: BAR, judge: JUDGE, results: finished, total: kept.length + jobs.length, spent: spent + kept.reduce((a, r) => a + r.cost + (r.judgeCost || 0), 0), cap: CAP, running: true }); } catch (e) { console.log(`(results page: ${e.message})`); } }
-    console.log(`${String(done).padStart(3)}/${jobs.length} ${pad(s.label, 22)} ${pad(task.id, 18)} ${rec.scores ? REVIEW_KEYS.map((k) => rec.scores[k]).join('/') : '-/-/-/-'} ${rec.pass ? 'pass' : 'FAIL'}  $${(rec.cost + rec.judgeCost).toFixed(3)}  ${(rec.ms / 60000).toFixed(1)}m  tools ${rec.toolCalls ?? 0}  decide ${rec.deciders?.calls ?? 0}${rec.error ? `  ⚠ ${clip(rec.error, 80)}` : ''}  (spent $${spent.toFixed(2)})`);
+    console.log(`${String(done).padStart(3)}/${jobs.length} ${pad(s.label, 22)} ${pad(task.id, 18)} ${rec.scores ? REVIEW_KEYS.map((k) => rec.scores[k]).join('/') : '-/-/-/-'} ${rec.pass ? 'pass' : 'FAIL'}${rec.tests ? `  checks ${rec.tests.passed}/${rec.tests.total}` : ''}  $${(rec.cost + rec.judgeCost).toFixed(3)}  ${(rec.ms / 60000).toFixed(1)}m  tools ${rec.toolCalls ?? 0}  decide ${rec.deciders?.calls ?? 0}${rec.error ? `  ⚠ ${clip(rec.error, 80)}` : ''}  (spent $${spent.toFixed(2)})`);
     return rec;
   });
   server.close();
@@ -232,13 +248,18 @@ export async function runBuildBench(arg) {
 async function build({ task, s, pid, suffix, settings, minutes, rep }) {
   const ev = { reply: '', stats: null, error: null, arts: new Map(), sentBack: { reviewer: 0, checks: 0 }, plan: false, reviews: [], tools: {}, toolErrors: 0, helperTools: 0, deciders: { asks: 0, looks: 0, asked: [], outcomes: {} }, questions: [], retries: 0, checks: [], deciderAnswers: [] };
   const rounds = new Map(); // decide round → { look, questions }
+  // Nobody watches a bench run: an approval left for the user (the deciders weren't sure) is declined after a
+  // minute, as if the user were away, so the agent carries on instead of waiting until the run's time is up.
+  const waiting = new Map(), runId = `bench-build-${pid}`;
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), minutes * 60e3);
   const t0 = Date.now();
   try {
-    await runAgent({ bench: 'build', runId: `bench-build-${pid}`, projectId: pid, chatTitle: `bench ${task.id} #${rep + 1}`, setup: { model: s.builder, decide: s.decide || 'off', reasoning: s.reasoning },
+    await runAgent({ bench: 'build', runId, projectId: pid, chatTitle: `bench ${task.id} #${rep + 1}`, setup: { model: s.builder, decide: s.decide || 'off', reasoning: s.reasoning },
       text: task.prompt + suffix, settings: { mediaEnabled: false, voters: DEFAULTS.voters, approval: 'yolo', yoloCheck: false, askLimit: 0, ...settings } }, (e) => {
       if (e.t === 'done') { ev.reply = e.reply; ev.stats = e.stats; }
+      if (e.t === 'approval' && !waiting.has(e.id)) waiting.set(e.id, setTimeout(() => { if (answerApproval(runId, e.id, { approve: false, reason: 'No one is here to answer (a benchmark run): carry on without it.' })) ev.unanswered = (ev.unanswered || 0) + 1; }, 60e3));
+      if (e.t === 'approval_done') { clearTimeout(waiting.get(e.id)); waiting.delete(e.id); }
       if (e.t === 'artifact') ev.arts.set(e.artifact.id, e.artifact);
       if (e.t === 'plan') ev.plan = true;
       if (e.t === 'sent_back') ev.sentBack[e.by === 'reviewer' ? 'reviewer' : 'checks']++;
@@ -263,7 +284,7 @@ async function build({ task, s, pid, suffix, settings, minutes, rep }) {
       if (e.t === 'fresh_eyes') (ev.fresh ||= []).push({ problems: e.problems, report: e.report, ok: e.ok, step: e.step });
     }, ac.signal);
   } catch (e) { ev.error = ac.signal.aborted ? `stopped after ${minutes} min` : e.message; }
-  finally { clearTimeout(timer); }
+  finally { clearTimeout(timer); for (const t of waiting.values()) clearTimeout(t); }
   return { ...ev, stats: ev.stats || { cost: 0, byRole: {}, byModel: {} }, ms: Date.now() - t0 };
 }
 
@@ -297,7 +318,9 @@ async function direct({ task, s, dir, suffix, minutes, retries }) {
   const ev = { reply: '', error: null, arts: new Map(), sentBack: { reviewer: 0, checks: 0 }, plan: false, reviews: [], tools: {}, toolErrors: 0, helperTools: 0, deciders: { asks: 0, looks: 0, asked: [], outcomes: {} }, questions: [], retries: 0, checks: [], deciderAnswers: [] };
   const t0 = Date.now();
   const ac = new AbortController(), timer = setTimeout(() => ac.abort(), minutes * 60e3);
-  const prompt = task.prompt + suffix.replace(/\s*When it works, open it with preview_site\.?/i, '');
+  // A seeded task: the files it starts from go in the prompt, since a direct build can't read the folder.
+  const seed = task.seed ? `\n\nThe project's files now:\n${listBuilt(dir).map((f) => `${f.path}\n\`\`\`\n${fs.readFileSync(path.join(dir, f.path), 'utf8')}\n\`\`\``).join('\n\n')}` : '';
+  const prompt = task.prompt + suffix.replace(/\s*(When it works, )?open (it|index\.html) with preview_site\.?/i, '') + seed;
   const body = { model: s.builder, messages: [{ role: 'system', content: DIRECT_SYSTEM }, { role: 'user', content: prompt }], max_tokens: 64000,
     ...(s.reasoning && s.reasoning !== 'off' ? { reasoning: { effort: s.reasoning } } : { reasoning: { enabled: false } }) };
   let r = null, cost = 0;
@@ -355,7 +378,7 @@ function writeResultsPage(dir, { models, tasks, setups, bar, judge, results, tot
   const data = { at: new Date().toISOString(), models, tasks: tasks.map((t) => ({ id: t.id, cat: t.cat, prompt: t.prompt })), setups: setups.map((s) => ({ label: s.label, builder: s.builder, decide: s.decide })),
     bar, judge, total, spent, cap: cap === Infinity ? null : cap, running, keys: REVIEW_KEYS,
     results: results.filter(Boolean).map((r) => ({ builder: r.builder, decide: r.decide, task: r.task, cat: r.cat, scores: r.scores, total: r.total, pass: r.pass, cost: r.cost, judgeCost: r.judgeCost, ms: r.ms,
-      steps: r.steps, tools: r.tools, toolCalls: r.toolCalls, toolErrors: r.toolErrors, helperTools: r.helperTools, deciders: r.deciders, questions: r.questions, retries: r.llmRetries, mode: r.mode, col: r.col, checkEvents: r.checkEvents, deciderAnswers: r.deciderAnswers, saved: r.saved, error: r.error, skipped: r.skipped, bugs: r.bugs, summary: r.summary, files: (r.files || []).length })) };
+      steps: r.steps, tools: r.tools, toolCalls: r.toolCalls, toolErrors: r.toolErrors, helperTools: r.helperTools, deciders: r.deciders, questions: r.questions, retries: r.llmRetries, mode: r.mode, col: r.col, checkEvents: r.checkEvents, deciderAnswers: r.deciderAnswers, saved: r.saved, tests: r.tests, error: r.error, skipped: r.skipped, bugs: r.bugs, summary: r.summary, files: (r.files || []).length })) };
   fs.writeFileSync(path.join(dir, 'results.json'), JSON.stringify(data, null, 2));
   const tpl = fs.readFileSync(path.join(ROOT, 'bench', 'results-page.html'), 'utf8');
   // A function replacer: a string one would treat $' $& $` in the data (a model's text can hold them) as patterns.
@@ -400,7 +423,7 @@ async function judge({ task, targets, pid, arts, model, bar, catalogue }) {
     if (t.startsWith('site:')) return `${base}/ws/${pid}/${t.slice(5).replace(/^[/\\]+/, '') || 'index.html'}`;
     throw new Error(`open one of: ${targets.join(', ')}`);
   };
-  const msgs = [{ role: 'system', content: REVIEW_SYSTEM(bar, sees) }, { role: 'user', content: `The user asked:\n<request>\n${task.prompt}\n</request>\n\nTest these with the browser tool (open each one): ${targets.join(', ')}
+  const msgs = [{ role: 'system', content: REVIEW_SYSTEM(bar, sees) + ORIGINALITY }, { role: 'user', content: `The user asked:\n<request>\n${task.prompt}\n</request>\n\nTest these with the browser tool (open each one): ${targets.join(', ')}
 
 Real-time games keep running while you think between turns, so a game can end before your next action. Judge whether a control works by the result returned right after that action, and test quick sequences (start then pause, or start then steer) as several browser calls in one turn.` }];
   let cost = 0, result = null, tab = null;
@@ -434,7 +457,7 @@ Real-time games keep running while you think between turns, so a game can end be
   if (!result) return { scores: null, pass: false, bugs: [], summary: 'the judge never submitted a review', cost, ms: Date.now() - t0 };
   const scores = Object.fromEntries(REVIEW_KEYS.map((k) => [k, Math.max(1, Math.min(5, Math.round(Number(result.scores?.[k])) || 1))]));
   // Pass stays on the four scores earlier benchmark runs used, so pass rates remain comparable; accessibility is reported beside them.
-  return { scores, pass: CORE_KEYS.every((k) => scores[k] >= bar), bugs: (Array.isArray(result.bugs) ? result.bugs : []).map((x) => clip(x, 300)).slice(0, 10), summary: clip(result.summary, 600), cost, ms: Date.now() - t0 };
+  return { scores, pass: CORE_KEYS.every((k) => scores[k] >= bar), bugs: bugText(result.bugs), summary: clip(result.summary, 600), cost, ms: Date.now() - t0 };
 }
 async function browse(tab, args, resolve) {
   let did = '';
@@ -446,6 +469,85 @@ async function browse(tab, args, resolve) {
   else if (args.action === 'scroll') did = await tab.scroll(args.dy);
   const sum = await tab.summary();
   return `${did ? did + '\n' : ''}Title: ${sum.title || '(none)'} · URL: ${sum.url}\nControls: ${sum.controls.join('; ') || '(none)'}\nConsole errors: ${tab.console.length ? tab.console.slice(-8).join(' | ') : 'none'}\nVisible text:\n${sum.text || '(empty)'}`;
+}
+
+// The judge's originality rubric, stricter than the in-loop reviewer's: a stock look done well is not original.
+const ORIGINALITY = `
+
+For this review, score originality this way (it is about how distinct the result is, not how complete or polished):
+1 = the stock version: a tutorial-like layout, default system look, a centred card on a gradient, purple-blue gradients, emoji as icons, generic headings ("Welcome", "Dashboard"), nothing chosen for this request.
+2 = competent but interchangeable: it could be any of a thousand builds of this request.
+3 = at least one deliberate choice of its own that fits the request: a palette or type pairing, a layout, an interaction or a rule twist.
+4 = a clear point of view carried through the whole thing.
+5 = memorable and coherent, and still easy to use.
+Polish alone is not originality: a common look done well is a 2 or 3. Don't reward novelty that makes it harder to use.`;
+
+// Bugs as one line each: did → saw (expected …).
+const bugText = (bugs) => (Array.isArray(bugs) ? bugs : []).slice(0, 10).map((b) => clip(b && typeof b === 'object' ? `${b.severity ? `[${b.severity}] ` : ''}${b.did || ''} → ${b.saw || ''}${b.expected ? ` (expected ${b.expected})` : ''}` : b, 300));
+
+// A pack's toolchain on this computer: { ok, label, cmd: [program, ...args] } (the probe's own arguments, less --version).
+function probeToolchain(id) {
+  const t = allToolchains().find((x) => x.id === id);
+  if (!t?.probe) return { ok: false, label: id };
+  const [prog, args = []] = t.probe;
+  const r = spawnSync(prog, args, { encoding: 'utf8', timeout: 20000, windowsHide: true });
+  const ok = r.status === 0 && (!t.re || t.re.test(`${r.stdout}\n${r.stderr}`));
+  return { ok, label: t.label || id, cmd: [prog, ...args.filter((a) => !/^--?version$/i.test(a))] };
+}
+
+// The task's hidden checks (task.verify): { passed, total, fails: [{ name, note }] }. Web tasks get a browser tab on
+// the built project; code tasks get the toolchains they need.
+async function hiddenChecks({ task, dir, pid, tools }) {
+  let tab = null;
+  try {
+    const verify = (await import(pathToFileURL(path.resolve(ROOT, task.verify)).href)).default;
+    if (task.kind !== 'code') tab = await openTab();
+    const rows = await verify({ dir, tab, url: `http://localhost:${runtime.port}/ws/${pid}/index.html`, python: tools.get('python')?.cmd });
+    return { passed: rows.filter((r) => r.ok).length, total: rows.length, fails: rows.filter((r) => !r.ok).map((r) => ({ name: r.name, note: clip(r.note, 200) })) };
+  } catch (e) {
+    return { passed: 0, total: 1, fails: [{ name: 'hidden checks', note: clip(e.message, 200) }] };
+  } finally { try { await tab?.close(); } catch { /* gone */ } }
+}
+
+// The hidden checks cap the function score: all pass → up to 5, half → 3, none → 1.
+function capByTests(j, tests, bar) {
+  if (!tests || !j.scores) return;
+  const cap = Math.max(1, Math.round(1 + 4 * tests.passed / tests.total));
+  if (j.scores.function > cap) { j.scores.function = cap; j.capped = true; }
+  j.pass = CORE_KEYS.every((k) => j.scores[k] >= bar);
+}
+
+// ---------- the judge for a task with no page (kind "code"): it reads the files and the hidden checks' results ----------
+const CODE_REVIEW = (bar) => `You are an independent, skeptical reviewer. Another AI wrote the program you are reviewing; you have no reason to go easy on it.
+You can't run it. You get the user's request, every file it wrote, and the results of hidden checks that ran the program on test files it never saw.
+Call submit_review once with:
+- scores from 1 to 5: function (does what was asked: lean on the hidden checks, and on what the code shows for anything they don't cover), craft (clear and correct code: error handling, sensible structure, no dead code, tests that test real behaviour), design (how it feels to use from a terminal: help text, messages that say what to do, exit codes, output that is easy to read and to pipe), originality (see below), accessibility (plain output that reads well without colour or special characters, errors that explain themselves).
+- bugs: only problems you can point to in the code or in the check results, each as did (the command, or the file and line), saw, expected and severity ("breaks", "annoying" or "minor").
+- summary: two or three sentences.
+${bar} means acceptable. Anything basic, broken or unfinished scores below ${bar}.`;
+async function judgeCode({ task, dir, tests, model, bar }) {
+  const t0 = Date.now();
+  const files = listBuilt(dir).filter((f) => f.bytes < 60000 && !/\.(pyc|png|jpe?g|gif|ico|zip|exe|dll)$/i.test(f.path) && !/(^|\/)(__pycache__|\.venv|venv)\//.test(f.path));
+  let budget = 60000;
+  const shown = files.map((f) => { const body = clip(fs.readFileSync(path.join(dir, f.path), 'utf8'), Math.max(500, Math.min(budget, 20000))); budget -= body.length; return `--- ${f.path}\n${body}`; }).join('\n\n');
+  if (!files.length) return { scores: Object.fromEntries(REVIEW_KEYS.map((k) => [k, 1])), pass: false, bugs: ['nothing was written'], summary: 'No files.', cost: 0, ms: 0 };
+  const checks = tests ? `${tests.passed} of ${tests.total} hidden checks passed.${tests.fails.length ? `\nFailed:\n${tests.fails.map((f) => `- ${f.name}: ${f.note}`).join('\n')}` : ''}` : 'No hidden checks ran.';
+  const msgs = [{ role: 'system', content: CODE_REVIEW(bar) + ORIGINALITY }, { role: 'user', content: `The user asked:\n<request>\n${task.prompt}\n</request>\n\nHidden checks:\n${checks}\n\nThe files:\n${shown}` }];
+  let cost = 0, result = null;
+  try {
+    for (const choice of [{ type: 'function', function: { name: 'submit_review' } }, 'auto']) {
+      let r;
+      try { r = await chatStream({ model, messages: msgs, tools: [SUBMIT_REVIEW], tool_choice: choice, max_tokens: 4000, reasoning: { enabled: false } }, undefined, null, null); }
+      catch (e) { if (choice === 'auto') throw e; continue; } // a provider that refuses a forced tool gets 'auto'
+      cost += Number(r.usage?.cost) || 0;
+      const tc = r.toolCalls.find((x) => x.function.name === 'submit_review');
+      if (tc) { try { result = JSON.parse(tc.function.arguments || '{}'); } catch { /* try again */ } }
+      if (result) break;
+    }
+  } catch (e) { return { scores: null, pass: false, bugs: [], summary: `judge failed: ${e.message}`, cost, ms: Date.now() - t0, error: e.message }; }
+  if (!result) return { scores: null, pass: false, bugs: [], summary: 'the judge never submitted a review', cost, ms: Date.now() - t0 };
+  const scores = Object.fromEntries(REVIEW_KEYS.map((k) => [k, Math.max(1, Math.min(5, Math.round(Number(result.scores?.[k])) || 1))]));
+  return { scores, pass: CORE_KEYS.every((k) => scores[k] >= bar), bugs: bugText(result.bugs), summary: clip(result.summary, 600), cost, ms: Date.now() - t0 };
 }
 
 // ---------- report ----------
@@ -470,9 +572,9 @@ function report(results, setups, tasks, bar) {
     console.log(`${pad(r.setup, 24)}${lpad(`${r.passed}/${r.runs}`, 7)}${REVIEW_KEYS.map((k, i) => lpad(r.scores[k].toFixed(1), [6, 6, 7, 6, 6][i])).join('')}${lpad(r.total.toFixed(1), 6)}${lpad(`$${r.costPerRun.toFixed(3)}`, 9)}${lpad(`$${r.byRolePerRun.writer.toFixed(3)}`, 9)}${lpad(`$${r.byRolePerRun.reviewer.toFixed(3)}`, 9)}${lpad(`$${r.byRolePerRun.helper.toFixed(3)}`, 9)}${lpad(`$${r.byRolePerRun.decider.toFixed(3)}`, 9)}${lpad(r.callsPerRun, 7)}${lpad(r.minutesPerRun.toFixed(1), 6)}${lpad(r.sentBackPerRun.toFixed(1), 6)}${lpad(`${r.planned}/${r.runs}`, 6)}`);
   }
   console.log('  $/run = builder run cost (writer + reviewer + helpers + deciders for look; the judge is extra) · calls = model calls per run · back = times sent back (reviewer + checks) · plan = runs that made a plan');
-  console.log(`\nPER TASK (function/craft/design/originality/accessibility, ✓ = pass)\n${pad('task', 18)}${setups.map((s) => pad(s.label, 24)).join('')}`);
+  console.log(`\nPER TASK (function/craft/design/originality/accessibility, ✓ = pass, then hidden checks passed)\n${pad('task', 18)}${setups.map((s) => pad(s.label, 24)).join('')}`);
   for (const t of tasks) {
-    console.log(`${pad(t.id, 18)}${setups.map((s) => pad(results.filter((r) => r.task === t.id && r.setup === s.label).map((r) => (r.scores ? `${REVIEW_KEYS.map((k) => r.scores[k] ?? '-').join('/')}${r.pass ? '✓' : '✗'}` : `—${r.error ? '⚠' : ''}`)).join(' '), 24)).join('')}`);
+    console.log(`${pad(t.id, 18)}${setups.map((s) => pad(results.filter((r) => r.task === t.id && r.setup === s.label).map((r) => (r.scores ? `${REVIEW_KEYS.map((k) => r.scores[k] ?? '-').join('/')}${r.pass ? '✓' : '✗'}${r.tests ? ` ${r.tests.passed}/${r.tests.total}` : ''}` : `—${r.error ? '⚠' : r.skipped ? ' skipped' : ''}`)).join(' '), 24)).join('')}`);
   }
   const errs = results.filter((r) => r.error);
   if (errs.length) { console.log('\nPROBLEMS'); for (const r of errs) console.log(`  ${r.setup} · ${r.task}: ${clip(r.error, 160)}`); }
