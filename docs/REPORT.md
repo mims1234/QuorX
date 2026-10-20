@@ -867,8 +867,10 @@ differences:
 - **Updates:** the app checks its feed (the project's GitHub Releases) shortly after start and every 6 hours,
   downloads with progress, checks the SHA-512, and installs on restart.
 - **Publishing:** `npm run release:bump`, commit, then tag `v<version>` and push the tag.
-  `.github/workflows/release.yml` builds the installer on Windows and creates the release with `latest.yml`, the
-  installer and its blockmap, plus winget manifests. `npm run winget` writes the manifests by hand.
+  `.github/workflows/release.yml` builds the installer on Windows and publishes it as a pre-release with `latest.yml`,
+  the installer, its blockmap and `SHA256SUMS.txt`. Installed apps don't take it until the **Promote release**
+  workflow makes it the latest release (and sends it to winget); **Pull release** takes a bad version back
+  ([Releasing](RELEASING.md)). `npm run winget` writes the winget manifests by hand.
 - **Start at login:** a checkbox in ⚙ Settings → About and in the tray menu (off by default).
 
 ### Settings from the environment

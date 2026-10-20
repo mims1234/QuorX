@@ -25,7 +25,7 @@ import { shellRun, shellClose, shellInfo } from './server/shell.js';
 import { ptyAvailable, ptyOpen, ptyWrite, ptyResize, ptyFollow, ptyClose } from './server/pty.js';
 // Pages the agent wrote, served from this app's own address, get their own opaque origin: their requests to /api are refused.
 const SANDBOX_CSP = 'sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads';
-import { listChats, getChat, saveChat, patchChat, trashChat, validId, listProjects, saveProject, forgetProject, setProjectColor, setProjectFlags, costSummary, costChats } from './server/store.js';
+import { listChats, getChat, saveChat, patchChat, settleReply, trashChat, validId, listProjects, saveProject, forgetProject, setProjectColor, setProjectFlags, costSummary, costChats } from './server/store.js';
 import { ALLOWED, copyTemplate, workspaceDir, safePath, listFiles, listServers, stopServerWait, restartServer, serverLog, startServer, restoreCheckpoint, listCheckpoints, pruneCheckpoints, undoConflicts, changedFiles, reviewFiles, reviewDiff, undoFile, serverOverview, launchConfigs, saveLaunchConfig, removeLaunchConfig, ensureAgentDir, agentSpace, clearAgentSpace } from './server/workspace.js';
 import { followTerm, runningJobs, stopJob } from './server/terminal.js';
 import { runningIn, stopRunning, stopAllIn } from './server/running.js';
@@ -737,7 +737,7 @@ const server = http.createServer(async (req, res) => {
       const body = JSON.parse(await readBody(req));
       const runId = validRunId(String(body.runId || '')) ? String(body.runId) : `r${Date.now().toString(36)}`;
       body.runId = runId;
-      if (!getRun(runId)) startRun({ runId, chatId: body.chatId }, (emit, signal) => runAgent(body, emit, signal));
+      if (!getRun(runId)) startRun({ runId, chatId: body.chatId, onEnd: (end) => body.chatId && settleReply(String(body.chatId), runId, end) }, (emit, signal) => runAgent(body, emit, signal));
       return stream(res, runId, 0);
     }
     const rm = url.pathname.match(/^\/api\/runs\/([\w-]+)(?:\/(events|stop|mode|steer|reading|hold|brief|log))?$/);

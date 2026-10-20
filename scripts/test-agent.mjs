@@ -1625,3 +1625,22 @@ test('a scheduled chat does not start when its project has reached its budget', 
     assert.throws(() => startScheduledChat({ ...s, projectId: 'nope' }, {}, schedDeps(() => reply('x'))), /no longer exists/);
   } finally { forgetProject(pid); ledger.delete(`seed-${pid}`); }
 });
+
+test('cache-read and cache-write tokens from the usage go into the reply stats, per model', async () => {
+  const { cacheTokens } = await import('../server/agent.js');
+  assert.deepEqual(cacheTokens({ prompt_tokens: 100 }), { read: null, write: 0 }, 'not reported is not 0%');
+  assert.deepEqual(cacheTokens({ prompt_tokens_details: { cached_tokens: 80, cache_write_tokens: 5 } }), { read: 80, write: 5 });
+  assert.deepEqual(cacheTokens({ cache_read_input_tokens: 7, cache_creation_input_tokens: 3 }), { read: 7, write: 3 });
+  let b = 0;
+  const cached = (r, u) => ({ ...r, usage: { cost: 0.0001, prompt_tokens: 1000, completion_tokens: 10, ...u } });
+  const { done } = await run(() => [
+    cached(reply('', [['list_files', {}]]), { prompt_tokens_details: { cached_tokens: 0, cache_write_tokens: 900 } }),
+    cached(reply('', [['list_files', {}]]), { prompt_tokens_details: { cached_tokens: 900 } }),
+    cached(reply('Done.'), {}),
+  ][b++]);
+  const m = done.stats.byModel['test/model'];
+  assert.equal(m.cacheRead, 900); assert.equal(m.cacheWrite, 900);
+  assert.equal(m.cachedIn, 2000, 'only calls that reported caching count toward the share');
+  assert.equal(m.tokensIn, 3000);
+  assert.equal(done.stats.cacheRead, 900);
+});
