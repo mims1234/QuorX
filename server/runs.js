@@ -115,11 +115,14 @@ export function recordRun(row) {
   if (row.runId && row.project) ledger.set(row.runId, { project: row.project, cost: Number(row.cost) || 0, at: Date.parse(row.ts) || Date.now() });
   try { fs.mkdirSync(path.dirname(SCORE), { recursive: true }); fs.appendFileSync(SCORE, JSON.stringify(row) + '\n'); } catch { /* best effort */ }
 }
+/** The rows of logs/runs.jsonl from the last `days`: every reply, and document reading (kind 'docs'). */
+export function scoreRows(days = 14) {
+  const since = Date.now() - days * 864e5;
+  try { return fs.readFileSync(SCORE, 'utf8').split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter((r) => r && Date.parse(r.ts) >= since); } catch { return []; }
+}
 /** Per-model totals over the last `days`: replies, how they ended, checks passed, steps, cost and time. */
 export function scorecard(days = 14) {
-  const since = Date.now() - days * 864e5;
-  let rows = [];
-  try { rows = fs.readFileSync(SCORE, 'utf8').split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter((r) => r && Date.parse(r.ts) >= since); } catch { /* none yet */ }
+  const rows = scoreRows(days);
   const by = {};
   for (const r of rows) {
     if (r.kind === 'docs') continue; // reading and indexing documents: in the ledger and budgets, not a reply

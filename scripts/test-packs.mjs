@@ -14,6 +14,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { PACKS, PACK_ERRORS } from '../server/packs/index.js';
 import { detectToolchains } from '../server/toolchains.js';
+import { saveTestResult } from './test-results.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const only = process.argv.flatMap((a, i, all) => (a === '--pack' && all[i + 1] ? [all[i + 1]] : []));
@@ -85,6 +86,12 @@ const md = [
   '',
   ...rows.filter((x) => x.r?.fails.length).flatMap(({ p, r }) => [`## ${p.label}: failures`, '', ...r.fails.map((f) => `- **${f.name}**: ${f.error}`), '']),
 ].join('\n');
+
+saveTestResult('packs', {
+  packs: only.length ? only : null, // null: every pack was run
+  toolchains: found.map((t) => ({ label: t.label, version: t.version, works: t.works !== false })),
+  rows: rows.map(({ p, status, why, r }) => ({ id: p.id, label: p.label, status, pass: r?.pass ?? 0, fail: r?.fail ?? 0, skipped: r?.skipped ?? 0, why: why || null })),
+});
 
 const out = path.join(ROOT, 'pack-test-report.md');
 fs.writeFileSync(out, md + '\n');

@@ -1,0 +1,590 @@
+{
+  "generated": "2026-10-20",
+  "packs": [
+    {
+      "id": "electron",
+      "label": "Electron",
+      "summary": "Desktop apps with web-page windows and a Node main process",
+      "level": "tested",
+      "hosts": null,
+      "detect": [
+        "Node.js"
+      ],
+      "check": "–",
+      "drive": "Windows read and clicked through the DevTools port",
+      "debug": "Main process: Node inspector (debug attach)",
+      "explain": "Starting with a DevTools port, main and renderer output",
+      "evidence": "8 of 8 self-tests with Electron 44 on Windows 11 (PR #8)"
+    },
+    {
+      "id": "core",
+      "label": "Every project",
+      "summary": "",
+      "level": "tested",
+      "hosts": null,
+      "detect": [
+        "Git"
+      ],
+      "check": "–",
+      "drive": "Terminal, background jobs, the browser",
+      "debug": "–",
+      "explain": "Git, and how QuorX works in any folder",
+      "evidence": "Git is found on every test run"
+    },
+    {
+      "id": "godot",
+      "label": "Godot",
+      "summary": "Games and apps made with Godot 4 and GDScript",
+      "level": "tested",
+      "hosts": null,
+      "detect": [
+        "Godot 4"
+      ],
+      "check": "godot --check-only on each changed script",
+      "drive": "Scenes run headless and print",
+      "debug": "Godot (GDScript)",
+      "explain": "Imports, class_name, user:// logs",
+      "evidence": "8 of 8 with Godot 4.7.2: a script error caught, a breakpoint hit in the running game (PR #9)"
+    },
+    {
+      "id": "jvm",
+      "label": "Java and Kotlin",
+      "summary": "Programs, desktop apps (Swing, JavaFX), services and libraries on the JVM",
+      "level": "tested",
+      "hosts": null,
+      "detect": [
+        "Java (JDK)",
+        "Gradle",
+        "Maven",
+        "Kotlin compiler"
+      ],
+      "check": "Gradle or Maven compile through the wrapper",
+      "drive": "JavaFX through UI Automation, Swing with keys; JUnit summaries",
+      "debug": "Java and Kotlin (JDK debugger)",
+      "explain": "Wrappers, JUnit reports, Swing and JavaFX",
+      "evidence": "14 of 14 with JDK 21 and Gradle 8.14: compile check, JUnit summary, a breakpoint hit (PR #11)"
+    },
+    {
+      "id": "node",
+      "label": "Node.js and TypeScript",
+      "summary": "Scripts, command-line tools and servers",
+      "level": "tested",
+      "hosts": null,
+      "detect": [
+        "Node.js"
+      ],
+      "check": "tsc --noEmit for TypeScript",
+      "drive": "Terminal and background servers; pages in the browser",
+      "debug": "Node inspector (built in)",
+      "explain": "npm scripts, TypeScript, servers",
+      "evidence": "Self-test passes on Windows 11 (PR #3, #8)"
+    },
+    {
+      "id": "python",
+      "label": "Python",
+      "summary": "Scripts, command-line tools, services and desktop apps (tkinter, PyQt, PySide)",
+      "level": "tested",
+      "hosts": null,
+      "detect": [
+        "Python 3"
+      ],
+      "check": "Syntax with the venv's own Python, plus ruff or pyflakes",
+      "drive": "tkinter windows clicked; pytest summaries",
+      "debug": "Python (debugpy)",
+      "explain": "Project venvs, pytest, tkinter limits",
+      "evidence": "Python 3.12 with tkinter, debugpy and pyflakes: a button clicked, a breakpoint in its handler (PR #14)"
+    },
+    {
+      "id": "installers",
+      "label": "Windows installers",
+      "summary": "MSI packages with WiX and MSIX packages with MakeAppx and SignTool",
+      "level": "tested",
+      "hosts": [
+        "win32"
+      ],
+      "detect": [
+        "WiX Toolset (v4 or later)",
+        "Windows SDK (MakeAppx, SignTool)"
+      ],
+      "check": "wix build on changed .wxs files",
+      "drive": "MSIX packed and signed with a test certificate",
+      "debug": "–",
+      "explain": "WiX, MakeAppx, SignTool, test signing only",
+      "evidence": "6 of 6 with WiX and the Windows SDK: a schema error caught, an MSIX packed and test-signed (PR #9)"
+    },
+    {
+      "id": "dotnet",
+      "label": ".NET (C#)",
+      "summary": "Console, WinForms, WPF, ASP.NET and MAUI apps",
+      "level": "wired",
+      "hosts": null,
+      "detect": [
+        ".NET SDK",
+        "netcoredbg"
+      ],
+      "check": "dotnet build",
+      "drive": "WinForms and WPF windows read and clicked; dotnet test summaries",
+      "debug": "C# (netcoredbg)",
+      "explain": "SDKs, target frameworks, test runners",
+      "evidence": "4 logic tests pass; 7 need the .NET SDK and skip (PR #4)"
+    },
+    {
+      "id": "android",
+      "label": "Android",
+      "summary": "Apps built with Gradle, run on an emulator, tapped and read like a person would",
+      "level": "wired",
+      "hosts": null,
+      "detect": [
+        "Android SDK",
+        "Android platform tools (adb)",
+        "Android emulator"
+      ],
+      "check": "Gradle compileDebugSources",
+      "drive": "Emulator booted, screen read and tapped; Logcat crash summaries",
+      "debug": "–",
+      "explain": "SDK, emulator, Gradle, Logcat",
+      "evidence": "11 logic tests pass with a stand-in Gradle; no Android SDK tested yet (PR #10)"
+    },
+    {
+      "id": "apple",
+      "label": "Apple apps",
+      "summary": "iPhone, iPad and Mac apps (SwiftUI, UIKit, AppKit) and Swift packages",
+      "level": "wired",
+      "hosts": [
+        "darwin"
+      ],
+      "detect": [
+        "Xcode",
+        "Swift",
+        "Simulators",
+        "idb"
+      ],
+      "check": "xcodebuild, swift build",
+      "drive": "iOS Simulator driven; crash reports read",
+      "debug": "Swift and Objective-C (lldb-dap)",
+      "explain": "Xcode setup, simulators, crash reports",
+      "evidence": "Needs a Mac; its logic is tested on Windows (8 pass, PR #13)"
+    },
+    {
+      "id": "cpp",
+      "label": "C and C++",
+      "summary": "Native programs and libraries with CMake",
+      "level": "wired",
+      "hosts": null,
+      "detect": [
+        "CMake",
+        "Visual Studio C++ (MSVC)",
+        "GCC",
+        "Clang",
+        "LLDB (lldb-dap)"
+      ],
+      "check": "cmake --build on the project's build folder",
+      "drive": "Terminal for programs",
+      "debug": "C and C++ (lldb-dap)",
+      "explain": "CMake, MSVC and MinGW, crash dumps",
+      "evidence": "Debugger tests pass with a stand-in adapter; needs CMake and LLVM (PR #7)"
+    },
+    {
+      "id": "flutter",
+      "label": "Flutter and Dart",
+      "summary": "Windows, macOS, Linux and Android apps from one Dart codebase",
+      "level": "wired",
+      "hosts": null,
+      "detect": [
+        "Flutter",
+        "Dart SDK"
+      ],
+      "check": "flutter analyze, dart analyze",
+      "drive": "Desktop builds driven like any window; test summaries",
+      "debug": "Dart and Flutter (debug_adapter)",
+      "explain": "Devices, flutter doctor, debug_adapter",
+      "evidence": "The debugger bridge tested with a stand-in adapter; no Flutter or Dart tested yet (PR #10)"
+    },
+    {
+      "id": "go",
+      "label": "Go",
+      "summary": "Command-line programs and services",
+      "level": "wired",
+      "hosts": null,
+      "detect": [
+        "Go",
+        "Delve (Go debugger)"
+      ],
+      "check": "go vet",
+      "drive": "Terminal for programs",
+      "debug": "Go (Delve)",
+      "explain": "Modules, go test, Delve",
+      "evidence": "Debugger tests pass with a stand-in adapter; needs Go and Delve (PR #7)"
+    },
+    {
+      "id": "rust",
+      "label": "Rust",
+      "summary": "Command-line programs, libraries and services",
+      "level": "wired",
+      "hosts": null,
+      "detect": [
+        "Rust (cargo)"
+      ],
+      "check": "cargo check",
+      "drive": "Terminal for programs",
+      "debug": "Rust (lldb-dap or CodeLLDB)",
+      "explain": "Cargo, the MSVC linker, panics",
+      "evidence": "cargo check catches errors for real (3 pass); builds and the debugger need the C++ Build Tools (PR #7)"
+    },
+    {
+      "id": "tauri",
+      "label": "Tauri",
+      "summary": "Desktop apps with a Rust back end and a web front end",
+      "level": "wired",
+      "hosts": null,
+      "detect": [
+        "Tauri CLI",
+        "WebView2 runtime"
+      ],
+      "check": "cargo check in src-tauri",
+      "drive": "Window read and clicked through WebView2's DevTools port",
+      "debug": "Rust side: lldb-dap (Rust pack)",
+      "explain": "Tauri 1 and 2, capabilities, panics",
+      "evidence": "The WebView2 drive path tested with a real WebView2 window; no real Tauri build yet (PR #6)"
+    },
+    {
+      "id": "unity",
+      "label": "Unity",
+      "summary": "Games and apps made with Unity and C#",
+      "level": "wired",
+      "hosts": null,
+      "detect": [
+        "Unity Hub",
+        "Unity Editor"
+      ],
+      "check": "Unity batchmode compile",
+      "drive": "EditMode tests summarised",
+      "debug": "– (logs only)",
+      "explain": "Editor versions, license, first import, logs",
+      "evidence": "Parsers and editor discovery tested on fixtures (4 pass); needs Unity with a license (PR #9)"
+    }
+  ],
+  "next": [
+    {
+      "label": "MinGW gdb debugging",
+      "covers": "Debugging MinGW builds with gdb's own adapter (gdb -i dap)",
+      "evidence": "Not started: lldb-dap debugs MinGW builds meanwhile"
+    },
+    {
+      "label": "Unity's debugger",
+      "covers": "Breakpoints in a running Unity game",
+      "evidence": "Not started: Unity's debugger is not one the debug tool can drive"
+    }
+  ],
+  "totals": {
+    "packs": 16,
+    "toolchains": 33,
+    "checks": 15,
+    "debuggers": 10,
+    "proven": 0,
+    "tested": 7,
+    "wired": 9,
+    "next": 2
+  },
+  "matrix": {
+    "levels": [
+      {
+        "id": "proven",
+        "label": "Proven"
+      },
+      {
+        "id": "tested",
+        "label": "Tested"
+      },
+      {
+        "id": "wired",
+        "label": "Logic tested"
+      },
+      {
+        "id": "next",
+        "label": "Not yet"
+      }
+    ],
+    "columns": [
+      "Platform",
+      "Covers",
+      "Detect",
+      "Check",
+      "Run and drive",
+      "Debug",
+      "Explain",
+      "Evidence"
+    ],
+    "rows": [
+      {
+        "level": "tested",
+        "cells": [
+          "Electron",
+          "Desktop apps with web-page windows and a Node main process",
+          "Node.js",
+          "–",
+          "Windows read and clicked through the DevTools port",
+          "Main process: Node inspector (debug attach)",
+          "Starting with a DevTools port, main and renderer output",
+          "8 of 8 self-tests with Electron 44 on Windows 11 (PR #8)"
+        ]
+      },
+      {
+        "level": "tested",
+        "cells": [
+          "Every project",
+          "Every project",
+          "Git",
+          "–",
+          "Terminal, background jobs, the browser",
+          "–",
+          "Git, and how QuorX works in any folder",
+          "Git is found on every test run"
+        ]
+      },
+      {
+        "level": "tested",
+        "cells": [
+          "Godot",
+          "Games and apps made with Godot 4 and GDScript",
+          "Godot 4",
+          "godot --check-only on each changed script",
+          "Scenes run headless and print",
+          "Godot (GDScript)",
+          "Imports, class_name, user:// logs",
+          "8 of 8 with Godot 4.7.2: a script error caught, a breakpoint hit in the running game (PR #9)"
+        ]
+      },
+      {
+        "level": "tested",
+        "cells": [
+          "Java and Kotlin",
+          "Programs, desktop apps (Swing, JavaFX), services and libraries on the JVM",
+          "Java (JDK), Gradle, Maven, Kotlin compiler",
+          "Gradle or Maven compile through the wrapper",
+          "JavaFX through UI Automation, Swing with keys; JUnit summaries",
+          "Java and Kotlin (JDK debugger)",
+          "Wrappers, JUnit reports, Swing and JavaFX",
+          "14 of 14 with JDK 21 and Gradle 8.14: compile check, JUnit summary, a breakpoint hit (PR #11)"
+        ]
+      },
+      {
+        "level": "tested",
+        "cells": [
+          "Node.js and TypeScript",
+          "Scripts, command-line tools and servers",
+          "Node.js",
+          "tsc --noEmit for TypeScript",
+          "Terminal and background servers; pages in the browser",
+          "Node inspector (built in)",
+          "npm scripts, TypeScript, servers",
+          "Self-test passes on Windows 11 (PR #3, #8)"
+        ]
+      },
+      {
+        "level": "tested",
+        "cells": [
+          "Python",
+          "Scripts, command-line tools, services and desktop apps (tkinter, PyQt, PySide)",
+          "Python 3",
+          "Syntax with the venv's own Python, plus ruff or pyflakes",
+          "tkinter windows clicked; pytest summaries",
+          "Python (debugpy)",
+          "Project venvs, pytest, tkinter limits",
+          "Python 3.12 with tkinter, debugpy and pyflakes: a button clicked, a breakpoint in its handler (PR #14)"
+        ]
+      },
+      {
+        "level": "tested",
+        "cells": [
+          "Windows installers (Windows only)",
+          "MSI packages with WiX and MSIX packages with MakeAppx and SignTool",
+          "WiX Toolset (v4 or later), Windows SDK (MakeAppx, SignTool)",
+          "wix build on changed .wxs files",
+          "MSIX packed and signed with a test certificate",
+          "–",
+          "WiX, MakeAppx, SignTool, test signing only",
+          "6 of 6 with WiX and the Windows SDK: a schema error caught, an MSIX packed and test-signed (PR #9)"
+        ]
+      },
+      {
+        "level": "wired",
+        "cells": [
+          ".NET (C#)",
+          "Console, WinForms, WPF, ASP.NET and MAUI apps",
+          ".NET SDK, netcoredbg",
+          "dotnet build",
+          "WinForms and WPF windows read and clicked; dotnet test summaries",
+          "C# (netcoredbg)",
+          "SDKs, target frameworks, test runners",
+          "4 logic tests pass; 7 need the .NET SDK and skip (PR #4)"
+        ]
+      },
+      {
+        "level": "wired",
+        "cells": [
+          "Android",
+          "Apps built with Gradle, run on an emulator, tapped and read like a person would",
+          "Android SDK, Android platform tools (adb), Android emulator",
+          "Gradle compileDebugSources",
+          "Emulator booted, screen read and tapped; Logcat crash summaries",
+          "–",
+          "SDK, emulator, Gradle, Logcat",
+          "11 logic tests pass with a stand-in Gradle; no Android SDK tested yet (PR #10)"
+        ]
+      },
+      {
+        "level": "wired",
+        "cells": [
+          "Apple apps (macOS only)",
+          "iPhone, iPad and Mac apps (SwiftUI, UIKit, AppKit) and Swift packages",
+          "Xcode, Swift, Simulators, idb",
+          "xcodebuild, swift build",
+          "iOS Simulator driven; crash reports read",
+          "Swift and Objective-C (lldb-dap)",
+          "Xcode setup, simulators, crash reports",
+          "Needs a Mac; its logic is tested on Windows (8 pass, PR #13)"
+        ]
+      },
+      {
+        "level": "wired",
+        "cells": [
+          "C and C++",
+          "Native programs and libraries with CMake",
+          "CMake, Visual Studio C++ (MSVC), GCC, Clang, LLDB (lldb-dap)",
+          "cmake --build on the project's build folder",
+          "Terminal for programs",
+          "C and C++ (lldb-dap)",
+          "CMake, MSVC and MinGW, crash dumps",
+          "Debugger tests pass with a stand-in adapter; needs CMake and LLVM (PR #7)"
+        ]
+      },
+      {
+        "level": "wired",
+        "cells": [
+          "Flutter and Dart",
+          "Windows, macOS, Linux and Android apps from one Dart codebase",
+          "Flutter, Dart SDK",
+          "flutter analyze, dart analyze",
+          "Desktop builds driven like any window; test summaries",
+          "Dart and Flutter (debug_adapter)",
+          "Devices, flutter doctor, debug_adapter",
+          "The debugger bridge tested with a stand-in adapter; no Flutter or Dart tested yet (PR #10)"
+        ]
+      },
+      {
+        "level": "wired",
+        "cells": [
+          "Go",
+          "Command-line programs and services",
+          "Go, Delve (Go debugger)",
+          "go vet",
+          "Terminal for programs",
+          "Go (Delve)",
+          "Modules, go test, Delve",
+          "Debugger tests pass with a stand-in adapter; needs Go and Delve (PR #7)"
+        ]
+      },
+      {
+        "level": "wired",
+        "cells": [
+          "Rust",
+          "Command-line programs, libraries and services",
+          "Rust (cargo)",
+          "cargo check",
+          "Terminal for programs",
+          "Rust (lldb-dap or CodeLLDB)",
+          "Cargo, the MSVC linker, panics",
+          "cargo check catches errors for real (3 pass); builds and the debugger need the C++ Build Tools (PR #7)"
+        ]
+      },
+      {
+        "level": "wired",
+        "cells": [
+          "Tauri",
+          "Desktop apps with a Rust back end and a web front end",
+          "Tauri CLI, WebView2 runtime",
+          "cargo check in src-tauri",
+          "Window read and clicked through WebView2's DevTools port",
+          "Rust side: lldb-dap (Rust pack)",
+          "Tauri 1 and 2, capabilities, panics",
+          "The WebView2 drive path tested with a real WebView2 window; no real Tauri build yet (PR #6)"
+        ]
+      },
+      {
+        "level": "wired",
+        "cells": [
+          "Unity",
+          "Games and apps made with Unity and C#",
+          "Unity Hub, Unity Editor",
+          "Unity batchmode compile",
+          "EditMode tests summarised",
+          "– (logs only)",
+          "Editor versions, license, first import, logs",
+          "Parsers and editor discovery tested on fixtures (4 pass); needs Unity with a license (PR #9)"
+        ]
+      },
+      {
+        "level": "next",
+        "cells": [
+          "MinGW gdb debugging",
+          "Debugging MinGW builds with gdb's own adapter (gdb -i dap)",
+          "–",
+          "–",
+          "–",
+          "–",
+          "–",
+          "Not started: lldb-dap debugs MinGW builds meanwhile"
+        ]
+      },
+      {
+        "level": "next",
+        "cells": [
+          "Unity's debugger",
+          "Breakpoints in a running Unity game",
+          "–",
+          "–",
+          "–",
+          "–",
+          "–",
+          "Not started: Unity's debugger is not one the debug tool can drive"
+        ]
+      }
+    ]
+  },
+  "levelChart": {
+    "type": "bar",
+    "title": "Packs by level of evidence",
+    "x": [
+      "Proven",
+      "Tested",
+      "Logic tested",
+      "Not yet"
+    ],
+    "series": [
+      {
+        "name": "Packs",
+        "values": [
+          0,
+          7,
+          9,
+          2
+        ]
+      }
+    ]
+  },
+  "stats": {
+    "items": [
+      {
+        "label": "Platform packs (PR #3 → now)",
+        "from": 10,
+        "to": 16
+      },
+      {
+        "label": "Pack self-test files (PR #3 → now)",
+        "from": 8,
+        "to": 15
+      }
+    ]
+  }
+}
