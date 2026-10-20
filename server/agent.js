@@ -27,7 +27,7 @@ import { languageChecks } from './langchecks.js';
 import { audit } from './audit.js';
 import { packagesOf, checkPackages } from './pkgguard.js';
 import { testChanges, TEST_FILE } from './testguard.js';
-import { debugStart, debugBreak, debugMove, debugState, debugEval, debugStop, stateText, debugLanguages, debugGateLine } from './debugger.js';
+import { debugStart, debugAttach, debugBreak, debugMove, debugState, debugEval, debugStop, stateText, debugLanguages, debugGateLine, debugPausedIn } from './debugger.js';
 import { isCheckedFile, packNotes, outputSummary } from './packs/index.js';
 import { devices as adbDevices, pickDevice, readScreen, tap as adbTap, typeText as adbType, key as adbKey, screenshot as adbShot, install as adbInstall, launch as adbLaunch, logcat as adbLog } from './android.js';
 import { listSkills, readSkill, saveSkill, listTemplates } from './skills.js';
@@ -329,7 +329,7 @@ Every picture, video, music or voice file you make is also saved into the projec
 Paid media tools you may use: ${cats.map((c) => `${MEDIA[c].tool} (${MEDIA[c].noun}${T[c].pick === 'agent' && T[c].models.length > 1 ? '; you choose the model' : ''})`).join(', ')}. They cost real money, so every call goes through an approval gate (${approval === 'yolo' ? 'an automatic check that judges whether the request needs it and the price is fair' : 'the user sees what you plan, the model and the cost, and approves, declines, or switches to another model'}). Always fill "why" with one plain sentence. Use media only when the user asks for it or it clearly adds value. When you choose a model, prefer the cheapest one that fits the request. If a call is declined, read the reason, adapt (another approach, a cheaper option, or no media), and never repeat the identical call.`;
 
 const CODE_RULES = `
-Project folder: you have your own folder on the user's machine for multi-file projects (apps, sites, scripts, games with assets). Use list_files, read_file, write_file and edit_file (exact find and replace). shell runs a command line in that folder (any language or toolchain: installs, builds, tests, git); QuorX checks each command first and some ask the user, so run what the task needs and say why in your reply when a command is unusual. To delete files or folders use delete_file (it can be undone), not the shell. start_server starts a long-running dev server that opens in the user's Browser tab and is saved to the project's launch file (the user runs and stops it from the servers button): the server MUST listen on the port given in the PORT environment variable, or take {PORT} as an argument (for example: python -m http.server {PORT}). For a static site (HTML, CSS, JS and assets, no server code), write index.html and its files, then call preview_site: it runs the harness's small static server (.quorx/serve.mjs) as the launch entry "site", so it behaves like any other server. Never write your own static file server (serve.mjs, http.server scripts and the like): preview_site already does that, with no caching. Only an app with real server code (an API, a backend) gets its own server file, in the project itself, run with start_server. The launch file is .quorx/launch.json (read it with read_file); a page on a running server opens with browser target app:<server name>/<path>. Arguments can't contain quotes, brackets, $, %, ;, & or pipes: for anything more than a plain command, write a script file and run it (for example node check.mjs). Files longer than about 300 lines: write the first part with write_file, then add the rest with append_file in parts of about 300 lines; one huge call can be cut off. Never draft code in your thinking: thinking is not saved and is never shown to the tools, so plan briefly (the idea, the files, the main parts), then write the code straight into write_file / append_file calls. Use write_artifact for quick single-file pages; use the project folder when there are several files, dependencies or a server.
+Project folder: you have your own folder on the user's machine for multi-file projects (apps, sites, scripts, games with assets). Use list_files, read_file, write_file and edit_file (exact find and replace). shell runs a command line in that folder (any language or toolchain: installs, builds, tests, git); QuorX checks each command first and some ask the user, so run what the task needs and say why in your reply when a command is unusual. To delete files or folders use delete_file (it can be undone), not the shell. start_server starts a long-running dev server that opens in the user's Browser tab and is saved to the project's launch file (the user runs and stops it from the servers button): the server MUST listen on the port given in the PORT environment variable, or take {PORT} as an argument (for example: python -m http.server {PORT}). For a static site (HTML, CSS, JS and assets, no server code), write index.html and its files, then call preview_site: it runs the harness's small static server (.quorx/serve.mjs) as the launch entry "site", so it behaves like any other server. Never write your own static file server (serve.mjs, http.server scripts and the like): preview_site already does that, with no caching. Only an app with real server code (an API, a backend) gets its own server file, in the project itself, run with start_server. The launch file is .quorx/launch.json (read it with read_file); a page on a running server opens with browser target app:<server name>/<path>. Arguments can't contain quotes, brackets, $, %, ;, & or pipes: for anything more than a plain command, write a script file and run it (for example node check.mjs). Such a script does the work itself: never write a script whose job is to run other programs (a wrapper that takes a command and runs it, or calls spawn, exec, subprocess or Start-Process). Run each command directly with shell instead: QuorX reads a script before it runs, and one that runs other programs always asks the user and can't run in the background. Files longer than about 300 lines: write the first part with write_file, then add the rest with append_file in parts of about 300 lines; one huge call can be cut off. Never draft code in your thinking: thinking is not saved and is never shown to the tools, so plan briefly (the idea, the files, the main parts), then write the code straight into write_file / append_file calls. Use write_artifact for quick single-file pages; use the project folder when there are several files, dependencies or a server.
 Stay inside the project folder: never read, list or scan anything outside it (the user's home or other folders, the harness's own files and data, environment variables), and never call the harness's own server or its /api routes from your scripts. If something you need isn't in the folder or in your tool results, ask the user instead of searching for it.
 read_file returns numbered lines (the numbers are not part of the file); a long file comes in windows, so continue with offset. edit_file can apply several edits to one file at once with edits (all or none). After every write or edit the harness checks the file (Node parses JS, Python parses .py, plus JSON, CSS, and HTML scripts and links) and reports problems in the result: fix them before moving on.`;
 
@@ -412,7 +412,7 @@ const CODE_TOOLS = [
   { type: 'function', function: { name: 'append_file', description: 'Append content to the end of a file (creates it if missing). Use it to write large files in parts.', parameters: { type: 'object', required: ['path', 'content'], properties: { path: { type: 'string' }, content: { type: 'string' } } } } },
   { type: 'function', function: { name: 'edit_file', description: 'Replace an exact snippet in a file. "find" must match exactly once unless replace_all is true. For several changes to one file, pass edits instead: they are applied in order, all or none.', parameters: { type: 'object', required: ['path'], properties: { path: { type: 'string' }, find: { type: 'string' }, replace: { type: 'string' }, replace_all: { type: 'boolean' },
     edits: { type: 'array', maxItems: 20, items: { type: 'object', required: ['find', 'replace'], properties: { find: { type: 'string' }, replace: { type: 'string' }, replace_all: { type: 'boolean' } } } } } } } },
-  { type: 'function', function: { name: 'shell', description: 'Run a command line in your project folder and wait for it. Any toolchain works: cargo, dotnet, go, cmake, gradle, python, node, npm, git… Before it runs, QuorX checks it: read-only commands run at once, others may ask the user (or, in YOLO, the deciders); system commands, deleting folders, and touching drive roots, the user profile or places above the project are refused. Input is closed, so pass non-interactive flags (--yes, -y, /quiet). Returns the exit code, the files it changed, the last output and a log file with all of it.', parameters: { type: 'object', required: ['command'], properties: {
+  { type: 'function', function: { name: 'shell', description: 'Run a command line in your project folder and wait for it. Any toolchain works: cargo, dotnet, go, cmake, gradle, python, node, npm, git… Before it runs, QuorX checks it: read-only commands run at once, others may ask the user (or, in YOLO, the deciders); system commands, deleting folders, and touching drive roots, the user profile or places above the project are refused. Input is closed, so pass non-interactive flags (--yes, -y, /quiet). Run each program directly here, never through a wrapper script you wrote. Returns the exit code, the files it changed, the last output and a log file with all of it.', parameters: { type: 'object', required: ['command'], properties: {
     command: { type: 'string', description: 'The whole command line in the project\'s shell (Windows PowerShell unless the user chose another), e.g. "cargo build --release" or "dotnet test"' },
     cwd: { type: 'string', description: 'Optional subfolder of the project to run in, e.g. "app"' },
     background: { type: 'boolean', description: 'Start it and return at once, for programs that keep running: a desktop app you want to test, a watcher, a long build. A build, or an install the user allowed, that outlives the time limit moves to the background by itself.' } } } } },
@@ -423,9 +423,10 @@ const CODE_TOOLS = [
     action: { type: 'string', enum: ['start', 'send', 'read', 'stop'] }, command: { type: 'string', description: 'start: the command line' }, id: { type: 'string', description: 'send/read/stop: the terminal id, e.g. "t1"' },
     text: { type: 'string', description: 'send: text to type' }, keys: { type: 'array', items: { type: 'string' }, description: 'send: keys to press after the text, in order: Enter, Tab, Esc, Up, Down, Left, Right, Backspace, Space, Ctrl+C, Ctrl+D, F1–F5, PageUp, PageDown, or a single character' },
     wait_s: { type: 'integer', minimum: 0, maximum: 30 }, cols: { type: 'integer', minimum: 40, maximum: 200 }, rows: { type: 'integer', minimum: 10, maximum: 60 }, cwd: { type: 'string' } } } } },
-  { type: 'function', function: { name: 'debug', description: `A debugger for ${debugLanguages()} programs, for bugs that reading the trace and adding prints haven't found. start runs a file paused (args optional); break sets a breakpoint at file:line (condition optional); continue runs to the next breakpoint; step / into / out move one line; state shows where it is, the stack and the local variables; eval evaluates an expression where it stopped; stop ends it. Python needs debugpy (pip install debugpy).`, parameters: { type: 'object', required: ['action'], properties: {
-    action: { type: 'string', enum: ['start', 'break', 'continue', 'step', 'into', 'out', 'state', 'eval', 'stop'] }, id: { type: 'string', description: 'The session id from start, e.g. "d1"' },
-    file: { type: 'string' }, args: { type: 'array', items: { type: 'string' } }, line: { type: 'integer' }, condition: { type: 'string' }, expr: { type: 'string' }, frame: { type: 'integer' } } } } },
+  { type: 'function', function: { name: 'debug', description: `A debugger for ${debugLanguages()} programs, for bugs that reading the trace and adding prints haven't found. start runs a file paused (args optional); attach connects to the Node inspector of a background job you started with --inspect=<port> (an Electron app's main process, a server), and stop then only disconnects; break sets a breakpoint at file:line (condition optional); continue runs to the next breakpoint (while the program runs, it waits for one: click the app's button first); step / into / out move one line; state shows where it is, the stack and the local variables; eval evaluates an expression where it stopped; stop ends it. Python needs debugpy in the project's interpreter (its venv when it has one).`, parameters: { type: 'object', required: ['action'], properties: {
+    action: { type: 'string', enum: ['start', 'attach', 'break', 'continue', 'step', 'into', 'out', 'state', 'eval', 'stop'] }, id: { type: 'string', description: 'The session id from start, e.g. "d1"' },
+    file: { type: 'string' }, args: { type: 'array', items: { type: 'string' } }, line: { type: 'integer' }, condition: { type: 'string' }, expr: { type: 'string' }, frame: { type: 'integer' }, port: { type: 'integer', description: 'attach: the --inspect port' },
+    program: { type: 'string', description: 'start, for Go, C, C++ and Rust: the built program to run, only when QuorX cannot find it (it finds Go packages, Cargo binaries and CMake targets itself)' } } } } },
   { type: 'function', function: { name: 'android', description: 'Test an Android app on an emulator (adb). devices: what is connected. install {apk}: an APK from the project. launch {package}. read: the screen as text; interactive controls are numbered [n] with their position @x,y. tap {ref} or {x, y}. type {text}: into the focused field. key {key}: back, home, enter, tab, delete, up/down/left/right. screenshot: a picture for the user. log {package}: recent errors and the app\'s own log lines. Emulators only, unless the user allows phones.', parameters: { type: 'object', required: ['action'], properties: {
     action: { type: 'string', enum: ['devices', 'install', 'launch', 'read', 'tap', 'type', 'key', 'screenshot', 'log'] }, device: { type: 'string' }, apk: { type: 'string' }, package: { type: 'string' },
     ref: { type: 'integer' }, x: { type: 'integer' }, y: { type: 'integer' }, text: { type: 'string' }, key: { type: 'string' } } } } },
@@ -2199,29 +2200,38 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
     if (name === 'debug') {
       const act = String(args.action || '');
       // Earned: after a few failed tries (errors, a build sent back), or when the user turned it on for every reply.
-      if (S.debugger === 'off' && act === 'start') return 'The user has turned the debugger off. Debug with the shell: reproduce, read the trace, add prints.';
+      if (S.debugger === 'off' && (act === 'start' || act === 'attach')) return 'The user has turned the debugger off. Debug with the shell: reproduce, read the trace, add prints.';
       const earned = S.debugger === 'always' || (run.errSteps?.length || 0) >= 2 || (run.verifyRounds || 0) > 0 || (run.reviewRounds || 0) > 0 || run.debugOn;
-      if (act === 'start' && !earned) return 'Not yet: reproduce the bug, read the error\'s file and line, and add a print or log line to test your guess first. The debugger opens after a couple of failed tries (the user can turn it on for every reply).';
+      if ((act === 'start' || act === 'attach') && !earned) return 'Not yet: reproduce the bug, read the error\'s file and line, and add a print or log line to test your guess first. The debugger opens after a couple of failed tries (the user can turn it on for every reply).';
       if (act === 'start') {
         const file = String(args.file || '');
         safePath(root, file);
         const line = `debug ${file}`;
-        const d = await decideCommand(debugGateLine(file, (args.args || []).map(String)), { shell: 'cmd', root, cwd: root, env: childEnv(), rules: commandRules(), mode: S.approval, yolo: { external: SF.yoloExternal, opaque: SF.yoloOpaque, outside: SF.yoloOutside } });
+        const program = args.program ? String(args.program) : undefined;
+        if (program) safePath(root, program);
+        const d = await decideCommand(debugGateLine(file, (args.args || []).map(String), { program, cwd: root }), { shell: 'cmd', root, cwd: root, env: childEnv(), rules: commandRules(), mode: S.approval, yolo: { external: SF.yoloExternal, opaque: SF.yoloOpaque, outside: SF.yoloOutside } });
         const g = await gateCommand(d, line, 'cmd');
         if (!g.ok) return g.text;
         run.debugOn = true;
         const logRel = `${SCRATCH}/logs/${runId}-debug-${(run.cmdSeq = (run.cmdSeq || 0) + 1)}.log`;
-        const s = await debugStart({ projectId, cwd: root, file, args: (args.args || []).map(String), logTo: path.join(root, logRel), logRel, term: { projectId, source: 'agent', chatId: req.chatId } });
+        const s = await debugStart({ projectId, cwd: root, file, args: (args.args || []).map(String), program, logTo: path.join(root, logRel), logRel, term: { projectId, source: 'agent', chatId: req.chatId } });
         aud({ kind: 'background', command: line, by: g.by, job: s.job, why: 'debugger' });
         emit({ t: 'debug', id: s.id, action: 'start', file, at: at() });
-        return `Debug session ${s.id} (${s.kind}) started: ${file} is paused before its first line. Set breakpoints with break, then continue. Its output goes to ${logRel}.`;
+        return `Debug session ${s.id} (${s.kind}) started: ${file} is paused before its first line. Set breakpoints with break, then continue. Its output goes to ${logRel}; it runs as background job ${s.job} (the job for the desktop tool, when it opens a window).${s.note ? ` ${s.note}` : ''}`;
+      }
+      if (act === 'attach') {
+        // No new command runs: the job it attaches to was approved when it started.
+        const s = await debugAttach({ projectId, cwd: root, port: args.port });
+        run.debugOn = true;
+        emit({ t: 'debug', id: s.id, action: 'attach', file: `port ${args.port}`, at: at() });
+        return `Debug session ${s.id} attached to job ${s.job} on port ${args.port}: ${s.paused ? 'paused on its first line' : 'it keeps running'}. Set breakpoints with break, then continue (trigger the code from the app if it runs on a click). stop disconnects; job_stop ends the program.`;
       }
       let out;
       if (act === 'break') out = await debugBreak(args.id, String(args.file || ''), Number(args.line), args.condition);
       else if (['continue', 'step', 'into', 'out'].includes(act)) out = stateText(await debugMove(args.id, act));
       else if (act === 'state') out = stateText(await debugState(args.id));
       else if (act === 'eval') out = `${clip(args.expr, 200)} → ${await debugEval(args.id, String(args.expr || ''), Number(args.frame) || 0)}`;
-      else if (act === 'stop') { const r = await debugStop(args.id); out = r.already ? 'The program had already ended.' : stopNote(r); }
+      else if (act === 'stop') { const r = await debugStop(args.id); out = r.detached ? `Disconnected; job ${r.job} keeps running.` : r.already ? 'The program had already ended.' : stopNote(r); }
       else return 'Error: unknown debug action.';
       emit({ t: 'debug', id: args.id, action: act, text: clip(out, 1500), at: at() });
       return out;
@@ -2229,7 +2239,11 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
     if (name === 'desktop') {
       if (process.platform !== 'win32') return 'Error: the desktop tool works on Windows only.';
       const act = String(args.action || ''), job = String(args.job || '');
-      const again = async (h) => { await sleep(450, signal); const r = await readWindow(job, h).catch((e) => ({ text: `(could not read it again: ${e.message})` })); return `\nWindow now:\n${r.text}`; };
+      // A program paused at a breakpoint can't answer for its windows: say where it stopped instead of waiting on it.
+      const paused = async (wait) => { const p = await debugPausedIn(job, wait); return p ? `The app is paused at a breakpoint (debug session ${p.id}, ${p.at}), so its window can't respond: use debug state and eval, then debug continue.` : ''; };
+      const again = async (h) => { await sleep(450, signal); const p = await paused(800); if (p) return `\n${p}`; const r = await readWindow(job, h).catch((e) => ({ text: `(could not read it again: ${e.message})` })); return `\nWindow now:\n${r.text}`; };
+      const stopped = await paused();
+      if (stopped) return stopped;
       if (act === 'windows') {
         const w = await appWindows(job, 8000);
         return w.length ? `Windows of ${job}:\n${w.map((x) => `- window ${x.handle}: "${x.title}" (process ${x.pid})`).join('\n')}` : `Job ${job} has no windows yet. It may still be starting (try again), or it isn't a windowed app (read its output with job_output).`;
@@ -2239,7 +2253,14 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
       if (act === 'click_at') { const did = await clickAt(job, args.window, args.x, args.y); emit({ t: 'desktop', job, action: act, did, at: at() }); return `${did}.${await again(args.window)}`; }
       if (act === 'type') { const did = await setControl(job, args.window, args.ref, args.text); emit({ t: 'desktop', job, action: act, did, at: at() }); return `${did}.${await again(args.window)}`; }
       if (act === 'keys') { const did = await sendKeys(job, args.window, args.keys); emit({ t: 'desktop', job, action: act, did, at: at() }); return `${did}.${await again(args.window)}`; }
-      if (act === 'screenshot') { const img = await windowShot(job, args.window); emit({ t: 'screenshot', action: 'desktop', target: `desktop:${job}`, url: '', image: img, at: at() }); return 'Screenshot taken; the user sees it in the trace. Read the window for its controls as text.'; }
+      if (act === 'screenshot') {
+        const img = await windowShot(job, args.window);
+        emit({ t: 'screenshot', action: 'desktop', target: `desktop:${job}`, url: '', image: img, at: at() });
+        // Saved in the agent's scratch folder too, so the deciders can look at it (apps whose controls can't be read, such as tkinter).
+        const rel = `${SCRATCH}/shots/${job}-${(run.shotSeq = (run.shotSeq || 0) + 1)}.png`;
+        try { fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true }); fs.writeFileSync(path.join(root, rel), Buffer.from(img.split(',')[1], 'base64')); } catch { return 'Screenshot taken; the user sees it in the trace. Read the window for its controls as text.'; }
+        return `Screenshot taken; the user sees it in the trace. Saved as ${rel}: to check what it shows (text, layout, a result), call decide with images ["file:${rel}"]. Read the window for its controls as text.`;
+      }
       if (act === 'close') { const did = await closeWindow(job, args.window); return `${did}.`; }
       return 'Error: unknown desktop action.';
     }
@@ -2299,7 +2320,7 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
   function commandRules() { return [...chatRules(), ...(root ? loadRules(root) : [])]; }
   function slimPolicy(d) {
     return { verdict: d.verdict, who: d.who, why: d.why, decidedBy: d.decidedBy, hint: d.hint, shell: d.shell, packages: d.packages,
-      segments: d.segments.map((s) => ({ text: clip(s.text, 300), cls: s.cls, verdict: s.verdict, why: s.why, global: s.global || undefined, suggest: s.suggest,
+      segments: d.segments.map((s) => ({ text: clip(s.text, 300), cls: s.cls, verdict: s.verdict, why: s.why, global: s.global || undefined, via: s.via, suggest: s.suggest,
         paths: (s.paths || []).slice(0, 8).map((p) => ({ path: p.resolved || p.raw, zone: p.zone, kind: p.kind })) })) };
   }
 
@@ -2336,7 +2357,7 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
     card.noAlways = d.segments.some((s) => ['opaque', 'external', 'discard'].includes(s.cls) || s.global || (s.paths || []).some((p) => p.zone === 'outside' || p.zone === 'unknown'));
     if (who === 'deciders') {
       emit({ t: 'approval', ...card, mode: 'yolo', at: at() });
-      const facts = { command: line, shell, parts: d.segments.map((s) => ({ text: clip(s.text, 200), class: s.cls, touches: (s.paths || []).map((p) => `${p.resolved || p.raw} (${p.zone === 'inside' ? 'inside the project' : p.zone})`) })),
+      const facts = { command: line, shell, parts: d.segments.map((s) => ({ text: clip(s.text, 200), class: s.cls, ...(s.via ? { run_by_script: s.via } : {}), touches: (s.paths || []).map((p) => `${p.resolved || p.raw} (${p.zone === 'inside' ? 'inside the project' : p.zone})`) })),
         ...(d.packages?.length ? { packages: d.packages.map((p) => `${p.name} on ${p.eco}: ${p.exists ? `first published ${p.ageDays ?? '?'} days ago${p.weekly != null ? `, ${p.weekly} downloads last week` : ''}` : 'not checked'}`) } : {}) };
       const j = await approvalJudge({ kind: 'command', userMessages: userTurns(), facts, voters: S.voters, chatModel: setup.model, gate: S.gate, signal, account, sf: SF,
         log: { runId, chatId: req.chatId || null, project: projectId } });
@@ -2599,9 +2620,10 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
     }
     throw new Error('target must be artifact:<id>, site:<path>, app:<name>, or an http(s) URL');
   }
-  // Pages from the outside web are labelled untrusted; the agent's own pages and apps are not.
+  // Pages from the outside web are labelled untrusted; the agent's own pages and apps are not (an app's window
+  // loaded from its own files, too).
   function pageReport(sum, did) {
-    const own = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//i.test(String(sum.url));
+    const own = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//i.test(String(sum.url)) || (tab?.app && /^file:/i.test(String(sum.url)));
     return `${did ? did + '\n' : ''}Title: ${sum.title || '(none)'} · URL: ${sum.url}${sum.scroll && sum.size ? ` · Scrolled to ${sum.scroll[1]} of ${sum.size[1]} px (the screenshot shows ${sum.scroll[1]}–${sum.scroll[1] + (sum.view?.[1] || 0)})` : ''}\nControls: ${sum.controls.join('; ') || '(none)'}\nConsole errors: ${tab.console.length ? tab.console.slice(-8).join(' | ') : 'none'}\nVisible text:\n${own ? sum.text || '(empty)' : untrusted(sum.text || '(empty)', sum.url)}`;
   }
   // The agent's tab can disappear (closed in the desktop app's pane, the app restarted). Drop it and open a fresh

@@ -214,6 +214,123 @@ test('the Build Tools install is an install for the whole computer, and asks', a
   assert.notEqual(d.verdict, 'allow');
 });
 
+// ---------- commands hidden in scripts ----------
+// The real case: the agent wrote a Node script that runs whatever it is given, then ran a toolchain install through it.
+const WRAPPER = "import { spawn } from 'node:child_process';\nconst [cmd, ...args] = process.argv.slice(2);\nspawn(cmd, args, { stdio: 'inherit', shell: true }).on('exit', (c) => process.exit(c ?? 1));\n";
+const REAL = 'node .quorx/scratch/run.mjs rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal';
+const scripts = tmp('scripts');
+const put = (rel, text) => { fs.mkdirSync(path.dirname(path.join(scripts, rel)), { recursive: true }); fs.writeFileSync(path.join(scripts, rel), text); };
+put('.quorx/scratch/run.mjs', WRAPPER);
+put('app.js', "const name = process.argv[2] || 'world';\nconsole.log(`hello ${name}`);\n");
+put('wrap.py', 'import subprocess, sys\nsys.exit(subprocess.call(sys.argv[1:]))\n');
+put('open.ps1', "Write-Host 'opening'\nStart-Process notepad.exe\n");
+put('setup.ps1', "Write-Host 'setting up'\nwinget install --id Rustlang.Rustup -e\n");
+put('tools/main.mjs', "import { run } from './helper.mjs';\nrun(process.argv.slice(2));\n");
+put('tools/helper.mjs', "import { execFileSync } from 'child_process';\nexport const run = ([c, ...a]) => execFileSync(c, a);\n");
+const sctx = (over = {}) => ({ shell: 'powershell', root: scripts, rules: [], mode: 'strict', yolo: {}, ...over });
+
+test('scripts: a wrapper that runs its arguments is opaque, and what it runs is judged as a whole-computer install', { skip: !WIN }, async () => {
+  for (const shell of ['powershell', 'cmd']) {
+    const d = await decide(REAL, sctx({ shell }));
+    assert.equal(d.verdict, 'ask', shell);
+    assert.equal(d.who, 'user', shell);
+    const inst = d.segments.find((s) => s.cls === 'install');
+    assert.ok(inst, `${shell}: the forwarded command is a segment: ${JSON.stringify(d.segments.map((s) => [s.text, s.cls]))}`);
+    assert.equal(inst.text, 'rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal');
+    assert.ok(inst.global, 'whole computer');
+    assert.equal(inst.via, '.quorx/scratch/run.mjs');
+    assert.match(d.why, /rustup installs for the whole computer \(\.quorx\/scratch\/run\.mjs passes it on as a command\)/, 'the card leads with the install');
+    const script = d.segments.find((s) => s.program === 'node');
+    assert.equal(script.cls, 'opaque');
+    assert.match(script.why, /this script \(\.quorx\/scratch\/run\.mjs\) runs other programs, so QuorX can’t check what it runs/);
+  }
+  // A button rule for node can't lift it, YOLO's opaque box doesn't hand the install to the deciders, and a deny rule
+  // for rustup reaches the command through the script.
+  assert.equal((await decide(REAL, sctx({ rules: [{ effect: 'allow', match: 'node*', by: 'button' }] }))).verdict, 'ask');
+  const y = await decide(REAL, sctx({ mode: 'yolo', yolo: { opaque: true } }));
+  assert.equal(y.who, 'user', 'even in YOLO');
+  assert.equal((await decide(REAL, sctx({ rules: [{ effect: 'deny', match: 'rustup*' }] }))).verdict, 'deny');
+});
+
+test('scripts: a plain script that runs nothing else stays a normal build', { skip: !WIN }, async () => {
+  const d = await decide('node app.js Ada', sctx());
+  assert.deepEqual(d.segments.map((s) => s.cls), ['build'], 'reading its own arguments is fine when it runs nothing');
+  assert.equal((await decide('node app.js Ada', sctx({ mode: 'yolo' }))).who, 'deciders');
+  assert.equal((await decide('node app.js Ada', sctx({ rules: [{ effect: 'allow', match: 'node app.js*', by: 'button' }] }))).verdict, 'allow', 'Always allow still covers it');
+});
+
+test('scripts: a Python subprocess wrapper is caught the same way', { skip: !WIN }, async () => {
+  for (const [line, shell] of [['python wrap.py winget install Git.Git', 'powershell'], ['py -3 wrap.py winget install Git.Git', 'cmd']]) {
+    const d = await decide(line, sctx({ shell }));
+    assert.deepEqual(d.segments.map((s) => [s.cls, s.global]), [['install', true], ['opaque', false]], line);
+    assert.equal(d.segments[0].text, 'winget install Git.Git');
+    assert.match(d.segments[1].why, /wrap\.py\) runs other programs/);
+  }
+});
+
+test('scripts: PowerShell scripts that start programs are opaque; their installs show as commands of their own', { skip: !WIN }, async () => {
+  const open = await decide('.\\open.ps1', sctx());
+  assert.equal(open.segments[0].cls, 'opaque');
+  assert.match(open.why, /open\.ps1\) runs other programs/);
+  assert.equal((await decide('powershell -NoProfile -ExecutionPolicy Bypass -File open.ps1', sctx())).segments.at(-1).cls, 'opaque');
+  const setup = await decide('powershell -NoProfile -File setup.ps1', sctx());
+  const inst = setup.segments.find((s) => s.cls === 'install');
+  assert.ok(inst?.global && inst.via === 'setup.ps1', JSON.stringify(setup.segments.map((s) => [s.text, s.cls])));
+  assert.match(setup.why, /winget installs for the whole computer \(inside setup\.ps1\)/);
+});
+
+test('scripts: a launcher moved into a helper file, a script the same line writes, and a script from a variable', { skip: !WIN }, async () => {
+  const d = await decide('node tools/main.mjs rustup default stable', sctx());
+  assert.deepEqual(d.segments.map((s) => s.cls), ['install', 'opaque']);
+  assert.match((await decide('Set-Content x.js "1"; node x.js', sctx())).why, /writes x\.js and then runs it/);
+  assert.equal((await decide('node $f', sctx())).segments[0].cls, 'opaque');
+});
+
+// package.json scripts: npm run x runs a command line the agent can write.
+put('web/package.json', JSON.stringify({ scripts: {
+  setup: 'rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal', build: 'tsc', prestart: 'node tools/main.mjs', start: 'node app.js',
+  wrap: 'node ../.quorx/scratch/run.mjs', dev: 'concurrently "tsc -w" "npm:setup"', env: 'cross-env NODE_ENV=production winget install Git.Git',
+  postinstall: 'choco install nodejs', a: 'npm run b', b: 'npm run a' } }));
+put('web/tools/main.mjs', "import { execFileSync } from 'node:child_process';\nexecFileSync('git', ['--version']);\n");
+put('web/app.js', "console.log('up')\n");
+const wctx = (over = {}) => sctx({ cwd: path.join(scripts, 'web'), ...over });
+
+test('scripts: package.json scripts are read, so an install hidden there shows as one', { skip: !WIN }, async () => {
+  for (const [line, shell] of [['npm run setup', 'powershell'], ['npm run setup', 'cmd'], ['yarn setup', 'powershell'], ['pnpm run setup', 'powershell'], ['bun run setup', 'powershell']]) {
+    const d = await decide(line, wctx({ shell }));
+    assert.equal(d.verdict, 'ask', line);
+    assert.equal(d.who, 'user', line);
+    const inst = d.segments.find((s) => s.cls === 'install');
+    assert.ok(inst?.global, `${line}: ${JSON.stringify(d.segments.map((s) => [s.text, s.cls]))}`);
+    assert.equal(inst.text, 'rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal');
+    assert.equal(inst.via, 'web/package.json scripts.setup');
+    assert.match(d.why, /rustup installs for the whole computer \(inside web\/package\.json scripts\.setup\)/);
+  }
+  assert.equal((await decide('npm run setup', wctx({ rules: [{ effect: 'allow', match: 'npm run*', by: 'button' }] }))).verdict, 'ask', 'Always allow npm run does not cover it');
+  // Through concurrently, cross-env and the install hooks of a bare npm ci.
+  for (const [line, prog] of [['npm run dev', 'rustup'], ['npm run env', 'winget'], ['npm ci', 'choco']]) {
+    assert.ok((await decide(line, wctx())).segments.some((s) => s.cls === 'install' && s.global && s.program === prog), line);
+  }
+});
+
+test('scripts: a plain package script stays a build, and the scripts it runs are read in turn', { skip: !WIN }, async () => {
+  const b = await decide('npm run build', wctx());
+  assert.deepEqual(b.segments.map((s) => s.cls), ['build'], '"build": "tsc" is a build');
+  assert.equal((await decide('npm run build', wctx({ rules: [{ effect: 'allow', match: 'npm run build*', by: 'button' }] }))).verdict, 'allow', 'Always allow still covers it');
+  const start = await decide('npm start', wctx());
+  assert.equal(start.segments.at(-1).cls, 'opaque', 'its prestart hook runs a script that runs other programs');
+  assert.match(start.why, /tools\/main\.mjs\) runs other programs/);
+  const wrap = await decide('npm run wrap -- winget install Git.Git', wctx());
+  assert.deepEqual(wrap.segments.map((s) => [s.cls, s.via]), [['install', '.quorx/scratch/run.mjs'], ['opaque', undefined]], 'arguments after -- reach the wrapper');
+  assert.match((await decide('npm run a', wctx())).why, /nested too deeply/);
+});
+
+test('scripts: a package.json the same line writes can\'t be read first', { skip: !WIN }, async () => {
+  const d = await decide("Set-Content package.json '{}'; npm run setup", wctx());
+  assert.equal(d.segments.at(-1).cls, 'opaque');
+  assert.match(d.why, /writes web\/package\.json and then runs its scripts/);
+});
+
 test('toolchain note: Rust that can\'t link gets the Build Tools line with the C++ part, and says to carry on after', async () => {
   const { toolchainNote, TOOLCHAINS } = await import('../server/toolchains.js');
   assert.match(TOOLCHAINS.find((t) => t.id === 'msvc').wingetArgs, /Workload\.VCTools/);
@@ -235,12 +352,13 @@ test('packs: every pack loads, and every toolchain, check and debugger is still 
   assert.ok(PACKS.length >= 10);
   const ids = allToolchains().map((t) => t.id);
   for (const id of ['rust', 'dotnet', 'go', 'cmake', 'msvc', 'gcc', 'clang', 'java', 'gradle', 'maven', 'python', 'node', 'flutter', 'adb', 'git']) assert.ok(ids.includes(id), id);
-  assert.deepEqual(allChecks().map((c) => c.id).sort(), ['dotnet', 'go', 'jvm', 'rust', 'ts']);
-  for (const f of ['src/main.rs', 'App.xaml', 'Program.cs', 'cmd/main.go', 'src/app.tsx', 'src/main/java/App.java', 'App.kt', 'build.gradle.kts']) assert.ok(isCheckedFile(f), f);
+  const checks = allChecks().map((c) => c.id);
+  for (const id of ['cmake', 'dotnet', 'go', 'jvm', 'python', 'rust', 'ts', ...(WIN ? ['godot', 'unity', 'wix'] : ['godot', 'unity'])]) assert.ok(checks.includes(id), id);
+  for (const f of ['src/main.rs', 'App.xaml', 'Program.cs', 'cmd/main.go', 'src/app.tsx', 'src/main.cpp', 'include/app.hpp', 'app/main.py', 'src/main/java/App.java', 'App.kt', 'build.gradle.kts']) assert.ok(isCheckedFile(f), f);
   assert.ok(!isCheckedFile('README.md'));
   assert.match(debugLanguages(), /^Node \(\.js, \.mjs, \.cjs\), /);
-  assert.match(debugLanguages(), /Python \(debugpy\) \(\.py\)/);
-  assert.match(debugLanguages(), /Java and Kotlin \(JDK debugger\) \(\.java, \.kt\)/);
+  assert.match(debugLanguages(), /Python \(debugpy\) \(\.py, \.pyw\)/);
+  for (const l of ['Go (Delve) (.go)', 'C and C++ (lldb-dap) (.c, .cc, .cpp, .cxx)', 'Rust (lldb-dap or CodeLLDB) (.rs)', 'Godot (GDScript) (.gd, .tscn)', 'Java and Kotlin (JDK debugger) (.java, .kt)']) assert.ok(debugLanguages().includes(l), l);
   assert.equal(debugGateLine('app.py', ['in put.txt']), `${WIN ? 'py -3' : 'python3'} app.py "in put.txt"`);
   assert.equal(debugGateLine('app.js', ['x']), 'node app.js x');
 });
@@ -257,6 +375,74 @@ test('packs: the agent gets notes for the kinds of project in its folder, includ
   assert.match(n, /- Rust: build with cargo build/);
   assert.match(n, /- Android: build with gradlew assembleDebug/);
   assert.equal(packNotes(tmp('empty'), []), '');
+});
+
+// ---------- native debuggers (Go, C/C++, Rust) ----------
+test('packs: Go, C/C++ and Rust find the program to debug and the command the rules judge', async () => {
+  const { goLaunch, goGate } = await import('../server/packs/go.js');
+  const { cmakeBuildDir, cmakeTop, cmakeCache, cmakeExecutables, pickExecutable } = await import('../server/packs/cpp.js');
+  const { cargoExecutables, pickCargoExecutable, cargoManifest, rustLaunchExtra } = await import('../server/packs/rust.js');
+  const { listenArgs } = await import('../server/packs/_lldb.js');
+  const { debugGateLine } = await import('../server/debugger.js');
+  const dir = tmp('native');
+  const at = (...p) => path.join(dir, ...p);
+  // Go: the file's package runs; a _test.go file runs its tests; a built binary runs as it is.
+  assert.deepEqual(goLaunch({ file: 'cmd/app/main.go', args: ['-v'], cwd: dir }), { mode: 'debug', program: at('cmd', 'app'), args: ['-v'], cwd: dir });
+  assert.deepEqual(goLaunch({ file: 'calc/sum_test.go', cwd: dir }), { mode: 'test', program: at('calc'), args: [], cwd: at('calc') });
+  assert.equal(goLaunch({ file: 'main.go', cwd: dir, program: 'bin/app.exe' }).mode, 'exec');
+  assert.equal(goGate({ file: 'cmd/app/main.go', args: ['a b'], cwd: dir }), 'go run ./cmd/app "a b"');
+  assert.equal(goGate({ file: 'main.go', cwd: dir }), 'go run .');
+  assert.equal(debugGateLine('calc/sum_test.go', ['-test.run', 'TestSum'], { cwd: dir }), 'go test ./calc -test.run TestSum');
+  // lldb-dap: --connection from LLVM 20, --port before.
+  assert.deepEqual(listenArgs('  --connection <uri>  Communicate with the lldb-dap tool over the specified connection', 4711), ['--connection', 'listen://127.0.0.1:4711']);
+  assert.deepEqual(listenArgs('  -p, --port <port>', 4711), ['--port', '4711']);
+  // CMake: the configured build folder (a debug one first), the top project, and the target built from the file.
+  fs.mkdirSync(at('src'), { recursive: true });
+  for (const f of ['CMakeLists.txt', 'src/CMakeLists.txt', 'src/main.cpp', 'src/util.cpp', 'tools/gen.cpp']) { fs.mkdirSync(path.dirname(at(f)), { recursive: true }); fs.writeFileSync(at(f), ''); }
+  assert.equal(cmakeBuildDir(dir), null, 'never configured');
+  assert.equal(debugGateLine('src/main.cpp', [], { cwd: dir }), 'cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug && cmake --build build');
+  for (const b of ['out/build/x64-Release', 'out/build/x64-Debug']) { fs.mkdirSync(at(b), { recursive: true }); fs.writeFileSync(at(b, 'CMakeCache.txt'), 'CMAKE_BUILD_TYPE:STRING=Debug\n'); }
+  assert.equal(cmakeBuildDir(dir), at('out', 'build', 'x64-Debug'));
+  assert.equal(cmakeTop(dir, 'src/main.cpp'), dir, 'the highest CMakeLists.txt, not src/');
+  assert.deepEqual(cmakeCache(at('out', 'build', 'x64-Debug')), { type: 'Debug', multi: false });
+  assert.equal(debugGateLine('src/main.cpp', ['x'], { cwd: dir }), 'cmake --build out/build/x64-Debug');
+  assert.equal(debugGateLine('src/main.cpp', ['x'], { cwd: dir, program: 'build/my app.exe' }), '"build/my app.exe" x');
+  const b = at('build');
+  fs.mkdirSync(path.join(b, '.cmake', 'api', 'v1', 'reply'), { recursive: true });
+  fs.writeFileSync(path.join(b, 'CMakeCache.txt'), 'CMAKE_BUILD_TYPE:STRING=\nCMAKE_CONFIGURATION_TYPES:STRING=Debug;Release\n');
+  const reply = (f, o) => fs.writeFileSync(path.join(b, '.cmake', 'api', 'v1', 'reply', f), JSON.stringify(o));
+  reply('index-2026-10-20T00-00-00-0000.json', { objects: [{ kind: 'codemodel', jsonFile: 'codemodel-v2-1.json' }] });
+  reply('codemodel-v2-1.json', { paths: { source: dir, build: b }, configurations: [
+    { name: 'Release', targets: [{ name: 'app', jsonFile: 'target-app-Release.json' }] },
+    { name: 'Debug', targets: [{ name: 'app', jsonFile: 'target-app-Debug.json' }, { name: 'gen', jsonFile: 'target-gen-Debug.json' }, { name: 'util', jsonFile: 'target-util-Debug.json' }] }] });
+  reply('target-app-Release.json', { name: 'app', type: 'EXECUTABLE', artifacts: [{ path: 'Release/app.exe' }], sources: [{ path: 'src/main.cpp' }] });
+  reply('target-app-Debug.json', { name: 'app', type: 'EXECUTABLE', artifacts: [{ path: 'Debug/app.exe' }, { path: 'Debug/app.pdb' }], sources: [{ path: 'src/main.cpp' }, { path: 'src/util.cpp' }] });
+  reply('target-gen-Debug.json', { name: 'gen', type: 'EXECUTABLE', artifacts: [{ path: 'Debug/gen.exe' }], sources: [{ path: 'tools/gen.cpp' }] });
+  reply('target-util-Debug.json', { name: 'util', type: 'STATIC_LIBRARY', artifacts: [{ path: 'Debug/util.lib' }], sources: [{ path: 'src/util.cpp' }] });
+  assert.equal(cmakeCache(b).multi, true);
+  const exes = cmakeExecutables(b, 'Debug');
+  assert.deepEqual(exes.map((e) => e.name), ['app', 'gen'], 'executables only');
+  assert.deepEqual(pickExecutable(exes, at('src', 'util.cpp')), { program: path.join(b, 'Debug', 'app.exe') }, 'the program, not the library');
+  assert.deepEqual(pickExecutable(exes, at('tools', 'gen.cpp')), { program: path.join(b, 'Debug', 'gen.exe') });
+  assert.match(pickExecutable(exes, at('src', 'other.h')).error, /2 programs could run other\.h: pass program/);
+  assert.match(pickExecutable([], at('src', 'main.cpp')).error, /no program/);
+  // Cargo: the binary built from the file, else the package's own one; libraries and tests are left out.
+  const art = (name, kind, src, exe, manifest = at('Cargo.toml')) => JSON.stringify({ reason: 'compiler-artifact', manifest_path: manifest, target: { kind: [kind], name, src_path: src }, executable: exe });
+  const out = ['   Compiling qx v0.1.0', art('qx', 'lib', at('src', 'lib.rs'), null), art('qx', 'bin', at('src', 'main.rs'), at('target', 'debug', 'qx.exe')),
+    art('tool', 'bin', at('src', 'bin', 'tool.rs'), at('target', 'debug', 'tool.exe')), art('other', 'bin', at('other', 'src', 'main.rs'), at('target', 'debug', 'other.exe'), at('other', 'Cargo.toml')),
+    '{"reason":"build-finished","success":true}', '{not json'].join('\n');
+  const bins = cargoExecutables(out);
+  assert.deepEqual(bins.map((e) => e.name), ['qx', 'tool', 'other']);
+  assert.equal(pickCargoExecutable(bins, at('src', 'bin', 'tool.rs'), at('Cargo.toml')).program, at('target', 'debug', 'tool.exe'));
+  assert.equal(pickCargoExecutable(bins, at('src', 'parse.rs'), at('Cargo.toml')).program, at('target', 'debug', 'qx.exe'), 'a module: the package\'s main binary');
+  assert.equal(pickCargoExecutable(bins, at('other', 'src', 'x.rs'), at('other', 'Cargo.toml')).program, at('target', 'debug', 'other.exe'));
+  assert.match(pickCargoExecutable(bins.slice(1, 2), at('src', 'lib.rs'), at('Cargo.toml')).program, /tool/);
+  assert.match(pickCargoExecutable([], at('src', 'lib.rs'), at('Cargo.toml')).error, /no program/);
+  fs.writeFileSync(at('Cargo.toml'), '');
+  assert.equal(cargoManifest(dir, 'src/bin/tool.rs'), at('Cargo.toml'));
+  assert.equal(debugGateLine('src/main.rs', ['a'], { cwd: dir }), 'cargo run -- a');
+  assert.deepEqual(rustLaunchExtra('CodeLLDB', ['ignored']), { sourceLanguages: ['rust'], preRunCommands: ['breakpoint set -n rust_panic'] });
+  assert.deepEqual(rustLaunchExtra('lldb-dap', ['command script import "x"']).initCommands, ['command script import "x"']);
 });
 
 // ---------- the hardened deciders ----------
@@ -533,6 +719,21 @@ test('jobs: installs never move to the background', { skip: !WIN }, async () => 
   assert.match(toolOut(bodies, 1), /only commands that build, run project code or read can run in the background/);
 });
 
+test('jobs: an install hidden in a wrapper script asks with no Always allow, and never runs in the background', { skip: !WIN }, async () => {
+  let card = null;
+  // The wrapper only prints what it was given, so nothing is installed even if this check ever failed.
+  const echo = "import { spawn } from 'node:child_process';\nconsole.log('would run', process.argv.slice(2).join(' '));\n";
+  const { bodies, events } = await agentRun((b, i) => [reply('', [['shell', { command: REAL, background: true }]]), reply('OK.')][i], {
+    prep: (d) => { fs.mkdirSync(path.join(d, '.quorx', 'scratch'), { recursive: true }); fs.writeFileSync(path.join(d, '.quorx', 'scratch', 'run.mjs'), echo); },
+    onEvent: (e, id) => { if (e.t === 'approval' && e.mode === 'strict') { card = e; setTimeout(() => answerApproval(id, e.id, { approve: true }), 10); } },
+  });
+  assert.ok(card, 'it asked');
+  assert.equal(card.noAlways, true, 'no Always allow');
+  assert.ok(card.policy.segments.some((s) => s.cls === 'install' && s.global && s.via === '.quorx/scratch/run.mjs'), 'the card shows the install');
+  assert.match(toolOut(bodies, 1), /only commands that build, run project code or read can run in the background/);
+  assert.ok(!events.some((e) => e.t === 'command'), 'nothing ran');
+});
+
 // ---------- the Running tab ----------
 test('running: a background job is listed with its chat; stopping it there ends it and tells the agent', { skip: !WIN }, async () => {
   const { runningIn, stopRunning } = await import('../server/running.js');
@@ -735,4 +936,69 @@ test('debug: the debugger opens only after failed tries, then finds the bug', { 
   assert.match(toolOut(bodies, 4), /sum = 6/);
   assert.match(toolOut(bodies, 5), /"string"/);
   assert.match(toolOut(bodies, 6), /0 processes left|already ended/);
+});
+
+// ---------- native debuggers, end to end (last: it starts background jobs, and tests above count job ids) ----------
+// A stand-in debug adapter (the way lldb-dap, CodeLLDB and Delve listen: --connection, --port, dap --listen), so the
+// launch request each pack sends and the answers coming back are tested without the real debuggers.
+const MOCK_DAP = `import net from 'node:net'; import fs from 'node:fs';
+const a = process.argv.slice(2);
+if (a.includes('--help')) { console.log('USAGE: lldb-dap [options]\\n  --connection <uri>'); process.exit(0); }
+const port = Number((a.join(' ').match(/(?:listen:\\/\\/127\\.0\\.0\\.1:|--port |--listen=127\\.0\\.0\\.1:)(\\d+)/) || [])[1]);
+net.createServer((sock) => {
+  let buf = Buffer.alloc(0), n = 0;
+  const send = (m) => { const b = JSON.stringify({ seq: ++n, ...m }); sock.write('Content-Length: ' + Buffer.byteLength(b) + '\\r\\n\\r\\n' + b); };
+  const ok = (r, body = {}) => send({ type: 'response', request_seq: r.seq, command: r.command, success: true, body });
+  sock.on('data', (d) => {
+    buf = Buffer.concat([buf, d]);
+    for (;;) {
+      const h = buf.indexOf('\\r\\n\\r\\n'); if (h < 0) return;
+      const len = Number(/Content-Length: (\\d+)/.exec(buf.slice(0, h).toString())[1]); if (buf.length < h + 4 + len) return;
+      const r = JSON.parse(buf.slice(h + 4, h + 4 + len).toString()); buf = buf.slice(h + 4 + len);
+      if (r.command === 'launch') {
+        fs.writeFileSync(process.env.QX_MOCK_LOG, JSON.stringify({ argv: a, launch: r.arguments }));
+        if (/fail/.test(r.arguments.program)) { send({ type: 'response', request_seq: r.seq, command: 'launch', success: false, message: 'could not find the program' }); continue; }
+        ok(r); send({ type: 'event', event: 'initialized' });
+      } else if (r.command === 'setBreakpoints') ok(r, { breakpoints: r.arguments.breakpoints.map(() => ({ verified: true })) });
+      else if (r.command === 'configurationDone') { ok(r); send({ type: 'event', event: 'stopped', body: { reason: 'breakpoint', threadId: 7 } }); }
+      else if (r.command === 'stackTrace') ok(r, { stackFrames: [{ id: 1, name: 'main', line: 3, source: { path: 'main.src' } }] });
+      else if (r.command === 'scopes') ok(r, { scopes: [{ name: 'Locals', variablesReference: 5 }] });
+      else if (r.command === 'variables') ok(r, { variables: [{ name: 'n', value: '3' }] });
+      else if (r.command === 'evaluate') ok(r, { result: r.arguments.context + ':' + r.arguments.expression });
+      else ok(r);
+    }
+  });
+}).listen(port, '127.0.0.1');
+`;
+
+test('packs: Go, C/C++ and Rust debug sessions launch through their adapter and read the stop', async () => {
+  const { debugStart, debugBreak, debugMove, debugEval, debugStop } = await import('../server/debugger.js');
+  const dir = tmp('native-dap');
+  fs.writeFileSync(path.join(dir, 'mock.mjs'), MOCK_DAP);
+  const exe = path.join(dir, WIN ? 'mock-adapter.cmd' : 'mock-adapter');
+  fs.writeFileSync(exe, WIN ? `@"${process.execPath}" "%~dp0mock.mjs" %*\r\n` : `#!/bin/sh\nexec "${process.execPath}" "$(dirname "$0")/mock.mjs" "$@"\n`);
+  if (!WIN) fs.chmodSync(exe, 0o755);
+  for (const f of ['go.mod', 'main.go', 'main.cpp', 'Cargo.toml', 'src/main.rs', 'app.exe', 'fail.exe']) { fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true }); fs.writeFileSync(path.join(dir, f), ''); }
+  const log = path.join(dir, 'launch.json');
+  const env = { QX_DLV: exe, QX_LLDB_DAP: exe, QX_CODELLDB: exe, QX_MOCK_LOG: log };
+  const saved = Object.fromEntries(Object.keys(env).map((k) => [k, process.env[k]]));
+  Object.assign(process.env, env);
+  try {
+    for (const [file, program, want] of [
+      ['main.go', undefined, (l) => { assert.match(l.argv.join(' '), /^dap --listen=127\.0\.0\.1:\d+$/); assert.deepEqual([l.launch.mode, l.launch.program], ['debug', dir]); }],
+      ['main.cpp', 'app.exe', (l) => { assert.match(l.argv.join(' '), /^--connection listen:\/\/127\.0\.0\.1:\d+$/); assert.equal(l.launch.program, path.join(dir, 'app.exe')); assert.equal(l.launch.stopOnEntry, false); }],
+      ['src/main.rs', 'app.exe', (l) => { assert.match(l.argv.join(' '), /^--port \d+$/, 'CodeLLDB first for Rust'); assert.deepEqual(l.launch.sourceLanguages, ['rust']); assert.deepEqual(l.launch.preRunCommands, ['breakpoint set -n rust_panic']); }],
+    ]) {
+      const s = await debugStart({ projectId: 'native-test', cwd: dir, file, args: ['x'], program });
+      try {
+        want(JSON.parse(fs.readFileSync(log, 'utf8')));
+        assert.match(await debugBreak(s.id, file, 3), /breakpoint at/);
+        const st = await debugMove(s.id, 'continue', 8000);
+        assert.equal(st.state, 'paused', file);
+        assert.deepEqual(st.locals, ['n = 3']);
+        assert.equal(await debugEval(s.id, 'n * 2'), file.endsWith('.go') ? 'repl:n * 2' : 'watch:n * 2', 'lldb gets expressions, not lldb commands');
+      } finally { await debugStop(s.id).catch(() => {}); }
+    }
+    await assert.rejects(debugStart({ projectId: 'native-test', cwd: dir, file: 'main.cpp', program: 'fail.exe' }), /could not start the program: could not find the program/);
+  } finally { for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } }
 });

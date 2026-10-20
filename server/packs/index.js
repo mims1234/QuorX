@@ -14,11 +14,11 @@
 //   detect(root),                       // or a function, for projects whose marker sits deeper (Android)
 //   checks: [{ id, tool, ext, marker(dir), cmd, errors, tidy }], // compiler checks before the final reply (errors:
 //                                       // a pattern for its error lines, when the usual "error" match misses them;
-//                                       // tidy(line, dir): the line as the agent should read it; cmd may be a
-//                                       // function of the folder, null to skip it; timeoutHint: what to do when slow)
-//   summaries: [{ cmd: /^dotnet test\b/, summarize(out, { cwd, since }) }], // a short summary put above a command's
+//                                       // tidy(line, dir): the line as the agent should read it; timeoutHint: what
+//                                       // to do when a first build is too slow)
+//   summaries: [{ cmd: /^dotnet test/, summarize(out, { cwd, since }) }], // a short summary put above a command's
 //                                       // output (since: when it started, for reports it wrote to disk)
-//   debug: { exts: ['.cs'], tool, label, gate({ file, args }), start({ file, args, cwd, port }) },
+//   debug: { exts: ['.cs'], tool, label, gate({ file, args, cwd }), start({ file, args, cwd, port }) },
 //   notes(have, root),                  // what the agent should know, when the project is this kind
 //   test: { needs: ['dotnet'] },        // its self-test (tests/<id>.test.mjs) runs when these are installed
 // }

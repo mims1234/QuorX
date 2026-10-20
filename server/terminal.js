@@ -25,8 +25,8 @@ export function termEvent(projectId, e) {
   for (const cb of f.subs) cb(ev);
 }
 
-// Output arrives in chunks; split into lines, keeping a partial line until it ends.
-export function lineSplitter(onLine) {
+// Output arrives in chunks; split into lines, keeping a partial line until it ends (or passes `max` characters).
+export function lineSplitter(onLine, max = 4000) {
   let rest = '';
   return {
     push(chunk, stream) {
@@ -34,7 +34,7 @@ export function lineSplitter(onLine) {
       const parts = s.split(/\r?\n/);
       rest = parts.pop();
       for (const line of parts) onLine(line, stream);
-      if (rest.length > 4000) { onLine(rest, stream); rest = ''; }
+      if (rest.length > max) { onLine(rest, stream); rest = ''; }
     },
     flush(stream) { if (rest) onLine(rest, stream); rest = ''; },
   };
