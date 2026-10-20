@@ -90,6 +90,16 @@ const withEnv = (env, line) => `${Object.entries(env).map(([k, v]) => (WIN ? `se
 export const GRADLE_CHECK = `${WIN ? '.\\gradlew.bat' : './gradlew'} compileDebugSources -q --console=plain`;
 // Kotlin reports "e: file:///…/MainActivity.kt:12:5 …", javac "…\Main.java:12: error: …", aapt2 "…xml:5: AAPT: error: …".
 export const GRADLE_ERRORS = /^e: |\berror\b|^ERROR:/i;
+/** An error line as "app/src/…/MainActivity.kt:12:5: message", the path relative to the project when it is inside it. */
+export function tidyGradleLine(l, dir) {
+  const m = /^(?:e: |ERROR: )?(?:file:\/\/)?(.+?\.(?:kts?|java|xml))(?::(\d+)(?::(\d+))?(?:-\d+)?|: \((\d+), (\d+)\)):?\s*(?:AAPT: )?(?:error: )?(.*)$/.exec(String(l).trim());
+  if (!m) return l;
+  const abs = decodeURIComponent(m[1]).replace(/^\/([A-Za-z]:)/, '$1');
+  const rel = path.relative(dir, abs);
+  const file = rel && !rel.startsWith('..') && !path.isAbsolute(rel) ? rel.replace(/\\/g, '/') : abs;
+  const line = m[2] || m[4], col = m[3] || m[5];
+  return `${file}:${line}${col ? `:${col}` : ''}: ${m[6]}`;
+}
 
 // ---------- crashes in logcat ----------
 // `-v brief` (E/AndroidRuntime( 1234): …) and `-v threadtime` (10-20 12:34:56.789  1234  1234 E AndroidRuntime: …).
@@ -208,7 +218,8 @@ export default {
   // The manifest sits two or three folders down (app/src/main), deeper than a marker scan looks.
   detect: isAndroidProject,
   checks: [{ id: 'android', tool: 'android-sdk', ext: /\.(java|kt|kts|xml)$/i, marker: (d) => hasFile(d, /^gradlew(\.bat)?$/) && isAndroidProject(d),
-    get cmd() { return withEnv(gradleEnv(), GRADLE_CHECK); }, errors: GRADLE_ERRORS }],
+    // Gradle's first run in a project starts its daemon and can take minutes, so it gets a longer limit.
+    cmd: () => withEnv(gradleEnv(), GRADLE_CHECK), timeout: 300e3, errors: GRADLE_ERRORS, tidy: tidyGradleLine }],
   // Gradle's and logcat's long output, cut to what matters, after the agent runs them with the shell tool.
   summaries: [
     { cmd: /\bgradlew(\.bat)?\b|\bgradle\b/i, summarize: gradleSummary },

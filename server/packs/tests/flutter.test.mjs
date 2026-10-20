@@ -10,7 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
-import { parseDoctor, doctorSummary, parseTestOutput, testSummary, isFlutterProject, ANALYZE_ERRORS, DESKTOP } from '../flutter.js';
+import { parseDoctor, doctorSummary, parseTestOutput, testSummary, isFlutterProject, ANALYZE_ERRORS, tidyAnalyzeLine, DESKTOP } from '../flutter.js';
 import { outputSummary, debugAdapters } from '../index.js';
 import { languageChecks } from '../../langchecks.js';
 import { debugStart, debugBreak, debugMove, debugEval, debugStop, debugGateLine } from '../../debugger.js';
@@ -129,6 +129,8 @@ test('flutter: analyze errors count, warnings and infos do not', () => {
   assert.ok(ANALYZE_ERRORS.test("error - lib/main.dart:12:5 - Undefined name 'cout'. - undefined_identifier"));
   assert.ok(!ANALYZE_ERRORS.test("warning • Unused import: 'dart:io' • lib/main.dart:1:8 • unused_import"));
   assert.ok(!ANALYZE_ERRORS.test("info • Don't use 'BuildContext's across async gaps • lib/main.dart:40:7 • use_build_context_synchronously"));
+  assert.equal(tidyAnalyzeLine("error • Undefined name 'cout' • lib/main.dart:12:5 • undefined_identifier"), "lib/main.dart:12:5: Undefined name 'cout' (undefined_identifier)");
+  assert.equal(tidyAnalyzeLine("error - lib\\main.dart:12:5 - Undefined name 'cout'. - undefined_identifier"), "lib/main.dart:12:5: Undefined name 'cout'. (undefined_identifier)");
   assert.ok(isFlutterProject(project('flpub', { 'pubspec.yaml': FLUTTER_PUBSPEC })));
   assert.ok(!isFlutterProject(project('dartpub', { 'pubspec.yaml': DART_PUBSPEC })));
 });
