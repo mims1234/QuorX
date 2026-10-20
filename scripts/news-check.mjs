@@ -36,6 +36,13 @@ export function blocksOf(body) {
   return out;
 }
 
+const PICTURE = /^[a-z0-9][a-z0-9_-]*(\.[a-z0-9_-]+)*\.(png|jpe?g|gif|webp|svg)$/i;
+/** The pictures a Markdown body shows (outside fenced code): ['chart.png', …]. */
+export function picturesOf(body) {
+  const text = String(body).replace(/^(`{3,}|~{3,})[^\n]*\n[\s\S]*?^\1[ \t]*$/gm, '').replace(/`[^`\n]*`/g, '');
+  return [...text.matchAll(/!\[[^\]]*\]\(\s*([^)\s]+)/g)].map((m) => m[1]);
+}
+
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 const isStr = (v) => typeof v === 'string' && v.length > 0;
 const arr = (v) => Array.isArray(v);
@@ -128,6 +135,10 @@ export function checkNews(news = NEWS) {
       if (!isStr(f.title)) bad(where, 'front matter needs title');
       if (!DATE.test(f.date || '')) bad(where, 'front matter needs date as YYYY-MM-DD');
       if (!isStr(f.summary) || f.summary.length > 280) bad(where, 'front matter needs a summary under 280 characters');
+      for (const pic of picturesOf(doc.body)) {
+        if (!PICTURE.test(pic)) bad(where, `picture ${pic}: use a .png, .jpg, .gif, .webp or .svg file in the same folder`);
+        else if (!fs.existsSync(path.join(dir, pic))) bad(where, `picture ${pic} is not in the folder`);
+      }
       for (const b of blocksOf(doc.body)) {
         let d;
         try { d = blockData(b.json, dir); } catch (e) { bad(`${where}/index.md:${b.line}`, `${b.name} block: ${e.message}`); continue; }

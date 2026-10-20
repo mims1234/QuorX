@@ -164,10 +164,13 @@ const TEST_RE = /^\s*test(?:\.skip|\.only|\.todo)?\(/gm;
 const countTests = (text) => (String(text).match(TEST_RE) || []).length;
 const show = (ref, file) => { try { return git('show', `${ref}:${file}`); } catch { return ''; } };
 const suiteFiles = (pkgText) => { try { return (JSON.parse(pkgText).scripts?.test || '').split(/\s+/).filter((x) => /\.m?js$/.test(x) && !x.startsWith('--')); } catch { return []; } };
-const history = git('log', '--first-parent', '--reverse', '--format=%H %cs %s', 'HEAD').trim().split('\n').map((l) => {
+// Main's history (origin/main when this checkout has it, so a branch shows the changes merged into main), then
+// this checkout's own test files as "now".
+const MAIN = (() => { try { git('rev-parse', '--verify', '-q', 'origin/main'); return 'origin/main'; } catch { return 'HEAD'; } })();
+const history = git('log', '--first-parent', '--reverse', '--format=%H %cs %s', MAIN).trim().split('\n').map((l) => {
   const [hash, date, ...rest] = l.split(' ');
   const subject = rest.join(' ');
-  const pr = /Merge pull request #(\d+)/.exec(subject)?.[1];
+  const pr = (/Merge pull request #(\d+)/.exec(subject) || /\(#(\d+)\)$/.exec(subject))?.[1]; // a merge, or a squashed "… (#22)"
   const ver = /^v(\d+\.\d+\.\d+)/.exec(subject)?.[1];
   const files = suiteFiles(show(hash, 'package.json'));
   const packTests = (() => { try { return git('ls-tree', '--name-only', `${hash}:server/packs/tests`).split('\n').filter((f) => f.endsWith('.test.mjs')); } catch { return []; } })();

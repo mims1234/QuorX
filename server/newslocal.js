@@ -8,7 +8,8 @@
 //             logs/checks.jsonl), and per decider how often its vote matched the panel's (logs/checks.jsonl,
 //             logs/approvals.jsonl)
 //   costs     spend per day for the last 30 days, and per model (logs/runs.jsonl)
-//   tests     the last npm test, npm run test:packs and UI test results this computer kept (logs/test-results.json)
+//   tests     the last npm test, npm run test:packs and UI test results this computer kept (logs/test-results.json):
+//             { runs: [{ name, passed, failed, skipped, at }], test, packs, ui }
 //
 // localView(view) answers synchronously; a view is cached for a few seconds. With nothing to show it answers
 // { empty: true, why }. An unknown view gives null.
@@ -116,6 +117,14 @@ function tests() {
   try { saved = JSON.parse(fs.readFileSync(TEST_RESULTS, 'utf8')); } catch { /* none kept yet */ }
   const pick = (k) => (saved && typeof saved[k] === 'object' && saved[k] ? saved[k] : null);
   const out = { test: pick('test'), packs: pick('packs'), ui: pick('ui') };
-  if (!out.test && !out.packs && !out.ui) return { empty: true, why: 'No test results kept on this computer yet. Run npm test, npm run test:packs or npm run test:ui in the QuorX folder and the last result of each shows here.' };
+  const when = (at) => (typeof at === 'string' ? `${at.slice(0, 10)} ${at.slice(11, 16)} UTC` : '');
+  const sum = (rows, k) => (Array.isArray(rows) ? rows.reduce((a, r) => a + (Number(r?.[k]) || 0), 0) : 0);
+  // One row per suite, as the page's table draws it: name, passed, failed, when.
+  out.runs = [
+    out.test && { name: 'npm test', passed: out.test.pass ?? 0, failed: out.test.fail ?? 0, skipped: out.test.skipped ?? 0, at: when(out.test.at) },
+    out.packs && { name: 'Pack self-tests', passed: sum(out.packs.rows, 'pass'), failed: sum(out.packs.rows, 'fail'), skipped: sum(out.packs.rows, 'skipped'), at: when(out.packs.at) },
+    out.ui && { name: `UI test (${out.ui.scenario || 'all'})`, passed: out.ui.passed ?? 0, failed: Math.max(0, (out.ui.total ?? 0) - (out.ui.passed ?? 0)), at: when(out.ui.at) },
+  ].filter(Boolean);
+  if (!out.runs.length) return { empty: true, why: 'No test results kept on this computer yet. Run npm test, npm run test:packs or npm run test:ui in the QuorX folder and the last result of each shows here.' };
   return out;
 }

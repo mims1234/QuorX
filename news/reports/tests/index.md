@@ -52,7 +52,7 @@ The last `npm run test:packs` published here ran on 2026-10-20 01:19 UTC (QuorX 
 
 ## UI test
 
-The last UI test published here (`npm run test:ui -- --scenario settings`) ran on 2026-10-20 01:22 UTC (QuorX 0.1.5): 9 of 9 steps passed. It starts the QuorX desktop app with its own data folder and port, drives its window the way a person would, and saves a screenshot of every step. Scenarios: `settings`, `cli`, `running`.
+The last UI test published here (`npm run test:ui -- --scenario settings`) ran on 2026-10-20 01:55 UTC (QuorX 0.1.5): 9 of 9 steps passed. It starts the QuorX desktop app with its own data folder and port, drives its window the way a person would, and saves a screenshot of every step. Scenarios: `settings`, `news`, `cli`, `running`.
 
 ## Your own results
 

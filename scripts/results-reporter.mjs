@@ -15,7 +15,7 @@ export default async function* resultsReporter(source) {
     totals[m[1]] = Number(m[2]);
     if (m[1] === 'duration_ms' && totals.tests != null) {
       saveTestResult('test', { total: totals.tests, pass: totals.pass ?? 0, fail: totals.fail ?? 0, skipped: (totals.skipped ?? 0) + (totals.todo ?? 0),
-        cancelled: totals.cancelled ?? 0, seconds: +(totals.duration_ms / 1000).toFixed(1), failed });
+        cancelled: totals.cancelled ?? 0, seconds: +(totals.duration_ms / 1000).toFixed(1), failedNames: failed });
     }
   }
 }

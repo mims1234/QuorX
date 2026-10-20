@@ -40,6 +40,8 @@
           "package.json",
           "server/**/*",
           "public/**/*",
+          "news/**/*",
+          "scripts/news-check.mjs",
           "skills/**/*",
           "templates/**/*",
           "README.md",

@@ -1,0 +1,13 @@
+{
+  "levels": [
+    { "id": "proven", "label": "Tested on Windows here" },
+    { "id": "wired", "label": "Logic tested" },
+    { "id": "basic", "label": "Fallback" }
+  ],
+  "columns": ["Method", "A child whose parent exited", "A process that tries to leave", "If QuorX itself dies", "Confirms what is left"],
+  "rows": [
+    { "level": "proven", "cells": ["Job Object (Windows)", "Ended: it is still in the job", "Can't leave: the jobs don't allow breakaway", "Every job ends with it", "Yes: counts to 0, or names what is left"] },
+    { "level": "wired", "cells": ["Process group (macOS, Linux)", "Ended: it is still in the group", "Followed, unless it leaves between two looks", "Each gate ends its own group", "Yes: looks again after SIGKILL"] },
+    { "level": "basic", "cells": ["Process tree (taskkill /T)", "Missed: no parent link left", "Missed", "Nothing ends", "No: says detached processes may survive"] }
+  ]
+}

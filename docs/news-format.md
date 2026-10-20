@@ -14,7 +14,8 @@ news/
 ```
 
 A slug is lower case letters, digits and dashes: `quorum-experiment`, `models`. Folders starting with `_` are drafts:
-the checker reads them, the app doesn't list them.
+the checker reads them, the app doesn't list them, and a draft opens by its address in the app:
+`#news/articles/_my-draft`.
 
 ## What's new: `news/updates.json`
 
@@ -39,8 +40,9 @@ the checker reads them, the app doesn't list them.
 - `text` is one plain sentence for users: what changed for them, not how it was built. Under 160 characters.
 - `pr` (a pull request number) and `link` (`articles/<slug>` or `reports/<slug>`) are optional.
 
-The app remembers the last version the user read. Items newer than that get a "new" mark, and the sidebar's News entry
-shows a dot until they are opened.
+The app remembers the last version the user read (in `data/news.json`, with the user's other settings on that
+computer). Versions newer than that get a "new" mark, and the sidebar's News entry shows a dot until What's new is
+opened.
 
 ## Articles and reports: `index.md`
 
@@ -66,9 +68,18 @@ order: 1
 | `version` | no | The QuorX version it arrived with |
 | `order` | no | Reports only: their order in the Reports list |
 
-The body is Markdown: headings (`##` and below), paragraphs, **bold**, *italic*, `code`, links, lists, tables, block
-quotes, fenced code, and images relative to the article folder. Write it like the rest of QuorX: plain words, from
+The body is Markdown: headings (`##` and below; a `#` heading shows as `##`, since the title is the page's only top
+heading), paragraphs, **bold**, *italic*, ~~struck~~, `code`, links, lists (nested by indenting), tables (with `:--:`
+alignment), block quotes, fenced code, rules (`---`), and pictures. Write it like the rest of QuorX: plain words, from
 the reader's side, no hype.
+
+What the renderer allows, and nothing more (it escapes everything else, so HTML in the file shows as text):
+
+- **Links**: `https://…`, `http://…` and `mailto:` open in the user's browser; `articles/<slug>` and `reports/<slug>`
+  open that page in News; `#heading-text` jumps to a heading on the same page (the heading's words, lower case,
+  joined by dashes). Any other link shows as plain text.
+- **Pictures**: `![what it shows](chart.png)`, a file in the same folder (`.png`, `.jpg`, `.gif`, `.webp` or `.svg`).
+  Pictures from the web aren't loaded. The alt text is required reading for screen readers, so say what it shows.
 
 ## Interactive blocks
 
@@ -105,16 +116,21 @@ test results). They never leave the computer and are never written into `news/`.
 - `models`: `{ "rows": [{ "model", "replies", "passRate", "avgCost", "avgSteps", "avgSeconds" }], "since" }`
 - `deciders`: `{ "questions", "confirmed", "flipped", "theater", "unclear", "byModel": [{ "model", "votes", "agreed" }] }`
 - `costs`: `{ "days": [{ "date", "cost" }], "byModel": [{ "model", "cost" }] }`
-- `tests`: the last `npm test`, `npm run test:packs` and UI test results this computer kept, if any.
+- `tests`: the last `npm test`, `npm run test:packs` and UI test results this computer kept, if any:
+  `{ "runs": [{ "name", "passed", "failed", "at" }] }`.
 
-With no logs yet, a block shows a short explanation of what will appear there.
+With no logs yet the route answers `{ "empty": true }`, and the block shows a short explanation of what will appear
+there. Until `server/newslocal.js` exists (it exports `localView(view)`, which returns the JSON above), every view is
+empty.
 
 ## The routes
 
 | Route | Answers |
 |---|---|
-| `GET /api/news` | `{ "version", "lastRead"?, "updates": updates.json, "articles": [front matter + slug], "reports": [front matter + slug] }` |
-| `GET /api/news/item?kind=articles\|reports&slug=…` | `{ "front": {…}, "body": "markdown" }` |
-| `GET /api/news/file?kind=…&slug=…&name=file.json` | that data file (JSON only; names are checked, nothing outside `news/` is served) |
+| `GET /api/news` | `{ "version", "lastRead"?, "updates": updates.json (newest first), "articles": [card], "reports": [card] }`; a card is `{ slug, title, date, summary, tags: [..], version?, order? }`. Articles come newest first, reports by `order`. Drafts aren't listed |
+| `GET /api/news/item?kind=articles\|reports&slug=…` | `{ "front": {…}, "body": "markdown" }` (drafts too) |
+| `GET /api/news/file?kind=…&slug=…&name=file.json` | that data file or picture (`.json`, `.png`, `.jpg`, `.gif`, `.webp`, `.svg`; names are checked, nothing outside `news/` is served) |
 | `GET /api/news/local?view=…` | the user's own numbers (above) |
 | `POST /api/news/read` `{ "version" }` | marks News as read up to that version |
+
+News is cached by the server until a file in `news/` changes, so an edited page shows on the next visit to News.
