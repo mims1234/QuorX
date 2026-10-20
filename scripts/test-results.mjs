@@ -1,4 +1,4 @@
-// The last result of each test suite, kept in logs/test-results.json so News can show it ("Your numbers", the tests
+// The last result of each test suite, kept in logs/test-results.json so News can show it ("On this computer", the tests
 // view). npm test (through scripts/results-reporter.mjs), npm run test:packs and npm run test:ui each replace their
 // own entry. Only counts, test names, pack names and toolchain versions are kept: nothing from chats or projects.
 import fs from 'node:fs';

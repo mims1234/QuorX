@@ -8,9 +8,9 @@
   "rows": [
     { "level": "settings", "cells": ["QuorX opens", "The desktop app starts with its own data and port", "The window's page loads and shows its settings button and project list"] },
     { "level": "settings", "cells": ["Settings → Safety & commands", "Stop is in its strongest mode", "The Stop row reads \"Job Objects: every process, confirmed\" on Windows"] },
-    { "level": "settings", "cells": ["Rule test: deleting your profile", "Remove-Item ~ -Recurse is refused", "The rule tester answers \"Blocked\""] },
-    { "level": "settings", "cells": ["Rule test: a build in Strict", "cargo build --release asks you", "\"Asks you · no rule allows cargo build yet\""] },
-    { "level": "settings", "cells": ["Rule test: a push in YOLO", "git push asks you even in YOLO", "\"Asks you · git push changes a remote repository\""] },
+    { "level": "settings", "cells": ["Rule test: deleting the user profile", "Remove-Item ~ -Recurse is refused", "The rule tester answers \"Blocked\""] },
+    { "level": "settings", "cells": ["Rule test: a build in Strict", "cargo build --release asks the user", "\"Asks you · no rule allows cargo build yet\""] },
+    { "level": "settings", "cells": ["Rule test: a push in YOLO", "git push asks the user even in YOLO", "\"Asks you · git push changes a remote repository\""] },
     { "level": "settings", "cells": ["Rule test: a hidden delete", "Remove-Item inside a ForEach-Object pipeline is caught", "\"Asks you\" or \"Blocked\""] },
     { "level": "settings", "cells": ["Budget", "Every model has caps", "\"Cap per reply\" and \"Cap per day\" are on the page"] },
     { "level": "settings", "cells": ["Setup check", "Toolchains and the sandbox row are listed", "The \"Command sandbox\" row appears, with the toolchains under it"] },
@@ -20,8 +20,8 @@
     { "level": "cli", "cells": ["The program really works", "Checked outside QuorX", "The test runs the built program on a 2-line file and expects 2 lines, 5 words, 24 bytes. With no C linker, it expects the reply to say so instead"] },
     { "level": "cli", "cells": ["The audit log and the saved rule", "What the cards decided is on record", "⚙ Safety shows the rule saved from a card and the audit log's latest commands"] },
     { "level": "running", "cells": ["The agent starts a program and leaves it running", "background: true works through a card", "The reply finishes while ticker.js keeps running"] },
-    { "level": "running", "cells": ["The Running tab lists everything", "Background job, server and your terminal, with who started each", "Rows of each kind; the background row names the agent and ticker.js"] },
-    { "level": "running", "cells": ["■ Stop on one row", "Stop ends that job only", "Its row goes; the server and your terminal stay"] },
-    { "level": "running", "cells": ["Stop all", "It asks first, then ends the rest", "A confirmation appears; afterwards only your terminal is left"] }
+    { "level": "running", "cells": ["The Running tab lists everything", "Background job, server and the user's terminal, with who started each", "Rows of each kind; the background row names the agent and ticker.js"] },
+    { "level": "running", "cells": ["■ Stop on one row", "Stop ends that job only", "Its row goes; the server and the user's terminal stay"] },
+    { "level": "running", "cells": ["Stop all", "It asks first, then ends the rest", "A confirmation appears; afterwards only the user's terminal is left"] }
   ]
 }

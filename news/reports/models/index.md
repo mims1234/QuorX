@@ -1,14 +1,14 @@
 ---
 title: Models: which ones build, and what a working build costs
 date: 2026-10-20
-summary: The build benchmark's leaderboard (pass rate, cost per working build, steps and time per model), the decider experiment explained, and your own numbers from this computer.
+summary: The build benchmark's leaderboard (pass rate, cost per working build, steps and time per model), the decider experiment explained, and the same numbers from the computer QuorX runs on.
 tags: models, cost, deciders, research
 order: 1
 ---
 
 QuorX runs any model through OpenRouter, so the useful question is not "which model is best" but "which model builds
-what I need, for how much". This report answers it with numbers from QuorX's own benchmarks, and shows the same
-numbers for your own replies, from this computer's logs.
+a given job, for how much". This report answers it with numbers from QuorX's own benchmarks, and shows the same
+numbers for the replies run on this computer, from its logs.
 
 ## How models are compared
 
@@ -83,12 +83,12 @@ No run of the known-answer benchmark has been published here yet. It compares th
 {"title":"Run the decider experiment","lines":[{"cmd":"node scripts/bench.mjs --setups A,C,E --limit 10"},{"cmd":"node scripts/news-data.mjs"}]}
 ```
 
-## Your own numbers
+## On this computer
 
-These come from this computer only: every reply QuorX ran here is logged in `logs/runs.jsonl`, and every question the
-deciders answered in `logs/decisions.jsonl`, `logs/checks.jsonl` and `logs/approvals.jsonl`. They never leave this
-computer and are never written into News. Below: your models over the last 90 days (the pass rate counts replies
-whose checks before the final answer passed), then what asking the deciders did for you.
+These numbers come from this computer only: every reply QuorX ran here is logged in `logs/runs.jsonl`, and every
+question the deciders answered in `logs/decisions.jsonl`, `logs/checks.jsonl` and `logs/approvals.jsonl`. They never
+leave the computer and are never written into News. Below: the models used here over the last 90 days (the pass rate
+counts replies whose checks before the final answer passed), then what asking the deciders changed.
 
 ```local
 {"view":"models"}
@@ -98,7 +98,7 @@ whose checks before the final answer passed), then what asking the deciders did 
 {"view":"deciders"}
 ```
 
-What you spent, per day and per model, over the last 30 days:
+What QuorX spent here, per day and per model, over the last 30 days:
 
 ```local
 {"view":"costs"}

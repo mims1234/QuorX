@@ -73,8 +73,8 @@ Ports, phones and other devices, the installer, updates and every setting from `
   chat builds to it. Point at part of a page to say what should change, and export a page as PDF or PNG or the
   project as a ZIP. Any MCP client can hand work to QuorX ([details](docs/REPORT.md#design-systems-comments-exports-and-replay)).
 - **News, inside the app.** What's new in each version, reports on models, tests and platforms, and research
-  articles with interactive charts and flows. It ships with QuorX, so it updates when QuorX does, and "Your numbers"
-  are worked out from this computer's own logs, never uploaded.
+  articles with interactive charts and flows. It ships with QuorX, so it updates when QuorX does. Numbers about the
+  computer it runs on are worked out from that computer's own logs and never uploaded.
 
 ## Deliberately narrow
 

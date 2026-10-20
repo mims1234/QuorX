@@ -61,10 +61,10 @@ its level.
 
 The fastest way to move a pack from logic tested to tested is to run its self-test on a computer that has the
 toolchain. No key is needed and nothing is spent: the self-tests drive QuorX's own checks, debugger and builds
-directly, and skip whatever your computer doesn't have.
+directly, and skip whatever the computer doesn't have.
 
 ```terminal
-{"title":"Test the packs your computer can run","lines":[{"cmd":"npm run test:packs"},{"cmd":"npm run test:packs -- --pack dotnet"},{"out":"Report: pack-test-report.md"}]}
+{"title":"Test the packs a computer can run","lines":[{"cmd":"npm run test:packs"},{"cmd":"npm run test:packs -- --pack dotnet"},{"out":"Report: pack-test-report.md"}]}
 ```
 
 Paste `pack-test-report.md` into the pack's pull request or a "Pack test report" issue. Some packs need a little

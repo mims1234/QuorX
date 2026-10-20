@@ -1,17 +1,17 @@
 ---
 title: The quorum experiment
 date: 2026-10-20
-summary: QuorX began as one question. Can a cheap model do better by asking a quorum of fast decider models? How QuorX measures that on every question, what the first benchmarks found, what isn't known yet, and where to see your own numbers.
+summary: QuorX began as one question. Can a cheap model do better by asking a quorum of fast decider models? How QuorX measures that on every question, what the first benchmarks found, what isn't known yet, and where any computer running QuorX shows the same numbers for itself.
 tags: deciders, models, research, cost
 ---
 
-QuorX is named after the idea it was built to test. Every chat runs one model of your choice, often a cheap one. Behind it sit **deciders**: small, fast models that never write text. They only judge. They answer a typed question (yes or no, pick an option, rate on a scale) with a probability, in about half a second, for a tiny fraction of a cent.
+QuorX is named after the idea it was built to test. Every chat runs one model of the user's choice, often a cheap one. Behind it sit **deciders**: small, fast models that never write text. They only judge. They answer a typed question (yes or no, pick an option, rate on a scale) with a probability, in about half a second, for a tiny fraction of a cent.
 
 The experiment is this: **can a small, cheap model get stronger by writing its own questions for a quorum of deciders**, instead of relying on its own judgment? This article explains how QuorX measures that, what we know so far, and what we don't.
 
 ## Why it's hard to measure
 
-If an agent asks a question and then does the right thing, did asking help? You can't tell. Maybe it already knew. Maybe the deciders agreed with a wrong idea. Most systems that consult other models can't answer this, because the asking model never says what it thought before it asked.
+If an agent asks a question and then does the right thing, did asking help? There is no way to tell. Maybe it already knew. Maybe the deciders agreed with a wrong idea. Most systems that consult other models can't answer this, because the asking model never says what it thought before it asked.
 
 QuorX makes it say. For **every** question, the agent must commit its own answer and how sure it is, before the deciders reply. Then the trace can show, question by question, whether asking changed anything.
 
@@ -20,7 +20,7 @@ QuorX makes it say. For **every** question, the agent must commit its own answer
   "nodes": [
     { "id": "need", "title": "The agent hits a judgment", "sub": "what does the user mean? which approach?", "cap": "The agent chooses when to ask. It is told to ask when a judgment matters and it isn't sure, and not to ask what it already knows." },
     { "id": "guess", "title": "It writes its own guess first", "sub": "my_guess · my_confidence", "new": true, "cap": "Each question carries the agent's own answer and a confidence from 0 to 1. Without them, the question is refused." },
-    { "id": "ask", "title": "Three deciders answer", "sub": "options shuffled per decider", "cap": "Jev 1.14, Liquid d1-ultra and GPT-6 Luna Decisions. They see your latest message word for word, the agent's short notes marked as unverified, and the question. Nothing else." },
+    { "id": "ask", "title": "Three deciders answer", "sub": "options shuffled per decider", "cap": "Jev 1.14, Liquid d1-ultra and GPT-6 Luna Decisions. They see the user's latest message word for word, the agent's short notes marked as unverified, and the question. Nothing else." },
     { "id": "agg", "title": "Their votes are combined", "sub": "a pick and a confidence", "cap": "If they can't settle it (confidence below 0.5), the answer is 'unsure'." },
     { "id": "label", "title": "The question gets a label", "sub": "already knew · confirmed · changed · unsure", "new": true, "cap": "QuorX compares the guess with the deciders' pick. The label goes into the trace and into logs/decisions.jsonl." },
     { "id": "use", "title": "The agent carries on", "sub": "follows a settled disagreement", "cap": "If the deciders settle on something different, the agent is told to follow them unless it has concrete evidence they are wrong." }
@@ -66,7 +66,7 @@ On the first set of 41 tasks the picture was similar: Ling went from 91–94% al
 - **For weaker models, it depends on the model.** Ling asked questions that really changed its answers: across both sets, 7 changes in 79 questions, all of them to the correct answer. Asking first put it within 1–2 points of Opus, at about a fiftieth of the price on the first set. Qwen mostly asked questions that echoed its own first reading, so asking didn't move it on the first set.
 - **Asking first costs very little.** Per task, C cost about $0.0001 to $0.0007 and took 3.5 to 6 seconds.
 
-The benchmarks also caught a real flaw. The deciders used to see only the agent's retelling of the question. Qwen retold a modified riddle as the classic one, and the deciders confirmed the classic, wrong answer. Showing them the user's own words wasn't enough on its own, because a confident note from the agent still pulled them toward its answer. With the agent's notes marked *unverified* and a rule that your message wins, the same deciders moved from 77% to 4% on the wrong answer. QuorX now does both.
+The benchmarks also caught a real flaw. The deciders used to see only the agent's retelling of the question. Qwen retold a modified riddle as the classic one, and the deciders confirmed the classic, wrong answer. Showing them the user's own words wasn't enough on its own, because a confident note from the agent still pulled them toward its answer. With the agent's notes marked *unverified* and a rule that the user's message wins, the same deciders moved from 77% to 4% on the wrong answer. QuorX now does both.
 
 ## What we don't know yet
 
@@ -81,15 +81,15 @@ The benchmarks also caught a real flaw. The deciders used to see only the agent'
 
 The next step on the benchmark side is a harder, fresher task set: longer requests with several constraints, and checks on things the agent actually built.
 
-## Your own numbers
+## On this computer
 
-Every question any chat on your computer asks is written to `logs/decisions.jsonl` with the guess, the confidence, the deciders' pick and the label. That file never leaves your computer and is never written into News. The block below reads it when you open this page:
+Every question any chat on a computer asks is written to its `logs/decisions.jsonl` with the guess, the confidence, the deciders' pick and the label. That file never leaves the computer and is never written into News. The block below reads it when this page opens:
 
 ```local
 { "view": "deciders" }
 ```
 
-If you mostly see "already knew", your model rarely needs the deciders for the questions it chooses to ask, and you are paying a little for reassurance. If you see "changed answer" often, look at a few of those questions in the trace: those are the moments where the experiment either worked or went wrong, and only you can tell which.
+Mostly "already knew" means the chat model rarely needs the deciders for the questions it chooses to ask, and the asking buys a little reassurance at a small price. Frequent "changed answer" is worth a look at a few of those questions in the trace: those are the moments where the experiment either worked or went wrong, and only the person who asked can tell which.
 
 ## Why this is the founding question
 

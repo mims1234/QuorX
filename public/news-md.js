@@ -195,7 +195,7 @@ export function blockHtml(name, d, width = 720) {
     case 'ledger': return `<div class="nb nb-ledger">${arr(data.rows).map((r) => `<div class="nb-lg"><div class="lg-gain"><span class="k">Gained</span><b>${esc(r.gain)}</b>${r.gainText ? `<p>${inline(r.gainText)}</p>` : ''}</div><div class="lg-cost"><span class="k">Cost</span><b>${esc(r.cost)}</b>${r.costText ? `<p>${inline(r.costText)}</p>` : ''}${r.mitigation ? `<span class="lg-mit"><b>Kept small by:</b> ${inline(r.mitigation)}</span>` : ''}</div></div>`).join('')}</div>`;
     case 'terminal': return `<div class="nb nb-term"><div class="nb-term-top"><i></i><i></i><i></i><span>${esc(data.title || 'Terminal')}</span><button type="button" class="nb-term-replay">Replay</button></div><pre class="nb-term-out">${termLines(arr(data.lines))}</pre></div>`;
     case 'callout': return `<aside class="nb nb-callout" data-tone="${['info', 'warn', 'good'].includes(data.tone) ? data.tone : 'info'}"><b>${esc(data.title)}</b>${data.text ? `<p>${inline(data.text)}</p>` : ''}</aside>`;
-    case 'local': return `<div class="nb nb-local" data-view="${esc(data.view)}"><p class="nb-local-wait">Reading your numbers on this computer…</p></div>`;
+    case 'local': return `<div class="nb nb-local" data-view="${esc(data.view)}"><p class="nb-local-wait">Reading the numbers on this computer…</p></div>`;
     default: return blockError(name, 'is not a block QuorX knows');
   }
 }
@@ -455,23 +455,23 @@ export function termLines(lines) {
   return lines.map((l) => (typeof l.cmd === 'string' ? `<span class="ps">&gt;</span> ${esc(l.cmd)}` : `<span class="out">${esc(l.out)}</span>`)).join('\n') + '\n<span class="ps">&gt;</span> <span class="cur"></span>';
 }
 
-// ---------- the user's own numbers ----------
+// ---------- numbers from this computer ----------
 const LOCAL_EMPTY = {
-  models: ['How each model did', 'Once you have chatted with a few models, this shows how each one did on this computer: replies, how often its work passed the checks, and what a reply cost and took.'],
-  deciders: ['What asking the deciders changed', 'Once the deciders have voted in your chats, this shows how often asking them confirmed the agent, changed its answer, or changed nothing.'],
-  costs: ['What QuorX cost you', 'Once you have used QuorX for a few days, this shows what it cost each day and which models the money went to.'],
-  tests: ['Your test results', 'After you run npm test, npm run test:packs or the UI test on this computer, their latest results show here.'],
+  models: ['How each model did', 'Once a few models have run replies here, this shows how each one did on this computer: replies, how often its work passed the checks, and what a reply cost and took.'],
+  deciders: ['What asking the deciders changed', 'Once the deciders have voted in chats here, this shows how often asking them confirmed the agent, changed its answer, or changed nothing.'],
+  costs: ['What QuorX cost here', 'Once QuorX has been used here for a few days, this shows what it cost each day and which models the money went to.'],
+  tests: ['Test results', 'Once npm test, npm run test:packs or the UI test has run on this computer, the latest results show here.'],
 };
 const money = (v) => `$${num(v).toFixed(num(v) && num(v) < 0.1 ? 4 : 2)}`;
 const pct = (v) => (v == null || v === '' ? '—' : `${Math.round(num(v) <= 1 ? num(v) * 100 : num(v))}%`);
 const table = (head, rows) => `<div class="nb-tbl"><table><thead><tr>${head.map((h) => `<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.map((r) => `<tr>${r.map((c, k) => `<td${k ? ' class="n"' : ''}>${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
 /** A local block's content from /api/news/local, or the friendly empty state. */
 export function localHtml(view, r, width = 720) {
-  const [title, why] = LOCAL_EMPTY[view] || ['Your own numbers', 'They show here once QuorX has some.'];
+  const [title, why] = LOCAL_EMPTY[view] || ['Numbers from this computer', 'They show here once QuorX has some.'];
   const empty = `<div class="nb-local-empty"><b>${esc(title)}: nothing yet</b><p>${esc(why)} They come from this computer's own logs and never leave it.</p></div>`;
   if (!r || r.empty || r.error) return empty;
   const note = (t) => `<p class="nb-local-note">${esc(t)}</p>`;
-  if (view === 'models' && arr(r.rows).length) return table(['Model', 'Replies', 'Passed checks', 'Avg cost', 'Avg steps', 'Avg time'], arr(r.rows).map((x) => [String(x.model || '').split('/').pop(), fmt(num(x.replies), 0), pct(x.passRate), money(x.avgCost), fmt(num(x.avgSteps), 1), `${fmt(num(x.avgSeconds), 0)} s`])) + note(`From your own runs${r.since ? ` since ${r.since}` : ''}, on this computer only.`);
+  if (view === 'models' && arr(r.rows).length) return table(['Model', 'Replies', 'Passed checks', 'Avg cost', 'Avg steps', 'Avg time'], arr(r.rows).map((x) => [String(x.model || '').split('/').pop(), fmt(num(x.replies), 0), pct(x.passRate), money(x.avgCost), fmt(num(x.avgSteps), 1), `${fmt(num(x.avgSeconds), 0)} s`])) + note(`From replies run on this computer${r.since ? ` since ${r.since}` : ''}, and only here.`);
   if (view === 'deciders' && num(r.questions)) {
     const it = ['confirmed', 'flipped', 'theater', 'unclear'].map((k) => ({ label: { confirmed: 'Confirmed the agent', flipped: 'Changed its answer', theater: 'Changed nothing (it was sure)', unclear: 'Couldn\'t settle it' }[k], from: 0, to: num(r[k]) }));
     return `<p class="nb-local-big"><b>${fmt(num(r.questions), 0)}</b> questions asked of the deciders</p>${statHtml({ items: it })}${arr(r.byModel).length ? table(['Decider', 'Votes', 'Agreed with the result'], arr(r.byModel).map((x) => [String(x.model || '').split('/').pop(), fmt(num(x.votes), 0), fmt(num(x.agreed), 0)])) : ''}`;

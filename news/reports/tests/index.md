@@ -1,7 +1,7 @@
 ---
 title: Tests: what QuorX checks before every change
 date: 2026-10-20
-summary: The test suites and how they grew, the platform packs' self-tests, the UI test that drives the desktop app, and the last results kept on your computer.
+summary: The test suites and how they grew, the platform packs' self-tests, the UI test that drives the desktop app, and the last results kept on this computer.
 tags: tests, platforms, safety
 order: 2
 ---
@@ -54,10 +54,10 @@ The last `npm run test:packs` published here ran on 2026-10-20 01:19 UTC (QuorX 
 
 The last UI test published here (`npm run test:ui -- --scenario settings`) ran on 2026-10-20 01:55 UTC (QuorX 0.1.5): 9 of 9 steps passed. It starts the QuorX desktop app with its own data folder and port, drives its window the way a person would, and saves a screenshot of every step. Scenarios: `settings`, `news`, `cli`, `running`.
 
-## Your own results
+## On this computer
 
-The last `npm test`, `npm run test:packs` and `npm run test:ui` you ran in your QuorX folder, if any. Each run keeps
-only its counts and the names of failed tests, in `logs/test-results.json` on this computer.
+The last `npm test`, `npm run test:packs` and `npm run test:ui` run in this computer's QuorX folder, if any. Each run
+keeps only its counts and the names of failed tests, in `logs/test-results.json` on this computer.
 
 ```local
 {"view":"tests"}
@@ -66,8 +66,9 @@ only its counts and the names of failed tests, in `logs/test-results.json` on th
 ## Help test
 
 Tests pass on the machines they ran on. The more systems they run on, the more they're worth: a pack's self-test that
-skips here may be the one that fails on yours. Run the kit and paste its report into a "Pack test report" issue.
+skips here may be the one that fails on another. Running the kit and pasting its report into a "Pack test report"
+issue adds that system to the record.
 
 ```terminal
-{"title":"Test QuorX on your computer","lines":[{"cmd":"npm test"},{"cmd":"npm run test:packs"},{"out":"Report: pack-test-report.md (paste it into a \"Pack test report\" issue)"}]}
+{"title":"Test QuorX on another computer","lines":[{"cmd":"npm test"},{"cmd":"npm run test:packs"},{"out":"Report: pack-test-report.md (paste it into a \"Pack test report\" issue)"}]}
 ```

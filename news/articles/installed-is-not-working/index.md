@@ -5,7 +5,7 @@ summary: A PC can have Rust and still be unable to build a Rust program. Here is
 tags: platforms, toolchains, research
 ---
 
-You ask an agent to write a small Rust program, build it and run it. The computer has Rust: `cargo --version` answers, `rustc --version` answers. The agent writes the code, runs `cargo build`, and gets this:
+Someone asks an agent to write a small Rust program, build it and run it. The computer has Rust: `cargo --version` answers, `rustc --version` answers. The agent writes the code, runs `cargo build`, and gets this:
 
 ```terminal
 {
@@ -24,7 +24,7 @@ You ask an agent to write a small Rust program, build it and run it. The compute
 }
 ```
 
-Rust compiles your code itself, but on Windows it hands the last step, linking, to Microsoft's linker. That linker comes with Visual Studio or its Build Tools, and only when the C++ part is ticked. A computer can have a complete, current Rust install and no linker at all. The Windows PC the runs below come from was exactly that computer.
+Rust compiles the code itself, but on Windows it hands the last step, linking, to Microsoft's linker. That linker comes with Visual Studio or its Build Tools, and only when the C++ part is ticked. A computer can have a complete, current Rust install and no linker at all. The Windows PC the runs below come from was exactly that computer.
 
 This article is about that gap between "the tool is installed" and "the tool can do the job", what it costs an agent to find the gap by itself, and what QuorX does about it now.
 
@@ -40,7 +40,7 @@ On 20 October at 00:55 IST, before QuorX checked toolchains by building anything
 
 Eleven commands in all. Some of them are reasonable: look for Visual Studio, look for MinGW, check which toolchain is active. Two of them show how a search like this goes wrong.
 
-- **It asked for an install that changes the whole computer.** `rustup target add x86_64-pc-windows-gnu` downloads a second Rust target into your profile. At the time the rules filed it as an install without marking it as one for the whole computer, so the card looked like an ordinary step. While it ran, rustup unpacked and deleted 25 files in its own temp folder within 3 seconds, and QuorX's tripwire stopped it. That was a false alarm, and it is part of the story in [Stop means stop](articles/stop-means-stop).
+- **It asked for an install that changes the whole computer.** `rustup target add x86_64-pc-windows-gnu` downloads a second Rust target into the user's profile. At the time the rules filed it as an install without marking it as one for the whole computer, so the card looked like an ordinary step. While it ran, rustup unpacked and deleted 25 files in its own temp folder within 3 seconds, and QuorX's tripwire stopped it. That was a false alarm, and it is part of the story in [Stop means stop](articles/stop-means-stop).
 - **It found the wrong `link.exe`.** Git for Windows ships a `link.exe` in `C:\Program Files\Git\usr\bin`. It is the Unix `link` command, which makes hard links between files. It has nothing to do with linking programs. An agent that sees "FOUND link.exe" and puts that folder first on its PATH has made the problem harder to read.
 
 The agent did end honestly: its last plan item says the build is blocked on the missing linker. The test still failed, because the test asked for a built program and there wasn't one. The run took 140 seconds and $0.0045, according to its line in the test's `logs/runs.jsonl`.
@@ -54,7 +54,7 @@ A person who sets up their own PC knows what they installed. An agent arrives co
 
 So the agent finds out the expensive way: by trying to build, failing, and then searching. Each search is a command the user has to read on an approval card. Each guess risks an install the user didn't ask for. The longer the hunt, the more likely the agent settles on a workaround, such as a different toolchain or a wrapper script, which leaves the project in a state the user didn't choose.
 
-There is a second reason to check up front. When the agent knows from the start, it can tell you before it writes any code, and you can choose: install the Build Tools, accept a checked but unbuilt crate, or use a different language.
+There is a second reason to check up front. When the agent knows from the start, it can tell the user before it writes any code, and the user can choose: install the Build Tools, accept a checked but unbuilt crate, or use a different language.
 
 ## What QuorX does now
 
@@ -66,7 +66,7 @@ QuorX now checks Rust by building a tiny program. The Rust pack (`server/packs/r
     { "id": "probe", "title": "Find it", "sub": "cargo --version", "cap": "QuorX runs the toolchain's version command with a short time limit. An answer means it is installed." },
     { "id": "build", "title": "Build something tiny", "sub": "fn main() {} → main.exe", "new": true, "cap": "In a temporary folder, rustc builds an empty program. This is the step that needs the linker." },
     { "id": "judge", "title": "Did a program appear?", "sub": "works / can't build", "new": true, "cap": "No main.exe and a mention of link.exe means 'no C linker'. Any other failure is reported with its first error line." },
-    { "id": "tell", "title": "Tell the agent and you", "sub": "agent notes · Setup check", "new": true, "cap": "The agent's notes say Rust can't build programs here, what still works (cargo check), and to tell you before trying. ⚙ Settings → Setup check shows the same row with a fix." },
+    { "id": "tell", "title": "Tell the agent and the user", "sub": "agent notes · Setup check", "new": true, "cap": "The agent's notes say Rust can't build programs here, what still works (cargo check), and to tell the user before trying. ⚙ Settings → Setup check shows the same row with a fix." },
     { "id": "fix", "title": "Offer the fix", "sub": "Build Tools with C++", "cap": "The Setup check installs the Build Tools with the C++ workload. A plain install has no linker, so the C++ part is included." },
     { "id": "again", "title": "Look again", "sub": "every minute", "new": true, "cap": "A missing or broken toolchain is checked again after a minute, with fresh PATH entries from the registry. An install made mid-chat counts on the next reply, with no restart." }
   ],
@@ -76,7 +76,7 @@ QuorX now checks Rust by building a tiny program. The Rust pack (`server/packs/r
 
 The result goes two places.
 
-- **Into the agent's notes for every reply.** For a broken toolchain the note reads, in part: *"Rust (cargo): no C linker … Checking code still works (cargo check …), but building or running a program won't: before you try, tell the user."* It then lists the options in order: install the Build Tools from the Setup check, let the agent run the Build Tools install (which asks you first and shows Windows' admin prompt), use the GNU toolchain for this folder only, or stop at a checked crate.
+- **Into the agent's notes for every reply.** For a broken toolchain the note reads, in part: *"Rust (cargo): no C linker … Checking code still works (cargo check …), but building or running a program won't: before you try, tell the user."* It then lists the options in order: install the Build Tools from the Setup check, let the agent run the Build Tools install (which asks first and shows Windows' admin prompt), use the GNU toolchain for this folder only, or stop at a checked crate.
 - **Into ⚙ Settings → Setup check,** where the Rust row says what is wrong and offers the install, with the C++ workload included.
 
 Here is the same task, before and after the check, from the two UI test runs on this PC:
@@ -113,7 +113,7 @@ Here is the same task, before and after the check, from the two UI test runs on 
 }
 ```
 
-Be careful with the comparison. The runs cost about the same ($0.0045 and $0.0043) and took about the same time (140 and 144 seconds). The agent still tried to build, twice more than it needed to. What changed is where it started from and what you saw: one install card instead of a disk search, and that card named the install for what it was.
+Be careful with the comparison. The runs cost about the same ($0.0045 and $0.0043) and took about the same time (140 and 144 seconds). The agent still tried to build, twice more than it needed to. What changed is where it started from and what the user saw: one install card instead of a disk search, and that card named the install for what it was.
 
 ## How the program finally got built
 
@@ -162,11 +162,11 @@ The same idea now runs through QuorX's platform packs. A pack's toolchain can ca
 Counts are from `allToolchains()` in `server/packs/index.js` at commit 0174105 (the PR #3 merge) and at today's main.
 
 ```callout
-{ "tone": "warn", "title": "What this doesn't catch", "text": "A works() check proves the smallest job, once, with QuorX's environment. A project can still need things the tiny program doesn't: a specific SDK version, a native library, a network registry. And a check that passes is cached for 10 minutes; one that fails is looked at again after a minute. If you change your setup in between, Check again in the Setup check looks at once." }
+{ "tone": "warn", "title": "What this doesn't catch", "text": "A works() check proves the smallest job, once, with QuorX's environment. A project can still need things the tiny program doesn't: a specific SDK version, a native library, a network registry. And a check that passes is cached for 10 minutes; one that fails is looked at again after a minute. After a change to the setup in between, Check again in the Setup check looks at once." }
 ```
 
 ## What to take from this
 
-If you build agents: a version string is a weak signal. Prove the toolchain does the smallest real job, tell the model the result before it plans, and tell it what still works, so it has a useful fallback instead of a search.
+For anyone building agents: a version string is a weak signal. Prove the toolchain does the smallest real job, tell the model the result before it plans, and tell it what still works, so it has a useful fallback instead of a search.
 
-If you use QuorX: open ⚙ Settings → Setup check once on a new PC. A toolchain marked "can't build here" will cost you a confused first reply if you don't fix it first.
+For anyone using QuorX: ⚙ Settings → Setup check is worth opening once on a new PC. A toolchain marked "can't build here" costs a confused first reply if it isn't fixed first.
