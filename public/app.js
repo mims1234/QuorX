@@ -6030,7 +6030,8 @@ function browserTabs(c) {
   const agentSid = `agent-${c.id}`;
   G.btabs ||= [];
   const list = [];
-  if (G.agentTab?.[c.id]) list.push({ sid: agentSid, agent: true, ...G.agentTab[c.id] });
+  // The agent's tab is its stored record itself, not a copy: a step's answer (its picture) and its state stay on it.
+  if (G.agentTab?.[c.id]) list.push(Object.assign(G.agentTab[c.id], { sid: agentSid, agent: true }));
   return list.concat(G.btabs);
 }
 function activeBTab(c) {
@@ -6109,10 +6110,10 @@ function closeBTab(c, sid) {
 async function refreshAgentTab(c) {
   const r = await postJ('/api/ubrowser', { sid: `agent-${c.id}`, op: 'peek' });
   G.agentTab ||= {};
-  const had = G.agentTab[c.id];
+  const had = G.agentTab[c.id], was = had && { locked: had.locked, desktop: had.desktop };
   if (r.none || r.error) { if (had) { delete G.agentTab[c.id]; return true; } return false; }
-  G.agentTab[c.id] = { ...had, url: r.url, title: r.title, locked: r.locked, w: r.w, h: r.h, desktop: r.desktop };
-  return !had || had.locked !== r.locked || had.desktop !== r.desktop;
+  G.agentTab[c.id] = Object.assign(had || {}, { url: r.url, title: r.title, locked: r.locked, w: r.w, h: r.h, desktop: r.desktop });
+  return !had || was.locked !== r.locked || was.desktop !== r.desktop;
 }
 
 // Terminal tab: everything running in the background, in this project and elsewhere, with ■ Stop.
@@ -6398,10 +6399,10 @@ async function ubCall(op, a = {}) {
   if (res.none) { if (t.agent) { delete G.agentTab[c.id]; renderPane(); } return; }
   if (res.error) return ubStatus(/^(not found|HTTP 404)/i.test(res.error) ? '⚠ The harness is running an older version: restart it to use the browser.' : `⚠ ${res.error}`);
   const lockChanged = t.agent && !!t.locked !== !!res.locked;
-  Object.assign(t, { url: res.url, title: res.title, shot: res.shot, w: res.w, h: res.h, locked: res.locked });
-  if (t.agent) Object.assign(G.agentTab[c.id] ||= {}, { url: res.url, title: res.title, locked: res.locked, shot: res.shot });
+  // An answer without a picture keeps the last one on screen.
+  Object.assign(t, { url: res.url, title: res.title, shot: res.shot || t.shot, w: res.w, h: res.h, locked: res.locked });
   if (lockChanged) return renderPane();
-  $('#paneBody .ub-shot').src = res.shot;
+  if (res.shot) $('#paneBody .ub-shot').src = res.shot;
   const tt = $(`#paneBody .btab[data-sid="${CSS.escape(t.sid)}"] .bt-title`); if (tt && !t.agent) tt.textContent = res.title || res.url.replace(/^https?:\/\//, '').slice(0, 24);
   setUrlBar(res.url); ubStatus('');
 }
