@@ -27,7 +27,7 @@ import { languageChecks } from './langchecks.js';
 import { audit } from './audit.js';
 import { packagesOf, checkPackages } from './pkgguard.js';
 import { testChanges, TEST_FILE } from './testguard.js';
-import { debugStart, debugAttach, debugBreak, debugMove, debugState, debugEval, debugStop, stateText, debugLanguages, debugGateLine } from './debugger.js';
+import { debugStart, debugAttach, debugBreak, debugMove, debugState, debugEval, debugStop, stateText, debugLanguages, debugGateLine, debugPausedIn } from './debugger.js';
 import { isCheckedFile, packNotes, outputSummary } from './packs/index.js';
 import { devices as adbDevices, pickDevice, readScreen, tap as adbTap, typeText as adbType, key as adbKey, screenshot as adbShot, install as adbInstall, launch as adbLaunch, logcat as adbLog, listAvds, startEmulator } from './android.js';
 import { listSkills, readSkill, saveSkill, listTemplates } from './skills.js';
@@ -423,7 +423,7 @@ const CODE_TOOLS = [
     action: { type: 'string', enum: ['start', 'send', 'read', 'stop'] }, command: { type: 'string', description: 'start: the command line' }, id: { type: 'string', description: 'send/read/stop: the terminal id, e.g. "t1"' },
     text: { type: 'string', description: 'send: text to type' }, keys: { type: 'array', items: { type: 'string' }, description: 'send: keys to press after the text, in order: Enter, Tab, Esc, Up, Down, Left, Right, Backspace, Space, Ctrl+C, Ctrl+D, F1–F5, PageUp, PageDown, or a single character' },
     wait_s: { type: 'integer', minimum: 0, maximum: 30 }, cols: { type: 'integer', minimum: 40, maximum: 200 }, rows: { type: 'integer', minimum: 10, maximum: 60 }, cwd: { type: 'string' } } } } },
-  { type: 'function', function: { name: 'debug', description: `A debugger for ${debugLanguages()} programs, for bugs that reading the trace and adding prints haven't found. start runs a file paused (args optional); attach connects to the Node inspector of a background job you started with --inspect=<port> (an Electron app's main process, a server), and stop then only disconnects; break sets a breakpoint at file:line (condition optional); continue runs to the next breakpoint; step / into / out move one line; state shows where it is, the stack and the local variables; eval evaluates an expression where it stopped; stop ends it. Python needs debugpy (pip install debugpy).`, parameters: { type: 'object', required: ['action'], properties: {
+  { type: 'function', function: { name: 'debug', description: `A debugger for ${debugLanguages()} programs, for bugs that reading the trace and adding prints haven't found. start runs a file paused (args optional); attach connects to the Node inspector of a background job you started with --inspect=<port> (an Electron app's main process, a server), and stop then only disconnects; break sets a breakpoint at file:line (condition optional); continue runs to the next breakpoint (while the program runs, it waits for one: click the app's button first); step / into / out move one line; state shows where it is, the stack and the local variables; eval evaluates an expression where it stopped; stop ends it. Python needs debugpy in the project's interpreter (its venv when it has one).`, parameters: { type: 'object', required: ['action'], properties: {
     action: { type: 'string', enum: ['start', 'attach', 'break', 'continue', 'step', 'into', 'out', 'state', 'eval', 'stop'] }, id: { type: 'string', description: 'The session id from start, e.g. "d1"' },
     file: { type: 'string' }, args: { type: 'array', items: { type: 'string' } }, line: { type: 'integer' }, condition: { type: 'string' }, expr: { type: 'string' }, frame: { type: 'integer' }, port: { type: 'integer', description: 'attach: the --inspect port' },
     program: { type: 'string', description: 'start, for Go, C, C++ and Rust: the built program to run, only when QuorX cannot find it (it finds Go packages, Cargo binaries and CMake targets itself)' } } } } },
@@ -2226,7 +2226,7 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
         const s = await debugStart({ projectId, cwd: root, file, args: (args.args || []).map(String), program, logTo: path.join(root, logRel), logRel, term: { projectId, source: 'agent', chatId: req.chatId } });
         aud({ kind: 'background', command: line, by: g.by, job: s.job, why: 'debugger' });
         emit({ t: 'debug', id: s.id, action: 'start', file, at: at() });
-        return `Debug session ${s.id} (${s.kind}) started: ${file} is paused before its first line. Set breakpoints with break, then continue. Its output goes to ${logRel}.${s.note ? ` ${s.note}` : ''}`;
+        return `Debug session ${s.id} (${s.kind}) started: ${file} is paused before its first line. Set breakpoints with break, then continue. Its output goes to ${logRel}; it runs as background job ${s.job} (the job for the desktop tool, when it opens a window).${s.note ? ` ${s.note}` : ''}`;
       }
       if (act === 'attach') {
         // No new command runs: the job it attaches to was approved when it started.
@@ -2248,7 +2248,11 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
     if (name === 'desktop') {
       if (process.platform !== 'win32') return 'Error: the desktop tool works on Windows only.';
       const act = String(args.action || ''), job = String(args.job || '');
-      const again = async (h) => { await sleep(450, signal); const r = await readWindow(job, h).catch((e) => ({ text: `(could not read it again: ${e.message})` })); return `\nWindow now:\n${r.text}`; };
+      // A program paused at a breakpoint can't answer for its windows: say where it stopped instead of waiting on it.
+      const paused = async (wait) => { const p = await debugPausedIn(job, wait); return p ? `The app is paused at a breakpoint (debug session ${p.id}, ${p.at}), so its window can't respond: use debug state and eval, then debug continue.` : ''; };
+      const again = async (h) => { await sleep(450, signal); const p = await paused(800); if (p) return `\n${p}`; const r = await readWindow(job, h).catch((e) => ({ text: `(could not read it again: ${e.message})` })); return `\nWindow now:\n${r.text}`; };
+      const stopped = await paused();
+      if (stopped) return stopped;
       if (act === 'windows') {
         const w = await appWindows(job, 8000);
         return w.length ? `Windows of ${job}:\n${w.map((x) => `- window ${x.handle}: "${x.title}" (process ${x.pid})`).join('\n')}` : `Job ${job} has no windows yet. It may still be starting (try again), or it isn't a windowed app (read its output with job_output).`;
@@ -2258,7 +2262,14 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
       if (act === 'click_at') { const did = await clickAt(job, args.window, args.x, args.y); emit({ t: 'desktop', job, action: act, did, at: at() }); return `${did}.${await again(args.window)}`; }
       if (act === 'type') { const did = await setControl(job, args.window, args.ref, args.text); emit({ t: 'desktop', job, action: act, did, at: at() }); return `${did}.${await again(args.window)}`; }
       if (act === 'keys') { const did = await sendKeys(job, args.window, args.keys); emit({ t: 'desktop', job, action: act, did, at: at() }); return `${did}.${await again(args.window)}`; }
-      if (act === 'screenshot') { const img = await windowShot(job, args.window); emit({ t: 'screenshot', action: 'desktop', target: `desktop:${job}`, url: '', image: img, at: at() }); return 'Screenshot taken; the user sees it in the trace. Read the window for its controls as text.'; }
+      if (act === 'screenshot') {
+        const img = await windowShot(job, args.window);
+        emit({ t: 'screenshot', action: 'desktop', target: `desktop:${job}`, url: '', image: img, at: at() });
+        // Saved in the agent's scratch folder too, so the deciders can look at it (apps whose controls can't be read, such as tkinter).
+        const rel = `${SCRATCH}/shots/${job}-${(run.shotSeq = (run.shotSeq || 0) + 1)}.png`;
+        try { fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true }); fs.writeFileSync(path.join(root, rel), Buffer.from(img.split(',')[1], 'base64')); } catch { return 'Screenshot taken; the user sees it in the trace. Read the window for its controls as text.'; }
+        return `Screenshot taken; the user sees it in the trace. Saved as ${rel}: to check what it shows (text, layout, a result), call decide with images ["file:${rel}"]. Read the window for its controls as text.`;
+      }
       if (act === 'close') { const did = await closeWindow(job, args.window); return `${did}.`; }
       return 'Error: unknown desktop action.';
     }
