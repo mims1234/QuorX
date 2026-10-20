@@ -5,11 +5,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { hostAllowed, crossSiteApi, gate, isLoopback } from '../server/access.js';
-import { safePath, checkCommand } from '../server/workspace.js';
+import { hostAllowed, crossSiteApi, gate, isLoopback, setLan, lanOn, appGate, appKey } from '../server/access.js';
+import { privateAddress } from '../server/safefetch.js';
+import { decide, agentWriteBlocked } from '../server/cmdpolicy.js';
+import { safePath, checkCommand, searchFiles } from '../server/workspace.js';
 import { externalize, blobData } from '../server/blobs.js';
 
-const req = ({ host = 'localhost:5188', ip = '127.0.0.1', site, cookie } = {}) => ({ headers: { host, ...(site ? { 'sec-fetch-site': site } : {}), ...(cookie ? { cookie } : {}) }, socket: { remoteAddress: ip } });
+const req = ({ host = 'localhost:5188', ip = '127.0.0.1', site, cookie, headers = {} } = {}) => ({ headers: { host, ...(site ? { 'sec-fetch-site': site } : {}), ...(cookie ? { cookie } : {}), ...headers }, socket: { remoteAddress: ip } });
 const res = () => { const r = { code: 0, headers: {}, body: '' }; r.writeHead = (c, h = {}) => { r.code = c; Object.assign(r.headers, h); return r; }; r.end = (b = '') => { r.body += b; return r; }; return r; };
 
 test('the Host must name this computer: names a web page could rebind are refused', () => {
@@ -26,6 +28,8 @@ test('/api refuses other sites and other origins on this computer; pages and sam
 });
 
 test('other devices must pair; this computer never has to', () => {
+  assert.equal(lanOn(), false, 'other devices are off on a fresh install');
+  setLan(true);
   const url = (p) => new URL(p, 'http://x');
   assert.equal(gate(req({ ip: '::ffff:127.0.0.1' }), res(), url('/api/chats')), false);
   assert.ok(isLoopback(req({ ip: '::1' })));
@@ -116,4 +120,54 @@ test('a chat saves only what changed; a stale patch is refused and a whole save 
   assert.equal(patchChat('patch-chat', { base: third.rev, count: 3, messages: {} }).stale, true);
   assert.ok(patchChat('patch-chat', { base: fourth.rev, count: 3, messages: {} }).rev);
   assert.throws(() => patchChat('patch-chat', { count: 1 }), /base/);
+});
+
+test('/api on this computer needs the app key; the app link sets it', () => {
+  const u = (p) => new URL(p, 'http://x');
+  const r1 = res();
+  assert.equal(appGate(req({ ip: '127.0.0.1' }), r1, u('/api/chats')), true);
+  assert.equal(r1.code, 401, 'a program on this computer without the key');
+  assert.equal(appGate(req({ ip: '127.0.0.1' }), res(), u('/api/config')), false, 'the version check stays open');
+  assert.equal(appGate(req({ ip: '127.0.0.1', headers: { cookie: `qx_app=${appKey}` } }), res(), u('/api/chats')), false);
+  assert.equal(appGate(req({ ip: '127.0.0.1', headers: { 'x-quorx-key': appKey } }), res(), u('/api/chats')), false);
+  const r2 = res();
+  assert.equal(appGate(req({ ip: '127.0.0.1' }), r2, u(`/?k=${appKey}`)), true);
+  assert.equal(r2.code, 302);
+  const r3 = res();
+  assert.equal(appGate(req({ ip: '127.0.0.1' }), r3, u('/?k=wrong')), true);
+  assert.equal(r3.code, 401);
+});
+
+test('fetch_url refuses private, loopback and link-local addresses', () => {
+  for (const ip of ['127.0.0.1', '10.1.2.3', '172.20.0.1', '192.168.1.1', '169.254.169.254', '100.64.1.1', '0.0.0.0', '::1', 'fd00::1', 'fe80::1', '::ffff:127.0.0.1', '::ffff:7f00:1']) assert.ok(privateAddress(ip), ip);
+  for (const ip of ['93.184.215.14', '1.1.1.1', '2606:4700:4700::1111']) assert.ok(!privateAddress(ip), ip);
+});
+
+test('read commands: keys never, outside the project asks; QuorX itself never', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qx-sec-'));
+  const v = async (line) => (await decide(line, { shell: 'bash', root, mode: 'strict', rules: [] })).verdict;
+  const fwd = (p) => p.split(path.sep).join('/');
+  assert.equal(await v(`cat ${fwd(path.join(os.homedir(), '.ssh', 'id_ed25519'))}`), 'deny');
+  assert.equal(await v(`cat ${fwd(path.join(process.env.OH_HOME, 'data', 'app-key'))}`), 'deny');
+  assert.equal(await v(`cat ${fwd(path.join(os.tmpdir(), 'elsewhere.txt'))}`), 'ask');
+  assert.equal(await v('cat README.md'), 'allow');
+  assert.equal(await v('curl http://127.0.0.1:5188/api/config'), 'deny');
+});
+
+test('the write guard judges where a path lands, not how it is spelled', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qx-sec-'));
+  for (const p of ['.quorx/permissions.json', path.join(root, '.quorx', 'x.json'), 'src/../.quorx/x.json', path.join(root, '.claude', 'settings.json')]) {
+    const real = path.relative(root, safePath(root, p));
+    assert.ok(agentWriteBlocked(real), p);
+  }
+});
+
+test('search_files does not follow links out of the project', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qx-sec-'));
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'qx-out-'));
+  fs.writeFileSync(path.join(out, 'secret.txt'), 'needle-outside');
+  fs.writeFileSync(path.join(root, 'a.txt'), 'needle-inside');
+  try { fs.symlinkSync(path.join(out, 'secret.txt'), path.join(root, 'link.txt')); } catch { return t.skip('this account cannot make links'); }
+  const hits = searchFiles(root, 'needle');
+  assert.deepEqual(hits.map((h) => h.path), ['a.txt']);
 });

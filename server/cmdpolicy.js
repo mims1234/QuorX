@@ -12,11 +12,22 @@
 // Nothing here runs the command. decide() is the whole interface.
 import fs from 'node:fs';
 import os from 'node:os';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import { parsePowerShell } from './jobhost.js';
 import { realish } from './workspace.js';
-import { HOME } from './openrouter.js';
+import { HOME, runtime } from './openrouter.js';
 import { SECRET_FILES } from './keys.js';
+
+// Any spelling of this computer on QuorX's own ports (the app and its pages address).
+function harnessUrl(text) {
+  let u; try { u = new URL(/^https?:\/\//i.test(text) ? text : `http://${text}`); } catch { return false; }
+  const ports = [runtime.port, runtime.pagePort].filter(Boolean).map(Number);
+  if (!ports.includes(Number(u.port || 80))) return false;
+  const h = u.hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  return h === 'localhost' || h.endsWith('.localhost') || /^(127\.|0\.0\.0\.0$)/.test(h) || h === '::1' || h === '::' || /^::ffff:(127\.|7f)/.test(h) || os.hostname().toLowerCase() === h
+    || Object.values(os.networkInterfaces()).flat().some((a) => a && a.address.toLowerCase() === h);
+}
 
 const WIN = process.platform === 'win32';
 // Windows and macOS file names ignore case (macOS's usual APFS volumes do), so the path checks do too.
@@ -564,8 +575,11 @@ function classify(s, shell) {
   if (p === 'flutter' || p === 'dart') { if (a1 === 'pub' && hasArg(s, 'publish')) return { cls: 'external', why: 'it publishes a package' }; if (a1 === 'pub') return { cls: 'install', why: 'it fetches packages' }; return { cls: 'build', why: '' }; }
   if (EXTERNAL.has(p)) {
     if (['curl', 'wget', 'invoke-webrequest', 'iwr', 'invoke-restmethod', 'irm'].includes(p)) {
+      // QuorX's own address is never for commands (it can change approvals); the project's own dev servers still ask.
+      const own = s.args.some((a) => harnessUrl(a.text));
+      if (own) return { cls: 'never', why: 'it calls QuorX itself; commands may not use QuorX’s own address' };
       const local = s.args.some((a) => /^(https?:\/\/)?(localhost|127\.0\.0\.1|\[::1\])([:/]|$)/i.test(a.text));
-      if (local) return { cls: 'read', why: '' };
+      if (local) return { cls: 'build', why: 'it talks to a server on this computer' };
     }
     return { cls: 'external', why: `${s.rawProgram} reaches outside this computer` };
   }
@@ -611,7 +625,31 @@ function pathsOf(s, c, ctx) {
       add(a.text, c.cls === 'delete' || (MOVES.has(s.program) && plain === 1) ? 'delete' : 'write');
     }
   }
+  // Programs that print files: what they read is judged too (QuorX's keys and your key folders never, outside the project asks).
+  if (c.cls === 'read' && FILE_READERS.has(s.program)) {
+    let skip = false;
+    for (const a of s.args) {
+      if (skip) { skip = false; continue; }
+      if (a.param) { if (VALUE_PARAMS.has(low(a.text))) skip = true; continue; }
+      if (a.kind === 'ScriptBlockExpressionAst' || /^https?:\/\//i.test(a.text)) continue;
+      add(a.text, 'read');
+    }
+  }
   return out;
+}
+const FILE_READERS = new Set(['get-content', 'gc', 'cat', 'type', 'more', 'less', 'head', 'tail', 'select-string', 'sls', 'findstr', 'grep', 'rg', 'strings',
+  'od', 'hexdump', 'xxd', 'get-filehash', 'sha1sum', 'sha256sum', 'md5sum', 'shasum', 'md5', 'cut', 'sort', 'uniq', 'nl', 'wc', 'jq', 'diff', 'fc', 'comp', 'cmp',
+  'import-csv', 'import-clixml', 'get-item', 'get-itemproperty', 'test-json', 'select-xml', 'convertfrom-json', 'file', 'stat', 'plutil', 'base64', 'certutil']);
+// Folders whose files are keys or sign-ins: reading them is never allowed, wherever the project is.
+const SECRET_DIRS = ['.ssh', '.gnupg', '.aws', '.azure', '.kube', '.docker', '.config/gh', '.git-credentials', '.npmrc', '.pypirc', '.netrc'];
+function secretRead(abs) {
+  const p = realish(path.resolve(abs)), home = realish(os.homedir());
+  if (SECRET_FILES.some((f) => same(p, realish(f)))) return 'QuorX’s keys';
+  const data = path.join(HOME, 'data');
+  if (same(p, data) || inside(p, data)) return 'QuorX’s own data';
+  for (const d of SECRET_DIRS) { const q = path.join(home, d); if (same(p, q) || inside(p, q)) return `your ${d} (keys and sign-ins)`; }
+  if (/[\\/](google[\\/]chrome|microsoft[\\/]edge|mozilla[\\/]firefox|bravesoftware)[\\/]/i.test(p)) return 'a browser profile (passwords and cookies)';
+  return '';
 }
 
 // ---------- scripts that run other programs ----------
@@ -992,10 +1030,14 @@ export async function decide(line, ctx) {
     const seg = { text: s.text, program: s.program, cls: k.cls, why: k.why, global: !!k.global, paths, rule: null, suggest: suggestions(s), ...(s.via ? { via: s.via } : {}) };
     if (!s.ctx) trackCd(s, c);
     let v = 'allow', who = null, by = `class:${k.cls}`, why = k.why;
-    const blocked = paths.find((p) => p.zone === 'blocked' || p.zone === 'protected');
+    const writes = paths.filter((p) => p.kind !== 'read'), reads = paths.filter((p) => p.kind === 'read');
+    const blocked = writes.find((p) => p.zone === 'blocked' || p.zone === 'protected');
     const unknownPath = paths.find((p) => p.zone === 'unknown');
-    const outside = paths.find((p) => p.zone === 'outside');
+    // A read outside the project asks; reading keys never runs.
+    const secret = reads.map((p) => p.resolved && secretRead(p.resolved)).find(Boolean);
+    const outside = writes.find((p) => p.zone === 'outside') || reads.find((p) => p.resolved && p.zone !== 'inside' && p.zone !== 'protected' && p.why !== 'the project folder itself');
     if (k.cls === 'never') { v = 'deny'; why = k.why || 'this command is never allowed'; }
+    else if (secret) { v = 'deny'; by = 'path'; why = `it would read ${secret}`; }
     else if (blocked) { v = 'deny'; by = 'path'; why = `it would ${blocked.kind === 'write' ? 'write to' : 'delete or move'} ${blocked.why}`; }
     else if (k.cls === 'delete' && !unknownPath && !outside) {
       const recursive = s.args.some((a) => /^(-recurse|-r|-rf|-fr|\/s|--recursive)$/i.test(a.text) || (s.program === 'rm' && /^-[a-z]*r/i.test(a.text))) || s.program === 'rimraf' || s.program === 'del-cli';
@@ -1003,7 +1045,7 @@ export async function decide(line, ctx) {
       if (recursive || many > 20) { v = 'deny'; by = 'code'; why = `it deletes ${recursive ? 'a whole folder' : `${many} files`}`; seg.hint = 'Use delete_file instead: it moves files and folders to .quorx/trash, so the user can get them back.'; }
     }
     else if (unknownPath) { v = 'ask'; who = 'user'; by = 'path'; why = `a path it touches (${unknownPath.raw}) ${unknownPath.why}`; }
-    else if (outside) { v = 'ask'; who = ctx.yolo?.outside ? 'deciders' : 'user'; by = 'path'; why = `it ${outside.kind === 'write' ? 'writes' : 'deletes or moves'} outside the project (${outside.resolved})`; }
+    else if (outside) { v = 'ask'; who = ctx.yolo?.outside ? 'deciders' : 'user'; by = 'path'; why = `it ${outside.kind === 'write' ? 'writes' : outside.kind === 'read' ? 'reads' : 'deletes or moves'} outside the project (${outside.resolved})`; }
     else if (k.cls === 'opaque') { v = 'ask'; who = ctx.yolo?.opaque ? 'deciders' : 'user'; why = k.why || 'QuorX can’t check it'; }
     else if (k.cls === 'external') { v = 'ask'; who = ctx.yolo?.external ? 'deciders' : 'user'; }
     else if (k.cls === 'discard') { v = 'ask'; who = 'user'; }
@@ -1037,7 +1079,9 @@ export async function decide(line, ctx) {
 // Rules live in data/permissions.json (everywhere) and <project>/.quorx/permissions.json (one project). The agent
 // can't write either: .quorx is off limits to its file tools, and data/ is blocked for commands.
 const globalFile = () => path.join(HOME, 'data', 'permissions.json');
-const projectFile = (root) => path.join(root, '.quorx', 'permissions.json');
+// A project's rules live in QuorX's data folder, keyed by the project's real folder: a folder you open (a cloned repo)
+// can't bring rules of its own. A .quorx/permissions.json in a project is no longer read.
+const projectFile = (root) => path.join(HOME, 'data', 'project-rules', `${crypto.createHash('sha256').update(realish(path.resolve(root)).toLowerCase()).digest('hex').slice(0, 32)}.json`);
 const readRules = (f) => { try { const j = JSON.parse(fs.readFileSync(f, 'utf8')); return Array.isArray(j.rules) ? j.rules : []; } catch { return []; } };
 const cleanRule = (r) => ({ effect: ['allow', 'ask', 'deny'].includes(r.effect) ? r.effect : 'ask', match: String(r.match || '').trim().replace(/\s+/g, ' ').slice(0, 300),
   by: r.by === 'button' ? 'button' : 'user', note: String(r.note || '').slice(0, 200), at: r.at || Date.now() });

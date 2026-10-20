@@ -5625,3 +5625,10 @@ dialog.st-dialog[open] { position: fixed; inset: 0; margin: auto; display: flex;
 .sb-ph .sb-budget .sb-bbar b { display: block; height: 100%; background: var(--amber, #e3a64b); }
 .sb-ph .sb-budget.full { color: var(--bad, #f0705e); }
 .approval.budget-card .raise-to { width: 7em; margin-left: 4px; }
+
+/* Opened without the app link (server/access.js): a full-page notice. */
+.app-key-wall{position:fixed;inset:0;z-index:9999;display:grid;place-items:center;padding:24px max(16px,env(safe-area-inset-right,0px)) 24px max(16px,env(safe-area-inset-left,0px));background:var(--bg,#070908);color:var(--text,#e7edea);font:15px/1.6 system-ui,sans-serif}
+.app-key-wall>div{max-width:520px}
+.app-key-wall h2{margin:0 0 10px;font-size:22px}
+.app-key-wall p{margin:0 0 18px;color:var(--muted,#83948c)}
+.app-key-wall button{font:inherit;padding:8px 16px;border-radius:8px;border:1px solid var(--line-strong,#273932);background:var(--panel-2,#131a17);color:inherit;cursor:pointer}

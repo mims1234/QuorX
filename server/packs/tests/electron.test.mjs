@@ -14,7 +14,7 @@ import { packsIn, packNotes } from '../index.js';
 import fs from 'node:fs';
 import { startBackground, stopBackground, getBackground, jobOutput, listBackground } from '../../bgjobs.js';
 import { openTab, startedWithDevtoolsPort } from '../../browser.js';
-import { decide } from '../../cmdpolicy.js';
+import { decide, saveRules } from '../../cmdpolicy.js';
 import { debugAttach, debugBreak, debugMove, debugEval, debugStop } from '../../debugger.js';
 import { runAgent } from '../../agent.js';
 import { saveProject, forgetProject } from '../../store.js';
@@ -194,7 +194,7 @@ test('electron: the agent starts the app, clicks through cdp:<port> and stops th
   if (!fs.existsSync(cli)) return t.skip(`no cli.js next to ${EXE}`);
   const dir = app();
   fs.mkdirSync(path.join(dir, '.quorx'));
-  fs.writeFileSync(path.join(dir, '.quorx', 'permissions.json'), JSON.stringify({ rules: [{ effect: 'allow', match: 'node *', by: 'user' }] }));
+  saveRules('project', [{ effect: 'allow', match: 'node *', by: 'user' }], dir);
   const id = `el${Date.now().toString(36)}`;
   saveProject({ id, name: 'electron test', path: dir });
   const port = await freePort(), inspect = await freePort();

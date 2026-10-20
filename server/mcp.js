@@ -11,11 +11,13 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const envPort = (() => { try { return fs.readFileSync(path.join(ROOT, '.env'), 'utf8').match(/^\s*AGENT_PORT\s*=\s*(\d+)/m)?.[1]; } catch { return null; } })();
 const BASE = (process.env.QUORX_URL || `http://localhost:${process.env.AGENT_PORT || envPort || 5188}`).replace(/\/+$/, '');
+// The running QuorX's app key (server/access.js), from its data folder (QUORX_HOME when it lives elsewhere).
+const KEY = (() => { try { return fs.readFileSync(path.join(process.env.QUORX_HOME || process.env.OH_HOME || ROOT, 'data', 'app-key'), 'utf8').trim(); } catch { return ''; } })();
 const VERSION = (() => { try { return JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version; } catch { return '0'; } })();
 
 async function api(p, opts = {}) {
   let r;
-  try { r = await fetch(BASE + p, { ...opts, headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) }, signal: opts.signal || AbortSignal.timeout(30000) }); }
+  try { r = await fetch(BASE + p, { ...opts, headers: { 'Content-Type': 'application/json', 'X-QuorX-Key': KEY, ...(opts.headers || {}) }, signal: opts.signal || AbortSignal.timeout(30000) }); }
   catch (e) { throw new Error(`QuorX is not answering at ${BASE} (${e.cause?.code || e.message}). Start it, or set QUORX_URL.`); }
   const j = await r.json().catch(() => ({}));
   if (!r.ok && !j.error) throw new Error(`QuorX answered ${r.status} for ${p}`);
@@ -82,7 +84,7 @@ const TOOLS = [
       if (chatRef && !chat?.agent) throw new Error(`no chat ${chatRef}`);
       if (chat && chat.projectId !== p.id) throw new Error(`chat ${chatRef} belongs to another project`);
       const setup = { model: model || chat?.agent?.setup?.model || cfg.defaults?.chatModel || 'deepseek/deepseek-v4.1-flash-1017' };
-      chat ||= { id: id36('cm'), title: clip(String(message).replace(/\s+/g, ' '), 60), projectId: p.id, created: Date.now(), approval: approval === 'yolo' ? 'yolo' : 'strict', agent: { setup, allowed: [], messages: [], artifacts: {} }, from: 'mcp' };
+      chat ||= { id: id36('cm'), title: clip(String(message).replace(/\s+/g, ' '), 60), projectId: p.id, created: Date.now(), approval: approval === 'yolo' && process.env.QUORX_MCP_YOLO === '1' ? 'yolo' : 'strict', agent: { setup, allowed: [], messages: [], artifacts: {} }, from: 'mcp' };
       const history = chat.agent.messages.filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.error).slice(-20).map((m) => ({ role: m.role, at: m.at, content: String(m.content || '') }));
       const runId = id36('r');
       chat.agent.messages.push({ role: 'user', content: String(message), at: Date.now(), from: 'mcp' });
@@ -92,7 +94,7 @@ const TOOLS = [
       // The reply belongs to QuorX once it starts: read its stream only until it has begun, then let it work.
       const ac = new AbortController();
       const body = { runId, chatId: chat.id, projectId: p.id, chatTitle: chat.title, setup, settings: { approval: chat.approval, mediaEnabled: false }, allowed: [], history, summary: '', text: String(message), artifacts: {}, context: '', images: [], docs: [] };
-      const r = await fetch(`${BASE}/api/run`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: ac.signal }).catch((e) => { throw new Error(`QuorX is not answering at ${BASE} (${e.cause?.code || e.message})`); });
+      const r = await fetch(`${BASE}/api/run`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-QuorX-Key': KEY }, body: JSON.stringify(body), signal: ac.signal }).catch((e) => { throw new Error(`QuorX is not answering at ${BASE} (${e.cause?.code || e.message})`); });
       try { const rd = r.body.getReader(); const end = Date.now() + 15000; let got = ''; while (Date.now() < end && !/"t":"start"/.test(got)) { const { value, done } = await rd.read(); if (done) break; got += Buffer.from(value).toString('utf8'); } } catch { /* the reply goes on regardless */ }
       ac.abort();
       // The chat keeps a live placeholder for the reply, so opening it in QuorX shows the reply working (and its

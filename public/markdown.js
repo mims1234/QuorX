@@ -1,4 +1,4 @@
-// Markdown for chat messages, with no dependencies (KaTeX loads from a CDN only when a message has math).
+// Markdown for chat messages, with no dependencies (KaTeX, shipped with the app, loads only when a message has math).
 // Supports: headings, paragraphs (single newlines kept), bold/italic/strike, inline code, links,
 // autolinks, images, block quotes, ordered/unordered/task lists (nested by indentation), tables
 // with alignment, horizontal rules, fenced code with syntax colours and a Copy button, and math:
@@ -21,7 +21,12 @@ function inline(src, keep) {
   s = esc(s);
   s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (m, alt, url) => { const u = safeUrl(url.replace(/&amp;/g, '&'), true); return u ? `<img class="md-img" src="${esc(u)}" alt="${alt}" loading="lazy">` : m; });
   s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, text, url) => { const u = safeUrl(url.replace(/&amp;/g, '&')); return u ? `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${text}</a>` : m; });
-  s = s.replace(/(^|[\s(])((?:https?:\/\/)[^\s<)]+[^\s<).,;:!?'"])/g, (_, pre, url) => `${pre}<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`);
+  // Bare URLs in text only: never inside a tag made above (an alt or href), and never inside a link's own text.
+  let inA = 0;
+  s = s.split(/(<[^>]*>)/).map((part, i) => {
+    if (i % 2) { if (/^<a[\s>]/i.test(part)) inA++; else if (/^<\/a>/i.test(part)) inA = Math.max(0, inA - 1); return part; }
+    return inA ? part : part.replace(/(^|[\s(])((?:https?:\/\/)[^\s<)"]+[^\s<).,;:!?'"])/g, (_, pre, url) => `${pre}<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`);
+  }).join('');
   s = s.replace(/\*\*\*([^*]+)\*\*\*/g, '<strong><em>$1</em></strong>')
     .replace(/\*\*([^*\n]+?)\*\*/g, '<strong>$1</strong>').replace(/__([^_\n]+?)__/g, '<strong>$1</strong>')
     .replace(/(^|[^*\w])\*(?!\s)([^*\n]+?)(?<!\s)\*(?!\*)/g, '$1<em>$2</em>').replace(/(^|[^_\w])_(?!\s)([^_\n]+?)(?<!\s)_(?!\w)/g, '$1<em>$2</em>')
@@ -126,10 +131,10 @@ function loadKatex() {
   if (loading) return loading;
   loading = new Promise((resolve) => {
     const css = document.createElement('link');
-    css.rel = 'stylesheet'; css.href = 'https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css';
+    css.rel = 'stylesheet'; css.href = '/vendor/katex/katex.min.css';
     document.head.appendChild(css);
     const s = document.createElement('script');
-    s.src = 'https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js';
+    s.src = '/vendor/katex/katex.min.js';
     s.onload = () => { katex = window.katex; resolve(katex); };
     s.onerror = () => resolve(null); // offline: the TeX source stays visible, styled as math
     document.head.appendChild(s);

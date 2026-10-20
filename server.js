@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { currentKey, PORT, runtime, ROOT, HOME, chatModels, decisionModels, imageModels, speechModels, musicModels, videoModels, transcribe, clearCatalogues } from './server/openrouter.js';
-import { listKeys, addKey, removeKey, setActive, renameKey, keyUsage, activeUsage, accountCredits, startSampling } from './server/keys.js';
+import { listKeys, addKey, removeKey, setActive, renameKey, keyUsage, activeUsage, accountCredits, startSampling, lockDown } from './server/keys.js';
 import { setupCheck, runFix } from './server/setup-check.js';
 import { startSignIn, signInStatus, cancelSignIn, finishByCallback, finishWithCode, callbackPage } from './server/oauth.js';
 import { runAgent, answerApproval, answerQuestion, answerBudget, raiseCap, setRunApproval, steerRun, setRunReading, holdCard, DEFAULTS, MEDIA, briefFor, briefForChat } from './server/agent.js';
@@ -38,7 +38,7 @@ import { listSkills, listTemplates } from './server/skills.js';
 import { hostedHtml, browserPath, openTab } from './server/browser.js';
 import { zipFolder } from './server/zip.js';
 import { artifactContent, servedArtifact, ARTIFACT_HEADERS, folderStamp } from './server/artifacts.js';
-import { gate, hostAllowed, crossSiteApi, isLoopback, accessInfo, setLan, resetToken } from './server/access.js';
+import { gate, appGate, appLink, lanOn, hostAllowed, crossSiteApi, isLoopback, accessInfo, setLan, resetToken } from './server/access.js';
 import { gitHubRemote, gitHubInfo } from './server/github.js';
 import { serveBlob, startSweeping } from './server/blobs.js';
 import { listDesignSystems, readDesignSystem, projectDesign, applyDesignSystem, saveProjectDesign } from './server/design.js';
@@ -61,6 +61,7 @@ function codeChanged() {
 if (!currentKey()) console.warn('!! No OpenRouter key yet: add one in the page (⚙ Settings → API keys) or set OPENROUTER_API_KEY in .env');
 startSampling();
 startSweeping();
+setTimeout(lockDown, 2000).unref?.(); // keys and data: this account only (server/keys.js)
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.htm': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.ico': 'image/x-icon', '.json': 'application/json',
@@ -87,9 +88,9 @@ function readRaw(req, limit) {
   });
 }
 const json = (res, code, body) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(body)); };
-// The app's own pages may run only its own scripts (and KaTeX from jsDelivr), so text that slipped into the page
+// The app's own pages may run only its own scripts (KaTeX ships with the app, under /vendor/katex), so text that slipped into the page
 // unescaped can't run code with the harness's powers.
-const APP_CSP = "script-src 'self' https://cdn.jsdelivr.net; object-src 'none'; base-uri 'self'; frame-ancestors 'self'";
+const APP_CSP = "script-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'; form-action 'self'";
 // The app's own files: revalidated on every load (an edit shows on reload) but answered with 304 when unchanged,
 // and text files gzipped once per version, so phones on Wi-Fi don't pull ~900 KB of script and styles every time.
 const GZIP = new Map(); // file → { tag, buf }
@@ -125,6 +126,7 @@ const server = http.createServer(async (req, res) => {
     // The Host must name this computer (no DNS rebinding); other devices must be paired; no /api calls from other sites.
     if (!hostAllowed(req)) return json(res, 403, { error: 'unknown host name: open QuorX at localhost or this computer\'s address (or list the name in OH_ALLOWED_HOSTS)' });
     if (gate(req, res, url)) return;
+    if (!req.pageOrigin && appGate(req, res, url)) return;
     if (crossSiteApi(req, url.pathname)) return json(res, 403, { error: 'requests from other sites are not allowed' });
     // Changes only from this app's own pages: a request from another site (its Origin differs) is refused.
     if (req.method !== 'GET' && req.headers.origin) {
@@ -224,6 +226,8 @@ const server = http.createServer(async (req, res) => {
       const root = workspaceDir(wm[1]);
       const rel = decodePath(wm[2]);
       if (rel == null) return json(res, 400, { error: 'bad address' });
+      // Dot files and folders (.env, .git, .quorx) hold settings and keys, never site content.
+      if (/(^|[/\\])\.(?!well-known([/\\]|$))/.test(rel)) return json(res, 404, { error: 'not found' });
       let file = safePath(root, rel || 'index.html');
       if (fs.existsSync(file) && fs.statSync(file).isDirectory()) file = path.join(file, 'index.html');
       if (!fs.existsSync(file)) return json(res, 404, { error: 'not found' });
@@ -232,7 +236,9 @@ const server = http.createServer(async (req, res) => {
       // Referer is a page of this project (or an artifact or preview page) on this app's address. Other sites, and
       // pages of other projects, can't read the files this way.
       const ref = String(req.headers.referer || ''), base = `http://${req.headers.host}/`;
-      const own = req.headers.origin === 'null' && [`ws/${wm[1]}/`, 'art/', 'preview/'].some((p) => ref.startsWith(base + p));
+      // On the pages address every project shares one origin: a page may load files of its own project only.
+      if (req.pageOrigin && req.headers['sec-fetch-mode'] !== 'navigate' && !ref.startsWith(`${base}ws/${wm[1]}/`)) return json(res, 404, { error: 'not found' });
+      const own = req.headers.origin === 'null' && ref.startsWith(`${base}ws/${wm[1]}/`);
       const type = MIME[path.extname(file).toLowerCase()] || 'application/octet-stream';
       res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-cache', ...(/html|svg|xml/.test(type) && !req.pageOrigin ? { 'Content-Security-Policy': SANDBOX_CSP } : {}), ...(own ? { 'Access-Control-Allow-Origin': 'null' } : {}) });
       return fs.createReadStream(file).pipe(res);
@@ -285,6 +291,8 @@ const server = http.createServer(async (req, res) => {
     const am = url.pathname.match(/^\/art\/([a-z0-9-]+)\/([\w.-]+)$/i);
     if (am && req.method === 'GET') {
       if (!validId(am[1])) return json(res, 400, { error: 'bad chat id' });
+      // On the shared pages address an artifact is opened, never read by another page's script.
+      if (req.pageOrigin && req.headers['sec-fetch-mode'] && req.headers['sec-fetch-mode'] !== 'navigate') return json(res, 404, { error: 'not found' });
       const content = artifactContent(am[1], am[2]);
       const headers = { ...ARTIFACT_HEADERS };
       if (req.pageOrigin) delete headers['Content-Security-Policy'];
@@ -477,7 +485,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname.startsWith('/api/access')) {
       if (!isLoopback(req)) return json(res, 200, { paired: true });
       if (url.pathname === '/api/access' && req.method === 'GET') return json(res, 200, accessInfo(runtime.port));
-      if (url.pathname === '/api/access' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e3) || '{}'); setLan(b.lan); return json(res, 200, accessInfo(runtime.port)); }
+      if (url.pathname === '/api/access' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e3) || '{}'); const was = lanOn(); setLan(b.lan); return json(res, 200, { ...accessInfo(runtime.port), restart: !process.env.AGENT_HOST && was !== lanOn() }); }
       if (url.pathname === '/api/access/reset' && req.method === 'POST') { resetToken(); return json(res, 200, accessInfo(runtime.port)); }
     }
     // ---- the desktop app's link (see server/desktop.js): only from this computer ----
@@ -687,6 +695,14 @@ const server = http.createServer(async (req, res) => {
       if (r) return json(res, r.code, r.body);
     }
     if (url.pathname === '/api/scorecard' && req.method === 'GET') return json(res, 200, scorecard(Number(url.searchParams.get('days')) || 14));
+    // KaTeX (math in messages): its script, stylesheet and fonts, from the installed package.
+    const kxm = url.pathname.match(/^\/vendor\/katex\/(katex\.min\.(?:js|css)|fonts\/[\w-]+\.(?:woff2|woff|ttf))$/);
+    if (kxm && req.method === 'GET') {
+      const full = path.join(ROOT, 'node_modules', 'katex', 'dist', kxm[1]);
+      if (!fs.existsSync(full)) return json(res, 404, { error: 'KaTeX is not installed (run npm install)' });
+      res.writeHead(200, { 'Content-Type': MIME[path.extname(full)] || 'application/octet-stream', 'Cache-Control': 'max-age=86400', 'X-Content-Type-Options': 'nosniff' });
+      return fs.createReadStream(full).pipe(res);
+    }
     const vm = url.pathname.match(/^\/vendor\/(xterm\.js|xterm\.css|addon-fit\.js)$/);
     if (vm && req.method === 'GET') {
       const file = { 'xterm.js': 'node_modules/@xterm/xterm/lib/xterm.js', 'xterm.css': 'node_modules/@xterm/xterm/css/xterm.css', 'addon-fit.js': 'node_modules/@xterm/addon-fit/lib/addon-fit.js' }[vm[1]];
@@ -726,7 +742,8 @@ function listen(port, triesLeft = 40) {
     console.error(e.message); process.exit(1);
   });
   // AGENT_HOST=127.0.0.1 keeps the harness on this computer only; by default other devices can reach it once paired.
-  server.listen(port, process.env.AGENT_HOST || undefined);
+  // Other devices switched off: listen on this computer only, so nothing else on the network can even connect.
+  server.listen(port, process.env.AGENT_HOST || (lanOn() ? undefined : '127.0.0.1'));
 }
 // Stops this harness (dev servers and the headless browser stop with it). With restart, a fresh copy
 // starts first in the background, waits for the port, and takes over; its output goes to logs/harness.log.
@@ -741,6 +758,7 @@ function shutDown(restart) {
 }
 server.once('listening', () => {
   runtime.port = server.address().port; console.log(`QuorX → http://localhost:${runtime.port}`);
+  console.log(`Open QuorX with this link once (it signs this browser in): ${appLink(runtime.port)}`);
   listenPages(runtime.port + 1000, 8);
 });
 listen(PORT);
@@ -763,5 +781,5 @@ function listenPages(port, triesLeft) {
     if (e.code === 'EADDRINUSE' && port) return listenPages(0, 0);
     console.warn(`Pages address not available (${e.message}); agent pages stay sandboxed, without storage.`);
   });
-  pageServer.listen(port, () => { runtime.pagePort = pageServer.address().port; });
+  pageServer.listen(port, '127.0.0.1', () => { runtime.pagePort = pageServer.address().port; });
 }
