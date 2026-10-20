@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 110" width="420" height="110" role="img" aria-label="A request goes to QuorX">
+  <rect x="10" y="25" width="140" height="60" rx="10" fill="#0d7d88" opacity="0.15" stroke="#0d7d88" stroke-width="2"/>
+  <text x="80" y="60" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="15" fill="#0d7d88">Your request</text>
+  <path d="M155 55 H255" stroke="#888" stroke-width="2.5" marker-end="url(#a)"/>
+  <defs><marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 1 L9 5 L0 9z" fill="#888"/></marker></defs>
+  <rect x="270" y="25" width="140" height="60" rx="10" fill="#2fb36f" opacity="0.15" stroke="#2fb36f" stroke-width="2"/>
+  <text x="340" y="60" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="15" fill="#2fb36f">QuorX</text>
+</svg>
