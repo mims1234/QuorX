@@ -1,0 +1,21 @@
+* { box-sizing: border-box; }
+body { margin: 0; font: 15px/1.45 Georgia, 'Times New Roman', serif; background: #f4efe6; color: #2b2622; }
+header { display: flex; justify-content: space-between; align-items: baseline; padding: 20px 24px; border-bottom: 2px solid #2b2622; }
+h1 { margin: 0; font-size: 26px; letter-spacing: .02em; }
+.balance { margin: 0; font-size: 18px; }
+.balance strong { font-variant-numeric: tabular-nums; }
+main { max-width: 760px; margin: 0 auto; padding: 20px 24px; }
+form { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; align-items: end; }
+label { display: grid; gap: 4px; font-size: 13px; }
+input, select, button { font: inherit; padding: 6px 8px; border: 1px solid #8a7f72; border-radius: 3px; background: #fffdf8; color: inherit; }
+button { background: #2b2622; color: #f4efe6; cursor: pointer; }
+.toolbar { display: flex; justify-content: space-between; align-items: end; margin: 22px 0 8px; }
+ul { list-style: none; margin: 0; padding: 0; border-top: 1px solid #c9bfb2; }
+li { display: grid; grid-template-columns: 95px 1fr 70px 90px 34px; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid #c9bfb2; }
+li .amount { text-align: right; font-variant-numeric: tabular-nums; }
+li.income .amount { color: #1f6b3a; }
+li.expense .amount { color: #9b2c1f; }
+li .cat { font-size: 12px; text-transform: uppercase; color: #6d6357; }
+li button { padding: 2px 6px; background: transparent; color: #6d6357; border-color: transparent; }
+li button:hover, li button:focus-visible { color: #9b2c1f; border-color: #9b2c1f; }
+@media (max-width: 520px) { li { grid-template-columns: 1fr 80px 30px; } li .date, li .cat { display: none; } }

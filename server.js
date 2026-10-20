@@ -42,7 +42,8 @@ import { listSkills, listTemplates } from './server/skills.js';
 import { hostedHtml, browserPath, openTab } from './server/browser.js';
 import { zipFolder } from './server/zip.js';
 import { artifactContent, servedArtifact, ARTIFACT_HEADERS, folderStamp } from './server/artifacts.js';
-import { gate, appGate, appLink, lanOn, hostAllowed, crossSiteApi, isLoopback, accessInfo, setLan, resetToken } from './server/access.js';
+import { gate, appGate, appLink, lanOn, hostAllowed, crossSiteApi, isLoopback, accessInfo, setLan, resetToken, plainLan, setLanTls } from './server/access.js';
+import { serveLan } from './server/lantls.js';
 import { gitHubRemote, gitHubInfo } from './server/github.js';
 import { serveBlob, startSweeping } from './server/blobs.js';
 import { listDesignSystems, readDesignSystem, projectDesign, applyDesignSystem, saveProjectDesign } from './server/design.js';
@@ -129,6 +130,7 @@ const server = http.createServer(async (req, res) => {
   try {
     // The Host must name this computer (no DNS rebinding); other devices must be paired; no /api calls from other sites.
     if (!hostAllowed(req)) return json(res, 403, { error: 'unknown host name: open QuorX at localhost or this computer\'s address (or list the name in OH_ALLOWED_HOSTS)' });
+    if (plainLan(req, res, url)) return;
     if (gate(req, res, url)) return;
     if (!req.pageOrigin && appGate(req, res, url)) return;
     if (crossSiteApi(req, url.pathname)) return json(res, 403, { error: 'requests from other sites are not allowed' });
@@ -799,8 +801,19 @@ const server = http.createServer(async (req, res) => {
 
 // Start on PORT (AGENT_PORT in .env, default 5188); if another program already uses it, try the
 // next ports instead of failing. Agent dev servers use 5300-5999, so the search stops before them.
+// AGENT_HOST=127.0.0.1 keeps the harness on this computer only; by default other devices can reach it once paired.
+// Other devices switched off: listen on this computer only, so nothing else on the network can even connect.
+// Listening beyond this computer, the same port also speaks TLS (server/lantls.js): other devices use https, this
+// computer keeps plain http.
+const HOST = process.env.AGENT_HOST || (lanOn() ? undefined : '127.0.0.1');
+const lanSide = !/^(127\.|localhost$|::1$|\[::1\]$)/i.test(HOST ?? '');
+let listener = server;
+if (lanSide) {
+  try { listener = serveLan(server); setLanTls(true); }
+  catch (e) { console.warn(`HTTPS for other devices is not available (${e.message}); they connect over plain http.`); }
+}
 function listen(port, triesLeft = 40) {
-  server.once('error', (e) => {
+  listener.once('error', (e) => {
     // A restart (⟳) waits for the old copy to let go of the port instead of moving to another one.
     if (e.code === 'EADDRINUSE' && process.env.OH_PORT_WAIT && triesLeft > 0) { return setTimeout(() => listen(port, triesLeft - 1), 300); }
     if (e.code === 'EADDRINUSE' && triesLeft > 0 && port + 1 < 5300) {
@@ -809,14 +822,12 @@ function listen(port, triesLeft = 40) {
     }
     console.error(e.message); process.exit(1);
   });
-  // AGENT_HOST=127.0.0.1 keeps the harness on this computer only; by default other devices can reach it once paired.
-  // Other devices switched off: listen on this computer only, so nothing else on the network can even connect.
-  server.listen(port, process.env.AGENT_HOST || (lanOn() ? undefined : '127.0.0.1'));
+  listener.listen(port, HOST);
 }
 // Stops this harness (dev servers and the headless browser stop with it). With restart, a fresh copy
 // starts first in the background, waits for the port, and takes over; its output goes to logs/harness.log.
 function shutDown(restart) {
-  server.close(); pageServer.close();
+  listener.close(); server.close(); pageServer.close();
   if (restart) {
     const logDir = path.join(HOME, 'logs'); fs.mkdirSync(logDir, { recursive: true });
     const out = fs.openSync(path.join(logDir, 'harness.log'), 'a');
@@ -824,8 +835,9 @@ function shutDown(restart) {
   }
   setTimeout(() => process.exit(0), 150);
 }
-server.once('listening', () => {
-  runtime.port = server.address().port; console.log(`QuorX → http://localhost:${runtime.port}`);
+listener.once('listening', () => {
+  runtime.port = listener.address().port; console.log(`QuorX → http://localhost:${runtime.port}`);
+  if (listener !== server) console.log(`Other devices: https on the same port (Settings → About → Other devices has the link and the certificate fingerprint)`);
   console.log(`Open QuorX with this link once (it signs this browser in): ${appLink(runtime.port)}`);
   listenPages(runtime.port + 1000, 8);
 });

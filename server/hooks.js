@@ -63,6 +63,10 @@ export function commandMatches(pattern, line) {
 export function matchHooks(hooks, event, { file, command } = {}) {
   return (hooks || []).filter((h) => h.on && h.event === event && (event === 'after_write' ? fileMatches(h.match, file) : commandMatches(h.match, command)));
 }
+// The agent chooses file names, so {file} is filled in only with a plain path: letters, digits, spaces and . / _ @ + , = -,
+// no part starting with "-". Anything else (; & | $ ` quotes brackets…) could change what the hook's command line does, so
+// the hook is skipped instead of quoting it for each shell.
+export const safeHookFile = (rel) => { const f = String(rel || '').replaceAll('\\', '/'); return /^[\w./ @+,=-]+$/.test(f) && !f.split('/').some((p) => p.startsWith('-')); };
 // {file} in a hook's command is the written file's path (quoted when it has spaces).
 export function hookLine(h, { file } = {}) {
   const f = String(file || '').replaceAll('\\', '/');
