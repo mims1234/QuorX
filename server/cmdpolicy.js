@@ -1,11 +1,11 @@
 // The rule engine: decides, before a command runs, whether it runs, asks, or is blocked (docs/shell-safety-plan.md §1–2).
 //   1. Split the line into commands. PowerShell lines go through PowerShell's own parser (jobhost.ps1 "parse");
-//      cmd and bash lines through small, conservative tokenizers. Anything they can't read is "opaque".
+//      cmd, bash and zsh lines through small, conservative tokenizers. Anything they can't read is "opaque".
 //   2. Give each command a class (read, write, build, install, external, opaque, delete, discard, never, unknown).
 //      A script it runs from the project is read first: one that runs other programs is opaque (see "scripts").
 //   3. Resolve every path a delete or write touches to its real target (~, $env:X, %X%, junctions, 8.3 names).
-//      Drive roots, your profile and its folders, system folders, folders above the project, the project folder
-//      itself, .git and QuorX's own files are blocked outright.
+//      Drive roots, your profile and its folders, system folders (Windows, macOS and Linux ones), other people's
+//      profiles, folders above the project, the project folder itself, .git and QuorX's own files are blocked outright.
 //   4. Apply the rules: deny > ask > allow. A rule can always make a class stricter; it can only relax opaque,
 //      external and discard if you typed it yourself, and never relaxes "never" or a blocked path.
 //   5. The strictest command decides the whole line.
@@ -19,6 +19,8 @@ import { HOME } from './openrouter.js';
 import { SECRET_FILES } from './keys.js';
 
 const WIN = process.platform === 'win32';
+// Windows and macOS file names ignore case (macOS's usual APFS volumes do), so the path checks do too.
+const FOLD = WIN || process.platform === 'darwin';
 const low = (s) => String(s ?? '').toLowerCase();
 const progName = (s) => low(path.basename(String(s || '').replace(/^["']|["']$/g, ''))).replace(/\.(exe|cmd|bat|com|ps1)$/, '');
 
@@ -30,10 +32,15 @@ const READ = new Set(['get-childitem', 'dir', 'ls', 'get-content', 'cat', 'type'
   'cd', 'chdir', 'set-location', 'push-location', 'pop-location', 'get-alias', 'get-help', 'hostname', 'whoami', 'ver', 'get-variable',
   'split-path', 'join-path', 'get-itemproperty', 'test-json', 'compare-object', 'group-object', 'get-unique', 'select-xml', 'get-psdrive',
   'get-host', 'get-culture', 'get-random', 'start-sleep', 'sleep', 'timeout', 'true', 'false', 'exit', 'basename', 'dirname', 'diff', 'fc', 'comp',
-  'out-null', 'write-error', 'write-warning', 'write-verbose', 'write-information']);
+  'out-null', 'write-error', 'write-warning', 'write-verbose', 'write-information',
+  // macOS and Linux
+  ':', 'printf', 'env', 'printenv', 'uname', 'id', 'ps', 'top', 'df', 'du', 'file', 'stat', 'less', 'realpath', 'readlink', 'type', 'test', '[',
+  'cut', 'tr', 'column', 'nl', 'od', 'hexdump', 'strings', 'cmp', 'md5', 'md5sum', 'sha1sum', 'sha256sum', 'shasum', 'jq', 'lsof',
+  'sw_vers', 'system_profiler', 'mdfind', 'mdls', 'otool', 'nm', 'lipo', 'pgrep', 'journalctl', 'lsb_release', 'nproc', 'free', 'uptime', 'apt-cache']);
 const WRITE = new Set(['new-item', 'ni', 'mkdir', 'md', 'set-content', 'add-content', 'out-file', 'copy-item', 'cp', 'copy', 'xcopy', 'touch',
-  'tee-object', 'expand-archive', 'compress-archive', 'rename-item', 'ren', 'rename', 'move-item', 'mv', 'move', 'robocopy', 'tar', 'unzip', 'zip', '7z']);
-const DELETE = new Set(['remove-item', 'rm', 'ri', 'del', 'erase', 'rd', 'rmdir', 'rimraf', 'del-cli', 'clear-content', 'clear-item', 'trash']);
+  'tee-object', 'expand-archive', 'compress-archive', 'rename-item', 'ren', 'rename', 'move-item', 'mv', 'move', 'robocopy', 'tar', 'unzip', 'zip', '7z',
+  'tee', 'ln', 'chmod', 'chown', 'chgrp', 'ditto', 'xattr', 'chflags', 'truncate']);
+const DELETE = new Set(['remove-item', 'rm', 'ri', 'del', 'erase', 'rd', 'rmdir', 'rimraf', 'del-cli', 'clear-content', 'clear-item', 'trash', 'unlink', 'shred', 'srm']);
 const MOVES = new Set(['move-item', 'mv', 'move', 'rename-item', 'ren', 'rename']);
 const BUILD = new Set(['cargo', 'rustc', 'dotnet', 'go', 'cmake', 'ctest', 'make', 'nmake', 'ninja', 'msbuild', 'cl', 'gcc', 'g++', 'clang', 'clang++',
   'javac', 'java', 'gradle', 'gradlew', 'mvn', 'mvnw', 'kotlinc', 'kotlin', 'swift', 'swiftc', 'zig', 'tsc', 'vite', 'webpack', 'esbuild', 'rollup',
@@ -46,14 +53,24 @@ const INTERPRETERS = new Set(['python', 'python3', 'py', 'node', 'deno', 'bun', 
   'zsh', 'wsl', 'lua', 'rscript', 'osascript', 'npx', 'uvx']);
 const OPAQUE = new Set(['invoke-expression', 'iex', 'invoke-command', 'icm', 'start-process', 'saps', 'start', 'start-job', 'add-type', 'mshta',
   'rundll32', 'regsvr32', 'wscript', 'cscript', 'certutil', 'wsl', 'eval', 'source', 'xargs', 'exec', 'invoke-item', 'ii', 'set-alias', 'new-alias',
-  'call', 'forfiles', 'powershell_ise', 'explorer']);
+  'call', 'forfiles', 'powershell_ise', 'explorer', 'open', 'xdg-open', 'gio', 'watch', 'parallel', 'flock', 'script', 'busybox', 'awk', 'gawk',
+  'nawk', 'expect', 'nsenter', 'chroot', 'unshare', 'trap']);
 const NEVER = new Set(['format', 'format-volume', 'diskpart', 'bcdedit', 'vssadmin', 'cipher', 'set-executionpolicy', 'net', 'net1', 'netsh',
   'schtasks', 'shutdown', 'stop-computer', 'restart-computer', 'takeown', 'wmic', 'bootrec', 'manage-bde', 'fsutil', 'mountvol', 'disable-computerrestore',
   'set-mppreference', 'add-mppreference', 'remove-mppreference', 'new-service', 'set-service', 'remove-service', 'register-scheduledtask',
   'unregister-scheduledtask', 'set-netfirewallrule', 'new-netfirewallrule', 'remove-netfirewallrule', 'new-localuser', 'set-localuser',
   'add-localgroupmember', 'enable-psremoting', 'sudo', 'runas', 'clear-recyclebin', 'clear-disk', 'initialize-disk', 'remove-partition',
   'set-partition', 'reg', 'regedit', 'bcdboot', 'sfc', 'dism', 'secedit', 'auditpol', 'gpupdate', 'mkfs', 'dd', 'icacls',
-  'set-acl', 'remove-computer', 'add-computer', 'rename-computer', 'set-timezone', 'set-date', 'logoff']);
+  'set-acl', 'remove-computer', 'add-computer', 'rename-computer', 'set-timezone', 'set-date', 'logoff',
+  // macOS and Linux: services, scheduled jobs, users, disks, firewalls, boot, privacy and security settings
+  'launchctl', 'systemctl', 'crontab', 'at', 'csrutil', 'spctl', 'tccutil', 'nvram', 'pmset', 'scutil', 'networksetup', 'systemsetup', 'dscl',
+  'sysadminctl', 'kextload', 'kextunload', 'kmutil', 'bless', 'fdesetup', 'mount', 'umount', 'useradd', 'userdel', 'usermod', 'groupadd', 'passwd',
+  'chpasswd', 'visudo', 'su', 'doas', 'pkexec', 'iptables', 'ip6tables', 'nft', 'ufw', 'firewall-cmd', 'modprobe', 'insmod', 'rmmod', 'sysctl',
+  'update-grub', 'grub-install', 'efibootmgr', 'reboot', 'halt', 'poweroff', 'telinit', 'chsh', 'fdisk', 'parted', 'sfdisk', 'wipefs',
+  'mkswap', 'swapon', 'swapoff', 'cryptsetup', 'setenforce', 'chattr', 'diskutil', 'asr']);
+// Read-only uses of programs that are otherwise never allowed.
+const NEVER_READ = { systemctl: ['status', 'is-active', 'is-enabled', 'list-units', 'show', 'cat'], launchctl: ['list', 'print', 'blame'], crontab: ['-l'],
+  diskutil: ['list', 'info'], spctl: ['--assess', '-a', '--status'], sysctl: ['-n', '-a', 'hw.ncpu', 'hw.memsize'], csrutil: ['status'] };
 // Programs that end other processes: they could close your own programs, so they ask you.
 const KILLERS = new Set(['taskkill', 'tskill', 'stop-process', 'spps', 'kill', 'pkill', 'killall']);
 const EXTERNAL = new Set(['gh', 'glab', 'vercel', 'netlify', 'fly', 'flyctl', 'firebase', 'heroku', 'wrangler', 'az', 'aws', 'gcloud', 'kubectl',
@@ -62,7 +79,25 @@ const EXTERNAL = new Set(['gh', 'glab', 'vercel', 'netlify', 'fly', 'flyctl', 'f
   'tnc', 'telnet', 'nc', 'ncat', 'netcat', 'psql', 'mysql', 'sqlcmd', 'mongo', 'mongosh', 'redis-cli', 'send-mailmessage', 'twine', 'ping',
   'test-connection', 'new-pssession', 'enter-pssession']);
 const GLOBAL_INSTALL = new Set(['winget', 'choco', 'scoop', 'rustup', 'install-module', 'install-package', 'install-script', 'brew', 'apt', 'apt-get',
-  'msiexec', 'add-appxpackage']);
+  'msiexec', 'add-appxpackage', 'dnf', 'yum', 'pacman', 'zypper', 'apk', 'emerge', 'snap', 'flatpak', 'port', 'nix-env', 'mas', 'softwareupdate',
+  'installer', 'dpkg', 'rpm', 'gem', 'pipx', 'xcode-select', 'xcodes', 'pyenv', 'rbenv', 'nvm', 'asdf', 'mise', 'sdk']);
+// What these install tools can do without installing: listing and searching read only.
+const INSTALL_READ = { brew: ['list', 'ls', 'info', 'search', '--prefix', '--cellar', '--repository', 'config', 'doctor', 'deps', 'uses', 'leaves', 'outdated', 'desc', 'shellenv'],
+  apt: ['list', 'show', 'search', 'policy', 'depends', 'rdepends'], dnf: ['list', 'info', 'search', 'repolist', 'provides'], yum: ['list', 'info', 'search', 'repolist', 'provides'],
+  zypper: ['search', 'se', 'info', 'if', 'list-updates', 'lu'], apk: ['info', 'search', 'list'], snap: ['list', 'info', 'find', 'version'], flatpak: ['list', 'info', 'search'],
+  port: ['installed', 'info', 'search', 'list', 'contents', 'deps', 'outdated'], mas: ['list', 'search', 'info', 'outdated'], softwareupdate: ['-l', '--list', '--history'],
+  dpkg: ['-l', '--list', '-L', '--listfiles', '-s', '--status', '-S', '--search', '--print-architecture'], gem: ['list', 'search', 'info', 'env', 'which', 'contents'],
+  pipx: ['list', 'environment'], 'xcode-select': ['-p', '--print-path'], xcodes: ['list', 'installed', 'runtimes'], pyenv: ['versions', 'version', 'which', 'root'],
+  rbenv: ['versions', 'version', 'which', 'root'], nvm: ['ls', 'list', 'current', 'which', 'ls-remote'], asdf: ['list', 'current', 'where', 'which'], mise: ['ls', 'list', 'current', 'where', 'which'],
+  sdk: ['list', 'current', 'version'], 'nix-env': ['-q', '--query'], pacman: ['-Q', '-Qi', '-Ql', '-Qs', '-Ss', '-Si', '-Qe', '-Qdt'], rpm: ['-q', '-qa', '-qi', '-ql', '-qf'] };
+// Programs that run the rest of their arguments as a command: what matters is that command. vals: options that
+// take a value; skip: plain words before the command (timeout's duration); stop: options after which the program
+// itself is the command (xcrun --find); bad: options that turn text into a command.
+const WRAPPERS = { env: { vals: ['-u', '--unset', '-C', '--chdir'], bad: ['-S', '--split-string'], assigns: true }, nohup: {}, time: { vals: ['-f', '-o'] },
+  command: { stop: ['-v', '-V'] }, builtin: {}, nice: { vals: ['-n', '--adjustment'] }, ionice: { vals: ['-c', '-n', '--class', '--classdata'] }, setsid: {},
+  stdbuf: { vals: ['-i', '-o', '-e'] }, caffeinate: { vals: ['-t', '-w'] }, timeout: { vals: ['-s', '--signal', '-k', '--kill-after'], skip: 1 },
+  gtimeout: { vals: ['-s', '--signal', '-k', '--kill-after'], skip: 1 }, unbuffer: {}, arch: {}, noglob: {}, nocorrect: {}, chronic: {},
+  xcrun: { vals: ['--sdk', '-sdk', '--toolchain', '-toolchain'], stop: ['-f', '--find', '--show-sdk-path', '--show-sdk-version', '--show-sdk-build-version', '--show-sdk-platform-path', '--show-sdk-platform-version', '--show-toolchain-path'] } };
 
 // Value-taking parameters whose value is not a path.
 const VALUE_PARAMS = new Set(['-value', '-itemtype', '-type', '-encoding', '-filter', '-include', '-exclude', '-name', '-newname', '-depth', '-erroraction',
@@ -73,7 +108,8 @@ const DEST_PARAMS = new Set(['-destination', '-dest', '-destinationpath', '-path
 // A segment: { text, program, rawProgram, args: [{ text, static, param?, value? }], redirects: [text], dynamicProgram, opaque?: why }
 function segOf(tokens, redirects = [], text = '') {
   const toks = tokens.filter((t) => t.text !== '' || t.quoted);
-  if (!toks.length) return null;
+  // A redirection on its own (`> file`) still writes, so it is a command of its own: a no-op with that write.
+  if (!toks.length) return redirects.length ? { text: text || `> ${redirects.join(' ')}`, rawProgram: ':', program: ':', dynamicProgram: false, args: [], redirects } : null;
   const [p, ...rest] = toks;
   return { text: text || toks.map((t) => t.text).join(' '), rawProgram: p.text, program: progName(p.text), dynamicProgram: !p.static,
     args: rest.map((t) => ({ text: t.text, static: t.static !== false, param: /^-{1,2}[a-z]|^\/[a-z?]{1,3}$/i.test(t.text) && !t.quoted })), redirects };
@@ -116,12 +152,56 @@ function splitCmd(line) {
   return { segs, opaque };
 }
 
-// bash: ; && || | & and newlines separate; $( ) ` ` <( ) can't be checked; $VAR makes an argument dynamic.
-function splitBash(line) {
+// Strips wrapper programs (env, timeout, nohup, xcrun …) off the front of a command's words, so the command they
+// run is the one judged. Words are { text, static }. Returns { words, why } (why: the wrapper turns text into a command).
+function unwrapWords(words) {
+  for (let n = 0; n < 8 && words.length && words[0].static !== false; n++) {
+    const p = progName(words[0].text), w = WRAPPERS[p];
+    if (!w) break;
+    let i = 1;
+    for (; i < words.length; i++) {
+      const t = words[i].text;
+      if (w.assigns && /^[A-Za-z_][A-Za-z0-9_]*=/.test(t)) continue;
+      if (t === '--') { i++; break; }
+      if (!/^-/.test(t) || words[i].quoted) break;
+      if (w.bad?.includes(t.split('=')[0])) return { words, why: `${p} ${t} runs text as a command` };
+      if (w.stop?.includes(t)) return { words };
+      if (w.vals?.includes(t)) i++;
+    }
+    i += w.skip || 0;
+    if (i >= words.length) break; // the wrapper alone (env prints the environment)
+    words = words.slice(i);
+  }
+  return { words };
+}
+
+// Shell words that start or close a block (if … then, { …; }, ! cmd): the command after them is what runs.
+const BLOCK_WORDS = new Set(['!', '{', '}', 'then', 'do', 'else', 'elif', 'if', 'while', 'until', 'fi', 'done', 'esac', '[[', ']]']);
+// Loops and definitions run their body with values QuorX can't know beforehand.
+const BLOCK_OPAQUE = new Set(['for', 'case', 'select', 'function', 'coproc', 'repeat', 'foreach']);
+
+// bash and zsh: ; && || | & and newlines separate; ( ) and { } group; $( ) ` ` <( ) can't be checked; $VAR makes an
+// argument dynamic. zsh also expands =name to a program's path, and its glob qualifiers *(e:…:) run code.
+function splitBash(line, zsh = false) {
   const segs = []; let toks = [], tok = null, redirects = [], opaque = null;
   const push = () => { if (tok) toks.push(tok); tok = null; };
-  const end = () => { push(); while (toks.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(toks[0].text)) toks.shift(); const s = segOf(toks, redirects); if (s) segs.push(s); toks = []; redirects = []; };
-  const add = (c, dyn = false) => { tok ??= { text: '', static: true, quoted: false }; tok.text += c; if (dyn) tok.static = false; };
+  const end = () => {
+    push();
+    const text = toks.map((t) => t.text).join(' ');
+    for (;;) {
+      if (toks.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(toks[0].text)) { toks.shift(); continue; }
+      if (toks.length && !toks[0].quoted && BLOCK_WORDS.has(toks[0].text)) { toks.shift(); continue; }
+      break;
+    }
+    while (toks.length && !toks[toks.length - 1].quoted && ['}', ']]'].includes(toks[toks.length - 1].text)) toks.pop();
+    const u = unwrapWords(toks);
+    const s = segOf(u.words, redirects, text);
+    if (s && u.why) s.opaque = u.why;
+    if (s && !u.why && toks[0] && !toks[0].quoted && BLOCK_OPAQUE.has(toks[0].text)) s.opaque = `a ${toks[0].text} block runs commands with values QuorX can't know beforehand`;
+    if (s) segs.push(s);
+    toks = []; redirects = [];
+  };
+  const add = (c, dyn = false) => { tok ??= { text: '', static: !(zsh && c === '='), quoted: false }; tok.text += c; if (dyn) tok.static = false; };
   for (let i = 0; i < line.length; i++) {
     const c = line[i];
     if (c === "'") { const j = line.indexOf("'", i + 1); if (j < 0) { opaque = 'it has unbalanced quotes'; break; } tok ??= { text: '', static: true, quoted: true }; tok.text += line.slice(i + 1, j); tok.quoted = true; i = j; continue; }
@@ -146,14 +226,19 @@ function splitBash(line) {
     if (c === '>' || c === '<' || (c === '&' && line[i + 1] === '>')) {
       if (tok && /^\d$/.test(tok.text)) tok = null; else push();
       if (c === '&') i++;
-      if (line[i + 1] === '>') i++;
-      if (line[i + 1] === '&') { i += 2; continue; }
+      if (line[i + 1] === '>' || (c === '>' && line[i + 1] === '|')) i++; // >> and >| (writes even with noclobber)
+      // >&2 and >&- copy or close a stream; >& file writes to the file, like &>.
+      if (line[i + 1] === '&') { if (/[\d-]/.test(line[i + 2] || '')) { i += 2; continue; } i++; }
       let j = i + 1; while (line[j] === ' ') j++;
       let target = '';
-      for (; j < line.length && !/[\s;&|<>]/.test(line[j]); j++) target += line[j];
+      for (; j < line.length && !/[\s;&|<>()]/.test(line[j]); j++) target += line[j];
       if (c !== '<') redirects.push(target);
       i = j - 1; continue;
     }
+    // ( ) groups commands (a subshell); right after a word it defines a function or is a glob pattern (zsh's
+    // qualifiers can run code), which QuorX can't read.
+    if (c === '(' && tok && tok.text) { opaque = 'it defines a function or uses a pattern QuorX can\'t read'; add(c, true); continue; }
+    if (c === '(' || c === ')') { end(); continue; }
     if (c === '{' || c === '}') { if (/[,.]/.test(line.slice(i, line.indexOf('}', i)))) opaque = 'it uses brace expansion'; }
     if (/\s/.test(c)) { push(); continue; }
     add(c);
@@ -189,12 +274,48 @@ function expandVars(text, env) {
   s = s.replace(/%([A-Za-z_][A-Za-z0-9_()]*)%/g, (m, k) => { const v = envGet(env, k); if (v == null) unresolved = true; return v ?? ''; });
   s = s.replace(/\$HOME\b|\$\{HOME\}/g, () => os.homedir());
   if (/^~(?=$|[\\/])/.test(s)) s = os.homedir() + s.slice(1);
+  else if (/^~./.test(s)) unresolved = true; // ~user, ~+ and ~- are other folders
   if (/\$[A-Za-z_{(]/.test(s) || s.includes('$_') || s.includes('`')) unresolved = true;
   return { path: s, unresolved };
 }
 const envGet = (env, k) => { const hit = Object.keys(env).find((x) => x.toLowerCase() === String(k).toLowerCase()); return hit ? env[hit] : null; };
-const same = (a, b) => (WIN ? a.toLowerCase() === b.toLowerCase() : a === b);
-const inside = (p, dir) => (WIN ? p.toLowerCase().startsWith(dir.toLowerCase() + path.sep) : p.startsWith(dir + path.sep));
+const same = (a, b) => (FOLD ? a.toLowerCase() === b.toLowerCase() : a === b);
+const inside = (p, dir) => (FOLD ? p.toLowerCase().startsWith(dir.toLowerCase() + path.sep) : p.startsWith(dir + path.sep));
+
+// macOS and Linux: the system's own folders, other people's profiles, and the parts of yours that hold keys,
+// settings and programs that run at login. (Your profile and the folders directly in it are blocked by zoneOf.)
+const POSIX_SYSTEM = {
+  darwin: ['/System', '/Library', '/Applications', '/bin', '/sbin', '/usr', '/etc', '/private/etc', '/private/var/db', '/private/var/root', '/opt', '/cores', '/nix'],
+  linux: ['/etc', '/usr', '/bin', '/sbin', '/lib', '/lib32', '/lib64', '/libx32', '/boot', '/sys', '/proc', '/dev', '/run', '/opt', '/srv', '/root', '/snap', '/nix', '/var'],
+};
+const HOME_KEEP = ['.ssh', '.gnupg', '.aws', '.kube', '.docker', '.config/autostart', '.config/systemd', '.local/bin', 'Library'];
+// Inside those, places a developer clears on purpose: they only ask.
+const HOME_ASK = ['Library/Developer/Xcode/DerivedData', 'Library/Developer/CoreSimulator/Caches', 'Library/Caches'];
+/**
+ * Whether an absolute macOS or Linux path is off limits: { zone: 'blocked', why } or null. Pure (POSIX paths and
+ * the platform passed in), so it is tested on any computer.
+ */
+export function posixSystemZone(p, { platform = process.platform, home = os.homedir() } = {}) {
+  const P = path.posix, fold = platform === 'darwin';
+  const eq = (a, b) => (fold ? a.toLowerCase() === b.toLowerCase() : a === b);
+  const under = (a, d) => (fold ? a.toLowerCase().startsWith(`${d.toLowerCase()}/`) : a.startsWith(`${d}/`));
+  const at = (a, d) => eq(a, d) || under(a, d);
+  p = P.normalize(p).replace(/(.)\/+$/, '$1');
+  home = P.normalize(home).replace(/(.)\/+$/, '$1');
+  for (const k of HOME_ASK) if (at(p, P.join(home, k))) return null;
+  for (const k of HOME_KEEP) if (at(p, P.join(home, k))) return { zone: 'blocked', why: k === 'Library' ? 'your Library folder (app data, keychains and settings)' : `your ${k} folder` };
+  if (at(p, home)) return null;
+  if (platform === 'linux' && (at(p, '/var/tmp'))) return null;
+  for (const d of POSIX_SYSTEM[platform] || []) if (at(p, d)) return { zone: 'blocked', why: `a system folder (${d})` };
+  // Every profile lives in /Users (macOS) or /home (Linux): the folder itself and other people's are off limits.
+  const users = platform === 'darwin' ? '/Users' : '/home';
+  if (eq(p, users)) return { zone: 'blocked', why: `the folder of every profile (${users})` };
+  if (under(p, users) && !at(p, `${users}/Shared`)) return { zone: 'blocked', why: 'another person’s profile' };
+  // Drives: /Volumes/<drive> on macOS, /mnt/<drive> and /media/<you>/<drive> on Linux (the drive itself, not inside it).
+  const parts = p.split('/').filter(Boolean);
+  if ((platform === 'darwin' && parts[0] === 'Volumes' && parts.length <= 2) || (platform === 'linux' && ((parts[0] === 'mnt' && parts.length <= 2) || (parts[0] === 'media' && parts.length <= 3)))) return { zone: 'blocked', why: 'a drive' };
+  return null;
+}
 
 /** Where an absolute path is: { zone: 'blocked' | 'protected' | 'inside' | 'outside', why }. */
 export function zoneOf(abs, root) {
@@ -207,6 +328,7 @@ export function zoneOf(abs, root) {
   for (const sys of [process.env.SystemRoot, process.env.ProgramFiles, process.env['ProgramFiles(x86)'], process.env.ProgramData].filter(Boolean)) {
     if (same(p, sys) || inside(p, sys)) return { zone: 'blocked', why: `a system folder (${sys})` };
   }
+  if (!WIN && !same(p, proj) && !inside(p, proj)) { const z = posixSystemZone(p, { home }); if (z) return z; }
   const data = path.join(HOME, 'data');
   if (same(p, data) || inside(p, data) || SECRET_FILES.some((f) => same(p, realish(f)))) return { zone: 'blocked', why: 'QuorX’s own data' };
   if (same(p, proj)) return { zone: 'blocked', why: 'the project folder itself' };
@@ -248,6 +370,23 @@ function countMatches(abs) {
 const sub = (s, i = 0) => low(s.args.filter((a) => !a.param)[i]?.text);
 const hasArg = (s, ...xs) => s.args.some((a) => xs.includes(low(a.text)));
 
+// The command sudo would run: its words after sudo's own options (-u user, -E …).
+function sudoInner(s) {
+  const a = s.args;
+  let i = 0;
+  for (; i < a.length && /^-/.test(a[i].text); i++) {
+    if (a[i].text === '--') { i++; break; }
+    if (/^-[ughpCDrtUT]$/.test(a[i].text)) i++;
+  }
+  return i < a.length ? segOf(unwrapWords(a.slice(i)).words, s.redirects, s.text) : null;
+}
+// Programs that are never allowed, used only to read (systemctl status, crontab -l, diskutil list).
+function neverButRead(p, words) {
+  if (p === 'sysctl') return !words.some((w) => w === '-w' || w.includes('='));
+  if (p === 'crontab') return words.length === 1 && words[0] === '-l';
+  return NEVER_READ[p].includes(words[0]);
+}
+
 function classify(s, shell) {
   const p = s.program, a1 = sub(s), words = s.args.map((a) => low(a.text));
   if (s.opaque) return { cls: 'opaque', why: s.opaque };
@@ -259,8 +398,38 @@ function classify(s, shell) {
   if (s.args.some((a) => /^(hklm|hkey_local_machine|hkcr|hku)\b/i.test(a.text)) || (/itemproperty$/.test(p) && s.args.some((a) => /^hk/i.test(a.text)))) return { cls: 'never', why: 'it changes the Windows registry' };
   if (p === 'reg' && ['query', 'compare'].includes(a1)) return { cls: 'read', why: '' };
   if (p === 'net' && ['view', 'statistics'].includes(a1)) return { cls: 'read', why: '' };
-  if (NEVER.has(p)) return { cls: 'never', why: `${s.rawProgram} changes your system` };
-  if (GLOBAL_INSTALL.has(p)) return { cls: 'install', global: true, why: `${s.rawProgram} installs for the whole computer` };
+  // sudo: an install for the whole computer asks you (it needs your password, which an agent command can't type);
+  // anything else as administrator is never allowed.
+  if (p === 'sudo') {
+    const inner = sudoInner(s);
+    const k = inner && !inner.dynamicProgram ? classify(inner, shell) : null;
+    if (k?.cls === 'install' && k.global) return { cls: 'install', global: true, why: `sudo ${inner.rawProgram} installs for the whole computer as administrator. It needs your password, which an agent command can't type: run it yourself in a terminal tab` };
+    return { cls: 'never', why: 'sudo runs it as administrator' };
+  }
+  if (NEVER_READ[p] && neverButRead(p, words)) return { cls: 'read', why: '' };
+  if (NEVER.has(p) || /^mkfs(\.|$)/.test(p)) return { cls: 'never', why: `${s.rawProgram} changes your system` };
+  if (p === 'security') {
+    // The keychain holds your passwords. Listing code-signing identities and reading a provisioning profile are fine.
+    if (a1 === 'find-identity' || (a1 === 'cms' && hasArg(s, '-d'))) return { cls: 'read', why: '' };
+    return { cls: 'never', why: 'security reads and changes your keychain' };
+  }
+  if (p === 'defaults') {
+    if (['read', 'read-type', 'export', 'domains', 'find'].includes(a1)) return { cls: 'read', why: '' };
+    if (s.args.some((a) => /^(-g|-globalDomain|NSGlobalDomain|com\.apple\.)/i.test(a.text))) return { cls: 'never', why: 'it changes macOS settings' };
+    return { cls: 'unknown', why: 'defaults changes an app\'s settings' };
+  }
+  if (GLOBAL_INSTALL.has(p)) {
+    // Tools whose first option is the action (pacman -Qi, dpkg -L) are read as typed: case matters there.
+    const action = ['pacman', 'rpm', 'dpkg', 'softwareupdate', 'xcode-select', 'nix-env'].includes(p) ? s.args[0]?.text : a1;
+    if (INSTALL_READ[p]?.includes(action)) return { cls: 'read', why: '' };
+    return { cls: 'install', global: true, why: `${s.rawProgram} installs for the whole computer` };
+  }
+  // command -v and xcrun --find only find a program; with a command after them, that command is judged.
+  if (p === 'command' || p === 'xcrun') {
+    const u = unwrapWords([{ text: s.rawProgram, static: true }, ...s.args]);
+    if (u.words.length === s.args.length + 1) return { cls: 'read', why: '' };
+    return classify(segOf(u.words, s.redirects, s.text), shell);
+  }
   // Interpreters and shells running inline code
   if (INTERPRETERS.has(p)) {
     const inline = { python: ['-c'], python3: ['-c'], py: ['-c'], node: ['-e', '-p', '--eval', '--print'], deno: ['eval'], bun: ['-e', '--eval'],
@@ -269,6 +438,8 @@ function classify(s, shell) {
     if (words.some((w) => inline.includes(w)) || (['cmd', 'bash', 'sh', 'zsh', 'powershell', 'pwsh'].includes(p) && !s.args.length)) return { cls: 'opaque', why: `${s.rawProgram} would run code QuorX can't read first` };
     if (['powershell', 'pwsh'].includes(p) && !hasArg(s, '-file', '-f')) return { cls: 'opaque', why: `${s.rawProgram} would run code QuorX can't read first` };
     if (['powershell', 'pwsh'].includes(p)) return { cls: 'build', script: true, why: '' }; // -File: a script file, like python app.py
+    // bash build.sh: a script file, read before it runs like ./build.sh (inspectRun); anything else is another shell.
+    if (['bash', 'sh', 'zsh'].includes(p) && /\.(sh|bash|zsh)$/i.test(s.args.find((a) => !a.param)?.text || '') && !s.args.some((a) => a.param && !/^-[ex]+$/.test(a.text))) return { cls: 'build', script: true, why: '' };
     if (['cmd', 'bash', 'sh', 'zsh', 'wsl'].includes(p)) return { cls: 'opaque', why: `${s.rawProgram} runs another shell` };
     // An interpreter with no script is a prompt: in the agent's terminal, whatever it types next runs unchecked.
     if (!s.args.some((a) => !a.param) && !words.some((w) => ['--version', '-v', '-V', '--help', '-h'].includes(w))) return { cls: 'opaque', why: `${s.rawProgram} with no script opens a prompt where anything typed runs unchecked` };
@@ -332,6 +503,42 @@ function classify(s, shell) {
   if (['docker', 'podman'].includes(p) && ['push', 'login', 'logout'].includes(a1)) return { cls: 'external', why: `${p} ${a1} talks to a registry` };
   if (['docker', 'podman'].includes(p) && ['ps', 'images', 'version', 'info', 'logs', 'inspect'].includes(a1)) return { cls: 'read', why: '' };
   if (['docker', 'podman', 'docker-compose'].includes(p)) return { cls: 'unknown', why: `${p} can reach outside the project` };
+  // Apple's tools (most arrive through xcrun, which is unwrapped).
+  if (p === 'simctl') {
+    const plain = s.args.filter((a) => !a.param).map((a) => low(a.text));
+    if (['list', 'help', 'getenv', 'listapps', 'appinfo', 'get_app_container', 'pbpaste', 'pbinfo', 'bootstatus'].includes(a1)) return { cls: 'read', why: '' };
+    if (['erase', 'delete', 'unpair'].includes(a1)) return { cls: 'discard', why: `simctl ${a1} deletes a simulator or its data` };
+    if (a1 === 'runtime') return plain[1] === 'list' ? { cls: 'read', why: '' } : { cls: 'install', global: true, why: 'it adds or removes a simulator runtime for the whole computer' };
+    // spawn runs a program of this Mac inside the simulator's setting: only its log reader is known.
+    if (a1 === 'spawn') return plain[2] === 'log' ? { cls: 'read', why: '' } : { cls: 'opaque', why: 'simctl spawn runs another program' };
+    if (a1 === 'io') return { cls: 'write', why: '' }; // a screenshot or video: where it is written is checked
+    return { cls: 'build', why: '' };
+  }
+  if (p === 'xcodebuild') {
+    if (hasArg(s, '-downloadplatform', '-downloadallplatforms', '-importplatform', '-runfirstlaunch', '-license')) return { cls: 'install', global: true, why: 'it changes Xcode for the whole computer' };
+    if (hasArg(s, '-resolvepackagedependencies')) return { cls: 'install', why: 'it downloads Swift packages' };
+    const acts = ['build', 'test', 'archive', 'clean', 'analyze', 'install', 'build-for-testing', 'test-without-building', 'docbuild'];
+    if (hasArg(s, '-list', '-version', '-showsdks', '-showbuildsettings', '-showdestinations', '-checkfirstlaunchstatus', '-showtestplans') && !words.some((w) => acts.includes(w))) return { cls: 'read', why: '' };
+    return { cls: 'build', why: '' };
+  }
+  if (p === 'swift' && a1 === 'package') {
+    const w = low(s.args.filter((a) => !a.param)[1]?.text);
+    if (['resolve', 'update', 'add-dependency'].includes(w)) return { cls: 'install', why: 'it downloads Swift packages' };
+    if (w === 'publish') return { cls: 'external', why: 'it publishes a package' };
+    if (['describe', 'dump-package', 'show-dependencies', 'compute-checksum'].includes(w)) return { cls: 'read', why: '' };
+  }
+  if (p === 'swift' && a1 === 'sdk' && hasArg(s, 'install', 'remove')) return { cls: 'install', global: true, why: 'it installs a Swift SDK for the whole computer' };
+  if (p === 'plutil') return hasArg(s, '-p', '-lint', '-help', '-type') ? { cls: 'read', why: '' } : { cls: 'write', why: '' };
+  if (p === 'log') return ['show', 'stream', 'help'].includes(a1) ? { cls: 'read', why: '' } : { cls: 'never', why: 'it changes or erases the system log' };
+  if (['notarytool', 'altool'].includes(p)) return { cls: 'external', why: `${p} sends the app to Apple` };
+  if (p === 'devicectl') return a1 === 'list' ? { cls: 'read', why: '' } : { cls: 'external', why: 'devicectl works on a real iPhone, iPad or watch connected to this Mac' };
+  if (['pod', 'carthage'].includes(p)) {
+    if (p === 'pod' && a1 === 'trunk') return { cls: 'external', why: 'it publishes a pod' };
+    if (['install', 'update', 'bootstrap', 'repo'].includes(a1)) return { cls: 'install', why: `${p} ${a1} downloads dependencies` };
+    return { cls: 'build', why: '' };
+  }
+  if (['xcresulttool', 'dwarfdump', 'atos', 'symbols'].includes(p)) return { cls: 'read', why: '' };
+  if (['codesign', 'stapler', 'agvtool', 'xctrace', 'instruments', 'ibtool', 'actool', 'idb', 'lldb-dap', 'swift-format', 'swiftlint', 'xcbeautify'].includes(p)) return { cls: 'build', why: '' };
   if (p === 'flutter' || p === 'dart') { if (a1 === 'pub' && hasArg(s, 'publish')) return { cls: 'external', why: 'it publishes a package' }; if (a1 === 'pub') return { cls: 'install', why: 'it fetches packages' }; return { cls: 'build', why: '' }; }
   if (EXTERNAL.has(p)) {
     if (['curl', 'wget', 'invoke-webrequest', 'iwr', 'invoke-restmethod', 'irm'].includes(p)) {
@@ -560,6 +767,9 @@ async function judgeCommands(segs, lang, ic, rel, depth, out) {
     }
     if (s.dynamicProgram || s.opaque || LAUNCHERS.has(s.program) || (s.program === 'new-object' && hasArg(s, '-comobject'))) { out.launch ||= runs; continue; }
     const k = classify(s, SHELL_OF[lang]);
+    // In a shell script, anything the rules can't read (open, awk, watch, find -exec …) runs other programs too.
+    // (PowerShell's Add-Type and COM, which WinForms and WPF scripts use, are judged by LAUNCHERS and members above.)
+    if (lang === 'sh' && k.cls === 'opaque') { out.launch ||= runs; continue; }
     const paths = pathsOf(s, k, ic);
     if (k.cls === 'never' || (k.cls === 'install' && k.global) || ['external', 'discard'].includes(k.cls) || KILLERS.has(s.program) || paths.some((p) => p.zone === 'blocked' || p.zone === 'protected')) {
       out.extra.push({ ...s, ctx: { ...ic }, shell: SHELL_OF[lang], via: rel, viaWhy: `inside ${rel}`, depth: depth + 1 });
@@ -726,17 +936,19 @@ const RANK = { allow: 0, ask: 1, deny: 2 };
 
 /**
  * Decides what happens to a command line before it runs.
- * ctx: { shell: 'powershell'|'pwsh'|'cmd'|'bash'|'direct', root, cwd?, env?, rules: [{effect, match, by, scope}], mode: 'strict'|'yolo',
+ * ctx: { shell: 'powershell'|'pwsh'|'cmd'|'bash'|'zsh'|'direct', root, cwd?, env?, rules: [{effect, match, by, scope}], mode: 'strict'|'yolo',
  *        yolo: { external, opaque, outside } (what the deciders may approve) }
  * Returns { verdict: 'allow'|'ask'|'deny', who: 'user'|'deciders'|null, why, decidedBy, segments: [...], hint? }.
  */
 export async function decide(line, ctx) {
-  const shell = ctx.shell || 'powershell';
+  let shell = ctx.shell || (WIN ? 'powershell' : 'bash');
+  // Off Windows there is no cmd, and Node's default shell (run_command's "direct") is /bin/sh: both are read as bash.
+  if (!WIN && (shell === 'cmd' || shell === 'direct')) shell = 'bash';
   const root = path.resolve(ctx.root);
   const c = { root, cwd: path.resolve(ctx.cwd || root), env: ctx.env || process.env };
   const text = String(line || '').trim();
   if (!text) return { verdict: 'deny', who: null, why: 'empty command', decidedBy: 'code', segments: [] };
-  const split = shell === 'powershell' || shell === 'pwsh' ? await splitPowerShell(text) : shell === 'bash' ? splitBash(text) : splitCmd(text);
+  const split = shell === 'powershell' || shell === 'pwsh' ? await splitPowerShell(text) : shell === 'bash' || shell === 'zsh' ? splitBash(text, shell === 'zsh') : splitCmd(text);
   const segments = [];
   if (split.opaque || !split.segs.length) {
     const why = split.opaque || 'QuorX could not find a command in it';
@@ -764,7 +976,7 @@ export async function decide(line, ctx) {
     if (k.cls === 'never') { v = 'deny'; why = k.why || 'this command is never allowed'; }
     else if (blocked) { v = 'deny'; by = 'path'; why = `it would ${blocked.kind === 'write' ? 'write to' : 'delete or move'} ${blocked.why}`; }
     else if (k.cls === 'delete' && !unknownPath && !outside) {
-      const recursive = s.args.some((a) => /^(-recurse|-r|-rf|-fr|\/s|--recursive)$/i.test(a.text)) || s.program === 'rimraf' || s.program === 'del-cli';
+      const recursive = s.args.some((a) => /^(-recurse|-r|-rf|-fr|\/s|--recursive)$/i.test(a.text) || (s.program === 'rm' && /^-[a-z]*r/i.test(a.text))) || s.program === 'rimraf' || s.program === 'del-cli';
       const many = paths.reduce((n, p) => n + (p.resolved ? countMatches(p.resolved) : 0), 0);
       if (recursive || many > 20) { v = 'deny'; by = 'code'; why = `it deletes ${recursive ? 'a whole folder' : `${many} files`}`; seg.hint = 'Use delete_file instead: it moves files and folders to .quorx/trash, so the user can get them back.'; }
     }
@@ -840,6 +1052,8 @@ const MARKERS = [
   ['package.json', ['npm run *', 'npm test*', 'npm ci*', 'npx tsc*']],
   [/^(pyproject\.toml|requirements\.txt|setup\.py)$/, ['pytest*', 'python -m pytest*', 'ruff*', 'mypy*']],
   ['pubspec.yaml', ['flutter build*', 'flutter test*', 'dart test*']],
+  [/\.(xcodeproj|xcworkspace)$/,['xcodebuild*', 'simctl boot*', 'simctl install*', 'simctl launch*', 'simctl terminate*']],
+  ['Package.swift', ['swift build*', 'swift test*', 'swift run*']],
 ];
 /** Build rules a project's files suggest, minus ones already present. [{ match, why }] */
 export function suggestedRules(root, existing = []) {

@@ -44,11 +44,24 @@ log('Checking which toolchains this computer has…');
 const chains = await detectToolchains(true);
 const byId = new Map(chains.map((t) => [t.id, t]));
 const rows = [];
+// QuorX's own safety layer on this system (Stop through process groups on macOS and Linux, the bash and zsh rules,
+// the folders that are off limits, the desktop tool's keys): `--pack system` runs only this.
+if (!only.length || only.includes('system')) {
+  const label = `QuorX on ${{ darwin: 'macOS', linux: 'Linux', win32: 'Windows' }[process.platform] || process.platform}: Stop, rules, desktop keys`;
+  log(`Testing ${label}…`);
+  const r = await runFile(path.join(ROOT, 'scripts', 'test-posix.mjs'));
+  rows.push({ p: { id: 'system', label }, status: r.fail ? 'failed' : r.pass ? 'passed' : 'skipped', r });
+}
 for (const p of PACKS.filter((x) => !only.length || only.includes(x.id))) {
   const file = path.join(ROOT, 'server', 'packs', 'tests', `${p.id}.test.mjs`);
   const needs = p.test?.needs || [];
   const missing = needs.filter((id) => !byId.get(id)?.found);
-  if (p.hosts && !p.hosts.includes(process.platform)) { rows.push({ p, status: 'not here', why: `works on ${p.hosts.join(', ')}` }); continue; }
+  if (p.hosts && !p.hosts.includes(process.platform)) {
+    // Its logic (parsers, rules, notes) is still tested here; the parts that need its system skip themselves.
+    const r = fs.existsSync(file) ? (log(`Testing ${p.label} (its logic only)…`), await runFile(file)) : null;
+    rows.push({ p, status: r?.fail ? 'failed' : 'not here', why: `works on ${p.hosts.join(', ')}${r ? '; only its logic was tested here' : ''}`, r });
+    continue;
+  }
   if (!fs.existsSync(file)) { rows.push({ p, status: 'no self-test', why: 'this pack has no self-test yet' }); continue; }
   if (missing.length) { rows.push({ p, status: 'not tested', why: `needs ${missing.map((id) => byId.get(id)?.label || id).join(', ')}` }); continue; }
   log(`Testing ${p.label}…`);
