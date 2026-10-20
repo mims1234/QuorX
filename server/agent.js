@@ -2190,11 +2190,11 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     }
     if (name === 'decide') return decide(args, step);
     if (name === 'plan') return planTool(args, step);
-    if (name === 'edit_video') return editVideo(args);
     if (['browser', 'use_skill', 'fetch_url', 'ask_user', 'look', 'extract_design'].includes(name) || CAT_OF[name]) return runToolRest(name, args, step);
     if (name === 'run_command' || [...CODE_TOOLS, ...PROJECT_TOOLS].some((t) => t.function.name === name)) return codeTool(name, args);
     if (['list_docs', 'read_doc', 'search_docs'].includes(name)) return docTool(name, args);
     if (name === 'delegate') return delegate(args, step);
+    if (name === 'edit_video') return editVideo(args);
     return `Error: unknown tool ${name}.`;
   }
   async function docTool(name, args) {
