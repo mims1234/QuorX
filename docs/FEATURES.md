@@ -15,6 +15,10 @@ a real browser and your real toolchains, and shows how it got every answer.
   guess first so you can see whether asking changed anything. Fixed checks ask them about every build too.
 - **It reads your request in full.** A prompt enhancer spells out what a request implies (a movie trailer implies a
   voice-over and music) and shows it under your message, where you can correct it.
+- **Films from pictures, finished with ffmpeg.** A clip can start from a picture the agent made (or one in the project)
+  when the video model takes a first frame, so characters and style hold from shot to shot. `edit_video` then joins
+  clips, stills, a voice-over and music into one .mp4 in the project with ffmpeg, as an ordinary checked command.
+  Setup check offers to install ffmpeg when it is missing.
 - **Guarded commands.** Every command line is parsed and each part classed (read, build, install, push, delete,
   can't be checked). Your rules decide what runs; the rest comes to your approval card, or to the deciders in ⚡ YOLO,
   who see only facts and your own messages. Deleting your profile, a drive root or anything above the project is

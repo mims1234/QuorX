@@ -56,7 +56,7 @@ const TOOL_NAME = { imagine: '🖼 Make a picture', make_video: '🎬 Make a vid
   write_artifact: '📄 Write a page', edit_artifact: '✏️ Edit a page', read_artifact: '👀 Read a page', decide: '⚖️ Ask the deciders',
   list_files: '🗂 List files', read_file: '👀 Read a file', write_file: '📝 Write a file', append_file: '📝 Append to a file', edit_file: '✏️ Edit a file',
   search_docs: '🔎 Search the attached documents', read_doc: '📄 Read an attached document', list_docs: '📎 List attached documents',
-  run_command: '⌨️ Run a command', start_server: '🚀 Start a server', stop_server: '■ Stop a server', preview_site: '🌐 Preview a site',
+  edit_video: '🎞 Edit the film', run_command: '⌨️ Run a command', start_server: '🚀 Start a server', stop_server: '■ Stop a server', preview_site: '🌐 Preview a site',
   browser: '🌐 Use the browser', look: '👁 Look at the result', search_files: '🔎 Search files', delete_file: '🗑 Delete a file',
   scaffold: '🧱 Use a template', save_skill: '🧩 Save a skill', use_skill: '🧩 Load a skill', fetch_url: '🌍 Read a web page', delegate: '🤝 Ask a helper', plan: '🗺 Plan' };
 const CATS = [
