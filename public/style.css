@@ -3983,7 +3983,7 @@ body.resizing iframe { pointer-events: none; }
   padding-left: 3px;
 }
 
-/* @ Context & / Commands Suggestion Popup (Claude Code / Discord Style) */
+/* @ Context & / Commands Suggestion Popup */
 .cmp-suggest-popup {
   position: relative;
   width: 100%;

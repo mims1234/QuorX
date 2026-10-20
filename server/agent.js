@@ -1,4 +1,4 @@
-// One agent run: a chat model in a tool loop, the way Claude Code works, but in a web page.
+// One agent run: a chat model in a tool loop, in a web page.
 //   - artifacts: write_artifact / read_artifact / edit_artifact (self-contained HTML pages)
 //   - decide:    the agent builds its own questions for the deciders, committing its OWN guess
 //                first, so every decision shows whether asking changed anything
