@@ -11,9 +11,9 @@
         { "kind": "new", "text": "Hooks: pick commands QuorX runs around the agent's work, like npm run lint after every file write, in each project's settings.", "pr": 38 },
         { "kind": "new", "text": "A failing lint or test hook goes back to the agent to fix, and a failing before-command hook stops that command.", "pr": 38 },
         { "kind": "safety", "text": "Hooks are kept in QuorX's data folder, never in the project, and still go through your command rules, approvals and Stop.", "pr": 38 },
-        { "kind": "new", "text": "Schedules: QuorX starts a chat on its own, like every weekday at 9 in a project, or once in an hour, with the prompt, model and mode you saved." },
-        { "kind": "new", "text": "A run missed while the computer slept runs once when it wakes, labelled as missed, and you get a notice when a scheduled chat ends or waits for you." },
-        { "kind": "safety", "text": "Scheduled chats keep your budgets and caps, and use YOLO only when you chose YOLO for that schedule; Strict approvals wait for you." }
+        { "kind": "new", "text": "Schedules: QuorX starts a chat on its own, like every weekday at 9 in a project, or once in an hour, with the prompt, model and mode you saved.", "pr": 39 },
+        { "kind": "new", "text": "A run missed while the computer slept runs once when it wakes, labelled as missed, and you get a notice when a scheduled chat ends or waits for you.", "pr": 39 },
+        { "kind": "safety", "text": "Scheduled chats keep your budgets and caps, and use YOLO only when you chose YOLO for that schedule; Strict approvals wait for you.", "pr": 39 }
       ]
     },
     {
