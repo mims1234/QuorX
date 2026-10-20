@@ -67,6 +67,9 @@ Ports, phones and other devices, the installer, updates and every setting from `
 - **The agent tests its own work before it replies.** Every file is checked as it is written. Before the final
   reply, QuorX checks the changed files again, opens what was built, runs the compiler checks, catches weakened
   tests, and a separate reviewer model plays the result and scores it. Problems go back to the agent.
+- **News, inside the app.** What's new in each version, reports on models, tests and platforms, and research
+  articles with interactive charts and flows. It ships with QuorX, so it updates when QuorX does, and "Your numbers"
+  are worked out from this computer's own logs, never uploaded.
 
 ## Deliberately narrow
 
