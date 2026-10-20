@@ -14,8 +14,10 @@
 //   detect(root),                       // or a function, for projects whose marker sits deeper (Android)
 //   checks: [{ id, tool, ext, marker(dir), cmd, errors, tidy }], // compiler checks before the final reply (errors:
 //                                       // a pattern for its error lines, when the usual "error" match misses them;
-//                                       // tidy(line, dir): the line as the agent should read it; timeoutHint: what
-//                                       // to do when a first build is too slow)
+//                                       // tidy(line, dir): the line as the agent should read it; cmd may be a
+//                                       // function (dir, { files }) giving one or more lines, or none to skip the
+//                                       // folder; timeout: ms; parse(out, { dir, files }): the error lines;
+//                                       // timeoutHint: what to do when a first build is too slow)
 //   summaries: [{ cmd: /^dotnet test\b/, summarize(out, { cwd, since }) }], // a short summary put above a command's
 //                                       // output (since: when it started, for reports it wrote to disk)
 //   debug: { exts: ['.cs'], tool, label, gate({ file, args, cwd }), start({ file, args, cwd, port }) },
@@ -55,7 +57,8 @@ export const packById = (id) => PACKS.find((p) => p.id === id);
 /** Every toolchain, each tagged with its pack. A toolchain two packs list (Node for TypeScript and Electron) counts once. */
 export function allToolchains() {
   const seen = new Map();
-  for (const p of PACKS) for (const t of p.toolchains || []) if (!seen.has(t.id)) seen.set(t.id, { ...t, pack: p.id, host: here(p) });
+  // host: whether a pack that works on this computer lists it (Xcode is only looked for on a Mac).
+  for (const p of PACKS) for (const t of p.toolchains || []) { if (!seen.has(t.id)) seen.set(t.id, { ...t, pack: p.id, host: here(p) }); else if (here(p)) seen.get(t.id).host = true; }
   return [...seen.values()];
 }
 

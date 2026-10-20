@@ -110,7 +110,7 @@ export async function termStop(id) {
   const s = getS(id);
   if (s.exited) return { already: true, code: s.code };
   let r = { left: 0, mode: 'basic' };
-  if (s.job) { try { const k = await killJob(s.job); r = { left: k.left, names: k.names, mode: 'jobs' }; } catch { /* fall back */ } }
+  if (s.job) { try { const k = await killJob(s.job); r = { left: k.left, names: k.names, mode: k.mode }; } catch { /* fall back */ } }
   // Once its program is gone the terminal closes by itself; node-pty's own kill is only the fallback (it lists the
   // console's processes through a helper that fails when the console has already gone).
   const t0 = Date.now();

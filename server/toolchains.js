@@ -28,6 +28,7 @@ export async function refreshPath() {
 
 // Installed is not the same as working: a pack's works() builds something tiny (Rust needs a C linker, for one).
 async function probe(t) {
+  if (!t.host) return { id: t.id, label: t.label, for: t.for, pack: t.pack, found: false, version: null, works: false, problem: '', winget: null, fixWith: null, host: false };
   let version = null;
   try { version = t.detect ? await t.detect() : ver(t.re)(await run(...t.probe)); } catch { version = null; }
   const r = { id: t.id, label: t.label, for: t.for, pack: t.pack, found: !!version, version, works: !!version, problem: '', winget: t.winget || null, fixWith: t.fixWith || null };
@@ -62,7 +63,7 @@ export async function detectToolchains(fresh = false) {
 export function toolchainNote(list) {
   const def = (id) => TOOLCHAINS.find((t) => t.id === id) || {};
   const have = list.filter((t) => t.found).map((t) => `${t.label} ${t.version}${t.works ? '' : ' (installed, but it can\'t build programs here)'}`);
-  const missing = list.filter((t) => !t.found).map((t) => t.label);
+  const missing = list.filter((t) => !t.found && t.host !== false).map((t) => t.label);
   const broken = list.filter((t) => t.found && !t.works);
   const after = 'Installing runs outside this chat and can take a while: say so, and ask the user to tell you when it is done; QuorX looks for toolchains again on each reply, so you carry on from there';
   return `Toolchains on this computer: ${have.join(', ') || 'none found'}.${missing.length ? ` Not installed: ${missing.join(', ')} (if the task needs one, tell the user; they can install it from ⚙ Settings → Setup check, or you can run its winget install if they allow it).` : ''}`
