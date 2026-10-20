@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { groupCalls, numberedWindow, untrusted, looksLikeInstruction, trimTranscript, compactTranscript, transcriptChars, withCacheMarks, retryable } from '../server/loop.js';
-import { checkFile, checkHtml, lintHtml, lintCss, lintFile } from '../server/checks.js';
+import { checkFile, checkHtml, lintHtml, lintCss, lintFile, CHECK_TIMEOUTS } from '../server/checks.js';
 import { listDesignSystems, readDesignSystem, tokenColors, projectDesign, applyDesignSystem, saveProjectDesign } from '../server/design.js';
 
 const call = (name, args = {}, id = name + Math.random()) => ({ id, type: 'function', function: { name, arguments: JSON.stringify(args) } });
@@ -109,6 +109,18 @@ test('file checks use real parsers', async () => {
     assert.match((await checkHtml('<html><body>cut', { label: 'a' }))[0], /does not end with <\/html>/);
     assert.match((await checkHtml('<html><script type="module">import {a} from "b"; let = 1;</script></html>', { label: 'm' }))[0], /SyntaxError/);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a check that runs out of time is "couldn\x27t check", never a syntax error', async () => {
+  const dir = tempDir('quorx-test-');
+  const was = CHECK_TIMEOUTS.check;
+  try {
+    fs.writeFileSync(path.join(dir, 'ok.js'), 'export const a = 1;\n');
+    fs.writeFileSync(path.join(dir, 'ok.py'), 'print(1)\n');
+    CHECK_TIMEOUTS.check = 1; // every check is killed before it can answer
+    assert.deepEqual(await checkFile(dir, 'ok.js'), []);
+    assert.deepEqual(await checkFile(dir, 'ok.py'), []);
+  } finally { CHECK_TIMEOUTS.check = was; }
 });
 
 test('the design lint flags machine-made patterns and leaves a plain page alone', () => {
