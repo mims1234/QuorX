@@ -129,7 +129,7 @@ shell({ command: "cargo build --release", timeout_s?: 180 })
   - the running reply, for "this chat only" (replacing today's per-tool `allowed` Set for commands).
 - **Matching** is done on the parsed segment (program plus arguments), never on the raw text. So `cargo build; rm -rf x` can't ride on a `cargo build*` rule.
 - **Strict, start of the reply:** the class table plus the rules decide.
-- **Entering YOLO:** wildcard rules on interpreters and package runners (`python*`, `node*`, `npx*`, `uv run*`, `powershell*`) are **ignored**, the way Claude Code's auto mode drops them. The Permissions panel shows them struck through, with the reason.
+- **Entering YOLO:** wildcard rules on interpreters and package runners (`python*`, `node*`, `npx*`, `uv run*`, `powershell*`) are **ignored**, because a wildcard on an interpreter would allow any program it runs. The Permissions panel shows them struck through, with the reason.
 
 **Step 4. Detect toolchains and suggest rules.** On project open, `setup-check` finds `cargo`, `dotnet`, `go`, `cmake`, `java`/`gradle`, `npm` and `python`. It offers suggested `build` allow rules for the ones the project uses (by looking for `Cargo.toml`, `*.csproj`, `go.mod`, `CMakeLists.txt` and so on). They appear as unticked suggestions; the user ticks them.
 
