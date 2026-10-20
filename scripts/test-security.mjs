@@ -171,3 +171,26 @@ test('search_files does not follow links out of the project', (t) => {
   const hits = searchFiles(root, 'needle');
   assert.deepEqual(hits.map((h) => h.path), ['a.txt']);
 });
+
+// ---------- the data folder lock-down (server/keys.js) keeps every file readable by its owner ----------
+test('data folder: 0.2.5 locked files are repaired at start, and the lock-down keeps them readable', { skip: process.platform !== 'win32' }, async () => {
+  const { spawnSync } = await import('node:child_process');
+  const home = tempDir('qx-lock-');
+  fs.mkdirSync(path.join(home, 'data', 'chats'), { recursive: true });
+  fs.writeFileSync(path.join(home, 'data', 'app-key'), 'k'.repeat(43));
+  fs.writeFileSync(path.join(home, 'data', 'chats', 'c1.json'), '{}');
+  // What 0.2.5 did: strip inheritance from every file and leave it with no access at all.
+  spawnSync('icacls', [path.join(home, 'data'), '/inheritance:r', '/grant:r', `${process.env.USERNAME}:(OI)(CI)F`, '/T', '/Q'], { windowsHide: true });
+  assert.throws(() => fs.readFileSync(path.join(home, 'data', 'chats', 'c1.json')), /EPERM|EACCES/, 'the 0.2.5 damage is reproduced');
+  // The fixed lockDown, run as QuorX runs it, with this folder as its home.
+  const keys = new URL('../server/keys.js', import.meta.url).href;
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', `const { lockDown } = await import(${JSON.stringify(keys)}); lockDown();`], { env: { ...process.env, OH_HOME: home }, windowsHide: true, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(fs.readFileSync(path.join(home, 'data', 'app-key'), 'utf8'), 'k'.repeat(43));
+  assert.equal(fs.readFileSync(path.join(home, 'data', 'chats', 'c1.json'), 'utf8'), '{}');
+  // Still private: the folder grants only this account and SYSTEM, and the files inherit just that.
+  const acl = spawnSync('icacls', [path.join(home, 'data', 'chats', 'c1.json')], { encoding: 'utf8', windowsHide: true }).stdout;
+  assert.match(acl, new RegExp(`${process.env.USERNAME}:\\(I\\)\\(F\\)`, 'i'));
+  assert.doesNotMatch(acl, /Users:|Everyone:|Authenticated Users:/i);
+  fs.rmSync(home, { recursive: true, force: true });
+});

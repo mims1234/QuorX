@@ -22,9 +22,13 @@ const BASE = 'https://openrouter.ai';
 // entries. The owner may always reset a file's permissions, so this needs no administrator rights.
 (function repairData() {
   if (process.platform !== 'win32' || !fs.existsSync(DATA)) return;
-  const probe = fs.readdirSync(DATA, { withFileTypes: true }).find((e) => e.isFile());
-  if (!probe) return;
-  try { fs.closeSync(fs.openSync(path.join(DATA, probe.name), 'r')); return; } catch (e) { if (e.code !== 'EPERM' && e.code !== 'EACCES') return; }
+  // Probe the files QuorX can't start without, and one chat: a file rewritten since 0.2.5 inherits the right entries,
+  // so one readable file doesn't mean the rest are.
+  const chats = path.join(DATA, 'chats');
+  const firstChat = fs.existsSync(chats) ? fs.readdirSync(chats).find((n) => n.endsWith('.json')) : null;
+  const probes = ['app-key', 'projects.json', 'keys.json', 'access.json'].map((n) => path.join(DATA, n)).concat(firstChat ? [path.join(chats, firstChat)] : []);
+  const locked = probes.some((p) => { try { fs.closeSync(fs.openSync(p, 'r')); return false; } catch (e) { return e.code === 'EPERM' || e.code === 'EACCES'; } });
+  if (!locked) return;
   spawnSync('icacls', [path.join(DATA, '*'), '/reset', '/T', '/C', '/Q'], { windowsHide: true, timeout: 120000 });
 })();
 export function lockDown() {

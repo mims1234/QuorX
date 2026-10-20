@@ -1,6 +1,18 @@
 {
   "versions": [
     {
+      "version": "0.2.6",
+      "date": "2026-10-21",
+      "title": "Your projects and terminal are back",
+      "items": [
+        { "kind": "fixed", "text": "0.2.5 locked QuorX out of its own data files, so projects, chats and the Terminal seemed gone; nothing was lost.", "pr": 34 },
+        { "kind": "fixed", "text": "QuorX repairs those files by itself when it starts, before it reads anything, with no administrator rights needed.", "pr": 34 },
+        { "kind": "fixed", "text": "The desktop window no longer says its app link is not valid after a restart.", "pr": 34 },
+        { "kind": "safety", "text": "The data folder stays private to your account: only the folder is locked, and its files inherit that.", "pr": 34 },
+        { "kind": "improved", "text": "If the project list can't be read, QuorX says so instead of showing an empty list.", "pr": 34 }
+      ]
+    },
+    {
       "version": "0.2.5",
       "date": "2026-10-21",
       "title": "Locked down by default",
