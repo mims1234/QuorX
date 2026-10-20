@@ -1,6 +1,16 @@
 {
   "versions": [
     {
+      "version": "0.2.7",
+      "date": "2026-10-21",
+      "title": "A second pair of eyes on your code",
+      "items": [
+        { "kind": "new", "text": "/review in a chat reads what changed (the last reply, uncommitted changes, or the branch) and lists bugs with file:line and severity." },
+        { "kind": "new", "text": "Tick the review findings you agree with and send them to the agent to fix in one click." },
+        { "kind": "improved", "text": "The reviewer can also read the code after every reply that changed it, and posts a card only when it finds a bug." }
+      ]
+    },
+    {
       "version": "0.2.6",
       "date": "2026-10-21",
       "title": "Your projects and terminal are back",

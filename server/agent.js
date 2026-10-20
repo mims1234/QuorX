@@ -101,6 +101,7 @@ export const DEFAULTS = {
   zdrOnly: false,          // only providers with zero data retention
   fallbackModel: '',       // tried by OpenRouter when the chat's model fails or is unavailable ('' = none)
   // The reviewer (#4): a separate model plays what was built and scores it before the final reply.
+  codeReview: 'off',       // /review on its own after a reply that changed code: 'off' · 'auto' (a card only when the reviewer finds bugs)
   review: 'builds',        // 'off' · 'builds' (when the agent made a plan for this reply) · 'always' (whenever something openable was built or changed)
   reviewModel: '',         // '' = the reviewer for the tier below (another one if the chat's own model is the same)
   reviewTier: 'cheap',     // 'cheap' = gpt-6-luna (~$0.003 a build) · 'strong' = Claude Sonnet 5.5 (~$0.02 a build, no false alarms in the benchmark)

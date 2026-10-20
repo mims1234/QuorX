@@ -68,6 +68,8 @@ const CHAT_TOOLS = ['image', 'video', 'music', 'speech'];
 // The quality tools: on by default (the best value in the build benchmark); each chat can switch them off in 🧰.
 const QUALITY_TOOLS = ['enhancer', 'reviewer', 'freshEyes', 'deciders', 'helpers'];
 const DEFAULT_CHAT_TOOLS = { image: false, video: false, music: false, speech: false, enhancer: true, reviewer: true, freshEyes: true, deciders: true, helpers: true };
+// Files a code review reads (an automatic review skips replies that only changed pictures, data or docs).
+const CODE_FILE = /\.(m?[jt]sx?|cjs|py|rb|go|rs|java|kt|swift|c|cc|cpp|h|hpp|cs|php|lua|sh|ps1|vue|svelte|html?|css|scss|sql)$/i;
 const REVIEW_CHEAP = 'openai/gpt-6-luna', REVIEW_STRONG = 'anthropic/claude-sonnet-5.5', HELPER_DEFAULT = 'qwen/qwen3.7-flash', LOOK_DEFAULT = 'openai/gpt-6-luna-decisions';
 const reviewerModel = () => G.settings.reviewModel || (G.settings.reviewTier === 'strong' ? REVIEW_STRONG : REVIEW_CHEAP);
 const helperModel = () => G.settings.helperModel || HELPER_DEFAULT;
@@ -292,6 +294,7 @@ const COMMANDS = [
   ['file', 'Attach files of any kind (documents, PDFs, sheets, images…)', (c) => $('.imgInput', c.el.root).click()],
   ['image', 'Attach images', (c) => $('.imgInput', c.el.root).click()],
   ['attach', 'Pick chats to attach as context (a checklist)', (c) => openCtxPicker(c)],
+  ['review', 'Review the code changes for bugs: the last reply, uncommitted changes, or the branch', (c, arg) => codeReview(c, arg)],
   ['usage', 'This chat\'s cost per model, as a card only you see', (c) => postUsage(c)],
   ['costs', 'What each project and chat has cost', () => openCosts()],
   ['skills', 'List the skills the agent can load', (c) => showSkills(c)],
@@ -303,6 +306,7 @@ const COMMANDS = [
 const CMD_ARGS = {
   model: { usage: '[model]', list: (c) => modelArgs(c) },
   fresh: { usage: '[model]', list: (c) => modelArgs(c) },
+  review: { usage: '[reply|changes|branch]', list: () => [['reply', 'the files the last reply changed'], ['changes', 'uncommitted git changes'], ['branch', 'this branch against main (or name a base: branch dev)']].map(([value, hint]) => ({ value, hint })) },
   continue: { usage: '[steps]', list: () => [10, 20, 30, 50].map((n) => ({ value: String(n), hint: `${n} more steps` })) },
   reason: { usage: '<level>', need: true, list: () => Object.entries(REASON_INFO).map(([v, [label, hint]]) => ({ value: v, hint: `${label}: ${hint}` })) },
   creativity: { usage: '<style>', need: true, list: () => Object.entries(CREATIVITY_INFO).map(([v, [label, hint]]) => ({ value: v, hint: `${label}: ${hint}` })) },
@@ -2326,7 +2330,7 @@ function renderComposerBar(c) {
 // ---------- usage (per chat): every model this chat paid for, grouped by kind of call ----------
 const USAGE_KIND = {
   writer: ['💬', 'Chat model'], strong: ['💬', 'Chat model (strong)'], summary: ['🗜', 'Summaries'], decider: ['⚖️', 'Deciders · checks, look, decide'],
-  reviewer: ['🔍', 'Reviewer'], helper: ['🧭', 'Helpers'], freshEyes: ['👀', 'Fresh eyes'], enhancer: ['📝', 'Prompt enhancer'],
+  reviewer: ['🔍', 'Reviewer'], codereview: ['🔎', 'Code reviews'], helper: ['🧭', 'Helpers'], freshEyes: ['👀', 'Fresh eyes'], enhancer: ['📝', 'Prompt enhancer'],
   image: ['🖼', 'Pictures'], video: ['🎬', 'Video'], music: ['🎵', 'Music'], speech: ['🗣', 'Voice'], listen: ['🎤', 'Mic (speech to text)'], media: ['🎨', 'Media'],
 };
 function chatUsage(c) {
@@ -2376,6 +2380,70 @@ function postUsage(c) {
   const box = c.el && $('.msgs', c.el.root);
   if (box) { box.querySelector('.hint')?.remove(); box.appendChild(renderMsg(c, m)); c.follow = true; c.toEnd?.(); }
   saveChat(c);
+}
+// ---------- /review: a reviewer model reads what changed and reports bugs as a card ----------
+// The card is the user's (never part of the agent's history); "Send to fix" sends the ticked findings as a message.
+const CR_SCOPES = ['reply', 'changes', 'branch'];
+async function codeReview(c, arg = '', { auto = false, runId = '' } = {}) {
+  if (c.running && !auto) return uiAlert('This chat is still working. Run /review when the reply has finished.');
+  const [first = '', ...rest] = String(arg).trim().split(/\s+/);
+  const scope = CR_SCOPES.includes(first.toLowerCase()) ? first.toLowerCase() : 'auto';
+  const tail = (scope === 'auto' ? [first, ...rest] : rest).join(' ').trim();
+  const base = scope === 'branch' && /^[\w./-]+$/.test(tail) ? tail : '';
+  const ask = base ? '' : tail;
+  const last = runId || [...c.agent.messages].reverse().find((x) => x.role === 'assistant' && x.stats?.changed?.length && !x.undone)?.runId || '';
+  const m = { role: 'codereview', at: Date.now(), pending: true, scope, auto };
+  c.agent.messages.push(m);
+  const box = c.el && $('.msgs', c.el.root);
+  if (box) { box.querySelector('.hint')?.remove(); box.appendChild(renderMsg(c, m)); c.follow = true; c.toEnd?.(); }
+  const r = await postJ('/api/code-review', { projectId: c.projectId, chatId: c.id, scope, runId: scope === 'auto' || scope === 'reply' ? last : '', base, ask, chatModel: c.agent.setup.model, reviewModel: G.settings.reviewModel || '', reviewTier: G.settings.reviewTier || 'cheap' }).catch((e) => ({ error: e.message }));
+  m.pending = false;
+  if (!r || r.error) { m.error = r?.error || 'No answer from QuorX.'; m.empty = !!r?.empty; }
+  else {
+    Object.assign(m, { label: r.label, scope: r.scope, files: r.files, cut: r.cut, skipped: r.skipped, dropped: r.dropped, summary: r.summary, model: r.model, cost: r.cost, ms: r.ms, findings: r.findings.map((x) => ({ ...x, pick: x.severity !== 'minor' })) });
+    if (r.cost) (c.agent.extraUsage ||= []).push({ kind: 'codereview', model: r.model, cost: r.cost, at: Date.now(), runId: r.id });
+  }
+  // An automatic review that found nothing (or had nothing to read) leaves no card behind.
+  if (auto && (m.error || !m.findings.length)) { c.agent.messages = c.agent.messages.filter((x) => x !== m); m.el?.remove(); }
+  else if (m.el) m.el.replaceWith(renderMsg(c, m));
+  saveChat(c);
+}
+const SEV_INFO = { breaks: 'Breaks: a crash, a wrong result or lost data', annoying: 'Annoying: wrong in some cases, or an error a user will hit', minor: 'Minor: worth a look' };
+function codeReviewHTML(m) {
+  const n = m.files?.length || 0;
+  const head = `<div class="cr-head"><b>🔎 Code review</b>${m.label ? `<span class="cr-scope">${esc(m.label)} · ${n} file${n === 1 ? '' : 's'}</span>` : ''}${m.auto ? '<span class="cr-auto" title="Run after a reply that changed code (⚙ Settings → Agent loop → Reviewer)">auto</span>' : ''}${m.model ? `<span class="cr-by" title="${esc(m.model)}">${esc(short(m.model))}${m.ms ? ` · ${secs(m.ms)}` : ''}</span>` : ''}${m.cost ? `<span class="cost cr-cost" title="What this review cost">${money(m.cost, 4)}</span>` : ''}</div>`;
+  if (m.pending) return `<div class="cr-card">${head}<div class="cr-wait">Reading the changes…</div></div>`;
+  if (m.error) return `<div class="cr-card">${head}<div class="cr-${m.empty ? 'none' : 'err'}">${esc(m.error)}</div></div>`;
+  const notes = [m.cut ? 'The diff was cut to fit the reviewer\'s context.' : '', m.skipped ? `${m.skipped} generated or lock file${m.skipped > 1 ? 's' : ''} skipped.` : '', m.dropped ? `${m.dropped} finding${m.dropped > 1 ? 's' : ''} about files that did not change ${m.dropped > 1 ? 'were' : 'was'} dropped.` : ''].filter(Boolean).join(' ');
+  if (!m.findings.length) return `<div class="cr-card">${head}<div class="cr-none">✓ No bugs found.${m.summary ? ` ${esc(m.summary)}` : ''}</div>${notes ? `<div class="cr-note">${esc(notes)}</div>` : ''}</div>`;
+  const picked = m.findings.filter((x) => x.pick).length;
+  return `<div class="cr-card">${head}${m.summary ? `<div class="cr-sum">${esc(m.summary)}</div>` : ''}<ol class="cr-list">${m.findings.map((x, i) => `<li class="cr-item sev-${x.severity}">
+      <label class="sq-check cr-pick" title="Include this one when sending to the agent"><input type="checkbox" data-i="${i}" ${x.pick ? 'checked' : ''} ${m.sent ? 'disabled' : ''}></label>
+      <div class="cr-main"><div class="cr-top"><span class="cr-sev sev-${x.severity}" title="${esc(SEV_INFO[x.severity])}">${x.severity}</span><button type="button" class="cr-loc" data-i="${i}" title="Open ${esc(x.file)} in the Files tab">${esc(x.file)}${x.line ? `:${x.line}` : ''}</button>${x.title ? `<b class="cr-title">${esc(x.title)}</b>` : ''}</div>
+      <div class="cr-why">${esc(x.why)}</div>${x.fix ? `<div class="cr-fix"><span>Fix</span> ${esc(x.fix)}</div>` : ''}</div></li>`).join('')}</ol>
+    ${notes ? `<div class="cr-note">${esc(notes)}</div>` : ''}
+    <div class="cr-acts">${m.sent ? '<span class="cr-sent">✓ Sent to the agent</span>' : `<button type="button" class="primary cr-send" ${picked ? '' : 'disabled'}>Send ${picked} to the agent to fix</button>`}</div></div>`;
+}
+function crFixText(m, picked) {
+  return `Please fix these bugs found by a code review of ${m.label}:\n${picked.map((x) => `- ${x.file}${x.line ? `:${x.line}` : ''} [${x.severity}] ${x.title ? `${x.title}: ` : ''}${x.why}${x.fix ? ` Fix: ${x.fix}` : ''}`).join('\n')}\nCheck each one in the code first; if one is not a real bug, say so instead of changing it.`;
+}
+function wireCodeReview(c, m, el) {
+  $('.uc-x', el).onclick = () => { c.agent.messages = c.agent.messages.filter((x) => x !== m); el.remove(); saveChat(c); };
+  for (const b of el.querySelectorAll('.cr-loc')) b.onclick = () => openProjectFile(c, m.findings[Number(b.dataset.i)].file);
+  for (const cb of el.querySelectorAll('.cr-pick input')) cb.onchange = () => {
+    m.findings[Number(cb.dataset.i)].pick = cb.checked; saveChat(c);
+    const n = m.findings.filter((x) => x.pick).length, send = $('.cr-send', el);
+    if (send) { send.disabled = !n; send.textContent = `Send ${n} to the agent to fix`; }
+  };
+  const send = $('.cr-send', el);
+  if (send) send.onclick = () => {
+    if (c.running) return uiAlert('This chat is still working. Send these when the reply has finished.');
+    const picked = m.findings.filter((x) => x.pick);
+    if (!picked.length) return;
+    m.sent = true; saveChat(c);
+    el.replaceWith(renderMsg(c, m));
+    runChat(c, crFixText(m, picked), null, []);
+  };
 }
 // Reasoning effort: a menu in the app's own style (not the system dropdown), aware of what the model supports.
 const REASON_INFO = { off: ['Off', 'Answers straight away. Fastest and cheapest.'], low: ['Low', 'A little thinking before answering.'], medium: ['Medium', 'Thinks through multi-step work.'], high: ['High', 'Thinks longest. Slowest and costs the most.'], default: ['Model default', 'Whatever the model does by default.'] };
@@ -2558,6 +2626,12 @@ function renderMsg(c, m) {
     el.className = 'msg usage';
     el.innerHTML = `${usageHTML(m.usage, m.at)}<button type="button" class="ghost uc-x" title="Remove this card">✕</button>`;
     $('.uc-x', el).onclick = () => { c.agent.messages = c.agent.messages.filter((x) => x !== m); el.remove(); saveChat(c); };
+    return el;
+  }
+  if (m.role === 'codereview') {
+    el.className = 'msg usage codereview';
+    el.innerHTML = `${codeReviewHTML(m)}<button type="button" class="ghost uc-x" title="Remove this card">✕</button>`;
+    wireCodeReview(c, m, el);
     return el;
   }
   el.className = 'msg bot';
@@ -3921,6 +3995,8 @@ async function followRun(c, m, open) {
     }
     updateMsg(c, m); syncRunState(c); saveChat(c, true); refreshSidebar(); checkSpace(c, true); refreshUndoable(c.projectId); if (G.view.browser && focused() === c) renderPane();
     refreshBalance();
+    // ⚙ Reviewer → "Review code changes": after a reply that changed code, a code review card (only when it finds something).
+    if (G.settings.codeReview === 'auto' && m.stats && !m.error && (m.stats.changed || []).some((f) => CODE_FILE.test(f))) codeReview(c, 'reply', { auto: true, runId: m.runId });
   }
 }
 async function reconnect(c, m) {
@@ -4512,6 +4588,7 @@ function settingsPanels(S) {
       stCard('Reviewer', 'A separate model with a fresh context tests what was built before the final reply, scores it, and sends it back with specific bugs if it falls short.',
         stRow('When to review', 'Builds: when the agent made a plan for the reply. Always: whenever it built or changed something that can be opened.', stSeg('review', [['off', 'Off'], ['builds', 'Builds'], ['always', 'Always']], S.review || 'builds'))
         + stRow('Reviewer strength', 'Cheap: gpt-6-luna, about $0.003 a review, but it fails good builds often (it agreed with the benchmark judge 43% of the time). Strong: Claude Sonnet 5.5, about $0.02 a build, agreed 100% and caused no needless rounds of fixing (gpt-6.1-sol when Sonnet is the builder). A model picked below overrides this.', stSeg('reviewTier', [['cheap', 'Cheap'], ['strong', 'Strong']], S.reviewTier || 'cheap'))
+        + stRow('Review code changes', 'After a reply that changed code, the reviewer reads the diff and posts the bugs it finds as a card you can send back to fix (about $0.001–0.01 a review). Off: only when you type /review.', stSeg('codeReview', [['off', 'Off'], ['auto', 'After replies']], S.codeReview || 'off'))
         + stRow('Send a build back for', 'Every bug the reviewer reports says how bad it is. Minor bugs never send a build back; they go to the builder as notes.', stSeg('reviewSendBack', [['annoying', 'Breaks or annoying'], ['breaks', 'Only breaks']], S.reviewSendBack || 'annoying'))
         + stRow('Reviewer model', 'Default: gpt-6-luna, which is cheap, sees screenshots, and comes from a different family than most builders (qwen3.7-flash if your chat already uses gpt-6-luna). Pick one that can use tools and see images.', `<div class="st-fb"><button type="button" class="st-chip" data-act="pickReviewer" id="rvModel">${S.reviewModel ? `${recDot(S.reviewModel, 'chat')} ${esc(short(S.reviewModel))} <small>${esc(shortPrice(S.reviewModel))}</small>` : 'Default'}</button>${S.reviewModel ? '<button type="button" class="st-btn secondary sm" data-act="clearReviewer" title="Use the default reviewer">✕</button>' : ''}</div>`)
         + stRow('Rounds to fix', 'How many times the builder is sent back with the reviewer’s bugs. After that, what is still open shows in the reply.', stStep('reviewRounds', S.reviewRounds ?? 1, 0, 3))
@@ -4762,7 +4839,7 @@ function resetCategory() {
   if (ST.cat === 'appearance') { S.theme = null; G.theme = null; applyTheme(); }
   if (ST.cat === 'models') { S.model = d.chatModel || d.setups.C.model; S.reasoning = 'off'; Object.assign(S, { providerSort: 'auto', requireParams: true, zdrOnly: false, fallbackModel: '' }); }
   if (ST.cat === 'newchats') { S.approval = d.approval; S.strictAsk = d.strictAsk; S.strictAskHelpers = d.strictAskHelpers; S.strictAskDeciders = d.strictAskDeciders; S.newChatTools = { ...DEFAULT_CHAT_TOOLS }; }
-  if (ST.cat === 'loop') { S.maxSteps = d.maxSteps; S.compact = true; S.compactAt = 24000; Object.assign(S, { planFirst: d.planFirst, planSteps: d.planSteps, continueRounds: d.continueRounds, maxOutput: d.maxOutput, thinkShare: d.thinkShare, review: d.review, reviewModel: '', reviewTier: d.reviewTier, reviewSendBack: d.reviewSendBack, reviewRounds: d.reviewRounds, reviewBar: d.reviewBar, helpers: d.helpers, helperModel: '', helperSteps: d.helperSteps, retries: d.retries, parallel: d.parallel, verify: d.verify, verifyRounds: d.verifyRounds, askLimit: d.askLimit, trimAt: d.trimAt, buildThinking: d.buildThinking }); }
+  if (ST.cat === 'loop') { S.maxSteps = d.maxSteps; S.compact = true; S.compactAt = 24000; Object.assign(S, { planFirst: d.planFirst, planSteps: d.planSteps, continueRounds: d.continueRounds, maxOutput: d.maxOutput, thinkShare: d.thinkShare, review: d.review, reviewModel: '', reviewTier: d.reviewTier, reviewSendBack: d.reviewSendBack, codeReview: d.codeReview, reviewRounds: d.reviewRounds, reviewBar: d.reviewBar, helpers: d.helpers, helperModel: '', helperSteps: d.helperSteps, retries: d.retries, parallel: d.parallel, verify: d.verify, verifyRounds: d.verifyRounds, askLimit: d.askLimit, trimAt: d.trimAt, buildThinking: d.buildThinking }); }
   if (ST.cat === 'deciders') { S.voters = [...d.voters]; S.gate = { ...d.gate }; S.lookVoters = [...d.lookVoters]; S.lookEscalate = d.lookEscalate; S.checks = structuredClone(d.checks); }
   if (ST.cat === 'tools') S.tools = structuredClone(d.tools);
   if (ST.cat === 'budget') { S.budget = d.budget; S.yoloCheck = true; S.budgetGrace = d.budgetGrace; S.yoloAuto = {}; }

@@ -9,13 +9,14 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { currentKey, PORT, runtime, ROOT, HOME, chatModels, decisionModels, imageModels, speechModels, musicModels, videoModels, transcribe, clearCatalogues } from './server/openrouter.js';
+import { currentKey, PORT, runtime, ROOT, HOME, chat, chatModels, decisionModels, imageModels, speechModels, musicModels, videoModels, transcribe, clearCatalogues } from './server/openrouter.js';
 import { listKeys, addKey, removeKey, setActive, renameKey, keyUsage, activeUsage, accountCredits, startSampling, lockDown } from './server/keys.js';
 import { setupCheck, runFix } from './server/setup-check.js';
 import { startSignIn, signInStatus, cancelSignIn, finishByCallback, finishWithCode, callbackPage } from './server/oauth.js';
-import { runAgent, answerApproval, answerQuestion, answerBudget, raiseCap, setRunApproval, steerRun, setRunReading, holdCard, DEFAULTS, MEDIA, briefFor, briefForChat } from './server/agent.js';
+import { runAgent, answerApproval, answerQuestion, answerBudget, raiseCap, setRunApproval, steerRun, setRunReading, holdCard, DEFAULTS, MEDIA, briefFor, briefForChat, REVIEW_MODEL, REVIEW_ALT, REVIEW_STRONG, REVIEW_STRONG_ALT } from './server/agent.js';
+import { reviewCode, pickReviewer } from './server/codereview.js';
 import { CHECKS } from './server/harness-checks.js';
-import { startRun, getRun, stopRun, follow, runStatus, activeRuns, validRunId, scorecard, readLog } from './server/runs.js';
+import { startRun, getRun, stopRun, follow, runStatus, activeRuns, validRunId, scorecard, readLog, recordRun } from './server/runs.js';
 import { setBudget, budgetState } from './server/budget.js';
 import { shellRun, shellClose, shellInfo } from './server/shell.js';
 import { ptyAvailable, ptyOpen, ptyWrite, ptyResize, ptyFollow, ptyClose } from './server/pty.js';
@@ -331,6 +332,22 @@ const server = http.createServer(async (req, res) => {
       if (!validId(pid)) return json(res, 400, { error: 'bad project id' });
       try { return json(res, 200, q.get('path') ? reviewDiff(workspaceDir(pid), q.get('run'), q.get('path')) : reviewFiles(workspaceDir(pid), q.get('run'))); }
       catch (e) { return json(res, 200, { error: e.message }); }
+    }
+    // /review in a chat: a reviewer model reads what changed (the last reply, uncommitted changes, or the branch)
+    // and returns bugs with file:line. Its cost goes to the project's ledger and budget like a reply's.
+    if (url.pathname === '/api/code-review' && req.method === 'POST') {
+      const b = JSON.parse(await readBody(req, 1e4) || '{}');
+      if (!validId(b.projectId)) return json(res, 400, { error: 'bad project id' });
+      const st = budgetState(b.projectId);
+      if (st.budget != null && st.left <= 0) return json(res, 200, { error: 'This project has reached its budget. Raise it in the sidebar to run a review.' });
+      try {
+        const model = pickReviewer({ reviewModel: b.reviewModel, reviewTier: b.reviewTier }, String(b.chatModel || ''), { REVIEW_MODEL, REVIEW_ALT, REVIEW_STRONG, REVIEW_STRONG_ALT });
+        const info = (await chatModels().catch(() => [])).find((m) => m.id === model) || {};
+        const r = await reviewCode(workspaceDir(b.projectId), { scope: String(b.scope || 'auto'), runId: validRunId(String(b.runId || '')) ? String(b.runId) : '', base: String(b.base || ''), ask: String(b.ask || ''), model, info }, { chat });
+        const id = `cr-${Date.now().toString(36)}`;
+        if (r.cost) recordRun({ ts: new Date().toISOString(), runId: id, kind: 'review', project: b.projectId, chatId: b.chatId || null, model, stop: r.scope, cost: +r.cost.toFixed(6) });
+        return json(res, 200, { ...r, id });
+      } catch (e) { return json(res, 200, { error: e.message, empty: !!e.empty }); }
     }
     if (url.pathname === '/api/review/undo' && req.method === 'POST') {
       const b = JSON.parse(await readBody(req, 1e4) || '{}');

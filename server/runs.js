@@ -131,7 +131,7 @@ export function scorecard(days = 14) {
   const rows = scoreRows(days);
   const by = {};
   for (const r of rows) {
-    if (r.kind === 'docs') continue; // reading and indexing documents: in the ledger and budgets, not a reply
+    if (r.kind) continue; // reading documents ('docs') and code reviews ('review'): in the ledger and budgets, not a reply
     const m = (by[r.model] ??= { model: r.model, replies: 0, stops: {}, checked: 0, passed: 0, steps: 0, tools: 0, cost: 0, ms: 0, retries: 0, trimmed: 0, changedFiles: 0 });
     m.replies++; m.stops[r.stop] = (m.stops[r.stop] || 0) + 1;
     if (r.verify) { m.checked++; if (r.verify.ok) m.passed++; }

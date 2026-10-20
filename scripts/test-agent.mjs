@@ -10,6 +10,8 @@ import { runAgent, answerQuestion, answerApproval, answerBudget, setRunApproval,
 import { saveProject, forgetProject, setProjectBudget } from '../server/store.js';
 import { loadCheckpoint, dropCheckpoint, ledger } from '../server/runs.js';
 import { setBudget, projectSpend, budgetState, live as liveRuns } from '../server/budget.js';
+import { reviewCode, collectChanges, parseGitDiff, checkFindings, pickReviewer } from '../server/codereview.js';
+import { execFileSync } from 'node:child_process';
 
 let n = 0;
 const reply = (text, calls = [], finishReason = 'stop') => ({ text, toolCalls: calls.map(([name, args], i) => ({ id: `c${++n}_${i}`, type: 'function', function: { name, arguments: typeof args === 'string' ? args : JSON.stringify(args) } })), usage: { cost: 0.0001 }, ms: 1, firstMs: 1, finishReason });
@@ -1279,4 +1281,98 @@ test('the reviewer sends back an annoying bug even when the scores pass', async 
   // The final reply keeps the answer written before the send-back, then the fix.
   assert.match(done.reply, /^The page is ready: it lists all 37 plates/);
   assert.match(done.reply, /\*\*After the checks:\*\* Fixed the counts\./);
+});
+
+// ---------- /review: a code review of what changed (server/codereview.js) ----------
+
+const findingsCall = (findings, summary = '') => ({ message: { content: '', tool_calls: [{ id: 'f1', type: 'function', function: { name: 'submit_findings', arguments: JSON.stringify({ findings, summary }) } }] }, usage: { cost: 0.0012 } });
+function git(dir, ...args) { return execFileSync('git', args, { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }); }
+const gitCommit = (dir, msg) => { git(dir, 'add', '.'); git(dir, '-c', 'user.email=t@t', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', 'commit', '-qm', msg); };
+
+test('/review of the last reply reads only the files it changed, and keeps only findings that point into them', async () => {
+  const { dir, id } = await run((body, i) => [
+    reply('', [['edit_file', { path: 'calc.js', find: 'return a + b;', replace: 'return a - b;' }]]),
+    reply('', [['write_file', { path: 'notes.txt', content: 'new notes\n' }]]),
+    reply('Done.'),
+  ][i], { prep: (d) => { fs.writeFileSync(path.join(d, 'calc.js'), 'export function add(a, b) {\n  return a + b;\n}\n'); fs.writeFileSync(path.join(d, 'untouched.js'), 'const SECRET_MARKER_UNCHANGED = 1;\n'); } });
+  const bodies = [];
+  const r = await reviewCode(dir, { scope: 'auto', runId: id, model: 'test/reviewer', info: { tools: true, ctx: 32000 } }, { chat: async (body) => { bodies.push(body); return findingsCall([
+    { file: 'calc.js', line: 2, severity: 'breaks', title: 'add subtracts', why: 'add() returns a - b, so every sum is wrong.', fix: 'Return a + b.' },
+    { file: 'untouched.js', line: 1, severity: 'breaks', why: 'Made up: this file did not change.' },
+    { file: './calc.js', line: 999, severity: 'nonsense', why: 'A line past the end of the file.' },
+  ], 'One real bug.'); } });
+  assert.equal(r.scope, 'reply');
+  assert.deepEqual(r.files.sort(), ['calc.js', 'notes.txt']);
+  const sent = bodies[0].messages.map((m) => m.content).join('\n');
+  assert.match(sent, /### calc\.js \(modified\)/);
+  assert.match(sent, /- +\| +return a \+ b;/);
+  assert.match(sent, /\+2 \| +return a - b;/);
+  assert.doesNotMatch(sent, /SECRET_MARKER_UNCHANGED|untouched\.js/);
+  assert.equal(bodies[0].tool_choice.function.name, 'submit_findings');
+  assert.equal(r.findings.length, 2);
+  assert.deepEqual(r.findings[0], { file: 'calc.js', line: 2, severity: 'breaks', title: 'add subtracts', why: 'add() returns a - b, so every sum is wrong.', fix: 'Return a + b.' });
+  assert.equal(r.findings[1].severity, 'annoying'); // an unknown severity becomes the middle one
+  assert.equal(r.findings[1].line, 3);             // clamped to the file's last line
+  assert.equal(r.dropped, 1);
+  assert.equal(r.cost, 0.0012);
+});
+
+test('/review asks a model without tools for JSON in text, and asks once more when it cannot read the answer', async () => {
+  const dir = tempDir('quorx-cr-');
+  git(dir, 'init', '-q', '-b', 'main');
+  fs.writeFileSync(path.join(dir, 'a.py'), 'def f(x):\n    return x\n');
+  gitCommit(dir, 'one');
+  fs.writeFileSync(path.join(dir, 'a.py'), 'def f(x):\n    return x / 0\n');
+  const bodies = [], fence = '`'.repeat(3);
+  const answers = [{ message: { content: 'Looks risky to me.' }, usage: { cost: 0.0001 } }, { message: { content: `${fence}json\n{"findings":[{"file":"a.py","line":2,"severity":"breaks","why":"Divides by zero on every call."}],"summary":"x"}\n${fence}` }, usage: { cost: 0.0001 } }];
+  const r = await reviewCode(dir, { scope: 'changes', model: 'test/plain', info: { tools: false } }, { chat: async (body) => { bodies.push(body); return answers[bodies.length - 1]; } });
+  assert.equal(bodies.length, 2);
+  assert.equal(bodies[0].tools, undefined);
+  assert.match(bodies[0].messages[1].content, /Answer with only a JSON object/);
+  assert.equal(r.scope, 'changes');
+  assert.deepEqual(r.findings.map((x) => [x.file, x.line, x.severity]), [['a.py', 2, 'breaks']]);
+  assert.ok(Math.abs(r.cost - 0.0002) < 1e-9);
+  // A model that refuses a forced tool choice (400) gets tool_choice auto, now and on later reviews.
+  const seen = [];
+  const refuse = async (body) => { seen.push(body.tool_choice); if (typeof body.tool_choice === 'object') throw Object.assign(new Error('Provider returned error'), { status: 400 }); return findingsCall([]); };
+  await reviewCode(dir, { scope: 'changes', model: 'test/no-force', info: { tools: true } }, { chat: refuse });
+  await reviewCode(dir, { scope: 'changes', model: 'test/no-force', info: { tools: true } }, { chat: refuse });
+  assert.deepEqual(seen.map((x) => (typeof x === 'object' ? 'forced' : x)), ['forced', 'auto', 'auto']);
+});
+
+test('/review finds uncommitted changes (untracked files too), then the branch against main, and says when there is nothing', () => {
+  const dir = tempDir('quorx-cr-');
+  git(dir, 'init', '-q', '-b', 'main');
+  fs.writeFileSync(path.join(dir, 'app.js'), 'one\ntwo\nthree\n');
+  gitCommit(dir, 'base');
+  assert.throws(() => collectChanges(dir, { scope: 'auto' }), (e) => e.empty && /no uncommitted changes/.test(e.message));
+  fs.writeFileSync(path.join(dir, 'app.js'), 'one\nTWO\nthree\n');
+  fs.writeFileSync(path.join(dir, 'new.js'), 'fresh\n');
+  const ch = collectChanges(dir, { scope: 'auto' });
+  assert.equal(ch.scope, 'changes');
+  assert.deepEqual(ch.files.map((f) => [f.path, f.status]), [['app.js', 'modified'], ['new.js', 'added']]);
+  assert.deepEqual(ch.files[0].hunks[0].lines.filter((l) => l[0] !== ' '), [['-', 2, null, 'two'], ['+', null, 2, 'TWO']]);
+  git(dir, 'checkout', '-q', '-b', 'feature');
+  gitCommit(dir, 'change');
+  const br = collectChanges(dir, { scope: 'auto' });
+  assert.equal(br.scope, 'branch');
+  assert.equal(br.label, 'feature against main');
+  assert.deepEqual(br.files.map((f) => f.path).sort(), ['app.js', 'new.js']);
+  assert.throws(() => collectChanges(dir, { scope: 'branch', base: 'main;rm' }), /not a branch name/);
+});
+
+test('/review helpers: git diff parsing, finding checks, and the reviewer model setting', () => {
+  const files = parseGitDiff('diff --git a/x.js b/x.js\nindex 1..2 100644\n--- a/x.js\n+++ b/x.js\n@@ -10,3 +10,3 @@ fn\n a\n-b\n+B\n c\ndiff --git a/gone.js b/gone.js\ndeleted file mode 100644\n--- a/gone.js\n+++ /dev/null\n@@ -1 +0,0 @@\n-x\n');
+  assert.deepEqual(files.map((f) => [f.path, f.status]), [['x.js', 'modified'], ['gone.js', 'deleted']]);
+  assert.deepEqual(files[0].hunks[0].lines, [[' ', 10, 10, 'a'], ['-', 11, null, 'b'], ['+', null, 11, 'B'], [' ', 12, 12, 'c']]);
+  const ch = { files: [{ path: 'src/a/util.js', status: 'deleted', hunks: [] }] };
+  const minor = Array.from({ length: 5 }, (_, i) => ({ file: 'util.js', line: i + 1, severity: 'minor', why: `small ${i}` }));
+  const r = checkFindings([...minor, { file: 'b/src/a/util.js', line: '7', severity: 'BREAKS', why: 'real' }, { file: 'util.js', line: 3, why: '' }], ch, '.');
+  assert.equal(r.findings[0].severity, 'breaks');
+  assert.equal(r.findings[0].file, 'src/a/util.js');
+  assert.equal(r.findings.filter((x) => x.severity === 'minor').length, 3);
+  const R = { REVIEW_MODEL: 'c/cheap', REVIEW_ALT: 'c/alt', REVIEW_STRONG: 's/strong', REVIEW_STRONG_ALT: 's/alt' };
+  assert.equal(pickReviewer({ reviewTier: 'cheap' }, 'x/y', R), 'c/cheap');
+  assert.equal(pickReviewer({ reviewTier: 'strong' }, 's/strong', R), 's/alt');
+  assert.equal(pickReviewer({ reviewModel: 'my/pick', reviewTier: 'strong' }, 'x', R), 'my/pick');
 });
