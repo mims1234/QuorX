@@ -429,7 +429,7 @@ async function projectFiles(pid) {
   const hit = fileCache.get(pid);
   if (hit && Date.now() - hit.at < 30000) return hit.files;
   const files = await fetch(`/api/files?project=${pid}`).then((r) => r.json()).catch(() => []);
-  fileCache.set(pid, { at: Date.now(), files: files.filter((f) => !f.path.endsWith('(skipped)')) });
+  fileCache.set(pid, { at: Date.now(), files: files.filter((f) => !/skipped\)$/.test(f.path)) });
   return fileCache.get(pid).files;
 }
 function tokenAtCaret(ta) {
@@ -563,8 +563,11 @@ function renderAttachments(c) {
 
 // ---------- sidebar: projects and chats ----------
 async function refreshSidebar() {
-  try { [G.projects, G.chats] = await Promise.all([fetch('/api/projects').then((r) => r.json()), fetch('/api/chats').then((r) => r.json())]); }
-  catch { return; }
+  try {
+    const [projects, chats] = await Promise.all([fetch('/api/projects').then((r) => r.json()), fetch('/api/chats').then((r) => r.json())]);
+    if (!Array.isArray(projects) || !Array.isArray(chats)) return; // refused (no app link) or an error: keep what's shown
+    [G.projects, G.chats] = [projects, chats];
+  } catch { return; }
   renderSidebar();
   budgetNotices();
   folderNotices();
@@ -4374,10 +4377,10 @@ async function renderFiles(c) {
   // A folder tree from the flat list (folders first, open by default near the top).
   const tree = {};
   for (const f of files) {
-    const parts = f.path.replace(/\/ \(skipped\)$/, '/').split('/').filter(Boolean);
+    const parts = f.path.replace(/\/ \((another project, )?skipped\)$/, '/').split('/').filter(Boolean);
     let node = tree;
-    parts.forEach((part, k) => { if (k === parts.length - 1 && !f.path.endsWith('(skipped)')) (node.__files ||= []).push({ name: part, ...f }); else node = (node[part] ||= {}); });
-    if (f.path.endsWith('(skipped)')) node.__skipped = true;
+    parts.forEach((part, k) => { if (k === parts.length - 1 && !/skipped\)$/.test(f.path)) (node.__files ||= []).push({ name: part, ...f }); else node = (node[part] ||= {}); });
+    if (/skipped\)$/.test(f.path)) node.__skipped = true;
   }
   const fileIcon = (n) => ({ html: '🌐', css: '🎨', js: '📜', json: '🧾', py: '🐍', md: '📝', sh: '⌨️' }[langOf(n)] || (/\.(png|jpe?g|gif|webp|svg|ico)$/i.test(n) ? '🖼' : /\.(mp3|wav|ogg)$/i.test(n) ? '🎵' : /\.(mp4|webm)$/i.test(n) ? '🎬' : '📄'));
   // A tree you can read: guide lines per level, folders that open and close (▸ ▾, remembered) with how
@@ -5623,6 +5626,8 @@ function syncLayout() {
 // ---------- start-up ----------
 async function boot() {
   G.cfg = await fetch('/api/config').then((r) => r.json());
+  // Opened without the app link, every other /api call answers 401 and the wall above says what to do: stop here.
+  if ((await fetch('/api/chats')).status === 401) return;
   loadScores();
   const d = G.cfg.defaults;
   const saved = load();
