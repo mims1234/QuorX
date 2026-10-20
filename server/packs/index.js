@@ -16,7 +16,7 @@
 //                                       // a pattern for its error lines, when the usual "error" match misses them;
 //                                       // tidy(line, dir): the line as the agent should read it; timeoutHint: what
 //                                       // to do when a first build is too slow)
-//   summaries: [{ cmd: /^dotnet test/, summarize(out, { cwd, since }) }], // a short summary put above a command's
+//   summaries: [{ cmd: /^dotnet test\b/, summarize(out, { cwd, since }) }], // a short summary put above a command's
 //                                       // output (since: when it started, for reports it wrote to disk)
 //   debug: { exts: ['.cs'], tool, label, gate({ file, args, cwd }), start({ file, args, cwd, port }) },
 //   notes(have, root),                  // what the agent should know, when the project is this kind
