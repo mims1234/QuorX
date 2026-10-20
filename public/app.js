@@ -7629,15 +7629,32 @@ const UPD_ICO = {
   ready: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>',
   error: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4 2.5 20h19z"/><path d="M12 10v4.5M12 17.2v.3"/></svg>',
 };
+// Both versions when they fit (old → new), else just the new one: a half-cut old version reads as noise.
+function fitUpdStrip(b) {
+  const v = $('.un-vers', b); if (!v) return;
+  b.classList.remove('un-tight');
+  if (v.scrollWidth > v.clientWidth + 1) b.classList.add('un-tight');
+}
 function drawUpdate(u) {
   const b = $('#updNote');
   if (b) {
     const t = updateText(u);
     // Short on the button (it shares the sidebar's footer with three icons); the whole sentence is in its tip.
     // While downloading, the button fills up like a progress bar.
-    const short = { available: `Update ${u.version ? `v${u.version}` : ''}`.trim(), downloading: `${u.percent ?? 0}%`, ready: 'Restart', error: 'Retry' }[u.state] || '';
+    const short = { available: 'Update', downloading: `${u.percent ?? 0}%`, ready: 'Restart', error: 'Retry' }[u.state] || '';
     b.hidden = !t; b.dataset.state = u.state || '';
-    b.innerHTML = t ? `${UPD_ICO[u.state] || ''}<span class="un-txt">${esc(short)}</span>` : '';
+    // In the sidebar's footer it takes over the version's place (and ⟳'s): the versions it goes between, an action
+    // on the right, and while downloading the whole strip fills up. Elsewhere (the phone's top bar) it stays short.
+    const from = u.current || G.cfg?.version || '', to = u.version || '';
+    const vers = u.state === 'error' ? '<span class="un-vers">Update failed</span>'
+      : u.state === 'ready' ? `<span class="un-vers"><b>v${esc(to)}</b><em>ready</em></span>`
+      : `<span class="un-vers">${from ? `<s>v${esc(from)}</s><i aria-hidden="true">→</i>` : ''}<b>${to ? `v${esc(to)}` : 'new version'}</b></span>`;
+    // the action on the right: ⬆ (out), the % (downloading), ↻ Restart (ready), Retry (failed); only a failure leads with an icon
+    const act = u.state === 'available' ? UPD_ICO.available : u.state === 'ready' ? `${UPD_ICO.ready}<span>Restart</span>` : esc(short);
+    b.innerHTML = t ? `<span class="un-fill" aria-hidden="true"></span>${u.state === 'error' ? `<span class="un-ico">${UPD_ICO.error}</span>` : ''}${vers}<span class="un-txt">${act}</span>` : '';
+    const foot = $('#sbFoot'); if (foot) { if (t) foot.dataset.upd = u.state; else delete foot.dataset.upd; }
+    fitUpdStrip(b);
+    if (!b.dataset.fitWired && window.ResizeObserver) { b.dataset.fitWired = '1'; new ResizeObserver(() => fitUpdStrip(b)).observe(b); }
     b.setAttribute('aria-label', t.replace(/^\S+\s/, ''));
     b.style.setProperty('--p', `${Math.max(0, Math.min(100, u.percent ?? 0))}%`);
     b.disabled = u.state === 'downloading';
@@ -7654,6 +7671,14 @@ function drawUpdate(u) {
   }
   const s = $('#stDeskUpd');
   if (s) s.textContent = { dev: 'Running from the repo: updates come from git.', store: 'Updates come from the Microsoft Store.', 'no-feed': 'No update feed set.', checking: 'Checking…', current: `Up to date (v${u.current || '?'}).`, available: `v${u.version} is available.`, downloading: `Downloading… ${u.percent ?? 0}%`, ready: `v${u.version} is downloaded: restart to install.`, error: `Couldn't check: ${u.error || 'unknown error'}` }[u.state] || `v${u.current || '?'}`;
+}
+// Preview of the update strip in a browser on this computer: ?demo-update=available | downloading:42 | ready | error
+{
+  const demo = new URLSearchParams(location.search).get('demo-update');
+  if (demo && !DESK && /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname)) {
+    const [state, pct] = demo.split(':');
+    setTimeout(() => drawUpdate({ state, percent: Number(pct) || 0, version: '0.2.5', current: G.cfg?.version || '0.2.4', error: 'The download stopped (demo).' }), 1600);
+  }
 }
 if (DESK) {
   window.ohDesktop.on((ev) => { if (ev.type === 'update') drawUpdate(ev); });
