@@ -18,7 +18,7 @@ const TYPES = {
 
 http.createServer((req, res) => {
   // Only this computer's own names (a web page can't reach it by DNS tricks), and never dot files (.env, .git).
-  const host = String(req.headers.host || '').replace(/:d+$/, '').toLowerCase();
+  const host = String(req.headers.host || '').replace(/:\d+$/, '').toLowerCase();
   if (!['localhost', '127.0.0.1', '[::1]'].includes(host)) { res.writeHead(403).end('Not allowed'); return; }
   let rel;
   try { rel = decodeURIComponent(new URL(req.url, 'http://x').pathname); } catch { res.writeHead(400).end('Bad address'); return; }

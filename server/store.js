@@ -223,13 +223,50 @@ function currentChat(id) {
   return hit && hit.key && hit.key === stamp(id) ? hit.doc : getChat(id);
 }
 
+// A finished reply's result, once on disk, stays: a save from a page whose copy of that reply lacks it (a page that
+// lost track of the run, or a stale copy) keeps the text, note and totals the run left.
+const RESULT = ['content', 'note', 'stats', 'doneAt'];
+function keepResults(old, messages) {
+  if (!Array.isArray(old) || !Array.isArray(messages)) return messages;
+  const done = new Map(old.filter((m) => m?.role === 'assistant' && m.runId && m.stats && !m.stats.partial).map((m) => [m.runId, m]));
+  if (!done.size) return messages;
+  return messages.map((m) => {
+    const o = m?.role === 'assistant' && (!m.stats || m.stats.partial) ? done.get(m.runId) : null;
+    if (!o) return m;
+    const kept = { ...m, runActive: false };
+    for (const k of RESULT) if (o[k] != null && (k !== 'content' || !m.content)) kept[k] = o[k];
+    delete kept.error; delete kept.resumable;
+    return kept;
+  });
+}
+
 export function saveChat(id, chat) {
   if (!validId(id)) throw new Error('bad chat id');
   if (!chat || typeof chat !== 'object' || Array.isArray(chat)) throw new Error('a chat must be an object');
-  // The page always sends `created`; only an older page without it costs a read of the old file.
-  const created = Number(chat.created) || getChat(id)?.created || Date.now();
+  let old = null; try { old = currentChat(id); } catch { /* unreadable: saved over */ }
+  const created = Number(chat.created) || old?.created || Date.now();
   // Big pictures and media (older chats kept every screenshot inline) are stored once as blobs.
-  return writeChat(id, { ...externalize(chat), id, created, updated: Date.now(), rev: newRev() });
+  const doc = { ...externalize(chat), id, created, updated: Date.now(), rev: newRev() };
+  if (doc.agent?.messages) doc.agent = { ...doc.agent, messages: keepResults(old?.agent?.messages, doc.agent.messages) };
+  return writeChat(id, doc);
+}
+
+// When a reply ends, its result goes into its chat from the server (server.js), so it is kept even when the page
+// that started it was closed, reloaded or lost track of it. A page that already saved the result is left alone.
+export function settleReply(chatId, runId, end) {
+  if (!validId(chatId) || !end) return false;
+  const chat = currentChat(chatId);
+  const i = chat?.agent?.messages?.findIndex((m) => m.role === 'assistant' && m.runId === runId) ?? -1;
+  if (i < 0) return false;
+  const m = chat.agent.messages[i];
+  if (end.t === 'done' ? m.stats && !m.stats.partial && m.content : m.error || m.stats) return false;
+  const next = end.t === 'done'
+    ? { ...m, content: m.content || String(end.reply || ''), note: end.historyNote, stats: end.stats, doneAt: m.doneAt || Date.now(), live: false, runActive: false }
+    : { ...m, error: end.msg || 'The reply ended without an answer.', ...(end.stats ? { stats: { ...end.stats, partial: true } } : {}), live: false, runActive: false };
+  if (end.t === 'done') { delete next.error; delete next.resumable; }
+  const messages = chat.agent.messages.slice(); messages[i] = next;
+  writeChat(chatId, { ...chat, updated: Date.now(), rev: newRev(), agent: { ...chat.agent, messages } });
+  return true;
 }
 
 // A save of only what changed: { base: the rev it builds on, count: how many messages the chat has now,
@@ -261,7 +298,7 @@ export function patchChat(id, p) {
   }
   const top = head || old;
   const created = Number(top.created) || old.created || Date.now();
-  return writeChat(id, { ...top, id, created, updated: Date.now(), rev: newRev(), agent: { ...(head ? head.agent : old.agent), messages, artifacts } });
+  return writeChat(id, { ...top, id, created, updated: Date.now(), rev: newRev(), agent: { ...(head ? head.agent : old.agent), messages: keepResults(old.agent.messages, messages), artifacts } });
 }
 
 export function trashChat(id) {
