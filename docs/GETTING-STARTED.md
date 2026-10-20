@@ -14,6 +14,12 @@ that the file is the one built here, compare its checksum with `SHA256SUMS.txt` 
 Get-FileHash .\QuorX-Setup-0.2.4.exe -Algorithm SHA256
 ```
 
+On macOS or Linux, with `SHA256SUMS.txt` in the same folder as the installer:
+
+```bash
+sha256sum -c --ignore-missing SHA256SUMS.txt
+```
+
 If the two match, choose **More info → Run anyway**. Every installer is built from this repository's code by GitHub
 Actions ([the workflow](../.github/workflows/release.yml)), and you can always build or run QuorX from source instead.
 

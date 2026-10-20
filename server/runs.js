@@ -24,7 +24,7 @@ const runs = new Map(); // runId → { id, chatId, status, events, listeners, ac
  * Starts a run in the background. `work(emit, signal)` is the agent loop. Tokens stay in memory
  * (they are many and small); on disk, each step's tokens are written as one combined event.
  */
-export function startRun({ runId, chatId }, work) {
+export function startRun({ runId, chatId, onEnd }, work) {
   const r = { id: runId, chatId: chatId || null, status: 'running', events: [], listeners: new Set(), ac: new AbortController(), started: Date.now(), ended: null };
   runs.set(runId, r);
   let pending = null; // tokens of the current step, not yet on disk
@@ -38,7 +38,8 @@ export function startRun({ runId, chatId }, work) {
     if (o.t === 'token') { if (pending && pending.step === o.step) pending.text += o.text; else { flush(); pending = { ...o }; } }
     else { flush(); disk(o); }
   };
-  disk({ t: 'run', runId, chatId, at: 0 });
+  // pid: which QuorX runs it, so another one on the same data folder can tell "running elsewhere" from "cut off".
+  disk({ t: 'run', runId, chatId, pid: process.pid, at: 0 });
   Promise.resolve().then(() => work(emit, r.ac.signal))
     .catch((e) => {
       const spent = e?.stats ? { stats: e.stats } : {}; // what the reply had spent when it ended (server/agent.js)
@@ -50,6 +51,8 @@ export function startRun({ runId, chatId }, work) {
       r.ended = Date.now();
       for (const l of r.listeners) l(null);
       r.listeners.clear();
+      // The result goes into the chat from here too, so it is kept even when no page was there to save it.
+      if (onEnd) { try { onEnd(r.events.findLast((e) => e.t === 'done' || e.t === 'error') || null); } catch (e) { console.error(e); } }
       setTimeout(() => runs.delete(runId), KEEP_MS).unref?.();
     });
   return r;
@@ -68,9 +71,20 @@ export function runStatus(id) {
   const ended = events.some((e) => e.t === 'done' || e.t === 'error');
   // Not in this process but written to in the last 90 s: another QuorX on the same data folder (the desktop app and
   // a preview, or the MCP server's QuorX) is running it, so it isn't "interrupted" and must not be marked so.
+  // A log that names its process settles it at once: that process is gone (a restart), so it was cut off.
   let fresh = false; try { fresh = !ended && Date.now() - fs.statSync(logFile(id)).mtimeMs < 90e3; } catch { /* gone */ }
+  if (fresh) { const pid = ownerOf(id); if (pid && (pid === process.pid || !alive(pid))) fresh = false; }
   return { status: ended ? 'done' : fresh ? 'elsewhere' : 'interrupted', resumable: !ended && !fresh && fs.existsSync(ckptFile(id)), events: events.length };
 }
+// The process that started a run, from its log's first line (older logs don't say).
+function ownerOf(id) {
+  try {
+    const fd = fs.openSync(logFile(id), 'r'), buf = Buffer.alloc(300);
+    const n = fs.readSync(fd, buf, 0, 300, 0); fs.closeSync(fd);
+    return Number(JSON.parse(buf.subarray(0, n).toString('utf8').split('\n')[0]).pid) || null;
+  } catch { return null; }
+}
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
 export function readLog(id) {
   try { return fs.readFileSync(logFile(id), 'utf8').split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter((e) => e && e.t !== 'run'); }
   catch { return []; }

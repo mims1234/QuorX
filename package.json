@@ -8,7 +8,7 @@
   "scripts": {
     "start": "node server.js",
     "desktop": "npm --prefix desktop start",
-    "desktop:setup": "npm --prefix desktop install && node desktop/node_modules/electron/install.js",
+    "desktop:setup": "cd desktop && npm install && node node_modules/electron/install.js",
     "desktop:dist": "npm --prefix desktop run dist",
     "desktop:release": "npm --prefix desktop run release",
     "winget": "node scripts/winget-manifest.mjs",

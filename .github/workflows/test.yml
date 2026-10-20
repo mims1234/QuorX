@@ -1,0 +1,59 @@
+# Runs the test suites on every pull request and on every push to main, so a change can't reach a release untested.
+# The tests drive the agent with a scripted model: no network calls to a model, no keys, no secrets.
+#
+# Hardening (as in release.yml): actions are pinned to commits, the token can only read the repository, and the
+# checkout doesn't keep it, so dependency install scripts never see a token.
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Tests on Windows
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Install
+        run: npm ci
+
+      - name: Run the tests (the same suites as npm test)
+        run: npm test
+
+  ubuntu:
+    # The macOS and Linux tests that start real processes (process groups, bash and zsh rules) skip on Windows;
+    # they run here, with the News checks.
+    name: POSIX and News tests on Linux
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Install
+        run: npm ci
+
+      - name: Run the POSIX and News tests
+        run: node --test --test-force-exit --test-reporter=spec scripts/test-posix.mjs scripts/test-news.mjs

@@ -1,6 +1,8 @@
-# Builds the Windows installer when a version tag is pushed, and publishes it as a GitHub release.
-# The release is the update feed: installed apps read latest.yml from releases/latest/download (desktop/package.json →
-# quorx.updateUrl), and winget points at that version's own release (quorx.winget.downloadBase).
+# Builds the Windows installer when a version tag is pushed, and publishes it as a GitHub pre-release.
+# Installed apps read latest.yml from releases/latest/download (desktop/package.json → quorx.updateUrl), and GitHub's
+# "latest" never points at a pre-release: a new version reaches people who download it by hand, not installed apps.
+# Once it looks good, the "Promote release" workflow (promote.yml) makes it the latest release, which starts
+# auto-update and sends it to winget. "Pull release" (pull.yml) takes a bad version back. See docs/RELEASING.md.
 #
 # To release: npm run release:bump (raises the version everywhere), commit, then
 #   git tag v<version> && git push origin main v<version>
@@ -58,15 +60,14 @@ jobs:
         run: npm --prefix desktop run dist -- --publish never
 
       - name: Write the checksums
+        # LF line endings and the "<hash>  <name>" format, so `sha256sum -c SHA256SUMS.txt` works on macOS and Linux
+        # as well as a Get-FileHash check on Windows.
         shell: pwsh
         run: |
           $d = 'desktop/dist'
           $lines = foreach ($f in "QuorX-Setup-$env:VERSION.exe", 'latest.yml') { "{0}  {1}" -f (Get-FileHash "$d/$f" -Algorithm SHA256).Hash.ToLower(), $f }
-          $lines | Set-Content "$d/SHA256SUMS.txt" -Encoding ascii
+          [IO.File]::WriteAllText("$d/SHA256SUMS.txt", (($lines -join "`n") + "`n"), [Text.Encoding]::ASCII)
           Get-Content "$d/SHA256SUMS.txt"
-
-      - name: Write the winget manifests for this version
-        run: npm run winget
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -76,7 +77,6 @@ jobs:
             desktop/dist/QuorX-Setup-${{ steps.ver.outputs.version }}.exe
             desktop/dist/QuorX-Setup-${{ steps.ver.outputs.version }}.exe.blockmap
             desktop/dist/SHA256SUMS.txt
-            desktop/dist/winget/${{ steps.ver.outputs.version }}
 
   publish:
     needs: build
@@ -96,35 +96,24 @@ jobs:
           path: dist
 
       - name: Check the files against their checksums
-        shell: pwsh
+        shell: bash
+        working-directory: dist
         run: |
-          foreach ($line in Get-Content dist/SHA256SUMS.txt) {
-            $hash, $name = $line -split '\s+', 2
-            if ((Get-FileHash "dist/$name" -Algorithm SHA256).Hash.ToLower() -ne $hash) { Write-Error "$name does not match its checksum"; exit 1 }
-          }
+          if grep -q $'\r' SHA256SUMS.txt; then echo "::error::SHA256SUMS.txt has CRLF line endings"; exit 1; fi
+          sha256sum -c --strict SHA256SUMS.txt
 
       - name: Attest where the installer was built
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
           subject-path: dist/QuorX-Setup-${{ env.VERSION }}.exe
 
-      - name: Publish the release
+      # A pre-release: releases/latest/download (the update feed) keeps serving the version before it until
+      # "Promote release" runs. winget gets the new version then too, not here.
+      - name: Publish the pre-release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create $env:TAG "dist/latest.yml" "dist/QuorX-Setup-$env:VERSION.exe" "dist/QuorX-Setup-$env:VERSION.exe.blockmap" "dist/SHA256SUMS.txt" `
-            --repo $env:GITHUB_REPOSITORY --title "QuorX $env:TAG" --generate-notes
-
-      # After the first version is in winget-pkgs (submitted by hand once), later versions can go in by themselves:
-      # add a GitHub token with public_repo scope as the WINGET_TOKEN secret (in the release environment).
-      # wingetcreate is a fixed version, checked against its published SHA-256 before it runs.
-      - name: Send the new version to winget-pkgs
-        shell: pwsh
-        env:
-          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
-        run: |
-          if (-not $env:WINGET_TOKEN) { "No WINGET_TOKEN: skipped."; exit 0 }
-          Invoke-WebRequest https://github.com/microsoft/winget-create/releases/download/v1.12.13.0/wingetcreate.exe -OutFile wingetcreate.exe
-          if ((Get-FileHash wingetcreate.exe -Algorithm SHA256).Hash.ToLower() -ne '24042bd37915805615e6cf969ac57c6439124c3fe85823327f5f3fb24bd9ffea') { Write-Error 'wingetcreate.exe does not match its published checksum'; exit 1 }
-          ./wingetcreate.exe submit --token $env:WINGET_TOKEN "dist/winget/$env:VERSION"
+            --repo $env:GITHUB_REPOSITORY --title "QuorX $env:TAG" --generate-notes --prerelease --latest=false
+          "Published $env:TAG as a pre-release. Installed apps don't see it until the Promote release workflow runs." >> $env:GITHUB_STEP_SUMMARY
