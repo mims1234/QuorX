@@ -1,0 +1,31 @@
+{
+  "chart": {
+    "type": "pairs",
+    "title": "Languages the debug tool covers, at the PR #3 merge and today",
+    "x": ["Windows", "Linux", "macOS"],
+    "series": [
+      { "name": "At the PR #3 merge (04:34, 20 Oct)", "values": [2, 2, 2] },
+      { "name": "Today", "values": [9, 9, 10] }
+    ],
+    "unit": "languages"
+  },
+  "matrix": {
+    "levels": [
+      { "id": "proven", "label": "Proven on this PC" },
+      { "id": "wired", "label": "Logic tested" }
+    ],
+    "columns": ["Language", "Debugger", "How QuorX starts it", "Tested how"],
+    "rows": [
+      { "level": "proven", "cells": ["Node (and Electron's main process)", "V8's inspector, built into Node", "runs the file paused, or attaches to a job started with --inspect", "real Node; a real Electron 44.9 app (PR #8)"] },
+      { "level": "proven", "cells": ["Python", "debugpy", "in the project's venv when it has one", "a venv with debugpy 1.8.22, stopping in a tkinter button handler (PR #14)"] },
+      { "level": "proven", "cells": ["Java and Kotlin", "QuorX's own adapter on the JDK's debugger interface", "the JDK runs it from source, nothing to install", "JDK 21 and Gradle 8.14, 14 of 14 self-tests (PR #11)"] },
+      { "level": "proven", "cells": ["GDScript (Godot)", "Godot's built-in adapter", "the editor runs headless with --dap-port", "Godot 4.7.2 (PR #9)"] },
+      { "level": "wired", "cells": ["C#", "netcoredbg", "builds the .csproj, launches the dll", "no .NET SDK here: 4 tests pass, 7 skip (PR #4)"] },
+      { "level": "wired", "cells": ["Go", "Delve (dlv dap)", "Delve builds the package with debug info", "a stand-in adapter; no Go or Delve here (PR #7)"] },
+      { "level": "wired", "cells": ["C and C++", "lldb-dap", "cmake --build, then the target for that file", "a stand-in adapter; no LLVM or compiler here (PR #7)"] },
+      { "level": "wired", "cells": ["Rust", "CodeLLDB, else lldb-dap", "cargo build, then the binary for that file", "program lookup on real cargo output; debugger tests skip (PR #7)"] },
+      { "level": "wired", "cells": ["Dart and Flutter", "dart debug_adapter", "over stdin and stdout, through a bridge", "the bridge with a stand-in adapter; no Dart here (PR #10)"] },
+      { "level": "wired", "cells": ["Swift and Objective-C (macOS only)", "lldb-dap", "builds and launches, or attaches in the simulator", "8 tests on fixtures, 4 need a Mac (PR #13)"] }
+    ]
+  }
+}

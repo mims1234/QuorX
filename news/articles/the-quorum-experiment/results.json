@@ -1,0 +1,12 @@
+{
+  "hard": {
+    "type": "pairs",
+    "title": "Hard set, 40 tasks (18 Oct): the small model alone (A) and asking first (C)",
+    "x": ["Ling 3.0 Flash", "Qwen 3.7 Flash", "DeepSeek V4.1 Flash"],
+    "series": [
+      { "name": "A: alone", "values": [94, 95, 98] },
+      { "name": "C: asks the deciders first", "values": [98, 98, 98] }
+    ],
+    "unit": "%"
+  }
+}

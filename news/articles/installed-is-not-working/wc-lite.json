@@ -1,0 +1,11 @@
+{
+  "title": "Rust-Test, after the chat: the built program, run outside QuorX",
+  "lines": [
+    { "cmd": ".\\target\\release\\wc-lite.exe Cargo.toml src\\main.rs" },
+    { "out": "    16    44   290 Cargo.toml" },
+    { "out": "   528  1933 16607 src\\main.rs" },
+    { "out": "   544  1977 16897 total" },
+    { "cmd": ".\\target\\release\\wc-lite.exe -l Cargo.toml" },
+    { "out": "  16 Cargo.toml" }
+  ]
+}
