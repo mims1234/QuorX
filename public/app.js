@@ -157,7 +157,7 @@ const dedupeArts = (list) => [...new Map(list.map((a) => [a.id, { id: a.id, kind
 function blankChat(projectId) {
   const from = focused();
   return normalise({ id: newId(), projectId, approval: from?.approval || G.settings.approval, tools: { ...DEFAULT_CHAT_TOOLS, ...(G.settings.newChatTools || {}) },
-    agent: { setup: { model: from?.agent.setup.model || G.settings.model, reasoning: from?.agent.setup.reasoning || G.settings.reasoning } } });
+    agent: { setup: { model: G.settings.model, reasoning: G.settings.reasoning || 'off' } } });
 }
 // One load per chat at a time: two callers at once share it, so a chat never has two copies
 // (one on screen and another that the running reply updates).
@@ -599,16 +599,18 @@ function renderSidebar() {
     return `<div class="sb-project ${p.id === curProject ? 'current' : ''} ${working ? 'working' : ''} ${folded ? 'folded' : ''} ${p.pinned ? 'pinned' : ''}" data-p="${esc(p.id)}" style="${projStyle(p)}">
       <div class="sb-ph" aria-expanded="${!folded}">
         <div class="sb-pname-wrap"><b class="sb-pname" title="${esc(p.name)} · ${esc(p.dir)}">${esc(p.name)}</b><button type="button" class="sb-fold" aria-expanded="${!folded}" title="${folded ? 'Show' : 'Hide'} this project's chats" aria-label="${folded ? 'Show' : 'Hide'} chats of ${esc(p.name)}"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg></button>${p.missing ? '<button type="button" class="sb-missing" title="The project folder was moved, renamed or deleted: click to reselect it">⚠ missing</button>' : p.needsFolder ? '<button type="button" class="sb-missing needs" title="Pick a folder for this project: its files sit inside QuorX itself and are copied to the folder you pick" aria-label="Pick a folder for this project">📁</button>' : ''}${working ? '<span class="sb-pworking" title="A chat in this project is working" aria-label="Working"></span>' : ''}<span class="sb-psp"></span><button type="button" class="sb-pin sb-picon ${p.pinned ? 'on' : ''}" aria-pressed="${!!p.pinned}" title="${p.pinned ? 'Unpin' : 'Pin to the top (up to 3)'}" aria-label="${p.pinned ? 'Unpin' : 'Pin'} ${esc(p.name)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4h6l-1 6 4 4H6l4-4z"/><path d="M12 14v6"/></svg></button><button type="button" class="sb-edit sb-picon" title="Project settings: budget, pin, archive, folder, colour" aria-label="Settings for ${esc(p.name)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg></button><button type="button" class="sb-new sb-picon" title="New chat in ${esc(p.name)}" aria-label="New chat in ${esc(p.name)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button><span class="sb-grip" draggable="true" tabindex="0" role="button" title="Drag to move this project (or focus it and press ↑ / ↓)" aria-label="Move ${esc(p.name)}: drag, or press up or down"><svg viewBox="0 0 10 16" aria-hidden="true"><circle cx="2.5" cy="3" r="1.4"/><circle cx="7.5" cy="3" r="1.4"/><circle cx="2.5" cy="8" r="1.4"/><circle cx="7.5" cy="8" r="1.4"/><circle cx="2.5" cy="13" r="1.4"/><circle cx="7.5" cy="13" r="1.4"/></svg></span></div>
-        ${p.id === curProject ? projectSpendHTML(p, chats.length, cost, share) : ''}
+        ${p.id === curProject ? projectSpendHTML(p, chats.length, cost, share, chats) : ''}
       </div>
       ${shown.map((c) => {
         const live = G.open.get(c.id);
         const running = !!live?.running, waiting = running && live.waiting;
-        return `<div class="sb-chat sb-chat-item ${G.panes.includes(c.id) ? 'on active' : ''} ${running ? 'running' : ''}" data-c="${esc(c.id)}" title="${esc(c.title)}">
+        const spent = (c.cost || 0) + liveOf(G.open.get(c.id));
+        const tip = [c.title || 'Untitled', ...(c.model ? [`Model\t${short(c.model)}`] : []), `Last message\t${new Date(c.lastAt || c.updated || Date.now()).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`, ...(c.messages ? [`Messages\t${c.messages}`] : []), ...(running ? [`Now\t${waiting ? 'waiting for you' : 'working'}`] : []), `Spent\t$${spent.toFixed(3)}`].join('\n');
+        return `<div class="sb-chat sb-chat-item ${G.panes.includes(c.id) ? 'on active' : ''} ${running ? 'running' : ''}" data-c="${esc(c.id)}" data-tip-delay="900" title="${esc(tip)}">
           <div class="sb-chat-content">
-            <div class="sb-chat-topline"><span class="sb-chat-title">${esc(c.title)}</span>${running ? '<span class="live-dot" title="Running"></span>' : ''}</div>
+            <div class="sb-chat-topline"><span class="sb-chat-title">${esc(c.title)}</span>${running ? '<span class="live-dot" aria-label="Running"></span>' : ''}</div>
             ${waiting ? `<div class="sb-chat-prev"><b class="needs">${waiting === 'answer' ? 'Waiting for your answer' : waiting === 'budget' ? 'Waiting: project budget reached' : 'Waiting for your approval'}</b></div>` : running ? '<div class="sb-chat-prev"><i>Working…</i></div>' : ''}
-            <div class="sb-chat-meta" title="Last message ${esc(new Date(c.lastAt || c.updated || Date.now()).toLocaleString())}"><span>${ago(c.lastAt || c.updated || Date.now())}</span>${c.model ? `<span>· ${esc(short(c.model))}</span>` : ''}${c.cost || liveOf(G.open.get(c.id)) ? `<span class="cost${liveOf(G.open.get(c.id)) ? ' live' : ''}">· $${((c.cost || 0) + liveOf(G.open.get(c.id))).toFixed(3)}</span>` : ''}</div>
+            <div class="sb-chat-meta"><span>${ago(c.lastAt || c.updated || Date.now())}</span>${c.model ? `<span>· ${esc(short(c.model))}</span>` : ''}${c.cost || liveOf(G.open.get(c.id)) ? `<span class="cost${liveOf(G.open.get(c.id)) ? ' live' : ''}">· $${((c.cost || 0) + liveOf(G.open.get(c.id))).toFixed(3)}</span>` : ''}</div>
           </div>
           <div class="sb-chat-acts"><button type="button" class="sb-ren ico-rename" title="Rename chat" aria-label="Rename chat">${ICO.pencil}</button><button type="button" class="sb-del del ico-delete" title="Delete chat (moves it to data/trash)" aria-label="Delete chat">${ICO.trash}</button></div>
         </div>`;
@@ -637,7 +639,6 @@ function renderSidebar() {
     $('.sb-edit', el).onclick = (e) => { e.stopPropagation(); openProjectSettings(p); };
     $('.sb-pin', el).onclick = (e) => { e.stopPropagation(); setProjectFlag(p, { pinned: !p.pinned }); };
     const miss = $('.sb-missing', el); if (miss) miss.onclick = () => editProject(p, { reselect: true });
-    const meter = $('.sb-budget', el); if (meter) meter.onclick = () => openProjectSettings(p, 'budget');
     const del = $('.sb-delp', el); if (del) del.onclick = () => deleteProject(p);
 
     // Drag and drop to reorder projects: only the ⠿ grip drags, so the header's buttons stay easy to click.
@@ -909,12 +910,18 @@ async function mountDesign(p, el) {
 // The strip under a project's name: one box with its spend (a meter when it has a budget) and its + ⚙ 🗑 buttons.
 // The open chat's project: one line of what it has spent (of its budget), and a bar along the header's bottom edge.
 // Read-only: clicking it opens the project's budget settings.
-function projectSpendHTML(p, n, cost, share) {
+function projectSpendHTML(p, n, cost, share, chats = []) {
   const usd = (v) => `$${v.toFixed(v < 1 ? 3 : 2)}`;
   const has = p.budget != null, pct = Math.round(share * 100), state = !has ? 'none' : share >= 1 ? 'full' : share >= 0.85 ? 'near' : 'ok';
   const info = has ? `<b class="cost">${usd(cost)}</b> of $${p.budget.toFixed(p.budget < 10 ? 2 : 0)} · ${state === 'full' ? 'budget used up' : `${pct}%`} · ${n} chat${n === 1 ? '' : 's'}`
     : `<b class="cost">${usd(cost)}</b> spent · no limit · ${n} chat${n === 1 ? '' : 's'}`;
-  return `<button type="button" class="sb-budget sb-pinfo ${state}" title="${has ? `${usd(cost)} of the $${p.budget.toFixed(2)} budget · ${state === 'full' ? 'budget reached' : `$${Math.max(0, p.budget - cost).toFixed(2)} left`}` : 'No budget set'} · open the budget settings">${info}</button>${has ? `<span class="sb-pbar ${state}" aria-hidden="true"><i style="width:${Math.min(100, share * 100).toFixed(1)}%"></i></span>` : ''}`;
+  const clean = (t) => String(t || 'Untitled').replace(/\s+/g, ' ').slice(0, 48);
+  const byCost = [...chats].sort((a, b) => (b.cost || 0) - (a.cost || 0));
+  const tip = [`${p.name}${has ? ` · ${state === 'full' ? 'budget reached' : `$${Math.max(0, p.budget - cost).toFixed(2)} left of $${p.budget.toFixed(2)}`}` : ' · no budget'}`,
+    ...byCost.slice(0, 8).map((c) => `${clean(c.title)}\t${usd(c.cost || 0)}`),
+    ...(byCost.length > 8 ? [`${byCost.length - 8} more chats\t${usd(byCost.slice(8).reduce((t, c) => t + (c.cost || 0), 0))}`] : []),
+    `Total\t${usd(cost)}`].join('\n');
+  return `<span class="sb-budget sb-pinfo ${state}" data-tip-delay="900" title="${esc(tip)}">${info}</span>`;
 }
 function budgetLine(p, n, cost, share, acts = '') {
   const usd = (v) => `$${v.toFixed(v < 1 ? 3 : 2)}`;
@@ -1383,28 +1390,24 @@ function renderLanding(box) {
   const allRecent = [...G.chats].filter((c) => c.messages > 0 && !archived.has(c.projectId || 'scratch')).sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0));
   // Six at a time, with ‹ › to page through the rest (the page you were on is kept while you're here).
   const PAGE = 6, pages = (n) => Math.max(1, Math.ceil(n / PAGE));
-  G.ldChatPage = Math.min(G.ldChatPage || 0, pages(allRecent.length) - 1);
-  const recent = allRecent.slice(G.ldChatPage * PAGE, G.ldChatPage * PAGE + PAGE);
   const pager = (key, page, n, what) => n > PAGE ? `<span class="ld-pg"><span class="ld-pg-n">${page * PAGE + 1}–${Math.min(n, page * PAGE + PAGE)} of ${n}</span><button type="button" class="ld-pg-b" data-pg="${key}" data-d="-1" aria-label="Previous ${what}" title="Previous ${what}" ${page === 0 ? 'disabled' : ''}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6"/></svg></button><button type="button" class="ld-pg-b" data-pg="${key}" data-d="1" aria-label="Next ${what}" title="Next ${what}" ${page >= pages(n) - 1 ? 'disabled' : ''}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button></span>` : '';
   const projName = (id) => G.projects.find((p) => p.id === id)?.name || id;
-  // Projects you used most recently first; six show until you ask for the rest.
+  // One list: pinned projects first (in the order you pinned them), then the one with the most recent chat; each with its latest chats. Six at a time.
   const lastUsed = (id) => Math.max(0, ...G.chats.filter((c) => (c.projectId || 'scratch') === id).map((c) => c.lastAt || 0));
-  const projects = G.projects.filter((p) => !p.archived).sort((a, b) => ((a.pinned || Infinity) - (b.pinned || Infinity)) || (lastUsed(b.id) - lastUsed(a.id)));
+  const projects = G.projects.filter((p) => !p.archived).sort((a, b) => ((a.pinned || Infinity) - (b.pinned || Infinity)) || (lastUsed(b.id) - lastUsed(a.id)) || a.name.localeCompare(b.name));
   const last = G.landingProject && G.projects.some((p) => p.id === G.landingProject) ? G.landingProject : (allRecent[0]?.projectId || 'scratch');
   G.ldProjPage = Math.min(G.ldProjPage || 0, pages(projects.length) - 1);
   const shownProjects = projects.slice(G.ldProjPage * PAGE, G.ldProjPage * PAGE + PAGE);
   box.innerHTML = `<section class="landing">
     <header class="ld-brand"><span class="ld-mark" aria-hidden="true">◆</span><h1>Quor<span>X</span></h1><span class="ld-tag">What are we building?</span></header>
-    ${recent.length ? `<div class="ld-hrow"><h2 class="ld-h">Recent chats</h2>${pager('chat', G.ldChatPage, allRecent.length, 'chats')}</div><div class="ld-recent">${recent.map((c) => `<button type="button" class="ld-chat" data-c="${esc(c.id)}"><span class="ld-chat-main"><b>${esc(c.title)}</b><small><span class="ld-chat-proj" style="${projStyle(G.projects.find((x) => x.id === c.projectId) || { name: projName(c.projectId) })}">${esc(projName(c.projectId))}</span> · ${ago(c.lastAt || Date.now())}</small></span><span class="ld-cost">$${(c.cost || 0).toFixed(3)}</span></button>`).join('')}</div>` : ''}
-    <div class="ld-hrow"><h2 class="ld-h">Projects</h2>${pager('proj', G.ldProjPage, projects.length, 'projects')}</div>
+    <div class="ld-hrow"><h2 class="ld-h">Projects <small>· pinned first, then latest chats</small></h2>${pager('proj', G.ldProjPage, projects.length, 'projects')}</div>
     <div class="ld-projects">${shownProjects.map((p) => {
-      const n = G.chats.filter((c) => (c.projectId || 'scratch') === p.id && c.messages > 0).length, spent = p.spent || 0;
+      const mine = allRecent.filter((c) => (c.projectId || 'scratch') === p.id), n = mine.length, spent = p.spent || 0;
       const share = p.budget ? Math.min(1, spent / p.budget) : 0, state = share >= 1 ? 'full' : share >= 0.8 ? 'near' : 'ok';
-      return `<div class="ld-project" style="${projStyle(p)}"><div class="ld-p-top"><b>${esc(p.name)}</b><button type="button" class="ld-p-set" data-set="${esc(p.id)}" title="Project settings">${ICO.gear}</button></div>
-        <small>${n} chat${n === 1 ? '' : 's'} · $${spent.toFixed(3)}${p.budget != null ? ` of $${p.budget.toFixed(2)}` : ' · no limit'}</small>
-        ${p.github ? `<div class="ld-p-gh" data-gh="${esc(p.id)}">${ghLineHTML(p.github)}</div>` : ''}
+      return `<div class="ld-project" style="${projStyle(p)}"><div class="ld-p-top">${p.pinned ? '<span class="ld-p-pin" title="Pinned" aria-label="Pinned"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4h6l-1 6 4 4H6l4-4z"/><path d="M12 14v6"/></svg></span>' : ''}<b>${esc(p.name)}</b>${p.github ? `<a class="ld-p-gh" href="${esc(p.github.url)}" target="_blank" rel="noopener noreferrer" title="Open ${esc(p.github.owner)}/${esc(p.github.repo)} on GitHub" aria-label="Open on GitHub">${GH_ICO}</a>` : ''}<button type="button" class="ld-p-set" data-set="${esc(p.id)}" title="Project settings" aria-label="Settings for ${esc(p.name)}">${ICO.gear}</button><button type="button" class="ld-p-plus" data-new="${esc(p.id)}" title="New chat in ${esc(p.name)}" aria-label="New chat in ${esc(p.name)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button></div>
+        <small class="ld-p-meta">${n} chat${n === 1 ? '' : 's'} · <span class="money">$${spent.toFixed(3)}</span>${p.budget != null ? ` of $${p.budget.toFixed(2)}` : ' · no limit'}</small>
         ${p.budget != null ? `<span class="ld-bar ${state}"><i style="width:${(share * 100).toFixed(1)}%"></i></span>` : ''}
-        <button type="button" class="ld-p-new" data-new="${esc(p.id)}">＋ New chat here</button></div>`;
+        <div class="ld-p-chats">${mine.slice(0, 3).map((c) => `<button type="button" class="ld-chat ld-pc" data-c="${esc(c.id)}" title="${esc(c.title)}"><b>${esc(c.title)}</b><small>${ago(c.lastAt || Date.now())}</small><span class="ld-cost">$${(c.cost || 0).toFixed(3)}</span></button>`).join('') || '<span class="ld-p-none">No chats yet</span>'}${n > 3 ? `<span class="ld-p-more">+${n - 3} more in the sidebar</span>` : ''}</div></div>`;
     }).join('')}</div>
     <p class="ld-tips">Tips: type <kbd>@</kbd> to add files or other chats as context, <kbd>/</kbd> for commands, and ⚙ for settings.</p>
     <div class="ld-dock">
@@ -1674,7 +1677,12 @@ async function openFolderAsProject(btn, errEl, { pickOnly = false } = {}) {
       }
       // The bar may be laid out as part of its parent row (display: contents): measure the row it sits in.
       const row = getComputedStyle(bar).display === 'contents' ? bar.parentElement : bar;
-      const one = 34, tight = row.scrollWidth > row.clientWidth + 1 || row.getBoundingClientRect().height > one + 10;
+      const one = 34, wraps = getComputedStyle(row).flexWrap === 'wrap';
+      // A row that wraps on purpose (the Browser bar in a narrow pane: address above, actions below) is tight only when
+      // its actions no longer fit on one line of their own.
+      const acts = wraps ? [...bar.children].filter((k) => k.getClientRects().length) : [];
+      const tight = wraps ? new Set(acts.map((k) => { const r = k.getBoundingClientRect(); return Math.round((r.top + r.height / 2) / 12); })).size > 2 || row.scrollWidth > row.clientWidth + 1
+        : row.scrollWidth > row.clientWidth + 1 || row.getBoundingClientRect().height > one + 10;
       if (!tight) return;
       for (const b of bar.querySelectorAll('button')) {
         const t = b.textContent.trim(); if (!t) continue;
@@ -1701,6 +1709,7 @@ async function openFolderAsProject(btn, errEl, { pickOnly = false } = {}) {
 // the calls it made: their costs are in its steps, so the chat and the Costs window count them.
 // ---------- what a running reply has spent so far: sent after every model call, shown as it climbs ----------
 const liveOf = (c) => (c?.agent?.messages || []).reduce((s, m) => s + (m.role === 'assistant' && !m.stats && m.live ? m.liveCost || 0 : 0), 0);
+const stoppedByYou = (m) => m.error === 'Stopped.';
 function liveFootHTML(m) {
   return `<span class="f-cost live" title="Spent so far by this reply, updated after every model call">${money(m.liveCost, 5)}</span><span class="f-dur live" title="Model calls so far">${m.liveCalls || 0} call${m.liveCalls === 1 ? '' : 's'}</span>`;
 }
@@ -1988,6 +1997,10 @@ function hideTip() {
   TIP.target = null;
   if (TIP.el?.classList.contains('on')) { TIP.el.classList.remove('on'); TIP.hidAt = Date.now(); if (TIP.el.popover) { try { TIP.el.hidePopover(); } catch { /* closed */ } } }
 }
+// A tip never outlives its target: a click hides it, and so does the target being removed or hidden under the pointer
+// (a window closing, a list redrawn), which sends no pointer event of its own.
+document.addEventListener('pointerdown', () => hideTip(), true);
+setInterval(() => { const t = TIP.target; if (TIP.el?.classList.contains('on') && !TIP.el.classList.contains('flash') && (!t || !t.isConnected || !t.getClientRects().length)) hideTip(); }, 300); // a flash ("Copied") goes by itself
 document.addEventListener('pointerover', (e) => {
   if (e.pointerType === 'touch') return;
   const t = e.target.closest?.('[data-oh-title], [data-tip], [title]');
@@ -1997,7 +2010,8 @@ document.addEventListener('pointerover', (e) => {
   if (t.hasAttribute('title')) adoptTitle(t);
   if (!tipText(t).trim()) return;
   TIP.target = t;
-  TIP.timer = setTimeout(() => TIP.target === t && showTip(t), Date.now() - TIP.hidAt < 400 ? 0 : 450);
+  const wait = t.dataset.tipDelay ? Number(t.dataset.tipDelay) : Date.now() - TIP.hidAt < 400 ? 0 : 450; // a long one (data-tip-delay) always waits: rows you only pass over stay quiet
+  TIP.timer = setTimeout(() => TIP.target === t && showTip(t), wait);
 });
 // The browser's own tooltip never shows: a title is moved to data-oh-title as soon as it is set (also when a live
 // reply redraws a button under the pointer). A button with no other label keeps it as its accessible name.
@@ -2069,11 +2083,11 @@ function renderPanes() {
         <div class="dir-a-toprow">
           <div class="dir-a-crumbs">
             <button type="button" class="ch-proj-tag proj-hue-tag" title="Open the project folder in File Explorer"><svg class="proj-folder-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6l2 3h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/></svg><span class="ch-proj-name"></span></button>
+            <a class="ch-gh" target="_blank" rel="noopener noreferrer" aria-label="Open on GitHub" hidden></a>
             <span class="dir-a-crumb-sep">/</span>
             <span class="dir-a-msgs-count"></span>
           </div>
           <div class="dir-a-meta-chips">
-            <span class="ch-model-badge model-badge-violet" title="This chat's model (change it in the message box)"></span>
             <button type="button" class="ch-cost cost-badge-amber" title="What this chat has cost (click for the breakdown)"></button>
           </div>
         </div>
@@ -2096,7 +2110,16 @@ function renderPanes() {
       <div class="msgs"></div>
       <form class="composer composer-v2">
         <div class="composer-box">
-        <div class="cmp-control-rack"><div class="cbar"></div><div class="toolbar cmp-tools-wrap" aria-label="Tools the agent may use"></div></div>
+        <div class="cmp-control-rack opts-open"><span class="cmp-model-slot"></span><button type="button" class="cmp-set-btn" aria-haspopup="dialog" aria-expanded="false" title="This chat's settings: reasoning, creativity, Strict / YOLO, tools"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg><span class="cmp-set-l">This chat</span><span class="cmp-set-sum"></span></button><span class="cmp-follow-slot"></span>
+          <div class="cs-scrim" hidden></div>
+          <div class="chat-set" role="dialog" aria-label="This chat's settings" hidden>
+            <div class="cs-head"><b>This chat's settings</b><small>Changes here apply to this chat only</small><button type="button" class="cs-gear" title="All settings: models, prices and defaults (⚙ Settings)" aria-label="Open all settings">${ICO.gear}</button><button type="button" class="cs-x" aria-label="Discard changes and close" title="Close (discards unsaved changes)">✕</button></div>
+            <div class="cbar"></div>
+            <div class="cs-glob"></div>
+            <details class="cs-adv"><summary>Advanced <small>· each tool's model, strength and price</small></summary><div class="toolbar cmp-tools-wrap" aria-label="Tools the agent may use"></div></details>
+            <div class="cs-foot"><span class="cs-note">No changes</span><button type="button" class="cs-undo" title="Put back what was set when you opened this" disabled>Undo</button><button type="button" class="cs-ok" title="Save changes" disabled>✓ Save</button></div>
+          </div>
+        </div>
         <div class="attachments cmp-attachments-tray"></div>
         <div class="suggest cmp-suggest-popup" role="listbox" hidden></div>
         <div class="composer-row cmp-input-row">
@@ -2151,7 +2174,7 @@ function wirePane(c, root, i) {
   $('.ch-pane', root).onclick = () => setMView(G.mview === 'preview' ? 'chat' : 'preview');
   const form = $('.composer', root), ta = $('.input', root);
   form.addEventListener('submit', () => setTimeout(() => fitInput(ta))); // the box shrinks back once it's cleared
-  form.onsubmit = (e) => { e.preventDefault(); const t = ta.value; if (/^\/\w+(\s|$)/.test(t.trim()) && runCommand(c, t.trim())) { ta.value = ''; return; } if (c.running?.runId && (t.trim() || c.images.length || c.docs?.length || c.ctx.length)) { ta.value = ''; steer(c, t.trim()); return; } if ((t.trim() || c.images.length || c.docs?.length || c.ctx.length) && !c.running) { if (folderMissing(c)) return; if ((c.docs || []).some((d) => d.busy)) { uiAlert('Some attached files are still being read. Send when their chips say they are ready.'); return; } ta.value = ''; send(c, t); } };
+  form.onsubmit = (e) => { e.preventDefault(); const t = ta.value; if (/^\/\w+(\s|$)/.test(t.trim()) && runCommand(c, t.trim())) { ta.value = ''; return; } if (c.running?.runId && (t.trim() || hasAttachments(c))) { ta.value = ''; steer(c, t.trim()); return; } if ((t.trim() || hasAttachments(c)) && !c.running) { if (folderMissing(c)) return; if ((c.docs || []).some((d) => d.busy)) { uiAlert('Some attached files are still being read. Send when their chips say they are ready.'); return; } ta.value = ''; send(c, t); } };
   ta.onkeydown = (e) => { if (suggestKey(c, e)) return; if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); form.requestSubmit(); } };
   ta.oninput = () => { updateSuggest(c); fitInput(ta); };
   ta.onblur = () => setTimeout(() => hideSuggest(c), 150);
@@ -2178,8 +2201,9 @@ function renderChatHead(c) {
   if (p?.color) head.style.setProperty('--pcx', p.color); else head.style.removeProperty('--pcx');
   $('.ch-proj-name', r).textContent = p?.name || c.projectId;
   $('.ch-proj-tag', r).title = `Open the project folder in File Explorer\n${p?.dir || ''}`;
+  const gh = $('.ch-gh', r);
+  if (gh) { gh.hidden = !p?.github; if (p?.github && gh.getAttribute('href') !== p.github.url) { gh.href = p.github.url; gh.title = `Open ${p.github.owner}/${p.github.repo} on GitHub`; gh.innerHTML = GH_ICO; } }
   $('.dir-a-msgs-count', r).textContent = `${t.msgs} msg${t.msgs === 1 ? '' : 's'}`;
-  $('.ch-model-badge', r).textContent = short(c.agent.setup.model);
   $('.ch-cost', r).textContent = money(t.cost, t.cost < 1 ? 4 : 2);
   // State: Ready, Running, or waiting for your approval.
   const st = $('.dir-a-state-badge', r), state = c.waiting ? 'waiting' : c.running ? 'running' : 'idle'; // not 'approval': that class belongs to the approval cards
@@ -2192,22 +2216,80 @@ function renderComposerBar(c) {
   if (!c.el) return;
   const s = c.agent.setup;
   const bar = $('.cbar', c.el.root);
+  const rack = bar.closest('.cmp-control-rack'), slot = $('.cmp-model-slot', rack), glob = $('.cs-glob', rack), setBtn = $('.cmp-set-btn', rack), panel = $('.chat-set', rack), followSlot = $('.cmp-follow-slot', rack), scrim = $('.cs-scrim', rack);
+  slot.innerHTML = `<button type="button" class="mbtn model cmp-model-chip" title="Model for this chat: ${esc(priceOf(s.model))} (click to pick any model)">${recDot(s.model, 'chat')} ${esc(short(s.model))} <small>${esc(shortPrice(s.model))}</small></button>`;
   bar.innerHTML = `
-    <button type="button" class="mbtn model cmp-model-chip" title="Model for this chat: ${esc(priceOf(s.model))} (click to pick any model)">${recDot(s.model, 'chat')} ${esc(short(s.model))} <small>${esc(shortPrice(s.model))}</small></button>
-    ${reasonMenuHTML(s)}
-    ${creativityMenuHTML(s)}
+    <div class="cs-sec"><h5>Thinking</h5><div class="cs-row">${levelsHTML(s)}</div></div>
+    <div class="cs-sec"><h5>Permission</h5><div class="cs-row cs-perm">
     <div class="seg perm cmp-perm-switch" title="How much permission this chat's agent asks for">
       <button type="button" data-approval="strict" class="${c.approval === 'strict' ? 'on' : ''}" title="Asks before every tool it uses">🔒 Strict</button>
       <button type="button" data-approval="yolo" class="${c.approval === 'yolo' ? 'on' : ''}" title="Uses its tools without asking (budget cap still applies)">⚡ YOLO</button>
-    </div>
-    <label class="sq-check cmp-follow" title="Follow the agent: when it opens or checks a page in its browser, or starts a site or app, the Browser tab switches to it so you can watch. Off: the pane stays where you put it (all chats)."><input type="checkbox" class="follow-agent" ${G.followAgent !== false ? 'checked' : ''}><span>Follow</span></label>
-    <span class="mode-note cmp-budget" title="Paid tools stop before going over this per reply (⚙ Settings)">budget $${G.settings.budget}/reply</span>
-    <button type="button" class="cmp-more ${G.chatOpts ? 'on' : ''} ${c.approval === 'yolo' ? 'yolo' : ''}" aria-expanded="${!!G.chatOpts}" title="${G.chatOpts ? 'Hide' : 'Show'} this chat's settings: reasoning, creativity, Strict / YOLO (${esc(REASON_INFO[s.reasoning]?.[0] || s.reasoning || 'default')} · ${esc(CREATIVITY_INFO[s.creativity]?.[0] || 'Default')} · ${c.approval === 'yolo' ? 'YOLO' : 'Strict'})" aria-label="This chat's settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg></button>`;
-  bar.closest('.cmp-control-rack')?.classList.toggle('opts-open', !!G.chatOpts);
-  $('.cmp-more', bar).onclick = () => { G.chatOpts = !G.chatOpts; savePrefs(); for (const ch of G.open.values()) renderComposerBar(ch); };
-  $('.model', bar).onclick = async () => { const id = await pickModel('chat', s.model, { context: `For “${clip(c.title, 40)}”` }); if (id) { s.model = id; saveChat(c); renderComposerBar(c); renderChatHead(c); } };
+    </div></div></div>
+    <div class="cs-sec"><h5>Tools <small>· hover one for what it does</small></h5><div class="cs-row cs-tools">${quickToolsHTML(c)}</div></div>`;
+  // The two caps every reply has (all chats): what all its model calls may cost, and what its paid media may cost.
+  const cap = (k, label, v, step, tip) => `<label class="cs-num" title="${esc(tip)}"><span>${label}</span><span class="cs-inp"><i>$</i><input type="number" min="0" step="${step}" data-k="${k}" value="${esc(String(v))}" aria-label="${label} in dollars"></span></label>`;
+  glob.innerHTML = `<div class="cs-sec"><h5>Budget <small>· all chats</small></h5><div class="cs-row cs-caps">${cap('replyBudget', 'Cap per reply', G.settings.replyBudget ?? G.cfg.defaults.replyBudget ?? 1, 0.25, 'Everything one reply calls: the agent, deciders, helpers, checks and media. At 85% the agent is told to wrap up; at the cap Strict asks you, YOLO stops. 0 = no cap.')}${cap('budget', 'Paid media per reply', G.settings.budget, 0.05, 'A paid picture, voice, music or video call that would go over this is stopped, in Strict and in YOLO.')}</div></div>`;
+  followSlot.innerHTML = `
+    <label class="sq-check cmp-follow" title="Follow the agent: when it opens or checks a page in its browser, or starts a site or app, the Browser tab switches to it so you can watch. Off: the pane stays where you put it (all chats)."><input type="checkbox" class="follow-agent" ${G.followAgent !== false ? 'checked' : ''}><svg class="fl-eye" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg><span>Follow</span></label>
+`;
+  for (const inp of glob.querySelectorAll('.cs-num input')) inp.onchange = () => { const v = Math.max(0, Number(inp.value) || 0); inp.value = String(v); G.settings[inp.dataset.k] = v; savePrefs(); };
+  // The button says what matters at a glance (YOLO in red, reasoning on) and opens the panel.
+  const rName = REASON_INFO[s.reasoning]?.[0];
+  $('.cmp-set-sum', setBtn).textContent = [c.approval === 'yolo' ? 'YOLO' : '', (s.reasoning || 'off') !== 'off' && rName ? rName : ''].filter(Boolean).join(' · ');
+  setBtn.classList.toggle('yolo', c.approval === 'yolo');
+  setBtn.dataset.ohTitle = `This chat's settings (this chat only)\nReasoning\t${rName || s.reasoning || 'off'}\nCreativity\t${CREATIVITY_INFO[s.creativity]?.[0] || 'Default'}\nPermission\t${c.approval === 'yolo' ? 'YOLO' : 'Strict'}`;
+  if (!setBtn.dataset.wired) {
+    setBtn.dataset.wired = '1';
+    // Changes take effect as you make them, and stay only once you press ✓: ✕ puts back what was there when the
+    // window opened. With unsaved changes, a click outside or Esc doesn't close it (it points at ✓ and ✕ instead).
+    const okBtn = $('.cs-ok', panel), undoBtn = $('.cs-undo', panel), note = $('.cs-note', panel);
+    const state = () => JSON.stringify({ r: c.agent.setup.reasoning, cr: c.agent.setup.creativity, a: c.approval, t: c.tools, al: c.agent.allowed, set: G.settings });
+    let snap = null;
+    const dirty = () => snap != null && state() !== snap;
+    const mark = () => { const d = dirty(); okBtn.disabled = !d; undoBtn.disabled = !d; panel.classList.toggle('dirty', d); const t = d ? 'Unsaved changes' : 'No changes'; if (note.textContent !== t) note.textContent = t; }; // only when it changes: the observer below watches this window, so writing it every time would loop
+    const shut = () => { snap = null; panel.classList.remove('dirty', 'nudge'); panel.hidden = true; scrim.hidden = true; rack.classList.remove('cs-open'); setBtn.classList.remove('on'); setBtn.setAttribute('aria-expanded', 'false'); document.removeEventListener('pointerdown', outside, true); document.removeEventListener('keydown', onKey, true); };
+    const nudge = () => { panel.classList.remove('nudge'); void panel.offsetWidth; panel.classList.add('nudge'); okBtn.focus(); };
+    const discard = (andClose = true) => {
+      if (dirty()) {
+        const o = JSON.parse(snap);
+        Object.assign(c.agent.setup, { reasoning: o.r, creativity: o.cr });
+        c.approval = o.a; c.tools = o.t; c.agent.allowed = o.al;
+        for (const k of Object.keys(G.settings)) delete G.settings[k];
+        Object.assign(G.settings, o.set);
+        saveChat(c); savePrefs();
+        if (c.running?.runId) postJ(`/api/runs/${c.running.runId}/mode`, { approval: c.approval }).catch(() => {});
+        renderComposerBar(c); renderToolbars();
+      }
+      if (andClose) shut(); else mark();
+    };
+    const save = () => { saveChat(c); savePrefs(); shut(); };
+    const outside = (e) => { if ((!rack.contains(e.target) || e.target === scrim) && !e.target.closest?.('dialog, .oh-tip')) { if (dirty()) { e.preventDefault(); e.stopPropagation(); nudge(); } else shut(); } };
+    const onKey = (e) => { if (e.key === 'Escape' && !document.querySelector('dialog[open]')) { e.stopPropagation(); if (dirty()) nudge(); else { shut(); setBtn.focus(); } } };
+    new MutationObserver(() => { if (snap != null) mark(); }).observe(panel, { childList: true, subtree: true });
+    panel.addEventListener('change', () => setTimeout(mark));
+    panel.addEventListener('click', () => setTimeout(mark));
+    scrim.onclick = () => (dirty() ? nudge() : shut());
+    setBtn.onclick = () => {
+      if (!panel.hidden) return dirty() ? nudge() : shut();
+      snap = state(); mark();
+      panel.hidden = false; scrim.hidden = false; rack.classList.add('cs-open'); setBtn.classList.add('on'); setBtn.setAttribute('aria-expanded', 'true');
+      document.addEventListener('pointerdown', outside, true); document.addEventListener('keydown', onKey, true);
+    };
+    okBtn.onclick = save;
+    $('.cs-x', panel).onclick = () => discard(true);
+    undoBtn.onclick = () => discard(false);
+  }
+  $('.model', slot).onclick = async () => { const id = await pickModel('chat', s.model, { context: `For “${clip(c.title, 40)}”` }); if (id) { s.model = id; saveChat(c); renderComposerBar(c); renderChatHead(c); } };
   wireReasonMenu(c, bar);
-  $('.follow-agent', bar).onchange = (e) => { G.followAgent = e.target.checked; savePrefs(); for (const ch of G.open.values()) if (ch !== c) renderComposerBar(ch); };
+  for (const b of bar.querySelectorAll('.lvl-b')) b.onclick = () => { c.agent.setup[b.closest('.lvl').dataset.key] = b.dataset.v; saveChat(c); renderComposerBar(c); };
+  for (const b of bar.querySelectorAll('.qt-b')) b.onclick = () => {
+    const k = b.dataset.k;
+    if (k === 'listen') { (G.settings.tools.listen ??= {}).on = G.settings.tools.listen.on === false; savePrefs(); }
+    else { c.tools[k] = !({ ...DEFAULT_CHAT_TOOLS, ...c.tools })[k]; saveChat(c); }
+    renderToolbars(); renderComposerBar(c);
+  };
+  const gear = $('.cs-gear', rack); if (gear && !gear.dataset.wired) { gear.dataset.wired = '1'; gear.onclick = () => openSettings(); }
+  $('.follow-agent', followSlot).onchange = (e) => { G.followAgent = e.target.checked; savePrefs(); for (const ch of G.open.values()) if (ch !== c) renderComposerBar(ch); };
   for (const b of bar.querySelectorAll('.perm button')) b.onclick = () => { c.approval = b.dataset.approval; saveChat(c); renderComposerBar(c); if (c.running?.runId) postJ(`/api/runs/${c.running.runId}/mode`, { approval: c.approval }).catch(() => {}); };
   renderAllowed(c);
 }
@@ -2292,6 +2374,30 @@ function creativityMenuHTML(s) {
     </div></div>`;
 }
 // Wires every dropdown in the message box (Reasoning, Creativity); each sets its own key on the chat's setup.
+// Reasoning and creativity as small level meters: an icon, then one step per option (lit up to the chosen one).
+// A for "model default". The option's name and what it does show on hover.
+const LVL_REASON = ['off', 'low', 'medium', 'high'], LVL_CREATIVE = ['focused', 'default', 'creative'];
+function levelsHTML(s) {
+  const m = G.byId.get(s.model), na = m && m.kind === 'chat' && m.reasoning === false, rv = s.reasoning || 'off';
+  const cv = CREATIVITY_INFO[s.creativity] ? s.creativity : 'default';
+  const noTemp = m && m.kind === 'chat' && m.temp === false;
+  const step = (key, info, v, i, lit, on, extra = '') => `<button type="button" class="lvl-b ${lit ? 'lit' : ''} ${on ? 'on' : ''}" role="radio" aria-checked="${on}" data-v="${v}" title="${esc(`${key}: ${info[v][0]}${on ? ' (now)' : ''}\n${info[v][1]}${extra}`)}" aria-label="${key}: ${info[v][0]}"><i style="--h:${i}"></i></button>`;
+  const ri = LVL_REASON.indexOf(rv), ci = LVL_CREATIVE.indexOf(cv);
+  const rNote = na ? '\nThis model has no reasoning setting; it applies if you switch to one that does.' : '';
+  const cNote = noTemp ? '\nThis model has no temperature setting, so this has no effect on it.' : '';
+  return `<div class="lvl lvl-reason ${na ? 'na' : ''}" role="radiogroup" aria-label="Reasoning" data-key="reasoning"><span class="lvl-ico" title="Reasoning: how much the model thinks before answering" aria-hidden="true">🧠</span><button type="button" class="lvl-b lvl-auto ${rv === 'default' ? 'on' : ''}" role="radio" aria-checked="${rv === 'default'}" data-v="default" title="${esc(`Reasoning: Model default${rv === 'default' ? ' (now)' : ''}\n${REASON_INFO.default[1]}${rNote}`)}" aria-label="Reasoning: model default">A</button>${LVL_REASON.map((v, i) => step('Reasoning', REASON_INFO, v, i, ri >= 0 && i <= ri && rv !== 'off', v === rv, rNote)).join('')}</div>`
+    + `<div class="lvl lvl-creative ${noTemp ? 'na' : ''}" role="radiogroup" aria-label="Creativity" data-key="creativity"><span class="lvl-ico" title="Creativity: how varied the answers are" aria-hidden="true">🎨</span>${LVL_CREATIVE.map((v, i) => step('Creativity', CREATIVITY_INFO, v, i + 1, i <= ci, v === cv, cNote)).join('')}</div>`;
+}
+// Every tool as one icon toggle (lit when on); the name, what it does and its price show on hover.
+function quickToolsHTML(c) {
+  const t = { ...DEFAULT_CHAT_TOOLS, ...c.tools };
+  const btn = (k, icon, name, lines, on, paid) => `<button type="button" class="qt-b ${on ? 'on' : ''} ${paid ? 'paid' : ''}" data-k="${k}" aria-pressed="${on}" aria-label="${esc(name)}" title="${esc([`${name}: ${on ? 'on' : 'off'}`, ...lines, on ? 'Click to turn it off' : 'Click to turn it on'].join('\n'))}">${icon}</button>`;
+  const q = QUALITY_TOOLS.map((k) => { const x = QUALITY_INFO[k]; return btn(k, x.icon, x.name, [x.note, `Cost\t${x.perBuild()}`], !!t[k]); }).join('');
+  const media = CHAT_TOOLS.map((k) => { const [, label, note] = CATS.find((x) => x[0] === k); const icon = label.split(' ')[0], name = label.slice(icon.length + 1); return btn(k, icon, name, [note.replace(/^paid;?\s*/, '') || 'Costs money per use', `Model\t${short(G.settings.tools[k]?.models?.[0] || '')}`, 'Paid: stops at the paid media budget'], !!t[k], true); }).join('');
+  const micOn = G.settings.tools.listen?.on !== false;
+  const mic = btn('listen', '🎤', 'Mic · speech to text', ['Turns what you say into text in the message box', 'All chats; off hides the mic button'], micOn);
+  return `<span class="qt-group">${q}</span><span class="qt-sep" aria-hidden="true"></span><span class="qt-group">${media}</span><span class="qt-sep" aria-hidden="true"></span><span class="qt-group">${mic}</span>`;
+}
 function wireReasonMenu(c, bar) { for (const wrap of bar.querySelectorAll('.rs-wrap')) wireSetupMenu(c, wrap); }
 function wireSetupMenu(c, wrap) {
   const btn = $('.rs-btn', wrap), pop = $('.rs-pop', wrap), key = wrap.dataset.key || 'reasoning';
@@ -2340,8 +2446,8 @@ function renderChatTools(c) {
         const q = QUALITY_INFO[k], m = q.model(), onq = c.tools[k] !== false;
         return `<label class="cmp-tp-row q-row" role="menuitemcheckbox" aria-checked="${onq}" title="${esc(q.tip)}">
           <span class="switch"><input type="checkbox" data-qtool="${k}" ${onq ? 'checked' : ''}><span class="slider"></span></span>
-          <span class="cmp-tp-info"><span class="cmp-tp-top"><span class="cmp-tp-name">${q.icon} ${q.name} <span class="q-cost">${esc(q.perBuild())}</span></span><button type="button" class="cmp-tp-model q-pick" data-q="${k}" title="${esc(m)} · ${esc(priceOf(m))} (all chats)">${recDot(m, q.kind)} ${esc(short(m))} <small>${esc(shortPrice(m))}</small> <i>▾</i></button></span>
-          <span class="cmp-tp-note">${esc(q.note)}${k === 'reviewer' || k === 'freshEyes' ? ` <span class="q-tier" role="group" aria-label="${q.name} strength">${[['cheap', 'Cheap'], ['strong', 'Strong']].map(([v, l]) => { const tierKey = k === 'reviewer' ? 'reviewTier' : 'freshEyesTier', modelKey = k === 'reviewer' ? 'reviewModel' : 'freshEyesModel'; return `<button type="button" class="q-tier-btn ${!G.settings[modelKey] && (G.settings[tierKey] || 'cheap') === v ? 'on' : ''}" data-q="${k}" data-tier="${v}" title="${v === 'cheap' ? (k === 'reviewer' ? 'gpt-6-luna: about $0.003 a build' : 'the helper model: fast, about $0.001 a look') : 'Claude Sonnet 5.5: stronger, about $0.01–0.02'}">${l}</button>`; }).join('')}</span>` : ''}</span></span></label>`;
+          <span class="cmp-tp-info"><span class="cmp-tp-top"><span class="cmp-tp-name">${q.icon} ${q.name} <span class="q-cost" title="${esc(q.perBuild())}">${esc(q.perBuild().replace(/\s+(a build|a look|a check|when used|each|per \w+).*$/i, ''))}</span></span><button type="button" class="cmp-tp-model q-pick" data-q="${k}" title="${esc(m)} · ${esc(priceOf(m))} (all chats)">${recDot(m, q.kind)} ${esc(short(m))} <small>${esc(shortPrice(m))}</small> <i>▾</i></button></span>
+          <span class="cmp-tp-note"><span class="cmp-tp-ntext">${esc(q.note)}</span>${k === 'reviewer' || k === 'freshEyes' ? `<span class="q-tier" role="group" aria-label="${q.name} strength">${[['cheap', 'Cheap'], ['strong', 'Strong']].map(([v, l]) => { const tierKey = k === 'reviewer' ? 'reviewTier' : 'freshEyesTier', modelKey = k === 'reviewer' ? 'reviewModel' : 'freshEyesModel'; return `<button type="button" class="q-tier-btn ${!G.settings[modelKey] && (G.settings[tierKey] || 'cheap') === v ? 'on' : ''}" data-q="${k}" data-tier="${v}" title="${v === 'cheap' ? (k === 'reviewer' ? 'gpt-6-luna: about $0.003 a build' : 'the helper model: fast, about $0.001 a look') : 'Claude Sonnet 5.5: stronger, about $0.01–0.02'}">${l}</button>`; }).join('')}</span>` : ''}</span></span></label>`;
       }).join('')}
       </div>
       <div class="cmp-tp-group">Paid media</div>
@@ -2352,7 +2458,7 @@ function renderChatTools(c) {
         return `<label class="cmp-tp-row" role="menuitemcheckbox" aria-checked="${!!c.tools[k]}">
           <span class="switch"><input type="checkbox" data-tool="${k}" ${c.tools[k] ? 'checked' : ''}><span class="slider"></span></span>
           <span class="cmp-tp-info"><span class="cmp-tp-top"><span class="cmp-tp-name">${label(k)}${paid ? ' <span class="paid-badge">paid</span>' : ''}</span><button type="button" class="cmp-tp-model tm-pick" data-k="${k}" title="${esc((t.models || []).join(', ') || 'Choose a model')}">${t.models?.[0] && !(t.pick === 'agent' && t.models.length > 1) ? `${recDot(t.models[0], k)} ` : ''}${esc(model || 'choose')} <i>▾</i></button></span>
-          <span class="cmp-tp-note">${esc(note.replace(/^paid;?\s*/, '') || 'costs money per use')}</span></span></label>`;
+          <span class="cmp-tp-note"><span class="cmp-tp-ntext">${esc(note.replace(/^paid;?\s*/, '') || 'costs money per use')}</span></span></span></label>`;
       }).join('')}
         <label class="cmp-tp-row tm-mic" role="menuitemcheckbox" aria-checked="${T.listen?.on !== false}">
           <span class="switch"><input type="checkbox" class="tm-mic-on" ${T.listen?.on !== false ? 'checked' : ''}><span class="slider"></span></span>
@@ -2366,6 +2472,7 @@ function renderChatTools(c) {
   const close = () => { menu.hidden = true; btn.setAttribute('aria-expanded', 'false'); document.removeEventListener('pointerdown', outside, true); };
   const outside = (e) => { if (!box.contains(e.target) && !$('#picker').open) close(); };
   btn.onclick = () => { const open = menu.hidden; menu.hidden = !open; btn.setAttribute('aria-expanded', String(open)); if (open) document.addEventListener('pointerdown', outside, true); else close(); };
+  if (box.closest('.chat-set')) { btn.hidden = true; menu.hidden = false; btn.onclick = () => {}; }
   for (const cb of menu.querySelectorAll('input[data-tool]')) cb.onchange = () => { c.tools[cb.dataset.tool] = cb.checked; saveChat(c); const keep = !menu.hidden; renderChatTools(c); if (keep) $('.tools-btn', box).click(); };
   // The quality tools: on/off for this chat; their models and the reviewer's strength apply to all chats.
   const reopen = () => { const keep = !menu.hidden; renderToolbars(); if (keep) $('.tools-btn', $('.toolbar', c.el.root))?.click(); };
@@ -2613,33 +2720,46 @@ function timelineHTML(m) {
       continue;
     }
     if (it.kind === 'group') { const busy = m.live && !it.done && it.calls.some((x) => x.res == null); row(groupRow(it.key, it.icon, it.label, it.calls, busy), it.key, it.calls, 0, busy); continue; }
-    if (it.kind === 'card') { other(it.html()); continue; }
+    if (it.kind === 'card') { const h = it.html(); if (h) pieces.push({ html: h, row: false, card: true }); continue; }
     if (it.kind === 'steer') {
       const att = (m.steerAtt || []).find((x) => x.text === it.e.text && !usedAtt.has(x)) || null;
       if (att) usedAtt.add(att);
-      other(`<div class="steer-card ${it.read ? 'read' : ''}"><span class="sc-who">You, while it worked</span><p>${esc(it.e.text)}</p>${att?.imgs?.length ? `<div class="u-imgs" data-views="${esc(JSON.stringify(att.imgViews || []))}">${att.imgs.map((u, k) => `<img src="${u}" alt="attached picture" data-k="${k}">`).join('')}</div>` : it.e.images ? `<span class="sc-att">📎 ${it.e.images} picture${it.e.images > 1 ? 's' : ''}</span>` : ''}${att?.docs?.length ? `<div class="u-docs">${att.docs.map((d) => `<button type="button" class="u-doc" data-doc="${esc(JSON.stringify(d))}" title="${esc(d.name)} · ${esc(docSize(d.size))} · click to preview">${DOC_ICON[d.kind] || '📄'} ${esc(d.name)}</button>`).join('')}</div>` : it.e.docs ? `<span class="sc-att">📎 ${it.e.docs} file${it.e.docs > 1 ? 's' : ''}</span>` : ''}<span class="sc-state">${it.read ? '✓ read by the agent' : '… it reads this at its next step'}</span></div>`);
+      pieces.push({ row: false, card: true, html: `<div class="steer-card ${it.read ? 'read' : ''}"><span class="sc-who">You, while it worked</span><p>${esc(it.e.text)}</p>${att?.imgs?.length ? `<div class="u-imgs" data-views="${esc(JSON.stringify(att.imgViews || []))}">${att.imgs.map((u, k) => `<img src="${u}" alt="attached picture" data-k="${k}">`).join('')}</div>` : it.e.images ? `<span class="sc-att">📎 ${it.e.images} picture${it.e.images > 1 ? 's' : ''}</span>` : ''}${att?.docs?.length ? `<div class="u-docs">${att.docs.map((d) => `<button type="button" class="u-doc" data-doc="${esc(JSON.stringify(d))}" title="${esc(d.name)} · ${esc(docSize(d.size))} · click to preview">${DOC_ICON[d.kind] || '📄'} ${esc(d.name)}</button>`).join('')}</div>` : it.e.docs ? `<span class="sc-att">📎 ${it.e.docs} file${it.e.docs > 1 ? 's' : ''}</span>` : ''}<span class="sc-state">${it.read ? '✓ read by the agent' : '… it reads this at its next step'}</span></div>` });
       continue;
     }
     if (it.kind === 'note') other(`<div class="tl-note">${esc(clip(it.text, 220))}</div>`);
   }
   // Four or more lines in a row with nothing said between them fold into one line ("Wrote 7 files, ran 7 commands ·
-  // thought 6 times"); open it to see each. While the reply works, its newest line stays outside so you see what it's doing.
-  const out = [];
-  for (let k = 0; k < pieces.length;) {
-    if (!pieces[k].row) { out.push(pieces[k++].html); continue; }
-    let e = k; while (e < pieces.length && pieces[e].row) e++;
-    let run = pieces.slice(k, e);
-    const tail = m.live && e === pieces.length ? run.splice(-1) : [];
-    if (run.length >= 4) {
-      const calls = run.flatMap((x) => x.calls), thinks = run.reduce((n, x) => n + x.think, 0);
-      const errs = calls.filter((x) => x.res != null && /^Error/.test(x.res)).length;
-      const label = [calls.length ? callsLabel(calls) : '', thinks ? `${calls.length ? 'thought' : 'Thought'} ${thinks} time${thinks === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
-      out.push(det(`b-${run[0].key}`, 'tl-row tl-bundle', `<span class="tl-ic">🗂</span><span class="tl-label">${esc(label)}</span><small class="tl-words">${run.length} steps</small>${run.some((x) => x.busy) ? '<span class="tl-spin" aria-label="running"></span>' : ''}${errs ? `<span class="tl-err">${errs} error${errs > 1 ? 's' : ''}</span>` : ''}`, `<div class="tl-bundle-body">${run.map((x) => x.html).join('')}</div>`));
-    } else out.push(...run.map((x) => x.html));
-    out.push(...tail.map((x) => x.html));
-    k = e;
-  }
-  return out.join('');
+  // thought 6 times"); open it to see each.
+  const bundle = (list) => {
+    const out = [];
+    for (let k = 0; k < list.length;) {
+      if (!list[k].row) { out.push(list[k++].html); continue; }
+      let e = k; while (e < list.length && list[e].row) e++;
+      const run = list.slice(k, e);
+      if (run.length >= 4) {
+        const calls = run.flatMap((x) => x.calls), thinks = run.reduce((n, x) => n + x.think, 0);
+        const errs = calls.filter((x) => x.res != null && /^Error/.test(x.res)).length;
+        const label = [calls.length ? callsLabel(calls) : '', thinks ? `${calls.length ? 'thought' : 'Thought'} ${thinks} time${thinks === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
+        out.push(det(`b-${run[0].key}`, 'tl-row tl-bundle', `<span class="tl-ic">🗂</span><span class="tl-label">${esc(label)}</span><small class="tl-words">${run.length} steps</small>${run.some((x) => x.busy) ? '<span class="tl-spin" aria-label="running"></span>' : ''}${errs ? `<span class="tl-err">${errs} error${errs > 1 ? 's' : ''}</span>` : ''}`, `<div class="tl-bundle-body">${run.map((x) => x.html).join('')}</div>`));
+      } else out.push(...run.map((x) => x.html));
+      k = e;
+    }
+    return out.join('');
+  };
+  // The reply's work folds into one line you can open (the Steps pane has all of it too). While it works, what it is
+  // doing right now, and anything waiting for you, stay below that line.
+  const live = !!m.live, last = pieces.length - 1;
+  const stays = (x, i) => live && (x.card || i === last);
+  const fold = pieces.filter((x, i) => !stays(x, i)), keep = pieces.filter((x, i) => stays(x, i));
+  if (fold.length < 3) return bundle(pieces);
+  const done = fold.flatMap((x) => x.calls || []), thinks = fold.reduce((n, x) => n + (x.think || 0), 0), steps = fold.filter((x) => x.row).length;
+  const errs = done.filter((x) => x.res != null && /^Error/.test(x.res)).length;
+  // Says how much work it was; what kind of work shows on hover (and inside).
+  const what = [done.length ? callsLabel(done) : '', thinks ? `${done.length ? 'thought' : 'Thought'} ${thinks} time${thinks === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
+  const counts = [done.length ? `${done.length} tool call${done.length === 1 ? '' : 's'}` : '', thinks ? `${thinks} thought${thinks === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
+  return det('all', 'tl-row tl-bundle tl-fold', `<span class="tl-ic">🗂</span><span class="tl-label" title="${esc(what)}">${live ? 'Working' : 'Worked'} through ${steps} step${steps === 1 ? '' : 's'}</span><small class="tl-words">${esc(counts)}</small>${errs ? `<span class="tl-err">${errs} error${errs > 1 ? 's' : ''}</span>` : ''}`, `<div class="tl-bundle-body">${bundle(fold)}</div>`)
+    + keep.map((x) => x.html).join('');
 }
 // Open lines stay open across redraws; a thinking line draws its text only when opened.
 function wireTimeline(m, el) {
@@ -2681,7 +2801,7 @@ function updateMsg(c, m, { bodyOnly = false } = {}) {
   const el = m.el;
   if (!el) return;
   const body = $('.body', el);
-  body.innerHTML = m.error ? `${md(m.content)}<p class="err">⚠ ${esc(m.error)}</p>` : md(m.content) || (m.live ? '' : '<p class="err">(no reply)</p>');
+  body.innerHTML = m.error && !stoppedByYou(m) ? `${md(m.content)}<p class="err">⚠ ${esc(m.error)}</p>` : md(m.content) || (m.live || stoppedByYou(m) ? '' : '<p class="err">(no reply)</p>');
   body.classList.toggle('typing', !!m.live);
   enhance(body);
   drawThinking(m);
@@ -2689,7 +2809,8 @@ function updateMsg(c, m, { bodyOnly = false } = {}) {
   const waiting = Object.values(m.approvals || {}).some((a) => !a.outcome);
   el.classList.toggle('is-live', !!m.live && !waiting);
   el.classList.toggle('is-waiting', !!m.live && waiting);
-  el.classList.toggle('is-error', !!m.error);
+  el.classList.toggle('is-error', !!m.error && !stoppedByYou(m));
+  el.classList.toggle('is-stopped', stoppedByYou(m));
   // The badge shows which model wrote this reply.
   const model = (m.trace || []).find((e) => e.t === 'llm_start')?.model || Object.keys(m.stats?.byModel || {}).find((k) => (m.stats.byModel[k].role || 'writer') === 'writer') || c.agent.setup.model;
   el.dataset.who = initials(short(model)).slice(0, 2);
@@ -2730,9 +2851,16 @@ function updateMsg(c, m, { bodyOnly = false } = {}) {
   const stopTag = s?.stop === 'steps' ? '<span title="The reply used all its steps (⚙ Settings → Agent loop)">step limit reached</span>'
     : s?.stop === 'budget' ? (s.budgetStop === 'hard' ? '<span title="The reply went past the project budget and its allowance for finishing work (⚙ Settings → Budget & approvals), so it was stopped">stopped past the budget</span>'
       : '<span title="The project budget was used up, so the reply did not start; raise it with the $ next to the project in the sidebar">budget reached</span>') : '';
+  let undoRow = $('.f-undo-row', el);
+  if (!undoRow) { undoRow = document.createElement('div'); undoRow.className = 'f-undo-row'; }
+  $('.foot', el).before(undoRow);
+  undoRow.innerHTML = s ? s.changed?.length ? (m.undone ? `<span class="undone undo-undone">↶ ${m.undone === 'partial' ? 'changes undone, except files changed since' : 'changes undone'}</span>` : undoGone(c, m) ? `<span class="undo-gone" title="Undo is kept for the newest ${Number(G.settings?.undoKeep) || 10} replies in a project, for up to ${Number(G.settings?.undoDays) || 7} days (⚙ Settings → Code & servers). Older undo copies are removed.">↶ undo no longer kept</span>` : `<button type="button" class="undo undo-btn" title="Put back the files this reply changed: ${esc(s.changed.filter((f) => !m.undoneFiles?.includes(f)).join(', '))}">↶ Undo changes (${s.changed.length - (m.undoneFiles?.length || 0)})</button>`) : '' : '';
+  undoRow.hidden = !undoRow.innerHTML;
   $('.foot', el).innerHTML = !s && m.resumable && !m.live ? '<button type="button" class="resume-btn primary" title="Carry on from the last finished step">▶ Resume where it stopped</button>'
     : !s && m.live && m.liveCost != null ? liveFootHTML(m)
-    : s ? `<span class="f-cost" title="What the reply cost">${money(s.cost, 5)}</span><span class="f-dur" title="How long the reply took">${secs(s.ms)}</span>${checkTag}${stopTag}${s.changed?.length ? (m.undone ? `<span class="undone undo-undone">↶ ${m.undone === 'partial' ? 'changes undone, except files changed since' : 'changes undone'}</span>` : undoGone(c, m) ? `<span class="undo-gone" title="Undo is kept for the newest ${Number(G.settings?.undoKeep) || 10} replies in a project, for up to ${Number(G.settings?.undoDays) || 7} days (⚙ Settings → Code & servers). Older undo copies are removed.">↶ undo no longer kept</span>` : `<button type="button" class="undo undo-btn" title="Put back the files this reply changed: ${esc(s.changed.filter((f) => !m.undoneFiles?.includes(f)).join(', '))}">↶ Undo changes (${s.changed.length - (m.undoneFiles?.length || 0)})</button>`) : ''}` : '';
+    : s ? `<span class="f-cost" title="What the reply cost">${money(s.cost, 5)}</span>${s.ms ? `<span class="f-dur" title="How long the reply took">${secs(s.ms)}</span>` : ''}${checkTag}${stopTag}` : '';
+  // A reply you stopped says so in one small tag down here, not in a box above.
+  if (stoppedByYou(m) && !m.live) $('.foot', el).insertAdjacentHTML('afterbegin', '<span class="f-stopped" title="You stopped this reply">■ Stopped</span>');
   // Right side: 🧭 Steps (hover: what it cost; click: the steps, ending with the cost card), then copy and remix.
   const right = document.createElement('span'); right.className = 'f-right';
   $('.f-pop', tb)?.remove(); tb.classList.toggle('has-info', !!s);
@@ -2744,7 +2872,7 @@ function updateMsg(c, m, { bodyOnly = false } = {}) {
     wireIconCopy($('.foot .mt-copy', el), () => m.content);
     $('.foot .mt-remix', el).onclick = () => remixFrom(c, m);
   }
-  const undo = $('.foot .undo', el);
+  const undo = $('.f-undo-row .undo', el);
   if (undo) undo.onclick = () => undoReply(c, m);
   const resume = $('.foot .resume-btn', el);
   if (resume) resume.onclick = () => { if (c.running) return; m.resumable = false; updateMsg(c, m); saveChat(c); runChat(c, '', null, [], { resumeOf: m.runId }); };
@@ -2757,7 +2885,7 @@ function drawReviewCard(c, m, el) {
   let slot = $('.review-slot', el);
   const n = m.stats?.changed?.length || 0, left = n - (m.undoneFiles?.length || 0);
   if (!n || left <= 0 || m.live || m.undone || undoGone(c, m)) { slot?.remove(); return; }
-  if (!slot) { slot = document.createElement('div'); slot.className = 'review-slot'; $('.foot', el).before(slot); }
+  if (!slot) { slot = document.createElement('div'); slot.className = 'review-slot'; ($('.f-undo-row', el) || $('.foot', el)).before(slot); }
   const key = `${m.runId}:${left}`;
   if (slot.dataset.key === key) return; // keeps it open, with its diffs, while the reply redraws
   slot.dataset.key = key;
@@ -3531,14 +3659,16 @@ function wireQuestion(card, m) {
 async function steer(c, text) {
   if ((c.docs || []).some((d) => d.busy)) { const ta = $('.input', c.el.root); if (ta && !ta.value) ta.value = text; uiAlert('Some attached files are still being read. Send when their chips say they are ready.'); return; }
   // Pictures, files and context go with the note, the same way they go with a message.
-  const imgs = c.images.splice(0), docs = (c.docs || []).splice(0).filter((d) => d.id && !d.busy), ctxItems = c.ctx.splice(0);
+  const cmts = (c.comments || []).splice(0);
+  const imgs = [...c.images.splice(0), ...cmts.filter((x) => x.crop).map((x) => ({ thumb: x.crop, full: x.crop }))], docs = (c.docs || []).splice(0).filter((d) => d.id && !d.busy), ctxItems = c.ctx.splice(0);
   renderAttachments(c);
-  const context = ctxItems.length ? await contextText(ctxItems).catch(() => '') : '';
+  const pointed = cmts.length ? `The user pointed at on the page: ${cmts.map((x) => `${x.tag} "${x.text}" (${x.selector})${x.note ? `: ${x.note}` : ''}`).join('; ')}` : '';
+  const context = [pointed, ctxItems.length ? await contextText(ctxItems).catch(() => '') : ''].filter(Boolean).join('\n\n');
   const r = await postJ(`/api/runs/${c.running.runId}/steer`, { text, images: imgs.map((x) => x.full), docs: docs.map((d) => d.id), context }).catch((e) => ({ error: e.message }));
   if (!r?.ok) {
     // Nothing is lost: the text and the attachments go back into the box.
     const ta = $('.input', c.el.root); if (ta && !ta.value) ta.value = text;
-    c.images.unshift(...imgs); (c.docs ||= []).unshift(...docs); c.ctx.unshift(...ctxItems); renderAttachments(c);
+    c.images.unshift(...imgs.filter((x) => !cmts.some((k) => k.crop === x.full))); (c.docs ||= []).unshift(...docs); c.ctx.unshift(...ctxItems); (c.comments ||= []).unshift(...cmts); renderAttachments(c);
     uiAlert(`The note didn't reach the agent${r?.error ? `: ${r.error}` : ''}. It's back in the box.`);
     return;
   }
@@ -3546,6 +3676,8 @@ async function steer(c, text) {
   const m = [...c.agent.messages].reverse().find((x) => x.role === 'assistant' && x.runId === c.running?.runId);
   if (m && (imgs.length || docs.length)) { (m.steerAtt ||= []).push({ text, imgs: imgs.map((x) => x.thumb), imgViews: imgs.map((x) => x.view || x.full), docs: docs.map(({ id, name, kind, size, rel }) => ({ id, name, kind, size, rel })) }); saveChat(c); }
 }
+// Anything waiting in the box besides text: pictures, files, @ context, or elements picked on the page.
+const hasAttachments = (c) => !!(c.images.length || (c.docs || []).length || c.ctx.length || (c.comments || []).length);
 async function send(c, text) {
   text = text.trim();
   // A picture, a file or context on its own is a message too.
@@ -5090,6 +5222,7 @@ async function boot() {
   G.settings = { voters: d.voters, gate: d.gate, maxSteps: d.maxSteps, approval: d.approval, budget: d.budget, model: d.chatModel || d.setups.C.model, reasoning: 'off', ...(saved?.settings || {}) };
   G.settings.tools = Object.fromEntries(Object.entries(d.tools).map(([k, v]) => [k, { ...structuredClone(v), ...(saved?.settings?.tools?.[k] || {}) }]));
   delete G.settings.media; delete G.settings.mediaEnabled;
+  if ((G.settings.modelDefaultV || 0) < 2) { G.settings.model = d.chatModel || G.settings.model; G.settings.modelDefaultV = 2; }
   if ((G.settings.maxSteps || 0) < d.maxSteps) G.settings.maxSteps = d.maxSteps; // building and checking needs room
   G.settings.maxSteps = Math.min(120, G.settings.maxSteps);
   G.sideHidden = !!saved?.sideHidden; G.chatOpts = !!saved?.chatOpts; G.projectOrder = saved?.projectOrder || []; G.foldedProjects = saved?.foldedProjects || []; G.favModels = saved?.favModels || {}; G.spaceSeen = saved?.spaceSeen || {}; G.followAgent = saved?.followAgent !== false; G.budgetSeen = saved?.budgetSeen || {}; G.recentModels = saved?.recentModels || {}; G.pickerSort = saved?.pickerSort || {}; G.sizes = saved?.sizes || {}; G.theme = saved?.theme || null;

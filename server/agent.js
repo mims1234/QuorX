@@ -279,7 +279,7 @@ export function steerRun(runId, text, extra = {}) {
   const docs = (Array.isArray(extra.docs) ? extra.docs : []).map(String).slice(0, 20);
   const context = clip(String(extra.context || ''), 60000);
   if (!ctl || (!t && !images.length && !docs.length && !context)) return false;
-  ctl.steer(t || '(see the attached files)', { images, docs, context });
+  ctl.steer(t || '(No message: see what the user attached or pointed at.)', { images, docs, context });
   return true;
 }
 // The project budget card (Strict): "Wrap up" ends the reply; raising the budget anywhere lets it go on.
@@ -1605,7 +1605,7 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
     ].filter(Boolean).join('\n\n');
     const rmsgs = [{ role: 'system', content: REVIEW_SYSTEM(bar, sees, !!brandDoc) }, { role: 'user', content: brief }];
     const shots = new WeakSet();
-    let result = null;
+    let result = null, opened = 0, tried = 0;
     for (let i = 0; i < 14 && !result; i++) {
       const final = i >= 12;
       const body = { model, messages: rmsgs, tools: [BROWSER_TOOLS[0], submitReviewTool(keys)], tool_choice: final ? { type: 'function', function: { name: 'submit_review' } } : 'auto', max_tokens: 4000, ...REASONING.off };
@@ -1627,6 +1627,7 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
         emit({ t: 'tool', step, name: 'browser', args, by: 'reviewer', at: at() });
         let out;
         try { out = await browserTool(args); } catch (e) { if (signal.aborted) throw e; out = `Error: ${e.message}`; }
+        tried++; if (!/^Error:/.test(out)) opened++;
         emit({ t: 'tool_result', step, name: 'browser', result: clip(out, 400), by: 'reviewer', at: at() });
         rmsgs.push({ role: 'tool', tool_call_id: tc.id, content: clip(out, 6000) });
       }
@@ -1638,6 +1639,8 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
       }
     }
     if (!result) return null;
+    // The reviewer could not open a single page: its scores would only say the browser failed, not how the build is.
+    if (tried && !opened) { emit({ t: 'note', level: 'warn', msg: `The reviewer (${short(model)}) could not open any page (the browser failed every time), so there is no review this round.`, at: at() }); return null; }
     // A missing core score counts as 1 (nothing to show for it); a missing accessibility or brand score is left out, not failed.
     const scores = Object.fromEntries(keys.filter((k) => CORE_KEYS.includes(k) || result.scores?.[k] != null).map((k) => [k, Math.max(1, Math.min(5, Math.round(Number(result.scores?.[k])) || 1))]));
     // A bug counts only with its steps and what happened: something the builder can reproduce and fix.

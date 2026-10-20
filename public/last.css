@@ -2275,8 +2275,9 @@ body.top-in-sidebar .sb-titlebar #sbCollapseBtn { margin-left: 7px !important; }
 .sb-project.folded { margin-top: 0; margin-bottom: 0; }
 .sb-project .sb-pbar { left: 6px; right: 6px; }
 html body .sidebar .sb-list .sb-project { border: 1px solid transparent !important; border-radius: 9px !important; box-shadow: none !important; }
-html body .sidebar .sb-list .sb-project:not(.folded) { border-color: color-mix(in srgb, var(--pc) 32%, transparent) !important; background: color-mix(in srgb, var(--pc) 4%, transparent) !important; box-shadow: 0 0 12px -6px color-mix(in srgb, var(--pc) 70%, transparent) !important; }
-html body .sidebar .sb-list .sb-project.current { border-color: color-mix(in srgb, var(--pc) 55%, transparent) !important; background: color-mix(in srgb, var(--pc) 6%, transparent) !important; box-shadow: 0 0 16px -5px color-mix(in srgb, var(--pc) 85%, transparent) !important; }
+/* open projects carry no box or glow (it read as noise); only the open chat's left line glows */
+html body .sidebar .sb-list .sb-project:not(.folded), html body .sidebar .sb-list .sb-project.current { border-color: transparent !important; background: transparent !important; box-shadow: none !important; }
+html body .sidebar .sb-project .sb-chat.sb-chat-item.active { box-shadow: -3px 0 12px -3px var(--accent), inset 1px 0 0 var(--accent) !important; }
 
 /* the pin on every project row: dim until pinned, then lit */
 .sb-project .sb-pname-wrap .sb-pin { color: var(--dim) !important; }
@@ -2322,3 +2323,246 @@ html body .sidebar .sb-list .sb-project { margin-left: 2px !important; margin-ri
 .oh-tip .tip-row.tip-total b { font-weight: 800; }
 .pj-hpick:focus-within { outline: none; }
 .pj-hpick:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* The reply's cost card fits its content: up to 440px (never wider than the window), labels on one line,
+   long values (the calls breakdown) on a second line, model names shortening before their costs. */
+.f-pop-float { max-width: min(440px, calc(100vw - 16px)) !important; min-width: 260px; overflow: hidden; }
+.f-pop-float .fi-row { align-items: baseline; min-width: 0; }
+.f-pop-float .fi-row > span { flex: none; white-space: nowrap; }
+.f-pop-float .fi-row > b { min-width: 0; text-align: right; overflow-wrap: anywhere; }
+.f-pop-float .fi-row b small { display: block; margin-top: 1px; font: 500 10.5px var(--mono); white-space: normal; }
+.f-pop-float .fi-model > span { flex: 1 1 auto !important; min-width: 0; }
+.f-pop-float .fi-model > b { flex: none; white-space: nowrap; }
+
+/* Tools menu: every row is the same two-line grid. Line 1: the ✓, the name and its price, the model on the right.
+   Line 2: what it does, with Cheap | Strong on the right where a row has it. */
+.tools-menu .cmp-tp-list { display: grid; gap: 6px; }
+.tools-menu .cmp-tp-row { display: grid !important; grid-template-columns: 22px minmax(0, 1fr); column-gap: 10px; align-items: start; padding: 8px 10px !important; border-radius: 9px; }
+.tools-menu .cmp-tp-row > .switch, .tools-menu .cmp-tp-row > .sq-check { margin-top: 3px; }
+.tools-menu .cmp-tp-info { display: grid; gap: 3px; min-width: 0; }
+.tools-menu .cmp-tp-top { display: flex !important; align-items: center; gap: 8px; min-width: 0; flex-wrap: nowrap !important; }
+.tools-menu .cmp-tp-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tools-menu .cmp-tp-name .q-cost { margin-left: 4px; }
+.tools-menu .cmp-tp-model { flex: none; max-width: 58%; margin: 0 !important; justify-content: flex-start; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tools-menu .cmp-tp-note { display: flex !important; align-items: center; gap: 10px; min-width: 0; margin: 0 !important; line-height: 1.4; }
+.tools-menu .cmp-tp-ntext { flex: 1 1 auto; min-width: 0; color: var(--muted); }
+.tools-menu .cmp-tp-note .q-tier { flex: none; margin: 0 !important; }
+/* the name and its price always show in full; the model picker shortens instead (its full name is in its tip) */
+.tools-menu .cmp-tp-name { flex: none !important; overflow: visible !important; }
+.tools-menu .cmp-tp-model { flex: 0 1 auto !important; min-width: 0; max-width: none !important; margin-left: auto !important; }
+.tools-menu .cmp-tp-model small { white-space: nowrap; }
+.tools-menu .cmp-tp-model small { display: none !important; } /* the model price is in its tip; the name gets the room */
+
+.tools-menu.cmp-tools-popover { width: min(440px, calc(100vw - 24px)) !important; max-width: none !important; }
+.tools-menu .q-cost { font-variant-numeric: tabular-nums; }
+
+/* Reviewer scores: each cell fits its label, pips and score (they ran into the next cell); the pass bar is a small tick under its pip */
+.rv-scores { grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr)) !important; gap: 4px 18px !important; }
+.rv-score { grid-template-columns: minmax(0, 1fr) auto 28px !important; gap: 8px !important; min-width: 0; }
+.rv-score > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rv-score b { white-space: nowrap; }
+.rv-pips i { position: relative; flex: none; }
+.rv-pips i.bar { box-shadow: none !important; }
+.rv-pips i.bar::after { content: ''; position: absolute; left: 1px; right: 1px; bottom: -4px; height: 2px; border-radius: 1px; background: var(--muted); }
+/* Home project card: just the GitHub mark, next to settings */
+.ld-p-top .ld-p-gh { flex: none; width: 26px; height: 26px; display: grid; place-items: center; border-radius: 6px; border: 1px solid var(--line); color: var(--muted); }
+.ld-p-top .ld-p-gh:hover { color: var(--text); background: var(--panel-2); }
+.ld-p-top .ld-p-gh svg { width: 14px; height: 14px; }
+/* Chat header: the project's GitHub mark next to its name */
+.ch-gh { flex: none; width: 24px; height: 24px; display: inline-grid; place-items: center; border-radius: 6px; border: 1px solid var(--line); color: var(--muted); margin-left: 4px; }
+.ch-gh[hidden] { display: none !important; }
+.ch-gh:hover { color: var(--text); background: var(--panel-2); border-color: var(--line-strong); }
+.ch-gh svg { width: 13px; height: 13px; }
+
+/* ---------- the message box: model, This chat, the box, attach, mic, send / stop. The rest is in "This chat's settings" ---------- */
+.chatpane .composer-box { position: relative; }
+.chatpane .cmp-control-rack { flex-wrap: nowrap !important; align-items: center !important; }
+.chatpane .cmp-control-rack::after { display: none !important; }
+.chatpane .cmp-model-slot { display: contents; }
+.chatpane .cmp-model-slot .cmp-model-chip { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chatpane .cmp-set-btn { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--line); background: transparent; color: var(--muted); font: 600 12px var(--font-ui); cursor: pointer; white-space: nowrap; }
+.chatpane .cmp-set-btn svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; }
+.chatpane .cmp-set-btn:hover { color: var(--text); background: var(--panel-2); border-color: var(--line-strong); }
+.chatpane .cmp-set-btn.on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: var(--accent-dim); box-shadow: 0 0 10px -3px var(--accent); }
+.chatpane .cmp-set-btn.yolo { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 50%, transparent); }
+.chatpane .cmp-set-btn.yolo.on { background: var(--bad-dim); box-shadow: 0 0 10px -3px var(--bad); }
+.chatpane .cmp-set-sum:empty { display: none; }
+.chatpane .cmp-set-sum { font: 600 10.5px var(--mono); padding: 1px 6px; border-radius: 5px; background: color-mix(in srgb, currentColor 14%, transparent); }
+.chatpane .chat-set { position: absolute; z-index: 60; left: 0; bottom: calc(100% + 6px); width: min(560px, 100%); max-height: min(72vh, 680px); overflow-y: auto; display: grid; gap: 10px; padding: 0 12px 12px; background: var(--panel-overlay, var(--panel)); border: 1px solid var(--line-strong); border-radius: 12px; box-shadow: var(--shadow-pop, 0 12px 40px rgba(0,0,0,.45)); animation: popFade .15s cubic-bezier(.16, 1, .3, 1); }
+.chatpane .chat-set[hidden] { display: none !important; }
+.chatpane .chat-set .cs-head { display: flex; align-items: center; gap: 8px; position: sticky; top: 0; margin: 0 -12px; padding: 10px 12px 8px; background: var(--panel-overlay, var(--panel)); border-bottom: 1px solid var(--line); z-index: 2; }
+.chatpane .chat-set .cs-head b { font-size: 13px; color: var(--text-bright, var(--text)); white-space: nowrap; }
+.chatpane .chat-set .cs-head small { flex: 1; min-width: 0; color: var(--muted); font-size: 11.5px; }
+.chatpane .chat-set .cs-x { flex: none; width: 24px; height: 24px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }
+.chatpane .chat-set .cs-x:hover { color: var(--text); background: var(--panel-2); }
+.chatpane .chat-set .cbar { display: grid !important; gap: 10px; }
+.chatpane .chat-set .cs-sec { display: grid; gap: 6px; }
+.chatpane .chat-set .cs-sec h5 { margin: 0; font: 700 10.5px var(--font-ui); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.chatpane .chat-set .cs-sec h5 small { text-transform: none; letter-spacing: 0; font-weight: 500; color: var(--dim); }
+.chatpane .chat-set .cs-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.chatpane .chat-set .cs-row > * { order: 0 !important; margin-left: 0 !important; }
+.chatpane .chat-set .cs-row .rs-wrap, .chatpane .chat-set .cs-row .allow-wrap { display: inline-flex !important; }
+.chatpane .chat-set .cs-row .seg.perm { display: inline-grid !important; }
+.chatpane .chat-set .cs-row .cmp-budget { display: inline !important; font: 600 11.5px var(--mono); color: var(--dim); }
+.chatpane .chat-set .cs-row .cmp-budget b { color: var(--amber, #f59e0b); }
+.chatpane .chat-set .toolbar { display: block !important; }
+.chatpane .chat-set .tools-menu.cmp-tools-popover { position: static !important; inset: auto !important; transform: none !important; width: auto !important; max-height: none !important; overflow: visible !important; padding: 0 !important; margin: 0 !important; border: 0 !important; box-shadow: none !important; background: transparent !important; animation: none !important; }
+.chatpane .chat-set .tools-menu .cmp-tp-header { padding: 0 0 4px !important; }
+.chatpane .chat-set .tools-menu .cmp-tp-title { font: 700 10.5px var(--font-ui); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.chatpane .chat-set > * { order: 0 !important; }
+.chatpane .chat-set .cs-glob { border-top: 1px solid var(--line); padding-top: 10px; }
+.chatpane .chat-set .tools-menu .cmp-tp-header { border: 0 !important; margin: 0 !important; background: none !important; }
+.chatpane .chat-set .tools-menu .cmp-tp-group { padding: 6px 0 2px !important; }
+
+/* the message box is taller; Follow sits next to This chat */
+.chatpane .cmp-input-row textarea.cmp-textarea { min-height: 64px !important; }
+.chatpane .cmp-follow-slot { display: contents; }
+.chatpane .cmp-control-rack .cmp-follow-slot .cmp-follow { flex: none; display: inline-flex !important; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--line); font-size: 12px !important; color: var(--muted); cursor: pointer; white-space: nowrap; }
+.chatpane .cmp-control-rack .cmp-follow-slot .cmp-follow:has(input:checked) { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); background: var(--accent-dim); }
+.chatpane .cmp-control-rack .cmp-follow-slot .cmp-follow:hover { color: var(--text); }
+/* the settings window: its own coloured edge, and everything behind it blurred */
+.chatpane .cs-scrim { position: fixed; inset: 0; z-index: 58; background: rgba(4, 8, 6, .35); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); animation: popFade .15s ease-out; }
+.chatpane .cs-scrim[hidden] { display: none !important; }
+.chatpane .cmp-control-rack.cs-open > :is(.cmp-model-slot > *, .cmp-set-btn), .chatpane .cmp-control-rack.cs-open .cmp-follow-slot > * { position: relative; z-index: 61; }
+.chatpane .cmp-control-rack.cs-open .cmp-model-slot > *, .chatpane .cmp-control-rack.cs-open .cmp-set-btn { position: relative; z-index: 61; }
+.chatpane .chat-set { z-index: 62 !important; border-color: color-mix(in srgb, var(--accent) 55%, var(--line)) !important; box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent), 0 0 24px -8px var(--accent), 0 16px 44px rgba(0, 0, 0, .5) !important; }
+.chatpane .chat-set .cs-head b { color: var(--accent); }
+/* model names in the window, big enough to read */
+.chatpane .chat-set .tools-menu .cmp-tp-model { font-size: 12.5px !important; }
+.chatpane .chat-set .tools-menu .cmp-tp-name { font-size: 13px; }
+.chatpane .chat-set .tools-menu .q-cost { font-size: 11.5px; }
+/* the caps: small $ fields */
+.chatpane .chat-set .cs-caps { gap: 8px 14px; }
+.chatpane .chat-set .cs-num { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.chatpane .chat-set .cs-inp { display: inline-flex; align-items: center; height: 28px; padding: 0 8px; border-radius: 7px; border: 1px solid var(--line); background: var(--surface-inset, var(--bg)); }
+.chatpane .chat-set .cs-inp:focus-within { border-color: var(--accent); }
+.chatpane .chat-set .cs-inp i { font: 600 12px var(--mono); color: var(--amber, #f59e0b); font-style: normal; }
+.chatpane .chat-set .cs-inp input { width: 58px; border: 0; background: transparent; color: var(--amber, #f59e0b); font: 600 12.5px var(--mono); padding: 0 0 0 2px; outline: none; }
+/* narrow chats: the model chip keeps room to be read; This chat drops its word (icon + YOLO tag stay); model names in the window move to their own line instead of being cut */
+.chatpane .composer-box { container: cmpbox / inline-size; }
+.chatpane .cmp-model-slot .cmp-model-chip { flex: 1 1 auto !important; min-width: 96px !important; justify-content: flex-start !important; text-align: left; }
+@container cmpbox (max-width: 520px) { .chatpane .cmp-set-btn .cmp-set-l { display: none; } .chatpane .cmp-model-slot .cmp-model-chip small { display: none; } }
+@container cmpbox (max-width: 380px) { .chatpane .cmp-control-rack .cmp-follow-slot .cmp-follow span { display: none; } .chatpane .cmp-control-rack .cmp-follow-slot .cmp-follow { padding: 0 7px; } }
+.chatpane .chat-set .tools-menu .cmp-tp-top { flex-wrap: wrap !important; row-gap: 4px; }
+.chatpane .chat-set .tools-menu .cmp-tp-model { max-width: 100% !important; }
+.chatpane .cmp-follow .fl-eye { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+/* ---------- home: one list of projects, latest chat first, each card with its latest chats ---------- */
+.ld-h small { text-transform: none; letter-spacing: 0; font-weight: 500; color: var(--dim); }
+.ld-project { display: flex !important; flex-direction: column; gap: 8px; }
+.ld-p-top .ld-p-plus { flex: none; width: 26px; height: 26px; display: grid; place-items: center; padding: 0; border-radius: 6px; border: 1px solid color-mix(in srgb, var(--ok) 40%, transparent); background: var(--ok-dim); color: var(--ok); cursor: pointer; }
+.ld-p-top .ld-p-plus:hover { background: color-mix(in srgb, var(--ok) 22%, transparent); }
+.ld-p-top .ld-p-plus svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; }
+.ld-p-meta .money { color: var(--amber, #f59e0b); }
+.ld-p-chats { display: grid; gap: 2px; margin: 0 -6px; }
+.ld-project .ld-chat.ld-pc { display: grid !important; grid-template-columns: minmax(0, 1fr) auto auto; align-items: baseline; gap: 8px; width: 100%; min-height: 0; padding: 5px 6px !important; border: 0 !important; border-radius: 6px; background: transparent !important; box-shadow: none !important; text-align: left; cursor: pointer; }
+.ld-project .ld-chat.ld-pc:hover { background: var(--panel-2) !important; }
+.ld-project .ld-pc b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; font-weight: 500; color: var(--text); }
+.ld-project .ld-pc small { font-size: 11px; color: var(--dim); white-space: nowrap; }
+.ld-project .ld-pc .ld-cost { font: 600 11px var(--mono); color: var(--amber, #f59e0b); }
+.ld-p-none, .ld-p-more { padding: 4px 6px; font-size: 11.5px; color: var(--dim); }
+/* the $ fields: one border (the wrappers), no inner box, focus ring or spinner arrows */
+.chatpane .chat-set .cs-inp input, .chatpane .chat-set .cs-inp input:focus, .chatpane .chat-set .cs-inp input:focus-visible { border: 0 !important; outline: none !important; box-shadow: none !important; background: transparent !important; height: auto !important; min-height: 0 !important; border-radius: 0 !important; -moz-appearance: textfield; appearance: textfield; }
+.chatpane .chat-set .cs-inp input::-webkit-inner-spin-button, .chatpane .chat-set .cs-inp input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+
+/* the settings window: ✓ keeps the changes (lit once something changed), ✕ undoes them */
+.chatpane .chat-set .cs-ok { flex: none; width: 26px; height: 24px; display: grid; place-items: center; padding: 0; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: var(--dim); font: 700 13px var(--font-ui); cursor: default; }
+.chatpane .chat-set .cs-ok:not(:disabled) { cursor: pointer; color: var(--ok-ink, #04140b); background: var(--ok); border-color: var(--ok); box-shadow: 0 0 10px -2px var(--ok); }
+.chatpane .chat-set .cs-ok:not(:disabled):hover { filter: brightness(1.1); }
+.chatpane .chat-set.dirty .cs-note { color: var(--amber, #f59e0b); }
+.chatpane .chat-set.nudge .cs-head { animation: csNudge .35s ease-in-out; }
+@keyframes csNudge { 0%, 100% { transform: none; } 25% { transform: translateX(-4px); } 75% { transform: translateX(4px); } }
+
+/* the save bar: pinned to the bottom of the window while its content scrolls */
+.chatpane .chat-set .cs-foot { position: sticky; bottom: -12px; z-index: 2; display: flex; align-items: center; gap: 8px; margin: 0 -12px -12px; padding: 8px 12px; background: var(--panel-overlay, var(--panel)); border-top: 1px solid var(--line); }
+.chatpane .chat-set .cs-foot .cs-note { flex: 1; min-width: 0; font-size: 11.5px; color: var(--dim); }
+.chatpane .chat-set.dirty .cs-foot .cs-note { color: var(--amber, #f59e0b); }
+.chatpane .chat-set .cs-foot .cs-ok { width: auto; height: 28px; padding: 0 14px; font: 700 12px var(--font-ui); }
+.chatpane .chat-set .cs-undo { height: 28px; padding: 0 12px; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: var(--muted); font: 600 12px var(--font-ui); cursor: pointer; }
+.chatpane .chat-set .cs-undo:hover:not(:disabled) { color: var(--text); background: var(--panel-2); }
+.chatpane .chat-set .cs-undo:disabled { opacity: .45; cursor: default; }
+.chatpane .chat-set.nudge .cs-foot { animation: csNudge .35s ease-in-out; }
+/* in the settings window, the Reasoning and Creativity lists open in place (pushing what is below down), so the windows scroll never cuts them off */
+.chatpane .chat-set .cs-row .rs-wrap { flex-direction: column; align-items: flex-start; }
+.chatpane .chat-set .cs-row .rs-wrap:has(.rs-pop:not([hidden])) { flex: 1 1 100%; }
+.chatpane .chat-set .rs-pop { position: static !important; inset: auto !important; transform: none !important; width: 100% !important; max-width: none !important; max-height: none !important; margin-top: 6px !important; box-shadow: none !important; animation: none !important; }
+
+/* ↶ Undo changes: its own row above the reply's numbers */
+.msg .f-undo-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.msg .f-undo-row[hidden] { display: none; }
+.msg .f-undo-row .undo-btn { margin: 0 !important; }
+/* the drag handle: its own 14px slot in front of the name, centred on the name row (not on the whole header, which grows with the budget line) */
+.sb-project .sb-ph .sb-pname-wrap { position: relative !important; padding-left: 14px !important; }
+.sb-project .sb-ph .sb-pname-wrap .sb-grip { left: 0 !important; width: 14px !important; top: 50% !important; transform: translateY(-50%) !important; }
+.sb-project .sb-ph .sb-pname-wrap .sb-grip svg { width: 7px; height: 13px; }
+.ld-p-top .ld-p-pin { flex: none; display: grid; place-items: center; width: 16px; height: 16px; color: var(--accent); margin-right: -2px; }
+.ld-p-top .ld-p-pin svg { width: 13px; height: 13px; fill: color-mix(in srgb, var(--accent) 35%, transparent); stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; filter: drop-shadow(0 0 4px var(--accent)); }
+
+/* ---------- This chat's settings, simple view: level meters, icon toggles, budget; the details under Advanced ---------- */
+.chatpane .chat-set .cs-gear { flex: none; width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }
+.chatpane .chat-set .cs-gear:hover { color: var(--text); background: var(--panel-2); }
+.chatpane .chat-set .cs-gear svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.chatpane .chat-set .tools-menu .cmp-tp-foot, .chatpane .chat-set .tools-menu .cmp-tp-header { display: none !important; }
+.chatpane .chat-set .lvl { --lc: var(--violet, #a78bfa); display: inline-flex; align-items: flex-end; gap: 2px; height: 32px; padding: 3px 8px 4px 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-inset, var(--bg)); }
+.chatpane .chat-set .lvl-creative { --lc: var(--amber, #f59e0b); }
+.chatpane .chat-set .lvl.na { opacity: .55; }
+.chatpane .chat-set .lvl-ico { align-self: center; font-size: 14px; margin-right: 4px; cursor: help; }
+.chatpane .chat-set .lvl-b { position: relative; width: 14px; height: 24px; padding: 0; border: 0; background: transparent; cursor: pointer; display: flex; align-items: flex-end; justify-content: center; }
+.chatpane .chat-set .lvl-b i { display: block; width: 8px; height: calc(6px + var(--h) * 5px); border-radius: 2px; background: var(--line-strong); transition: background .12s, box-shadow .12s; }
+.chatpane .chat-set .lvl-b:hover i { background: color-mix(in srgb, var(--lc) 45%, var(--line-strong)); }
+.chatpane .chat-set .lvl-b.lit i { background: color-mix(in srgb, var(--lc) 70%, transparent); }
+.chatpane .chat-set .lvl-b.on i { background: var(--lc); box-shadow: 0 0 8px -1px var(--lc); }
+.chatpane .chat-set .lvl-b:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 3px; }
+.chatpane .chat-set .lvl-auto { width: 18px; align-items: center; font: 700 10px var(--mono); color: var(--dim); border-radius: 4px; margin-right: 3px; }
+.chatpane .chat-set .lvl-auto:hover { color: var(--text); }
+.chatpane .chat-set .lvl-auto.on { color: var(--lc); background: color-mix(in srgb, var(--lc) 16%, transparent); box-shadow: 0 0 8px -2px var(--lc); }
+.chatpane .chat-set .cs-tools { gap: 6px; }
+.chatpane .chat-set .qt-group { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+.chatpane .chat-set .qt-sep { width: 1px; align-self: stretch; background: var(--line); margin: 2px 2px; }
+.chatpane .chat-set .qt-b { position: relative; width: 32px; height: 32px; display: grid; place-items: center; padding: 0; font-size: 15px; line-height: 1; border-radius: 8px; border: 1px solid var(--line); background: transparent; cursor: pointer; filter: grayscale(1); opacity: .5; transition: opacity .12s, filter .12s, box-shadow .12s; }
+.chatpane .chat-set .qt-b:hover { opacity: .85; }
+.chatpane .chat-set .qt-b.on { filter: none; opacity: 1; border-color: color-mix(in srgb, var(--accent) 50%, transparent); background: var(--accent-dim); box-shadow: 0 0 10px -3px var(--accent); }
+.chatpane .chat-set .qt-b.paid.on { border-color: color-mix(in srgb, var(--amber, #f59e0b) 55%, transparent); background: color-mix(in srgb, var(--amber, #f59e0b) 12%, transparent); box-shadow: 0 0 10px -3px var(--amber, #f59e0b); }
+.chatpane .chat-set .qt-b.paid::after { content: '$'; position: absolute; right: 1px; bottom: 0; font: 700 8.5px var(--mono); color: var(--amber, #f59e0b); }
+.chatpane .chat-set .qt-b:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.chatpane .chat-set .cs-adv { border-top: 1px solid var(--line); padding-top: 8px; }
+.chatpane .chat-set .cs-adv > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 6px; font: 700 10.5px var(--font-ui); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.chatpane .chat-set .cs-adv > summary::-webkit-details-marker { display: none; }
+.chatpane .chat-set .cs-adv > summary::before { content: '›'; font-size: 14px; line-height: 1; transition: transform .15s; }
+.chatpane .chat-set .cs-adv[open] > summary::before { transform: rotate(90deg); }
+.chatpane .chat-set .cs-adv > summary small { text-transform: none; letter-spacing: 0; font-weight: 500; color: var(--dim); }
+.chatpane .chat-set .cs-adv > summary:hover { color: var(--text); }
+.chatpane .chat-set .cs-adv[open] > .toolbar { margin-top: 8px; }
+.chatpane .chat-set .cs-glob { border-top: 0 !important; padding-top: 0 !important; }
+/* the open chats line glows in its projects title colour (a picked colour when there is one) */
+html body .sidebar .sb-project .sb-chat.sb-chat-item.active { --cc: var(--pcx, var(--pc)); position: relative; border-left-color: transparent !important; background: color-mix(in srgb, var(--cc) 9%, transparent) !important; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--cc) 18%, transparent) !important; border-radius: 0 7px 7px 0; } /* the chat you are watching: a light tint in its project colour, plus the glowing line */
+html body .sidebar .sb-project .sb-chat.sb-chat-item.active::before { display: block !important; content: ''; position: absolute; left: -2px; top: 0; bottom: 0; height: auto !important; transform: none !important; width: 3px; border-radius: 2px; background: var(--cc); box-shadow: 0 0 8px 0 var(--cc), 0 0 2px var(--cc); pointer-events: none; } /* over the row's own 2px guide line, the full row tall */
+/* a reply you stopped: a small tag in its footer instead of a red box */
+.msg .foot .f-stopped { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 8px; border-radius: 6px; font: 600 11px var(--font-ui); color: var(--bad); background: var(--bad-dim); border: 1px solid color-mix(in srgb, var(--bad) 35%, transparent); }
+.sidebar .sb-pinfo { cursor: default !important; } .sidebar .sb-pinfo:hover { background: transparent !important; }
+/* Advanced open: its list has the same switches, so the icon row steps aside; a tool that is on is lit green */
+.chatpane .chat-set:has(.cs-adv[open]) .cs-sec:has(> .cs-tools) { display: none; }
+.chatpane .chat-set .qt-b.on, .chatpane .chat-set .qt-b.paid.on { border-color: color-mix(in srgb, var(--ok) 55%, transparent) !important; background: var(--ok-dim) !important; box-shadow: 0 0 10px -3px var(--ok) !important; }
+/* Steps pane: a slimmer left gutter: the rail and its dots close to the edge, a narrower time column, so the details start further left */
+html body .trace.trace-pane { padding-left: 4px !important; }
+html body .trace.trace-pane .steps { padding-left: 14px !important; }
+html body .trace.trace-pane .steps::before { left: 6px !important; }
+html body .trace.trace-pane .step { border-left: 0 !important; padding-left: 0 !important; grid-template-columns: 40px minmax(0, 1fr) !important; column-gap: 8px !important; }
+html body .trace.trace-pane .step::before { left: -11.5px !important; }
+html body .trace.trace-pane .step .when { width: auto !important; white-space: nowrap; }
+/* the folded "Worked through N steps" line: the label keeps its room, the counts shorten first */
+.msg .tl-fold > summary { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.msg .tl-fold > summary .tl-label { flex: none !important; color: var(--text) !important; }
+.msg .tl-fold > summary .tl-words { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msg .tl-fold > summary .tl-err, .msg .tl-fold > summary .tl-chev { flex: none; }
+/* a question card in a narrow chat: the question drops under its badge instead of being squeezed to a letter a line */
+.msg .qbox .q-head { flex-wrap: wrap !important; row-gap: 6px; }
+.msg .qbox .q-head .q-text { flex: 1 1 180px !important; min-width: 0; }
+/* a narrow pane: the address gets the first row to itself (with back, forward, reload, copy, open); the page actions (Comment, Export, devtools…) move to a second row, right-aligned */
+:has(> #paneTool) { container: panebox / inline-size; }
+@container panebox (max-width: 640px) {
+  .pane-tool:has(> #appBar:not([hidden]):not(:empty)) { flex-wrap: wrap; row-gap: 4px; }
+  .pane-tool:has(> #appBar:not([hidden]):not(:empty)) > #paneUrlWrap { flex: 1 1 calc(100% - 96px); }
+  .pane-tool > #appBar > .bv-real { margin-right: auto; }
+  .pane-tool > #appBar > .bv-cmt { margin-left: auto; }
+  .pane-tool > #appBar > .bv-real ~ .bv-cmt { margin-left: 0; }
+}
