@@ -18,7 +18,7 @@
 //                                       // function (dir, { files }) giving one or more lines, or none to skip the
 //                                       // folder; timeout: ms; parse(out, { dir, files }): the error lines)
 //   summaries: [{ cmd: /^dotnet test\b/, summarize(out) }], // a short summary put above a command's output
-//   debug: { exts: ['.cs'], tool, label, gate({ file, args }), start({ file, args, cwd, port }) },
+//   debug: { exts: ['.cs'], tool, label, gate({ file, args, cwd }), start({ file, args, cwd, port }) },
 //   notes(have, root),                  // what the agent should know, when the project is this kind
 //   test: { needs: ['dotnet'] },        // its self-test (tests/<id>.test.mjs) runs when these are installed
 // }

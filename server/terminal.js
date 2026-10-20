@@ -25,7 +25,7 @@ export function termEvent(projectId, e) {
   for (const cb of f.subs) cb(ev);
 }
 
-// Output arrives in chunks; split into lines, keeping a partial line until it ends.
+// Output arrives in chunks; split into lines, keeping a partial line until it ends (or passes `max` characters).
 export function lineSplitter(onLine, max = 4000) {
   let rest = '';
   return {
