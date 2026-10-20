@@ -1459,7 +1459,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     return `[The harness summarised the earlier part of this reply to keep the conversation small.]\nSteps so far:\n${journal.slice(-60).map((l) => `- ${l}`).join('\n')}${root ? `\nFiles in the project now: ${listFiles(root, 80).map((f) => f.path).join(', ')}` : ''}\nCarry on from here; read files again if you need their current contents.`;
   }
 
-  // The check before the final answer. ALMA's finish gate only parses a static site; this one also
+  // The check before the final answer. It doesn't only parse a static site: it
   // runs the real parsers, sees whether the dev servers it started are still up, and opens every
   // page or app this reply built in the headless browser to catch errors a user would hit.
   // ================= #6 helpers: a read-only job on a cheaper model, in a clean context =================
