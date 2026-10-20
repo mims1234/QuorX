@@ -15,7 +15,7 @@ import { setupCheck, runFix } from './server/setup-check.js';
 import { startSignIn, signInStatus, cancelSignIn, finishByCallback, finishWithCode, callbackPage } from './server/oauth.js';
 import { runAgent, answerApproval, answerQuestion, answerBudget, raiseCap, setRunApproval, steerRun, DEFAULTS, MEDIA, briefFor, briefForChat } from './server/agent.js';
 import { CHECKS } from './server/harness-checks.js';
-import { startRun, getRun, stopRun, follow, runStatus, activeRuns, validRunId, scorecard } from './server/runs.js';
+import { startRun, getRun, stopRun, follow, runStatus, activeRuns, validRunId, scorecard, readLog } from './server/runs.js';
 import { setBudget, budgetState } from './server/budget.js';
 import { shellRun, shellClose, shellInfo } from './server/shell.js';
 import { ptyAvailable, ptyLoadError, ptyOpen, ptyWrite, ptyResize, ptyFollow, ptyClose } from './server/pty.js';
@@ -35,10 +35,12 @@ import { openLink, linkReply } from './server/desktop.js';
 import { saveUpload, processDoc, listDocs, removeDoc, DOC_DEFAULTS, officeText } from './server/docs.js';
 import { embeddingModels } from './server/openrouter.js';
 import { listSkills, listTemplates } from './server/skills.js';
-import { hostedHtml, browserPath } from './server/browser.js';
+import { hostedHtml, browserPath, openTab } from './server/browser.js';
+import { zipFolder } from './server/zip.js';
 import { artifactContent, servedArtifact, ARTIFACT_HEADERS, folderStamp } from './server/artifacts.js';
 import { gate, hostAllowed, crossSiteApi, isLoopback, accessInfo, setLan, resetToken } from './server/access.js';
 import { serveBlob, startSweeping } from './server/blobs.js';
+import { listDesignSystems, readDesignSystem, projectDesign, applyDesignSystem, saveProjectDesign } from './server/design.js';
 import zlib from 'node:zlib';
 
 const PUBLIC = path.join(ROOT, 'public');
@@ -173,6 +175,24 @@ const server = http.createServer(async (req, res) => {
       const b = JSON.parse(await readBody(req, 1e4) || '{}');
       try { return json(res, 200, { ok: true, ...setProjectColor(pcm[1], b.color || null) }); } catch (e) { return json(res, 200, { error: e.message }); }
     }
+    // Design systems: the starters, and a project's own DESIGN.md + tokens.css (apply a starter, edit, remove).
+    if (url.pathname === '/api/design-systems' && req.method === 'GET') return json(res, 200, listDesignSystems());
+    const dsm = url.pathname.match(/^\/api\/design-systems\/([a-z0-9-]+)$/i);
+    if (dsm && req.method === 'GET') { const s = readDesignSystem(dsm[1]); return s ? json(res, 200, s) : json(res, 404, { error: 'no such design system' }); }
+    const pdm = url.pathname.match(/^\/api\/projects\/([a-z0-9-]+)\/design$/i);
+    if (pdm && req.method === 'GET') {
+      try { const d = projectDesign(workspaceDir(pdm[1])); return json(res, 200, d ? { md: d.md, tokens: d.tokens, name: d.name, colors: d.colors.size } : { md: '', tokens: '', name: null }); } catch (e) { return json(res, 200, { error: e.message }); }
+    }
+    if (pdm && req.method === 'POST') {
+      const b = JSON.parse(await readBody(req, 2e5) || '{}');
+      try {
+        const root = workspaceDir(pdm[1]);
+        if (b.system) return json(res, 200, applyDesignSystem(root, String(b.system), { overwrite: !!b.overwrite }));
+        if (b.remove) return json(res, 200, saveProjectDesign(root, null));
+        if (typeof b.md === 'string') return json(res, 200, saveProjectDesign(root, b.md));
+        return json(res, 200, { error: 'give system, md or remove' });
+      } catch (e) { return json(res, 200, { error: e.message }); }
+    }
     if (url.pathname === '/api/projects' && req.method === 'POST') {
       const b = JSON.parse(await readBody(req, 1e5));
       try { return json(res, 200, saveProject(b)); } catch (e) { return json(res, 200, { error: e.message }); }
@@ -215,6 +235,21 @@ const server = http.createServer(async (req, res) => {
         const file = safePath(workspaceDir(pid), String(url.searchParams.get('path') || ''));
         if (fs.statSync(file).size > 60e6) return json(res, 200, { error: 'too big to preview (over 60 MB)' });
         return json(res, 200, { text: officeText(file).slice(0, 400000) });
+      } catch (e) { return json(res, 200, { error: e.message }); }
+    }
+    // One text file of a project, in windows of up to 100k characters (for the MCP server's read_file).
+    if (url.pathname === '/api/files/read' && req.method === 'GET') {
+      const pid = url.searchParams.get('project');
+      if (!validId(pid) || !listProjects().some((p) => p.id === pid)) return json(res, 400, { error: 'unknown project' });
+      try {
+        const file = safePath(workspaceDir(pid), String(url.searchParams.get('path') || ''));
+        const st = fs.statSync(file);
+        if (!st.isFile()) return json(res, 200, { error: 'not a file' });
+        if (st.size > 20e6) return json(res, 200, { error: 'too big to read (over 20 MB)' });
+        const buf = fs.readFileSync(file);
+        if (buf.subarray(0, 8000).includes(0)) return json(res, 200, { error: 'a binary file', size: st.size });
+        const text = buf.toString('utf8'), off = Math.max(0, Number(url.searchParams.get('offset')) || 0);
+        return json(res, 200, { text: text.slice(off, off + 100000), offset: off, total: text.length, more: off + 100000 < text.length });
       } catch (e) { return json(res, 200, { error: e.message }); }
     }
     if (url.pathname === '/api/files' && req.method === 'GET') {
@@ -439,6 +474,31 @@ const server = http.createServer(async (req, res) => {
       const b = JSON.parse(await readBody(req, 1e5) || '{}');
       try { return json(res, 200, await userBrowse(String(b.sid || ''), String(b.op || 'look'), b)); } catch (e) { return json(res, 200, { error: e.message }); }
     }
+    // ---- export from the pane: a page as PDF or one long PNG, or the project's files as a ZIP ----
+    if (url.pathname === '/api/export' && req.method === 'POST') {
+      const b = JSON.parse(await readBody(req, 1e5) || '{}');
+      const fmt = String(b.format || ''), safeName = (s) => String(s || 'export').replace(/[^\w .-]+/g, '-').replace(/\s+/g, ' ').trim().slice(0, 60) || 'export';
+      const send = (buf, type, name) => { res.writeHead(200, { 'Content-Type': type, 'Content-Length': buf.length, 'Content-Disposition': `attachment; filename="${name}"`, 'Cache-Control': 'no-store' }); res.end(buf); };
+      try {
+        if (fmt === 'zip') {
+          if (!validId(b.projectId)) return json(res, 400, { error: 'bad project id' });
+          const proj = listProjects().find((p) => p.id === b.projectId);
+          const r = zipFolder(workspaceDir(b.projectId));
+          if (r.skipped.length) res.setHeader('X-Skipped', String(r.skipped.length));
+          return send(r.zip, 'application/zip', `${safeName(proj?.name || b.projectId)}.zip`);
+        }
+        if (fmt !== 'pdf' && fmt !== 'png') return json(res, 400, { error: 'format must be pdf, png or zip' });
+        const target = String(b.url || '');
+        if (!/^https?:\/\//i.test(target)) return json(res, 400, { error: 'only http and https pages can be exported' });
+        const tab = await openTab();
+        try {
+          await tab.open(target, { width: Math.max(360, Math.min(1920, Number(b.width) || 1280)), height: 900 });
+          await new Promise((r) => setTimeout(r, 900));
+          const title = await tab.eval('document.title').catch(() => '');
+          return fmt === 'pdf' ? send(await tab.pdf({ landscape: !!b.landscape }), 'application/pdf', `${safeName(title)}.pdf`) : send(await tab.fullPage(), 'image/png', `${safeName(title)}.png`);
+        } finally { await tab.close().catch(() => {}); }
+      } catch (e) { return json(res, 200, { error: e.message }); }
+    }
     // ---- attached documents: upload, read and index, list, remove (see server/docs.js) ----
     if (url.pathname === '/api/docs/upload' && req.method === 'POST') {
       const pid = url.searchParams.get('project');
@@ -586,8 +646,10 @@ const server = http.createServer(async (req, res) => {
       if (!getRun(runId)) startRun({ runId, chatId: body.chatId }, (emit, signal) => runAgent(body, emit, signal));
       return stream(res, runId, 0);
     }
-    const rm = url.pathname.match(/^\/api\/runs\/([\w-]+)(?:\/(events|stop|mode|steer|brief))?$/);
+    const rm = url.pathname.match(/^\/api\/runs\/([\w-]+)(?:\/(events|stop|mode|steer|brief|log))?$/);
     if (rm && validRunId(rm[1])) {
+      // A reply's events so far as one JSON list (the MCP server and run replay read this; the page streams /events).
+      if (rm[2] === 'log' && req.method === 'GET') return json(res, 200, { ...runStatus(rm[1]), events: readLog(rm[1]) });
       // The out-of-steps card's "Fresh chat": a short handover brief of that reply.
       if (rm[2] === 'brief' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e4) || '{}'); try { return json(res, 200, await briefFor(rm[1], { model: b.model })); } catch (e) { return json(res, 400, { error: e.message }); } }
       if (rm[2] === 'events' && req.method === 'GET') return stream(res, rm[1], Math.max(0, Number(url.searchParams.get('from')) || 0));

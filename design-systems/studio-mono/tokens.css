@@ -1,0 +1,57 @@
+/* Studio Mono tokens. Link this file first (<link rel="stylesheet" href="tokens.css">) and use var() everywhere. */
+@import url("https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@100..125,500..900&family=Public+Sans:wght@400;500;600&display=swap");
+
+:root {
+  /* colour */
+  --bg: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #f2f2f2;
+  --fg: #0a0a0a;
+  --muted: #5c5c5c;
+  --line: #e2e2e2;
+  --accent: #d70a00;
+  --accent-ink: #ffffff;
+  --ok: #1a7f37;
+  --warn: #9a6700;
+  --bad: #d70a00;
+  --focus: #0a0a0a;
+  /* type */
+  --font-display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --font-body: "Public Sans", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, Consolas, monospace;
+  --text-sm: 0.8125rem;
+  --text-base: 1rem;
+  --text-lg: 1.25rem;
+  --text-xl: 2rem;
+  --text-2xl: 3.5rem;
+  --text-3xl: 6rem;
+  --leading: 1.5;
+  /* space and shape */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 16px;
+  --space-4: 32px;
+  --space-5: 64px;
+  --space-6: 128px;
+  --radius: 0px;
+  --radius-sm: 0px;
+  --shadow: none;
+  --max: 1280px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0a0a0a;
+    --surface: #0a0a0a;
+    --surface-2: #1a1a1a;
+    --fg: #f4f4f4;
+    --muted: #a3a3a3;
+    --line: #2c2c2c;
+    --accent: #ff453a;
+    --accent-ink: #0a0a0a;
+    --ok: #4ac26b;
+    --warn: #d4a72c;
+    --bad: #ff453a;
+    --focus: #f4f4f4;
+  }
+}

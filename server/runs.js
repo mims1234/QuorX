@@ -63,7 +63,10 @@ export function runStatus(id) {
   if (!validRunId(id) || !fs.existsSync(logFile(id))) return { status: 'unknown' };
   const events = readLog(id);
   const ended = events.some((e) => e.t === 'done' || e.t === 'error');
-  return { status: ended ? 'done' : 'interrupted', resumable: !ended && fs.existsSync(ckptFile(id)), events: events.length };
+  // Not in this process but written to in the last 90 s: another QuorX on the same data folder (the desktop app and
+  // a preview, or the MCP server's QuorX) is running it, so it isn't "interrupted" and must not be marked so.
+  let fresh = false; try { fresh = !ended && Date.now() - fs.statSync(logFile(id)).mtimeMs < 90e3; } catch { /* gone */ }
+  return { status: ended ? 'done' : fresh ? 'elsewhere' : 'interrupted', resumable: !ended && !fresh && fs.existsSync(ckptFile(id)), events: events.length };
 }
 export function readLog(id) {
   try { return fs.readFileSync(logFile(id), 'utf8').split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter((e) => e && e.t !== 'run'); }

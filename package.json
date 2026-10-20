@@ -15,6 +15,7 @@
     "test": "node --test --test-force-exit scripts/test-loop.mjs scripts/test-agent.mjs scripts/test-security.mjs scripts/test-safety.mjs",
     "test:ui": "node scripts/ui-test.mjs",
     "test:packs": "node scripts/test-packs.mjs",
+    "mcp": "node server/mcp.js",
     "scorecard": "node scripts/scorecard.mjs",
     "icons": "node scripts/make-icons.mjs"
   },

@@ -522,11 +522,13 @@ async function addImages(c, files) {
 function renderAttachments(c) {
   const box = c.el && $('.attachments', c.el.root);
   if (!box) return;
-  box.innerHTML = c.ctx.map((x, i) => `<span class="ctx-chip cmp-att-item ${x.type === 'file' ? 'file' : x.type === 'project' ? 'project' : 'chat'}" title="Attached as context for your next message">${x.type === 'file' ? '📄' : x.type === 'project' ? '' : '💬'} ${esc(x.title)}<button type="button" data-ctx="${i}" aria-label="Remove">✕</button></span>`).join('')
+  box.innerHTML = (c.comments || []).map((x, i) => `<span class="cmt-chip cmp-att-item" title="${esc(x.note || 'No note: the agent will ask what to change')}">${x.crop ? `<img src="${x.crop}" alt="">` : ''}<span class="cmt-what">💬 <b>${esc(x.tag)}</b> ${esc(clip(x.text || x.selector, 40))}</span><button type="button" data-cmt="${i}" aria-label="Remove this comment">✕</button></span>`).join('')
+    + c.ctx.map((x, i) => `<span class="ctx-chip cmp-att-item ${x.type === 'file' ? 'file' : x.type === 'project' ? 'project' : 'chat'}" title="Attached as context for your next message">${x.type === 'file' ? '📄' : x.type === 'project' ? '' : '💬'} ${esc(x.title)}<button type="button" data-ctx="${i}" aria-label="Remove">✕</button></span>`).join('')
     + c.images.map((x, i) => `<span class="img-chip cmp-att-item image"><img src="${x.thumb}" alt="attached image ${i + 1}"><button type="button" data-img="${i}" aria-label="Remove image">✕</button></span>`).join('')
     + (c.docs || []).map((d, i) => docChip(d, i)).join('');
   for (const b of box.querySelectorAll('[data-ctx]')) b.onclick = () => { c.ctx.splice(Number(b.dataset.ctx), 1); renderAttachments(c); };
   for (const b of box.querySelectorAll('[data-img]')) b.onclick = () => { c.images.splice(Number(b.dataset.img), 1); renderAttachments(c); };
+  for (const b of box.querySelectorAll('[data-cmt]')) b.onclick = () => { c.comments.splice(Number(b.dataset.cmt), 1); renderAttachments(c); };
   wireDocChips(c, box);
 }
 
@@ -736,6 +738,10 @@ Every chat in this project reads, writes and runs programs in this folder.">${es
           </div>
         </div>
       </section>
+      <section class="pj-sec" id="pjDesignSec">
+        <div class="pj-sec-head"><h4>Design system <small>the look every chat here builds to</small></h4></div>
+        <div id="pjDesign"><div class="kx-wait">Loading…</div></div>
+      </section>
       <section class="pj-sec" id="pjBudgetSec">
         <div class="pj-sec-head"><h4>Budget <small>for all chats together</small></h4>
         <div class="pj-budget-mode"><button type="button" class="pj-mode ${p.budget == null ? 'on' : ''}" data-mode="none">No limit</button><button type="button" class="pj-mode ${p.budget != null ? 'on' : ''}" data-mode="set">Set a budget</button></div></div>
@@ -805,8 +811,83 @@ Every chat in this project reads, writes and runs programs in this folder.">${es
   loadChats(false);
   // After a save: the Budget figure above the chat list follows.
   $('#pjBudget', box).addEventListener('budget-saved', (e) => { const b = $('#pjKpis > div:nth-child(3) b', box); if (b) b.textContent = e.detail.budget != null ? `$${e.detail.budget.toFixed(2)}` : 'No limit'; });
+  mountDesign(p, $('#pjDesign', box));
   if (!dlg.open) dlg.showModal();
   if (focusOn === 'budget') $('#pjBudgetSec', box).scrollIntoView({ block: 'start' });
+  if (focusOn === 'design') $('#pjDesignSec', box).scrollIntoView({ block: 'start' });
+}
+// Project settings → Design system: the project's DESIGN.md + tokens.css (edit, change, remove), or a starter to use.
+// Replacing or removing moves the old files to the project's .quorx/trash, so nothing is lost.
+async function mountDesign(p, el) {
+  if (!el) return;
+  if (p.missing || p.needsFolder) { el.innerHTML = '<p class="pj-hint">Pick a folder for this project first.</p>'; return; }
+  const [cur, systems] = await Promise.all([
+    fetch(`/api/projects/${p.id}/design`).then((r) => r.json()).catch(() => ({ error: 'could not load' })),
+    fetch('/api/design-systems').then((r) => r.json()).catch(() => []),
+  ]);
+  const has = !!(cur.md || cur.tokens);
+  const swatch = (s) => `<span class="ds-sw" aria-hidden="true">${s.swatches.map((w) => `<i style="background:${esc(w.value)}" title="--${esc(w.token)} ${esc(w.value)}"></i>`).join('')}</span>`;
+  const grid = (replace) => `<div class="ds-grid" role="list">${systems.map((s) => `<div class="ds-card" role="listitem">
+      ${swatch(s)}
+      <div class="ds-name"><b>${esc(s.name)}</b><span class="tag">${s.dark === 'only' ? 'dark only' : s.dark === 'yes' ? 'light + dark' : 'light'}</span></div>
+      <p class="ds-desc">${esc(s.description)}</p>
+      <p class="ds-fonts">${esc(s.fonts.display)} · ${esc(s.fonts.body)}</p>
+      <button type="button" class="kx-btn sm ds-use" data-id="${esc(s.id)}">${replace ? 'Switch to this' : 'Use this'}</button>
+    </div>`).join('')}</div>`;
+  const hint = '<p class="pj-hint">Or make one from a reference: in a chat, ask "make a design system from https://…" or attach a screenshot and ask for one.</p>';
+  if (cur.error) { el.innerHTML = `<p class="pf-warn">Could not read the design files: ${esc(cur.error)}</p>`; return; }
+  el.innerHTML = has ? `
+    <div class="ds-current">
+      <div class="ds-cur-top"><b>${esc(cur.name || 'Project design system')}</b><span class="ds-files">${[cur.md ? 'DESIGN.md' : '', cur.tokens ? `tokens.css · ${cur.colors} colours` : ''].filter(Boolean).join(' · ')}</span></div>
+      <div class="ds-acts"><button type="button" class="kx-btn sm ds-edit">Edit DESIGN.md</button><button type="button" class="kx-btn sm ds-change">Change…</button><button type="button" class="kx-btn sm ds-remove">Remove</button></div>
+      <div class="ds-panel" hidden></div>
+    </div>`
+    : `<p class="pj-hint">None yet: each chat picks its own look. Pick a starter to give every chat in this project the same colours, type and components.</p>${grid(false)}${hint}`;
+  const panel = $('.ds-panel', el);
+  const reload = () => mountDesign(p, el);
+  const apply = async (id, overwrite) => {
+    const r = await postJ(`/api/projects/${p.id}/design`, { system: id, overwrite }).catch((e) => ({ error: e.message }));
+    if (r?.error) return uiAlert(`Could not use that design system: ${r.error}`);
+    if (r.applied === false) {
+      // A DESIGN.md or tokens.css is already there: confirm in place before replacing it.
+      const card = el.querySelector(`.ds-use[data-id="${CSS.escape(id)}"]`)?.closest('.ds-card');
+      const ask = document.createElement('div'); ask.className = 'ds-confirm';
+      ask.innerHTML = `<p>This project already has ${esc(r.exists.join(' and '))}. Replace ${r.exists.length > 1 ? 'them' : 'it'}? The old ${r.exists.length > 1 ? 'files go' : 'file goes'} to the project's trash.</p><div class="ds-acts"><button type="button" class="kx-btn primary sm ds-yes">Replace</button><button type="button" class="kx-btn sm ds-no">Cancel</button></div>`;
+      (card || el).appendChild(ask);
+      $('.ds-yes', ask).onclick = () => apply(id, true);
+      $('.ds-no', ask).onclick = () => ask.remove();
+      return;
+    }
+    reload();
+  };
+  for (const b of el.querySelectorAll('.ds-use')) b.onclick = () => apply(b.dataset.id, false);
+  if (!has) return;
+  $('.ds-edit', el).onclick = () => {
+    panel.hidden = false;
+    panel.innerHTML = `<textarea class="ds-text" spellcheck="false" aria-label="DESIGN.md">${esc(cur.md)}</textarea><div class="ds-acts"><button type="button" class="kx-btn primary sm ds-save">Save</button><button type="button" class="kx-btn sm ds-cancel">Cancel</button><span class="pj-hint">The previous version goes to the project's trash.</span></div>`;
+    const ta = $('.ds-text', panel); ta.focus();
+    $('.ds-cancel', panel).onclick = () => { panel.hidden = true; panel.innerHTML = ''; };
+    $('.ds-save', panel).onclick = async () => {
+      const r = await postJ(`/api/projects/${p.id}/design`, { md: ta.value }).catch((e) => ({ error: e.message }));
+      if (r?.error) return uiAlert(`Could not save DESIGN.md: ${r.error}`);
+      reload();
+    };
+  };
+  $('.ds-change', el).onclick = () => {
+    panel.hidden = false;
+    panel.innerHTML = `${grid(true)}${hint}`;
+    for (const b of panel.querySelectorAll('.ds-use')) b.onclick = () => apply(b.dataset.id, false);
+  };
+  $('.ds-remove', el).onclick = () => {
+    panel.hidden = false;
+    panel.innerHTML = `<div class="ds-confirm"><p>Remove this project's DESIGN.md and tokens.css? They move to the project's trash, and chats go back to picking their own look. Pages already built keep linking tokens.css until you change them.</p><div class="ds-acts"><button type="button" class="kx-btn primary sm ds-yes">Remove</button><button type="button" class="kx-btn sm ds-no">Keep</button></div></div>`;
+    $('.ds-no', panel).onclick = () => { panel.hidden = true; panel.innerHTML = ''; };
+    $('.ds-yes', panel).onclick = async () => {
+      const r = await postJ(`/api/projects/${p.id}/design`, { remove: true }).catch((e) => ({ error: e.message }));
+      if (r?.error) return uiAlert(`Could not remove the design files: ${r.error}`);
+      reload();
+    };
+  };
 }
 // The strip under a project's name: one box with its spend (a meter when it has a budget) and its + ⚙ 🗑 buttons.
 function budgetLine(p, n, cost, share, acts = '') {
@@ -1999,7 +2080,7 @@ function renderMsg(c, m) {
   m.el = el;
   if (m.role === 'user') {
     el.className = 'msg user';
-    el.innerHTML = `<div class="utext"></div>${m.imgs?.length ? `<div class="u-imgs" data-views="${esc(JSON.stringify(m.imgViews || []))}">${m.imgs.map((u, k) => `<img src="${u}" alt="attached picture" data-k="${k}" title="Click to see it large">`).join('')}</div>` : ''}${m.docs?.length ? `<div class="u-docs">${m.docs.map((d) => `<button type="button" class="u-doc" data-doc="${esc(JSON.stringify(d))}" title="${esc(d.name)} · ${esc(docSize(d.size))} · click to preview">${DOC_ICON[d.kind] || '📄'} ${esc(d.name)}</button>`).join('')}</div>` : ''}${m.ctx?.length ? `<div class="ctx-used">${m.ctx.map((t) => `<span>📎 ${esc(t)}</span>`).join('')}</div>` : ''}${m.at ? timeTag(m.at) : ''}`;
+    el.innerHTML = `<div class="utext"></div>${m.imgs?.length ? `<div class="u-imgs" data-views="${esc(JSON.stringify(m.imgViews || []))}">${m.imgs.map((u, k) => `<img src="${u}" alt="attached picture" data-k="${k}" title="Click to see it large">`).join('')}</div>` : ''}${m.docs?.length ? `<div class="u-docs">${m.docs.map((d) => `<button type="button" class="u-doc" data-doc="${esc(JSON.stringify(d))}" title="${esc(d.name)} · ${esc(docSize(d.size))} · click to preview">${DOC_ICON[d.kind] || '📄'} ${esc(d.name)}</button>`).join('')}</div>` : ''}${m.ctx?.length ? `<div class="ctx-used">${m.ctx.map((t) => `<span>📎 ${esc(t)}</span>`).join('')}</div>` : ''}${m.cmts?.length ? `<div class="ctx-used cmts-used">${m.cmts.map((x) => `<span title="${esc(x.selector)}">💬 ${esc(x.tag)} "${esc(clip(x.text || '', 40))}"${x.note ? `: ${esc(clip(x.note, 60))}` : ''}</span>`).join('')}</div>` : ''}${m.at ? timeTag(m.at) : ''}`;
     $('.utext', el).innerHTML = md(m.content);
     enhance($('.utext', el));
     el.insertAdjacentHTML('beforeend', `<div class="msg-tools u-tools"><button type="button" class="mt-btn mt-rewind" title="Rewind to here: this message and everything after it leave the chat, and it goes back in the box to edit. You choose whether file changes are undone too." aria-label="Rewind to here">${msgIcon('rewind')}</button><button type="button" class="mt-btn mt-copy" title="Copy this message" aria-label="Copy message">${msgIcon('copy')}</button></div>`);
@@ -2082,7 +2163,7 @@ const TL_ONE = {
   delete_file: (a) => `Deleted ${a.path}`, list_files: () => 'Listed the files', search_files: (a) => `Searched for "${clip(a.query || '', 40)}"`,
   run_command: (a) => `Ran ${clip([a.command, ...(a.args || [])].join(' '), 50)}`, start_server: (a) => `Started the "${a.name}" server`, stop_server: (a) => `Stopped the "${a.name}" server`,
   preview_site: () => 'Opened the site preview', browser: (a) => (a.action === 'open' ? `Opened ${a.target}` : `Browser: ${a.action}${a.key ? ` ${a.key}` : ''}`),
-  look: () => 'Checked the page with the judges', decide: (a) => `Asked the deciders ${a.questions?.length || ''} question${a.questions?.length === 1 ? '' : 's'}`.replace('  ', ' '),
+  look: () => 'Checked the page with the judges', extract_design: (a) => `Read the look of ${clip(a.target || '', 50)}`, decide: (a) => `Asked the deciders ${a.questions?.length || ''} question${a.questions?.length === 1 ? '' : 's'}`.replace('  ', ' '),
   plan: () => 'Updated the plan', delegate: (a) => `Asked a helper: ${clip(a.task || '', 50)}`, imagine: () => 'Made a picture', make_video: () => 'Made a video',
   compose_music: () => 'Composed music', speak: () => 'Made a voice clip', write_artifact: (a) => `Wrote the page "${a.title || a.id}"`, edit_artifact: (a) => `Edited the page ${a.id}`,
   read_artifact: (a) => `Read the page ${a.id}`, use_skill: (a) => `Loaded the ${a.name} skill`, save_skill: (a) => `Saved the ${a.name} skill`, scaffold: (a) => `Used the ${a.template} template`,
@@ -2514,10 +2595,12 @@ function openTrace(c, m) {
 function closeTrace() { G.traceRun = null; G.view.trace = null; syncLayout(); renderPane(); refreshTraceButtons(); }
 function refreshTraceButtons() { for (const b of document.querySelectorAll('.trace-btn')) b.classList.remove('on'); const c = focused(); const m = c?.agent.messages.find((x) => x.runId === G.traceRun); if (m?.el) $('.trace-btn', m.el)?.classList.add('on'); }
 function renderTracePane(c, m) {
+  if (G.replay?.run === m.runId) return renderReplay(c, m);
   const body = $('#paneBody'), bar = $('#appBar');
   bar.hidden = false;
-  bar.innerHTML = `🧭 <b>Steps</b> <span class="dim">${esc(traceSummary(m).replace(/^Steps · /, ''))}</span> <button type="button" class="back" title="Close the trace">✕ Close</button>`;
+  bar.innerHTML = `🧭 <b>Steps</b> <span class="dim">${esc(traceSummary(m).replace(/^Steps · /, ''))}</span>${!m.live && m.runId ? '<button type="button" class="tp-replay" title="Watch this reply again, step by step, with a scrubber">⏵ Replay</button>' : ''} <button type="button" class="back" title="Close the trace">✕ Close</button>`;
   $('.back', bar).onclick = closeTrace;
+  const rp = $('.tp-replay', bar); if (rp) rp.onclick = () => startReplay(c, m);
   // Opening a trace starts at its latest step; redrawing the same one keeps your place (and follows new steps while you're at the end).
   const old = $('.trace-pane', body), same = !!old && old.dataset.run === m.runId;
   const top = same ? old.scrollTop : 0, atEnd = !same || old.scrollHeight - old.scrollTop - old.clientHeight < 40;
@@ -2545,6 +2628,91 @@ function renderTracePane(c, m) {
   now.addEventListener('scroll', () => { T[m.runId] = now.scrollHeight - now.scrollTop - now.clientHeight < 60; jump.hidden = T[m.runId]; }, { passive: true });
   for (const b of now.querySelectorAll('.tl-chip')) b.onclick = () => { F.has(b.dataset.k) ? F.delete(b.dataset.k) : F.add(b.dataset.k); renderTracePane(c, m); };
   const all = $('.tl-all', now); if (all) all.onclick = () => { F.clear(); renderTracePane(c, m); };
+}
+// ⏵ Replay: a finished reply's steps again, from the start, one event at a time with its real timing (sped up), with a
+// scrubber. J/K or ←/→ jump to the previous/next step, Space plays and pauses, Home/End go to the ends.
+const REPLAY_MARK = new Set(['llm_start', 'tool', 'review', 'review_start', 'verify', 'question', 'answer', 'approval', 'sent_back', 'check', 'lint', 'decide_start', 'done', 'error']);
+async function startReplay(c, m) {
+  let trace = m.trace || [];
+  // A reply whose steps the page never saw (started over MCP, or while the page was closed): QuorX's own log.
+  if (!trace.length && m.runId) { const r = await fetch(`/api/runs/${encodeURIComponent(m.runId)}/log`).then((x) => x.json()).catch(() => null); trace = r?.events || []; }
+  if (!trace.length) return uiAlert('This reply has no recorded steps to replay.');
+  stopReplay();
+  G.replay = { run: m.runId, trace, i: 0, playing: true, speed: 4, timer: null };
+  renderTracePane(c, m);
+  G.replay.keys = (e) => {
+    const R = G.replay; if (!R || R.run !== m.runId || /input|textarea|select/i.test(e.target?.tagName || '')) return;
+    if (e.key === 'j' || e.key === 'J' || e.key === 'ArrowLeft') { e.preventDefault(); replayStep(c, m, -1); }
+    else if (e.key === 'k' || e.key === 'K' || e.key === 'ArrowRight') { e.preventDefault(); replayStep(c, m, 1); }
+    else if (e.key === ' ') { e.preventDefault(); R.playing = !R.playing; replayTick(c, m); renderReplay(c, m); }
+    else if (e.key === 'Home') { e.preventDefault(); R.i = 0; R.playing = false; renderReplay(c, m); }
+    else if (e.key === 'End') { e.preventDefault(); R.i = R.trace.length; R.playing = false; renderReplay(c, m); }
+    else if (e.key === 'Escape') { stopReplay(); renderTracePane(c, m); }
+  };
+  document.addEventListener('keydown', G.replay.keys);
+  replayTick(c, m);
+}
+function stopReplay() {
+  const R = G.replay; if (!R) return;
+  clearTimeout(R.timer); if (R.keys) document.removeEventListener('keydown', R.keys);
+  G.replay = null;
+}
+function replayStep(c, m, dir) {
+  const R = G.replay; R.playing = false; clearTimeout(R.timer);
+  let i = R.i + dir;
+  while (i > 0 && i < R.trace.length && !REPLAY_MARK.has(R.trace[i - 1]?.t)) i += dir;
+  R.i = Math.max(0, Math.min(R.trace.length, i));
+  renderReplay(c, m);
+}
+function replayTick(c, m) {
+  const R = G.replay; if (!R) return;
+  clearTimeout(R.timer);
+  if (!R.playing) return;
+  if (R.i >= R.trace.length) { R.playing = false; return renderReplay(c, m); }
+  const gap = R.i ? Math.max(0, (R.trace[R.i]?.at || 0) - (R.trace[R.i - 1]?.at || 0)) : 0;
+  R.timer = setTimeout(() => { if (G.replay !== R) return; R.i++; renderReplay(c, m); replayTick(c, m); }, Math.max(25, Math.min(1500, gap / R.speed)));
+}
+function renderReplay(c, m) {
+  const R = G.replay, body = $('#paneBody'), bar = $('#appBar');
+  if (!body || G.traceRun !== m.runId) { stopReplay(); return; }
+  const n = R.trace.length, shown = R.trace.slice(0, R.i), at = shown.at(-1)?.at || 0, end = R.trace.at(-1)?.at || 0;
+  const marks = R.trace.map((e, k) => (REPLAY_MARK.has(e.t) ? k + 1 : null)).filter(Boolean);
+  const stepNo = marks.filter((k) => k <= R.i).length;
+  bar.hidden = false;
+  bar.innerHTML = `⏵ <b>Replay</b> <span class="dim">step ${stepNo} of ${marks.length} · ${secs(at)} of ${secs(end)}</span> <button type="button" class="back rp-exit" title="Back to all the steps (Esc)">✕ Exit replay</button>`;
+  $('.rp-exit', bar).onclick = () => { stopReplay(); renderTracePane(c, m); };
+  const old = $('.replay-pane', body);
+  if (!old) {
+    body.innerHTML = `<div class="replay-pane"><div class="rp-bar" role="toolbar" aria-label="Replay controls">
+      <button type="button" class="rp-btn" data-go="start" title="Back to the start (Home)" aria-label="Back to the start">⏮</button>
+      <button type="button" class="rp-btn" data-go="prev" title="Previous step (J or ←)" aria-label="Previous step">◀</button>
+      <button type="button" class="rp-btn rp-play" data-go="play" title="Play or pause (Space)" aria-label="Play or pause"></button>
+      <button type="button" class="rp-btn" data-go="next" title="Next step (K or →)" aria-label="Next step">▶</button>
+      <button type="button" class="rp-btn" data-go="end" title="To the end (End)" aria-label="To the end">⏭</button>
+      <input type="range" class="rp-range" min="0" max="${n}" step="1" aria-label="Position in the reply">
+      <div class="rp-speed" role="radiogroup" aria-label="Speed">${[1, 4, 16].map((s) => `<button type="button" class="rp-sp" data-sp="${s}" role="radio">${s}×</button>`).join('')}</div>
+    </div><div class="trace trace-pane rp-trace" data-run="${esc(m.runId)}"></div></div>`;
+    const p = $('.replay-pane', body);
+    for (const b of p.querySelectorAll('[data-go]')) b.onclick = () => {
+      const g = b.dataset.go;
+      if (g === 'prev') return replayStep(c, m, -1);
+      if (g === 'next') return replayStep(c, m, 1);
+      if (g === 'start') { G.replay.i = 0; G.replay.playing = false; }
+      if (g === 'end') { G.replay.i = G.replay.trace.length; G.replay.playing = false; }
+      if (g === 'play') { if (G.replay.i >= G.replay.trace.length) G.replay.i = 0; G.replay.playing = !G.replay.playing; }
+      renderReplay(c, m); replayTick(c, m);
+    };
+    $('.rp-range', p).oninput = (e) => { G.replay.i = Number(e.target.value); G.replay.playing = false; clearTimeout(G.replay.timer); renderReplay(c, m); };
+    for (const b of p.querySelectorAll('.rp-sp')) b.onclick = () => { G.replay.speed = Number(b.dataset.sp); renderReplay(c, m); replayTick(c, m); };
+  }
+  const p = $('.replay-pane', body);
+  $('.rp-play', p).textContent = R.playing ? '⏸' : '⏵';
+  const rg = $('.rp-range', p); rg.max = n; rg.value = R.i;
+  rg.style.setProperty('--pos', `${n ? (R.i / n) * 100 : 0}%`);
+  for (const b of p.querySelectorAll('.rp-sp')) { const on = Number(b.dataset.sp) === R.speed; b.classList.toggle('on', on); b.setAttribute('aria-checked', String(on)); }
+  const tp = $('.rp-trace', p);
+  tp.innerHTML = shown.length ? traceHTML({ ...m, trace: shown, live: R.i < n }) : '<div class="rp-empty">The reply starts here. Press ⏵ or K.</div>';
+  tp.scrollTop = tp.scrollHeight;
 }
 // The 🧭 Steps tip: what the reply did, as rows.
 function traceTip(m) {
@@ -2996,28 +3164,30 @@ async function steer(c, text) {
 }
 async function send(c, text) {
   text = text.trim();
-  if (!text || c.running) return;
+  if (c.running || (!text && !c.comments?.length)) return;
   askNotifyPermission();
   const ctx =c.ctx.length ? { titles: c.ctx.map((x) => x.title), text: await contextText(c.ctx) } : null;
-  const imgs = c.images.splice(0);
+  const comments = (c.comments || []).splice(0);
+  const imgs = [...c.images.splice(0), ...comments.filter((x) => x.crop).map((x) => ({ thumb: x.crop, full: x.crop }))];
   const docs = (c.docs || []).splice(0).filter((d) => d.id && !d.busy);
   c.ctx = []; renderAttachments(c);
-  if (!c.title || c.title === 'New chat') { c.title = text.replace(/\s+/g, ' ').slice(0, 60); if (c.el) { $('.ch-name', c.el.root).value = c.title; } }
-  runChat(c, text, ctx, imgs, { docs });
+  if ((!c.title || c.title === 'New chat') && text) { c.title = text.replace(/\s+/g, ' ').slice(0, 60); if (c.el) { $('.ch-name', c.el.root).value = c.title; } }
+  runChat(c, text, ctx, imgs, { docs, comments });
 }
-async function runChat(c, text, ctx, imgs, { resumeOf, docs = [], more = 0, model = '' } = {}) {
+async function runChat(c, text, ctx, imgs, { resumeOf, docs = [], more = 0, model = '', comments = [] } = {}) {
+  const cmts = comments.map(({ selector, tag, text: t, section, rect, url, note, crop }) => ({ selector, tag, text: t, section, rect, url, note, crop: !!crop }));
   const a = c.agent;
   // After a compaction only the turns since the summary are sent, together with the summary.
-  const history = a.messages.filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.error && (!a.summaryAt || (m.at || 0) >= a.summaryAt)).map((m) => ({ role: m.role, at: m.at, content: m.role === 'assistant' ? `${m.content}${m.note || ''}` : `${m.ctx?.length ? `[attached context: ${m.ctx.join(', ')}] ` : ''}${m.docs?.length ? `[attached files: ${m.docs.map((d) => d.name).join(', ')}; read them with read_doc / search_docs] ` : ''}${m.content}` }));
+  const history = a.messages.filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.error && (!a.summaryAt || (m.at || 0) >= a.summaryAt)).map((m) => ({ role: m.role, at: m.at, content: m.role === 'assistant' ? `${m.content}${m.note || ''}` : `${m.cmts?.length ? `[pointed at on the page: ${m.cmts.map((x) => `${x.tag} "${x.text}" (${x.selector})${x.note ? `: ${x.note}` : ''}`).join('; ')}] ` : ''}${m.ctx?.length ? `[attached context: ${m.ctx.join(', ')}] ` : ''}${m.docs?.length ? `[attached files: ${m.docs.map((d) => d.name).join(', ')}; read them with read_doc / search_docs] ` : ''}${m.content}` }));
   const m = { role: 'assistant', content: '', at: Date.now(), trace: [], approvals: {}, questions: {}, arts: [], runId: `r${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, live: true, runActive: true };
-  const user = resumeOf ? null : { role: 'user', content: text, at: Date.now(), ...(ctx ? { ctx: ctx.titles } : {}), ...(imgs.length ? { imgs: imgs.map((x) => x.thumb), imgViews: imgs.map((x) => x.view || x.full) } : {}), ...(docs.length ? { docs: docs.map(({ id, name, kind, size, status, rel }) => ({ rel, id, name, kind, size, status })) } : {}) };
+  const user = resumeOf ? null : { role: 'user', content: text, at: Date.now(), ...(cmts.length ? { cmts: cmts.map(({ crop, ...x }) => x) } : {}), ...(ctx ? { ctx: ctx.titles } : {}), ...(imgs.length ? { imgs: imgs.map((x) => x.thumb), imgViews: imgs.map((x) => x.view || x.full) } : {}), ...(docs.length ? { docs: docs.map(({ id, name, kind, size, status, rel }) => ({ rel, id, name, kind, size, status })) } : {}) };
   a.messages.push(...(user ? [user] : []), m);
   const box = c.el && G.panes.includes(c.id) ? $('.msgs', c.el.root) : null;
   if (box) { if (box.querySelector('.hint')) box.innerHTML = ''; if (user) box.appendChild(renderMsg(c, user)); box.appendChild(renderMsg(c, m)); c.follow = true; c.toEnd?.(); }
   const artifacts = Object.fromEntries(Object.entries(a.artifacts).map(([id, x]) => [id, x.kind === 'html' ? { kind: 'html', title: x.title, html: x.html, v: 1 } : x.kind === 'md' ? { kind: 'md', title: x.title, md: x.md || '', v: 1 } : { kind: x.kind, title: x.title, url: x.url?.startsWith('data:') ? undefined : x.url, v: 1 }]));
   const settings = { ...G.settings, approval: c.approval, tools: chatTools(c), ...qualitySettings(c) };
   const body = resumeOf ? { runId: m.runId, chatId: c.id, resume: resumeOf, settings, allowed: a.allowed, cmdRules: a.cmdRules || [], ...(more ? { continue: more, ...(model ? { model } : {}) } : {}) }
-    : { runId: m.runId, chatId: c.id, projectId: c.projectId, chatTitle: c.title, setup: a.setup, settings, allowed: a.allowed, cmdRules: a.cmdRules || [], history, summary: a.summary || '', text, artifacts, context: ctx?.text || '', images: imgs.map((x) => x.full), docs: docs.map((d) => d.id) };
+    : { runId: m.runId, chatId: c.id, projectId: c.projectId, chatTitle: c.title, setup: a.setup, settings, allowed: a.allowed, cmdRules: a.cmdRules || [], history, summary: a.summary || '', text, artifacts, context: ctx?.text || '', images: imgs.map((x) => x.full), docs: docs.map((d) => d.id), ...(cmts.length ? { comments: cmts } : {}) };
   // Saved straight away, so a reload finds the running reply and reattaches to it.
   saveChat(c, true);
   return followRun(c, m, (signal) => fetch('/api/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal, body: JSON.stringify(body) }));
@@ -3031,6 +3201,8 @@ async function reattachRuns(c) {
     following.add(m.runId);
     const st = await fetch(`/api/runs/${m.runId}`).then((r) => r.json()).catch(() => ({ status: 'unknown' }));
     if (st.status === 'unknown') { following.delete(m.runId); m.runActive = false; m.error ||= 'This reply was interrupted.'; saveChat(c); continue; }
+    // Another QuorX on the same data folder is running it right now: leave it be (it saves its own result).
+    if (st.status === 'elsewhere') { following.delete(m.runId); continue; }
     // Interrupted by a restart: offer Resume instead of replaying its whole log (it never ends, so it looped).
     // A reply that is running, or that finished while no one watched, is replayed to its end as before.
     if (st.status === 'interrupted') {
@@ -5327,9 +5499,11 @@ function renderBrowser(c) {
     : `${t.agent ? `<span class="bv-who agent" title="${live ? "The agent's page: it is using it now, so you can only watch" : "The agent's page: it is done with it, so it is yours to use"}">🤖</span>${live ? '<span class="bv-lock" title="The agent is using this page: watch only">watching</span>' : ''}` : '<span class="bv-who you" title="Your tab">👤</span>'}
        ${!live && t.mode !== 'frame' && t.url ? `<button type="button" class="bv-nav" data-op="back" title="Back" aria-label="Back"${REAL && t.canBack === false ? ' disabled' : ''}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button><button type="button" class="bv-nav" data-op="forward" title="Forward" aria-label="Forward"${REAL && t.canForward === false ? ' disabled' : ''}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg></button>` : ''}
        ${REAL && t.url ? `<span class="bv-real ${t.loading ? 'loading' : ''}" title="A real Chromium tab in the desktop app">● real tab${t.loading ? ' · loading…' : ''}</span>` : ''}
-       <span class="spacer"></span>${REAL && t.url && !live ? '<button type="button" class="bv-dev" title="Open DevTools for this tab" aria-label="DevTools"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8l-4 4 4 4M16 8l4 4-4 4M13.5 5l-3 14"/></svg></button>' : ''}${!DESK && !t.agent && t.url ? `<button type="button" class="bv-mode ${t.mode === 'frame' ? 'on' : ''}" title="${t.mode === 'frame' ? 'Shown in a frame. Click to open it in the harness browser instead (for sites that refuse frames)' : 'Shown in the harness browser. Click to show it in a frame (works for your own served pages)'}" aria-label="Frame or harness browser"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/></svg></button>` : ''}${downloadsHTML()}`;
+       <span class="spacer"></span>${t.url ? `<button type="button" class="bv-cmt ${t.commenting ? 'on' : ''}" aria-pressed="${!!t.commenting}" title="Comment on part of this page: click an element, say what to change, and it goes with your next message">💬 ${t.commenting ? 'Done commenting' : 'Comment'}</button><button type="button" class="bv-exp" aria-haspopup="menu" title="Export this page as a PDF or one long picture, or the project's files as a ZIP">⤓ Export</button>` : ''}${REAL && t.url && !live ? '<button type="button" class="bv-dev" title="Open DevTools for this tab" aria-label="DevTools"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8l-4 4 4 4M16 8l4 4-4 4M13.5 5l-3 14"/></svg></button>' : ''}${!DESK && !t.agent && t.url ? `<button type="button" class="bv-mode ${t.mode === 'frame' ? 'on' : ''}" title="${t.mode === 'frame' ? 'Shown in a frame. Click to open it in the harness browser instead (for sites that refuse frames)' : 'Shown in the harness browser. Click to show it in a frame (works for your own served pages)'}" aria-label="Frame or harness browser"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/></svg></button>` : ''}${downloadsHTML()}`;
   for (const b of bar.querySelectorAll('.bv-nav')) b.onclick = () => (REAL ? window.ohDesktop.nav(t.sid, b.dataset.op) : ubCall(b.dataset.op));
   const dv = $('.bv-dev', bar); if (dv) dv.onclick = () => window.ohDesktop.nav(t.sid, 'devtools');
+  const cmb = $('.bv-cmt', bar); if (cmb) cmb.onclick = () => { t.commenting = !t.commenting; renderPane(); };
+  const exb = $('.bv-exp', bar); if (exb) exb.onclick = () => exportMenu(exb, c, t);
   const ex = $('.bv-ext', bar); if (ex) ex.onclick = () => window.ohDesktop.openExternal(t.url);
   wireDownloads(bar);
   const mb = $('.bv-mode', bar); if (mb) mb.onclick = () => { t.mode = t.mode === 'frame' ? 'remote' : 'frame'; t.opened = null; renderPane(); };
@@ -5339,6 +5513,7 @@ function renderBrowser(c) {
   $('.btab-new', body).onclick = () => { newBTab(''); renderPane(); $('#paneUrl').focus(); };
   const stage = $('.bstage', body);
   if (!t || !t.url) return newTabPage(c, stage);
+  if (t.commenting) return commentStage(c, t, stage);
   if (DESK && t.agent && t.desktop) { t.opened = t.url; return deskStage(t, stage); } // the agent's real tab: shown as it is, never reloaded
   if (DESK && !t.agent) return deskStage(t, stage);
   if (!t.agent && (t.mode || (t.mode = sameSite(t.url) ? 'frame' : 'remote')) === 'frame') {
@@ -5592,6 +5767,69 @@ function remixFrom(c, m) {
 
 // ---------- pages in the harness's browser (see server/userbrowser.js) ----------
 const sameSite = (u) => { try { const x = new URL(u); return x.origin === location.origin || /^(localhost|127\.0\.0\.1|\[::1\])$/.test(x.hostname); } catch { return false; } };
+// 💬 Comment mode: a live picture of the page (the tab's own one, or a copy of its page for frames and real tabs).
+// A click shows what is under it; a note turns it into a chip for the next message.
+async function commentStage(c, t, stage) {
+  const sid = t.agent || (!DESK && t.mode !== 'frame') ? t.sid : `cmt-${t.sid}`.slice(0, 60);
+  stage.innerHTML = `<div class="cmtview" tabindex="0"><img class="ub-shot" alt="The page to comment on"><div class="cmt-hl" hidden></div><div class="cmt-tip">💬 Click the part you want changed. Scroll to move around the page.</div><div class="cmt-pop" hidden></div></div>`;
+  const v = $('.cmtview', stage), img = $('.ub-shot', v), hl = $('.cmt-hl', v), pop = $('.cmt-pop', v);
+  const size = () => { const r = stage.getBoundingClientRect(); return { w: Math.round(r.width), h: Math.round(r.height) }; };
+  let view = { w: 1280, h: 800 };
+  const show = (res) => { if (res?.shot) { img.src = res.shot; view = { w: res.w || view.w, h: res.h || view.h }; } };
+  const first = await postJ('/api/ubrowser', { sid, op: sid === t.sid ? 'look' : 'open', url: t.url, ...size() });
+  if (first.error) { $('.cmt-tip', v).textContent = `⚠ ${first.error}`; return; }
+  show(first);
+  let dy = 0, dyT = null;
+  v.addEventListener('wheel', (e) => { e.preventDefault(); dy += e.deltaY; clearTimeout(dyT); dyT = setTimeout(async () => { const d = dy; dy = 0; hl.hidden = true; pop.hidden = true; await postJ('/api/ubrowser', { sid, op: 'scroll', dy: Math.round(d), ...size() }).catch(() => {}); show(await postJ('/api/ubrowser', { sid, op: 'look', ...size() })); }, 160); }, { passive: false });
+  img.onclick = async (e) => {
+    const sx = img.clientWidth / view.w, sy = img.clientHeight / view.h;
+    const res = await postJ('/api/ubrowser', { sid, op: 'inspect', x: e.offsetX / sx, y: e.offsetY / sy, ...size() });
+    if (res.error || !res.hit) { $('.cmt-tip', v).textContent = res.error ? `⚠ ${res.error}` : 'Nothing there to comment on. Try another spot.'; return; }
+    const h = res.hit, box = { left: h.rect.x * sx, top: h.rect.y * sy, width: h.rect.w * sx, height: h.rect.h * sy };
+    Object.assign(hl.style, { left: `${box.left}px`, top: `${box.top}px`, width: `${box.width}px`, height: `${box.height}px` }); hl.hidden = false;
+    pop.innerHTML = `<div class="cp-what">${res.crop ? `<img src="${res.crop}" alt="">` : ''}<div><b>${esc(h.tag)}</b> ${esc(clip(h.text || '(no text)', 60))}<div class="cp-sel" title="How the agent will find it">${esc(clip(h.selector, 70))}</div></div></div>
+      <textarea class="cp-note" rows="3" placeholder="What should change here? (optional)" aria-label="What should change here"></textarea>
+      <div class="cp-acts"><button type="button" class="kx-btn primary sm cp-add">Add to message</button><button type="button" class="kx-btn sm cp-cancel">Cancel</button></div>`;
+    pop.hidden = false;
+    const below = box.top + box.height + 8, room = v.clientHeight - below;
+    Object.assign(pop.style, { left: `${Math.max(8, Math.min(box.left, v.clientWidth - 300))}px`, top: `${room > 180 ? below : Math.max(8, box.top - 190)}px` });
+    const note = $('.cp-note', pop); note.focus();
+    const add = () => {
+      (c.comments ||= []).push({ ...h, note: note.value.trim(), crop: res.crop });
+      renderAttachments(c);
+      pop.hidden = true; hl.hidden = true;
+      $('.cmt-tip', v).textContent = `💬 ${c.comments.length} comment${c.comments.length > 1 ? 's' : ''} in your message box. Add more, or write your message and send it.`;
+    };
+    $('.cp-add', pop).onclick = add;
+    note.onkeydown = (ev) => { if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); add(); } if (ev.key === 'Escape') { pop.hidden = true; hl.hidden = true; } };
+    $('.cp-cancel', pop).onclick = () => { pop.hidden = true; hl.hidden = true; };
+  };
+}
+// ⤓ Export: the page as a PDF or one long PNG, or the project's files as a ZIP (without .quorx, node_modules or .git).
+function exportMenu(btn, c, t) {
+  document.querySelector('.exp-menu')?.remove();
+  const p = G.projects.find((x) => x.id === c.projectId);
+  const m = document.createElement('div'); m.className = 'exp-menu'; m.setAttribute('role', 'menu');
+  m.innerHTML = `<button type="button" role="menuitem" data-f="pdf">📄 PDF of this page</button><button type="button" role="menuitem" data-f="png">🖼 PNG of the whole page</button>${p && !p.missing && !p.needsFolder ? `<button type="button" role="menuitem" data-f="zip">🗜 ZIP of ${esc(p.name)}'s files</button>` : ''}<div class="exp-status" hidden></div>`;
+  document.body.appendChild(m);
+  { const r = btn.getBoundingClientRect(); m.style.top = `${r.bottom + 6}px`; m.style.left = `${Math.max(8, Math.min(r.right - 240, innerWidth - 248))}px`; }
+  const close = (e) => { if (!m.contains(e.target) && e.target !== btn) { m.remove(); document.removeEventListener('click', close, true); } };
+  setTimeout(() => document.addEventListener('click', close, true));
+  for (const b of m.querySelectorAll('[data-f]')) b.onclick = async () => {
+    const st = $('.exp-status', m); st.hidden = false; st.textContent = 'Making it…';
+    m.querySelectorAll('button').forEach((x) => (x.disabled = true));
+    try {
+      const r = await fetch('/api/export', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ format: b.dataset.f, url: t.url, projectId: c.projectId, width: t.w || 1280 }) });
+      if ((r.headers.get('content-type') || '').includes('json')) throw new Error((await r.json()).error || 'export failed');
+      const name = (r.headers.get('content-disposition') || '').match(/filename="([^"]+)"/)?.[1] || `export.${b.dataset.f}`;
+      const url = URL.createObjectURL(await r.blob());
+      const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60e3);
+      st.textContent = `Saved ${name}${r.headers.get('x-skipped') ? ` (${r.headers.get('x-skipped')} big files left out)` : ''}`;
+      setTimeout(() => m.remove(), 2500);
+    } catch (e) { st.textContent = `⚠ ${e.message}`; m.querySelectorAll('button').forEach((x) => (x.disabled = false)); }
+  };
+}
 function ubStatus(t) { const el = $('#paneBody .ub-status'); if (el) { el.textContent = t; el.hidden = !t; } }
 async function ubCall(op, a = {}) {
   const c = focused(), t = c && activeBTab(c);

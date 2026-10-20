@@ -48,7 +48,15 @@ export async function userBrowse(sid, op, a = {}) {
   if (!/^[\w-]{6,60}$/.test(String(sid))) throw new Error('bad session');
   const s = await session(sid, a.w, a.h);
   if (!s) return { none: true };
-  if (s.locked && op !== 'look' && op !== 'peek') throw new Error('the agent is using this page right now: watch only until its reply ends');
+  if (s.locked && op !== 'look' && op !== 'peek' && op !== 'inspect') throw new Error('the agent is using this page right now: watch only until its reply ends');
+  // 💬 Comment: what is under a point of the picture, and a cropped picture of it. Reads only; never clicks.
+  if (op === 'inspect') {
+    const x = Math.max(0, Math.min(s.w, Number(a.x) || 0)), y = Math.max(0, Math.min(s.h, Number(a.y) || 0));
+    const hit = await s.tab.inspect(x, y);
+    if (!hit) return { hit: null };
+    const info = await s.tab.eval('location.href').catch(() => s.tab.url);
+    return { hit: { ...hit, url: info }, crop: await s.tab.crop(hit.rect, hit.scroll).catch(() => null), w: s.w, h: s.h };
+  }
   const t = s.tab;
   if (op === 'open') {
     const url = String(a.url || '');

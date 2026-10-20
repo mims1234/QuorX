@@ -1,0 +1,62 @@
+/* Meadow tokens. Link this file first (<link rel="stylesheet" href="tokens.css">) and use var() everywhere. */
+@import url("https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Nunito+Sans:wght@400;600;700&display=swap");
+
+:root {
+  /* colour */
+  --bg: #f6f8f1;
+  --surface: #ffffff;
+  --surface-2: #ebf0e2;
+  --fg: #1d2b20;
+  --muted: #56685a;
+  --line: #dbe3d0;
+  --accent: #c8432d;
+  --accent-ink: #ffffff;
+  --accent-2: #2f7a4b;
+  --accent-soft: #fde4dc;
+  --ok: #2f7a4b;
+  --warn: #9a6100;
+  --bad: #b3261e;
+  --focus: #2f7a4b;
+  /* type */
+  --font-display: "Baloo 2", "Trebuchet MS", system-ui, sans-serif;
+  --font-body: "Nunito Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: ui-monospace, Consolas, monospace;
+  --text-sm: 0.875rem;
+  --text-base: 1.0625rem;
+  --text-lg: 1.3125rem;
+  --text-xl: 1.75rem;
+  --text-2xl: 2.5rem;
+  --text-3xl: 3.5rem;
+  --leading: 1.65;
+  /* space and shape */
+  --space-1: 6px;
+  --space-2: 10px;
+  --space-3: 16px;
+  --space-4: 28px;
+  --space-5: 44px;
+  --space-6: 76px;
+  --radius: 20px;
+  --radius-sm: 12px;
+  --shadow: 0 2px 0 rgba(29, 43, 32, 0.08);
+  --max: 1080px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #131a14;
+    --surface: #1b241c;
+    --surface-2: #233025;
+    --fg: #e8efe4;
+    --muted: #a3b3a5;
+    --line: #2f3d31;
+    --accent: #ff8a73;
+    --accent-ink: #2a0d06;
+    --accent-2: #7cc996;
+    --accent-soft: #3a211b;
+    --ok: #7cc996;
+    --warn: #f0b35a;
+    --bad: #ff8a80;
+    --focus: #7cc996;
+    --shadow: 0 2px 0 rgba(0, 0, 0, 0.35);
+  }
+}

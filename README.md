@@ -197,7 +197,7 @@ The loop borrows the parts of ALMA's build harness that make long builds reliabl
 | **Reading files** | `read_file` returns numbered lines, 400 at a time, and says where to continue (`offset`). Long artifacts come the same way. |
 | **Editing files** | `edit_file` takes one find/replace or up to 20 `edits`, applied all or none. |
 | **A check after every write** | After `write_file`, `append_file`, `edit_file` and artifact edits, the harness checks the file with real parsers: `node --check` for JS (ES modules and CommonJS), Python's parser for `.py`, JSON, CSS braces, and in HTML the inline scripts, import maps and every local link. Problems come back in the tool result right away (🔎 in the trace). |
-| **Design lint** | HTML and CSS writes also get a free check for patterns that make a page look machine-made, adapted from OpenDesign's linter. **Fix** notes: Tailwind's default indigo/violet, a purple-blue-cyan hero gradient, rounded cards with a coloured left border, invented numbers ("10x faster", "99.9% uptime"), filler text. **Consider** notes: emoji as icons, placeholder image sites, more than 12 raw hex colours outside tokens, a removed focus outline with no replacement, images without alt text, no viewport tag. Each rule is mentioned once per file per reply (🎨 in the trace). It is advice only: it never fails a check or sends a build back, and the agent is told to skip a rule you asked for. The final check counts what is left, and the scorecard row stores it (`verify.lint`). Switch it off in ⚙ Settings → Agent loop → Checks. On the 23 HTML/CSS files in the existing projects (2026-10-19) it gave no wrong "fix" notes; the common one was raw hex in game stylesheets. |
+| **Design lint** | HTML and CSS writes also get a free check for patterns that make a page look machine-made, adapted from OpenDesign's linter. In a project with a [design system](#design-systems), colours that aren't in its `tokens.css` are noted too. **Fix** notes: Tailwind's default indigo/violet, a purple-blue-cyan hero gradient, rounded cards with a coloured left border, invented numbers ("10x faster", "99.9% uptime"), filler text. **Consider** notes: emoji as icons, placeholder image sites, more than 12 raw hex colours outside tokens, a removed focus outline with no replacement, images without alt text, no viewport tag. Each rule is mentioned once per file per reply (🎨 in the trace). It is advice only: it never fails a check or sends a build back, and the agent is told to skip a rule you asked for. The final check counts what is left, and the scorecard row stores it (`verify.lint`). Switch it off in ⚙ Settings → Agent loop → Checks. On the 23 HTML/CSS files in the existing projects (2026-10-19) it gave no wrong "fix" notes; the common one was raw hex in game stylesheets. |
 | **The check before the final reply** | When the agent tries to finish, the harness checks every file this reply changed again and makes sure the dev servers it started are still up. It also opens each page, site and app it built in the headless browser, looking for script errors, failed loads and blank pages. If anything is wrong, the agent is sent back to fix it (↩ in the trace), up to 2 rounds (⚙). After that the reply ends and says what's left. ALMA can only parse a static site; this check runs the real tools. |
 | **Long replies** | Past 120k characters (⚙), old file contents in writes and reads are swapped for short notes. This happens in batches, so the provider's prompt cache stays warm, and never touches the last 3 steps. If that isn't enough, the earlier part of the reply is summarised from the harness's own record of each step. |
 | **Prompt cache** | Claude models get cache marks on the system prompt and the newest message, so repeated steps cost less. |
@@ -234,7 +234,7 @@ Measured: Ling 3.0 Flash, a text-only model, was given a picture of a red circle
 - **`AGENT.md`:** every chat in a project gets the project's notes in its context. The agent keeps them current: what the project is, how to run it, a file map, decisions and to-dos.
 - **Work log:** after each reply that changed something, the harness adds one line to `<project>/.quorx/log.md` (time, chat, model, what changed). The last 15 lines are in every chat's context.
 - **Skills:** playbooks the agent loads with `use_skill` when a task fits. Only their names and descriptions sit in the prompt.
-  - Built in: `web-app`, `design-craft`, `node-server`, `canvas-game`, `ui-review`, `debug-loop`, `decide-well`, in `skills/<name>/SKILL.md`.
+  - Built in: `web-app`, `design-craft`, `design-system`, `node-server`, `canvas-game`, `ui-review`, `debug-loop`, `decide-well`, in `skills/<name>/SKILL.md`.
   - `design-craft` covers committing to one visual direction (decided by the agent, never asked), tokens, type, colour, layout, content, states and accessibility. It is adapted from OpenDesign's craft rules (Apache-2.0) and refero_skill (MIT). `web-app` loads it.
   - **The agent writes its own:** after a task that took several attempts, `save_skill` stores what worked in `<project>/.quorx/skills/`.
   - ⚙ Settings lists every skill with an on/off switch.
@@ -284,6 +284,38 @@ Measured: Ling 3.0 Flash, a text-only model, was given a picture of a red circle
 - **Long chats:** past about 24k characters of history, the older turns are summarised once (shown in the trace as 🗜) and only the summary plus recent turns are sent.
 
 Measured: a fresh chat asked for "a simple dodge-the-blocks game" loaded the `canvas-game` skill, scaffolded the template, previewed it, played it in the browser and checked it with `look` at desktop and 390px, for $0.025. A second chat in the same project read the notes and log, fixed the title with two small edits, confirmed it at 360px and wrote `AGENT.md` ($0.006). Undo restored `game.js` exactly and moved the new `AGENT.md` to the trash.
+
+## Design systems
+
+A project can have one look that every chat builds to. It is two files in the project folder's root:
+- **`DESIGN.md`**: the look in words (colours with their roles, type, spacing and shape, components, do and don't).
+- **`tokens.css`**: the same values as CSS custom properties, linked by every page (`<link rel="stylesheet" href="tokens.css">`) and used with `var()`.
+
+When a project has them, every chat gets `DESIGN.md` in its context and is told to follow it, link `tokens.css` and not ask you to pick a style.
+
+**⚙ Project settings → Design system** (next to the folder and name colour):
+- **None yet:** six starters to pick from, each with its colours, fonts and what it suits. All are our own designs, not copies of brands. Every one passes the design lint, its text has at least 7:1 contrast on its background, and its secondary text and buttons at least 4.5:1, in light and dark.
+
+  | Starter | Look | Suits |
+  |---|---|---|
+  | Harbor | Cool off-white, navy ink, serif headlines, one signal orange | Local services, clinics, studios |
+  | Field Notes | Lab notebook: faint grid, condensed headings, mono labels, forest green | Tools, docs, developer pages |
+  | Ledger | Dense data, mono numbers, fixed chart colours, one blue | Dashboards, admin, finance |
+  | Meadow | Soft and rounded, sage and coral | Kids, learning, wellness, friendly apps |
+  | Night Market | Warm dark, chunky display face, saffron and teal (dark only) | Events, food, music |
+  | Studio Mono | Black and white on a strict grid, huge wide headlines, one red | Portfolios, agencies, editorial |
+- **With one:** its name, files and colour count, plus **Edit DESIGN.md** (edit it in place), **Change…** (switch to another starter) and **Remove**. Replacing or removing asks first in place, and the old files go to the project's `.quorx/trash`, so nothing is lost.
+
+**From a reference:** ask in a chat, for example "make a design system from https://… for this project", or attach a screenshot and ask for one. The agent loads the `design-system` skill and calls **`extract_design`**:
+- **A web page** (https, `site:`, `app:`) is opened in the browser and measured. The result lists the background and text colours by how much of the page they cover, the type of headings and body, the main button's style, the corner radii in use, `:root` custom properties and the web fonts that loaded. It's labelled as measurements of an outside page, not instructions.
+- **A picture** (`attached:1`, or `screenshot` of the page open in the browser) goes to the vision deciders with six fixed questions: background, accent family, headline type, corners, density and feel.
+- Then the agent writes `DESIGN.md` and `tokens.css` in its own words, named after your project, never copying logos, names or text. It checks contrast and builds a small sample page. If the project already has a `DESIGN.md`, it writes `DESIGN.draft.md` and asks before replacing.
+
+**Kept to it:** the design lint checks every HTML and CSS file against the project's `tokens.css`. Colours that aren't in it get a "consider" note (`off-palette`), and the agent is told to use a token or add the colour to both files. The reviewer scores **brand fit** against `DESIGN.md`.
+
+Measured (2026-10-20, through the app, about $0.07 in all):
+- With Harbor picked, "build a one-page site for a boat tours company" read `DESIGN.md` and `tokens.css` first. It linked `tokens.css`, used `var()` 226 times with no hex colours of its own, and ended with no lint notes. The reviewer gave brand fit 4/5.
+- "Make a design system from https://www.python.org" measured its blues, yellow, greys and Source Sans, and wrote a system called Quayside with a style-guide sample page. When the lint flagged one colour as off-palette, the agent added it as a token instead of hard-coding it. The reviewer passed it (brand fit 4/5, accessibility 4/5).
 
 ## Tools, models and costs
 
@@ -392,6 +424,52 @@ Measured: a fresh chat built a Node counter app, started it, clicked + twice and
 
 **🔒 Strict** asks before each of these tools, showing the exact command or file. **⚡ YOLO** runs them without asking, which means the agent runs programs on your machine. Keep YOLO for projects you're happy to let it change.
 
+### 💬 Comment on part of a page
+**💬 Comment** in the Browser tab's bar shows a live picture of the page, the same in all three ways the tab can show one (a frame, the harness browser, or a real tab in the desktop app).
+- **Click any part** of it. QuorX finds the element under the click and draws a box around it. A small box then shows what it is (for example `a` "Book a tour"), a cropped picture of it, and the selector the agent will use to find it.
+- **Say what should change** (or leave the note empty), then **Add to message**. The comment becomes a chip in the message box, with its picture and ✕ to remove it. Add as many as you like; scroll the picture with the wheel to reach the rest of the page.
+- **Send your message** as usual. The agent gets each element's tag, text, selector, section and size with your note, and its crop as an attached picture. It's told to change only those elements. Your message bubble lists what you pointed at, and later replies in the chat remember it.
+- Pages the agent builds mark their sections and repeated blocks with `data-qx-id` (`web-app` and `design-craft` say so), so a selector still finds the element after edits.
+
+Measured (2026-10-20, through the app): on the boat-tours site, a comment on the hero's "Book a tour" saying "make this button sea-glass green with dark text, and a little bigger" changed only that button. It added three colour tokens instead of hard-coding them, and the header's "Book a tour" stayed as it was. $0.0042.
+
+### ⤓ Export
+**⤓ Export** beside it offers:
+- **PDF of this page** (with its print styles and backgrounds)
+- **PNG of the whole page** (one long picture, up to 20,000 px)
+- **ZIP of the project's files** (without `.quorx`, `.git`, `node_modules` or build output, with files over 25 MB left out)
+
+The file is saved by your browser. Measured: the boat-tours page gave a 7-page PDF with no blank pages, a 1280×3745 PNG, and a 6-file ZIP that Windows opens.
+
+## QuorX as an MCP server
+
+Other agents can hand work to QuorX: Claude Code, OpenDesign, or any MCP client. `server/mcp.js` is an MCP server over stdio. It talks to the QuorX you have running (at `QUORX_URL`, by default `http://localhost:` plus `AGENT_PORT` or 5188):
+
+```
+claude mcp add quorx -- node D:/path/to/QuorX/server/mcp.js
+```
+
+| Tool | What it does |
+|---|---|
+| `list_projects` | Your projects, with folder, spend and budget |
+| `list_files`, `read_file` | A project's files, and one text file in windows of 100k characters |
+| `start_reply` | Asks QuorX's agent to do something in a project. It's an ordinary chat in your sidebar, so you can open it and watch, with the project's budget, checks and reviewer. Paid media is off, and Strict is the default (`approval: "yolo"` to change it). Pass `chat` to continue a chat. |
+| `get_reply` | Waits up to `wait` seconds (default 20), then says how the reply is doing (working, waiting for you, done or failed) with its last steps, checks, review, cost, changed files and answer. When it has ended, the answer is saved into the chat. |
+| `stop_reply` | Stops it |
+
+Approvals and the agent's questions stay yours. A client sees that a reply is "waiting for the user in QuorX", but there's no tool to answer for you.
+
+Measured (2026-10-20): a client listed the projects, read `DESIGN.md`, started "open the site in the Browser tab, change nothing", followed it to the end and got the answer back. The chat appeared in the sidebar with its answer and cost. $0.0015.
+
+**Two QuorX on one data folder** (for example the desktop app and a second copy): a reply that one of them runs, and whose log was written in the last 90 seconds, now counts as "running elsewhere" for the other one, and isn't marked "interrupted" over the chat. `get_reply` also repairs a chat that an older copy marked that way.
+
+### ⏵ Replay
+**⏵ Replay** in a finished reply's Steps plays it again from the start, step by step, with its real timing. Controls:
+- ⏮ ◀ ⏵/⏸ ▶ ⏭ buttons, a scrubber, and 1× / 4× / 16× speed.
+- Keys: J/K or ←/→ for the previous or next step, Space to play and pause, Home/End for the ends, Esc to leave.
+
+A reply the page never saw (one started over MCP, or while the page was closed) replays from QuorX's own log (`/api/runs/<id>/log`).
+
 ## Decide-with-guess
 
 Every agent has a `decide` tool. For **every** question, the agent must commit `my_guess` and `my_confidence` before the deciders answer. Three deciders then answer: Jev 1.14, Liquid d1-ultra and GPT-6 Luna Decisions, with choice options shuffled per decider. Each question gets one of these labels:
@@ -414,6 +492,7 @@ Every question is appended to `logs/decisions.jsonl`: the question, guess, confi
 | `server.js` | HTTP server: `/api/run` (starts a reply and streams it), `/api/runs/<id>` (status), `/api/runs/<id>/events` (reattach), `/api/runs/<id>/stop`, `/api/runs` (running now), `/api/answer`, `/api/scorecard`, `/api/projects/<id>/budget` (set or raise), `/api/budget-stop` (Wrap up), `/api/approve`, `/api/transcribe`, `/api/models`, `/api/config`, `/api/balance`, `/api/chats`, `/api/projects`, `/api/files`, `/api/servers/*` (and `/overview`), `/api/launch`, `/api/term/stream|run|stop`, `/api/agent-space` (+ `/clear`), `/api/pick-folder`, `/api/docs` (+ `/upload`, `/process`, `/models`), `/api/costs`, `/api/skills`, `/api/checkpoints/restore`, `/ws/<project>/…` (project files), static files |
 | `server/agent.js` | One reply: the tool loop (retries, look-ups together, nudges, checks, trimming, resume), artifacts, decide-with-guess (with images), project tools, ask_user, notes/log/skills, paid media behind the approval gate |
 | `server/loop.js` | Pure loop helpers: grouping look-ups, numbered file windows, trimming and compaction, prompt-cache marks, labelling outside text, which errors to retry |
+| `server/design.js`, `design-systems/` | Design systems: the starters (`DESIGN.md` + `tokens.css` each), a project's own, applying, editing and removing them |
 | `server/checks.js` | File checks with real parsers (Node, Python, JSON, CSS, HTML scripts and links), and the design lint (`lintHtml`, `lintCss`, `lintFile`) |
 | `server/runs.js` | Replies on the server: event log, reattach, stop, checkpoints for resume, the scorecard and cost ledger |
 | `server/budget.js` | Project budgets: what a project has spent (saved chats + ledger + running replies), setting a budget never below that |
@@ -429,7 +508,10 @@ Every question is appended to `logs/decisions.jsonl`: the question, guess, confi
 | `server/terminal.js` | The live terminal feed per project: command and server output, running jobs, stop |
 | `server/pickfolder.js` | 📂 Browse…: the computer's own folder dialog |
 | `server/artifacts.js` | Hosting artifacts at `/art/…`: pages as they are, Markdown documents rendered |
-| `server/browser.js` | Headless Edge/Chrome over the DevTools protocol: open, click, type, screenshot, console errors (a temporary profile per process) |
+| `server/mcp.js` | QuorX as an MCP server (stdio): projects, files, start / follow / stop a reply |
+| `server/zip.js` | A small ZIP writer for ⤓ Export (deflate, no dependencies) |
+| `server/clis.js` | Other agent CLIs as bench builders (Claude Code, Codex CLI, or ones in `bench/clis.json`) |
+| `server/browser.js` | Headless Edge/Chrome over the DevTools protocol: open, click, type, screenshot, console errors (a temporary profile per process). Also what's under a point and a crop of it (💬 Comment), and a full-page PNG and a PDF (⤓ Export). A click with a selector or text ignores x/y, since models often send `x: 0, y: 0` alongside. When Edge hands off to a new process at start (it exits with code 0 but keeps the debugging port), that browser is used rather than a fresh one being started, and its real process is closed when QuorX exits. |
 | `server/skills.js`, `skills/`, `templates/` | Skills (built-in and per project) and starter templates |
 | `server/keys.js` | OpenRouter keys (data/keys.json), the active key, per-key usage windows, account credits |
 | `public/code.js` | The code viewer: highlighting, formatting, line numbers |
@@ -562,7 +644,10 @@ node scripts/bench.mjs --set build --limit 2
 node scripts/bench.mjs --set build --review off,builds --limit 4
 node scripts/bench.mjs --set build --helpers on,off --reasoning off,low --only snake_portals,invoice_builder
 node scripts/bench.mjs --set build --builder deepseek/deepseek-v4.1-flash,anthropic/claude-haiku-5.5 --repeat 2
+node scripts/bench.mjs --set build --mode harness,cli:claude --only snake_portals,sales_dashboard
 ```
+
+**Other agent CLIs as builders:** `--mode cli:claude` (Claude Code) or `cli:codex` (Codex CLI) has that agent build the task in its throwaway folder, and the same judge scores what it leaves. Each CLI is one data object in `server/clis.js`: program, arguments, prompt on stdin, how to read its answer. More can go in `bench/clis.json` with the same shape. They run only here, because QuorX's approvals can't reach inside another agent. Each CLI's own flags limit it to editing files in that folder, so Claude Code runs with `acceptEdits` and only its file tools. Arguments are fixed flags or a checked model id (`--cli-model`), so no task text reaches a command line. Claude Code reports its cost, which goes into the run's cost. These runs use your own Claude or OpenAI account, not OpenRouter.
 
 How a run works:
 - **Its own project.** Every run gets a new folder under the OS temp dir, registered as a throwaway project (`bench-…`). When the run ends, its servers are stopped, the project is forgotten, and the folder is deleted (`--keep` keeps the folder; its path is in the results). `workspaces/` and the chats in `data/` are never touched.

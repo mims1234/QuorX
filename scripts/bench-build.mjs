@@ -14,7 +14,9 @@
 //                                  logs/bench-cap.txt, if there is one, overrides it while the bench runs)
 //            --resume <file.jsonl> carry on a stopped bench: runs already in that file are kept, not run again
 //            --mode harness,direct  harness = the full QuorX agent; direct = one plain call to the model asking for
-//                                  the files (no tools, no checks), the way you would use it in a plain chat
+//                                  the files (no tools, no checks), the way you would use it in a plain chat;
+//                                  cli:claude, cli:codex (or one from bench/clis.json) = that agent CLI builds in the
+//                                  task's folder, limited to editing files there · --cli-model <id> passes a model to it
 //            --checks on,off       the harness checks (gap check, screenshot and click checks) · --ask n: ask_user per reply
 //                                  (in this YOLO bench the deciders answer) · default 0
 //
@@ -33,6 +35,7 @@ import { chatStream, chatModels, runtime } from '../server/openrouter.js';
 import { saveProject, forgetProject, projectDir } from '../server/store.js';
 import { safePath, listServers, stopServer } from '../server/workspace.js';
 import { openTab, hostHtml, hostedHtml } from '../server/browser.js';
+import { cliDefs, runCli } from '../server/clis.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const MIME = { '.html': 'text/html; charset=utf-8', '.htm': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
@@ -72,7 +75,8 @@ export async function runBuildBench(arg) {
     fresh: list(arg('fresh', 'on')),
   };
   for (const f of axes.fresh) if (!['on', 'off'].includes(f)) throw new Error(`--fresh ${f}: use on or off`);
-  for (const m of axes.mode) if (!['harness', 'direct'].includes(m)) throw new Error(`--mode ${m}: use harness or direct`);
+  const CLIS = cliDefs(), CLI_MODEL = arg('cli-model', '');
+  for (const m of axes.mode) if (!['harness', 'direct'].includes(m) && !(m.startsWith('cli:') && CLIS.some((d) => d.id === m.slice(4)))) throw new Error(`--mode ${m}: use harness, direct or cli:<${CLIS.map((d) => d.id).join('|')}>`);
   for (const c of axes.checks) if (!['on', 'off'].includes(c)) throw new Error(`--checks ${c}: use on or off`);
   const ASK = Math.max(0, Math.min(10, Number(arg('ask', 0)) || 0));
   for (const d of axes.decide) if (!['off', 'auto', 'force-first'].includes(d)) throw new Error(`--decide ${d}: use off, auto or force-first`);
@@ -93,11 +97,13 @@ export async function runBuildBench(arg) {
   const setups = [{}];
   for (const [k, vals] of Object.entries(axes)) setups.splice(0, setups.length, ...setups.flatMap((s) => vals.map((v) => ({ ...s, [k]: v }))));
   // A direct build has no harness, so its review, helpers, decide and checks settings mean nothing: keep one of each.
-  { const seen = new Set(); for (let i = setups.length - 1; i >= 0; i--) { const x = setups[i]; if (x.mode !== 'direct') continue; const k = `${x.builder}|${x.reasoning}`; if (seen.has(k)) setups.splice(i, 1); else seen.add(k); } }
+  { const seen = new Set(); for (let i = setups.length - 1; i >= 0; i--) { const x = setups[i]; if (x.mode !== 'direct' && !x.mode.startsWith('cli:')) continue; const k = x.mode.startsWith('cli:') ? x.mode : `${x.builder}|${x.reasoning}`; if (seen.has(k)) setups.splice(i, 1); else seen.add(k); } }
   const varying = Object.keys(axes).filter((k) => axes[k].length > 1);
   // A model that cannot run without thinking (or should think) sets "reasoning" in the --models file.
   for (const s of setups) { const r = MODELS?.find((m) => m.id === s.builder)?.reasoning; if (r) s.reasoning = r; }
   for (const s of setups) s.label = varying.length ? varying.map((k) => (k === 'builder' ? short(s[k]) : `${k}=${s[k]}`)).join(' ') : 'default';
+  // An agent CLI uses its own model (or --cli-model), not the --builder one: it is named by the CLI.
+  for (const s of setups) if (s.mode.startsWith('cli:')) { const d = CLIS.find((x) => x.id === s.mode.slice(4)); s.cli = d; s.builder = `cli/${d.id}${CLI_MODEL ? `:${CLI_MODEL}` : ''}`; s.label = `${d.name}${CLI_MODEL ? ` ${short(CLI_MODEL)}` : ''}`; }
   // With a project folder: register it as an QuorX project (so it can be opened in the app) and keep the builds there.
   if (PROJECT) {
     fs.mkdirSync(path.join(PROJECT, 'builds'), { recursive: true });
@@ -179,7 +185,8 @@ export async function runBuildBench(arg) {
     live.set(pid, dir);
     let rec;
     try {
-      const run = s.mode === 'direct' ? await direct({ task, s, dir, suffix: file.suffix || '', minutes: MINUTES, retries: RETRIES })
+      const run = s.cli ? await cliBuild({ task, s, dir, suffix: file.suffix || '', minutes: MINUTES, model: CLI_MODEL })
+        : s.mode === 'direct' ? await direct({ task, s, dir, suffix: file.suffix || '', minutes: MINUTES, retries: RETRIES })
         : await build({ task, s, pid, suffix: file.suffix || '', settings: { review: s.review, reviewModel: REVIEWER, reviewRounds: ROUNDS, reviewBar: BAR, helpers: s.helpers === 'on', maxSteps: STEPS, retries: RETRIES, askLimit: ASK, freshEyes: s.fresh !== 'off', ...(s.checks === 'off' ? { checks: { gap: false, shots: false, click: false } } : {}) }, minutes: MINUTES, rep });
       // The builder's model never answered (or kept failing): count it towards giving up on that model.
       const modelFailed = !!run.error && (!(run.stats.llmCalls > 0) || /rate.?limit|429|no endpoints|provider|overloaded|unavailable|timed? ?out|402|quota/i.test(run.error));
@@ -260,6 +267,7 @@ async function build({ task, s, pid, suffix, settings, minutes, rep }) {
 // The column a run belongs to on the results page: the axis values that tell setups apart.
 function colOf(s, axes) {
   if (s.mode === 'direct') return 'direct';
+  if (s.cli) return s.cli.name;
   const parts = [];
   if (axes.mode.length > 1) parts.push('harness');
   if (axes.checks.length > 1) parts.push(`checks ${s.checks}`);
@@ -306,6 +314,19 @@ async function direct({ task, s, dir, suffix, minutes, retries }) {
   const ms = Date.now() - t0;
   return { ...ev, stats: { cost, byRole: { writer: cost }, byModel: { [s.builder]: { role: 'writer', calls: 1, cost } }, llmCalls: r ? 1 : 0, steps: 1, ms, stop: ev.error ? 'error' : 'answered', changed: [] }, ms };
 }
+// ---------- an agent CLI as the builder: it works in the task's folder by itself; the judge scores what is left ----------
+export async function cliBuild({ task, s, dir, suffix, minutes, model }) {
+  const ev = { reply: '', error: null, arts: new Map(), sentBack: { reviewer: 0, checks: 0 }, plan: false, reviews: [], tools: {}, toolErrors: 0, helperTools: 0, deciders: { asks: 0, looks: 0, asked: [], outcomes: {} }, questions: [], retries: 0, checks: [], deciderAnswers: [] };
+  const prompt = `${task.prompt}${suffix.replace(/\s*When it works, open it with preview_site\.?/i, '')}\n\nBuild it as files in the current folder (index.html as the entry page). Don't ask questions: decide yourself.`;
+  const r = await runCli(s.cli, { cwd: dir, prompt, model, minutes });
+  ev.reply = r.reply || ''; ev.error = r.error || null;
+  const files = fs.readdirSync(dir, { recursive: true }).filter((f) => !/^\.|node_modules/.test(String(f))).length;
+  ev.tools = { files };
+  if (!ev.error && !files) ev.error = 'the CLI left no files';
+  const cost = Number(r.cost) || 0;
+  return { ...ev, stats: { cost, byRole: { writer: cost }, byModel: { [s.builder]: { role: 'writer', calls: 1, cost } }, llmCalls: 1, steps: r.turns || 1, ms: r.ms, stop: ev.error ? 'error' : 'answered', changed: [] }, ms: r.ms };
+}
+
 // "path" on its own line, then a fenced block; a cut-off last block keeps what arrived.
 function parseFiles(text) {
   const out = [], seen = new Set();

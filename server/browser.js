@@ -36,8 +36,10 @@ const freePort = async () => { for (let p = 9333; p < 9400; p++) { const ok = aw
 
 // Callers that arrive while the browser is starting share that one start: two launches on the same
 // profile folder would fight over it, and all but one would fail with "the browser did not start".
-function ensureBrowser() {
-  if (chrome && chrome.proc.exitCode == null) return Promise.resolve(chrome);
+// The DevTools port answers: the browser is up, even when the process we started has exited (see startOnce).
+const answers = async (port) => { try { const r = await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(1500) }); return r.ok; } catch { return false; } };
+async function ensureBrowser() {
+  if (chrome && (chrome.proc.exitCode == null || await answers(chrome.port))) return chrome;
   // After a failed start, later callers hear why at once for two minutes instead of waiting for it to fail again.
   if (failed && Date.now() - failed.at < 120e3) return Promise.reject(new Error(failed.message));
   starting ??= launchBrowser().then((c) => { failed = null; return c; }, (e) => { failed = { at: Date.now(), message: e.message }; throw e; }).finally(() => { starting = null; });
@@ -68,19 +70,33 @@ async function startOnce(exe, suffix) {
   proc.stderr.on('data', (d) => { said = (said + d).slice(-2000); });
   proc.on('error', (e) => { spawnErr = e; });
   // Up to 30 s: a first start on a slow or busy computer (antivirus scanning the new profile) can take a while.
+  // Edge on Windows may hand off to a new browser process and exit with code 0 at once; that browser keeps our port,
+  // so a clean exit means "keep waiting for the port", and only an error exit is a failed start.
   for (let i = 0; i < 120; i++) {
-    try { const r = await fetch(`http://127.0.0.1:${port}/json/version`); if (r.ok) { chrome = { proc, port }; return chrome; } } catch { /* starting */ }
+    try { const r = await fetch(`http://127.0.0.1:${port}/json/version`); if (r.ok) { chrome = { proc, port, pid: await browserPid(await r.json()) }; return chrome; } } catch { /* starting */ }
     if (spawnErr) throw new Error(spawnErr.message);
-    if (proc.exitCode != null) throw new Error(`it closed at once (exit code ${proc.exitCode})${lastLine(said)}`);
+    if (proc.exitCode != null && proc.exitCode !== 0) throw new Error(`it closed at once (exit code ${proc.exitCode})${lastLine(said)}`);
+    if (proc.exitCode === 0 && i >= 60) throw new Error(`it closed at once (exit code 0) and nothing answered on its port${lastLine(said)}`);
     await sleep(250);
   }
   proc.kill();
   throw new Error(`it gave no answer within 30 s${lastLine(said)}`);
 }
+// The real browser's process id (after a hand-off it isn't the one we spawned), so it can be closed when QuorX exits.
+async function browserPid(version) {
+  try {
+    const ws = new WebSocket(version.webSocketDebuggerUrl);
+    await new Promise((r, j) => { ws.onopen = r; ws.onerror = j; setTimeout(j, 2000); });
+    const info = await new Promise((r, j) => { ws.onmessage = (ev) => { const m = JSON.parse(ev.data); if (m.id === 1) r(m.result); }; ws.send(JSON.stringify({ id: 1, method: 'SystemInfo.getProcessInfo' })); setTimeout(j, 2000); });
+    ws.close();
+    return info?.processInfo?.find((p) => p.type === 'browser')?.id || null;
+  } catch { return null; }
+}
 // The browser's last meaningful message line, without its [pid:tid:time:LEVEL:file] prefix.
 const lastLine = (s) => { const l = String(s).split(/\r?\n/).map((x) => x.replace(/^\[[^\]]*\]\s*/, '').trim()).filter((x) => x && !/DevTools listening/i.test(x)).pop(); return l ? `: ${l.slice(0, 200)}` : ''; };
 process.on('exit', () => {
   try { chrome?.proc.kill(); } catch { /* gone */ }
+  try { if (chrome?.pid && chrome.pid !== chrome.proc.pid) process.kill(chrome.pid); } catch { /* gone */ }
   try { fs.rmSync(path.join(os.tmpdir(), `quorx-browser-${process.pid}`), { recursive: true, force: true }); } catch { /* still locked */ }
 });
 
@@ -206,13 +222,57 @@ export async function openTab({ chatId, cdpPort } = {}) {
           size: [document.documentElement.scrollWidth, document.documentElement.scrollHeight], scroll: [Math.round(scrollX), Math.round(scrollY)], view: [innerWidth, innerHeight] };
       })()`);
     },
+    // 💬 Comment: the element under a point of the view: a selector that finds it again (id, data-qx-id, or a short
+    // path), its tag, text, section and box. Prefers the meaningful element (a button, a heading) over a span inside it.
+    async inspect(x, y) {
+      return js(`((x, y) => {
+        const hit = document.elementFromPoint(x, y); if (!hit) return null;
+        const el = hit.closest('button, a, input, select, textarea, label, img, svg, video, canvas, h1, h2, h3, h4, h5, h6, p, li, td, th, figure, blockquote, [data-qx-id], [role=button]') || hit;
+        const one = (e) => {
+          if (e.id) return '#' + CSS.escape(e.id);
+          const q = e.getAttribute('data-qx-id'); if (q) return '[data-qx-id="' + q.replace(/"/g, '') + '"]';
+          let s = e.tagName.toLowerCase();
+          const cls = [...e.classList].filter((c) => !/^(is-|has-|active$|hover|focus|open$|show$)/.test(c)).slice(0, 2);
+          if (cls.length) s += '.' + cls.map((c) => CSS.escape(c)).join('.');
+          const p = e.parentElement;
+          if (p) { const same = [...p.children].filter((c) => c.tagName === e.tagName); if (same.length > 1) s += ':nth-of-type(' + (same.indexOf(e) + 1) + ')'; }
+          return s;
+        };
+        const parts = []; let e = el;
+        while (e && e !== document.body && e !== document.documentElement && parts.length < 5) { parts.unshift(one(e)); if (e.id || e.getAttribute('data-qx-id')) break; e = e.parentElement; }
+        const selector = parts.join(' > ') || el.tagName.toLowerCase();
+        const r = el.getBoundingClientRect();
+        const sec = el.closest('[data-qx-id]')?.getAttribute('data-qx-id') || el.closest('section[id], header[id], footer[id], nav[id], main[id], aside[id], article[id]')?.id || null;
+        return { selector, unique: document.querySelectorAll(selector).length === 1, tag: el.tagName.toLowerCase(),
+          text: (el.innerText || el.value || el.alt || el.getAttribute('aria-label') || el.title || '').trim().replace(/\\s+/g, ' ').slice(0, 160),
+          section: sec, rect: { x: r.x, y: r.y, w: r.width, h: r.height }, scroll: { x: scrollX, y: scrollY }, html: el.outerHTML.slice(0, 300) };
+      })(${Number(x) || 0}, ${Number(y) || 0})`);
+    },
+    // A picture of one part of the page (view coordinates, as inspect returns them), with a little margin around it.
+    async crop(rect, scroll = { x: 0, y: 0 }, pad = 12) {
+      const w = Math.max(8, Math.min(1600, rect.w + pad * 2)), h = Math.max(8, Math.min(1200, rect.h + pad * 2));
+      const r = await send('Page.captureScreenshot', { format: 'jpeg', quality: 80, captureBeyondViewport: true, clip: { x: Math.max(0, rect.x + scroll.x - pad), y: Math.max(0, rect.y + scroll.y - pad), width: w, height: h, scale: 1 } });
+      return `data:image/jpeg;base64,${r.data}`;
+    },
+    // Export: the whole page as one PNG (up to 20000 px tall), or as a PDF with its print styles.
+    async fullPage() {
+      const m = await send('Page.getLayoutMetrics');
+      const size = m.cssContentSize || m.contentSize;
+      const r = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true, clip: { x: 0, y: 0, width: Math.ceil(size.width), height: Math.min(20000, Math.ceil(size.height)), scale: 1 } });
+      return Buffer.from(r.data, 'base64');
+    },
+    async pdf({ landscape = false } = {}) {
+      const r = await send('Page.printToPDF', { printBackground: true, landscape, preferCSSPageSize: true, marginTop: 0.4, marginBottom: 0.4, marginLeft: 0.4, marginRight: 0.4 });
+      return Buffer.from(r.data, 'base64');
+    },
     async screenshot() {
       const r = await send('Page.captureScreenshot', { format: 'jpeg', quality: 72 });
       return `data:image/jpeg;base64,${r.data}`;
     },
     // Click by CSS selector, by visible text, or at x,y. Uses real mouse events at the element's centre.
     async click({ selector, text, x, y }) {
-      let pt = x != null && y != null ? { x, y, what: `point ${x},${y}` } : await js(`(() => {
+      // A selector or text wins over x/y: models often fill every field, sending x: 0, y: 0 next to the text they mean.
+      let pt = !selector && !text && x != null && y != null ? { x, y, what: `point ${x},${y}` } : await js(`(() => {
         const sel = ${JSON.stringify(selector || '')}, txt = ${JSON.stringify(String(text || '').toLowerCase())};
         let el = sel ? document.querySelector(sel) : null;
         if (!el && txt) el = [...document.querySelectorAll('button, a, [role=button], input[type=submit], input[type=button], label, li, div, span')]
