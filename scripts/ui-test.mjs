@@ -5,6 +5,7 @@
 //   npm run test:ui -- --scenario settings  only the checks that need no key
 //   npm run test:ui -- --scenario cli       the agent builds a Rust command-line program
 //   npm run test:ui -- --scenario running   the Running tab: what runs, who started it, Stop and Stop all
+//   npm run test:ui -- --scenario news      News: the dot, What's new, the sample article, Play on a flow, a compare
 //   add --keep to leave the app open afterwards
 //
 // The test copy keeps its own chats, projects and keys in .uitest/home (git ignores it), and runs on port 5197, so
@@ -17,6 +18,7 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { detectToolchains } from '../server/toolchains.js';
+import { saveTestResult } from './test-results.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const WIN = process.platform === 'win32';
@@ -392,12 +394,119 @@ async function runningScenario() {
   });
 }
 
+// ---------- scenario: News (no key needed) ----------
+// The sidebar's News entry shows a dot for updates you haven't read, What's new lists the versions, and the sample
+// article (a draft that uses every block) draws each block; Play walks its flow, and its compare switches.
+async function newsScenario() {
+  // A test result in the test copy's own logs, with a count unique to this run, for the Tests report's local block.
+  // Written before News first asks for it (the server keeps a view's answer for a few seconds).
+  const own = 100 + (Date.now() % 900);
+  fs.mkdirSync(path.join(HOME, 'logs'), { recursive: true });
+  fs.writeFileSync(path.join(HOME, 'logs', 'test-results.json'), JSON.stringify({ test: { at: new Date().toISOString(), total: own, pass: own, fail: 0, skipped: 0 } }));
+  await step('QuorX opens with News unread', async () => {
+    fs.rmSync(path.join(HOME, 'data', 'news.json'), { force: true }); // as if What's new was never opened
+    await js('location.hash = ""; location.reload(); return true;').catch(() => {});
+    await sleep(1500);
+    await waitFor(`document.querySelector('#newsBtn') && !document.querySelector('#newsDot').hidden`, 30000, 'the News dot');
+    await js(`document.querySelector('#settings')?.open && document.querySelector('#stCancel')?.click(); return true;`);
+    await sleep(400);
+    return `The News entry shows its dot: ${await js("return document.querySelector('#newsBtn').getAttribute('aria-label')")}`;
+  });
+  await step('Open News: What\'s new, newest version first', async () => {
+    await click('#newsBtn');
+    await waitFor(`document.querySelectorAll('#newsView .nw-version').length > 1`, 10000, 'the versions');
+    const v = await js(`return [...document.querySelectorAll('#newsView .nw-version')].map((s) => s.dataset.version + (s.querySelector('.nw-new') ? ' (new)' : '') + ': ' + s.querySelectorAll('.nw-item').length + ' items');`);
+    const tags = await js(`return [...new Set([...document.querySelectorAll('#newsView .nw-item .nw-tag')].map((t) => t.textContent))];`);
+    if (!/\(new\)/.test(v[0])) throw new Error(`the newest version has no "new" mark: ${v[0]}`);
+    return `${v.join('\n')}\nKinds shown: ${tags.join(', ')}`;
+  });
+  await step('The dot goes once What\'s new is open', async () => {
+    await waitFor(`document.querySelector('#newsDot').hidden`, 8000, 'the dot to go');
+    const r = await api('/api/news');
+    if (r.lastRead !== r.updates.versions[0].version) throw new Error(`lastRead is ${r.lastRead}`);
+    return `Read up to v${r.lastRead}; stored in ${path.join(HOME, 'data', 'news.json')}`;
+  });
+  await step('Reports and Articles lists', async () => {
+    await click('#newsView [data-tab="articles"]');
+    await waitFor(`document.querySelector('#newsView .nw-cards, #newsView .nw-empty')`, 5000, 'the list');
+    const a = await js(`return [...document.querySelectorAll('#newsView .nw-card h3')].map((h) => h.textContent);`);
+    await click('#newsView [data-tab="reports"]');
+    await waitFor(`document.querySelector('#newsView [data-tab="reports"][aria-pressed="true"]')`, 5000, 'Reports');
+    const r = await js(`return [...document.querySelectorAll('#newsView .nw-card h3')].map((h) => h.textContent);`);
+    return `Articles: ${a.join(', ') || 'none yet'}\nReports: ${r.join(', ') || 'none yet'}`;
+  });
+  await step('Open the sample article: every block draws', async () => {
+    await js('location.hash = "#news/articles/_sample"; return true;');
+    await waitFor(`document.querySelector('#newsView .nb-flow') && !document.querySelector('#newsView .nb-slot')`, 10000, 'the blocks');
+    const kinds = await js(`return [...document.querySelectorAll('#newsView .nb')].map((e) => e.className.split(' ')[1]);`);
+    const want = ['nb-stat', 'nb-chart', 'nb-tl', 'nb-lanes', 'nb-flow', 'nb-compare', 'nb-matrix', 'nb-ledger', 'nb-term', 'nb-callout', 'nb-local'];
+    const missing = want.filter((k) => !kinds.includes(k));
+    if (missing.length) throw new Error(`missing: ${missing.join(', ')}`);
+    if (kinds.includes('nb-error')) throw new Error('a block could not be shown');
+    const title = await textOf('#newsView .nw-article h1');
+    return `"${title}": ${kinds.length} blocks (${[...new Set(kinds)].join(', ')})`;
+  });
+  await step('Play on the flow walks its steps', async () => {
+    // A window behind others gets no animation frames and slow timers; bring it forward so the walk runs as you'd see it.
+    await send('Page.bringToFront').catch(() => {});
+    await js(`document.querySelector('#newsView').style.scrollBehavior = 'auto'; document.querySelector('#newsView .nb-flow').scrollIntoView({ block: 'start' }); return true;`);
+    await sleep(300);
+    const seen = await js('return document.visibilityState + (document.hasFocus() ? ", focused" : "");');
+    await click('#newsView .nb-flow .nb-play');
+    await sleep(4200);
+    const cap = await textOf('#newsView .nb-flow-cap');
+    const on = await js(`return [...document.querySelectorAll('#newsView .nb-flow .node')].findIndex((n) => n.classList.contains('on'));`);
+    const btn = await textOf('#newsView .nb-flow .nb-play');
+    if (on < 1 || !/\d\/\d/.test(cap)) throw new Error(`not walking: step ${on}, caption "${cap}", button "${btn}" (the window is ${seen})`);
+    return `Step ${on + 1} lit; caption "${cap}"; button "${btn}"`;
+  });
+  await step('The compare switches between versions', async () => {
+    await js(`document.querySelector('#newsView .nb-compare').scrollIntoView({ block: 'center' }); return true;`);
+    const before = await textOf('#newsView .nb-compare .nb-verdict b');
+    await click('#newsView .nb-compare .nb-seg button[data-o="0"]');
+    await sleep(700);
+    const after = await textOf('#newsView .nb-compare .nb-verdict b');
+    const pressed = await js(`return document.querySelector('#newsView .nb-compare .nb-seg button[data-o="0"]').getAttribute('aria-pressed');`);
+    if (before === after || pressed !== 'true') throw new Error(`still "${after}"`);
+    return `"${before}" → "${after}"`;
+  });
+  await step('The matrix filters by level, and a lane shows its detail', async () => {
+    await js(`document.querySelector('#newsView .nb-matrix').scrollIntoView({ block: 'center' }); return true;`);
+    await click('#newsView .nb-matrix .nb-filter button[data-f="tested"]');
+    const shown = await js(`return [...document.querySelectorAll('#newsView .nb-matrix tbody tr:not(.hide)')].map((r) => r.dataset.l);`);
+    if (!shown.length || shown.some((l) => l !== 'tested')) throw new Error(`rows: ${shown.join(', ')}`);
+    await moment('The matrix shows only Tested rows', shown.join(', '));
+    await js(`document.querySelector('#newsView .nb-lanes').scrollIntoView({ block: 'center' }); const g = document.querySelectorAll('#newsView .nb-lane')[1]; g.dispatchEvent(new MouseEvent('click', { bubbles: true })); return true;`);
+    await sleep(300);
+    return `Matrix: ${shown.length} tested rows. Lane card: ${(await textOf('#newsView .nb-lane-card')).replace(/\s+/g, ' ')}`;
+  });
+  await step('A report draws, and its local block reads this copy\'s own logs', async () => {
+    const list = await api('/api/news');
+    const slugs = (list.reports || []).map((x) => x.slug);
+    for (const s of ['models', 'tests', 'platforms']) if (!slugs.includes(s)) throw new Error(`the ${s} report is not listed (${slugs.join(', ')})`);
+    await js('location.hash = "#news/reports/tests"; return true;');
+    await waitFor(`document.querySelector('#newsView .nb-local table') && !document.querySelector('#newsView .nb-slot')`, 15000, 'the report and its local block');
+    const kinds = await js(`return [...new Set([...document.querySelectorAll('#newsView .nb')].map((e) => e.className.split(' ')[1]))];`);
+    if (kinds.includes('nb-error')) throw new Error('a block could not be shown');
+    const shown = (await textOf('#newsView .nb-local table')).replace(/\s+/g, ' ');
+    if (!shown.includes(`npm test ${own} 0`)) throw new Error(`the local block shows "${shown}", not this run's ${own} passed`);
+    await js(`document.querySelector('#newsView .nb-local').scrollIntoView({ block: 'center' }); return true;`);
+    return `Reports listed: ${slugs.join(', ')}. "${await textOf('#newsView .nw-article h1')}": ${kinds.join(', ')}. Your own results: ${shown}`;
+  });
+  await step('Close News: back to Home', async () => {
+    await click('#newsView .nw-close');
+    await waitFor(`document.querySelector('#newsView').hidden && !document.querySelector('.work').classList.contains('news-on')`, 5000, 'News to close');
+    return `Home is ${await js("return document.querySelector('#homeBtn').classList.contains('active') ? 'lit' : 'not lit'")}`;
+  });
+}
+
 // ---------- run ----------
 let failed = false;
 try {
   await launch();
   await connect();
   if (SCENARIO === 'all' || SCENARIO === 'settings') await settingsScenario();
+  if (SCENARIO === 'all' || SCENARIO === 'news') await newsScenario();
   if (SCENARIO === 'all' || SCENARIO === 'cli') await cliScenario();
   if (SCENARIO === 'all' || SCENARIO === 'running') await runningScenario();
 } catch (e) {
@@ -408,6 +517,7 @@ try {
   const r = report();
   log(`${r.passed} of ${r.total} steps passed. Report: ${r.file}`);
   if (!KEEP) for (const id of made.projects) await js(`await fetch(${q(`/api/projects/${id}`)}, { method: 'DELETE' }); return true;`).catch(() => {});
+  saveTestResult('ui', { scenario: SCENARIO, passed: r.passed, total: r.total, failedNames: steps.filter((s) => !s.moment && !s.ok).map((s) => s.title) });
   try { ws?.close(); } catch { /* closed */ }
   quit();
   if (!KEEP) {

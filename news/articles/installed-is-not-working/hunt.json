@@ -1,0 +1,26 @@
+{
+  "title": "UI test, 20 Oct 00:55 IST: the agent looks for a linker (commands and output shortened)",
+  "lines": [
+    { "cmd": "rustup toolchain list; rustup target list --installed" },
+    { "out": "stable-x86_64-pc-windows-msvc (active, default)" },
+    { "out": "x86_64-pc-windows-msvc" },
+    { "cmd": "Get-ChildItem \"C:\\Program Files (x86)\\Microsoft Visual Studio\"; where.exe link.exe gcc.exe lld-link.exe clang.exe" },
+    { "out": "(nothing found, exit code 1)" },
+    { "cmd": "Get-ChildItem \"C:\\Program Files (x86)\\Windows Kits\"; Get-ChildItem C:\\ -Directory -Filter \"*mingw*\"" },
+    { "out": "(nothing found)" },
+    { "cmd": "rustc --version --verbose" },
+    { "out": "rustc 1.97.1 (8bab26f4f 2026-07-14)" },
+    { "out": "host: x86_64-pc-windows-msvc" },
+    { "cmd": "rustup target add x86_64-pc-windows-gnu 2>&1 | Select-Object -Last 6" },
+    { "out": "Tripwire: 25 files vanished outside the project within 3s, so QuorX stopped \"rustup target add x86_64-pc-windows-gnu\"." },
+    { "cmd": "$c=@(\"C:\\msys64\\mingw64\\bin\", \"C:\\Program Files\\LLVM\\bin\", \"C:\\Program Files\\Git\\usr\\bin\", …); foreach ($p in $c) { … }" },
+    { "out": "absent C:\\msys64\\mingw64\\bin" },
+    { "out": "absent C:\\Program Files\\LLVM\\bin" },
+    { "out": "FOUND in C:\\Program Files\\Git\\usr\\bin" },
+    { "out": "C:\\Program Files\\Git\\usr\\bin\\link.exe" },
+    { "cmd": "cargo build 2>&1 | Select-Object -Last 6" },
+    { "out": "note: please ensure that Visual Studio 2017 or later, or Build Tools for Visual Studio were installed with the Visual C++ option" },
+    { "out": "note: VS Code is a different product, and is not sufficient" },
+    { "out": "error: could not compile `wc-lite` (bin \"wc-lite\") due to 1 previous error" }
+  ]
+}

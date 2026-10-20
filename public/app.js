@@ -1377,7 +1377,7 @@ function placeChrome() {
 }
 // 🏠 Home (sidebar, rail, and the app name in the top bar): back to the start screen. Lit while you're on it.
 function goHome() { withTransition(showLanding); closeDrawer(); if (isPhone()) setMView('chat'); }
-function syncHome() { const on = !G.panes.length; for (const b of document.querySelectorAll('#homeBtn, #railHome')) { b.classList.toggle('active', on); b.setAttribute('aria-current', on ? 'page' : 'false'); } }
+function syncHome() { const on = !G.panes.length && !$('.work')?.classList.contains('news-on'); for (const b of document.querySelectorAll('#homeBtn, #railHome')) { b.classList.toggle('active', on); b.setAttribute('aria-current', on ? 'page' : 'false'); } }
 function renderLanding(box) {
   const archived = new Set(G.projects.filter((p) => p.archived).map((p) => p.id));
   const allRecent = [...G.chats].filter((c) => c.messages > 0 && !archived.has(c.projectId || 'scratch')).sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0));
@@ -3236,7 +3236,7 @@ const CMD_CLASS = { read: 'reads only', write: 'writes in the project', build: '
 const CMD_ZONE = { inside: 'in the project', outside: 'outside the project', unknown: 'can’t be resolved', blocked: 'blocked', protected: 'protected' };
 function shellCardHTML(a) {
   const c = a.card, p = c.policy || {};
-  const segs = (p.segments || []).map((s) => `<div class="sc-seg"><code>${esc(clip(s.text, 200))}</code><span class="sc-cls" data-cls="${esc(s.cls)}">${esc(CMD_CLASS[s.cls] || s.cls)}${s.global ? ' · whole computer' : ''}</span>${(s.paths || []).map((x) => `<span class="sc-path" data-zone="${esc(x.zone)}">${esc(CMD_ZONE[x.zone] || x.zone)} · ${esc(clip(x.path, 90))}</span>`).join('')}</div>`).join('');
+  const segs = (p.segments || []).map((s) => `<div class="sc-seg"><code>${esc(clip(s.text, 200))}</code><span class="sc-cls" data-cls="${esc(s.cls)}">${esc(CMD_CLASS[s.cls] || s.cls)}${s.global ? ' · whole computer' : ''}${s.via ? ` · run by ${esc(s.via)}` : ''}</span>${(s.paths || []).map((x) => `<span class="sc-path" data-zone="${esc(x.zone)}">${esc(CMD_ZONE[x.zone] || x.zone)} · ${esc(clip(x.path, 90))}</span>`).join('')}</div>`).join('');
   const sug = (p.segments || []).find((s) => s.verdict !== 'allow')?.suggest || p.segments?.[0]?.suggest || { exact: c.what, prefix: c.what, program: c.what };
   const seg = (group, opts) => `<div class="seg sc-pick" data-group="${group}">${opts.map(([v, l], i) => `<button type="button" data-v="${esc(v)}" class="${i === 0 ? 'on' : ''}">${l}</button>`).join('')}</div>`;
   return `<div class="approval shell-card" data-id="${esc(c.id)}" data-tool="shell">
@@ -4352,9 +4352,12 @@ function settingsPanels(S) {
     safety: (() => {
       const SF = { ...(d.safety || {}), ...(S.safety || {}) };
       return ['Safety & commands', 'How the agent’s commands are checked before they run, what Stop and Undo cover, and what ⚡ YOLO may approve on its own. Every command is split into its parts first; the strictest part decides.', [
-        stCard('Shell', '', stRow('The agent’s shell', 'Windows PowerShell 5.1 is read by PowerShell’s own parser, so its commands can be checked exactly. cmd and Git Bash are checked with simpler rules, and Git Bash’s path translation caused the worst delete incidents in other agents.', stSeg('safety.shell', [['powershell', 'PowerShell 5.1'], ['pwsh', 'PowerShell 7'], ['cmd', 'cmd'], ['bash', 'Git Bash']], SF.shell))
+        stCard('Shell', '', stRow('The agent’s shell', G.cfg?.platform && G.cfg.platform !== 'win32'
+          ? 'Both are checked with the same rules: each command is split into its parts first, and anything that runs text as a command (eval, $(…), zsh’s glob qualifiers) asks you.'
+          : 'Windows PowerShell 5.1 is read by PowerShell’s own parser, so its commands can be checked exactly. cmd and Git Bash are checked with simpler rules, and Git Bash’s path translation caused the worst delete incidents in other agents.',
+        stSeg('safety.shell', G.cfg?.platform && G.cfg.platform !== 'win32' ? [['bash', 'bash'], ['zsh', 'zsh']] : [['powershell', 'PowerShell 5.1'], ['pwsh', 'PowerShell 7'], ['cmd', 'cmd'], ['bash', 'Git Bash']], SF.shell))
           + stRow('Wait for a command', 'How long the agent waits for a command before it moves to the background. It keeps running there while the agent carries on; you see it, and can stop it, in the pane’s Running tab.', stStep('safety.timeout', SF.timeout, 5, 900, 5, 's'))
-          + stRow('Memory cap per command', 'For the command and everything it starts, so a runaway build can’t starve your PC. 0 = no cap.', stStep('safety.memoryMB', SF.memoryMB, 0, 65536, 256, 'MB'))
+          + stRow('Memory cap per command', `For the command and everything it starts, so a runaway build can’t starve your PC. 0 = no cap.${G.cfg?.platform && G.cfg.platform !== 'win32' ? ' Windows only for now.' : ''}`, stStep('safety.memoryMB', SF.memoryMB, 0, 65536, 256, 'MB'))
           + stRow('Stop', 'How Stop ends a command.', '<span id="stStopMode" class="st-chip">checking…</span>')),
         stCard('Undo for commands', 'Before a command that can change files, QuorX snapshots the project (only changed files are read again), so ↶ Undo and Review changes cover what the command did. Not covered: files outside the project, ignored folders (node_modules, target, bin, obj…), pushes, installs and databases.',
           stRow('Snapshot before each command', '', stSwitch('safety.snapshots', SF.snapshots))
@@ -4656,7 +4659,7 @@ async function drawPermsPanel() {
   PERMS.project ??= G.chats?.find((c) => c.id === G.panes?.[0])?.projectId || projects[0]?.id || null;
   const r = await fetch(`/api/permissions${PERMS.project ? `?project=${encodeURIComponent(PERMS.project)}` : ''}`).then((x) => x.json()).catch((e) => ({ error: e.message }));
   const sm = $('#stStopMode');
-  if (sm && r.stop) { sm.textContent = r.stop.mode === 'jobs' ? '✓ Job Objects: every process, confirmed' : '⚠ Basic: process tree only'; sm.title = r.stop.error || ''; }
+  if (sm && r.stop) { sm.textContent = r.stop.mode === 'jobs' ? '✓ Job Objects: every process, confirmed' : r.stop.mode === 'groups' ? '✓ Process groups: every process, confirmed' : '⚠ Basic: process tree only'; sm.title = r.stop.error || ''; }
   if (r.error) { box.innerHTML = `<div class="st-row-help">Couldn't load the rules: ${esc(r.error)}</div>`; return; }
   const list = (scope, rules) => rules.length ? rules.map((x, i) => `<div class="pr-rule" data-scope="${scope}" data-i="${i}">
       <span class="pr-eff" data-eff="${esc(x.effect)}">${RULE_EFFECT[x.effect] || esc(x.effect)}</span><code>${esc(x.match)}</code>
@@ -6060,16 +6063,27 @@ function drawRunningPane(c, r) {
   const pname = (id) => G.projects.find((p) => p.id === id)?.name || id;
   const elsewhere = (r.elsewhere || []).length ? `<div class="run-else">Also running in other projects: ${r.elsewhere.map((e) => `<b>${esc(pname(e.projectId))}</b> (${e.count})`).join(', ')}</div>` : '';
   const html = (groups || `<div class="run-empty"><b>Nothing is running in this project.</b><br>Long commands the agent starts keep running here in the background while it carries on; servers, the agent’s terminals and your terminal tabs show here too, each with a Stop.</div>`) + elsewhere;
-  // Redraw only when something changed (the times tick every poll), so a click is never lost to a redraw.
-  const sig = JSON.stringify(items.map((x) => [x.id, x.status, x.tail, x.chatId])) + elsewhere;
-  if (box.dataset.sig === sig) { for (const x of items) { const t = box.querySelector(`.run-row[data-id="${CSS.escape(x.id)}"] .run-time`); if (t && x.started) t.textContent = `${x.kind === 'your-term' ? 'open' : 'running'} ${dur(Date.now() - x.started)}`; } return; }
+  // Rows are rebuilt only when what runs changes. Output and times update in place, so a Stop click never lands on a
+  // button that a redraw has just replaced (output changes every second or two).
+  const sig = JSON.stringify(items.map((x) => [x.id, x.status, x.chatId, !!x.tail?.length])) + elsewhere;
+  if (box.dataset.sig === sig) {
+    for (const x of items) {
+      const row = box.querySelector(`.run-row[data-id="${CSS.escape(x.id)}"]`); if (!row) continue;
+      const t = $('.run-time', row); if (t && x.started) t.textContent = `${x.kind === 'your-term' ? 'open' : 'running'} ${dur(Date.now() - x.started)}`;
+      const pre = $('.run-tail', row), text = (x.tail || []).join('\n'); if (pre && pre.textContent !== text) pre.textContent = text;
+    }
+    return;
+  }
   box.dataset.sig = sig;
   box.innerHTML = html;
   for (const row of box.querySelectorAll('.run-row')) {
     const x = items.find((i) => i.id === row.dataset.id); if (!x) continue;
-    $('.run-stop', row).onclick = async (e) => {
+    const stopBtn = $('.run-stop', row);
+    if ((G.runStopping ||= new Set()).has(x.id)) { stopBtn.disabled = true; stopBtn.textContent = 'Stopping…'; }
+    stopBtn.onclick = async (e) => {
       e.target.disabled = true; e.target.textContent = 'Stopping…';
-      const res = await postJ('/api/running/stop', { projectId: c.projectId, id: x.id });
+      G.runStopping.add(x.id);
+      const res = await postJ('/api/running/stop', { projectId: c.projectId, id: x.id }).finally(() => G.runStopping.delete(x.id));
       if (res.error) uiAlert(res.error);
       else if (res.left) uiAlert(`${res.left} process${res.left > 1 ? 'es' : ''} did not stop: ${(res.names || []).join(', ')}`);
       if (x.kind === 'your-term' && G.term?.projectId === c.projectId) { dropXterm?.(c.projectId, x.tab, true); G.term.terms = G.term.terms.filter((u) => u.id !== x.tab); }
@@ -6530,3 +6544,356 @@ async function restartHarness() {
 }
 $('#restartBtn')?.addEventListener('click', restartHarness);
 $('#staleNote')?.addEventListener('click', () => { if (!$('#restartBtn').disabled) restartHarness(); });
+
+// =====================================================================================================================
+// ---------- News (docs/news-format.md): What's new, Reports, Articles, and the article pages ----------
+// Everything News adds to the page lives in this section. news-md.js renders Markdown and draws each block at rest;
+// this part fetches /api/news*, shows the view in place of the chats, and adds the motion: count-ups, bars that grow,
+// Play on a flow, the compare switch, the matrix filter, clickable lanes and the terminal replay. Routes:
+// #news, #news/reports, #news/articles, #news/articles/<slug> (drafts, whose folder starts with _, open only this way).
+// =====================================================================================================================
+import { renderMarkdown as newsMarkdown, blockHtml, blockError, chartSvg, lanesSvg, laneCard, flowSvg, flowCap, compareBody, termLines, localHtml, fmt as newsFmt, withUnit } from './news-md.js';
+
+const NEWS = { data: null, tab: 'updates', tags: {}, seen: undefined, open: false, item: null, io: null, ro: null, gen: 0 };
+const NEWS_KIND = { new: 'New', improved: 'Improved', fixed: 'Fixed', safety: 'Safety' };
+const NEWS_DRAWN = ['chart', 'lanes', 'flow', 'local'];
+const newsCalm = () => motionReduced() || matchMedia('(prefers-reduced-motion: reduce)').matches;
+function newsVer(a, b) {
+  const p = (v) => String(v || '').split('.').map((x) => parseInt(x, 10) || 0);
+  const x = p(a), y = p(b);
+  for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) < (y[i] || 0) ? -1 : 1;
+  return 0;
+}
+const newsDate = (d) => { const t = Date.parse(`${d}T12:00:00`); return Number.isFinite(t) ? new Date(t).toLocaleDateString([], { day: 'numeric', month: 'long', year: 'numeric' }) : esc(d); };
+const newsTop = () => NEWS.data?.updates?.versions?.[0]?.version || null;
+const newsUnread = () => { const top = newsTop(); return !!top && (!NEWS.data.lastRead || newsVer(top, NEWS.data.lastRead) > 0); };
+
+async function newsLoad() {
+  const d = await getJ('/api/news');
+  if (d && !d.error) { NEWS.data = d; newsDot(); }
+  return NEWS.data;
+}
+function newsDot() {
+  const on = newsUnread();
+  for (const el of document.querySelectorAll('#newsDot, #railNews .nw-dot')) el.hidden = !on;
+  $('#newsBtn')?.setAttribute('aria-label', on ? 'News, with new updates' : 'News');
+  $('#railNews')?.setAttribute('data-tip', on ? 'News · new updates' : 'News');
+}
+function newsEl() {
+  let v = $('#newsView');
+  if (!v) {
+    v = document.createElement('div');
+    v.id = 'newsView'; v.className = 'news-view'; v.hidden = true;
+    v.setAttribute('role', 'region'); v.setAttribute('aria-label', 'News');
+    $('.work').append(v);
+    v.addEventListener('click', newsClick);
+  }
+  return v;
+}
+function newsRoute(route) { try { history.replaceState(null, '', `${location.pathname}${location.search}#news${route ? `/${route}` : ''}`); } catch { /* file: or sandboxed */ } }
+
+/** Opens News at a route: 'updates', 'reports', 'articles', or 'articles/<slug>'. */
+async function openNews(route = 'updates') {
+  closeDrawer(); if (isPhone()) setMView('chat');
+  const v = newsEl(), gen = ++NEWS.gen;
+  if (!NEWS.open) { NEWS.open = true; NEWS.seen = undefined; }
+  $('.work').classList.add('news-on'); $('.layout').classList.add('news-on'); v.hidden = false;
+  for (const b of document.querySelectorAll('#newsBtn, #railNews')) { b.classList.add('active'); b.setAttribute('aria-current', 'page'); }
+  for (const b of document.querySelectorAll('#homeBtn, #railHome')) { b.classList.remove('active'); b.setAttribute('aria-current', 'false'); }
+  newsStop();
+  if (!NEWS.data) { v.innerHTML = '<div class="nw-wrap"><p class="nw-sub">Loading News…</p></div>'; await newsLoad(); if (gen !== NEWS.gen) return; }
+  if (!NEWS.data) { v.innerHTML = `<div class="nw-wrap">${newsHead('News')}<div class="nw-empty"><b>News didn't load.</b><span>The QuorX server didn't answer. <button type="button" class="nw-go" data-go="updates">Try again</button></span></div></div>`; return; }
+  // "New" marks compare against what you had read before this visit, so they stay while you look.
+  if (NEWS.seen === undefined) NEWS.seen = NEWS.data.lastRead || null;
+  const [kind, slug] = String(route || 'updates').split('/');
+  if ((kind === 'articles' || kind === 'reports') && slug) return newsArticle(kind, slug, gen);
+  NEWS.tab = ['articles', 'reports'].includes(kind) ? kind : 'updates';
+  newsRoute(NEWS.tab === 'updates' ? '' : NEWS.tab);
+  newsList();
+}
+function closeNews() {
+  if (!NEWS.open) return;
+  NEWS.open = false; NEWS.gen++; newsStop();
+  const v = $('#newsView'); if (v) { v.hidden = true; v.innerHTML = ''; }
+  $('.work').classList.remove('news-on'); $('.layout').classList.remove('news-on');
+  for (const b of document.querySelectorAll('#newsBtn, #railNews')) { b.classList.remove('active'); b.setAttribute('aria-current', 'false'); }
+  if (/^#news\b/.test(location.hash)) { try { history.replaceState(null, '', `${location.pathname}${location.search}`); } catch { /* ignore */ } }
+  syncHome(); syncLayout();
+}
+// Stops what the open page was animating (flows, terminals) and its observers.
+function newsStop() {
+  for (const el of document.querySelectorAll('#newsView .nb')) { newsFlowStop(el); if (el._term) el._term.stop = true; }
+  NEWS.io?.disconnect(); NEWS.io = null; NEWS.ro?.disconnect(); NEWS.ro = null;
+}
+
+const newsHead = (title, sub = '', left = '') => `<header class="nw-head"><div class="nw-head-left">${left}<h1>${title}</h1>${sub ? `<span class="nw-sub">${sub}</span>` : ''}</div><div class="nw-head-right"><button type="button" class="nw-icon-btn nw-close" title="Close News and go back" aria-label="Close News">✕</button></div></header>`;
+function newsTabs() {
+  const d = NEWS.data, n = (k) => d[k]?.length || 0;
+  const b = (k, label, count) => `<button type="button" data-tab="${k}" aria-pressed="${NEWS.tab === k}">${label}${count != null ? ` <span class="nw-count">${count}</span>` : ''}</button>`;
+  return `<div class="nw-seg" role="group" aria-label="News sections">${b('updates', 'What\'s new')}${b('reports', 'Reports', n('reports'))}${b('articles', 'Articles', n('articles'))}</div>`;
+}
+function newsList() {
+  const v = newsEl(), d = NEWS.data, t = NEWS.tab;
+  let body = '';
+  if (t === 'updates') {
+    const vs = d.updates?.versions || [];
+    const title = (link) => { const [k, s] = String(link).split('/'); return (d[k] || []).find((x) => x.slug === s)?.title; };
+    body = vs.length ? `<div class="nw-versions">${vs.map((ver) => {
+      const unread = !NEWS.seen || newsVer(ver.version, NEWS.seen) > 0, mine = ver.version === d.version;
+      const items = (ver.items || []).map((it) => {
+        const meta = [it.pr ? `<span class="nw-pr" title="Pull request ${esc(it.pr)} on GitHub">PR ${esc(it.pr)}</span>` : '', it.link ? `<button type="button" class="nw-go" data-go="${esc(it.link)}">${esc(title(it.link) ? `Read: ${title(it.link)}` : it.link.startsWith('reports/') ? 'Open the report' : 'Read the article')} →</button>` : ''].filter(Boolean).join('');
+        return `<li class="nw-item"><span class="nw-tag" data-k="${esc(it.kind)}">${esc(NEWS_KIND[it.kind] || it.kind)}</span><div class="nw-item-text">${esc(it.text)}${meta ? `<div class="nw-item-meta">${meta}</div>` : ''}</div></li>`;
+      }).join('');
+      return `<section class="nw-version${unread ? ' unread' : ''}" data-version="${esc(ver.version)}"><div class="nw-vhead"><span class="nw-vnum">v${esc(ver.version)}</span>${ver.title ? `<h2>${esc(ver.title)}</h2>` : ''}<span class="nw-vdate">${newsDate(ver.date)}${mine ? ' · the version you run' : ''}</span>${unread ? '<span class="nw-new" title="New since you last opened What\'s new">new</span>' : ''}</div><ul class="nw-items">${items}</ul></section>`;
+    }).join('')}</div>` : '<div class="nw-empty"><b>Nothing here yet.</b><span>What\'s new in each version of QuorX shows here.</span></div>';
+    // Opening What's new reads it: the dot goes, the marks stay until you leave News.
+    const top = newsTop();
+    if (top && newsUnread()) postJ('/api/news/read', { version: top }).then((r) => { if (r?.lastRead) { NEWS.data.lastRead = r.lastRead; newsDot(); } });
+  } else {
+    const list = d[t] || [], tags = [...new Set(list.flatMap((x) => x.tags || []))].sort(), cur = tags.includes(NEWS.tags[t]) ? NEWS.tags[t] : null;
+    const shown = cur ? list.filter((x) => (x.tags || []).includes(cur)) : list;
+    const filter = tags.length > 1 ? `<div class="nw-filter"><span class="nw-filter-label">Tag</span><div class="nw-seg" role="group" aria-label="Show by tag"><button type="button" data-tag="" aria-pressed="${!cur}">All</button>${tags.map((x) => `<button type="button" data-tag="${esc(x)}" aria-pressed="${cur === x}">${esc(x)}</button>`).join('')}</div></div>` : '';
+    const what = t === 'reports' ? 'reports' : 'articles';
+    body = list.length ? `${filter}<div class="nw-cards">${shown.map((x) => `<button type="button" class="nw-card" data-go="${t}/${esc(x.slug)}"><h3>${esc(x.title)}</h3><p>${esc(x.summary)}</p><div class="nw-meta"><span>${newsDate(x.date)}</span>${x.version ? `<span>v${esc(x.version)}</span>` : ''}${(x.tags || []).length ? `<span class="nw-tags">${x.tags.map((g) => `<span class="nw-tag">${esc(g)}</span>`).join('')}</span>` : ''}</div></button>`).join('')}</div>`
+      : `<div class="nw-empty"><b>No ${what} yet.</b><span>${t === 'reports' ? 'Reports on models, tests and platforms' : 'Research articles'} arrive with QuorX updates and show here.</span></div>`;
+  }
+  const sub = t === 'updates' ? 'What changed in each version of QuorX' : t === 'reports' ? 'Models, tests and platforms, measured' : 'Research and how QuorX works';
+  v.innerHTML = `<div class="nw-wrap">${newsHead('News', sub)}${newsTabs()}${body}</div>`;
+  v.scrollTop = 0;
+}
+
+async function newsArticle(kind, slug, gen) {
+  const v = newsEl();
+  v.innerHTML = '<div class="nw-wrap"><p class="nw-sub">Loading…</p></div>';
+  const it = await getJ(`/api/news/item?kind=${encodeURIComponent(kind)}&slug=${encodeURIComponent(slug)}`);
+  if (gen !== NEWS.gen) return;
+  const back = `<button type="button" class="nw-back" data-go="${kind}">← ${kind === 'reports' ? 'Reports' : 'Articles'}</button>`;
+  newsRoute(`${kind}/${slug}`);
+  if (!it || it.error) { v.innerHTML = `<div class="nw-wrap">${newsHead('Not found', '', back)}<div class="nw-empty"><b>This page isn't in News.</b><span>It may have been renamed or removed in an update.</span></div></div>`; return; }
+  const f = it.front || {}, blocks = [];
+  const html = newsMarkdown(it.body, { kind, slug, block: (name, json, n) => { blocks[n] = { name, json }; return `<div class="nb-slot" data-n="${n}"></div>`; } });
+  const tags = String(f.tags || '').split(',').map((x) => x.trim()).filter(Boolean);
+  NEWS.item = { kind, slug, blocks };
+  v.innerHTML = `<div class="nw-wrap"><header class="nw-head"><div class="nw-head-left">${back}</div><div class="nw-head-right"><button type="button" class="nw-icon-btn nw-close" title="Close News and go back" aria-label="Close News">✕</button></div></header>
+    <article class="nw-article"><header><h1>${esc(f.title || slug)}</h1>${f.summary ? `<p class="nw-lede">${esc(f.summary)}</p>` : ''}<div class="nw-meta">${f.date ? `<span>${newsDate(f.date)}</span>` : ''}${f.version ? `<span>QuorX v${esc(f.version)}</span>` : ''}${tags.length ? `<span class="nw-tags">${tags.map((g) => `<span class="nw-tag">${esc(g)}</span>`).join('')}</span>` : ''}${slug.startsWith('_') ? '<span class="nw-draft">Draft: not listed in News</span>' : ''}</div></header>
+    <div class="nw-body">${html}</div></article></div>`;
+  v.scrollTop = 0;
+  await newsBlocks(v, kind, slug, blocks, gen);
+}
+
+// A block's data: its inline JSON, with a src file from the same folder merged in first (inline keys win).
+async function newsBlockData(json, kind, slug) {
+  const inline = JSON.parse(json);
+  if (!inline || typeof inline !== 'object' || !inline.src) return inline;
+  const r = await fetch(`/api/news/file?kind=${encodeURIComponent(kind)}&slug=${encodeURIComponent(slug)}&name=${encodeURIComponent(inline.src)}`);
+  if (!r.ok) throw new Error(`its data file ${inline.src} isn't there`);
+  let file = await r.json();
+  if (inline.path) file = String(inline.path).split('.').reduce((o, k) => o?.[k], file);
+  if (!file || typeof file !== 'object') throw new Error(`${inline.src} has nothing at ${inline.path}`);
+  const { src: _s, path: _p, ...rest } = inline;
+  return { ...file, ...rest };
+}
+const newsWidth = (slot) => Math.max(280, (slot.clientWidth || 720) - 34);
+async function newsBlocks(v, kind, slug, blocks, gen) {
+  const slots = [...v.querySelectorAll('.nb-slot')];
+  await Promise.all(slots.map(async (slot) => {
+    const b = blocks[Number(slot.dataset.n)];
+    if (!b) return;
+    let data;
+    try { data = await newsBlockData(b.json, kind, slug); } catch (e) { slot.outerHTML = blockError(b.name, e instanceof SyntaxError ? `its JSON doesn't parse: ${e.message}` : e.message); return; }
+    if (gen !== NEWS.gen) return;
+    let html;
+    try { html = blockHtml(b.name, data, newsWidth(slot)); } catch (e) { html = blockError(b.name, e.message); }
+    const box = document.createElement('div'); box.innerHTML = html;
+    const el = box.firstElementChild;
+    if (!el) return;
+    el._nb = { name: b.name, data, w: newsWidth(slot) };
+    slot.replaceWith(el);
+    if (!el.classList.contains('nb-error')) newsWire(el);
+  }));
+  if (gen !== NEWS.gen) return;
+  // Motion replays each block the first time it comes into view.
+  if (!newsCalm() && 'IntersectionObserver' in window) {
+    NEWS.io = new IntersectionObserver((es) => { for (const e of es) if (e.isIntersecting) { NEWS.io?.unobserve(e.target); newsEnter(e.target); } }, { root: v, threshold: 0.2 });
+    for (const el of v.querySelectorAll('.nb')) NEWS.io.observe(el);
+  }
+  // Drawn blocks fit their width: redrawn when the view is resized.
+  if ('ResizeObserver' in window) {
+    let t = null;
+    NEWS.ro = new ResizeObserver(() => { clearTimeout(t); t = setTimeout(() => newsRedraw(v), 140); });
+    NEWS.ro.observe($('.nw-body', v));
+  }
+}
+function newsRedraw(v) {
+  for (const el of v.querySelectorAll('.nb')) {
+    const nb = el._nb;
+    if (!nb || !NEWS_DRAWN.includes(nb.name) || el.classList.contains('nb-error')) continue;
+    const w = Math.max(280, el.clientWidth - (nb.name === 'local' ? 2 : 34));
+    if (Math.abs(w - nb.w) < 8) continue;
+    nb.w = w;
+    if (nb.name === 'chart') { const box = $('.nb-draw-box', el); if (box) box.innerHTML = chartSvg(nb.data, w); }
+    if (nb.name === 'lanes') { $('.nb-draw-box', el).innerHTML = lanesSvg(nb.data, w); newsLaneOn(el, el._lane ?? 0); }
+    if (nb.name === 'flow') { newsFlowStop(el); el._flow = null; $('.nb-draw-box', el).innerHTML = flowSvg(nb.data, w); $('.nb-play', el).textContent = '▶ Play'; const cap = $('.nb-flow-cap', el); cap.dataset.k = ''; cap.innerHTML = flowCap(nb.data, -1); }
+    if (nb.name === 'local' && el._local && nb.data.view === 'costs') el.innerHTML = localHtml('costs', el._local, w);
+  }
+}
+function newsEnter(el) {
+  if (newsCalm()) return;
+  el.classList.add('in');
+  const nb = el._nb;
+  if (nb?.name === 'stat') for (const t of el.querySelectorAll('.to[data-count]')) newsCount(t);
+  if (nb?.name === 'terminal') newsTermReplay(el);
+}
+function newsCount(t) {
+  const end = Number(t.dataset.count), dec = Number(t.dataset.dec) || 0, unit = t.dataset.unit || '', t0 = performance.now();
+  const tick = (now) => { const f = Math.min(1, (now - t0) / 1100); t.textContent = withUnit(newsFmt(end * (1 - (1 - f) ** 3), dec), unit); if (f < 1 && t.isConnected) requestAnimationFrame(tick); };
+  requestAnimationFrame(tick);
+}
+
+// ---------- wiring for each block ----------
+function newsWire(el) {
+  const { name, data } = el._nb;
+  if (name === 'lanes') {
+    newsLaneOn(el, Math.max(0, (data.rows || []).findIndex((r) => r.detail)));
+    el.addEventListener('click', (e) => { const g = e.target.closest('.nb-lane'); if (g) newsLaneOn(el, Number(g.dataset.i)); });
+    el.addEventListener('keydown', (e) => { const g = e.target.closest('.nb-lane'); if (g && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); newsLaneOn(el, Number(g.dataset.i)); } });
+  }
+  if (name === 'flow') $('.nb-play', el).addEventListener('click', () => newsFlowPlay(el));
+  if (name === 'compare') {
+    for (const b of el.querySelectorAll('.nb-seg button')) b.addEventListener('click', () => {
+      const o = Number(b.dataset.o);
+      for (const x of el.querySelectorAll('.nb-seg button')) x.setAttribute('aria-pressed', String(x === b));
+      el.dataset.o = String(o);
+      $('.nb-cmp-body', el).innerHTML = compareBody(data, o);
+      if (!newsCalm()) $('.nb-steps', el)?.classList.add('swap');
+    });
+  }
+  if (name === 'matrix') {
+    for (const b of el.querySelectorAll('.nb-filter button')) b.addEventListener('click', () => {
+      for (const x of el.querySelectorAll('.nb-filter button')) x.setAttribute('aria-pressed', String(x === b));
+      let n = 0;
+      for (const tr of el.querySelectorAll('tbody tr')) { const hide = b.dataset.f !== 'all' && tr.dataset.l !== b.dataset.f; tr.classList.toggle('hide', hide); if (!hide) n++; }
+      $('.nb-matrix-none', el).hidden = n > 0;
+    });
+  }
+  if (name === 'terminal') $('.nb-term-replay', el).addEventListener('click', () => newsTermReplay(el, true));
+  if (name === 'local') {
+    getJ(`/api/news/local?view=${encodeURIComponent(data.view)}`).then((r) => { if (!el.isConnected) return; el._local = r; el.innerHTML = localHtml(data.view, r, Math.max(280, el.clientWidth - 2)); });
+  }
+}
+function newsLaneOn(el, i) {
+  el._lane = i;
+  for (const g of el.querySelectorAll('.nb-lane')) g.classList.toggle('on', Number(g.dataset.i) === i);
+  $('.nb-lane-card', el).innerHTML = laneCard(el._nb.data, i);
+}
+
+// Flow: Play walks a token along the path, lighting each step and showing what it says; Pause, Resume, Replay.
+// With reduced motion it steps from node to node without moving anything.
+function newsFlowGeom(el) {
+  if (el._flow?.geom) return el._flow.geom;
+  const svg = $('.nb-flow-svg', el), path = svg?.querySelector('.edge:not(.lit)');
+  if (!path) return null;
+  const L = path.getTotalLength(), nodes = [...svg.querySelectorAll('.node')];
+  const at = nodes.map((g) => {
+    const r = g.querySelector('rect'), cx = Number(r.getAttribute('x')) + Number(r.getAttribute('width')) / 2, cy = Number(r.getAttribute('y')) + Number(r.getAttribute('height')) / 2;
+    let best = 0, dmin = Infinity;
+    for (let s = 0; s <= 500; s++) { const p = path.getPointAtLength((s / 500) * L), dd = (p.x - cx) ** 2 + (p.y - cy) ** 2; if (dd < dmin) { dmin = dd; best = (s / 500) * L; } }
+    return best;
+  });
+  const geom = { svg, path, L, nodes, at, lit: svg.querySelector('.edge.lit'), tok: svg.querySelector('.tok'), halo: svg.querySelector('.halo') };
+  el._flow = { ...(el._flow || {}), geom };
+  return geom;
+}
+function newsFlowShow(el, len, k) {
+  const g = newsFlowGeom(el), d = el._nb.data;
+  const p = g.path.getPointAtLength(len);
+  for (const c of [g.tok, g.halo]) { c.setAttribute('cx', p.x); c.setAttribute('cy', p.y); }
+  g.lit.style.strokeDasharray = `${len} ${g.L}`;
+  g.nodes.forEach((n, i) => n.classList.toggle('on', i === k));
+  const cap = $('.nb-flow-cap', el);
+  if (cap.dataset.k !== String(k)) { cap.dataset.k = String(k); cap.innerHTML = flowCap(d, k); }
+}
+function newsFlowStop(el) { const f = el._flow; if (!f) return; if (f.raf) cancelAnimationFrame(f.raf); if (f.timer) { clearInterval(f.timer); clearTimeout(f.timer); } f.raf = null; f.timer = null; f.playing = false; el.classList.remove('playing'); }
+function newsFlowPlay(el) {
+  const g = newsFlowGeom(el), btn = $('.nb-play', el), f = el._flow;
+  if (!g) return;
+  if (f.playing) { newsFlowStop(el); btn.textContent = '▶ Resume'; return; }
+  const n = g.nodes.length;
+  f.playing = true; el.classList.add('playing'); btn.textContent = '❚❚ Pause';
+  const done = () => { newsFlowStop(el); f.t = 0; f.k = 0; btn.textContent = '↻ Replay'; g.tok.setAttribute('opacity', '0'); g.halo.setAttribute('opacity', '0'); };
+  if (newsCalm()) {
+    let k = f.k && f.k < n ? f.k : 0;
+    g.tok.setAttribute('opacity', '0'); g.halo.setAttribute('opacity', '0');
+    newsFlowShow(el, g.at[k], k);
+    f.timer = setInterval(() => { k++; f.k = k; if (k >= n) { g.lit.style.strokeDasharray = ''; return done(); } newsFlowShow(el, g.at[k], k); }, 2400);
+    return;
+  }
+  g.tok.setAttribute('opacity', '1'); g.halo.setAttribute('opacity', '1');
+  const per = 1900, total = per * (n - 1) + 1400, t0 = performance.now() - (f.t || 0);
+  // Frames, with a timer behind them: a window the system has put in the background gets no frames, and the walk
+  // should still reach the end. The clock is performance.now(), not the frame's time, which can lag while the window
+  // isn't painting and kept the walk on its first step.
+  const next = () => { f.raf = requestAnimationFrame(step); f.timer = setTimeout(() => { cancelAnimationFrame(f.raf); step(); }, 120); };
+  const step = () => {
+    clearTimeout(f.timer);
+    if (!el.isConnected) return newsFlowStop(el);
+    f.t = performance.now() - t0;
+    // Glide to the next step, then rest on it so its caption can be read.
+    const seg = Math.min(n - 1, Math.floor(f.t / per)), x = Math.min(1, ((f.t % per) / per) / 0.5), e = x < 0.5 ? 2 * x * x : 1 - (-2 * x + 2) ** 2 / 2;
+    const len = seg >= n - 1 ? g.at[n - 1] : g.at[seg] + (g.at[seg + 1] - g.at[seg]) * e;
+    let k = 0; g.at.forEach((a, i) => { if (len >= a - 1) k = i; });
+    newsFlowShow(el, len, k);
+    if (f.t < total) next(); else done();
+  };
+  step();
+}
+
+// Terminal: types the commands and prints the output again; at rest it shows every line.
+async function newsTermReplay(el, asked) {
+  const pre = $('.nb-term-out', el), lines = el._nb.data.lines || [], all = termLines(lines);
+  if (el._term && !el._term.stop) { el._term.stop = true; pre.innerHTML = all; if (!asked) return; }
+  if (newsCalm()) { pre.innerHTML = all; return; }
+  const run = el._term = { stop: false };
+  pre.innerHTML = all; pre.style.minHeight = `${pre.offsetHeight}px`; // keeps its height while it types
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  let html = '';
+  for (const l of lines) {
+    if (run.stop || !el.isConnected) return;
+    if (typeof l.cmd === 'string') {
+      for (let i = 1; i <= l.cmd.length; i++) { if (run.stop) return; pre.innerHTML = `${html}<span class="ps">&gt;</span> ${esc(l.cmd.slice(0, i))}<span class="cur"></span>`; await wait(l.cmd.length > 60 ? 10 : 22); }
+      html += `<span class="ps">&gt;</span> ${esc(l.cmd)}\n`; await wait(260);
+    } else { html += `<span class="out">${esc(l.out)}</span>\n`; pre.innerHTML = html; await wait(320); }
+  }
+  if (!run.stop) { pre.innerHTML = all; run.stop = true; }
+}
+
+// Clicks in the view: tabs, the tag filter, cards, links between News pages, and the web.
+function newsClick(e) {
+  const t = e.target;
+  if (t.closest('.nw-close')) return closeNews();
+  const tab = t.closest('[data-tab]');
+  if (tab) return openNews(tab.dataset.tab);
+  const tag = t.closest('[data-tag]');
+  if (tag) { NEWS.tags[NEWS.tab] = tag.dataset.tag || null; return newsList(); }
+  const go = t.closest('[data-go]');
+  if (go) return openNews(go.dataset.go);
+  const a = t.closest('a');
+  if (!a) return;
+  if (a.dataset.news) { e.preventDefault(); return openNews(a.dataset.news); }
+  if (a.dataset.anchor) { e.preventDefault(); $(`#nw-${CSS.escape(a.dataset.anchor)}`, $('#newsView'))?.scrollIntoView({ block: 'start' }); return; }
+  if (a.dataset.ext && DESK) { e.preventDefault(); window.ohDesktop.openExternal(a.href); }
+}
+
+(function newsInit() {
+  $('#newsBtn')?.addEventListener('click', () => openNews('updates'));
+  $('#railNews')?.addEventListener('click', () => openNews('updates'));
+  // Anything else in the sidebar, the rail or the phone bar (a chat, Home, New chat, a project) leaves News.
+  document.addEventListener('click', (e) => {
+    if (!NEWS.open) return;
+    const hit = e.target.closest('#sidebar button, #sidebar a, #sidebar [role="button"], #sidebar .sb-chat-item, #mnav button, #brandHome');
+    if (!hit || hit.closest('#newsBtn, #railNews, #sbCollapseBtn, #sbExpandBtn, #railSearch, #settingsBtn, #railSettings, #themeBtn, #railTheme, #paletteBtn, #restartBtn, #railRestart, .sb-tools')) return;
+    closeNews();
+  }, true);
+  window.addEventListener('hashchange', () => { const m = /^#news(?:\/(.*))?$/.exec(location.hash); if (m) openNews(m[1] || 'updates'); });
+  newsLoad().then(() => { const m = /^#news(?:\/(.*))?$/.exec(location.hash); if (m) openNews(m[1] || 'updates'); });
+})();

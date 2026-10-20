@@ -167,6 +167,12 @@ async function desktopTransport(chatId) {
   };
 }
 
+/**
+ * Whether a command line opens DevTools port `port`: Electron's --remote-debugging-port=N, or the same flag handed to
+ * WebView2 through WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS (a Tauri app), in any shell's way of setting it.
+ */
+export const startedWithDevtoolsPort = (line, port) => new RegExp(`--remote-debugging-port[= ]${Number(port)}(?!\\d)`).test(String(line || ''));
+
 // An app the agent started with a DevTools port (an Electron app run with --remote-debugging-port=N): its first
 // window. Closing the transport only disconnects; the app keeps running until its job is stopped.
 async function cdpTransport(port) {
@@ -185,7 +191,8 @@ async function cdpTransport(port) {
   };
   return {
     id: t.id, desktop: false, app: true, url: t.url, title: t.title,
-    send: (method, params = {}) => new Promise((res, rej) => { const id = ++seq; waiting.set(id, { res, rej }); ws.send(JSON.stringify({ id, method, params })); setTimeout(() => { if (waiting.has(id)) { waiting.delete(id); rej(new Error(`${method} timed out`)); } }, 20000); }),
+    // An app whose main process is stopped at a breakpoint doesn't answer for its windows either.
+    send: (method, params = {}) => new Promise((res, rej) => { const id = ++seq; waiting.set(id, { res, rej }); ws.send(JSON.stringify({ id, method, params })); setTimeout(() => { if (waiting.has(id)) { waiting.delete(id); rej(new Error(`the app did not answer ${method} within 10 s: if a debug session has it stopped at a breakpoint, read it with debug state and continue`)); } }, 10000); }),
     onEvent: (fn) => subs.add(fn),
     close: async () => { try { ws.close(); } catch { /* closed */ } },
   };

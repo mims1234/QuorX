@@ -27,7 +27,7 @@ const gb = (n) => `${(n / 1e9).toFixed(n < 10e9 ? 1 : 0)} GB`;
 
 export async function setupCheck() {
   const desktop = !!process.env.OH_DESKTOP;
-  const [key, git, python, pdf, chains, wsl] = await Promise.all([
+  const [key, git, python, pdf, chains, wsl, ax] = await Promise.all([
     (async () => {
       const k = activeKey();
       if (!k) return { status: 'missing', detail: 'No key yet.' };
@@ -42,6 +42,8 @@ export async function setupCheck() {
     (async () => { for (const p of PDFTOTEXT) { const o = await run(p, ['-v']); if (o && /pdftotext/i.test(o)) return p; } return null; })(),
     detectToolchains(true).catch(() => []),
     WIN ? run('wsl.exe', ['--status']).then((o) => !!o && /Default Version|Default Distribution|\u0000/i.test(o)) : Promise.resolve(false),
+    // macOS: whether the app QuorX runs in may use the Accessibility API (the desktop tool). Asking never prompts.
+    process.platform === 'darwin' ? run('osascript', ['-l', 'JavaScript', '-e', "ObjC.import('ApplicationServices'); $.AXIsProcessTrusted()"]).then((o) => (o == null ? null : /true/.test(o))) : Promise.resolve(null),
   ]);
   const sh = shellInfo(), browser = browserPath();
   let free = null; try { const s = fs.statfsSync(HOME); free = s.bavail * s.bsize; } catch { /* older Node */ }
@@ -60,12 +62,20 @@ export async function setupCheck() {
     ...(desktop ? [] : [{ id: 'node', label: 'Node.js', need: 'Running server.js (the desktop app brings its own).', status: nodeMajor >= 20 ? 'ok' : 'missing', detail: `Version ${process.versions.node}.`, fix: nodeMajor >= 20 ? null : fix('node') }]),
     // Sandboxing: what fences the agent's commands. QuorX's own layers always apply; an OS sandbox is not built yet.
     { id: 'sandbox', label: 'Command sandbox', need: 'An operating-system fence around the agent’s commands, on top of QuorX’s own checks.', status: 'warn',
-      detail: `Not in use yet. QuorX fences commands itself: the rule engine, real-path checks on deletes, Windows jobs (Stop ends everything), snapshots for Undo, and the tripwire. ${WIN ? `${wsl ? 'WSL 2 is installed, which a future version can use as a sandbox for Linux toolchains.' : 'WSL 2 isn’t installed.'} Windows Sandbox needs Windows Pro or Enterprise.` : ''}` },
-    // Toolchains: optional, each only for the languages that need it.
-    // Installed but unable to build (Rust with no C linker) is amber too, with the fix for what's missing.
-    ...chains.filter((c) => !['git', 'python', 'node'].includes(c.id)).map((c) => ({ id: `tc-${c.id}`, label: c.label, need: c.for, status: c.found && c.works ? 'ok' : 'warn',
-      detail: !c.found ? 'Not installed. Only needed for this kind of project.' : c.works ? `Version ${c.version}.` : `Version ${c.version}, but ${c.problem}.`,
-      fix: !c.found ? fix(`tc-${c.id}`) : !c.works && c.id === 'rust' && WIN ? fix('tc-msvc') : null })),
+      detail: `Not in use yet. QuorX fences commands itself: the rule engine, real-path checks on deletes, ${WIN ? 'Windows jobs' : 'process groups'} (Stop ends everything), snapshots for Undo, and the tripwire. ${WIN ? `${wsl ? 'WSL 2 is installed, which a future version can use as a sandbox for Linux toolchains.' : 'WSL 2 isn’t installed.'} Windows Sandbox needs Windows Pro or Enterprise.` : ''}` },
+    // Toolchains (from the platform packs): optional, each only for the languages that need it. Installed but unable
+    // to build (Rust with no C linker) is amber too, with the fix for what's missing (its pack's `fixWith`). Away from
+    // Windows there is no Install button: the detail names the brew or apt package instead.
+    ...chains.filter((c) => !['git', 'python', 'node'].includes(c.id) && c.host !== false).map((c) => {
+      const t = TOOLCHAINS.find((x) => x.id === c.id) || {};
+      // `install`: a command line for tools that come without winget (Delve: go install), shown on every system.
+      const how = t.install || !WIN && (process.platform === 'darwin' ? t.brew && `brew install ${t.brew}` : t.apt && `sudo apt install ${t.apt}`) || (!WIN && t.url) || '';
+      return { id: `tc-${c.id}`, label: c.label, need: c.for, status: c.found && c.works ? 'ok' : 'warn',
+        detail: !c.found ? `Not installed. Only needed for this kind of project.${how ? ` Install: ${how}` : ''}` : c.works ? `Version ${c.version}.` : `Version ${c.version}, but ${c.problem}.`,
+        fix: !c.found ? fix(`tc-${c.id}`) : !c.works && c.fixWith ? fix(`tc-${c.fixWith}`) : null };
+    }),
+    ...(ax == null ? [] : [{ id: 'accessibility', label: 'Accessibility (desktop apps)', need: 'The agent reading and pressing the windows of Mac apps it started.', status: ax ? 'ok' : 'warn',
+      detail: ax ? 'Allowed.' : 'Not allowed yet. In System Settings → Privacy & Security → Accessibility, turn on the app QuorX runs in (QuorX, or Terminal when you started it with npm start). Screen Recording, in the same place, lets it take pictures of those windows.' }]),
     { id: 'disk', label: 'Free space', need: 'Chats, run logs, uploads and undo copies.', status: free == null ? 'ok' : free < 2e9 ? 'warn' : 'ok', detail: free == null ? 'Not measured.' : `${gb(free)} free where QuorX keeps its data.` },
   ] };
 }

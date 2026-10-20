@@ -1,4 +1,4 @@
-// Project folders, commands and dev servers for the agent, the way Claude Code works on a repo.
+// Project folders, commands and dev servers for the agent.
 // A project is one folder shared by all its chats (workspaces/<project> or a folder the user chose).
 // Paths can't leave it, commands
 // are limited to a list of developer programs with no shell metacharacters, and child processes get
@@ -12,7 +12,7 @@ import { spawn, execFile, spawnSync } from 'node:child_process';
 import { projectDir } from './store.js';
 import { SECRET_FILES } from './keys.js';
 import { termEvent, lineSplitter, newJob, endJob } from './terminal.js';
-import { jobsAvailable, adoptPid, jobCount, killJob, closeJob } from './jobhost.js';
+import { jobsAvailable, adoptPid, jobCount, killJob, closeJob, startDetached } from './jobhost.js';
 import { snapshot, changesSince, objectFor, pruneObjects } from './snapshot.js';
 
 export const ALLOWED = ['node', 'npm', 'npx', 'python', 'python3', 'py', 'pip', 'pip3', 'deno', 'bun', 'pnpm', 'yarn', 'uv'];
@@ -163,12 +163,12 @@ export function childEnv(extra = {}) {
 // The command line for an allow-listed program and its plain arguments.
 export const lineOf = (cmd, args) => [checkCommand(cmd, args), ...args.map((a) => (/\s/.test(a) ? `"${a}"` : a))].join(' ');
 
-// Every command and server starts through jobgate.cjs, is put in its own Windows job (jobhost.js), and only then
-// starts running, so nothing it starts can escape Stop. `shell`: direct (Node's default shell), powershell, pwsh,
+// Every command and server starts through jobgate.cjs, is put in its own Windows job (jobhost.js; on macOS and
+// Linux its own process group), and only then starts running, so nothing it starts can escape Stop. `shell`: direct (Node's default shell), powershell, pwsh,
 // cmd or bash. Without the job host the process still runs, with proc.qxJob unset ("basic" Stop).
 const GATE = fileURLToPath(new URL('./jobgate.cjs', import.meta.url));
 async function launch(root, line, { shell = 'direct', env, memoryMB = 0 } = {}) {
-  const proc = spawn(process.execPath, [GATE, shell, line], { cwd: root, env: childEnv(env), windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+  const proc = spawn(process.execPath, [GATE, shell, line], { cwd: root, env: childEnv(env), windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], detached: startDetached });
   proc.stdin.on('error', () => { /* the gate is gone */ });
   if (proc.pid) {
     const job = `c${proc.pid}x${Date.now().toString(36)}`;
@@ -185,7 +185,8 @@ function taskkillTree(pid) {
 }
 /**
  * Ends a process and everything it started, then checks. Resolves to
- * { left: processes still alive, names: their names, mode: 'jobs' (confirmed by the job) or 'basic' (process tree only) }.
+ * { left: processes still alive, names: their names, mode: 'jobs' or 'groups' (confirmed by the Windows job or the
+ * process group) or 'basic' (process tree only) }.
  */
 export async function endProc(proc) {
   if (!proc) return { left: 0, names: [], mode: 'none' };
@@ -193,7 +194,7 @@ export async function endProc(proc) {
     try {
       const r = await killJob(proc.qxJob);
       if (!r.left) { closeJob(proc.qxJob); proc.qxJob = null; }
-      return { left: r.left, names: r.names, mode: 'jobs' };
+      return { left: r.left, names: r.names, mode: r.mode };
     } catch { /* the job host went away: fall back to the tree */ }
   }
   if (proc.exitCode == null && proc.signalCode == null && proc.pid) await taskkillTree(proc.pid);
@@ -355,7 +356,7 @@ export const serverFor = (projectId, name) => servers.get(`${projectId}/${slug(n
 
 // ---------- launch configs: the project's saved run commands ----------
 // Kept in <project>/.quorx/launch.json (written whenever a server starts, editable by the user). A
-// Claude Code style .claude/launch.json in the folder is read too, so existing repos work as they are.
+// A .claude/launch.json in the folder (the same format, from other tools) is read too, so existing repos work as they are.
 const LAUNCH = '.quorx/launch.json';
 function readJson(p) { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; } }
 const cleanConfig = (c) => ({ name: String(c.name || 'app').trim().slice(0, 40) || 'app', command: String(c.command || '').trim(), args: (Array.isArray(c.args) ? c.args : []).map(String), port: Number(c.port) > 0 ? Number(c.port) : null });
