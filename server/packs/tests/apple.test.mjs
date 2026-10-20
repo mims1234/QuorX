@@ -99,6 +99,10 @@ test('apple: Xcode’s and Swift’s errors are read with file and line, once ea
   assert.match(errs[2].msg, /Unable to find a destination/);
   assert.equal(tidyDiag('/Users/me/Counter/Counter/ContentView.swift:18:13: error: cannot find \'countt\' in scope', '/Users/me/Counter'), 'Counter/ContentView.swift:18:13: error: cannot find \'countt\' in scope');
   assert.equal(parseDiag('ld: symbol(s) not found for architecture arm64'), null);
+  // The checks' parse: errors with a file, once each, warnings left out; then tidy makes them relative.
+  const xc = apple.checks.find((c) => c.id === 'xcode');
+  const lines = xc.parse(BUILD_LOG, { dir: '/Users/me/Counter', files: ['Counter/ContentView.swift'] });
+  assert.deepEqual(lines.map((l) => xc.tidy(l, '/Users/me/Counter')), ['Counter/ContentView.swift:18:13: error: cannot find \'countt\' in scope', 'Counter/Model.m:9:5: error: use of undeclared identifier \'foo\'']);
 });
 
 test('apple: a crash report says what happened and the first frame in the app', () => {
