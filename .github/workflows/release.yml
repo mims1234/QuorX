@@ -12,7 +12,9 @@ on:
     tags: ['v*']
 
 permissions:
-  contents: write # create the release and upload its files
+  contents: write     # create the release and upload its files
+  id-token: write     # sign the build attestation (proof the installer was built here, from this tag)
+  attestations: write
 
 jobs:
   windows:
@@ -45,13 +47,28 @@ jobs:
         # --publish never: this job uploads the files itself (electron-builder's generic provider can't publish).
         run: npm --prefix desktop run dist -- --publish never
 
+      # Until the installer is code-signed: a checksum file to compare a download with, and a signed attestation that
+      # this workflow built it from this tag (check it with: gh attestation verify <file> --repo <owner>/<repo>).
+      - name: Write the checksums
+        shell: pwsh
+        run: |
+          $d = 'desktop/dist'
+          $lines = foreach ($f in "QuorX-Setup-$env:VERSION.exe", 'latest.yml') { "{0}  {1}" -f (Get-FileHash "$d/$f" -Algorithm SHA256).Hash.ToLower(), $f }
+          $lines | Set-Content "$d/SHA256SUMS.txt" -Encoding ascii
+          Get-Content "$d/SHA256SUMS.txt"
+
+      - name: Attest where the installer was built
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: desktop/dist/QuorX-Setup-${{ env.VERSION }}.exe
+
       - name: Publish the release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $d = 'desktop/dist'
-          gh release create '${{ github.ref_name }}' "$d/latest.yml" "$d/QuorX-Setup-$env:VERSION.exe" "$d/QuorX-Setup-$env:VERSION.exe.blockmap" `
+          gh release create '${{ github.ref_name }}' "$d/latest.yml" "$d/QuorX-Setup-$env:VERSION.exe" "$d/QuorX-Setup-$env:VERSION.exe.blockmap" "$d/SHA256SUMS.txt" `
             --title "QuorX ${{ github.ref_name }}" --generate-notes
 
       - name: Write the winget manifests for this version
