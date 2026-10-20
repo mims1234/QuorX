@@ -86,7 +86,7 @@ npm test
 
 180 tests: the agent loop driven by a scripted model (no network, no cost), security, the rule engine and the rest of
 the safety layer, macOS and Linux paths, and the News format. On Windows 10 of them skip because they need macOS or
-Linux. A few tests count real processes; if several copies of the suite run on one PC at once, rerun a failing
+Linux. A few tests count real processes or wait on a terminal; on a busy PC, rerun a failing
 `stop: …` or `terminal: …prompts` test alone.
 
 ```bash

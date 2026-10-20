@@ -120,8 +120,8 @@ chats and goes through the same rule engine as `shell`.
 
 ### Artifacts, projects and the project folder
 
-- **A project is a folder you pick**, such as a repo. Many chats can share one project, like several sessions on
-  one repo. A project is named after its folder. Picking a folder inside QuorX itself is refused, and a folder that
+- **A project is a folder you pick**, such as a repo. Many chats can share one project and
+  work in the same files. A project is named after its folder. Picking a folder inside QuorX itself is refused, and a folder that
   disappears is noticed (sending waits until you reselect it).
 - **The agent's own files** sit in a hidden `.quorx/` folder in the project: undo checkpoints, trash, the snapshot
   store, scratch work, uploads, the plan, launch configs, skills and the work log. A `.gitignore` of `*` inside it
@@ -135,7 +135,7 @@ chats and goes through the same rule engine as `shell`.
   sandboxed and can't call QuorX's API. What the agent builds (sites, apps, games, tools) lives in the project folder
   and runs as a server or a program.
 - **Servers** get a free port from 5300 to 5999 in `PORT` (and `{PORT}` in their arguments), are saved to
-  `.quorx/launch.json` (a `.claude/launch.json` is read too) and are listed under 🖥 with Run, Stop, Restart and Edit.
+  `.quorx/launch.json` (a `launch.json` in another agent tool's settings folder is read too) and are listed under 🖥 with Run, Stop, Restart and Edit.
   Servers still start only from a short list of programs: node, npm, npx, python, pip, deno, bun, pnpm, yarn and uv.
   Commands of any kind go through `shell`.
 - **Skills and templates:** built-in playbooks in `skills/` (`web-app`, `design-craft`, `node-server`,
@@ -372,9 +372,10 @@ Anything that can't be resolved (an unknown variable, a wildcard in the first pa
 | Outside the project but not blocked (a sibling folder) | Asks you in both modes (YOLO's deciders only if you ticked "YOLO may approve outside deletes") |
 
 The agent's own file tools can't write QuorX's config either: `.quorx/` (except scratch, and skills through
-`save_skill`), `.git/` (hooks are code), `.claude/`, `.vscode/tasks.json` and `.vscode/launch.json` are refused. This
-keeps the agent from planting a command that you, or git, would run later. A project's own `AGENTS.md` or
-`CLAUDE.md` build commands are only ever shown as suggested rules, so a cloned repo can't grant itself permissions.
+`save_skill`), `.git/` (hooks are code), other agent tools' settings folders, `.vscode/tasks.json` and
+`.vscode/launch.json` are refused. This
+keeps the agent from planting a command that you, or git, would run later. Build commands in a project's own agent
+instruction files (such as `AGENTS.md`) are only ever shown as suggested rules, so a cloned repo can't grant itself permissions.
 
 ### Who approves: you or the deciders
 
@@ -633,8 +634,8 @@ Python venvs and tkinter, game engines and installers), [java-and-kotlin.md](jav
 | `scripts/test-news.mjs` | 4 | The News format checker |
 
 A few tests count real processes across the whole computer (`stop: …` tests count `PING.EXE`) or need a quiet
-desktop (`terminal: … prompts`, the WinForms test). When several QuorX sessions run the suite on one PC at the same
-time, they can fail; each passes when run alone. They don't fail on a quiet machine.
+desktop (`terminal: … prompts`, the WinForms test). On a busy PC they can fail; each passes when run alone, and they
+don't fail on a quiet machine.
 
 **The pack self-tests** drive QuorX's real code (the compiler checks, the debugger, a real build) with no model, and
 skip themselves when a toolchain is missing, saying what they need. A good self-test checks that the toolchain is
@@ -648,7 +649,7 @@ can read it and press a button. Optional variables widen the run: `QX_PYTHON` (a
 `.github/ISSUE_TEMPLATE/`). A pack moves from *wired* (it exists) to *tested* (self-tests pass on a real machine) to
 *proven* (an agent built and ran a real app with it in QuorX).
 
-On the PC this report was written on (Git, Node.js, Python and Rust without a C linker), the run passed every test
+On one Windows PC (Git, Node.js, Python and Rust without a C linker), the run passed every test
 it could run and skipped the rest with a reason: C/C++, .NET and Go weren't installed, and Rust's build and debugger
 tests said "installed but no C linker".
 
@@ -757,7 +758,7 @@ differences:
   code: no chats, keys or `.env`.
 - **Data:** on first run the installed app asks where to keep chats, projects and keys, and saves the choice in
   `%APPDATA%\QuorX\config.json`. Updates never touch the data.
-- **Updates:** the app checks its feed (GitHub Releases of `mims1234/QuorX`) shortly after start and every 6 hours,
+- **Updates:** the app checks its feed (the project's GitHub Releases) shortly after start and every 6 hours,
   downloads with progress, checks the SHA-512, and installs on restart.
 - **Publishing:** `npm run release:bump`, commit, then tag `v<version>` and push the tag.
   `.github/workflows/release.yml` builds the installer on Windows and creates the release with `latest.yml`, the
@@ -784,45 +785,14 @@ differences:
 
 ## Research and decisions
 
-QuorX's safety layer and packs were built over 19 and 20 October 2026, in pull requests that are all in the repo's
-history. Most of the pack work ran as about ten sessions at once, each on its own branch and pull request.
-
-```mermaid
-gantt
-  title Pull requests, from opened to merged (UTC)
-  dateFormat YYYY-MM-DD HH:mm
-  axisFormat %H:%M
-  section Foundation
-  Safety layer and non-web apps (#1)         :done, 2026-10-19 20:02, 2026-10-19 20:03
-  Running tab (#2)                           :done, 2026-10-19 20:29, 1m
-  Platform packs, tester kit, DAP (#3)       :done, 2026-10-19 22:48, 2026-10-19 23:04
-  section Built in parallel
-  .NET (#4)                                  :done, 2026-10-19 23:21, 2026-10-19 23:33
-  Scripts guard (#5)                         :done, 2026-10-19 23:22, 2026-10-19 23:43
-  Tauri (#6)                                 :done, 2026-10-19 23:26, 2026-10-19 23:34
-  Go, C/C++, Rust debugging (#7)             :done, 2026-10-19 23:28, 2026-10-19 23:43
-  Electron (#8)                              :done, 2026-10-19 23:31, 2026-10-20 00:01
-  Godot, Unity, installers (#9)              :done, 2026-10-19 23:32, 2026-10-20 00:01
-  Android and Flutter (#10)                  :done, 2026-10-19 23:35, 2026-10-20 00:17
-  Java and Kotlin (#11)                      :done, 2026-10-19 23:36, 2026-10-20 00:34
-  macOS and Linux (#12)                      :done, 2026-10-19 23:39, 2026-10-20 00:27
-  Apple apps (#13)                           :done, 2026-10-19 23:51, 2026-10-20 00:28
-  Python desktop (#14)                       :done, 2026-10-19 23:57, 2026-10-20 00:11
-  section After
-  News format (#16)                          :done, 2026-10-20 01:08, 1m
-```
-
-The work behind each pull request started earlier than the bar; the bars show review and merging. Eleven pull
-requests (#4 to #14) came from ten sessions working at the same time, merged one after another within about an
-hour. The suite grew alongside: 135 tests
-with the safety layer, 139 with the packs framework, 148 with the scripts guard, 180 today.
+The choices below shaped the safety layer and the packs. Each one came from something tried and measured.
 
 **What was tried, what was found, what was decided:**
 
 1. **Open the shell, but only with the guards.** The old `run_command` allowed a short list of programs
    with no shell characters. That already allowed any code (`python -c`, `node -e`, `npx anything`), so a real shell added little
    new risk, as long as the rule engine, the delete guard, Stop, snapshots and the hardened deciders came with it.
-   They shipped in one pull request.
+   They arrived together, in the same release as the shell.
 2. **Parse PowerShell with PowerShell.** A hand-written tokenizer would guess at a language with aliases, script
    blocks, subexpressions and call operators. PowerShell's own parser answers exactly, in milliseconds after the
    first call, from the same helper process that holds the jobs. Windows PowerShell 5.1 is the default shell for that
@@ -850,9 +820,9 @@ with the safety layer, 139 with the packs framework, 148 with the scripts guard,
 7. **Judges must not read the actor's reasons.** The first YOLO media vote showed the deciders the agent's own
    "why". That is agent-written text, so it can carry injected instructions. The judge now sees only your messages
    and facts the harness computed, needs a quorum, excludes the chat's own model, and sends anything unclear to you.
-8. **Tests that count processes need a quiet machine.** With ten sessions running the same suite on one PC, the
-   Stop tests (which count `PING.EXE` system-wide), the terminal prompt test and the WinForms test failed now and
-   then, and passed alone. They were left strict, and the flakiness is documented rather than hidden.
+8. **Tests that count processes need a quiet machine.** The Stop tests count `PING.EXE` across the whole computer,
+   and the terminal prompt test and the WinForms test wait on a terminal or a window. On a busy PC they can fail and
+   then pass when run alone. They were left strict, and this is documented in [Testing](#testing).
 9. **Small findings that shaped packs.** Windows' UI Automation sees almost nothing of tkinter, and pressing a Tk
    button through it reports success without running the command, so Tk gets real mouse clicks. A desktop
    screenshot was one JSON line of 50–200 KB and the helper's line reader cut lines at 4000 characters, so every
@@ -860,11 +830,11 @@ with the safety layer, 139 with the packs framework, 148 with the scripts guard,
    its windows don't answer DevTools at all. From PowerShell a GUI program returns at once, so `npx electron .` is
    the form that keeps its job alive. `NoDefaultCurrentDirectoryInExePath` stops `cmd` from running `gradlew.bat`
    by bare name, so notes say `.\gradlew.bat`.
-10. **Parallel sessions need shared conventions.** Ten sessions edited a few shared files (the DAP client, the
-    compiler-check runner, the pack loader, the safety tests). They agreed on hook shapes in a shared notes folder
-    (for example a check's `cmd` may be a function of `{ dir, files }`, a pack's `summaries`, the debugger's
-    `program` argument) and changed pinned test lists to "includes" checks, so pull requests merged with small or no
-    conflicts.
+10. **One file per platform, with shared hooks.** A pack is one file that QuorX loads by itself, so a new platform
+    adds a file instead of edits across the code. What several platforms need lives once in the shared code and
+    every pack uses it: a check's `cmd` may be a function of `{ dir, files }` with its own `parse` and `timeout`, a
+    pack's `summaries` put a test summary above a command's output, the debugger takes a `program` for compiled
+    languages, and stdio-only debug adapters run behind one bridge.
 
 ---
 
