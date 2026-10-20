@@ -6673,15 +6673,25 @@ function deskAgentEvent(ev) {
 // ⚙ Settings → About, in the desktop app only: start at login (applied right away) and the data folder.
 async function drawDesktopSettings() {
   const box = $('#stDesktop'); if (!box || !DESK) return;
-  const [info, login] = await Promise.all([window.ohDesktop.info().catch(() => ({})), window.ohDesktop.loginItem().catch(() => false)]);
+  const [info, login, onClose] = await Promise.all([window.ohDesktop.info().catch(() => ({})), window.ohDesktop.loginItem().catch(() => false), window.ohDesktop.closeAction?.().catch(() => 'ask')]);
   if (!box.isConnected) return;
-  box.innerHTML = stCard('Desktop app', `Version ${esc(info.version || '?')}${info.packaged ? '' : ' (running from the repo)'}. ${info.ownsServer ? 'It runs the harness itself; ✕ keeps it in the tray and Quit is in the tray menu.' : 'It is attached to a harness that was already running.'}`,
-    stRow('Start at login', 'Opens QuorX in the tray when you sign in to Windows, so phones on your Wi-Fi can reach it. Applies right away.', '<label class="sq-check"><input type="checkbox" id="stDeskLogin"' + (login ? ' checked' : '') + '><span>On</span></label>')
+  const canQuit = typeof window.ohDesktop.quit === 'function';
+  const closeSeg = `<div class="st-segmented" role="radiogroup" id="stDeskClose">${[['ask', 'Ask'], ['tray', 'Keep running in the tray'], ['quit', 'Quit QuorX']].map(([k, l]) => `<button type="button" class="st-seg-btn ${k === (onClose || 'ask') ? 'active' : ''}" role="radio" aria-checked="${k === (onClose || 'ask')}" data-v="${k}">${l}</button>`).join('')}</div>`;
+  box.innerHTML = stCard('Desktop app', `Version ${esc(info.version || '?')}${info.packaged ? '' : ' (running from the repo)'}. ${info.ownsServer ? 'It runs the harness itself, so phones on your Wi-Fi can reach it while the window is closed.' : 'It is attached to a harness that was already running; closing the window leaves that one running.'}`,
+    (canQuit ? stRow('Closing the window (✕)', 'Ask: a short notice the first time. Keep running: QuorX stays in the tray, where right-click → Quit QuorX stops it. Quit: ✕ stops QuorX and the harness.', closeSeg)
+      + stRow('Quit QuorX', info.ownsServer ? 'Stops QuorX and the harness now. Phones lose it until you open QuorX again.' : 'Closes this window. The harness it is attached to keeps running.', '<button type="button" class="st-btn danger sm" id="stDeskQuit">Quit QuorX</button>') : '')
+    + stRow('Start at login', 'Opens QuorX in the tray when you sign in to Windows, so phones on your Wi-Fi can reach it. Applies right away.', '<label class="sq-check"><input type="checkbox" id="stDeskLogin"' + (login ? ' checked' : '') + '><span>On</span></label>')
     + stRow('Updates', '', '<span id="stDeskUpd" class="st-upd">…</span> <button type="button" class="st-btn ghost sm" id="stDeskCheck">Check now</button>')
     + stRow('Update feed', 'Where new versions are published (latest.yml and the installer), e.g. https://github.com/you/repo/releases/latest/download. Empty: no updates.', '<input type="url" class="st-input" id="stDeskFeed" placeholder="https://…" spellcheck="false" style="min-width:260px">')
     + stRow('Data folder', 'Chats, projects, keys and logs.', `<code class="blurable" title="${esc(info.home || '')}">${esc(info.home || '')}</code> <button type="button" class="st-btn ghost sm" id="stDeskHome">📂 Open</button>`));
   $('#stDeskLogin').onchange = async (e) => { e.target.checked = await window.ohDesktop.loginItem(e.target.checked).catch(() => !e.target.checked); };
   $('#stDeskHome').onclick = () => window.ohDesktop.openHome();
+  for (const b of box.querySelectorAll('#stDeskClose .st-seg-btn')) b.onclick = async () => {
+    const v = await window.ohDesktop.closeAction(b.dataset.v).catch(() => null);
+    if (v) for (const x of box.querySelectorAll('#stDeskClose .st-seg-btn')) { x.classList.toggle('active', x.dataset.v === v); x.setAttribute('aria-checked', String(x.dataset.v === v)); }
+  };
+  const quit = $('#stDeskQuit');
+  if (quit) quit.onclick = async () => { if (await uiConfirm(info.ownsServer ? 'Quit QuorX? The harness stops too, and phones lose it until you open QuorX again.' : 'Close QuorX? The harness it is attached to keeps running.')) window.ohDesktop.quit(); };
   const st = await window.ohDesktop.update('state').catch(() => ({}));
   $('#stDeskFeed').value = st.url || '';
   $('#stDeskFeed').onchange = async (e) => { try { await window.ohDesktop.update('setUrl', e.target.value); } catch (er) { uiAlert(er.message); } };
