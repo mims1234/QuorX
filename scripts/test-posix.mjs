@@ -151,6 +151,46 @@ test('rules: the agent\'s shell off Windows is bash or zsh, never PowerShell', (
   if (POSIX) { assert.equal(s.shell, 'bash'); assert.equal(safetySettings({ shell: 'zsh' }).shell, 'zsh'); } else assert.equal(s.shell, 'powershell');
 });
 
+// ---------- scripts the agent runs (bash on macOS and Linux) ----------
+const scriptsAt = (files) => { const dir = tmp('posix-scripts'); for (const [rel, text] of Object.entries(files)) { fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true }); fs.writeFileSync(path.join(dir, rel), text); } return dir; };
+
+test('scripts: a bash wrapper script that runs other programs can’t be checked', async () => {
+  const root = scriptsAt({
+    'run.sh': '#!/bin/bash\n# runs whatever it is given\n"$@"\n',
+    'launch.sh': '#!/bin/bash\nset -e\ncargo build\nopen -a Calculator\n',
+    'hidden.sh': '#!/bin/bash\nif true; then\n  timeout 5 bash -c "rm -rf ~/x"\nfi\n',
+    'each.sh': '#!/bin/bash\nfind . -name "*.tmp" -exec rm {} \\;\n',
+    'build.sh': '#!/bin/bash\nset -e\ncargo build --release\necho done\n',
+    'nested.sh': '#!/bin/bash\n./launch.sh\n',
+  });
+  const d = async (line) => decide(line, { shell: 'bash', root, rules: [], mode: 'strict', yolo: {} });
+  for (const line of ['bash run.sh make', './launch.sh', 'sh hidden.sh', 'bash each.sh', './nested.sh']) {
+    const r = await d(line);
+    assert.equal(`${r.verdict}:${r.who}`, 'ask:user', `${line} → ${r.verdict} (${r.why})`);
+    assert.ok(r.segments.some((s) => s.cls === 'opaque' && /runs other programs|can’t read this script/.test(s.why)), `${line}: ${JSON.stringify(r.segments.map((s) => [s.text, s.cls, s.why]))}`);
+  }
+  const passed = await d('bash run.sh rm -rf ~');
+  assert.equal(passed.verdict, 'deny', 'what the wrapper passes on is judged as a command');
+  const plain = await d('bash build.sh');
+  assert.ok(!plain.segments.some((s) => s.cls === 'opaque'), `a plain build script stays a build: ${JSON.stringify(plain.segments.map((s) => [s.cls, s.why]))}`);
+});
+
+test('scripts: system commands inside a bash script show up as commands of their own', async () => {
+  const root = scriptsAt({ 'setup.sh': '#!/bin/bash\nbrew install cmake\nsudo launchctl load ~/Library/LaunchAgents/x.plist\n' });
+  const r = await decide('./setup.sh', { shell: 'bash', root, rules: [], mode: 'strict', yolo: {} });
+  assert.equal(r.verdict, 'deny', r.why);
+  assert.ok(r.segments.some((s) => s.program === 'brew' && s.cls === 'install' && s.global), 'the brew install is shown');
+  assert.ok(r.segments.some((s) => s.program === 'sudo' && s.cls === 'never'), 'sudo launchctl is refused');
+});
+
+test('scripts: package.json scripts are read as sh off Windows', { skip: !POSIX && 'needs macOS or Linux' }, async () => {
+  const root = scriptsAt({ 'package.json': JSON.stringify({ scripts: { start: 'open -a Safari http://localhost:3000', build: 'tsc -p . && echo ok', clean: 'rm -rf ~/' } }) });
+  const v = async (line) => { const r = await decide(line, { shell: 'bash', root, rules: [], mode: 'strict', yolo: {} }); return r.verdict === 'ask' ? `ask:${r.who}` : r.verdict; };
+  assert.equal(await v('npm start'), 'ask:user');
+  assert.equal(await v('npm run clean'), 'deny');
+  assert.notEqual(await v('npm run build'), 'deny');
+});
+
 // ---------- folders that are off limits on macOS and Linux ----------
 test('paths: macOS system folders, other profiles and your Library are blocked', () => {
   const at = (p) => posixSystemZone(p, { platform: 'darwin', home: '/Users/me' })?.zone || 'ok';
