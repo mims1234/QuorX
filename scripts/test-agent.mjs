@@ -952,6 +952,27 @@ test('list_files shows your scratch, the launch file and the site server inside 
   assert.ok(!paths.some((x) => /trash|checkpoints/.test(x)), 'harness records stay hidden');
 });
 
+test('a project inside another project is listed once and not walked, in list_files and search_files', async () => {
+  const { listFiles, searchFiles } = await import('../server/workspace.js');
+  const dir = tempDir('quorx-nest-');
+  const other = path.join(dir, 'registered');
+  for (const f of ['index.html', 'inner/.quorx/launch.json', 'inner/src/app.js', 'registered/lib.js', 'plain/util.js']) {
+    fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true }); fs.writeFileSync(path.join(dir, f), 'needle');
+  }
+  const id = `nest${Date.now().toString(36)}`;
+  saveProject({ id, name: 'nested', path: other });
+  try {
+    const paths = listFiles(dir).map((x) => x.path);
+    assert.ok(paths.includes('inner/ (another project, skipped)'), 'a folder with its own .quorx');
+    assert.ok(paths.includes('registered/ (another project, skipped)'), 'a folder another project points at');
+    assert.ok(!paths.some((x) => /inner\/src|registered\/lib/.test(x)), 'their files stay out');
+    assert.ok(paths.includes('plain/util.js') && paths.includes('index.html'), 'ordinary folders are still walked');
+    const hits = searchFiles(dir, 'needle').map((h) => h.path).sort();
+    assert.deepEqual(hits, ['index.html', 'plain/util.js']);
+    assert.ok(listFiles(other).some((x) => x.path === 'lib.js'), 'the inner project still lists its own files');
+  } finally { forgetProject(id); }
+});
+
 
 test('when the steps run out while the plan has open items, the reply keeps going (extra rounds, then it wraps up)', async () => {
   let b = 0;
