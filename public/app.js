@@ -4745,6 +4745,7 @@ async function drawDevices(info) {
     stRow('Allow other devices', 'Off: only this computer can open QuorX.', `<label class="sq-check"><input type="checkbox" id="stLan"${info.lan ? ' checked' : ''}><span>On</span></label>`)
     + (info.lan ? (links.length
       ? links.map((l) => stRow(`Pairing link (${esc(l.ip)})`, 'Open it on the device, or type it there. Keep it private.', `<code class="${shown ? '' : 'blurable'}" style="word-break:break-all">${shown ? esc(l.url) : esc(l.url.replace(/pair=.*/, 'pair=••••••••'))}</code> <button type="button" class="st-btn ghost sm" data-copy-link="${esc(l.url)}">Copy</button>`)).join('')
+        + (info.fingerprint ? stRow('Certificate fingerprint (SHA-256)', "Devices connect over HTTPS with a certificate made for this computer, so the device warns that it isn't trusted. Open the warning's details (certificate, SHA-256 fingerprint) and continue only if it matches this.", `<code class="st-fp" style="display:inline-block;white-space:pre;font-size:11.5px;line-height:1.6">${esc(info.fingerprint.match(/(?:[0-9A-F]{2}:?){1,8}/g).map((l) => l.replace(/:$/, '')).join('\n'))}</code>`) : '')
         + stRow('', '', `<button type="button" class="st-btn ghost sm" id="stDevShow">${shown ? 'Hide' : 'Show'} links</button> <button type="button" class="st-btn danger sm" id="stDevReset" title="Every paired device has to pair again">New link…</button>`)
       : stRow('Pairing link', 'This computer has no network address right now (no Wi-Fi or cable).', ''))
       : ''));
