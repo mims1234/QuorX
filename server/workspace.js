@@ -9,7 +9,7 @@ import net from 'node:net';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { spawn, execFile, spawnSync } from 'node:child_process';
-import { projectDir } from './store.js';
+import { projectDir, listProjects } from './store.js';
 import { SECRET_FILES } from './keys.js';
 import { termEvent, lineSplitter, newJob, endJob } from './terminal.js';
 import { jobsAvailable, adoptPid, jobCount, killJob, closeJob, startDetached } from './jobhost.js';
@@ -59,8 +59,17 @@ export function safePath(root, rel) {
 
 // Inside .quorx only what the agent (and you) work with is listed; the harness's own records are not.
 const AGENT_VISIBLE = new Set(['scratch', 'skills', 'launch.json', 'serve.mjs']);
+// A folder inside this project that is a project of its own (it has a .quorx folder, or another project points
+// at it) is listed once and not entered, so its files don't fill this project's prompts and searches.
+const norm = (p) => (process.platform === 'win32' ? path.resolve(p).toLowerCase() : path.resolve(p));
+function otherProjectDirs(root) {
+  try { return new Set(listProjects().map((p) => norm(p.dir)).filter((d) => d !== norm(root))); } catch { return new Set(); }
+}
+const isOtherProject = (dir, others) => others.has(norm(dir)) || fs.existsSync(path.join(dir, '.quorx')) || fs.existsSync(path.join(dir, '.openharness'));
+export const SKIPPED = /\((another project, )?skipped\)$/;
 export function listFiles(root, max = 300) {
   const out = [];
+  const others = otherProjectDirs(root);
   const walk = (dir) => {
     for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
       if (out.length >= max) return;
@@ -77,6 +86,7 @@ export function listFiles(root, max = 300) {
       if (e.isSymbolicLink()) continue; // a link can lead outside the project
       if (SKIP.has(e.name)) { out.push({ path: path.relative(root, path.join(dir, e.name)).replaceAll('\\', '/') + '/ (skipped)', size: 0 }); continue; }
       const p = path.join(dir, e.name);
+      if (e.isDirectory() && isOtherProject(p, others)) { out.push({ path: path.relative(root, p).replaceAll('\\', '/') + '/ (another project, skipped)', size: 0 }); continue; }
       if (e.isDirectory()) walk(p);
       else out.push({ path: path.relative(root, p).replaceAll('\\', '/'), size: fs.statSync(p).size });
     }
@@ -522,7 +532,7 @@ export function searchFiles(root, query, glob = '', max = 80) {
   const rx = glob ? globToRegExp(glob) : null;
   const out = [];
   for (const f of listFiles(root, 2000)) {
-    if (out.length >= max || f.path.endsWith('(skipped)') || f.size > 1e6) continue;
+    if (out.length >= max || SKIPPED.test(f.path) || f.size > 1e6) continue;
     if (rx && !rx.test(f.path) && !rx.test(path.basename(f.path))) continue;
     // Links can point outside the project (or at QuorX's own keys): skip them, and keep every read inside safePath.
     let text;
