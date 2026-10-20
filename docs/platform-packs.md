@@ -119,6 +119,40 @@ only over its own input and output (`gdb -i dap`), which QuorX's debugger doesn'
 debugger for MinGW builds too. For a crash outside the debugger, Windows Error Reporting can keep a dump (the
 `LocalDumps` key, a setting for the whole computer, so the agent asks first); `lldb <program> -c <dump>` opens it.
 
+## Python: venvs, tkinter and debugpy
+
+**The project's own Python.** When a project has a virtual environment (`.venv`, `venv` or `env`, with its
+`pyvenv.cfg`), QuorX uses its interpreter for everything: the compiler check, the debugger, and the commands the notes
+give the agent (`.venv\Scripts\python.exe -m pytest`, `… -m pip install x`, which the rules treat as a project install).
+Without one, the agent is told to make one before installing packages, never to pip into the system's Python.
+
+**The check.** Every `.py` file the agent writes is parsed as it is written. Before the final reply, a project with a
+venv (or ruff set up) also gets `server/packs/_pycheck.py`: syntax as the venv's own Python sees it (a venv on 3.9 has
+no `match`), plus, when the project already has ruff or pyflakes, names that are used but never defined. It writes
+nothing (no `.pyc`, no fixes), and only errors in files the reply changed count.
+
+**What tkinter shows the desktop tool.** Tk 8.6 draws its own widgets, so Windows UI Automation sees little of them:
+
+| Widget | Seen by UI Automation |
+|---|---|
+| The window's title | Yes |
+| `tk.Button`, `Checkbutton`, `Radiobutton` | Yes, as unnamed buttons with their position |
+| `Label`, `Entry`, `Text`, `Listbox`, `Canvas`, `Scale` | No |
+| Every `ttk` widget | No |
+
+Pressing a Tk button through UI Automation reports success but never runs its command, so the desktop tool clicks Tk
+buttons with the real mouse, each event carrying its own position (moving the mouse meanwhile can't send the click
+elsewhere), after checking that nothing covers the button. For the rest, the agent clicks a point (`click_at`), types
+with `keys`, and checks results with a screenshot (saved in the agent's scratch folder, so the deciders can look at it),
+the window title, or what the app prints. Qt supports UI Automation, so PyQt and PySide windows should show their
+controls by name, like WinForms (not tested yet: that needs someone with PyQt6 or PySide6).
+
+**Debugging a window.** `debug start` on a `.py` file runs it under debugpy with the project's interpreter; when debugpy
+is missing, the agent gets the exact install for the venv. For a button's handler: set the breakpoint, continue (the
+window opens), click the button with the desktop tool on the job `debug start` named. A paused program's windows
+can't answer UI Automation, so the desktop tool says where the program stopped instead of waiting on it; `continue`
+on a program that is still running waits for its next stop.
+
 ## Testing a pack (no key needed)
 
 Each pack has a self-test in `server/packs/tests/<id>.test.mjs`. It drives QuorX's real code (the compiler checks,
@@ -129,8 +163,8 @@ npm run test:packs
 ```
 
 That runs every self-test your computer can run and writes `pack-test-report.md`: your OS, the toolchains found, and
-each pack's result. To test one pack: `npm run test:packs -- --pack dotnet`. To include the Python debugger, set
-`QX_PYTHON` to a Python that has debugpy. To include the Electron app tests, set `QX_ELECTRON` to an Electron binary
+each pack's result. To test one pack: `npm run test:packs -- --pack dotnet`. To include the Python debugger and the
+pyflakes check, set `QX_PYTHON` to a Python that has debugpy and pyflakes (a venv: `pip install debugpy pyflakes`). To include the Electron app tests, set `QX_ELECTRON` to an Electron binary
 (`node_modules\electron\dist\electron.exe` in any Electron project), or run `npm run desktop:setup` once.
 
 **Have a toolchain we can't test?** Run the kit and paste `pack-test-report.md` into the pack's pull request, or open
@@ -154,7 +188,7 @@ Each is its own pull request, so people with that toolchain can test it on its o
 | Pack framework and tester kit | This page, the pack loader, generic DAP debugging, `npm run test:packs`; today's languages moved into packs | Node.js |
 | Commands hidden in scripts | Scripts that mainly launch other programs are marked "can't be checked"; the agent runs commands directly | Windows |
 | .NET | WinForms and WPF apps built and driven; `dotnet test`; debugging with netcoredbg | .NET 8 SDK, netcoredbg |
-| Python desktop | tkinter and PyQt windows driven; pytest; debugpy set up in the project's own venv | Python 3 |
+| Python desktop | The project's venv used for everything; a check with its own Python (plus ruff or pyflakes when the project has them); tkinter windows driven (and PyQt/PySide notes); pytest summaries; debugpy in the venv, stopping in a button handler after a click | Python 3 with tkinter; a venv with debugpy; PyQt6 or PySide6 to try those windows |
 | Electron | Apps started with their DevTools port and driven; main-process debugging (`debug attach`) | Node.js, an Electron binary |
 | Tauri | Tauri 1 and 2 apps found; `cargo check` in `src-tauri`; `tauri dev` started with WebView2's DevTools port, so the window is read and clicked; panics and capability errors explained (Rust breakpoints come with the C/C++ pack's lldb-dap) | Rust with the MSVC linker (Build Tools with C++), the Tauri CLI, WebView2, Node.js |
 | Go, C/C++ and Rust debugging | Delve and lldb-dap debugging; CMake build check; crashes caught under the debugger | Go and Delve, CMake and a C++ compiler, LLVM with lldb-dap, Rust with a linker |
