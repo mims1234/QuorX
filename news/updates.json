@@ -1,6 +1,21 @@
 {
   "versions": [
     {
+      "version": "0.2.5",
+      "date": "2026-10-21",
+      "title": "Locked down by default",
+      "items": [
+        { "kind": "safety", "text": "QuorX answers only its own windows: open the link it prints at start once per browser (the desktop app does this for you).", "pr": 32 },
+        { "kind": "safety", "text": "Other devices are off for new installs, and QuorX listens only on this computer until you turn them on.", "pr": 32 },
+        { "kind": "safety", "text": "Commands can't read QuorX's keys or browser profiles, and reading files outside the project asks first.", "pr": 32 },
+        { "kind": "safety", "text": "Web fetches check every redirect, and a page from one chat can't read another chat's files.", "pr": 32 },
+        { "kind": "safety", "text": "Releases are built by a read-only job and published by a separate step, with checksums checked in between.", "pr": 32 },
+        { "kind": "improved", "text": "Command rules move from each project's folder into QuorX's own data folder; add any you saved before again.", "pr": 32 },
+        { "kind": "new", "text": "A video direction skill for trailers, explainers and social cuts, with the research behind it.", "pr": 31 },
+        { "kind": "improved", "text": "Code and styles for features that are gone were removed, about 1,100 lines lighter." }
+      ]
+    },
+    {
       "version": "0.2.4",
       "date": "2026-10-20",
       "title": "Open source, under Apache 2.0",
