@@ -34,7 +34,8 @@ shows what this computer has (Git, Python, a browser, toolchains) and offers to 
 ## The desktop app from source
 
 The desktop app puts the same page in its own window, with real browser tabs in the pane and a tray icon that keeps
-QuorX running for your phone:
+QuorX running for your phone. The first ✕ shows a short notice (Keep running or Quit QuorX); right-click the tray
+icon → Quit QuorX stops it, and ⚙ Settings → About sets what ✕ does:
 
 ```bash
 npm run desktop:setup

@@ -124,9 +124,32 @@ function createWindow() {
   });
   // Anything that opens a new window (↗, links in pages and artifacts) goes to your default browser.
   win.webContents.setWindowOpenHandler(({ url }) => { if (/^(https?|mailto):/i.test(url)) shell.openExternal(url); return { action: 'deny' }; });
-  // ✕ keeps the harness running in the tray (phones on the LAN still reach it); Quit is in the tray menu.
-  win.on('close', (e) => { if (!quitting && server) { e.preventDefault(); win.hide(); } });
+  // ✕ keeps the harness running in the tray (phones on the LAN still reach it), or quits, as you chose in the notice
+  // or in ⚙ Settings → About. Attached to a harness someone else runs, ✕ just closes the window.
+  win.on('close', (e) => {
+    if (quitting || !server) return;
+    e.preventDefault();
+    const act = closeAction();
+    if (act === 'quit') quitApp(); else if (act === 'tray') win.hide(); else askOnClose();
+  });
   win.on('closed', () => { win = null; tabs.clear(); });
+}
+// What ✕ does: 'ask' (the notice, until you tick "Don't show this again"), 'tray' or 'quit'.
+const closeAction = () => (['tray', 'quit'].includes(readConfig().onClose) ? readConfig().onClose : 'ask');
+function setCloseAction(v) { writeConfig({ ...readConfig(), onClose: ['tray', 'quit'].includes(v) ? v : 'ask' }); return closeAction(); }
+function quitApp() { quitting = true; app.quit(); }
+let asking = false;
+async function askOnClose() {
+  if (asking || !win) return;
+  asking = true;
+  const { response, checkboxChecked } = await dialog.showMessageBox(win, {
+    type: 'info', title: 'QuorX', message: 'QuorX keeps running in the tray so your phone can reach it',
+    detail: 'Quit it any time from the QuorX icon in the tray (right-click → Quit QuorX), or here. You can change what ✕ does in ⚙ Settings → About.',
+    buttons: ['Keep running', 'Quit QuorX'], defaultId: 0, cancelId: 0, noLink: true,
+    checkboxLabel: "Don't show this again", checkboxChecked: false,
+  }).finally(() => { asking = false; });
+  if (checkboxChecked) setCloseAction(response === 1 ? 'quit' : 'tray');
+  if (response === 1) quitApp(); else win?.hide();
 }
 // Start at login: off by default; when on, the app starts hidden in the tray.
 const loginArgs = () => (app.isPackaged ? ['--hidden'] : [path.resolve(__dirname), '--hidden']);
@@ -134,19 +157,21 @@ const loginItem = () => app.getLoginItemSettings({ path: process.execPath, args:
 function setLoginItem(on) { app.setLoginItemSettings({ openAtLogin: !!on, path: process.execPath, args: loginArgs() }); if (tray) createTrayMenu(); return loginItem(); }
 function createTray() {
   tray = new Tray(iconImage(16));
-  tray.setToolTip(`QuorX · ${origin}`);
+  tray.setToolTip(trayTip());
   createTrayMenu();
   tray.on('click', showWindow);
 }
+const trayTip = () => `QuorX is running · ${origin}${server ? ' · right-click to quit' : ''}`;
+// Quit sits right under Open, so it is found without reading the whole menu.
 function createTrayMenu() {
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: 'Open QuorX', click: showWindow },
+    { label: server ? 'Quit QuorX (stops the harness)' : 'Quit QuorX', click: quitApp },
+    { type: 'separator' },
     { label: `Address: ${origin}`, enabled: false },
     ...(HOME ? [{ label: 'Open the data folder', click: () => shell.openPath(HOME) }] : []),
     { label: 'Restart the harness', click: async () => { const r = await restartHarness(); if (r.ok) win?.webContents.reload(); else dialog.showErrorBox('Restart failed', r.error); } },
     { label: 'Start at login', type: 'checkbox', checked: loginItem(), click: (m) => setLoginItem(m.checked) },
-    { type: 'separator' },
-    { label: server ? 'Quit (stops the harness)' : 'Quit', click: () => { quitting = true; app.quit(); } },
   ]));
 }
 
@@ -343,13 +368,15 @@ async function restartHarness() {
     }
     if (!(await waitFor(async () => !(await harnessAt(PORT)), 15000))) throw new Error(`the harness on port ${PORT} did not stop`);
     origin = await startServer();
-    if (tray) { tray.setToolTip(`QuorX · ${origin}`); createTrayMenu(); }
+    if (tray) { tray.setToolTip(trayTip()); createTrayMenu(); }
     return { ok: true, origin, owns: !!server };
   } catch (e) { return { ok: false, error: e.message }; }
   finally { restarting = false; }
 }
 handle('restartHarness', () => restartHarness());
 handle('loginItem', (on) => (on === undefined ? loginItem() : setLoginItem(on)));
+handle('closeAction', (v) => (v === undefined ? closeAction() : setCloseAction(v)));
+handle('quit', () => { setImmediate(quitApp); return true; });
 handle('info', () => ({ version: app.getVersion(), packaged: app.isPackaged, home: HOME || ROOT, origin, ownsServer: !!server }));
 handle('openHome', () => { shell.openPath(HOME || ROOT); return true; });
 // QuorX's own zoom (the page sends Ctrl + / − / 0 here unless they were for the terminal). Remembered between starts.
