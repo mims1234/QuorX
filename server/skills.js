@@ -1,4 +1,4 @@
-// Skills: playbooks the agent loads only when they're relevant, like Claude Code's skills.
+// Skills: playbooks the agent loads only when they're relevant.
 // Built-in skills live in skills/<name>/SKILL.md; each project can add its own in
 // <project>/.quorx/skills/<name>/SKILL.md (the agent can save new ones there with save_skill).
 // A SKILL.md starts with front matter (name, description); the body holds the instructions.
