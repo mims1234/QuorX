@@ -174,7 +174,7 @@ const history = git('log', '--first-parent', '--reverse', '--format=%H %cs %s', 
   return { hash: hash.slice(0, 7), date, label: pr ? `#${pr}` : ver ? `v${ver}` : /first public version/i.test(subject) ? 'first' : null,
     npmTest: files.reduce((a, f) => a + countTests(show(hash, f)), 0), packs: packTests.reduce((a, f) => a + countTests(show(hash, `server/packs/tests/${f}`)), 0) };
 }).filter((h, i, all) => i === all.length - 1 || h.label); // releases and merged pull requests; the newest commit always
-history.at(-1).label ||= history.at(-1).hash;
+history.at(-1).label ||= 'now';
 // Suites now, from the working tree.
 const pkgNow = fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8');
 const suites = suiteFiles(pkgNow).map((f) => ({ file: f, tests: countTests(fs.readFileSync(path.join(ROOT, f), 'utf8')) }));
@@ -184,7 +184,9 @@ let saved = {};
 try { saved = JSON.parse(fs.readFileSync(path.join(LOGS, 'test-results.json'), 'utf8')) || {}; } catch { /* none kept in this checkout */ }
 // Uncommitted test changes in this checkout count as one more point.
 const nowCount = { npmTest: suites.reduce((a, s) => a + s.tests, 0), packs: packTestsNow.reduce((a, s) => a + s.tests, 0) };
-if (nowCount.npmTest !== history.at(-1).npmTest || nowCount.packs !== history.at(-1).packs) history.push({ label: 'now', date: today, ...nowCount });
+if (nowCount.npmTest !== history.at(-1).npmTest || nowCount.packs !== history.at(-1).packs) {
+  if (history.at(-1).label === 'now') Object.assign(history.at(-1), nowCount); else history.push({ label: 'now', date: today, ...nowCount });
+}
 const first = history[0], last = history.at(-1);
 const testsData = {
   generated: today,
@@ -196,24 +198,23 @@ const testsData = {
   historyChart: { type: 'line', title: 'Tests written, at each change merged into main', x: history.map((h) => h.label), series: [{ name: 'npm test', values: history.map((h) => h.npmTest) }, { name: 'Pack self-tests', values: history.map((h) => h.packs) }] },
   suitesChart: { type: 'bar', title: 'Tests in each npm test file', x: suites.map((s) => path.basename(s.file, '.mjs').replace(/^test-/, '')), series: [{ name: 'Tests', values: suites.map((s) => s.tests) }] },
   packsChart: { type: 'bar', title: 'Self-tests per pack', x: packTestsNow.map((s) => s.pack), series: [{ name: 'Tests', values: packTestsNow.map((s) => s.tests) }] },
-  lastRun: saved.test ? { at: saved.test.at, commit: saved.test.commit, total: saved.test.total, pass: saved.test.pass, fail: saved.test.fail, skipped: saved.test.skipped } : null,
 };
 const P = saved.packs;
 if (P?.rows?.length) {
   const lv = { passed: 'passed', failed: 'failed' };
-  testsData.packRun = { at: P.at, commit: P.commit, platform: P.platform, toolchains: (P.toolchains || []).map((t) => `${t.label} ${t.version || ''}${t.works ? '' : ' (cannot build here)'}`.trim()) };
+  testsData.packRun = { at: P.at, version: P.version, platform: P.platform, toolchains: (P.toolchains || []).map((t) => `${t.label} ${t.version || ''}${t.works ? '' : ' (cannot build here)'}`.trim()) };
   testsData.packMatrix = {
     levels: [{ id: 'passed', label: 'Passed' }, { id: 'failed', label: 'Failed' }, { id: 'skipped', label: 'Not tested here' }],
     columns: ['Pack', 'Result', 'Passed', 'Skipped', 'Why some were skipped'],
     rows: P.rows.map((r) => ({ level: lv[r.status] || 'skipped', cells: [r.label, r.status, String(r.pass), String(r.skipped), r.why || (r.skipped ? 'its toolchain is not on this computer' : '')] })),
   };
 }
-if (saved.ui) testsData.uiRun = { at: saved.ui.at, commit: saved.ui.commit, scenario: saved.ui.scenario, passed: saved.ui.passed, total: saved.ui.total };
+if (saved.ui) testsData.uiRun = { at: saved.ui.at, version: saved.ui.version, scenario: saved.ui.scenario, passed: saved.ui.passed, total: saved.ui.total };
 writeJson('tests', 'tests.json', testsData);
 
 const when = (iso) => `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
 setSection('tests', 'Pack self-tests', testsData.packMatrix ? [
-  `The last \`npm run test:packs\` published here ran on ${when(P.at)} (commit ${P.commit}, ${{ win32: 'Windows', darwin: 'macOS', linux: 'Linux' }[P.platform] || P.platform}). Toolchains it found: ${testsData.packRun.toolchains.join(', ') || 'none'}. A pack whose toolchain is missing skips the tests that need it; its logic (parsers, rules, notes) is still tested. This is one computer's run: the Platforms report rates each pack by the best run on record, often on a computer set up with that toolchain.`,
+  `The last \`npm run test:packs\` published here ran on ${when(P.at)} (QuorX ${P.version}, ${{ win32: 'Windows', darwin: 'macOS', linux: 'Linux' }[P.platform] || P.platform}). Toolchains it found: ${testsData.packRun.toolchains.join(', ') || 'none'}. A pack whose toolchain is missing skips the tests that need it; its logic (parsers, rules, notes) is still tested. This is one computer's run: the Platforms report rates each pack by the best run on record, often on a computer set up with that toolchain.`,
   '',
   block('matrix', { src: 'tests.json', path: 'packMatrix' }),
   '',
@@ -224,7 +225,7 @@ setSection('tests', 'Pack self-tests', testsData.packMatrix ? [
   block('chart', { src: 'tests.json', path: 'packsChart' }),
 ].join('\n'));
 setSection('tests', 'UI test', testsData.uiRun ? [
-  `The last UI test published here (\`npm run test:ui -- --scenario ${testsData.uiRun.scenario}\`) ran on ${when(testsData.uiRun.at)}, commit ${testsData.uiRun.commit}: ${testsData.uiRun.passed} of ${testsData.uiRun.total} steps passed. It starts the QuorX desktop app with its own data folder and port, drives its window the way a person would, and saves a screenshot of every step. Scenarios: ${uiScenarios.map((s) => `\`${s}\``).join(', ')}.`,
+  `The last UI test published here (\`npm run test:ui -- --scenario ${testsData.uiRun.scenario}\`) ran on ${when(testsData.uiRun.at)} (QuorX ${testsData.uiRun.version}): ${testsData.uiRun.passed} of ${testsData.uiRun.total} steps passed. It starts the QuorX desktop app with its own data folder and port, drives its window the way a person would, and saves a screenshot of every step. Scenarios: ${uiScenarios.map((s) => `\`${s}\``).join(', ')}.`,
 ].join('\n') : [
   `The UI test starts the QuorX desktop app with its own data folder and port, drives its window the way a person would, and saves a screenshot of every step with an HTML report. Scenarios: ${uiScenarios.map((s) => `\`${s}\``).join(', ')}. No run has been published here yet.`,
   '',

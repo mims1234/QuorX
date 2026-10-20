@@ -256,17 +256,9 @@
       }
     ]
   },
-  "lastRun": {
-    "at": "2026-10-20T01:18:14.166Z",
-    "commit": "3d75802",
-    "total": 184,
-    "pass": 174,
-    "fail": 0,
-    "skipped": 10
-  },
   "packRun": {
     "at": "2026-10-20T01:19:30.310Z",
-    "commit": "3d75802",
+    "version": "0.1.5",
     "platform": "win32",
     "toolchains": [
       "Git 2.55.0",
@@ -473,7 +465,7 @@
   },
   "uiRun": {
     "at": "2026-10-20T01:22:11.035Z",
-    "commit": "3d75802",
+    "version": "0.1.5",
     "scenario": "settings",
     "passed": 9,
     "total": 9
