@@ -308,6 +308,19 @@ test('stop: if QuorX is killed, the gate ends its own group', { skip: !POSIX ? '
   assert.equal(named(m), 0, 'it ended with its gate');
 });
 
+test('stop: a stdio debug adapter behind dapbridge ends with the session’s group', { skip: !POSIX ? 'needs macOS or Linux' : !hasPerl && 'needs perl' }, async () => {
+  const { runLine } = await import('../server/workspace.js');
+  const { stdioLine } = await import('../server/dapbridge.js');
+  const m = marker(), ac = new AbortController();
+  const p = runLine(tmp('bridge'), stdioLine(47000 + Math.floor(Math.random() * 1000), sleeper(m)), { shell: 'bash', signal: ac.signal, timeout: 30000 });
+  for (let t = 0; t < 50 && !named(m); t++) await new Promise((r) => setTimeout(r, 100));
+  assert.ok(named(m) >= 1, 'the adapter runs');
+  ac.abort();
+  const r = await p;
+  assert.equal(r.stopped.left, 0);
+  assert.equal(named(m), 0, 'the adapter ended with the bridge');
+});
+
 test('stop: zsh runs commands when it is installed', { skip: !POSIX ? 'needs macOS or Linux' : !['/bin/zsh', '/usr/bin/zsh'].some((f) => fs.existsSync(f)) && 'zsh is not installed' }, async () => {
   const { runLine } = await import('../server/workspace.js');
   const r = await runLine(tmp('zsh'), 'echo $ZSH_VERSION', { shell: 'zsh', timeout: 10000 });
