@@ -6172,12 +6172,13 @@ function newsFlowPlay(el) {
   g.tok.setAttribute('opacity', '1'); g.halo.setAttribute('opacity', '1');
   const per = 1900, total = per * (n - 1) + 1400, t0 = performance.now() - (f.t || 0);
   // Frames, with a timer behind them: a window the system has put in the background gets no frames, and the walk
-  // should still reach the end.
-  const next = () => { f.raf = requestAnimationFrame(step); f.timer = setTimeout(() => { cancelAnimationFrame(f.raf); step(performance.now()); }, 120); };
-  const step = (now) => {
+  // should still reach the end. The clock is performance.now(), not the frame's time, which can lag while the window
+  // isn't painting and kept the walk on its first step.
+  const next = () => { f.raf = requestAnimationFrame(step); f.timer = setTimeout(() => { cancelAnimationFrame(f.raf); step(); }, 120); };
+  const step = () => {
     clearTimeout(f.timer);
     if (!el.isConnected) return newsFlowStop(el);
-    f.t = now - t0;
+    f.t = performance.now() - t0;
     // Glide to the next step, then rest on it so its caption can be read.
     const seg = Math.min(n - 1, Math.floor(f.t / per)), x = Math.min(1, ((f.t % per) / per) / 0.5), e = x < 0.5 ? 2 * x * x : 1 - (-2 * x + 2) ** 2 / 2;
     const len = seg >= n - 1 ? g.at[n - 1] : g.at[seg] + (g.at[seg + 1] - g.at[seg]) * e;
@@ -6185,7 +6186,7 @@ function newsFlowPlay(el) {
     newsFlowShow(el, len, k);
     if (f.t < total) next(); else done();
   };
-  step(performance.now());
+  step();
 }
 
 // Terminal: types the commands and prints the output again; at rest it shows every line.

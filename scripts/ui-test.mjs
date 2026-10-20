@@ -452,7 +452,7 @@ async function newsScenario() {
     const cap = await textOf('#newsView .nb-flow-cap');
     const on = await js(`return [...document.querySelectorAll('#newsView .nb-flow .node')].findIndex((n) => n.classList.contains('on'));`);
     const btn = await textOf('#newsView .nb-flow .nb-play');
-    if (on < 1 || !/\d\/\d/.test(cap)) throw new Error(`not walking: step ${on}, caption "${cap}" (the window is ${seen})`);
+    if (on < 1 || !/\d\/\d/.test(cap)) throw new Error(`not walking: step ${on}, caption "${cap}", button "${btn}" (the window is ${seen})`);
     return `Step ${on + 1} lit; caption "${cap}"; button "${btn}"`;
   });
   await step('The compare switches between versions', async () => {
