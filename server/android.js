@@ -1,13 +1,18 @@
-// Android apps for the agent, through adb: list devices, install an APK built in the project, launch it, read its
-// screen as numbered controls (uiautomator's view hierarchy), tap, type, press keys, take a picture, read the log.
+// Android apps for the agent, through adb: boot an emulator, list devices, install an APK built in the project,
+// launch it, read its screen as numbered controls (uiautomator's view hierarchy), tap, type, press keys, take a
+// picture, read the log (with the newest crash summed up first).
 // Only emulators are used unless the user allows physical phones in ⚙ Safety & commands (a phone holds real data).
 // Every adb call is made by QuorX with fixed arguments; the agent never types an adb command line here.
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
+import { sdkTool, listAvds, findCrash, crashText } from './packs/android.js';
+import { startBackground, getBackground, jobOutput } from './bgjobs.js';
 
+// adb is often only inside the SDK (platform-tools), not on the PATH.
+const adbPath = () => sdkTool('adb') || 'adb';
 const run = (args, { timeout = 30000, binary = false } = {}) => new Promise((resolve, reject) => {
-  execFile('adb', args, { timeout, windowsHide: true, encoding: binary ? 'buffer' : 'utf8', maxBuffer: 64 * 1024 * 1024 }, (err, out, errOut) => {
+  execFile(adbPath(), args, { timeout, windowsHide: true, encoding: binary ? 'buffer' : 'utf8', maxBuffer: 64 * 1024 * 1024 }, (err, out, errOut) => {
     if (err && !out?.length) return reject(new Error(err.code === 'ENOENT' ? 'adb is not installed (⚙ Settings → Setup check can install Android platform tools)' : String(errOut || err.message).trim().split(/\r?\n/).slice(-2).join(' ')));
     resolve(out);
   });
@@ -32,7 +37,7 @@ export async function pickDevice(serial, { phones = false } = {}) {
     if (!d.emulator && !phones) throw new Error(`${serial} is a physical phone; QuorX uses emulators only unless you allow phones in ⚙ Settings → Safety & commands`);
     return d.serial;
   }
-  if (!usable.length) throw new Error(list.length ? 'only physical phones are connected; start an emulator, or allow phones in ⚙ Settings → Safety & commands' : 'no emulator is running (start one from Android Studio, or with: emulator -avd <name>)');
+  if (!usable.length) throw new Error(list.length ? 'only physical phones are connected; start an emulator, or allow phones in ⚙ Settings → Safety & commands' : 'no emulator is running (android avds lists the virtual devices; android start {avd} boots one)');
   return usable[0].serial;
 }
 
@@ -108,9 +113,46 @@ export async function launch(serial, pkg) {
   await run(['-s', serial, 'shell', 'monkey', '-p', pkg, '-c', 'android.intent.category.LAUNCHER', '1']);
   return `launched ${pkg}`;
 }
-/** The newest log lines: errors and the app's own lines. */
+/** The newest log lines: errors and the app's own lines, after a summary of the newest crash when there is one. */
 export async function logcat(serial, pkg) {
-  const out = await run(['-s', serial, 'logcat', '-d', '-t', '400', '-v', 'brief'], { timeout: 20000 });
+  const out = await run(['-s', serial, 'logcat', '-d', '-t', '2000', '-v', 'brief'], { timeout: 20000 });
+  const crash = crashText(findCrash(out, pkg));
   const lines = String(out).split(/\r?\n/).filter((l) => /^[EF]\//.test(l) || (pkg && l.includes(pkg)) || /AndroidRuntime|FATAL/.test(l));
-  return lines.slice(-80).join('\n') || '(no errors or lines from the app)';
+  return [crash, lines.slice(-80).join('\n') || '(no errors or lines from the app)'].filter(Boolean).join('\n\n');
+}
+
+// ---------- virtual devices ----------
+export { listAvds };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/**
+ * Boots an AVD as a background job (in the Running tab; Stop ends it), on a console port of its own so its serial
+ * is known (emulator-5556), and waits up to `wait` ms for Android to finish booting. { job, serial, booted, note }.
+ */
+export async function startEmulator({ avd, projectId, chatId, cwd, logTo, logRel, term, wait = 150e3, signal }) {
+  if (!/^[\w.-]+$/.test(String(avd || ''))) throw new Error('an AVD name looks like Pixel_8_API_35 (android avds lists them)');
+  const emu = sdkTool('emulator');
+  if (!emu) throw new Error('the Android emulator is not installed (Android Studio → SDK Manager → Android Emulator)');
+  const avds = await listAvds();
+  if (!avds.includes(avd)) throw new Error(`no AVD ${avd} (this computer has: ${avds.join(', ') || 'none'})`);
+  const taken = new Set((await devices().catch(() => [])).map((d) => d.serial));
+  let port = 5554;
+  while (taken.has(`emulator-${port}`) && port < 5682) port += 2;
+  const serial = `emulator-${port}`;
+  // -no-snapshot-save: the AVD's saved state stays as it was, so every boot starts from the same place.
+  const line = `${/\s/.test(emu) ? `"${emu}"` : emu} -avd ${avd} -port ${port} -no-snapshot-save -no-boot-anim`;
+  const job = startBackground({ projectId, chatId, cwd, line, shell: 'direct', label: `emulator ${avd}`, logTo, logRel, term });
+  const t0 = Date.now();
+  while (Date.now() - t0 < wait && !signal?.aborted) {
+    if (getBackground(job.id)?.status !== 'running') {
+      const o = await jobOutput(job.id, { max: 1500 }).catch(() => ({ text: '' }));
+      return { job: job.id, serial, booted: false, ended: true, note: `the emulator stopped before it booted:\n${o.text.trim() || '(no output)'}` };
+    }
+    const v = await run(['-s', serial, 'shell', 'getprop', 'sys.boot_completed'], { timeout: 5000 }).catch(() => '');
+    if (String(v).trim() === '1') {
+      await run(['-s', serial, 'shell', 'input', 'keyevent', '82'], { timeout: 5000 }).catch(() => {}); // past the lock screen
+      return { job: job.id, serial, booted: true, note: `booted in ${Math.round((Date.now() - t0) / 1000)}s` };
+    }
+    await sleep(2000);
+  }
+  return { job: job.id, serial, booted: false, note: `still booting after ${Math.round((Date.now() - t0) / 1000)}s` };
 }
