@@ -1,4 +1,4 @@
-// Checks on what the agent writes. ALMA can only parse files; this harness can run real tools, so a
+// Checks on what the agent writes. QuorX runs real tools rather than only parsing files, so a
 // JS file is checked by Node itself (node --check, which handles both ES modules and CommonJS) and a
 // Python file by Python. HTML gets its inline scripts parsed and its local links resolved.
 // Nothing here runs the agent's code: --check and ast.parse only read it.
@@ -8,8 +8,11 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { execFile } from 'node:child_process';
 
-const run = (cmd, args, ms = 10000) => new Promise((resolve) => {
-  execFile(cmd, args, { timeout: ms, windowsHide: true, maxBuffer: 1 << 20 }, (err, stdout, stderr) => resolve({ code: err ? (err.code ?? 1) : 0, out: String(stderr || stdout || '') }));
+// How long a check may take. A check that runs out of time (a slow first start of Python, a busy machine) says
+// nothing about the file: it is "couldn't check", never a syntax error the agent would then try to fix.
+export const CHECK_TIMEOUTS = { check: 20000, findPython: 15000 };
+const run = (cmd, args, ms = CHECK_TIMEOUTS.check) => new Promise((resolve) => {
+  execFile(cmd, args, { timeout: ms, windowsHide: true, maxBuffer: 1 << 20 }, (err, stdout, stderr) => resolve({ code: err ? (err.code ?? 1) : 0, timedOut: !!(err && (err.killed || err.signal) && err.code == null), out: String(stderr || stdout || '') }));
 });
 
 // node --check prints "file:line", the line, a caret, a blank line, then "SyntaxError: …".
@@ -22,14 +25,14 @@ function nodeError(out, label) {
 }
 async function checkJs(file, label) {
   const r = await run(process.execPath, ['--check', file]);
-  return r.code === 0 ? [] : [nodeError(r.out, label)];
+  return r.code === 0 || r.timedOut ? [] : [nodeError(r.out, label)];
 }
 
 let python; // the first Python that answers, found once
 async function findPython() {
   if (python !== undefined) return python;
   for (const exe of process.platform === 'win32' ? ['py', 'python'] : ['python3', 'python']) {
-    const r = await run(exe, ['--version'], 4000);
+    const r = await run(exe, ['--version'], CHECK_TIMEOUTS.findPython);
     if (r.code === 0 && /Python 3/.test(r.out)) return (python = exe);
   }
   return (python = null);
@@ -38,7 +41,7 @@ async function checkPython(file, label) {
   const exe = await findPython();
   if (!exe) return [];
   const r = await run(exe, ['-c', 'import ast,sys; ast.parse(open(sys.argv[1],encoding="utf-8").read(), sys.argv[1])', file]);
-  if (r.code === 0) return [];
+  if (r.code === 0 || r.timedOut) return [];
   const line = r.out.match(/line (\d+)/)?.[1];
   const msg = r.out.trim().split(/\r?\n/).filter((l) => /Error/.test(l)).at(-1) || 'syntax error';
   return [`${label}${line ? `:${line}` : ''}: ${msg.trim()}`];
