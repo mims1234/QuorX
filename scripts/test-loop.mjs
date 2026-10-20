@@ -212,7 +212,8 @@ test('the ZIP export holds every project file, compressed or stored, and leaves 
 
 test('an agent CLI runs as a bench builder with the prompt on stdin, and its JSON answer is read', async () => {
   const { runCli, CLI_DEFS, cliDefs } = await import('../server/clis.js');
-  const dir = tempDir('quorx-cli-');
+  // The long form of the temp folder: CI's is a short 8.3 name (RUNNER~1), and ~ is not a safe CLI argument.
+  const dir = fs.realpathSync.native(tempDir('quorx-cli-'));
   const fake = path.join(dir, 'fake-cli.mjs').replaceAll('\\', '/');
   fs.writeFileSync(fake, `let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{require('fs').writeFileSync('index.html','<p>'+s.length+'</p>');console.log(JSON.stringify({result:'Built it from '+s.split(' ')[0],total_cost_usd:0.0123,num_turns:3,is_error:false}))});`.replace("require('fs')", "(await import('node:fs'))").replace("process.stdin.on('data',d=>s+=d).on('end',()=>{", "process.stdin.on('data',d=>s+=d).on('end',async()=>{"));
   const work = tempDir('quorx-cli-work-');
