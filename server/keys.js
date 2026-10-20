@@ -17,6 +17,16 @@ const BASE = 'https://openrouter.ai';
 
 // The data folder (keys, the app key, chats) and .env belong to this account only. On a second drive Windows lets
 // every signed-in user change new folders, and elsewhere the default lets others read them.
+// Repair for 0.2.5, whose lock-down left every file in data/ with no permission entries (EPERM on projects.json).
+// Runs before anything reads data/: if a file can't be opened, every file goes back to inheriting the folder's
+// entries. The owner may always reset a file's permissions, so this needs no administrator rights.
+(function repairData() {
+  if (process.platform !== 'win32' || !fs.existsSync(DATA)) return;
+  const probe = fs.readdirSync(DATA, { withFileTypes: true }).find((e) => e.isFile());
+  if (!probe) return;
+  try { fs.closeSync(fs.openSync(path.join(DATA, probe.name), 'r')); return; } catch (e) { if (e.code !== 'EPERM' && e.code !== 'EACCES') return; }
+  spawnSync('icacls', [path.join(DATA, '*'), '/reset', '/T', '/C', '/Q'], { windowsHide: true, timeout: 120000 });
+})();
 export function lockDown() {
   const targets = [DATA, path.join(HOME, '.env'), path.join(ROOT, '.env')].filter((p, i, a) => a.indexOf(p) === i && fs.existsSync(p));
   for (const p of targets) {
@@ -24,8 +34,10 @@ export function lockDown() {
       if (process.platform === 'win32') {
         const who = `${process.env.USERDOMAIN ? `${process.env.USERDOMAIN}\\` : ''}${process.env.USERNAME || ''}`;
         if (!process.env.USERNAME) continue;
+        // The folder only: files inside inherit its two entries. (/T rewrote each file with folder-only flags, which
+        // left files with no entries at all.)
         const dir = fs.statSync(p).isDirectory();
-        spawnSync('icacls', [p, '/inheritance:r', '/grant:r', `${who}:${dir ? '(OI)(CI)F' : 'F'}`, '/grant:r', `SYSTEM:${dir ? '(OI)(CI)F' : 'F'}`, ...(dir ? ['/T'] : []), '/Q'], { windowsHide: true, timeout: 20000 });
+        spawnSync('icacls', [p, '/inheritance:r', '/grant:r', `${who}:${dir ? '(OI)(CI)F' : 'F'}`, '/grant:r', `SYSTEM:${dir ? '(OI)(CI)F' : 'F'}`, '/Q'], { windowsHide: true, timeout: 20000 });
       } else fs.chmodSync(p, fs.statSync(p).isDirectory() ? 0o700 : 0o600);
     } catch { /* best effort: QuorX still runs */ }
   }
