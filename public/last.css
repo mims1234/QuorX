@@ -952,6 +952,9 @@ input[type="checkbox"]:disabled { opacity: .45; cursor: not-allowed; }
 /* QuorX: the X is part of the name, so it keeps the same size and weight, sits right against "Quor", takes the accent
    colour, and stays visible on phones (the older themes shrank and hid the second half of "OpenHarness") */
 .brand#brandHome > span { display: inline; margin-left: calc(-1 * var(--brand-gap, 6px)); /* the row's gap is for the status dot */ font: inherit; font-weight: 800; text-transform: none; letter-spacing: inherit; color: var(--ok); }
+/* the logo takes the place of the old status dot */
+.brand#brandHome::before { display: none; }
+.brand#brandHome .brand-logo { flex: none; width: 18px; height: 18px; display: block; }
 .top .brand#brandHome:hover { filter: brightness(1.15); }
 .top .brand#brandHome:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
@@ -2566,3 +2569,9 @@ html body .trace.trace-pane .step .when { width: auto !important; white-space: n
   .pane-tool > #appBar > .bv-cmt { margin-left: auto; }
   .pane-tool > #appBar > .bv-real ~ .bv-cmt { margin-left: 0; }
 }
+
+/* ---------- the QuorX logo (public/brand/): home header, Settings header and the version line ---------- */
+.ld-brand .ld-mark.ld-logo, .ld-hero .ld-mark.ld-logo { background: none; border-radius: 0 !important; object-fit: contain; }
+.st-head-version { display: inline-flex; align-items: center; gap: 5px; }
+.st-head-logo { width: 14px; height: 14px; flex: none; }
+.sb-version:not(:empty)::before { content: ""; display: inline-block; width: 12px; height: 12px; margin-right: 6px; vertical-align: -2px; background: url(brand/quorx-32.png) center / contain no-repeat; }

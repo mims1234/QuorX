@@ -1399,7 +1399,7 @@ function renderLanding(box) {
   G.ldProjPage = Math.min(G.ldProjPage || 0, pages(projects.length) - 1);
   const shownProjects = projects.slice(G.ldProjPage * PAGE, G.ldProjPage * PAGE + PAGE);
   box.innerHTML = `<section class="landing">
-    <header class="ld-brand"><span class="ld-mark" aria-hidden="true">◆</span><h1>Quor<span>X</span></h1><span class="ld-tag">What are we building?</span></header>
+    <header class="ld-brand"><img class="ld-mark ld-logo" src="brand/quorx-64.png" alt=""><h1>Quor<span>X</span></h1><span class="ld-tag">What are we building?</span></header>
     <div class="ld-hrow"><h2 class="ld-h">Projects <small>· pinned first, then latest chats</small></h2>${pager('proj', G.ldProjPage, projects.length, 'projects')}</div>
     <div class="ld-projects">${shownProjects.map((p) => {
       const mine = allRecent.filter((c) => (c.projectId || 'scratch') === p.id), n = mine.length, spent = p.spent || 0;
@@ -3752,7 +3752,7 @@ ${line.length > 110 ? `${line.slice(0, 109)}…` : line}` : ''}`;
   if (window.ohDesktop?.notify) { window.ohDesktop.notify({ title, body: text, chatId: c.id, silent: kind === 'done' }).catch(() => {}); return; }
   if (!('Notification' in window) || Notification.permission !== 'granted') return;
   try {
-    const n = new Notification(title, { body: text, tag: `oh-${c.id}`, silent: kind === 'done' });
+    const n = new Notification(title, { body: text, icon: 'brand/quorx-192.png', tag: `oh-${c.id}`, silent: kind === 'done' });
     n.onclick = () => { window.ohDesktop?.focusWindow?.(); window.focus(); if (!G.panes.includes(c.id)) showChat(c.id); n.close(); };
   } catch { /* some browsers only allow notifications from a service worker */ }
 }

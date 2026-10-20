@@ -1,6 +1,15 @@
 {
   "versions": [
     {
+      "version": "0.2.1",
+      "date": "2026-10-20",
+      "title": "A logo of its own",
+      "items": [
+        { "kind": "new", "text": "QuorX has its own logo, a Q whose tail is an X, in the top bar, on Home, in Settings, by the version and as the tab icon." },
+        { "kind": "improved", "text": "The desktop app uses the logo for its window, taskbar, tray, notifications and installer." }
+      ]
+    },
+    {
       "version": "0.2.0",
       "date": "2026-10-20",
       "title": "Every kind of app, with the safety to match",

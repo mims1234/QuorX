@@ -1,3 +1,5 @@
+<img src="public/brand/quorx-192.png" width="80" alt="QuorX logo">
+
 # QuorX
 
 QuorX is an AI coding agent that runs on your own computer: it works in a project folder you pick, with a real

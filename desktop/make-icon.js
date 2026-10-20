@@ -1,4 +1,4 @@
-// Writes build/icon.png (256×256) for the installer: node make-icon.js
+// Writes build/icon.png (256×256) for the installer from the logo in assets/: node make-icon.js
 const fs = require('node:fs');
 const path = require('node:path');
 const { pngIcon } = require('./icon.js');
