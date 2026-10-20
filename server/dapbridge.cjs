@@ -9,7 +9,12 @@ const { spawn } = require('node:child_process');
 const [port, ...cmd] = process.argv.slice(2);
 // The desktop app runs this file as Node through its own Electron binary; the adapter must not inherit that.
 delete process.env.ELECTRON_RUN_AS_NODE;
-const line = cmd.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(' ');
+// The arguments are joined back into one line for a shell: cmd.exe on Windows, sh elsewhere, where single quotes keep
+// $, quotes and spaces as they are.
+const quote = process.platform === 'win32'
+  ? (a) => (/\s/.test(a) ? `"${a}"` : a)
+  : (a) => (/^[\w@%+=:,./-]+$/.test(a) ? a : `'${a.replace(/'/g, `'\\''`)}'`);
+const line = cmd.map(quote).join(' ');
 if (!Number(port) || !line) { process.stderr.write('usage: dapbridge.cjs <port> <adapter command>\n'); process.exit(2); }
 
 // The adapter starts at once (Flutter's takes a few seconds); its output waits in the pipe until QuorX connects.

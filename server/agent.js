@@ -168,6 +168,13 @@ export function toolSettings(raw = {}, mediaEnabled = true) {
 }
 
 const clip = (s, n) => { s = String(s ?? ''); return s.length > n ? s.slice(0, n) + '…' : s; };
+// Cache-read and cache-write tokens from a call's usage (OpenRouter's prompt_tokens_details, or the provider's own
+// names). read is null when the answer says nothing about caching, so "no cache" and "not reported" stay apart.
+export function cacheTokens(u = {}) {
+  const d = u.prompt_tokens_details || {};
+  const n = (...v) => { for (const x of v) if (Number.isFinite(Number(x)) && x != null) return Number(x); return null; };
+  return { read: n(d.cached_tokens, u.cache_read_input_tokens), write: n(d.cache_write_tokens, u.cache_creation_input_tokens) || 0 };
+}
 const short = (m) => String(m).split('/').pop();
 // Tools that put the agent's text into a file or an artifact, and the note trimming leaves in place of old text (loop.js).
 const WRITES_CONTENT = new Set(['write_file', 'append_file', 'edit_file', 'write_artifact', 'edit_artifact']);
@@ -771,6 +778,11 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
     m.calls++; m.cost += c;
     m.tokensIn = (m.tokensIn || 0) + (u.prompt_tokens || 0); m.tokensOut = (m.tokensOut || 0) + (u.completion_tokens || 0);
     stats.tokensIn += u.prompt_tokens || 0; stats.tokensOut += u.completion_tokens || 0;
+    // Prompt caching, where the provider reports it: the share of tokens in read from the cache shows which models
+    // really cost less over a long reply.
+    const { read, write } = cacheTokens(u);
+    if (read != null) { m.cacheRead = (m.cacheRead || 0) + read; m.cachedIn = (m.cachedIn || 0) + (u.prompt_tokens || 0); stats.cacheRead = (stats.cacheRead || 0) + read; stats.cachedIn = (stats.cachedIn || 0) + (u.prompt_tokens || 0); }
+    if (write) { m.cacheWrite = (m.cacheWrite || 0) + write; stats.cacheWrite = (stats.cacheWrite || 0) + write; }
     const lv = live.get(runId); if (lv) lv.cost = stats.cost;
     // The page shows what this reply has spent so far, after every call (the chat, its header and the sidebar).
     emit({ t: 'spend', cost: +stats.cost.toFixed(6), calls: Object.values(stats.byModel).reduce((n, x) => n + x.calls, 0), tokensIn: stats.tokensIn, tokensOut: stats.tokensOut, byModel: structuredClone(stats.byModel), at: at() });
@@ -1289,7 +1301,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   if (!(run.stop === 'steps' && !req.bench)) dropCheckpoint(runId);
   if (!req.bench && !deps.quiet) recordRun({ ts: new Date().toISOString(), runId, chatId: req.chatId || null, project: projectId, model: setup.model, stop: run.stop, steps: run.steps, tools: run.tools,
     retries: run.retries, trimmed: run.trimmed, questions: run.questions, changed: stats.changed.length, verify: stats.verify ? { ok: stats.verify.ok, problems: stats.verify.problems.length, rounds: stats.verify.rounds, lint: stats.verify.lint || null } : null,
-    cost: +stats.cost.toFixed(6), tokensIn: stats.tokensIn, tokensOut: stats.tokensOut, ms: stats.ms, resumed: !!resumed });
+    cost: +stats.cost.toFixed(6), tokensIn: stats.tokensIn, tokensOut: stats.tokensOut, ...(stats.cachedIn ? { cacheRead: stats.cacheRead, cachedIn: stats.cachedIn } : {}), ms: stats.ms, resumed: !!resumed });
   if (live.has(runId)) live.get(runId).recorded = true;
 
   // ================= loop helpers =================

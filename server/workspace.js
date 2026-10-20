@@ -150,6 +150,11 @@ export function editFile(root, rel, find, replace, all = false) {
 // its braces are not "brackets" here.
 export function checkCommand(cmd, args) {
   const exe = String(cmd || '').trim().toLowerCase().replace(/\.(exe|cmd|bat)$/, '');
+  // A whole command line in `command` ("node hub/server.mjs"): the program is fine, the arguments belong in args.
+  const [first, ...rest] = String(cmd || '').trim().split(/\s+/);
+  if (rest.length && ALLOWED.includes(first.toLowerCase().replace(/\.(exe|cmd|bat)$/, ''))) {
+    throw new Error(`command must be the program alone: use command "${first}" with args ${JSON.stringify([...rest, ...args])}`);
+  }
   if (!ALLOWED.includes(exe)) throw new Error(`"${cmd}" is not allowed. Allowed programs: ${ALLOWED.join(', ')}`);
   for (const a of args) if (BAD.test(String(a).replaceAll('{PORT}', '0'))) throw new Error(`argument "${a}" contains characters that are not allowed (& | < > ^ % \` $ ; quotes, brackets, !)`);
   return exe;

@@ -1,0 +1,94 @@
+# Pull release: takes a bad version back. The version before it becomes the latest release again, so
+# releases/latest/download serves its latest.yml and installed apps stop being offered the bad one; the bad version
+# goes back to being a pre-release, with a warning at the top of its notes. Run it by hand
+# (Actions → Pull release → Run workflow). See docs/RELEASING.md for what it can't undo.
+#
+# Hardening (as in release.yml): no checkout, the inputs reach scripts through env, never inline, and the job waits
+# for the "release" environment's approval before it can change anything.
+name: Pull release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: The bad version, like 0.2.7
+        required: true
+        type: string
+      restore:
+        description: Version to make latest again (empty = the newest full release before the bad one)
+        required: false
+        type: string
+        default: ''
+
+permissions: {}
+
+# One change to which release is latest at a time (shared with promote.yml).
+concurrency:
+  group: release-channel
+  cancel-in-progress: false
+
+jobs:
+  pull:
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write   # edit the releases
+    env:
+      BAD_INPUT: ${{ inputs.version }}
+      RESTORE_INPUT: ${{ inputs.restore }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Find the bad version and the one to restore
+        shell: bash
+        run: |
+          set -euo pipefail
+          semver='^[0-9]+\.[0-9]+\.[0-9]+$'
+          bad="${BAD_INPUT#v}"; bad="${bad//[[:space:]]/}"
+          [[ "$bad" =~ $semver ]] || { echo "::error::The version must look like 1.2.3."; exit 1; }
+          gh release view "v$bad" --json tagName > /dev/null || { echo "::error::There is no release v$bad."; exit 1; }
+          restore="${RESTORE_INPUT#v}"; restore="${restore//[[:space:]]/}"
+          if [ -z "$restore" ]; then
+            # The newest full (not pre-release, not draft) release older than the bad one.
+            # The bad version is added to the list, sorted, and the line just before it is the one to restore.
+            restore=$({ gh release list --limit 100 --exclude-drafts --exclude-pre-releases --json tagName --jq '.[].tagName' \
+              | sed 's/^v//' | grep -E "$semver" || true; echo "$bad"; } | sort -uV | grep -B1 -x "$bad" | head -n 1)
+            [ "$restore" != "$bad" ] || restore=''
+          fi
+          [ -n "$restore" ] || { echo "::error::No earlier full release to restore. Give one in 'restore'."; exit 1; }
+          [[ "$restore" =~ $semver ]] || { echo "::error::The restore version must look like 1.2.3."; exit 1; }
+          [ "$restore" != "$bad" ] || { echo "::error::The restore version is the bad version."; exit 1; }
+          r=$(gh release view "v$restore" --json isDraft,assets --jq '[.isDraft, ([.assets[].name] | index("latest.yml") != null)] | @tsv')
+          [ "$r" = $'false\ttrue' ] || { echo "::error::v$restore is a draft or has no latest.yml."; exit 1; }
+          echo "BAD=$bad" >> "$GITHUB_ENV"
+          echo "RESTORE=$restore" >> "$GITHUB_ENV"
+          echo "Pulling v$bad; v$restore becomes the latest release again."
+
+      - name: Make the earlier version the latest release
+        shell: bash
+        run: |
+          set -euo pipefail
+          # First, so the update feed moves off the bad version before anything else changes.
+          gh release edit "v$RESTORE" --prerelease=false --latest
+          now=$(gh release view --json tagName --jq .tagName)
+          [ "$now" = "v$RESTORE" ] || { echo "::error::The latest release is $now, not v$RESTORE."; exit 1; }
+
+      - name: Mark the bad version as a pre-release, with a warning
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release view "v$BAD" --json body --jq .body > notes.md
+          if ! grep -q '^> \*\*Pulled:\*\*' notes.md; then
+            { printf '> **Pulled:** this version was taken back. Use v%s or a newer version.\n\n' "$RESTORE"; cat notes.md; } > pulled.md
+            gh release edit "v$BAD" --prerelease --latest=false --notes-file pulled.md
+          else
+            gh release edit "v$BAD" --prerelease --latest=false
+          fi
+          now=$(gh release view --json tagName --jq .tagName)
+          [ "$now" = "v$RESTORE" ] || { echo "::error::The latest release is $now, not v$RESTORE."; exit 1; }
+          {
+            echo "v$BAD is pulled (now a pre-release) and v$RESTORE is the latest release."
+            echo
+            echo "Apps that already updated to v$BAD stay on it: ship a fixed, newer version and promote it."
+            echo "If v$BAD went to winget, its manifest stays there until a newer version replaces it."
+          } >> "$GITHUB_STEP_SUMMARY"

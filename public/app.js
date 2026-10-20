@@ -1819,6 +1819,14 @@ function partialSpendQuiet(m) {
   m.stats = { cost, llmCalls: calls, tokensOut, byModel, partial: true, fromSteps: true };
   return true;
 }
+// The share of tokens in that came from the provider's prompt cache. Only calls whose provider reported caching count;
+// null when none did (an unknown, not a 0%).
+const cacheShare = (v) => (v?.cachedIn > 0 ? (v.cacheRead || 0) / v.cachedIn : null);
+function cacheTag(v) {
+  const sh = cacheShare(v);
+  if (sh == null) return '';
+  return `<span class="tok-cache ${sh >= 0.5 ? 'hit' : ''}" title="${esc(`${(v.cacheRead || 0).toLocaleString()} of ${v.cachedIn.toLocaleString()} tokens in were read from the provider's prompt cache${v.cacheWrite ? `; ${v.cacheWrite.toLocaleString()} written to it` : ''}. Cached tokens cost less.`)}">${pct(sh)} cached</span>`;
+}
 // ---------- the end of the Steps pane: what this reply cost (so far, while it runs), by model, and the chat's total ----------
 function traceCostHTML(c, m) {
   const s = m.stats || (m.live && m.liveCost != null ? { cost: m.liveCost, byModel: m.liveByModel || {}, tokensIn: m.liveTokens?.[0], tokensOut: m.liveTokens?.[1], live: true } : null);
@@ -1826,11 +1834,12 @@ function traceCostHTML(c, m) {
   const k = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n || 0));
   const models = Object.entries(s.byModel || {}).sort((a, b) => (b[1].cost || 0) - (a[1].cost || 0));
   const calls = models.reduce((n, [, v]) => n + (v.calls || 0), 0) || s.llmCalls || 0;
+  const sumCache = (list) => list.reduce((a, [, v]) => ({ cacheRead: a.cacheRead + (v.cacheRead || 0), cachedIn: a.cachedIn + (v.cachedIn || 0), cacheWrite: a.cacheWrite + (v.cacheWrite || 0) }), { cacheRead: 0, cachedIn: 0, cacheWrite: 0 });
   const t = chatTotals(c); // every reply in the chat (this one included, live or done) and calls outside replies
-  const rows = models.map(([id, v]) => `<tr><td><span class="tc-model" title="${esc(id)}">${esc(short(id))}</span>${v.role && v.role !== 'writer' ? ` <i>${esc(v.role)}</i>` : ''}</td><td>${v.calls || 0}×</td><td>${v.tokensIn || v.tokensOut ? `<span class="tok-in">${k(v.tokensIn)} in</span> · <span class="tok-out">${k(v.tokensOut)} out</span>` : ''}</td><td class="tc-c">${money(v.cost || 0, 5)}</td></tr>`).join('');
+  const rows = models.map(([id, v]) => `<tr><td><span class="tc-model" title="${esc(id)}">${esc(short(id))}</span>${v.role && v.role !== 'writer' ? ` <i>${esc(v.role)}</i>` : ''}</td><td>${v.calls || 0}×</td><td>${v.tokensIn || v.tokensOut ? `<span class="tok-in">${k(v.tokensIn)} in</span> · <span class="tok-out">${k(v.tokensOut)} out</span>` : ''}</td><td class="tc-cache">${cacheTag(v)}</td><td class="tc-c">${money(v.cost || 0, 5)}</td></tr>`).join('');
   return `<div class="trace-cost">
     <div class="tc-head"><span>💲 ${s.live ? 'Spent so far' : s.partial ? 'This reply spent (it ended early)' : 'This reply cost'}</span><b>${money(s.cost || 0, 5)}</b></div>
-    <div class="tc-sub">${calls} model call${calls === 1 ? '' : 's'}${s.tokensIn ? ` · <span class="tok-in">${k(s.tokensIn)} tokens in</span>` : ''}${s.tokensOut ? ` · <span class="tok-out">${k(s.tokensOut)} tokens out</span>` : ''}${s.ms ? ` · ${secs(s.ms)}` : ''}${s.mediaSpent ? ` · media ${money(s.mediaSpent, 4)}` : ''}</div>
+    <div class="tc-sub">${calls} model call${calls === 1 ? '' : 's'}${s.tokensIn ? ` · <span class="tok-in">${k(s.tokensIn)} tokens in</span>` : ''}${s.tokensOut ? ` · <span class="tok-out">${k(s.tokensOut)} tokens out</span>` : ''}${cacheShare(sumCache(models)) != null ? ` · ${cacheTag(sumCache(models))}` : ''}${s.ms ? ` · ${secs(s.ms)}` : ''}${s.mediaSpent ? ` · media ${money(s.mediaSpent, 4)}` : ''}</div>
     ${rows ? `<table class="tc-table"><tbody>${rows}</tbody></table>` : ''}
     <div class="tc-chat"><span>Whole chat so far · ${t.replies} repl${t.replies === 1 ? 'y' : 'ies'}${t.msgs ? ` · ${t.msgs} message${t.msgs === 1 ? '' : 's'}` : ''}</span><b>${money(t.cost, 4)}</b></div>
   </div>`;
@@ -2395,8 +2404,9 @@ const USAGE_KIND = {
 };
 function chatUsage(c) {
   const rows = new Map(), add = (kind, model, v) => {
-    const k = `${kind}|${model}`, r = rows.get(k) || { kind, model, calls: 0, cost: 0, tokensIn: 0, tokensOut: 0 };
-    r.calls += v.calls || 0; r.cost += v.cost || 0; r.tokensIn += v.tokensIn || 0; r.tokensOut += v.tokensOut || 0; rows.set(k, r);
+    const k = `${kind}|${model}`, r = rows.get(k) || { kind, model, calls: 0, cost: 0, tokensIn: 0, tokensOut: 0, cacheRead: 0, cachedIn: 0, cacheWrite: 0 };
+    r.calls += v.calls || 0; r.cost += v.cost || 0; r.tokensIn += v.tokensIn || 0; r.tokensOut += v.tokensOut || 0;
+    r.cacheRead += v.cacheRead || 0; r.cachedIn += v.cachedIn || 0; r.cacheWrite += v.cacheWrite || 0; rows.set(k, r);
   };
   let replies = 0;
   for (const m of c.agent.messages) {
@@ -2418,7 +2428,7 @@ function usageHTML(u, at) {
     ${u.rows.length ? kinds.map((k) => {
       const rs = u.rows.filter((r) => r.kind === k), sub = rs.reduce((n, r) => n + r.cost, 0), [ico, name] = USAGE_KIND[k] || ['•', k];
       return `<div class="uc-kind"><div class="uc-kind-h"><span>${ico} ${esc(name)}</span><b>${money(sub, 4)}</b></div>
-        ${rs.map((r) => `<div class="uc-row"><span class="uc-model" title="${esc(r.model)}">${esc(short(r.model))}</span><span class="uc-calls">${r.calls}×${r.tokensIn || r.tokensOut ? ` · ${tok(r.tokensIn)} in / ${tok(r.tokensOut)} out` : ''}</span><span class="uc-cost">${money(r.cost, 5)}</span><span class="uc-bar"><i style="width:${pct(r.cost)}%"></i></span></div>`).join('')}</div>`;
+        ${rs.map((r) => `<div class="uc-row"><span class="uc-model" title="${esc(r.model)}">${esc(short(r.model))}</span><span class="uc-calls">${r.calls}×${r.tokensIn || r.tokensOut ? ` · ${tok(r.tokensIn)} in / ${tok(r.tokensOut)} out` : ''}</span><span class="uc-cache">${cacheTag(r)}</span><span class="uc-cost">${money(r.cost, 5)}</span><span class="uc-bar"><i style="width:${pct(r.cost)}%"></i></span></div>`).join('')}</div>`;
     }).join('') : '<p class="uc-empty">Nothing spent in this chat yet.</p>'}
     <div class="uc-foot">Only you see this. It is never sent to the agent.</div>
   </div>`;
@@ -3016,7 +3026,8 @@ function updateMsg(c, m, { bodyOnly = false } = {}) {
   $('.foot', el).before(undoRow);
   undoRow.innerHTML = s ? s.changed?.length ? (m.undone ? `<span class="undone undo-undone">↶ ${m.undone === 'partial' ? 'changes undone, except files changed since' : 'changes undone'}</span>` : undoGone(c, m) ? `<span class="undo-gone" title="Undo is kept for the newest ${Number(G.settings?.undoKeep) || 10} replies in a project, for up to ${Number(G.settings?.undoDays) || 7} days (⚙ Settings → Code & servers). Older undo copies are removed.">↶ undo no longer kept</span>` : `<button type="button" class="undo undo-btn" title="Put back the files this reply changed: ${esc(s.changed.filter((f) => !m.undoneFiles?.includes(f)).join(', '))}">↶ Undo changes (${s.changed.length - (m.undoneFiles?.length || 0)})</button>`) : '' : '';
   undoRow.hidden = !undoRow.innerHTML;
-  $('.foot', el).innerHTML = !s && m.resumable && !m.live ? '<button type="button" class="resume-btn primary" title="Carry on from the last finished step">▶ Resume where it stopped</button>'
+  // A reply cut off by a restart may carry partial stats (what it spent before the cut): it can still be resumed.
+  $('.foot', el).innerHTML = (!s || s.partial) && m.resumable && !m.live ? '<button type="button" class="resume-btn primary" title="Carry on from the last finished step">▶ Resume where it stopped</button>'
     : !s && m.live && m.liveCost != null ? liveFootHTML(m)
     : s ? `<span class="f-cost" title="What the reply cost">${money(s.cost, 5)}</span>${s.ms ? `<span class="f-dur" title="How long the reply took">${secs(s.ms)}</span>` : ''}${checkTag}${stopTag}` : '';
   // A reply you stopped says so in one small tag down here, not in a box above.
@@ -3458,7 +3469,8 @@ function traceHTML(m) {
     else if (e.t === 'checks' && e.kind === 'page') { const bad = e.rows.filter((r) => r.fail); row(e.at, `🔎 <b>Harness checks</b> on ${esc(e.target)} (${e.when === 'verify' ? 'before the final reply' : 'after the preview'}) · ${bad.length ? `<span class="warn">${bad.length} problem${bad.length > 1 ? 's' : ''}</span>` : `${e.rows.length} passed`}<div class="sub">${e.rows.map((r) => `<span class="chk ${r.fail ? 'miss' : 'ok'}" title="${r.p == null ? 'no answer' : `${Math.round(r.p * 100)}% fine`}">${r.fail ? '✗' : '✓'} ${esc(r.fail ? r.label : r.id)}</span>`).join(' ')}</div>${e.clicked ? `<div class="sub">clicked “${esc(e.clicked)}” to see whether it responds</div>` : ''}${e.image ? `<img class="shot" src="${e.image}" alt="what the checks saw" loading="lazy">` : ''}${e.after ? `<img class="shot" src="${e.after}" alt="after the click" loading="lazy">` : ''}`, bad.length ? 'warn' : 'ok'); }
     else if (e.t === 'budget_ask') row(e.at, `💵 The project budget is used up (${money(e.spent, 3)} of ${money(e.budget, 2)}); asked you to raise it or wrap up`, 'ask');
     else if (e.t === 'budget_done') row(e.at, e.raised ? `✅ Budget raised to ${e.budget == null ? 'no limit' : money(e.budget, 2)}; carrying on` : '⛔ Wrapped up at the budget', e.raised ? 'ok' : 'warn');
-    else if (e.t === 'interrupted') row(e.at || 0, `<span class="warn">⚠ The harness restarted while this reply was running${e.resumable ? '. It can be resumed.' : '.'}</span>`, 'warn');
+    else if (e.t === 'resumed') row(e.at || 0, '<span class="warn">▶ Resumed from the last finished step</span>', 'warn');
+    else if (e.t === 'interrupted') row(e.at || 0,`<span class="warn">⚠ The harness restarted while this reply was running${e.resumable ? '. It can be resumed.' : '.'}</span>`, 'warn');
   }
   if (mediaStatus && m.live) row(mediaStatus.at, `⏳ ${esc(mediaStatus.tool)}: ${esc(mediaStatus.status)} · ${secs(mediaStatus.ms)}`, 'tool');
   return out.map((h) => h.replace(/<span data-round="(\d+)"><\/span>/, (_, r) => decideCard(rounds[r]))).join('');
@@ -3894,11 +3906,21 @@ async function runChat(c, text, ctx, imgs, { resumeOf, docs = [], more = 0, mode
   const a = c.agent;
   // After a compaction only the turns since the summary are sent, together with the summary.
   const history = a.messages.filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.error && (!a.summaryAt || (m.at || 0) >= a.summaryAt)).map((m) => ({ role: m.role, at: m.at, content: m.role === 'assistant' ? `${m.content}${m.note || ''}` : `${m.cmts?.length ? `[pointed at on the page: ${m.cmts.map((x) => `${x.tag} "${x.text}" (${x.selector})${x.note ? `: ${x.note}` : ''}`).join('; ')}] ` : ''}${m.ctx?.length ? `[attached context: ${m.ctx.join(', ')}] ` : ''}${m.docs?.length ? `[attached files: ${m.docs.map((d) => d.name).join(', ')}; read them with read_doc / search_docs] ` : ''}${m.content}` }));
-  const m = { role: 'assistant', content: '', at: Date.now(), trace: [], approvals: {}, questions: {}, arts: [], runId: `r${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, live: true, runActive: true };
+  const runId = `r${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  // Resuming after a restart carries on in the reply that was cut off (its steps so far stay above the new ones);
+  // "Keep going" after running out of steps is a reply of its own.
+  const cut = resumeOf && !more ? a.messages.find((x) => x.role === 'assistant' && x.runId === resumeOf) : null;
+  const m = cut || { role: 'assistant', content: '', at: Date.now(), trace: [], approvals: {}, questions: {}, arts: [], runId, live: true, runActive: true };
+  if (cut) {
+    Object.assign(m, { runId, live: true, runActive: true, resumedFrom: [...(m.resumedFrom || []), resumeOf], error: undefined, resumable: false });
+    if (m.stats?.partial) delete m.stats; // the resumed run's totals include what the cut-off part spent
+    m.trace.push({ t: 'resumed', from: resumeOf, at: (m.trace.at(-1)?.at || 0) });
+  }
   const user = resumeOf ? null : { role: 'user', content: text, at: Date.now(), ...(cmts.length ? { cmts: cmts.map(({ crop, ...x }) => x) } : {}), ...(ctx ? { ctx: ctx.titles } : {}), ...(imgs.length ? { imgs: imgs.map((x) => x.thumb), imgViews: imgs.map((x) => x.view || x.full) } : {}), ...(docs.length ? { docs: docs.map(({ id, name, kind, size, status, rel }) => ({ rel, id, name, kind, size, status })) } : {}) };
-  a.messages.push(...(user ? [user] : []), m);
+  if (!cut) a.messages.push(...(user ? [user] : []), m);
   const box = c.el && G.panes.includes(c.id) ? $('.msgs', c.el.root) : null;
-  if (box) { if (box.querySelector('.hint')) box.innerHTML = ''; if (user) box.appendChild(renderMsg(c, user)); box.appendChild(renderMsg(c, m)); c.follow = true; c.toEnd?.(); }
+  if (box && cut) { updateMsg(c, m); c.follow = true; c.toEnd?.(); }
+  else if (box) { if (box.querySelector('.hint')) box.innerHTML = ''; if (user) box.appendChild(renderMsg(c, user)); box.appendChild(renderMsg(c, m)); c.follow = true; c.toEnd?.(); }
   const artifacts = Object.fromEntries(Object.entries(a.artifacts).map(([id, x]) => [id, x.kind === 'html' ? { kind: 'html', title: x.title, html: x.html, v: 1 } : x.kind === 'md' ? { kind: 'md', title: x.title, md: x.md || '', v: 1 } : { kind: x.kind, title: x.title, url: x.url?.startsWith('data:') ? undefined : x.url, v: 1 }]));
   const settings = { ...G.settings, approval: c.approval, tools: chatTools(c), ...qualitySettings(c) };
   const body = resumeOf ? { runId: m.runId, chatId: c.id, resume: resumeOf, settings, allowed: a.allowed, cmdRules: a.cmdRules || [], reading: a.reading?.text || '', ...(more ? { continue: more, ...(model ? { model } : {}) } : {}) }
@@ -3910,14 +3932,18 @@ async function runChat(c, text, ctx, imgs, { resumeOf, docs = [], more = 0, mode
 // After a page reload: replies that were still running pick up again (everything so far is
 // replayed), finished ones get their result, and ones a harness restart cut off offer ▶ Resume.
 const following = new Set(); // replies this page is following now (never twice)
+// A reply that ended with nothing saved (no text, totals or error): its result is still in the run's log.
+const lostResult = (m) => m.role === 'assistant' && m.runId && !m.runActive && !m.live && !m.content && !m.stats && !m.error;
 async function reattachRuns(c) {
   for (const m of c.agent.messages) {
-    if (m.role !== 'assistant' || !m.runActive || c.running || following.has(m.runId)) continue;
+    const lost = lostResult(m);
+    if (m.role !== 'assistant' || !(m.runActive || lost) || c.running || following.has(m.runId)) continue;
     following.add(m.runId);
     const st = await fetch(`/api/runs/${m.runId}`).then((r) => r.json()).catch(() => ({ status: 'unknown' }));
-    if (st.status === 'unknown') { following.delete(m.runId); m.runActive = false; m.error ||= 'This reply was interrupted.'; saveChat(c); continue; }
-    // Another QuorX on the same data folder is running it right now: leave it be (it saves its own result).
-    if (st.status === 'elsewhere') { following.delete(m.runId); continue; }
+    if (st.status === 'unknown') { following.delete(m.runId); if (lost) continue; m.runActive = false; m.error ||= 'This reply was interrupted.'; saveChat(c); continue; }
+    // Another QuorX on the same data folder is running it right now: leave it be (it saves its own result), and
+    // look again later in case that QuorX stops.
+    if (st.status === 'elsewhere') { following.delete(m.runId); setTimeout(() => { if (G.open.get(c.id) === c) reattachRuns(c); }, 30e3); continue; }
     // Interrupted by a restart: offer Resume instead of replaying its whole log (it never ends, so it looped).
     // A reply that is running, or that finished while no one watched, is replayed to its end as before.
     if (st.status === 'interrupted') {
@@ -3927,7 +3953,12 @@ async function reattachRuns(c) {
       syncRunState(c); saveChat(c); continue;
     }
     // A replay starts from the first event, so the thinking starts empty too (it used to be appended again).
-    Object.assign(m, { content: '', trace: [], approvals: {}, questions: {}, thinking: {}, error: undefined, live: true });
+    // A resumed reply keeps the steps from before the restart: the log replayed is only the resumed part's.
+    const mark = m.resumedFrom?.length ? m.trace.findLastIndex((e) => e.t === 'resumed') : -1;
+    const kept = mark >= 0 ? m.trace.slice(0, mark + 1) : [];
+    const keptSteps = new Set(kept.filter((e) => e.t === 'llm_start').map((e) => String(e.step)));
+    const thinking = Object.fromEntries(Object.entries(m.thinking || {}).filter(([k]) => keptSteps.has(k)));
+    Object.assign(m, { content: '', trace: kept, approvals: mark >= 0 ? m.approvals || {} : {}, questions: mark >= 0 ? m.questions || {} : {}, thinking, error: undefined, live: true, runActive: true });
     if (m.el) updateMsg(c, m);
     followRun(c, m, (signal) => fetch(`/api/runs/${m.runId}/events`, { signal }));
   }
