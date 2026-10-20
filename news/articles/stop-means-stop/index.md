@@ -1,13 +1,13 @@
 ---
 title: Stop means stop
 date: 2026-10-20
-summary: When you press Stop, everything the agent's command started should end, including programs that slipped away from their parent. How QuorX does that with Windows Job Objects and process groups, what the tripwire adds, and where the Running tab fits.
+summary: When Stop is pressed, everything the agent's command started should end, including programs that slipped away from their parent. How QuorX does that with Windows Job Objects and process groups, what the tripwire adds, and where the Running tab fits.
 tags: safety, platforms, tests
 ---
 
 A coding agent with a real shell starts real programs. `cargo build` starts `rustc`. `npm run dev` starts a server and a file watcher. An installer starts another installer. Some of those programs start more programs and then exit, leaving their children running with no parent.
 
-When you press Stop, you mean all of it. This article is about how QuorX keeps that promise, where it can't, and how you can see what is still running.
+When someone presses Stop, they mean all of it. This article is about how QuorX keeps that promise, where it can't, and how to see what is still running.
 
 ## The problem with process trees
 
@@ -37,7 +37,7 @@ QuorX runs one long-lived helper (`server/jobhost.ps1`), a PowerShell process th
 Two more things come with jobs:
 
 - **Leftovers are ended too.** When a command finishes normally but something it started is still running (a `start /b` child, a daemon), QuorX ends it and names it in the result, so the agent knows.
-- **If QuorX dies, everything dies with it.** The jobs are created with `KILL_ON_JOB_CLOSE`. If QuorX or its helper crashes, Windows closes their handles and ends every job, so no orphaned agent process keeps running on your PC.
+- **If QuorX dies, everything dies with it.** The jobs are created with `KILL_ON_JOB_CLOSE`. If QuorX or its helper crashes, Windows closes their handles and ends every job, so no orphaned agent process keeps running on the PC.
 
 If the helper can't start (a policy that blocks loading the C# class, for example), commands still run, and Stop falls back to the process tree. ⚙ Settings → Safety & commands says which mode is on: "Job Objects: every process, confirmed" or basic mode.
 
@@ -53,7 +53,7 @@ Here is what each method catches:
 { "src": "methods.json" }
 ```
 
-"Logic tested" is honest about where this was built: on Windows. `scripts/test-posix.mjs` runs the process-group logic on Windows against simulated process lists (SIGTERM, the grace time, a daemon that left, a reused pid), and 10 of its tests need a real Mac or Linux machine to run. If you have one, `npm test` there runs them.
+"Logic tested" is honest about where this was built: on Windows. `scripts/test-posix.mjs` runs the process-group logic on Windows against simulated process lists (SIGTERM, the grace time, a daemon that left, a reused pid), and 10 of its tests need a real Mac or Linux machine to run. On one of those, `npm test` runs them.
 
 ## A stopped command, step by step
 
@@ -72,34 +72,34 @@ QuorX's test suite stops a command that hides a detached child, the case process
 }
 ```
 
-That last check has a flaw we found the hard way: it counts every `ping` on the computer. When several copies of QuorX's test suite ran on the same PC at the same time, their pings got counted together, and this test failed now and then for reasons that had nothing to do with Stop. The job's own count, "0 left", always passed. The fix is for the test to count only its own job; until then, run it alone when it fails.
+That last check has a flaw we found the hard way: it counts every `ping` on the computer. When several copies of QuorX's test suite ran on the same PC at the same time, their pings got counted together, and this test failed now and then for reasons that had nothing to do with Stop. The job's own count, "0 left", always passed. The fix is for the test to count only its own job; until then, it is run alone when it fails.
 
 ## The tripwire
 
-Stop handles what you can see. The tripwire handles damage you might not notice in time. The rule engine judges commands before they run, but it can't see what a project's own code does: a build script that deletes the wrong folder, or a bug in the program the agent just wrote.
+Stop handles what the user can see. The tripwire handles damage that might not be noticed in time. The rule engine judges commands before they run, but it can't see what a project's own code does: a build script that deletes the wrong folder, or a bug in the program the agent just wrote.
 
-While an agent command runs, QuorX watches the places a runaway delete would hurt most: your profile (without busy folders like AppData), the folder around the project, and the project's `.git`. If 25 files vanish there within 3 seconds, it stops that command's job and shows what it saw, with a pointer to the Recycle Bin and Previous Versions. Both numbers are in ⚙ Settings → Safety & commands.
+While an agent command runs, QuorX watches the places a runaway delete would hurt most: the user profile (without busy folders like AppData), the folder around the project, and the project's `.git`. If 25 files vanish there within 3 seconds, it stops that command's job and shows what it saw, with a pointer to the Recycle Bin and Previous Versions. Both numbers are in ⚙ Settings → Safety & commands.
 
-It fired once for the wrong reason, and that taught us something. On 20 October at 00:55 IST, during a UI test, the agent ran `rustup target add x86_64-pc-windows-gnu`. rustup unpacked the new target into a temp folder in your profile and deleted 25 files there within 3 seconds, which tripped the wire. Those files were rustup's own, made seconds earlier. The tripwire now ignores files a command created after the watch started. A folder you already had, moved and then deleted, still trips it, because a move keeps the folder's creation time.
+It fired once for the wrong reason, and that taught us something. On 20 October at 00:55 IST, during a UI test, the agent ran `rustup target add x86_64-pc-windows-gnu`. rustup unpacked the new target into a temp folder in the user profile and deleted 25 files there within 3 seconds, which tripped the wire. Those files were rustup's own, made seconds earlier. The tripwire now ignores files a command created after the watch started. A folder that already existed, moved and then deleted, still trips it, because a move keeps the folder's creation time.
 
 ```callout
-{ "tone": "warn", "title": "What the tripwire is not", "text": "It reacts after the fact, to what the system's change notifications report. It stops a mass delete after about 25 files instead of letting it run to the end. It does not block a single deleted file, and on Linux it watches your home folder only one level deep, because each folder there needs a watch of its own." }
+{ "tone": "warn", "title": "What the tripwire is not", "text": "It reacts after the fact, to what the system's change notifications report. It stops a mass delete after about 25 files instead of letting it run to the end. It does not block a single deleted file, and on Linux it watches the home folder only one level deep, because each folder there needs a watch of its own." }
 ```
 
 ## The Running tab
 
-All of this is only useful if you can see what is running. PR #2 added a **Running** tab next to Files. It lists, grouped:
+All of this is only useful if the user can see what is running. PR #2 added a **Running** tab next to Files. It lists, grouped:
 
 - commands that moved to the background;
 - commands running now;
 - the agent's own terminals (prompts, menus, interactive programs);
 - dev servers;
-- your own terminal tabs.
+- the user's own terminal tabs.
 
-Each row says who started it (the agent, from which chat, or you), how long it has run, and its last lines of output. Each has **■ Stop**, which ends it and everything it started, through the same job. **■ Stop all** asks first, then stops everything except your terminal tabs. If you stop something the agent started while its reply is still working, the agent is told before its next step and carries on without it.
+Each row says who started it (the agent, from which chat, or the user), how long it has run, and its last lines of output. Each has **■ Stop**, which ends it and everything it started, through the same job. **■ Stop all** asks first, then stops everything except the user's terminal tabs. If the user stops something the agent started while its reply is still working, the agent is told before its next step and carries on without it.
 
-The same PR changed what happens at the time limit. A command that outlives the wait now moves to the background instead of being killed, so a long build or install isn't thrown away halfway. It keeps its job and its tripwire, and it shows up in the Running tab where you can stop it.
+The same PR changed what happens at the time limit. A command that outlives the wait now moves to the background instead of being killed, so a long build or install isn't thrown away halfway. It keeps its job and its tripwire, and it shows up in the Running tab, where it can be stopped.
 
-## What to expect when you press Stop
+## What to expect from Stop
 
-On Windows with the job helper running, Stop ends every process the command started and tells you how many are left, normally 0. If something refuses to end in 5 seconds, the row names it. On macOS and Linux the same promise holds through process groups, built and checked by logic on Windows and waiting for testers on real machines. In basic mode, the row tells you that detached processes may survive, so you know to check.
+On Windows with the job helper running, Stop ends every process the command started and says how many are left, normally 0. If something refuses to end in 5 seconds, the row names it. On macOS and Linux the same promise holds through process groups, built and checked by logic on Windows and waiting for testers on real machines. In basic mode, the row says that detached processes may survive, so there is a reason to check.

@@ -81,7 +81,7 @@ for what happened in it.
 ```lanes
 { "start": "10:00", "end": "10:15", "rows": [
   { "label": "Toolchain check", "build": ["10:00", "10:01"], "detail": "Rust compiles here, but there is no linker, so the agent asks before writing anything." },
-  { "label": "Install a linker", "build": ["10:01", "10:05"], "review": ["10:05", "10:06"], "detail": "You pick the GNU toolchain for this folder; it installs in the background and shows in the Running tab." },
+  { "label": "Install a linker", "build": ["10:01", "10:05"], "review": ["10:05", "10:06"], "detail": "The user picks the GNU toolchain for this folder; it installs in the background and shows in the Running tab." },
   { "label": "Write the program", "build": ["10:06", "10:09"], "review": ["10:09", "10:11"], "back": 1, "detail": "The compiler check sends it back once for an error in a changed file." },
   { "label": "Tests", "build": ["10:11", "10:12"], "review": ["10:12", "10:13"] },
   { "label": "Run it", "build": ["10:13", "10:14"], "detail": "The agent runs the program on its own files and reads the output." }
@@ -94,7 +94,7 @@ for what happened in it.
 { "nodes": [
   { "id": "cmd", "title": "Agent command", "sub": "any program", "new": true, "cap": "The agent runs a command through the shell tool." },
   { "id": "rules", "title": "Rule engine", "sub": "parsed and classed", "new": true, "cap": "Each part of the command gets a class and the real paths it touches." },
-  { "id": "card", "title": "Your card", "sub": "or the deciders", "cap": "You decide in Strict; the deciders vote in YOLO." },
+  { "id": "card", "title": "The approval card", "sub": "or the deciders", "cap": "The user decides in Strict; the deciders vote in YOLO." },
   { "id": "snap", "title": "Snapshot", "sub": "Undo covers it", "new": true, "cap": "The project is copied first, so Undo can put back what the command changes." },
   { "id": "job", "title": "Windows job", "sub": "Stop ends it all", "cap": "Everything it starts lives in one job; Stop ends all of it." },
   { "id": "checks", "title": "Pack checks", "sub": "compile what changed", "cap": "Before the final reply, the packs compile what changed." },
@@ -107,13 +107,13 @@ for what happened in it.
   { "label": "Before", "steps": [
     { "title": "Only a short list of programs may run", "text": "cargo is not on it", "bad": true },
     { "title": "It writes the whole crate, then builds", "text": "the build fails: no linker", "bad": true },
-    { "title": "You install the linker yourself", "text": "outside QuorX" }
+    { "title": "The user installs the linker", "text": "outside QuorX" }
   ], "verdict": { "title": "It got there, the long way", "text": "The missing linker was found only after everything was written." } },
   { "label": "After", "steps": [
     { "title": "QuorX checks the toolchain first", "text": "Rust is here, the linker is not" },
-    { "title": "The agent offers three ways on", "text": "you pick one; the install runs in the background" },
+    { "title": "The agent offers three ways on", "text": "the user picks one; the install runs in the background" },
     { "title": "Checks, tests, then the real program", "text": "cargo check before the reply" }
-  ], "verdict": { "title": "Straight there, with you in charge", "text": "The agent knows what this computer can build before it writes a line." } }
+  ], "verdict": { "title": "Straight there, with the user in charge", "text": "The agent knows what this computer can build before it writes a line." } }
 ] }
 ```
 
@@ -121,7 +121,7 @@ for what happened in it.
 
 ```matrix
 { "levels": [{ "id": "proven", "label": "Proven" }, { "id": "tested", "label": "Tested" }, { "id": "wired", "label": "Logic tested" }, { "id": "next", "label": "Not yet" }],
-  "columns": ["What you can build", "Evidence"],
+  "columns": ["What can be built", "Evidence"],
   "rows": [
     { "level": "proven", "cells": ["Websites, web apps, canvas games", "Opened and checked in a browser before each reply"] },
     { "level": "proven", "cells": ["Rust command-line programs", "wc-lite built in a real chat for $0.039"] },
@@ -134,7 +134,7 @@ for what happened in it.
 
 ```ledger
 { "rows": [
-  { "gain": "Any toolchain, not six programs", "gainText": "The agent runs cargo, dotnet or gradle directly, and you see the real command.", "cost": "More cards to answer", "costText": "Builds ask in Strict until a rule allows them.", "mitigation": "\"Always allow\" on the card, or the deciders in YOLO." },
+  { "gain": "Any toolchain, not six programs", "gainText": "The agent runs cargo, dotnet or gradle directly, and the card shows the real command.", "cost": "More cards to answer", "costText": "Builds ask in Strict until a rule allows them.", "mitigation": "\"Always allow\" on the card, or the deciders in YOLO." },
   { "gain": "Long work is never cut off", "gainText": "Builds and installs keep going in the background.", "cost": "A forgotten command keeps using the computer", "costText": "Nothing ends it on a timer any more.", "mitigation": "The Running tab lists each one with Stop." }
 ] }
 ```
@@ -160,7 +160,7 @@ for what happened in it.
 { "tone": "good", "title": "Good news", "text": "Something that worked." }
 ```
 
-## Your own numbers
+## On this computer
 
 These come from this computer's own logs and never leave it. With no logs yet, each one says what will show.
 

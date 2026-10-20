@@ -223,7 +223,7 @@ setSection('tests', 'Pack self-tests', testsData.packMatrix ? [
   '',
   block('chart', { src: 'tests.json', path: 'packsChart' }),
 ].join('\n') : [
-  block('callout', { tone: 'info', title: 'No pack test run published yet', text: 'Run npm run test:packs, then node scripts/news-data.mjs, to publish which packs passed on your computer.' }),
+  block('callout', { tone: 'info', title: 'No pack test run published yet', text: 'Run npm run test:packs, then node scripts/news-data.mjs, to publish which packs passed on that computer.' }),
   '',
   block('chart', { src: 'tests.json', path: 'packsChart' }),
 ].join('\n'));

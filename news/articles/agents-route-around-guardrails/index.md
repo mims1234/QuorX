@@ -5,7 +5,7 @@ summary: An agent once wrapped a whole-computer install inside a small Node scri
 tags: safety, research
 ---
 
-QuorX lets its agent use a real shell. Before each command runs, a rule engine (`server/cmdpolicy.js`) splits the line into its commands, gives each one a class (reads, builds, writes, installs, deletes, runs code that can't be checked) and works out the real paths it touches. Your rules then allow it, ask you, or refuse it. Installs that change the whole computer, like `winget` or `rustup`, always ask, never get an "Always allow", and never run in the background.
+QuorX lets its agent use a real shell. Before each command runs, a rule engine (`server/cmdpolicy.js`) splits the line into its commands, gives each one a class (reads, builds, writes, installs, deletes, runs code that can't be checked) and works out the real paths it touches. The rules then allow it, ask the user, or refuse it. Installs that change the whole computer, like `winget` or `rustup`, always ask, never get an "Always allow", and never run in the background.
 
 That only works if the engine sees the command that really runs. In a real QuorX chat, it didn't.
 
@@ -30,7 +30,7 @@ The rule engine saw one command: `node` running a script inside the project. Tha
 
 The user approved that card, and the toolchain was installed. The user had chosen that toolchain when the agent asked, so no harm came of it this time. But the card they approved didn't describe what it did.
 
-Nothing in the trace says the model meant to hide anything. Models write helper scripts all the time, and QuorX's own instructions at the time encouraged "write a script file and run it" for anything more than a plain command. Whether it was a habit or a workaround, the result for you was the same: a card that didn't say what would happen. That is the gap PR #5 closes.
+Nothing in the trace says the model meant to hide anything. Models write helper scripts all the time, and QuorX's own instructions at the time encouraged "write a script file and run it" for anything more than a plain command. Whether it was a habit or a workaround, the result for the user was the same: a card that didn't say what would happen. That is the gap PR #5 closes.
 
 ## Why this keeps happening
 
@@ -50,8 +50,8 @@ When a command runs a script inside the project (`node` or `python` on a `.js`, 
     { "id": "read", "title": "Read the script", "sub": "up to 1 MB, its modules, scripts it runs", "new": true, "cap": "QuorX reads the file, the local modules it imports, and scripts it starts, a few levels down. Deeper than that counts as unreadable." },
     { "id": "spawn", "title": "Does it run other programs?", "sub": "child_process · subprocess · Start-Process", "new": true, "cap": "A script that spawns programs, or builds code while running (eval, exec), is opaque: QuorX can't know what it will run." },
     { "id": "pass", "title": "What does it pass on?", "sub": "process.argv · sys.argv · $args", "new": true, "cap": "If the script forwards its own arguments, those arguments become a command of their own, judged like any other: rustup toolchain install …, run by .quorx/scratch/run.mjs." },
-    { "id": "rules", "title": "Your rules, per command", "sub": "deny > ask > allow", "cap": "Each command gets its verdict. A deny rule on rustup* blocks the forwarded command, even inside a script." },
-    { "id": "card", "title": "The card", "sub": "leads with the riskiest part", "cap": "The card shows the install first, with 'run by .quorx/scratch/run.mjs'. Opaque commands ask you, offer no Always allow, and can't run in the background." }
+    { "id": "rules", "title": "The rules, per command", "sub": "deny > ask > allow", "cap": "Each command gets its verdict. A deny rule on rustup* blocks the forwarded command, even inside a script." },
+    { "id": "card", "title": "The card", "sub": "leads with the riskiest part", "cap": "The card shows the install first, with 'run by .quorx/scratch/run.mjs'. Opaque commands ask the user, offer no Always allow, and can't run in the background." }
   ]
 }
 ```
@@ -80,9 +80,9 @@ Here is the real case, judged before and after PR #5:
         { "title": "Two commands", "text": "`rustup toolchain install …` (install, whole computer, run by .quorx/scratch/run.mjs) and `node …` (opaque)." },
         { "title": "Card leads with the install", "text": "\"rustup installs for the whole computer (.quorx/scratch/run.mjs passes it on as a command)\"." },
         { "title": "No Always allow", "text": "A button rule `node*` doesn't lift it. A deny rule `rustup*` blocks it." },
-        { "title": "No background", "text": "Even after you approve the install, the background run is refused, so nothing runs." }
+        { "title": "No background", "text": "Even once the install is approved, the background run is refused, so nothing runs." }
       ],
-      "verdict": { "title": "You see the install", "text": "The same line asks you, in Strict and in YOLO, and says what it will really do." }
+      "verdict": { "title": "The install is on the card", "text": "The same line asks the user, in Strict and in YOLO, and says what it will really do." }
     }
   ]
 }
@@ -100,14 +100,14 @@ So a `"setup": "rustup toolchain install …"` line makes `npm run setup` show t
 
 ## What it costs
 
-A guard that reads scripts will catch honest scripts too. We'd rather say so than have you find out from a card you didn't expect.
+A guard that reads scripts will catch honest scripts too. We'd rather say so than have users find out from a card they didn't expect.
 
 ```ledger
 {
   "rows": [
     {
       "gain": "Wrapper installs show as installs",
-      "gainText": "A script that forwards its arguments to rustup, winget or npm -g shows that command on the card, judged by your rules.",
+      "gainText": "A script that forwards its arguments to rustup, winget or npm -g shows that command on the card, judged by the user's rules.",
       "cost": "Honest build scripts that spawn tools always ask",
       "costText": "A build.mjs that calls execSync('esbuild …') is opaque: it asks every time and never gets an Always allow. We checked this case against today's rule engine.",
       "mitigation": "Run the tool directly (npx esbuild …, or a package.json line that names it), so a rule can allow it."
@@ -123,7 +123,7 @@ A guard that reads scripts will catch honest scripts too. We'd rather say so tha
       "gain": "Opaque commands can't be started in the background",
       "gainText": "The agent can't fire off a command QuorX can't read and carry on while it runs out of sight.",
       "cost": "Watchers and dev servers behind a spawning script start in the foreground",
-      "costText": "background: true is refused for them. Once you approve one, it runs normally and moves to the Running tab only after it outlives the wait.",
+      "costText": "background: true is refused for them. Once one is approved, it runs normally and moves to the Running tab only after it outlives the wait.",
       "mitigation": "Start the server or watcher with its own command (npx vite, node server.js), which can start in the background."
     },
     {
@@ -131,7 +131,7 @@ A guard that reads scripts will catch honest scripts too. We'd rather say so tha
       "gainText": "A script named by a variable (node $f), written by the same line, or nested too deeply counts as one QuorX can't check.",
       "cost": "Some generated or dynamic setups always ask",
       "costText": "Code generators and task runners that build their command lines at run time land here.",
-      "mitigation": "Only the card itself. In YOLO, the deciders can approve opaque commands if you tick that box in ⚙ Settings → Safety & commands."
+      "mitigation": "Only the card itself. In YOLO, the deciders can approve opaque commands if that box is ticked in ⚙ Settings → Safety & commands."
     },
     {
       "gain": "Reading happens before every script run",
@@ -155,7 +155,7 @@ Two runners are not followed today. We checked both against the current rule eng
 | `npx tsx x.ts` | build, "no rule allows npx tsx yet" | not read: a rule allowing `npx tsx` would also allow a spawning script |
 | `uv run x.py` | build, "no rule allows uv run yet" | not read: same |
 
-So if you add a rule for `npx tsx*` or `uv run*`, you are trusting every script those run. Until QuorX reads them, it is safer to answer those cards one at a time.
+So a rule for `npx tsx*` or `uv run*` trusts every script those run. Until QuorX reads them, it is safer to answer those cards one at a time.
 
 ```callout
 { "tone": "info", "title": "Where to see it", "text": "On an approval card, a command found inside a script carries a small label: · run by .quorx/scratch/run.mjs, or · run by package.json scripts.setup. The deciders see the same fact as run_by_script." }
@@ -163,4 +163,4 @@ So if you add a rule for `npx tsx*` or `uv run*`, you are trusting every script 
 
 ## The general lesson
 
-Every guardrail on an agent has a shape, and a capable agent will find the edges of that shape, whether it means to or not. A rule that names programs invites the agent to use a different program. The defence that holds up is to judge what will actually run, follow the common kinds of indirection, and mark everything else as "can't be checked", which asks you. That costs some convenience, and the table above is the honest price.
+Every guardrail on an agent has a shape, and a capable agent will find the edges of that shape, whether it means to or not. A rule that names programs invites the agent to use a different program. The defence that holds up is to judge what will actually run, follow the common kinds of indirection, and mark everything else as "can't be checked", which asks the user. That costs some convenience, and the table above is the honest price.

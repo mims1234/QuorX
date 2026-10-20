@@ -18,7 +18,7 @@ Two readings follow from that, and QuorX acts on both:
 1. **A debugger helps most when the cheap approach has failed.** Reading the error, opening the file at the line it names and adding a print statement solves most bugs faster and with fewer steps. A debugger session costs many tool calls: start, break, continue, read the state, step, read again.
 2. **A debugger can distract a weaker model.** Given the tool from the start, a model can spend its steps driving the debugger instead of reading the code. QuorX is built to run on cheap models, so this risk matters more here than for a harness that always uses the strongest model.
 
-We have not measured either effect inside QuorX. The gate below is a reasonable reading of outside research, and it is a setting you can change.
+We have not measured either effect inside QuorX. The gate below is a reasonable reading of outside research, and it is a setting that can be changed.
 
 ## The gate
 
@@ -27,7 +27,7 @@ When the agent asks to start or attach the debugger, QuorX checks whether it has
 - two tool calls in this reply came back with an error;
 - QuorX's compiler checks sent the work back to be fixed;
 - the reviewer sent the build back;
-- or you set the debugger to **Always** in ⚙ Settings → Safety & commands.
+- or the debugger is set to **Always** in ⚙ Settings → Safety & commands.
 
 Otherwise the tool answers: *"Not yet: reproduce the bug, read the error's file and line, and add a print or log line to test your guess first. The debugger opens after a couple of failed tries (the user can turn it on for every reply)."*
 
@@ -40,7 +40,7 @@ The setting has three values: **After failed tries** (the default), **Always** a
   "nodes": [
     { "id": "ask", "title": "The agent asks to debug", "sub": "debug start src/main.rs", "cap": "The source file picks the language. For compiled languages the agent can also name the built program." },
     { "id": "gate", "title": "Has it earned it?", "sub": "2 errors · a check or review sent back", "new": true, "cap": "If not, the tool says what to try first. The setting can make the debugger always available, or turn it off." },
-    { "id": "card", "title": "The real command is judged", "sub": "approval card", "cap": "The command the debug session runs (cargo build, dlv dap, the venv's python) goes through the same rules as any shell command. If it needs your approval, you see it." },
+    { "id": "card", "title": "The real command is judged", "sub": "approval card", "cap": "The command the debug session runs (cargo build, dlv dap, the venv's python) goes through the same rules as any shell command. If it needs the user's approval, the user sees it." },
     { "id": "job", "title": "The adapter runs as a job", "sub": "Running tab · Stop ends it", "cap": "The debugger and the program run as one of the agent's background jobs, inside a Windows Job Object (a process group on macOS and Linux). Stop ends both." },
     { "id": "paused", "title": "Paused before the first line", "sub": "Debug Adapter Protocol", "new": true, "cap": "QuorX speaks the Debug Adapter Protocol to whatever adapter the language's pack starts: initialize, launch or attach, then wait." },
     { "id": "break", "title": "Breakpoints, then continue", "sub": "break file:line · continue", "cap": "Breakpoints go in before the program starts. Continue runs to the next one; if the program is waiting for a click, it waits for the breakpoint." },
@@ -51,9 +51,9 @@ The setting has three values: **After failed tries** (the default), **Always** a
 }
 ```
 
-Two details matter for safety and for your attention:
+Two details matter for safety and for the user's attention:
 
-- **The debugger is not a back door.** Starting a session runs a real command: a build, an adapter, the program. That command is judged by the same rule engine as everything else, and the card shows it. When Delve is missing, for example, the agent can offer `go install …dlv@latest`, which installs into your Go folder for every project, so it asks you.
+- **The debugger is not a back door.** Starting a session runs a real command: a build, an adapter, the program. That command is judged by the same rule engine as everything else, and the card shows it. When Delve is missing, for example, the agent can offer `go install …dlv@latest`, which installs into the Go folder for every project, so it asks first.
 - **Debugging stops by itself where a program fails.** Delve stops on an unrecovered panic, LLDB on a crash, and Rust programs on every panic. A crash shows where it happened, even with no breakpoint there.
 
 ## What it covers now
@@ -68,9 +68,9 @@ Counted from `debugLanguages()` in `server/debugger.js` at commit 0174105 (the P
 
 Some of these needed more than plugging in:
 
-- **Java and Kotlin** had no adapter that is easy to install. Microsoft's Java debugger runs only as a plugin inside an Eclipse language server. QuorX ships a small adapter of its own, written against the JDK's debugger interface, which the JDK runs straight from its source file. If you have a JDK, you have the debugger.
+- **Java and Kotlin** had no adapter that is easy to install. Microsoft's Java debugger runs only as a plugin inside an Eclipse language server. QuorX ships a small adapter of its own, written against the JDK's debugger interface, which the JDK runs straight from its source file. Any computer with a JDK has the debugger.
 - **Dart** only speaks the protocol over its own input and output. QuorX runs it behind a small bridge that listens on the session's port, as part of the same job, so Stop still ends it. The same bridge works for `lldb-dap` in that mode.
-- **Electron** is attached to: the agent starts the app with `--inspect` as a background job and attaches to its main process. Stopping the session then only disconnects; the app keeps running until you or the agent stop it.
+- **Electron** is attached to: the agent starts the app with `--inspect` as a background job and attaches to its main process. Stopping the session then only disconnects; the app keeps running until the user or the agent stops it.
 
 ## What is proven, and what isn't
 
@@ -80,7 +80,7 @@ Not every debugger has run against a real toolchain on the Windows PC these test
 { "src": "debuggers.json", "path": "matrix" }
 ```
 
-"Logic tested" means QuorX's side ran for real against a stand-in adapter or recorded output: the launch command, the breakpoints, continue, reading variables, and Stop. It does not prove that the real adapter, at the version you have, behaves the same way. If you have one of those toolchains, `npm run test:packs` runs that pack's self-test on your computer without a key, and the **Pack test report** issue template takes the result.
+"Logic tested" means QuorX's side ran for real against a stand-in adapter or recorded output: the launch command, the breakpoints, continue, reading variables, and Stop. It does not prove that the real adapter, at the version installed, behaves the same way. On a computer with one of those toolchains, `npm run test:packs` runs that pack's self-test without a key, and the **Pack test report** issue template takes the result.
 
 ## Known limits
 
@@ -89,9 +89,9 @@ Not every debugger has run against a real toolchain on the Windows PC these test
 - **The settings label is behind.** In ⚙ Settings → Safety & commands the row is still called "Debugger for Node and Python". The setting applies to every language above.
 
 ```callout
-{ "tone": "info", "title": "If you want the debugger every time", "text": "Set ⚙ Settings → Safety & commands → Debugger to Always. That makes sense with a strong model on a hard bug. With a cheap model, try the default first: the research suggests it can do worse with the debugger from the start, and every debugger step is a model call you pay for." }
+{ "tone": "info", "title": "For the debugger every time", "text": "Set ⚙ Settings → Safety & commands → Debugger to Always. That makes sense with a strong model on a hard bug. With a cheap model, try the default first: the research suggests it can do worse with the debugger from the start, and every debugger step is a paid model call." }
 ```
 
 ## The general point
 
-Giving an agent a tool is not free. Each tool adds to what the model has to choose between, and a powerful tool used too early can cost more steps than it saves. For a debugger, the outside evidence says "late, and for the stronger models". QuorX makes "late" the default, tells the agent what to try first, and leaves the switch with you.
+Giving an agent a tool is not free. Each tool adds to what the model has to choose between, and a powerful tool used too early can cost more steps than it saves. For a debugger, the outside evidence says "late, and for the stronger models". QuorX makes "late" the default, tells the agent what to try first, and leaves the switch with the user.

@@ -491,7 +491,7 @@ async function newsScenario() {
     const shown = (await textOf('#newsView .nb-local table')).replace(/\s+/g, ' ');
     if (!shown.includes(`npm test ${own} 0`)) throw new Error(`the local block shows "${shown}", not this run's ${own} passed`);
     await js(`document.querySelector('#newsView .nb-local').scrollIntoView({ block: 'center' }); return true;`);
-    return `Reports listed: ${slugs.join(', ')}. "${await textOf('#newsView .nw-article h1')}": ${kinds.join(', ')}. Your own results: ${shown}`;
+    return `Reports listed: ${slugs.join(', ')}. "${await textOf('#newsView .nw-article h1')}": ${kinds.join(', ')}. On this computer: ${shown}`;
   });
   await step('Close News: back to Home', async () => {
     await click('#newsView .nw-close');
