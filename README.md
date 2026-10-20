@@ -58,11 +58,18 @@ Then open http://localhost:5188 and sign in with OpenRouter. The full setup is i
   <br><sub>Leave the desktop app running and use QuorX from your phone.</sub>
 </p>
 
-## Use it at your own risk
+## A friendly reminder
 
-QuorX lets an AI agent run real commands on your computer. Its guards make mistakes unlikely, not impossible, and
-they are not a sandbox. Keep backups, use 🔒 Strict (the default) for anything that matters, and read
-[Security](SECURITY.md) before you switch to ⚡ YOLO. The software comes with no warranty, as the licence says.
+QuorX is powerful: its agent runs real commands on your own computer, which is what lets it build and test real
+apps. That deserves a little care, the same as any powerful tool.
+
+- **Start in 🔒 Strict** (the default). You see each command that needs your OK, and you'll quickly get a feel for
+  what the agent does.
+- **Keep your work in git or backed up.** QuorX can undo its own changes, but a second safety net never hurts.
+- **Save ⚡ YOLO for projects you trust**, once you know how QuorX behaves. [Security](SECURITY.md) explains what its
+  guards cover.
+
+Like most open-source software, QuorX comes as is, without a warranty ([licence](LICENSE)).
 
 ## Licence
 
