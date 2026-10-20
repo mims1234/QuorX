@@ -1,19 +1,6 @@
 {
   "versions": [
     {
-      "version": "0.2.7",
-      "date": "2026-10-21",
-      "title": "A second pair of eyes on your code",
-      "items": [
-        { "kind": "new", "text": "/review in a chat reads what changed (the last reply, uncommitted changes, or the branch) and lists bugs with file:line and severity.", "pr": 37 },
-        { "kind": "new", "text": "Tick the review findings you agree with and send them to the agent to fix in one click.", "pr": 37 },
-        { "kind": "improved", "text": "The reviewer can also read the code after every reply that changed it, and posts a card only when it finds a bug.", "pr": 37 },
-        { "kind": "new", "text": "Hooks: pick commands QuorX runs around the agent's work, like npm run lint after every file write, in each project's settings.", "pr": 38 },
-        { "kind": "new", "text": "A failing lint or test hook goes back to the agent to fix, and a failing before-command hook stops that command.", "pr": 38 },
-        { "kind": "safety", "text": "Hooks are kept in QuorX's data folder, never in the project, and still go through your command rules, approvals and Stop.", "pr": 38 }
-      ]
-    },
-    {
       "version": "0.2.6",
       "date": "2026-10-21",
       "title": "Your projects and terminal are back",
