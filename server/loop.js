@@ -74,7 +74,7 @@ const BIG_ARGS = { write_file: 'content', append_file: 'content', write_artifact
 const TRIM_OVER = 1200;
 
 /**
- * Batch trimming, as ALMA does it: once the transcript passes `at` characters, old file bodies in
+ * Batch trimming: once the transcript passes `at` characters, old file bodies in
  * write calls and old read results are replaced by short notes until it is under `to`. The newest
  * `fresh` assistant turns are never touched, and each item is trimmed once, so the cached prefix
  * only changes now and then (trimming a little every step would defeat prompt caching).
