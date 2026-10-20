@@ -24,7 +24,7 @@ export const validId = (id) => typeof id === 'string' && /^[a-z0-9][a-z0-9-]{2,6
 const PROJECTS = path.join(HOME, 'data', 'projects.json');
 export function listProjects() {
   let list = [];
-  try { list = JSON.parse(fs.readFileSync(PROJECTS, 'utf8')); } catch { /* first run */ }
+  try { list = JSON.parse(fs.readFileSync(PROJECTS, 'utf8')); } catch (e) { if (e.code && e.code !== 'ENOENT') throw new Error(`QuorX can't read its project list (${e.code}). Your projects are safe; restart QuorX to repair the data folder.`); }
   if (!list.some((p) => p.id === 'scratch')) list.unshift({ id: 'scratch', name: 'Scratch', path: null, created: Date.now() });
   // A folder the user chose can be moved or deleted outside the app: say so instead of quietly making an empty one.
   // needsFolder: a project whose files sit inside the harness (no folder picked, or one inside the app): it must pick a folder.
@@ -34,7 +34,7 @@ export function listProjects() {
 (function adoptScratch() {
   try {
     let list = [];
-    try { list = JSON.parse(fs.readFileSync(PROJECTS, 'utf8')); } catch { /* first run */ }
+    try { list = JSON.parse(fs.readFileSync(PROJECTS, 'utf8')); } catch (e) { if (e.code && e.code !== 'ENOENT') throw new Error(`QuorX can't read its project list (${e.code}). Your projects are safe; restart QuorX to repair the data folder.`); }
     const sc = list.find((p) => p.id === 'scratch');
     if (sc?.path) return;
     fs.mkdirSync(SCRATCH_HOME, { recursive: true });
