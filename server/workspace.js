@@ -464,7 +464,11 @@ export function migrateAgentDir(root) {
       return true;
     }
     return false;
-  } catch { return 'busy'; } // a file in use (e.g. a server still running from the old folder): try again next time
+  } catch (e) {
+    // A file in use (e.g. a server still running from the old folder): try again next time. Anything else is a real error.
+    if (['EBUSY', 'EPERM', 'EACCES'].includes(e.code)) return 'busy';
+    throw e;
+  }
 }
 export function ensureAgentDir(root) {
   const dir = path.join(root, AGENT_DIR);
