@@ -1,6 +1,34 @@
 {
   "versions": [
     {
+      "version": "0.2.7",
+      "date": "2026-10-21",
+      "title": "Review, hooks, schedules and memory",
+      "items": [
+        { "kind": "new", "text": "/review lists bugs in what changed (the last reply, uncommitted changes or the branch) with file:line; send the ones you agree with to the agent.", "pr": 37 },
+        { "kind": "new", "text": "Hooks run your own commands around the agent's work, like npm run lint after every file write, set in each project's settings.", "pr": 38 },
+        { "kind": "new", "text": "Schedules start a chat on their own, like every weekday at 9 in a project, with the prompt, model and mode you saved.", "pr": 39 },
+        { "kind": "new", "text": "Memory: a short list of facts and preferences you approve, like \"I use pnpm\", that every chat gets; edit it in Settings.", "pr": 45 },
+        { "kind": "new", "text": "Export my QuorX saves your chats, projects, settings and rules to one file, and Import restores it on any computer.", "pr": 54 },
+        { "kind": "new", "text": "Paid media work with several parts is priced up front as one production plan and approved once.", "pr": 44 },
+        { "kind": "new", "text": "A video clip can start from a picture, and edit_video joins clips, stills, voice and music into one .mp4 with ffmpeg.", "pr": 47 },
+        { "kind": "new", "text": "Recommended models have a model card with their limits, quirks and tips, and the agent reads the ones it uses.", "pr": 52 },
+        { "kind": "new", "text": "A short first-run tour shows projects, Strict and YOLO, the deciders, costs and the terminal.", "pr": 56 },
+        { "kind": "improved", "text": "Each step's prompt is smaller and puts what doesn't change first, so more of it is read from the cache.", "pr": 58 },
+        { "kind": "improved", "text": "Usage shows how much of each model's input came from the prompt cache.", "pr": 42 },
+        { "kind": "improved", "text": "Closing the desktop window explains that QuorX keeps running in the tray, and Quit QuorX is easy to find.", "pr": 49 },
+        { "kind": "fixed", "text": "The desktop app ships its full terminal again, plus the terminal view and math files the installer had left out.", "pr": 53 },
+        { "kind": "fixed", "text": "A reply resumed after a restart stays in one bubble and keeps its result.", "pr": 35 },
+        { "kind": "fixed", "text": "Two copies of QuorX on one computer no longer sign each other out.", "pr": 57 },
+        { "kind": "fixed", "text": "A project inside another project's folder no longer fills that project's file list and prompts.", "pr": 41 },
+        { "kind": "fixed", "text": "A file check that runs out of time no longer reports a syntax error in a file that is fine.", "pr": 46 },
+        { "kind": "safety", "text": "Phones and other devices pair over HTTPS; check the certificate's fingerprint in Settings → About.", "pr": 48 },
+        { "kind": "safety", "text": "Hook commands go through your command rules and approvals like the agent's own, and /review never sends secrets files.", "pr": 38 },
+        { "kind": "safety", "text": "An imported backup never changes your approval settings, and its schedules arrive paused.", "pr": 54 },
+        { "kind": "safety", "text": "Every pull request is tested on Windows and Linux, and new versions reach installed apps only once promoted.", "pr": 43 }
+      ]
+    },
+    {
       "version": "0.2.6",
       "date": "2026-10-21",
       "title": "Your projects and terminal are back",
