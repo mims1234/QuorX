@@ -26,6 +26,7 @@ import { markJob } from './terminal.js';
 import { termStart, termSend, termRead, termStop } from './agentterm.js';
 import { appWindows, readWindow, clickControl, clickAt, setControl, sendKeys, windowShot, closeWindow } from './uia.js';
 import { languageChecks } from './langchecks.js';
+import { loadHooks, matchHooks, hookLine, safeHookFile } from './hooks.js';
 import { audit } from './audit.js';
 import { packagesOf, checkPackages } from './pkgguard.js';
 import { testChanges, TEST_FILE } from './testguard.js';
@@ -2367,13 +2368,13 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (name === 'list_files') { const f = listFiles(root); return f.length ? f.map((x) => `${x.path} (${x.size} bytes)`).join('\n') : 'The project folder is empty.'; }
     if (name === 'read_file') return numberedWindow(readText(root, args.path), { offset: args.offset, limit: args.limit });
     const check = async (todo) => (CHECKED.test(String(args.path)) ? await checked(String(args.path), await checkFile(root, args.path), todo) : '') + linted(String(args.path), lintFile(root, args.path));
-    if (name === 'write_file') { const n = writeFile(root, args.path, args.content); emit({ t: 'file', path: args.path, bytes: n, at: at() }); notes.push(`wrote ${args.path}`); return `Wrote ${args.path} (${n} bytes).${await check(PARTIAL)}`; }
-    if (name === 'append_file') { const n = appendFile(root, args.path, args.content); emit({ t: 'file', path: args.path, bytes: n, at: at() }); notes.push(`appended to ${args.path}`); return `Appended to ${args.path} (now ${n} bytes).${await check(PARTIAL)}`; }
+    if (name === 'write_file') { const n = writeFile(root, args.path, args.content); emit({ t: 'file', path: args.path, bytes: n, at: at() }); notes.push(`wrote ${args.path}`); return `Wrote ${args.path} (${n} bytes).${await check(PARTIAL)}${(await runHooks('after_write', { file: String(args.path) })).text}`; }
+    if (name === 'append_file') { const n = appendFile(root, args.path, args.content); emit({ t: 'file', path: args.path, bytes: n, at: at() }); notes.push(`appended to ${args.path}`); return `Appended to ${args.path} (now ${n} bytes).${await check(PARTIAL)}${(await runHooks('after_write', { file: String(args.path) })).text}`; }
     if (name === 'edit_file') {
       const multi = Array.isArray(args.edits) && args.edits.length;
       const n = multi ? editFileMulti(root, args.path, args.edits) : editFile(root, args.path, String(args.find ?? ''), String(args.replace ?? ''), !!args.replace_all);
       emit({ t: 'file', path: args.path, at: at() }); notes.push(`edited ${args.path}`);
-      return `Edited ${args.path} (${n} replacement${n > 1 ? 's' : ''}${multi ? ` from ${args.edits.length} edits` : ''}).${await check('Fix it before going on.')}`;
+      return `Edited ${args.path} (${n} replacement${n > 1 ? 's' : ''}${multi ? ` from ${args.edits.length} edits` : ''}).${await check('Fix it before going on.')}${(await runHooks('after_write', { file: String(args.path) })).text}`;
     }
     if (name === 'shell' || name === 'run_command') {
       // run_command is the old form (one allow-listed program with plain arguments), kept for older chats.
@@ -2396,8 +2397,11 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       // A command that outlives the time limit moves to the background instead of being killed: a long build or an
       // install (Visual Studio Build Tools, an SDK) stopped part-way is wasted work or a half-installed tool. It keeps
       // its tripwire, the user sees it in the pane's Running tab and can stop it there, and the agent carries on.
-      return execCommand({ line, shell, cwd, label: alias ? [args.command, ...argv].join(' ') : line, readOnly: d.segments.every((s) => s.cls === 'read'), decidedBy: g.by,
+      const before = await runHooks('before_command', { command: line });
+      if (before.blocked) return before.text.trim();
+      const out = await execCommand({ line, shell, cwd, label: alias ? [args.command, ...argv].join(' ') : line, readOnly: d.segments.every((s) => s.cls === 'read'), decidedBy: g.by,
         background: !!args.background, backgroundable: true });
+      return `${out}${before.text}${args.background ? '' : (await runHooks('after_command', { command: line })).text}`;
     }
     if (name === 'terminal') {
       const act = String(args.action || '');
@@ -2576,12 +2580,55 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         paths: (s.paths || []).slice(0, 8).map((p) => ({ path: p.resolved || p.raw, zone: p.zone, kind: p.kind })) })) };
   }
 
+  // ---------- hooks: the user's commands around tool calls (project settings → Hooks; server/hooks.js) ----------
+  // Each goes through the command policy and approvals like the agent's own commands, and Stop ends it. Hooks never
+  // trigger hooks. Returns { text } for the tool result (failures the agent should hear about) and, for
+  // before_command, { blocked } when a failing hook stops the agent's command.
+  async function runHooks(event, { file, command } = {}) {
+    if (!root || run.inHook || signal.aborted) return { text: '', blocked: false };
+    const list = matchHooks(run.hooks ??= loadHooks(root), event, { file, command });
+    if (!list.length) return { text: '', blocked: false };
+    run.inHook = true;
+    const parts = [];
+    let blocked = false;
+    try {
+      for (const h of list) {
+        if (signal.aborted) break;
+        const usesFile = h.command.includes('{file}');
+        if (usesFile && !safeHookFile(file)) {
+          emit({ t: 'hook', event, command: h.command, file, ok: false, skipped: true, why: 'the file name has characters that are not safe to pass to a command', at: at() });
+          continue;
+        }
+        const line = hookLine(h, { file });
+        const d = await decideCommand(line, { shell: SF.shell, root, cwd: root, env: childEnv(), rules: commandRules(), mode: S.approval, yolo: { external: SF.yoloExternal, opaque: SF.yoloOpaque, outside: SF.yoloOutside } });
+        const g = await gateCommand(d, line, SF.shell, { hook: { before_command: 'before a command', after_command: 'after a command', after_write: 'after a file write' }[event], fileFromAgent: usesFile });
+        if (!g.ok) {
+          emit({ t: 'hook', event, command: line, file, ok: false, skipped: true, why: clip(g.text, 300), at: at() });
+          if (event === 'before_command' && h.feedback) { blocked = true; parts.push(`Your command did not run: the user's hook "${line}" runs first and was not allowed (${clip(g.text, 200)}).`); break; }
+          continue;
+        }
+        const sb = SF.snapshots ? snapBefore(root, { maxBytes: SF.snapshotMaxMB * 1024 * 1024 }) : { snap: null };
+        const r = await runLine(root, line, { shell: SF.shell, label: `hook: ${line}`, signal, timeout: h.timeout * 1000, memoryMB: SF.memoryMB, term: { projectId, source: 'agent', chatId: req.chatId } });
+        if (sb.snap) { try { commandChanges(root, filesId, sb.snap); } catch { /* best effort */ } }
+        const ok = r.code === 0 && !r.timedOut && !r.stopped;
+        emit({ t: 'hook', event, command: line, file, code: r.code, ms: r.ms, ok, told: !ok && h.feedback, timedOut: r.timedOut || undefined, out: r.out.slice(-1500), decidedBy: g.by, at: at() });
+        aud({ kind: 'hook', event, command: line, by: g.by, code: r.code, ms: r.ms, timedOut: r.timedOut || undefined });
+        if (ok || !h.feedback) continue;
+        const why = r.timedOut ? `was stopped at its ${h.timeout}s limit` : `failed (exit code ${r.code ?? 'none'})`;
+        const out = clipKeepEnd(r.out.trim() || '(no output)', 3000);
+        if (event === 'before_command') { blocked = true; parts.push(`Your command did not run: the user's hook "${line}" runs before commands and ${why}. Its output:\n${out}`); break; }
+        parts.push(`The user's hook "${line}" ${why} after this ${event === 'after_write' ? 'write' : 'command'}. Its output:\n${out}\nFix what it reports before going on.`);
+      }
+    } finally { run.inHook = false; }
+    return { text: parts.length ? `\n${parts.join('\n')}` : '', blocked };
+  }
+
   // Every command decision and run goes to logs/audit.jsonl (who let it happen; see server/audit.js).
   function aud(rec) { audit({ project: projectId, chat: req.chatId || null, run: runId, model: setup.model, mode: S.approval, ...rec }); }
 
   // Before a command runs: the rule engine's verdict, then the user or (YOLO) the deciders when it asks.
   // Returns { ok, by } to run it, or { ok: false, text } for the agent.
-  async function gateCommand(d, line, shell) {
+  async function gateCommand(d, line, shell, { hook, fileFromAgent } = {}) {
     // Installs: each package it names must exist on its registry; a very new or barely used one asks the user.
     if (d.verdict !== 'deny' && d.segments.some((s) => s.cls === 'install')) {
       const pk = await checkPackages(d.segments.filter((s) => s.cls === 'install').flatMap((s) => packagesOf(s.text))).catch(() => []);
@@ -2604,13 +2651,13 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     const yoloAsksCommands = S.approval === 'yolo' && S.yoloAuto?.commands === false;
     if (d.verdict === 'allow' && !strictEvery && !yoloAsksCommands) return { ok: true, by: d.decidedBy };
     let who = d.verdict === 'allow' || S.approval !== 'yolo' || yoloAsksCommands || run.cmdEscalated ? 'user' : d.who;
-    const card = { id: newApprovalId(), tool: 'shell', free: true, est: 0, what: line, why: d.why, policy };
+    const card = { id: newApprovalId(), tool: 'shell', free: true, est: 0, what: line, why: hook ? `your hook (${hook}) runs this${fileFromAgent ? ', with a file name the agent chose' : ', not the agent'}; ${d.why}` : d.why, policy };
     // Rules made by a button can't lift these, so the card doesn't offer "Always allow" for them.
     card.noAlways = d.segments.some((s) => ['opaque', 'external', 'discard'].includes(s.cls) || s.global || (s.paths || []).some((p) => p.zone === 'outside' || p.zone === 'unknown'));
     let unsure = null;
     if (who === 'deciders') {
       emit({ t: 'approval', ...card, mode: 'yolo', at: at() });
-      const facts = { command: line, shell, parts: d.segments.map((s) => ({ text: clip(s.text, 200), class: s.cls, ...(s.via ? { run_by_script: s.via } : {}), touches: (s.paths || []).map((p) => `${p.resolved || p.raw} (${p.zone === 'inside' ? 'inside the project' : p.zone})`) })),
+      const facts = { command: line, shell, ...(hook ? { chosen_by: `the user, as a hook (${hook}) in project settings${fileFromAgent ? '; the file name in it was chosen by the agent' : '; the agent did not ask for it'}` } : {}), parts: d.segments.map((s) => ({ text: clip(s.text, 200), class: s.cls, ...(s.via ? { run_by_script: s.via } : {}), touches: (s.paths || []).map((p) => `${p.resolved || p.raw} (${p.zone === 'inside' ? 'inside the project' : p.zone})`) })),
         ...(d.packages?.length ? { packages: d.packages.map((p) => `${p.name} on ${p.eco}: ${p.exists ? `first published ${p.ageDays ?? '?'} days ago${p.weekly != null ? `, ${p.weekly} downloads last week` : ''}` : 'not checked'}`) } : {}) };
       // A helper script the agent wrote in its own scratch folder (and QuorX read): judged on harm only.
       const scratch = d.segments.length === 1 && SCRATCH_SCRIPT.test(line);

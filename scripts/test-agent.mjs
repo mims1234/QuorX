@@ -15,6 +15,7 @@ import { saveProject, forgetProject, setProjectBudget } from '../server/store.js
 import { loadCheckpoint, dropCheckpoint, ledger } from '../server/runs.js';
 import { setBudget, projectSpend, budgetState, live as liveRuns } from '../server/budget.js';
 import { reviewCode, collectChanges, parseGitDiff, checkFindings, pickReviewer } from '../server/codereview.js';
+import { saveHooks, loadHooks, matchHooks, fileMatches, commandMatches, hookLine, cleanHook, safeHookFile } from '../server/hooks.js';
 import { matchPlan, usePlan } from '../server/mediaplan.js';
 
 let n = 0;
@@ -34,7 +35,7 @@ async function run(script, { settings = {}, text = 'build it', resume, onEvent, 
   const chatStream = async (body, sig, onText) => { bodies.push(structuredClone(body)); const r = await script(body, i++); if (r.text && onText) onText(r.text); return r; };
   try {
     await runAgent({ runId: id, projectId: id, ...(chatId ? { chatId } : {}), ...(images ? { images } : {}), ...(comments ? { comments } : {}), text, resume, ...(cont ? { continue: cont } : {}), ...(reading ? { reading } : {}), history, setup: { model: 'test/model', ...setup }, settings: { approval: 'yolo', mediaEnabled: false, tools: { browser: { on: false } }, ...settings } },
-      (e) => { events.push(e); onEvent?.(e); }, signal || new AbortController().signal, { chatStream, catalogue: [{ id: 'test/model', maxOut: 4000 }], quiet: true, startServer: async ({ name, args }) => ({ key: `fake-${name}`, url: 'http://localhost:9/', status: 'running', command: ['node', ...(args || [])].join(' '), log: '' }), ...(openTab ? { openTab } : {}), ...(generateImage ? { generateImage } : {}), ...(generateVideo ? { generateVideo } : {}), ...(ensemble ? { ensemble } : {}), ...(checks ? { checks } : {}), ...(enhance ? { enhance } : {}) });
+      (e) => { events.push(e); onEvent?.(e, id); }, signal || new AbortController().signal, { chatStream, catalogue: [{ id: 'test/model', maxOut: 4000 }], quiet: true, startServer: async ({ name, args }) => ({ key: `fake-${name}`, url: 'http://localhost:9/', status: 'running', command: ['node', ...(args || [])].join(' '), log: '' }), ...(openTab ? { openTab } : {}), ...(generateImage ? { generateImage } : {}), ...(generateVideo ? { generateVideo } : {}), ...(ensemble ? { ensemble } : {}), ...(checks ? { checks } : {}), ...(enhance ? { enhance } : {}) });
     return { events, bodies, dir, id, done: events.find((e) => e.t === 'done') };
   } finally { forgetProject(id); ledger.delete(`seed-${id}`); }
 }
@@ -1607,6 +1608,126 @@ test('/review helpers: git diff parsing, finding checks, and the reviewer model 
   assert.equal(pickReviewer({ reviewTier: 'cheap' }, 'x/y', R), 'c/cheap');
   assert.equal(pickReviewer({ reviewTier: 'strong' }, 's/strong', R), 's/alt');
   assert.equal(pickReviewer({ reviewModel: 'my/pick', reviewTier: 'strong' }, 'x', R), 'my/pick');
+});
+
+// ---------- hooks: the user's commands around tool calls (server/hooks.js) ----------
+
+// Hook commands ask like the agent's own (Strict here): every card is approved.
+const hookRun = (script, prep) => run(script, { prep, settings: { approval: 'strict' }, onEvent: (e, id) => { if (e.t === 'approval' && e.mode === 'strict') setTimeout(() => answerApproval(id, e.id, { approve: true }), 5); } });
+// A project with small scripts the hooks run: lint.mjs fails on files containing "var ", log.mjs appends its name.
+const hookProject = (hooks) => (d) => {
+  fs.writeFileSync(path.join(d, 'lint.mjs'), "import fs from 'node:fs';\nconst f = process.argv[2];\nif (fs.readFileSync(f, 'utf8').includes('var ')) { console.log(`${f}:1 no-var: use let or const`); process.exit(1); }\nconsole.log('lint ok');\n");
+  fs.writeFileSync(path.join(d, 'log.mjs'), "import fs from 'node:fs';\nfs.appendFileSync('hooklog.txt', process.argv[2] + '\\n');\n");
+  fs.writeFileSync(path.join(d, 'slow.mjs'), 'setTimeout(() => {}, 20000);\n');
+  fs.writeFileSync(path.join(d, 'gate.mjs'), "console.log('tests are red, no deploys'); process.exit(3);\n");
+  fs.writeFileSync(path.join(d, 'make.mjs'), "import fs from 'node:fs';\nfs.writeFileSync('made.txt', 'x');\n");
+  saveHooks(d, hooks);
+};
+
+test('hooks: file and command patterns, order, and the {file} placeholder', () => {
+  assert.ok(fileMatches('', 'src/a.js'));
+  assert.ok(fileMatches('*.js, *.ts', 'src/deep/a.ts'));
+  assert.ok(!fileMatches('*.js', 'a.json'));
+  assert.ok(fileMatches('src/**', 'src/x/y.css'));
+  assert.ok(!fileMatches('src/*.js', 'src/x/y.js'));
+  assert.ok(commandMatches('npm *, git commit*', 'npm   run build'));
+  assert.ok(!commandMatches('npm *', 'node x.js'));
+  assert.ok(commandMatches('', 'anything'));
+  const hooks = [cleanHook({ id: 'a', event: 'after_write', command: 'one', match: '*.js' }), cleanHook({ id: 'b', event: 'after_write', command: 'two' }), cleanHook({ id: 'c', event: 'after_write', command: 'off', on: false }), cleanHook({ id: 'd', event: 'before_command', command: 'gate' })];
+  assert.deepEqual(matchHooks(hooks, 'after_write', { file: 'a.js' }).map((h) => h.id), ['a', 'b']);
+  assert.deepEqual(matchHooks(hooks, 'after_write', { file: 'a.md' }).map((h) => h.id), ['b']);
+  assert.deepEqual(matchHooks(hooks, 'before_command', { command: 'npm test' }).map((h) => h.id), ['d']);
+  assert.equal(hookLine({ command: 'eslint {file}' }, { file: 'my dir\\a.js' }), 'eslint "my dir/a.js"');
+  assert.equal(cleanHook({ command: 'x', timeout: 99999 }).timeout, 600);
+  assert.equal(cleanHook({ command: 'x', event: 'nonsense' }).event, 'after_write');
+});
+
+test('hooks are kept in the data folder, not in the project', () => {
+  const dir = tempDir('quorx-hk-');
+  saveHooks(dir, [{ event: 'after_write', command: 'npm run lint' }, { event: 'after_write', command: '' }]);
+  assert.deepEqual(loadHooks(dir).map((h) => h.command), ['npm run lint']);
+  assert.deepEqual(fs.readdirSync(dir), []);
+  assert.throws(() => saveHooks(dir, Array.from({ length: 21 }, () => ({ command: 'x' }))), /at most 20/);
+});
+
+test('an after-write hook runs in order after matching writes only, and a failure goes back to the agent', async () => {
+  const { events, bodies, dir } = await hookRun((body, i) => [
+    reply('', [['write_file', { path: 'app.js', content: 'var a = 1;\n' }]]),
+    reply('', [['write_file', { path: 'notes.md', content: 'hi\n' }]]),
+    reply('', [['edit_file', { path: 'app.js', find: 'var a', replace: 'const a' }]]),
+    reply('Done.'),
+  ][i], hookProject([
+    { event: 'after_write', command: 'node lint.mjs {file}', match: '*.js' },
+    { event: 'after_write', command: 'node log.mjs {file}' },
+  ]));
+  const hooks = of(events, 'hook');
+  assert.deepEqual(hooks.map((h) => [h.command, h.ok]), [
+    ['node lint.mjs app.js', false], ['node log.mjs app.js', true],
+    ['node log.mjs notes.md', true],
+    ['node lint.mjs app.js', true], ['node log.mjs app.js', true],
+  ]);
+  assert.match(hooks[0].out, /no-var/);
+  assert.match(toolResults(bodies[1])[0], /The user's hook "node lint\.mjs app\.js" failed \(exit code 1\) after this write\. Its output:\napp\.js:1 no-var/);
+  assert.doesNotMatch(toolResults(bodies[2])[1], /hook/);
+  assert.doesNotMatch(toolResults(bodies[3])[2], /hook/);
+  assert.equal(fs.readFileSync(path.join(dir, 'hooklog.txt'), 'utf8'), 'app.js\nnotes.md\napp.js\n');
+});
+
+test('a hook that runs too long is stopped at its time limit and the agent is told', async () => {
+  const { events, bodies } = await hookRun((body, i) => [
+    reply('', [['write_file', { path: 'a.txt', content: 'x' }]]),
+    reply('Done.'),
+  ][i], hookProject([{ event: 'after_write', command: 'node slow.mjs', timeout: 1 }]));
+  const h = of(events, 'hook')[0];
+  assert.equal(h.ok, false);
+  assert.equal(h.timedOut, true);
+  assert.ok(h.ms < 15000, `took ${h.ms}ms`);
+  assert.match(toolResults(bodies[1])[0], /hook "node slow\.mjs" was stopped at its 1s limit/);
+});
+
+test('a failing before-command hook stops the agent\'s command; one that only reports does not', async () => {
+  const { events, bodies, dir } = await hookRun((body, i) => [
+    reply('', [['shell', { command: 'node make.mjs' }]]),
+    reply('Done.'),
+  ][i], hookProject([{ event: 'before_command', command: 'node gate.mjs', match: 'node make*' }, { event: 'after_command', command: 'node log.mjs after' }]));
+  assert.match(toolResults(bodies[1])[0], /^Your command did not run: the user's hook "node gate\.mjs" runs before commands and failed \(exit code [1-9]\d*\)\. Its output:\ntests are red/);
+  assert.ok(!fs.existsSync(path.join(dir, 'made.txt')));
+  assert.ok(!fs.existsSync(path.join(dir, 'hooklog.txt')));
+  assert.deepEqual(of(events, 'hook').map((h) => h.command), ['node gate.mjs']);
+  const r2 = await hookRun((body, i) => [reply('', [['shell', { command: 'node make.mjs' }]]), reply('Done.')][i],
+    hookProject([{ event: 'before_command', command: 'node gate.mjs', feedback: false }, { event: 'after_command', command: 'node log.mjs after' }]));
+  assert.ok(fs.existsSync(path.join(r2.dir, 'made.txt')));
+  assert.equal(fs.readFileSync(path.join(r2.dir, 'hooklog.txt'), 'utf8'), 'after\n');
+  assert.deepEqual(of(r2.events, 'hook').map((h) => [h.event, h.ok]), [['before_command', false], ['after_command', true]]);
+});
+
+test('a file name the agent chose never becomes part of a hook command', async () => {
+  for (const bad of ['a;echo pwned;.js', '$(x).js', 'a&calc&.js', 'a|b.js', '`x`.js', "a'b.js", 'dir/-rf.js']) assert.equal(safeHookFile(bad), false, bad);
+  for (const ok of ['src/app.js', 'my file.js', 'a-b_c.d@2x.js', 'v1,2=3+4.js']) assert.equal(safeHookFile(ok), true, ok);
+  const { events, dir } = await hookRun((body, i) => [
+    reply('', [['write_file', { path: 'a;echo pwned;.js', content: 'x' }]]),
+    reply('', [['write_file', { path: '$(x).js', content: 'x' }]]),
+    reply('', [['write_file', { path: 'fine.js', content: 'x' }]]),
+    reply('Done.'),
+  ][i], hookProject([{ event: 'after_write', command: 'node log.mjs {file}' }]));
+  const hooks = of(events, 'hook');
+  assert.deepEqual(hooks.map((h) => [h.skipped || false, h.command]), [[true, 'node log.mjs {file}'], [true, 'node log.mjs {file}'], [false, 'node log.mjs fine.js']]);
+  assert.ok(!of(events, 'command').some((e) => /pwned|\$\(x\)/.test(e.command)));
+  assert.equal(fs.readFileSync(path.join(dir, 'hooklog.txt'), 'utf8'), 'fine.js\n');
+  // The approval card says the file name came from the agent.
+  const card = of(events, 'approval').find((e) => e.what === 'node log.mjs fine.js');
+  assert.match(card.why, /with a file name the agent chose/);
+});
+
+test('hook commands go through the command policy: a blocked one never runs', async () => {
+  const { events, bodies } = await hookRun((body, i) => [
+    reply('', [['write_file', { path: 'a.txt', content: 'x' }]]),
+    reply('Done.'),
+  ][i], hookProject([{ event: 'after_write', command: 'shutdown /s /t 0' }]));
+  const h = of(events, 'hook')[0];
+  assert.equal(h.skipped, true);
+  assert.equal(of(events, 'command_blocked').length, 1);
+  assert.doesNotMatch(toolResults(bodies[1])[0], /hook/);
 });
 
 test('cache-read and cache-write tokens from the usage go into the reply stats, per model', async () => {
