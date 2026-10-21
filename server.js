@@ -804,7 +804,8 @@ listener.once('listening', () => {
   runtime.port = listener.address().port; console.log(`QuorX → http://localhost:${runtime.port}`);
   if (listener !== server) console.log(`Other devices: https on the same port (Settings → About → Other devices has the link and the certificate fingerprint)`);
   console.log(`Open QuorX with this link once (it signs this browser in): ${appLink(runtime.port)}`);
-  listenPages(runtime.port + 1000, 8);
+  // 1000 above the main port, when that is still a port; else any free one (a main port above 64535 crashed here).
+  listenPages(runtime.port && runtime.port + 1000 <= 65535 ? runtime.port + 1000 : 0, 8);
 });
 listen(PORT);
 
@@ -826,5 +827,6 @@ function listenPages(port, triesLeft) {
     if (e.code === 'EADDRINUSE' && port) return listenPages(0, 0);
     console.warn(`Pages address not available (${e.message}); agent pages stay sandboxed, without storage.`);
   });
-  pageServer.listen(port, '127.0.0.1', () => { runtime.pagePort = pageServer.address().port; });
+  try { pageServer.listen(port, '127.0.0.1', () => { runtime.pagePort = pageServer.address().port; }); }
+  catch (e) { pageServer.removeAllListeners('error'); if (port) return listenPages(0, 0); console.warn(`Pages address not available (${e.message}); agent pages stay sandboxed, without storage.`); }
 }
