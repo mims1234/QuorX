@@ -2,6 +2,8 @@
 // run, so chats work in parallel. Every run streams events from /api/run; approvals are answered
 // through /api/approve. Chats live on the server; preferences stay in this browser. Plain JS.
 
+import { startTour, maybeStartTour } from './tour.js';
+
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const money = (c, d = 4) => `$${(Number(c) || 0).toFixed(d)}`;
@@ -4650,7 +4652,7 @@ function settingsPanels(S) {
     ]],
     setup: ['Setup check', 'What this computer has for QuorX, and what each thing is for. Amber rows are optional.', ['<div id="stSetup"><div class="st-row-help">Checking this computer…</div></div>']],
     shortcuts: ['Shortcuts', '', [stCard('Keyboard', '', `<table class="st-shortcuts-table"><tbody>${[['Ctrl + K', 'Search chats, commands, settings and files'], ['Enter', 'Send'], ['Shift + Enter', 'New line'], ['@', 'Add files, chats or projects as context'], ['/', 'Commands (/usage, /model, /strict, …)'], ['↑ ↓ then Enter or Tab', 'Pick a suggestion'], ['Esc', 'Close a dialog or suggestions']].map(([k, v]) => `<tr><td>${k.split(' ').map((x) => (/^[+]$|^then$|^or$/.test(x) ? x : `<kbd>${esc(x)}</kbd>`)).join(' ')}</td><td>${v}</td></tr>`).join('')}</tbody></table>`)]],
-    about: ['About', '', [...(DESK ? ['<div id="stDesktop"></div>'] : []), '<div id="stDevices"></div>',stCard('QuorX', '', stRow('Version', DESK ? 'The desktop app and the harness it is attached to.' : '', `<code id="stVersion">v${esc(G.cfg?.version || '?')}</code>`) + stRow('Address', '', `<code>${esc(location.origin)}</code>`) + stRow('OpenRouter key', '', G.cfg.hasKey ? '<span class="st-key-active-badge">active</span>' : '<span class="st-nav-badge bad-dot"></span> none yet') + stRow('Your data', 'Chats, projects, keys and logs stay in this folder.', '<code>data/</code>'))]],
+    about: ['About', '', [...(DESK ? ['<div id="stDesktop"></div>'] : []), '<div id="stDevices"></div>',stCard('QuorX', '', stRow('Version', DESK ? 'The desktop app and the harness it is attached to.' : '', `<code id="stVersion">v${esc(G.cfg?.version || '?')}</code>`) + stRow('Address', '', `<code>${esc(location.origin)}</code>`) + stRow('OpenRouter key', '', G.cfg.hasKey ? '<span class="st-key-active-badge">active</span>' : '<span class="st-nav-badge bad-dot"></span> none yet') + stRow('Your data', 'Chats, projects, keys and logs stay in this folder.', '<code>data/</code>') + stRow('Tour', 'Five short steps over the page: projects, Strict and YOLO, the deciders and reviewer, costs, the terminal.', '<button type="button" class="st-btn secondary sm" data-act="tour">Show the tour</button>'))]],
     _badges: { keys: keysBadge },
   };
 }
@@ -4711,6 +4713,7 @@ function wireSettings() {
     if (act === 'refreshModels') { $('#stCatInfo').textContent = 'Refreshing…'; await loadModels(true); $('#stCatInfo').textContent = `${G.models?.length || 0} models loaded · refreshed ${new Date().toLocaleTimeString()}`; }
     if (act === 'resetOrder') { G.projectOrder = []; savePrefs(); renderSidebar(); e.target.textContent = 'Done'; }
     if (act === 'openCosts') openCosts();
+    if (act === 'tour') { $('#settings').close(); startTour({ fill: fillStart }); }
     if (act === 'exportChats') exportChats(e.target);
     if (act === 'clearPrefs' && await uiConfirm('Clear this browser\'s preferences? Chats, projects and keys stay.')) { try { localStorage.removeItem(STORE); localStorage.removeItem('agent001-v1'); } catch { /* ignore */ } location.reload(); }
   };
@@ -5425,6 +5428,13 @@ async function boot() {
   loadModels();
   if (!G.cfg.hasKey) openSettings('keys');
   else firstSetupCheck();
+  maybeStartTour({ fill: fillStart });
+}
+// The tour's first build: into the start box on Home, or the open chat's message box (not sent).
+function fillStart(text) {
+  const ta = $('#ldStartText') || $('.chatpane.focus .input');
+  if (!ta) return;
+  ta.value = text; ta.dispatchEvent(new Event('input', { bubbles: true })); ta.focus();
 }
 
 boot();
