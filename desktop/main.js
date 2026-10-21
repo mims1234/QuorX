@@ -453,6 +453,8 @@ function applyEmu(t) {
 const COVER = `data:text/html,${encodeURIComponent('<!doctype html><meta charset="utf-8"><body style="margin:0;height:100vh;background:transparent;cursor:not-allowed;font:600 12px system-ui;user-select:none"><div style="position:fixed;left:50%;bottom:12px;transform:translateX(-50%);padding:6px 12px;border-radius:8px;background:rgba(167,139,250,.18);border:1px solid rgba(167,139,250,.6);color:#c4b5fd;backdrop-filter:blur(6px);white-space:nowrap">🤖 The agent is using this page · watch only until its reply ends</div></body>')}`;
 const COMMANDS = {
   async 'app.notify'(n) { return showNote(n); },
+  // Sign-in with OpenRouter finished in the user's browser: back to QuorX.
+  async 'app.focus'() { showWindow(); return true; },
   async 'tab.create'({ chatId }) {
     const sid = `agent-${String(chatId).replace(/[^\w-]/g, '').slice(0, 40)}`;
     if (tabs.has(sid)) closeTab(sid);
@@ -497,8 +499,13 @@ const COMMANDS = {
     const f = t.emu && fitEmu(t);
     if (f && f.scale !== 1 && (method === 'Input.dispatchMouseEvent' || method === 'Input.synthesizeTapGesture')) return t.view.webContents.debugger.sendCommand(method, { ...params, x: params.x * f.scale, y: params.y * f.scale });
     if (f && f.scale !== 1 && method === 'Input.dispatchTouchEvent') return t.view.webContents.debugger.sendCommand(method, { ...params, touchPoints: (params.touchPoints || []).map((p) => ({ ...p, x: p.x * f.scale, y: p.y * f.scale })) });
-    // Screenshots at the page's own size, even while it is shown scaled down in the pane.
-    if (method === 'Page.captureScreenshot' && t.emu) return t.view.webContents.debugger.sendCommand(method, { ...params, clip: { x: 0, y: 0, width: t.emu.width, height: t.emu.height, scale: 1 } });
+    // Screenshots at the page's own size, even while it is shown scaled down in the pane. A clip is in page
+    // coordinates, so it starts where the page is scrolled to: one at 0,0 on a scrolled page was blank background.
+    if (method === 'Page.captureScreenshot' && t.emu) {
+      const m = await t.view.webContents.debugger.sendCommand('Page.getLayoutMetrics').catch(() => null);
+      const v = m?.cssVisualViewport || m?.visualViewport || { pageX: 0, pageY: 0 };
+      return t.view.webContents.debugger.sendCommand(method, { ...params, clip: { x: v.pageX || 0, y: v.pageY || 0, width: t.emu.width, height: t.emu.height, scale: 1 } });
+    }
     return t.view.webContents.debugger.sendCommand(method, params);
   },
   async 'tab.lock'({ tab, locked }) {

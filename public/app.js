@@ -1470,13 +1470,14 @@ function placeChrome() {
   const desk = !isPhone(), top = $('header.top'), title = $('#sbTitlebar'), foot = $('#sbFootBtns');
   if (!top || !title || !foot) return;
   document.body.classList.toggle('top-in-sidebar', desk);
-  const brand = $('#brandHome'), sep = $('.top-sep', top) || null, bits = ['#spend', '#staleNote'].map((q) => $(q)).filter(Boolean);
+  const brand = $('#brandHome'), git = $('#brandGit'), sep = $('.top-sep', top) || null, bits = ['#spend', '#staleNote'].map((q) => $(q)).filter(Boolean);
   const upd = $('#updNote'), btns = ['#restartBtn', '#themeBtn', '#settingsBtn'].map((q) => $(q)).filter(Boolean);
   // The ☰ panel toggle leads the title row on wider screens; phones keep it beside the search.
   const tog = $('#sbCollapseBtn'), tools = $('.sb-tools');
-  if (desk) { title.append(brand, ...bits); if (tog) title.prepend(tog); foot.append(...(upd ? [upd] : []), ...btns); return; }
+  if (desk) { title.append(brand, ...(git ? [git] : []), ...bits); if (tog) title.prepend(tog); foot.append(...(upd ? [upd] : []), ...btns); return; }
   if (tog && tools) tools.prepend(tog);
   top.prepend(brand);
+  if (git) brand.after(git);
   if (sep) sep.after(...bits, ...(upd ? [upd] : [])); else top.append(...bits, ...(upd ? [upd] : []));
   top.append(...btns);
 }
@@ -5357,6 +5358,8 @@ async function drawMemoryPanel(msg = '') {
     $('.mem-del', li).onclick = () => save({ items: m.items.filter((x) => x.id !== id) }, '✓ Forgotten');
   }
 }
+// The 👁 / 🙈 button that shows or masks amounts, switched in place.
+function revealButton(b, shown) { if (!b) return; b.title = shown ? 'Hide amounts' : 'Show amounts'; b.textContent = shown ? '🙈' : '👁'; }
 async function drawKeysPanel() {
   const box = $('#stKeys'); if (!box) return;
   const keys = await fetch('/api/keys').then((r) => r.json()).catch(() => []);
@@ -5422,9 +5425,15 @@ async function drawKeysPanel() {
   // per key
   for (const card of box.querySelectorAll('.kx-card')) {
     const id = card.dataset.key, k = keys.find((x) => x.id === id), show = () => ST.reveal.has(id) || !U.maskAmounts;
+    // Fetched once; 👁 paints the same numbers again, shown or masked, without reloading or redrawing the panel.
+    let last = null;
     const load = async () => {
-      const el = $('[data-usage]', card);
-      const u = await fetch(`/api/keys/${id}/usage`).then((x) => x.json()).catch((e) => ({ error: e.message }));
+      last = await fetch(`/api/keys/${id}/usage`).then((x) => x.json()).catch((e) => ({ error: e.message }));
+      paint();
+    };
+    const paint = () => {
+      const el = $('[data-usage]', card), u = last;
+      if (!u) return;
       if (u.error) { el.innerHTML = `<div class="kx-wait bad">⚠ ${esc(u.error)}</div>`; return; }
       const w = u.windows || {}, partial = Object.values(w).find((x) => x?.partial);
       const val = (x) => (x == null ? '—' : money(x.value ?? x, 2));
@@ -5450,7 +5459,7 @@ async function drawKeysPanel() {
     };
     card.onclick = async (e) => {
       const act = e.target.closest('[data-k]')?.dataset.k; if (!act) return;
-      if (act === 'reveal') { ST.reveal.has(id) ? ST.reveal.delete(id) : ST.reveal.add(id); return drawKeysPanel(); }
+      if (act === 'reveal') { ST.reveal.has(id) ? ST.reveal.delete(id) : ST.reveal.add(id); revealButton($('[data-k="reveal"]', card), show()); return paint(); }
       if (act === 'refresh') return load();
       if (act === 'activate') { await fetch(`/api/keys/${id}/activate`, { method: 'POST' }); await keysChanged(); return drawKeysPanel(); }
       if (act === 'rename') { const n = $('.kx-name', card); n.focus(); n.select(); return; }
@@ -5461,14 +5470,16 @@ async function drawKeysPanel() {
   const acc = $('#stAccount');
   if (acc) {
     const showAcc = () => ST.revealAccount || !U.maskAmounts;
-    const loadAcc = async () => {
-      const a = await fetch('/api/credits').then((x) => x.json()).catch((e) => ({ error: e.message }));
+    let lastAcc = null;
+    const loadAcc = async () => { lastAcc = await fetch('/api/credits').then((x) => x.json()).catch((e) => ({ error: e.message })); paintAcc(); };
+    const paintAcc = () => {
+      const a = lastAcc; if (!a) return;
       const m = (v) => (showAcc() ? money(v ?? 0, 2) : '•••••');
       acc.innerHTML = a.error ? `<div class="kx-wait">Account credits aren't available for this key (${esc(a.error)}).</div>`
         : `<div class="kx-metric"><span>Total credits</span><b>${m(a.total)}</b></div><div class="kx-metric"><span>Total used</span><b>${m(a.used)}</b></div><div class="kx-metric left"><span>Left</span><b>${m((a.total ?? 0) - (a.used ?? 0))}</b></div><div class="kx-checked">Checked ${new Date(a.checked).toLocaleTimeString()}</div>`;
     };
     loadAcc();
-    box.querySelector('[data-acc="reveal"]').onclick = () => { ST.revealAccount = !ST.revealAccount; drawKeysPanel(); };
+    box.querySelector('[data-acc="reveal"]').onclick = (e) => { ST.revealAccount = !ST.revealAccount; revealButton(e.currentTarget, showAcc()); paintAcc(); };
     box.querySelector('[data-acc="refresh"]').onclick = loadAcc;
   }
 }
@@ -7178,6 +7189,9 @@ function newsStop() {
   NEWS.io?.disconnect(); NEWS.io = null; NEWS.ro?.disconnect(); NEWS.ro = null;
 }
 
+// A colour for each kind of tag, so rows and chips read at a glance.
+const NEWS_TONES = { research: 'research', models: 'models', deciders: 'models', cost: 'cost', safety: 'safety', security: 'safety', tests: 'tests', bugs: 'safety', platforms: 'platforms', toolchains: 'platforms', desktop: 'platforms', workflow: 'workflow', release: 'workflow' };
+const newsTone = (tag) => NEWS_TONES[String(tag || '').toLowerCase()] || 'other';
 const newsHead = (title, sub = '', left = '') => `<header class="nw-head"><div class="nw-head-left">${left}<h1>${title}</h1>${sub ? `<span class="nw-sub">${sub}</span>` : ''}</div><div class="nw-head-right"><button type="button" class="nw-icon-btn nw-close" title="Close News and go back" aria-label="Close News">✕</button></div></header>`;
 function newsTabs() {
   const d = NEWS.data, n = (k) => d[k]?.length || 0;
@@ -7206,7 +7220,9 @@ function newsList() {
     const shown = cur ? list.filter((x) => (x.tags || []).includes(cur)) : list;
     const filter = tags.length > 1 ? `<div class="nw-filter"><span class="nw-filter-label">Tag</span><div class="nw-seg" role="group" aria-label="Show by tag"><button type="button" data-tag="" aria-pressed="${!cur}">All</button>${tags.map((x) => `<button type="button" data-tag="${esc(x)}" aria-pressed="${cur === x}">${esc(x)}</button>`).join('')}</div></div>` : '';
     const what = t === 'reports' ? 'reports' : 'articles';
-    body = list.length ? `${filter}<div class="nw-cards">${shown.map((x) => `<button type="button" class="nw-card" data-go="${t}/${esc(x.slug)}"><h3>${esc(x.title)}</h3><p>${esc(x.summary)}</p><div class="nw-meta"><span>${newsDate(x.date)}</span>${x.version ? `<span>v${esc(x.version)}</span>` : ''}${(x.tags || []).length ? `<span class="nw-tags">${x.tags.map((g) => `<span class="nw-tag">${esc(g)}</span>`).join('')}</span>` : ''}</div></button>`).join('')}</div>`
+    // One row per article or report: a colour bar for its most specific tag (not "research", which nearly all have), the title and summary, then its date, version
+    // and every tag as a coloured chip.
+    body = list.length ? `${filter}<div class="nw-rows">${shown.map((x) => `<button type="button" class="nw-row" data-tone="${esc(newsTone((x.tags || []).find((g) => g !== 'research') || (x.tags || [])[0]))}" data-go="${t}/${esc(x.slug)}"><div class="nw-row-main"><h3>${esc(x.title)}</h3><p>${esc(x.summary)}</p></div><div class="nw-row-side"><span class="nw-row-date">${newsDate(x.date)}${x.version ? ` · v${esc(x.version)}` : ''}</span>${(x.tags || []).length ? `<span class="nw-tags">${x.tags.map((g) => `<span class="nw-tag" data-tone="${esc(newsTone(g))}">${esc(g)}</span>`).join('')}</span>` : ''}</div></button>`).join('')}</div>`
       : `<div class="nw-empty"><b>No ${what} yet.</b><span>${t === 'reports' ? 'Reports on models, tests and platforms' : 'Research articles'} arrive with QuorX updates and show here.</span></div>`;
   }
   const sub = t === 'updates' ? 'What changed in each version of QuorX' : t === 'reports' ? 'Models, tests and platforms, measured' : 'Research and how QuorX works';

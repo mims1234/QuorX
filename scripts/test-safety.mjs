@@ -600,6 +600,31 @@ test('shell: in YOLO an unsettled vote with a doubtful harm vote is skipped when
     assert.doesNotMatch(toolOut(bodies, 1), /built/);
   });
 });
+// A decider "no" isn't the last word: the user gets the card for the YOLO wait and can run it anyway.
+test('shell: in YOLO the deciders’ no goes to you for the wait; no answer and it stays declined', { skip: !WIN }, async () => {
+  await withDeciders(voteAll({ needed: 0.05, other: 0.95 }), async () => {
+    const { events, bodies } = await agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('OK.')][i], {
+      settings: { approval: 'yolo', yoloWaitSecs: 1 }, prep: (d) => fs.writeFileSync(path.join(d, 'build.js'), "console.log('built')") });
+    const card = of(events, 'approval').find((e) => e.mode === 'strict');
+    assert.ok(card, 'the user was shown the card');
+    assert.match(card.why, /The deciders said no: .*Run it anyway\?/);
+    assert.equal(card.wait?.then, 'skip');
+    const last = of(events, 'approval_done').at(-1);
+    assert.equal(last.approve, false);
+    assert.equal(last.by, 'deciders');
+    assert.doesNotMatch(toolOut(bodies, 1), /built/);
+  });
+});
+test('shell: in YOLO you can run a command the deciders said no to', { skip: !WIN }, async () => {
+  await withDeciders(voteAll({ needed: 0.05, other: 0.95 }), async () => {
+    const { events, bodies } = await agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('Done.')][i], {
+      settings: { approval: 'yolo', yoloWaitSecs: 5 }, prep: (d) => fs.writeFileSync(path.join(d, 'build.js'), "console.log('built')"),
+      onEvent: (e, id) => { if (e.t === 'approval' && e.mode === 'strict') setTimeout(() => answerApproval(id, e.id, { approve: true }), 20); } });
+    const last = of(events, 'approval_done').at(-1);
+    assert.equal(last.approve, true);
+    assert.match(toolOut(bodies, 1), /built/);
+  });
+});
 // ---------- tripwire ----------
 test('tripwire: many files vanishing next to the project trips it', { skip: !WIN }, async () => {
   const parent = tmp('tw');

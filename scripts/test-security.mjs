@@ -282,3 +282,13 @@ test('QuorX starts on a main port near the top of the range', async () => {
     assert.ok(cfg.pagePort > 0 && cfg.pagePort <= 65535, `pages on ${cfg.pagePort}`);
   } finally { child.kill(); }
 });
+
+// After "Sign in with OpenRouter" the desktop app's tab is the user's own browser, which can't open QuorX's pages.
+test('sign-in finish: in the desktop app the tab says to go back to the QuorX window, with no link into QuorX', async () => {
+  const { callbackPage } = await import('../server/oauth.js');
+  const desk = callbackPage({ ok: true, desktop: true });
+  assert.match(desk, /Close this tab and go back to the QuorX window/);
+  assert.doesNotMatch(desk, /href=/, 'no link the browser could not open');
+  assert.doesNotMatch(callbackPage({ ok: false, message: 'OpenRouter said no.', desktop: true }), /href=/);
+  assert.match(callbackPage({ ok: true }), /href="\/"/, 'a browser QuorX already opened keeps its way back');
+});
