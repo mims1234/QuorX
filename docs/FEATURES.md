@@ -11,6 +11,9 @@ a real browser and your real toolchains, and shows how it got every answer.
 
 - **Any model, with its price.** Every model on OpenRouter, through one key. The model picker searches, sorts by
   price, filters by what a model can do, and shows your own pass rate next to each price.
+- **A card for each model.** Recommended and default models carry a short card: limits and quirks, prompting tips
+  from the provider's docs (with the links), and QuorX's own benchmark results. Hover "card" in the model picker to
+  read it. The agent gets the cards of the models it is using, a few lines each.
 - **A quorum of deciders.** The agent can ask fast models yes/no and multiple-choice questions, writing its own
   guess first so you can see whether asking changed anything. Fixed checks ask them about every build too.
 - **It reads your request in full.** A prompt enhancer spells out what a request implies (a movie trailer implies a

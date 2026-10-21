@@ -1,0 +1,27 @@
+{
+  "id": "openai/gpt-6-luna-decisions",
+  "name": "OpenAI: GPT-6 Luna Decisions",
+  "kind": "decision",
+  "refreshed": "2026-10-20",
+  "limits": {
+    "context": 1050000,
+    "max_output": 945000,
+    "tools": false,
+    "images_in": true,
+    "reasoning": false,
+    "price_per_m": [
+      0.1,
+      0
+    ]
+  },
+  "quirks": [
+    "A decider: it answers typed questions (yes/no, choice, score) with probabilities and never writes text."
+  ],
+  "tips": [
+    "Ask one checkable statement per yes/no question; use a choice question for open questions."
+  ],
+  "bench": "The default look decider in QuorX: median 622 ms per vote, $0.131 per 1,000 votes (224 votes logged), and it settled 78% of screenshot checks on its own.",
+  "sources": [
+    "https://openrouter.ai/openai/gpt-6-luna-decisions"
+  ]
+}

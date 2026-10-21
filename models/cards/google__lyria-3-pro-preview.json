@@ -1,0 +1,22 @@
+{
+  "id": "google/lyria-3-pro-preview",
+  "name": "Google: Lyria 3 Pro Preview",
+  "kind": "music",
+  "refreshed": "2026-10-20",
+  "limits": {
+    "length": "full song",
+    "per_use": 0.08
+  },
+  "quirks": [
+    "A full-length song, so it costs more than a clip; try ideas on the clip model first."
+  ],
+  "tips": [
+    "Name instruments, BPM, key, mood and structure.",
+    "Use section tags like [Verse], [Chorus] and [Bridge] to control the song's flow.",
+    "Write the prompt in the language the lyrics should be in."
+  ],
+  "bench": "",
+  "sources": [
+    "https://ai.google.dev/gemini-api/docs/music-generation"
+  ]
+}
