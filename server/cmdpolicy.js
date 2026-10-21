@@ -1,7 +1,7 @@
 // The rule engine: decides, before a command runs, whether it runs, asks, or is blocked (docs/shell-safety-plan.md §1–2).
 //   1. Split the line into commands. PowerShell lines go through PowerShell's own parser (jobhost.ps1 "parse");
 //      cmd, bash and zsh lines through small, conservative tokenizers. Anything they can't read is "opaque".
-//   2. Give each command a class (read, write, build, install, external, opaque, delete, discard, never, unknown).
+//   2. Give each command a class (read, net, write, build, install, external, opaque, delete, discard, never, unknown).
 //      A script it runs from the project is read first: one that runs other programs is opaque (see "scripts").
 //   3. Resolve every path a delete or write touches to its real target (~, $env:X, %X%, junctions, 8.3 names).
 //      Drive roots, your profile and its folders, system folders (Windows, macOS and Linux ones), other people's
@@ -78,10 +78,20 @@ const NEVER = new Set(['format', 'format-volume', 'diskpart', 'bcdedit', 'vssadm
   'sysadminctl', 'kextload', 'kextunload', 'kmutil', 'bless', 'fdesetup', 'mount', 'umount', 'useradd', 'userdel', 'usermod', 'groupadd', 'passwd',
   'chpasswd', 'visudo', 'su', 'doas', 'pkexec', 'iptables', 'ip6tables', 'nft', 'ufw', 'firewall-cmd', 'modprobe', 'insmod', 'rmmod', 'sysctl',
   'update-grub', 'grub-install', 'efibootmgr', 'reboot', 'halt', 'poweroff', 'telinit', 'chsh', 'fdisk', 'parted', 'sfdisk', 'wipefs',
-  'mkswap', 'swapon', 'swapoff', 'cryptsetup', 'setenforce', 'chattr', 'diskutil', 'asr']);
+  'mkswap', 'swapon', 'swapoff', 'cryptsetup', 'setenforce', 'chattr', 'diskutil', 'asr',
+  // power, sessions, services, drivers, networking, Windows features and logs
+  'psshutdown', 'tsdiscon', 'loginctl', 'powercfg', 'wevtutil', 'clear-eventlog', 'limit-eventlog', 'stop-service', 'restart-service', 'suspend-service',
+  'start-service', 'pnputil', 'devcon', 'disable-pnpdevice', 'enable-pnpdevice', 'disable-netadapter', 'enable-netadapter', 'restart-netadapter',
+  'set-netadapter', 'set-netipaddress', 'new-netipaddress', 'remove-netipaddress', 'set-dnsclientserveraddress', 'set-netconnectionprofile', 'route',
+  'enable-windowsoptionalfeature', 'disable-windowsoptionalfeature', 'add-windowscapability', 'remove-windowscapability', 'uninstall-package',
+  'remove-appxpackage', 'suspend-bitlocker', 'disable-bitlocker', 'enable-bitlocker', 'set-itemproperty', 'new-itemproperty', 'remove-itemproperty',
+  'set-processmitigation', 'bcdboot', 'rasdial']);
+// PowerShell verbs that only read, compute or print.
+const SAFE_VERBS = new Set(['get', 'test', 'select', 'measure', 'compare', 'find', 'resolve', 'join', 'split', 'sort', 'group', 'where', 'foreach',
+  'show', 'read', 'convertto', 'convertfrom', 'format', 'out', 'write', 'trace', 'search', 'watch', 'wait', 'confirm', 'debug']);
 // Read-only uses of programs that are otherwise never allowed.
 const NEVER_READ = { systemctl: ['status', 'is-active', 'is-enabled', 'list-units', 'show', 'cat'], launchctl: ['list', 'print', 'blame'], crontab: ['-l'],
-  diskutil: ['list', 'info'], spctl: ['--assess', '-a', '--status'], sysctl: ['-n', '-a', 'hw.ncpu', 'hw.memsize'], csrutil: ['status'] };
+  diskutil: ['list', 'info'], route: ['print'], spctl: ['--assess', '-a', '--status'], sysctl: ['-n', '-a', 'hw.ncpu', 'hw.memsize'], csrutil: ['status'] };
 // Programs that end other processes: they could close your own programs, so they ask you.
 const KILLERS = new Set(['taskkill', 'tskill', 'stop-process', 'spps', 'kill', 'pkill', 'killall']);
 const EXTERNAL = new Set(['gh', 'glab', 'vercel', 'netlify', 'fly', 'flyctl', 'firebase', 'heroku', 'wrangler', 'az', 'aws', 'gcloud', 'kubectl',
@@ -420,11 +430,122 @@ function neverButRead(p, words) {
   return NEVER_READ[p].includes(words[0]);
 }
 
+// ---------- reading the web ----------
+// Fetching a page, looking a name up or asking a cloud CLI what is there sends nothing of yours out: class "net".
+// Sending data, signing in, a non-http(s) address, or a command that changes a remote or deploys stays "external".
+const NET_PROBES = new Set(['ping', 'test-connection', 'nslookup', 'dig', 'resolve-dnsname', 'tracert', 'traceroute', 'test-netconnection', 'tnc']);
+const FETCHERS = { curl: 'curl', wget: 'wget', 'invoke-webrequest': 'ps', iwr: 'ps', 'invoke-restmethod': 'ps', irm: 'ps' };
+// Flags that send data, sign in, or load a config or cookie jar of their own.
+const SENDS = {
+  curl: /^(-d.*|--data.*|-F.*|--form.*|-T.*|--upload-file|--json|-u.*|--user|-K.*|--config|-b.*|--cookie|-c|--cookie-jar|-E|--cert|--key|--oauth2-bearer|--aws-sigv4|--netrc.*|-n|--proxy-user|-U)$/,
+  wget: /^(--post-data|--post-file|--body-data|--body-file|--user|--password|--http-user|--http-password|--ask-password|--load-cookies|--save-cookies|-i|--input-file|-e|--execute|--config)(=.*)?$/i,
+};
+const METHOD = { curl: /^(-X.*|--request)$/, wget: /^--method(=.*)?$/i };
+const OUTFILE = { curl: /^(-o|--output)$/, wget: /^(-O|--output-document|-P|--directory-prefix)$/ };
+// Invoke-WebRequest / Invoke-RestMethod (curl and wget are their aliases in Windows PowerShell 5.1): PowerShell
+// accepts any unambiguous start of a parameter's name (-B is -Body), so only these parameters keep it a read.
+const PS_SAFE = ['uri', 'outfile', 'usebasicparsing', 'headers', 'timeoutsec', 'maximumredirection', 'maximumretrycount', 'retryintervalsec',
+  'useragent', 'method', 'passthru', 'skipcertificatecheck', 'skipheadervalidation', 'skiphttperrorcheck', 'disablekeepalive', 'erroraction', 'verbose'];
+// Read-only subcommands of cloud and deploy CLIs (the words after the program). Their dev servers are builds.
+const CLOUD_READS = {
+  wrangler: ['whoami', 'tail', 'deployments list', 'deployments status', 'versions list', 'versions view', 'pages project list', 'pages deployment list',
+    'pages deployment tail', 'kv namespace list', 'kv key list', 'd1 list', 'd1 info', 'r2 bucket list', 'queues list', 'secret list'],
+  gh: ['pr view', 'pr list', 'pr status', 'pr diff', 'pr checks', 'issue view', 'issue list', 'issue status', 'repo view', 'repo list', 'run list', 'run view',
+    'run watch', 'release list', 'release view', 'workflow list', 'workflow view', 'auth status', 'search', 'status', 'label list', 'cache list', 'gist list', 'gist view'],
+  vercel: ['ls', 'list', 'inspect', 'logs', 'whoami', 'domains ls', 'env ls', 'projects ls', 'project ls'],
+  netlify: ['status', 'sites:list', 'logs', 'logs:function', 'env:list', 'functions:list'],
+  fly: ['status', 'logs', 'apps list', 'releases', 'machine list', 'machines list', 'regions list', 'ips list', 'auth whoami'],
+  firebase: ['projects:list', 'apps:list', 'hosting:channel:list', 'functions:list', 'login:list'],
+  heroku: ['apps', 'logs', 'ps', 'releases', 'auth:whoami'],
+  kubectl: ['get', 'describe', 'logs', 'top', 'version', 'explain', 'api-resources', 'api-versions', 'cluster-info'],
+  helm: ['list', 'ls', 'status', 'history', 'show', 'search', 'version'],
+  terraform: ['validate', 'show', 'output', 'version', 'providers', 'state list', 'plan'],
+};
+CLOUD_READS.flyctl = CLOUD_READS.fly;
+const CLOUD_DEV = { wrangler: ['dev', 'pages dev', 'types', 'build'], vercel: ['dev', 'build'], netlify: ['dev', 'build'], firebase: ['emulators:start', 'serve'] };
+const SECRETISH = /secret|token|credential|password|keyvault|ssm|kms|access-key|get-session/i;
+const startsWithWords = (plain, words) => words.split(' ').every((x, i) => plain[i] === x);
+
+/** A web read (net), a dev server (build), or null: then it reaches outside (external). */
+function netClass(s) {
+  const p = s.program, plain = s.args.filter((a) => !a.param).map((a) => low(a.text));
+  if (NET_PROBES.has(p)) return { cls: 'net', why: '' };
+  const kind = FETCHERS[p];
+  if (kind) {
+    const texts = s.args.map((a) => a.text), out = [];
+    if (s.args.some((a) => !a.static)) return null;
+    if (texts.some((t) => /authorization|cookie|api-?key|bearer/i.test(t))) return null;
+    if (kind === 'ps') {
+      for (let i = 0; i < s.args.length; i++) {
+        if (!s.args[i].param) continue;
+        const name = low(texts[i]).slice(1).replace(/:.*$/, '');
+        if (!name || !PS_SAFE.some((n) => n.startsWith(name))) return null;
+        if ('method'.startsWith(name) && !/^(get|head|options)$/i.test(texts[i + 1] || '')) return null;
+        if ('outfile'.startsWith(name) && texts[i + 1]) out.push(texts[i + 1]);
+      }
+    } else if (texts.some((t) => SENDS[kind].test(t))) return null;
+    for (let i = 0; kind !== 'ps' && i < texts.length; i++) {
+      if (METHOD[kind].test(texts[i])) {
+        const m = (texts[i].match(/^-X(.+)$/) || texts[i].match(/=(.+)$/) || [])[1] || texts[i + 1];
+        if (!/^(get|head|options)$/i.test(String(m || ''))) return null;
+      }
+      if (OUTFILE[kind].test(texts[i]) && texts[i + 1]) out.push(texts[i + 1]);
+    }
+    // http(s) only, with no name and password in the address (file://, ftp://, scp:// … read or send otherwise).
+    if (texts.some((t) => /^[a-z][\w+.-]*:\/\//i.test(t) && !/^https?:\/\//i.test(t))) return null;
+    if (texts.some((t) => /^(https?:\/\/)?[^/\s@:]+:[^/\s@]*@/i.test(t))) return null;
+    return { cls: 'net', out, why: '' };
+  }
+  if (CLOUD_DEV[p]?.some((w) => startsWithWords(plain, w))) return { cls: 'build', why: '' };
+  if (plain.some((w) => SECRETISH.test(w))) return null;
+  if (CLOUD_READS[p]?.some((w) => startsWithWords(plain, w))) return { cls: 'net', why: '' };
+  if (p === 'gh' && plain[0] === 'api' && !hasArg(s, '-f', '-F', '--field', '--raw-field', '--input')) {
+    const i = s.args.findIndex((a) => ['-x', '--method'].includes(low(a.text)));
+    if (i < 0 || /^get$/i.test(s.args[i + 1]?.text || '')) return { cls: 'net', why: '' };
+  }
+  if (p === 'aws' && ((plain[0] === 's3' && plain[1] === 'ls') || (plain[0] === 'sts' && plain[1] === 'get-caller-identity') || /^(describe|list)-/.test(plain[1] || ''))) return { cls: 'net', why: '' };
+  if (p === 'gcloud' && ['list', 'describe'].includes(plain.at(-1))) return { cls: 'net', why: '' };
+  if (p === 'az' && ['list', 'show'].includes(plain.at(-1))) return { cls: 'net', why: '' };
+  return null;
+}
+
+// ---------- one-liners ----------
+// python -c "…" and node -e "…": the code is right there, so it is read like a script. One that starts programs,
+// builds code while running, deletes or moves files, names places outside the project or reaches for keys stays opaque.
+const INLINE_FLAGS = { python: ['-c'], python3: ['-c'], py: ['-c'], node: ['-e', '-p', '--eval', '--print'], bun: ['-e', '--eval'], deno: ['eval'] };
+const INLINE_RISK = {
+  js: /\b(?:rm|rmSync|rmdir|rmdirSync|unlink|unlinkSync|rename|renameSync|truncate|truncateSync|cp|cpSync|symlink|symlinkSync|chmod|chmodSync)\s*\(|\bhomedir\s*\(/,
+  py: /\bos\s*\.\s*(?:remove|unlink|rmdir|removedirs|rename|renames|replace|truncate|chmod|symlink)\s*\(|\bshutil\b|\.(?:unlink|rmdir|rename|symlink_to|chmod)\s*\(|\bexpanduser\b|\bPath\s*\.\s*home\s*\(|\bfrom\s+os\s+import\b/,
+};
+const INLINE_PLACES = /\b[a-z]:[\\/]|\\\\|(?:^|['"`\s(])\/(?:users|home|etc|var|usr|library|system|root|opt|private)\b|\.ssh|\.gnupg|\.aws|\.azure|\.kube|\.docker|\.npmrc|\.pypirc|\.netrc|git-credentials|id_rsa|id_ed25519|appdata|userprofile|~[\\/]|\.\.[\\/]/i;
+/** The code of a one-liner and its language, or null when the command isn't one. */
+function inlineOf(s) {
+  const flags = INLINE_FLAGS[s.program];
+  const i = flags ? s.args.findIndex((a) => flags.includes(low(a.text))) : -1;
+  if (i < 0) return null;
+  const code = s.args[i + 1];
+  return { code: code?.static ? code.text : null, lang: ['python', 'python3', 'py'].includes(s.program) ? 'py' : 'js' };
+}
+/** Why a one-liner needs a look before it runs, or '' when it only computes, prints or works inside the project. */
+export function inlineRisk(code, lang) {
+  if (!code) return 'its code comes from a variable';
+  if (LAUNCH[lang].programs.test(code)) return 'its code starts other programs';
+  if (LAUNCH[lang].code.test(code)) return 'its code builds more code while it runs';
+  if (INLINE_RISK[lang].test(code)) return 'its code deletes, moves or changes files, or works in your home folder';
+  if (INLINE_PLACES.test(code)) return 'its code names places outside the project';
+  return '';
+}
+// awk with a program that only prints (no system(), pipes, getline or files it writes) only reads.
+const AWKS = new Set(['awk', 'gawk', 'nawk']);
+const awkReads = (s) => !hasArg(s, '-f', '--file', '-i', '--include', '-e', '--source', '-l', '--load') && s.args.every((a) => a.static)
+  && !/system\s*\(|getline|\|\s*"|printf?[^;}]*[>|]|\bclose\s*\(|ENVIRON|PROCINFO/.test(s.args.find((a) => !a.param)?.text ?? 'system(');
+
 function classify(s, shell) {
   const p = s.program, a1 = sub(s), words = s.args.map((a) => low(a.text));
   if (s.opaque) return { cls: 'opaque', why: s.opaque };
-  if (p === 'sc' && shell !== 'powershell' && shell !== 'pwsh') return { cls: 'never', why: 'sc changes Windows services' };
-  if (KILLERS.has(p)) return { cls: 'opaque', why: `${s.rawProgram} can end your other programs` };
+  // In PowerShell a bare sc is Set-Content; sc.exe is still the service tool.
+  if (p === 'sc' && ((shell !== 'powershell' && shell !== 'pwsh') || /\.exe$/i.test(s.rawProgram))) return { cls: 'never', why: 'sc changes Windows services' };
+  if (KILLERS.has(p)) return { cls: 'opaque', ends: true, why: `${s.rawProgram} can end your other programs` };
   if (s.dynamicProgram) return { cls: 'opaque', why: 'the program name comes from a variable' };
   if (s.args.some((a) => /^\\\\/.test(a.text)) || /^\\\\/.test(s.rawProgram)) return { cls: 'opaque', why: 'it uses a network (UNC) path' };
   if (hasArg(s, '-verb') && words.includes('runas')) return { cls: 'never', why: 'it asks for administrator rights' };
@@ -436,7 +557,7 @@ function classify(s, shell) {
   if (p === 'sudo') {
     const inner = sudoInner(s);
     const k = inner && !inner.dynamicProgram ? classify(inner, shell) : null;
-    if (k?.cls === 'install' && k.global) return { cls: 'install', global: true, why: `sudo ${inner.rawProgram} installs for the whole computer as administrator. It needs your password, which an agent command can't type: run it yourself in a terminal tab` };
+    if (k?.cls === 'install' && k.global) return { cls: 'install', global: true, sudo: true, why: `sudo ${inner.rawProgram} installs for the whole computer as administrator. It needs your password, which an agent command can't type: run it yourself in a terminal tab` };
     return { cls: 'never', why: 'sudo runs it as administrator' };
   }
   if (NEVER_READ[p] && neverButRead(p, words)) return { cls: 'read', why: '' };
@@ -468,6 +589,8 @@ function classify(s, shell) {
     const inline = { python: ['-c'], python3: ['-c'], py: ['-c'], node: ['-e', '-p', '--eval', '--print'], deno: ['eval'], bun: ['-e', '--eval'],
       ruby: ['-e'], perl: ['-e', '-E'], php: ['-r'], lua: ['-e'], powershell: ['-c', '-command', '-encodedcommand', '-enc', '-ec', '-e'],
       pwsh: ['-c', '-command', '-encodedcommand', '-enc', '-ec', '-e'], cmd: ['/c', '/k', '/r'], bash: ['-c', '-lc'], sh: ['-c'], zsh: ['-c'] }[p] || [];
+    const one = inlineOf(s);
+    if (one) { const risk = inlineRisk(one.code, one.lang); return risk ? { cls: 'opaque', why: `${s.rawProgram}: ${risk}` } : { cls: 'build', inline: true, why: '' }; }
     if (words.some((w) => inline.includes(w)) || (['cmd', 'bash', 'sh', 'zsh', 'powershell', 'pwsh'].includes(p) && !s.args.length)) return { cls: 'opaque', why: `${s.rawProgram} would run code QuorX can't read first` };
     if (['powershell', 'pwsh'].includes(p) && !hasArg(s, '-file', '-f')) return { cls: 'opaque', why: `${s.rawProgram} would run code QuorX can't read first` };
     if (['powershell', 'pwsh'].includes(p)) return { cls: 'build', script: true, why: '' }; // -File: a script file, like python app.py
@@ -477,6 +600,7 @@ function classify(s, shell) {
     // An interpreter with no script is a prompt: in the agent's terminal, whatever it types next runs unchecked.
     if (!s.args.some((a) => !a.param) && !words.some((w) => ['--version', '-v', '-V', '--help', '-h'].includes(w))) return { cls: 'opaque', why: `${s.rawProgram} with no script opens a prompt where anything typed runs unchecked` };
   }
+  if (AWKS.has(p) && awkReads(s)) return { cls: 'read', why: '' };
   if (OPAQUE.has(p)) return { cls: 'opaque', why: `${s.rawProgram} runs other commands QuorX can't read first` };
   if (p === 'new-object' && hasArg(s, '-comobject')) return { cls: 'opaque', why: 'it starts a COM object' };
   if (p === 'find' && hasArg(s, '-delete', '-exec', '-execdir', '-ok')) return { cls: 'opaque', why: 'find -delete/-exec runs on files it finds' };
@@ -581,13 +705,16 @@ function classify(s, shell) {
       const local = s.args.some((a) => /^(https?:\/\/)?(localhost|127\.0\.0\.1|\[::1\])([:/]|$)/i.test(a.text));
       if (local) return { cls: 'build', why: 'it talks to a server on this computer' };
     }
-    return { cls: 'external', why: `${s.rawProgram} reaches outside this computer` };
+    return netClass(s) || { cls: 'external', why: `${s.rawProgram} reaches outside this computer` };
   }
   if (DELETE.has(p)) return { cls: 'delete', why: '' };
   if (WRITE.has(p)) return { cls: 'write', why: '' };
   if (BUILD.has(p)) return { cls: 'build', why: '' };
   // A script or program inside the project runs project code
   if (/[\\/]/.test(s.rawProgram) || /\.(ps1|bat|cmd|exe|sh|py|js)$/i.test(s.rawProgram)) return { cls: 'build', script: true, why: '' };
+  // A PowerShell cmdlet QuorX doesn't know whose verb can change things (Stop-, Set-, Disable-…): the deciders vote even at Open.
+  const verb = /^([a-z]+)-[a-z]/.exec(p)?.[1];
+  if (verb && !SAFE_VERBS.has(verb)) return { cls: 'unknown', why: `${s.rawProgram} is a PowerShell command QuorX doesn’t know, and ${verb} can change your system` };
   return { cls: 'unknown', why: '' };
 }
 
@@ -612,6 +739,7 @@ function pathsOf(s, c, ctx) {
     out.push({ raw: text, resolved: abs, zone: z.zone, why: z.why, kind, redirect, wildcard: /[*?]/.test(path.basename(abs)) });
   };
   for (const r of s.redirects || []) add(r, 'write', true);
+  for (const o of c.cls === 'net' ? c.out || [] : []) add(o, 'write');
   if (c.cls === 'delete' || c.cls === 'write') {
     let skip = false, plain = 0;
     for (const a of s.args) {
@@ -632,12 +760,13 @@ function pathsOf(s, c, ctx) {
       if (skip) { skip = false; continue; }
       if (a.param) { if (VALUE_PARAMS.has(low(a.text))) skip = true; continue; }
       if (a.kind === 'ScriptBlockExpressionAst' || /^https?:\/\//i.test(a.text)) continue;
+      if (AWKS.has(s.program) && a === s.args.find((x) => !x.param)) continue; // awk's program, not a file
       add(a.text, 'read');
     }
   }
   return out;
 }
-const FILE_READERS = new Set(['get-content', 'gc', 'cat', 'type', 'more', 'less', 'head', 'tail', 'select-string', 'sls', 'findstr', 'grep', 'rg', 'strings',
+const FILE_READERS = new Set(['awk', 'gawk', 'nawk', 'get-content', 'gc', 'cat', 'type', 'more', 'less', 'head', 'tail', 'select-string', 'sls', 'findstr', 'grep', 'rg', 'strings',
   'od', 'hexdump', 'xxd', 'get-filehash', 'sha1sum', 'sha256sum', 'md5sum', 'shasum', 'md5', 'cut', 'sort', 'uniq', 'nl', 'wc', 'jq', 'diff', 'fc', 'comp', 'cmp',
   'import-csv', 'import-clixml', 'get-item', 'get-itemproperty', 'test-json', 'select-xml', 'convertfrom-json', 'file', 'stat', 'plutil', 'base64', 'certutil']);
 // Folders whose files are keys or sign-ins: reading them is never allowed, wherever the project is.
@@ -997,7 +1126,7 @@ const RANK = { allow: 0, ask: 1, deny: 2 };
 /**
  * Decides what happens to a command line before it runs.
  * ctx: { shell: 'powershell'|'pwsh'|'cmd'|'bash'|'zsh'|'direct', root, cwd?, env?, rules: [{effect, match, by, scope}], mode: 'strict'|'yolo',
- *        yolo: { external, opaque, outside } (what the deciders may approve) }
+ *        yolo: { level: 'careful'|'balanced'|'open', external, opaque, outside } (what YOLO runs on its own, what the deciders may approve) }
  * Returns { verdict: 'allow'|'ask'|'deny', who: 'user'|'deciders'|null, why, decidedBy, segments: [...], hint? }.
  */
 export async function decide(line, ctx) {
@@ -1016,6 +1145,11 @@ export async function decide(line, ctx) {
   }
   // Commands a script runs (see "scripts") join the queue just before the command that runs the script.
   const queue = [...split.segs], written = [];
+  // What YOLO runs on its own (safety.js yoloLevel). Strict is none of these: anything not read-only asks you.
+  const level = ctx.mode === 'yolo' ? (['careful', 'balanced', 'open'].includes(ctx.yolo?.level) ? ctx.yolo.level : 'careful') : 'strict';
+  const open = level === 'open', wide = open || level === 'balanced';
+  // How a card that asks you looks: danger (system changes, your keys) or warn (deploys, pushes, outside the project).
+  const RISK = { danger: 2, warn: 1 };
   while (queue.length) {
     const s = queue.shift();
     if (!s.inspected && (s.depth || 0) <= SCRIPT_DEPTH) {
@@ -1024,8 +1158,11 @@ export async function decide(line, ctx) {
       if (r?.opaque) s.opaque ||= r.opaque;
       if (r?.extra.length) { queue.unshift(...r.extra, s); continue; }
     }
-    const k = classify(s, s.shell || shell);
+    let k = classify(s, s.shell || shell);
     const paths = pathsOf(s, k, s.ctx || c);
+    // At Careful, a web read counts as reaching outside and a one-liner as code QuorX can't read, as before.
+    if (level === 'careful' && k.cls === 'net') k = { ...k, cls: 'external', why: `${s.rawProgram} reaches outside this computer` };
+    if (level === 'careful' && k.inline) k = { ...k, cls: 'opaque', why: `${s.rawProgram} would run code QuorX can't read first` };
     written.push(...paths.filter((p) => p.kind === 'write' && p.resolved).map((p) => p.resolved));
     const seg = { text: s.text, program: s.program, cls: k.cls, why: k.why, global: !!k.global, paths, rule: null, suggest: suggestions(s), ...(s.via ? { via: s.via } : {}) };
     if (!s.ctx) trackCd(s, c);
@@ -1036,20 +1173,31 @@ export async function decide(line, ctx) {
     // A read outside the project asks; reading keys never runs.
     const secret = reads.map((p) => p.resolved && secretRead(p.resolved)).find(Boolean);
     const outside = writes.find((p) => p.zone === 'outside') || reads.find((p) => p.resolved && p.zone !== 'inside' && p.zone !== 'protected' && p.why !== 'the project folder itself');
+    // Balanced and Open let YOLO read outside the project (never keys or QuorX's data: those are denied above).
+    const readOnlyOutside = wide && outside?.kind === 'read';
+    let risk = null;
+    // System changes (power, services, registry, disks, admin rights) are refused at every level: a card would let
+    // one yes, or a script that answers cards, shut the computer down. You run those yourself in a terminal tab.
     if (k.cls === 'never') { v = 'deny'; why = k.why || 'this command is never allowed'; }
-    else if (secret) { v = 'deny'; by = 'path'; why = `it would read ${secret}`; }
+    else if (secret && /QuorX/.test(secret)) { v = 'deny'; by = 'path'; why = `it would read ${secret}`; }
+    else if (secret) { v = 'ask'; who = 'user'; risk = 'danger'; by = 'path'; why = `it would read ${secret}`; }
     else if (blocked) { v = 'deny'; by = 'path'; why = `it would ${blocked.kind === 'write' ? 'write to' : 'delete or move'} ${blocked.why}`; }
     else if (k.cls === 'delete' && !unknownPath && !outside) {
       const recursive = s.args.some((a) => /^(-recurse|-r|-rf|-fr|\/s|--recursive)$/i.test(a.text) || (s.program === 'rm' && /^-[a-z]*r/i.test(a.text))) || s.program === 'rimraf' || s.program === 'del-cli';
       const many = paths.reduce((n, p) => n + (p.resolved ? countMatches(p.resolved) : 0), 0);
       if (recursive || many > 20) { v = 'deny'; by = 'code'; why = `it deletes ${recursive ? 'a whole folder' : `${many} files`}`; seg.hint = 'Use delete_file instead: it moves files and folders to .quorx/trash, so the user can get them back.'; }
     }
-    else if (unknownPath) { v = 'ask'; who = 'user'; by = 'path'; why = `a path it touches (${unknownPath.raw}) ${unknownPath.why}`; }
-    else if (outside) { v = 'ask'; who = ctx.yolo?.outside ? 'deciders' : 'user'; by = 'path'; why = `it ${outside.kind === 'write' ? 'writes' : outside.kind === 'read' ? 'reads' : 'deletes or moves'} outside the project (${outside.resolved})`; }
-    else if (k.cls === 'opaque') { v = 'ask'; who = ctx.yolo?.opaque ? 'deciders' : 'user'; why = k.why || 'QuorX can’t check it'; }
-    else if (k.cls === 'external') { v = 'ask'; who = ctx.yolo?.external ? 'deciders' : 'user'; }
-    else if (k.cls === 'discard') { v = 'ask'; who = 'user'; }
-    else if (k.cls === 'install' && k.global) { v = 'ask'; who = 'user'; }
+    else if (unknownPath) { v = 'ask'; who = open ? 'deciders' : 'user'; by = 'path'; why = `a path it touches (${unknownPath.raw}) ${unknownPath.why}`; }
+    else if (outside && !readOnlyOutside) { v = 'ask'; who = ctx.yolo?.outside && !open ? 'deciders' : 'user'; risk = outside.kind === 'read' ? null : 'warn'; by = 'path'; why = `it ${outside.kind === 'write' ? 'writes' : outside.kind === 'read' ? 'reads' : 'deletes or moves'} outside the project (${outside.resolved})`; }
+    else if (k.cls === 'opaque') { v = 'ask'; who = (ctx.yolo?.opaque || open) && !k.ends ? 'deciders' : 'user'; risk = k.ends ? 'warn' : null; why = k.why || 'QuorX can’t check it'; }
+    // Open: what changes a remote, installs for the whole computer or writes outside the project pauses for you.
+    else if (k.cls === 'external') { v = 'ask'; who = ctx.yolo?.external && !open ? 'deciders' : 'user'; risk = 'warn'; }
+    else if (k.cls === 'net') { if (!wide) { v = 'ask'; who = 'user'; why = why || `${s.rawProgram} reaches the web`; } }
+    else if (k.cls === 'discard') { v = 'ask'; who = 'user'; risk = 'warn'; }
+    else if (k.cls === 'install' && k.global) { v = 'ask'; who = 'user'; risk = 'warn'; }
+    // Open: builds, local installs, project scripts and plain unknown commands run (snapshots make them undoable).
+    // An unknown command with a named concern (docker, macOS defaults) still goes to the deciders.
+    else if (open && (['build', 'install'].includes(k.cls) || (k.cls === 'unknown' && !k.why))) { by = 'level:open'; }
     else if (['build', 'install', 'unknown'].includes(k.cls)) { v = 'ask'; who = 'deciders'; why = why || (k.cls === 'unknown' ? 'no rule covers this command' : `no rule allows ${seg.suggest.prefix.replace(/\*$/, '')} yet`); }
     // Rules
     if (v !== 'deny' || (by !== 'path' && k.cls !== 'never' && by !== 'code')) {
@@ -1057,22 +1205,23 @@ export async function decide(line, ctx) {
       if (hits.deny) { v = 'deny'; who = null; by = `rule:${hits.deny.scope || 'project'}`; why = `your rule denies “${hits.deny.match}”`; seg.rule = hits.deny; }
       else if (hits.ask && v === 'allow') { v = 'ask'; who = 'user'; by = `rule:${hits.ask.scope || 'project'}`; why = `your rule asks for “${hits.ask.match}”`; seg.rule = hits.ask; }
       else if (hits.ask) { who = 'user'; seg.rule = hits.ask; }
-      else if (hits.allow && v === 'ask') {
-        const liftable = ['build', 'install', 'unknown', 'read', 'write'].includes(k.cls) && !k.global && !unknownPath && !outside;
+      else if (hits.allow && v === 'ask' && risk !== 'danger') {
+        const liftable = ['build', 'install', 'unknown', 'read', 'write', 'net'].includes(k.cls) && !k.global && !unknownPath && (!outside || readOnlyOutside);
         const userOnly = ['opaque', 'external', 'discard'].includes(k.cls) || k.global || outside;
         if (liftable || (userOnly && hits.allow.by === 'user' && !unknownPath)) { v = 'allow'; who = null; by = `rule:${hits.allow.scope || 'project'}`; why = `your rule allows “${hits.allow.match}”`; seg.rule = hits.allow; }
       }
     }
     if (ctx.mode !== 'yolo' && v === 'ask') who = 'user';
     if (s.viaWhy) why = why ? `${why} (${s.viaWhy})` : s.viaWhy;
-    Object.assign(seg, { verdict: v, who, decidedBy: by, why });
+    Object.assign(seg, { verdict: v, who, decidedBy: by, why, ...(v === 'ask' && risk ? { risk } : {}) });
     segments.push(seg);
   }
   // The strictest command decides; one that needs you makes the whole line need you.
   let top = segments[0];
   for (const s of segments) if (RANK[s.verdict] > RANK[top.verdict] || (s.verdict === top.verdict && s.who === 'user' && top.who !== 'user')) top = s;
   return { verdict: top.verdict, who: top.verdict === 'ask' ? (segments.some((s) => s.verdict === 'ask' && s.who === 'user') ? 'user' : 'deciders') : null,
-    why: top.why, decidedBy: top.decidedBy, hint: segments.find((s) => s.hint)?.hint, segments, shell };
+    why: top.why, decidedBy: top.decidedBy, hint: segments.find((s) => s.hint)?.hint, segments, shell,
+    risk: segments.reduce((r, s) => ((RISK[s.risk] || 0) > (RISK[r] || 0) ? s.risk : r), null) };
 }
 
 // ---------- rule storage ----------

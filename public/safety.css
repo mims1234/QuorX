@@ -8,10 +8,16 @@
 .sc-seg > code { font: 12px var(--mono); color: var(--text); }
 .sc-cls, .sc-path { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 999px; font: 600 11px var(--font-ui); border: 1px solid transparent; cursor: default; }
 .sc-cls { background: var(--panel-2); color: var(--muted); border-color: var(--line); }
-.sc-cls[data-cls="read"], .sc-cls[data-cls="write"] { color: var(--ok); background: var(--ok-dim); border-color: color-mix(in srgb, var(--ok) 35%, transparent); }
+.sc-cls[data-cls="read"], .sc-cls[data-cls="net"], .sc-cls[data-cls="write"] { color: var(--ok); background: var(--ok-dim); border-color: color-mix(in srgb, var(--ok) 35%, transparent); }
 .sc-cls[data-cls="build"], .sc-cls[data-cls="install"], .sc-cls[data-cls="unknown"] { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
 .sc-cls[data-cls="external"], .sc-cls[data-cls="opaque"], .sc-cls[data-cls="discard"], .sc-cls[data-cls="delete"] { color: var(--warn); background: var(--warn-dim); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
 .sc-cls[data-cls="never"] { color: var(--bad); background: var(--bad-dim); border-color: color-mix(in srgb, var(--bad) 40%, transparent); }
+/* A card that pauses for something past the project (warn) or a system change or your keys (danger). */
+.approval.shell-card[data-risk="warn"] { border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); box-shadow: inset 3px 0 0 var(--warn); }
+.approval.shell-card[data-risk="danger"] { border-color: color-mix(in srgb, var(--bad) 60%, var(--line)); box-shadow: inset 3px 0 0 var(--bad); }
+.sc-risk { margin: 6px 0 2px; padding: 6px 10px; border-radius: 8px; font: 600 12px/1.4 var(--font-ui); }
+.sc-risk[data-risk="warn"] { color: var(--warn); background: var(--warn-dim); }
+.sc-risk[data-risk="danger"] { color: var(--bad); background: var(--bad-dim); }
 .sc-path { font-weight: 500; background: transparent; border-color: var(--line); color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sc-path[data-zone="outside"], .sc-path[data-zone="unknown"] { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
 .sc-path[data-zone="blocked"], .sc-path[data-zone="protected"] { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, transparent); }

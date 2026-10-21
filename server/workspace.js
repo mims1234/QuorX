@@ -15,7 +15,10 @@ import { termEvent, lineSplitter, newJob, endJob } from './terminal.js';
 import { jobsAvailable, adoptPid, jobCount, killJob, closeJob, startDetached } from './jobhost.js';
 import { snapshot, changesSince, objectFor, pruneObjects } from './snapshot.js';
 
+// Programs a server or launch config starts without a check (as before the shell tool). Any other program is judged
+// by the command engine first (agent.js start_server); here it only has to be one plain program name or path.
 export const ALLOWED = ['node', 'npm', 'npx', 'python', 'python3', 'py', 'pip', 'pip3', 'deno', 'bun', 'pnpm', 'yarn', 'uv'];
+const PROGRAM = /^[\w.\-\\/:@+]+$/;
 const BAD = /[&|<>^%`$;"'\r\n(){}!]/;
 const SKIP = new Set(['node_modules', '.git', '__pycache__', '.venv', 'venv', '.next', 'dist', '.cache', '.quorx', '.openharness']); // .openharness: the folder's old name, until it moves
 
@@ -161,14 +164,15 @@ export function editFile(root, rel, find, replace, all = false) {
 // ---------- commands ----------
 // {PORT} in a server's arguments is the harness's own placeholder (replaced by the port before anything runs), so
 // its braces are not "brackets" here.
+export const preApproved = (cmd) => ALLOWED.includes(String(cmd || '').trim().toLowerCase().replace(/\.(exe|cmd|bat)$/, ''));
 export function checkCommand(cmd, args) {
   const exe = String(cmd || '').trim().toLowerCase().replace(/\.(exe|cmd|bat)$/, '');
   // A whole command line in `command` ("node hub/server.mjs"): the program is fine, the arguments belong in args.
   const [first, ...rest] = String(cmd || '').trim().split(/\s+/);
-  if (rest.length && ALLOWED.includes(first.toLowerCase().replace(/\.(exe|cmd|bat)$/, ''))) {
+  if (rest.length && PROGRAM.test(first)) {
     throw new Error(`command must be the program alone: use command "${first}" with args ${JSON.stringify([...rest, ...args])}`);
   }
-  if (!ALLOWED.includes(exe)) throw new Error(`"${cmd}" is not allowed. Allowed programs: ${ALLOWED.join(', ')}`);
+  if (!exe || !PROGRAM.test(exe)) throw new Error(`"${cmd}" is not allowed: command must be one program name or path, with its arguments in args`);
   for (const a of args) if (BAD.test(String(a).replaceAll('{PORT}', '0'))) throw new Error(`argument "${a}" contains characters that are not allowed (& | < > ^ % \` $ ; quotes, brackets, !)`);
   return exe;
 }
@@ -179,7 +183,7 @@ export function childEnv(extra = {}) {
   return { ...env, ...extra, FORCE_COLOR: '0', BROWSER: 'none' };
 }
 
-// The command line for an allow-listed program and its plain arguments.
+// The command line for one program and its plain arguments.
 export const lineOf = (cmd, args) => [checkCommand(cmd, args), ...args.map((a) => (/\s/.test(a) ? `"${a}"` : a))].join(' ');
 
 // Every command and server starts through jobgate.cjs, is put in its own Windows job (jobhost.js; on macOS and
@@ -379,13 +383,12 @@ export const serverFor = (projectId, name) => servers.get(`${projectId}/${slug(n
 const LAUNCH = '.quorx/launch.json';
 function readJson(p) { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; } }
 const cleanConfig = (c) => ({ name: String(c.name || 'app').trim().slice(0, 40) || 'app', command: String(c.command || '').trim(), args: (Array.isArray(c.args) ? c.args : []).map(String), port: Number(c.port) > 0 ? Number(c.port) : null });
-const isAllowed = (cmd) => ALLOWED.includes(String(cmd || '').trim().toLowerCase().replace(/\.(exe|cmd|bat)$/, ''));
 
 export function launchConfigs(projectId) {
   const root = workspaceDir(projectId);
   const own = (readJson(path.join(root, LAUNCH))?.configurations || []).filter((c) => c?.command).map((c) => ({ ...cleanConfig(c), from: LAUNCH }));
   const claude = (readJson(path.join(root, '.claude', 'launch.json'))?.configurations || [])
-    .filter((c) => c?.runtimeExecutable && isAllowed(c.runtimeExecutable))
+    .filter((c) => c?.runtimeExecutable && PROGRAM.test(String(c.runtimeExecutable).trim()))
     .map((c) => ({ ...cleanConfig({ name: c.name, command: c.runtimeExecutable, args: c.runtimeArgs, port: c.port }), from: '.claude/launch.json' }))
     .filter((c) => !own.some((o) => slug(o.name) === slug(c.name)));
   return [...own, ...claude];

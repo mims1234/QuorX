@@ -10,7 +10,12 @@ export const SAFETY_DEFAULTS = {
   tripwire: true,        // stop a command that deletes many files outside the project
   tripwireFiles: 25,     //   … this many files
   tripwireSeconds: 3,    //   … within this many seconds
-  // What YOLO's deciders may approve on their own (unticked = it asks you, even in YOLO).
+  // What ⚡ YOLO runs on its own. careful: only reads; the deciders vote on builds, installs and unknown commands.
+  // balanced: also web reads (curl GET, wrangler whoami, gh pr view), reads outside the project and one-liners
+  // QuorX can read (python -c, node -e). open: also builds, local installs, project scripts and unknown commands;
+  // deploys, pushes, global installs and writes outside the project pause for you; the deciders vote on unreadable code.
+  yoloLevel: 'open',
+  // What YOLO's deciders may approve on their own below Open (unticked = it asks you, even in YOLO).
   yoloExternal: false,   // pushes, publishes, deploys
   yoloOpaque: false,     // commands that can't be checked (python -c, cmd /c, iex …)
   yoloOutside: false,    // deletes and moves outside the project (never the blocked places)
@@ -25,6 +30,7 @@ export const SAFETY_DEFAULTS = {
 
 const num = (v, d, lo, hi) => { const n = Number(v); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : d; };
 // PowerShell's parser runs in the Windows job host, so the PowerShell shells are Windows-only (and cmd is Windows').
+const LEVELS = ['careful', 'balanced', 'open'];
 const SHELLS = WIN ? ['powershell', 'pwsh', 'cmd', 'bash'] : ['bash', 'zsh'];
 
 /** The safety settings for a reply: the page's values over the defaults, each held to its limits. */
@@ -41,6 +47,7 @@ export function safetySettings(raw = {}) {
     tripwire: bool('tripwire'),
     tripwireFiles: num(r.tripwireFiles, d.tripwireFiles, 2, 1e5),
     tripwireSeconds: num(r.tripwireSeconds, d.tripwireSeconds, 1, 120),
+    yoloLevel: LEVELS.includes(r.yoloLevel) ? r.yoloLevel : d.yoloLevel,
     yoloExternal: bool('yoloExternal'),
     yoloOpaque: bool('yoloOpaque'),
     yoloOutside: bool('yoloOutside'),
@@ -52,3 +59,6 @@ export function safetySettings(raw = {}) {
     escalateTotal: Math.round(num(r.escalateTotal, d.escalateTotal, 1, 1000)),
   };
 }
+
+/** What the command engine needs to know about YOLO: the level, and what the deciders may approve. */
+export const yoloOf = (SF) => ({ level: SF.yoloLevel, external: SF.yoloExternal, opaque: SF.yoloOpaque, outside: SF.yoloOutside });

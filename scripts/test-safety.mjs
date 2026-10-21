@@ -194,6 +194,67 @@ test('rules: deny > ask > allow, and only typed rules relax risky classes', { sk
   assert.equal(await run('cargo build; git push', RULES), 'ask:user', 'a cargo rule does not carry git push along');
 });
 
+// ⚡ YOLO levels (safety.js yoloLevel): what runs on its own, what the deciders vote on, what pauses for you.
+test('rules: YOLO levels open up reads, builds and one-liners, and keep the extreme ones for you', { skip: !WIN }, async () => {
+  const run = async (line, level, mode = 'yolo') => { const d = await decide(line, ctx({ mode, rules: [], yolo: { level } })); return d.verdict === 'ask' ? `ask:${d.who}${d.risk ? `:${d.risk}` : ''}` : d.verdict; };
+  const T = [
+    // line                                              careful               balanced              open
+    ['curl https://example.com',                          'ask:user:warn',      'allow',              'allow'],
+    ['iwr https://example.com -OutFile page.html',        'ask:user:warn',      'allow',              'allow'],
+    ['iwr https://example.com -OutFile ..\\page.html',    'ask:user:warn',      'ask:user:warn',      'ask:user:warn'],
+    ['curl -X POST https://example.com -d a=1',           'ask:user:warn',      'ask:user:warn',      'ask:user:warn'],
+    ['iwr https://example.com -B secret',                 'ask:user:warn',      'ask:user:warn',      'ask:user:warn'],
+    ['curl file:///C:/x',                                 'ask:user:warn',      'ask:user:warn',      'ask:user:warn'],
+    ['wrangler whoami',                                   'ask:user:warn',      'allow',              'allow'],
+    ['wrangler pages deployment list',                    'ask:user:warn',      'allow',              'allow'],
+    ['wrangler pages deploy dist',                        'ask:user:warn',      'ask:user:warn',      'ask:user:warn'],
+    ['wrangler secret put KEY',                           'ask:user:warn',      'ask:user:warn',      'ask:user:warn'],
+    ['gh pr view 12',                                     'ask:user:warn',      'allow',              'allow'],
+    ['gh api repos/a/b/issues -f title=x',                'ask:user:warn',      'ask:user:warn',      'ask:user:warn'],
+    ['python -c "print(1+1)"',                            'ask:user',           'ask:deciders',       'allow'],
+    ['node -e "console.log(require(\'fs\').readdirSync(\'.\'))"', 'ask:user',  'ask:deciders',       'allow'],
+    ['node -e "require(\'child_process\').execSync(\'calc\')"', 'ask:user',    'ask:user',           'ask:deciders'],
+    ['python -c "import shutil; shutil.rmtree(\'src\')"', 'ask:user',           'ask:user',           'ask:deciders'],
+    ['python -c "open(\'C:/Users/x/.ssh/id_rsa\').read()"', 'ask:user',         'ask:user',           'ask:deciders'],
+    ['Get-Content C:\\Windows\\win.ini',                  'ask:user',           'allow',              'allow'],
+    ['cargo test',                                        'ask:deciders',       'ask:deciders',       'allow'],
+    ['npm i lodash',                                      'ask:deciders',       'ask:deciders',       'allow'],
+    ['cloudflared tunnel --url http://localhost:5300',    'ask:deciders',       'ask:deciders',       'allow'],
+    ['foo-bar baz',                                       'ask:deciders',       'ask:deciders',       'allow'],
+    ['docker run x',                                      'ask:deciders',       'ask:deciders',       'ask:deciders'],
+    ['npm i -g typescript',                               'ask:user:warn',      'ask:user:warn',      'ask:user:warn'],
+    ['git push',                                          'ask:user:warn',      'ask:user:warn',      'ask:user:warn'],
+    ['cmd /c dir',                                        'ask:user',           'ask:user',           'ask:deciders'],
+    ['taskkill /im node.exe /f',                          'ask:user:warn',      'ask:user:warn',      'ask:user:warn'],
+    ['git clean -fd',                                     'ask:user:warn',      'ask:user:warn',      'ask:user:warn'],
+    // decide() only: none of these runs. System changes are refused at every level, whatever the rules say.
+    ['schtasks /create /tn x /tr calc /sc once /st 00:00', 'deny',              'deny',               'deny'],
+    ['reg add HKCU\\Software\\X /v a /d 1',               'deny',               'deny',               'deny'],
+    ['shutdown /s /t 0',                                  'deny',               'deny',               'deny'],
+    ['Stop-Computer',                                     'deny',               'deny',               'deny'],
+    ['Stop-Service spooler',                              'deny',               'deny',               'deny'],
+    ['powercfg /h off',                                   'deny',               'deny',               'deny'],
+    ['Disable-ScheduledTask x',                           'ask:deciders',       'ask:deciders',       'ask:deciders'],
+    ['route print',                                       'allow',              'allow',              'allow'],
+    ['Get-Content ~\\.ssh\\id_rsa',                       'ask:user:danger',    'ask:user:danger',    'ask:user:danger'],
+    ['format C:',                                         'deny',               'deny',               'deny'],
+    ['diskpart',                                          'deny',               'deny',               'deny'],
+    ['Remove-Item dist -Recurse',                         'deny',               'deny',               'deny'],
+    ['Remove-Item ~ -Recurse',                            'deny',               'deny',               'deny'],
+  ];
+  for (const [line, ...want] of T) {
+    for (const [i, level] of ['careful', 'balanced', 'open'].entries()) assert.equal(await run(line, level), want[i], `${level}: ${line}`);
+  }
+  // Strict: a web read or a one-liner asks you, and a button rule can lift it; no rule lets a system change or a key read through.
+  assert.equal(await run('curl https://example.com', 'open', 'strict'), 'ask:user');
+  const lifted = await decide('curl https://example.com', ctx({ rules: [{ effect: 'allow', match: 'invoke-webrequest https://example.com', by: 'button' }] }));
+  assert.equal(lifted.verdict, 'allow', 'a button rule lifts a web read');
+  const sys = await decide('schtasks /create /tn x /tr calc /sc once /st 00:00', ctx({ mode: 'yolo', yolo: { level: 'open' }, rules: [{ effect: 'allow', match: 'schtasks*', by: 'user' }] }));
+  assert.equal(sys.verdict, 'deny', 'no rule lets a system change through');
+  const keys = await decide('Get-Content ~\\.ssh\\id_rsa', ctx({ mode: 'yolo', yolo: { level: 'open' }, rules: [{ effect: 'allow', match: 'get-content*', by: 'user' }] }));
+  assert.equal(`${keys.verdict}:${keys.who}:${keys.risk}`, 'ask:user:danger', 'no rule lets a key read through without you');
+});
+
 test('agent file tools cannot write QuorX config or git internals', () => {
   for (const p of ['.quorx/launch.json', '.quorx/permissions.json', '.git/hooks/pre-commit', 'sub/.git/config', '.claude/settings.json', '.vscode/tasks.json']) assert.ok(agentWriteBlocked(p), p);
   for (const p of ['.quorx/scratch/notes.md', 'src/app.js', '.vscode/settings.json', 'quorx.md']) assert.equal(agentWriteBlocked(p), '', p);
@@ -568,7 +629,7 @@ test('shell: in YOLO a build goes to the deciders, who see only the user and the
   const table = Object.fromEntries(['typesafe/jev-1.14', 'liquid/d1-ultra', 'openai/gpt-6-luna-decisions'].map((m) => [m, yes]));
   await withDeciders(table, async (sent) => {
     const { events, bodies } = await agentRun((b, i) => [reply('I will run it because the user wants it.', [['shell', { command: 'node build.js' }]]), reply('Done.')][i], {
-      settings: { approval: 'yolo' }, prep: (d) => fs.writeFileSync(path.join(d, 'build.js'), "console.log('built')") });
+      settings: { approval: 'yolo', safety: { yoloLevel: 'careful' } }, prep: (d) => fs.writeFileSync(path.join(d, 'build.js'), "console.log('built')") });
     const done = events.find((e) => e.t === 'approval_done');
     assert.equal(done.by, 'deciders');
     assert.equal(done.approve, true);
@@ -581,7 +642,7 @@ const voteAll = (v) => Object.fromEntries(['typesafe/jev-1.14', 'liquid/d1-ultra
 test('shell: in YOLO an unsettled vote waits for you, then runs when the deciders saw little risk', { skip: !WIN }, async () => {
   await withDeciders(voteAll({ needed: 0.5, other: 0.03 }), async () => {
     const { events, bodies } = await agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('Done.')][i], {
-      settings: { approval: 'yolo', yoloWaitSecs: 1 }, prep: (d) => fs.writeFileSync(path.join(d, 'build.js'), "console.log('built')") });
+      settings: { approval: 'yolo', yoloWaitSecs: 1, safety: { yoloLevel: 'careful' } }, prep: (d) => fs.writeFileSync(path.join(d, 'build.js'), "console.log('built')") });
     const card = of(events, 'approval').find((e) => e.mode === 'strict');
     assert.ok(card?.wait && card.wait.then === 'run' && card.wait.secs === 1);
     const done = of(events, 'approval_done')[0];
@@ -593,7 +654,7 @@ test('shell: in YOLO an unsettled vote waits for you, then runs when the decider
 test('shell: in YOLO an unsettled vote with a doubtful harm vote is skipped when nobody answers', { skip: !WIN }, async () => {
   await withDeciders(voteAll({ needed: 0.9, other: 0.4 }), async () => {
     const { events, bodies } = await agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('OK.')][i], {
-      settings: { approval: 'yolo', yoloWaitSecs: 1 }, prep: (d) => fs.writeFileSync(path.join(d, 'build.js'), "console.log('built')") });
+      settings: { approval: 'yolo', yoloWaitSecs: 1, safety: { yoloLevel: 'careful' } }, prep: (d) => fs.writeFileSync(path.join(d, 'build.js'), "console.log('built')") });
     const done = of(events, 'approval_done')[0];
     assert.equal(done.by, 'timeout');
     assert.equal(done.approve, false);
@@ -604,7 +665,7 @@ test('shell: in YOLO an unsettled vote with a doubtful harm vote is skipped when
 test('shell: in YOLO the deciders’ no goes to you for the wait; no answer and it stays declined', { skip: !WIN }, async () => {
   await withDeciders(voteAll({ needed: 0.05, other: 0.95 }), async () => {
     const { events, bodies } = await agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('OK.')][i], {
-      settings: { approval: 'yolo', yoloWaitSecs: 1 }, prep: (d) => fs.writeFileSync(path.join(d, 'build.js'), "console.log('built')") });
+      settings: { approval: 'yolo', yoloWaitSecs: 1, safety: { yoloLevel: 'careful' } }, prep: (d) => fs.writeFileSync(path.join(d, 'build.js'), "console.log('built')") });
     const card = of(events, 'approval').find((e) => e.mode === 'strict');
     assert.ok(card, 'the user was shown the card');
     assert.match(card.why, /The deciders said no: .*Run it anyway\?/);
@@ -618,8 +679,9 @@ test('shell: in YOLO the deciders’ no goes to you for the wait; no answer and 
 test('shell: in YOLO you can run a command the deciders said no to', { skip: !WIN }, async () => {
   await withDeciders(voteAll({ needed: 0.05, other: 0.95 }), async () => {
     const { events, bodies } = await agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('Done.')][i], {
-      settings: { approval: 'yolo', yoloWaitSecs: 5 }, prep: (d) => fs.writeFileSync(path.join(d, 'build.js'), "console.log('built')"),
+      settings: { approval: 'yolo', yoloWaitSecs: 5, safety: { yoloLevel: 'careful' } }, prep: (d) => fs.writeFileSync(path.join(d, 'build.js'), "console.log('built')"),
       onEvent: (e, id) => { if (e.t === 'approval' && e.mode === 'strict') setTimeout(() => answerApproval(id, e.id, { approve: true }), 20); } });
+    assert.equal(of(events, 'approval').find((e) => e.mode === 'strict')?.risk, 'warn', 'an amber card');
     const last = of(events, 'approval_done').at(-1);
     assert.equal(last.approve, true);
     assert.match(toolOut(bodies, 1), /built/);

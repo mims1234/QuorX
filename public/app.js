@@ -3554,7 +3554,7 @@ function approvalBadge(a, live) {
   };
 }
 // ---------- a command waiting for you: what it is, what it touches, why it asks, and how wide a rule to save ----------
-const CMD_CLASS = { read: 'reads only', write: 'writes in the project', build: 'runs project code', install: 'installs packages', external: 'leaves this computer',
+const CMD_CLASS = { read: 'reads only', net: 'reads the web', write: 'writes in the project', build: 'runs project code', install: 'installs packages', external: 'leaves this computer',
   opaque: 'can’t be checked', delete: 'deletes', discard: 'throws away work', never: 'never allowed', unknown: 'no rule covers it' };
 const CMD_ZONE = { inside: 'in the project', outside: 'outside the project', unknown: 'can’t be resolved', blocked: 'blocked', protected: 'protected' };
 const byName = (by) => (by === 'user' ? 'you' : by === 'timeout' ? 'no answer in time' : by === 'plan' ? 'the approved production plan' : esc(by));
@@ -3594,8 +3594,10 @@ function shellCardHTML(a) {
   const segs = (p.segments || []).map((s) => `<div class="sc-seg"><code>${esc(clip(s.text, 200))}</code><span class="sc-cls" data-cls="${esc(s.cls)}">${esc(CMD_CLASS[s.cls] || s.cls)}${s.global ? ' · whole computer' : ''}${s.via ? ` · run by ${esc(s.via)}` : ''}</span>${(s.paths || []).map((x) => `<span class="sc-path" data-zone="${esc(x.zone)}">${esc(CMD_ZONE[x.zone] || x.zone)} · ${esc(clip(x.path, 90))}</span>`).join('')}</div>`).join('');
   const sug = (p.segments || []).find((s) => s.verdict !== 'allow')?.suggest || p.segments?.[0]?.suggest || { exact: c.what, prefix: c.what, program: c.what };
   const seg = (group, opts) => `<div class="seg sc-pick" data-group="${group}">${opts.map(([v, l], i) => `<button type="button" data-v="${esc(v)}" class="${i === 0 ? 'on' : ''}">${l}</button>`).join('')}</div>`;
-  return `<div class="approval shell-card" data-id="${esc(c.id)}" data-tool="shell">
-    <h4>⌨️ Run a command <small>(free${p.shell ? ` · ${esc(p.shell)}` : ''})</small></h4>
+  const risk = c.risk === 'danger' ? '<div class="sc-risk" data-risk="danger">⛔ This reads your keys or sign-ins. Only say yes if you asked for exactly this.</div>'
+    : c.risk === 'warn' ? '<div class="sc-risk" data-risk="warn">⚠ This reaches past the project: a deploy, a push, a whole-computer install, or files outside the project.</div>' : '';
+  return `<div class="approval shell-card" data-id="${esc(c.id)}" data-tool="shell"${c.risk ? ` data-risk="${esc(c.risk)}"` : ''}>
+    <h4>⌨️ Run a command <small>(free${p.shell ? ` · ${esc(p.shell)}` : ''})</small></h4>${risk}
     <pre class="sc-line">${esc(c.what)}</pre>
     ${segs ? `<div class="sc-segs">${segs}</div>` : ''}
     ${(p.packages || []).length ? `<div class="sc-segs">${p.packages.map((k) => `<span class="sc-path" data-zone="${k.verdict === 'ok' ? 'inside' : k.verdict === 'missing' ? 'blocked' : 'unknown'}">📦 ${esc(k.name)} · ${esc(k.eco)} · ${k.verdict === 'ok' ? `${k.ageDays != null ? `${Math.round(k.ageDays / 365 * 10) / 10} years old` : 'exists'}${k.weekly != null ? ` · ${k.weekly.toLocaleString()}/week` : ''}` : esc(k.note)}</span>`).join('')}</div>` : ''}
@@ -4888,10 +4890,12 @@ function settingsPanels(S) {
           stRow('Watch for mass deletes', '', stSwitch('safety.tripwire', SF.tripwire))
           + stRow('Stop after', 'Files removed outside the project…', stStep('safety.tripwireFiles', SF.tripwireFiles, 2, 10000, 1, 'files'))
           + stRow('Within', '…in this many seconds.', stStep('safety.tripwireSeconds', SF.tripwireSeconds, 1, 120, 1, 's'))),
-        stCard('What ⚡ YOLO’s deciders may approve', 'Builds, tests, local installs and unknown commands go to the deciders in YOLO. These stay with you unless you tick them. Blocked places (drive roots, your profile, system folders, folders above the project) are never allowed.',
-          stRow('Pushes, publishes and deploys', 'Anything that leaves this computer: git push, npm publish, curl, ssh…', stSwitch('safety.yoloExternal', SF.yoloExternal))
-          + stRow('Commands QuorX can’t check', 'python -c, cmd /c, iex, scripts built from text…', stSwitch('safety.yoloOpaque', SF.yoloOpaque))
-          + stRow('Deletes and writes outside the project', '', stSwitch('safety.yoloOutside', SF.yoloOutside))),
+        stCard('What ⚡ YOLO runs on its own', 'Refused at every level: system changes (power, services, registry, disks, admin rights), deleting whole folders, blocked places and QuorX’s own keys. Run those yourself in a terminal tab.',
+          stRow('Always asks you', 'Reading your key folders pauses with a red card (hooks never run it). Ending other programs and throwing away uncommitted work ask too. A no from the deciders comes to you for the YOLO wait before the command is skipped.', '')
+          + stRow('Commands', 'Careful: only reads run; the deciders vote on builds, installs and unknown commands. Balanced: also web reads (curl, wrangler whoami, gh pr view), reads outside the project, and one-liners QuorX can read (python -c, node -e). Open: also builds, local installs, project scripts, servers, tunnels and unknown commands, which snapshots make undoable. Deploys, pushes, whole-computer installs and writes outside the project pause for you with an amber card; the deciders vote only on code QuorX can’t read.', stSeg('safety.yoloLevel', [['careful', 'Careful'], ['balanced', 'Balanced'], ['open', 'Open']], SF.yoloLevel || 'open'))
+          + ((SF.yoloLevel || 'open') === 'open' ? stRow('The deciders may approve', 'At Open: only code QuorX can’t read. Pick Careful or Balanced to choose more.', '') : stRow('Pushes, publishes and deploys', 'Anything that sends data out or changes a remote: git push, npm publish, wrangler deploy, a POST…', stSwitch('safety.yoloExternal', SF.yoloExternal))
+          + stRow('Commands QuorX can’t check', 'cmd /c, iex, one-liners that start programs or delete files, scripts built from text…', stSwitch('safety.yoloOpaque', SF.yoloOpaque))
+          + stRow('Deletes and writes outside the project', '', stSwitch('safety.yoloOutside', SF.yoloOutside)))),
         stCard('Debugger and devices', '',
           stRow('Debugger for Node and Python', 'Research found a debugger helps strong models most after plain debugging fails, and can make weaker ones worse from the start. “After failed tries”: it opens once the agent has hit errors or had a build sent back.', stSeg('debugger', [['earned', 'After failed tries'], ['always', 'Always'], ['off', 'Off']], S.debugger || 'earned'))
           + stRow('Let the android tool use a physical phone', 'Unticked, it uses emulators only: a phone holds your real accounts and data.', stSwitch('safety.androidPhones', SF.androidPhones))),
@@ -4975,6 +4979,7 @@ function wireSettings() {
   for (const seg of main.querySelectorAll('.st-segmented[data-bind]')) for (const b of seg.querySelectorAll('.st-seg-btn')) b.onclick = () => {
     for (const x of seg.querySelectorAll('.st-seg-btn')) { x.classList.toggle('active', x === b); x.setAttribute('aria-checked', String(x === b)); }
     setPath(S, seg.dataset.bind, b.dataset.v); seg.closest('.st-row')?.classList.add('changed'); mark();
+    if (seg.dataset.bind === 'safety.yoloLevel') drawSettings(); // the deciders' switches matter only below Open
   };
   for (const st of main.querySelectorAll('.st-stepper')) {
     const inp = $('input', st), step = Number(st.dataset.step), min = Number(st.dataset.min), max = Number(st.dataset.max);

@@ -34,7 +34,7 @@ import { followTerm, runningJobs, stopJob } from './server/terminal.js';
 import { runningIn, stopRunning, stopAllIn } from './server/running.js';
 import { decide as decideCommand, loadRules, saveRules, suggestedRules } from './server/cmdpolicy.js';
 import { jobHostStatus, jobsAvailable } from './server/jobhost.js';
-import { safetySettings } from './server/safety.js';
+import { safetySettings, yoloOf } from './server/safety.js';
 import { readAudit } from './server/audit.js';
 import { pickFolder } from './server/pickfolder.js';
 import { userBrowse } from './server/userbrowser.js';
@@ -491,7 +491,7 @@ const server = http.createServer(async (req, res) => {
       const S = safetySettings(b.safety);
       try {
         const d = await decideCommand(String(b.line || ''), { shell: S.shell, root, rules: [...(Array.isArray(b.chatRules) ? b.chatRules : []), ...loadRules(b.projectId && validId(b.projectId) ? root : null)],
-          mode: b.mode === 'yolo' ? 'yolo' : 'strict', yolo: { external: S.yoloExternal, opaque: S.yoloOpaque, outside: S.yoloOutside } });
+          mode: b.mode === 'yolo' ? 'yolo' : 'strict', yolo: yoloOf(S) });
         return json(res, 200, { verdict: d.verdict, who: d.who, why: d.why, decidedBy: d.decidedBy, hint: d.hint, shell: d.shell,
           segments: d.segments.map((s) => ({ text: s.text, cls: s.cls, verdict: s.verdict, who: s.who, why: s.why, decidedBy: s.decidedBy, paths: (s.paths || []).map((p) => ({ path: p.resolved || p.raw, zone: p.zone, kind: p.kind, why: p.why })) })) });
       } catch (e) { return json(res, 200, { error: e.message }); }
