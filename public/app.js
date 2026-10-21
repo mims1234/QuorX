@@ -5357,6 +5357,8 @@ async function drawMemoryPanel(msg = '') {
     $('.mem-del', li).onclick = () => save({ items: m.items.filter((x) => x.id !== id) }, '✓ Forgotten');
   }
 }
+// The 👁 / 🙈 button that shows or masks amounts, switched in place.
+function revealButton(b, shown) { if (!b) return; b.title = shown ? 'Hide amounts' : 'Show amounts'; b.textContent = shown ? '🙈' : '👁'; }
 async function drawKeysPanel() {
   const box = $('#stKeys'); if (!box) return;
   const keys = await fetch('/api/keys').then((r) => r.json()).catch(() => []);
@@ -5422,9 +5424,15 @@ async function drawKeysPanel() {
   // per key
   for (const card of box.querySelectorAll('.kx-card')) {
     const id = card.dataset.key, k = keys.find((x) => x.id === id), show = () => ST.reveal.has(id) || !U.maskAmounts;
+    // Fetched once; 👁 paints the same numbers again, shown or masked, without reloading or redrawing the panel.
+    let last = null;
     const load = async () => {
-      const el = $('[data-usage]', card);
-      const u = await fetch(`/api/keys/${id}/usage`).then((x) => x.json()).catch((e) => ({ error: e.message }));
+      last = await fetch(`/api/keys/${id}/usage`).then((x) => x.json()).catch((e) => ({ error: e.message }));
+      paint();
+    };
+    const paint = () => {
+      const el = $('[data-usage]', card), u = last;
+      if (!u) return;
       if (u.error) { el.innerHTML = `<div class="kx-wait bad">⚠ ${esc(u.error)}</div>`; return; }
       const w = u.windows || {}, partial = Object.values(w).find((x) => x?.partial);
       const val = (x) => (x == null ? '—' : money(x.value ?? x, 2));
@@ -5450,7 +5458,7 @@ async function drawKeysPanel() {
     };
     card.onclick = async (e) => {
       const act = e.target.closest('[data-k]')?.dataset.k; if (!act) return;
-      if (act === 'reveal') { ST.reveal.has(id) ? ST.reveal.delete(id) : ST.reveal.add(id); return drawKeysPanel(); }
+      if (act === 'reveal') { ST.reveal.has(id) ? ST.reveal.delete(id) : ST.reveal.add(id); revealButton($('[data-k="reveal"]', card), show()); return paint(); }
       if (act === 'refresh') return load();
       if (act === 'activate') { await fetch(`/api/keys/${id}/activate`, { method: 'POST' }); await keysChanged(); return drawKeysPanel(); }
       if (act === 'rename') { const n = $('.kx-name', card); n.focus(); n.select(); return; }
@@ -5461,14 +5469,16 @@ async function drawKeysPanel() {
   const acc = $('#stAccount');
   if (acc) {
     const showAcc = () => ST.revealAccount || !U.maskAmounts;
-    const loadAcc = async () => {
-      const a = await fetch('/api/credits').then((x) => x.json()).catch((e) => ({ error: e.message }));
+    let lastAcc = null;
+    const loadAcc = async () => { lastAcc = await fetch('/api/credits').then((x) => x.json()).catch((e) => ({ error: e.message })); paintAcc(); };
+    const paintAcc = () => {
+      const a = lastAcc; if (!a) return;
       const m = (v) => (showAcc() ? money(v ?? 0, 2) : '•••••');
       acc.innerHTML = a.error ? `<div class="kx-wait">Account credits aren't available for this key (${esc(a.error)}).</div>`
         : `<div class="kx-metric"><span>Total credits</span><b>${m(a.total)}</b></div><div class="kx-metric"><span>Total used</span><b>${m(a.used)}</b></div><div class="kx-metric left"><span>Left</span><b>${m((a.total ?? 0) - (a.used ?? 0))}</b></div><div class="kx-checked">Checked ${new Date(a.checked).toLocaleTimeString()}</div>`;
     };
     loadAcc();
-    box.querySelector('[data-acc="reveal"]').onclick = () => { ST.revealAccount = !ST.revealAccount; drawKeysPanel(); };
+    box.querySelector('[data-acc="reveal"]').onclick = (e) => { ST.revealAccount = !ST.revealAccount; revealButton(e.currentTarget, showAcc()); paintAcc(); };
     box.querySelector('[data-acc="refresh"]').onclick = loadAcc;
   }
 }
