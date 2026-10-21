@@ -146,11 +146,13 @@ export function scorecard(days = 14) {
   const by = {};
   for (const r of rows) {
     if (r.kind) continue; // reading documents ('docs') and code reviews ('review'): in the ledger and budgets, not a reply
-    const m = (by[r.model] ??= { model: r.model, replies: 0, stops: {}, checked: 0, passed: 0, steps: 0, tools: 0, cost: 0, ms: 0, retries: 0, trimmed: 0, changedFiles: 0 });
+    const m = (by[r.model] ??= { model: r.model, replies: 0, stops: {}, checked: 0, passed: 0, steps: 0, tools: 0, cost: 0, ms: 0, retries: 0, trimmed: 0, changedFiles: 0, looksFirst: 0, started: 0 });
     m.replies++; m.stops[r.stop] = (m.stops[r.stop] || 0) + 1;
     if (r.verify) { m.checked++; if (r.verify.ok) m.passed++; }
     m.steps += r.steps || 0; m.tools += r.tools || 0; m.cost += r.cost || 0; m.ms += r.ms || 0; m.retries += r.retries || 0; m.trimmed += r.trimmed ? 1 : 0; m.changedFiles += r.changed || 0;
+    // Replies that wrote something: how many steps only read or looked first (rows from before 0.2.7 have no count).
+    if (r.firstWrite != null && r.looksFirst != null) { m.started++; m.looksFirst += r.looksFirst; }
   }
-  return Object.values(by).map((m) => ({ ...m, avgSteps: +(m.steps / m.replies).toFixed(1), avgCost: +(m.cost / m.replies).toFixed(5), avgSecs: +(m.ms / m.replies / 1000).toFixed(1), passRate: m.checked ? +(m.passed / m.checked).toFixed(2) : null }))
+  return Object.values(by).map((m) => ({ ...m, avgSteps: +(m.steps / m.replies).toFixed(1), avgCost: +(m.cost / m.replies).toFixed(5), avgSecs: +(m.ms / m.replies / 1000).toFixed(1), passRate: m.checked ? +(m.passed / m.checked).toFixed(2) : null, avgLooksFirst: m.started ? +(m.looksFirst / m.started).toFixed(1) : null }))
     .sort((a, b) => b.replies - a.replies);
 }

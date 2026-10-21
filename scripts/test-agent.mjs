@@ -696,10 +696,20 @@ test('several delegate calls in one step run at the same time', async () => {
 });
 
 test('helpers can be switched off, and then delegate is not offered', async () => {
-  const { bodies } = await run(() => reply('ok'), { settings: { helpers: false } });
+  const { bodies } = await run(() => reply('ok'), { settings: { helpers: false, helperMinFiles: 0 } });
   assert.ok(!bodies[0].tools.some((t) => t.function.name === 'delegate'));
-  const on = await run(() => reply('ok'));
+  const on = await run(() => reply('ok'), { settings: { helperMinFiles: 0 } });
   assert.ok(on.bodies[0].tools.some((t) => t.function.name === 'delegate'));
+});
+
+test('helpers are offered only in projects big enough to explore (40 files by default)', async () => {
+  const many = (dir) => { for (let i = 0; i < 45; i++) fs.writeFileSync(path.join(dir, `f${i}.js`), 'x'); };
+  const small = await run(() => reply('ok'));
+  assert.ok(!small.bodies[0].tools.some((t) => t.function.name === 'delegate'), 'an empty project gets no helpers');
+  assert.doesNotMatch(small.bodies[0].messages[0].content, /\nHelpers: /);
+  const big = await run(() => reply('ok'), { prep: many });
+  assert.ok(big.bodies[0].tools.some((t) => t.function.name === 'delegate'));
+  assert.match(big.bodies[0].messages[0].content, /\nHelpers: /);
 });
 
 test('after 3 steps of reading files itself, the agent is nudged to use helpers (once)', async () => {
@@ -710,7 +720,7 @@ test('after 3 steps of reading files itself, the agent is nudged to use helpers 
     reply('', [['read_file', { path: 'a.txt' }]]),
     reply('', [['read_file', { path: 'a.txt' }]]),
     reply('done'),
-  ][i]);
+  ][i], { settings: { helperMinFiles: 0 } });
   assert.match(toolResults(bodies[4]).at(-1), /Hand the rest of the exploring to helpers with delegate/);
   assert.equal(of(events, 'note').filter((n) => /helpers with delegate/.test(n.msg)).length, 1);
 });
@@ -2061,4 +2071,28 @@ test('edit_video joins a still, a clip and a voice-over into one mp4 in the proj
   assert.equal(cards.length, 1, 'the ffmpeg line went through the command approval');
   assert.match(JSON.stringify(cards[0]), /ffmpeg/);
   assert.ok(of(events, 'file').some((e) => e.path === 'assets/edits/teaser.mp4'));
+});
+
+test('the slow start is counted: steps that only read or looked before the first write', async () => {
+  let b = 0;
+  const { done } = await run(() => [
+    reply('', [['list_files', {}]]),
+    reply('', [['search_files', { query: 'x' }], ['list_files', {}]]),
+    reply('', [['write_file', { path: 'a.txt', content: 'x' }]]),
+    reply('', [['read_file', { path: 'a.txt' }]]),
+    reply('Done.'),
+  ][b++]);
+  assert.equal(done.stats.looksFirst, 2);
+  assert.equal(done.stats.firstWrite, 2);
+});
+
+test('skills are listed by name, with descriptions only for the ones the request is about', async () => {
+  const { skillsNote, compactPaths } = await import('../server/agent.js');
+  const sk = [{ name: 'canvas-game', description: 'Build a browser game on a canvas.' }, { name: 'node-server', description: 'Run a Node.js web server or API.' }];
+  const note = skillsNote(sk, 'Make a snake game');
+  assert.match(note, /- canvas-game: Build a browser game/);
+  assert.match(note, /Also: node-server\./);
+  assert.doesNotMatch(note, /Node\.js web server/);
+  assert.equal(skillsNote(sk, 'hello'), 'Available: canvas-game, node-server.');
+  assert.equal(compactPaths(['index.html', 'src/a.js', 'src/b.js', 'css/x.css', 'lib/ (skipped)']), 'index.html, src/{a.js, b.js}, css/x.css, lib/ (skipped)');
 });

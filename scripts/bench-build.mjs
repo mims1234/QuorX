@@ -223,6 +223,7 @@ export async function runBuildBench(arg) {
         tools: run.tools, toolCalls: Object.values(run.tools).reduce((a, b) => a + b, 0), toolErrors: run.toolErrors, helperTools: run.helperTools, deciders: { ...run.deciders, ...(st.decide || {}) }, questions: run.questions, llmRetries: run.retries, saved: saved && path.relative(PROJECT, saved).replace(/\\/g, '/'),
         task: task.id, cat: task.cat, rep, tests, scores: j.scores, total: j.scores ? CORE_KEYS.reduce((a, k) => a + j.scores[k], 0) : 0, pass: !!j.pass, bar: BAR, bugs: j.bugs, summary: j.summary,
         judgeCost: j.cost || 0, judgeMs: j.ms || 0, cost: st.cost || 0, byRole: st.byRole || {}, calls: Object.values(callsByRole).reduce((a, b) => a + b, 0), callsByRole, builderCalls: st.llmCalls || 0,
+        tokens: tokensOf(st, s.builder), looksFirst: st.looksFirst ?? null, firstWrite: st.firstWrite ?? null,
         ms: st.ms || run.ms, steps: st.steps || 0, stop: st.stop || (run.error ? 'error' : null), sentBack: run.sentBack, plan: run.plan, planDone: st.plan || null,
         inLoopReviews: run.reviews, verify: st.verify || null, targets, files: listBuilt(dir), changed: (st.changed || []).length, error: run.error, dir: KEEP ? dir : null, reply: clip(run.reply, 1500) };
     } catch (e) {
@@ -551,6 +552,12 @@ async function judgeCode({ task, dir, tests, model, bar }) {
 }
 
 // ---------- report ----------
+// The builder's prompt size: tokens in per call, and the share read from the provider's cache (null when not reported).
+function tokensOf(st, builder) {
+  const m = st.byModel?.[builder] || {};
+  return { in: st.tokensIn || 0, out: st.tokensOut || 0, builderIn: m.tokensIn || 0, builderCalls: m.calls || 0, perCall: m.calls ? Math.round((m.tokensIn || 0) / m.calls) : 0,
+    cacheRead: m.cacheRead ?? null, cachedIn: m.cachedIn ?? null };
+}
 const pad = (s, n) => String(s).padEnd(n);
 const lpad = (s, n) => String(s).padStart(n);
 const avg = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
@@ -576,6 +583,8 @@ function report(results, setups, tasks, bar) {
   for (const t of tasks) {
     console.log(`${pad(t.id, 18)}${setups.map((s) => pad(results.filter((r) => r.task === t.id && r.setup === s.label).map((r) => (r.scores ? `${REVIEW_KEYS.map((k) => r.scores[k] ?? '-').join('/')}${r.pass ? '✓' : '✗'}${r.tests ? ` ${r.tests.passed}/${r.tests.total}` : ''}` : `—${r.error ? '⚠' : r.skipped ? ' skipped' : ''}`)).join(' '), 24)).join('')}`);
   }
+  console.log('\nPROMPT SIZE (builder): tokens in per call · cached share · read/look steps before the first write');
+  for (const r of results.filter((x) => x.tokens)) console.log(`  ${pad(r.setup, 22)} ${pad(r.task, 18)} ${lpad(r.tokens.perCall, 7)} tok/call × ${r.tokens.builderCalls} · ${r.tokens.cachedIn ? `${Math.round((100 * r.tokens.cacheRead) / r.tokens.cachedIn)}% cached` : 'cache n/a'} · ${r.looksFirst ?? '-'} looks first`);
   const errs = results.filter((r) => r.error);
   if (errs.length) { console.log('\nPROBLEMS'); for (const r of errs) console.log(`  ${r.setup} · ${r.task}: ${clip(r.error, 160)}`); }
   return rows;
