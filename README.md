@@ -49,6 +49,7 @@ Then open http://localhost:5188 and sign in with OpenRouter. The full setup is i
 | [What QuorX does](docs/FEATURES.md) | Every feature, with screenshots, and what it deliberately doesn't do |
 | [Getting started](docs/GETTING-STARTED.md) | Installing, signing in, the desktop app, and where your data lives |
 | [How it works](docs/REPORT.md) | The full report: the agent loop, the deciders, the safety layer, platform packs, research |
+| [Research notes 0.2.7](docs/research/0.2.7-overview.md) | What this release taught us: a cheaper prompt, deciders and creativity, a post-mortem, safer releases |
 | [Testing](docs/TESTING.md) | Running the tests, and helping test platform packs |
 | [Privacy](PRIVACY.md) | What stays on your computer and what leaves it |
 | [Security](SECURITY.md) | Reporting a problem, checking downloads, and what the guards do and don't cover |
