@@ -499,8 +499,13 @@ const COMMANDS = {
     const f = t.emu && fitEmu(t);
     if (f && f.scale !== 1 && (method === 'Input.dispatchMouseEvent' || method === 'Input.synthesizeTapGesture')) return t.view.webContents.debugger.sendCommand(method, { ...params, x: params.x * f.scale, y: params.y * f.scale });
     if (f && f.scale !== 1 && method === 'Input.dispatchTouchEvent') return t.view.webContents.debugger.sendCommand(method, { ...params, touchPoints: (params.touchPoints || []).map((p) => ({ ...p, x: p.x * f.scale, y: p.y * f.scale })) });
-    // Screenshots at the page's own size, even while it is shown scaled down in the pane.
-    if (method === 'Page.captureScreenshot' && t.emu) return t.view.webContents.debugger.sendCommand(method, { ...params, clip: { x: 0, y: 0, width: t.emu.width, height: t.emu.height, scale: 1 } });
+    // Screenshots at the page's own size, even while it is shown scaled down in the pane. A clip is in page
+    // coordinates, so it starts where the page is scrolled to: one at 0,0 on a scrolled page was blank background.
+    if (method === 'Page.captureScreenshot' && t.emu) {
+      const m = await t.view.webContents.debugger.sendCommand('Page.getLayoutMetrics').catch(() => null);
+      const v = m?.cssVisualViewport || m?.visualViewport || { pageX: 0, pageY: 0 };
+      return t.view.webContents.debugger.sendCommand(method, { ...params, clip: { x: v.pageX || 0, y: v.pageY || 0, width: t.emu.width, height: t.emu.height, scale: 1 } });
+    }
     return t.view.webContents.debugger.sendCommand(method, params);
   },
   async 'tab.lock'({ tab, locked }) {
