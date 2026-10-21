@@ -60,7 +60,7 @@ export function exportBackup({ dir, settings = null, includeLogs = false, includ
   entries.unshift({ name: 'manifest.json', data: Buffer.from(JSON.stringify({ format: FORMAT, version: 1, app: version, created: new Date().toISOString(), platform: process.platform, counts }, null, 2)) });
   const zip = zipBuffer(entries);
   const file = path.join(dir, backupName(dir));
-  fs.writeFileSync(file, zip, { flag: 'wx' });
+  writeAtomic(file, zip);
   return { file, bytes: zip.length, counts };
 }
 
@@ -121,52 +121,85 @@ const mergeBy = (key, mine, theirs, overwrite) => {
   return out;
 };
 
+// A file is replaced whole or not at all: written beside it, then renamed over it (a crash or a full disk mid-write
+// leaves the old file, never half of one).
+function writeAtomic(f, data) {
+  fs.mkdirSync(path.dirname(f), { recursive: true });
+  const tmp = `${f}.${process.pid}.tmp`;
+  try { fs.writeFileSync(tmp, data); fs.renameSync(tmp, f); } catch (e) { try { fs.rmSync(tmp, { force: true }); } catch { /* gone */ } throw e; }
+}
+// A log's name: letters, digits, - _ and dots, not starting with a dot (so never "." or "..").
+const LOG_NAME = /^logs\/[\w-][\w.-]{0,120}$/;
+
 /**
  * Restores `file`. overwrite: replace chats, projects, rules and schedules that are here already (else they are
  * kept). folders: { projectId: new folder } for projects whose folder moved; skip: [projectId] to leave out.
- * keys: also add the backup's API keys (if it has any). Returns what was done, plus the settings for the page to apply.
+ * keys: also add the backup's API keys (if it has any). Everything is read and checked first, and nothing is written
+ * if any part is broken. Imported schedules arrive paused: a backup may be old, or someone else's.
+ * Returns what was done, plus the settings for the page to apply.
  */
 export function importBackup(file, { overwrite = false, folders = {}, skip = [], keys = false } = {}) {
   const { z, json } = open(file);
-  const done = { projects: 0, chats: 0, files: 0, rules: 0, schedules: 0, keys: 0, logs: 0, kept: 0, missing: [] };
+  const done = { projects: 0, chats: 0, files: 0, rules: 0, schedules: 0, paused: 0, keys: 0, logs: 0, kept: 0, missing: [] };
   for (const [id, dir] of Object.entries(folders || {})) if (dir && (!path.isAbsolute(dir) || !fs.existsSync(dir) || !fs.statSync(dir).isDirectory())) throw new Error(`there is no folder at ${dir} (for ${id})`);
-  fs.mkdirSync(path.join(DATA, 'chats'), { recursive: true });
+  const bad = (what) => { throw new Error(`the backup is damaged (${what}): nothing was imported`); };
 
+  // ---- 1. read and check everything ----
+  const projects = json('projects.json', []);
+  if (!Array.isArray(projects)) bad('projects.json');
+  const chats = [], blobs = [], logs = [];
+  for (const [n, read] of z) {
+    const chat = n.match(/^chats\/([\w-]{1,100})\.json$/), blob = n.match(/^blobs\/([a-f0-9]{64}\.[a-z0-9]{1,8})$/);
+    if (chat) {
+      const data = read();
+      let c = null;
+      try { c = JSON.parse(data.toString('utf8')); } catch { bad(n); }
+      if (!c || typeof c !== 'object' || (c.id != null && c.id !== chat[1])) bad(`${n}: its id doesn't match its name`);
+      chats.push({ id: chat[1], data });
+    } else if (blob) blobs.push({ name: blob[1], read });
+    else if (n.startsWith('logs/')) { if (!LOG_NAME.test(n)) bad(n); logs.push(n); }
+  }
+  const sched = json('schedules.json');
+  const arr = (s) => (Array.isArray(s) ? s : Array.isArray(s?.schedules) ? s.schedules : null);
+  if (z.has('schedules.json') && !arr(sched)) bad('schedules.json');
+  const theirKeys = json('keys.json');
+  if (z.has('keys.json') && !Array.isArray(theirKeys?.keys)) bad('keys.json');
+  const every = json('rules/everywhere.json')?.rules;
+  if (z.has('rules/everywhere.json') && !Array.isArray(every)) bad('rules/everywhere.json');
+
+  // ---- 2. write ----
   // Projects: the path from the backup, or the folder the user pointed it at. A folder that isn't on this computer
-  // is kept as it is: the project shows as missing until its folder is reselected.
+  // is kept as it is: the project shows as missing until its folder is reselected. Its name stays its own.
   const listFile = path.join(DATA, 'projects.json');
   const list = readJson(listFile, []);
   const where = {};
-  for (const p of json('projects.json', []) || []) {
+  for (const p of projects) {
     if (!p || !validId(p.id) || p.id === 'scratch' || skip.includes(p.id)) continue;
     const moved = folders?.[p.id], dir = moved ? path.resolve(moved) : p.path || null;
     const i = list.findIndex((x) => x.id === p.id);
     if (i >= 0 && !overwrite) { done.kept++; where[p.id] = list[i].path; continue; }
-    const next = { ...p, path: dir, name: dir ? path.basename(dir).slice(0, 80) : String(p.name || p.id) };
+    const next = { ...p, path: dir, name: String(p.name || (dir ? path.basename(dir) : p.id)).slice(0, 80) };
     if (i >= 0) list[i] = next; else list.push(next);
     where[p.id] = dir;
     done.projects++;
     if (!dir || !fs.existsSync(dir)) done.missing.push(p.id);
   }
-  fs.writeFileSync(listFile, JSON.stringify(list, null, 2));
+  writeAtomic(listFile, JSON.stringify(list, null, 2));
 
   // Chats and the files they point at.
-  for (const [n, read] of z) {
-    const chat = n.match(/^chats\/([\w-]{1,100})\.json$/), blob = n.match(/^blobs\/([a-f0-9]{64}\.[a-z0-9]{1,8})$/);
-    if (chat) {
-      const f = path.join(DATA, 'chats', `${chat[1]}.json`);
-      if (fs.existsSync(f) && !overwrite) { done.kept++; continue; }
-      fs.writeFileSync(f, read()); done.chats++;
-    } else if (blob) {
-      const f = path.join(DATA, 'blobs', blob[1]);
-      if (fs.existsSync(f)) continue; // named by their content: one that is here is the same file
-      fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, read()); done.files++;
-    }
+  for (const c of chats) {
+    const f = path.join(DATA, 'chats', `${c.id}.json`);
+    if (fs.existsSync(f) && !overwrite) { done.kept++; continue; }
+    writeAtomic(f, c.data); done.chats++;
+  }
+  for (const b of blobs) {
+    const f = path.join(DATA, 'blobs', b.name);
+    if (fs.existsSync(f)) continue; // named by their content: one that is here is the same file
+    writeAtomic(f, b.read()); done.files++;
   }
 
   // Command rules: added to the ones here (or, with overwrite, replacing them).
   const ruleKey = (r) => `${r.effect}|${r.match}`;
-  const every = json('rules/everywhere.json')?.rules;
   if (Array.isArray(every)) {
     const mine = loadRules(null).map(({ scope: _s, ...r }) => r);
     done.rules += saveRules('everywhere', overwrite ? every : mergeBy(ruleKey, mine, every, false), null).length - (overwrite ? 0 : mine.length);
@@ -181,33 +214,29 @@ export function importBackup(file, { overwrite = false, folders = {}, skip = [],
     done.rules += saveRules('project', overwrite ? theirs : mergeBy(ruleKey, mine, theirs, false), root).length - (overwrite ? 0 : mine.length);
   }
 
-  // Schedules (when the backup has them): by id, like the rest.
-  const sched = json('schedules.json');
+  // Schedules: by id, like the rest, and every one that comes in is paused until the user starts it here.
   if (sched) {
     const f = path.join(DATA, 'schedules.json'), mine = readJson(f, null);
-    const arr = (s) => (Array.isArray(s) ? s : Array.isArray(s?.schedules) ? s.schedules : []);
-    const merged = mergeBy((s) => s.id, arr(mine), arr(sched), overwrite);
-    done.schedules = Math.max(0, merged.length - arr(mine).length);
-    fs.writeFileSync(f, JSON.stringify(Array.isArray(sched) ? merged : { ...(mine && !Array.isArray(mine) ? mine : sched), schedules: merged }, null, 2));
+    const incoming = arr(sched).filter((s) => s && s.id).map((s) => ({ ...s, paused: true, nextAt: null }));
+    const before = arr(mine) || [];
+    const merged = mergeBy((s) => s.id, before, incoming, overwrite);
+    done.paused = merged.filter((s) => incoming.includes(s)).length;
+    done.schedules = done.paused;
+    writeAtomic(f, JSON.stringify(Array.isArray(mine) ? merged : { ...(mine && typeof mine === 'object' ? mine : { version: 1 }), schedules: merged }, null, 2));
   }
 
   // API keys: only when the user asked, and only keys this computer doesn't have yet.
-  const theirKeys = json('keys.json');
-  if (keys && Array.isArray(theirKeys?.keys)) {
+  if (keys && theirKeys) {
     const f = path.join(DATA, 'keys.json'), mine = readJson(f, { active: null, keys: [] });
     const add = theirKeys.keys.filter((k) => k?.key && !mine.keys.some((m) => m.key === k.key));
     mine.keys.push(...add);
     if (!mine.active && add[0]) mine.active = add[0].id ?? null;
-    fs.writeFileSync(f + '.tmp', JSON.stringify(mine, null, 2)); fs.renameSync(f + '.tmp', f);
+    writeAtomic(f, JSON.stringify(mine, null, 2));
     done.keys = add.length;
   }
 
   // Logs go beside this computer's own, in a folder of their own.
-  const logs = [...z.keys()].filter((n) => /^logs\/[\w.-]+$/.test(n) && !n.includes('..'));
-  if (logs.length) {
-    const dir = path.join(LOGS, `imported-${today()}`);
-    fs.mkdirSync(dir, { recursive: true });
-    for (const n of logs) { const f = path.join(dir, n.slice(5)); if (!fs.existsSync(f) || overwrite) { fs.writeFileSync(f, z.get(n)()); done.logs++; } }
-  }
+  const logDir = path.join(LOGS, `imported-${today()}`);
+  for (const n of logs) { const f = path.join(logDir, n.slice(5)); if (!fs.existsSync(f) || overwrite) { writeAtomic(f, z.get(n)()); done.logs++; } }
   return { ...done, settings: json('settings.json') };
 }

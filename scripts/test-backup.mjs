@@ -6,6 +6,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { zipBuffer } from '../server/zip.js';
+import { mergeSettings } from '../public/backup.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const KEY = 'sk-or-v1-backuptestkey0123456789';
@@ -40,13 +42,13 @@ function homeA() {
   fs.mkdirSync(path.join(data, 'blobs'), { recursive: true });
   fs.mkdirSync(path.join(home, 'logs'), { recursive: true });
   fs.writeFileSync(path.join(data, 'projects.json'), JSON.stringify([
-    { id: 'keep-app', name: path.basename(keep), path: keep, created: 1, color: '#c0392b', budget: 5 },
+    { id: 'keep-app', name: 'Keep App', path: keep, created: 1, color: '#c0392b', budget: 5 },
     { id: 'moved-app', name: path.basename(gone), path: gone, created: 2 },
   ]));
   fs.writeFileSync(path.join(data, 'chats', 'chat-one.json'), JSON.stringify({ id: 'chat-one', title: 'Round trip', projectId: 'keep-app', agent: { setup: {}, messages: [{ role: 'user', content: 'hello', images: [`blob:${BLOB}`] }] } }));
   fs.writeFileSync(path.join(data, 'blobs', BLOB), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
   fs.writeFileSync(path.join(data, 'permissions.json'), JSON.stringify({ version: 1, rules: [{ effect: 'allow', match: 'npm test', by: 'user', note: '', at: 1 }] }));
-  fs.writeFileSync(path.join(data, 'schedules.json'), JSON.stringify([{ id: 'nightly', prompt: 'check the build', cron: '0 3 * * *' }]));
+  fs.writeFileSync(path.join(data, 'schedules.json'), JSON.stringify({ version: 1, schedules: [{ id: 'nightly', prompt: 'check the build', when: { kind: 'daily', at: '03:00' }, approval: 'yolo', paused: false, nextAt: Date.now() + 60e3 }] }));
   fs.writeFileSync(path.join(data, 'keys.json'), JSON.stringify({ active: 'k1', keys: [{ id: 'k1', label: 'Mine', key: KEY, added: 1 }] }));
   fs.writeFileSync(path.join(home, 'logs', 'audit.jsonl'), '{"t":"run"}\n');
   fs.writeFileSync(path.join(home, 'logs', 'bench-build-x.jsonl'), '{"bench":1}\n');
@@ -120,12 +122,15 @@ test('round trip: import on another computer asks before overwriting and re-poin
     const keep = projects.find((p) => p.id === 'keep-app'), mv = projects.find((p) => p.id === 'moved-app');
     assert.equal(keep.color, '#c0392b');
     assert.equal(keep.budget, 5);
+    assert.equal(keep.name, 'Keep App', 'the project keeps its own name');
     assert.equal(path.resolve(mv.path), path.resolve(moved), 're-pointed');
     assert.ok(!mv.missing);
     const rules = (await qb.call('/api/permissions?project=keep-app')).body;
     assert.ok(rules.project.some((r) => r.match === 'git push *' && r.effect === 'deny'), 'the project rule follows its project');
     assert.ok(rules.everywhere.some((r) => r.match === 'npm test'));
-    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(bHome, 'data', 'schedules.json'), 'utf8')).map((s) => s.id), ['nightly']);
+    const sched = JSON.parse(fs.readFileSync(path.join(bHome, 'data', 'schedules.json'), 'utf8')).schedules;
+    assert.deepEqual(sched.map((s) => [s.id, s.paused, s.nextAt]), [['nightly', true, null]], 'an imported schedule arrives paused');
+    assert.equal(r1.paused, 1);
     assert.ok(fs.existsSync(path.join(bHome, 'data', 'blobs', BLOB)), 'the chat\'s picture came along');
     assert.ok(fs.readdirSync(path.join(bHome, 'logs')).some((d) => d.startsWith('imported-')));
     assert.ok(!fs.existsSync(path.join(bHome, 'data', 'keys.json')), 'no keys were in it, none appear');
@@ -166,6 +171,40 @@ test('a backup restores into a fresh QuorX home without losing projects or chats
     assert.equal(one.title, 'Round trip');
     assert.equal(one.projectId, 'keep-app');
   } finally { await qb.stop(); }
+});
+
+// A backup with one broken part: nothing at all is written.
+test('a damaged backup is refused before anything is written', async () => {
+  const home = tempDir('qx-backup-dmg-'), qx = await quorx(home);
+  try {
+    const before = fs.readFileSync(path.join(home, 'data', 'projects.json'), 'utf8');
+    const make = (extra) => {
+      const f = path.join(tempDir('qx-out-'), 'quorx-backup-bad.zip');
+      const j = (o) => Buffer.from(JSON.stringify(o));
+      fs.writeFileSync(f, zipBuffer([{ name: 'manifest.json', data: j({ format: 'quorx-backup', version: 1 }) }, { name: 'projects.json', data: j([{ id: 'new-app', name: 'New', path: home }]) },
+        { name: 'chats/c-good.json', data: j({ id: 'c-good', title: 'fine' }) }, ...extra]));
+      return f;
+    };
+    for (const [why, extra] of [['a log named "."', [{ name: 'logs/.', data: Buffer.from('x') }]], ['a chat whose id differs from its name', [{ name: 'chats/c-two.json', data: Buffer.from('{"id":"other"}') }]], ['a chat that is not JSON', [{ name: 'chats/c-three.json', data: Buffer.from('{') }]]]) {
+      const r = (await qx.call('/api/backup/import', { file: make(extra) })).body;
+      assert.match(r.error || '', /damaged.*nothing was imported/, why);
+      assert.equal(fs.readFileSync(path.join(home, 'data', 'projects.json'), 'utf8'), before, `${why}: the project list is untouched`);
+      assert.ok(!fs.existsSync(path.join(home, 'data', 'chats', 'c-good.json')), `${why}: no chat was written`);
+    }
+  } finally { await qx.stop(); }
+});
+
+test('imported settings keep the safety settings of this computer', () => {
+  const theirs = { settings: { theme: 'light', approval: 'yolo', yoloAuto: { commands: true }, voters: ['x/y'], fontSize: 16 }, templates: ['t'] };
+  const mine = { settings: { approval: 'strict', voters: ['a/b'] } };
+  const out = mergeSettings(theirs, mine);
+  assert.equal(out.settings.approval, 'strict');
+  assert.deepEqual(out.settings.voters, ['a/b']);
+  assert.ok(!('yoloAuto' in out.settings), 'a safety setting this computer never set goes back to its default');
+  assert.equal(out.settings.theme, 'light');
+  assert.equal(out.settings.fontSize, 16);
+  assert.deepEqual(out.templates, ['t']);
+  assert.equal(mergeSettings(theirs, null).settings.approval, undefined, 'with nothing saved here, the defaults apply');
 });
 
 test('keys come back only when the backup has them and the import asks for them', async () => {

@@ -14,6 +14,16 @@ export function drawBackup(helpers) {
   wire(box);
 }
 
+// Settings that decide what the agent may do and spend: an import never changes them. A backup may be old or
+// someone else's, so this computer keeps its own approval mode, YOLO and Strict options, deciders, budgets and tools.
+export const SAFETY_KEYS = ['approval', 'strictAsk', 'strictAskHelpers', 'strictAskDeciders', 'yoloCheck', 'yoloAuto', 'yoloWaitSecs', 'voters', 'lookVoters',
+  'lookEscalate', 'gate', 'budget', 'budgetGrace', 'dailyBudget', 'replyBudget', 'safety', 'askLimit', 'zdrOnly', 'planFirst', 'tools', 'newChatTools'];
+/** The backup's saved page state with this computer's safety settings in place of its own. */
+export function mergeSettings(theirs, mine) {
+  const out = { ...theirs, settings: { ...(theirs?.settings || {}) } };
+  for (const k of SAFETY_KEYS) { if (mine?.settings && k in mine.settings) out.settings[k] = mine.settings[k]; else delete out.settings[k]; }
+  return out;
+}
 const pl = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const kb = (n) => (n > 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1e3))} KB`);
 const row = (label, help, ctrl) => `<div class="st-row"><div class="st-row-info"><div class="st-row-label-wrap"><span class="st-row-label">${label}</span></div>${help ? `<div class="st-row-help">${help}</div>` : ''}</div><div class="st-row-ctrl">${ctrl}</div></div>`;
@@ -47,7 +57,7 @@ function importView(esc) {
     const clashes = L.chatClashes + L.projects.filter((p) => p.clash).length;
     if (clashes) body += row(`${clashes} already here`, 'Chats and projects with the same id as ones on this computer.', `<div class="st-segmented" role="radiogroup" id="bkClash"><button type="button" class="st-seg-btn ${IMP.overwrite ? '' : 'active'}" data-v="keep" role="radio" aria-checked="${!IMP.overwrite}">Keep mine</button><button type="button" class="st-seg-btn ${IMP.overwrite ? 'active' : ''}" data-v="replace" role="radio" aria-checked="${IMP.overwrite}">Replace with the backup</button></div>`);
     if (L.keys) body += row('API keys', `This backup holds ${pl(L.keys, 'API key')}.`, check('bkImpKeys', 'Add them here', IMP.keys));
-    body += row('', L.settings ? 'Settings from the backup replace the ones in this browser; the page reloads after.' : '', '<button type="button" class="st-btn primary sm" id="bkImport">Import</button>');
+    body += row('', L.settings ? 'Settings from the backup replace the ones in this browser, except the safety ones (approval mode, YOLO and Strict options, deciders, budgets, tools), which stay as they are here. The page reloads after.' : '', '<button type="button" class="st-btn primary sm" id="bkImport">Import</button>');
   }
   body += '<div class="st-row-help bk-out" id="bkImpOut" role="status"></div>';
   return `<section class="st-card"><div class="st-card-head"><div class="st-card-title">Import</div><div class="st-card-subtitle">Restore a backup made with Export my QuorX, on this or another computer. It asks before replacing anything, and lets you point projects at their folders on this computer.</div></div>${body}</section>`;
@@ -102,15 +112,16 @@ function wire(box) {
     const lines = [
       ...(IMP.overwrite && clashes ? [`• ${clashes} chats and projects that are here already will be replaced by the backup's.`] : []),
       ...(missing.length ? [`• ${missing.length} project${missing.length === 1 ? '' : 's'} without a folder here (${missing.map((p) => p.name).join(', ')}): they show as missing until you choose their folders.`] : []),
-      ...(L.settings ? ['• This browser\'s settings are replaced by the backup\'s, and the page reloads.'] : []),
+      ...(L.settings ? ['• This browser\'s settings are replaced by the backup\'s, except the safety ones, and the page reloads.'] : []),
+      ...(L.schedules ? ['• Its schedules arrive paused: start each one yourself when you want it to run here.'] : []),
     ];
     if (lines.length && !(await uiConfirm(`Import this backup?\n${lines.join('\n')}`, { ok: 'Import', danger: IMP.overwrite && clashes > 0 }))) return;
     go.disabled = true; out.textContent = 'Importing…';
     const r = await postJ('/api/backup/import', { file: L.file, overwrite: IMP.overwrite, folders: IMP.folders, keys: IMP.keys });
     go.disabled = false;
     if (r.error) { out.textContent = `Not imported: ${r.error}`; return; }
-    out.textContent = `Imported ${pl(r.chats, 'chat')}, ${pl(r.projects, 'project')}${r.rules ? `, ${pl(r.rules, 'rule')}` : ''}${r.schedules ? `, ${pl(r.schedules, 'schedule')}` : ''}${r.keys ? `, ${pl(r.keys, 'API key')}` : ''}${r.logs ? `, ${pl(r.logs, 'log')}` : ''}${r.kept ? `; kept ${r.kept} of yours` : ''}.`;
-    if (r.settings) { try { localStorage.setItem(H.store, JSON.stringify(r.settings)); } catch { /* storage off */ } }
+    out.textContent = `Imported ${pl(r.chats, 'chat')}, ${pl(r.projects, 'project')}${r.rules ? `, ${pl(r.rules, 'rule')}` : ''}${r.schedules ? `, ${pl(r.schedules, 'schedule')} (paused)` : ''}${r.keys ? `, ${pl(r.keys, 'API key')}` : ''}${r.logs ? `, ${pl(r.logs, 'log')}` : ''}${r.kept ? `; kept ${r.kept} of yours` : ''}.`;
+    if (r.settings) { try { localStorage.setItem(H.store, JSON.stringify(mergeSettings(r.settings, JSON.parse(localStorage.getItem(H.store) || 'null')))); } catch { /* storage off */ } }
     setTimeout(() => location.reload(), r.settings ? 1500 : 2500);
   };
 }
