@@ -1,0 +1,28 @@
+{
+  "id": "elevenlabs/eleven-flash-v2.5",
+  "name": "ElevenLabs: Eleven Flash v2.5",
+  "kind": "speech",
+  "refreshed": "2026-10-20",
+  "limits": {
+    "voices": 21,
+    "voice_examples": [
+      "george",
+      "sarah",
+      "adam",
+      "alice"
+    ],
+    "price_per_m_chars": 40
+  },
+  "quirks": [
+    "A small, fast model: it may misread numbers and abbreviations."
+  ],
+  "tips": [
+    "Spell out money, phone numbers, dates and abbreviations in words.",
+    "Use pauses sparingly; many breaks can change the speed or add artefacts.",
+    "Respell unusual names the way they sound."
+  ],
+  "bench": "",
+  "sources": [
+    "https://elevenlabs.io/docs/best-practices/prompting"
+  ]
+}

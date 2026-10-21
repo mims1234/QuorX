@@ -1,0 +1,22 @@
+{
+  "id": "google/lyria-3-clip-preview",
+  "name": "Google: Lyria 3 Clip Preview",
+  "kind": "music",
+  "refreshed": "2026-10-20",
+  "limits": {
+    "length": "30-second clip",
+    "per_use": 0.04
+  },
+  "quirks": [
+    "Always a 30-second clip."
+  ],
+  "tips": [
+    "Name instruments, BPM, key, mood and structure; vague prompts sound generic.",
+    "Use section tags like [Verse] and [Chorus] to shape the flow.",
+    "Write the prompt in the language the lyrics should be in."
+  ],
+  "bench": "",
+  "sources": [
+    "https://ai.google.dev/gemini-api/docs/music-generation"
+  ]
+}

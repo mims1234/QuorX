@@ -1,0 +1,28 @@
+{
+  "id": "deepseek/deepseek-v4.1-flash-1017",
+  "name": "DeepSeek: DeepSeek V4.1 Flash 1017",
+  "kind": "chat",
+  "refreshed": "2026-10-20",
+  "limits": {
+    "context": 1048576,
+    "max_output": 393216,
+    "tools": true,
+    "images_in": true,
+    "reasoning": true,
+    "price_per_m": [
+      0.15,
+      0.6
+    ]
+  },
+  "quirks": [
+    "Much stronger than the older deepseek-v4.1-flash (no -1017), which passed 1 of 10 builds in the same benchmark.",
+    "QuorX benchmarked it with reasoning \"low\"; with reasoning off, plan briefly before writing files."
+  ],
+  "tips": [
+    "Call tools with the exact parameter names in the schema; strict tool mode needs every property and no extra fields."
+  ],
+  "bench": "QuorX build benchmark (Oct 2026): through the harness 39 of 39 builds passed, 18.9 of 20 on average, about $0.06 a build; one-shot without the harness 8 of 10 passed (15.2 of 20). Tool-call errors: 38 of 2,449 calls (1.6%).",
+  "sources": [
+    "https://api-docs.deepseek.com/guides/tool_calls"
+  ]
+}
