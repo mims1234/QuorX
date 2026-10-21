@@ -2988,9 +2988,17 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
   }
   // Pages from the outside web are labelled untrusted; the agent's own pages and apps are not (an app's window
   // loaded from its own files, too).
+  // What the page did with sound, which nobody can hear here: started, waiting for a click, or none yet.
+  function soundLine(x) {
+    if (!x) return '';
+    const n = x.sources + x.media, ctx = `${x.contexts} Web Audio context${x.contexts === 1 ? '' : 's'}`;
+    if (n) return `\nSound: the page started ${n} sound${n === 1 ? '' : 's'} (${x.running} of ${ctx} running)`;
+    if (x.contexts) return `\nSound: ${ctx}, ${x.running ? 'running' : 'waiting for a click or key (browsers start audio only after one)'}, nothing played yet`;
+    return '\nSound: none so far';
+  }
   function pageReport(sum, did) {
     const own = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//i.test(String(sum.url)) || (tab?.app && /^file:/i.test(String(sum.url)));
-    return `${did ? did + '\n' : ''}Title: ${sum.title || '(none)'} · URL: ${sum.url}${sum.scroll && sum.size ? ` · Scrolled to ${sum.scroll[1]} of ${sum.size[1]} px (the screenshot shows ${sum.scroll[1]}–${sum.scroll[1] + (sum.view?.[1] || 0)})` : ''}\nControls: ${sum.controls.join('; ') || '(none)'}\nConsole errors: ${tab.console.length ? tab.console.slice(-8).join(' | ') : 'none'}\nVisible text:\n${own ? sum.text || '(empty)' : untrusted(sum.text || '(empty)', sum.url)}`;
+    return `${did ? did + '\n' : ''}Title: ${sum.title || '(none)'} · URL: ${sum.url}${sum.scroll && sum.size ? ` · Scrolled to ${sum.scroll[1]} of ${sum.size[1]} px (the screenshot shows ${sum.scroll[1]}–${sum.scroll[1] + (sum.view?.[1] || 0)})` : ''}\nControls: ${sum.controls.join('; ') || '(none)'}\nConsole errors: ${tab.console.length ? tab.console.slice(-8).join(' | ') : 'none'}${soundLine(sum.sound)}\nVisible text:\n${own ? sum.text || '(empty)' : untrusted(sum.text || '(empty)', sum.url)}`;
   }
   // The agent's tab can disappear (closed in the desktop app's pane, the app restarted). Drop it and open a fresh
   // one (the headless browser when the desktop app doesn't answer), then try the action once more.

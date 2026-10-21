@@ -244,6 +244,9 @@ export async function openTab({ chatId, cdpPort, own = false } = {}) {
   await send('Page.enable'); await send('Runtime.enable'); await send('Log.enable');
   // Headless tabs in the background never get focus, so clicks wouldn't focus inputs and typing went nowhere.
   await send('Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => {});
+  // Sound can't be heard here, so every page counts what it starts: Web Audio contexts and sources, and <audio>/<video>
+  // playing. summary() reports it, so the agent knows whether a game or a player made any sound at all.
+  await send('Page.addScriptToEvaluateOnNewDocument', { source: SOUND_PROBE }).catch(() => {});
 
   Object.assign(tab, {
     async open(url, { width = 1280, height = 800, mobile = width < 600 } = {}) {
@@ -264,7 +267,9 @@ export async function openTab({ chatId, cdpPort, own = false } = {}) {
         const label = (e) => (e.innerText || e.value || e.placeholder || e.getAttribute('aria-label') || e.title || e.name || '').trim().replace(/\\s+/g, ' ').slice(0, 60);
         const controls = [...document.querySelectorAll('button, a[href], input, textarea, select, [role=button], canvas')].filter(vis).slice(0, 40)
           .map((e) => e.tagName.toLowerCase() + (e.id ? '#' + e.id : '') + (e.type && e.tagName === 'INPUT' ? '[' + e.type + ']' : '') + (label(e) ? ' "' + label(e) + '"' : ''));
-        return { title: document.title, url: location.href, text: (document.body?.innerText || '').replace(/\\n{3,}/g, '\\n\\n').slice(0, 2500), controls,
+        const q = window.__qxSound, ctxs = q ? q.ctxs : [];
+        const sound = q ? { contexts: ctxs.length, running: ctxs.filter((c) => c.state === 'running').length, sources: q.sources, media: q.media + [...document.querySelectorAll('audio, video')].filter((m) => !m.paused && !m.muted && m.volume > 0).length } : null;
+        return { sound, title: document.title, url: location.href, text: (document.body?.innerText || '').replace(/\\n{3,}/g, '\\n\\n').slice(0, 2500), controls,
           size: [document.documentElement.scrollWidth, document.documentElement.scrollHeight], scroll: [Math.round(scrollX), Math.round(scrollY)], view: [innerWidth, innerHeight] };
       })()`);
     },
@@ -382,6 +387,20 @@ export async function openTab({ chatId, cdpPort, own = false } = {}) {
   });
   return tab;
 }
+
+// Counts the sound a page starts (see openTab). Wrapped, never changed: the page's own audio works as before.
+const SOUND_PROBE = `(() => {
+  if (window.__qxSound) return;
+  const q = window.__qxSound = { ctxs: [], sources: 0, media: 0 };
+  for (const name of ['AudioContext', 'webkitAudioContext']) {
+    const C = window[name]; if (!C) continue;
+    window[name] = new Proxy(C, { construct(T, a, nt) { const c = Reflect.construct(T, a, nt); q.ctxs.push(c); return c; } });
+  }
+  const S = window.AudioScheduledSourceNode;
+  if (S) { const start = S.prototype.start; S.prototype.start = function (...a) { q.sources++; return start.apply(this, a); }; }
+  const M = window.HTMLMediaElement;
+  if (M) { const play = M.prototype.play; M.prototype.play = function (...a) { q.media++; return play.apply(this, a); }; }
+})();`;
 
 // Short-lived URLs for single-page HTML artifacts, so the browser can open them like any site.
 const pages = new Map();

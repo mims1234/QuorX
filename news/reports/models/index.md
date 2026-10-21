@@ -10,6 +10,10 @@ QuorX runs any model through OpenRouter, so the useful question is not "which mo
 a given job, for how much". This report answers it with numbers from QuorX's own benchmarks, and shows the same
 numbers for the replies run on this computer, from its logs.
 
+```callout
+{ "tone": "info", "title": "For choosing a model, start with OpenRouter's rankings", "text": "QuorX's own benchmark is small: a few tasks on a few models, run when a change needs measuring. For which models people actually use for coding and agents, and how they compare, see OpenRouter's rankings at https://openrouter.ai/rankings. Every model QuorX lists comes from OpenRouter, with its price, so the two line up." }
+```
+
 ## How models are compared
 
 The build benchmark gives every model the same tasks from `bench/tasks-build.json`: games, a dashboard and forms
