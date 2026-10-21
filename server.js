@@ -144,9 +144,12 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/oauth/openrouter/callback') {
       const q = url.searchParams, r = await finishByCallback({ state: q.get('state'), code: q.get('code'), error: q.get('error') });
       if (r.ok) clearCatalogues();
+      // In the desktop app the window comes to the front, so the user is back in QuorX, signed in.
+      const desktop = desktopReady();
+      if (desktop) desktopCall('app.focus', {}, 5000).catch(() => {});
       res.writeHead(r.ok ? 200 : 400, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer',
         'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'" });
-      return res.end(callbackPage(r));
+      return res.end(callbackPage({ ...r, desktop }));
     }
     if (req.method === 'GET' && url.pathname === '/api/stale') return json(res, 200, codeChanged());
     if (req.method === 'GET' && url.pathname === '/api/config') return json(res, 200, { ...codeChanged(), version: VERSION, platform: process.platform, pagePort: runtime.pagePort || null, shell: shellInfo().name, pty: ptyAvailable(), defaults: DEFAULTS, checks: CHECKS, media: MEDIA, hasKey: !!currentKey(), browser: browserPath(), allowed: ALLOWED });

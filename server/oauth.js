@@ -62,14 +62,17 @@ export async function finishWithCode(id, code) {
   await exchange(f, code);
 }
 
-export function callbackPage({ ok, message }) {
+// In the desktop app this tab is the user's own browser, which can't open QuorX's pages (they answer only QuorX's own
+// windows): it says to go back to the QuorX window, with no link into QuorX.
+export function callbackPage({ ok, message, desktop = false }) {
   const title = ok ? 'Signed in to OpenRouter' : 'Sign-in did not finish';
-  const body = ok ? 'QuorX has its new key and is ready. You can close this tab.' : message;
+  const body = ok ? (desktop ? 'QuorX has its new key. Close this tab and go back to the QuorX window.' : 'QuorX has its new key and is ready. You can close this tab.')
+    : desktop ? `${message} Close this tab and try again from the QuorX window.` : message;
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   return `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>QuorX</title>
 <body style="font:16px/1.5 system-ui,sans-serif;background:#0b0f0d;color:#e7edea;max-width:560px;margin:0 auto;padding:40px 20px">
 <p style="font:600 12px ui-monospace,Consolas,monospace;letter-spacing:.1em;color:${ok ? '#45c486' : '#ef6b6b'}">${ok ? '✓ DONE' : '⚠ NOT SIGNED IN'}</p>
 <h2 style="margin:0 0 8px">${esc(title)}</h2><p style="color:#9fb0a8;margin:0 0 20px">${esc(body)}</p>
-<a href="/" style="color:#4cc6d3">Back to QuorX</a>
+${desktop ? '' : '<a href="/" style="color:#4cc6d3">Back to QuorX</a>'}
 ${ok ? '<script>setTimeout(() => window.close(), 1500)</script>' : ''}</body>`;
 }

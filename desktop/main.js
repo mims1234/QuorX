@@ -453,6 +453,8 @@ function applyEmu(t) {
 const COVER = `data:text/html,${encodeURIComponent('<!doctype html><meta charset="utf-8"><body style="margin:0;height:100vh;background:transparent;cursor:not-allowed;font:600 12px system-ui;user-select:none"><div style="position:fixed;left:50%;bottom:12px;transform:translateX(-50%);padding:6px 12px;border-radius:8px;background:rgba(167,139,250,.18);border:1px solid rgba(167,139,250,.6);color:#c4b5fd;backdrop-filter:blur(6px);white-space:nowrap">🤖 The agent is using this page · watch only until its reply ends</div></body>')}`;
 const COMMANDS = {
   async 'app.notify'(n) { return showNote(n); },
+  // Sign-in with OpenRouter finished in the user's browser: back to QuorX.
+  async 'app.focus'() { showWindow(); return true; },
   async 'tab.create'({ chatId }) {
     const sid = `agent-${String(chatId).replace(/[^\w-]/g, '').slice(0, 40)}`;
     if (tabs.has(sid)) closeTab(sid);
