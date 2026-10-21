@@ -53,6 +53,8 @@ Then open http://localhost:5188 and sign in with OpenRouter. The full setup is i
 | [Privacy](PRIVACY.md) | What stays on your computer and what leaves it |
 | [Security](SECURITY.md) | Reporting a problem, checking downloads, and what the guards do and don't cover |
 | [Contributing](CONTRIBUTING.md) | Setting up, running the tests, pull requests, and sending a pack test report |
+| [Model cards](models/README.md) | Each recommended model's limits, quirks and prompting tips, and how the cards are kept up to date |
+| [Releasing](docs/RELEASING.md) | How a version goes out: a pre-release first, then Promote release, and Pull release to take one back |
 
 <p align="center">
   <img src="docs/images/quorx-phone.jpg" width="240" alt="QuorX on a phone: a finished build with the reviewer's scores">
