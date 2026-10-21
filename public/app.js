@@ -2,6 +2,8 @@
 // run, so chats work in parallel. Every run streams events from /api/run; approvals are answered
 // through /api/approve. Chats live on the server; preferences stay in this browser. Plain JS.
 
+import { startTour, maybeStartTour } from './tour.js';
+
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const money = (c, d = 4) => `$${(Number(c) || 0).toFixed(d)}`;
@@ -52,11 +54,11 @@ const BUCKET = {
   unclear: ['deciders unsure', 'The deciders could not settle it (low confidence).'],
   unmatched: ['guess unclear', 'The agent\'s guess did not match any option, so it can\'t be compared.'],
 };
-const TOOL_NAME = { imagine: '🖼 Make a picture', make_video: '🎬 Make a video', compose_music: '🎵 Compose music', speak: '🗣 Speak aloud',
+const TOOL_NAME = { media_plan: '🎞 Production plan', imagine: '🖼 Make a picture', make_video: '🎬 Make a video', compose_music: '🎵 Compose music', speak: '🗣 Speak aloud',
   write_artifact: '📄 Write a page', edit_artifact: '✏️ Edit a page', read_artifact: '👀 Read a page', decide: '⚖️ Ask the deciders',
   list_files: '🗂 List files', read_file: '👀 Read a file', write_file: '📝 Write a file', append_file: '📝 Append to a file', edit_file: '✏️ Edit a file',
   search_docs: '🔎 Search the attached documents', read_doc: '📄 Read an attached document', list_docs: '📎 List attached documents',
-  run_command: '⌨️ Run a command', start_server: '🚀 Start a server', stop_server: '■ Stop a server', preview_site: '🌐 Preview a site',
+  edit_video: '🎞 Edit the film', run_command: '⌨️ Run a command', start_server: '🚀 Start a server', stop_server: '■ Stop a server', preview_site: '🌐 Preview a site',
   browser: '🌐 Use the browser', look: '👁 Look at the result', search_files: '🔎 Search files', delete_file: '🗑 Delete a file',
   scaffold: '🧱 Use a template', save_skill: '🧩 Save a skill', use_skill: '🧩 Load a skill', fetch_url: '🌍 Read a web page', delegate: '🤝 Ask a helper', plan: '🗺 Plan' };
 const CATS = [
@@ -1355,6 +1357,19 @@ async function loadScores() {
   const rows = await fetch('/api/scorecard?days=30').then((r) => r.json()).catch(() => []);
   G.scores = Object.fromEntries((Array.isArray(rows) ? rows : []).map((r) => [r.model, r]));
 }
+// Model cards (models/cards/, served at /api/model-cards): limits, quirks, provider tips and QuorX's own results.
+async function loadCards() {
+  G.cards = await fetch('/api/model-cards').then((r) => r.json()).catch(() => ({}));
+}
+// A "card" tag beside the rating; the whole card shows on hover.
+function cardChip(id) {
+  const c = G.cards?.[id];
+  if (!c) return '';
+  const bullets = (xs) => xs.map((x) => `• ${x}`).join('\n');
+  const text = [`Model card · ${id}`, c.limits && `Limits: ${c.limits}`, c.quirks.length && `Quirks:\n${bullets(c.quirks)}`, c.tips.length && `Prompting tips (provider docs):\n${bullets(c.tips)}`,
+    c.bench && `QuorX results: ${c.bench}`, c.sources.length && `Sources: ${c.sources.join(' · ')}`, c.refreshed && `Catalogue facts as of ${c.refreshed}`].filter(Boolean).join('\n\n');
+  return `<span class="mp-card" title="${esc(text)}" aria-label="${esc(text)}">card</span>`;
+}
 function scoreBadge(id) {
   const s = G.scores?.[id];
   if (!s || s.checked < 3) return '';
@@ -1366,7 +1381,7 @@ function rowHTML(m, i) {
   const caps = [(m.in || []).includes('image') && m.kind !== 'image' ? ['👁', 'Sees images'] : null, m.tools ? ['🧰', 'Uses tools'] : null, m.reasoning ? ['🧠', 'Reasoning'] : null, (m.in || []).includes('audio') ? ['🎙', 'Hears audio'] : null, m.voices?.length ? ['🗣', `${m.voices.length} voices`] : null].filter(Boolean);
   return `<div class="mp-row ${m.id === PK.current ? 'cur' : ''}" role="option" data-i="${i}" data-id="${esc(m.id)}" aria-selected="false" title="${esc(m.desc || priceText(m))}">
     <span class="mp-ava" style="--h:${hue(p)}" title="${esc(PROVIDER_NAME(p))}">${esc(initials(PROVIDER_NAME(p)))}</span>
-    <span class="mp-main"><span class="mp-name">${recDot(m, PK.kind)} ${esc(cleanName(m))}${m.id === PK.current ? ' <span class="mp-tag cur">current</span>' : ''}</span><span class="mp-id">${esc(m.id)}</span></span>
+    <span class="mp-main"><span class="mp-name">${recDot(m, PK.kind)}${cardChip(m.id)} ${esc(cleanName(m))}${m.id === PK.current ? ' <span class="mp-tag cur">current</span>' : ''}</span><span class="mp-id">${esc(m.id)}</span></span>
     <span class="mp-caps">${caps.map(([i2, t]) => `<span title="${t}">${i2}</span>`).join('')}</span>
     <span class="mp-meta">${scoreBadge(m.id)}${m.ctx ? `<span title="Context window">${ctxText(m.ctx)}</span>` : ''}${m.created ? `<span title="${new Date(m.created * 1000).toLocaleDateString()}">${agoDate(m.created)}</span>` : ''}</span>
     <span class="mp-price" title="${esc(priceText(m))}">${priceCell(m)}</span>
@@ -3539,7 +3554,7 @@ function approvalBadge(a, live) {
 const CMD_CLASS = { read: 'reads only', write: 'writes in the project', build: 'runs project code', install: 'installs packages', external: 'leaves this computer',
   opaque: 'can’t be checked', delete: 'deletes', discard: 'throws away work', never: 'never allowed', unknown: 'no rule covers it' };
 const CMD_ZONE = { inside: 'in the project', outside: 'outside the project', unknown: 'can’t be resolved', blocked: 'blocked', protected: 'protected' };
-const byName = (by) => (by === 'user' ? 'you' : by === 'timeout' ? 'no answer in time' : esc(by));
+const byName = (by) => (by === 'user' ? 'you' : by === 'timeout' ? 'no answer in time' : by === 'plan' ? 'the approved production plan' : esc(by));
 // ⚡ YOLO cards that wait for you a few seconds: a countdown, what happens when it ends, and "Wait for me".
 function waitHTML(card) {
   const w = card.wait;
@@ -3632,7 +3647,9 @@ function approvalHTML(a, live = true) {
   const finalModel = o?.model || c.model;
   const name = TOOL_NAME[c.tool] || esc(c.tool);
   const head = c.free ? `<h4>${name} <small>(free)</small></h4>` : `<h4>${name} · <span class="cost">${money(c.est, 3)}</span> <small>(${esc(c.basis || 'estimated')})</small></h4>`;
-  const model = c.free ? '' : waiting && opts.length > 1
+  // A production plan (media_plan): one row per kind of paid call, approved together.
+  const planRows = c.items ? `<ul class="ap-plan">${c.items.map((x) => `<li><b>${x.count} ×</b> ${esc({ image: '🖼 picture', video: '🎬 clip', music: '🎵 music', speech: '🗣 voice' }[x.kind] || x.kind)} · ${esc(short(x.model))}${x.detail ? ` · ${esc(x.detail)}` : ''}<span class="cost">${money(x.each * x.count, 3)}</span>${x.what ? `<div class="dim">${esc(x.what)}</div>` : ''}</li>`).join('')}</ul>` : '';
+  const model = c.free ? '' : c.items ? planRows : waiting && opts.length > 1
     ? `<label class="what">Model <select class="pickModel">${opts.map((x) => `<option value="${esc(x.model)}" data-est="${x.est}" ${x.model === c.model ? 'selected' : ''}>${esc(short(x.model))} · ${money(x.est, 3)} · ${esc(x.detail)}${x.model === c.model ? (c.pickedBy === 'agent' ? ' (agent’s choice)' : ' (your default)') : ''}</option>`).join('')}</select></label>`
     : `<div class="what">${esc(short(finalModel))} · ${esc(c.detail)}${c.pickedBy === 'agent' && finalModel === c.model ? ' · chosen by the agent' : ''}</div>`;
   // Answered (or no longer waiting): one line, ✓/⛔ + the tool + what it did + the price; click it for the details.
@@ -3642,12 +3659,12 @@ function approvalHTML(a, live = true) {
     const who = o ? `${o.approve ? 'Allowed' : 'Declined'} by ${byName(o.by)}${o.always ? ' · always allowed from now on' : ''}${o.approve && o.model && o.model !== c.model ? ` · switched to ${esc(short(o.model))}` : ''}${o.reason ? ` · ${esc(o.reason)}` : ''}`
       : live ? (c.tool === 'shell' ? 'The deciders are voting on this command…' : 'Deciders are checking whether this is needed and worth the price…') : 'Not answered: the reply ended';
     return `<details class="approval-line ${state}"><summary title="${esc(who)}"><span class="al-mark">${mark}</span><b>${name}</b><span class="al-what">${esc(c.what)}</span><span class="al-price">${c.free ? 'free' : money(c.est, 3)}</span></summary>
-      <div class="al-detail">${c.free ? '' : `<div>${esc(short(finalModel))} · ${esc(c.detail || '')}</div>`}<div>${esc(c.what)}</div>${c.why ? `<div>Why: ${esc(c.why)}</div>` : ''}<div class="al-who ${state}">${who}</div></div></details>`;
+      <div class="al-detail">${c.items ? planRows : `${c.free ? '' : `<div>${esc(short(finalModel))} · ${esc(c.detail || '')}</div>`}<div>${esc(c.what)}</div>`}${c.why ? `<div>Why: ${esc(c.why)}</div>` : ''}<div class="al-who ${state}">${who}</div></div></details>`;
   }
   return `<div class="approval ${o ? 'done' : ''} ${c.free ? 'free' : ''}" ${waiting ? `data-id="${esc(c.id)}" data-tool="${esc(c.tool)}"` : ''}>
     ${head}${model}
-    <div class="what">${c.free ? esc(c.what) : `“${esc(c.what)}”`}</div>
-    ${c.why ? `<div class="what">Why: ${esc(c.why)}</div>` : ''}
+    ${c.items ? '' : `<div class="what">${c.free ? esc(c.what) : `“${esc(c.what)}”`}</div>`}
+    ${c.why ? `<div class="what">Why: ${esc(c.why)}</div>` : ''}${c.items && waiting ? '<div class="what dim">Calls that match this plan then run without asking again; anything else asks on its own.</div>' : ''}
     ${waiting ? `${waitHTML(c)}<textarea rows="1" placeholder="To decline, you can add a note: why, or what to do instead. Enter declines and sends it."></textarea>
       <div class="acts"><button type="button" class="primary yes">${c.free ? 'Allow once' : `Approve ${money(c.est, 3)}`}</button><button type="button" class="always" title="Stop asking for this tool in this chat">Always allow</button><button type="button" class="no">Decline</button></div>`
       : o ? `<div class="outcome ${o.approve ? 'yes' : 'no'}">${o.approve ? '✅ Allowed' : '⛔ Declined'} by ${byName(o.by)}${o.always ? ' · always allowed from now on' : ''}${o.approve && o.model && o.model !== c.model ? ` · switched to ${esc(short(o.model))}` : ''}${o.reason ? ` · ${esc(o.reason)}` : ''}</div>`
@@ -4915,7 +4932,7 @@ function settingsPanels(S) {
     ]],
     setup: ['Setup check', 'What this computer has for QuorX, and what each thing is for. Amber rows are optional.', ['<div id="stSetup"><div class="st-row-help">Checking this computer…</div></div>']],
     shortcuts: ['Shortcuts', '', [stCard('Keyboard', '', `<table class="st-shortcuts-table"><tbody>${[['Ctrl + K', 'Search chats, commands, settings and files'], ['Enter', 'Send'], ['Shift + Enter', 'New line'], ['@', 'Add files, chats or projects as context'], ['/', 'Commands (/usage, /model, /strict, …)'], ['↑ ↓ then Enter or Tab', 'Pick a suggestion'], ['Esc', 'Close a dialog or suggestions']].map(([k, v]) => `<tr><td>${k.split(' ').map((x) => (/^[+]$|^then$|^or$/.test(x) ? x : `<kbd>${esc(x)}</kbd>`)).join(' ')}</td><td>${v}</td></tr>`).join('')}</tbody></table>`)]],
-    about: ['About', '', [...(DESK ? ['<div id="stDesktop"></div>'] : []), '<div id="stDevices"></div>',stCard('QuorX', '', stRow('Version', DESK ? 'The desktop app and the harness it is attached to.' : '', `<code id="stVersion">v${esc(G.cfg?.version || '?')}</code>`) + stRow('Address', '', `<code>${esc(location.origin)}</code>`) + stRow('OpenRouter key', '', G.cfg.hasKey ? '<span class="st-key-active-badge">active</span>' : '<span class="st-nav-badge bad-dot"></span> none yet') + stRow('Your data', 'Chats, projects, keys and logs stay in this folder.', '<code>data/</code>'))]],
+    about: ['About', '', [...(DESK ? ['<div id="stDesktop"></div>'] : []), '<div id="stDevices"></div>',stCard('QuorX', '', stRow('Version', DESK ? 'The desktop app and the harness it is attached to.' : '', `<code id="stVersion">v${esc(G.cfg?.version || '?')}</code>`) + stRow('Address', '', `<code>${esc(location.origin)}</code>`) + stRow('OpenRouter key', '', G.cfg.hasKey ? '<span class="st-key-active-badge">active</span>' : '<span class="st-nav-badge bad-dot"></span> none yet') + stRow('Your data', 'Chats, projects, keys and logs stay in this folder.', '<code>data/</code>') + stRow('Tour', 'Five short steps over the page: projects, Strict and YOLO, the deciders and reviewer, costs, the terminal.', '<button type="button" class="st-btn secondary sm" data-act="tour">Show the tour</button>'))]],
     _badges: { keys: keysBadge },
   };
 }
@@ -4976,6 +4993,7 @@ function wireSettings() {
     if (act === 'refreshModels') { $('#stCatInfo').textContent = 'Refreshing…'; await loadModels(true); $('#stCatInfo').textContent = `${G.models?.length || 0} models loaded · refreshed ${new Date().toLocaleTimeString()}`; }
     if (act === 'resetOrder') { G.projectOrder = []; savePrefs(); renderSidebar(); e.target.textContent = 'Done'; }
     if (act === 'openCosts') openCosts();
+    if (act === 'tour') { $('#settings').close(); startTour({ fill: fillStart }); }
     if (act === 'exportChats') exportChats(e.target);
     if (act === 'clearPrefs' && await uiConfirm('Clear this browser\'s preferences? Chats, projects and keys stay.')) { try { localStorage.removeItem(STORE); localStorage.removeItem('agent001-v1'); } catch { /* ignore */ } location.reload(); }
   };
@@ -5593,7 +5611,7 @@ async function boot() {
   G.cfg = await fetch('/api/config').then((r) => r.json());
   // Opened without the app link, every other /api call answers 401 and the wall above says what to do: stop here.
   if ((await fetch('/api/chats')).status === 401) return;
-  loadScores();
+  loadScores(); loadCards();
   const d = G.cfg.defaults;
   const saved = load();
   G.settings = { voters: d.voters, gate: d.gate, maxSteps: d.maxSteps, approval: d.approval, budget: d.budget, model: d.chatModel || d.setups.C.model, reasoning: 'off', ...(saved?.settings || {}) };
@@ -5693,6 +5711,13 @@ async function boot() {
   loadModels();
   if (!G.cfg.hasKey) openSettings('keys');
   else firstSetupCheck();
+  maybeStartTour({ fill: fillStart });
+}
+// The tour's first build: into the start box on Home, or the open chat's message box (not sent).
+function fillStart(text) {
+  const ta = $('#ldStartText') || $('.chatpane.focus .input');
+  if (!ta) return;
+  ta.value = text; ta.dispatchEvent(new Event('input', { bubbles: true })); ta.focus();
 }
 
 boot();
