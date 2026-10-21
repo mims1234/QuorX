@@ -44,8 +44,7 @@ import { hostedHtml, browserPath, openTab } from './server/browser.js';
 import { zipFolder } from './server/zip.js';
 import { exportBackup, findBackups, inspectBackup, importBackup } from './server/backup.js';
 import { artifactContent, servedArtifact, ARTIFACT_HEADERS, folderStamp } from './server/artifacts.js';
-import { gate, appGate, appLink, lanOn, hostAllowed, crossSiteApi, isLoopback, accessInfo, setLan, resetToken, plainLan, setLanTls } from './server/access.js';
-import { serveLan } from './server/lantls.js';
+import { gate, appGate, appLink, hostAllowed, crossSiteApi, isLoopback } from './server/access.js';
 import { gitHubRemote, gitHubInfo } from './server/github.js';
 import { serveBlob, startSweeping } from './server/blobs.js';
 import { listDesignSystems, readDesignSystem, projectDesign, applyDesignSystem, saveProjectDesign } from './server/design.js';
@@ -100,7 +99,7 @@ const json = (res, code, body) => { res.writeHead(code, { 'Content-Type': 'appli
 // unescaped can't run code with the harness's powers.
 const APP_CSP = "script-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'; form-action 'self'";
 // The app's own files: revalidated on every load (an edit shows on reload) but answered with 304 when unchanged,
-// and text files gzipped once per version, so phones on Wi-Fi don't pull ~900 KB of script and styles every time.
+// and text files gzipped once per version, so a reload doesn't pull ~900 KB of script and styles every time.
 const GZIP = new Map(); // file → { tag, buf }
 function sendStatic(req, res, file, type, extra = {}) {
   const st = fs.statSync(file), tag = `"${st.size.toString(36)}-${Math.round(st.mtimeMs).toString(36)}"`;
@@ -131,9 +130,8 @@ const server = http.createServer(async (req, res) => {
   let url;
   try { url = new URL(req.url, 'http://x'); } catch { res.writeHead(400); return res.end(); }
   try {
-    // The Host must name this computer (no DNS rebinding); other devices must be paired; no /api calls from other sites.
+    // The Host must name this computer (no DNS rebinding); only this computer may connect; no /api calls from other sites.
     if (!hostAllowed(req)) return json(res, 403, { error: 'unknown host name: open QuorX at localhost or this computer\'s address (or list the name in OH_ALLOWED_HOSTS)' });
-    if (plainLan(req, res, url)) return;
     if (gate(req, res, url)) return;
     if (!req.pageOrigin && appGate(req, res, url)) return;
     if (crossSiteApi(req, url.pathname)) return json(res, 403, { error: 'requests from other sites are not allowed' });
@@ -560,13 +558,6 @@ const server = http.createServer(async (req, res) => {
       setTimeout(() => shutDown(restart), 250);
       return;
     }
-    // ---- other devices (phones on Wi-Fi): the pairing links, on/off and a new link; only from this computer ----
-    if (url.pathname.startsWith('/api/access')) {
-      if (!isLoopback(req)) return json(res, 200, { paired: true });
-      if (url.pathname === '/api/access' && req.method === 'GET') return json(res, 200, accessInfo(runtime.port));
-      if (url.pathname === '/api/access' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e3) || '{}'); const was = lanOn(); setLan(b.lan); return json(res, 200, { ...accessInfo(runtime.port), restart: !process.env.AGENT_HOST && was !== lanOn() }); }
-      if (url.pathname === '/api/access/reset' && req.method === 'POST') { resetToken(); return json(res, 200, accessInfo(runtime.port)); }
-    }
     // ---- the desktop app's link (see server/desktop.js): only from this computer ----
     if (url.pathname.startsWith('/api/desktop/')) {
       const ip = req.socket.remoteAddress || '';
@@ -824,17 +815,9 @@ const server = http.createServer(async (req, res) => {
 
 // Start on PORT (AGENT_PORT in .env, default 5188); if another program already uses it, try the
 // next ports instead of failing. Agent dev servers use 5300-5999, so the search stops before them.
-// AGENT_HOST=127.0.0.1 keeps the harness on this computer only; by default other devices can reach it once paired.
-// Other devices switched off: listen on this computer only, so nothing else on the network can even connect.
-// Listening beyond this computer, the same port also speaks TLS (server/lantls.js): other devices use https, this
-// computer keeps plain http.
-const HOST = process.env.AGENT_HOST || (lanOn() ? undefined : '127.0.0.1');
-const lanSide = !/^(127\.|localhost$|::1$|\[::1\]$)/i.test(HOST ?? '');
-let listener = server;
-if (lanSide) {
-  try { listener = serveLan(server); setLanTls(true); }
-  catch (e) { console.warn(`HTTPS for other devices is not available (${e.message}); they connect over plain http.`); }
-}
+// QuorX is for the computer it runs on: it listens on 127.0.0.1 only, so nothing else on the network can connect.
+const HOST = '127.0.0.1';
+const listener = server;
 function listen(port, triesLeft = 40) {
   listener.once('error', (e) => {
     // A restart (⟳) waits for the old copy to let go of the port instead of moving to another one.
@@ -860,7 +843,6 @@ function shutDown(restart) {
 }
 listener.once('listening', () => {
   runtime.port = listener.address().port; console.log(`QuorX → http://localhost:${runtime.port}`);
-  if (listener !== server) console.log(`Other devices: https on the same port (Settings → About → Other devices has the link and the certificate fingerprint)`);
   console.log(`Open QuorX with this link once (it signs this browser in): ${appLink(runtime.port)}`);
   // 1000 above the main port, when that is still a port; else any free one (a main port above 64535 crashed here).
   listenPages(runtime.port && runtime.port + 1000 <= 65535 ? runtime.port + 1000 : 0, 8);

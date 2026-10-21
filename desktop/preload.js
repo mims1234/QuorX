@@ -1,5 +1,5 @@
 // The bridge the app's own page gets in the desktop app (browse tabs get nothing). With it, the pane's
-// Browser tab uses real Chromium tabs; without it (phones, other browsers) it streams pictures as before.
+// Browser tab uses real Chromium tabs; without it (other browsers) it streams pictures as before.
 const { contextBridge, ipcRenderer } = require('electron');
 
 const call = (name, ...a) => ipcRenderer.invoke(`oh:${name}`, ...a);

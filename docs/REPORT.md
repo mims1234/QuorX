@@ -39,7 +39,6 @@ was checked against the code or measured on 20 October 2026 (QuorX 0.1.5, Window
   - [Install and first start](#install-and-first-start)
   - [OpenRouter keys](#openrouter-keys)
   - [Ports](#ports)
-  - [Phones and other devices](#phones-and-other-devices)
   - [Where data lives](#where-data-lives)
   - [The desktop app](#the-desktop-app)
   - [Settings from the environment](#settings-from-the-environment)
@@ -517,8 +516,7 @@ Every command row in a reply also shows the layer that decided it (`rule: projec
 
 Anyone who reaches QuorX can make it run commands, so `server/access.js` limits who can:
 
-- This computer (loopback) always may. Other devices must be paired once (see [Phones and other
-  devices](#phones-and-other-devices)).
+- Only this computer (loopback): QuorX listens on 127.0.0.1, and a request from anywhere else is refused.
 - The Host header must name this computer (localhost, an IP address or its own name), so a web page can't reach
   QuorX through DNS rebinding. Other names (a Tailscale name, say) go in `OH_ALLOWED_HOSTS`.
 - Other sites, and pages the agent builds (dev servers, sandboxed artifacts), can't call `/api`.
@@ -734,7 +732,7 @@ Python venvs and tkinter, game engines and installers), [java-and-kotlin.md](jav
 |---|---|---|
 | `scripts/test-loop.mjs` | 9 | Grouping look-ups, file windows, trimming, cache marks, untrusted text, retries |
 | `scripts/test-agent.mjs` | 72 | The whole loop with a scripted model: tools, checks, budgets, approvals, resume, Undo |
-| `scripts/test-security.mjs` | 7 | Host checks, other sites and origins refused, device pairing, paths that stay in the project, blobs, partial chat saves |
+| `scripts/test-security.mjs` | 7 | Host checks, other sites and origins refused, other devices refused, paths that stay in the project, blobs, partial chat saves |
 | `scripts/test-safety.mjs` | 62 | Rule engine and bypass corpus, scripts guard, paths, Stop, snapshots, tripwire, deciders, background jobs, terminal, desktop, debugger, packs |
 | `scripts/test-posix.mjs` | 26 | bash and zsh rules, POSIX blocked paths, process groups (skipped on Windows where they need macOS or Linux) |
 | `scripts/test-news.mjs` | 4 | The News format checker |
@@ -789,8 +787,7 @@ is an OS sandbox), each Ready, Optional or Missing, with one fix: Sign in for th
 With no key, ⚙ Settings → API keys opens and the message boxes stay locked until you add one.
 
 - **Sign in with OpenRouter** (the easy way): openrouter.ai opens, you approve (and can set a spending limit for the
-  new key there), and the key comes back by itself. It uses OAuth with PKCE; QuorX never sees your password. From
-  another device, OpenRouter shows a code to paste instead.
+  new key there), and the key comes back by itself. It uses OAuth with PKCE; QuorX never sees your password.
 - **Paste a key:** the server checks it with OpenRouter before saving it.
 - **`.env`:** `OPENROUTER_API_KEY` (or `OPENROUTER_API_KEY_BOT`) also works and shows as "From .env".
 - You can keep several keys and choose the active one. Each shows its spend for the last 1 h, 3 h, 24 h, 3 days and 7
@@ -811,24 +808,10 @@ each price in its own unit (per million tokens, per picture, per second, per cli
 
 Nothing uses 7860, a common port for Gradio and other Python apps.
 
-### Phones and other devices
+### Narrow windows
 
-QuorX listens on your network so a phone on Wi-Fi can use it, but only this computer gets in by itself. A phone or
-another computer pairs once: ⚙ Settings → About → **Other devices** → **Show links**, then open the pairing link on the
-device. It leaves a cookie for a year. **New link…** signs every paired device out, and switching **Allow other
-devices** off refuses them all. Ten wrong links from one address lock it out for 10 minutes. `AGENT_HOST=127.0.0.1`
-keeps QuorX on this computer only.
-
-Other devices connect over **HTTPS** on the same port (`server/lantls.js`); this computer keeps plain HTTP. Each install
-makes its own self-signed certificate (ECDSA P-256, valid 825 days, renewed 30 days before it ends) in
-`data/tls/`, readable by your account only and off limits to the agent. A connection's first byte tells TLS from
-plain HTTP; a plain request from another device is redirected to https, and a pairing link sent in plain is refused
-rather than carried over. The phone warns about the certificate the first time, because no authority signed it:
-open the warning's details and check that its SHA-256 fingerprint matches the one under **Other devices** in
-⚙ Settings → About before you continue. The pairing cookie is `Secure` over HTTPS.
-
-Phones and small tablets (900 px wide or less) get their own layout: a bottom bar switches between Chats, Chat,
-Preview and Settings.
+A window 900 px wide or less gets a compact layout: a bottom bar switches between Chats, Chat, Preview and
+Settings.
 
 ### Where data lives
 
@@ -865,7 +848,7 @@ differences:
   using this page"); when it ends, the tab is yours, exactly where the agent left it. The agent's tabs use their own
   profile, separate from your sign-ins.
 - **The server:** if QuorX already runs on its port, the window attaches to it; otherwise it starts one. Closing the
-  window keeps it running in the tray so phones still reach it; **Quit** is in the tray menu. **⟳ Restart** loads new
+  window keeps it running in the tray so scheduled tasks still run; **Quit** is in the tray menu. **⟳ Restart** loads new
   server code.
 - **Installer:** `npm run desktop:dist` builds `desktop/dist/QuorX-Setup-<version>.exe` (about 112 MB): per user, no
   admin rights, your choice of folder. It isn't code-signed yet, so SmartScreen warns the first time. It carries only
@@ -889,7 +872,6 @@ differences:
 |---|---|
 | `OPENROUTER_API_KEY`, `OPENROUTER_API_KEY_BOT` | A key, shown as "From .env" |
 | `AGENT_PORT` | The port (default 5188) |
-| `AGENT_HOST` | The address to listen on; `127.0.0.1` keeps QuorX on this computer |
 | `OH_ALLOWED_HOSTS` | Extra host names allowed to reach QuorX, comma separated |
 | `OH_HOME` | Where `data/` and `logs/` live |
 | `AGENT_BROWSER` | The browser to drive, if not the Edge or Chrome QuorX finds |

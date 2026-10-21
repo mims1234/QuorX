@@ -1,7 +1,7 @@
 // QuorX desktop: the same page in a window, plus real Chromium tabs for the pane's Browser tab.
 // The page draws the tab strip and the address bar; this process places a native browser view (a real
 // Chromium page: smooth scrolling, video and sound, sign-ins that last, downloads, DevTools) exactly
-// over the Browser tab's page area. Phones and ordinary browsers keep the streamed view.
+// over the Browser tab's page area. Ordinary browsers keep the streamed view.
 //
 // The server: if a harness already answers on its port, the window attaches to it (two servers on the
 // same data folder would fight). Otherwise it starts server.js with Electron's own Node.
@@ -124,7 +124,7 @@ function createWindow() {
   });
   // Anything that opens a new window (↗, links in pages and artifacts) goes to your default browser.
   win.webContents.setWindowOpenHandler(({ url }) => { if (/^(https?|mailto):/i.test(url)) shell.openExternal(url); return { action: 'deny' }; });
-  // ✕ keeps the harness running in the tray (phones on the LAN still reach it), or quits, as you chose in the notice
+  // ✕ keeps the harness running in the tray (scheduled tasks still run), or quits, as you chose in the notice
   // or in ⚙ Settings → About. Attached to a harness someone else runs, ✕ just closes the window.
   win.on('close', (e) => {
     if (quitting || !server) return;
@@ -143,7 +143,7 @@ async function askOnClose() {
   if (asking || !win) return;
   asking = true;
   const { response, checkboxChecked } = await dialog.showMessageBox(win, {
-    type: 'info', title: 'QuorX', message: 'QuorX keeps running in the tray so your phone can reach it',
+    type: 'info', title: 'QuorX', message: 'QuorX keeps running in the tray so scheduled tasks can run',
     detail: 'Quit it any time from the QuorX icon in the tray (right-click → Quit QuorX), or here. You can change what ✕ does in ⚙ Settings → About.',
     buttons: ['Keep running', 'Quit QuorX'], defaultId: 0, cancelId: 0, noLink: true,
     checkboxLabel: "Don't show this again", checkboxChecked: false,

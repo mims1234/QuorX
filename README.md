@@ -56,11 +56,6 @@ Then open http://localhost:5188 and sign in with OpenRouter. The full setup is i
 | [Model cards](models/README.md) | Each recommended model's limits, quirks and prompting tips, and how the cards are kept up to date |
 | [Releasing](docs/RELEASING.md) | How a version goes out: a pre-release first, then Promote release, and Pull release to take one back |
 
-<p align="center">
-  <img src="docs/images/quorx-phone.jpg" width="240" alt="QuorX on a phone: a finished build with the reviewer's scores">
-  <br><sub>Leave the desktop app running and use QuorX from your phone.</sub>
-</p>
-
 ## A friendly reminder
 
 QuorX is powerful: its agent runs real commands on your own computer, which is what lets it build and test real

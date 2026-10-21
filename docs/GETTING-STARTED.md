@@ -40,7 +40,7 @@ shows what this computer has (Git, Python, a browser, toolchains) and offers to 
 ## The desktop app from source
 
 The desktop app puts the same page in its own window, with real browser tabs in the pane and a tray icon that keeps
-QuorX running for your phone. The first ✕ shows a short notice (Keep running or Quit QuorX); right-click the tray
+QuorX running for scheduled tasks. The first ✕ shows a short notice (Keep running or Quit QuorX); right-click the tray
 icon → Quit QuorX stops it, and ⚙ Settings → About sets what ✕ does:
 
 ```bash
@@ -58,5 +58,5 @@ asks where to keep them). Each project keeps QuorX's own working files (undo his
 in a hidden `.quorx/` folder inside it, which git ignores. Keys stay on the server; the page only ever sees them
 masked. What leaves your computer is described in [Privacy](../PRIVACY.md).
 
-Ports, phones and other devices, the installer, updates and every setting from `.env` are in
+Ports, the installer, updates and every setting from `.env` are in
 [the report's setup section](REPORT.md#setup-in-detail).
