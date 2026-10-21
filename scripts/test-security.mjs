@@ -292,3 +292,26 @@ test('sign-in finish: in the desktop app the tab says to go back to the QuorX wi
   assert.doesNotMatch(callbackPage({ ok: false, message: 'OpenRouter said no.', desktop: true }), /href=/);
   assert.match(callbackPage({ ok: true }), /href="\/"/, 'a browser QuorX already opened keeps its way back');
 });
+
+// Node's Brotli decoder bug (October 2026): until QuorX runs on a fixed Node, its web requests never take Brotli.
+test('Brotli: fixed Node versions are told apart; until then requests ask for gzip/deflate and a Brotli answer is refused', async () => {
+  const { brotliFixed } = await import('../server/nobrotli.js');
+  for (const v of ['22.23.4', '22.24.0', '24.22.1', '24.23.0', '26.12.1', '27.0.0']) assert.ok(brotliFixed(v), v);
+  for (const v of ['22.23.1', '22.23.3', '24.22.0', '26.12.0', '20.19.0', '23.11.0']) assert.ok(!brotliFixed(v), v);
+  if (brotliFixed()) return; // this Node is fixed: nothing is wrapped
+  const http = await import('node:http');
+  const zlib = await import('node:zlib');
+  let asked = '';
+  const srv = http.createServer((q, r) => {
+    asked = q.headers['accept-encoding'] || '';
+    if (q.url === '/br') { r.writeHead(200, { 'Content-Type': 'text/plain', 'Content-Encoding': 'br' }); return r.end(zlib.brotliCompressSync('secret')); }
+    r.writeHead(200, { 'Content-Type': 'text/plain', 'Content-Encoding': 'gzip' }); r.end(zlib.gzipSync('hello'));
+  });
+  await new Promise((ok) => srv.listen(0, '127.0.0.1', ok));
+  const base = `http://127.0.0.1:${srv.address().port}`;
+  try {
+    assert.equal(await (await fetch(`${base}/gz`, { headers: { 'Accept-Encoding': 'br' } })).text(), 'hello', 'gzip still works');
+    assert.doesNotMatch(asked, /\bbr\b/, 'never asks for Brotli, even when the caller does');
+    await assert.rejects(fetch(`${base}/br`), /refused a Brotli-compressed answer/);
+  } finally { srv.close(); }
+});

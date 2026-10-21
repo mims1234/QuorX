@@ -5,6 +5,8 @@
 //   server/openrouter.js  OpenRouter client: chat, Decisions, images, speech, music, catalogues
 //   server/decisions.js   the decider ensemble: one Decisions call per decider, soft vote, confidence
 //   server/agent.js       one run: the tool loop, decide-with-guess, artifacts, media approvals
+// First: QuorX's web requests refuse Brotli until its Node has the October 2026 security fix (server/nobrotli.js).
+import './server/nobrotli.js';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
