@@ -11,6 +11,8 @@
     "start": "electron .",
     "icon": "node make-icon.js",
     "dist": "node make-icon.js && electron-builder --win nsis --x64",
+    "dist:mac": "node make-icon.js && electron-builder --mac",
+    "dist:linux": "node make-icon.js && electron-builder --linux",
     "release": "npm version patch --no-git-tag-version && node sync-version.js && npm run dist"
   },
   "devDependencies": {
@@ -114,6 +116,56 @@
       "runAfterFinish": true,
       "artifactName": "QuorX-Setup-${version}.exe"
     },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "build/icon-512.png",
+      "category": "public.app-category.developer-tools",
+      "identity": null,
+      "artifactName": "QuorX-${version}-mac-${arch}.${ext}"
+    },
+    "dmg": {
+      "title": "QuorX ${version}"
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon-512.png",
+      "category": "Development",
+      "executableName": "quorx",
+      "synopsis": "An open-source AI agent with a quorum of models behind every call",
+      "maintainer": "QuorX",
+      "artifactName": "QuorX-${version}-linux-${arch}.${ext}"
+    },
+    "deb": {
+      "artifactName": "quorx_${version}_${arch}.deb"
+    },
     "publish": [
       {
         "provider": "generic",
@@ -137,5 +189,6 @@
       "downloadBase": "https://github.com/mims1234/QuorX/releases/download/v{version}",
       "_note": "For npm run winget (scripts/winget-manifest.mjs). downloadBase must be a permanent per-version https address with {version}, e.g. https://github.com/<you>/<repo>/releases/download/v{version}. Empty: a GitHub releases/latest/download updateUrl is turned into that."
     }
-  }
+  },
+  "homepage": "https://github.com/mims1234/QuorX"
 }

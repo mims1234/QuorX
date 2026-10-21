@@ -2,10 +2,10 @@
 // installed with `winget install QuorX.QuorX`. Run: npm run winget -- [--url <download base>] [--validate]
 //
 // The installer has to be downloadable from a public address first (winget fetches it to check its hash).
-// The base comes from --url, else from quorx.updateUrl in desktop/package.json (the update feed serves the
-// same files). Output: desktop/dist/winget/<version>/ with the three manifests winget-pkgs expects.
+// The base comes from --url, else quorx.winget.downloadBase in desktop/package.json (that version's own release),
+// else quorx.updateUrl. Output: desktop/dist/winget/<version>/ with the three manifests winget-pkgs expects.
 // Publishing is a pull request to github.com/microsoft/winget-pkgs: `wingetcreate submit <that folder>`
-// (needs a GitHub token), or copy the folder to manifests/o/QuorX/QuorX/<version>/ in a fork.
+// (needs a GitHub token), or copy the folder to manifests/q/QuorX/QuorX/<version>/ in a fork. See docs/WINGET.md.
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -31,6 +31,18 @@ const base = raw.replace(/\/releases\/latest\/download\/?$/, '/releases/download
 if (!/^https:\/\//.test(base)) { console.error('Give the public download base with --url https://… (or set quorx.winget.downloadBase in desktop/package.json; {version} is filled in). winget only takes https addresses.'); process.exit(1); }
 
 const sha256 = crypto.createHash('sha256').update(fs.readFileSync(exe)).digest('hex').toUpperCase();
+// What the installer registers in Apps & features, so winget can tell QuorX is installed and upgrade it: the key is
+// electron-builder's GUID for the appId (a v5 UUID in its own namespace), the name "QuorX <version>", the publisher
+// the package's author.
+function uuidV5(name, ns) {
+  const h = crypto.createHash('sha1').update(Buffer.from(ns.replace(/-/g, ''), 'hex')).update(name).digest();
+  h[6] = (h[6] & 0x0f) | 0x50; h[8] = (h[8] & 0x3f) | 0x80;
+  const x = h.subarray(0, 16).toString('hex');
+  return `${x.slice(0, 8)}-${x.slice(8, 12)}-${x.slice(12, 16)}-${x.slice(16, 20)}-${x.slice(20)}`;
+}
+const productCode = pkg.build?.nsis?.guid || uuidV5(pkg.build?.appId || 'dev.quorx.desktop', '50e065bc-3134-11e6-9bab-38c9862bdaf3');
+const arpPublisher = (typeof pkg.author === 'string' ? pkg.author : pkg.author?.name) || W.publisher;
+const repo = W.packageUrl || pkg.homepage || '';
 const MV = '1.10.0';
 const head = (type) => `# yaml-language-server: $schema=https://aka.ms/winget-manifest.${type}.${MV}.schema.json\n# Written by scripts/winget-manifest.mjs\n\n`;
 const files = {
@@ -43,11 +55,18 @@ ManifestVersion: ${MV}
   [`${ID}.installer.yaml`]: `${head('installer')}PackageIdentifier: ${ID}
 PackageVersion: ${version}
 InstallerType: nullsoft
+InstallerLocale: en-US
 Scope: user
 InstallModes:
   - interactive
   - silent
 UpgradeBehavior: install
+ProductCode: '${productCode}'
+AppsAndFeaturesEntries:
+  - DisplayName: QuorX ${version}
+    Publisher: ${arpPublisher}
+    DisplayVersion: ${version}
+    ProductCode: '${productCode}'
 Installers:
   - Architecture: x64
     InstallerUrl: ${base}/QuorX-Setup-${version}.exe
@@ -59,16 +78,21 @@ ManifestVersion: ${MV}
 PackageVersion: ${version}
 PackageLocale: en-US
 Publisher: ${W.publisher}
-${W.publisherUrl ? `PublisherUrl: ${W.publisherUrl}\n` : ''}PackageName: QuorX
-${W.packageUrl ? `PackageUrl: ${W.packageUrl}\n` : ''}License: ${W.license}
+${W.publisherUrl ? `PublisherUrl: ${W.publisherUrl}\n` : ''}${repo ? `PublisherSupportUrl: ${repo}/issues\n` : ''}Author: QuorX
+PackageName: QuorX
+${repo ? `PackageUrl: ${repo}\n` : ''}License: ${W.license}
 ${W.licenseUrl ? `LicenseUrl: ${W.licenseUrl}\n` : ''}ShortDescription: An open-source AI agent with a quorum of models behind every call. Any model, through OpenRouter.
+Description: |-
+  You describe what you want: a game, a site, a desktop app, a fix. QuorX's agent works in a project folder you pick,
+  with a real terminal, a real browser and the tools already on your computer. Any model on OpenRouter, priced up
+  front; small decider models check its work; risky commands wait for your OK.
 Moniker: quorx
 Tags:
   - ai
   - agent
   - openrouter
   - developer-tools
-ManifestType: defaultLocale
+${repo ? `ReleaseNotesUrl: ${repo}/releases/tag/v${version}\n` : ''}ManifestType: defaultLocale
 ManifestVersion: ${MV}
 `,
 };

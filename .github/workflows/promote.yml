@@ -54,10 +54,11 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          gh release download "v$V" --dir dist --pattern latest.yml --pattern "QuorX-Setup-$V.exe" --pattern SHA256SUMS.txt
+          gh release download "v$V" --dir dist --pattern 'latest*.yml' --pattern "QuorX-Setup-$V.exe" --pattern SHA256SUMS.txt
           cd dist
-          sha256sum -c --strict SHA256SUMS.txt
-          grep -qx "version: $V" latest.yml || { echo "::error::latest.yml is not for $V"; exit 1; }
+          # SHA256SUMS.txt also lists the macOS and Linux installers, which aren't downloaded here.
+          sha256sum -c --strict --ignore-missing SHA256SUMS.txt
+          for f in latest*.yml; do grep -qx "version: $V" "$f" || { echo "::error::$f is not for $V"; exit 1; }; done
 
       - name: Make it the latest release
         shell: pwsh
