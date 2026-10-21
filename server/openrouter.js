@@ -7,6 +7,9 @@ import { activeKey } from './keys.js';
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // Where chats, projects, keys, logs and .env live: the app folder itself, unless OH_HOME points elsewhere
 // (the installed desktop app keeps them in your profile, so updates never touch them).
+// A test run (node --test) must never use the real data folder: its hooks, memory and projects would land in the
+// user's own QuorX. Test files import scripts/test-home.mjs first, which sets OH_HOME to a throwaway folder.
+if (process.env.NODE_TEST_CONTEXT && !process.env.OH_HOME) throw new Error('A test loaded QuorX without a throwaway data folder: import scripts/test-home.mjs first (it sets OH_HOME).');
 export const HOME = process.env.OH_HOME ? path.resolve(process.env.OH_HOME) : ROOT;
 
 function loadEnv(file) {
