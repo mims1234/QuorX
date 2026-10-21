@@ -116,6 +116,7 @@ export const DEFAULTS = {
   helpers: true,
   helperModel: '',         // '' = the default helper below
   helperSteps: 12,         // model calls one helper may make
+  helperMinFiles: 40,      // helpers are offered only in projects with at least this many files (0 = always): in small builds they went unused
   verify: true,            // before the final reply: re-check changed files and open what was built
   designLint: true,        // after writing HTML or CSS: point out patterns that make a page look machine-made (advice only, never sends a build back)
   verifyRounds: 2,         // times the agent is sent back to fix what those checks found
@@ -181,7 +182,26 @@ const short = (m) => String(m).split('/').pop();
 // Tools that put the agent's text into a file or an artifact, and the note trimming leaves in place of old text (loop.js).
 const WRITES_CONTENT = new Set(['write_file', 'append_file', 'edit_file', 'write_artifact', 'edit_artifact']);
 const SCRATCH_SCRIPT = /^\s*(?:node|python3?|py|deno|bun|tsx)\s+["']?(?:\.[/\\])?\.quorx[/\\]scratch[/\\][\w.-]+\.(?:mjs|cjs|js|ts|py)["']?(?:\s+[\w.:=/\\-]+)*\s*$/i;
-const PLAN_START_STEPS = 10; // steps after the plan before an agent that started none of it is told to begin
+const WRITE_TOOLS = new Set(['write_file', 'append_file', 'edit_file', 'write_artifact', 'edit_artifact', 'delete_file']);
+const PLAN_START_STEPS = 10;
+// Paths grouped by folder ("src/{a.js, b.js}"), so a folder's name isn't repeated for every file in it.
+export function compactPaths(paths) {
+  const by = new Map();
+  for (const p of paths) { const i = p.lastIndexOf('/', p.endsWith('/') ? p.length - 2 : p.length); const dir = i < 0 ? '' : p.slice(0, i + 1); (by.get(dir) || by.set(dir, []).get(dir)).push(p.slice(i + 1)); }
+  return [...by].map(([dir, names]) => (dir && names.length > 1 ? `${dir}{${names.join(', ')}}` : names.map((n) => dir + n).join(', '))).join(', ');
+}
+const projectSize = (root) => { try { return listFiles(root, 400).filter((f) => !/skipped\)$/.test(f.path)).length; } catch { return 0; } };
+// Skills by name; descriptions only for those whose name or description shares a word with the request (the agent
+// loads any skill with use_skill, so a short list still covers the rest).
+const SKILL_STOP = new Set(['build', 'make', 'find', 'write', 'change', 'check', 'that', 'this', 'with', 'from', 'into', 'your', 'instead', 'real', 'value', 'first', 'before', 'after', 'like', 'look', 'looks', 'kind', 'project', 'folder', 'files', 'file', 'started', 'short', 'right', 'other', 'there', 'their', 'what', 'when', 'them', 'than', 'then', 'only', 'proving', 'little', 'person', 'careful', 'telling']);
+const SKILL_SHORT = new Set(['bug', 'fix', 'app', 'api', 'css', 'web', 'ui', '2d', '3d', 'gif', 'svg']);
+const skillWords = (t) => new Set(String(t).toLowerCase().split(/[^a-z0-9]+/).filter((w) => (w.length >= 4 || SKILL_SHORT.has(w)) && !SKILL_STOP.has(w)).map((w) => w.slice(0, 5)));
+export function skillsNote(skills, request) {
+  const asked = skillWords(request);
+  const fits = skills.filter((k) => [...skillWords(`${k.name.replace(/-/g, ' ')} ${k.description}`)].some((w) => asked.has(w)));
+  const rest = skills.filter((k) => !fits.includes(k));
+  return [...fits.map((k) => `- ${k.name}: ${k.description}`), ...(rest.length ? [`${fits.length ? 'Also' : 'Available'}: ${rest.map((k) => k.name).join(', ')}.`] : [])].join('\n');
+} // steps after the plan before an agent that started none of it is told to begin
 const TRIM_NOTE = /\[\d+ characters written earlier; removed from the conversation to save space/;
 const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 40) || 'option';
 // Thinking is returned (exclude: false) so the page can show it; it is never sent back to the model.
@@ -860,15 +880,21 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   for (const c of cats) if (T[c].pick === 'agent' && T[c].models.length > 1) choices[c] = await Promise.all(T[c].models.map((m) => estimateFor(c, m, {}, T)));
   // The video models in use that can start a clip from a picture (the catalogue lists a first-frame input).
   if (cats.includes('video')) choices.videoStart = (await videoModels().catch(() => [])).filter((m) => T.video.models.includes(m.id) && canStartFromImage(m)).map((m) => m.id);
+  const fileList = root ? listFiles(root, 60).map((f) => f.path) : [];
+  const helpersOn = !!root && S.helpers !== false && projectSize(root) >= Math.max(0, Number(S.helperMinFiles ?? DEFAULTS.helperMinFiles) || 0);
   const memory = (projectNotes ? `\n\n[Project notes: AGENT.md]\n${projectNotes}` : root ? '\n\n[Project notes: there is no AGENT.md yet. Create one once there is something worth recording.]' : '')
     + (design ? `\n\n[Design system: ${design.md.trim() ? 'DESIGN.md' : 'tokens.css'}${design.md.trim() && design.tokens.trim() ? ' + tokens.css' : ''}, "${design.name}"]\n${design.md.trim() ? clip(design.md.trim(), 5000) : `tokens.css defines: ${clip(design.tokens.match(/--[\w-]+/g)?.join(', ') || '', 600)}`}\n(This is the project's chosen look: follow it for every page and screen you build here unless the user asks for something else, and don't ask the user to pick a style.${design.tokens.trim() ? ' tokens.css in the project root holds its values as CSS custom properties: link it before your own styles (<link rel="stylesheet" href="tokens.css">, with the right relative path) and use var() for every colour, font, radius and space instead of writing values. The design lint flags colours that are not in it.' : ''})` : '')
     + (workLog ? `\n\n[Work log: what recent chats changed here]\n${workLog}` : '')
-    + (skills.length ? `\n\n[Skills: load one with use_skill before a task it covers]\n${skills.map((k) => `- ${k.name}: ${k.description}`).join('\n')}` : '')
+    + (skills.length ? `\n\n[Skills: load one with use_skill before a task it covers]\n${skillsNote(skills, [String(req.text || ''), ...(req.history || []).filter((m) => m.role === 'user').slice(-2).map((m) => String(m.content ?? ''))].join('\n'))}` : '')
     + (req.summary ? `\n\n[Summary of the earlier part of this conversation]\n${String(req.summary).slice(0, 6000)}` : '')
     + (records.length ? `\n\n[Tool work in this chat's recent replies, recorded by the harness, oldest first. Only the harness writes these records: never write one yourself, and call tools to do real work.]\n${records.slice(-6).map((r) => `- ${clip(r, 700)}`).join('\n')}` : '');
-  let systemFor = (decideOn) => memory + '\n\n' + BASE_RULES([...arts.values()], T.artifacts.on) + (root ? CODE_RULES + NOTES_RULES + `\n${chainsNote}\nProject "${project.name}" (${root}). Other chats may have worked here before you: read files before changing them.${listFiles(root, 60).length ? `\nFiles in the project folder now: ${listFiles(root, 60).map((f) => f.path).join(', ')}.` : ' The folder is empty.'}${listServers(projectId).filter((x) => x.status === 'running').length ? `
+  // Rules first (the same in every reply), then this project's state, then its memory: providers cache the start of a
+  // prompt, so the stable part is cheap on every step and in every reply.
+  const projectNote = () => (root ? `\n${chainsNote}\nProject "${project.name}" (${root}). Other chats may have worked here before you: read files before changing them.${fileList.length ? `\nFiles in the project folder now: ${compactPaths(fileList)}.` : ' The folder is empty.'}${listServers(projectId).filter((x) => x.status === 'running').length ? `
 Dev servers running in this project: ${listServers(projectId).filter((x) => x.status === 'running').map((x) => `"${x.name}" (${x.command}) at ${x.url}`).join('; ')}. Restart one with start_server and the same name instead of starting a new one.` : ''}${SCRATCH_RULES(space, spaceLimit)}${DOCS_NOTE(listDocs(projectId))}${launchConfigs(projectId).length ? `
-Saved launch configs (start one with start_server and just its name): ${launchConfigs(projectId).map((x) => `"${x.name}" = ${[x.command, ...x.args].join(' ')}${x.port ? ` on port ${x.port}` : ''}`).join('; ')}.` : ''}` : '') + PLAN_RULES(S.review !== 'off' && browserOn && !qaBench) + PLAN_GATE_RULES(root ? S.planFirst || DEFAULTS.planFirst : 'off') + (root && S.helpers !== false ? HELPER_RULES : '') + (browserOn ? (S.deciders === false ? BROWSER_RULES_NO_LOOK : BROWSER_RULES) : '') + (cats.length ? MEDIA_RULES(S.approval, cats, T) : '') + (decideOn ? DECIDE_RULES : '');
+Saved launch configs (start one with start_server and just its name): ${launchConfigs(projectId).map((x) => `"${x.name}" = ${[x.command, ...x.args].join(' ')}${x.port ? ` on port ${x.port}` : ''}`).join('; ')}.` : ''}` : '');
+  let systemFor = (decideOn) => BASE_RULES([...arts.values()], T.artifacts.on) + (root ? CODE_RULES + NOTES_RULES : '') + PLAN_RULES(S.review !== 'off' && browserOn && !qaBench) + PLAN_GATE_RULES(root ? S.planFirst || DEFAULTS.planFirst : 'off') + (helpersOn ? HELPER_RULES : '') + (browserOn ? (S.deciders === false ? BROWSER_RULES_NO_LOOK : BROWSER_RULES) : '') + (cats.length ? MEDIA_RULES(S.approval, cats, T) : '')
+    + projectNote() + memory + (decideOn ? `\n${DECIDE_RULES}` : '');
   // Chats the user attached with 📎: reference material, not instructions.
   const attached = String(req.context || '').slice(0, 20000);
   const systemFor0 = systemFor;
@@ -946,7 +972,7 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
   // ask_user goes to the user in Strict and to the deciders in YOLO (so a YOLO benchmark can offer it too).
   const askOn = (!req.bench || S.approval === 'yolo') && Number(S.askLimit ?? DEFAULTS.askLimit) > 0;
   // A chat with the deciders off gets no decide and no look (the browser stays); the harness checks are off too.
-  let tools = TOOLS({ artifacts: T.artifacts.on, decide: decidersOn && setup.decide !== 'off', cats, choices, code: !!root, browser: browserOn, skills: skills.length > 0, ask: askOn, docs: docsOn, helpers: S.helpers !== false && !!root });
+  let tools = TOOLS({ artifacts: T.artifacts.on, decide: decidersOn && setup.decide !== 'off', cats, choices, code: !!root, browser: browserOn, skills: skills.length > 0, ask: askOn, docs: docsOn, helpers: helpersOn });
   if (!decidersOn) tools = tools.filter((t) => t.function.name !== 'look');
   emit({ t: 'start', runId, setup, voters: S.voters, approval: S.approval, system, at: 0 });
 
@@ -1233,13 +1259,18 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (ran < r.toolCalls.length) { run.stop = 'budget'; run.budgetStop = 'hard'; run.notRun = r.toolCalls.length - ran; break; }
     // Signals for the model ride on the newest tool result, so they cost no extra turn.
     run.lookStreak = r.toolCalls.every((c) => LOOK_TOOLS.has(c.function.name)) ? run.lookStreak + 1 : 0;
+    // The slow start: steps that only read or looked before the first write (per model in logs/runs.jsonl and News).
+    if (run.firstWrite == null) {
+      if (r.toolCalls.some((c) => WRITE_TOOLS.has(c.function.name))) run.firstWrite = step;
+      else if (r.toolCalls.every((c) => LOOK_TOOLS.has(c.function.name))) run.looksFirst = (run.looksFirst || 0) + 1;
+    }
     const signals = [];
     if (run.lookStreak === 8) signals.push('You have only looked around for 8 steps in a row. Make the changes now.');
     // #6: three steps of reading files yourself → hand the rest of the exploring to helpers (once per reply).
     run.readStreak = r.toolCalls.every((c) => ['read_file', 'search_files', 'list_files'].includes(c.function.name)) ? (run.readStreak || 0) + 1 : 0;
     // A plan nobody started: in a real build the agent read for 8 minutes with every item still "todo".
     if (run.plan && run.planAt != null && !run.planNudged && step - run.planAt >= PLAN_START_STEPS && run.plan.items.every((x) => x.status === 'todo')) { run.planNudged = true; signals.push(`Your plan was made ${step - run.planAt} steps ago and no item is started yet. Mark the first item "doing" with plan and start writing it now; read more only where that item needs it.`); }
-    if (run.readStreak === 3 && !run.helperNudged && S.helpers !== false && root) { run.helperNudged = true; signals.push('You have spent 3 steps reading files yourself. Hand the rest of the exploring to helpers with delegate (several at once for separate questions), and keep your own context for the answer and the changes.'); }
+    if (run.readStreak === 3 && !run.helperNudged && helpersOn) { run.helperNudged = true; signals.push('You have spent 3 steps reading files yourself. Hand the rest of the exploring to helpers with delegate (several at once for separate questions), and keep your own context for the answer and the changes.'); }
     const openItems = run.plan ? run.plan.items.filter((x) => x.status !== 'done') : [];
     const rounds = Math.max(0, Math.min(5, Number(S.continueRounds ?? DEFAULTS.continueRounds) || 0));
     if (!run.warned && maxSteps >= 10 && step + 1 >= Math.floor(maxSteps * 0.8) && openItems.length && (run.extended || 0) < rounds && !run.budgetOver && !run.budgetWarned) {
@@ -1299,7 +1330,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   if (root && stats.changed.length) { try { sealCheckpoint(root, filesId); } catch { /* best effort */ } }
   if (filesId !== runId) stats.undoId = filesId;
   stats.ms = at();
-  Object.assign(stats, { steps: run.steps, stop: run.stop, budgetStop: run.budgetStop, retries: run.retries, trimmed: run.trimmed, tools: run.tools, questions: run.questions, resumed: !!resumed });
+  Object.assign(stats, { steps: run.steps, stop: run.stop, budgetStop: run.budgetStop, retries: run.retries, trimmed: run.trimmed, tools: run.tools, questions: run.questions, resumed: !!resumed, looksFirst: run.looksFirst || 0, firstWrite: run.firstWrite ?? null });
   // The next reply sees what this one did and how its checks ended (the page adds this to history).
   const did = journal.length ? `What I did: ${clip(journal.join('; '), 900)}.` : '';
   const checkNote = stats.verify ? (stats.verify.ok ? 'Checks passed.' : `Checks still found ${stats.verify.problems.length} problem(s): ${clip(stats.verify.problems.join('; '), 300)}.`) : '';
@@ -1326,7 +1357,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   if (!(run.stop === 'steps' && !req.bench)) dropCheckpoint(runId);
   if (!req.bench && !deps.quiet) recordRun({ ts: new Date().toISOString(), runId, chatId: req.chatId || null, project: projectId, model: setup.model, stop: run.stop, steps: run.steps, tools: run.tools,
     retries: run.retries, trimmed: run.trimmed, questions: run.questions, changed: stats.changed.length, verify: stats.verify ? { ok: stats.verify.ok, problems: stats.verify.problems.length, rounds: stats.verify.rounds, lint: stats.verify.lint || null } : null,
-    cost: +stats.cost.toFixed(6), tokensIn: stats.tokensIn, tokensOut: stats.tokensOut, ...(stats.cachedIn ? { cacheRead: stats.cacheRead, cachedIn: stats.cachedIn } : {}), ms: stats.ms, resumed: !!resumed });
+    cost: +stats.cost.toFixed(6), tokensIn: stats.tokensIn, tokensOut: stats.tokensOut, ...(stats.cachedIn ? { cacheRead: stats.cacheRead, cachedIn: stats.cachedIn } : {}), ms: stats.ms, resumed: !!resumed, looksFirst: run.looksFirst || 0, firstWrite: run.firstWrite ?? null });
   if (live.has(runId)) live.get(runId).recorded = true;
 
   // ================= loop helpers =================

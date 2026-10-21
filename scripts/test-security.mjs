@@ -362,3 +362,25 @@ test('two QuorX on one computer keep their own cookies: each name carries the po
   assert.equal(gate(lan(5233, `oh_pair_5262=other; oh_pair_5233=${token}`), res(), u('/api/chats')), false, 'paired on this port');
   assert.equal(gate(lan(5262, `oh_pair_5233=${token}`), res(), u('/api/chats')), true, 'not paired on the other');
 });
+
+// A main port above 64535 has no port 1000 above it for the pages address: QuorX must start anyway (it used to crash
+// with ERR_SOCKET_BAD_PORT, as when Windows hands a test a high free port).
+test('QuorX starts on a main port near the top of the range', async () => {
+  const { spawn } = await import('node:child_process');
+  const home = tempDir('qx-highport-');
+  const child = spawn(process.execPath, [path.resolve('server.js')], { env: { ...process.env, OH_HOME: home, AGENT_PORT: '65000', AGENT_HOST: '127.0.0.1', QX_NO_JOBHOST: '1' }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+  let out = '';
+  try {
+    const port = await new Promise((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error(`QuorX did not start:\n${out}`)), 30000);
+      child.stdout.on('data', (d) => { out += d; const m = out.match(/QuorX → http:\/\/localhost:(\d+)/); if (m) { clearTimeout(t); resolve(Number(m[1])); } });
+      child.stderr.on('data', (d) => { out += d; });
+      child.once('exit', (c) => { clearTimeout(t); reject(new Error(`QuorX exited (${c}):\n${out}`)); });
+    });
+    assert.ok(port > 64535, `started on ${port}`);
+    await new Promise((r) => setTimeout(r, 1500)); // the pages address is set up just after
+    assert.equal(child.exitCode, null, `QuorX is still running:\n${out}`);
+    const cfg = await fetch(`http://127.0.0.1:${port}/api/config`).then((r) => r.json());
+    assert.ok(cfg.pagePort > 0 && cfg.pagePort <= 65535, `pages on ${cfg.pagePort}`);
+  } finally { child.kill(); }
+});
