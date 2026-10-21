@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { HOME } from './openrouter.js';
+import { findKey } from './secrets.js';
 
 const FILE = () => path.join(HOME, 'data', 'memory.json');
 export const MEMORY_TOKENS = 300, ITEM_CHARS = 200, MAX_ITEMS = 30;
@@ -25,15 +26,8 @@ function write(mem) {
 }
 
 // ---------- never a secret ----------
+// The key patterns are shared with /review (server/secrets.js); memory also refuses secrets written as prose.
 const SECRET = [
-  [/\b(?:sk|pk|rk)[-_][A-Za-z0-9_-]{16,}/, 'an API key'],
-  [/\bgh[pousr]_[A-Za-z0-9]{20,}|\bgithub_pat_[A-Za-z0-9_]{20,}/, 'a GitHub token'],
-  [/\bxox[abprs]-[A-Za-z0-9-]{10,}/, 'a Slack token'],
-  [/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/, 'an AWS key'],
-  [/\bAIza[0-9A-Za-z_-]{30,}/, 'a Google API key'],
-  [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\./, 'a login token (JWT)'],
-  [/-----BEGIN [A-Z ]*PRIVATE KEY/, 'a private key'],
-  [/\b[a-z][\w+.-]*:\/\/[^\s:@/]+:[^\s@/]+@/i, 'a password in an address'],
   [/\b(?:passwords?|passwd|pwd|passcode|passphrase|secret|api[\s_-]?key|access[\s_-]?key|(?:access|auth|bearer|api|refresh)[\s_-]?token|token|pin|otp|cvv|ssn)\b\s*(?:is|=|:)\s*\S{3,}/i, 'a password or key'],
   [/\b(?:\d[ -]?){13,19}\b/, 'a card or account number'],
 ];
@@ -41,6 +35,8 @@ const SECRET = [
 const RANDOMISH = /(?<![\w/.-])(?=[A-Za-z0-9_+/=-]{24,}(?![\w/.-]))(?=[^\s]*[a-z])(?=[^\s]*[A-Z])(?=[^\s]*\d)[A-Za-z0-9_+/=-]{24,}/;
 export function looksSecret(text) {
   const t = String(text || '');
+  const key = findKey(t);
+  if (key) return key;
   for (const [re, what] of SECRET) if (re.test(t)) return what;
   if (RANDOMISH.test(t)) return 'something that looks like a key';
   return '';
