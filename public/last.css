@@ -2493,3 +2493,9 @@ html body .trace.trace-pane .step .when { width: auto !important; white-space: n
 .ap-plan li { padding: 5px 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-2); }
 .ap-plan li .cost { float: right; font-variant-numeric: tabular-nums; }
 .ap-plan li .dim { color: var(--dim); font-size: 11.5px; }
+
+/* GitHub next to the QuorX name: QuorX is open source */
+.brand-git { flex: none; display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; color: var(--muted); margin-left: -2px; }
+.brand-git svg { width: 14px; height: 14px; display: block; }
+.brand-git:hover { color: var(--text); background: color-mix(in srgb, var(--text) 8%, transparent); }
+.brand-git:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
