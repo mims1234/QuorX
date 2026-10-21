@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { hostAllowed, crossSiteApi, gate, isLoopback, setLan, lanOn, appGate, appKey } from '../server/access.js';
+import { hostAllowed, crossSiteApi, gate, isLoopback, appGate, appKey } from '../server/access.js';
 import { privateAddress } from '../server/safefetch.js';
 import { decide, agentWriteBlocked } from '../server/cmdpolicy.js';
 import { safePath, checkCommand, searchFiles } from '../server/workspace.js';
@@ -27,24 +27,16 @@ test('/api refuses other sites and other origins on this computer; pages and sam
   assert.ok(!crossSiteApi(req({ site: 'cross-site' }), '/ws/p1/index.html'), 'project files stay loadable by sandboxed pages');
 });
 
-test('other devices must pair; this computer never has to', () => {
-  assert.equal(lanOn(), false, 'other devices are off on a fresh install');
-  setLan(true);
+test('only this computer may use QuorX: other devices are refused, with no way to pair', () => {
   const url = (p) => new URL(p, 'http://x');
   assert.equal(gate(req({ ip: '::ffff:127.0.0.1' }), res(), url('/api/chats')), false);
   assert.ok(isLoopback(req({ ip: '::1' })));
-  const r1 = res();
-  assert.equal(gate(req({ ip: '192.168.1.50' }), r1, url('/api/chats')), true);
-  assert.equal(r1.code, 401);
-  const r2 = res();
-  assert.equal(gate(req({ ip: '192.168.1.51' }), r2, url('/?pair=wrong')), true);
-  assert.equal(r2.code, 401);
-  const token = JSON.parse(fs.readFileSync(path.join(process.env.OH_HOME, 'data', 'access.json'), 'utf8')).token;
-  const r3 = res();
-  assert.equal(gate(req({ ip: '192.168.1.52' }), r3, url(`/?pair=${token}`)), true);
-  assert.equal(r3.code, 302);
-  assert.match(r3.headers['Set-Cookie'], /HttpOnly/);
-  assert.equal(gate(req({ ip: '192.168.1.52', cookie: `x=1; oh_pair=${token}` }), res(), url('/api/chats')), false, 'paired');
+  for (const p of ['/api/chats', '/', '/?pair=anything']) {
+    const r = res();
+    assert.equal(gate(req({ ip: '192.168.1.50' }), r, url(p)), true, p);
+    assert.equal(r.code, 403, p);
+    assert.ok(!r.headers['Set-Cookie'], 'nothing signs another device in');
+  }
 });
 
 test('file paths stay inside the project: links, streams and device names too', () => {
@@ -253,92 +245,6 @@ test('data folder: 0.2.5 locked files are repaired at start, and the lock-down k
   fs.rmSync(home, { recursive: true, force: true });
 });
 
-// ---------- HTTPS for other devices (server/lantls.js) ----------
-test('other devices get HTTPS: one certificate per install, in the data folder, kept between starts', async () => {
-  const crypto = await import('node:crypto');
-  const { lanCert, KEY_FILE, CERT_FILE } = await import('../server/lantls.js');
-  const { SECRET_FILES } = await import('../server/keys.js');
-  const c = lanCert();
-  const data = path.join(process.env.OH_HOME, 'data');
-  for (const f of [KEY_FILE, CERT_FILE]) {
-    assert.ok(!path.relative(data, f).startsWith('..'), `${f} is in the data folder`);
-    assert.ok(fs.existsSync(f));
-  }
-  assert.ok(SECRET_FILES.includes(KEY_FILE), "the agent's file tools may never read the private key");
-  if (process.platform !== 'win32') assert.equal(fs.statSync(KEY_FILE).mode & 0o077, 0, 'the key is for this account only');
-  const x = new crypto.X509Certificate(fs.readFileSync(CERT_FILE));
-  assert.ok(x.verify(x.publicKey), 'self-signed');
-  assert.ok(x.checkPrivateKey(crypto.createPrivateKey(fs.readFileSync(KEY_FILE))));
-  assert.equal(x.ca, false);
-  assert.match(x.subjectAltName, /DNS:localhost/);
-  assert.match(x.subjectAltName, /IP Address:127\.0\.0\.1/);
-  assert.deepEqual(x.keyUsage, ['1.3.6.1.5.5.7.3.1'], 'for TLS servers only');
-  assert.ok(Date.parse(x.validTo) - Date.now() <= 826 * 86400e3, 'no longer than phones accept');
-  assert.match(c.fingerprint, /^([0-9A-F]{2}:){31}[0-9A-F]{2}$/);
-  assert.equal(c.fingerprint, x.fingerprint256);
-  assert.equal(lanCert().fingerprint, c.fingerprint, 'the same certificate next time, so the fingerprint you checked stays');
-});
-
-test('one port: other devices over TLS, this computer over plain http', async () => {
-  const http = await import('node:http');
-  const tls = await import('node:tls');
-  const { lanCert, serveLan } = await import('../server/lantls.js');
-  const { plainLan, setLanTls } = await import('../server/access.js');
-  setLanTls(true);
-  const app = http.createServer((rq, rs) => { if (plainLan(rq, rs, new URL(rq.url, 'http://x'))) return; rs.end(JSON.stringify({ tls: !!rq.socket.encrypted, url: rq.url })); });
-  const front = serveLan(app);
-  await new Promise((r) => front.listen(0, '127.0.0.1', r));
-  const port = front.address().port;
-  try {
-    const plain = await new Promise((ok, no) => http.get({ host: '127.0.0.1', port, path: '/api/x?y=1' }, (r) => { let d = ''; r.on('data', (b) => (d += b)); r.on('end', () => ok([r.statusCode, JSON.parse(d)])); }).on('error', no));
-    assert.deepEqual(plain, [200, { tls: false, url: '/api/x?y=1' }], 'loopback stays plain http');
-    const secure = await new Promise((ok, no) => {
-      const s = tls.connect({ host: '127.0.0.1', port, rejectUnauthorized: false, ALPNProtocols: ['http/1.1'] }, () => {
-        const fp = s.getPeerCertificate().fingerprint256;
-        let d = '';
-        s.on('data', (b) => (d += b)); s.on('end', () => ok({ fp, d }));
-        s.write('GET /p HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n');
-      });
-      s.on('error', no);
-    });
-    assert.equal(secure.fp, lanCert().fingerprint, 'the device sees the fingerprint Settings shows');
-    assert.match(secure.d, /^HTTP\/1\.1 200/);
-    assert.match(secure.d, /"tls":true/);
-  } finally { front.close(); app.close(); setLanTls(false); }
-});
-
-test('plain http from another device goes to https; a pairing link sent in plain is refused; cookies are Secure over TLS', async () => {
-  const { plainLan, setLanTls, gate, accessInfo, lanOn } = await import('../server/access.js');
-  const { lanCert } = await import('../server/lantls.js');
-  const url = (p) => new URL(p, 'http://x');
-  const rq = (ip, encrypted) => ({ headers: { host: '192.168.1.20:5188' }, socket: { remoteAddress: ip, encrypted } });
-  setLanTls(true);
-  try {
-    const r1 = res();
-    assert.equal(plainLan(rq('192.168.1.50'), r1, url('/chat/c1?x=1')), true);
-    assert.equal(r1.code, 308);
-    assert.equal(r1.headers.Location, 'https://192.168.1.20:5188/chat/c1?x=1');
-    const r2 = res();
-    assert.equal(plainLan(rq('192.168.1.50'), r2, url('/?pair=secret-token')), true);
-    assert.equal(r2.code, 403);
-    assert.ok(!r2.headers.Location && !r2.body.includes('secret-token'), 'the token is not sent on anywhere');
-    assert.equal(plainLan(rq('192.168.1.50', true), res(), url('/')), false, 'over TLS');
-    assert.equal(plainLan(rq('127.0.0.1'), res(), url('/')), false, 'this computer');
-    setLanTls(false);
-    assert.equal(plainLan(rq('192.168.1.50'), res(), url('/')), false, 'TLS not in use: nothing changes');
-    setLanTls(true);
-    setLan(true);
-    assert.equal(lanOn(), true);
-    const token = JSON.parse(fs.readFileSync(path.join(process.env.OH_HOME, 'data', 'access.json'), 'utf8')).token;
-    const r3 = res();
-    assert.equal(gate(rq('192.168.1.52', true), r3, url(`/?pair=${token}`)), true);
-    assert.match(r3.headers['Set-Cookie'], /; Secure/);
-    const info = accessInfo(5188);
-    assert.equal(info.fingerprint, lanCert().fingerprint);
-    for (const l of info.links) assert.match(l.url, /^https:\/\//);
-  } finally { setLanTls(false); }
-});
-
 test('two QuorX on one computer keep their own cookies: each name carries the port', () => {
   const at = (port, cookie) => ({ headers: { host: `localhost:${port}`, ...(cookie ? { cookie } : {}) }, socket: { remoteAddress: '127.0.0.1', localPort: port } });
   const u = (p) => new URL(p, 'http://x');
@@ -353,14 +259,6 @@ test('two QuorX on one computer keep their own cookies: each name carries the po
   assert.equal(r2.code, 401);
   assert.equal(appGate(at(5233, `qx_app=${appKey}`), res(), u('/api/chats')), false, 'the old cookie name still works for now');
   assert.equal(appGate(at(5233, `qx_app=${appKey}; qx_app_5233=wrong`), res(), u('/api/chats')), true, "this port's cookie wins over the old one");
-  setLan(true);
-  const token = JSON.parse(fs.readFileSync(path.join(process.env.OH_HOME, 'data', 'access.json'), 'utf8')).token;
-  const lan = (port, cookie) => ({ headers: { host: `192.168.1.20:${port}`, ...(cookie ? { cookie } : {}) }, socket: { remoteAddress: '192.168.1.60', localPort: port } });
-  const r3 = res();
-  assert.equal(gate(lan(5233), r3, u(`/?pair=${token}`)), true);
-  assert.match(r3.headers['Set-Cookie'], /^oh_pair_5233=/);
-  assert.equal(gate(lan(5233, `oh_pair_5262=other; oh_pair_5233=${token}`), res(), u('/api/chats')), false, 'paired on this port');
-  assert.equal(gate(lan(5262, `oh_pair_5233=${token}`), res(), u('/api/chats')), true, 'not paired on the other');
 });
 
 // A main port above 64535 has no port 1000 above it for the pages address: QuorX must start anyway (it used to crash

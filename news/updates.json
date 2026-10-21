@@ -22,7 +22,7 @@
         { "kind": "fixed", "text": "Two copies of QuorX on one computer no longer sign each other out.", "pr": 57 },
         { "kind": "fixed", "text": "A project inside another project's folder no longer fills that project's file list and prompts.", "pr": 41 },
         { "kind": "fixed", "text": "A file check that runs out of time no longer reports a syntax error in a file that is fine.", "pr": 46 },
-        { "kind": "safety", "text": "Phones and other devices pair over HTTPS; check the certificate's fingerprint in Settings → About.", "pr": 48 },
+        { "kind": "safety", "text": "QuorX answers only the computer it runs on: phone and other-device access is gone, and so is everything it opened up.", "pr": 61 },
         { "kind": "safety", "text": "Hook commands go through your command rules and approvals like the agent's own, and /review never sends secrets files.", "pr": 38 },
         { "kind": "safety", "text": "An imported backup never changes your approval settings, and its schedules arrive paused.", "pr": 54 },
         { "kind": "safety", "text": "Every pull request is tested on Windows and Linux, and new versions reach installed apps only once promoted.", "pr": 43 }

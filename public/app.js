@@ -4937,7 +4937,7 @@ function settingsPanels(S) {
     ]],
     setup: ['Setup check', 'What this computer has for QuorX, and what each thing is for. Amber rows are optional.', ['<div id="stSetup"><div class="st-row-help">Checking this computer…</div></div>']],
     shortcuts: ['Shortcuts', '', [stCard('Keyboard', '', `<table class="st-shortcuts-table"><tbody>${[['Ctrl + K', 'Search chats, commands, settings and files'], ['Enter', 'Send'], ['Shift + Enter', 'New line'], ['@', 'Add files, chats or projects as context'], ['/', 'Commands (/usage, /model, /strict, …)'], ['↑ ↓ then Enter or Tab', 'Pick a suggestion'], ['Esc', 'Close a dialog or suggestions']].map(([k, v]) => `<tr><td>${k.split(' ').map((x) => (/^[+]$|^then$|^or$/.test(x) ? x : `<kbd>${esc(x)}</kbd>`)).join(' ')}</td><td>${v}</td></tr>`).join('')}</tbody></table>`)]],
-    about: ['About', '', [...(DESK ? ['<div id="stDesktop"></div>'] : []), '<div id="stDevices"></div>',stCard('QuorX', '', stRow('Version', DESK ? 'The desktop app and the harness it is attached to.' : '', `<code id="stVersion">v${esc(G.cfg?.version || '?')}</code>`) + stRow('Address', '', `<code>${esc(location.origin)}</code>`) + stRow('OpenRouter key', '', G.cfg.hasKey ? '<span class="st-key-active-badge">active</span>' : '<span class="st-nav-badge bad-dot"></span> none yet') + stRow('Your data', 'Chats, projects, keys and logs stay in this folder.', '<code>data/</code>') + stRow('Tour', 'Five short steps over the page: projects, Strict and YOLO, the deciders and reviewer, costs, the terminal.', '<button type="button" class="st-btn secondary sm" data-act="tour">Show the tour</button>'))]],
+    about: ['About', '', [...(DESK ? ['<div id="stDesktop"></div>'] : []), stCard('QuorX', '', stRow('Version', DESK ? 'The desktop app and the harness it is attached to.' : '', `<code id="stVersion">v${esc(G.cfg?.version || '?')}</code>`) + stRow('Address', '', `<code>${esc(location.origin)}</code>`) + stRow('OpenRouter key', '', G.cfg.hasKey ? '<span class="st-key-active-badge">active</span>' : '<span class="st-nav-badge bad-dot"></span> none yet') + stRow('Your data', 'Chats, projects, keys and logs stay in this folder.', '<code>data/</code>') + stRow('Tour', 'Five short steps over the page: projects, Strict and YOLO, the deciders and reviewer, costs, the terminal.', '<button type="button" class="st-btn secondary sm" data-act="tour">Show the tour</button>'))]],
     _badges: { keys: keysBadge },
   };
 }
@@ -5031,37 +5031,8 @@ function wireSettings() {
   drawSetupPanel();
   drawEmbedPick();
   drawDesktopSettings();
-  drawDevices();
   drawBackup({ postJ, esc, uiConfirm, store: STORE });
   showVersion();
-}
-// ⚙ Settings → About → Other devices: phones and other computers on your network open QuorX once with a
-// pairing link (only shown on this computer). The links hide until you click Show, like API keys.
-async function drawDevices(info) {
-  const box = $('#stDevices'); if (!box) return;
-  info ||= await fetch('/api/access').then((r) => r.json()).catch(() => null);
-  if (!box.isConnected || !info || info.error) return;
-  if (info.paired) { box.innerHTML = stCard('Other devices', 'This device is paired with the computer running QuorX. Pairing is managed on that computer.', ''); return; }
-  const shown = !!ST.revealDevices;
-  const links = info.links || [];
-  box.innerHTML = stCard('Other devices', 'Phones and other computers on your network can use QuorX, with all its powers (including your terminals). Each device needs the pairing link once; anyone without it is refused.',
-    stRow('Allow other devices', 'Off: only this computer can open QuorX.', `<label class="sq-check"><input type="checkbox" id="stLan"${info.lan ? ' checked' : ''}><span>On</span></label>`)
-    + (info.lan ? (links.length
-      ? links.map((l) => stRow(`Pairing link (${esc(l.ip)})`, 'Open it on the device, or type it there. Keep it private.', `<code class="${shown ? '' : 'blurable'}" style="word-break:break-all">${shown ? esc(l.url) : esc(l.url.replace(/pair=.*/, 'pair=••••••••'))}</code> <button type="button" class="st-btn ghost sm" data-copy-link="${esc(l.url)}">Copy</button>`)).join('')
-        + (info.fingerprint ? stRow('Certificate fingerprint (SHA-256)', "Devices connect over HTTPS with a certificate made for this computer, so the device warns that it isn't trusted. Open the warning's details (certificate, SHA-256 fingerprint) and continue only if it matches this.", `<code class="st-fp" style="display:inline-block;white-space:pre;font-size:11.5px;line-height:1.6">${esc(info.fingerprint.match(/(?:[0-9A-F]{2}:?){1,8}/g).map((l) => l.replace(/:$/, '')).join('\n'))}</code>`) : '')
-        + stRow('', '', `<button type="button" class="st-btn ghost sm" id="stDevShow">${shown ? 'Hide' : 'Show'} links</button> <button type="button" class="st-btn danger sm" id="stDevReset" title="Every paired device has to pair again">New link…</button>`)
-      : stRow('Pairing link', 'This computer has no network address right now (no Wi-Fi or cable).', ''))
-      : ''));
-  $('#stLan').onchange = async (e) => {
-    const r = await postJ('/api/access', { lan: e.target.checked }).catch(() => null);
-    drawDevices(r);
-    // QuorX listens on this computer only while other devices are off; switching needs a restart to take effect.
-    if (r?.restart) uiAlert(`Restart QuorX to apply this\nOther devices ${r.lan ? 'can connect' : 'are refused'} after the next restart (⟳ in the sidebar).`);
-  };
-  const show = $('#stDevShow'); if (show) show.onclick = () => { ST.revealDevices = !shown; drawDevices(info); };
-  const reset = $('#stDevReset');
-  if (reset) reset.onclick = async () => { if (await uiConfirm('Make a new pairing link? Every phone or computer paired with the old one has to pair again.')) drawDevices(await postJ('/api/access/reset', {}).catch(() => null)); };
-  for (const b of box.querySelectorAll('[data-copy-link]')) b.onclick = async () => { try { await navigator.clipboard.writeText(b.dataset.copyLink); b.textContent = 'Copied ✓'; } catch { b.textContent = 'Copy failed'; } setTimeout(() => (b.textContent = 'Copy'), 1400); };
 }
 // Search looks through every category; matching rows show, everything else hides.
 function searchSettings(q) {
@@ -7010,10 +6981,10 @@ async function drawDesktopSettings() {
   if (!box.isConnected) return;
   const canQuit = typeof window.ohDesktop.quit === 'function';
   const closeSeg = `<div class="st-segmented" role="radiogroup" id="stDeskClose">${[['ask', 'Ask'], ['tray', 'Keep running in the tray'], ['quit', 'Quit QuorX']].map(([k, l]) => `<button type="button" class="st-seg-btn ${k === (onClose || 'ask') ? 'active' : ''}" role="radio" aria-checked="${k === (onClose || 'ask')}" data-v="${k}">${l}</button>`).join('')}</div>`;
-  box.innerHTML = stCard('Desktop app', `Version ${esc(info.version || '?')}${info.packaged ? '' : ' (running from the repo)'}. ${info.ownsServer ? 'It runs the harness itself, so phones on your Wi-Fi can reach it while the window is closed.' : 'It is attached to a harness that was already running; closing the window leaves that one running.'}`,
+  box.innerHTML = stCard('Desktop app', `Version ${esc(info.version || '?')}${info.packaged ? '' : ' (running from the repo)'}. ${info.ownsServer ? 'It runs the harness itself, so scheduled tasks keep running while the window is closed.' : 'It is attached to a harness that was already running; closing the window leaves that one running.'}`,
     (canQuit ? stRow('Closing the window (✕)', 'Ask: a short notice the first time. Keep running: QuorX stays in the tray, where right-click → Quit QuorX stops it. Quit: ✕ stops QuorX and the harness.', closeSeg)
-      + stRow('Quit QuorX', info.ownsServer ? 'Stops QuorX and the harness now. Phones lose it until you open QuorX again.' : 'Closes this window. The harness it is attached to keeps running.', '<button type="button" class="st-btn danger sm" id="stDeskQuit">Quit QuorX</button>') : '')
-    + stRow('Start at login', 'Opens QuorX in the tray when you sign in to Windows, so phones on your Wi-Fi can reach it. Applies right away.', '<label class="sq-check"><input type="checkbox" id="stDeskLogin"' + (login ? ' checked' : '') + '><span>On</span></label>')
+      + stRow('Quit QuorX', info.ownsServer ? 'Stops QuorX and the harness now. Scheduled tasks wait until you open QuorX again.' : 'Closes this window. The harness it is attached to keeps running.', '<button type="button" class="st-btn danger sm" id="stDeskQuit">Quit QuorX</button>') : '')
+    + stRow('Start at login', 'Opens QuorX in the tray when you sign in to Windows, so scheduled tasks run. Applies right away.', '<label class="sq-check"><input type="checkbox" id="stDeskLogin"' + (login ? ' checked' : '') + '><span>On</span></label>')
     + stRow('Updates', '', '<span id="stDeskUpd" class="st-upd">…</span> <button type="button" class="st-btn ghost sm" id="stDeskCheck">Check now</button>')
     + stRow('Update feed', 'Where new versions are published (latest.yml and the installer), e.g. https://github.com/you/repo/releases/latest/download. Empty: no updates.', '<input type="url" class="st-input" id="stDeskFeed" placeholder="https://…" spellcheck="false" style="min-width:260px">')
     + stRow('Data folder', 'Chats, projects, keys and logs.', `<code class="blurable" title="${esc(info.home || '')}">${esc(info.home || '')}</code> <button type="button" class="st-btn ghost sm" id="stDeskHome">📂 Open</button>`));
@@ -7024,7 +6995,7 @@ async function drawDesktopSettings() {
     if (v) for (const x of box.querySelectorAll('#stDeskClose .st-seg-btn')) { x.classList.toggle('active', x.dataset.v === v); x.setAttribute('aria-checked', String(x.dataset.v === v)); }
   };
   const quit = $('#stDeskQuit');
-  if (quit) quit.onclick = async () => { if (await uiConfirm(info.ownsServer ? 'Quit QuorX? The harness stops too, and phones lose it until you open QuorX again.' : 'Close QuorX? The harness it is attached to keeps running.')) window.ohDesktop.quit(); };
+  if (quit) quit.onclick = async () => { if (await uiConfirm(info.ownsServer ? 'Quit QuorX? The harness stops too, and scheduled tasks wait until you open QuorX again.' : 'Close QuorX? The harness it is attached to keeps running.')) window.ohDesktop.quit(); };
   const st = await window.ohDesktop.update('state').catch(() => ({}));
   $('#stDeskFeed').value = st.url || '';
   $('#stDeskFeed').onchange = async (e) => { try { await window.ohDesktop.update('setUrl', e.target.value); } catch (er) { uiAlert(er.message); } };
