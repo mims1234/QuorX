@@ -58,7 +58,8 @@
         "filter": [
           "package.json",
           "lib/**/*",
-          "prebuilds/**/*",
+          "prebuilds/win32-x64/**/*",
+          "!**/*.pdb",
           "build/Release/*.node"
         ]
       },
@@ -151,5 +152,6 @@
       "downloadBase": "https://github.com/mims1234/QuorX/releases/download/v{version}",
       "_note": "For npm run winget (scripts/winget-manifest.mjs). downloadBase must be a permanent per-version https address with {version}, e.g. https://github.com/<you>/<repo>/releases/download/v{version}. Empty: a GitHub releases/latest/download updateUrl is turned into that."
     }
-  }
+  },
+  "homepage": "https://github.com/mims1234/QuorX"
 }

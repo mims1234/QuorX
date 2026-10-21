@@ -637,6 +637,26 @@ test('browser wait lets the page run instead of a shell sleep; press passes key 
   assert.deepEqual(pressed, ['Shift+R']);
 });
 
+test('the browser tells the agent whether the page made a sound, which nobody can hear here', async () => {
+  const sounds = [null, { contexts: 0, running: 0, sources: 0, media: 0 }, { contexts: 1, running: 0, sources: 0, media: 0 }, { contexts: 1, running: 1, sources: 2, media: 0 }];
+  let n = 0; // each action moves the page on to the next sound state
+  const tab = { ...fakeTab(), async summary() { return { ...(await fakeTab().summary()), url: this.url, sound: sounds[n] }; },
+    async scroll() { n = 1; return 'Scrolled.'; }, async click() { n = 2; return 'Clicked Start.'; }, async press() { n = 3; return 'Pressed.'; } };
+  const { bodies } = await run((body, i) => [
+    reply('', [['write_file', { path: 'index.html', content: PAGE }]]),
+    reply('', [['browser', { action: 'open', target: 'site:index.html' }]]),
+    reply('', [['browser', { action: 'scroll', dy: 10 }]]),
+    reply('', [['browser', { action: 'click', text: 'Start' }]]),
+    reply('', [['browser', { action: 'press', key: 'Space' }]]),
+    reply('Done.'),
+  ][i], { settings: { tools: { browser: { on: true } }, review: 'off', checks: { on: false } }, openTab: async () => tab });
+  const out = (k) => toolResults(bodies[k]).at(-1);
+  assert.doesNotMatch(out(2), /Sound:/, 'a page that was not probed says nothing');
+  assert.match(out(3), /Sound: none so far/);
+  assert.match(out(4), /Sound: 1 Web Audio context, waiting for a click or key/);
+  assert.match(out(5), /Sound: the page started 2 sounds \(1 of 1 Web Audio context running\)/);
+});
+
 test('a browser that will not start is a note from the checks, never a problem sent back to the agent', async () => {
   let b = 0;
   const { events } = await run((body) => [
