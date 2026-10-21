@@ -3,8 +3,9 @@
 // Chromium page: smooth scrolling, video and sound, sign-ins that last, downloads, DevTools) exactly
 // over the Browser tab's page area. Ordinary browsers keep the streamed view.
 //
-// The server: if a harness already answers on its port, the window attaches to it (two servers on the
-// same data folder would fight). Otherwise it starts server.js with Electron's own Node.
+// The server: if this data folder's harness already answers on its port, the window attaches to it (two servers on
+// the same data folder would fight). Another QuorX on that port (its own data folder, so its own app key) is left
+// alone, and this one starts server.js with Electron's own Node on the next free port.
 const { app, BrowserWindow, WebContentsView, Tray, Menu, nativeImage, ipcMain, session, shell, dialog, Notification } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
@@ -79,9 +80,16 @@ async function chooseHome() {
 async function harnessAt(port) {
   try { const r = await fetch(`http://localhost:${port}/api/config`, { signal: AbortSignal.timeout(1500) }); const j = await r.json(); return !!j && 'defaults' in j; } catch { return false; }
 }
-// Attach to a running harness, or start one and wait for its "→ http://localhost:<port>" line.
+// A harness on that port that takes this data folder's app key is ours to attach to.
+async function oursAt(port) {
+  try { return (await fetch(`http://localhost:${port}/api/chats`, { headers: keyed(), signal: AbortSignal.timeout(1500) })).ok; } catch { return false; }
+}
+// Attach to our running harness, or start one (past any other QuorX's port) and wait for its "→ http://localhost:<port>" line.
 async function startServer() {
-  if (await harnessAt(PORT)) return `http://localhost:${PORT}`;
+  for (let p = PORT, tries = 0; tries < 20; p++, tries++) {
+    if (!(await harnessAt(p))) { PORT = p; break; }
+    if (await oursAt(p)) { PORT = p; return `http://localhost:${p}`; }
+  }
   server = spawn(process.execPath, [path.join(ROOT, 'server.js')], { cwd: ROOT, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', OH_DESKTOP: '1', AGENT_PORT: String(PORT), ...(HOME ? { OH_HOME: HOME } : {}) }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
   const logFile = fs.createWriteStream(path.join(app.getPath('userData'), 'server.log'), { flags: 'a' });
   return new Promise((resolve, reject) => {
