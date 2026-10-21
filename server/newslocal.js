@@ -2,7 +2,8 @@
 // computed from this computer's logs and only counts and model names leave this file: never a prompt, a question's
 // text, a file path or a project name. Nothing here is ever written into news/.
 //
-//   models    per model: replies, how often the checks before the final answer passed, cost, steps, time
+//   models    per model: replies, how often the checks before the final answer passed, cost, steps, time, and the
+//             steps that only read or looked before the first write
 //             (logs/runs.jsonl, through scorecard() in runs.js)
 //   deciders  what asking the deciders did: questions by bucket (logs/decisions.jsonl and the screenshot checks in
 //             logs/checks.jsonl), and per decider how often its vote matched the panel's (logs/checks.jsonl,
@@ -53,7 +54,7 @@ function models() {
   const rows = scorecard(DAYS);
   if (!rows.length) return { empty: true, why: `No replies in the last ${DAYS} days yet. Each reply adds its model, cost, steps and time here.` };
   return {
-    rows: rows.map((m) => ({ model: m.model, replies: m.replies, passRate: m.passRate, avgCost: m.avgCost, avgSteps: m.avgSteps, avgSeconds: m.avgSecs })),
+    rows: rows.map((m) => ({ model: m.model, replies: m.replies, passRate: m.passRate, avgCost: m.avgCost, avgSteps: m.avgSteps, avgSeconds: m.avgSecs, looksFirst: m.avgLooksFirst })),
     since: firstDay(scoreRows(DAYS).filter((r) => r.kind !== 'docs')),
     days: DAYS,
   };
