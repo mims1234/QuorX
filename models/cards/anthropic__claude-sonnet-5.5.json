@@ -1,0 +1,30 @@
+{
+  "id": "anthropic/claude-sonnet-5.5",
+  "name": "Anthropic: Claude Sonnet 5.5",
+  "kind": "chat",
+  "refreshed": "2026-10-20",
+  "limits": {
+    "context": 1000000,
+    "max_output": 128000,
+    "tools": true,
+    "images_in": true,
+    "reasoning": true,
+    "price_per_m": [
+      2,
+      10
+    ]
+  },
+  "quirks": [
+    "Through OpenRouter it rejects a forced tool_choice (HTTP 400); leave tool choice on auto.",
+    "Tends to add tests, docs and small files it wasn't asked for (provider docs).",
+    "May call a tool with the wrong letter case or a near-miss parameter name: read the error and retry with the exact name."
+  ],
+  "tips": [
+    "Run a real check before reporting a change done.",
+    "When asked for ideas, options or a plan, give them and stop until told to build."
+  ],
+  "bench": "As the reviewer in QuorX's build benchmark it agreed with the benchmark judge 7 of 7 times, for about $0.02 a build. Also a strong builder (pricier).",
+  "sources": [
+    "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-sonnet-5-5"
+  ]
+}

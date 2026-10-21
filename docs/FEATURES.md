@@ -11,10 +11,16 @@ a real browser and your real toolchains, and shows how it got every answer.
 
 - **Any model, with its price.** Every model on OpenRouter, through one key. The model picker searches, sorts by
   price, filters by what a model can do, and shows your own pass rate next to each price.
+- **A card for each model.** Recommended and default models carry a short card: limits and quirks, prompting tips
+  from the provider's docs (with the links), and QuorX's own benchmark results. Hover "card" in the model picker to
+  read it. The agent gets the cards of the models it is using, a few lines each.
 - **A quorum of deciders.** The agent can ask fast models yes/no and multiple-choice questions, writing its own
   guess first so you can see whether asking changed anything. Fixed checks ask them about every build too.
 - **It reads your request in full.** A prompt enhancer spells out what a request implies (a movie trailer implies a
   voice-over and music) and shows it under your message, where you can correct it.
+- **A production plan for paid media.** Work that needs several paid pieces (a trailer: stills, clips, a voice-over,
+  music) is priced up front and approved once, by you or in ⚡ YOLO by the deciders. Calls that match the plan then run
+  without another vote; anything off the plan or over its estimate is judged on its own.
 - **Guarded commands.** Every command line is parsed and each part classed (read, build, install, push, delete,
   can't be checked). Your rules decide what runs; the rest comes to your approval card, or to the deciders in ⚡ YOLO,
   who see only facts and your own messages. Deleting your profile, a drive root or anything above the project is
@@ -25,6 +31,10 @@ a real browser and your real toolchains, and shows how it got every answer.
   every process it started and confirms "0 processes left".
 - **A tripwire and spending caps.** A command that deletes many files outside the project is stopped. A cap per
   reply, an optional daily cap, project budgets and a media cap keep spending where you set it.
+- **Films from pictures, finished with ffmpeg.** A clip can start from a picture the agent made (or one in the project)
+  when the video model takes a first frame, so characters and style hold from shot to shot. `edit_video` then joins
+  clips, stills, a voice-over and music into one .mp4 in the project with ffmpeg, as an ordinary checked command.
+  Setup check offers to install ffmpeg when it is missing.
 - **16 platform packs** for apps beyond the web: Rust, Node and TypeScript, Python, .NET, Go, C and C++, Java and
   Kotlin, Android, Flutter, Electron, Tauri, Godot, Unity, Windows installers and Apple apps, plus one for every
   project. Each finds its toolchain (and whether it really builds here), compiles what a reply changed before the
