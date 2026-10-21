@@ -2703,10 +2703,16 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
           run.cmdEscalated = true;
           emit({ t: 'note', level: 'warn', msg: `The deciders blocked ${run.cmdBlockRow >= SF.escalateRow ? `${run.cmdBlockRow} commands in a row` : `${run.cmdBlocks} commands in this reply`}, so from now on commands that need a vote ask you.`, at: at() });
         }
-        return { ok: false, text: `${declined('shell', { by: 'deciders', reason: j.reason })}${run.cmdEscalated ? ' From now on such commands go to the user.' : ''}` };
+        // The deciders' no isn't the last word: the user gets the card for the YOLO wait and can run it anyway (they
+        // may have asked for exactly this). No answer in time, and the no stands.
+        const holdMs = yoloWait();
+        if (!holdMs) return { ok: false, text: `${declined('shell', { by: 'deciders', reason: j.reason })}${run.cmdEscalated ? ' From now on such commands go to the user.' : ''}` };
+        card.why = `The deciders said no: ${j.reason}. Run it anyway?`;
+        const secs = Math.round(holdMs / 1000);
+        unsure = { ms: holdMs, then: 'skip', onTimeout: () => ({ approve: false, by: 'deciders', reason: `${j.reason} (no answer from the user in ${secs}s)` }) };
       }
-      card.why = j.reason;
-      const waitMs = yoloWait();
+      const waitMs = unsure ? 0 : yoloWait();
+      if (!unsure) card.why = j.reason;
       if (waitMs) {
         const low = j.pOther != null && j.pOther <= (SF.harmMax ?? 0.2), secs = Math.round(waitMs / 1000);
         unsure = { ms: waitMs, then: low ? 'run' : 'skip', onTimeout: () => (low
