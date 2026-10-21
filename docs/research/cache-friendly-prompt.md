@@ -118,7 +118,7 @@ knowing.
 
 ## The measurement
 
-Build benchmark, the first two of the harder tasks from #51, builder DeepSeek V4.1 Flash, one run of each task per version,
+Build benchmark, the standard build tasks (snake with portals and a sales dashboard, from `bench/tasks-build.json`) judged the way #51 judges, builder DeepSeek V4.1 Flash, one run of each task per version,
 run one after the other on a quiet machine.
 
 ```mermaid
