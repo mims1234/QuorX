@@ -23,7 +23,10 @@ const SKIP = new Set(['node_modules', '.git', '__pycache__', '.venv', 'venv', '.
 const migrated = new Set();
 export const workspaceDir = (projectId) => {
   const root = projectDir(projectId);
-  if (!migrated.has(root) && migrateAgentDir(root) !== 'busy') migrated.add(root);
+  if (!migrated.has(root)) {
+    // A failed move must never lock the user out of the project: say why once, and use the folder as it is.
+    try { if (migrateAgentDir(root) !== 'busy') migrated.add(root); } catch (e) { migrated.add(root); console.error(`QuorX couldn't move the old working folder in ${root}: ${e.message}`); }
+  }
   return root;
 };
 
@@ -458,13 +461,30 @@ export function migrateAgentDir(root) {
         const ours = (fs.existsSync(gi) && /QuorX|OpenHarness/.test(fs.readFileSync(gi, 'utf8'))) || HARNESS_PARTS.filter((x) => fs.existsSync(path.join(old, x))).length >= 2;
         if (!ours) continue;
       }
-      fs.renameSync(old, neu);
+      renameRetry(old, neu);
       const lj = path.join(neu, 'launch.json');
       if (fs.existsSync(lj)) fs.writeFileSync(lj, fs.readFileSync(lj, 'utf8').replace(/\.(openharness|agent)([\\/]+)/g, `${AGENT_DIR}$2`));
       return true;
     }
     return false;
-  } catch { return 'busy'; } // a file in use (e.g. a server still running from the old folder): try again next time
+  } catch (e) {
+    // Still in use after the retries (e.g. a server running from the old folder): try again next time. Anything else is
+    // a real error, not "busy".
+    if (LOCKED.has(e.code)) return 'busy';
+    throw e;
+  }
+}
+// On Windows a folder can't be renamed while anything holds a file in it, and a virus scanner often does for a moment
+// right after files are written. So a rename is tried a few times (about 0.75 s in all) before it counts as busy.
+const LOCKED = new Set(['EBUSY', 'EPERM', 'EACCES']);
+const RENAME_WAITS = [50, 100, 200, 400];
+function renameRetry(from, to) {
+  for (let i = 0; ; i++) {
+    try { return fs.renameSync(from, to); } catch (e) {
+      if (!LOCKED.has(e.code) || i >= RENAME_WAITS.length) throw e;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, RENAME_WAITS[i]);
+    }
+  }
 }
 export function ensureAgentDir(root) {
   const dir = path.join(root, AGENT_DIR);

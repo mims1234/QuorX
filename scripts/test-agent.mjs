@@ -12,7 +12,7 @@ import { loadCheckpoint, dropCheckpoint, ledger } from '../server/runs.js';
 import { setBudget, projectSpend, budgetState, live as liveRuns } from '../server/budget.js';
 import { reviewCode, collectChanges, parseGitDiff, checkFindings, pickReviewer } from '../server/codereview.js';
 import { execFileSync } from 'node:child_process';
-import { saveHooks, loadHooks, matchHooks, fileMatches, commandMatches, hookLine, cleanHook } from '../server/hooks.js';
+import { saveHooks, loadHooks, matchHooks, fileMatches, commandMatches, hookLine, cleanHook, safeHookFile } from '../server/hooks.js';
 import { nextAfter, cleanWhen, cleanSchedule, describeWhen, createScheduler, saveSchedules as saveScheds, loadSchedules as loadScheds, GRACE_MS } from '../server/schedules.js';
 import { startScheduledChat } from '../server/schedrun.js';
 import { loadMemory, saveMemory, addMemory, checkMemory, looksSecret, memoryPrompt, memoryTokens, MEMORY_TOKENS } from '../server/memory.js';
@@ -745,6 +745,42 @@ test('a harness-made .agent folder becomes .quorx; another tool\'s .agent is lef
   assert.equal(fs.existsSync(path.join(theirs, '.quorx')), false);
 });
 
+test('renaming the old folder retries while a file in it is briefly locked, then says busy; other errors are raised', async () => {
+  const { migrateAgentDir } = await import('../server/workspace.js');
+  const real = fs.renameSync;
+  const make = () => { const d = tempDir('oh-mig-'); fs.mkdirSync(path.join(d, '.openharness', 'scratch'), { recursive: true }); return d; };
+  const failing = (n, code) => { let left = n; return (...a) => { if (left-- > 0) throw Object.assign(new Error(`${code}: locked`), { code }); return real(...a); }; };
+  try {
+    const a = make();
+    fs.renameSync = failing(2, 'EPERM'); // a scanner holds a file for a moment
+    assert.equal(migrateAgentDir(a), true);
+    assert.ok(fs.existsSync(path.join(a, '.quorx', 'scratch')));
+    const b = make();
+    fs.renameSync = failing(99, 'EBUSY'); // still in use after every retry
+    assert.equal(migrateAgentDir(b), 'busy');
+    assert.ok(fs.existsSync(path.join(b, '.openharness')), 'left as it was, for next time');
+    fs.renameSync = failing(1, 'EINVAL'); // a real error is not "busy"
+    assert.throws(() => migrateAgentDir(b), /EINVAL/);
+  } finally { fs.renameSync = real; }
+});
+
+test('a project whose old folder fails to move still opens, with the folder as it is (reported once)', async () => {
+  const { workspaceDir } = await import('../server/workspace.js');
+  const dir = tempDir('oh-mig-');
+  fs.mkdirSync(path.join(dir, '.openharness'), { recursive: true });
+  const id = `mig${Date.now().toString(36)}`;
+  saveProject({ id, name: 'mig', path: dir });
+  const real = fs.renameSync, log = console.error, said = [];
+  fs.renameSync = () => { throw Object.assign(new Error('EINVAL: odd'), { code: 'EINVAL' }); };
+  console.error = (m) => said.push(String(m));
+  try {
+    assert.equal(workspaceDir(id), dir);
+    assert.equal(workspaceDir(id), dir);
+    assert.equal(said.filter((m) => /couldn't move the old working folder/.test(m)).length, 1, 'said once');
+    assert.ok(fs.existsSync(path.join(dir, '.openharness')));
+  } finally { fs.renameSync = real; console.error = log; forgetProject(id); }
+});
+
 test('a project\'s .openharness folder (the name before QuorX) becomes .quorx, and its launch file follows', async () => {
   const { migrateAgentDir } = await import('../server/workspace.js');
   const dir = tempDir('oh-mig-');
@@ -1386,6 +1422,31 @@ test('/review finds uncommitted changes (untracked files too), then the branch a
   assert.equal(br.label, 'feature against main');
   assert.deepEqual(br.files.map((f) => f.path).sort(), ['app.js', 'new.js']);
   assert.throws(() => collectChanges(dir, { scope: 'branch', base: 'main;rm' }), /not a branch name/);
+  // A base that starts with "-" would be read by git as an option (e.g. -O<file>).
+  for (const base of ['-Oevil.txt', '--output=x', '-p']) assert.throws(() => collectChanges(dir, { scope: 'branch', base }), /not a branch name/);
+  assert.ok(!fs.existsSync(path.join(dir, 'evil.txt')));
+});
+
+test('/review never sends secrets: secrets files are skipped and keys in code are removed', async () => {
+  const dir = tempDir('quorx-cr-');
+  git(dir, 'init', '-q', '-b', 'main');
+  fs.writeFileSync(path.join(dir, 'app.js'), 'export const n = 1;\n');
+  gitCommit(dir, 'base');
+  const KEY = 'sk-or-v1-' + 'a1b2c3d4'.repeat(6), PEM = '-----BEGIN RSA PRIVATE KEY-----';
+  fs.writeFileSync(path.join(dir, 'app.js'), `export const n = 2;\nconst client = new Api({ apiKey: "${KEY}" });\nconst password = 'hunter2hunter2';\n`);
+  fs.writeFileSync(path.join(dir, '.env'), `OPENROUTER_API_KEY=${KEY}\nDB_SECRET=plainsecretvalue\n`);
+  fs.writeFileSync(path.join(dir, 'server.pem'), `${PEM}\nMIIEow\n`);
+  fs.writeFileSync(path.join(dir, 'notes.txt'), `${PEM}\nMIIEpA\n`);
+  const bodies = [];
+  const r = await reviewCode(dir, { scope: 'changes', model: 'test/reviewer', info: { tools: true } }, { chat: async (body) => { bodies.push(body); return findingsCall([]); } });
+  const sent = JSON.stringify(bodies);
+  assert.ok(!sent.includes(KEY), 'the key never reaches the model');
+  assert.doesNotMatch(sent, /hunter2hunter2|plainsecretvalue|PRIVATE KEY|MIIE/);
+  assert.doesNotMatch(sent, /### \.env|### server\.pem|### notes\.txt/);
+  assert.match(sent, /apiKey: \\"\[secret removed\]\\"/);
+  assert.deepEqual(r.secretFiles.sort(), ['.env', 'notes.txt', 'server.pem']);
+  assert.equal(r.redacted, 4); // each line is in the diff and in the whole file
+  assert.deepEqual(r.files, ['app.js']);
 });
 
 test('/review helpers: git diff parsing, finding checks, and the reviewer model setting', () => {
@@ -1493,6 +1554,24 @@ test('a failing before-command hook stops the agent\'s command; one that only re
   assert.ok(fs.existsSync(path.join(r2.dir, 'made.txt')));
   assert.equal(fs.readFileSync(path.join(r2.dir, 'hooklog.txt'), 'utf8'), 'after\n');
   assert.deepEqual(of(r2.events, 'hook').map((h) => [h.event, h.ok]), [['before_command', false], ['after_command', true]]);
+});
+
+test('a file name the agent chose never becomes part of a hook command', async () => {
+  for (const bad of ['a;echo pwned;.js', '$(x).js', 'a&calc&.js', 'a|b.js', '`x`.js', "a'b.js", 'dir/-rf.js']) assert.equal(safeHookFile(bad), false, bad);
+  for (const ok of ['src/app.js', 'my file.js', 'a-b_c.d@2x.js', 'v1,2=3+4.js']) assert.equal(safeHookFile(ok), true, ok);
+  const { events, dir } = await hookRun((body, i) => [
+    reply('', [['write_file', { path: 'a;echo pwned;.js', content: 'x' }]]),
+    reply('', [['write_file', { path: '$(x).js', content: 'x' }]]),
+    reply('', [['write_file', { path: 'fine.js', content: 'x' }]]),
+    reply('Done.'),
+  ][i], hookProject([{ event: 'after_write', command: 'node log.mjs {file}' }]));
+  const hooks = of(events, 'hook');
+  assert.deepEqual(hooks.map((h) => [h.skipped || false, h.command]), [[true, 'node log.mjs {file}'], [true, 'node log.mjs {file}'], [false, 'node log.mjs fine.js']]);
+  assert.ok(!of(events, 'command').some((e) => /pwned|\$\(x\)/.test(e.command)));
+  assert.equal(fs.readFileSync(path.join(dir, 'hooklog.txt'), 'utf8'), 'fine.js\n');
+  // The approval card says the file name came from the agent.
+  const card = of(events, 'approval').find((e) => e.what === 'node log.mjs fine.js');
+  assert.match(card.why, /with a file name the agent chose/);
 });
 
 test('hook commands go through the command policy: a blocked one never runs', async () => {

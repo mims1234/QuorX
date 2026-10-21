@@ -819,6 +819,14 @@ device. It leaves a cookie for a year. **New link…** signs every paired device
 devices** off refuses them all. Ten wrong links from one address lock it out for 10 minutes. `AGENT_HOST=127.0.0.1`
 keeps QuorX on this computer only.
 
+Other devices connect over **HTTPS** on the same port (`server/lantls.js`); this computer keeps plain HTTP. Each install
+makes its own self-signed certificate (ECDSA P-256, valid 825 days, renewed 30 days before it ends) in
+`data/tls/`, readable by your account only and off limits to the agent. A connection's first byte tells TLS from
+plain HTTP; a plain request from another device is redirected to https, and a pairing link sent in plain is refused
+rather than carried over. The phone warns about the certificate the first time, because no authority signed it:
+open the warning's details and check that its SHA-256 fingerprint matches the one under **Other devices** in
+⚙ Settings → About before you continue. The pairing cookie is `Secure` over HTTPS.
+
 Phones and small tablets (900 px wide or less) get their own layout: a bottom bar switches between Chats, Chat,
 Preview and Settings.
 

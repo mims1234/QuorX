@@ -26,8 +26,9 @@ code-signed yet, so Windows SmartScreen warns about it; compare its checksum fir
 - **Your own windows only.** QuorX's API answers only pages that opened it with its app link (printed when it starts;
   the desktop app uses it by itself). Other programs on the computer, including commands the agent runs, can't use it.
 - **This computer only, by default.** Other devices (a phone on Wi-Fi) are off until you turn them on in
-  ⚙ Settings → About; until then QuorX listens on this computer alone. Pairing travels over plain HTTP, so use it on
-  networks you trust.
+  ⚙ Settings → About; until then QuorX listens on this computer alone. Other devices connect over HTTPS with a
+  certificate made for your install (kept in the data folder): the device warns that it isn't trusted, and Settings
+  shows its SHA-256 fingerprint to compare before you continue. This computer itself keeps plain HTTP.
 - **Keys stay put.** QuorX's data folder and `.env` are readable by your account only. The agent's commands may not read
   them, your key folders (`.ssh`, `.aws`, …) or browser profiles, and they ask before reading outside the project.
   Command rules are kept in QuorX's data folder, never in a project, so a folder you open can't bring its own.

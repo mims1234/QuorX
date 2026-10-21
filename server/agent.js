@@ -25,7 +25,7 @@ import { markJob } from './terminal.js';
 import { termStart, termSend, termRead, termStop } from './agentterm.js';
 import { appWindows, readWindow, clickControl, clickAt, setControl, sendKeys, windowShot, closeWindow } from './uia.js';
 import { languageChecks } from './langchecks.js';
-import { loadHooks, matchHooks, hookLine } from './hooks.js';
+import { loadHooks, matchHooks, hookLine, safeHookFile } from './hooks.js';
 import { loadMemory, memoryPrompt, checkMemory, addMemory, REMEMBER_TOOL } from './memory.js';
 import { audit } from './audit.js';
 import { packagesOf, checkPackages } from './pkgguard.js';
@@ -2553,9 +2553,14 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     try {
       for (const h of list) {
         if (signal.aborted) break;
+        const usesFile = h.command.includes('{file}');
+        if (usesFile && !safeHookFile(file)) {
+          emit({ t: 'hook', event, command: h.command, file, ok: false, skipped: true, why: 'the file name has characters that are not safe to pass to a command', at: at() });
+          continue;
+        }
         const line = hookLine(h, { file });
         const d = await decideCommand(line, { shell: SF.shell, root, cwd: root, env: childEnv(), rules: commandRules(), mode: S.approval, yolo: { external: SF.yoloExternal, opaque: SF.yoloOpaque, outside: SF.yoloOutside } });
-        const g = await gateCommand(d, line, SF.shell, { hook: { before_command: 'before a command', after_command: 'after a command', after_write: 'after a file write' }[event] });
+        const g = await gateCommand(d, line, SF.shell, { hook: { before_command: 'before a command', after_command: 'after a command', after_write: 'after a file write' }[event], fileFromAgent: usesFile });
         if (!g.ok) {
           emit({ t: 'hook', event, command: line, file, ok: false, skipped: true, why: clip(g.text, 300), at: at() });
           if (event === 'before_command' && h.feedback) { blocked = true; parts.push(`Your command did not run: the user's hook "${line}" runs first and was not allowed (${clip(g.text, 200)}).`); break; }
@@ -2582,7 +2587,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
 
   // Before a command runs: the rule engine's verdict, then the user or (YOLO) the deciders when it asks.
   // Returns { ok, by } to run it, or { ok: false, text } for the agent.
-  async function gateCommand(d, line, shell, { hook } = {}) {
+  async function gateCommand(d, line, shell, { hook, fileFromAgent } = {}) {
     // Installs: each package it names must exist on its registry; a very new or barely used one asks the user.
     if (d.verdict !== 'deny' && d.segments.some((s) => s.cls === 'install')) {
       const pk = await checkPackages(d.segments.filter((s) => s.cls === 'install').flatMap((s) => packagesOf(s.text))).catch(() => []);
@@ -2605,13 +2610,13 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     const yoloAsksCommands = S.approval === 'yolo' && S.yoloAuto?.commands === false;
     if (d.verdict === 'allow' && !strictEvery && !yoloAsksCommands) return { ok: true, by: d.decidedBy };
     let who = d.verdict === 'allow' || S.approval !== 'yolo' || yoloAsksCommands || run.cmdEscalated ? 'user' : d.who;
-    const card = { id: newApprovalId(), tool: 'shell', free: true, est: 0, what: line, why: hook ? `your hook (${hook}), not the agent, runs this; ${d.why}` : d.why, policy };
+    const card = { id: newApprovalId(), tool: 'shell', free: true, est: 0, what: line, why: hook ? `your hook (${hook}) runs this${fileFromAgent ? ', with a file name the agent chose' : ', not the agent'}; ${d.why}` : d.why, policy };
     // Rules made by a button can't lift these, so the card doesn't offer "Always allow" for them.
     card.noAlways = d.segments.some((s) => ['opaque', 'external', 'discard'].includes(s.cls) || s.global || (s.paths || []).some((p) => p.zone === 'outside' || p.zone === 'unknown'));
     let unsure = null;
     if (who === 'deciders') {
       emit({ t: 'approval', ...card, mode: 'yolo', at: at() });
-      const facts = { command: line, shell, ...(hook ? { chosen_by: `the user, as a hook (${hook}) in project settings; the agent did not ask for it` } : {}), parts: d.segments.map((s) => ({ text: clip(s.text, 200), class: s.cls, ...(s.via ? { run_by_script: s.via } : {}), touches: (s.paths || []).map((p) => `${p.resolved || p.raw} (${p.zone === 'inside' ? 'inside the project' : p.zone})`) })),
+      const facts = { command: line, shell, ...(hook ? { chosen_by: `the user, as a hook (${hook}) in project settings${fileFromAgent ? '; the file name in it was chosen by the agent' : '; the agent did not ask for it'}` } : {}), parts: d.segments.map((s) => ({ text: clip(s.text, 200), class: s.cls, ...(s.via ? { run_by_script: s.via } : {}), touches: (s.paths || []).map((p) => `${p.resolved || p.raw} (${p.zone === 'inside' ? 'inside the project' : p.zone})`) })),
         ...(d.packages?.length ? { packages: d.packages.map((p) => `${p.name} on ${p.eco}: ${p.exists ? `first published ${p.ageDays ?? '?'} days ago${p.weekly != null ? `, ${p.weekly} downloads last week` : ''}` : 'not checked'}`) } : {}) };
       // A helper script the agent wrote in its own scratch folder (and QuorX read): judged on harm only.
       const scratch = d.segments.length === 1 && SCRATCH_SCRIPT.test(line);

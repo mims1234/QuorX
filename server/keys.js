@@ -12,7 +12,7 @@ const DATA = path.join(HOME, 'data');
 const FILE = path.join(DATA, 'keys.json');
 const USAGE = path.join(DATA, 'key-usage.json');
 // Files the agent's file tools and the /ws file server must never read, whatever folder a project points at.
-export const SECRET_FILES = [path.join(ROOT, '.env'), path.join(HOME, '.env'), FILE, USAGE, path.join(DATA, 'app-key'), path.join(DATA, 'access.json')];
+export const SECRET_FILES = [path.join(ROOT, '.env'), path.join(HOME, '.env'), FILE, USAGE, path.join(DATA, 'app-key'), path.join(DATA, 'access.json'), path.join(DATA, 'tls', 'lan-key.pem')];
 const BASE = 'https://openrouter.ai';
 
 // The data folder (keys, the app key, chats) and .env belong to this account only. On a second drive Windows lets
