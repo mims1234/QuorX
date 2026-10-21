@@ -18,6 +18,9 @@ a real browser and your real toolchains, and shows how it got every answer.
   guess first so you can see whether asking changed anything. Fixed checks ask them about every build too.
 - **It reads your request in full.** A prompt enhancer spells out what a request implies (a movie trailer implies a
   voice-over and music) and shows it under your message, where you can correct it.
+- **A production plan for paid media.** Work that needs several paid pieces (a trailer: stills, clips, a voice-over,
+  music) is priced up front and approved once, by you or in ⚡ YOLO by the deciders. Calls that match the plan then run
+  without another vote; anything off the plan or over its estimate is judged on its own.
 - **Guarded commands.** Every command line is parsed and each part classed (read, build, install, push, delete,
   can't be checked). Your rules decide what runs; the rest comes to your approval card, or to the deciders in ⚡ YOLO,
   who see only facts and your own messages. Deleting your profile, a drive root or anything above the project is
