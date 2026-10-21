@@ -1,10 +1,11 @@
 // The agent loop with a scripted model: no network, no money. node --test scripts/
 // Each test gets a throwaway project in the temp folder, removed afterwards.
+// test-home.mjs comes first: it points QuorX at a throwaway data folder before any server module reads it.
+import { tempDir } from './test-home.mjs';
 import { resolver } from '../server/safefetch.js';
 import { videoBody, editCommand, ffmpegMajor } from '../server/video.js';
 import { primeCatalogue } from '../server/openrouter.js';
 import { execFileSync } from 'node:child_process';
-import { tempDir } from './test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -1764,7 +1765,9 @@ test('hook commands go through the command policy: a blocked one never runs', as
   const { events, bodies } = await hookRun((body, i) => [
     reply('', [['write_file', { path: 'a.txt', content: 'x' }]]),
     reply('Done.'),
-  ][i], hookProject([{ event: 'after_write', command: 'shutdown /s /t 0' }]));
+  // `shutdown /?` only prints help: the policy classes it like any shutdown (never), and if a regression ever lets it
+  // through, nothing happens to the computer running the tests.
+  ][i], hookProject([{ event: 'after_write', command: 'shutdown /?' }]));
   const h = of(events, 'hook')[0];
   assert.equal(h.skipped, true);
   assert.equal(of(events, 'command_blocked').length, 1);
