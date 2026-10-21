@@ -40,7 +40,7 @@ Counted from the test files at each change merged into QuorX's main branch: the 
 
 ## Pack self-tests
 
-The last `npm run test:packs` published here ran on 2026-10-20 01:19 UTC (QuorX 0.1.5, Windows). Toolchains it found: Git 2.55.0, Node.js 22.23.1, Python 3 3.12.10, Rust (cargo) 1.97.1 (cannot build here), WebView2 runtime 155.0.4283.62. A pack whose toolchain is missing skips the tests that need it; its logic (parsers, rules, notes) is still tested. This is one computer's run: the Platforms report rates each pack by the best run on record, often on a computer set up with that toolchain.
+Every platform pack has self-tests, and `npm run test:packs` runs them. A pack's logic (parsers, rules, notes) is tested on any computer; the tests that build and run real apps need that pack's toolchain. The Platforms report rates each pack by the best run on record.
 
 ```matrix
 {"src":"tests.json","path":"packMatrix"}
@@ -52,7 +52,7 @@ The last `npm run test:packs` published here ran on 2026-10-20 01:19 UTC (QuorX 
 
 ## UI test
 
-The last UI test published here (`npm run test:ui -- --scenario settings`) ran on 2026-10-20 01:55 UTC (QuorX 0.1.5): 9 of 9 steps passed. It starts the QuorX desktop app with its own data folder and port, drives its window the way a person would, and saves a screenshot of every step. Scenarios: `settings`, `news`, `cli`, `running`.
+The UI test (`npm run test:ui`) starts the QuorX desktop app with its own data folder and port, drives its window the way a person would, and saves a screenshot of every step. Its last published run passed 9 of 9 steps. Scenarios: `settings`, `news`, `cli`, `running`.
 
 ## On this computer
 

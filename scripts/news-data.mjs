@@ -205,19 +205,18 @@ const testsData = {
 const P = saved.packs;
 if (P?.rows?.length) {
   const lv = { passed: 'passed', failed: 'failed' };
-  testsData.packRun = { at: P.at, version: P.version, platform: P.platform, toolchains: (P.toolchains || []).map((t) => `${t.label} ${t.version || ''}${t.works ? '' : ' (cannot build here)'}`.trim()) };
   testsData.packMatrix = {
-    levels: [{ id: 'passed', label: 'Passed' }, { id: 'failed', label: 'Failed' }, { id: 'skipped', label: 'Not tested here' }],
-    columns: ['Pack', 'Result', 'Passed', 'Skipped', 'Why some were skipped'],
-    rows: P.rows.map((r) => ({ level: lv[r.status] || 'skipped', cells: [r.label, r.status, String(r.pass), String(r.skipped), r.why || (r.skipped ? 'its toolchain is not on this computer' : '')] })),
+    // What each pack's self-tests showed, without the toolchains, versions or reasons of the computer that ran them.
+    levels: [{ id: 'passed', label: 'Passed' }, { id: 'failed', label: 'Failed' }, { id: 'skipped', label: 'Logic tested' }],
+    columns: ['Pack', 'Result', 'Self-tests passed'],
+    rows: P.rows.map((r) => ({ level: lv[r.status] || 'skipped', cells: [r.label, lv[r.status] ? r.status : 'logic tested', String(r.pass)] })),
   };
 }
 if (saved.ui) testsData.uiRun = { at: saved.ui.at, version: saved.ui.version, scenario: saved.ui.scenario, passed: saved.ui.passed, total: saved.ui.total };
 writeJson('tests', 'tests.json', testsData);
 
-const when = (iso) => `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
 setSection('tests', 'Pack self-tests', testsData.packMatrix ? [
-  `The last \`npm run test:packs\` published here ran on ${when(P.at)} (QuorX ${P.version}, ${{ win32: 'Windows', darwin: 'macOS', linux: 'Linux' }[P.platform] || P.platform}). Toolchains it found: ${testsData.packRun.toolchains.join(', ') || 'none'}. A pack whose toolchain is missing skips the tests that need it; its logic (parsers, rules, notes) is still tested. This is one computer's run: the Platforms report rates each pack by the best run on record, often on a computer set up with that toolchain.`,
+  "Every platform pack has self-tests, and `npm run test:packs` runs them. A pack's logic (parsers, rules, notes) is tested on any computer; the tests that build and run real apps need that pack's toolchain. The Platforms report rates each pack by the best run on record.",
   '',
   block('matrix', { src: 'tests.json', path: 'packMatrix' }),
   '',
@@ -228,7 +227,7 @@ setSection('tests', 'Pack self-tests', testsData.packMatrix ? [
   block('chart', { src: 'tests.json', path: 'packsChart' }),
 ].join('\n'));
 setSection('tests', 'UI test', testsData.uiRun ? [
-  `The last UI test published here (\`npm run test:ui -- --scenario ${testsData.uiRun.scenario}\`) ran on ${when(testsData.uiRun.at)} (QuorX ${testsData.uiRun.version}): ${testsData.uiRun.passed} of ${testsData.uiRun.total} steps passed. It starts the QuorX desktop app with its own data folder and port, drives its window the way a person would, and saves a screenshot of every step. Scenarios: ${uiScenarios.map((s) => `\`${s}\``).join(', ')}.`,
+  `The UI test (\`npm run test:ui\`) starts the QuorX desktop app with its own data folder and port, drives its window the way a person would, and saves a screenshot of every step. Its last published run passed ${testsData.uiRun.passed} of ${testsData.uiRun.total} steps. Scenarios: ${uiScenarios.map((s) => `\`${s}\``).join(', ')}.`,
 ].join('\n') : [
   `The UI test starts the QuorX desktop app with its own data folder and port, drives its window the way a person would, and saves a screenshot of every step with an HTML report. Scenarios: ${uiScenarios.map((s) => `\`${s}\``).join(', ')}. No run has been published here yet.`,
   '',
