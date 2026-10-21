@@ -320,8 +320,10 @@ let updater = null, update = { state: 'idle' };
 // A saved feed that isn't https (an older setting) is ignored for the built-in one.
 const updateUrl = () => { const saved = String(readConfig().updateUrl ?? '').trim(); return (/^https:\/\//i.test(saved) ? saved : saved === '' && readConfig().updateUrl === '' ? '' : PKG.quorx?.updateUrl ?? '').trim(); };
 function setUpdate(patch) { update = { ...update, ...patch }; send({ type: 'update', ...update }); }
+// The Microsoft Store copy is updated by the Store itself, so it never downloads or installs updates on its own.
+const STORE = !!process.windowsStore;
 function getUpdater() {
-  if (updater || !app.isPackaged) return updater;
+  if (updater || !app.isPackaged || STORE) return updater;
   ({ autoUpdater: updater } = require('electron-updater'));
   updater.autoDownload = false; // only when you press Update
   updater.autoInstallOnAppQuit = true; // a downloaded update also installs the next time you quit
@@ -335,6 +337,7 @@ function getUpdater() {
 }
 async function checkUpdates() {
   const u = getUpdater(), url = updateUrl();
+  if (STORE) return setUpdate({ state: 'store' });
   if (!u) return setUpdate({ state: 'dev' });
   if (!url) return setUpdate({ state: 'no-feed' });
   if (['downloading', 'ready'].includes(update.state)) return update;
@@ -377,7 +380,7 @@ handle('restartHarness', () => restartHarness());
 handle('loginItem', (on) => (on === undefined ? loginItem() : setLoginItem(on)));
 handle('closeAction', (v) => (v === undefined ? closeAction() : setCloseAction(v)));
 handle('quit', () => { setImmediate(quitApp); return true; });
-handle('info', () => ({ version: app.getVersion(), packaged: app.isPackaged, home: HOME || ROOT, origin, ownsServer: !!server }));
+handle('info', () => ({ version: app.getVersion(), packaged: app.isPackaged, store: STORE, home: HOME || ROOT, origin, ownsServer: !!server }));
 handle('openHome', () => { shell.openPath(HOME || ROOT); return true; });
 // QuorX's own zoom (the page sends Ctrl + / − / 0 here unless they were for the terminal). Remembered between starts.
 handle('zoom', (dir) => {

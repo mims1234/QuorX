@@ -11,7 +11,8 @@
     "start": "electron .",
     "icon": "node make-icon.js",
     "dist": "node make-icon.js && electron-builder --win nsis --x64",
-    "release": "npm version patch --no-git-tag-version && node sync-version.js && npm run dist"
+    "release": "npm version patch --no-git-tag-version && node sync-version.js && npm run dist",
+    "dist:store": "node make-icon.js && electron-builder --win appx --x64"
   },
   "devDependencies": {
     "electron": "^44.9.2",
@@ -119,7 +120,20 @@
         "provider": "generic",
         "url": "https://github.com/mims1234/QuorX/releases/latest/download"
       }
-    ]
+    ],
+    "appx": {
+      "identityName": "14991MiMs.QuorX",
+      "publisher": "CN=BCAF9FCC-5703-459A-9027-CD13C1B68AD9",
+      "publisherDisplayName": "MiMs",
+      "displayName": "QuorX",
+      "applicationId": "QuorX",
+      "backgroundColor": "#0b0f0d",
+      "languages": [
+        "en-US"
+      ],
+      "showNameOnTiles": false,
+      "artifactName": "QuorX-Store-${version}.${ext}"
+    }
   },
   "dependencies": {
     "electron-updater": "^6.8.9"

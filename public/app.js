@@ -6984,11 +6984,12 @@ async function drawDesktopSettings() {
   box.innerHTML = stCard('Desktop app', `Version ${esc(info.version || '?')}${info.packaged ? '' : ' (running from the repo)'}. ${info.ownsServer ? 'It runs the harness itself, so scheduled tasks keep running while the window is closed.' : 'It is attached to a harness that was already running; closing the window leaves that one running.'}`,
     (canQuit ? stRow('Closing the window (✕)', 'Ask: a short notice the first time. Keep running: QuorX stays in the tray, where right-click → Quit QuorX stops it. Quit: ✕ stops QuorX and the harness.', closeSeg)
       + stRow('Quit QuorX', info.ownsServer ? 'Stops QuorX and the harness now. Scheduled tasks wait until you open QuorX again.' : 'Closes this window. The harness it is attached to keeps running.', '<button type="button" class="st-btn danger sm" id="stDeskQuit">Quit QuorX</button>') : '')
-    + stRow('Start at login', 'Opens QuorX in the tray when you sign in to Windows, so scheduled tasks run. Applies right away.', '<label class="sq-check"><input type="checkbox" id="stDeskLogin"' + (login ? ' checked' : '') + '><span>On</span></label>')
+    // The Microsoft Store copy can't start at login this way, and the Store brings its updates.
+    + (info.store ? '' : stRow('Start at login', 'Opens QuorX in the tray when you sign in to Windows, so scheduled tasks run. Applies right away.', '<label class="sq-check"><input type="checkbox" id="stDeskLogin"' + (login ? ' checked' : '') + '><span>On</span></label>'))
     + stRow('Updates', '', '<span id="stDeskUpd" class="st-upd">…</span> <button type="button" class="st-btn ghost sm" id="stDeskCheck">Check now</button>')
-    + stRow('Update feed', 'Where new versions are published (latest.yml and the installer), e.g. https://github.com/you/repo/releases/latest/download. Empty: no updates.', '<input type="url" class="st-input" id="stDeskFeed" placeholder="https://…" spellcheck="false" style="min-width:260px">')
+    + (info.store ? '' : stRow('Update feed', 'Where new versions are published (latest.yml and the installer), e.g. https://github.com/you/repo/releases/latest/download. Empty: no updates.', '<input type="url" class="st-input" id="stDeskFeed" placeholder="https://…" spellcheck="false" style="min-width:260px">'))
     + stRow('Data folder', 'Chats, projects, keys and logs.', `<code class="blurable" title="${esc(info.home || '')}">${esc(info.home || '')}</code> <button type="button" class="st-btn ghost sm" id="stDeskHome">📂 Open</button>`));
-  $('#stDeskLogin').onchange = async (e) => { e.target.checked = await window.ohDesktop.loginItem(e.target.checked).catch(() => !e.target.checked); };
+  if ($('#stDeskLogin')) $('#stDeskLogin').onchange = async (e) => { e.target.checked = await window.ohDesktop.loginItem(e.target.checked).catch(() => !e.target.checked); };
   $('#stDeskHome').onclick = () => window.ohDesktop.openHome();
   for (const b of box.querySelectorAll('#stDeskClose .st-seg-btn')) b.onclick = async () => {
     const v = await window.ohDesktop.closeAction(b.dataset.v).catch(() => null);
@@ -6997,8 +6998,9 @@ async function drawDesktopSettings() {
   const quit = $('#stDeskQuit');
   if (quit) quit.onclick = async () => { if (await uiConfirm(info.ownsServer ? 'Quit QuorX? The harness stops too, and scheduled tasks wait until you open QuorX again.' : 'Close QuorX? The harness it is attached to keeps running.')) window.ohDesktop.quit(); };
   const st = await window.ohDesktop.update('state').catch(() => ({}));
-  $('#stDeskFeed').value = st.url || '';
-  $('#stDeskFeed').onchange = async (e) => { try { await window.ohDesktop.update('setUrl', e.target.value); } catch (er) { uiAlert(er.message); } };
+  const feed = $('#stDeskFeed');
+  if (feed) feed.value = st.url || '';
+  if (feed) feed.onchange = async (e) => { try { await window.ohDesktop.update('setUrl', e.target.value); } catch (er) { uiAlert(er.message); } };
   $('#stDeskCheck').onclick = () => window.ohDesktop.update('check');
   drawUpdate(st);
 }
@@ -7037,7 +7039,7 @@ function drawUpdate(u) {
     r.innerHTML = u.state === 'downloading' ? `<span class="ru-pct">${u.percent ?? 0}</span>` : UPD_ICO[u.state] || '';
   }
   const s = $('#stDeskUpd');
-  if (s) s.textContent = { dev: 'Running from the repo: updates come from git.', 'no-feed': 'No update feed set.', checking: 'Checking…', current: `Up to date (v${u.current || '?'}).`, available: `v${u.version} is available.`, downloading: `Downloading… ${u.percent ?? 0}%`, ready: `v${u.version} is downloaded: restart to install.`, error: `Couldn't check: ${u.error || 'unknown error'}` }[u.state] || `v${u.current || '?'}`;
+  if (s) s.textContent = { dev: 'Running from the repo: updates come from git.', store: 'Updates come from the Microsoft Store.', 'no-feed': 'No update feed set.', checking: 'Checking…', current: `Up to date (v${u.current || '?'}).`, available: `v${u.version} is available.`, downloading: `Downloading… ${u.percent ?? 0}%`, ready: `v${u.version} is downloaded: restart to install.`, error: `Couldn't check: ${u.error || 'unknown error'}` }[u.state] || `v${u.current || '?'}`;
 }
 if (DESK) {
   window.ohDesktop.on((ev) => { if (ev.type === 'update') drawUpdate(ev); });

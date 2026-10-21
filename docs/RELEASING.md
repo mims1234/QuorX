@@ -84,3 +84,12 @@ Both workflows share one queue, so a promote and a pull never run at the same ti
 `SHA256SUMS.txt` has one `<sha256>  <file name>` line per file, with plain LF line endings, so the same file works with
 `sha256sum -c` on macOS and Linux and with `Get-FileHash` on Windows. The Release workflow refuses to publish if the
 file has CRLF line endings or any file doesn't match.
+
+## Microsoft Store
+
+The Store copy is an MSIX package (`.appx`) that Microsoft signs after certification, so it needs no certificate of
+ours. The **Store package** workflow ([store.yml](../.github/workflows/store.yml)) builds it for every version tag (and
+from Actions → Store package → Run workflow), checks that its identity matches the Store product, and keeps it as the
+`store-package` artifact. Download that artifact and upload the `.appx` in Partner Center → QuorX → Packages, then
+submit for certification. The Store updates its own copy, so that copy never uses `latest.yml`. The listing text is in
+[store-listing.md](store-listing.md).
