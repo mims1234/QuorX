@@ -55,7 +55,7 @@ const BUCKET = {
   unclear: ['deciders unsure', 'The deciders could not settle it (low confidence).'],
   unmatched: ['guess unclear', 'The agent\'s guess did not match any option, so it can\'t be compared.'],
 };
-const TOOL_NAME = { media_plan: '🎞 Production plan', imagine: '🖼 Make a picture', make_video: '🎬 Make a video', compose_music: '🎵 Compose music', speak: '🗣 Speak aloud',
+const TOOL_NAME = { remember: '📌 Remember this in every chat', media_plan: '🎞 Production plan', imagine: '🖼 Make a picture', make_video: '🎬 Make a video', compose_music: '🎵 Compose music', speak: '🗣 Speak aloud',
   write_artifact: '📄 Write a page', edit_artifact: '✏️ Edit a page', read_artifact: '👀 Read a page', decide: '⚖️ Ask the deciders',
   list_files: '🗂 List files', read_file: '👀 Read a file', write_file: '📝 Write a file', append_file: '📝 Append to a file', edit_file: '✏️ Edit a file',
   search_docs: '🔎 Search the attached documents', read_doc: '📄 Read an attached document', list_docs: '📎 List attached documents',
@@ -3466,6 +3466,7 @@ function traceHTML(m) {
       row(e.at, `⌨️ <code>${esc(e.command)}</code> → exit ${e.code ?? '–'} · ${secs(e.ms)}<div class="sub">${[by, undo, stop, e.leftovers?.ended?.length ? `ended ${e.leftovers.ended.length} process${e.leftovers.ended.length > 1 ? 'es' : ''} it left running` : '', 'not covered: files outside the project, ignored folders (node_modules, target), pushes, installs, databases'].filter(Boolean).join(' · ')}</div>${ch && n ? `<details class="out"><summary>files</summary><pre>${esc([...ch.added.map((f) => `+ ${f}`), ...ch.modified.map((f) => `~ ${f}`), ...ch.deleted.map((f) => `- ${f}`)].join('\n'))}</pre></details>` : ''}${e.out ? `<details class="out"><summary>output</summary><pre>${esc(e.out)}</pre>${e.log ? `<div class="sub">Full log: ${esc(e.log)}</div>` : ''}</details>` : ''}`, e.code || e.stopped?.left ? 'err' : 'cmd');
     }
     else if (e.t === 'hook') row(e.at, `🪝 hook <code>${esc(clip(e.command, 160))}</code> ${e.skipped ? 'did not run' : `→ ${e.ok ? 'ok' : e.timedOut ? 'stopped at its time limit' : `exit ${e.code ?? '–'}`} · ${secs(e.ms)}`}<div class="sub">${esc(HOOK_WHEN[e.event] || e.event)}${e.file ? `: ${esc(e.file)}` : ''}${e.skipped ? ` · ${esc(e.why || '')}` : e.told ? (e.event === 'before_command' ? ' · the command did not run; the agent sees why' : ' · the agent sees its output') : ''}</div>${e.out ? `<details class="out"${e.ok ? '' : ' open'}><summary>output</summary><pre>${esc(e.out)}</pre></details>` : ''}`, e.ok ? 'cmd' : 'err');
+    else if (e.t === 'memory_saved') row(e.at, `📌 saved to memory: “${esc(e.text)}”<div class="sub">Every chat gets it from now on · ⚙ Settings → Memory</div>`, 'ok');
     else if (e.t === 'tripwire') row(e.at, `🚨 tripwire stopped <code>${esc(e.command)}</code>: ${e.count} files vanished outside the project<div class="sub">${(e.sample || []).map(esc).join('<br>')}<br>Look in the Recycle Bin, or right-click the folder → Properties → Previous Versions.</div>`, 'err');
     else if (e.t === 'command_blocked') row(e.at, `⛔ blocked <code>${esc(e.command)}</code><div class="sub">${esc(e.policy?.why || '')}${e.policy?.hint ? ` · ${esc(e.policy.hint)}` : ''}</div>`, 'err');
     else if (e.t === 'cmd_rule') row(e.at, `📏 rule saved: allow <code>${esc(e.rule.match)}</code> · ${esc({ chat: 'this chat', project: 'this project', everywhere: 'everywhere' }[e.rule.scope] || e.rule.scope)}`, 'ok');
@@ -3667,7 +3668,7 @@ function approvalHTML(a, live = true) {
     ${c.items ? '' : `<div class="what">${c.free ? esc(c.what) : `“${esc(c.what)}”`}</div>`}
     ${c.why ? `<div class="what">Why: ${esc(c.why)}</div>` : ''}${c.items && waiting ? '<div class="what dim">Calls that match this plan then run without asking again; anything else asks on its own.</div>' : ''}
     ${waiting ? `${waitHTML(c)}<textarea rows="1" placeholder="To decline, you can add a note: why, or what to do instead. Enter declines and sends it."></textarea>
-      <div class="acts"><button type="button" class="primary yes">${c.free ? 'Allow once' : `Approve ${money(c.est, 3)}`}</button><button type="button" class="always" title="Stop asking for this tool in this chat">Always allow</button><button type="button" class="no">Decline</button></div>`
+      <div class="acts"><button type="button" class="primary yes">${c.tool === 'remember' ? 'Save to memory' : c.free ? 'Allow once' : `Approve ${money(c.est, 3)}`}</button>${c.noAlways ? '' : '<button type="button" class="always" title="Stop asking for this tool in this chat">Always allow</button>'}<button type="button" class="no">${c.tool === 'remember' ? "Don't save" : 'Decline'}</button></div>`
       : o ? `<div class="outcome ${o.approve ? 'yes' : 'no'}">${o.approve ? '✅ Allowed' : '⛔ Declined'} by ${byName(o.by)}${o.always ? ' · always allowed from now on' : ''}${o.approve && o.model && o.model !== c.model ? ` · switched to ${esc(short(o.model))}` : ''}${o.reason ? ` · ${esc(o.reason)}` : ''}</div>`
       : !live ? '<div class="outcome">Not answered: the reply ended</div>' : `<div class="outcome">⚡ ${c.tool === 'shell' ? 'The deciders are voting on this command…' : 'Deciders are checking whether this is needed and worth the price…'}</div>`}
   </div>`;
@@ -3683,7 +3684,7 @@ function wireApproval(card, m) {
     await fetch('/api/approve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ runId: m.runId, id, approve, always, reason, model: sel?.value }) }).catch(() => {});
   };
   $('.yes', card).onclick = () => answer(true);
-  $('.always', card).onclick = () => answer(true, true);
+  const always = $('.always', card); if (always) always.onclick = () => answer(true, true);
   $('.no', card).onclick = () => answer(false);
   noteLeadsToNo(card, 'Decline', () => $('.no', card).click());
 }
@@ -4740,7 +4741,7 @@ const UI_DEFAULTS = { density: 'comfortable', fontSize: 14, reduceMotion: 'syste
 const SETTINGS_NAV = [
   ['Harness', [['setup', '🧪', 'Setup check'], ['appearance', '🎨', 'Appearance'], ['layout', '🧱', 'Layout'], ['privacy', '🕶', 'Privacy & display']]],
   ['OpenRouter', [['keys', '🔑', 'API keys'], ['models', '🧠', 'Models & catalogue']]],
-  ['Agent', [['newchats', '✨', 'New chats'], ['loop', '🔁', 'Agent loop'], ['deciders', '⚖️', 'Deciders'], ['tools', '🧰', 'Tools & media'], ['budget', '💵', 'Budget & approvals'], ['safety', '🛡', 'Safety & commands'], ['skills', '🧩', 'Skills']]],
+  ['Agent', [['newchats', '✨', 'New chats'], ['loop', '🔁', 'Agent loop'], ['deciders', '⚖️', 'Deciders'], ['tools', '🧰', 'Tools & media'], ['budget', '💵', 'Budget & approvals'], ['safety', '🛡', 'Safety & commands'], ['skills', '🧩', 'Skills'], ['memory', '📌', 'Memory']]],
   ['Workspace', [['projects', '📁', 'Projects'], ['code', '💻', 'Code & servers'], ['docs', '📎', 'Documents']]],
   ['Data', [['usage', '📊', 'Usage & costs'], ['data', '🗄', 'Data & storage'], ['shortcuts', '⌨️', 'Shortcuts'], ['about', 'ℹ️', 'About']]],
 ];
@@ -4904,6 +4905,7 @@ function settingsPanels(S) {
       ]];
     })(),
     skills: ['Skills', 'Playbooks the agent loads when a task fits. Agents can also save their own into a project.', ['<div id="skillList" class="st-skill-list"></div>']],
+    memory: ['Memory', 'A few facts and preferences about you that every chat gets, in every project.', ['<div id="memPanel"></div>']],
     projects: ['Projects', 'A project is a folder that many chats share. Changes here apply at once.', [`<div id="stProjects"></div>`]],
     docs: ['Documents', 'Files you attach with 📎. They are kept in the project folder\'s .quorx/uploads, which git ignores.', [
       stCard('Reading', 'Text is read out of PDFs, Word, PowerPoint, Excel, OpenDocument, EPUB, HTML, code and plain text. Other files are saved and the agent decides whether it can read them.',
@@ -5025,6 +5027,7 @@ function wireSettings() {
   drawProjectsPanel();
   drawPermsPanel();
   drawKeysPanel();
+  drawMemoryPanel();
   drawSetupPanel();
   drawEmbedPick();
   drawDesktopSettings();
@@ -5349,6 +5352,39 @@ function wireSignIn() {
     if (r.error) return signInUi('waiting', `⚠ ${r.error}`, true);
     pollSignIn();
   };
+}
+// ⚙ Memory: a few facts and preferences about you that every chat gets. Saved at once (it lives on the server, so
+// scheduled chats and other devices get it too); the server checks the size and refuses anything like a secret.
+async function drawMemoryPanel(msg = '') {
+  const el = $('#memPanel');
+  if (!el) return;
+  const m = await fetch('/api/memory').then((r) => r.json()).catch(() => null);
+  if (!m || m.error) { el.innerHTML = `<p class="st-row-help">Could not load memory${m?.error ? `: ${esc(m.error)}` : ''}.</p>`; return; }
+  const pct = Math.min(100, Math.round((m.tokens / m.limit) * 100));
+  el.innerHTML = stCard('Memory', '', stRow('Use memory in every chat', `Every chat, in every project, gets the items below. They stay under ${m.limit} tokens, so even small models have room. When on, the agent may also propose an item; it is saved only if you say yes (in ⚡ YOLO too). Off: chats get nothing.`,
+    `<label class="st-switch"><input type="checkbox" role="switch" id="memOn" ${m.on ? 'checked' : ''} aria-label="Use memory in every chat"><span class="st-switch-track"><span class="st-switch-thumb"></span></span></label>`)
+    + `<div class="mem-body ${m.on ? '' : 'off'}">
+      <div class="mem-meter" title="About 4 characters a token"><span class="mem-bar"><i style="width:${pct}%"></i></span><span class="mem-count ${pct >= 90 ? 'full' : ''}">${m.tokens} / ${m.limit} tokens</span></div>
+      ${m.items.length ? `<ul class="mem-list">${m.items.map((x) => `<li class="mem-item" data-id="${esc(x.id)}"><input class="mem-text" value="${esc(x.text)}" maxlength="200" aria-label="Memory item" spellcheck="true"><span class="tag mem-by" title="${x.by === 'agent' ? 'Proposed by the agent, approved by you' : 'Added by you'}">${x.by === 'agent' ? 'agent · approved' : 'you'}</span><button type="button" class="kx-btn sm mem-save" hidden>Save</button><button type="button" class="mem-del" title="Forget this" aria-label="Forget this">✕</button></li>`).join('')}</ul>` : '<p class="st-row-help mem-empty">Nothing yet. For example: “I use pnpm, not npm”, “Prefer dark themes”, “Write commit messages in English”.</p>'}
+      <div class="mem-add"><input id="memNew" maxlength="200" placeholder="Add a fact or preference (one short sentence)" aria-label="New memory item"><button type="button" class="kx-btn sm primary" id="memAddBtn">Add</button></div>
+      <p class="mem-msg ${msg.startsWith('✓') ? 'ok' : msg ? 'bad' : ''}" role="status">${esc(msg)}</p>
+      <p class="st-row-help">Never keys, tokens or passwords: anything that looks like one is refused.</p></div>`);
+  const save = async (body, ok) => {
+    const r = await postJ('/api/memory', body, 'PUT');
+    drawMemoryPanel(r?.error ? `Not saved: ${r.error}.` : ok);
+  };
+  $('#memOn').onchange = (e) => save({ on: e.target.checked }, e.target.checked ? '✓ Memory is on' : '✓ Memory is off: chats get nothing');
+  const add = () => { const t = $('#memNew').value.trim(); if (t) save({ items: [...m.items, { text: t }] }, '✓ Added'); };
+  $('#memAddBtn').onclick = add;
+  $('#memNew').onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } };
+  for (const li of el.querySelectorAll('.mem-item')) {
+    const id = li.dataset.id, inp = $('.mem-text', li), btn = $('.mem-save', li), orig = m.items.find((x) => x.id === id).text;
+    inp.oninput = () => { btn.hidden = inp.value.trim() === orig; };
+    const commit = () => { if (inp.value.trim() !== orig) save({ items: m.items.map((x) => (x.id === id ? { ...x, text: inp.value } : x)) }, '✓ Saved'); };
+    btn.onclick = commit;
+    inp.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); commit(); } };
+    $('.mem-del', li).onclick = () => save({ items: m.items.filter((x) => x.id !== id) }, '✓ Forgotten');
+  }
 }
 async function drawKeysPanel() {
   const box = $('#stKeys'); if (!box) return;

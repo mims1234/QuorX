@@ -18,6 +18,7 @@ import { reviewCode, pickReviewer } from './server/codereview.js';
 import { loadHooks, saveHooks, HOOK_EVENTS } from './server/hooks.js';
 import { createScheduler, loadSchedules, saveSchedules, cleanSchedule, describeWhen, MAX_SCHEDULES } from './server/schedules.js';
 import { startScheduledChat } from './server/schedrun.js';
+import { loadMemory, saveMemory, memoryTokens, MEMORY_TOKENS } from './server/memory.js';
 import { CHECKS } from './server/harness-checks.js';
 import { startRun, getRun, stopRun, follow, runStatus, activeRuns, validRunId, scorecard, readLog, recordRun } from './server/runs.js';
 import { setBudget, budgetState } from './server/budget.js';
@@ -422,6 +423,12 @@ const server = http.createServer(async (req, res) => {
       if (b.scope === 'project' && !validId(b.projectId)) return json(res, 400, { error: 'bad project id' });
       if (!['project', 'everywhere'].includes(b.scope)) return json(res, 400, { error: 'scope must be project or everywhere' });
       try { return json(res, 200, { ok: true, rules: saveRules(b.scope, b.rules, b.scope === 'project' ? workspaceDir(b.projectId) : null) }); } catch (e) { return json(res, 200, { error: e.message }); }
+    }
+    // ---- memory: facts and preferences every chat gets (server/memory.js); the agent can only propose ----
+    if (url.pathname === '/api/memory' && req.method === 'GET') { const m = loadMemory(); return json(res, 200, { ...m, tokens: memoryTokens(m.items), limit: MEMORY_TOKENS }); }
+    if (url.pathname === '/api/memory' && req.method === 'PUT') {
+      const b = JSON.parse(await readBody(req, 1e5) || '{}');
+      try { const m = saveMemory(b); return json(res, 200, { ok: true, ...m, tokens: memoryTokens(m.items), limit: MEMORY_TOKENS }); } catch (e) { return json(res, 200, { error: e.message }); }
     }
     // ---- scheduled tasks: list, add, change (pause, resume), remove, run now; and notices for the page ----
     if (url.pathname === '/api/schedules' && req.method === 'GET') {

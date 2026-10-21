@@ -27,6 +27,7 @@ import { termStart, termSend, termRead, termStop } from './agentterm.js';
 import { appWindows, readWindow, clickControl, clickAt, setControl, sendKeys, windowShot, closeWindow } from './uia.js';
 import { languageChecks } from './langchecks.js';
 import { loadHooks, matchHooks, hookLine, safeHookFile } from './hooks.js';
+import { loadMemory, memoryPrompt, checkMemory, addMemory, REMEMBER_TOOL } from './memory.js';
 import { audit } from './audit.js';
 import { packagesOf, checkPackages } from './pkgguard.js';
 import { testChanges, TEST_FILE } from './testguard.js';
@@ -882,7 +883,12 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   if (cats.includes('video')) choices.videoStart = (await videoModels().catch(() => [])).filter((m) => T.video.models.includes(m.id) && canStartFromImage(m)).map((m) => m.id);
   const fileList = root ? listFiles(root, 60).map((f) => f.path) : [];
   const helpersOn = !!root && S.helpers !== false && projectSize(root) >= Math.max(0, Number(S.helperMinFiles ?? DEFAULTS.helperMinFiles) || 0);
-  const memory = (projectNotes ? `\n\n[Project notes: AGENT.md]\n${projectNotes}` : root ? '\n\n[Project notes: there is no AGENT.md yet. Create one once there is something worth recording.]' : '')
+  // The user's memory (Settings → Memory): every chat gets the approved facts. Only a model with tools and room to spare
+  // (16k+) is offered remember, so the smallest models get the facts and nothing else.
+  const userMem = req.bench ? { on: false, items: [] } : loadMemory();
+  const memInfo = userMem.on ? (deps.catalogue || await chatModels().catch(() => [])).find((m) => m.id === setup.model) : null;
+  const proposeMem = userMem.on && memInfo?.tools !== false && (Number(memInfo?.ctx) || 32000) >= 16000;
+  const memory = memoryPrompt(userMem, { propose: proposeMem }) + (projectNotes ? `\n\n[Project notes: AGENT.md]\n${projectNotes}` : root ? '\n\n[Project notes: there is no AGENT.md yet. Create one once there is something worth recording.]' : '')
     + (design ? `\n\n[Design system: ${design.md.trim() ? 'DESIGN.md' : 'tokens.css'}${design.md.trim() && design.tokens.trim() ? ' + tokens.css' : ''}, "${design.name}"]\n${design.md.trim() ? clip(design.md.trim(), 5000) : `tokens.css defines: ${clip(design.tokens.match(/--[\w-]+/g)?.join(', ') || '', 600)}`}\n(This is the project's chosen look: follow it for every page and screen you build here unless the user asks for something else, and don't ask the user to pick a style.${design.tokens.trim() ? ' tokens.css in the project root holds its values as CSS custom properties: link it before your own styles (<link rel="stylesheet" href="tokens.css">, with the right relative path) and use var() for every colour, font, radius and space instead of writing values. The design lint flags colours that are not in it.' : ''})` : '')
     + (workLog ? `\n\n[Work log: what recent chats changed here]\n${workLog}` : '')
     + (skills.length ? `\n\n[Skills: load one with use_skill before a task it covers]\n${skillsNote(skills, [String(req.text || ''), ...(req.history || []).filter((m) => m.role === 'user').slice(-2).map((m) => String(m.content ?? ''))].join('\n'))}` : '')
@@ -974,6 +980,7 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
   // A chat with the deciders off gets no decide and no look (the browser stays); the harness checks are off too.
   let tools = TOOLS({ artifacts: T.artifacts.on, decide: decidersOn && setup.decide !== 'off', cats, choices, code: !!root, browser: browserOn, skills: skills.length > 0, ask: askOn, docs: docsOn, helpers: helpersOn });
   if (!decidersOn) tools = tools.filter((t) => t.function.name !== 'look');
+  if (proposeMem) tools.push(REMEMBER_TOOL);
   emit({ t: 'start', runId, setup, voters: S.voters, approval: S.approval, system, at: 0 });
 
   let reply = '';
@@ -2012,6 +2019,21 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     }
     return ans;
   }
+  // The agent proposes a memory; it is saved only when the user says yes. YOLO waits for the user here too.
+  async function remember(args) {
+    const text = String(args.text || '').replace(/\s+/g, ' ').trim();
+    const why = checkMemory(text, loadMemory());
+    if (why) return `Not saved: ${why}.`;
+    if ((run.remembered = (run.remembered || 0) + 1) > 2) return 'Not saved: at most 2 memory proposals per reply. Carry on with the task.';
+    const card = { id: newApprovalId(), tool: 'remember', free: true, est: 0, noAlways: true, what: text, why: 'The agent proposes remembering this in every chat, in every project. You can change it any time in Settings → Memory.' };
+    const ans = await askUser(card);
+    emit({ t: 'approval_done', id: card.id, ...ans, at: at() });
+    if (!ans.approve) return declined('remember', ans);
+    const r = addMemory(text, 'agent');
+    if (r.error) return `Not saved: ${r.error}.`;
+    emit({ t: 'memory_saved', text, at: at() });
+    return `Saved to the user's memory: "${text}". Every future chat will see it.`;
+  }
   function newApprovalId() { return `ap${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`; }
   function declined(name, ans) { return `${ans.by === 'user' ? 'The user' : ans.by === 'budget' ? 'The budget check' : 'The automatic approval check'} declined this ${name} call${ans.reason ? `. Reason: "${ans.reason}"` : ' without giving a reason'}. Decide how to proceed with that in mind: adapt, offer an alternative, or continue without it. Do not repeat the identical call.`; }
   function toolSummary(name, args) {
@@ -2036,6 +2058,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (name === 'append_file') return `Append ${String(args.content || '').length} characters to ${args.path}`;
     if (name === 'delete_file') return `Delete ${args.path} (moves it to .quorx/trash)`;
     if (name === 'scaffold') return `Copy the "${args.template}" starter template into the project`;
+    if (name === 'remember') return `Remember in every chat: “${clip(args.text, 200)}”`;
     if (name === 'save_skill') return `Save a project skill "${args.name}": ${clip(args.description, 80)}`;
     if (name === 'use_skill') return `Load the skill "${args.name}"`;
     if (name === 'ask_user') return Array.isArray(args.questions) && args.questions.length ? `Ask you ${args.questions.length} questions: "${clip(args.questions[0]?.question, 80)}"…` : `Ask you: "${clip(args.question, 100)}"`;
@@ -2178,6 +2201,8 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     // The harness's own trim note ("[N characters written earlier; removed …]") stands in for content the agent wrote
     // earlier; copied back into a file it breaks it (it did: a SyntaxError in a real build). Never written to disk.
     if (WRITES_CONTENT.has(name) && TRIM_NOTE.test(JSON.stringify(args))) return `Refused: this ${name} call contains the harness's note "[… characters written earlier; removed from the conversation to save space …]". That note only stands in for text that was trimmed from this conversation; it is not file content. ${name.includes('artifact') ? 'Use read_artifact' : 'Use read_file'} to get the real text back, then write that.`;
+    // remember asks the user itself, in YOLO too (never the deciders), so it gets no generic card.
+    if (name === 'remember') return remember(args);
     // Strict asks before paid media (inside media(), with the price), helpers or decider checks only if the user chose that, or before
     // every tool when the user chose that. A plan asks once in Strict; ticking its items off later doesn't.
     // Commands have their own gate (the rule engine, in codeTool), so they never get a second, generic card.
