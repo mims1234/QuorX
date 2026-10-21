@@ -14,6 +14,7 @@
         { "kind": "new", "text": "A video clip can start from a picture, and edit_video joins clips, stills, voice and music into one .mp4 with ffmpeg.", "pr": 47 },
         { "kind": "new", "text": "Recommended models have a model card with their limits, quirks and tips, and the agent reads the ones it uses.", "pr": 52 },
         { "kind": "new", "text": "A short first-run tour shows projects, Strict and YOLO, the deciders, costs and the terminal.", "pr": 56 },
+        { "kind": "new", "text": "Research notes for 0.2.7 in docs/research: how QuorX checks its agent across models, a cheaper prompt, and a 0.2.5 post-mortem.", "pr": 62 },
         { "kind": "improved", "text": "Each step's prompt is smaller and puts what doesn't change first, so more of it is read from the cache.", "pr": 58 },
         { "kind": "improved", "text": "Usage shows how much of each model's input came from the prompt cache.", "pr": 42 },
         { "kind": "improved", "text": "Closing the desktop window explains that QuorX keeps running in the tray, and Quit QuorX is easy to find.", "pr": 49 },
