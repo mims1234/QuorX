@@ -93,6 +93,10 @@ Both workflows share one queue, so a promote and a pull never run at the same ti
 All three feeds sit next to each other in the same release, so `releases/latest/download` serves each platform's
 own. Promote and Pull move them together, because they move the whole release.
 
+The Windows build is the one that decides: if it succeeds, the release is published even when the macOS or Linux
+build failed, or their files don't match their checksums. That platform is then left out, with a warning in the
+run, and the step summary lists the platforms in the release. Build the missing one in a new version.
+
 - **macOS** builds are unsigned and not notarized (`identity: null` in `desktop/package.json`). People open the app
   once with right-click → Open. macOS only installs updates for signed apps, so the Mac app opens the release page
   when you press Update instead of downloading it. Signing needs an Apple Developer ID (paid); when there is one,

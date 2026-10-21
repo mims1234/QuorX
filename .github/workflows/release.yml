@@ -182,8 +182,11 @@ jobs:
             desktop/dist/quorx_*.deb
             desktop/dist/SHA256SUMS-linux.txt
 
+  # Publishes when the Windows build succeeded, whatever happened to macOS and Linux: their files join the release only
+  # when their job succeeded and their checksums match. A macOS or Linux failure never holds back the Windows release.
   publish:
     needs: [build, build-mac, build-linux]
+    if: ${{ always() && needs.build.result == 'success' }}
     runs-on: windows-latest
     environment: release
     permissions:
@@ -296,35 +299,57 @@ jobs:
           node src/desktop/after-sign.js dist "QuorX-Setup-$VERSION.exe"
           cd dist && sha256sum -c --strict SHA256SUMS.txt
 
-      # ---------- macOS and Linux: their files and checksums join the Windows ones ----------
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      # ---------- macOS and Linux: their files and checksums join the Windows ones, when they are there and match ----------
+      - name: Download the macOS files
+        if: needs.build-mac.result == 'success'
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          pattern: release-files-*
-          path: dist
-          merge-multiple: true
+          name: release-files-mac
+          path: more/mac
 
-      - name: Check the macOS and Linux files, and add them to SHA256SUMS.txt
+      - name: Download the Linux files
+        if: needs.build-linux.result == 'success'
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-files-linux
+          path: more/linux
+
+      # Each platform comes in whole or not at all: its files move into dist and its lines into SHA256SUMS.txt only if
+      # its own checksum file is there, has LF endings and matches every file. Otherwise it is left out with a warning.
+      - name: Add the macOS and Linux files that check out
+        id: more
         shell: bash
-        working-directory: dist
+        env:
+          MAC: ${{ needs.build-mac.result }}
+          LINUX: ${{ needs.build-linux.result }}
         run: |
-          for f in SHA256SUMS-mac.txt SHA256SUMS-linux.txt; do
-            if grep -q $'\r' "$f"; then echo "::error::$f has CRLF line endings"; exit 1; fi
-            sha256sum -c --strict "$f"
-            cat "$f" >> SHA256SUMS.txt
-            rm "$f"
+          added=()
+          for p in mac linux; do
+            d="more/$p" sums="SHA256SUMS-$p.txt"
+            if [ ! -f "$d/$sums" ]; then echo "::warning::No $p files (build: $([ $p = mac ] && echo "$MAC" || echo "$LINUX")): published without them."; continue; fi
+            if grep -q $'\r' "$d/$sums" || ! (cd "$d" && sha256sum -c --strict "$sums"); then echo "::warning::The $p files don't match their checksums: published without them."; continue; fi
+            cat "$d/$sums" >> dist/SHA256SUMS.txt
+            rm "$d/$sums"
+            mv "$d"/* dist/
+            added+=("$p")
           done
-          sha256sum -c --strict SHA256SUMS.txt
-          cat SHA256SUMS.txt
+          (cd dist && sha256sum -c --strict SHA256SUMS.txt)
+          cat dist/SHA256SUMS.txt
+          echo "Platforms in this release: windows ${added[*]}" >> "$GITHUB_STEP_SUMMARY"
+          # The installers to attest: Windows always, the others when they were added.
+          {
+            echo 'subjects<<EOF'
+            echo "dist/QuorX-Setup-$VERSION.exe"
+            ls dist | grep -E -e '-mac-.*\.(dmg|zip)$' -e '-linux-.*\.AppImage$' -e '^quorx_.*\.deb$' | sed 's|^|dist/|' || true
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
 
       - name: Attest where the installers were built
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
-          subject-path: |
-            dist/QuorX-Setup-${{ env.VERSION }}.exe
-            dist/QuorX-*-mac-*.dmg
-            dist/QuorX-*-mac-*.zip
-            dist/QuorX-*-linux-*.AppImage
-            dist/quorx_*.deb
+          subject-path: ${{ steps.more.outputs.subjects }}
 
       # A pre-release: releases/latest/download (the update feed) keeps serving the version before it until
       # "Promote release" runs. winget gets the new version then too, not here.
