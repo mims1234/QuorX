@@ -1,0 +1,17 @@
+/* ⚙ Settings → Data & storage → Export my QuorX / Import (public/backup.js) */
+.bk-warn { margin: 4px 16px 10px; padding: 10px 12px; border: 1px solid var(--warn); border-radius: 8px; background: var(--warn-dim); font-size: 12.5px; line-height: 1.5; display: grid; gap: 8px; }
+.bk-warn strong { color: var(--warn); }
+.bk-out { padding: 0 16px 12px; }
+.bk-out:empty { display: none; }
+.bk-out code { word-break: break-all; }
+.bk-list { display: grid; gap: 6px; padding: 0 16px 10px; }
+.bk-file { display: flex; justify-content: space-between; gap: 12px; text-align: left; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: transparent; color: inherit; font: inherit; font-size: 12.5px; cursor: pointer; }
+.bk-file small { color: var(--muted); white-space: nowrap; }
+.bk-file.on, .bk-file:hover, .bk-file:focus-visible { border-color: var(--accent); }
+.bk-look { padding: 0 16px 6px; }
+.bk-projects { display: grid; gap: 6px; padding: 0 16px 10px; }
+.bk-proj { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 6px 12px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 12.5px; }
+.bk-proj code { color: var(--muted); word-break: break-all; }
+.bk-tag { display: inline-block; padding: 1px 7px; border-radius: 4px; font-size: 11px; border: 1px solid var(--line-strong); color: var(--muted); }
+.bk-tag.ok { border-color: var(--ok); color: var(--ok); word-break: break-all; }
+.bk-tag.miss { border-color: var(--warn); color: var(--warn); }

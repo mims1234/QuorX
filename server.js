@@ -42,6 +42,7 @@ import { embeddingModels } from './server/openrouter.js';
 import { listSkills, listTemplates } from './server/skills.js';
 import { hostedHtml, browserPath, openTab } from './server/browser.js';
 import { zipFolder } from './server/zip.js';
+import { exportBackup, findBackups, inspectBackup, importBackup } from './server/backup.js';
 import { artifactContent, servedArtifact, ARTIFACT_HEADERS, folderStamp } from './server/artifacts.js';
 import { gate, appGate, appLink, lanOn, hostAllowed, crossSiteApi, isLoopback, accessInfo, setLan, resetToken, plainLan, setLanTls } from './server/access.js';
 import { serveLan } from './server/lantls.js';
@@ -601,6 +602,18 @@ const server = http.createServer(async (req, res) => {
           const title = await tab.eval('document.title').catch(() => '');
           return fmt === 'pdf' ? send(await tab.pdf({ landscape: !!b.landscape }), 'application/pdf', `${safeName(title)}.pdf`) : send(await tab.fullPage(), 'image/png', `${safeName(title)}.png`);
         } finally { await tab.close().catch(() => {}); }
+      } catch (e) { return json(res, 200, { error: e.message }); }
+    }
+    // ---- Export my QuorX / Import (server/backup.js) ----
+    if (url.pathname.startsWith('/api/backup/') && req.method === 'POST') {
+      const b = JSON.parse(await readBody(req, 5e6) || '{}');
+      try {
+        // API keys go in only with both boxes ticked, and only from this computer.
+        if (url.pathname === '/api/backup/export') return json(res, 200, exportBackup({ dir: String(b.dir || ''), settings: b.settings && typeof b.settings === 'object' ? b.settings : null, includeLogs: b.logs === true, includeKeys: b.keys === true && b.keysWarned === true && isLoopback(req), version: VERSION }));
+        if (url.pathname === '/api/backup/find') return json(res, 200, { backups: findBackups(String(b.dir || '')) });
+        if (url.pathname === '/api/backup/inspect') return json(res, 200, inspectBackup(String(b.file || '')));
+        if (url.pathname === '/api/backup/import') return json(res, 200, importBackup(String(b.file || ''), { overwrite: b.overwrite === true, folders: b.folders || {}, skip: Array.isArray(b.skip) ? b.skip : [], keys: b.keys === true && isLoopback(req) }));
+        return json(res, 404, { error: 'no such backup call' });
       } catch (e) { return json(res, 200, { error: e.message }); }
     }
     // ---- attached documents: upload, read and index, list, remove (see server/docs.js) ----
