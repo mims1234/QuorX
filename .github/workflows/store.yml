@@ -1,0 +1,59 @@
+# Builds the Microsoft Store package (.appx, an MSIX package) for Partner Center. The Store signs it after
+# certification, so it needs no certificate here. Run it from Actions → "Store package" on main or a version tag,
+# download the "store-package" artifact, and upload the .appx in Partner Center → Packages. See docs/store-listing.md.
+#
+# Hardening: actions are pinned to commits and the job can only read the repository; nothing is published.
+name: Store package
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+  # A change to the package's settings or tiles is built here first, so a broken package never reaches a release.
+  pull_request:
+    paths: ['desktop/package.json', 'desktop/build/appx/**', '.github/workflows/store.yml']
+
+permissions: {}
+
+jobs:
+  appx:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Install the harness (node-pty, xterm, KaTeX)
+        run: npm ci
+
+      - name: Install Electron and electron-builder
+        run: npm ci
+        working-directory: desktop
+
+      - name: Build the Store package
+        run: npm --prefix desktop run dist:store -- --publish never
+
+      - name: Check the package's identity
+        # The Store refuses a package whose identity doesn't match the product in Partner Center.
+        shell: pwsh
+        run: |
+          $appx = Get-ChildItem desktop/dist/QuorX-Store-*.appx | Select-Object -First 1
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [IO.Compression.ZipFile]::OpenRead($appx.FullName)
+          $xml = [xml](New-Object IO.StreamReader(($zip.Entries | Where-Object FullName -eq 'AppxManifest.xml').Open())).ReadToEnd()
+          $zip.Dispose()
+          $id = $xml.Package.Identity
+          "Name=$($id.Name) Publisher=$($id.Publisher) Version=$($id.Version)"
+          if ($id.Name -ne '14991MiMs.QuorX' -or $id.Publisher -ne 'CN=BCAF9FCC-5703-459A-9027-CD13C1B68AD9') { Write-Error 'The package identity does not match the Store product.'; exit 1 }
+          if (-not ($xml.Package.Capabilities.OuterXml -match 'runFullTrust')) { Write-Error 'The package must declare runFullTrust.'; exit 1 }
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: store-package
+          path: desktop/dist/QuorX-Store-*.appx
