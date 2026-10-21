@@ -1,6 +1,6 @@
 # Shipping safer
 
-*QuorX 0.2.7 research notes. Pull requests #40, #43, #48 and #53, plus the checksums from 0.2.4.*
+*QuorX 0.2.7 research notes. Pull requests #40, #43, #53 and #61, plus the checksums from 0.2.4.*
 
 In 0.2.5, a bad version reached installed apps through auto-update. 0.2.7 puts more steps between a
 change and your computer. Each step is small. Together they mean a change is tested, built by a read-only job,
@@ -64,18 +64,18 @@ Since 0.2.4, each release lists the installer's SHA-256 checksum and a signed pr
 repository. In 0.2.7, `SHA256SUMS.txt` uses plain LF line endings, so `sha256sum -c SHA256SUMS.txt` works on macOS
 and Linux as well as `Get-FileHash` on Windows. The publish job refuses a sums file with Windows line endings.
 
-## HTTPS for phone pairing (#48)
+## This computer only (#61)
 
-You can pair a phone with QuorX on your Wi-Fi. Until 0.2.7, that used plain HTTP: anyone on the same network could
-read the pairing link, the cookie and every chat.
+The smallest attack surface is the one that isn't there. QuorX's agent runs real commands on your computer, so in
+0.2.7 QuorX answers only that computer.
 
-Now other devices connect over HTTPS. Each install makes its own self-signed certificate (ECDSA P-256), kept in
-QuorX's private data folder. One port serves both: a small front listener looks at the first byte of each
-connection, and a TLS handshake is decrypted while plain HTTP from this computer passes through unchanged.
+- It listens on 127.0.0.1 only.
+- Every request that doesn't come from this computer is refused (403), and there is no way to pair another device.
+- The code and settings for other devices are gone, so there is less to guard and less to test.
+- Files an older install may still have for other devices stay on the list of secret files the agent can't read.
 
-A self-signed certificate means your phone shows a warning. So the pairing screen shows the certificate's SHA-256
-fingerprint, and you can compare it with the one in the phone's warning before you continue. A pairing link sent
-over plain HTTP is refused, and its token isn't carried over.
+A test checks that other devices are refused. This keeps QuorX's attention where its work is checked: on the agent,
+its commands and its builds.
 
 ## A gap the pipeline didn't catch (#53)
 

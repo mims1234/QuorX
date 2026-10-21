@@ -13,7 +13,7 @@ This note is about the process: what made it fast, and what slowed it down.
 | Stream | Pull requests | Main files |
 |---|---|---|
 | Release safety | #40, #43 | `.github/workflows/`, `docs/RELEASING.md` |
-| Desktop and trust | #48, #49, #53, #57 (#55 held) | `desktop/`, `server/lantls.js`, `server/access.js` |
+| Desktop and trust | #49, #53, #57, #61 (#55 held) | `desktop/`, `server/access.js`, `server.js` |
 | Media and models | #44, #47, #52 | `server/mediaplan.js`, `server/video.js`, `models/cards/` |
 | Loop and cost | #41, #42, #46, #50, #58 | `server/agent.js`, `server/workspace.js`, `server/runs.js` |
 | Benchmark and onboarding | #51, #54, #56, #59 | `bench/`, `server/backup.js`, `public/tour.js` |
@@ -47,10 +47,10 @@ gantt
     #47 video and ffmpeg  :2026-10-20 23:29, 2026-10-20 23:55
     #52 model cards       :2026-10-20 23:55, 2026-10-21 00:00
     section Desktop and trust
-    #48 HTTPS pairing     :2026-10-20 23:35, 2026-10-20 23:38
     #49 clear quitting    :2026-10-20 23:37, 2026-10-20 23:43
     #53 installer modules :2026-10-20 23:59, 2026-10-21 00:06
     #57 sign-in per port  :2026-10-21 00:06, 2026-10-21 00:10
+    #61 this computer only:2026-10-21 01:22, 2026-10-21 01:26
     section Benchmark and onboarding
     #51 harder benchmark  :2026-10-20 23:44, 2026-10-20 23:46
     #54 export and import :2026-10-21 00:00, 2026-10-21 00:16
@@ -69,16 +69,16 @@ build; most work started before its pull request was opened.
 - **Tests on every pull request came first.** #40 was one of the first merges, so every later pull request was
   checked on Windows and Linux before it could land.
 - **The full suite on `main` after each wave.** The coordinator's checks on `main` grew from 217 passing tests to
-  274, with no failures in the final run.
+  274. #61 then replaced a few tests with one check that other devices are refused: 271 pass, 0 fail.
 - **Benchmarks, not opinions, for loop changes.** #58 was reviewed against its numbers and against a line-by-line
   comparison of the prompt's rules.
 
 ```mermaid
 xychart-beta
-    title "Passing tests on main as 0.2.7 came together"
-    x-axis ["after #35", "after #48", "after #52", "after #57", "after #58", "after #45"]
+    title "Passing tests on main as 0.2.7 came together (UTC)"
+    x-axis ["23:15", "23:38", "00:00", "00:10", "00:53", "01:08", "01:26"]
     y-axis "passing tests" 200 --> 280
-    line [217, 224, 233, 241, 257, 274]
+    line [217, 224, 233, 241, 257, 274, 271]
 ```
 
 ## What hurt
@@ -101,6 +101,9 @@ xychart-beta
 The macOS and Linux installers (#55) were ready to review, but their publish and promote steps had never run end to
 end. A release-pipeline change is the kind that breaks everyone at once. So they moved to 0.2.8, where the Windows
 build will decide and a failing macOS or Linux job can't block it.
+
+The scope also narrowed at the end. #61 made QuorX answer only the computer it runs on, and took out the earlier work
+for other devices. Removing a feature late is cheap when it lives in its own files and has its own tests.
 
 ## What we learned
 
