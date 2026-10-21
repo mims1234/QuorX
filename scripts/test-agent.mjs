@@ -1,11 +1,15 @@
 // The agent loop with a scripted model: no network, no money. node --test scripts/
 // Each test gets a throwaway project in the temp folder, removed afterwards.
 import { resolver } from '../server/safefetch.js';
+import { videoBody, editCommand, ffmpegMajor } from '../server/video.js';
+import { primeCatalogue } from '../server/openrouter.js';
+import { execFileSync } from 'node:child_process';
 import { tempDir } from './test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { loadCards, cardText, limitsLine, cardFile, CARDS_DIR, CARD_CHARS } from '../server/modelcards.js';
 import { runAgent, answerQuestion, answerApproval, answerBudget, setRunApproval, steerRun, holdCard } from '../server/agent.js';
 import { saveProject, forgetProject, setProjectBudget } from '../server/store.js';
 import { loadCheckpoint, dropCheckpoint, ledger } from '../server/runs.js';
@@ -16,7 +20,7 @@ const reply = (text, calls = [], finishReason = 'stop') => ({ text, toolCalls: c
 
 /** Runs one reply. `script(body, i)` returns the model's i-th answer (or throws). */
 // `budget` sets the project's budget and `spent` seeds what it has already spent (as a ledger row).
-async function run(script, { settings = {}, text = 'build it', resume, onEvent, signal, history, budget, spent, setup = {}, openTab, generateImage, ensemble, checks, chatId, prep, cont, images, comments, enhance, reading } = {}) {
+async function run(script, { settings = {}, text = 'build it', resume, onEvent, signal, history, budget, spent, setup = {}, openTab, generateImage, generateVideo, ensemble, checks, chatId, prep, cont, images, comments, enhance, reading } = {}) {
   const id = `t${Date.now().toString(36)}${(n++).toString(36)}`;
   const dir = tempDir('quorx-run-');
   saveProject({ id, name: 'test', path: dir });
@@ -28,7 +32,7 @@ async function run(script, { settings = {}, text = 'build it', resume, onEvent, 
   const chatStream = async (body, sig, onText) => { bodies.push(structuredClone(body)); const r = await script(body, i++); if (r.text && onText) onText(r.text); return r; };
   try {
     await runAgent({ runId: id, projectId: id, ...(chatId ? { chatId } : {}), ...(images ? { images } : {}), ...(comments ? { comments } : {}), text, resume, ...(cont ? { continue: cont } : {}), ...(reading ? { reading } : {}), history, setup: { model: 'test/model', ...setup }, settings: { approval: 'yolo', mediaEnabled: false, tools: { browser: { on: false } }, ...settings } },
-      (e) => { events.push(e); onEvent?.(e); }, signal || new AbortController().signal, { chatStream, catalogue: [{ id: 'test/model', maxOut: 4000 }], quiet: true, startServer: async ({ name, args }) => ({ key: `fake-${name}`, url: 'http://localhost:9/', status: 'running', command: ['node', ...(args || [])].join(' '), log: '' }), ...(openTab ? { openTab } : {}), ...(generateImage ? { generateImage } : {}), ...(ensemble ? { ensemble } : {}), ...(checks ? { checks } : {}), ...(enhance ? { enhance } : {}) });
+      (e) => { events.push(e); onEvent?.(e); }, signal || new AbortController().signal, { chatStream, catalogue: [{ id: 'test/model', maxOut: 4000 }], quiet: true, startServer: async ({ name, args }) => ({ key: `fake-${name}`, url: 'http://localhost:9/', status: 'running', command: ['node', ...(args || [])].join(' '), log: '' }), ...(openTab ? { openTab } : {}), ...(generateImage ? { generateImage } : {}), ...(generateVideo ? { generateVideo } : {}), ...(ensemble ? { ensemble } : {}), ...(checks ? { checks } : {}), ...(enhance ? { enhance } : {}) });
     return { events, bodies, dir, id, done: events.find((e) => e.t === 'done') };
   } finally { forgetProject(id); ledger.delete(`seed-${id}`); }
 }
@@ -59,6 +63,38 @@ test('a running reply sends what it has spent after every call, ending at its fi
   for (let k = 1; k < sp.length; k++) assert.ok(sp[k].cost >= sp[k - 1].cost && sp[k].calls >= sp[k - 1].calls);
   assert.ok(Math.abs(sp.at(-1).cost - done.stats.cost) < 1e-6);
   assert.ok(events.indexOf(sp[0]) < events.indexOf(done));
+});
+
+// ---------- model cards (models/cards/) ----------
+test('every shipped model card is well formed, cites its tips, and fits the agent in about 250 tokens', () => {
+  const cards = [...loadCards(true).values()];
+  assert.ok(cards.length >= 18, `cards: ${cards.length}`);
+  for (const c of cards) {
+    assert.ok(fs.existsSync(path.join(CARDS_DIR, cardFile(c.id))), `${c.id}: file name matches its id`);
+    assert.ok(['chat', 'decision', 'image', 'video', 'music', 'speech'].includes(c.kind), `${c.id}: kind ${c.kind}`);
+    assert.ok(c.limits && typeof c.limits === 'object', `${c.id}: limits`);
+    if (c.tips.length) assert.ok(c.sources.length && c.sources.every((u) => /^https:\/\//.test(u)), `${c.id}: tips cite https sources`);
+    assert.ok(cardText(c).length <= CARD_CHARS, `${c.id}: ${cardText(c).length} chars`);
+  }
+});
+
+test('a card reads as limits, quirks and tips, and drops tips first when it is too long', () => {
+  const c = { id: 'v/x', kind: 'video', limits: { durations: [4, 5, 6, 7, 8], resolutions: ['720p'], aspects: ['16:9'], frames: ['first_frame'], audio: true }, quirks: ['q1'], tips: ['t1', 't2'] };
+  assert.equal(cardText(c), '- v/x (video): 4-8 s · 720p · shapes 16:9 · starts from a picture · makes sound.\n  Quirk: q1\n  Tip: t1\n  Tip: t2');
+  assert.equal(cardText(c, 95), '- v/x (video): 4-8 s · 720p · shapes 16:9 · starts from a picture · makes sound.\n  Quirk: q1');
+  assert.match(limitsLine({ kind: 'chat', limits: { context: 1000000, max_output: 128000, tools: true, images_in: false } }), /^1M context · 128k max output · tool calls · text only$/);
+});
+
+test('the agent reads the cards of its own model and of the media models in use, and no others', async () => {
+  const { bodies } = await run(() => reply('Hi.'), { setup: { model: 'anthropic/claude-haiku-5.5' },
+    settings: { mediaEnabled: true, tools: { browser: { on: false }, image: { on: false }, music: { on: false }, speech: { on: false }, video: { on: true, pick: 'fixed', models: ['google/veo-3.1-lite', 'alibaba/wan-3.0'] } } } });
+  const sys = bodies[0].messages[0].content;
+  const text = typeof sys === 'string' ? sys : JSON.stringify(sys);
+  assert.match(text, /\[Model notes:/);
+  assert.match(text, /- anthropic\/claude-haiku-5\.5 \(chat\)/);
+  assert.match(text, /- google\/veo-3\.1-lite \(video\): 4, 6, 8 s/);
+  assert.doesNotMatch(text, /alibaba\/wan-3\.0 \(video\)/, 'only the first video model when the settings pick it');
+  assert.doesNotMatch(text, /QuorX build benchmark/, 'benchmark results are for the user, not the agent');
 });
 
 test('a reply that ends part-way keeps what it spent', async () => {
@@ -1355,4 +1391,95 @@ test('cache-read and cache-write tokens from the usage go into the reply stats, 
   assert.equal(m.cachedIn, 2000, 'only calls that reported caching count toward the share');
   assert.equal(m.tokensIn, 3000);
   assert.equal(done.stats.cacheRead, 900);
+});
+
+// ---------- video: a picture as the first frame, and edit_video (no paid calls) ----------
+test('make_video body: a start picture goes in as the first frame, only for models that take one', () => {
+  const spec = { frames: ['first_frame', 'last_frame'], aspects: ['16:9', '9:16'] };
+  const ok = videoBody({ model: 'v/a', prompt: 'waves', secs: 5, res: '480p', spec, firstFrame: 'data:image/png;base64,AAA' });
+  assert.deepEqual(ok.body.frame_images, [{ type: 'image_url', image_url: { url: 'data:image/png;base64,AAA' }, frame_type: 'first_frame' }]);
+  assert.equal(ok.body.aspect_ratio, '16:9');
+  assert.equal(ok.body.duration, 5);
+  assert.match(videoBody({ model: 'v/b', prompt: 'x', spec: { frames: [] }, firstFrame: 'data:image/png;base64,AAA' }).error, /can't start from a picture/);
+  const near = videoBody({ model: 'v/c', prompt: 'x', spec: { aspects: ['16:9', '9:16'] }, aspect: '3:4' });
+  assert.equal(near.body.aspect_ratio, '9:16');
+  assert.match(near.note, /nearest shape, 9:16/);
+  assert.equal('frame_images' in videoBody({ model: 'v/a', prompt: 'x', spec }).body, false);
+});
+
+test('edit_video command: stills loop, clips can be cut, music loops under the voice, the graph goes in a file', () => {
+  const e = editCommand({ clips: [{ path: 'assets/a.png', seconds: 2 }, 'assets/b.mp4', { path: 'assets/c.mp4', seconds: 1.5 }], voice: 'assets/v.mp3', music: 'assets/m.mp3', musicVolume: 0.3, out: 'assets/edits/t.mp4', filterFile: '.quorx/edits/t.filter', ffmpegMajor: 9 });
+  assert.equal(e.line, 'ffmpeg -hide_banner -loglevel error -y -loop 1 -framerate 30 -t 2 -i "assets/a.png" -i "assets/b.mp4" -t 1.5 -i "assets/c.mp4" -i "assets/v.mp3" -stream_loop -1 -i "assets/m.mp3" -/filter_complex ".quorx/edits/t.filter" -map "[vout]" -map "[aout]" -c:a aac -b:a 192k -shortest -c:v libx264 -preset veryfast -crf 20 -r 30 -movflags +faststart "assets/edits/t.mp4"');
+  assert.match(e.filter, /\[v0\]\[v1\]\[v2\]concat=n=3:v=1:a=0\[vout\]/);
+  assert.match(e.filter, /\[3:a\]apad\[vo\];\n\[4:a\]volume=0\.3\[mu\];\n\[vo\]\[mu\]amix=inputs=2:duration=first:normalize=0\[aout\]/);
+  assert.match(e.filter, /scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720/);
+  const old = editCommand({ clips: ['a.mp4'], out: 'o.mp4', filterFile: 'f.txt', ffmpegMajor: 6, aspect: '9:16' });
+  assert.match(old.line, /-filter_complex_script "f\.txt" -map "\[vout\]" -an /);
+  assert.match(old.filter, /scale=720:1280/);
+  assert.match(editCommand({ clips: ['a b$x.mp4'], out: 'o.mp4', filterFile: 'f' }).error, /can't pass safely/);
+  assert.match(editCommand({ clips: ['notes.txt'], out: 'o.mp4', filterFile: 'f' }).error, /not a video or a picture/);
+  assert.match(editCommand({ clips: ['a.mp4'], out: 'o.mov', filterFile: 'f' }).error, /\.mp4/);
+  assert.equal(ffmpegMajor('9.0.2-full_build-www.gyan.dev'), 9);
+  assert.equal(ffmpegMajor('N-118000-gabc'), 0);
+});
+
+const TEST_VIDEO = { id: 'test/vid-start', name: 'Test video', kind: 'video', skus: { duration_seconds_480p: 0.02, cents_per_image_input: '1' }, resolutions: ['480p'], durations: [5], aspects: ['16:9', '9:16'], frames: ['first_frame'] };
+const TEST_VIDEO_TEXT = { ...TEST_VIDEO, id: 'test/vid-text', frames: [] };
+const videoSettings = (model) => ({ mediaEnabled: true, yoloCheck: false, tools: { browser: { on: false }, image: { on: false }, music: { on: false }, speech: { on: false }, video: { on: true, pick: 'fixed', models: [model], resolution: '480p', seconds: 5 } } });
+
+test('make_video starts from a project picture with a model that takes one', async () => {
+  primeCatalogue('videos', [TEST_VIDEO, TEST_VIDEO_TEXT]);
+  const sent = [];
+  const { bodies, events } = await run((body, i) => [
+    reply('', [['make_video', { prompt: 'the lighthouse beam sweeps across the sea', why: 'shot 1', start_image: 'assets/frame.png', aspect_ratio: '16:9' }]]),
+    reply('Done.'),
+  ][i], { settings: videoSettings('test/vid-start'), prep: (dir) => { fs.mkdirSync(path.join(dir, 'assets'), { recursive: true }); fs.writeFileSync(path.join(dir, 'assets', 'frame.png'), 'fake-png'); },
+    generateVideo: async (b) => { sent.push(b); return { url: `data:video/mp4;base64,${Buffer.from('mp4').toString('base64')}`, usage: { cost: 0.1 }, ms: 5 }; } });
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].frame_images[0].frame_type, 'first_frame');
+  assert.equal(sent[0].frame_images[0].image_url.url, `data:image/png;base64,${Buffer.from('fake-png').toString('base64')}`);
+  assert.match(toolResults(bodies[1]).at(-1), /starting from assets\/frame\.png/);
+  const card = of(events, 'approval')[0];
+  assert.ok(Math.abs(card.est - 0.11) < 1e-9, `5 s at $0.02 plus 1 cent for the picture: ${card.est}`);
+  assert.match(card.detail, /from the picture assets\/frame\.png/);
+  const tool = bodies[0].tools.find((t) => t.function.name === 'make_video');
+  assert.match(tool.function.parameters.properties.start_image.description, /test\/vid-start/);
+});
+
+test('make_video with a start picture and a text-only model is refused before any approval or charge', async () => {
+  primeCatalogue('videos', [TEST_VIDEO, TEST_VIDEO_TEXT]);
+  let called = 0;
+  const { bodies, events } = await run((body, i) => [
+    reply('', [['make_video', { prompt: 'waves', why: 'x', start_image: 'assets/frame.png' }]]),
+    reply('Done.'),
+  ][i], { settings: videoSettings('test/vid-text'), generateVideo: async () => { called++; return {}; } });
+  assert.match(toolResults(bodies[1]).at(-1), /^Error: test\/vid-text can't start from a picture\. None of the video models in use can/);
+  assert.equal(called, 0);
+  assert.equal(of(events, 'approval').length, 0);
+  assert.equal('start_image' in bodies[0].tools.find((t) => t.function.name === 'make_video').function.parameters.properties, false);
+});
+
+let hasFfmpeg = false;
+try { execFileSync('ffmpeg', ['-version'], { stdio: 'ignore' }); hasFfmpeg = true; } catch { /* not installed */ }
+test('edit_video joins a still, a clip and a voice-over into one mp4 in the project, through the command gate', { skip: !hasFfmpeg && 'ffmpeg is not installed' }, async () => {
+  let runId; const cards = [];
+  const { bodies, dir, events } = await run((body, i) => [
+    reply('', [['edit_video', { clips: [{ path: 'assets/still.png', seconds: 1 }, { path: 'assets/clip.mp4' }], voice: 'assets/voice.mp3', out: 'assets/edits/teaser.mp4' }]]),
+    reply('Done.'),
+  ][i], { settings: { approval: 'strict', mediaEnabled: true, tools: { browser: { on: false }, image: { on: true }, video: { on: false }, music: { on: false }, speech: { on: false } } },
+    prep: (d) => {
+      const a = path.join(d, 'assets'); fs.mkdirSync(a);
+      const ff = (...x) => execFileSync('ffmpeg', ['-loglevel', 'error', '-y', ...x], { cwd: a });
+      ff('-f', 'lavfi', '-i', 'testsrc=size=320x240:rate=10', '-frames:v', '1', 'still.png');
+      ff('-f', 'lavfi', '-i', 'testsrc=size=640x360:rate=24', '-t', '1', '-pix_fmt', 'yuv420p', 'clip.mp4');
+      ff('-f', 'lavfi', '-i', 'sine=frequency=440:duration=1', 'voice.mp3');
+    },
+    onEvent: (e) => { if (e.t === 'start') runId = e.runId; if (e.t === 'approval') { cards.push(e); setTimeout(() => answerApproval(runId, e.id, { approve: true }), 5); } } });
+  const result = toolResults(bodies[1]).at(-1);
+  assert.match(result, /^Saved the finished film as assets\/edits\/teaser\.mp4 \([\d.]+ MB, 1280×720, 2 clips, voice-over\)/, result);
+  assert.ok(fs.statSync(path.join(dir, 'assets', 'edits', 'teaser.mp4')).size > 1000);
+  assert.ok(fs.existsSync(path.join(dir, '.quorx', 'edits', 'teaser.filter')));
+  assert.equal(cards.length, 1, 'the ffmpeg line went through the command approval');
+  assert.match(JSON.stringify(cards[0]), /ffmpeg/);
+  assert.ok(of(events, 'file').some((e) => e.path === 'assets/edits/teaser.mp4'));
 });

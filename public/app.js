@@ -56,7 +56,7 @@ const TOOL_NAME = { imagine: '🖼 Make a picture', make_video: '🎬 Make a vid
   write_artifact: '📄 Write a page', edit_artifact: '✏️ Edit a page', read_artifact: '👀 Read a page', decide: '⚖️ Ask the deciders',
   list_files: '🗂 List files', read_file: '👀 Read a file', write_file: '📝 Write a file', append_file: '📝 Append to a file', edit_file: '✏️ Edit a file',
   search_docs: '🔎 Search the attached documents', read_doc: '📄 Read an attached document', list_docs: '📎 List attached documents',
-  run_command: '⌨️ Run a command', start_server: '🚀 Start a server', stop_server: '■ Stop a server', preview_site: '🌐 Preview a site',
+  edit_video: '🎞 Edit the film', run_command: '⌨️ Run a command', start_server: '🚀 Start a server', stop_server: '■ Stop a server', preview_site: '🌐 Preview a site',
   browser: '🌐 Use the browser', look: '👁 Look at the result', search_files: '🔎 Search files', delete_file: '🗑 Delete a file',
   scaffold: '🧱 Use a template', save_skill: '🧩 Save a skill', use_skill: '🧩 Load a skill', fetch_url: '🌍 Read a web page', delegate: '🤝 Ask a helper', plan: '🗺 Plan' };
 const CATS = [
@@ -1291,6 +1291,19 @@ async function loadScores() {
   const rows = await fetch('/api/scorecard?days=30').then((r) => r.json()).catch(() => []);
   G.scores = Object.fromEntries((Array.isArray(rows) ? rows : []).map((r) => [r.model, r]));
 }
+// Model cards (models/cards/, served at /api/model-cards): limits, quirks, provider tips and QuorX's own results.
+async function loadCards() {
+  G.cards = await fetch('/api/model-cards').then((r) => r.json()).catch(() => ({}));
+}
+// A "card" tag beside the rating; the whole card shows on hover.
+function cardChip(id) {
+  const c = G.cards?.[id];
+  if (!c) return '';
+  const bullets = (xs) => xs.map((x) => `• ${x}`).join('\n');
+  const text = [`Model card · ${id}`, c.limits && `Limits: ${c.limits}`, c.quirks.length && `Quirks:\n${bullets(c.quirks)}`, c.tips.length && `Prompting tips (provider docs):\n${bullets(c.tips)}`,
+    c.bench && `QuorX results: ${c.bench}`, c.sources.length && `Sources: ${c.sources.join(' · ')}`, c.refreshed && `Catalogue facts as of ${c.refreshed}`].filter(Boolean).join('\n\n');
+  return `<span class="mp-card" title="${esc(text)}" aria-label="${esc(text)}">card</span>`;
+}
 function scoreBadge(id) {
   const s = G.scores?.[id];
   if (!s || s.checked < 3) return '';
@@ -1302,7 +1315,7 @@ function rowHTML(m, i) {
   const caps = [(m.in || []).includes('image') && m.kind !== 'image' ? ['👁', 'Sees images'] : null, m.tools ? ['🧰', 'Uses tools'] : null, m.reasoning ? ['🧠', 'Reasoning'] : null, (m.in || []).includes('audio') ? ['🎙', 'Hears audio'] : null, m.voices?.length ? ['🗣', `${m.voices.length} voices`] : null].filter(Boolean);
   return `<div class="mp-row ${m.id === PK.current ? 'cur' : ''}" role="option" data-i="${i}" data-id="${esc(m.id)}" aria-selected="false" title="${esc(m.desc || priceText(m))}">
     <span class="mp-ava" style="--h:${hue(p)}" title="${esc(PROVIDER_NAME(p))}">${esc(initials(PROVIDER_NAME(p)))}</span>
-    <span class="mp-main"><span class="mp-name">${recDot(m, PK.kind)} ${esc(cleanName(m))}${m.id === PK.current ? ' <span class="mp-tag cur">current</span>' : ''}</span><span class="mp-id">${esc(m.id)}</span></span>
+    <span class="mp-main"><span class="mp-name">${recDot(m, PK.kind)}${cardChip(m.id)} ${esc(cleanName(m))}${m.id === PK.current ? ' <span class="mp-tag cur">current</span>' : ''}</span><span class="mp-id">${esc(m.id)}</span></span>
     <span class="mp-caps">${caps.map(([i2, t]) => `<span title="${t}">${i2}</span>`).join('')}</span>
     <span class="mp-meta">${scoreBadge(m.id)}${m.ctx ? `<span title="Context window">${ctxText(m.ctx)}</span>` : ''}${m.created ? `<span title="${new Date(m.created * 1000).toLocaleDateString()}">${agoDate(m.created)}</span>` : ''}</span>
     <span class="mp-price" title="${esc(priceText(m))}">${priceCell(m)}</span>
@@ -5328,7 +5341,7 @@ async function boot() {
   G.cfg = await fetch('/api/config').then((r) => r.json());
   // Opened without the app link, every other /api call answers 401 and the wall above says what to do: stop here.
   if ((await fetch('/api/chats')).status === 401) return;
-  loadScores();
+  loadScores(); loadCards();
   const d = G.cfg.defaults;
   const saved = load();
   G.settings = { voters: d.voters, gate: d.gate, maxSteps: d.maxSteps, approval: d.approval, budget: d.budget, model: d.chatModel || d.setups.C.model, reasoning: 'off', ...(saved?.settings || {}) };
