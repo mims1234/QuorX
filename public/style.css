@@ -5678,3 +5678,42 @@ dialog.st-dialog[open] { position: fixed; inset: 0; margin: auto; display: flex;
 .hk-time { display: inline-flex; gap: 6px; align-items: center; }
 .hk-acts { display: flex; gap: 10px; align-items: center; margin-top: 8px; }
 .hk-state { flex: 1; font-size: 12px; color: var(--muted); }
+
+/* ⏰ Schedules */
+#schedules { width: min(860px, calc(100vw - 32px)); }
+#schedBody { display: grid; gap: 12px; padding: 4px 2px 8px; }
+.sc-head { display: flex; gap: 12px; align-items: flex-start; }
+.sc-head .pj-hint { flex: 1; }
+.sc-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.sc-row { display: flex; gap: 12px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.sc-row.paused { opacity: .65; }
+.sc-main { flex: 1; min-width: 0; display: grid; gap: 4px; }
+.sc-top { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.sc-name { font-size: 14px; }
+.sc-mode.yolo { color: var(--warn); }
+.sc-when { font-size: 12.5px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+.sc-prompt { font-size: 12.5px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sc-runs { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12px; color: var(--muted); align-items: center; }
+.sc-runs b { color: var(--text); font-weight: 600; }
+.sc-st { display: inline-block; font: 600 11px/1.6 var(--font-ui); padding: 0 6px; border-radius: 999px; border: 1px solid currentColor; margin-left: 4px; }
+.sc-st.ok { color: var(--ok); } .sc-st.bad { color: var(--bad); } .sc-st.wait { color: var(--warn); } .sc-st.run { color: var(--accent); } .sc-st.missed { color: var(--muted); }
+.sc-note { display: block; color: var(--dim); }
+.sc-dim { color: var(--dim); font-size: 12px; }
+.sc-acts { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; max-width: 260px; }
+.sc-form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.sc-form h3 { grid-column: 1 / -1; margin: 0; font-size: 14px; }
+.sc-f { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+.sc-f > span:first-child { font-weight: 600; color: var(--text); }
+.sc-wide { grid-column: 1 / -1; }
+.sc-f input:not([type=checkbox]), .sc-f select, .sc-f textarea { font: 13px var(--font-ui); color: var(--text); background: var(--surface-inset, var(--bg)); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+.sc-f textarea { resize: vertical; min-height: 70px; }
+.sc-when-box { display: grid; gap: 8px; }
+.sc-kind-body { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.sc-kind-body[hidden] { display: none; }
+.sc-days { display: inline-flex; flex-wrap: wrap; gap: 8px; }
+#scEvery { width: 80px; }
+.sc-model { justify-self: start; }
+.sc-form-acts { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; justify-content: flex-end; }
+.sc-err { flex: 1; color: var(--bad); font-size: 12.5px; }
+.u-sched { font-size: 11.5px; color: var(--muted); margin-bottom: 4px; }
+@media (max-width: 640px) { .sc-row { flex-direction: column; } .sc-acts { max-width: none; justify-content: flex-start; } .sc-form { grid-template-columns: 1fr; } .sc-head { flex-direction: column; } }

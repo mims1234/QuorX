@@ -300,6 +300,7 @@ const COMMANDS = [
   ['review', 'Review the code changes for bugs: the last reply, uncommitted changes, or the branch', (c, arg) => codeReview(c, arg)],
   ['usage', 'This chat\'s cost per model, as a card only you see', (c) => postUsage(c)],
   ['costs', 'What each project and chat has cost', () => openCosts()],
+  ['schedule', 'Schedules: chats QuorX starts on its own (every weekday at 9, in an hour…)', () => openSchedules('new')],
   ['skills', 'List the skills the agent can load', (c) => showSkills(c)],
   ['settings', 'Open settings', () => openSettings()],
   ['help', 'What @ and / can do', () => uiAlert('@  attach a file, another chat, or another project as context for your next message.\n/  run a command: ' + COMMANDS.map(([k]) => '/' + k).join(' '))],
@@ -340,7 +341,7 @@ function runCommand(c, line) {
 // ---------- Ctrl+K: one search for chats, commands, settings pages, projects and this project's files ----------
 // The same commands as / in the message box (those that need a chat only while one is open).
 const PAL = { items: [], active: 0, files: null };
-const PAL_GLOBAL = new Set(['new', 'costs', 'settings', 'help']);
+const PAL_GLOBAL = new Set(['new', 'costs', 'schedule', 'settings', 'help']);
 function paletteItems(q) {
   const c = focused(), words = q.toLowerCase().split(/\s+/).filter(Boolean);
   const hit = (text) => words.every((w) => text.toLowerCase().includes(w));
@@ -2700,7 +2701,7 @@ function renderMsg(c, m) {
   m.el = el;
   if (m.role === 'user') {
     el.className = 'msg user';
-    el.innerHTML = `<div class="utext"></div>${m.imgs?.length ? `<div class="u-imgs" data-views="${esc(JSON.stringify(m.imgViews || []))}">${m.imgs.map((u, k) => `<img src="${u}" alt="attached picture" data-k="${k}" title="Click to see it large">`).join('')}</div>` : ''}${m.docs?.length ? `<div class="u-docs">${m.docs.map((d) => `<button type="button" class="u-doc" data-doc="${esc(JSON.stringify(d))}" title="${esc(d.name)} · ${esc(docSize(d.size))} · click to preview">${DOC_ICON[d.kind] || '📄'} ${esc(d.name)}</button>`).join('')}</div>` : ''}${m.ctx?.length ? `<div class="ctx-used">${m.ctx.map((t) => `<span>📎 ${esc(t)}</span>`).join('')}</div>` : ''}${m.cmts?.length ? `<div class="ctx-used cmts-used">${m.cmts.map((x) => `<span title="${esc(x.selector)}">💬 ${esc(x.tag)} "${esc(clip(x.text || '', 40))}"${x.note ? `: ${esc(clip(x.note, 60))}` : ''}</span>`).join('')}</div>` : ''}${m.at ? timeTag(m.at) : ''}`;
+    el.innerHTML = `${m.scheduled ? `<div class="u-sched" title="${m.scheduled.missed ? 'QuorX was closed or the computer slept at the planned time, so this ran when it was back' : 'Started by a schedule'}">⏰ ${m.scheduled.missed ? 'Missed run, started late' : 'Scheduled'}: ${esc(m.scheduled.name)}</div>` : ''}<div class="utext"></div>${m.imgs?.length ? `<div class="u-imgs" data-views="${esc(JSON.stringify(m.imgViews || []))}">${m.imgs.map((u, k) => `<img src="${u}" alt="attached picture" data-k="${k}" title="Click to see it large">`).join('')}</div>` : ''}${m.docs?.length ? `<div class="u-docs">${m.docs.map((d) => `<button type="button" class="u-doc" data-doc="${esc(JSON.stringify(d))}" title="${esc(d.name)} · ${esc(docSize(d.size))} · click to preview">${DOC_ICON[d.kind] || '📄'} ${esc(d.name)}</button>`).join('')}</div>` : ''}${m.ctx?.length ? `<div class="ctx-used">${m.ctx.map((t) => `<span>📎 ${esc(t)}</span>`).join('')}</div>` : ''}${m.cmts?.length ? `<div class="ctx-used cmts-used">${m.cmts.map((x) => `<span title="${esc(x.selector)}">💬 ${esc(x.tag)} "${esc(clip(x.text || '', 40))}"${x.note ? `: ${esc(clip(x.note, 60))}` : ''}</span>`).join('')}</div>` : ''}${m.at ? timeTag(m.at) : ''}`;
     $('.utext', el).innerHTML = md(m.content);
     enhance($('.utext', el));
     el.insertAdjacentHTML('beforeend', '<div class="u-reading-slot"></div>');
@@ -4495,6 +4496,133 @@ function renderSpend() {
 // 💲 Costs: totals, then each project with its top chats; more chats load a page at a time, and the
 // search looks through every chat. Projects show 10 at a time.
 const COSTS = { sort: (() => { try { return localStorage.getItem('oh-cost-sort') || 'recent'; } catch { return 'recent'; } })(), q: '', projectsShown: 10, data: null };
+// ---------- ⏰ Schedules: chats QuorX starts on its own (server/schedules.js) ----------
+// A schedule starts a normal chat in its project with the saved prompt, model and mode. They run while QuorX runs
+// (the desktop app or its tray). The page polls for what they did: new chats, a chat waiting for you, one finished.
+const SCHED = { list: [], since: 0, edit: null, timer: 0, now: Date.now() };
+const SCHED_STATUS = { starting: ['Starting', 'run'], running: ['Running', 'run'], waiting: ['Waits for you', 'wait'], done: ['Finished', 'ok'], failed: ['Failed', 'bad'], stopped: ['Stopped', 'bad'], skipped: ['Skipped', 'wait'] };
+const WEEK = [[1, 'Mon'], [2, 'Tue'], [3, 'Wed'], [4, 'Thu'], [5, 'Fri'], [6, 'Sat'], [0, 'Sun']];
+const when2 = (t) => { if (!t) return '–'; const d = new Date(t), today = new Date(); const same = d.toDateString() === today.toDateString(); const tmr = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1).toDateString() === d.toDateString(); return `${same ? 'Today' : tmr ? 'Tomorrow' : d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })} ${d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`; };
+async function loadSchedules() {
+  const r = await fetch(`/api/schedules?since=${SCHED.since}`).then((x) => x.json()).catch(() => null);
+  if (!r || r.error) return null;
+  const first = !SCHED.since && !SCHED.seen;
+  SCHED.list = r.schedules; SCHED.now = r.now; SCHED.seen = true;
+  // Notices from before this page loaded are old news: only later ones notify.
+  if (!first) for (const n of r.notices) scheduleNoticed(n);
+  SCHED.since = Math.max(SCHED.since, r.noticeSeq || 0);
+  return r;
+}
+function scheduleNoticed(n) {
+  if (n.chatId) refreshSidebar();
+  if (n.kind !== 'done' && n.kind !== 'error') { const c = G.open.get(n.chatId); if (c && !c.running) reattachRuns(c); }
+  // The desktop app shows these itself (the harness sends them), so only a browser notifies here.
+  if (window.ohDesktop) return;
+  const pref = uiOf(G.settings).notify;
+  if (pref === 'off' || (pref === 'needs' && (n.kind === 'done' || n.kind === 'error')) || !('Notification' in window) || Notification.permission !== 'granted') return;
+  const title = { done: '✓ Scheduled chat finished', error: '✕ Scheduled chat stopped', approval: '⏸ Scheduled chat needs your approval', answer: '❓ Scheduled chat has a question', budget: '💲 Project budget reached' }[n.kind] || 'QuorX';
+  try { const x = new Notification(title, { body: `⏰ ${n.name}${n.text ? `\n${n.text}` : ''}`, icon: 'brand/quorx-192.png', tag: `oh-sched-${n.scheduleId}`, silent: n.kind === 'done' }); x.onclick = () => { window.focus(); if (n.chatId) showChat(n.chatId); x.close(); }; } catch { /* needs a service worker in some browsers */ }
+}
+// Every 30 s while any schedule exists (the list is short and the server answers from one small file).
+function pollSchedules() {
+  clearTimeout(SCHED.timer);
+  SCHED.timer = setTimeout(async () => { await loadSchedules(); if ($('#schedules')?.open) drawSchedules(); pollSchedules(); }, SCHED.list.length ? 30e3 : 120e3);
+}
+async function openSchedules(editId) {
+  const d = $('#schedules');
+  $('#schedBody').innerHTML = '<div class="cx-loading">Loading schedules…</div>';
+  if (!d.open) d.showModal();
+  await loadSchedules();
+  SCHED.edit = editId === 'new' ? blankSchedule() : null;
+  drawSchedules();
+}
+function blankSchedule() {
+  const c = focused(), pid = c?.projectId && G.projects.some((p) => p.id === c.projectId) ? c.projectId : (G.projects.find((p) => !p.archived && p.id !== 'scratch') || G.projects[0])?.id;
+  const at = new Date(Date.now() + 3600e3); at.setSeconds(0, 0);
+  return { name: '', projectId: pid, prompt: '', model: c?.agent.setup.model || G.settings.model, approval: 'strict', when: { kind: 'daily', time: '09:00', days: [1, 2, 3, 4, 5] }, onceAt: at.getTime(), everyN: 2, everyUnit: 'hours' };
+}
+function drawSchedules() {
+  const body = $('#schedBody');
+  const proj = (id) => G.projects.find((p) => p.id === id)?.name || id;
+  const rows = SCHED.list.map((s) => {
+    const st = s.lastRun ? SCHED_STATUS[s.lastRun.status] || [s.lastRun.status, ''] : null;
+    return `<li class="sc-row ${s.paused ? 'paused' : ''}" data-id="${esc(s.id)}">
+      <div class="sc-main"><div class="sc-top"><b class="sc-name">${esc(s.name)}</b><span class="tag sc-proj">📁 ${esc(proj(s.projectId))}</span><span class="tag sc-mode ${s.approval}" title="${s.approval === 'yolo' ? 'YOLO: the deciders answer for you, nothing waits' : 'Strict: approvals and questions wait for you'}">${s.approval === 'yolo' ? '⚡ YOLO' : '🔒 Strict'}</span></div>
+        <div class="sc-when">${esc(s.whenText)} · ${recDot(s.model, 'chat')} ${esc(short(s.model))}</div>
+        <div class="sc-prompt" title="${esc(s.prompt)}">${esc(clip(s.prompt.replace(/\s+/g, ' '), 140))}</div>
+        <div class="sc-runs"><span>Next: <b>${s.paused ? 'paused' : s.nextAt ? esc(when2(s.nextAt)) : 'none'}</b></span>${s.lastRun ? `<span>Last: ${esc(when2(s.lastRun.at))} <span class="sc-st ${st[1]}">${esc(st[0])}</span>${s.lastRun.missed ? '<span class="sc-st missed" title="QuorX was closed or the computer slept at the planned time, so it ran when QuorX was back">missed, ran late</span>' : ''}${s.lastRun.cost ? ` <span class="cost">${money(s.lastRun.cost, 4)}</span>` : ''}${s.lastRun.chatId ? ` <button type="button" class="mp-link sc-open" data-chat="${esc(s.lastRun.chatId)}">Open chat</button>` : ''}${s.lastRun.note ? `<small class="sc-note">${esc(s.lastRun.note)}</small>` : ''}</span>` : '<span class="sc-dim">Not run yet</span>'}</div></div>
+      <div class="sc-acts"><button type="button" class="kx-btn sm sc-now" title="Start this chat now (the schedule stays as it is)">▶ Run now</button><button type="button" class="kx-btn sm sc-pause">${s.paused ? 'Resume' : 'Pause'}</button><button type="button" class="kx-btn sm sc-edit">Edit</button><button type="button" class="kx-btn sm sc-del" title="Delete this schedule (its chats stay)">🗑</button></div></li>`;
+  }).join('');
+  body.innerHTML = `${SCHED.edit ? scheduleForm(SCHED.edit) : `<div class="sc-head"><p class="pj-hint">Schedules start a normal chat on their own, with the saved prompt, model and mode. They run while QuorX is open or in the tray; a run missed while the computer slept runs once when it wakes. Budgets and caps apply as in any chat.</p><button type="button" class="kx-btn primary sc-new">+ New schedule</button></div>`}
+    ${SCHED.list.length ? `<ol class="sc-list">${rows}</ol>` : SCHED.edit ? '' : '<div class="cx-empty">No schedules yet. For example: every weekday at 9, “summarise yesterday\'s commits”, or in an hour, “remind me to check the deploy”.</div>'}`;
+  $('.sc-new', body)?.addEventListener('click', () => { SCHED.edit = blankSchedule(); drawSchedules(); $('#scName')?.focus(); });
+  for (const row of body.querySelectorAll('.sc-row')) {
+    const s = SCHED.list.find((x) => x.id === row.dataset.id);
+    $('.sc-pause', row).onclick = async () => { const r = await postJ(`/api/schedules/${s.id}`, { paused: !s.paused }, 'PUT'); if (r?.error) return uiAlert(r.error); await loadSchedules(); drawSchedules(); };
+    $('.sc-del', row).onclick = async () => { if (!(await uiConfirm(`Delete the schedule “${s.name}”? Chats it already started stay.`))) return; await postJ(`/api/schedules/${s.id}`, null, 'DELETE'); await loadSchedules(); drawSchedules(); };
+    $('.sc-edit', row).onclick = () => { const at = s.when.kind === 'once' ? s.when.at : Date.now() + 3600e3; SCHED.edit = { ...s, onceAt: at, everyN: s.when.kind === 'every' ? (s.when.minutes % 60 ? s.when.minutes : s.when.minutes / 60) : 2, everyUnit: s.when.kind === 'every' && s.when.minutes % 60 ? 'minutes' : 'hours' }; drawSchedules(); };
+    $('.sc-now', row).onclick = async (e) => { e.target.disabled = true; const r = await postJ(`/api/schedules/${s.id}/run`, {}); if (r?.error) { e.target.disabled = false; return uiAlert(`It did not start: ${r.error}`); } await loadSchedules(); drawSchedules(); refreshSidebar(); };
+    const open = $('.sc-open', row); if (open) open.onclick = () => { $('#schedules').close(); showChat(open.dataset.chat); if (isPhone()) setMView('chat'); };
+  }
+  if (SCHED.edit) wireScheduleForm(body);
+  pollSchedules();
+}
+const localInput = (t) => { const d = new Date(t); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); };
+function scheduleForm(e) {
+  const w = e.when, kind = w.kind, days = kind === 'daily' ? w.days : [1, 2, 3, 4, 5];
+  const projects = G.projects.filter((p) => !p.archived || p.id === e.projectId);
+  return `<form class="sc-form" id="scForm" autocomplete="off">
+    <h3>${e.id ? 'Edit schedule' : 'New schedule'}</h3>
+    <label class="sc-f"><span>Name</span><input id="scName" maxlength="80" placeholder="Morning summary" value="${esc(e.name || '')}"></label>
+    <label class="sc-f"><span>Project</span><select id="scProject">${projects.map((p) => `<option value="${esc(p.id)}" ${p.id === e.projectId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>
+    <label class="sc-f sc-wide"><span>Prompt</span><textarea id="scPrompt" rows="4" placeholder="What the chat should do, as you would type it">${esc(e.prompt || '')}</textarea></label>
+    <div class="sc-f sc-wide"><span>When</span><div class="sc-when-box">
+      <div class="mp-sorts sc-kind" role="radiogroup" aria-label="How often">${[['once', 'Once'], ['daily', 'Daily'], ['every', 'Repeat every']].map(([k, l]) => `<button type="button" class="mp-sort ${kind === k ? 'on' : ''}" data-kind="${k}" role="radio" aria-checked="${kind === k}">${l}</button>`).join('')}</div>
+      <div class="sc-kind-body" data-for="once" ${kind === 'once' ? '' : 'hidden'}><input type="datetime-local" id="scAt" value="${localInput(kind === 'once' ? w.at : e.onceAt)}"><button type="button" class="kx-btn sm sc-quick" data-in="60">In 1 hour</button><button type="button" class="kx-btn sm sc-quick" data-in="tomorrow">Tomorrow 9:00</button></div>
+      <div class="sc-kind-body" data-for="daily" ${kind === 'daily' ? '' : 'hidden'}><input type="time" id="scTime" value="${esc(kind === 'daily' ? w.time : '09:00')}"><span class="sc-days">${WEEK.map(([d, l]) => `<label class="sq-check"><input type="checkbox" class="sc-day" value="${d}" ${!days.length || days.includes(d) ? 'checked' : ''}><span>${l}</span></label>`).join('')}</span><button type="button" class="kx-btn sm sc-preset" data-days="1,2,3,4,5">Weekdays</button><button type="button" class="kx-btn sm sc-preset" data-days="0,1,2,3,4,5,6">Every day</button></div>
+      <div class="sc-kind-body" data-for="every" ${kind === 'every' ? '' : 'hidden'}><input type="number" id="scEvery" min="1" max="10080" value="${esc(String(e.everyN))}"><select id="scUnit"><option value="minutes" ${e.everyUnit === 'minutes' ? 'selected' : ''}>minutes</option><option value="hours" ${e.everyUnit === 'hours' ? 'selected' : ''}>hours</option></select><small class="sc-dim">at least 15 minutes</small></div>
+    </div></div>
+    <div class="sc-f"><span>Model</span><button type="button" class="st-chip sc-model">${recDot(e.model, 'chat')} ${esc(short(e.model))} <small>${esc(shortPrice(e.model))}</small></button></div>
+    <div class="sc-f"><span>Mode</span><div class="mp-sorts sc-mode-pick" role="radiogroup" aria-label="Permission mode">${[['strict', '🔒 Strict'], ['yolo', '⚡ YOLO']].map(([k, l]) => `<button type="button" class="mp-sort ${e.approval === k ? 'on' : ''}" data-mode="${k}" role="radio" aria-checked="${e.approval === k}">${l}</button>`).join('')}</div><small class="sc-dim sc-mode-note">${e.approval === 'yolo' ? 'Nothing waits: the deciders answer the agent\'s questions and approve commands for you.' : 'Approvals and questions wait for you, with a notification.'}</small></div>
+    <div class="sc-form-acts"><span class="sc-err" role="alert"></span><button type="button" class="kx-btn sc-cancel">Cancel</button><button type="submit" class="kx-btn primary">${e.id ? 'Save' : 'Create schedule'}</button></div>
+  </form>`;
+}
+function wireScheduleForm(body) {
+  const e = SCHED.edit, f = $('#scForm', body);
+  const keep = () => { e.name = $('#scName', f).value; e.projectId = $('#scProject', f).value; e.prompt = $('#scPrompt', f).value; };
+  for (const b of f.querySelectorAll('.sc-kind button')) b.onclick = () => {
+    keep();
+    const k = b.dataset.kind;
+    e.when = k === 'once' ? { kind: 'once', at: e.onceAt } : k === 'daily' ? { kind: 'daily', time: '09:00', days: [1, 2, 3, 4, 5] } : { kind: 'every', minutes: 120 };
+    drawSchedules();
+  };
+  for (const b of f.querySelectorAll('.sc-mode-pick button')) b.onclick = () => { keep(); e.approval = b.dataset.mode; drawSchedules(); };
+  for (const b of f.querySelectorAll('.sc-quick')) b.onclick = () => {
+    const t = new Date(); if (b.dataset.in === 'tomorrow') { t.setDate(t.getDate() + 1); t.setHours(9, 0, 0, 0); } else { t.setMinutes(t.getMinutes() + Number(b.dataset.in)); t.setSeconds(0, 0); }
+    $('#scAt', f).value = localInput(t.getTime());
+  };
+  for (const b of f.querySelectorAll('.sc-preset')) b.onclick = () => { const on = b.dataset.days.split(','); for (const c of f.querySelectorAll('.sc-day')) c.checked = on.includes(c.value); };
+  $('.sc-model', f).onclick = async () => { keep(); const id = await pickModel('chat', e.model, { context: 'Model for this schedule' }); if (id) { e.model = id; drawSchedules(); } };
+  $('.sc-cancel', f).onclick = () => { SCHED.edit = null; drawSchedules(); };
+  f.onsubmit = async (ev) => {
+    ev.preventDefault(); keep();
+    const err = $('.sc-err', f);
+    const k = e.when.kind;
+    let when;
+    if (k === 'once') when = { kind: 'once', at: new Date($('#scAt', f).value).getTime() };
+    else if (k === 'daily') when = { kind: 'daily', time: $('#scTime', f).value, days: [...f.querySelectorAll('.sc-day:checked')].map((c) => Number(c.value)) };
+    else when = { kind: 'every', minutes: Math.round(Number($('#scEvery', f).value) * ($('#scUnit', f).value === 'hours' ? 60 : 1)) };
+    if (k === 'daily' && !when.days.length) { err.textContent = 'Pick at least one day.'; return; }
+    // What a new chat in that project would get: your settings now, with this schedule's mode.
+    const c = blankChat(e.projectId);
+    c.approval = e.approval;
+    const payload = { name: e.name, projectId: e.projectId, prompt: e.prompt, model: e.model, reasoning: c.agent.setup.reasoning, approval: e.approval, when, tools: c.tools,
+      settings: { ...G.settings, approval: e.approval, tools: chatTools(c), ...qualitySettings(c) } };
+    const r = await postJ(e.id ? `/api/schedules/${e.id}` : '/api/schedules', payload, e.id ? 'PUT' : 'POST');
+    if (!r || r.error) { err.textContent = r?.error ? `${r.error[0].toUpperCase()}${r.error.slice(1)}.` : 'Not saved.'; return; }
+    SCHED.edit = null; await loadSchedules(); drawSchedules();
+  };
+}
 async function openCosts() {
   COSTS.q = ''; COSTS.projectsShown = 10;
   $('#costBody').innerHTML = '<div class="cx-loading">Loading costs…</div>';
@@ -5515,6 +5643,9 @@ async function boot() {
   $('#stSearch').oninput = () => searchSettings($('#stSearch').value);
   $('#newBtn').onclick = () => newChat();
   $('#costsBtn').onclick = openCosts;
+  $('#schedBtn').onclick = () => openSchedules();
+  $('#schedClose').onclick = () => $('#schedules').close();
+  loadSchedules().then(pollSchedules);
   $('#costClose').onclick = () => $('#costs').close();
   $('#themeBtn').onclick = () => { const i = THEMES.findIndex((t) => t[0] === (G.theme || null)); G.theme = THEMES[(i + 1) % THEMES.length][0]; applyTheme(); savePrefs(); };
   wirePicker();

@@ -16,6 +16,10 @@ import { loadCheckpoint, dropCheckpoint, ledger } from '../server/runs.js';
 import { setBudget, projectSpend, budgetState, live as liveRuns } from '../server/budget.js';
 import { reviewCode, collectChanges, parseGitDiff, checkFindings, pickReviewer } from '../server/codereview.js';
 import { saveHooks, loadHooks, matchHooks, fileMatches, commandMatches, hookLine, cleanHook, safeHookFile } from '../server/hooks.js';
+import { nextAfter, cleanWhen, cleanSchedule, describeWhen, createScheduler, saveSchedules as saveScheds, loadSchedules as loadScheds, GRACE_MS } from '../server/schedules.js';
+import { startScheduledChat } from '../server/schedrun.js';
+import { startRun, follow, getRun, readLog } from '../server/runs.js';
+import { getChat, saveChat as storeChat, listProjects } from '../server/store.js';
 import { matchPlan, usePlan } from '../server/mediaplan.js';
 
 let n = 0;
@@ -1728,6 +1732,148 @@ test('hook commands go through the command policy: a blocked one never runs', as
   assert.equal(h.skipped, true);
   assert.equal(of(events, 'command_blocked').length, 1);
   assert.doesNotMatch(toolResults(bodies[1])[0], /hook/);
+});
+
+// ---------- scheduled tasks (server/schedules.js, server/schedrun.js), on a fake clock ----------
+
+const at = (y, mo, d, h = 0, mi = 0) => new Date(y, mo - 1, d, h, mi).getTime(); // local time; 2026-10-19 is a Monday
+
+test('schedules: the next run of a daily, weekday, one-off and repeating schedule', () => {
+  const weekdays = cleanWhen({ kind: 'daily', time: '9:00', days: [1, 2, 3, 4, 5] });
+  assert.equal(weekdays.time, '09:00');
+  assert.equal(nextAfter(weekdays, at(2026, 10, 19, 8, 59)), at(2026, 10, 19, 9, 0));   // Monday, before 9
+  assert.equal(nextAfter(weekdays, at(2026, 10, 19, 9, 0)), at(2026, 10, 20, 9, 0));    // exactly 9: the next one
+  assert.equal(nextAfter(weekdays, at(2026, 10, 23, 10, 0)), at(2026, 10, 26, 9, 0));   // Friday after 9: Monday
+  assert.equal(nextAfter(cleanWhen({ kind: 'daily', time: '18:30', days: [0, 1, 2, 3, 4, 5, 6] }), at(2026, 10, 24, 19)), at(2026, 10, 25, 18, 30));
+  assert.equal(nextAfter({ kind: 'once', at: at(2026, 10, 21, 15) }, at(2026, 10, 21, 14)), at(2026, 10, 21, 15));
+  assert.equal(nextAfter({ kind: 'once', at: at(2026, 10, 21, 15) }, at(2026, 10, 21, 15)), null);
+  const every = cleanWhen({ kind: 'every', minutes: 120 });
+  assert.equal(nextAfter(every, at(2026, 10, 21, 13, 10), at(2026, 10, 21, 12)), at(2026, 10, 21, 14));
+  assert.throws(() => cleanWhen({ kind: 'every', minutes: 5 }), /15 minutes/);
+  assert.throws(() => cleanWhen({ kind: 'daily', time: '25:00' }), /time like/);
+  assert.equal(describeWhen(weekdays), 'weekdays at 09:00');
+  assert.equal(describeWhen(every), 'every 2 hours');
+  // YOLO only when chosen for the schedule, whatever the settings say.
+  const base = { prompt: 'p', projectId: 'p1', model: 'test/model', when: { kind: 'once', at: at(2026, 10, 22) } };
+  assert.equal(cleanSchedule({ ...base, settings: { approval: 'yolo' } }, at(2026, 10, 21)).approval, 'strict');
+  assert.equal(cleanSchedule({ ...base, approval: 'yolo' }, at(2026, 10, 21)).approval, 'yolo');
+});
+
+test('the scheduler runs what is due, runs a missed run once on wake (labelled), skips paused ones and ends one-offs', async () => {
+  let now = at(2026, 10, 19, 8, 0), store = [];
+  const ran = [];
+  const sched = createScheduler({ now: () => now, load: () => store, save: (l) => { store = l; }, lease: false, run: async (s, info) => { ran.push({ id: s.id, ...info, at: now }); return { chatId: `c-${ran.length}`, runId: `r-${ran.length}` }; } });
+  store = [
+    cleanSchedule({ prompt: 'standup', projectId: 'p', model: 'test/model', name: 'Standup', when: { kind: 'daily', time: '09:00', days: [1, 2, 3, 4, 5] } }, now),
+    cleanSchedule({ prompt: 'remind me', projectId: 'p', model: 'test/model', name: 'Remind', when: { kind: 'once', at: at(2026, 10, 19, 9, 30) } }, now),
+    cleanSchedule({ prompt: 'paused', projectId: 'p', model: 'test/model', name: 'Off', paused: true, when: { kind: 'daily', time: '09:00', days: [] } }, now),
+  ];
+  assert.equal(store[2].nextAt, null);
+  now = at(2026, 10, 19, 8, 59); await sched.tick();
+  assert.equal(ran.length, 0);
+  now = at(2026, 10, 19, 9, 0) + 20e3; await sched.tick();               // on time (20 s late is within the grace)
+  assert.deepEqual(ran.map((r) => [r.id, r.missed]), [[store[0].id, false]]);
+  assert.equal(store[0].lastRun.chatId, 'c-1');
+  assert.equal(store[0].nextAt, at(2026, 10, 20, 9, 0));
+  now = at(2026, 10, 19, 9, 31); await sched.tick();                     // the one-off
+  assert.equal(ran.at(-1).id, store[1].id);
+  assert.equal(store[1].nextAt, null);
+  // Asleep from Monday evening to Wednesday 14:00: Tuesday's and Wednesday's runs were missed; one run, labelled.
+  now = at(2026, 10, 21, 14, 0); await sched.tick();
+  const woke = ran.slice(2);
+  assert.equal(woke.length, 1);
+  assert.equal(woke[0].missed, true);
+  assert.equal(woke[0].due, at(2026, 10, 20, 9, 0));
+  assert.ok(woke[0].late > GRACE_MS);
+  assert.equal(store[0].lastRun.missed, true);
+  assert.equal(store[0].nextAt, at(2026, 10, 22, 9, 0));
+  now += 60e3; await sched.tick();                                       // nothing more until Thursday
+  assert.equal(ran.length, 3);
+  // A run that fails to start is recorded, and the schedule carries on.
+  const bad = createScheduler({ now: () => at(2026, 10, 22, 9, 1), load: () => store, save: (l) => { store = l; }, lease: false, run: async () => { throw new Error('its project no longer exists'); } });
+  await bad.tick();
+  assert.equal(store[0].lastRun.status, 'failed');
+  assert.match(store[0].lastRun.note, /no longer exists/);
+  assert.equal(store[0].nextAt, at(2026, 10, 23, 9, 0));
+});
+
+// A scheduled chat on the scripted model: the real run store, chat store and agent loop.
+function schedDeps(script, { onNotify } = {}) {
+  let i = 0;
+  const chatStream = async (body) => script(body, i++);
+  return {
+    now: Date.now, listProjects, budgetState, saveChat: storeChat, getChat, startRun, follow,
+    events: (id) => getRun(id)?.events || readLog(id),
+    runAgent: (body, emit, signal) => runAgent(body, emit, signal, { chatStream, catalogue: [{ id: 'test/model', maxOut: 4000 }], quiet: true }),
+    notify: (kind, info) => onNotify?.(kind, info),
+  };
+}
+const ended = (kinds = ['done', 'error']) => { let res; const p = new Promise((r) => { res = r; }); return { p, on: (k, info) => { if (kinds.includes(k)) res({ k, info }); } }; };
+
+test('a scheduled chat runs like a normal chat and is saved complete, with no page open', async () => {
+  const dir = tempDir('quorx-sched-'), pid = `sp${Date.now().toString(36)}`;
+  saveProject({ id: pid, name: 'sched', path: dir });
+  try {
+    const s = cleanSchedule({ name: 'Notes', prompt: 'write notes.txt', projectId: pid, model: 'test/model', when: { kind: 'daily', time: '09:00', days: [] }, settings: { mediaEnabled: false, tools: { browser: { on: false } } } });
+    saveScheds([s]);
+    const end = ended(), notes = [];
+    const r = startScheduledChat(s, { missed: true, due: 123 }, schedDeps((b, k) => [reply('', [['write_file', { path: 'notes.txt', content: 'hi' }]]), reply('Wrote notes.txt.')][k], { onNotify: (k, info) => { notes.push(k); end.on(k, info); } }));
+    // The scheduler records the run it started; noteRun then follows it to the end.
+    const list = loadScheds(); list[0].lastRun = { at: Date.now(), runId: r.runId, chatId: r.chatId, status: 'running', missed: true }; saveScheds(list);
+    assert.equal(r.status, 'running');
+    const fin = await end.p;
+    assert.equal(fin.k, 'done');
+    assert.deepEqual(notes, ['done']);
+    const doc = getChat(r.chatId);
+    assert.equal(doc.title, '⏰ Notes');
+    assert.equal(doc.approval, 'strict');
+    assert.deepEqual(doc.agent.messages[0].scheduled, { id: s.id, name: 'Notes', missed: true, due: 123 });
+    const m = doc.agent.messages[1];
+    assert.equal(m.content, 'Wrote notes.txt.');
+    assert.equal(m.runActive, false);
+    assert.deepEqual(m.stats.changed, ['notes.txt']);
+    assert.ok(m.trace.some((e) => e.t === 'tool' && e.name === 'write_file'));
+    assert.ok(!m.trace.some((e) => e.t === 'token'));
+    assert.equal(fs.readFileSync(path.join(dir, 'notes.txt'), 'utf8'), 'hi');
+    assert.equal(loadScheds()[0].lastRun.status, 'done');
+  } finally { forgetProject(pid); saveScheds([]); }
+});
+
+test('a scheduled chat in Strict waits for your approval (and says so), even if the saved settings say YOLO', async () => {
+  const dir = tempDir('quorx-sched-'), pid = `sq${Date.now().toString(36)}`;
+  saveProject({ id: pid, name: 'sched', path: dir });
+  fs.writeFileSync(path.join(dir, 'build.js'), "require('fs').writeFileSync('out.txt', 'built')");
+  try {
+    const s = cleanSchedule({ name: 'Build', prompt: 'build it', projectId: pid, model: 'test/model', when: { kind: 'daily', time: '09:00', days: [] }, settings: { approval: 'yolo', mediaEnabled: false, tools: { browser: { on: false } } } });
+    saveScheds([s]);
+    const waiting = ended(['approval']), end = ended();
+    const r = startScheduledChat(s, {}, schedDeps((b, k) => [reply('', [['shell', { command: 'node build.js' }]]), reply('Built.')][k], { onNotify: (k, info) => { waiting.on(k, info); end.on(k, info); } }));
+    const list = loadScheds(); list[0].lastRun = { at: Date.now(), runId: r.runId, chatId: r.chatId, status: 'running' }; saveScheds(list);
+    const w = await waiting.p;
+    assert.equal(w.info.chatId, r.chatId);
+    assert.equal(loadScheds()[0].lastRun.status, 'waiting');
+    const card = getRun(r.runId).events.find((e) => e.t === 'approval' && e.mode === 'strict');
+    assert.ok(answerApproval(r.runId, card.id, { approve: true }));
+    assert.equal((await end.p).k, 'done');
+    assert.equal(fs.readFileSync(path.join(dir, 'out.txt'), 'utf8'), 'built');
+    assert.equal(loadScheds()[0].lastRun.status, 'done');
+  } finally { forgetProject(pid); saveScheds([]); }
+});
+
+test('a scheduled chat does not start when its project has reached its budget', () => {
+  const dir = tempDir('quorx-sched-'), pid = `sb${Date.now().toString(36)}`;
+  saveProject({ id: pid, name: 'sched', path: dir });
+  setProjectBudget(pid, 0.5);
+  ledger.set(`seed-${pid}`, { project: pid, cost: 0.6 });
+  try {
+    const notes = [];
+    const s = cleanSchedule({ name: 'Costly', prompt: 'x', projectId: pid, model: 'test/model', when: { kind: 'daily', time: '09:00', days: [] } });
+    const r = startScheduledChat(s, {}, schedDeps(() => { throw new Error('the model must not be called'); }, { onNotify: (k) => notes.push(k) }));
+    assert.equal(r.status, 'skipped');
+    assert.match(r.note, /budget/);
+    assert.deepEqual(notes, ['budget']);
+    assert.throws(() => startScheduledChat({ ...s, projectId: 'nope' }, {}, schedDeps(() => reply('x'))), /no longer exists/);
+  } finally { forgetProject(pid); ledger.delete(`seed-${pid}`); }
 });
 
 test('cache-read and cache-write tokens from the usage go into the reply stats, per model', async () => {

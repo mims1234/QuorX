@@ -390,7 +390,9 @@ handle('focusWindow', () => { showWindow(); return true; }); // a clicked notifi
 // Notifications from the app itself (not the page's own), so they carry QuorX's name and logo. Clicking one brings
 // the window back and opens that chat. Each is kept until it closes: one collected early loses its click.
 const notes = new Set();
-handle('notify', (n = {}) => {
+handle('notify', (n = {}) => showNote(n));
+// Also sent by the harness itself over the link (scheduled chats), so it works while the window is hidden in the tray.
+function showNote(n = {}) {
   if (!Notification.isSupported()) return false;
   const x = new Notification({ title: String(n.title || 'QuorX').slice(0, 90), body: String(n.body || '').slice(0, 240), icon: iconImage(256), silent: !!n.silent });
   notes.add(x);
@@ -399,7 +401,7 @@ handle('notify', (n = {}) => {
   x.on('close', drop); x.on('failed', drop);
   x.show();
   return true;
-});
+}
 // Windows shows a notification under the name and icon registered for the app's ID. The installer's shortcut
 // registers them; run from the repo there is none, and Windows showed "Electron". This registers both for this user
 // (HKCU, the app's own ID only), once per start.
@@ -439,6 +441,7 @@ function applyEmu(t) {
 }
 const COVER = `data:text/html,${encodeURIComponent('<!doctype html><meta charset="utf-8"><body style="margin:0;height:100vh;background:transparent;cursor:not-allowed;font:600 12px system-ui;user-select:none"><div style="position:fixed;left:50%;bottom:12px;transform:translateX(-50%);padding:6px 12px;border-radius:8px;background:rgba(167,139,250,.18);border:1px solid rgba(167,139,250,.6);color:#c4b5fd;backdrop-filter:blur(6px);white-space:nowrap">🤖 The agent is using this page · watch only until its reply ends</div></body>')}`;
 const COMMANDS = {
+  async 'app.notify'(n) { return showNote(n); },
   async 'tab.create'({ chatId }) {
     const sid = `agent-${String(chatId).replace(/[^\w-]/g, '').slice(0, 40)}`;
     if (tabs.has(sid)) closeTab(sid);

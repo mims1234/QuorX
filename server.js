@@ -16,6 +16,8 @@ import { startSignIn, signInStatus, cancelSignIn, finishByCallback, finishWithCo
 import { runAgent, answerApproval, answerQuestion, answerBudget, raiseCap, setRunApproval, steerRun, setRunReading, holdCard, DEFAULTS, MEDIA, briefFor, briefForChat, REVIEW_MODEL, REVIEW_ALT, REVIEW_STRONG, REVIEW_STRONG_ALT } from './server/agent.js';
 import { reviewCode, pickReviewer } from './server/codereview.js';
 import { loadHooks, saveHooks, HOOK_EVENTS } from './server/hooks.js';
+import { createScheduler, loadSchedules, saveSchedules, cleanSchedule, describeWhen, MAX_SCHEDULES } from './server/schedules.js';
+import { startScheduledChat } from './server/schedrun.js';
 import { CHECKS } from './server/harness-checks.js';
 import { startRun, getRun, stopRun, follow, runStatus, activeRuns, validRunId, scorecard, readLog, recordRun } from './server/runs.js';
 import { setBudget, budgetState } from './server/budget.js';
@@ -33,7 +35,7 @@ import { safetySettings } from './server/safety.js';
 import { readAudit } from './server/audit.js';
 import { pickFolder } from './server/pickfolder.js';
 import { userBrowse } from './server/userbrowser.js';
-import { openLink, linkReply } from './server/desktop.js';
+import { openLink, linkReply, desktopReady, desktopCall } from './server/desktop.js';
 import { saveUpload, processDoc, listDocs, removeDoc, DOC_DEFAULTS, officeText } from './server/docs.js';
 import { embeddingModels } from './server/openrouter.js';
 import { listSkills, listTemplates } from './server/skills.js';
@@ -420,6 +422,44 @@ const server = http.createServer(async (req, res) => {
       if (b.scope === 'project' && !validId(b.projectId)) return json(res, 400, { error: 'bad project id' });
       if (!['project', 'everywhere'].includes(b.scope)) return json(res, 400, { error: 'scope must be project or everywhere' });
       try { return json(res, 200, { ok: true, rules: saveRules(b.scope, b.rules, b.scope === 'project' ? workspaceDir(b.projectId) : null) }); } catch (e) { return json(res, 200, { error: e.message }); }
+    }
+    // ---- scheduled tasks: list, add, change (pause, resume), remove, run now; and notices for the page ----
+    if (url.pathname === '/api/schedules' && req.method === 'GET') {
+      const since = Number(url.searchParams.get('since')) || 0;
+      return json(res, 200, { schedules: loadSchedules().map((s) => ({ ...s, settings: undefined, whenText: describeWhen(s.when) })), notices: notices.filter((n) => n.id > since), noticeSeq, now: Date.now() });
+    }
+    if (url.pathname === '/api/schedules' && req.method === 'POST') {
+      const b = JSON.parse(await readBody(req, 5e5) || '{}');
+      try {
+        if (!listProjects().some((p) => p.id === b.projectId)) throw new Error('unknown project');
+        const list = loadSchedules();
+        if (list.length >= MAX_SCHEDULES) throw new Error(`at most ${MAX_SCHEDULES} schedules`);
+        const s = cleanSchedule(b);
+        if (s.nextAt == null && !s.paused) throw new Error('that time has already passed');
+        saveSchedules([...list, s]);
+        return json(res, 200, { ok: true, schedule: { ...s, settings: undefined, whenText: describeWhen(s.when) } });
+      } catch (e) { return json(res, 200, { error: e.message }); }
+    }
+    const scm = url.pathname.match(/^\/api\/schedules\/([\w-]{1,40})(\/run)?$/);
+    if (scm) {
+      const list = loadSchedules(), i = list.findIndex((s) => s.id === scm[1]);
+      if (i < 0) return json(res, 404, { error: 'no such schedule' });
+      if (req.method === 'DELETE' && !scm[2]) { list.splice(i, 1); saveSchedules(list); return json(res, 200, { ok: true }); }
+      if (req.method === 'PUT' && !scm[2]) {
+        const b = JSON.parse(await readBody(req, 5e5) || '{}');
+        try { list[i] = cleanSchedule(b, Date.now(), list[i]); saveSchedules(list); return json(res, 200, { ok: true, schedule: { ...list[i], settings: undefined, whenText: describeWhen(list[i].when) } }); }
+        catch (e) { return json(res, 200, { error: e.message }); }
+      }
+      if (req.method === 'POST' && scm[2]) {
+        const s = list[i];
+        try {
+          const r = startScheduledChat(s, { missed: false, due: Date.now() }, scheduleDeps);
+          s.lastRun = { at: Date.now(), due: Date.now(), missed: false, now: true, chatId: r.chatId || null, runId: r.runId || null, status: r.status, ...(r.note ? { note: r.note } : {}) };
+          s.runs = (s.runs || 0) + 1;
+          saveSchedules(list);
+          return json(res, 200, { ok: true, ...r });
+        } catch (e) { return json(res, 200, { error: e.message }); }
+      }
     }
     // ---- hooks: the user's commands around the agent's tool calls, per project, kept in the data folder ----
     const hkm = url.pathname.match(/^\/api\/projects\/([a-z0-9-]+)\/hooks$/i);
@@ -819,6 +859,22 @@ listener.once('listening', () => {
   listenPages(runtime.port && runtime.port + 1000 <= 65535 ? runtime.port + 1000 : 0, 8);
 });
 listen(PORT);
+
+// ---- scheduled tasks (server/schedules.js): checked every 30 s while QuorX runs (the desktop app or its tray) ----
+// Each notice is kept for the page to show; the desktop app gets it straight away as a notification of its own.
+const notices = [];
+let noticeSeq = 0;
+function scheduleNotice(kind, { schedule, chatId = null, text = '', cost = 0 }) {
+  const n = { id: ++noticeSeq, at: Date.now(), kind, scheduleId: schedule.id, name: schedule.name, projectId: schedule.projectId, chatId, text: String(text || '').replace(/\s+/g, ' ').slice(0, 200), cost };
+  notices.push(n); if (notices.length > 50) notices.shift();
+  if (desktopReady()) {
+    const title = { done: '✓ Scheduled chat finished', error: '✕ Scheduled chat stopped', approval: '⏸ Scheduled chat needs your approval', answer: '❓ Scheduled chat has a question', budget: '💲 Project budget reached' }[kind] || 'QuorX';
+    desktopCall('app.notify', { title, body: `⏰ ${schedule.name}${n.text ? `\n${n.text}` : ''}`, chatId, silent: kind === 'done' }, 5000).catch(() => {});
+  }
+}
+const scheduleDeps = { now: Date.now, listProjects, budgetState, saveChat, getChat, startRun, follow, runAgent, events: (id) => getRun(id)?.events || readLog(id), notify: scheduleNotice };
+const scheduler = createScheduler({ run: (s, info) => startScheduledChat(s, info, scheduleDeps) });
+if (!process.env.OH_NO_SCHEDULES) scheduler.start();
 
 // Pages the agent made (project files, artifacts) also load from a second address on this computer. There they have
 // an origin of their own, so localStorage, IndexedDB, cookies and module scripts work as on any site. On the app's
