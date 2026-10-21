@@ -9,10 +9,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { loadCards, cardText, limitsLine, cardFile, CARDS_DIR, CARD_CHARS } from '../server/modelcards.js';
 import { runAgent, answerQuestion, answerApproval, answerBudget, setRunApproval, steerRun, holdCard } from '../server/agent.js';
 import { saveProject, forgetProject, setProjectBudget } from '../server/store.js';
 import { loadCheckpoint, dropCheckpoint, ledger } from '../server/runs.js';
 import { setBudget, projectSpend, budgetState, live as liveRuns } from '../server/budget.js';
+import { matchPlan, usePlan } from '../server/mediaplan.js';
 
 let n = 0;
 const reply = (text, calls = [], finishReason = 'stop') => ({ text, toolCalls: calls.map(([name, args], i) => ({ id: `c${++n}_${i}`, type: 'function', function: { name, arguments: typeof args === 'string' ? args : JSON.stringify(args) } })), usage: { cost: 0.0001 }, ms: 1, firstMs: 1, finishReason });
@@ -62,6 +64,38 @@ test('a running reply sends what it has spent after every call, ending at its fi
   for (let k = 1; k < sp.length; k++) assert.ok(sp[k].cost >= sp[k - 1].cost && sp[k].calls >= sp[k - 1].calls);
   assert.ok(Math.abs(sp.at(-1).cost - done.stats.cost) < 1e-6);
   assert.ok(events.indexOf(sp[0]) < events.indexOf(done));
+});
+
+// ---------- model cards (models/cards/) ----------
+test('every shipped model card is well formed, cites its tips, and fits the agent in about 250 tokens', () => {
+  const cards = [...loadCards(true).values()];
+  assert.ok(cards.length >= 18, `cards: ${cards.length}`);
+  for (const c of cards) {
+    assert.ok(fs.existsSync(path.join(CARDS_DIR, cardFile(c.id))), `${c.id}: file name matches its id`);
+    assert.ok(['chat', 'decision', 'image', 'video', 'music', 'speech'].includes(c.kind), `${c.id}: kind ${c.kind}`);
+    assert.ok(c.limits && typeof c.limits === 'object', `${c.id}: limits`);
+    if (c.tips.length) assert.ok(c.sources.length && c.sources.every((u) => /^https:\/\//.test(u)), `${c.id}: tips cite https sources`);
+    assert.ok(cardText(c).length <= CARD_CHARS, `${c.id}: ${cardText(c).length} chars`);
+  }
+});
+
+test('a card reads as limits, quirks and tips, and drops tips first when it is too long', () => {
+  const c = { id: 'v/x', kind: 'video', limits: { durations: [4, 5, 6, 7, 8], resolutions: ['720p'], aspects: ['16:9'], frames: ['first_frame'], audio: true }, quirks: ['q1'], tips: ['t1', 't2'] };
+  assert.equal(cardText(c), '- v/x (video): 4-8 s · 720p · shapes 16:9 · starts from a picture · makes sound.\n  Quirk: q1\n  Tip: t1\n  Tip: t2');
+  assert.equal(cardText(c, 95), '- v/x (video): 4-8 s · 720p · shapes 16:9 · starts from a picture · makes sound.\n  Quirk: q1');
+  assert.match(limitsLine({ kind: 'chat', limits: { context: 1000000, max_output: 128000, tools: true, images_in: false } }), /^1M context · 128k max output · tool calls · text only$/);
+});
+
+test('the agent reads the cards of its own model and of the media models in use, and no others', async () => {
+  const { bodies } = await run(() => reply('Hi.'), { setup: { model: 'anthropic/claude-haiku-5.5' },
+    settings: { mediaEnabled: true, tools: { browser: { on: false }, image: { on: false }, music: { on: false }, speech: { on: false }, video: { on: true, pick: 'fixed', models: ['google/veo-3.1-lite', 'alibaba/wan-3.0'] } } } });
+  const sys = bodies[0].messages[0].content;
+  const text = typeof sys === 'string' ? sys : JSON.stringify(sys);
+  assert.match(text, /\[Model notes:/);
+  assert.match(text, /- anthropic\/claude-haiku-5\.5 \(chat\)/);
+  assert.match(text, /- google\/veo-3\.1-lite \(video\): 4, 6, 8 s/);
+  assert.doesNotMatch(text, /alibaba\/wan-3\.0 \(video\)/, 'only the first video model when the settings pick it');
+  assert.doesNotMatch(text, /QuorX build benchmark/, 'benchmark results are for the user, not the agent');
 });
 
 test('a reply that ends part-way keeps what it spent', async () => {
@@ -708,6 +742,110 @@ test('imagine passes the aspect ratio the agent picked, or the nearest one the m
   await run((body, i) => [reply('', [['imagine', { prompt: 'a cat', why: 'icon' }]]), reply('Done.')][i],
     { settings, generateImage: async (b) => { noRatio.push(b); return { images: [PNG], usage: { cost: 0.01 }, ms: 5 }; } });
   assert.equal('aspect_ratio' in noRatio[0], false);
+});
+
+// ---------- media_plan: a production plan approved once ----------
+const PLAN_PNG = 'data:image/png;base64,' + Buffer.from('plan-png').toString('base64');
+const planSettings = (over = {}) => ({ mediaEnabled: true, tools: { browser: { on: false }, image: { on: true, pick: 'fixed', models: ['test/plan-img'], resolution: '1K' }, video: { on: false }, music: { on: false }, speech: { on: false } }, ...over });
+// Deciders that answer every approval question with `yes` (needed and fair price), and remember what they saw.
+const planDeciders = (yes = 0.95) => {
+  const seen = [];
+  const fn = async ({ voters, questions, state }) => {
+    seen.push({ questions: questions.map((q) => q.ask), state: JSON.stringify(state) });
+    return { results: Object.fromEntries(questions.map((q) => [q.id, { pick: yes >= 0.5 ? 'yes' : 'no', dist: { yes, no: 1 - yes }, confidence: 0.9, agree: voters.length, n: voters.length, verdict: 'settled' }])), votes: voters.map(() => ({ dists: {} })), ms: 1 };
+  };
+  return { fn, seen };
+};
+
+test('YOLO: the deciders judge a production plan once, and calls that match it run without another vote', async () => {
+  const d = planDeciders();
+  const made = [];
+  const { events, bodies } = await run((body, i) => [
+    reply('', [['media_plan', { why: 'SECRET-AGENT-REASON', items: [{ kind: 'image', count: 2, what: 'two key frames' }] }]]),
+    reply('', [['imagine', { prompt: 'frame one', why: 'x' }]]),
+    reply('', [['imagine', { prompt: 'frame two', why: 'x' }]]),
+    reply('', [['imagine', { prompt: 'frame three', why: 'x' }]]),
+    reply('Done.'),
+  ][i], { text: 'make a short trailer for my game', settings: planSettings(), ensemble: d.fn,
+    generateImage: async (b) => { made.push(b.prompt); return { images: [PLAN_PNG], usage: { cost: 0.01 }, ms: 1 }; } });
+  assert.match(toolResults(bodies[1]).at(-1), /^Plan approved \(about \$[\d.]+ for 2 calls\)/);
+  assert.equal(d.seen.length, 2, 'one vote for the plan, one for the call past it');
+  assert.match(d.seen[0].questions[0], /production plan/);
+  assert.match(d.seen[0].state, /make a short trailer for my game/);
+  assert.match(d.seen[0].state, /"production_plan"/);
+  assert.ok(!d.seen[0].state.includes('SECRET-AGENT-REASON'), 'the judge never sees the agent\'s why');
+  const done = of(events, 'approval_done');
+  assert.deepEqual(done.map((x) => x.by), ['deciders', 'plan', 'plan', 'deciders']);
+  assert.match(done[1].reason, /1 of 2: two key frames/);
+  assert.deepEqual(made, ['frame one', 'frame two', 'frame three']);
+});
+
+test('Strict: the user approves the plan on one card, and its calls ask nothing more', async () => {
+  let runId, cards = 0;
+  const { events } = await run((body, i) => [
+    reply('', [['media_plan', { why: 'a poster set', items: [{ kind: 'image', count: 2, what: 'posters' }] }]]),
+    reply('', [['imagine', { prompt: 'poster A', why: 'x' }], ['imagine', { prompt: 'poster B', why: 'x' }]]),
+    reply('Done.'),
+  ][i], { settings: planSettings({ approval: 'strict' }),
+    onEvent: (e) => { if (e.t === 'start') runId = e.runId; if (e.t === 'approval') setTimeout(() => { if (answerApproval(runId, e.id, { approve: true })) cards++; }, 5); },
+    generateImage: async () => ({ images: [PLAN_PNG], usage: { cost: 0.01 }, ms: 1 }) });
+  assert.equal(cards, 1, 'only the plan asked');
+  const card = of(events, 'approval').find((e) => e.tool === 'media_plan');
+  assert.equal(card.items[0].count, 2);
+  assert.ok(card.est > 0);
+  assert.deepEqual(of(events, 'approval_done').map((x) => x.by), ['user', 'plan', 'plan']);
+});
+
+test('a plan the deciders approved in YOLO stops covering calls once the user switches the reply to Strict', async () => {
+  const d = planDeciders();
+  let runId, switched = false;
+  const { events } = await run((body, i) => [
+    reply('', [['media_plan', { why: 'x', items: [{ kind: 'image', count: 3, what: 'frames' }] }]]),
+    reply('', [['imagine', { prompt: 'frame one', why: 'x' }]]),
+    reply('', [['imagine', { prompt: 'frame two', why: 'x' }]]),
+    reply('Done.'),
+  ][i], { settings: planSettings(), ensemble: d.fn, generateImage: async () => ({ images: [PLAN_PNG], usage: { cost: 0.01 }, ms: 1 }),
+    onEvent: (e) => {
+      if (e.t === 'start') runId = e.runId;
+      if (e.t === 'approval_done' && e.by === 'plan' && !switched) { switched = true; setRunApproval(runId, 'strict'); }
+      if (e.t === 'approval' && e.mode === 'strict' && switched) setTimeout(() => answerApproval(runId, e.id, { approve: true }), 5);
+    } });
+  assert.deepEqual(of(events, 'approval_done').map((x) => x.by), ['deciders', 'plan', 'user'], 'the second picture asked the user');
+  const card = of(events, 'approval').at(-1);
+  assert.match(card.offPlan, /approved by the deciders in YOLO, and this reply is now in Strict/);
+});
+
+test('a plan over the media budget is turned down before anyone is asked, and calls are then judged one by one', async () => {
+  const d = planDeciders();
+  const { events, bodies } = await run((body, i) => [
+    reply('', [['media_plan', { why: 'a lot', items: [{ kind: 'image', count: 20, what: 'frames' }] }]]),
+    reply('', [['imagine', { prompt: 'one frame', why: 'x' }]]),
+    reply('Done.'),
+  ][i], { settings: planSettings({ budget: 0.1 }), ensemble: d.fn, generateImage: async () => ({ images: [PLAN_PNG], usage: { cost: 0.01 }, ms: 1 }) });
+  assert.match(toolResults(bodies[1]).at(-1), /The budget check did not approve this plan.*over this reply's \$0\.1 media budget/s);
+  assert.deepEqual(of(events, 'approval_done').map((x) => x.by), ['budget', 'deciders']);
+  assert.equal(d.seen.length, 1, 'only the single call was voted on');
+  assert.doesNotMatch(d.seen[0].questions[0], /production plan/);
+});
+
+test('a plan item of a kind that is switched off is refused with the kinds that are on', async () => {
+  const { bodies, events } = await run((body, i) => [
+    reply('', [['media_plan', { why: 'x', items: [{ kind: 'video', count: 1, what: 'clip' }] }]]),
+    reply('Done.'),
+  ][i], { settings: planSettings() });
+  assert.match(toolResults(bodies[1]).at(-1), /^Error: item 1: kind "video" is not one of the paid tools switched on \(image\)/);
+  assert.equal(of(events, 'approval').length, 0);
+});
+
+test('a call fits the plan only with the same kind and model, calls left, and no dearer than planned', () => {
+  const plan = { items: [{ kind: 'video', count: 1, model: 'v/a', each: 0.25, used: 0 }], total: 0.25, spent: 0 };
+  assert.match(matchPlan(plan, { cat: 'image', model: 'i/a', est: 0.01 }).why, /no picture/);
+  assert.match(matchPlan(plan, { cat: 'video', model: 'v/b', est: 0.2 }).why, /another model/);
+  assert.match(matchPlan(plan, { cat: 'video', model: 'v/a', est: 0.5 }).why, /costs more than the plan's estimate/);
+  const fit = matchPlan(plan, { cat: 'video', model: 'v/a', est: 0.28 });
+  assert.equal(fit.ok, true, 'a little over is within the slack');
+  usePlan(plan, fit.item, 0.28);
+  assert.match(matchPlan(plan, { cat: 'video', model: 'v/a', est: 0.2 }).why, /used up/);
 });
 
 test('a browser tab that was closed is replaced and the action runs again', async () => {

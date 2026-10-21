@@ -1,0 +1,26 @@
+{
+  "id": "hexgrad/kokoro-82m",
+  "name": "hexgrad: Kokoro 82M",
+  "kind": "speech",
+  "refreshed": "2026-10-20",
+  "limits": {
+    "voices": 54,
+    "voice_examples": [
+      "af_alloy",
+      "af_aoede",
+      "af_bella",
+      "af_heart"
+    ],
+    "price_per_m_chars": 0.62
+  },
+  "quirks": [
+    "A tiny open-weight voice model: very cheap, less expressive than the others."
+  ],
+  "tips": [
+    "Voice names start with the language and gender, e.g. af_heart is American English, female."
+  ],
+  "bench": "",
+  "sources": [
+    "https://huggingface.co/hexgrad/Kokoro-82M"
+  ]
+}

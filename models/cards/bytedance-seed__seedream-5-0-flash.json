@@ -1,0 +1,40 @@
+{
+  "id": "bytedance-seed/seedream-5-0-flash",
+  "name": "ByteDance Seed: Seedream 5.0 Flash",
+  "kind": "image",
+  "refreshed": "2026-10-20",
+  "limits": {
+    "aspects": [
+      "1:1",
+      "1:2",
+      "2:1",
+      "2:3",
+      "3:2",
+      "3:4",
+      "4:3",
+      "4:5",
+      "5:4",
+      "9:16",
+      "16:9",
+      "9:19.5",
+      "19.5:9",
+      "9:20",
+      "20:9",
+      "9:21",
+      "21:9"
+    ],
+    "resolutions": [
+      "1K",
+      "2K"
+    ],
+    "images_in": true,
+    "per_image": null,
+    "price_per_m_image_tokens": 4.3114
+  },
+  "quirks": [],
+  "tips": [],
+  "bench": "",
+  "sources": [
+    "https://docs.byteplus.com/en/docs/ModelArk"
+  ]
+}
