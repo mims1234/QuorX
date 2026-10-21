@@ -3,6 +3,7 @@
 // through /api/approve. Chats live on the server; preferences stay in this browser. Plain JS.
 
 import { startTour, maybeStartTour } from './tour.js';
+import { backupCard, drawBackup } from './backup.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -4740,6 +4741,7 @@ function settingsPanels(S) {
     ]],
     data: ['Data & storage', 'Where things are kept.', [
       stCard('Chats', 'Saved on this computer in data/chats; deleted chats move to data/trash.', stRow('Export all chats', 'One JSON file with every chat.', '<button type="button" class="st-btn secondary sm" data-act="exportChats">⬇ Export</button>')),
+      backupCard(),
       stCard('Danger zone', '', stRow('Clear this browser\'s preferences', 'Settings, layout and theme go back to defaults. Chats, projects and keys are not touched.', '<button type="button" class="st-btn danger sm" data-act="clearPrefs">Clear</button>'), 'danger'),
     ]],
     setup: ['Setup check', 'What this computer has for QuorX, and what each thing is for. Amber rows are optional.', ['<div id="stSetup"><div class="st-row-help">Checking this computer…</div></div>']],
@@ -4838,6 +4840,7 @@ function wireSettings() {
   drawEmbedPick();
   drawDesktopSettings();
   drawDevices();
+  drawBackup({ postJ, esc, uiConfirm, store: STORE });
   showVersion();
 }
 // ⚙ Settings → About → Other devices: phones and other computers on your network open QuorX once with a
