@@ -1,6 +1,18 @@
 {
   "versions": [
     {
+      "version": "0.2.10",
+      "date": "2026-10-21",
+      "title": "In the Microsoft Store, and a browser that notices sound",
+      "items": [
+        { "kind": "new", "text": "QuorX is in the Microsoft Store: Microsoft signs that copy and keeps it up to date, so Windows shows no warning.", "pr": 68 },
+        { "kind": "new", "text": "The agent's browser tells it whether a page started any sound, so it can check a game or a player it can't hear.", "pr": 69 },
+        { "kind": "improved", "text": "The Windows app is about 55 MB smaller: it carries only the terminal parts it uses.", "pr": 69 },
+        { "kind": "improved", "text": "The Models report in News points to OpenRouter's rankings for choosing a model.", "pr": 69 },
+        { "kind": "fixed", "text": "With another copy of QuorX already running, the desktop app starts its own instead of opening the other one.", "pr": 71 }
+      ]
+    },
+    {
       "version": "0.2.9",
       "date": "2026-10-21",
       "title": "Research in News, and a browser that can wait",
