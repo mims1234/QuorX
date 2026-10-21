@@ -30,8 +30,12 @@ the way a person would, and shows you every step it took.
 
 ## Get it
 
-**Windows:** download the installer from the [latest release](https://github.com/mims1234/QuorX/releases/latest).
-It isn't code-signed yet, so Windows may warn you; [here's how to check the download](docs/GETTING-STARTED.md#install-the-app-windows).
+**Windows:** get QuorX from the Microsoft Store. Microsoft signs it and keeps it up to date.
+
+<a href="https://apps.microsoft.com/detail/9NBK5DMLMTFF?mode=direct"><img src="https://get.microsoft.com/images/en-us%20dark.svg" width="200" alt="Get QuorX from the Microsoft Store"></a>
+
+Or download the installer from the [latest release](https://github.com/mims1234/QuorX/releases/latest). It isn't
+code-signed yet, so Windows may warn you; [here's how to check the download](docs/GETTING-STARTED.md#install-the-app-windows).
 
 **From source** (Windows, macOS, Linux), with Node.js 20+:
 

@@ -4,7 +4,10 @@
 
 ## Install the app (Windows)
 
-Download `QuorX-Setup-<version>.exe` from the [latest release](https://github.com/mims1234/QuorX/releases/latest)
+The easiest way is the [Microsoft Store](https://apps.microsoft.com/detail/9NBK5DMLMTFF?mode=direct): Microsoft signs
+that copy, so Windows doesn't warn about it, and the Store keeps it up to date.
+
+Or download `QuorX-Setup-<version>.exe` from the [latest release](https://github.com/mims1234/QuorX/releases/latest)
 and run it. The app updates itself from the same releases.
 
 **"Windows protected your PC"?** The installer isn't code-signed yet, so Windows SmartScreen warns about it. To check
