@@ -1,0 +1,29 @@
+{
+  "id": "anthropic/claude-opus-5.5",
+  "name": "Anthropic: Claude Opus 5.5",
+  "kind": "chat",
+  "refreshed": "2026-10-20",
+  "limits": {
+    "context": 1000000,
+    "max_output": 128000,
+    "tools": true,
+    "images_in": true,
+    "reasoning": true,
+    "price_per_m": [
+      4,
+      20
+    ]
+  },
+  "quirks": [
+    "Thinking is always on; effort is the control for cost and speed.",
+    "On long tasks it may end a turn with a progress report while work is still open (provider docs)."
+  ],
+  "tips": [
+    "Put status notes in the same message as the next tool call, and carry on with what doesn't need the user.",
+    "For frontend work, name the specific patterns to avoid rather than \"avoid a generic look\"."
+  ],
+  "bench": "100% on QuorX's earlier question benchmark. The most capable model QuorX recommends, and the priciest.",
+  "sources": [
+    "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-opus-5-5"
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "id": "openai/gpt-6.1-sol",
+  "name": "OpenAI: GPT-6.1 Sol",
+  "kind": "chat",
+  "refreshed": "2026-10-20",
+  "limits": {
+    "context": 1050000,
+    "max_output": 128000,
+    "tools": true,
+    "images_in": true,
+    "reasoning": true,
+    "price_per_m": [
+      2,
+      10
+    ]
+  },
+  "quirks": [
+    "Contradictory or vague instructions hurt this family more than most: it spends reasoning reconciling them (provider docs)."
+  ],
+  "tips": [
+    "State the result wanted, the limits, and what counts as done; leave the path to the model.",
+    "Be clear about which actions need approval and when to ask for input."
+  ],
+  "bench": "As the reviewer in QuorX's build benchmark it agreed with the judge 7 of 7 times, at about $0.07 a build (Sonnet 5.5 matched it for $0.02).",
+  "sources": [
+    "https://developers.openai.com/api/docs/guides/prompt-guidance-gpt-5p6",
+    "https://openai.com/index/practical-guide-building-gpt-6/"
+  ]
+}

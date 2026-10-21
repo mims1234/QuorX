@@ -338,3 +338,27 @@ test('plain http from another device goes to https; a pairing link sent in plain
     for (const l of info.links) assert.match(l.url, /^https:\/\//);
   } finally { setLanTls(false); }
 });
+
+test('two QuorX on one computer keep their own cookies: each name carries the port', () => {
+  const at = (port, cookie) => ({ headers: { host: `localhost:${port}`, ...(cookie ? { cookie } : {}) }, socket: { remoteAddress: '127.0.0.1', localPort: port } });
+  const u = (p) => new URL(p, 'http://x');
+  const r = res();
+  assert.equal(appGate(at(5233), r, u(`/?k=${appKey}`)), true);
+  assert.match(r.headers['Set-Cookie'], /^qx_app_5233=/, 'the app link sets this port\'s cookie');
+  // Another QuorX on 5262 (its own data folder, so its own key) set its cookie for the same host.
+  const both = `qx_app_5262=someone-elses-key-0123456789abcdefghijkl; qx_app_5233=${appKey}`;
+  assert.equal(appGate(at(5233, both), res(), u('/api/chats')), false, 'this one stays signed in');
+  const r2 = res();
+  assert.equal(appGate(at(5262, `qx_app_5233=${appKey}`), r2, u('/api/chats')), true, "this key doesn't open the other port");
+  assert.equal(r2.code, 401);
+  assert.equal(appGate(at(5233, `qx_app=${appKey}`), res(), u('/api/chats')), false, 'the old cookie name still works for now');
+  assert.equal(appGate(at(5233, `qx_app=${appKey}; qx_app_5233=wrong`), res(), u('/api/chats')), true, "this port's cookie wins over the old one");
+  setLan(true);
+  const token = JSON.parse(fs.readFileSync(path.join(process.env.OH_HOME, 'data', 'access.json'), 'utf8')).token;
+  const lan = (port, cookie) => ({ headers: { host: `192.168.1.20:${port}`, ...(cookie ? { cookie } : {}) }, socket: { remoteAddress: '192.168.1.60', localPort: port } });
+  const r3 = res();
+  assert.equal(gate(lan(5233), r3, u(`/?pair=${token}`)), true);
+  assert.match(r3.headers['Set-Cookie'], /^oh_pair_5233=/);
+  assert.equal(gate(lan(5233, `oh_pair_5262=other; oh_pair_5233=${token}`), res(), u('/api/chats')), false, 'paired on this port');
+  assert.equal(gate(lan(5262, `oh_pair_5233=${token}`), res(), u('/api/chats')), true, 'not paired on the other');
+});

@@ -1,0 +1,42 @@
+{
+  "id": "tencent/hy-image-v3.5-preview",
+  "name": "Tencent: Hy Image 3.5 Preview",
+  "kind": "image",
+  "refreshed": "2026-10-20",
+  "limits": {
+    "aspects": [
+      "1:1",
+      "1:2",
+      "1:4",
+      "2:1",
+      "2:3",
+      "3:2",
+      "3:4",
+      "4:1",
+      "4:3",
+      "4:5",
+      "5:4",
+      "9:16",
+      "16:9"
+    ],
+    "resolutions": [
+      "1K",
+      "1.5K",
+      "2K",
+      "4K"
+    ],
+    "images_in": true,
+    "per_image": null,
+    "price_per_m_image_tokens": 1.6
+  },
+  "quirks": [
+    "Priced per output image token: QuorX was billed about $0.024 for a 1K picture."
+  ],
+  "tips": [
+    "Give a detailed, specific description: subject, setting, style, lighting and composition."
+  ],
+  "bench": "Made 100+ pictures in one QuorX build without a failure.",
+  "sources": [
+    "https://huggingface.co/tencent/HunyuanImage-3.0"
+  ]
+}

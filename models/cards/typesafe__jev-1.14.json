@@ -1,0 +1,27 @@
+{
+  "id": "typesafe/jev-1.14",
+  "name": "TypeSafe: Jev 1.14",
+  "kind": "decision",
+  "refreshed": "2026-10-20",
+  "limits": {
+    "context": 262144,
+    "max_output": 235929,
+    "tools": false,
+    "images_in": true,
+    "reasoning": false,
+    "price_per_m": [
+      0.042,
+      0
+    ]
+  },
+  "quirks": [
+    "A decider: typed answers with probabilities only. Reads images."
+  ],
+  "tips": [
+    "Ask one checkable statement per yes/no question; use a choice question for open questions."
+  ],
+  "bench": "In QuorX's default decider panel: median 493 ms per vote, $0.108 per 1,000 votes (126 votes logged), the fastest of the three.",
+  "sources": [
+    "https://openrouter.ai/typesafe/jev-1.14"
+  ]
+}

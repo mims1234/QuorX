@@ -1,0 +1,60 @@
+{
+  "id": "x-ai/grok-imagine-video-1.5-lite",
+  "name": "SpaceXAI: Grok Imagine Video 1.5 Lite",
+  "kind": "video",
+  "refreshed": "2026-10-20",
+  "limits": {
+    "durations": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15
+    ],
+    "resolutions": [
+      "480p",
+      "720p",
+      "1080p"
+    ],
+    "aspects": [
+      "16:9",
+      "9:16",
+      "1:1",
+      "4:3",
+      "3:4",
+      "3:2",
+      "2:3"
+    ],
+    "frames": [
+      "first_frame"
+    ],
+    "audio": false,
+    "skus": {
+      "cents_per_image_input": "1",
+      "cents_per_video_output_second_480p": "2",
+      "cents_per_video_output_second_720p": "3",
+      "cents_per_video_output_second_1080p": "14"
+    }
+  },
+  "quirks": [
+    "Starting from a picture adds 1 cent per input picture to the price."
+  ],
+  "tips": [
+    "Describe the motion: what the subject does, how the camera moves, pacing and atmosphere.",
+    "With a start picture, make its subject clear; the clip keeps the picture's look."
+  ],
+  "bench": "QuorX check (Oct 2026): a 1-second 480p clip from a test picture cost $0.0297 and opened on that picture.",
+  "sources": [
+    "https://openrouter.ai/x-ai/grok-imagine-video-1.5-lite"
+  ]
+}
