@@ -113,7 +113,7 @@ Level ids used across QuorX: `proven`, `tested`, `wired` (shown as "Logic tested
 test results). They never leave the computer and are never written into `news/`. The server answers
 `GET /api/news/local?view=<view>` with JSON:
 
-- `models`: `{ "rows": [{ "model", "replies", "passRate", "avgCost", "avgSteps", "avgSeconds" }], "since" }`
+- `models`: `{ "rows": [{ "model", "replies", "passRate", "avgCost", "avgSteps", "avgSeconds", "looksFirst" }], "since" }`. `looksFirst` is the average number of steps that only read or looked before the first write (null for replies logged before 0.2.7).
 - `deciders`: `{ "questions", "confirmed", "flipped", "theater", "unclear", "byModel": [{ "model", "votes", "agreed" }] }`
 - `costs`: `{ "days": [{ "date", "cost" }], "byModel": [{ "model", "cost" }] }`
 - `tests`: the last `npm test`, `npm run test:packs` and UI test results this computer kept, if any:

@@ -233,6 +233,7 @@ test('news renderer: every block draws at rest, escaped and to scale', () => {
   // Local blocks: a friendly empty state, then the numbers.
   for (const view of ['models', 'deciders', 'costs', 'tests']) assert.match(md.localHtml(view, { empty: true }), /nothing yet[\s\S]*never leave it/, view);
   assert.match(md.localHtml('models', { rows: [{ model: 'openai/gpt-x', replies: 3, passRate: 0.67, avgCost: 0.002, avgSteps: 4, avgSeconds: 30 }] }), /gpt-x[\s\S]*67%/);
+  assert.match(md.localHtml('models', { rows: [{ model: 'openai/gpt-x', replies: 3, passRate: 0.67, avgCost: 0.002, avgSteps: 4, avgSeconds: 30, looksFirst: 5.5 }] }), /Looks before writing[\s\S]*5\.5/);
   assert.match(md.localHtml('tests', { runs: [{ name: 'npm test', passed: 180, failed: 0, at: '2026-10-20' }] }), /npm test[\s\S]*180/);
   assert.match(md.blockHtml('nope', {}), /nb-error/);
 });
@@ -255,7 +256,7 @@ test('news local: every view explains itself while there are no logs', () => {
 test('news local: models and costs come from runs.jsonl, with nothing private', () => {
   lines('runs.jsonl', [
     { ts: ago(1), runId: 'r1', chatId: 'c1', project: 'secret-project', model: 'acme/small', stop: 'done', steps: 4, tools: 3, verify: { ok: true }, cost: 0.01, ms: 20000 },
-    { ts: ago(1, 2), runId: 'r2', chatId: 'c1', project: 'secret-project', model: 'acme/small', stop: 'done', steps: 6, tools: 5, verify: { ok: false }, cost: 0.03, ms: 40000 },
+    { ts: ago(1, 2), runId: 'r2', chatId: 'c1', project: 'secret-project', model: 'acme/small', stop: 'done', steps: 6, tools: 5, verify: { ok: false }, cost: 0.03, ms: 40000, looksFirst: 3, firstWrite: 4 },
     { ts: ago(3), runId: 'r3', project: 'my-app', model: 'acme/big', stop: 'done', steps: 2, cost: 0.2, ms: 10000 },
     { ts: ago(2), runId: 'doc-1', kind: 'docs', project: 'my-app', model: 'acme/embed', stop: 'index', cost: 0.005 },
     { ts: ago(200), runId: 'old', project: 'my-app', model: 'acme/ancient', stop: 'done', cost: 9 },
@@ -265,6 +266,7 @@ test('news local: models and costs come from runs.jsonl, with nothing private', 
   assert.deepEqual(m.rows.map((r) => r.model), ['acme/small', 'acme/big'], 'docs rows and old rows are left out');
   const small = m.rows[0];
   assert.deepEqual([small.replies, small.passRate, small.avgCost, small.avgSteps, small.avgSeconds], [2, 0.5, 0.02, 5, 30]);
+  assert.equal(small.looksFirst, 3, 'only replies that logged the slow start count'); assert.equal(m.rows[1].looksFirst, null);
   assert.equal(m.rows[1].passRate, null, 'no checks ran: no pass rate');
   assert.match(m.since, /^\d{4}-\d{2}-\d{2}$/);
 
