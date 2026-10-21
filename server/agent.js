@@ -527,10 +527,11 @@ const FETCH_TOOL = { type: 'function', function: { name: 'fetch_url', descriptio
 
 export const BROWSER_TOOLS = [
   { type: 'function', function: { name: 'browser', description: 'Use a headless browser to open and test what you built, like a user would.', parameters: { type: 'object', required: ['action'], properties: {
-    action: { type: 'string', enum: ['open', 'click', 'type', 'press', 'scroll', 'read'] },
+    action: { type: 'string', enum: ['open', 'click', 'type', 'press', 'scroll', 'wait', 'read'] },
     target: { type: 'string', description: 'open: artifact:<id>, site:<path>, app:<server name>, an http(s) URL, or cdp:<port> for an Electron app you started with shell (background: true) and --remote-debugging-port=<port>' },
     selector: { type: 'string', description: 'click/type: CSS selector' }, text: { type: 'string', description: 'click: visible text of the element · type: the text to type' },
-    key: { type: 'string', description: 'press: Enter, Tab, Escape, Space, Backspace, ArrowUp/Down/Left/Right, or a character' },
+    key: { type: 'string', description: 'press: Enter, Tab, Escape, Space, Backspace, ArrowUp/Down/Left/Right, a character (r, R, 5), or a combination like Shift+R, Control+S or Control+Shift+Z' },
+    seconds: { type: 'number', description: 'wait: let the page run this long (up to 30), e.g. for a timer, a round or an animation, then see it again' },
     x: { type: 'number', description: 'click: a point on the page, only when you give no selector or text' }, y: { type: 'number' }, dy: { type: 'number', description: 'scroll: pixels down (negative = up)' },
     width: { type: 'integer', description: 'open: viewport width, e.g. 390 for a phone, default 1280' } } } } },
   { type: 'function', function: { name: 'look', description: 'Screenshot the page open in the browser (or open a target first) and have fast vision judges answer your yes/no checks about it. Commit your own guess for each check first.', parameters: { type: 'object', required: ['checks'], properties: {
@@ -3049,6 +3050,8 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     else if (args.action === 'type') did = await t.type(args);
     else if (args.action === 'press') did = await t.press(String(args.key || 'Enter'));
     else if (args.action === 'scroll') did = await t.scroll(args.dy);
+    // A timer, a round or an animation runs on its own: wait here instead of a shell sleep.
+    else if (args.action === 'wait') { const s = Math.min(30, Math.max(0.1, Number(args.seconds) || 1)); await sleep(s * 1000, signal); did = `Waited ${s} s.`; }
     // A click or a redirect that lands on the harness's own pages is undone.
     if (harnessPage(t.url)) { await t.open('about:blank').catch(() => {}); return offLimits(); }
     const shot = await t.screenshot();

@@ -621,6 +621,22 @@ test('a review that stays below the bar after the allowed rounds is shown in the
   assert.equal(done.stats.review.pass, false);
 });
 
+test('browser wait lets the page run instead of a shell sleep; press passes key combinations through', async () => {
+  const pressed = [];
+  const tab = { ...fakeTab(), async press(k) { pressed.push(k); return `pressed ${k}`; } };
+  const t0 = Date.now();
+  const { bodies } = await run((body, i) => [
+    reply('', [['write_file', { path: 'index.html', content: PAGE }]]),
+    reply('', [['browser', { action: 'open', target: 'site:index.html' }]]),
+    reply('', [['browser', { action: 'wait', seconds: 0.4 }]]),
+    reply('', [['browser', { action: 'press', key: 'Shift+R' }]]),
+    reply('Done.'),
+  ][i], { settings: { tools: { browser: { on: true } }, review: 'off', checks: { on: false } }, openTab: async () => tab });
+  assert.match(toolResults(bodies[3]).at(-1), /Waited 0\.4 s/);
+  assert.ok(Date.now() - t0 >= 400, 'it really waited');
+  assert.deepEqual(pressed, ['Shift+R']);
+});
+
 test('a browser that will not start is a note from the checks, never a problem sent back to the agent', async () => {
   let b = 0;
   const { events } = await run((body) => [

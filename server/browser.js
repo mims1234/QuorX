@@ -340,18 +340,27 @@ export async function openTab({ chatId, cdpPort, own = false } = {}) {
       await sleep(200);
       return `typed ${String(text).length} characters`;
     },
-    async press(key) {
+    async press(combo) {
       // A real keyboard event: key (what was typed), code (which physical key) and the key code. Pages check any of
       // the three (e.key === ' ', e.code === 'Space', e.keyCode === 32), so all of them must be right.
+      // Combinations (Shift+R, Control+S, Control+Shift+Z) hold their modifiers; a capital letter holds Shift.
+      const parts = String(combo).length > 1 ? String(combo).split('+').filter(Boolean) : [String(combo)];
+      const MOD = { alt: 1, control: 2, ctrl: 2, meta: 4, cmd: 4, shift: 8 };
+      let modifiers = 0;
+      for (const m of parts.slice(0, -1)) { const bit = MOD[m.toLowerCase()]; if (!bit) throw new Error(`unknown modifier ${m}: use Shift, Control, Alt or Meta`); modifiers |= bit; }
+      let key = parts.at(-1) ?? String(combo);
+      if (/^[a-z]$/i.test(key)) { if (modifiers & 8) key = key.toUpperCase(); else if (key !== key.toLowerCase()) modifiers |= 8; }
       const named = { Enter: [13, '\r', 'Enter'], Tab: [9, '\t', 'Tab'], Escape: [27, '', 'Escape'], Esc: [27, '', 'Escape'], Backspace: [8, '', 'Backspace'], Delete: [46, '', 'Delete'], ArrowUp: [38, '', 'ArrowUp'], ArrowDown: [40, '', 'ArrowDown'], ArrowLeft: [37, '', 'ArrowLeft'], ArrowRight: [39, '', 'ArrowRight'], Space: [32, ' ', 'Space'], ' ': [32, ' ', 'Space'], Shift: [16, '', 'ShiftLeft'], Control: [17, '', 'ControlLeft'], Home: [36, '', 'Home'], End: [35, '', 'End'], PageUp: [33, '', 'PageUp'], PageDown: [34, '', 'PageDown'] };
-      const ch = String(key);
+      const ch = Object.keys(named).find((n) => n.length > 1 && n.toLowerCase() === key.toLowerCase()) || key; // enter, arrowup
       const k = named[ch] || (/^[a-z]$/i.test(ch) ? [ch.toUpperCase().charCodeAt(0), ch, `Key${ch.toUpperCase()}`] : /^[0-9]$/.test(ch) ? [ch.charCodeAt(0), ch, `Digit${ch}`] : [0, ch, '']);
       const keyName = ch === 'Space' ? ' ' : ch === 'Esc' ? 'Escape' : ch;
-      await send('Input.dispatchKeyEvent', { type: 'keyDown', key: keyName, code: k[2] || undefined, windowsVirtualKeyCode: k[0], nativeVirtualKeyCode: k[0], text: k[1] || undefined, unmodifiedText: k[1] || undefined });
-      await send('Input.dispatchKeyEvent', { type: 'keyUp', key: keyName, code: k[2] || undefined, windowsVirtualKeyCode: k[0], nativeVirtualKeyCode: k[0] });
+      // Control, Alt and Meta combinations type nothing (Control+S saves, it doesn't insert an s).
+      const text = modifiers & 7 ? undefined : k[1] || undefined;
+      await send('Input.dispatchKeyEvent', { type: 'keyDown', modifiers, key: keyName, code: k[2] || undefined, windowsVirtualKeyCode: k[0], nativeVirtualKeyCode: k[0], text, unmodifiedText: text && k[1].toLowerCase() });
+      await send('Input.dispatchKeyEvent', { type: 'keyUp', modifiers, key: keyName, code: k[2] || undefined, windowsVirtualKeyCode: k[0], nativeVirtualKeyCode: k[0] });
       await sleep(300);
       await settle();
-      return `pressed ${key}`;
+      return `pressed ${combo}`;
     },
     async scroll(dy = 600) { await js(`window.scrollBy({ top: ${Number(dy) || 600}, left: 0, behavior: 'instant' })`); await settle(); return `scrolled ${dy}px`; },
     // Typing like a keyboard, one key event per character (some pages ignore inserted text).
