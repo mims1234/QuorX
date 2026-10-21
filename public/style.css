@@ -5632,3 +5632,30 @@ dialog.st-dialog[open] { position: fixed; inset: 0; margin: auto; display: flex;
 .app-key-wall h2{margin:0 0 10px;font-size:22px}
 .app-key-wall p{margin:0 0 18px;color:var(--muted,#83948c)}
 .app-key-wall button{font:inherit;padding:8px 16px;border-radius:8px;border:1px solid var(--line-strong,#273932);background:var(--panel-2,#131a17);color:inherit;cursor:pointer}
+
+/* /review: the code review card (a usage-style card only the user sees) */
+.msg.codereview { max-width: 680px; }
+.cr-card { display: grid; gap: 8px; background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: var(--radius-lg); padding: 10px 14px 12px; }
+.cr-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding-right: 22px; }
+.cr-scope, .cr-by { color: var(--muted); font-size: 12px; }
+.cr-auto { font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; }
+.cr-cost { margin-left: auto; font-size: 12px; }
+.cr-wait, .cr-none, .cr-note, .cr-sum { font-size: 13px; color: var(--muted); }
+.cr-none { color: var(--ok); }
+.cr-err { font-size: 13px; color: var(--bad); }
+.cr-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.cr-item { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; align-items: start; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-inset, var(--bg)); }
+.cr-pick { padding-top: 2px; }
+.cr-top { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.cr-sev { font: 700 10.5px/1.6 var(--font-ui); text-transform: uppercase; letter-spacing: .04em; padding: 0 6px; border-radius: 4px; }
+.cr-sev.sev-breaks { background: var(--bad-dim); color: var(--bad); }
+.cr-sev.sev-annoying { background: var(--warn-dim); color: var(--warn); }
+.cr-sev.sev-minor { background: var(--line); color: var(--muted); }
+.cr-loc { font: 12px var(--mono); color: var(--accent); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.cr-loc:hover { color: var(--text); }
+.cr-title { font-size: 13px; }
+.cr-why { font-size: 13px; margin-top: 3px; }
+.cr-fix { font-size: 12.5px; color: var(--muted); margin-top: 3px; }
+.cr-fix span { font-weight: 600; color: var(--text); }
+.cr-acts { display: flex; justify-content: flex-end; }
+.cr-sent { font-size: 12.5px; color: var(--ok); }

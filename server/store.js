@@ -126,7 +126,7 @@ function summarise(c) {
     messages: msgs.filter((m) => m.role === 'user').length, cost: spend.reduce((n, [, v]) => n + v, 0),
     artifacts: lay.reduce((n, col) => n + Object.keys(col.artifacts || {}).length, 0), spend, models,
     // Replies whose cost is saved in this file (the budget ledger counts the others itself).
-    runIds: msgs.filter((m) => m.runId && replySpend(m)).map((m) => m.runId),
+    runIds: [...msgs.filter((m) => m.runId && replySpend(m)).map((m) => m.runId), ...(c.agent?.extraUsage || []).filter((x) => x.runId).map((x) => x.runId)],
   };
 }
 function summaries() {
