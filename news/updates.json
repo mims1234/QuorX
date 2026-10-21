@@ -1,14 +1,15 @@
 {
   "versions": [
     {
-      "version": "0.2.8",
+      "version": "0.2.9",
       "date": "2026-10-21",
       "title": "Research in News, and a browser that can wait",
       "items": [
         { "kind": "new", "text": "News has seven new articles on what 0.2.7 measured and learned, from the cache-friendly prompt to a lock-down post-mortem.", "pr": 63 },
         { "kind": "improved", "text": "The Models, Tests and Platforms reports in News are rebuilt with 0.2.7's benchmark and test results.", "pr": 63 },
         { "kind": "new", "text": "The agent's browser can wait for a timer, a round or an animation, instead of sleeping in the shell.", "pr": 64 },
-        { "kind": "improved", "text": "The agent's browser presses key combinations like Shift+R and Control+S, and a capital letter holds Shift.", "pr": 64 }
+        { "kind": "improved", "text": "The agent's browser presses key combinations like Shift+R and Control+S, and a capital letter holds Shift.", "pr": 64 },
+        { "kind": "fixed", "text": "The Tests report in News shows each pack's results only, not details of the computer that ran the tests.", "pr": 66 }
       ]
     },
     {
