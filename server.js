@@ -49,6 +49,7 @@ import { gitHubRemote, gitHubInfo } from './server/github.js';
 import { serveBlob, startSweeping } from './server/blobs.js';
 import { listDesignSystems, readDesignSystem, projectDesign, applyDesignSystem, saveProjectDesign } from './server/design.js';
 import { newsRoute } from './server/news.js';
+import { uiCards } from './server/modelcards.js';
 import zlib from 'node:zlib';
 
 const PUBLIC = path.join(ROOT, 'public');
@@ -670,6 +671,8 @@ const server = http.createServer(async (req, res) => {
       const b = JSON.parse(await readBody(req, 1e4) || '{}');
       try { return json(res, 200, { path: await pickFolder(b.start) }); } catch (e) { return json(res, 200, { error: e.message }); }
     }
+    // Model cards (models/cards/): limits, quirks, tips and QuorX's results, shown on hover next to each rating.
+    if (req.method === 'GET' && url.pathname === '/api/model-cards') return json(res, 200, uiCards());
     if (req.method === 'GET' && url.pathname === '/api/models') {
       if (url.searchParams.get('refresh')) clearCatalogues();
       // Each catalogue loads on its own, so one failing list doesn't hide the others. The lists are

@@ -22,14 +22,15 @@ export function logApproval(rec) {
 export const independentVoters = (voters, chatModel) => (voters || []).filter((m) => m && m !== chatModel);
 
 /**
- * kind: 'command' | 'media'. userMessages: the user's own turns (strings). reading: the prompt enhancer's reading of
+ * kind: 'command' | 'media' | 'plan' (a production plan: several paid calls judged once, see server/mediaplan.js). userMessages: the user's own turns (strings). reading: the prompt enhancer's reading of
  * the request (what it plainly implies), or nothing. facts: what the harness computed about
- * the action (for a command: the line, its parts and classes, real paths; for media: model, price, the prompt).
+ * the action (for a command: the line, its parts and classes, real paths; for media: model, price, the prompt; for a plan: each
+ * part's kind, count, model and price, and the total).
  * Resolves to { approve: true | false | null, reason, pNeed, pOther, votes, voters }. null = ask the user.
  */
 // harmOnly (commands): a helper script the agent wrote in its own scratch folder is a step toward the request, never
 // something the user asks for by name, so only the harm question is voted on.
-export async function approvalJudge({ kind, userMessages, reading, harmOnly = false, facts, voters, chatModel, gate, signal, account, sf, log = {} }) {
+export async function approvalJudge({ kind, userMessages, reading, harmOnly = false, facts, voters, chatModel, gate, signal, account, sf, log = {}, ensembleFn = ensemble }) {
   const panel = independentVoters(voters, chatModel);
   const quorum = Math.max(1, Number(sf?.quorum) || 2);
   if (panel.length < quorum) {
@@ -37,11 +38,20 @@ export async function approvalJudge({ kind, userMessages, reading, harmOnly = fa
     logApproval({ kind, ...log, facts, final: 'user', reason });
     return { approve: null, reason, votes: [], voters: panel };
   }
-  const second = kind === 'media'
-    ? { id: 'other', type: 'noul', ask: `Spending the estimated amount on this is reasonable for what the user asked.` }
-    : { id: 'other', type: 'noul', ask: 'Running this could damage or delete files outside the project folder, leak private data or keys, or cost money.' };
+  const paid = kind === 'media' || kind === 'plan';
+  const implied = reading ? ' "request_reading" spells out what their request implies: count those parts as asked for.' : '';
+  const second = kind === 'plan'
+    ? { id: 'other', type: 'noul', ask: 'Spending the estimated total on this plan is reasonable for what the user asked.' }
+    : kind === 'media'
+      ? { id: 'other', type: 'noul', ask: `Spending the estimated amount on this is reasonable for what the user asked.` }
+      : { id: 'other', type: 'noul', ask: 'Running this could damage or delete files outside the project folder, leak private data or keys, or cost money.' };
+  // A plan is judged as a whole: is it a sensible way to make what was asked? Its parts are the usual steps for
+  // that kind of work, even when the user named only the finished thing.
+  const needed = kind === 'plan'
+    ? `The user's own messages ask for, or clearly imply, what this production plan makes, and the plan is a sensible way to make it (its parts are the usual steps for that kind of work, even if the user named only the finished result).${implied}`
+    : `The user's own messages ask for, or clearly imply, this ${kind === 'media' ? 'paid generation' : 'command'}.${implied}`;
   const questions = [
-    { id: 'needed', type: 'noul', ask: `The user's own messages ask for, or clearly imply, this ${kind === 'media' ? 'paid generation' : 'command'}.${reading ? ' "request_reading" spells out what their request implies: count those parts as asked for.' : ''}` },
+    { id: 'needed', type: 'noul', ask: needed },
     second,
   ].filter((q) => !harmOnly || q.id === 'other');
   const state = {
@@ -51,7 +61,7 @@ export async function approvalJudge({ kind, userMessages, reading, harmOnly = fa
     action: facts,
   };
   let d;
-  try { d = await ensemble({ voters: panel, state, questions, gate, signal, account, quorum }); } catch (e) {
+  try { d = await ensembleFn({ voters: panel, state, questions, gate, signal, account, quorum }); } catch (e) {
     if (signal?.aborted) throw e;
     logApproval({ kind, ...log, facts, final: 'user', reason: e.message });
     return { approve: null, reason: `The deciders could not vote (${e.message}), so it waits for you.`, votes: [], voters: panel };
@@ -64,7 +74,7 @@ export async function approvalJudge({ kind, userMessages, reading, harmOnly = fa
   const sure = (r) => ['settled', 'lean'].includes(r.verdict);
   let approve = null, reason;
   if (rn.verdict === 'failed' || ro.verdict === 'failed') reason = `Only ${Math.min(rn.n, ro.n)} of ${panel.length} deciders gave a valid vote (${quorum} needed), so it waits for you.`;
-  else if (kind === 'media') {
+  else if (paid) {
     if (sure(rn) && sure(ro) && pNeed >= 0.5 && pOther >= 0.5) { approve = true; reason = `Deciders approved: needed P=${pNeed.toFixed(2)}, fair price P=${pOther.toFixed(2)}.`; }
     else if ((sure(rn) && pNeed < 0.5) || (sure(ro) && pOther < 0.5)) { approve = false; reason = `Deciders declined: ${pNeed < 0.5 ? `the request doesn't seem to need it (P=${pNeed.toFixed(2)})` : `the price doesn't seem worth it (P=${pOther.toFixed(2)})`}.`; }
     else reason = `The deciders couldn't agree (needed P=${pNeed.toFixed(2)}, fair price P=${pOther.toFixed(2)}), so it waits for you.`;

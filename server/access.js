@@ -15,6 +15,16 @@ import { HOME } from './openrouter.js';
 import { lanFingerprint } from './lantls.js';
 
 const FILE = path.join(HOME, 'data', 'access.json');
+// Cookies belong to a host, not a port: two QuorX on one computer (the desktop app and `npm start`, or two copies on
+// different ports) would overwrite each other's and keep signing each other out. So each cookie name carries the
+// port QuorX answered on. The old names without it are still accepted, until 0.2.8.
+const portOf = (req) => req.socket?.localPort || 0;
+const named = (base, req) => `${base}_${portOf(req)}`;
+/** A cookie's value: the one for this port, else the old name shared by every port. */
+const cookieValue = (req, base) => {
+  const jar = new Map(String(req.headers.cookie || '').split(/;\s*/).map((c) => { const i = c.indexOf('='); return i < 0 ? [c, ''] : [c.slice(0, i), c.slice(i + 1)]; }));
+  return jar.get(named(base, req)) ?? jar.get(base) ?? '';
+};
 const COOKIE = 'oh_pair';
 const newToken = () => crypto.randomBytes(18).toString('base64url');
 
@@ -71,7 +81,7 @@ export function crossSiteApi(req, pathname) {
 }
 
 const same = (a, b) => { const x = Buffer.from(String(a || '')), y = Buffer.from(String(b || '')); return x.length === y.length && crypto.timingSafeEqual(x, y); };
-const cookieOf = (req) => String(req.headers.cookie || '').split(/;\s*/).map((c) => c.split('=')).find(([k]) => k === COOKIE)?.[1] || '';
+const cookieOf = (req) => cookieValue(req, COOKIE);
 
 // Wrong pairing links from one address: after 10, that address waits 10 minutes.
 const fails = new Map();
@@ -96,7 +106,7 @@ export function gate(req, res, url) {
     if (same(pair, state.token)) {
       fails.delete(ip);
       url.searchParams.delete('pair');
-      res.writeHead(302, { 'Set-Cookie': `${COOKIE}=${state.token}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Strict${req.socket.encrypted ? '; Secure' : ''}`, Location: `${url.pathname}${url.search}`, 'Cache-Control': 'no-store' });
+      res.writeHead(302, { 'Set-Cookie': `${named(COOKIE, req)}=${state.token}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Strict${req.socket.encrypted ? '; Secure' : ''}`, Location: `${url.pathname}${url.search}`, 'Cache-Control': 'no-store' });
       res.end();
       return true;
     }
@@ -120,7 +130,7 @@ export const appKey = (() => {
   try { fs.mkdirSync(path.dirname(KEY_FILE), { recursive: true }); fs.writeFileSync(KEY_FILE, k, { mode: 0o600 }); } catch { /* lasts until restart */ }
   return k;
 })();
-const keyCookie = (req) => String(req.headers.cookie || '').split(/;\s*/).map((c) => c.split('=')).find(([k]) => k === KEY_COOKIE)?.[1] || '';
+const keyCookie = (req) => cookieValue(req, KEY_COOKIE);
 /** The app link: opening it once leaves the cookie. */
 export const appLink = (port) => `http://localhost:${port}/?k=${appKey}`;
 // Routes any caller may use: the version check the desktop app makes before it has the key, and nothing else.
@@ -135,7 +145,7 @@ export function appGate(req, res, url) {
   if (k != null && !url.pathname.startsWith('/api/')) {
     url.searchParams.delete('k');
     if (!same(k, appKey)) { res.writeHead(401, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(PAGE('That app link is not valid.', 'Open the link QuorX printed when it started, or the desktop app.')); return true; }
-    res.writeHead(302, { 'Set-Cookie': `${KEY_COOKIE}=${appKey}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Strict`, Location: `${url.pathname}${url.search}`, 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' });
+    res.writeHead(302, { 'Set-Cookie': `${named(KEY_COOKIE, req)}=${appKey}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Strict`, Location: `${url.pathname}${url.search}`, 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' });
     res.end();
     return true;
   }
