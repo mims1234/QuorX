@@ -39,14 +39,18 @@ spends real money on OpenRouter, so it only runs when someone chooses to, with a
 
 ## Leaderboard
 
-```callout
-{"tone":"info","title":"No benchmark run yet","text":"This report fills in from the build benchmark. Nobody has published a run of it here yet, so there are no numbers to show: none are made up. Running it costs real money on OpenRouter, so it only runs when someone chooses to."}
+From 4 build runs (`bench-build-2026-10-20T23-13-27.json`, `bench-build-2026-10-21T00-03-03.json`). Each run is one task from `bench/tasks-build.json`, built by the full QuorX agent in a throwaway folder; a judge model then plays the build and scores it. A build passes when function, craft, design and originality all reach the bar.
+
+| Model | Runs | Passed | Cost per run | Cost per working build | Steps | Minutes |
+|---|---|---|---|---|---|---|
+| deepseek/deepseek-v4.1-flash-1017 | 4 | 100% | US$0.094 | US$0.094 | 94.5 | 8.6 |
+
+```chart
+{"src":"bench.json","path":"passChart"}
 ```
 
-To run it and publish the results:
-
-```terminal
-{"title":"Run the build benchmark","lines":[{"cmd":"node scripts/bench.mjs --set build --builder deepseek/deepseek-v4.1-flash,anthropic/claude-haiku-5.5 --limit 3 --cap 2"},{"out":"Spends real money on OpenRouter: --cap stops it at that many dollars."},{"cmd":"node scripts/news-data.mjs"},{"cmd":"npm run news:check"}]}
+```chart
+{"src":"bench.json","path":"costChart"}
 ```
 
 ## The decider experiment

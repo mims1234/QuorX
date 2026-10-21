@@ -1,8 +1,65 @@
 {
-  "generated": "2026-10-20",
-  "sources": [],
-  "build": [],
+  "generated": "2026-10-21",
+  "sources": [
+    {
+      "file": "bench-build-2026-10-20T23-13-27.json",
+      "runs": 2,
+      "from": "2026-10-20"
+    },
+    {
+      "file": "bench-build-2026-10-21T00-03-03.json",
+      "runs": 2,
+      "from": "2026-10-21"
+    }
+  ],
+  "build": [
+    {
+      "model": "deepseek/deepseek-v4.1-flash-1017",
+      "mode": "harness",
+      "runs": 4,
+      "passed": 4,
+      "passRate": 1,
+      "costPerRun": 0.0942,
+      "costPerWorkingBuild": 0.0942,
+      "avgSteps": 94.5,
+      "minutesPerRun": 8.6,
+      "avgScore": 16.8,
+      "errors": 0
+    }
+  ],
   "direct": [],
   "decide": [],
-  "qa": []
+  "qa": [],
+  "passChart": {
+    "type": "bar",
+    "title": "Builds that passed the judge, cheapest model first",
+    "unit": "%",
+    "x": [
+      "deepseek-v4.1-flash-1017"
+    ],
+    "series": [
+      {
+        "name": "Pass rate",
+        "values": [
+          100
+        ]
+      }
+    ]
+  },
+  "costChart": {
+    "type": "bar",
+    "title": "Cost per working build (US cents)",
+    "unit": "¢",
+    "x": [
+      "deepseek-v4.1-flash-1017"
+    ],
+    "series": [
+      {
+        "name": "Cents per build that passed",
+        "values": [
+          9.4
+        ]
+      }
+    ]
+  }
 }

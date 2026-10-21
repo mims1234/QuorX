@@ -1,5 +1,5 @@
 {
-  "generated": "2026-10-20",
+  "generated": "2026-10-21",
   "packs": [
     {
       "id": "electron",
@@ -23,7 +23,8 @@
       "level": "tested",
       "hosts": null,
       "detect": [
-        "Git"
+        "Git",
+        "FFmpeg"
       ],
       "check": "–",
       "drive": "Terminal, background jobs, the browser",
@@ -278,7 +279,7 @@
   ],
   "totals": {
     "packs": 16,
-    "toolchains": 33,
+    "toolchains": 34,
     "checks": 15,
     "debuggers": 10,
     "proven": 0,
@@ -334,7 +335,7 @@
         "cells": [
           "Every project",
           "Every project",
-          "Git",
+          "Git, FFmpeg",
           "–",
           "Terminal, background jobs, the browser",
           "–",
