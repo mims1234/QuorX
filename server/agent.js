@@ -1783,7 +1783,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         try { out = await browserTool(args); } catch (e) { if (signal.aborted) throw e; out = `Error: ${e.message}`; }
         tried++; if (!/^Error:/.test(out)) opened++;
         emit({ t: 'tool_result', step, name: 'browser', result: clip(out, 400), by: 'reviewer', at: at() });
-        rmsgs.push({ role: 'tool', tool_call_id: tc.id, content: clip(out, 6000) });
+        rmsgs.push({ role: 'tool', tool_call_id: tc.id, content: clip(scrubSecrets(root, out), 6000) });
       }
       // Only the newest screenshot stays in the reviewer's context.
       if (!result && sees && tab && tab.url !== 'about:blank') {
