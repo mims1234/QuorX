@@ -4998,6 +4998,8 @@ function settingsPanels(S) {
       stCard('Balance', '', stRow('Show the 💲 balance button in the top bar', 'Off by default, so your OpenRouter spend never shows on a stream. ⚙ Settings → API keys always has the numbers.', stSwitch('ui.showBalance', U.showBalance))
         + stRow('Hide amounts until I click 👁', 'All-time spend, key limits and account credits stay masked (•••) until you reveal them.', stSwitch('ui.maskAmounts', U.maskAmounts))),
       stCard('Paths', '', stRow('Blur folder paths', 'Project folders in the explorer and settings are blurred until you hover them.', stSwitch('ui.blurPaths', U.blurPaths))),
+      stCard('Browser', '', stRow('Search with', 'Words typed in the Browser tab’s address bar (not an address) are searched here. Start with ? to always search.', stSeg('ui.searchEngine', [...Object.entries(SEARCH_ENGINES).map(([k, [l]]) => [k, l]), ['custom', 'Custom']], U.searchEngine || 'google'))
+        + stRow('Custom search address', 'Used when Custom is picked: the address of a search with %s where the words go.', `<input type="text" class="st-input" data-bind="ui.searchCustom" value="${esc(U.searchCustom || '')}" placeholder="https://example.com/search?q=%s" spellcheck="false">`)),
     ]],
     keys: ['API keys', 'The harness uses one active OpenRouter key for every call. Add as many as you like and switch between them.', [`<div id="stKeys"><div class="st-row-help">Loading keys…</div></div>`]],
     models: ['Models & catalogue', 'Model lists and prices come from OpenRouter.', [
@@ -6804,7 +6806,7 @@ function setUrlBar(url, { art = false } = {}) {
   wrap.classList.toggle('art-mode', !!art);
   const full = absUrl(url);
   f.value = full;
-  f.placeholder = url && url.startsWith('data:') ? 'Embedded in the chat (no address)' : 'Type an address and press Enter to look at it yourself';
+  f.placeholder = url && url.startsWith('data:') ? 'Embedded in the chat (no address)' : 'Type an address or words to search, and press Enter';
   f.title = full || f.placeholder;
   $('#copyUrlBtn').disabled = !full; $('#popBtn').disabled = !full && !(url || '').startsWith('data:');
   G.paneUrl = full;
@@ -6828,10 +6830,8 @@ function wirePaneChrome() {
   };
   $('#paneUrl').onkeydown = (e) => {
     if (e.key !== 'Enter') return;
-    let v = e.target.value.trim(); if (!v) return;
-    if (v.startsWith('/')) v = location.origin + v;
-    else if (!/^https?:\/\//i.test(v)) v = (/^(localhost|127\.0\.0\.1)(:\d+)?/i.test(v) ? 'http://' : 'https://') + v;
-    browserGo(v);
+    const v = e.target.value.trim(); if (!v) return;
+    browserGo(typedToUrl(v));
   };
 }
 
@@ -6927,8 +6927,29 @@ async function newTabPage(c, stage) {
   const links = [...arts.map((a) => ({ label: `${ICON[a.kind] || '📄'} ${a.title}`, url: absUrl(artifactUrl(c, a)) })),
     ...(Array.isArray(srv) ? srv.filter((x) => x.status === 'running' && !arts.some((a) => a.url === x.url)).map((x) => ({ label: `🖥 ${x.name}`, url: x.url })) : [])].filter((x) => x.url);
   if (!stage.isConnected) return;
-  stage.innerHTML = `<div class="bnew"><p class="dim">Type an address in the bar above and press Enter${links.length ? ', or open something from this chat:' : '.'}</p>${links.length ? `<div class="bnew-links">${links.map((l, i) => `<button type="button" class="bnew-link" data-i="${i}"><b>${esc(l.label)}</b><code>${esc(l.url)}</code></button>`).join('')}</div>` : ''}</div>`;
+  stage.innerHTML = `<div class="bnew"><p class="dim">Type an address or words to search in the bar above, and press Enter${links.length ? ', or open something from this chat:' : '.'}</p>${links.length ? `<div class="bnew-links">${links.map((l, i) => `<button type="button" class="bnew-link" data-i="${i}"><b>${esc(l.label)}</b><code>${esc(l.url)}</code></button>`).join('')}</div>` : ''}</div>`;
   for (const b of stage.querySelectorAll('.bnew-link')) b.onclick = () => browserGo(links[Number(b.dataset.i)].url);
+}
+// The address bar: an address opens; anything else (how to make cake) is searched with the engine you picked in
+// ⚙ Settings → Privacy & display. Starting with ? always searches.
+const SEARCH_ENGINES = { google: ['Google', 'https://www.google.com/search?q=%s'], duckduckgo: ['DuckDuckGo', 'https://duckduckgo.com/?q=%s'], bing: ['Bing', 'https://www.bing.com/search?q=%s'], brave: ['Brave', 'https://search.brave.com/search?q=%s'], startpage: ['Startpage', 'https://www.startpage.com/do/search?query=%s'] };
+function searchUrl(q) {
+  const ui = G.settings.ui || {}, custom = String(ui.searchCustom || '').trim();
+  const tpl = ui.searchEngine === 'custom' && /^https?:\/\/\S*%s/i.test(custom) ? custom : (SEARCH_ENGINES[ui.searchEngine] || SEARCH_ENGINES.google)[1];
+  return tpl.replace('%s', encodeURIComponent(q));
+}
+// What was typed as an address (example.com, localhost:3000, 192.168.1.5/x, https://…), or null for words to search.
+function addressOf(v) {
+  if (/^https?:\/\//i.test(v)) return v;
+  if (/\s/.test(v)) return null;
+  if (/^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/i.test(v) || /^\d{1,3}(\.\d{1,3}){3}(:\d+)?(\/|$)/.test(v)) return `http://${v}`;
+  if (/^[\w-]+(\.[\w-]+)*\.[a-z]{2,}(:\d+)?([/?#]\S*)?$/i.test(v)) return `https://${v}`;
+  return null;
+}
+function typedToUrl(v) {
+  if (v.startsWith('?')) return searchUrl(v.slice(1).trim());
+  if (v.startsWith('/')) return location.origin + v;
+  return addressOf(v) || searchUrl(v);
 }
 function browserGo(url) {
   const c = focused(); if (!c) return;
