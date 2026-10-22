@@ -110,7 +110,7 @@ const iconImage = (size = 32) => nativeImage.createFromBuffer(pngIcon(size));
 function showWindow() { if (!win) return; if (win.isMinimized()) win.restore(); win.show(); win.focus(); }
 function createWindow() {
   win = new BrowserWindow({
-    width: 1440, height: 900, minWidth: 760, minHeight: 520, show: false, backgroundColor: '#070908', title: 'QuorX', icon: iconImage(64), autoHideMenuBar: true,
+    width: 1440, height: 900, minWidth: 760, minHeight: 520, show: false, backgroundColor: '#070908', title: app.isPackaged ? 'QuorX' : 'QuorX · DEV', icon: iconImage(64), autoHideMenuBar: true,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false },
   });
   win.once('ready-to-show', () => { if (!HIDDEN) win.show(); });
@@ -175,7 +175,8 @@ function createTray() {
   createTrayMenu();
   tray.on('click', showWindow);
 }
-const trayTip = () => `QuorX is running · ${origin}${server ? ' · right-click to quit' : ''}`;
+// The copy run from the QuorX folder (npm run desktop) says DEV everywhere, so it is never mixed up with the installed one.
+const trayTip = () => `QuorX${app.isPackaged ? '' : ' DEV (from your folder)'} is running · ${origin}${server ? ' · right-click to quit' : ''}`;
 // Quit sits right under Open, so it is found without reading the whole menu.
 function createTrayMenu() {
   tray.setContextMenu(Menu.buildFromTemplate([
