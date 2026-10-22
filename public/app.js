@@ -2004,7 +2004,8 @@ function askBody(text) {
     return `<p>${lines.map(esc).join('<br>')}</p>`;
   }).join('');
 }
-function ask(message, { ok, cancel = 'Cancel', danger, input = null, alertOnly = false } = {}) {
+// alt adds a third answer between Cancel and OK (shown in red with altDanger); choosing it resolves to 'alt'.
+function ask(message, { ok, cancel = 'Cancel', danger, input = null, alertOnly = false, alt = null, altDanger = false } = {}) {
   return new Promise((resolve) => {
     const [head, ...rest] = String(message || '').split('\n');
     const verb = ASK_VERBS[(head.match(/^\s*(\w+)/)?.[1] || '').toLowerCase()];
@@ -2015,13 +2016,14 @@ function ask(message, { ok, cancel = 'Cancel', danger, input = null, alertOnly =
     d.innerHTML = `<form class="ask" method="dialog">
       <h3>${esc(head)}</h3>${rest.join('\n').trim() ? `<div class="ask-body">${askBody(rest.join('\n'))}</div>` : ''}
       ${input != null ? `<input class="ask-in" spellcheck="false" value="${esc(input)}">` : ''}
-      <footer>${alertOnly ? '' : `<button type="button" class="ask-cancel">${esc(cancel)}</button>`}<button type="submit" class="ask-ok ${danger ? 'danger' : ''}">${esc(ok)}</button></footer>
+      <footer>${alertOnly ? '' : `<button type="button" class="ask-cancel">${esc(cancel)}</button>`}${alt ? `<button type="button" class="ask-alt ${altDanger ? 'danger' : ''}">${esc(alt)}</button>` : ''}<button type="submit" class="ask-ok ${danger ? 'danger' : ''}">${esc(ok)}</button></footer>
     </form>`;
     document.body.appendChild(d);
     const no = input != null ? null : alertOnly;
     let settled = false;
     const done = (v) => { if (settled) return; settled = true; d.close(); d.remove(); resolve(v); };
     $('.ask-cancel', d)?.addEventListener('click', () => done(no));
+    $('.ask-alt', d)?.addEventListener('click', () => done('alt'));
     d.addEventListener('cancel', (e) => { e.preventDefault(); done(no); });
     d.addEventListener('mousedown', (e) => { d._down = e.target === d; });
     d.addEventListener('click', (e) => { if (e.target === d && d._down) done(no); });
@@ -6661,7 +6663,21 @@ function browserGo(url) {
   G.view = { id: G.view.id, src: false, files: false, browser: true };
   c.paneHidden = false; syncLayout(); renderPane();
 }
-function closeBTab(c, sid) {
+// Closing a tab that shows one of your running servers asks first: keep the server running (reopen the address any
+// time) or stop it too.
+async function closeBTab(c, sid) {
+  const url = sid.startsWith('agent-') ? G.agentTab?.[c.id]?.url : (G.btabs || []).find((x) => x.sid === sid)?.url;
+  let u = null; try { u = url && new URL(url); } catch { /* not an address */ }
+  if (u && /^(localhost|127\.0\.0\.1|\[::1\])$/.test(u.hostname)) {
+    const all = await getJ('/api/servers');
+    const sv = (Array.isArray(all) ? all : []).find((x) => x.status !== 'stopped' && x.url && (() => { try { return new URL(x.url).port === u.port; } catch { return false; } })());
+    if (sv) {
+      const where = `${u.hostname}:${u.port}`;
+      const ans = await uiConfirm(`Close ${where}?\n“${sv.name}” is still running. You can keep it running and reopen this tab any time by entering ${where} in the address bar.`, { ok: 'Keep running', alt: 'Stop server', altDanger: true, danger: false });
+      if (!ans) return;
+      if (ans === 'alt') { await postJ('/api/servers/stop', { key: sv.key }); pollDev(); }
+    }
+  }
   if (sid.startsWith('agent-')) { delete G.agentTab[c.id]; } else { G.btabs = (G.btabs || []).filter((x) => x.sid !== sid); if (DESK) window.ohDesktop.close(sid); }
   postJ('/api/ubrowser', { sid, op: 'close' }).catch(() => {});
   if (G.bActive === sid) G.bActive = null;

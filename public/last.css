@@ -2503,3 +2503,9 @@ html body .trace.trace-pane .step .when { width: auto !important; white-space: n
 /* Running tab: rows use the pane's whole width */
 #paneBody > .run { flex: 1 1 auto; width: 100%; min-width: 0; }
 .fx-menu button { display: flex; align-items: center; justify-content: flex-start; gap: 8px; }
+
+/* a third answer in a confirm box (e.g. Stop server), red when it ends something */
+.ask .ask-alt { border: 1px solid var(--line-strong); background: transparent; color: var(--text); }
+.ask .ask-alt.danger { border-color: var(--bad); background: var(--bad); color: #fff; }
+.ask .ask-alt:hover { filter: brightness(1.08); }
+.ask footer:has(.ask-alt) .ask-cancel { margin-right: auto; }
