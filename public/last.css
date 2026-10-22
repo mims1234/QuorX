@@ -2503,3 +2503,11 @@ html body .trace.trace-pane .step .when { width: auto !important; white-space: n
 /* Running tab: rows use the pane's whole width */
 #paneBody > .run { flex: 1 1 auto; width: 100%; min-width: 0; }
 .fx-menu button { display: flex; align-items: center; justify-content: flex-start; gap: 8px; }
+
+/* The title row matches the nav rows under it: a 30px ☰ box, 16px icons and 13px text */
+body.top-in-sidebar .sb-titlebar #sbCollapseBtn { width: 30px !important; height: 30px !important; font-size: 15px; line-height: 1; }
+body.top-in-sidebar .sb-titlebar { gap: 8px; }
+.sb-titlebar .brand#brandHome { font-size: 13px; line-height: 16px; gap: 8px; --brand-gap: 8px; }
+.sb-titlebar .brand#brandHome .brand-logo { width: 16px; height: 16px; }
+.sb-titlebar .brand-git { width: 26px; height: 26px; }
+.sb-titlebar .brand-git svg { width: 16px; height: 16px; }
