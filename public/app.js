@@ -6631,6 +6631,11 @@ function renderBrowser(c) {
   body.innerHTML = `<div class="bwin"><div class="btabs" role="tablist" aria-label="Browser tabs">${list.map((x) => `<span class="btab ${x.sid === t?.sid ? 'on' : ''} ${x.agent ? 'agent' : ''} ${!x.agent && lentChatOf(x.sid) ? 'lent' : ''}" data-sid="${esc(x.sid)}" role="tab" ${x.agent ? '' : 'draggable="true" '}title="${esc(x.url || 'New tab')}">${x.agent ? `<i class="bt-dot ${x.locked ? 'live' : ''}"></i>🤖` : '🌐'}<span class="bt-title">${esc(x.agent ? (x.title || 'Agent') : (x.title || (x.url ? x.url.replace(/^https?:\/\//, '').slice(0, 24) : 'New tab')))}</span><button type="button" class="bt-x" data-close="${esc(x.sid)}" title="Close this tab" aria-label="Close tab">×</button></span>`).join('')}<button type="button" class="btab-new" title="New tab">＋</button></div><div class="bstage"></div></div>`;
   for (const el of body.querySelectorAll('.btab')) el.onclick = (e) => { if (e.target.closest('.bt-x')) return; G.bActive = el.dataset.sid; renderPane(); };
   for (const el of body.querySelectorAll('.btab[draggable="true"]')) el.ondragstart = (e) => { e.dataTransfer.setData('application/x-quorx-tab', el.dataset.sid); e.dataTransfer.effectAllowed = 'link'; };
+  // Right-click one of your tabs: give it to this chat's agent (or take it back), or close it.
+  for (const el of body.querySelectorAll('.btab[draggable="true"]')) el.oncontextmenu = (e) => {
+    const sid = el.dataset.sid, to = lentChatOf(sid);
+    tabMenu(e, [to ? ['↩ Take back from the agent', () => takeBackTab(to)] : ['🤖 Give to agent in this chat', () => lendTab(c, sid)], ['✕ Close tab', () => closeBTab(c, sid)]]);
+  };
   for (const b of body.querySelectorAll('.bt-x')) b.onclick = () => closeBTab(c, b.dataset.close);
   $('.btab-new', body).onclick = () => { newBTab(''); renderPane(); $('#paneUrl').focus(); };
   const stage = $('.bstage', body);
@@ -6667,6 +6672,22 @@ function browserGo(url) {
   c.paneHidden = false; syncLayout(); renderPane();
 }
 // ---------- 🤖 Give to agent: lend one of your Browser tabs to a chat ----------
+// A tab's right-click menu: items are [label, action].
+function tabMenu(e, items) {
+  e.preventDefault(); e.stopPropagation();
+  document.querySelector('.exp-menu')?.remove();
+  const m = document.createElement('div'); m.className = 'exp-menu fx-menu'; m.setAttribute('role', 'menu');
+  m.innerHTML = items.map((x, i) => `<button type="button" role="menuitem" data-i="${i}">${esc(x[0])}</button>`).join('');
+  document.body.append(m);
+  const r = m.getBoundingClientRect();
+  m.style.left = `${Math.min(e.clientX, innerWidth - r.width - 8)}px`; m.style.top = `${Math.min(e.clientY, innerHeight - r.height - 8)}px`;
+  const away = (ev) => { if (!m.contains(ev.target)) close(); };
+  const key = (ev) => { if (ev.key === 'Escape') close(); };
+  const close = () => { m.remove(); removeEventListener('pointerdown', away, true); removeEventListener('keydown', key, true); };
+  addEventListener('pointerdown', away, true); addEventListener('keydown', key, true);
+  m.onclick = (ev) => { const b = ev.target.closest('[data-i]'); if (!b) return; close(); items[Number(b.dataset.i)][1](); };
+  m.querySelector('button')?.focus();
+}
 // Drag a tab onto a chat, or press 🤖 Give to agent in the tab's bar. The agent can then work in that one tab (with
 // your sign-in on that site) in that chat; it is covered while the agent uses it, and Take back ends it at once.
 const lentChatOf = (sid) => Object.keys(G.lent ||= {}).find((id) => G.lent[id]?.sid === sid);
