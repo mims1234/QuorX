@@ -16,6 +16,9 @@ const PKG = require('./package.json');
 
 // The harness's code: the repo while developing, the copy bundled in the installer once installed.
 const ROOT = app.isPackaged ? path.join(process.resourcesPath, 'app-server') : path.resolve(__dirname, '..');
+// DEV: the app run from a QuorX git checkout (npm run desktop). Both must hold, so an installer or Store build, which is
+// packaged and has no .git, can never look like DEV. The DEV badge, title and tray text all come from this one value.
+const DEV = !app.isPackaged && fs.existsSync(path.join(ROOT, '.git'));
 // Your data (chats, projects, keys, logs, .env): the repo while developing; once installed, a folder you
 // choose on first run (a new one in your profile by default), so updates never touch it.
 const CONFIG = () => path.join(app.getPath('userData'), 'config.json');
@@ -110,7 +113,7 @@ const iconImage = (size = 32) => nativeImage.createFromBuffer(pngIcon(size));
 function showWindow() { if (!win) return; if (win.isMinimized()) win.restore(); win.show(); win.focus(); }
 function createWindow() {
   win = new BrowserWindow({
-    width: 1440, height: 900, minWidth: 760, minHeight: 520, show: false, backgroundColor: '#070908', title: app.isPackaged ? 'QuorX' : 'QuorX · DEV', icon: iconImage(64), autoHideMenuBar: true,
+    width: 1440, height: 900, minWidth: 760, minHeight: 520, show: false, backgroundColor: '#070908', title: DEV ? 'QuorX · DEV' : 'QuorX', icon: iconImage(64), autoHideMenuBar: true,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false },
   });
   win.once('ready-to-show', () => { if (!HIDDEN) win.show(); });
@@ -176,7 +179,7 @@ function createTray() {
   tray.on('click', showWindow);
 }
 // The copy run from the QuorX folder (npm run desktop) says DEV everywhere, so it is never mixed up with the installed one.
-const trayTip = () => `QuorX${app.isPackaged ? '' : ' DEV (from your folder)'} is running · ${origin}${server ? ' · right-click to quit' : ''}`;
+const trayTip = () => `QuorX${DEV ? ' DEV (from your folder)' : ''} is running · ${origin}${server ? ' · right-click to quit' : ''}`;
 // Quit sits right under Open, so it is found without reading the whole menu.
 function createTrayMenu() {
   tray.setContextMenu(Menu.buildFromTemplate([
@@ -395,7 +398,7 @@ handle('restartHarness', () => restartHarness());
 handle('loginItem', (on) => (on === undefined ? loginItem() : setLoginItem(on)));
 handle('closeAction', (v) => (v === undefined ? closeAction() : setCloseAction(v)));
 handle('quit', () => { setImmediate(quitApp); return true; });
-handle('info', () => ({ version: app.getVersion(), packaged: app.isPackaged, store: STORE, home: HOME || ROOT, origin, ownsServer: !!server }));
+handle('info', () => ({ version: app.getVersion(), packaged: app.isPackaged, dev: DEV, store: STORE, home: HOME || ROOT, origin, ownsServer: !!server }));
 handle('openHome', () => { shell.openPath(HOME || ROOT); return true; });
 // QuorX's own zoom (the page sends Ctrl + / − / 0 here unless they were for the terminal). Remembered between starts.
 handle('zoom', (dir) => {

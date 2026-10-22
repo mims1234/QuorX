@@ -7481,7 +7481,8 @@ setTimeout(checkStale, 1500);
 const DESK = !!window.ohDesktop?.available;
 // The desktop app run from your QuorX folder (npm run desktop) looks different from the installed one: an amber DEV
 // badge by the name, a thin amber line along the top, and DEV in the window title, so the two are never mixed up.
-if (DESK) window.ohDesktop.info().then((i) => { if (i && i.packaged === false) markDevBuild(); }).catch(() => {});
+// Only when the desktop app says so itself (its DEV value: not packaged and a git checkout).
+if (DESK) window.ohDesktop.info().then((i) => { if (i?.dev === true) markDevBuild(); }).catch(() => {});
 function markDevBuild() {
   document.body.classList.add('dev-build');
   document.title = 'QuorX · DEV';

@@ -370,3 +370,22 @@ test('a command that needs administrator rights is handed to the user; other fai
   assert.equal(needsAdmin({ line: 'npm test', code: 1, out: '3 tests failed' }), false);
   assert.equal(adminForAgent('winget install Foo'), "This needs administrator rights, which QuorX doesn't use. Ask the user to run it in a Terminal tab opened as administrator: `winget install Foo`");
 });
+
+test('the DEV look can only appear in a git checkout run unpackaged, never in an installer or Store build', () => {
+  const root = path.resolve(path.dirname(decodeURIComponent(new URL(import.meta.url).pathname).replace(/^\/(\w:)/, '$1')), '..');
+  const main = fs.readFileSync(path.join(root, 'desktop', 'main.js'), 'utf8');
+  const page = fs.readFileSync(path.join(root, 'public', 'app.js'), 'utf8');
+  // One switch, with both conditions: not packaged, and a .git next to the app.
+  assert.match(main, /const DEV = !app\.isPackaged && fs\.existsSync\(path\.join\(ROOT, '\.git'\)\);/);
+  // Every DEV wording in the desktop app goes through that switch.
+  for (const line of main.split('\n').filter((l) => /QuorX · DEV|DEV \(from your folder\)/.test(l))) assert.match(line, /\bDEV \?/, `not behind the DEV switch: ${line.trim()}`);
+  assert.match(main, /handle\('info', \(\) => \(\{[^\n]*dev: DEV[,}]/);
+  // The page turns DEV on only when the desktop app says dev: true, and in one place.
+  const calls = page.split('\n').filter((l) => /markDevBuild\(\)/.test(l) && !/^function markDevBuild/.test(l.trim()));
+  assert.equal(calls.length, 1);
+  assert.match(calls[0], /i\?\.dev === true\) markDevBuild\(\)/);
+  // A build never carries a .git folder.
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, 'desktop', 'package.json'), 'utf8'));
+  const filters = JSON.stringify(pkg.build?.extraResources || []) + JSON.stringify(pkg.build?.files || []);
+  assert.doesNotMatch(filters, /\.git(?!hub|ignore|attributes)/, 'the desktop build must not package .git');
+});
