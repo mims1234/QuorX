@@ -2320,9 +2320,14 @@ function wirePane(c, root, i) {
   ta.oninput = () => { updateSuggest(c); fitInput(ta); };
   ta.onblur = () => setTimeout(() => hideSuggest(c), 150);
   ta.onpaste = (e) => { const files = [...(e.clipboardData?.files || [])]; if (files.length) { e.preventDefault(); addFiles(c, files); } };
-  root.ondragover = (e) => { const ty = [...e.dataTransfer.types]; if (ty.includes('Files') || ty.includes('application/x-quorx-tab')) { e.preventDefault(); root.classList.add('drop'); } };
+  root.ondragover = (e) => { const ty = [...e.dataTransfer.types]; if (['Files', 'application/x-quorx-file', 'application/x-quorx-tab'].some((k) => ty.includes(k))) { e.preventDefault(); root.classList.add('drop'); } };
   root.ondragleave = () => root.classList.remove('drop');
-  root.ondrop = (e) => { root.classList.remove('drop'); const sid = e.dataTransfer.getData('application/x-quorx-tab'); if (sid) { e.preventDefault(); lendTab(c, sid); return; } if (e.dataTransfer.files.length) { e.preventDefault(); addFiles(c, e.dataTransfer.files); } };
+  root.ondrop = (e) => {
+    root.classList.remove('drop');
+    const pf = e.dataTransfer.getData('application/x-quorx-file'); if (pf) { e.preventDefault(); try { const f = JSON.parse(pf); addFileToChat(f.projectId, f.path, root); } catch { /* not ours */ } return; }
+    const sid = e.dataTransfer.getData('application/x-quorx-tab'); if (sid) { e.preventDefault(); lendTab(c, sid); return; }
+    if (e.dataTransfer.files.length) { e.preventDefault(); addFiles(c, e.dataTransfer.files); }
+  };
   $('.imgBtn', root).onclick = () => $('.imgInput', root).click();
   $('.imgInput', root).onchange = (e) => { addFiles(c, e.target.files); e.target.value = ''; };
   $('.micBtn', root).onclick = () => toggleMic(c);
@@ -3299,11 +3304,13 @@ async function openFolder(projectId, path) {
   if (r.error) uiAlert(`Could not open the folder: ${r.error}`);
 }
 // Files → right-click a file or folder: show it in File Explorer, or copy its path.
-function filesMenu(e, projectId, rel, full) {
-  e.preventDefault();
+// A small right-click menu: items are [label, action] (null for a line between groups).
+function popMenu(e, items) {
+  e.preventDefault(); e.stopPropagation();
   document.querySelector('.exp-menu')?.remove();
   const m = document.createElement('div'); m.className = 'exp-menu fx-menu'; m.setAttribute('role', 'menu');
-  m.innerHTML = '<button type="button" role="menuitem" data-a="reveal">📂 Show in File Explorer</button><button type="button" role="menuitem" data-a="copy">📋 Copy full path</button><button type="button" role="menuitem" data-a="rel">📋 Copy relative path</button>';
+  const acts = items.filter(Boolean);
+  m.innerHTML = items.map((x) => (x ? `<button type="button" role="menuitem" data-i="${acts.indexOf(x)}">${esc(x[0])}</button>` : '<hr class="fx-sep">')).join('');
   document.body.append(m);
   const r = m.getBoundingClientRect();
   m.style.left = `${Math.min(e.clientX, innerWidth - r.width - 8)}px`; m.style.top = `${Math.min(e.clientY, innerHeight - r.height - 8)}px`;
@@ -3311,13 +3318,25 @@ function filesMenu(e, projectId, rel, full) {
   const key = (ev) => { if (ev.key === 'Escape') close(); };
   const close = () => { m.remove(); removeEventListener('pointerdown', away, true); removeEventListener('keydown', key, true); };
   addEventListener('pointerdown', away, true); addEventListener('keydown', key, true);
-  m.onclick = (ev) => {
-    const a = ev.target.closest('[data-a]')?.dataset.a; if (!a) return;
-    close();
-    if (a === 'reveal') openFolder(projectId, rel);
-    else navigator.clipboard?.writeText(a === 'copy' ? full : rel).catch(() => {});
-  };
-  m.querySelector('button').focus();
+  m.onclick = (ev) => { const b = ev.target.closest('[data-i]'); if (!b) return; close(); acts[Number(b.dataset.i)][1](); };
+  m.querySelector('button')?.focus();
+}
+// Files → right-click a file or folder: add a file to the chat, show it in File Explorer, or copy its path.
+function filesMenu(e, projectId, rel, full, isFile = true) {
+  popMenu(e, [
+    ...(isFile ? [['💬 Add to chat', () => addFileToChat(projectId, rel, e.currentTarget || e.target)], null] : []),
+    ['📂 Show in File Explorer', () => openFolder(projectId, rel)],
+    ['📋 Copy full path', () => navigator.clipboard?.writeText(full).catch(() => {})],
+    ['📋 Copy relative path', () => navigator.clipboard?.writeText(rel).catch(() => {})],
+  ]);
+}
+// A project file goes with your next message in the chat you are in (as with @file).
+function addFileToChat(projectId, rel, from) {
+  const c = focused();
+  if (!c?.el) return uiAlert('Open a chat first: the file goes with your next message there.');
+  if (!c.ctx.some((x) => x.type === 'file' && x.projectId === projectId && x.path === rel)) c.ctx.push({ type: 'file', projectId, path: rel, title: rel });
+  renderAttachments(c);
+  flashTip(from && from.isConnected ? from : $('.input', c.el.root), 'Added to your next message');
 }
 // The trace opens in the artifact pane area only when asked, and leaves it when closed.
 const clip = (t, n) => (String(t).length > n ? String(t).slice(0, n - 1) + '…' : String(t));
@@ -4579,8 +4598,13 @@ async function renderFiles(c) {
     G.filesProject = c.projectId;
     previewFile(view, { name: path, src, size: f?.size, full: fullOf(path) });
   };
-  for (const b of body.querySelectorAll('.fl[data-p]')) b.oncontextmenu = (e) => filesMenu(e, c.projectId, b.dataset.p, fullOf(b.dataset.p));
-  for (const d of body.querySelectorAll('.fx-dir')) $('summary', d).oncontextmenu = (e) => { e.stopPropagation(); filesMenu(e, c.projectId, d.dataset.dir, fullOf(d.dataset.dir)); };
+  for (const b of body.querySelectorAll('.fl[data-p]')) {
+    b.oncontextmenu = (e) => filesMenu(e, c.projectId, b.dataset.p, fullOf(b.dataset.p));
+    // Drag a file onto the chat: it goes with your next message.
+    b.draggable = true;
+    b.ondragstart = (e) => { e.dataTransfer.setData('application/x-quorx-file', JSON.stringify({ projectId: c.projectId, path: b.dataset.p })); e.dataTransfer.effectAllowed = 'copy'; };
+  }
+  for (const d of body.querySelectorAll('.fx-dir')) $('summary', d).oncontextmenu = (e) => { e.stopPropagation(); filesMenu(e, c.projectId, d.dataset.dir, fullOf(d.dataset.dir), false); };
 }
 
 // ---------- spend: private balance, page total, costs view ----------
