@@ -147,6 +147,7 @@ function createWindow() {
     if (quitting || !server) return;
     e.preventDefault();
     const act = closeAction();
+    if (act !== 'quit' && STORE && update.state === 'store-available' && update.version !== skippedUpdate) return askUpdateOnClose(act);
     if (act === 'quit') quitApp(); else if (act === 'tray') win.hide(); else askOnClose();
   });
   win.on('closed', () => { win = null; tabs.clear(); });
@@ -167,6 +168,21 @@ async function askOnClose() {
   }).finally(() => { asking = false; });
   if (checkboxChecked) setCloseAction(response === 1 ? 'quit' : 'tray');
   if (response === 1) quitApp(); else win?.hide();
+}
+// The Store copy with a newer version out: ✕ would only hide QuorX in the tray, and the Store can't install over a running
+// copy (0x80073D02). So ✕ asks first: quit and open the Store page, or keep running as usual (asked once per version).
+let skippedUpdate = null;
+async function askUpdateOnClose(act) {
+  if (asking || !win) return;
+  asking = true;
+  const { response } = await dialog.showMessageBox(win, {
+    type: 'info', title: 'QuorX', message: `QuorX ${update.version} is out`,
+    detail: `You have ${app.getVersion()}. The Microsoft Store can only install the update once QuorX has quit. Quit now and open QuorX in the Store, then press Update there.`,
+    buttons: ['Quit and update', 'Not now'], defaultId: 0, cancelId: 1, noLink: true,
+  }).finally(() => { asking = false; });
+  if (response === 0) { shell.openExternal('ms-windows-store://pdp/?productid=9NBK5DMLMTFF'); return quitApp(); }
+  skippedUpdate = update.version;
+  if (act === 'tray') win?.hide(); else askOnClose();
 }
 // Start at login: off by default; when on, the app starts hidden in the tray.
 const loginArgs = () => (app.isPackaged ? ['--hidden'] : [path.resolve(__dirname), '--hidden']);
