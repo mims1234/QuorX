@@ -7600,7 +7600,7 @@ async function drawDesktopSettings() {
       + stRow('Quit QuorX', info.ownsServer ? 'Stops QuorX and the harness now. Scheduled tasks wait until you open QuorX again.' : 'Closes this window. The harness it is attached to keeps running.', '<button type="button" class="st-btn danger sm" id="stDeskQuit">Quit QuorX</button>') : '')
     // The Microsoft Store copy can't start at login this way, and the Store brings its updates.
     + (info.store ? '' : stRow('Start at login', 'Opens QuorX in the tray when you sign in to Windows, so scheduled tasks run. Applies right away.', '<label class="sq-check"><input type="checkbox" id="stDeskLogin"' + (login ? ' checked' : '') + '><span>On</span></label>'))
-    + stRow('Updates', '', '<span id="stDeskUpd" class="st-upd">…</span> <button type="button" class="st-btn ghost sm" id="stDeskCheck">Check now</button>')
+    + stRow('Updates', '', `<span id="stDeskUpd" class="st-upd">…</span> <button type="button" class="st-btn ghost sm" id="stDeskCheck">${info.store ? 'Open in the Store ↗' : 'Check now'}</button>`)
     + (info.store ? '' : stRow('Update feed', 'Where new versions are published (latest.yml and the installer), e.g. https://github.com/you/repo/releases/latest/download. Empty: no updates.', '<input type="url" class="st-input" id="stDeskFeed" placeholder="https://…" spellcheck="false" style="min-width:260px">'))
     + stRow('Data folder', 'Chats, projects, keys and logs.', `<code class="blurable" title="${esc(info.home || '')}">${esc(info.home || '')}</code> <button type="button" class="st-btn ghost sm" id="stDeskHome">📂 Open</button>`));
   if ($('#stDeskLogin')) $('#stDeskLogin').onchange = async (e) => { e.target.checked = await window.ohDesktop.loginItem(e.target.checked).catch(() => !e.target.checked); };
@@ -7615,7 +7615,7 @@ async function drawDesktopSettings() {
   const feed = $('#stDeskFeed');
   if (feed) feed.value = st.url || '';
   if (feed) feed.onchange = async (e) => { try { await window.ohDesktop.update('setUrl', e.target.value); } catch (er) { uiAlert(er.message); } };
-  $('#stDeskCheck').onclick = () => window.ohDesktop.update('check');
+  $('#stDeskCheck').onclick = () => window.ohDesktop.update(info.store ? 'store' : 'check');
   drawUpdate(st);
 }
 // ---------- updates (desktop app): "⬆ Update" in the top bar, progress, "Restart to update" ----------
@@ -7669,6 +7669,18 @@ function drawUpdate(u) {
     r.dataset.tip = t.replace(/^\S+\s/, ''); r.setAttribute('aria-label', r.dataset.tip);
     r.innerHTML = u.state === 'downloading' ? `<span class="ru-pct">${u.percent ?? 0}</span>` : UPD_ICO[u.state] || '';
   }
+  // ⚙ Settings' header: the same check one click away, without opening About. It says where the update stands and
+  // its click does the next step: check, Update, Restart, or open the Store page.
+  const h = $('#stHeadUpd');
+  if (h && (DESK || u.demo)) {
+    const v = u.version ? ` to v${u.version}` : '';
+    h.hidden = false; h.dataset.state = u.state || '';
+    h.textContent = { checking: 'Checking…', current: '✓ Up to date', available: `⬆ Update${v}`, downloading: `⬇ ${u.percent ?? 0}%`, ready: `↻ Restart to update${v}`, error: '⚠ Check again', store: 'Microsoft Store ↗', dev: 'Updates from git', 'no-feed': 'No update feed' }[u.state] || '⟳ Check for updates';
+    h.title = { current: `QuorX v${u.current || '?'} is the newest version. Click to check again.`, store: 'This copy is updated by the Microsoft Store. Opens QuorX in the Store, where a new version shows as Update.', dev: 'Running from the repo: pull with git to update.', 'no-feed': 'Set the update feed in Settings → About.', error: u.error || '' }[u.state] || '';
+    h.classList.toggle('accent', ['available', 'ready'].includes(u.state));
+    h.classList.toggle('secondary', !['available', 'ready'].includes(u.state));
+    h.disabled = ['checking', 'downloading', 'dev', 'no-feed'].includes(u.state);
+  }
   const s = $('#stDeskUpd');
   if (s) s.textContent = { dev: 'Running from the repo: updates come from git.', store: 'Updates come from the Microsoft Store.', 'no-feed': 'No update feed set.', checking: 'Checking…', current: `Up to date (v${u.current || '?'}).`, available: `v${u.version} is available.`, downloading: `Downloading… ${u.percent ?? 0}%`, ready: `v${u.version} is downloaded: restart to install.`, error: `Couldn't check: ${u.error || 'unknown error'}` }[u.state] || `v${u.current || '?'}`;
 }
@@ -7677,7 +7689,7 @@ function drawUpdate(u) {
   const demo = new URLSearchParams(location.search).get('demo-update');
   if (demo && !DESK && /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname)) {
     const [state, pct] = demo.split(':');
-    setTimeout(() => drawUpdate({ state, percent: Number(pct) || 0, version: '0.2.5', current: G.cfg?.version || '0.2.4', error: 'The download stopped (demo).' }), 1600);
+    setTimeout(() => drawUpdate({ demo: true, state, percent: Number(pct) || 0, version: '0.2.5', current: G.cfg?.version || '0.2.4', error: 'The download stopped (demo).' }), 1600);
   }
 }
 if (DESK) {
@@ -7687,6 +7699,12 @@ if (DESK) {
   setTimeout(() => window.ohDesktop.update('state').then(drawUpdate).catch(() => {}), 1500);
   const ub = $('#updNote');
   const rb = $('#railUpd'); if (rb) rb.onclick = () => ub?.click();
+  const hb = $('#stHeadUpd');
+  if (hb) hb.onclick = () => {
+    const st = hb.dataset.state;
+    if (['available', 'ready', 'error'].includes(st) && ub) ub.click();
+    else window.ohDesktop.update(st === 'store' ? 'store' : 'check');
+  };
   if (ub) ub.onclick = async () => {
     const st = ub.dataset.state;
     if (st === 'available') drawUpdate(await window.ohDesktop.update('download'));

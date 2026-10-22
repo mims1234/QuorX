@@ -364,8 +364,10 @@ async function checkUpdates() {
   return update;
 }
 handle('update', async (op, arg) => {
-  if (op === 'state') return { ...update, current: app.getVersion(), url: updateUrl(), packaged: app.isPackaged };
+  if (op === 'state') return { ...update, ...(STORE ? { state: 'store' } : {}), current: app.getVersion(), url: updateUrl(), packaged: app.isPackaged };
   if (op === 'check') return checkUpdates();
+  // The Store copy: open QuorX's page in the Microsoft Store, where a new version shows as Update.
+  if (op === 'store') { shell.openExternal('ms-windows-store://pdp/?productid=9NBK5DMLMTFF'); return update; }
   if (op === 'download') { if (update.state !== 'available') return update; setUpdate({ state: 'downloading', percent: 0 }); getUpdater().downloadUpdate().catch((e) => setUpdate({ state: 'error', error: String(e?.message || e).slice(0, 300) })); return update; }
   if (op === 'install') { if (update.state !== 'ready') return update; quitting = true; setImmediate(() => getUpdater().quitAndInstall(false, true)); return update; }
   if (op === 'setUrl') { const url = String(arg || '').trim(); // https only: an update replaces the app, so its feed must not be readable or changeable on the way.
