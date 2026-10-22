@@ -6418,22 +6418,6 @@ function termScreenText(t, f) {
   if (!jobs.length) return null;
   return { title: `⌨ ${f === 'all' ? 'Activity' : f === 'agent' ? 'Agent' : f.startsWith('srv:') ? f.slice(4) : u?.name || 'Terminal'} (last ${jobs.length} command${jobs.length > 1 ? 's' : ''})`, text: jobs.map((j) => termJobText(j).text).join('\n\n') };
 }
-// The terminal's right-click menu: items are [label, action].
-function termMenu(e, items) {
-  e.preventDefault(); e.stopPropagation();
-  document.querySelector('.exp-menu')?.remove();
-  const m = document.createElement('div'); m.className = 'exp-menu fx-menu'; m.setAttribute('role', 'menu');
-  m.innerHTML = items.map((x, i) => `<button type="button" role="menuitem" data-i="${i}">${esc(x[0])}</button>`).join('');
-  document.body.append(m);
-  const r = m.getBoundingClientRect();
-  m.style.left = `${Math.min(e.clientX, innerWidth - r.width - 8)}px`; m.style.top = `${Math.min(e.clientY, innerHeight - r.height - 8)}px`;
-  const away = (ev) => { if (!m.contains(ev.target)) close(); };
-  const key = (ev) => { if (ev.key === 'Escape') close(); };
-  const close = () => { m.remove(); removeEventListener('pointerdown', away, true); removeEventListener('keydown', key, true); };
-  addEventListener('pointerdown', away, true); addEventListener('keydown', key, true);
-  m.onclick = (ev) => { const b = ev.target.closest('[data-i]'); if (!b) return; close(); items[Number(b.dataset.i)][1](); };
-  m.querySelector('button')?.focus();
-}
 function termToChat(item, from) {
   const c = focused();
   if (!c?.el) return uiAlert('Open a chat first: the output goes with your next message there.');
@@ -6474,7 +6458,7 @@ function termDrawPane(t, p, full) {
     w.el.classList.toggle('running', j.status === 'running');
     $('.tj-head', w.el).innerHTML = termHead(t, j);
     $('.tj-share', w.el).onclick = (e) => termToChat(termJobText(j), e.currentTarget);
-    w.el.oncontextmenu = (e) => { if (window.getSelection()?.toString().trim()) return; termMenu(e, [['↪ Send this command and its output to the chat', () => termToChat(termJobText(j), w.el)]]); };
+    w.el.oncontextmenu = (e) => { if (window.getSelection()?.toString().trim()) return; popMenu(e, [['↪ Send this command and its output to the chat', () => termToChat(termJobText(j), w.el)]]); };
     const stop = $('.tj-stop', w.el);
     if (stop) stop.onclick = () => { stop.disabled = true; if (j.server) postJ('/api/servers/stop', { key: j.id.slice(4, j.id.lastIndexOf(':')) }); else postJ('/api/term/stop', { job: j.id }); };
     const pre = $('.tj-out', w.el);
@@ -6509,7 +6493,7 @@ function termFilters(t) {
       + `<span class="tp-acts"><button type="button" class="tp-btn" data-tp="above" title="Add a terminal pane above this one" aria-label="Add a pane above"${t.panes.length >= 6 ? ' disabled' : ''}>${TP_ICO.above}</button><button type="button" class="tp-btn" data-tp="below" title="Add a terminal pane below this one" aria-label="Add a pane below"${t.panes.length >= 6 ? ' disabled' : ''}>${TP_ICO.below}</button>${many ? `<button type="button" class="tp-btn danger" data-tp="close" title="Close this pane (its terminals stay in the tabs)" aria-label="Close this pane">${TP_ICO.close}</button>` : ''}</span>`;
     if (box.dataset.html === html) continue;
     box.dataset.html = html; box.innerHTML = html;
-    for (const el of box.querySelectorAll('.ttab')) { el.onclick = (e) => { if (!e.target.closest('.bt-x')) termPick(t, p, el.dataset.f); }; el.draggable = true; el.ondragstart = (e) => { e.dataTransfer.setData('application/x-quorx-term', el.dataset.f); e.dataTransfer.effectAllowed = 'copy'; }; el.oncontextmenu = (e) => termMenu(e, [['↪ Send what this tab shows to the chat', () => termToChat(termScreenText(t, el.dataset.f), el)]]); }
+    for (const el of box.querySelectorAll('.ttab')) { el.onclick = (e) => { if (!e.target.closest('.bt-x')) termPick(t, p, el.dataset.f); }; el.draggable = true; el.ondragstart = (e) => { e.dataTransfer.setData('application/x-quorx-term', el.dataset.f); e.dataTransfer.effectAllowed = 'copy'; }; el.oncontextmenu = (e) => popMenu(e, [['↪ Send what this tab shows to the chat', () => termToChat(termScreenText(t, el.dataset.f), el)]]); }
     for (const b of box.querySelectorAll('.bt-x')) b.onclick = () => {
       const id = b.dataset.close;
       postJ('/api/term/close', { projectId: t.projectId, tab: id }).catch(() => {}); dropXterm(t.projectId, id, true);
@@ -6954,7 +6938,7 @@ function renderBrowser(c) {
   // Right-click one of your tabs: give it to this chat's agent (or take it back), or close it.
   for (const el of body.querySelectorAll('.btab[draggable="true"]')) el.oncontextmenu = (e) => {
     const sid = el.dataset.sid, to = lentChatOf(sid);
-    tabMenu(e, [to ? ['↩ Take back from the agent', () => takeBackTab(to)] : ['🤖 Give to agent in this chat', () => lendTab(c, sid)], ['✕ Close tab', () => closeBTab(c, sid)]]);
+    popMenu(e, [to ? ['↩ Take back from the agent', () => takeBackTab(to)] : ['🤖 Give to agent in this chat', () => lendTab(c, sid)], ['✕ Close tab', () => closeBTab(c, sid)]]);
   };
   for (const b of body.querySelectorAll('.bt-x')) b.onclick = () => closeBTab(c, b.dataset.close);
   $('.btab-new', body).onclick = () => { newBTab(''); renderPane(); $('#paneUrl').focus(); };
@@ -7091,22 +7075,6 @@ function termLinks(term) {
   });
 }
 // ---------- 🤖 Give to agent: lend one of your Browser tabs to a chat ----------
-// A tab's right-click menu: items are [label, action].
-function tabMenu(e, items) {
-  e.preventDefault(); e.stopPropagation();
-  document.querySelector('.exp-menu')?.remove();
-  const m = document.createElement('div'); m.className = 'exp-menu fx-menu'; m.setAttribute('role', 'menu');
-  m.innerHTML = items.map((x, i) => `<button type="button" role="menuitem" data-i="${i}">${esc(x[0])}</button>`).join('');
-  document.body.append(m);
-  const r = m.getBoundingClientRect();
-  m.style.left = `${Math.min(e.clientX, innerWidth - r.width - 8)}px`; m.style.top = `${Math.min(e.clientY, innerHeight - r.height - 8)}px`;
-  const away = (ev) => { if (!m.contains(ev.target)) close(); };
-  const key = (ev) => { if (ev.key === 'Escape') close(); };
-  const close = () => { m.remove(); removeEventListener('pointerdown', away, true); removeEventListener('keydown', key, true); };
-  addEventListener('pointerdown', away, true); addEventListener('keydown', key, true);
-  m.onclick = (ev) => { const b = ev.target.closest('[data-i]'); if (!b) return; close(); items[Number(b.dataset.i)][1](); };
-  m.querySelector('button')?.focus();
-}
 // Drag a tab onto a chat, or press 🤖 Give to agent in the tab's bar. The agent can then work in that one tab (with
 // your sign-in on that site) in that chat; it is covered while the agent uses it, and Take back ends it at once.
 const lentChatOf = (sid) => Object.keys(G.lent ||= {}).find((id) => G.lent[id]?.sid === sid);
