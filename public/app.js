@@ -2365,7 +2365,7 @@ function renderComposerBar(c) {
   const cap = (k, label, v, step, tip) => `<label class="cs-num" title="${esc(tip)}"><span>${label}</span><span class="cs-inp"><i>$</i><input type="number" min="0" step="${step}" data-k="${k}" value="${esc(String(v))}" aria-label="${label} in dollars"></span></label>`;
   glob.innerHTML = `<div class="cs-sec"><h5>Budget <small>· all chats</small></h5><div class="cs-row cs-caps">${cap('replyBudget', 'Cap per reply', G.settings.replyBudget ?? G.cfg.defaults.replyBudget ?? 1, 0.25, 'Everything one reply calls: the agent, deciders, helpers, checks and media. At 85% the agent is told to wrap up; at the cap Strict asks you, YOLO stops. 0 = no cap.')}${cap('budget', 'Paid media per reply', G.settings.budget, 0.05, 'A paid picture, voice, music or video call that would go over this is stopped, in Strict and in YOLO.')}</div></div>`;
   followSlot.innerHTML = `
-    <label class="sq-check cmp-follow" title="Follow the agent: when it opens or checks a page in its browser, or starts a site or app, the Browser tab switches to it so you can watch. Off: the pane stays where you put it (all chats)."><input type="checkbox" class="follow-agent" ${G.followAgent !== false ? 'checked' : ''}><svg class="fl-eye" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg><span>Follow</span></label>
+    <label class="sq-check cmp-follow" title="Follow the agent: when it opens or checks a page in its browser, or starts a site or app, the Browser tab switches to it; when it runs a command, the Terminal tab shows its output. So you can watch. Off: the pane stays where you put it (all chats)."><input type="checkbox" class="follow-agent" ${G.followAgent !== false ? 'checked' : ''}><svg class="fl-eye" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg><span>Follow</span></label>
 `;
   for (const inp of glob.querySelectorAll('.cs-num input')) inp.onchange = () => { const v = Math.max(0, Number(inp.value) || 0); inp.value = String(v); G.settings[inp.dataset.k] = v; savePrefs(); };
   // The button says what matters at a glance (YOLO in red, reasoning on) and opens the panel.
@@ -4151,6 +4151,7 @@ async function followRun(c, m, open) {
         }
         if (e.t !== 'start') m.trace.push(e);
         if (isShot(e)) onAgentBrowse(c, m);
+        if (e.t === 'tool' && !e.by && (e.name === 'shell' || e.name === 'run_command')) onAgentCommand(c);
         redraw(false);
       }
     }
@@ -6599,6 +6600,14 @@ function onAgentBrowse(c, m) {
     if (G.followAgent !== false && !(G.view.browser && G.bActive === `agent-${c.id}`)) { G.view = { id: G.view.id, src: false, files: false, browser: true }; G.bActive = `agent-${c.id}`; c.paneHidden = false; syncLayout(); renderPane(); }
     else if (G.view.browser) renderPane();
   });
+}
+// With "Follow the agent", a command the agent runs brings up the Terminal tab on its output (the 🤖 Agent view, or
+// ≡ Activity before the agent's first command has shown up there), unless you are typing in the pane.
+function onAgentCommand(c) {
+  if (focused() !== c || G.followAgent === false || (G.view.term && ['agent', 'all'].includes(G.term?.filter))) return;
+  if ($('#pane')?.contains(document.activeElement) && document.activeElement.matches('input, textarea, .xterm-helper-textarea, [contenteditable]')) return;
+  const t = termState(c.projectId);
+  openTerminal(c, [...t.jobs.values()].some((j) => j.source === 'agent' && !j.server) ? 'agent' : 'all');
 }
 // The Browser tab is a small browser of its own: the agent's page for this chat (live, and watch-only
 // while its reply works), and your own tabs. Pages run in the harness's headless browser and show as a
