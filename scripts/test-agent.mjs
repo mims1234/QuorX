@@ -2406,7 +2406,7 @@ test('🧩 Chrome on in a chat: the agent opens its own tab in the user’s Chro
     if (m.cmd === 'tab.open') { opened.push(m.args); await real.open(m.args.url, { width: 900, height: 600 }); return reply({ result: { id: 9, title: 'Inbox' } }); }
     if (m.cmd === 'tab.cdp') { try { return reply({ result: await real.cdp(m.args.method, m.args.params) }); } catch (e) { return reply({ error: e.message }); } }
     reply({ result: true });
-  }; ws.onopen = () => ws.send(JSON.stringify({ t: 'hello', key: extKey() })); });
+  }; ws.onopen = () => ws.send(JSON.stringify({ t: 'hello', key: extKey(), version: '0.2.11' })); });
   const chatId = `chat-${Date.now().toString(36)}`;
   try {
     const off = await run((body, i) => [reply('', [['browser', { action: 'open', target: `chrome:127.0.0.1:${port}/` }]]), reply('Done.')][i], { chatId });

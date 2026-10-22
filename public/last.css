@@ -2656,3 +2656,5 @@ body.link-mod a[data-cl] { cursor: pointer; }
 .st-ext-acts { display: inline-flex; gap: 4px; margin: 0 4px; vertical-align: middle; }
 .st-ext-steps li { line-height: 1.9; }
 .sq-check.cmp-chrome.off { opacity: .55; }
+.st-ext-state.warn { color: var(--warn); }
+.st-ext-state.warn i { background: var(--warn); }

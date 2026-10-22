@@ -21,7 +21,11 @@ let link = null; // { send(obj), close(code, why), at, version }
 const waiting = new Map(), subs = new Map(); // call id → { ok, no, timer }; tab → Set(fn)
 let handlers = {}; // what the extension asks of the harness: give, takeBack, closed, chats
 export const extReady = () => !!link;
-export const extInfo = () => (link ? { connected: true, since: link.at, version: link.version } : { connected: false });
+// The extension's version this QuorX needs (what it can do); an older one is still connected but must be reloaded.
+export const EXT_NEEDS = '0.2.11';
+const older = (v) => { const a = String(v || '0').split('.').map(Number), b = EXT_NEEDS.split('.').map(Number); for (let i = 0; i < 3; i++) { if ((a[i] || 0) !== b[i]) return (a[i] || 0) < b[i]; } return false; };
+export const extOutdated = () => !!link && older(link.version);
+export const extInfo = () => (link ? { connected: true, since: link.at, version: link.version, outdated: older(link.version) } : { connected: false });
 export function onExtRequest(h) { handlers = h; }
 
 /** A command for the extension (tab.cdp, tab.lock, tab.release); resolves with its answer. */

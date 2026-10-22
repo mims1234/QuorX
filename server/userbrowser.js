@@ -4,7 +4,7 @@
 // and closed when idle like the rest.
 import { openTab } from './browser.js';
 import { desktopCall } from './desktop.js';
-import { extCall } from './extlink.js';
+import { extCall, extOutdated } from './extlink.js';
 
 const sessions = new Map(); // sid → { tab, at, w, h, agent?, locked? }
 const IDLE = 10 * 60e3;
@@ -127,6 +127,7 @@ export function takeBackSid(sid) { for (const [c, g] of given) if (g.sid === sid
 export const lentChromeTabs = () => [...given].filter(([, g]) => g.ext != null).map(([chatId, g]) => ({ chatId, tab: g.ext, title: g.title }));
 /** 🧩 Chrome on in a chat: a new tab in the user's Chrome (the QuorX window), lent to that chat as the agent's own. */
 export async function openChromeTab(chatId, url) {
+  if (extOutdated()) throw new Error('the QuorX extension in Chrome is an older version: the user needs to reload it once (chrome://extensions → ↻ on the QuorX card)');
   const t = await extCall('tab.open', { url, chatId }, 20000);
   return giveTab(chatId, `chrome-${t.id}`, { url, title: t.title || url, ext: t.id, own: true });
 }
