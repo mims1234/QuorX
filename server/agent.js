@@ -1495,7 +1495,11 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     emit({ t: 'tool_result', step, id: tc.id, name, result: clip(result, 600), at: at() });
     if (/^\s*Error/.test(String(result))) (run.errSteps ||= []).push(step);
     // Attempts: what changes the work. A problem only counts as "back" if one happened since it was last seen.
-    if (['write_file', 'edit_file', 'append_file', 'delete_file', 'write_artifact', 'edit_artifact', 'run_command', 'shell', 'terminal', 'start_server'].includes(name)) (run.actionSteps ||= []).push(step);
+    if (['write_file', 'edit_file', 'append_file', 'delete_file', 'write_artifact', 'edit_artifact', 'run_command', 'shell', 'terminal', 'start_server'].includes(name)) {
+      (run.actionSteps ||= []).push(step);
+      // Which file it touched ('' for a command, which could make any file), so a missing link can wait for its file.
+      (run.actionPaths ||= []).push({ step, path: /_file$/.test(name) && !broken ? String(args?.path || '').replaceAll('\\', '/').replace(/^\.\//, '') : '' });
+    }
     noteProblems(name, String(result), step);
     if (!broken) result += await loopWatch(name, args, first, step);
     return result;
@@ -1608,9 +1612,13 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       if (key.length < 8) continue;
       const seen = (run.problemSeen ||= new Map()), prev = seen.get(key);
       // The same problem reported again without an attempt in between (a check repeating it) is not "came back".
-      const tried = prev && (run.actionSteps || []).some((x) => x > prev.step && x <= step);
+      let tried = prev && (run.actionSteps || []).some((x) => x > prev.step && x <= step);
+      // "Links to X, which does not exist" right after writing a page is usually X still to come. It only counts as
+      // back once the agent has touched something other than that page since it first showed up, and it is still there.
+      const page = line.match(/^(.+?): links to .+, which does not exist$/)?.[1];
+      if (tried && page && !(run.actionPaths || []).some((x) => x.step > prev.first && x.step <= step && x.path !== page)) tried = false;
       const n = !prev ? 1 : tried ? prev.n + 1 : prev.n;
-      seen.set(key, { n, text: clip(line, 600), source, step });
+      seen.set(key, { n, text: clip(line, 600), source, step, first: prev?.first ?? step });
       if (n === 2 && !(run.freshDone ||= new Set()).has(key)) { run.freshDone.add(key); (run.freshQueue ||= []).push({ key, text: line, source }); }
     }
   }
