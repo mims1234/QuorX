@@ -8,6 +8,9 @@ import { highlight, langOf, LANG_NAME } from './code.js';
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const LANG_ALIAS = { js: 'js', javascript: 'js', ts: 'js', typescript: 'js', jsx: 'js', tsx: 'js', mjs: 'js', node: 'js', json: 'json', html: 'html', xml: 'html', svg: 'html', vue: 'html', css: 'css', scss: 'css', py: 'py', python: 'py', sh: 'sh', bash: 'sh', shell: 'sh', zsh: 'sh', powershell: 'sh', ps1: 'sh', cmd: 'sh', md: 'md', markdown: 'md' };
 const safeUrl = (u, img = false) => (/^(https?:|mailto:)/i.test(u) || (img && /^data:image\//i.test(u)) ? u : '');
+// A web link in content opens only with Ctrl+click (Cmd+click on a Mac), in QuorX's Browser tab (data-cl: the page's
+// click handler does that). A mail link stays an ordinary link. `href` is already escaped.
+const link = (href, text) => (/^https?:/i.test(href) ? `<a href="${href}" rel="noopener noreferrer" data-cl="1">${text}</a>` : `<a href="${href}" target="_blank" rel="noopener noreferrer">${text}</a>`);
 
 // ---------- inline ----------
 // Code spans and math are cut out first (as placeholders) so their contents are never formatted.
@@ -20,12 +23,12 @@ function inline(src, keep) {
   s = s.replace(/(^|[^\\$\w])\$(?![\s\d$])([^$\n]+?)(?<!\s)\$(?![\d$])/g, (_, pre, tex) => pre + hold(`<span class="md-math" data-tex="${esc(tex)}">${esc(tex)}</span>`));
   s = esc(s);
   s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (m, alt, url) => { const u = safeUrl(url.replace(/&amp;/g, '&'), true); return u ? `<img class="md-img" src="${esc(u)}" alt="${alt}" loading="lazy">` : m; });
-  s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, text, url) => { const u = safeUrl(url.replace(/&amp;/g, '&')); return u ? `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${text}</a>` : m; });
+  s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, text, url) => { const u = safeUrl(url.replace(/&amp;/g, '&')); return u ? link(esc(u), text) : m; });
   // Bare URLs in text only: never inside a tag made above (an alt or href), and never inside a link's own text.
   let inA = 0;
   s = s.split(/(<[^>]*>)/).map((part, i) => {
     if (i % 2) { if (/^<a[\s>]/i.test(part)) inA++; else if (/^<\/a>/i.test(part)) inA = Math.max(0, inA - 1); return part; }
-    return inA ? part : part.replace(/(^|[\s(])((?:https?:\/\/)[^\s<)"]+[^\s<).,;:!?'"])/g, (_, pre, url) => `${pre}<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`);
+    return inA ? part : part.replace(/(^|[\s(])((?:https?:\/\/)[^\s<)"]+[^\s<).,;:!?'"])/g, (_, pre, url) => `${pre}${link(url, url)}`);
   }).join('');
   s = s.replace(/\*\*\*([^*]+)\*\*\*/g, '<strong><em>$1</em></strong>')
     .replace(/\*\*([^*\n]+?)\*\*/g, '<strong>$1</strong>').replace(/__([^_\n]+?)__/g, '<strong>$1</strong>')
