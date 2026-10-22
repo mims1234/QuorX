@@ -3740,8 +3740,10 @@ function approvalHTML(a, live = true) {
     return `<details class="approval-line ${state}"><summary title="${esc(who)}"><span class="al-mark">${mark}</span><b>${name}</b><span class="al-what">${esc(c.what)}</span><span class="al-price">${c.free ? 'free' : money(c.est, 3)}</span></summary>
       <div class="al-detail">${c.items ? planRows : `${c.free ? '' : `<div>${esc(short(finalModel))} · ${esc(c.detail || '')}</div>`}<div>${esc(c.what)}</div>`}${c.why ? `<div>Why: ${esc(c.why)}</div>` : ''}<div class="al-who ${state}">${who}</div></div></details>`;
   }
-  return `<div class="approval ${o ? 'done' : ''} ${c.free ? 'free' : ''}" ${waiting ? `data-id="${esc(c.id)}" data-tool="${esc(c.tool)}"` : ''}>
-    ${head}${model}
+  // A card that acts in the user's own account (a lent tab: send, delete, buy…) is red, and says so.
+  const danger = c.risk === 'danger' && waiting ? '<div class="sc-risk" data-risk="danger">⛔ This acts in your own account. Only say yes if you want exactly this.</div>' : '';
+  return `<div class="approval ${o ? 'done' : ''} ${c.free ? 'free' : ''}" ${waiting ? `data-id="${esc(c.id)}" data-tool="${esc(c.tool)}"` : ''}${c.risk ? ` data-risk="${esc(c.risk)}"` : ''}>
+    ${head}${model}${danger}
     ${c.items ? '' : `<div class="what">${c.free ? esc(c.what) : `“${esc(c.what)}”`}</div>`}
     ${c.why ? `<div class="what">Why: ${esc(c.why)}</div>` : ''}${c.items && waiting ? '<div class="what dim">Calls that match this plan then run without asking again; anything else asks on its own.</div>' : ''}
     ${waiting ? `${waitHTML(c)}<textarea rows="1" placeholder="To decline, you can add a note: why, or what to do instead. Enter declines and sends it."></textarea>

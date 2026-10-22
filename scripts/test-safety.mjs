@@ -929,13 +929,16 @@ const allow = (d, match) => { fs.mkdirSync(path.join(d, '.quorx'), { recursive: 
 test('terminal: the agent answers a program’s prompts and reads its screen', { skip: !WIN }, async () => {
   const { bodies } = await agentRun((b, i) => [
     reply('', [['terminal', { action: 'start', command: 'py -3 ask.py', cols: 60, rows: 10 }]]),
+    // Python can take a moment to start on a busy machine: look again (as the agent would) before typing.
+    reply('', [['terminal', { action: 'read', id: 't1', wait_s: 5 }]]),
     reply('', [['terminal', { action: 'send', id: 't1', text: 'Ada', keys: ['Enter'] }]]),
     reply('', [['terminal', { action: 'stop', id: 't1' }]]),
     reply('Done.'),
   ][i], { prep: (d) => { fs.writeFileSync(path.join(d, 'ask.py'), 'name = input("Name? ")\nprint("Hello,", name)\ninput("Enter to quit")\n'); allow(d, 'py -3 ask.py*'); } });
-  assert.match(toolOut(bodies, 1), /Terminal t\d+ started[\s\S]*Name\?/);
-  assert.match(toolOut(bodies, 2), /Hello, Ada/);
-  assert.match(toolOut(bodies, 3), /0 processes left|already ended/);
+  assert.match(toolOut(bodies, 1), /Terminal t\d+ started/);
+  assert.match(`${toolOut(bodies, 1)}\n${toolOut(bodies, 2)}`, /Name\?/);
+  assert.match(toolOut(bodies, 3), /Hello, Ada/);
+  assert.match(toolOut(bodies, 4), /0 processes left|already ended/);
 });
 
 test('terminal: a bare interpreter is a prompt QuorX can’t check, so it asks', { skip: !WIN }, async () => {
