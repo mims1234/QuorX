@@ -126,7 +126,8 @@ export async function killJob(job, wait = 5000) {
 }
 /**
  * Splits a PowerShell command line with PowerShell's own parser: { errors, commands: [{ name, resolved, nameStatic,
- * invocation, args: [{ t: 'param'|'arg', text, static, value? }], redirects, text }], members: [.NET calls] }.
+ * invocation, isFunction (a function the line defines itself), args: [{ t: 'param'|'arg', text, static, value? }], redirects, text }],
+ * members: [.NET calls] }.
  * Throws when the host isn't running (the caller then treats the command as one it can't check).
  */
 export async function parsePowerShell(line) {
