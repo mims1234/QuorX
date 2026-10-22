@@ -130,8 +130,14 @@ function createWindow() {
     e.preventDefault();
     if (/^(https?|mailto):/i.test(url)) shell.openExternal(url);
   });
-  // Anything that opens a new window (↗, links in pages and artifacts) goes to your default browser.
-  win.webContents.setWindowOpenHandler(({ url }) => { if (/^(https?|mailto):/i.test(url)) shell.openExternal(url); return { action: 'deny' }; });
+  // Ctrl+click (Cmd+click on a Mac) on a web link inside a frame of the app (an artifact, a page preview) opens it in the
+  // pane's Browser tab. Links in QuorX's own content are handled by the page and never get here.
+  // Anything else that opens a new window (↗, sign-in) goes to your default browser.
+  win.webContents.setWindowOpenHandler(({ url, disposition }) => {
+    if (disposition === 'background-tab' && /^https?:\/\//i.test(url)) { send({ type: 'open-link', url }); return { action: 'deny' }; }
+    if (/^(https?|mailto):/i.test(url)) shell.openExternal(url);
+    return { action: 'deny' };
+  });
   // ✕ keeps the harness running in the tray (scheduled tasks still run), or quits, as you chose in the notice
   // or in ⚙ Settings → About. Attached to a harness someone else runs, ✕ just closes the window.
   win.on('close', (e) => {
