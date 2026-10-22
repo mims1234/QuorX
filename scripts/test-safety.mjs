@@ -1167,3 +1167,20 @@ test('shell: an approved command runs in the background, and the terminal tool d
   assert.match(toolOut(bodies, 2), /Terminal \S+ started/);
   assert.ok(of(events, 'approval_done').every((e) => e.approve));
 });
+
+// From a real YOLO chat: harmless PowerShell the agent wrote to read its own scratch files asked the user 13 times.
+test('YOLO: safe .NET calls, GETs with plain headers and the line’s own functions run; risky look-alikes still pause', { skip: !WIN }, async () => {
+  const root = tmp('yolo-ps');
+  fs.mkdirSync(path.join(root, '.quorx', 'scratch'), { recursive: true });
+  const { safetySettings, yoloOf } = await import('../server/safety.js');
+  const y = yoloOf(safetySettings({}));
+  const verdict = async (line) => { const d = await decide(line, { mode: 'yolo', yolo: y, root, shell: 'powershell' }); return d.verdict === 'allow' ? 'allow' : `${d.verdict}:${d.who}`; };
+  assert.equal(await verdict('$c = Get-Content ".quorx/scratch/r.md"; $s = 3; $c[($s-1)..([Math]::Min($s+90,$c.Count-1))]'), 'allow', '[Math]::Min alone');
+  assert.equal(await verdict('$h = Get-Content "index.html" -Raw; [regex]::Matches($h, \'id="x"\').Count'), 'allow', '[regex]::Matches');
+  assert.equal(await verdict('$r = Invoke-RestMethod -Uri "https://api.github.com/repos/a/b" -Headers @{ \'User-Agent\'=\'QuorX\' }; $r.size'), 'allow', 'a GET with literal headers');
+  assert.equal(await verdict('$a = Get-Content ".quorx/scratch/a.json" -Raw | ConvertFrom-Json\nfunction Cat($n) { if ($n -match \'x\') { \'X\' } else { \'Y\' } }\n$a | Group-Object { Cat $_.name }'), 'allow', 'a function called Cat is not Get-Content');
+  assert.notEqual(await verdict('Invoke-RestMethod -Uri "https://api.example.com/x" -Headers @{ Authorization = "Bearer $env:TOKEN" }'), 'allow', 'a token header');
+  assert.notEqual(await verdict('Invoke-RestMethod -Uri "https://api.example.com/x" -Method Post -Body \'{}\''), 'allow', 'a POST');
+  assert.notEqual(await verdict('[IO.File]::Delete("C:/x.txt")'), 'allow', 'a .NET delete');
+  assert.notEqual(await verdict('function cat($p) { Remove-Item -Recurse $p }; cat C:/Users'), 'allow', 'what a script function runs is still judged');
+});

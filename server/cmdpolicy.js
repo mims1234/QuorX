@@ -289,6 +289,8 @@ async function splitPowerShell(line) {
     }
     const s = { text: c.text, rawProgram: c.name, program: progName(resolved), dynamicProgram: !c.nameStatic, args, redirects: c.redirects };
     if (c.invocation && c.invocation !== 'Unknown' && !c.nameStatic) s.dynamicProgram = true;
+    // A function the line defines itself: not the alias or program of the same name (a function called Cat isn't cat).
+    if (c.isFunction) Object.assign(s, { scriptFunction: true, program: `function:${low(c.name)}` });
     return s;
   });
   const risky = r.members.filter((m) => !readOnlyMember(m));
@@ -300,13 +302,17 @@ async function splitPowerShell(line) {
 const READ_ONLY_METHODS = new Set(['substring', 'indexof', 'lastindexof', 'indexofany', 'trim', 'trimstart', 'trimend', 'tolower', 'toupper',
   'tolowerinvariant', 'toupperinvariant', 'split', 'startswith', 'endswith', 'contains', 'padleft', 'padright', 'tostring', 'equals',
   'compareto', 'normalize', 'gettype', 'replace']);
-const READ_ONLY_STATIC = /\[(?:math|system\.math)\]::(?:min|max|round|floor|ceiling|abs)\s*\(|\[(?:string|system\.string)\]::(?:join|isnullorempty|isnullorwhitespace|format|concat)\s*\(/gi;
+const READ_ONLY_STATIC = /\[(?:system\.)?math\]::(?:min|max|round|floor|ceiling|abs|pow|sqrt|truncate|sign)\s*\(|\[(?:system\.)?string\]::(?:join|isnullorempty|isnullorwhitespace|format|concat|equals|compare)\s*\(|\[(?:(?:system\.)?text\.regularexpressions\.)?regex\]::(?:matches|match|ismatch|escape|unescape|split|replace)\s*\(|\[(?:system\.)?(?:int|int32|int64|long|double|decimal|bool|boolean|datetime|timespan|guid|version)\]::(?:parse|tryparse|parseexact|compare)\s*\(|\[(?:system\.)?(?:io\.)?path\]::(?:getfilename|getfilenamewithoutextension|getextension|getdirectoryname|combine|join|hasextension|isrooted|changeextension)\s*\(|\[(?:system\.)?convert\]::(?:toint32|toint64|todouble|tostring|toboolean|tobase64string|frombase64string)\s*\(/gi;
+// Read-only static values ([datetime]::Now, [Environment]::NewLine…), dropped before the check like the calls above.
+const READ_ONLY_VALUES = /\[(?:system\.)?(?:datetime|datetimeoffset)\]::(?:now|utcnow|today)|\[(?:system\.)?environment\]::newline|\[(?:system\.)?(?:int|int32|int64|double)\]::(?:maxvalue|minvalue)|\[(?:system\.)?string\]::empty/gi;
 const STRING_PROPS = /\.(?:fullname|name|basename|extension|directoryname|line|path|text|value|filename)\s*\.replace\s*\($/i;
 export function readOnlyMember(text) {
-  const t = String(text).replace(READ_ONLY_STATIC, '(');
+  const raw = String(text).replace(READ_ONLY_VALUES, '0');
+  const t = raw.replace(READ_ONLY_STATIC, '(');
   if (t.includes('::')) return false;
   const calls = [...t.matchAll(/\.(\w+)\s*\(/g)];
-  if (!calls.length) return false;
+  // Only safe static calls ([Math]::Min(...)) and nothing else that calls: read-only.
+  if (!calls.length) return t !== raw;
   return calls.every((m) => {
     const name = m[1].toLowerCase();
     if (!READ_ONLY_METHODS.has(name)) return false;
@@ -481,7 +487,9 @@ function netClass(s) {
   const kind = FETCHERS[p];
   if (kind) {
     const texts = s.args.map((a) => a.text), out = [];
-    if (s.args.some((a) => !a.static)) return null;
+    // A plain hashtable of literal headers (@{ 'User-Agent'='x' }) is as known as a string; anything built at run time isn't.
+    const literal = (a) => a.static || (kind === 'ps' && /^@\{[^$`()]*\}$/.test(String(a.text || '').trim()));
+    if (s.args.some((a) => !literal(a))) return null;
     if (texts.some((t) => /authorization|cookie|api-?key|bearer/i.test(t))) return null;
     if (kind === 'ps') {
       for (let i = 0; i < s.args.length; i++) {
@@ -551,6 +559,8 @@ const awkReads = (s) => !hasArg(s, '-f', '--file', '-i', '--include', '-e', '--s
 function classify(s, shell) {
   const p = s.program, a1 = sub(s), words = s.args.map((a) => low(a.text));
   if (s.opaque) return { cls: 'opaque', why: s.opaque };
+  // A function the line defines itself runs only its own body, whose commands are judged one by one.
+  if (s.scriptFunction) return { cls: 'read', why: '' };
   // In PowerShell a bare sc is Set-Content; sc.exe is still the service tool.
   if (p === 'sc' && ((shell !== 'powershell' && shell !== 'pwsh') || /\.exe$/i.test(s.rawProgram))) return { cls: 'never', why: 'sc changes Windows services' };
   if (KILLERS.has(p)) return { cls: 'opaque', ends: true, why: `${s.rawProgram} can end your other programs` };

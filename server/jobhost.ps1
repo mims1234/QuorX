@@ -87,13 +87,17 @@ while ($true) {
         $ast = [System.Management.Automation.Language.Parser]::ParseInput([string]$m.line, [ref]$tokens, [ref]$errs)
         $out.errors = @($errs | ForEach-Object { $_.Message })
         $cmds = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true)
+        # Functions the line defines itself: calling one runs only its own body (whose commands are listed too), so it
+        # is not the alias or program of the same name (a function called Cat is not Get-Content).
+        $fns = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) | ForEach-Object { $_.Name.ToLowerInvariant() })
         $out.commands = @(foreach ($c in $cmds) {
           $els = $c.CommandElements
           $first = $els[0]
           $nameStatic = $first -is [System.Management.Automation.Language.StringConstantExpressionAst]
           $name = if ($nameStatic) { $first.Value } else { $first.Extent.Text }
           $resolved = $name
-          if ($nameStatic) { $al = Get-Alias -Name $name -ErrorAction SilentlyContinue; if ($al) { $resolved = $al.Definition } }
+          $isFunction = $nameStatic -and ($fns -contains $name.ToLowerInvariant())
+          if ($nameStatic -and -not $isFunction) { $al = Get-Alias -Name $name -ErrorAction SilentlyContinue; if ($al) { $resolved = $al.Definition } }
           $argsOut = @(for ($i = 1; $i -lt $els.Count; $i++) {
             $e = $els[$i]
             if ($e -is [System.Management.Automation.Language.CommandParameterAst]) {
@@ -109,7 +113,7 @@ while ($true) {
             }
           })
           @{
-            name = $name; resolved = $resolved; nameStatic = $nameStatic; invocation = [string]$c.InvocationOperator
+            name = $name; resolved = $resolved; nameStatic = $nameStatic; isFunction = [bool]$isFunction; invocation = [string]$c.InvocationOperator
             args = $argsOut; text = $c.Extent.Text
             redirects = @($c.Redirections | Where-Object { $_ -is [System.Management.Automation.Language.FileRedirectionAst] } | ForEach-Object { $_.Location.Extent.Text })
           }
