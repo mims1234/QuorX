@@ -1910,7 +1910,7 @@ function zoomTarget(kind) {
   return isPaneFrame(el) ? 'page' : inTerminal(el) ? 'terminal' : 'app';
 }
 function zoomFor(target, dir) {
-  if (target === 'terminal') return flashTip($('#paneBody .term-x') || document.body, `Terminal text ${termFont(dir)}px`);
+  if (target === 'terminal') return flashTip($('#paneBody .tpane.on .term-x') || $('#paneBody .term-x') || document.body, `Terminal text ${termFont(dir)}px`);
   if (target === 'page') { const z = zoomPages(dir); const f = paneFrames()[0]; return flashTip(f?.parentElement || document.body, `Page ${Math.round(z * 100)}%`); }
   window.ohDesktop?.zoom?.(dir).then((f) => flashTip(document.body, `QuorX ${Math.round(f * 100)}%`)).catch(() => {});
 }
@@ -4250,7 +4250,6 @@ function renderPane() {
   if (!c) return;
   if (G.view.term) { setUrlBar(null); return renderTerm(c); }
   closeTermStream();
-  if (G.view.run) { setUrlBar(null); return renderRunningPane(c); }
   if (G.view.files) { setUrlBar(null); return renderFiles(c); }
   if (G.view.browser) return renderBrowser(c);
   if (G.view.trace) {
@@ -6039,14 +6038,14 @@ function toggleServers(c) {
     if (!pop.isConnected || (!pop.contains(e.target) && !btn.contains(e.target))) closeServers(c);
   };
   document.addEventListener('pointerdown', outside, true);
-  c.srvPop = { outside, timer: setInterval(() => renderServers(c), 2000), editing: null };
+  c.srvPop = { el: pop, outside, timer: setInterval(() => renderServers(c), 2000), editing: null };
   pop.innerHTML = '<div class="srv-empty">Loading…</div>';
   renderServers(c);
 }
 function closeServers(c) {
   const s = c.srvPop; if (!s) return;
   clearInterval(s.timer); document.removeEventListener('pointerdown', s.outside, true); c.srvPop = null;
-  if (!c.el) return;
+  if (!c.el || s.inline) return;
   $('#paneSrvPop').hidden = true;
   const btn = $('#paneSrvBtn'); btn.classList.remove('active'); btn.setAttribute('aria-expanded', 'false');
 }
@@ -6061,8 +6060,9 @@ const SRV_ICO = {
   trash: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg>',
 };
 async function renderServers(c) {
-  const pop = c.el && $('#paneSrvPop');
-  if (!pop || pop.hidden || !c.srvPop || c.srvPop.editing || c.srvPop.busy) return;
+  const pop = c.srvPop?.el;
+  if (!pop || !pop.isConnected) { if (c.srvPop?.inline) closeServers(c); return; }
+  if (c.srvPop.editing || c.srvPop.busy) return;
   const r = await getJ(`/api/servers/overview?project=${encodeURIComponent(c.projectId)}`);
   if (!c.srvPop || c.srvPop.editing || c.srvPop.busy) return;
   devBadges(c.projectId, r);
@@ -6124,7 +6124,7 @@ async function renderServers(c) {
 }
 // Add or edit a launch config, right in the menu.
 function editServer(c, s) {
-  const pop = $('#paneSrvPop');
+  const pop = c.srvPop.el;
   c.srvPop.editing = s;
   const allowed = G.cfg.allowed || [];
   pop.innerHTML = `<form class="srv-form">
@@ -6184,23 +6184,43 @@ async function pollDev() {
     if (run && !run.error) {
       (G.runCount ||= {})[pid] = { n: run.items.filter((x) => x.kind !== 'your-term').length };
       const fc = focused();
-      if (fc?.projectId === pid) { renderPaneTabs(fc); if (G.view.run) drawRunningPane(fc, run); }
+      if (fc?.projectId === pid) { renderPaneTabs(fc); if (G.view.term && G.term?.sec === 'run') drawRunningPane(fc, run); }
     }
   }
 }
 setInterval(pollDev, 3000);
 
 // ---------- ⌨ terminal: live output of every command and server in the project ----------
-function openTerminal(c, filter) {
+// One Terminal tab with three sections: your terminals (panes stacked top to bottom, each with its own tabs, added
+// above or below and resized by dragging the bar between them), what is Running (each with a Stop), and the Servers.
+function openTerminal(c, filter, sec = 'term') {
   const t = termState(c.projectId);
   if (filter) t.filter = t.terms.some((u) => u.id === filter) || filter === 'all' || filter === 'agent' ? filter : `srv:${filter}`;
+  t.sec = sec; termSave(t);
   G.view = { id: G.view.id, src: false, files: false, term: true };
   c.paneHidden = false;
   syncLayout(); renderPane(); toPreview();
 }
+const termLayoutKey = (projectId) => `oh-term-layout:${projectId}`;
 function termState(projectId) {
-  if (G.term?.projectId !== projectId) { closeTermStream(); G.term = { projectId, jobs: new Map(), order: [], seq: 0, filter: 'u1', cleared: 0, terms: [{ id: 'u1', name: 'Terminal 1', cwd: '', hist: [], hi: 0 }], nextTerm: 2 }; }
+  if (G.term?.projectId !== projectId) {
+    closeTermStream();
+    let saved = null; try { saved = JSON.parse(localStorage.getItem(termLayoutKey(projectId)) || 'null'); } catch { /* storage off */ }
+    const panes = (Array.isArray(saved?.panes) && saved.panes.length ? saved.panes : [{ filter: 'u1', grow: 1 }]).slice(0, 6)
+      .map((p, i) => ({ id: `p${i + 1}`, filter: String(p.filter || 'u1'), grow: Math.max(0.1, Number(p.grow) || 1) }));
+    // Your terminals that the saved panes show come back (their shells start again when shown).
+    const ids = [...new Set(['u1', ...panes.map((p) => p.filter).filter((f) => /^u\d+$/.test(f))])];
+    G.term = { projectId, jobs: new Map(), order: [], seq: 0, cleared: 0, terms: ids.map((id) => ({ id, name: `Terminal ${id.slice(1)}`, cwd: '', hist: [], hi: 0 })),
+      nextTerm: Math.max(...ids.map((x) => Number(x.slice(1)))) + 1, panes, act: panes[0].id, nextPane: panes.length + 1, sec: ['term', 'run', 'srv'].includes(saved?.sec) ? saved.sec : 'term' };
+    // The active pane's tab, as the rest of the page knows it (Follow, Clear, a server's Logs).
+    Object.defineProperty(G.term, 'filter', { get() { return termPane(this).filter; }, set(v) { termPane(this).filter = v; }, enumerable: true });
+  }
   return G.term;
+}
+const termPane = (t) => t.panes.find((p) => p.id === t.act) || t.panes[0];
+const tpaneEl = (p) => $(`#paneBody .tpane[data-pane="${p.id}"]`);
+function termSave(t) {
+  try { localStorage.setItem(termLayoutKey(t.projectId), JSON.stringify({ panes: t.panes.map((p) => ({ filter: p.filter, grow: Math.round(p.grow * 1000) / 1000 })), sec: t.sec })); } catch { /* storage off */ }
 }
 function closeTermStream() { if (G.term?.es) { G.term.es.close(); G.term.es = null; } }
 function termOpenStream(t) {
@@ -6211,25 +6231,25 @@ function termOpenStream(t) {
 function termApply(t, e) {
   let j = t.jobs.get(e.job);
   if (!j) {
-    j = { id: e.job, label: e.label || '(earlier output)', source: e.source, server: e.server, chatId: e.chatId, tab: e.tab, at: e.at, lines: [], status: 'running', port: e.port };
+    j = { id: e.job, label: e.label || '(earlier output)', source: e.source, server: e.server, chatId: e.chatId, tab: e.tab, at: e.at, lines: [], status: 'running', port: e.port, rev: 0, cut: 0 };
     t.jobs.set(e.job, j); t.order.push(e.job);
     if (t.order.length > 300) t.jobs.delete(t.order.shift());
   }
   if (e.kind === 'start') Object.assign(j, { label: e.label, source: e.source, server: e.server, chatId: e.chatId, tab: e.tab, at: e.at, port: e.port, status: 'running' });
-  else if (e.kind === 'out') { j.lines.push({ text: e.text, stream: e.stream }); if (j.lines.length > 3000) { j.lines.splice(0, j.lines.length - 3000); j.drawn = 0; j.redraw = true; } }
+  else if (e.kind === 'out') { j.lines.push({ text: e.text, stream: e.stream }); if (j.lines.length > 3000) { j.lines.splice(0, j.lines.length - 3000); j.cut++; } }
   else if (e.kind === 'end') {
     Object.assign(j, { status: 'done', code: e.code, ms: e.ms, error: e.error });
     const u = e.cwd && e.tab && t.terms?.find((x) => x.id === e.tab);
     if (u) { u.dir = e.cwd; renderTermInput(t); }
   }
-  j.dirty = true;
+  j.rev++;
   // A short timer, not requestAnimationFrame: frames are paused in background tabs and some embedded views.
   if (!t.raf) t.raf = setTimeout(() => { t.raf = null; termDraw(t); }, 40);
 }
 // Which output a terminal tab shows: Activity = everything, Agent = its commands, a server's own tab,
 // or one of your terminals (only what was run from it).
-const termShows = (t, j) => (t.filter === 'all' ? true : t.filter === 'agent' ? j.source === 'agent' && !j.server : t.filter.startsWith('srv:') ? j.server === t.filter.slice(4) : j.tab === t.filter)
-  && (j.status === 'running' || j.at >= (t.clearedBy?.[t.filter] || 0));
+const termShows = (t, j, f = t.filter) => (f === 'all' ? true : f === 'agent' ? j.source === 'agent' && !j.server : f.startsWith('srv:') ? j.server === f.slice(4) : j.tab === f)
+  && (j.status === 'running' || j.at >= (t.clearedBy?.[f] || 0));
 function termHead(t, j) {
   const chat = j.chatId && G.chats.find((x) => x.id === j.chatId);
   const who = j.server ? `<span class="tj-srv">🖥 ${esc(j.server)}</span>` : '';
@@ -6240,67 +6260,114 @@ function termHead(t, j) {
     : `<span class="tj-st bad">✗ exit ${j.code ?? '?'}${j.ms != null ? ` · ${secs(j.ms)}` : ''}</span>`;
   return `${src}${who}<code class="tj-cmd"><span class="tj-ps">$</span> ${esc(j.label)}</code><span class="tj-time">${esc(new Date(j.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }))}</span>${st}${j.status === 'running' ? '<button type="button" class="tj-stop" title="Stop it">■ Stop</button>' : ''}`;
 }
+// full: true redraws the active pane from scratch, 'all' every pane; otherwise only what changed is added.
 function termDraw(t, full) {
-  const out = $('#paneBody .term-out');
-  if (!out || G.term !== t) return;
-  const stick = full || out.scrollHeight - out.scrollTop - out.clientHeight < 60;
-  if (full) { out.innerHTML = ''; for (const j of t.jobs.values()) { j.el = null; j.drawn = 0; j.dirty = true; } }
-  for (const id of t.order) {
-    const j = t.jobs.get(id);
-    if (!j || !termShows(t, j)) { if (j?.el) { j.el.remove(); j.el = null; j.drawn = 0; } continue; }
-    if (!j.dirty && j.el) continue;
-    if (!j.el) {
-      j.el = document.createElement('div'); j.el.className = 'tj';
-      j.el.innerHTML = '<div class="tj-head"></div><pre class="tj-out"></pre>';
-      out.appendChild(j.el); j.drawn = 0;
-    }
-    j.el.classList.toggle('running', j.status === 'running');
-    $('.tj-head', j.el).innerHTML = termHead(t, j);
-    const stop = $('.tj-stop', j.el);
-    if (stop) stop.onclick = () => { stop.disabled = true; if (j.server) postJ('/api/servers/stop', { key: j.id.slice(4, j.id.lastIndexOf(':')) }); else postJ('/api/term/stop', { job: j.id }); };
-    const pre = $('.tj-out', j.el);
-    if (j.redraw) { pre.textContent = ''; j.drawn = 0; j.redraw = false; }
-    const frag = document.createDocumentFragment();
-    for (const l of j.lines.slice(j.drawn)) { const s = document.createElement('span'); s.className = `tl ${l.stream || 'out'}`; s.textContent = `${l.text}\n`; frag.appendChild(s); }
-    j.drawn = j.lines.length; pre.appendChild(frag);
-    while (pre.childElementCount > 1500) pre.firstChild.remove();
-    pre.hidden = !j.lines.length;
-    j.dirty = false;
-  }
-  if (!out.childElementCount) out.innerHTML = `<div class="term-empty">${t.filter === 'all' ? 'Nothing has run in this project yet. Commands and servers started by the agent or by you show here live.' : t.terms.some((u) => u.id === t.filter) ? 'A fresh terminal in the project folder. Type a command below (help for what works).' : 'Nothing here yet.'}</div>`;
-  else $('.term-empty', out)?.remove();
-  if (stick) out.scrollTop = out.scrollHeight;
+  if (G.term !== t) return;
+  for (const p of t.panes) termDrawPane(t, p, full === 'all' || (!!full && p.id === t.act));
   termFilters(t);
 }
+function termDrawPane(t, p, full) {
+  const root = tpaneEl(p), out = root && $('.term-out', root);
+  if (!out) return;
+  const f = p.filter;
+  const stick = full || out.scrollHeight - out.scrollTop - out.clientHeight < 60;
+  if (full) { out.innerHTML = ''; for (const j of t.jobs.values()) if (j.v) delete j.v[p.id]; }
+  for (const id of t.order) {
+    const j = t.jobs.get(id); if (!j) continue;
+    const v = (j.v ||= {})[p.id];
+    if (!termShows(t, j, f)) { if (v) { v.el.remove(); delete j.v[p.id]; } continue; }
+    if (v && v.rev === j.rev) continue;
+    const w = v || (j.v[p.id] = { el: document.createElement('div'), drawn: 0, cut: j.cut, rev: -1 });
+    if (!v) { w.el.className = 'tj'; w.el.innerHTML = '<div class="tj-head"></div><pre class="tj-out"></pre>'; out.appendChild(w.el); }
+    w.el.classList.toggle('running', j.status === 'running');
+    $('.tj-head', w.el).innerHTML = termHead(t, j);
+    const stop = $('.tj-stop', w.el);
+    if (stop) stop.onclick = () => { stop.disabled = true; if (j.server) postJ('/api/servers/stop', { key: j.id.slice(4, j.id.lastIndexOf(':')) }); else postJ('/api/term/stop', { job: j.id }); };
+    const pre = $('.tj-out', w.el);
+    if (w.cut !== j.cut) { pre.textContent = ''; w.drawn = 0; w.cut = j.cut; }
+    const frag = document.createDocumentFragment();
+    for (const l of j.lines.slice(w.drawn)) { const s = document.createElement('span'); s.className = `tl ${l.stream || 'out'}`; s.textContent = `${l.text}\n`; frag.appendChild(s); }
+    w.drawn = j.lines.length; pre.appendChild(frag);
+    while (pre.childElementCount > 1500) pre.firstChild.remove();
+    pre.hidden = !j.lines.length;
+    w.rev = j.rev;
+  }
+  if (!out.querySelector('.tj')) out.innerHTML = `<div class="term-empty">${f === 'all' ? 'Nothing has run in this project yet. Commands and servers started by the agent or by you show here live.' : t.terms.some((u) => u.id === f) ? 'A fresh terminal in the project folder. Type a command below (help for what works).' : 'Nothing here yet.'}</div>`;
+  else $('.term-empty', out)?.remove();
+  if (stick) out.scrollTop = out.scrollHeight;
+}
+const TP_ICO = {
+  above: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 11h16"/><path d="M12 5.5v4M10 7.5h4"/></svg>',
+  below: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 13h16"/><path d="M12 14.5v4M10 16.5h4"/></svg>',
+  close: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="m9.5 9.5 5 5M14.5 9.5l-5 5"/></svg>',
+};
 function termFilters(t) {
-  const box = $('#paneBody .ttabs'); if (!box) return;
   const servers = [...new Set([...t.jobs.values()].filter((j) => j.server).map((j) => j.server))];
   const agentRan = [...t.jobs.values()].some((j) => j.source === 'agent' && !j.server);
-  const busy = (f) => [...t.jobs.values()].some((j) => j.status === 'running' && termShows({ ...t, filter: f, clearedBy: {} }, j));
-  const tabs = [['all', '≡ Activity'], ...(agentRan ? [['agent', '🤖 Agent']] : []), ...servers.map((x) => [`srv:${x}`, `🖥 ${x}`]), ...t.terms.map((u) => [u.id, `⌨ ${u.name}`, true])];
-  if (!tabs.some(([k]) => k === t.filter)) t.filter = t.terms[0]?.id || 'all';
-  const html = tabs.map(([k, l, mine]) => `<span class="ttab ${t.filter === k ? 'on' : ''}" data-f="${esc(k)}" role="tab">${busy(k) ? '<i class="tr-dot busy"></i>' : ''}<span>${esc(l)}</span>${mine ? `<button type="button" class="bt-x" data-close="${esc(k)}" title="Close this terminal" aria-label="Close terminal">×</button>` : ''}</span>`).join('')
-    + '<button type="button" class="btab-new ttab-new" title="New terminal">＋</button>';
-  if (box.dataset.html === html) return;
-  box.dataset.html = html; box.innerHTML = html;
-  for (const el of box.querySelectorAll('.ttab')) el.onclick = (e) => { if (e.target.closest('.bt-x')) return; t.filter = el.dataset.f; renderTermInput(t); termDraw(t, true); };
-  for (const b of box.querySelectorAll('.bt-x')) b.onclick = () => { postJ('/api/term/close', { projectId: t.projectId, tab: b.dataset.close }).catch(() => {}); dropXterm(t.projectId, b.dataset.close, true); t.terms = t.terms.filter((u) => u.id !== b.dataset.close); if (t.filter === b.dataset.close) t.filter = t.terms[0]?.id || 'all'; renderTermInput(t); termDraw(t, true); };
-  $('.ttab-new', box).onclick = () => { const id = `u${t.nextTerm}`; t.terms.push({ id, name: `Terminal ${t.nextTerm++}`, cwd: '', hist: [], hi: 0 }); t.filter = id; renderTermInput(t); termDraw(t, true); $('#paneBody .term-in input')?.focus(); };
+  const busy = (f) => [...t.jobs.values()].some((j) => j.status === 'running' && termShows({ ...t, clearedBy: {} }, j, f));
+  const many = t.panes.length > 1;
+  for (const p of t.panes) {
+    const root = tpaneEl(p), box = root && $('.ttabs', root); if (!box) continue;
+    const tabs = [['all', '≡ Activity'], ...(agentRan ? [['agent', '🤖 Agent']] : []), ...servers.map((x) => [`srv:${x}`, `🖥 ${x}`]), ...t.terms.map((u) => [u.id, `⌨ ${u.name}`, true])];
+    if (!tabs.some(([k]) => k === p.filter)) p.filter = t.terms.find((u) => !t.panes.some((q) => q.filter === u.id))?.id || 'all';
+    const html = tabs.map(([k, l, mine]) => `<span class="ttab ${p.filter === k ? 'on' : ''}" data-f="${esc(k)}" role="tab">${busy(k) ? '<i class="tr-dot busy"></i>' : ''}<span>${esc(l)}</span>${mine ? `<button type="button" class="bt-x" data-close="${esc(k)}" title="Close this terminal" aria-label="Close terminal">×</button>` : ''}</span>`).join('')
+      + '<button type="button" class="btab-new ttab-new" title="New terminal in this pane">＋</button>'
+      + `<span class="tp-acts"><button type="button" class="tp-btn" data-tp="above" title="Add a terminal pane above this one" aria-label="Add a pane above"${t.panes.length >= 6 ? ' disabled' : ''}>${TP_ICO.above}</button><button type="button" class="tp-btn" data-tp="below" title="Add a terminal pane below this one" aria-label="Add a pane below"${t.panes.length >= 6 ? ' disabled' : ''}>${TP_ICO.below}</button>${many ? `<button type="button" class="tp-btn danger" data-tp="close" title="Close this pane (its terminals stay in the tabs)" aria-label="Close this pane">${TP_ICO.close}</button>` : ''}</span>`;
+    if (box.dataset.html === html) continue;
+    box.dataset.html = html; box.innerHTML = html;
+    for (const el of box.querySelectorAll('.ttab')) el.onclick = (e) => { if (!e.target.closest('.bt-x')) termPick(t, p, el.dataset.f); };
+    for (const b of box.querySelectorAll('.bt-x')) b.onclick = () => {
+      const id = b.dataset.close;
+      postJ('/api/term/close', { projectId: t.projectId, tab: id }).catch(() => {}); dropXterm(t.projectId, id, true);
+      t.terms = t.terms.filter((u) => u.id !== id);
+      for (const q of t.panes) if (q.filter === id) q.filter = t.terms.find((u) => !t.panes.some((r) => r.filter === u.id))?.id || 'all';
+      termSave(t); renderTermInput(t); termDraw(t, 'all');
+    };
+    $('.ttab-new', box).onclick = () => { const id = termNew(t); termPick(t, p, id); $('.term-in input', root)?.focus(); };
+    for (const b of box.querySelectorAll('[data-tp]')) b.onclick = () => (b.dataset.tp === 'close' ? termClosePane(t, p) : termSplit(t, p, b.dataset.tp));
+  }
 }
-// The input row belongs to your own terminals; the other tabs only show output.
-function renderTermInput(t) {
-  const u = t.terms.find((x) => x.id === t.filter), form = $('#paneBody .term-in'), hint = $('#paneBody .term-hint');
-  if (!form) return;
+function termNew(t) { const id = `u${t.nextTerm}`; t.terms.push({ id, name: `Terminal ${t.nextTerm++}`, cwd: '', hist: [], hi: 0 }); return id; }
+// Your own terminal shows in one pane at a time: picking it where another pane shows it swaps the two.
+function termPick(t, p, f) {
+  const other = /^u\d+$/.test(f) && t.panes.find((q) => q !== p && q.filter === f);
+  if (other) other.filter = p.filter;
+  p.filter = f; termActivate(t, p); termSave(t);
+  renderTermInput(t); termDraw(t, other ? 'all' : true);
+}
+function termActivate(t, p) {
+  t.act = p.id;
+  for (const el of document.querySelectorAll('#paneBody .tpane')) el.classList.toggle('on', el.dataset.pane === p.id);
+  for (const q of t.panes) { const h = tpaneEl(q) && $('.term-hint', tpaneEl(q)); if (h && !$('.term-in', tpaneEl(q)).hidden) h.hidden = q !== p; }
+}
+// A new pane above or below, with a fresh terminal in it; the two share the space this one had.
+function termSplit(t, p, where) {
+  if (t.panes.length >= 6) return;
+  const q = { id: `p${t.nextPane++}`, filter: termNew(t), grow: p.grow / 2 };
+  p.grow /= 2;
+  t.panes.splice(t.panes.indexOf(p) + (where === 'below' ? 1 : 0), 0, q);
+  t.act = q.id; termSave(t); renderPane();
+}
+function termClosePane(t, p) {
+  if (t.panes.length < 2) return;
+  const i = t.panes.indexOf(p), n = t.panes[i ? i - 1 : 1];
+  n.grow += p.grow; t.panes.splice(i, 1);
+  t.act = n.id; termSave(t); renderPane();
+}
+// The input row belongs to your own terminals; the other tabs only show output. The hint shows in the active pane.
+function renderTermInput(t) { for (const p of t.panes) termPaneInput(t, p); }
+function termPaneInput(t, p) {
+  const root = tpaneEl(p); if (!root) return;
+  const u = t.terms.find((x) => x.id === p.filter), form = $('.term-in', root), hint = $('.term-hint', root);
   const full = !!u && G.cfg.pty && !u.plain;
-  form.hidden = !u || full; hint.hidden = !u || full;
-  const note = $('#paneBody .term-note'); if (note) note.hidden = !!u;
-  const xbox = $('#paneBody .term-x'), outBox = $('#paneBody .term-out');
-  if (xbox) xbox.hidden = !full;
-  if (outBox) outBox.hidden = full;
-  if (full) { mountXterm(t, u, xbox); return; }
+  form.hidden = !u || full; hint.hidden = !u || full || p.id !== t.act;
+  $('.term-note', root).hidden = !!u;
+  const xbox = $('.term-x', root), outBox = $('.term-out', root);
+  xbox.hidden = !full; outBox.hidden = full;
+  if (full) { mountXterm(t, u, xbox, p.id === t.act); return; }
   if (!u) return;
-  const p = G.projects.find((x) => x.id === t.projectId);
-  const dir = u.dir || p?.dir || '';
+  const pr = G.projects.find((x) => x.id === t.projectId);
+  const dir = u.dir || pr?.dir || '';
   $('.term-ps', form).textContent = `${baseName(dir) || t.projectId} ›`;
   $('.term-ps', form).title = dir;
   const running = [...t.jobs.values()].some((j) => j.tab === u.id && j.status === 'running');
@@ -6322,11 +6389,11 @@ function xtermTheme() {
   const v = (n, d) => getComputedStyle(document.documentElement).getPropertyValue(n).trim() || d;
   return { background: v('--surface-inset', '#05080a') || '#05080a', foreground: v('--text', '#d7e0dc'), cursor: v('--accent', '#1fc8db'), cursorAccent: '#000000', selectionBackground: 'rgba(31, 200, 219, 0.35)' };
 }
-async function mountXterm(t, u, box) {
+async function mountXterm(t, u, box, focus = true) {
   const k = `${t.projectId}:${u.id}`;
   G.xt ||= new Map();
   let x = G.xt.get(k);
-  if (x) { if (x.el.parentElement !== box) box.replaceChildren(x.el); requestAnimationFrame(() => { try { x.fit.fit(); } catch { /* hidden */ } x.term.focus(); }); return; }
+  if (x) { if (x.el.parentElement !== box) box.replaceChildren(x.el); requestAnimationFrame(() => { try { x.fit.fit(); } catch { /* hidden */ } if (focus) x.term.focus(); }); return; }
   // The pane can redraw while this one is still being set up: only one terminal per tab.
   if ((G.xtBusy ||= new Set()).has(k)) return;
   G.xtBusy.add(k);
@@ -6361,7 +6428,7 @@ async function mountXterm(t, u, box) {
   term.onResize(({ cols, rows }) => { clearTimeout(x.rt); x.rt = setTimeout(() => postJ('/api/pty/resize', { projectId: x.projectId, tab: x.tab, cols, rows }).catch(() => {}), 60); });
   new ResizeObserver(() => { if (el.offsetParent) { try { fit.fit(); } catch { /* hidden */ } } }).observe(el);
   await startXterm(x);
-  term.focus();
+  if (focus) term.focus();
   // Once it runs, fit again: the shell redraws its screen for the final size (a first prompt can be drawn too early).
   setTimeout(() => { try { fit.fit(); } catch { /* hidden */ } }, 300);
 }
@@ -6397,48 +6464,101 @@ function termLocal(t, u, label, lines) {
   for (const text of lines) termApply(t, { kind: 'out', job, text, stream: 'note', at: Date.now() });
   termApply(t, { kind: 'end', job, code: 0, at: Date.now() });
 }
+const SVG_RUN = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg>';
 function renderTerm(c) {
   const body = $('#paneBody'), bar = $('#appBar');
   const p = projectOf(c), t = termState(c.projectId);
+  if (c.srvPop?.inline) closeServers(c);
   bar.hidden = false;
-  bar.innerHTML = `<span class="term-title">${SVG_TERM}<b>Terminal</b></span><span class="dim">${esc(p?.name || c.projectId)}</span><span class="spacer"></span>
-    <button type="button" class="term-clear" title="Clear this tab's finished output (running ones stay)">Clear</button><button type="button" class="back" title="Close the terminal">✕ Close</button>`;
-  $('.term-clear', bar).onclick = () => { const x = G.xt?.get(`${t.projectId}:${t.filter}`); if (x && !$('#paneBody .term-x')?.hidden) { x.term.clear(); x.term.focus(); return; } (t.clearedBy ||= {})[t.filter] = Date.now(); termDraw(t, true); };
-  $('.back', bar).onclick = () => { G.view.term = false; closeTermStream(); syncLayout(); renderPane(); };
-  body.innerHTML = `<div class="term">
-    <div class="ttabs" role="tablist" aria-label="Terminals"></div>
-    <div class="term-running" id="termRunning"><span class="tr-label">Running</span><span class="dim">checking…</span></div>
-    <div class="term-out" tabindex="0" aria-live="polite"></div>
-    <div class="term-x" hidden></div>
-    <div class="term-note dim" hidden>This tab only shows output. Open one of your terminals (⌨, or ＋) to run commands.</div>
-    <form class="term-in"><span class="term-ps"></span><input aria-label="Command" placeholder="git status   ·   npm run dev   ·   dir" autocomplete="off" spellcheck="false"><button type="submit">Run</button></form>
-    <div class="term-hint"><b>${esc(G.cfg.shell || 'Shell')}</b>, starting in the project folder · pipes, scripts, git and dev servers work · <code>clear</code> empties the tab · ■ stops a command (the shell restarts in the same folder) · ↑ ↓ earlier commands · full-screen programs (vim, htop) need a terminal app</div>
-  </div>`;
-  const form = $('.term-in', body), inp = $('input', form), hint = $('.term-hint', body);
-  const say = (msg, bad) => { hint.classList.toggle('bad', !!bad); hint.innerHTML = msg; };
-  const defaultHint = hint.innerHTML;
-  form.onsubmit = async (e) => {
-    e.preventDefault();
-    const u = t.terms.find((x) => x.id === t.filter); if (!u) return;
-    const line = inp.value.trim(); if (!line) return;
-    if (folderMissing(c)) return;
-    u.hist.push(line); u.hi = u.hist.length; inp.value = '';
-    const [cmd] = line.split(/\s+/);
-    if (cmd === 'clear' || cmd === 'cls') { (t.clearedBy ||= {})[u.id] = Date.now(); termDraw(t, true); return; }
-    // Your terminals are a real shell; the line goes to it as typed.
-    const rs = await postJ('/api/term/run', { projectId: c.projectId, line, tab: u.id });
-    if (rs.error) { say(`⚠ ${esc(rs.error)}`, true); termLocal(t, u, line, [`⚠ ${rs.error}`]); return; }
-    say(defaultHint); renderTermInput(t);
-  };
-  inp.onkeydown = (e) => {
-    const u = t.terms.find((x) => x.id === t.filter); if (!u) return;
-    if (e.key === 'ArrowUp' && u.hi > 0) { u.hi--; inp.value = u.hist[u.hi]; e.preventDefault(); }
-    if (e.key === 'ArrowDown') { u.hi = Math.min(u.hist.length, u.hi + 1); inp.value = u.hist[u.hi] || ''; e.preventDefault(); }
-  };
+  const sec = (k, ico, label, tip) => `<button type="button" class="tsec ${t.sec === k ? 'on' : ''}" data-sec="${k}" role="tab" aria-selected="${t.sec === k}" title="${tip}">${ico}<span class="tsec-l">${label}</span><span class="tsec-n" hidden></span></button>`;
+  bar.innerHTML = `<span class="term-title">${SVG_TERM}<b>Terminal</b></span><span class="dim">${esc(p?.name || c.projectId)}</span>
+    <span class="tsecs" role="tablist" aria-label="Terminal sections">${sec('term', SVG_TERM, 'Terminals', 'Your terminals and the live output of every command and server, in panes you can stack')}${sec('run', SVG_RUN, 'Running', 'Everything running in this project (background jobs, commands, servers, terminals), each with a Stop')}${sec('srv', SVG_SERVER, 'Servers', 'This project’s saved servers: run, stop, edit, open')}</span><span class="spacer"></span>
+    ${t.sec === 'term' ? '<button type="button" class="term-clear" title="Clear the active pane’s finished output (running ones stay)">Clear</button>' : t.sec === 'run' ? '<button type="button" class="run-stopall danger" title="Stop every command, background job, server and agent terminal in this project (your terminal tabs stay open)" disabled>■ Stop all</button>' : ''}<button type="button" class="back" title="Close the terminal">✕ Close</button>`;
+  for (const b of bar.querySelectorAll('.tsec')) b.onclick = () => { if (t.sec === b.dataset.sec) return; t.sec = b.dataset.sec; termSave(t); renderTerm(c); };
+  $('.back', bar).onclick = () => { G.view.term = false; closeTermStream(); if (c.srvPop?.inline) closeServers(c); syncLayout(); renderPane(); };
+  termSecCounts(c);
   termOpenStream(t);
+  if (t.sec === 'run') {
+    $('.run-stopall', bar).onclick = async (e) => {
+      const n = G.runCount?.[c.projectId]?.n || 0;
+      if (!n || !(await uiConfirm(`Stop everything running in this project?\n${n} thing${n > 1 ? 's' : ''}: commands, background jobs, servers and the agent’s terminals, with all they started. Your terminal tabs stay open. A reply that is working is told, and carries on without them.`, { ok: 'Stop all', danger: true }))) return;
+      e.target.disabled = true;
+      await postJ('/api/running/stop-all', { projectId: c.projectId });
+      refreshRunning(c);
+    };
+    body.innerHTML = '<div class="run" id="runPane"><div class="run-empty dim">Checking…</div></div>';
+    return refreshRunning(c);
+  }
+  if (t.sec === 'srv') {
+    body.innerHTML = '<div class="srv-pop srv-inline" id="termSrv"><div class="srv-empty">Loading…</div></div>';
+    c.srvPop = { el: $('#termSrv', body), inline: true, editing: null, timer: setInterval(() => renderServers(c), 2000) };
+    return renderServers(c);
+  }
+  $('.term-clear', bar).onclick = () => {
+    const root = tpaneEl(termPane(t)), x = G.xt?.get(`${t.projectId}:${t.filter}`);
+    if (x && root && !$('.term-x', root).hidden) { x.term.clear(); x.term.focus(); return; }
+    (t.clearedBy ||= {})[t.filter] = Date.now(); termDraw(t, true);
+  };
+  const hintHTML = `<b>${esc(G.cfg.shell || 'Shell')}</b>, starting in the project folder · pipes, scripts, git and dev servers work · <code>clear</code> empties the tab · ■ stops a command (the shell restarts in the same folder) · ↑ ↓ earlier commands · full-screen programs (vim, htop) need a terminal app`;
+  body.innerHTML = `<div class="term">
+    <div class="term-running" id="termRunning"><span class="tr-label">Running</span><span class="dim">checking…</span></div>
+    <div class="tpanes">${t.panes.map((q, i) => `${i ? `<div class="tsplit" data-i="${i}" role="separator" aria-orientation="horizontal" aria-label="Resize the terminal panes" title="Drag to resize · double-click to share the space evenly"></div>` : ''}<section class="tpane ${q.id === t.act ? 'on' : ''}" data-pane="${q.id}" style="flex-grow:${q.grow}">
+      <div class="ttabs" role="tablist" aria-label="Terminals"></div>
+      <div class="term-out" tabindex="0" aria-live="polite"></div>
+      <div class="term-x" hidden></div>
+      <div class="term-note dim" hidden>This tab only shows output. Pick one of your terminals (⌨, or ＋) to run commands.</div>
+      <form class="term-in"><span class="term-ps"></span><input aria-label="Command" placeholder="git status   ·   npm run dev   ·   dir" autocomplete="off" spellcheck="false"><button type="submit">Run</button></form>
+      <div class="term-hint">${hintHTML}</div>
+    </section>`).join('')}</div>
+  </div>`;
+  for (const q of t.panes) {
+    const root = tpaneEl(q), form = $('.term-in', root), inp = $('input', form), hint = $('.term-hint', root);
+    const say = (msg, bad) => { hint.classList.toggle('bad', !!bad); hint.innerHTML = msg; };
+    root.addEventListener('pointerdown', () => { if (t.act !== q.id) termActivate(t, q); }, true);
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      const u = t.terms.find((x) => x.id === q.filter); if (!u) return;
+      const line = inp.value.trim(); if (!line) return;
+      if (folderMissing(c)) return;
+      u.hist.push(line); u.hi = u.hist.length; inp.value = '';
+      const [cmd] = line.split(/\s+/);
+      if (cmd === 'clear' || cmd === 'cls') { (t.clearedBy ||= {})[u.id] = Date.now(); termDraw(t, 'all'); return; }
+      // Your terminals are a real shell; the line goes to it as typed.
+      const rs = await postJ('/api/term/run', { projectId: c.projectId, line, tab: u.id });
+      if (rs.error) { say(`⚠ ${esc(rs.error)}`, true); termLocal(t, u, line, [`⚠ ${rs.error}`]); return; }
+      say(hintHTML); termPaneInput(t, q);
+    };
+    inp.onkeydown = (e) => {
+      const u = t.terms.find((x) => x.id === q.filter); if (!u) return;
+      if (e.key === 'ArrowUp' && u.hi > 0) { u.hi--; inp.value = u.hist[u.hi]; e.preventDefault(); }
+      if (e.key === 'ArrowDown') { u.hi = Math.min(u.hist.length, u.hi + 1); inp.value = u.hist[u.hi] || ''; e.preventDefault(); }
+    };
+  }
+  // The bar between two panes moves the space between them; the sizes are remembered for the project.
+  for (const s of body.querySelectorAll('.tsplit')) {
+    const a = t.panes[Number(s.dataset.i) - 1], b = t.panes[Number(s.dataset.i)];
+    s.onpointerdown = (e) => {
+      e.preventDefault(); s.setPointerCapture(e.pointerId); s.classList.add('drag');
+      const ea = tpaneEl(a), eb = tpaneEl(b), ha = ea.getBoundingClientRect().height, hb = eb.getBoundingClientRect().height, g = a.grow + b.grow, y0 = e.clientY;
+      s.onpointermove = (ev) => {
+        const na = Math.max(70, Math.min(ha + hb - 70, ha + ev.clientY - y0));
+        a.grow = (g * na) / (ha + hb); b.grow = g - a.grow;
+        ea.style.flexGrow = a.grow; eb.style.flexGrow = b.grow;
+      };
+      s.onpointerup = () => { s.onpointermove = null; s.classList.remove('drag'); termSave(t); };
+    };
+    s.ondblclick = () => { for (const q of t.panes) { q.grow = 1; tpaneEl(q).style.flexGrow = 1; } termSave(t); };
+  }
   termFilters(t); renderTermInput(t);
-  termDraw(t, true);
+  termDraw(t, 'all');
   getJ(`/api/servers/overview?project=${encodeURIComponent(c.projectId)}`).then((r) => drawRunning(c, r));
+}
+// The section buttons count what runs and how many servers are up.
+function termSecCounts(c) {
+  const bar = $('#appBar'); if (!bar || !G.view.term) return;
+  const put = (k, n, tip) => { const el = $(`.tsec[data-sec="${k}"] .tsec-n`, bar); if (el) { el.textContent = n || ''; el.hidden = !n; el.title = tip; } };
+  const rn = G.runCount?.[c.projectId]?.n || 0, sn = G.devCount?.[c.projectId]?.running || 0;
+  put('run', rn, `${rn} running`); put('srv', sn, `${sn} server${sn === 1 ? '' : 's'} up`);
 }
 
 // ---------- 📎 attached files of any kind: uploaded to the project, read and (when big) indexed ----------
@@ -6503,7 +6623,7 @@ async function drawEmbedPick() {
 }
 
 // ---------- the pane as a small browser: tabs, an address bar, and the agent's own browser ----------
-const paneTab = () => (G.view.run ? 'run' : G.view.term ? 'term' : G.view.files ? 'files' : G.view.trace ? 'trace' : G.view.browser ? 'browser' : 'art');
+const paneTab = () => (G.view.term ? 'term' : G.view.files ? 'files' : G.view.trace ? 'trace' : G.view.browser ? 'browser' : 'art');
 const absUrl = (u) => (!u || u.startsWith('data:') ? '' : u.startsWith('/') ? location.origin + u : u);
 function artifactUrl(c, a) {
   if (a.kind === 'html' || a.kind === 'md') return `/art/${encodeURIComponent(c.id)}/${encodeURIComponent(a.id)}`;
@@ -6511,6 +6631,7 @@ function artifactUrl(c, a) {
 }
 function setPaneTab(tab) {
   const c = focused(); if (!c) return;
+  if (tab === 'run') return openTerminal(c, null, 'run');
   const lastRun = [...c.agent.messages].reverse().find((m) => m.role === 'assistant' && m.runId);
   if (tab === 'trace') G.traceRun = G.traceRun && c.agent.messages.some((m) => m.runId === G.traceRun) ? G.traceRun : lastRun?.runId || null;
   if (tab === 'browser') refreshAgentTab(c).then((ch) => { if (ch && G.view.browser) renderPane(); });
@@ -6524,12 +6645,11 @@ function renderPaneTabs(c) {
   for (const b of box.querySelectorAll('[data-tab]')) { const on = b.dataset.tab === t; b.classList.toggle('on', on); b.setAttribute('aria-selected', String(on)); }
   const n = planArts(c).length;
   $('[data-tab="art"] .pt-n', box).textContent = n || '';
-  // How many things run is counted on the Running tab; the Terminal tab only turns amber while a command runs.
-  const dev = c && G.devCount?.[c.projectId];
-  const tn = $('[data-tab="term"] .pt-n', box); tn.textContent = ''; $('[data-tab="term"]', box).classList.toggle('busy', !!dev?.busy);
-  const rn = c && G.runCount?.[c.projectId];
-  const rb = $('[data-tab="run"]', box), rc = $('[data-tab="run"] .pt-n', box);
-  if (rc) { rc.textContent = rn?.n || ''; rc.classList.toggle('busy', !!rn?.n); rb.title = rn?.n ? `Running: ${rn.n} thing${rn.n > 1 ? 's' : ''} running in this project, each with a Stop` : 'Running: nothing runs in this project right now'; }
+  // The Terminal tab counts what runs (its Running section lists them) and turns amber while a command runs.
+  const dev = c && G.devCount?.[c.projectId], rn = c && G.runCount?.[c.projectId];
+  const tb = $('[data-tab="term"]', box), tn = $('[data-tab="term"] .pt-n', box);
+  tn.textContent = rn?.n || ''; tn.classList.toggle('busy', !!rn?.n); tb.classList.toggle('busy', !!dev?.busy);
+  if (c && G.view.term) termSecCounts(c);
   const ag = c && G.agentTab?.[c.id];
   const dot = $('[data-tab="browser"] .pt-dot', box); dot.className = `pt-dot ${ag?.locked ? 'live' : ag || G.btabs?.length ? 'has' : ''}`;
   const fa = $('#followAgent'); if (fa) fa.checked = G.followAgent !== false;
@@ -6708,22 +6828,6 @@ const RUN_GROUPS = [
 ];
 const RUN_KIND = { background: 'Background', command: 'Command', 'agent-term': 'Agent terminal', server: 'Server', 'your-term': 'Your terminal' };
 const dur = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`; };
-function renderRunningPane(c) {
-  const body = $('#paneBody'), bar = $('#appBar'), p = projectOf(c);
-  bar.hidden = false;
-  bar.innerHTML = `<span class="term-title"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg><b>Running</b></span><span class="dim">${esc(p?.name || c.projectId)}</span><span class="spacer"></span>
-    <button type="button" class="run-stopall danger" title="Stop every command, background job, server and agent terminal in this project (your terminal tabs stay open)" disabled>■ Stop all</button><button type="button" class="back" title="Close">✕ Close</button>`;
-  $('.back', bar).onclick = () => { G.view.run = false; syncLayout(); renderPane(); };
-  $('.run-stopall', bar).onclick = async (e) => {
-    const n = G.runCount?.[c.projectId]?.n || 0;
-    if (!n || !(await uiConfirm(`Stop everything running in this project?\n${n} thing${n > 1 ? 's' : ''}: commands, background jobs, servers and the agent’s terminals, with all they started. Your terminal tabs stay open. A reply that is working is told, and carries on without them.`, { ok: 'Stop all', danger: true }))) return;
-    e.target.disabled = true;
-    await postJ('/api/running/stop-all', { projectId: c.projectId });
-    refreshRunning(c);
-  };
-  body.innerHTML = '<div class="run" id="runPane"><div class="run-empty dim">Checking…</div></div>';
-  refreshRunning(c);
-}
 async function refreshRunning(c) {
   const r = await getJ(`/api/running?project=${encodeURIComponent(c.projectId)}`);
   if (r && !r.error) (G.runCount ||= {})[c.projectId] = { n: r.items.filter((x) => x.kind !== 'your-term').length };
