@@ -7615,13 +7615,13 @@ async function drawDesktopSettings() {
   const feed = $('#stDeskFeed');
   if (feed) feed.value = st.url || '';
   if (feed) feed.onchange = async (e) => { try { await window.ohDesktop.update('setUrl', e.target.value); } catch (er) { uiAlert(er.message); } };
-  $('#stDeskCheck').onclick = () => window.ohDesktop.update('check');
+  $('#stDeskCheck').onclick = async () => { const b = $('#stDeskCheck'), u = await window.ohDesktop.update(b.dataset.store ? 'openStore' : 'check').catch(() => null); if (u) drawUpdate(u); };
   drawUpdate(st);
 }
 // ---------- updates (desktop app): "⬆ Update" in the top bar, progress, "Restart to update" ----------
 function updateText(u) {
   const v = u.version ? `v${u.version}` : 'a new version';
-  return { available: `⬆ Update to ${v}`, downloading: `⬇ Downloading ${v}… ${u.percent ?? 0}%`, ready: `↻ Restart to update to ${v}`, error: '⚠ Update failed' }[u.state] || '';
+  return { available: `⬆ Update to ${v}`, 'store-available': `⬆ ${v} in the Microsoft Store`, downloading: `⬇ Downloading ${v}… ${u.percent ?? 0}%`, ready: `↻ Restart to update to ${v}`, error: '⚠ Update failed' }[u.state] || '';
 }
 const UPD_ICO = {
   available: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V6M6 11l6-6 6 6"/></svg>',
@@ -7635,7 +7635,7 @@ function drawUpdate(u) {
     const t = updateText(u);
     // Short on the button (it shares the sidebar's footer with three icons); the whole sentence is in its tip.
     // While downloading, the button fills up like a progress bar.
-    const short = { available: `Update ${u.version ? `v${u.version}` : ''}`.trim(), downloading: `${u.percent ?? 0}%`, ready: 'Restart', error: 'Retry' }[u.state] || '';
+    const short = { available: `Update ${u.version ? `v${u.version}` : ''}`.trim(), 'store-available': `Update ${u.version ? `v${u.version}` : ''}`.trim(), downloading: `${u.percent ?? 0}%`, ready: 'Restart', error: 'Retry' }[u.state] || '';
     b.hidden = !t; b.dataset.state = u.state || '';
     b.innerHTML = t ? `${UPD_ICO[u.state] || ''}<span class="un-txt">${esc(short)}</span>` : '';
     b.setAttribute('aria-label', t.replace(/^\S+\s/, ''));
@@ -7653,18 +7653,22 @@ function drawUpdate(u) {
     r.innerHTML = u.state === 'downloading' ? `<span class="ru-pct">${u.percent ?? 0}</span>` : UPD_ICO[u.state] || '';
   }
   const s = $('#stDeskUpd');
-  if (s) s.textContent = { dev: 'Running from the repo: updates come from git.', store: 'Updates come from the Microsoft Store.', 'no-feed': 'No update feed set.', checking: 'Checking…', current: `Up to date (v${u.current || '?'}).`, available: `v${u.version} is available.`, downloading: `Downloading… ${u.percent ?? 0}%`, ready: `v${u.version} is downloaded: restart to install.`, error: `Couldn't check: ${u.error || 'unknown error'}` }[u.state] || `v${u.current || '?'}`;
+  // In the Store copy, with a newer version out, the button goes to QuorX's Store page (where the Update button is).
+  const cb = $('#stDeskCheck'); if (cb) { const go = u.state === 'store-available'; cb.textContent = go ? 'Open Microsoft Store' : 'Check now'; if (go) cb.dataset.store = '1'; else delete cb.dataset.store; }
+  if (s) s.textContent = { dev: 'Running from the repo: updates come from git.', store: u.error ? `Couldn't check (${u.error}). Updates come from the Microsoft Store.` : 'Updates come from the Microsoft Store.', 'store-current': `Up to date (v${u.current || '?'}). Updates come from the Microsoft Store.`, 'store-available': `v${u.version} is out (you have v${u.current || '?'}). The Microsoft Store installs it: close QuorX, then Update on its Store page.`, 'no-feed': 'No update feed set.', checking: 'Checking…', current: `Up to date (v${u.current || '?'}).`, available: `v${u.version} is available.`, downloading: `Downloading… ${u.percent ?? 0}%`, ready: `v${u.version} is downloaded: restart to install.`, error: `Couldn't check: ${u.error || 'unknown error'}` }[u.state] || `v${u.current || '?'}`;
 }
 if (DESK) {
   window.ohDesktop.on((ev) => { if (ev.type === 'update') drawUpdate(ev); });
   // A clicked notification opens its chat.
   window.ohDesktop.on((ev) => { if (ev.type === 'notify-click' && ev.chatId && !G.panes.includes(ev.chatId)) showChat(ev.chatId); });
-  setTimeout(() => window.ohDesktop.update('state').then(drawUpdate).catch(() => {}), 1500);
+  // The Store copy looks once at startup whether a newer QuorX is out (the Store itself installs it).
+  setTimeout(() => window.ohDesktop.update('state').then((u) => { drawUpdate(u); if (u?.state === 'store') window.ohDesktop.update('check').then(drawUpdate).catch(() => {}); }).catch(() => {}), 1500);
   const ub = $('#updNote');
   const rb = $('#railUpd'); if (rb) rb.onclick = () => ub?.click();
   if (ub) ub.onclick = async () => {
     const st = ub.dataset.state;
     if (st === 'available') drawUpdate(await window.ohDesktop.update('download'));
+    else if (st === 'store-available') window.ohDesktop.update('openStore');
     else if (st === 'ready') { if (await uiConfirm('Restart QuorX now to install the update?\n\nRunning replies are stopped and can be resumed after the restart.')) window.ohDesktop.update('install'); }
     else if (st === 'error') window.ohDesktop.update('check');
   };
