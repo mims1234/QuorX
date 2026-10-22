@@ -1360,6 +1360,36 @@ test('fresh eyes: the same problem twice gets a clean-context diagnosis before t
   assert.equal(done.reply, 'Fixed.');
 });
 
+const linkPage = '<!doctype html><html><head><link rel="stylesheet" href="report.css"></head><body><h1>Report</h1></body></html>';
+test('fresh eyes: a page linking a file not written yet waits for the agent to write it', async () => {
+  const { events, bodies, done } = await run((body, i) => {
+    if (/second pair of eyes/.test(String(body.messages[0].content))) return reply('Cause: report.css is missing.');
+    return [
+      reply('', [['write_file', { path: 'index.html', content: linkPage }]]),
+      reply('', [['edit_file', { path: 'index.html', find: '<h1>Report</h1>', replace: '<h1>Weekly report</h1>' }]]),
+      reply('', [['write_file', { path: 'report.css', content: 'body{margin:0}\n' }]]),
+      reply('Done.'),
+    ][i];
+  }, { settings: { review: 'off', verify: false } });
+  assert.match(JSON.stringify(bodies[2].messages), /links to report\.css, which does not exist/, 'the agent still sees the check');
+  assert.equal(of(events, 'fresh_eyes_start').length, 0, 'no fresh look for a file still to come');
+  assert.equal(done.reply, 'Done.');
+});
+
+test('fresh eyes: a missing linked file still gets a fresh look once the agent has moved on without it', async () => {
+  const { events } = await run((body, i) => {
+    if (/second pair of eyes/.test(String(body.messages[0].content))) return reply('Cause: report.css was never written.');
+    return [
+      reply('', [['write_file', { path: 'index.html', content: linkPage }]]),
+      reply('', [['write_file', { path: 'app.js', content: 'const a = 1;\n' }]]),
+      reply('', [['edit_file', { path: 'index.html', find: '<h1>Report</h1>', replace: '<h1>Weekly report</h1>' }]]),
+      reply('Done.'),
+    ][i] || reply('Done.');
+  }, { settings: { review: 'off', verify: false } });
+  assert.equal(of(events, 'fresh_eyes').length, 1, 'one fresh look');
+  assert.match(of(events, 'fresh_eyes')[0].problems[0], /links to report\.css/);
+});
+
 test('a project with DESIGN.md and tokens.css: every chat gets it, and writes are checked against its palette', async () => {
   const prep = (dir) => { fs.writeFileSync(path.join(dir, 'DESIGN.md'), '---\nname: Rustic\n---\n# Rustic\nAccent: rust. Headings in a serif.'); fs.writeFileSync(path.join(dir, 'tokens.css'), ':root{--bg:#faf7f2;--fg:#201a14;--accent:#b4441b}'); };
   const page = '<!doctype html><html><head><meta name="viewport" content="width=device-width"><link rel="stylesheet" href="tokens.css"><style>body{background:var(--bg);color:#00ff88}</style></head><body><h1>Hi</h1></body></html>';
