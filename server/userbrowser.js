@@ -75,3 +75,43 @@ export async function userBrowse(sid, op, a = {}) {
   else if (op !== 'look') throw new Error(`unknown step ${op}`);
   return state(s);
 }
+
+// ---------- 🤖 Give to agent: one of your tabs, lent to one chat ----------
+// The agent works in that tab only (with your sign-in on that site), in that chat only. While its reply uses it the
+// tab is covered (watch only); you take it back with one click, and the agent hears so at its next step.
+const given = new Map(); // chatId → { sid, url, title, at, desktop }
+export function giveTab(chatId, sid, info = {}) {
+  if (!/^[\w-]{6,60}$/.test(String(sid)) || String(sid).startsWith('agent-')) throw new Error('only one of your own tabs can be given');
+  // A tab is lent to one chat at a time.
+  for (const [c, g] of given) if (g.sid === sid && c !== chatId) takeBackTab(c);
+  if (given.get(chatId)?.sid !== sid) takeBackTab(chatId);
+  const g = { sid, url: String(info.url || '').slice(0, 2000), title: String(info.title || '').slice(0, 200), at: Date.now(), desktop: info.desktop != null ? !!info.desktop : !sessions.has(sid) };
+  given.set(chatId, g);
+  return g;
+}
+export const givenTab = (chatId) => given.get(chatId) || null;
+export function takeBackTab(chatId) {
+  const g = given.get(chatId); if (!g) return false;
+  given.delete(chatId);
+  lockGiven(g, false);
+  if (g.desktop) desktopCall('tab.detach', { tab: g.sid }).catch(() => {});
+  return true;
+}
+function lockGiven(g, locked) {
+  if (g.desktop) { desktopCall('tab.lock', { tab: g.sid, locked }).catch(() => {}); return; }
+  const s = sessions.get(g.sid); if (s) { s.locked = locked; s.at = Date.now(); }
+}
+/** The lent tab, ready for the agent: covered while its reply runs. Closing what this returns never closes your tab. */
+export async function borrowTab(chatId) {
+  const g = given.get(chatId); if (!g) return null;
+  let tab;
+  if (g.desktop) tab = await openTab({ attachTab: g.sid });
+  else {
+    const s = sessions.get(g.sid);
+    if (!s) { given.delete(chatId); return null; } // the tab was closed (or went idle)
+    // Pages open at the size you see the tab at, and letting go never closes it.
+    tab = Object.assign(Object.create(s.tab), { given: true, close: async () => {}, open: (url) => s.tab.open(url, { width: s.w, height: s.h, mobile: false }) });
+  }
+  lockGiven(g, true);
+  return { tab, sid: g.sid, release: () => { if (given.get(chatId)?.sid === g.sid) lockGiven(g, false); } };
+}

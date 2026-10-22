@@ -557,10 +557,12 @@ function renderAttachments(c) {
   box.innerHTML = (c.comments || []).map((x, i) => `<span class="cmt-chip cmp-att-item" title="${esc(x.note || 'No note: the agent will ask what to change')}">${x.crop ? `<img src="${x.crop}" alt="">` : ''}<span class="cmt-what">💬 <b>${esc(x.tag)}</b> ${esc(clip(x.text || x.selector, 40))}</span><button type="button" data-cmt="${i}" aria-label="Remove this comment">✕</button></span>`).join('')
     + c.ctx.map((x, i) => `<span class="ctx-chip cmp-att-item ${x.type === 'file' ? 'file' : x.type === 'project' ? 'project' : 'chat'}" title="Attached as context for your next message">${x.type === 'file' ? '📄' : x.type === 'project' ? '' : '💬'} ${esc(x.title)}<button type="button" data-ctx="${i}" aria-label="Remove">✕</button></span>`).join('')
     + c.images.map((x, i) => `<span class="img-chip cmp-att-item image"><img src="${x.thumb}" alt="attached image ${i + 1}"><button type="button" data-img="${i}" aria-label="Remove image">✕</button></span>`).join('')
-    + (c.docs || []).map((d, i) => docChip(d, i)).join('');
+    + (c.docs || []).map((d, i) => docChip(d, i)).join('')
+    + ((G.lent ||= {})[c.id] ? `<span class="lent-chip cmp-att-item" title="The agent can work in this tab of yours (signed in as you) in this chat. Sending, deleting, buying and account changes ask you first."><span class="lent-ico" aria-hidden="true">🤖</span><span class="lent-l">Your tab</span><b>${esc(clip(G.lent[c.id].title || G.lent[c.id].url, 40))}</b><button type="button" class="lent-back" title="Take the tab back: the agent can no longer use it">Take back</button></span>` : '');
   for (const b of box.querySelectorAll('[data-ctx]')) b.onclick = () => { c.ctx.splice(Number(b.dataset.ctx), 1); renderAttachments(c); };
   for (const b of box.querySelectorAll('[data-img]')) b.onclick = () => { c.images.splice(Number(b.dataset.img), 1); renderAttachments(c); };
   for (const b of box.querySelectorAll('[data-cmt]')) b.onclick = () => { c.comments.splice(Number(b.dataset.cmt), 1); renderAttachments(c); };
+  const lb = $('.lent-back', box); if (lb) lb.onclick = () => takeBackTab(c.id);
   wireDocChips(c, box);
 }
 
@@ -2316,9 +2318,9 @@ function wirePane(c, root, i) {
   ta.oninput = () => { updateSuggest(c); fitInput(ta); };
   ta.onblur = () => setTimeout(() => hideSuggest(c), 150);
   ta.onpaste = (e) => { const files = [...(e.clipboardData?.files || [])]; if (files.length) { e.preventDefault(); addFiles(c, files); } };
-  root.ondragover = (e) => { if ([...e.dataTransfer.types].includes('Files')) { e.preventDefault(); root.classList.add('drop'); } };
+  root.ondragover = (e) => { const ty = [...e.dataTransfer.types]; if (ty.includes('Files') || ty.includes('application/x-quorx-tab')) { e.preventDefault(); root.classList.add('drop'); } };
   root.ondragleave = () => root.classList.remove('drop');
-  root.ondrop = (e) => { root.classList.remove('drop'); if (e.dataTransfer.files.length) { e.preventDefault(); addFiles(c, e.dataTransfer.files); } };
+  root.ondrop = (e) => { root.classList.remove('drop'); const sid = e.dataTransfer.getData('application/x-quorx-tab'); if (sid) { e.preventDefault(); lendTab(c, sid); return; } if (e.dataTransfer.files.length) { e.preventDefault(); addFiles(c, e.dataTransfer.files); } };
   $('.imgBtn', root).onclick = () => $('.imgInput', root).click();
   $('.imgInput', root).onchange = (e) => { addFiles(c, e.target.files); e.target.value = ''; };
   $('.micBtn', root).onclick = () => toggleMic(c);
@@ -6202,7 +6204,7 @@ async function pollDev() {
     if (run && !run.error) {
       (G.runCount ||= {})[pid] = { n: run.items.filter((x) => x.kind !== 'your-term').length };
       const fc = focused();
-      if (fc?.projectId === pid) { renderPaneTabs(fc); if (G.view.term && G.term?.sec === 'run') drawRunningPane(fc, run); }
+      if (fc?.projectId === pid) { renderPaneTabs(fc); if (G.view.term && G.term?.sec === 'run') drawRunningPane(fc, run); syncLent(fc); }
     }
   }
 }
@@ -6763,16 +6765,24 @@ function renderBrowser(c) {
     : `${t.agent ? `<span class="bv-who agent" title="${live ? "The agent's page: it is using it now, so you can only watch" : "The agent's page: it is done with it, so it is yours to use"}">🤖</span>${live ? '<span class="bv-lock" title="The agent is using this page: watch only">watching</span>' : ''}` : '<span class="bv-who you" title="Your tab">👤</span>'}
        ${!live && t.mode !== 'frame' && t.url ? `<button type="button" class="bv-nav" data-op="back" title="Back" aria-label="Back"${REAL && t.canBack === false ? ' disabled' : ''}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button><button type="button" class="bv-nav" data-op="forward" title="Forward" aria-label="Forward"${REAL && t.canForward === false ? ' disabled' : ''}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg></button>` : ''}
        ${REAL && t.url ? `<span class="bv-real ${t.loading ? 'loading' : ''}" title="A real Chromium tab in the desktop app">● real tab${t.loading ? ' · loading…' : ''}</span>` : ''}
-       <span class="spacer"></span>${t.url ? `<button type="button" class="bv-cmt ${t.commenting ? 'on' : ''}" aria-pressed="${!!t.commenting}" title="Comment on part of this page: click an element, say what to change, and it goes with your next message">💬 ${t.commenting ? 'Done commenting' : 'Comment'}</button><button type="button" class="bv-exp" aria-haspopup="menu" title="Export this page as a PDF or one long picture, or the project's files as a ZIP">⤓ Export</button>` : ''}${REAL && t.url && !live ? '<button type="button" class="bv-dev" title="Open DevTools for this tab" aria-label="DevTools"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8l-4 4 4 4M16 8l4 4-4 4M13.5 5l-3 14"/></svg></button>' : ''}${!DESK && !t.agent && t.url ? `<button type="button" class="bv-mode ${t.mode === 'frame' ? 'on' : ''}" title="${t.mode === 'frame' ? 'Shown in a frame. Click to open it in the harness browser instead (for sites that refuse frames)' : 'Shown in the harness browser. Click to show it in a frame (works for your own served pages)'}" aria-label="Frame or harness browser"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/></svg></button>` : ''}${downloadsHTML()}`;
+       <span class="spacer"></span>${!t.agent && t.url ? (() => { const to = lentChatOf(t.sid), ch = to && (G.open.get(to) || G.chats.find((x) => x.id === to)); return to ? `<span class="bv-lent" title="The agent can work in this tab in that chat">🤖 Lent to ${to === c.id ? 'this chat' : `“${esc(clip(ch?.title || 'another chat', 24))}”`}</span><button type="button" class="bv-takeback" title="Take this tab back: the agent can no longer use it">Take back</button>` : `<button type="button" class="bv-give" title="Let the agent in this chat work in this tab (signed in as you). Sending, deleting, buying and account changes always ask you first. You can also drag the tab onto a chat.">🤖 Give to agent</button>`; })() : ''}${t.url ? `<button type="button" class="bv-cmt ${t.commenting ? 'on' : ''}" aria-pressed="${!!t.commenting}" title="Comment on part of this page: click an element, say what to change, and it goes with your next message">💬 ${t.commenting ? 'Done commenting' : 'Comment'}</button><button type="button" class="bv-exp" aria-haspopup="menu" title="Export this page as a PDF or one long picture, or the project's files as a ZIP">⤓ Export</button>` : ''}${REAL && t.url && !live ? '<button type="button" class="bv-dev" title="Open DevTools for this tab" aria-label="DevTools"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8l-4 4 4 4M16 8l4 4-4 4M13.5 5l-3 14"/></svg></button>' : ''}${!DESK && !t.agent && t.url ? `<button type="button" class="bv-mode ${t.mode === 'frame' ? 'on' : ''}" title="${t.mode === 'frame' ? 'Shown in a frame. Click to open it in the harness browser instead (for sites that refuse frames)' : 'Shown in the harness browser. Click to show it in a frame (works for your own served pages)'}" aria-label="Frame or harness browser"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/></svg></button>` : ''}${downloadsHTML()}`;
   for (const b of bar.querySelectorAll('.bv-nav')) b.onclick = () => (REAL ? window.ohDesktop.nav(t.sid, b.dataset.op) : ubCall(b.dataset.op));
   const dv = $('.bv-dev', bar); if (dv) dv.onclick = () => window.ohDesktop.nav(t.sid, 'devtools');
   const cmb = $('.bv-cmt', bar); if (cmb) cmb.onclick = () => { t.commenting = !t.commenting; renderPane(); };
   const exb = $('.bv-exp', bar); if (exb) exb.onclick = () => exportMenu(exb, c, t);
+  const gv = $('.bv-give', bar); if (gv) gv.onclick = () => lendTab(c, t.sid);
+  const tb = $('.bv-takeback', bar); if (tb) tb.onclick = () => takeBackTab(lentChatOf(t.sid));
   const ex = $('.bv-ext', bar); if (ex) ex.onclick = () => window.ohDesktop.openExternal(t.url);
   wireDownloads(bar);
   const mb = $('.bv-mode', bar); if (mb) mb.onclick = () => { t.mode = t.mode === 'frame' ? 'remote' : 'frame'; t.opened = null; renderPane(); };
-  body.innerHTML = `<div class="bwin"><div class="btabs" role="tablist" aria-label="Browser tabs">${list.map((x) => `<span class="btab ${x.sid === t?.sid ? 'on' : ''} ${x.agent ? 'agent' : ''}" data-sid="${esc(x.sid)}" role="tab" title="${esc(x.url || 'New tab')}">${x.agent ? `<i class="bt-dot ${x.locked ? 'live' : ''}"></i>🤖` : '🌐'}<span class="bt-title">${esc(x.agent ? (x.title || 'Agent') : (x.title || (x.url ? x.url.replace(/^https?:\/\//, '').slice(0, 24) : 'New tab')))}</span><button type="button" class="bt-x" data-close="${esc(x.sid)}" title="Close this tab" aria-label="Close tab">×</button></span>`).join('')}<button type="button" class="btab-new" title="New tab">＋</button></div><div class="bstage"></div></div>`;
+  body.innerHTML = `<div class="bwin"><div class="btabs" role="tablist" aria-label="Browser tabs">${list.map((x) => `<span class="btab ${x.sid === t?.sid ? 'on' : ''} ${x.agent ? 'agent' : ''} ${!x.agent && lentChatOf(x.sid) ? 'lent' : ''}" data-sid="${esc(x.sid)}" role="tab" ${x.agent ? '' : 'draggable="true" '}title="${esc(x.url || 'New tab')}">${x.agent ? `<i class="bt-dot ${x.locked ? 'live' : ''}"></i>🤖` : '🌐'}<span class="bt-title">${esc(x.agent ? (x.title || 'Agent') : (x.title || (x.url ? x.url.replace(/^https?:\/\//, '').slice(0, 24) : 'New tab')))}</span><button type="button" class="bt-x" data-close="${esc(x.sid)}" title="Close this tab" aria-label="Close tab">×</button></span>`).join('')}<button type="button" class="btab-new" title="New tab">＋</button></div><div class="bstage"></div></div>`;
   for (const el of body.querySelectorAll('.btab')) el.onclick = (e) => { if (e.target.closest('.bt-x')) return; G.bActive = el.dataset.sid; renderPane(); };
+  for (const el of body.querySelectorAll('.btab[draggable="true"]')) el.ondragstart = (e) => { e.dataTransfer.setData('application/x-quorx-tab', el.dataset.sid); e.dataTransfer.effectAllowed = 'link'; };
+  // Right-click one of your tabs: give it to this chat's agent (or take it back), or close it.
+  for (const el of body.querySelectorAll('.btab[draggable="true"]')) el.oncontextmenu = (e) => {
+    const sid = el.dataset.sid, to = lentChatOf(sid);
+    tabMenu(e, [to ? ['↩ Take back from the agent', () => takeBackTab(to)] : ['🤖 Give to agent in this chat', () => lendTab(c, sid)], ['✕ Close tab', () => closeBTab(c, sid)]]);
+  };
   for (const b of body.querySelectorAll('.bt-x')) b.onclick = () => closeBTab(c, b.dataset.close);
   $('.btab-new', body).onclick = () => { newBTab(''); renderPane(); $('#paneUrl').focus(); };
   const stage = $('.bstage', body);
@@ -6886,6 +6896,52 @@ function termLinks(term) {
     },
   });
 }
+// ---------- 🤖 Give to agent: lend one of your Browser tabs to a chat ----------
+// A tab's right-click menu: items are [label, action].
+function tabMenu(e, items) {
+  e.preventDefault(); e.stopPropagation();
+  document.querySelector('.exp-menu')?.remove();
+  const m = document.createElement('div'); m.className = 'exp-menu fx-menu'; m.setAttribute('role', 'menu');
+  m.innerHTML = items.map((x, i) => `<button type="button" role="menuitem" data-i="${i}">${esc(x[0])}</button>`).join('');
+  document.body.append(m);
+  const r = m.getBoundingClientRect();
+  m.style.left = `${Math.min(e.clientX, innerWidth - r.width - 8)}px`; m.style.top = `${Math.min(e.clientY, innerHeight - r.height - 8)}px`;
+  const away = (ev) => { if (!m.contains(ev.target)) close(); };
+  const key = (ev) => { if (ev.key === 'Escape') close(); };
+  const close = () => { m.remove(); removeEventListener('pointerdown', away, true); removeEventListener('keydown', key, true); };
+  addEventListener('pointerdown', away, true); addEventListener('keydown', key, true);
+  m.onclick = (ev) => { const b = ev.target.closest('[data-i]'); if (!b) return; close(); items[Number(b.dataset.i)][1](); };
+  m.querySelector('button')?.focus();
+}
+// Drag a tab onto a chat, or press 🤖 Give to agent in the tab's bar. The agent can then work in that one tab (with
+// your sign-in on that site) in that chat; it is covered while the agent uses it, and Take back ends it at once.
+const lentChatOf = (sid) => Object.keys(G.lent ||= {}).find((id) => G.lent[id]?.sid === sid);
+async function lendTab(c, sid) {
+  const t = (G.btabs || []).find((x) => x.sid === sid);
+  if (!t) return;
+  if (!t.url) return uiAlert('Open a page in this tab first, then give it to the agent.');
+  // A page shown in a frame has no browser tab of its own behind it: it moves to "your view" first.
+  if (!DESK && t.mode === 'frame') { t.mode = 'remote'; t.opened = null; if (G.view.browser) renderPane(); await postJ('/api/ubrowser', { sid: t.sid, op: 'open', url: t.url }).catch(() => {}); }
+  const r = await postJ('/api/given-tab', { chatId: c.id, sid, url: t.url, title: t.title || '', desktop: DESK });
+  if (r.error) return uiAlert(`Could not give the tab: ${r.error}`);
+  G.lent ||= {};
+  for (const id of Object.keys(G.lent)) if (G.lent[id]?.sid === sid) { delete G.lent[id]; const o = G.open.get(id); if (o) renderAttachments(o); }
+  G.lent[c.id] = { sid, url: t.url, title: t.title || '' };
+  renderAttachments(c);
+  if (G.view.browser) renderPane();
+}
+async function takeBackTab(chatId) {
+  await fetch(`/api/given-tab?chat=${encodeURIComponent(chatId)}`, { method: 'DELETE' }).catch(() => {});
+  delete (G.lent ||= {})[chatId];
+  const c = G.open.get(chatId); if (c) renderAttachments(c);
+  if (G.view.browser) renderPane();
+}
+// The harness forgets lent tabs when it restarts: the chip goes when the harness no longer has it.
+async function syncLent(c) {
+  if (!c || !(G.lent ||= {})[c.id]) return;
+  const r = await getJ(`/api/given-tab?chat=${encodeURIComponent(c.id)}`);
+  if (r && !r.error && !r.given) { delete G.lent[c.id]; renderAttachments(c); }
+}
 // Closing a tab that shows one of your running servers asks first: keep the server running (reopen the address any
 // time) or stop it too.
 async function closeBTab(c, sid) {
@@ -6901,6 +6957,7 @@ async function closeBTab(c, sid) {
       if (ans === 'alt') { await postJ('/api/servers/stop', { key: sv.key }); pollDev(); }
     }
   }
+  const lentTo = lentChatOf(sid); if (lentTo) takeBackTab(lentTo);
   if (sid.startsWith('agent-')) { delete G.agentTab[c.id]; } else { G.btabs = (G.btabs || []).filter((x) => x.sid !== sid); if (DESK) window.ohDesktop.close(sid); }
   postJ('/api/ubrowser', { sid, op: 'close' }).catch(() => {});
   if (G.bActive === sid) G.bActive = null;
