@@ -14,6 +14,7 @@ import { SECRET_FILES } from './keys.js';
 import { termEvent, lineSplitter, newJob, endJob } from './terminal.js';
 import { jobsAvailable, adoptPid, jobCount, killJob, closeJob, startDetached } from './jobhost.js';
 import { snapshot, changesSince, objectFor, pruneObjects } from './snapshot.js';
+import { freshPath } from './userenv.js';
 
 // Programs a server or launch config starts without a check (as before the shell tool). Any other program is judged
 // by the command engine first (agent.js start_server); here it only has to be one plain program name or path.
@@ -177,10 +178,11 @@ export function checkCommand(cmd, args) {
   return exe;
 }
 
-// No secrets for code the agent wrote: drop anything that looks like a key, token or password.
+// No secrets for code the agent wrote: drop anything that looks like a key, token or password. PATH is brought up to
+// date (userenv.js), so a tool installed during the chat is found at once.
 export function childEnv(extra = {}) {
   const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/KEY|TOKEN|SECRET|PASSW|PASSPHRASE|PWD_|OPENROUTER|CREDENTIAL|AUTH|COOKIE|SESSION_?(TOKEN|KEY|SECRET|ID$)|_PAT$|PRIVATE|DSN|DATABASE_URL|_URI$|CONNECTION_STRING|WEBHOOK|SSH_AUTH_SOCK|GPG_AGENT|CLIENT_ID|CLIENT_SECRET/i.test(k) || k === 'PWD' || k === 'OLDPWD'));
-  return { ...env, ...extra, FORCE_COLOR: '0', BROWSER: 'none' };
+  return { ...freshPath(env), ...extra, FORCE_COLOR: '0', BROWSER: 'none' };
 }
 
 // The command line for one program and its plain arguments.

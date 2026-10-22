@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { termEvent, lineSplitter, newJob, endJob } from './terminal.js';
-import { childEnv } from './workspace.js';
+import { userEnv } from './userenv.js';
 
 const WIN = process.platform === 'win32';
 const SHELLS = new Map(); // `${projectId}:${tab}` → { proc, cwd, job, t0, mark, tab, projectId }
@@ -39,7 +39,7 @@ const markerCmd = (sh, mark) => (sh.kind === 'ps'
 
 function start(projectId, tab, cwd) {
   const sh = shellInfo(), key = `${projectId}:${tab}`;
-  const proc = spawn(sh.exe, sh.args, { cwd, env: childEnv(), windowsHide: true, detached: !WIN });
+  const proc = spawn(sh.exe, sh.args, { cwd, env: userEnv(), windowsHide: true, detached: !WIN });
   const s = { proc, cwd, job: null, t0: 0, mark: `@@OH${crypto.randomBytes(6).toString('hex')}`, tab, projectId, sh };
   const onLine = (raw, stream) => {
     const text = raw.replace(ANSI, '').replace(/\r$/, '');

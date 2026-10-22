@@ -1727,6 +1727,19 @@ test('a hook that runs too long is stopped at its time limit and the agent is to
   assert.match(toolResults(bodies[1])[0], /hook "node slow\.mjs" was stopped at its 1s limit/);
 });
 
+// Exit code 740 is ERROR_ELEVATION_REQUIRED on Windows; cmd passes it on as it is (PowerShell would make it 1).
+test('a command that fails for want of administrator rights goes to the user, never elevated', { skip: process.platform !== 'win32' }, async () => {
+  const cmdRun = (script) => run(script, { settings: { approval: 'strict', safety: { shell: 'cmd' } }, onEvent: (e, id) => { if (e.t === 'approval' && e.mode === 'strict') setTimeout(() => answerApproval(id, e.id, { approve: true }), 5); } });
+  const line = 'node -e "process.exit(740)"';
+  const { events, bodies } = await cmdRun((body, i) => [reply('', [['shell', { command: line }]]), reply('Asked the user.')][i]);
+  const r = toolResults(bodies[1])[0];
+  assert.ok(r.includes(`This needs administrator rights, which QuorX doesn't use. Ask the user to run it in a Terminal tab opened as administrator: \`${line}\``), r);
+  assert.match(r, /Exit code 740/);
+  assert.ok(of(events, 'note').some((e) => e.level === 'warn' && e.msg.includes('administrator') && e.msg.includes(line)));
+  const ok = await cmdRun((body, i) => [reply('', [['shell', { command: 'node -e "process.exit(3)"' }]]), reply('Done.')][i]);
+  assert.doesNotMatch(toolResults(ok.bodies[1])[0], /administrator/);
+});
+
 test('a failing before-command hook stops the agent\'s command; one that only reports does not', async () => {
   const { events, bodies, dir } = await hookRun((body, i) => [
     reply('', [['shell', { command: 'node make.mjs' }]]),

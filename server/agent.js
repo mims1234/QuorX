@@ -14,6 +14,7 @@ import { ensemble, GATE } from './decisions.js';
 import { runtime } from './openrouter.js';
 import { enhanceRequest } from './enhancer.js';
 import { validId, listProjects, getChat } from './store.js';
+import { needsAdmin, adminForAgent, adminForUser } from './elevation.js';
 import { searchFiles, trashFile, checkpoint, changedFiles, copyTemplate, snapBefore, commandChanges, safePath, childEnv, realish } from './workspace.js';
 import { SAFETY_DEFAULTS, safetySettings, yoloOf } from './safety.js';
 import { decide as decideCommand, loadRules, addRule, agentWriteBlocked } from './cmdpolicy.js';
@@ -2817,6 +2818,11 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       changes: ch || undefined, snap: sb.snap ? { files: sb.snap.count, ms: sb.snap.ms } : { off: sb.why }, at: at() });
     const parts = [];
     if (trip) parts.push(`QuorX's tripwire STOPPED this command: ${trip.count} files outside the project were removed within ${SF.tripwireSeconds}s (for example ${trip.sample.slice(0, 3).join(', ')}). Do not run it again. Tell the user at once what was removed, so they can restore it from the Recycle Bin or Previous Versions.`);
+    // Needs admin: QuorX never elevates, so the command goes to the user (elevation.js).
+    if (needsAdmin({ line, code: r.code, out: r.out })) {
+      parts.push(adminForAgent(line));
+      emit({ t: 'note', level: 'warn', msg: adminForUser(line), at: at() });
+    }
     parts.push(`Exit code ${r.code ?? '(none)'} after ${Math.round(r.ms / 1000)}s.${r.timedOut ? ` It was stopped at the ${SF.timeout}s limit${/\?\s*$|:\s*$|\(y\/n\)|press any key/i.test(r.out.slice(-300)) ? ' while it seemed to wait for input: pass a non-interactive flag (e.g. --yes, -y, /quiet)' : ''}.` : ''}`);
     if (ch && changed) parts.push(`Files it changed (Undo covers them): ${[...ch.added.map((f) => `+${f}`), ...ch.modified.map((f) => `~${f}`), ...ch.deleted.map((f) => `-${f}`)].slice(0, 30).join(', ')}${changed > 30 ? ` … and ${changed - 30} more` : ''}.`);
     else if (!sb.snap && !readOnly) parts.push(`No snapshot was taken (${sb.why}), so Undo can't restore what this command changed.`);

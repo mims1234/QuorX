@@ -3,10 +3,11 @@
 // password prompts and arrow-key menus all work. Output streams to the page over Server-Sent Events; keystrokes and
 // resizes come back as small POSTs. If node-pty can't load, the plain shell in shell.js is used instead.
 // Only your own windows reach these routes (other sites are refused; the agent's pages are sandboxed and its browser
-// can't open the harness itself); the agent never uses them.
+// can't open the harness itself); the agent never uses them. The shell gets your whole environment (userenv.js), as a
+// terminal you opened yourself would: colours, your tokens, programs that open the browser.
 import { createRequire } from 'node:module';
 import { shellInfo } from './shell.js';
-import { childEnv } from './workspace.js';
+import { userEnv } from './userenv.js';
 
 const require = createRequire(import.meta.url);
 let pty = null, loadError = '';
@@ -27,7 +28,7 @@ export function ptyOpen(projectId, tab, cwd, cols = 100, rows = 30) {
   const args = sh.kind === 'ps' ? ['-NoLogo'] : (/(bash|zsh)$/.test(sh.exe) ? ['-l'] : []);
   const term = pty.spawn(sh.exe, args, {
     name: 'xterm-256color', cols: clampCols(cols), rows: clampRows(rows), cwd,
-    env: childEnv({ TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'QuorX' }),
+    env: userEnv({ TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'QuorX' }),
   });
   const s = { term, buf: '', subs: new Set(), exited: false, code: null, cols, rows, shell: sh.name, started: Date.now() };
   term.onData((d) => {
