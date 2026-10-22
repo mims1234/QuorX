@@ -176,7 +176,9 @@ async function desktopTransport(chatId) {
   const off = onTabEvents(id, (method, params) => { for (const fn of subs) fn(method, params); });
   return {
     id, desktop: true,
-    send: (method, params = {}) => desktopCall('tab.cdp', { tab: id, method, params }, 25000),
+    // A screenshot of what shows gives up sooner: the app answers within ~12 s even when the page stalls, with a
+    // picture of the view instead. A whole-page one (an export) can rightly take longer.
+    send: (method, params = {}) => desktopCall('tab.cdp', { tab: id, method, params }, method === 'Page.captureScreenshot' && !params.captureBeyondViewport ? 16000 : 25000),
     onEvent: (fn) => subs.add(fn),
     close: async () => { off(); await desktopCall('tab.close', { tab: id }).catch(() => {}); },
   };
