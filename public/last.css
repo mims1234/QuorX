@@ -2504,6 +2504,11 @@ html body .trace.trace-pane .step .when { width: auto !important; white-space: n
 #paneBody > .run { flex: 1 1 auto; width: 100%; min-width: 0; }
 .fx-menu button { display: flex; align-items: center; justify-content: flex-start; gap: 8px; }
 
+/* a third answer in a confirm box (e.g. Stop server), red when it ends something */
+.ask .ask-alt { border: 1px solid var(--line-strong); background: transparent; color: var(--text); }
+.ask .ask-alt.danger { border-color: var(--bad); background: var(--bad); color: #fff; }
+.ask .ask-alt:hover { filter: brightness(1.08); }
+.ask footer:has(.ask-alt) .ask-cancel { margin-right: auto; }
 /* ---------- Terminal tab: Terminals · Running · Servers, and terminal panes stacked top to bottom ---------- */
 .pane-tool:has(.tsecs) { flex-wrap: wrap; row-gap: 4px; }
 .pane-tool > #appBar > .tsecs { display: inline-flex; gap: 2px; padding: 2px; margin: 0 auto 0 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); }
