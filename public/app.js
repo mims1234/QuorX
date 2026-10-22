@@ -2063,7 +2063,16 @@ function tipBox() {
   document.body.appendChild(el);
   return (TIP.el = el);
 }
-function tipText(t) { return t.dataset.ohTitle ?? t.getAttribute('data-tip') ?? ''; }
+// A web link in content (data-cl) opens only with Ctrl+click (Cmd+click on a Mac), in the Browser tab: its tip says so,
+// with the address under it when the link's text doesn't show it.
+const MAC = /Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent || '');
+const LINK_TIP = `${MAC ? 'Cmd' : 'Ctrl'}+click to open in the Browser tab`;
+function tipText(t) {
+  const own = t.dataset.ohTitle ?? t.getAttribute('data-tip') ?? '';
+  if (t.tagName !== 'A' || t.dataset.cl == null) return own;
+  const href = t.getAttribute('href') || '';
+  return [LINK_TIP, own, href && href !== t.textContent.trim() ? href : ''].filter(Boolean).join('\n');
+}
 function showTip(t, override) {
   const text = (override ?? tipText(t)).trim();
   if (!text || !t.isConnected) return;
@@ -2111,7 +2120,9 @@ document.addEventListener('pointerdown', () => hideTip(), true);
 setInterval(() => { const t = TIP.target; if (TIP.el?.classList.contains('on') && !TIP.el.classList.contains('flash') && (!t || !t.isConnected || !t.getClientRects().length)) hideTip(); }, 300); // a flash ("Copied") goes by itself
 document.addEventListener('pointerover', (e) => {
   if (e.pointerType === 'touch') return;
-  const t = e.target.closest?.('[data-oh-title], [data-tip], [title]');
+  // A link's tip in the terminal stays while the pointer moves along the link (the terminal's rows are many elements).
+  if (TIP.target?.classList?.contains('xt-tip-at') && e.target.closest?.('.xterm')) return;
+  const t = e.target.closest?.('a[data-cl], [data-oh-title], [data-tip], [title]');
   if (t === TIP.target) return;
   hideTip();
   if (!t || t.closest('.oh-tip')) return;
@@ -3441,6 +3452,8 @@ function traceSummary(m) {
   const tools = (m.trace || []).filter((e) => e.t === 'tool').length;
   return `Steps · ${tools} tool call${tools === 1 ? '' : 's'}${decs.length ? ` · ${decs.length} decision round${decs.length === 1 ? '' : 's'}, ${flips} answer${flips === 1 ? '' : 's'} changed` : ''}${s ? ` · ${secs(s.ms)}` : m.live ? ' · running…' : ''}`;
 }
+// Web addresses in escaped text (tool results, notes, screens) as Ctrl+click links to the Browser tab.
+const linkUrls = (html) => String(html).replace(/(^|[\s(>]|&quot;|&#39;|&lt;)(https?:\/\/(?:(?!&quot;|&#39;|&lt;|&gt;)[^\s<)"])+?)(?=[.,;:!?]?(?:[\s<)"]|&quot;|&#39;|&lt;|&gt;|$))/g, (_, pre, url) => `${pre}<a href="${url}" rel="noopener noreferrer" data-cl="1">${url}</a>`);
 function traceHTML(m) {
   const out = [], rounds = {};
   let mediaStatus = null;
@@ -3452,10 +3465,10 @@ function traceHTML(m) {
       const i = out.findLastIndex((h) => h.includes(`data-llm="${e.step}"`));
       if (i >= 0) out[i] = out[i].replace(`<span class="sub" data-llm="${e.step}"></span>`, `<div class="sub">${secs(e.ms)} · <span class="tok-out">${e.tokensOut} tokens out</span> · ${money(e.cost, 5)}${e.provider ? ` · via <span class="tr-prov" title="The provider OpenRouter routed this call to">${esc(e.provider)}</span>` : ''}${e.model && e.model !== m.trace.find((x) => x.t === 'llm_start' && x.step === e.step)?.model ? ` · <b class="tr-fallback" title="The chat's model was unavailable, so OpenRouter used the fallback model">fallback ${esc(short(e.model))}</b>` : ''}${e.toolCalls.length ? ` · then ${e.toolCalls.join(', ')}` : ''}</div>${e.aside ? `<div class="aside">💬 ${esc(e.aside)}</div>` : ''}`);
     } else if (e.t === 'tool' && e.name !== 'decide') row(e.at, `${e.by === 'reviewer' ? '🧪 <span class="tr-rv">reviewer</span> ' : e.by === 'helper' ? `🤝 <span class="tr-hp">helper ${e.helper || ''}</span> ` : ''}${TOOL_NAME[e.name]?.split(' ')[0] || '🔧'} <b>${esc(e.name)}</b><div class="sub">${esc(argSummary(e))}</div>`, e.by === 'reviewer' ? 'browser' : 'tool');
-    else if (e.t === 'reading') row(e.at, `📝 <b>Prompt enhancer</b> ${esc(short(e.model))} read the request${e.late ? ' (too late for the first step; the deciders still use it)' : ''} · ${secs(e.ms)} · ${money(e.cost, 5)}<div class="sub" style="white-space:pre-wrap">${esc(e.text)}</div>`, 'note');
+    else if (e.t === 'reading') row(e.at, `📝 <b>Prompt enhancer</b> ${esc(short(e.model))} read the request${e.late ? ' (too late for the first step; the deciders still use it)' : ''} · ${secs(e.ms)} · ${money(e.cost, 5)}<div class="sub" style="white-space:pre-wrap">${linkUrls(esc(e.text))}</div>`, 'note');
     else if (e.t === 'reading_edit') row(e.at, e.text ? `📝 You corrected the reading<div class="sub" style="white-space:pre-wrap">${esc(e.text)}</div>` : '📝 You dropped the reading', 'note');
     else if (e.t === 'fresh_eyes_start') row(e.at, `👀 <b>Fresh eyes</b> ${esc(short(e.model))}: a problem came back, so a clean-context model takes a look<div class="sub">${(e.problems || []).map(esc).join('<br>')}</div>`, 'note');
-    else if (e.t === 'fresh_eyes') row(e.at, `👀 Fresh eyes ${e.ok ? 'diagnosed it' : 'found nothing'}${e.report ? `<div class="sub" style="white-space:pre-wrap">${esc(e.report)}</div>` : ''}`, e.ok ? 'ok' : 'warn');
+    else if (e.t === 'fresh_eyes') row(e.at, `👀 Fresh eyes ${e.ok ? 'diagnosed it' : 'found nothing'}${e.report ? `<div class="sub" style="white-space:pre-wrap">${linkUrls(esc(e.report))}</div>` : ''}`, e.ok ? 'ok' : 'warn');
     else if (e.t === 'helper_start' && e.fresh) continue;
     else if (e.t === 'helper_start') row(e.at, `🤝 <b>Helper ${e.id}</b> ${esc(short(e.model))} starts, with a clean context<div class="sub">${esc(e.task)}</div>`, 'note');
     else if (e.t === 'helper_done') row(e.at, `🤝 Helper ${e.id} ${e.ok ? 'reported back' : 'gave no report'} · ${e.steps} step${e.steps === 1 ? '' : 's'} · ${secs(e.ms)} · ${money(e.cost, 4)}${e.chars ? ` · ${e.chars} characters returned` : ''}`, e.ok ? 'ok' : 'warn');
@@ -3465,7 +3478,7 @@ function traceHTML(m) {
     else if (e.t === 'plan') row(e.at, `🗺 <b>Plan</b> · ${e.items.filter((x) => x.status === 'done').length} of ${e.items.length} done<div class="sub">${esc(e.items.map((x) => `${x.status === 'done' ? '✓' : x.status === 'doing' ? '◐' : '○'} ${x.text}`).join('  '))}</div>`, 'note');
     else if (e.t === 'review_start') row(e.at, `🧪 <b>Reviewer</b> ${esc(short(e.model))} starts testing ${esc(e.targets.join(', '))} <span class="sub">(round ${e.round}, fresh context)</span>`, 'browser');
     else if (e.t === 'review') row(e.at, `🧪 Reviewer: <b>${e.pass ? 'passed' : 'not passed'}</b> · ${Object.entries(e.scores).map(([k, v]) => `${k} ${v}/5`).join(', ')} (bar ${e.bar}) · ${money(e.cost, 4)}${e.bugs.length ? `<div class="sub">${esc(e.bugs.join(' · '))}</div>` : ''}`, e.pass ? 'ok' : 'warn');
-    else if (e.t === 'tool_result' && e.name !== 'decide') row(e.at, `<div class="sub">↳ ${esc(e.result.slice(0, 220))}</div>`, /^Error/.test(e.result) ? 'err' : 'res');
+    else if (e.t === 'tool_result' && e.name !== 'decide') row(e.at, `<div class="sub">↳ ${linkUrls(esc(e.result.slice(0, 220)))}</div>`, /^Error/.test(e.result) ? 'err' : 'res');
     else if (e.t === 'decide_start') { rounds[e.round] = { start: e, votes: [], done: null }; row(e.at, `<span data-round="${e.round}"></span>`, 'decide'); }
     else if (e.t === 'decide_vote') rounds[e.round]?.votes.push(e);
     else if (e.t === 'decide_done') { if (rounds[e.round]) rounds[e.round].done = e; }
@@ -3473,9 +3486,9 @@ function traceHTML(m) {
     else if (e.t === 'card_held') row(e.at, '⏸ You stopped the clock: the card waits for you', 'note');
     else if (e.t === 'approval_done') row(e.at, `${e.approve ? '✅ approved' : '⛔ declined'} by ${byName(e.by)}${e.reason ? `<div class="sub">${esc(e.reason)}</div>` : ''}`, e.approve ? 'ok' : 'err');
     else if (e.t === 'media_status') mediaStatus = e;
-    else if (e.t === 'screenshot') row(e.at, `📸 browser ${esc(e.action)}${e.target ? ` ${esc(e.target)}` : ''}<div class="sub">${esc(e.url || '')}</div><img class="shot" src="${e.image}" alt="screenshot" loading="lazy">`, 'browser');
+    else if (e.t === 'screenshot') row(e.at, `📸 browser ${esc(e.action)}${e.target ? ` ${esc(e.target)}` : ''}<div class="sub">${linkUrls(esc(e.url || ''))}</div><img class="shot" src="${e.image}" alt="screenshot" loading="lazy">`, 'browser');
     else if (e.t === 'command' && e.background) row(e.at, `⏳ <code>${esc(e.command)}</code> → background job <b>${esc(e.background)}</b> · ${esc(e.why || '')}<div class="sub">It keeps running; its output goes to ${esc(e.log || 'its log')}. Stop it from the terminal, or the agent stops it with job_stop.</div>`, 'cmd');
-    else if (e.t === 'terminal') row(e.at, `🖥 terminal ${esc(e.id)} · ${esc(e.action)}${e.command ? ` <code>${esc(clip(e.command, 120))}</code>` : ''}${e.running === false ? ' · ended' : ''}${e.screen ? `<details class="out"><summary>screen</summary><pre>${esc(e.screen)}</pre></details>` : ''}`, 'cmd');
+    else if (e.t === 'terminal') row(e.at, `🖥 terminal ${esc(e.id)} · ${esc(e.action)}${e.command ? ` <code>${esc(clip(e.command, 120))}</code>` : ''}${e.running === false ? ' · ended' : ''}${e.screen ? `<details class="out"><summary>screen</summary><pre>${linkUrls(esc(e.screen))}</pre></details>` : ''}`, 'cmd');
     else if (e.t === 'debug') row(e.at, `🐞 debugger ${esc(e.id || '')} · ${esc(e.action)}${e.file ? ` <code>${esc(e.file)}</code>` : ''}${e.text ? `<details class="out"><summary>where it is</summary><pre>${esc(e.text)}</pre></details>` : ''}`, 'cmd');
     else if (e.t === 'android') row(e.at, `📱 android ${esc(e.device)} · ${esc(e.action)}`, 'browser');
     else if (e.t === 'packages') row(e.at, `📦 checked ${e.packages.length} package${e.packages.length === 1 ? '' : 's'} for <code>${esc(clip(e.command, 80))}</code><div class="sub">${e.packages.map((p) => `${esc(p.name)} (${esc(p.eco)}): ${p.verdict === 'ok' ? `exists${p.ageDays != null ? `, ${Math.round(p.ageDays / 36.5) / 10} years old` : ''}${p.weekly != null ? `, ${p.weekly.toLocaleString()}/week` : ''}` : esc(p.note)}`).join('<br>')}</div>`, e.packages.some((p) => p.verdict === 'missing') ? 'err' : 'cmd');
@@ -5837,6 +5850,8 @@ async function boot() {
   $('#homeBtn').onclick = goHome; $('#railHome').onclick = goHome;
   placeChrome(); matchMedia('(max-width: 900px)').addEventListener('change', placeChrome);
   for (const [rail, real] of [['#railRestart', '#restartBtn'], ['#railTheme', '#themeBtn'], ['#railSettings', '#settingsBtn']]) { const b = $(rail); if (b) b.onclick = () => $(real)?.click(); }
+  // The GitHub mark by the name is a control, not content: a plain click opens QuorX's code in the Browser tab.
+  const bg = $('#brandGit'); if (bg) bg.onclick = (e) => { e.preventDefault(); openLink(bg.getAttribute('href'), bg); };
   $('#brandHome').onclick = goHome; $('#brandHome').onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); goHome(); } };
   $('#sbCollapseBtn').onclick = () => { if (isNarrow()) return closeDrawer(); G.sideHidden = true; savePrefs(); syncLayout(); };
   $('#newBtn').addEventListener('click', closeDrawer);
@@ -6333,7 +6348,8 @@ async function mountXterm(t, u, box) {
   box.innerHTML = '<div class="fx-empty">Starting the terminal…</div>';
   try { await loadXterm(); } catch (e) { G.xtBusy.delete(k); u.plain = true; box.hidden = true; renderTermInput(t); return; }
   const el = document.createElement('div'); el.className = 'xt-host';
-  const term = new window.Terminal({ cursorBlink: true, fontFamily: getComputedStyle(document.documentElement).getPropertyValue('--mono').trim() || 'Consolas, monospace', fontSize: (() => { try { return Number(localStorage.getItem('oh-term-font')) || 13; } catch { return 13; } })(), lineHeight: 1.15, scrollback: 5000, allowProposedApi: false, theme: xtermTheme(), convertEol: false });
+  const term = new window.Terminal({ cursorBlink: true, fontFamily: getComputedStyle(document.documentElement).getPropertyValue('--mono').trim() || 'Consolas, monospace', fontSize: (() => { try { return Number(localStorage.getItem('oh-term-font')) || 13; } catch { return 13; } })(), lineHeight: 1.15, scrollback: 5000, allowProposedApi: false, theme: xtermTheme(), convertEol: false, linkHandler: termLink });
+  termLinks(term);
   const fit = new window.FitAddon.FitAddon(); term.loadAddon(fit);
   x = { term, fit, el, es: null, q: '', chain: Promise.resolve(), exited: false, projectId: t.projectId, tab: u.id };
   G.xt.set(k, x); G.xtBusy.delete(k);
@@ -6660,6 +6676,84 @@ function browserGo(url) {
   G.bActive = t.sid;
   G.view = { id: G.view.id, src: false, files: false, browser: true };
   c.paneHidden = false; syncLayout(); renderPane();
+}
+// ---------- links in content: Ctrl+click (Cmd+click on a Mac) opens them in the Browser tab ----------
+// Chat messages, Steps, News, documents in the pane, artifact pages and the terminal. A plain click does nothing (text
+// selection works as usual). Only web addresses open, in a new tab of the pane's Browser, never in the system browser
+// or a new window. QuorX's own pages never open inside its Browser tab, as the agent's browser can't open them either.
+function quorxPage(u) {
+  let x; try { x = new URL(String(u || '')); } catch { return false; }
+  const port = (p, proto) => Number(p || (proto === 'https:' ? 443 : 80));
+  if (!/^https?:$/.test(x.protocol) || port(x.port, x.protocol) !== port(location.port, location.protocol)) return false;
+  const host = (h) => h.toLowerCase().replace(/\.$/, '').replace(/^\[|\]$/g, '');
+  const h = host(x.hostname);
+  const self = h === host(location.hostname) || h === 'localhost' || h.endsWith('.localhost') || /^(127\.|0\.0\.0\.0$)/.test(h) || h === '::1' || h === '::' || /^::ffff:(127\.|7f)/.test(h);
+  return self && !/^\/(ws|art|preview|blob)\//.test(x.pathname); // its own work served by QuorX is fine
+}
+async function openLink(url, from) {
+  let u; try { u = new URL(String(url || ''), location.href); } catch { return; }
+  if (!/^https?:$/.test(u.protocol)) return;
+  const say = (text) => { if (from?.isConnected && from.getClientRects().length) flashTip(from, text, 2400); };
+  if (quorxPage(u.href)) return say("QuorX's own pages don't open in its Browser tab");
+  // The Browser tab is in a chat's side pane: News closes, and with no chat open the latest one opens.
+  if (NEWS.open) closeNews();
+  let c = focused();
+  if (!c) { const last = [...G.chats].sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0))[0]; if (last) { await showChat(last.id); c = focused(); } }
+  if (!c) return say('Open a chat first: links open in its Browser tab');
+  // A new tab, or the empty tab you're on.
+  const cur = G.view.browser ? activeBTab(c) : null;
+  const t = cur && !cur.agent && !cur.url ? cur : newBTab(u.href);
+  Object.assign(t, { url: u.href, title: '', mode: null, opened: null, shot: null });
+  G.bActive = t.sid;
+  G.view = { id: G.view.id, src: false, files: false, browser: true };
+  c.paneHidden = false; syncLayout(); renderPane(); toPreview();
+}
+document.addEventListener('click', (e) => {
+  const a = e.target.closest?.('a[data-cl]');
+  if (!a) return;
+  e.preventDefault();
+  if ((e.ctrlKey || e.metaKey) && e.button === 0) openLink(a.getAttribute('href'), a);
+}, true);
+// A middle click would open a new window: nothing, like a plain click.
+document.addEventListener('auxclick', (e) => { if (e.target.closest?.('a[data-cl]')) e.preventDefault(); }, true);
+// The hand shows on a link only while Ctrl (Cmd) is held, since only then a click opens it.
+const linkModKey = (e) => document.body.classList.toggle('link-mod', !!(e.ctrlKey || e.metaKey));
+document.addEventListener('keydown', linkModKey, true);
+document.addEventListener('keyup', linkModKey, true);
+window.addEventListener('blur', () => document.body.classList.remove('link-mod'));
+// Artifact pages (in frames) send their Ctrl+clicked links here (see server/artifacts.js); only from a frame of this page.
+window.addEventListener('message', (e) => {
+  const d = e.data;
+  if (!d || d.quorx !== 'open-link' || typeof d.url !== 'string') return;
+  const f = [...document.querySelectorAll('iframe')].find((x) => x.contentWindow === e.source);
+  if (f) openLink(d.url, f);
+});
+// The terminal: web addresses in its output (and OSC 8 links) open the same way, with the same tip at the pointer.
+function termTip(ev, text) {
+  let a = $('.xt-tip-at');
+  if (!text) { if (TIP.target === a) hideTip(); a?.remove(); return; }
+  if (!a) { a = document.createElement('span'); a.className = 'xt-tip-at'; document.body.appendChild(a); }
+  a.style.left = `${ev.clientX}px`; a.style.top = `${ev.clientY}px`;
+  clearTimeout(TIP.timer);
+  TIP.target = a;
+  TIP.timer = setTimeout(() => TIP.target === a && showTip(a, text), 450);
+}
+const termLink = {
+  activate: (ev, url) => { if (ev.ctrlKey || ev.metaKey) openLink(url); },
+  hover: (ev, url) => termTip(ev, `${LINK_TIP}\n${url}`),
+  leave: () => termTip(null),
+  allowNonHttpProtocols: false,
+};
+function termLinks(term) {
+  const RX = /https?:\/\/[^\s<>"'`]+[^\s<>"'`.,;:!?)\]]/g;
+  term.registerLinkProvider({
+    provideLinks(y, cb) {
+      const line = term.buffer.active.getLine(y - 1);
+      const text = line ? line.translateToString(true) : '';
+      const links = [...text.matchAll(RX)].map((m) => ({ text: m[0], range: { start: { x: m.index + 1, y }, end: { x: m.index + m[0].length, y } }, decorations: { pointerCursor: false, underline: true }, ...termLink }));
+      cb(links.length ? links : undefined);
+    },
+  });
 }
 function closeBTab(c, sid) {
   if (sid.startsWith('agent-')) { delete G.agentTab[c.id]; } else { G.btabs = (G.btabs || []).filter((x) => x.sid !== sid); if (DESK) window.ohDesktop.close(sid); }
@@ -7073,6 +7167,7 @@ if (DESK) {
   document.addEventListener('visibilitychange', () => deskPlace(true));
   window.ohDesktop.on((ev) => {
     const c = focused();
+    if (ev.type === 'open-link') { openLink(ev.url); return; }
     if (ev.type === 'popup') { newBTab(ev.url); if (c) { G.view = { id: G.view.id, src: false, files: false, browser: true }; syncLayout(); renderPane(); } return; }
     if (ev.type === 'download') { deskDownload(ev); return; }
     if (String(ev.sid || '').startsWith('agent-')) return deskAgentEvent(ev);
@@ -7593,6 +7688,7 @@ function newsClick(e) {
   if (!a) return;
   if (a.dataset.news) { e.preventDefault(); return openNews(a.dataset.news); }
   if (a.dataset.anchor) { e.preventDefault(); $(`#nw-${CSS.escape(a.dataset.anchor)}`, $('#newsView'))?.scrollIntoView({ block: 'start' }); return; }
+  if (a.dataset.cl) return; // a web link: Ctrl+click opens it in the Browser tab (see openLink)
   if (a.dataset.ext && DESK) { e.preventDefault(); window.ohDesktop.openExternal(a.href); }
 }
 
