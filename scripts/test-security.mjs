@@ -8,7 +8,9 @@ import path from 'node:path';
 import { hostAllowed, crossSiteApi, gate, isLoopback, appGate, appKey } from '../server/access.js';
 import { privateAddress } from '../server/safefetch.js';
 import { decide, agentWriteBlocked } from '../server/cmdpolicy.js';
-import { safePath, checkCommand, preApproved, searchFiles } from '../server/workspace.js';
+import { safePath, checkCommand, preApproved, searchFiles, childEnv } from '../server/workspace.js';
+import { userEnv, mergePath } from '../server/userenv.js';
+import { needsAdmin, adminForAgent } from '../server/elevation.js';
 import { externalize, blobData } from '../server/blobs.js';
 
 const req = ({ host = 'localhost:5188', ip = '127.0.0.1', site, cookie, headers = {} } = {}) => ({ headers: { host, ...(site ? { 'sec-fetch-site': site } : {}), ...(cookie ? { cookie } : {}), ...headers }, socket: { remoteAddress: ip } });
@@ -323,4 +325,48 @@ test('Brotli: fixed Node versions are told apart; until then requests ask for gz
     assert.doesNotMatch(asked, /\bbr\b/, 'never asks for Brotli, even when the caller does');
     await assert.rejects(fetch(`${base}/br`), /refused a Brotli-compressed answer/);
   } finally { srv.close(); }
+});
+
+test("your own terminal gets the normal environment; the agent's commands still lose secrets, colours and the browser", () => {
+  const was = { token: process.env.GITHUB_TOKEN, color: process.env.FORCE_COLOR, run: process.env.ELECTRON_RUN_AS_NODE };
+  process.env.GITHUB_TOKEN = 'test-token-not-real';
+  delete process.env.FORCE_COLOR;
+  process.env.ELECTRON_RUN_AS_NODE = '1';
+  try {
+    const mine = userEnv({ TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'QuorX' });
+    assert.equal(mine.GITHUB_TOKEN, 'test-token-not-real');
+    assert.equal(mine.FORCE_COLOR, undefined);
+    assert.equal(mine.BROWSER, process.env.BROWSER);
+    assert.equal(mine.COLORTERM, 'truecolor');
+    assert.equal(mine.ELECTRON_RUN_AS_NODE, undefined, 'Electron apps run as themselves');
+    const agent = childEnv();
+    assert.equal(agent.GITHUB_TOKEN, undefined);
+    assert.equal(agent.FORCE_COLOR, '0');
+    assert.equal(agent.BROWSER, 'none');
+  } finally {
+    for (const [k, v] of [['GITHUB_TOKEN', was.token], ['FORCE_COLOR', was.color], ['ELECTRON_RUN_AS_NODE', was.run]]) { if (v == null) delete process.env[k]; else process.env[k] = v; }
+  }
+});
+
+test("PATH: QuorX's own entries first, then what an installer added to the registry, once each", () => {
+  const cur = 'C:\\nvm\\v22;C:\\Windows\\system32;C:\\Tools\\';
+  const machine = 'C:\\WINDOWS\\system32;%SystemRoot%\\System32\\Wbem;C:\\Program Files\\dotnet\\';
+  const user = 'C:\\tools;%USERPROFILE%\\.cargo\\bin;;%UNKNOWN_QX%\\x;C:\\Program Files\\dotnet';
+  assert.equal(mergePath(cur, machine, user, { SystemRoot: 'C:\\Windows', userprofile: 'C:\\Users\\someone' }),
+    'C:\\nvm\\v22;C:\\Windows\\system32;C:\\Tools\\;C:\\Windows\\System32\\Wbem;C:\\Program Files\\dotnet\\;C:\\Users\\someone\\.cargo\\bin;%UNKNOWN_QX%\\x');
+  assert.equal(mergePath(cur, '', ''), cur, 'nothing new: the PATH as it was');
+  assert.equal(mergePath('', 'C:\\a', 'c:\\A\\'), 'C:\\a');
+});
+
+test('a command that needs administrator rights is handed to the user; other failures are not', () => {
+  assert.equal(needsAdmin({ line: 'setup.exe /quiet', code: 740, out: '' }), true);
+  assert.equal(needsAdmin({ line: 'x', code: 1, out: 'The requested operation requires elevation.' }), true);
+  assert.equal(needsAdmin({ line: 'x', code: 5, out: 'Error: Administrator privileges are required for this operation.' }), true);
+  assert.equal(needsAdmin({ line: 'x', code: 1, out: 'Please run this as administrator.' }), true);
+  assert.equal(needsAdmin({ line: 'winget install Foo.Bar', code: 1, out: 'Access is denied.' }), true);
+  assert.equal(needsAdmin({ line: 'del locked.txt', code: 1, out: 'Access is denied.' }), false, 'access denied counts only for an install');
+  assert.equal(needsAdmin({ line: 'winget install X', code: 1, out: 'The installer cannot be run from an administrator context.' }), false);
+  assert.equal(needsAdmin({ line: 'x', code: 0, out: 'tip: run as administrator for more' }), false, 'a command that worked is left alone');
+  assert.equal(needsAdmin({ line: 'npm test', code: 1, out: '3 tests failed' }), false);
+  assert.equal(adminForAgent('winget install Foo'), "This needs administrator rights, which QuorX doesn't use. Ask the user to run it in a Terminal tab opened as administrator: `winget install Foo`");
 });
