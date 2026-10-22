@@ -130,8 +130,14 @@ function createWindow() {
     e.preventDefault();
     if (/^(https?|mailto):/i.test(url)) shell.openExternal(url);
   });
-  // Anything that opens a new window (↗, links in pages and artifacts) goes to your default browser.
-  win.webContents.setWindowOpenHandler(({ url }) => { if (/^(https?|mailto):/i.test(url)) shell.openExternal(url); return { action: 'deny' }; });
+  // Ctrl+click (Cmd+click on a Mac) on a web link inside a frame of the app (an artifact, a page preview) opens it in the
+  // pane's Browser tab. Links in QuorX's own content are handled by the page and never get here.
+  // Anything else that opens a new window (↗, sign-in) goes to your default browser.
+  win.webContents.setWindowOpenHandler(({ url, disposition }) => {
+    if (disposition === 'background-tab' && /^https?:\/\//i.test(url)) { send({ type: 'open-link', url }); return { action: 'deny' }; }
+    if (/^(https?|mailto):/i.test(url)) shell.openExternal(url);
+    return { action: 'deny' };
+  });
   // ✕ keeps the harness running in the tray (scheduled tasks still run), or quits, as you chose in the notice
   // or in ⚙ Settings → About. Attached to a harness someone else runs, ✕ just closes the window.
   win.on('close', (e) => {
@@ -572,6 +578,22 @@ const COMMANDS = {
     return true;
   },
   async 'tab.close'({ tab }) { return closeTab(tab); },
+  // 🤖 Give to agent: one of your tabs, lent to a chat. Its debugger forwards page events like the agent's own tab's;
+  // detaching lets go of it (the tab and your sign-in stay as they are).
+  async 'tab.attach'({ tab }) {
+    const t = tabs.get(tab); if (!t || t.agent) throw new Error('that tab is gone');
+    const dbg = t.view.webContents.debugger;
+    if (!dbg.isAttached()) dbg.attach('1.3');
+    if (!t.onDbg) { t.onDbg = (_e, method, params) => { if (FORWARD.has(method)) queueEvent({ tab, method, params }); }; dbg.on('message', t.onDbg); }
+    return tab;
+  },
+  async 'tab.detach'({ tab }) {
+    const t = tabs.get(tab); if (!t || t.agent) return false;
+    const dbg = t.view.webContents.debugger;
+    if (t.onDbg) { dbg.removeListener('message', t.onDbg); t.onDbg = null; }
+    try { if (dbg.isAttached()) dbg.detach(); } catch { /* gone */ }
+    return true;
+  },
 };
 // Linked to the harness: commands come down an event stream; answers and page events go back by POST.
 // It reconnects when the harness restarts; an older harness without the link just keeps headless tabs.

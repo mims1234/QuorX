@@ -57,3 +57,27 @@ export async function enhanceRequest({ text, earlier = [], model, signal, call =
   const reading = parseReading(r?.message?.content);
   return reading ? { ...reading, text: readingText(reading), model, usage: r.usage || {} } : null;
 }
+
+// ✨ Enhance in the composer: the user's draft, rewritten before they send it. The same cheap model; the user sees
+// the result in the box, can press it again or undo, and sends it themselves.
+export const REWRITE_SYSTEM = `You improve a user's draft message to an AI agent that builds things and does tasks on their computer, before they send it.
+
+Rewrite it so the agent gets it right the first time:
+- Keep the user's intent, voice and language (write in the language they used). Never change what they asked for.
+- Put the goal first, then what the request plainly implies and a reasonable person would expect, as short points.
+- Keep every detail they gave: names, numbers, files, links, code, constraints.
+- Don't invent features, facts, file names or requirements they would not expect. Where something important is open, state a sensible default the agent may use ("Assume ...") instead of asking.
+- As short as it can be while complete. No preamble, no explanation, no quotes around it.
+- If the draft is a question, a greeting or feedback rather than a request, only fix spelling and make it clear.
+
+Answer with the rewritten message only.`;
+/** Rewrites a draft. earlier: the user's earlier turns in this chat (strings, oldest first). Resolves to { text, model, cost } or null. */
+export async function rewritePrompt({ text, earlier = [], model, signal, call = chat }) {
+  const prior = earlier.filter(Boolean).slice(-3).map((m) => `- ${clip(m, 400)}`).join('\n');
+  const r = await call({ model, max_tokens: 1500, temperature: 0.3, reasoning: { enabled: false }, messages: [
+    { role: 'system', content: REWRITE_SYSTEM },
+    { role: 'user', content: `${prior ? `The user's earlier messages in this chat:\n${prior}\n\n` : ''}The draft to improve:\n${clip(text, 8000)}` },
+  ] }, signal);
+  const out = String(r?.message?.content || '').trim().replace(/^```\w*\n?/, '').replace(/\n?```$/, '').replace(/^"([\s\S]*)"$/, '$1').trim();
+  return out ? { text: out, model, cost: r?.usage?.cost || 0 } : null;
+}

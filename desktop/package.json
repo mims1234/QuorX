@@ -49,6 +49,7 @@
           "scripts/news-check.mjs",
           "skills/**/*",
           "templates/**/*",
+          "extension/**/*",
           "README.md"
         ]
       },
