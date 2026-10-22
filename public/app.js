@@ -7615,10 +7615,18 @@ async function drawDesktopSettings() {
   const feed = $('#stDeskFeed');
   if (feed) feed.value = st.url || '';
   if (feed) feed.onchange = async (e) => { try { await window.ohDesktop.update('setUrl', e.target.value); } catch (er) { uiAlert(er.message); } };
-  $('#stDeskCheck').onclick = () => window.ohDesktop.update(info.store ? 'store' : 'check');
+  $('#stDeskCheck').onclick = () => (info.store ? storeUpdate() : window.ohDesktop.update('check'));
   drawUpdate(st);
 }
 // ---------- updates (desktop app): "⬆ Update" in the top bar, progress, "Restart to update" ----------
+// The Store copy: open its Store page. The Store can't replace a QuorX that is still running, and ✕ may only hide it in
+// the tray (the update then fails with 0x80073D02), so when a newer version is out, offer to quit QuorX now.
+async function storeUpdate() {
+  const st = await window.ohDesktop.update('state').catch(() => ({}));
+  await window.ohDesktop.update('store');
+  if (st.state !== 'store-available' || typeof window.ohDesktop.quit !== 'function') return;
+  if (await uiConfirm(`QuorX's page is open in the Microsoft Store.\n\nThe Store can only install v${st.version} once QuorX has quit; closing the window keeps it running in the tray. Quit QuorX now, then press Update in the Store?`)) window.ohDesktop.quit();
+}
 function updateText(u) {
   const v = u.version ? `v${u.version}` : 'a new version';
   return { available: `⬆ Update to ${v}`, 'store-available': `⬆ Update to ${v} in the Microsoft Store`, downloading: `⬇ Downloading ${v}… ${u.percent ?? 0}%`, ready: `↻ Restart to update to ${v}`, error: '⚠ Update failed' }[u.state] || '';
@@ -7658,7 +7666,7 @@ function drawUpdate(u) {
     b.setAttribute('aria-label', t.replace(/^\S+\s/, ''));
     b.style.setProperty('--p', `${Math.max(0, Math.min(100, u.percent ?? 0))}%`);
     b.disabled = u.state === 'downloading';
-    b.title = u.state === 'error' ? `${u.error || ''}\nClick to try again.` : u.state === 'available' ? `Version ${u.version} is out (you have ${u.current || 'an older one'}). Click to download it${u.size ? ` (${Math.round(u.size / 1e6)} MB)` : ''}.${u.notes ? `\n\n${u.notes.replace(/<[^>]+>/g, '')}` : ''}` : u.state === 'ready' ? 'Restarts QuorX and installs the update. Your chats and projects stay as they are.' : u.state === 'store-available' ? `Version ${u.version} is out (you have ${u.current || 'an older one'}). Click to open QuorX in the Microsoft Store: close QuorX, then Update there.` : '';
+    b.title = u.state === 'error' ? `${u.error || ''}\nClick to try again.` : u.state === 'available' ? `Version ${u.version} is out (you have ${u.current || 'an older one'}). Click to download it${u.size ? ` (${Math.round(u.size / 1e6)} MB)` : ''}.${u.notes ? `\n\n${u.notes.replace(/<[^>]+>/g, '')}` : ''}` : u.state === 'ready' ? 'Restarts QuorX and installs the update. Your chats and projects stay as they are.' : u.state === 'store-available' ? `Version ${u.version} is out (you have ${u.current || 'an older one'}). Click to open QuorX in the Microsoft Store, then quit QuorX (tray icon → Quit QuorX) and press Update there.` : '';
     if (u.state === 'downloading') b.title = t;
   }
   // The folded sidebar shows it as an icon, coloured like the button: ⬆ out, ⬇ downloading (with its %), ↻ ready, ⚠ failed.
@@ -7676,14 +7684,14 @@ function drawUpdate(u) {
     const v = u.version ? ` to v${u.version}` : '';
     h.hidden = false; h.dataset.state = u.state || '';
     h.textContent = { checking: 'Checking…', current: '✓ Up to date', available: `⬆ Update${v}`, downloading: `⬇ ${u.percent ?? 0}%`, ready: `↻ Restart to update${v}`, error: '⚠ Check again', store: '⟳ Check for updates', 'store-current': '✓ Up to date', 'store-available': `⬆ Update${v} ↗`, dev: 'Updates from git', 'no-feed': 'No update feed' }[u.state] || '⟳ Check for updates';
-    h.title = { current: `QuorX v${u.current || '?'} is the newest version. Click to check again.`, store: `Updates come from the Microsoft Store.${u.error ? ` Couldn't check for a newer version: ${u.error}.` : ''} Click to check.`, 'store-current': `QuorX v${u.current || '?'} is the newest version; updates come from the Microsoft Store. Click to check again.`, 'store-available': `v${u.version} is out (you have v${u.current || '?'}). Opens QuorX in the Microsoft Store: close QuorX, then Update there. The Store can get a release a day after it's out.`, dev: 'Running from the repo: pull with git to update.', 'no-feed': 'Set the update feed in Settings → About.', error: u.error || '' }[u.state] || '';
+    h.title = { current: `QuorX v${u.current || '?'} is the newest version. Click to check again.`, store: `Updates come from the Microsoft Store.${u.error ? ` Couldn't check for a newer version: ${u.error}.` : ''} Click to check.`, 'store-current': `QuorX v${u.current || '?'} is the newest version; updates come from the Microsoft Store. Click to check again.`, 'store-available': `v${u.version} is out (you have v${u.current || '?'}). Opens QuorX in the Microsoft Store. Quit QuorX from its tray icon (right-click → Quit QuorX), then press Update there; closing the window keeps it running. The Store can get a release a day after it's out.`, dev: 'Running from the repo: pull with git to update.', 'no-feed': 'Set the update feed in Settings → About.', error: u.error || '' }[u.state] || '';
     const hot = ['available', 'ready', 'store-available'].includes(u.state);
     h.classList.toggle('accent', hot);
     h.classList.toggle('secondary', !hot);
     h.disabled = ['checking', 'downloading', 'dev', 'no-feed'].includes(u.state);
   }
   const s = $('#stDeskUpd');
-  if (s) s.textContent = { dev: 'Running from the repo: updates come from git.', store: `Updates come from the Microsoft Store.${u.error ? ` Couldn't check for a newer version: ${u.error}.` : ''}`, 'store-current': `Up to date (v${u.current || '?'}). Updates come from the Microsoft Store.`, 'store-available': `v${u.version} is out (you have v${u.current || '?'}). Close QuorX, then Update on its Store page.`, 'no-feed': 'No update feed set.', checking: 'Checking…', current: `Up to date (v${u.current || '?'}).`, available: `v${u.version} is available.`, downloading: `Downloading… ${u.percent ?? 0}%`, ready: `v${u.version} is downloaded: restart to install.`, error: `Couldn't check: ${u.error || 'unknown error'}` }[u.state] || `v${u.current || '?'}`;
+  if (s) s.textContent = { dev: 'Running from the repo: updates come from git.', store: `Updates come from the Microsoft Store.${u.error ? ` Couldn't check for a newer version: ${u.error}.` : ''}`, 'store-current': `Up to date (v${u.current || '?'}). Updates come from the Microsoft Store.`, 'store-available': `v${u.version} is out (you have v${u.current || '?'}). Quit QuorX from its tray icon (right-click → Quit QuorX), then press Update on its Store page.`, 'no-feed': 'No update feed set.', checking: 'Checking…', current: `Up to date (v${u.current || '?'}).`, available: `v${u.version} is available.`, downloading: `Downloading… ${u.percent ?? 0}%`, ready: `v${u.version} is downloaded: restart to install.`, error: `Couldn't check: ${u.error || 'unknown error'}` }[u.state] || `v${u.current || '?'}`;
 }
 // Preview of the update strip in a browser on this computer: ?demo-update=available | downloading:42 | ready | error
 {
@@ -7704,12 +7712,13 @@ if (DESK) {
   if (hb) hb.onclick = () => {
     const st = hb.dataset.state;
     if (['available', 'ready', 'error'].includes(st) && ub) ub.click();
-    else window.ohDesktop.update(st === 'store-available' ? 'store' : 'check');
+    else if (st === 'store-available') storeUpdate();
+    else window.ohDesktop.update('check');
   };
   if (ub) ub.onclick = async () => {
     const st = ub.dataset.state;
     if (st === 'available') drawUpdate(await window.ohDesktop.update('download'));
-    else if (st === 'store-available') window.ohDesktop.update('store');
+    else if (st === 'store-available') storeUpdate();
     else if (st === 'ready') { if (await uiConfirm('Restart QuorX now to install the update?\n\nRunning replies are stopped and can be resumed after the restart.')) window.ohDesktop.update('install'); }
     else if (st === 'error') window.ohDesktop.update('check');
   };
