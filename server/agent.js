@@ -15,7 +15,7 @@ import { runtime } from './openrouter.js';
 import { enhanceRequest } from './enhancer.js';
 import { validId, listProjects, getChat } from './store.js';
 import { searchFiles, trashFile, checkpoint, changedFiles, copyTemplate, snapBefore, commandChanges, safePath, childEnv, realish } from './workspace.js';
-import { SAFETY_DEFAULTS, safetySettings } from './safety.js';
+import { SAFETY_DEFAULTS, safetySettings, yoloOf } from './safety.js';
 import { decide as decideCommand, loadRules, addRule, agentWriteBlocked } from './cmdpolicy.js';
 import { approvalJudge } from './approvals.js';
 import { normalizePlan, pricePlan, itemLine, planFacts, matchPlan, usePlan } from './mediaplan.js';
@@ -36,7 +36,7 @@ import { isCheckedFile, packNotes, outputSummary } from './packs/index.js';
 import { devices as adbDevices, pickDevice, readScreen, tap as adbTap, typeText as adbType, key as adbKey, screenshot as adbShot, install as adbInstall, launch as adbLaunch, logcat as adbLog, listAvds, startEmulator } from './android.js';
 import { listSkills, readSkill, saveSkill, listTemplates } from './skills.js';
 import { projectDesign } from './design.js';
-import { workspaceDir, listFiles, readFile, readText, writeFile, appendFile, editFile, editFileMulti, runLine, lineOf, stopNote, endProc, startServer, stopServerWait, serverFor, serverLog, listServers, launchConfigs, ensureAgentDir, agentSpace, SCRATCH, sealCheckpoint, pruneCheckpoints } from './workspace.js';
+import { workspaceDir, listFiles, readFile, readText, writeFile, appendFile, editFile, editFileMulti, runLine, lineOf, preApproved, stopNote, endProc, startServer, stopServerWait, serverFor, serverLog, listServers, launchConfigs, ensureAgentDir, agentSpace, SCRATCH, sealCheckpoint, pruneCheckpoints } from './workspace.js';
 import { openTab, hostHtml, startedWithDevtoolsPort } from './browser.js';
 import { adoptAgentTab, releaseAgentTab } from './userbrowser.js';
 import { setLiveArtifact, markdownHtml } from './artifacts.js';
@@ -483,7 +483,7 @@ const CODE_TOOLS = [
   { type: 'function', function: { name: 'shell', description: 'Run a command line in your project folder and wait for it. Any toolchain works: cargo, dotnet, go, cmake, gradle, python, node, npm, git… Before it runs, QuorX checks it: read-only commands run at once, others may ask the user (or, in YOLO, the deciders); system commands, deleting folders, and touching drive roots, the user profile or places above the project are refused. Input is closed, so pass non-interactive flags (--yes, -y, /quiet). Run each program directly here, never through a wrapper script you wrote. Returns the exit code, the files it changed, the last output and a log file with all of it.', parameters: { type: 'object', required: ['command'], properties: {
     command: { type: 'string', description: `The whole command line in the project's shell (${process.platform === 'win32' ? 'Windows PowerShell' : 'bash'} unless the user chose another), e.g. "cargo build --release" or "dotnet test"` },
     cwd: { type: 'string', description: 'Optional subfolder of the project to run in, e.g. "app"' },
-    background: { type: 'boolean', description: 'Start it and return at once, for programs that keep running: a desktop app you want to test, a watcher, a long build. A build, or an install the user allowed, that outlives the time limit moves to the background by itself.' } } } } },
+    background: { type: 'boolean', description: 'Start it and return at once, for programs that keep running: a server, a tunnel, a watcher, a desktop app you want to test, a long build. A command that outlives the time limit moves to the background by itself. Either way it is a job the user can stop; check it with job_output.' } } } } },
   { type: 'function', function: { name: 'job_output', description: 'Output from a background job, and whether it is still running. Pass since (from the last call) to get only what is new; wait_s waits up to 60 s for the job to end (it returns as soon as it does).', parameters: { type: 'object', required: ['job'], properties: {
     job: { type: 'string', description: 'The job id, e.g. "bg1"' }, since: { type: 'integer' }, wait_s: { type: 'integer', minimum: 0, maximum: 60 } } } } },
   { type: 'function', function: { name: 'job_stop', description: 'Stop a background job and everything it started.', parameters: { type: 'object', required: ['job'], properties: { job: { type: 'string' } } } } },
@@ -2403,7 +2403,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       return `Edited ${args.path} (${n} replacement${n > 1 ? 's' : ''}${multi ? ` from ${args.edits.length} edits` : ''}).${await check('Fix it before going on.')}${(await runHooks('after_write', { file: String(args.path) })).text}`;
     }
     if (name === 'shell' || name === 'run_command') {
-      // run_command is the old form (one allow-listed program with plain arguments), kept for older chats.
+      // run_command is the old form (one program with plain arguments), kept for older chats.
       const alias = name === 'run_command';
       const argv = alias ? (args.args || []).map(String) : [];
       const line = alias ? lineOf(args.command, argv) : String(args.command ?? '').trim();
@@ -2414,12 +2414,13 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) return `Error: no folder ${args.cwd} in the project.`;
       }
       const d = await decideCommand(line, { shell: shell === 'direct' ? 'cmd' : shell, root, cwd, env: childEnv(), rules: commandRules(), mode: S.approval,
-        yolo: { external: SF.yoloExternal, opaque: SF.yoloOpaque, outside: SF.yoloOutside } });
+        yolo: yoloOf(SF) });
+      // An install runs in the open so its end is seen: said before any card, so a yes is never wasted.
+      if (args.background && d.verdict !== 'deny' && d.segments.some((s) => s.cls === 'install')) return 'Error: installs can’t run in the background, so their end is seen. Run it again without background.';
       const g = await gateCommand(d, line, shell);
       if (!g.ok) return g.text;
-      // Only commands that read, write inside the project or build may keep running past the time limit.
-      const quiet = d.segments.every((s) => ['read', 'write', 'build'].includes(s.cls) && !(s.paths || []).some((p) => p.zone !== 'inside'));
-      if (args.background && !quiet) return 'Error: only commands that build, run project code or read can run in the background. Run this one normally.';
+      // Whatever else passed the gate (on its own, by the deciders or by you) may run in the background: a tunnel, a server,
+      // a watcher. It stays a job you can stop in the Running tab, with its tripwire.
       // A command that outlives the time limit moves to the background instead of being killed: a long build or an
       // install (Visual Studio Build Tools, an SDK) stopped part-way is wasted work or a half-installed tool. It keeps
       // its tripwire, the user sees it in the pane's Running tab and can stop it there, and the agent carries on.
@@ -2437,7 +2438,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         if (!line) return 'Error: start needs a command.';
         let cwd = root;
         if (args.cwd) { cwd = safePath(root, String(args.cwd)); if (!fs.existsSync(cwd)) return `Error: no folder ${args.cwd} in the project.`; }
-        const d = await decideCommand(line, { shell: SF.shell, root, cwd, env: childEnv(), rules: commandRules(), mode: S.approval, yolo: { external: SF.yoloExternal, opaque: SF.yoloOpaque, outside: SF.yoloOutside } });
+        const d = await decideCommand(line, { shell: SF.shell, root, cwd, env: childEnv(), rules: commandRules(), mode: S.approval, yolo: yoloOf(SF) });
         const g = await gateCommand(d, line, SF.shell);
         if (!g.ok) return g.text;
         const sb = SF.snapshots ? snapBefore(root, { maxBytes: SF.snapshotMaxMB * 1024 * 1024 }) : { snap: null };
@@ -2491,7 +2492,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         const line = `debug ${file}`;
         const program = args.program ? String(args.program) : undefined;
         if (program) safePath(root, program);
-        const d = await decideCommand(debugGateLine(file, (args.args || []).map(String), { program, cwd: root }), { shell: 'cmd', root, cwd: root, env: childEnv(), rules: commandRules(), mode: S.approval, yolo: { external: SF.yoloExternal, opaque: SF.yoloOpaque, outside: SF.yoloOutside } });
+        const d = await decideCommand(debugGateLine(file, (args.args || []).map(String), { program, cwd: root }), { shell: 'cmd', root, cwd: root, env: childEnv(), rules: commandRules(), mode: S.approval, yolo: yoloOf(SF) });
         const g = await gateCommand(d, line, 'cmd');
         if (!g.ok) return g.text;
         run.debugOn = true;
@@ -2559,6 +2560,13 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       const saved = !args.command && launchConfigs(projectId).find((x) => x.name.toLowerCase() === String(args.name || '').toLowerCase());
       if (!args.command && !saved) return `Error: no saved launch config named "${args.name}"; give a command.`;
       if (saved) { args.command = saved.command; args.args = saved.args; }
+      // node, npm, python and the like start as they always have; any other program (cargo run, wrangler dev,
+      // hugo server…) goes through the same check as a shell command first.
+      if (!preApproved(args.command)) {
+        const line = lineOf(args.command, (args.args || []).map(String));
+        const g = await gateCommand(await decideCommand(line, { shell: 'cmd', root, cwd: root, env: childEnv(), rules: commandRules(), mode: S.approval, yolo: yoloOf(SF) }), line, 'direct');
+        if (!g.ok) return g.text;
+      }
       const r = await (deps.startServer || startServer)({ projectId, name: args.name, cmd: args.command, args: (args.args || []).map(String), port: saved?.port || undefined });
       emit({ t: 'server', name: String(args.name || 'app'), url: r.url, status: r.status, at: at() });
       notes.push(`started server ${args.name} on ${r.url}`);
@@ -2626,7 +2634,9 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
           continue;
         }
         const line = hookLine(h, { file });
-        const d = await decideCommand(line, { shell: SF.shell, root, cwd: root, env: childEnv(), rules: commandRules(), mode: S.approval, yolo: { external: SF.yoloExternal, opaque: SF.yoloOpaque, outside: SF.yoloOutside } });
+        const d = await decideCommand(line, { shell: SF.shell, root, cwd: root, env: childEnv(), rules: commandRules(), mode: S.approval, yolo: yoloOf(SF) });
+        // A hook never runs what would need a red card (your key folders): it runs unasked, after every write.
+        if (d.risk === 'danger') Object.assign(d, { verdict: 'deny', who: null, why: `hooks never run this: ${d.why}`, decidedBy: 'hook' });
         const g = await gateCommand(d, line, SF.shell, { hook: { before_command: 'before a command', after_command: 'after a command', after_write: 'after a file write' }[event], fileFromAgent: usesFile });
         if (!g.ok) {
           emit({ t: 'hook', event, command: line, file, ok: false, skipped: true, why: clip(g.text, 300), at: at() });
@@ -2676,10 +2686,14 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     const strictEvery = S.approval === 'strict' && (S.strictAsk || 'paid') === 'every';
     const yoloAsksCommands = S.approval === 'yolo' && S.yoloAuto?.commands === false;
     if (d.verdict === 'allow' && !strictEvery && !yoloAsksCommands) return { ok: true, by: d.decidedBy };
+    // The same command line approved earlier in this reply doesn't ask again, say when the agent moves it from shell
+    // to its terminal or to the background. (Hooks are approved one by one: you didn't type them for this reply.)
+    const sameLine = line.replace(/\s+/g, ' ').trim(), approvedLines = (run.approvedLines ??= new Set());
+    if (!hook && approvedLines.has(sameLine)) { aud({ kind: 'approved', command: line, by: 'earlier', reason: 'approved earlier in this reply' }); return { ok: true, by: 'earlier' }; }
     let who = d.verdict === 'allow' || S.approval !== 'yolo' || yoloAsksCommands || run.cmdEscalated ? 'user' : d.who;
-    const card = { id: newApprovalId(), tool: 'shell', free: true, est: 0, what: line, why: hook ? `your hook (${hook}) runs this${fileFromAgent ? ', with a file name the agent chose' : ', not the agent'}; ${d.why}` : d.why, policy };
+    const card = { id: newApprovalId(), tool: 'shell', free: true, est: 0, what: line, why: hook ? `your hook (${hook}) runs this${fileFromAgent ? ', with a file name the agent chose' : ', not the agent'}; ${d.why}` : d.why, policy, ...(d.risk ? { risk: d.risk } : {}) };
     // Rules made by a button can't lift these, so the card doesn't offer "Always allow" for them.
-    card.noAlways = d.segments.some((s) => ['opaque', 'external', 'discard'].includes(s.cls) || s.global || (s.paths || []).some((p) => p.zone === 'outside' || p.zone === 'unknown'));
+    card.noAlways = d.segments.some((s) => ['opaque', 'external', 'discard', 'never'].includes(s.cls) || s.risk === 'danger' || s.global || (s.paths || []).some((p) => p.zone === 'outside' || p.zone === 'unknown'));
     let unsure = null;
     if (who === 'deciders') {
       emit({ t: 'approval', ...card, mode: 'yolo', at: at() });
@@ -2693,11 +2707,11 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         run.cmdBlockRow = 0;
         emit({ t: 'approval_done', id: card.id, approve: true, by: 'deciders', reason: j.reason, votes: j.votes, at: at() });
         aud({ kind: 'approved', command: line, by: 'deciders', reason: j.reason });
+        if (!hook) approvedLines.add(sameLine);
         return { ok: true, by: 'deciders' };
       }
       if (j.approve === false) {
         run.cmdBlockRow = (run.cmdBlockRow || 0) + 1; run.cmdBlocks = (run.cmdBlocks || 0) + 1;
-        emit({ t: 'approval_done', id: card.id, approve: false, by: 'deciders', reason: j.reason, votes: j.votes, at: at() });
         aud({ kind: 'declined', command: line, by: 'deciders', reason: j.reason });
         if (run.cmdBlockRow >= SF.escalateRow || run.cmdBlocks >= SF.escalateTotal) {
           run.cmdEscalated = true;
@@ -2707,7 +2721,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         // may have asked for exactly this). No answer in time, and the no stands.
         const holdMs = yoloWait();
         if (!holdMs) return { ok: false, text: `${declined('shell', { by: 'deciders', reason: j.reason })}${run.cmdEscalated ? ' From now on such commands go to the user.' : ''}` };
-        card.why = `The deciders said no: ${j.reason}. Run it anyway?`;
+        Object.assign(card, { why: `The deciders said no: ${j.reason}. Run it anyway?`, risk: card.risk || 'warn' });
         const secs = Math.round(holdMs / 1000);
         unsure = { ms: holdMs, then: 'skip', onTimeout: () => ({ approve: false, by: 'deciders', reason: `${j.reason} (no answer from the user in ${secs}s)` }) };
       }
@@ -2733,6 +2747,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     emit({ t: 'approval_done', id: card.id, ...ans, at: at() });
     aud({ kind: ans.approve ? 'approved' : 'declined', command: line, by: ans.by || 'user', reason: ans.reason || undefined });
     if (!ans.approve) return { ok: false, text: declined('shell', ans) };
+    if (!hook) approvedLines.add(sameLine);
     return { ok: true, by: ans.by === 'timeout' ? 'timeout' : 'you' };
   }
 

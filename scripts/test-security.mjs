@@ -8,7 +8,7 @@ import path from 'node:path';
 import { hostAllowed, crossSiteApi, gate, isLoopback, appGate, appKey } from '../server/access.js';
 import { privateAddress } from '../server/safefetch.js';
 import { decide, agentWriteBlocked } from '../server/cmdpolicy.js';
-import { safePath, checkCommand, searchFiles } from '../server/workspace.js';
+import { safePath, checkCommand, preApproved, searchFiles } from '../server/workspace.js';
 import { externalize, blobData } from '../server/blobs.js';
 
 const req = ({ host = 'localhost:5188', ip = '127.0.0.1', site, cookie, headers = {} } = {}) => ({ headers: { host, ...(site ? { 'sec-fetch-site': site } : {}), ...(cookie ? { cookie } : {}), ...headers }, socket: { remoteAddress: ip } });
@@ -59,13 +59,21 @@ test('file paths stay inside the project: links, streams and device names too', 
 test('{PORT} is allowed in server arguments; shell characters are not', () => {
   assert.equal(checkCommand('python', ['-m', 'http.server', '{PORT}']), 'python');
   assert.throws(() => checkCommand('node', ['x.js', '&&', 'calc']), /not allowed/);
-  assert.throws(() => checkCommand('cmd', ['/c', 'dir']), /not allowed/);
+  assert.throws(() => checkCommand('node&calc', []), /not allowed/);
 });
 
-test('a whole command line in command says how to split it, not that the program is not allowed', () => {
+test('any program can be a server; only node, npm, python and the like skip the command check', () => {
+  assert.equal(checkCommand('cargo', ['run']), 'cargo');
+  assert.equal(checkCommand('wrangler', ['dev', '--port', '{PORT}']), 'wrangler');
+  assert.equal(preApproved('npm'), true);
+  assert.equal(preApproved('cmd'), false, 'cmd /c … goes through the command check first');
+  assert.equal(preApproved('wrangler'), false);
+});
+
+test('a whole command line in command says how to split it', () => {
   assert.throws(() => checkCommand('node hub/server.mjs', []), /use command "node" with args \["hub\/server\.mjs"\]/);
   assert.throws(() => checkCommand('npm run dev', ['--', '--port', '{PORT}']), /use command "npm" with args \["run","dev","--","--port","\{PORT\}"\]/);
-  assert.throws(() => checkCommand('cmd /c dir', []), /"cmd \/c dir" is not allowed/);
+  assert.throws(() => checkCommand('cmd /c dir', []), /use command "cmd" with args \["\/c","dir"\]/);
 });
 
 test('the static site server answers this computer on its port', async () => {
@@ -193,11 +201,12 @@ test('fetch_url refuses private, loopback and link-local addresses', () => {
   for (const ip of ['93.184.215.14', '1.1.1.1', '2606:4700:4700::1111']) assert.ok(!privateAddress(ip), ip);
 });
 
-test('read commands: keys never, outside the project asks; QuorX itself never', async () => {
+test('read commands: your keys ask with a red card, outside the project asks; QuorX itself never', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qx-sec-'));
   const v = async (line) => (await decide(line, { shell: 'bash', root, mode: 'strict', rules: [] })).verdict;
   const fwd = (p) => p.split(path.sep).join('/');
-  assert.equal(await v(`cat ${fwd(path.join(os.homedir(), '.ssh', 'id_ed25519'))}`), 'deny');
+  const keys = await decide(`cat ${fwd(path.join(os.homedir(), '.ssh', 'id_ed25519'))}`, { shell: 'bash', root, mode: 'yolo', rules: [{ effect: 'allow', match: '*', by: 'user' }] });
+  assert.equal(`${keys.verdict}:${keys.who}:${keys.risk}`, 'ask:user:danger', 'not even YOLO with an allow-all rule reads your keys unasked');
   assert.equal(await v(`cat ${fwd(path.join(process.env.OH_HOME, 'data', 'app-key'))}`), 'deny');
   assert.equal(await v(`cat ${fwd(path.join(os.tmpdir(), 'elsewhere.txt'))}`), 'ask');
   assert.equal(await v('cat README.md'), 'allow');
