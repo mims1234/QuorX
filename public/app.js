@@ -558,7 +558,7 @@ function renderAttachments(c) {
     + c.ctx.map((x, i) => `<span class="ctx-chip cmp-att-item ${x.type === 'file' ? 'file' : x.type === 'project' ? 'project' : 'chat'}" title="Attached as context for your next message">${x.type === 'file' ? '📄' : x.type === 'project' ? '' : '💬'} ${esc(x.title)}<button type="button" data-ctx="${i}" aria-label="Remove">✕</button></span>`).join('')
     + c.images.map((x, i) => `<span class="img-chip cmp-att-item image"><img src="${x.thumb}" alt="attached image ${i + 1}"><button type="button" data-img="${i}" aria-label="Remove image">✕</button></span>`).join('')
     + (c.docs || []).map((d, i) => docChip(d, i)).join('')
-    + ((G.lent ||= {})[c.id] ? `<span class="lent-chip cmp-att-item" title="The agent can work in this tab of yours (signed in as you) in this chat. Sending, deleting, buying and account changes ask you first."><span class="lent-ico" aria-hidden="true">🤖</span><span class="lent-l">Your tab</span><b>${esc(clip(G.lent[c.id].title || G.lent[c.id].url, 40))}</b><button type="button" class="lent-back" title="Take the tab back: the agent can no longer use it">Take back</button></span>` : '');
+    + ((G.lent ||= {})[c.id] ? `<span class="lent-chip cmp-att-item" title="The agent can work in this tab of yours (signed in as you) in this chat. Sending, deleting, buying and account changes ask you first."><span class="lent-ico" aria-hidden="true">🤖</span><span class="lent-l">${G.lent[c.id].chrome ? 'Your Chrome tab' : 'Your tab'}</span><b>${esc(clip(G.lent[c.id].title || G.lent[c.id].url, 40))}</b><button type="button" class="lent-back" title="Take the tab back: the agent can no longer use it">Take back</button></span>` : '');
   for (const b of box.querySelectorAll('[data-ctx]')) b.onclick = () => { c.ctx.splice(Number(b.dataset.ctx), 1); renderAttachments(c); };
   for (const b of box.querySelectorAll('[data-img]')) b.onclick = () => { c.images.splice(Number(b.dataset.img), 1); renderAttachments(c); };
   for (const b of box.querySelectorAll('[data-cmt]')) b.onclick = () => { c.comments.splice(Number(b.dataset.cmt), 1); renderAttachments(c); };
@@ -5106,6 +5106,7 @@ function settingsPanels(S) {
       stCard('Servers and browser', 'Servers are saved in .quorx/launch.json per project; run and stop them from 🖥 in the chat header, and watch them in the terminal.', stRow('Dev server ports', 'Each server gets a free port here unless it has a fixed one.', '<code>5300–5999</code>')
         + stRow('Headless browser', 'Used by the agent to check its own pages.', `<code class="blurable">${esc(G.cfg.browser || 'not found')}</code>`)
         + stRow('Secrets', 'Agent processes run without your API keys, tokens or passwords in their environment, and the file tools cannot read .env or data/keys.json.', '<span class="st-key-source-badge">protected</span>')),
+      stCard('Chrome extension', 'Give a tab of your everyday Chrome to a chat, so the agent can work in it with your own sign-ins (Gmail, GitHub…). It touches only tabs you give; sending, deleting, buying and account changes ask you first.', '<div id="stExt"></div>'),
     ]],
     usage: ['Usage & costs', 'What chats and projects cost.', [
       stCard('In chats', '', stRow('Show the cost badge in chat headers', 'The amber cost next to the model; click it for the per-chat usage breakdown (also /usage).', stSwitch('ui.usageBtn', U.usageBtn))),
@@ -5211,6 +5212,7 @@ function wireSettings() {
   drawKeysPanel();
   drawMemoryPanel();
   drawSetupPanel();
+  drawExtPanel();
   drawEmbedPick();
   drawDesktopSettings();
   drawBackup({ postJ, esc, uiConfirm, store: STORE });
@@ -5310,6 +5312,24 @@ function cancelSettings() { G.theme = ST.themeAtOpen; applyTheme(); if ($('#sett
 
 // Projects panel: acts at once (like the sidebar's ⚙ and 🗑).
 // Settings → Projects: one compact row per project (colour, spend vs budget, folder) with icon actions.
+// ⚙ Settings → Code & servers → Chrome extension: the key to paste into the QuorX extension, and whether it is connected.
+async function drawExtPanel() {
+  const box = $('#stExt'); if (!box) return;
+  const r = await getJ('/api/ext/status');
+  if (!box.isConnected || !r || r.error) return;
+  let shown = false;
+  const paint = () => {
+    box.innerHTML = `<div class="st-ext">
+      <div class="st-ext-state ${r.connected ? 'on' : ''}"><i></i>${r.connected ? 'Connected to your Chrome' : 'Not connected'}${r.lent?.length ? ` · ${r.lent.length} tab${r.lent.length > 1 ? 's' : ''} given to chats` : ''}</div>
+      <div class="st-ext-key"><code class="${shown ? '' : 'masked'}">${shown ? esc(r.key) : '•'.repeat(24)}</code><button type="button" class="kx-icon" data-x="show" title="${shown ? 'Hide the key' : 'Show the key'}">${shown ? '🙈' : '👁'}</button><button type="button" class="st-btn sm" data-x="copy">Copy key</button><button type="button" class="st-btn sm danger" data-x="new" title="Make a new key: the extension disconnects until you paste the new one">New key</button></div>
+      <ol class="st-ext-steps"><li>In Chrome open <code>chrome://extensions</code> and turn on <b>Developer mode</b>.</li><li><b>Load unpacked</b> and pick the folder <code class="blurable">${esc(r.folder || 'extension')}</code>.</li><li>Click the QuorX icon in Chrome's toolbar, paste the key, and press Connect.</li><li>On any page, the QuorX icon → pick a chat → <b>🤖 Give this tab</b>.</li></ol>
+    </div>`;
+    $('[data-x="show"]', box).onclick = () => { shown = !shown; paint(); };
+    $('[data-x="copy"]', box).onclick = async (e) => { try { await navigator.clipboard.writeText(r.key); flashTip(e.currentTarget, 'Copied'); } catch { uiPrompt('Copy the key', r.key, { ok: 'Done', cancel: 'Close' }); } };
+    $('[data-x="new"]', box).onclick = async () => { if (!(await uiConfirm('Make a new key?\nThe extension disconnects until you paste the new key into it.', { ok: 'New key', danger: true }))) return; const n = await postJ('/api/ext/key', {}); if (n.key) { r.key = n.key; r.connected = false; shown = true; paint(); } };
+  };
+  paint();
+}
 async function drawProjectsPanel() {
   const box = $('#stProjects'); if (!box) return;
   const projects = await fetch('/api/projects').then((r) => r.json()).catch(() => G.projects);
@@ -6966,9 +6986,13 @@ async function takeBackTab(chatId) {
 }
 // The harness forgets lent tabs when it restarts: the chip goes when the harness no longer has it.
 async function syncLent(c) {
-  if (!c || !(G.lent ||= {})[c.id]) return;
+  if (!c?.el) return;
   const r = await getJ(`/api/given-tab?chat=${encodeURIComponent(c.id)}`);
-  if (r && !r.error && !r.given) { delete G.lent[c.id]; renderAttachments(c); }
+  if (!r || r.error) return;
+  const had = (G.lent ||= {})[c.id];
+  if (!r.given && had) { delete G.lent[c.id]; renderAttachments(c); }
+  // A tab given from Chrome (the QuorX extension) appears here on its own.
+  else if (r.given && had?.sid !== r.given.sid) { G.lent[c.id] = { sid: r.given.sid, url: r.given.url, title: r.given.title, chrome: r.given.ext != null }; renderAttachments(c); }
 }
 // Closing a tab that shows one of your running servers asks first: keep the server running (reopen the address any
 // time) or stop it too.

@@ -8,6 +8,7 @@ import net from 'node:net';
 import crypto from 'node:crypto';
 import { spawn, execFile } from 'node:child_process';
 import { desktopReady, desktopCall, onTabEvents } from './desktop.js';
+import { extCall, onExtTabEvents } from './extlink.js';
 
 const LOCAL = process.env.LOCALAPPDATA || '';
 const CANDIDATES = [
@@ -176,6 +177,18 @@ async function headlessTransport({ own = false } = {}) {
 // Console lines the page didn't cause: Electron's own security warning in desktop-app tabs, missing source maps.
 const CONSOLE_NOISE = /Electron Security Warning|DevTools failed to load source ?map/i;
 
+// A tab of your everyday Chrome that you gave to a chat, through the QuorX extension. Closing only lets go of it.
+async function extTransport(tab) {
+  const subs = new Set();
+  const off = onExtTabEvents(tab, (method, params) => { for (const fn of subs) fn(method, params); });
+  const t = await extCall('tab.cdp', { tab, method: 'Runtime.evaluate', params: { expression: 'location.href', returnByValue: true } }, 15000).catch((e) => { off(); throw e; });
+  return {
+    id: `chrome-${tab}`, chrome: true, url: t?.result?.value || '',
+    send: (method, params = {}) => extCall('tab.cdp', { tab, method, params }, method === 'Page.captureScreenshot' ? 20000 : 25000),
+    onEvent: (fn) => subs.add(fn),
+    close: async () => { off(); },
+  };
+}
 // One of the user's own tabs in the desktop app, lent to the agent (🤖 Give to agent). Closing only lets go of it.
 async function desktopAttachTransport(sid) {
   const id = await desktopCall('tab.attach', { tab: sid });
@@ -239,9 +252,10 @@ async function cdpTransport(port) {
  * view in the app (the pane shows it live); otherwise it is a tab of the headless browser. With `{ cdpPort }` it is
  * the window of an app the agent started (Electron), reached through that app's own DevTools port.
  */
-export async function openTab({ chatId, cdpPort, own = false, attachTab } = {}) {
+export async function openTab({ chatId, cdpPort, own = false, attachTab, extTab } = {}) {
   let tr = null;
-  if (attachTab) tr = await desktopAttachTransport(attachTab);
+  if (extTab != null) tr = await extTransport(extTab);
+  else if (attachTab) tr = await desktopAttachTransport(attachTab);
   else if (cdpPort) tr = await cdpTransport(cdpPort);
   else if (chatId && desktopReady()) tr = await desktopTransport(chatId).catch(() => null);
   // A desktop tab that doesn't answer quickly is dropped for a headless one, so the agent never hangs on it.
@@ -249,10 +263,10 @@ export async function openTab({ chatId, cdpPort, own = false, attachTab } = {}) 
     const ok = await Promise.race([tr.send('Page.enable').then(() => true, () => false), new Promise((r) => setTimeout(() => r(false), 8000))]);
     if (!ok) { await tr.close(); tr = null; }
   }
-  if (!tr && attachTab) throw new Error('that tab is gone');
+  if (!tr && (attachTab || extTab != null)) throw new Error('that tab is gone');
   tr ||= await headlessTransport({ own });
   const listeners = [];
-  const tab = { id: tr.id, desktop: tr.desktop, app: !!tr.app, given: !!attachTab, console: [], url: tr.url || 'about:blank' };
+  const tab = { id: tr.id, desktop: tr.desktop, app: !!tr.app, given: !!attachTab || extTab != null, console: [], url: tr.url || 'about:blank' };
   tr.onEvent((method, params) => {
     if (method === 'Runtime.consoleAPICalled' && ['error', 'warning'].includes(params.type) && !CONSOLE_NOISE.test(params.args.map((a) => a.value ?? a.description ?? '').join(' '))) tab.console.push(`${params.type}: ${params.args.map((a) => a.value ?? a.description ?? '').join(' ')}`.slice(0, 300));
     if (method === 'Runtime.exceptionThrown') tab.console.push(`exception: ${(params.exceptionDetails.exception?.description || params.exceptionDetails.text || '').split('\n')[0]}`.slice(0, 300));
@@ -272,6 +286,8 @@ export async function openTab({ chatId, cdpPort, own = false, attachTab } = {}) 
   await send('Page.addScriptToEvaluateOnNewDocument', { source: SOUND_PROBE }).catch(() => {});
 
   Object.assign(tab, {
+    // A raw DevTools call (tests stand a headless tab in for a Chrome tab behind the extension).
+    cdp: (method, params = {}) => send(method, params),
     async open(url, { width = 1280, height = 800, mobile = width < 600 } = {}) {
       // A tab the user lent keeps the size the user sees it at.
       if (!tab.given) { await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile }); tab.size = { width, height }; }
