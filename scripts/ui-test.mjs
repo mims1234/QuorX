@@ -364,8 +364,8 @@ async function runningScenario() {
     await sleep(2500);
     return 'Opened the Terminal tab (its first tab starts a shell).';
   });
-  await step('The Running tab lists everything, with who started it', async () => {
-    await click('#paneTabs [data-tab="run"]');
+  await step('Terminal → Running lists everything, with who started it', async () => {
+    await click('#appBar .tsec[data-sec="run"]');
     await waitFor(`document.querySelectorAll('#runPane .run-row').length >= 2`, 15000, 'the rows');
     await sleep(3500); // one poll, so the times and the tab's count are fresh
     const rows = await js(`return [...document.querySelectorAll('#runPane .run-row')].map((r) => ({ kind: r.dataset.kind, text: r.innerText.replace(/\\s+/g, ' ').slice(0, 160) }));`);
@@ -373,7 +373,7 @@ async function runningScenario() {
     for (const k of ['background', 'server']) if (!kinds.includes(k)) throw new Error(`no ${k} row; rows: ${JSON.stringify(rows)}`);
     const bg = rows.find((r) => r.kind === 'background');
     if (!/agent/.test(bg.text) || !/ticker/.test(bg.text)) throw new Error(`the background row doesn't say the agent started ticker.js: ${bg.text}`);
-    const count = await textOf('#paneTabs [data-tab="run"] .pt-n');
+    const count = await textOf('#paneTabs [data-tab="term"] .pt-n');
     return `Tab count ${count}. ${rows.map((r) => `[${r.kind}] ${r.text}`).join('\n')}`;
   });
   await step('■ Stop on the background job ends it', async () => {

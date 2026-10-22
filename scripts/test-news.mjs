@@ -156,7 +156,8 @@ test('news renderer: everything from the file is escaped', () => {
   const l = md.renderMarkdown('[a](javascript:alert(1)) [b](https://x.y/?a=1&b="2) [c](data:text/html,x) [d](https://ok.example/p?q=1) [e](articles/my-page) [f](#numbers) [g](file:///C:/x)');
   assert.doesNotMatch(l, /href="(javascript|data|file):/i);
   assert.doesNotMatch(l, /href="[^"]*"2/);
-  assert.match(l, /<a href="https:\/\/ok\.example\/p\?q=1" target="_blank" rel="noopener noreferrer" data-ext="1">d<\/a>/);
+  assert.match(l, /<a href="https:\/\/ok\.example\/p\?q=1" rel="noopener noreferrer" data-ext="1" data-cl="1">d<\/a>/);
+  assert.doesNotMatch(l, /target="_blank"[^>]*data-cl/); // a web link in News opens in the Browser tab, never a new window
   assert.match(l, /data-news="articles\/my-page"/);
   assert.match(l, /data-anchor="numbers"/);
   // Pictures: a file in the article's own folder only.
