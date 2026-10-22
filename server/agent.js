@@ -15,6 +15,7 @@ import { runtime } from './openrouter.js';
 import { enhanceRequest } from './enhancer.js';
 import { validId, listProjects, getChat } from './store.js';
 import { needsAdmin, adminForAgent, adminForUser } from './elevation.js';
+import { secretKind, maskSecretText, scrubSecrets, projectEnv, setSecret, ENV_NAME, MASK } from './projectsecrets.js';
 import { searchFiles, trashFile, checkpoint, changedFiles, copyTemplate, snapBefore, commandChanges, safePath, childEnv, realish } from './workspace.js';
 import { SAFETY_DEFAULTS, safetySettings, yoloOf } from './safety.js';
 import { decide as decideCommand, loadRules, addRule, agentWriteBlocked } from './cmdpolicy.js';
@@ -373,6 +374,17 @@ export function answerQuestion(runId, id, answer) {
   return true;
 }
 
+// request_secret: a value the user types for the project's .env. It is held here only until the reply writes it.
+const secretWaits = new Map();
+export function answerSecret(runId, id, answer) {
+  const resolve = secretWaits.get(`${runId}:${id}`);
+  if (!resolve) return false;
+  secretWaits.delete(`${runId}:${id}`);
+  const value = answer?.skip ? '' : String(answer?.value ?? '').trim();
+  resolve(value ? { value } : { skip: true });
+  return true;
+}
+
 // ---------- prompts ----------
 const BASE_RULES = (artifacts, artifactsOn = true) => `You are an agent working inside a web harness. The user sees your chat replies${artifactsOn ? ', and an artifact pane where your artifacts open' : ''}.
 ${artifactsOn ? `
@@ -396,7 +408,8 @@ When the work needs several paid pieces (a trailer or short film: stills, clips,
 const CODE_RULES = `
 Project folder: you have your own folder on the user's machine for multi-file projects (apps, sites, scripts, games with assets). Use list_files, read_file, write_file and edit_file (exact find and replace). shell runs a command line in that folder (any language or toolchain: installs, builds, tests, git); QuorX checks each command first and some ask the user, so run what the task needs and say why in your reply when a command is unusual. To delete files or folders use delete_file (it can be undone), not the shell. start_server starts a long-running dev server that opens in the user's Browser tab and is saved to the project's launch file (the user runs and stops it from the servers button): the server MUST listen on the port given in the PORT environment variable, or take {PORT} as an argument (for example: python -m http.server {PORT}). For a static site (HTML, CSS, JS and assets, no server code), write index.html and its files, then call preview_site: it runs the harness's small static server (.quorx/serve.mjs) as the launch entry "site", so it behaves like any other server. Never write your own static file server (serve.mjs, http.server scripts and the like): preview_site already does that, with no caching. Only an app with real server code (an API, a backend) gets its own server file, in the project itself, run with start_server. The launch file is .quorx/launch.json (read it with read_file); a page on a running server opens with browser target app:<server name>/<path>. Arguments can't contain quotes, brackets, $, %, ;, & or pipes: for anything more than a plain command, write a script file and run it (for example node check.mjs). Such a script does the work itself: never write a script whose job is to run other programs (a wrapper that takes a command and runs it, or calls spawn, exec, subprocess or Start-Process). Run each command directly with shell instead: QuorX reads a script before it runs, and one that runs other programs always asks the user and can't run in the background. Files longer than about 300 lines: write the first part with write_file, then add the rest with append_file in parts of about 300 lines; one huge call can be cut off. Never draft code in your thinking: thinking is not saved and is never shown to the tools, so plan briefly (the idea, the files, the main parts), then write the code straight into write_file / append_file calls. Use write_artifact for quick single-file pages; use the project folder when there are several files, dependencies or a server.
 Stay inside the project folder: never read, list or scan anything outside it (the user's home or other folders, the harness's own files and data, environment variables), and never call the harness's own server or its /api routes from your scripts. If something you need isn't in the folder or in your tool results, ask the user instead of searching for it.
-read_file returns numbered lines (the numbers are not part of the file); a long file comes in windows, so continue with offset. edit_file can apply several edits to one file at once with edits (all or none). After every write or edit the harness checks the file (Node parses JS, Python parses .py, plus JSON, CSS, and HTML scripts and links) and reports problems in the result: fix them before moving on.`;
+read_file returns numbered lines (the numbers are not part of the file); a long file comes in windows, so continue with offset. edit_file can apply several edits to one file at once with edits (all or none). After every write or edit the harness checks the file (Node parses JS, Python parses .py, plus JSON, CSS, and HTML scripts and links) and reports problems in the result: fix them before moving on.
+Secrets: .env and key files show names only (NAME=•••• (set, N characters)), and their values are removed from every tool result. Commands and servers you start get the project's .env as environment variables, so use a secret by its name (process.env.NAME, os.environ["NAME"]). When one is missing, ask for it with request_secret; never ask the user to paste a key into the chat.`;
 
 const mb = (b) => `${(b / 1e6).toFixed(b < 1e7 ? 1 : 0)} MB`;
 const SCRATCH_RULES = (space, limit) => `
@@ -510,6 +523,7 @@ const CODE_TOOLS = [
 const TEMPLATE_LIST = listTemplates();
 const PROJECT_TOOLS = [
   { type: 'function', function: { name: 'search_files', description: 'Search the project files for a literal text (case-insensitive). Returns file, line and the matching line.', parameters: { type: 'object', required: ['query'], properties: { query: { type: 'string' }, glob: { type: 'string', description: 'Optional file filter, e.g. "*.js" or "src/**/*.css"' } } } } },
+  { type: 'function', function: { name: 'request_secret', description: 'Ask the user for a secret the project needs (an API key, a password, a token). They type it into a card in the page; QuorX saves it to the project\'s .env (and adds .env to .gitignore). You only hear that it is set, never the value: use it by its name from the environment. Your work waits for the answer.', parameters: { type: 'object', required: ['name', 'why'], properties: { name: { type: 'string', description: 'The variable name, e.g. OPENAI_API_KEY' }, why: { type: 'string', description: 'One short sentence: what it is for and where the user gets it' } } } } },
   { type: 'function', function: { name: 'delete_file', description: 'Delete a file from the project (it moves to .quorx/trash, so it can be recovered).', parameters: { type: 'object', required: ['path'], properties: { path: { type: 'string' } } } } },
   ...(TEMPLATE_LIST.length ? [{ type: 'function', function: { name: 'scaffold', description: `Copy a starter template into the project (never overwrites existing files). Templates: ${TEMPLATE_LIST.map((t) => `${t.name} (${t.description})`).join('; ')}`, parameters: { type: 'object', required: ['template'], properties: { template: { type: 'string', enum: TEMPLATE_LIST.map((t) => t.name) } } } } }] : []),
   { type: 'function', function: { name: 'save_skill', description: 'Save what worked as a reusable skill for this project, so future chats can load it with use_skill. Use it after a task that needed several fixes to get right.', parameters: { type: 'object', required: ['name', 'description', 'instructions'], properties: { name: { type: 'string', description: 'short-kebab-name' }, description: { type: 'string', description: 'One line: when to use this skill' }, instructions: { type: 'string', description: 'The steps, rules and gotchas, in Markdown' } } } } },
@@ -1489,7 +1503,8 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       try { result = await runTool(name, args, step); }
       catch (e) { if (signal.aborted) throw e; if (process.env.QX_DEBUG) console.error(e.stack); result = `Error: ${e.message}`; }
     }
-    result = String(result ?? '');
+    // Nothing secret goes back to the model: the values in the project's .env files, and anything shaped like a key.
+    result = scrubSecrets(root, String(result ?? ''));
     const first = result.split('\n')[0];
     journal.push(`${clip(toolSummary(name, broken ? {} : args), 110)}${/^Error|declined/.test(first) ? ` → ${clip(first, 90)}` : name === 'run_command' || name === 'shell' ? ` → ${clip(first, 40)}` : ''}${/\nCheck found/.test(result) ? ' (check found problems)' : ''}`);
     emit({ t: 'tool_result', step, id: tc.id, name, result: clip(result, 600), at: at() });
@@ -1587,7 +1602,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
           return `Error: ${name} is not available to helpers.`;
         } catch (e) { if (signal.aborted) throw e; return `Error: ${e.message}`; }
       }));
-      r.toolCalls.forEach((tc, k) => hm.push({ role: 'tool', tool_call_id: tc.id, content: clip(results[k], 12000) }));
+      r.toolCalls.forEach((tc, k) => hm.push({ role: 'tool', tool_call_id: tc.id, content: clip(scrubSecrets(root, results[k]), 12000) }));
     }
     const cost = stats.cost - cost0;
     emit({ t: 'helper_done', step, id, ok: !!report, model, steps: used, cost, ms: at() - t0, chars: report.length, fresh: !!opts.fresh, at: at() });
@@ -1831,7 +1846,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     for (const id of htmlArts) problems.push(...await checkHtml(arts.get(id).html, { label: `artifact ${id}` }));
     for (const name of touched.apps) {
       const sv = serverFor(projectId, name);
-      if (!sv || sv.status !== 'running') problems.push(`server "${name}" is not running${sv?.code != null ? ` (it exited with code ${sv.code})` : ''}${sv ? `. Last output: ${clip(serverLog(sv.key).split('\n').slice(-6).join(' | '), 300)}` : ''}`);
+      if (!sv || sv.status !== 'running') problems.push(`server "${name}" is not running${sv?.code != null ? ` (it exited with code ${sv.code})` : ''}${sv ? `. Last output: ${clip(scrubSecrets(root, serverLog(sv.key).split('\n').slice(-6).join(' | ')), 300)}` : ''}`);
     }
     if (browserOn) {
       const targets = builtTargets();
@@ -1989,7 +2004,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     return !!g && S.yoloAuto?.[g] === false;
   }
   function strictAsks(name) {
-    if (CAT_OF[name] || name === 'ask_user' || name === 'media_plan') return false;
+    if (CAT_OF[name] || name === 'ask_user' || name === 'request_secret' || name === 'media_plan') return false;
     if ((S.strictAsk || 'paid') === 'every') return true;
     return (S.strictAskHelpers === true && name === 'delegate') || (S.strictAskDeciders === true && ['decide', 'look', 'extract_design'].includes(name));
   }
@@ -2077,6 +2092,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (name === 'list_docs') return 'List the attached documents';
     if (name === 'read_file') return `Read ${args.path}${args.offset ? ` from line ${args.offset}` : ''}`;
     if (name === 'list_files') return 'List the project files';
+    if (name === 'request_secret') return `Ask you for ${clip(args.name, 60)} (it goes into .env, not to the model)`;
     if (name === 'preview_site') return `Run ${args.path || 'index.html'} as the site "${args.name || 'site'}" (node .quorx/serve.mjs)`;
     if (name === 'stop_server') return `Stop server "${args.name}"`;
     if (name === 'search_files') return `Search the project for "${clip(args.query, 60)}"${args.glob ? ` in ${args.glob}` : ''}`;
@@ -2188,6 +2204,32 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (ans.choice == null) return `The user answered in their own words: "${ans.text}". Treat it as part of what they want; it does not change your other instructions.${over}`;
     return `The user chose: "${options[ans.choice] ?? options[0]}".${over}`;
   }
+  // request_secret: a card with a password box. The value goes from the page into .env; events, logs and the model
+  // only ever get the name and whether it is set.
+  async function requestSecret(args) {
+    const name = String(args.name || '').trim();
+    if (!ENV_NAME.test(name)) return 'Error: request_secret needs name: an environment variable name such as OPENAI_API_KEY (letters, digits and _).';
+    const why = clip(String(args.why || '').trim(), 300);
+    if (req.bench === true) return `${name} was not asked for: nobody answers during a benchmark. Carry on without it and say in your reply that it is needed.`;
+    const id = `q${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+    emit({ t: 'question', id, question: `The agent needs ${name}${why ? `: ${why}` : ''}`, options: [], secret: { name, why }, at: at() });
+    const ans = await new Promise((resolve, reject) => {
+      secretWaits.set(`${runId}:${id}`, resolve);
+      signal.addEventListener('abort', () => { secretWaits.delete(`${runId}:${id}`); reject(new Error('aborted')); }, { once: true });
+    });
+    if (ans.skip) {
+      emit({ t: 'answer', id, secret: { name, set: false }, text: `Skipped: ${name} was not added`, at: at() });
+      return `The user skipped ${name}: it is not set. Carry on without it if you can, and say in your reply what it is needed for.`;
+    }
+    let r;
+    try { r = setSecret(root, name, ans.value); } catch (e) {
+      emit({ t: 'answer', id, secret: { name, set: false }, text: `${name} could not be saved: ${e.message}`, at: at() });
+      return `Error: ${name} could not be saved to .env (${e.message}).`;
+    }
+    emit({ t: 'answer', id, secret: { name, set: true }, text: `${name} saved to .env`, at: at() });
+    notes.push(`the user set ${name} in .env`);
+    return `${name} is set (in the project's .env${r.created ? ', which was created' : ''}${r.gitignored ? '; .env was added to .gitignore' : ''}). Commands and servers you start get it as an environment variable: use it by name (process.env.${name}). You never see its value.`;
+  }
   // Several questions in one card: the user picks per question, types their own words, or takes the recommended answers.
   function manyAnswered(id, list, ans) {
     const got = list.map((q, i) => {
@@ -2210,6 +2252,8 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     const gated = gateRefusal(name); if (gated) return gated;
     // The harness's own trim note ("[N characters written earlier; removed …]") stands in for content the agent wrote
     // earlier; copied back into a file it breaks it (it did: a SyntaxError in a real build). Never written to disk.
+    // The stand-ins for hidden secrets are not the secrets: written into a file, they would replace the real values.
+    if (WRITES_CONTENT.has(name) && /\[secret removed\]|•••• \(set, \d+ characters?\)/.test(JSON.stringify(args))) return `Refused: this ${name} call contains "[secret removed]" or "${MASK} (set, …)", which only stand in for secret values QuorX hides from you. Leave those lines as they are (edit around them), and use secrets by their names from the environment.`;
     if (WRITES_CONTENT.has(name) && TRIM_NOTE.test(JSON.stringify(args))) return `Refused: this ${name} call contains the harness's note "[… characters written earlier; removed from the conversation to save space …]". That note only stands in for text that was trimmed from this conversation; it is not file content. ${name.includes('artifact') ? 'Use read_artifact' : 'Use read_file'} to get the real text back, then write that.`;
     // remember asks the user itself, in YOLO too (never the deciders), so it gets no generic card.
     if (name === 'remember') return remember(args);
@@ -2378,6 +2422,10 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   }
 
   // ---------- project folder ----------
+  // Whether a path is a secret file ('env', 'file' or ''), judged on where it really lands as well as how it was written.
+  function secretOf(rel) {
+    try { return secretKind(path.relative(realish(root), realish(safePath(root, String(rel)))), String(rel)); } catch { return secretKind(String(rel)); }
+  }
   async function codeTool(name, args) {
     if (!root) return 'Error: the project folder is switched off.';
     if (['write_file', 'append_file', 'edit_file', 'delete_file'].includes(name) && args.path) {
@@ -2386,9 +2434,19 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       try { real = path.relative(realish(root), realish(safePath(root, String(args.path)))).replace(/[. ]+(?=[\\/]|$)/g, ''); } catch (e) { return `Refused: ${e.message}.`; }
       const no = agentWriteBlocked(real) || agentWriteBlocked(args.path);
       if (no) return `Refused: ${no}. Work in the project's own files instead.`;
+      if (name === 'write_file' && secretKind(real, String(args.path)) && fs.existsSync(safePath(root, String(args.path)))) return `Refused: ${args.path} holds the user's secrets and you see only their names, so writing it whole would wipe them. Add a setting with append_file, rename one with edit_file, or ask for a secret with request_secret.`;
       checkpoint(root, filesId, args.path);
     }
-    if (name === 'search_files') { const hits = searchFiles(root, args.query, args.glob); return hits.length ? hits.map((h) => `${h.path}:${h.line}: ${h.text}`).join('\n') : `No matches for "${args.query}".`; }
+    if (name === 'search_files') {
+      // Secret files give names only (.env lines, matched as they are shown) or nothing (keys); no hit may hinge on a hidden value.
+      const q = String(args.query || '').toLowerCase();
+      const hits = searchFiles(root, args.query, args.glob).flatMap((h) => {
+        const k = secretKind(h.path);
+        if (k === 'file') return [];
+        const text = k === 'env' ? maskSecretText(h.path, h.text, 'env') : scrubSecrets(root, h.text);
+        return text.toLowerCase().includes(q) ? [{ ...h, text }] : [];
+      });
+      return hits.length ? hits.map((h) => `${h.path}:${h.line}: ${h.text}`).join('\n') : `No matches for "${args.query}".`; }
     if (name === 'delete_file') { const to = trashFile(root, args.path); emit({ t: 'file', path: args.path, deleted: true, at: at() }); notes.push(`deleted ${args.path}`); return `Deleted ${args.path} (moved to ${to}).`; }
     if (name === 'scaffold') {
       const t = TEMPLATE_LIST.find((x) => x.name === args.template);
@@ -2401,7 +2459,13 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     }
     if (name === 'save_skill') { const id = saveSkill(root, args); notes.push(`saved skill ${id}`); emit({ t: 'note', level: 'info', msg: `Saved a new project skill: ${id}`, at: at() }); return `Saved skill "${id}" in .quorx/skills/${id}. Future chats in this project will see it.`; }
     if (name === 'list_files') { const f = listFiles(root); return f.length ? f.map((x) => `${x.path} (${x.size} bytes)`).join('\n') : 'The project folder is empty.'; }
-    if (name === 'read_file') return numberedWindow(readText(root, args.path), { offset: args.offset, limit: args.limit });
+    if (name === 'read_file') {
+      const k = secretOf(args.path);
+      if (k === 'file') { if (!fs.existsSync(safePath(root, String(args.path)))) throw new Error(`no file ${args.path}`); return maskSecretText(String(args.path), '', 'file'); }
+      const text = readText(root, args.path);
+      return numberedWindow(k === 'env' ? maskSecretText(String(args.path), text, 'env') : text, { offset: args.offset, limit: args.limit });
+    }
+    if (name === 'request_secret') return requestSecret(args);
     const check = async (todo) => (CHECKED.test(String(args.path)) ? await checked(String(args.path), await checkFile(root, args.path), todo) : '') + linted(String(args.path), lintFile(root, args.path));
     if (name === 'write_file') { const n = writeFile(root, args.path, args.content); emit({ t: 'file', path: args.path, bytes: n, at: at() }); notes.push(`wrote ${args.path}`); return `Wrote ${args.path} (${n} bytes).${await check(PARTIAL)}${(await runHooks('after_write', { file: String(args.path) })).text}`; }
     if (name === 'append_file') { const n = appendFile(root, args.path, args.content); emit({ t: 'file', path: args.path, bytes: n, at: at() }); notes.push(`appended to ${args.path}`); return `Appended to ${args.path} (now ${n} bytes).${await check(PARTIAL)}${(await runHooks('after_write', { file: String(args.path) })).text}`; }
@@ -2451,7 +2515,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         const g = await gateCommand(d, line, SF.shell);
         if (!g.ok) return g.text;
         const sb = SF.snapshots ? snapBefore(root, { maxBytes: SF.snapshotMaxMB * 1024 * 1024 }) : { snap: null };
-        const s = await termStart({ projectId, chatId: req.chatId || null, cwd, line, shell: SF.shell, cols: Number(args.cols) || 100, rows: Number(args.rows) || 30,
+        const s = await termStart({ projectId, chatId: req.chatId || null, cwd, line, shell: SF.shell, cols: Number(args.cols) || 100, rows: Number(args.rows) || 30, env: projectEnv(root),
           onExit: () => { if (sb.snap) { try { commandChanges(root, filesId, sb.snap); } catch { /* best effort */ } } } });
         notes.push(`opened terminal ${s.id}: ${clip(line, 60)}`);
         const scr = show(s.id, await termRead(s.id, 8000, 1000), line); // a shell can take a few seconds to start
@@ -2653,7 +2717,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
           continue;
         }
         const sb = SF.snapshots ? snapBefore(root, { maxBytes: SF.snapshotMaxMB * 1024 * 1024 }) : { snap: null };
-        const r = await runLine(root, line, { shell: SF.shell, label: `hook: ${line}`, signal, timeout: h.timeout * 1000, memoryMB: SF.memoryMB, term: { projectId, source: 'agent', chatId: req.chatId } });
+        const r = await runLine(root, line, { shell: SF.shell, label: `hook: ${line}`, signal, env: projectEnv(root), timeout: h.timeout * 1000, memoryMB: SF.memoryMB, term: { projectId, source: 'agent', chatId: req.chatId } });
         if (sb.snap) { try { commandChanges(root, filesId, sb.snap); } catch { /* best effort */ } }
         const ok = r.code === 0 && !r.timedOut && !r.stopped;
         emit({ t: 'hook', event, command: line, file, code: r.code, ms: r.ms, ok, told: !ok && h.feedback, timedOut: r.timedOut || undefined, out: r.out.slice(-1500), decidedBy: g.by, at: at() });
@@ -2776,7 +2840,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     } }) : null;
     const long = background || backgroundable;
     let termJob = null;
-    const runP = runLine(cwd, line, { shell, label, signal, timeout: long ? 24 * 3600e3 : SF.timeout * 1000, memoryMB: SF.memoryMB, logTo: path.join(root, logRel),
+    const runP = runLine(cwd, line, { shell, label, signal, env: projectEnv(root), timeout: long ? 24 * 3600e3 : SF.timeout * 1000, memoryMB: SF.memoryMB, logTo: path.join(root, logRel),
       term: { projectId, source: 'agent', chatId: req.chatId }, onStart: (p) => { proc = p; if (bg) bg.proc = p; if (trip) endProc(p); }, onJob: (j) => { termJob = j; if (bg) { bg.termJob = j; markJob(j, { bg: bg.id }); } } });
     // A job that outlives this tool call keeps its tripwire, and records what it changed when it ends. When you stop
     // it from the page while this reply still works, the agent hears about it before its next step.
@@ -2821,7 +2885,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     const changed = ch ? ch.added.length + ch.modified.length + ch.deleted.length : 0;
     aud({ kind: 'ran', command: label || line, by: decidedBy, code: r.code, ms: r.ms, changed, stopped: r.stopped ? r.stopped.left : undefined, timedOut: r.timedOut || undefined });
     if (changed) notes.push(`command changed ${changed} file${changed > 1 ? 's' : ''}`);
-    emit({ t: 'command', command: label || line, code: r.code, ms: r.ms, out: r.out.slice(-1500), log: logRel, timedOut: r.timedOut || undefined, decidedBy,
+    emit({ t: 'command', command: label || line, code: r.code, ms: r.ms, out: scrubSecrets(root, r.out.slice(-1500)), log: logRel, timedOut: r.timedOut || undefined, decidedBy,
       stopped: r.stopped ? { left: r.stopped.left, names: r.stopped.names, mode: r.stopped.mode } : undefined, leftovers: r.leftovers || undefined,
       changes: ch || undefined, snap: sb.snap ? { files: sb.snap.count, ms: sb.snap.ms } : { off: sb.why }, at: at() });
     const parts = [];

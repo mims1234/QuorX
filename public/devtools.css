@@ -252,6 +252,11 @@ input.kx-name:focus { outline: none; border-color: var(--accent); background: va
 .qbox .q-opt.missed { border-style: dashed; color: var(--muted); cursor: default; }
 .qbox .q-own { display: flex; gap: 6px; margin-top: 0; }
 .qbox .q-own .send-own { flex: none; }
+/* request_secret: a password box with its Show tick right beside it, a plain note, then Save / Skip */
+.secretq .q-own { align-items: center; }
+.secretq .q-own .secret-val { flex: 1; min-width: 0; font-family: var(--font-mono, monospace); }
+.secretq .q-text code { font: 600 12.5px var(--font-mono, monospace); }
+.secretq .secret-note { margin: 0; font-size: 12px; color: var(--muted); }
 /* several questions in one card: one block per question, the chosen answer marked, one Send for all */
 .qmulti .qm-item { display: grid; gap: 6px; padding-top: 10px; border-top: 1px solid var(--line); }
 .qmulti .qm-q { margin: 0; display: flex; gap: 8px; align-items: flex-start; font: 600 13.5px/1.45 var(--font-ui); color: var(--text-bright, var(--text)); }
