@@ -106,3 +106,10 @@ export function extUpgrade(req, socket) {
   };
   socket.on('close', gone); socket.on('error', gone);
 }
+
+// Chrome itself (not Edge or Brave), for "Open in Chrome" in ⚙ Settings: web pages can't open chrome:// addresses,
+// so QuorX starts Chrome with the extensions page, which opens in the Chrome you already have running.
+const LOCAL = process.env.LOCALAPPDATA || '';
+const CHROME = ['C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe', LOCAL && path.join(LOCAL, 'Google/Chrome/Application/chrome.exe'),
+  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/usr/bin/google-chrome', '/usr/bin/google-chrome-stable'].filter(Boolean);
+export const chromePath = () => CHROME.find((p) => fs.existsSync(p)) || null;
