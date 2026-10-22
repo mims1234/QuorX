@@ -353,9 +353,21 @@ function getUpdater() {
   updater.on('error', (e) => setUpdate({ state: 'error', error: String(e?.message || e).split('\n')[0].slice(0, 300) }));
   return updater;
 }
+// The Store copy can't update itself, but it can still say whether a newer QuorX is out: it asks GitHub for the
+// latest release. The Store may get a release a day after GitHub does.
+const newer = (a, b) => { const x = String(a).split('.').map(Number), y = String(b).split('.').map(Number); for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); } return false; };
+async function checkStore() {
+  setUpdate({ state: 'checking', error: null });
+  try {
+    const r = await fetch('https://api.github.com/repos/mims1234/QuorX/releases/latest', { headers: { Accept: 'application/vnd.github+json' }, signal: AbortSignal.timeout(10000) });
+    if (!r.ok) throw new Error(`GitHub answered ${r.status}`);
+    const latest = String((await r.json()).tag_name || '').replace(/^v/, '');
+    return setUpdate(newer(latest, app.getVersion()) ? { state: 'store-available', version: latest, current: app.getVersion(), checked: Date.now() } : { state: 'store-current', current: app.getVersion(), checked: Date.now() });
+  } catch (e) { return setUpdate({ state: 'store', error: String(e?.message || e).slice(0, 200) }); }
+}
 async function checkUpdates() {
   const u = getUpdater(), url = updateUrl();
-  if (STORE) return setUpdate({ state: 'store' });
+  if (STORE) return checkStore();
   if (!u) return setUpdate({ state: 'dev' });
   if (!url) return setUpdate({ state: 'no-feed' });
   if (['downloading', 'ready'].includes(update.state)) return update;
@@ -364,8 +376,10 @@ async function checkUpdates() {
   return update;
 }
 handle('update', async (op, arg) => {
-  if (op === 'state') return { ...update, current: app.getVersion(), url: updateUrl(), packaged: app.isPackaged };
+  if (op === 'state') return { ...update, ...(STORE && update.state === 'idle' ? { state: 'store' } : {}), current: app.getVersion(), url: updateUrl(), packaged: app.isPackaged };
   if (op === 'check') return checkUpdates();
+  // The Store copy: open QuorX's page in the Microsoft Store, where a new version shows as Update.
+  if (op === 'store') { shell.openExternal('ms-windows-store://pdp/?productid=9NBK5DMLMTFF'); return update; }
   if (op === 'download') { if (update.state !== 'available') return update; setUpdate({ state: 'downloading', percent: 0 }); getUpdater().downloadUpdate().catch((e) => setUpdate({ state: 'error', error: String(e?.message || e).slice(0, 300) })); return update; }
   if (op === 'install') { if (update.state !== 'ready') return update; quitting = true; setImmediate(() => getUpdater().quitAndInstall(false, true)); return update; }
   if (op === 'setUrl') { const url = String(arg || '').trim(); // https only: an update replaces the app, so its feed must not be readable or changeable on the way.
