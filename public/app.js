@@ -4805,6 +4805,63 @@ const stStep = (bind, v, min, max, step = 1, unit = '') => `<div class="st-stepp
 const getPath = (o, p) => p.split('.').reduce((x, k) => x?.[k], o);
 const setPath = (o, p, v) => { const ks = p.split('.'), last = ks.pop(); const t = ks.reduce((x, k) => (x[k] ??= {}), o); t[last] = v; };
 
+// ---------- Settings → Safety & commands: the simple controls on top, mapped onto the Advanced ticks ----------
+// "Extra care" = all six check-first ticks. "When YOLO needs a decision" = the pause-for-you ticks.
+const SF_CARE = ['yoloCheckWeb', 'yoloCheckInline', 'yoloCheckBuild', 'yoloCheckInstall', 'yoloCheckUnknown', 'yoloCheckReads'];
+const SF_ASK = ['yoloExternal', 'yoloOutside', 'yoloGlobal'];
+const sfOf = (S) => ({ ...(G.cfg?.defaults?.safety || {}), ...(S?.safety || {}) });
+function sfModes(SF) {
+  const care = SF_CARE.every((k) => SF[k]) ? 'on' : SF_CARE.every((k) => !SF[k]) ? 'off' : 'mix';
+  // Ask me: the three pause-for-you groups wait for you (yoloOpaque is left as it is). Deciders: all four go to the vote.
+  const decide = SF_ASK.every((k) => !SF[k]) ? 'ask' : [...SF_ASK, 'yoloOpaque'].every((k) => SF[k]) ? 'decide' : 'mix';
+  return { care, decide };
+}
+// The three plain-word columns: they follow the current ticks.
+function yoloShortHTML(SF) {
+  const M = sfModes(SF);
+  const tag = (t) => ` <span class="sf-by">· ${t}</span>`;
+  const run = [['Builds and tests', ['yoloCheckBuild']], ['Installs in the project', ['yoloCheckInstall']], ['Web reads', ['yoloCheckWeb']], ['Scripts and one-liners', ['yoloCheckBuild', 'yoloCheckInline']], ['Servers and tunnels', ['yoloCheckBuild']], ['Reading files', ['yoloCheckReads']]]
+    .map(([l, ks]) => `<li>${l}${M.care === 'mix' && ks.some((k) => SF[k]) ? tag('deciders check first') : ''}</li>`);
+  const ask = [['Installs for the whole computer', 'yoloGlobal'], ['Pushes and deploys', 'yoloExternal'], ['Changes outside the project', 'yoloOutside'], ['Commands QuorX can’t read', 'yoloOpaque']]
+    .map(([l, k]) => `<li>${l}${M.decide !== 'decide' && SF[k] ? tag('deciders decide') : ''}</li>`);
+  ask.push(`<li>Reading your key folders${M.decide === 'decide' ? tag('always asks you') : ''}</li>`);
+  const col = (cls, mark, title, items, note) => `<div class="sf-col ${cls}"><div class="sf-col-head"><span class="sf-mark" aria-hidden="true">${mark}</span>${title}</div><ul>${items.join('')}</ul>${note ? `<p class="sf-col-note">${note}</p>` : ''}</div>`;
+  return col('ok', '✓', M.care === 'on' ? 'Runs after the deciders’ check' : 'Runs on its own', run,
+    [M.care === 'on' ? 'A no from the deciders comes to you.' : '', SF.snapshots ? 'Undo covers what it changes in the project.' : 'Undo for commands is off.'].filter(Boolean).join(' '))
+    + col('warn', '?', M.decide === 'decide' ? 'The deciders decide' : 'Asks you', ask, M.decide === 'ask' ? '' : 'A no or a split vote still comes to you.')
+    + col('danger', '✕', 'Never', ['<li>System changes: power, services, registry, disks</li>', '<li>Deleting whole folders</li>', '<li>QuorX’s own keys</li>'], 'You run those yourself in a terminal tab.');
+}
+// Advanced starts closed; this browser remembers it open or closed.
+const sfAdvPref = () => { try { return localStorage.getItem('oh-safety-adv') === '1'; } catch { return false; } };
+// After any change on the page: the simple controls, the Advanced ticks and the three columns all show the draft.
+function sfSync() {
+  const panel = document.querySelector('#stMain [data-panel="safety"]'); if (!panel) return;
+  const SF = sfOf(ST.draft), M = sfModes(SF);
+  for (const b of panel.querySelectorAll('[data-sf="decide"] .st-seg-btn')) { const on = b.dataset.v === M.decide; b.classList.toggle('active', on); b.setAttribute('aria-checked', String(on)); }
+  const care = $('[data-sf="care"]', panel); if (care) care.checked = M.care === 'on';
+  for (const n of panel.querySelectorAll('[data-sf-note]')) n.hidden = M[n.dataset.sfNote] !== 'mix';
+  for (const inp of panel.querySelectorAll('input[type="checkbox"][data-bind^="safety."]')) inp.checked = !!SF[inp.dataset.bind.slice(7)];
+  const short = $('#sfShort'); if (short) short.innerHTML = yoloShortHTML(SF);
+}
+function wireSafetySimple(mark) {
+  const panel = document.querySelector('#stMain [data-panel="safety"]'); if (!panel) return;
+  const S = ST.draft;
+  const set = (keys, v) => {
+    S.safety ??= {};
+    for (const k of keys) { S.safety[k] = v; $(`input[data-bind="safety.${k}"]`, panel)?.closest('.st-row')?.classList.add('changed'); }
+  };
+  for (const b of panel.querySelectorAll('[data-sf="decide"] .st-seg-btn')) b.onclick = () => {
+    if (b.dataset.v === 'decide') set([...SF_ASK, 'yoloOpaque'], true); else set(SF_ASK, false);
+    b.closest('.st-row')?.classList.add('changed'); mark(); sfSync();
+  };
+  const care = $('[data-sf="care"]', panel);
+  if (care) care.onchange = () => { set(SF_CARE, care.checked); care.closest('.st-row')?.classList.add('changed'); mark(); sfSync(); };
+  // An Advanced tick (or the Undo box) changed: the generic handler has already written the draft.
+  panel.addEventListener('change', (e) => { if (e.target.matches?.('input[data-bind^="safety."]')) sfSync(); });
+  const adv = $('#sfAdv');
+  if (adv) adv.ontoggle = () => { if ($('#stSearch').value.trim()) return; try { localStorage.setItem('oh-safety-adv', adv.open ? '1' : ''); } catch { /* this session only */ } };
+}
+
 function settingsPanels(S) {
   const U = uiOf(S), d = G.cfg.defaults;
   const keysBadge = G.cfg.hasKey ? '' : 'bad-dot';
@@ -4907,7 +4964,16 @@ function settingsPanels(S) {
     ]],
     safety: (() => {
       const SF = { ...(d.safety || {}), ...(S.safety || {}) };
-      return ['Safety & commands', 'How the agent’s commands are checked before they run, what Stop and Undo cover, and what ⚡ YOLO may approve on its own. Every command is split into its parts first; the strictest part decides.', [
+      const M = sfModes(SF);
+      return ['Safety & commands', 'What ⚡ YOLO runs on its own, what it asks you, and what never runs. Advanced has every detail: the shell, each YOLO tick, the deciders’ vote and your command rules.', [
+        stCard('⚡ YOLO in short', '', `<div id="sfShort" class="sf-short">${yoloShortHTML(SF)}</div>`),
+        stCard('Your choices', '',
+          stRow('When YOLO needs a decision', 'Ask me: pushes, deploys, installs for the whole computer and changes outside the project wait for you. The deciders: they vote instead, and a no or a split vote still comes to you.',
+            `<div class="sf-ctrl">${stSeg('', [['ask', 'Ask me'], ['decide', 'Let the deciders decide']], M.decide).replace('data-bind=""', 'data-sf="decide" aria-label="When YOLO needs a decision"')}<span class="sf-custom" data-sf-note="decide" ${M.decide === 'mix' ? '' : 'hidden'}>Custom (see Advanced)</span></div>`)
+          + stRow('Extra care', 'The deciders check every command before it runs. Slower, and stricter.',
+            `<div class="sf-ctrl"><span class="sf-custom" data-sf-note="care" ${M.care === 'mix' ? '' : 'hidden'}>Custom (see Advanced)</span>${stSwitch('', M.care === 'on').replace('data-bind=""', 'data-sf="care" aria-label="Extra care"')}</div>`)
+          + stRow('Undo for commands', 'QuorX snapshots the project before a command that can change files, so ↶ Undo and Review changes cover it. Not covered: files outside the project, ignored folders (node_modules, target…), pushes, installs and databases.', stSwitch('safety.snapshots', SF.snapshots))),
+        `<details class="sf-adv" id="sfAdv" ${sfAdvPref() ? 'open' : ''}><summary><span class="sf-adv-title">Advanced</span><span class="sf-adv-sub">Shell, undo size, tripwire, each YOLO tick, debugger, the deciders’ vote, audit log, command rules</span></summary><div class="sf-adv-body">` + [
         stCard('Shell', '', stRow('The agent’s shell', G.cfg?.platform && G.cfg.platform !== 'win32'
           ? 'Both are checked with the same rules: each command is split into its parts first, and anything that runs text as a command (eval, $(…), zsh’s glob qualifiers) asks you.'
           : 'Windows PowerShell 5.1 is read by PowerShell’s own parser, so its commands can be checked exactly. cmd and Git Bash are checked with simpler rules, and Git Bash’s path translation caused the worst delete incidents in other agents.',
@@ -4915,9 +4981,8 @@ function settingsPanels(S) {
           + stRow('Wait for a command', 'How long the agent waits for a command before it moves to the background. It keeps running there while the agent carries on; you see it, and can stop it, in the pane’s Running tab.', stStep('safety.timeout', SF.timeout, 5, 900, 5, 's'))
           + stRow('Memory cap per command', `For the command and everything it starts, so a runaway build can’t starve your PC. 0 = no cap.${G.cfg?.platform && G.cfg.platform !== 'win32' ? ' Windows only for now.' : ''}`, stStep('safety.memoryMB', SF.memoryMB, 0, 65536, 256, 'MB'))
           + stRow('Stop', 'How Stop ends a command.', '<span id="stStopMode" class="st-chip">checking…</span>')),
-        stCard('Undo for commands', 'Before a command that can change files, QuorX snapshots the project (only changed files are read again), so ↶ Undo and Review changes cover what the command did. Not covered: files outside the project, ignored folders (node_modules, target, bin, obj…), pushes, installs and databases.',
-          stRow('Snapshot before each command', '', stSwitch('safety.snapshots', SF.snapshots))
-          + stRow('Pause snapshots past', 'A project bigger than this (not counting ignored folders) runs commands without a snapshot, and each command row says so.', stStep('safety.snapshotMaxMB', SF.snapshotMaxMB, 50, 100000, 50, 'MB'))),
+        stCard('Undo size limit', 'Undo for commands is turned on or off above. Each snapshot reads only the files that changed.',
+          stRow('Pause snapshots past', 'A project bigger than this (not counting ignored folders) runs commands without a snapshot, and each command row says so.', stStep('safety.snapshotMaxMB', SF.snapshotMaxMB, 50, 100000, 50, 'MB'))),
         stCard('Tripwire', 'While a command runs, QuorX watches your profile and the folders around the project. If many files vanish there, it stops the command and shows what it saw. It is a last line of defence, not a guarantee.',
           stRow('Watch for mass deletes', '', stSwitch('safety.tripwire', SF.tripwire))
           + stRow('Stop after', 'Files removed outside the project…', stStep('safety.tripwireFiles', SF.tripwireFiles, 2, 10000, 1, 'files'))
@@ -4947,6 +5012,7 @@ function settingsPanels(S) {
           + stRow('…or blocks in one reply', '', stStep('safety.escalateTotal', SF.escalateTotal, 1, 200))),
         stCard('Audit log', 'Every command the agent ran or was stopped from running, and who let it: a rule, you, the deciders, or the built-in classes. Votes are in logs/approvals.jsonl; this log is logs/audit.jsonl.', '<div id="stAudit"><div class="st-row-help">Loading…</div></div>'),
         stCard('Command rules', 'Your rules, checked before the built-in classes: deny beats ask beats allow. A rule can always make a command stricter. Rules made with the “Always allow…” button never relax pushes, uncheckable commands or deletes outside the project; rules you type here can. Changes here save at once.', '<div id="stPerms"><div class="st-row-help">Loading rules…</div></div>'),
+        ].join('') + '</div></details>',
       ]];
     })(),
     skills: ['Skills', 'Playbooks the agent loads when a task fits. Agents can also save their own into a project.', ['<div id="skillList" class="st-skill-list"></div>']],
@@ -5047,6 +5113,7 @@ function wireSettings() {
     if (act === 'exportChats') exportChats(e.target);
     if (act === 'clearPrefs' && await uiConfirm('Clear this browser\'s preferences? Chats, projects and keys stay.')) { try { localStorage.removeItem(STORE); localStorage.removeItem('agent001-v1'); } catch { /* ignore */ } location.reload(); }
   };
+  wireSafetySimple(mark);
   // the richer editors
   $('#voterInputs').innerHTML = [0, 1, 2, 3, 4].map((i) => `<div class="slot"><span class="n">${i + 1}</span><button type="button" class="mbtn m" data-id="${esc(S.voters[i] || '')}">${S.voters[i] ? `${recDot(S.voters[i], 'decision')} ${esc(S.voters[i])}` : `<i>${i < 3 ? 'choose a decider' : 'add a decider (optional)'}</i>`}</button>${S.voters[i] && i ? '<button type="button" class="ghost x" title="Remove">✕</button>' : ''}<small class="price">${esc(priceOf(S.voters[i]))}</small></div>`).join('');
   for (const slot of document.querySelectorAll('#voterInputs .slot')) {
@@ -5094,6 +5161,13 @@ function searchSettings(q) {
     }
     panel.classList.toggle('active', q ? any || panel.querySelector('.st-panel-title').textContent.toLowerCase().includes(q) : panel.dataset.panel === ST.cat);
   }
+  // Safety's Advanced: a search that hits inside opens it; clearing the search puts it back as you left it.
+  const adv = $('#sfAdv');
+  if (adv) {
+    const hit = [...adv.querySelectorAll('.st-card')].some((c) => !c.hidden);
+    adv.hidden = !!q && !hit;
+    adv.open = q ? hit : sfAdvPref();
+  }
 }
 // Reset category: that category's settings go back to the defaults (still unsaved until Save).
 function resetCategory() {
@@ -5108,6 +5182,7 @@ function resetCategory() {
   if (ST.cat === 'tools') S.tools = structuredClone(d.tools);
   if (ST.cat === 'budget') { S.budget = d.budget; S.yoloCheck = true; S.budgetGrace = d.budgetGrace; S.yoloAuto = {}; }
   if (ST.cat === 'skills') S.skillsOff = [];
+  if (ST.cat === 'safety') { S.safety = { ...(d.safety || {}) }; S.debugger = 'earned'; }
   ST.dirty = true; drawSettings();
 }
 function updateDirty() {
