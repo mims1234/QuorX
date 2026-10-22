@@ -231,6 +231,7 @@ async function contextText(list) {
     const t = await fetch(`/ws/${item.projectId}/${item.path.split('/').map(encodeURIComponent).join('/')}`).then((r) => r.ok ? r.text() : '').catch(() => '');
     if (t) parts.push(`### File ${item.path} (project "${G.projects.find((p) => p.id === item.projectId)?.name || item.projectId}")\n\`\`\`\n${t.slice(0, 8000)}${t.length > 8000 ? '\n… (cut)' : ''}\n\`\`\``);
   }
+  for (const item of list.filter((x) => x.type === 'term')) parts.push(`### Terminal output the user shared: ${item.title}\n\`\`\`\n${item.text}\n\`\`\``);
   for (const item of list.filter((x) => x.type === 'project')) {
     const p = G.projects.find((x) => x.id === item.id);
     const notes = await fetch(`/ws/${item.id}/AGENT.md`).then((r) => r.ok ? r.text() : '').catch(() => '');
@@ -555,7 +556,7 @@ function renderAttachments(c) {
   const box = c.el && $('.attachments', c.el.root);
   if (!box) return;
   box.innerHTML = (c.comments || []).map((x, i) => `<span class="cmt-chip cmp-att-item" title="${esc(x.note || 'No note: the agent will ask what to change')}">${x.crop ? `<img src="${x.crop}" alt="">` : ''}<span class="cmt-what">💬 <b>${esc(x.tag)}</b> ${esc(clip(x.text || x.selector, 40))}</span><button type="button" data-cmt="${i}" aria-label="Remove this comment">✕</button></span>`).join('')
-    + c.ctx.map((x, i) => `<span class="ctx-chip cmp-att-item ${x.type === 'file' ? 'file' : x.type === 'project' ? 'project' : 'chat'}" title="Attached as context for your next message">${x.type === 'file' ? '📄' : x.type === 'project' ? '' : '💬'} ${esc(x.title)}<button type="button" data-ctx="${i}" aria-label="Remove">✕</button></span>`).join('')
+    + c.ctx.map((x, i) => `<span class="ctx-chip cmp-att-item ${x.type === 'file' ? 'file' : x.type === 'project' ? 'project' : x.type === 'term' ? 'termout' : 'chat'}" title="${x.type === 'term' ? esc(clip(x.text, 600)) : 'Attached as context for your next message'}">${x.type === 'file' ? '📄' : x.type === 'project' || x.type === 'term' ? '' : '💬'} ${esc(x.title)}<button type="button" data-ctx="${i}" aria-label="Remove">✕</button></span>`).join('')
     + c.images.map((x, i) => `<span class="img-chip cmp-att-item image"><img src="${x.thumb}" alt="attached image ${i + 1}"><button type="button" data-img="${i}" aria-label="Remove image">✕</button></span>`).join('')
     + (c.docs || []).map((d, i) => docChip(d, i)).join('')
     + ((G.lent ||= {})[c.id] ? `<span class="lent-chip cmp-att-item" title="The agent can work in this tab of yours (signed in as you) in this chat. Sending, deleting, buying and account changes ask you first."><span class="lent-ico" aria-hidden="true">🤖</span><span class="lent-l">${G.lent[c.id].chrome ? 'Your Chrome tab' : 'Your tab'}</span><b>${esc(clip(G.lent[c.id].title || G.lent[c.id].url, 40))}</b><button type="button" class="lent-back" title="Take the tab back: the agent can no longer use it">Take back</button></span>` : '');
@@ -2320,12 +2321,13 @@ function wirePane(c, root, i) {
   ta.oninput = () => { updateSuggest(c); fitInput(ta); };
   ta.onblur = () => setTimeout(() => hideSuggest(c), 150);
   ta.onpaste = (e) => { const files = [...(e.clipboardData?.files || [])]; if (files.length) { e.preventDefault(); addFiles(c, files); } };
-  root.ondragover = (e) => { const ty = [...e.dataTransfer.types]; if (['Files', 'application/x-quorx-file', 'application/x-quorx-tab'].some((k) => ty.includes(k))) { e.preventDefault(); root.classList.add('drop'); } };
+  root.ondragover = (e) => { const ty = [...e.dataTransfer.types]; if (['Files', 'application/x-quorx-file', 'application/x-quorx-tab', 'application/x-quorx-term'].some((k) => ty.includes(k))) { e.preventDefault(); root.classList.add('drop'); } };
   root.ondragleave = () => root.classList.remove('drop');
   root.ondrop = (e) => {
     root.classList.remove('drop');
     const pf = e.dataTransfer.getData('application/x-quorx-file'); if (pf) { e.preventDefault(); try { const f = JSON.parse(pf); addFileToChat(f.projectId, f.path, root); } catch { /* not ours */ } return; }
     const sid = e.dataTransfer.getData('application/x-quorx-tab'); if (sid) { e.preventDefault(); lendTab(c, sid); return; }
+    const tf = e.dataTransfer.getData('application/x-quorx-term'); if (tf && G.term) { e.preventDefault(); termToChat(termScreenText(G.term, tf), root); return; }
     if (e.dataTransfer.files.length) { e.preventDefault(); addFiles(c, e.dataTransfer.files); }
   };
   $('.imgBtn', root).onclick = () => $('.imgInput', root).click();
@@ -6393,6 +6395,37 @@ function termApply(t, e) {
 // or one of your terminals (only what was run from it).
 const termShows = (t, j, f = t.filter) => (f === 'all' ? true : f === 'agent' ? j.source === 'agent' && !j.server : f.startsWith('srv:') ? j.server === f.slice(4) : j.tab === f)
   && (j.status === 'running' || j.at >= (t.clearedBy?.[f] || 0));
+// ---------- ↪ terminal output into the chat ----------
+// A command and its output (or what your own terminal shows) goes with your next message, as a chip like a file.
+function termJobText(j) {
+  const st = j.status === 'running' ? 'still running' : j.error ? `failed: ${j.error}` : j.code === 0 || (j.server && j.code == null) ? 'finished' : `exit code ${j.code ?? '?'}`;
+  const lines = j.lines.map((l) => l.text), cut = lines.length > 300;
+  return { title: `$ ${clip(j.label, 48)}`, text: `$ ${j.label}\n(${j.source === 'agent' ? 'run by the agent' : j.server ? `server ${j.server}` : 'run by the user'}, ${st})\n${(cut ? ['… (earlier lines cut)', ...lines.slice(-300)] : lines).join('\n')}` };
+}
+// Your own terminal: the selected text, or the last lines of its screen.
+function termScreenText(t, f) {
+  const x = G.xt?.get(`${t.projectId}:${f}`), u = t.terms.find((y) => y.id === f);
+  if (x) {
+    const sel = x.term.getSelection().trim();
+    if (sel) return { title: `⌨ ${u?.name || 'Terminal'} (selection)`, text: sel };
+    const b = x.term.buffer.active, rows = [];
+    for (let i = 0; i < b.length; i++) rows.push(b.getLine(i)?.translateToString(true) ?? '');
+    while (rows.length && !rows[rows.length - 1].trim()) rows.pop();
+    return { title: `⌨ ${u?.name || 'Terminal'} (last ${Math.min(rows.length, 200)} lines)`, text: rows.slice(-200).join('\n') };
+  }
+  // A terminal tab without a full screen, or one of the output tabs: the commands it shows.
+  const jobs = t.order.map((id) => t.jobs.get(id)).filter((j) => j && termShows(t, j, f)).slice(-5);
+  if (!jobs.length) return null;
+  return { title: `⌨ ${f === 'all' ? 'Activity' : f === 'agent' ? 'Agent' : f.startsWith('srv:') ? f.slice(4) : u?.name || 'Terminal'} (last ${jobs.length} command${jobs.length > 1 ? 's' : ''})`, text: jobs.map((j) => termJobText(j).text).join('\n\n') };
+}
+function termToChat(item, from) {
+  const c = focused();
+  if (!c?.el) return uiAlert('Open a chat first: the output goes with your next message there.');
+  if (!item?.text?.trim()) return flashTip(from || document.body, 'Nothing to send yet');
+  c.ctx.push({ type: 'term', id: `term-${Date.now().toString(36)}`, title: item.title, text: item.text.slice(-20000) });
+  renderAttachments(c);
+  flashTip(from || document.body, 'Added to your next message');
+}
 function termHead(t, j) {
   const chat = j.chatId && G.chats.find((x) => x.id === j.chatId);
   const who = j.server ? `<span class="tj-srv">🖥 ${esc(j.server)}</span>` : '';
@@ -6401,7 +6434,7 @@ function termHead(t, j) {
     : j.error ? `<span class="tj-st bad">✗ ${esc(j.error)}</span>`
     : j.code === 0 || (j.server && j.code == null) ? `<span class="tj-st ok">✓ ${j.server ? 'stopped' : `done${j.ms != null ? ` in ${secs(j.ms)}` : ''}`}</span>`
     : `<span class="tj-st bad">✗ exit ${j.code ?? '?'}${j.ms != null ? ` · ${secs(j.ms)}` : ''}</span>`;
-  return `${src}${who}<code class="tj-cmd"><span class="tj-ps">$</span> ${esc(j.label)}</code><span class="tj-time">${esc(new Date(j.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }))}</span>${st}${j.status === 'running' ? '<button type="button" class="tj-stop" title="Stop it">■ Stop</button>' : ''}`;
+  return `${src}${who}<code class="tj-cmd"><span class="tj-ps">$</span> ${esc(j.label)}</code><span class="tj-time">${esc(new Date(j.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }))}</span>${st}<button type="button" class="tj-share" title="Send this command and its output to the chat, with your next message">↪ Chat</button>${j.status === 'running' ? '<button type="button" class="tj-stop" title="Stop it">■ Stop</button>' : ''}`;
 }
 // full: true redraws the active pane from scratch, 'all' every pane; otherwise only what changed is added.
 function termDraw(t, full) {
@@ -6424,6 +6457,7 @@ function termDrawPane(t, p, full) {
     if (!v) { w.el.className = 'tj'; w.el.innerHTML = '<div class="tj-head"></div><pre class="tj-out"></pre>'; out.appendChild(w.el); }
     w.el.classList.toggle('running', j.status === 'running');
     $('.tj-head', w.el).innerHTML = termHead(t, j);
+    $('.tj-share', w.el).onclick = (e) => termToChat(termJobText(j), e.currentTarget);
     const stop = $('.tj-stop', w.el);
     if (stop) stop.onclick = () => { stop.disabled = true; if (j.server) postJ('/api/servers/stop', { key: j.id.slice(4, j.id.lastIndexOf(':')) }); else postJ('/api/term/stop', { job: j.id }); };
     const pre = $('.tj-out', w.el);
@@ -6458,7 +6492,7 @@ function termFilters(t) {
       + `<span class="tp-acts"><button type="button" class="tp-btn" data-tp="above" title="Add a terminal pane above this one" aria-label="Add a pane above"${t.panes.length >= 6 ? ' disabled' : ''}>${TP_ICO.above}</button><button type="button" class="tp-btn" data-tp="below" title="Add a terminal pane below this one" aria-label="Add a pane below"${t.panes.length >= 6 ? ' disabled' : ''}>${TP_ICO.below}</button>${many ? `<button type="button" class="tp-btn danger" data-tp="close" title="Close this pane (its terminals stay in the tabs)" aria-label="Close this pane">${TP_ICO.close}</button>` : ''}</span>`;
     if (box.dataset.html === html) continue;
     box.dataset.html = html; box.innerHTML = html;
-    for (const el of box.querySelectorAll('.ttab')) el.onclick = (e) => { if (!e.target.closest('.bt-x')) termPick(t, p, el.dataset.f); };
+    for (const el of box.querySelectorAll('.ttab')) { el.onclick = (e) => { if (!e.target.closest('.bt-x')) termPick(t, p, el.dataset.f); }; el.draggable = true; el.ondragstart = (e) => { e.dataTransfer.setData('application/x-quorx-term', el.dataset.f); e.dataTransfer.effectAllowed = 'copy'; }; }
     for (const b of box.querySelectorAll('.bt-x')) b.onclick = () => {
       const id = b.dataset.close;
       postJ('/api/term/close', { projectId: t.projectId, tab: id }).catch(() => {}); dropXterm(t.projectId, id, true);
@@ -6617,7 +6651,7 @@ function renderTerm(c) {
   const sec = (k, ico, label, tip) => `<button type="button" class="tsec ${t.sec === k ? 'on' : ''}" data-sec="${k}" role="tab" aria-selected="${t.sec === k}" title="${tip}">${ico}<span class="tsec-l">${label}</span><span class="tsec-n" hidden></span></button>`;
   bar.innerHTML = `<span class="term-title">${SVG_TERM}<b>Terminal</b></span><span class="dim">${esc(p?.name || c.projectId)}</span>
     <span class="tsecs" role="tablist" aria-label="Terminal sections">${sec('term', SVG_TERM, 'Terminals', 'Your terminals and the live output of every command and server, in panes you can stack')}${sec('run', SVG_RUN, 'Running', 'Everything running in this project (background jobs, commands, servers, terminals), each with a Stop')}${sec('srv', SVG_SERVER, 'Servers', 'This project’s saved servers: run, stop, edit, open')}</span><span class="spacer"></span>
-    ${t.sec === 'term' ? '<button type="button" class="term-clear" title="Clear the active pane’s finished output (running ones stay)">⌫ Clear output</button>' : t.sec === 'run' ? '<button type="button" class="run-stopall danger" title="Stop every command, background job, server and agent terminal in this project (your terminal tabs stay open)" disabled>■ Stop all</button>' : ''}<button type="button" class="back" title="Close the terminal">✕ Close</button>`;
+    ${t.sec === 'term' ? '<button type="button" class="term-share" title="Send what the active pane shows to the chat, with your next message: the text you selected, or the last lines (you can also drag a terminal tab onto the chat)">↪ Send to chat</button><button type="button" class="term-clear" title="Clear the active pane’s finished output (running ones stay)">⌫ Clear output</button>' : t.sec === 'run' ? '<button type="button" class="run-stopall danger" title="Stop every command, background job, server and agent terminal in this project (your terminal tabs stay open)" disabled>■ Stop all</button>' : ''}<button type="button" class="back" title="Close the terminal">✕ Close</button>`;
   for (const b of bar.querySelectorAll('.tsec')) b.onclick = () => { if (t.sec === b.dataset.sec) return; t.sec = b.dataset.sec; termSave(t); renderTerm(c); };
   $('.back', bar).onclick = () => { G.view.term = false; closeTermStream(); if (c.srvPop?.inline) closeServers(c); syncLayout(); renderPane(); };
   termSecCounts(c);
@@ -6638,6 +6672,7 @@ function renderTerm(c) {
     c.srvPop = { el: $('#termSrv', body), inline: true, editing: null, timer: setInterval(() => renderServers(c), 2000) };
     return renderServers(c);
   }
+  $('.term-share', bar).onclick = (e) => termToChat(termScreenText(t, t.filter), e.currentTarget);
   $('.term-clear', bar).onclick = () => {
     const root = tpaneEl(termPane(t)), x = G.xt?.get(`${t.projectId}:${t.filter}`);
     if (x && root && !$('.term-x', root).hidden) { x.term.clear(); x.term.focus(); return; }
