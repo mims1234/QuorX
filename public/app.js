@@ -3483,7 +3483,9 @@ function traceHTML(m) {
     else if (e.t === 'verify_start') row(e.at, `🔍 Checking the work before the final reply${e.files ? ` · ${e.files} changed file${e.files === 1 ? '' : 's'}` : ''}`, 'browser');
     else if (e.t === 'verify') row(e.at, `${e.ok ? '✅ Checks passed' : `<span class="warn">⚠ Checks found ${e.problems.length} problem${e.problems.length === 1 ? '' : 's'}</span>`}${e.problems.length ? `<div class="sub">${e.problems.map(esc).join('<br>')}</div>` : ''}${e.lint && (e.lint.fix || e.lint.consider) ? `<div class="sub">🎨 design lint still notes ${e.lint.fix} to fix, ${e.lint.consider} to consider (${esc(e.lint.ids.join(', '))})</div>` : ''}${e.note ? `<div class="sub">ℹ ${esc(e.note)}</div>` : ''}${(e.pages || []).map((p) => `<div class="sub">opened ${esc(p.target)} · ${p.problems ? `${p.problems} problem${p.problems === 1 ? '' : 's'}` : 'no errors'}</div>${p.image ? `<img class="shot" src="${p.image}" alt="what the check saw" loading="lazy">` : ''}`).join('')}`, e.ok ? 'ok' : 'warn');
     else if (e.t === 'sent_back') row(e.at, `↩ ${e.by === 'reviewer' ? 'The reviewer sent it back' : 'Sent back'} to fix ${e.problems} problem${e.problems === 1 ? '' : 's'} (round ${e.round})${e.aside ? `<div class="aside">💬 ${esc(e.aside)}</div>` : ''}`, 'warn');
+    else if (e.t === 'question' && e.secret) row(e.at, `🔑 Asked you for <b>${esc(e.secret.name)}</b>${e.secret.why ? `<div class="sub">${esc(e.secret.why)}</div>` : ''}`, 'ask');
     else if (e.t === 'question') row(e.at, `❓ ${e.auto ? 'Asked (⚡ YOLO: the deciders answer for you)' : 'Asked you'}: <b>${esc(e.question)}</b><div class="sub">${e.questions ? e.questions.map((q, i) => `${i + 1}. ${esc(q.question)} (${q.options.map(esc).join(' · ')})`).join('<br>') : e.options.map(esc).join(' · ')}</div>`, 'ask');
+    else if (e.t === 'answer' && e.secret) row(e.at, `🔑 ${esc(e.text || '')}`, e.secret.set ? 'ok' : 'warn');
     else if (e.t === 'answer') row(e.at, e.by === 'deciders' ? `⚖️ The deciders answered for you: <b>${esc(e.label || e.text || '')}</b>${e.confidence != null ? ` · ${Math.round(e.confidence * 100)}% sure` : ''}` : `💬 You answered: ${esc(e.label || e.text || '')}`, 'ok');
     else if (e.t === 'checks' && e.kind === 'gap') row(e.at, `🧭 <b>Gap check</b> · ${e.build ? 'a build' : 'not a build, so nothing to ask'}${e.build ? `<div class="sub">${e.rows.filter((r) => r.label).map((r) => `<span class="chk ${r.missing ? 'miss' : 'ok'}">${r.missing ? '✗ not said' : '✓'} ${esc(r.label)}</span>`).join(' ')}</div>` : ''}<div class="sub">Fixed harness questions about your message, answered by the deciders${e.ms ? ` in ${secs(e.ms)}` : ''}.</div>`, e.rows.some((r) => r.missing) ? 'warn' : 'ok');
     else if (e.t === 'checks' && e.kind === 'page') { const bad = e.rows.filter((r) => r.fail); row(e.at, `🔎 <b>Harness checks</b> on ${esc(e.target)} (${e.when === 'verify' ? 'before the final reply' : 'after the preview'}) · ${bad.length ? `<span class="warn">${bad.length} problem${bad.length > 1 ? 's' : ''}</span>` : `${e.rows.length} passed`}<div class="sub">${e.rows.map((r) => `<span class="chk ${r.fail ? 'miss' : 'ok'}" title="${r.p == null ? 'no answer' : `${Math.round(r.p * 100)}% fine`}">${r.fail ? '✗' : '✓'} ${esc(r.fail ? r.label : r.id)}</span>`).join(' ')}</div>${e.clicked ? `<div class="sub">clicked “${esc(e.clicked)}” to see whether it responds</div>` : ''}${e.image ? `<img class="shot" src="${e.image}" alt="what the checks saw" loading="lazy">` : ''}${e.after ? `<img class="shot" src="${e.after}" alt="after the click" loading="lazy">` : ''}`, bad.length ? 'warn' : 'ok'); }
@@ -3823,6 +3825,7 @@ function questionHTML(q, live = true) {
   </div>`;
   }
   if (c.questions?.length) return questionsHTML(c, a);
+  if (c.secret) return secretHTML(c, a);
   return `<div class="approval question qbox ${a ? 'done' : ''}" ${a ? '' : `data-id="${esc(c.id)}" tabindex="-1"`}>
     <div class="q-head"><span class="q-badge">${c.gate === 'plan' ? 'Plan first' : 'Question'}</span><p class="q-text">${esc(c.question)}</p></div>
     ${a ? `<div class="q-opts answered">${c.options.map((o, i) => `<div class="q-opt ${i === picked ? 'picked' : 'faded'}"><span class="q-key">${i === picked ? '✓' : i + 1}</span><span class="q-label">${esc(o)}</span></div>`).join('')}
@@ -3831,6 +3834,34 @@ function questionHTML(q, live = true) {
       : `${waitHTML(c)}<div class="q-opts" role="group" aria-label="Answers">${c.options.map((o, i) => `<button type="button" class="opt q-opt" data-i="${i}"><span class="q-key">${i + 1}</span><span class="q-label">${esc(o)}</span></button>`).join('')}</div>
       <div class="own-row q-own"><input type="text" class="own" placeholder="${c.gate === 'plan' ? 'Or say what to change in the plan' : 'Or answer in your own words'}" aria-label="${c.gate === 'plan' ? 'What to change in the plan' : 'Your own answer'}"><button type="button" class="send-own">Send</button></div>`}
   </div>`;
+}
+// request_secret: the agent asks for a secret by name. The value goes from this box into the project's .env; the
+// agent only hears that it is set, and the chat never keeps it.
+function secretHTML(c, a) {
+  const s = c.secret, missed = a && /^\(not answered/.test(a.label || '');
+  if (a) return `<div class="approval question qbox secretq done">
+    <div class="q-head"><span class="q-badge">Secret</span><p class="q-text">The agent needs <code>${esc(s.name)}</code>${s.why ? `: ${esc(s.why)}` : ''}</p></div>
+    <div class="q-opts answered"><div class="q-opt ${a.secret?.set ? 'picked' : 'missed'}"><span class="q-key">${a.secret?.set ? '✓' : '–'}</span><span class="q-label">${missed ? 'Not answered: the reply ended' : esc(a.text || a.label || '')}</span></div></div>
+  </div>`;
+  return `<div class="approval question qbox secretq" data-id="${esc(c.id)}" tabindex="-1">
+    <div class="q-head"><span class="q-badge">Secret</span><p class="q-text">The agent needs <code>${esc(s.name)}</code>${s.why ? `: ${esc(s.why)}` : ''}</p></div>
+    <div class="own-row q-own"><input type="password" class="own secret-val" autocomplete="off" spellcheck="false" placeholder="Paste the value" aria-label="Value for ${esc(s.name)}"><label class="sq-check secret-show"><input type="checkbox" class="reveal"><span>Show</span></label></div>
+    <p class="secret-note">Saved to this project's .env, never sent to the model: the agent only learns that ${esc(s.name)} is set.</p>
+    <div class="acts"><button type="button" class="primary save-secret" disabled>Save</button><button type="button" class="skip-secret">Skip</button></div>
+  </div>`;
+}
+function wireSecret(card, m) {
+  const id = card.dataset.id, box = $('.secret-val', card), save = $('.save-secret', card);
+  const send = (body) => {
+    card.querySelectorAll('button, input').forEach((b) => (b.disabled = true));
+    box.value = '';
+    fetch('/api/secret', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ runId: m.runId, id, ...body }) }).catch(() => {});
+  };
+  box.oninput = () => { save.disabled = !box.value.trim(); };
+  box.onkeydown = (e) => { if (e.key === 'Enter' && box.value.trim()) { e.preventDefault(); save.click(); } };
+  $('.reveal', card).onchange = (e) => { box.type = e.target.checked ? 'text' : 'password'; };
+  save.onclick = () => { if (box.value.trim()) send({ value: box.value }); };
+  $('.skip-secret', card).onclick = () => send({ skip: true });
 }
 // Several questions in one card: pick per question (the agent's recommendation is preselected), or type your own words.
 function questionsHTML(c, a) {
@@ -3876,6 +3907,7 @@ function wireQuestions(card, m) {
 }
 function wireQuestion(card, m) {
   if (card.classList.contains('qmulti')) return wireQuestions(card, m);
+  if (card.classList.contains('secretq')) return wireSecret(card, m);
   const id = card.dataset.id, own = $('.own', card);
   const answer = (body) => {
     card.querySelectorAll('button, input').forEach((b) => (b.disabled = true));

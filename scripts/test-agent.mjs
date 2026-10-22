@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadCards, cardText, limitsLine, cardFile, CARDS_DIR, CARD_CHARS } from '../server/modelcards.js';
-import { runAgent, answerQuestion, answerApproval, answerBudget, setRunApproval, steerRun, holdCard } from '../server/agent.js';
+import { runAgent, answerQuestion, answerSecret, answerApproval, answerBudget, setRunApproval, steerRun, holdCard } from '../server/agent.js';
 import { saveProject, forgetProject, setProjectBudget } from '../server/store.js';
 import { loadCheckpoint, dropCheckpoint, ledger } from '../server/runs.js';
 import { setBudget, projectSpend, budgetState, live as liveRuns } from '../server/budget.js';
@@ -23,6 +23,7 @@ import { loadMemory, saveMemory, addMemory, checkMemory, looksSecret, memoryProm
 import { startRun, follow, getRun, readLog } from '../server/runs.js';
 import { getChat, saveChat as storeChat, listProjects } from '../server/store.js';
 import { matchPlan, usePlan } from '../server/mediaplan.js';
+import { setSecret, parseEnv, secretKind, scrubSecrets } from '../server/projectsecrets.js';
 
 let n = 0;
 const reply = (text, calls = [], finishReason = 'stop') => ({ text, toolCalls: calls.map(([name, args], i) => ({ id: `c${++n}_${i}`, type: 'function', function: { name, arguments: typeof args === 'string' ? args : JSON.stringify(args) } })), usage: { cost: 0.0001 }, ms: 1, firstMs: 1, finishReason });
@@ -2177,4 +2178,82 @@ test('skills are listed by name, with descriptions only for the ones the request
   assert.doesNotMatch(note, /Node\.js web server/);
   assert.equal(skillsNote(sk, 'hello'), 'Available: canvas-game, node-server.');
   assert.equal(compactPaths(['index.html', 'src/a.js', 'src/b.js', 'css/x.css', 'lib/ (skipped)']), 'index.html, src/{a.js, b.js}, css/x.css, lib/ (skipped)');
+});
+
+// ---------- the project's own secrets: names for the agent, values for its commands ----------
+const KEY = 'sk-test-0123456789abcdefghij', DB = 'p@ss word#42';
+const withEnv = (dir) => {
+  fs.writeFileSync(path.join(dir, '.env'), `# keys\nOPENAI_API_KEY=${KEY}\nDB_PASS="${DB}"\nDEBUG=true\nEMPTY=\n`);
+  fs.writeFileSync(path.join(dir, 'server.pem'), '-----BEGIN PRIVATE KEY-----\nMIIEvQ\n-----END PRIVATE KEY-----\n');
+};
+
+test('read_file shows a .env as names only, and a key file as a one-line note', async () => {
+  const { bodies } = await run((body, i) => [reply('', [['read_file', { path: '.env' }], ['read_file', { path: 'server.pem' }]]), reply('Done.')][i], { prep: withEnv });
+  const [env, pem] = toolResults(bodies[1]);
+  assert.match(env, /# keys/);
+  assert.match(env, /OPENAI_API_KEY=•••• \(set, 28 characters\)/);
+  assert.match(env, /DB_PASS=•••• \(set, 12 characters\)/);
+  assert.match(env, /EMPTY= \(empty\)/);
+  assert.ok(!env.includes(KEY) && !env.includes('p@ss') && !/=true/.test(env), env);
+  assert.match(pem, /^This file holds a secret \(a private key\)\. QuorX doesn't show its contents\./);
+});
+
+test('search_files never returns a secret value: names from .env, nothing from key files', async () => {
+  const { bodies } = await run((body, i) => [reply('', [['search_files', { query: 'sk-test' }], ['search_files', { query: 'OPENAI' }], ['search_files', { query: 'PRIVATE' }]]), reply('Done.')][i], { prep: withEnv });
+  const [byValue, byName, inKey] = toolResults(bodies[1]);
+  assert.match(byValue, /^No matches/, 'a hidden value never makes a hit');
+  assert.match(byName, /\.env:2: OPENAI_API_KEY=•••• \(set, 28 characters\)/);
+  assert.ok(!byName.includes(KEY));
+  assert.match(inKey, /^No matches/);
+});
+
+test('commands get the project\'s .env, and what they print of it is removed before the model sees it', async () => {
+  const { bodies, events, dir } = await run((body, i) => [reply('', [['shell', { command: 'node show.mjs' }]]), reply('', [['shell', { command: 'node cat.mjs' }]]), reply('Done.')][i], {
+    prep: (d) => {
+      withEnv(d);
+      fs.writeFileSync(path.join(d, 'show.mjs'), "import fs from 'node:fs';\nfs.writeFileSync('got.txt', `${process.env.OPENAI_API_KEY}|${process.env.DB_PASS}`);\nconsole.log('key is', process.env.OPENAI_API_KEY, 'debug', process.env.DEBUG);\n");
+      fs.writeFileSync(path.join(d, 'cat.mjs'), "import fs from 'node:fs';\nconsole.log(fs.readFileSync('.env', 'utf8'));\n");
+    } });
+  assert.equal(fs.readFileSync(path.join(dir, 'got.txt'), 'utf8'), `${KEY}|${DB}`, 'the command had the values');
+  const shown = toolResults(bodies[1])[0];
+  assert.match(shown, /key is \[secret removed\] debug true/);
+  assert.ok(!shown.includes(KEY));
+  const printed = toolResults(bodies[2]).at(-1);
+  assert.match(printed, /OPENAI_API_KEY=\[secret removed\]/);
+  assert.ok(!printed.includes(KEY) && !printed.includes(DB), printed);
+  assert.ok(!JSON.stringify(events).includes(KEY), 'no event carries the value');
+});
+
+test('request_secret writes .env and .gitignore, and the model hears only that it is set', async () => {
+  let runId;
+  const secret = 'ghp_abcdefghijklmnopqrstuvwxyz0123';
+  const { bodies, events, dir } = await run((body, i) => [reply('', [['request_secret', { name: 'GITHUB_TOKEN', why: 'To publish the release.' }]]), reply('', [['request_secret', { name: 'OTHER_KEY', why: 'Maybe later.' }]]), reply('Done.')][i], {
+    settings: { approval: 'strict' },
+    prep: (d) => { fs.mkdirSync(path.join(d, '.git')); fs.writeFileSync(path.join(d, '.gitignore'), 'node_modules'); fs.writeFileSync(path.join(d, '.env'), 'A=1\n'); },
+    onEvent: (e) => {
+      if (e.t === 'start') runId = e.runId;
+      if (e.t === 'question' && e.secret) setTimeout(() => answerSecret(runId, e.id, e.secret.name === 'GITHUB_TOKEN' ? { value: `  ${secret} ` } : { skip: true }), 10);
+    },
+  });
+  assert.equal(fs.readFileSync(path.join(dir, '.env'), 'utf8'), `A=1\nGITHUB_TOKEN=${secret}\n`);
+  assert.equal(fs.readFileSync(path.join(dir, '.gitignore'), 'utf8'), 'node_modules\n.env\n');
+  assert.match(toolResults(bodies[1])[0], /^GITHUB_TOKEN is set \(in the project's \.env; \.env was added to \.gitignore\)/);
+  assert.match(toolResults(bodies[2]).at(-1), /^The user skipped OTHER_KEY/);
+  assert.deepEqual(of(events, 'question').map((e) => e.secret.name), ['GITHUB_TOKEN', 'OTHER_KEY']);
+  assert.deepEqual(of(events, 'answer').map((e) => e.secret), [{ name: 'GITHUB_TOKEN', set: true }, { name: 'OTHER_KEY', set: false }]);
+  assert.ok(!JSON.stringify(events).includes(secret) && !JSON.stringify(bodies).includes(secret), 'the value is in no event and no model call');
+});
+
+test('setSecret replaces a line in place and quotes what needs it; parseEnv reads it back', () => {
+  const dir = tempDir('quorx-env-');
+  fs.writeFileSync(path.join(dir, '.env'), 'X=1\r\nKEY=old\r\n');
+  assert.deepEqual(setSecret(dir, 'KEY', 'a "b" #c\nd'), { created: false, replaced: true, gitignored: false });
+  const text = fs.readFileSync(path.join(dir, '.env'), 'utf8');
+  assert.equal(text, 'X=1\r\nKEY="a \\"b\\" #c\\nd"\r\n');
+  assert.deepEqual(parseEnv(text), { X: '1', KEY: 'a "b" #c\nd' });
+  assert.deepEqual(parseEnv("export A='x # y'\nB=plain # note\n# C=no\n"), { A: 'x # y', B: 'plain' });
+  assert.equal(secretKind('.env.example'), '', 'templates are meant to be read');
+  assert.equal(secretKind('app/.env.local'), 'env');
+  assert.equal(secretKind('.env. '), 'env', 'Windows drops trailing dots and spaces');
+  assert.equal(scrubSecrets(dir, 'X=1 KEY=a "b" #c\nd'), 'X=1 KEY=[secret removed]', 'six or more characters are removed; short ones stay');
 });

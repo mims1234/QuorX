@@ -15,7 +15,7 @@ import { currentKey, PORT, runtime, ROOT, HOME, chat, chatModels, decisionModels
 import { listKeys, addKey, removeKey, setActive, renameKey, keyUsage, activeUsage, accountCredits, startSampling, lockDown } from './server/keys.js';
 import { setupCheck, runFix } from './server/setup-check.js';
 import { startSignIn, signInStatus, cancelSignIn, finishByCallback, finishWithCode, callbackPage } from './server/oauth.js';
-import { runAgent, answerApproval, answerQuestion, answerBudget, raiseCap, setRunApproval, steerRun, setRunReading, holdCard, DEFAULTS, MEDIA, briefFor, briefForChat, REVIEW_MODEL, REVIEW_ALT, REVIEW_STRONG, REVIEW_STRONG_ALT } from './server/agent.js';
+import { runAgent, answerApproval, answerQuestion, answerSecret, answerBudget, raiseCap, setRunApproval, steerRun, setRunReading, holdCard, DEFAULTS, MEDIA, briefFor, briefForChat, REVIEW_MODEL, REVIEW_ALT, REVIEW_STRONG, REVIEW_STRONG_ALT } from './server/agent.js';
 import { reviewCode, pickReviewer } from './server/codereview.js';
 import { loadHooks, saveHooks, HOOK_EVENTS } from './server/hooks.js';
 import { createScheduler, loadSchedules, saveSchedules, cleanSchedule, describeWhen, MAX_SCHEDULES } from './server/schedules.js';
@@ -743,6 +743,11 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && url.pathname === '/api/answer') {
       const b = JSON.parse(await readBody(req, 1e5));
       return json(res, 200, { ok: answerQuestion(b.runId, b.id, b) });
+    }
+    // request_secret's card: the value goes into the project's .env and nowhere else (never logged or saved in the chat).
+    if (req.method === 'POST' && url.pathname === '/api/secret') {
+      const b = JSON.parse(await readBody(req, 1e5));
+      return json(res, 200, { ok: answerSecret(String(b.runId || ''), String(b.id || ''), { value: b.value, skip: !!b.skip }) });
     }
     if (req.method === 'POST' && url.pathname === '/api/budget-stop') {
       const b = JSON.parse(await readBody(req, 1e4));

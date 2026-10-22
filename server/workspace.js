@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn, execFile, spawnSync } from 'node:child_process';
 import { projectDir, listProjects } from './store.js';
 import { SECRET_FILES } from './keys.js';
+import { projectEnv } from './projectsecrets.js';
 import { termEvent, lineSplitter, newJob, endJob } from './terminal.js';
 import { jobsAvailable, adoptPid, jobCount, killJob, closeJob, startDetached } from './jobhost.js';
 import { snapshot, changesSince, objectFor, pruneObjects } from './snapshot.js';
@@ -261,11 +262,11 @@ export function runCommand(root, cmd, args = [], opts = {}) {
  * { code, out (last 8,000 chars), ms, timedOut, stopped: endProc result | null, leftovers: sweep result | null, log }.
  * `logTo`: a file that gets the full output. `onStart(proc)`: called once it runs (for the tripwire).
  */
-export function runLine(root, line, { shell = 'direct', timeout = 180e3, signal, term, label, memoryMB = 0, logTo, onStart, onJob } = {}) {
+export function runLine(root, line, { shell = 'direct', timeout = 180e3, signal, term, label, memoryMB = 0, logTo, onStart, onJob, env = {} } = {}) {
   return new Promise((resolve, reject) => {
     (async () => {
       let proc;
-      try { proc = await launch(root, line, { shell, memoryMB, env: NON_INTERACTIVE }); } catch (e) { return reject(e); }
+      try { proc = await launch(root, line, { shell, memoryMB, env: { ...env, ...NON_INTERACTIVE } }); } catch (e) { return reject(e); }
       onStart?.(proc);
       const t0 = Date.now();
       label = label || line;
@@ -344,7 +345,7 @@ export async function startServer({ projectId, name, cmd, args = [], port: fixed
     termEvent(projectId, { kind: 'out', job, server: s.name, text: line, stream });
   });
   termEvent(projectId, { kind: 'start', job, server: s.name, source, label: [cmd, ...real].join(' '), port });
-  s.proc = await launch(root, lineOf(cmd, real), { env: { PORT: String(port) } });
+  s.proc = await launch(root, lineOf(cmd, real), { env: { ...projectEnv(root), PORT: String(port) } });
   s.proc.stdout.on('data', (d) => split.push(d, 'out')); s.proc.stderr.on('data', (d) => split.push(d, 'err'));
   s.proc.on('exit', (code) => { split.flush('out'); s.status = 'stopped'; s.code = code; termEvent(projectId, { kind: 'end', job, server: s.name, code }); });
   servers.set(key, s);
