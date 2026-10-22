@@ -2281,6 +2281,20 @@ test('launch_config lists, saves, renames and removes saved servers; direct writ
   assert.deepEqual(file.configurations.map((c) => c.name), ['site']);
 });
 
+test('✨ Enhance rewrites a draft with the given model, sees earlier turns, and drops fences or quotes', async () => {
+  const { rewritePrompt, REWRITE_SYSTEM } = await import('../server/enhancer.js');
+  let sent = null;
+  const call = async (body) => { sent = body; return { message: { content: '```\n"Build a snake game in one HTML file.\n- Arrow keys to move\n- Score shown"\n```' }, usage: { cost: 0.00002 } }; };
+  const r = await rewritePrompt({ text: 'make snake', earlier: ['hi', 'use plain js'], model: 'test/cheap', call });
+  assert.equal(r.text, 'Build a snake game in one HTML file.\n- Arrow keys to move\n- Score shown');
+  assert.equal(r.model, 'test/cheap');
+  assert.equal(r.cost, 0.00002);
+  assert.equal(sent.model, 'test/cheap');
+  assert.equal(sent.messages[0].content, REWRITE_SYSTEM);
+  assert.match(sent.messages[1].content, /- use plain js[\s\S]*The draft to improve:\nmake snake/);
+  assert.equal(await rewritePrompt({ text: 'x', model: 'm', call: async () => ({ message: { content: '  ' } }) }), null);
+});
+
 test('a tab the user lends works only through target "given", asks before Send or a password, and stops when taken back', { skip: !(await import('../server/browser.js')).browserPath() && 'no Chromium browser installed' }, async () => {
   const http = await import('node:http');
   const { userBrowse, giveTab, takeBackTab } = await import('../server/userbrowser.js');

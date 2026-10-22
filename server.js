@@ -15,7 +15,7 @@ import { currentKey, PORT, runtime, ROOT, HOME, chat, chatModels, decisionModels
 import { listKeys, addKey, removeKey, setActive, renameKey, keyUsage, activeUsage, accountCredits, startSampling, lockDown } from './server/keys.js';
 import { setupCheck, runFix } from './server/setup-check.js';
 import { startSignIn, signInStatus, cancelSignIn, finishByCallback, finishWithCode, callbackPage } from './server/oauth.js';
-import { runAgent, answerApproval, answerQuestion, answerSecret, answerBudget, raiseCap, setRunApproval, steerRun, setRunReading, holdCard, DEFAULTS, MEDIA, briefFor, briefForChat, REVIEW_MODEL, REVIEW_ALT, REVIEW_STRONG, REVIEW_STRONG_ALT } from './server/agent.js';
+import { runAgent, answerApproval, answerQuestion, answerSecret, answerBudget, raiseCap, setRunApproval, steerRun, setRunReading, holdCard, DEFAULTS, MEDIA, briefFor, briefForChat, REVIEW_MODEL, HELPER_MODEL, REVIEW_ALT, REVIEW_STRONG, REVIEW_STRONG_ALT } from './server/agent.js';
 import { reviewCode, pickReviewer } from './server/codereview.js';
 import { loadHooks, saveHooks, HOOK_EVENTS } from './server/hooks.js';
 import { createScheduler, loadSchedules, saveSchedules, cleanSchedule, describeWhen, MAX_SCHEDULES } from './server/schedules.js';
@@ -38,6 +38,7 @@ import { safetySettings, yoloOf } from './server/safety.js';
 import { readAudit } from './server/audit.js';
 import { pickFolder } from './server/pickfolder.js';
 import { userBrowse, giveTab, givenTab, takeBackTab } from './server/userbrowser.js';
+import { rewritePrompt } from './server/enhancer.js';
 import { openLink, linkReply, desktopReady, desktopCall } from './server/desktop.js';
 import { saveUpload, processDoc, listDocs, removeDoc, DOC_DEFAULTS, officeText } from './server/docs.js';
 import { embeddingModels } from './server/openrouter.js';
@@ -574,6 +575,16 @@ const server = http.createServer(async (req, res) => {
       if (!/^(127\.|::1$|::ffff:127\.)/.test(ip) || req.headers.origin) return json(res, 403, { error: 'the desktop link is only for the app on this computer' });
       if (url.pathname === '/api/desktop/link' && req.method === 'GET') return openLink(req, res, url.searchParams.get('token'));
       if (url.pathname === '/api/desktop/reply' && req.method === 'POST') return json(res, linkReply(JSON.parse(await readBody(req, 50e6) || '{}')) ? 200 : 403, {});
+    }
+    // ✨ Enhance in the composer: the draft rewritten clearer and fuller, before the user sends it.
+    if (url.pathname === '/api/enhance-prompt' && req.method === 'POST') {
+      const b = JSON.parse(await readBody(req, 2e5) || '{}');
+      const text = String(b.text || '').trim();
+      if (!text) return json(res, 400, { error: 'nothing to enhance' });
+      try {
+        const r = await rewritePrompt({ text, earlier: Array.isArray(b.earlier) ? b.earlier.map(String).slice(-3) : [], model: String(b.model || '').trim() || HELPER_MODEL });
+        return json(res, 200, r || { error: 'the model gave nothing usable' });
+      } catch (e) { return json(res, 200, { error: /auth|401|api key/i.test(e.message) ? 'add an OpenRouter key in ⚙ Settings → API keys first' : e.message }); }
     }
     // ---- the Browser tab's "your view" for sites that refuse frames (see server/userbrowser.js) ----
     if (url.pathname === '/api/ubrowser' && req.method === 'POST') {
