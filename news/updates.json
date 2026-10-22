@@ -1,6 +1,34 @@
 {
   "versions": [
     {
+      "version": "0.2.11",
+      "date": "2026-10-22",
+      "title": "Your own browser for the agent",
+      "items": [
+        { "kind": "new", "text": "The QuorX extension for Chrome, Brave or Edge: tick 🧩 Chrome in a chat and the agent works in your own browser, signed in as you.", "pr": 96, "link": "articles/your-own-browser-for-the-agent" },
+        { "kind": "new", "text": "Give one of your browser tabs to a chat by dragging it there; the agent works only in that tab, and Take back ends it.", "pr": 93 },
+        { "kind": "new", "text": "The Terminal tab holds your terminals, what's running and your servers, with terminal panes you can stack and resize.", "pr": 91 },
+        { "kind": "new", "text": "✨ Enhance rewrites what you typed clearer and fuller before you send it. Press it again to go further, or ↶ to undo.", "pr": 95 },
+        { "kind": "new", "text": "Drag files, browser tabs or terminal output onto a chat, or right-click them → Add to chat.", "pr": 100 },
+        { "kind": "new", "text": "Type words in the Browser tab's address bar to search, with Google, DuckDuckGo, Bing, Brave, Startpage or your own.", "pr": 99 },
+        { "kind": "new", "text": "The agent can list, rename and remove the servers saved for a project, not only add them.", "pr": 87 },
+        { "kind": "improved", "text": "⚡ YOLO runs most commands on its own; only extreme ones pause for you, in warning colours.", "pr": 78 },
+        { "kind": "improved", "text": "Safety & commands settings show the simple choices first, with every detail under Advanced.", "pr": 84 },
+        { "kind": "improved", "text": "Replies read in order: the plan sits above its Go ahead, each review where it happened, answered questions on one line.", "pr": 97 },
+        { "kind": "improved", "text": "Your terminal is a normal terminal, and tools you just installed are found at once.", "pr": 80 },
+        { "kind": "improved", "text": "Follow also switches to the Terminal tab when the agent runs a command.", "pr": 90 },
+        { "kind": "improved", "text": "Links in chats and News open with Ctrl+click, in the Browser tab.", "pr": 85 },
+        { "kind": "improved", "text": "Closing a tab that shows a running server asks whether to stop the server or keep it running.", "pr": 92 },
+        { "kind": "safety", "text": "The agent knows the names of your project's secrets, never their values.", "pr": 81 },
+        { "kind": "safety", "text": "Guarded against the October 2026 Node.js security issue until the desktop app's fix ships.", "pr": 75 },
+        { "kind": "fixed", "text": "Screenshots of scrolled pages are no longer blank, so the agent stops re-checking pages that are fine.", "pr": 73, "link": "articles/the-screenshot-that-was-always-blank" },
+        { "kind": "fixed", "text": "The agent's screenshots no longer stall while its tab is hidden in the desktop app.", "pr": 82 },
+        { "kind": "fixed", "text": "Fresh eyes no longer raises an alarm about a file the agent hasn't written yet.", "pr": 79 },
+        { "kind": "fixed", "text": "After OpenRouter sign-in, the browser tab says to close it and QuorX comes to the front.", "pr": 73 },
+        { "kind": "fixed", "text": "Smaller fixes: the sidebar's title row, the ▶ in Servers, Clear output next to Close, and the Running stop button.", "pr": 89 }
+      ]
+    },
+    {
       "version": "0.2.10",
       "date": "2026-10-21",
       "title": "In the Microsoft Store, and a browser that notices sound",
