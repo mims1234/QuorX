@@ -37,7 +37,7 @@ import { jobHostStatus, jobsAvailable } from './server/jobhost.js';
 import { safetySettings, yoloOf } from './server/safety.js';
 import { readAudit } from './server/audit.js';
 import { pickFolder } from './server/pickfolder.js';
-import { userBrowse } from './server/userbrowser.js';
+import { userBrowse, giveTab, givenTab, takeBackTab } from './server/userbrowser.js';
 import { rewritePrompt } from './server/enhancer.js';
 import { openLink, linkReply, desktopReady, desktopCall } from './server/desktop.js';
 import { saveUpload, processDoc, listDocs, removeDoc, DOC_DEFAULTS, officeText } from './server/docs.js';
@@ -590,6 +590,17 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/ubrowser' && req.method === 'POST') {
       const b = JSON.parse(await readBody(req, 1e5) || '{}');
       try { return json(res, 200, await userBrowse(String(b.sid || ''), String(b.op || 'look'), b)); } catch (e) { return json(res, 200, { error: e.message }); }
+    }
+    // ---- 🤖 Give to agent: lend one of your Browser tabs to a chat, or take it back ----
+    if (url.pathname === '/api/given-tab') {
+      const chatId = String(url.searchParams.get('chat') || '');
+      if (req.method === 'GET') return json(res, 200, { given: validId(chatId) ? givenTab(chatId) : null });
+      if (req.method === 'DELETE') return json(res, 200, { ok: validId(chatId) && takeBackTab(chatId) });
+      if (req.method === 'POST') {
+        const b = JSON.parse(await readBody(req, 1e4) || '{}');
+        if (!validId(b.chatId)) return json(res, 400, { error: 'bad chat id' });
+        try { return json(res, 200, { given: giveTab(b.chatId, String(b.sid || ''), b) }); } catch (e) { return json(res, 200, { error: e.message }); }
+      }
     }
     // ---- export from the pane: a page as PDF or one long PNG, or the project's files as a ZIP ----
     if (url.pathname === '/api/export' && req.method === 'POST') {
