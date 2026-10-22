@@ -557,10 +557,12 @@ function renderAttachments(c) {
   box.innerHTML = (c.comments || []).map((x, i) => `<span class="cmt-chip cmp-att-item" title="${esc(x.note || 'No note: the agent will ask what to change')}">${x.crop ? `<img src="${x.crop}" alt="">` : ''}<span class="cmt-what">💬 <b>${esc(x.tag)}</b> ${esc(clip(x.text || x.selector, 40))}</span><button type="button" data-cmt="${i}" aria-label="Remove this comment">✕</button></span>`).join('')
     + c.ctx.map((x, i) => `<span class="ctx-chip cmp-att-item ${x.type === 'file' ? 'file' : x.type === 'project' ? 'project' : 'chat'}" title="Attached as context for your next message">${x.type === 'file' ? '📄' : x.type === 'project' ? '' : '💬'} ${esc(x.title)}<button type="button" data-ctx="${i}" aria-label="Remove">✕</button></span>`).join('')
     + c.images.map((x, i) => `<span class="img-chip cmp-att-item image"><img src="${x.thumb}" alt="attached image ${i + 1}"><button type="button" data-img="${i}" aria-label="Remove image">✕</button></span>`).join('')
-    + (c.docs || []).map((d, i) => docChip(d, i)).join('');
+    + (c.docs || []).map((d, i) => docChip(d, i)).join('')
+    + ((G.lent ||= {})[c.id] ? `<span class="lent-chip cmp-att-item" title="The agent can work in this tab of yours (signed in as you) in this chat. Sending, deleting, buying and account changes ask you first."><span class="lent-ico" aria-hidden="true">🤖</span><span class="lent-l">${G.lent[c.id].chrome ? 'Your Chrome tab' : 'Your tab'}</span><b>${esc(clip(G.lent[c.id].title || G.lent[c.id].url, 40))}</b><button type="button" class="lent-back" title="Take the tab back: the agent can no longer use it">Take back</button></span>` : '');
   for (const b of box.querySelectorAll('[data-ctx]')) b.onclick = () => { c.ctx.splice(Number(b.dataset.ctx), 1); renderAttachments(c); };
   for (const b of box.querySelectorAll('[data-img]')) b.onclick = () => { c.images.splice(Number(b.dataset.img), 1); renderAttachments(c); };
   for (const b of box.querySelectorAll('[data-cmt]')) b.onclick = () => { c.comments.splice(Number(b.dataset.cmt), 1); renderAttachments(c); };
+  const lb = $('.lent-back', box); if (lb) lb.onclick = () => takeBackTab(c.id);
   wireDocChips(c, box);
 }
 
@@ -1910,7 +1912,7 @@ function zoomTarget(kind) {
   return isPaneFrame(el) ? 'page' : inTerminal(el) ? 'terminal' : 'app';
 }
 function zoomFor(target, dir) {
-  if (target === 'terminal') return flashTip($('#paneBody .term-x') || document.body, `Terminal text ${termFont(dir)}px`);
+  if (target === 'terminal') return flashTip($('#paneBody .tpane.on .term-x') || $('#paneBody .term-x') || document.body, `Terminal text ${termFont(dir)}px`);
   if (target === 'page') { const z = zoomPages(dir); const f = paneFrames()[0]; return flashTip(f?.parentElement || document.body, `Page ${Math.round(z * 100)}%`); }
   window.ohDesktop?.zoom?.(dir).then((f) => flashTip(document.body, `QuorX ${Math.round(f * 100)}%`)).catch(() => {});
 }
@@ -2004,7 +2006,8 @@ function askBody(text) {
     return `<p>${lines.map(esc).join('<br>')}</p>`;
   }).join('');
 }
-function ask(message, { ok, cancel = 'Cancel', danger, input = null, alertOnly = false } = {}) {
+// alt adds a third answer between Cancel and OK (shown in red with altDanger); choosing it resolves to 'alt'.
+function ask(message, { ok, cancel = 'Cancel', danger, input = null, alertOnly = false, alt = null, altDanger = false } = {}) {
   return new Promise((resolve) => {
     const [head, ...rest] = String(message || '').split('\n');
     const verb = ASK_VERBS[(head.match(/^\s*(\w+)/)?.[1] || '').toLowerCase()];
@@ -2015,13 +2018,14 @@ function ask(message, { ok, cancel = 'Cancel', danger, input = null, alertOnly =
     d.innerHTML = `<form class="ask" method="dialog">
       <h3>${esc(head)}</h3>${rest.join('\n').trim() ? `<div class="ask-body">${askBody(rest.join('\n'))}</div>` : ''}
       ${input != null ? `<input class="ask-in" spellcheck="false" value="${esc(input)}">` : ''}
-      <footer>${alertOnly ? '' : `<button type="button" class="ask-cancel">${esc(cancel)}</button>`}<button type="submit" class="ask-ok ${danger ? 'danger' : ''}">${esc(ok)}</button></footer>
+      <footer>${alertOnly ? '' : `<button type="button" class="ask-cancel">${esc(cancel)}</button>`}${alt ? `<button type="button" class="ask-alt ${altDanger ? 'danger' : ''}">${esc(alt)}</button>` : ''}<button type="submit" class="ask-ok ${danger ? 'danger' : ''}">${esc(ok)}</button></footer>
     </form>`;
     document.body.appendChild(d);
     const no = input != null ? null : alertOnly;
     let settled = false;
     const done = (v) => { if (settled) return; settled = true; d.close(); d.remove(); resolve(v); };
     $('.ask-cancel', d)?.addEventListener('click', () => done(no));
+    $('.ask-alt', d)?.addEventListener('click', () => done('alt'));
     d.addEventListener('cancel', (e) => { e.preventDefault(); done(no); });
     d.addEventListener('mousedown', (e) => { d._down = e.target === d; });
     d.addEventListener('click', (e) => { if (e.target === d && d._down) done(no); });
@@ -2063,7 +2067,16 @@ function tipBox() {
   document.body.appendChild(el);
   return (TIP.el = el);
 }
-function tipText(t) { return t.dataset.ohTitle ?? t.getAttribute('data-tip') ?? ''; }
+// A web link in content (data-cl) opens only with Ctrl+click (Cmd+click on a Mac), in the Browser tab: its tip says so,
+// with the address under it when the link's text doesn't show it.
+const MAC = /Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent || '');
+const LINK_TIP = `${MAC ? 'Cmd' : 'Ctrl'}+click to open in the Browser tab`;
+function tipText(t) {
+  const own = t.dataset.ohTitle ?? t.getAttribute('data-tip') ?? '';
+  if (t.tagName !== 'A' || t.dataset.cl == null) return own;
+  const href = t.getAttribute('href') || '';
+  return [LINK_TIP, own, href && href !== t.textContent.trim() ? href : ''].filter(Boolean).join('\n');
+}
 function showTip(t, override) {
   const text = (override ?? tipText(t)).trim();
   if (!text || !t.isConnected) return;
@@ -2111,7 +2124,9 @@ document.addEventListener('pointerdown', () => hideTip(), true);
 setInterval(() => { const t = TIP.target; if (TIP.el?.classList.contains('on') && !TIP.el.classList.contains('flash') && (!t || !t.isConnected || !t.getClientRects().length)) hideTip(); }, 300); // a flash ("Copied") goes by itself
 document.addEventListener('pointerover', (e) => {
   if (e.pointerType === 'touch') return;
-  const t = e.target.closest?.('[data-oh-title], [data-tip], [title]');
+  // A link's tip in the terminal stays while the pointer moves along the link (the terminal's rows are many elements).
+  if (TIP.target?.classList?.contains('xt-tip-at') && e.target.closest?.('.xterm')) return;
+  const t = e.target.closest?.('a[data-cl], [data-oh-title], [data-tip], [title]');
   if (t === TIP.target) return;
   hideTip();
   if (!t || t.closest('.oh-tip')) return;
@@ -2253,6 +2268,8 @@ function renderPanes() {
               <button type="button" class="cmp-act-btn imgBtn attachBtn" title="Attach files of any kind: documents, PDFs, spreadsheets, code, images… (or paste / drop them)" aria-label="Attach files">${CMP_ICO.attach}</button>
               <input type="file" class="imgInput" multiple hidden>
               <button type="button" class="cmp-act-btn micBtn" title="Speak your message (transcribed into the box)" aria-label="Speak your message">${CMP_ICO.mic}</button>
+              <button type="button" class="cmp-act-btn enhBtn" title="Enhance: rewrite what you wrote clearer and fuller before you send it (press again to go further). Uses the prompt enhancer's model, a fraction of a cent." aria-label="Enhance your message">✨<span class="enh-l">Enhance</span></button>
+              <button type="button" class="cmp-act-btn enhUndo" title="Undo the last ✨ Enhance: your words back" aria-label="Undo enhance" hidden>↶</button>
             </div>
             <div class="cmp-actions-right">
               <button type="button" class="cmp-stop-btn stopBtn" title="Stop the agent" aria-label="Stop" hidden>${CMP_ICO.stop}</button>
@@ -2303,12 +2320,19 @@ function wirePane(c, root, i) {
   ta.oninput = () => { updateSuggest(c); fitInput(ta); };
   ta.onblur = () => setTimeout(() => hideSuggest(c), 150);
   ta.onpaste = (e) => { const files = [...(e.clipboardData?.files || [])]; if (files.length) { e.preventDefault(); addFiles(c, files); } };
-  root.ondragover = (e) => { const ty = [...e.dataTransfer.types]; if (ty.includes('Files') || ty.includes('application/x-quorx-file')) { e.preventDefault(); root.classList.add('drop'); } };
+  root.ondragover = (e) => { const ty = [...e.dataTransfer.types]; if (['Files', 'application/x-quorx-file', 'application/x-quorx-tab'].some((k) => ty.includes(k))) { e.preventDefault(); root.classList.add('drop'); } };
   root.ondragleave = () => root.classList.remove('drop');
-  root.ondrop = (e) => { root.classList.remove('drop'); const pf = e.dataTransfer.getData('application/x-quorx-file'); if (pf) { e.preventDefault(); try { const f = JSON.parse(pf); addFileToChat(f.projectId, f.path, root); } catch { /* not ours */ } return; } if (e.dataTransfer.files.length) { e.preventDefault(); addFiles(c, e.dataTransfer.files); } };
+  root.ondrop = (e) => {
+    root.classList.remove('drop');
+    const pf = e.dataTransfer.getData('application/x-quorx-file'); if (pf) { e.preventDefault(); try { const f = JSON.parse(pf); addFileToChat(f.projectId, f.path, root); } catch { /* not ours */ } return; }
+    const sid = e.dataTransfer.getData('application/x-quorx-tab'); if (sid) { e.preventDefault(); lendTab(c, sid); return; }
+    if (e.dataTransfer.files.length) { e.preventDefault(); addFiles(c, e.dataTransfer.files); }
+  };
   $('.imgBtn', root).onclick = () => $('.imgInput', root).click();
   $('.imgInput', root).onchange = (e) => { addFiles(c, e.target.files); e.target.value = ''; };
   $('.micBtn', root).onclick = () => toggleMic(c);
+  $('.enhBtn', root).onclick = () => enhanceDraft(c);
+  $('.enhUndo', root).onclick = () => undoEnhance(c);
   $('.stopBtn', root).onclick = () => c.running?.abort();
 }
 function chatTotals(c) {
@@ -2354,7 +2378,8 @@ function renderComposerBar(c) {
   const cap = (k, label, v, step, tip) => `<label class="cs-num" title="${esc(tip)}"><span>${label}</span><span class="cs-inp"><i>$</i><input type="number" min="0" step="${step}" data-k="${k}" value="${esc(String(v))}" aria-label="${label} in dollars"></span></label>`;
   glob.innerHTML = `<div class="cs-sec"><h5>Budget <small>· all chats</small></h5><div class="cs-row cs-caps">${cap('replyBudget', 'Cap per reply', G.settings.replyBudget ?? G.cfg.defaults.replyBudget ?? 1, 0.25, 'Everything one reply calls: the agent, deciders, helpers, checks and media. At 85% the agent is told to wrap up; at the cap Strict asks you, YOLO stops. 0 = no cap.')}${cap('budget', 'Paid media per reply', G.settings.budget, 0.05, 'A paid picture, voice, music or video call that would go over this is stopped, in Strict and in YOLO.')}</div></div>`;
   followSlot.innerHTML = `
-    <label class="sq-check cmp-follow" title="Follow the agent: when it opens or checks a page in its browser, or starts a site or app, the Browser tab switches to it so you can watch. Off: the pane stays where you put it (all chats)."><input type="checkbox" class="follow-agent" ${G.followAgent !== false ? 'checked' : ''}><svg class="fl-eye" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg><span>Follow</span></label>
+    <label class="sq-check cmp-follow" title="Follow the agent: when it opens or checks a page in its browser, or starts a site or app, the Browser tab switches to it; when it runs a command, the Terminal tab shows its output. So you can watch. Off: the pane stays where you put it (all chats)."><input type="checkbox" class="follow-agent" ${G.followAgent !== false ? 'checked' : ''}><svg class="fl-eye" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg><span>Follow</span></label>
+    <label class="sq-check cmp-chrome ${G.ext?.connected && !G.ext.outdated ? '' : 'off'}" title="${G.ext?.outdated ? 'Chrome: the QuorX extension is an older version. Reload it once in chrome://extensions (↻ on the QuorX card).' : G.ext?.connected ? 'Chrome: let the agent in this chat open tabs in your own Chrome (a QuorX window), signed in as you. Sending, deleting, buying and account changes ask you first. It never touches your other tabs.' : 'Chrome: the QuorX extension is not connected (⚙ Settings → Code & servers → Chrome extension). Ticked, the agent can use your Chrome once it is.'}"><input type="checkbox" class="chrome-access" ${c.tools?.chrome ? 'checked' : ''}><span>🧩 Chrome</span></label>
 `;
   for (const inp of glob.querySelectorAll('.cs-num input')) inp.onchange = () => { const v = Math.max(0, Number(inp.value) || 0); inp.value = String(v); G.settings[inp.dataset.k] = v; savePrefs(); };
   // The button says what matters at a glance (YOLO in red, reasoning on) and opens the panel.
@@ -2413,6 +2438,7 @@ function renderComposerBar(c) {
   };
   const gear = $('.cs-gear', rack); if (gear && !gear.dataset.wired) { gear.dataset.wired = '1'; gear.onclick = () => openSettings(); }
   $('.follow-agent', followSlot).onchange = (e) => { G.followAgent = e.target.checked; savePrefs(); for (const ch of G.open.values()) if (ch !== c) renderComposerBar(ch); };
+  $('.chrome-access', followSlot).onchange = (e) => { c.tools.chrome = e.target.checked; saveChat(c); };
   for (const b of bar.querySelectorAll('.perm button')) b.onclick = () => { c.approval = b.dataset.approval; saveChat(c); renderComposerBar(c); if (c.running?.runId) postJ(`/api/runs/${c.running.runId}/mode`, { approval: c.approval }).catch(() => {}); };
   renderAllowed(c);
 }
@@ -2803,20 +2829,22 @@ function planCardHTML(m) {
 }
 // #4 What the separate reviewer found: scores out of 5, the bar, its bugs. One card per review round.
 const REVIEW_LABEL = { function: 'Function', craft: 'Craft', design: 'Design', originality: 'Originality', accessibility: 'Accessibility', brand: 'Brand fit' };
-function reviewCardsHTML(m) {
-  const tr = m.trace || [];
-  const reviews = tr.filter((e) => e.t === 'review');
-  const running = m.live && tr.findLast((e) => e.t === 'review_start' || e.t === 'review')?.t === 'review_start' ? tr.findLast((e) => e.t === 'review_start') : null;
-  return reviews.map((r, i) => {
-    const sentBack = !r.pass && (i < reviews.length - 1 || tr.some((e) => e.t === 'sent_back' && e.by === 'reviewer' && e.at >= r.at));
-    const verdict = r.pass ? 'Passed' : sentBack ? 'Sent back to fix' : 'Not passed';
-    return `<div class="review-card ${r.pass ? 'pass' : 'fail'}">
+function reviewCardHTML(m, r) {
+  const tr = m.trace || [], reviews = tr.filter((e) => e.t === 'review'), i = reviews.indexOf(r);
+  const sentBack = !r.pass && (i < reviews.length - 1 || tr.some((e) => e.t === 'sent_back' && e.by === 'reviewer' && e.at >= r.at));
+  const verdict = r.pass ? 'Passed' : sentBack ? 'Sent back to fix' : 'Not passed';
+  return `<div class="review-card ${r.pass ? 'pass' : 'fail'}">
       <div class="rv-head"><b>🧪 Reviewer</b><span class="rv-model" title="A separate model with a fresh context tested this">${esc(short(r.model))}</span><span class="rv-round">round ${r.round}</span><span class="rv-verdict">${verdict}</span><span class="rv-cost" title="What this review cost">${money(r.cost, 4)}</span></div>
       <div class="rv-scores">${Object.keys(r.scores).map((k) => `<div class="rv-score ${r.scores[k] < r.bar ? 'low' : ''}"><span>${esc(REVIEW_LABEL[k] || k)}</span><span class="rv-pips" aria-label="${r.scores[k]} of 5">${[1, 2, 3, 4, 5].map((n) => `<i class="${n <= r.scores[k] ? 'on' : ''}${n === r.bar ? ' bar' : ''}"></i>`).join('')}</span><b>${r.scores[k]}/5</b></div>`).join('')}</div>
       ${r.bugs.length ? `<ul class="rv-bugs">${r.bugs.map((b) => `<li>${esc(b)}</li>`).join('')}</ul>` : ''}
       ${r.summary ? `<p class="rv-sum">${esc(r.summary)}</p>` : ''}
     </div>`;
-  }).join('') + (running ? `<div class="review-card running"><div class="rv-head"><b>🧪 Reviewer</b><span class="rv-model">${esc(short(running.model))}</span><span class="rv-verdict">testing ${esc(running.targets.join(', '))}…</span></div></div>` : '');
+}
+// A review that is still testing: shown where it started, until its result replaces it.
+function reviewRunningHTML(m, start) {
+  const tr = m.trace || [];
+  if (!m.live || tr.findLast((e) => e.t === 'review_start' || e.t === 'review') !== start) return '';
+  return `<div class="review-card running"><div class="rv-head"><b>🧪 Reviewer</b><span class="rv-model">${esc(short(start.model))}</span><span class="rv-verdict">testing ${esc(start.targets.join(', '))}…</span></div></div>`;
 }
 // ---------- the reply timeline ----------
 // One-line descriptions of tool calls, in the user's terms: one call names its target, several are counted.
@@ -2868,7 +2896,10 @@ function timelineItems(m) {
       const x = pool && [...pool].reverse().find((y) => y.e.name === e.name && y.res == null);
       if (x) x.res = String(e.result ?? ''); continue;
     }
-    if (e.t === 'review_start') { rv = null; continue; }
+    if (e.t === 'review_start') { rv = null; items.push({ kind: 'card', pin: true, html: () => reviewRunningHTML(m, e) }); continue; }
+    if (e.t === 'review') { items.push({ kind: 'card', pin: true, html: () => reviewCardHTML(m, e) }); continue; }
+    // The plan shows where it was first made (just before its Go ahead question), with its latest ticks.
+    if (e.t === 'plan') { if (!seenCards.has('plan')) { seenCards.add('plan'); items.push({ kind: 'card', pin: true, html: () => planCardHTML(m) }); } continue; }
     if (e.t === 'fresh_eyes') { items.push({ kind: 'note', text: `👀 Fresh eyes (${short(e.model)}) ${e.ok ? `on a problem that came back: ${clip((e.report || '').split('\n')[0].replace(/^Cause:\s*/i, ''), 220)}` : 'looked but found nothing'}` }); continue; }
     if (e.t === 'helper_done') { const h = helpers.get(e.id); if (h) { h.label = `Helper ${e.id} ${e.ok ? 'reported back' : 'gave no report'} · ${e.steps} step${e.steps === 1 ? '' : 's'} · ${money(e.cost, 4)}`; h.done = true; } continue; }
     if (e.t === 'approval') {
@@ -2882,7 +2913,8 @@ function timelineItems(m) {
       if (call) { call.approval = e.id; continue; }
       items.push({ kind: 'card', html: () => (m.approvals?.[e.id] ? approvalHTML(m.approvals[e.id], !!m.live) : '') }); continue;
     }
-    if (e.t === 'question') { items.push({ kind: 'card', html: () => (m.questions?.[e.id] ? questionHTML(m.questions[e.id], !!m.live) : '') }); continue; }
+    // Questions stay in view where they were asked (answered ones are one line).
+    if (e.t === 'question') { items.push({ kind: 'card', pin: true, html: () => (m.questions?.[e.id] ? questionHTML(m.questions[e.id], !!m.live) : '') }); continue; }
     if (e.t === 'budget_ask') { items.push({ kind: 'card', html: () => (m.budgetAsk ? budgetHTML(m.budgetAsk, !!m.live) : '') }); continue; }
     if (e.t === 'steer') { items.push({ kind: 'steer', e, read: tr.slice(i + 1).some((x) => x.t === 'steer_delivered') }); continue; }
     if (e.t === 'mode') { items.push({ kind: 'note', text: e.approval === 'yolo' ? '⚡ Switched to YOLO' : '🔒 Switched to Strict' }); continue; }
@@ -2918,7 +2950,7 @@ function timelineHTML(m) {
       continue;
     }
     if (it.kind === 'group') { const busy = m.live && !it.done && it.calls.some((x) => x.res == null); row(groupRow(it.key, it.icon, it.label, it.calls, busy), it.key, it.calls, 0, busy); continue; }
-    if (it.kind === 'card') { const h = it.html(); if (h) pieces.push({ html: h, row: false, card: true }); continue; }
+    if (it.kind === 'card') { const h = it.html(); if (h) pieces.push({ html: h, row: false, card: true, pin: !!it.pin }); continue; }
     if (it.kind === 'steer') {
       const att = (m.steerAtt || []).find((x) => x.text === it.e.text && !usedAtt.has(x)) || null;
       if (att) usedAtt.add(att);
@@ -2945,19 +2977,23 @@ function timelineHTML(m) {
     }
     return out.join('');
   };
-  // The reply's work folds into one line you can open (the Steps pane has all of it too). While it works, what it is
-  // doing right now, and anything waiting for you, stay below that line.
+  // The reply's work folds into lines you can open (the Steps pane has all of it too). The plan and each review stay
+  // out, where they happened, so the work before and after them folds on its own and it all reads in order. While it
+  // works, anything waiting for you and what it is doing right now stay out too.
   const live = !!m.live, last = pieces.length - 1;
-  const stays = (x, i) => live && (x.card || i === last);
-  const fold = pieces.filter((x, i) => !stays(x, i)), keep = pieces.filter((x, i) => stays(x, i));
-  if (fold.length < 3) return bundle(pieces);
-  const done = fold.flatMap((x) => x.calls || []), thinks = fold.reduce((n, x) => n + (x.think || 0), 0), steps = fold.filter((x) => x.row).length;
-  const errs = done.filter((x) => x.res != null && /^Error/.test(x.res)).length;
-  // Says how much work it was; what kind of work shows on hover (and inside).
-  const what = [done.length ? callsLabel(done) : '', thinks ? `${done.length ? 'thought' : 'Thought'} ${thinks} time${thinks === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
-  const counts = [done.length ? `${done.length} tool call${done.length === 1 ? '' : 's'}` : '', thinks ? `${thinks} thought${thinks === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
-  return det('all', 'tl-row tl-bundle tl-fold', `<span class="tl-ic">🗂</span><span class="tl-label" title="${esc(what)}">${live ? 'Working' : 'Worked'} through ${steps} step${steps === 1 ? '' : 's'}</span><small class="tl-words">${esc(counts)}</small>${errs ? `<span class="tl-err">${errs} error${errs > 1 ? 's' : ''}</span>` : ''}`, `<div class="tl-bundle-body">${bundle(fold)}</div>`)
-    + keep.map((x) => x.html).join('');
+  const stays = (x, i) => x.pin || (live && (x.card || i === last));
+  const foldLine = (seg, n, end) => {
+    if (seg.length < 3) return bundle(seg);
+    const done = seg.flatMap((x) => x.calls || []), thinks = seg.reduce((k, x) => k + (x.think || 0), 0), steps = seg.filter((x) => x.row).length;
+    const errs = done.filter((x) => x.res != null && /^Error/.test(x.res)).length;
+    // Says how much work it was; what kind of work shows on hover (and inside).
+    const what = [done.length ? callsLabel(done) : '', thinks ? `${done.length ? 'thought' : 'Thought'} ${thinks} time${thinks === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
+    const counts = [done.length ? `${done.length} tool call${done.length === 1 ? '' : 's'}` : '', thinks ? `${thinks} thought${thinks === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
+    return det(n ? `all${n}` : 'all', 'tl-row tl-bundle tl-fold', `<span class="tl-ic">🗂</span><span class="tl-label" title="${esc(what)}">${live && end ? 'Working' : 'Worked'} through ${steps} step${steps === 1 ? '' : 's'}</span><small class="tl-words">${esc(counts)}</small>${errs ? `<span class="tl-err">${errs} error${errs > 1 ? 's' : ''}</span>` : ''}`, bundle(seg));
+  };
+  let out = '', seg = [], n = 0;
+  pieces.forEach((x, i) => { if (stays(x, i)) { out += foldLine(seg, n++, false); seg = []; out += x.html; } else seg.push(x); });
+  return out + foldLine(seg, n, true);
 }
 // Open lines stay open across redraws; a thinking line draws its text only when opened.
 function wireTimeline(m, el) {
@@ -3008,14 +3044,11 @@ function updateMsg(c, m, { bodyOnly = false } = {}) {
   const rh = $('.reply-head', el);
   if (rh) { const h = replyHeadHTML(m, model); if (rh._h !== h) { rh.innerHTML = h; rh._h = h; } }
   if (bodyOnly) return;
-  // The plan leads the reply; whatever is asking you (approvals, questions, budget) and the reviews come last,
-  // below the thinking and the text, where the newest output is.
-  $('.plan-slot', el).innerHTML = planCardHTML(m);
   // Everything the agent did reads in order: its thinking (folded), what it said, one line per step's tool calls
   // (click for each call and its result), and any card that asks you something, right where it happened.
   $('.timeline', el).innerHTML = timelineHTML(m);
   wireTimeline(m, el);
-  $('.approvals', el).innerHTML = reviewCardsHTML(m) + outOfStepsHTML(m);
+  $('.approvals', el).innerHTML = outOfStepsHTML(m);
   const oos = $('.oos-card[data-run]', el); if (oos) wireOutOfSteps(oos, c, m);
   for (const card of el.querySelectorAll('.approval[data-id]:not(.question):not(.budget-card)')) wireApproval(card, m);
   for (const card of el.querySelectorAll('.question[data-id]')) wireQuestion(card, m);
@@ -3455,6 +3488,8 @@ function traceSummary(m) {
   const tools = (m.trace || []).filter((e) => e.t === 'tool').length;
   return `Steps · ${tools} tool call${tools === 1 ? '' : 's'}${decs.length ? ` · ${decs.length} decision round${decs.length === 1 ? '' : 's'}, ${flips} answer${flips === 1 ? '' : 's'} changed` : ''}${s ? ` · ${secs(s.ms)}` : m.live ? ' · running…' : ''}`;
 }
+// Web addresses in escaped text (tool results, notes, screens) as Ctrl+click links to the Browser tab.
+const linkUrls = (html) => String(html).replace(/(^|[\s(>]|&quot;|&#39;|&lt;)(https?:\/\/(?:(?!&quot;|&#39;|&lt;|&gt;)[^\s<)"])+?)(?=[.,;:!?]?(?:[\s<)"]|&quot;|&#39;|&lt;|&gt;|$))/g, (_, pre, url) => `${pre}<a href="${url}" rel="noopener noreferrer" data-cl="1">${url}</a>`);
 function traceHTML(m) {
   const out = [], rounds = {};
   let mediaStatus = null;
@@ -3466,10 +3501,10 @@ function traceHTML(m) {
       const i = out.findLastIndex((h) => h.includes(`data-llm="${e.step}"`));
       if (i >= 0) out[i] = out[i].replace(`<span class="sub" data-llm="${e.step}"></span>`, `<div class="sub">${secs(e.ms)} · <span class="tok-out">${e.tokensOut} tokens out</span> · ${money(e.cost, 5)}${e.provider ? ` · via <span class="tr-prov" title="The provider OpenRouter routed this call to">${esc(e.provider)}</span>` : ''}${e.model && e.model !== m.trace.find((x) => x.t === 'llm_start' && x.step === e.step)?.model ? ` · <b class="tr-fallback" title="The chat's model was unavailable, so OpenRouter used the fallback model">fallback ${esc(short(e.model))}</b>` : ''}${e.toolCalls.length ? ` · then ${e.toolCalls.join(', ')}` : ''}</div>${e.aside ? `<div class="aside">💬 ${esc(e.aside)}</div>` : ''}`);
     } else if (e.t === 'tool' && e.name !== 'decide') row(e.at, `${e.by === 'reviewer' ? '🧪 <span class="tr-rv">reviewer</span> ' : e.by === 'helper' ? `🤝 <span class="tr-hp">helper ${e.helper || ''}</span> ` : ''}${TOOL_NAME[e.name]?.split(' ')[0] || '🔧'} <b>${esc(e.name)}</b><div class="sub">${esc(argSummary(e))}</div>`, e.by === 'reviewer' ? 'browser' : 'tool');
-    else if (e.t === 'reading') row(e.at, `📝 <b>Prompt enhancer</b> ${esc(short(e.model))} read the request${e.late ? ' (too late for the first step; the deciders still use it)' : ''} · ${secs(e.ms)} · ${money(e.cost, 5)}<div class="sub" style="white-space:pre-wrap">${esc(e.text)}</div>`, 'note');
+    else if (e.t === 'reading') row(e.at, `📝 <b>Prompt enhancer</b> ${esc(short(e.model))} read the request${e.late ? ' (too late for the first step; the deciders still use it)' : ''} · ${secs(e.ms)} · ${money(e.cost, 5)}<div class="sub" style="white-space:pre-wrap">${linkUrls(esc(e.text))}</div>`, 'note');
     else if (e.t === 'reading_edit') row(e.at, e.text ? `📝 You corrected the reading<div class="sub" style="white-space:pre-wrap">${esc(e.text)}</div>` : '📝 You dropped the reading', 'note');
     else if (e.t === 'fresh_eyes_start') row(e.at, `👀 <b>Fresh eyes</b> ${esc(short(e.model))}: a problem came back, so a clean-context model takes a look<div class="sub">${(e.problems || []).map(esc).join('<br>')}</div>`, 'note');
-    else if (e.t === 'fresh_eyes') row(e.at, `👀 Fresh eyes ${e.ok ? 'diagnosed it' : 'found nothing'}${e.report ? `<div class="sub" style="white-space:pre-wrap">${esc(e.report)}</div>` : ''}`, e.ok ? 'ok' : 'warn');
+    else if (e.t === 'fresh_eyes') row(e.at, `👀 Fresh eyes ${e.ok ? 'diagnosed it' : 'found nothing'}${e.report ? `<div class="sub" style="white-space:pre-wrap">${linkUrls(esc(e.report))}</div>` : ''}`, e.ok ? 'ok' : 'warn');
     else if (e.t === 'helper_start' && e.fresh) continue;
     else if (e.t === 'helper_start') row(e.at, `🤝 <b>Helper ${e.id}</b> ${esc(short(e.model))} starts, with a clean context<div class="sub">${esc(e.task)}</div>`, 'note');
     else if (e.t === 'helper_done') row(e.at, `🤝 Helper ${e.id} ${e.ok ? 'reported back' : 'gave no report'} · ${e.steps} step${e.steps === 1 ? '' : 's'} · ${secs(e.ms)} · ${money(e.cost, 4)}${e.chars ? ` · ${e.chars} characters returned` : ''}`, e.ok ? 'ok' : 'warn');
@@ -3479,7 +3514,7 @@ function traceHTML(m) {
     else if (e.t === 'plan') row(e.at, `🗺 <b>Plan</b> · ${e.items.filter((x) => x.status === 'done').length} of ${e.items.length} done<div class="sub">${esc(e.items.map((x) => `${x.status === 'done' ? '✓' : x.status === 'doing' ? '◐' : '○'} ${x.text}`).join('  '))}</div>`, 'note');
     else if (e.t === 'review_start') row(e.at, `🧪 <b>Reviewer</b> ${esc(short(e.model))} starts testing ${esc(e.targets.join(', '))} <span class="sub">(round ${e.round}, fresh context)</span>`, 'browser');
     else if (e.t === 'review') row(e.at, `🧪 Reviewer: <b>${e.pass ? 'passed' : 'not passed'}</b> · ${Object.entries(e.scores).map(([k, v]) => `${k} ${v}/5`).join(', ')} (bar ${e.bar}) · ${money(e.cost, 4)}${e.bugs.length ? `<div class="sub">${esc(e.bugs.join(' · '))}</div>` : ''}`, e.pass ? 'ok' : 'warn');
-    else if (e.t === 'tool_result' && e.name !== 'decide') row(e.at, `<div class="sub">↳ ${esc(e.result.slice(0, 220))}</div>`, /^Error/.test(e.result) ? 'err' : 'res');
+    else if (e.t === 'tool_result' && e.name !== 'decide') row(e.at, `<div class="sub">↳ ${linkUrls(esc(e.result.slice(0, 220)))}</div>`, /^Error/.test(e.result) ? 'err' : 'res');
     else if (e.t === 'decide_start') { rounds[e.round] = { start: e, votes: [], done: null }; row(e.at, `<span data-round="${e.round}"></span>`, 'decide'); }
     else if (e.t === 'decide_vote') rounds[e.round]?.votes.push(e);
     else if (e.t === 'decide_done') { if (rounds[e.round]) rounds[e.round].done = e; }
@@ -3487,9 +3522,9 @@ function traceHTML(m) {
     else if (e.t === 'card_held') row(e.at, '⏸ You stopped the clock: the card waits for you', 'note');
     else if (e.t === 'approval_done') row(e.at, `${e.approve ? '✅ approved' : '⛔ declined'} by ${byName(e.by)}${e.reason ? `<div class="sub">${esc(e.reason)}</div>` : ''}`, e.approve ? 'ok' : 'err');
     else if (e.t === 'media_status') mediaStatus = e;
-    else if (e.t === 'screenshot') row(e.at, `📸 browser ${esc(e.action)}${e.target ? ` ${esc(e.target)}` : ''}<div class="sub">${esc(e.url || '')}</div><img class="shot" src="${e.image}" alt="screenshot" loading="lazy">`, 'browser');
+    else if (e.t === 'screenshot') row(e.at, `📸 browser ${esc(e.action)}${e.target ? ` ${esc(e.target)}` : ''}<div class="sub">${linkUrls(esc(e.url || ''))}</div><img class="shot" src="${e.image}" alt="screenshot" loading="lazy">`, 'browser');
     else if (e.t === 'command' && e.background) row(e.at, `⏳ <code>${esc(e.command)}</code> → background job <b>${esc(e.background)}</b> · ${esc(e.why || '')}<div class="sub">It keeps running; its output goes to ${esc(e.log || 'its log')}. Stop it from the terminal, or the agent stops it with job_stop.</div>`, 'cmd');
-    else if (e.t === 'terminal') row(e.at, `🖥 terminal ${esc(e.id)} · ${esc(e.action)}${e.command ? ` <code>${esc(clip(e.command, 120))}</code>` : ''}${e.running === false ? ' · ended' : ''}${e.screen ? `<details class="out"><summary>screen</summary><pre>${esc(e.screen)}</pre></details>` : ''}`, 'cmd');
+    else if (e.t === 'terminal') row(e.at, `🖥 terminal ${esc(e.id)} · ${esc(e.action)}${e.command ? ` <code>${esc(clip(e.command, 120))}</code>` : ''}${e.running === false ? ' · ended' : ''}${e.screen ? `<details class="out"><summary>screen</summary><pre>${linkUrls(esc(e.screen))}</pre></details>` : ''}`, 'cmd');
     else if (e.t === 'debug') row(e.at, `🐞 debugger ${esc(e.id || '')} · ${esc(e.action)}${e.file ? ` <code>${esc(e.file)}</code>` : ''}${e.text ? `<details class="out"><summary>where it is</summary><pre>${esc(e.text)}</pre></details>` : ''}`, 'cmd');
     else if (e.t === 'android') row(e.at, `📱 android ${esc(e.device)} · ${esc(e.action)}`, 'browser');
     else if (e.t === 'packages') row(e.at, `📦 checked ${e.packages.length} package${e.packages.length === 1 ? '' : 's'} for <code>${esc(clip(e.command, 80))}</code><div class="sub">${e.packages.map((p) => `${esc(p.name)} (${esc(p.eco)}): ${p.verdict === 'ok' ? `exists${p.ageDays != null ? `, ${Math.round(p.ageDays / 36.5) / 10} years old` : ''}${p.weekly != null ? `, ${p.weekly.toLocaleString()}/week` : ''}` : esc(p.note)}`).join('<br>')}</div>`, e.packages.some((p) => p.verdict === 'missing') ? 'err' : 'cmd');
@@ -3847,7 +3882,19 @@ function wireBudget(card, c, m) {
 }
 
 // ---------- questions the agent asks (ask_user) ----------
+// An answered question folds to one line (what was asked, what you chose); open it for the whole card.
 function questionHTML(q, live = true) {
+  const c = q.card, a = q.answer || (live ? null : { label: '(not answered: the reply ended)' });
+  const full = questionCardHTML(q, live);
+  if (!a || c.secret) return full;
+  const n = c.questions?.length || 1, key = `q-${c.id}`;
+  const label = n > 1 ? `Asked you ${n} questions` : c.gate === 'plan' ? 'Plan first' : c.auto ? 'The deciders answered' : 'Asked you';
+  const said = clip(String(a.label || a.text || '').replace(/^Your answer: /, ''), 160);
+  return `<details class="q-fold" data-qkey="${esc(key)}" ${G.qOpen?.has(key) ? 'open' : ''}><summary><span class="q-fold-ic" aria-hidden="true">✓</span><span class="q-fold-l">${esc(label)}${n === 1 && c.question ? `: <span class="q-fold-q">${esc(clip(c.question, 90))}</span>` : ''}</span><span class="q-fold-a">${esc(said)}</span><span class="tl-chev" aria-hidden="true">›</span></summary>${full}</details>`;
+}
+// Folded answers stay open or closed across redraws.
+document.addEventListener('toggle', (e) => { const d = e.target; if (d.matches?.('details.q-fold')) (G.qOpen ||= new Set())[d.open ? 'add' : 'delete'](d.dataset.qkey); }, true);
+function questionCardHTML(q, live = true) {
   const c = q.card, a = q.answer || (live ? null : { label: '(not answered: the reply ended)' });
   const picked = a && a.choice != null ? Number(a.choice) : null, missed = a && /^\(not answered/.test(a.label || '');
   // The question reads first, on the left; each answer is its own full-width row, numbered (press 1–9 to pick).
@@ -3979,10 +4026,34 @@ async function steer(c, text) {
 }
 // Anything waiting in the box besides text: pictures, files, @ context, or elements picked on the page.
 const hasAttachments = (c) => !!(c.images.length || (c.docs || []).length || c.ctx.length || (c.comments || []).length);
+// ✨ Enhance: the draft in the box, rewritten clearer and fuller by the prompt enhancer's model, before you send it.
+// Press it again to go further, ↶ for your words back. Any chat, any time; nothing is sent until you send it.
+async function enhanceDraft(c) {
+  const ta = $('.input', c.el.root), btn = $('.enhBtn', c.el.root);
+  const draft = ta.value.trim();
+  if (!draft) return flashTip(btn, 'Write your message first, then ✨ makes it clearer');
+  btn.disabled = true; btn.classList.add('busy');
+  const earlier = c.agent.messages.filter((m) => m.role === 'user').slice(-3).map((m) => String(m.content || '').slice(0, 400));
+  const r = await postJ('/api/enhance-prompt', { text: draft, earlier, model: enhancerModel() }).catch((e) => ({ error: e.message }));
+  btn.disabled = false; btn.classList.remove('busy');
+  if (r.error || !r.text) return flashTip(btn, `Could not enhance it: ${r.error || 'no answer'}`);
+  (c.enhUndo ||= []).push(ta.value);
+  ta.value = r.text; ta.dispatchEvent(new Event('input', { bubbles: true })); ta.focus();
+  if (r.cost) { (c.agent.extraUsage ||= []).push({ kind: 'enhancer', model: r.model, cost: r.cost, at: Date.now() }); saveChat(c); }
+  renderEnhUndo(c);
+}
+function undoEnhance(c) {
+  const ta = $('.input', c.el.root), prev = c.enhUndo?.pop();
+  if (prev == null) return;
+  ta.value = prev; ta.dispatchEvent(new Event('input', { bubbles: true })); ta.focus();
+  renderEnhUndo(c);
+}
+function renderEnhUndo(c) { const u = c.el && $('.enhUndo', c.el.root); if (u) u.hidden = !c.enhUndo?.length; }
 async function send(c, text) {
   text = text.trim();
   // A picture, a file or context on its own is a message too.
   if (c.running || (!text && !c.images.length && !(c.docs || []).some((d) => d.id && !d.busy) && !c.ctx.length && !c.comments?.length)) return;
+  c.enhUndo = []; renderEnhUndo(c);
   askNotifyPermission();
   const ctx =c.ctx.length ? { titles: c.ctx.map((x) => x.title), text: await contextText(c.ctx) } : null;
   const comments = (c.comments || []).splice(0);
@@ -4013,7 +4084,7 @@ async function runChat(c, text, ctx, imgs, { resumeOf, docs = [], more = 0, mode
   if (box && cut) { updateMsg(c, m); c.follow = true; c.toEnd?.(); }
   else if (box) { if (box.querySelector('.hint')) box.innerHTML = ''; if (user) box.appendChild(renderMsg(c, user)); box.appendChild(renderMsg(c, m)); c.follow = true; c.toEnd?.(); }
   const artifacts = Object.fromEntries(Object.entries(a.artifacts).map(([id, x]) => [id, x.kind === 'html' ? { kind: 'html', title: x.title, html: x.html, v: 1 } : x.kind === 'md' ? { kind: 'md', title: x.title, md: x.md || '', v: 1 } : { kind: x.kind, title: x.title, url: x.url?.startsWith('data:') ? undefined : x.url, v: 1 }]));
-  const settings = { ...G.settings, approval: c.approval, tools: chatTools(c), ...qualitySettings(c) };
+  const settings = { ...G.settings, approval: c.approval, tools: chatTools(c), ...qualitySettings(c), chromeAccess: !!c.tools?.chrome };
   const body = resumeOf ? { runId: m.runId, chatId: c.id, resume: resumeOf, settings, allowed: a.allowed, cmdRules: a.cmdRules || [], reading: a.reading?.text || '', ...(more ? { continue: more, ...(model ? { model } : {}) } : {}) }
     : { runId: m.runId, chatId: c.id, projectId: c.projectId, chatTitle: c.title, setup: a.setup, settings, allowed: a.allowed, cmdRules: a.cmdRules || [], history, summary: a.summary || '', reading: a.reading?.text || '', text, artifacts, context: ctx?.text || '', images: imgs.map((x) => x.full), docs: docs.map((d) => d.id), ...(cmts.length ? { comments: cmts } : {}) };
   // Saved straight away, so a reload finds the running reply and reattaches to it.
@@ -4152,6 +4223,7 @@ async function followRun(c, m, open) {
         }
         if (e.t !== 'start') m.trace.push(e);
         if (isShot(e)) onAgentBrowse(c, m);
+        if (e.t === 'tool' && !e.by && (e.name === 'shell' || e.name === 'run_command')) onAgentCommand(c);
         redraw(false);
       }
     }
@@ -4264,7 +4336,6 @@ function renderPane() {
   if (!c) return;
   if (G.view.term) { setUrlBar(null); return renderTerm(c); }
   closeTermStream();
-  if (G.view.run) { setUrlBar(null); return renderRunningPane(c); }
   if (G.view.files) { setUrlBar(null); return renderFiles(c); }
   if (G.view.browser) return renderBrowser(c);
   if (G.view.trace) {
@@ -4697,7 +4768,7 @@ function wireScheduleForm(body) {
     const c = blankChat(e.projectId);
     c.approval = e.approval;
     const payload = { name: e.name, projectId: e.projectId, prompt: e.prompt, model: e.model, reasoning: c.agent.setup.reasoning, approval: e.approval, when, tools: c.tools,
-      settings: { ...G.settings, approval: e.approval, tools: chatTools(c), ...qualitySettings(c) } };
+      settings: { ...G.settings, approval: e.approval, tools: chatTools(c), ...qualitySettings(c), chromeAccess: !!c.tools?.chrome } };
     const r = await postJ(e.id ? `/api/schedules/${e.id}` : '/api/schedules', payload, e.id ? 'PUT' : 'POST');
     if (!r || r.error) { err.textContent = r?.error ? `${r.error[0].toUpperCase()}${r.error.slice(1)}.` : 'Not saved.'; return; }
     SCHED.edit = null; await loadSchedules(); drawSchedules();
@@ -5080,6 +5151,7 @@ function settingsPanels(S) {
       stCard('Servers and browser', 'Servers are saved in .quorx/launch.json per project; run and stop them from 🖥 in the chat header, and watch them in the terminal.', stRow('Dev server ports', 'Each server gets a free port here unless it has a fixed one.', '<code>5300–5999</code>')
         + stRow('Headless browser', 'Used by the agent to check its own pages.', `<code class="blurable">${esc(G.cfg.browser || 'not found')}</code>`)
         + stRow('Secrets', 'Agent processes run without your API keys, tokens or passwords in their environment, and the file tools cannot read .env or data/keys.json.', '<span class="st-key-source-badge">protected</span>')),
+      stCard('Chrome extension', 'Give a tab of your everyday Chrome to a chat, so the agent can work in it with your own sign-ins (Gmail, GitHub…). It touches only tabs you give; sending, deleting, buying and account changes ask you first.', '<div id="stExt"></div>'),
     ]],
     usage: ['Usage & costs', 'What chats and projects cost.', [
       stCard('In chats', '', stRow('Show the cost badge in chat headers', 'The amber cost next to the model; click it for the per-chat usage breakdown (also /usage).', stSwitch('ui.usageBtn', U.usageBtn))),
@@ -5185,6 +5257,7 @@ function wireSettings() {
   drawKeysPanel();
   drawMemoryPanel();
   drawSetupPanel();
+  drawExtPanel();
   drawEmbedPick();
   drawDesktopSettings();
   drawBackup({ postJ, esc, uiConfirm, store: STORE });
@@ -5284,6 +5357,51 @@ function cancelSettings() { G.theme = ST.themeAtOpen; applyTheme(); if ($('#sett
 
 // Projects panel: acts at once (like the sidebar's ⚙ and 🗑).
 // Settings → Projects: one compact row per project (colour, spend vs budget, folder) with icon actions.
+// ⚙ Settings → Code & servers → Chrome extension: set up in your default browser (Brave, Chrome, Edge…), connect with
+// one click (Allow here), and whether it is connected. The key is a fallback, under "Use a key instead".
+async function drawExtPanel() {
+  const box = $('#stExt'); if (!box) return;
+  const r = await getJ('/api/ext/status');
+  if (!box.isConnected || !r || r.error) return;
+  const b = r.browser || { name: 'Chrome', page: 'chrome://extensions' }, page = b.page || 'chrome://extensions';
+  let shown = false;
+  const paint = () => {
+    box.innerHTML = `<div class="st-ext">
+      <div class="st-ext-state ${r.connected ? (r.outdated ? 'warn' : 'on') : ''}"><i></i>${r.connected ? (r.outdated ? `Connected, but the extension is an older version: reload it once in ${esc(page)} (↻ on the QuorX card)` : `Connected to your ${esc(b.name)}`) : 'Not connected'}${r.lent?.length ? ` · ${r.lent.length} tab${r.lent.length > 1 ? 's' : ''} given to chats` : ''}</div>
+      ${r.pairing ? `<div class="st-ext-pair"><b>🧩 ${esc(r.pairing.browser)} wants to connect to QuorX.</b> Allow it only if you just pressed Connect in the extension.<span class="st-ext-acts"><button type="button" class="st-btn sm primary" data-x="allow">Allow</button><button type="button" class="st-btn sm" data-x="deny">Deny</button></span></div>` : ''}
+      ${b.page === null ? `<p class="st-ext-warn">Your default browser is ${esc(b.name)}, which can't run this extension. Use Chrome, Brave or Edge for it.</p>` : ''}
+      <ol class="st-ext-steps">
+        <li>Open <code>${esc(page)}</code> in ${esc(b.name)} <span class="st-ext-acts"><button type="button" class="st-btn sm" data-x="chrome" title="Opens the extensions page in ${esc(b.name)}">Open in ${esc(b.name)}</button><button type="button" class="st-btn sm" data-x="copyurl">Copy</button></span> and turn on <b>Developer mode</b>.</li>
+        <li><b>Load unpacked</b> and pick the folder <code class="blurable">${esc(r.folder || 'extension')}</code> <span class="st-ext-acts"><button type="button" class="st-btn sm" data-x="copyfolder">Copy path</button><button type="button" class="st-btn sm" data-x="folder">Show folder</button></span></li>
+        <li>Click the QuorX icon in the toolbar and press <b>Connect</b>, then <b>Allow</b> here.</li>
+        <li>In a chat, tick <b>🧩 Chrome</b> (next to Follow), or give a tab from the QuorX icon.</li>
+      </ol>
+      <details class="st-ext-keybox"><summary>Use a key instead</summary><div class="st-ext-key"><code class="${shown ? '' : 'masked'}">${shown ? esc(r.key) : '•'.repeat(24)}</code><button type="button" class="kx-icon" data-x="show" title="${shown ? 'Hide the key' : 'Show the key'}">${shown ? '🙈' : '👁'}</button><button type="button" class="st-btn sm" data-x="copy">Copy key</button><button type="button" class="st-btn sm danger" data-x="new" title="Make a new key: the extension disconnects until it connects again">New key</button></div></details>
+    </div>`;
+    const copy = async (btn, text) => { try { await navigator.clipboard.writeText(text); flashTip(btn, 'Copied'); } catch { uiPrompt('Copy this', text, { ok: 'Done', cancel: 'Close' }); } };
+    $('[data-x="show"]', box).onclick = () => { shown = !shown; paint(); $('.st-ext-keybox', box).open = true; };
+    $('[data-x="copy"]', box).onclick = (e) => copy(e.currentTarget, r.key);
+    $('[data-x="copyurl"]', box).onclick = (e) => copy(e.currentTarget, page);
+    $('[data-x="copyfolder"]', box).onclick = (e) => copy(e.currentTarget, r.folder || '');
+    $('[data-x="chrome"]', box).onclick = async (e) => { const btn = e.currentTarget, x = await postJ('/api/ext/open-chrome', {}); flashTip(btn, x.error ? `${x.error}: copy the address instead` : `Opened in ${x.browser || b.name}`); };
+    $('[data-x="folder"]', box).onclick = async (e) => { const btn = e.currentTarget, x = await postJ('/api/ext/show-folder', {}); if (x.error) flashTip(btn, x.error); };
+    $('[data-x="new"]', box).onclick = async () => { if (!(await uiConfirm('Make a new key?\nThe extension disconnects until it connects again (Connect in the extension, then Allow here).', { ok: 'New key', danger: true }))) return; const n = await postJ('/api/ext/key', {}); if (n.key) { r.key = n.key; r.connected = false; shown = true; paint(); } };
+    for (const [x, allow] of [['allow', true], ['deny', false]]) { const btn = $(`[data-x="${x}"]`, box); if (btn) btn.onclick = async () => { await postJ('/api/ext/pair', { allow }); setTimeout(drawExtPanel, 700); }; }
+  };
+  paint();
+}
+// An extension asking to connect: a notice anywhere in QuorX with Allow / Deny (it waits up to 2 minutes).
+function extPairNotice() {
+  let n = $('#extPairNotice');
+  const p = G.ext?.pairing;
+  if (!p) { n?.remove(); return; }
+  if (n && n.dataset.at === String(p.at)) return;
+  n?.remove();
+  n = document.createElement('div'); n.id = 'extPairNotice'; n.className = 'ext-pair-notice'; n.dataset.at = String(p.at); n.setAttribute('role', 'alertdialog');
+  n.innerHTML = `<b>🧩 ${esc(p.browser)} wants to connect to QuorX</b><p>Allow it only if you just pressed Connect in the QuorX extension.</p><div class="acts"><button type="button" class="st-btn sm" data-a="0">Deny</button><button type="button" class="st-btn sm primary" data-a="1">Allow</button></div>`;
+  document.body.append(n);
+  for (const btn of n.querySelectorAll('[data-a]')) btn.onclick = async () => { n.remove(); await postJ('/api/ext/pair', { allow: btn.dataset.a === '1' }); drawExtPanel(); };
+}
 async function drawProjectsPanel() {
   const box = $('#stProjects'); if (!box) return;
   const projects = await fetch('/api/projects').then((r) => r.json()).catch(() => G.projects);
@@ -5856,6 +5974,8 @@ async function boot() {
   $('#homeBtn').onclick = goHome; $('#railHome').onclick = goHome;
   placeChrome(); matchMedia('(max-width: 900px)').addEventListener('change', placeChrome);
   for (const [rail, real] of [['#railRestart', '#restartBtn'], ['#railTheme', '#themeBtn'], ['#railSettings', '#settingsBtn']]) { const b = $(rail); if (b) b.onclick = () => $(real)?.click(); }
+  // The GitHub mark by the name is a control, not content: a plain click opens QuorX's code in the Browser tab.
+  const bg = $('#brandGit'); if (bg) bg.onclick = (e) => { e.preventDefault(); openLink(bg.getAttribute('href'), bg); };
   $('#brandHome').onclick = goHome; $('#brandHome').onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); goHome(); } };
   $('#sbCollapseBtn').onclick = () => { if (isNarrow()) return closeDrawer(); G.sideHidden = true; savePrefs(); syncLayout(); };
   $('#newBtn').addEventListener('click', closeDrawer);
@@ -6058,21 +6178,21 @@ function toggleServers(c) {
     if (!pop.isConnected || (!pop.contains(e.target) && !btn.contains(e.target))) closeServers(c);
   };
   document.addEventListener('pointerdown', outside, true);
-  c.srvPop = { outside, timer: setInterval(() => renderServers(c), 2000), editing: null };
+  c.srvPop = { el: pop, outside, timer: setInterval(() => renderServers(c), 2000), editing: null };
   pop.innerHTML = '<div class="srv-empty">Loading…</div>';
   renderServers(c);
 }
 function closeServers(c) {
   const s = c.srvPop; if (!s) return;
   clearInterval(s.timer); document.removeEventListener('pointerdown', s.outside, true); c.srvPop = null;
-  if (!c.el) return;
+  if (!c.el || s.inline) return;
   $('#paneSrvPop').hidden = true;
   const btn = $('#paneSrvBtn'); btn.classList.remove('active'); btn.setAttribute('aria-expanded', 'false');
 }
 // The 🖥 servers list: square icon buttons (colour only where it means something: stop red, run green).
 const SRV_ICO = {
   stop: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5" fill="currentColor" stroke="none"/></svg>',
-  run: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5z" fill="currentColor" stroke="none"/></svg>',
+  run: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5.5v13l11-6.5z" fill="currentColor" stroke="none"/></svg>',
   restart: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>',
   open: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M7 6.5h.01M10 6.5h.01"/></svg>',
   logs: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M12 15h5"/></svg>',
@@ -6080,8 +6200,9 @@ const SRV_ICO = {
   trash: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg>',
 };
 async function renderServers(c) {
-  const pop = c.el && $('#paneSrvPop');
-  if (!pop || pop.hidden || !c.srvPop || c.srvPop.editing || c.srvPop.busy) return;
+  const pop = c.srvPop?.el;
+  if (!pop || !pop.isConnected) { if (c.srvPop?.inline) closeServers(c); return; }
+  if (c.srvPop.editing || c.srvPop.busy) return;
   const r = await getJ(`/api/servers/overview?project=${encodeURIComponent(c.projectId)}`);
   if (!c.srvPop || c.srvPop.editing || c.srvPop.busy) return;
   devBadges(c.projectId, r);
@@ -6143,7 +6264,7 @@ async function renderServers(c) {
 }
 // Add or edit a launch config, right in the menu.
 function editServer(c, s) {
-  const pop = $('#paneSrvPop');
+  const pop = c.srvPop.el;
   c.srvPop.editing = s;
   const allowed = G.cfg.allowed || [];
   pop.innerHTML = `<form class="srv-form">
@@ -6195,6 +6316,7 @@ function devAfter(projectId, r) {
 }
 async function pollDev() {
   if (document.hidden) return;
+  getJ('/api/ext/state').then((r) => { const k = (x) => `${!!x?.connected}${!!x?.outdated}`, was = k(G.ext); G.ext = r && !r.error ? r : null; if (was !== k(G.ext)) for (const ch of G.open.values()) renderComposerBar(ch); extPairNotice(); }).catch(() => {});
   const ids = new Set(G.panes.map((id) => G.open.get(id)?.projectId).filter(Boolean));
   for (const pid of ids) {
     if (G.projects.find((p) => p.id === pid)?.missing) continue;
@@ -6203,23 +6325,43 @@ async function pollDev() {
     if (run && !run.error) {
       (G.runCount ||= {})[pid] = { n: run.items.filter((x) => x.kind !== 'your-term').length };
       const fc = focused();
-      if (fc?.projectId === pid) { renderPaneTabs(fc); if (G.view.run) drawRunningPane(fc, run); }
+      if (fc?.projectId === pid) { renderPaneTabs(fc); if (G.view.term && G.term?.sec === 'run') drawRunningPane(fc, run); syncLent(fc); }
     }
   }
 }
 setInterval(pollDev, 3000);
 
 // ---------- ⌨ terminal: live output of every command and server in the project ----------
-function openTerminal(c, filter) {
+// One Terminal tab with three sections: your terminals (panes stacked top to bottom, each with its own tabs, added
+// above or below and resized by dragging the bar between them), what is Running (each with a Stop), and the Servers.
+function openTerminal(c, filter, sec = 'term') {
   const t = termState(c.projectId);
   if (filter) t.filter = t.terms.some((u) => u.id === filter) || filter === 'all' || filter === 'agent' ? filter : `srv:${filter}`;
+  t.sec = sec; termSave(t);
   G.view = { id: G.view.id, src: false, files: false, term: true };
   c.paneHidden = false;
   syncLayout(); renderPane(); toPreview();
 }
+const termLayoutKey = (projectId) => `oh-term-layout:${projectId}`;
 function termState(projectId) {
-  if (G.term?.projectId !== projectId) { closeTermStream(); G.term = { projectId, jobs: new Map(), order: [], seq: 0, filter: 'u1', cleared: 0, terms: [{ id: 'u1', name: 'Terminal 1', cwd: '', hist: [], hi: 0 }], nextTerm: 2 }; }
+  if (G.term?.projectId !== projectId) {
+    closeTermStream();
+    let saved = null; try { saved = JSON.parse(localStorage.getItem(termLayoutKey(projectId)) || 'null'); } catch { /* storage off */ }
+    const panes = (Array.isArray(saved?.panes) && saved.panes.length ? saved.panes : [{ filter: 'u1', grow: 1 }]).slice(0, 6)
+      .map((p, i) => ({ id: `p${i + 1}`, filter: String(p.filter || 'u1'), grow: Math.max(0.1, Number(p.grow) || 1) }));
+    // Your terminals that the saved panes show come back (their shells start again when shown).
+    const ids = [...new Set(['u1', ...panes.map((p) => p.filter).filter((f) => /^u\d+$/.test(f))])];
+    G.term = { projectId, jobs: new Map(), order: [], seq: 0, cleared: 0, terms: ids.map((id) => ({ id, name: `Terminal ${id.slice(1)}`, cwd: '', hist: [], hi: 0 })),
+      nextTerm: Math.max(...ids.map((x) => Number(x.slice(1)))) + 1, panes, act: panes[0].id, nextPane: panes.length + 1, sec: ['term', 'run', 'srv'].includes(saved?.sec) ? saved.sec : 'term' };
+    // The active pane's tab, as the rest of the page knows it (Follow, Clear, a server's Logs).
+    Object.defineProperty(G.term, 'filter', { get() { return termPane(this).filter; }, set(v) { termPane(this).filter = v; }, enumerable: true });
+  }
   return G.term;
+}
+const termPane = (t) => t.panes.find((p) => p.id === t.act) || t.panes[0];
+const tpaneEl = (p) => $(`#paneBody .tpane[data-pane="${p.id}"]`);
+function termSave(t) {
+  try { localStorage.setItem(termLayoutKey(t.projectId), JSON.stringify({ panes: t.panes.map((p) => ({ filter: p.filter, grow: Math.round(p.grow * 1000) / 1000 })), sec: t.sec })); } catch { /* storage off */ }
 }
 function closeTermStream() { if (G.term?.es) { G.term.es.close(); G.term.es = null; } }
 function termOpenStream(t) {
@@ -6230,25 +6372,25 @@ function termOpenStream(t) {
 function termApply(t, e) {
   let j = t.jobs.get(e.job);
   if (!j) {
-    j = { id: e.job, label: e.label || '(earlier output)', source: e.source, server: e.server, chatId: e.chatId, tab: e.tab, at: e.at, lines: [], status: 'running', port: e.port };
+    j = { id: e.job, label: e.label || '(earlier output)', source: e.source, server: e.server, chatId: e.chatId, tab: e.tab, at: e.at, lines: [], status: 'running', port: e.port, rev: 0, cut: 0 };
     t.jobs.set(e.job, j); t.order.push(e.job);
     if (t.order.length > 300) t.jobs.delete(t.order.shift());
   }
   if (e.kind === 'start') Object.assign(j, { label: e.label, source: e.source, server: e.server, chatId: e.chatId, tab: e.tab, at: e.at, port: e.port, status: 'running' });
-  else if (e.kind === 'out') { j.lines.push({ text: e.text, stream: e.stream }); if (j.lines.length > 3000) { j.lines.splice(0, j.lines.length - 3000); j.drawn = 0; j.redraw = true; } }
+  else if (e.kind === 'out') { j.lines.push({ text: e.text, stream: e.stream }); if (j.lines.length > 3000) { j.lines.splice(0, j.lines.length - 3000); j.cut++; } }
   else if (e.kind === 'end') {
     Object.assign(j, { status: 'done', code: e.code, ms: e.ms, error: e.error });
     const u = e.cwd && e.tab && t.terms?.find((x) => x.id === e.tab);
     if (u) { u.dir = e.cwd; renderTermInput(t); }
   }
-  j.dirty = true;
+  j.rev++;
   // A short timer, not requestAnimationFrame: frames are paused in background tabs and some embedded views.
   if (!t.raf) t.raf = setTimeout(() => { t.raf = null; termDraw(t); }, 40);
 }
 // Which output a terminal tab shows: Activity = everything, Agent = its commands, a server's own tab,
 // or one of your terminals (only what was run from it).
-const termShows = (t, j) => (t.filter === 'all' ? true : t.filter === 'agent' ? j.source === 'agent' && !j.server : t.filter.startsWith('srv:') ? j.server === t.filter.slice(4) : j.tab === t.filter)
-  && (j.status === 'running' || j.at >= (t.clearedBy?.[t.filter] || 0));
+const termShows = (t, j, f = t.filter) => (f === 'all' ? true : f === 'agent' ? j.source === 'agent' && !j.server : f.startsWith('srv:') ? j.server === f.slice(4) : j.tab === f)
+  && (j.status === 'running' || j.at >= (t.clearedBy?.[f] || 0));
 function termHead(t, j) {
   const chat = j.chatId && G.chats.find((x) => x.id === j.chatId);
   const who = j.server ? `<span class="tj-srv">🖥 ${esc(j.server)}</span>` : '';
@@ -6259,67 +6401,114 @@ function termHead(t, j) {
     : `<span class="tj-st bad">✗ exit ${j.code ?? '?'}${j.ms != null ? ` · ${secs(j.ms)}` : ''}</span>`;
   return `${src}${who}<code class="tj-cmd"><span class="tj-ps">$</span> ${esc(j.label)}</code><span class="tj-time">${esc(new Date(j.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }))}</span>${st}${j.status === 'running' ? '<button type="button" class="tj-stop" title="Stop it">■ Stop</button>' : ''}`;
 }
+// full: true redraws the active pane from scratch, 'all' every pane; otherwise only what changed is added.
 function termDraw(t, full) {
-  const out = $('#paneBody .term-out');
-  if (!out || G.term !== t) return;
-  const stick = full || out.scrollHeight - out.scrollTop - out.clientHeight < 60;
-  if (full) { out.innerHTML = ''; for (const j of t.jobs.values()) { j.el = null; j.drawn = 0; j.dirty = true; } }
-  for (const id of t.order) {
-    const j = t.jobs.get(id);
-    if (!j || !termShows(t, j)) { if (j?.el) { j.el.remove(); j.el = null; j.drawn = 0; } continue; }
-    if (!j.dirty && j.el) continue;
-    if (!j.el) {
-      j.el = document.createElement('div'); j.el.className = 'tj';
-      j.el.innerHTML = '<div class="tj-head"></div><pre class="tj-out"></pre>';
-      out.appendChild(j.el); j.drawn = 0;
-    }
-    j.el.classList.toggle('running', j.status === 'running');
-    $('.tj-head', j.el).innerHTML = termHead(t, j);
-    const stop = $('.tj-stop', j.el);
-    if (stop) stop.onclick = () => { stop.disabled = true; if (j.server) postJ('/api/servers/stop', { key: j.id.slice(4, j.id.lastIndexOf(':')) }); else postJ('/api/term/stop', { job: j.id }); };
-    const pre = $('.tj-out', j.el);
-    if (j.redraw) { pre.textContent = ''; j.drawn = 0; j.redraw = false; }
-    const frag = document.createDocumentFragment();
-    for (const l of j.lines.slice(j.drawn)) { const s = document.createElement('span'); s.className = `tl ${l.stream || 'out'}`; s.textContent = `${l.text}\n`; frag.appendChild(s); }
-    j.drawn = j.lines.length; pre.appendChild(frag);
-    while (pre.childElementCount > 1500) pre.firstChild.remove();
-    pre.hidden = !j.lines.length;
-    j.dirty = false;
-  }
-  if (!out.childElementCount) out.innerHTML = `<div class="term-empty">${t.filter === 'all' ? 'Nothing has run in this project yet. Commands and servers started by the agent or by you show here live.' : t.terms.some((u) => u.id === t.filter) ? 'A fresh terminal in the project folder. Type a command below (help for what works).' : 'Nothing here yet.'}</div>`;
-  else $('.term-empty', out)?.remove();
-  if (stick) out.scrollTop = out.scrollHeight;
+  if (G.term !== t) return;
+  for (const p of t.panes) termDrawPane(t, p, full === 'all' || (!!full && p.id === t.act));
   termFilters(t);
 }
+function termDrawPane(t, p, full) {
+  const root = tpaneEl(p), out = root && $('.term-out', root);
+  if (!out) return;
+  const f = p.filter;
+  const stick = full || out.scrollHeight - out.scrollTop - out.clientHeight < 60;
+  if (full) { out.innerHTML = ''; for (const j of t.jobs.values()) if (j.v) delete j.v[p.id]; }
+  for (const id of t.order) {
+    const j = t.jobs.get(id); if (!j) continue;
+    const v = (j.v ||= {})[p.id];
+    if (!termShows(t, j, f)) { if (v) { v.el.remove(); delete j.v[p.id]; } continue; }
+    if (v && v.rev === j.rev) continue;
+    const w = v || (j.v[p.id] = { el: document.createElement('div'), drawn: 0, cut: j.cut, rev: -1 });
+    if (!v) { w.el.className = 'tj'; w.el.innerHTML = '<div class="tj-head"></div><pre class="tj-out"></pre>'; out.appendChild(w.el); }
+    w.el.classList.toggle('running', j.status === 'running');
+    $('.tj-head', w.el).innerHTML = termHead(t, j);
+    const stop = $('.tj-stop', w.el);
+    if (stop) stop.onclick = () => { stop.disabled = true; if (j.server) postJ('/api/servers/stop', { key: j.id.slice(4, j.id.lastIndexOf(':')) }); else postJ('/api/term/stop', { job: j.id }); };
+    const pre = $('.tj-out', w.el);
+    if (w.cut !== j.cut) { pre.textContent = ''; w.drawn = 0; w.cut = j.cut; }
+    const frag = document.createDocumentFragment();
+    for (const l of j.lines.slice(w.drawn)) { const s = document.createElement('span'); s.className = `tl ${l.stream || 'out'}`; s.textContent = `${l.text}\n`; frag.appendChild(s); }
+    w.drawn = j.lines.length; pre.appendChild(frag);
+    while (pre.childElementCount > 1500) pre.firstChild.remove();
+    pre.hidden = !j.lines.length;
+    w.rev = j.rev;
+  }
+  if (!out.querySelector('.tj')) out.innerHTML = `<div class="term-empty">${f === 'all' ? 'Nothing has run in this project yet. Commands and servers started by the agent or by you show here live.' : t.terms.some((u) => u.id === f) ? 'A fresh terminal in the project folder. Type a command below (help for what works).' : 'Nothing here yet.'}</div>`;
+  else $('.term-empty', out)?.remove();
+  if (stick) out.scrollTop = out.scrollHeight;
+}
+const TP_ICO = {
+  above: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 11h16"/><path d="M12 5.5v4M10 7.5h4"/></svg>',
+  below: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 13h16"/><path d="M12 14.5v4M10 16.5h4"/></svg>',
+  close: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="m9.5 9.5 5 5M14.5 9.5l-5 5"/></svg>',
+};
 function termFilters(t) {
-  const box = $('#paneBody .ttabs'); if (!box) return;
   const servers = [...new Set([...t.jobs.values()].filter((j) => j.server).map((j) => j.server))];
   const agentRan = [...t.jobs.values()].some((j) => j.source === 'agent' && !j.server);
-  const busy = (f) => [...t.jobs.values()].some((j) => j.status === 'running' && termShows({ ...t, filter: f, clearedBy: {} }, j));
-  const tabs = [['all', '≡ Activity'], ...(agentRan ? [['agent', '🤖 Agent']] : []), ...servers.map((x) => [`srv:${x}`, `🖥 ${x}`]), ...t.terms.map((u) => [u.id, `⌨ ${u.name}`, true])];
-  if (!tabs.some(([k]) => k === t.filter)) t.filter = t.terms[0]?.id || 'all';
-  const html = tabs.map(([k, l, mine]) => `<span class="ttab ${t.filter === k ? 'on' : ''}" data-f="${esc(k)}" role="tab">${busy(k) ? '<i class="tr-dot busy"></i>' : ''}<span>${esc(l)}</span>${mine ? `<button type="button" class="bt-x" data-close="${esc(k)}" title="Close this terminal" aria-label="Close terminal">×</button>` : ''}</span>`).join('')
-    + '<button type="button" class="btab-new ttab-new" title="New terminal">＋</button>';
-  if (box.dataset.html === html) return;
-  box.dataset.html = html; box.innerHTML = html;
-  for (const el of box.querySelectorAll('.ttab')) el.onclick = (e) => { if (e.target.closest('.bt-x')) return; t.filter = el.dataset.f; renderTermInput(t); termDraw(t, true); };
-  for (const b of box.querySelectorAll('.bt-x')) b.onclick = () => { postJ('/api/term/close', { projectId: t.projectId, tab: b.dataset.close }).catch(() => {}); dropXterm(t.projectId, b.dataset.close, true); t.terms = t.terms.filter((u) => u.id !== b.dataset.close); if (t.filter === b.dataset.close) t.filter = t.terms[0]?.id || 'all'; renderTermInput(t); termDraw(t, true); };
-  $('.ttab-new', box).onclick = () => { const id = `u${t.nextTerm}`; t.terms.push({ id, name: `Terminal ${t.nextTerm++}`, cwd: '', hist: [], hi: 0 }); t.filter = id; renderTermInput(t); termDraw(t, true); $('#paneBody .term-in input')?.focus(); };
+  const busy = (f) => [...t.jobs.values()].some((j) => j.status === 'running' && termShows({ ...t, clearedBy: {} }, j, f));
+  const many = t.panes.length > 1;
+  for (const p of t.panes) {
+    const root = tpaneEl(p), box = root && $('.ttabs', root); if (!box) continue;
+    const tabs = [['all', '≡ Activity'], ...(agentRan ? [['agent', '🤖 Agent']] : []), ...servers.map((x) => [`srv:${x}`, `🖥 ${x}`]), ...t.terms.map((u) => [u.id, `⌨ ${u.name}`, true])];
+    if (!tabs.some(([k]) => k === p.filter)) p.filter = t.terms.find((u) => !t.panes.some((q) => q.filter === u.id))?.id || 'all';
+    const html = tabs.map(([k, l, mine]) => `<span class="ttab ${p.filter === k ? 'on' : ''}" data-f="${esc(k)}" role="tab">${busy(k) ? '<i class="tr-dot busy"></i>' : ''}<span>${esc(l)}</span>${mine ? `<button type="button" class="bt-x" data-close="${esc(k)}" title="Close this terminal" aria-label="Close terminal">×</button>` : ''}</span>`).join('')
+      + '<button type="button" class="btab-new ttab-new" title="New terminal in this pane">＋</button>'
+      + `<span class="tp-acts"><button type="button" class="tp-btn" data-tp="above" title="Add a terminal pane above this one" aria-label="Add a pane above"${t.panes.length >= 6 ? ' disabled' : ''}>${TP_ICO.above}</button><button type="button" class="tp-btn" data-tp="below" title="Add a terminal pane below this one" aria-label="Add a pane below"${t.panes.length >= 6 ? ' disabled' : ''}>${TP_ICO.below}</button>${many ? `<button type="button" class="tp-btn danger" data-tp="close" title="Close this pane (its terminals stay in the tabs)" aria-label="Close this pane">${TP_ICO.close}</button>` : ''}</span>`;
+    if (box.dataset.html === html) continue;
+    box.dataset.html = html; box.innerHTML = html;
+    for (const el of box.querySelectorAll('.ttab')) el.onclick = (e) => { if (!e.target.closest('.bt-x')) termPick(t, p, el.dataset.f); };
+    for (const b of box.querySelectorAll('.bt-x')) b.onclick = () => {
+      const id = b.dataset.close;
+      postJ('/api/term/close', { projectId: t.projectId, tab: id }).catch(() => {}); dropXterm(t.projectId, id, true);
+      t.terms = t.terms.filter((u) => u.id !== id);
+      for (const q of t.panes) if (q.filter === id) q.filter = t.terms.find((u) => !t.panes.some((r) => r.filter === u.id))?.id || 'all';
+      termSave(t); renderTermInput(t); termDraw(t, 'all');
+    };
+    $('.ttab-new', box).onclick = () => { const id = termNew(t); termPick(t, p, id); $('.term-in input', root)?.focus(); };
+    for (const b of box.querySelectorAll('[data-tp]')) b.onclick = () => (b.dataset.tp === 'close' ? termClosePane(t, p) : termSplit(t, p, b.dataset.tp));
+  }
 }
-// The input row belongs to your own terminals; the other tabs only show output.
-function renderTermInput(t) {
-  const u = t.terms.find((x) => x.id === t.filter), form = $('#paneBody .term-in'), hint = $('#paneBody .term-hint');
-  if (!form) return;
+function termNew(t) { const id = `u${t.nextTerm}`; t.terms.push({ id, name: `Terminal ${t.nextTerm++}`, cwd: '', hist: [], hi: 0 }); return id; }
+// Your own terminal shows in one pane at a time: picking it where another pane shows it swaps the two.
+function termPick(t, p, f) {
+  const other = /^u\d+$/.test(f) && t.panes.find((q) => q !== p && q.filter === f);
+  if (other) other.filter = p.filter;
+  p.filter = f; termActivate(t, p); termSave(t);
+  renderTermInput(t); termDraw(t, other ? 'all' : true);
+}
+function termActivate(t, p) {
+  t.act = p.id;
+  for (const el of document.querySelectorAll('#paneBody .tpane')) el.classList.toggle('on', el.dataset.pane === p.id);
+  for (const q of t.panes) { const h = tpaneEl(q) && $('.term-hint', tpaneEl(q)); if (h && !$('.term-in', tpaneEl(q)).hidden) h.hidden = q !== p; }
+}
+// A new pane above or below, with a fresh terminal in it; the two share the space this one had.
+function termSplit(t, p, where) {
+  if (t.panes.length >= 6) return;
+  const q = { id: `p${t.nextPane++}`, filter: termNew(t), grow: p.grow / 2 };
+  p.grow /= 2;
+  t.panes.splice(t.panes.indexOf(p) + (where === 'below' ? 1 : 0), 0, q);
+  t.act = q.id; termSave(t); renderPane();
+}
+function termClosePane(t, p) {
+  if (t.panes.length < 2) return;
+  const i = t.panes.indexOf(p), n = t.panes[i ? i - 1 : 1];
+  n.grow += p.grow; t.panes.splice(i, 1);
+  t.act = n.id; termSave(t); renderPane();
+}
+// The input row belongs to your own terminals; the other tabs only show output. The hint shows in the active pane.
+function renderTermInput(t) { for (const p of t.panes) termPaneInput(t, p); }
+function termPaneInput(t, p) {
+  const root = tpaneEl(p); if (!root) return;
+  const u = t.terms.find((x) => x.id === p.filter), form = $('.term-in', root), hint = $('.term-hint', root);
   const full = !!u && G.cfg.pty && !u.plain;
-  form.hidden = !u || full; hint.hidden = !u || full;
-  const note = $('#paneBody .term-note'); if (note) note.hidden = !!u;
-  const xbox = $('#paneBody .term-x'), outBox = $('#paneBody .term-out');
-  if (xbox) xbox.hidden = !full;
-  if (outBox) outBox.hidden = full;
-  if (full) { mountXterm(t, u, xbox); return; }
+  form.hidden = !u || full; hint.hidden = !u || full || p.id !== t.act;
+  $('.term-note', root).hidden = !!u;
+  const xbox = $('.term-x', root), outBox = $('.term-out', root);
+  xbox.hidden = !full; outBox.hidden = full;
+  if (full) { mountXterm(t, u, xbox, p.id === t.act); return; }
   if (!u) return;
-  const p = G.projects.find((x) => x.id === t.projectId);
-  const dir = u.dir || p?.dir || '';
+  const pr = G.projects.find((x) => x.id === t.projectId);
+  const dir = u.dir || pr?.dir || '';
   $('.term-ps', form).textContent = `${baseName(dir) || t.projectId} ›`;
   $('.term-ps', form).title = dir;
   const running = [...t.jobs.values()].some((j) => j.tab === u.id && j.status === 'running');
@@ -6341,18 +6530,19 @@ function xtermTheme() {
   const v = (n, d) => getComputedStyle(document.documentElement).getPropertyValue(n).trim() || d;
   return { background: v('--surface-inset', '#05080a') || '#05080a', foreground: v('--text', '#d7e0dc'), cursor: v('--accent', '#1fc8db'), cursorAccent: '#000000', selectionBackground: 'rgba(31, 200, 219, 0.35)' };
 }
-async function mountXterm(t, u, box) {
+async function mountXterm(t, u, box, focus = true) {
   const k = `${t.projectId}:${u.id}`;
   G.xt ||= new Map();
   let x = G.xt.get(k);
-  if (x) { if (x.el.parentElement !== box) box.replaceChildren(x.el); requestAnimationFrame(() => { try { x.fit.fit(); } catch { /* hidden */ } x.term.focus(); }); return; }
+  if (x) { if (x.el.parentElement !== box) box.replaceChildren(x.el); requestAnimationFrame(() => { try { x.fit.fit(); } catch { /* hidden */ } if (focus) x.term.focus(); }); return; }
   // The pane can redraw while this one is still being set up: only one terminal per tab.
   if ((G.xtBusy ||= new Set()).has(k)) return;
   G.xtBusy.add(k);
   box.innerHTML = '<div class="fx-empty">Starting the terminal…</div>';
   try { await loadXterm(); } catch (e) { G.xtBusy.delete(k); u.plain = true; box.hidden = true; renderTermInput(t); return; }
   const el = document.createElement('div'); el.className = 'xt-host';
-  const term = new window.Terminal({ cursorBlink: true, fontFamily: getComputedStyle(document.documentElement).getPropertyValue('--mono').trim() || 'Consolas, monospace', fontSize: (() => { try { return Number(localStorage.getItem('oh-term-font')) || 13; } catch { return 13; } })(), lineHeight: 1.15, scrollback: 5000, allowProposedApi: false, theme: xtermTheme(), convertEol: false });
+  const term = new window.Terminal({ cursorBlink: true, fontFamily: getComputedStyle(document.documentElement).getPropertyValue('--mono').trim() || 'Consolas, monospace', fontSize: (() => { try { return Number(localStorage.getItem('oh-term-font')) || 13; } catch { return 13; } })(), lineHeight: 1.15, scrollback: 5000, allowProposedApi: false, theme: xtermTheme(), convertEol: false, linkHandler: termLink });
+  termLinks(term);
   const fit = new window.FitAddon.FitAddon(); term.loadAddon(fit);
   x = { term, fit, el, es: null, q: '', chain: Promise.resolve(), exited: false, projectId: t.projectId, tab: u.id };
   G.xt.set(k, x); G.xtBusy.delete(k);
@@ -6380,7 +6570,7 @@ async function mountXterm(t, u, box) {
   term.onResize(({ cols, rows }) => { clearTimeout(x.rt); x.rt = setTimeout(() => postJ('/api/pty/resize', { projectId: x.projectId, tab: x.tab, cols, rows }).catch(() => {}), 60); });
   new ResizeObserver(() => { if (el.offsetParent) { try { fit.fit(); } catch { /* hidden */ } } }).observe(el);
   await startXterm(x);
-  term.focus();
+  if (focus) term.focus();
   // Once it runs, fit again: the shell redraws its screen for the final size (a first prompt can be drawn too early).
   setTimeout(() => { try { fit.fit(); } catch { /* hidden */ } }, 300);
 }
@@ -6416,48 +6606,101 @@ function termLocal(t, u, label, lines) {
   for (const text of lines) termApply(t, { kind: 'out', job, text, stream: 'note', at: Date.now() });
   termApply(t, { kind: 'end', job, code: 0, at: Date.now() });
 }
+const SVG_RUN = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg>';
 function renderTerm(c) {
   const body = $('#paneBody'), bar = $('#appBar');
   const p = projectOf(c), t = termState(c.projectId);
+  if (c.srvPop?.inline) closeServers(c);
   bar.hidden = false;
-  bar.innerHTML = `<span class="term-title">${SVG_TERM}<b>Terminal</b></span><span class="dim">${esc(p?.name || c.projectId)}</span><span class="spacer"></span>
-    <button type="button" class="term-clear" title="Clear this tab's finished output (running ones stay)">Clear</button><button type="button" class="back" title="Close the terminal">✕ Close</button>`;
-  $('.term-clear', bar).onclick = () => { const x = G.xt?.get(`${t.projectId}:${t.filter}`); if (x && !$('#paneBody .term-x')?.hidden) { x.term.clear(); x.term.focus(); return; } (t.clearedBy ||= {})[t.filter] = Date.now(); termDraw(t, true); };
-  $('.back', bar).onclick = () => { G.view.term = false; closeTermStream(); syncLayout(); renderPane(); };
-  body.innerHTML = `<div class="term">
-    <div class="ttabs" role="tablist" aria-label="Terminals"></div>
-    <div class="term-running" id="termRunning"><span class="tr-label">Running</span><span class="dim">checking…</span></div>
-    <div class="term-out" tabindex="0" aria-live="polite"></div>
-    <div class="term-x" hidden></div>
-    <div class="term-note dim" hidden>This tab only shows output. Open one of your terminals (⌨, or ＋) to run commands.</div>
-    <form class="term-in"><span class="term-ps"></span><input aria-label="Command" placeholder="git status   ·   npm run dev   ·   dir" autocomplete="off" spellcheck="false"><button type="submit">Run</button></form>
-    <div class="term-hint"><b>${esc(G.cfg.shell || 'Shell')}</b>, starting in the project folder · pipes, scripts, git and dev servers work · <code>clear</code> empties the tab · ■ stops a command (the shell restarts in the same folder) · ↑ ↓ earlier commands · full-screen programs (vim, htop) need a terminal app</div>
-  </div>`;
-  const form = $('.term-in', body), inp = $('input', form), hint = $('.term-hint', body);
-  const say = (msg, bad) => { hint.classList.toggle('bad', !!bad); hint.innerHTML = msg; };
-  const defaultHint = hint.innerHTML;
-  form.onsubmit = async (e) => {
-    e.preventDefault();
-    const u = t.terms.find((x) => x.id === t.filter); if (!u) return;
-    const line = inp.value.trim(); if (!line) return;
-    if (folderMissing(c)) return;
-    u.hist.push(line); u.hi = u.hist.length; inp.value = '';
-    const [cmd] = line.split(/\s+/);
-    if (cmd === 'clear' || cmd === 'cls') { (t.clearedBy ||= {})[u.id] = Date.now(); termDraw(t, true); return; }
-    // Your terminals are a real shell; the line goes to it as typed.
-    const rs = await postJ('/api/term/run', { projectId: c.projectId, line, tab: u.id });
-    if (rs.error) { say(`⚠ ${esc(rs.error)}`, true); termLocal(t, u, line, [`⚠ ${rs.error}`]); return; }
-    say(defaultHint); renderTermInput(t);
-  };
-  inp.onkeydown = (e) => {
-    const u = t.terms.find((x) => x.id === t.filter); if (!u) return;
-    if (e.key === 'ArrowUp' && u.hi > 0) { u.hi--; inp.value = u.hist[u.hi]; e.preventDefault(); }
-    if (e.key === 'ArrowDown') { u.hi = Math.min(u.hist.length, u.hi + 1); inp.value = u.hist[u.hi] || ''; e.preventDefault(); }
-  };
+  const sec = (k, ico, label, tip) => `<button type="button" class="tsec ${t.sec === k ? 'on' : ''}" data-sec="${k}" role="tab" aria-selected="${t.sec === k}" title="${tip}">${ico}<span class="tsec-l">${label}</span><span class="tsec-n" hidden></span></button>`;
+  bar.innerHTML = `<span class="term-title">${SVG_TERM}<b>Terminal</b></span><span class="dim">${esc(p?.name || c.projectId)}</span>
+    <span class="tsecs" role="tablist" aria-label="Terminal sections">${sec('term', SVG_TERM, 'Terminals', 'Your terminals and the live output of every command and server, in panes you can stack')}${sec('run', SVG_RUN, 'Running', 'Everything running in this project (background jobs, commands, servers, terminals), each with a Stop')}${sec('srv', SVG_SERVER, 'Servers', 'This project’s saved servers: run, stop, edit, open')}</span><span class="spacer"></span>
+    ${t.sec === 'term' ? '<button type="button" class="term-clear" title="Clear the active pane’s finished output (running ones stay)">⌫ Clear output</button>' : t.sec === 'run' ? '<button type="button" class="run-stopall danger" title="Stop every command, background job, server and agent terminal in this project (your terminal tabs stay open)" disabled>■ Stop all</button>' : ''}<button type="button" class="back" title="Close the terminal">✕ Close</button>`;
+  for (const b of bar.querySelectorAll('.tsec')) b.onclick = () => { if (t.sec === b.dataset.sec) return; t.sec = b.dataset.sec; termSave(t); renderTerm(c); };
+  $('.back', bar).onclick = () => { G.view.term = false; closeTermStream(); if (c.srvPop?.inline) closeServers(c); syncLayout(); renderPane(); };
+  termSecCounts(c);
   termOpenStream(t);
+  if (t.sec === 'run') {
+    $('.run-stopall', bar).onclick = async (e) => {
+      const n = G.runCount?.[c.projectId]?.n || 0;
+      if (!n || !(await uiConfirm(`Stop everything running in this project?\n${n} thing${n > 1 ? 's' : ''}: commands, background jobs, servers and the agent’s terminals, with all they started. Your terminal tabs stay open. A reply that is working is told, and carries on without them.`, { ok: 'Stop all', danger: true }))) return;
+      e.target.disabled = true;
+      await postJ('/api/running/stop-all', { projectId: c.projectId });
+      refreshRunning(c);
+    };
+    body.innerHTML = '<div class="run" id="runPane"><div class="run-empty dim">Checking…</div></div>';
+    return refreshRunning(c);
+  }
+  if (t.sec === 'srv') {
+    body.innerHTML = '<div class="srv-pop srv-inline" id="termSrv"><div class="srv-empty">Loading…</div></div>';
+    c.srvPop = { el: $('#termSrv', body), inline: true, editing: null, timer: setInterval(() => renderServers(c), 2000) };
+    return renderServers(c);
+  }
+  $('.term-clear', bar).onclick = () => {
+    const root = tpaneEl(termPane(t)), x = G.xt?.get(`${t.projectId}:${t.filter}`);
+    if (x && root && !$('.term-x', root).hidden) { x.term.clear(); x.term.focus(); return; }
+    (t.clearedBy ||= {})[t.filter] = Date.now(); termDraw(t, true);
+  };
+  const hintHTML = `<b>${esc(G.cfg.shell || 'Shell')}</b>, starting in the project folder · pipes, scripts, git and dev servers work · <code>clear</code> empties the tab · ■ stops a command (the shell restarts in the same folder) · ↑ ↓ earlier commands · full-screen programs (vim, htop) need a terminal app`;
+  body.innerHTML = `<div class="term">
+    <div class="term-running" id="termRunning"><span class="tr-label">Running</span><span class="dim">checking…</span></div>
+    <div class="tpanes">${t.panes.map((q, i) => `${i ? `<div class="tsplit" data-i="${i}" role="separator" aria-orientation="horizontal" aria-label="Resize the terminal panes" title="Drag to resize · double-click to share the space evenly"></div>` : ''}<section class="tpane ${q.id === t.act ? 'on' : ''}" data-pane="${q.id}" style="flex-grow:${q.grow}">
+      <div class="ttabs" role="tablist" aria-label="Terminals"></div>
+      <div class="term-out" tabindex="0" aria-live="polite"></div>
+      <div class="term-x" hidden></div>
+      <div class="term-note dim" hidden>This tab only shows output. Pick one of your terminals (⌨, or ＋) to run commands.</div>
+      <form class="term-in"><span class="term-ps"></span><input aria-label="Command" placeholder="git status   ·   npm run dev   ·   dir" autocomplete="off" spellcheck="false"><button type="submit">Run</button></form>
+      <div class="term-hint">${hintHTML}</div>
+    </section>`).join('')}</div>
+  </div>`;
+  for (const q of t.panes) {
+    const root = tpaneEl(q), form = $('.term-in', root), inp = $('input', form), hint = $('.term-hint', root);
+    const say = (msg, bad) => { hint.classList.toggle('bad', !!bad); hint.innerHTML = msg; };
+    root.addEventListener('pointerdown', () => { if (t.act !== q.id) termActivate(t, q); }, true);
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      const u = t.terms.find((x) => x.id === q.filter); if (!u) return;
+      const line = inp.value.trim(); if (!line) return;
+      if (folderMissing(c)) return;
+      u.hist.push(line); u.hi = u.hist.length; inp.value = '';
+      const [cmd] = line.split(/\s+/);
+      if (cmd === 'clear' || cmd === 'cls') { (t.clearedBy ||= {})[u.id] = Date.now(); termDraw(t, 'all'); return; }
+      // Your terminals are a real shell; the line goes to it as typed.
+      const rs = await postJ('/api/term/run', { projectId: c.projectId, line, tab: u.id });
+      if (rs.error) { say(`⚠ ${esc(rs.error)}`, true); termLocal(t, u, line, [`⚠ ${rs.error}`]); return; }
+      say(hintHTML); termPaneInput(t, q);
+    };
+    inp.onkeydown = (e) => {
+      const u = t.terms.find((x) => x.id === q.filter); if (!u) return;
+      if (e.key === 'ArrowUp' && u.hi > 0) { u.hi--; inp.value = u.hist[u.hi]; e.preventDefault(); }
+      if (e.key === 'ArrowDown') { u.hi = Math.min(u.hist.length, u.hi + 1); inp.value = u.hist[u.hi] || ''; e.preventDefault(); }
+    };
+  }
+  // The bar between two panes moves the space between them; the sizes are remembered for the project.
+  for (const s of body.querySelectorAll('.tsplit')) {
+    const a = t.panes[Number(s.dataset.i) - 1], b = t.panes[Number(s.dataset.i)];
+    s.onpointerdown = (e) => {
+      e.preventDefault(); s.setPointerCapture(e.pointerId); s.classList.add('drag');
+      const ea = tpaneEl(a), eb = tpaneEl(b), ha = ea.getBoundingClientRect().height, hb = eb.getBoundingClientRect().height, g = a.grow + b.grow, y0 = e.clientY;
+      s.onpointermove = (ev) => {
+        const na = Math.max(70, Math.min(ha + hb - 70, ha + ev.clientY - y0));
+        a.grow = (g * na) / (ha + hb); b.grow = g - a.grow;
+        ea.style.flexGrow = a.grow; eb.style.flexGrow = b.grow;
+      };
+      s.onpointerup = () => { s.onpointermove = null; s.classList.remove('drag'); termSave(t); };
+    };
+    s.ondblclick = () => { for (const q of t.panes) { q.grow = 1; tpaneEl(q).style.flexGrow = 1; } termSave(t); };
+  }
   termFilters(t); renderTermInput(t);
-  termDraw(t, true);
+  termDraw(t, 'all');
   getJ(`/api/servers/overview?project=${encodeURIComponent(c.projectId)}`).then((r) => drawRunning(c, r));
+}
+// The section buttons count what runs and how many servers are up.
+function termSecCounts(c) {
+  const bar = $('#appBar'); if (!bar || !G.view.term) return;
+  const put = (k, n, tip) => { const el = $(`.tsec[data-sec="${k}"] .tsec-n`, bar); if (el) { el.textContent = n || ''; el.hidden = !n; el.title = tip; } };
+  const rn = G.runCount?.[c.projectId]?.n || 0, sn = G.devCount?.[c.projectId]?.running || 0;
+  put('run', rn, `${rn} running`); put('srv', sn, `${sn} server${sn === 1 ? '' : 's'} up`);
 }
 
 // ---------- 📎 attached files of any kind: uploaded to the project, read and (when big) indexed ----------
@@ -6522,7 +6765,7 @@ async function drawEmbedPick() {
 }
 
 // ---------- the pane as a small browser: tabs, an address bar, and the agent's own browser ----------
-const paneTab = () => (G.view.run ? 'run' : G.view.term ? 'term' : G.view.files ? 'files' : G.view.trace ? 'trace' : G.view.browser ? 'browser' : 'art');
+const paneTab = () => (G.view.term ? 'term' : G.view.files ? 'files' : G.view.trace ? 'trace' : G.view.browser ? 'browser' : 'art');
 const absUrl = (u) => (!u || u.startsWith('data:') ? '' : u.startsWith('/') ? location.origin + u : u);
 function artifactUrl(c, a) {
   if (a.kind === 'html' || a.kind === 'md') return `/art/${encodeURIComponent(c.id)}/${encodeURIComponent(a.id)}`;
@@ -6530,6 +6773,7 @@ function artifactUrl(c, a) {
 }
 function setPaneTab(tab) {
   const c = focused(); if (!c) return;
+  if (tab === 'run') return openTerminal(c, null, 'run');
   const lastRun = [...c.agent.messages].reverse().find((m) => m.role === 'assistant' && m.runId);
   if (tab === 'trace') G.traceRun = G.traceRun && c.agent.messages.some((m) => m.runId === G.traceRun) ? G.traceRun : lastRun?.runId || null;
   if (tab === 'browser') refreshAgentTab(c).then((ch) => { if (ch && G.view.browser) renderPane(); });
@@ -6543,12 +6787,11 @@ function renderPaneTabs(c) {
   for (const b of box.querySelectorAll('[data-tab]')) { const on = b.dataset.tab === t; b.classList.toggle('on', on); b.setAttribute('aria-selected', String(on)); }
   const n = planArts(c).length;
   $('[data-tab="art"] .pt-n', box).textContent = n || '';
-  // How many things run is counted on the Running tab; the Terminal tab only turns amber while a command runs.
-  const dev = c && G.devCount?.[c.projectId];
-  const tn = $('[data-tab="term"] .pt-n', box); tn.textContent = ''; $('[data-tab="term"]', box).classList.toggle('busy', !!dev?.busy);
-  const rn = c && G.runCount?.[c.projectId];
-  const rb = $('[data-tab="run"]', box), rc = $('[data-tab="run"] .pt-n', box);
-  if (rc) { rc.textContent = rn?.n || ''; rc.classList.toggle('busy', !!rn?.n); rb.title = rn?.n ? `Running: ${rn.n} thing${rn.n > 1 ? 's' : ''} running in this project, each with a Stop` : 'Running: nothing runs in this project right now'; }
+  // The Terminal tab counts what runs (its Running section lists them) and turns amber while a command runs.
+  const dev = c && G.devCount?.[c.projectId], rn = c && G.runCount?.[c.projectId];
+  const tb = $('[data-tab="term"]', box), tn = $('[data-tab="term"] .pt-n', box);
+  tn.textContent = rn?.n || ''; tn.classList.toggle('busy', !!rn?.n); tb.classList.toggle('busy', !!dev?.busy);
+  if (c && G.view.term) termSecCounts(c);
   const ag = c && G.agentTab?.[c.id];
   const dot = $('[data-tab="browser"] .pt-dot', box); dot.className = `pt-dot ${ag?.locked ? 'live' : ag || G.btabs?.length ? 'has' : ''}`;
   const fa = $('#followAgent'); if (fa) fa.checked = G.followAgent !== false;
@@ -6603,6 +6846,14 @@ function onAgentBrowse(c, m) {
     else if (G.view.browser) renderPane();
   });
 }
+// With "Follow the agent", a command the agent runs brings up the Terminal tab on its output (the 🤖 Agent view, or
+// ≡ Activity before the agent's first command has shown up there), unless you are typing in the pane.
+function onAgentCommand(c) {
+  if (focused() !== c || G.followAgent === false || (G.view.term && ['agent', 'all'].includes(G.term?.filter))) return;
+  if ($('#pane')?.contains(document.activeElement) && document.activeElement.matches('input, textarea, .xterm-helper-textarea, [contenteditable]')) return;
+  const t = termState(c.projectId);
+  openTerminal(c, [...t.jobs.values()].some((j) => j.source === 'agent' && !j.server) ? 'agent' : 'all');
+}
 // The Browser tab is a small browser of its own: the agent's page for this chat (live, and watch-only
 // while its reply works), and your own tabs. Pages run in the harness's headless browser and show as a
 // live picture you can click, scroll and type into; your own served pages can show in a frame instead.
@@ -6635,16 +6886,24 @@ function renderBrowser(c) {
     : `${t.agent ? `<span class="bv-who agent" title="${live ? "The agent's page: it is using it now, so you can only watch" : "The agent's page: it is done with it, so it is yours to use"}">🤖</span>${live ? '<span class="bv-lock" title="The agent is using this page: watch only">watching</span>' : ''}` : '<span class="bv-who you" title="Your tab">👤</span>'}
        ${!live && t.mode !== 'frame' && t.url ? `<button type="button" class="bv-nav" data-op="back" title="Back" aria-label="Back"${REAL && t.canBack === false ? ' disabled' : ''}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button><button type="button" class="bv-nav" data-op="forward" title="Forward" aria-label="Forward"${REAL && t.canForward === false ? ' disabled' : ''}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg></button>` : ''}
        ${REAL && t.url ? `<span class="bv-real ${t.loading ? 'loading' : ''}" title="A real Chromium tab in the desktop app">● real tab${t.loading ? ' · loading…' : ''}</span>` : ''}
-       <span class="spacer"></span>${t.url ? `<button type="button" class="bv-cmt ${t.commenting ? 'on' : ''}" aria-pressed="${!!t.commenting}" title="Comment on part of this page: click an element, say what to change, and it goes with your next message">💬 ${t.commenting ? 'Done commenting' : 'Comment'}</button><button type="button" class="bv-exp" aria-haspopup="menu" title="Export this page as a PDF or one long picture, or the project's files as a ZIP">⤓ Export</button>` : ''}${REAL && t.url && !live ? '<button type="button" class="bv-dev" title="Open DevTools for this tab" aria-label="DevTools"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8l-4 4 4 4M16 8l4 4-4 4M13.5 5l-3 14"/></svg></button>' : ''}${!DESK && !t.agent && t.url ? `<button type="button" class="bv-mode ${t.mode === 'frame' ? 'on' : ''}" title="${t.mode === 'frame' ? 'Shown in a frame. Click to open it in the harness browser instead (for sites that refuse frames)' : 'Shown in the harness browser. Click to show it in a frame (works for your own served pages)'}" aria-label="Frame or harness browser"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/></svg></button>` : ''}${downloadsHTML()}`;
+       <span class="spacer"></span>${!t.agent && t.url ? (() => { const to = lentChatOf(t.sid), ch = to && (G.open.get(to) || G.chats.find((x) => x.id === to)); return to ? `<span class="bv-lent" title="The agent can work in this tab in that chat">🤖 Lent to ${to === c.id ? 'this chat' : `“${esc(clip(ch?.title || 'another chat', 24))}”`}</span><button type="button" class="bv-takeback" title="Take this tab back: the agent can no longer use it">Take back</button>` : `<button type="button" class="bv-give" title="Let the agent in this chat work in this tab (signed in as you). Sending, deleting, buying and account changes always ask you first. You can also drag the tab onto a chat.">🤖 Give to agent</button>`; })() : ''}${t.url ? `<button type="button" class="bv-cmt ${t.commenting ? 'on' : ''}" aria-pressed="${!!t.commenting}" title="Comment on part of this page: click an element, say what to change, and it goes with your next message">💬 ${t.commenting ? 'Done commenting' : 'Comment'}</button><button type="button" class="bv-exp" aria-haspopup="menu" title="Export this page as a PDF or one long picture, or the project's files as a ZIP">⤓ Export</button>` : ''}${REAL && t.url && !live ? '<button type="button" class="bv-dev" title="Open DevTools for this tab" aria-label="DevTools"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8l-4 4 4 4M16 8l4 4-4 4M13.5 5l-3 14"/></svg></button>' : ''}${!DESK && !t.agent && t.url ? `<button type="button" class="bv-mode ${t.mode === 'frame' ? 'on' : ''}" title="${t.mode === 'frame' ? 'Shown in a frame. Click to open it in the harness browser instead (for sites that refuse frames)' : 'Shown in the harness browser. Click to show it in a frame (works for your own served pages)'}" aria-label="Frame or harness browser"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/></svg></button>` : ''}${downloadsHTML()}`;
   for (const b of bar.querySelectorAll('.bv-nav')) b.onclick = () => (REAL ? window.ohDesktop.nav(t.sid, b.dataset.op) : ubCall(b.dataset.op));
   const dv = $('.bv-dev', bar); if (dv) dv.onclick = () => window.ohDesktop.nav(t.sid, 'devtools');
   const cmb = $('.bv-cmt', bar); if (cmb) cmb.onclick = () => { t.commenting = !t.commenting; renderPane(); };
   const exb = $('.bv-exp', bar); if (exb) exb.onclick = () => exportMenu(exb, c, t);
+  const gv = $('.bv-give', bar); if (gv) gv.onclick = () => lendTab(c, t.sid);
+  const tb = $('.bv-takeback', bar); if (tb) tb.onclick = () => takeBackTab(lentChatOf(t.sid));
   const ex = $('.bv-ext', bar); if (ex) ex.onclick = () => window.ohDesktop.openExternal(t.url);
   wireDownloads(bar);
   const mb = $('.bv-mode', bar); if (mb) mb.onclick = () => { t.mode = t.mode === 'frame' ? 'remote' : 'frame'; t.opened = null; renderPane(); };
-  body.innerHTML = `<div class="bwin"><div class="btabs" role="tablist" aria-label="Browser tabs">${list.map((x) => `<span class="btab ${x.sid === t?.sid ? 'on' : ''} ${x.agent ? 'agent' : ''}" data-sid="${esc(x.sid)}" role="tab" title="${esc(x.url || 'New tab')}">${x.agent ? `<i class="bt-dot ${x.locked ? 'live' : ''}"></i>🤖` : '🌐'}<span class="bt-title">${esc(x.agent ? (x.title || 'Agent') : (x.title || (x.url ? x.url.replace(/^https?:\/\//, '').slice(0, 24) : 'New tab')))}</span><button type="button" class="bt-x" data-close="${esc(x.sid)}" title="Close this tab" aria-label="Close tab">×</button></span>`).join('')}<button type="button" class="btab-new" title="New tab">＋</button></div><div class="bstage"></div></div>`;
+  body.innerHTML = `<div class="bwin"><div class="btabs" role="tablist" aria-label="Browser tabs">${list.map((x) => `<span class="btab ${x.sid === t?.sid ? 'on' : ''} ${x.agent ? 'agent' : ''} ${!x.agent && lentChatOf(x.sid) ? 'lent' : ''}" data-sid="${esc(x.sid)}" role="tab" ${x.agent ? '' : 'draggable="true" '}title="${esc(x.url || 'New tab')}">${x.agent ? `<i class="bt-dot ${x.locked ? 'live' : ''}"></i>🤖` : '🌐'}<span class="bt-title">${esc(x.agent ? (x.title || 'Agent') : (x.title || (x.url ? x.url.replace(/^https?:\/\//, '').slice(0, 24) : 'New tab')))}</span><button type="button" class="bt-x" data-close="${esc(x.sid)}" title="Close this tab" aria-label="Close tab">×</button></span>`).join('')}<button type="button" class="btab-new" title="New tab">＋</button></div><div class="bstage"></div></div>`;
   for (const el of body.querySelectorAll('.btab')) el.onclick = (e) => { if (e.target.closest('.bt-x')) return; G.bActive = el.dataset.sid; renderPane(); };
+  for (const el of body.querySelectorAll('.btab[draggable="true"]')) el.ondragstart = (e) => { e.dataTransfer.setData('application/x-quorx-tab', el.dataset.sid); e.dataTransfer.effectAllowed = 'link'; };
+  // Right-click one of your tabs: give it to this chat's agent (or take it back), or close it.
+  for (const el of body.querySelectorAll('.btab[draggable="true"]')) el.oncontextmenu = (e) => {
+    const sid = el.dataset.sid, to = lentChatOf(sid);
+    tabMenu(e, [to ? ['↩ Take back from the agent', () => takeBackTab(to)] : ['🤖 Give to agent in this chat', () => lendTab(c, sid)], ['✕ Close tab', () => closeBTab(c, sid)]]);
+  };
   for (const b of body.querySelectorAll('.bt-x')) b.onclick = () => closeBTab(c, b.dataset.close);
   $('.btab-new', body).onclick = () => { newBTab(''); renderPane(); $('#paneUrl').focus(); };
   const stage = $('.bstage', body);
@@ -6680,7 +6939,150 @@ function browserGo(url) {
   G.view = { id: G.view.id, src: false, files: false, browser: true };
   c.paneHidden = false; syncLayout(); renderPane();
 }
-function closeBTab(c, sid) {
+// ---------- links in content: Ctrl+click (Cmd+click on a Mac) opens them in the Browser tab ----------
+// Chat messages, Steps, News, documents in the pane, artifact pages and the terminal. A plain click does nothing (text
+// selection works as usual). Only web addresses open, in a new tab of the pane's Browser, never in the system browser
+// or a new window. QuorX's own pages never open inside its Browser tab, as the agent's browser can't open them either.
+function quorxPage(u) {
+  let x; try { x = new URL(String(u || '')); } catch { return false; }
+  const port = (p, proto) => Number(p || (proto === 'https:' ? 443 : 80));
+  if (!/^https?:$/.test(x.protocol) || port(x.port, x.protocol) !== port(location.port, location.protocol)) return false;
+  const host = (h) => h.toLowerCase().replace(/\.$/, '').replace(/^\[|\]$/g, '');
+  const h = host(x.hostname);
+  const self = h === host(location.hostname) || h === 'localhost' || h.endsWith('.localhost') || /^(127\.|0\.0\.0\.0$)/.test(h) || h === '::1' || h === '::' || /^::ffff:(127\.|7f)/.test(h);
+  return self && !/^\/(ws|art|preview|blob)\//.test(x.pathname); // its own work served by QuorX is fine
+}
+async function openLink(url, from) {
+  let u; try { u = new URL(String(url || ''), location.href); } catch { return; }
+  if (!/^https?:$/.test(u.protocol)) return;
+  const say = (text) => { if (from?.isConnected && from.getClientRects().length) flashTip(from, text, 2400); };
+  if (quorxPage(u.href)) return say("QuorX's own pages don't open in its Browser tab");
+  // The Browser tab is in a chat's side pane: News closes, and with no chat open the latest one opens.
+  if (NEWS.open) closeNews();
+  let c = focused();
+  if (!c) { const last = [...G.chats].sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0))[0]; if (last) { await showChat(last.id); c = focused(); } }
+  if (!c) return say('Open a chat first: links open in its Browser tab');
+  // A new tab, or the empty tab you're on.
+  const cur = G.view.browser ? activeBTab(c) : null;
+  const t = cur && !cur.agent && !cur.url ? cur : newBTab(u.href);
+  Object.assign(t, { url: u.href, title: '', mode: null, opened: null, shot: null });
+  G.bActive = t.sid;
+  G.view = { id: G.view.id, src: false, files: false, browser: true };
+  c.paneHidden = false; syncLayout(); renderPane(); toPreview();
+}
+document.addEventListener('click', (e) => {
+  const a = e.target.closest?.('a[data-cl]');
+  if (!a) return;
+  e.preventDefault();
+  if ((e.ctrlKey || e.metaKey) && e.button === 0) openLink(a.getAttribute('href'), a);
+}, true);
+// A middle click would open a new window: nothing, like a plain click.
+document.addEventListener('auxclick', (e) => { if (e.target.closest?.('a[data-cl]')) e.preventDefault(); }, true);
+// The hand shows on a link only while Ctrl (Cmd) is held, since only then a click opens it.
+const linkModKey = (e) => document.body.classList.toggle('link-mod', !!(e.ctrlKey || e.metaKey));
+document.addEventListener('keydown', linkModKey, true);
+document.addEventListener('keyup', linkModKey, true);
+window.addEventListener('blur', () => document.body.classList.remove('link-mod'));
+// Artifact pages (in frames) send their Ctrl+clicked links here (see server/artifacts.js); only from a frame of this page.
+window.addEventListener('message', (e) => {
+  const d = e.data;
+  if (!d || d.quorx !== 'open-link' || typeof d.url !== 'string') return;
+  const f = [...document.querySelectorAll('iframe')].find((x) => x.contentWindow === e.source);
+  if (f) openLink(d.url, f);
+});
+// The terminal: web addresses in its output (and OSC 8 links) open the same way, with the same tip at the pointer.
+function termTip(ev, text) {
+  let a = $('.xt-tip-at');
+  if (!text) { if (TIP.target === a) hideTip(); a?.remove(); return; }
+  if (!a) { a = document.createElement('span'); a.className = 'xt-tip-at'; document.body.appendChild(a); }
+  a.style.left = `${ev.clientX}px`; a.style.top = `${ev.clientY}px`;
+  clearTimeout(TIP.timer);
+  TIP.target = a;
+  TIP.timer = setTimeout(() => TIP.target === a && showTip(a, text), 450);
+}
+const termLink = {
+  activate: (ev, url) => { if (ev.ctrlKey || ev.metaKey) openLink(url); },
+  hover: (ev, url) => termTip(ev, `${LINK_TIP}\n${url}`),
+  leave: () => termTip(null),
+  allowNonHttpProtocols: false,
+};
+function termLinks(term) {
+  const RX = /https?:\/\/[^\s<>"'`]+[^\s<>"'`.,;:!?)\]]/g;
+  term.registerLinkProvider({
+    provideLinks(y, cb) {
+      const line = term.buffer.active.getLine(y - 1);
+      const text = line ? line.translateToString(true) : '';
+      const links = [...text.matchAll(RX)].map((m) => ({ text: m[0], range: { start: { x: m.index + 1, y }, end: { x: m.index + m[0].length, y } }, decorations: { pointerCursor: false, underline: true }, ...termLink }));
+      cb(links.length ? links : undefined);
+    },
+  });
+}
+// ---------- 🤖 Give to agent: lend one of your Browser tabs to a chat ----------
+// A tab's right-click menu: items are [label, action].
+function tabMenu(e, items) {
+  e.preventDefault(); e.stopPropagation();
+  document.querySelector('.exp-menu')?.remove();
+  const m = document.createElement('div'); m.className = 'exp-menu fx-menu'; m.setAttribute('role', 'menu');
+  m.innerHTML = items.map((x, i) => `<button type="button" role="menuitem" data-i="${i}">${esc(x[0])}</button>`).join('');
+  document.body.append(m);
+  const r = m.getBoundingClientRect();
+  m.style.left = `${Math.min(e.clientX, innerWidth - r.width - 8)}px`; m.style.top = `${Math.min(e.clientY, innerHeight - r.height - 8)}px`;
+  const away = (ev) => { if (!m.contains(ev.target)) close(); };
+  const key = (ev) => { if (ev.key === 'Escape') close(); };
+  const close = () => { m.remove(); removeEventListener('pointerdown', away, true); removeEventListener('keydown', key, true); };
+  addEventListener('pointerdown', away, true); addEventListener('keydown', key, true);
+  m.onclick = (ev) => { const b = ev.target.closest('[data-i]'); if (!b) return; close(); items[Number(b.dataset.i)][1](); };
+  m.querySelector('button')?.focus();
+}
+// Drag a tab onto a chat, or press 🤖 Give to agent in the tab's bar. The agent can then work in that one tab (with
+// your sign-in on that site) in that chat; it is covered while the agent uses it, and Take back ends it at once.
+const lentChatOf = (sid) => Object.keys(G.lent ||= {}).find((id) => G.lent[id]?.sid === sid);
+async function lendTab(c, sid) {
+  const t = (G.btabs || []).find((x) => x.sid === sid);
+  if (!t) return;
+  if (!t.url) return uiAlert('Open a page in this tab first, then give it to the agent.');
+  // A page shown in a frame has no browser tab of its own behind it: it moves to "your view" first.
+  if (!DESK && t.mode === 'frame') { t.mode = 'remote'; t.opened = null; if (G.view.browser) renderPane(); await postJ('/api/ubrowser', { sid: t.sid, op: 'open', url: t.url }).catch(() => {}); }
+  const r = await postJ('/api/given-tab', { chatId: c.id, sid, url: t.url, title: t.title || '', desktop: DESK });
+  if (r.error) return uiAlert(`Could not give the tab: ${r.error}`);
+  G.lent ||= {};
+  for (const id of Object.keys(G.lent)) if (G.lent[id]?.sid === sid) { delete G.lent[id]; const o = G.open.get(id); if (o) renderAttachments(o); }
+  G.lent[c.id] = { sid, url: t.url, title: t.title || '' };
+  renderAttachments(c);
+  if (G.view.browser) renderPane();
+}
+async function takeBackTab(chatId) {
+  await fetch(`/api/given-tab?chat=${encodeURIComponent(chatId)}`, { method: 'DELETE' }).catch(() => {});
+  delete (G.lent ||= {})[chatId];
+  const c = G.open.get(chatId); if (c) renderAttachments(c);
+  if (G.view.browser) renderPane();
+}
+// The harness forgets lent tabs when it restarts: the chip goes when the harness no longer has it.
+async function syncLent(c) {
+  if (!c?.el) return;
+  const r = await getJ(`/api/given-tab?chat=${encodeURIComponent(c.id)}`);
+  if (!r || r.error) return;
+  const had = (G.lent ||= {})[c.id];
+  if (!r.given && had) { delete G.lent[c.id]; renderAttachments(c); }
+  // A tab given from Chrome (the QuorX extension) appears here on its own.
+  else if (r.given && had?.sid !== r.given.sid) { G.lent[c.id] = { sid: r.given.sid, url: r.given.url, title: r.given.title, chrome: r.given.ext != null }; renderAttachments(c); }
+}
+// Closing a tab that shows one of your running servers asks first: keep the server running (reopen the address any
+// time) or stop it too.
+async function closeBTab(c, sid) {
+  const url = sid.startsWith('agent-') ? G.agentTab?.[c.id]?.url : (G.btabs || []).find((x) => x.sid === sid)?.url;
+  let u = null; try { u = url && new URL(url); } catch { /* not an address */ }
+  if (u && /^(localhost|127\.0\.0\.1|\[::1\])$/.test(u.hostname)) {
+    const all = await getJ('/api/servers');
+    const sv = (Array.isArray(all) ? all : []).find((x) => x.status !== 'stopped' && x.url && (() => { try { return new URL(x.url).port === u.port; } catch { return false; } })());
+    if (sv) {
+      const where = `${u.hostname}:${u.port}`;
+      const ans = await uiConfirm(`Close ${where}?\n“${sv.name}” is still running. You can keep it running and reopen this tab any time by entering ${where} in the address bar.`, { ok: 'Keep running', alt: 'Stop server', altDanger: true, danger: false });
+      if (!ans) return;
+      if (ans === 'alt') { await postJ('/api/servers/stop', { key: sv.key }); pollDev(); }
+    }
+  }
+  const lentTo = lentChatOf(sid); if (lentTo) takeBackTab(lentTo);
   if (sid.startsWith('agent-')) { delete G.agentTab[c.id]; } else { G.btabs = (G.btabs || []).filter((x) => x.sid !== sid); if (DESK) window.ohDesktop.close(sid); }
   postJ('/api/ubrowser', { sid, op: 'close' }).catch(() => {});
   if (G.bActive === sid) G.bActive = null;
@@ -6727,22 +7129,6 @@ const RUN_GROUPS = [
 ];
 const RUN_KIND = { background: 'Background', command: 'Command', 'agent-term': 'Agent terminal', server: 'Server', 'your-term': 'Your terminal' };
 const dur = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`; };
-function renderRunningPane(c) {
-  const body = $('#paneBody'), bar = $('#appBar'), p = projectOf(c);
-  bar.hidden = false;
-  bar.innerHTML = `<span class="term-title"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg><b>Running</b></span><span class="dim">${esc(p?.name || c.projectId)}</span><span class="spacer"></span>
-    <button type="button" class="run-stopall danger" title="Stop every command, background job, server and agent terminal in this project (your terminal tabs stay open)" disabled>■ Stop all</button><button type="button" class="back" title="Close">✕ Close</button>`;
-  $('.back', bar).onclick = () => { G.view.run = false; syncLayout(); renderPane(); };
-  $('.run-stopall', bar).onclick = async (e) => {
-    const n = G.runCount?.[c.projectId]?.n || 0;
-    if (!n || !(await uiConfirm(`Stop everything running in this project?\n${n} thing${n > 1 ? 's' : ''}: commands, background jobs, servers and the agent’s terminals, with all they started. Your terminal tabs stay open. A reply that is working is told, and carries on without them.`, { ok: 'Stop all', danger: true }))) return;
-    e.target.disabled = true;
-    await postJ('/api/running/stop-all', { projectId: c.projectId });
-    refreshRunning(c);
-  };
-  body.innerHTML = '<div class="run" id="runPane"><div class="run-empty dim">Checking…</div></div>';
-  refreshRunning(c);
-}
 async function refreshRunning(c) {
   const r = await getJ(`/api/running?project=${encodeURIComponent(c.projectId)}`);
   if (r && !r.error) (G.runCount ||= {})[c.projectId] = { n: r.items.filter((x) => x.kind !== 'your-term').length };
@@ -7092,6 +7478,7 @@ if (DESK) {
   document.addEventListener('visibilitychange', () => deskPlace(true));
   window.ohDesktop.on((ev) => {
     const c = focused();
+    if (ev.type === 'open-link') { openLink(ev.url); return; }
     if (ev.type === 'popup') { newBTab(ev.url); if (c) { G.view = { id: G.view.id, src: false, files: false, browser: true }; syncLayout(); renderPane(); } return; }
     if (ev.type === 'download') { deskDownload(ev); return; }
     if (String(ev.sid || '').startsWith('agent-')) return deskAgentEvent(ev);
@@ -7612,6 +7999,7 @@ function newsClick(e) {
   if (!a) return;
   if (a.dataset.news) { e.preventDefault(); return openNews(a.dataset.news); }
   if (a.dataset.anchor) { e.preventDefault(); $(`#nw-${CSS.escape(a.dataset.anchor)}`, $('#newsView'))?.scrollIntoView({ block: 'start' }); return; }
+  if (a.dataset.cl) return; // a web link: Ctrl+click opens it in the Browser tab (see openLink)
   if (a.dataset.ext && DESK) { e.preventDefault(); window.ohDesktop.openExternal(a.href); }
 }
 

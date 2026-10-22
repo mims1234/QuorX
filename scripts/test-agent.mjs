@@ -2280,3 +2280,171 @@ test('launch_config lists, saves, renames and removes saved servers; direct writ
   const file = JSON.parse(fs.readFileSync(path.join(dir, '.quorx', 'launch.json'), 'utf8'));
   assert.deepEqual(file.configurations.map((c) => c.name), ['site']);
 });
+
+test('✨ Enhance rewrites a draft with the given model, sees earlier turns, and drops fences or quotes', async () => {
+  const { rewritePrompt, REWRITE_SYSTEM } = await import('../server/enhancer.js');
+  let sent = null;
+  const call = async (body) => { sent = body; return { message: { content: '```\n"Build a snake game in one HTML file.\n- Arrow keys to move\n- Score shown"\n```' }, usage: { cost: 0.00002 } }; };
+  const r = await rewritePrompt({ text: 'make snake', earlier: ['hi', 'use plain js'], model: 'test/cheap', call });
+  assert.equal(r.text, 'Build a snake game in one HTML file.\n- Arrow keys to move\n- Score shown');
+  assert.equal(r.model, 'test/cheap');
+  assert.equal(r.cost, 0.00002);
+  assert.equal(sent.model, 'test/cheap');
+  assert.equal(sent.messages[0].content, REWRITE_SYSTEM);
+  assert.match(sent.messages[1].content, /- use plain js[\s\S]*The draft to improve:\nmake snake/);
+  assert.equal(await rewritePrompt({ text: 'x', model: 'm', call: async () => ({ message: { content: '  ' } }) }), null);
+});
+
+test('a tab the user lends works only through target "given", asks before Send or a password, and stops when taken back', { skip: !(await import('../server/browser.js')).browserPath() && 'no Chromium browser installed' }, async () => {
+  const http = await import('node:http');
+  const { userBrowse, giveTab, takeBackTab } = await import('../server/userbrowser.js');
+  const page = '<!doctype html><meta charset="utf-8"><title>Inbox</title><a href="#more" id="more">Read more</a><button id="send" aria-label="Send">➤</button><form><input id="pw" type="password"></form>';
+  const srv = http.createServer((_q, r) => { r.writeHead(200, { 'Content-Type': 'text/html' }); r.end(page); });
+  await new Promise((ok) => srv.listen(0, '127.0.0.1', ok));
+  const sid = `usertab${Date.now().toString(36)}`, chatId = `chat-${Date.now().toString(36)}`;
+  try {
+    await userBrowse(sid, 'open', { url: `http://127.0.0.1:${srv.address().port}/`, w: 900, h: 600 });
+    giveTab(chatId, sid, { url: 'http://127.0.0.1/', title: 'Inbox', desktop: false });
+    const asked = [];
+    const { bodies } = await run((body, i) => {
+      if (i === 5) takeBackTab(chatId);
+      return [
+        reply('', [['browser', { action: 'open', target: 'given' }]]),
+        reply('', [['browser', { action: 'click', text: 'Read more' }]]),
+        reply('', [['browser', { action: 'click', selector: '#send' }]]),
+        reply('', [['browser', { action: 'type', selector: '#pw', text: 'x' }]]),
+        reply('', [['browser', { action: 'scroll', dy: 100 }]]),
+        reply('', [['browser', { action: 'click', text: 'Read more' }]]),
+        reply('Done.'),
+      ][i];
+    }, { chatId, onEvent: (e, runId) => { if (e.t === 'approval' && e.tool === 'browser') { asked.push(e.what); setTimeout(() => answerApproval(runId, e.id, { approve: /password/.test(e.what) }), 5); } } });
+    assert.match(String(bodies[0].messages.at(-1).content), /given you one of their own browser tabs for this chat: "Inbox"/);
+    const res = toolResults(bodies.at(-1)).map(String);
+    assert.match(res[0], /You are in the user's own tab \("Inbox"\)/);
+    assert.match(res[1], /clicked a "Read more"/);
+    assert.match(res[2], /The user said no to that \(click "➤ · Send"\)/);
+    assert.match(res[3], /typed 1 characters/);
+    assert.match(res[5], /took their tab back/);
+    assert.deepEqual(asked.map((w) => w.replace(/^In your tab on \S+: /, '')), ['click "➤ · Send"', 'type into a password field']);
+  } finally { takeBackTab(chatId); await userBrowse(sid, 'close').catch(() => {}); srv.close(); (await import('../server/browser.js')).closeBrowser(); }
+});
+
+test('a Chrome tab given through the QuorX extension: only an extension with the key connects, and the agent works in that tab with the same asks', { skip: !(await import('../server/browser.js')).browserPath() && 'no Chromium browser installed' }, async () => {
+  const http = await import('node:http');
+  const { extUpgrade, extKey, onExtRequest, extReady } = await import('../server/extlink.js');
+  const { giveTab, takeBackTab, takeBackSid, lentChromeTabs } = await import('../server/userbrowser.js');
+  const { openTab, closeBrowser } = await import('../server/browser.js');
+  const page = '<!doctype html><meta charset="utf-8"><title>Mail</title><button aria-label="Delete">🗑</button><a href="#x">Open message</a>';
+  const srv = http.createServer((q, r) => { r.writeHead(200, { 'Content-Type': 'text/html' }); r.end(page); });
+  srv.on('upgrade', (q, s) => extUpgrade(q, s));
+  await new Promise((ok) => srv.listen(0, '127.0.0.1', ok));
+  const port = srv.address().port, ORIGIN = `chrome-extension://${'a'.repeat(32)}`;
+  // The "Chrome tab": a headless tab, driven only through the extension link.
+  const real = await openTab({ own: true });
+  await real.open(`http://127.0.0.1:${port}/`, { width: 900, height: 600 });
+  const connect = (origin, key) => new Promise((ok) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/api/ext/socket`, { headers: { Origin: origin } });
+    const got = [];
+    ws.onopen = () => ws.send(JSON.stringify({ t: 'hello', key, version: 'test' }));
+    ws.onmessage = async (ev) => {
+      const m = JSON.parse(ev.data); got.push(m.t);
+      if (m.t === 'call') {
+        if (m.args.tab !== 7) return ws.send(JSON.stringify({ t: 'reply', id: m.id, error: 'that tab was not given to QuorX' }));
+        if (m.cmd !== 'tab.cdp') return ws.send(JSON.stringify({ t: 'reply', id: m.id, result: true }));
+        try { ws.send(JSON.stringify({ t: 'reply', id: m.id, result: await real.cdp(m.args.method, m.args.params) })); } catch (e) { ws.send(JSON.stringify({ t: 'reply', id: m.id, error: e.message })); }
+      }
+    };
+    ws.onclose = ws.onerror = () => ok({ ws, got, closed: true }); // a refused handshake is an error in Node's client
+    setTimeout(() => ok({ ws, got, closed: false }), 1500);
+  });
+  const chatId = `chat-${Date.now().toString(36)}`;
+  try {
+    onExtRequest({});
+    // A web page can't connect (wrong Origin), and an extension with the wrong key is turned away.
+    const page1 = await connect('http://evil.example', extKey());
+    assert.equal(page1.closed, true); assert.deepEqual(page1.got, []);
+    const wrong = await connect(ORIGIN, 'f'.repeat(48));
+    assert.deepEqual(wrong.got, ['denied']);
+    const ext = await connect(ORIGIN, extKey());
+    assert.equal(ext.got[0], 'welcome'); assert.equal(extReady(), true); // an older copy is also asked to reload
+    giveTab(chatId, 'chrome-7', { url: 'http://127.0.0.1/', title: 'Mail', ext: 7 });
+    assert.deepEqual(lentChromeTabs(), [{ chatId, tab: 7, title: 'Mail' }]);
+    const asked = [];
+    const { bodies } = await run((body, i) => [
+      reply('', [['browser', { action: 'open', target: 'given' }]]),
+      reply('', [['browser', { action: 'click', text: 'Open message' }]]),
+      reply('', [['browser', { action: 'click', selector: 'button' }]]),
+      reply('Done.'),
+    ][i], { chatId, onEvent: (e, runId) => { if (e.t === 'approval' && e.tool === 'browser') { asked.push(e.what); setTimeout(() => answerApproval(runId, e.id, { approve: false }), 5); } } });
+    const res = toolResults(bodies.at(-1)).map(String);
+    assert.match(res[0], /You are in the user's own tab \("Mail"\)[\s\S]*Title: Mail/);
+    assert.match(res[1], /clicked a "Open message"/);
+    assert.match(res[2], /The user said no to that \(click "🗑 · Delete"\)/);
+    assert.equal(asked.length, 1);
+    assert.equal(takeBackSid('chrome-7'), true);
+    assert.deepEqual(lentChromeTabs(), []);
+    ext.ws.close();
+  } finally { takeBackTab(chatId); await real.close().catch(() => {}); srv.close(); closeBrowser(); }
+});
+
+test('🧩 Chrome on in a chat: the agent opens its own tab in the user’s Chrome through the extension; off, it is told to ask', { skip: !(await import('../server/browser.js')).browserPath() && 'no Chromium browser installed' }, async () => {
+  const http = await import('node:http');
+  const { extUpgrade, extKey } = await import('../server/extlink.js');
+  const { takeBackTab, givenTab } = await import('../server/userbrowser.js');
+  const { openTab, closeBrowser } = await import('../server/browser.js');
+  const srv = http.createServer((q, r) => { r.writeHead(200, { 'Content-Type': 'text/html' }); r.end('<!doctype html><meta charset="utf-8"><title>Inbox</title><a href="#m">Open message</a>'); });
+  srv.on('upgrade', (q, s) => extUpgrade(q, s));
+  await new Promise((ok) => srv.listen(0, '127.0.0.1', ok));
+  const port = srv.address().port, real = await openTab({ own: true });
+  const opened = [];
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/api/ext/socket`, { headers: { Origin: `chrome-extension://${'b'.repeat(32)}` } });
+  await new Promise((ok) => { ws.onmessage = async (ev) => {
+    const m = JSON.parse(ev.data);
+    if (m.t === 'welcome') ok();
+    if (m.t !== 'call') return;
+    const reply = (o) => ws.send(JSON.stringify({ t: 'reply', id: m.id, ...o }));
+    if (m.cmd === 'tab.open') { opened.push(m.args); await real.open(m.args.url, { width: 900, height: 600 }); return reply({ result: { id: 9, title: 'Inbox' } }); }
+    if (m.cmd === 'tab.cdp') { try { return reply({ result: await real.cdp(m.args.method, m.args.params) }); } catch (e) { return reply({ error: e.message }); } }
+    reply({ result: true });
+  }; ws.onopen = () => ws.send(JSON.stringify({ t: 'hello', key: extKey(), version: '0.2.11' })); });
+  const chatId = `chat-${Date.now().toString(36)}`;
+  try {
+    const off = await run((body, i) => [reply('', [['browser', { action: 'open', target: `chrome:127.0.0.1:${port}/` }]]), reply('Done.')][i], { chatId });
+    assert.match(String(toolResults(off.bodies.at(-1))[0]), /Chrome is off in this chat/);
+    const on = await run((body, i) => [
+      reply('', [['browser', { action: 'open', target: `chrome:http://127.0.0.1:${port}/` }]]),
+      reply('', [['browser', { action: 'click', text: 'Open message' }]]),
+      reply('Done.'),
+    ][i], { chatId, settings: { chromeAccess: true } });
+    assert.match(String(on.bodies[0].messages.at(-1).content), /use their own Chrome in this chat/);
+    const res = toolResults(on.bodies.at(-1)).map(String);
+    assert.equal(opened.length, 1); assert.equal(opened[0].chatId, chatId); assert.equal(opened[0].url, `http://127.0.0.1:${port}/`);
+    assert.match(res[1], /clicked a "Open message"/);
+    assert.equal(givenTab(chatId)?.own, true);
+  } finally { takeBackTab(chatId); ws.close(); await real.close().catch(() => {}); srv.close(); closeBrowser(); }
+});
+
+test('the extension connects with one click: it waits until Allow in QuorX, Deny closes it, and an older copy is asked to reload', async () => {
+  const http = await import('node:http');
+  const { extUpgrade, extKey, extPairing, extPair, extReady } = await import('../server/extlink.js');
+  const srv = http.createServer(); srv.on('upgrade', (q, s) => extUpgrade(q, s));
+  await new Promise((ok) => srv.listen(0, '127.0.0.1', ok));
+  const open = (version) => new Promise((ok) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${srv.address().port}/api/ext/socket`, { headers: { Origin: `chrome-extension://${'c'.repeat(32)}` } });
+    const got = []; ws.onmessage = (ev) => got.push(JSON.parse(ev.data));
+    ws.onopen = () => { ws.send(JSON.stringify({ t: 'hello', pair: true, browser: 'Brave', version })); ok({ ws, got }); };
+  });
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  try {
+    const a = await open('0.2.11'); await wait(150);
+    assert.deepEqual(a.got.map((m) => m.t), ['pairing']);
+    assert.equal(extPairing()?.browser, 'Brave');
+    assert.equal(extPair(false), true); await wait(150);
+    assert.equal(a.got.at(-1).t, 'denied'); assert.equal(extPairing(), null);
+    const b = await open('0.2.11'); await wait(150);
+    extPair(true); await wait(150);
+    assert.deepEqual(b.got.map((m) => m.t), ['pairing', 'paired', 'welcome', 'reload']);
+    assert.equal(b.got[1].key, extKey()); assert.equal(extReady(), true);
+    b.ws.close();
+  } finally { srv.close(); }
+});
