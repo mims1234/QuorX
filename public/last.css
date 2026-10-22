@@ -2499,3 +2499,7 @@ html body .trace.trace-pane .step .when { width: auto !important; white-space: n
 .brand-git svg { width: 14px; height: 14px; display: block; }
 .brand-git:hover { color: var(--text); background: color-mix(in srgb, var(--text) 8%, transparent); }
 .brand-git:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* Running tab: rows use the pane's whole width */
+#paneBody > .run { flex: 1 1 auto; width: 100%; min-width: 0; }
+.fx-menu button { display: flex; align-items: center; justify-content: flex-start; gap: 8px; }
