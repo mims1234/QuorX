@@ -2280,3 +2280,37 @@ test('launch_config lists, saves, renames and removes saved servers; direct writ
   const file = JSON.parse(fs.readFileSync(path.join(dir, '.quorx', 'launch.json'), 'utf8'));
   assert.deepEqual(file.configurations.map((c) => c.name), ['site']);
 });
+
+test('a tab the user lends works only through target "given", asks before Send or a password, and stops when taken back', { skip: !(await import('../server/browser.js')).browserPath() && 'no Chromium browser installed' }, async () => {
+  const http = await import('node:http');
+  const { userBrowse, giveTab, takeBackTab } = await import('../server/userbrowser.js');
+  const page = '<!doctype html><meta charset="utf-8"><title>Inbox</title><a href="#more" id="more">Read more</a><button id="send" aria-label="Send">➤</button><form><input id="pw" type="password"></form>';
+  const srv = http.createServer((_q, r) => { r.writeHead(200, { 'Content-Type': 'text/html' }); r.end(page); });
+  await new Promise((ok) => srv.listen(0, '127.0.0.1', ok));
+  const sid = `usertab${Date.now().toString(36)}`, chatId = `chat-${Date.now().toString(36)}`;
+  try {
+    await userBrowse(sid, 'open', { url: `http://127.0.0.1:${srv.address().port}/`, w: 900, h: 600 });
+    giveTab(chatId, sid, { url: 'http://127.0.0.1/', title: 'Inbox', desktop: false });
+    const asked = [];
+    const { bodies } = await run((body, i) => {
+      if (i === 5) takeBackTab(chatId);
+      return [
+        reply('', [['browser', { action: 'open', target: 'given' }]]),
+        reply('', [['browser', { action: 'click', text: 'Read more' }]]),
+        reply('', [['browser', { action: 'click', selector: '#send' }]]),
+        reply('', [['browser', { action: 'type', selector: '#pw', text: 'x' }]]),
+        reply('', [['browser', { action: 'scroll', dy: 100 }]]),
+        reply('', [['browser', { action: 'click', text: 'Read more' }]]),
+        reply('Done.'),
+      ][i];
+    }, { chatId, onEvent: (e, runId) => { if (e.t === 'approval' && e.tool === 'browser') { asked.push(e.what); setTimeout(() => answerApproval(runId, e.id, { approve: /password/.test(e.what) }), 5); } } });
+    assert.match(String(bodies[0].messages.at(-1).content), /given you one of their own browser tabs for this chat: "Inbox"/);
+    const res = toolResults(bodies.at(-1)).map(String);
+    assert.match(res[0], /You are in the user's own tab \("Inbox"\)/);
+    assert.match(res[1], /clicked a "Read more"/);
+    assert.match(res[2], /The user said no to that \(click "➤ · Send"\)/);
+    assert.match(res[3], /typed 1 characters/);
+    assert.match(res[5], /took their tab back/);
+    assert.deepEqual(asked.map((w) => w.replace(/^In your tab on \S+: /, '')), ['click "➤ · Send"', 'type into a password field']);
+  } finally { takeBackTab(chatId); await userBrowse(sid, 'close').catch(() => {}); srv.close(); (await import('../server/browser.js')).closeBrowser(); }
+});

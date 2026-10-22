@@ -2503,3 +2503,19 @@ html body .trace.trace-pane .step .when { width: auto !important; white-space: n
 /* Running tab: rows use the pane's whole width */
 #paneBody > .run { flex: 1 1 auto; width: 100%; min-width: 0; }
 .fx-menu button { display: flex; align-items: center; justify-content: flex-start; gap: 8px; }
+
+/* ---------- 🤖 Give to agent: a tab of yours lent to a chat ---------- */
+.pane-tool .bv-give, .pane-tool .bv-takeback { height: 26px; padding: 0 10px; border-radius: 7px; font: 600 12px var(--font-ui); cursor: pointer; white-space: nowrap; }
+.pane-tool .bv-give { border: 1px solid color-mix(in srgb, var(--violet, #a78bfa) 55%, transparent); background: color-mix(in srgb, var(--violet, #a78bfa) 12%, transparent); color: var(--violet, #a78bfa); }
+.pane-tool .bv-give:hover { background: color-mix(in srgb, var(--violet, #a78bfa) 22%, transparent); }
+.pane-tool .bv-lent { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 999px; font: 600 11.5px var(--font-ui); color: var(--violet, #a78bfa); background: color-mix(in srgb, var(--violet, #a78bfa) 12%, transparent); white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.pane-tool .bv-takeback { border: 1px solid var(--line-strong); background: transparent; color: var(--text); }
+.pane-tool .bv-takeback:hover { border-color: var(--bad); color: var(--bad); }
+.btab.lent { box-shadow: inset 0 -2px 0 var(--violet, #a78bfa); }
+.btab.lent::before { content: '🤖'; font-size: 11px; margin-right: 2px; }
+.btab[draggable="true"] { cursor: grab; }
+.lent-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; height: 30px; padding: 0 4px 0 9px; border-radius: 8px; border: 1px solid color-mix(in srgb, var(--violet, #a78bfa) 55%, transparent); background: color-mix(in srgb, var(--violet, #a78bfa) 10%, transparent); font-size: 12px; color: var(--text); }
+.lent-chip .lent-l { color: var(--violet, #a78bfa); font-weight: 600; }
+.lent-chip b { font-weight: 600; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lent-chip .lent-back { height: 22px; padding: 0 8px; border-radius: 6px; border: 1px solid var(--line-strong); background: var(--panel); color: var(--text); font: 600 11.5px var(--font-ui); cursor: pointer; }
+.lent-chip .lent-back:hover { border-color: var(--bad); color: var(--bad); }

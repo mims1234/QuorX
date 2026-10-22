@@ -572,6 +572,22 @@ const COMMANDS = {
     return true;
   },
   async 'tab.close'({ tab }) { return closeTab(tab); },
+  // 🤖 Give to agent: one of your tabs, lent to a chat. Its debugger forwards page events like the agent's own tab's;
+  // detaching lets go of it (the tab and your sign-in stay as they are).
+  async 'tab.attach'({ tab }) {
+    const t = tabs.get(tab); if (!t || t.agent) throw new Error('that tab is gone');
+    const dbg = t.view.webContents.debugger;
+    if (!dbg.isAttached()) dbg.attach('1.3');
+    if (!t.onDbg) { t.onDbg = (_e, method, params) => { if (FORWARD.has(method)) queueEvent({ tab, method, params }); }; dbg.on('message', t.onDbg); }
+    return tab;
+  },
+  async 'tab.detach'({ tab }) {
+    const t = tabs.get(tab); if (!t || t.agent) return false;
+    const dbg = t.view.webContents.debugger;
+    if (t.onDbg) { dbg.removeListener('message', t.onDbg); t.onDbg = null; }
+    try { if (dbg.isAttached()) dbg.detach(); } catch { /* gone */ }
+    return true;
+  },
 };
 // Linked to the harness: commands come down an event stream; answers and page events go back by POST.
 // It reconnects when the harness restarts; an older harness without the link just keeps headless tabs.

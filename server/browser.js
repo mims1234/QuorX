@@ -96,6 +96,12 @@ async function browserPid(version) {
 }
 // The browser's last meaningful message line, without its [pid:tid:time:LEVEL:file] prefix.
 const lastLine = (s) => { const l = String(s).split(/\r?\n/).map((x) => x.replace(/^\[[^\]]*\]\s*/, '').trim()).filter((x) => x && !/DevTools listening/i.test(x)).pop(); return l ? `: ${l.slice(0, 200)}` : ''; };
+/** Ends the headless browser now (tests: a running browser keeps the process from exiting). It starts again on next use. */
+export function closeBrowser() {
+  const c = chrome; chrome = null; if (!c) return;
+  try { c.proc.kill(); } catch { /* gone */ }
+  try { if (c.pid && c.pid !== c.proc.pid) process.kill(c.pid); } catch { /* gone */ }
+}
 process.on('exit', () => {
   try { chrome?.proc.kill(); } catch { /* gone */ }
   try { if (chrome?.pid && chrome.pid !== chrome.proc.pid) process.kill(chrome.pid); } catch { /* gone */ }
@@ -170,6 +176,19 @@ async function headlessTransport({ own = false } = {}) {
 // Console lines the page didn't cause: Electron's own security warning in desktop-app tabs, missing source maps.
 const CONSOLE_NOISE = /Electron Security Warning|DevTools failed to load source ?map/i;
 
+// One of the user's own tabs in the desktop app, lent to the agent (🤖 Give to agent). Closing only lets go of it.
+async function desktopAttachTransport(sid) {
+  const id = await desktopCall('tab.attach', { tab: sid });
+  const subs = new Set();
+  const off = onTabEvents(id, (method, params) => { for (const fn of subs) fn(method, params); });
+  const t = await desktopCall('tab.cdp', { tab: id, method: 'Runtime.evaluate', params: { expression: 'location.href', returnByValue: true } }).catch(() => null);
+  return {
+    id, desktop: true, url: t?.result?.value || '',
+    send: (method, params = {}) => desktopCall('tab.cdp', { tab: id, method, params }, method === 'Page.captureScreenshot' && !params.captureBeyondViewport ? 16000 : 25000),
+    onEvent: (fn) => subs.add(fn),
+    close: async () => { off(); },
+  };
+}
 async function desktopTransport(chatId) {
   const id = await desktopCall('tab.create', { kind: 'agent', chatId });
   const subs = new Set();
@@ -220,18 +239,20 @@ async function cdpTransport(port) {
  * view in the app (the pane shows it live); otherwise it is a tab of the headless browser. With `{ cdpPort }` it is
  * the window of an app the agent started (Electron), reached through that app's own DevTools port.
  */
-export async function openTab({ chatId, cdpPort, own = false } = {}) {
+export async function openTab({ chatId, cdpPort, own = false, attachTab } = {}) {
   let tr = null;
-  if (cdpPort) tr = await cdpTransport(cdpPort);
+  if (attachTab) tr = await desktopAttachTransport(attachTab);
+  else if (cdpPort) tr = await cdpTransport(cdpPort);
   else if (chatId && desktopReady()) tr = await desktopTransport(chatId).catch(() => null);
   // A desktop tab that doesn't answer quickly is dropped for a headless one, so the agent never hangs on it.
   if (tr) {
     const ok = await Promise.race([tr.send('Page.enable').then(() => true, () => false), new Promise((r) => setTimeout(() => r(false), 8000))]);
     if (!ok) { await tr.close(); tr = null; }
   }
+  if (!tr && attachTab) throw new Error('that tab is gone');
   tr ||= await headlessTransport({ own });
   const listeners = [];
-  const tab = { id: tr.id, desktop: tr.desktop, app: !!tr.app, console: [], url: tr.url || 'about:blank' };
+  const tab = { id: tr.id, desktop: tr.desktop, app: !!tr.app, given: !!attachTab, console: [], url: tr.url || 'about:blank' };
   tr.onEvent((method, params) => {
     if (method === 'Runtime.consoleAPICalled' && ['error', 'warning'].includes(params.type) && !CONSOLE_NOISE.test(params.args.map((a) => a.value ?? a.description ?? '').join(' '))) tab.console.push(`${params.type}: ${params.args.map((a) => a.value ?? a.description ?? '').join(' ')}`.slice(0, 300));
     if (method === 'Runtime.exceptionThrown') tab.console.push(`exception: ${(params.exceptionDetails.exception?.description || params.exceptionDetails.text || '').split('\n')[0]}`.slice(0, 300));
@@ -252,8 +273,8 @@ export async function openTab({ chatId, cdpPort, own = false } = {}) {
 
   Object.assign(tab, {
     async open(url, { width = 1280, height = 800, mobile = width < 600 } = {}) {
-      await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile });
-      tab.size = { width, height };
+      // A tab the user lent keeps the size the user sees it at.
+      if (!tab.given) { await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile }); tab.size = { width, height }; }
       tab.console = [];
       const loaded = once('Page.loadEventFired', 15000);
       await send('Page.navigate', { url });
@@ -384,6 +405,43 @@ export async function openTab({ chatId, cdpPort, own = false } = {}) {
     async viewport(width, height, mobile = false) { await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile }); tab.size = { width, height }; },
     eval: js, // internal use only (not offered to the agent)
     // Back to the page's own size (the desktop app's pane decides it once the agent is done).
+    // 🤖 A lent tab: what a click, Enter or typing would act on, when it sends, deletes, buys, posts, signs out or
+    // changes the account (null when it doesn't look like any of that). Reads only.
+    async riskOf(a) {
+      return js(`((a) => {
+        const RISK = /\\b(send|delete|remove|trash|discard|erase|buy|purchase|pay|payment|order|checkout|check out|subscribe|unsubscribe|transfer|withdraw|donate|post|publish|tweet|reply|forward|share|submit|confirm|sign out|log ?out|deactivate|close account|change password|update password|save changes|settings)\\b/i;
+        // Every name a control has: icon buttons (Send ➤, a bin for Delete) carry theirs in aria-label or a tooltip.
+        const label = (e) => (e ? [...new Set([e.innerText, e.value, e.getAttribute('aria-label'), e.title, e.getAttribute('data-tooltip')].map((x) => String(x || '').trim().replace(/\\s+/g, ' ')).filter(Boolean))].join(' · ').slice(0, 80) : '');
+        if (a.action === 'click') {
+          let el = a.selector ? document.querySelector(a.selector) : null;
+          const txt = String(a.text || '').toLowerCase();
+          if (!el && txt) el = [...document.querySelectorAll('button, a, [role=button], input[type=submit], input[type=button], label, li, div, span')]
+            .filter((e) => (e.innerText || e.value || '').trim().toLowerCase().includes(txt)).sort((x, y) => (x.innerText || '').length - (y.innerText || '').length)[0];
+          if (!el && !a.selector && !txt && a.x != null) el = document.elementFromPoint(a.x, a.y);
+          if (!el) return null;
+          el = el.closest('button, a, [role=button], [role=menuitem], input[type=submit], input[type=button]') || el;
+          const l = label(el);
+          if (RISK.test(l)) return 'click "' + l + '"';
+          if (el.matches('input[type=submit], button[type=submit], form button:not([type])')) return 'submit a form ("' + (l || 'submit') + '")';
+          return null;
+        }
+        if (a.action === 'press') {
+          const key = String(a.key || 'Enter');
+          if (!/enter/i.test(key)) return null;
+          if (/ctrl|control|meta|cmd/i.test(key)) return 'press ' + key + ' (it often sends)';
+          const f = document.activeElement, form = f && f.closest ? f.closest('form') : null;
+          if (!form || f.type === 'search' || form.getAttribute('role') === 'search' || f.tagName === 'TEXTAREA') return null;
+          const b = form.querySelector('[type=submit], button:not([type])');
+          return 'submit a form' + (b && label(b) ? ' ("' + label(b) + '")' : '') + ' with Enter';
+        }
+        if (a.action === 'type') {
+          const e = a.selector ? document.querySelector(a.selector) : document.activeElement;
+          if (e && e.type === 'password') return 'type into a password field';
+          if (e && /one-time-code|cc-number|cc-csc|cc-exp/.test(e.autocomplete || '')) return 'type into a payment or sign-in code field';
+        }
+        return null;
+      })(${JSON.stringify({ action: a.action, selector: a.selector, text: a.text, x: a.x, y: a.y, key: a.key })})`);
+    },
     async clearViewport() { await send('Emulation.clearDeviceMetricsOverride').catch(() => {}); tab.size = null; },
     close: () => tr.close(),
   });
