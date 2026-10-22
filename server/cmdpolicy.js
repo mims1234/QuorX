@@ -86,6 +86,14 @@ const NEVER = new Set(['format', 'format-volume', 'diskpart', 'bcdedit', 'vssadm
   'enable-windowsoptionalfeature', 'disable-windowsoptionalfeature', 'add-windowscapability', 'remove-windowscapability', 'uninstall-package',
   'remove-appxpackage', 'suspend-bitlocker', 'disable-bitlocker', 'enable-bitlocker', 'set-itemproperty', 'new-itemproperty', 'remove-itemproperty',
   'set-processmitigation', 'bcdboot', 'rasdial']);
+// PowerShell's approved verbs (Get-Verb): a program named <verb>-<noun> with one of these is a cmdlet.
+const PS_VERBS = new Set(['add', 'clear', 'close', 'copy', 'enter', 'exit', 'find', 'format', 'get', 'hide', 'join', 'lock', 'move', 'new', 'open', 'optimize',
+  'pop', 'push', 'redo', 'remove', 'rename', 'reset', 'resize', 'search', 'select', 'set', 'show', 'skip', 'split', 'step', 'switch', 'undo', 'unlock', 'watch',
+  'backup', 'checkpoint', 'compare', 'compress', 'convert', 'convertfrom', 'convertto', 'dismount', 'edit', 'expand', 'export', 'group', 'import', 'initialize',
+  'limit', 'merge', 'mount', 'out', 'publish', 'restore', 'save', 'sync', 'unpublish', 'update', 'approve', 'assert', 'build', 'complete', 'confirm', 'deny',
+  'deploy', 'disable', 'enable', 'install', 'invoke', 'register', 'request', 'restart', 'resume', 'start', 'stop', 'submit', 'suspend', 'uninstall',
+  'unregister', 'wait', 'debug', 'measure', 'ping', 'repair', 'resolve', 'test', 'trace', 'connect', 'disconnect', 'read', 'receive', 'send', 'write',
+  'block', 'grant', 'protect', 'revoke', 'unblock', 'unprotect', 'use', 'where', 'foreach', 'sort']);
 // PowerShell verbs that only read, compute or print.
 const SAFE_VERBS = new Set(['get', 'test', 'select', 'measure', 'compare', 'find', 'resolve', 'join', 'split', 'sort', 'group', 'where', 'foreach',
   'show', 'read', 'convertto', 'convertfrom', 'format', 'out', 'write', 'trace', 'search', 'watch', 'wait', 'confirm', 'debug']);
@@ -714,7 +722,7 @@ function classify(s, shell) {
   if (/[\\/]/.test(s.rawProgram) || /\.(ps1|bat|cmd|exe|sh|py|js)$/i.test(s.rawProgram)) return { cls: 'build', script: true, why: '' };
   // A PowerShell cmdlet QuorX doesn't know whose verb can change things (Stop-, Set-, Disable-…): the deciders vote even at Open.
   const verb = /^([a-z]+)-[a-z]/.exec(p)?.[1];
-  if (verb && !SAFE_VERBS.has(verb)) return { cls: 'unknown', why: `${s.rawProgram} is a PowerShell command QuorX doesn’t know, and ${verb} can change your system` };
+  if (verb && PS_VERBS.has(verb) && !SAFE_VERBS.has(verb)) return { cls: 'unknown', why: `${s.rawProgram} is a PowerShell command QuorX doesn’t know, and ${verb} can change your system` };
   return { cls: 'unknown', why: '' };
 }
 
@@ -1126,7 +1134,9 @@ const RANK = { allow: 0, ask: 1, deny: 2 };
 /**
  * Decides what happens to a command line before it runs.
  * ctx: { shell: 'powershell'|'pwsh'|'cmd'|'bash'|'zsh'|'direct', root, cwd?, env?, rules: [{effect, match, by, scope}], mode: 'strict'|'yolo',
- *        yolo: { level: 'careful'|'balanced'|'open', external, opaque, outside } (what YOLO runs on its own, what the deciders may approve) }
+ *        yolo: { check: { web, inline, build, install, unknown, reads }, external, opaque, outside, global } }
+ *        check: what YOLO sends to the deciders instead of running it (left out: every one is checked, the careful default);
+ *        external, opaque, outside, global: what the deciders may approve instead of asking you. See safety.js yoloOf().
  * Returns { verdict: 'allow'|'ask'|'deny', who: 'user'|'deciders'|null, why, decidedBy, segments: [...], hint? }.
  */
 export async function decide(line, ctx) {
@@ -1145,9 +1155,10 @@ export async function decide(line, ctx) {
   }
   // Commands a script runs (see "scripts") join the queue just before the command that runs the script.
   const queue = [...split.segs], written = [];
-  // What YOLO runs on its own (safety.js yoloLevel). Strict is none of these: anything not read-only asks you.
-  const level = ctx.mode === 'yolo' ? (['careful', 'balanced', 'open'].includes(ctx.yolo?.level) ? ctx.yolo.level : 'careful') : 'strict';
-  const open = level === 'open', wide = open || level === 'balanced';
+  // What YOLO runs on its own, and what it checks with the deciders first (⚙ Safety & commands → ⚡ YOLO). Strict is
+  // none of these: anything that isn't read-only asks you.
+  const yolo = ctx.mode === 'yolo', Y = ctx.yolo || {};
+  const check = (k) => !yolo || !Y.check || Y.check[k] !== false;
   // How a card that asks you looks: danger (system changes, your keys) or warn (deploys, pushes, outside the project).
   const RISK = { danger: 2, warn: 1 };
   while (queue.length) {
@@ -1158,11 +1169,8 @@ export async function decide(line, ctx) {
       if (r?.opaque) s.opaque ||= r.opaque;
       if (r?.extra.length) { queue.unshift(...r.extra, s); continue; }
     }
-    let k = classify(s, s.shell || shell);
+    const k = classify(s, s.shell || shell);
     const paths = pathsOf(s, k, s.ctx || c);
-    // At Careful, a web read counts as reaching outside and a one-liner as code QuorX can't read, as before.
-    if (level === 'careful' && k.cls === 'net') k = { ...k, cls: 'external', why: `${s.rawProgram} reaches outside this computer` };
-    if (level === 'careful' && k.inline) k = { ...k, cls: 'opaque', why: `${s.rawProgram} would run code QuorX can't read first` };
     written.push(...paths.filter((p) => p.kind === 'write' && p.resolved).map((p) => p.resolved));
     const seg = { text: s.text, program: s.program, cls: k.cls, why: k.why, global: !!k.global, paths, rule: null, suggest: suggestions(s), ...(s.via ? { via: s.via } : {}) };
     if (!s.ctx) trackCd(s, c);
@@ -1173,8 +1181,8 @@ export async function decide(line, ctx) {
     // A read outside the project asks; reading keys never runs.
     const secret = reads.map((p) => p.resolved && secretRead(p.resolved)).find(Boolean);
     const outside = writes.find((p) => p.zone === 'outside') || reads.find((p) => p.resolved && p.zone !== 'inside' && p.zone !== 'protected' && p.why !== 'the project folder itself');
-    // Balanced and Open let YOLO read outside the project (never keys or QuorX's data: those are denied above).
-    const readOnlyOutside = wide && outside?.kind === 'read';
+    // YOLO reads outside the project unless it checks those first (never keys or QuorX's data: see secret).
+    const readOnlyOutside = yolo && !check('reads') && outside?.kind === 'read';
     let risk = null;
     // System changes (power, services, registry, disks, admin rights) are refused at every level: a card would let
     // one yes, or a script that answers cards, shut the computer down. You run those yourself in a terminal tab.
@@ -1187,18 +1195,22 @@ export async function decide(line, ctx) {
       const many = paths.reduce((n, p) => n + (p.resolved ? countMatches(p.resolved) : 0), 0);
       if (recursive || many > 20) { v = 'deny'; by = 'code'; why = `it deletes ${recursive ? 'a whole folder' : `${many} files`}`; seg.hint = 'Use delete_file instead: it moves files and folders to .quorx/trash, so the user can get them back.'; }
     }
-    else if (unknownPath) { v = 'ask'; who = open ? 'deciders' : 'user'; by = 'path'; why = `a path it touches (${unknownPath.raw}) ${unknownPath.why}`; }
-    else if (outside && !readOnlyOutside) { v = 'ask'; who = ctx.yolo?.outside && !open ? 'deciders' : 'user'; risk = outside.kind === 'read' ? null : 'warn'; by = 'path'; why = `it ${outside.kind === 'write' ? 'writes' : outside.kind === 'read' ? 'reads' : 'deletes or moves'} outside the project (${outside.resolved})`; }
-    else if (k.cls === 'opaque') { v = 'ask'; who = (ctx.yolo?.opaque || open) && !k.ends ? 'deciders' : 'user'; risk = k.ends ? 'warn' : null; why = k.why || 'QuorX can’t check it'; }
-    // Open: what changes a remote, installs for the whole computer or writes outside the project pauses for you.
-    else if (k.cls === 'external') { v = 'ask'; who = ctx.yolo?.external && !open ? 'deciders' : 'user'; risk = 'warn'; }
-    else if (k.cls === 'net') { if (!wide) { v = 'ask'; who = 'user'; why = why || `${s.rawProgram} reaches the web`; } }
+    else if (unknownPath) { v = 'ask'; who = Y.opaque ? 'deciders' : 'user'; by = 'path'; why = `a path it touches (${unknownPath.raw}) ${unknownPath.why}`; }
+    // A read outside the project the user wants checked goes to the deciders; a write or delete there pauses for you.
+    else if (outside && !readOnlyOutside) { v = 'ask'; who = (outside.kind === 'read' || Y.outside) ? 'deciders' : 'user'; risk = outside.kind === 'read' ? null : 'warn'; by = 'path'; why = `it ${outside.kind === 'write' ? 'writes' : outside.kind === 'read' ? 'reads' : 'deletes or moves'} outside the project (${outside.resolved})`; }
+    else if (k.cls === 'opaque') { v = 'ask'; who = Y.opaque && !k.ends ? 'deciders' : 'user'; risk = k.ends ? 'warn' : null; why = k.why || 'QuorX can’t check it'; }
+    // What changes a remote, installs for the whole computer or throws work away pauses for you (amber card).
+    else if (k.cls === 'external') { v = 'ask'; who = Y.external ? 'deciders' : 'user'; risk = 'warn'; }
     else if (k.cls === 'discard') { v = 'ask'; who = 'user'; risk = 'warn'; }
-    else if (k.cls === 'install' && k.global) { v = 'ask'; who = 'user'; risk = 'warn'; }
-    // Open: builds, local installs, project scripts and plain unknown commands run (snapshots make them undoable).
-    // An unknown command with a named concern (docker, macOS defaults) still goes to the deciders.
-    else if (open && (['build', 'install'].includes(k.cls) || (k.cls === 'unknown' && !k.why))) { by = 'level:open'; }
-    else if (['build', 'install', 'unknown'].includes(k.cls)) { v = 'ask'; who = 'deciders'; why = why || (k.cls === 'unknown' ? 'no rule covers this command' : `no rule allows ${seg.suggest.prefix.replace(/\*$/, '')} yet`); }
+    else if (k.cls === 'install' && k.global) { v = 'ask'; who = Y.global && !k.sudo ? 'deciders' : 'user'; risk = 'warn'; }
+    // Web reads, readable one-liners, builds, project scripts, local installs and plain unknown commands run, unless
+    // YOLO checks that kind first; snapshots make them undoable. An unknown command with a named concern (docker,
+    // macOS defaults, a cmdlet that can change things) always goes to the deciders.
+    else if (['net', 'build', 'install', 'unknown'].includes(k.cls)) {
+      const kind = k.cls === 'net' ? 'web' : k.inline ? 'inline' : k.cls;
+      if (!check(kind) && !(k.cls === 'unknown' && k.why)) by = `yolo:${kind}`;
+      else { v = 'ask'; who = 'deciders'; why = why || (k.cls === 'net' ? `${s.rawProgram} reaches the web` : k.cls === 'unknown' ? 'no rule covers this command' : `no rule allows ${seg.suggest.prefix.replace(/\*$/, '')} yet`); }
+    }
     // Rules
     if (v !== 'deny' || (by !== 'path' && k.cls !== 'never' && by !== 'code')) {
       const hits = matchRules(ruleText(s), ctx.rules, ctx.mode);

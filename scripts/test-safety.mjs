@@ -11,7 +11,7 @@ import { runLine, snapBefore, commandChanges, restoreCheckpoint, reviewFiles, ag
 import { jobsAvailable, jobHostStatus } from '../server/jobhost.js';
 import { decide, agentWriteBlocked, suggestedRules, saveRules, loadRules } from '../server/cmdpolicy.js';
 import { approvalJudge } from '../server/approvals.js';
-import { SAFETY_DEFAULTS } from '../server/safety.js';
+import { SAFETY_DEFAULTS, safetySettings, yoloOf } from '../server/safety.js';
 import { runAgent, answerApproval, raiseCap, answerQuestion } from '../server/agent.js';
 import { startTripwire } from '../server/tripwire.js';
 import { listBackground, stopBackground } from '../server/bgjobs.js';
@@ -177,7 +177,7 @@ test('rules: Strict asks you; YOLO lets the deciders vote only where allowed', {
     ['python -c 1', 'ask:user'], ['format C:', 'deny'], ['foo-bar baz', 'ask:user'], ['git clean -fd', 'ask:user']];
   for (const [l, v] of S) assert.equal(await run(l, 'strict'), v, `strict: ${l}`);
   const Y = [['git status', 'allow'], ['cargo test', 'ask:deciders'], ['npm i lodash', 'ask:deciders'], ['npm i -g x', 'ask:user'], ['git push', 'ask:user'],
-    ['python -c 1', 'ask:user'], ['git clean -fd', 'ask:user'], ['format C:', 'deny'], ['foo-bar baz', 'ask:deciders']];
+    ['python -c 1', 'ask:deciders'], ['git clean -fd', 'ask:user'], ['format C:', 'deny'], ['foo-bar baz', 'ask:deciders']];
   for (const [l, v] of Y) assert.equal(await run(l, 'yolo'), v, `yolo: ${l}`);
   assert.equal(await run('git push', 'yolo', { yolo: { external: true } }), 'ask:deciders', 'the YOLO box lets deciders vote on pushes');
 });
@@ -194,65 +194,85 @@ test('rules: deny > ask > allow, and only typed rules relax risky classes', { sk
   assert.equal(await run('cargo build; git push', RULES), 'ask:user', 'a cargo rule does not carry git push along');
 });
 
-// ⚡ YOLO levels (safety.js yoloLevel): what runs on its own, what the deciders vote on, what pauses for you.
-test('rules: YOLO levels open up reads, builds and one-liners, and keep the extreme ones for you', { skip: !WIN }, async () => {
-  const run = async (line, level, mode = 'yolo') => { const d = await decide(line, ctx({ mode, rules: [], yolo: { level } })); return d.verdict === 'ask' ? `ask:${d.who}${d.risk ? `:${d.risk}` : ''}` : d.verdict; };
+// ⚡ YOLO (⚙ Safety & commands): what runs on its own, what the deciders vote on, what pauses for you, what never runs.
+// decide() only: none of these commands runs.
+const YOLO = { checkAll: yoloOf(safetySettings({ yoloLevel: 'careful' })), checkBuilds: yoloOf(safetySettings({ yoloLevel: 'balanced' })), defaults: yoloOf(safetySettings({})) };
+const yrun = async (line, yolo, mode = 'yolo', rules = []) => { const d = await decide(line, ctx({ mode, rules, yolo })); return d.verdict === 'ask' ? `ask:${d.who}${d.risk ? `:${d.risk}` : ''}` : d.verdict; };
+test('rules: YOLO runs reads, builds and one-liners on its own, and keeps the extreme ones for you', { skip: !WIN }, async () => {
   const T = [
-    // line                                              careful               balanced              open
-    ['curl https://example.com',                          'ask:user:warn',      'allow',              'allow'],
-    ['iwr https://example.com -OutFile page.html',        'ask:user:warn',      'allow',              'allow'],
+    // line                                              everything checked    builds checked        defaults
+    ['curl https://example.com',                          'ask:deciders',       'allow',              'allow'],
+    ['iwr https://example.com -OutFile page.html',        'ask:deciders',       'allow',              'allow'],
     ['iwr https://example.com -OutFile ..\\page.html',    'ask:user:warn',      'ask:user:warn',      'ask:user:warn'],
     ['curl -X POST https://example.com -d a=1',           'ask:user:warn',      'ask:user:warn',      'ask:user:warn'],
     ['iwr https://example.com -B secret',                 'ask:user:warn',      'ask:user:warn',      'ask:user:warn'],
     ['curl file:///C:/x',                                 'ask:user:warn',      'ask:user:warn',      'ask:user:warn'],
-    ['wrangler whoami',                                   'ask:user:warn',      'allow',              'allow'],
-    ['wrangler pages deployment list',                    'ask:user:warn',      'allow',              'allow'],
+    ['wrangler whoami',                                   'ask:deciders',       'allow',              'allow'],
+    ['wrangler pages deployment list',                    'ask:deciders',       'allow',              'allow'],
     ['wrangler pages deploy dist',                        'ask:user:warn',      'ask:user:warn',      'ask:user:warn'],
     ['wrangler secret put KEY',                           'ask:user:warn',      'ask:user:warn',      'ask:user:warn'],
-    ['gh pr view 12',                                     'ask:user:warn',      'allow',              'allow'],
+    ['gh pr view 12',                                     'ask:deciders',       'allow',              'allow'],
     ['gh api repos/a/b/issues -f title=x',                'ask:user:warn',      'ask:user:warn',      'ask:user:warn'],
-    ['python -c "print(1+1)"',                            'ask:user',           'ask:deciders',       'allow'],
-    ['node -e "console.log(require(\'fs\').readdirSync(\'.\'))"', 'ask:user',  'ask:deciders',       'allow'],
-    ['node -e "require(\'child_process\').execSync(\'calc\')"', 'ask:user',    'ask:user',           'ask:deciders'],
-    ['python -c "import shutil; shutil.rmtree(\'src\')"', 'ask:user',           'ask:user',           'ask:deciders'],
-    ['python -c "open(\'C:/Users/x/.ssh/id_rsa\').read()"', 'ask:user',         'ask:user',           'ask:deciders'],
-    ['Get-Content C:\\Windows\\win.ini',                  'ask:user',           'allow',              'allow'],
+    ['python -c "print(1+1)"',                            'ask:deciders',       'allow',              'allow'],
+    ['node -e "console.log(require(\'fs\').readdirSync(\'.\'))"', 'ask:deciders', 'allow',           'allow'],
+    ['node -e "require(\'child_process\').execSync(\'calc\')"', 'ask:user',    'ask:deciders',       'ask:deciders'],
+    ['python -c "import shutil; shutil.rmtree(\'src\')"', 'ask:user',           'ask:deciders',       'ask:deciders'],
+    ['python -c "open(\'C:/Users/x/.ssh/id_rsa\').read()"', 'ask:user',         'ask:deciders',       'ask:deciders'],
+    ['Get-Content C:\\Windows\\win.ini',                  'ask:deciders',       'allow',              'allow'],
     ['cargo test',                                        'ask:deciders',       'ask:deciders',       'allow'],
     ['npm i lodash',                                      'ask:deciders',       'ask:deciders',       'allow'],
     ['cloudflared tunnel --url http://localhost:5300',    'ask:deciders',       'ask:deciders',       'allow'],
     ['foo-bar baz',                                       'ask:deciders',       'ask:deciders',       'allow'],
     ['docker run x',                                      'ask:deciders',       'ask:deciders',       'ask:deciders'],
+    ['Disable-ScheduledTask x',                           'ask:deciders',       'ask:deciders',       'ask:deciders'],
     ['npm i -g typescript',                               'ask:user:warn',      'ask:user:warn',      'ask:user:warn'],
     ['git push',                                          'ask:user:warn',      'ask:user:warn',      'ask:user:warn'],
-    ['cmd /c dir',                                        'ask:user',           'ask:user',           'ask:deciders'],
+    ['cmd /c dir',                                        'ask:user',           'ask:deciders',       'ask:deciders'],
     ['taskkill /im node.exe /f',                          'ask:user:warn',      'ask:user:warn',      'ask:user:warn'],
     ['git clean -fd',                                     'ask:user:warn',      'ask:user:warn',      'ask:user:warn'],
-    // decide() only: none of these runs. System changes are refused at every level, whatever the rules say.
+    ['Get-Content ~\\.ssh\\id_rsa',                       'ask:user:danger',    'ask:user:danger',    'ask:user:danger'],
+    ['route print',                                       'allow',              'allow',              'allow'],
+    // System changes are refused whatever YOLO or the rules say.
     ['schtasks /create /tn x /tr calc /sc once /st 00:00', 'deny',              'deny',               'deny'],
     ['reg add HKCU\\Software\\X /v a /d 1',               'deny',               'deny',               'deny'],
     ['shutdown /s /t 0',                                  'deny',               'deny',               'deny'],
     ['Stop-Computer',                                     'deny',               'deny',               'deny'],
     ['Stop-Service spooler',                              'deny',               'deny',               'deny'],
     ['powercfg /h off',                                   'deny',               'deny',               'deny'],
-    ['Disable-ScheduledTask x',                           'ask:deciders',       'ask:deciders',       'ask:deciders'],
-    ['route print',                                       'allow',              'allow',              'allow'],
-    ['Get-Content ~\\.ssh\\id_rsa',                       'ask:user:danger',    'ask:user:danger',    'ask:user:danger'],
     ['format C:',                                         'deny',               'deny',               'deny'],
     ['diskpart',                                          'deny',               'deny',               'deny'],
     ['Remove-Item dist -Recurse',                         'deny',               'deny',               'deny'],
     ['Remove-Item ~ -Recurse',                            'deny',               'deny',               'deny'],
   ];
   for (const [line, ...want] of T) {
-    for (const [i, level] of ['careful', 'balanced', 'open'].entries()) assert.equal(await run(line, level), want[i], `${level}: ${line}`);
+    for (const [i, name] of ['checkAll', 'checkBuilds', 'defaults'].entries()) assert.equal(await yrun(line, YOLO[name]), want[i], `${name}: ${line}`);
   }
   // Strict: a web read or a one-liner asks you, and a button rule can lift it; no rule lets a system change or a key read through.
-  assert.equal(await run('curl https://example.com', 'open', 'strict'), 'ask:user');
-  const lifted = await decide('curl https://example.com', ctx({ rules: [{ effect: 'allow', match: 'invoke-webrequest https://example.com', by: 'button' }] }));
-  assert.equal(lifted.verdict, 'allow', 'a button rule lifts a web read');
-  const sys = await decide('schtasks /create /tn x /tr calc /sc once /st 00:00', ctx({ mode: 'yolo', yolo: { level: 'open' }, rules: [{ effect: 'allow', match: 'schtasks*', by: 'user' }] }));
-  assert.equal(sys.verdict, 'deny', 'no rule lets a system change through');
-  const keys = await decide('Get-Content ~\\.ssh\\id_rsa', ctx({ mode: 'yolo', yolo: { level: 'open' }, rules: [{ effect: 'allow', match: 'get-content*', by: 'user' }] }));
-  assert.equal(`${keys.verdict}:${keys.who}:${keys.risk}`, 'ask:user:danger', 'no rule lets a key read through without you');
+  assert.equal(await yrun('curl https://example.com', YOLO.defaults, 'strict'), 'ask:user');
+  assert.equal(await yrun('curl https://example.com', YOLO.defaults, 'strict', [{ effect: 'allow', match: 'invoke-webrequest https://example.com', by: 'button' }]), 'allow', 'a button rule lifts a web read');
+  assert.equal(await yrun('schtasks /create /tn x /tr calc /sc once /st 00:00', YOLO.defaults, 'yolo', [{ effect: 'allow', match: 'schtasks*', by: 'user' }]), 'deny', 'no rule lets a system change through');
+  assert.equal(await yrun('Get-Content ~\\.ssh\\id_rsa', YOLO.defaults, 'yolo', [{ effect: 'allow', match: 'get-content*', by: 'user' }]), 'ask:user:danger', 'no rule lets a key read through without you');
+});
+
+test('rules: each ⚡ YOLO setting moves its own kind of command, and nothing else', { skip: !WIN }, async () => {
+  const with_ = (over) => yoloOf(safetySettings(over));
+  // Check first: that kind goes to the deciders instead of running.
+  for (const [key, line] of [['yoloCheckWeb', 'curl https://example.com'], ['yoloCheckInline', 'python -c "print(1)"'], ['yoloCheckBuild', 'cargo test'],
+    ['yoloCheckInstall', 'npm i lodash'], ['yoloCheckUnknown', 'foo-bar baz'], ['yoloCheckReads', 'Get-Content C:\\Windows\\win.ini']]) {
+    assert.equal(await yrun(line, with_({ [key]: true })), 'ask:deciders', `${key}: ${line}`);
+    assert.equal(await yrun('cargo build --release', with_({ [key]: true })), key === 'yoloCheckBuild' ? 'ask:deciders' : 'allow', `${key} leaves other kinds alone`);
+  }
+  // Let the deciders approve: that kind goes to them instead of pausing for you.
+  for (const [key, line] of [['yoloExternal', 'git push'], ['yoloGlobal', 'npm i -g typescript'], ['yoloOutside', 'echo hi > ..\\outside.txt']]) {
+    assert.equal(await yrun(line, YOLO.defaults), 'ask:user:warn', `default: ${line}`);
+    assert.equal(await yrun(line, with_({ [key]: true })), 'ask:deciders:warn', `${key}: ${line}`);
+  }
+  assert.equal(await yrun('cmd /c dir', with_({ yoloOpaque: false })), 'ask:user', 'unticking “can’t read” sends it to you');
+  assert.equal(await yrun('sudo apt install x', with_({ yoloGlobal: true }), 'yolo'), 'ask:user:warn', 'sudo needs a password the deciders can’t type');
+  // Old settings files with a level still load.
+  assert.equal(safetySettings({ yoloLevel: 'careful' }).yoloCheckWeb, true);
+  assert.equal(safetySettings({ yoloLevel: 'careful', yoloCheckWeb: false }).yoloCheckWeb, false, 'a saved tick wins over the old level');
+  assert.equal(safetySettings({ yoloLevel: 'nonsense' }).yoloCheckBuild, false);
 });
 
 test('agent file tools cannot write QuorX config or git internals', () => {
@@ -792,7 +812,7 @@ test('budget: in Strict the cap asks; raising it lets the reply carry on', async
 test('jobs: a long build moves to the background instead of being killed, and job_output follows it', { skip: !WIN }, async () => {
   const { bodies } = await agentRun((b, i) => [
     reply('', [['shell', { command: 'node slow.js' }]]),
-    reply('', [['job_output', { job: 'bg1', wait_s: 10 }]]),
+    reply('', [['job_output', { job: toolOut([b], 0)?.match(/job (bg\d+)/)?.[1] || 'bg1', wait_s: 10 }]]),
     reply('Done.'),
   ][i], {
     settings: { safety: { timeout: 5 } },
@@ -803,8 +823,6 @@ test('jobs: a long build moves to the background instead of being killed, and jo
     },
   });
   assert.match(toolOut(bodies, 1), /continues in the background as job bg\d+/);
-  const jobId = toolOut(bodies, 1).match(/job (bg\d+)/)[1];
-  assert.equal(jobId, 'bg1');
   assert.match(toolOut(bodies, 2), /ended, exit code 0[\s\S]*finished/);
 });
 
@@ -824,13 +842,15 @@ test('jobs: background: true returns at once and job_stop ends it', { skip: !WIN
   assert.match(toolOut(bodies, 2), /0 processes left|already/);
 });
 
-test('jobs: installs never move to the background', { skip: !WIN }, async () => {
+test('jobs: installs never move to the background, and say so before any card', { skip: !WIN }, async () => {
+  let cards = 0;
   const { bodies } = await agentRun((b, i) => [reply('', [['shell', { command: 'npm install left-pad', background: true }]]), reply('OK.')][i], { settings: { approval: 'strict' },
-    onEvent: (e, id) => { if (e.t === 'approval' && e.mode === 'strict') setTimeout(() => answerApproval(id, e.id, { approve: true }), 10); } });
-  assert.match(toolOut(bodies, 1), /only commands that build, run project code or read can run in the background/);
+    onEvent: (e, id) => { if (e.t === 'approval' && e.mode === 'strict') { cards++; setTimeout(() => answerApproval(id, e.id, { approve: true }), 10); } } });
+  assert.match(toolOut(bodies, 1), /installs can’t run in the background/);
+  assert.equal(cards, 0, 'no card for a command that would be refused anyway');
 });
 
-test('jobs: an install hidden in a wrapper script asks with no Always allow, and never runs in the background', { skip: !WIN }, async () => {
+test('jobs: an install hidden in a wrapper script never runs in the background', { skip: !WIN }, async () => {
   let card = null;
   // The wrapper only prints what it was given, so nothing is installed even if this check ever failed.
   const echo = "import { spawn } from 'node:child_process';\nconsole.log('would run', process.argv.slice(2).join(' '));\n";
@@ -838,10 +858,8 @@ test('jobs: an install hidden in a wrapper script asks with no Always allow, and
     prep: (d) => { fs.mkdirSync(path.join(d, '.quorx', 'scratch'), { recursive: true }); fs.writeFileSync(path.join(d, '.quorx', 'scratch', 'run.mjs'), echo); },
     onEvent: (e, id) => { if (e.t === 'approval' && e.mode === 'strict') { card = e; setTimeout(() => answerApproval(id, e.id, { approve: true }), 10); } },
   });
-  assert.ok(card, 'it asked');
-  assert.equal(card.noAlways, true, 'no Always allow');
-  assert.ok(card.policy.segments.some((s) => s.cls === 'install' && s.global && s.via === '.quorx/scratch/run.mjs'), 'the card shows the install');
-  assert.match(toolOut(bodies, 1), /only commands that build, run project code or read can run in the background/);
+  assert.equal(card, null, 'refused before any card');
+  assert.match(toolOut(bodies, 1), /installs can’t run in the background/);
   assert.ok(!events.some((e) => e.t === 'command'), 'nothing ran');
 });
 
@@ -1130,4 +1148,22 @@ test('deciders: the agent\'s own scratch script is judged on harm only', async (
   assert.ok(r.sent.every((b) => Object.keys(b.questions).join() === 'other'), 'only the harm question is asked');
   const harmful = { needed: 0.9, other: 0.9 };
   assert.equal((await withDeciders({ a: harmful, b: harmful, c: harmful }, () => judge({ harmOnly: true }))).approve, false);
+});
+
+// ---------- last, because it starts a job and a terminal (earlier tests expect to get bg1 and t1) ----------
+// A command you approved may run in the background (a tunnel, a server), and moving it to the terminal tool in the
+// same reply doesn't ask again. wait.js only waits: nothing here changes the computer.
+test('shell: an approved command runs in the background, and the terminal tool doesn’t ask for it again', { skip: !WIN }, async () => {
+  let cards = 0;
+  const { events, bodies } = await agentRun((b, i) => [
+    reply('', [['shell', { command: 'node wait.js', background: true }]]),
+    reply('', [['terminal', { action: 'start', command: 'node wait.js' }]]),
+    reply('Done.'),
+  ][i], { settings: { approval: 'strict' }, prep: (d) => fs.writeFileSync(path.join(d, 'wait.js'), 'setTimeout(() => {}, 3000);\n'),
+    onEvent: (e, id) => { if (e.t === 'approval' && e.mode === 'strict') { cards++; setTimeout(() => answerApproval(id, e.id, { approve: true }), 10); } } });
+  assert.equal(cards, 1, 'one card for the line, not one per tool');
+  assert.doesNotMatch(toolOut(bodies, 1), /only commands that build/);
+  assert.match(toolOut(bodies, 1), /background|job/i);
+  assert.match(toolOut(bodies, 2), /Terminal \S+ started/);
+  assert.ok(of(events, 'approval_done').every((e) => e.approve));
 });

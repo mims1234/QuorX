@@ -201,11 +201,12 @@ test('fetch_url refuses private, loopback and link-local addresses', () => {
   for (const ip of ['93.184.215.14', '1.1.1.1', '2606:4700:4700::1111']) assert.ok(!privateAddress(ip), ip);
 });
 
-test('read commands: keys never, outside the project asks; QuorX itself never', async () => {
+test('read commands: your keys ask with a red card, outside the project asks; QuorX itself never', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qx-sec-'));
   const v = async (line) => (await decide(line, { shell: 'bash', root, mode: 'strict', rules: [] })).verdict;
   const fwd = (p) => p.split(path.sep).join('/');
-  assert.equal(await v(`cat ${fwd(path.join(os.homedir(), '.ssh', 'id_ed25519'))}`), 'deny');
+  const keys = await decide(`cat ${fwd(path.join(os.homedir(), '.ssh', 'id_ed25519'))}`, { shell: 'bash', root, mode: 'yolo', rules: [{ effect: 'allow', match: '*', by: 'user' }] });
+  assert.equal(`${keys.verdict}:${keys.who}:${keys.risk}`, 'ask:user:danger', 'not even YOLO with an allow-all rule reads your keys unasked');
   assert.equal(await v(`cat ${fwd(path.join(process.env.OH_HOME, 'data', 'app-key'))}`), 'deny');
   assert.equal(await v(`cat ${fwd(path.join(os.tmpdir(), 'elsewhere.txt'))}`), 'ask');
   assert.equal(await v('cat README.md'), 'allow');

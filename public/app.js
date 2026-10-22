@@ -4890,12 +4890,20 @@ function settingsPanels(S) {
           stRow('Watch for mass deletes', '', stSwitch('safety.tripwire', SF.tripwire))
           + stRow('Stop after', 'Files removed outside the project…', stStep('safety.tripwireFiles', SF.tripwireFiles, 2, 10000, 1, 'files'))
           + stRow('Within', '…in this many seconds.', stStep('safety.tripwireSeconds', SF.tripwireSeconds, 1, 120, 1, 's'))),
-        stCard('What ⚡ YOLO runs on its own', 'Refused at every level: system changes (power, services, registry, disks, admin rights), deleting whole folders, blocked places and QuorX’s own keys. Run those yourself in a terminal tab.',
-          stRow('Always asks you', 'Reading your key folders pauses with a red card (hooks never run it). Ending other programs and throwing away uncommitted work ask too. A no from the deciders comes to you for the YOLO wait before the command is skipped.', '')
-          + stRow('Commands', 'Careful: only reads run; the deciders vote on builds, installs and unknown commands. Balanced: also web reads (curl, wrangler whoami, gh pr view), reads outside the project, and one-liners QuorX can read (python -c, node -e). Open: also builds, local installs, project scripts, servers, tunnels and unknown commands, which snapshots make undoable. Deploys, pushes, whole-computer installs and writes outside the project pause for you with an amber card; the deciders vote only on code QuorX can’t read.', stSeg('safety.yoloLevel', [['careful', 'Careful'], ['balanced', 'Balanced'], ['open', 'Open']], SF.yoloLevel || 'open'))
-          + ((SF.yoloLevel || 'open') === 'open' ? stRow('The deciders may approve', 'At Open: only code QuorX can’t read. Pick Careful or Balanced to choose more.', '') : stRow('Pushes, publishes and deploys', 'Anything that sends data out or changes a remote: git push, npm publish, wrangler deploy, a POST…', stSwitch('safety.yoloExternal', SF.yoloExternal))
-          + stRow('Commands QuorX can’t check', 'cmd /c, iex, one-liners that start programs or delete files, scripts built from text…', stSwitch('safety.yoloOpaque', SF.yoloOpaque))
-          + stRow('Deletes and writes outside the project', '', stSwitch('safety.yoloOutside', SF.yoloOutside)))),
+        stCard('⚡ YOLO: what runs on its own', 'Unticked, it just runs; a snapshot first makes it undoable. Ticked, the deciders vote first, and a no comes to you.',
+          stRow('Web reads', 'curl or Invoke-WebRequest GET, wrangler whoami, gh pr view, cloud CLI list and describe. Sending data, signing in or deploying always pauses (below).', stSwitch('safety.yoloCheckWeb', SF.yoloCheckWeb))
+          + stRow('One-liners', 'node -e, python -c whose code QuorX can read. One that starts programs or deletes files counts as code QuorX can’t read.', stSwitch('safety.yoloCheckInline', SF.yoloCheckInline))
+          + stRow('Builds, tests and project scripts', 'cargo build, npm test, node app.js, servers and tunnels…', stSwitch('safety.yoloCheckBuild', SF.yoloCheckBuild))
+          + stRow('Package installs in the project', 'npm i, pip install, cargo add… A made-up package is still blocked, and a brand-new one still asks you.', stSwitch('safety.yoloCheckInstall', SF.yoloCheckInstall))
+          + stRow('Commands QuorX doesn’t know', 'Programs with no rule yet. A PowerShell command that can change things (Stop-, Set-, Disable-…) or docker always goes to the deciders.', stSwitch('safety.yoloCheckUnknown', SF.yoloCheckUnknown))
+          + stRow('Reading files outside the project', 'Never your key folders or QuorX’s own data.', stSwitch('safety.yoloCheckReads', SF.yoloCheckReads))),
+        stCard('⚡ YOLO: what pauses for you', 'These show you an amber card even in YOLO. Ticked, the deciders may approve them instead.',
+          stRow('Pushes, publishes and deploys', 'Anything that sends data out or changes a remote: git push, npm publish, wrangler deploy, a POST…', stSwitch('safety.yoloExternal', SF.yoloExternal))
+          + stRow('Writes and deletes outside the project', 'Never the blocked places: drive roots, your profile, system folders, folders above the project.', stSwitch('safety.yoloOutside', SF.yoloOutside))
+          + stRow('Installs for the whole computer', 'npm i -g, winget, cargo install, pipx…', stSwitch('safety.yoloGlobal', SF.yoloGlobal))
+          + stRow('Commands QuorX can’t read', 'cmd /c, iex, one-liners that start programs, scripts built from text. Ticked by default.', stSwitch('safety.yoloOpaque', SF.yoloOpaque))
+          + stRow('Always asks you', 'Reading your key folders (a red card; hooks never run it), ending other programs, and throwing away uncommitted work.', '')
+          + stRow('Never runs', 'System changes (power, services, registry, disks, admin rights), deleting whole folders (the agent uses the trash instead), blocked places and QuorX’s own keys. Run those yourself in a terminal tab.', '')),
         stCard('Debugger and devices', '',
           stRow('Debugger for Node and Python', 'Research found a debugger helps strong models most after plain debugging fails, and can make weaker ones worse from the start. “After failed tries”: it opens once the agent has hit errors or had a build sent back.', stSeg('debugger', [['earned', 'After failed tries'], ['always', 'Always'], ['off', 'Off']], S.debugger || 'earned'))
           + stRow('Let the android tool use a physical phone', 'Unticked, it uses emulators only: a phone holds your real accounts and data.', stSwitch('safety.androidPhones', SF.androidPhones))),
@@ -4979,7 +4987,6 @@ function wireSettings() {
   for (const seg of main.querySelectorAll('.st-segmented[data-bind]')) for (const b of seg.querySelectorAll('.st-seg-btn')) b.onclick = () => {
     for (const x of seg.querySelectorAll('.st-seg-btn')) { x.classList.toggle('active', x === b); x.setAttribute('aria-checked', String(x === b)); }
     setPath(S, seg.dataset.bind, b.dataset.v); seg.closest('.st-row')?.classList.add('changed'); mark();
-    if (seg.dataset.bind === 'safety.yoloLevel') drawSettings(); // the deciders' switches matter only below Open
   };
   for (const st of main.querySelectorAll('.st-stepper')) {
     const inp = $('input', st), step = Number(st.dataset.step), min = Number(st.dataset.min), max = Number(st.dataset.max);
