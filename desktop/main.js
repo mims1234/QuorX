@@ -6,7 +6,7 @@
 // The server: if this data folder's harness already answers on its port, the window attaches to it (two servers on
 // the same data folder would fight). Another QuorX on that port (its own data folder, so its own app key) is left
 // alone, and this one starts server.js with Electron's own Node on the next free port.
-const { app, BrowserWindow, WebContentsView, Tray, Menu, nativeImage, ipcMain, session, shell, dialog, Notification } = require('electron');
+const { app, BrowserWindow, WebContentsView, Tray, Menu, nativeImage, ipcMain, session, shell, dialog, Notification, screen } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const { spawn } = require('node:child_process');
@@ -451,6 +451,61 @@ function applyEmu(t) {
   t.view.webContents.debugger.sendCommand('Emulation.setDefaultBackgroundColorOverride', { color: { r: 255, g: 255, b: 255, a: 1 } }).catch(() => {});
 }
 const COVER = `data:text/html,${encodeURIComponent('<!doctype html><meta charset="utf-8"><body style="margin:0;height:100vh;background:transparent;cursor:not-allowed;font:600 12px system-ui;user-select:none"><div style="position:fixed;left:50%;bottom:12px;transform:translateX(-50%);padding:6px 12px;border-radius:8px;background:rgba(167,139,250,.18);border:1px solid rgba(167,139,250,.6);color:#c4b5fd;backdrop-filter:blur(6px);white-space:nowrap">🤖 The agent is using this page · watch only until its reply ends</div></body>')}`;
+// A promise that gives up after `ms`, so one stuck step can't hold up the agent's whole turn.
+const within = (p, ms, what) => { let timer; return Promise.race([p, new Promise((_, no) => { timer = setTimeout(() => no(new Error(`${what} took over ${ms / 1000} s`)), ms); })]).finally(() => clearTimeout(timer)); };
+const CAPTURE_HIDDEN = { stayHidden: true, stayAwake: true };
+// The agent's screenshot. Every browser step ends with one, so a stalled picture failed the whole step. While you
+// were on another tab its view was hidden, and a hidden view makes a new frame only now and then: every other
+// capture waited for one (back in ~4 s, then ~27 s, past the harness's limit). Asking for a frame first doesn't help;
+// capturing the view while the screenshot waits does, as each such capture paints the page (answers in ~0.1 s).
+// The picture still gets only a few seconds, and after that the view's own picture is sent instead.
+async function captureTab(t, params) {
+  const wc = t.view.webContents, dbg = wc.debugger;
+  // Where the page is scrolled to, and how much of it the view shows (in page pixels; scaled down in a narrow pane).
+  const m = await within(dbg.sendCommand('Page.getLayoutMetrics'), 2000, 'reading the page size').catch(() => null);
+  const v = m?.cssVisualViewport || m?.visualViewport || {};
+  const vb = t.view.getBounds(), k = (t.emu && fitEmu(t)?.scale) || 1;
+  const seen = { x: v.pageX || 0, y: v.pageY || 0, width: vb.width ? vb.width / k : v.clientWidth || 0, height: vb.height ? vb.height / k : v.clientHeight || 0 };
+  // Screenshots at the page's own size, even while it is shown scaled down in the pane. A clip is in page
+  // coordinates, so it starts where the page is scrolled to: one at 0,0 on a scrolled page was blank background.
+  const p = t.emu ? { ...params, clip: { x: seen.x, y: seen.y, width: t.emu.width, height: t.emu.height, scale: 1 } } : params;
+  // A picture of what shows can also be cut from the view's own picture; a bigger one (the whole page, for an
+  // export) can't, and gets longer, as it can rightly take a while.
+  const fits = !!t.emu || !p.clip || (p.clip.x >= seen.x - 1 && p.clip.y >= seen.y - 1 && p.clip.x + p.clip.width <= seen.x + seen.width + 1 && p.clip.y + p.clip.height <= seen.y + seen.height + 1);
+  const shot = dbg.sendCommand('Page.captureScreenshot', p);
+  let done = false; // stops the painting below once the screenshot has come back or been given up on
+  if (!t.shown || !win?.isVisible() || win.isMinimized()) (async () => { while (!done) { await wc.capturePage(undefined, CAPTURE_HIDDEN).catch(() => {}); await new Promise((r) => setTimeout(r, 50)); } })();
+  try { return await within(shot, fits ? 6000 : 20000, 'the screenshot'); } catch (e) {
+    done = true;
+    if (!fits) throw e;
+    vlog('capture fallback', t.shown ? 'shown' : 'hidden', e.message);
+    const data = await viewPicture(t, p, seen).catch((e2) => { vlog('capture fallback failed', e2.message); return null; });
+    if (data) return { data };
+    throw new Error(`no picture of the page (${e.message}, and the view itself could not be captured either)`);
+  } finally { done = true; }
+}
+// The view's own picture, turned into what the screenshot would have been: page pixels, cut to the clip.
+async function viewPicture(t, p, seen) {
+  let img = await within(t.view.webContents.capturePage(undefined, CAPTURE_HIDDEN), 4000, 'capturing the view');
+  if (img.isEmpty()) throw new Error('the view has no picture');
+  // The picture is in screen pixels, and while the page has its own size it can come out bigger than the view, with
+  // the view's part in its top-left corner (the rest black): that part first.
+  let dpr = 1;
+  try { dpr = screen.getDisplayMatching(win.getBounds()).scaleFactor || 1; } catch { /* no window: one to one */ }
+  const vb = t.view.getBounds(), is = img.getSize();
+  const vw = Math.min(is.width, Math.round(vb.width * dpr)), vh = Math.min(is.height, Math.round(vb.height * dpr));
+  if (vw > 0 && vh > 0 && (vw < is.width || vh < is.height)) img = img.crop({ x: 0, y: 0, width: vw, height: vh });
+  // The view shows the visible part of the page, scaled down when the pane is narrower: back to page pixels.
+  const width = Math.round(seen.width);
+  if (width > 0 && img.getSize().width !== width) img = img.resize({ width, quality: 'good' });
+  const s = img.getSize();
+  const c = p.clip ? { x: p.clip.x - seen.x, y: p.clip.y - seen.y, width: p.clip.width, height: p.clip.height } : { x: 0, y: 0, width: s.width, height: s.height };
+  const x = Math.max(0, Math.round(c.x)), y = Math.max(0, Math.round(c.y));
+  const r = { x, y, width: Math.min(s.width - x, Math.round(c.width)), height: Math.min(s.height - y, Math.round(c.height)) };
+  if (r.width < 1 || r.height < 1) throw new Error('the clip is outside the view');
+  if (r.x || r.y || r.width !== s.width || r.height !== s.height) img = img.crop(r);
+  return (p.format === 'png' ? img.toPNG() : img.toJPEG(p.quality || 80)).toString('base64');
+}
 const COMMANDS = {
   async 'app.notify'(n) { return showNote(n); },
   // Sign-in with OpenRouter finished in the user's browser: back to QuorX.
@@ -499,13 +554,7 @@ const COMMANDS = {
     const f = t.emu && fitEmu(t);
     if (f && f.scale !== 1 && (method === 'Input.dispatchMouseEvent' || method === 'Input.synthesizeTapGesture')) return t.view.webContents.debugger.sendCommand(method, { ...params, x: params.x * f.scale, y: params.y * f.scale });
     if (f && f.scale !== 1 && method === 'Input.dispatchTouchEvent') return t.view.webContents.debugger.sendCommand(method, { ...params, touchPoints: (params.touchPoints || []).map((p) => ({ ...p, x: p.x * f.scale, y: p.y * f.scale })) });
-    // Screenshots at the page's own size, even while it is shown scaled down in the pane. A clip is in page
-    // coordinates, so it starts where the page is scrolled to: one at 0,0 on a scrolled page was blank background.
-    if (method === 'Page.captureScreenshot' && t.emu) {
-      const m = await t.view.webContents.debugger.sendCommand('Page.getLayoutMetrics').catch(() => null);
-      const v = m?.cssVisualViewport || m?.visualViewport || { pageX: 0, pageY: 0 };
-      return t.view.webContents.debugger.sendCommand(method, { ...params, clip: { x: v.pageX || 0, y: v.pageY || 0, width: t.emu.width, height: t.emu.height, scale: 1 } });
-    }
+    if (method === 'Page.captureScreenshot') return captureTab(t, params);
     return t.view.webContents.debugger.sendCommand(method, params);
   },
   async 'tab.lock'({ tab, locked }) {
