@@ -2503,3 +2503,5 @@ html body .trace.trace-pane .step .when { width: auto !important; white-space: n
 /* Running tab: rows use the pane's whole width */
 #paneBody > .run { flex: 1 1 auto; width: 100%; min-width: 0; }
 .fx-menu button { display: flex; align-items: center; justify-content: flex-start; gap: 8px; }
+.fx-menu .fx-sep { border: 0; border-top: 1px solid var(--line); margin: 3px 4px; }
+.files .fl[draggable="true"] { cursor: grab; }
