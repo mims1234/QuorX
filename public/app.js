@@ -2253,6 +2253,8 @@ function renderPanes() {
               <button type="button" class="cmp-act-btn imgBtn attachBtn" title="Attach files of any kind: documents, PDFs, spreadsheets, code, images… (or paste / drop them)" aria-label="Attach files">${CMP_ICO.attach}</button>
               <input type="file" class="imgInput" multiple hidden>
               <button type="button" class="cmp-act-btn micBtn" title="Speak your message (transcribed into the box)" aria-label="Speak your message">${CMP_ICO.mic}</button>
+              <button type="button" class="cmp-act-btn enhBtn" title="Enhance: rewrite what you wrote clearer and fuller before you send it (press again to go further). Uses the prompt enhancer's model, a fraction of a cent." aria-label="Enhance your message">✨<span class="enh-l">Enhance</span></button>
+              <button type="button" class="cmp-act-btn enhUndo" title="Undo the last ✨ Enhance: your words back" aria-label="Undo enhance" hidden>↶</button>
             </div>
             <div class="cmp-actions-right">
               <button type="button" class="cmp-stop-btn stopBtn" title="Stop the agent" aria-label="Stop" hidden>${CMP_ICO.stop}</button>
@@ -2309,6 +2311,8 @@ function wirePane(c, root, i) {
   $('.imgBtn', root).onclick = () => $('.imgInput', root).click();
   $('.imgInput', root).onchange = (e) => { addFiles(c, e.target.files); e.target.value = ''; };
   $('.micBtn', root).onclick = () => toggleMic(c);
+  $('.enhBtn', root).onclick = () => enhanceDraft(c);
+  $('.enhUndo', root).onclick = () => undoEnhance(c);
   $('.stopBtn', root).onclick = () => c.running?.abort();
 }
 function chatTotals(c) {
@@ -3965,10 +3969,34 @@ async function steer(c, text) {
 }
 // Anything waiting in the box besides text: pictures, files, @ context, or elements picked on the page.
 const hasAttachments = (c) => !!(c.images.length || (c.docs || []).length || c.ctx.length || (c.comments || []).length);
+// ✨ Enhance: the draft in the box, rewritten clearer and fuller by the prompt enhancer's model, before you send it.
+// Press it again to go further, ↶ for your words back. Any chat, any time; nothing is sent until you send it.
+async function enhanceDraft(c) {
+  const ta = $('.input', c.el.root), btn = $('.enhBtn', c.el.root);
+  const draft = ta.value.trim();
+  if (!draft) return flashTip(btn, 'Write your message first, then ✨ makes it clearer');
+  btn.disabled = true; btn.classList.add('busy');
+  const earlier = c.agent.messages.filter((m) => m.role === 'user').slice(-3).map((m) => String(m.content || '').slice(0, 400));
+  const r = await postJ('/api/enhance-prompt', { text: draft, earlier, model: enhancerModel() }).catch((e) => ({ error: e.message }));
+  btn.disabled = false; btn.classList.remove('busy');
+  if (r.error || !r.text) return flashTip(btn, `Could not enhance it: ${r.error || 'no answer'}`);
+  (c.enhUndo ||= []).push(ta.value);
+  ta.value = r.text; ta.dispatchEvent(new Event('input', { bubbles: true })); ta.focus();
+  if (r.cost) { (c.agent.extraUsage ||= []).push({ kind: 'enhancer', model: r.model, cost: r.cost, at: Date.now() }); saveChat(c); }
+  renderEnhUndo(c);
+}
+function undoEnhance(c) {
+  const ta = $('.input', c.el.root), prev = c.enhUndo?.pop();
+  if (prev == null) return;
+  ta.value = prev; ta.dispatchEvent(new Event('input', { bubbles: true })); ta.focus();
+  renderEnhUndo(c);
+}
+function renderEnhUndo(c) { const u = c.el && $('.enhUndo', c.el.root); if (u) u.hidden = !c.enhUndo?.length; }
 async function send(c, text) {
   text = text.trim();
   // A picture, a file or context on its own is a message too.
   if (c.running || (!text && !c.images.length && !(c.docs || []).some((d) => d.id && !d.busy) && !c.ctx.length && !c.comments?.length)) return;
+  c.enhUndo = []; renderEnhUndo(c);
   askNotifyPermission();
   const ctx =c.ctx.length ? { titles: c.ctx.map((x) => x.title), text: await contextText(c.ctx) } : null;
   const comments = (c.comments || []).splice(0);

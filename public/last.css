@@ -2503,3 +2503,13 @@ html body .trace.trace-pane .step .when { width: auto !important; white-space: n
 /* Running tab: rows use the pane's whole width */
 #paneBody > .run { flex: 1 1 auto; width: 100%; min-width: 0; }
 .fx-menu button { display: flex; align-items: center; justify-content: flex-start; gap: 8px; }
+
+/* ✨ Enhance in the composer: rewrite the draft before sending */
+.cmp-actions-left .cmp-act-btn.enhBtn { width: auto !important; height: 30px; padding: 0 9px 0 7px !important; gap: 5px; display: inline-flex !important; align-items: center; flex: none !important; color: var(--violet, #a78bfa) !important; border-color: color-mix(in srgb, var(--violet, #a78bfa) 40%, transparent) !important; border-radius: 8px; font: 600 12px var(--font-ui); }
+.cmp-act-btn.enhBtn:hover:not(:disabled) { background: color-mix(in srgb, var(--violet, #a78bfa) 14%, transparent) !important; }
+.cmp-act-btn.enhBtn.busy { opacity: .7; animation: devPulse 1.2s ease-in-out infinite; }
+.cmp-act-btn.enhUndo[hidden] { display: none !important; }
+@container (max-width: 420px) { .enh-l { display: none; } }
+.cmp-actions-left .cmp-act-btn.enhBtn { font-size: 12px !important; line-height: 1 !important; }
+.cmp-actions-left .cmp-act-btn.enhBtn .ico { width: 15px !important; height: 15px !important; flex: none; }
+.cmp-actions-left .cmp-act-btn.enhUndo { font-size: 15px !important; }
