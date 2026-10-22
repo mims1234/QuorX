@@ -2690,3 +2690,7 @@ body.link-mod a[data-cl] { cursor: pointer; }
 /* An approval that acts in your own account (a lent tab: send, delete, buy…): red, like a dangerous command */
 .approval[data-risk="danger"]:not(.done) { border-color: color-mix(in srgb, var(--bad) 65%, var(--line)) !important; box-shadow: inset 3px 0 0 var(--bad), 0 0 18px -6px var(--bad) !important; }
 .approval[data-risk="danger"] .sc-risk { margin: 4px 0 2px; }
+
+/* The desktop app run from the QuorX folder (npm run desktop): DEV, so it is never mixed up with the installed one */
+body.dev-build::before { content: ''; position: fixed; left: 0; right: 0; top: 0; height: 3px; z-index: 3000; pointer-events: none; background: linear-gradient(90deg, var(--warn), color-mix(in srgb, var(--warn) 55%, transparent)); }
+.dev-badge { flex: none; display: inline-grid; place-items: center; height: 18px; padding: 0 6px; margin-left: 2px; border-radius: 5px; background: var(--warn); color: #1a1205; font: 800 10px/1 var(--mono); letter-spacing: .08em; cursor: default; }
