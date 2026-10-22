@@ -47,7 +47,8 @@ export function inline(src, ctx = {}) {
 function link(href, inner, title) {
   const t = linkTarget(href), tt = title ? ` title="${esc(title)}"` : '';
   if (!t) return `<span class="nw-badlink" title="${esc(`Not a link QuorX opens: ${href}`)}">${inner}</span>`;
-  if (t.ext) return `<a href="${esc(t.href)}" target="_blank" rel="noopener noreferrer" data-ext="1"${tt}>${inner}</a>`;
+  // A web link opens only with Ctrl+click (Cmd+click on a Mac), in QuorX's Browser tab (data-cl); a mail link stays ordinary.
+  if (t.ext) return /^https?:/i.test(t.href) ? `<a href="${esc(t.href)}" rel="noopener noreferrer" data-ext="1" data-cl="1"${tt}>${inner}</a>` : `<a href="${esc(t.href)}" target="_blank" rel="noopener noreferrer" data-ext="1"${tt}>${inner}</a>`;
   if (t.news) return `<a href="#news/${esc(t.news)}" data-news="${esc(t.news)}"${tt}>${inner}</a>`;
   return `<a href="#news" data-anchor="${esc(t.anchor)}"${tt}>${inner}</a>`;
 }

@@ -2503,3 +2503,75 @@ html body .trace.trace-pane .step .when { width: auto !important; white-space: n
 /* Running tab: rows use the pane's whole width */
 #paneBody > .run { flex: 1 1 auto; width: 100%; min-width: 0; }
 .fx-menu button { display: flex; align-items: center; justify-content: flex-start; gap: 8px; }
+
+/* ---------- an update in the sidebar's footer: the version, the update and ⟳ become one live strip (◐ and ⚙ stay) ----------
+   out: old → new version with a sweep of light and a bobbing ⬆ · downloading: the strip fills up, striped
+   ready: glows green, ↻ turns on hover · failed: amber, still */
+#sbFoot[data-upd] .sb-version, #sbFoot[data-upd] #restartBtn { display: none !important; }
+#sbFoot[data-upd] { gap: 6px; }
+#sbFoot[data-upd] .sb-foot-btns { flex: 1 1 auto !important; }
+#sbFoot #updNote { --uc: var(--accent); position: relative; overflow: hidden; isolation: isolate; flex: 1 1 auto !important; min-width: 0; height: 30px !important; padding: 0 4px 0 8px !important; display: flex !important; align-items: center; gap: 7px; border-radius: 9px !important; border: 1px solid color-mix(in srgb, var(--uc) 45%, transparent) !important; background: color-mix(in srgb, var(--uc) 9%, var(--panel)) !important; color: var(--text) !important; font: 600 11.5px var(--font-ui) !important; cursor: pointer; text-align: left; box-shadow: 0 0 14px -6px var(--uc); transition: box-shadow .2s, border-color .2s; }
+#sbFoot #updNote:hover:not(:disabled) { border-color: var(--uc) !important; box-shadow: 0 0 18px -4px var(--uc); }
+#sbFoot #updNote:disabled { cursor: default; opacity: 1 !important; }
+#sbFoot #updNote[data-state="downloading"] { --uc: var(--violet, #a78bfa); }
+#sbFoot #updNote[data-state="ready"] { --uc: var(--ok); }
+#sbFoot #updNote[data-state="error"] { --uc: var(--amber, #f59e0b); box-shadow: none; }
+#sbFoot #updNote .un-ico { flex: none; display: grid; place-items: center; width: 16px; height: 16px; color: var(--uc); }
+#sbFoot #updNote .un-ico svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+#sbFoot #updNote .un-vers { flex: 1 1 auto; min-width: 0; display: flex; align-items: baseline; gap: 5px; overflow: hidden; white-space: nowrap; font: 600 11px var(--mono); color: var(--muted); }
+#sbFoot #updNote .un-vers s { text-decoration: none; color: var(--dim); }
+#sbFoot #updNote .un-vers i { font-style: normal; color: var(--dim); }
+#sbFoot #updNote .un-vers b { color: var(--uc); font-weight: 800; text-shadow: 0 0 10px color-mix(in srgb, var(--uc) 55%, transparent); }
+#sbFoot #updNote .un-vers em { font: 600 11px var(--font-ui); font-style: normal; color: var(--text); }
+#sbFoot #updNote .un-txt { flex: none; height: 22px; padding: 0 9px; display: grid; place-items: center; border-radius: 6px; background: var(--uc); color: var(--ok-ink, #04140b); font: 700 11px var(--font-ui); }
+#sbFoot #updNote[data-state="downloading"] .un-txt { background: transparent; color: var(--uc); font: 700 11.5px var(--mono); padding: 0 6px; }
+#sbFoot #updNote > :not(.un-fill) { position: relative; z-index: 1; }
+/* the fill (downloading) and the sweep of light (out) */
+#sbFoot #updNote .un-fill { position: absolute; inset: 0 auto 0 0; width: 0; z-index: 0; pointer-events: none; }
+#sbFoot #updNote[data-state="downloading"] .un-fill { width: var(--p, 0%); background: repeating-linear-gradient(-45deg, color-mix(in srgb, var(--uc) 30%, transparent) 0 6px, color-mix(in srgb, var(--uc) 18%, transparent) 6px 12px); background-size: 17px 17px; border-right: 1px solid color-mix(in srgb, var(--uc) 70%, transparent); transition: width .4s ease; animation: unStripes .8s linear infinite; }
+#sbFoot #updNote[data-state="available"]::after { content: ''; position: absolute; inset: 0; z-index: 0; pointer-events: none; background: linear-gradient(100deg, transparent 30%, color-mix(in srgb, var(--uc) 22%, transparent) 50%, transparent 70%); transform: translateX(-100%); animation: unSweep 3.2s ease-in-out infinite; }
+#sbFoot #updNote[data-state="available"] .un-ico { animation: unBob 1.6s ease-in-out infinite; }
+#sbFoot #updNote[data-state="downloading"] .un-ico { animation: unDrop 1.1s ease-in-out infinite; }
+#sbFoot #updNote[data-state="ready"] { animation: unGlow 2.4s ease-in-out infinite; }
+#sbFoot #updNote[data-state="ready"]:hover .un-ico svg { transform: rotate(-200deg); transition: transform .6s ease; }
+#sbFoot #updNote[data-state="ready"] .un-ico svg { transition: transform .4s ease; }
+@keyframes unSweep { 0%, 35% { transform: translateX(-100%); } 75%, 100% { transform: translateX(100%); } }
+@keyframes unBob { 0%, 100% { transform: translateY(1px); } 50% { transform: translateY(-2px); } }
+@keyframes unDrop { 0% { transform: translateY(-3px); opacity: .3; } 50% { transform: translateY(0); opacity: 1; } 100% { transform: translateY(3px); opacity: .3; } }
+@keyframes unStripes { to { background-position: 17px 0; } }
+@keyframes unGlow { 0%, 100% { box-shadow: 0 0 10px -5px var(--uc); } 50% { box-shadow: 0 0 18px -3px var(--uc); } }
+@media (prefers-reduced-motion: reduce) { #sbFoot #updNote, #sbFoot #updNote *, #sbFoot #updNote::after { animation: none !important; } }
+/* outside the sidebar (the phone's top bar) the strip stays short: its icon and the action */
+#updNote:not(#sbFoot #updNote) .un-vers, #updNote:not(#sbFoot #updNote) .un-fill { display: none; }
+/* short of room: the old version gives way first; the new one always shows */
+#sbFoot #updNote .un-vers b, #sbFoot #updNote .un-vers i { flex: none; }
+#sbFoot #updNote .un-vers s { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: clip; }
+#sbFoot #updNote .un-vers { gap: 4px; }
+#sbFoot #updNote .un-txt { padding: 0 8px; }
+#sbFoot #updNote .un-vers s { flex: none !important; overflow: visible !important; }
+#sbFoot #updNote.un-tight .un-vers s, #sbFoot #updNote.un-tight .un-vers i { display: none; }
+/* the action button: a bobbing ⬆ when out, ↻ Restart when ready (↻ turns on hover) */
+#sbFoot #updNote[data-state="available"] .un-txt { width: 24px; padding: 0 !important; }
+#sbFoot #updNote .un-txt { gap: 4px; grid-auto-flow: column; }
+#sbFoot #updNote .un-txt svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+#sbFoot #updNote[data-state="available"] .un-txt svg { animation: unBob 1.6s ease-in-out infinite; }
+#sbFoot #updNote[data-state="ready"] .un-txt svg { transition: transform .5s ease; }
+#sbFoot #updNote[data-state="ready"]:hover .un-txt svg { transform: rotate(-200deg); }
+#sbFoot #updNote { padding-left: 9px !important; }
+#sbFoot #updNote.un-tight .un-vers em { display: none; }
+#sbFoot #updNote .un-vers em { flex: none; }
+#sbFoot #updNote[data-state="error"] .un-vers { font: 600 11.5px var(--font-ui); color: var(--text); display: block; text-overflow: ellipsis; }
+#sbFoot #updNote[data-state="error"] .un-txt { padding: 0 7px; }
+#sbFoot #updNote[hidden] { display: none !important; }
+/* The title row matches the nav rows under it: a 30px ☰ box, 16px icons and 13px text */
+body.top-in-sidebar .sb-titlebar #sbCollapseBtn { width: 30px !important; height: 30px !important; font-size: 15px; line-height: 1; }
+body.top-in-sidebar .sb-titlebar { gap: 8px; }
+.sb-titlebar .brand#brandHome { font-size: 13px; line-height: 16px; gap: 8px; --brand-gap: 8px; }
+.sb-titlebar .brand#brandHome .brand-logo { width: 16px; height: 16px; }
+.sb-titlebar .brand-git { width: 26px; height: 26px; }
+.sb-titlebar .brand-git svg { width: 16px; height: 16px; }
+/* Links in content open only with Ctrl+click (Cmd+click on a Mac): the hand shows only while the key is held. */
+a[data-cl] { cursor: text; }
+body.link-mod a[data-cl] { cursor: pointer; }
+/* Where a link's tip in the terminal points (at the pointer). */
+.xt-tip-at { position: fixed; width: 1px; height: 16px; pointer-events: none; }
