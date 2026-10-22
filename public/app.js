@@ -3266,9 +3266,30 @@ async function refreshUndoable(projectId) {
 const undoGone = (c, m) => { const set = G.undoable?.[c.projectId]; return !!set && !set.has(m.stats?.undoId || m.runId); };
 
 // 📂: the project's folder in the computer's own file manager (File Explorer on Windows).
-async function openFolder(projectId) {
-  const r = await fetch('/api/open-folder', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId }) }).then((x) => x.json()).catch((e) => ({ error: e.message }));
+async function openFolder(projectId, path) {
+  const r = await fetch('/api/open-folder', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId, path }) }).then((x) => x.json()).catch((e) => ({ error: e.message }));
   if (r.error) uiAlert(`Could not open the folder: ${r.error}`);
+}
+// Files → right-click a file or folder: show it in File Explorer, or copy its path.
+function filesMenu(e, projectId, rel, full) {
+  e.preventDefault();
+  document.querySelector('.exp-menu')?.remove();
+  const m = document.createElement('div'); m.className = 'exp-menu fx-menu'; m.setAttribute('role', 'menu');
+  m.innerHTML = '<button type="button" role="menuitem" data-a="reveal">📂 Show in File Explorer</button><button type="button" role="menuitem" data-a="copy">📋 Copy full path</button><button type="button" role="menuitem" data-a="rel">📋 Copy relative path</button>';
+  document.body.append(m);
+  const r = m.getBoundingClientRect();
+  m.style.left = `${Math.min(e.clientX, innerWidth - r.width - 8)}px`; m.style.top = `${Math.min(e.clientY, innerHeight - r.height - 8)}px`;
+  const away = (ev) => { if (!m.contains(ev.target)) close(); };
+  const key = (ev) => { if (ev.key === 'Escape') close(); };
+  const close = () => { m.remove(); removeEventListener('pointerdown', away, true); removeEventListener('keydown', key, true); };
+  addEventListener('pointerdown', away, true); addEventListener('keydown', key, true);
+  m.onclick = (ev) => {
+    const a = ev.target.closest('[data-a]')?.dataset.a; if (!a) return;
+    close();
+    if (a === 'reveal') openFolder(projectId, rel);
+    else navigator.clipboard?.writeText(a === 'copy' ? full : rel).catch(() => {});
+  };
+  m.querySelector('button').focus();
 }
 // The trace opens in the artifact pane area only when asked, and leaves it when closed.
 const clip = (t, n) => (String(t).length > n ? String(t).slice(0, n - 1) + '…' : String(t));
@@ -4470,6 +4491,8 @@ async function renderFiles(c) {
   };
   split.ondblclick = () => { filesBox.style.removeProperty('--tree-w'); try { localStorage.removeItem('oh-tree-w'); } catch { /* storage off */ } };
   const view = $('.fview', body);
+  const sep = p?.dir?.includes('\\') ? '\\' : '/';
+  const fullOf = (rel) => (p?.dir ? `${p.dir}${sep}${rel.replaceAll('/', sep)}` : rel);
   const select = (b) => { for (const x of body.querySelectorAll('.fl')) x.classList.toggle('on', x === b); };
   for (const b of body.querySelectorAll('.fx-art')) b.onclick = () => {
     select(b);
@@ -4488,8 +4511,10 @@ async function renderFiles(c) {
     const path = b.dataset.p, src = `/ws/${c.projectId}/${path.split('/').map(encodeURIComponent).join('/')}`;
     const f = files.find((x) => x.path === path);
     G.filesProject = c.projectId;
-    previewFile(view, { name: path, src, size: f?.size, full: p?.dir ? `${p.dir}${p.dir.includes('\\') ? '\\' : '/'}${path.replaceAll('/', p.dir.includes('\\') ? '\\' : '/')}` : path });
+    previewFile(view, { name: path, src, size: f?.size, full: fullOf(path) });
   };
+  for (const b of body.querySelectorAll('.fl[data-p]')) b.oncontextmenu = (e) => filesMenu(e, c.projectId, b.dataset.p, fullOf(b.dataset.p));
+  for (const d of body.querySelectorAll('.fx-dir')) $('summary', d).oncontextmenu = (e) => { e.stopPropagation(); filesMenu(e, c.projectId, d.dataset.dir, fullOf(d.dataset.dir)); };
 }
 
 // ---------- spend: private balance, page total, costs view ----------

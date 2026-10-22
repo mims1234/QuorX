@@ -255,12 +255,17 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-cache', ...(/html|svg|xml/.test(type) && !req.pageOrigin ? { 'Content-Security-Policy': SANDBOX_CSP } : {}), ...(own ? { 'Access-Control-Allow-Origin': 'null' } : {}) });
       return fs.createReadStream(file).pipe(res);
     }
-    // Open a project's folder in the computer's own file manager (File Explorer on Windows).
+    // Open a project's folder in the computer's own file manager (File Explorer on Windows). With a path inside the
+    // project, a folder opens and a file is shown selected in its folder (Files → right-click → Show in File Explorer).
     if (url.pathname === '/api/open-folder' && req.method === 'POST') {
       const b = JSON.parse(await readBody(req, 1e4) || '{}');
       if (!validId(b.projectId) || !listProjects().some((p) => p.id === b.projectId)) return json(res, 400, { error: 'unknown project' });
-      const dir = workspaceDir(b.projectId);
-      const [cmd, args] = process.platform === 'win32' ? ['explorer.exe', [dir]] : process.platform === 'darwin' ? ['open', [dir]] : ['xdg-open', [dir]];
+      let dir = workspaceDir(b.projectId), file = null;
+      if (b.path) {
+        try { const t = safePath(dir, String(b.path)); if (fs.statSync(t).isDirectory()) dir = t; else { file = t; dir = path.dirname(t); } }
+        catch (e) { return json(res, 400, { error: e.code === 'ENOENT' ? 'that file is gone' : e.message }); }
+      }
+      const [cmd, args] = process.platform === 'win32' ? ['explorer.exe', [file ? `/select,${file}` : dir]] : process.platform === 'darwin' ? ['open', file ? ['-R', file] : [dir]] : ['xdg-open', [dir]];
       try { spawn(cmd, args, { detached: true, stdio: 'ignore' }).on('error', () => {}).unref(); return json(res, 200, { ok: true, dir }); }
       catch (e) { return json(res, 500, { error: e.message }); }
     }
