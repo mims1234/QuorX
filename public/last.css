@@ -2504,6 +2504,17 @@ html body .trace.trace-pane .step .when { width: auto !important; white-space: n
 #paneBody > .run { flex: 1 1 auto; width: 100%; min-width: 0; }
 .fx-menu button { display: flex; align-items: center; justify-content: flex-start; gap: 8px; }
 
+/* An answered question, folded to one line: what was asked and what you chose (open for the whole card) */
+.q-fold { margin: 6px 0; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.q-fold > summary { list-style: none; display: flex; align-items: center; gap: 8px; min-width: 0; padding: 7px 10px; cursor: pointer; font-size: 12.5px; }
+.q-fold > summary::-webkit-details-marker { display: none; }
+.q-fold-ic { flex: none; width: 18px; height: 18px; display: grid; place-items: center; border-radius: 5px; background: color-mix(in srgb, var(--ok) 22%, transparent); color: var(--ok); font-size: 11px; font-weight: 700; }
+.q-fold-l { flex: none; max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.q-fold-q { color: var(--text); }
+.q-fold-a { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-weight: 600; }
+.q-fold > summary .tl-chev { margin-left: auto; transition: transform .15s; color: var(--muted); }
+.q-fold[open] > summary .tl-chev { transform: rotate(90deg); }
+.q-fold[open] > .qbox { margin: 0 8px 8px; }
 /* ✨ Enhance in the composer: rewrite the draft before sending */
 .cmp-actions-left .cmp-act-btn.enhBtn { width: auto !important; height: 30px; padding: 0 9px 0 7px !important; gap: 5px; display: inline-flex !important; align-items: center; flex: none !important; color: var(--violet, #a78bfa) !important; border-color: color-mix(in srgb, var(--violet, #a78bfa) 40%, transparent) !important; border-radius: 8px; font: 600 12px var(--font-ui); }
 .cmp-act-btn.enhBtn:hover:not(:disabled) { background: color-mix(in srgb, var(--violet, #a78bfa) 14%, transparent) !important; }

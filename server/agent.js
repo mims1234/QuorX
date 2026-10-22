@@ -1692,7 +1692,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   async function planGate() {
     const id = `q${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
     run.planGate = 'waiting';
-    emit({ t: 'question', id, gate: 'plan', question: 'Go ahead with this plan? (It is shown above.) Type below to ask for changes.', options: ['Go ahead', 'Stop here'], at: at() });
+    emit({ t: 'question', id, gate: 'plan', question: 'Go ahead with this plan? Type below to ask for changes.', options: ['Go ahead', 'Stop here'], at: at() });
     const ans = await new Promise((resolve, reject) => {
       questions.set(`${runId}:${id}`, resolve);
       signal.addEventListener('abort', () => { questions.delete(`${runId}:${id}`); reject(new Error('aborted')); }, { once: true });

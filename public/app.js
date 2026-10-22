@@ -2824,20 +2824,22 @@ function planCardHTML(m) {
 }
 // #4 What the separate reviewer found: scores out of 5, the bar, its bugs. One card per review round.
 const REVIEW_LABEL = { function: 'Function', craft: 'Craft', design: 'Design', originality: 'Originality', accessibility: 'Accessibility', brand: 'Brand fit' };
-function reviewCardsHTML(m) {
-  const tr = m.trace || [];
-  const reviews = tr.filter((e) => e.t === 'review');
-  const running = m.live && tr.findLast((e) => e.t === 'review_start' || e.t === 'review')?.t === 'review_start' ? tr.findLast((e) => e.t === 'review_start') : null;
-  return reviews.map((r, i) => {
-    const sentBack = !r.pass && (i < reviews.length - 1 || tr.some((e) => e.t === 'sent_back' && e.by === 'reviewer' && e.at >= r.at));
-    const verdict = r.pass ? 'Passed' : sentBack ? 'Sent back to fix' : 'Not passed';
-    return `<div class="review-card ${r.pass ? 'pass' : 'fail'}">
+function reviewCardHTML(m, r) {
+  const tr = m.trace || [], reviews = tr.filter((e) => e.t === 'review'), i = reviews.indexOf(r);
+  const sentBack = !r.pass && (i < reviews.length - 1 || tr.some((e) => e.t === 'sent_back' && e.by === 'reviewer' && e.at >= r.at));
+  const verdict = r.pass ? 'Passed' : sentBack ? 'Sent back to fix' : 'Not passed';
+  return `<div class="review-card ${r.pass ? 'pass' : 'fail'}">
       <div class="rv-head"><b>🧪 Reviewer</b><span class="rv-model" title="A separate model with a fresh context tested this">${esc(short(r.model))}</span><span class="rv-round">round ${r.round}</span><span class="rv-verdict">${verdict}</span><span class="rv-cost" title="What this review cost">${money(r.cost, 4)}</span></div>
       <div class="rv-scores">${Object.keys(r.scores).map((k) => `<div class="rv-score ${r.scores[k] < r.bar ? 'low' : ''}"><span>${esc(REVIEW_LABEL[k] || k)}</span><span class="rv-pips" aria-label="${r.scores[k]} of 5">${[1, 2, 3, 4, 5].map((n) => `<i class="${n <= r.scores[k] ? 'on' : ''}${n === r.bar ? ' bar' : ''}"></i>`).join('')}</span><b>${r.scores[k]}/5</b></div>`).join('')}</div>
       ${r.bugs.length ? `<ul class="rv-bugs">${r.bugs.map((b) => `<li>${esc(b)}</li>`).join('')}</ul>` : ''}
       ${r.summary ? `<p class="rv-sum">${esc(r.summary)}</p>` : ''}
     </div>`;
-  }).join('') + (running ? `<div class="review-card running"><div class="rv-head"><b>🧪 Reviewer</b><span class="rv-model">${esc(short(running.model))}</span><span class="rv-verdict">testing ${esc(running.targets.join(', '))}…</span></div></div>` : '');
+}
+// A review that is still testing: shown where it started, until its result replaces it.
+function reviewRunningHTML(m, start) {
+  const tr = m.trace || [];
+  if (!m.live || tr.findLast((e) => e.t === 'review_start' || e.t === 'review') !== start) return '';
+  return `<div class="review-card running"><div class="rv-head"><b>🧪 Reviewer</b><span class="rv-model">${esc(short(start.model))}</span><span class="rv-verdict">testing ${esc(start.targets.join(', '))}…</span></div></div>`;
 }
 // ---------- the reply timeline ----------
 // One-line descriptions of tool calls, in the user's terms: one call names its target, several are counted.
@@ -2889,7 +2891,10 @@ function timelineItems(m) {
       const x = pool && [...pool].reverse().find((y) => y.e.name === e.name && y.res == null);
       if (x) x.res = String(e.result ?? ''); continue;
     }
-    if (e.t === 'review_start') { rv = null; continue; }
+    if (e.t === 'review_start') { rv = null; items.push({ kind: 'card', pin: true, html: () => reviewRunningHTML(m, e) }); continue; }
+    if (e.t === 'review') { items.push({ kind: 'card', pin: true, html: () => reviewCardHTML(m, e) }); continue; }
+    // The plan shows where it was first made (just before its Go ahead question), with its latest ticks.
+    if (e.t === 'plan') { if (!seenCards.has('plan')) { seenCards.add('plan'); items.push({ kind: 'card', pin: true, html: () => planCardHTML(m) }); } continue; }
     if (e.t === 'fresh_eyes') { items.push({ kind: 'note', text: `👀 Fresh eyes (${short(e.model)}) ${e.ok ? `on a problem that came back: ${clip((e.report || '').split('\n')[0].replace(/^Cause:\s*/i, ''), 220)}` : 'looked but found nothing'}` }); continue; }
     if (e.t === 'helper_done') { const h = helpers.get(e.id); if (h) { h.label = `Helper ${e.id} ${e.ok ? 'reported back' : 'gave no report'} · ${e.steps} step${e.steps === 1 ? '' : 's'} · ${money(e.cost, 4)}`; h.done = true; } continue; }
     if (e.t === 'approval') {
@@ -2903,7 +2908,8 @@ function timelineItems(m) {
       if (call) { call.approval = e.id; continue; }
       items.push({ kind: 'card', html: () => (m.approvals?.[e.id] ? approvalHTML(m.approvals[e.id], !!m.live) : '') }); continue;
     }
-    if (e.t === 'question') { items.push({ kind: 'card', html: () => (m.questions?.[e.id] ? questionHTML(m.questions[e.id], !!m.live) : '') }); continue; }
+    // Questions stay in view where they were asked (answered ones are one line).
+    if (e.t === 'question') { items.push({ kind: 'card', pin: true, html: () => (m.questions?.[e.id] ? questionHTML(m.questions[e.id], !!m.live) : '') }); continue; }
     if (e.t === 'budget_ask') { items.push({ kind: 'card', html: () => (m.budgetAsk ? budgetHTML(m.budgetAsk, !!m.live) : '') }); continue; }
     if (e.t === 'steer') { items.push({ kind: 'steer', e, read: tr.slice(i + 1).some((x) => x.t === 'steer_delivered') }); continue; }
     if (e.t === 'mode') { items.push({ kind: 'note', text: e.approval === 'yolo' ? '⚡ Switched to YOLO' : '🔒 Switched to Strict' }); continue; }
@@ -2939,7 +2945,7 @@ function timelineHTML(m) {
       continue;
     }
     if (it.kind === 'group') { const busy = m.live && !it.done && it.calls.some((x) => x.res == null); row(groupRow(it.key, it.icon, it.label, it.calls, busy), it.key, it.calls, 0, busy); continue; }
-    if (it.kind === 'card') { const h = it.html(); if (h) pieces.push({ html: h, row: false, card: true }); continue; }
+    if (it.kind === 'card') { const h = it.html(); if (h) pieces.push({ html: h, row: false, card: true, pin: !!it.pin }); continue; }
     if (it.kind === 'steer') {
       const att = (m.steerAtt || []).find((x) => x.text === it.e.text && !usedAtt.has(x)) || null;
       if (att) usedAtt.add(att);
@@ -2966,19 +2972,23 @@ function timelineHTML(m) {
     }
     return out.join('');
   };
-  // The reply's work folds into one line you can open (the Steps pane has all of it too). While it works, what it is
-  // doing right now, and anything waiting for you, stay below that line.
+  // The reply's work folds into lines you can open (the Steps pane has all of it too). The plan and each review stay
+  // out, where they happened, so the work before and after them folds on its own and it all reads in order. While it
+  // works, anything waiting for you and what it is doing right now stay out too.
   const live = !!m.live, last = pieces.length - 1;
-  const stays = (x, i) => live && (x.card || i === last);
-  const fold = pieces.filter((x, i) => !stays(x, i)), keep = pieces.filter((x, i) => stays(x, i));
-  if (fold.length < 3) return bundle(pieces);
-  const done = fold.flatMap((x) => x.calls || []), thinks = fold.reduce((n, x) => n + (x.think || 0), 0), steps = fold.filter((x) => x.row).length;
-  const errs = done.filter((x) => x.res != null && /^Error/.test(x.res)).length;
-  // Says how much work it was; what kind of work shows on hover (and inside).
-  const what = [done.length ? callsLabel(done) : '', thinks ? `${done.length ? 'thought' : 'Thought'} ${thinks} time${thinks === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
-  const counts = [done.length ? `${done.length} tool call${done.length === 1 ? '' : 's'}` : '', thinks ? `${thinks} thought${thinks === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
-  return det('all', 'tl-row tl-bundle tl-fold', `<span class="tl-ic">🗂</span><span class="tl-label" title="${esc(what)}">${live ? 'Working' : 'Worked'} through ${steps} step${steps === 1 ? '' : 's'}</span><small class="tl-words">${esc(counts)}</small>${errs ? `<span class="tl-err">${errs} error${errs > 1 ? 's' : ''}</span>` : ''}`, `<div class="tl-bundle-body">${bundle(fold)}</div>`)
-    + keep.map((x) => x.html).join('');
+  const stays = (x, i) => x.pin || (live && (x.card || i === last));
+  const foldLine = (seg, n, end) => {
+    if (seg.length < 3) return bundle(seg);
+    const done = seg.flatMap((x) => x.calls || []), thinks = seg.reduce((k, x) => k + (x.think || 0), 0), steps = seg.filter((x) => x.row).length;
+    const errs = done.filter((x) => x.res != null && /^Error/.test(x.res)).length;
+    // Says how much work it was; what kind of work shows on hover (and inside).
+    const what = [done.length ? callsLabel(done) : '', thinks ? `${done.length ? 'thought' : 'Thought'} ${thinks} time${thinks === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
+    const counts = [done.length ? `${done.length} tool call${done.length === 1 ? '' : 's'}` : '', thinks ? `${thinks} thought${thinks === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
+    return det(n ? `all${n}` : 'all', 'tl-row tl-bundle tl-fold', `<span class="tl-ic">🗂</span><span class="tl-label" title="${esc(what)}">${live && end ? 'Working' : 'Worked'} through ${steps} step${steps === 1 ? '' : 's'}</span><small class="tl-words">${esc(counts)}</small>${errs ? `<span class="tl-err">${errs} error${errs > 1 ? 's' : ''}</span>` : ''}`, bundle(seg));
+  };
+  let out = '', seg = [], n = 0;
+  pieces.forEach((x, i) => { if (stays(x, i)) { out += foldLine(seg, n++, false); seg = []; out += x.html; } else seg.push(x); });
+  return out + foldLine(seg, n, true);
 }
 // Open lines stay open across redraws; a thinking line draws its text only when opened.
 function wireTimeline(m, el) {
@@ -3029,14 +3039,11 @@ function updateMsg(c, m, { bodyOnly = false } = {}) {
   const rh = $('.reply-head', el);
   if (rh) { const h = replyHeadHTML(m, model); if (rh._h !== h) { rh.innerHTML = h; rh._h = h; } }
   if (bodyOnly) return;
-  // The plan leads the reply; whatever is asking you (approvals, questions, budget) and the reviews come last,
-  // below the thinking and the text, where the newest output is.
-  $('.plan-slot', el).innerHTML = planCardHTML(m);
   // Everything the agent did reads in order: its thinking (folded), what it said, one line per step's tool calls
   // (click for each call and its result), and any card that asks you something, right where it happened.
   $('.timeline', el).innerHTML = timelineHTML(m);
   wireTimeline(m, el);
-  $('.approvals', el).innerHTML = reviewCardsHTML(m) + outOfStepsHTML(m);
+  $('.approvals', el).innerHTML = outOfStepsHTML(m);
   const oos = $('.oos-card[data-run]', el); if (oos) wireOutOfSteps(oos, c, m);
   for (const card of el.querySelectorAll('.approval[data-id]:not(.question):not(.budget-card)')) wireApproval(card, m);
   for (const card of el.querySelectorAll('.question[data-id]')) wireQuestion(card, m);
@@ -3856,7 +3863,19 @@ function wireBudget(card, c, m) {
 }
 
 // ---------- questions the agent asks (ask_user) ----------
+// An answered question folds to one line (what was asked, what you chose); open it for the whole card.
 function questionHTML(q, live = true) {
+  const c = q.card, a = q.answer || (live ? null : { label: '(not answered: the reply ended)' });
+  const full = questionCardHTML(q, live);
+  if (!a || c.secret) return full;
+  const n = c.questions?.length || 1, key = `q-${c.id}`;
+  const label = n > 1 ? `Asked you ${n} questions` : c.gate === 'plan' ? 'Plan first' : c.auto ? 'The deciders answered' : 'Asked you';
+  const said = clip(String(a.label || a.text || '').replace(/^Your answer: /, ''), 160);
+  return `<details class="q-fold" data-qkey="${esc(key)}" ${G.qOpen?.has(key) ? 'open' : ''}><summary><span class="q-fold-ic" aria-hidden="true">✓</span><span class="q-fold-l">${esc(label)}${n === 1 && c.question ? `: <span class="q-fold-q">${esc(clip(c.question, 90))}</span>` : ''}</span><span class="q-fold-a">${esc(said)}</span><span class="tl-chev" aria-hidden="true">›</span></summary>${full}</details>`;
+}
+// Folded answers stay open or closed across redraws.
+document.addEventListener('toggle', (e) => { const d = e.target; if (d.matches?.('details.q-fold')) (G.qOpen ||= new Set())[d.open ? 'add' : 'delete'](d.dataset.qkey); }, true);
+function questionCardHTML(q, live = true) {
   const c = q.card, a = q.answer || (live ? null : { label: '(not answered: the reply ended)' });
   const picked = a && a.choice != null ? Number(a.choice) : null, missed = a && /^\(not answered/.test(a.label || '');
   // The question reads first, on the left; each answer is its own full-width row, numbered (press 1–9 to pick).
