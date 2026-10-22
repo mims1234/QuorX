@@ -38,7 +38,7 @@ import { isCheckedFile, packNotes, outputSummary } from './packs/index.js';
 import { devices as adbDevices, pickDevice, readScreen, tap as adbTap, typeText as adbType, key as adbKey, screenshot as adbShot, install as adbInstall, launch as adbLaunch, logcat as adbLog, listAvds, startEmulator } from './android.js';
 import { listSkills, readSkill, saveSkill, listTemplates } from './skills.js';
 import { projectDesign } from './design.js';
-import { workspaceDir, listFiles, readFile, readText, writeFile, appendFile, editFile, editFileMulti, runLine, lineOf, preApproved, stopNote, endProc, startServer, stopServerWait, serverFor, serverLog, listServers, launchConfigs, ensureAgentDir, agentSpace, SCRATCH, sealCheckpoint, pruneCheckpoints } from './workspace.js';
+import { workspaceDir, listFiles, readFile, readText, writeFile, appendFile, editFile, editFileMulti, runLine, lineOf, preApproved, stopNote, endProc, startServer, stopServerWait, serverFor, serverLog, listServers, launchConfigs, saveLaunchConfig, removeLaunchConfig, ensureAgentDir, agentSpace, SCRATCH, sealCheckpoint, pruneCheckpoints } from './workspace.js';
 import { openTab, hostHtml, startedWithDevtoolsPort } from './browser.js';
 import { adoptAgentTab, releaseAgentTab } from './userbrowser.js';
 import { setLiveArtifact, markdownHtml } from './artifacts.js';
@@ -67,7 +67,7 @@ const CAT_OF = Object.fromEntries(Object.entries(MEDIA).map(([k, v]) => [v.tool,
 export const YOLO_GROUPS = {
   files: ['write_file', 'append_file', 'edit_file', 'delete_file', 'scaffold'],
   commands: ['shell', 'run_command', 'terminal'],
-  servers: ['start_server', 'stop_server', 'preview_site'],
+  servers: ['start_server', 'stop_server', 'preview_site', 'launch_config'],
   browser: ['browser', 'look', 'extract_design', 'desktop', 'android'],
   web: ['fetch_url'],
   media: Object.keys(CAT_OF),
@@ -517,6 +517,7 @@ const CODE_TOOLS = [
     window: { type: 'integer', description: 'A window handle from windows (default: its first window)' }, ref: { type: 'integer' }, x: { type: 'integer' }, y: { type: 'integer' }, text: { type: 'string' }, keys: { type: 'string' } } } } },
   { type: 'function', function: { name: 'start_server', description: 'Start (or restart) a long-running dev server in your project folder. It gets a free port in the PORT environment variable and as {PORT} in arguments, and opens in the user\'s Browser tab. Its command is saved to the project\'s launch file, so the user can start and stop it later; give only the name to rerun a saved one.', parameters: { type: 'object', required: ['name'], properties: { name: { type: 'string', description: 'Short name, e.g. "web"' }, command: { type: 'string', description: 'Leave out to rerun the saved launch config with this name' }, args: { type: 'array', items: { type: 'string' } } } } } },
   { type: 'function', function: { name: 'stop_server', description: 'Stop a dev server you started.', parameters: { type: 'object', required: ['name'], properties: { name: { type: 'string' } } } } },
+  { type: 'function', function: { name: 'launch_config', description: 'The project’s saved launch configs (.quorx/launch.json): the servers the user can start and stop from the chat header. list shows them; save creates one or updates it (old_name renames it); remove deletes one (a running server keeps running: stop_server ends it). Use this, not write_file, for that file. Saving does not start anything: start_server with the name does.', parameters: { type: 'object', required: ['action'], properties: { action: { type: 'string', enum: ['list', 'save', 'remove'] }, name: { type: 'string', description: 'Short name, e.g. "web" (save, remove)' }, command: { type: 'string', description: 'The program, e.g. npm, node, python, cargo (save)' }, args: { type: 'array', items: { type: 'string' }, description: 'Its arguments; {PORT} becomes the server’s port (save)' }, port: { type: 'integer', description: 'A fixed port, only if the app needs one; otherwise it gets a free one (save)' }, old_name: { type: 'string', description: 'The config’s current name when renaming it (save)' } } } } },
   { type: 'function', function: { name: 'preview_site', description: 'Run a static site from your project folder (an HTML file and the files it loads) on a small local server, saved to the launch file as "site" (or the name you give), and open it in the user\'s Browser tab.', parameters: { type: 'object', required: ['title'], properties: { title: { type: 'string' }, name: { type: 'string', description: 'Launch entry name, default "site"' }, path: { type: 'string', description: 'Entry HTML file, default index.html' } } } } },
 ];
 // Tools for project memory, skills, templates and housekeeping (only with a project folder).
@@ -2095,6 +2096,11 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (name === 'request_secret') return `Ask you for ${clip(args.name, 60)} (it goes into .env, not to the model)`;
     if (name === 'preview_site') return `Run ${args.path || 'index.html'} as the site "${args.name || 'site'}" (node .quorx/serve.mjs)`;
     if (name === 'stop_server') return `Stop server "${args.name}"`;
+    if (name === 'launch_config') {
+      if (args.action === 'remove') return `Remove the saved launch config "${args.name}"`;
+      if (args.action === 'save') return `Save the launch config "${args.name}"${args.old_name && args.old_name !== args.name ? ` (renamed from "${args.old_name}")` : ''}: ${[args.command, ...(args.args || [])].join(' ')}${args.port ? ` on port ${args.port}` : ''}`;
+      return 'List the saved launch configs';
+    }
     if (name === 'search_files') return `Search the project for "${clip(args.query, 60)}"${args.glob ? ` in ${args.glob}` : ''}`;
     if (name === 'fetch_url') return `Read the web page ${clip(args.url, 120)}`;
     if (name === 'edit_file') return Array.isArray(args.edits) && args.edits.length ? `Edit ${args.path}: ${args.edits.length} changes` : `Edit ${args.path}: replace "${clip(args.find, 80)}" with "${clip(args.replace, 80)}"`;
@@ -2260,7 +2266,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     // Strict asks before paid media (inside media(), with the price), helpers or decider checks only if the user chose that, or before
     // every tool when the user chose that. A plan asks once in Strict; ticking its items off later doesn't.
     // Commands have their own gate (the rule engine, in codeTool), so they never get a second, generic card.
-    if (((S.approval === 'strict' && strictAsks(name) && !allowed.has(name)) || yoloAsks(name)) && !(name === 'plan' && run.plan) && !['shell', 'run_command', 'terminal', 'edit_video'].includes(name)) {
+    if (((S.approval === 'strict' && strictAsks(name) && !allowed.has(name)) || yoloAsks(name)) && !(name === 'plan' && run.plan) && !(name === 'launch_config' && args.action === 'list') && !['shell', 'run_command', 'terminal', 'edit_video'].includes(name)) {
       const card = { id: newApprovalId(), tool: name, free: true, est: 0, what: toolSummary(name, args), why: '' };
       const ans = await askUser(card);
       emit({ t: 'approval_done', id: card.id, ...ans, at: at() });
@@ -2433,7 +2439,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       let real;
       try { real = path.relative(realish(root), realish(safePath(root, String(args.path)))).replace(/[. ]+(?=[\\/]|$)/g, ''); } catch (e) { return `Refused: ${e.message}.`; }
       const no = agentWriteBlocked(real) || agentWriteBlocked(args.path);
-      if (no) return `Refused: ${no}. Work in the project's own files instead.`;
+      if (no) return /(^|[\\/])\.quorx[\\/]launch\.json$/i.test(real) ? `Refused: ${no}. Change saved servers with launch_config (list, save, remove).` : `Refused: ${no}. Work in the project's own files instead.`;
       if (name === 'write_file' && secretKind(real, String(args.path)) && fs.existsSync(safePath(root, String(args.path)))) return `Refused: ${args.path} holds the user's secrets and you see only their names, so writing it whole would wipe them. Add a setting with append_file, rename one with edit_file, or ask for a secret with request_secret.`;
       checkpoint(root, filesId, args.path);
     }
@@ -2647,6 +2653,28 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       return `Server "${args.name}" is ${r.status} at ${r.url}; it opened in the user's Browser tab and is saved in the launch file. Check it with browser target app:${args.name}. Recent output:\n${r.log || '(none)'}`;
     }
     if (name === 'stop_server') { const sv = serverFor(projectId, args.name); const r = sv && await stopServerWait(sv.key); return r ? `Stopped "${args.name}": ${stopNote(r)}.` : `No server named "${args.name}".`; }
+    // Saved launch configs go through QuorX's own code, so the file stays valid; starting one is still checked like a command.
+    if (name === 'launch_config') {
+      const show = (c) => `- ${c.name}: ${[c.command, ...(c.args || [])].join(' ')}${c.port ? ` (port ${c.port})` : ''}`;
+      if (args.action === 'save') {
+        if (!args.name) return 'Error: give the config a name.';
+        try {
+          const old = args.old_name && launchConfigs(projectId).find((x) => x.name.toLowerCase() === String(args.old_name).toLowerCase());
+          if (args.old_name && !old) return `Error: no saved launch config named "${args.old_name}".`;
+          const c = saveLaunchConfig(projectId, { name: String(args.name), command: args.command ?? old?.command, args: (args.args ?? old?.args ?? []).map(String), port: args.port ?? old?.port, oldName: args.old_name });
+          notes.push(`saved launch config ${c.name}`);
+          return `Saved:\n${show(c)}\nStart it with start_server and the name "${c.name}".`;
+        } catch (e) { return `Error: ${e.message}`; }
+      }
+      if (args.action === 'remove') {
+        if (!args.name) return 'Error: say which config to remove.';
+        if (!removeLaunchConfig(projectId, String(args.name))) return `No saved launch config named "${args.name}".`;
+        notes.push(`removed launch config ${args.name}`);
+        return `Removed "${args.name}" from the launch configs.${serverFor(projectId, args.name) ? ' It is still running: stop_server ends it.' : ''}`;
+      }
+      const list = launchConfigs(projectId);
+      return list.length ? `Saved launch configs:\n${list.map(show).join('\n')}` : 'No saved launch configs yet.';
+    }
     if (name === 'preview_site') {
       const entry = String(args.path || 'index.html').replace(/^[/\\]+/, '');
       readFile(root, entry, 10);

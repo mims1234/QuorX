@@ -2257,3 +2257,26 @@ test('setSecret replaces a line in place and quotes what needs it; parseEnv read
   assert.equal(secretKind('.env. '), 'env', 'Windows drops trailing dots and spaces');
   assert.equal(scrubSecrets(dir, 'X=1 KEY=a "b" #c\nd'), 'X=1 KEY=[secret removed]', 'six or more characters are removed; short ones stay');
 });
+
+test('launch_config lists, saves, renames and removes saved servers; direct writes to launch.json point to it', async () => {
+  let b = 0;
+  const { bodies, dir } = await run(() => [
+    reply('', [['launch_config', { action: 'save', name: 'web', command: 'npm', args: ['run', 'dev'] }]]),
+    reply('', [['launch_config', { action: 'save', name: 'api', command: 'node', args: ['api.js'], port: 4010 }]]),
+    reply('', [['launch_config', { action: 'save', name: 'site', old_name: 'web', args: ['run', 'start'] }]]),
+    reply('', [['launch_config', { action: 'remove', name: 'api' }]]),
+    reply('', [['launch_config', { action: 'save', name: 'bad', command: 'npm & calc' }]]),
+    reply('', [['write_file', { path: '.quorx/launch.json', content: '{}' }]]),
+    reply('', [['launch_config', { action: 'list' }]]),
+    reply('Done.'),
+  ][b++]);
+  const results = bodies.at(-1).messages.filter((m) => m.role === 'tool').map((m) => String(m.content));
+  assert.match(results[0], /Saved:\n- web: npm run dev/);
+  assert.match(results[2], /- site: npm run start/, 'a rename keeps the command and takes the new args');
+  assert.match(results[3], /Removed "api"/);
+  assert.match(results[4], /^Error:/, 'a command line with shell characters is refused');
+  assert.match(results[5], /^Refused: .*launch_config/);
+  assert.match(results[6], /^Saved launch configs:\n- site: npm run start\n\n\[steps/);
+  const file = JSON.parse(fs.readFileSync(path.join(dir, '.quorx', 'launch.json'), 'utf8'));
+  assert.deepEqual(file.configurations.map((c) => c.name), ['site']);
+});

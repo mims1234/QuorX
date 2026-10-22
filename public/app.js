@@ -59,7 +59,7 @@ const TOOL_NAME = { remember: '📌 Remember this in every chat', media_plan: '�
   write_artifact: '📄 Write a page', edit_artifact: '✏️ Edit a page', read_artifact: '👀 Read a page', decide: '⚖️ Ask the deciders',
   list_files: '🗂 List files', read_file: '👀 Read a file', write_file: '📝 Write a file', append_file: '📝 Append to a file', edit_file: '✏️ Edit a file',
   search_docs: '🔎 Search the attached documents', read_doc: '📄 Read an attached document', list_docs: '📎 List attached documents',
-  edit_video: '🎞 Edit the film', run_command: '⌨️ Run a command', start_server: '🚀 Start a server', stop_server: '■ Stop a server', preview_site: '🌐 Preview a site',
+  edit_video: '🎞 Edit the film', run_command: '⌨️ Run a command', start_server: '🚀 Start a server', stop_server: '■ Stop a server', launch_config: '🧾 Saved servers', preview_site: '🌐 Preview a site',
   browser: '🌐 Use the browser', look: '👁 Look at the result', search_files: '🔎 Search files', delete_file: '🗑 Delete a file',
   scaffold: '🧱 Use a template', save_skill: '🧩 Save a skill', use_skill: '🧩 Load a skill', fetch_url: '🌍 Read a web page', delegate: '🤝 Ask a helper', plan: '🗺 Plan' };
 const CATS = [
@@ -2823,7 +2823,7 @@ function reviewCardsHTML(m) {
 const TL_ONE = {
   read_file: (a) => `Read ${a.path}`, write_file: (a) => `Wrote ${a.path}`, append_file: (a) => `Added to ${a.path}`, edit_file: (a) => `Edited ${a.path}`,
   delete_file: (a) => `Deleted ${a.path}`, list_files: () => 'Listed the files', search_files: (a) => `Searched for "${clip(a.query || '', 40)}"`,
-  run_command: (a) => `Ran ${clip([a.command, ...(a.args || [])].join(' '), 50)}`, start_server: (a) => `Started the "${a.name}" server`, stop_server: (a) => `Stopped the "${a.name}" server`,
+  run_command: (a) => `Ran ${clip([a.command, ...(a.args || [])].join(' '), 50)}`, start_server: (a) => `Started the "${a.name}" server`, stop_server: (a) => `Stopped the "${a.name}" server`, launch_config: (a) => a.action === 'save' ? `Saved the "${a.name}" server` : a.action === 'remove' ? `Removed the saved "${a.name}" server` : 'Listed the saved servers',
   preview_site: () => 'Opened the site preview', browser: (a) => (a.action === 'open' ? `Opened ${a.target}` : `Browser: ${a.action}${a.key ? ` ${a.key}` : ''}`),
   look: () => 'Checked the page with the judges', extract_design: (a) => `Read the look of ${clip(a.target || '', 50)}`, decide: (a) => `Asked the deciders ${a.questions?.length || ''} question${a.questions?.length === 1 ? '' : 's'}`.replace('  ', ' '),
   plan: () => 'Updated the plan', delegate: (a) => `Asked a helper: ${clip(a.task || '', 50)}`, imagine: () => 'Made a picture', make_video: () => 'Made a video',
