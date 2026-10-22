@@ -6068,7 +6068,7 @@ function closeServers(c) {
 // The 🖥 servers list: square icon buttons (colour only where it means something: stop red, run green).
 const SRV_ICO = {
   stop: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5" fill="currentColor" stroke="none"/></svg>',
-  run: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5z" fill="currentColor" stroke="none"/></svg>',
+  run: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5.5v13l11-6.5z" fill="currentColor" stroke="none"/></svg>',
   restart: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>',
   open: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M7 6.5h.01M10 6.5h.01"/></svg>',
   logs: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M12 15h5"/></svg>',
@@ -6418,7 +6418,7 @@ function renderTerm(c) {
   const p = projectOf(c), t = termState(c.projectId);
   bar.hidden = false;
   bar.innerHTML = `<span class="term-title">${SVG_TERM}<b>Terminal</b></span><span class="dim">${esc(p?.name || c.projectId)}</span><span class="spacer"></span>
-    <button type="button" class="term-clear" title="Clear this tab's finished output (running ones stay)">Clear</button><button type="button" class="back" title="Close the terminal">✕ Close</button>`;
+    <button type="button" class="term-clear" title="Clear this tab's finished output (running ones stay)">⌫ Clear output</button><button type="button" class="back" title="Close the terminal">✕ Close</button>`;
   $('.term-clear', bar).onclick = () => { const x = G.xt?.get(`${t.projectId}:${t.filter}`); if (x && !$('#paneBody .term-x')?.hidden) { x.term.clear(); x.term.focus(); return; } (t.clearedBy ||= {})[t.filter] = Date.now(); termDraw(t, true); };
   $('.back', bar).onclick = () => { G.view.term = false; closeTermStream(); syncLayout(); renderPane(); };
   body.innerHTML = `<div class="term">

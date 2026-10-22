@@ -2504,6 +2504,14 @@ html body .trace.trace-pane .step .when { width: auto !important; white-space: n
 #paneBody > .run { flex: 1 1 auto; width: 100%; min-width: 0; }
 .fx-menu button { display: flex; align-items: center; justify-content: flex-start; gap: 8px; }
 
+/* Servers card: icons sit in the middle of their boxes (something upstream sets align-content: start) */
+.srv-pop .srv-ib { place-content: center; }
+/* Terminal bar: Clear is a quiet tool, Close is the bordered button that leaves */
+.appbar .term-clear { height: 26px; padding: 0 9px; border-radius: 6px; border: 1px dashed var(--line-strong) !important; background: transparent !important; color: var(--muted) !important; font: 500 12px var(--font-ui); cursor: pointer; }
+.appbar .term-clear:hover { color: var(--text) !important; border-style: solid !important; }
+/* Running strip: each chip's ■ is a proper square button, not a sliver */
+.term-running .tr-chip { height: 28px; padding-right: 3px; }
+#paneBody .term-running .tr-chip button, #paneBody .term-running .tr-else button { width: 22px !important; min-width: 22px !important; height: 22px !important; min-height: 0 !important; padding: 0 !important; display: grid; place-items: center; border-radius: 5px; font-size: 10px; line-height: 1; margin-left: 4px; }
 /* ---------- an update in the sidebar's footer: the version, the update and ⟳ become one live strip (◐ and ⚙ stay) ----------
    out: old → new version with a sweep of light and a bobbing ⬆ · downloading: the strip fills up, striped
    ready: glows green, ↻ turns on hover · failed: amber, still */
