@@ -1,0 +1,58 @@
+# Watches for an Electron release whose built-in Node has the October 2026 Node.js security fixes (Brotli, TLS host
+# names). The desktop app runs QuorX's server on Electron's Node, so installed apps get the fix only through an Electron
+# bump. Every day: when a fixed Electron exists and desktop/package.json doesn't use one yet, the tracking issue says
+# which version to bump to; once the app uses one, the issue is closed. server/nobrotli.js covers Brotli until then.
+#
+# Hardening: actions are pinned to commits; the job reads the repository and writes only issues.
+name: Electron security watch
+
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Check Electron's Node
+        id: check
+        run: node scripts/electron-watch.mjs
+
+      - name: Update the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          STATE: ${{ steps.check.outputs.state }}
+          PICK: ${{ steps.check.outputs.pick }}
+          TEXT: ${{ steps.check.outputs.text }}
+        run: |
+          title='Electron: bump to a release with the October 2026 Node security fix'
+          num=$(gh issue list --repo "$REPO" --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')
+          if [ "$STATE" = "fixed" ]; then
+            if [ -n "$num" ]; then gh issue close "$num" --repo "$REPO" --comment "$TEXT"; fi
+            exit 0
+          fi
+          if [ -z "$num" ]; then
+            gh issue create --repo "$REPO" --title "$title" --body "$TEXT
+
+          This issue is kept up to date by the Electron security watch workflow and closes itself once the desktop app uses a fixed Electron."
+            exit 0
+          fi
+          # Comment only when there is news: a fixed Electron that this issue hasn't named yet.
+          if [ "$STATE" = "ready" ] && ! gh issue view "$num" --repo "$REPO" --json comments,body --jq '.body + ([.comments[].body] | join(" "))' | grep -qF "Electron $PICK "; then
+            gh issue comment "$num" --repo "$REPO" --body "$TEXT"
+          fi
