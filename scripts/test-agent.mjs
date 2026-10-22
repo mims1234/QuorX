@@ -2386,3 +2386,40 @@ test('a Chrome tab given through the QuorX extension: only an extension with the
     ext.ws.close();
   } finally { takeBackTab(chatId); await real.close().catch(() => {}); srv.close(); closeBrowser(); }
 });
+
+test('🧩 Chrome on in a chat: the agent opens its own tab in the user’s Chrome through the extension; off, it is told to ask', { skip: !(await import('../server/browser.js')).browserPath() && 'no Chromium browser installed' }, async () => {
+  const http = await import('node:http');
+  const { extUpgrade, extKey } = await import('../server/extlink.js');
+  const { takeBackTab, givenTab } = await import('../server/userbrowser.js');
+  const { openTab, closeBrowser } = await import('../server/browser.js');
+  const srv = http.createServer((q, r) => { r.writeHead(200, { 'Content-Type': 'text/html' }); r.end('<!doctype html><meta charset="utf-8"><title>Inbox</title><a href="#m">Open message</a>'); });
+  srv.on('upgrade', (q, s) => extUpgrade(q, s));
+  await new Promise((ok) => srv.listen(0, '127.0.0.1', ok));
+  const port = srv.address().port, real = await openTab({ own: true });
+  const opened = [];
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/api/ext/socket`, { headers: { Origin: `chrome-extension://${'b'.repeat(32)}` } });
+  await new Promise((ok) => { ws.onmessage = async (ev) => {
+    const m = JSON.parse(ev.data);
+    if (m.t === 'welcome') ok();
+    if (m.t !== 'call') return;
+    const reply = (o) => ws.send(JSON.stringify({ t: 'reply', id: m.id, ...o }));
+    if (m.cmd === 'tab.open') { opened.push(m.args); await real.open(m.args.url, { width: 900, height: 600 }); return reply({ result: { id: 9, title: 'Inbox' } }); }
+    if (m.cmd === 'tab.cdp') { try { return reply({ result: await real.cdp(m.args.method, m.args.params) }); } catch (e) { return reply({ error: e.message }); } }
+    reply({ result: true });
+  }; ws.onopen = () => ws.send(JSON.stringify({ t: 'hello', key: extKey() })); });
+  const chatId = `chat-${Date.now().toString(36)}`;
+  try {
+    const off = await run((body, i) => [reply('', [['browser', { action: 'open', target: `chrome:127.0.0.1:${port}/` }]]), reply('Done.')][i], { chatId });
+    assert.match(String(toolResults(off.bodies.at(-1))[0]), /Chrome is off in this chat/);
+    const on = await run((body, i) => [
+      reply('', [['browser', { action: 'open', target: `chrome:http://127.0.0.1:${port}/` }]]),
+      reply('', [['browser', { action: 'click', text: 'Open message' }]]),
+      reply('Done.'),
+    ][i], { chatId, settings: { chromeAccess: true } });
+    assert.match(String(on.bodies[0].messages.at(-1).content), /use their own Chrome in this chat/);
+    const res = toolResults(on.bodies.at(-1)).map(String);
+    assert.equal(opened.length, 1); assert.equal(opened[0].chatId, chatId); assert.equal(opened[0].url, `http://127.0.0.1:${port}/`);
+    assert.match(res[1], /clicked a "Open message"/);
+    assert.equal(givenTab(chatId)?.own, true);
+  } finally { takeBackTab(chatId); ws.close(); await real.close().catch(() => {}); srv.close(); closeBrowser(); }
+});

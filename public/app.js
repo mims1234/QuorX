@@ -2374,6 +2374,7 @@ function renderComposerBar(c) {
   glob.innerHTML = `<div class="cs-sec"><h5>Budget <small>· all chats</small></h5><div class="cs-row cs-caps">${cap('replyBudget', 'Cap per reply', G.settings.replyBudget ?? G.cfg.defaults.replyBudget ?? 1, 0.25, 'Everything one reply calls: the agent, deciders, helpers, checks and media. At 85% the agent is told to wrap up; at the cap Strict asks you, YOLO stops. 0 = no cap.')}${cap('budget', 'Paid media per reply', G.settings.budget, 0.05, 'A paid picture, voice, music or video call that would go over this is stopped, in Strict and in YOLO.')}</div></div>`;
   followSlot.innerHTML = `
     <label class="sq-check cmp-follow" title="Follow the agent: when it opens or checks a page in its browser, or starts a site or app, the Browser tab switches to it; when it runs a command, the Terminal tab shows its output. So you can watch. Off: the pane stays where you put it (all chats)."><input type="checkbox" class="follow-agent" ${G.followAgent !== false ? 'checked' : ''}><svg class="fl-eye" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg><span>Follow</span></label>
+    <label class="sq-check cmp-chrome ${G.ext?.connected ? '' : 'off'}" title="${G.ext?.connected ? 'Chrome: let the agent in this chat open tabs in your own Chrome (a QuorX window), signed in as you. Sending, deleting, buying and account changes ask you first. It never touches your other tabs.' : 'Chrome: the QuorX extension is not connected (⚙ Settings → Code & servers → Chrome extension). Ticked, the agent can use your Chrome once it is.'}"><input type="checkbox" class="chrome-access" ${c.tools?.chrome ? 'checked' : ''}><span>🧩 Chrome</span></label>
 `;
   for (const inp of glob.querySelectorAll('.cs-num input')) inp.onchange = () => { const v = Math.max(0, Number(inp.value) || 0); inp.value = String(v); G.settings[inp.dataset.k] = v; savePrefs(); };
   // The button says what matters at a glance (YOLO in red, reasoning on) and opens the panel.
@@ -2432,6 +2433,7 @@ function renderComposerBar(c) {
   };
   const gear = $('.cs-gear', rack); if (gear && !gear.dataset.wired) { gear.dataset.wired = '1'; gear.onclick = () => openSettings(); }
   $('.follow-agent', followSlot).onchange = (e) => { G.followAgent = e.target.checked; savePrefs(); for (const ch of G.open.values()) if (ch !== c) renderComposerBar(ch); };
+  $('.chrome-access', followSlot).onchange = (e) => { c.tools.chrome = e.target.checked; saveChat(c); };
   for (const b of bar.querySelectorAll('.perm button')) b.onclick = () => { c.approval = b.dataset.approval; saveChat(c); renderComposerBar(c); if (c.running?.runId) postJ(`/api/runs/${c.running.runId}/mode`, { approval: c.approval }).catch(() => {}); };
   renderAllowed(c);
 }
@@ -4044,7 +4046,7 @@ async function runChat(c, text, ctx, imgs, { resumeOf, docs = [], more = 0, mode
   if (box && cut) { updateMsg(c, m); c.follow = true; c.toEnd?.(); }
   else if (box) { if (box.querySelector('.hint')) box.innerHTML = ''; if (user) box.appendChild(renderMsg(c, user)); box.appendChild(renderMsg(c, m)); c.follow = true; c.toEnd?.(); }
   const artifacts = Object.fromEntries(Object.entries(a.artifacts).map(([id, x]) => [id, x.kind === 'html' ? { kind: 'html', title: x.title, html: x.html, v: 1 } : x.kind === 'md' ? { kind: 'md', title: x.title, md: x.md || '', v: 1 } : { kind: x.kind, title: x.title, url: x.url?.startsWith('data:') ? undefined : x.url, v: 1 }]));
-  const settings = { ...G.settings, approval: c.approval, tools: chatTools(c), ...qualitySettings(c) };
+  const settings = { ...G.settings, approval: c.approval, tools: chatTools(c), ...qualitySettings(c), chromeAccess: !!c.tools?.chrome };
   const body = resumeOf ? { runId: m.runId, chatId: c.id, resume: resumeOf, settings, allowed: a.allowed, cmdRules: a.cmdRules || [], reading: a.reading?.text || '', ...(more ? { continue: more, ...(model ? { model } : {}) } : {}) }
     : { runId: m.runId, chatId: c.id, projectId: c.projectId, chatTitle: c.title, setup: a.setup, settings, allowed: a.allowed, cmdRules: a.cmdRules || [], history, summary: a.summary || '', reading: a.reading?.text || '', text, artifacts, context: ctx?.text || '', images: imgs.map((x) => x.full), docs: docs.map((d) => d.id), ...(cmts.length ? { comments: cmts } : {}) };
   // Saved straight away, so a reload finds the running reply and reattaches to it.
@@ -4723,7 +4725,7 @@ function wireScheduleForm(body) {
     const c = blankChat(e.projectId);
     c.approval = e.approval;
     const payload = { name: e.name, projectId: e.projectId, prompt: e.prompt, model: e.model, reasoning: c.agent.setup.reasoning, approval: e.approval, when, tools: c.tools,
-      settings: { ...G.settings, approval: e.approval, tools: chatTools(c), ...qualitySettings(c) } };
+      settings: { ...G.settings, approval: e.approval, tools: chatTools(c), ...qualitySettings(c), chromeAccess: !!c.tools?.chrome } };
     const r = await postJ(e.id ? `/api/schedules/${e.id}` : '/api/schedules', payload, e.id ? 'PUT' : 'POST');
     if (!r || r.error) { err.textContent = r?.error ? `${r.error[0].toUpperCase()}${r.error.slice(1)}.` : 'Not saved.'; return; }
     SCHED.edit = null; await loadSchedules(); drawSchedules();
@@ -6249,6 +6251,7 @@ function devAfter(projectId, r) {
 }
 async function pollDev() {
   if (document.hidden) return;
+  getJ('/api/ext/state').then((r) => { const was = !!G.ext?.connected; G.ext = r && !r.error ? r : null; if (was !== !!G.ext?.connected) for (const ch of G.open.values()) renderComposerBar(ch); }).catch(() => {});
   const ids = new Set(G.panes.map((id) => G.open.get(id)?.projectId).filter(Boolean));
   for (const pid of ids) {
     if (G.projects.find((p) => p.id === pid)?.missing) continue;

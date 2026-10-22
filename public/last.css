@@ -2655,3 +2655,4 @@ body.link-mod a[data-cl] { cursor: pointer; }
 .st-ext-steps code { font: 11.5px var(--mono); }
 .st-ext-acts { display: inline-flex; gap: 4px; margin: 0 4px; vertical-align: middle; }
 .st-ext-steps li { line-height: 1.9; }
+.sq-check.cmp-chrome.off { opacity: .55; }

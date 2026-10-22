@@ -593,6 +593,7 @@ const server = http.createServer(async (req, res) => {
       try { return json(res, 200, await userBrowse(String(b.sid || ''), String(b.op || 'look'), b)); } catch (e) { return json(res, 200, { error: e.message }); }
     }
     // ---- 🧩 the QuorX Chrome extension: its connection key (⚙ Settings) and whether it is connected ----
+    if (url.pathname === '/api/ext/state' && req.method === 'GET') return json(res, 200, extInfo());
     if (url.pathname === '/api/ext/status' && req.method === 'GET') return json(res, 200, { ...extInfo(), key: extKey(), lent: lentChromeTabs(), folder: path.join(ROOT, 'extension') });
     if (url.pathname === '/api/ext/key' && req.method === 'POST') return json(res, 200, { key: extKey(true) });
     // ⚙ Settings → Chrome extension: open chrome://extensions in your Chrome, or show the extension's folder.

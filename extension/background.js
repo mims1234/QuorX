@@ -59,8 +59,19 @@ async function onMessage(sock, data) {
   }
 }
 // What QuorX may ask, and only for a tab you gave.
-async function call(cmd, { tab, method, params, locked }) {
+async function call(cmd, { tab, method, params, locked, url, chatId }) {
   const lent = await lentTabs();
+  // A chat with 🧩 Chrome on opens its own tab, in one QuorX window, unless you turned that off in this popup.
+  if (cmd === 'tab.open') {
+    if ((await chrome.storage.local.get('allowOpen')).allowOpen === false) throw new Error('opening tabs is turned off in the QuorX extension (its popup)');
+    if (!/^https?:\/\//i.test(String(url || ''))) throw new Error('only web pages (http or https) can be opened');
+    const { win } = await chrome.storage.session.get('win');
+    let t;
+    try { t = win ? await chrome.tabs.create({ windowId: win, url, active: true }) : null; } catch { t = null; }
+    if (!t) { const w = await chrome.windows.create({ url, focused: false }); await chrome.storage.session.set({ win: w.id }); t = w.tabs[0]; }
+    lent[t.id] = { chatId, own: true }; await setLent(lent); badge(t.id, true);
+    return { id: t.id, title: t.title || '' };
+  }
   if (!lent[tab]) throw new Error('that tab was not given to QuorX');
   if (cmd === 'tab.cdp') { await attach(tab); return chrome.debugger.sendCommand({ tabId: tab }, method, params || {}); }
   if (cmd === 'tab.lock') { if (locked) await attach(tab); else await detach(tab); return true; }
@@ -106,7 +117,8 @@ async function badgeAll() { const lent = await lentTabs(); for (const t of await
 // The popup asks here.
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   (async () => {
-    if (msg.q === 'state') { await connect(); const s = await settings(); return { state, error: lastError, address: s.address, paired: !!s.key, lent: await lentTabs() }; }
+    if (msg.q === 'state') { await connect(); const s = await settings(); return { state, error: lastError, address: s.address, paired: !!s.key, lent: await lentTabs(), allowOpen: (await chrome.storage.local.get('allowOpen')).allowOpen !== false }; }
+    if (msg.q === 'allowOpen') { await chrome.storage.local.set({ allowOpen: !!msg.on }); return true; }
     if (msg.q === 'save') {
       await chrome.storage.local.set({ address: String(msg.address || '').trim() || 'http://127.0.0.1:5188', key: String(msg.key || '').trim() });
       state = 'off'; lastError = ''; ws?.close(); ws = null; await connect();

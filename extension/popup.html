@@ -24,6 +24,8 @@
   .note { font-size: 11.5px; color: var(--muted); }
   .err { font-size: 12px; color: var(--bad); }
   .lent { border-color: color-mix(in srgb, var(--violet) 60%, transparent); }
+  .check { display: flex; align-items: flex-start; gap: 8px; color: var(--text); font-size: 12px; }
+  .check input { margin-top: 2px; accent-color: var(--violet); }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -48,6 +50,7 @@
       <button class="back" id="backBtn">Take back</button>
     </div>
     <p class="note">Tip: give the tab its own window, so you can watch it and the agent can see it.</p>
+    <label class="check"><input type="checkbox" id="allowOpen"> Chats with 🧩 Chrome on may open their own tabs here (in a QuorX window)</label>
     <button id="repair">Change QuorX address or key</button>
   </section>
   <p class="err" id="err" hidden></p>

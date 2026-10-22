@@ -19,6 +19,7 @@ async function draw() {
   $('address').value = s.address || 'http://127.0.0.1:5188';
   if (s.error && s.state !== 'on') say(s.error);
   if (showPair) return;
+  $('allowOpen').checked = s.allowOpen;
   $('tabTitle').textContent = tab?.title || 'This tab'; $('tabUrl').textContent = tab?.url || '';
   const lent = tab && s.lent[tab.id];
   if (s.state === 'on') chats = await ask({ q: 'chats' }).catch(() => []);
@@ -38,5 +39,6 @@ $('save').onclick = async () => {
 };
 $('giveBtn').onclick = async () => { try { await ask({ q: 'give', tab: tab.id, chatId: $('chat').value }); } catch (e) { say(e.message); } draw(); };
 $('backBtn').onclick = async () => { try { await ask({ q: 'takeBack', tab: tab.id }); } catch (e) { say(e.message); } draw(); };
+$('allowOpen').onchange = (e) => ask({ q: 'allowOpen', on: e.target.checked }).catch((x) => say(x.message));
 $('repair').onclick = () => { $('pair').hidden = false; $('give').hidden = true; };
 draw().catch((e) => say(e.message));
