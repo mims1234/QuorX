@@ -5314,28 +5314,50 @@ function cancelSettings() { G.theme = ST.themeAtOpen; applyTheme(); if ($('#sett
 
 // Projects panel: acts at once (like the sidebar's ⚙ and 🗑).
 // Settings → Projects: one compact row per project (colour, spend vs budget, folder) with icon actions.
-// ⚙ Settings → Code & servers → Chrome extension: the key to paste into the QuorX extension, and whether it is connected.
+// ⚙ Settings → Code & servers → Chrome extension: set up in your default browser (Brave, Chrome, Edge…), connect with
+// one click (Allow here), and whether it is connected. The key is a fallback, under "Use a key instead".
 async function drawExtPanel() {
   const box = $('#stExt'); if (!box) return;
   const r = await getJ('/api/ext/status');
   if (!box.isConnected || !r || r.error) return;
+  const b = r.browser || { name: 'Chrome', page: 'chrome://extensions' }, page = b.page || 'chrome://extensions';
   let shown = false;
   const paint = () => {
     box.innerHTML = `<div class="st-ext">
-      <div class="st-ext-state ${r.connected ? (r.outdated ? 'warn' : 'on') : ''}"><i></i>${r.connected ? (r.outdated ? 'Connected, but the extension is an older version: reload it in chrome://extensions (↻ on the QuorX card)' : 'Connected to your Chrome') : 'Not connected'}${r.lent?.length ? ` · ${r.lent.length} tab${r.lent.length > 1 ? 's' : ''} given to chats` : ''}</div>
-      <div class="st-ext-key"><code class="${shown ? '' : 'masked'}">${shown ? esc(r.key) : '•'.repeat(24)}</code><button type="button" class="kx-icon" data-x="show" title="${shown ? 'Hide the key' : 'Show the key'}">${shown ? '🙈' : '👁'}</button><button type="button" class="st-btn sm" data-x="copy">Copy key</button><button type="button" class="st-btn sm danger" data-x="new" title="Make a new key: the extension disconnects until you paste the new one">New key</button></div>
-      <ol class="st-ext-steps"><li>Open <code>chrome://extensions</code> in Chrome <span class="st-ext-acts"><button type="button" class="st-btn sm" data-x="chrome" title="Opens the extensions page in your Chrome">Open in Chrome</button><button type="button" class="st-btn sm" data-x="copyurl">Copy</button></span> and turn on <b>Developer mode</b> (top right).</li><li><b>Load unpacked</b> and pick the folder <code class="blurable">${esc(r.folder || 'extension')}</code> <span class="st-ext-acts"><button type="button" class="st-btn sm" data-x="copyfolder">Copy path</button><button type="button" class="st-btn sm" data-x="folder">Show folder</button></span></li><li>Click the QuorX icon in Chrome's toolbar, paste the key, and press Connect.</li><li>On any page, the QuorX icon → pick a chat → <b>🤖 Give this tab</b>.</li></ol>
+      <div class="st-ext-state ${r.connected ? (r.outdated ? 'warn' : 'on') : ''}"><i></i>${r.connected ? (r.outdated ? `Connected, but the extension is an older version: reload it once in ${esc(page)} (↻ on the QuorX card)` : `Connected to your ${esc(b.name)}`) : 'Not connected'}${r.lent?.length ? ` · ${r.lent.length} tab${r.lent.length > 1 ? 's' : ''} given to chats` : ''}</div>
+      ${r.pairing ? `<div class="st-ext-pair"><b>🧩 ${esc(r.pairing.browser)} wants to connect to QuorX.</b> Allow it only if you just pressed Connect in the extension.<span class="st-ext-acts"><button type="button" class="st-btn sm primary" data-x="allow">Allow</button><button type="button" class="st-btn sm" data-x="deny">Deny</button></span></div>` : ''}
+      ${b.page === null ? `<p class="st-ext-warn">Your default browser is ${esc(b.name)}, which can't run this extension. Use Chrome, Brave or Edge for it.</p>` : ''}
+      <ol class="st-ext-steps">
+        <li>Open <code>${esc(page)}</code> in ${esc(b.name)} <span class="st-ext-acts"><button type="button" class="st-btn sm" data-x="chrome" title="Opens the extensions page in ${esc(b.name)}">Open in ${esc(b.name)}</button><button type="button" class="st-btn sm" data-x="copyurl">Copy</button></span> and turn on <b>Developer mode</b>.</li>
+        <li><b>Load unpacked</b> and pick the folder <code class="blurable">${esc(r.folder || 'extension')}</code> <span class="st-ext-acts"><button type="button" class="st-btn sm" data-x="copyfolder">Copy path</button><button type="button" class="st-btn sm" data-x="folder">Show folder</button></span></li>
+        <li>Click the QuorX icon in the toolbar and press <b>Connect</b>, then <b>Allow</b> here.</li>
+        <li>In a chat, tick <b>🧩 Chrome</b> (next to Follow), or give a tab from the QuorX icon.</li>
+      </ol>
+      <details class="st-ext-keybox"><summary>Use a key instead</summary><div class="st-ext-key"><code class="${shown ? '' : 'masked'}">${shown ? esc(r.key) : '•'.repeat(24)}</code><button type="button" class="kx-icon" data-x="show" title="${shown ? 'Hide the key' : 'Show the key'}">${shown ? '🙈' : '👁'}</button><button type="button" class="st-btn sm" data-x="copy">Copy key</button><button type="button" class="st-btn sm danger" data-x="new" title="Make a new key: the extension disconnects until it connects again">New key</button></div></details>
     </div>`;
-    $('[data-x="show"]', box).onclick = () => { shown = !shown; paint(); };
     const copy = async (btn, text) => { try { await navigator.clipboard.writeText(text); flashTip(btn, 'Copied'); } catch { uiPrompt('Copy this', text, { ok: 'Done', cancel: 'Close' }); } };
-    $('[data-x="copyurl"]', box).onclick = (e) => copy(e.currentTarget, 'chrome://extensions');
+    $('[data-x="show"]', box).onclick = () => { shown = !shown; paint(); $('.st-ext-keybox', box).open = true; };
+    $('[data-x="copy"]', box).onclick = (e) => copy(e.currentTarget, r.key);
+    $('[data-x="copyurl"]', box).onclick = (e) => copy(e.currentTarget, page);
     $('[data-x="copyfolder"]', box).onclick = (e) => copy(e.currentTarget, r.folder || '');
-    $('[data-x="chrome"]', box).onclick = async (e) => { const b = e.currentTarget, x = await postJ('/api/ext/open-chrome', {}); flashTip(b, x.error ? `${x.error}: copy the address instead` : 'Opened in Chrome'); };
-    $('[data-x="folder"]', box).onclick = async (e) => { const b = e.currentTarget, x = await postJ('/api/ext/show-folder', {}); if (x.error) flashTip(b, x.error); };
-    $('[data-x="copy"]', box).onclick = async (e) => { try { await navigator.clipboard.writeText(r.key); flashTip(e.currentTarget, 'Copied'); } catch { uiPrompt('Copy the key', r.key, { ok: 'Done', cancel: 'Close' }); } };
-    $('[data-x="new"]', box).onclick = async () => { if (!(await uiConfirm('Make a new key?\nThe extension disconnects until you paste the new key into it.', { ok: 'New key', danger: true }))) return; const n = await postJ('/api/ext/key', {}); if (n.key) { r.key = n.key; r.connected = false; shown = true; paint(); } };
+    $('[data-x="chrome"]', box).onclick = async (e) => { const btn = e.currentTarget, x = await postJ('/api/ext/open-chrome', {}); flashTip(btn, x.error ? `${x.error}: copy the address instead` : `Opened in ${x.browser || b.name}`); };
+    $('[data-x="folder"]', box).onclick = async (e) => { const btn = e.currentTarget, x = await postJ('/api/ext/show-folder', {}); if (x.error) flashTip(btn, x.error); };
+    $('[data-x="new"]', box).onclick = async () => { if (!(await uiConfirm('Make a new key?\nThe extension disconnects until it connects again (Connect in the extension, then Allow here).', { ok: 'New key', danger: true }))) return; const n = await postJ('/api/ext/key', {}); if (n.key) { r.key = n.key; r.connected = false; shown = true; paint(); } };
+    for (const [x, allow] of [['allow', true], ['deny', false]]) { const btn = $(`[data-x="${x}"]`, box); if (btn) btn.onclick = async () => { await postJ('/api/ext/pair', { allow }); setTimeout(drawExtPanel, 700); }; }
   };
   paint();
+}
+// An extension asking to connect: a notice anywhere in QuorX with Allow / Deny (it waits up to 2 minutes).
+function extPairNotice() {
+  let n = $('#extPairNotice');
+  const p = G.ext?.pairing;
+  if (!p) { n?.remove(); return; }
+  if (n && n.dataset.at === String(p.at)) return;
+  n?.remove();
+  n = document.createElement('div'); n.id = 'extPairNotice'; n.className = 'ext-pair-notice'; n.dataset.at = String(p.at); n.setAttribute('role', 'alertdialog');
+  n.innerHTML = `<b>🧩 ${esc(p.browser)} wants to connect to QuorX</b><p>Allow it only if you just pressed Connect in the QuorX extension.</p><div class="acts"><button type="button" class="st-btn sm" data-a="0">Deny</button><button type="button" class="st-btn sm primary" data-a="1">Allow</button></div>`;
+  document.body.append(n);
+  for (const btn of n.querySelectorAll('[data-a]')) btn.onclick = async () => { n.remove(); await postJ('/api/ext/pair', { allow: btn.dataset.a === '1' }); drawExtPanel(); };
 }
 async function drawProjectsPanel() {
   const box = $('#stProjects'); if (!box) return;
@@ -6251,7 +6273,7 @@ function devAfter(projectId, r) {
 }
 async function pollDev() {
   if (document.hidden) return;
-  getJ('/api/ext/state').then((r) => { const k = (x) => `${!!x?.connected}${!!x?.outdated}`, was = k(G.ext); G.ext = r && !r.error ? r : null; if (was !== k(G.ext)) for (const ch of G.open.values()) renderComposerBar(ch); }).catch(() => {});
+  getJ('/api/ext/state').then((r) => { const k = (x) => `${!!x?.connected}${!!x?.outdated}`, was = k(G.ext); G.ext = r && !r.error ? r : null; if (was !== k(G.ext)) for (const ch of G.open.values()) renderComposerBar(ch); extPairNotice(); }).catch(() => {});
   const ids = new Set(G.panes.map((id) => G.open.get(id)?.projectId).filter(Boolean));
   for (const pid of ids) {
     if (G.projects.find((p) => p.id === pid)?.missing) continue;

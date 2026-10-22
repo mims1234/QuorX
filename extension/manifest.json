@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "QuorX",
-  "version": "0.2.11",
+  "version": "0.2.12",
   "description": "Give a tab of your everyday Chrome to a QuorX chat, so its agent can work in it with your sign-ins. It touches only tabs you give.",
   "minimum_chrome_version": "116",
   "permissions": ["debugger", "tabs", "storage", "alarms"],

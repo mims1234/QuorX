@@ -2366,7 +2366,7 @@ test('a Chrome tab given through the QuorX extension: only an extension with the
     const wrong = await connect(ORIGIN, 'f'.repeat(48));
     assert.deepEqual(wrong.got, ['denied']);
     const ext = await connect(ORIGIN, extKey());
-    assert.deepEqual(ext.got, ['welcome']); assert.equal(extReady(), true);
+    assert.equal(ext.got[0], 'welcome'); assert.equal(extReady(), true); // an older copy is also asked to reload
     giveTab(chatId, 'chrome-7', { url: 'http://127.0.0.1/', title: 'Mail', ext: 7 });
     assert.deepEqual(lentChromeTabs(), [{ chatId, tab: 7, title: 'Mail' }]);
     const asked = [];
@@ -2422,4 +2422,29 @@ test('🧩 Chrome on in a chat: the agent opens its own tab in the user’s Chro
     assert.match(res[1], /clicked a "Open message"/);
     assert.equal(givenTab(chatId)?.own, true);
   } finally { takeBackTab(chatId); ws.close(); await real.close().catch(() => {}); srv.close(); closeBrowser(); }
+});
+
+test('the extension connects with one click: it waits until Allow in QuorX, Deny closes it, and an older copy is asked to reload', async () => {
+  const http = await import('node:http');
+  const { extUpgrade, extKey, extPairing, extPair, extReady } = await import('../server/extlink.js');
+  const srv = http.createServer(); srv.on('upgrade', (q, s) => extUpgrade(q, s));
+  await new Promise((ok) => srv.listen(0, '127.0.0.1', ok));
+  const open = (version) => new Promise((ok) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${srv.address().port}/api/ext/socket`, { headers: { Origin: `chrome-extension://${'c'.repeat(32)}` } });
+    const got = []; ws.onmessage = (ev) => got.push(JSON.parse(ev.data));
+    ws.onopen = () => { ws.send(JSON.stringify({ t: 'hello', pair: true, browser: 'Brave', version })); ok({ ws, got }); };
+  });
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  try {
+    const a = await open('0.2.11'); await wait(150);
+    assert.deepEqual(a.got.map((m) => m.t), ['pairing']);
+    assert.equal(extPairing()?.browser, 'Brave');
+    assert.equal(extPair(false), true); await wait(150);
+    assert.equal(a.got.at(-1).t, 'denied'); assert.equal(extPairing(), null);
+    const b = await open('0.2.11'); await wait(150);
+    extPair(true); await wait(150);
+    assert.deepEqual(b.got.map((m) => m.t), ['pairing', 'paired', 'welcome', 'reload']);
+    assert.equal(b.got[1].key, extKey()); assert.equal(extReady(), true);
+    b.ws.close();
+  } finally { srv.close(); }
 });

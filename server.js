@@ -39,7 +39,7 @@ import { readAudit } from './server/audit.js';
 import { pickFolder } from './server/pickfolder.js';
 import { userBrowse, giveTab, givenTab, takeBackTab, takeBackSid, lentChromeTabs } from './server/userbrowser.js';
 import { rewritePrompt } from './server/enhancer.js';
-import { extUpgrade, extKey, extInfo, onExtRequest, chromePath } from './server/extlink.js';
+import { extUpgrade, extKey, extInfo, onExtRequest, defaultBrowser, extPairing, extPair } from './server/extlink.js';
 import { openLink, linkReply, desktopReady, desktopCall } from './server/desktop.js';
 import { saveUpload, processDoc, listDocs, removeDoc, DOC_DEFAULTS, officeText } from './server/docs.js';
 import { embeddingModels } from './server/openrouter.js';
@@ -593,14 +593,17 @@ const server = http.createServer(async (req, res) => {
       try { return json(res, 200, await userBrowse(String(b.sid || ''), String(b.op || 'look'), b)); } catch (e) { return json(res, 200, { error: e.message }); }
     }
     // ---- 🧩 the QuorX Chrome extension: its connection key (⚙ Settings) and whether it is connected ----
-    if (url.pathname === '/api/ext/state' && req.method === 'GET') return json(res, 200, extInfo());
-    if (url.pathname === '/api/ext/status' && req.method === 'GET') return json(res, 200, { ...extInfo(), key: extKey(), lent: lentChromeTabs(), folder: path.join(ROOT, 'extension') });
+    if (url.pathname === '/api/ext/state' && req.method === 'GET') return json(res, 200, { ...extInfo(), pairing: extPairing() });
+    if (url.pathname === '/api/ext/pair' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e3) || '{}'); return json(res, 200, { ok: extPair(!!b.allow) }); }
+    if (url.pathname === '/api/ext/status' && req.method === 'GET') return json(res, 200, { ...extInfo(), key: extKey(), lent: lentChromeTabs(), folder: path.join(ROOT, 'extension'), pairing: extPairing(), browser: await defaultBrowser() });
     if (url.pathname === '/api/ext/key' && req.method === 'POST') return json(res, 200, { key: extKey(true) });
     // ⚙ Settings → Chrome extension: open chrome://extensions in your Chrome, or show the extension's folder.
     if (url.pathname === '/api/ext/open-chrome' && req.method === 'POST') {
-      const exe = chromePath();
-      if (!exe) return json(res, 200, { error: 'Chrome was not found on this computer' });
-      try { spawn(exe, ['chrome://extensions'], { detached: true, stdio: 'ignore' }).on('error', () => {}).unref(); return json(res, 200, { ok: true }); } catch (e) { return json(res, 200, { error: e.message }); }
+      // Your default browser's extensions page (brave://extensions for Brave…).
+      const b = await defaultBrowser();
+      if (!b) return json(res, 200, { error: 'no Chromium browser (Chrome, Brave, Edge…) was found on this computer' });
+      if (!b.page) return json(res, 200, { error: `${b.name} can't run this extension: use Chrome, Brave or Edge` });
+      try { spawn(b.exe, [b.page], { detached: true, stdio: 'ignore' }).on('error', () => {}).unref(); return json(res, 200, { ok: true, browser: b.name }); } catch (e) { return json(res, 200, { error: e.message }); }
     }
     if (url.pathname === '/api/ext/show-folder' && req.method === 'POST') {
       const dir = path.join(ROOT, 'extension');

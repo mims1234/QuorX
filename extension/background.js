@@ -12,16 +12,19 @@ const settings = async () => ({ address: 'http://127.0.0.1:5188', key: '', ...(a
 const lentTabs = async () => (await chrome.storage.session.get('lent')).lent || {}; // tab id → { chatId, chat }
 const setLent = (lent) => chrome.storage.session.set({ lent });
 
-async function connect() {
+// Which browser this is, for QuorX's "… wants to connect" notice.
+const browserName = () => (navigator.brave ? 'Brave' : (navigator.userAgentData?.brands || []).map((b) => b.brand).find((b) => !/chromium|not.?a.?brand/i.test(b))?.replace('Google ', '').replace('Microsoft ', '') || 'Chrome');
+// pair: connect without a key, and QuorX asks you to Allow it (the key comes back from QuorX).
+async function connect(pair = false) {
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
   const { address, key } = await settings();
-  if (!key) { state = 'unpaired'; return; }
+  if (!key && !pair) { state = 'unpaired'; return; }
   let u; try { u = new URL('/api/ext/socket', address); } catch { state = 'error'; lastError = 'That QuorX address is not valid.'; return; }
   u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
   state = 'connecting';
   const sock = new WebSocket(u.href);
   ws = sock;
-  sock.onopen = () => sock.send(JSON.stringify({ t: 'hello', key, version: VERSION }));
+  sock.onopen = () => sock.send(JSON.stringify(key ? { t: 'hello', key, version: VERSION } : { t: 'hello', pair: true, browser: browserName(), version: VERSION }));
   sock.onmessage = (ev) => onMessage(sock, ev.data);
   sock.onclose = () => {
     if (ws !== sock) return;
@@ -52,6 +55,10 @@ async function onMessage(sock, data) {
     return;
   }
   if (m.t === 'denied') { state = 'denied'; lastError = m.why || 'QuorX refused the key.'; return; }
+  if (m.t === 'pairing') { state = 'pairing'; lastError = ''; return; }
+  if (m.t === 'paired') { await chrome.storage.local.set({ key: String(m.key || '') }); return; }
+  // QuorX is newer than this extension: reload from its folder (a loaded-unpacked extension reads its files again).
+  if (m.t === 'reload') { setTimeout(() => chrome.runtime.reload(), 300); return; }
   if (m.t === 'res') { const w = waiting.get(m.id); if (w) { waiting.delete(m.id); m.error ? w.no(new Error(m.error)) : w.ok(m.result); } return; }
   if (m.t === 'call') {
     try { send({ t: 'reply', id: m.id, result: await call(m.cmd, m.args || {}) }); }
@@ -122,6 +129,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
     if (msg.q === 'save') {
       await chrome.storage.local.set({ address: String(msg.address || '').trim() || 'http://127.0.0.1:5188', key: String(msg.key || '').trim() });
       state = 'off'; lastError = ''; ws?.close(); ws = null; await connect();
+      for (let i = 0; i < 20 && state === 'connecting'; i++) await new Promise((r) => setTimeout(r, 150));
+      return { state, error: lastError };
+    }
+    if (msg.q === 'pair') {
+      await chrome.storage.local.set({ address: String(msg.address || '').trim() || 'http://127.0.0.1:5188', key: '' });
+      state = 'off'; lastError = ''; ws?.close(); ws = null; await connect(true);
       for (let i = 0; i < 20 && state === 'connecting'; i++) await new Promise((r) => setTimeout(r, 150));
       return { state, error: lastError };
     }

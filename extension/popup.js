@@ -7,14 +7,15 @@ let tab = null, chats = [];
 function status(s) {
   const d = $('dot');
   d.className = `dot ${s.state === 'on' ? 'on' : s.state === 'denied' || s.state === 'error' ? 'bad' : ''}`;
-  $('dotText').textContent = s.state === 'on' ? 'connected' : s.state === 'connecting' ? 'connecting…' : s.state === 'unpaired' ? 'not set up' : 'not connected';
+  $('dotText').textContent = s.state === 'on' ? 'connected' : s.state === 'connecting' ? 'connecting…' : s.state === 'pairing' ? 'waiting for Allow' : s.state === 'unpaired' ? 'not set up' : 'not connected';
 }
 async function draw() {
   say('');
   const s = await ask({ q: 'state' });
   status(s);
   [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const showPair = !s.paired || s.state === 'denied';
+  const showPair = s.state === 'pairing' || !s.paired || s.state === 'denied';
+  $('pairWait').hidden = s.state !== 'pairing'; $('pairBtn').disabled = s.state === 'pairing';
   $('pair').hidden = !showPair; $('give').hidden = showPair;
   $('address').value = s.address || 'http://127.0.0.1:5188';
   if (s.error && s.state !== 'on') say(s.error);
@@ -32,6 +33,13 @@ async function draw() {
 }
 const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
+$('pairBtn').onclick = async () => {
+  $('pairBtn').disabled = true;
+  try { const r = await ask({ q: 'pair', address: $('address').value }); if (r.state !== 'pairing' && r.state !== 'on') say(r.error || 'Could not reach QuorX: is it running?'); } catch (e) { say(e.message); }
+  draw();
+  // Back to the normal view once you Allow it in QuorX.
+  const poll = setInterval(async () => { const s = await ask({ q: 'state' }).catch(() => null); if (!s || s.state !== 'pairing') { clearInterval(poll); draw(); } }, 1000);
+};
 $('save').onclick = async () => {
   $('save').disabled = true;
   try { const r = await ask({ q: 'save', address: $('address').value, key: $('key').value }); $('key').value = ''; if (r.state !== 'on') say(r.error || 'Could not connect.'); } catch (e) { say(e.message); }

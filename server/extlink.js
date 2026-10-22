@@ -5,6 +5,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { HOME } from './openrouter.js';
 
 const KEY_FILE = path.join(HOME, 'data', 'extension-key');
@@ -20,10 +21,17 @@ export function extKey(renew = false) {
 let link = null; // { send(obj), close(code, why), at, version }
 const waiting = new Map(), subs = new Map(); // call id → { ok, no, timer }; tab → Set(fn)
 let handlers = {}; // what the extension asks of the harness: give, takeBack, closed, chats
+let pairing = null; // { me, browser, at, finish(allow) }: an extension asking to connect, waiting for Allow in QuorX
+export const extPairing = () => (pairing && Date.now() - pairing.at < 120000 ? { browser: pairing.browser, at: pairing.at } : null);
+/** Allow or Deny the extension that asked to connect (⚙ Settings or the notice in QuorX). */
+export function extPair(allow) { const p = pairing; pairing = null; if (!p) return false; p.finish(!!allow); return true; }
 export const extReady = () => !!link;
 // The extension's version this QuorX needs (what it can do); an older one is still connected but must be reloaded.
 export const EXT_NEEDS = '0.2.11';
-const older = (v) => { const a = String(v || '0').split('.').map(Number), b = EXT_NEEDS.split('.').map(Number); for (let i = 0; i < 3; i++) { if ((a[i] || 0) !== b[i]) return (a[i] || 0) < b[i]; } return false; };
+const below = (v, w) => { const a = String(v || '0').split('.').map(Number), b = String(w).split('.').map(Number); for (let i = 0; i < 3; i++) { if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) < (b[i] || 0); } return false; };
+const older = (v) => below(v, EXT_NEEDS);
+// The version in QuorX's extension folder: an older running copy is asked to reload itself from it.
+const latest = () => { try { return JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'extension', 'manifest.json'), 'utf8')).version; } catch { return EXT_NEEDS; } };
 export const extOutdated = () => !!link && older(link.version);
 export const extInfo = () => (link ? { connected: true, since: link.at, version: link.version, outdated: older(link.version) } : { connected: false });
 export function onExtRequest(h) { handlers = h; }
@@ -64,6 +72,15 @@ export function extUpgrade(req, socket) {
   const helloTimer = setTimeout(() => { if (!hello) socket.destroy(); }, 10000);
   const onText = (text) => {
     let m; try { m = JSON.parse(text); } catch { return; }
+    if (!hello && m.t === 'hello' && m.pair && !m.key) {
+      // No key yet: it waits (up to 2 minutes) until you press Allow or Deny in QuorX.
+      if (pairing) pairing.finish(false);
+      const p = { me, browser: String(m.browser || 'A browser').slice(0, 30), at: Date.now() };
+      p.finish = (allow) => { clearTimeout(p.timer); if (pairing === p) pairing = null; if (!allow) { me.send({ t: 'denied', why: 'not allowed in QuorX' }); me.close(4003); return; } me.send({ t: 'paired', key: extKey() }); onText(JSON.stringify({ t: 'hello', key: extKey(), version: m.version })); };
+      p.timer = setTimeout(() => p.finish(false), 120000);
+      clearTimeout(helloTimer); pairing = p; me.send({ t: 'pairing' });
+      return;
+    }
     if (!hello) {
       const want = Buffer.from(extKey()), got = Buffer.from(String(m.key || ''));
       if (m.t !== 'hello' || got.length !== want.length || !crypto.timingSafeEqual(got, want)) { me.send({ t: 'denied', why: 'wrong key: copy it again from QuorX ⚙ Settings → Chrome extension' }); me.close(4003); return; }
@@ -71,6 +88,7 @@ export function extUpgrade(req, socket) {
       if (link && link !== me) link.close(4000);
       me.version = String(m.version || '').slice(0, 20);
       link = me; me.send({ t: 'welcome' });
+      if (below(me.version, latest())) me.send({ t: 'reload' });
       return;
     }
     if (m.t === 'ping') return me.send({ t: 'pong' });
@@ -117,3 +135,21 @@ const LOCAL = process.env.LOCALAPPDATA || '';
 const CHROME = ['C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe', LOCAL && path.join(LOCAL, 'Google/Chrome/Application/chrome.exe'),
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/usr/bin/google-chrome', '/usr/bin/google-chrome-stable'].filter(Boolean);
 export const chromePath = () => CHROME.find((p) => fs.existsSync(p)) || null;
+
+// Your default browser and its extensions page (brave://extensions, edge://extensions…): the extension works in any
+// Chromium browser, so "Open" in ⚙ Settings opens the one you use. Windows reads it from the registry; elsewhere Chrome.
+const BROWSERS = { 'brave.exe': ['Brave', 'brave://extensions'], 'chrome.exe': ['Chrome', 'chrome://extensions'], 'msedge.exe': ['Edge', 'edge://extensions'], 'vivaldi.exe': ['Vivaldi', 'vivaldi://extensions'], 'opera.exe': ['Opera', 'opera://extensions'], 'launcher.exe': ['Opera', 'opera://extensions'], 'firefox.exe': ['Firefox', null] };
+export async function defaultBrowser() {
+  if (process.platform === 'win32') {
+    try {
+      const { execFile } = await import('node:child_process');
+      const reg = (args) => new Promise((ok) => execFile('reg', args, { windowsHide: true, timeout: 4000 }, (e, out) => ok(e ? '' : String(out))));
+      const prog = (await reg(['query', 'HKCU\\Software\\Microsoft\\Windows\\Shell\\Associations\\UrlAssociations\\https\\UserChoice', '/v', 'ProgId'])).match(/ProgId\s+REG_SZ\s+(\S+)/)?.[1];
+      const cmd = prog && (await reg(['query', `HKCR\\${prog}\\shell\\open\\command`, '/ve'])).match(/REG_SZ\s+"([^"]+\.exe)"/i)?.[1];
+      const known = cmd && BROWSERS[path.basename(cmd).toLowerCase()];
+      if (cmd && known) return { name: known[0], exe: cmd, page: known[1] };
+    } catch { /* fall back to Chrome */ }
+  }
+  const exe = chromePath();
+  return exe ? { name: 'Chrome', exe, page: 'chrome://extensions' } : null;
+}

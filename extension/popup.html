@@ -33,10 +33,14 @@
 <header><img src="icons/quorx-32.png" alt=""><b>QuorX</b><span class="dot" id="dot"><i></i><span id="dotText">…</span></span></header>
 <main>
   <section id="pair" hidden>
-    <p class="note">Connect this Chrome to QuorX once. In QuorX open ⚙ Settings → Chrome extension and copy the key.</p>
-    <label>QuorX address<input id="address" spellcheck="false" placeholder="http://127.0.0.1:5188"></label>
-    <label>Key<input id="key" type="password" spellcheck="false" autocomplete="off" placeholder="paste the key from QuorX"></label>
-    <button class="main" id="save">Connect</button>
+    <p class="note">Connect this browser to QuorX once: press Connect, then <b>Allow</b> in QuorX.</p>
+    <button class="main" id="pairBtn">Connect to QuorX</button>
+    <p class="note" id="pairWait" hidden>Waiting… switch to QuorX and press <b>Allow</b>.</p>
+    <details><summary class="note">QuorX address, or use a key</summary>
+      <label>QuorX address<input id="address" spellcheck="false" placeholder="http://127.0.0.1:5188"></label>
+      <label>Key (⚙ Settings → Chrome extension → Use a key instead)<input id="key" type="password" spellcheck="false" autocomplete="off" placeholder="paste the key from QuorX"></label>
+      <button id="save">Connect with the key</button>
+    </details>
   </section>
   <section id="give" hidden>
     <div class="tab" id="thisTab"><b id="tabTitle"></b><small id="tabUrl"></small></div>
