@@ -4,6 +4,7 @@
 // and closed when idle like the rest.
 import { openTab } from './browser.js';
 import { desktopCall } from './desktop.js';
+import { extCall, extOutdated } from './extlink.js';
 
 const sessions = new Map(); // sid → { tab, at, w, h, agent?, locked? }
 const IDLE = 10 * 60e3;
@@ -85,7 +86,8 @@ export function giveTab(chatId, sid, info = {}) {
   // A tab is lent to one chat at a time.
   for (const [c, g] of given) if (g.sid === sid && c !== chatId) takeBackTab(c);
   if (given.get(chatId)?.sid !== sid) takeBackTab(chatId);
-  const g = { sid, url: String(info.url || '').slice(0, 2000), title: String(info.title || '').slice(0, 200), at: Date.now(), desktop: info.desktop != null ? !!info.desktop : !sessions.has(sid) };
+  const ext = info.ext != null ? Number(info.ext) : null; // a tab of your everyday Chrome (the QuorX extension)
+  const g = { sid, url: String(info.url || '').slice(0, 2000), title: String(info.title || '').slice(0, 200), at: Date.now(), ext, own: !!info.own, desktop: ext == null && (info.desktop != null ? !!info.desktop : !sessions.has(sid)) };
   given.set(chatId, g);
   return g;
 }
@@ -95,9 +97,12 @@ export function takeBackTab(chatId) {
   given.delete(chatId);
   lockGiven(g, false);
   if (g.desktop) desktopCall('tab.detach', { tab: g.sid }).catch(() => {});
+  if (g.ext != null) extCall('tab.release', { tab: g.ext }).catch(() => {});
   return true;
 }
 function lockGiven(g, locked) {
+  // Chrome shows its own bar ("QuorX started debugging this browser") while the agent is attached to the tab.
+  if (g.ext != null) { extCall('tab.lock', { tab: g.ext, locked }).catch(() => {}); return; }
   if (g.desktop) { desktopCall('tab.lock', { tab: g.sid, locked }).catch(() => {}); return; }
   const s = sessions.get(g.sid); if (s) { s.locked = locked; s.at = Date.now(); }
 }
@@ -105,7 +110,8 @@ function lockGiven(g, locked) {
 export async function borrowTab(chatId) {
   const g = given.get(chatId); if (!g) return null;
   let tab;
-  if (g.desktop) tab = await openTab({ attachTab: g.sid });
+  if (g.ext != null) tab = await openTab({ extTab: g.ext });
+  else if (g.desktop) tab = await openTab({ attachTab: g.sid });
   else {
     const s = sessions.get(g.sid);
     if (!s) { given.delete(chatId); return null; } // the tab was closed (or went idle)
@@ -114,4 +120,14 @@ export async function borrowTab(chatId) {
   }
   lockGiven(g, true);
   return { tab, sid: g.sid, release: () => { if (given.get(chatId)?.sid === g.sid) lockGiven(g, false); } };
+}
+/** The lent tab with this id, wherever it is lent (the extension takes a Chrome tab back by its id). */
+export function takeBackSid(sid) { for (const [c, g] of given) if (g.sid === sid) return takeBackTab(c); return false; }
+/** Every Chrome tab (QuorX extension) lent right now, for the extension's popup. */
+export const lentChromeTabs = () => [...given].filter(([, g]) => g.ext != null).map(([chatId, g]) => ({ chatId, tab: g.ext, title: g.title }));
+/** 🧩 Chrome on in a chat: a new tab in the user's Chrome (the QuorX window), lent to that chat as the agent's own. */
+export async function openChromeTab(chatId, url) {
+  if (extOutdated()) throw new Error('the QuorX extension in Chrome is an older version: the user needs to reload it once (chrome://extensions → ↻ on the QuorX card)');
+  const t = await extCall('tab.open', { url, chatId }, 20000);
+  return giveTab(chatId, `chrome-${t.id}`, { url, title: t.title || url, ext: t.id, own: true });
 }

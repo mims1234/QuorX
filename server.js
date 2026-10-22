@@ -37,8 +37,9 @@ import { jobHostStatus, jobsAvailable } from './server/jobhost.js';
 import { safetySettings, yoloOf } from './server/safety.js';
 import { readAudit } from './server/audit.js';
 import { pickFolder } from './server/pickfolder.js';
-import { userBrowse, giveTab, givenTab, takeBackTab } from './server/userbrowser.js';
+import { userBrowse, giveTab, givenTab, takeBackTab, takeBackSid, lentChromeTabs } from './server/userbrowser.js';
 import { rewritePrompt } from './server/enhancer.js';
+import { extUpgrade, extKey, extInfo, onExtRequest, defaultBrowser, extPairing, extPair } from './server/extlink.js';
 import { openLink, linkReply, desktopReady, desktopCall } from './server/desktop.js';
 import { saveUpload, processDoc, listDocs, removeDoc, DOC_DEFAULTS, officeText } from './server/docs.js';
 import { embeddingModels } from './server/openrouter.js';
@@ -591,6 +592,24 @@ const server = http.createServer(async (req, res) => {
       const b = JSON.parse(await readBody(req, 1e5) || '{}');
       try { return json(res, 200, await userBrowse(String(b.sid || ''), String(b.op || 'look'), b)); } catch (e) { return json(res, 200, { error: e.message }); }
     }
+    // ---- 🧩 the QuorX Chrome extension: its connection key (⚙ Settings) and whether it is connected ----
+    if (url.pathname === '/api/ext/state' && req.method === 'GET') return json(res, 200, { ...extInfo(), pairing: extPairing() });
+    if (url.pathname === '/api/ext/pair' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e3) || '{}'); return json(res, 200, { ok: extPair(!!b.allow) }); }
+    if (url.pathname === '/api/ext/status' && req.method === 'GET') return json(res, 200, { ...extInfo(), key: extKey(), lent: lentChromeTabs(), folder: path.join(ROOT, 'extension'), pairing: extPairing(), browser: await defaultBrowser() });
+    if (url.pathname === '/api/ext/key' && req.method === 'POST') return json(res, 200, { key: extKey(true) });
+    // ⚙ Settings → Chrome extension: open chrome://extensions in your Chrome, or show the extension's folder.
+    if (url.pathname === '/api/ext/open-chrome' && req.method === 'POST') {
+      // Your default browser's extensions page (brave://extensions for Brave…).
+      const b = await defaultBrowser();
+      if (!b) return json(res, 200, { error: 'no Chromium browser (Chrome, Brave, Edge…) was found on this computer' });
+      if (!b.page) return json(res, 200, { error: `${b.name} can't run this extension: use Chrome, Brave or Edge` });
+      try { spawn(b.exe, [b.page], { detached: true, stdio: 'ignore' }).on('error', () => {}).unref(); return json(res, 200, { ok: true, browser: b.name }); } catch (e) { return json(res, 200, { error: e.message }); }
+    }
+    if (url.pathname === '/api/ext/show-folder' && req.method === 'POST') {
+      const dir = path.join(ROOT, 'extension');
+      const [cmd, args] = process.platform === 'win32' ? ['explorer.exe', [dir]] : process.platform === 'darwin' ? ['open', [dir]] : ['xdg-open', [dir]];
+      try { spawn(cmd, args, { detached: true, stdio: 'ignore' }).on('error', () => {}).unref(); return json(res, 200, { ok: true }); } catch (e) { return json(res, 200, { error: e.message }); }
+    }
     // ---- 🤖 Give to agent: lend one of your Browser tabs to a chat, or take it back ----
     if (url.pathname === '/api/given-tab') {
       const chatId = String(url.searchParams.get('chat') || '');
@@ -853,6 +872,24 @@ const server = http.createServer(async (req, res) => {
 // Start on PORT (AGENT_PORT in .env, default 5188); if another program already uses it, try the
 // next ports instead of failing. Agent dev servers use 5300-5999, so the search stops before them.
 // QuorX is for the computer it runs on: it listens on 127.0.0.1 only, so nothing else on the network can connect.
+// 🧩 The QuorX Chrome extension connects by WebSocket (server/extlink.js); nothing else upgrades.
+server.on('upgrade', (req, socket) => {
+  let p = ''; try { p = new URL(req.url, 'http://x').pathname; } catch { /* bad url */ }
+  if (p === '/api/ext/socket' && hostAllowed(req)) return extUpgrade(req, socket);
+  socket.destroy();
+});
+// What the extension's popup asks: recent chats to give a tab to, giving and taking back.
+onExtRequest({
+  chats: () => listChats().slice(0, 25).map((c) => ({ id: c.id, title: c.title || 'New chat', project: listProjects().find((p) => p.id === c.projectId)?.name || '' })),
+  lent: () => lentChromeTabs(),
+  give: ({ tab, chatId, url: u, title }) => {
+    if (!validId(chatId) || !listChats().some((c) => c.id === chatId)) throw new Error('that chat is gone');
+    if (!Number.isInteger(tab)) throw new Error('bad tab');
+    return giveTab(chatId, `chrome-${tab}`, { url: u, title, ext: tab });
+  },
+  takeBack: ({ tab }) => takeBackSid(`chrome-${tab}`),
+  disconnected: () => { for (const x of lentChromeTabs()) takeBackSid(`chrome-${x.tab}`); },
+});
 const HOST = '127.0.0.1';
 const listener = server;
 function listen(port, triesLeft = 40) {

@@ -558,7 +558,7 @@ function renderAttachments(c) {
     + c.ctx.map((x, i) => `<span class="ctx-chip cmp-att-item ${x.type === 'file' ? 'file' : x.type === 'project' ? 'project' : 'chat'}" title="Attached as context for your next message">${x.type === 'file' ? '📄' : x.type === 'project' ? '' : '💬'} ${esc(x.title)}<button type="button" data-ctx="${i}" aria-label="Remove">✕</button></span>`).join('')
     + c.images.map((x, i) => `<span class="img-chip cmp-att-item image"><img src="${x.thumb}" alt="attached image ${i + 1}"><button type="button" data-img="${i}" aria-label="Remove image">✕</button></span>`).join('')
     + (c.docs || []).map((d, i) => docChip(d, i)).join('')
-    + ((G.lent ||= {})[c.id] ? `<span class="lent-chip cmp-att-item" title="The agent can work in this tab of yours (signed in as you) in this chat. Sending, deleting, buying and account changes ask you first."><span class="lent-ico" aria-hidden="true">🤖</span><span class="lent-l">Your tab</span><b>${esc(clip(G.lent[c.id].title || G.lent[c.id].url, 40))}</b><button type="button" class="lent-back" title="Take the tab back: the agent can no longer use it">Take back</button></span>` : '');
+    + ((G.lent ||= {})[c.id] ? `<span class="lent-chip cmp-att-item" title="The agent can work in this tab of yours (signed in as you) in this chat. Sending, deleting, buying and account changes ask you first."><span class="lent-ico" aria-hidden="true">🤖</span><span class="lent-l">${G.lent[c.id].chrome ? 'Your Chrome tab' : 'Your tab'}</span><b>${esc(clip(G.lent[c.id].title || G.lent[c.id].url, 40))}</b><button type="button" class="lent-back" title="Take the tab back: the agent can no longer use it">Take back</button></span>` : '');
   for (const b of box.querySelectorAll('[data-ctx]')) b.onclick = () => { c.ctx.splice(Number(b.dataset.ctx), 1); renderAttachments(c); };
   for (const b of box.querySelectorAll('[data-img]')) b.onclick = () => { c.images.splice(Number(b.dataset.img), 1); renderAttachments(c); };
   for (const b of box.querySelectorAll('[data-cmt]')) b.onclick = () => { c.comments.splice(Number(b.dataset.cmt), 1); renderAttachments(c); };
@@ -2374,6 +2374,7 @@ function renderComposerBar(c) {
   glob.innerHTML = `<div class="cs-sec"><h5>Budget <small>· all chats</small></h5><div class="cs-row cs-caps">${cap('replyBudget', 'Cap per reply', G.settings.replyBudget ?? G.cfg.defaults.replyBudget ?? 1, 0.25, 'Everything one reply calls: the agent, deciders, helpers, checks and media. At 85% the agent is told to wrap up; at the cap Strict asks you, YOLO stops. 0 = no cap.')}${cap('budget', 'Paid media per reply', G.settings.budget, 0.05, 'A paid picture, voice, music or video call that would go over this is stopped, in Strict and in YOLO.')}</div></div>`;
   followSlot.innerHTML = `
     <label class="sq-check cmp-follow" title="Follow the agent: when it opens or checks a page in its browser, or starts a site or app, the Browser tab switches to it; when it runs a command, the Terminal tab shows its output. So you can watch. Off: the pane stays where you put it (all chats)."><input type="checkbox" class="follow-agent" ${G.followAgent !== false ? 'checked' : ''}><svg class="fl-eye" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg><span>Follow</span></label>
+    <label class="sq-check cmp-chrome ${G.ext?.connected && !G.ext.outdated ? '' : 'off'}" title="${G.ext?.outdated ? 'Chrome: the QuorX extension is an older version. Reload it once in chrome://extensions (↻ on the QuorX card).' : G.ext?.connected ? 'Chrome: let the agent in this chat open tabs in your own Chrome (a QuorX window), signed in as you. Sending, deleting, buying and account changes ask you first. It never touches your other tabs.' : 'Chrome: the QuorX extension is not connected (⚙ Settings → Code & servers → Chrome extension). Ticked, the agent can use your Chrome once it is.'}"><input type="checkbox" class="chrome-access" ${c.tools?.chrome ? 'checked' : ''}><span>🧩 Chrome</span></label>
 `;
   for (const inp of glob.querySelectorAll('.cs-num input')) inp.onchange = () => { const v = Math.max(0, Number(inp.value) || 0); inp.value = String(v); G.settings[inp.dataset.k] = v; savePrefs(); };
   // The button says what matters at a glance (YOLO in red, reasoning on) and opens the panel.
@@ -2432,6 +2433,7 @@ function renderComposerBar(c) {
   };
   const gear = $('.cs-gear', rack); if (gear && !gear.dataset.wired) { gear.dataset.wired = '1'; gear.onclick = () => openSettings(); }
   $('.follow-agent', followSlot).onchange = (e) => { G.followAgent = e.target.checked; savePrefs(); for (const ch of G.open.values()) if (ch !== c) renderComposerBar(ch); };
+  $('.chrome-access', followSlot).onchange = (e) => { c.tools.chrome = e.target.checked; saveChat(c); };
   for (const b of bar.querySelectorAll('.perm button')) b.onclick = () => { c.approval = b.dataset.approval; saveChat(c); renderComposerBar(c); if (c.running?.runId) postJ(`/api/runs/${c.running.runId}/mode`, { approval: c.approval }).catch(() => {}); };
   renderAllowed(c);
 }
@@ -4044,7 +4046,7 @@ async function runChat(c, text, ctx, imgs, { resumeOf, docs = [], more = 0, mode
   if (box && cut) { updateMsg(c, m); c.follow = true; c.toEnd?.(); }
   else if (box) { if (box.querySelector('.hint')) box.innerHTML = ''; if (user) box.appendChild(renderMsg(c, user)); box.appendChild(renderMsg(c, m)); c.follow = true; c.toEnd?.(); }
   const artifacts = Object.fromEntries(Object.entries(a.artifacts).map(([id, x]) => [id, x.kind === 'html' ? { kind: 'html', title: x.title, html: x.html, v: 1 } : x.kind === 'md' ? { kind: 'md', title: x.title, md: x.md || '', v: 1 } : { kind: x.kind, title: x.title, url: x.url?.startsWith('data:') ? undefined : x.url, v: 1 }]));
-  const settings = { ...G.settings, approval: c.approval, tools: chatTools(c), ...qualitySettings(c) };
+  const settings = { ...G.settings, approval: c.approval, tools: chatTools(c), ...qualitySettings(c), chromeAccess: !!c.tools?.chrome };
   const body = resumeOf ? { runId: m.runId, chatId: c.id, resume: resumeOf, settings, allowed: a.allowed, cmdRules: a.cmdRules || [], reading: a.reading?.text || '', ...(more ? { continue: more, ...(model ? { model } : {}) } : {}) }
     : { runId: m.runId, chatId: c.id, projectId: c.projectId, chatTitle: c.title, setup: a.setup, settings, allowed: a.allowed, cmdRules: a.cmdRules || [], history, summary: a.summary || '', reading: a.reading?.text || '', text, artifacts, context: ctx?.text || '', images: imgs.map((x) => x.full), docs: docs.map((d) => d.id), ...(cmts.length ? { comments: cmts } : {}) };
   // Saved straight away, so a reload finds the running reply and reattaches to it.
@@ -4723,7 +4725,7 @@ function wireScheduleForm(body) {
     const c = blankChat(e.projectId);
     c.approval = e.approval;
     const payload = { name: e.name, projectId: e.projectId, prompt: e.prompt, model: e.model, reasoning: c.agent.setup.reasoning, approval: e.approval, when, tools: c.tools,
-      settings: { ...G.settings, approval: e.approval, tools: chatTools(c), ...qualitySettings(c) } };
+      settings: { ...G.settings, approval: e.approval, tools: chatTools(c), ...qualitySettings(c), chromeAccess: !!c.tools?.chrome } };
     const r = await postJ(e.id ? `/api/schedules/${e.id}` : '/api/schedules', payload, e.id ? 'PUT' : 'POST');
     if (!r || r.error) { err.textContent = r?.error ? `${r.error[0].toUpperCase()}${r.error.slice(1)}.` : 'Not saved.'; return; }
     SCHED.edit = null; await loadSchedules(); drawSchedules();
@@ -5106,6 +5108,7 @@ function settingsPanels(S) {
       stCard('Servers and browser', 'Servers are saved in .quorx/launch.json per project; run and stop them from 🖥 in the chat header, and watch them in the terminal.', stRow('Dev server ports', 'Each server gets a free port here unless it has a fixed one.', '<code>5300–5999</code>')
         + stRow('Headless browser', 'Used by the agent to check its own pages.', `<code class="blurable">${esc(G.cfg.browser || 'not found')}</code>`)
         + stRow('Secrets', 'Agent processes run without your API keys, tokens or passwords in their environment, and the file tools cannot read .env or data/keys.json.', '<span class="st-key-source-badge">protected</span>')),
+      stCard('Chrome extension', 'Give a tab of your everyday Chrome to a chat, so the agent can work in it with your own sign-ins (Gmail, GitHub…). It touches only tabs you give; sending, deleting, buying and account changes ask you first.', '<div id="stExt"></div>'),
     ]],
     usage: ['Usage & costs', 'What chats and projects cost.', [
       stCard('In chats', '', stRow('Show the cost badge in chat headers', 'The amber cost next to the model; click it for the per-chat usage breakdown (also /usage).', stSwitch('ui.usageBtn', U.usageBtn))),
@@ -5211,6 +5214,7 @@ function wireSettings() {
   drawKeysPanel();
   drawMemoryPanel();
   drawSetupPanel();
+  drawExtPanel();
   drawEmbedPick();
   drawDesktopSettings();
   drawBackup({ postJ, esc, uiConfirm, store: STORE });
@@ -5310,6 +5314,51 @@ function cancelSettings() { G.theme = ST.themeAtOpen; applyTheme(); if ($('#sett
 
 // Projects panel: acts at once (like the sidebar's ⚙ and 🗑).
 // Settings → Projects: one compact row per project (colour, spend vs budget, folder) with icon actions.
+// ⚙ Settings → Code & servers → Chrome extension: set up in your default browser (Brave, Chrome, Edge…), connect with
+// one click (Allow here), and whether it is connected. The key is a fallback, under "Use a key instead".
+async function drawExtPanel() {
+  const box = $('#stExt'); if (!box) return;
+  const r = await getJ('/api/ext/status');
+  if (!box.isConnected || !r || r.error) return;
+  const b = r.browser || { name: 'Chrome', page: 'chrome://extensions' }, page = b.page || 'chrome://extensions';
+  let shown = false;
+  const paint = () => {
+    box.innerHTML = `<div class="st-ext">
+      <div class="st-ext-state ${r.connected ? (r.outdated ? 'warn' : 'on') : ''}"><i></i>${r.connected ? (r.outdated ? `Connected, but the extension is an older version: reload it once in ${esc(page)} (↻ on the QuorX card)` : `Connected to your ${esc(b.name)}`) : 'Not connected'}${r.lent?.length ? ` · ${r.lent.length} tab${r.lent.length > 1 ? 's' : ''} given to chats` : ''}</div>
+      ${r.pairing ? `<div class="st-ext-pair"><b>🧩 ${esc(r.pairing.browser)} wants to connect to QuorX.</b> Allow it only if you just pressed Connect in the extension.<span class="st-ext-acts"><button type="button" class="st-btn sm primary" data-x="allow">Allow</button><button type="button" class="st-btn sm" data-x="deny">Deny</button></span></div>` : ''}
+      ${b.page === null ? `<p class="st-ext-warn">Your default browser is ${esc(b.name)}, which can't run this extension. Use Chrome, Brave or Edge for it.</p>` : ''}
+      <ol class="st-ext-steps">
+        <li>Open <code>${esc(page)}</code> in ${esc(b.name)} <span class="st-ext-acts"><button type="button" class="st-btn sm" data-x="chrome" title="Opens the extensions page in ${esc(b.name)}">Open in ${esc(b.name)}</button><button type="button" class="st-btn sm" data-x="copyurl">Copy</button></span> and turn on <b>Developer mode</b>.</li>
+        <li><b>Load unpacked</b> and pick the folder <code class="blurable">${esc(r.folder || 'extension')}</code> <span class="st-ext-acts"><button type="button" class="st-btn sm" data-x="copyfolder">Copy path</button><button type="button" class="st-btn sm" data-x="folder">Show folder</button></span></li>
+        <li>Click the QuorX icon in the toolbar and press <b>Connect</b>, then <b>Allow</b> here.</li>
+        <li>In a chat, tick <b>🧩 Chrome</b> (next to Follow), or give a tab from the QuorX icon.</li>
+      </ol>
+      <details class="st-ext-keybox"><summary>Use a key instead</summary><div class="st-ext-key"><code class="${shown ? '' : 'masked'}">${shown ? esc(r.key) : '•'.repeat(24)}</code><button type="button" class="kx-icon" data-x="show" title="${shown ? 'Hide the key' : 'Show the key'}">${shown ? '🙈' : '👁'}</button><button type="button" class="st-btn sm" data-x="copy">Copy key</button><button type="button" class="st-btn sm danger" data-x="new" title="Make a new key: the extension disconnects until it connects again">New key</button></div></details>
+    </div>`;
+    const copy = async (btn, text) => { try { await navigator.clipboard.writeText(text); flashTip(btn, 'Copied'); } catch { uiPrompt('Copy this', text, { ok: 'Done', cancel: 'Close' }); } };
+    $('[data-x="show"]', box).onclick = () => { shown = !shown; paint(); $('.st-ext-keybox', box).open = true; };
+    $('[data-x="copy"]', box).onclick = (e) => copy(e.currentTarget, r.key);
+    $('[data-x="copyurl"]', box).onclick = (e) => copy(e.currentTarget, page);
+    $('[data-x="copyfolder"]', box).onclick = (e) => copy(e.currentTarget, r.folder || '');
+    $('[data-x="chrome"]', box).onclick = async (e) => { const btn = e.currentTarget, x = await postJ('/api/ext/open-chrome', {}); flashTip(btn, x.error ? `${x.error}: copy the address instead` : `Opened in ${x.browser || b.name}`); };
+    $('[data-x="folder"]', box).onclick = async (e) => { const btn = e.currentTarget, x = await postJ('/api/ext/show-folder', {}); if (x.error) flashTip(btn, x.error); };
+    $('[data-x="new"]', box).onclick = async () => { if (!(await uiConfirm('Make a new key?\nThe extension disconnects until it connects again (Connect in the extension, then Allow here).', { ok: 'New key', danger: true }))) return; const n = await postJ('/api/ext/key', {}); if (n.key) { r.key = n.key; r.connected = false; shown = true; paint(); } };
+    for (const [x, allow] of [['allow', true], ['deny', false]]) { const btn = $(`[data-x="${x}"]`, box); if (btn) btn.onclick = async () => { await postJ('/api/ext/pair', { allow }); setTimeout(drawExtPanel, 700); }; }
+  };
+  paint();
+}
+// An extension asking to connect: a notice anywhere in QuorX with Allow / Deny (it waits up to 2 minutes).
+function extPairNotice() {
+  let n = $('#extPairNotice');
+  const p = G.ext?.pairing;
+  if (!p) { n?.remove(); return; }
+  if (n && n.dataset.at === String(p.at)) return;
+  n?.remove();
+  n = document.createElement('div'); n.id = 'extPairNotice'; n.className = 'ext-pair-notice'; n.dataset.at = String(p.at); n.setAttribute('role', 'alertdialog');
+  n.innerHTML = `<b>🧩 ${esc(p.browser)} wants to connect to QuorX</b><p>Allow it only if you just pressed Connect in the QuorX extension.</p><div class="acts"><button type="button" class="st-btn sm" data-a="0">Deny</button><button type="button" class="st-btn sm primary" data-a="1">Allow</button></div>`;
+  document.body.append(n);
+  for (const btn of n.querySelectorAll('[data-a]')) btn.onclick = async () => { n.remove(); await postJ('/api/ext/pair', { allow: btn.dataset.a === '1' }); drawExtPanel(); };
+}
 async function drawProjectsPanel() {
   const box = $('#stProjects'); if (!box) return;
   const projects = await fetch('/api/projects').then((r) => r.json()).catch(() => G.projects);
@@ -6224,6 +6273,7 @@ function devAfter(projectId, r) {
 }
 async function pollDev() {
   if (document.hidden) return;
+  getJ('/api/ext/state').then((r) => { const k = (x) => `${!!x?.connected}${!!x?.outdated}`, was = k(G.ext); G.ext = r && !r.error ? r : null; if (was !== k(G.ext)) for (const ch of G.open.values()) renderComposerBar(ch); extPairNotice(); }).catch(() => {});
   const ids = new Set(G.panes.map((id) => G.open.get(id)?.projectId).filter(Boolean));
   for (const pid of ids) {
     if (G.projects.find((p) => p.id === pid)?.missing) continue;
@@ -6966,9 +7016,13 @@ async function takeBackTab(chatId) {
 }
 // The harness forgets lent tabs when it restarts: the chip goes when the harness no longer has it.
 async function syncLent(c) {
-  if (!c || !(G.lent ||= {})[c.id]) return;
+  if (!c?.el) return;
   const r = await getJ(`/api/given-tab?chat=${encodeURIComponent(c.id)}`);
-  if (r && !r.error && !r.given) { delete G.lent[c.id]; renderAttachments(c); }
+  if (!r || r.error) return;
+  const had = (G.lent ||= {})[c.id];
+  if (!r.given && had) { delete G.lent[c.id]; renderAttachments(c); }
+  // A tab given from Chrome (the QuorX extension) appears here on its own.
+  else if (r.given && had?.sid !== r.given.sid) { G.lent[c.id] = { sid: r.given.sid, url: r.given.url, title: r.given.title, chrome: r.given.ext != null }; renderAttachments(c); }
 }
 // Closing a tab that shows one of your running servers asks first: keep the server running (reopen the address any
 // time) or stop it too.
