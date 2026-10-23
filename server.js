@@ -53,6 +53,7 @@ import { gitHubRemote, gitHubInfo } from './server/github.js';
 import { serveBlob, startSweeping } from './server/blobs.js';
 import { listDesignSystems, readDesignSystem, projectDesign, applyDesignSystem, saveProjectDesign } from './server/design.js';
 import { newsRoute } from './server/news.js';
+import { startNewsSync, remoteState as newsRemoteState } from './server/newsremote.js';
 import { uiCards } from './server/modelcards.js';
 import zlib from 'node:zlib';
 
@@ -72,6 +73,7 @@ function codeChanged() {
 if (!currentKey()) console.warn('!! No OpenRouter key yet: add one in the page (⚙ Settings → API keys) or set OPENROUTER_API_KEY in .env');
 startSampling();
 startSweeping();
+startNewsSync(); // News from the QuorX website: a check soon after start, then a few times a day (server/newsremote.js)
 setTimeout(lockDown, 2000).unref?.(); // keys and data: this account only (server/keys.js)
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.htm': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
@@ -156,7 +158,7 @@ const server = http.createServer(async (req, res) => {
       return res.end(callbackPage({ ...r, desktop }));
     }
     if (req.method === 'GET' && url.pathname === '/api/stale') return json(res, 200, codeChanged());
-    if (req.method === 'GET' && url.pathname === '/api/config') return json(res, 200, { ...codeChanged(), version: VERSION, platform: process.platform, pagePort: runtime.pagePort || null, shell: shellInfo().name, pty: ptyAvailable(), defaults: DEFAULTS, checks: CHECKS, media: MEDIA, hasKey: !!currentKey(), browser: browserPath(), allowed: ALLOWED });
+    if (req.method === 'GET' && url.pathname === '/api/config') return json(res, 200, { ...codeChanged(), version: VERSION, platform: process.platform, pagePort: runtime.pagePort || null, shell: shellInfo().name, pty: ptyAvailable(), defaults: DEFAULTS, checks: CHECKS, media: MEDIA, newsRemote: newsRemoteState().on, hasKey: !!currentKey(), browser: browserPath(), allowed: ALLOWED });
 
     // ---- chat history (data/chats; delete = move to data/trash) ----
     if (url.pathname === '/api/chats' && req.method === 'GET') return json(res, 200, listChats());

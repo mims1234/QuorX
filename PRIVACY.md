@@ -17,6 +17,7 @@ QuorX runs on your computer. It has no account, no analytics and no telemetry, a
 | [OpenRouter](https://openrouter.ai) | Your messages and what the agent works with (file contents, command output, screenshots) go to the models you pick, as any AI app must send them | Every model call, under your own OpenRouter key and their [privacy policy](https://openrouter.ai/privacy) |
 | Package registries (npm, PyPI, crates.io, NuGet, Go, Maven) | The names of packages the agent wants to install | Before an install, to check that each package exists and isn't brand new |
 | GitHub | A request for the latest release | When the desktop app checks for updates |
+| [quorx.genxmims.org](https://quorx.genxmims.org/privacy) | A request for the News feed and for each article, report or picture that changed, with `QuorX/<version>` as the user agent. Nothing about you, your chats or projects | A little after QuorX starts, a few times a day, and when you press ↻ Check now. Turn it off in ⚙ Settings → Privacy & display; News then shows the copy that came with QuorX |
 | Sites the agent opens | Normal web requests from its browser | Only when you or the agent open a page |
 
 Commands the agent runs can of course reach the network themselves (an `npm install`, a `git push`). Those go through
