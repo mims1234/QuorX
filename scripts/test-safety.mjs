@@ -367,12 +367,52 @@ test('scripts: a launcher moved into a helper file, a script the same line write
   assert.equal((await decide('node $f', sctx())).segments[0].cls, 'opaque');
 });
 
+// The real case from a video run: the agent's render script runs ffmpeg and ffprobe, named in plain text.
+put('.quorx/scratch/render.mjs', [
+  "import { execFileSync, spawnSync as probe } from 'node:child_process';",
+  "const SHOTS = [{ src: 'assets/a.png', dur: 3 }];",
+  "for (const s of SHOTS) execFileSync('ffmpeg', ['-y', '-loop', '1', '-i', s.src, '-t', String(s.dur), `clips/${s.dur}.mp4`], { stdio: 'inherit' });",
+  "probe('ffprobe', ['-v', 'error', 'out.mp4']);",
+].join('\n'));
+put('.quorx/scratch/req.cjs', "const cp = require('child_process');\ncp.execFileSync('ffmpeg', ['-version']);\n");
+put('.quorx/scratch/push.mjs', "import { execFileSync } from 'node:child_process';\nexecFileSync('git', ['push', '--force']);\n");
+const OPAQUE_SHAPES = {
+  'from a variable': "import { execFileSync } from 'node:child_process';\nconst p = process.argv[2];\nexecFileSync(p, []);\n",
+  'shell mode': "import { spawn } from 'node:child_process';\nspawn('ffmpeg', ['-i', 'a.png'], { shell: true });\n",
+  'an interpreter': "import { execFileSync } from 'node:child_process';\nexecFileSync('cmd', ['/c', 'del', 'x']);\n",
+  'computed arguments for git': "import { execFileSync } from 'node:child_process';\nconst a = ['status'];\nexecFileSync('git', a);\n",
+  'the function passed around': "import { execFileSync } from 'node:child_process';\nconst run = execFileSync;\nrun('ffmpeg', []);\n",
+  'exec with a shell line': "import { execSync } from 'node:child_process';\nexecSync('ffmpeg -version');\n",
+  'a dynamic import': "const cp = await import('node:child_process');\ncp.execFileSync('ffmpeg', []);\n",
+};
+for (const [k, v] of Object.entries(OPAQUE_SHAPES)) put(`.quorx/scratch/shape-${k.replace(/\W+/g, '-')}.mjs`, v);
+
+test('scripts: a script that names its programs in plain text is judged by those programs, not as opaque', { skip: !WIN }, async () => {
+  for (const line of ['node .quorx/scratch/render.mjs', 'node .quorx/scratch/req.cjs']) {
+    const d = await decide(line, sctx());
+    assert.ok(!d.segments.some((s) => s.cls === 'opaque'), `${line}: ${JSON.stringify(d.segments.map((s) => [s.text, s.cls, s.why]))}`);
+    assert.deepEqual(d.segments.map((s) => s.cls), ['build'], line);
+  }
+  // A risky program named in the script still shows as a command of its own.
+  const push = await decide('node .quorx/scratch/push.mjs', sctx());
+  const ext = push.segments.find((s) => s.cls === 'external');
+  assert.ok(ext && ext.via === '.quorx/scratch/push.mjs', JSON.stringify(push.segments.map((s) => [s.text, s.cls])));
+  assert.equal(push.verdict, 'ask');
+});
+
+test('scripts: programs from variables, shell mode, interpreters and hidden launches keep a script opaque', { skip: !WIN }, async () => {
+  for (const k of Object.keys(OPAQUE_SHAPES)) {
+    const d = await decide(`node .quorx/scratch/shape-${k.replace(/\W+/g, '-')}.mjs`, sctx());
+    assert.ok(d.segments.some((s) => s.cls === 'opaque'), `${k}: ${JSON.stringify(d.segments.map((s) => [s.text, s.cls]))}`);
+  }
+});
+
 // package.json scripts: npm run x runs a command line the agent can write.
 put('web/package.json', JSON.stringify({ scripts: {
   setup: 'rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal', build: 'tsc', prestart: 'node tools/main.mjs', start: 'node app.js',
   wrap: 'node ../.quorx/scratch/run.mjs', dev: 'concurrently "tsc -w" "npm:setup"', env: 'cross-env NODE_ENV=production winget install Git.Git',
   postinstall: 'choco install nodejs', a: 'npm run b', b: 'npm run a' } }));
-put('web/tools/main.mjs', "import { execFileSync } from 'node:child_process';\nexecFileSync('git', ['--version']);\n");
+put('web/tools/main.mjs', "import { execFileSync } from 'node:child_process';\nexecFileSync(process.env.GIT || 'git', ['--version']);\n");
 put('web/app.js', "console.log('up')\n");
 const wctx = (over = {}) => sctx({ cwd: path.join(scripts, 'web'), ...over });
 

@@ -60,7 +60,7 @@ function checkCss(text, label) {
 
 const LOCAL = (u) => u && !/^(?:[a-z][a-z0-9+.-]*:|\/\/|#|\{|\$)/i.test(u);
 /** Problems in one HTML document: a cut-off ending, inline scripts that don't parse, missing local files. */
-export async function checkHtml(html, { label = 'page', dir = null } = {}) {
+export async function checkHtml(html, { label = 'page', dir = null, root = null } = {}) {
   const out = [];
   if (/<html[\s>]/i.test(html) && !/<\/html>\s*$/i.test(html.trim())) out.push(`${label}: does not end with </html>; it may be cut off`);
   let n = 0;
@@ -87,7 +87,12 @@ export async function checkHtml(html, { label = 'page', dir = null } = {}) {
       if (!LOCAL(ref) || seen.has(ref)) continue;
       seen.add(ref);
       if (/^<link/i.test(m[0]) && !/rel\s*=\s*["']?(stylesheet|icon|manifest|modulepreload|preload)/i.test(m[0])) continue;
-      let file; try { file = path.resolve(dir, decodeURIComponent(ref.replace(/^\//, ''))); } catch { continue; }
+      // A link starting with / is served from the project folder (QuorX's site server, and the app's own /ws/<id>/
+      // address for a project), not from the page's folder.
+      let file; try {
+        const p = decodeURIComponent(ref);
+        file = p.startsWith('/') && root ? path.resolve(root, p.replace(/^\/ws\/[^/]+\//, '/').replace(/^\/+/, '')) : path.resolve(dir, p.replace(/^\//, ''));
+      } catch { continue; }
       if (!fs.existsSync(file)) out.push(`${label}: links to ${ref}, which does not exist`);
     }
   }
@@ -106,7 +111,7 @@ export async function checkFile(root, rel) {
     const text = fs.readFileSync(file, 'utf8');
     if (ext === '.json') { try { JSON.parse(text); return []; } catch (e) { return [`${label}: not valid JSON: ${e.message}`]; } }
     if (ext === '.css') return checkCss(text, label);
-    if (ext === '.html' || ext === '.htm') return await checkHtml(text, { label, dir: path.dirname(file) });
+    if (ext === '.html' || ext === '.htm') return await checkHtml(text, { label, dir: path.dirname(file), root: path.resolve(root) });
   } catch (e) { return [`${label}: could not be checked (${e.message})`]; }
   return [];
 }

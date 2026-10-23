@@ -639,6 +639,20 @@ test('browser wait lets the page run instead of a shell sleep; press passes key 
   assert.deepEqual(pressed, ['Shift+R']);
 });
 
+test('browser open with no target reloads the open page, or says what can be opened', async () => {
+  const tab = fakeTab();
+  const { bodies } = await run((body, i) => [
+    reply('', [['browser', { action: 'open' }]]),
+    reply('', [['write_file', { path: 'index.html', content: PAGE }]]),
+    reply('', [['browser', { action: 'open', target: 'site:index.html' }]]),
+    reply('', [['browser', { action: 'open' }]]),
+    reply('Done.'),
+  ][i], { settings: { tools: { browser: { on: true } }, review: 'off', checks: { on: false } }, openTab: async () => tab });
+  assert.match(toolResults(bodies[1]).at(-1), /no target was given\. Pass one.*site:<a file in the project/);
+  assert.match(toolResults(bodies[4]).at(-1), /Reloaded the page that was open/);
+  assert.match(tab.url, /index\.html/);
+});
+
 test('the browser tells the agent whether the page made a sound, which nobody can hear here', async () => {
   const sounds = [null, { contexts: 0, running: 0, sources: 0, media: 0 }, { contexts: 1, running: 0, sources: 0, media: 0 }, { contexts: 1, running: 1, sources: 2, media: 0 }];
   let n = 0; // each action moves the page on to the next sound state

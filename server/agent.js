@@ -3147,6 +3147,11 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
   }
   function resolveTarget(t) {
     const target = String(t || '').trim();
+    if (!target) {
+      // Name what can be opened right now, so the next call has a real target.
+      const can = [...listServers(projectId).filter((x) => x.status !== 'stopped').map((x) => `app:${x.name}`), ...[...arts.keys()].slice(-3).map((id) => `artifact:${id}`)];
+      throw new Error(`no target was given. Pass one${can.length ? `, for example ${can.join(', ')}` : ''}; or site:<a file in the project, like index.html or assets/film.mp4>, or an http(s) URL`);
+    }
     const base = `http://localhost:${runtime.port}`;
     // Pages the agent made open from the pages address (their own origin, so storage works), if it is up.
     const pages = runtime.pagePort ? `http://localhost:${runtime.pagePort}` : base;
@@ -3486,7 +3491,9 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
   async function browserStep(t, args, o = {}) {
     const act = args.action;
     let did = '', before = null, failed = false, info = null;
-    if (act === 'open') { const url = resolveTarget(args.target); if (harnessPage(url)) return offLimits(); await t.open(url, { width: Number(args.width) || 1280 }); info = t.readyInfo; did = `Opened ${args.target}.${readyNote(info)}`; info = null; }
+    // open with no target reloads the page that is open, when there is one of the agent's own.
+    if (act === 'open' && !String(args.target || '').trim() && t.url && t.url !== 'about:blank' && !harnessPage(t.url)) { await t.open(t.url, { width: Number(args.width) || 1280 }); info = t.readyInfo; did = `Reloaded the page that was open (no target was given).${readyNote(info)}`; info = null; }
+    else if (act === 'open') { const url = resolveTarget(args.target); if (harnessPage(url)) return offLimits(); await t.open(url, { width: Number(args.width) || 1280 }); info = t.readyInfo; did = `Opened ${args.target}.${readyNote(info)}`; info = null; }
     else if (harnessPage(t.url)) { await t.open('about:blank').catch(() => {}); return offLimits(); }
     else if (t.url === 'about:blank') return 'Nothing is open yet: use action "open" with a target first.';
     else if (act === 'find') return findOnPage(t, args);
