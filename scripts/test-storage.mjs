@@ -47,6 +47,8 @@ function makeHome() {
   write(path.join(q, 'trash', stamp(Date.now() - 40 * DAY), 'gone.txt'), 'old');
   write(path.join(q, 'trash', stamp(Date.now()), 'kept.txt'), 'new');
   for (const [i, r] of ['r1', 'r2', 'r3'].entries()) age(write(path.join(q, 'checkpoints', r, 'manifest.json'), '{}'), (3 - i) * 3600e3);
+  // The folders' own times tie, as they do when a fast machine makes them in the same moment: the manifest decides.
+  for (const r of ['r1', 'r2', 'r3']) age(path.join(q, 'checkpoints', r), 0);
   write(path.join(q, 'objects', 'aa', 'bb'), 'obj');
   write(path.join(q, 'snapindex.json'), '{}');
   write(path.join(q, 'uploads', 'doc.pdf'), 'pdf');
