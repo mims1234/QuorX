@@ -1,0 +1,48 @@
+/* ⚙ Settings → Storage (public/storage.js). Sizes are plain monospace numbers, tags are outlined, buttons are buttons. */
+.sto { display: contents; }
+.sto-summary { gap: 10px; }
+.sto-total { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+.sto-total-num { font: 600 26px/1.1 var(--font-mono, ui-monospace, monospace); color: var(--text); }
+.sto-total-acts { display: flex; gap: 8px; flex-wrap: wrap; }
+.sto-bar { display: flex; height: 10px; border-radius: 4px; overflow: hidden; background: var(--panel-3); border: 1px solid var(--line); margin-top: 12px; }
+.sto-seg { display: block; min-width: 3px; }
+.sto-seg + .sto-seg { border-left: 1px solid var(--bg); }
+.g-cache { background: #4e9fd6; }
+.g-logs { background: #a97fd8; }
+.g-trash { background: var(--warn); }
+.g-projects { background: var(--ok); }
+.sto-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 8px; font-size: 12px; color: var(--muted); }
+.sto-key { display: inline-flex; align-items: center; gap: 6px; }
+.sto-dot { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+.sto-size { font: 500 12.5px/1 var(--font-mono, ui-monospace, monospace); color: var(--text); white-space: nowrap; }
+.sto-files { font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+.sto-ctrl { display: flex; align-items: center; gap: 12px; justify-content: flex-end; }
+.sto-ctrl .st-btn { min-width: 76px; }
+.sto-tag { display: inline-block; margin-left: 8px; padding: 1px 7px; border-radius: 4px; font-size: 11px; border: 1px solid var(--line-strong); color: var(--muted); white-space: nowrap; }
+.sto-ctrl .sto-tag { margin-left: 0; min-width: 76px; text-align: center; }
+.sto-tag.warn { border-color: var(--warn); color: var(--warn); }
+.sto-tag.ok { border-color: var(--ok); color: var(--ok); }
+.sto-status { margin-top: 10px; padding: 8px 10px; border-radius: 6px; background: var(--panel-2); border: 1px solid var(--line); font-size: 12.5px; color: var(--text); }
+.sto-recent { margin-top: 8px; font-size: 11.5px; color: var(--muted); }
+.sto-recent > span { color: var(--text); }
+.sto-fold { width: 22px; height: 22px; min-height: 0; padding: 0; margin-right: 8px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--panel-2); color: var(--text); cursor: pointer; font-size: 13px; line-height: 1; display: inline-grid; place-content: center; flex-shrink: 0; }
+.sto-proj.can-open { cursor: pointer; }
+.sto-row .st-row-info { min-width: 0; max-width: 100%; }
+.sto-path { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.sto-fold:disabled { cursor: default; opacity: 0.5; }
+.sto-fold:hover:not(:disabled) { color: var(--text); border-color: var(--line-strong); }
+.sto-parts { margin: 0 0 6px 26px; border-left: 2px solid var(--line); padding-left: 10px; }
+.sto-parts .sto-row { padding-top: 8px; padding-bottom: 8px; }
+.sq-check input::before { content: none; display: none; }
+.sto-pick-dlg .ask { max-width: 560px; }
+.sto-pick { display: flex; flex-direction: column; gap: 2px; margin-top: 10px; }
+.sto-pick-row { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: start; padding: 8px 6px; border-radius: 6px; cursor: pointer; }
+.sto-pick-row:hover { background: var(--panel-2); }
+.sto-pick-text { display: flex; flex-direction: column; gap: 2px; }
+.sto-pick-text b { font-weight: 600; color: var(--text); }
+.sto-pick-text small { color: var(--muted); font-size: 11.5px; line-height: 1.35; }
+.sto-pick-row .sq-check { padding-top: 2px; }
+@media (max-width: 640px) {
+  .sto-ctrl { flex-wrap: wrap; gap: 6px; }
+  .sto-files { display: none; }
+}

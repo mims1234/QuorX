@@ -99,6 +99,28 @@ test('the extension runs the same page operations: extension/pageops.js is gener
   assert.equal(onDisk, extensionPageops(), 'run: node scripts/sync-extension.mjs');
 });
 
+test('your own skills: one for every project and one for a project, edited, renamed and moved to the trash', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const os = await import('node:os');
+  const { listSkills, saveSkill, getSkill, deleteSkill } = await import('../server/skills.js');
+  const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'qx-skills-'));
+  const mine = (dir) => listSkills(dir).filter((k) => k.source !== 'built-in').map((k) => `${k.name}:${k.source}`);
+  assert.equal(saveSkill(proj, { name: 'Release Notes', description: 'From the git log', instructions: '1. Read the log' }, { where: 'mine', by: 'written by you' }), 'release-notes');
+  saveSkill(proj, { name: 'deploy', description: 'Ship it', instructions: 'npm run deploy' }, { where: 'project', by: 'written by you' });
+  assert.deepEqual(mine(proj), ['deploy:project', 'release-notes:mine']);
+  assert.deepEqual(mine(null), ['release-notes:mine'], 'your skills show in every project; a project skill only in its own');
+  const k = getSkill(proj, 'release-notes', 'mine');
+  assert.equal(k.description, 'From the git log'); assert.equal(k.instructions, '1. Read the log');
+  assert.throws(() => saveSkill(proj, { name: 'deploy', instructions: 'x' }, { where: 'project', was: { name: 'release-notes', where: 'mine' } }), /already a skill named deploy/);
+  saveSkill(proj, { name: 'changelog', description: 'From the git log', instructions: '2. Group by feature' }, { where: 'project', was: { name: 'release-notes', where: 'mine' } });
+  assert.deepEqual(mine(proj), ['changelog:project', 'deploy:project'], 'renamed and moved: the old one is gone');
+  assert.throws(() => deleteSkill(proj, 'web-app', 'built-in'), /can only be switched off/);
+  deleteSkill(proj, 'deploy', 'project');
+  assert.deepEqual(mine(proj), ['changelog:project']);
+  assert.throws(() => saveSkill(null, { name: 'x', instructions: 'y' }), /needs a project/);
+});
+
 test('a routine recorded in Chrome becomes a skill of named steps, with typed text kept only for search boxes', async () => {
   const { routineSkill } = await import('../server/skills.js');
   const k = routineSkill('Open bat-cave', [

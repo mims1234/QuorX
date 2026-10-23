@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { HOME } from './openrouter.js';
 import { externalize } from './blobs.js';
+import { rotateLog } from './storagerules.js';
 
 const DIR = path.join(HOME, 'data', 'runs');
 fs.mkdirSync(DIR, { recursive: true });
@@ -138,7 +139,7 @@ try {
 } catch { /* no replies yet */ }
 export function recordRun(row) {
   if (row.runId && row.project) ledger.set(row.runId, { project: row.project, cost: Number(row.cost) || 0, at: Date.parse(row.ts) || Date.now() });
-  try { fs.mkdirSync(path.dirname(SCORE), { recursive: true }); fs.appendFileSync(SCORE, JSON.stringify(row) + '\n'); } catch { /* best effort */ }
+  try { fs.mkdirSync(path.dirname(SCORE), { recursive: true }); rotateLog(SCORE); fs.appendFileSync(SCORE, JSON.stringify(row) + '\n'); } catch { /* best effort */ }
 }
 /** The rows of logs/runs.jsonl from the last `days`: every reply, and document reading (kind 'docs'). */
 export function scoreRows(days = 14) {
