@@ -9,7 +9,16 @@ import { storageCard, drawStorage, setRulesText, refreshStorageBadge, projectSiz
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const money = (c, d = 4) => `$${(Number(c) || 0).toFixed(d)}`;
-const secs = (ms) => `${((ms || 0) / 1000).toFixed(1)}s`;
+// How long something took, as people read it: 12.3s under a minute, then 21m 41s, 1h 2m 5s, 2d 3h 4m.
+const secs = (ms) => {
+  const t = Math.max(0, (Number(ms) || 0) / 1000);
+  if (t < 59.95) return `${t.toFixed(1)}s`;
+  let s = Math.round(t);
+  const d = Math.floor(s / 86400); s %= 86400;
+  const h = Math.floor(s / 3600); s %= 3600;
+  const m = Math.floor(s / 60); s %= 60;
+  return d ? `${d}d ${h}h ${m}m` : h ? `${h}h ${m}m ${s}s` : `${m}m ${s}s`;
+};
 const short = (m) => String(m || '').split('/').pop();
 const pct = (p) => `${Math.round((p || 0) * 100)}%`;
 // Opened without the app link (server/access.js): every /api call is refused, so say how to sign this browser in.
@@ -7577,7 +7586,7 @@ const RUN_GROUPS = [
   ['your-term', 'Your terminal tabs', 'Open shells in the Terminal tab'],
 ];
 const RUN_KIND = { background: 'Background', command: 'Command', 'agent-term': 'Agent terminal', server: 'Server', 'your-term': 'Your terminal' };
-const dur = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`; };
+const dur = (ms) => (ms < 59500 ? `${Math.max(0, Math.round(ms / 1000))}s` : secs(ms));
 async function refreshRunning(c) {
   const r = await getJ(`/api/running?project=${encodeURIComponent(c.projectId)}`);
   if (r && !r.error) (G.runCount ||= {})[c.projectId] = { n: r.items.filter((x) => x.kind !== 'your-term').length };
