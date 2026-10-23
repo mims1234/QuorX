@@ -61,6 +61,19 @@ test('trimming replaces old file bodies, keeps the newest turns, and only trims 
   assert.equal(trimTranscript(msgs, { at: 100000, to: 50000, done }), 0);
 });
 
+test('the agent is told its real shell, and a command written for another shell gets a hint', async () => {
+  const { shellNote, shellHint } = await import('../server/shellnotes.js');
+  assert.match(shellNote('powershell'), /Windows PowerShell 5\.1\. It has no && or \|\|/);
+  assert.match(shellNote('pwsh'), /&& and \|\| work/);
+  assert.match(shellNote('cmd'), /cmd\.exe/);
+  assert.equal(shellNote('direct'), '');
+  assert.match(shellHint('powershell', "At line:1 char:8\n+ echo a && echo b\nThe token '&&' is not a valid statement separator in this version.", 'echo a && echo b'), /has no && or \|\|/);
+  assert.match(shellHint('powershell', "head : The term 'head' is not recognized as the name of a cmdlet, function, script file, or operable program."), /head is a Unix tool.*Select-Object -First/);
+  assert.match(shellHint('powershell', "[eval]:1\nconsole.log('a' + \" b)\nSyntaxError: Invalid or unexpected token", 'node -e "console.log(\'a\' + \\"b\\")"'), /Write the code to a file/);
+  assert.equal(shellHint('powershell', 'npm ERR! missing script: build', 'npm run build'), ''); // an ordinary failure gets no hint
+  assert.equal(shellHint('pwsh', "The token '&&' is not a valid statement separator", 'a && b'), ''); // pwsh has &&
+});
+
 test('old page views are cut in batches, the newest two stay whole, and other tools are left alone', () => {
   const big = (k) => `Opened page ${k}.\nTitle: P${k}\n${'x'.repeat(3000)}`;
   const msgs = [{ role: 'system', content: 's' }, { role: 'user', content: 'read my feed' }];

@@ -23,6 +23,7 @@ import { approvalJudge } from './approvals.js';
 import { normalizePlan, pricePlan, itemLine, planFacts, matchPlan, usePlan } from './mediaplan.js';
 import { startTripwire } from './tripwire.js';
 import { detectToolchains, toolchainNote } from './toolchains.js';
+import { shellNote, shellHint } from './shellnotes.js';
 import { startBackground, jobOutput, stopBackground, listBackground } from './bgjobs.js';
 import { markJob } from './terminal.js';
 import { termStart, termSend, termRead, termStop } from './agentterm.js';
@@ -928,7 +929,8 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   // Which compilers and SDKs this computer has (cached), so the agent builds with what is there, and what the platform
   // packs know about the kinds of project in this folder (how to build, run, test and read crashes).
   const chains = root && !req.bench ? await detectToolchains().catch(() => []) : [];
-  const chainsNote = root && !req.bench ? [toolchainNote(chains), packNotes(root, chains)].filter(Boolean).join('\n') : '';
+  // Which shell commands run in and what works there: 6 of 28 failed commands in one day were written for another shell.
+  const chainsNote = root && !req.bench ? [shellNote(SF.shell), toolchainNote(chains), packNotes(root, chains)].filter(Boolean).join('\n') : '';
   // When the agent picks the model, its tool lists each option with an estimated price.
   const choices = {};
   for (const c of cats) if (T[c].pick === 'agent' && T[c].models.length > 1) choices[c] = await Promise.all(T[c].models.map((m) => estimateFor(c, m, {}, T)));
@@ -2989,6 +2991,8 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     // JUnit's summary comes from the reports the run wrote in its folder, so the pack gets that folder and the start.
     const sum = outputSummary(line, (() => { try { return fs.readFileSync(path.join(root, logRel), 'utf8').slice(-2e6); } catch { return r.out; } })(), { cwd, since: Date.now() - r.ms });
     if (sum) parts.push(sum);
+    const hint = r.code ? shellHint(shell, r.out, line) : '';
+    if (hint) parts.push(hint);
     parts.push(r.out.slice(-4000) || '(no output)');
     return parts.join('\n');
   }
