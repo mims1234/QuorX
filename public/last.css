@@ -878,6 +878,9 @@ input[type="checkbox"]:disabled { opacity: .45; cursor: not-allowed; }
 /* ---------- 💲 card: click to open / close only (hover and focus no longer show it) ---------- */
 .spend .sp-tip.bal-card, .spend:hover .sp-tip.bal-card, .spend:focus-within .sp-tip.bal-card, .spend.pinned .sp-tip.bal-card { display: none !important; }
 .spend.open .sp-tip.bal-card { display: flex !important; }
+/* The card is wider than the sidebar it opens from, and the sidebar's scrolling list would cut it off: it floats over
+   the page instead, placed under 💲 by renderSpend(). */
+.spend.open .sp-tip.bal-card { position: fixed !important; right: auto !important; z-index: 200; }
 .spend.open .sp-icon { background: color-mix(in srgb, var(--amber, #f59e0b) 18%, transparent); box-shadow: 0 0 0 1px var(--amber, #f59e0b); }
 
 /* ---------- 🏠 Home: sidebar head, rail, and the app name ---------- */
