@@ -40,7 +40,7 @@
 #settings .sx-search-kbd { position: absolute; right: 10px; font: 600 10.5px var(--mono); color: var(--dim); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px; pointer-events: none; }
 #settings .st-search-input:focus ~ .sx-search-kbd { display: none; }
 #settings .st-head-right { display: flex; align-items: center; gap: 8px; }
-#settings .st-head-upd { height: 32px; }
+#settings .st-head-upd, #settings .st-head-restart { height: 32px; }
 #settings .st-head-upd.accent { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 #settings .st-close-btn { width: 34px; height: 34px; border-radius: 9px; border: 1px solid transparent; background: transparent; color: var(--muted); font-size: 15px; cursor: pointer; }
 #settings .st-close-btn:hover { background: var(--panel-3); border-color: var(--line); color: var(--text-bright); }
