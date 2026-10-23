@@ -17,8 +17,8 @@ import { storageRules, rotateLog } from './storagerules.js';
 // in plain words), ask (a yes/no statement; yes = fine for shot and click, yes = the request says it for gap).
 export const CHECKS = {
   gap: [
-    { id: 'build', v: 1, gate: true, ask: 'This message asks to build something new or to remake it: an app, site, page, game or tool. It is not a question, an explanation or a small change to something that exists.' },
-    { id: 'does', v: 1, label: 'what a person does in it, from opening it to the end', ask: 'The message says what a person does with it, from opening it to the end: the main things they click, type, choose or play.' },
+    { id: 'build', v: 2, gate: true, ask: 'This message asks to make something new or to remake it: an app, site, page, game, tool, or a video, film or animation. It is not a question, an explanation or a small change to something that exists.' },
+    { id: 'does', v: 2, label: 'what a person does in it, or what happens in it, from start to end', ask: 'The message says what a person does with it from opening it to the end (the main things they click, type, choose or play), or, for a video or animation, what happens in it from start to end.' },
     { id: 'contents', v: 1, label: 'what must be in it', ask: 'The message names the parts it must have: sections, features, screens or data.' },
     { id: 'look', v: 1, taste: true, label: 'how it should look', ask: 'The message says how it should look: a style, a mood, colours, or an example to follow.' },
     { id: 'facts', v: 2, label: 'the real facts it must show (names, prices, text about a real business or person)', ask: 'Nothing real is missing: the message gives the real-world facts the page must show (such as names, prices, or text about a real business or person), or none are needed because the content is made up, generated, or typed in by the person using it.' },

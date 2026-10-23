@@ -33,10 +33,22 @@ http.createServer((req, res) => {
   if (!file.startsWith(root + path.sep) || (/[/\\]\.quorx([/\\]|$)/.test(inside) && !/^[/\\]\.quorx[/\\]scratch([/\\]|$)/.test(inside))) { res.writeHead(403).end('Not allowed'); return; }
   let target = file;
   try { if (fs.statSync(target).isDirectory()) target = path.join(target, 'index.html'); } catch { /* checked below */ }
-  fs.readFile(target, (err, data) => {
-    if (err) { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }).end(`Not found: ${rel}`); return; }
-    // No caching: edits show on the next reload.
-    res.writeHead(200, { 'Content-Type': TYPES[path.extname(target).toLowerCase()] || 'application/octet-stream', 'Cache-Control': 'no-store' });
-    res.end(data);
+  fs.stat(target, (err, st) => {
+    if (err || !st.isFile()) { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }).end(`Not found: ${rel}`); return; }
+    // No caching: edits show on the next reload. Byte ranges, so a <video> or <audio> can seek.
+    const head = { 'Content-Type': TYPES[path.extname(target).toLowerCase()] || 'application/octet-stream', 'Cache-Control': 'no-store', 'Accept-Ranges': 'bytes' };
+    const m = String(req.headers.range || '').match(/^bytes=(\d*)-(\d*)$/);
+    if (m && (m[1] || m[2])) {
+      let start = m[1] ? Number(m[1]) : Math.max(0, st.size - Number(m[2]));
+      let end = m[1] && m[2] ? Math.min(Number(m[2]), st.size - 1) : st.size - 1;
+      if (start > end || start >= st.size) { res.writeHead(416, { 'Content-Range': `bytes */${st.size}` }).end(); return; }
+      res.writeHead(206, { ...head, 'Content-Range': `bytes ${start}-${end}/${st.size}`, 'Content-Length': end - start + 1 });
+      if (req.method === 'HEAD') { res.end(); return; }
+      fs.createReadStream(target, { start, end }).on('error', () => res.destroy()).pipe(res);
+      return;
+    }
+    res.writeHead(200, { ...head, 'Content-Length': st.size });
+    if (req.method === 'HEAD') { res.end(); return; }
+    fs.createReadStream(target).on('error', () => res.destroy()).pipe(res);
   });
 }).listen(port, '127.0.0.1', () => console.log(`Serving ${root} at http://localhost:${port}/ (entry ${entry})`));

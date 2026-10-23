@@ -38,7 +38,7 @@ QuorX's own browser tool is for looking, not batch capture, so write a small Nod
 4. Encode: `ffmpeg -framerate 30 -i frames/%05d.jpg -c:v libx264 -pix_fmt yuv420p -crf 18 out/video.mp4`.
 5. Add film grain in ffmpeg (`noise` filter), not in the page: grain drawn in the page makes every frame slow to compress.
 
-Write the steps into `build.ps1` or `build.sh` so the whole film rebuilds with one command.
+Write the steps into one Node build script so the whole film rebuilds with one command. Name every program it runs in plain text (`execFileSync('ffmpeg', [...])`): QuorX reads the script and runs it like those commands. A program name from a variable, `shell: true`, or a `.cmd` wrapper can't be checked, so it waits for approval. The ffmpeg notes in `film-from-images` apply here too.
 
 ## 4. Formats
 - Master: 1920×1080, 24 or 30 fps, H.264, CRF 18, `yuv420p`.

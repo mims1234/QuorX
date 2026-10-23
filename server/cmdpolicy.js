@@ -918,6 +918,88 @@ function localModules(text, abs, lang) {
   return out.slice(0, 20);
 }
 
+// A Node script whose only launches are child_process calls naming the program in plain text, like the render scripts
+// agents write for video: execFileSync('ffmpeg', [...]), spawn('ffprobe', [...]). Returns those commands, or null when
+// anything is unclear: another launcher, shell mode, a program from a variable, the module passed around or used in a
+// way this can't follow, an interpreter or launcher as the program, or computed arguments for a program whose
+// arguments decide what it does. A null keeps the script opaque, as before.
+const CP_SPEC = /['"`](?:node:)?child_process['"`]/g;
+const CP_FNS = new Set(['execFileSync', 'execFile', 'spawn', 'spawnSync']);
+// Programs whose arguments only name media files and settings, so computed arguments don't change what they are.
+const ARGS_FREE = new Set(['ffmpeg', 'ffprobe']);
+const NOT_NAMED = new Set([...Object.keys(RUNNERS), 'npx', 'npm', 'pnpm', 'yarn', 'uv', 'uvx', 'env', 'xargs', 'sudo', 'runas', 'explorer',
+  'rundll32', 'wscript', 'cscript', 'mshta', 'conhost', 'wt']);
+function namedLaunches(text) {
+  if (LAUNCH.js.programs.test(text.replace(CP_SPEC, "''"))) return null;
+  if (/\bshell\s*:\s*(?!false\b)/.test(text)) return null;
+  const names = new Map(), decls = [];
+  const bind = (list, sep) => { for (const part of list.split(',')) { const [orig, alias] = part.trim().split(sep).map((x) => x?.trim()); if (orig) names.set(alias || orig, orig); } };
+  for (const m of text.matchAll(/import\s*\{([^}]*)\}\s*from\s*['"`](?:node:)?child_process['"`]/g)) { decls.push(m[0]); bind(m[1], /\s+as\s+/); }
+  for (const m of text.matchAll(/import\s+(?:\*\s+as\s+)?([A-Za-z_$][\w$]*)\s+from\s*['"`](?:node:)?child_process['"`]/g)) { decls.push(m[0]); names.set(m[1], '*'); }
+  for (const m of text.matchAll(/(?:const|let|var)\s*\{([^}]*)\}\s*=\s*require\s*\(\s*['"`](?:node:)?child_process['"`]\s*\)/g)) { decls.push(m[0]); bind(m[1], /\s*:\s*/); }
+  for (const m of text.matchAll(/(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*['"`](?:node:)?child_process['"`]\s*\)/g)) { decls.push(m[0]); names.set(m[1], '*'); }
+  // Every mention of the module is one of those declarations: no dynamic import, no require inside an expression.
+  if (!names.size || (text.match(CP_SPEC) || []).length !== decls.length) return null;
+  let rest = text;
+  for (const d of decls) rest = rest.replace(d, '');
+  const segs = [];
+  for (const [local, fn] of names) {
+    if (fn !== '*' && !CP_FNS.has(fn)) return null;
+    const id = local.replace(/\$/g, '\\$');
+    const uses = [...rest.matchAll(new RegExp(`(?<![\\w$.])${id}(?![\\w$])`, 'g'))];
+    if (!uses.length) return null;
+    for (const u of uses) {
+      let j = u.index + local.length;
+      if (fn === '*') {
+        const m = rest.slice(j).match(/^\s*\.\s*(\w+)/);
+        if (!m || !CP_FNS.has(m[1])) return null;
+        j += m[0].length;
+      }
+      const call = literalCall(rest, j);
+      if (!call) return null;
+      const prog = progName(call.program);
+      if (NOT_NAMED.has(prog) || LAUNCHERS.has(prog)) return null;
+      const computed = !call.args || call.args.some((a) => !a);
+      if (computed && !ARGS_FREE.has(prog)) return null;
+      const args = computed ? [{ text: '$QUORX_COMPUTED_ARGS', static: false }] : call.args.map((a) => ({ ...a, param: /^-{1,2}[a-z]/i.test(a.text) }));
+      const s = { text: `${call.program} ${computed ? '…' : call.args.map((a) => a.text).join(' ')}`.trim(), rawProgram: call.program, program: prog, dynamicProgram: false, args, redirects: [] };
+      if (classify(s, WIN ? 'powershell' : 'bash').cls === 'opaque') return null;
+      segs.push(s);
+    }
+  }
+  return segs;
+}
+// A call at src[i]: ( 'program' [, [ 'arg', … ]] …). args is null when the second argument isn't an array literal, and an
+// entry is null when it isn't a plain string.
+function literalCall(src, i) {
+  let j = i;
+  const ws = () => { while (/\s/.test(src[j] || '')) j++; };
+  ws();
+  if (src[j] !== '(') return null;
+  j++; ws();
+  const q = src[j];
+  if (!q || !`'"\``.includes(q)) return null;
+  const end = src.indexOf(q, j + 1);
+  const program = end > 0 ? src.slice(j + 1, end) : '';
+  if (!program || /[\\$\n{}]/.test(program)) return null;
+  j = end + 1; ws();
+  let args = null;
+  if (src[j] === ',') {
+    j++; ws();
+    if (src[j] === '[') {
+      const close = src.indexOf(']', j);
+      const body = close > 0 ? src.slice(j + 1, close) : null;
+      if (body != null && !body.includes('[')) {
+        args = body.split(',').map((x) => x.trim()).filter(Boolean).map((it) => {
+          const m = it.match(/^(['"])([^'"\\\n]*)\1$/) || it.match(/^`()([^`$\\\n]*)`$/);
+          return m ? { text: m[2], static: true } : null;
+        });
+      }
+    }
+  }
+  return { program, args };
+}
+
 // Reads one script: { launch: why it is opaque, or null; argv: it reads its own arguments; extra: commands to judge }.
 // null when there is no such file.
 async function readScript(abs, lang, c, depth, seen) {
@@ -932,11 +1014,15 @@ async function readScript(abs, lang, c, depth, seen) {
   const runs = `this script (${rel}) runs other programs, so QuorX can’t check what it runs`;
   out.argv = LAUNCH[lang].argv.test(text);
   if (lang === 'js' || lang === 'py') {
-    if (LAUNCH[lang].programs.test(text)) out.launch = runs;
-    else if (LAUNCH[lang].code.test(text)) out.launch = `this script (${rel}) runs code it builds while running, so QuorX can’t check what it runs`;
+    if (LAUNCH[lang].programs.test(text)) {
+      // Programs named in plain text (execFileSync('ffmpeg', …)) are judged as if they had been typed.
+      const named = lang === 'js' ? namedLaunches(text) : null;
+      if (named) await judgeCommands(named, lang, { ...c }, rel, depth, out);
+      else out.launch = runs;
+    } else if (LAUNCH[lang].code.test(text)) out.launch = `this script (${rel}) runs code it builds while running, so QuorX can’t check what it runs`;
     for (const f of localModules(text, abs, lang)) {
       const r = await readScript(f, lang, c, depth, seen);
-      if (r) { out.launch ||= r.launch; out.argv ||= r.argv; }
+      if (r) { out.launch ||= r.launch; out.argv ||= r.argv; out.extra.push(...r.extra); }
     }
     return out;
   }

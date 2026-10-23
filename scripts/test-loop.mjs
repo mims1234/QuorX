@@ -140,6 +140,49 @@ test('file checks use real parsers', async () => {
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('links starting with / are looked up in the project folder, as the site server serves them', async () => {
+  const dir = tempDir('quorx-test-');
+  try {
+    const w = (rel, text) => { fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true }); fs.writeFileSync(path.join(dir, rel), text); };
+    w('assets/a.png', 'x');
+    // The real case: a contact sheet in the agent's scratch folder showing the project's images.
+    w('.quorx/scratch/sheet.html', '<!doctype html><html><body><img src="/assets/a.png"><img src="/ws/pmabc/assets/a.png"><img src="../../assets/a.png"><img src="/assets/gone.png"><img src="../assets/a.png"></body></html>');
+    const p = await checkFile(dir, '.quorx/scratch/sheet.html');
+    assert.deepEqual(p, ['.quorx/scratch/sheet.html: links to /assets/gone.png, which does not exist', '.quorx/scratch/sheet.html: links to ../assets/a.png, which does not exist']);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('the site server answers byte ranges, so a video can seek', async () => {
+  const { spawn } = await import('node:child_process');
+  const dir = tempDir('quorx-test-');
+  const port = 20000 + Math.floor(Math.random() * 20000);
+  fs.writeFileSync(path.join(dir, 'clip.mp4'), Buffer.from('0123456789'));
+  fs.mkdirSync(path.join(dir, '.quorx'));
+  fs.writeFileSync(path.join(dir, '.quorx', 'secret.txt'), 'no');
+  const srv = spawn(process.execPath, [fileURLToPath(new URL('../server/serve-static.mjs', import.meta.url)), 'index.html'], { cwd: dir, env: { ...process.env, PORT: String(port) }, stdio: ['ignore', 'pipe', 'inherit'] });
+  try {
+    await new Promise((ok) => srv.stdout.once('data', ok));
+    const get = (p, h = {}) => fetch(`http://127.0.0.1:${port}${p}`, { headers: h });
+    const full = await get('/clip.mp4');
+    assert.equal(full.status, 200);
+    assert.equal(full.headers.get('accept-ranges'), 'bytes');
+    assert.equal(await full.text(), '0123456789');
+    const part = await get('/clip.mp4', { Range: 'bytes=2-5' });
+    assert.equal(part.status, 206);
+    assert.equal(part.headers.get('content-range'), 'bytes 2-5/10');
+    assert.equal(await part.text(), '2345');
+    assert.equal(await (await get('/clip.mp4', { Range: 'bytes=7-' })).text(), '789');
+    assert.equal(await (await get('/clip.mp4', { Range: 'bytes=-3' })).text(), '789');
+    assert.equal((await get('/clip.mp4', { Range: 'bytes=20-' })).status, 416);
+    assert.equal((await get('/.quorx/secret.txt')).status, 404, 'still no dot folders');
+    assert.equal((await get('/nothing.mp4')).status, 404);
+  } finally {
+    // Windows keeps the folder busy until the server has exited.
+    await new Promise((ok) => { srv.once('exit', ok); srv.kill(); });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
+});
+
 test('a check that runs out of time is "couldn’t check", never a syntax error', async () => {
   const dir = tempDir('quorx-test-');
   const was = CHECK_TIMEOUTS.check;
