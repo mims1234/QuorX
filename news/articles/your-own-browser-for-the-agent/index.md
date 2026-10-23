@@ -117,7 +117,7 @@ browser at all.
 selection goes to the agent with the tab. You can also drag a tab into a chat's QuorX group. The chat shows which tab
 it has, with **Take back** next to it.
 
-![The extension's popup on a mail tab: pick a chat and press Give this tab](popup-give.png)
+![The extension's popup on a mail tab: pick a chat and press Give this tab, with Allow reading pages and Record in this tab below](popup-give.png)
 
 ![A chat's message box showing the tab it was given, with a Take back button](lent-chip.png)
 
@@ -129,6 +129,8 @@ The same red cards apply, so anything that changes something waits for you.
 The popup for a given tab shows the chat, what the agent is doing, **■ Stop the agent** and **Open in QuorX**.
 **Alt+Shift+Q** stops every reply that is using your browser, from any tab. You can change the shortcut on your
 browser's extension shortcuts page.
+
+![The extension's popup on a given tab while the agent works: a Working tag, Stop the agent, Open in QuorX and Take back this tab](popup-stop.png)
 
 The agent's window opens at 1400×900. If you shrink or minimise it, it goes back to that size, so the agent always
 sees a full page. A chat opens at most 6 tabs of its own per reply. After that it reuses the current one.
