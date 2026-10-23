@@ -51,7 +51,7 @@ import { artifactContent, servedArtifact, ARTIFACT_HEADERS, folderStamp } from '
 import { gate, appGate, appLink, hostAllowed, crossSiteApi, isLoopback } from './server/access.js';
 import { gitHubRemote, gitHubInfo } from './server/github.js';
 import { serveBlob, startSweeping } from './server/blobs.js';
-import { measureStorage, clearStorage, recentClears, startStorageRules } from './server/storage.js';
+import { measureStorage, clearStorage, recentClears, startStorageRules, scanInstallers, clearInstallers } from './server/storage.js';
 import { storageRules, saveStorageRules, rotateLog } from './server/storagerules.js';
 import { listDesignSystems, readDesignSystem, projectDesign, applyDesignSystem, saveProjectDesign } from './server/design.js';
 import { newsRoute } from './server/news.js';
@@ -725,6 +725,11 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, storageRules());
     }
     if (url.pathname === '/api/storage/log' && req.method === 'GET') return json(res, 200, recentClears());
+    // Old QuorX installers in your Downloads folder: listed only when you ask, moved to the Recycle Bin only when you pick them.
+    if (url.pathname === '/api/storage/downloads') {
+      if (req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e5) || '{}'); return json(res, 200, await clearInstallers(Array.isArray(b.names) ? b.names.slice(0, 200) : [], VERSION)); }
+      return json(res, 200, { current: VERSION, ...scanInstallers(VERSION) });
+    }
 
     // ---- "Browse…": the computer's own folder dialog (only for someone sitting at this computer) ----
     // A template starts a NEW project: a fresh folder <parent>/<name>, the template copied in, then the project.

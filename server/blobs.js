@@ -50,6 +50,22 @@ export function externalize(v, depth = 0) {
   return out || v;
 }
 
+/** In a saved JSON text: the data URLs externalize would move out (⚙ Settings → Storage → Compact chats). → { bytes, count, decoded } */
+export function inlinePictures(text) {
+  let bytes = 0, count = 0, decoded = 0, i = 0;
+  while ((i = text.indexOf('"data:', i)) !== -1) {
+    const end = text.indexOf('"', i + 1);
+    if (end < 0) break;
+    const len = end - i - 1;
+    if (len >= MIN) {
+      const m = HEAD.exec(text.slice(i + 1, i + 201));
+      if (m && EXT[m[1].toLowerCase()]) { bytes += len; count++; decoded += Math.floor((len - m[0].length) * 3 / 4); }
+    }
+    i = end + 1;
+  }
+  return { bytes, count, decoded };
+}
+
 const nameOf = (url) => String(url || '').match(/^\/blob\/([0-9a-f]{64}\.[a-z0-9]{2,5})$/)?.[1] || null;
 /** A blob address back as a data URL (for model providers, which can't reach this computer), or null. */
 export function blobData(url) {

@@ -4,7 +4,7 @@
 
 import { startTour, maybeStartTour } from './tour.js';
 import { backupCard, drawBackup } from './backup.js';
-import { storageCard, drawStorage, setRulesText } from './storage.js';
+import { storageCard, drawStorage, setRulesText, refreshStorageBadge, projectSizes, focusProject, fmtBytes } from './storage.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -5329,7 +5329,7 @@ function wireSettings() {
   drawDesktopSettings();
   drawBackup({ postJ, esc, uiConfirm, store: STORE });
   setRulesText(G.storageRules);
-  if (ST.cat === 'storage') drawStorage(storageHelpers());
+  if (ST.cat === 'storage') drawStorage(storageHelpers()); else refreshStorageBadge(storageHelpers());
   showVersion();
 }
 // Search looks through every category; matching rows show, everything else hides.
@@ -5495,7 +5495,7 @@ async function drawProjectsPanel() {
       return `<div class="pp-row" style="${projStyle(pr)}">
         <span class="pp-ico">📁</span>
         <div class="pp-main">
-          <div class="pp-top"><b class="pp-name">${esc(pr.name)}</b><span class="pp-meta">${n} chat${n === 1 ? '' : 's'} · <em>$${spent.toFixed(3)}</em>${pr.budget != null ? ` of $${pr.budget.toFixed(2)}` : ' · no limit'}</span></div>
+          <div class="pp-top"><b class="pp-name">${esc(pr.name)}</b><span class="pp-meta">${n} chat${n === 1 ? '' : 's'} · <em>$${spent.toFixed(3)}</em>${pr.budget != null ? ` of $${pr.budget.toFixed(2)}` : ' · no limit'}<button type="button" class="pp-sto" data-proj-sto="${esc(pr.id)}" hidden></button></span></div>
           ${pr.budget != null ? `<span class="pp-bar ${state}"><i style="width:${(share * 100).toFixed(1)}%"></i></span>` : ''}
           <code class="pp-path blurable" title="${esc(pr.dir)}">${esc(short(pr.dir))}</code>
         </div>
@@ -5509,6 +5509,16 @@ async function drawProjectsPanel() {
   </section>`;
   const find = (id) => projects.find((x) => x.id === id);
   for (const b of box.querySelectorAll('[data-proj-open]')) b.onclick = () => openFolder(b.dataset.projOpen);
+  // How much room the agent's folder (.quorx) takes in each project; it opens that project in ⚙ Storage.
+  for (const b of box.querySelectorAll('[data-proj-sto]')) b.onclick = () => { focusProject(b.dataset.projSto); ST.cat = 'storage'; drawSettings(); };
+  projectSizes(storageHelpers()).then((sizes) => {
+    const limit = (Number(G.settings.agentSpaceMB) || 500) * 1e6;
+    for (const b of box.querySelectorAll('[data-proj-sto]')) {
+      const s = sizes.get(b.dataset.projSto);
+      if (!s || s.missing || !s.bytes || !b.isConnected) continue;
+      b.textContent = `🧹 ${fmtBytes(s.bytes)}`; b.title = 'The agent\'s folder (.quorx) in this project: see and clear its parts in Storage'; b.classList.toggle('big', s.bytes > limit); b.hidden = false;
+    }
+  });
   for (const b of box.querySelectorAll('[data-proj-set]')) b.onclick = () => openProjectSettings(find(b.dataset.projSet));
   for (const b of box.querySelectorAll('[data-proj-del]')) b.onclick = async () => { await deleteProject(find(b.dataset.projDel)); drawProjectsPanel(); };
   const nb = $('[data-proj-new]', box); if (nb) nb.onclick = async () => { await editProject(null); drawProjectsPanel(); };

@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import crypto from 'node:crypto';
 import { HOME, ROOT } from './openrouter.js';
 import { externalize } from './blobs.js';
 
@@ -232,6 +233,29 @@ function writeChat(id, doc) {
   LAST.delete(id); LAST.set(id, { key: stamp(id), doc });
   if (LAST.size > 8) LAST.delete(LAST.keys().next().value);
   return { id, updated: doc.updated, rev: doc.rev };
+}
+/**
+ * ⚙ Settings → Storage → Compact chats: pictures an older chat still keeps inside its file move to data/blobs, where
+ * every picture is stored once. Nothing else changes (not its rev or time, so open pages go on saving as before).
+ * Every picture it now names is checked on disk, by its content hash, before the file is replaced.
+ * → { before, after, blobs (bytes of pictures newly written) } or null when there is no such chat.
+ */
+export function compactChat(id) {
+  if (!validId(id) || !fs.existsSync(file(id))) return null;
+  const was = stamp(id), before = fs.statSync(file(id)).size;
+  const doc = getChat(id), out = externalize(doc);
+  if (out === doc) return { before, after: before, blobs: 0 };
+  const known = new Set(JSON.stringify(doc).match(/\/blob\/[0-9a-f]{64}\.[a-z0-9]{2,5}/g) || []);
+  let blobs = 0;
+  for (const ref of new Set(JSON.stringify(out).match(/\/blob\/[0-9a-f]{64}\.[a-z0-9]{2,5}/g) || [])) {
+    if (known.has(ref)) continue;
+    const name = ref.slice(6), buf = fs.readFileSync(path.join(HOME, 'data', 'blobs', name));
+    if (crypto.createHash('sha256').update(buf).digest('hex') !== name.split('.')[0]) throw new Error(`picture ${name} did not save correctly`);
+    blobs += buf.length;
+  }
+  if (stamp(id) !== was) throw new Error('the chat changed while it was being compacted; try again');
+  writeChat(id, out);
+  return { before, after: fs.statSync(file(id)).size, blobs };
 }
 function currentChat(id) {
   const hit = LAST.get(id);

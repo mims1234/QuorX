@@ -9,6 +9,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import crypto from 'node:crypto';
 
 process.env.QX_TRASH = 'delete';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -124,6 +125,46 @@ test('Storage: measures every part, clears each one, and leaves what it only sho
     assert.equal(saved.trashDays, 1); assert.equal(saved.logMaxMB, 5); assert.equal(saved.autoClean, false); assert.ok(!('junk' in saved));
     assert.equal(JSON.parse(fs.readFileSync(path.join(h.data, 'storage.json'), 'utf8')).logMaxMB, 5);
   } finally { await q.stop(); }
+});
+
+test('Compact chats moves pictures out of chat files, and old installers in Downloads go only when picked', async () => {
+  const h = makeHome();
+  const png = `data:image/png;base64,${crypto.randomBytes(30000).toString('base64')}`;
+  const chat = { id: 'old1', title: 'Pictures', projectId: 'p1', created: 5, updated: 7, rev: 'r-old', agent: { setup: {}, messages: [{ role: 'user', content: 'draw' }], artifacts: [{ id: 'a1', kind: 'image', title: 'one', url: png }, { id: 'a2', kind: 'image', title: 'same again', url: png }] } };
+  fs.writeFileSync(path.join(h.data, 'chats', 'old1.json'), JSON.stringify(chat));
+  const before = fs.statSync(path.join(h.data, 'chats', 'old1.json')).size;
+  const dl = tempDir('qx-downloads-');
+  for (const [n, size] of [['QuorX-Setup-0.2.10.exe', 700], ['QuorX-Store-0.2.10.appx', 900], ['QuorX-Store-0.2.10 (1).appx', 900], ['QuorX-Setup-9.9.9.exe', 800], ['QuorX Installer.exe', 300], ['quorx-backup-2026-10-21.zip', 50], ['notes.txt', 10]]) write(path.join(dl, n), Buffer.alloc(size));
+  process.env.QX_DOWNLOADS = dl;
+  const q = await quorx(h.home);
+  try {
+    const by = Object.fromEntries((await q.call('/api/storage')).body.items.map((x) => [x.id, x]));
+    assert.equal(by.compact.files, 2, 'two pictures');
+    assert.equal(by.compact.count, 1, 'in one chat');
+    assert.ok(by.compact.bytes >= 2 * 40000 && by.compact.saves > 0);
+    assert.equal(by.chats.how, null, 'chats themselves are only shown');
+    const r = (await q.call('/api/storage/clear', { items: [{ id: 'compact' }] })).body.results[0];
+    assert.equal(r.wentTo, 'compacted'); assert.equal(r.files, 1); assert.ok(r.bytes > 30000, `saved ${r.bytes}`);
+    const after = JSON.parse(fs.readFileSync(path.join(h.data, 'chats', 'old1.json'), 'utf8'));
+    assert.ok(fs.statSync(path.join(h.data, 'chats', 'old1.json')).size < before / 10);
+    assert.equal(after.rev, 'r-old'); assert.equal(after.updated, 7);
+    const urls = after.agent.artifacts.map((a) => a.url);
+    assert.match(urls[0], /^\/blob\/[0-9a-f]{64}\.png$/); assert.equal(urls[0], urls[1], 'the same picture is stored once');
+    const blob = fs.readFileSync(path.join(h.data, 'blobs', urls[0].slice(6)));
+    assert.equal(`data:image/png;base64,${blob.toString('base64')}`, png, 'the picture is exactly the one it was');
+    assert.equal((await q.call('/api/storage')).body.items.find((x) => x.id === 'compact').how, null, 'nothing left to compact');
+
+    const scan = (await q.call('/api/storage/downloads')).body;
+    const f = Object.fromEntries(scan.files.map((x) => [x.name, x]));
+    assert.deepEqual(Object.keys(f).sort(), ['QuorX Installer.exe', 'QuorX-Setup-0.2.10.exe', 'QuorX-Setup-9.9.9.exe', 'QuorX-Store-0.2.10 (1).appx', 'QuorX-Store-0.2.10.appx'], 'installers only: no backup, nothing else');
+    assert.equal(f['QuorX-Setup-9.9.9.exe'].newer, true); assert.equal(f['QuorX-Setup-9.9.9.exe'].old, false);
+    assert.equal(f['QuorX Installer.exe'].old, false, 'no version: not ticked');
+    assert.equal(f['QuorX-Store-0.2.10 (1).appx'].copy, true);
+    assert.equal(f['QuorX-Setup-0.2.10.exe'].old, true);
+    const gone = (await q.call('/api/storage/downloads', { names: ['QuorX-Setup-0.2.10.exe', 'QuorX-Store-0.2.10 (1).appx', 'notes.txt', '..\\x.exe'] })).body;
+    assert.equal(gone.removed, 2); assert.equal(gone.notListed, 2); assert.equal(gone.bytes, 1600);
+    assert.deepEqual(fs.readdirSync(dl).sort(), ['QuorX Installer.exe', 'QuorX-Setup-9.9.9.exe', 'QuorX-Store-0.2.10.appx', 'notes.txt', 'quorx-backup-2026-10-21.zip']);
+  } finally { await q.stop(); delete process.env.QX_DOWNLOADS; }
 });
 
 test('Automatic cleanup: trash past its days goes, newer trash and everything else stay', async () => {

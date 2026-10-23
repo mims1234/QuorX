@@ -46,3 +46,16 @@
   .sto-ctrl { flex-wrap: wrap; gap: 6px; }
   .sto-files { display: none; }
 }
+.g-chats { background: #d66b9a; }
+.st-nav-badge.warn-dot { width: 7px; height: 7px; padding: 0; border-radius: 50%; background: var(--warn); }
+.sto-flash { animation: sto-flash 1.6s ease-out 1; border-radius: 6px; }
+@keyframes sto-flash { from { background: var(--warn-dim); } to { background: transparent; } }
+.sto-dl-row { cursor: pointer; }
+.sto-dl-row .sq-check { margin-right: 8px; }
+.sto-dl-name { word-break: break-all; }
+.sto-dl-acts { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.pp-sto[hidden] { display: none; }
+.pp-sto { display: inline-block; width: auto; height: auto; min-height: 0; vertical-align: baseline; margin-left: 8px; padding: 0 6px; border: 1px solid var(--line-strong); border-radius: 4px; background: transparent; color: var(--muted); font: 500 11px/18px var(--font-mono, ui-monospace, monospace); cursor: pointer; }
+.pp-sto:hover { color: var(--text); border-color: var(--accent); }
+.pp-sto.big { border-color: var(--warn); color: var(--warn); }
+.sto-proj { scroll-margin-top: 12px; }
