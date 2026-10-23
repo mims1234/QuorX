@@ -476,6 +476,18 @@ handle('showFile', (file) => { if (file && file.startsWith(app.getPath('download
 let agentSession = null;
 const agentSess = () => (agentSession ||= (() => { const s = session.fromPartition('persist:agent'); s.setUserAgent(CHROME_UA()); s.setPermissionRequestHandler((_wc, perm, cb) => cb(perm === 'fullscreen')); return s; })());
 const FORWARD = new Set(['Page.loadEventFired', 'Page.frameNavigated', 'Runtime.consoleAPICalled', 'Runtime.exceptionThrown', 'Log.entryAdded']);
+// A page's data requests (XHR, fetch) go to QuorX with only their id, method, address, status, type and size:
+// never headers, cookies or bodies (a body is read only when the agent asks for one request).
+const DATA_REQ = new Set(['XHR', 'Fetch', 'EventSource']);
+function slimNet(method, p) {
+  if (method === 'Network.requestWillBeSent') return DATA_REQ.has(p.type) ? { requestId: p.requestId, type: p.type, method: p.request && p.request.method, url: String((p.request && p.request.url) || '').slice(0, 2000) } : null;
+  if (method === 'Network.responseReceived') return DATA_REQ.has(p.type) ? { requestId: p.requestId, type: p.type, status: p.response && p.response.status, mimeType: p.response && p.response.mimeType } : null;
+  if (method === 'Network.loadingFinished') return { requestId: p.requestId, encodedDataLength: p.encodedDataLength };
+  if (method === 'Network.loadingFailed') return { requestId: p.requestId, errorText: p.errorText };
+  return undefined;
+}
+// What passes on: the page events as they are, network events slimmed (or dropped: a picture, a script).
+const passOn = (method, params) => (FORWARD.has(method) ? params : method.startsWith('Network.') ? slimNet(method, params) : undefined);
 let linkToken = null, eventQueue = [], eventTimer = null;
 function postReply(body) { if (!origin || !linkToken) return; fetch(`${origin}/api/desktop/reply`, { method: 'POST', headers: keyed({ 'Content-Type': 'application/json' }), body: JSON.stringify({ token: linkToken, ...body }) }).catch(() => {}); }
 function queueEvent(e) { eventQueue.push(e); if (!eventTimer) eventTimer = setTimeout(() => { eventTimer = null; const events = eventQueue; eventQueue = []; postReply({ events }); }, 40); }
@@ -550,6 +562,8 @@ const COMMANDS = {
   async 'app.notify'(n) { return showNote(n); },
   // Sign-in with OpenRouter finished in the user's browser: back to QuorX.
   async 'app.focus'() { showWindow(); return true; },
+  // The Chrome extension's "Open in QuorX": the window comes forward on that chat.
+  async 'app.openChat'({ chatId }) { showWindow(); if (chatId) send({ type: 'notify-click', chatId }); return true; },
   async 'tab.create'({ chatId }) {
     const sid = `agent-${String(chatId).replace(/[^\w-]/g, '').slice(0, 40)}`;
     if (tabs.has(sid)) closeTab(sid);
@@ -568,7 +582,7 @@ const COMMANDS = {
     await view.webContents.loadURL('about:blank').catch(() => {});
     const dbg = view.webContents.debugger;
     dbg.attach('1.3');
-    dbg.on('message', (_e, method, params) => { if (FORWARD.has(method)) queueEvent({ tab: sid, method, params }); });
+    dbg.on('message', (_e, method, params) => { const p = passOn(method, params); if (p) queueEvent({ tab: sid, method, params: p }); });
     send({ sid, type: 'agent-tab', chatId });
     return sid;
   },
@@ -618,7 +632,7 @@ const COMMANDS = {
     const t = tabs.get(tab); if (!t || t.agent) throw new Error('that tab is gone');
     const dbg = t.view.webContents.debugger;
     if (!dbg.isAttached()) dbg.attach('1.3');
-    if (!t.onDbg) { t.onDbg = (_e, method, params) => { if (FORWARD.has(method)) queueEvent({ tab, method, params }); }; dbg.on('message', t.onDbg); }
+    if (!t.onDbg) { t.onDbg = (_e, method, params) => { const p = passOn(method, params); if (p) queueEvent({ tab, method, params: p }); }; dbg.on('message', t.onDbg); }
     return tab;
   },
   async 'tab.detach'({ tab }) {

@@ -516,8 +516,12 @@ function chooseSuggest(c, i, how = 'run') {
   if (it.kind === 'file') c.ctx.push({ type: 'file', projectId: c.projectId, path: it.value.path, title: it.value.path });
   if (it.kind === 'project') c.ctx.push({ type: 'project', id: it.value.id, title: `📁 ${it.value.name}` });
   c.ctx = [...new Map(c.ctx.map((x) => [`${x.type}:${x.id || x.path}`, x])).values()];
-  ta.value = `${before}@${it.label} ${after}`;
-  ta.selectionStart = ta.selectionEnd = before.length + it.label.length + 2;
+  // The chip above the box carries it: the @word you typed goes, so the message holds only your own words.
+  const head = before.replace(/[ \t]+$/, ''), tail = after.replace(/^[ \t]+/, '');
+  const gap = head && tail && !/\s$/.test(head) && !/^\s/.test(tail) ? ' ' : '';
+  ta.value = head + gap + tail;
+  ta.selectionStart = ta.selectionEnd = head.length + gap.length;
+  ta.dispatchEvent(new Event('input'));
   ta.focus(); renderAttachments(c);
 }
 async function openNotes(c) {
@@ -1128,6 +1132,21 @@ async function showChat(id, pane = G.focus) {
   G.view = { id: null, src: false, files: false }; G.traceRun = null;
   withTransition(() => { renderPanes(); savePrefs(); renderSidebar(); });
 }
+// The home page's draft chat: one at a time, kept while you stay on Home (its options, chips and attachments too),
+// moved to the project you pick. It is not saved and not in the sidebar until its first message.
+function homeDraft(projectId) {
+  if (!G.homeDraft || G.homeDraft.agent.messages.length) G.homeDraft = blankChat(projectId);
+  G.homeDraft.projectId = projectId;
+  return G.homeDraft;
+}
+// Its first message sent: the draft is a chat like any other, open in the main pane.
+function promoteDraft(c) {
+  G.homeDraft = null; G.landingDraft = ''; G.landingProject = c.projectId;
+  G.open.set(c.id, c);
+  G.panes = [c.id]; G.focus = 0;
+  G.view = { id: null, src: false, files: false }; G.traceRun = null;
+  withTransition(() => { renderPanes(); savePrefs(); renderSidebar(); });
+}
 async function newChat(projectId = focused()?.projectId || 'scratch', pane = G.focus) {
   const c = blankChat(projectId);
   G.open.set(c.id, c);
@@ -1513,15 +1532,14 @@ function renderLanding(box) {
     }).join('')}</div>
     <p class="ld-tips">Tips: type <kbd>@</kbd> to add files or other chats as context, <kbd>/</kbd> for commands, and ⚙ for settings.</p>
     <div class="ld-dock">
-    <div class="ld-sbox" id="ldStart">
-      <textarea class="ld-sb-input" id="ldStartText" rows="2" placeholder="What are we building? Describe it, or ask about your code…" aria-label="Your first message"></textarea>
+    <div class="ld-sbox has-draft" id="ldStart">
       <div class="ld-sb-row">
         <button type="button" class="ld-chip" id="ldChip" aria-haspopup="menu" aria-expanded="false" title="Where this chat runs: a project, any folder, or a new project from a template"></button>
         <span class="ld-sb-path blurable" id="ldChipPath"></span>
         <span class="ld-sb-sp"></span>
         <span class="ld-sb-hint">Enter to start · Shift+Enter for a new line</span>
-        <button type="button" class="ld-sb-send" id="ldStartGo" aria-label="Start the chat" title="Start the chat (Enter)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
       </div>
+      <div class="ld-draft" id="ldDraft"></div>
       <div class="ld-menu" id="ldMenu" role="menu" hidden></div>
     </div>
     <p class="ld-folder-err" role="alert" hidden></p>
@@ -1602,7 +1620,7 @@ function loadGhMeta(scope) {
 // the other ways in: a recent project, any folder on this PC, or a new project from a template. Picking one only
 // changes the chip, so what you typed stays.
 function wireStartBox(box, first, projects) {
-  const ta = $('#ldStartText', box), chip = $('#ldChip', box), menu = $('#ldMenu', box), err = $('.ld-folder-err', box);
+  const chip = $('#ldChip', box), menu = $('#ldMenu', box), err = $('.ld-folder-err', box);
   const proj = () => G.projects.find((p) => p.id === G.landingProject) || G.projects.find((p) => p.id === first) || G.projects[0];
   if (!G.projects.some((p) => p.id === G.landingProject)) G.landingProject = first;
   const drawChip = () => {
@@ -1612,24 +1630,28 @@ function wireStartBox(box, first, projects) {
     $('#ldChipPath', box).textContent = dir; $('#ldChipPath', box).title = dir;
   };
   drawChip();
+  // A draft chat in the picked project, with the message box every chat has: model, This chat, Follow, Chrome,
+  // attach, mic, Enhance, @ and /. Sending turns it into the chat (promoteDraft, in send).
+  const d = homeDraft(proj()?.id || first);
+  const pane = document.createElement('section');
+  pane.className = 'chatpane home-draft';
+  pane.innerHTML = paneHTML(d);
+  $('#ldDraft', box).appendChild(pane);
+  d.el = { root: pane };
+  wirePane(d, pane, 0);
+  renderComposerBar(d); renderAllowed(d); renderAttachments(d); syncRunState(d);
+  const ta = $('.input', pane);
+  ta.id = 'ldStartText';
+  ta.placeholder = 'What are we building? Describe it, or ask about your code…  @ to add files or chats · / for commands';
+  ta.setAttribute('aria-label', 'Your first message');
   ta.value = G.landingDraft || '';
-  const fit = () => { ta.style.height = 'auto'; ta.style.height = `${Math.min(ta.scrollHeight, Math.round(innerHeight * 0.3))}px`; };
+  const fit = () => fitInput(ta);
   fit();
-  ta.oninput = () => { G.landingDraft = ta.value; fit(); };
-  const go = async () => {
-    const p = proj(); if (!p) return;
-    const text = ta.value.trim();
-    G.landingProject = p.id; G.landingDraft = '';
-    const c = await newChat(p.id);
-    if (c && text) send(c, text);
-  };
-  ta.onkeydown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); go(); }
-    if (e.key === 'ArrowDown' && e.altKey) { e.preventDefault(); openMenu(); }
-  };
-  $('#ldStartGo', box).onclick = go;
+  const typed = ta.oninput;
+  ta.oninput = () => { typed?.(); G.landingDraft = ta.value; };
+  ta.addEventListener('keydown', (e) => { if (e.key === 'ArrowDown' && e.altKey) { e.preventDefault(); openMenu(); } });
   // The chip's menu: recent projects (with what each has spent), then a folder, then templates.
-  const pick = (id) => { G.landingProject = id; drawChip(); closeMenu(); ta.focus(); };
+  const pick = (id) => { G.landingProject = id; d.projectId = id; drawChip(); closeMenu(); ta.focus(); };
   const items = () => [...menu.querySelectorAll('.ld-mi:not([hidden])')];
   const closeMenu = () => { menu.hidden = true; chip.setAttribute('aria-expanded', 'false'); document.removeEventListener('pointerdown', outside, true); };
   const outside = (e) => { if (!menu.contains(e.target) && e.target !== chip && !chip.contains(e.target)) closeMenu(); };
@@ -1661,7 +1683,7 @@ function wireStartBox(box, first, projects) {
   // After a folder or template pick the list refresh may have redrawn the home screen: bring the start box that is on
   // screen now up to date (its chip shows the picked project, its menu is shut) and put the cursor back in it.
   const liveStart = () => {
-    if (box.isConnected && $('#ldChip', box) === chip) { drawChip(); closeMenu(); ta.value = G.landingDraft || ''; fit(); }
+    if (box.isConnected && $('#ldChip', box) === chip) { d.projectId = proj()?.id || d.projectId; drawChip(); closeMenu(); ta.value = G.landingDraft || ''; fit(); }
     else { const land = $('.landing'); if (land) renderLanding(land.parentElement); }
     const t = $('#ldStartText'); if (t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); }
   };
@@ -1861,7 +1883,7 @@ function traceCostHTML(c, m) {
   const t = chatTotals(c); // every reply in the chat (this one included, live or done) and calls outside replies
   const rows = models.map(([id, v]) => `<tr><td><span class="tc-model" title="${esc(id)}">${esc(short(id))}</span>${v.role && v.role !== 'writer' ? ` <i>${esc(v.role)}</i>` : ''}</td><td>${v.calls || 0}×</td><td>${v.tokensIn || v.tokensOut ? `<span class="tok-in">${k(v.tokensIn)} in</span> · <span class="tok-out">${k(v.tokensOut)} out</span>` : ''}</td><td class="tc-cache">${cacheTag(v)}</td><td class="tc-c">${money(v.cost || 0, 5)}</td></tr>`).join('');
   return `<div class="trace-cost">
-    <div class="tc-head"><span>💲 ${s.live ? 'Spent so far' : s.partial ? 'This reply spent (it ended early)' : 'This reply cost'}</span><b>${money(s.cost || 0, 5)}</b></div>
+    <div class="tc-head"><span>💲 ${s.live ? 'Spent so far' : s.partial ? 'This reply spent (it ended early)' : 'This reply cost'}</span><b>${money(m.stats ? ownCost(m, c.agent.messages) : s.cost || 0, 5)}</b></div>
     <div class="tc-sub">${calls} model call${calls === 1 ? '' : 's'}${s.tokensIn ? ` · <span class="tok-in">${k(s.tokensIn)} tokens in</span>` : ''}${s.tokensOut ? ` · <span class="tok-out">${k(s.tokensOut)} tokens out</span>` : ''}${cacheShare(sumCache(models)) != null ? ` · ${cacheTag(sumCache(models))}` : ''}${s.ms ? ` · ${secs(s.ms)}` : ''}${s.mediaSpent ? ` · media ${money(s.mediaSpent, 4)}` : ''}</div>
     ${rows ? `<table class="tc-table"><tbody>${rows}</tbody></table>` : ''}
     <div class="tc-chat"><span>Whole chat so far · ${t.replies} repl${t.replies === 1 ? 'y' : 'ies'}${t.msgs ? ` · ${t.msgs} message${t.msgs === 1 ? '' : 's'}` : ''}</span><b>${money(t.cost, 4)}</b></div>
@@ -2206,19 +2228,9 @@ function followScroll(box, { get, set, near = 60, onChange }) {
   box.addEventListener('load', (e) => { if (e.target.tagName === 'IMG' && get()) box.scrollTop = box.scrollHeight; }, true);
 }
 // ---------- the chat panes ----------
-function renderPanes() {
-  const box = $('#chats');
-  G.panes = G.panes.filter((id) => G.open.has(id));
-  syncHome();
-  box.innerHTML = '';
-  if (!G.panes.length) { renderLanding(box); syncLayout(); renderPane(); return; }
-  box.classList.toggle('split', G.panes.length > 1);
-  G.panes.forEach((id, i) => {
-    const c = G.open.get(id);
-    const root = document.createElement('section');
-    root.className = `chatpane ${i === G.focus ? 'focus' : ''}`;
-    root.dataset.pane = i;
-    root.innerHTML = `
+// A chat's pane: header, messages and message box. The home page's start box uses the same one for a draft chat.
+function paneHTML(c) {
+  return `
       <header class="chat-head chat-header dir-a-head" style="--h:${hue(c.title)}">
         <div class="dir-a-toprow">
           <div class="dir-a-crumbs">
@@ -2280,6 +2292,20 @@ function renderPanes() {
         </div>
         </div>
       </form>`;
+}
+function renderPanes() {
+  const box = $('#chats');
+  G.panes = G.panes.filter((id) => G.open.has(id));
+  syncHome();
+  box.innerHTML = '';
+  if (!G.panes.length) { renderLanding(box); syncLayout(); renderPane(); return; }
+  box.classList.toggle('split', G.panes.length > 1);
+  G.panes.forEach((id, i) => {
+    const c = G.open.get(id);
+    const root = document.createElement('section');
+    root.className = `chatpane ${i === G.focus ? 'focus' : ''}`;
+    root.dataset.pane = i;
+    root.innerHTML = paneHTML(c);
     box.appendChild(root);
     c.el = { root };
     wirePane(c, root, i);
@@ -2337,10 +2363,19 @@ function wirePane(c, root, i) {
   $('.enhUndo', root).onclick = () => undoEnhance(c);
   $('.stopBtn', root).onclick = () => c.running?.abort();
 }
+// What a reply spent itself (server/store.js ownCost): before 0.2.12, "Continue" after the step limit started the new
+// reply's total with the reply before it included; its per-model costs show its own share.
+function ownCost(m, all) {
+  const s = m.stats, cost = Number(s?.cost) || 0;
+  if (!s?.resumed) return cost;
+  const before = all.slice(0, all.indexOf(m)).reverse().find((x) => x.role === 'assistant');
+  const prev = Number(before?.stats?.cost) || 0, models = Object.values(s.byModel || {}).reduce((n, v) => n + (Number(v.cost) || 0), 0);
+  return prev > 0 && Math.abs(cost - prev - models) < 1e-6 ? cost - prev : cost;
+}
 function chatTotals(c) {
   for (const m of c.agent.messages) if (m.role === 'assistant' && !m.stats && !m.live && m.trace?.length) partialSpendQuiet(m); // older replies that ended part-way
-  const done = c.agent.messages.filter((m) => m.role === 'assistant' && m.stats);
-  return { cost: done.reduce((s, m) => s + m.stats.cost, 0) + (c.agent.extraUsage || []).reduce((s, x) => s + (x.cost || 0), 0) + liveOf(c), replies: done.length, msgs: c.agent.messages.filter((m) => m.role === 'user').length };
+  const all = c.agent.messages, done = all.filter((m) => m.role === 'assistant' && m.stats);
+  return { cost: done.reduce((s, m) => s + ownCost(m, all), 0) + (c.agent.extraUsage || []).reduce((s, x) => s + (x.cost || 0), 0) + liveOf(c), replies: done.length, msgs: all.filter((m) => m.role === 'user').length };
 }
 function renderChatHead(c) {
   if (!c.el) return;
@@ -2458,9 +2493,12 @@ function chatUsage(c) {
   };
   let replies = 0;
   for (const m of c.agent.messages) {
-    if (m.role !== 'assistant' || !m.stats) continue;
+    if (m.role !== 'assistant') continue;
+    // A finished reply's models, or (while it runs) what it has spent so far, as the chat total counts it.
+    const byModel = m.stats ? m.stats.byModel : m.live ? m.liveByModel : null;
+    if (!byModel) continue;
     replies++;
-    for (const [model, v] of Object.entries(m.stats.byModel || {})) add(v.role || 'writer', model, v);
+    for (const [model, v] of Object.entries(byModel || {})) add(v.role || 'writer', model, v);
   }
   for (const x of c.agent.extraUsage || []) add(x.kind, x.model, { calls: 1, cost: x.cost });
   const list = [...rows.values()].sort((a, b) => b.cost - a.cost);
@@ -3637,7 +3675,7 @@ function waitHTML(card) {
   const w = card.wait;
   if (!w) return '';
   if (w.held) return '<div class="aw held"><span class="aw-text">⏸ Waiting for you: nothing happens until you answer.</span></div>';
-  const then = { deciders: 'the deciders answer for you', run: 'it runs (the deciders saw little risk)', skip: 'it is skipped (the deciders weren\'t sure it is harmless)' }[w.then] || 'the reply carries on';
+  const then = { deciders: 'the deciders answer for you', run: 'it runs (the deciders saw little risk)', skip: 'it is skipped (the deciders weren\'t sure it is harmless)', stop: 'the agent stops waiting and carries on without it' }[w.then] || 'the reply carries on';
   const left = Math.max(0, Math.ceil((w.until - Date.now()) / 1000));
   return `<div class="aw" data-until="${w.until}" data-secs="${w.secs}" data-run="${esc(w.runId || '')}" data-id="${esc(card.id)}"><span class="aw-bar" aria-hidden="true"><i style="width:${Math.min(100, (left / (w.secs || 1)) * 100)}%"></i></span><span class="aw-text">⚡ No answer in <b class="aw-n">${left}</b>s and ${then}.</span><button type="button" class="aw-hold" title="Stop the clock: the card waits until you answer">Wait for me</button></div>`;
 }
@@ -3747,7 +3785,7 @@ function approvalHTML(a, live = true) {
     ${c.items ? '' : `<div class="what">${c.free ? esc(c.what) : `“${esc(c.what)}”`}</div>`}
     ${c.why ? `<div class="what">Why: ${esc(c.why)}</div>` : ''}${c.items && waiting ? '<div class="what dim">Calls that match this plan then run without asking again; anything else asks on its own.</div>' : ''}
     ${waiting ? `${waitHTML(c)}<textarea rows="1" placeholder="To decline, you can add a note: why, or what to do instead. Enter declines and sends it."></textarea>
-      <div class="acts"><button type="button" class="primary yes">${c.tool === 'remember' ? 'Save to memory' : c.free ? 'Allow once' : `Approve ${money(c.est, 3)}`}</button>${c.noAlways ? '' : '<button type="button" class="always" title="Stop asking for this tool in this chat">Always allow</button>'}<button type="button" class="no">${c.tool === 'remember' ? "Don't save" : 'Decline'}</button></div>`
+      <div class="acts"><button type="button" class="primary yes">${c.yes ? esc(c.yes) : c.tool === 'remember' ? 'Save to memory' : c.free ? 'Allow once' : `Approve ${money(c.est, 3)}`}</button>${c.noAlways ? '' : '<button type="button" class="always" title="Stop asking for this tool in this chat">Always allow</button>'}<button type="button" class="no">${c.no ? esc(c.no) : c.tool === 'remember' ? "Don't save" : 'Decline'}</button></div>`
       : o ? `<div class="outcome ${o.approve ? 'yes' : 'no'}">${o.approve ? '✅ Allowed' : '⛔ Declined'} by ${byName(o.by)}${o.always ? ' · always allowed from now on' : ''}${o.approve && o.model && o.model !== c.model ? ` · switched to ${esc(short(o.model))}` : ''}${o.reason ? ` · ${esc(o.reason)}` : ''}</div>`
       : !live ? '<div class="outcome">Not answered: the reply ended</div>' : `<div class="outcome">⚡ ${c.tool === 'shell' ? 'The deciders are voting on this command…' : 'Deciders are checking whether this is needed and worth the price…'}</div>`}
   </div>`;
@@ -4066,6 +4104,7 @@ async function send(c, text) {
   c.ctx = []; renderAttachments(c);
   if ((!c.title || c.title === 'New chat') && text) { c.title = text.replace(/\s+/g, ' ').slice(0, 60); if (c.el) { $('.ch-name', c.el.root).value = c.title; } }
   runChat(c, text, ctx, imgs, { docs, comments });
+  if (c === G.homeDraft) promoteDraft(c);
 }
 async function runChat(c, text, ctx, imgs, { resumeOf, docs = [], more = 0, model = '', comments = [] } = {}) {
   const cmts = comments.map(({ selector, tag, text: t, section, rect, url, note, crop }) => ({ selector, tag, text: t, section, rect, url, note, crop: !!crop }));
@@ -4739,12 +4778,13 @@ function scheduleForm(e) {
     </div></div>
     <div class="sc-f"><span>Model</span><button type="button" class="st-chip sc-model">${recDot(e.model, 'chat')} ${esc(short(e.model))} <small>${esc(shortPrice(e.model))}</small></button></div>
     <div class="sc-f"><span>Mode</span><div class="mp-sorts sc-mode-pick" role="radiogroup" aria-label="Permission mode">${[['strict', '🔒 Strict'], ['yolo', '⚡ YOLO']].map(([k, l]) => `<button type="button" class="mp-sort ${e.approval === k ? 'on' : ''}" data-mode="${k}" role="radio" aria-checked="${e.approval === k}">${l}</button>`).join('')}</div><small class="sc-dim sc-mode-note">${e.approval === 'yolo' ? 'Nothing waits: the deciders answer the agent\'s questions and approve commands for you.' : 'Approvals and questions wait for you, with a notification.'}</small></div>
+    <div class="sc-f sc-wide"><span>Chrome</span><label class="sq-check"><input type="checkbox" id="scChrome" ${(e.chrome ?? e.tools?.chrome) ? 'checked' : ''}><span>🧩 Let it use my Chrome, signed in as me (Chrome must be open; sending, posting and buying still wait for you)</span></label></div>
     <div class="sc-form-acts"><span class="sc-err" role="alert"></span><button type="button" class="kx-btn sc-cancel">Cancel</button><button type="submit" class="kx-btn primary">${e.id ? 'Save' : 'Create schedule'}</button></div>
   </form>`;
 }
 function wireScheduleForm(body) {
   const e = SCHED.edit, f = $('#scForm', body);
-  const keep = () => { e.name = $('#scName', f).value; e.projectId = $('#scProject', f).value; e.prompt = $('#scPrompt', f).value; };
+  const keep = () => { e.name = $('#scName', f).value; e.projectId = $('#scProject', f).value; e.prompt = $('#scPrompt', f).value; e.chrome = $('#scChrome', f).checked; };
   for (const b of f.querySelectorAll('.sc-kind button')) b.onclick = () => {
     keep();
     const k = b.dataset.kind;
@@ -4771,8 +4811,9 @@ function wireScheduleForm(body) {
     // What a new chat in that project would get: your settings now, with this schedule's mode.
     const c = blankChat(e.projectId);
     c.approval = e.approval;
+    c.tools = { ...c.tools, chrome: !!e.chrome };
     const payload = { name: e.name, projectId: e.projectId, prompt: e.prompt, model: e.model, reasoning: c.agent.setup.reasoning, approval: e.approval, when, tools: c.tools,
-      settings: { ...G.settings, approval: e.approval, tools: chatTools(c), ...qualitySettings(c), chromeAccess: !!c.tools?.chrome } };
+      settings: { ...G.settings, approval: e.approval, tools: chatTools(c), ...qualitySettings(c), chromeAccess: !!e.chrome } };
     const r = await postJ(e.id ? `/api/schedules/${e.id}` : '/api/schedules', payload, e.id ? 'PUT' : 'POST');
     if (!r || r.error) { err.textContent = r?.error ? `${r.error[0].toUpperCase()}${r.error.slice(1)}.` : 'Not saved.'; return; }
     SCHED.edit = null; await loadSchedules(); drawSchedules();
@@ -5157,7 +5198,14 @@ function settingsPanels(S) {
       stCard('Servers and browser', 'Servers are saved in .quorx/launch.json per project; run and stop them from 🖥 in the chat header, and watch them in the terminal.', stRow('Dev server ports', 'Each server gets a free port here unless it has a fixed one.', '<code>5300–5999</code>')
         + stRow('Headless browser', 'Used by the agent to check its own pages.', `<code class="blurable">${esc(G.cfg.browser || 'not found')}</code>`)
         + stRow('Secrets', 'Agent processes run without your API keys, tokens or passwords in their environment, and the file tools cannot read .env or data/keys.json.', '<span class="st-key-source-badge">protected</span>')),
-      stCard('Chrome extension', 'Give a tab of your everyday Chrome to a chat, so the agent can work in it with your own sign-ins (Gmail, GitHub…). It touches only tabs you give; sending, deleting, buying and account changes ask you first.', '<div id="stExt"></div>'),
+      stCard('Chrome extension', 'Give a tab of your everyday Chrome to a chat, so the agent can work in it with your own sign-ins (Gmail, GitHub…). It touches only tabs you give; sending, deleting, buying and account changes ask you first.', '<div id="stExt"></div>'
+        + stRow('Read-only for reading requests', 'When you ask to read, check or summarise, typing into your account outside a search box asks you first. A site your request didn\'t name always asks before it opens in your Chrome.', stSwitch('browseReadOnly', S.browseReadOnly !== false))
+        + stRow('Deciders check typing in your tabs', 'Before the agent types or presses Enter in your own tab, the deciders judge from your request alone (never the page) whether it serves what you asked. Below 35%, the step is refused. One decider call per step.', stSwitch('chromeCheck', S.chromeCheck !== false))
+        + stRow('Network reading in your tabs', 'The agent can list the data requests a page makes and read its JSON or text answers (GET only). Cookies, tokens and passwords are removed, and nothing is ever sent again.', stSwitch('chromeNetwork', S.chromeNetwork !== false))
+        + stRow('Close the agent\'s tabs when it\'s done', 'When a reply ends, the tabs it opened in your Chrome close, so an empty QuorX window means it has finished. Tabs you gave it stay open.', stSwitch('chromeCloseTabs', S.chromeCloseTabs !== false))
+        + stRow('Never open', 'Sites the agent may never open in your Chrome, separated by commas. A site includes its subdomains.', `<input type="text" class="st-input" data-bind="chromeSitesNever" value="${esc(S.chromeSitesNever || '')}" placeholder="mybank.com, mychart.org" spellcheck="false">`)
+        + stRow('Always allowed', 'Sites it may open without asking, even when your request didn\'t name them.', `<input type="text" class="st-input" data-bind="chromeSitesAlways" value="${esc(S.chromeSitesAlways || '')}" placeholder="github.com, news.ycombinator.com" spellcheck="false">`)
+        + stRow('Read-only sites', 'Typing outside a search box always asks you on these, whatever the request says.', `<input type="text" class="st-input" data-bind="chromeSitesRead" value="${esc(S.chromeSitesRead || '')}" placeholder="mail.google.com, linkedin.com" spellcheck="false">`)),
     ]],
     usage: ['Usage & costs', 'What chats and projects cost.', [
       stCard('In chats', '', stRow('Show the cost badge in chat headers', 'The amber cost next to the model; click it for the per-chat usage breakdown (also /usage).', stSwitch('ui.usageBtn', U.usageBtn))),

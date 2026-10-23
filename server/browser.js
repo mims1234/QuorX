@@ -8,7 +8,8 @@ import net from 'node:net';
 import crypto from 'node:crypto';
 import { spawn, execFile } from 'node:child_process';
 import { desktopReady, desktopCall, onTabEvents } from './desktop.js';
-import { extCall, onExtTabEvents } from './extlink.js';
+import { extCall, extCaps, onExtTabEvents } from './extlink.js';
+import { pageOp } from './pageops.js';
 
 const LOCAL = process.env.LOCALAPPDATA || '';
 const CANDIDATES = [
@@ -177,14 +178,58 @@ async function headlessTransport({ own = false } = {}) {
 // Console lines the page didn't cause: Electron's own security warning in desktop-app tabs, missing source maps.
 const CONSOLE_NOISE = /Electron Security Warning|DevTools failed to load source ?map/i;
 
+// A page's data requests (XHR and fetch only), from the DevTools Network events: method, address, status, type and
+// size, never headers or cookies. The desktop app and the extension pass on only these fields too. 200 at most.
+const DATA_REQ = new Set(['XHR', 'Fetch', 'EventSource']);
+export function noteRequest(list, method, p) {
+  if (method === 'Network.requestWillBeSent') {
+    if (!DATA_REQ.has(p.type)) return;
+    list.push({ id: p.requestId, ref: `n${(list.seq = (list.seq || 0) + 1)}`, method: p.request?.method || p.method || 'GET', url: String(p.request?.url || p.url || '').slice(0, 2000), type: p.type, at: Date.now(), status: 0, mime: '', size: 0, done: false, failed: '' });
+    if (list.length > 200) list.splice(0, list.length - 200);
+    return;
+  }
+  const r = list.find((x) => x.id === p.requestId);
+  if (!r) return;
+  if (method === 'Network.responseReceived') { r.status = p.response?.status ?? p.status ?? 0; r.mime = String(p.response?.mimeType || p.mimeType || ''); }
+  else if (method === 'Network.loadingFinished') { r.done = true; r.size = Math.round(p.encodedDataLength || 0); }
+  else if (method === 'Network.loadingFailed') r.failed = String(p.errorText || 'failed');
+}
+/** Only what noteRequest uses, for the desktop app and the extension to pass on (no headers, cookies or bodies). */
+export function slimNetworkEvent(method, p) {
+  if (method === 'Network.requestWillBeSent') return DATA_REQ.has(p.type) ? { requestId: p.requestId, type: p.type, method: p.request?.method, url: String(p.request?.url || '').slice(0, 2000) } : null;
+  if (method === 'Network.responseReceived') return DATA_REQ.has(p.type) ? { requestId: p.requestId, type: p.type, status: p.response?.status, mimeType: p.response?.mimeType } : null;
+  if (method === 'Network.loadingFinished') return { requestId: p.requestId, encodedDataLength: p.encodedDataLength };
+  if (method === 'Network.loadingFailed') return { requestId: p.requestId, errorText: p.errorText };
+  return null;
+}
+
 // A tab of your everyday Chrome that you gave to a chat, through the QuorX extension. Closing only lets go of it.
+// When you let the extension read pages (its popup), reading, screenshots and the agent's mark go through page scripts
+// and Chrome's own capture, so the "started debugging this browser" bar shows only while the agent clicks, types or
+// reads network data. The debugger is attached on the first such command (and the extension lets go after a quiet
+// spell, which this hears as Extension.detached and enables the page again next time).
 async function extTransport(tab) {
   const subs = new Set();
-  const off = onExtTabEvents(tab, (method, params) => { for (const fn of subs) fn(method, params); });
-  const t = await extCall('tab.cdp', { tab, method: 'Runtime.evaluate', params: { expression: 'location.href', returnByValue: true } }, 15000).catch((e) => { off(); throw e; });
+  const lazy = !!extCaps().script;
+  let enabled = null;
+  const off = onExtTabEvents(tab, (method, params) => { if (method === 'Extension.detached') enabled = null; for (const fn of subs) fn(method, params); });
+  const raw = (method, params = {}) => extCall('tab.cdp', { tab, method, params }, method === 'Page.captureScreenshot' ? 20000 : 25000);
+  const where = lazy ? await extCall('tab.where', { tab }, 15000).catch((e) => { off(); throw e; }) : null;
+  const t = lazy ? null : await raw('Runtime.evaluate', { expression: 'location.href', returnByValue: true }).catch((e) => { off(); throw e; });
+  const enable = async () => {
+    await raw('Page.enable'); await raw('Runtime.enable'); await raw('Log.enable');
+    await raw('Network.enable', { maxPostDataSize: 0 }).catch(() => {});
+    await raw('Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => {});
+  };
   return {
-    id: `chrome-${tab}`, chrome: true, url: t?.result?.value || '',
-    send: (method, params = {}) => extCall('tab.cdp', { tab, method, params }, method === 'Page.captureScreenshot' ? 20000 : 25000),
+    id: `chrome-${tab}`, chrome: true, lazy, url: (lazy ? where?.href : t?.result?.value) || '',
+    send: async (method, params = {}) => { if (lazy) { enabled ||= enable().catch((e) => { enabled = null; throw e; }); await enabled; } return raw(method, params); },
+    ...(lazy ? {
+      op: (name, args) => extCall('tab.op', { tab, name, args }, name === 'ready' ? 25000 : 20000),
+      shot: async () => { const r = await extCall('tab.shot', { tab }, 15000); return r?.image || null; },
+      where: () => extCall('tab.where', { tab }, 10000),
+      navigate: (url) => extCall('tab.go', { tab, url }, 20000),
+    } : {}),
     onEvent: (fn) => subs.add(fn),
     close: async () => { off(); },
   };
@@ -259,15 +304,17 @@ export async function openTab({ chatId, cdpPort, own = false, attachTab, extTab 
   else if (cdpPort) tr = await cdpTransport(cdpPort);
   else if (chatId && desktopReady()) tr = await desktopTransport(chatId).catch(() => null);
   // A desktop tab that doesn't answer quickly is dropped for a headless one, so the agent never hangs on it.
-  if (tr) {
+  if (tr && !tr.lazy) {
     const ok = await Promise.race([tr.send('Page.enable').then(() => true, () => false), new Promise((r) => setTimeout(() => r(false), 8000))]);
     if (!ok) { await tr.close(); tr = null; }
   }
   if (!tr && (attachTab || extTab != null)) throw new Error('that tab is gone');
   tr ||= await headlessTransport({ own });
   const listeners = [];
-  const tab = { id: tr.id, desktop: tr.desktop, app: !!tr.app, given: !!attachTab || extTab != null, console: [], url: tr.url || 'about:blank' };
+  const tab = { id: tr.id, desktop: tr.desktop, app: !!tr.app, given: !!attachTab || extTab != null, lazy: !!tr.lazy, console: [], url: tr.url || 'about:blank', net: [] };
   tr.onEvent((method, params) => {
+    if (method.startsWith('Network.')) noteRequest(tab.net, method, params);
+    else if (method === 'Page.frameNavigated' && !params.frame?.parentId) tab.net.length = 0; // a new page: its own requests only
     if (method === 'Runtime.consoleAPICalled' && ['error', 'warning'].includes(params.type) && !CONSOLE_NOISE.test(params.args.map((a) => a.value ?? a.description ?? '').join(' '))) tab.console.push(`${params.type}: ${params.args.map((a) => a.value ?? a.description ?? '').join(' ')}`.slice(0, 300));
     if (method === 'Runtime.exceptionThrown') tab.console.push(`exception: ${(params.exceptionDetails.exception?.description || params.exceptionDetails.text || '').split('\n')[0]}`.slice(0, 300));
     if (method === 'Log.entryAdded' && params.entry.level === 'error' && !CONSOLE_NOISE.test(params.entry.text || '')) tab.console.push(`error: ${params.entry.text} ${params.entry.url || ''}`.slice(0, 300));
@@ -278,12 +325,21 @@ export async function openTab({ chatId, cdpPort, own = false, attachTab, extTab 
   const js = async (expr) => { const r = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true }); if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description?.split('\n')[0] || 'script error'); return r.result.value; };
   // The page has stopped scrolling when its scroll position reads the same twice in a row (checked every 120 ms).
   const settle = async (ms = 2000) => { const end = Date.now() + ms; let last = null; while (Date.now() < end) { const pos = await js('Math.round(scrollX) + "," + Math.round(scrollY)').catch(() => null); if (pos !== null && pos === last) return; last = pos; await sleep(120); } };
-  await send('Page.enable'); await send('Runtime.enable'); await send('Log.enable');
+  // A Chrome tab read through page scripts (tr.lazy) enables the page only when the debugger is first needed.
+  if (!tr.lazy) {
+    await send('Page.enable'); await send('Runtime.enable'); await send('Log.enable');
+    // The page's own data requests (XHR and fetch), for network list/read and for waiting on one. Bodies stay in the
+    // browser until asked for; headers are never kept.
+    await send('Network.enable', { maxPostDataSize: 0 }).catch(() => {});
+  }
+  const cdpOp = async (name, args) => { try { return await js(pageOp(name, args)); } catch (e) { if (!/context|navigat|destroyed|not found/i.test(e.message)) throw e; await sleep(300); return js(pageOp(name, args)); } };
+  const op = tr.op ? async (name, args) => { try { return await tr.op(name, args); } catch (e) { if (!/navigat|closed|frame|context|cannot access|no tab/i.test(e.message)) throw e; await sleep(300); return tr.op(name, args); } } : cdpOp;
+  const ready = (o = {}) => op('ready', o).catch(() => null);
   // Headless tabs in the background never get focus, so clicks wouldn't focus inputs and typing went nowhere.
-  await send('Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => {});
+  if (!tr.lazy) await send('Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => {});
   // Sound can't be heard here, so every page counts what it starts: Web Audio contexts and sources, and <audio>/<video>
   // playing. summary() reports it, so the agent knows whether a game or a player made any sound at all.
-  await send('Page.addScriptToEvaluateOnNewDocument', { source: SOUND_PROBE }).catch(() => {});
+  if (!tr.lazy) await send('Page.addScriptToEvaluateOnNewDocument', { source: SOUND_PROBE }).catch(() => {});
 
   Object.assign(tab, {
     // A raw DevTools call (tests stand a headless tab in for a Chrome tab behind the extension).
@@ -292,26 +348,52 @@ export async function openTab({ chatId, cdpPort, own = false, attachTab, extTab 
       // A tab the user lent keeps the size the user sees it at.
       if (!tab.given) { await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile }); tab.size = { width, height }; }
       tab.console = [];
-      const loaded = once('Page.loadEventFired', 15000);
-      await send('Page.navigate', { url });
-      await loaded; await sleep(700);
+      if (tr.navigate) await tr.navigate(url); // the user's Chrome, read through page scripts: no debugger to navigate
+      else { const loaded = once('Page.loadEventFired', 15000); await send('Page.navigate', { url }); await loaded; }
+      // Loaded is not ready: single-page apps draw their content after it. Wait until the page is quiet (10 s at most).
+      // A page from this computer (the agent's own work) is not kept waiting for a "Loading…" shell to fill in.
+      tab.readyInfo = await ready({ quiet: 500, cap: 10000, thinMs: /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//i.test(url) ? 500 : 2000 });
       tab.url = url;
       return tab.summary();
     },
     // Waits until the page stops scrolling (smooth scrolls, anchor links), at most `ms`.
     async settle(ms = 2000) { return settle(ms); },
-    async summary() {
-      return js(`(() => {
-        const vis = (e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
-        const label = (e) => (e.innerText || e.value || e.placeholder || e.getAttribute('aria-label') || e.title || e.name || '').trim().replace(/\\s+/g, ' ').slice(0, 60);
-        const controls = [...document.querySelectorAll('button, a[href], input, textarea, select, [role=button], canvas')].filter(vis).slice(0, 40)
-          .map((e) => e.tagName.toLowerCase() + (e.id ? '#' + e.id : '') + (e.type && e.tagName === 'INPUT' ? '[' + e.type + ']' : '') + (label(e) ? ' "' + label(e) + '"' : ''));
-        const q = window.__qxSound, ctxs = q ? q.ctxs : [];
-        const sound = q ? { contexts: ctxs.length, running: ctxs.filter((c) => c.state === 'running').length, sources: q.sources, media: q.media + [...document.querySelectorAll('audio, video')].filter((m) => !m.paused && !m.muted && m.volume > 0).length } : null;
-        return { sound, title: document.title, url: location.href, text: (document.body?.innerText || '').replace(/\\n{3,}/g, '\\n\\n').slice(0, 2500), controls,
-          size: [document.documentElement.scrollWidth, document.documentElement.scrollHeight], scroll: [Math.round(scrollX), Math.round(scrollY)], view: [innerWidth, innerHeight] };
-      })()`);
+    // Loaded and quiet for `quiet` ms (no added or removed content, no new downloads), at most `cap` ms.
+    ready,
+    // The page operations in pageops.js: what is on screen, the snapshot with refs, find, the whole text, feeds.
+    // Snapshot numbers carry on from page to page in this tab (see seed in pageops.js).
+    snapshot: async (o = {}) => { const r = await op('snapshot', { ...o, seed: tab.snapN || 0 }); if (r?.n) tab.snapN = Math.max(tab.snapN || 0, r.n); return r; },
+    find: async (query, limit = 15) => { const r = await op('find', { query, limit, seed: tab.snapN || 0 }); if (r?.n) tab.snapN = Math.max(tab.snapN || 0, r.n); return r; },
+    pageText: (o = {}) => op('pageText', o),
+    pageState: () => op('state', {}).catch(() => null),
+    collectStep: (o = {}) => op('collect', o),
+    scrollItems: (o = {}) => op('scrollItems', o),
+    // The data requests since this page opened, newest last: { id, method, url, type, status, mime, size, done, failed }.
+    netList: () => tab.net.slice(-100),
+    async netRead(id) {
+      const r = tab.net.find((x) => x.id === id || x.ref === id);
+      if (!r) throw new Error(`no request ${id} on this page (network list shows the ids)`);
+      if (!r.done) throw new Error(`request ${r.ref} has not finished loading yet${r.failed ? ` (it failed: ${r.failed})` : ''}`);
+      const b = await send('Network.getResponseBody', { requestId: r.id });
+      return { ...r, body: b.base64Encoded ? Buffer.from(b.body, 'base64').toString('utf8') : b.body };
     },
+    // Until a data request whose address contains `part` has finished (one that started after `since`), at most `ms`.
+    async waitRequest(part, ms = 10000, since = 0) {
+      const end = Date.now() + ms;
+      while (Date.now() < end) { const r = tab.net.find((x) => x.at >= since && x.url.includes(part) && (x.done || x.failed)); if (r) return r; await sleep(150); }
+      return null;
+    },
+    // Built-in tabs only (the agent's own and test pages): requests to these address patterns are refused.
+    block: (urls) => send('Network.setBlockedURLs', { urls }),
+    // Title, address, size, controls, sound and the text on screen (not the first 2,500 characters of the page: on a
+    // chat app those were the server and channel lists, before any message). One page operation, any transport.
+    summary: () => op('summary', {}),
+    // Where the page is: { href, readyState, title }.
+    where: () => (tr.where ? tr.where() : op('where', {})),
+    // Any page operation from pageops.js, by name.
+    op,
+    // The thin border on the user's tab while the agent works in it.
+    mark: (on = true) => op('mark', { on }).catch(() => null),
     // 💬 Comment: the element under a point of the view: a selector that finds it again (id, data-qx-id, or a short
     // path), its tag, text, section and box. Prefers the meaningful element (a button, a heading) over a span inside it.
     async inspect(x, y) {
@@ -356,30 +438,27 @@ export async function openTab({ chatId, cdpPort, own = false, attachTab, extTab 
       return Buffer.from(r.data, 'base64');
     },
     async screenshot() {
+      if (tr.shot) { const img = await tr.shot(); if (img) return img; }
       const r = await send('Page.captureScreenshot', { format: 'jpeg', quality: 72 });
       return `data:image/jpeg;base64,${r.data}`;
     },
-    // Click by CSS selector, by visible text, or at x,y. Uses real mouse events at the element's centre.
-    async click({ selector, text, x, y }) {
-      // A selector or text wins over x/y: models often fill every field, sending x: 0, y: 0 next to the text they mean.
-      let pt = !selector && !text && x != null && y != null ? { x, y, what: `point ${x},${y}` } : await js(`(() => {
-        const sel = ${JSON.stringify(selector || '')}, txt = ${JSON.stringify(String(text || '').toLowerCase())};
-        let el = sel ? document.querySelector(sel) : null;
-        if (!el && txt) el = [...document.querySelectorAll('button, a, [role=button], input[type=submit], input[type=button], label, li, div, span')]
-          .filter((e) => (e.innerText || e.value || '').trim().toLowerCase().includes(txt)).sort((a, b) => (a.innerText || '').length - (b.innerText || '').length)[0];
-        if (!el) return null;
-        el.scrollIntoView({ block: 'center', behavior: 'instant' }); // instant: on smooth-scrolling pages the position would still be moving
-        const r = el.getBoundingClientRect();
-        return { x: r.left + r.width / 2, y: r.top + r.height / 2, what: el.tagName.toLowerCase() + ' "' + (el.innerText || el.value || '').trim().slice(0, 40) + '"' };
-      })()`);
-      if (!pt) throw new Error(`nothing matches ${selector ? `selector ${selector}` : `text "${text}"`}`);
+    // A screenshot that gives up after `ms` (null): a window Chrome isn't drawing (behind others, minimised) can make
+    // the capture wait until the transport's own timeout.
+    shotWithin: (ms = 8000) => Promise.race([tab.screenshot(), sleep(ms).then(() => null)]).catch(() => null),
+    // Click a ref from the snapshot, a CSS selector, visible text, or x,y. Before a click by ref, selector or text the
+    // element must be visible, still, enabled and the thing under the point (Playwright's checks, retried for up to
+    // 3 s); otherwise the error says which check failed. Then real mouse events at its centre.
+    async click({ ref, selector, text, x, y }) {
+      // A ref, selector or text wins over x/y: models often fill every field, sending x: 0, y: 0 next to the text they mean.
+      const pt = !ref && !selector && !text && x != null && y != null ? { x, y, what: `point ${x},${y}` } : await op('point', { ref, selector, text });
+      if (pt.err) throw new Error(pt.err);
       for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x: pt.x, y: pt.y, button: 'left', clickCount: 1 });
       await sleep(400);
       await settle(); // an anchor link may scroll smoothly; the next screenshot should show where it lands
-      return `clicked ${pt.what}`;
+      return `clicked ${pt.what}${pt.others ? ` (${pt.others} other element${pt.others > 1 ? 's' : ''} also match; use a ref to be exact)` : ''}`;
     },
-    async type({ selector, text }) {
-      if (selector) { const ok = await js(`(() => { const e = document.querySelector(${JSON.stringify(selector)}); if (!e) return false; e.focus(); return true; })()`); if (!ok) throw new Error(`no element ${selector}`); }
+    async type({ ref, selector, text }) {
+      if (ref || selector) { const f = await op('focus', { ref, selector }); if (f.err) throw new Error(f.err); }
       await send('Input.insertText', { text: String(text ?? '') });
       await sleep(200);
       return `typed ${String(text).length} characters`;
@@ -406,7 +485,16 @@ export async function openTab({ chatId, cdpPort, own = false, attachTab, extTab 
       await settle();
       return `pressed ${combo}`;
     },
-    async scroll(dy = 600) { await js(`window.scrollBy({ top: ${Number(dy) || 600}, left: 0, behavior: 'instant' })`); await settle(); return `scrolled ${dy}px`; },
+    // Scrolls the page, or when the page can't move that way the area under the middle of the screen (a chat list, a
+    // feed column), or the one holding a ref. screens: how many screens (0.85 of the area's height each).
+    async scroll(dy = 600, { screens, ref } = {}) {
+      const r = await op('scroll', { dy: screens == null ? Number(dy) || 600 : undefined, screens, ref }).catch(async () => { await js(`window.scrollBy({ top: ${Number(dy) || 600}, left: 0, behavior: 'instant' })`); return null; });
+      await settle();
+      if (!r) return `scrolled ${dy}px`;
+      if (r.err) throw new Error(r.err);
+      if (!r.moved) return `nothing scrolled: ${r.what === 'nothing' ? 'neither the page nor any area under the middle of the screen can move that way' : `${r.what} is already at its end`}`;
+      return r.what === 'page' ? `scrolled ${r.moved}px` : `scrolled ${r.what} by ${r.moved}px (the page itself doesn't scroll here) · now at ${r.pos[0]} of ${r.pos[1]} px`;
+    },
     // Typing like a keyboard, one key event per character (some pages ignore inserted text).
     async keys(text) {
       for (const ch of String(text ?? '')) {
@@ -423,41 +511,8 @@ export async function openTab({ chatId, cdpPort, own = false, attachTab, extTab 
     // Back to the page's own size (the desktop app's pane decides it once the agent is done).
     // 🤖 A lent tab: what a click, Enter or typing would act on, when it sends, deletes, buys, posts, signs out or
     // changes the account (null when it doesn't look like any of that). Reads only.
-    async riskOf(a) {
-      return js(`((a) => {
-        const RISK = /\\b(send|delete|remove|trash|discard|erase|buy|purchase|pay|payment|order|checkout|check out|subscribe|unsubscribe|transfer|withdraw|donate|post|publish|tweet|reply|forward|share|submit|confirm|sign out|log ?out|deactivate|close account|change password|update password|save changes|settings)\\b/i;
-        // Every name a control has: icon buttons (Send ➤, a bin for Delete) carry theirs in aria-label or a tooltip.
-        const label = (e) => (e ? [...new Set([e.innerText, e.value, e.getAttribute('aria-label'), e.title, e.getAttribute('data-tooltip')].map((x) => String(x || '').trim().replace(/\\s+/g, ' ')).filter(Boolean))].join(' · ').slice(0, 80) : '');
-        if (a.action === 'click') {
-          let el = a.selector ? document.querySelector(a.selector) : null;
-          const txt = String(a.text || '').toLowerCase();
-          if (!el && txt) el = [...document.querySelectorAll('button, a, [role=button], input[type=submit], input[type=button], label, li, div, span')]
-            .filter((e) => (e.innerText || e.value || '').trim().toLowerCase().includes(txt)).sort((x, y) => (x.innerText || '').length - (y.innerText || '').length)[0];
-          if (!el && !a.selector && !txt && a.x != null) el = document.elementFromPoint(a.x, a.y);
-          if (!el) return null;
-          el = el.closest('button, a, [role=button], [role=menuitem], input[type=submit], input[type=button]') || el;
-          const l = label(el);
-          if (RISK.test(l)) return 'click "' + l + '"';
-          if (el.matches('input[type=submit], button[type=submit], form button:not([type])')) return 'submit a form ("' + (l || 'submit') + '")';
-          return null;
-        }
-        if (a.action === 'press') {
-          const key = String(a.key || 'Enter');
-          if (!/enter/i.test(key)) return null;
-          if (/ctrl|control|meta|cmd/i.test(key)) return 'press ' + key + ' (it often sends)';
-          const f = document.activeElement, form = f && f.closest ? f.closest('form') : null;
-          if (!form || f.type === 'search' || form.getAttribute('role') === 'search' || f.tagName === 'TEXTAREA') return null;
-          const b = form.querySelector('[type=submit], button:not([type])');
-          return 'submit a form' + (b && label(b) ? ' ("' + label(b) + '")' : '') + ' with Enter';
-        }
-        if (a.action === 'type') {
-          const e = a.selector ? document.querySelector(a.selector) : document.activeElement;
-          if (e && e.type === 'password') return 'type into a password field';
-          if (e && /one-time-code|cc-number|cc-csc|cc-exp/.test(e.autocomplete || '')) return 'type into a payment or sign-in code field';
-        }
-        return null;
-      })(${JSON.stringify({ action: a.action, selector: a.selector, text: a.text, x: a.x, y: a.y, key: a.key })})`);
-    },
+    riskOf: (a) => op('risk', { action: a.action, ref: a.ref, selector: a.selector, text: a.text, x: a.x, y: a.y, key: a.key }),
+
     async clearViewport() { await send('Emulation.clearDeviceMetricsOverride').catch(() => {}); tab.size = null; },
     close: () => tr.close(),
   });
