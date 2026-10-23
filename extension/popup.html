@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <title>QuorX</title>
 <style>
-  :root { color-scheme: dark; --bg: #0b0f0d; --panel: #121815; --line: #26302b; --text: #d9e4df; --muted: #8a9a92; --accent: #1fc8db; --ok: #3ddc84; --bad: #ef4444; --violet: #a78bfa; }
-  body { margin: 0; width: 320px; background: var(--bg); color: var(--text); font: 13px/1.45 system-ui, sans-serif; }
+  :root { color-scheme: dark; --bg: #0b0f0d; --panel: #121815; --line: #26302b; --text: #d9e4df; --muted: #8a9a92; --accent: #1fc8db; --ok: #3ddc84; --bad: #ef4444; --violet: #a78bfa; --amber: #e9b23b; }
+  body { margin: 0; width: 330px; background: var(--bg); color: var(--text); font: 13px/1.45 system-ui, sans-serif; }
   header { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
   header img { width: 18px; height: 18px; }
   header b { font-size: 14px; }
@@ -14,18 +14,30 @@
   .dot.on i { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
   .dot.bad i { background: var(--bad); }
   main { padding: 12px; display: grid; gap: 10px; }
+  section { display: grid; gap: 10px; }
   label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
   input, select { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 7px; padding: 7px 8px; font: inherit; }
   button { height: 32px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text); font: 600 12.5px system-ui, sans-serif; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
   button.main { border-color: color-mix(in srgb, var(--violet) 60%, transparent); background: color-mix(in srgb, var(--violet) 18%, transparent); color: var(--violet); }
+  button.stop { border-color: color-mix(in srgb, var(--bad) 60%, transparent); background: color-mix(in srgb, var(--bad) 16%, transparent); color: var(--bad); }
   button.back:hover { border-color: var(--bad); color: var(--bad); }
+  .row { display: flex; gap: 8px; } .row > * { flex: 1; }
   .tab { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
   .tab small { display: block; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .note { font-size: 11.5px; color: var(--muted); }
+  .note { font-size: 11.5px; color: var(--muted); margin: 0; }
   .err { font-size: 12px; color: var(--bad); }
   .lent { border-color: color-mix(in srgb, var(--violet) 60%, transparent); }
   .check { display: flex; align-items: flex-start; gap: 8px; color: var(--text); font-size: 12px; }
   .check input { margin-top: 2px; accent-color: var(--violet); }
+  .state { display: inline-flex; align-items: center; gap: 6px; font: 600 11.5px system-ui, sans-serif; padding: 3px 8px; border-radius: 6px; background: var(--panel); border: 1px solid var(--line); }
+  .state.working { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
+  .state.needs { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 50%, transparent); }
+  .state.done { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 50%, transparent); }
+  .box { border: 1px solid var(--line); border-radius: 9px; padding: 10px; display: grid; gap: 8px; }
+  .box h2 { margin: 0; font-size: 12.5px; }
+  .rec { border-color: color-mix(in srgb, var(--amber) 60%, transparent); }
+  .rec b { color: var(--amber); }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -46,15 +58,33 @@
     <div class="tab" id="thisTab"><b id="tabTitle"></b><small id="tabUrl"></small></div>
     <div id="giveForm">
       <label>Give this tab to the chat<select id="chat"></select></label>
-      <p class="note">The agent in that chat can then work in this tab, signed in as you. Sending, deleting, buying and account changes ask you first in QuorX. Nothing else in your Chrome is touched.</p>
+      <p class="note">The agent in that chat can then work in this tab, signed in as you. Sending, deleting, buying and account changes ask you first in QuorX. Nothing else in your Chrome is touched. You can also right-click a page, or drag a tab into a chat's QuorX tab group.</p>
       <button class="main" id="giveBtn">🤖 Give this tab</button>
     </div>
-    <div id="lentNote" hidden>
-      <p class="note">Given to <b id="lentChat"></b>. While the agent works in it, Chrome shows “QuorX started debugging this browser”; Cancel there also takes it back.</p>
-      <button class="back" id="backBtn">Take back</button>
+    <div id="lentNote" hidden class="box">
+      <div><span class="note">Given to </span><b id="lentChat"></b></div>
+      <div><span class="state" id="agentState">idle</span> <span class="note" id="agentWhat"></span></div>
+      <div class="row"><button class="stop" id="stopBtn">■ Stop the agent</button><button id="openBtn">Open in QuorX</button></div>
+      <p class="note">Shortcut: Alt+Shift+Q stops it from any tab (change it in chrome://extensions/shortcuts).</p>
+      <button class="back" id="backBtn">Take back this tab</button>
     </div>
-    <p class="note">Tip: give the tab its own window, so you can watch it and the agent can see it.</p>
-    <label class="check"><input type="checkbox" id="allowOpen"> Chats with 🧩 Chrome on may open their own tabs here (in a QuorX window)</label>
+    <div class="box" id="scriptBox" hidden>
+      <h2>Read pages without the debugging bar</h2>
+      <p class="note">Let QuorX read the pages it works on with page scripts. Chrome's “started debugging this browser” bar then shows only while the agent clicks, types or reads network data. Chrome asks you to allow reading on all sites; the agent still only touches tabs you give.</p>
+      <button class="main" id="scriptBtn">Allow reading pages</button>
+    </div>
+    <div class="box" id="recBox">
+      <h2>Teach QuorX a routine</h2>
+      <div id="recIdle"><p class="note">Do a task once in this tab while QuorX records the steps. It is saved as a skill in a chat's project, and the agent follows it next time. Typing is kept only in search boxes; passwords are never read.</p>
+        <button id="recBtn">● Record in this tab</button></div>
+      <div id="recOn" hidden class="box rec">
+        <div><b>● Recording</b> <span class="note" id="recCount"></span></div>
+        <label>Name<input id="recName" placeholder="e.g. Open Meow bat-cave"></label>
+        <label>Save in the project of<select id="recChat"></select></label>
+        <div class="row"><button class="main" id="recSave">Stop and save</button><button id="recDrop">Discard</button></div>
+      </div>
+    </div>
+    <label class="check"><input type="checkbox" id="allowOpen"> Chats with 🧩 Chrome on may open their own tabs here (in a QuorX window, grouped by chat)</label>
     <button id="repair">Change QuorX address or key</button>
   </section>
   <p class="err" id="err" hidden></p>

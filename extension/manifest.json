@@ -1,12 +1,14 @@
 {
   "manifest_version": 3,
   "name": "QuorX",
-  "version": "0.2.14",
+  "version": "0.3.0",
   "description": "Give a tab of your everyday Chrome to a QuorX chat, so its agent can work in it with your sign-ins. It touches only tabs you give.",
   "minimum_chrome_version": "116",
-  "permissions": ["debugger", "tabs", "storage", "alarms"],
+  "permissions": ["debugger", "tabs", "storage", "alarms", "scripting", "tabGroups", "contextMenus"],
   "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
+  "optional_host_permissions": ["<all_urls>"],
   "background": { "service_worker": "background.js", "type": "module" },
   "action": { "default_title": "QuorX: give this tab to a chat", "default_popup": "popup.html", "default_icon": { "16": "icons/quorx-16.png", "32": "icons/quorx-32.png" } },
+  "commands": { "stop-agent": { "suggested_key": { "default": "Alt+Shift+Q" }, "description": "Stop the QuorX agent working in your Chrome" } },
   "icons": { "16": "icons/quorx-16.png", "32": "icons/quorx-32.png", "48": "icons/quorx-48.png", "128": "icons/quorx-128.png" }
 }

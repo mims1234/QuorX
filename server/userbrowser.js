@@ -87,7 +87,9 @@ export function giveTab(chatId, sid, info = {}) {
   for (const [c, g] of given) if (g.sid === sid && c !== chatId) takeBackTab(c);
   if (given.get(chatId)?.sid !== sid) takeBackTab(chatId);
   const ext = info.ext != null ? Number(info.ext) : null; // a tab of your everyday Chrome (the QuorX extension)
-  const g = { sid, url: String(info.url || '').slice(0, 2000), title: String(info.title || '').slice(0, 200), at: Date.now(), ext, own: !!info.own, desktop: ext == null && (info.desktop != null ? !!info.desktop : !sessions.has(sid)) };
+  const g = { sid, url: String(info.url || '').slice(0, 2000), title: String(info.title || '').slice(0, 200), at: Date.now(), ext, own: !!info.own, desktop: ext == null && (info.desktop != null ? !!info.desktop : !sessions.has(sid)),
+    // Right-click in Chrome: what you had selected, or the link or picture you right-clicked.
+    selection: String(info.selection || '').slice(0, 4000), link: String(info.link || '').slice(0, 2000), image: String(info.image || '').slice(0, 2000) };
   given.set(chatId, g);
   return g;
 }
@@ -127,8 +129,15 @@ export function takeBackSid(sid) { for (const [c, g] of given) if (g.sid === sid
 /** Every Chrome tab (QuorX extension) lent right now, for the extension's popup. */
 export const lentChromeTabs = () => [...given].filter(([, g]) => g.ext != null).map(([chatId, g]) => ({ chatId, tab: g.ext, title: g.title }));
 /** 🧩 Chrome on in a chat: a new tab in the user's Chrome (the QuorX window), lent to that chat as the agent's own. */
-export async function openChromeTab(chatId, url) {
+export async function openChromeTab(chatId, url, chatTitle = '') {
   if (extOutdated()) throw new Error('the QuorX extension in Chrome is an older version: the user needs to reload it once (chrome://extensions → ↻ on the QuorX card)');
-  const t = await extCall('tab.open', { url, chatId }, 20000);
+  const t = await extCall('tab.open', { url, chatId, chatTitle }, 20000);
   return giveTab(chatId, `chrome-${t.id}`, { url, title: t.title || url, ext: t.id, own: true });
+}
+/** The tabs in a chat's QuorX tab group in Chrome: { id, title, url, active, lent }. */
+export const chatChromeTabs = (chatId) => extCall('tab.list', { chatId }, 10000);
+/** One of the chat's own Chrome tabs, made the one the agent uses (it becomes the active tab in its window). */
+export async function adoptChromeTab(chatId, tab) {
+  const t = await extCall('tab.adopt', { tab, chatId }, 10000);
+  return giveTab(chatId, `chrome-${t.id}`, { url: t.url, title: t.title, ext: t.id, own: true });
 }

@@ -6,7 +6,7 @@
 
 /* eslint-disable no-restricted-globals */
 export function qxPage() {
-  const KEY = Symbol.for('quorx.ops'), VERSION = 4;
+  const KEY = Symbol.for('quorx.ops'), VERSION = 5;
   if (window[KEY] && window[KEY].v === VERSION) return;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const clean = (s, n) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim().slice(0, n);
@@ -382,7 +382,72 @@ export function qxPage() {
     const b = scrollY; window.scrollBy({ top: (up ? -1 : 1) * innerHeight * 0.85, behavior: 'instant' }); return { moved: Math.round(scrollY - b) };
   }
 
-  Object.defineProperty(window, KEY, { value: { v: VERSION, ready, screenText, pageText, snapshot, find, point, focus, field, scroll, state, collect, scrollItems }, configurable: true });
+  // ---------- the page report's header: title, address, controls, size, sound ----------
+  function summary() {
+    const controls = [...document.querySelectorAll('button, a[href], input, textarea, select, [role=button], canvas')].filter((e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; }).slice(0, 40)
+      .map((e) => e.tagName.toLowerCase() + (e.id ? '#' + e.id : '') + (e.type && e.tagName === 'INPUT' ? '[' + e.type + ']' : '') + (nameOf(e, 60) ? ' "' + nameOf(e, 60) + '"' : ''));
+    // The sound probe lives in the page's own world; read through the extension (a separate world) it isn't there.
+    const q = window.__qxSound, ctxs = q ? q.ctxs : [];
+    const sound = q ? { contexts: ctxs.length, running: ctxs.filter((c) => c.state === 'running').length, sources: q.sources, media: q.media + [...document.querySelectorAll('audio, video')].filter((m) => !m.paused && !m.muted && m.volume > 0).length } : null;
+    const st = screenText({ max: 2500 });
+    return { sound, title: document.title, url: location.href, text: st.text, screen: true, more: st.more, controls,
+      size: [document.documentElement.scrollWidth, document.documentElement.scrollHeight], scroll: [Math.round(scrollX), Math.round(scrollY)], view: [innerWidth, innerHeight] };
+  }
+  const where = () => ({ href: location.href, readyState: document.readyState, title: document.title });
+
+  // ---------- what a step in the user's own tab would do to their account ----------
+  // A click, Enter or typing that sends, deletes, buys, posts, signs out or changes the account (null otherwise).
+  // Reads only. Refs count too: a click by ref is checked like a click by text.
+  const RISK = /\b(send|delete|remove|trash|discard|erase|buy|purchase|pay|payment|order|checkout|check out|subscribe|unsubscribe|transfer|withdraw|donate|post|publish|tweet|reply|forward|share|submit|confirm|sign out|log ?out|deactivate|close account|change password|update password|save changes|settings)\b/i;
+  const labels = (e) => (e ? [...new Set([e.innerText, e.value, e.getAttribute('aria-label'), e.title, e.getAttribute('data-tooltip')].map((x) => clean(x, 200)).filter(Boolean))].join(' · ').slice(0, 80) : '');
+  function risk(a = {}) {
+    if (a.action === 'click') {
+      let el = null;
+      if (a.ref) { const g = resolve(a.ref); el = g.el || null; }
+      else if (a.selector) { try { el = document.querySelector(a.selector); } catch (e) { el = null; } }
+      if (!el && a.text) { const g = locate({ text: a.text }); el = g.el || null; }
+      if (!el && !a.ref && !a.selector && !a.text && a.x != null) el = topHit(a.x, a.y);
+      if (!el) return null;
+      el = el.closest('button, a, [role=button], [role=menuitem], input[type=submit], input[type=button]') || el;
+      const l = labels(el);
+      if (RISK.test(l)) return `click "${l}"`;
+      if (el.matches('input[type=submit], button[type=submit], form button:not([type])')) return `submit a form ("${l || 'submit'}")`;
+      return null;
+    }
+    if (a.action === 'press') {
+      const key = String(a.key || 'Enter');
+      if (!/enter/i.test(key)) return null;
+      if (/ctrl|control|meta|cmd/i.test(key)) return `press ${key} (it often sends)`;
+      const f = document.activeElement, form = f && f.closest ? f.closest('form') : null;
+      if (!form || f.type === 'search' || form.getAttribute('role') === 'search' || f.tagName === 'TEXTAREA') return null;
+      const b = form.querySelector('[type=submit], button:not([type])');
+      return `submit a form${b && labels(b) ? ` ("${labels(b)}")` : ''} with Enter`;
+    }
+    if (a.action === 'type') {
+      let e = document.activeElement;
+      if (a.ref) { const g = resolve(a.ref); e = g.el || e; } else if (a.selector) { try { e = document.querySelector(a.selector) || e; } catch (x) { /* bad selector */ } }
+      if (e && e.type === 'password') return 'type into a password field';
+      if (e && /one-time-code|cc-number|cc-csc|cc-exp/.test(e.autocomplete || '')) return 'type into a payment or sign-in code field';
+    }
+    return null;
+  }
+
+  // ---------- the mark on the agent's tab: a thin border while it works there ----------
+  function mark({ on = true } = {}) {
+    const id = 'quorx-agent-mark';
+    let el = document.getElementById(id);
+    if (!on) { if (el) el.remove(); return { on: false }; }
+    if (!el) {
+      el = document.createElement('div');
+      el.id = id;
+      el.setAttribute('aria-hidden', 'true');
+      el.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2147483647;box-shadow:inset 0 0 0 3px rgba(60,194,201,.9),inset 0 0 18px rgba(60,194,201,.35);border-radius:2px;';
+      (document.body || document.documentElement).appendChild(el);
+    }
+    return { on: true };
+  }
+
+  Object.defineProperty(window, KEY, { value: { v: VERSION, ready, screenText, pageText, snapshot, find, point, focus, field, scroll, state, collect, scrollItems, summary, where, risk, mark }, configurable: true });
 }
 
 /** A DevTools expression that runs one of the page operations above with these arguments. */

@@ -29,7 +29,7 @@ export function startScheduledChat(s, { missed = false, due = null } = {}, deps)
   const bot = { role: 'assistant', content: '', at, trace: [], approvals: {}, questions: {}, arts: [], runId, runActive: true };
   deps.saveChat(chatId, { id: chatId, title, projectId: s.projectId, created: at, approval, tools: s.tools || {}, scheduled: { id: s.id, name: s.name },
     agent: { setup, messages: [user, bot], artifacts: {}, allowed: [], cmdRules: [] } });
-  const body = { runId, chatId, projectId: s.projectId, chatTitle: title, setup, settings: { ...(s.settings || {}), approval }, allowed: [], cmdRules: [],
+  const body = { runId, chatId, projectId: s.projectId, chatTitle: title, setup, settings: { ...(s.settings || {}), approval, chromeAccess: s.settings?.chromeAccess ?? !!s.tools?.chrome }, allowed: [], cmdRules: [],
     history: [], summary: '', reading: '', text: s.prompt, artifacts: {}, context: '', images: [], docs: [] };
   deps.startRun({ runId, chatId }, (emit, signal) => deps.runAgent(body, emit, signal));
   const told = new Set();

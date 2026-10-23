@@ -562,6 +562,8 @@ const COMMANDS = {
   async 'app.notify'(n) { return showNote(n); },
   // Sign-in with OpenRouter finished in the user's browser: back to QuorX.
   async 'app.focus'() { showWindow(); return true; },
+  // The Chrome extension's "Open in QuorX": the window comes forward on that chat.
+  async 'app.openChat'({ chatId }) { showWindow(); if (chatId) send({ type: 'notify-click', chatId }); return true; },
   async 'tab.create'({ chatId }) {
     const sid = `agent-${String(chatId).replace(/[^\w-]/g, '').slice(0, 40)}`;
     if (tabs.has(sid)) closeTab(sid);

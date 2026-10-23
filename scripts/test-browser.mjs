@@ -18,7 +18,7 @@ const PAGES = {
     const draw = () => { const first = Math.max(0, Math.floor(scrollY / H) - 2), last = Math.min(total, first + 10); m.style.top = (first * H) + 'px'; m.innerHTML = ''; for (let i = first; i < last; i++) { const a = document.createElement('article'); a.innerHTML = '<a href="/status/' + i + '"><time>' + i + 'm</time></a> Feed post ' + i + ' says something worth reading'; m.append(a); } };
     addEventListener('scroll', draw); draw();</script>`,
   '/form': `<!doctype html><meta charset="utf-8"><title>Form</title><form role="search"><input id="q" placeholder="Search people"></form><label>Note <input id="note"></label>
-    <button id="go" disabled>Go</button><button id="b">Toggle</button><ul>${Array.from({ length: 30 }, (_, i) => `<li role="listitem">Row ${i} with some text in it</li>`).join('')}</ul>
+    <button id="go" disabled>Go</button><button id="b">Toggle</button><button aria-label="Delete">🗑</button><ul>${Array.from({ length: 30 }, (_, i) => `<li role="listitem">Row ${i} with some text in it</li>`).join('')}</ul>
     <script>document.getElementById('b').onclick = () => { document.querySelector('ul').innerHTML = '<li>new</li>'; };</script>`,
 };
 let srv, base, tab;
@@ -75,6 +75,54 @@ test('snapshot refs: a click by ref works, a disabled button is refused with why
   await tab.open(`${base}/feed`, { width: 1000, height: 700 });
   await assert.rejects(tab.click({ ref: `s${s1.n}:${toggle}` }), /too old/);
   assert.ok((await tab.snapshot()).n > f.n);
+});
+
+test('the risk check, summary and the agent’s mark are page operations too: a click by ref on Delete is caught', { skip: noBrowser }, async () => {
+  await tab.open(`${base}/form`, { width: 1000, height: 700 });
+  const s = await tab.snapshot();
+  const del = /(e\d+) button "Delete"/.exec(s.text)[1], toggle = /(e\d+) button "Toggle"/.exec(s.text)[1];
+  assert.equal(await tab.riskOf({ action: 'click', ref: `s${s.n}:${del}` }), 'click "🗑 · Delete"');
+  assert.equal(await tab.riskOf({ action: 'click', ref: `s${s.n}:${toggle}` }), null);
+  const sum = await tab.summary();
+  assert.equal(sum.title, 'Form'); assert.equal(sum.screen, true);
+  assert.ok(sum.controls.some((c) => /button#b "Toggle"/.test(c)));
+  await tab.mark(true);
+  assert.equal(await tab.eval('!!document.getElementById("quorx-agent-mark")'), true);
+  await tab.mark(false);
+  assert.equal(await tab.eval('!!document.getElementById("quorx-agent-mark")'), false);
+});
+
+test('the extension runs the same page operations: extension/pageops.js is generated from server/pageops.js', async () => {
+  const fs = await import('node:fs');
+  const { extensionPageops } = await import('./sync-extension.mjs');
+  const onDisk = fs.readFileSync(new URL('../extension/pageops.js', import.meta.url), 'utf8');
+  assert.equal(onDisk, extensionPageops(), 'run: node scripts/sync-extension.mjs');
+});
+
+test('a routine recorded in Chrome becomes a skill of named steps, with typed text kept only for search boxes', async () => {
+  const { routineSkill } = await import('../server/skills.js');
+  const k = routineSkill('Open bat-cave', [
+    { kind: 'go', url: 'https://discord.com/channels/@me' },
+    { kind: 'click', role: 'treeitem', name: 'Meow' },
+    { kind: 'click', role: 'link', name: 'bat-cave' },
+    { kind: 'type', role: 'search box', field: 'Search', value: 'cats' },
+    { kind: 'type', role: 'text box', field: 'Message #bat-cave', value: '' },
+    { kind: 'press', key: 'Enter', field: 'Message #bat-cave' },
+  ], new Date('2026-10-23T08:00:00Z'));
+  assert.equal(k.name, 'Open bat-cave'); assert.equal(k.steps, 6);
+  assert.match(k.description, /6 steps on discord\.com/);
+  assert.match(k.instructions, /1\. Open https:\/\/discord\.com\/channels\/@me\n2\. Click the treeitem "Meow"\n3\. Click the link "bat-cave"\n4\. Type into the search box "Search": "cats"\n5\. Type into the text box "Message #bat-cave": \(your text: not recorded/);
+  assert.throws(() => routineSkill('x', [{ kind: 'go', url: 'https://a.example' }]), /nothing was recorded/);
+});
+
+test('every run’s events reach a watcher (the extension’s status), with null when the run ends', async () => {
+  const { startRun, onRunEvent } = await import('../server/runs.js');
+  const seen = [];
+  const stop = onRunEvent((r, e) => { if (r.id.startsWith('rtestwatch')) seen.push(e ? e.t : null); });
+  const runId = `rtestwatch${Date.now().toString(36)}`;
+  await new Promise((done) => startRun({ runId, chatId: 'c1', onEnd: done }, async (emit) => { emit({ t: 'tool', name: 'browser' }); emit({ t: 'approval', id: 'a1', mode: 'strict' }); }));
+  stop();
+  assert.deepEqual(seen, ['run', 'tool', 'approval', null].filter((x) => x !== 'run'));
 });
 
 test('network events: only data requests are kept, with no headers, from full or slimmed events', () => {

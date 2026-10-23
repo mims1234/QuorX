@@ -19,6 +19,9 @@ const ckptFile = (id) => path.join(DIR, `${id}.ckpt.json`);
 try { for (const f of fs.readdirSync(DIR)) { const p = path.join(DIR, f); if (Date.now() - fs.statSync(p).mtimeMs > KEEP_FILES_MS) fs.rmSync(p, { force: true }); } } catch { /* first run */ }
 
 const runs = new Map(); // runId → { id, chatId, status, events, listeners, ac, started, ended }
+const watchers = new Set(); // fn(run, event | null) for every run: null when it ends
+/** Watches every run's events (the 🧩 Chrome status); returns a function that stops watching. */
+export function onRunEvent(fn) { watchers.add(fn); return () => watchers.delete(fn); }
 
 /**
  * Starts a run in the background. `work(emit, signal)` is the agent loop. Tokens stay in memory
@@ -35,6 +38,7 @@ export function startRun({ runId, chatId, onEnd }, work) {
     if (o.t !== 'token' && o.t !== 'think') o = externalize(o);
     r.events.push(o);
     for (const l of r.listeners) l(o);
+    for (const w of watchers) { try { w(r, o); } catch { /* a watcher's problem stays its own */ } }
     if (o.t === 'token') { if (pending && pending.step === o.step) pending.text += o.text; else { flush(); pending = { ...o }; } }
     else { flush(); disk(o); }
   };
@@ -51,6 +55,7 @@ export function startRun({ runId, chatId, onEnd }, work) {
       r.ended = Date.now();
       for (const l of r.listeners) l(null);
       r.listeners.clear();
+      for (const w of watchers) { try { w(r, null); } catch { /* ignore */ } }
       // The result goes into the chat from here too, so it is kept even when no page was there to save it.
       if (onEnd) { try { onEnd(r.events.findLast((e) => e.t === 'done' || e.t === 'error') || null); } catch (e) { console.error(e); } }
       setTimeout(() => runs.delete(runId), KEEP_MS).unref?.();

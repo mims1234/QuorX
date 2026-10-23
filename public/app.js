@@ -4739,12 +4739,13 @@ function scheduleForm(e) {
     </div></div>
     <div class="sc-f"><span>Model</span><button type="button" class="st-chip sc-model">${recDot(e.model, 'chat')} ${esc(short(e.model))} <small>${esc(shortPrice(e.model))}</small></button></div>
     <div class="sc-f"><span>Mode</span><div class="mp-sorts sc-mode-pick" role="radiogroup" aria-label="Permission mode">${[['strict', '🔒 Strict'], ['yolo', '⚡ YOLO']].map(([k, l]) => `<button type="button" class="mp-sort ${e.approval === k ? 'on' : ''}" data-mode="${k}" role="radio" aria-checked="${e.approval === k}">${l}</button>`).join('')}</div><small class="sc-dim sc-mode-note">${e.approval === 'yolo' ? 'Nothing waits: the deciders answer the agent\'s questions and approve commands for you.' : 'Approvals and questions wait for you, with a notification.'}</small></div>
+    <div class="sc-f sc-wide"><span>Chrome</span><label class="sq-check"><input type="checkbox" id="scChrome" ${(e.chrome ?? e.tools?.chrome) ? 'checked' : ''}><span>🧩 Let it use my Chrome, signed in as me (Chrome must be open; sending, posting and buying still wait for you)</span></label></div>
     <div class="sc-form-acts"><span class="sc-err" role="alert"></span><button type="button" class="kx-btn sc-cancel">Cancel</button><button type="submit" class="kx-btn primary">${e.id ? 'Save' : 'Create schedule'}</button></div>
   </form>`;
 }
 function wireScheduleForm(body) {
   const e = SCHED.edit, f = $('#scForm', body);
-  const keep = () => { e.name = $('#scName', f).value; e.projectId = $('#scProject', f).value; e.prompt = $('#scPrompt', f).value; };
+  const keep = () => { e.name = $('#scName', f).value; e.projectId = $('#scProject', f).value; e.prompt = $('#scPrompt', f).value; e.chrome = $('#scChrome', f).checked; };
   for (const b of f.querySelectorAll('.sc-kind button')) b.onclick = () => {
     keep();
     const k = b.dataset.kind;
@@ -4771,8 +4772,9 @@ function wireScheduleForm(body) {
     // What a new chat in that project would get: your settings now, with this schedule's mode.
     const c = blankChat(e.projectId);
     c.approval = e.approval;
+    c.tools = { ...c.tools, chrome: !!e.chrome };
     const payload = { name: e.name, projectId: e.projectId, prompt: e.prompt, model: e.model, reasoning: c.agent.setup.reasoning, approval: e.approval, when, tools: c.tools,
-      settings: { ...G.settings, approval: e.approval, tools: chatTools(c), ...qualitySettings(c), chromeAccess: !!c.tools?.chrome } };
+      settings: { ...G.settings, approval: e.approval, tools: chatTools(c), ...qualitySettings(c), chromeAccess: !!e.chrome } };
     const r = await postJ(e.id ? `/api/schedules/${e.id}` : '/api/schedules', payload, e.id ? 'PUT' : 'POST');
     if (!r || r.error) { err.textContent = r?.error ? `${r.error[0].toUpperCase()}${r.error.slice(1)}.` : 'Not saved.'; return; }
     SCHED.edit = null; await loadSchedules(); drawSchedules();
@@ -5160,7 +5162,10 @@ function settingsPanels(S) {
       stCard('Chrome extension', 'Give a tab of your everyday Chrome to a chat, so the agent can work in it with your own sign-ins (Gmail, GitHub…). It touches only tabs you give; sending, deleting, buying and account changes ask you first.', '<div id="stExt"></div>'
         + stRow('Read-only for reading requests', 'When you ask to read, check or summarise, typing into your account outside a search box asks you first. A site your request didn\'t name always asks before it opens in your Chrome.', stSwitch('browseReadOnly', S.browseReadOnly !== false))
         + stRow('Deciders check typing in your tabs', 'Before the agent types or presses Enter in your own tab, the deciders judge from your request alone (never the page) whether it serves what you asked. Below 35%, the step is refused. One decider call per step.', stSwitch('chromeCheck', S.chromeCheck !== false))
-        + stRow('Network reading in your tabs', 'The agent can list the data requests a page makes and read its JSON or text answers (GET only). Cookies, tokens and passwords are removed, and nothing is ever sent again.', stSwitch('chromeNetwork', S.chromeNetwork !== false))),
+        + stRow('Network reading in your tabs', 'The agent can list the data requests a page makes and read its JSON or text answers (GET only). Cookies, tokens and passwords are removed, and nothing is ever sent again.', stSwitch('chromeNetwork', S.chromeNetwork !== false))
+        + stRow('Never open', 'Sites the agent may never open in your Chrome, separated by commas. A site includes its subdomains.', `<input type="text" class="st-input" data-bind="chromeSitesNever" value="${esc(S.chromeSitesNever || '')}" placeholder="mybank.com, mychart.org" spellcheck="false">`)
+        + stRow('Always allowed', 'Sites it may open without asking, even when your request didn\'t name them.', `<input type="text" class="st-input" data-bind="chromeSitesAlways" value="${esc(S.chromeSitesAlways || '')}" placeholder="github.com, news.ycombinator.com" spellcheck="false">`)
+        + stRow('Read-only sites', 'Typing outside a search box always asks you on these, whatever the request says.', `<input type="text" class="st-input" data-bind="chromeSitesRead" value="${esc(S.chromeSitesRead || '')}" placeholder="mail.google.com, linkedin.com" spellcheck="false">`)),
     ]],
     usage: ['Usage & costs', 'What chats and projects cost.', [
       stCard('In chats', '', stRow('Show the cost badge in chat headers', 'The amber cost next to the model; click it for the per-chat usage breakdown (also /usage).', stSwitch('ui.usageBtn', U.usageBtn))),

@@ -22,7 +22,7 @@ import { createScheduler, loadSchedules, saveSchedules, cleanSchedule, describeW
 import { startScheduledChat } from './server/schedrun.js';
 import { loadMemory, saveMemory, memoryTokens, MEMORY_TOKENS } from './server/memory.js';
 import { CHECKS } from './server/harness-checks.js';
-import { startRun, getRun, stopRun, follow, runStatus, activeRuns, validRunId, scorecard, readLog, recordRun } from './server/runs.js';
+import { startRun, getRun, stopRun, follow, runStatus, activeRuns, validRunId, scorecard, readLog, recordRun, onRunEvent } from './server/runs.js';
 import { setBudget, budgetState } from './server/budget.js';
 import { shellRun, shellClose, shellInfo } from './server/shell.js';
 import { ptyAvailable, ptyOpen, ptyWrite, ptyResize, ptyFollow, ptyClose } from './server/pty.js';
@@ -39,11 +39,11 @@ import { readAudit } from './server/audit.js';
 import { pickFolder } from './server/pickfolder.js';
 import { userBrowse, giveTab, givenTab, takeBackTab, takeBackSid, lentChromeTabs } from './server/userbrowser.js';
 import { rewritePrompt } from './server/enhancer.js';
-import { extUpgrade, extKey, extInfo, onExtRequest, defaultBrowser, extPairing, extPair } from './server/extlink.js';
+import { extUpgrade, extKey, extInfo, onExtRequest, defaultBrowser, extPairing, extPair, extPush } from './server/extlink.js';
 import { openLink, linkReply, desktopReady, desktopCall } from './server/desktop.js';
 import { saveUpload, processDoc, listDocs, removeDoc, DOC_DEFAULTS, officeText } from './server/docs.js';
 import { embeddingModels } from './server/openrouter.js';
-import { listSkills, listTemplates } from './server/skills.js';
+import { listSkills, listTemplates, saveSkill, routineSkill } from './server/skills.js';
 import { hostedHtml, browserPath, openTab } from './server/browser.js';
 import { zipFolder } from './server/zip.js';
 import { exportBackup, findBackups, inspectBackup, importBackup } from './server/backup.js';
@@ -878,17 +878,48 @@ server.on('upgrade', (req, socket) => {
   if (p === '/api/ext/socket' && hostAllowed(req)) return extUpgrade(req, socket);
   socket.destroy();
 });
-// What the extension's popup asks: recent chats to give a tab to, giving and taking back.
+// What the extension's popup asks: recent chats to give a tab to, giving and taking back, stopping the agent,
+// opening a chat in QuorX, and saving a routine you recorded.
+const stopChat = (chatId) => { let n = 0; for (const r of activeRuns()) if (r.chatId === chatId && stopRun(r.runId)) n++; return n; };
 onExtRequest({
   chats: () => listChats().slice(0, 25).map((c) => ({ id: c.id, title: c.title || 'New chat', project: listProjects().find((p) => p.id === c.projectId)?.name || '' })),
   lent: () => lentChromeTabs(),
-  give: ({ tab, chatId, url: u, title }) => {
+  give: ({ tab, chatId, url: u, title, selection, link, image }) => {
     if (!validId(chatId) || !listChats().some((c) => c.id === chatId)) throw new Error('that chat is gone');
     if (!Number.isInteger(tab)) throw new Error('bad tab');
-    return giveTab(chatId, `chrome-${tab}`, { url: u, title, ext: tab });
+    return giveTab(chatId, `chrome-${tab}`, { url: u, title, ext: tab, selection, link, image });
+  },
+  stop: ({ chatId }) => ({ stopped: validId(chatId) ? stopChat(chatId) : 0 }),
+  // The shortcut: every reply working in your Chrome.
+  stopAll: () => ({ stopped: [...new Set(lentChromeTabs().map((x) => x.chatId))].reduce((n, c) => n + stopChat(c), 0) }),
+  focus: async ({ chatId }) => { if (desktopReady()) await desktopCall('app.openChat', { chatId: validId(chatId) ? chatId : null }, 5000).catch(() => {}); return true; },
+  saveRoutine: ({ chatId, name, steps }) => {
+    const chat = validId(chatId) ? getChat(chatId) : null;
+    const project = chat && listProjects().find((p) => p.id === chat.projectId);
+    if (!project?.path) throw new Error('pick a chat whose project has a folder');
+    const k = routineSkill(name, steps);
+    saveSkill(project.path, { name: k.name, description: k.description, instructions: k.instructions });
+    return { saved: true, name: k.name, steps: k.steps, project: project.name };
   },
   takeBack: ({ tab }) => takeBackSid(`chrome-${tab}`),
   disconnected: () => { for (const x of lentChromeTabs()) takeBackSid(`chrome-${x.tab}`); },
+});
+// 🧩 The agent's status in your Chrome: the extension's button says working, needs you or done for the tab a chat's
+// agent uses, and a card waiting for you in such a chat shows a Windows notification (clicking it opens the chat).
+// Only chats with one of your Chrome tabs; nothing is sent for the others.
+const chromeState = new Map(); // chatId → the last state sent
+onRunEvent((r, e) => {
+  if (!r.chatId || !lentChromeTabs().some((x) => x.chatId === r.chatId)) return;
+  const push = (state, what = '') => { if (chromeState.get(r.chatId) === state && state !== 'needs') return; chromeState.set(r.chatId, state); extPush({ kind: 'status', chatId: r.chatId, state, what }); };
+  if (e === null) { push('done'); return; }
+  if ((e.t === 'approval' && e.mode === 'strict') || (e.t === 'question' && !e.auto)) {
+    const what = String(e.what || e.question || 'a question').slice(0, 200);
+    push('needs', what);
+    if (desktopReady()) desktopCall('app.notify', { title: 'QuorX needs you', body: what, chatId: r.chatId }, 5000).catch(() => {});
+    return;
+  }
+  // Answered (or the agent moved on): working again.
+  if (['approval_done', 'answer', 'tool_result', 'llm_start', 'tool'].includes(e.t)) push('working');
 });
 const HOST = '127.0.0.1';
 const listener = server;

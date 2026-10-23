@@ -2539,6 +2539,63 @@ test('🧩 in the user’s tab: the deciders refuse typing the request never ask
   } finally { takeBackTab(chatId); await userBrowse(sid, 'close').catch(() => {}); srv.close(); (await import('../server/browser.js')).closeBrowser(); }
 });
 
+test('🧩 Chrome read through page scripts: opening, reading and collecting never attach the debugger; a click does; a never-open site is refused; tabs lists the chat’s group', { skip: !(await import('../server/browser.js')).browserPath() && 'no Chromium browser installed' }, async () => {
+  const http = await import('node:http');
+  const { extUpgrade, extKey } = await import('../server/extlink.js');
+  const { takeBackTab } = await import('../server/userbrowser.js');
+  const { openTab, closeBrowser } = await import('../server/browser.js');
+  const { pageOp } = await import('../server/pageops.js');
+  const srv = http.createServer((q, r) => { r.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); r.end(CHAT_PAGE); });
+  srv.on('upgrade', (q, s) => extUpgrade(q, s));
+  await new Promise((ok) => srv.listen(0, '127.0.0.1', ok));
+  const port = srv.address().port, real = await openTab({ own: true });
+  const cdp = [], calls = [];
+  // A stand-in for the extension that may read pages: page operations run in a real tab, the debugger is counted.
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/api/ext/socket`, { headers: { Origin: `chrome-extension://${'d'.repeat(32)}` } });
+  await new Promise((ok) => { ws.onmessage = async (ev) => {
+    const m = JSON.parse(ev.data);
+    if (m.t === 'welcome') ok();
+    if (m.t !== 'call') return;
+    const reply = (o) => ws.send(JSON.stringify({ t: 'reply', id: m.id, ...o }));
+    calls.push(m.cmd);
+    try {
+      if (m.cmd === 'tab.open') { await real.open(m.args.url, { width: 900, height: 600 }); return reply({ result: { id: 11, title: 'bat-cave' } }); }
+      if (m.cmd === 'tab.op') return reply({ result: await real.eval(pageOp(m.args.name, m.args.args)) });
+      if (m.cmd === 'tab.where') return reply({ result: await real.eval('({ href: location.href, readyState: document.readyState, title: document.title })') });
+      if (m.cmd === 'tab.shot') return reply({ result: { image: await real.screenshot() } });
+      if (m.cmd === 'tab.go') { await real.open(m.args.url, { width: 900, height: 600 }); return reply({ result: { href: m.args.url } }); }
+      if (m.cmd === 'tab.list') return reply({ result: [{ id: 11, title: 'bat-cave', url: `http://127.0.0.1:${port}/chat`, active: true, lent: true }, { id: 12, title: 'Docs', url: 'https://docs.example/', active: false, lent: false }] });
+      if (m.cmd === 'tab.cdp') { cdp.push(m.args.method); return reply({ result: await real.cdp(m.args.method, m.args.params) }); }
+      return reply({ result: true });
+    } catch (e) { return reply({ error: e.message }); }
+  }; ws.onopen = () => ws.send(JSON.stringify({ t: 'hello', key: extKey(), version: '0.3.0', caps: { script: true } })); });
+  const chatId = `chat-${Date.now().toString(36)}l`;
+  try {
+    const { bodies } = await run((body, i) => [
+      reply('', [['browser', { action: 'open', target: `chrome:http://127.0.0.1:${port}/chat` }]]),
+      reply('', [['browser', { action: 'find', query: 'Meow' }]]),
+      reply('', [['browser', { action: 'collect', direction: 'up', count: 30 }]]),
+      reply('', [['browser', { action: 'tabs' }]]),
+      reply('', [['browser', { action: 'click', text: 'Meow' }]]),
+      reply('', [['browser', { action: 'open', target: 'chrome:https://mybank.example/' }]]),
+      reply('Done.'),
+    ][i], { chatId, text: 'summarise the bat-cave channel', settings: { chromeAccess: true, chromeSitesNever: 'mybank.example, health.example' } });
+    const res = toolResults(bodies.at(-1)).map(String);
+    assert.match(res[0], /You are in the user's own tab/);
+    assert.match(res[0], /Snapshot s\d+/);
+    assert.match(res[1], /treeitem "Meow" · on screen/);
+    assert.match(res[2], /Collected 30 items/);
+    assert.match(res[3], /1\. \(in use\) bat-cave · http:\/\/127\.0\.0\.1:\d+\/chat\n2\. Docs · https:\/\/docs\.example\//);
+    assert.match(res[4], /clicked treeitem "Meow"/);
+    assert.match(res[5], /doesn't let the agent open mybank\.example/);
+    // Reading went through page scripts: the debugger only came for the click (and the page set-up just before it).
+    const firstInput = cdp.indexOf('Input.dispatchMouseEvent');
+    assert.ok(firstInput >= 0, cdp.join(','));
+    assert.deepEqual(cdp.slice(0, firstInput).filter((x) => !/^(Page|Runtime|Log|Network|Emulation)\.(enable|setFocusEmulationEnabled)$/.test(x)), []);
+    assert.ok(calls.includes('tab.op') && calls.includes('tab.shot'));
+  } finally { takeBackTab(chatId); ws.close(); await real.close().catch(() => {}); srv.close(); closeBrowser(); }
+});
+
 test('the extension connects with one click: it waits until Allow in QuorX, Deny closes it, and an older copy is asked to reload', async () => {
   const http = await import('node:http');
   const { extUpgrade, extKey, extPairing, extPair, extReady } = await import('../server/extlink.js');
