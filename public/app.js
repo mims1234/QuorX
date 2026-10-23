@@ -7936,18 +7936,22 @@ async function showVersion() {
 }
 setTimeout(showVersion, 1200);
 
-// ---------- ⟳ restart the harness (top bar, and the amber notice) ----------
+// ---------- ⟳ restart the harness (top bar, ⚙ Settings' header, and the amber notice) ----------
 async function restartHarness() {
   const runs = await getJ('/api/runs');
   const n = Array.isArray(runs) ? runs.length : 0;
-  if (!await uiConfirm(`Restart the harness?\n\nIt loads the latest server code. Dev servers it started stop and can be run again from 🖥.${n ? `\n\n${n} repl${n > 1 ? 'ies are' : 'y is'} running: ${n > 1 ? 'they pause' : 'it pauses'} and can be resumed afterwards.` : ''}`)) return;
-  const btn = $('#restartBtn'), note = $('#staleNote');
+  // The page reloads after the restart, so Settings changes that weren't saved would be lost: say so.
+  const unsaved = $('#settings')?.open && ST.dirty;
+  if (!await uiConfirm(`Restart the harness?\n\nIt loads the latest server code. Dev servers it started stop and can be run again from 🖥.${n ? `\n\n${n} repl${n > 1 ? 'ies are' : 'y is'} running: ${n > 1 ? 'they pause' : 'it pauses'} and can be resumed afterwards.` : ''}${unsaved ? '\n\nYour unsaved changes in Settings will be lost: press Save first to keep them.' : ''}`)) return;
+  const btn = $('#restartBtn'), note = $('#staleNote'), head = $('#stHeadRestart');
   const before = (await getJ('/api/config'))?.started;
   btn.disabled = true; btn.classList.add('spinning'); btn.title = 'Restarting…';
+  if (head) { head.disabled = true; head.textContent = '⟳ Restarting…'; }
   if (note) { note.hidden = false; note.textContent = '⟳ Restarting the harness…'; }
   // An older desktop window (opened before this feature) has no restart of its own: the harness restarts itself.
   const r = DESK && typeof window.ohDesktop.restartHarness === 'function' ? await window.ohDesktop.restartHarness() : await postJ('/api/harness/restart');
-  if (r && r.ok === false) { uiAlert(`Restart failed: ${r.error}`); btn.disabled = false; btn.classList.remove('spinning'); return; }
+  const idle = () => { btn.disabled = false; btn.classList.remove('spinning'); if (head) { head.disabled = false; head.textContent = '⟳ Restart harness'; } };
+  if (r && r.ok === false) { uiAlert(`Restart failed: ${r.error}`); idle(); return; }
   // Wait for the fresh copy (it reports a new start time), then reload the page against it.
   for (let i = 0; i < 80; i++) {
     await new Promise((res) => setTimeout(res, 500));
@@ -7955,9 +7959,10 @@ async function restartHarness() {
     if (c && c.started && c.started !== before) return location.reload();
   }
   uiAlert('The harness did not come back within 40 seconds. Check logs/harness.log, or start it again with npm start.');
-  btn.disabled = false; btn.classList.remove('spinning');
+  idle();
 }
 $('#restartBtn')?.addEventListener('click', restartHarness);
+$('#stHeadRestart')?.addEventListener('click', () => { if (!$('#restartBtn').disabled) restartHarness(); });
 $('#staleNote')?.addEventListener('click', () => { if (!$('#restartBtn').disabled) restartHarness(); });
 
 // =====================================================================================================================
