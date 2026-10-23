@@ -5048,6 +5048,7 @@ function settingsPanels(S) {
     ]],
     keys: ['API keys', 'The harness uses one active OpenRouter key for every call. Add as many as you like and switch between them.', [`<div id="stKeys"><div class="st-row-help">Loading keys…</div></div>`]],
     models: ['Models & catalogue', 'Model lists and prices come from OpenRouter.', [
+      stCard('Spending limit', 'What the active OpenRouter key has left, while you pick models by price. Hidden until you click 👁.', '<div id="stModelLimit"><div class="st-row-help">Loading…</div></div>'),
       stCard('Catalogue', '', stRow('Model lists and prices', `<span id="stCatInfo">${G.models ? `${G.models.length} models loaded` : 'Loading…'}</span>`, `<button type="button" class="st-btn secondary sm" data-act="refreshModels">↻ Refresh now</button>`)),
       stCard('New chats use', '', stRow('Default chat model', 'Each chat can still pick any model from its message box.', `<button type="button" class="st-chip" data-act="pickDefModel" id="defModel" data-id="${esc(S.model)}">${recDot(S.model, 'chat')} ${esc(short(S.model))} <small>${esc(shortPrice(S.model))}</small></button>`)
         + stRow('Default reasoning', '', stSeg('reasoning', [['off', 'Off'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']], S.reasoning || 'off'))),
@@ -5227,7 +5228,7 @@ function openSettings(cat) {
   ST.draft = structuredClone(G.settings);
   ST.draft.theme = G.theme ?? null; ST.themeAtOpen = G.theme ?? null;
   ST.draft.newChatTools ??= { ...DEFAULT_CHAT_TOOLS };
-  ST.dirty = false; ST.reveal = new Set(); ST.revealAccount = false;
+  ST.dirty = false; ST.reveal = new Set(); ST.revealAccount = false; ST.revealLimit = false;
   if (cat) ST.cat = cat;
   $('#stSearch').value = '';
   drawSettings();
@@ -5309,6 +5310,7 @@ function wireSettings() {
   drawProjectsPanel();
   drawPermsPanel();
   drawKeysPanel();
+  drawModelLimit();
   drawMemoryPanel();
   drawSetupPanel();
   drawExtPanel();
@@ -5695,6 +5697,34 @@ async function drawMemoryPanel(msg = '') {
 }
 // The 👁 / 🙈 button that shows or masks amounts, switched in place.
 function revealButton(b, shown) { if (!b) return; b.title = shown ? 'Hide amounts' : 'Show amounts'; b.textContent = shown ? '🙈' : '👁'; }
+// ⚙ Models: what the active key has left. The amounts stay hidden until 👁 here, every time Settings opens,
+// whatever "Hide amounts" says, since this page is open while picking models (often on a stream).
+async function drawModelLimit() {
+  const box = $('#stModelLimit'); if (!box) return;
+  const keys = await fetch('/api/keys').then((r) => r.json()).catch(() => []);
+  const k = keys.find((x) => x.active);
+  box.onclick = (e) => {
+    const act = e.target.closest('[data-lim]')?.dataset.lim;
+    if (act === 'keys') { ST.cat = 'keys'; drawSettings(); }
+    if (act === 'reveal') { ST.revealLimit = !ST.revealLimit; paint(); }
+    if (act === 'refresh') load();
+  };
+  if (!k) { box.innerHTML = '<div class="kx-mlim"><span class="kx-mlim-name">No OpenRouter key yet.</span><span class="kx-spacer"></span><button type="button" class="st-btn ghost sm" data-lim="keys">Add one in API keys →</button></div>'; return; }
+  let u = null;
+  const paint = () => {
+    const show = ST.revealLimit, m = (x) => (show ? money(x ?? 0, 2) : '•••••');
+    const head = `<span class="kx-mlim-name">🔑 ${esc(k.label)}</span>`;
+    const tail = `<span class="kx-spacer"></span><button type="button" class="kx-icon" data-lim="reveal" title="${show ? 'Hide amounts' : 'Show amounts'}">${show ? '🙈' : '👁'}</button><button type="button" class="kx-icon" data-lim="refresh" title="Refresh">↻</button><button type="button" class="st-btn ghost sm" data-lim="keys">API keys →</button>`;
+    if (!u) { box.innerHTML = `<div class="kx-mlim">${head}<span class="st-row-help">Checking with OpenRouter…</span>${tail}</div>`; return; }
+    if (u.error) { box.innerHTML = `<div class="kx-mlim">${head}<span class="kx-wait bad">⚠ ${esc(u.error)}</span>${tail}</div>`; return; }
+    if (u.limit == null) { box.innerHTML = `<div class="kx-mlim">${head}<span class="st-row-help">This key has no spending limit.</span>${tail}</div>`; return; }
+    const used = u.remaining != null ? u.limit - u.remaining : u.usage, pct = u.limit ? Math.min(100, ((used || 0) / u.limit) * 100) : 0;
+    box.innerHTML = `<div class="kx-mlim">${head}<span class="kx-mlim-amt ${show ? '' : 'masked'}"><b>${m(u.remaining)}</b> left of <b>${m(u.limit)}</b></span>${tail}</div>`
+      + `<div class="kx-bar"><i style="width:${show ? pct : 0}%" class="${show && pct > 85 ? 'hot' : ''}"></i></div>`;
+  };
+  const load = async () => { u = null; paint(); u = await fetch(`/api/keys/${k.id}/usage`).then((x) => x.json()).catch((e) => ({ error: e.message })); paint(); };
+  load();
+}
 async function drawKeysPanel() {
   const box = $('#stKeys'); if (!box) return;
   const keys = await fetch('/api/keys').then((r) => r.json()).catch(() => []);
