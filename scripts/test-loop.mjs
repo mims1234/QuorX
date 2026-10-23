@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { groupCalls, numberedWindow, untrusted, looksLikeInstruction, trimTranscript, compactTranscript, transcriptChars, withCacheMarks, retryable } from '../server/loop.js';
+import { groupCalls, numberedWindow, untrusted, looksLikeInstruction, trimTranscript, trimPageViews, compactTranscript, transcriptChars, withCacheMarks, retryable } from '../server/loop.js';
 import { checkFile, checkHtml, lintHtml, lintCss, lintFile, CHECK_TIMEOUTS } from '../server/checks.js';
 import { listDesignSystems, readDesignSystem, tokenColors, projectDesign, applyDesignSystem, saveProjectDesign } from '../server/design.js';
 
@@ -59,6 +59,22 @@ test('trimming replaces old file bodies, keeps the newest turns, and only trims 
   assert.match(msgs[3].content, /Wrote|removed/);
   assert.match(JSON.parse(msgs[2].tool_calls[0].function.arguments).content, /written earlier; removed/);
   assert.equal(trimTranscript(msgs, { at: 100000, to: 50000, done }), 0);
+});
+
+test('old page views are cut in batches, the newest two stay whole, and other tools are left alone', () => {
+  const big = (k) => `Opened page ${k}.\nTitle: P${k}\n${'x'.repeat(3000)}`;
+  const msgs = [{ role: 'system', content: 's' }, { role: 'user', content: 'read my feed' }];
+  for (let k = 0; k < 8; k++) msgs.push({ role: 'assistant', content: null, tool_calls: [{ id: `b${k}`, function: { name: 'browser', arguments: '{}' } }] }, { role: 'tool', tool_call_id: `b${k}`, content: big(k) });
+  msgs.push({ role: 'assistant', content: null, tool_calls: [{ id: 'r1', function: { name: 'read_file', arguments: '{}' } }] }, { role: 'tool', tool_call_id: 'r1', content: 'y'.repeat(3000) });
+  const done = new WeakSet();
+  assert.equal(trimPageViews(msgs, { done }), 0); // 8 views: not yet a batch
+  msgs.push({ role: 'assistant', content: null, tool_calls: [{ id: 'b8', function: { name: 'browser', arguments: '{}' } }] }, { role: 'tool', tool_call_id: 'b8', content: big(8) });
+  assert.ok(trimPageViews(msgs, { done }) > 6 * 2900);
+  const views = msgs.filter((m) => m.role === 'tool' && m.tool_call_id.startsWith('b'));
+  assert.match(views[0].content, /^Opened page 0\.\nTitle: P0\n\[An older page view/);
+  assert.equal(views[7].content, big(7)); assert.equal(views[8].content, big(8));
+  assert.equal(msgs.find((m) => m.tool_call_id === 'r1').content.length, 3000);
+  assert.equal(trimPageViews(msgs, { done }), 0); // nothing new to cut
 });
 
 test('compaction keeps the request and starts the kept tail on an assistant turn', () => {

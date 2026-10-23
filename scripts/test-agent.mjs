@@ -2321,7 +2321,7 @@ test('a tab the user lends works only through target "given", asks before Send o
     assert.match(String(bodies[0].messages.at(-1).content), /given you one of their own browser tabs for this chat: "Inbox"/);
     const res = toolResults(bodies.at(-1)).map(String);
     assert.match(res[0], /You are in the user's own tab \("Inbox"\)/);
-    assert.match(res[1], /clicked a "Read more"/);
+    assert.match(res[1], /clicked link "Read more"/);
     assert.match(res[2], /The user said no to that \(click "➤ · Send"\)/);
     assert.match(res[3], /typed 1 characters/);
     assert.match(res[5], /took their tab back/);
@@ -2378,7 +2378,7 @@ test('a Chrome tab given through the QuorX extension: only an extension with the
     ][i], { chatId, onEvent: (e, runId) => { if (e.t === 'approval' && e.tool === 'browser') { asked.push(e.what); setTimeout(() => answerApproval(runId, e.id, { approve: false }), 5); } } });
     const res = toolResults(bodies.at(-1)).map(String);
     assert.match(res[0], /You are in the user's own tab \("Mail"\)[\s\S]*Title: Mail/);
-    assert.match(res[1], /clicked a "Open message"/);
+    assert.match(res[1], /clicked link "Open message"/);
     assert.match(res[2], /The user said no to that \(click "🗑 · Delete"\)/);
     assert.equal(asked.length, 1);
     assert.equal(takeBackSid('chrome-7'), true);
@@ -2419,9 +2419,124 @@ test('🧩 Chrome on in a chat: the agent opens its own tab in the user’s Chro
     assert.match(String(on.bodies[0].messages.at(-1).content), /use their own Chrome in this chat/);
     const res = toolResults(on.bodies.at(-1)).map(String);
     assert.equal(opened.length, 1); assert.equal(opened[0].chatId, chatId); assert.equal(opened[0].url, `http://127.0.0.1:${port}/`);
-    assert.match(res[1], /clicked a "Open message"/);
+    assert.match(res[1], /clicked link "Open message"/);
     assert.equal(givenTab(chatId)?.own, true);
   } finally { takeBackTab(chatId); ws.close(); await real.close().catch(() => {}); srv.close(); closeBrowser(); }
+});
+
+// A chat app's quirks in one page: a server list first, messages in a list that scrolls by itself (the window never
+// does), older messages loaded on scrolling up, and the messages also fetched as JSON with a token in it.
+const CHAT_PAGE = `<!doctype html><meta charset="utf-8"><title>bat-cave</title><style>html,body{height:100%;margin:0;overflow:hidden}nav{position:fixed;left:0;top:0;width:180px;height:100%}#list{position:absolute;left:180px;right:0;top:0;bottom:40px;overflow-y:auto;margin:0}#list li{height:56px}</style>
+<nav aria-label="Servers"><div role="treeitem" aria-label="Meow">M</div><div role="treeitem" aria-label="Gen X Game, Coding family, Meow">folder</div>${'<div>channel name here</div>'.repeat(40)}</nav>
+<ol id="list" role="list" aria-label="Messages in bat-cave"></ol><input aria-label="Message #bat-cave" style="position:fixed;bottom:0;left:180px"><input type="search" aria-label="Search" style="position:fixed;top:0;right:0">
+<button id="send" style="position:fixed;bottom:60px;right:10px">Send</button><div role="dialog" aria-modal="true" aria-label="Quick switcher" style="position:fixed;right:0;bottom:40px;width:120px;height:80px;background:#ccc">switch</div>
+<script>let n = 0; const list = document.getElementById('list');
+const add = (top) => { const els = []; for (let i = 0; i < 20 && n < 100; i++) { n++; const li = document.createElement('li'); li.setAttribute('data-list-item-id', 'm' + n); li.textContent = 'Batman at 9:' + String(n).padStart(2, '0') + ' PM: message number ' + n + ' in the cave'; els.push(li); } if (top) list.prepend(...els.reverse()); else list.append(...els); };
+add(); list.scrollTop = list.scrollHeight;
+list.addEventListener('scroll', () => { if (list.scrollTop < 60 && n < 100) { const h = list.scrollHeight; add(true); list.scrollTop = list.scrollHeight - h; } });
+fetch('/api/messages?limit=50').then((r) => r.json());</script>`;
+
+test('browser on a chat app: the inner list scrolls, collect gathers a channel into a file, data requests are listed and read without secrets, and a failed click is not repeated', { skip: !(await import('../server/browser.js')).browserPath() && 'no Chromium browser installed' }, async () => {
+  const http = await import('node:http');
+  const { openTab, closeBrowser } = await import('../server/browser.js');
+  const srv = http.createServer((q, r) => {
+    if (q.url.startsWith('/api/')) { r.writeHead(200, { 'Content-Type': 'application/json' }); return r.end(JSON.stringify({ messages: [{ author: 'Batman', text: 'hello' }], access_token: 'secret-should-hide', session: { id: 'zz' } })); }
+    r.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); r.end(CHAT_PAGE);
+  });
+  await new Promise((ok) => srv.listen(0, '127.0.0.1', ok));
+  const url = `http://127.0.0.1:${srv.address().port}/chat`;
+  const tab = await openTab({ own: true });
+  let dir = null;
+  try {
+    const { bodies } = await run((body, i) => [
+      reply('', [['browser', { action: 'open', target: url }]]),
+      reply('', [['browser', { action: 'scroll', screens: -1 }]]),
+      reply('', [['browser', { action: 'find', query: 'Meow' }]]),
+      reply('', [['browser', { action: 'collect', direction: 'up', count: 60 }]]),
+      reply('', [['browser', { action: 'network' }]]),
+      reply('', [['browser', { action: 'network', op: 'read', id: 'n1' }]]),
+      reply('', [['browser', { action: 'click', text: 'Send' }]]),
+      reply('', [['browser', { action: 'click', text: 'Send' }]]),
+      reply('Done.'),
+    ][i], { settings: { tools: { browser: { on: true } }, review: 'off', verify: false, checks: { on: false } }, openTab: async () => tab, prep: (d) => { dir = d; } });
+    const res = toolResults(bodies.at(-1)).map(String);
+    assert.match(res[0], /Page ready after/);
+    assert.match(res[0], /Snapshot s\d+ \(/);
+    assert.match(res[0], /listitem "Batman at 9:/); // the messages, not only the server list
+    assert.match(res[1], /scrolled list "Messages in bat-cave" by -\d+px \(the page itself doesn't scroll here\)/);
+    assert.match(res[2], /s\d+:e\d+ treeitem "Meow" · on screen/); // the exact name before the folder that contains it
+    assert.ok(res[2].indexOf('treeitem "Meow"') < res[2].indexOf('Gen X Game'));
+    assert.match(res[3], /Collected 60 items/);
+    const file = /saved in (\.quorx\/collected\/\S+\.json)/.exec(res[3])?.[1];
+    assert.ok(file, res[3]);
+    const saved = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8'));
+    assert.equal(saved.items.length, 60);
+    assert.equal(new Set(saved.items.map((x) => x.key)).size, 60);
+    assert.match(res[4], /n1 GET 200 json .*\/api\/messages/);
+    assert.match(res[5], /"text":"hello"/);
+    assert.doesNotMatch(res[5], /secret-should-hide/);
+    assert.match(res[5], /"access_token"(:"\[removed\]"|\[secret removed\])/); // removed here, and the harness's own scrubber agrees
+    assert.match(res[6], /^Error: can't click button "Send": it is covered by dialog "Quick switcher"/);
+    assert.match(res[6], /Snapshot s\d+/); // a failure still shows the page as it is now
+    assert.match(res[7], /^You already tried exactly this \(click "Send"\) and it failed/);
+  } finally { await tab.close().catch(() => {}); srv.close(); closeBrowser(); }
+});
+
+test('🧩 in the user’s tab: a reading request asks before typing outside a search box, and a site the request didn’t name asks before it opens', { skip: !(await import('../server/browser.js')).browserPath() && 'no Chromium browser installed' }, async () => {
+  const http = await import('node:http');
+  const { userBrowse, giveTab, takeBackTab } = await import('../server/userbrowser.js');
+  const srv = http.createServer((_q, r) => { r.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); r.end(CHAT_PAGE); });
+  await new Promise((ok) => srv.listen(0, '127.0.0.1', ok));
+  const sid = `usertab${Date.now().toString(36)}r`, chatId = `chat-${Date.now().toString(36)}r`;
+  try {
+    await userBrowse(sid, 'open', { url: `http://127.0.0.1:${srv.address().port}/chat`, w: 900, h: 600 });
+    giveTab(chatId, sid, { url: 'http://127.0.0.1/', title: 'bat-cave', desktop: false });
+    const asked = [];
+    const { bodies } = await run((body, i) => [
+      reply('', [['browser', { action: 'open', target: 'given' }]]),
+      reply('', [['browser', { action: 'type', text: 'cats', selector: 'input[type=search]' }]]),
+      reply('', [['browser', { action: 'type', text: 'hi all', selector: 'input[aria-label="Message #bat-cave"]' }]]),
+      reply('', [['browser', { action: 'open', target: 'https://example.com/' }]]),
+      reply('Done.'),
+    ][i], { chatId, text: 'check the bat-cave channel and summarise the last messages', settings: { chromeAccess: true }, onEvent: (e, runId) => { if (e.t === 'approval' && e.tool === 'browser') { asked.push(e.what); setTimeout(() => answerApproval(runId, e.id, { approve: false }), 5); } } });
+    assert.match(String(bodies[0].messages.at(-1).content), /this request only reads, so typing outside a search box asks them too/);
+    const res = toolResults(bodies.at(-1)).map(String);
+    assert.match(res[1], /typed 4 characters/); // a search box doesn't ask
+    assert.match(res[2], /The user said no to that \(type "hi all" into textbox "Message #bat-cave"\)/);
+    assert.match(res[3], /The user said no to opening example\.com in their Chrome/);
+    assert.deepEqual(asked.map((w) => w.replace(/^In your tab on \S+: /, '')), ['type "hi all" into textbox "Message #bat-cave"', 'Open example.com in your Chrome, signed in as you']);
+  } finally { takeBackTab(chatId); await userBrowse(sid, 'close').catch(() => {}); srv.close(); (await import('../server/browser.js')).closeBrowser(); }
+});
+
+test('🧩 in the user’s tab: the deciders refuse typing the request never asked for, and a handoff gives the tab back until the user is done', { skip: !(await import('../server/browser.js')).browserPath() && 'no Chromium browser installed' }, async () => {
+  const http = await import('node:http');
+  const { userBrowse, giveTab, takeBackTab } = await import('../server/userbrowser.js');
+  const srv = http.createServer((_q, r) => { r.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); r.end(CHAT_PAGE); });
+  await new Promise((ok) => srv.listen(0, '127.0.0.1', ok));
+  const sid = `usertab${Date.now().toString(36)}d`, chatId = `chat-${Date.now().toString(36)}d`;
+  const judged = [];
+  // The deciders see only the request and the step: "buy" here was never asked for.
+  const ensemble = async ({ voters, questions, state }) => { judged.push(String(state)); const yes = /buy crypto/.test(String(state)) ? 0.1 : 0.9; return { results: Object.fromEntries(questions.map((q) => [q.id, { pick: yes > 0.5 ? 'yes' : 'no', dist: { yes, no: 1 - yes }, confidence: 0.9, agree: voters.length, n: voters.length, verdict: 'settled' }])), votes: [], ms: 2 }; };
+  try {
+    await userBrowse(sid, 'open', { url: `http://127.0.0.1:${srv.address().port}/chat`, w: 900, h: 600 });
+    giveTab(chatId, sid, { url: 'http://127.0.0.1/', title: 'bat-cave', desktop: false });
+    const cards = [];
+    const { bodies } = await run((body, i) => [
+      reply('', [['browser', { action: 'open', target: 'given' }]]),
+      reply('', [['browser', { action: 'type', text: 'buy crypto now', selector: 'input[aria-label="Message #bat-cave"]' }]]),
+      reply('', [['browser', { action: 'type', text: 'see you at 9', selector: 'input[aria-label="Message #bat-cave"]' }]]),
+      reply('', [['browser', { action: 'handoff', reason: 'sign in to the server' }]]),
+      reply('Done.'),
+    ][i], { chatId, text: 'reply "see you at 9" in the bat-cave channel', ensemble, settings: { checks: { on: false } }, onEvent: (e, runId) => { if (e.t === 'approval' && e.tool === 'browser') { cards.push(e); setTimeout(() => answerApproval(runId, e.id, { approve: true }), 5); } } });
+    const res = toolResults(bodies.at(-1)).map(String);
+    assert.match(res[1], /The deciders judged that this step doesn't serve the user's request \(90% sure\): type "buy crypto now"/);
+    assert.match(res[2], /typed 12 characters/);
+    assert.ok(judged.every((s) => !/Batman at 9:/.test(s)), 'the deciders never see the page');
+    assert.match(res[3], /The user finished: "sign in to the server"\. You can use the tab again/);
+    const hand = cards.find((c) => /Your turn/.test(c.what));
+    assert.equal(hand.what, 'Your turn in your tab on 127.0.0.1: sign in to the server');
+    assert.equal(hand.yes, 'I’m done'); assert.equal(hand.no, 'Stop');
+  } finally { takeBackTab(chatId); await userBrowse(sid, 'close').catch(() => {}); srv.close(); (await import('../server/browser.js')).closeBrowser(); }
 });
 
 test('the extension connects with one click: it waits until Allow in QuorX, Deny closes it, and an older copy is asked to reload', async () => {

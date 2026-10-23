@@ -4,6 +4,18 @@
 // It never touches a tab you didn't give, and forgets a tab when you take it back or close it.
 const VERSION = chrome.runtime.getManifest().version;
 const FORWARD = new Set(['Page.loadEventFired', 'Page.frameNavigated', 'Runtime.consoleAPICalled', 'Runtime.exceptionThrown', 'Log.entryAdded']);
+// A page's data requests (XHR, fetch) go to QuorX with only their id, method, address, status, type and size:
+// never headers, cookies or bodies (a body is read only when the agent asks for one request).
+const DATA_REQ = new Set(['XHR', 'Fetch', 'EventSource']);
+function slimNet(method, p) {
+  if (method === 'Network.requestWillBeSent') return DATA_REQ.has(p.type) ? { requestId: p.requestId, type: p.type, method: p.request && p.request.method, url: String((p.request && p.request.url) || '').slice(0, 2000) } : null;
+  if (method === 'Network.responseReceived') return DATA_REQ.has(p.type) ? { requestId: p.requestId, type: p.type, status: p.response && p.response.status, mimeType: p.response && p.response.mimeType } : null;
+  if (method === 'Network.loadingFinished') return { requestId: p.requestId, encodedDataLength: p.encodedDataLength };
+  if (method === 'Network.loadingFailed') return { requestId: p.requestId, errorText: p.errorText };
+  return undefined;
+}
+// What passes on: the page events as they are, network events slimmed (or dropped: a picture, a script).
+const passOn = (method, params) => (FORWARD.has(method) ? params : method.startsWith('Network.') ? slimNet(method, params) : undefined);
 let ws = null, state = 'off', lastError = '', pingTimer = null, seq = 0;
 const waiting = new Map(); // request id → resolve/reject
 const attached = new Set(); // tab ids the debugger is attached to right now
@@ -95,7 +107,7 @@ async function detach(tab) {
   attached.delete(tab);
   await chrome.debugger.detach({ tabId: tab }).catch(() => {});
 }
-chrome.debugger.onEvent.addListener((src, method, params) => { if (attached.has(src.tabId) && FORWARD.has(method)) send({ t: 'event', tab: src.tabId, method, params }); });
+chrome.debugger.onEvent.addListener((src, method, params) => { if (!attached.has(src.tabId)) return; const p = passOn(method, params); if (p) send({ t: 'event', tab: src.tabId, method, params: p }); });
 // Cancel on Chrome's "started debugging this browser" bar: you took the tab back.
 chrome.debugger.onDetach.addListener(async (src, reason) => {
   attached.delete(src.tabId);

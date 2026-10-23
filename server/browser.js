@@ -9,6 +9,7 @@ import crypto from 'node:crypto';
 import { spawn, execFile } from 'node:child_process';
 import { desktopReady, desktopCall, onTabEvents } from './desktop.js';
 import { extCall, onExtTabEvents } from './extlink.js';
+import { pageOp } from './pageops.js';
 
 const LOCAL = process.env.LOCALAPPDATA || '';
 const CANDIDATES = [
@@ -177,6 +178,31 @@ async function headlessTransport({ own = false } = {}) {
 // Console lines the page didn't cause: Electron's own security warning in desktop-app tabs, missing source maps.
 const CONSOLE_NOISE = /Electron Security Warning|DevTools failed to load source ?map/i;
 
+// A page's data requests (XHR and fetch only), from the DevTools Network events: method, address, status, type and
+// size, never headers or cookies. The desktop app and the extension pass on only these fields too. 200 at most.
+const DATA_REQ = new Set(['XHR', 'Fetch', 'EventSource']);
+export function noteRequest(list, method, p) {
+  if (method === 'Network.requestWillBeSent') {
+    if (!DATA_REQ.has(p.type)) return;
+    list.push({ id: p.requestId, ref: `n${(list.seq = (list.seq || 0) + 1)}`, method: p.request?.method || p.method || 'GET', url: String(p.request?.url || p.url || '').slice(0, 2000), type: p.type, at: Date.now(), status: 0, mime: '', size: 0, done: false, failed: '' });
+    if (list.length > 200) list.splice(0, list.length - 200);
+    return;
+  }
+  const r = list.find((x) => x.id === p.requestId);
+  if (!r) return;
+  if (method === 'Network.responseReceived') { r.status = p.response?.status ?? p.status ?? 0; r.mime = String(p.response?.mimeType || p.mimeType || ''); }
+  else if (method === 'Network.loadingFinished') { r.done = true; r.size = Math.round(p.encodedDataLength || 0); }
+  else if (method === 'Network.loadingFailed') r.failed = String(p.errorText || 'failed');
+}
+/** Only what noteRequest uses, for the desktop app and the extension to pass on (no headers, cookies or bodies). */
+export function slimNetworkEvent(method, p) {
+  if (method === 'Network.requestWillBeSent') return DATA_REQ.has(p.type) ? { requestId: p.requestId, type: p.type, method: p.request?.method, url: String(p.request?.url || '').slice(0, 2000) } : null;
+  if (method === 'Network.responseReceived') return DATA_REQ.has(p.type) ? { requestId: p.requestId, type: p.type, status: p.response?.status, mimeType: p.response?.mimeType } : null;
+  if (method === 'Network.loadingFinished') return { requestId: p.requestId, encodedDataLength: p.encodedDataLength };
+  if (method === 'Network.loadingFailed') return { requestId: p.requestId, errorText: p.errorText };
+  return null;
+}
+
 // A tab of your everyday Chrome that you gave to a chat, through the QuorX extension. Closing only lets go of it.
 async function extTransport(tab) {
   const subs = new Set();
@@ -266,8 +292,10 @@ export async function openTab({ chatId, cdpPort, own = false, attachTab, extTab 
   if (!tr && (attachTab || extTab != null)) throw new Error('that tab is gone');
   tr ||= await headlessTransport({ own });
   const listeners = [];
-  const tab = { id: tr.id, desktop: tr.desktop, app: !!tr.app, given: !!attachTab || extTab != null, console: [], url: tr.url || 'about:blank' };
+  const tab = { id: tr.id, desktop: tr.desktop, app: !!tr.app, given: !!attachTab || extTab != null, console: [], url: tr.url || 'about:blank', net: [] };
   tr.onEvent((method, params) => {
+    if (method.startsWith('Network.')) noteRequest(tab.net, method, params);
+    else if (method === 'Page.frameNavigated' && !params.frame?.parentId) tab.net.length = 0; // a new page: its own requests only
     if (method === 'Runtime.consoleAPICalled' && ['error', 'warning'].includes(params.type) && !CONSOLE_NOISE.test(params.args.map((a) => a.value ?? a.description ?? '').join(' '))) tab.console.push(`${params.type}: ${params.args.map((a) => a.value ?? a.description ?? '').join(' ')}`.slice(0, 300));
     if (method === 'Runtime.exceptionThrown') tab.console.push(`exception: ${(params.exceptionDetails.exception?.description || params.exceptionDetails.text || '').split('\n')[0]}`.slice(0, 300));
     if (method === 'Log.entryAdded' && params.entry.level === 'error' && !CONSOLE_NOISE.test(params.entry.text || '')) tab.console.push(`error: ${params.entry.text} ${params.entry.url || ''}`.slice(0, 300));
@@ -279,6 +307,11 @@ export async function openTab({ chatId, cdpPort, own = false, attachTab, extTab 
   // The page has stopped scrolling when its scroll position reads the same twice in a row (checked every 120 ms).
   const settle = async (ms = 2000) => { const end = Date.now() + ms; let last = null; while (Date.now() < end) { const pos = await js('Math.round(scrollX) + "," + Math.round(scrollY)').catch(() => null); if (pos !== null && pos === last) return; last = pos; await sleep(120); } };
   await send('Page.enable'); await send('Runtime.enable'); await send('Log.enable');
+  // The page's own data requests (XHR and fetch), for network list/read and for waiting on one. Bodies stay in the
+  // browser until asked for; headers are never kept.
+  await send('Network.enable', { maxPostDataSize: 0 }).catch(() => {});
+  const op = async (name, args) => { try { return await js(pageOp(name, args)); } catch (e) { if (!/context|navigat|destroyed|not found/i.test(e.message)) throw e; await sleep(300); return js(pageOp(name, args)); } };
+  const ready = (o = {}) => op('ready', o).catch(() => null);
   // Headless tabs in the background never get focus, so clicks wouldn't focus inputs and typing went nowhere.
   await send('Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => {});
   // Sound can't be heard here, so every page counts what it starts: Web Audio contexts and sources, and <audio>/<video>
@@ -294,14 +327,44 @@ export async function openTab({ chatId, cdpPort, own = false, attachTab, extTab 
       tab.console = [];
       const loaded = once('Page.loadEventFired', 15000);
       await send('Page.navigate', { url });
-      await loaded; await sleep(700);
+      await loaded;
+      // Loaded is not ready: single-page apps draw their content after it. Wait until the page is quiet (10 s at most).
+      // A page from this computer (the agent's own work) is not kept waiting for a "Loading…" shell to fill in.
+      tab.readyInfo = await ready({ quiet: 500, cap: 10000, thinMs: /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//i.test(url) ? 500 : 2000 });
       tab.url = url;
       return tab.summary();
     },
     // Waits until the page stops scrolling (smooth scrolls, anchor links), at most `ms`.
     async settle(ms = 2000) { return settle(ms); },
+    // Loaded and quiet for `quiet` ms (no added or removed content, no new downloads), at most `cap` ms.
+    ready,
+    // The page operations in pageops.js: what is on screen, the snapshot with refs, find, the whole text, feeds.
+    // Snapshot numbers carry on from page to page in this tab (see seed in pageops.js).
+    snapshot: async (o = {}) => { const r = await op('snapshot', { ...o, seed: tab.snapN || 0 }); if (r?.n) tab.snapN = Math.max(tab.snapN || 0, r.n); return r; },
+    find: async (query, limit = 15) => { const r = await op('find', { query, limit, seed: tab.snapN || 0 }); if (r?.n) tab.snapN = Math.max(tab.snapN || 0, r.n); return r; },
+    pageText: (o = {}) => op('pageText', o),
+    pageState: () => op('state', {}).catch(() => null),
+    collectStep: (o = {}) => op('collect', o),
+    scrollItems: (o = {}) => op('scrollItems', o),
+    // The data requests since this page opened, newest last: { id, method, url, type, status, mime, size, done, failed }.
+    netList: () => tab.net.slice(-100),
+    async netRead(id) {
+      const r = tab.net.find((x) => x.id === id || x.ref === id);
+      if (!r) throw new Error(`no request ${id} on this page (network list shows the ids)`);
+      if (!r.done) throw new Error(`request ${r.ref} has not finished loading yet${r.failed ? ` (it failed: ${r.failed})` : ''}`);
+      const b = await send('Network.getResponseBody', { requestId: r.id });
+      return { ...r, body: b.base64Encoded ? Buffer.from(b.body, 'base64').toString('utf8') : b.body };
+    },
+    // Until a data request whose address contains `part` has finished (one that started after `since`), at most `ms`.
+    async waitRequest(part, ms = 10000, since = 0) {
+      const end = Date.now() + ms;
+      while (Date.now() < end) { const r = tab.net.find((x) => x.at >= since && x.url.includes(part) && (x.done || x.failed)); if (r) return r; await sleep(150); }
+      return null;
+    },
+    // Built-in tabs only (the agent's own and test pages): requests to these address patterns are refused.
+    block: (urls) => send('Network.setBlockedURLs', { urls }),
     async summary() {
-      return js(`(() => {
+      const s = await js(`(() => {
         const vis = (e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
         const label = (e) => (e.innerText || e.value || e.placeholder || e.getAttribute('aria-label') || e.title || e.name || '').trim().replace(/\\s+/g, ' ').slice(0, 60);
         const controls = [...document.querySelectorAll('button, a[href], input, textarea, select, [role=button], canvas')].filter(vis).slice(0, 40)
@@ -311,6 +374,11 @@ export async function openTab({ chatId, cdpPort, own = false, attachTab, extTab 
         return { sound, title: document.title, url: location.href, text: (document.body?.innerText || '').replace(/\\n{3,}/g, '\\n\\n').slice(0, 2500), controls,
           size: [document.documentElement.scrollWidth, document.documentElement.scrollHeight], scroll: [Math.round(scrollX), Math.round(scrollY)], view: [innerWidth, innerHeight] };
       })()`);
+      // The text that is on screen (and in same-site frames), not the first 2,500 characters of the page: on a chat
+      // app those were the server and channel lists, before any message.
+      const st = await op('screenText', { max: 2500 }).catch(() => null);
+      if (st?.text) { s.text = st.text; s.screen = true; s.more = st.more; }
+      return s;
     },
     // 💬 Comment: the element under a point of the view: a selector that finds it again (id, data-qx-id, or a short
     // path), its tag, text, section and box. Prefers the meaningful element (a button, a heading) over a span inside it.
@@ -359,27 +427,23 @@ export async function openTab({ chatId, cdpPort, own = false, attachTab, extTab 
       const r = await send('Page.captureScreenshot', { format: 'jpeg', quality: 72 });
       return `data:image/jpeg;base64,${r.data}`;
     },
-    // Click by CSS selector, by visible text, or at x,y. Uses real mouse events at the element's centre.
-    async click({ selector, text, x, y }) {
-      // A selector or text wins over x/y: models often fill every field, sending x: 0, y: 0 next to the text they mean.
-      let pt = !selector && !text && x != null && y != null ? { x, y, what: `point ${x},${y}` } : await js(`(() => {
-        const sel = ${JSON.stringify(selector || '')}, txt = ${JSON.stringify(String(text || '').toLowerCase())};
-        let el = sel ? document.querySelector(sel) : null;
-        if (!el && txt) el = [...document.querySelectorAll('button, a, [role=button], input[type=submit], input[type=button], label, li, div, span')]
-          .filter((e) => (e.innerText || e.value || '').trim().toLowerCase().includes(txt)).sort((a, b) => (a.innerText || '').length - (b.innerText || '').length)[0];
-        if (!el) return null;
-        el.scrollIntoView({ block: 'center', behavior: 'instant' }); // instant: on smooth-scrolling pages the position would still be moving
-        const r = el.getBoundingClientRect();
-        return { x: r.left + r.width / 2, y: r.top + r.height / 2, what: el.tagName.toLowerCase() + ' "' + (el.innerText || el.value || '').trim().slice(0, 40) + '"' };
-      })()`);
-      if (!pt) throw new Error(`nothing matches ${selector ? `selector ${selector}` : `text "${text}"`}`);
+    // A screenshot that gives up after `ms` (null): a window Chrome isn't drawing (behind others, minimised) can make
+    // the capture wait until the transport's own timeout.
+    shotWithin: (ms = 8000) => Promise.race([tab.screenshot(), sleep(ms).then(() => null)]).catch(() => null),
+    // Click a ref from the snapshot, a CSS selector, visible text, or x,y. Before a click by ref, selector or text the
+    // element must be visible, still, enabled and the thing under the point (Playwright's checks, retried for up to
+    // 3 s); otherwise the error says which check failed. Then real mouse events at its centre.
+    async click({ ref, selector, text, x, y }) {
+      // A ref, selector or text wins over x/y: models often fill every field, sending x: 0, y: 0 next to the text they mean.
+      const pt = !ref && !selector && !text && x != null && y != null ? { x, y, what: `point ${x},${y}` } : await op('point', { ref, selector, text });
+      if (pt.err) throw new Error(pt.err);
       for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x: pt.x, y: pt.y, button: 'left', clickCount: 1 });
       await sleep(400);
       await settle(); // an anchor link may scroll smoothly; the next screenshot should show where it lands
-      return `clicked ${pt.what}`;
+      return `clicked ${pt.what}${pt.others ? ` (${pt.others} other element${pt.others > 1 ? 's' : ''} also match; use a ref to be exact)` : ''}`;
     },
-    async type({ selector, text }) {
-      if (selector) { const ok = await js(`(() => { const e = document.querySelector(${JSON.stringify(selector)}); if (!e) return false; e.focus(); return true; })()`); if (!ok) throw new Error(`no element ${selector}`); }
+    async type({ ref, selector, text }) {
+      if (ref || selector) { const f = await op('focus', { ref, selector }); if (f.err) throw new Error(f.err); }
       await send('Input.insertText', { text: String(text ?? '') });
       await sleep(200);
       return `typed ${String(text).length} characters`;
@@ -406,7 +470,16 @@ export async function openTab({ chatId, cdpPort, own = false, attachTab, extTab 
       await settle();
       return `pressed ${combo}`;
     },
-    async scroll(dy = 600) { await js(`window.scrollBy({ top: ${Number(dy) || 600}, left: 0, behavior: 'instant' })`); await settle(); return `scrolled ${dy}px`; },
+    // Scrolls the page, or when the page can't move that way the area under the middle of the screen (a chat list, a
+    // feed column), or the one holding a ref. screens: how many screens (0.85 of the area's height each).
+    async scroll(dy = 600, { screens, ref } = {}) {
+      const r = await op('scroll', { dy: screens == null ? Number(dy) || 600 : undefined, screens, ref }).catch(async () => { await js(`window.scrollBy({ top: ${Number(dy) || 600}, left: 0, behavior: 'instant' })`); return null; });
+      await settle();
+      if (!r) return `scrolled ${dy}px`;
+      if (r.err) throw new Error(r.err);
+      if (!r.moved) return `nothing scrolled: ${r.what === 'nothing' ? 'neither the page nor any area under the middle of the screen can move that way' : `${r.what} is already at its end`}`;
+      return r.what === 'page' ? `scrolled ${r.moved}px` : `scrolled ${r.what} by ${r.moved}px (the page itself doesn't scroll here) · now at ${r.pos[0]} of ${r.pos[1]} px`;
+    },
     // Typing like a keyboard, one key event per character (some pages ignore inserted text).
     async keys(text) {
       for (const ch of String(text ?? '')) {

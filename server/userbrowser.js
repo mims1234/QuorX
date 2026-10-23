@@ -119,7 +119,8 @@ export async function borrowTab(chatId) {
     tab = Object.assign(Object.create(s.tab), { given: true, close: async () => {}, open: (url) => s.tab.open(url, { width: s.w, height: s.h, mobile: false }) });
   }
   lockGiven(g, true);
-  return { tab, sid: g.sid, release: () => { if (given.get(chatId)?.sid === g.sid) lockGiven(g, false); } };
+  // release: the user can use the tab again (the reply ended, or a handoff); relock: the agent takes it back.
+  return { tab, sid: g.sid, release: () => { if (given.get(chatId)?.sid === g.sid) lockGiven(g, false); }, relock: () => { if (given.get(chatId)?.sid === g.sid) lockGiven(g, true); } };
 }
 /** The lent tab with this id, wherever it is lent (the extension takes a Chrome tab back by its id). */
 export function takeBackSid(sid) { for (const [c, g] of given) if (g.sid === sid) return takeBackTab(c); return false; }
