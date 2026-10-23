@@ -173,6 +173,53 @@ test('a backup restores into a fresh QuorX home without losing projects or chats
   } finally { await qb.stop(); }
 });
 
+test('your own skills and memory go in the backup and come back, keeping what is here unless asked to replace it', async () => {
+  const a = tempDir('qx-backup-sk-a-'), da = path.join(a, 'data');
+  fs.mkdirSync(path.join(da, 'skills', 'release-notes', 'refs'), { recursive: true });
+  fs.writeFileSync(path.join(da, 'skills', 'release-notes', 'SKILL.md'), '---\nname: release-notes\ndescription: From the git log\n---\n1. Read the log');
+  fs.writeFileSync(path.join(da, 'skills', 'release-notes', 'refs', 'style.md'), 'Short lines.');
+  fs.mkdirSync(path.join(da, 'skills', 'no-skill-md'), { recursive: true });
+  fs.writeFileSync(path.join(da, 'skills', 'no-skill-md', 'notes.txt'), 'not a skill');
+  fs.writeFileSync(path.join(da, 'memory.json'), JSON.stringify({ version: 1, on: true, items: [{ id: 'm1', text: 'I use pnpm', by: 'you', at: 1 }, { id: 'm2', text: 'Prefer dark themes', by: 'you', at: 2 }] }));
+  const qa = await quorx(a);
+  let file;
+  try {
+    const r = (await qa.call('/api/backup/export', { dir: tempDir('qx-out-') })).body;
+    assert.ok(!r.error, r.error);
+    assert.equal(r.counts.skills, 1, 'only folders with a SKILL.md');
+    assert.equal(r.counts.memory, 2);
+    const names = entries(r.file);
+    assert.ok(names.includes('skills/release-notes/SKILL.md') && names.includes('skills/release-notes/refs/style.md'), 'every file in the skill');
+    assert.ok(names.includes('memory.json'));
+    assert.ok(!names.some((n) => n.includes('no-skill-md')));
+    file = r.file;
+  } finally { await qa.stop(); }
+
+  // Computer B has its own skill of the same name and one memory item, one of them the same as the backup's.
+  const b = tempDir('qx-backup-sk-b-'), db = path.join(b, 'data');
+  fs.mkdirSync(path.join(db, 'skills', 'release-notes'), { recursive: true });
+  fs.writeFileSync(path.join(db, 'skills', 'release-notes', 'SKILL.md'), '---\nname: release-notes\ndescription: Mine\n---\nMine');
+  fs.writeFileSync(path.join(db, 'memory.json'), JSON.stringify({ version: 1, on: true, items: [{ id: 'x1', text: 'i use pnpm', by: 'you', at: 1 }, { id: 'x2', text: 'Answer in English', by: 'you', at: 2 }] }));
+  const qb = await quorx(b);
+  try {
+    const look = (await qb.call('/api/backup/inspect', { file })).body;
+    assert.equal(look.skills, 1); assert.equal(look.skillClashes, 1); assert.equal(look.memory, 2);
+    const keep = (await qb.call('/api/backup/import', { file })).body;
+    assert.ok(!keep.error, keep.error);
+    assert.equal(keep.skills, 0, 'a skill that is here is kept');
+    assert.match(fs.readFileSync(path.join(db, 'skills', 'release-notes', 'SKILL.md'), 'utf8'), /Mine/);
+    assert.equal(keep.memory, 1, 'the duplicate memory item stays out');
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(db, 'memory.json'), 'utf8')).items.map((x) => x.text), ['i use pnpm', 'Answer in English', 'Prefer dark themes']);
+    const replace = (await qb.call('/api/backup/import', { file, overwrite: true })).body;
+    assert.equal(replace.skills, 1);
+    assert.match(fs.readFileSync(path.join(db, 'skills', 'release-notes', 'SKILL.md'), 'utf8'), /From the git log/);
+    assert.equal(fs.readFileSync(path.join(db, 'skills', 'release-notes', 'refs', 'style.md'), 'utf8'), 'Short lines.');
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(db, 'memory.json'), 'utf8')).items.map((x) => x.text), ['I use pnpm', 'Prefer dark themes'], 'with Replace, the backup\'s memory');
+    const skills = (await qb.call('/api/skills?project=scratch')).body.filter((k) => k.source === 'mine').map((k) => k.name);
+    assert.deepEqual(skills, ['release-notes'], 'the agent sees the restored skill');
+  } finally { await qb.stop(); }
+});
+
 // A backup with one broken part: nothing at all is written.
 test('a damaged backup is refused before anything is written', async () => {
   const home = tempDir('qx-backup-dmg-'), qx = await quorx(home);
@@ -185,7 +232,8 @@ test('a damaged backup is refused before anything is written', async () => {
         { name: 'chats/c-good.json', data: j({ id: 'c-good', title: 'fine' }) }, ...extra]));
       return f;
     };
-    for (const [why, extra] of [['a log named "."', [{ name: 'logs/.', data: Buffer.from('x') }]], ['a chat whose id differs from its name', [{ name: 'chats/c-two.json', data: Buffer.from('{"id":"other"}') }]], ['a chat that is not JSON', [{ name: 'chats/c-three.json', data: Buffer.from('{') }]]]) {
+    for (const [why, extra] of [['a log named "."', [{ name: 'logs/.', data: Buffer.from('x') }]], ['a chat whose id differs from its name', [{ name: 'chats/c-two.json', data: Buffer.from('{"id":"other"}') }]], ['a chat that is not JSON', [{ name: 'chats/c-three.json', data: Buffer.from('{') }]],
+      ['a skill file that climbs out of its folder', [{ name: 'skills/evil/../../keys.json', data: Buffer.from('{}') }]], ['memory that is not a list', [{ name: 'memory.json', data: Buffer.from('{"items":5}') }]]]) {
       const r = (await qx.call('/api/backup/import', { file: make(extra) })).body;
       assert.match(r.error || '', /damaged.*nothing was imported/, why);
       assert.equal(fs.readFileSync(path.join(home, 'data', 'projects.json'), 'utf8'), before, `${why}: the project list is untouched`);

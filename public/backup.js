@@ -31,7 +31,7 @@ const check = (id, label, on = false) => `<label class="sq-check"><input type="c
 
 function view() {
   const { esc } = H;
-  const exp = `<section class="st-card"><div class="st-card-head"><div class="st-card-title">Backup</div><div class="st-card-subtitle">One .zip file with your chats, projects (their folders and settings, not the files in them), these settings, your command rules and schedules. Use it as a backup, or to move to another computer.</div></div>
+  const exp = `<section class="st-card"><div class="st-card-head"><div class="st-card-title">Backup</div><div class="st-card-subtitle">One .zip file with your chats, projects (their folders and settings, not the files in them), these settings, your command rules, your own skills, memory and schedules. Use it as a backup, or to move to another computer.</div></div>
     ${row('Also include', 'Logs: what QuorX recorded while you worked (runs, approvals, checks).', check('bkLogs', 'My logs'))}
     ${row('API keys', 'Left out unless you tick both boxes.', `${check('bkKeys', 'Include my API keys')}`)}
     <div class="bk-warn" id="bkKeysWarn" hidden><strong>Anyone with this file can spend on your OpenRouter account.</strong> Keep it somewhere private, and don't share or upload it. ${check('bkKeysOk', 'I understand')}</div>
@@ -48,14 +48,14 @@ function importView(esc) {
     : `<div class="st-row-help">No QuorX backups (quorx-backup-….zip) in <code>${esc(IMP.dir)}</code>.</div>`;
   if (L) {
     const c = L.manifest?.counts || {};
-    body += `<div class="bk-look"><div class="st-row-help">From ${esc(L.manifest?.created?.slice(0, 10) || '?')}${L.manifest?.app ? ` (QuorX ${esc(L.manifest.app)})` : ''}: ${pl(L.chats, 'chat')}, ${pl(L.projects.length, 'project')}${c.files ? `, ${pl(c.files, 'attached file')}` : ''}${L.settings ? ', settings' : ''}${L.schedules ? ', schedules' : ''}${L.logs ? `, ${pl(L.logs, 'log')}` : ''}${L.keys ? `, ${pl(L.keys, 'API key')}` : ''}.</div>`;
+    body += `<div class="bk-look"><div class="st-row-help">From ${esc(L.manifest?.created?.slice(0, 10) || '?')}${L.manifest?.app ? ` (QuorX ${esc(L.manifest.app)})` : ''}: ${pl(L.chats, 'chat')}, ${pl(L.projects.length, 'project')}${c.files ? `, ${pl(c.files, 'attached file')}` : ''}${L.settings ? ', settings' : ''}${L.skills ? `, ${pl(L.skills, 'skill')}` : ''}${L.memory ? `, ${pl(L.memory, 'memory item')}` : ''}${L.schedules ? ', schedules' : ''}${L.logs ? `, ${pl(L.logs, 'log')}` : ''}${L.keys ? `, ${pl(L.keys, 'API key')}` : ''}.</div>`;
     if (L.projects.length) body += `<div class="bk-projects">${L.projects.map((p) => {
       const to = IMP.folders[p.id];
       const state = to ? `<span class="bk-tag ok">→ ${esc(to)}</span>` : p.found ? '<span class="bk-tag ok">folder found</span>' : '<span class="bk-tag miss">folder not on this computer</span>';
       return `<div class="bk-proj"><div><strong>${esc(p.name)}</strong> <code>${esc(p.path || '')}</code>${p.clash ? ' <span class="bk-tag">already here</span>' : ''}</div><div>${state} <button type="button" class="st-btn ghost sm" data-repoint="${esc(p.id)}">${to || !p.found ? 'Choose its folder…' : 'Use another folder…'}</button></div></div>`;
     }).join('')}</div>`;
-    const clashes = L.chatClashes + L.projects.filter((p) => p.clash).length;
-    if (clashes) body += row(`${clashes} already here`, 'Chats and projects with the same id as ones on this computer.', `<div class="st-segmented" role="radiogroup" id="bkClash"><button type="button" class="st-seg-btn ${IMP.overwrite ? '' : 'active'}" data-v="keep" role="radio" aria-checked="${!IMP.overwrite}">Keep mine</button><button type="button" class="st-seg-btn ${IMP.overwrite ? 'active' : ''}" data-v="replace" role="radio" aria-checked="${IMP.overwrite}">Replace with the backup</button></div>`);
+    const clashes = L.chatClashes + L.projects.filter((p) => p.clash).length + (L.skillClashes || 0);
+    if (clashes) body += row(`${clashes} already here`, 'Chats, projects and skills with the same id or name as ones on this computer.', `<div class="st-segmented" role="radiogroup" id="bkClash"><button type="button" class="st-seg-btn ${IMP.overwrite ? '' : 'active'}" data-v="keep" role="radio" aria-checked="${!IMP.overwrite}">Keep mine</button><button type="button" class="st-seg-btn ${IMP.overwrite ? 'active' : ''}" data-v="replace" role="radio" aria-checked="${IMP.overwrite}">Replace with the backup</button></div>`);
     if (L.keys) body += row('API keys', `This backup holds ${pl(L.keys, 'API key')}.`, check('bkImpKeys', 'Add them here', IMP.keys));
     body += row('', L.settings ? 'Settings from the backup replace the ones in this browser, except the safety ones (approval mode, YOLO and Strict options, deciders, budgets, tools), which stay as they are here. The page reloads after.' : '', '<button type="button" class="st-btn primary sm" id="bkImport">Import</button>');
   }
@@ -80,7 +80,7 @@ function wire(box) {
     btn.disabled = false;
     if (r.error) { out.textContent = `Not exported: ${r.error}`; return; }
     const c = r.counts;
-    out.innerHTML = `Saved <code>${esc(r.file)}</code> (${kb(r.bytes)}): ${pl(c.chats, 'chat')}, ${pl(c.projects, 'project')}${c.logs ? `, ${pl(c.logs, 'log')}` : ''}${c.keys ? `, <strong>${pl(c.keys, 'API key')}</strong>` : ''}.`;
+    out.innerHTML = `Saved <code>${esc(r.file)}</code> (${kb(r.bytes)}): ${pl(c.chats, 'chat')}, ${pl(c.projects, 'project')}${c.skills ? `, ${pl(c.skills, 'skill')}` : ''}${c.memory ? `, ${pl(c.memory, 'memory item')}` : ''}${c.logs ? `, ${pl(c.logs, 'log')}` : ''}${c.keys ? `, <strong>${pl(c.keys, 'API key')}</strong>` : ''}.`;
   };
   const redraw = () => drawBackup(H);
   $('#bkPick').onclick = async () => {
@@ -108,9 +108,10 @@ function wire(box) {
   if (go) go.onclick = async () => {
     const L = IMP.look, out = $('#bkImpOut');
     const missing = L.projects.filter((p) => !p.found && !IMP.folders[p.id]);
-    const clashes = L.chatClashes + L.projects.filter((p) => p.clash).length;
+    const clashes = L.chatClashes + L.projects.filter((p) => p.clash).length + (L.skillClashes || 0);
     const lines = [
-      ...(IMP.overwrite && clashes ? [`• ${clashes} chats and projects that are here already will be replaced by the backup's.`] : []),
+      ...(IMP.overwrite && clashes ? [`• ${clashes} chats, projects and skills that are here already will be replaced by the backup's.`] : []),
+      ...(IMP.overwrite && L.memory ? ['• Your memory is replaced by the backup\'s.'] : []),
       ...(missing.length ? [`• ${missing.length} project${missing.length === 1 ? '' : 's'} without a folder here (${missing.map((p) => p.name).join(', ')}): they show as missing until you choose their folders.`] : []),
       ...(L.settings ? ['• This browser\'s settings are replaced by the backup\'s, except the safety ones, and the page reloads.'] : []),
       ...(L.schedules ? ['• Its schedules arrive paused: start each one yourself when you want it to run here.'] : []),
@@ -120,7 +121,7 @@ function wire(box) {
     const r = await postJ('/api/backup/import', { file: L.file, overwrite: IMP.overwrite, folders: IMP.folders, keys: IMP.keys });
     go.disabled = false;
     if (r.error) { out.textContent = `Not imported: ${r.error}`; return; }
-    out.textContent = `Imported ${pl(r.chats, 'chat')}, ${pl(r.projects, 'project')}${r.rules ? `, ${pl(r.rules, 'rule')}` : ''}${r.schedules ? `, ${pl(r.schedules, 'schedule')} (paused)` : ''}${r.keys ? `, ${pl(r.keys, 'API key')}` : ''}${r.logs ? `, ${pl(r.logs, 'log')}` : ''}${r.kept ? `; kept ${r.kept} of yours` : ''}.`;
+    out.textContent = `Imported ${pl(r.chats, 'chat')}, ${pl(r.projects, 'project')}${r.rules ? `, ${pl(r.rules, 'rule')}` : ''}${r.skills ? `, ${pl(r.skills, 'skill')}` : ''}${r.memory ? `, ${pl(r.memory, 'memory item')}` : ''}${r.schedules ? `, ${pl(r.schedules, 'schedule')} (paused)` : ''}${r.keys ? `, ${pl(r.keys, 'API key')}` : ''}${r.logs ? `, ${pl(r.logs, 'log')}` : ''}${r.kept ? `; kept ${r.kept} of yours` : ''}.`;
     if (r.settings) { try { localStorage.setItem(H.store, JSON.stringify(mergeSettings(r.settings, JSON.parse(localStorage.getItem(H.store) || 'null')))); } catch { /* storage off */ } }
     setTimeout(() => location.reload(), r.settings ? 1500 : 2500);
   };

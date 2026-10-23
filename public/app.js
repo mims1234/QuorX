@@ -5708,6 +5708,12 @@ async function drawSkillsPanel(mark, msg = '') {
     </div>`;
   const list = await fetch(`/api/skills?project=${pid}`).then((r) => r.json()).catch(() => []);
   G.skillCount = list.length;
+  // The count beside Skills in the nav, kept up to date after a skill is added or deleted here.
+  const nav = $('#stNav .st-nav-item[data-cat="skills"]');
+  if (nav && !nav.querySelector('.st-nav-badge:not(.count)')) {
+    nav.querySelector('.st-nav-badge.count')?.remove();
+    if (list.length) nav.insertAdjacentHTML('beforeend', `<span class="st-nav-badge count">${list.length}</span>`);
+  }
   listEl.innerHTML = list.length ? list.map((k) => {
     const [cls, label] = SKILL_SOURCE[k.source] || ['saved', k.source], own = k.source !== 'built-in';
     return `<div class="st-skill-item" data-name="${esc(k.name)}" data-where="${esc(k.source)}"><div class="st-skill-info"><div class="st-skill-top"><span class="st-skill-name">${esc(k.name)}</span><span class="st-source-badge ${cls}">${esc(label)}</span></div><div class="st-skill-desc">${esc(k.description)}</div></div>${own ? `<button type="button" class="pp-btn set" data-sk-edit title="Edit this skill" aria-label="Edit ${esc(k.name)}">${ICO.pencil}</button><button type="button" class="pp-btn del" data-sk-del title="Move this skill to data/trash" aria-label="Delete ${esc(k.name)}">${ICO.trash}</button>` : ''}${stSwitch('', !off.has(k.name)).replace('data-bind=""', `data-skill="${esc(k.name)}"`)}</div>`;
