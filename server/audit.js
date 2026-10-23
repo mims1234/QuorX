@@ -4,14 +4,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { HOME } from './openrouter.js';
+import { rotateLog } from './storagerules.js';
 
 const FILE = path.join(HOME, 'logs', 'audit.jsonl');
-const MAX = 20 * 1024 * 1024; // past 20 MB the log starts a new file (the old one is kept as audit.1.jsonl)
 
+// Past the log limit (⚙ Settings → Storage, 50 MB) the log starts a new file; the old one is kept as audit.1.jsonl.
 export function audit(rec) {
   try {
     fs.mkdirSync(path.dirname(FILE), { recursive: true });
-    try { if (fs.statSync(FILE).size > MAX) fs.renameSync(FILE, FILE.replace(/\.jsonl$/, '.1.jsonl')); } catch { /* no log yet */ }
+    rotateLog(FILE);
     fs.appendFileSync(FILE, `${JSON.stringify({ ts: new Date().toISOString(), ...rec })}\n`);
   } catch { /* best effort: auditing never breaks a reply */ }
 }

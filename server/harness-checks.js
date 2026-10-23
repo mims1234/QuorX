@@ -11,6 +11,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { ensemble, aggregate } from './decisions.js';
 import { HOME } from './openrouter.js';
+import { storageRules, rotateLog } from './storagerules.js';
 
 // Each question: id (stable, used in logs), v (bump when the wording changes), label (what a "no" means,
 // in plain words), ask (a yes/no statement; yes = fine for shot and click, yes = the request says it for gap).
@@ -71,7 +72,7 @@ export async function askDeciders({ S, state, questions, signal, account, onVote
 // ---------- the log and the screenshot library ----------
 export const CHECK_LOG = path.join(HOME, 'logs', 'checks.jsonl');
 export const SHOT_DIR = path.join(HOME, 'logs', 'check-shots');
-const SHOT_KEEP = 800;
+// How many screenshots stay: ⚙ Settings → Storage (300 unless changed).
 let shotsSincePrune = 0;
 export function saveShot(dataUrl) {
   const m = /^data:image\/(jpeg|png|webp);base64,(.+)$/.exec(String(dataUrl || ''));
@@ -86,11 +87,15 @@ export function saveShot(dataUrl) {
   } catch { return null; }
   return name;
 }
-function pruneShots() {
-  const files = fs.readdirSync(SHOT_DIR).map((n) => ({ n, t: fs.statSync(path.join(SHOT_DIR, n)).mtimeMs })).sort((a, b) => b.t - a.t);
-  for (const f of files.slice(SHOT_KEEP)) { try { fs.unlinkSync(path.join(SHOT_DIR, f.n)); } catch { /* in use */ } }
+export function pruneShots(keep = storageRules().shotKeep) {
+  let names; try { names = fs.readdirSync(SHOT_DIR); } catch { return 0; }
+  const files = names.map((n) => { try { return { n, t: fs.statSync(path.join(SHOT_DIR, n)).mtimeMs }; } catch { return null; } }).filter(Boolean).sort((a, b) => b.t - a.t);
+  let n = 0;
+  for (const f of files.slice(keep)) { try { fs.unlinkSync(path.join(SHOT_DIR, f.n)); n++; } catch { /* in use */ } }
+  return n;
 }
 export function logCheck(rec) {
+  rotateLog(CHECK_LOG);
   fs.mkdir(path.dirname(CHECK_LOG), { recursive: true }, () => fs.appendFile(CHECK_LOG, JSON.stringify({ ts: new Date().toISOString(), ...rec }) + '\n', () => {}));
 }
 // What each decider said about each question, for the log (which single decider agrees most with the panel).

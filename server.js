@@ -51,6 +51,8 @@ import { artifactContent, servedArtifact, ARTIFACT_HEADERS, folderStamp } from '
 import { gate, appGate, appLink, hostAllowed, crossSiteApi, isLoopback } from './server/access.js';
 import { gitHubRemote, gitHubInfo } from './server/github.js';
 import { serveBlob, startSweeping } from './server/blobs.js';
+import { measureStorage, clearStorage, recentClears, startStorageRules } from './server/storage.js';
+import { storageRules, saveStorageRules, rotateLog } from './server/storagerules.js';
 import { listDesignSystems, readDesignSystem, projectDesign, applyDesignSystem, saveProjectDesign } from './server/design.js';
 import { newsRoute } from './server/news.js';
 import { uiCards } from './server/modelcards.js';
@@ -72,6 +74,7 @@ function codeChanged() {
 if (!currentKey()) console.warn('!! No OpenRouter key yet: add one in the page (⚙ Settings → API keys) or set OPENROUTER_API_KEY in .env');
 startSampling();
 startSweeping();
+startStorageRules();
 setTimeout(lockDown, 2000).unref?.(); // keys and data: this account only (server/keys.js)
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.htm': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
@@ -695,6 +698,20 @@ const server = http.createServer(async (req, res) => {
       try { const root = workspaceDir(b.projectId); return json(res, 200, { cleared: clearAgentSpace(root, b.what, Number(b.keep) || 10), ...agentSpace(root) }); } catch (e) { return json(res, 200, { error: e.message }); }
     }
 
+    // ---- ⚙ Settings → Storage (server/storage.js): sizes, clearing, and the automatic cleanup rules ----
+    if (url.pathname === '/api/storage' && req.method === 'GET') return json(res, 200, await measureStorage({ keep: Number(url.searchParams.get('keep')) || 10 }));
+    if (url.pathname === '/api/storage/clear' && req.method === 'POST') {
+      const b = JSON.parse(await readBody(req, 1e5) || '{}');
+      if (!Array.isArray(b.items) || !b.items.length) return json(res, 400, { error: 'nothing to clear' });
+      const r = await clearStorage(b.items.slice(0, 500), { keep: Math.max(1, Number(b.keep) || 10) });
+      return json(res, r.busy ? 409 : 200, r);
+    }
+    if (url.pathname === '/api/storage/rules') {
+      if (req.method === 'POST') return json(res, 200, saveStorageRules(JSON.parse(await readBody(req, 1e4) || '{}')));
+      return json(res, 200, storageRules());
+    }
+    if (url.pathname === '/api/storage/log' && req.method === 'GET') return json(res, 200, recentClears());
+
     // ---- "Browse…": the computer's own folder dialog (only for someone sitting at this computer) ----
     // A template starts a NEW project: a fresh folder <parent>/<name>, the template copied in, then the project.
     // A folder that already has files is refused, so a template never lands in an existing codebase.
@@ -941,6 +958,7 @@ function shutDown(restart) {
   listener.close(); server.close(); pageServer.close();
   if (restart) {
     const logDir = path.join(HOME, 'logs'); fs.mkdirSync(logDir, { recursive: true });
+    rotateLog(path.join(logDir, 'harness.log'));
     const out = fs.openSync(path.join(logDir, 'harness.log'), 'a');
     spawn(process.execPath, process.argv.slice(1), { cwd: process.cwd(), env: { ...process.env, AGENT_PORT: String(runtime.port), OH_PORT_WAIT: '1' }, detached: true, stdio: ['ignore', out, out], windowsHide: true }).unref();
   }

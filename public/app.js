@@ -4,6 +4,7 @@
 
 import { startTour, maybeStartTour } from './tour.js';
 import { backupCard, drawBackup } from './backup.js';
+import { storageCard, drawStorage, setRulesText } from './storage.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -4938,7 +4939,7 @@ const SETTINGS_NAV = [
   ['OpenRouter', [['keys', '🔑', 'API keys'], ['models', '🧠', 'Models & catalogue']]],
   ['Agent', [['newchats', '✨', 'New chats'], ['loop', '🔁', 'Agent loop'], ['deciders', '⚖️', 'Deciders'], ['tools', '🧰', 'Tools & media'], ['budget', '💵', 'Budget & approvals'], ['safety', '🛡', 'Safety & commands'], ['skills', '🧩', 'Skills'], ['memory', '📌', 'Memory']]],
   ['Workspace', [['projects', '📁', 'Projects'], ['code', '💻', 'Code & servers'], ['docs', '📎', 'Documents']]],
-  ['Data', [['usage', '📊', 'Usage & costs'], ['data', '🗄', 'Data & storage'], ['shortcuts', '⌨️', 'Shortcuts'], ['about', 'ℹ️', 'About']]],
+  ['Data', [['usage', '📊', 'Usage & costs'], ['data', '🗄', 'Data & storage'], ['storage', '🧹', 'Storage'], ['shortcuts', '⌨️', 'Shortcuts'], ['about', 'ℹ️', 'About']]],
 ];
 const ST = { cat: 'appearance', draft: null, dirty: false, reveal: new Set(), revealAccount: false };
 const uiOf = (S) => ({ ...UI_DEFAULTS, ...(S.ui || {}) });
@@ -4959,6 +4960,8 @@ const YOLO_ROWS = [
 ];
 const stRow = (label, help, ctrl, extra = '') => `<div class="st-row" ${extra}><div class="st-row-info"><div class="st-row-label-wrap"><span class="st-row-label">${label}</span></div>${help ? `<div class="st-row-help">${help}</div>` : ''}</div><div class="st-row-ctrl">${ctrl}</div></div>`;
 const stCard = (title, sub, body, cls = '') => `<section class="st-card ${cls}"><div class="st-card-head"><div class="st-card-title">${title}</div>${sub ? `<div class="st-card-subtitle">${sub}</div>` : ''}</div>${body}</section>`;
+// An on/off that is a rounded-square ✓ box (Storage's rules use it).
+const sqCheck = (bind, on, label = '') => `<label class="sq-check"><input type="checkbox" data-bind="${bind}" ${on ? 'checked' : ''}>${label ? `<span>${label}</span>` : ''}</label>`;
 const stSwitch = (bind, on) => `<label class="st-switch"><input type="checkbox" role="switch" data-bind="${bind}" ${on ? 'checked' : ''}><span class="st-switch-track"><span class="st-switch-thumb"></span></span></label>`;
 const stSeg = (bind, opts, v) => `<div class="st-segmented" role="radiogroup" data-bind="${bind}">${opts.map(([k, l]) => `<button type="button" class="st-seg-btn ${String(k) === String(v) ? 'active' : ''}" role="radio" aria-checked="${String(k) === String(v)}" data-v="${esc(k)}">${l}</button>`).join('')}</div>`;
 const stStep = (bind, v, min, max, step = 1, unit = '') => `<div class="st-stepper" data-min="${min}" data-max="${max}" data-step="${step}"><button type="button" class="st-step-btn" data-d="-1" aria-label="Less">−</button><input class="st-step-val" type="number" data-bind="${bind}" value="${v}" min="${min}" max="${max}" step="${step}">${unit ? `<span class="st-step-unit">${unit}</span>` : ''}<button type="button" class="st-step-btn" data-d="1" aria-label="More">＋</button></div>`;
@@ -5023,7 +5026,7 @@ function wireSafetySimple(mark) {
 }
 
 function settingsPanels(S) {
-  const U = uiOf(S), d = G.cfg.defaults;
+  const U = uiOf(S), d = G.cfg.defaults, R = S.storage || {};
   const keysBadge = G.cfg.hasKey ? '' : 'bad-dot';
   return {
     appearance: ['Appearance', 'How the harness looks on this computer.', [
@@ -5193,9 +5196,7 @@ function settingsPanels(S) {
     ]],
     code: ['Code & servers', 'What the agent may run on this computer.', [
       stCard('Commands', 'The agent runs command lines in its shell. Each one is checked first: read-only commands run, others ask you (or the deciders in ⚡ YOLO), and system commands or deletes outside the project are blocked.', stRow('Rules, shell, Stop and Undo for commands', '', '<button type="button" class="st-btn secondary sm" data-act="openSafety">🛡 Safety & commands</button>')),
-      stCard('Agent folder', 'The agent keeps research scripts, downloads, undo history and deleted files in .quorx/ inside each project folder. Git ignores it, so it never ends up in your repo.', stRow('Ask me when it grows past', 'The chat shows a notice with what to clear, and the agent asks before adding more.', stStep('agentSpaceMB', S.agentSpaceMB ?? 500, 50, 50000, 50, 'MB'))
-        + stRow('Undo for the newest', 'Replies per project that keep ↶ Undo. Older undo copies are removed when a new reply starts.', stStep('undoKeep', S.undoKeep ?? 10, 1, 100, 1, 'replies'))
-        + stRow('Undo kept for at most', 'Even among the newest replies, Undo goes after this long. For history that lasts, use git.', stStep('undoDays', S.undoDays ?? 7, 1, 90, 1, 'days'))),
+      stCard('Agent folder', 'The agent keeps research scripts, downloads, undo history and deleted files in .quorx/ inside each project folder. Git ignores it, so it never ends up in your repo.', stRow('Its size, undo history and clearing', '', '<button type="button" class="st-btn secondary sm" data-act="openStorage">🧹 Storage</button>')),
       stCard('Servers and browser', 'Servers are saved in .quorx/launch.json per project; run and stop them from 🖥 in the chat header, and watch them in the terminal.', stRow('Dev server ports', 'Each server gets a free port here unless it has a fixed one.', '<code>5300–5999</code>')
         + stRow('Headless browser', 'Used by the agent to check its own pages.', `<code class="blurable">${esc(G.cfg.browser || 'not found')}</code>`)
         + stRow('Secrets', 'Agent processes run without your API keys, tokens or passwords in their environment, and the file tools cannot read .env or data/keys.json.', '<span class="st-key-source-badge">protected</span>')),
@@ -5211,6 +5212,19 @@ function settingsPanels(S) {
     usage: ['Usage & costs', 'What chats and projects cost.', [
       stCard('In chats', '', stRow('Show the cost badge in chat headers', 'The amber cost next to the model; click it for the per-chat usage breakdown (also /usage).', stSwitch('ui.usageBtn', U.usageBtn))),
       stCard('Everything', '', stRow('Costs per project and chat', '', '<button type="button" class="st-btn secondary sm" data-act="openCosts">💲 Open costs</button>')),
+    ]],
+    storage: ['Storage', 'How much room QuorX takes on this computer, and clearing what it doesn\'t need. Caches are deleted; your own things go to the Windows Recycle Bin.', [
+      storageCard(),
+      stCard('Automatic cleanup', 'Saved with Save, and used whether or not this page is open.',
+        stRow('Clean up automatically', 'When QuorX starts, then once a day.', sqCheck('storage.autoClean', R.autoClean !== false, 'On'))
+        + stRow('Empty QuorX\'s trash after', 'Deleted chats and skills, and each project\'s agent trash, go to the Windows Recycle Bin this long after they were deleted.', stStep('storage.trashDays', R.trashDays ?? 30, 1, 3650, 1, 'days'))
+        + stRow('Start a log afresh past', 'Each log; the older part is kept once, as <code>name.1.jsonl</code>.', stStep('storage.logMaxMB', R.logMaxMB ?? 50, 1, 10000, 10, 'MB'))
+        + stRow('Check screenshots kept', 'The newest ones; older ones are removed.', stStep('storage.shotKeep', R.shotKeep ?? 300, 0, 100000, 50, 'pictures'))
+        + (DESK ? stRow('Remove installed update downloads', 'An installer goes once its version (or a newer one) is running.', sqCheck('storage.updateCleanup', R.updateCleanup !== false, 'On'))
+          + stRow('Clear the browser agent\'s cache each time QuorX starts', 'Its sign-ins stay.', sqCheck('storage.agentCacheOnStart', !!R.agentCacheOnStart, 'On')) : '')),
+      stCard('Agent folder', 'The agent keeps research scripts, downloads, undo history and deleted files in .quorx/ inside each project folder. Git ignores it, so it never ends up in your repo.', stRow('Ask me when it grows past', 'The chat shows a notice with what to clear, and the agent asks before adding more.', stStep('agentSpaceMB', S.agentSpaceMB ?? 500, 50, 50000, 50, 'MB'))
+        + stRow('Undo for the newest', 'Replies per project that keep ↶ Undo. Older undo copies are removed when a new reply starts.', stStep('undoKeep', S.undoKeep ?? 10, 1, 100, 1, 'replies'))
+        + stRow('Undo kept for at most', 'Even among the newest replies, Undo goes after this long. For history that lasts, use git.', stStep('undoDays', S.undoDays ?? 7, 1, 90, 1, 'days'))),
     ]],
     data: ['Data & storage', 'Where things are kept.', [
       stCard('Chats', 'Saved on this computer in data/chats; deleted chats move to data/trash.', stRow('Export all chats', 'One JSON file with every chat.', '<button type="button" class="st-btn secondary sm" data-act="exportChats">⬇ Export</button>')),
@@ -5228,6 +5242,7 @@ function openSettings(cat) {
   ST.draft = structuredClone(G.settings);
   ST.draft.theme = G.theme ?? null; ST.themeAtOpen = G.theme ?? null;
   ST.draft.newChatTools ??= { ...DEFAULT_CHAT_TOOLS };
+  ST.draft.storage = structuredClone(G.storageRules || {});
   ST.dirty = false; ST.reveal = new Set(); ST.revealAccount = false; ST.revealLimit = false;
   if (cat) ST.cat = cat;
   $('#stSearch').value = '';
@@ -5273,6 +5288,7 @@ function wireSettings() {
     if (act === 'pickFallback') { const id = await pickModel('chat', S.fallbackModel || '', { context: 'Fallback when a chat’s model fails' }); if (id) { S.fallbackModel = id; mark(); drawSettings(); } }
     if (act === 'clearFallback') { S.fallbackModel = ''; mark(); drawSettings(); }
     if (act === 'openSafety') { ST.cat = 'safety'; drawSettings(); }
+    if (act === 'openStorage') { ST.cat = 'storage'; drawSettings(); }
     if (act === 'pickReviewer') { const id = await pickModel('chat', S.reviewModel || '', { context: 'Reviewer: tests what was built' }); if (id) { S.reviewModel = id; mark(); drawSettings(); } }
     if (act === 'clearReviewer') { S.reviewModel = ''; mark(); drawSettings(); }
     if (act === 'pickHelper') { const id = await pickModel('chat', S.helperModel || '', { context: 'Helper: read-only jobs' }); if (id) { S.helperModel = id; mark(); drawSettings(); } }
@@ -5317,6 +5333,8 @@ function wireSettings() {
   drawEmbedPick();
   drawDesktopSettings();
   drawBackup({ postJ, esc, uiConfirm, store: STORE });
+  setRulesText(G.storageRules);
+  if (ST.cat === 'storage') drawStorage(storageHelpers());
   showVersion();
 }
 // Search looks through every category; matching rows show, everything else hides.
@@ -5403,11 +5421,23 @@ function saveSettings() {
     if ($('.secs', el)) t.seconds = Math.max(1, Math.min(15, Number($('.secs', el).value) || 5));
   }
   G.theme = S.theme ?? null; delete S.theme;
+  saveStorageRules(S.storage); delete S.storage;
   G.settings = S;
   savePrefs(); applyTheme(); applyUi();
   renderToolbars(); renderPanes(); renderSpend();
   $('#settings').close();
 }
+// The Storage page's rules live with the harness (data/storage.json), so they work while no page is open; the desktop
+// app keeps its own two in its settings, so they apply before the harness starts.
+function saveStorageRules(rules) {
+  if (!rules || JSON.stringify(rules) === JSON.stringify(G.storageRules || {})) return;
+  postJ('/api/storage/rules', rules).then((r) => { if (r && !r.error) G.storageRules = r; });
+  G.storageRules = { ...(G.storageRules || {}), ...rules };
+  if (DESK) window.ohDesktop.storage?.('rules', rules).catch(() => {});
+}
+const storageHelpers = () => ({ getJ, postJ, esc, ask, uiAlert, keep: () => Number(G.settings?.undoKeep) || 10,
+  desk: DESK && window.ohDesktop.storage ? (op, arg) => window.ohDesktop.storage(op, arg) : null,
+  openCat: (id) => { ST.cat = id; drawSettings(); } });
 // Cancel (or Esc) drops the draft and undoes the theme preview.
 function cancelSettings() { G.theme = ST.themeAtOpen; applyTheme(); if ($('#settings').open) $('#settings').close(); }
 
@@ -5999,6 +6029,7 @@ async function boot() {
   // Opened without the app link, every other /api call answers 401 and the wall above says what to do: stop here.
   if ((await fetch('/api/chats')).status === 401) return;
   loadScores(); loadCards();
+  getJ('/api/storage/rules').then((r) => { if (r && !r.error) G.storageRules = r; });
   const d = G.cfg.defaults;
   const saved = load();
   G.settings = { voters: d.voters, gate: d.gate, maxSteps: d.maxSteps, approval: d.approval, budget: d.budget, model: d.chatModel || d.setups.C.model, reasoning: 'off', ...(saved?.settings || {}) };
