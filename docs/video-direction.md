@@ -93,7 +93,7 @@ what the toolkit READMEs describe. This is a reading of the source code, not a m
 | Plan the whole film first | `plan` is required first for any build: spec, live to-do list, done-when checks. No shot-list fields yet. | Matches |
 | Sign-off before costly steps | Plan first (Go ahead / Stop here / Changes); build tools are refused until Go ahead. | Ahead |
 | Deterministic, seekable rendering | No frame renderer yet. `make_video` asks a paid model for a clip of up to 15 s, optionally starting from a picture (first frame), and `edit_video` joins clips, stills, a voice-over and music with ffmpeg. | Partial |
-| Router, skills on demand | `use_skill` / `save_skill`; no video skill until this PR. | Matches |
+| Router, skills on demand | `use_skill` / `save_skill`; ten video skills since October 2026 (section 8). | Matches |
 | Shot-recipe library | None. | Missing |
 | Lock style and references early | `DESIGN.md` + `tokens.css`, design lint, brand score, `extract_design`. Nothing for characters or locations. | Matches |
 | Lint and check in the loop | `node --check`, `ast.parse`, HTML link checks; nothing for rendered video. | Partial |
@@ -102,10 +102,10 @@ what the toolkit READMEs describe. This is a reading of the source code, not a m
 | Select against the original brief | The reviewer tests against the request and plan; the enhancer's reading reaches the judges. One candidate only. | Partial |
 | Editable output as tracks | `edit_video` keeps its filter graph in `.quorx/edits/`, and Undo covers the finished file; no timeline editor. | Partial |
 | Confirm before posting | Paid media and risky commands need approval: the person, or in YOLO a quorum of deciders that never includes the chat's own model. | Ahead |
-| Video craft knowledge | One line on motion in `design-craft`. This PR adds `video-direction`. | Missing → this PR |
+| Video craft knowledge | The video skill family (section 8). Written, not yet tested on video. | Covered in writing |
 
 **Score:** 58% overall (15 of 26 points), 83% for the nine loop and safety practices, 0% for the four video-stack
-practices, before this PR.
+practices, before any video skill existed.
 
 ## 6. Where the deciders fit
 
@@ -146,7 +146,7 @@ scores may turn out to be taste questions.
 
 | Stage | Change | Closes |
 |---|---|---|
-| Now | The `video-direction` skill (this PR) | video craft |
+| Now | The video skill family (section 8) | video craft |
 | Now | Topic critics: the reviewer as 3-4 parallel critics with their own rubrics, on decider models | split critics |
 | Now | ffprobe and a seek test in the write checks | lint in the loop |
 | Next | A shot-recipe library, one card and one runnable demo per shot | shot library |
@@ -157,6 +157,53 @@ scores may turn out to be taste questions.
 Projected score if each stage lands as described: 73% after Now, 85% after Next, 100% after Later (video stack 25%,
 50%, 100%). These are arithmetic on the table above, not measurements. The first real test should be a small video
 set in `scripts/bench.mjs --set build`, judged by a person, with and without the skill and the decider checks.
+
+## 8. Update, 23 October 2026: one skill became ten
+
+A public list of eight video, 3-D and three.js repositories pointed to two projects that go further than the toolkits in
+section 4: [lemo-opuscar](https://github.com/lemomo-ai/lemo-opuscar) (59 film styles made only in code, with a directing
+guide and a technique guide, MIT) and [mg-styles-15](https://github.com/Vincentwei1021/mg-styles-15) (15 motion-design
+films with their prompts, a review rubric and a prompt template, MIT). [img2threejs](https://github.com/img2threejs/img2threejs)
+(Apache-2.0) rebuilds a reference object as three.js code pass by pass. The other five (video-shotcraft,
+dsh-blender-plugin, dioramas, Motion2MixamoRig, and jianying-headless, which is no longer public) add less for QuorX today.
+
+What they add beyond the earlier research:
+
+- **A page contract** for code films: `DUR`, `render(t)`, `READY`, timed sound events `EV` and on-screen text `TEXTS(t)`.
+- **One timeline** drives picture, score, effects, subtitles and checks; cue timing is measured, aiming for 0 ms.
+- **Reading time as arithmetic:** text holds letters ÷ 15 + 1.5 s; subtitles at least 1.8 s and the spoken line + 0.6 s;
+  title cards at least 4 s.
+- **A fuller treatment:** three candidate structures, a benchmark with what to learn and what not to take, a shot list
+  with the reason for each shot, a beat sheet, a cue map and a sound design table.
+- **Sound as half the film:** three layers, two real silences, J and L cuts, original scores from free sample libraries,
+  and voice checked by transcribing it back.
+- **Styles as reusable packs** with traits sorted into safe to change, changes its character, and can't change, and
+  signature features written as checkable numbers.
+- **An anchored 1-10 jury rubric** (5 = student work, 8 = agency work), which makes design and pacing scores less of a
+  taste question for the deciders.
+
+There is also more than one way to make a video: drawn in code, built from still images, made from AI-generated clips,
+cut from real footage, or a mix. The skills cover each route and the craft they share:
+
+| Skill | Covers |
+|---|---|
+| `video-direction` | The hub: picks the route; the brief, treatment, story, camera and motion rules; delivery |
+| `film-render` | The code route: the page contract, preview, frame capture in a headless browser, ffmpeg encoding |
+| `film-from-images` | Stills (the user's or `imagine`) with camera moves and parallax |
+| `film-from-ai-clips` | `make_video` shots: a spend plan, a look line, `start_image` for a consistent cast, choosing takes, joining |
+| `film-from-footage` | Real recordings: a transcript-led paper edit, b-roll, captions, an EDL or OpenTimelineIO hand-over |
+| `motion-graphics` | 5-15 s design-led pieces from a four-part brief with checkable signature features |
+| `three-from-image` | 3-D props and characters in three.js code, compared with the reference after every pass |
+| `film-style` | Use, adapt or create a reusable STYLE.md, proven with a style frame and a short demo |
+| `film-sound` | Ambience, foley, score, voice with a speech-to-text check, ducking, the -14 LUFS master |
+| `film-review` | Contact sheets, measured checks, look checks, the anchored rubric and fix rounds |
+
+Two roadmap items look cheaper than section 7 says. QuorX already drives Edge and Chrome on Windows, so a render tool
+can capture frames natively instead of through WSL. And editable tracks can start as an EDL or OpenTimelineIO export
+the user opens in their own editor, instead of a timeline editor inside QuorX.
+
+**Still analysis only.** None of these skills has been run on a real video task in QuorX, and the projects they borrow
+from tune their styles for one frontier model, so results with QuorX's cheaper default models may differ.
 
 ## Sources
 
