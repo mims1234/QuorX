@@ -32,6 +32,7 @@ const lentTabs = async () => (await chrome.storage.session.get('lent')).lent || 
 const setLent = (lent) => chrome.storage.session.set({ lent });
 const groups = async () => (await chrome.storage.session.get('groups')).groups || {}; // chat id → tab group id
 const status = async () => (await chrome.storage.session.get('status')).status || {}; // chat id → { state, what, at }
+const opened = async () => (await chrome.storage.session.get('opened')).opened || {}; // tab id → chat id, for tabs the agent opened
 // Reading through page scripts needs access to the sites; you grant it once in the popup.
 const canScript = () => chrome.permissions.contains(ALL_SITES).catch(() => false);
 const caps = async () => ({ script: await canScript() });
@@ -112,6 +113,7 @@ async function call(cmd, { tab, method, params, locked, url, chatId, chatTitle, 
       if (w && (w.state === 'minimized' || w.width < WIN_SIZE.width - 120 || w.height < WIN_SIZE.height - 120)) await chrome.windows.update(w.id, { state: 'normal', ...WIN_SIZE }).catch(() => {});
     }
     await intoGroup(t.id, chatId, chatTitle);
+    const o = await opened(); o[t.id] = chatId; await chrome.storage.session.set({ opened: o });
     lent[t.id] = { chatId, own: true }; await setLent(lent); badge(t.id);
     return { id: t.id, title: t.title || '' };
   }
@@ -120,6 +122,15 @@ async function call(cmd, { tab, method, params, locked, url, chatId, chatTitle, 
     const gid = (await groups())[chatId];
     if (gid == null) return [];
     return (await chrome.tabs.query({ groupId: gid }).catch(() => [])).map((x) => ({ id: x.id, title: x.title || '', url: x.url || '', active: !!x.active, lent: !!lent[x.id] }));
+  }
+  // The reply ended: close the tabs its agent opened (only those; a tab you gave or dragged in stays open).
+  if (cmd === 'tab.closeOwn') {
+    const o = await opened(), mine = Object.keys(o).filter((id) => o[id] === chatId).map(Number);
+    for (const id of mine) { netOn.delete(id); await detach(id); delete lent[id]; delete o[id]; }
+    await setLent(lent); await chrome.storage.session.set({ opened: o });
+    await chrome.tabs.remove(mine).catch(() => {});
+    const g = await groups(); delete g[chatId]; await chrome.storage.session.set({ groups: g });
+    return { closed: mine.length };
   }
   if (cmd === 'tab.adopt') {
     const gid = (await groups())[chatId];

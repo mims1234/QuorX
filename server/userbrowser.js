@@ -141,3 +141,9 @@ export async function adoptChromeTab(chatId, tab) {
   const t = await extCall('tab.adopt', { tab, chatId }, 10000);
   return giveTab(chatId, `chrome-${t.id}`, { url: t.url, title: t.title, ext: t.id, own: true });
 }
+/** The tabs a chat's agent opened in your Chrome close (never the ones you gave); its lent tab is let go first. */
+export async function closeChatChromeTabs(chatId) {
+  const g = given.get(chatId);
+  if (g?.own) takeBackTab(chatId);
+  return extCall('tab.closeOwn', { chatId }, 10000).catch(() => null);
+}

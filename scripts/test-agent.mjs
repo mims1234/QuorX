@@ -2420,7 +2420,7 @@ test('🧩 Chrome on in a chat: the agent opens its own tab in the user’s Chro
     const res = toolResults(on.bodies.at(-1)).map(String);
     assert.equal(opened.length, 1); assert.equal(opened[0].chatId, chatId); assert.equal(opened[0].url, `http://127.0.0.1:${port}/`);
     assert.match(res[1], /clicked link "Open message"/);
-    assert.equal(givenTab(chatId)?.own, true);
+    assert.equal(givenTab(chatId), null); // the reply ended: the tab it opened was let go and closed
   } finally { takeBackTab(chatId); ws.close(); await real.close().catch(() => {}); srv.close(); closeBrowser(); }
 });
 
@@ -2593,6 +2593,7 @@ test('🧩 Chrome read through page scripts: opening, reading and collecting nev
     assert.ok(firstInput >= 0, cdp.join(','));
     assert.deepEqual(cdp.slice(0, firstInput).filter((x) => !/^(Page|Runtime|Log|Network|Emulation)\.(enable|setFocusEmulationEnabled)$/.test(x)), []);
     assert.ok(calls.includes('tab.op') && calls.includes('tab.shot'));
+    assert.equal(calls.at(-1), 'tab.closeOwn'); // the reply ended: the tabs it opened close
   } finally { takeBackTab(chatId); ws.close(); await real.close().catch(() => {}); srv.close(); closeBrowser(); }
 });
 

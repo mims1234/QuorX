@@ -41,7 +41,7 @@ import { projectDesign } from './design.js';
 import { workspaceDir, listFiles, readFile, readText, writeFile, appendFile, editFile, editFileMulti, runLine, lineOf, preApproved, stopNote, endProc, startServer, stopServerWait, serverFor, serverLog, listServers, launchConfigs, saveLaunchConfig, removeLaunchConfig, ensureAgentDir, agentSpace, SCRATCH, sealCheckpoint, pruneCheckpoints } from './workspace.js';
 import { openTab, hostHtml, startedWithDevtoolsPort } from './browser.js';
 import { pageOp } from './pageops.js';
-import { adoptAgentTab, releaseAgentTab, borrowTab, givenTab, openChromeTab, chatChromeTabs, adoptChromeTab } from './userbrowser.js';
+import { adoptAgentTab, releaseAgentTab, borrowTab, givenTab, openChromeTab, chatChromeTabs, adoptChromeTab, closeChatChromeTabs } from './userbrowser.js';
 import { setLiveArtifact, markdownHtml } from './artifacts.js';
 import { listDocs, docText, readDoc, searchDocs, DOC_DEFAULTS } from './docs.js';
 import { groupCalls, numberedWindow, untrusted, trimTranscript, trimPageViews, compactTranscript, transcriptChars, withCacheMarks, retryable, LOOK_TOOLS } from './loop.js';
@@ -125,6 +125,7 @@ export const DEFAULTS = {
   browseReadOnly: true,    // 🧩 Chrome and lent tabs: for a request that only reads, typing outside a search box asks the user
   chromeCheck: true,       // 🧩 Chrome and lent tabs: the deciders check each typing step against the request (never the page)
   chromeNetwork: true,     // 🧩 Chrome and lent tabs: the agent may read a page's JSON or text data responses (GET only, secrets removed)
+  chromeCloseTabs: true,   // 🧩 Chrome: when a reply ends, close the tabs it opened (the ones you gave stay)
   chromeSitesNever: '',    // 🧩 Chrome: sites the agent may never open ("bank.com, mychart.org")
   chromeSitesAlways: '',   // 🧩 Chrome: sites it may open without the "your request didn't name it" ask
   chromeSitesRead: '',     // 🧩 Chrome: sites where typing outside a search box always asks, whatever the request
@@ -3337,6 +3338,9 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
       if (err) return `Error: could not reach the user's tab (${err.message}).`;
       if (!lent) return 'Error: the tab the user gave is closed now. Ask them to give it again.';
       cleanups.push(async () => { if (lent) { await lent.tab.mark?.(false); lent.release(); await lent.tab.close().catch(() => {}); lent = null; } });
+      // When the reply ends (after letting go of the tab above), the tabs it opened close, so an empty Chrome window
+      // means it is done. Tabs the user gave stay.
+      if (fresh && !run.closesChrome) { run.closesChrome = true; cleanups.push(async () => { if (S.chromeCloseTabs !== false) await closeChatChromeTabs(req.chatId); }); }
     }
     onLent = true; run.lentUsed = true;
     const t = lent.tab;
