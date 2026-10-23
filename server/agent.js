@@ -1320,6 +1320,8 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     // Past the budget allowance (paid media, deciders), the rest of the step's calls are not run.
     let ran = 0;
     for (const group of groupCalls(r.toolCalls, S.parallel !== false)) {
+      // Stop takes effect before the next call, not only at the next model call (one answer can hold many calls).
+      if (signal.aborted) throw new Error('Stopped.');
       if (ran && pastAllowance()) break;
       if (group.length > 1) emit({ t: 'parallel', step, names: group.map((c) => c.function.name), at: at() });
       const results = await Promise.all(group.map((tc) => callTool(tc, step, r.finishReason)));
@@ -3246,7 +3248,18 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     }
   }
   // o.by: 'reviewer' when the reviewer drives the browser (its screenshots never reach the builder).
-  async function browserTool(args, o = {}) {
+  // Stop ends a browser step at once: page waits (up to 10 s each) and Chrome's answers don't watch the stop signal
+  // themselves, so the step races it. What was under way finishes in the background and is cleaned up with the reply.
+  function untilStopped(p) {
+    if (signal.aborted) return Promise.reject(new Error('Stopped.'));
+    return new Promise((ok, no) => {
+      const stop = () => no(new Error('Stopped.'));
+      signal.addEventListener('abort', stop, { once: true });
+      p.then((v) => { signal.removeEventListener('abort', stop); ok(v); }, (e) => { signal.removeEventListener('abort', stop); no(e); });
+    });
+  }
+  function browserTool(args, o = {}) { return untilStopped(browserToolRun(args, o)); }
+  async function browserToolRun(args, o = {}) {
     if (Array.isArray(args.steps) && args.steps.length) return browserSteps(args.steps, o);
     if (args.action === 'handoff') return handoff(args);
     // The same failed click, key or typing a second time is refused: the Discord run pressed Control+K four times.
@@ -3279,6 +3292,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
   async function browserSteps(list, o) {
     const lines = []; let last = '';
     for (const [i, s] of list.slice(0, 8).entries()) {
+      if (signal.aborted) throw new Error('Stopped.');
       if (!s || typeof s !== 'object' || Array.isArray(s.steps)) { last = `Error: step ${i + 1} is not a browser action.`; lines.push(`${i + 1}. ${last}`); break; }
       last = await browserTool(s, o);
       lines.push(`${i + 1}. ${s.action}${s.target ? ` ${s.target}` : s.ref ? ` ${s.ref}` : s.text ? ` "${clip(s.text, 40)}"` : ''}: ${clip(String(last).split('\n')[0], 180)}`);
@@ -3300,7 +3314,10 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     const okd = await siteAllowed(hostOf(url));
     if (okd !== true) return okd;
     const g = req.chatId ? givenTab(req.chatId) : null;
-    if (!newTab && onLent && lent && g?.own && g.sid === lent.sid) return lentStep({ action: 'open', target: url });
+    // At most 6 of its own tabs per reply: past that, a new tab opens in the current one (the run above opened 16).
+    const full = newTab && (run.chromeTabs || 0) >= 6;
+    if ((!newTab || full) && onLent && lent && g?.own && g.sid === lent.sid) { const out = await lentStep({ action: 'open', target: url }); return full ? `${out}\n\n[This chat already has 6 tabs of its own open, so this opened in the current tab. Read pages one at a time; tabs lists and switch moves between the open ones.]` : out; }
+    run.chromeTabs = (run.chromeTabs || 0) + 1;
     try { await openChromeTab(req.chatId, url, clip(getChat(req.chatId)?.title || userText, 30)); }
     catch (e) { return `Error: ${e.message}${/not connected/i.test(e.message) ? '. Ask the user to open Chrome with the QuorX extension connected (⚙ Settings → Code & servers → Chrome extension).' : ''}`; }
     return useLentTab({ fresh: true });

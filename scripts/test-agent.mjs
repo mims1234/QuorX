@@ -1243,6 +1243,21 @@ test('out of steps: the reply keeps its checkpoint, says why, and "Keep going" c
   dropCheckpoint(id);
 });
 
+test('Stop ends a reply in the middle of slow browser steps, and the rest of the batch never runs', async () => {
+  let opened = 0;
+  // Each page takes 3 s to open, like a busy site waiting to settle.
+  const tab = { ...fakeTab(), async open(u) { opened++; await new Promise((r) => setTimeout(r, 3000)); this.url = u; return this.summary(); } };
+  const ac = new AbortController();
+  const t0 = Date.now();
+  setTimeout(() => ac.abort(), 700);
+  const steps = [1, 2, 3, 4, 5].map((k) => ({ action: 'open', target: `https://example.com/${k}` }));
+  const r = await run((body, i) => [reply('', [['browser', { action: 'open', steps }], ['browser', { action: 'open', target: 'https://example.com/again' }]]), reply('Done.')][i],
+    { settings: { tools: { browser: { on: true } }, review: 'off', verify: false, checks: { on: false } }, openTab: async () => tab, signal: ac.signal }).catch((e) => e);
+  assert.ok(Date.now() - t0 < 2500, `stopped after ${Date.now() - t0} ms`);
+  assert.equal(opened, 1); // the page being opened when Stop came; the other four and the second call never start
+  void r;
+});
+
 test('older chats: a continued reply whose total carried the reply before it is counted once', async () => {
   const { ownCost } = await import('../server/store.js');
   const first = { cost: 0.2226, byModel: { a: { cost: 0.2226 } } };
