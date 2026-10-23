@@ -4933,7 +4933,7 @@ function wireCatEditor(el) {
 }
 // ---------- settings page: categories on the left, that category's settings on the right ----------
 const UI_DEFAULTS = { density: 'comfortable', fontSize: 14, reduceMotion: 'system', timestamps: 'time', paneMode: 'auto', sidebarStart: 'remember',
-  showBalance: false, maskAmounts: true, blurPaths: false, usageBtn: true, notify: 'all' };
+  showBalance: false, maskAmounts: true, blurPaths: false, usageBtn: true, notify: 'all', searchEngine: 'google', searchCustom: '' };
 const SETTINGS_NAV = [
   ['Harness', [['setup', '🧪', 'Setup check'], ['appearance', '🎨', 'Appearance'], ['layout', '🧱', 'Layout'], ['privacy', '🕶', 'Privacy & display']]],
   ['OpenRouter', [['keys', '🔑', 'API keys'], ['models', '🧠', 'Models & catalogue']]],
@@ -5517,17 +5517,22 @@ function searchSettings(q) {
 // Reset category: that category's settings go back to the defaults (still unsaved until Save).
 function resetCategory() {
   const S = ST.draft, d = G.cfg.defaults, U = (S.ui ??= {});
-  const uiKeys = { appearance: ['density', 'fontSize', 'reduceMotion', 'timestamps', 'notify'], layout: ['sidebarStart', 'paneMode'], privacy: ['showBalance', 'maskAmounts', 'blurPaths'], usage: ['usageBtn'] }[ST.cat];
+  const uiKeys = { appearance: ['density', 'fontSize', 'reduceMotion', 'timestamps', 'notify'], layout: ['sidebarStart', 'paneMode'], privacy: ['showBalance', 'maskAmounts', 'blurPaths', 'searchEngine', 'searchCustom'], usage: ['usageBtn'] }[ST.cat];
   if (uiKeys) for (const k of uiKeys) U[k] = UI_DEFAULTS[k];
   if (ST.cat === 'appearance') { S.theme = null; G.theme = null; applyTheme(); }
+  if (ST.cat === 'privacy') S.newsRemote = true;
   if (ST.cat === 'models') { S.model = d.chatModel || d.setups.C.model; S.reasoning = 'off'; Object.assign(S, { providerSort: 'auto', requireParams: true, zdrOnly: false, fallbackModel: '' }); }
   if (ST.cat === 'newchats') { S.approval = d.approval; S.strictAsk = d.strictAsk; S.strictAskHelpers = d.strictAskHelpers; S.strictAskDeciders = d.strictAskDeciders; S.newChatTools = { ...DEFAULT_CHAT_TOOLS }; }
-  if (ST.cat === 'loop') { S.maxSteps = d.maxSteps; S.compact = true; S.compactAt = 24000; Object.assign(S, { planFirst: d.planFirst, planSteps: d.planSteps, continueRounds: d.continueRounds, maxOutput: d.maxOutput, thinkShare: d.thinkShare, review: d.review, reviewModel: '', reviewTier: d.reviewTier, reviewSendBack: d.reviewSendBack, codeReview: d.codeReview, reviewRounds: d.reviewRounds, reviewBar: d.reviewBar, helpers: d.helpers, helperModel: '', helperSteps: d.helperSteps, helperMinFiles: d.helperMinFiles, retries: d.retries, parallel: d.parallel, verify: d.verify, verifyRounds: d.verifyRounds, askLimit: d.askLimit, trimAt: d.trimAt, buildThinking: d.buildThinking }); }
+  if (ST.cat === 'loop') { S.maxSteps = d.maxSteps; S.compact = true; S.compactAt = 24000; Object.assign(S, { planFirst: d.planFirst, planSteps: d.planSteps, continueRounds: d.continueRounds, maxOutput: d.maxOutput, thinkShare: d.thinkShare, review: d.review, reviewModel: '', reviewTier: d.reviewTier, reviewSendBack: d.reviewSendBack, codeReview: d.codeReview, designLint: d.designLint, fixSteps: d.fixSteps, reviewRounds: d.reviewRounds, reviewBar: d.reviewBar, helpers: d.helpers, helperModel: '', helperSteps: d.helperSteps, helperMinFiles: d.helperMinFiles, retries: d.retries, parallel: d.parallel, verify: d.verify, verifyRounds: d.verifyRounds, askLimit: d.askLimit, trimAt: d.trimAt, buildThinking: d.buildThinking }); }
   if (ST.cat === 'deciders') { S.voters = [...d.voters]; S.gate = { ...d.gate }; S.lookVoters = [...d.lookVoters]; S.lookEscalate = d.lookEscalate; S.checks = structuredClone(d.checks); }
   if (ST.cat === 'tools') S.tools = structuredClone(d.tools);
-  if (ST.cat === 'budget') { S.budget = d.budget; S.yoloCheck = true; S.budgetGrace = d.budgetGrace; S.yoloAuto = {}; }
+  if (ST.cat === 'budget') { Object.assign(S, { replyBudget: d.replyBudget, dailyBudget: d.dailyBudget, budget: d.budget, yoloCheck: d.yoloCheck, yoloWaitSecs: d.yoloWaitSecs, budgetGrace: d.budgetGrace }); S.yoloAuto = {}; }
   if (ST.cat === 'skills') S.skillsOff = [];
   if (ST.cat === 'safety') { S.safety = { ...(d.safety || {}) }; S.debugger = 'earned'; }
+  if (ST.cat === 'docs') { const dd = G.cfg.docDefaults || {}; Object.assign(S, { maxUploadMB: dd.maxUploadMB, inlineDocTokens: dd.inlineDocTokens, pdfNative: dd.pdfNative, embedModel: dd.embedModel, docIndexBudget: dd.docIndexBudget }); }
+  if (ST.cat === 'code') Object.assign(S, { browseReadOnly: d.browseReadOnly, chromeCheck: d.chromeCheck, chromeNetwork: d.chromeNetwork, chromeCloseTabs: d.chromeCloseTabs, chromeSitesNever: d.chromeSitesNever, chromeSitesAlways: d.chromeSitesAlways, chromeSitesRead: d.chromeSitesRead });
+  // The agent folder's three have no server default: the agent falls back to these (server/agent.js).
+  if (ST.cat === 'storage') { S.storage = { ...(G.cfg.storageDefaults || {}) }; Object.assign(S, { agentSpaceMB: 500, undoKeep: 10, undoDays: 7 }); }
   ST.dirty = true; drawSettings();
 }
 function updateDirty() {

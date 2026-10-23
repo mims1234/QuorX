@@ -52,7 +52,7 @@ import { gate, appGate, appLink, hostAllowed, crossSiteApi, isLoopback } from '.
 import { gitHubRemote, gitHubInfo } from './server/github.js';
 import { serveBlob, startSweeping } from './server/blobs.js';
 import { measureStorage, clearStorage, recentClears, startStorageRules, scanInstallers, clearInstallers } from './server/storage.js';
-import { storageRules, saveStorageRules, rotateLog } from './server/storagerules.js';
+import { storageRules, saveStorageRules, rotateLog, RULE_DEFAULTS } from './server/storagerules.js';
 import { listDesignSystems, readDesignSystem, projectDesign, applyDesignSystem, saveProjectDesign } from './server/design.js';
 import { newsRoute } from './server/news.js';
 import { startNewsSync, remoteState as newsRemoteState } from './server/newsremote.js';
@@ -161,7 +161,7 @@ const server = http.createServer(async (req, res) => {
       return res.end(callbackPage({ ...r, desktop }));
     }
     if (req.method === 'GET' && url.pathname === '/api/stale') return json(res, 200, codeChanged());
-    if (req.method === 'GET' && url.pathname === '/api/config') return json(res, 200, { ...codeChanged(), version: VERSION, platform: process.platform, pagePort: runtime.pagePort || null, shell: shellInfo().name, pty: ptyAvailable(), defaults: DEFAULTS, checks: CHECKS, media: MEDIA, newsRemote: newsRemoteState().on, hasKey: !!currentKey(), browser: browserPath(), allowed: ALLOWED });
+    if (req.method === 'GET' && url.pathname === '/api/config') return json(res, 200, { ...codeChanged(), version: VERSION, platform: process.platform, pagePort: runtime.pagePort || null, shell: shellInfo().name, pty: ptyAvailable(), defaults: DEFAULTS, docDefaults: DOC_DEFAULTS, storageDefaults: RULE_DEFAULTS, checks: CHECKS, media: MEDIA, newsRemote: newsRemoteState().on, hasKey: !!currentKey(), browser: browserPath(), allowed: ALLOWED });
 
     // ---- chat history (data/chats; delete = move to data/trash) ----
     if (url.pathname === '/api/chats' && req.method === 'GET') return json(res, 200, listChats());
