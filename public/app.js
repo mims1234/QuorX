@@ -4677,6 +4677,12 @@ function renderSpend() {
     </div>`;
   // The card opens and closes with 💲 only (no hover), so its buttons stay put while you use them.
   el.classList.toggle('open', !!G.balanceOpen);
+  // It floats over the page (the sidebar's list would cut it off): under 💲, and kept inside the window.
+  if (G.balanceOpen) {
+    const at = $('.sp-icon', el).getBoundingClientRect(), card = $('#spTip', el);
+    card.style.setProperty('top', `${Math.round(at.bottom + 6)}px`, 'important');
+    card.style.setProperty('left', `${Math.round(Math.max(8, Math.min(at.left, innerWidth - card.offsetWidth - 8)))}px`, 'important');
+  }
   $('.sp-icon', el).onclick = () => { G.balanceOpen = !G.balanceOpen; renderSpend(); if (G.balanceOpen) refreshBalance(); };
   $('.sp-refresh', el).onclick = () => refreshBalance();
   $('.bc-more', el).onclick = () => { G.balanceOpen = false; renderSpend(); openSettings('keys'); };
@@ -4686,6 +4692,8 @@ function renderSpend() {
     const close = () => { if (G.balanceOpen) { G.balanceOpen = false; renderSpend(); } };
     document.addEventListener('mousedown', (e) => { if (!e.target.closest('#spend')) close(); });
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && G.balanceOpen) { close(); $('#spend .sp-icon')?.focus(); } });
+    // Placed for where 💲 was: a resize moves 💲, so the card closes rather than float in the wrong place.
+    addEventListener('resize', close);
   }
 }
 // 💲 Costs: totals, then each project with its top chats; more chats load a page at a time, and the
