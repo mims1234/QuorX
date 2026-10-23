@@ -1236,7 +1236,21 @@ test('out of steps: the reply keeps its checkpoint, says why, and "Keep going" c
   assert.match(second.bodies[0].messages.at(-1).content, /reached this reply's step limit\. The user gave you 5 more steps/);
   assert.equal(second.done.reply, 'Finished the rest.');
   assert.ok(second.bodies[0].messages.some((m) => m.role === 'tool' && /Wrote f0\.txt/.test(m.content)), 'it continues the same transcript');
+  // It is a new reply: it counts only its own spend (the reply before keeps its own), so nothing is counted twice.
+  const own = Object.values(second.done.stats.byModel).reduce((n, v) => n + v.cost, 0);
+  assert.equal(+second.done.stats.cost.toFixed(6), +own.toFixed(6));
+  assert.ok(second.done.stats.cost < done.stats.cost);
   dropCheckpoint(id);
+});
+
+test('older chats: a continued reply whose total carried the reply before it is counted once', async () => {
+  const { ownCost } = await import('../server/store.js');
+  const first = { cost: 0.2226, byModel: { a: { cost: 0.2226 } } };
+  const carried = { cost: 0.3412, resumed: true, byModel: { a: { cost: 0.1186 } } };
+  assert.equal(+ownCost(carried, first).toFixed(4), 0.1186);
+  assert.equal(ownCost(first, null), 0.2226);
+  // A reply resumed after a restart that kept its whole breakdown is left as it is.
+  assert.equal(ownCost({ cost: 0.3412, resumed: true, byModel: { a: { cost: 0.3412 } } }, first), 0.3412);
 });
 
 test('YOLO asks first for a group the user turned off (here: file changes); everything else still goes ahead', async () => {

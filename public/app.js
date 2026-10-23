@@ -1861,7 +1861,7 @@ function traceCostHTML(c, m) {
   const t = chatTotals(c); // every reply in the chat (this one included, live or done) and calls outside replies
   const rows = models.map(([id, v]) => `<tr><td><span class="tc-model" title="${esc(id)}">${esc(short(id))}</span>${v.role && v.role !== 'writer' ? ` <i>${esc(v.role)}</i>` : ''}</td><td>${v.calls || 0}×</td><td>${v.tokensIn || v.tokensOut ? `<span class="tok-in">${k(v.tokensIn)} in</span> · <span class="tok-out">${k(v.tokensOut)} out</span>` : ''}</td><td class="tc-cache">${cacheTag(v)}</td><td class="tc-c">${money(v.cost || 0, 5)}</td></tr>`).join('');
   return `<div class="trace-cost">
-    <div class="tc-head"><span>💲 ${s.live ? 'Spent so far' : s.partial ? 'This reply spent (it ended early)' : 'This reply cost'}</span><b>${money(s.cost || 0, 5)}</b></div>
+    <div class="tc-head"><span>💲 ${s.live ? 'Spent so far' : s.partial ? 'This reply spent (it ended early)' : 'This reply cost'}</span><b>${money(m.stats ? ownCost(m, c.agent.messages) : s.cost || 0, 5)}</b></div>
     <div class="tc-sub">${calls} model call${calls === 1 ? '' : 's'}${s.tokensIn ? ` · <span class="tok-in">${k(s.tokensIn)} tokens in</span>` : ''}${s.tokensOut ? ` · <span class="tok-out">${k(s.tokensOut)} tokens out</span>` : ''}${cacheShare(sumCache(models)) != null ? ` · ${cacheTag(sumCache(models))}` : ''}${s.ms ? ` · ${secs(s.ms)}` : ''}${s.mediaSpent ? ` · media ${money(s.mediaSpent, 4)}` : ''}</div>
     ${rows ? `<table class="tc-table"><tbody>${rows}</tbody></table>` : ''}
     <div class="tc-chat"><span>Whole chat so far · ${t.replies} repl${t.replies === 1 ? 'y' : 'ies'}${t.msgs ? ` · ${t.msgs} message${t.msgs === 1 ? '' : 's'}` : ''}</span><b>${money(t.cost, 4)}</b></div>
@@ -2337,10 +2337,19 @@ function wirePane(c, root, i) {
   $('.enhUndo', root).onclick = () => undoEnhance(c);
   $('.stopBtn', root).onclick = () => c.running?.abort();
 }
+// What a reply spent itself (server/store.js ownCost): before 0.2.12, "Continue" after the step limit started the new
+// reply's total with the reply before it included; its per-model costs show its own share.
+function ownCost(m, all) {
+  const s = m.stats, cost = Number(s?.cost) || 0;
+  if (!s?.resumed) return cost;
+  const before = all.slice(0, all.indexOf(m)).reverse().find((x) => x.role === 'assistant');
+  const prev = Number(before?.stats?.cost) || 0, models = Object.values(s.byModel || {}).reduce((n, v) => n + (Number(v.cost) || 0), 0);
+  return prev > 0 && Math.abs(cost - prev - models) < 1e-6 ? cost - prev : cost;
+}
 function chatTotals(c) {
   for (const m of c.agent.messages) if (m.role === 'assistant' && !m.stats && !m.live && m.trace?.length) partialSpendQuiet(m); // older replies that ended part-way
-  const done = c.agent.messages.filter((m) => m.role === 'assistant' && m.stats);
-  return { cost: done.reduce((s, m) => s + m.stats.cost, 0) + (c.agent.extraUsage || []).reduce((s, x) => s + (x.cost || 0), 0) + liveOf(c), replies: done.length, msgs: c.agent.messages.filter((m) => m.role === 'user').length };
+  const all = c.agent.messages, done = all.filter((m) => m.role === 'assistant' && m.stats);
+  return { cost: done.reduce((s, m) => s + ownCost(m, all), 0) + (c.agent.extraUsage || []).reduce((s, x) => s + (x.cost || 0), 0) + liveOf(c), replies: done.length, msgs: all.filter((m) => m.role === 'user').length };
 }
 function renderChatHead(c) {
   if (!c.el) return;
@@ -2458,9 +2467,12 @@ function chatUsage(c) {
   };
   let replies = 0;
   for (const m of c.agent.messages) {
-    if (m.role !== 'assistant' || !m.stats) continue;
+    if (m.role !== 'assistant') continue;
+    // A finished reply's models, or (while it runs) what it has spent so far, as the chat total counts it.
+    const byModel = m.stats ? m.stats.byModel : m.live ? m.liveByModel : null;
+    if (!byModel) continue;
     replies++;
-    for (const [model, v] of Object.entries(m.stats.byModel || {})) add(v.role || 'writer', model, v);
+    for (const [model, v] of Object.entries(byModel || {})) add(v.role || 'writer', model, v);
   }
   for (const x of c.agent.extraUsage || []) add(x.kind, x.model, { calls: 1, cost: x.cost });
   const list = [...rows.values()].sort((a, b) => b.cost - a.cost);

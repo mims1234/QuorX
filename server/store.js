@@ -94,8 +94,8 @@ export const agentsOf = (c) => (c.agent ? [c.agent] : c.layouts?.[c.mode] || c.l
 const SUMMARIES = new Map(); // file name → { key, s }
 // What a reply cost: its totals, or for one that ended without them (an error, a dropped connection, a restart),
 // the calls it made, from its steps. Those were paid for, so they count like any other.
-function replySpend(m) {
-  if (m.stats) return { cost: m.stats.cost || 0, byModel: m.stats.byModel || {} };
+function replySpend(m, prev = null) {
+  if (m.stats) return { cost: ownCost(m.stats, prev?.stats), byModel: m.stats.byModel || {} };
   // A reply still running is counted by the budget ledger as it goes, not here.
   if (m.role !== 'assistant' || m.live || !Array.isArray(m.trace)) return null;
   let cost = 0, n = 0; const byModel = {};
@@ -106,6 +106,18 @@ function replySpend(m) {
   }
   return n ? { cost, byModel } : null;
 }
+/**
+ * What a reply spent itself. Before 0.2.12, "Continue" after the step limit started the new reply's total from the
+ * checkpoint, so it also held the reply before it (its per-model costs did not). Such a total, minus the earlier
+ * reply's, is this reply's own. Everything else is its total as saved.
+ */
+export function ownCost(stats, prevStats) {
+  const cost = Number(stats?.cost) || 0;
+  if (!stats?.resumed || !prevStats) return cost;
+  const models = Object.values(stats.byModel || {}).reduce((n, v) => n + (Number(v.cost) || 0), 0);
+  const prev = Number(prevStats.cost) || 0;
+  return prev > 0 && Math.abs(cost - prev - models) < 1e-6 ? cost - prev : cost;
+}
 function summarise(c) {
   const lay = agentsOf(c);
   const msgs = lay.flatMap((col) => col.messages || []);
@@ -113,8 +125,10 @@ function summarise(c) {
   const lastBot = [...msgs].reverse().find((m) => m.role === 'assistant' && m.content);
   // Spend over time (for today / 7 days) and per model, plus calls made outside a reply (mic).
   const spend = [], models = {};
+  let prev = null;
   for (const m of msgs) {
-    const r = replySpend(m), cost = r?.cost || 0;
+    const r = replySpend(m, prev), cost = r?.cost || 0;
+    if (m.role === 'assistant') prev = m;
     if (cost) spend.push([m.doneAt || m.at || 0, cost]);
     for (const [model, v] of Object.entries(r?.byModel || {})) models[model] = (models[model] || 0) + (v.cost || 0);
   }

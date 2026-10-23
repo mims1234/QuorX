@@ -862,7 +862,11 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   const T0 = Date.now();
   const at = () => Date.now() - T0;
 
-  const stats = { cost: resumed?.cost || 0, byRole: {}, byModel: {}, llmCalls: 0, tokensIn: 0, tokensOut: 0, decide: { calls: 0, questions: 0, theater: 0, confirmed: 0, flipped: 0, unclear: 0, unmatched: 0, skipped: 0 }, mediaSpent: 0 };
+  // A reply resumed after a restart is the same reply, so it carries what it had spent (and on what). "Continue"
+  // after the step limit is a new reply: the one before keeps its own cost, so this one starts at zero (carrying it
+  // counted the earlier reply twice in the chat, the project budget and today's spending).
+  const carried = resumed && !carryOn ? resumed : null;
+  const stats = { cost: carried?.cost || 0, byRole: { ...carried?.spend?.byRole }, byModel: structuredClone(carried?.spend?.byModel || {}), llmCalls: carried?.spend?.llmCalls || 0, tokensIn: carried?.spend?.tokensIn || 0, tokensOut: carried?.spend?.tokensOut || 0, decide: { calls: 0, questions: 0, theater: 0, confirmed: 0, flipped: 0, unclear: 0, unmatched: 0, skipped: 0 }, mediaSpent: carried?.spend?.mediaSpent || 0 };
   spent.stats = stats; spent.at = () => at();
   const account = (u = {}, model = '?', role = 'writer') => {
     const c = Number(u.cost) || 0;
@@ -1442,7 +1446,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   // with it, so a reply whose budget was extended (plan rounds, fixes) keeps it after a restart.
   function checkpointAt(atStep) {
     if (req.bench) return;
-    saveCheckpoint(runId, { req: ckptReq, undoId: filesId, cost: stats.cost, messages, step: atStep, maxSteps, journal, notes, firstOwn, arts: Object.fromEntries(arts), plan: run.plan, at: Date.now(),
+    saveCheckpoint(runId, { req: ckptReq, undoId: filesId, cost: stats.cost, spend: { byRole: stats.byRole, byModel: stats.byModel, llmCalls: stats.llmCalls, tokensIn: stats.tokensIn, tokensOut: stats.tokensOut, mediaSpent: stats.mediaSpent }, messages, step: atStep, maxSteps, journal, notes, firstOwn, arts: Object.fromEntries(arts), plan: run.plan, at: Date.now(),
       touched: { arts: [...touched.arts], apps: [...touched.apps], sites: [...touched.sites] } });
   }
 
