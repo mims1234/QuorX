@@ -7677,12 +7677,12 @@ const DESK = !!window.ohDesktop?.available;
 // The desktop app run from your QuorX folder (npm run desktop) looks different from the installed one: an amber DEV
 // badge by the name, a thin amber line along the top, and DEV in the window title, so the two are never mixed up.
 // Only when the desktop app says so itself (its DEV value: not packaged and a git checkout).
-if (DESK) window.ohDesktop.info().then((i) => { if (i?.dev === true) markDevBuild(); }).catch(() => {});
-function markDevBuild() {
+if (DESK) window.ohDesktop.info().then((i) => { if (i?.dev === true) markDevBuild(); }).catch(() => {});function markDevBuild() {
   document.body.classList.add('dev-build');
   document.title = 'QuorX · DEV';
+  // Inside the name, so it moves with it: on wider windows the name moves from the top bar into the sidebar.
   const b = $('#brandHome');
-  if (b && !$('.dev-badge')) b.insertAdjacentHTML('afterend', '<span class="dev-badge" title="Running from your QuorX folder (npm run desktop), not the installed app">DEV</span>');
+  if (b && !$('.dev-badge')) b.insertAdjacentHTML('beforeend', '<span class="dev-badge" title="Running from your QuorX folder (npm run desktop), not the installed app">DEV</span>');
 }
 function deskStage(t, stage) {
   if (!t.agent && t.opened !== t.url) { t.opened = t.url; t.error = null; window.ohDesktop.open(t.sid, t.url).catch((e) => { t.error = e.message; deskPlace(true); }); }
