@@ -349,3 +349,9 @@
   .nw-row-side { justify-items: start; }
   .nw-row .nw-tags { justify-content: flex-start; max-width: none; }
 }
+
+/* Where the News shown came from: the copy downloaded from the QuorX website, or the one that shipped (server/newsremote.js) */
+.news-view .nw-source { margin: -10px 0 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; color: var(--muted); font-size: 12.5px; }
+.news-view .nw-source::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--line-strong); flex: none; }
+.news-view .nw-source[data-from="website"]::before { background: var(--ok); }
+.news-view .nw-source .nw-go { font-size: 12.5px; }

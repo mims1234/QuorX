@@ -5045,6 +5045,7 @@ function settingsPanels(S) {
     privacy: ['Privacy & display', 'For streaming and screen sharing.', [
       stCard('Balance', '', stRow('Show the 💲 balance button in the top bar', 'Off by default, so your OpenRouter spend never shows on a stream. ⚙ Settings → API keys always has the numbers.', stSwitch('ui.showBalance', U.showBalance))
         + stRow('Hide amounts until I click 👁', 'All-time spend, key limits and account credits stay masked (•••) until you reveal them.', stSwitch('ui.maskAmounts', U.maskAmounts))),
+      stCard('News', '', stRow('Get News from the QuorX website', 'New articles, reports and What’s new arrive between versions: QuorX downloads them from quorx.genxmims.org a few times a day and keeps a copy. Nothing about you or your chats is sent. Off, News shows the copy that came with QuorX.', stSwitch('newsRemote', S.newsRemote ?? G.cfg.newsRemote !== false))),
       stCard('Paths', '', stRow('Blur folder paths', 'Project folders in the explorer and settings are blurred until you hover them.', stSwitch('ui.blurPaths', U.blurPaths))),
       stCard('Browser', '', stRow('Search with', 'Words typed in the Browser tab’s address bar (not an address) are searched here. Start with ? to always search.', stSeg('ui.searchEngine', [...Object.entries(SEARCH_ENGINES).map(([k, [l]]) => [k, l]), ['custom', 'Custom']], U.searchEngine || 'google'))
         + stRow('Custom search address', 'Used when Custom is picked: the address of a search with %s where the words go.', `<input type="text" class="st-input" data-bind="ui.searchCustom" value="${esc(U.searchCustom || '')}" placeholder="https://example.com/search?q=%s" spellcheck="false">`)),
@@ -5417,6 +5418,12 @@ function saveSettings() {
   }
   G.theme = S.theme ?? null; delete S.theme;
   saveStorageRules(S.storage); delete S.storage;
+  // News downloads are kept by QuorX's server, not with these settings: send a change there.
+  const newsRemote = S.newsRemote; delete S.newsRemote;
+  if (typeof newsRemote === 'boolean' && newsRemote !== (G.cfg.newsRemote !== false)) {
+    G.cfg.newsRemote = newsRemote;
+    postJ('/api/news/remote', { on: newsRemote }).then(() => { NEWS.data = null; if (NEWS.open) openNews(NEWS.tab); else newsLoad(); }).catch(() => {});
+  }
   G.settings = S;
   savePrefs(); applyTheme(); applyUi();
   renderToolbars(); renderPanes(); renderSpend();
@@ -8071,7 +8078,7 @@ function newsList() {
       : `<div class="nw-empty"><b>No ${what} yet.</b><span>${t === 'reports' ? 'Reports on models, tests and platforms' : 'Research articles'} arrive with QuorX updates and show here.</span></div>`;
   }
   const sub = t === 'updates' ? 'What changed in each version of QuorX' : t === 'reports' ? 'Models, tests and platforms, measured' : 'Research and how QuorX works';
-  v.innerHTML = `<div class="nw-wrap">${newsHead('News', sub)}${newsTabs()}${body}</div>`;
+  v.innerHTML = `<div class="nw-wrap">${newsHead('News', sub)}${newsSourceLine()}${newsTabs()}${body}</div>`;
   v.scrollTop = 0;
 }
 
@@ -8281,9 +8288,36 @@ async function newsTermReplay(el, asked) {
 }
 
 // Clicks in the view: tabs, the tag filter, cards, links between News pages, and the web.
+// Where the News shown came from (server/newsremote.js): the copy downloaded from the QuorX website, or the one that
+// shipped with QuorX, and why; with Check now while downloads are on.
+const newsAgo = (iso) => {
+  const t = Date.parse(iso || ''); if (!Number.isFinite(t)) return '';
+  const m = Math.round((Date.now() - t) / 60000);
+  return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 48 * 60 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} days ago`;
+};
+function newsSourceLine() {
+  const s = NEWS.data?.source; if (!s) return '';
+  const host = esc(String(s.site || '').replace(/^https?:\/\//, ''));
+  const check = s.on ? '<button type="button" class="nw-go" data-act="newsSync">↻ Check now</button>' : '';
+  let text;
+  if (s.from === 'website') text = `From ${host}${s.syncedAt ? ` · updated ${newsAgo(s.syncedAt)}` : ''}`;
+  else if (!s.on) text = 'The copy that came with QuorX · downloads from the QuorX website are off in ⚙ Settings → Privacy &amp; display';
+  else if (s.error) text = `The copy that came with QuorX · ${host} couldn't be reached: ${esc(s.error)}`;
+  else text = 'The copy that came with QuorX';
+  return `<p class="nw-source" data-from="${esc(s.from)}">${text}${check}</p>`;
+}
+async function newsSyncNow(btn) {
+  btn.disabled = true; btn.textContent = 'Checking…';
+  const d = await postJ('/api/news/sync', {}).catch(() => null);
+  if (d && !d.error) { NEWS.data = d; newsDot(); }
+  if (NEWS.open && !NEWS.item) newsList(); else { btn.disabled = false; btn.textContent = '↻ Check now'; }
+}
+
 function newsClick(e) {
   const t = e.target;
   if (t.closest('.nw-close')) return closeNews();
+  const sync = t.closest('[data-act="newsSync"]');
+  if (sync) return newsSyncNow(sync);
   const tab = t.closest('[data-tab]');
   if (tab) return openNews(tab.dataset.tab);
   const tag = t.closest('[data-tag]');
