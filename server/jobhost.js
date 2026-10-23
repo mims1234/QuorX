@@ -87,7 +87,9 @@ export function psHost(file, opts = {}) {
 }
 
 const OFF = process.env.QX_NO_JOBHOST === '1';
-const J = psHost('./jobhost.ps1', { label: 'job host', off: OFF });
+// It compiles its C# helper when it starts: under a second on a desktop, but 7-17 s on a busy CI machine. Missing the
+// deadline turns Stop's job tracking off for the rest of the run, so the deadline leaves plenty of room.
+const J = psHost('./jobhost.ps1', { label: 'job host', off: OFF, readyMs: 60000 });
 // macOS and Linux: process groups. Commands start detached (their own session and group); see procgroup.js.
 const G = WIN || OFF ? null : processGroups();
 if (G) process.once('exit', () => G.killAllSync());

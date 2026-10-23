@@ -13,6 +13,7 @@ import { activeRuns } from './runs.js';
 import { unusedBlobs } from './blobs.js';
 import { SHOT_DIR, pruneShots } from './harness-checks.js';
 import { storageRules } from './storagerules.js';
+import { checkpointTime } from './workspace.js';
 
 const DATA = path.join(HOME, 'data');
 const LOGS = path.join(HOME, 'logs');
@@ -106,7 +107,7 @@ function projectList(root, part, keep) {
   if (part === 'objects') return [path.join(base, 'objects'), path.join(base, 'snapindex.json')].filter(exists);
   const dir = path.join(base, part);
   let list = names(dir).map((n) => path.join(dir, n));
-  if (part === 'checkpoints') list = list.filter((p) => { try { return fs.lstatSync(p).isDirectory(); } catch { return false; } }).sort((a, b) => mtime(b) - mtime(a)).slice(keep);
+  if (part === 'checkpoints') list = list.filter((p) => { try { return fs.lstatSync(p).isDirectory(); } catch { return false; } }).sort((a, b) => checkpointTime(b) - checkpointTime(a)).slice(keep);
   return list.filter((p) => { try { return !fs.lstatSync(p).isSymbolicLink(); } catch { return false; } });
 }
 // Projects with a reply running: nothing in their .quorx is cleared until it ends.
