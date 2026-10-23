@@ -5177,7 +5177,7 @@ function settingsPanels(S) {
         ].join('') + '</div></details>',
       ]];
     })(),
-    skills: ['Skills', 'Playbooks the agent loads when a task fits. Agents can also save their own into a project.', ['<div id="skillList" class="st-skill-list"></div>']],
+    skills: ['Skills', 'Playbooks the agent loads when a task fits. Write your own here, for all your projects or just one; agents can also save their own into a project.', ['<div id="skillPanel"></div><div id="skillList" class="st-skill-list"></div>']],
     memory: ['Memory', 'A few facts and preferences about you that every chat gets, in every project.', ['<div id="memPanel"></div>']],
     projects: ['Projects', 'A project is a folder that many chats share. Changes here apply at once.', [`<div id="stProjects"></div>`]],
     docs: ['Documents', 'Files you attach with 📎. They are kept in the project folder\'s .quorx/uploads, which git ignores.', [
@@ -5300,12 +5300,7 @@ function wireSettings() {
   drawCheckList(S, mark);
   $('#catEditors').innerHTML = CATS.map((cat) => catEditor(cat, S.tools)).join('');
   for (const el of document.querySelectorAll('#catEditors .cat')) { wireCatEditor(el); el.addEventListener('change', mark); el.addEventListener('click', (ev) => { if (ev.target.closest('button')) mark(); }); }
-  const off = new Set(S.skillsOff || []);
-  fetch(`/api/skills?project=${focused()?.projectId || 'scratch'}`).then((r) => r.json()).then((list) => {
-    G.skillCount = list.length;
-    $('#skillList').innerHTML = list.length ? list.map((k) => `<div class="st-skill-item"><div class="st-skill-info"><div class="st-skill-top"><span class="st-skill-name">${esc(k.name)}</span><span class="st-source-badge ${k.source === 'built-in' ? 'builtin' : k.source === 'project' ? 'project' : 'saved'}">${esc(k.source)}</span></div><div class="st-skill-desc">${esc(k.description)}</div></div>${stSwitch('', !off.has(k.name)).replace('data-bind=""', `data-skill="${esc(k.name)}"`)}</div>`).join('') : '<p class="st-row-help">No skills yet.</p>';
-    for (const inp of document.querySelectorAll('#skillList input[data-skill]')) inp.onchange = mark;
-  }).catch(() => {});
+  drawSkillsPanel(mark);
   drawProjectsPanel();
   drawPermsPanel();
   drawKeysPanel();
@@ -5662,6 +5657,74 @@ function wireSignIn() {
 }
 // ⚙ Memory: a few facts and preferences about you that every chat gets. Saved at once (it lives on the server, so
 // scheduled chats and other devices get it too); the server checks the size and refuses anything like a secret.
+// ⚙ Settings → Skills: write, import, edit and trash your own skills (data/skills, every project) and this project's
+// (.quorx/skills). Switching a skill on or off is a draft change like the rest of Settings; writing one saves at once.
+const SKILL_SOURCE = { 'built-in': ['builtin', 'built-in'], mine: ['mine', 'all projects'], project: ['project', 'this project'] };
+async function drawSkillsPanel(mark, msg = '') {
+  const box = $('#skillPanel'), listEl = $('#skillList');
+  if (!box || !listEl) return;
+  const pid = focused()?.projectId || 'scratch', pname = G.projects.find((p) => p.id === pid)?.name || 'this project';
+  const shown = document.querySelectorAll('#skillList input[data-skill]');
+  const off = new Set(shown.length ? [...shown].filter((x) => !x.checked).map((x) => x.dataset.skill) : ST.draft?.skillsOff || []);
+  box.innerHTML = `<div class="sk-bar"><button type="button" class="st-btn primary sm" data-sk-new>＋ New skill</button><label class="st-btn secondary sm sk-import" title="A SKILL.md file: front matter with name and description, then the instructions">Import SKILL.md<input type="file" accept=".md,text/markdown,text/plain" data-sk-import hidden></label><p class="mem-msg ${msg.startsWith('✓') ? 'ok' : msg ? 'bad' : ''}" role="status">${esc(msg)}</p></div>
+    <div class="sk-editor" hidden>
+      <label class="sk-field"><span>Name</span><input class="st-input mono" data-sk-name maxlength="40" placeholder="release-notes" spellcheck="false"></label>
+      <label class="sk-field"><span>When to use it <small>the agent reads this line to decide whether to load the skill</small></span><input class="st-input" data-sk-desc maxlength="200" placeholder="Writing release notes from the git log"></label>
+      <label class="sk-field"><span>Instructions <small>steps, rules and gotchas, in Markdown</small></span><textarea class="st-input mono sk-body" data-sk-body rows="12" placeholder="1. Read the commits since the last tag&#10;2. Group them by feature, fix and chore&#10;3. …"></textarea></label>
+      <div class="sk-field"><span>For</span><div class="seg" data-sk-where><button type="button" data-v="mine" class="on">All my projects</button><button type="button" data-v="project">Only ${esc(pname)}</button></div></div>
+      <div class="sk-acts"><button type="button" class="st-btn primary sm" data-sk-save>Save skill</button><button type="button" class="st-btn ghost sm" data-sk-cancel>Cancel</button><span class="sk-err" role="alert"></span></div>
+    </div>`;
+  const list = await fetch(`/api/skills?project=${pid}`).then((r) => r.json()).catch(() => []);
+  G.skillCount = list.length;
+  listEl.innerHTML = list.length ? list.map((k) => {
+    const [cls, label] = SKILL_SOURCE[k.source] || ['saved', k.source], own = k.source !== 'built-in';
+    return `<div class="st-skill-item" data-name="${esc(k.name)}" data-where="${esc(k.source)}"><div class="st-skill-info"><div class="st-skill-top"><span class="st-skill-name">${esc(k.name)}</span><span class="st-source-badge ${cls}">${esc(label)}</span></div><div class="st-skill-desc">${esc(k.description)}</div></div>${own ? `<button type="button" class="pp-btn set" data-sk-edit title="Edit this skill" aria-label="Edit ${esc(k.name)}">${ICO.pencil}</button><button type="button" class="pp-btn del" data-sk-del title="Move this skill to data/trash" aria-label="Delete ${esc(k.name)}">${ICO.trash}</button>` : ''}${stSwitch('', !off.has(k.name)).replace('data-bind=""', `data-skill="${esc(k.name)}"`)}</div>`;
+  }).join('') : '<p class="st-row-help">No skills yet.</p>';
+  for (const inp of listEl.querySelectorAll('input[data-skill]')) inp.onchange = mark;
+
+  const ed = $('.sk-editor', box), where = $('[data-sk-where]', box);
+  let was = null;
+  const setWhere = (v) => { for (const b of where.children) b.classList.toggle('on', b.dataset.v === v); };
+  for (const b of where.children) b.onclick = () => setWhere(b.dataset.v);
+  const open = (k = {}, editing = null) => {
+    was = editing;
+    $('[data-sk-name]', box).value = k.name || ''; $('[data-sk-desc]', box).value = k.description || ''; $('[data-sk-body]', box).value = k.instructions || '';
+    setWhere(k.where || 'mine'); $('.sk-err', box).textContent = '';
+    $('[data-sk-save]', box).textContent = editing ? 'Save changes' : 'Save skill';
+    ed.hidden = false; $('[data-sk-name]', box).focus();
+  };
+  $('[data-sk-new]', box).onclick = () => open();
+  $('[data-sk-cancel]', box).onclick = () => { ed.hidden = true; was = null; };
+  $('[data-sk-import]', box).onchange = async (e) => {
+    const f = e.target.files?.[0]; e.target.value = '';
+    if (!f) return;
+    if (f.size > 300000) return drawSkillsPanel(mark, `${f.name} is over 300 KB: a skill is a short playbook.`);
+    const text = await f.text(), m = text.match(/^﻿?---\s*\r?\n([\s\S]*?)\r?\n---\s*\r?\n?([\s\S]*)$/), meta = {};
+    if (m) for (const line of m[1].split(/\r?\n/)) { const kv = line.match(/^(\w+):\s*(.*)$/); if (kv) meta[kv[1]] = kv[2].trim().replace(/^["']|["']$/g, ''); }
+    open({ name: meta.name || f.name.replace(/\.md$/i, '').replace(/^skill$/i, ''), description: meta.description || '', instructions: (m ? m[2] : text).trim() });
+  };
+  $('[data-sk-save]', box).onclick = async () => {
+    const body = { projectId: pid, where: $('button.on', where).dataset.v, name: $('[data-sk-name]', box).value.trim(), description: $('[data-sk-desc]', box).value.trim(), instructions: $('[data-sk-body]', box).value, was };
+    if (!body.name) return $('[data-sk-name]', box).focus();
+    const r = await postJ('/api/skills', body);
+    if (r?.error) { $('.sk-err', box).textContent = `Not saved: ${r.error}.`; return; }
+    drawSkillsPanel(mark, `✓ Saved ${r.name}${body.where === 'mine' ? ' for all your projects' : ` for ${pname}`}`);
+  };
+  for (const row of listEl.querySelectorAll('.st-skill-item[data-where="mine"], .st-skill-item[data-where="project"]')) {
+    const name = row.dataset.name, w = row.dataset.where;
+    $('[data-sk-edit]', row).onclick = async () => {
+      const k = await fetch(`/api/skills/one?project=${pid}&where=${w}&name=${encodeURIComponent(name)}`).then((r) => r.json()).catch((e) => ({ error: e.message }));
+      if (k.error) return drawSkillsPanel(mark, `Could not open ${name}: ${k.error}.`);
+      open(k, { name, where: w });
+      if (k.extras?.length) $('.sk-err', box).textContent = `Its other files (${k.extras.join(', ')}) stay as they are.`;
+    };
+    $('[data-sk-del]', row).onclick = async () => {
+      if (!await uiConfirm(`Delete the skill "${name}"?\nIt moves to data/trash/skills (recoverable).`)) return;
+      const r = await postJ('/api/skills', { projectId: pid, name, where: w }, 'DELETE');
+      drawSkillsPanel(mark, r?.error ? `Not deleted: ${r.error}.` : `✓ Moved ${name} to the trash`);
+    };
+  }
+}
 async function drawMemoryPanel(msg = '') {
   const el = $('#memPanel');
   if (!el) return;

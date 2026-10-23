@@ -43,7 +43,7 @@ import { extUpgrade, extKey, extInfo, onExtRequest, defaultBrowser, extPairing, 
 import { openLink, linkReply, desktopReady, desktopCall } from './server/desktop.js';
 import { saveUpload, processDoc, listDocs, removeDoc, DOC_DEFAULTS, officeText } from './server/docs.js';
 import { embeddingModels } from './server/openrouter.js';
-import { listSkills, listTemplates, saveSkill, routineSkill } from './server/skills.js';
+import { listSkills, listTemplates, saveSkill, getSkill, deleteSkill, skillId, routineSkill } from './server/skills.js';
 import { hostedHtml, browserPath, openTab } from './server/browser.js';
 import { zipFolder } from './server/zip.js';
 import { exportBackup, findBackups, inspectBackup, importBackup } from './server/backup.js';
@@ -329,10 +329,24 @@ const server = http.createServer(async (req, res) => {
       try { return json(res, 200, runFix(JSON.parse(await readBody(req, 1e4) || '{}').id)); } catch (e) { return json(res, 400, { error: e.message }); }
     }
     if (url.pathname === '/api/starters' && req.method === 'GET') return json(res, 200, listTemplates().map(({ name, description }) => ({ name, description })));
-    if (url.pathname === '/api/skills' && req.method === 'GET') {
-      const pid = url.searchParams.get('project');
-      const dir = validId(pid) ? (() => { try { return workspaceDir(pid); } catch { return null; } })() : null;
-      return json(res, 200, listSkills(dir).map(({ name, description, source }) => ({ name, description, source })));
+    // Your own skills ('mine', every project) and a project's ('project') can be written, edited and trashed here.
+    if (url.pathname.startsWith('/api/skills')) {
+      const dirOf = (pid) => (validId(pid) ? (() => { try { return workspaceDir(pid); } catch { return null; } })() : null);
+      if (url.pathname === '/api/skills' && req.method === 'GET') return json(res, 200, listSkills(dirOf(url.searchParams.get('project'))).map(({ name, description, source }) => ({ name, description, source })));
+      if (url.pathname === '/api/skills/one' && req.method === 'GET') {
+        const q = url.searchParams, k = getSkill(dirOf(q.get('project')), q.get('name'), q.get('where'));
+        return k ? json(res, 200, k) : json(res, 404, { error: 'no such skill' });
+      }
+      if (url.pathname === '/api/skills' && (req.method === 'POST' || req.method === 'DELETE')) {
+        const b = JSON.parse(await readBody(req, 3e5) || '{}'), dir = dirOf(b.projectId);
+        try {
+          if (req.method === 'DELETE') { deleteSkill(dir, String(b.name || ''), b.where); return json(res, 200, { ok: true }); }
+          const where = b.where === 'mine' ? 'mine' : 'project';
+          const was = b.was && typeof b.was === 'object' ? { name: String(b.was.name || ''), where: b.was.where === 'mine' ? 'mine' : 'project' } : null;
+          if (!was && getSkill(dir, skillId(b.name), where)) throw new Error('there is already a skill with that name there: edit it instead');
+          return json(res, 200, { ok: true, name: saveSkill(dir, b, { where, by: 'written by you', was }) });
+        } catch (e) { return json(res, 200, { error: e.message }); }
+      }
     }
     // Replies that can still be undone (the newest ones; see pruneCheckpoints).
     if (url.pathname === '/api/checkpoints' && req.method === 'GET') {
@@ -898,7 +912,7 @@ onExtRequest({
     const project = chat && listProjects().find((p) => p.id === chat.projectId);
     if (!project?.path) throw new Error('pick a chat whose project has a folder');
     const k = routineSkill(name, steps);
-    saveSkill(project.path, { name: k.name, description: k.description, instructions: k.instructions });
+    saveSkill(project.path, { name: k.name, description: k.description, instructions: k.instructions }, { by: 'recorded in Chrome' });
     return { saved: true, name: k.name, steps: k.steps, project: project.name };
   },
   takeBack: ({ tab }) => takeBackSid(`chrome-${tab}`),
