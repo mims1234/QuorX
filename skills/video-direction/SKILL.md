@@ -53,7 +53,7 @@ Show the plan with `plan` (or a `write_artifact` table) and let the user approve
 Keep sections, tempo, beats and hit points in one `timeline.json`. The picture, the score, the sound effects, the subtitles and the checks all read it, so nothing drifts.
 
 ## 6. Prove the look before the film
-Render three style frames (or a model sheet for characters) with the real route, and check them against the style. With a storyboard requested: 6-9 key shots tiled in one sheet with shot number, framing and duration, then wait for approval.
+Render three style frames (or a model sheet for characters) with the real route, and check them against the style. With a storyboard requested: 6-9 key shots tiled in one sheet with shot number, framing and duration, then wait for approval. In QuorX's Video Mode the `storyboard` tool draws that sheet and waits for the user's Go ahead; paid media waits for it.
 
 ## 7. Deliver
 - `<name>.mp4` (1920×1080 by default, other shapes recomposed rather than cropped), `poster.jpg`, `<name>.srt` when there is speech or subtitles, `TREATMENT.md`, and a one-command build script for code routes.

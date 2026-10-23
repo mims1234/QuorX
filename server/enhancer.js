@@ -12,6 +12,7 @@ export const ENHANCER_SYSTEM = `You read a user's request to an AI agent that ma
 
 Answer with JSON only:
 {"goal": "one sentence: what the user wants",
+ "kind": "what is being made: app, site, game, video, image, audio, document, other, or none (not a request to make something)",
  "includes": ["what a reasonable person expects the result to have even though the request doesn't say it"],
  "assumptions": ["a sensible default you chose for something the request leaves open (style, length, audience, platform)"]}
 
@@ -20,7 +21,9 @@ How to read:
 - Name the kind of thing each item needs when it matters for making it, e.g. "a voice for the narration (speech)", "background music", "sound effects".
 - Work only from the user's words (and the earlier messages, if given). Don't add features they would not expect, and don't repeat what they already said word for word.
 - Short items, under 15 words each. At most 8 includes and 5 assumptions.
-- If the message is not a request to make or do something (a question, a greeting, feedback on earlier work), return the goal and empty lists.`;
+- kind "video" only when the finished thing is a film to watch (a trailer, a reel, an explainer, a music video); a site or app that plays videos is a site or an app.
+- If the message is not a request to make or do something (a question, a greeting, feedback on earlier work), return the goal, kind "none" and empty lists.`;
+const KINDS = new Set(['app', 'site', 'game', 'video', 'image', 'audio', 'document', 'other', 'none']);
 
 /** Turns the model's JSON into the reading. null when it gave nothing usable. */
 export function parseReading(raw) {
@@ -32,7 +35,8 @@ export function parseReading(raw) {
   const list = (x, n) => (Array.isArray(x) ? x : []).map((v) => clip(String(v ?? '').trim(), 160)).filter(Boolean).slice(0, n);
   const goal = clip(String(j.goal || '').trim(), 300);
   if (!goal) return null;
-  return { goal, includes: list(j.includes, 8), assumptions: list(j.assumptions, 5) };
+  const kind = String(j.kind || '').trim().toLowerCase();
+  return { goal, ...(KINDS.has(kind) ? { kind } : {}), includes: list(j.includes, 8), assumptions: list(j.assumptions, 5) };
 }
 
 /** The reading as the plain text the user sees and edits, and the agent and judges read. */

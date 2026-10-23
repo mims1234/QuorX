@@ -205,6 +205,27 @@ the user opens in their own editor, instead of a timeline editor inside QuorX.
 **Still analysis only.** None of these skills has been run on a real video task in QuorX, and the projects they borrow
 from tune their styles for one frontier model, so results with QuorX's cheaper default models may differ.
 
+## 9. Video Mode
+
+Runs of a film request showed the agent planning before asking, using none of the video skills, and spending before
+anyone saw a shot. Video Mode (`server/videomode.js`, ⚙ Settings → Video) changes that for films only:
+
+1. **Is it a film?** The prompt enhancer now says what is being made (`kind`). `video` turns Video Mode on, and any other
+   kind keeps it off, even when the words say "video" (a video player is an app). With no reading, plain words decide
+   ("make me a video of…", not "add a video player"). The chat remembers it, and a chip under the message says
+   **Not a video** to turn it off.
+2. **Skills, loaded by the harness:** `video-direction`, `film-sound` and `film-review` go into the reply; the agent loads the
+   route skill once the brief picks the route.
+3. **Brief, then story:** one `ask_user` card on length and shapes, route, the user's material and real people (allowed),
+   and sound, then three story structures. A film reply may ask up to 8 questions (the usual limit is 4). In ⚡ YOLO
+   the cards still appear and wait (120 s by default), then the agent's recommendations stand; the deciders don't guess.
+4. **Storyboard gate:** the `storyboard` tool draws 6-9 shots in the pane and waits for Go ahead or changes. Paid pictures,
+   clips, music and voice (and `media_plan`) are refused until it is approved; YOLO goes ahead after the wait.
+5. **Film checks for the reviewer:** each new film is measured (length, size, fps, sound, loudness, true black frames)
+   and tiled on a contact sheet, so the reviewer scores the film and not only the page that plays it.
+
+A request that is not a film gets the same prompt, tools and question limit as before; a test compares the two.
+
 ## Sources
 
 Skills and toolkits: [EveryInc product-launch-video](https://github.com/EveryInc/product-launch-video) ·

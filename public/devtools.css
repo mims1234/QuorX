@@ -470,6 +470,15 @@ html:root body .msgs .msg.bot { padding-left: 18px !important; }
 .oos-acts .primary small { color: inherit; opacity: .85; }
 .oos-card .what { color: var(--text); }
 
+/* ---------- 🎬 Video Mode: under the message it read as a film ---------- */
+.msg.user .u-video-slot:empty { display: none; }
+.u-video { margin-top: 6px; display: flex; align-items: center; gap: 8px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); font-size: 12.5px; color: var(--muted); text-align: left; }
+.u-video.on { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.u-video.on b { color: var(--text); }
+.u-video .uv-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.u-video button { flex: none; padding: 1px 8px; font-size: 12px; line-height: 18px; }
+.qbox .q-open-art { flex: none; }
+
 /* ---------- 📝 prompt enhancer: its reading under the message it read ---------- */
 .msg.user .u-reading-slot:empty { display: none; }
 .u-reading { margin-top: 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); font-size: 12.5px; color: var(--text); text-align: left; max-width: 100%; }
