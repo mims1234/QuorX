@@ -96,8 +96,9 @@ const SUMMARIES = new Map(); // file name → { key, s }
 // the calls it made, from its steps. Those were paid for, so they count like any other.
 function replySpend(m, prev = null) {
   if (m.stats) return { cost: ownCost(m.stats, prev?.stats), byModel: m.stats.byModel || {} };
-  // A reply still running is counted by the budget ledger as it goes, not here.
-  if (m.role !== 'assistant' || m.live || !Array.isArray(m.trace)) return null;
+  // A reply still running is counted by the budget ledger as it goes, not here. The page saves it with live: false
+  // but runActive: true (a chat saved mid-reply, e.g. by /usage); counting its steps too doubled it while it ran.
+  if (m.role !== 'assistant' || m.live || m.runActive || !Array.isArray(m.trace)) return null;
   let cost = 0, n = 0; const byModel = {};
   for (const e of m.trace) {
     if ((e?.t !== 'llm_done' && e?.t !== 'helper_done') || !(Number(e.cost) >= 0)) continue;

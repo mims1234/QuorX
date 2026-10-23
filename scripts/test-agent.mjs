@@ -21,7 +21,7 @@ import { nextAfter, cleanWhen, cleanSchedule, describeWhen, createScheduler, sav
 import { startScheduledChat } from '../server/schedrun.js';
 import { loadMemory, saveMemory, addMemory, checkMemory, looksSecret, memoryPrompt, memoryTokens, MEMORY_TOKENS } from '../server/memory.js';
 import { startRun, follow, getRun, readLog } from '../server/runs.js';
-import { getChat, saveChat as storeChat, listProjects } from '../server/store.js';
+import { getChat, saveChat as storeChat, listProjects, listChats } from '../server/store.js';
 import { matchPlan, usePlan } from '../server/mediaplan.js';
 import { setSecret, parseEnv, secretKind, scrubSecrets } from '../server/projectsecrets.js';
 
@@ -1258,6 +1258,22 @@ test('Stop ends a reply in the middle of slow browser steps, and the rest of the
   void r;
 });
 
+test('a chat saved while a reply runs (/usage does that) does not count the running reply as well as the live ledger', async () => {
+  const id = `cusage${Date.now().toString(36)}`;
+  const step = (cost) => ({ t: 'llm_done', model: 'm', cost });
+  storeChat(id, { id, title: 'running', projectId: 'scratch', created: Date.now(), agent: { setup: {}, messages: [
+    { role: 'user', content: 'go', at: 1 },
+    { role: 'assistant', content: 'done', at: 2, runId: 'r1', stats: { cost: 0.1, byModel: { m: { cost: 0.1 } } } },
+    { role: 'user', content: 'more', at: 3 },
+    // As the page saves a reply that is still running: live false, runActive true, its steps so far.
+    { role: 'assistant', content: '', at: 4, runId: 'r2', live: false, runActive: true, trace: [step(0.4), step(0.5)] },
+  ] } });
+  assert.equal(+listChats().find((c) => c.id === id).cost.toFixed(4), 0.1);
+  // Once it ends and is saved without runActive, its steps count (a reply that ended part-way still cost money).
+  storeChat(id, { ...getChat(id), agent: { ...getChat(id).agent, messages: getChat(id).agent.messages.map((m, i) => (i === 3 ? { ...m, runActive: false } : m)) } });
+  assert.equal(+listChats().find((c) => c.id === id).cost.toFixed(4), 1.0);
+});
+
 test('older chats: a continued reply whose total carried the reply before it is counted once', async () => {
   const { ownCost } = await import('../server/store.js');
   const first = { cost: 0.2226, byModel: { a: { cost: 0.2226 } } };
@@ -2335,7 +2351,7 @@ test('a tab the user lends works only through target "given", asks before Send o
     await userBrowse(sid, 'open', { url: `http://127.0.0.1:${srv.address().port}/`, w: 900, h: 600 });
     giveTab(chatId, sid, { url: 'http://127.0.0.1/', title: 'Inbox', desktop: false });
     const asked = [];
-    const { bodies } = await run((body, i) => {
+    const { bodies, events } = await run((body, i) => {
       if (i === 5) takeBackTab(chatId);
       return [
         reply('', [['browser', { action: 'open', target: 'given' }]]),
@@ -2355,6 +2371,11 @@ test('a tab the user lends works only through target "given", asks before Send o
     assert.match(res[3], /typed 1 characters/);
     assert.match(res[5], /took their tab back/);
     assert.deepEqual(asked.map((w) => w.replace(/^In your tab on \S+: /, '')), ['click "➤ · Send"', 'type into a password field']);
+    // Each card is closed in the page once answered (it stayed open after Allow once before).
+    const shown = events.filter((e) => e.t === 'approval' && e.tool === 'browser').map((e) => e.id);
+    const closed = events.filter((e) => e.t === 'approval_done').map((e) => e.id);
+    assert.deepEqual(shown.filter((id) => !closed.includes(id)), []);
+    assert.deepEqual(events.filter((e) => e.t === 'approval_done' && shown.includes(e.id)).map((e) => e.approve), [false, true]);
   } finally { takeBackTab(chatId); await userBrowse(sid, 'close').catch(() => {}); srv.close(); (await import('../server/browser.js')).closeBrowser(); }
 });
 

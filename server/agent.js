@@ -3409,7 +3409,10 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
       const ro = !risk && (readOnlyAsk() || onSiteList(host, S.chromeSitesRead)) ? await typingOutsideSearch(lent.tab, args) : null;
       if (risk || ro) {
         const what = risk || ro;
-        const ans = await askUser({ id: newApprovalId(), tool: 'browser', free: true, est: 0, risk: 'danger', noAlways: true, what: `In your tab on ${host}: ${what}`, why: risk ? 'This acts in your own account, so only you can allow it.' : "Your request only reads, so QuorX asks before the agent types into your account (search boxes don't ask)." });
+        const card = { id: newApprovalId(), tool: 'browser', free: true, est: 0, risk: 'danger', noAlways: true, what: `In your tab on ${host}: ${what}`, why: risk ? 'This acts in your own account, so only you can allow it.' : "Your request only reads, so QuorX asks before the agent types into your account (search boxes don't ask)." };
+        const ans = await askUser(card);
+        // The answer closes the card in the page (without it the card stayed open after Allow once).
+        emit({ t: 'approval_done', id: card.id, ...ans, at: at() });
         if (!ans.approve) return `The user said no to that (${what}). Don't try it another way: tell them what you wanted to do and why.`;
       } else if (args.action === 'type' || (args.action === 'press' && /enter/i.test(String(args.key || 'Enter')))) {
         const no = await deciderFit(host, args);
