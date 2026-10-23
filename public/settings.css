@@ -665,3 +665,18 @@
 #settings .sk-field .seg button.on { background: var(--panel-3); border-color: var(--line-strong); color: var(--text-bright); }
 #settings .sk-acts { display: flex; align-items: center; gap: 8px; }
 #settings .sk-err { color: var(--bad); font-size: 12px; }
+
+/* Skills: "all projects" skills (yours) get their own tint */
+#settings .st-source-badge.mine { background: var(--violet-dim); color: var(--violet); }
+/* Storage: its tags and sizes in the same system; its ✓ boxes (and Backup's) are the same box as everywhere else */
+#settings .sto-tag { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 4px; font: 700 9.5px/1 var(--font-ui); letter-spacing: .06em; text-transform: uppercase; background: var(--panel-3); color: var(--muted); }
+#settings .sto-tag.ok { background: var(--ok-dim); color: var(--ok); }
+#settings .sto-tag.warn { background: var(--amber-dim); color: var(--amber); }
+#settings .sto-size, #settings .sto-total-num { font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--text-bright); }
+#settings .sto-total-num { font-size: 24px; font-weight: 700; letter-spacing: -.02em; }
+#settings .sto > .st-card + .st-card { margin-top: var(--sx-gap); }
+#settings .sq-check { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: var(--muted); cursor: pointer; }
+#settings .sq-check input { appearance: none; -webkit-appearance: none; width: 20px; height: 20px; margin: 0; border-radius: 6px; border: 1.5px solid var(--line-strong); background: var(--surface-inset); display: inline-grid; place-content: center; cursor: pointer; flex: none; }
+#settings .sq-check input::after { content: '✓'; font: 800 13px/1 var(--font-ui); color: var(--ok-ink); opacity: 0; }
+#settings .sq-check input:checked { background: var(--ok); border-color: var(--ok); }
+#settings .sq-check input:checked::after { opacity: 1; }
