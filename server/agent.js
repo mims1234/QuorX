@@ -12,6 +12,7 @@ import path from 'node:path';
 import { chat, chatStream, chatModels, imageModels, generateImage, speechModels, synthesize, composeMusic, musicModels, videoModels, generateVideo, HOME } from './openrouter.js';
 import { ensemble, GATE } from './decisions.js';
 import { runtime } from './openrouter.js';
+import { rotateLog } from './storagerules.js';
 import { enhanceRequest } from './enhancer.js';
 import { validId, listProjects, getChat } from './store.js';
 import { needsAdmin, adminForAgent, adminForUser } from './elevation.js';
@@ -785,9 +786,9 @@ function bucketOf(q, r) {
 }
 
 const LOG = path.join(HOME, 'logs', 'decisions.jsonl');
-const logLine = (rec) => fs.mkdir(path.dirname(LOG), { recursive: true }, () => fs.appendFile(LOG, JSON.stringify(rec) + '\n', () => {}));
+const logLine = (rec) => { rotateLog(LOG); fs.mkdir(path.dirname(LOG), { recursive: true }, () => fs.appendFile(LOG, JSON.stringify(rec) + '\n', () => {})); };
 export const REVIEW_LOG = path.join(HOME, 'logs', 'reviews.jsonl');
-const logReview = (rec) => fs.mkdir(path.dirname(REVIEW_LOG), { recursive: true }, () => fs.appendFile(REVIEW_LOG, JSON.stringify(rec) + '\n', () => {}));
+const logReview = (rec) => { rotateLog(REVIEW_LOG); fs.mkdir(path.dirname(REVIEW_LOG), { recursive: true }, () => fs.appendFile(REVIEW_LOG, JSON.stringify(rec) + '\n', () => {})); };
 
 // ---------- the run ----------
 // `deps` replaces outside services in tests: { chatStream, catalogue, quiet } (quiet = no scorecard row).

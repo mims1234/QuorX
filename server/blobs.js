@@ -85,9 +85,13 @@ export function serveBlob(req, res, name) {
 // so a picture made by a reply that is still running (and not saved yet) is never swept.
 const KEEP_MS = 2 * 864e5;
 async function sweep() {
+  for (const b of await unusedBlobs()) { try { await fs.promises.rm(b.path, { force: true }); } catch { /* in use or gone */ } }
+}
+/** Blobs nothing names and older than `minAgeMs` (⚙ Settings → Storage clears these sooner than the sweep): [{ name, path, bytes }]. */
+export async function unusedBlobs(minAgeMs = KEEP_MS) {
   let names;
-  try { names = await fs.promises.readdir(DIR); } catch { return; }
-  if (!names.length) return;
+  try { names = await fs.promises.readdir(DIR); } catch { return []; }
+  if (!names.length) return [];
   const used = new Set();
   for (const sub of ['chats', 'trash', 'runs']) {
     const dir = path.join(HOME, 'data', sub);
@@ -100,12 +104,13 @@ async function sweep() {
       for (const m of text.matchAll(/\/blob\/([0-9a-f]{64}\.[a-z0-9]{2,5})/g)) used.add(m[1]);
     }
   }
-  const now = Date.now();
+  const now = Date.now(), out = [];
   for (const n of names) {
     if (used.has(n)) continue;
     const p = path.join(DIR, n);
-    try { if (now - (await fs.promises.stat(p)).mtimeMs > KEEP_MS) await fs.promises.rm(p, { force: true }); } catch { /* in use or gone */ }
+    try { const st = await fs.promises.stat(p); if (st.isFile() && now - st.mtimeMs > minAgeMs) out.push({ name: n, path: p, bytes: st.size }); } catch { /* gone */ }
   }
+  return out;
 }
 export function startSweeping() {
   setTimeout(() => sweep().catch(() => {}), 60e3).unref();

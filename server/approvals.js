@@ -10,12 +10,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { ensemble } from './decisions.js';
 import { HOME } from './openrouter.js';
+import { rotateLog } from './storagerules.js';
 
 const LOG = path.join(HOME, 'logs', 'approvals.jsonl');
 const clip = (s, n) => { const t = String(s ?? ''); return t.length > n ? `${t.slice(0, n)}…` : t; };
 
 export function logApproval(rec) {
-  try { fs.mkdirSync(path.dirname(LOG), { recursive: true }); fs.appendFileSync(LOG, `${JSON.stringify({ ts: new Date().toISOString(), ...rec })}\n`); } catch { /* best effort */ }
+  try { fs.mkdirSync(path.dirname(LOG), { recursive: true }); rotateLog(LOG); fs.appendFileSync(LOG, `${JSON.stringify({ ts: new Date().toISOString(), ...rec })}\n`); } catch { /* best effort */ }
 }
 
 /** The deciders allowed to judge this chat: never its own model. */
