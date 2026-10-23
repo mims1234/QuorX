@@ -24,13 +24,14 @@ import { startRun, follow, getRun, readLog } from '../server/runs.js';
 import { getChat, saveChat as storeChat, listProjects, listChats } from '../server/store.js';
 import { matchPlan, usePlan } from '../server/mediaplan.js';
 import { setSecret, parseEnv, secretKind, scrubSecrets } from '../server/projectsecrets.js';
+import { looksLikeFilm, videoModeFor, filmFacts, factsText } from '../server/videomode.js';
 
 let n = 0;
 const reply = (text, calls = [], finishReason = 'stop') => ({ text, toolCalls: calls.map(([name, args], i) => ({ id: `c${++n}_${i}`, type: 'function', function: { name, arguments: typeof args === 'string' ? args : JSON.stringify(args) } })), usage: { cost: 0.0001 }, ms: 1, firstMs: 1, finishReason });
 
 /** Runs one reply. `script(body, i)` returns the model's i-th answer (or throws). */
 // `budget` sets the project's budget and `spent` seeds what it has already spent (as a ledger row).
-async function run(script, { settings = {}, text = 'build it', resume, onEvent, signal, history, budget, spent, setup = {}, openTab, generateImage, generateVideo, ensemble, checks, chatId, prep, cont, images, comments, enhance, reading, catalogue } = {}) {
+async function run(script, { settings = {}, text = 'build it', resume, onEvent, signal, history, budget, spent, setup = {}, openTab, generateImage, generateVideo, ensemble, checks, chatId, prep, cont, images, comments, enhance, reading, catalogue, videoMode } = {}) {
   const id = `t${Date.now().toString(36)}${(n++).toString(36)}`;
   const dir = tempDir('quorx-run-');
   saveProject({ id, name: 'test', path: dir });
@@ -41,7 +42,7 @@ async function run(script, { settings = {}, text = 'build it', resume, onEvent, 
   let i = 0;
   const chatStream = async (body, sig, onText) => { bodies.push(structuredClone(body)); const r = await script(body, i++); if (r.text && onText) onText(r.text); return r; };
   try {
-    await runAgent({ runId: id, projectId: id, ...(chatId ? { chatId } : {}), ...(images ? { images } : {}), ...(comments ? { comments } : {}), text, resume, ...(cont ? { continue: cont } : {}), ...(reading ? { reading } : {}), history, setup: { model: 'test/model', ...setup }, settings: { approval: 'yolo', mediaEnabled: false, tools: { browser: { on: false } }, ...settings } },
+    await runAgent({ runId: id, projectId: id, ...(chatId ? { chatId } : {}), ...(images ? { images } : {}), ...(comments ? { comments } : {}), text, resume, ...(cont ? { continue: cont } : {}), ...(reading ? { reading } : {}), ...(videoMode ? { videoMode } : {}), history, setup: { model: 'test/model', ...setup }, settings: { approval: 'yolo', mediaEnabled: false, tools: { browser: { on: false } }, ...settings } },
       (e) => { events.push(e); onEvent?.(e, id); }, signal || new AbortController().signal, { chatStream, catalogue: catalogue || [{ id: 'test/model', maxOut: 4000 }], quiet: true, startServer: async ({ name, args }) => ({ key: `fake-${name}`, url: 'http://localhost:9/', status: 'running', command: ['node', ...(args || [])].join(' '), log: '' }), ...(openTab ? { openTab } : {}), ...(generateImage ? { generateImage } : {}), ...(generateVideo ? { generateVideo } : {}), ...(ensemble ? { ensemble } : {}), ...(checks ? { checks } : {}), ...(enhance ? { enhance } : {}) });
     return { events, bodies, dir, id, done: events.find((e) => e.t === 'done') };
   } finally { forgetProject(id); ledger.delete(`seed-${id}`); }
@@ -815,7 +816,8 @@ test('imagine passes the aspect ratio the agent picked, or the nearest one the m
 
 // ---------- media_plan: a production plan approved once ----------
 const PLAN_PNG = 'data:image/png;base64,' + Buffer.from('plan-png').toString('base64');
-const planSettings = (over = {}) => ({ mediaEnabled: true, tools: { browser: { on: false }, image: { on: true, pick: 'fixed', models: ['test/plan-img'], resolution: '1K' }, video: { on: false }, music: { on: false }, speech: { on: false } }, ...over });
+// (Video Mode off: these test how plans are judged; with it on, a trailer's plan first waits for a storyboard.)
+const planSettings = (over = {}) => ({ videoMode: 'off', mediaEnabled: true, tools: { browser: { on: false }, image: { on: true, pick: 'fixed', models: ['test/plan-img'], resolution: '1K' }, video: { on: false }, music: { on: false }, speech: { on: false } }, ...over });
 // Deciders that answer every approval question with `yes` (needed and fair price), and remember what they saw.
 const planDeciders = (yes = 0.95) => {
   const seen = [];
@@ -2684,4 +2686,137 @@ test('the extension connects with one click: it waits until Allow in QuorX, Deny
     assert.equal(b.got[1].key, extKey()); assert.equal(extReady(), true);
     b.ws.close();
   } finally { srv.close(); }
+});
+
+// ---------- Video Mode (server/videomode.js): a film gets a brief, a story pick and a storyboard first ----------
+const userText = (body) => { const u = body.messages.filter((m) => m.role === 'user').at(-1).content; return typeof u === 'string' ? u : u.filter((x) => x.type === 'text').map((x) => x.text).join('\n'); };
+const toolNames = (body) => body.tools.map((t) => t.function.name);
+
+test('Video Mode: plain words tell a film from a feature that plays video', () => {
+  for (const t of ['Make me a nice video of India winning the 2026 T20 World Cup', 'I need a 30 second promo for my bakery', 'create a trailer for my indie game', 'a short film about a lighthouse keeper, please', 'Turn these photos into a reel for Instagram', 'make a music video for my song']) assert.equal(looksLikeFilm(t), true, t);
+  for (const t of ['build a snake game', 'add a video player to my site', 'make a promo page for the launch', 'fix the video upload in my app', 'make a game with animation', 'build a video streaming app like YouTube', 'what is the best film camera?', 'make a landing page with a video background']) assert.equal(looksLikeFilm(t), false, t);
+});
+
+test('Video Mode: the enhancer\'s kind decides first, then the chat, then the words; off and benchmarks never', () => {
+  const root = 'x';
+  assert.equal(videoModeFor({ kind: 'video', text: 'something cinematic for the launch', root }).on, true);
+  assert.equal(videoModeFor({ kind: 'app', text: 'make a video editor', root }).on, false);
+  assert.equal(videoModeFor({ text: 'make a trailer', root }).on, true);
+  assert.equal(videoModeFor({ chatMode: 'off', kind: 'video', text: 'make a trailer', root }).on, false);
+  assert.equal(videoModeFor({ chatMode: 'on', text: 'make it longer', root }).on, true);
+  assert.equal(videoModeFor({ settings: { videoMode: 'off' }, kind: 'video', text: 'make a trailer', root }).on, false);
+  assert.equal(videoModeFor({ kind: 'video', text: 'make a trailer', root, bench: true }).on, false);
+  assert.equal(videoModeFor({ kind: 'video', text: 'make a trailer', root: null }).on, false);
+});
+
+test('Video Mode: a request that is not a film gets exactly the prompt, tools and limits it got before', async () => {
+  const script = (body, i) => [reply('', [['ask_user', { questions: [{ question: 'A?', options: ['1', '2'] }, { question: 'B?', options: ['1', '2'] }, { question: 'C?', options: ['1', '2'] }, { question: 'D?', options: ['1', '2'] }] }]]), reply('', [['ask_user', { question: 'E?', options: ['1', '2'] }]]), reply('Done.')][i];
+  const answer = (runId) => (e) => { if (e.t === 'question') setTimeout(() => answerQuestion(runId.id, e.id, { defaults: true, answers: [{ choice: 0 }, { choice: 0 }, { choice: 0 }, { choice: 0 }] }), 5); };
+  const go = async (settings) => { const r = { id: null }; const out = await run(script, { text: 'build a snake game with a video player for replays', settings: { approval: 'strict', ...settings }, onEvent: (e) => { if (e.t === 'start') r.id = e.runId; answer(r)(e); } }); return out; };
+  const on = await go({}), off = await go({ videoMode: 'off' });
+  assert.equal(of(on.events, 'video_mode').length, 0);
+  assert.deepEqual(toolNames(on.bodies[0]), toolNames(off.bodies[0]));
+  assert.ok(!toolNames(on.bodies[0]).includes('storyboard'));
+  assert.equal(userText(on.bodies[0]), userText(off.bodies[0]));
+  const own = (t) => t.replace(/quorx-run-\w+/g, 'quorx-run-X'); // each run has its own throwaway project folder
+  assert.equal(own(on.bodies[0].messages[0].content), own(off.bodies[0].messages[0].content));
+  assert.match(toolResults(on.bodies[2]).at(-1), /You have asked 4 questions in this reply, the most the user allows/, 'the usual limit of 4 still holds');
+});
+
+test('Video Mode: a film loads the video skills, adds the storyboard tool, and allows the brief and story questions', async () => {
+  let runId;
+  const brief = { questions: [{ question: 'Length?', options: ['30 s', '60 s'], recommended: 0 }, { question: 'Route?', options: ['Stills', 'Code'], recommended: 0 }, { question: 'People?', options: ['Licensed', 'Generic'], recommended: 0 }, { question: 'Sound?', options: ['Score', 'Voice'], recommended: 0 }] };
+  const { events, bodies } = await run((body, i) => [reply('', [['ask_user', brief]]), reply('', [['ask_user', { question: 'Which story?', options: ['Journey', 'Countdown', 'Then and now'], recommended: 0 }]]), reply('Done.')][i], {
+    text: 'Make me a nice video of India winning the 2026 T20 World Cup', settings: { approval: 'strict' },
+    onEvent: (e) => { if (e.t === 'start') runId = e.runId; if (e.t === 'question') setTimeout(() => answerQuestion(runId, e.id, e.questions ? { defaults: true, answers: [{ choice: 0 }, { choice: 0 }, { choice: 0 }, { choice: 0 }] } : { choice: 0 }), 5); },
+  });
+  const vm = of(events, 'video_mode')[0];
+  assert.ok(vm?.on, 'a video_mode event');
+  assert.deepEqual(vm.skills, ['video-direction', 'film-sound', 'film-review']);
+  assert.ok(toolNames(bodies[0]).includes('storyboard'));
+  const sent = userText(bodies[0]);
+  assert.match(sent, /\[Video Mode: the harness reads this request as a film/);
+  assert.match(sent, /# Skill: video-direction/);
+  assert.match(sent, /# Skill: film-review/);
+  assert.match(toolResults(bodies[2]).at(-1), /^The user chose: "Journey"/, 'the fifth question is asked: Video Mode allows 8');
+});
+
+test('Video Mode: paid media waits for the storyboard, and Go ahead lets it through', async () => {
+  let runId;
+  const shots = [{ time: '0:00', framing: 'wide', move: 'push', what: 'Stadium hush' }, { time: '0:03', what: 'Title' }, { time: '0:06', what: 'The six', sound: 'crowd roar' }];
+  const { events, bodies, dir } = await run((body, i) => [reply('', [['imagine', { prompt: 'a stadium', why: 'shot 1' }]]), reply('', [['storyboard', { title: 'One More Time', shots }]]), reply('', [['imagine', { prompt: 'a stadium', why: 'shot 1' }]]), reply('Done.')][i], {
+    text: 'make a trailer for the final', chatId: 'chat-vm', settings: { approval: 'strict', mediaEnabled: true, tools: { browser: { on: false }, image: { on: true } } },
+    generateImage: async () => ({ url: 'data:image/png;base64,iVBORw0KGgo=', cost: 0.01, ms: 1, model: 'test/image' }),
+    onEvent: (e) => { if (e.t === 'start') runId = e.runId; if (e.t === 'question' && e.gate === 'storyboard') setTimeout(() => answerQuestion(runId, e.id, { choice: 0 }), 5); if (e.t === 'approval') setTimeout(() => answerApproval(runId, e.id, { approve: false }), 5); },
+  });
+  assert.match(toolResults(bodies[1])[0], /^Refused: Video Mode: show the storyboard first/);
+  const card = of(events, 'question').find((e) => e.gate === 'storyboard');
+  assert.ok(card?.artifact, 'the storyboard card points at its sheet');
+  const sheet = of(events, 'artifact').find((e) => e.artifact.id === card.artifact);
+  assert.match(sheet.artifact.html, /Storyboard · One More Time/);
+  assert.match(sheet.artifact.html, /crowd roar/);
+  assert.match(toolResults(bodies[2]).at(-1), /^The user approved the storyboard/);
+  assert.doesNotMatch(toolResults(bodies[3]).at(-1), /storyboard/i, 'after Go ahead the picture is no longer refused for the storyboard');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, '.quorx', 'video', 'storyboard.json'), 'utf8')).approved, true);
+});
+
+test('Video Mode: changes to the storyboard go back to the agent, and paid media still waits', async () => {
+  let runId;
+  const shots = [{ time: '0:00', what: 'A' }, { time: '0:03', what: 'B' }, { time: '0:06', what: 'C' }];
+  const { bodies } = await run((body, i) => [reply('', [['storyboard', { title: 'T', shots }]]), reply('', [['imagine', { prompt: 'x', why: 'y' }]]), reply('Done.')][i], {
+    text: 'make a trailer', settings: { approval: 'strict', mediaEnabled: true, tools: { browser: { on: false }, image: { on: true } } },
+    onEvent: (e) => { if (e.t === 'start') runId = e.runId; if (e.t === 'question') setTimeout(() => answerQuestion(runId, e.id, { text: 'swap shots 2 and 3' }), 5); },
+  });
+  assert.match(toolResults(bodies[1])[0], /The user wants the storyboard changed: "swap shots 2 and 3"/);
+  assert.match(toolResults(bodies[2]).at(-1), /^Refused: Video Mode: the user has not approved the storyboard yet/);
+});
+
+test('Video Mode in YOLO: an unanswered brief takes the agent\'s recommendations, not the deciders\' guesses', async () => {
+  let deciderCalls = 0;
+  const qs = [{ question: 'Length?', options: ['60 s', '30 s'], recommended: 1 }, { question: 'Sound?', options: ['Score', 'Voice'], recommended: 0 }];
+  const { events, bodies } = await run((body, i) => [reply('', [['ask_user', { questions: qs }]]), reply('', [['storyboard', { title: 'T', shots: [{ time: '0', what: 'A' }, { time: '1', what: 'B' }, { time: '2', what: 'C' }] }]]), reply('Done.')][i], {
+    text: 'make a promo video for my bakery', settings: { approval: 'yolo', videoWaitSecs: 0.05 },
+    ensemble: async () => { deciderCalls++; throw new Error('the deciders should not be asked'); },
+  });
+  assert.equal(deciderCalls, 0);
+  const res = toolResults(bodies[1])[0];
+  assert.match(res, /1\. Length\?\nThe user did not answer in time, so your recommendation stands \(⚡ YOLO, Video Mode\): "30 s"/);
+  assert.match(res, /2\. Sound\?\nThe user did not answer in time, so your recommendation stands \(⚡ YOLO, Video Mode\): "Score"/);
+  const ans = of(events, 'answer')[0];
+  assert.equal(ans.by, 'recommended');
+  assert.match(toolResults(bodies[2]).at(-1), /the storyboard stands/);
+});
+
+test('Video Mode: a later reply in a film chat keeps the mode but doesn\'t ask the brief again; "Not a video" turns it off', async () => {
+  const history = [{ role: 'user', content: 'make a trailer' }, { role: 'assistant', content: 'Here it is.' }];
+  const later = await run((body, i) => [reply('Done.')][i], { text: 'make it a bit longer', history, videoMode: 'on' });
+  assert.match(userText(later.bodies[0]), /Video Mode is on for this chat.*The brief and the story were settled earlier/s);
+  assert.equal(of(later.events, 'video_mode')[0].first, false);
+  const off = await run((body, i) => [reply('Done.')][i], { text: 'make a trailer', videoMode: 'off' });
+  assert.equal(of(off.events, 'video_mode').length, 0);
+  assert.ok(!toolNames(off.bodies[0]).includes('storyboard'));
+});
+
+test('Video Mode: the enhancer\'s kind wins over the words both ways', async () => {
+  const says = (kind) => async () => ({ message: { content: JSON.stringify({ goal: 'x', kind, includes: [], assumptions: [] }) }, usage: {} });
+  const app = await run((body, i) => [reply('Done.')][i], { text: 'make a video editor for my team', enhance: says('app') });
+  assert.equal(of(app.events, 'video_mode').length, 0);
+  const film = await run((body, i) => [reply('Done.')][i], { text: 'something cinematic for our launch, 20 seconds', enhance: says('video') });
+  assert.equal(of(film.events, 'video_mode')[0]?.why, 'enhancer');
+  assert.equal(of(film.events, 'reading')[0].kind, 'video');
+});
+
+test('Video Mode: the film facts read ffprobe and ffmpeg\'s loudness and black-frame output', async () => {
+  const dir = tempDir('quorx-film-');
+  fs.mkdirSync(path.join(dir, 'assets'), { recursive: true });
+  const ff = async (cmd, args) => {
+    if (cmd === 'ffprobe') return { ok: true, out: JSON.stringify({ format: { duration: '28.8' }, streams: [{ codec_type: 'video', width: 1280, height: 720, r_frame_rate: '30/1' }, { codec_type: 'audio' }] }), err: '' };
+    if (args.includes('ebur128=peak=true')) return { ok: true, out: '', err: 'Summary:\n  Integrated loudness:\n    I:         -14.2 LUFS\n  True peak:\n    Peak:       -1.3 dBFS\n' };
+    if (args.some((a) => String(a).startsWith('blackdetect'))) return { ok: true, out: '', err: '[blackdetect] black_start:0 black_end:0.6 black_duration:0.6\n' };
+    fs.writeFileSync(args.at(-1), 'jpg'); return { ok: true, out: '', err: '' };
+  };
+  const f = await filmFacts(dir, 'assets/film.mp4', { ff });
+  assert.deepEqual({ ...f, sheet: !!f.sheet }, { rel: 'assets/film.mp4', seconds: 28.8, width: 1280, height: 720, fps: 30, audio: true, lufs: -14.2, peak: -1.3, black: 0.6, sheet: true });
+  assert.equal(factsText(f), 'assets/film.mp4: 28.8 s, 1280×720 at 30 fps, sound at -14.2 LUFS, peak -1.3 dBFS, 0.6 s black');
+  assert.match(factsText({ ...f, audio: false, lufs: null, peak: null }), /Off: it has no sound track/);
 });

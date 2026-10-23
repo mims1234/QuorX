@@ -56,6 +56,7 @@ import { modelNotes } from './modelcards.js';
 import { ownAddresses } from './access.js';
 import { safeFetch } from './safefetch.js';
 import { videoBody, canStartFromImage, editCommand, ffmpegMajor } from './video.js';
+import { VIDEO_DEFAULTS, VIDEO_SKILLS, STORYBOARD_TOOL, videoModeFor, videoRules, normalizeStoryboard, storyboardHtml, loadStoryboard, saveStoryboard, filmFacts, factsText } from './videomode.js';
 
 // The paid media categories and the tool each one gives the agent.
 export const MEDIA = {
@@ -137,6 +138,7 @@ export const DEFAULTS = {
   parallel: true,          // neighbouring look-ups (read, list, search, fetch) run at the same time
   trimAt: 120000,          // characters of conversation inside one reply before old file bodies are trimmed
   askLimit: 4,             // questions the agent may ask the user per reply with ask_user (0 = never)
+  ...VIDEO_DEFAULTS,       // Video Mode (server/videomode.js): a film request gets a brief, a story pick and a storyboard first
   approval: 'strict',      // 'strict' = ask the user before paid media, and ask_user questions go to them · 'yolo' = never ask; the deciders answer ask_user
   strictAsk: 'paid',       // Strict asks before: 'paid' = paid media only (its own card, with the price) · 'every' = every tool, as before
   strictAskHelpers: false,  // with 'paid': also ask before handing a job to a helper model
@@ -344,6 +346,13 @@ export function setRunReading(runId, text) {
   const ctl = runControls.get(runId);
   if (!ctl) return false;
   ctl.setReading(clip(String(text || '').trim(), 4000));
+  return true;
+}
+// "Not a video" on the Video Mode chip: the running reply drops the film workflow (its gate and limits) and is told so.
+export function setRunVideo(runId, on) {
+  const ctl = runControls.get(runId);
+  if (!ctl?.setVideo) return false;
+  ctl.setVideo(!!on);
   return true;
 }
 export function steerRun(runId, text, extra = {}) {
@@ -1075,6 +1084,17 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
       run.inbox.push(text ? `[The user corrected how the harness read their request. Go by this:
 ${text}]` : '[The user dropped the harness reading of their request: go by their own words only.]');
     },
+    // The user said this is not a film (or that it is, after all): the gate and limits follow at once.
+    setVideo: (on) => {
+      if (!on && run.video) {
+        run.video = null;
+        emit({ t: 'video_mode', on: false, why: 'user', at: at() });
+        run.inbox.push('[The user says this is not a film: drop Video Mode. Ignore its steps (brief, story, storyboard) and do the request as it is.]');
+      } else if (on && !run.video && root) {
+        startVideoMode('chat', { quiet: true });
+        run.inbox.push('[The user says this is a film: Video Mode is on. Follow its order from where you are: the brief and the story with ask_user if they are still open, then a storyboard (the storyboard tool) before any paid media.]');
+      }
+    },
     // A note from the user: shown at once, given to the agent at its next step.
     steer: (text, extra = {}) => {
       run.inbox.push({ text, ...extra });
@@ -1153,6 +1173,13 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     }
   }
   await reading;
+  // Video Mode (server/videomode.js): a film gets the video skills, a brief, a story pick and a storyboard before
+  // anything is spent. A request that is not a film gets none of it.
+  // A reply resumed after a restart already has the notes in its messages: it gets the tool, limits and gate back.
+  if (!handled && !qaBench) {
+    const vm = videoModeFor({ settings: S, chatMode: resumed ? resumed.video ? 'on' : 'off' : req.videoMode, kind: run.readingKind, text: userText, bench: !!req.bench, root });
+    if (vm.on) startVideoMode(vm.why, { quiet: !!resumed });
+  }
   // The project budget, shared by every chat in the project. A reply may not START once the budget is
   // used up (Strict asks to raise it, YOLO stops). A reply already working may finish past it, up to
   // budgetGrace % more, and is force-stopped beyond that.
@@ -1451,7 +1478,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   // with it, so a reply whose budget was extended (plan rounds, fixes) keeps it after a restart.
   function checkpointAt(atStep) {
     if (req.bench) return;
-    saveCheckpoint(runId, { req: ckptReq, undoId: filesId, cost: stats.cost, spend: { byRole: stats.byRole, byModel: stats.byModel, llmCalls: stats.llmCalls, tokensIn: stats.tokensIn, tokensOut: stats.tokensOut, mediaSpent: stats.mediaSpent }, messages, step: atStep, maxSteps, journal, notes, firstOwn, arts: Object.fromEntries(arts), plan: run.plan, at: Date.now(),
+    saveCheckpoint(runId, { req: ckptReq, undoId: filesId, cost: stats.cost, spend: { byRole: stats.byRole, byModel: stats.byModel, llmCalls: stats.llmCalls, tokensIn: stats.tokensIn, tokensOut: stats.tokensOut, mediaSpent: stats.mediaSpent }, messages, step: atStep, maxSteps, journal, notes, firstOwn, arts: Object.fromEntries(arts), plan: run.plan, at: Date.now(), ...(run.video ? { video: true } : {}),
       touched: { arts: [...touched.arts], apps: [...touched.apps], sites: [...touched.sites] } });
   }
 
@@ -1769,6 +1796,76 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     return null; // 'big' with no plan shown: a small fix may go ahead
   }
 
+  // ================= Video Mode (server/videomode.js) =================
+  // why: 'enhancer' | 'words' | 'chat'. quiet: a resumed reply, whose messages already hold the notes.
+  function startVideoMode(why, { quiet = false } = {}) {
+    const first = req.videoMode !== 'on' && !resumed;
+    run.video = { why, first, skills: [] };
+    if (loadStoryboard(root, req.chatId)?.approved && req.chatId) run.storyboard = 'approved';
+    if (!tools.includes(STORYBOARD_TOOL)) tools.push(STORYBOARD_TOOL);
+    const loaded = VIDEO_SKILLS.map((n) => readSkill(root, n, req.settings?.skillsOff || [])).filter(Boolean);
+    run.video.skills = loaded.map((k) => k.name);
+    if (!quiet) {
+      const limit = askLimitNow(), waitS = Math.round(videoWait() / 1000);
+      addToRequest(videoRules(S, { first, ask: askOn && limit > 0, limit, yolo: S.approval === 'yolo', waitS, gate: S.videoStoryboard !== false, text: userText, cats })
+        + (loaded.length ? `\n\n[Skills Video Mode loaded for you: no need to call use_skill for these]\n${loaded.map((k) => `# Skill: ${k.name}\n${k.body}`).join('\n\n')}` : ''));
+    }
+    emit({ t: 'video_mode', on: true, why, first, skills: run.video.skills, at: at() });
+  }
+  // Questions a reply may ask: the user's limit, raised to the Video Mode one for a film (never above 0 when questions are off).
+  function askLimitNow() {
+    const base = Math.max(0, Number(S.askLimit ?? DEFAULTS.askLimit));
+    if (!base || !run.video) return base;
+    return Math.max(base, Math.max(0, Math.min(20, Number(S.videoAskLimit ?? DEFAULTS.videoAskLimit) || 0)));
+  }
+  // ⚡ YOLO in Video Mode: the brief, story and storyboard cards wait this long, then the recommendations stand.
+  // Benchmarks never wait, and scripted tests only when they set it.
+  function videoWait() {
+    if (S.approval !== 'yolo' || req.bench || (deps.quiet && req.settings?.videoWaitSecs == null)) return 0;
+    return Math.max(0, Math.min(600, Number(S.videoWaitSecs ?? DEFAULTS.videoWaitSecs) || 0)) * 1000;
+  }
+  // Paid media waits for an approved storyboard (⚙ Video → Storyboard before paid media).
+  function storyboardRefusal() {
+    if (!run.video || S.videoStoryboard === false || run.storyboard === 'approved') return null;
+    if (run.storyboard === 'waiting' || run.storyboard === 'changes') return 'Refused: Video Mode: the user has not approved the storyboard yet. Call storyboard with the (changed) shots and wait for their answer before paid media.';
+    return 'Refused: Video Mode: show the storyboard first (call storyboard with 6 to 9 key shots) and wait for the user\'s Go ahead before paid pictures, clips, music or voice.';
+  }
+  // storyboard: the harness draws the sheet in the artifact pane, then a card waits for Go ahead or changes.
+  // Strict waits for the user; ⚡ YOLO waits the Video Mode time, then goes ahead.
+  async function storyboardTool(args) {
+    const sb = normalizeStoryboard(args);
+    if (sb.error) return `Error: ${sb.error}`;
+    const prev = loadStoryboard(root, req.chatId);
+    const id = run.storyboardId || (prev?.artifact && arts.has(prev.artifact) ? prev.artifact : newId(`storyboard ${sb.title}`));
+    run.storyboardId = id;
+    saveArtifact({ id, kind: 'html', title: `Storyboard: ${sb.title}`, html: storyboardHtml(sb), v: (arts.get(id)?.v || 0) + 1 });
+    touched.arts.add(id);
+    notes.push(`storyboard ${id} (${sb.shots.length} shots)`);
+    const keep = (approved) => saveStoryboard(root, req.chatId, { artifact: id, approved, ...sb });
+    if (S.videoStoryboard === false) { run.storyboard = 'approved'; keep(true); return `Storyboard \`${id}\` (${sb.shots.length} shots) is in the user's pane. Their settings don't wait for approval: go on with the plan.`; }
+    keep(false);
+    const qid = `q${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+    const waitMs = videoWait();
+    run.storyboard = 'waiting';
+    emit({ t: 'question', id: qid, gate: 'storyboard', artifact: id, question: `Go ahead with this storyboard (${sb.shots.length} shots)? Type below to change shots.`, options: ['Go ahead', 'Change some shots'], recommended: 0, ...(waitMs ? { wait: waitInfo(waitMs, 'go ahead') } : {}), at: at() });
+    const answered = new Promise((resolve, reject) => {
+      questions.set(`${runId}:${qid}`, resolve);
+      signal.addEventListener('abort', () => { questions.delete(`${runId}:${qid}`); reject(new Error('aborted')); }, { once: true });
+    });
+    const ans = S.approval === 'yolo' && !waitMs ? { timedOut: true } : await userOrTimeout(qid, waitMs, answered);
+    if (ans.timedOut) {
+      questions.delete(`${runId}:${qid}`);
+      run.storyboard = 'approved'; keep(true);
+      emit({ t: 'answer', id: qid, choice: 0, text: '', by: 'timeout', at: at() });
+      return `⚡ YOLO: the user did not answer in time, so the storyboard stands. Go on: load the route skill, then ${cats.length ? 'list the paid calls in media_plan and ' : ''}build it.`;
+    }
+    emit({ t: 'answer', id: qid, choice: ans.choice, text: ans.text, at: at() });
+    if (ans.choice === 0) { run.storyboard = 'approved'; keep(true); return `The user approved the storyboard. Go on: load the route skill, then ${cats.length ? 'list the paid calls in media_plan and ' : ''}build it.`; }
+    run.storyboard = 'changes';
+    const said = clip(String(ans.text || '').trim(), 1000);
+    return said ? `The user wants the storyboard changed: "${said}". Call storyboard again with the changed shots; they will look again.` : 'The user wants some shots changed but did not say which. Ask them with ask_user which shots to change, then call storyboard again.';
+  }
+
   // What this reply built or changed that can be opened: its pages, sites and running apps.
   function builtTargets() {
     const htmlArts = [...touched.arts].filter((id) => arts.get(id)?.kind === 'html');
@@ -1778,7 +1875,13 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     const changed = root ? changedFiles(root, filesId) : [];
     if (changed.some((f) => /\.(html?|css|m?js)$/i.test(f))) for (const lc of launchConfigs(projectId)) if (lc.args?.[0] === '.quorx/serve.mjs' && lc.args[1]) { const t = `site:${lc.args[1]}`; if (!targets.includes(t)) targets.push(t); }
     if (changed.some((f) => /\.(html?|css|m?js)$/i.test(f))) for (const a of arts.values()) if (a.kind === 'site' && a.url?.startsWith(`/ws/${projectId}/`)) { const t = `site:${a.url.slice(`/ws/${projectId}/`.length)}`; if (!targets.includes(t)) targets.push(t); }
+    // Video Mode: a film with no page around it is still something to review (the site server plays it).
+    if (run.video && !targets.length) for (const f of filmsChanged().slice(0, 2)) targets.push(`site:${f}`);
     return targets;
+  }
+  // The films this reply made or changed (not the agent's scratch copies).
+  function filmsChanged() {
+    return root ? changedFiles(root, filesId).map((f) => f.replaceAll('\\', '/')).filter((f) => /\.(mp4|webm|mov|m4v)$/i.test(f) && !/^\.quorx\//i.test(f) && fs.existsSync(path.join(root, f))) : [];
   }
 
   // ================= #4 the reviewer: a separate model, fresh context, plays it and scores it =================
@@ -1819,7 +1922,13 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       draft ? `The builder's own summary. These are claims to check, not facts:\n<summary>\n${clip(draft, 800)}\n</summary>` : '',
       brandDoc ? `The project's design system (DESIGN.md), for the brand score:\n<design>\n${clip(brandDoc, 3000)}\n</design>` : '',
     ].filter(Boolean).join('\n\n');
-    const rmsgs = [{ role: 'system', content: REVIEW_SYSTEM(bar, sees, !!brandDoc) }, { role: 'user', content: brief }];
+    // Video Mode: the films are measured (length, size, sound, loudness, black frames) and tiled on a contact sheet, so
+    // the reviewer scores the film itself, not only the page that plays it.
+    const films = run.video && S.videoReview !== false ? (await Promise.all(filmsChanged().slice(0, 2).map((f) => filmFacts(root, f).catch(() => null)))).filter(Boolean) : [];
+    if (films.length) emit({ t: 'note', level: 'info', msg: `🎬 Film checks: ${films.map(factsText).join(' · ')}`, at: at() });
+    const filmBrief = films.length ? `The films this build made, measured by the harness (facts, not claims):\n${films.map((f) => `- ${factsText(f)}`).join('\n')}\nReview the film as a film: function is whether it plays and matches the brief (length, shapes, sound); craft is pacing, framing, type and sound level, judged from the contact sheet${films.some((f) => f.sheet) && sees ? 's below' : ''} and the page. Report each "Off:" item as a bug (did: "read the harness's film facts"), severity annoying, or breaks when the film has no sound and the request implies sound.` : '';
+    const rmsgs = [{ role: 'system', content: REVIEW_SYSTEM(bar, sees, !!brandDoc) }, { role: 'user', content: filmBrief ? `${brief}\n\n${filmBrief}` : brief }];
+    if (sees) for (const f of films.filter((x) => x.sheet)) { try { rmsgs.push({ role: 'user', content: [{ type: 'text', text: `Contact sheet of ${f.rel}: frames in order, left to right, top to bottom.` }, { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${fs.readFileSync(path.join(root, f.sheet)).toString('base64')}` } }] }); } catch { /* no sheet to show */ } }
     const shots = new WeakSet();
     let result = null, opened = 0, tried = 0;
     for (let i = 0; i < 14 && !result; i++) {
@@ -2066,7 +2175,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     return !!g && S.yoloAuto?.[g] === false;
   }
   function strictAsks(name) {
-    if (CAT_OF[name] || name === 'ask_user' || name === 'request_secret' || name === 'media_plan') return false;
+    if (CAT_OF[name] || name === 'ask_user' || name === 'request_secret' || name === 'media_plan' || name === 'storyboard') return false;
     if ((S.strictAsk || 'paid') === 'every') return true;
     return (S.strictAskHelpers === true && name === 'delegate') || (S.strictAskDeciders === true && ['decide', 'look', 'extract_design'].includes(name));
   }
@@ -2148,6 +2257,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (name === 'remember') return `Remember in every chat: “${clip(args.text, 200)}”`;
     if (name === 'save_skill') return `Save a project skill "${args.name}": ${clip(args.description, 80)}`;
     if (name === 'use_skill') return `Load the skill "${args.name}"`;
+    if (name === 'storyboard') return `Show the storyboard "${clip(args.title, 60)}" (${Array.isArray(args.shots) ? args.shots.length : 0} shots)`;
     if (name === 'ask_user') return Array.isArray(args.questions) && args.questions.length ? `Ask you ${args.questions.length} questions: "${clip(args.questions[0]?.question, 80)}"…` : `Ask you: "${clip(args.question, 100)}"`;
     if (name === 'search_docs') return `Search the attached documents for "${clip(args.query, 100)}"`;
     if (name === 'read_doc') return `Read "${clip(args.doc, 60)}" from line ${Number(args.offset) || 1}`;
@@ -2225,7 +2335,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
 
   // ask_user: one question, or several in one card, answered in the page. The reply waits; nothing is spent meanwhile.
   async function askQuestion(args) {
-    const limit = Math.max(0, Number(S.askLimit ?? DEFAULTS.askLimit));
+    const limit = askLimitNow();
     if (run.questions >= limit) return `You have asked ${run.questions} question${run.questions === 1 ? '' : 's'} in this reply, the most the user allows. Decide yourself and say in your reply what you chose.`;
     const tidy = (x) => {
       const question = clip(String(x?.question || '').trim(), 300);
@@ -2239,7 +2349,21 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     const over = cut ? `\n(${cut} more question${cut > 1 ? 's were' : ' was'} not asked: this reply may ask ${limit} in all. Decide ${cut > 1 ? 'those' : 'that one'} yourself.)` : '';
     run.questions += list.length;
     const qid = () => `q${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
-    const waitMs = yoloWait();
+    // Video Mode in ⚡ YOLO: the card waits the Video Mode time, and then (or at once, with no wait) the agent's
+    // recommendation stands; the deciders answer only a question without one.
+    const recs = run.video && S.approval === 'yolo';
+    const waitMs = recs ? Math.max(yoloWait(), videoWait()) : yoloWait();
+    const recommendedAnswer = async (id, q, shown) => {
+      if (q.recommended == null) return deciderPick(id, q.question, q.options, { shown, silent: true });
+      return { choice: q.recommended, msg: `${shown ? 'The user did not answer in time, so your' : 'Your'} recommendation stands (⚡ YOLO, Video Mode): "${q.options[q.recommended]}". Go with it, and mention it in your reply so the user can change it.` };
+    };
+    if (recs && list.every((q) => q.recommended != null) && !waitMs) {
+      const id = qid();
+      const picks = await Promise.all(list.map((q) => recommendedAnswer(id, q, false)));
+      emit(list.length > 1 ? { t: 'question', id, question: `${list[0].question} (and ${list.length - 1} more)`, options: [], questions: list, at: at() } : { t: 'question', id, question: list[0].question, options: list[0].options, recommended: list[0].recommended, at: at() });
+      emit(list.length > 1 ? { t: 'answer', id, answers: picks.map((x) => ({ choice: x.choice, text: '' })), defaults: true, by: 'recommended', at: at() } : { t: 'answer', id, choice: picks[0].choice, text: '', by: 'recommended', at: at() });
+      return (list.length === 1 ? picks[0].msg : list.map((q, i) => `${i + 1}. ${q.question}\n${picks[i].msg}`).join('\n')) + over;
+    }
     if (S.approval === 'yolo' && !waitMs) {
       const out = [];
       for (const q of list) out.push(await deciderAnswers(qid(), q.question, q.options));
@@ -2248,7 +2372,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     // Strict: the user answers. ⚡ YOLO with a wait: the user sees the card for a few seconds and may steer; if they
     // don't answer, the deciders do (a question of taste goes back to the agent).
     const id = qid();
-    const wait = waitMs ? { wait: waitInfo(waitMs, 'deciders') } : {};
+    const wait = waitMs ? { wait: waitInfo(waitMs, recs && list.every((q) => q.recommended != null) ? 'recommended' : 'deciders') } : {};
     const answered = () => new Promise((resolve, reject) => {
       questions.set(`${runId}:${id}`, resolve);
       signal.addEventListener('abort', () => { questions.delete(`${runId}:${id}`); reject(new Error('aborted')); }, { once: true });
@@ -2259,13 +2383,18 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       if (!got.timedOut) return manyAnswered(id, list, got) + over;
       questions.delete(`${runId}:${id}`);
       const picks = [];
-      for (const q of list) picks.push(await deciderPick(qid(), q.question, q.options, { shown: true, silent: true }));
-      emit({ t: 'answer', id, answers: picks.map((x) => ({ choice: x.choice, text: x.choice == null ? 'the agent decides' : '' })), by: 'deciders', at: at() });
+      for (const q of list) picks.push(recs ? await recommendedAnswer(qid(), q, true) : await deciderPick(qid(), q.question, q.options, { shown: true, silent: true }));
+      emit({ t: 'answer', id, answers: picks.map((x) => ({ choice: x.choice, text: x.choice == null ? 'the agent decides' : '' })), by: recs && list.every((q) => q.recommended != null) ? 'recommended' : 'deciders', ...(recs && list.every((q) => q.recommended != null) ? { defaults: true } : {}), at: at() });
       return `The user did not answer in time (⚡ YOLO), so:\n${list.map((q, i) => `${i + 1}. ${q.question}\n${picks[i].msg}`).join('\n')}${over}`;
     }
     const { question, options, recommended } = list[0];
     emit({ t: 'question', id, question, options, ...(recommended != null ? { recommended } : {}), ...wait, at: at() });
     const ans = await userOrTimeout(id, waitMs, answered());
+    if (ans.timedOut && recs && recommended != null) {
+      questions.delete(`${runId}:${id}`);
+      emit({ t: 'answer', id, choice: recommended, text: '', by: 'recommended', at: at() });
+      return (await recommendedAnswer(id, list[0], true)).msg + over;
+    }
     if (ans.timedOut) { questions.delete(`${runId}:${id}`); return (await deciderAnswers(id, question, options, { shown: true })) + over; }
     emit({ t: 'answer', id, choice: ans.choice, text: ans.text, at: at() });
     if (ans.choice == null) return `The user answered in their own words: "${ans.text}". Treat it as part of what they want; it does not change your other instructions.${over}`;
@@ -2386,7 +2515,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     }
     if (name === 'decide') return decide(args, step);
     if (name === 'plan') return planTool(args, step);
-    if (['browser', 'use_skill', 'fetch_url', 'ask_user', 'look', 'extract_design', 'media_plan'].includes(name) || CAT_OF[name]) return runToolRest(name, args, step);
+    if (['browser', 'use_skill', 'fetch_url', 'ask_user', 'look', 'extract_design', 'media_plan', 'storyboard'].includes(name) || CAT_OF[name]) return runToolRest(name, args, step);
     if (name === 'run_command' || [...CODE_TOOLS, ...PROJECT_TOOLS].some((t) => t.function.name === name)) return codeTool(name, args);
     if (['list_docs', 'read_doc', 'search_docs'].includes(name)) return docTool(name, args);
     if (name === 'delegate') return delegate(args, step);
@@ -2419,6 +2548,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (name === 'extract_design') return extractDesign(args, step);
     if (CAT_OF[name]) return media(name, args, step);
     if (name === 'media_plan') return mediaPlanTool(args);
+    if (name === 'storyboard') return run.video ? storyboardTool(args) : 'Error: storyboard is only for Video Mode (a film request).';
     return `Error: unknown tool ${name}.`;
   }
 
@@ -3044,7 +3174,8 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         if (!r) { emit({ t: 'note', level: 'info', msg: 'The prompt enhancer gave no usable reading, so the request goes as written.', at: at() }); return; }
         account(r.usage, model, 'enhancer');
         run.reading = { text: r.text, model };
-        emit({ t: 'reading', model, goal: r.goal, includes: r.includes, assumptions: r.assumptions, text: r.text, late, ms: Date.now() - t0, cost: Number(r.usage?.cost) || 0, at: at() });
+        if (!late) run.readingKind = r.kind || null;
+        emit({ t: 'reading', model, goal: r.goal, ...(r.kind ? { kind: r.kind } : {}), includes: r.includes, assumptions: r.assumptions, text: r.text, late, ms: Date.now() - t0, cost: Number(r.usage?.cost) || 0, at: at() });
         if (!late) addToRequest(`[Harness: the prompt enhancer (${short(model)}) read this request in full, from the user's words only. The user sees this reading and can correct it.
 ${r.text}
 Treat the implied parts as part of the request. The assumptions are defaults: follow them unless the user or the project says otherwise.]`);
@@ -3810,6 +3941,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
 
   // media_plan: the paid calls a piece of work needs, priced by the harness and approved once (server/mediaplan.js).
   async function mediaPlanTool(args) {
+    const board = storyboardRefusal(); if (board) return board;
     const n = normalizePlan(args.items, cats);
     if (n.error) return `Error: ${n.error}`;
     const plan = await pricePlan(n.items, (it) => estimateFor(it.kind, modelFor(it.kind, { model: it.model }), { seconds: it.seconds, text: ' '.repeat(it.chars || 0) }, T));
@@ -3856,6 +3988,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
   async function media(name, args, step) {
     const cat = CAT_OF[name];
     if (!T[cat]?.on) return `Error: ${name} is switched off by the user.`;
+    const board = storyboardRefusal(); if (board) return board;
     const plan = await estimateFor(cat, modelFor(cat, args), args, T);
     // A start picture is read, and the model checked, before anyone is asked to pay for it.
     let firstFrame = null;

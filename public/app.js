@@ -180,7 +180,7 @@ function normalise(doc) {
   return { id: doc.id, title: doc.title || 'New chat', projectId: doc.projectId || 'scratch', created: doc.created || Date.now(),
     approval: doc.approval || G.settings.approval || 'strict', paneHidden: doc.paneHidden,
     tools: { ...DEFAULT_CHAT_TOOLS, ...(doc.tools || {}) },
-    agent: { setup, allowed: agent.allowed || [], extraUsage: agent.extraUsage || [], summary: agent.summary, summaryAt: agent.summaryAt, messages: (agent.messages || []).map((m) => ({ ...m, live: false, arts: m.arts && dedupeArts(m.arts) })), artifacts },
+    agent: { setup, allowed: agent.allowed || [], extraUsage: agent.extraUsage || [], summary: agent.summary, summaryAt: agent.summaryAt, ...(agent.videoMode ? { videoMode: agent.videoMode } : {}), messages: (agent.messages || []).map((m) => ({ ...m, live: false, arts: m.arts && dedupeArts(m.arts) })), artifacts },
     ctx: [], images: [], docs: [], running: null, el: null };
 }
 const dedupeArts = (list) => [...new Map(list.map((a) => [a.id, { id: a.id, kind: a.kind, title: a.title }])).values()];
@@ -2772,8 +2772,9 @@ function renderMsg(c, m) {
     el.innerHTML = `${m.scheduled ? `<div class="u-sched" title="${m.scheduled.missed ? 'QuorX was closed or the computer slept at the planned time, so this ran when it was back' : 'Started by a schedule'}">⏰ ${m.scheduled.missed ? 'Missed run, started late' : 'Scheduled'}: ${esc(m.scheduled.name)}</div>` : ''}<div class="utext"></div>${m.imgs?.length ? `<div class="u-imgs" data-views="${esc(JSON.stringify(m.imgViews || []))}">${m.imgs.map((u, k) => `<img src="${u}" alt="attached picture" data-k="${k}" title="Click to see it large">`).join('')}</div>` : ''}${m.docs?.length ? `<div class="u-docs">${m.docs.map((d) => `<button type="button" class="u-doc" data-doc="${esc(JSON.stringify(d))}" title="${esc(d.name)} · ${esc(docSize(d.size))} · click to preview">${DOC_ICON[d.kind] || '📄'} ${esc(d.name)}</button>`).join('')}</div>` : ''}${m.ctx?.length ? `<div class="ctx-used">${m.ctx.map((t) => `<span>📎 ${esc(t)}</span>`).join('')}</div>` : ''}${m.cmts?.length ? `<div class="ctx-used cmts-used">${m.cmts.map((x) => `<span title="${esc(x.selector)}">💬 ${esc(x.tag)} "${esc(clip(x.text || '', 40))}"${x.note ? `: ${esc(clip(x.note, 60))}` : ''}</span>`).join('')}</div>` : ''}${m.at ? timeTag(m.at) : ''}`;
     $('.utext', el).innerHTML = md(m.content);
     enhance($('.utext', el));
-    el.insertAdjacentHTML('beforeend', '<div class="u-reading-slot"></div>');
+    el.insertAdjacentHTML('beforeend', '<div class="u-reading-slot"></div><div class="u-video-slot"></div>');
     drawReading(c, m);
+    drawVideo(c, m);
     el.insertAdjacentHTML('beforeend', `<div class="msg-tools u-tools"><button type="button" class="mt-btn mt-rewind" title="Rewind to here: this message and everything after it leave the chat, and it goes back in the box to edit. You choose whether file changes are undone too." aria-label="Rewind to here">${msgIcon('rewind')}</button><button type="button" class="mt-btn mt-copy" title="Copy this message" aria-label="Copy message">${msgIcon('copy')}</button></div>`);
     wireIconCopy($('.mt-copy', el), () => m.content);
     $('.mt-rewind', el).onclick = () => rewindTo(c, m);
@@ -2797,6 +2798,27 @@ function renderMsg(c, m) {
   $('.thinking > summary', el).addEventListener('click', () => { m.thinkOpen = !$('.thinking', el).open; });
   updateMsg(c, m);
   return el;
+}
+// ---------- 🎬 Video Mode, under the message it read as a film: say it is not one, or turn it back on ----------
+// The chat remembers the choice (c.agent.videoMode: 'on' after a film reply, 'off' after "Not a video"); a running
+// reply hears it at once.
+function drawVideo(c, m) {
+  const slot = m.el && $('.u-video-slot', m.el), v = m.video;
+  if (!slot) return;
+  if (!v) { slot.innerHTML = ''; return; }
+  const a = c.agent, latest = a.messages.filter((x) => x.role === 'user' && x.video).at(-1) === m;
+  const set = (on) => {
+    a.videoMode = on ? 'on' : 'off'; v.on = on;
+    if (c.running?.runId) postJ(`/api/runs/${c.running.runId}/video`, { on }).catch(() => {});
+    saveChat(c); drawVideo(c, m);
+  };
+  const why = { enhancer: 'the prompt enhancer read it as a film', words: 'your words ask for a film', chat: 'this chat is in Video Mode', user: 'you turned it on' }[v.why] || 'it reads as a film';
+  slot.innerHTML = v.on
+    ? `<div class="u-video on"><span class="uv-ico" aria-hidden="true">🎬</span><span class="uv-text"><b>Video Mode</b> · ${esc(why)}${v.skills?.length ? ` · skills: ${v.skills.map(esc).join(', ')}` : ''}</span>${latest ? '<button type="button" class="uv-off secondary sm" title="Not a film: the agent drops the brief, story and storyboard steps for this chat">Not a video</button>' : ''}</div>`
+    : `<div class="u-video off"><span class="uv-ico" aria-hidden="true">🎬</span><span class="uv-text">Video Mode is off for this chat</span>${latest ? '<button type="button" class="uv-on secondary sm" title="It is a film after all: brief, story and storyboard before anything is spent">Turn it on</button>' : ''}</div>`;
+  const off = $('.uv-off', slot), on = $('.uv-on', slot);
+  if (off) off.onclick = () => set(false);
+  if (on) on.onclick = () => set(true);
 }
 // ---------- 📝 the prompt enhancer's reading, under the message it read: correct it or drop it ----------
 function drawReading(c, m) {
@@ -3543,6 +3565,7 @@ function traceHTML(m) {
       if (i >= 0) out[i] = out[i].replace(`<span class="sub" data-llm="${e.step}"></span>`, `<div class="sub">${secs(e.ms)} · <span class="tok-out">${e.tokensOut} tokens out</span> · ${money(e.cost, 5)}${e.provider ? ` · via <span class="tr-prov" title="The provider OpenRouter routed this call to">${esc(e.provider)}</span>` : ''}${e.model && e.model !== m.trace.find((x) => x.t === 'llm_start' && x.step === e.step)?.model ? ` · <b class="tr-fallback" title="The chat's model was unavailable, so OpenRouter used the fallback model">fallback ${esc(short(e.model))}</b>` : ''}${e.toolCalls.length ? ` · then ${e.toolCalls.join(', ')}` : ''}</div>${e.aside ? `<div class="aside">💬 ${esc(e.aside)}</div>` : ''}`);
     } else if (e.t === 'tool' && e.name !== 'decide') row(e.at, `${e.by === 'reviewer' ? '🧪 <span class="tr-rv">reviewer</span> ' : e.by === 'helper' ? `🤝 <span class="tr-hp">helper ${e.helper || ''}</span> ` : ''}${TOOL_NAME[e.name]?.split(' ')[0] || '🔧'} <b>${esc(e.name)}</b><div class="sub">${esc(argSummary(e))}</div>`, e.by === 'reviewer' ? 'browser' : 'tool');
     else if (e.t === 'reading') row(e.at, `📝 <b>Prompt enhancer</b> ${esc(short(e.model))} read the request${e.late ? ' (too late for the first step; the deciders still use it)' : ''} · ${secs(e.ms)} · ${money(e.cost, 5)}<div class="sub" style="white-space:pre-wrap">${linkUrls(esc(e.text))}</div>`, 'note');
+    else if (e.t === 'video_mode') row(e.at, e.on ? `🎬 <b>Video Mode</b> on${e.skills?.length ? ` · loaded ${e.skills.map(esc).join(', ')}` : ''}<div class="sub">Brief, story and storyboard come before anything is spent${e.first ? '' : ' (the brief was settled earlier in this chat)'}.</div>` : '🎬 Video Mode off: you said this is not a film', 'note');
     else if (e.t === 'reading_edit') row(e.at, e.text ? `📝 You corrected the reading<div class="sub" style="white-space:pre-wrap">${esc(e.text)}</div>` : '📝 You dropped the reading', 'note');
     else if (e.t === 'fresh_eyes_start') row(e.at, `👀 <b>Fresh eyes</b> ${esc(short(e.model))}: a problem came back, so a clean-context model takes a look<div class="sub">${(e.problems || []).map(esc).join('<br>')}</div>`, 'note');
     else if (e.t === 'fresh_eyes') row(e.at, `👀 Fresh eyes ${e.ok ? 'diagnosed it' : 'found nothing'}${e.report ? `<div class="sub" style="white-space:pre-wrap">${linkUrls(esc(e.report))}</div>` : ''}`, e.ok ? 'ok' : 'warn');
@@ -3676,7 +3699,7 @@ function waitHTML(card) {
   const w = card.wait;
   if (!w) return '';
   if (w.held) return '<div class="aw held"><span class="aw-text">⏸ Waiting for you: nothing happens until you answer.</span></div>';
-  const then = { deciders: 'the deciders answer for you', run: 'it runs (the deciders saw little risk)', skip: 'it is skipped (the deciders weren\'t sure it is harmless)', stop: 'the agent stops waiting and carries on without it' }[w.then] || 'the reply carries on';
+  const then = { deciders: 'the deciders answer for you', recommended: 'the agent\'s recommendations stand', 'go ahead': 'the storyboard stands and the agent goes ahead', run: 'it runs (the deciders saw little risk)', skip: 'it is skipped (the deciders weren\'t sure it is harmless)', stop: 'the agent stops waiting and carries on without it' }[w.then] || 'the reply carries on';
   const left = Math.max(0, Math.ceil((w.until - Date.now()) / 1000));
   return `<div class="aw" data-until="${w.until}" data-secs="${w.secs}" data-run="${esc(w.runId || '')}" data-id="${esc(card.id)}"><span class="aw-bar" aria-hidden="true"><i style="width:${Math.min(100, (left / (w.secs || 1)) * 100)}%"></i></span><span class="aw-text">⚡ No answer in <b class="aw-n">${left}</b>s and ${then}.</span><button type="button" class="aw-hold" title="Stop the clock: the card waits until you answer">Wait for me</button></div>`;
 }
@@ -3931,7 +3954,7 @@ function questionHTML(q, live = true) {
   const full = questionCardHTML(q, live);
   if (!a || c.secret) return full;
   const n = c.questions?.length || 1, key = `q-${c.id}`;
-  const label = n > 1 ? `Asked you ${n} questions` : c.gate === 'plan' ? 'Plan first' : c.auto ? 'The deciders answered' : 'Asked you';
+  const label = n > 1 ? `Asked you ${n} questions` : c.gate === 'plan' ? 'Plan first' : c.gate === 'storyboard' ? '🎬 Storyboard' : c.auto ? 'The deciders answered' : 'Asked you';
   const said = clip(String(a.label || a.text || '').replace(/^Your answer: /, ''), 160);
   return `<details class="q-fold" data-qkey="${esc(key)}" ${G.qOpen?.has(key) ? 'open' : ''}><summary><span class="q-fold-ic" aria-hidden="true">✓</span><span class="q-fold-l">${esc(label)}${n === 1 && c.question ? `: <span class="q-fold-q">${esc(clip(c.question, 90))}</span>` : ''}</span><span class="q-fold-a">${esc(said)}</span><span class="tl-chev" aria-hidden="true">›</span></summary>${full}</details>`;
 }
@@ -3952,12 +3975,13 @@ function questionCardHTML(q, live = true) {
   if (c.questions?.length) return questionsHTML(c, a);
   if (c.secret) return secretHTML(c, a);
   return `<div class="approval question qbox ${a ? 'done' : ''}" ${a ? '' : `data-id="${esc(c.id)}" tabindex="-1"`}>
-    <div class="q-head"><span class="q-badge">${c.gate === 'plan' ? 'Plan first' : 'Question'}</span><p class="q-text">${esc(c.question)}</p></div>
+    <div class="q-head"><span class="q-badge">${c.gate === 'plan' ? 'Plan first' : c.gate === 'storyboard' ? '🎬 Storyboard' : 'Question'}</span><p class="q-text">${esc(c.question)}</p>${c.gate === 'storyboard' && c.artifact ? `<button type="button" class="secondary sm q-open-art" data-art="${esc(c.artifact)}">Open the storyboard</button>` : ''}</div>
     ${a ? `<div class="q-opts answered">${c.options.map((o, i) => `<div class="q-opt ${i === picked ? 'picked' : 'faded'}"><span class="q-key">${i === picked ? '✓' : i + 1}</span><span class="q-label">${esc(o)}</span></div>`).join('')}
+        ${a.by === 'recommended' || a.by === 'timeout' ? `<div class="q-opt picked by-deciders"><span class="q-key">⏱</span><span class="q-label">No answer in time: ${a.by === 'timeout' ? 'the storyboard stands' : 'the agent\'s recommendation stands'} (⚡ YOLO, 🎬 Video Mode)</span></div>` : ''}
         ${a.by === 'deciders' ? `<div class="q-opt ${picked == null ? 'missed' : 'picked'} by-deciders"><span class="q-key">⚖</span><span class="q-label">No answer in time: ${picked == null ? `${esc((a.text || 'the deciders could not settle it').replace(/^\w/, (x) => x.toLowerCase()))}, so the agent decides` : `the deciders picked this${a.confidence != null ? ` · ${Math.round(a.confidence * 100)}% sure` : ''}`}</span></div>`
           : picked == null ? `<div class="q-opt ${missed ? 'missed' : 'picked'}"><span class="q-key">${missed ? '–' : '✓'}</span><span class="q-label">${missed ? 'Not answered: the reply ended' : `Your answer: ${esc(a.label || a.text || '')}`}</span></div>` : ''}</div>`
       : `${waitHTML(c)}<div class="q-opts" role="group" aria-label="Answers">${c.options.map((o, i) => `<button type="button" class="opt q-opt" data-i="${i}"><span class="q-key">${i + 1}</span><span class="q-label">${esc(o)}</span></button>`).join('')}</div>
-      <div class="own-row q-own"><input type="text" class="own" placeholder="${c.gate === 'plan' ? 'Or say what to change in the plan' : 'Or answer in your own words'}" aria-label="${c.gate === 'plan' ? 'What to change in the plan' : 'Your own answer'}"><button type="button" class="send-own">Send</button></div>`}
+      <div class="own-row q-own"><input type="text" class="own" placeholder="${c.gate === 'plan' ? 'Or say what to change in the plan' : c.gate === 'storyboard' ? 'Or say which shots to change' : 'Or answer in your own words'}" aria-label="${c.gate === 'plan' ? 'What to change in the plan' : c.gate === 'storyboard' ? 'Which shots to change' : 'Your own answer'}"><button type="button" class="send-own">Send</button></div>`}
   </div>`;
 }
 // request_secret: the agent asks for a secret by name. The value goes from this box into the project's .env; the
@@ -3994,7 +4018,7 @@ function questionsHTML(c, a) {
   if (a) {
     const got = a.answers || [];
     return `<div class="approval question qbox qmulti done">
-    <div class="q-head"><span class="q-badge">Questions · ${qs.length}</span><p class="q-text">${a.by === 'deciders' ? 'No answer in time: the deciders answered (the agent decides the rest)' : a.defaults ? 'You took the agent\'s recommendations' : a.answers ? 'Your answers' : 'Not answered: the reply ended'}</p></div>
+    <div class="q-head"><span class="q-badge">Questions · ${qs.length}</span><p class="q-text">${a.by === 'deciders' ? 'No answer in time: the deciders answered (the agent decides the rest)' : a.by === 'recommended' ? 'No answer in time: the agent\'s recommendations stand (⚡ YOLO, 🎬 Video Mode)' : a.defaults ? 'You took the agent\'s recommendations' : a.answers ? 'Your answers' : 'Not answered: the reply ended'}</p></div>
     ${qs.map((q, i) => { const g = got[i] || {}; const said = g.choice != null ? q.options[g.choice] : a.by === 'deciders' ? 'The agent decides' : g.text ? `Your answer: ${g.text}` : 'No answer: the agent decides'; return `<div class="qm-item"><p class="qm-q"><span class="q-key">${i + 1}</span>${esc(q.question)}</p><div class="q-opt ${g.choice != null || g.text ? 'picked' : 'missed'}"><span class="q-key">${g.choice != null || g.text ? '✓' : '–'}</span><span class="q-label">${esc(said)}</span></div></div>`; }).join('')}
   </div>`;
   }
@@ -4030,6 +4054,12 @@ function wireQuestions(card, m) {
   const qs = m.questions?.[id]?.card?.questions || [];
   $('.use-rec', card).onclick = () => send({ defaults: true, answers: items.map((_, i) => (qs[i]?.recommended != null ? { choice: qs[i].recommended } : { text: '' })) });
 }
+// 🎬 The storyboard card's button opens the sheet in that chat's pane (answered cards too).
+document.addEventListener('click', (e) => {
+  const b = e.target.closest?.('.q-open-art'); if (!b) return;
+  const pane = b.closest('.chatpane'), c = pane && G.open.get(G.panes[Number(pane.dataset.pane)]);
+  if (c) openArtifact(c, b.dataset.art);
+});
 function wireQuestion(card, m) {
   if (card.classList.contains('qmulti')) return wireQuestions(card, m);
   if (card.classList.contains('secretq')) return wireSecret(card, m);
@@ -4130,7 +4160,7 @@ async function runChat(c, text, ctx, imgs, { resumeOf, docs = [], more = 0, mode
   const artifacts = Object.fromEntries(Object.entries(a.artifacts).map(([id, x]) => [id, x.kind === 'html' ? { kind: 'html', title: x.title, html: x.html, v: 1 } : x.kind === 'md' ? { kind: 'md', title: x.title, md: x.md || '', v: 1 } : { kind: x.kind, title: x.title, url: x.url?.startsWith('data:') ? undefined : x.url, v: 1 }]));
   const settings = { ...G.settings, approval: c.approval, tools: chatTools(c), ...qualitySettings(c), chromeAccess: !!c.tools?.chrome };
   const body = resumeOf ? { runId: m.runId, chatId: c.id, resume: resumeOf, settings, allowed: a.allowed, cmdRules: a.cmdRules || [], reading: a.reading?.text || '', ...(more ? { continue: more, ...(model ? { model } : {}) } : {}) }
-    : { runId: m.runId, chatId: c.id, projectId: c.projectId, chatTitle: c.title, setup: a.setup, settings, allowed: a.allowed, cmdRules: a.cmdRules || [], history, summary: a.summary || '', reading: a.reading?.text || '', text, artifacts, context: ctx?.text || '', images: imgs.map((x) => x.full), docs: docs.map((d) => d.id), ...(cmts.length ? { comments: cmts } : {}) };
+    : { runId: m.runId, chatId: c.id, projectId: c.projectId, chatTitle: c.title, setup: a.setup, settings, allowed: a.allowed, cmdRules: a.cmdRules || [], history, summary: a.summary || '', reading: a.reading?.text || '', text, artifacts, context: ctx?.text || '', images: imgs.map((x) => x.full), docs: docs.map((d) => d.id), ...(cmts.length ? { comments: cmts } : {}), ...(a.videoMode ? { videoMode: a.videoMode } : {}) };
   // Saved straight away, so a reload finds the running reply and reattaches to it.
   saveChat(c, true);
   return followRun(c, m, (signal) => fetch('/api/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal, body: JSON.stringify(body) }));
@@ -4259,6 +4289,12 @@ async function followRun(c, m, open) {
         if (e.t === 'error') { m.error = e.msg; if (e.stats && !m.stats) { m.stats = { ...e.stats, partial: true }; G.sessionCost += e.stats.cost || 0; renderSpend(); } }
         if (e.t === 'interrupted') { m.error = 'The harness restarted while this reply was running.'; m.resumable = !!e.resumable; }
         if (e.t === 'compacted') { a.summary = e.summary; a.summaryAt = e.cutoffAt; }
+        if (e.t === 'video_mode') {
+          const u = a.messages[a.messages.indexOf(m) - 1];
+          if (e.on) a.videoMode = 'on';
+          if (u?.role === 'user') { u.video = { on: !!e.on, why: e.why, skills: e.skills || u.video?.skills || [] }; drawVideo(c, u); }
+          saveChat(c);
+        }
         if (e.t === 'reading') {
           const u = a.messages[a.messages.indexOf(m) - 1];
           a.reading = { text: e.text, at: Date.now() };
@@ -4945,7 +4981,7 @@ const UI_DEFAULTS = { density: 'comfortable', fontSize: 14, reduceMotion: 'syste
 const SETTINGS_NAV = [
   ['Harness', [['setup', '🧪', 'Setup check'], ['appearance', '🎨', 'Appearance'], ['layout', '🧱', 'Layout'], ['privacy', '🕶', 'Privacy & display']]],
   ['OpenRouter', [['keys', '🔑', 'API keys'], ['models', '🧠', 'Models & catalogue']]],
-  ['Agent', [['newchats', '✨', 'New chats'], ['loop', '🔁', 'Agent loop'], ['deciders', '⚖️', 'Deciders'], ['tools', '🧰', 'Tools & media'], ['budget', '💵', 'Budget & approvals'], ['safety', '🛡', 'Safety & commands'], ['skills', '🧩', 'Skills'], ['memory', '📌', 'Memory']]],
+  ['Agent', [['newchats', '✨', 'New chats'], ['loop', '🔁', 'Agent loop'], ['deciders', '⚖️', 'Deciders'], ['tools', '🧰', 'Tools & media'], ['video', '🎬', 'Video'], ['budget', '💵', 'Budget & approvals'], ['safety', '🛡', 'Safety & commands'], ['skills', '🧩', 'Skills'], ['memory', '📌', 'Memory']]],
   ['Workspace', [['projects', '📁', 'Projects'], ['code', '💻', 'Code & servers'], ['docs', '📎', 'Documents']]],
   ['Data', [['usage', '📊', 'Usage & costs'], ['data', '🗄', 'Data & storage'], ['storage', '🧹', 'Storage'], ['shortcuts', '⌨️', 'Shortcuts'], ['about', 'ℹ️', 'About']]],
 ];
@@ -5239,6 +5275,17 @@ function settingsPanels(S) {
         ].join('') + '</div></details>',
       ]];
     })(),
+    video: ['Video', 'When a request is for a film, Video Mode loads the video skills, takes a short brief, offers three stories and shows a storyboard before anything is spent. A request that is not a film never sees any of it.', [
+      stCard('Video Mode', '', pad(stCards('videoMode', [['auto', '🎬', 'On for films', 'The prompt enhancer, or your own words, spot a film. Each chat can say “Not a video”.'], ['off', '⏹', 'Off', 'A film is built like any other request.']], S.videoMode ?? d.videoMode)
+        + stRow('Questions in a film reply', 'The brief, the story and storyboard changes. Your usual limit (Agent loop) applies when it is higher, and none when questions are off.', stStep('videoAskLimit', S.videoAskLimit ?? d.videoAskLimit, 0, 20))
+        + stRow('⚡ YOLO waits for you', 'How long the brief, story and storyboard cards wait in YOLO before the agent\'s recommendations stand. 0 = they stand at once.', stStep('videoWaitSecs', S.videoWaitSecs ?? d.videoWaitSecs, 0, 600, 15, 's'))
+        + stRow('Storyboard before paid media', 'Pictures, clips, music and voice wait until you approve the storyboard.', stSwitch('videoStoryboard', S.videoStoryboard !== false))
+        + stRow('Review the film', 'The reviewer gets each new film\'s length, size, sound, loudness and a contact sheet, and scores the film, not only its page.', stSwitch('videoReview', S.videoReview !== false)))),
+      stCard('What the brief recommends', 'The agent puts these first in the brief; you can pick anything else there.', pad(
+        stRow('How the picture is made', 'By subject: code for products, data and motion design; your footage when you have it; stills with camera moves otherwise.', stSeg('videoRoute', [['auto', 'By subject'], ['images', 'Stills'], ['code', 'Code'], ['clips', 'AI clips'], ['footage', 'Your footage']], S.videoRoute ?? d.videoRoute))
+        + stRow('Length', '', stStep('videoLength', S.videoLength ?? d.videoLength, 5, 600, 5, 's'))
+        + stRow('Shapes', '', stSeg('videoShapes', [['both', '16:9 + 9:16'], ['16:9', '16:9'], ['9:16', '9:16'], ['1:1', '1:1']], S.videoShapes ?? d.videoShapes)))),
+    ]],
     skills: ['Skills', 'Playbooks the agent loads when a task fits. Write your own here, for all your projects or just one; agents can also save their own into a project.', ['<div id="skillPanel"></div><div class="sx-filter" id="skillFilter"></div><div id="skillList" class="st-skill-list"></div>']],
     memory: ['Memory', 'A few facts and preferences about you that every chat gets, in every project. Changes here save at once.', ['<div id="memPanel"></div>']],
     projects: ['Projects', 'A project is a folder that many chats share. Changes here apply at once.', [`<div id="stProjects"></div>`]],
@@ -5363,6 +5410,8 @@ function stSummary(id, S) {
     case 'budget': { const r = S.replyBudget ?? G.cfg.defaults.replyBudget ?? 1, dd = S.dailyBudget ?? G.cfg.defaults.dailyBudget ?? 0, y = YOLO_ROWS.filter(([k]) => S.yoloAuto?.[k] !== false).length;
       return [r ? usd(r) : 'no cap', `${r ? `${stMoney(usd(r))} <span class="sx-state-k">a reply</span>` : stStatus('warn', 'No cap per reply')} ${dd ? `${stMoney(usd(dd))} <span class="sx-state-k">a day</span>` : stStatus('off', 'No daily cap')} ${stMoney(usd(S.budget))} <span class="sx-state-k">paid media a reply</span>` + stStatus('ok', `${y} of ${YOLO_ROWS.length} YOLO groups on their own`), 'money']; }
     case 'safety': { const M = sfModes(SF); return [M.decide === 'ask' ? 'Ask me' : M.decide === 'decide' ? 'Deciders' : 'Custom', stStatus(M.decide === 'ask' ? 'warn' : 'info', M.decide === 'ask' ? 'Pushes and installs ask you' : M.decide === 'decide' ? 'The deciders decide pushes and installs' : 'Custom: see Advanced') + stStatus(M.care === 'off' ? 'off' : 'ok', M.care === 'on' ? 'Extra care on' : M.care === 'off' ? 'Extra care off' : 'Extra care: custom') + on(SF.snapshots, 'Undo for commands on', 'Undo for commands off')]; }
+    case 'video': { const d = G.cfg.defaults || {}, live = (S.videoMode ?? d.videoMode) !== 'off', board = S.videoStoryboard !== false;
+      return [live ? 'films' : 'off', on(live, 'On for films', 'Off: films build like any request') + (live ? stStatus(board ? 'ok' : 'off', board ? 'Storyboard before paid media' : 'No storyboard gate') + stStatus('info', `Up to ${S.videoAskLimit ?? d.videoAskLimit} questions`) : '')]; }
     case 'skills': { if (G.skillCount == null) return ['', '']; const off = (S.skillsOff || []).length; return [`${G.skillCount - off} on`, stStatus('ok', `${G.skillCount - off} on`) + (off ? stStatus('off', `${off} off`) : '')]; }
     case 'memory': { const m = ST.mem; if (!m) return ['', '']; return [m.on ? `${m.n} notes` : 'off', on(m.on, 'On in every chat', 'Off: chats get nothing') + stStatus('info', `${m.n} note${m.n === 1 ? '' : 's'} · ${m.tokens} of ${m.limit} tokens`)]; }
     case 'projects': { const n = (G.projects || []).length; return [String(n), stStatus('info', `${n} project${n === 1 ? '' : 's'}`)]; }
@@ -5536,6 +5585,7 @@ function resetCategory() {
   if (ST.cat === 'tools') S.tools = structuredClone(d.tools);
   if (ST.cat === 'budget') { Object.assign(S, { replyBudget: d.replyBudget, dailyBudget: d.dailyBudget, budget: d.budget, yoloCheck: d.yoloCheck, yoloWaitSecs: d.yoloWaitSecs, budgetGrace: d.budgetGrace }); S.yoloAuto = {}; }
   if (ST.cat === 'skills') S.skillsOff = [];
+  if (ST.cat === 'video') for (const k of Object.keys(d)) if (/^video[A-Z]/.test(k)) S[k] = d[k];
   if (ST.cat === 'safety') { S.safety = { ...(d.safety || {}) }; S.debugger = 'earned'; }
   if (ST.cat === 'docs') { const dd = G.cfg.docDefaults || {}; Object.assign(S, { maxUploadMB: dd.maxUploadMB, inlineDocTokens: dd.inlineDocTokens, pdfNative: dd.pdfNative, embedModel: dd.embedModel, docIndexBudget: dd.docIndexBudget }); }
   if (ST.cat === 'code') Object.assign(S, { browseReadOnly: d.browseReadOnly, chromeCheck: d.chromeCheck, chromeNetwork: d.chromeNetwork, chromeCloseTabs: d.chromeCloseTabs, chromeSitesNever: d.chromeSitesNever, chromeSitesAlways: d.chromeSitesAlways, chromeSitesRead: d.chromeSitesRead });
