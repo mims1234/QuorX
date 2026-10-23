@@ -680,3 +680,4 @@
 #settings .sq-check input::after { content: '✓'; font: 800 13px/1 var(--font-ui); color: var(--ok-ink); opacity: 0; }
 #settings .sq-check input:checked { background: var(--ok); border-color: var(--ok); }
 #settings .sq-check input:checked::after { opacity: 1; }
+#settings .st-card.sto-summary { padding: 16px 18px; display: grid; gap: 10px; }
