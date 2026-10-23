@@ -687,3 +687,9 @@
 #settings .st-nav-item .st-nav-badge.warn-dot { position: static; flex: none; width: 7px; height: 7px; margin-left: 6px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 0 3px var(--amber-dim); }
 /* Projects: the agent folder's size on each card, a chip that opens Storage */
 #settings .pp-meta .pp-sto { cursor: pointer; }
+/* wide rows (choice cards) keep the full width: after the general row grid above */
+#settings .st-row.sx-row-wide { grid-template-columns: minmax(0, 1fr); }
+/* Storage cards: loose lines and button rows get the same inner padding as rows */
+#settings #stStorage .st-card > .st-row-help { padding: 0 18px 12px; margin: 0; }
+#settings #stStorage .st-card > .st-btn { margin: 0 18px 14px; }
+#settings #stStorage .sto-dl-acts { display: flex; justify-content: flex-end; gap: 8px; padding: 10px 18px 14px; border-top: 1px solid var(--line-subtle); }
