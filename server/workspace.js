@@ -531,7 +531,7 @@ export function clearAgentSpace(root, what, keep = 10) {
   const dir = path.join(base, what);
   if (!fs.existsSync(dir)) return 0;
   let list = fs.readdirSync(dir, { withFileTypes: true });
-  if (what === 'checkpoints') list = list.filter((e) => e.isDirectory()).sort((a, b) => fs.statSync(path.join(dir, b.name)).mtimeMs - fs.statSync(path.join(dir, a.name)).mtimeMs).slice(keep);
+  if (what === 'checkpoints') list = list.filter((e) => e.isDirectory()).sort((a, b) => checkpointTime(path.join(dir, b.name)) - checkpointTime(path.join(dir, a.name))).slice(keep);
   let n = 0;
   for (const e of list) { fs.rmSync(path.join(dir, e.name), { recursive: true, force: true }); n++; }
   return n;
@@ -581,6 +581,13 @@ export function trashFile(root, rel) {
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   fs.renameSync(p, dest);
   return path.relative(root, dest).replaceAll('\\', '/');
+}
+
+/** When a reply's undo copy last changed: its manifest is rewritten each time the reply touches another file. A folder's
+ *  own time only moves when an entry is added to it, so copies made in the same second would tie. */
+export function checkpointTime(dir) {
+  for (const p of [path.join(dir, 'manifest.json'), dir]) { try { return fs.statSync(p).mtimeMs; } catch { /* next */ } }
+  return 0;
 }
 
 // Before a run first touches a file, keep its previous version (or note that it didn't exist),

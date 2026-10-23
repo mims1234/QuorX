@@ -4,7 +4,7 @@
 
 import { startTour, maybeStartTour } from './tour.js';
 import { backupCard, drawBackup } from './backup.js';
-import { storageCard, drawStorage, setRulesText } from './storage.js';
+import { storageCard, drawStorage, setRulesText, refreshStorageBadge, projectSizes, focusProject, fmtBytes } from './storage.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -5076,6 +5076,7 @@ function settingsPanels(S) {
         + stTile('ui.maskAmounts', '👁', 'Hide amounts until I click 👁', 'All-time spend, key limits and account credits stay masked (•••) until you reveal them.', U.maskAmounts, `${stMoney('$12.40', 'sx-masked')} ${stTag('', 'masked')}`)
         + stTile('ui.blurPaths', '📂', 'Blur folder paths', 'Project folders in the explorer and settings are blurred until you hover them.', U.blurPaths, '<code class="sx-masked">D:\\Projects\\site</code>')
         + `</div>`),
+      stCard('News', 'Where the News page gets its articles.', stRow('Get News from the QuorX website', 'New articles, reports and What’s new arrive between versions: QuorX downloads them from quorx.genxmims.org a few times a day and keeps a copy. Nothing about you or your chats is sent. Off, News shows the copy that came with QuorX.', stSwitch('newsRemote', S.newsRemote ?? G.cfg.newsRemote !== false))),
       stCard('Browser search', 'Words typed in the Browser tab’s address bar (not an address) are searched here. Start with ? to always search.',
         stRow('Search with', '', stCards('ui.searchEngine', [...Object.entries(SEARCH_ENGINES).map(([k, [l]]) => [k, `<b class="sx-letter">${esc(l[0])}</b>`, l, '']), ['custom', '✎', 'Custom', '']], U.searchEngine || 'google', 'compact'), { cls: 'sx-row-wide' })
         + stRow('Custom search address', 'Used when Custom is picked: the address of a search with %s where the words go.', `<input type="text" class="st-input sx-wide-input" data-bind="ui.searchCustom" value="${esc(U.searchCustom || '')}" placeholder="https://example.com/search?q=%s" spellcheck="false">`)),
@@ -5487,7 +5488,7 @@ function wireSettings() {
   drawDesktopSettings();
   drawBackup({ postJ, esc, uiConfirm, store: STORE });
   setRulesText(G.storageRules);
-  if (ST.cat === 'storage') drawStorage(storageHelpers());
+  if (ST.cat === 'storage') drawStorage(storageHelpers()); else refreshStorageBadge(storageHelpers());
   showVersion();
 }
 // Search looks through every category; matching rows show, everything else hides.
@@ -5594,6 +5595,12 @@ function saveSettings() {
   }
   G.theme = S.theme ?? null; delete S.theme;
   saveStorageRules(S.storage); delete S.storage;
+  // News downloads are kept by QuorX's server, not with these settings: send a change there.
+  const newsRemote = S.newsRemote; delete S.newsRemote;
+  if (typeof newsRemote === 'boolean' && newsRemote !== (G.cfg.newsRemote !== false)) {
+    G.cfg.newsRemote = newsRemote;
+    postJ('/api/news/remote', { on: newsRemote }).then(() => { NEWS.data = null; if (NEWS.open) openNews(NEWS.tab); else newsLoad(); }).catch(() => {});
+  }
   G.settings = S;
   savePrefs(); applyTheme(); applyUi();
   renderToolbars(); renderPanes(); renderSpend();
@@ -5672,7 +5679,7 @@ async function drawProjectsPanel() {
       return `<div class="pp-row" style="${projStyle(pr)}">
         <span class="pp-ico">📁</span>
         <div class="pp-main">
-          <div class="pp-top"><b class="pp-name">${esc(pr.name)}</b><span class="pp-meta">${n} chat${n === 1 ? '' : 's'} · <em>$${spent.toFixed(3)}</em>${pr.budget != null ? ` of $${pr.budget.toFixed(2)}` : ' · no limit'}</span></div>
+          <div class="pp-top"><b class="pp-name">${esc(pr.name)}</b><span class="pp-meta">${n} chat${n === 1 ? '' : 's'} · <em>$${spent.toFixed(3)}</em>${pr.budget != null ? ` of $${pr.budget.toFixed(2)}` : ' · no limit'}<button type="button" class="pp-sto" data-proj-sto="${esc(pr.id)}" hidden></button></span></div>
           ${pr.budget != null ? `<span class="pp-bar ${state}"><i style="width:${(share * 100).toFixed(1)}%"></i></span>` : ''}
           <code class="pp-path blurable" title="${esc(pr.dir)}">${esc(short(pr.dir))}</code>
         </div>
@@ -5686,6 +5693,16 @@ async function drawProjectsPanel() {
   </section>`;
   const find = (id) => projects.find((x) => x.id === id);
   for (const b of box.querySelectorAll('[data-proj-open]')) b.onclick = () => openFolder(b.dataset.projOpen);
+  // How much room the agent's folder (.quorx) takes in each project; it opens that project in ⚙ Storage.
+  for (const b of box.querySelectorAll('[data-proj-sto]')) b.onclick = () => { focusProject(b.dataset.projSto); ST.cat = 'storage'; drawSettings(); };
+  projectSizes(storageHelpers()).then((sizes) => {
+    const limit = (Number(G.settings.agentSpaceMB) || 500) * 1e6;
+    for (const b of box.querySelectorAll('[data-proj-sto]')) {
+      const s = sizes.get(b.dataset.projSto);
+      if (!s || s.missing || !s.bytes || !b.isConnected) continue;
+      b.textContent = `🧹 ${fmtBytes(s.bytes)}`; b.title = 'The agent\'s folder (.quorx) in this project: see and clear its parts in Storage'; b.classList.toggle('big', s.bytes > limit); b.hidden = false;
+    }
+  });
   for (const b of box.querySelectorAll('[data-proj-set]')) b.onclick = () => openProjectSettings(find(b.dataset.projSet));
   for (const b of box.querySelectorAll('[data-proj-del]')) b.onclick = async () => { await deleteProject(find(b.dataset.projDel)); drawProjectsPanel(); };
   const nb = $('[data-proj-new]', box); if (nb) nb.onclick = async () => { await editProject(null); drawProjectsPanel(); };
@@ -8259,7 +8276,7 @@ function newsList() {
       : `<div class="nw-empty"><b>No ${what} yet.</b><span>${t === 'reports' ? 'Reports on models, tests and platforms' : 'Research articles'} arrive with QuorX updates and show here.</span></div>`;
   }
   const sub = t === 'updates' ? 'What changed in each version of QuorX' : t === 'reports' ? 'Models, tests and platforms, measured' : 'Research and how QuorX works';
-  v.innerHTML = `<div class="nw-wrap">${newsHead('News', sub)}${newsTabs()}${body}</div>`;
+  v.innerHTML = `<div class="nw-wrap">${newsHead('News', sub)}${newsSourceLine()}${newsTabs()}${body}</div>`;
   v.scrollTop = 0;
 }
 
@@ -8469,9 +8486,36 @@ async function newsTermReplay(el, asked) {
 }
 
 // Clicks in the view: tabs, the tag filter, cards, links between News pages, and the web.
+// Where the News shown came from (server/newsremote.js): the copy downloaded from the QuorX website, or the one that
+// shipped with QuorX, and why; with Check now while downloads are on.
+const newsAgo = (iso) => {
+  const t = Date.parse(iso || ''); if (!Number.isFinite(t)) return '';
+  const m = Math.round((Date.now() - t) / 60000);
+  return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 48 * 60 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} days ago`;
+};
+function newsSourceLine() {
+  const s = NEWS.data?.source; if (!s) return '';
+  const host = esc(String(s.site || '').replace(/^https?:\/\//, ''));
+  const check = s.on ? '<button type="button" class="nw-go" data-act="newsSync">↻ Check now</button>' : '';
+  let text;
+  if (s.from === 'website') text = `From ${host}${s.syncedAt ? ` · updated ${newsAgo(s.syncedAt)}` : ''}`;
+  else if (!s.on) text = 'The copy that came with QuorX · downloads from the QuorX website are off in ⚙ Settings → Privacy &amp; display';
+  else if (s.error) text = `The copy that came with QuorX · ${host} couldn't be reached: ${esc(s.error)}`;
+  else text = 'The copy that came with QuorX';
+  return `<p class="nw-source" data-from="${esc(s.from)}">${text}${check}</p>`;
+}
+async function newsSyncNow(btn) {
+  btn.disabled = true; btn.textContent = 'Checking…';
+  const d = await postJ('/api/news/sync', {}).catch(() => null);
+  if (d && !d.error) { NEWS.data = d; newsDot(); }
+  if (NEWS.open && !NEWS.item) newsList(); else { btn.disabled = false; btn.textContent = '↻ Check now'; }
+}
+
 function newsClick(e) {
   const t = e.target;
   if (t.closest('.nw-close')) return closeNews();
+  const sync = t.closest('[data-act="newsSync"]');
+  if (sync) return newsSyncNow(sync);
   const tab = t.closest('[data-tab]');
   if (tab) return openNews(tab.dataset.tab);
   const tag = t.closest('[data-tag]');

@@ -1,8 +1,15 @@
 # The News format
 
 QuorX has a **News** section in its sidebar: what's new in each version, reports on models, tests and platforms, the
-user's own numbers, and research articles. All of it ships with QuorX itself, in the `news/` folder, so News updates
-whenever QuorX does. This page is the contract every News page is written to. `npm run news:check` checks it.
+user's own numbers, and research articles. This page is the contract every News page is written to.
+`npm run news:check` checks it.
+
+**Where News comes from.** News is written and published in the QuorX website's repository (its `news/` folder);
+pushing there puts it live on https://quorx.genxmims.org/news/ and in the website's feed. QuorX downloads that feed
+(`server/newsremote.js`) a little after it starts and a few times a day, keeps a copy in `data/news-cache/` laid out
+exactly like `news/`, and shows that copy. The `news/` folder in this repository is the snapshot that ships with each
+release: QuorX shows it before the first download, when downloads are off (⚙ Settings → Privacy & display), or when
+it's newer than the download. Refresh it from the website before a release with `npm run news:snapshot`.
 
 ## The folder
 
@@ -132,5 +139,16 @@ empty.
 | `GET /api/news/file?kind=…&slug=…&name=file.json` | that data file or picture (`.json`, `.png`, `.jpg`, `.gif`, `.webp`, `.svg`; names are checked, nothing outside `news/` is served) |
 | `GET /api/news/local?view=…` | the user's own numbers (above) |
 | `POST /api/news/read` `{ "version" }` | marks News as read up to that version |
+| `POST /api/news/sync` | checks the website for new News now, then answers like `GET /api/news` |
+| `POST /api/news/remote` `{ "on": true\|false }` | turns downloads from the website on or off (off removes the downloaded copy) |
 
-News is cached by the server until a file in `news/` changes, so an edited page shows on the next visit to News.
+`GET /api/news` also has `"source"`: `{ "from": "website" | "shipped", "on", "site", "syncedAt"?, "checkedAt"?, "error"? }`,
+saying which copy is shown and how the last download went.
+
+**The download, checked.** The feed (format 1) lists each article and report with its files' names, sizes and SHA-256.
+QuorX fetches only files that changed, each from the site's own `/news/content/<kind>/<slug>/<name>` address (never an
+address the feed gives), with the names, sizes and kinds `news/` allows, and each must match its SHA-256. The whole copy
+must then pass `npm run news:check`'s rules before it replaces the old one in a single rename; anything wrong keeps the
+copy QuorX already has.
+
+News is cached by the server until a file in the folder it reads changes, so a new or edited page shows on the next visit to News.

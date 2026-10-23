@@ -6,13 +6,15 @@
 // The desktop app's own caches (Electron) are measured and cleared by desktop/main.js; the page shows both together.
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import os from 'node:os';
+import { spawn, execFileSync } from 'node:child_process';
 import { HOME } from './openrouter.js';
-import { listProjects, getChat } from './store.js';
+import { listProjects, getChat, compactChat } from './store.js';
 import { activeRuns } from './runs.js';
-import { unusedBlobs } from './blobs.js';
+import { unusedBlobs, inlinePictures } from './blobs.js';
 import { SHOT_DIR, pruneShots } from './harness-checks.js';
 import { storageRules } from './storagerules.js';
+import { checkpointTime } from './workspace.js';
 
 const DATA = path.join(HOME, 'data');
 const LOGS = path.join(HOME, 'logs');
@@ -106,7 +108,7 @@ function projectList(root, part, keep) {
   if (part === 'objects') return [path.join(base, 'objects'), path.join(base, 'snapindex.json')].filter(exists);
   const dir = path.join(base, part);
   let list = names(dir).map((n) => path.join(dir, n));
-  if (part === 'checkpoints') list = list.filter((p) => { try { return fs.lstatSync(p).isDirectory(); } catch { return false; } }).sort((a, b) => mtime(b) - mtime(a)).slice(keep);
+  if (part === 'checkpoints') list = list.filter((p) => { try { return fs.lstatSync(p).isDirectory(); } catch { return false; } }).sort((a, b) => checkpointTime(b) - checkpointTime(a)).slice(keep);
   return list.filter((p) => { try { return !fs.lstatSync(p).isSymbolicLink(); } catch { return false; } });
 }
 // Projects with a reply running: nothing in their .quorx is cleared until it ends.
@@ -135,10 +137,100 @@ export async function measureStorage({ keep = 10 } = {}) {
       items.push({ id: `proj:${p.id}:${d.part}`, group: 'projects', project, part: d.part, label: d.label, help: d.help, how: d.how, safe: false, busy: busy.has(p.id), ...s });
     }
   }));
-  const order = ['cache', 'logs', 'trash', 'projects'];
+  items.push(...await chatParts());
+  const order = ['cache', 'chats', 'logs', 'trash', 'projects'];
   items.sort((a, b) => order.indexOf(a.group) - order.indexOf(b.group));
   return { home: HOME, at: Date.now(), rules: storageRules(), items };
 }
+// ---------- chats: their size, and the pictures older chats still keep inside their files ----------
+// Chats saved since pictures moved to data/blobs keep only short /blob/ addresses; older ones still hold each picture
+// as text (a third bigger than the file, and once per copy). Compacting moves them out; nothing in the chat changes.
+const CHATS = path.join(DATA, 'chats');
+const liveChats = () => new Set(activeRuns().map((r) => r.chatId).filter(Boolean));
+async function chatPictures() {
+  const live = liveChats(), out = [];
+  let total = 0;
+  for (const n of names(CHATS).filter((x) => x.endsWith('.json'))) {
+    const p = path.join(CHATS, n);
+    let text; try { text = await fs.promises.readFile(p, 'utf8'); } catch { continue; }
+    total += Buffer.byteLength(text);
+    const pic = inlinePictures(text);
+    if (pic.count) out.push({ id: n.slice(0, -5), live: live.has(n.slice(0, -5)), ...pic });
+  }
+  return { total, chats: out };
+}
+async function chatParts() {
+  const { total, chats } = await chatPictures();
+  const inline = chats.reduce((a, c) => a + c.bytes, 0), decoded = chats.reduce((a, c) => a + c.decoded, 0);
+  return [
+    { id: 'chats', group: 'chats', label: 'Your chats', how: null, bytes: total - inline, files: names(CHATS).filter((x) => x.endsWith('.json')).length,
+      help: 'Every chat, with its messages and plans. Delete a chat from the sidebar; it goes to QuorX\'s trash.' },
+    { id: 'compact', group: 'chats', label: 'Pictures kept inside older chats', how: chats.length ? 'compact' : null, bytes: inline, files: chats.reduce((a, c) => a + c.count, 0), count: chats.length,
+      saves: Math.max(0, inline - decoded), busy: chats.length > 0 && chats.every((c) => c.live),
+      help: `Chats from before pictures were stored on their own keep each picture inside the chat file. Compacting moves them to the picture store: the chats look exactly the same, open faster, and take about ${Math.round(100 * Math.max(0, inline - decoded) / (inline || 1))}% less room (repeated pictures are stored once).` },
+  ];
+}
+// Each chat in turn; a chat with a reply running is left for later.
+async function compactChats() {
+  const { chats } = await chatPictures();
+  let saved = 0, done = 0;
+  const skipped = [];
+  for (const c of chats) {
+    if (liveChats().has(c.id)) { skipped.push({ path: c.id, error: 'a reply is running in it' }); continue; }
+    try { const r = compactChat(c.id); if (r) { saved += Math.max(0, r.before - r.after - r.blobs); done++; } }
+    catch (e) { skipped.push({ path: c.id, error: e.message }); }
+  }
+  return { saved, done, skipped };
+}
+
+// ---------- old QuorX installers in your Downloads folder (only when you ask to look) ----------
+// QuorX didn't put them there, so it never looks on its own. Only installers named QuorX or OpenHarness count;
+// backups (quorx-backup-….zip) and anything else are never listed.
+const INSTALLER = /^(quorx|openharness)(?!.*backup).*\.(exe|msi|msix|msixbundle|appx|appxbundle)$/i;
+export function downloadsDir() {
+  if (process.env.QX_DOWNLOADS) return process.env.QX_DOWNLOADS;
+  if (process.platform === 'win32') {
+    try {
+      // Downloads can be moved (to D:\Downloads…): Windows keeps where in the user's shell folders.
+      const out = execFileSync('reg', ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders', '/v', '{374DE290-123F-4565-9164-39C4925E467B}'], { encoding: 'utf8', windowsHide: true, timeout: 5000 });
+      const m = /REG_(?:EXPAND_)?SZ\s+(.+)/.exec(out);
+      if (m) { const dir = m[1].trim().replace(/%([^%]+)%/g, (_, k) => process.env[k] || ''); if (exists(dir)) return dir; }
+    } catch { /* the usual place */ }
+  }
+  return path.join(os.homedir(), 'Downloads');
+}
+const verOf = (name) => (/(\d+)\.(\d+)\.(\d+)/.exec(name) || []).slice(1).map(Number);
+const cmpVer = (a, b) => { for (let i = 0; i < 3; i++) { if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) - (b[i] || 0); } return 0; };
+/** → { dir, files: [{ name, bytes, at, version, newer, copy, old }] }: old = an installed or older version, or a second copy. */
+export function scanInstallers(current) {
+  const dir = downloadsDir(), cur = verOf(current), files = [];
+  for (const n of names(dir).filter((x) => INSTALLER.test(x))) {
+    const p = path.join(dir, n);
+    let st; try { st = fs.lstatSync(p); } catch { continue; }
+    if (!st.isFile()) continue;
+    const v = verOf(n);
+    files.push({ name: n, bytes: st.size, at: st.mtimeMs, version: v.length ? v.join('.') : null, newer: v.length > 0 && cur.length > 0 && cmpVer(v, cur) > 0 });
+  }
+  // "QuorX-Store-0.2.10 (1).appx": a second download of the same file.
+  for (const f of files) {
+    const base = f.name.replace(/ \(\d+\)(?=\.\w+$)/, '');
+    f.copy = base !== f.name && files.some((g) => g.name === base && g.bytes === f.bytes);
+    f.old = f.copy || (!!f.version && !f.newer);
+  }
+  return { dir, files: files.sort((a, b) => b.at - a.at) };
+}
+/** Moves the named installers (only ones the scan lists) to the Recycle Bin. */
+export async function clearInstallers(picked, current) {
+  const { dir, files } = scanInstallers(current);
+  const want = new Set((picked || []).map(String));
+  const list = files.filter((f) => want.has(f.name));
+  const r = await removePaths(list.map((f) => path.join(dir, f.name)), 'recycle');
+  const left = new Set(r.skipped.map((x) => path.basename(x.path)));
+  const bytes = list.filter((f) => !left.has(f.name)).reduce((a, f) => a + f.bytes, 0);
+  logClear({ auto: false, id: 'downloads', bytes, files: list.length, wentTo: r.wentTo, skipped: r.skipped.length });
+  return { id: 'downloads', bytes, files: list.length, removed: r.removed, wentTo: r.wentTo, skipped: r.skipped, ...(list.length < want.size ? { notListed: want.size - list.length } : {}) };
+}
+
 async function sumOf(paths) {
   let bytes = 0, files = 0, partial = false;
   const deadline = Date.now() + 10e3;
@@ -175,6 +267,12 @@ async function clearParts(items, { keep, auto }) {
   const results = [];
   for (const it of items || []) {
     const id = String(it?.id || '');
+    if (id === 'compact') {
+      const c = await compactChats();
+      results.push({ id, bytes: c.saved, files: c.done, removed: c.done, wentTo: 'compacted', skipped: c.skipped });
+      logClear({ auto, id, bytes: c.saved, files: c.done, wentTo: 'compacted', skipped: c.skipped.length });
+      continue;
+    }
     const r = await findPart(id, keep);
     if (r.error) { results.push({ id, error: r.error, ...(r.busy ? { busy: true } : {}) }); continue; }
     if (!r.def.how) { results.push({ id, error: 'this part is only shown here' }); continue; }

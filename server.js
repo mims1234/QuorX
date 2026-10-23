@@ -51,10 +51,11 @@ import { artifactContent, servedArtifact, ARTIFACT_HEADERS, folderStamp } from '
 import { gate, appGate, appLink, hostAllowed, crossSiteApi, isLoopback } from './server/access.js';
 import { gitHubRemote, gitHubInfo } from './server/github.js';
 import { serveBlob, startSweeping } from './server/blobs.js';
-import { measureStorage, clearStorage, recentClears, startStorageRules } from './server/storage.js';
+import { measureStorage, clearStorage, recentClears, startStorageRules, scanInstallers, clearInstallers } from './server/storage.js';
 import { storageRules, saveStorageRules, rotateLog } from './server/storagerules.js';
 import { listDesignSystems, readDesignSystem, projectDesign, applyDesignSystem, saveProjectDesign } from './server/design.js';
 import { newsRoute } from './server/news.js';
+import { startNewsSync, remoteState as newsRemoteState } from './server/newsremote.js';
 import { uiCards } from './server/modelcards.js';
 import zlib from 'node:zlib';
 
@@ -75,6 +76,7 @@ if (!currentKey()) console.warn('!! No OpenRouter key yet: add one in the page (
 startSampling();
 startSweeping();
 startStorageRules();
+startNewsSync(); // News from the QuorX website: a check soon after start, then a few times a day (server/newsremote.js)
 setTimeout(lockDown, 2000).unref?.(); // keys and data: this account only (server/keys.js)
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.htm': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
@@ -159,7 +161,7 @@ const server = http.createServer(async (req, res) => {
       return res.end(callbackPage({ ...r, desktop }));
     }
     if (req.method === 'GET' && url.pathname === '/api/stale') return json(res, 200, codeChanged());
-    if (req.method === 'GET' && url.pathname === '/api/config') return json(res, 200, { ...codeChanged(), version: VERSION, platform: process.platform, pagePort: runtime.pagePort || null, shell: shellInfo().name, pty: ptyAvailable(), defaults: DEFAULTS, checks: CHECKS, media: MEDIA, hasKey: !!currentKey(), browser: browserPath(), allowed: ALLOWED });
+    if (req.method === 'GET' && url.pathname === '/api/config') return json(res, 200, { ...codeChanged(), version: VERSION, platform: process.platform, pagePort: runtime.pagePort || null, shell: shellInfo().name, pty: ptyAvailable(), defaults: DEFAULTS, checks: CHECKS, media: MEDIA, newsRemote: newsRemoteState().on, hasKey: !!currentKey(), browser: browserPath(), allowed: ALLOWED });
 
     // ---- chat history (data/chats; delete = move to data/trash) ----
     if (url.pathname === '/api/chats' && req.method === 'GET') return json(res, 200, listChats());
@@ -725,6 +727,11 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, storageRules());
     }
     if (url.pathname === '/api/storage/log' && req.method === 'GET') return json(res, 200, recentClears());
+    // Old QuorX installers in your Downloads folder: listed only when you ask, moved to the Recycle Bin only when you pick them.
+    if (url.pathname === '/api/storage/downloads') {
+      if (req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e5) || '{}'); return json(res, 200, await clearInstallers(Array.isArray(b.names) ? b.names.slice(0, 200) : [], VERSION)); }
+      return json(res, 200, { current: VERSION, ...scanInstallers(VERSION) });
+    }
 
     // ---- "Browse…": the computer's own folder dialog (only for someone sitting at this computer) ----
     // A template starts a NEW project: a fresh folder <parent>/<name>, the template copied in, then the project.

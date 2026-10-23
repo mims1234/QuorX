@@ -1,12 +1,14 @@
-// News (docs/news-format.md): What's new, articles and reports from the news/ folder that ships with QuorX, their
-// data files and pictures, and the user's own numbers. Only files inside news/ are served and every name is checked
-// strictly. The index is cached until a file in news/ changes. The last version the user read is kept in
-// data/news.json, next to the user's other settings on this computer.
+// News (docs/news-format.md): What's new, articles and reports, their data files and pictures, and the user's own
+// numbers. They come from the copy downloaded from the QuorX website (server/newsremote.js, data/news-cache/) or, as
+// the fallback, the news/ folder that ships with QuorX; both are laid out the same way. Only files inside that folder
+// are served and every name is checked strictly. The index is cached until a file in it changes. The last version
+// the user read is kept in data/news.json, next to the user's other settings on this computer.
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { ROOT, HOME } from './openrouter.js';
 import { parseFront, NEWS } from '../scripts/news-check.mjs';
+import { activeNewsDir, newsCacheDir, remoteState, setRemote, syncNews } from './newsremote.js';
 
 const KIND = ['articles', 'reports'];
 const SLUG = /^_?[a-z0-9][a-z0-9-]{0,79}$/;          // drafts (a leading _) open by name but are never listed
@@ -124,6 +126,12 @@ export function newsFile(kind, slug, name, dir = NEWS) {
   } catch { return null; }
 }
 
+/** Where the News being shown comes from: { from: 'website' | 'shipped', on, site, syncedAt?, checkedAt?, error? }. */
+export function newsSource(dir) {
+  const s = remoteState();
+  return { from: path.resolve(dir) === path.resolve(newsCacheDir()) ? 'website' : 'shipped', ...s };
+}
+
 /** The user's own numbers for a local block. server/newslocal.js fills them when it is there; until then, empty. */
 export async function newsLocal(view) {
   if (!VIEWS.includes(view)) return { error: `view is one of ${VIEWS.join(', ')}` };
@@ -140,12 +148,25 @@ export async function newsLocal(view) {
  * The /api/news routes. Takes { method, pathname, query (URLSearchParams), body (string) } and answers
  * { code, body } for JSON, or { code, file, type, headers } for a file; null when the path isn't a News route.
  */
-export async function newsRoute({ method, pathname, query, body }, dir = NEWS) {
+export async function newsRoute({ method, pathname, query, body }, dir = activeNewsDir(NEWS)) {
   const q = query || new URLSearchParams();
   const no = (code, error) => ({ code, body: { error } });
   if (pathname === '/api/news' && method === 'GET') {
     const lr = lastRead();
-    return { code: 200, body: { version: appVersion(), ...(lr ? { lastRead: lr } : {}), ...newsIndex(dir) } };
+    syncNews(); // a quiet check for new News when it's been a while; this answer uses the copy QuorX has now
+    return { code: 200, body: { version: appVersion(), ...(lr ? { lastRead: lr } : {}), source: newsSource(dir), ...newsIndex(dir) } };
+  }
+  // Check the website for new News now, then answer like GET /api/news.
+  if (pathname === '/api/news/sync' && method === 'POST') {
+    await syncNews({ force: true });
+    return newsRoute({ method: 'GET', pathname: '/api/news', query: q, body: '' });
+  }
+  // Downloads on or off: { "on": true | false }. Off goes back to the copy that shipped with QuorX.
+  if (pathname === '/api/news/remote' && method === 'POST') {
+    let b = {}; try { b = JSON.parse(body || '{}'); } catch { return no(400, 'the body is not JSON'); }
+    try { setRemote(b.on); } catch (e) { return no(400, e.message); }
+    if (b.on) await syncNews({ force: true });
+    return { code: 200, body: { ok: true, source: newsSource(activeNewsDir(NEWS)) } };
   }
   if (pathname === '/api/news/item' && method === 'GET') {
     const it = newsItem(q.get('kind'), q.get('slug'), dir);

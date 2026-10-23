@@ -1,52 +1,62 @@
 ---
 name: video-direction
-description: Direct a short video (launch film, trailer, explainer, motion piece, social cut) so it looks directed - shot list first, a film drawn as a function of time, frame checks on a contact sheet, and a finish for muted phones.
+description: Start here for any video (launch film, trailer, explainer, motion piece, social cut, music video, documentary short). Picks the route (code, images, AI clips, footage or a mix), writes the treatment and shot list, and names the other video skills to load.
 ---
 
 # Video direction
 
-Use this when the user asks for a launch video, trailer, promo, explainer, motion piece or social cut. A film looks directed when the whole plan exists before any frame does, every frame can be rebuilt exactly, and the checks look at real frames. (Distilled from public video-agent toolkits and film-editing references; see `docs/video-direction.md`.)
+Use this first for any video request. It covers the decisions every route shares and tells you which other skill to load. A film is judged in this order: **sound, rhythm, camera, directing**. Good-looking frames are only the starting point. (Adapted from public video-agent toolkits and film references; see `docs/video-direction.md`. QuorX has not tested these rules on video yet.)
 
-These rules come from reading those sources. QuorX has not yet tested them on video, and nothing here proves how the deciders do on video questions.
+## 1. Pick the route
+| Route | Picture comes from | Load | Cost |
+|---|---|---|---|
+| Code | `render(t)` on a canvas, SVG, WebGL or three.js page | `film-render` | free |
+| Images | the user's photos, screenshots or `imagine` stills, moved by a camera | `film-from-images` | free, or paid per image |
+| AI clips | `make_video` shots of up to 15 s, joined | `film-from-ai-clips` | paid per clip, usually the most expensive |
+| Footage | the user's recordings, screen captures or interviews, cut together | `film-from-footage` | free |
+| Mix | any of the above in one timeline, for example code titles over footage or AI clips inside a code-drawn frame | the skills for each part | sum of the parts |
 
-## 1. Brief and real assets
-- Find out, or ask in one `ask_user` card: length (default 15-30 s for a launch film), where it will be posted (16:9, 9:16, 1:1), and whether it needs a voice. A movie implies music and sound even when the user doesn't say so.
-- Use the product's real screens and real UI copy. Invented labels are the quickest way to make a video feel fake.
+- Default to **code** for product, data and motion-design films: every frame can be re-rendered, and it costs nothing.
+- Use **images** when the subject is photographic or the user has pictures; **AI clips** only for live-action-looking shots code can't draw; **footage** when the user has real recordings.
+- Short design-led pieces (5-15 s): also load `motion-graphics`. 3D objects or characters built from a reference picture: `three-from-image`.
+- Every route also loads `film-sound` and `film-review`. Load `film-style` when the user names a look or wants a reusable one.
 
-## 2. Plan the whole film first
-- Call `plan` before writing any scene. Its spec names the shape: cold open, introduce, escalate, climax, button (for a product: the problem, the product, the payoff, the call to action).
-- Put a shot list in the plan or in a `write_artifact` table. Each shot gets an id, its time range, its purpose, framing, camera move and the cut out of it. Aim for 6-18 shots.
-- The product is on screen before 0:03. Pick the music's tempo first and land cuts on bar lines. The music changes mood at no more than two or three planned points.
-- Rewriting scenes nobody needed is the costliest mistake, so the plan is what the user approves.
+## 2. Take the brief, once
+Ask everything in one `ask_user` card, then no more questions:
+- length (default 30-60 s; launch films 15-30 s), shape (16:9, 9:16, 1:1) and where it will be posted;
+- whether they have their own voice, music, footage, photos, logo or data (theirs comes first);
+- whether they want to see a storyboard before the full film.
 
-## 3. Lock the style
-- With a `DESIGN.md`, use its tokens. Without one, pick one direction yourself (see `design-craft`) or read a reference with `extract_design`.
-- Keep characters, colours and type the same in every shot. Write them down once and reuse them.
+Paid tools (`imagine`, `make_video`, `compose_music`, `speak`) need approval: say what each will cost before using it. Use only the product's real UI copy; invented labels make a video feel fake.
 
-## 4. Build the film as a function of time
-- Draw every frame from `t` alone: `drawFrame(t)` on a canvas, or a paused timeline you seek. No `Date.now()`, no `setInterval` timing, no unseeded `Math.random()`. Then the preview, the checks and the final render all show the same frames.
-- Give the page two ways to show a fixed moment: `film.html?t=12.4` draws that frame and stops, and `sheet.html` draws 12 evenly spaced frames in a grid with their times underneath (the contact sheet).
-- Motion: entering elements ease out, leaving elements ease in, moves within the frame ease in and out. Never linear. UI-like moves take 200-500 ms, small accents 150-250 ms. Stagger elements so one leads, and keep one main focus per frame.
-- Real space (3-D scenes, two people talking): keep the camera on one side of the line between the subjects (180° rule), and move it at least 30° between two shots of the same subject. Cut in the middle of a movement.
-- When a cut can't get everything right, keep emotion and story and give up rhythm, eye-trace and spatial neatness first (Murch's order).
+## 3. Write TREATMENT.md before any picture
+1. **Three candidate structures** (for example a journey, a before/after, a countdown, a list that turns), then the one you chose and why. The first idea for a style is usually its cliché.
+2. **Logline and arc:** one subject, one goal, one turn; setup, turn, ending. A product film: problem, product, payoff, call to action.
+3. **Benchmark:** one or two reference works for this style and topic, with what to learn (pacing, camera grammar, colour logic, score shape) and what not to take (characters, designs, melodies, logos).
+4. **Shot list:** id, time range, framing (wide, full, medium, close, insert), angle, camera move, and **why** this shot is shot this way.
+5. **Beat sheet**, second by second, and a **cue map**: tempo, bar grid, and on which beat every cut, key action and subtitle lands.
+6. **Sound design table:** per section, the ambience, the foley and the music state (`film-sound`).
+7. **Titles and subtitles:** the type is part of the style.
 
-## 5. Check real frames
-- Open `sheet.html` and use `look` with checks you can't answer from your own code, guessing first:
-  - "Every caption in these frames is fully readable."
-  - "No text or face sits in the top 9% or bottom 20% of the 9:16 frames, or under the right-hand edge."
-  - "Subject A stays on the left of the frame in shots 3 and 4."
-- Measure what can be measured instead of asking: durations, frame count, loudness and beat timing come from your code or from `ffprobe`, not from a vote.
-- Don't ask the deciders which look is nicer. Taste questions are where they are least sure.
-- Fix what a settled "no" names, then check the sheet again. Stop after two rounds and list what is left in the reply.
+Show the plan with `plan` (or a `write_artifact` table) and let the user approve it before building.
 
-## 6. Sound and finish
-- Burn captions in: many viewers watch with the sound off.
-- Text must stay readable when the video is shown at 720p.
-- Mix to about -14 LUFS with true peaks under -1 dBTP (`ffmpeg -af loudnorm=I=-14:TP=-1`). Platforms turn louder masters down.
-- `compose_music` and `speak` are paid and need approval. Ask for them only when the user wants sound, and say what each costs.
+## 4. Story, camera and motion
+- Hook in the first 3 seconds; the product or subject is on screen before 0:03. End with an echo of the opening, a scale reveal, or the subject getting it right the second time.
+- One **native move** at the emotional peak: something only this medium can do (a fold that becomes the transition, ink that blooms into the next scene). Cut any extra beat that needs explaining.
+- At least **four different camera moves** and real changes of framing (2-D has a camera too: push, pull, parallax, focus pulls). One **signature shot** people remember. Transitions made from the medium itself, not default fades.
+- At key moments the subject fills at least a third of the frame height.
+- Real space: keep the camera on one side of the line between subjects (180° rule) and move at least 30° between two shots of one subject. Cut in the middle of a movement.
+- Vary the pace: one clear acceleration or slowdown, and one held breath. One action, one sound, one cut, but not a cut on every beat.
+- Easing: entering ease-out, leaving ease-in, moving within the frame ease-in-out; never linear. When a cut can't get everything right, keep emotion and story and give up rhythm and spatial neatness first.
 
-## 7. Render and deliver
-- An MP4 needs `ffmpeg` (`ffmpeg -version`) and a script that opens `film.html` in a headless browser, seeks each frame, saves a PNG and encodes them. Installing a browser library for that is a package install and needs approval, so say so first.
-- Default master: 1920×1080, 30 fps, H.264, CRF 18. Cut 9:16 (1080×1920) and 1:1 from the same film when the user posts there, and recompose the layout for each shape rather than cropping.
-- `make_video` makes one short AI clip (15 s at most) from a prompt. Use it only for footage that code can't draw, and remember that a generated clip can't be re-rendered the same way.
-- Never post anywhere yourself. Hand over the files and a caption, and the user posts them.
+## 5. One timeline drives everything
+Keep sections, tempo, beats and hit points in one `timeline.json`. The picture, the score, the sound effects, the subtitles and the checks all read it, so nothing drifts.
+
+## 6. Prove the look before the film
+Render three style frames (or a model sheet for characters) with the real route, and check them against the style. With a storyboard requested: 6-9 key shots tiled in one sheet with shot number, framing and duration, then wait for approval.
+
+## 7. Deliver
+- `<name>.mp4` (1920×1080 by default, other shapes recomposed rather than cropped), `poster.jpg`, `<name>.srt` when there is speech or subtitles, `TREATMENT.md`, and a one-command build script for code routes.
+- `CREDITS`: every third-party asset with its source and licence (CC0, CC BY or OFL only, unless the user owns it). A film that states facts keeps `FACTS.md`: each claim with its source.
+- Never post anywhere yourself. Hand over the files and a caption.
+- References teach grammar only: no copied characters, shots, melodies, logos or brands the user has no right to.

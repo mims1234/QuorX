@@ -683,3 +683,7 @@
 #settings .st-card.sto-summary { padding: 16px 18px; display: grid; gap: 10px; }
 /* the Skills count lives in the nav state text ("10 on"), kept current by stRefresh; an older count badge stays hidden */
 #settings .st-nav-item .st-nav-badge.count { display: none; }
+/* Storage's dot when there is room to clear: an amber dot after the nav's state text */
+#settings .st-nav-item .st-nav-badge.warn-dot { position: static; flex: none; width: 7px; height: 7px; margin-left: 6px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 0 3px var(--amber-dim); }
+/* Projects: the agent folder's size on each card, a chip that opens Storage */
+#settings .pp-meta .pp-sto { cursor: pointer; }
