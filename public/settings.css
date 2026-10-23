@@ -681,3 +681,5 @@
 #settings .sq-check input:checked { background: var(--ok); border-color: var(--ok); }
 #settings .sq-check input:checked::after { opacity: 1; }
 #settings .st-card.sto-summary { padding: 16px 18px; display: grid; gap: 10px; }
+/* the Skills count lives in the nav state text ("10 on"), kept current by stRefresh; an older count badge stays hidden */
+#settings .st-nav-item .st-nav-badge.count { display: none; }
