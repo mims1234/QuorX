@@ -516,8 +516,12 @@ function chooseSuggest(c, i, how = 'run') {
   if (it.kind === 'file') c.ctx.push({ type: 'file', projectId: c.projectId, path: it.value.path, title: it.value.path });
   if (it.kind === 'project') c.ctx.push({ type: 'project', id: it.value.id, title: `📁 ${it.value.name}` });
   c.ctx = [...new Map(c.ctx.map((x) => [`${x.type}:${x.id || x.path}`, x])).values()];
-  ta.value = `${before}@${it.label} ${after}`;
-  ta.selectionStart = ta.selectionEnd = before.length + it.label.length + 2;
+  // The chip above the box carries it: the @word you typed goes, so the message holds only your own words.
+  const head = before.replace(/[ \t]+$/, ''), tail = after.replace(/^[ \t]+/, '');
+  const gap = head && tail && !/\s$/.test(head) && !/^\s/.test(tail) ? ' ' : '';
+  ta.value = head + gap + tail;
+  ta.selectionStart = ta.selectionEnd = head.length + gap.length;
+  ta.dispatchEvent(new Event('input'));
   ta.focus(); renderAttachments(c);
 }
 async function openNotes(c) {
