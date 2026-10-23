@@ -4958,13 +4958,34 @@ const YOLO_ROWS = [
   ['deciders', 'Ask the deciders', 'Quick yes/no checks by the decider models.'],
   ['skills', 'Save skills', 'Save a playbook into the project for later chats.'],
 ];
-const stRow = (label, help, ctrl, extra = '') => `<div class="st-row" ${extra}><div class="st-row-info"><div class="st-row-label-wrap"><span class="st-row-label">${label}</span></div>${help ? `<div class="st-row-help">${help}</div>` : ''}</div><div class="st-row-ctrl">${ctrl}</div></div>`;
-const stCard = (title, sub, body, cls = '') => `<section class="st-card ${cls}"><div class="st-card-head"><div class="st-card-title">${title}</div>${sub ? `<div class="st-card-subtitle">${sub}</div>` : ''}</div>${body}</section>`;
-// An on/off that is a rounded-square ✓ box (Storage's rules use it).
-const sqCheck = (bind, on, label = '') => `<label class="sq-check"><input type="checkbox" data-bind="${bind}" ${on ? 'checked' : ''}>${label ? `<span>${label}</span>` : ''}</label>`;
-const stSwitch = (bind, on) => `<label class="st-switch"><input type="checkbox" role="switch" data-bind="${bind}" ${on ? 'checked' : ''}><span class="st-switch-track"><span class="st-switch-thumb"></span></span></label>`;
+const YOLO_ICO = { files: '📝', commands: '▶️', servers: '🖥', browser: '🌐', web: '📖', media: '💲', artifacts: '🗺', helpers: '🤝', deciders: '⚖️', skills: '🧩' };
+// A row: label and help on the left, the control on the right. Long help folds to two lines (click it for the rest).
+// `extra` is extra attributes, or { cls, id, attrs }.
+const stRow = (label, help, ctrl, extra = '') => {
+  const x = typeof extra === 'string' ? { attrs: extra } : extra;
+  const fold = String(help || '').replace(/<[^>]+>/g, '').length > 170;
+  return `<div class="st-row ${x.cls || ''}" ${x.id ? `id="${x.id}"` : ''} ${x.attrs || ''}><div class="st-row-info"><div class="st-row-label-wrap"><span class="st-row-label">${label}</span></div>${help ? `<div class="st-row-help ${fold ? 'sx-fold' : ''}" ${fold ? 'title="Click for the rest"' : ''}>${help}</div>` : ''}</div><div class="st-row-ctrl">${ctrl}</div></div>`;
+};
+const stCard = (title, sub, body, cls = '', id = '') => `<section class="st-card ${cls}" ${id ? `id="${id}"` : ''}><div class="st-card-head"><div class="st-card-title">${title}</div>${sub ? `<div class="st-card-subtitle">${sub}</div>` : ''}</div>${body}</section>`;
+// On/off is a rounded square with ✓, and the word On or Off beside it.
+const stSwitch = (bind, on) => `<label class="sx-check"><input type="checkbox" data-bind="${bind}" ${on ? 'checked' : ''}><span class="sx-word"></span></label>`;
+// Storage's rules call it sqCheck; it is the same box.
+const sqCheck = (bind, on) => stSwitch(bind, on);
 const stSeg = (bind, opts, v) => `<div class="st-segmented" role="radiogroup" data-bind="${bind}">${opts.map(([k, l]) => `<button type="button" class="st-seg-btn ${String(k) === String(v) ? 'active' : ''}" role="radio" aria-checked="${String(k) === String(v)}" data-v="${esc(k)}">${l}</button>`).join('')}</div>`;
+// The same choice as stSeg, drawn as cards with an icon and a line on what each one does. opts: [value, icon, title, line]
+const stCards = (bind, opts, v, cls = '') => `<div class="st-segmented sx-cards ${cls}" role="radiogroup" data-bind="${bind}">${opts.map(([k, ico, t, d]) => `<button type="button" class="st-seg-btn ${String(k) === String(v) ? 'active' : ''}" role="radio" aria-checked="${String(k) === String(v)}" data-v="${esc(k)}"><span class="sx-c-ico" aria-hidden="true">${ico}</span><span class="sx-c-t">${t}</span>${d ? `<span class="sx-c-d">${d}</span>` : ''}</button>`).join('')}</div>`;
 const stStep = (bind, v, min, max, step = 1, unit = '') => `<div class="st-stepper" data-min="${min}" data-max="${max}" data-step="${step}"><button type="button" class="st-step-btn" data-d="-1" aria-label="Less">−</button><input class="st-step-val" type="number" data-bind="${bind}" value="${v}" min="${min}" max="${max}" step="${step}">${unit ? `<span class="st-step-unit">${unit}</span>` : ''}<button type="button" class="st-step-btn" data-d="1" aria-label="More">＋</button></div>`;
+// A tile with a ✓ box (tools, YOLO groups): the whole tile toggles it.
+const stTile = (bind, ico, name, note, on, meta = '') => `<label class="st-row sx-tile"><span class="sx-tile-top"><span class="sx-tile-ico" aria-hidden="true">${ico}</span><span class="st-row-label">${name}</span></span><span class="sx-check"><input type="checkbox" data-bind="${bind}" ${on ? 'checked' : ''} aria-label="${esc(String(name).replace(/<[^>]+>/g, ''))}"></span>${note ? `<span class="sx-tile-note st-row-help">${note}</span>` : ''}${meta ? `<span class="sx-tile-meta">${meta}</span>` : ''}</label>`;
+// A money cap: a big $ field with − and ＋, what it means, and room for a meter.
+const stCap = (bind, label, v, min, max, step, help, extra = '') => `<div class="st-row sx-cap"><span class="sx-cap-k st-row-label">${label}</span><div class="st-stepper" data-min="${min}" data-max="${max}" data-step="${step}"><span class="sx-cap-cur" aria-hidden="true">$</span><input class="st-step-val" type="number" data-bind="${bind}" value="${Number(v || 0).toFixed(2)}" min="${min}" max="${max}" step="${step}" aria-label="${esc(label)} in dollars"><button type="button" class="st-step-btn" data-d="-1" aria-label="Less">−</button><button type="button" class="st-step-btn" data-d="1" aria-label="More">＋</button></div>${extra}<span class="sx-cap-help st-row-help">${help}</span></div>`;
+// A strip of stages; each one jumps to its card. nodes: [number, title, state, card id, off]
+const stFlow = (nodes) => `<div class="sx-flow" role="list">${nodes.map(([n, t, s, to, off], i) => `${i ? '<span class="sx-link" aria-hidden="true"></span>' : ''}<button type="button" class="sx-node ${off ? 'off' : ''}" role="listitem" ${to ? `data-jump="${to}"` : ''}><b><span class="sx-n">${n}</span>${t}</b><small>${s}</small></button>`).join('')}</div>`;
+const stStatus = (cls, t) => `<span class="sx-status ${cls}">${t}</span>`;
+const stTag = (cls, t) => `<span class="sx-tag ${cls}">${t}</span>`;
+const stMoney = (v, cls = '') => `<span class="sx-money ${cls}">${v}</span>`;
+const stSec = (t) => `<div class="sx-sec-label">${t}</div>`;
+const stNum = (n) => `<span class="sx-n" aria-hidden="true">${n}</span>`;
 const getPath = (o, p) => p.split('.').reduce((x, k) => x?.[k], o);
 const setPath = (o, p, v) => { const ks = p.split('.'), last = ks.pop(); const t = ks.reduce((x, k) => (x[k] ??= {}), o); t[last] = v; };
 
@@ -5015,10 +5036,10 @@ function wireSafetySimple(mark) {
   };
   for (const b of panel.querySelectorAll('[data-sf="decide"] .st-seg-btn')) b.onclick = () => {
     if (b.dataset.v === 'decide') set([...SF_ASK, 'yoloOpaque'], true); else set(SF_ASK, false);
-    b.closest('.st-row')?.classList.add('changed'); mark(); sfSync();
+    ST.changed.add('safety:decide'); b.closest('.st-row')?.classList.add('changed'); mark(); sfSync();
   };
   const care = $('[data-sf="care"]', panel);
-  if (care) care.onchange = () => { set(SF_CARE, care.checked); care.closest('.st-row')?.classList.add('changed'); mark(); sfSync(); };
+  if (care) care.onchange = () => { set(SF_CARE, care.checked); ST.changed.add('safety:care'); care.closest('.st-row')?.classList.add('changed'); mark(); sfSync(); };
   // An Advanced tick (or the Undo box) changed: the generic handler has already written the draft.
   panel.addEventListener('change', (e) => { if (e.target.matches?.('input[data-bind^="safety."]')) sfSync(); });
   const adv = $('#sfAdv');
@@ -5028,213 +5049,260 @@ function wireSafetySimple(mark) {
 function settingsPanels(S) {
   const U = uiOf(S), d = G.cfg.defaults, R = S.storage || {};
   const keysBadge = G.cfg.hasKey ? '' : 'bad-dot';
+  const pad = (html) => `<div class="sx-pad">${html}</div>`;
+  const modelField = (act, id, id2, empty, title) => `<button type="button" class="sx-model" data-act="${act}" id="${id2}" ${title ? `title="${esc(title)}"` : ''}>${id ? `<span class="sx-av" aria-hidden="true">${esc((short(id)[0] || '?').toUpperCase())}</span>${recDot(id, 'chat')} ${esc(short(id))} <small>${esc(shortPrice(id))}</small>` : `<span class="sx-av" aria-hidden="true">＋</span>${empty}`}<span class="sx-change">Change</span></button>`;
   return {
-    appearance: ['Appearance', 'How the harness looks on this computer.', [
-      stCard('Theme', '', `<div class="st-theme-picker" data-bind="theme">${[[null, 'System', 'system'], ['dark', 'Dark', 'dark'], ['light', 'Light', 'light']].map(([v, l, cls]) => `<button type="button" class="st-theme-card ${(S.theme ?? null) === v ? 'active' : ''}" data-v="${v ?? ''}"><span class="st-theme-preview-box ${cls}">${cls === 'system' ? '<span class="thumb-left"></span><span class="thumb-right"></span>' : '<span class="thumb-bar"></span><span class="thumb-sidebar"></span><span class="thumb-dot"></span>'}</span><span class="st-theme-card-foot"><span class="st-theme-card-label">${l}</span><span class="st-theme-card-radio"></span></span></button>`).join('')}</div>`),
-      stCard('Text and spacing', '', stRow('Density', 'Compact fits more messages and chats on screen.', stSeg('ui.density', [['comfortable', 'Comfortable'], ['compact', 'Compact']], U.density))
+    appearance: ['Appearance', 'How QuorX looks on this computer. The theme shows at once; Save keeps it.', [
+      `<div class="sx-grid two"><div>`
+      + stCard('Theme', '', `<div class="st-theme-picker sx-pad" data-bind="theme">${[[null, 'System', 'system', '🖥', 'Follows Windows'], ['dark', 'Dark', 'dark', '🌙', 'For low light'], ['light', 'Light', 'light', '☀️', 'For bright rooms']].map(([v, l, cls, ico, line]) => `<button type="button" class="st-theme-card ${(S.theme ?? null) === v ? 'active' : ''}" data-v="${v ?? ''}"><span class="st-theme-preview-box ${cls}">${cls === 'system' ? '<span class="thumb-left"></span><span class="thumb-right"></span>' : '<span class="thumb-bar"></span><span class="thumb-sidebar"></span><span class="thumb-dot"></span>'}</span><span class="st-theme-card-foot"><span class="st-theme-card-label">${ico} ${l}</span><small>${line}</small><span class="st-theme-card-radio"></span></span></button>`).join('')}</div>`)
+      + stCard('Text and spacing', '', stRow('Density', 'Compact fits more messages and chats on screen.', stSeg('ui.density', [['comfortable', 'Comfortable'], ['compact', 'Compact']], U.density))
         + stRow('Message text size', 'Replies, your posts and the message box.', stStep('ui.fontSize', U.fontSize, 12, 18, 1, 'px'))
         + stRow('Motion', 'Animations and transitions. “Follow system” uses Windows’ Animation effects setting (or your OS’s reduce-motion setting).', stSeg('ui.reduceMotion', [['system', 'Follow system'], ['full', 'On'], ['reduce', 'Reduced']], motionPref(U)))
-        + stRow('Message timestamps', 'Shown on every post.', stSeg('ui.timestamps', [['time', 'Time'], ['relative', 'Relative'], ['off', 'Off']], U.timestamps))),
-      stCard('Notifications', '', stRow('Tell me when a reply…', 'Only while QuorX is in the background. Click a notification to open that chat. Your browser asks once, the first time you send a message.', stSeg('ui.notify', [['all', 'Needs me or ends'], ['needs', 'Needs me'], ['off', 'Off']], U.notify))),
+        + stRow('Message timestamps', 'Shown on every post.', stSeg('ui.timestamps', [['time', 'Time'], ['relative', 'Relative'], ['off', 'Off']], U.timestamps)))
+      + `</div><div>`
+      + stCard('Preview', 'A chat with these settings.', '<div data-live="preview"></div>')
+      + stCard('Notifications', '', stRow('Tell me when a reply…', 'Only while QuorX is in the background. Click a notification to open that chat. Your browser asks once, the first time you send a message.', stCards('ui.notify', [['all', '🔔', 'Needs me or ends', ''], ['needs', '✋', 'Needs me', ''], ['off', '🔕', 'Off', '']], U.notify, 'compact'), { cls: 'sx-row-wide' }))
+      + `</div></div>`,
     ]],
-    layout: ['Layout', 'Where things sit on the page.', [
-      stCard('Panels', '', stRow('Sidebar when the harness opens', '“Remember” keeps it as you last left it.', stSeg('ui.sidebarStart', [['remember', 'Remember'], ['expanded', 'Expanded'], ['rail', 'Rail']], U.sidebarStart))
-        + stRow('Artifact pane', 'Auto shows it only when the chat has built something. ◧ in a chat\'s header still toggles it.', stSeg('ui.paneMode', [['auto', 'Auto'], ['always', 'Always'], ['never', 'Only when asked']], U.paneMode))
+    layout: ['Layout', 'Where things sit on the page. Click a part of the window for its option.', [
+      stCard('Your window', '', '<div data-live="window"></div>'
+        + stRow('Sidebar when QuorX opens', '“Remember” keeps it as you last left it.', stSeg('ui.sidebarStart', [['remember', 'Remember'], ['expanded', 'Expanded'], ['rail', 'Rail']], U.sidebarStart), { id: 'stRowSidebar' })
+        + stRow('Artifact pane', 'Auto shows it only when the chat has built something. ◧ in a chat\'s header still toggles it.', stSeg('ui.paneMode', [['auto', 'Auto'], ['always', 'Always'], ['never', 'Only when asked']], U.paneMode), { id: 'stRowPane' })
         + stRow('Sidebar project order', 'Drag a project\'s header in the sidebar to move it.', `<button type="button" class="st-btn ghost sm" data-act="resetOrder">Reset order</button>`)),
     ]],
-    privacy: ['Privacy & display', 'For streaming and screen sharing.', [
-      stCard('Balance', '', stRow('Show the 💲 balance button in the top bar', 'Off by default, so your OpenRouter spend never shows on a stream. ⚙ Settings → API keys always has the numbers.', stSwitch('ui.showBalance', U.showBalance))
-        + stRow('Hide amounts until I click 👁', 'All-time spend, key limits and account credits stay masked (•••) until you reveal them.', stSwitch('ui.maskAmounts', U.maskAmounts))),
-      stCard('News', '', stRow('Get News from the QuorX website', 'New articles, reports and What’s new arrive between versions: QuorX downloads them from quorx.genxmims.org a few times a day and keeps a copy. Nothing about you or your chats is sent. Off, News shows the copy that came with QuorX.', stSwitch('newsRemote', S.newsRemote ?? G.cfg.newsRemote !== false))),
-      stCard('Paths', '', stRow('Blur folder paths', 'Project folders in the explorer and settings are blurred until you hover them.', stSwitch('ui.blurPaths', U.blurPaths))),
-      stCard('Browser', '', stRow('Search with', 'Words typed in the Browser tab’s address bar (not an address) are searched here. Start with ? to always search.', stSeg('ui.searchEngine', [...Object.entries(SEARCH_ENGINES).map(([k, [l]]) => [k, l]), ['custom', 'Custom']], U.searchEngine || 'google'))
-        + stRow('Custom search address', 'Used when Custom is picked: the address of a search with %s where the words go.', `<input type="text" class="st-input" data-bind="ui.searchCustom" value="${esc(U.searchCustom || '')}" placeholder="https://example.com/search?q=%s" spellcheck="false">`)),
+    privacy: ['Privacy & display', 'For streaming and screen sharing: what other people would see on your screen.', [
+      stCard('On a stream, people would see', 'What shows on your screen while you stream or share it. ⚙ Settings → API keys always has the numbers.', `<div class="sx-tiles">`
+        + stTile('ui.showBalance', '💲', 'Show the 💲 balance button in the top bar', 'Off by default, so your OpenRouter spend never shows on a stream.', U.showBalance)
+        + stTile('ui.maskAmounts', '👁', 'Hide amounts until I click 👁', 'All-time spend, key limits and account credits stay masked (•••) until you reveal them.', U.maskAmounts, `${stMoney('$12.40', 'sx-masked')} ${stTag('', 'masked')}`)
+        + stTile('ui.blurPaths', '📂', 'Blur folder paths', 'Project folders in the explorer and settings are blurred until you hover them.', U.blurPaths, '<code class="sx-masked">D:\\Projects\\site</code>')
+        + `</div>`),
+      stCard('News', 'Where the News page gets its articles.', stRow('Get News from the QuorX website', 'New articles, reports and What’s new arrive between versions: QuorX downloads them from quorx.genxmims.org a few times a day and keeps a copy. Nothing about you or your chats is sent. Off, News shows the copy that came with QuorX.', stSwitch('newsRemote', S.newsRemote ?? G.cfg.newsRemote !== false))),
+      stCard('Browser search', 'Words typed in the Browser tab’s address bar (not an address) are searched here. Start with ? to always search.',
+        stRow('Search with', '', stCards('ui.searchEngine', [...Object.entries(SEARCH_ENGINES).map(([k, [l]]) => [k, `<b class="sx-letter">${esc(l[0])}</b>`, l, '']), ['custom', '✎', 'Custom', '']], U.searchEngine || 'google', 'compact'), { cls: 'sx-row-wide' })
+        + stRow('Custom search address', 'Used when Custom is picked: the address of a search with %s where the words go.', `<input type="text" class="st-input sx-wide-input" data-bind="ui.searchCustom" value="${esc(U.searchCustom || '')}" placeholder="https://example.com/search?q=%s" spellcheck="false">`)),
     ]],
-    keys: ['API keys', 'The harness uses one active OpenRouter key for every call. Add as many as you like and switch between them.', [`<div id="stKeys"><div class="st-row-help">Loading keys…</div></div>`]],
-    models: ['Models & catalogue', 'Model lists and prices come from OpenRouter.', [
-      stCard('Spending limit', 'What the active OpenRouter key has left, while you pick models by price. Hidden until you click 👁.', '<div id="stModelLimit"><div class="st-row-help">Loading…</div></div>'),
+    keys: ['API keys', 'QuorX uses one active OpenRouter key for every call. Add as many as you like and switch between them.', [`<div id="stKeys"><div class="st-row-help">Loading keys…</div></div>`]],
+    models: ['Models & catalogue', 'Model lists and prices come from OpenRouter. Pick what new chats start with, and how each call finds a provider.', [
+      stCard('Spending limit', 'What the active OpenRouter key has left, while you pick models by price. Hidden until you click 👁.', '<div id="stModelLimit"><div class="st-row-help">Loading…</div></div>', 'sx-limit'),
       stCard('Catalogue', '', stRow('Model lists and prices', `<span id="stCatInfo">${G.models ? `${G.models.length} models loaded` : 'Loading…'}</span>`, `<button type="button" class="st-btn secondary sm" data-act="refreshModels">↻ Refresh now</button>`)),
-      stCard('New chats use', '', stRow('Default chat model', 'Each chat can still pick any model from its message box.', `<button type="button" class="st-chip" data-act="pickDefModel" id="defModel" data-id="${esc(S.model)}">${recDot(S.model, 'chat')} ${esc(short(S.model))} <small>${esc(shortPrice(S.model))}</small></button>`)
-        + stRow('Default reasoning', '', stSeg('reasoning', [['off', 'Off'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']], S.reasoning || 'off'))),
-      stCard('Routing', 'How OpenRouter picks the provider behind each model, for every chat’s agent calls. The provider that answered shows on each step in “Steps”.',
-        stRow('Provider order', 'Auto favours providers with reliable tool calling (OpenRouter’s Exacto). Cheapest and Fastest sort by price or speed instead.', stSeg('providerSort', [['auto', 'Auto'], ['price', 'Cheapest'], ['throughput', 'Fastest']], S.providerSort || 'auto'))
-        + stRow('Only providers that support every feature', 'Skips providers that would silently drop tools, reasoning or other settings. If none qualifies, that reply uses the default routing.', stSwitch('requireParams', S.requireParams !== false))
-        + stRow('Zero data retention only', 'Only providers that keep no copy of your prompts. Fewer models qualify.', stSwitch('zdrOnly', !!S.zdrOnly))
-        + stRow('Fallback model', 'OpenRouter switches to it when a chat’s model fails or is down, billed at its own price. The trace marks steps it answered.', `<div class="st-fb"><button type="button" class="st-chip" data-act="pickFallback" id="fbModel">${S.fallbackModel ? `${esc(short(S.fallbackModel))} <small>${esc(shortPrice(S.fallbackModel))}</small>` : 'None'}</button>${S.fallbackModel ? '<button type="button" class="st-btn secondary sm" data-act="clearFallback" title="No fallback model">✕</button>' : ''}</div>`)),
+      `<div class="sx-grid two">`
+      + stCard('New chats start with', 'Each chat can still pick any model from its message box.', stRow('Default chat model', '', `<button type="button" class="sx-model" data-act="pickDefModel" id="defModel" data-id="${esc(S.model)}"><span class="sx-av" aria-hidden="true">${esc((short(S.model)[0] || '?').toUpperCase())}</span>${recDot(S.model, 'chat')} ${esc(short(S.model))} <small>${esc(shortPrice(S.model))}</small><span class="sx-change">Change</span></button>`)
+        + stRow('Default reasoning', '', stSeg('reasoning', [['off', 'Off'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']], S.reasoning || 'off')))
+      + stCard('When the model fails', '', stRow('Fallback model', 'OpenRouter switches to it when a chat’s model fails or is down, billed at its own price. The trace marks steps it answered.', `<div class="st-fb">${modelField('pickFallback', S.fallbackModel, 'fbModel', 'None')}${S.fallbackModel ? '<button type="button" class="st-btn secondary sm" data-act="clearFallback" title="No fallback model">✕</button>' : ''}</div>`, { id: 'stRowFallback' }), '', 'stCardFallback')
+      + `</div>`,
+      stCard('Routing: how a call finds a provider', 'For every chat’s agent calls. The provider that answered shows on each step in “Steps”.',
+        `<div class="sx-pad" data-live="routing"></div>`
+        + stRow('Provider order', 'Auto favours providers with reliable tool calling (OpenRouter’s Exacto). Cheapest and Fastest sort by price or speed instead.', stCards('providerSort', [['auto', '🎯', 'Auto', 'Reliable tool calling'], ['price', '💲', 'Cheapest', 'Lowest price first'], ['throughput', '⚡', 'Fastest', 'Highest throughput first']], S.providerSort || 'auto', 'compact'), { cls: 'sx-row-wide', id: 'stRowOrder' })
+        + stRow('Only providers that support every feature', 'Skips providers that would silently drop tools, reasoning or other settings. If none qualifies, that reply uses the default routing.', stSwitch('requireParams', S.requireParams !== false), { id: 'stRowFeatures' })
+        + stRow('Zero data retention only', 'Only providers that keep no copy of your prompts. Fewer models qualify.', stSwitch('zdrOnly', !!S.zdrOnly), { id: 'stRowZdr' })),
     ]],
     newchats: ['New chats', 'What a fresh chat starts with. Each chat can change these in its message box.', [
-      stCard('Permissions', '', stRow('Default permission mode', '🔒 Strict asks you before paid media (pictures, video, music, speech, with the price), and the agent\'s questions come to you. ⚡ YOLO never asks: the deciders answer the agent\'s questions for you (the budget cap still applies).', stSeg('approval', [['strict', '🔒 Strict'], ['yolo', '⚡ YOLO']], S.approval))
+      stCard('Permission mode', '', pad(stCards('approval', [['strict', '🔒', 'Strict', 'Asks you before paid media (pictures, video, music, speech, with the price), and the agent\'s questions come to you.'], ['yolo', '⚡', 'YOLO', 'Never asks: the deciders answer the agent\'s questions for you. The budget cap still applies.']], S.approval))
         + stRow('In 🔒 Strict, ask before', 'Paid media: only pictures, video, music and speech. Every tool: also file edits, commands, reads, the browser and helpers, as before.', stSeg('strictAsk', [['paid', 'Paid media'], ['every', 'Every tool']], S.strictAsk || 'paid'))
         + stRow('Also ask before helpers', 'Helpers hand read-only jobs to a cheaper model. Only with “Paid media”.', stSwitch('strictAskHelpers', S.strictAskHelpers === true))
         + stRow('Also ask before decider checks', 'decide and look ask the deciders; each costs well under $0.001. Only with “Paid media”.', stSwitch('strictAskDeciders', S.strictAskDeciders === true))),
-      stCard('Tools on by default', 'For new chats; each chat can change them in its 🧰 Tools menu. Pages, code & servers and the browser are always on.',
-        QUALITY_TOOLS.map((k) => stRow(`${QUALITY_INFO[k].icon} ${QUALITY_INFO[k].name}`, `${QUALITY_INFO[k].note} ${QUALITY_INFO[k].perBuild()}.`, stSwitch(`newChatTools.${k}`, S.newChatTools?.[k] !== false))).join('')
-        + CHAT_TOOLS.map((k) => stRow(CATS.find((x) => x[0] === k)[1], 'Paid per use.', stSwitch(`newChatTools.${k}`, !!S.newChatTools?.[k]))).join('')),
+      stCard('Checking the work', 'On by default; each chat can change them in its 🧰 Tools menu. Pages, code & servers and the browser are always on.',
+        `<div class="sx-tiles">${QUALITY_TOOLS.map((k) => stTile(`newChatTools.${k}`, QUALITY_INFO[k].icon, QUALITY_INFO[k].name, QUALITY_INFO[k].note, S.newChatTools?.[k] !== false, stMoney(esc(QUALITY_INFO[k].perBuild())))).join('')}</div>`),
+      stCard('Paid media', 'Off for new chats. Paid per use.',
+        `<div class="sx-tiles">${CHAT_TOOLS.map((k) => { const [ico, ...name] = CATS.find((x) => x[0] === k)[1].split(' '); return stTile(`newChatTools.${k}`, ico, name.join(' '), 'Paid per use.', !!S.newChatTools?.[k], stTag('warn', 'paid')); }).join('')}</div>`),
     ]],
-    loop: ['Agent loop', 'How long one reply may work, and how long chats stay cheap.', [
-      stCard('Steps', '', stRow('Max model calls per reply', 'A page takes 6–15; a multi-file app with a server can take 40 or more. At 80% the agent is told to wrap up.', stStep('maxSteps', S.maxSteps, 2, 120))
-        + stRow('Plan first', 'Off: the agent plans and builds in one go. Big tasks: for a new app, site, game or a change across several files, it shows its plan and waits for Go ahead, Stop here, or your changes. Always: before any file change or command. File changes and commands are refused until you say Go ahead. Waits for you in 🔒 Strict and ⚡ YOLO alike.', stSeg('planFirst', [['off', 'Off'], ['big', 'Big tasks'], ['always', 'Always']], S.planFirst || 'off'))
-        + stRow('Steps when the reply has a plan', 'A planned build gets this many instead (checks, previews and review take steps). 0 = the same as above.', stStep('planSteps', S.planSteps ?? 0, 0, 200))
-        + stRow('Keep going while the plan is open', 'When the steps run out and the plan still has open items, the reply gets this many extra rounds of half the steps (budget caps still apply). 0 = stop at the limit.', stStep('continueRounds', S.continueRounds ?? 2, 0, 5))
+    loop: ['Agent loop', 'How long one reply may work, how its work is checked, and how long chats stay cheap. Click a stage to jump to it.', [
+      '<div data-live="loopflow"></div>',
+      stCard(`${stNum(1)} Plan`, '', stRow('Plan first', 'Off: the agent plans and builds in one go. Big tasks: for a new app, site, game or a change across several files, it shows its plan and waits for Go ahead, Stop here, or your changes. Always: before any file change or command. File changes and commands are refused until you say Go ahead. Waits for you in 🔒 Strict and ⚡ YOLO alike.', stCards('planFirst', [['off', '⏩', 'Off', 'Plan and build in one go'], ['big', '🗺', 'Big tasks', 'New apps, sites, games, multi-file changes'], ['always', '✋', 'Always', 'Before any file change or command']], S.planFirst || 'off', 'compact'), { cls: 'sx-row-wide' })
+        + stRow('Steps when the reply has a plan', 'A planned build gets this many instead (checks, previews and review take steps). 0 = the same as below.', stStep('planSteps', S.planSteps ?? 0, 0, 200))
+        + stRow('Keep going while the plan is open', 'When the steps run out and the plan still has open items, the reply gets this many extra rounds of half the steps (budget caps still apply). 0 = stop at the limit.', stStep('continueRounds', S.continueRounds ?? 2, 0, 5)), 'sx-anchor', 'stLoopPlan'),
+      stCard(`${stNum(2)} Work`, '', stRow('Max model calls per reply', 'A page takes 6–15; a multi-file app with a server can take 40 or more. At 80% the agent is told to wrap up.', stStep('maxSteps', S.maxSteps, 2, 120))
         + stRow('Output per model call', 'Tokens one call may write (thinking included), never more than the model allows. Too little and a model can think through a whole file, then run out before writing it.', stStep('maxOutput', S.maxOutput ?? 64000, 4000, 128000, 4000, 'tokens'))
         + stRow('Thinking share', 'How much of that output reasoning may use, so the answer and tool calls always have room.', stStep('thinkShare', S.thinkShare ?? 25, 5, 60, 5, '%'))
         + stRow('Thinking for builds', 'When the gap check sees that a message asks for a build and the chat\'s thinking is off, the model thinks this much for that reply. Deciders find problems; thinking is what fixes them.', stSeg('buildThinking', [['off', 'Off'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']], S.buildThinking || 'low'))
         + stRow('Retries on model errors', 'Rate limits, network drops and provider errors are retried with growing waits before the reply gives up.', stStep('retries', S.retries ?? 3, 0, 6))
-        + stRow('Run look-ups together', 'Several reads, searches and fetches in one step run at the same time.', stSwitch('parallel', S.parallel !== false))),
-      stCard('Checks before the final reply', '', stRow('Check the work', 'Re-checks every changed file (Node, Python, JSON, CSS, HTML) and opens what was built in the browser. Problems go back to the agent to fix.', stSwitch('verify', S.verify !== false))
+        + stRow('Run look-ups together', 'Several reads, searches and fetches in one step run at the same time.', stSwitch('parallel', S.parallel !== false))
+        + stRow('Questions per reply', 'How often the agent may stop to ask you a question with options (ask_user). 0 = never.', stStep('askLimit', S.askLimit ?? 4, 0, 10)), 'sx-anchor', 'stLoopWork'),
+      stCard(`${stNum(3)} Check`, 'Before the final reply.', stRow('Check the work', 'Re-checks every changed file (Node, Python, JSON, CSS, HTML) and opens what was built in the browser. Problems go back to the agent to fix.', stSwitch('verify', S.verify !== false))
         + stRow('Design lint', 'After each HTML or CSS write, points out patterns that make a page look machine-made: default indigo, purple-blue hero gradients, emoji icons, invented numbers, filler text, missing alt text or focus styles. Advice only: it never sends a build back. Free, no model call.', stSwitch('designLint', S.designLint !== false))
         + stRow('Rounds to fix problems', 'How many times the agent is sent back. After that the reply ends and shows what is left.', stStep('verifyRounds', S.verifyRounds ?? 2, 0, 5))
-        + stRow('Steps to fix', 'When the checks or the reviewer send a build back near the step limit, the reply gets this many steps to fix it, instead of ending with a to-do list.', stStep('fixSteps', S.fixSteps ?? 12, 4, 40))),
-      stCard('Reviewer', 'A separate model with a fresh context tests what was built before the final reply, scores it, and sends it back with specific bugs if it falls short.',
-        stRow('When to review', 'Builds: when the agent made a plan for the reply. Always: whenever it built or changed something that can be opened.', stSeg('review', [['off', 'Off'], ['builds', 'Builds'], ['always', 'Always']], S.review || 'builds'))
-        + stRow('Reviewer strength', 'Cheap: gpt-6-luna, about $0.003 a review, but it fails good builds often (it agreed with the benchmark judge 43% of the time). Strong: Claude Sonnet 5.5, about $0.02 a build, agreed 100% and caused no needless rounds of fixing (gpt-6.1-sol when Sonnet is the builder). A model picked below overrides this.', stSeg('reviewTier', [['cheap', 'Cheap'], ['strong', 'Strong']], S.reviewTier || 'cheap'))
+        + stRow('Steps to fix', 'When the checks or the reviewer send a build back near the step limit, the reply gets this many steps to fix it, instead of ending with a to-do list.', stStep('fixSteps', S.fixSteps ?? 12, 4, 40)), 'sx-anchor', 'stLoopCheck'),
+      stCard(`${stNum(4)} Review`, 'A separate model with a fresh context tests what was built before the final reply, scores it, and sends it back with specific bugs if it falls short.',
+        stRow('When to review', 'Builds: when the agent made a plan for the reply. Always: whenever it built or changed something that can be opened.', stCards('review', [['off', '⏭', 'Off', 'No second opinion'], ['builds', '🏗', 'Builds', 'When the reply had a plan'], ['always', '🔍', 'Always', 'Anything that can be opened']], S.review || 'builds', 'compact'), { cls: 'sx-row-wide' })
+        + stRow('Reviewer strength', 'Cheap: gpt-6-luna, about $0.003 a review, but it fails good builds often (it agreed with the benchmark judge 43% of the time). Strong: Claude Sonnet 5.5, about $0.02 a build, agreed 100% and caused no needless rounds of fixing (gpt-6.1-sol when Sonnet is the builder). A model picked below overrides this.', stCards('reviewTier', [['cheap', '🪙', 'Cheap', '≈ $0.003 a review'], ['strong', '💎', 'Strong', '≈ $0.02 a build']], S.reviewTier || 'cheap', 'compact'), { cls: 'sx-row-wide' })
         + stRow('Review code changes', 'After a reply that changed code, the reviewer reads the diff and posts the bugs it finds as a card you can send back to fix (about $0.001–0.01 a review). Off: only when you type /review.', stSeg('codeReview', [['off', 'Off'], ['auto', 'After replies']], S.codeReview || 'off'))
         + stRow('Send a build back for', 'Every bug the reviewer reports says how bad it is. Minor bugs never send a build back; they go to the builder as notes.', stSeg('reviewSendBack', [['annoying', 'Breaks or annoying'], ['breaks', 'Only breaks']], S.reviewSendBack || 'annoying'))
-        + stRow('Reviewer model', 'Default: gpt-6-luna, which is cheap, sees screenshots, and comes from a different family than most builders (qwen3.7-flash if your chat already uses gpt-6-luna). Pick one that can use tools and see images.', `<div class="st-fb"><button type="button" class="st-chip" data-act="pickReviewer" id="rvModel">${S.reviewModel ? `${recDot(S.reviewModel, 'chat')} ${esc(short(S.reviewModel))} <small>${esc(shortPrice(S.reviewModel))}</small>` : 'Default'}</button>${S.reviewModel ? '<button type="button" class="st-btn secondary sm" data-act="clearReviewer" title="Use the default reviewer">✕</button>' : ''}</div>`)
+        + stRow('Reviewer model', 'Default: gpt-6-luna, which is cheap, sees screenshots, and comes from a different family than most builders (qwen3.7-flash if your chat already uses gpt-6-luna). Pick one that can use tools and see images.', `<div class="st-fb">${modelField('pickReviewer', S.reviewModel, 'rvModel', 'Default')}${S.reviewModel ? '<button type="button" class="st-btn secondary sm" data-act="clearReviewer" title="Use the default reviewer">✕</button>' : ''}</div>`)
         + stRow('Rounds to fix', 'How many times the builder is sent back with the reviewer’s bugs. After that, what is still open shows in the reply.', stStep('reviewRounds', S.reviewRounds ?? 1, 0, 3))
-        + stRow('Pass bar', 'Every score (function, craft, design, originality, accessibility, and brand fit when the project has a DESIGN.md) must reach this, out of 5.', stStep('reviewBar', S.reviewBar ?? 3, 1, 5))),
-      stCard('Helpers', 'For exploring big projects: the agent hands read-only jobs (find, read, summarise) to a cheaper model with its own clean context. Only the helper’s short report comes back, so the agent’s context stays small. Several run at once.',
+        + stRow('Pass bar', 'Every score (function, craft, design, originality, accessibility, and brand fit when the project has a DESIGN.md) must reach this, out of 5.', stStep('reviewBar', S.reviewBar ?? 3, 1, 5)), 'sx-anchor', 'stLoopReview'),
+      stCard(`${stNum(5)} Helpers`, 'For exploring big projects: the agent hands read-only jobs (find, read, summarise) to a cheaper model with its own clean context. Only the helper’s short report comes back, so the agent’s context stays small. Several run at once.',
         stRow('Let the agent use helpers', 'Offered only in chats with a project folder.', stSwitch('helpers', S.helpers !== false))
         + stRow('Only in projects with at least', 'Small builds never used them, and offering them costs prompt space on every step. 0 = every project.', stStep('helperMinFiles', S.helperMinFiles ?? 40, 0, 400, 10, ' files'))
-        + stRow('Helper model', 'Default: qwen3.7-flash, which is very cheap, uses tools, and has a 1M-token window. Pick one that can use tools.', `<div class="st-fb"><button type="button" class="st-chip" data-act="pickHelper" id="hpModel">${S.helperModel ? `${recDot(S.helperModel, 'chat')} ${esc(short(S.helperModel))} <small>${esc(shortPrice(S.helperModel))}</small>` : 'Default'}</button>${S.helperModel ? '<button type="button" class="st-btn secondary sm" data-act="clearHelper" title="Use the default helper">✕</button>' : ''}</div>`)
-        + stRow('Steps per helper', 'Model calls one helper may make before it must report.', stStep('helperSteps', S.helperSteps ?? 12, 2, 30))),
-      stCard('Questions', '', stRow('Questions per reply', 'How often the agent may stop to ask you a question with options (ask_user). 0 = never.', stStep('askLimit', S.askLimit ?? 4, 0, 10))),
-      stCard('Long replies', '', stRow('Trim after', 'Characters of conversation inside one reply before old file contents are dropped from it (they stay on disk).', stStep('trimAt', S.trimAt || 120000, 30000, 400000, 10000))),
-      stCard('Long chats', '', stRow('Summarise older turns', 'Keeps the context small: older turns become a short summary (shown in the trace as 🗜).', stSwitch('compact', S.compact !== false))
-        + stRow('Summarise after', 'Characters of history before the older part is summarised.', stStep('compactAt', S.compactAt || 24000, 8000, 120000, 4000))),
+        + stRow('Helper model', 'Default: qwen3.7-flash, which is very cheap, uses tools, and has a 1M-token window. Pick one that can use tools.', `<div class="st-fb">${modelField('pickHelper', S.helperModel, 'hpModel', 'Default')}${S.helperModel ? '<button type="button" class="st-btn secondary sm" data-act="clearHelper" title="Use the default helper">✕</button>' : ''}</div>`)
+        + stRow('Steps per helper', 'Model calls one helper may make before it must report.', stStep('helperSteps', S.helperSteps ?? 12, 2, 30)), 'sx-anchor', 'stLoopHelpers'),
+      stCard(`${stNum(6)} Long replies and chats`, 'Keeps the context small, so long work stays cheap.', stRow('Trim after', 'Characters of conversation inside one reply before old file contents are dropped from it (they stay on disk).', stStep('trimAt', S.trimAt || 120000, 30000, 400000, 10000))
+        + stRow('Summarise older turns', 'Keeps the context small: older turns become a short summary (shown in the trace as 🗜).', stSwitch('compact', S.compact !== false))
+        + stRow('Summarise after', 'Characters of history before the older part is summarised.', stStep('compactAt', S.compactAt || 24000, 8000, 120000, 4000)), 'sx-anchor', 'stLoopMemory'),
     ]],
     deciders: ['Deciders', 'The fast judges the agent asks when it is unsure. It writes its own questions and guesses first.', [
-      stCard('Decider models', 'Up to 5. More deciders agree more reliably but cost more.', '<div id="voterInputs"></div>'),
-      stCard('Confidence', '', stRow('Settled at', 'Answers at least this confident count as settled.', stStep('gate.act', S.gate.act, 0.5, 1, 0.05)) + stRow('Lean at', 'Below this the deciders are unsure.', stStep('gate.confirm', S.gate.confirm, 0.3, 0.95, 0.05))),
-      stCard('Look and harness checks', 'Screenshot checks and the gap check ask one decider that reads pictures well, not the whole panel. The others are asked only when it is unsure.',
-        '<div id="lookInputs"></div>'
-        + stRow('Ask the other deciders when it is unsure', 'Only the unsure answers go to the rest of the panel above.', stSwitch('lookEscalate', S.lookEscalate !== false))),
-      stCard('Harness checks', 'Fixed questions QuorX asks the deciders at fixed moments, written here instead of by the model. Every answer is logged with its screenshot, so <code>node scripts/checks.mjs</code> can score each question and try new wording on past screenshots.',
+      stCard('The panel', 'Up to 5 seats. More deciders agree more reliably but cost more.', '<div id="voterInputs" class="sx-seats"></div>'),
+      stCard('Confidence', 'An answer is settled at or above “Settled at”, leans between the two, and below “Lean at” the deciders are unsure.', '<div data-live="scale"></div>'
+        + stRow('Settled at', 'Answers at least this confident count as settled.', stStep('gate.act', S.gate.act, 0.5, 1, 0.05)) + stRow('Lean at', 'Below this the deciders are unsure.', stStep('gate.confirm', S.gate.confirm, 0.3, 0.95, 0.05))),
+      `<div class="sx-grid two">`
+      + stCard('Look and harness checks', 'Screenshot checks and the gap check ask one decider that reads pictures well, not the whole panel. The others are asked only when it is unsure.',
+        '<div id="lookInputs" class="sx-seats one"></div>'
+        + stRow('Ask the other deciders when it is unsure', 'Only the unsure answers go to the rest of the panel above.', stSwitch('lookEscalate', S.lookEscalate !== false)))
+      + stCard('Harness checks', 'Fixed questions QuorX asks the deciders at fixed moments, written here instead of by the model.',
         stRow('Gap check before a build', 'Is the message a build, and does it say what a person does in it, what must be in it, how it should look, and the real content? What it leaves out goes to the agent to ask about.', stSwitch('checks.gap', S.checks?.gap !== false))
         + stRow('Screenshot checks', 'After a preview and before the final reply: blank page, unreadable text, broken images, content spilling off the page. Problems go back to the agent.', stSwitch('checks.shots', S.checks?.shots !== false))
         + stRow('Click and key check', 'Clicks the page\'s main button (Start, Add, Play…; never print, download, share or one already selected) and asks whether anything changed. A page with no button, like a keyboard game, gets Enter, Space and the arrows instead.', stSwitch('checks.click', S.checks?.click !== false))
         + stRow('A gap counts below', 'Chance that the message says it.', stStep('checks.gapBelow', S.checks?.gapBelow ?? 0.4, 0.1, 0.9, 0.05))
-        + stRow('A check fails below', 'Chance that the screenshot is fine.', stStep('checks.shotBelow', S.checks?.shotBelow ?? 0.3, 0.05, 0.9, 0.05))
-        + '<div id="checkList"></div>'),
+        + stRow('A check fails below', 'Chance that the screenshot is fine.', stStep('checks.shotBelow', S.checks?.shotBelow ?? 0.3, 0.05, 0.9, 0.05)))
+      + `</div>`,
+      stCard('The questions, word for word', 'Every answer is logged with its screenshot, so <code>node scripts/checks.mjs</code> can score each question and try new wording on past screenshots. Untick one to stop asking it; blank wording uses the built-in one.', '<div id="checkList"></div>'),
     ]],
-    tools: ['Tools & media', 'Up to 3 models per tool, and who picks the model for each call. Each chat turns tools on in its 🧰 menu.', ['<div id="catEditors"></div>']],
-    budget: ['Budget & approvals', 'Limits on paid calls.', [
-      stCard('Caps on every model', 'They count everything a reply calls: the agent, the deciders, helpers, screenshot checks and paid media.',
-        stRow('Cap per reply', 'At 85% the agent is told to wrap up. At the cap, 🔒 Strict asks you to raise it or wrap up; ⚡ YOLO stops. 0 = no cap.', stStep('replyBudget', S.replyBudget ?? d.replyBudget ?? 1, 0, 100, 0.25, '$'))
-        + stRow('Cap per day', 'Today’s spending across all projects. A reply that reaches it stops (Strict asks first). 0 = off. A separate OpenRouter key with its own daily limit is a good second fence for ⚡ YOLO.', stStep('dailyBudget', S.dailyBudget ?? d.dailyBudget ?? 0, 0, 1000, 1, '$'))),
-      stCard('Paid calls', '', stRow('Paid media per reply', 'A paid call that would go over this is stopped, in Strict and in YOLO.', stStep('budget', S.budget, 0, 20, 0.05, '$'))
-        + stRow('Deciders check paid calls in ⚡ YOLO', 'Before each paid call: is it needed, is the price fair?', stSwitch('yoloCheck', S.yoloCheck !== false))
-        + stRow('⚡ YOLO waits for you', 'When the agent asks a question, or the deciders can\'t settle an approval, the card waits this long so you can steer. Then the deciders answer (a question of taste goes back to the agent), or the approval carries on: a command runs only if the deciders saw little risk. "Wait for me" on the card, or typing in it, stops the clock. 0 = no wait.', stStep('yoloWaitSecs', S.yoloWaitSecs ?? 15, 0, 120, 5, 's'))),
+    tools: ['Tools & media', 'Up to 3 models per tool, and who picks the model for each call. Each chat turns tools on in its 🧰 menu.', ['<div id="catEditors" class="sx-media"></div>']],
+    budget: ['Budget & approvals', 'Limits on what a reply and a day may spend, and what ⚡ YOLO may do without asking.', [
+      stSec('Caps on every model'),
+      `<p class="sx-sec-help">They count everything a reply calls: the agent, the deciders, helpers, screenshot checks and paid media.</p><div class="sx-caps">`
+        + stCap('replyBudget', 'Cap per reply', S.replyBudget ?? d.replyBudget ?? 1, 0, 100, 0.25, 'At 85% the agent is told to wrap up. At the cap, 🔒 Strict asks you to raise it or wrap up; ⚡ YOLO stops. 0 = no cap.')
+        + stCap('dailyBudget', 'Cap per day', S.dailyBudget ?? d.dailyBudget ?? 0, 0, 1000, 1, 'Today’s spending across all projects. A reply that reaches it stops (Strict asks first). 0 = off. A separate OpenRouter key with its own daily limit is a good second fence for ⚡ YOLO.', '<div data-live="today"></div>')
+        + stCap('budget', 'Paid media per reply', S.budget, 0, 20, 0.05, 'A paid call that would go over this is stopped, in Strict and in YOLO.')
+        + `</div>`,
+      stSec('⚡ YOLO'),
       stCard('What ⚡ YOLO does by itself', 'Ticked: YOLO goes ahead without asking. Unticked: it asks you first, as Strict does (Always allow stops the asking for that chat). Reading files, listing and searching never ask.',
-        YOLO_ROWS.map(([k, label, help]) => stRow(label, help, stSwitch(`yoloAuto.${k}`, S.yoloAuto?.[k] !== false))).join('')),
-      stCard('Project budgets', 'Set a project\'s budget with the $ next to it in the sidebar.', stRow('Allowance to finish a reply', 'A new reply can\'t start once the project budget is used up. A reply already working may go this far past it to finish, then it is stopped. 0% stops it right at the budget.', stStep('budgetGrace', S.budgetGrace ?? 10, 0, 100, 5, '%'))),
+        `<div class="sx-tiles">${YOLO_ROWS.map(([k, label, help]) => stTile(`yoloAuto.${k}`, YOLO_ICO[k] || '•', label, help, S.yoloAuto?.[k] !== false)).join('')}</div>`),
+      `<div class="sx-grid two">`
+      + stCard('Paid calls in ⚡ YOLO', '', stRow('Deciders check paid calls in ⚡ YOLO', 'Before each paid call: is it needed, is the price fair?', stSwitch('yoloCheck', S.yoloCheck !== false))
+        + stRow('⚡ YOLO waits for you', 'When the agent asks a question, or the deciders can\'t settle an approval, the card waits this long so you can steer. Then the deciders answer (a question of taste goes back to the agent), or the approval carries on: a command runs only if the deciders saw little risk. "Wait for me" on the card, or typing in it, stops the clock. 0 = no wait.', stStep('yoloWaitSecs', S.yoloWaitSecs ?? 15, 0, 120, 5, 's')))
+      + stCard('Project budgets', 'Set a project\'s budget with the $ next to it in the sidebar, or in Workspace → Projects.', stRow('Allowance to finish a reply', 'A new reply can\'t start once the project budget is used up. A reply already working may go this far past it to finish, then it is stopped. 0% stops it right at the budget.', stStep('budgetGrace', S.budgetGrace ?? 10, 0, 100, 5, '%')))
+      + `</div>`,
     ]],
     safety: (() => {
       const SF = { ...(d.safety || {}), ...(S.safety || {}) };
       const M = sfModes(SF);
       return ['Safety & commands', 'What ⚡ YOLO runs on its own, what it asks you, and what never runs. Advanced has every detail: the shell, each YOLO tick, the deciders’ vote and your command rules.', [
-        stCard('⚡ YOLO in short', '', `<div id="sfShort" class="sf-short">${yoloShortHTML(SF)}</div>`),
+        `<div id="sfShort" class="sf-short">${yoloShortHTML(SF)}</div>`,
         stCard('Your choices', '',
           stRow('When YOLO needs a decision', 'Ask me: pushes, deploys, installs for the whole computer and changes outside the project wait for you. The deciders: they vote instead, and a no or a split vote still comes to you.',
-            `<div class="sf-ctrl">${stSeg('', [['ask', 'Ask me'], ['decide', 'Let the deciders decide']], M.decide).replace('data-bind=""', 'data-sf="decide" aria-label="When YOLO needs a decision"')}<span class="sf-custom" data-sf-note="decide" ${M.decide === 'mix' ? '' : 'hidden'}>Custom (see Advanced)</span></div>`)
+            `<div class="sf-ctrl">${stCards('', [['ask', '✋', 'Ask me', 'Those wait for you'], ['decide', '⚖️', 'Let the deciders decide', 'They vote; a no or a split vote comes to you']], M.decide, 'compact').replace('data-bind=""', 'data-sf="decide" aria-label="When YOLO needs a decision"')}<span class="sf-custom sx-tag warn" data-sf-note="decide" ${M.decide === 'mix' ? '' : 'hidden'}>Custom (see Advanced)</span></div>`, { cls: 'sx-row-wide' })
           + stRow('Extra care', 'The deciders check every command before it runs. Slower, and stricter.',
-            `<div class="sf-ctrl"><span class="sf-custom" data-sf-note="care" ${M.care === 'mix' ? '' : 'hidden'}>Custom (see Advanced)</span>${stSwitch('', M.care === 'on').replace('data-bind=""', 'data-sf="care" aria-label="Extra care"')}</div>`)
+            `<div class="sf-ctrl"><span class="sf-custom sx-tag warn" data-sf-note="care" ${M.care === 'mix' ? '' : 'hidden'}>Custom (see Advanced)</span>${stSwitch('', M.care === 'on').replace('data-bind=""', 'data-sf="care" aria-label="Extra care"')}</div>`)
           + stRow('Undo for commands', 'QuorX snapshots the project before a command that can change files, so ↶ Undo and Review changes cover it. Not covered: files outside the project, ignored folders (node_modules, target…), pushes, installs and databases.', stSwitch('safety.snapshots', SF.snapshots))),
         `<details class="sf-adv" id="sfAdv" ${sfAdvPref() ? 'open' : ''}><summary><span class="sf-adv-title">Advanced</span><span class="sf-adv-sub">Shell, undo size, tripwire, each YOLO tick, debugger, the deciders’ vote, audit log, command rules</span></summary><div class="sf-adv-body">` + [
-        stCard('Shell', '', stRow('The agent’s shell', G.cfg?.platform && G.cfg.platform !== 'win32'
+        `<div class="sx-grid two">`
+        + stCard('Shell', '', stRow('The agent’s shell', G.cfg?.platform && G.cfg.platform !== 'win32'
           ? 'Both are checked with the same rules: each command is split into its parts first, and anything that runs text as a command (eval, $(…), zsh’s glob qualifiers) asks you.'
           : 'Windows PowerShell 5.1 is read by PowerShell’s own parser, so its commands can be checked exactly. cmd and Git Bash are checked with simpler rules, and Git Bash’s path translation caused the worst delete incidents in other agents.',
-        stSeg('safety.shell', G.cfg?.platform && G.cfg.platform !== 'win32' ? [['bash', 'bash'], ['zsh', 'zsh']] : [['powershell', 'PowerShell 5.1'], ['pwsh', 'PowerShell 7'], ['cmd', 'cmd'], ['bash', 'Git Bash']], SF.shell))
+        stSeg('safety.shell', G.cfg?.platform && G.cfg.platform !== 'win32' ? [['bash', 'bash'], ['zsh', 'zsh']] : [['powershell', 'PowerShell 5.1'], ['pwsh', 'PowerShell 7'], ['cmd', 'cmd'], ['bash', 'Git Bash']], SF.shell), { cls: 'sx-row-wide' })
           + stRow('Wait for a command', 'How long the agent waits for a command before it moves to the background. It keeps running there while the agent carries on; you see it, and can stop it, in the pane’s Running tab.', stStep('safety.timeout', SF.timeout, 5, 900, 5, 's'))
           + stRow('Memory cap per command', `For the command and everything it starts, so a runaway build can’t starve your PC. 0 = no cap.${G.cfg?.platform && G.cfg.platform !== 'win32' ? ' Windows only for now.' : ''}`, stStep('safety.memoryMB', SF.memoryMB, 0, 65536, 256, 'MB'))
-          + stRow('Stop', 'How Stop ends a command.', '<span id="stStopMode" class="st-chip">checking…</span>')),
-        stCard('Undo size limit', 'Undo for commands is turned on or off above. Each snapshot reads only the files that changed.',
-          stRow('Pause snapshots past', 'A project bigger than this (not counting ignored folders) runs commands without a snapshot, and each command row says so.', stStep('safety.snapshotMaxMB', SF.snapshotMaxMB, 50, 100000, 50, 'MB'))),
-        stCard('Tripwire', 'While a command runs, QuorX watches your profile and the folders around the project. If many files vanish there, it stops the command and shows what it saw. It is a last line of defence, not a guarantee.',
+          + stRow('Stop', 'How Stop ends a command.', '<span id="stStopMode" class="sx-status">checking…</span>'))
+        + `<div>` + stCard('Undo size limit', 'Undo for commands is turned on or off above. Each snapshot reads only the files that changed.',
+          stRow('Pause snapshots past', 'A project bigger than this (not counting ignored folders) runs commands without a snapshot, and each command row says so.', stStep('safety.snapshotMaxMB', SF.snapshotMaxMB, 50, 100000, 50, 'MB')))
+        + stCard('Tripwire', 'While a command runs, QuorX watches your profile and the folders around the project. If many files vanish there, it stops the command and shows what it saw. It is a last line of defence, not a guarantee.',
           stRow('Watch for mass deletes', '', stSwitch('safety.tripwire', SF.tripwire))
           + stRow('Stop after', 'Files removed outside the project…', stStep('safety.tripwireFiles', SF.tripwireFiles, 2, 10000, 1, 'files'))
-          + stRow('Within', '…in this many seconds.', stStep('safety.tripwireSeconds', SF.tripwireSeconds, 1, 120, 1, 's'))),
-        stCard('⚡ YOLO: what runs on its own', 'Unticked, it just runs; a snapshot first makes it undoable. Ticked, the deciders vote first, and a no comes to you.',
+          + stRow('Within', '…in this many seconds.', stStep('safety.tripwireSeconds', SF.tripwireSeconds, 1, 120, 1, 's'))) + `</div></div>`,
+        `<div class="sx-grid two">`
+        + stCard(`${stTag('ok', 'runs')} ⚡ YOLO: what runs on its own`, 'Unticked, it just runs; a snapshot first makes it undoable. Ticked, the deciders vote first, and a no comes to you.',
           stRow('Web reads', 'curl or Invoke-WebRequest GET, wrangler whoami, gh pr view, cloud CLI list and describe. Sending data, signing in or deploying always pauses (below).', stSwitch('safety.yoloCheckWeb', SF.yoloCheckWeb))
           + stRow('One-liners', 'node -e, python -c whose code QuorX can read. One that starts programs or deletes files counts as code QuorX can’t read.', stSwitch('safety.yoloCheckInline', SF.yoloCheckInline))
           + stRow('Builds, tests and project scripts', 'cargo build, npm test, node app.js, servers and tunnels…', stSwitch('safety.yoloCheckBuild', SF.yoloCheckBuild))
           + stRow('Package installs in the project', 'npm i, pip install, cargo add… A made-up package is still blocked, and a brand-new one still asks you.', stSwitch('safety.yoloCheckInstall', SF.yoloCheckInstall))
           + stRow('Commands QuorX doesn’t know', 'Programs with no rule yet. A PowerShell command that can change things (Stop-, Set-, Disable-…) or docker always goes to the deciders.', stSwitch('safety.yoloCheckUnknown', SF.yoloCheckUnknown))
-          + stRow('Reading files outside the project', 'Never your key folders or QuorX’s own data.', stSwitch('safety.yoloCheckReads', SF.yoloCheckReads))),
-        stCard('⚡ YOLO: what pauses for you', 'These show you an amber card even in YOLO. Ticked, the deciders may approve them instead.',
+          + stRow('Reading files outside the project', 'Never your key folders or QuorX’s own data.', stSwitch('safety.yoloCheckReads', SF.yoloCheckReads)))
+        + stCard(`${stTag('warn', 'pauses')} ⚡ YOLO: what pauses for you`, 'These show you an amber card even in YOLO. Ticked, the deciders may approve them instead.',
           stRow('Pushes, publishes and deploys', 'Anything that sends data out or changes a remote: git push, npm publish, wrangler deploy, a POST…', stSwitch('safety.yoloExternal', SF.yoloExternal))
           + stRow('Writes and deletes outside the project', 'Never the blocked places: drive roots, your profile, system folders, folders above the project.', stSwitch('safety.yoloOutside', SF.yoloOutside))
           + stRow('Installs for the whole computer', 'npm i -g, winget, cargo install, pipx…', stSwitch('safety.yoloGlobal', SF.yoloGlobal))
           + stRow('Commands QuorX can’t read', 'cmd /c, iex, one-liners that start programs, scripts built from text. Ticked by default.', stSwitch('safety.yoloOpaque', SF.yoloOpaque))
-          + stRow('Always asks you', 'Reading your key folders (a red card; hooks never run it), ending other programs, and throwing away uncommitted work.', '')
-          + stRow('Never runs', 'System changes (power, services, registry, disks, admin rights), deleting whole folders (the agent uses the trash instead), blocked places and QuorX’s own keys. Run those yourself in a terminal tab.', '')),
-        stCard('Debugger and devices', '',
-          stRow('Debugger for Node and Python', 'Research found a debugger helps strong models most after plain debugging fails, and can make weaker ones worse from the start. “After failed tries”: it opens once the agent has hit errors or had a build sent back.', stSeg('debugger', [['earned', 'After failed tries'], ['always', 'Always'], ['off', 'Off']], S.debugger || 'earned'))
-          + stRow('Let the android tool use a physical phone', 'Unticked, it uses emulators only: a phone holds your real accounts and data.', stSwitch('safety.androidPhones', SF.androidPhones))),
-        stCard('How the deciders vote on an action', 'They see your own messages and the facts QuorX worked out (the command, its parts, the real paths, the price), never the agent’s reasons or tool output. A decider can’t be the chat’s own model. A failed or split vote waits for you. Every vote is logged in logs/approvals.jsonl.',
+          + stRow('Always asks you', 'Reading your key folders (a red card; hooks never run it), ending other programs, and throwing away uncommitted work.', stTag('warn', 'always'))
+          + stRow('Never runs', 'System changes (power, services, registry, disks, admin rights), deleting whole folders (the agent uses the trash instead), blocked places and QuorX’s own keys. Run those yourself in a terminal tab.', stTag('bad', 'never')))
+        + `</div>`,
+        `<div class="sx-grid two">`
+        + stCard('How the deciders vote on an action', 'They see your own messages and the facts QuorX worked out (the command, its parts, the real paths, the price), never the agent’s reasons or tool output. A decider can’t be the chat’s own model. A failed or split vote waits for you. Every vote is logged in logs/approvals.jsonl.',
           stRow('Valid votes needed', 'Fewer than this and it asks you.', stStep('safety.quorum', SF.quorum, 1, 5))
           + stRow('“The user asked for it” at least', 'Chance the deciders give that your messages ask for it.', stStep('safety.neededMin', SF.neededMin, 0.5, 1, 0.05))
           + stRow('“It could do harm” at most', 'Damage outside the project, leaked data or keys, or cost.', stStep('safety.harmMax', SF.harmMax, 0, 0.5, 0.05))
           + stRow('Pause after blocks in a row', 'Then commands that need a vote ask you for the rest of the reply.', stStep('safety.escalateRow', SF.escalateRow, 1, 20))
-          + stRow('…or blocks in one reply', '', stStep('safety.escalateTotal', SF.escalateTotal, 1, 200))),
-        stCard('Audit log', 'Every command the agent ran or was stopped from running, and who let it: a rule, you, the deciders, or the built-in classes. Votes are in logs/approvals.jsonl; this log is logs/audit.jsonl.', '<div id="stAudit"><div class="st-row-help">Loading…</div></div>'),
+          + stRow('…or blocks in one reply', '', stStep('safety.escalateTotal', SF.escalateTotal, 1, 200)))
+        + stCard('Debugger and devices', '',
+          stRow('Debugger for Node and Python', 'Research found a debugger helps strong models most after plain debugging fails, and can make weaker ones worse from the start. “After failed tries”: it opens once the agent has hit errors or had a build sent back.', stSeg('debugger', [['earned', 'After failed tries'], ['always', 'Always'], ['off', 'Off']], S.debugger || 'earned'), { cls: 'sx-row-wide' })
+          + stRow('Let the android tool use a physical phone', 'Unticked, it uses emulators only: a phone holds your real accounts and data.', stSwitch('safety.androidPhones', SF.androidPhones)))
+        + `</div>`,
         stCard('Command rules', 'Your rules, checked before the built-in classes: deny beats ask beats allow. A rule can always make a command stricter. Rules made with the “Always allow…” button never relax pushes, uncheckable commands or deletes outside the project; rules you type here can. Changes here save at once.', '<div id="stPerms"><div class="st-row-help">Loading rules…</div></div>'),
+        stCard('Audit log', 'Every command the agent ran or was stopped from running, and who let it: a rule, you, the deciders, or the built-in classes. Votes are in logs/approvals.jsonl; this log is logs/audit.jsonl.', '<div id="stAudit"><div class="st-row-help">Loading…</div></div>'),
         ].join('') + '</div></details>',
       ]];
     })(),
-    skills: ['Skills', 'Playbooks the agent loads when a task fits. Write your own here, for all your projects or just one; agents can also save their own into a project.', ['<div id="skillPanel"></div><div id="skillList" class="st-skill-list"></div>']],
-    memory: ['Memory', 'A few facts and preferences about you that every chat gets, in every project.', ['<div id="memPanel"></div>']],
+    skills: ['Skills', 'Playbooks the agent loads when a task fits. Write your own here, for all your projects or just one; agents can also save their own into a project.', ['<div id="skillPanel"></div><div class="sx-filter" id="skillFilter"></div><div id="skillList" class="st-skill-list"></div>']],
+    memory: ['Memory', 'A few facts and preferences about you that every chat gets, in every project. Changes here save at once.', ['<div id="memPanel"></div>']],
     projects: ['Projects', 'A project is a folder that many chats share. Changes here apply at once.', [`<div id="stProjects"></div>`]],
     docs: ['Documents', 'Files you attach with 📎. They are kept in the project folder\'s .quorx/uploads, which git ignores.', [
-      stCard('Reading', 'Text is read out of PDFs, Word, PowerPoint, Excel, OpenDocument, EPUB, HTML, code and plain text. Other files are saved and the agent decides whether it can read them.',
-        stRow('Send whole up to', 'Smaller documents go into your message as they are; bigger ones are made searchable.', stStep('inlineDocTokens', S.inlineDocTokens ?? 15000, 1000, 200000, 1000, 'tokens'))
+      stCard('What happens to an attachment', 'Text is read out of PDFs, Word, PowerPoint, Excel, OpenDocument, EPUB, HTML, code and plain text. Other files are saved and the agent decides whether it can read them.',
+        '<div class="sx-pad" data-live="docflow"></div>'
         + stRow('Upload limit', 'Per file.', stStep('maxUploadMB', S.maxUploadMB ?? 100, 1, 2000, 10, 'MB'))
+        + stRow('Send whole up to', 'Smaller documents go into your message as they are; bigger ones are made searchable.', stStep('inlineDocTokens', S.inlineDocTokens ?? 15000, 1000, 200000, 1000, 'tokens'))
         + stRow('Send PDFs as files', 'To models that read files themselves: they also see layout and pictures, but it costs more, because the PDF goes along with every step of the reply.', stSwitch('pdfNative', !!S.pdfNative))),
       stCard('Search', 'Big documents are split into passages and embedded once with an OpenRouter embedding model; the agent searches them with search_docs and reads exact lines with read_doc. A 300-page book is about 150k tokens.',
         stRow('Embedding model', 'Price per million tokens. Changing it re-indexes a document the next time it is attached.', '<div id="stEmbedPick" class="st-embed-pick">Loading models…</div>')
         + stRow('Ask before indexing over', 'Above this cost the attachment waits for your OK.', stStep('docIndexBudget', S.docIndexBudget ?? 0.5, 0, 50, 0.1, '$'))),
       stCard('PDFs', 'PDFs are read for free on this computer with pdftotext when it is installed (Git for Windows includes it); otherwise through OpenRouter\'s free parser. A scan with no text asks before OCR (mistral-ocr, about $2 per 1,000 pages).', ''),
     ]],
-    code: ['Code & servers', 'What the agent may run on this computer.', [
+    code: ['Code & servers', 'What the agent may run on this computer, and what it keeps in each project’s .quorx folder.', [
       stCard('Commands', 'The agent runs command lines in its shell. Each one is checked first: read-only commands run, others ask you (or the deciders in ⚡ YOLO), and system commands or deletes outside the project are blocked.', stRow('Rules, shell, Stop and Undo for commands', '', '<button type="button" class="st-btn secondary sm" data-act="openSafety">🛡 Safety & commands</button>')),
-      stCard('Agent folder', 'The agent keeps research scripts, downloads, undo history and deleted files in .quorx/ inside each project folder. Git ignores it, so it never ends up in your repo.', stRow('Its size, undo history and clearing', '', '<button type="button" class="st-btn secondary sm" data-act="openStorage">🧹 Storage</button>')),
-      stCard('Servers and browser', 'Servers are saved in .quorx/launch.json per project; run and stop them from 🖥 in the chat header, and watch them in the terminal.', stRow('Dev server ports', 'Each server gets a free port here unless it has a fixed one.', '<code>5300–5999</code>')
+      `<div class="sx-grid two">`
+      + stCard('Agent folder', 'The agent keeps research scripts, downloads, undo history and deleted files in .quorx/ inside each project folder. Git ignores it, so it never ends up in your repo.', stRow('Its size, undo history and clearing', '', '<button type="button" class="st-btn secondary sm" data-act="openStorage">🧹 Storage</button>'))
+      + stCard('Servers and browser', 'Servers are saved in .quorx/launch.json per project; run and stop them from 🖥 in the chat header, and watch them in the terminal.', stRow('Dev server ports', 'Each server gets a free port here unless it has a fixed one.', '<code>5300–5999</code>')
         + stRow('Headless browser', 'Used by the agent to check its own pages.', `<code class="blurable">${esc(G.cfg.browser || 'not found')}</code>`)
-        + stRow('Secrets', 'Agent processes run without your API keys, tokens or passwords in their environment, and the file tools cannot read .env or data/keys.json.', '<span class="st-key-source-badge">protected</span>')),
-      stCard('Chrome extension', 'Give a tab of your everyday Chrome to a chat, so the agent can work in it with your own sign-ins (Gmail, GitHub…). It touches only tabs you give; sending, deleting, buying and account changes ask you first.', '<div id="stExt"></div>'
-        + stRow('Read-only for reading requests', 'When you ask to read, check or summarise, typing into your account outside a search box asks you first. A site your request didn\'t name always asks before it opens in your Chrome.', stSwitch('browseReadOnly', S.browseReadOnly !== false))
+        + stRow('Secrets', 'Agent processes run without your API keys, tokens or passwords in their environment, and the file tools cannot read .env or data/keys.json.', stTag('ok', 'protected')))
+      + `</div>`,
+      `<div class="sx-grid two">`
+      + stCard('In your tabs', 'What the agent may do in the tabs of your own Chrome.',
+        stRow('Read-only for reading requests', 'When you ask to read, check or summarise, typing into your account outside a search box asks you first. A site your request didn\'t name always asks before it opens in your Chrome.', stSwitch('browseReadOnly', S.browseReadOnly !== false))
         + stRow('Deciders check typing in your tabs', 'Before the agent types or presses Enter in your own tab, the deciders judge from your request alone (never the page) whether it serves what you asked. Below 35%, the step is refused. One decider call per step.', stSwitch('chromeCheck', S.chromeCheck !== false))
         + stRow('Network reading in your tabs', 'The agent can list the data requests a page makes and read its JSON or text answers (GET only). Cookies, tokens and passwords are removed, and nothing is ever sent again.', stSwitch('chromeNetwork', S.chromeNetwork !== false))
-        + stRow('Close the agent\'s tabs when it\'s done', 'When a reply ends, the tabs it opened in your Chrome close, so an empty QuorX window means it has finished. Tabs you gave it stay open.', stSwitch('chromeCloseTabs', S.chromeCloseTabs !== false))
-        + stRow('Never open', 'Sites the agent may never open in your Chrome, separated by commas. A site includes its subdomains.', `<input type="text" class="st-input" data-bind="chromeSitesNever" value="${esc(S.chromeSitesNever || '')}" placeholder="mybank.com, mychart.org" spellcheck="false">`)
+        + stRow('Close the agent\'s tabs when it\'s done', 'When a reply ends, the tabs it opened in your Chrome close, so an empty QuorX window means it has finished. Tabs you gave it stay open.', stSwitch('chromeCloseTabs', S.chromeCloseTabs !== false)))
+      + stCard('Site rules', 'Which sites the agent may open in your Chrome, and where it may type.',
+        stRow('Never open', 'Sites the agent may never open in your Chrome, separated by commas. A site includes its subdomains.', `<input type="text" class="st-input" data-bind="chromeSitesNever" value="${esc(S.chromeSitesNever || '')}" placeholder="mybank.com, mychart.org" spellcheck="false">`)
         + stRow('Always allowed', 'Sites it may open without asking, even when your request didn\'t name them.', `<input type="text" class="st-input" data-bind="chromeSitesAlways" value="${esc(S.chromeSitesAlways || '')}" placeholder="github.com, news.ycombinator.com" spellcheck="false">`)
-        + stRow('Read-only sites', 'Typing outside a search box always asks you on these, whatever the request says.', `<input type="text" class="st-input" data-bind="chromeSitesRead" value="${esc(S.chromeSitesRead || '')}" placeholder="mail.google.com, linkedin.com" spellcheck="false">`)),
+        + stRow('Read-only sites', 'Typing outside a search box always asks you on these, whatever the request says.', `<input type="text" class="st-input" data-bind="chromeSitesRead" value="${esc(S.chromeSitesRead || '')}" placeholder="mail.google.com, linkedin.com" spellcheck="false">`))
+      + `</div>`,
+      stCard('Chrome extension', 'Give a tab of your everyday Chrome to a chat, so the agent can work in it with your own sign-ins (Gmail, GitHub…). It touches only tabs you give; sending, deleting, buying and account changes ask you first.', '<div id="stExt"></div>'),
     ]],
-    usage: ['Usage & costs', 'What chats and projects cost.', [
+    usage: ['Usage & costs', 'What chats and projects cost, from this computer’s records.', [
+      '<div id="stUsage"><div class="st-row-help">Adding up costs…</div></div>',
       stCard('In chats', '', stRow('Show the cost badge in chat headers', 'The amber cost next to the model; click it for the per-chat usage breakdown (also /usage).', stSwitch('ui.usageBtn', U.usageBtn))),
-      stCard('Everything', '', stRow('Costs per project and chat', '', '<button type="button" class="st-btn secondary sm" data-act="openCosts">💲 Open costs</button>')),
+      stCard('Everything', '', stRow('Costs per project and chat', 'Every chat’s cost, sorted and searchable.', '<button type="button" class="st-btn secondary sm" data-act="openCosts">💲 Open costs</button>')),
     ]],
     storage: ['Storage', 'How much room QuorX takes on this computer, and clearing what it doesn\'t need. Caches are deleted; your own things go to the Windows Recycle Bin.', [
       storageCard(),
-      stCard('Automatic cleanup', 'Saved with Save, and used whether or not this page is open.',
+      `<div class="sx-grid two">`
+      + stCard('Automatic cleanup', 'Saved with Save, and used whether or not this page is open.',
         stRow('Clean up automatically', 'When QuorX starts, then once a day.', sqCheck('storage.autoClean', R.autoClean !== false, 'On'))
         + stRow('Empty QuorX\'s trash after', 'Deleted chats and skills, and each project\'s agent trash, go to the Windows Recycle Bin this long after they were deleted.', stStep('storage.trashDays', R.trashDays ?? 30, 1, 3650, 1, 'days'))
         + stRow('Start a log afresh past', 'Each log; the older part is kept once, as <code>name.1.jsonl</code>.', stStep('storage.logMaxMB', R.logMaxMB ?? 50, 1, 10000, 10, 'MB'))
         + stRow('Check screenshots kept', 'The newest ones; older ones are removed.', stStep('storage.shotKeep', R.shotKeep ?? 300, 0, 100000, 50, 'pictures'))
         + (DESK ? stRow('Remove installed update downloads', 'An installer goes once its version (or a newer one) is running.', sqCheck('storage.updateCleanup', R.updateCleanup !== false, 'On'))
-          + stRow('Clear the browser agent\'s cache each time QuorX starts', 'Its sign-ins stay.', sqCheck('storage.agentCacheOnStart', !!R.agentCacheOnStart, 'On')) : '')),
-      stCard('Agent folder', 'The agent keeps research scripts, downloads, undo history and deleted files in .quorx/ inside each project folder. Git ignores it, so it never ends up in your repo.', stRow('Ask me when it grows past', 'The chat shows a notice with what to clear, and the agent asks before adding more.', stStep('agentSpaceMB', S.agentSpaceMB ?? 500, 50, 50000, 50, 'MB'))
+          + stRow('Clear the browser agent\'s cache each time QuorX starts', 'Its sign-ins stay.', sqCheck('storage.agentCacheOnStart', !!R.agentCacheOnStart, 'On')) : ''))
+      + stCard('Agent folder', 'The agent keeps research scripts, downloads, undo history and deleted files in .quorx/ inside each project folder. Git ignores it, so it never ends up in your repo.', stRow('Ask me when it grows past', 'The chat shows a notice with what to clear, and the agent asks before adding more.', stStep('agentSpaceMB', S.agentSpaceMB ?? 500, 50, 50000, 50, 'MB'))
         + stRow('Undo for the newest', 'Replies per project that keep ↶ Undo. Older undo copies are removed when a new reply starts.', stStep('undoKeep', S.undoKeep ?? 10, 1, 100, 1, 'replies'))
-        + stRow('Undo kept for at most', 'Even among the newest replies, Undo goes after this long. For history that lasts, use git.', stStep('undoDays', S.undoDays ?? 7, 1, 90, 1, 'days'))),
+        + stRow('Undo kept for at most', 'Even among the newest replies, Undo goes after this long. For history that lasts, use git.', stStep('undoDays', S.undoDays ?? 7, 1, 90, 1, 'days')))
+      + `</div>`,
     ]],
-    data: ['Data & storage', 'Where things are kept.', [
-      stCard('Chats', 'Saved on this computer in data/chats; deleted chats move to data/trash.', stRow('Export all chats', 'One JSON file with every chat.', '<button type="button" class="st-btn secondary sm" data-act="exportChats">⬇ Export</button>')),
+    data: ['Data & storage', 'Where things are kept, how to back them up, and how to move to another computer.', [
       backupCard(),
+      stCard('Chats', 'Saved on this computer in data/chats; deleted chats move to data/trash.', stRow('Export all chats', 'One JSON file with every chat.', '<button type="button" class="st-btn secondary sm" data-act="exportChats">⬇ Export</button>')),
       stCard('Danger zone', '', stRow('Clear this browser\'s preferences', 'Settings, layout and theme go back to defaults. Chats, projects and keys are not touched.', '<button type="button" class="st-btn danger sm" data-act="clearPrefs">Clear</button>'), 'danger'),
     ]],
     setup: ['Setup check', 'What this computer has for QuorX, and what each thing is for. Amber rows are optional.', ['<div id="stSetup"><div class="st-row-help">Checking this computer…</div></div>']],
-    shortcuts: ['Shortcuts', '', [stCard('Keyboard', '', `<table class="st-shortcuts-table"><tbody>${[['Ctrl + K', 'Search chats, commands, settings and files'], ['Enter', 'Send'], ['Shift + Enter', 'New line'], ['@', 'Add files, chats or projects as context'], ['/', 'Commands (/usage, /model, /strict, …)'], ['↑ ↓ then Enter or Tab', 'Pick a suggestion'], ['Esc', 'Close a dialog or suggestions']].map(([k, v]) => `<tr><td>${k.split(' ').map((x) => (/^[+]$|^then$|^or$/.test(x) ? x : `<kbd>${esc(x)}</kbd>`)).join(' ')}</td><td>${v}</td></tr>`).join('')}</tbody></table>`)]],
-    about: ['About', '', [...(DESK ? ['<div id="stDesktop"></div>'] : []), stCard('QuorX', '', stRow('Version', DESK ? 'The desktop app and the harness it is attached to.' : '', `<code id="stVersion">v${esc(G.cfg?.version || '?')}</code>`) + stRow('Address', '', `<code>${esc(location.origin)}</code>`) + stRow('OpenRouter key', '', G.cfg.hasKey ? '<span class="st-key-active-badge">active</span>' : '<span class="st-nav-badge bad-dot"></span> none yet') + stRow('Your data', 'Chats, projects, keys and logs stay in this folder.', '<code>data/</code>') + stRow('Tour', 'Five short steps over the page: projects, Strict and YOLO, the deciders and reviewer, costs, the terminal.', '<button type="button" class="st-btn secondary sm" data-act="tour">Show the tour</button>'))]],
+    shortcuts: ['Shortcuts', 'Keys that work everywhere in QuorX.', [stCard('Keyboard', '', `<div class="sx-keys">${[['Ctrl + K', 'Search chats, commands, settings and files'], ['Enter', 'Send'], ['Shift + Enter', 'New line'], ['@', 'Add files, chats or projects as context'], ['/', 'Commands (/usage, /model, /strict, …)'], ['↑ ↓ then Enter or Tab', 'Pick a suggestion'], ['Esc', 'Close a dialog or suggestions']].map(([k, v]) => `<div class="st-row sx-key"><span class="sx-key-combo">${k.split(' ').map((x) => (/^[+]$|^then$|^or$/.test(x) ? x : `<kbd>${esc(x)}</kbd>`)).join(' ')}</span><span class="sx-key-what st-row-label">${v}</span></div>`).join('')}</div>`)]],
+    about: ['About', 'This copy of QuorX, where it keeps your data, and the desktop app.', [
+      `<section class="st-card"><div class="sx-identity"><img src="brand/quorx-192.png" alt=""><div><h4>QuorX <code id="stVersion" class="sx-ver">v${esc(G.cfg?.version || '?')}</code></h4><p>An open-source AI agent with a quorum of models behind every call.</p></div></div>`
+        + stRow('Version', DESK ? 'The desktop app and the harness it is attached to.' : '', `<span class="sx-status ok">v${esc(G.cfg?.version || '?')}</span>`)
+        + stRow('Address', '', `<code>${esc(location.origin)}</code>`)
+        + stRow('OpenRouter key', '', G.cfg.hasKey ? stTag('ok', 'active') : stStatus('bad', 'none yet'))
+        + stRow('Your data', 'Chats, projects, keys and logs stay in this folder.', '<code>data/</code>')
+        + stRow('Tour', 'Five short steps over the page: projects, Strict and YOLO, the deciders and reviewer, costs, the terminal.', '<button type="button" class="st-btn secondary sm" data-act="tour">Show the tour</button>')
+        + '</section>',
+      ...(DESK ? ['<div id="stDesktop"></div>'] : []),
+    ]],
     _badges: { keys: keysBadge },
   };
 }
@@ -5244,7 +5312,7 @@ function openSettings(cat) {
   ST.draft.theme = G.theme ?? null; ST.themeAtOpen = G.theme ?? null;
   ST.draft.newChatTools ??= { ...DEFAULT_CHAT_TOOLS };
   ST.draft.storage = structuredClone(G.storageRules || {});
-  ST.dirty = false; ST.reveal = new Set(); ST.revealAccount = false; ST.revealLimit = false;
+  ST.dirty = false; ST.reveal = new Set(); ST.revealAccount = false; ST.revealLimit = false; ST.changed = new Set();
   if (cat) ST.cat = cat;
   $('#stSearch').value = '';
   drawSettings();
@@ -5252,26 +5320,90 @@ function openSettings(cat) {
 }
 function drawSettings() {
   const S = ST.draft, P = settingsPanels(S);
-  $('#stNav').innerHTML = SETTINGS_NAV.map(([group, items]) => `<div class="st-nav-group"><div class="st-nav-group-label">${group}</div>${items.map(([id, ico, label]) => `<button type="button" class="st-nav-item ${ST.cat === id ? 'active' : ''}" data-cat="${id}" ${ST.cat === id ? 'aria-current="page"' : ''}><span class="st-nav-item-left"><span class="st-nav-icon">${ico}</span><span class="st-nav-label">${label}</span></span>${P._badges[id] ? `<span class="st-nav-badge ${P._badges[id]}"></span>` : id === 'skills' && G.skillCount ? `<span class="st-nav-badge count">${G.skillCount}</span>` : ''}</button>`).join('')}</div>`).join('');
-  for (const b of document.querySelectorAll('#stNav .st-nav-item')) b.onclick = () => { ST.cat = b.dataset.cat; $('#stSearch').value = ''; drawSettings(); };
-  // Every panel is in the page (search looks through all of them); only the chosen one shows.
-  $('#stMain').innerHTML = SETTINGS_NAV.flatMap(([, items]) => items).map(([id]) => {
+  $('#stNav').innerHTML = SETTINGS_NAV.map(([group, items]) => `<div class="st-nav-group"><div class="st-nav-group-label">${group}</div>${items.map(([id, ico, label]) => `<button type="button" class="st-nav-item ${ST.cat === id ? 'active' : ''}" data-cat="${id}" ${ST.cat === id ? 'aria-current="page"' : ''}><span class="st-nav-item-left"><span class="st-nav-icon">${ico}</span><span class="st-nav-label">${label}</span></span><span class="sx-nav-sum"></span></button>`).join('')}</div>`).join('');
+  for (const b of document.querySelectorAll('#stNav .st-nav-item')) b.onclick = () => { ST.cat = b.dataset.cat; $('#stSearch').value = ''; drawSettings(); $('#stMain').scrollTop = 0; };
+  // Every panel is in the page (search looks through all of them); only the chosen one shows. Each one opens with
+  // its icon, what it is for, and a line that says what is set now (stRefresh keeps that line up to date).
+  $('#stMain').innerHTML = SETTINGS_NAV.flatMap(([group, items]) => items.map((it) => [group, ...it])).map(([group, id, ico]) => {
     const [title, desc, cards] = P[id];
-    return `<section class="st-panel ${ST.cat === id ? 'active' : ''}" data-panel="${id}"><div class="st-panel-head"><div class="st-panel-title-wrap"><h3 class="st-panel-title">${title}</h3>${desc ? `<p class="st-panel-desc">${desc}</p>` : ''}</div></div>${cards.join('')}</section>`;
+    return `<section class="st-panel ${ST.cat === id ? 'active' : ''}" data-panel="${id}" data-group="${group.toLowerCase()}"><div class="st-panel-head"><div class="sx-hero-ico" aria-hidden="true">${ico}</div><div class="st-panel-title-wrap"><h3 class="st-panel-title">${title}</h3>${desc ? `<p class="st-panel-desc">${desc}</p>` : ''}<div class="sx-state"></div></div></div>${cards.join('')}</section>`;
   }).join('');
+  $('#settings .settings-modal').dataset.group = (SETTINGS_NAV.find(([, items]) => items.some(([id]) => id === ST.cat))?.[0] || '').toLowerCase();
   wireSettings();
   updateDirty();
 }
+// ---------- what each category has set, in a few words: the nav (short) and the line under the title ----------
+const SIDE_START = { remember: 'Remember', expanded: 'Expanded', rail: 'Rail' }, PANE_MODE = { auto: 'Auto', always: 'Always', never: 'Only when asked' };
+const PLAN_FIRST = { off: 'Off', big: 'Big tasks', always: 'Always' }, PROVIDER_SORT = { auto: 'Auto', price: 'Cheapest', throughput: 'Fastest' };
+const kTok = (n) => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
+function stSummary(id, S) {
+  const U = uiOf(S), SF = sfOf(S), on = (x, a, b) => stStatus(x ? 'ok' : 'off', x ? a : b);
+  const usd = (v) => `$${Number(v || 0).toFixed(2)}`;
+  switch (id) {
+    case 'setup': { const r = ST.setup; if (!r) return ['', '']; return [r.missing ? `${r.missing} missing` : `${r.ok} ready`, stStatus('ok', `${r.ok} ready`) + (r.warn ? stStatus('warn', `${r.warn} optional`) : '') + (r.missing ? stStatus('bad', `${r.missing} missing`) : ''), r.missing ? 'bad' : '']; }
+    case 'appearance': { const t = S.theme === 'dark' ? 'Dark' : S.theme === 'light' ? 'Light' : 'System'; return [t, stStatus('info', `${t} theme`) + stStatus('info', U.density === 'compact' ? 'Compact' : 'Comfortable') + stStatus('info', `${U.fontSize} px text`) + stStatus('info', `Motion: ${{ system: 'follows system', full: 'on', reduce: 'reduced' }[motionPref(U)]}`)]; }
+    case 'layout': return ['', stStatus('info', `Sidebar: ${SIDE_START[U.sidebarStart] || U.sidebarStart}`) + stStatus('info', `Artifact pane: ${PANE_MODE[U.paneMode] || U.paneMode}`)];
+    case 'privacy': return [U.maskAmounts ? 'masked' : 'visible', stStatus(U.maskAmounts ? 'ok' : 'warn', U.maskAmounts ? 'Amounts masked' : 'Amounts visible') + stStatus(U.showBalance ? 'warn' : 'off', U.showBalance ? 'Balance button shown' : 'Balance button hidden') + on(U.blurPaths, 'Paths blurred', 'Paths visible')];
+    case 'keys': { const k = ST.keys; if (!G.cfg.hasKey) return ['add one', stStatus('bad', 'No key yet: nothing can run'), 'bad']; if (!k) return ['', '']; return [`${k.n} key${k.n === 1 ? '' : 's'}`, stStatus('ok', `${esc(k.active || 'A key')} is active`) + stStatus('off', `${k.n} key${k.n === 1 ? '' : 's'} on this computer`)]; }
+    case 'models': return [short(S.model), stStatus('info', `New chats: ${esc(short(S.model))}`) + (G.models ? stStatus('ok', `${G.models.length} models loaded`) : '') + stStatus('info', `${PROVIDER_SORT[S.providerSort || 'auto']} routing`) + on(S.fallbackModel, `Fallback: ${esc(short(S.fallbackModel || ''))}`, 'No fallback')];
+    case 'newchats': { const q = QUALITY_TOOLS.filter((k) => S.newChatTools?.[k] !== false).length, p = CHAT_TOOLS.filter((k) => S.newChatTools?.[k]).length;
+      return [S.approval === 'yolo' ? '⚡ YOLO' : '🔒 Strict', stStatus('info', S.approval === 'yolo' ? '⚡ YOLO: never asks' : `🔒 Strict: asks before ${S.strictAsk === 'every' ? 'every tool' : 'paid media'}`) + stStatus(q ? 'ok' : 'off', `${q} of ${QUALITY_TOOLS.length} checking tools on`) + stStatus(p ? 'warn' : 'off', p ? `${p} paid media on` : 'Paid media off')]; }
+    case 'loop': return [`${S.maxSteps} steps`, stStatus('info', `${S.maxSteps} calls a reply`) + stStatus('info', `Plan first: ${PLAN_FIRST[S.planFirst || 'off']}`) + on(S.verify !== false, 'Checks on', 'Checks off') + on((S.review || 'builds') !== 'off', `Reviewer: ${S.review || 'builds'}`, 'No reviewer')];
+    case 'deciders': { const n = (S.voters || []).filter(Boolean).length, c = ['gap', 'shots', 'click'].filter((k) => S.checks?.[k] !== false).length;
+      return [`${n} seats`, stStatus('info', `${n} decider${n === 1 ? '' : 's'} seated`) + stStatus('info', `Settled at ${S.gate.act}, lean at ${S.gate.confirm}`) + stStatus(c ? 'ok' : 'off', `${c} of 3 harness checks on`)]; }
+    case 'tools': { const n = CATS.filter(([k]) => S.tools?.[k]?.on !== false).length; return [`${n} of ${CATS.length}`, stStatus(n ? 'ok' : 'off', `${n} of ${CATS.length} tools on`) + stStatus('info', 'Each chat turns them on in 🧰')]; }
+    case 'budget': { const r = S.replyBudget ?? G.cfg.defaults.replyBudget ?? 1, dd = S.dailyBudget ?? G.cfg.defaults.dailyBudget ?? 0, y = YOLO_ROWS.filter(([k]) => S.yoloAuto?.[k] !== false).length;
+      return [r ? usd(r) : 'no cap', `${r ? `${stMoney(usd(r))} <span class="sx-state-k">a reply</span>` : stStatus('warn', 'No cap per reply')} ${dd ? `${stMoney(usd(dd))} <span class="sx-state-k">a day</span>` : stStatus('off', 'No daily cap')} ${stMoney(usd(S.budget))} <span class="sx-state-k">paid media a reply</span>` + stStatus('ok', `${y} of ${YOLO_ROWS.length} YOLO groups on their own`), 'money']; }
+    case 'safety': { const M = sfModes(SF); return [M.decide === 'ask' ? 'Ask me' : M.decide === 'decide' ? 'Deciders' : 'Custom', stStatus(M.decide === 'ask' ? 'warn' : 'info', M.decide === 'ask' ? 'Pushes and installs ask you' : M.decide === 'decide' ? 'The deciders decide pushes and installs' : 'Custom: see Advanced') + stStatus(M.care === 'off' ? 'off' : 'ok', M.care === 'on' ? 'Extra care on' : M.care === 'off' ? 'Extra care off' : 'Extra care: custom') + on(SF.snapshots, 'Undo for commands on', 'Undo for commands off')]; }
+    case 'skills': { if (G.skillCount == null) return ['', '']; const off = (S.skillsOff || []).length; return [`${G.skillCount - off} on`, stStatus('ok', `${G.skillCount - off} on`) + (off ? stStatus('off', `${off} off`) : '')]; }
+    case 'memory': { const m = ST.mem; if (!m) return ['', '']; return [m.on ? `${m.n} notes` : 'off', on(m.on, 'On in every chat', 'Off: chats get nothing') + stStatus('info', `${m.n} note${m.n === 1 ? '' : 's'} · ${m.tokens} of ${m.limit} tokens`)]; }
+    case 'projects': { const n = (G.projects || []).length; return [String(n), stStatus('info', `${n} project${n === 1 ? '' : 's'}`)]; }
+    case 'code': return ['', stStatus('ok', 'Secrets protected') + stStatus('info', 'Ports 5300–5999') + stStatus('info', `Agent folder: asks past ${S.agentSpaceMB ?? 500} MB`)];
+    case 'docs': return ['', stStatus('info', `Whole up to ${kTok(S.inlineDocTokens ?? 15000)} tokens`) + stStatus('info', `Up to ${S.maxUploadMB ?? 100} MB a file`) + `${stMoney(usd(S.docIndexBudget ?? 0.5))} <span class="sx-state-k">indexing without asking</span>`];
+    case 'usage': { const c = ST.costs?.total; if (!c) return ['', '']; return [`${usd(c.week)} wk`, `${stMoney(usd(c.today))} <span class="sx-state-k">today</span> ${stMoney(usd(c.week))} <span class="sx-state-k">this week</span>` + stStatus('off', `${c.chats} chat${c.chats === 1 ? '' : 's'}`), 'money']; }
+    case 'data': return ['', stStatus('info', 'Chats in data/chats') + stStatus('off', 'Deleted chats in data/trash')];
+    case 'storage': { const R = S.storage || {}; return [R.autoClean !== false ? 'auto' : 'manual', stStatus(R.autoClean !== false ? 'ok' : 'off', R.autoClean !== false ? 'Cleans up by itself, daily' : 'Automatic cleanup off') + stStatus('info', `Trash emptied after ${R.trashDays ?? 30} days`) + stStatus('info', `Undo: ${S.undoKeep ?? 10} replies, ${S.undoDays ?? 7} days`)]; }
+    case 'shortcuts': return ['', ''];
+    case 'about': return [`v${G.cfg?.version || '?'}`, stStatus('ok', `QuorX v${esc(G.cfg?.version || '?')}`) + (G.cfg.hasKey ? stStatus('ok', 'OpenRouter key active') : stStatus('bad', 'No OpenRouter key'))];
+  }
+  return ['', ''];
+}
+// Small parts of a page that draw what the draft says right now (they redraw after every change).
+const ST_LIVE = {
+  preview: (S) => { const U = uiOf(S), t = U.timestamps === 'off' ? '' : U.timestamps === 'relative' ? '<small>2 min ago</small>' : '<small>14:02</small>';
+    return `<div class="sx-preview ${U.density === 'compact' ? 'compact' : ''}" style="--pv-size:${U.fontSize}px" aria-hidden="true"><div class="sx-pv-side"><i></i><i></i><i></i><i style="width:70%"></i><i></i></div><div class="sx-pv-chat"><div class="sx-pv-msg me">Build me a pomodoro timer${t}</div><div class="sx-pv-msg">Done: a 25/5 timer with a start button and a chime. Open it in the preview.${t}</div></div></div>`; },
+  window: (S) => { const U = uiOf(S);
+    return `<div class="sx-window"><button type="button" class="${U.sidebarStart === 'rail' ? 'rail' : ''}" data-jump="stRowSidebar">Sidebar<small>${SIDE_START[U.sidebarStart] || ''}</small></button><button type="button" data-jump="stRowSidebar" tabindex="-1">Chat</button><button type="button" class="${U.paneMode === 'never' ? 'dim' : ''}" data-jump="stRowPane">Artifact pane<small>${PANE_MODE[U.paneMode] || ''}</small></button></div>`; },
+  routing: (S) => stFlow([['1', 'Your call', 'the chat’s model', ''], ['2', 'Order', PROVIDER_SORT[S.providerSort || 'auto'], 'stRowOrder'], ['3', 'Features', S.requireParams !== false ? 'all supported' : 'any provider', 'stRowFeatures', S.requireParams === false], ['4', 'Retention', S.zdrOnly ? 'zero retention' : 'any provider', 'stRowZdr', !S.zdrOnly], ['5', 'Fallback', S.fallbackModel ? short(S.fallbackModel) : 'none', 'stRowFallback', !S.fallbackModel]]),
+  loopflow: (S) => stFlow([['1', 'Plan', PLAN_FIRST[S.planFirst || 'off'], 'stLoopPlan', (S.planFirst || 'off') === 'off'], ['2', 'Work', `${S.maxSteps} calls`, 'stLoopWork'], ['3', 'Check', S.verify !== false ? `on · ${S.verifyRounds ?? 2} rounds` : 'off', 'stLoopCheck', S.verify === false], ['4', 'Review', (S.review || 'builds') === 'off' ? 'off' : `${S.review || 'builds'} · ${S.reviewTier || 'cheap'}`, 'stLoopReview', S.review === 'off'], ['5', 'Helpers', S.helpers !== false ? `≥ ${S.helperMinFiles ?? 40} files` : 'off', 'stLoopHelpers', S.helpers === false], ['6', 'Long chats', S.compact !== false ? `summarise > ${kTok(S.compactAt || 24000)}` : 'trim only', 'stLoopMemory']]),
+  scale: (S) => { const lo = Math.max(0, Math.min(1, Number(S.gate?.confirm) || 0)), hi = Math.max(lo, Math.min(1, Number(S.gate?.act) || 0));
+    return `<div class="sx-scale" aria-hidden="true"><div class="sx-scale-track"><span class="sx-z-unsure" style="flex:${lo}">unsure</span><span class="sx-z-lean" style="flex:${hi - lo}">${hi - lo >= 0.1 ? 'lean' : ''}</span><span class="sx-z-settled" style="flex:${1 - hi}">settled</span></div><div class="sx-scale-axis"><span>0</span><span>lean at ${lo.toFixed(2)}</span><span>settled at ${hi.toFixed(2)}</span><span>1</span></div></div>`; },
+  today: (S) => { const t = ST.costs?.total?.today, cap = Number(S.dailyBudget ?? G.cfg.defaults.dailyBudget ?? 0); if (t == null) return '';
+    const pct = cap ? Math.min(100, (t / cap) * 100) : 0;
+    return `${cap ? `<div class="sx-meter ${pct >= 85 ? 'bad' : pct >= 60 ? 'warn' : ''}"><i style="width:${pct}%"></i></div>` : ''}<span class="sx-cap-zero">${stMoney(`$${t.toFixed(2)}`)} spent today${cap ? ` · ${Math.round(pct)}% of the cap` : ''}</span>`; },
+  docflow: (S) => stFlow([['1', 'Attach', `up to ${S.maxUploadMB ?? 100} MB`, ''], ['2', 'Read the text', 'PDF, Word, Excel…', ''], ['3', 'Small', `≤ ${kTok(S.inlineDocTokens ?? 15000)} tokens: whole`, ''], ['4', 'Big: index', `asks above $${Number(S.docIndexBudget ?? 0.5).toFixed(2)}`, ''], ['5', 'Search', 'search_docs, read_doc', '']]),
+};
+function stRefresh() {
+  const S = ST.draft; if (!S || !$('#settings').open && !$('#stMain .st-panel')) return;
+  for (const b of document.querySelectorAll('#stNav .st-nav-item')) {
+    const [sum, , cls] = stSummary(b.dataset.cat, S), el = $('.sx-nav-sum', b);
+    if (el) { el.textContent = sum || ''; el.className = `sx-nav-sum ${cls || ''}`; el.title = sum || ''; }
+  }
+  for (const p of document.querySelectorAll('#stMain .st-panel')) { const el = $('.sx-state', p); if (el) el.innerHTML = stSummary(p.dataset.panel, S)[1] || ''; }
+  for (const el of document.querySelectorAll('#stMain [data-live]')) el.innerHTML = ST_LIVE[el.dataset.live]?.(S) || '';
+}
 function wireSettings() {
   const S = ST.draft, main = $('#stMain');
+  ST.changed ??= new Set();
+  for (const b of ST.changed) for (const el of main.querySelectorAll(`[data-bind="${b}"]`)) el.closest('.st-row')?.classList.add('changed');
   const mark = () => { ST.dirty = true; updateDirty(); };
   for (const inp of main.querySelectorAll('input[data-bind]')) inp.onchange = () => {
     const v = inp.type === 'checkbox' ? inp.checked : inp.type === 'text' ? inp.value.trim() : Number(inp.value);
-    setPath(S, inp.dataset.bind, v); inp.closest('.st-row')?.classList.add('changed'); mark();
+    setPath(S, inp.dataset.bind, v); ST.changed.add(inp.dataset.bind); inp.closest('.st-row')?.classList.add('changed'); mark();
   };
   for (const seg of main.querySelectorAll('.st-segmented[data-bind]')) for (const b of seg.querySelectorAll('.st-seg-btn')) b.onclick = () => {
     for (const x of seg.querySelectorAll('.st-seg-btn')) { x.classList.toggle('active', x === b); x.setAttribute('aria-checked', String(x === b)); }
-    setPath(S, seg.dataset.bind, b.dataset.v); seg.closest('.st-row')?.classList.add('changed'); mark();
+    setPath(S, seg.dataset.bind, b.dataset.v); ST.changed.add(seg.dataset.bind); seg.closest('.st-row')?.classList.add('changed'); mark();
   };
   for (const st of main.querySelectorAll('.st-stepper')) {
     const inp = $('input', st), step = Number(st.dataset.step), min = Number(st.dataset.min), max = Number(st.dataset.max);
@@ -5283,9 +5415,20 @@ function wireSettings() {
     G.theme = S.theme; applyTheme(); // preview right away; Cancel puts it back
   };
   main.onclick = async (e) => {
+    // Long help: a click opens the rest (and closes it again).
+    const fold = e.target.closest('.st-row-help.sx-fold');
+    if (fold) { fold.classList.toggle('sx-open'); return; }
+    // A stage in a strip, or a part of the window: scroll to its card or row and light it up for a moment.
+    const jump = e.target.closest('[data-jump]')?.dataset.jump;
+    if (jump) {
+      const to = document.getElementById(jump); if (!to) return;
+      to.scrollIntoView({ behavior: motionReduced() ? 'auto' : 'smooth', block: 'start' });
+      to.classList.remove('sx-flash'); void to.offsetWidth; to.classList.add('sx-flash');
+      return;
+    }
     const act = e.target.closest('[data-act]')?.dataset.act;
     if (!act) return;
-    if (act === 'pickDefModel') { const id = await pickModel('chat', S.model, { context: 'Default for new chats' }); if (id) { S.model = id; const b = $('#defModel'); b.dataset.id = id; b.innerHTML = `${esc(short(id))} <small>${esc(shortPrice(id))}</small>`; mark(); } }
+    if (act === 'pickDefModel') { const id = await pickModel('chat', S.model, { context: 'Default for new chats' }); if (id) { S.model = id; const b = $('#defModel'); b.dataset.id = id; b.innerHTML = `<span class="sx-av" aria-hidden="true">${esc((short(id)[0] || '?').toUpperCase())}</span>${recDot(id, 'chat')} ${esc(short(id))} <small>${esc(shortPrice(id))}</small><span class="sx-change">Change</span>`; mark(); } }
     if (act === 'pickFallback') { const id = await pickModel('chat', S.fallbackModel || '', { context: 'Fallback when a chat’s model fails' }); if (id) { S.fallbackModel = id; mark(); drawSettings(); } }
     if (act === 'clearFallback') { S.fallbackModel = ''; mark(); drawSettings(); }
     if (act === 'openSafety') { ST.cat = 'safety'; drawSettings(); }
@@ -5303,22 +5446,37 @@ function wireSettings() {
   };
   wireSafetySimple(mark);
   // the richer editors
-  $('#voterInputs').innerHTML = [0, 1, 2, 3, 4].map((i) => `<div class="slot"><span class="n">${i + 1}</span><button type="button" class="mbtn m" data-id="${esc(S.voters[i] || '')}">${S.voters[i] ? `${recDot(S.voters[i], 'decision')} ${esc(S.voters[i])}` : `<i>${i < 3 ? 'choose a decider' : 'add a decider (optional)'}</i>`}</button>${S.voters[i] && i ? '<button type="button" class="ghost x" title="Remove">✕</button>' : ''}<small class="price">${esc(priceOf(S.voters[i]))}</small></div>`).join('');
+  // The deciders sit in five seats: a model and its price in each, ✕ to empty seats 2–5. Save reads the seats back.
+  const seat = (i, id, look) => `<div class="slot sx-seat ${look ? 'look' : ''} ${id ? '' : 'empty'}"><span class="n">${look ? '👁' : i + 1}</span><span class="sx-seat-av" aria-hidden="true">${id ? esc((short(id)[0] || '?').toUpperCase()) : '＋'}</span><button type="button" class="mbtn m" data-id="${esc(id || '')}" title="${id ? `${esc(id)}: click to change` : 'Choose a decider'}">${id ? `${recDot(id, 'decision')} ${esc(short(id))}` : `<i>${i < 3 ? 'choose a decider' : 'add a decider (optional)'}</i>`}</button>${id && i && !look ? '<button type="button" class="ghost x" title="Empty this seat" aria-label="Empty this seat">✕</button>' : ''}<small class="price">${id ? esc(priceOf(id)) : ''}</small></div>`;
+  const fillSeat = (slot, id) => {
+    const btn = $('.m', slot); btn.dataset.id = id || ''; btn.title = id ? `${id}: click to change` : 'Choose a decider';
+    btn.innerHTML = id ? `${recDot(id, 'decision')} ${esc(short(id))}` : '<i>add a decider (optional)</i>';
+    $('.sx-seat-av', slot).textContent = id ? (short(id)[0] || '?').toUpperCase() : '＋';
+    $('.price', slot).textContent = id ? priceOf(id) : '';
+    slot.classList.toggle('empty', !id);
+    // the same rule Save uses: an empty panel keeps the deciders it had
+    const v = [...document.querySelectorAll('#voterInputs .m')].map((b) => b.dataset.id).filter(Boolean);
+    if (v.length) S.voters = v;
+  };
+  $('#voterInputs').innerHTML = [0, 1, 2, 3, 4].map((i) => seat(i, S.voters[i])).join('');
   for (const slot of document.querySelectorAll('#voterInputs .slot')) {
-    const btn = $('.m', slot);
-    btn.onclick = async () => { const id = await pickModel('decision', btn.dataset.id, { context: `Decider ${[...document.querySelectorAll('#voterInputs .slot')].indexOf(slot) + 1}` }); if (id) { btn.dataset.id = id; btn.textContent = id; $('.price', slot).textContent = priceOf(id); mark(); } };
-    const x = $('.x', slot); if (x) x.onclick = () => { btn.dataset.id = ''; btn.innerHTML = '<i>add a decider (optional)</i>'; $('.price', slot).textContent = ''; mark(); };
+    const btn = $('.m', slot), i = [...document.querySelectorAll('#voterInputs .slot')].indexOf(slot);
+    btn.onclick = async () => { const id = await pickModel('decision', btn.dataset.id, { context: `Decider ${i + 1}` }); if (id) { fillSeat(slot, id); if (i && !$('.x', slot)) { slot.insertAdjacentHTML('beforeend', '<button type="button" class="ghost x" title="Empty this seat" aria-label="Empty this seat">✕</button>'); wireX(slot); } mark(); } };
+    const wireX = (sl) => { const x = $('.x', sl); if (x) x.onclick = () => { fillSeat(sl, ''); x.remove(); mark(); }; };
+    wireX(slot);
   }
   const lookIds = Array.isArray(S.lookVoters) && S.lookVoters.length ? S.lookVoters : G.cfg.defaults.lookVoters || ['openai/gpt-6-luna-decisions'];
-  $('#lookInputs').innerHTML = `<div class="slot"><span class="n">👁</span><button type="button" class="mbtn m" data-id="${esc(lookIds[0])}">${recDot(lookIds[0], 'decision')} ${esc(lookIds[0])}</button><small class="price">${esc(priceOf(lookIds[0]))}</small></div>`;
+  $('#lookInputs').innerHTML = seat(0, lookIds[0], true);
   for (const slot of document.querySelectorAll('#lookInputs .slot')) {
     const btn = $('.m', slot);
-    btn.onclick = async () => { const id = await pickModel('decision', btn.dataset.id, { context: 'Decider for look and the harness checks (it must read images)' }); if (id) { btn.dataset.id = id; btn.textContent = id; $('.price', slot).textContent = priceOf(id); mark(); } };
+    btn.onclick = async () => { const id = await pickModel('decision', btn.dataset.id, { context: 'Decider for look and the harness checks (it must read images)' }); if (id) { btn.dataset.id = id; btn.innerHTML = `${recDot(id, 'decision')} ${esc(short(id))}`; $('.sx-seat-av', slot).textContent = (short(id)[0] || '?').toUpperCase(); $('.price', slot).textContent = priceOf(id); mark(); } };
   }
   drawCheckList(S, mark);
   $('#catEditors').innerHTML = CATS.map((cat) => catEditor(cat, S.tools)).join('');
   for (const el of document.querySelectorAll('#catEditors .cat')) { wireCatEditor(el); el.addEventListener('change', mark); el.addEventListener('click', (ev) => { if (ev.target.closest('button')) mark(); }); }
   drawSkillsPanel(mark);
+  // Usage & costs: today, this week and all time, and a bar per project (from /api/costs).
+  getJ('/api/costs?per=1').then((c) => { if (c && !c.error) { ST.costs = c; drawUsagePanel(); stRefresh(); } }).catch(() => {});
   drawProjectsPanel();
   drawPermsPanel();
   drawKeysPanel();
@@ -5339,7 +5497,7 @@ function searchSettings(q) {
   $('#stMain').classList.toggle('searching', !!q);
   for (const panel of document.querySelectorAll('#stMain .st-panel')) {
     let any = false;
-    for (const card of panel.querySelectorAll('.st-card, .st-key-card, .st-account-card, .st-hero-onboard')) {
+    for (const card of panel.querySelectorAll('.st-card, .st-key-card, .st-account-card, .st-hero-onboard, .sx-caps')) {
       let hit = false;
       const rows = card.querySelectorAll('.st-row, .st-skill-item, .st-proj-row, .cat');
       for (const r of rows) { const m = !q || r.textContent.toLowerCase().includes(q); r.hidden = !m; hit ||= m; }
@@ -5373,8 +5531,27 @@ function resetCategory() {
   ST.dirty = true; drawSettings();
 }
 function updateDirty() {
-  $('#stDirty').textContent = ST.dirty ? 'Unsaved changes' : 'No changes';
+  const n = Math.max(ST.changed?.size || 0, document.querySelectorAll('#stMain .changed').length);
+  $('#stDirty').textContent = !ST.dirty ? 'No changes' : n > 1 ? `${n} unsaved changes` : 'Unsaved changes';
   $('.st-foot').classList.toggle('dirty', ST.dirty);
+  // Reset names the category it resets
+  const what = $('#stResetWhat'), label = SETTINGS_NAV.flatMap(([, items]) => items).find(([id]) => id === ST.cat)?.[2];
+  if (what) what.textContent = label || 'category';
+  stRefresh();
+}
+// Usage & costs: totals as tiles (all time masked like other amounts until 👁), then a bar per project.
+function drawUsagePanel() {
+  const box = $('#stUsage'), c = ST.costs; if (!box || !c) return;
+  const U = uiOf(ST.draft), show = !U.maskAmounts || ST.revealUsage, usd = (v) => `$${Number(v || 0).toFixed(2)}`;
+  const cap = Number(ST.draft.dailyBudget ?? G.cfg.defaults.dailyBudget ?? 0), pct = cap ? Math.min(100, (c.total.today / cap) * 100) : 0;
+  const top = c.projects.filter((p) => p.cost > 0).slice(0, 8), max = Math.max(...top.map((p) => p.cost), 0.0001);
+  box.innerHTML = `<div class="sx-kpis">
+      <div class="sx-kpi"><span>Today</span>${stMoney(usd(c.total.today), 'big')}<small>${cap ? `of ${usd(cap)} a day` : 'no daily cap'}</small>${cap ? `<div class="sx-meter ${pct >= 85 ? 'bad' : pct >= 60 ? 'warn' : ''}"><i style="width:${pct}%"></i></div>` : ''}</div>
+      <div class="sx-kpi"><span>This week</span>${stMoney(usd(c.total.week), 'big')}<small>last 7 days</small></div>
+      <div class="sx-kpi"><span>All time <button type="button" class="sx-reveal" data-usage-reveal title="${show ? 'Hide amounts' : 'Show amounts'}">${show ? '🙈' : '👁'}</button></span>${stMoney(show ? usd(c.total.cost) : '•••••', `big ${show ? '' : 'sx-masked'}`)}<small>${c.total.chats} chat${c.total.chats === 1 ? '' : 's'}</small></div>
+    </div>`
+    + stCard('By project', top.length ? 'All time, most expensive first.' : '', top.length ? `<div class="sx-bars">${top.map((p) => `<div class="sx-bar" style="--pc:${esc(p.color || autoHex(p.name))}"><span class="sx-bar-name" title="${esc(p.name)}"><i></i>${esc(p.name)}</span><span class="sx-bar-track"><i style="width:${Math.max(1.5, (p.cost / max) * 100)}%"></i></span>${stMoney(show ? usd(p.cost) : '•••', show ? '' : 'sx-masked')}</div>`).join('')}</div>` : '<p class="st-row-help sx-pad">Nothing spent yet. Costs show here after the first reply.</p>');
+  const rv = $('[data-usage-reveal]', box); if (rv) rv.onclick = () => { ST.revealUsage = !ST.revealUsage; drawUsagePanel(); };
 }
 // The harness's questions, each with its own wording (blank = the built-in one) and a switch; plus your own.
 function drawCheckList(S, mark) {
@@ -5620,6 +5797,7 @@ async function drawSetupPanel(again) {
   box.classList.remove('sc-busy');
   if (r.error || !r.items) { box.innerHTML = `<div class="st-row-help">⚠ Could not run the check: ${esc(r.error || 'no answer')}</div>`; return; }
   const n = (s) => r.items.filter((i) => i.status === s).length;
+  ST.setup = { ok: n('ok'), warn: n('warn'), missing: n('missing') }; stRefresh();
   box.innerHTML = `<div class="sc-head">
       <span class="sc-sum"><b>${n('ok')}</b> ready${n('warn') ? ` · <b class="warn">${n('warn')}</b> optional` : ''}${n('missing') ? ` · <b class="bad">${n('missing')}</b> missing` : ''}</span>
       <span class="sc-when">checked ${new Date(r.checked).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
@@ -5709,6 +5887,27 @@ function wireSignIn() {
 // ⚙ Settings → Skills: write, import, edit and trash your own skills (data/skills, every project) and this project's
 // (.quorx/skills). Switching a skill on or off is a draft change like the rest of Settings; writing one saves at once.
 const SKILL_SOURCE = { 'built-in': ['builtin', 'built-in'], mine: ['mine', 'all projects'], project: ['project', 'this project'] };
+// The library's filter (one source at a time) and All on / All off, which act on the skills the filter shows.
+// The filter stays where it was when the panel redraws after a save, an import or a delete.
+function drawSkillFilter(list, changed) {
+  const fb = $('#skillFilter'); if (!fb) return;
+  if (!list.length) { fb.innerHTML = ''; return; }
+  const counts = { all: list.length }; for (const k of list) counts[k.source] = (counts[k.source] || 0) + 1;
+  const opts = [['all', 'All'], ...Object.entries(SKILL_SOURCE).map(([k, [, l]]) => [k, l[0].toUpperCase() + l.slice(1)])].filter(([k]) => counts[k]);
+  if (!counts[ST.skillFilter]) ST.skillFilter = 'all';
+  fb.innerHTML = `<div class="st-segmented" role="radiogroup" aria-label="Show skills from">${opts.map(([k, l]) => `<button type="button" class="st-seg-btn ${k === ST.skillFilter ? 'active' : ''}" role="radio" aria-checked="${k === ST.skillFilter}" data-v="${esc(k)}">${esc(l)} <small>${counts[k]}</small></button>`).join('')}</div><span class="sx-filter-acts"><button type="button" class="st-btn ghost sm" data-skills-all="1">✓ All on</button><button type="button" class="st-btn ghost sm" data-skills-all="0">All off</button></span>`;
+  const show = () => { for (const it of document.querySelectorAll('#skillList .st-skill-item')) it.hidden = ST.skillFilter !== 'all' && it.dataset.where !== ST.skillFilter; };
+  for (const b of fb.querySelectorAll('.st-seg-btn')) b.onclick = () => {
+    ST.skillFilter = b.dataset.v;
+    for (const x of fb.querySelectorAll('.st-seg-btn')) { x.classList.toggle('active', x === b); x.setAttribute('aria-checked', String(x === b)); }
+    show();
+  };
+  for (const b of fb.querySelectorAll('[data-skills-all]')) b.onclick = () => {
+    for (const it of document.querySelectorAll('#skillList .st-skill-item:not([hidden]) input[data-skill]')) it.checked = b.dataset.skillsAll === '1';
+    changed();
+  };
+  show();
+}
 async function drawSkillsPanel(mark, msg = '') {
   const box = $('#skillPanel'), listEl = $('#skillList');
   if (!box || !listEl) return;
@@ -5725,17 +5924,14 @@ async function drawSkillsPanel(mark, msg = '') {
     </div>`;
   const list = await fetch(`/api/skills?project=${pid}`).then((r) => r.json()).catch(() => []);
   G.skillCount = list.length;
-  // The count beside Skills in the nav, kept up to date after a skill is added or deleted here.
-  const nav = $('#stNav .st-nav-item[data-cat="skills"]');
-  if (nav && !nav.querySelector('.st-nav-badge:not(.count)')) {
-    nav.querySelector('.st-nav-badge.count')?.remove();
-    if (list.length) nav.insertAdjacentHTML('beforeend', `<span class="st-nav-badge count">${list.length}</span>`);
-  }
   listEl.innerHTML = list.length ? list.map((k) => {
     const [cls, label] = SKILL_SOURCE[k.source] || ['saved', k.source], own = k.source !== 'built-in';
     return `<div class="st-skill-item" data-name="${esc(k.name)}" data-where="${esc(k.source)}"><div class="st-skill-info"><div class="st-skill-top"><span class="st-skill-name">${esc(k.name)}</span><span class="st-source-badge ${cls}">${esc(label)}</span></div><div class="st-skill-desc">${esc(k.description)}</div></div>${own ? `<button type="button" class="pp-btn set" data-sk-edit title="Edit this skill" aria-label="Edit ${esc(k.name)}">${ICO.pencil}</button><button type="button" class="pp-btn del" data-sk-del title="Move this skill to data/trash" aria-label="Delete ${esc(k.name)}">${ICO.trash}</button>` : ''}${stSwitch('', !off.has(k.name)).replace('data-bind=""', `data-skill="${esc(k.name)}"`)}</div>`;
   }).join('') : '<p class="st-row-help">No skills yet.</p>';
-  for (const inp of listEl.querySelectorAll('input[data-skill]')) inp.onchange = mark;
+  const syncOff = () => { if (ST.draft) ST.draft.skillsOff = [...listEl.querySelectorAll('input[data-skill]')].filter((x) => !x.checked).map((x) => x.dataset.skill); };
+  for (const inp of listEl.querySelectorAll('input[data-skill]')) inp.onchange = () => { syncOff(); mark(); };
+  drawSkillFilter(list, () => { syncOff(); mark(); });
+  stRefresh();
 
   const ed = $('.sk-editor', box), where = $('[data-sk-where]', box);
   let was = null;
@@ -5786,8 +5982,9 @@ async function drawMemoryPanel(msg = '') {
   const m = await fetch('/api/memory').then((r) => r.json()).catch(() => null);
   if (!m || m.error) { el.innerHTML = `<p class="st-row-help">Could not load memory${m?.error ? `: ${esc(m.error)}` : ''}.</p>`; return; }
   const pct = Math.min(100, Math.round((m.tokens / m.limit) * 100));
-  el.innerHTML = stCard('Memory', '', stRow('Use memory in every chat', `Every chat, in every project, gets the items below. They stay under ${m.limit} tokens, so even small models have room. When on, the agent may also propose an item; it is saved only if you say yes (in ⚡ YOLO too). Off: chats get nothing.`,
-    `<label class="st-switch"><input type="checkbox" role="switch" id="memOn" ${m.on ? 'checked' : ''} aria-label="Use memory in every chat"><span class="st-switch-track"><span class="st-switch-thumb"></span></span></label>`)
+  ST.mem = { on: m.on, n: m.items.length, tokens: m.tokens, limit: m.limit }; stRefresh();
+  el.innerHTML = stCard('Notes every chat gets', '', stRow('Use memory in every chat', `Every chat, in every project, gets the items below. They stay under ${m.limit} tokens, so even small models have room. When on, the agent may also propose an item; it is saved only if you say yes (in ⚡ YOLO too). Off: chats get nothing.`,
+    `<label class="sx-check"><input type="checkbox" id="memOn" ${m.on ? 'checked' : ''} aria-label="Use memory in every chat"><span class="sx-word"></span></label>`)
     + `<div class="mem-body ${m.on ? '' : 'off'}">
       <div class="mem-meter" title="About 4 characters a token"><span class="mem-bar"><i style="width:${pct}%"></i></span><span class="mem-count ${pct >= 90 ? 'full' : ''}">${m.tokens} / ${m.limit} tokens</span></div>
       ${m.items.length ? `<ul class="mem-list">${m.items.map((x) => `<li class="mem-item" data-id="${esc(x.id)}"><input class="mem-text" value="${esc(x.text)}" maxlength="200" aria-label="Memory item" spellcheck="true"><span class="tag mem-by" title="${x.by === 'agent' ? 'Proposed by the agent, approved by you' : 'Added by you'}">${x.by === 'agent' ? 'agent · approved' : 'you'}</span><button type="button" class="kx-btn sm mem-save" hidden>Save</button><button type="button" class="mem-del" title="Forget this" aria-label="Forget this">✕</button></li>`).join('')}</ul>` : '<p class="st-row-help mem-empty">Nothing yet. For example: “I use pnpm, not npm”, “Prefer dark themes”, “Write commit messages in English”.</p>'}
@@ -5844,6 +6041,7 @@ async function drawModelLimit() {
 async function drawKeysPanel() {
   const box = $('#stKeys'); if (!box) return;
   const keys = await fetch('/api/keys').then((r) => r.json()).catch(() => []);
+  ST.keys = { n: keys.length, active: keys.find((k) => k.active)?.label || '' }; stRefresh();
   const U = uiOf(ST.draft);
   const addForm = (hero) => `<div class="kx-add ${hero ? 'hero' : ''}" ${hero ? '' : 'hidden'}>
       ${hero ? '<div class="kx-hero"><div class="kx-hero-ico">🔑</div><div><h4>Connect OpenRouter to start</h4><p>Models, prices, deciders and media all run through OpenRouter.</p></div></div>' : ''}
