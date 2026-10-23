@@ -2695,3 +2695,10 @@ body.link-mod a[data-cl] { cursor: pointer; }
 /* The desktop app run from the QuorX folder (npm run desktop): DEV, so it is never mixed up with the installed one */
 body.dev-build::before { content: ''; position: fixed; left: 0; right: 0; top: 0; height: 3px; z-index: 3000; pointer-events: none; background: linear-gradient(90deg, var(--warn), color-mix(in srgb, var(--warn) 55%, transparent)); }
 .dev-badge { flex: none; display: inline-grid; place-items: center; height: 18px; padding: 0 6px; margin-left: 2px; border-radius: 5px; background: var(--warn); color: #1a1205; font: 800 10px/1 var(--mono); letter-spacing: .08em; cursor: default; }
+
+/* Home: the start box holds a draft chat's own message box (every option a chat has), under the project chip. */
+.ld-sbox.has-draft { padding: 8px 8px 8px; gap: 8px; }
+.ld-sbox.has-draft > .ld-sb-row { padding: 0 4px; }
+.chatpane.home-draft { display: block; min-height: 0 !important; height: auto !important; border: 0; background: transparent; }
+.chatpane.home-draft > .chat-head, .chatpane.home-draft > .msgs { display: none !important; }
+.chatpane.home-draft .composer { margin: 0; padding: 0; position: static; }

@@ -1132,6 +1132,21 @@ async function showChat(id, pane = G.focus) {
   G.view = { id: null, src: false, files: false }; G.traceRun = null;
   withTransition(() => { renderPanes(); savePrefs(); renderSidebar(); });
 }
+// The home page's draft chat: one at a time, kept while you stay on Home (its options, chips and attachments too),
+// moved to the project you pick. It is not saved and not in the sidebar until its first message.
+function homeDraft(projectId) {
+  if (!G.homeDraft || G.homeDraft.agent.messages.length) G.homeDraft = blankChat(projectId);
+  G.homeDraft.projectId = projectId;
+  return G.homeDraft;
+}
+// Its first message sent: the draft is a chat like any other, open in the main pane.
+function promoteDraft(c) {
+  G.homeDraft = null; G.landingDraft = ''; G.landingProject = c.projectId;
+  G.open.set(c.id, c);
+  G.panes = [c.id]; G.focus = 0;
+  G.view = { id: null, src: false, files: false }; G.traceRun = null;
+  withTransition(() => { renderPanes(); savePrefs(); renderSidebar(); });
+}
 async function newChat(projectId = focused()?.projectId || 'scratch', pane = G.focus) {
   const c = blankChat(projectId);
   G.open.set(c.id, c);
@@ -1517,15 +1532,14 @@ function renderLanding(box) {
     }).join('')}</div>
     <p class="ld-tips">Tips: type <kbd>@</kbd> to add files or other chats as context, <kbd>/</kbd> for commands, and ⚙ for settings.</p>
     <div class="ld-dock">
-    <div class="ld-sbox" id="ldStart">
-      <textarea class="ld-sb-input" id="ldStartText" rows="2" placeholder="What are we building? Describe it, or ask about your code…" aria-label="Your first message"></textarea>
+    <div class="ld-sbox has-draft" id="ldStart">
       <div class="ld-sb-row">
         <button type="button" class="ld-chip" id="ldChip" aria-haspopup="menu" aria-expanded="false" title="Where this chat runs: a project, any folder, or a new project from a template"></button>
         <span class="ld-sb-path blurable" id="ldChipPath"></span>
         <span class="ld-sb-sp"></span>
         <span class="ld-sb-hint">Enter to start · Shift+Enter for a new line</span>
-        <button type="button" class="ld-sb-send" id="ldStartGo" aria-label="Start the chat" title="Start the chat (Enter)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
       </div>
+      <div class="ld-draft" id="ldDraft"></div>
       <div class="ld-menu" id="ldMenu" role="menu" hidden></div>
     </div>
     <p class="ld-folder-err" role="alert" hidden></p>
@@ -1606,7 +1620,7 @@ function loadGhMeta(scope) {
 // the other ways in: a recent project, any folder on this PC, or a new project from a template. Picking one only
 // changes the chip, so what you typed stays.
 function wireStartBox(box, first, projects) {
-  const ta = $('#ldStartText', box), chip = $('#ldChip', box), menu = $('#ldMenu', box), err = $('.ld-folder-err', box);
+  const chip = $('#ldChip', box), menu = $('#ldMenu', box), err = $('.ld-folder-err', box);
   const proj = () => G.projects.find((p) => p.id === G.landingProject) || G.projects.find((p) => p.id === first) || G.projects[0];
   if (!G.projects.some((p) => p.id === G.landingProject)) G.landingProject = first;
   const drawChip = () => {
@@ -1616,24 +1630,28 @@ function wireStartBox(box, first, projects) {
     $('#ldChipPath', box).textContent = dir; $('#ldChipPath', box).title = dir;
   };
   drawChip();
+  // A draft chat in the picked project, with the message box every chat has: model, This chat, Follow, Chrome,
+  // attach, mic, Enhance, @ and /. Sending turns it into the chat (promoteDraft, in send).
+  const d = homeDraft(proj()?.id || first);
+  const pane = document.createElement('section');
+  pane.className = 'chatpane home-draft';
+  pane.innerHTML = paneHTML(d);
+  $('#ldDraft', box).appendChild(pane);
+  d.el = { root: pane };
+  wirePane(d, pane, 0);
+  renderComposerBar(d); renderAllowed(d); renderAttachments(d); syncRunState(d);
+  const ta = $('.input', pane);
+  ta.id = 'ldStartText';
+  ta.placeholder = 'What are we building? Describe it, or ask about your code…  @ to add files or chats · / for commands';
+  ta.setAttribute('aria-label', 'Your first message');
   ta.value = G.landingDraft || '';
-  const fit = () => { ta.style.height = 'auto'; ta.style.height = `${Math.min(ta.scrollHeight, Math.round(innerHeight * 0.3))}px`; };
+  const fit = () => fitInput(ta);
   fit();
-  ta.oninput = () => { G.landingDraft = ta.value; fit(); };
-  const go = async () => {
-    const p = proj(); if (!p) return;
-    const text = ta.value.trim();
-    G.landingProject = p.id; G.landingDraft = '';
-    const c = await newChat(p.id);
-    if (c && text) send(c, text);
-  };
-  ta.onkeydown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); go(); }
-    if (e.key === 'ArrowDown' && e.altKey) { e.preventDefault(); openMenu(); }
-  };
-  $('#ldStartGo', box).onclick = go;
+  const typed = ta.oninput;
+  ta.oninput = () => { typed?.(); G.landingDraft = ta.value; };
+  ta.addEventListener('keydown', (e) => { if (e.key === 'ArrowDown' && e.altKey) { e.preventDefault(); openMenu(); } });
   // The chip's menu: recent projects (with what each has spent), then a folder, then templates.
-  const pick = (id) => { G.landingProject = id; drawChip(); closeMenu(); ta.focus(); };
+  const pick = (id) => { G.landingProject = id; d.projectId = id; drawChip(); closeMenu(); ta.focus(); };
   const items = () => [...menu.querySelectorAll('.ld-mi:not([hidden])')];
   const closeMenu = () => { menu.hidden = true; chip.setAttribute('aria-expanded', 'false'); document.removeEventListener('pointerdown', outside, true); };
   const outside = (e) => { if (!menu.contains(e.target) && e.target !== chip && !chip.contains(e.target)) closeMenu(); };
@@ -1665,7 +1683,7 @@ function wireStartBox(box, first, projects) {
   // After a folder or template pick the list refresh may have redrawn the home screen: bring the start box that is on
   // screen now up to date (its chip shows the picked project, its menu is shut) and put the cursor back in it.
   const liveStart = () => {
-    if (box.isConnected && $('#ldChip', box) === chip) { drawChip(); closeMenu(); ta.value = G.landingDraft || ''; fit(); }
+    if (box.isConnected && $('#ldChip', box) === chip) { d.projectId = proj()?.id || d.projectId; drawChip(); closeMenu(); ta.value = G.landingDraft || ''; fit(); }
     else { const land = $('.landing'); if (land) renderLanding(land.parentElement); }
     const t = $('#ldStartText'); if (t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); }
   };
@@ -2210,19 +2228,9 @@ function followScroll(box, { get, set, near = 60, onChange }) {
   box.addEventListener('load', (e) => { if (e.target.tagName === 'IMG' && get()) box.scrollTop = box.scrollHeight; }, true);
 }
 // ---------- the chat panes ----------
-function renderPanes() {
-  const box = $('#chats');
-  G.panes = G.panes.filter((id) => G.open.has(id));
-  syncHome();
-  box.innerHTML = '';
-  if (!G.panes.length) { renderLanding(box); syncLayout(); renderPane(); return; }
-  box.classList.toggle('split', G.panes.length > 1);
-  G.panes.forEach((id, i) => {
-    const c = G.open.get(id);
-    const root = document.createElement('section');
-    root.className = `chatpane ${i === G.focus ? 'focus' : ''}`;
-    root.dataset.pane = i;
-    root.innerHTML = `
+// A chat's pane: header, messages and message box. The home page's start box uses the same one for a draft chat.
+function paneHTML(c) {
+  return `
       <header class="chat-head chat-header dir-a-head" style="--h:${hue(c.title)}">
         <div class="dir-a-toprow">
           <div class="dir-a-crumbs">
@@ -2284,6 +2292,20 @@ function renderPanes() {
         </div>
         </div>
       </form>`;
+}
+function renderPanes() {
+  const box = $('#chats');
+  G.panes = G.panes.filter((id) => G.open.has(id));
+  syncHome();
+  box.innerHTML = '';
+  if (!G.panes.length) { renderLanding(box); syncLayout(); renderPane(); return; }
+  box.classList.toggle('split', G.panes.length > 1);
+  G.panes.forEach((id, i) => {
+    const c = G.open.get(id);
+    const root = document.createElement('section');
+    root.className = `chatpane ${i === G.focus ? 'focus' : ''}`;
+    root.dataset.pane = i;
+    root.innerHTML = paneHTML(c);
     box.appendChild(root);
     c.el = { root };
     wirePane(c, root, i);
@@ -4082,6 +4104,7 @@ async function send(c, text) {
   c.ctx = []; renderAttachments(c);
   if ((!c.title || c.title === 'New chat') && text) { c.title = text.replace(/\s+/g, ' ').slice(0, 60); if (c.el) { $('.ch-name', c.el.root).value = c.title; } }
   runChat(c, text, ctx, imgs, { docs, comments });
+  if (c === G.homeDraft) promoteDraft(c);
 }
 async function runChat(c, text, ctx, imgs, { resumeOf, docs = [], more = 0, model = '', comments = [] } = {}) {
   const cmts = comments.map(({ selector, tag, text: t, section, rect, url, note, crop }) => ({ selector, tag, text: t, section, rect, url, note, crop: !!crop }));
