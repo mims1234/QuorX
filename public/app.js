@@ -4,6 +4,7 @@
 
 import { startTour, maybeStartTour } from './tour.js';
 import { backupCard, drawBackup } from './backup.js';
+import { storageCard, drawStorage, setRulesText } from './storage.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -4938,7 +4939,7 @@ const SETTINGS_NAV = [
   ['OpenRouter', [['keys', '🔑', 'API keys'], ['models', '🧠', 'Models & catalogue']]],
   ['Agent', [['newchats', '✨', 'New chats'], ['loop', '🔁', 'Agent loop'], ['deciders', '⚖️', 'Deciders'], ['tools', '🧰', 'Tools & media'], ['budget', '💵', 'Budget & approvals'], ['safety', '🛡', 'Safety & commands'], ['skills', '🧩', 'Skills'], ['memory', '📌', 'Memory']]],
   ['Workspace', [['projects', '📁', 'Projects'], ['code', '💻', 'Code & servers'], ['docs', '📎', 'Documents']]],
-  ['Data', [['usage', '📊', 'Usage & costs'], ['data', '🗄', 'Data & storage'], ['shortcuts', '⌨️', 'Shortcuts'], ['about', 'ℹ️', 'About']]],
+  ['Data', [['usage', '📊', 'Usage & costs'], ['data', '🗄', 'Data & storage'], ['storage', '🧹', 'Storage'], ['shortcuts', '⌨️', 'Shortcuts'], ['about', 'ℹ️', 'About']]],
 ];
 const ST = { cat: 'appearance', draft: null, dirty: false, reveal: new Set(), revealAccount: false };
 const uiOf = (S) => ({ ...UI_DEFAULTS, ...(S.ui || {}) });
@@ -4959,6 +4960,8 @@ const YOLO_ROWS = [
 ];
 const stRow = (label, help, ctrl, extra = '') => `<div class="st-row" ${extra}><div class="st-row-info"><div class="st-row-label-wrap"><span class="st-row-label">${label}</span></div>${help ? `<div class="st-row-help">${help}</div>` : ''}</div><div class="st-row-ctrl">${ctrl}</div></div>`;
 const stCard = (title, sub, body, cls = '') => `<section class="st-card ${cls}"><div class="st-card-head"><div class="st-card-title">${title}</div>${sub ? `<div class="st-card-subtitle">${sub}</div>` : ''}</div>${body}</section>`;
+// An on/off that is a rounded-square ✓ box (Storage's rules use it).
+const sqCheck = (bind, on, label = '') => `<label class="sq-check"><input type="checkbox" data-bind="${bind}" ${on ? 'checked' : ''}>${label ? `<span>${label}</span>` : ''}</label>`;
 const stSwitch = (bind, on) => `<label class="st-switch"><input type="checkbox" role="switch" data-bind="${bind}" ${on ? 'checked' : ''}><span class="st-switch-track"><span class="st-switch-thumb"></span></span></label>`;
 const stSeg = (bind, opts, v) => `<div class="st-segmented" role="radiogroup" data-bind="${bind}">${opts.map(([k, l]) => `<button type="button" class="st-seg-btn ${String(k) === String(v) ? 'active' : ''}" role="radio" aria-checked="${String(k) === String(v)}" data-v="${esc(k)}">${l}</button>`).join('')}</div>`;
 const stStep = (bind, v, min, max, step = 1, unit = '') => `<div class="st-stepper" data-min="${min}" data-max="${max}" data-step="${step}"><button type="button" class="st-step-btn" data-d="-1" aria-label="Less">−</button><input class="st-step-val" type="number" data-bind="${bind}" value="${v}" min="${min}" max="${max}" step="${step}">${unit ? `<span class="st-step-unit">${unit}</span>` : ''}<button type="button" class="st-step-btn" data-d="1" aria-label="More">＋</button></div>`;
@@ -5023,7 +5026,7 @@ function wireSafetySimple(mark) {
 }
 
 function settingsPanels(S) {
-  const U = uiOf(S), d = G.cfg.defaults;
+  const U = uiOf(S), d = G.cfg.defaults, R = S.storage || {};
   const keysBadge = G.cfg.hasKey ? '' : 'bad-dot';
   return {
     appearance: ['Appearance', 'How the harness looks on this computer.', [
@@ -5179,7 +5182,7 @@ function settingsPanels(S) {
         ].join('') + '</div></details>',
       ]];
     })(),
-    skills: ['Skills', 'Playbooks the agent loads when a task fits. Agents can also save their own into a project.', ['<div id="skillList" class="st-skill-list"></div>']],
+    skills: ['Skills', 'Playbooks the agent loads when a task fits. Write your own here, for all your projects or just one; agents can also save their own into a project.', ['<div id="skillPanel"></div><div id="skillList" class="st-skill-list"></div>']],
     memory: ['Memory', 'A few facts and preferences about you that every chat gets, in every project.', ['<div id="memPanel"></div>']],
     projects: ['Projects', 'A project is a folder that many chats share. Changes here apply at once.', [`<div id="stProjects"></div>`]],
     docs: ['Documents', 'Files you attach with 📎. They are kept in the project folder\'s .quorx/uploads, which git ignores.', [
@@ -5194,9 +5197,7 @@ function settingsPanels(S) {
     ]],
     code: ['Code & servers', 'What the agent may run on this computer.', [
       stCard('Commands', 'The agent runs command lines in its shell. Each one is checked first: read-only commands run, others ask you (or the deciders in ⚡ YOLO), and system commands or deletes outside the project are blocked.', stRow('Rules, shell, Stop and Undo for commands', '', '<button type="button" class="st-btn secondary sm" data-act="openSafety">🛡 Safety & commands</button>')),
-      stCard('Agent folder', 'The agent keeps research scripts, downloads, undo history and deleted files in .quorx/ inside each project folder. Git ignores it, so it never ends up in your repo.', stRow('Ask me when it grows past', 'The chat shows a notice with what to clear, and the agent asks before adding more.', stStep('agentSpaceMB', S.agentSpaceMB ?? 500, 50, 50000, 50, 'MB'))
-        + stRow('Undo for the newest', 'Replies per project that keep ↶ Undo. Older undo copies are removed when a new reply starts.', stStep('undoKeep', S.undoKeep ?? 10, 1, 100, 1, 'replies'))
-        + stRow('Undo kept for at most', 'Even among the newest replies, Undo goes after this long. For history that lasts, use git.', stStep('undoDays', S.undoDays ?? 7, 1, 90, 1, 'days'))),
+      stCard('Agent folder', 'The agent keeps research scripts, downloads, undo history and deleted files in .quorx/ inside each project folder. Git ignores it, so it never ends up in your repo.', stRow('Its size, undo history and clearing', '', '<button type="button" class="st-btn secondary sm" data-act="openStorage">🧹 Storage</button>')),
       stCard('Servers and browser', 'Servers are saved in .quorx/launch.json per project; run and stop them from 🖥 in the chat header, and watch them in the terminal.', stRow('Dev server ports', 'Each server gets a free port here unless it has a fixed one.', '<code>5300–5999</code>')
         + stRow('Headless browser', 'Used by the agent to check its own pages.', `<code class="blurable">${esc(G.cfg.browser || 'not found')}</code>`)
         + stRow('Secrets', 'Agent processes run without your API keys, tokens or passwords in their environment, and the file tools cannot read .env or data/keys.json.', '<span class="st-key-source-badge">protected</span>')),
@@ -5212,6 +5213,19 @@ function settingsPanels(S) {
     usage: ['Usage & costs', 'What chats and projects cost.', [
       stCard('In chats', '', stRow('Show the cost badge in chat headers', 'The amber cost next to the model; click it for the per-chat usage breakdown (also /usage).', stSwitch('ui.usageBtn', U.usageBtn))),
       stCard('Everything', '', stRow('Costs per project and chat', '', '<button type="button" class="st-btn secondary sm" data-act="openCosts">💲 Open costs</button>')),
+    ]],
+    storage: ['Storage', 'How much room QuorX takes on this computer, and clearing what it doesn\'t need. Caches are deleted; your own things go to the Windows Recycle Bin.', [
+      storageCard(),
+      stCard('Automatic cleanup', 'Saved with Save, and used whether or not this page is open.',
+        stRow('Clean up automatically', 'When QuorX starts, then once a day.', sqCheck('storage.autoClean', R.autoClean !== false, 'On'))
+        + stRow('Empty QuorX\'s trash after', 'Deleted chats and skills, and each project\'s agent trash, go to the Windows Recycle Bin this long after they were deleted.', stStep('storage.trashDays', R.trashDays ?? 30, 1, 3650, 1, 'days'))
+        + stRow('Start a log afresh past', 'Each log; the older part is kept once, as <code>name.1.jsonl</code>.', stStep('storage.logMaxMB', R.logMaxMB ?? 50, 1, 10000, 10, 'MB'))
+        + stRow('Check screenshots kept', 'The newest ones; older ones are removed.', stStep('storage.shotKeep', R.shotKeep ?? 300, 0, 100000, 50, 'pictures'))
+        + (DESK ? stRow('Remove installed update downloads', 'An installer goes once its version (or a newer one) is running.', sqCheck('storage.updateCleanup', R.updateCleanup !== false, 'On'))
+          + stRow('Clear the browser agent\'s cache each time QuorX starts', 'Its sign-ins stay.', sqCheck('storage.agentCacheOnStart', !!R.agentCacheOnStart, 'On')) : '')),
+      stCard('Agent folder', 'The agent keeps research scripts, downloads, undo history and deleted files in .quorx/ inside each project folder. Git ignores it, so it never ends up in your repo.', stRow('Ask me when it grows past', 'The chat shows a notice with what to clear, and the agent asks before adding more.', stStep('agentSpaceMB', S.agentSpaceMB ?? 500, 50, 50000, 50, 'MB'))
+        + stRow('Undo for the newest', 'Replies per project that keep ↶ Undo. Older undo copies are removed when a new reply starts.', stStep('undoKeep', S.undoKeep ?? 10, 1, 100, 1, 'replies'))
+        + stRow('Undo kept for at most', 'Even among the newest replies, Undo goes after this long. For history that lasts, use git.', stStep('undoDays', S.undoDays ?? 7, 1, 90, 1, 'days'))),
     ]],
     data: ['Data & storage', 'Where things are kept.', [
       stCard('Chats', 'Saved on this computer in data/chats; deleted chats move to data/trash.', stRow('Export all chats', 'One JSON file with every chat.', '<button type="button" class="st-btn secondary sm" data-act="exportChats">⬇ Export</button>')),
@@ -5229,6 +5243,7 @@ function openSettings(cat) {
   ST.draft = structuredClone(G.settings);
   ST.draft.theme = G.theme ?? null; ST.themeAtOpen = G.theme ?? null;
   ST.draft.newChatTools ??= { ...DEFAULT_CHAT_TOOLS };
+  ST.draft.storage = structuredClone(G.storageRules || {});
   ST.dirty = false; ST.reveal = new Set(); ST.revealAccount = false; ST.revealLimit = false;
   if (cat) ST.cat = cat;
   $('#stSearch').value = '';
@@ -5274,6 +5289,7 @@ function wireSettings() {
     if (act === 'pickFallback') { const id = await pickModel('chat', S.fallbackModel || '', { context: 'Fallback when a chat’s model fails' }); if (id) { S.fallbackModel = id; mark(); drawSettings(); } }
     if (act === 'clearFallback') { S.fallbackModel = ''; mark(); drawSettings(); }
     if (act === 'openSafety') { ST.cat = 'safety'; drawSettings(); }
+    if (act === 'openStorage') { ST.cat = 'storage'; drawSettings(); }
     if (act === 'pickReviewer') { const id = await pickModel('chat', S.reviewModel || '', { context: 'Reviewer: tests what was built' }); if (id) { S.reviewModel = id; mark(); drawSettings(); } }
     if (act === 'clearReviewer') { S.reviewModel = ''; mark(); drawSettings(); }
     if (act === 'pickHelper') { const id = await pickModel('chat', S.helperModel || '', { context: 'Helper: read-only jobs' }); if (id) { S.helperModel = id; mark(); drawSettings(); } }
@@ -5302,12 +5318,7 @@ function wireSettings() {
   drawCheckList(S, mark);
   $('#catEditors').innerHTML = CATS.map((cat) => catEditor(cat, S.tools)).join('');
   for (const el of document.querySelectorAll('#catEditors .cat')) { wireCatEditor(el); el.addEventListener('change', mark); el.addEventListener('click', (ev) => { if (ev.target.closest('button')) mark(); }); }
-  const off = new Set(S.skillsOff || []);
-  fetch(`/api/skills?project=${focused()?.projectId || 'scratch'}`).then((r) => r.json()).then((list) => {
-    G.skillCount = list.length;
-    $('#skillList').innerHTML = list.length ? list.map((k) => `<div class="st-skill-item"><div class="st-skill-info"><div class="st-skill-top"><span class="st-skill-name">${esc(k.name)}</span><span class="st-source-badge ${k.source === 'built-in' ? 'builtin' : k.source === 'project' ? 'project' : 'saved'}">${esc(k.source)}</span></div><div class="st-skill-desc">${esc(k.description)}</div></div>${stSwitch('', !off.has(k.name)).replace('data-bind=""', `data-skill="${esc(k.name)}"`)}</div>`).join('') : '<p class="st-row-help">No skills yet.</p>';
-    for (const inp of document.querySelectorAll('#skillList input[data-skill]')) inp.onchange = mark;
-  }).catch(() => {});
+  drawSkillsPanel(mark);
   drawProjectsPanel();
   drawPermsPanel();
   drawKeysPanel();
@@ -5318,6 +5329,8 @@ function wireSettings() {
   drawEmbedPick();
   drawDesktopSettings();
   drawBackup({ postJ, esc, uiConfirm, store: STORE });
+  setRulesText(G.storageRules);
+  if (ST.cat === 'storage') drawStorage(storageHelpers());
   showVersion();
 }
 // Search looks through every category; matching rows show, everything else hides.
@@ -5404,6 +5417,7 @@ function saveSettings() {
     if ($('.secs', el)) t.seconds = Math.max(1, Math.min(15, Number($('.secs', el).value) || 5));
   }
   G.theme = S.theme ?? null; delete S.theme;
+  saveStorageRules(S.storage); delete S.storage;
   // News downloads are kept by QuorX's server, not with these settings: send a change there.
   const newsRemote = S.newsRemote; delete S.newsRemote;
   if (typeof newsRemote === 'boolean' && newsRemote !== (G.cfg.newsRemote !== false)) {
@@ -5415,6 +5429,17 @@ function saveSettings() {
   renderToolbars(); renderPanes(); renderSpend();
   $('#settings').close();
 }
+// The Storage page's rules live with the harness (data/storage.json), so they work while no page is open; the desktop
+// app keeps its own two in its settings, so they apply before the harness starts.
+function saveStorageRules(rules) {
+  if (!rules || JSON.stringify(rules) === JSON.stringify(G.storageRules || {})) return;
+  postJ('/api/storage/rules', rules).then((r) => { if (r && !r.error) G.storageRules = r; });
+  G.storageRules = { ...(G.storageRules || {}), ...rules };
+  if (DESK) window.ohDesktop.storage?.('rules', rules).catch(() => {});
+}
+const storageHelpers = () => ({ getJ, postJ, esc, ask, uiAlert, keep: () => Number(G.settings?.undoKeep) || 10,
+  desk: DESK && window.ohDesktop.storage ? (op, arg) => window.ohDesktop.storage(op, arg) : null,
+  openCat: (id) => { ST.cat = id; drawSettings(); } });
 // Cancel (or Esc) drops the draft and undoes the theme preview.
 function cancelSettings() { G.theme = ST.themeAtOpen; applyTheme(); if ($('#settings').open) $('#settings').close(); }
 
@@ -5671,6 +5696,74 @@ function wireSignIn() {
 }
 // ⚙ Memory: a few facts and preferences about you that every chat gets. Saved at once (it lives on the server, so
 // scheduled chats and other devices get it too); the server checks the size and refuses anything like a secret.
+// ⚙ Settings → Skills: write, import, edit and trash your own skills (data/skills, every project) and this project's
+// (.quorx/skills). Switching a skill on or off is a draft change like the rest of Settings; writing one saves at once.
+const SKILL_SOURCE = { 'built-in': ['builtin', 'built-in'], mine: ['mine', 'all projects'], project: ['project', 'this project'] };
+async function drawSkillsPanel(mark, msg = '') {
+  const box = $('#skillPanel'), listEl = $('#skillList');
+  if (!box || !listEl) return;
+  const pid = focused()?.projectId || 'scratch', pname = G.projects.find((p) => p.id === pid)?.name || 'this project';
+  const shown = document.querySelectorAll('#skillList input[data-skill]');
+  const off = new Set(shown.length ? [...shown].filter((x) => !x.checked).map((x) => x.dataset.skill) : ST.draft?.skillsOff || []);
+  box.innerHTML = `<div class="sk-bar"><button type="button" class="st-btn primary sm" data-sk-new>＋ New skill</button><label class="st-btn secondary sm sk-import" title="A SKILL.md file: front matter with name and description, then the instructions">Import SKILL.md<input type="file" accept=".md,text/markdown,text/plain" data-sk-import hidden></label><p class="mem-msg ${msg.startsWith('✓') ? 'ok' : msg ? 'bad' : ''}" role="status">${esc(msg)}</p></div>
+    <div class="sk-editor" hidden>
+      <label class="sk-field"><span>Name</span><input class="st-input mono" data-sk-name maxlength="40" placeholder="release-notes" spellcheck="false"></label>
+      <label class="sk-field"><span>When to use it <small>the agent reads this line to decide whether to load the skill</small></span><input class="st-input" data-sk-desc maxlength="200" placeholder="Writing release notes from the git log"></label>
+      <label class="sk-field"><span>Instructions <small>steps, rules and gotchas, in Markdown</small></span><textarea class="st-input mono sk-body" data-sk-body rows="12" placeholder="1. Read the commits since the last tag&#10;2. Group them by feature, fix and chore&#10;3. …"></textarea></label>
+      <div class="sk-field"><span>For</span><div class="seg" data-sk-where><button type="button" data-v="mine" class="on">All my projects</button><button type="button" data-v="project">Only ${esc(pname)}</button></div></div>
+      <div class="sk-acts"><button type="button" class="st-btn primary sm" data-sk-save>Save skill</button><button type="button" class="st-btn ghost sm" data-sk-cancel>Cancel</button><span class="sk-err" role="alert"></span></div>
+    </div>`;
+  const list = await fetch(`/api/skills?project=${pid}`).then((r) => r.json()).catch(() => []);
+  G.skillCount = list.length;
+  listEl.innerHTML = list.length ? list.map((k) => {
+    const [cls, label] = SKILL_SOURCE[k.source] || ['saved', k.source], own = k.source !== 'built-in';
+    return `<div class="st-skill-item" data-name="${esc(k.name)}" data-where="${esc(k.source)}"><div class="st-skill-info"><div class="st-skill-top"><span class="st-skill-name">${esc(k.name)}</span><span class="st-source-badge ${cls}">${esc(label)}</span></div><div class="st-skill-desc">${esc(k.description)}</div></div>${own ? `<button type="button" class="pp-btn set" data-sk-edit title="Edit this skill" aria-label="Edit ${esc(k.name)}">${ICO.pencil}</button><button type="button" class="pp-btn del" data-sk-del title="Move this skill to data/trash" aria-label="Delete ${esc(k.name)}">${ICO.trash}</button>` : ''}${stSwitch('', !off.has(k.name)).replace('data-bind=""', `data-skill="${esc(k.name)}"`)}</div>`;
+  }).join('') : '<p class="st-row-help">No skills yet.</p>';
+  for (const inp of listEl.querySelectorAll('input[data-skill]')) inp.onchange = mark;
+
+  const ed = $('.sk-editor', box), where = $('[data-sk-where]', box);
+  let was = null;
+  const setWhere = (v) => { for (const b of where.children) b.classList.toggle('on', b.dataset.v === v); };
+  for (const b of where.children) b.onclick = () => setWhere(b.dataset.v);
+  const open = (k = {}, editing = null) => {
+    was = editing;
+    $('[data-sk-name]', box).value = k.name || ''; $('[data-sk-desc]', box).value = k.description || ''; $('[data-sk-body]', box).value = k.instructions || '';
+    setWhere(k.where || 'mine'); $('.sk-err', box).textContent = '';
+    $('[data-sk-save]', box).textContent = editing ? 'Save changes' : 'Save skill';
+    ed.hidden = false; $('[data-sk-name]', box).focus();
+  };
+  $('[data-sk-new]', box).onclick = () => open();
+  $('[data-sk-cancel]', box).onclick = () => { ed.hidden = true; was = null; };
+  $('[data-sk-import]', box).onchange = async (e) => {
+    const f = e.target.files?.[0]; e.target.value = '';
+    if (!f) return;
+    if (f.size > 300000) return drawSkillsPanel(mark, `${f.name} is over 300 KB: a skill is a short playbook.`);
+    const text = await f.text(), m = text.match(/^﻿?---\s*\r?\n([\s\S]*?)\r?\n---\s*\r?\n?([\s\S]*)$/), meta = {};
+    if (m) for (const line of m[1].split(/\r?\n/)) { const kv = line.match(/^(\w+):\s*(.*)$/); if (kv) meta[kv[1]] = kv[2].trim().replace(/^["']|["']$/g, ''); }
+    open({ name: meta.name || f.name.replace(/\.md$/i, '').replace(/^skill$/i, ''), description: meta.description || '', instructions: (m ? m[2] : text).trim() });
+  };
+  $('[data-sk-save]', box).onclick = async () => {
+    const body = { projectId: pid, where: $('button.on', where).dataset.v, name: $('[data-sk-name]', box).value.trim(), description: $('[data-sk-desc]', box).value.trim(), instructions: $('[data-sk-body]', box).value, was };
+    if (!body.name) return $('[data-sk-name]', box).focus();
+    const r = await postJ('/api/skills', body);
+    if (r?.error) { $('.sk-err', box).textContent = `Not saved: ${r.error}.`; return; }
+    drawSkillsPanel(mark, `✓ Saved ${r.name}${body.where === 'mine' ? ' for all your projects' : ` for ${pname}`}`);
+  };
+  for (const row of listEl.querySelectorAll('.st-skill-item[data-where="mine"], .st-skill-item[data-where="project"]')) {
+    const name = row.dataset.name, w = row.dataset.where;
+    $('[data-sk-edit]', row).onclick = async () => {
+      const k = await fetch(`/api/skills/one?project=${pid}&where=${w}&name=${encodeURIComponent(name)}`).then((r) => r.json()).catch((e) => ({ error: e.message }));
+      if (k.error) return drawSkillsPanel(mark, `Could not open ${name}: ${k.error}.`);
+      open(k, { name, where: w });
+      if (k.extras?.length) $('.sk-err', box).textContent = `Its other files (${k.extras.join(', ')}) stay as they are.`;
+    };
+    $('[data-sk-del]', row).onclick = async () => {
+      if (!await uiConfirm(`Delete the skill "${name}"?\nIt moves to data/trash/skills (recoverable).`)) return;
+      const r = await postJ('/api/skills', { projectId: pid, name, where: w }, 'DELETE');
+      drawSkillsPanel(mark, r?.error ? `Not deleted: ${r.error}.` : `✓ Moved ${name} to the trash`);
+    };
+  }
+}
 async function drawMemoryPanel(msg = '') {
   const el = $('#memPanel');
   if (!el) return;
@@ -6006,6 +6099,7 @@ async function boot() {
   // Opened without the app link, every other /api call answers 401 and the wall above says what to do: stop here.
   if ((await fetch('/api/chats')).status === 401) return;
   loadScores(); loadCards();
+  getJ('/api/storage/rules').then((r) => { if (r && !r.error) G.storageRules = r; });
   const d = G.cfg.defaults;
   const saved = load();
   G.settings = { voters: d.voters, gate: d.gate, maxSteps: d.maxSteps, approval: d.approval, budget: d.budget, model: d.chatModel || d.setups.C.model, reasoning: 'off', ...(saved?.settings || {}) };

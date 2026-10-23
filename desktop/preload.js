@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('ohDesktop', {
   update: (op, arg) => call('update', op, arg),
   info: () => call('info'),
   restartHarness: () => call('restartHarness'),
+  storage: (op, arg) => call('storage', op, arg),
   openHome: () => call('openHome'),
   focusWindow: () => call('focusWindow'),
   notify: (n) => call('notify', n),

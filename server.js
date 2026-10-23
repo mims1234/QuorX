@@ -43,7 +43,7 @@ import { extUpgrade, extKey, extInfo, onExtRequest, defaultBrowser, extPairing, 
 import { openLink, linkReply, desktopReady, desktopCall } from './server/desktop.js';
 import { saveUpload, processDoc, listDocs, removeDoc, DOC_DEFAULTS, officeText } from './server/docs.js';
 import { embeddingModels } from './server/openrouter.js';
-import { listSkills, listTemplates, saveSkill, routineSkill } from './server/skills.js';
+import { listSkills, listTemplates, saveSkill, getSkill, deleteSkill, skillId, routineSkill } from './server/skills.js';
 import { hostedHtml, browserPath, openTab } from './server/browser.js';
 import { zipFolder } from './server/zip.js';
 import { exportBackup, findBackups, inspectBackup, importBackup } from './server/backup.js';
@@ -51,6 +51,8 @@ import { artifactContent, servedArtifact, ARTIFACT_HEADERS, folderStamp } from '
 import { gate, appGate, appLink, hostAllowed, crossSiteApi, isLoopback } from './server/access.js';
 import { gitHubRemote, gitHubInfo } from './server/github.js';
 import { serveBlob, startSweeping } from './server/blobs.js';
+import { measureStorage, clearStorage, recentClears, startStorageRules } from './server/storage.js';
+import { storageRules, saveStorageRules, rotateLog } from './server/storagerules.js';
 import { listDesignSystems, readDesignSystem, projectDesign, applyDesignSystem, saveProjectDesign } from './server/design.js';
 import { newsRoute } from './server/news.js';
 import { startNewsSync, remoteState as newsRemoteState } from './server/newsremote.js';
@@ -73,6 +75,7 @@ function codeChanged() {
 if (!currentKey()) console.warn('!! No OpenRouter key yet: add one in the page (⚙ Settings → API keys) or set OPENROUTER_API_KEY in .env');
 startSampling();
 startSweeping();
+startStorageRules();
 startNewsSync(); // News from the QuorX website: a check soon after start, then a few times a day (server/newsremote.js)
 setTimeout(lockDown, 2000).unref?.(); // keys and data: this account only (server/keys.js)
 
@@ -331,10 +334,24 @@ const server = http.createServer(async (req, res) => {
       try { return json(res, 200, runFix(JSON.parse(await readBody(req, 1e4) || '{}').id)); } catch (e) { return json(res, 400, { error: e.message }); }
     }
     if (url.pathname === '/api/starters' && req.method === 'GET') return json(res, 200, listTemplates().map(({ name, description }) => ({ name, description })));
-    if (url.pathname === '/api/skills' && req.method === 'GET') {
-      const pid = url.searchParams.get('project');
-      const dir = validId(pid) ? (() => { try { return workspaceDir(pid); } catch { return null; } })() : null;
-      return json(res, 200, listSkills(dir).map(({ name, description, source }) => ({ name, description, source })));
+    // Your own skills ('mine', every project) and a project's ('project') can be written, edited and trashed here.
+    if (url.pathname.startsWith('/api/skills')) {
+      const dirOf = (pid) => (validId(pid) ? (() => { try { return workspaceDir(pid); } catch { return null; } })() : null);
+      if (url.pathname === '/api/skills' && req.method === 'GET') return json(res, 200, listSkills(dirOf(url.searchParams.get('project'))).map(({ name, description, source }) => ({ name, description, source })));
+      if (url.pathname === '/api/skills/one' && req.method === 'GET') {
+        const q = url.searchParams, k = getSkill(dirOf(q.get('project')), q.get('name'), q.get('where'));
+        return k ? json(res, 200, k) : json(res, 404, { error: 'no such skill' });
+      }
+      if (url.pathname === '/api/skills' && (req.method === 'POST' || req.method === 'DELETE')) {
+        const b = JSON.parse(await readBody(req, 3e5) || '{}'), dir = dirOf(b.projectId);
+        try {
+          if (req.method === 'DELETE') { deleteSkill(dir, String(b.name || ''), b.where); return json(res, 200, { ok: true }); }
+          const where = b.where === 'mine' ? 'mine' : 'project';
+          const was = b.was && typeof b.was === 'object' ? { name: String(b.was.name || ''), where: b.was.where === 'mine' ? 'mine' : 'project' } : null;
+          if (!was && getSkill(dir, skillId(b.name), where)) throw new Error('there is already a skill with that name there: edit it instead');
+          return json(res, 200, { ok: true, name: saveSkill(dir, b, { where, by: 'written by you', was }) });
+        } catch (e) { return json(res, 200, { error: e.message }); }
+      }
     }
     // Replies that can still be undone (the newest ones; see pruneCheckpoints).
     if (url.pathname === '/api/checkpoints' && req.method === 'GET') {
@@ -697,6 +714,20 @@ const server = http.createServer(async (req, res) => {
       try { const root = workspaceDir(b.projectId); return json(res, 200, { cleared: clearAgentSpace(root, b.what, Number(b.keep) || 10), ...agentSpace(root) }); } catch (e) { return json(res, 200, { error: e.message }); }
     }
 
+    // ---- ⚙ Settings → Storage (server/storage.js): sizes, clearing, and the automatic cleanup rules ----
+    if (url.pathname === '/api/storage' && req.method === 'GET') return json(res, 200, await measureStorage({ keep: Number(url.searchParams.get('keep')) || 10 }));
+    if (url.pathname === '/api/storage/clear' && req.method === 'POST') {
+      const b = JSON.parse(await readBody(req, 1e5) || '{}');
+      if (!Array.isArray(b.items) || !b.items.length) return json(res, 400, { error: 'nothing to clear' });
+      const r = await clearStorage(b.items.slice(0, 500), { keep: Math.max(1, Number(b.keep) || 10) });
+      return json(res, r.busy ? 409 : 200, r);
+    }
+    if (url.pathname === '/api/storage/rules') {
+      if (req.method === 'POST') return json(res, 200, saveStorageRules(JSON.parse(await readBody(req, 1e4) || '{}')));
+      return json(res, 200, storageRules());
+    }
+    if (url.pathname === '/api/storage/log' && req.method === 'GET') return json(res, 200, recentClears());
+
     // ---- "Browse…": the computer's own folder dialog (only for someone sitting at this computer) ----
     // A template starts a NEW project: a fresh folder <parent>/<name>, the template copied in, then the project.
     // A folder that already has files is refused, so a template never lands in an existing codebase.
@@ -900,7 +931,7 @@ onExtRequest({
     const project = chat && listProjects().find((p) => p.id === chat.projectId);
     if (!project?.path) throw new Error('pick a chat whose project has a folder');
     const k = routineSkill(name, steps);
-    saveSkill(project.path, { name: k.name, description: k.description, instructions: k.instructions });
+    saveSkill(project.path, { name: k.name, description: k.description, instructions: k.instructions }, { by: 'recorded in Chrome' });
     return { saved: true, name: k.name, steps: k.steps, project: project.name };
   },
   takeBack: ({ tab }) => takeBackSid(`chrome-${tab}`),
@@ -943,6 +974,7 @@ function shutDown(restart) {
   listener.close(); server.close(); pageServer.close();
   if (restart) {
     const logDir = path.join(HOME, 'logs'); fs.mkdirSync(logDir, { recursive: true });
+    rotateLog(path.join(logDir, 'harness.log'));
     const out = fs.openSync(path.join(logDir, 'harness.log'), 'a');
     spawn(process.execPath, process.argv.slice(1), { cwd: process.cwd(), env: { ...process.env, AGENT_PORT: String(runtime.port), OH_PORT_WAIT: '1' }, detached: true, stdio: ['ignore', out, out], windowsHide: true }).unref();
   }

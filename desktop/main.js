@@ -12,6 +12,7 @@ const fs = require('node:fs');
 const { spawn } = require('node:child_process');
 const crypto = require('node:crypto');
 const { pngIcon } = require('./icon.js');
+const { createStorage, cleanAtStart } = require('./storage.js');
 const PKG = require('./package.json');
 
 // The harness's code: the repo while developing, the copy bundled in the installer once installed.
@@ -51,6 +52,8 @@ if (process.env.OH_USER_DATA) app.setPath('userData', process.env.OH_USER_DATA);
   } catch { /* then it starts fresh and asks where to keep the data */ }
 })();
 if (!app.requestSingleInstanceLock()) app.quit();
+// Only the copy that owns the settings folder clears caches there (desktop/storage.js); a second copy quits above.
+else try { if (cleanAtStart(app.getPath('userData'), readConfig())) writeConfig({ ...readConfig(), clearGpuAtStart: false }); } catch { /* next time */ }
 // Windows shows the page's notifications ("Needs your approval", "Reply finished") under this app's name.
 if (process.platform === 'win32') app.setAppUserModelId('dev.quorx.desktop');
 app.whenReady().then(() => registerToastName());
@@ -94,7 +97,10 @@ async function startServer() {
     if (await oursAt(p)) { PORT = p; return `http://localhost:${p}`; }
   }
   server = spawn(process.execPath, [path.join(ROOT, 'server.js')], { cwd: ROOT, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', OH_DESKTOP: '1', AGENT_PORT: String(PORT), ...(HOME ? { OH_HOME: HOME } : {}) }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
-  const logFile = fs.createWriteStream(path.join(app.getPath('userData'), 'server.log'), { flags: 'a' });
+  // The harness's output: past 50 MB it starts afresh, the older part kept as server.1.log.
+  const logPath = path.join(app.getPath('userData'), 'server.log');
+  try { if (fs.statSync(logPath).size > 50e6) fs.renameSync(logPath, path.join(app.getPath('userData'), 'server.1.log')); } catch { /* none yet */ }
+  const logFile = fs.createWriteStream(logPath, { flags: 'a' });
   return new Promise((resolve, reject) => {
     let done = false;
     const onData = (d) => {
@@ -425,6 +431,21 @@ async function restartHarness() {
   finally { restarting = false; }
 }
 handle('restartHarness', () => restartHarness());
+// ⚙ Settings → Storage: the app's own caches, the old OpenHarness folder and installed update downloads (desktop/storage.js).
+let storage = null;
+const getStorage = () => (storage ||= createStorage({
+  userData: app.getPath('userData'), appData: app.getPath('appData'), localAppData: process.env.LOCALAPPDATA || app.getPath('appData'),
+  resourcesPath: process.resourcesPath, version: app.getVersion(), ownUserData: !process.env.OH_USER_DATA,
+  sessions: { app: session.defaultSession, agent: agentSess(), tabs: session.fromPartition('persist:browse') },
+  trashItem: (p) => shell.trashItem(p), readConfig, writeConfig, updateBusy: () => ['downloading', 'ready'].includes(update.state),
+}));
+handle('storage', async (op, arg) => {
+  if (op === 'measure') return getStorage().measure();
+  if (op === 'clear') return getStorage().clear(Array.isArray(arg) ? arg : []);
+  // The two rules that are the app's own, kept in its config so they work before the harness has started.
+  if (op === 'rules') { const r = arg || {}; writeConfig({ ...readConfig(), storage: { updateCleanup: r.updateCleanup !== false, agentCacheOnStart: !!r.agentCacheOnStart } }); return readConfig().storage; }
+  throw new Error(`unknown storage step ${op}`);
+});
 handle('loginItem', (on) => (on === undefined ? loginItem() : setLoginItem(on)));
 handle('closeAction', (v) => (v === undefined ? closeAction() : setCloseAction(v)));
 handle('quit', () => { setImmediate(quitApp); return true; });
@@ -688,6 +709,8 @@ app.whenReady().then(async () => {
   createWindow();
   createTray();
   linkLoop();
+  // Installed update downloads go a little after start (⚙ Settings → Storage → Automatic cleanup).
+  if (readConfig().storage?.updateCleanup !== false) setTimeout(() => getStorage().clear([{ id: 'desk:updates' }]).catch(() => {}), 30000);
   // Check for updates a little after start, then every 6 hours.
   setTimeout(checkUpdates, 15000);
   setInterval(checkUpdates, 6 * 3600e3);

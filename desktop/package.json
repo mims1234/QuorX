@@ -31,6 +31,7 @@
       "main.js",
       "preload.js",
       "icon.js",
+      "storage.js",
       "assets/**/*",
       "package.json"
     ],

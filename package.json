@@ -13,7 +13,7 @@
     "desktop:release": "npm --prefix desktop run release",
     "winget": "node scripts/winget-manifest.mjs",
     "release:bump": "npm --prefix desktop version patch --no-git-tag-version && node desktop/sync-version.js",
-    "test": "node --test --test-force-exit --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./scripts/results-reporter.mjs --test-reporter-destination=stdout scripts/test-loop.mjs scripts/test-browser.mjs scripts/test-agent.mjs scripts/test-security.mjs scripts/test-safety.mjs scripts/test-posix.mjs scripts/test-news.mjs scripts/test-newsremote.mjs scripts/test-backup.mjs",
+    "test": "node --test --test-force-exit --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./scripts/results-reporter.mjs --test-reporter-destination=stdout scripts/test-loop.mjs scripts/test-browser.mjs scripts/test-agent.mjs scripts/test-security.mjs scripts/test-safety.mjs scripts/test-posix.mjs scripts/test-news.mjs scripts/test-newsremote.mjs scripts/test-backup.mjs scripts/test-storage.mjs",
     "test:ui": "node scripts/ui-test.mjs",
     "mcp": "node server/mcp.js",
     "test:packs": "node scripts/test-packs.mjs",
