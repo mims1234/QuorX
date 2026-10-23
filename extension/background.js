@@ -16,6 +16,7 @@ function slimNet(method, p) {
 }
 // What passes on: the page events as they are, network events slimmed (or dropped: a picture, a script).
 const passOn = (method, params) => (FORWARD.has(method) ? params : method.startsWith('Network.') ? slimNet(method, params) : undefined);
+const WIN_SIZE = { width: 1400, height: 900 }; // the QuorX window the agent's tabs open in
 let ws = null, state = 'off', lastError = '', pingTimer = null, seq = 0;
 const waiting = new Map(); // request id → resolve/reject
 const attached = new Set(); // tab ids the debugger is attached to right now
@@ -87,7 +88,14 @@ async function call(cmd, { tab, method, params, locked, url, chatId }) {
     const { win } = await chrome.storage.session.get('win');
     let t;
     try { t = win ? await chrome.tabs.create({ windowId: win, url, active: true }) : null; } catch { t = null; }
-    if (!t) { const w = await chrome.windows.create({ url, focused: false }); await chrome.storage.session.set({ win: w.id }); t = w.tabs[0]; }
+    // The agent sees one screen at a time, so its window is roomy (1400×900; Chrome fits it to a smaller screen),
+    // not maximised: on a big monitor that makes screenshots huge and their text tiny for the vision models.
+    if (!t) { const w = await chrome.windows.create({ url, focused: false, state: 'normal', ...WIN_SIZE }); await chrome.storage.session.set({ win: w.id }); t = w.tabs[0]; }
+    else {
+      // A window that was made smaller (or minimised) since is put back to that size; a bigger one you chose stays.
+      const w = await chrome.windows.get(t.windowId).catch(() => null);
+      if (w && (w.state === 'minimized' || w.width < WIN_SIZE.width - 120 || w.height < WIN_SIZE.height - 120)) await chrome.windows.update(w.id, { state: 'normal', ...WIN_SIZE }).catch(() => {});
+    }
     lent[t.id] = { chatId, own: true }; await setLent(lent); badge(t.id, true);
     return { id: t.id, title: t.title || '' };
   }
