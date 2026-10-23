@@ -117,6 +117,28 @@ export function trimTranscript(messages, { at = 120000, to = 60000, fresh = 3, d
 }
 
 /**
+ * Old page views: every browser step returns the whole page (snapshot and text), and a long browsing reply sent all
+ * of them again on every call (1.6 million input tokens in one 30-step run). Once more than `keep + batch` big views
+ * are untrimmed, all but the newest `keep` become their first two lines. In batches, so the cached prefix changes
+ * only now and then. Returns the characters saved.
+ */
+export function trimPageViews(messages, { keep = 2, batch = 6, over = 1500, done = new WeakSet(), names = ['browser'] } = {}) {
+  const nameOf = new Map();
+  for (const m of messages) for (const tc of m.tool_calls || []) nameOf.set(tc.id, tc.function?.name);
+  const views = messages.filter((m) => m.role === 'tool' && typeof m.content === 'string' && m.content.length > over && !done.has(m) && names.includes(nameOf.get(m.tool_call_id)));
+  if (views.length <= keep + batch) return 0;
+  let saved = 0;
+  for (const m of views.slice(0, -keep)) {
+    done.add(m);
+    const head = m.content.split('\n').slice(0, 2).join('\n').slice(0, 400);
+    const note = `${head}\n[An older page view (${m.content.length} characters) was removed to save space; the newest page views are further down.]`;
+    saved += m.content.length - note.length;
+    m.content = note;
+  }
+  return saved;
+}
+
+/**
  * When trimming is not enough: keep the system prompt and everything up to this reply's request,
  * replace the middle of the reply with a summary the harness writes from its journal, and keep the
  * last `keep` messages (starting on an assistant turn, so no tool result loses its call).

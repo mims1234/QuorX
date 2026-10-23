@@ -630,3 +630,38 @@
 #settings #checkList small { display: block; margin-top: 4px; font-size: 11px; color: var(--dim); }
 #settings .st-check-add { display: flex; gap: 8px; margin-top: 12px; }
 #settings .st-check-add .st-input { flex: 1; }
+
+/* Models & catalogue: the active key's spending limit, masked until 👁 (one line of money and a bar) */
+#settings .st-card.sx-limit { border-color: var(--amber-line); }
+#settings #stModelLimit { padding: 2px 18px 16px; display: grid; gap: 10px; }
+#settings .kx-mlim { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; font-size: 12.5px; color: var(--muted); }
+#settings .kx-mlim-name { font-weight: 700; color: var(--text-bright); }
+#settings .kx-mlim-amt b { font: 700 16px var(--mono); color: var(--amber); }
+#settings .kx-mlim-amt b + b { color: var(--text); }
+#settings .kx-mlim-amt.masked b { filter: blur(4px); }
+#settings #stModelLimit .kx-bar { height: 8px; border-radius: 99px; }
+
+/* Skills: a card per skill; its info on top, its controls (edit, delete when it is yours, and the ✓) along the
+   bottom. Writing and importing your own skills sits above the library. */
+#settings .st-skill-item { grid-template-columns: minmax(0, 1fr) auto auto auto; align-items: center; }
+#settings .st-skill-item > .st-skill-info { grid-column: 1 / -1; }
+#settings .st-skill-item > .sx-check { grid-column: 4; justify-self: end; }
+#settings .st-skill-item > .pp-btn { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 7px; border: 1px solid var(--line); background: var(--panel-2); cursor: pointer; }
+#settings .st-skill-item > .pp-btn svg { width: 14px; height: 14px; }
+#settings .st-skill-item > .pp-btn.set { grid-column: 2; }
+#settings .st-skill-item > .pp-btn.del { grid-column: 3; }
+#settings #skillPanel { margin-bottom: 12px; }
+#settings .sk-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+#settings .sk-bar .mem-msg { margin: 0 0 0 4px; }
+#settings .sk-editor { margin-top: 12px; padding: 16px 18px; border-radius: var(--sx-r); border: 1.5px solid var(--sx-g-line); background: var(--panel); display: grid; gap: 12px; }
+#settings .sk-editor[hidden] { display: none; }
+#settings .sk-field { display: grid; gap: 6px; }
+#settings .sk-field > span { font-size: 13px; font-weight: 600; color: var(--text); }
+#settings .sk-field > span small { font-weight: 500; color: var(--muted); margin-left: 6px; }
+#settings .sk-field .st-input { width: 100%; box-sizing: border-box; }
+#settings .sk-field textarea.st-input { height: auto; min-height: 180px; padding: 10px; line-height: 1.5; resize: vertical; font-family: var(--mono); font-size: 12px; }
+#settings .sk-field .seg { display: inline-flex; padding: 3px; gap: 2px; border-radius: 9px; background: var(--surface-inset); border: 1px solid var(--border-inset); justify-self: start; }
+#settings .sk-field .seg button { height: 28px; padding: 0 12px; border-radius: 7px; border: 1px solid transparent; background: transparent; color: var(--muted); font: 600 12px var(--font-ui); cursor: pointer; }
+#settings .sk-field .seg button.on { background: var(--panel-3); border-color: var(--line-strong); color: var(--text-bright); }
+#settings .sk-acts { display: flex; align-items: center; gap: 8px; }
+#settings .sk-err { color: var(--bad); font-size: 12px; }

@@ -147,6 +147,7 @@ function createWindow() {
     if (quitting || !server) return;
     e.preventDefault();
     const act = closeAction();
+    if (act !== 'quit' && STORE && update.state === 'store-available' && update.version !== skippedUpdate) return askUpdateOnClose(act);
     if (act === 'quit') quitApp(); else if (act === 'tray') win.hide(); else askOnClose();
   });
   win.on('closed', () => { win = null; tabs.clear(); });
@@ -167,6 +168,21 @@ async function askOnClose() {
   }).finally(() => { asking = false; });
   if (checkboxChecked) setCloseAction(response === 1 ? 'quit' : 'tray');
   if (response === 1) quitApp(); else win?.hide();
+}
+// The Store copy with a newer version out: ✕ would only hide QuorX in the tray, and the Store can't install over a running
+// copy (0x80073D02). So ✕ asks first: quit and open the Store page, or keep running as usual (asked once per version).
+let skippedUpdate = null;
+async function askUpdateOnClose(act) {
+  if (asking || !win) return;
+  asking = true;
+  const { response } = await dialog.showMessageBox(win, {
+    type: 'info', title: 'QuorX', message: `QuorX ${update.version} is out`,
+    detail: `You have ${app.getVersion()}. The Microsoft Store can only install the update once QuorX has quit. Quit now and open QuorX in the Store, then press Update there.`,
+    buttons: ['Quit and update', 'Not now'], defaultId: 0, cancelId: 1, noLink: true,
+  }).finally(() => { asking = false; });
+  if (response === 0) { shell.openExternal('ms-windows-store://pdp/?productid=9NBK5DMLMTFF'); return quitApp(); }
+  skippedUpdate = update.version;
+  if (act === 'tray') win?.hide(); else askOnClose();
 }
 // Start at login: off by default; when on, the app starts hidden in the tray.
 const loginArgs = () => (app.isPackaged ? ['--hidden'] : [path.resolve(__dirname), '--hidden']);
@@ -460,6 +476,18 @@ handle('showFile', (file) => { if (file && file.startsWith(app.getPath('download
 let agentSession = null;
 const agentSess = () => (agentSession ||= (() => { const s = session.fromPartition('persist:agent'); s.setUserAgent(CHROME_UA()); s.setPermissionRequestHandler((_wc, perm, cb) => cb(perm === 'fullscreen')); return s; })());
 const FORWARD = new Set(['Page.loadEventFired', 'Page.frameNavigated', 'Runtime.consoleAPICalled', 'Runtime.exceptionThrown', 'Log.entryAdded']);
+// A page's data requests (XHR, fetch) go to QuorX with only their id, method, address, status, type and size:
+// never headers, cookies or bodies (a body is read only when the agent asks for one request).
+const DATA_REQ = new Set(['XHR', 'Fetch', 'EventSource']);
+function slimNet(method, p) {
+  if (method === 'Network.requestWillBeSent') return DATA_REQ.has(p.type) ? { requestId: p.requestId, type: p.type, method: p.request && p.request.method, url: String((p.request && p.request.url) || '').slice(0, 2000) } : null;
+  if (method === 'Network.responseReceived') return DATA_REQ.has(p.type) ? { requestId: p.requestId, type: p.type, status: p.response && p.response.status, mimeType: p.response && p.response.mimeType } : null;
+  if (method === 'Network.loadingFinished') return { requestId: p.requestId, encodedDataLength: p.encodedDataLength };
+  if (method === 'Network.loadingFailed') return { requestId: p.requestId, errorText: p.errorText };
+  return undefined;
+}
+// What passes on: the page events as they are, network events slimmed (or dropped: a picture, a script).
+const passOn = (method, params) => (FORWARD.has(method) ? params : method.startsWith('Network.') ? slimNet(method, params) : undefined);
 let linkToken = null, eventQueue = [], eventTimer = null;
 function postReply(body) { if (!origin || !linkToken) return; fetch(`${origin}/api/desktop/reply`, { method: 'POST', headers: keyed({ 'Content-Type': 'application/json' }), body: JSON.stringify({ token: linkToken, ...body }) }).catch(() => {}); }
 function queueEvent(e) { eventQueue.push(e); if (!eventTimer) eventTimer = setTimeout(() => { eventTimer = null; const events = eventQueue; eventQueue = []; postReply({ events }); }, 40); }
@@ -534,6 +562,8 @@ const COMMANDS = {
   async 'app.notify'(n) { return showNote(n); },
   // Sign-in with OpenRouter finished in the user's browser: back to QuorX.
   async 'app.focus'() { showWindow(); return true; },
+  // The Chrome extension's "Open in QuorX": the window comes forward on that chat.
+  async 'app.openChat'({ chatId }) { showWindow(); if (chatId) send({ type: 'notify-click', chatId }); return true; },
   async 'tab.create'({ chatId }) {
     const sid = `agent-${String(chatId).replace(/[^\w-]/g, '').slice(0, 40)}`;
     if (tabs.has(sid)) closeTab(sid);
@@ -552,7 +582,7 @@ const COMMANDS = {
     await view.webContents.loadURL('about:blank').catch(() => {});
     const dbg = view.webContents.debugger;
     dbg.attach('1.3');
-    dbg.on('message', (_e, method, params) => { if (FORWARD.has(method)) queueEvent({ tab: sid, method, params }); });
+    dbg.on('message', (_e, method, params) => { const p = passOn(method, params); if (p) queueEvent({ tab: sid, method, params: p }); });
     send({ sid, type: 'agent-tab', chatId });
     return sid;
   },
@@ -602,7 +632,7 @@ const COMMANDS = {
     const t = tabs.get(tab); if (!t || t.agent) throw new Error('that tab is gone');
     const dbg = t.view.webContents.debugger;
     if (!dbg.isAttached()) dbg.attach('1.3');
-    if (!t.onDbg) { t.onDbg = (_e, method, params) => { if (FORWARD.has(method)) queueEvent({ tab, method, params }); }; dbg.on('message', t.onDbg); }
+    if (!t.onDbg) { t.onDbg = (_e, method, params) => { const p = passOn(method, params); if (p) queueEvent({ tab, method, params: p }); }; dbg.on('message', t.onDbg); }
     return tab;
   },
   async 'tab.detach'({ tab }) {

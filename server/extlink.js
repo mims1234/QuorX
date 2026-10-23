@@ -33,7 +33,11 @@ const older = (v) => below(v, EXT_NEEDS);
 // The version in QuorX's extension folder: an older running copy is asked to reload itself from it.
 const latest = () => { try { return JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'extension', 'manifest.json'), 'utf8')).version; } catch { return EXT_NEEDS; } };
 export const extOutdated = () => !!link && older(link.version);
-export const extInfo = () => (link ? { connected: true, since: link.at, version: link.version, outdated: older(link.version) } : { connected: false });
+export const extInfo = () => (link ? { connected: true, since: link.at, version: link.version, outdated: older(link.version), caps: link.caps || {} } : { connected: false });
+/** What the connected extension may do beyond the debugger: { script } once you let it read pages (its popup). */
+export const extCaps = () => link?.caps || {};
+/** A message for the extension that needs no answer (the agent's status for a tab, the routine it recorded…). */
+export function extPush(o) { if (link) link.send({ t: 'push', ...o }); }
 export function onExtRequest(h) { handlers = h; }
 
 /** A command for the extension (tab.cdp, tab.lock, tab.release); resolves with its answer. */
@@ -87,6 +91,7 @@ export function extUpgrade(req, socket) {
       hello = true; clearTimeout(helloTimer);
       if (link && link !== me) link.close(4000);
       me.version = String(m.version || '').slice(0, 20);
+      me.caps = m.caps && typeof m.caps === 'object' ? { script: !!m.caps.script } : {};
       link = me; me.send({ t: 'welcome' });
       if (below(me.version, latest())) me.send({ t: 'reload' });
       return;
@@ -94,6 +99,7 @@ export function extUpgrade(req, socket) {
     if (m.t === 'ping') return me.send({ t: 'pong' });
     if (m.t === 'reply') { const w = waiting.get(m.id); if (!w) return; waiting.delete(m.id); clearTimeout(w.timer); return m.error ? w.no(new Error(m.error)) : w.ok(m.result); }
     if (m.t === 'event') { for (const fn of subs.get(String(m.tab)) || []) fn(m.method, m.params); return; }
+    if (m.t === 'caps') { me.caps = m.caps && typeof m.caps === 'object' ? { script: !!m.caps.script } : {}; return; }
     if (m.t === 'req') {
       const h = handlers[m.what];
       Promise.resolve(h ? h(m.args || {}) : Promise.reject(new Error(`unknown request ${m.what}`)))
