@@ -207,7 +207,7 @@ test('a long reply is trimmed, and every result carries the step meter', async (
   const { events, bodies } = await run((body, i) => (i < 6 ? reply('', [['write_file', { path: `f${i}.txt`, content: body20k }]]) : reply('ok')), { settings: { trimAt: 30000 } });
   assert.ok(of(events, 'trimmed').length >= 1);
   assert.match(JSON.stringify(bodies.at(-1).messages), /written earlier; removed/);
-  assert.match(toolResults(bodies[1])[0], /\[steps: 1 of 60 used( · project budget: \$[\d.]+ of \$[\d.]+ used)?\]$/);
+  assert.match(toolResults(bodies[1])[0], /\[steps: 1 of 500 used( · project budget: \$[\d.]+ of \$[\d.]+ used)?\]$/);
 });
 
 test('the wrap-up nudge comes at 80% of the steps', async () => {
@@ -1219,7 +1219,7 @@ test('when the steps run out while the plan has open items, the reply keeps goin
   let b = 0;
   const { events, bodies } = await run(() => (b++ === 0
     ? reply('', [['plan', { spec: 'A page.', items: [{ text: 'Build it', status: 'doing' }, { text: 'Polish it', status: 'todo' }] }]])
-    : reply('', [['list_files', {}]])), { settings: { maxSteps: 10, continueRounds: 1 } });
+    : reply('', [['list_files', {}]])), { settings: { maxSteps: 10, continueRounds: 1, moreSteps: 10 } });
   const extra = events.filter((e) => e.t === 'note' && /more steps \(round 1 of 1\)/.test(e.msg));
   assert.equal(extra.length, 1, 'one extra round');
   assert.ok(bodies.length > 10 && bodies.length <= 20, `ran past the first limit (${bodies.length} calls)`);
