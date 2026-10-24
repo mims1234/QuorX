@@ -84,12 +84,16 @@ export const YOLO_GROUPS = {
 const PLAN_GATED = new Set([...YOLO_GROUPS.files, 'shell', 'run_command', 'terminal', 'start_server', 'edit_video']);
 const YOLO_GROUP_OF = Object.fromEntries(Object.entries(YOLO_GROUPS).flatMap(([g, names]) => names.map((n) => [n, g])));
 
+export const MAX_STEPS = 1000; // the highest step limit a reply can be given in Settings
+// The "steps are running out" point: 80% for short limits, the last 15 steps for long ones (80% of 500 is far too early).
+const nearEnd = (step, maxSteps) => step + 1 >= Math.max(Math.floor(maxSteps * 0.8), maxSteps - 15);
+
 export const DEFAULTS = {
   chatModel: 'deepseek/deepseek-v4.1-flash-1017', // new chats (the 1017 build did best in the build benchmark; the older v4.1 Flash is 🔴)
   voters: ['typesafe/jev-1.14', 'liquid/d1-ultra', 'openai/gpt-6-luna-decisions'],
   gate: { ...GATE },
-  maxSteps: 60,            // model calls per reply; a wrap-up nudge at 80% and trimming keep long builds on track
-  continueRounds: 2,       // when the steps run out while the plan still has open items: extra rounds of half the step limit (0 = stop)
+  maxSteps: 500,           // model calls per reply; the budget caps do the real stopping. At the limit the ⏱ card asks: keep going, another model, or a fresh chat
+  continueRounds: 0,       // when the steps run out while the plan still has open items: extra rounds of moreSteps each (0 = stop and show the ⏱ card)
   fixSteps: 12,
   freshEyes: true,         // when the same problem shows up a second time, a clean-context model diagnoses it before the next step
   freshEyesModel: '',      // '' = the helper model (fast and cheap); 'strong' tier below uses the strong reviewer model
@@ -1063,10 +1067,10 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
   const firstOwn = resumed ? resumed.firstOwn : messages.length; // where this reply's own turns begin
   const trimmedOnce = new WeakSet();
   const trimAt = Math.max(30000, Number(S.trimAt) || DEFAULTS.trimAt);
-  let maxSteps = Math.max(2, Math.min(200, Number(S.maxSteps) || DEFAULTS.maxSteps));
+  let maxSteps = Math.max(2, Math.min(MAX_STEPS, Number(S.maxSteps) || DEFAULTS.maxSteps));
   if (carryOn) maxSteps = resumed.step + 1 + carryOn.steps; // the steps already used, plus the new allowance
   else if (resumed) maxSteps = Math.max(maxSteps, Number(resumed.maxSteps) || 0, resumed.step + 1 + 5); // a restart keeps the reply's (extended) limit, and always leaves room to act
-  const planSteps = Math.max(0, Math.min(200, Number(S.planSteps ?? DEFAULTS.planSteps) || 0));
+  const planSteps = Math.max(0, Math.min(MAX_STEPS, Number(S.planSteps ?? DEFAULTS.planSteps) || 0));
   const planFirst = root && ['big', 'always'].includes(S.planFirst) ? S.planFirst : 'off'; // no project folder: nothing to protect
   const run = { mediaPlan: null, stop: 'answered', steps: 0, retries: 0, trimmed: 0, tools: 0, lookStreak: 0, warned: false, verifyRounds: 0, questions: 0, cacheMarks: true, passReasoning: true, routing: true, plan: resumed?.plan || null, planGate: resumed?.plan ? 'approved' : null, reviewRounds: 0, reviews: [], inbox: [], linted: {} };
   runControls.set(runId, {
@@ -1377,15 +1381,15 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (run.readStreak === 3 && !run.helperNudged && helpersOn) { run.helperNudged = true; signals.push('You have spent 3 steps reading files yourself. Hand the rest of the exploring to helpers with delegate (several at once for separate questions), and keep your own context for the answer and the changes.'); }
     const openItems = run.plan ? run.plan.items.filter((x) => x.status !== 'done') : [];
     const rounds = Math.max(0, Math.min(5, Number(S.continueRounds ?? DEFAULTS.continueRounds) || 0));
-    if (!run.warned && maxSteps >= 10 && step + 1 >= Math.floor(maxSteps * 0.8) && openItems.length && (run.extended || 0) < rounds && !run.budgetOver && !run.budgetWarned) {
+    if (!run.warned && maxSteps >= 10 && nearEnd(step, maxSteps) && openItems.length && (run.extended || 0) < rounds && !run.budgetOver && !run.budgetWarned) {
       // The plan isn't finished: keep going instead of wrapping up (budget caps still apply).
       run.extended = (run.extended || 0) + 1;
-      const add = Math.max(10, Math.round((run.baseSteps || maxSteps) / 2));
+      const add = Math.max(5, Math.min(200, Number(S.moreSteps ?? DEFAULTS.moreSteps) || 30));
       maxSteps += add;
       signals.push(`Your plan still has ${openItems.length} open item${openItems.length > 1 ? 's' : ''} (${openItems.slice(0, 4).map((x) => `"${clip(x.text, 60)}"`).join(', ')}${openItems.length > 4 ? ', …' : ''}), so this reply gets ${add} more steps (extra round ${run.extended} of ${rounds}). Carry on with them in order; keep the plan current.`);
       emit({ t: 'note', level: 'info', msg: `Steps were running out with ${openItems.length} plan item${openItems.length > 1 ? 's' : ''} left: ${add} more steps (round ${run.extended} of ${rounds}).`, at: at() });
     }
-    if (!run.warned && maxSteps >= 10 && step + 1 >= Math.floor(maxSteps * 0.8)) { run.warned = true; signals.push(`Only ${maxSteps - step - 1} steps are left in this reply. Stop adding features: make sure what you have works, then give your final reply.`); }
+    if (!run.warned && maxSteps >= 10 && nearEnd(step, maxSteps)) { run.warned = true; signals.push(`Only ${maxSteps - step - 1} steps are left in this reply. Stop adding features: make sure what you have works, then give your final reply.`); }
     const pb = projectId && !req.bench ? budgetState(projectId) : null;
     if (pb?.budget != null && !run.budgetOver && pb.spent >= pb.budget) { run.budgetOver = run.budgetWarned = true; signals.push(`The project budget is used up ($${pb.spent.toFixed(2)} of $${pb.budget.toFixed(2)}). Finish the task you are on in as few steps as possible, add nothing new, then give your final reply. This reply is stopped at $${(pb.budget * (1 + grace)).toFixed(2)}.`); }
     else if (pb?.budget != null && !run.budgetWarned && pb.spent >= pb.budget * 0.85) { run.budgetWarned = true; signals.push(`The project budget is almost used up ($${pb.spent.toFixed(2)} of $${pb.budget.toFixed(2)}). Finish what you are doing and give your final reply.`); }

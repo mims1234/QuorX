@@ -2664,6 +2664,9 @@ function renderChatTools(c) {
   if (!c.el) return;
   const box = $('.toolbar', c.el.root);
   const T = G.settings.tools;
+  // 🎙 off hides the mic in every message box, the home page's included (it is built after renderToolbars runs).
+  const mic = $('.micBtn', c.el.root);
+  if (mic) mic.hidden = mic.disabled = T.listen?.on === false;
   const on = CHAT_TOOLS.filter((k) => c.tools[k]);
   const qOff = QUALITY_TOOLS.filter((k) => c.tools[k] === false);
   const label = (k) => CATS.find((x) => x[0] === k)[1];
@@ -5162,9 +5165,9 @@ function settingsPanels(S) {
     loop: ['Agent loop', 'How long one reply may work, how its work is checked, and how long chats stay cheap. Click a stage to jump to it.', [
       '<div data-live="loopflow"></div>',
       stCard(`${stNum(1)} Plan`, '', stRow('Plan first', 'Off: the agent plans and builds in one go. Big tasks: for a new app, site, game or a change across several files, it shows its plan and waits for Go ahead, Stop here, or your changes. Always: before any file change or command. File changes and commands are refused until you say Go ahead. Waits for you in 🔒 Strict and ⚡ YOLO alike.', stCards('planFirst', [['off', '⏩', 'Off', 'Plan and build in one go'], ['big', '🗺', 'Big tasks', 'New apps, sites, games, multi-file changes'], ['always', '✋', 'Always', 'Before any file change or command']], S.planFirst || 'off', 'compact'), { cls: 'sx-row-wide' })
-        + stRow('Steps when the reply has a plan', 'A planned build gets this many instead (checks, previews and review take steps). 0 = the same as below.', stStep('planSteps', S.planSteps ?? 0, 0, 200))
-        + stRow('Keep going while the plan is open', 'When the steps run out and the plan still has open items, the reply gets this many extra rounds of half the steps (budget caps still apply). 0 = stop at the limit.', stStep('continueRounds', S.continueRounds ?? 2, 0, 5)), 'sx-anchor', 'stLoopPlan'),
-      stCard(`${stNum(2)} Work`, '', stRow('Max model calls per reply', 'A page takes 6–15; a multi-file app with a server can take 40 or more. At 80% the agent is told to wrap up.', stStep('maxSteps', S.maxSteps, 2, 120))
+        + stRow('Steps when the reply has a plan', 'A planned build gets this many instead (checks, previews and review take steps). 0 = the same as below.', stStep('planSteps', S.planSteps ?? 0, 0, 1000))
+        + stRow('Keep going while the plan is open', 'When the steps run out and the plan still has open items, the reply gets this many extra rounds of “Keep going” steps on its own (budget caps still apply). 0 = stop at the limit and ask you.', stStep('continueRounds', S.continueRounds ?? 0, 0, 5)), 'sx-anchor', 'stLoopPlan'),
+      stCard(`${stNum(2)} Work`, '', stRow('Max model calls per reply', 'A page takes 6–15; a multi-file app with a server can take 40 or more. Near the end the agent is told to wrap up; at the limit you pick: keep going, another model, or a fresh chat.', stStep('maxSteps', S.maxSteps, 2, 1000))
         + stRow('Output per model call', 'Tokens one call may write (thinking included), never more than the model allows. Too little and a model can think through a whole file, then run out before writing it.', stStep('maxOutput', S.maxOutput ?? 64000, 4000, 128000, 4000, 'tokens'))
         + stRow('Thinking share', 'How much of that output reasoning may use, so the answer and tool calls always have room.', stStep('thinkShare', S.thinkShare ?? 25, 5, 60, 5, '%'))
         + stRow('Thinking for builds', 'When the gap check sees that a message asks for a build and the chat\'s thinking is off, the model thinks this much for that reply. Deciders find problems; thinking is what fixes them.', stSeg('buildThinking', [['off', 'Off'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']], S.buildThinking || 'low'))
@@ -5649,7 +5652,7 @@ function saveSettings() {
   if (look) S.lookVoters = [look];
   const voters = [...document.querySelectorAll('#voterInputs .m')].map((b) => b.dataset.id).filter(Boolean);
   if (voters.length) S.voters = voters;
-  S.maxSteps = Math.max(2, Math.min(120, Number(S.maxSteps) || 60));
+  S.maxSteps = Math.max(2, Math.min(1000, Number(S.maxSteps) || 500));
   S.budget = Math.max(0, Number(S.budget) || 0);
   S.skillsOff = [...document.querySelectorAll('#skillList input[data-skill]')].filter((x) => !x.checked).map((x) => x.dataset.skill);
   for (const el of document.querySelectorAll('#catEditors .cat')) {
@@ -6392,8 +6395,10 @@ async function boot() {
   G.settings.tools = Object.fromEntries(Object.entries(d.tools).map(([k, v]) => [k, { ...structuredClone(v), ...(saved?.settings?.tools?.[k] || {}) }]));
   delete G.settings.media; delete G.settings.mediaEnabled;
   if ((G.settings.modelDefaultV || 0) < 2) { G.settings.model = d.chatModel || G.settings.model; G.settings.modelDefaultV = 2; }
-  if ((G.settings.maxSteps || 0) < d.maxSteps) G.settings.maxSteps = d.maxSteps; // building and checking needs room
-  G.settings.maxSteps = Math.min(120, G.settings.maxSteps);
+  // Once: the default went from 60 to 500 steps, and no silent extra rounds, so the ⏱ card asks right at the limit.
+  // After that, whatever you set (lower or higher) stays.
+  if ((G.settings.stepsDefaultV || 0) < 3) { if ((G.settings.maxSteps || 0) < d.maxSteps) G.settings.maxSteps = d.maxSteps; G.settings.continueRounds = 0; G.settings.stepsDefaultV = 3; }
+  G.settings.maxSteps = Math.max(2, Math.min(1000, Number(G.settings.maxSteps) || d.maxSteps));
   G.sideHidden = !!saved?.sideHidden; G.projectOrder = saved?.projectOrder || []; G.foldedProjects = saved?.foldedProjects || []; G.favModels = saved?.favModels || {}; G.spaceSeen = saved?.spaceSeen || {}; G.followAgent = saved?.followAgent !== false; G.budgetSeen = saved?.budgetSeen || {}; G.recentModels = saved?.recentModels || {}; G.pickerSort = saved?.pickerSort || {}; G.sizes = saved?.sizes || {}; G.theme = saved?.theme || null;
   G.sessionCost = saved?.sessionCost || 0; G.templates = saved?.templates || [];
   applySizes(); applyTheme();
