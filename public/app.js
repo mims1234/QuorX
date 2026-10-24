@@ -5538,10 +5538,10 @@ function settingsPanels(S) {
       stCard('Danger zone', '', stRow('Clear this browser\'s preferences', 'Settings, layout and theme go back to defaults. Chats, projects and keys are not touched.', '<button type="button" class="st-btn danger sm" data-act="clearPrefs">Clear</button>'), 'danger'),
     ]],
     setup: ['Setup check', 'What this computer has for QuorX, and what each thing is for. Amber rows are optional.', ['<div id="stSetup"><div class="st-row-help">Checking this computer…</div></div>']],
-    shortcuts: ['Shortcuts', 'Keys that work everywhere in QuorX.', [stCard('Keyboard', '', `<div class="sx-keys">${[['Ctrl + K', 'Search chats, commands, settings and files'], ['Enter', 'Send'], ['Shift + Enter', 'New line'], ['@', 'Add files, chats or projects as context'], ['/', 'Commands (/usage, /model, /strict, …)'], ['↑ ↓ then Enter or Tab', 'Pick a suggestion'], ['Esc', 'Close a dialog or suggestions'], [S.micKey || 'Alt+M', S.micMode === 'hold' ? 'Hold to speak into the message box' : 'Start or stop the mic']].map(([k, v]) => `<div class="st-row sx-key"><span class="sx-key-combo">${k.replace(/\+(?=\S)/g, ' + ').split(' ').map((x) => (/^[+]$|^then$|^or$/.test(x) ? x : `<kbd>${esc(x)}</kbd>`)).join(' ')}</span><span class="sx-key-what st-row-label">${v}</span></div>`).join('')}</div>`),
+    shortcuts: ['Shortcuts', 'Keys that work everywhere in QuorX.', [stCard('Keyboard', '', `<div class="sx-keys">${[['Ctrl + K', 'Search chats, commands, settings and files'], ['Enter', 'Send'], ['Shift + Enter', 'New line'], ['@', 'Add files, chats or projects as context'], ['/', 'Commands (/usage, /model, /strict, …)'], ['↑ ↓ then Enter or Tab', 'Pick a suggestion'], ['Esc', 'Close a dialog or suggestions'], [S.micKey || MIC_KEY, (S.micMode || MIC_MODE) === 'hold' ? 'Hold to speak into the message box' : 'Start or stop the mic']].map(([k, v]) => `<div class="st-row sx-key"><span class="sx-key-combo">${k.replace(/\+(?=\S)/g, ' + ').split(' ').map((x) => (/^[+]$|^then$|^or$/.test(x) ? x : `<kbd>${esc(x)}</kbd>`)).join(' ')}</span><span class="sx-key-what st-row-label">${v}</span></div>`).join('')}</div>`),
       stCard('🎤 Mic', 'Speak instead of typing: what you say is typed into the message box of the chat you are in.',
-        stRow('Mic key', 'Click the box, then press the keys you want (Esc leaves it as it is).', `<input type="text" class="st-input st-keycap" data-bind="micKey" value="${esc(S.micKey || 'Alt+M')}" readonly aria-label="Mic key: click, then press the keys">`)
-        + stRow('How the key works', 'Toggle: press once to start listening, press again to stop. Hold: listens while you hold the key down, like a walkie-talkie.', stSeg('micMode', [['toggle', 'Toggle'], ['hold', 'Hold']], S.micMode || 'toggle')))]],
+        stRow('Mic key', 'Click the box, then press the keys you want (Esc leaves it as it is).', `<input type="text" class="st-input st-keycap" data-bind="micKey" value="${esc(S.micKey || MIC_KEY)}" readonly aria-label="Mic key: click, then press the keys">`)
+        + stRow('How the key works', 'Toggle: press once to start listening, press again to stop. Hold: listens while you hold the key down, like a walkie-talkie.', stSeg('micMode', [['toggle', 'Toggle'], ['hold', 'Hold']], S.micMode || MIC_MODE)))]],
     about: ['About', 'This copy of QuorX, where it keeps your data, and the desktop app.', [
       `<section class="st-card"><div class="sx-identity"><img src="brand/quorx-192.png" alt=""><div><h4>QuorX <code id="stVersion" class="sx-ver">v${esc(G.cfg?.version || '?')}</code></h4><p>An open-source AI agent with a quorum of models behind every call.</p></div></div>`
         + stRow('Version', DESK ? 'The desktop app and the harness it is attached to.' : '', `<span class="sx-status ok">v${esc(G.cfg?.version || '?')}</span>`)
@@ -6569,7 +6569,7 @@ const asDataURL = (blob) => new Promise((r) => { const f = new FileReader(); f.o
 async function micAllowed() {
   if (G.perms?.mic === 'yes') return true;
   const m = short(G.settings.tools.listen?.models?.[0] || '');
-  if (!(await uiConfirm(`Let QuorX use your microphone?\nIt listens only while the mic glows (click 🎤 or press ${G.settings.micKey || 'Alt+M'}), then sends that recording${m ? ` to ${m}` : ''} to turn it into text in the message box. Your browser asks as well.\nYou can take it back any time under ⓘ next to the QuorX name.`, { ok: 'Allow the mic' }))) return false;
+  if (!(await uiConfirm(`Let QuorX use your microphone?\nIt listens only while the mic glows (click 🎤 or press ${G.settings.micKey || MIC_KEY}), then sends that recording${m ? ` to ${m}` : ''} to turn it into text in the message box. Your browser asks as well.\nYou can take it back any time under ⓘ next to the QuorX name.`, { ok: 'Allow the mic' }))) return false;
   (G.perms ||= {}).mic = 'yes'; savePrefs(); return true;
 }
 async function toggleMic(c, { byKey = false } = {}) {
@@ -6602,7 +6602,7 @@ async function toggleMic(c, { byKey = false } = {}) {
     rec.start(); G.rec = rec; btn.classList.add('rec'); btn.innerHTML = CMP_ICO.rec; btn.title = 'Listening · click to stop';
     box?.classList.add('listening');
     // Hold mode: the key may have been let go while the browser was still asking.
-    if (byKey && G.settings.micMode === 'hold' && !G.micHeld) rec.stop();
+    if (byKey && micHold() && !G.micHeld) rec.stop();
   } catch (e) { uiAlert(`Microphone unavailable: ${e.message}`); }
 }
 // ⓘ by the name: what QuorX may use on this computer, as QuorX and the browser each see it, with a way to take it back.
@@ -6632,7 +6632,9 @@ function closePerms() { const pop = $('#permPop'), b = $('#permBtn'); if (!pop |
     addEventListener('keydown', (e) => { if (e.key === 'Escape') closePerms(); });
   }
 }
-const micTip = () => `Speak your message · ${G.settings.micKey || 'Alt+M'}\nWhat you say is typed into the box.${G.settings.micMode === 'hold' ? ' Hold the key while you talk.' : ' Press again to stop.'}`;
+const MIC_KEY = 'Ctrl+,', MIC_MODE = 'hold'; // the defaults until you pick others in Settings → Shortcuts
+const micHold = () => (G.settings?.micMode || MIC_MODE) === 'hold';
+const micTip = () => `Speak your message · ${G.settings.micKey || MIC_KEY}\nWhat you say is typed into the box.${micHold() ? ' Hold the key while you talk.' : ' Press again to stop.'}`;
 // 🎤 The mic key (⚙ Settings → Shortcuts): Toggle = press to start, press again to stop; Hold = listens while held.
 const keyCombo = (e) => {
   if (['Control', 'Shift', 'Alt', 'Meta', 'AltGraph'].includes(e.key)) return '';
@@ -6642,16 +6644,16 @@ const keyCombo = (e) => {
 const micTarget = () => { const c = focused(); if (c?.el?.root?.isConnected) return c; return G.homeDraft?.el?.root?.isConnected ? G.homeDraft : null; };
 document.addEventListener('keydown', (e) => {
   if (e.repeat || e.target.closest?.('.st-keycap') || G.settings?.tools?.listen?.on === false) return;
-  if (keyCombo(e) !== (G.settings.micKey || 'Alt+M')) return;
+  if (keyCombo(e) !== (G.settings.micKey || MIC_KEY)) return;
   const c = micTarget(); if (!c) return;
   // It starts listening only while you're typing in that chat's message box (not in Settings or other fields); it stops from anywhere.
   if (!G.rec && !(e.target.closest?.('.composer .input') && c.el.root.contains(e.target))) return;
   e.preventDefault();
-  if (G.settings.micMode === 'hold') { G.micHeld = true; if (!G.rec) toggleMic(c, { byKey: true }); } else toggleMic(c, { byKey: true });
+  if (micHold()) { G.micHeld = true; if (!G.rec) toggleMic(c, { byKey: true }); } else toggleMic(c, { byKey: true });
 }, true);
 document.addEventListener('keyup', (e) => {
-  if (G.settings?.micMode !== 'hold' || !G.micHeld) return;
-  const keys = (G.settings.micKey || 'Alt+M').split('+'), k = keyCombo({ ...e, key: e.key, code: e.code, ctrlKey: false, shiftKey: false, altKey: false, metaKey: false }) || ({ Control: 'Ctrl', Shift: 'Shift', Alt: 'Alt', Meta: 'Meta' })[e.key];
+  if (!micHold() || !G.micHeld) return;
+  const keys = (G.settings.micKey || MIC_KEY).split('+'), k = keyCombo({ ...e, key: e.key, code: e.code, ctrlKey: false, shiftKey: false, altKey: false, metaKey: false }) || ({ Control: 'Ctrl', Shift: 'Shift', Alt: 'Alt', Meta: 'Meta' })[e.key];
   if (!keys.includes(k)) return;
   G.micHeld = false; G.rec?.stop();
 }, true);
