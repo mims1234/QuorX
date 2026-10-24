@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadCards, cardText, limitsLine, cardFile, CARDS_DIR, CARD_CHARS } from '../server/modelcards.js';
-import { runAgent, inPlaceEdit, answerQuestion, answerSecret, answerApproval, answerBudget, setRunApproval, steerRun, holdCard } from '../server/agent.js';
+import { runAgent, inPlaceEdit, deciderPicture, REVIEW_SYSTEM, FILM_KEYS, answerQuestion, answerSecret, answerApproval, answerBudget, setRunApproval, steerRun, holdCard } from '../server/agent.js';
 import { saveProject, forgetProject, setProjectBudget } from '../server/store.js';
 import { loadCheckpoint, dropCheckpoint, ledger } from '../server/runs.js';
 import { setBudget, projectSpend, budgetState, live as liveRuns } from '../server/budget.js';
@@ -24,8 +24,9 @@ import { startRun, follow, getRun, readLog } from '../server/runs.js';
 import { getChat, saveChat as storeChat, listProjects, listChats } from '../server/store.js';
 import { matchPlan, usePlan } from '../server/mediaplan.js';
 import { setSecret, parseEnv, secretKind, scrubSecrets } from '../server/projectsecrets.js';
-import { looksLikeFilm, videoModeFor, filmFacts, factsText, videoRules, recommendedRoute, recommendedMusic, VIDEO_DEFAULTS } from '../server/videomode.js';
+import { looksLikeFilm, videoModeFor, filmFacts, factsText, finishedFilms, videoRules, recommendedRoute, recommendedMusic, VIDEO_DEFAULTS } from '../server/videomode.js';
 import { settleTempo, analyse, tempoOf, barsOf, fitPlan, pickWindows, cutsVsBeats } from '../server/musicmap.js';
+import { checkHtml } from '../server/checks.js';
 
 let n = 0;
 const reply = (text, calls = [], finishReason = 'stop') => ({ text, toolCalls: calls.map(([name, args], i) => ({ id: `c${++n}_${i}`, type: 'function', function: { name, arguments: typeof args === 'string' ? args : JSON.stringify(args) } })), usage: { cost: 0.0001 }, ms: 1, firstMs: 1, finishReason });
@@ -2909,7 +2910,7 @@ test('Video Mode v2: the brief recommends moving stills and AI music when those 
   assert.equal(recommendedMusic({ videoMusic: 'ai' }, []), 'code');
 });
 
-test('Video Mode v2: music_map and fit_music work on a track in the project', async () => {
+test('Video Mode v2: music_map and fit_music work on a track in the project', { skip: !hasFfmpeg && 'ffmpeg is not installed' }, async () => {
   const { bodies, dir } = await run((body, i) => [
     reply('', [['music_map', { path: 'assets/audio/beat.wav', bpm: 96, seconds: 5, shape: 'peak' }]]),
     reply('', [['fit_music', { path: 'assets/audio/beat.wav', out: 'assets/audio/beat-30s.wav', seconds: 30, bpm: 96 }]]),
@@ -2928,6 +2929,7 @@ test('Video Mode v2: music_map and fit_music work on a track in the project', as
   const secs = Number(execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', path.join(dir, 'assets', 'audio', 'beat-30s.wav')]).toString());
   assert.ok(Math.abs(secs - 30) < 2.6, `about 30 s on bar lines, got ${secs}`);
   assert.match(toolResults(bodies[3]).at(-1), /^Error: /, 'outside the project is refused');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, '.quorx', 'video', 'music.json'), 'utf8')).bpm, 96, 'the tempo asked for is kept for the film checks');
 });
 
 test('a command that edits a file in place is steered to edit_file, before any approval', async () => {
@@ -2958,4 +2960,130 @@ test('Video Mode: a chat continued from a film chat keeps Video Mode and the sto
   assert.equal(of(events, 'video_mode')[0].first, false, 'no new brief');
   assert.match(userText(bodies[0]), /The brief and the story were settled earlier/);
   assert.doesNotMatch(toolResults(bodies[1])[0], /storyboard/i, 'the approval carried over');
+});
+
+// ---------- fixes from the first real v2 film (false alarms from QuorX's own checks) ----------
+test('Video Mode: only finished films are reviewed as films, not the clips they are made from', () => {
+  const found = [{ r: 'assets/clips/shot09.mp4', t: 9 }, { r: 'assets/generated/video_slow_crane.mp4', t: 8 }, { r: 'assets/edits/mumbai-monsoon.mp4', t: 5 }, { r: 'teaser.mp4', t: 7 }, { r: 'assets/shot01.mp4', t: 10 }];
+  assert.deepEqual(finishedFilms(found), ['assets/edits/mumbai-monsoon.mp4', 'teaser.mp4']);
+});
+
+test('Video Mode: the film checks measure the beat at the tempo the music was made at', async () => {
+  const dir = tempDir('quorx-film-');
+  fs.mkdirSync(path.join(dir, 'assets'), { recursive: true });
+  const ff = async (cmd, args) => {
+    if (cmd === 'ffprobe') return { ok: true, out: JSON.stringify({ format: { duration: '30' }, streams: [{ codec_type: 'video', width: 1920, height: 1080, r_frame_rate: '24/1' }, { codec_type: 'audio' }] }), err: '' };
+    if (args.some((a) => String(a).includes('astats'))) return { ok: true, out: '', err: 'RMS level dB: -20\n' };
+    if (args.includes('ebur128=peak=true')) return { ok: true, out: '', err: 'Summary:\n    I:   -14.0 LUFS\n    Peak:   -1.2 dBFS\n' };
+    if (args.some((a) => String(a).startsWith('blackdetect'))) return { ok: true, out: '', err: '' };
+    fs.writeFileSync(args.at(-1), 'jpg'); return { ok: true, out: '', err: '' };
+  };
+  const asked = [];
+  const music = async (file, opts) => { asked.push(opts.bpm); const bpm = opts.bpm || 129.2, beat = 60 / bpm; return { bpm, beats: Array.from({ length: Math.ceil(30 / beat) }, (_, i) => +(i * beat).toFixed(3)), ending: { clean: true } }; };
+  const cuts = async () => [5, 7.5, 10, 15, 17.5, 20, 25, 27.5];
+  const right = await filmFacts(dir, 'assets/film.mp4', { ff, music, cuts, bpm: 96 });
+  assert.equal(asked[0], 96);
+  assert.equal(right.cuts.onBeat, 8, 'at 96 BPM all eight cuts are on the beat');
+  assert.doesNotMatch(factsText(right), /cuts land on a beat/);
+  const wrong = await filmFacts(dir, 'assets/film.mp4', { ff, music, cuts });
+  assert.ok(wrong.cuts.onBeat < 8, 'without the tempo, a detector that hears 129 BPM makes them look off');
+});
+
+test('a picture for the deciders is scaled down first, and sent as it is when that fails', () => {
+  const dir = tempDir('quorx-pic-'), file = path.join(dir, 'sheet.png');
+  fs.writeFileSync(file, Buffer.alloc(64, 7));
+  let args = null;
+  const small = deciderPicture(file, 'image/png', (cmd, a) => { args = a; return Buffer.alloc(800, 1); });
+  assert.match(small, /^data:image\/jpeg;base64,/);
+  assert.ok(args.some((a) => String(a).includes("min(1280,iw)")));
+  assert.match(deciderPicture(file, 'image/png', () => { throw new Error('no ffmpeg'); }), /^data:image\/png;base64,/);
+});
+
+test('a film is reviewed as a film: picture, motion, sound, rhythm and story', () => {
+  assert.deepEqual(FILM_KEYS, ['picture', 'motion', 'sound', 'rhythm', 'story']);
+  const film = REVIEW_SYSTEM(3, true, false, true);
+  assert.match(film, /skeptical film reviewer/);
+  assert.match(film, /rhythm \(cuts land on the music's beats/);
+  assert.doesNotMatch(film, /accessibility/);
+  assert.match(REVIEW_SYSTEM(3, true), /accessibility/, 'a page is still reviewed as a page');
+});
+
+// ---------- the motion test: render without scripts, switch paid tools on, pick models ----------
+test('render_film plays a page frame by frame in QuorX\'s browser and encodes it, with no command to approve', { skip: (!(await import('../server/browser.js')).browserPath() && 'no Chromium browser installed') || (!hasFfmpeg && 'ffmpeg is not installed') }, async () => {
+  const page = '<!doctype html><html><body style="margin:0;background:#000"><canvas id="c" width="1080" height="1080"></canvas><script>const g = document.getElementById("c").getContext("2d"); window.DUR = 1; window.render = (t) => { g.fillStyle = "#000"; g.fillRect(0, 0, 1080, 1080); g.fillStyle = "#c6ff3d"; g.fillRect(100 + t * 600, 440, 200, 200); }; window.READY = true;</script></body></html>';
+  const { bodies, events, dir } = await run((body, i) => [
+    reply('', [['render_film', { page: 'film/index.html', out: 'assets/edits/box.mp4', fps: 12, aspect: '1:1' }]]),
+    reply('', [['render_film', { page: 'film/empty.html', out: 'assets/edits/none.mp4' }]]),
+    reply('Done.'),
+  ][i], {
+    text: 'make a 1 second motion graphics teaser', videoMode: 'on', settings: { approval: 'strict', tools: { browser: { on: true } } },
+    prep: (d) => { fs.mkdirSync(path.join(d, 'film'), { recursive: true }); fs.writeFileSync(path.join(d, 'film', 'index.html'), page); fs.writeFileSync(path.join(d, 'film', 'empty.html'), '<!doctype html><p>no film here</p>'); },
+  });
+  assert.match(toolResults(bodies[1]).at(-1), /^Rendered assets\/edits\/box\.mp4: 1 s, 12 frames at 12 fps, 1080×1080, no sound/);
+  const probe = execFileSync('ffprobe', ['-v', 'error', '-count_frames', '-show_entries', 'stream=nb_read_frames,width,height', '-of', 'csv=p=0', path.join(dir, 'assets', 'edits', 'box.mp4')]).toString().trim().replace(/,+$/, '');
+  assert.equal(probe, '1080,1080,12');
+  assert.equal(of(events, 'approval').length, 0, 'nothing to approve');
+  assert.match(toolResults(bodies[2]).at(-1), /has no window\.render\(t\)/);
+});
+
+test('enable_media: one card switches paid tools on for the chat, with the model the user picked', async () => {
+  let runId;
+  const { bodies, events } = await run((body, i) => [
+    reply('', [['enable_media', { kinds: ['music'], why: 'a real score instead of one written in code' }]]),
+    reply('', [['enable_media', { kinds: ['video'], why: 'moving shots' }]]),
+    reply('Done.'),
+  ][i], {
+    text: 'make a teaser', settings: { approval: 'strict', mediaEnabled: true, tools: { browser: { on: false }, image: { on: true }, video: { on: false }, music: { on: false }, speech: { on: false } } },
+    onEvent: (e) => { if (e.t === 'start') runId = e.runId; if (e.t === 'approval') setTimeout(() => answerApproval(runId, e.id, e.kinds?.includes('music') ? { approve: true, models: { music: 'google/lyria-3-pro-preview' } } : { approve: false }), 5); },
+  });
+  const names = (b) => b.tools.map((t) => t.function.name);
+  assert.ok(names(bodies[0]).includes('enable_media'));
+  assert.ok(!names(bodies[0]).includes('compose_music'));
+  const card = of(events, 'approval')[0];
+  assert.deepEqual(card.kinds, ['music']);
+  assert.match(toolResults(bodies[1]).at(-1), /^Switched on for this chat: music \(models: music google\/lyria-3-pro-preview\)/);
+  assert.ok(names(bodies[1]).includes('compose_music'), 'its tool is offered at once');
+  assert.deepEqual(of(events, 'tools_on')[0].kinds, ['music']);
+  assert.match(toolResults(bodies[2]).at(-1), /^The user kept video clips off/);
+  assert.ok(!names(bodies[2]).includes('make_video'));
+});
+
+test('enable_media in YOLO switches on after the wait (switching on spends nothing)', async () => {
+  const { bodies } = await run((body, i) => [reply('', [['enable_media', { kinds: ['music'], why: 'score' }]]), reply('Done.')][i], {
+    text: 'make a teaser', settings: { approval: 'yolo', mediaEnabled: true, tools: { browser: { on: false }, music: { on: false } } },
+  });
+  assert.match(toolResults(bodies[1]).at(-1), /^Switched on for this chat: music/);
+});
+
+test('every generate card has a model choice: a production plan line, and a single call, can switch to any model of that kind', async () => {
+  primeCatalogue('videos', [TEST_VIDEO, TEST_VIDEO_TEXT]);
+  let runId;
+  const { bodies, events } = await run((body, i) => [
+    reply('', [['media_plan', { why: 'two shots', items: [{ kind: 'video', count: 2, seconds: 5, what: 'two shots' }] }]]),
+    reply('', [['make_video', { prompt: 'a lighthouse at dusk', why: 'an extra shot' }]]),
+    reply('Done.'),
+  ][i], {
+    settings: { ...videoSettings('test/vid-start'), approval: 'strict' },
+    generateVideo: async () => ({ url: `data:video/mp4;base64,${Buffer.from('mp4').toString('base64')}`, usage: { cost: 0.1 }, ms: 5 }),
+    onEvent: (e) => { if (e.t === 'start') runId = e.runId; if (e.t === 'approval' && e.mode === 'strict') setTimeout(() => answerApproval(runId, e.id, e.tool === 'media_plan' ? { approve: true, models: { 0: 'test/vid-text' } } : { approve: true, model: 'test/vid-start' }), 5); },
+  });
+  const planCard = of(events, 'approval').find((e) => e.tool === 'media_plan');
+  assert.deepEqual(planCard.items[0].options.map((o) => o.model), ['test/vid-start'], 'each line offers the kind\'s models with prices');
+  assert.match(toolResults(bodies[1]).at(-1), /^Plan approved/);
+  assert.match(toolResults(bodies[1]).at(-1), /test\/vid-text/, 'the model picked from the catalogue is in the plan');
+  // The later call uses the model picked on the plan, so it fits the plan and needs no second card.
+  const call = of(events, 'approval').find((e) => e.tool === 'make_video');
+  assert.equal(call.model, 'test/vid-text');
+  assert.equal(of(events, 'approval_done').find((e) => e.id === call.id).by, 'plan');
+});
+
+test('the link check skips tags a script builds as text, and still finds a real broken link', async () => {
+  const dir = tempDir('quorx-links-');
+  const html = '<!doctype html><body><img src="missing.png"><script>const a = `<img src="out/${n}.png">`; const b = \'<img src="teaser/stills/t\' + t + \'.png">\';</script></body>';
+  const problems = await checkHtml(html, { label: 'review.html', dir });
+  assert.deepEqual(problems.filter((p) => /links to/.test(p)), ['review.html: links to missing.png, which does not exist']);
+});
+
+test('silent, draft and test copies of a film are not reviewed as films', () => {
+  assert.deepEqual(finishedFilms([{ r: 'assets/edits/quorx-teaser-silent.mp4', t: 9 }, { r: 'assets/edits/quorx-teaser.mp4', t: 8 }, { r: 'assets/edits/teaser_draft.mp4', t: 7 }]), ['assets/edits/quorx-teaser.mp4']);
 });

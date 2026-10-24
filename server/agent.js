@@ -12,6 +12,7 @@ import path from 'node:path';
 import { chat, chatStream, chatModels, imageModels, generateImage, speechModels, synthesize, composeMusic, musicModels, videoModels, generateVideo, HOME } from './openrouter.js';
 import { ensemble, GATE } from './decisions.js';
 import { runtime } from './openrouter.js';
+import { pathToFileURL } from 'node:url';
 import { rotateLog } from './storagerules.js';
 import { enhanceRequest } from './enhancer.js';
 import { validId, listProjects, getChat } from './store.js';
@@ -56,8 +57,9 @@ import { modelNotes } from './modelcards.js';
 import { ownAddresses } from './access.js';
 import { safeFetch } from './safefetch.js';
 import { videoBody, canStartFromImage, editCommand, ffmpegMajor } from './video.js';
+import { execFileSync } from 'node:child_process';
 import { mapMusic, pickWindows, fitPlan, writeFit } from './musicmap.js';
-import { VIDEO_DEFAULTS, VIDEO_SKILLS, STORYBOARD_TOOL, MUSIC_MAP_TOOL, FIT_MUSIC_TOOL, videoModeFor, videoRules, normalizeStoryboard, storyboardHtml, loadStoryboard, saveStoryboard, filmFacts, factsText } from './videomode.js';
+import { VIDEO_DEFAULTS, VIDEO_SKILLS, STORYBOARD_TOOL, MUSIC_MAP_TOOL, FIT_MUSIC_TOOL, RENDER_FILM_TOOL, RENDER_SIZES, renderArgs, finishedFilms, videoModeFor, videoRules, normalizeStoryboard, storyboardHtml, loadStoryboard, saveStoryboard, filmFacts, factsText } from './videomode.js';
 
 // The paid media categories and the tool each one gives the agent.
 export const MEDIA = {
@@ -203,6 +205,8 @@ const short = (m) => String(m).split('/').pop();
 // Tools that put the agent's text into a file or an artifact, and the note trimming leaves in place of old text (loop.js).
 const WRITES_CONTENT = new Set(['write_file', 'append_file', 'edit_file', 'write_artifact', 'edit_artifact']);
 const SCRATCH_SCRIPT = /^\s*(?:node|python3?|py|deno|bun|tsx)\s+["']?(?:\.[/\\])?\.quorx[/\\]scratch[/\\][\w.-]+\.(?:mjs|cjs|js|ts|py)["']?(?:\s+[\w.:=/\\-]+)*\s*$/i;
+// A target that is a media file, not a page (site:assets/edits/film.mp4).
+const MEDIA_TARGET = /^site:.+\.(mp4|webm|mov|m4v|mp3|wav|m4a|ogg|flac|png|jpe?g|gif|webp|avif)$/i;
 const WRITE_TOOLS = new Set(['write_file', 'append_file', 'edit_file', 'write_artifact', 'edit_artifact', 'delete_file']);
 const PLAN_START_STEPS = 10;
 // Paths grouped by folder ("src/{a.js, b.js}"), so a folder's name isn't repeated for every file in it.
@@ -210,6 +214,16 @@ export function compactPaths(paths) {
   const by = new Map();
   for (const p of paths) { const i = p.lastIndexOf('/', p.endsWith('/') ? p.length - 2 : p.length); const dir = i < 0 ? '' : p.slice(0, i + 1); (by.get(dir) || by.set(dir, []).get(dir)).push(p.slice(i + 1)); }
   return [...by].map(([dir, names]) => (dir && names.length > 1 ? `${dir}{${names.join(', ')}}` : names.map((n) => dir + n).join(', '))).join(', ');
+}
+// A picture from the project for the deciders, as a data URL, at most 1280 px on its longest side. A decider model
+// turned down a 1920×810 contact sheet and 1920×1080 frames ("Invalid image dimensions") and took 1024×576 stills,
+// so a big picture left a check with one judge fewer. Scaled with ffmpeg when it is installed; else sent as it is.
+export function deciderPicture(file, type, run = execFileSync) {
+  try {
+    const jpg = run('ffmpeg', ['-v', 'error', '-i', file, '-vf', "scale='min(1280,iw)':'min(1280,ih)':force_original_aspect_ratio=decrease", '-frames:v', '1', '-q:v', '4', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-'], { maxBuffer: 2e7, timeout: 20000, windowsHide: true });
+    if (jpg?.length > 500) return `data:image/jpeg;base64,${Buffer.from(jpg).toString('base64')}`;
+  } catch { /* no ffmpeg, or a picture it can't read: the original goes */ }
+  return `data:${type};base64,${fs.readFileSync(file).toString('base64')}`;
 }
 // The file a command edits in place, or ''. PowerShell: (Get-Content f [-Raw]) -replace … | Set-Content f (or .Replace(…),
 // Out-File, the same file on both sides); POSIX: sed -i … f.
@@ -253,6 +267,8 @@ export const HELPER_MODEL = 'qwen/qwen3.7-flash';
 // The four scores the build benchmark has always passed on, plus accessibility. A project with a DESIGN.md also gets a brand score.
 export const CORE_KEYS = ['function', 'craft', 'design', 'originality'];
 export const REVIEW_KEYS = [...CORE_KEYS, 'accessibility'];
+// A film (Video Mode) is scored as a film; every one of these counts.
+export const FILM_KEYS = ['picture', 'motion', 'sound', 'rhythm', 'story'];
 // Creativity (per chat): no temperature at all by default, so each model uses its own. Sent only to models
 // that accept it; Claude with thinking on accepts only 1, so "Focused" is skipped there.
 const CREATIVITY = { focused: 0.3, creative: 1 };
@@ -338,7 +354,9 @@ export function answerApproval(runId, id, answer) {
   // A command card's "Always allow…" sends the rule to save: { match, scope: 'chat' | 'project' | 'everywhere' }.
   const rule = answer.rule && typeof answer.rule.match === 'string' && ['chat', 'project', 'everywhere'].includes(answer.rule.scope)
     ? { match: clip(answer.rule.match.trim(), 300), scope: answer.rule.scope } : null;
-  resolve({ approve: !!answer.approve, always: !!answer.always, reason: clip(answer.reason || '', 400), model: answer.model ? String(answer.model) : null, rule, by: 'user' });
+  // models: the model picked for each line of a production plan, or for each paid tool being switched on ({ key: id }).
+  const models = answer.models && typeof answer.models === 'object' ? Object.fromEntries(Object.entries(answer.models).filter(([, v]) => typeof v === 'string' && v.trim()).slice(0, 20).map(([k, v]) => [String(k).slice(0, 20), clip(v.trim(), 120)])) : null;
+  resolve({ approve: !!answer.approve, always: !!answer.always, reason: clip(answer.reason || '', 400), model: answer.model ? String(answer.model) : null, ...(models ? { models } : {}), rule, by: 'user' });
   return true;
 }
 // A running reply can be changed while it works: its Strict / YOLO mode, and notes the user sends it.
@@ -467,7 +485,16 @@ Plan first (the user's setting): before you change any file or run any command, 
 Plan first for big tasks (the user's setting): for anything bigger than a small fix (a new app, game, site or tool, or a change across several files), call plan before you change anything. The user reads it and answers Go ahead, Stop here, or asks for changes; until they say Go ahead, file changes and commands are refused. Small fixes can go straight ahead.` : '');
 
 // The reviewer's own instructions (it never sees the builder's rules or conversation).
-export const REVIEW_SYSTEM = (bar, sees, brand = false) => `You are an independent, skeptical QA reviewer. Another AI built what you are testing. You did not build it, and you have no reason to go easy on it.
+// A film: watched, not clicked. The harness measures what a person can't judge by eye (length, sound, cuts against the beat).
+const FILM_REVIEW = (bar, sees) => `You are an independent, skeptical film reviewer. Another AI made the film you are reviewing. You did not make it, and you have no reason to go easy on it.
+Open each target with the browser tool: a film opens in a player; let it play, and seek to a few moments.${sees ? ' You get a screenshot after each action, and contact sheets of the film (frames in order) in the brief.' : ''} Use at most 6 browser actions. The harness's measured facts in the brief are facts: trust them over the builder's claims, and over your own guesses about timing or loudness.
+Then call submit_review once with:
+- scores from 1 to 5: picture (sharp enough for its size, one consistent look, the same people and places from shot to shot, no broken or garbled frames), motion (the shots move: the camera and things inside the frame, not a slideshow of stills), sound (the music fits the mood, no rumble, hiss or noise beds, a clean ending, a sensible level), rhythm (cuts land on the music's beats and accents, shot lengths vary, the pace builds where the story does), story (it shows what the user asked for, with a clear start, turn and end).
+- bugs: only problems you saw yourself or that the harness's facts list under "Off:", each as did (what you did, or "read the harness's film facts"), saw, expected and severity: "breaks" (it won't play, has no sound when sound was asked for, or misses what the user asked for), "annoying" (a viewer would notice: a garbled frame, a cut off the beat, an abrupt ending) or "minor" (polish).
+- summary: two or three sentences.
+Score what you actually saw and what the harness measured, not what the builder claims. ${bar} means acceptable.`;
+
+export const REVIEW_SYSTEM = (bar, sees, brand = false, film = false) => film ? FILM_REVIEW(bar, sees) : `You are an independent, skeptical QA reviewer. Another AI built what you are testing. You did not build it, and you have no reason to go easy on it.
 Test it like a demanding user: open each target with the browser tool, start it, use its controls (click, press keys, type), play or use it for a while, and try the obvious paths plus one or two edge cases.${sees ? ' After each action you get a screenshot of the page.' : ''} Use at most 10 browser actions.
 Then call submit_review once with:
 - scores from 1 to 5: function (works as asked, no errors, nothing broken), craft (layout, readable text, nothing cut off or overlapping), design (looks intentional and polished, not like a generic template), originality (for games and creative work: more than a basic demo, with depth or a twist; for tools and apps: complete for what the user asked), accessibility (text has enough contrast and size to read, buttons and inputs say what they do, Tab moves through the controls with a visible focus, and it still works at phone width: open it once with width 390)${brand ? ', brand (follows the project\'s design system given in the brief: its colours, type, spacing and components)' : ''}.
@@ -564,6 +591,13 @@ const PROJECT_TOOLS = [
   ...(TEMPLATE_LIST.length ? [{ type: 'function', function: { name: 'scaffold', description: `Copy a starter template into the project (never overwrites existing files). Templates: ${TEMPLATE_LIST.map((t) => `${t.name} (${t.description})`).join('; ')}`, parameters: { type: 'object', required: ['template'], properties: { template: { type: 'string', enum: TEMPLATE_LIST.map((t) => t.name) } } } } }] : []),
   { type: 'function', function: { name: 'save_skill', description: 'Save what worked as a reusable skill for this project, so future chats can load it with use_skill. Use it after a task that needed several fixes to get right.', parameters: { type: 'object', required: ['name', 'description', 'instructions'], properties: { name: { type: 'string', description: 'short-kebab-name' }, description: { type: 'string', description: 'One line: when to use this skill' }, instructions: { type: 'string', description: 'The steps, rules and gotchas, in Markdown' } } } } },
 ];
+// Paid tools that are off in this chat: one card asks the user to switch them on (each with a model to pick), instead
+// of the agent quietly working around them (a film without the music tool got a rumbling score written in code).
+const MEDIA_LABEL = { image: 'pictures', video: 'video clips', music: 'music', speech: 'voice' };
+const ENABLE_MEDIA_TOOL = (off) => ({ type: 'function', function: { name: 'enable_media', description: `Ask the user to switch on paid tools that are off in this chat (${off.map((c) => MEDIA_LABEL[c]).join(', ')}) when the work clearly needs one. One card; they can pick the model for each. Switching on spends nothing: every paid call is still priced and approved, and the budget caps apply. Ask once, with the reason; if they keep it off, plan without it.`, parameters: {
+  type: 'object', required: ['kinds', 'why'], properties: {
+    kinds: { type: 'array', minItems: 1, maxItems: 4, items: { type: 'string', enum: off } },
+    why: { type: 'string', description: 'One plain sentence: what the work gets from it' } } } } });
 const SKILL_TOOL = { type: 'function', function: { name: 'use_skill', description: 'Load a skill (a playbook of steps and gotchas) before starting a task it covers.', parameters: { type: 'object', required: ['name'], properties: { name: { type: 'string' } } } } };
 // One question, or up to 4 in one card (each with the answer the agent recommends), so the user can settle them in one go.
 const ASK_ITEM = {
@@ -1073,6 +1107,9 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
   let tools = TOOLS({ artifacts: T.artifacts.on, decide: decidersOn && setup.decide !== 'off', cats, choices, code: !!root, browser: browserOn, skills: skills.length > 0, ask: askOn, docs: docsOn, helpers: helpersOn });
   if (!decidersOn) tools = tools.filter((t) => t.function.name !== 'look');
   if (proposeMem) tools.push(REMEMBER_TOOL);
+  // Paid tools off in this chat can be asked for (enable_media); not in benchmarks, or where paid media is off entirely.
+  const mediaOff = () => (req.bench || req.settings?.mediaEnabled === false ? [] : Object.keys(MEDIA).filter((c) => !T[c].on));
+  if (mediaOff().length) tools.push(ENABLE_MEDIA_TOOL(mediaOff()));
   emit({ t: 'start', runId, setup, voters: S.voters, approval: S.approval, system, at: 0 });
 
   let reply = '';
@@ -1830,7 +1867,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       const was = loadStoryboard(root, String(req.videoFrom));
       if (was?.approved) { run.storyboard = 'approved'; const { chatId: _from, at: _at, ...rest } = was; saveStoryboard(root, req.chatId, rest); }
     }
-    for (const t of [STORYBOARD_TOOL, MUSIC_MAP_TOOL, FIT_MUSIC_TOOL]) if (!tools.includes(t)) tools.push(t);
+    for (const t of [STORYBOARD_TOOL, MUSIC_MAP_TOOL, FIT_MUSIC_TOOL, ...(browserOn ? [RENDER_FILM_TOOL] : [])]) if (!tools.includes(t)) tools.push(t);
     const loaded = VIDEO_SKILLS.map((n) => readSkill(root, n, req.settings?.skillsOff || [])).filter(Boolean);
     run.video.skills = loaded.map((k) => k.name);
     if (!quiet) {
@@ -1907,7 +1944,10 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     // the plan, not the build.
     if (run.video) {
       const films = filmsChanged().slice(0, 2).map((f) => `site:${f}`);
-      return [...films, ...targets.filter((t) => t !== `artifact:${run.storyboardId}` && !films.includes(t))];
+      // The storyboard of this chat (drawn in an earlier reply too, after Keep going) and the agent's own pages in
+      // .quorx/ (contact sheets, review pages) are not checked as the build: key presses on a storyboard sent a film back.
+      const board = run.storyboardId || loadStoryboard(root, req.chatId)?.artifact;
+      return [...films, ...targets.filter((t) => t !== `artifact:${board}` && !/^artifact:storyboard_/.test(t) && !/^site:\.?quorx[\\/]/i.test(t) && !films.includes(t))];
     }
     return targets;
   }
@@ -1928,9 +1968,71 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       }
     };
     walk(root, '', 0);
-    return found.sort((a, b) => b.t - a.t).map((x) => x.r);
+    return finishedFilms(found);
   }
   // music_map and fit_music (server/musicmap.js): the track's bars, changes and ending; a copy fitted to a length on bar lines.
+  // The tempo the film's music was asked for: from this reply's music_map / fit_music, else as this project last kept it.
+  function rememberBpm(bpm) {
+    run.musicBpm = bpm;
+    try { fs.mkdirSync(path.join(root, '.quorx', 'video'), { recursive: true }); fs.writeFileSync(path.join(root, '.quorx', 'video', 'music.json'), JSON.stringify({ bpm, at: Date.now() })); } catch { /* a convenience */ }
+  }
+  function musicBpm() {
+    if (run.musicBpm) return run.musicBpm;
+    try { return Number(JSON.parse(fs.readFileSync(path.join(root, '.quorx', 'video', 'music.json'), 'utf8')).bpm) || 0; } catch { return 0; }
+  }
+  // render_film (server/videomode.js): QuorX's own hidden browser plays the page frame by frame (window.render(t)) and
+  // ffmpeg encodes the frames, with the soundtrack if given. Nothing to approve: no command runs.
+  async function renderFilmTool(args) {
+    const pageRel = String(args.page || '').trim().replace(/^[/\\]+/, ''), outRel = String(args.out || '').trim();
+    if (!pageRel || !/\.html?$/i.test(pageRel)) return 'Error: give page, the film\'s HTML page in the project (e.g. film/index.html).';
+    if (!/\.mp4$/i.test(outRel)) return 'Error: give out, an .mp4 to write in the project (e.g. assets/edits/teaser.mp4).';
+    let pageFile, out, audio = '';
+    try { pageFile = safePath(root, pageRel); out = safePath(root, outRel); if (args.audio) audio = safePath(root, String(args.audio)); } catch (e) { return `Error: ${e.message}`; }
+    if (!fs.existsSync(pageFile)) return `Error: no file ${pageRel} in the project.`;
+    if (audio && !fs.existsSync(audio)) return `Error: no file ${args.audio} in the project.`;
+    const ff = (await detectToolchains().catch(() => [])).find((t) => t.id === 'ffmpeg');
+    if (!ff?.found) return 'Error: ffmpeg is not installed on this computer, so the frames can\'t be encoded. Tell the user they can install FFmpeg from ⚙ Settings → Setup check, then call render_film again.';
+    const [W, H] = RENDER_SIZES[args.aspect] || RENDER_SIZES['16:9'];
+    const fps = Math.max(12, Math.min(60, Math.round(Number(args.fps) || 30))), start = Math.max(0, Number(args.start) || 0);
+    const t0 = Date.now();
+    let tt;
+    try { tt = await (deps.openTab || openTab)(); } catch (e) { return `Error: QuorX's browser would not start (${clip(e.message, 160)}).`; }
+    try {
+      // From the pages address (its own origin, as the user sees it); without one (tests), straight from the file.
+      const url = runtime.pagePort ? resolveTarget(`site:${pageRel}`) : pathToFileURL(pageFile).href;
+      await tt.open(url, { width: W, height: H });
+      // The page says when its fonts and pictures are in (window.READY), at most 15 s.
+      for (let i = 0; i < 60 && !(await tt.eval('window.READY !== false && (!("READY" in window) || window.READY === true)').catch(() => true)); i++) await sleep(250, signal);
+      await tt.eval('document.fonts ? document.fonts.ready.then(() => true) : true').catch(() => true);
+      const has = await tt.eval('typeof window.render === "function"').catch(() => false);
+      if (!has) return `Error: ${pageRel} has no window.render(t). Define window.render = (t) => { /* draw the frame at t seconds */ } (film-render skill), then call render_film again.`;
+      const dur = Number(args.seconds) || Number(await tt.eval('Number(window.DUR) || 0').catch(() => 0));
+      if (!(dur > 0)) return 'Error: give seconds, or set window.DUR on the page.';
+      const seconds = Math.min(600, dur), frames = Math.round(seconds * fps);
+      fs.mkdirSync(path.dirname(out), { recursive: true });
+      const { spawn } = await import('node:child_process');
+      const enc = spawn('ffmpeg', renderArgs({ fps, seconds, out, audio }), { windowsHide: true, stdio: ['pipe', 'ignore', 'pipe'] });
+      let errText = '';
+      enc.stderr.on('data', (d) => { errText = (errText + d).slice(-2000); });
+      const closed = new Promise((resolve) => enc.on('close', resolve));
+      enc.stdin.on('error', () => {});
+      for (let i = 0; i < frames; i++) {
+        if (signal.aborted) { enc.kill(); throw new Error('aborted'); }
+        await tt.eval(`Promise.resolve(window.render(${(start + i / fps).toFixed(5)})).then(() => true)`);
+        const shot = await tt.cdp('Page.captureScreenshot', { format: 'jpeg', quality: 92 });
+        if (!enc.stdin.write(Buffer.from(shot.data, 'base64'))) await new Promise((r) => enc.stdin.once('drain', r));
+        if (i && i % Math.max(1, Math.round(frames / 4)) === 0) emit({ t: 'note', level: 'info', msg: `🎬 Rendering ${pageRel}: ${i} of ${frames} frames`, at: at() });
+      }
+      enc.stdin.end();
+      const code = await closed;
+      if (code !== 0 || !fs.existsSync(out)) return `Error: ffmpeg could not encode the frames: ${clip(errText.trim(), 500)}`;
+      notes.push(`rendered ${outRel} (${frames} frames)`);
+      return `Rendered ${outRel}: ${seconds} s, ${frames} frames at ${fps} fps, ${W}×${H}${audio ? `, with ${args.audio}` : ', no sound'}, in ${Math.round((Date.now() - t0) / 1000)} s. Check it: a contact sheet and look, and music_map for the beat.`;
+    } catch (e) {
+      if (signal.aborted) throw e;
+      return `Error: rendering stopped: ${clip(e.message, 300)}`;
+    } finally { try { await tt.close?.(); } catch { /* gone */ } }
+  }
   async function musicTool(name, args) {
     const rel = String(args.path || '').trim();
     if (!rel) return 'Error: give path, a track in the project.';
@@ -1938,7 +2040,8 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     try { file = safePath(root, rel); } catch (e) { return `Error: ${e.message}`; }
     if (!fs.existsSync(file)) return `Error: no file ${rel} in the project.`;
     let m;
-    try { m = await mapMusic(file, { bpm: args.bpm }); } catch (e) { return `Error: could not read ${rel} (${clip(e.message, 200)}). ffmpeg must be installed (⚙ Settings → Setup check).`; }
+    if (Number(args.bpm) > 0) rememberBpm(Number(args.bpm));
+    try { m = await mapMusic(file, { bpm: args.bpm || musicBpm() }); } catch (e) { return `Error: could not read ${rel} (${clip(e.message, 200)}). ffmpeg must be installed (⚙ Settings → Setup check).`; }
     const tempo = m.tempo.source === 'hint' ? `${m.bpm} BPM (the tempo asked for; the detector heard ${m.tempo.detected})` : `${m.bpm} BPM`;
     const head = `${tempo}, a bar every ${m.bar.toFixed(3)} s`;
     if (name === 'music_map') {
@@ -1983,7 +2086,12 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     // A project with a DESIGN.md (its design system) is also scored on how well the build follows it.
     let brandDoc = '';
     try { if (root && fs.existsSync(path.join(root, 'DESIGN.md'))) brandDoc = fs.readFileSync(path.join(root, 'DESIGN.md'), 'utf8').trim(); } catch { /* unreadable: no brand score */ }
-    const keys = brandDoc ? [...REVIEW_KEYS, 'brand'] : REVIEW_KEYS;
+    // Video Mode: the films are measured (length, size, sound, loudness, cuts against the music's real tempo) and tiled
+    // on a contact sheet, and a film is scored as a film (picture, motion, sound, rhythm, story).
+    const films = run.video && S.videoReview !== false ? (await Promise.all(filmsChanged().slice(0, 2).map((f) => filmFacts(root, f, { bpm: musicBpm() }).catch(() => null)))).filter(Boolean) : [];
+    const film = films.length > 0;
+    const keys = film ? FILM_KEYS : brandDoc ? [...REVIEW_KEYS, 'brand'] : REVIEW_KEYS;
+    const core = film ? FILM_KEYS : CORE_KEYS;
     emit({ t: 'review_start', step, round, model, targets, at: at() });
     const p = run.plan;
     const brief = [
@@ -1994,12 +2102,9 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       draft ? `The builder's own summary. These are claims to check, not facts:\n<summary>\n${clip(draft, 800)}\n</summary>` : '',
       brandDoc ? `The project's design system (DESIGN.md), for the brand score:\n<design>\n${clip(brandDoc, 3000)}\n</design>` : '',
     ].filter(Boolean).join('\n\n');
-    // Video Mode: the films are measured (length, size, sound, loudness, black frames) and tiled on a contact sheet, so
-    // the reviewer scores the film itself, not only the page that plays it.
-    const films = run.video && S.videoReview !== false ? (await Promise.all(filmsChanged().slice(0, 2).map((f) => filmFacts(root, f).catch(() => null)))).filter(Boolean) : [];
-    if (films.length) emit({ t: 'note', level: 'info', msg: `🎬 Film checks: ${films.map(factsText).join(' · ')}`, at: at() });
-    const filmBrief = films.length ? `The films this build made, measured by the harness (facts, not claims):\n${films.map((f) => `- ${factsText(f)}`).join('\n')}\nReview the film as a film: function is whether it plays and matches the brief (length, shapes, sound); craft is pacing, framing, type and sound level, judged from the contact sheet${films.some((f) => f.sheet) && sees ? 's below' : ''} and the page. Report each "Off:" item as a bug (did: "read the harness's film facts"), severity annoying, or breaks when the film has no sound and the request implies sound.` : '';
-    const rmsgs = [{ role: 'system', content: REVIEW_SYSTEM(bar, sees, !!brandDoc) }, { role: 'user', content: filmBrief ? `${brief}\n\n${filmBrief}` : brief }];
+    if (film) emit({ t: 'note', level: 'info', msg: `🎬 Film checks: ${films.map(factsText).join(' · ')}`, at: at() });
+    const filmBrief = film ? `The films this build made, measured by the harness (facts, not claims):\n${films.map((f) => `- ${factsText(f)}`).join('\n')}\nJudge picture and motion from the contact sheet${films.some((f) => f.sheet) && sees ? 's below' : ''} and the player; sound and rhythm from these facts and what you hear described. Report each "Off:" item as a bug (did: "read the harness's film facts"), severity annoying, or breaks when the film has no sound and the request implies sound.` : '';
+    const rmsgs = [{ role: 'system', content: REVIEW_SYSTEM(bar, sees, !!brandDoc, film) }, { role: 'user', content: filmBrief ? `${brief}\n\n${filmBrief}` : brief }];
     if (sees) for (const f of films.filter((x) => x.sheet)) { try { rmsgs.push({ role: 'user', content: [{ type: 'text', text: `Contact sheet of ${f.rel}: frames in order, left to right, top to bottom.` }, { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${fs.readFileSync(path.join(root, f.sheet)).toString('base64')}` } }] }); } catch { /* no sheet to show */ } }
     const shots = new WeakSet();
     let result = null, opened = 0, tried = 0;
@@ -2039,7 +2144,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     // The reviewer could not open a single page: its scores would only say the browser failed, not how the build is.
     if (tried && !opened) { emit({ t: 'note', level: 'warn', msg: `The reviewer (${short(model)}) could not open any page (the browser failed every time), so there is no review this round.`, at: at() }); return null; }
     // A missing core score counts as 1 (nothing to show for it); a missing accessibility or brand score is left out, not failed.
-    const scores = Object.fromEntries(keys.filter((k) => CORE_KEYS.includes(k) || result.scores?.[k] != null).map((k) => [k, Math.max(1, Math.min(5, Math.round(Number(result.scores?.[k])) || 1))]));
+    const scores = Object.fromEntries(keys.filter((k) => core.includes(k) || result.scores?.[k] != null).map((k) => [k, Math.max(1, Math.min(5, Math.round(Number(result.scores?.[k])) || 1))]));
     // A bug counts only with its steps and what happened: something the builder can reproduce and fix.
     const raw = Array.isArray(result.bugs) ? result.bugs : [];
     const SEV = ['breaks', 'annoying', 'minor'];
@@ -2114,7 +2219,9 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
             const media = await vt.eval('document.body ? document.body.querySelectorAll("img,svg,video,canvas,iframe").length : 0').catch(() => 1);
             const blank = !(sum.text || '').trim() && !sum.controls.length && !media;
             const found = [...errs.slice(0, 5).map((e) => `${target}: ${e}`), ...(blank ? [`${target}: the page shows nothing`] : [])];
-            if (!blank && checksLive) { const C = checkSettings(S); if (C.shots || C.click) found.push(...(await pageChecks(vt, target, 'verify')).problems); }
+            // A film, picture or sound file is not a web page: the page checks read signage in a film's frames as cut-off
+            // text and sent a finished film back twice. Films get the film checks instead.
+            if (!blank && checksLive && !MEDIA_TARGET.test(target)) { const C = checkSettings(S); if (C.shots || C.click) found.push(...(await pageChecks(vt, target, 'verify')).problems); }
             problems.push(...found);
             pages.push({ target, problems: found.length, image: await vt.screenshot().catch(() => null) });
           } catch (e) {
@@ -2247,7 +2354,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     return !!g && S.yoloAuto?.[g] === false;
   }
   function strictAsks(name) {
-    if (CAT_OF[name] || name === 'ask_user' || name === 'request_secret' || name === 'media_plan' || name === 'storyboard') return false;
+    if (CAT_OF[name] || name === 'ask_user' || name === 'request_secret' || name === 'media_plan' || name === 'enable_media' || name === 'storyboard') return false;
     if ((S.strictAsk || 'paid') === 'every') return true;
     return (S.strictAskHelpers === true && name === 'delegate') || (S.strictAskDeciders === true && ['decide', 'look', 'extract_design'].includes(name));
   }
@@ -2336,6 +2443,8 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (name === 'use_skill') return `Load the skill "${args.name}"`;
     if (name === 'music_map') return `Map the music in ${clip(args.path, 80)}`;
     if (name === 'fit_music') return `Fit ${clip(args.path, 60)} to ${args.seconds} s → ${clip(args.out, 60)}`;
+    if (name === 'render_film') return `Render ${clip(args.page, 60)} → ${clip(args.out, 60)}${args.audio ? ` with ${clip(args.audio, 50)}` : ''}`;
+    if (name === 'enable_media') return `Ask to switch on ${Array.isArray(args.kinds) ? args.kinds.join(', ') : ''}`;
     if (name === 'storyboard') return `Show the storyboard "${clip(args.title, 60)}" (${Array.isArray(args.shots) ? args.shots.length : 0} shots)`;
     if (name === 'ask_user') return Array.isArray(args.questions) && args.questions.length ? `Ask you ${args.questions.length} questions: "${clip(args.questions[0]?.question, 80)}"…` : `Ask you: "${clip(args.question, 100)}"`;
     if (name === 'search_docs') return `Search the attached documents for "${clip(args.query, 100)}"`;
@@ -2594,7 +2703,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     }
     if (name === 'decide') return decide(args, step);
     if (name === 'plan') return planTool(args, step);
-    if (['browser', 'use_skill', 'fetch_url', 'ask_user', 'look', 'extract_design', 'media_plan', 'storyboard', 'music_map', 'fit_music'].includes(name) || CAT_OF[name]) return runToolRest(name, args, step);
+    if (['browser', 'use_skill', 'fetch_url', 'ask_user', 'look', 'extract_design', 'media_plan', 'enable_media', 'storyboard', 'music_map', 'fit_music', 'render_film'].includes(name) || CAT_OF[name]) return runToolRest(name, args, step);
     if (name === 'run_command' || [...CODE_TOOLS, ...PROJECT_TOOLS].some((t) => t.function.name === name)) return codeTool(name, args);
     if (['list_docs', 'read_doc', 'search_docs'].includes(name)) return docTool(name, args);
     if (name === 'delegate') return delegate(args, step);
@@ -2627,7 +2736,9 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (name === 'extract_design') return extractDesign(args, step);
     if (CAT_OF[name]) return media(name, args, step);
     if (name === 'media_plan') return mediaPlanTool(args);
+    if (name === 'enable_media') return enableMediaTool(args);
     if (name === 'storyboard') return run.video ? storyboardTool(args) : 'Error: storyboard is only for Video Mode (a film request).';
+    if (name === 'render_film') return run.video ? renderFilmTool(args) : 'Error: render_film is only for Video Mode (a film request).';
     if (name === 'music_map' || name === 'fit_music') return run.video ? musicTool(name, args) : `Error: ${name} is only for Video Mode (a film request).`;
     return `Error: unknown tool ${name}.`;
   }
@@ -2643,7 +2754,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
           const rel = ref.slice(5).replace(/^[/\\]+/, '');
           const type = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif' }[rel.split('.').pop().toLowerCase()];
           const full = path.resolve(root, rel);
-          if (type && full.startsWith(path.resolve(root) + path.sep) && fs.existsSync(full)) out.push(`data:${type};base64,${fs.readFileSync(full).toString('base64')}`);
+          if (type && full.startsWith(path.resolve(root) + path.sep) && fs.existsSync(full)) out.push(deciderPicture(full, type));
         }
         else if (ref.startsWith('artifact:')) {
           const a = arts.get(ref.slice(9));
@@ -3091,7 +3202,10 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       const facts = { command: line, shell, ...(hook ? { chosen_by: `the user, as a hook (${hook}) in project settings${fileFromAgent ? '; the file name in it was chosen by the agent' : '; the agent did not ask for it'}` } : {}), parts: d.segments.map((s) => ({ text: clip(s.text, 200), class: s.cls, ...(s.via ? { run_by_script: s.via } : {}), touches: (s.paths || []).map((p) => `${p.resolved || p.raw} (${p.zone === 'inside' ? 'inside the project' : p.zone})`) })),
         ...(d.packages?.length ? { packages: d.packages.map((p) => `${p.name} on ${p.eco}: ${p.exists ? `first published ${p.ageDays ?? '?'} days ago${p.weekly != null ? `, ${p.weekly} downloads last week` : ''}` : 'not checked'}`) } : {}) };
       // A helper script the agent wrote in its own scratch folder (and QuorX read): judged on harm only.
-      const scratch = d.segments.length === 1 && SCRATCH_SCRIPT.test(line);
+      // Also when all it adds is reading the output (2>&1 | Select-Object -Last 3, | tail): the deciders asked "did the
+      // user ask for this?" about a render script four times in a row and turned it down each time.
+      const firstPart = String(d.segments[0]?.text || '').replace(/\s+\d?>&\d\s*$/, '').trim();
+      const scratch = d.segments.length >= 1 && SCRATCH_SCRIPT.test(firstPart) && d.segments.slice(1).every((s) => s.cls === 'read');
       const j = await approvalJudge({ kind: 'command', userMessages: userTurns(), reading: run.reading?.text, harmOnly: scratch, facts, voters: S.voters, chatModel: setup.model, gate: S.gate, signal, account, sf: SF,
         log: { runId, chatId: req.chatId || null, project: projectId } });
       if (j.approve === true) {
@@ -3389,6 +3503,8 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     // web:<address>: a site in QuorX's own browser (not signed in). page:<id or path>: your own work.
     if (/^web:/i.test(target)) { const u = target.slice(4).trim(); return /^https?:\/\//i.test(u) ? u : `https://${u}`; }
     if (/^page:/i.test(target)) { const x = target.slice(5).trim(); return resolveTarget(arts.has(x) ? `artifact:${x}` : `site:${x}`); }
+    // file:<path> is how decide names a project file; look and browser take it too (it opens like site:<path>).
+    if (/^file:/i.test(target)) return resolveTarget(`site:${target.slice(5).trim().replace(/^[/\\]+/, '')}`);
     if (target.startsWith('artifact:')) {
       const a = arts.get(target.slice(9));
       if (!a) throw new Error(`no artifact ${target.slice(9)}`);
@@ -3402,7 +3518,8 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
       // A site running from the launch file (serve.mjs) opens there: its own origin, so storage works.
       const entry = target.slice(5).replace(/^[/\\]+/, '') || 'index.html';
       const sv = listServers(projectId).find((x) => x.status !== 'stopped' && /\.quorx[/\\]serve\.mjs/.test(x.command || '') && x.url);
-      return sv ? new URL(entry, sv.url).href : `${pages}/ws/${projectId}/${entry}`;
+      // A film, a sound or a picture opens in QuorX's own plain player (centred, on black), not as a bare file.
+      return sv ? new URL(entry, sv.url).href : `${pages}/ws/${projectId}/${entry}${MEDIA_TARGET.test(target) ? '?player=1' : ''}`;
     }
     if (target.startsWith('app:')) {
       // app:<server name>, or app:<server name>/<page> for a page on it.
@@ -3412,7 +3529,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
       if (!sv) throw new Error(`no server named ${nm}${launchConfigs(projectId).length ? ` (servers in the launch file: ${launchConfigs(projectId).map((x) => x.name).join(', ')}; start one with start_server)` : ''}`);
       return `http://localhost:${sv.port}/${page.replace(/^\/+/, '')}`;
     }
-    throw new Error('target must be artifact:<id>, site:<path>, app:<name>, or an http(s) URL');
+    throw new Error('target must be artifact:<id>, site:<path> (or file:<path>), app:<name>, or an http(s) URL');
   }
   // Pages from the outside web are labelled untrusted; the agent's own pages and apps are not (an app's window
   // loaded from its own files, too).
@@ -4038,12 +4155,56 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     const ans = await askUser(card, unsure);
     // The user may have switched to another model in this category before approving.
     let final = plan;
-    if (ans.approve && ans.model && ans.model !== plan.model && T[cat].models.includes(ans.model)) {
+    if (ans.approve && ans.model && ans.model !== plan.model && await catalogueHas(cat, ans.model)) {
       final = options.find((o) => o.model === ans.model) || await estimateFor(cat, ans.model, args, T);
+      preferModel(cat, ans.model); // the rest of this reply uses the model the user picked
       if (overBudget(final)) { const no = budgetNo(final); emit({ t: 'approval_done', id, ...no, at: at() }); return { ...no, plan: final }; }
     }
     emit({ t: 'approval_done', id, ...ans, model: final.model, at: at() });
     return { ...ans, plan: final };
+  }
+
+  // A model the user picked on a card ("More models…"): any model of that kind in the catalogue, not only the three in
+  // Settings. It moves to the front of the kind's list, so the rest of the reply (and the plan's matching) uses it.
+  async function catalogueHas(cat, model) {
+    const list = { image: imageModels, video: videoModels, music: musicModels, speech: speechModels }[cat];
+    if (T[cat]?.models.includes(model)) return true;
+    try { return !!list && (await (deps.mediaCatalogue?.[cat] ? Promise.resolve(deps.mediaCatalogue[cat]) : list())).some((m) => m.id === model); } catch { return false; }
+  }
+  function preferModel(cat, model) { if (model && T[cat]) T[cat].models = [model, ...T[cat].models.filter((m) => m !== model)].slice(0, 3); }
+  // The paid tools offered to the model follow the kinds switched on, after enable_media turns one on mid-reply.
+  async function refreshMediaTools() {
+    for (const c of cats) if (T[c].pick === 'agent' && T[c].models.length > 1 && !choices[c]) choices[c] = await Promise.all(T[c].models.map((m) => estimateFor(c, m, {}, T)));
+    if (cats.includes('video') && !choices.videoStart) choices.videoStart = (await videoModels().catch(() => [])).filter((m) => T.video.models.includes(m.id) && canStartFromImage(m)).map((m) => m.id);
+    const fresh = TOOLS({ artifacts: T.artifacts.on, decide: decidersOn && setup.decide !== 'off', cats, choices, code: !!root, browser: browserOn, skills: skills.length > 0, ask: askOn, docs: docsOn, helpers: helpersOn });
+    const media = new Set(['media_plan', 'edit_video', ...Object.values(MEDIA).map((m) => m.tool)]);
+    tools = [...tools.filter((t) => !media.has(t.function.name) && t.function.name !== 'enable_media'), ...fresh.filter((t) => media.has(t.function.name))];
+    if (mediaOff().length) tools.push(ENABLE_MEDIA_TOOL(mediaOff()));
+  }
+  // enable_media: one card to switch on paid tools that are off in this chat, each with its model to pick. Strict waits
+  // for the user; ⚡ YOLO waits its usual time, then switches on (switching on spends nothing; every call is still
+  // priced and approved, and the budget caps apply).
+  async function enableMediaTool(args) {
+    const off = mediaOff();
+    const want = [...new Set((Array.isArray(args.kinds) ? args.kinds : []).map(String))].filter((k) => off.includes(k));
+    if (!want.length) return off.length ? `Error: give kinds, from the paid tools that are off here: ${off.join(', ')}.` : 'Every paid tool is already on in this chat.';
+    const names = want.map((k) => MEDIA_LABEL[k]).join(' and ');
+    const kindOptions = Object.fromEntries(await Promise.all(want.map(async (k) => [k, (await Promise.all(T[k].models.map((m) => estimateFor(k, m, {}, T)))).map(({ model, est, detail }) => ({ model, est, detail }))])));
+    const card = { id: newApprovalId(), tool: 'enable_media', cat: 'enable', free: true, est: 0, kinds: want, kindOptions, what: `Switch on ${names} for this chat`, why: clip(args.why, 200), yes: 'Switch on', no: 'Keep off', noAlways: true, mode: S.approval };
+    const waitMs = S.approval === 'yolo' ? Math.max(yoloWait(), run.video ? videoWait() : 0) : 0;
+    const ans = await askUser(card, S.approval === 'yolo' ? { ms: waitMs || 1, then: 'switch on', onTimeout: () => ({ approve: true, by: 'timeout', reason: `No answer in ${Math.round(waitMs / 1000)}s, so it was switched on (every paid call is still priced and approved).` }) } : null);
+    emit({ t: 'approval_done', id: card.id, ...ans, at: at() });
+    if (!ans.approve) return `The user kept ${names} off${ans.reason ? `: "${ans.reason}"` : ''}. Plan without ${want.length > 1 ? 'them' : 'it'}, and don't ask again in this reply.`;
+    const picked = {};
+    for (const k of want) {
+      T[k].on = true;
+      const m = ans.models?.[k];
+      if (m && await catalogueHas(k, m)) { preferModel(k, m); picked[k] = m; }
+      if (!cats.includes(k)) cats.push(k);
+    }
+    await refreshMediaTools();
+    emit({ t: 'tools_on', kinds: want, models: picked, at: at() });
+    return `Switched on for this chat: ${names}${Object.keys(picked).length ? ` (models: ${Object.entries(picked).map(([k, m]) => `${k} ${m}`).join(', ')})` : ''}. Their tools are yours now (${want.map((k) => MEDIA[k].tool).join(', ')}); list several calls in media_plan first. Each paid call is still priced and approved, and the budget caps apply.`;
   }
 
   // media_plan: the paid calls a piece of work needs, priced by the harness and approved once (server/mediaplan.js).
@@ -4056,6 +4217,8 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     const calls = plan.items.reduce((s, x) => s + x.count, 0);
     const card = { id, tool: 'media_plan', cat: 'plan', model: '', est: plan.total, basis: 'estimated', detail: `${calls} paid call${calls === 1 ? '' : 's'}`,
       what: plan.items.map(itemLine).join('\n'), items: plan.items.map(({ kind, count, model, each, detail, what }) => ({ kind, count, model, each, detail, what })), why: clip(args.why, 200), mode: S.approval };
+    // Each line offers the kind's models with their prices, so the user can switch one before approving.
+    for (const [i, it] of plan.items.entries()) card.items[i].options = (await Promise.all(T[it.kind].models.map((m) => estimateFor(it.kind, m, { seconds: it.seconds, text: ' '.repeat(it.chars || 0) }, T)))).map(({ model, est, detail }) => ({ model, est, detail }));
     const done = (ans) => { emit({ t: 'approval_done', id, ...ans, at: at() }); return ans; };
     const shown = () => emit({ t: 'approval', ...card, at: at() });
     const pb = projectId && !req.bench ? budgetState(projectId) : null;
@@ -4092,6 +4255,18 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
       run.mediaPlan = null;
       return `${ans.by === 'user' ? 'The user' : ans.by === 'budget' ? 'The budget check' : ans.by === 'timeout' ? 'Nobody' : 'The automatic approval check'} did not approve this plan${ans.reason ? `. Reason: "${ans.reason}"` : ''}. Each paid call will be judged on its own: adapt the plan (fewer or cheaper calls), or go on without it.`;
     }
+    // Models the user picked per line: re-priced, and used for the rest of this reply.
+    if (ans.models) {
+      for (const [i, m] of Object.entries(ans.models)) {
+        const it = plan.items[Number(i)];
+        if (!it || m === it.model || !(await catalogueHas(it.kind, m))) continue;
+        const e = await estimateFor(it.kind, m, { seconds: it.seconds, text: ' '.repeat(it.chars || 0) }, T);
+        Object.assign(it, { model: m, each: e.est, detail: e.detail });
+        preferModel(it.kind, m);
+      }
+      plan.total = plan.items.reduce((s, x) => s + x.each * x.count, 0);
+      if (stats.mediaSpent + plan.total > S.budget) { run.mediaPlan = null; return `With the models the user picked, the plan comes to about $${plan.total.toFixed(3)}, over this reply's $${S.budget} media budget. Plan fewer or shorter calls, or ask the user to raise the budget.`; }
+    }
     run.mediaPlan = { id, items: plan.items, total: plan.total, spent: 0, by: ans.by };
     notes.push(`production plan approved (${calls} paid calls, about $${plan.total.toFixed(3)})`);
     return `Plan approved (about $${plan.total.toFixed(3)} for ${calls} calls):\n${plan.items.map((x) => `- ${itemLine(x)}`).join('\n')}\nCalls that match it (same kind and model, within its count, not dearer than planned) run without another approval. Anything else is checked on its own. Budget caps still apply.`;
@@ -4101,6 +4276,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     const cat = CAT_OF[name];
     if (!T[cat]?.on) return `Error: ${name} is switched off by the user.`;
     const board = storyboardRefusal(); if (board) return board;
+    if (cat === 'music' && run.video) { const b = String(args.prompt || '').match(/\b(\d{2,3})\s*BPM\b/i); if (b) rememberBpm(Number(b[1])); }
     const plan = await estimateFor(cat, modelFor(cat, args), args, T);
     // A start picture is read, and the model checked, before anyone is asked to pay for it.
     let firstFrame = null;
