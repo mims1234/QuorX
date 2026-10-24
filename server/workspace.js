@@ -75,32 +75,70 @@ function otherProjectDirs(root) {
 }
 const isOtherProject = (dir, others) => others.has(norm(dir)) || fs.existsSync(path.join(dir, '.quorx')) || fs.existsSync(path.join(dir, '.openharness'));
 export const SKIPPED = /\((another project, )?skipped\)$/;
-export function listFiles(root, max = 300) {
+// match (optional): only paths it says yes to (the pickers' search); until (optional): stop at this time, with what
+// was found so far (a huge project never holds a search up).
+export function listFiles(root, max = 300, { match = null, until = 0 } = {}) {
   const out = [];
   const others = otherProjectDirs(root);
+  // .quorx is listed last, so a full scratch folder never pushes the project's own files out of the list.
+  let agentDir = null;
+  const add = (rel, size) => { if (!match || match(rel.toLowerCase())) out.push({ path: rel, size: size() }); };
   const walk = (dir) => {
     for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (out.length >= max) return;
-      if (e.name === '.quorx' && dir === root && e.isDirectory()) {
-        const ah = path.join(dir, e.name);
-        for (const k of fs.readdirSync(ah, { withFileTypes: true })) {
-          if (out.length >= max) return;
-          if (!AGENT_VISIBLE.has(k.name)) continue;
-          const p = path.join(ah, k.name);
-          if (k.isDirectory()) walk(p); else out.push({ path: path.relative(root, p).replaceAll('\\', '/'), size: fs.statSync(p).size });
-        }
-        continue;
-      }
+      if (out.length >= max || (until && Date.now() > until)) return;
+      if (e.name === '.quorx' && dir === root && e.isDirectory()) { agentDir = path.join(dir, e.name); continue; }
       if (e.isSymbolicLink()) continue; // a link can lead outside the project
-      if (SKIP.has(e.name)) { out.push({ path: path.relative(root, path.join(dir, e.name)).replaceAll('\\', '/') + '/ (skipped)', size: 0 }); continue; }
+      if (SKIP.has(e.name)) { if (!match) out.push({ path: path.relative(root, path.join(dir, e.name)).replaceAll('\\', '/') + '/ (skipped)', size: 0 }); continue; }
       const p = path.join(dir, e.name);
-      if (e.isDirectory() && isOtherProject(p, others)) { out.push({ path: path.relative(root, p).replaceAll('\\', '/') + '/ (another project, skipped)', size: 0 }); continue; }
+      if (e.isDirectory() && isOtherProject(p, others)) { if (!match) out.push({ path: path.relative(root, p).replaceAll('\\', '/') + '/ (another project, skipped)', size: 0 }); continue; }
       if (e.isDirectory()) walk(p);
-      else out.push({ path: path.relative(root, p).replaceAll('\\', '/'), size: fs.statSync(p).size });
+      else add(path.relative(root, p).replaceAll('\\', '/'), () => fs.statSync(p).size);
     }
   };
   if (fs.existsSync(root)) walk(root);
+  if (agentDir) {
+    for (const k of fs.readdirSync(agentDir, { withFileTypes: true })) {
+      if (out.length >= max) break;
+      if (!AGENT_VISIBLE.has(k.name)) continue;
+      const p = path.join(agentDir, k.name);
+      if (k.isDirectory()) walk(p); else add(path.relative(root, p).replaceAll('\\', '/'), () => fs.statSync(p).size);
+    }
+  }
   return out;
+}
+
+/**
+ * One folder of a project, for the Files pane (it reads a folder when you open it): folders first, then files, by
+ * name; `limit` entries from `offset`. Same rules as listFiles: no links, node_modules and the like are listed but not
+ * entered, a folder that is a project of its own is marked, and inside .quorx only what the agent works with shows.
+ * → { path, total, offset, entries: [{ name, dir, size?, count?, skipped? }] }
+ */
+export async function listDir(root, rel = '', { offset = 0, limit = 500 } = {}) {
+  const dir = rel ? safePath(root, rel) : root;
+  const atRoot = path.resolve(dir) === path.resolve(root), inAgent = path.resolve(dir) === path.resolve(root, AGENT_DIR);
+  const others = otherProjectDirs(root);
+  let list = await fs.promises.readdir(dir, { withFileTypes: true });
+  list = list.filter((e) => !e.isSymbolicLink() && (!inAgent || AGENT_VISIBLE.has(e.name)));
+  // Folders first, then files; by name, numbers in order (file2 before file10). .quorx goes after the project's own folders.
+  const rank = (e) => (e.isDirectory() ? (atRoot && e.name === AGENT_DIR ? 1 : 0) : 2);
+  list.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+  offset = Math.max(0, Number(offset) || 0); limit = Math.max(1, Math.min(2000, Number(limit) || 500));
+  const page = list.slice(offset, offset + limit);
+  const entries = await Promise.all(page.map(async (e) => {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) {
+      if (SKIP.has(e.name) && !(atRoot && e.name === AGENT_DIR)) return { name: e.name, dir: true, skipped: 'skipped' };
+      if (isOtherProject(p, others)) return { name: e.name, dir: true, skipped: 'project' };
+      // How many entries it holds, when that is quick to know (a huge folder just shows none).
+      // (.quorx counts only what it lists: the agent's own files.)
+      const agent = atRoot && e.name === AGENT_DIR;
+      let count; try { const h = await fs.promises.opendir(p); let n = 0; for await (const k of h) { if (agent && !AGENT_VISIBLE.has(k.name)) continue; if (++n > 999) break; } count = n > 999 ? undefined : n; } catch { /* unreadable */ }
+      return { name: e.name, dir: true, count };
+    }
+    let size = 0; try { size = (await fs.promises.stat(p)).size; } catch { /* gone */ }
+    return { name: e.name, dir: false, size };
+  }));
+  return { path: rel, total: list.length, offset, entries };
 }
 
 export function writeFile(root, rel, content) {
@@ -521,20 +559,6 @@ export function agentSpace(root) {
   const total = dirSize(dir);
   parts.push({ name: 'other', bytes: Math.max(0, total.bytes - parts.reduce((a, x) => a + x.bytes, 0)), files: Math.max(0, total.files - parts.reduce((a, x) => a + x.files, 0)) });
   return { dir, total: total.bytes, files: total.files, parts };
-}
-/** Clears one part the user picked: "scratch", "trash", "checkpoints" (keeps the newest `keep` for undo), or
- * "objects" (the snapshot store; the next command takes a full snapshot again). */
-export function clearAgentSpace(root, what, keep = 10) {
-  const base = path.join(root, AGENT_DIR);
-  if (!['scratch', 'trash', 'checkpoints', 'objects'].includes(what)) throw new Error('nothing to clear by that name');
-  if (what === 'objects') { try { fs.rmSync(path.join(base, 'snapindex.json'), { force: true }); } catch { /* gone */ } }
-  const dir = path.join(base, what);
-  if (!fs.existsSync(dir)) return 0;
-  let list = fs.readdirSync(dir, { withFileTypes: true });
-  if (what === 'checkpoints') list = list.filter((e) => e.isDirectory()).sort((a, b) => checkpointTime(path.join(dir, b.name)) - checkpointTime(path.join(dir, a.name))).slice(keep);
-  let n = 0;
-  for (const e of list) { fs.rmSync(path.join(dir, e.name), { recursive: true, force: true }); n++; }
-  return n;
 }
 
 // "*.js", "src/**/*.css": ** spans folders, * and ? stay within one name.

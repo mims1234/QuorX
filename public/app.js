@@ -101,7 +101,7 @@ const QUALITY_INFO = {
     tip: 'The second time the same problem shows up (the same error, failed check, console error, or a bug sent back), a second model with a clean context reads the problem, the recent attempts and the relevant files, and tells the agent the likely cause, the evidence, how to fix it and what not to try again, before it digs further in the wrong direction. Fast and cheap by default (the helper model); Strong uses Claude Sonnet 5.5. At most 3 looks per reply.' },
   deciders: { icon: '⚖️', name: 'Deciders', kind: 'decision', model: lookModel, perBuild: () => '< $0.001 a build',
     note: 'Screenshot and click checks, look and decide.',
-    tip: 'Fast judges that answer fixed yes/no questions from screenshots: is the page blank, is text cut off, did clicking Start change anything, what does your request leave out. They give the model eyes: in the build benchmark they caught a missing game-over screen and broken invoice lines. One decider answers; the others only when it is unsure. Under $0.001 a build. Off also removes the look and decide tools (and in YOLO the agent answers its own questions).' },
+    tip: 'Fast judges that answer fixed yes/no questions from screenshots: is the page blank, is text cut off, did clicking Start change anything, what does your request leave out. They give the model eyes: in the build benchmark they caught a missing game-over screen and broken invoice lines. One decider answers; the others only when it is unsure. Under $0.001 a build. Off also removes the look and decide tools and the screenshot checks. In YOLO the agent answers its own questions, and what the deciders would approve (commands, paid media) waits for you or runs without a check, as ⚙ Settings → Approvals & safety says.' },
   helpers: { icon: '🧭', name: 'Helpers', kind: 'chat', model: helperModel, perBuild: () => '≈ $0.001–0.01 when used',
     note: 'Cheap read-only searches of big projects.',
     tip: 'Hands read-only jobs (find, read, summarise code) to a cheaper model with its own context, so the main model\'s context stays small and each later step stays cheap. Most useful in big projects; rarely used on small builds. About $0.001–0.01 each time it is used.' },
@@ -120,11 +120,30 @@ const focused = () => G.open.get(G.panes[G.focus]) || G.open.get(G.panes[0]);
 
 // ---------- preferences (this browser) and chats (the server) ----------
 function savePrefs() {
-  try { localStorage.setItem(STORE, JSON.stringify({ settings: G.settings, templates: G.templates, sideHidden: G.sideHidden, projectOrder: G.projectOrder, foldedProjects: G.foldedProjects, favModels: G.favModels, recentModels: G.recentModels, budgetSeen: G.budgetSeen, spaceSeen: G.spaceSeen, followAgent: G.followAgent, pickerSort: G.pickerSort, panes: G.panes, sessionCost: G.sessionCost, sizes: G.sizes, theme: G.theme })); } catch { /* storage unavailable */ }
+  try { localStorage.setItem(STORE, JSON.stringify({ settings: G.settings, templates: G.templates, sideHidden: G.sideHidden, projectOrder: G.projectOrder, foldedProjects: G.foldedProjects, favModels: G.favModels, recentModels: G.recentModels, budgetSeen: G.budgetSeen, followAgent: G.followAgent, quickRow: G.quickRow, perms: G.perms, pickerSort: G.pickerSort, panes: G.panes, sessionCost: G.sessionCost, sizes: G.sizes, theme: G.theme })); } catch { /* storage unavailable */ }
 }
 // Preferences saved under the app's earlier names (OpenHarness, before that Agent-001) are read until the next save.
 function load() { try { return JSON.parse(localStorage.getItem(STORE) || localStorage.getItem('openharness-v1') || localStorage.getItem('agent001-v1') || 'null'); } catch { return null; } }
-const stripMsg = ({ el, thinkOpen, tlOpen, ...m }) => ({ ...m, live: false, ...(m.thinking ? { thinking: Object.fromEntries(Object.entries(m.thinking).map(([k, t]) => [k, t.length > 20000 ? t.slice(0, 20000) + '…' : t])) } : {}) });
+const stripMsg = ({ el, thinkOpen, tlOpen, ...m }) => ({ ...m, ...(m.traceRef ? { trace: [] } : {}), live: false, ...(m.thinking ? { thinking: Object.fromEntries(Object.entries(m.thinking).map(([k, t]) => [k, t.length > 20000 ? t.slice(0, 20000) + '…' : t])) } : {}) });
+// An older reply's steps kept apart on the server (traceRef): loaded into the page when the reply is shown, opened in
+// Steps or replayed, and saved as the note it came as, so loading them never sends megabytes back.
+const needsTrace = (m) => !!(m?.traceRef && !m.trace?.length && m.runId);
+const traceLoads = new WeakMap(); // message → its load
+function loadTrace(c, m) {
+  if (!needsTrace(m)) return Promise.resolve();
+  if (!traceLoads.has(m)) traceLoads.set(m, getJ(`/api/chats/${encodeURIComponent(c.id)}/trace/${encodeURIComponent(m.runId)}`).then((t) => {
+    if (!Array.isArray(t)) return;
+    m.trace = t;
+    if (m.el?.isConnected) updateMsg(c, m);
+    if (G.view.trace === m.runId && focused() === c) renderPane();
+  }).catch(() => {}));
+  return traceLoads.get(m);
+}
+let traceSeen = null;
+function watchTrace(c, m, el) {
+  traceSeen ??= new IntersectionObserver((list) => { for (const e of list) if (e.isIntersecting) { traceSeen.unobserve(e.target); const x = e.target._trace; if (x) loadTrace(x.c, x.m); } }, { rootMargin: '600px 0px' });
+  el._trace = { c, m }; traceSeen.observe(el);
+}
 function chatDoc(c) {
   return { id: c.id, title: c.title, projectId: c.projectId, created: c.created, approval: c.approval, paneHidden: c.paneHidden, tools: c.tools,
     agent: { ...c.agent, messages: c.agent.messages.map(stripMsg) } };
@@ -245,7 +264,7 @@ async function contextText(list) {
   for (const item of list.filter((x) => x.type === 'project')) {
     const p = G.projects.find((x) => x.id === item.id);
     const notes = await fetch(`/ws/${item.id}/AGENT.md`).then((r) => r.ok ? r.text() : '').catch(() => '');
-    const files = await fetch(`/api/files?project=${item.id}`).then((r) => r.json()).catch(() => []);
+    const files = await fetch(`/api/files?project=${item.id}&limit=60`).then((r) => r.json()).catch(() => []);
     parts.push(`### Project "${p?.name || item.id}" (${p?.dir || ''})\nFiles: ${files.slice(0, 60).map((f) => f.path).join(', ') || 'none'}${notes ? `\nAGENT.md:\n${notes.slice(0, 5000)}` : ''}`);
   }
   for (const { id, title } of list.filter((x) => !x.type || x.type === 'chat')) {
@@ -582,11 +601,19 @@ function renderAttachments(c) {
 }
 
 // ---------- sidebar: projects and chats ----------
+// The sidebar holds each project's newest chats (SB_PER), the open ones, and every project's counts (G.chatStats); a
+// project's older chats come with Show more (G.moreChats), and the search box asks the server, so it finds any chat.
+// After SB_PROJECTS projects, Show more projects (pinned, current and open ones always show).
+const SB_PER = 30, SB_PROJECTS = 25;
 async function refreshSidebar() {
   try {
-    const [projects, chats] = await Promise.all([fetch('/api/projects').then((r) => r.json()), fetch('/api/chats').then((r) => r.json())]);
-    if (!Array.isArray(projects) || !Array.isArray(chats)) return; // refused (no app link) or an error: keep what's shown
-    [G.projects, G.chats] = [projects, chats];
+    const ids = [...new Set([...G.panes, ...G.open.keys()])].join(',');
+    const more = Object.entries(G.sbLimit || {}).filter(([, n]) => n > SB_PER);
+    const [projects, side, ...pages] = await Promise.all([fetch('/api/projects').then((r) => r.json()), fetch(`/api/chats?view=sidebar&per=${SB_PER}&ids=${encodeURIComponent(ids)}`).then((r) => r.json()),
+      ...more.map(([pid, n]) => fetch(`/api/chats/page?project=${encodeURIComponent(pid)}&limit=${n}`).then((r) => r.json()).catch(() => null))]);
+    if (!Array.isArray(projects) || !Array.isArray(side?.chats)) return; // refused (no app link) or an error: keep what's shown
+    G.projects = projects; G.chats = side.chats; G.chatStats = side.stats || {};
+    G.moreChats = Object.fromEntries(more.map(([pid], i) => [pid, pages[i]?.chats || []]));
   } catch { return; }
   renderSidebar();
   budgetNotices();
@@ -619,13 +646,38 @@ function budgetNotices() {
     $('.bn-x', el).onclick = () => { (G.budgetSeen ??= {})[p.id] = { level, budget: p.budget }; savePrefs(); el.remove(); };
   }
 }
+// Searching the sidebar asks the server (it finds chats the sidebar hasn't loaded); a pause in typing sends it.
+let sbSearchTimer = 0;
+function sidebarSearch() {
+  const q = $('#chatSearch').value.trim();
+  clearTimeout(sbSearchTimer);
+  if (!q) { G.sbFound = null; return renderSidebar(); }
+  sbSearchTimer = setTimeout(async () => {
+    const r = await fetch(`/api/chats/page?q=${encodeURIComponent(q)}&limit=200`).then((x) => x.json()).catch(() => null);
+    if ($('#chatSearch').value.trim() !== q) return; // typed on meanwhile
+    G.sbFound = r?.chats ? { q: q.toLowerCase(), chats: r.chats, total: r.total } : null;
+    renderSidebar();
+  }, 180);
+  renderSidebar(); // what's loaded already narrows at once
+}
+async function showMoreChats(pid) {
+  const shown = (G.sbLimit ??= {})[pid] || SB_PER;
+  const r = await fetch(`/api/chats/page?project=${encodeURIComponent(pid)}&limit=${shown + SB_PER}`).then((x) => x.json()).catch(() => null);
+  if (!r?.chats) return;
+  G.sbLimit[pid] = shown + SB_PER; (G.moreChats ??= {})[pid] = r.chats;
+  renderSidebar();
+}
 function renderSidebar() {
   const q = $('#chatSearch').value.trim().toLowerCase();
   const curProject = focused()?.projectId;
   // Chats open here but not saved yet (no messages) still show while they're on screen.
-  const unsaved = [...G.open.values()].filter((c) => !G.chats.some((x) => x.id === c.id) && G.panes.includes(c.id))
+  const known = new Map(G.chats.map((c) => [c.id, c]));
+  for (const list of Object.values(G.moreChats || {})) for (const c of list) if (!known.has(c.id)) known.set(c.id, c);
+  if (q && G.sbFound?.q === q) for (const c of G.sbFound.chats) if (!known.has(c.id)) known.set(c.id, c);
+  const unsaved = [...G.open.values()].filter((c) => !known.has(c.id) && G.panes.includes(c.id))
     .map((c) => ({ id: c.id, title: c.title, projectId: c.projectId, messages: 0, cost: 0, lastAt: c.created, model: c.agent.setup.model, preview: '' }));
-  const all = [...unsaved, ...G.chats];
+  const all = [...unsaved, ...known.values()];
+  const stats = G.chatStats || {};
   // Your order first (drag a project's header to move it); projects you haven't placed keep theirs after.
   const rank = (p) => { const i = (G.projectOrder || []).indexOf(p.id); return i < 0 ? 1e6 + G.projects.indexOf(p) : i; };
   $('#projectList').classList.toggle('has-current', !!curProject);
@@ -635,11 +687,22 @@ function renderSidebar() {
     pl.addEventListener('dragover', (e) => { if (![...e.dataTransfer.types].includes('text/x-project')) return; const r = pl.getBoundingClientRect(), edge = 48; if (e.clientY < r.top + edge) pl.scrollTop -= 14; else if (e.clientY > r.bottom - edge) pl.scrollTop += 14; });
   }
   const pinRank = (p) => (p.pinned ? p.pinned : Infinity);
-  $('#projectList').innerHTML = G.projects.filter((p) => !p.archived).sort((a, b) => (pinRank(a) - pinRank(b)) || (rank(a) - rank(b))).map((p) => {
+  // After SB_PROJECTS projects the rest wait behind Show more projects; pinned, current and open ones always show.
+  const openProjects = new Set([...G.open.values()].map((c) => c.projectId));
+  const ordered = G.projects.filter((p) => !p.archived).sort((a, b) => (pinRank(a) - pinRank(b)) || (rank(a) - rank(b)));
+  const projLimit = G.sbProjLimit || SB_PROJECTS;
+  const listed = q ? ordered : ordered.filter((p, i) => i < projLimit || p.pinned || p.id === curProject || openProjects.has(p.id));
+  const hiddenProjects = ordered.length - listed.length;
+  $('#projectList').innerHTML = listed.map((p) => {
     // Newest first: the chat you used last is at the top of its project.
     const chats = all.filter((c) => (c.projectId || 'scratch') === p.id && (c.messages > 0 || G.panes.includes(c.id))).sort((a, b) => (b.lastAt || b.updated || 0) - (a.lastAt || a.updated || 0));
-    const shown = chats.filter((c) => !q || c.title.toLowerCase().includes(q) || String(c.preview || '').toLowerCase().includes(q));
-    if (q && !shown.length) return '';
+    const matching = chats.filter((c) => !q || c.title.toLowerCase().includes(q) || String(c.preview || '').toLowerCase().includes(q));
+    if (q && !matching.length) return '';
+    // Not searching: the newest (SB_PER, or more after Show more), plus open chats wherever they sit.
+    const limit = (G.sbLimit || {})[p.id] || SB_PER;
+    const shown = q ? matching : matching.filter((c, i) => i < limit || G.panes.includes(c.id));
+    const st = stats[p.id], total = Math.max(st?.active ?? 0, chats.filter((c) => c.messages > 0).length);
+    const moreN = q ? 0 : total - shown.filter((c) => c.messages > 0).length;
     // The server's total also counts replies that never reached a chat file (stopped, page closed, deleted), and
     // replies running now as they stood when it was fetched: replies running in this page add what they have spent since.
     const liveHere = chats.reduce((s, c) => s + liveOf(G.open.get(c.id)), 0);
@@ -651,7 +714,7 @@ function renderSidebar() {
     return `<div class="sb-project ${p.id === curProject ? 'current' : ''} ${working ? 'working' : ''} ${folded ? 'folded' : ''} ${p.pinned ? 'pinned' : ''}" data-p="${esc(p.id)}" style="${projStyle(p)}">
       <div class="sb-ph" aria-expanded="${!folded}">
         <div class="sb-pname-wrap"><b class="sb-pname" title="${esc(p.name)} · ${esc(p.dir)}">${esc(p.name)}</b><button type="button" class="sb-fold" aria-expanded="${!folded}" title="${folded ? 'Show' : 'Hide'} this project's chats" aria-label="${folded ? 'Show' : 'Hide'} chats of ${esc(p.name)}"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg></button>${p.missing ? '<button type="button" class="sb-missing" title="The project folder was moved, renamed or deleted: click to reselect it">⚠ missing</button>' : p.needsFolder ? '<button type="button" class="sb-missing needs" title="Pick a folder for this project: its files sit inside QuorX itself and are copied to the folder you pick" aria-label="Pick a folder for this project">📁</button>' : ''}${working ? '<span class="sb-pworking" title="A chat in this project is working" aria-label="Working"></span>' : ''}<span class="sb-psp"></span><button type="button" class="sb-pin sb-picon ${p.pinned ? 'on' : ''}" aria-pressed="${!!p.pinned}" title="${p.pinned ? 'Unpin' : 'Pin to the top (up to 3)'}" aria-label="${p.pinned ? 'Unpin' : 'Pin'} ${esc(p.name)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4h6l-1 6 4 4H6l4-4z"/><path d="M12 14v6"/></svg></button><button type="button" class="sb-edit sb-picon" title="Project settings: budget, pin, archive, folder, colour" aria-label="Settings for ${esc(p.name)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg></button><button type="button" class="sb-new sb-picon" title="New chat in ${esc(p.name)}" aria-label="New chat in ${esc(p.name)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button><span class="sb-grip" draggable="true" tabindex="0" role="button" title="Drag to move this project (or focus it and press ↑ / ↓)" aria-label="Move ${esc(p.name)}: drag, or press up or down"><svg viewBox="0 0 10 16" aria-hidden="true"><circle cx="2.5" cy="3" r="1.4"/><circle cx="7.5" cy="3" r="1.4"/><circle cx="2.5" cy="8" r="1.4"/><circle cx="7.5" cy="8" r="1.4"/><circle cx="2.5" cy="13" r="1.4"/><circle cx="7.5" cy="13" r="1.4"/></svg></span></div>
-        ${p.id === curProject ? projectSpendHTML(p, chats.length, cost, share, chats) : ''}
+        ${p.id === curProject ? projectSpendHTML(p, total, cost, share, chats) : ''}
       </div>
       ${shown.map((c) => {
         const live = G.open.get(c.id);
@@ -667,8 +730,12 @@ function renderSidebar() {
           <div class="sb-chat-acts"><button type="button" class="sb-ren ico-rename" title="Rename chat" aria-label="Rename chat">${ICO.pencil}</button><button type="button" class="sb-del del ico-delete" title="Delete chat (moves it to data/trash)" aria-label="Delete chat">${ICO.trash}</button></div>
         </div>`;
       }).join('') || '<div class="sb-empty">No chats yet</div>'}
+      ${moreN > 0 ? `<button type="button" class="sb-more" data-more="${esc(p.id)}">Show more chats <small>${moreN.toLocaleString()} more</small></button>` : ''}
     </div>`;
-  }).join('');
+  }).join('') + (hiddenProjects > 0 ? `<button type="button" class="sb-more sb-more-proj">Show more projects <small>${hiddenProjects.toLocaleString()} more</small></button>` : '')
+    + (q && G.sbFound?.q === q && G.sbFound.total > G.sbFound.chats.length ? `<div class="sb-empty">Showing the newest ${G.sbFound.chats.length} of ${G.sbFound.total.toLocaleString()} matches: type more to narrow it.</div>` : '');
+  for (const b of document.querySelectorAll('#projectList [data-more]')) b.onclick = () => { b.disabled = true; b.textContent = 'Loading…'; showMoreChats(b.dataset.more); };
+  const mp = $('#projectList .sb-more-proj'); if (mp) mp.onclick = () => { G.sbProjLimit = projLimit + SB_PROJECTS; renderSidebar(); };
   renderArchive(all);
   // The collapsed rail lists only the chats working right now (to jump back to them); the rest is in the full sidebar.
   const rail = [...all].filter((c) => G.open.get(c.id)?.running).slice(0, 8);
@@ -677,13 +744,14 @@ function renderSidebar() {
     return `<button type="button" class="sb-rail-btn ${G.panes.includes(c.id) ? 'active' : ''} ${running ? 'live-running' : ''}" data-c="${esc(c.id)}" data-tip="${esc(c.title)}" style="--h:${hue(c.title)}">${esc(initials(c.title))}${running ? '<span class="rail-dot"></span>' : ''}</button>`;
   }).join('');
   for (const b of document.querySelectorAll('#railList .sb-rail-btn')) b.onclick = () => showChat(b.dataset.c, G.focus);
-  const today = G.chats.reduce((n, c) => n + (c.today || 0), 0), total = G.chats.reduce((n, c) => n + (c.cost || 0), 0);
+  const total = Object.values(G.chatStats || {}).reduce((n, s) => n + (s.cost || 0), 0) || G.chats.reduce((n, c) => n + (c.cost || 0), 0);
   $('#costsPill').textContent = `$${total.toFixed(total < 1 ? 3 : 2)}`; // everything spent so far, all projects
   for (const el of document.querySelectorAll('#projectList .sb-chat')) {
     const id = el.dataset.c;
     el.onclick = (e) => { if (!e.target.closest('button')) { showChat(id, G.focus); closeDrawer(); if (isPhone()) setMView('chat'); } };
     $('.sb-ren', el).onclick = () => renameChat(id);
     $('.sb-del', el).onclick = () => deleteChat(id);
+    footprintOnHover($('.sb-del', el), id);
   }
   for (const el of document.querySelectorAll('#projectList .sb-project')) {
     const p = G.projects.find((x) => x.id === el.dataset.p);
@@ -757,10 +825,41 @@ async function clearChat(c) {
   if (c.running || !await uiConfirm('Clear this conversation? (Its project files stay.)')) return;
   c.agent.messages = []; c.agent.artifacts = {}; saveChat(c, true); renderPanes();
 }
+// What deleting a chat frees: its file, and pictures no other chat uses. Not at once: a deleted chat waits in QuorX's
+// trash (recoverable) until it is emptied. Remembered for a minute so hovering 🗑 again doesn't ask again.
+const footCache = new Map();
+async function chatFootprint(id) {
+  const hit = footCache.get(id);
+  if (hit && Date.now() - hit.at < 60e3) return hit.f;
+  const f = await getJ(`/api/chats/${encodeURIComponent(id)}/footprint`).catch(() => null);
+  if (f && !f.error) footCache.set(id, { at: Date.now(), f });
+  return f && !f.error ? f : null;
+}
+function footprintText(f, { short = false } = {}) {
+  if (!f) return '';
+  const total = f.chat + f.pictures, R = G.storageRules || {};
+  const when = R.autoClean !== false ? `when QuorX's trash is emptied (after ${R.trashDays ?? 30} days, or sooner from ⚙ Storage)` : 'when you empty QuorX\'s trash (⚙ Storage)';
+  const parts = `the chat ${fmtBytes(f.chat)}${f.count ? ` + ${f.count} picture${f.count === 1 ? '' : 's'} only it uses ${fmtBytes(f.pictures)}` : ''}`;
+  return short ? `Frees about ${fmtBytes(total)} (${parts}) ${when}` : `Frees about ${fmtBytes(total)}: ${parts}. Not at once: ${when}.`;
+}
+// 🗑 (sidebar and chat header): the hover says how much deleting frees.
+function footprintOnHover(btn, id) {
+  btn.addEventListener('mouseenter', async () => {
+    // The tip system moves title to data-oh-title; keep the button's own words once, and add the estimate to them.
+    const base = (btn.dataset.baseTip ??= btn.dataset.ohTitle ?? btn.getAttribute('title') ?? '');
+    const f = await chatFootprint(id);
+    if (!f || !btn.isConnected) return;
+    const text = `${base.replace(/\.?$/, '.')}\n${footprintText(f, { short: true })}`;
+    if (btn.dataset.ohTitle != null) btn.dataset.ohTitle = text; else btn.title = text;
+    if (TIP.target === btn && TIP.el?.classList.contains('on')) showTip(btn);
+  });
+}
 async function deleteChat(id) {
   const c = G.open.get(id) || G.chats.find((x) => x.id === id);
   if (G.open.get(id)?.running) return uiAlert('This chat is still running. Stop it first.');
-  if (!await uiConfirm(`Delete "${c?.title}"?\nIt moves to data/trash (recoverable). The project folder and its files stay.`)) return;
+  const f = await chatFootprint(id);
+  if (!await uiConfirm(`Delete "${c?.title}"?\nIt moves to data/trash (recoverable). The project folder and its files stay.${f ? `\n${footprintText(f)}` : ''}`)) return;
+  footCache.delete(id);
   await fetch(`/api/chats/${id}`, { method: 'DELETE' });
   G.open.delete(id);
   const i = G.panes.indexOf(id);
@@ -791,6 +890,7 @@ Every chat in this project reads, writes and runs programs in this folder.">${es
         ${p.github ? `<div class="pj-gh" data-gh="${esc(p.id)}">${ghLineHTML(p.github)}</div>` : ''}
         ${p.missing ? '<p class="pf-warn">⚠ This folder is missing: it was moved, renamed or deleted outside QuorX. Reselect it to keep working.</p>' : p.needsFolder ? '<p class="pf-warn">📁 This project\'s files sit inside QuorX itself. Pick a folder of your own: its files are copied there, and chats can work in it again.</p>' : ''}
       </section>
+      ${p.missing || p.needsFolder ? '' : '<section class="pj-sec" id="pjSpaceSec"><div class="pj-sec-head"><h4>Agent folder <small>.quorx/: the agent\'s own working files</small></h4></div><div id="pjSpace"><div class="kx-wait">Measuring…</div></div></section>'}
       <section class="pj-sec" id="pjDesignSec">
         <details class="pj-fold" id="pjDesignFold">
           <summary><h4>Design system <small>how the pages and apps chats build here look</small></h4><span class="pj-fold-state" id="pjDesignState">…</span><svg class="pj-fold-chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg></summary>
@@ -817,6 +917,7 @@ Every chat in this project reads, writes and runs programs in this folder.">${es
   const close = () => dlg.close();
   $('.pj-close', box).onclick = close;
   const pjOpen = $('.pj-open', box); if (pjOpen) pjOpen.onclick = () => openFolder(p.id);
+  if ($('#pjSpace', box)) projectSpace(p, $('#pjSpace', box));
   const pjCopy = $('.pj-copy', box);
   pjCopy.onclick = () => navigator.clipboard?.writeText(p.dir).then(() => flashTip(pjCopy, 'Copied')).catch(() => flashTip(pjCopy, 'Could not copy'));
   loadGhMeta(box);
@@ -892,6 +993,7 @@ Every chat in this project reads, writes and runs programs in this folder.">${es
   if (!dlg.open) dlg.showModal();
   if (focusOn === 'hooks') { $('#pjHooksFold', box).open = true; $('#pjHooksSec', box).scrollIntoView({ block: 'start' }); }
   if (focusOn === 'budget') $('#pjBudgetSec', box).scrollIntoView({ block: 'start' });
+  if (focusOn === 'space') $('#pjSpaceSec', box)?.scrollIntoView({ block: 'start' });
   if (focusOn === 'design') { $('#pjDesignFold', box).open = true; $('#pjDesignSec', box).scrollIntoView({ block: 'start' }); }
 }
 // Project settings → Hooks: commands QuorX runs around the agent's tool calls, in this order. Kept in QuorX's data
@@ -1124,7 +1226,7 @@ function editBudget(p, suggest, mount) {
 }
 async function deleteProject(p) {
   if ([...G.open.values()].some((c) => c.running && c.projectId === p.id)) return uiAlert('A chat in this project is still running. Stop it first.');
-  const n = G.chats.filter((c) => (c.projectId || 'scratch') === p.id).length;
+  const n = G.chatStats?.[p.id]?.chats ?? G.chats.filter((c) => (c.projectId || 'scratch') === p.id).length;
   if (!await uiConfirm(`Delete the project "${p.name}"?\n\n• Its ${n} chat${n === 1 ? '' : 's'} move to data/trash (recoverable).\n• The folder ${p.dir} and its files are NOT touched.`)) return;
   const r = await fetch(`/api/projects/${p.id}`, { method: 'DELETE' }).then((x) => x.json()).catch(() => ({}));
   if (!r.ok) return uiAlert('Could not delete that project.');
@@ -1502,14 +1604,15 @@ function placeChrome() {
   const desk = !isPhone(), top = $('header.top'), title = $('#sbTitlebar'), foot = $('#sbFootBtns');
   if (!top || !title || !foot) return;
   document.body.classList.toggle('top-in-sidebar', desk);
-  const brand = $('#brandHome'), git = $('#brandGit'), sep = $('.top-sep', top) || null, bits = ['#spend', '#staleNote'].map((q) => $(q)).filter(Boolean);
+  const brand = $('#brandHome'), git = $('#brandGit'), perm = $('#permBtn'), sep = $('.top-sep', top) || null, bits = ['#spend', '#staleNote'].map((q) => $(q)).filter(Boolean);
   const upd = $('#updNote'), btns = ['#restartBtn', '#themeBtn', '#settingsBtn'].map((q) => $(q)).filter(Boolean);
   // The ☰ panel toggle leads the title row on wider screens; phones keep it beside the search.
   const tog = $('#sbCollapseBtn'), tools = $('.sb-tools');
-  if (desk) { title.append(brand, ...(git ? [git] : []), ...bits); if (tog) title.prepend(tog); foot.append(...(upd ? [upd] : []), ...btns); return; }
+  if (desk) { title.append(brand, ...(perm ? [perm] : []), ...(git ? [git] : []), ...bits); if (tog) title.prepend(tog); foot.append(...(upd ? [upd] : []), ...btns); return; }
   if (tog && tools) tools.prepend(tog);
   top.prepend(brand);
-  if (git) brand.after(git);
+  if (perm) brand.after(perm);
+  if (git) (perm || brand).after(git);
   if (sep) sep.after(...bits, ...(upd ? [upd] : [])); else top.append(...bits, ...(upd ? [upd] : []));
   top.append(...btns);
 }
@@ -1524,7 +1627,7 @@ function renderLanding(box) {
   const pager = (key, page, n, what) => n > PAGE ? `<span class="ld-pg"><span class="ld-pg-n">${page * PAGE + 1}–${Math.min(n, page * PAGE + PAGE)} of ${n}</span><button type="button" class="ld-pg-b" data-pg="${key}" data-d="-1" aria-label="Previous ${what}" title="Previous ${what}" ${page === 0 ? 'disabled' : ''}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6"/></svg></button><button type="button" class="ld-pg-b" data-pg="${key}" data-d="1" aria-label="Next ${what}" title="Next ${what}" ${page >= pages(n) - 1 ? 'disabled' : ''}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button></span>` : '';
   const projName = (id) => G.projects.find((p) => p.id === id)?.name || id;
   // One list: pinned projects first (in the order you pinned them), then the one with the most recent chat; each with its latest chats. Six at a time.
-  const lastUsed = (id) => Math.max(0, ...G.chats.filter((c) => (c.projectId || 'scratch') === id).map((c) => c.lastAt || 0));
+  const lastUsed = (id) => G.chatStats?.[id]?.lastAt ?? Math.max(0, ...G.chats.filter((c) => (c.projectId || 'scratch') === id).map((c) => c.lastAt || 0));
   const projects = G.projects.filter((p) => !p.archived).sort((a, b) => ((a.pinned || Infinity) - (b.pinned || Infinity)) || (lastUsed(b.id) - lastUsed(a.id)) || a.name.localeCompare(b.name));
   const last = G.landingProject && G.projects.some((p) => p.id === G.landingProject) ? G.landingProject : (allRecent[0]?.projectId || 'scratch');
   G.ldProjPage = Math.min(G.ldProjPage || 0, pages(projects.length) - 1);
@@ -1533,7 +1636,7 @@ function renderLanding(box) {
     <header class="ld-brand"><img class="ld-mark ld-logo" src="brand/quorx-64.png" alt=""><h1>Quor<span>X</span></h1><span class="ld-tag">What are we building?</span></header>
     <div class="ld-hrow"><h2 class="ld-h">Projects <small>· pinned first, then latest chats</small></h2>${pager('proj', G.ldProjPage, projects.length, 'projects')}</div>
     <div class="ld-projects">${shownProjects.map((p) => {
-      const mine = allRecent.filter((c) => (c.projectId || 'scratch') === p.id), n = mine.length, spent = p.spent || 0;
+      const mine = allRecent.filter((c) => (c.projectId || 'scratch') === p.id), n = G.chatStats?.[p.id]?.active ?? mine.length, spent = p.spent || 0;
       const share = p.budget ? Math.min(1, spent / p.budget) : 0, state = share >= 1 ? 'full' : share >= 0.8 ? 'near' : 'ok';
       return `<div class="ld-project" style="${projStyle(p)}"><div class="ld-p-top">${p.pinned ? '<span class="ld-p-pin" title="Pinned" aria-label="Pinned"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4h6l-1 6 4 4H6l4-4z"/><path d="M12 14v6"/></svg></span>' : ''}<b>${esc(p.name)}</b>${p.github ? `<a class="ld-p-gh" href="${esc(p.github.url)}" target="_blank" rel="noopener noreferrer" title="Open ${esc(p.github.owner)}/${esc(p.github.repo)} on GitHub" aria-label="Open on GitHub">${GH_ICO}</a>` : ''}<button type="button" class="ld-p-set" data-set="${esc(p.id)}" title="Project settings" aria-label="Settings for ${esc(p.name)}">${ICO.gear}</button><button type="button" class="ld-p-plus" data-new="${esc(p.id)}" title="New chat in ${esc(p.name)}" aria-label="New chat in ${esc(p.name)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button></div>
         <small class="ld-p-meta">${n} chat${n === 1 ? '' : 's'} · <span class="money">$${spent.toFixed(3)}</span>${p.budget != null ? ` of $${p.budget.toFixed(2)}` : ' · no limit'}</small>
@@ -1649,7 +1752,7 @@ function wireStartBox(box, first, projects) {
   $('#ldDraft', box).appendChild(pane);
   d.el = { root: pane };
   wirePane(d, pane, 0);
-  renderComposerBar(d); renderAllowed(d); renderAttachments(d); syncRunState(d);
+  renderComposerBar(d); renderChatTools(d); renderAllowed(d); renderAttachments(d); syncRunState(d);
   const ta = $('.input', pane);
   ta.id = 'ldStartText';
   ta.placeholder = 'What are we building? Describe it, or ask about your code…  @ to add files or chats · / for commands';
@@ -2265,20 +2368,23 @@ function paneHTML(c) {
             <button type="button" class="ch-btn ch-rename hdr-icon-btn" title="Rename this chat" aria-label="Rename chat"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4z"/></svg></button>
             <span class="dir-a-actions-sep"></span>
             <button type="button" class="ch-btn ch-delete hdr-icon-btn danger" title="Delete this chat (it moves to data/trash; the project's files stay)" aria-label="Delete chat"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12h10l1-12M9 7V4h6v3"/></svg></button>
+            <button type="button" class="ch-btn ch-space hdr-icon-btn" aria-haspopup="dialog" aria-expanded="false" aria-label="The agent's folder is getting big" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 3l-8.5 8.5M9.5 9.5l5 5-1.5 1.5c-2 2-5 4-8.5 5L3 19.5c1-3.5 3-6.5 5-8.5z M6.5 17l2-2M9 19l2-2"/></svg></button>
           </div>
         </div>
         <div class="usage-pop" role="dialog" aria-label="Usage for this chat" hidden></div>
+        <div class="space-pop" role="dialog" aria-label="The agent's folder" hidden></div>
       </header>
       <div class="msgs"></div>
       <form class="composer composer-v2">
         <div class="composer-box">
+        <div class="cmp-quick" role="toolbar" aria-label="Quick settings for this chat"></div>
         <div class="cmp-control-rack opts-open"><span class="cmp-model-slot"></span><button type="button" class="cmp-set-btn" aria-haspopup="dialog" aria-expanded="false" title="This chat's settings: reasoning, creativity, Strict / YOLO, tools"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg><span class="cmp-set-l">This chat</span><span class="cmp-set-sum"></span></button><span class="cmp-follow-slot"></span>
           <div class="cs-scrim" hidden></div>
           <div class="chat-set" role="dialog" aria-label="This chat's settings" hidden>
             <div class="cs-head"><b>This chat's settings</b><small>Changes here apply to this chat only</small><button type="button" class="cs-gear" title="All settings: models, prices and defaults (⚙ Settings)" aria-label="Open all settings">${ICO.gear}</button><button type="button" class="cs-x" aria-label="Discard changes and close" title="Close (discards unsaved changes)">✕</button></div>
             <div class="cbar"></div>
             <div class="cs-glob"></div>
-            <details class="cs-adv"><summary>Advanced <small>· each tool's model, strength and price</small></summary><div class="toolbar cmp-tools-wrap" aria-label="Tools the agent may use"></div></details>
+            <details class="cs-adv" open><summary>Advanced <small>· each tool's model, strength and price</small></summary><div class="toolbar cmp-tools-wrap" aria-label="Tools the agent may use"></div></details>
             <div class="cs-foot"><span class="cs-note">No changes</span><button type="button" class="cs-undo" title="Put back what was set when you opened this" disabled>Undo</button><button type="button" class="cs-ok" title="Save changes" disabled>✓ Save</button></div>
           </div>
         </div>
@@ -2290,8 +2396,8 @@ function paneHTML(c) {
             <div class="cmp-actions-left">
               <button type="button" class="cmp-act-btn imgBtn attachBtn" title="Attach files of any kind: documents, PDFs, spreadsheets, code, images… (or paste / drop them)" aria-label="Attach files">${CMP_ICO.attach}</button>
               <input type="file" class="imgInput" multiple hidden>
-              <button type="button" class="cmp-act-btn micBtn" title="Speak your message (transcribed into the box)" aria-label="Speak your message">${CMP_ICO.mic}</button>
-              <button type="button" class="cmp-act-btn enhBtn" title="Enhance: rewrite what you wrote clearer and fuller before you send it (press again to go further). Uses the prompt enhancer's model, a fraction of a cent." aria-label="Enhance your message">✨<span class="enh-l">Enhance</span></button>
+              <button type="button" class="cmp-act-btn micBtn" title="${esc(micTip())}" aria-label="Speak your message">${CMP_ICO.mic}</button>
+              <button type="button" class="cmp-act-btn enhBtn" title="Enhance: rewrite what you wrote clearer and fuller before you send it (press again to go further). Uses the prompt enhancer's model, a fraction of a cent." aria-label="Enhance your message">✨</button>
               <button type="button" class="cmp-act-btn enhUndo" title="Undo the last ✨ Enhance: your words back" aria-label="Undo enhance" hidden>↶</button>
             </div>
             <div class="cmp-actions-right">
@@ -2348,6 +2454,7 @@ function wirePane(c, root, i) {
   $('.ch-panel', root).onclick = () => { if (G.paneMax) $('#paneMaxBtn')?.click(); setPaneHidden(!G.paneHidden); };
   { const pb = $('.ch-panel', root); pb.classList.toggle('on', !G.paneHidden); pb.setAttribute('aria-pressed', String(!G.paneHidden)); }
   $('.ch-delete', root).onclick = () => deleteChat(c.id);
+  footprintOnHover($('.ch-delete', root), c.id);
   // On a phone ◧ switches between the chat and what it built; on a desktop the pane is always there.
   $('.ch-pane', root).onclick = () => setMView(G.mview === 'preview' ? 'chat' : 'preview');
   const form = $('.composer', root), ta = $('.input', root);
@@ -2413,22 +2520,36 @@ function renderComposerBar(c) {
   const bar = $('.cbar', c.el.root);
   const rack = bar.closest('.cmp-control-rack'), slot = $('.cmp-model-slot', rack), glob = $('.cs-glob', rack), setBtn = $('.cmp-set-btn', rack), panel = $('.chat-set', rack), followSlot = $('.cmp-follow-slot', rack), scrim = $('.cs-scrim', rack);
   slot.innerHTML = `<button type="button" class="mbtn model cmp-model-chip" title="Model for this chat: ${esc(priceOf(s.model))} (click to pick any model)">${recDot(s.model, 'chat')} ${esc(short(s.model))} <small>${esc(shortPrice(s.model))}</small></button>`;
+  const permHTML = (cls = '') => `<div class="seg perm cmp-perm-switch ${cls}" title="How much permission this chat's agent asks for">
+      <button type="button" data-approval="strict" class="${c.approval === 'strict' ? 'on' : ''}" title="${esc(`🔒 Strict${c.approval === 'strict' ? ' (now)' : ''}\nAsks you before paid media, and the agent's questions come to you.\nSettings → Approvals & safety says what else it asks before.`)}">🔒 Strict</button>
+      <button type="button" data-approval="yolo" class="${c.approval === 'yolo' ? 'on' : ''}" title="${esc(`⚡ YOLO${c.approval === 'yolo' ? ' (now)' : ''}\nUses its tools without asking; the deciders answer its questions.\nThe budget cap and the safety rules still apply.`)}">⚡ YOLO</button>
+    </div>`;
   bar.innerHTML = `
     <div class="cs-sec"><h5>Thinking</h5><div class="cs-row">${levelsHTML(s)}</div></div>
-    <div class="cs-sec"><h5>Permission</h5><div class="cs-row cs-perm">
-    <div class="seg perm cmp-perm-switch" title="How much permission this chat's agent asks for">
-      <button type="button" data-approval="strict" class="${c.approval === 'strict' ? 'on' : ''}" title="Asks before every tool it uses">🔒 Strict</button>
-      <button type="button" data-approval="yolo" class="${c.approval === 'yolo' ? 'on' : ''}" title="Uses its tools without asking (budget cap still applies)">⚡ YOLO</button>
-    </div></div></div>
+    <div class="cs-sec"><h5>Permission</h5><div class="cs-row cs-perm">${permHTML()}</div></div>
     <div class="cs-sec"><h5>Tools <small>· hover one for what it does</small></h5><div class="cs-row cs-tools">${quickToolsHTML(c)}</div></div>`;
   // The two caps every reply has (all chats): what all its model calls may cost, and what its paid media may cost.
-  const cap = (k, label, v, step, tip) => `<label class="cs-num" title="${esc(tip)}"><span>${label}</span><span class="cs-inp"><i>$</i><input type="number" min="0" step="${step}" data-k="${k}" value="${esc(String(v))}" aria-label="${label} in dollars"></span></label>`;
-  glob.innerHTML = `<div class="cs-sec"><h5>Budget <small>· all chats</small></h5><div class="cs-row cs-caps">${cap('replyBudget', 'Cap per reply', G.settings.replyBudget ?? G.cfg.defaults.replyBudget ?? 1, 0.25, 'Everything one reply calls: the agent, deciders, helpers, checks and media. At 85% the agent is told to wrap up; at the cap Strict asks you, YOLO stops. 0 = no cap.')}${cap('budget', 'Paid media per reply', G.settings.budget, 0.05, 'A paid picture, voice, music or video call that would go over this is stopped, in Strict and in YOLO.')}</div></div>`;
+  const CAPS = [['replyBudget', 'Cap per reply', '💵', G.settings.replyBudget ?? G.cfg.defaults.replyBudget ?? 1, 0.25, 'Everything one reply calls: the agent, deciders, helpers, checks and media. At 85% the agent is told to wrap up; at the cap Strict asks you, YOLO stops. 0 = no cap.'],
+    ['budget', 'Paid media per reply', '🖼', G.settings.budget, 0.05, 'A paid picture, voice, music or video call that would go over this is stopped, in Strict and in YOLO.']];
+  const cap = ([k, label, , v, step, tip]) => `<label class="cs-num" title="${esc(tip)}"><span>${label}</span><span class="cs-inp"><i>$</i><input type="number" min="0" step="${step}" data-k="${k}" value="${esc(String(v))}" aria-label="${label} in dollars"></span></label>`;
+  glob.innerHTML = `<div class="cs-sec"><h5>Budget <small>· all chats</small></h5><div class="cs-row cs-caps">${CAPS.map(cap).join('')}</div></div>`;
+  // The quick row above the model: the same switches as the window, one click each; ⋯ opens the window for the rest.
+  const quick = $('.cmp-quick', c.el.root);
+  const qcap = ([k, label, ico, v, step, tip]) => `<label class="cs-num cq-cap" title="${esc(`${label} (all chats)\n${tip}`)}"><span aria-hidden="true">${ico}</span><span class="cs-inp"><i>$</i><input type="number" min="0" step="${step}" data-k="${k}" value="${esc(String(v))}" aria-label="${label} in dollars"></span></label>`;
+  quick.innerHTML = `<div class="cq-grp cq-lv">${levelsHTML(s)}</div><span class="cq-sep" aria-hidden="true"></span>${permHTML('cq-perm')}<span class="cq-br" aria-hidden="true"></span><span class="cq-sep" aria-hidden="true"></span><div class="cq-grp cs-tools">${quickToolsHTML(c)}</div><span class="cq-sep cq-sep-caps" aria-hidden="true"></span><div class="cq-grp cs-caps">${CAPS.map(qcap).join('')}</div>
+    <div class="lvl cq-plan" role="radiogroup" aria-label="Plan first"><span class="lvl-ico" title="Plan first (all chats): whether the agent shows its plan and waits for Go ahead" aria-hidden="true">🗺</span>${[['off', 'Off', 'Plans and builds in one go.'], ['big', 'Big', 'For a new app, site, game or a change across several files, it shows its plan and waits for Go ahead, Stop here, or your changes.'], ['always', 'Always', 'Before any file change or command, it shows its plan and waits.']].map(([v, w, tip]) => { const on = (G.settings.planFirst || 'off') === v; return `<button type="button" class="lvl-b ${on ? 'on' : ''}" role="radio" aria-checked="${on}" data-plan="${v}" title="${esc(`Plan first: ${w}${on ? ' (now)' : ''} · all chats\n${tip}`)}">${w}</button>`; }).join('')}</div><span class="cq-sp"></span>
+    <button type="button" class="cq-adv" aria-haspopup="dialog" title="All of this chat's settings: each tool's model, strength and price, Undo and Save" aria-label="Advanced settings for this chat"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg><span>Advanced</span></button>`;
+  // Show or hide the quick rows (all chats). Hidden, the button keeps what matters in view: YOLO and the thinking level.
+  const qOn = G.quickRow !== false, rWord = { default: 'Auto', off: '', low: 'Low', medium: 'Med', high: 'High' }[s.reasoning || 'off'];
+  quick.hidden = !qOn;
+  const qSum = [c.approval === 'yolo' ? 'YOLO' : '', rWord ? `🧠 ${rWord}` : ''].filter(Boolean).join(' · ');
   followSlot.innerHTML = `
-    <label class="sq-check cmp-follow" title="Follow the agent: when it opens or checks a page in its browser, or starts a site or app, the Browser tab switches to it; when it runs a command, the Terminal tab shows its output. So you can watch. Off: the pane stays where you put it (all chats)."><input type="checkbox" class="follow-agent" ${G.followAgent !== false ? 'checked' : ''}><svg class="fl-eye" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg><span>Follow</span></label>
-    <label class="sq-check cmp-chrome ${G.ext?.connected && !G.ext.outdated ? '' : 'off'}" title="${G.ext?.outdated ? 'Chrome: the QuorX extension is an older version. Reload it once in chrome://extensions (↻ on the QuorX card).' : G.ext?.connected ? 'Chrome: let the agent in this chat open tabs in your own Chrome (a QuorX window), signed in as you. Sending, deleting, buying and account changes ask you first. It never touches your other tabs.' : 'Chrome: the QuorX extension is not connected (⚙ Settings → Code & servers → Chrome extension). Ticked, the agent can use your Chrome once it is.'}"><input type="checkbox" class="chrome-access" ${c.tools?.chrome ? 'checked' : ''}><span>🧩 Chrome</span></label>
+    <button type="button" class="cq-toggle ${qOn ? 'on' : ''} ${c.approval === 'yolo' ? 'yolo' : ''}" aria-pressed="${qOn}" title="${qOn ? 'Hide the quick settings above (all chats)' : 'Show the quick settings: thinking, Strict / YOLO, tools and caps (all chats)'}${qSum ? `\nNow: ${qSum}` : ''}" aria-label="${qOn ? 'Hide' : 'Show'} quick settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>${!qOn && qSum ? `<span class="cq-tsum">${esc(qSum)}</span>` : ''}<svg class="cq-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="${qOn ? 'M6 15l6-6 6 6' : 'M6 9l6 6 6-6'}"/></svg></button>
+    <button type="button" class="cmp-ico cmp-follow-b ${G.followAgent !== false ? 'on' : ''}" aria-pressed="${G.followAgent !== false}" aria-label="Follow the agent" title="${esc(`Follow the agent: ${G.followAgent !== false ? 'on' : 'off'}\nThe side pane jumps to the page or terminal the agent is using, so you can watch.\nAll chats · click to turn ${G.followAgent !== false ? 'off' : 'on'}`)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
+    <button type="button" class="cmp-ico cmp-chrome-b ${c.tools?.chrome ? 'on' : ''} ${extReady() ? '' : 'nosetup'}" aria-pressed="${!!c.tools?.chrome}" aria-label="Chrome extension" title="${esc(`Chrome extension: ${!extReady() ? (G.ext?.outdated ? 'needs a reload' : 'not set up') : c.tools?.chrome ? 'on for this chat' : 'off for this chat'}\n${extReady() ? 'Lets the agent use your own Chrome, signed in as you. Sending, buying and account changes ask you first.' : G.ext?.outdated ? 'The extension is an older version: reload it once in chrome://extensions.' : 'Lets the agent use your own Chrome, signed in as you.'}\n${extReady() ? `This chat only · click to turn ${c.tools?.chrome ? 'off' : 'on'}` : 'Click to set it up'}`)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 3.5a2 2 0 0 1 4 0V6h4v4h-1.5a2 2 0 0 0 0 4H18v4h-4v-1.5a2 2 0 0 0-4 0V18H6v-4h1.5a2 2 0 0 0 0-4H6V6h4z"/></svg></button>
 `;
-  for (const inp of glob.querySelectorAll('.cs-num input')) inp.onchange = () => { const v = Math.max(0, Number(inp.value) || 0); inp.value = String(v); G.settings[inp.dataset.k] = v; savePrefs(); };
+  for (const inp of [...glob.querySelectorAll('.cs-num input'), ...quick.querySelectorAll('.cs-num input')]) inp.onchange = () => { const v = Math.min(Number(inp.dataset.max) || Infinity, Math.max(Number(inp.dataset.min) || 0, Number(inp.value) || 0)); inp.value = String(v); G.settings[inp.dataset.k] = v; savePrefs(); };
+  for (const b of quick.querySelectorAll('[data-plan]')) b.onclick = () => { G.settings.planFirst = b.dataset.plan; savePrefs(); renderComposerBar(c); };
   // The button says what matters at a glance (YOLO in red, reasoning on) and opens the panel.
   const rName = REASON_INFO[s.reasoning]?.[0];
   $('.cmp-set-sum', setBtn).textContent = [c.approval === 'yolo' ? 'YOLO' : '', (s.reasoning || 'off') !== 'off' && rName ? rName : ''].filter(Boolean).join(' · ');
@@ -2459,7 +2580,7 @@ function renderComposerBar(c) {
       if (andClose) shut(); else mark();
     };
     const save = () => { saveChat(c); savePrefs(); shut(); };
-    const outside = (e) => { if ((!rack.contains(e.target) || e.target === scrim) && !e.target.closest?.('dialog, .oh-tip')) { if (dirty()) { e.preventDefault(); e.stopPropagation(); nudge(); } else shut(); } };
+    const outside = (e) => { if ((!rack.contains(e.target) || e.target === scrim) && !e.target.closest?.('.cq-adv') && !e.target.closest?.('dialog, .oh-tip')) { if (dirty()) { e.preventDefault(); e.stopPropagation(); nudge(); } else shut(); } };
     const onKey = (e) => { if (e.key === 'Escape' && !document.querySelector('dialog[open]')) { e.stopPropagation(); if (dirty()) nudge(); else { shut(); setBtn.focus(); } } };
     new MutationObserver(() => { if (snap != null) mark(); }).observe(panel, { childList: true, subtree: true });
     panel.addEventListener('change', () => setTimeout(mark));
@@ -2476,17 +2597,21 @@ function renderComposerBar(c) {
     undoBtn.onclick = () => discard(false);
   }
   $('.model', slot).onclick = async () => { const id = await pickModel('chat', s.model, { context: `For “${clip(c.title, 40)}”` }); if (id) { s.model = id; saveChat(c); renderComposerBar(c); renderChatHead(c); } };
-  for (const b of bar.querySelectorAll('.lvl-b')) b.onclick = () => { c.agent.setup[b.closest('.lvl').dataset.key] = b.dataset.v; saveChat(c); renderComposerBar(c); };
-  for (const b of bar.querySelectorAll('.qt-b')) b.onclick = () => {
+  $('.cq-adv', quick).onclick = () => setBtn.click();
+  const both = (sel) => [...bar.querySelectorAll(sel), ...quick.querySelectorAll(sel)];
+  for (const b of both('.lvl[data-key] .lvl-b')) b.onclick = () => { c.agent.setup[b.closest('.lvl').dataset.key] = b.dataset.v; saveChat(c); renderComposerBar(c); };
+  for (const b of both('.qt-b')) b.onclick = () => {
     const k = b.dataset.k;
     if (k === 'listen') { (G.settings.tools.listen ??= {}).on = G.settings.tools.listen.on === false; savePrefs(); }
     else { c.tools[k] = !({ ...DEFAULT_CHAT_TOOLS, ...c.tools })[k]; saveChat(c); }
     renderToolbars(); renderComposerBar(c);
   };
   const gear = $('.cs-gear', rack); if (gear && !gear.dataset.wired) { gear.dataset.wired = '1'; gear.onclick = () => openSettings(); }
-  $('.follow-agent', followSlot).onchange = (e) => { G.followAgent = e.target.checked; savePrefs(); for (const ch of G.open.values()) if (ch !== c) renderComposerBar(ch); };
-  $('.chrome-access', followSlot).onchange = (e) => { c.tools.chrome = e.target.checked; saveChat(c); };
-  for (const b of bar.querySelectorAll('.perm button')) b.onclick = () => { c.approval = b.dataset.approval; saveChat(c); renderComposerBar(c); if (c.running?.runId) postJ(`/api/runs/${c.running.runId}/mode`, { approval: c.approval }).catch(() => {}); };
+  $('.cq-toggle', followSlot).onclick = () => { G.quickRow = G.quickRow === false; savePrefs(); for (const ch of [...G.open.values(), G.homeDraft]) if (ch?.el?.root?.isConnected) renderComposerBar(ch); };
+  $('.cmp-follow-b', followSlot).onclick = () => { G.followAgent = G.followAgent === false; savePrefs(); for (const ch of [...G.open.values(), G.homeDraft]) if (ch?.el?.root?.isConnected) renderComposerBar(ch); };
+  // Not set up: the click turns it on for this chat and opens the extension's setup, as the tick did.
+  $('.cmp-chrome-b', followSlot).onclick = () => { c.tools.chrome = !c.tools?.chrome || !extReady(); saveChat(c); renderComposerBar(c); if (!extReady()) openChromeSetup(); };
+  for (const b of both('.perm button')) b.onclick = () => { c.approval = b.dataset.approval; saveChat(c); renderComposerBar(c); if (c.running?.runId) postJ(`/api/runs/${c.running.runId}/mode`, { approval: c.approval }).catch(() => {}); };
   renderAllowed(c);
 }
 // ---------- usage (per chat): every model this chat paid for, grouped by kind of call ----------
@@ -2616,28 +2741,30 @@ const REASON_INFO = { off: ['Off', 'Answers straight away. Fastest and cheapest.
 // Creativity (per chat): how varied the answers are. "Default" sends no temperature, so each model uses its own.
 const CREATIVITY_INFO = { default: ['Default', "The model's own setting. Right for most work."], focused: ['Focused', 'Steadier, more predictable answers. Good for fixes and data.'], creative: ['Creative', 'More varied ideas. Good for games, designs and writing.'] };
 // Wires every dropdown in the message box (Reasoning, Creativity); each sets its own key on the chat's setup.
-// Reasoning and creativity as small level meters: an icon, then one step per option (lit up to the chosen one).
-// A for "model default". The option's name and what it does show on hover.
+// Reasoning and creativity as labelled choices: an icon, then one word per option (Auto = the model's default).
+// What each option does, and for which model, shows on hover.
 const LVL_REASON = ['off', 'low', 'medium', 'high'], LVL_CREATIVE = ['focused', 'default', 'creative'];
 function levelsHTML(s) {
   const m = G.byId.get(s.model), na = m && m.kind === 'chat' && m.reasoning === false, rv = s.reasoning || 'off';
   const cv = CREATIVITY_INFO[s.creativity] ? s.creativity : 'default';
   const noTemp = m && m.kind === 'chat' && m.temp === false;
-  const step = (key, info, v, i, lit, on, extra = '') => `<button type="button" class="lvl-b ${lit ? 'lit' : ''} ${on ? 'on' : ''}" role="radio" aria-checked="${on}" data-v="${v}" title="${esc(`${key}: ${info[v][0]}${on ? ' (now)' : ''}\n${info[v][1]}${extra}`)}" aria-label="${key}: ${info[v][0]}"><i style="--h:${i}"></i></button>`;
-  const ri = LVL_REASON.indexOf(rv), ci = LVL_CREATIVE.indexOf(cv);
-  const rNote = na ? '\nThis model has no reasoning setting; it applies if you switch to one that does.' : '';
-  const cNote = noTemp ? '\nThis model has no temperature setting, so this has no effect on it.' : '';
-  return `<div class="lvl lvl-reason ${na ? 'na' : ''}" role="radiogroup" aria-label="Reasoning" data-key="reasoning"><span class="lvl-ico" title="Reasoning: how much the model thinks before answering" aria-hidden="true">🧠</span><button type="button" class="lvl-b lvl-auto ${rv === 'default' ? 'on' : ''}" role="radio" aria-checked="${rv === 'default'}" data-v="default" title="${esc(`Reasoning: Model default${rv === 'default' ? ' (now)' : ''}\n${REASON_INFO.default[1]}${rNote}`)}" aria-label="Reasoning: model default">A</button>${LVL_REASON.map((v, i) => step('Reasoning', REASON_INFO, v, i, ri >= 0 && i <= ri && rv !== 'off', v === rv, rNote)).join('')}</div>`
-    + `<div class="lvl lvl-creative ${noTemp ? 'na' : ''}" role="radiogroup" aria-label="Creativity" data-key="creativity"><span class="lvl-ico" title="Creativity: how varied the answers are" aria-hidden="true">🎨</span>${LVL_CREATIVE.map((v, i) => step('Creativity', CREATIVITY_INFO, v, i + 1, i <= ci, v === cv, cNote)).join('')}</div>`;
+  // Each option is a word you can read at a glance; the one in use is filled. Hover still explains it.
+  const step = (key, info, v, word, on, extra = '') => `<button type="button" class="lvl-b ${on ? 'on' : ''}" role="radio" aria-checked="${on}" data-v="${v}" title="${esc(`${key}: ${info[v][0]}${on ? ' (now)' : ''}\n${info[v][1]}${extra}`)}" aria-label="${key}: ${info[v][0]}">${word}</button>`;
+  const WORD = { default: 'Auto', off: 'Off', low: 'Low', medium: 'Med', high: 'High', focused: 'Focused', creative: 'Creative' };
+  const forModel = `\nModel\t${short(s.model)}`;
+  const rNote = (na ? '\nThis model has no reasoning setting; it applies if you switch to one that does.' : '') + forModel;
+  const cNote = (noTemp ? '\nThis model has no temperature setting, so this has no effect on it.' : '') + forModel;
+  return `<div class="lvl lvl-reason ${na ? 'na' : ''}" role="radiogroup" aria-label="Thinking" data-key="reasoning"><span class="lvl-ico" title="Thinking: how much the model reasons before answering" aria-hidden="true">🧠</span>${['default', ...LVL_REASON].map((v) => step('Thinking', REASON_INFO, v, WORD[v], v === rv, rNote)).join('')}</div>`
+    + `<div class="lvl lvl-creative ${noTemp ? 'na' : ''}" role="radiogroup" aria-label="Creativity" data-key="creativity"><span class="lvl-ico" title="Creativity: how varied the answers are" aria-hidden="true">🎨</span>${LVL_CREATIVE.map((v) => step('Creativity', CREATIVITY_INFO, v, v === 'default' ? 'Default' : WORD[v], v === cv, cNote)).join('')}</div>`;
 }
 // Every tool as one icon toggle (lit when on); the name, what it does and its price show on hover.
 function quickToolsHTML(c) {
   const t = { ...DEFAULT_CHAT_TOOLS, ...c.tools };
   const btn = (k, icon, name, lines, on, paid) => `<button type="button" class="qt-b ${on ? 'on' : ''} ${paid ? 'paid' : ''}" data-k="${k}" aria-pressed="${on}" aria-label="${esc(name)}" title="${esc([`${name}: ${on ? 'on' : 'off'}`, ...lines, on ? 'Click to turn it off' : 'Click to turn it on'].join('\n'))}">${icon}</button>`;
-  const q = QUALITY_TOOLS.map((k) => { const x = QUALITY_INFO[k]; return btn(k, x.icon, x.name, [x.note, `Cost\t${x.perBuild()}`], !!t[k]); }).join('');
+  const q = QUALITY_TOOLS.map((k) => { const x = QUALITY_INFO[k]; return btn(k, x.icon, x.name, [x.note, `Model\t${short(x.model())}`, `Cost\t${x.perBuild()}`], !!t[k]); }).join('');
   const media = CHAT_TOOLS.map((k) => { const [, label, note] = CATS.find((x) => x[0] === k); const icon = label.split(' ')[0], name = label.slice(icon.length + 1); return btn(k, icon, name, [note.replace(/^paid;?\s*/, '') || 'Costs money per use', `Model\t${short(G.settings.tools[k]?.models?.[0] || '')}`, 'Paid: stops at the paid media budget'], !!t[k], true); }).join('');
   const micOn = G.settings.tools.listen?.on !== false;
-  const mic = btn('listen', '🎤', 'Mic · speech to text', ['Turns what you say into text in the message box', 'All chats; off hides the mic button'], micOn);
+  const mic = btn('listen', '🎤', 'Mic · speech to text', ['Turns what you say into text in the message box', ...(G.settings.tools.listen?.models?.[0] ? [`Model\t${short(G.settings.tools.listen.models[0])}`] : []), 'All chats; off hides the mic button'], micOn);
   return `<span class="qt-group">${q}</span><span class="qt-sep" aria-hidden="true"></span><span class="qt-group">${media}</span><span class="qt-sep" aria-hidden="true"></span><span class="qt-group">${mic}</span>`;
 }
 // The quality tools for one reply: on/off from this chat's 🧰, models and strength from ⚙ Settings.
@@ -2664,6 +2791,9 @@ function renderChatTools(c) {
   if (!c.el) return;
   const box = $('.toolbar', c.el.root);
   const T = G.settings.tools;
+  // 🎙 off hides the mic in every message box, the home page's included (it is built after renderToolbars runs).
+  const mic = $('.micBtn', c.el.root);
+  if (mic) mic.hidden = mic.disabled = T.listen?.on === false;
   const on = CHAT_TOOLS.filter((k) => c.tools[k]);
   const qOff = QUALITY_TOOLS.filter((k) => c.tools[k] === false);
   const label = (k) => CATS.find((x) => x[0] === k)[1];
@@ -2699,6 +2829,8 @@ function renderChatTools(c) {
       <div class="cmp-tp-foot"><button type="button" class="cmp-tp-settings-link tm-settings">Models and prices in ⚙ Settings →</button></div>
     </div>`;
   const btn = $('.tools-btn', box), menu = $('.tools-menu', box);
+  // The quick row above the model shows the same switches, so it follows what changed here.
+  const quick = $('.cmp-quick', c.el.root); if (quick?.childElementCount) { const fresh = document.createElement('div'); fresh.innerHTML = quickToolsHTML(c); const tools = $('.cs-tools', quick); for (const b of tools.querySelectorAll('.qt-b')) { const n = fresh.querySelector(`.qt-b[data-k="${b.dataset.k}"]`); if (n) { b.className = n.className; b.title = n.title; b.setAttribute('aria-pressed', n.getAttribute('aria-pressed')); } } }
   const close = () => { menu.hidden = true; btn.setAttribute('aria-expanded', 'false'); document.removeEventListener('pointerdown', outside, true); };
   const outside = (e) => { if (!box.contains(e.target) && !$('#picker').open) close(); };
   btn.onclick = () => { const open = menu.hidden; menu.hidden = !open; btn.setAttribute('aria-expanded', String(open)); if (open) document.addEventListener('pointerdown', outside, true); else close(); };
@@ -2731,7 +2863,7 @@ function renderChatTools(c) {
 // Refresh every open chat's 🧰 Tools button (models may have changed in Settings).
 function renderToolbars() {
   for (const c of G.open.values()) renderChatTools(c);
-  for (const b of document.querySelectorAll('.chatpane .micBtn')) { const off = G.settings.tools.listen?.on === false; b.hidden = off; b.disabled = off; }
+  if (G.homeDraft?.el?.root?.isConnected) renderChatTools(G.homeDraft); // the home page's message box has the same window
 }
 // Tools this chat's agent may use without asking (strict mode); click one to take the permission back.
 // "Always allowed" tools are part of this chat's permissions, so they live with 🔒 Strict / ⚡ YOLO in the
@@ -2776,6 +2908,7 @@ function syncRunState(c) {
 function renderMsg(c, m) {
   const el = document.createElement('div');
   m.el = el;
+  if (needsTrace(m)) watchTrace(c, m, el);
   if (m.role === 'user') {
     el.className = 'msg user';
     el.innerHTML = `${m.scheduled ? `<div class="u-sched" title="${m.scheduled.missed ? 'QuorX was closed or the computer slept at the planned time, so this ran when it was back' : 'Started by a schedule'}">⏰ ${m.scheduled.missed ? 'Missed run, started late' : 'Scheduled'}: ${esc(m.scheduled.name)}</div>` : ''}<div class="utext"></div>${m.imgs?.length ? `<div class="u-imgs" data-views="${esc(JSON.stringify(m.imgViews || []))}">${m.imgs.map((u, k) => `<img src="${u}" alt="attached picture" data-k="${k}" title="Click to see it large">`).join('')}</div>` : ''}${m.docs?.length ? `<div class="u-docs">${m.docs.map((d) => `<button type="button" class="u-doc" data-doc="${esc(JSON.stringify(d))}" title="${esc(d.name)} · ${esc(docSize(d.size))} · click to preview">${DOC_ICON[d.kind] || '📄'} ${esc(d.name)}</button>`).join('')}</div>` : ''}${m.ctx?.length ? `<div class="ctx-used">${m.ctx.map((t) => `<span>📎 ${esc(t)}</span>`).join('')}</div>` : ''}${m.cmts?.length ? `<div class="ctx-used cmts-used">${m.cmts.map((x) => `<span title="${esc(x.selector)}">💬 ${esc(x.tag)} "${esc(clip(x.text || '', 40))}"${x.note ? `: ${esc(clip(x.note, 60))}` : ''}</span>`).join('')}</div>` : ''}${m.at ? timeTag(m.at) : ''}`;
@@ -3144,7 +3277,7 @@ function updateMsg(c, m, { bodyOnly = false } = {}) {
   const checkTag = s?.verify ? (s.verify.ok ? '<span class="check-ok" title="Before this reply ended, the harness re-checked the changed files and opened what was built: no errors.">✓ Checked</span>'
     : `<span class="check-bad" title="${esc(s.verify.problems.join('\n'))}">⚠ ${s.verify.problems.length} problem${s.verify.problems.length === 1 ? '' : 's'} left</span>`) : '';
   const stopTag = s?.stop === 'steps' ? '<span title="The reply used all its steps (⚙ Settings → Agent loop)">step limit reached</span>'
-    : s?.stop === 'budget' ? (s.budgetStop === 'hard' ? '<span title="The reply went past the project budget and its allowance for finishing work (⚙ Settings → Budget & approvals), so it was stopped">stopped past the budget</span>'
+    : s?.stop === 'budget' ? (s.budgetStop === 'hard' ? '<span title="The reply went past the project budget and its allowance for finishing work (⚙ Settings → Budget), so it was stopped">stopped past the budget</span>'
       : '<span title="The project budget was used up, so the reply did not start; raise it with the $ next to the project in the sidebar">budget reached</span>') : '';
   let undoRow = $('.f-undo-row', el);
   if (!undoRow) { undoRow = document.createElement('div'); undoRow.className = 'f-undo-row'; }
@@ -3421,6 +3554,7 @@ function openTrace(c, m) {
   c.paneHidden = false;
   G.view = { id: G.view.id, src: false, files: false, trace: m.runId };
   syncLayout(); renderPane(); refreshTraceButtons();
+  loadTrace(c, m); // an older reply's steps: they draw when they arrive
 }
 function closeTrace() { G.traceRun = null; G.view.trace = null; syncLayout(); renderPane(); refreshTraceButtons(); }
 function refreshTraceButtons() { for (const b of document.querySelectorAll('.trace-btn')) b.classList.remove('on'); const c = focused(); const m = c?.agent.messages.find((x) => x.runId === G.traceRun); if (m?.el) $('.trace-btn', m.el)?.classList.add('on'); }
@@ -3463,6 +3597,7 @@ function renderTracePane(c, m) {
 // scrubber. J/K or ←/→ jump to the previous/next step, Space plays and pauses, Home/End go to the ends.
 const REPLAY_MARK = new Set(['llm_start', 'tool', 'review', 'review_start', 'verify', 'question', 'answer', 'approval', 'sent_back', 'check', 'lint', 'decide_start', 'done', 'error']);
 async function startReplay(c, m) {
+  await loadTrace(c, m);
   let trace = m.trace || [];
   // A reply whose steps the page never saw (started over MCP, or while the page was closed): QuorX's own log.
   if (!trace.length && m.runId) { const r = await fetch(`/api/runs/${encodeURIComponent(m.runId)}/log`).then((x) => x.json()).catch(() => null); trace = r?.events || []; }
@@ -3702,13 +3837,13 @@ function approvalBadge(a, live) {
 const CMD_CLASS = { read: 'reads only', net: 'reads the web', write: 'writes in the project', build: 'runs project code', install: 'installs packages', external: 'leaves this computer',
   opaque: 'can’t be checked', delete: 'deletes', discard: 'throws away work', never: 'never allowed', unknown: 'no rule covers it' };
 const CMD_ZONE = { inside: 'in the project', outside: 'outside the project', unknown: 'can’t be resolved', blocked: 'blocked', protected: 'protected' };
-const byName = (by) => (by === 'user' ? 'you' : by === 'timeout' ? 'no answer in time' : by === 'plan' ? 'the approved production plan' : esc(by));
+const byName = (by) => (by === 'user' ? 'you' : by === 'timeout' ? 'no answer in time' : by === 'plan' ? 'the approved production plan' : by === 'deciders off' ? '⚡ YOLO without a check (the deciders are off in this chat)' : esc(by));
 // ⚡ YOLO cards that wait for you a few seconds: a countdown, what happens when it ends, and "Wait for me".
 function waitHTML(card) {
   const w = card.wait;
   if (!w) return '';
   if (w.held) return '<div class="aw held"><span class="aw-text">⏸ Waiting for you: nothing happens until you answer.</span></div>';
-  const then = { deciders: 'the deciders answer for you', recommended: 'the agent\'s recommendations stand', 'go ahead': 'the storyboard stands and the agent goes ahead', run: 'it runs (the deciders saw little risk)', skip: 'it is skipped (the deciders weren\'t sure it is harmless)', stop: 'the agent stops waiting and carries on without it' }[w.then] || 'the reply carries on';
+  const then = { deciders: 'the deciders answer for you', recommended: 'the agent\'s recommendations stand', 'go ahead': 'the storyboard stands and the agent goes ahead', run: 'it runs (the deciders saw little risk)', skip: 'it is skipped (the deciders weren\'t sure it is harmless)', 'skip-off': 'it is skipped (the deciders are off in this chat)', stop: 'the agent stops waiting and carries on without it' }[w.then] || 'the reply carries on';
   const left = Math.max(0, Math.ceil((w.until - Date.now()) / 1000));
   return `<div class="aw" data-until="${w.until}" data-secs="${w.secs}" data-run="${esc(w.runId || '')}" data-id="${esc(card.id)}"><span class="aw-bar" aria-hidden="true"><i style="width:${Math.min(100, (left / (w.secs || 1)) * 100)}%"></i></span><span class="aw-text">⚡ No answer in <b class="aw-n">${left}</b>s and ${then}.</span><button type="button" class="aw-hold" title="Stop the clock: the card waits until you answer">Wait for me</button></div>`;
 }
@@ -3750,7 +3885,7 @@ function shellCardHTML(a) {
     ${waitHTML(c)}
     <textarea rows="1" placeholder="To deny it, you can add a note: why, or what to do instead. Enter denies and sends it."></textarea>
     <div class="acts"><button type="button" class="primary yes">Run once</button>${c.noAlways ? '' : '<button type="button" class="sc-always" aria-expanded="false">Always allow…</button>'}<button type="button" class="no">Deny</button></div>
-    ${c.noAlways ? '<div class="sc-note">A button can’t make a rule for this kind of command. If you’re sure, type one yourself in ⚙ Settings → Safety & commands.</div>'
+    ${c.noAlways ? '<div class="sc-note">A button can’t make a rule for this kind of command. If you’re sure, type one yourself in ⚙ Settings → Approvals & safety.</div>'
       : `<div class="sc-rule" hidden>
         <div class="sc-row"><span class="sc-k">What</span>${seg('match', [[sug.exact, 'This exact command'], [sug.prefix, `Starting with <code>${esc(sug.prefix.replace(/\*$/, ''))}</code>`], [sug.program, `Any <code>${esc(sug.program.replace(/\*$/, ''))}</code> command`]])}</div>
         <div class="sc-row"><span class="sc-k">Where</span>${seg('scope', [['chat', 'This chat'], ['project', 'This project'], ['everywhere', 'Everywhere']])}</div>
@@ -3924,7 +4059,7 @@ function budgetHTML(b, live = true) {
   const next = Math.ceil(Math.max(c.budget * 2, c.spent * 1.5) * 100) / 100;
   // kind: 'reply' (this reply's cap), 'day' (today's cap across projects), or the project budget.
   const title = c.kind === 'reply' ? 'This reply’s cap reached' : c.kind === 'day' ? 'Today’s cap reached' : 'Project budget reached';
-  const what = c.kind === 'reply' ? 'Every model this reply used counts (the agent, deciders, helpers, checks, media). Raise its cap to let it carry on, or wrap up here. Your default cap is in ⚙ Settings → Budget & approvals.'
+  const what = c.kind === 'reply' ? 'Every model this reply used counts (the agent, deciders, helpers, checks, media). Raise its cap to let it carry on, or wrap up here. Your default cap is in ⚙ Settings → Budget.'
     : c.kind === 'day' ? 'Today’s spending across all your projects reached your daily cap. Raise it for today to let this reply carry on, or wrap up here.'
     : 'All chats in this project together have used up its budget. Raise it to let this reply carry on, or wrap up here.';
   return `<div class="approval budget-card ${open ? '' : 'done'}" ${open ? `data-id="${esc(c.id)}" data-kind="${esc(c.kind || 'project')}"` : ''}>
@@ -4622,40 +4757,30 @@ async function renderFiles(c) {
   bar.innerHTML = `🗂 <b>Explorer</b> <span class="dim">${esc(p?.name || c.projectId)}</span> <code title="${esc(p?.dir || '')}">${esc(p?.dir || '')}</code> <button type="button" class="os-open" title="Open this folder in File Explorer">📂 Open in File Explorer</button> <button type="button" class="back">✕ Close</button>`;
   $('.os-open', bar).onclick = () => openFolder(c.projectId);
   $('.back', bar).onclick = () => { G.view.files = false; syncLayout(); renderPane(); };
-  const files = await fetch(`/api/files?project=${c.projectId}`).then((r) => r.json()).catch(() => []);
   const arts = Object.values(c.agent.artifacts).sort((a, b) => (b.updated || 0) - (a.updated || 0));
-  // A folder tree from the flat list (folders first, open by default near the top).
-  const tree = {};
-  for (const f of files) {
-    const parts = f.path.replace(/\/ \((another project, )?skipped\)$/, '/').split('/').filter(Boolean);
-    let node = tree;
-    parts.forEach((part, k) => { if (k === parts.length - 1 && !/skipped\)$/.test(f.path)) (node.__files ||= []).push({ name: part, ...f }); else node = (node[part] ||= {}); });
-    if (/skipped\)$/.test(f.path)) node.__skipped = true;
-  }
   const fileIcon = (n) => ({ html: '🌐', css: '🎨', js: '📜', json: '🧾', py: '🐍', md: '📝', sh: '⌨️' }[langOf(n)] || (/\.(png|jpe?g|gif|webp|svg|ico)$/i.test(n) ? '🖼' : /\.(mp3|wav|ogg)$/i.test(n) ? '🎵' : /\.(mp4|webm)$/i.test(n) ? '🎬' : '📄'));
-  // A tree you can read: guide lines per level, folders that open and close (▸ ▾, remembered) with how
-  // many files they hold, and long names shortened in the middle so the end (and extension) stays visible.
-  const openDirs = (G.fxOpen ||= {})[c.projectId] ||= new Set(['']);
-  const countFiles = (node) => (node.__files || []).length + Object.keys(node).filter((k) => !k.startsWith('__')).reduce((n, k) => n + countFiles(node[k]), 0);
+  // A tree you can read: guide lines per level, folders that open and close (▸ ▾, remembered), and long names
+  // shortened in the middle so the end (and extension) stays visible. It is read one folder at a time, when the folder
+  // opens (and the ones left open last time), so a project with a million files opens as fast as a small one; a big
+  // folder shows its first entries with Show more.
+  const openDirs = (G.fxOpen ||= {})[c.projectId] ||= new Set();
   const nameHTML = (n) => { const cut = Math.max(0, n.length - 9); return n.length > 18 ? `<span class="fl-name"><span class="n1">${esc(n.slice(0, cut))}</span><span class="n2">${esc(n.slice(cut))}</span></span>` : `<span class="fl-name"><span class="n1">${esc(n)}</span></span>`; };
-  const drawTree = (node, depth, base = '') => Object.keys(node).filter((k) => !k.startsWith('__')).sort().map((dir) => {
-      const path = base ? `${base}/${dir}` : dir, kid = node[dir], n = countFiles(kid);
-      const open = openDirs.has(path) || (depth < 1 && !openDirs.has(`!${path}`) && !kid.__skipped); // top level starts open, deeper ones closed
-      return `<details class="fx-dir" data-dir="${esc(path)}" ${open ? 'open' : ''}><summary style="--d:${depth}" title="${esc(path)}/"><span class="fx-chev" aria-hidden="true">▸</span>📁 ${nameHTML(dir)}${kid.__skipped ? '<small class="fx-note">not listed</small>' : `<small class="fx-count" title="${n} file${n === 1 ? '' : 's'} inside">${n}</small>`}</summary>${drawTree(kid, depth + 1, path)}</details>`;
-    }).join('')
-    + (node.__files || []).sort((a, b) => a.name.localeCompare(b.name)).map((f) => `<button type="button" class="fl" data-p="${esc(f.path)}" style="--d:${depth}" title="${esc(f.path)}${f.size ? ` · ${(f.size / 1024).toFixed(1)} KB` : ''}">${fileIcon(f.name)} ${nameHTML(f.name)}<small>${f.size ? `${f.size > 1e6 ? `${(f.size / 1e6).toFixed(1)} MB` : `${(f.size / 1024).toFixed(1)} KB`}` : ''}</small></button>`).join('');
+  const sizeText = (s) => (s ? (s > 1e6 ? `${(s / 1e6).toFixed(1)} MB` : `${(s / 1024).toFixed(1)} KB`) : '');
+  const entryHTML = (e, depth, base) => {
+    const path = base ? `${base}/${e.name}` : e.name;
+    if (e.dir) return `<details class="fx-dir" data-dir="${esc(path)}" data-depth="${depth}" ${openDirs.has(path) && !e.skipped ? 'open' : ''}><summary style="--d:${depth}" title="${esc(path)}/"><span class="fx-chev" aria-hidden="true">▸</span>📁 ${nameHTML(e.name)}${e.skipped ? `<small class="fx-note">${e.skipped === 'project' ? 'another project' : 'not listed'}</small>` : e.count != null ? `<small class="fx-count" title="${e.count} entr${e.count === 1 ? 'y' : 'ies'} inside">${e.count.toLocaleString()}</small>` : ''}</summary><div class="fx-kids"></div></details>`;
+    return `<button type="button" class="fl" data-p="${esc(path)}" data-size="${e.size || 0}" style="--d:${depth}" title="${esc(path)}${e.size ? ` · ${sizeText(e.size)}` : ''}">${fileIcon(e.name)} ${nameHTML(e.name)}<small>${sizeText(e.size)}</small></button>`;
+  };
   body.innerHTML = `<div class="files">
     <div class="tree">
       <div class="fx-h">This chat's artifacts <small>${arts.length}</small></div>
       ${arts.length ? arts.map((a) => `<button type="button" class="fl fx-art" data-art="${esc(a.id)}" style="--d:0" title="${esc(a.title)}">${ICON[a.kind] || '📄'} <span>${esc(a.title)}</span><small>${esc(a.kind)}</small></button>`).join('') : '<div class="fx-empty">Nothing built in this chat yet.</div>'}
-      <div class="fx-h">Project files <small>${files.length}</small></div>
-      ${files.length ? drawTree(tree, 0) : '<div class="fx-empty">No files in the project folder yet. Pages the agent writes as artifacts live with the chat (above); code it writes with write_file appears here.</div>'}
+      <div class="fx-h">Project files <small class="fx-root-n"></small></div>
+      <div class="fx-kids fx-root"><div class="fx-empty">Reading the folder…</div></div>
     </div>
     <div class="fx-split" role="separator" aria-orientation="vertical" aria-label="Resize the file list" title="Drag to resize · double-click to reset"></div>
     <div class="fview"><div class="fx-empty big">Pick an artifact or a file to view it.</div></div>
   </div>`;
-  // Folders remember being opened or closed; the file list can be made wider (remembered too).
-  for (const d of body.querySelectorAll('.fx-dir')) d.addEventListener('toggle', () => { const k = d.dataset.dir; openDirs.delete(k); openDirs.delete(`!${k}`); openDirs.add(d.open ? k : `!${k}`); });
   const filesBox = $('.files', body), split = $('.fx-split', body);
   let treeW = null; try { treeW = Number(localStorage.getItem('oh-tree-w')) || null; } catch { /* storage off */ }
   if (treeW) filesBox.style.setProperty('--tree-w', `${treeW}px`);
@@ -4682,20 +4807,47 @@ async function renderFiles(c) {
   };
   const start = G.lastArt && body.querySelector(`.fx-art[data-art="${CSS.escape(G.lastArt)}"]`);
   if (start) setTimeout(() => start.click(), 0);
-  for (const b of body.querySelectorAll('.fl[data-p]')) b.onclick = async () => {
-    select(b);
-    const path = b.dataset.p, src = `/ws/${c.projectId}/${path.split('/').map(encodeURIComponent).join('/')}`;
-    const f = files.find((x) => x.path === path);
-    G.filesProject = c.projectId;
-    previewFile(view, { name: path, src, size: f?.size, full: fullOf(path) });
+  // What a folder level just drew: files open in the viewer (right-click for the menu, drag onto the chat to send),
+  // folders read their entries the first time they open and remember being open.
+  const wire = (box) => {
+    for (const b of box.querySelectorAll(':scope > .fl[data-p]')) {
+      b.onclick = () => {
+        select(b);
+        const path = b.dataset.p, src = `/ws/${c.projectId}/${path.split('/').map(encodeURIComponent).join('/')}`;
+        G.filesProject = c.projectId;
+        previewFile(view, { name: path, src, size: Number(b.dataset.size) || 0, full: fullOf(path) });
+      };
+      b.oncontextmenu = (e) => filesMenu(e, c.projectId, b.dataset.p, fullOf(b.dataset.p));
+      b.draggable = true;
+      b.ondragstart = (e) => { e.dataTransfer.setData('application/x-quorx-file', JSON.stringify({ projectId: c.projectId, path: b.dataset.p })); e.dataTransfer.effectAllowed = 'copy'; };
+    }
+    for (const d of box.querySelectorAll(':scope > .fx-dir')) {
+      $('summary', d).oncontextmenu = (e) => { e.stopPropagation(); filesMenu(e, c.projectId, d.dataset.dir, fullOf(d.dataset.dir), false); };
+      const kids = $(':scope > .fx-kids', d), depth = Number(d.dataset.depth) + 1;
+      const open = () => { if (!kids.dataset.read) { kids.dataset.read = '1'; kids.innerHTML = '<div class="fx-empty" style="--d:' + depth + '">Reading…</div>'; level(kids, d.dataset.dir, depth); } };
+      d.addEventListener('toggle', () => { if (d.open) { openDirs.add(d.dataset.dir); open(); } else openDirs.delete(d.dataset.dir); });
+      if (d.open) open();
+    }
   };
-  for (const b of body.querySelectorAll('.fl[data-p]')) {
-    b.oncontextmenu = (e) => filesMenu(e, c.projectId, b.dataset.p, fullOf(b.dataset.p));
-    // Drag a file onto the chat: it goes with your next message.
-    b.draggable = true;
-    b.ondragstart = (e) => { e.dataTransfer.setData('application/x-quorx-file', JSON.stringify({ projectId: c.projectId, path: b.dataset.p })); e.dataTransfer.effectAllowed = 'copy'; };
-  }
-  for (const d of body.querySelectorAll('.fx-dir')) $('summary', d).oncontextmenu = (e) => { e.stopPropagation(); filesMenu(e, c.projectId, d.dataset.dir, fullOf(d.dataset.dir), false); };
+  const level = async (box, rel, depth, offset = 0) => {
+    const r = await getJ(`/api/files/dir?project=${encodeURIComponent(c.projectId)}&path=${encodeURIComponent(rel)}&offset=${offset}`);
+    if (!box.isConnected) return;
+    if (!offset) box.innerHTML = '';
+    box.querySelector(':scope > .fx-more')?.remove();
+    if (!r || r.error) { box.insertAdjacentHTML('beforeend', `<div class="fx-empty" style="--d:${depth}">${esc(r?.error || 'Could not read this folder.')}</div>`); return; }
+    if (!rel) $('.fx-root-n', body).textContent = r.total ? r.total.toLocaleString() : '';
+    if (!r.total) { box.innerHTML = rel ? `<div class="fx-empty" style="--d:${depth}">Empty</div>` : '<div class="fx-empty">No files in the project folder yet. Pages the agent writes as artifacts live with the chat (above); code it writes with write_file appears here.</div>'; return; }
+    const holder = document.createElement('div');
+    holder.innerHTML = r.entries.map((e) => entryHTML(e, depth, rel)).join('');
+    wire(holder);
+    box.append(...holder.childNodes);
+    const left = r.total - (r.offset + r.entries.length);
+    if (left > 0) {
+      box.insertAdjacentHTML('beforeend', `<button type="button" class="fx-more" style="--d:${depth}">Show more <small>${left.toLocaleString()} more</small></button>`);
+      $(':scope > .fx-more', box).onclick = (e) => { e.currentTarget.disabled = true; level(box, rel, depth, r.offset + r.entries.length); };
+    }
+  };
+  level($('.fx-root', body), '', 0);
 }
 
 // ---------- spend: private balance, page total, costs view ----------
@@ -4841,6 +4993,7 @@ function scheduleForm(e) {
 function wireScheduleForm(body) {
   const e = SCHED.edit, f = $('#scForm', body);
   const keep = () => { e.name = $('#scName', f).value; e.projectId = $('#scProject', f).value; e.prompt = $('#scPrompt', f).value; e.chrome = $('#scChrome', f).checked; };
+  $('#scChrome', f).addEventListener('change', (ev) => { e.chrome = ev.target.checked; if (ev.target.checked && !extReady()) openChromeSetup(); });
   for (const b of f.querySelectorAll('.sc-kind button')) b.onclick = () => {
     keep();
     const k = b.dataset.kind;
@@ -4990,9 +5143,9 @@ function wireCatEditor(el) {
 const UI_DEFAULTS = { density: 'comfortable', fontSize: 14, reduceMotion: 'system', timestamps: 'time', paneMode: 'auto', sidebarStart: 'remember',
   showBalance: false, maskAmounts: true, blurPaths: false, usageBtn: true, notify: 'all', searchEngine: 'google', searchCustom: '' };
 const SETTINGS_NAV = [
-  ['Harness', [['setup', '🧪', 'Setup check'], ['appearance', '🎨', 'Appearance'], ['layout', '🧱', 'Layout'], ['privacy', '🕶', 'Privacy & display']]],
+  ['Harness', [['setup', '🧪', 'Setup check'], ['appearance', '🎨', 'Appearance'], ['privacy', '🕶', 'Privacy & display']]],
   ['OpenRouter', [['keys', '🔑', 'API keys'], ['models', '🧠', 'Models & catalogue']]],
-  ['Agent', [['newchats', '✨', 'New chats'], ['loop', '🔁', 'Agent loop'], ['deciders', '⚖️', 'Deciders'], ['tools', '🧰', 'Tools & media'], ['video', '🎬', 'Video'], ['budget', '💵', 'Budget & approvals'], ['safety', '🛡', 'Safety & commands'], ['skills', '🧩', 'Skills'], ['memory', '📌', 'Memory']]],
+  ['Agent', [['newchats', '✨', 'New chats'], ['loop', '🔁', 'Agent loop'], ['deciders', '⚖️', 'Deciders'], ['tools', '🧰', 'Tools & media'], ['video', '🎬', 'Video'], ['safety', '🛡', 'Approvals & safety'], ['budget', '💵', 'Budget'], ['skills', '🧩', 'Skills'], ['memory', '📌', 'Memory']]],
   ['Workspace', [['projects', '📁', 'Projects'], ['code', '💻', 'Code & servers'], ['docs', '📎', 'Documents']]],
   ['Data', [['usage', '📊', 'Usage & costs'], ['data', '🗄', 'Data & storage'], ['storage', '🧹', 'Storage'], ['shortcuts', '⌨️', 'Shortcuts'], ['about', 'ℹ️', 'About']]],
 ];
@@ -5000,7 +5153,7 @@ const ST = { cat: 'appearance', draft: null, dirty: false, reveal: new Set(), re
 const uiOf = (S) => ({ ...UI_DEFAULTS, ...(S.ui || {}) });
 
 // small control builders (they write into the draft through data-bind="path")
-// The groups YOLO can do by itself (Settings → Budget & approvals); the server's YOLO_GROUPS match them.
+// The groups YOLO can do by itself (Settings → Approvals & safety); the server's YOLO_GROUPS match them.
 const YOLO_ROWS = [
   ['files', 'Change files', 'Write, edit, append and delete files, and copy starter templates (deleted files go to .quorx/trash).'],
   ['commands', 'Run commands', 'Programs in the project folder: installs, builds, tests, scripts.'],
@@ -5044,7 +5197,7 @@ const stNum = (n) => `<span class="sx-n" aria-hidden="true">${n}</span>`;
 const getPath = (o, p) => p.split('.').reduce((x, k) => x?.[k], o);
 const setPath = (o, p, v) => { const ks = p.split('.'), last = ks.pop(); const t = ks.reduce((x, k) => (x[k] ??= {}), o); t[last] = v; };
 
-// ---------- Settings → Safety & commands: the simple controls on top, mapped onto the Advanced ticks ----------
+// ---------- Settings → Approvals & safety: the simple controls on top, mapped onto the Advanced ticks ----------
 // "Extra care" = all six check-first ticks. "When YOLO needs a decision" = the pause-for-you ticks.
 const SF_CARE = ['yoloCheckWeb', 'yoloCheckInline', 'yoloCheckBuild', 'yoloCheckInstall', 'yoloCheckUnknown', 'yoloCheckReads'];
 const SF_ASK = ['yoloExternal', 'yoloOutside', 'yoloGlobal'];
@@ -5107,7 +5260,7 @@ function settingsPanels(S) {
   const pad = (html) => `<div class="sx-pad">${html}</div>`;
   const modelField = (act, id, id2, empty, title) => `<button type="button" class="sx-model" data-act="${act}" id="${id2}" ${title ? `title="${esc(title)}"` : ''}>${id ? `<span class="sx-av" aria-hidden="true">${esc((short(id)[0] || '?').toUpperCase())}</span>${recDot(id, 'chat')} ${esc(short(id))} <small>${esc(shortPrice(id))}</small>` : `<span class="sx-av" aria-hidden="true">＋</span>${empty}`}<span class="sx-change">Change</span></button>`;
   return {
-    appearance: ['Appearance', 'How QuorX looks on this computer. The theme shows at once; Save keeps it.', [
+    appearance: ['Appearance', 'How QuorX looks on this computer and where things sit. The theme shows at once; Save keeps it.', [
       `<div class="sx-grid two"><div>`
       + stCard('Theme', '', `<div class="st-theme-picker sx-pad" data-bind="theme">${[[null, 'System', 'system', '🖥', 'Follows Windows'], ['dark', 'Dark', 'dark', '🌙', 'For low light'], ['light', 'Light', 'light', '☀️', 'For bright rooms']].map(([v, l, cls, ico, line]) => `<button type="button" class="st-theme-card ${(S.theme ?? null) === v ? 'active' : ''}" data-v="${v ?? ''}"><span class="st-theme-preview-box ${cls}">${cls === 'system' ? '<span class="thumb-left"></span><span class="thumb-right"></span>' : '<span class="thumb-bar"></span><span class="thumb-sidebar"></span><span class="thumb-dot"></span>'}</span><span class="st-theme-card-foot"><span class="st-theme-card-label">${ico} ${l}</span><small>${line}</small><span class="st-theme-card-radio"></span></span></button>`).join('')}</div>`)
       + stCard('Text and spacing', '', stRow('Density', 'Compact fits more messages and chats on screen.', stSeg('ui.density', [['comfortable', 'Comfortable'], ['compact', 'Compact']], U.density))
@@ -5118,9 +5271,7 @@ function settingsPanels(S) {
       + stCard('Preview', 'A chat with these settings.', '<div data-live="preview"></div>')
       + stCard('Notifications', '', stRow('Tell me when a reply…', 'Only while QuorX is in the background. Click a notification to open that chat. Your browser asks once, the first time you send a message.', stCards('ui.notify', [['all', '🔔', 'Needs me or ends', ''], ['needs', '✋', 'Needs me', ''], ['off', '🔕', 'Off', '']], U.notify, 'compact'), { cls: 'sx-row-wide' }))
       + `</div></div>`,
-    ]],
-    layout: ['Layout', 'Where things sit on the page. Click a part of the window for its option.', [
-      stCard('Your window', '', '<div data-live="window"></div>'
+      stCard('Layout', 'Where things sit in your window. Click a part of it for its option.', '<div data-live="window"></div>'
         + stRow('Sidebar when QuorX opens', '“Remember” keeps it as you last left it.', stSeg('ui.sidebarStart', [['remember', 'Remember'], ['expanded', 'Expanded'], ['rail', 'Rail']], U.sidebarStart), { id: 'stRowSidebar' })
         + stRow('Artifact pane', 'Auto shows it only when the chat has built something. ◧ in a chat\'s header still toggles it.', stSeg('ui.paneMode', [['auto', 'Auto'], ['always', 'Always'], ['never', 'Only when asked']], U.paneMode), { id: 'stRowPane' })
         + stRow('Sidebar project order', 'Drag a project\'s header in the sidebar to move it.', `<button type="button" class="st-btn ghost sm" data-act="resetOrder">Reset order</button>`)),
@@ -5152,10 +5303,7 @@ function settingsPanels(S) {
         + stRow('Zero data retention only', 'Only providers that keep no copy of your prompts. Fewer models qualify.', stSwitch('zdrOnly', !!S.zdrOnly), { id: 'stRowZdr' })),
     ]],
     newchats: ['New chats', 'What a fresh chat starts with. Each chat can change these in its message box.', [
-      stCard('Permission mode', '', pad(stCards('approval', [['strict', '🔒', 'Strict', 'Asks you before paid media (pictures, video, music, speech, with the price), and the agent\'s questions come to you.'], ['yolo', '⚡', 'YOLO', 'Never asks: the deciders answer the agent\'s questions for you. The budget cap still applies.']], S.approval))
-        + stRow('In 🔒 Strict, ask before', 'Paid media: only pictures, video, music and speech. Every tool: also file edits, commands, reads, the browser and helpers, as before.', stSeg('strictAsk', [['paid', 'Paid media'], ['every', 'Every tool']], S.strictAsk || 'paid'))
-        + stRow('Also ask before helpers', 'Helpers hand read-only jobs to a cheaper model. Only with “Paid media”.', stSwitch('strictAskHelpers', S.strictAskHelpers === true))
-        + stRow('Also ask before decider checks', 'decide and look ask the deciders; each costs well under $0.001. Only with “Paid media”.', stSwitch('strictAskDeciders', S.strictAskDeciders === true))),
+      `<p class="sx-sec-help sx-mode-link">New chats start in ${S.approval === 'yolo' ? '⚡ YOLO' : '🔒 Strict'}. <button type="button" class="sp-link" data-act="openMode">Change it in 🛡 Approvals &amp; safety</button></p>`,
       stCard('Checking the work', 'On by default; each chat can change them in its 🧰 Tools menu. Pages, code & servers and the browser are always on.',
         `<div class="sx-tiles">${QUALITY_TOOLS.map((k) => stTile(`newChatTools.${k}`, QUALITY_INFO[k].icon, QUALITY_INFO[k].name, QUALITY_INFO[k].note, S.newChatTools?.[k] !== false, stMoney(esc(QUALITY_INFO[k].perBuild())))).join('')}</div>`),
       stCard('Paid media', 'Off for new chats. Paid per use.',
@@ -5164,9 +5312,9 @@ function settingsPanels(S) {
     loop: ['Agent loop', 'How long one reply may work, how its work is checked, and how long chats stay cheap. Click a stage to jump to it.', [
       '<div data-live="loopflow"></div>',
       stCard(`${stNum(1)} Plan`, '', stRow('Plan first', 'Off: the agent plans and builds in one go. Big tasks: for a new app, site, game or a change across several files, it shows its plan and waits for Go ahead, Stop here, or your changes. Always: before any file change or command. File changes and commands are refused until you say Go ahead. Waits for you in 🔒 Strict and ⚡ YOLO alike.', stCards('planFirst', [['off', '⏩', 'Off', 'Plan and build in one go'], ['big', '🗺', 'Big tasks', 'New apps, sites, games, multi-file changes'], ['always', '✋', 'Always', 'Before any file change or command']], S.planFirst || 'off', 'compact'), { cls: 'sx-row-wide' })
-        + stRow('Steps when the reply has a plan', 'A planned build gets this many instead (checks, previews and review take steps). 0 = the same as below.', stStep('planSteps', S.planSteps ?? 0, 0, 200))
-        + stRow('Keep going while the plan is open', 'When the steps run out and the plan still has open items, the reply gets this many extra rounds of half the steps (budget caps still apply). 0 = stop at the limit.', stStep('continueRounds', S.continueRounds ?? 2, 0, 5)), 'sx-anchor', 'stLoopPlan'),
-      stCard(`${stNum(2)} Work`, '', stRow('Max model calls per reply', 'A page takes 6–15; a multi-file app with a server can take 40 or more. At 80% the agent is told to wrap up.', stStep('maxSteps', S.maxSteps, 2, 120))
+        + stRow('Steps when the reply has a plan', 'A planned build gets this many instead (checks, previews and review take steps). 0 = the same as below.', stStep('planSteps', S.planSteps ?? 0, 0, 1000))
+        + stRow('Keep going while the plan is open', 'When the steps run out and the plan still has open items, the reply gets this many extra rounds of “Keep going” steps on its own (budget caps still apply). 0 = stop at the limit and ask you.', stStep('continueRounds', S.continueRounds ?? 0, 0, 5)), 'sx-anchor', 'stLoopPlan'),
+      stCard(`${stNum(2)} Work`, '', stRow('Max model calls per reply', 'A page takes 6–15; a multi-file app with a server can take 40 or more. Near the end the agent is told to wrap up; at the limit you pick: keep going, another model, or a fresh chat.', stStep('maxSteps', S.maxSteps, 2, 1000))
         + stRow('Output per model call', 'Tokens one call may write (thinking included), never more than the model allows. Too little and a model can think through a whole file, then run out before writing it.', stStep('maxOutput', S.maxOutput ?? 64000, 4000, 128000, 4000, 'tokens'))
         + stRow('Thinking share', 'How much of that output reasoning may use, so the answer and tool calls always have room.', stStep('thinkShare', S.thinkShare ?? 25, 5, 60, 5, '%'))
         + stRow('Thinking for builds', 'When the gap check sees that a message asks for a build and the chat\'s thinking is off, the model thinks this much for that reply. Deciders find problems; thinking is what fixes them.', stSeg('buildThinking', [['off', 'Off'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']], S.buildThinking || 'low'))
@@ -5212,27 +5360,32 @@ function settingsPanels(S) {
       stCard('The questions, word for word', 'Every answer is logged with its screenshot, so <code>node scripts/checks.mjs</code> can score each question and try new wording on past screenshots. Untick one to stop asking it; blank wording uses the built-in one.', '<div id="checkList"></div>'),
     ]],
     tools: ['Tools & media', 'Up to 3 models per tool, and who picks the model for each call. Each chat turns tools on in its 🧰 menu.', ['<div id="catEditors" class="sx-media"></div>']],
-    budget: ['Budget & approvals', 'Limits on what a reply and a day may spend, and what ⚡ YOLO may do without asking.', [
+    budget: ['Budget', 'Limits on what a reply, a day and paid media may spend, and how far a reply may finish past its project\'s budget.', [
       stSec('Caps on every model'),
       `<p class="sx-sec-help">They count everything a reply calls: the agent, the deciders, helpers, screenshot checks and paid media.</p><div class="sx-caps">`
         + stCap('replyBudget', 'Cap per reply', S.replyBudget ?? d.replyBudget ?? 1, 0, 100, 0.25, 'At 85% the agent is told to wrap up. At the cap, 🔒 Strict asks you to raise it or wrap up; ⚡ YOLO stops. 0 = no cap.')
         + stCap('dailyBudget', 'Cap per day', S.dailyBudget ?? d.dailyBudget ?? 0, 0, 1000, 1, 'Today’s spending across all projects. A reply that reaches it stops (Strict asks first). 0 = off. A separate OpenRouter key with its own daily limit is a good second fence for ⚡ YOLO.', '<div data-live="today"></div>')
         + stCap('budget', 'Paid media per reply', S.budget, 0, 20, 0.05, 'A paid call that would go over this is stopped, in Strict and in YOLO.')
         + `</div>`,
-      stSec('⚡ YOLO'),
-      stCard('What ⚡ YOLO does by itself', 'Ticked: YOLO goes ahead without asking. Unticked: it asks you first, as Strict does (Always allow stops the asking for that chat). Reading files, listing and searching never ask.',
-        `<div class="sx-tiles">${YOLO_ROWS.map(([k, label, help]) => stTile(`yoloAuto.${k}`, YOLO_ICO[k] || '•', label, help, S.yoloAuto?.[k] !== false)).join('')}</div>`),
-      `<div class="sx-grid two">`
-      + stCard('Paid calls in ⚡ YOLO', '', stRow('Deciders check paid calls in ⚡ YOLO', 'Before each paid call: is it needed, is the price fair?', stSwitch('yoloCheck', S.yoloCheck !== false))
-        + stRow('⚡ YOLO waits for you', 'When the agent asks a question, or the deciders can\'t settle an approval, the card waits this long so you can steer. Then the deciders answer (a question of taste goes back to the agent), or the approval carries on: a command runs only if the deciders saw little risk. "Wait for me" on the card, or typing in it, stops the clock. 0 = no wait.', stStep('yoloWaitSecs', S.yoloWaitSecs ?? 15, 0, 120, 5, 's')))
-      + stCard('Project budgets', 'Set a project\'s budget with the $ next to it in the sidebar, or in Workspace → Projects.', stRow('Allowance to finish a reply', 'A new reply can\'t start once the project budget is used up. A reply already working may go this far past it to finish, then it is stopped. 0% stops it right at the budget.', stStep('budgetGrace', S.budgetGrace ?? 10, 0, 100, 5, '%')))
-      + `</div>`,
+      stCard('Project budgets', 'Set a project\'s budget with the $ next to it in the sidebar, or in Workspace → Projects.', stRow('Allowance to finish a reply', 'A new reply can\'t start once the project budget is used up. A reply already working may go this far past it to finish, then it is stopped. 0% stops it right at the budget.', stStep('budgetGrace', S.budgetGrace ?? 10, 0, 100, 5, '%'))),
     ]],
     safety: (() => {
       const SF = { ...(d.safety || {}), ...(S.safety || {}) };
       const M = sfModes(SF);
-      return ['Safety & commands', 'What ⚡ YOLO runs on its own, what it asks you, and what never runs. Advanced has every detail: the shell, each YOLO tick, the deciders’ vote and your command rules.', [
+      return ['Approvals & safety', 'Whether new chats ask you or go ahead, what ⚡ YOLO does on its own, and what never runs. Advanced has every detail: the shell, each YOLO tick, the deciders’ vote and your command rules.', [
+        stCard('Permission mode', 'What a new chat starts in. Each chat can switch in its message box.', pad(stCards('approval', [['strict', '🔒', 'Strict', 'Asks you before paid media (pictures, video, music, speech, with the price), and the agent\'s questions come to you.'], ['yolo', '⚡', 'YOLO', 'Never asks: the deciders answer the agent\'s questions for you. The budget cap still applies.']], S.approval))
+          + stRow('In 🔒 Strict, ask before', 'Paid media: only pictures, video, music and speech. Every tool: also file edits, commands, reads, the browser and helpers, as before.', stSeg('strictAsk', [['paid', 'Paid media'], ['every', 'Every tool']], S.strictAsk || 'paid'))
+          + stRow('Also ask before helpers', 'Helpers hand read-only jobs to a cheaper model. Only with “Paid media”.', stSwitch('strictAskHelpers', S.strictAskHelpers === true))
+          + stRow('Also ask before decider checks', 'decide and look ask the deciders; each costs well under $0.001. Only with “Paid media”.', stSwitch('strictAskDeciders', S.strictAskDeciders === true))),
+        stSec('⚡ YOLO'),
         `<div id="sfShort" class="sf-short">${yoloShortHTML(SF)}</div>`,
+        stCard('What ⚡ YOLO does by itself', 'Ticked: YOLO goes ahead without asking. Unticked: it asks you first, as Strict does (Always allow stops the asking for that chat). Reading files, listing and searching never ask.',
+          `<div class="sx-tiles">${YOLO_ROWS.map(([k, label, help]) => stTile(`yoloAuto.${k}`, YOLO_ICO[k] || '•', label, help, S.yoloAuto?.[k] !== false)).join('')}</div>`),
+        stCard('Paid calls and waiting in ⚡ YOLO', '', stRow('Deciders check paid calls in ⚡ YOLO', 'Before each paid call: is it needed, is the price fair?', stSwitch('yoloCheck', S.yoloCheck !== false))
+          + stRow('⚡ YOLO waits for you', 'When the agent asks a question, or the deciders can\'t settle an approval, the card waits this long so you can steer. Then the deciders answer (a question of taste goes back to the agent), or the approval carries on: a command runs only if the deciders saw little risk. "Wait for me" on the card, or typing in it, stops the clock. 0 = no wait.', stStep('yoloWaitSecs', S.yoloWaitSecs ?? 15, 0, 120, 5, 's'))),
+        stCard('When a chat\'s ⚖️ Deciders are off', 'Turned off in a chat\'s 🧰 menu, no decider is asked anything in that chat. What they would have approved in ⚡ YOLO goes here instead. A card that waits for you is skipped when no one answers in time.',
+          stRow('Commands they would check', 'Web reads, builds, installs and unknown commands that ⚡ YOLO checks first. Commands the deciders approve in your place (pushes, changes outside the project, global installs) always wait for you.', stSeg('decidersOff.commands', [['ask', '✋ Wait for me'], ['run', 'Run without a check']], S.decidersOff?.commands || d.decidersOff?.commands || 'ask'))
+          + stRow('Paid media and plans', 'Pictures, video, music, speech and production plans. Budget caps still apply.', stSeg('decidersOff.media', [['ask', '✋ Wait for me'], ['run', 'Run without a check']], S.decidersOff?.media || d.decidersOff?.media || 'ask'))),
         stCard('Your choices', '',
           stRow('When YOLO needs a decision', 'Ask me: pushes, deploys, installs for the whole computer and changes outside the project wait for you. The deciders: they vote instead, and a no or a split vote still comes to you.',
             `<div class="sf-ctrl">${stCards('', [['ask', '✋', 'Ask me', 'Those wait for you'], ['decide', '⚖️', 'Let the deciders decide', 'They vote; a no or a split vote comes to you']], M.decide, 'compact').replace('data-bind=""', 'data-sf="decide" aria-label="When YOLO needs a decision"')}<span class="sf-custom sx-tag warn" data-sf-note="decide" ${M.decide === 'mix' ? '' : 'hidden'}>Custom (see Advanced)</span></div>`, { cls: 'sx-row-wide' })
@@ -5314,7 +5467,8 @@ function settingsPanels(S) {
       stCard('PDFs', 'PDFs are read for free on this computer with pdftotext when it is installed (Git for Windows includes it); otherwise through OpenRouter\'s free parser. A scan with no text asks before OCR (mistral-ocr, about $2 per 1,000 pages).', ''),
     ]],
     code: ['Code & servers', 'What the agent may run on this computer, and what it keeps in each project’s .quorx folder.', [
-      stCard('Commands', 'The agent runs command lines in its shell. Each one is checked first: read-only commands run, others ask you (or the deciders in ⚡ YOLO), and system commands or deletes outside the project are blocked.', stRow('Rules, shell, Stop and Undo for commands', '', '<button type="button" class="st-btn secondary sm" data-act="openSafety">🛡 Safety & commands</button>')),
+      stCard('🧩 Chrome extension', 'Give a tab of your everyday Chrome to a chat, so the agent can work in it with your own sign-ins (Gmail, GitHub…). It touches only tabs you give; sending, deleting, buying and account changes ask you first.', '<p class="st-ext-why" role="status" hidden>Connect the extension so this chat can use your Chrome.</p><div id="stExt"></div><p class="st-ext-howto"><a href="' + EXT_HOWTO + '" target="_blank" rel="noopener noreferrer">📖 How to connect, step by step</a> <small>the QuorX article, in your browser</small></p>', 'sx-featured', 'stExtCard'),
+      stCard('Commands', 'The agent runs command lines in its shell. Each one is checked first: read-only commands run, others ask you (or the deciders in ⚡ YOLO), and system commands or deletes outside the project are blocked.', stRow('Rules, shell, Stop and Undo for commands', '', '<button type="button" class="st-btn secondary sm" data-act="openSafety">🛡 Approvals & safety</button>')),
       `<div class="sx-grid two">`
       + stCard('Agent folder', 'The agent keeps research scripts, downloads, undo history and deleted files in .quorx/ inside each project folder. Git ignores it, so it never ends up in your repo.', stRow('Its size, undo history and clearing', '', '<button type="button" class="st-btn secondary sm" data-act="openStorage">🧹 Storage</button>'))
       + stCard('Servers and browser', 'Servers are saved in .quorx/launch.json per project; run and stop them from 🖥 in the chat header, and watch them in the terminal.', stRow('Dev server ports', 'Each server gets a free port here unless it has a fixed one.', '<code>5300–5999</code>')
@@ -5332,7 +5486,6 @@ function settingsPanels(S) {
         + stRow('Always allowed', 'Sites it may open without asking, even when your request didn\'t name them.', `<input type="text" class="st-input" data-bind="chromeSitesAlways" value="${esc(S.chromeSitesAlways || '')}" placeholder="github.com, news.ycombinator.com" spellcheck="false">`)
         + stRow('Read-only sites', 'Typing outside a search box always asks you on these, whatever the request says.', `<input type="text" class="st-input" data-bind="chromeSitesRead" value="${esc(S.chromeSitesRead || '')}" placeholder="mail.google.com, linkedin.com" spellcheck="false">`))
       + `</div>`,
-      stCard('Chrome extension', 'Give a tab of your everyday Chrome to a chat, so the agent can work in it with your own sign-ins (Gmail, GitHub…). It touches only tabs you give; sending, deleting, buying and account changes ask you first.', '<div id="stExt"></div>'),
     ]],
     usage: ['Usage & costs', 'What chats and projects cost, from this computer’s records.', [
       '<div id="stUsage"><div class="st-row-help">Adding up costs…</div></div>',
@@ -5344,12 +5497,12 @@ function settingsPanels(S) {
       `<div class="sx-grid two">`
       + stCard('Automatic cleanup', 'Saved with Save, and used whether or not this page is open.',
         stRow('Clean up automatically', 'When QuorX starts, then once a day.', sqCheck('storage.autoClean', R.autoClean !== false, 'On'))
-        + stRow('Empty QuorX\'s trash after', 'Deleted chats and skills, and each project\'s agent trash, go to the Windows Recycle Bin this long after they were deleted.', stStep('storage.trashDays', R.trashDays ?? 30, 1, 3650, 1, 'days'))
+        + stRow('Empty QuorX\'s trash after', 'Deleted chats and skills go to the Windows Recycle Bin this long after they were deleted. Project folders are never touched.', stStep('storage.trashDays', R.trashDays ?? 30, 1, 3650, 1, 'days'))
         + stRow('Start a log afresh past', 'Each log; the older part is kept once, as <code>name.1.jsonl</code>.', stStep('storage.logMaxMB', R.logMaxMB ?? 50, 1, 10000, 10, 'MB'))
         + stRow('Check screenshots kept', 'The newest ones; older ones are removed.', stStep('storage.shotKeep', R.shotKeep ?? 300, 0, 100000, 50, 'pictures'))
         + (DESK ? stRow('Remove installed update downloads', 'An installer goes once its version (or a newer one) is running.', sqCheck('storage.updateCleanup', R.updateCleanup !== false, 'On'))
           + stRow('Clear the browser agent\'s cache each time QuorX starts', 'Its sign-ins stay.', sqCheck('storage.agentCacheOnStart', !!R.agentCacheOnStart, 'On')) : ''))
-      + stCard('Agent folder', 'The agent keeps research scripts, downloads, undo history and deleted files in .quorx/ inside each project folder. Git ignores it, so it never ends up in your repo.', stRow('Ask me when it grows past', 'The chat shows a notice with what to clear, and the agent asks before adding more.', stStep('agentSpaceMB', S.agentSpaceMB ?? 500, 50, 50000, 50, 'MB'))
+      + stCard('Agent folder', 'The agent keeps research scripts, downloads, undo history and deleted files in .quorx/ inside each project folder. Git ignores it, so it never ends up in your repo.', stRow('Limit for each project', 'The 🧹 next to Delete in each chat glows while the folder is past this; click it to see and clear its parts. The agent asks before adding more.', stStep('agentSpaceMB', S.agentSpaceMB ?? 500, 50, 50000, 50, 'MB'))
         + stRow('Undo for the newest', 'Replies per project that keep ↶ Undo. Older undo copies are removed when a new reply starts.', stStep('undoKeep', S.undoKeep ?? 10, 1, 100, 1, 'replies'))
         + stRow('Undo kept for at most', 'Even among the newest replies, Undo goes after this long. For history that lasts, use git.', stStep('undoDays', S.undoDays ?? 7, 1, 90, 1, 'days')))
       + `</div>`,
@@ -5360,7 +5513,10 @@ function settingsPanels(S) {
       stCard('Danger zone', '', stRow('Clear this browser\'s preferences', 'Settings, layout and theme go back to defaults. Chats, projects and keys are not touched.', '<button type="button" class="st-btn danger sm" data-act="clearPrefs">Clear</button>'), 'danger'),
     ]],
     setup: ['Setup check', 'What this computer has for QuorX, and what each thing is for. Amber rows are optional.', ['<div id="stSetup"><div class="st-row-help">Checking this computer…</div></div>']],
-    shortcuts: ['Shortcuts', 'Keys that work everywhere in QuorX.', [stCard('Keyboard', '', `<div class="sx-keys">${[['Ctrl + K', 'Search chats, commands, settings and files'], ['Enter', 'Send'], ['Shift + Enter', 'New line'], ['@', 'Add files, chats or projects as context'], ['/', 'Commands (/usage, /model, /strict, …)'], ['↑ ↓ then Enter or Tab', 'Pick a suggestion'], ['Esc', 'Close a dialog or suggestions']].map(([k, v]) => `<div class="st-row sx-key"><span class="sx-key-combo">${k.split(' ').map((x) => (/^[+]$|^then$|^or$/.test(x) ? x : `<kbd>${esc(x)}</kbd>`)).join(' ')}</span><span class="sx-key-what st-row-label">${v}</span></div>`).join('')}</div>`)]],
+    shortcuts: ['Shortcuts', 'Keys that work everywhere in QuorX.', [stCard('Keyboard', '', `<div class="sx-keys">${[['Ctrl + K', 'Search chats, commands, settings and files'], ['Enter', 'Send'], ['Shift + Enter', 'New line'], ['@', 'Add files, chats or projects as context'], ['/', 'Commands (/usage, /model, /strict, …)'], ['↑ ↓ then Enter or Tab', 'Pick a suggestion'], ['Esc', 'Close a dialog or suggestions'], [S.micKey || 'Alt+M', S.micMode === 'hold' ? 'Hold to speak into the message box' : 'Start or stop the mic']].map(([k, v]) => `<div class="st-row sx-key"><span class="sx-key-combo">${k.replace(/\+(?=\S)/g, ' + ').split(' ').map((x) => (/^[+]$|^then$|^or$/.test(x) ? x : `<kbd>${esc(x)}</kbd>`)).join(' ')}</span><span class="sx-key-what st-row-label">${v}</span></div>`).join('')}</div>`),
+      stCard('🎤 Mic', 'Speak instead of typing: what you say is typed into the message box of the chat you are in.',
+        stRow('Mic key', 'Click the box, then press the keys you want (Esc leaves it as it is).', `<input type="text" class="st-input st-keycap" data-bind="micKey" value="${esc(S.micKey || 'Alt+M')}" readonly aria-label="Mic key: click, then press the keys">`)
+        + stRow('How the key works', 'Toggle: press once to start listening, press again to stop. Hold: listens while you hold the key down, like a walkie-talkie.', stSeg('micMode', [['toggle', 'Toggle'], ['hold', 'Hold']], S.micMode || 'toggle')))]],
     about: ['About', 'This copy of QuorX, where it keeps your data, and the desktop app.', [
       `<section class="st-card"><div class="sx-identity"><img src="brand/quorx-192.png" alt=""><div><h4>QuorX <code id="stVersion" class="sx-ver">v${esc(G.cfg?.version || '?')}</code></h4><p>An open-source AI agent with a quorum of models behind every call.</p></div></div>`
         + stRow('Version', DESK ? 'The desktop app and the harness it is attached to.' : '', `<span class="sx-status ok">v${esc(G.cfg?.version || '?')}</span>`)
@@ -5409,8 +5565,7 @@ function stSummary(id, S) {
   const usd = (v) => `$${Number(v || 0).toFixed(2)}`;
   switch (id) {
     case 'setup': { const r = ST.setup; if (!r) return ['', '']; return [r.missing ? `${r.missing} missing` : `${r.ok} ready`, stStatus('ok', `${r.ok} ready`) + (r.warn ? stStatus('warn', `${r.warn} optional`) : '') + (r.missing ? stStatus('bad', `${r.missing} missing`) : ''), r.missing ? 'bad' : '']; }
-    case 'appearance': { const t = S.theme === 'dark' ? 'Dark' : S.theme === 'light' ? 'Light' : 'System'; return [t, stStatus('info', `${t} theme`) + stStatus('info', U.density === 'compact' ? 'Compact' : 'Comfortable') + stStatus('info', `${U.fontSize} px text`) + stStatus('info', `Motion: ${{ system: 'follows system', full: 'on', reduce: 'reduced' }[motionPref(U)]}`)]; }
-    case 'layout': return ['', stStatus('info', `Sidebar: ${SIDE_START[U.sidebarStart] || U.sidebarStart}`) + stStatus('info', `Artifact pane: ${PANE_MODE[U.paneMode] || U.paneMode}`)];
+    case 'appearance': { const t = S.theme === 'dark' ? 'Dark' : S.theme === 'light' ? 'Light' : 'System'; return [t, stStatus('info', `${t} theme`) + stStatus('info', U.density === 'compact' ? 'Compact' : 'Comfortable') + stStatus('info', `${U.fontSize} px text`) + stStatus('info', `Motion: ${{ system: 'follows system', full: 'on', reduce: 'reduced' }[motionPref(U)]}`) + stStatus('info', `Sidebar: ${SIDE_START[U.sidebarStart] || U.sidebarStart}`) + stStatus('info', `Artifact pane: ${PANE_MODE[U.paneMode] || U.paneMode}`)]; }
     case 'privacy': return [U.maskAmounts ? 'masked' : 'visible', stStatus(U.maskAmounts ? 'ok' : 'warn', U.maskAmounts ? 'Amounts masked' : 'Amounts visible') + stStatus(U.showBalance ? 'warn' : 'off', U.showBalance ? 'Balance button shown' : 'Balance button hidden') + on(U.blurPaths, 'Paths blurred', 'Paths visible')];
     case 'keys': { const k = ST.keys; if (!G.cfg.hasKey) return ['add one', stStatus('bad', 'No key yet: nothing can run'), 'bad']; if (!k) return ['', '']; return [`${k.n} key${k.n === 1 ? '' : 's'}`, stStatus('ok', `${esc(k.active || 'A key')} is active`) + stStatus('off', `${k.n} key${k.n === 1 ? '' : 's'} on this computer`)]; }
     case 'models': return [short(S.model), stStatus('info', `New chats: ${esc(short(S.model))}`) + (G.models ? stStatus('ok', `${G.models.length} models loaded`) : '') + stStatus('info', `${PROVIDER_SORT[S.providerSort || 'auto']} routing`) + on(S.fallbackModel, `Fallback: ${esc(short(S.fallbackModel || ''))}`, 'No fallback')];
@@ -5420,19 +5575,19 @@ function stSummary(id, S) {
     case 'deciders': { const n = (S.voters || []).filter(Boolean).length, c = ['gap', 'shots', 'click'].filter((k) => S.checks?.[k] !== false).length;
       return [`${n} seats`, stStatus('info', `${n} decider${n === 1 ? '' : 's'} seated`) + stStatus('info', `Settled at ${S.gate.act}, lean at ${S.gate.confirm}`) + stStatus(c ? 'ok' : 'off', `${c} of 3 harness checks on`)]; }
     case 'tools': { const n = CATS.filter(([k]) => S.tools?.[k]?.on !== false).length; return [`${n} of ${CATS.length}`, stStatus(n ? 'ok' : 'off', `${n} of ${CATS.length} tools on`) + stStatus('info', 'Each chat turns them on in 🧰')]; }
-    case 'budget': { const r = S.replyBudget ?? G.cfg.defaults.replyBudget ?? 1, dd = S.dailyBudget ?? G.cfg.defaults.dailyBudget ?? 0, y = YOLO_ROWS.filter(([k]) => S.yoloAuto?.[k] !== false).length;
-      return [r ? usd(r) : 'no cap', `${r ? `${stMoney(usd(r))} <span class="sx-state-k">a reply</span>` : stStatus('warn', 'No cap per reply')} ${dd ? `${stMoney(usd(dd))} <span class="sx-state-k">a day</span>` : stStatus('off', 'No daily cap')} ${stMoney(usd(S.budget))} <span class="sx-state-k">paid media a reply</span>` + stStatus('ok', `${y} of ${YOLO_ROWS.length} YOLO groups on their own`), 'money']; }
-    case 'safety': { const M = sfModes(SF); return [M.decide === 'ask' ? 'Ask me' : M.decide === 'decide' ? 'Deciders' : 'Custom', stStatus(M.decide === 'ask' ? 'warn' : 'info', M.decide === 'ask' ? 'Pushes and installs ask you' : M.decide === 'decide' ? 'The deciders decide pushes and installs' : 'Custom: see Advanced') + stStatus(M.care === 'off' ? 'off' : 'ok', M.care === 'on' ? 'Extra care on' : M.care === 'off' ? 'Extra care off' : 'Extra care: custom') + on(SF.snapshots, 'Undo for commands on', 'Undo for commands off')]; }
+    case 'budget': { const r = S.replyBudget ?? G.cfg.defaults.replyBudget ?? 1, dd = S.dailyBudget ?? G.cfg.defaults.dailyBudget ?? 0;
+      return [r ? usd(r) : 'no cap', `${r ? `${stMoney(usd(r))} <span class="sx-state-k">a reply</span>` : stStatus('warn', 'No cap per reply')} ${dd ? `${stMoney(usd(dd))} <span class="sx-state-k">a day</span>` : stStatus('off', 'No daily cap')} ${stMoney(usd(S.budget))} <span class="sx-state-k">paid media a reply</span>`, 'money']; }
+    case 'safety': { const M = sfModes(SF), y = YOLO_ROWS.filter(([k]) => S.yoloAuto?.[k] !== false).length; return [S.approval === 'yolo' ? '⚡ YOLO' : '🔒 Strict', stStatus('info', `New chats: ${S.approval === 'yolo' ? '⚡ YOLO' : '🔒 Strict'}`) + stStatus('ok', `${y} of ${YOLO_ROWS.length} YOLO groups on their own`) + stStatus(M.decide === 'ask' ? 'warn' : 'info', M.decide === 'ask' ? 'Pushes and installs ask you' : M.decide === 'decide' ? 'The deciders decide pushes and installs' : 'Custom: see Advanced') + stStatus(M.care === 'off' ? 'off' : 'ok', M.care === 'on' ? 'Extra care on' : M.care === 'off' ? 'Extra care off' : 'Extra care: custom') + on(SF.snapshots, 'Undo for commands on', 'Undo for commands off')]; }
     case 'video': { const d = G.cfg.defaults || {}, live = (S.videoMode ?? d.videoMode) !== 'off', board = S.videoStoryboard !== false;
       return [live ? 'films' : 'off', on(live, 'On for films', 'Off: films build like any request') + (live ? stStatus(board ? 'ok' : 'off', board ? 'Storyboard before paid media' : 'No storyboard gate') + stStatus('info', `Up to ${S.videoAskLimit ?? d.videoAskLimit} questions`) : '')]; }
     case 'skills': { if (G.skillCount == null) return ['', '']; const off = (S.skillsOff || []).length; return [`${G.skillCount - off} on`, stStatus('ok', `${G.skillCount - off} on`) + (off ? stStatus('off', `${off} off`) : '')]; }
     case 'memory': { const m = ST.mem; if (!m) return ['', '']; return [m.on ? `${m.n} notes` : 'off', on(m.on, 'On in every chat', 'Off: chats get nothing') + stStatus('info', `${m.n} note${m.n === 1 ? '' : 's'} · ${m.tokens} of ${m.limit} tokens`)]; }
     case 'projects': { const n = (G.projects || []).length; return [String(n), stStatus('info', `${n} project${n === 1 ? '' : 's'}`)]; }
-    case 'code': return ['', stStatus('ok', 'Secrets protected') + stStatus('info', 'Ports 5300–5999') + stStatus('info', `Agent folder: asks past ${S.agentSpaceMB ?? 500} MB`)];
+    case 'code': return ['', stStatus('ok', 'Secrets protected') + stStatus('info', 'Ports 5300–5999')];
     case 'docs': return ['', stStatus('info', `Whole up to ${kTok(S.inlineDocTokens ?? 15000)} tokens`) + stStatus('info', `Up to ${S.maxUploadMB ?? 100} MB a file`) + `${stMoney(usd(S.docIndexBudget ?? 0.5))} <span class="sx-state-k">indexing without asking</span>`];
     case 'usage': { const c = ST.costs?.total; if (!c) return ['', '']; return [`${usd(c.week)} wk`, `${stMoney(usd(c.today))} <span class="sx-state-k">today</span> ${stMoney(usd(c.week))} <span class="sx-state-k">this week</span>` + stStatus('off', `${c.chats} chat${c.chats === 1 ? '' : 's'}`), 'money']; }
     case 'data': return ['', stStatus('info', 'Chats in data/chats') + stStatus('off', 'Deleted chats in data/trash')];
-    case 'storage': { const R = S.storage || {}; return [R.autoClean !== false ? 'auto' : 'manual', stStatus(R.autoClean !== false ? 'ok' : 'off', R.autoClean !== false ? 'Cleans up by itself, daily' : 'Automatic cleanup off') + stStatus('info', `Trash emptied after ${R.trashDays ?? 30} days`) + stStatus('info', `Undo: ${S.undoKeep ?? 10} replies, ${S.undoDays ?? 7} days`)]; }
+    case 'storage': { const R = S.storage || {}; return [R.autoClean !== false ? 'auto' : 'manual', stStatus(R.autoClean !== false ? 'ok' : 'off', R.autoClean !== false ? 'Cleans up by itself, daily' : 'Automatic cleanup off') + stStatus('info', `Trash emptied after ${R.trashDays ?? 30} days`) + stStatus('info', `Agent folder: glows past ${S.agentSpaceMB ?? 500} MB`) + stStatus('info', `Undo: ${S.undoKeep ?? 10} replies, ${S.undoDays ?? 7} days`)]; }
     case 'shortcuts': return ['', ''];
     case 'about': return [`v${G.cfg?.version || '?'}`, stStatus('ok', `QuorX v${esc(G.cfg?.version || '?')}`) + (G.cfg.hasKey ? stStatus('ok', 'OpenRouter key active') : stStatus('bad', 'No OpenRouter key'))];
   }
@@ -5471,6 +5626,8 @@ function wireSettings() {
     const v = inp.type === 'checkbox' ? inp.checked : inp.type === 'text' ? inp.value.trim() : Number(inp.value);
     setPath(S, inp.dataset.bind, v); ST.changed.add(inp.dataset.bind); inp.closest('.st-row')?.classList.add('changed'); mark();
   };
+  // The mic key: press the keys you want while the box has the focus.
+  for (const k of main.querySelectorAll('.st-keycap')) k.onkeydown = (e) => { if (e.key === 'Tab') return; e.preventDefault(); if (e.key === 'Escape') { e.stopPropagation(); k.blur(); return; } const v = keyCombo(e); if (v) { k.value = v; k.onchange(); } };
   for (const seg of main.querySelectorAll('.st-segmented[data-bind]')) for (const b of seg.querySelectorAll('.st-seg-btn')) b.onclick = () => {
     for (const x of seg.querySelectorAll('.st-seg-btn')) { x.classList.toggle('active', x === b); x.setAttribute('aria-checked', String(x === b)); }
     setPath(S, seg.dataset.bind, b.dataset.v); ST.changed.add(seg.dataset.bind); seg.closest('.st-row')?.classList.add('changed'); mark();
@@ -5502,6 +5659,12 @@ function wireSettings() {
     if (act === 'pickFallback') { const id = await pickModel('chat', S.fallbackModel || '', { context: 'Fallback when a chat’s model fails' }); if (id) { S.fallbackModel = id; mark(); drawSettings(); } }
     if (act === 'clearFallback') { S.fallbackModel = ''; mark(); drawSettings(); }
     if (act === 'openSafety') { ST.cat = 'safety'; drawSettings(); }
+    // New chats → "Change it": Approvals & safety, at the Permission mode card.
+    if (act === 'openMode') {
+      ST.cat = 'safety'; drawSettings();
+      const card = [...document.querySelectorAll('#stMain [data-panel="safety"] .st-card')].find((x) => /^Permission mode/.test(x.querySelector('.st-card-title')?.textContent || ''));
+      if (card) { card.scrollIntoView({ block: 'start' }); card.classList.add('sx-flash'); }
+    }
     if (act === 'openStorage') { ST.cat = 'storage'; drawSettings(); }
     if (act === 'pickReviewer') { const id = await pickModel('chat', S.reviewModel || '', { context: 'Reviewer: tests what was built' }); if (id) { S.reviewModel = id; mark(); drawSettings(); } }
     if (act === 'clearReviewer') { S.reviewModel = ''; mark(); drawSettings(); }
@@ -5587,19 +5750,23 @@ function searchSettings(q) {
 // Reset category: that category's settings go back to the defaults (still unsaved until Save).
 function resetCategory() {
   const S = ST.draft, d = G.cfg.defaults, U = (S.ui ??= {});
-  const uiKeys = { appearance: ['density', 'fontSize', 'reduceMotion', 'timestamps', 'notify'], layout: ['sidebarStart', 'paneMode'], privacy: ['showBalance', 'maskAmounts', 'blurPaths', 'searchEngine', 'searchCustom'], usage: ['usageBtn'] }[ST.cat];
+  const uiKeys = { appearance: ['density', 'fontSize', 'reduceMotion', 'timestamps', 'notify', 'sidebarStart', 'paneMode'], privacy: ['showBalance', 'maskAmounts', 'blurPaths', 'searchEngine', 'searchCustom'], usage: ['usageBtn'] }[ST.cat];
   if (uiKeys) for (const k of uiKeys) U[k] = UI_DEFAULTS[k];
   if (ST.cat === 'appearance') { S.theme = null; G.theme = null; applyTheme(); }
   if (ST.cat === 'privacy') S.newsRemote = true;
   if (ST.cat === 'models') { S.model = d.chatModel || d.setups.C.model; S.reasoning = 'off'; Object.assign(S, { providerSort: 'auto', requireParams: true, zdrOnly: false, fallbackModel: '' }); }
-  if (ST.cat === 'newchats') { S.approval = d.approval; S.strictAsk = d.strictAsk; S.strictAskHelpers = d.strictAskHelpers; S.strictAskDeciders = d.strictAskDeciders; S.newChatTools = { ...DEFAULT_CHAT_TOOLS }; }
+  if (ST.cat === 'newchats') S.newChatTools = { ...DEFAULT_CHAT_TOOLS };
   if (ST.cat === 'loop') { S.maxSteps = d.maxSteps; S.compact = true; S.compactAt = 24000; Object.assign(S, { planFirst: d.planFirst, planSteps: d.planSteps, continueRounds: d.continueRounds, maxOutput: d.maxOutput, thinkShare: d.thinkShare, review: d.review, reviewModel: '', reviewTier: d.reviewTier, reviewSendBack: d.reviewSendBack, codeReview: d.codeReview, designLint: d.designLint, fixSteps: d.fixSteps, reviewRounds: d.reviewRounds, reviewBar: d.reviewBar, helpers: d.helpers, helperModel: '', helperSteps: d.helperSteps, helperMinFiles: d.helperMinFiles, retries: d.retries, parallel: d.parallel, verify: d.verify, verifyRounds: d.verifyRounds, askLimit: d.askLimit, trimAt: d.trimAt, buildThinking: d.buildThinking }); }
   if (ST.cat === 'deciders') { S.voters = [...d.voters]; S.gate = { ...d.gate }; S.lookVoters = [...d.lookVoters]; S.lookEscalate = d.lookEscalate; S.checks = structuredClone(d.checks); }
   if (ST.cat === 'tools') S.tools = structuredClone(d.tools);
-  if (ST.cat === 'budget') { Object.assign(S, { replyBudget: d.replyBudget, dailyBudget: d.dailyBudget, budget: d.budget, yoloCheck: d.yoloCheck, yoloWaitSecs: d.yoloWaitSecs, budgetGrace: d.budgetGrace }); S.yoloAuto = {}; }
+  if (ST.cat === 'budget') Object.assign(S, { replyBudget: d.replyBudget, dailyBudget: d.dailyBudget, budget: d.budget, budgetGrace: d.budgetGrace });
   if (ST.cat === 'skills') S.skillsOff = [];
   if (ST.cat === 'video') for (const k of Object.keys(d)) if (/^video[A-Z]/.test(k)) S[k] = d[k];
-  if (ST.cat === 'safety') { S.safety = { ...(d.safety || {}) }; S.debugger = 'earned'; }
+  if (ST.cat === 'safety') {
+    S.safety = { ...(d.safety || {}) }; S.debugger = 'earned';
+    Object.assign(S, { approval: d.approval, strictAsk: d.strictAsk, strictAskHelpers: d.strictAskHelpers, strictAskDeciders: d.strictAskDeciders, yoloCheck: d.yoloCheck, decidersOff: { ...d.decidersOff }, yoloWaitSecs: d.yoloWaitSecs });
+    S.yoloAuto = {};
+  }
   if (ST.cat === 'docs') { const dd = G.cfg.docDefaults || {}; Object.assign(S, { maxUploadMB: dd.maxUploadMB, inlineDocTokens: dd.inlineDocTokens, pdfNative: dd.pdfNative, embedModel: dd.embedModel, docIndexBudget: dd.docIndexBudget }); }
   if (ST.cat === 'code') Object.assign(S, { browseReadOnly: d.browseReadOnly, chromeCheck: d.chromeCheck, chromeNetwork: d.chromeNetwork, chromeCloseTabs: d.chromeCloseTabs, chromeSitesNever: d.chromeSitesNever, chromeSitesAlways: d.chromeSitesAlways, chromeSitesRead: d.chromeSitesRead });
   // The agent folder's three have no server default: the agent falls back to these (server/agent.js).
@@ -5653,7 +5820,7 @@ function saveSettings() {
   if (look) S.lookVoters = [look];
   const voters = [...document.querySelectorAll('#voterInputs .m')].map((b) => b.dataset.id).filter(Boolean);
   if (voters.length) S.voters = voters;
-  S.maxSteps = Math.max(2, Math.min(120, Number(S.maxSteps) || 60));
+  S.maxSteps = Math.max(2, Math.min(1000, Number(S.maxSteps) || 500));
   S.budget = Math.max(0, Number(S.budget) || 0);
   S.skillsOff = [...document.querySelectorAll('#skillList input[data-skill]')].filter((x) => !x.checked).map((x) => x.dataset.skill);
   for (const el of document.querySelectorAll('#catEditors .cat')) {
@@ -5690,7 +5857,7 @@ function saveStorageRules(rules) {
   G.storageRules = { ...(G.storageRules || {}), ...rules };
   if (DESK) window.ohDesktop.storage?.('rules', rules).catch(() => {});
 }
-const storageHelpers = () => ({ getJ, postJ, esc, ask, uiAlert, keep: () => Number(G.settings?.undoKeep) || 10,
+const storageHelpers = () => ({ getJ, postJ, esc, ask, uiAlert, openFolder, keep: () => Number(G.settings?.undoKeep) || 10,
   desk: DESK && window.ohDesktop.storage ? (op, arg) => window.ohDesktop.storage(op, arg) : null,
   openCat: (id) => { ST.cat = id; drawSettings(); } });
 // Cancel (or Esc) drops the draft and undoes the theme preview.
@@ -5700,6 +5867,20 @@ function cancelSettings() { G.theme = ST.themeAtOpen; applyTheme(); if ($('#sett
 // Settings → Projects: one compact row per project (colour, spend vs budget, folder) with icon actions.
 // ⚙ Settings → Code & servers → Chrome extension: set up in your default browser (Brave, Chrome, Edge…), connect with
 // one click (Allow here), and whether it is connected. The key is a fallback, under "Use a key instead".
+// The QuorX article on connecting the extension (a plain link: it opens in the user's browser when clicked).
+const EXT_HOWTO = 'https://quorx.genxmims.org/news/articles/your-own-browser-for-the-agent/';
+const extReady = () => !!(G.ext?.connected && !G.ext.outdated);
+// Ticking 🧩 Chrome (a chat, or a scheduled chat) while the extension isn't connected (or is outdated): the tick stays,
+// and ⚙ Code & servers opens at the extension's card with a line saying why. Connected, or unticking: nothing opens.
+function openChromeSetup() {
+  openSettings('code');
+  requestAnimationFrame(() => {
+    const card = $('#stExtCard'); if (!card) return;
+    $('.st-ext-why', card).hidden = false;
+    card.scrollIntoView({ block: 'start' });
+    card.classList.remove('sx-flash'); void card.offsetWidth; card.classList.add('sx-flash');
+  });
+}
 async function drawExtPanel() {
   const box = $('#stExt'); if (!box) return;
   const r = await getJ('/api/ext/status');
@@ -5747,7 +5928,7 @@ async function drawProjectsPanel() {
   const box = $('#stProjects'); if (!box) return;
   const projects = await fetch('/api/projects').then((r) => r.json()).catch(() => G.projects);
   const counts = {}; for (const c of G.chats) if (c.messages > 0) counts[c.projectId || 'scratch'] = (counts[c.projectId || 'scratch'] || 0) + 1;
-  const short = (d) => { const parts = String(d).split(/[\\/]/).filter(Boolean); return parts.length > 3 ? `…\\${parts.slice(-3).join('\\')}` : d; };
+  for (const [id, st] of Object.entries(G.chatStats || {})) counts[id] = st.active;
   box.innerHTML = `<section class="pp">
     <header class="pp-head"><div><b>Your projects</b><small>${projects.length} · removing one moves its chats to the trash; the folder and files stay.</small></div><button type="button" class="pp-new" data-proj-new>＋ New project</button></header>
     <div class="pp-list">${projects.map((pr) => {
@@ -5755,11 +5936,12 @@ async function drawProjectsPanel() {
       return `<div class="pp-row" style="${projStyle(pr)}">
         <span class="pp-ico">📁</span>
         <div class="pp-main">
-          <div class="pp-top"><b class="pp-name">${esc(pr.name)}</b><span class="pp-meta">${n} chat${n === 1 ? '' : 's'} · <em>$${spent.toFixed(3)}</em>${pr.budget != null ? ` of $${pr.budget.toFixed(2)}` : ' · no limit'}<button type="button" class="pp-sto" data-proj-sto="${esc(pr.id)}" hidden></button></span></div>
+          <div class="pp-top"><b class="pp-name">${esc(pr.name)}</b><span class="pp-meta">${n} chat${n === 1 ? '' : 's'} · <em>$${spent.toFixed(3)}</em>${pr.budget != null ? ` of $${pr.budget.toFixed(2)}` : ' · no limit'}</span></div>
           ${pr.budget != null ? `<span class="pp-bar ${state}"><i style="width:${(share * 100).toFixed(1)}%"></i></span>` : ''}
-          <code class="pp-path blurable" title="${esc(pr.dir)}">${esc(short(pr.dir))}</code>
+          <code class="pp-path blurable" title="${esc(pr.dir)}">${esc(pr.dir)}</code>
         </div>
         <div class="pp-acts">
+          <button type="button" class="pp-sto" data-proj-sto="${esc(pr.id)}" hidden></button>
           <button type="button" class="pp-btn open" data-proj-open="${esc(pr.id)}" title="Open the folder in File Explorer" aria-label="Open folder"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h6l2 2h10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></button>
           <button type="button" class="pp-btn set" data-proj-set="${esc(pr.id)}" title="Project settings: name, folder, budget, costs" aria-label="Project settings">${ICO.gear}</button>
           ${pr.id !== 'scratch' ? `<button type="button" class="pp-btn del" data-proj-del="${esc(pr.id)}" title="Remove the project (its chats move to the trash)" aria-label="Remove project">${ICO.trash}</button>` : '<span class="pp-btn ghost" aria-hidden="true"></span>'}
@@ -5769,14 +5951,14 @@ async function drawProjectsPanel() {
   </section>`;
   const find = (id) => projects.find((x) => x.id === id);
   for (const b of box.querySelectorAll('[data-proj-open]')) b.onclick = () => openFolder(b.dataset.projOpen);
-  // How much room the agent's folder (.quorx) takes in each project; it opens that project in ⚙ Storage.
-  for (const b of box.querySelectorAll('[data-proj-sto]')) b.onclick = () => { focusProject(b.dataset.projSto); ST.cat = 'storage'; drawSettings(); };
+  // How much room the agent's folder (.quorx) takes in each project; it opens that project's settings, where it is cleared.
+  for (const b of box.querySelectorAll('[data-proj-sto]')) b.onclick = () => openProjectSettings(find(b.dataset.projSto), 'space');
   projectSizes(storageHelpers()).then((sizes) => {
     const limit = (Number(G.settings.agentSpaceMB) || 500) * 1e6;
     for (const b of box.querySelectorAll('[data-proj-sto]')) {
       const s = sizes.get(b.dataset.projSto);
       if (!s || s.missing || !s.bytes || !b.isConnected) continue;
-      b.textContent = `🧹 ${fmtBytes(s.bytes)}`; b.title = 'The agent\'s folder (.quorx) in this project: see and clear its parts in Storage'; b.classList.toggle('big', s.bytes > limit); b.hidden = false;
+      b.textContent = `🧹 ${fmtBytes(s.bytes)}`; b.title = `The agent's folder (.quorx) in this project uses ${fmtBytes(s.bytes)}${s.bytes > limit ? ', over your limit' : ''}. Click to see or clear it in the project's settings`; b.classList.toggle('big', s.bytes > limit); b.hidden = false;
     }
   });
   for (const b of box.querySelectorAll('[data-proj-set]')) b.onclick = () => openProjectSettings(find(b.dataset.projSet));
@@ -5786,7 +5968,7 @@ async function drawProjectsPanel() {
   const pd = $('#projDlg'); if (pd && !pd.dataset.refreshesPanel) { pd.dataset.refreshesPanel = '1'; pd.addEventListener('close', () => { if ($('#settings').open) drawProjectsPanel(); }); }
 }
 
-// ---------- Settings → Safety & commands: the command rules (server/cmdpolicy.js), saved at once ----------
+// ---------- Settings → Approvals & safety: the command rules (server/cmdpolicy.js), saved at once ----------
 const PERMS = { project: null, testShell: null };
 const RULE_EFFECT = { allow: 'Allow', ask: 'Ask me', deny: 'Deny' };
 async function drawPermsPanel() {
@@ -5863,6 +6045,73 @@ async function drawAuditPanel() {
   }).join('')}</div>`;
 }
 
+// ---------- one filter for any long Settings list (Setup check, Skills, and later Memory, Projects, models…) ----------
+// Each row carries what it is searched by (data-lf-text, lower case) and its group (data-lf-seg). The filter only hides
+// and shows rows, never redraws them, so their buttons stay wired and typing stays smooth with hundreds of rows. The
+// groups come from the rows themselves (a new source or status shows up by itself), each with how many rows match the
+// words typed; when they don't fit on one line they become a dropdown. What was picked and typed is kept per list in
+// ST.filters, so a redraw (Check again, a save) keeps it. Ctrl+F focuses the open page's filter.
+// opts: { key, rows: () => rows, segLabel: (v) => label, segOrder: [values first, in this order], placeholder, label,
+//   extra: html after the segments, onApply: () => {} }
+function listFilter(host, { key, rows, segLabel = (v) => v, segOrder = [], placeholder = 'Filter…', label = 'Show', extra = '', onApply }) {
+  const F = ((ST.filters ??= {})[key] ??= { q: '', seg: 'all' });
+  const all = [...rows()];
+  const segs = [...new Set(all.map((r) => r.dataset.lfSeg).filter(Boolean))]
+    .sort((a, b) => ((segOrder.indexOf(a) + 1) || 999) - ((segOrder.indexOf(b) + 1) || 999) || a.localeCompare(b));
+  if (F.seg !== 'all' && !segs.includes(F.seg)) F.seg = 'all';
+  const opts = [['all', 'All'], ...segs.map((v) => [v, segLabel(v)])];
+  host.classList.add('lf');
+  host.innerHTML = `<input type="search" class="lf-q" placeholder="${esc(placeholder)}" aria-label="${esc(placeholder)}" value="${esc(F.q)}" spellcheck="false" autocomplete="off">
+    ${segs.length > 1 ? `<div class="st-segmented lf-seg" role="radiogroup" aria-label="${esc(label)}">${opts.map(([v, l]) => `<button type="button" class="st-seg-btn ${F.seg === v ? 'active' : ''}" role="radio" aria-checked="${F.seg === v}" data-lf-v="${esc(v)}">${esc(l)} <small></small></button>`).join('')}</div>
+    <select class="st-select lf-sel" aria-label="${esc(label)}" hidden>${opts.map(([v, l]) => `<option value="${esc(v)}" ${F.seg === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>` : ''}
+    ${extra}<p class="lf-none" hidden>Nothing matches. <button type="button" class="sp-link lf-clear">Show everything</button></p>`;
+  const q = $('.lf-q', host), seg = $('.lf-seg', host), sel = $('.lf-sel', host), none = $('.lf-none', host);
+  const apply = () => {
+    const words = F.q.toLowerCase().split(/\s+/).filter(Boolean), n = { all: 0 };
+    let shown = 0;
+    for (const r of all) {
+      const hit = words.every((w) => (r.dataset.lfText || '').includes(w)), s = r.dataset.lfSeg;
+      if (hit) { n.all++; n[s] = (n[s] || 0) + 1; }
+      r.hidden = !(hit && (F.seg === 'all' || s === F.seg));
+      if (!r.hidden) shown++;
+    }
+    for (const b of host.querySelectorAll('[data-lf-v]')) $('small', b).textContent = n[b.dataset.lfV] || 0;
+    for (const o of sel?.options || []) o.textContent = `${opts.find(([v]) => v === o.value)[1]} (${n[o.value] || 0})`;
+    none.hidden = shown > 0 || !all.length;
+    onApply?.();
+  };
+  const pick = (v) => {
+    F.seg = v;
+    for (const b of host.querySelectorAll('[data-lf-v]')) { const on = b.dataset.lfV === v; b.classList.toggle('active', on); b.setAttribute('aria-checked', String(on)); }
+    if (sel) sel.value = v;
+    apply();
+  };
+  let t = 0;
+  q.oninput = () => { F.q = q.value; clearTimeout(t); t = setTimeout(apply, 120); };
+  // Esc clears the words first (and only then closes Settings).
+  q.onkeydown = (e) => { if (e.key === 'Escape' && q.value) { e.preventDefault(); e.stopPropagation(); q.value = F.q = ''; apply(); } };
+  for (const b of host.querySelectorAll('[data-lf-v]')) b.onclick = () => pick(b.dataset.lfV);
+  if (sel) sel.onchange = () => pick(sel.value);
+  $('.lf-clear', host).onclick = () => { q.value = F.q = ''; pick('all'); q.focus(); };
+  // Buttons while they fit on one line, a dropdown when they don't (checked again when the page is resized).
+  if (seg) {
+    const fit = () => { seg.hidden = false; sel.hidden = true; if (seg.scrollWidth > seg.clientWidth + 1 || seg.offsetTop > q.offsetTop + 4) { seg.hidden = true; sel.hidden = false; } };
+    requestAnimationFrame(fit);
+    host._lfFit?.disconnect(); host._lfFit = new ResizeObserver(() => fit()); host._lfFit.observe(host);
+  }
+  apply();
+}
+// Ctrl+F in Settings: the open page's list filter; / : the search over every setting (as its hint says).
+document.addEventListener('keydown', (e) => {
+  const dlg = $('#settings');
+  if (!dlg?.open) return;
+  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName) || document.activeElement?.isContentEditable;
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+    const box = [...dlg.querySelectorAll('.st-panel.active .lf-q')].find((x) => x.getClientRects().length) || $('#stSearch');
+    e.preventDefault(); box.focus(); box.select();
+  } else if (e.key === '/' && !typing && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); $('#stSearch').focus(); }
+});
+
 // ---------- setup check panel (server/setup-check.js) ----------
 // One row per thing: a status pill, what it's for, what was found, and at most one Fix.
 const SETUP_PILL = { ok: ['ok', 'Ready'], warn: ['warn', 'Optional'], missing: ['bad', 'Missing'] };
@@ -5879,9 +6128,10 @@ async function drawSetupPanel(again) {
       <span class="sc-when">checked ${new Date(r.checked).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
       <button type="button" class="st-btn secondary sm" data-sc-again>Check again</button>
     </div>
+    <div class="sc-filter"></div>
     <div class="sc-list">${r.items.map((i) => {
       const [cls, word] = SETUP_PILL[i.status] || SETUP_PILL.warn;
-      return `<div class="sc-row" data-id="${esc(i.id)}">
+      return `<div class="sc-row" data-id="${esc(i.id)}" data-lf-seg="${esc(i.status)}" data-lf-text="${esc([i.label, i.need, i.detail, i.fix?.cmd, i.fix?.label, word].filter(Boolean).join(' ').toLowerCase())}">
         <span class="sc-pill ${cls}"><i aria-hidden="true"></i>${word}</span>
         <div class="sc-main"><b>${esc(i.label)}</b><small>${esc(i.need)}</small><span class="sc-detail">${esc(i.detail || '')}</span>
           ${i.fix?.cmd ? `<code class="sc-cmd">${esc(i.fix.cmd)}</code>` : ''}<span class="sc-msg" role="status"></span></div>
@@ -5889,6 +6139,8 @@ async function drawSetupPanel(again) {
       </div>`;
     }).join('')}</div>`;
   $('[data-sc-again]', box).onclick = () => drawSetupPanel(true);
+  listFilter($('.sc-filter', box), { key: 'setup', rows: () => box.querySelectorAll('.sc-row'), segOrder: ['missing', 'warn', 'ok'],
+    segLabel: (v) => (SETUP_PILL[v] || [, v])[1], label: 'Show', placeholder: 'Filter: name, what it\'s for, what was found…' });
   for (const b of box.querySelectorAll('[data-sc-fix]')) b.onclick = async () => {
     const it = r.items.find((x) => x.id === b.dataset.scFix), msg = $('.sc-msg', b.closest('.sc-row'));
     if (it.fix.kind === 'settings') { ST.cat = it.fix.cat; return drawSettings(); }
@@ -5963,26 +6215,19 @@ function wireSignIn() {
 // ⚙ Settings → Skills: write, import, edit and trash your own skills (data/skills, every project) and this project's
 // (.quorx/skills). Switching a skill on or off is a draft change like the rest of Settings; writing one saves at once.
 const SKILL_SOURCE = { 'built-in': ['builtin', 'built-in'], mine: ['mine', 'all projects'], project: ['project', 'this project'] };
-// The library's filter (one source at a time) and All on / All off, which act on the skills the filter shows.
+// The library's filter (words and source, see listFilter) and All on / All off, which act on the skills it shows.
 // The filter stays where it was when the panel redraws after a save, an import or a delete.
 function drawSkillFilter(list, changed) {
   const fb = $('#skillFilter'); if (!fb) return;
   if (!list.length) { fb.innerHTML = ''; return; }
-  const counts = { all: list.length }; for (const k of list) counts[k.source] = (counts[k.source] || 0) + 1;
-  const opts = [['all', 'All'], ...Object.entries(SKILL_SOURCE).map(([k, [, l]]) => [k, l[0].toUpperCase() + l.slice(1)])].filter(([k]) => counts[k]);
-  if (!counts[ST.skillFilter]) ST.skillFilter = 'all';
-  fb.innerHTML = `<div class="st-segmented" role="radiogroup" aria-label="Show skills from">${opts.map(([k, l]) => `<button type="button" class="st-seg-btn ${k === ST.skillFilter ? 'active' : ''}" role="radio" aria-checked="${k === ST.skillFilter}" data-v="${esc(k)}">${esc(l)} <small>${counts[k]}</small></button>`).join('')}</div><span class="sx-filter-acts"><button type="button" class="st-btn ghost sm" data-skills-all="1">✓ All on</button><button type="button" class="st-btn ghost sm" data-skills-all="0">All off</button></span>`;
-  const show = () => { for (const it of document.querySelectorAll('#skillList .st-skill-item')) it.hidden = ST.skillFilter !== 'all' && it.dataset.where !== ST.skillFilter; };
-  for (const b of fb.querySelectorAll('.st-seg-btn')) b.onclick = () => {
-    ST.skillFilter = b.dataset.v;
-    for (const x of fb.querySelectorAll('.st-seg-btn')) { x.classList.toggle('active', x === b); x.setAttribute('aria-checked', String(x === b)); }
-    show();
-  };
+  listFilter(fb, { key: 'skills', rows: () => document.querySelectorAll('#skillList .st-skill-item'), segOrder: Object.keys(SKILL_SOURCE),
+    segLabel: (v) => { const l = (SKILL_SOURCE[v] || [, v])[1]; return l[0].toUpperCase() + l.slice(1); }, label: 'Show skills from',
+    placeholder: 'Filter: name, what it does, where it comes from…',
+    extra: '<span class="sx-filter-acts"><button type="button" class="st-btn ghost sm" data-skills-all="1" title="Turn on the skills shown">✓ All on</button><button type="button" class="st-btn ghost sm" data-skills-all="0" title="Turn off the skills shown">All off</button></span>' });
   for (const b of fb.querySelectorAll('[data-skills-all]')) b.onclick = () => {
     for (const it of document.querySelectorAll('#skillList .st-skill-item:not([hidden]) input[data-skill]')) it.checked = b.dataset.skillsAll === '1';
     changed();
   };
-  show();
 }
 async function drawSkillsPanel(mark, msg = '') {
   const box = $('#skillPanel'), listEl = $('#skillList');
@@ -6002,7 +6247,7 @@ async function drawSkillsPanel(mark, msg = '') {
   G.skillCount = list.length;
   listEl.innerHTML = list.length ? list.map((k) => {
     const [cls, label] = SKILL_SOURCE[k.source] || ['saved', k.source], own = k.source !== 'built-in';
-    return `<div class="st-skill-item" data-name="${esc(k.name)}" data-where="${esc(k.source)}"><div class="st-skill-info"><div class="st-skill-top"><span class="st-skill-name">${esc(k.name)}</span><span class="st-source-badge ${cls}">${esc(label)}</span></div><div class="st-skill-desc">${esc(k.description)}</div></div>${own ? `<button type="button" class="pp-btn set" data-sk-edit title="Edit this skill" aria-label="Edit ${esc(k.name)}">${ICO.pencil}</button><button type="button" class="pp-btn del" data-sk-del title="Move this skill to data/trash" aria-label="Delete ${esc(k.name)}">${ICO.trash}</button>` : ''}${stSwitch('', !off.has(k.name)).replace('data-bind=""', `data-skill="${esc(k.name)}"`)}</div>`;
+    return `<div class="st-skill-item" data-name="${esc(k.name)}" data-where="${esc(k.source)}" data-lf-seg="${esc(k.source)}" data-lf-text="${esc([k.name, k.description, label, k.source === 'project' ? pname : ''].filter(Boolean).join(' ').toLowerCase())}"><div class="st-skill-info"><div class="st-skill-top"><span class="st-skill-name">${esc(k.name)}</span><span class="st-source-badge ${cls}">${esc(label)}</span></div><div class="st-skill-desc">${esc(k.description)}</div></div>${own ? `<button type="button" class="pp-btn set" data-sk-edit title="Edit this skill" aria-label="Edit ${esc(k.name)}">${ICO.pencil}</button><button type="button" class="pp-btn del" data-sk-del title="Move this skill to data/trash" aria-label="Delete ${esc(k.name)}">${ICO.trash}</button>` : ''}${stSwitch('', !off.has(k.name)).replace('data-bind=""', `data-skill="${esc(k.name)}"`)}</div>`;
   }).join('') : '<p class="st-row-help">No skills yet.</p>';
   const syncOff = () => { if (ST.draft) ST.draft.skillsOff = [...listEl.querySelectorAll('input[data-skill]')].filter((x) => !x.checked).map((x) => x.dataset.skill); };
   for (const inp of listEl.querySelectorAll('input[data-skill]')) inp.onchange = () => { syncOff(); mark(); };
@@ -6295,15 +6540,24 @@ function encodeWav(samples, rate) {
   return new Blob([buf], { type: 'audio/wav' });
 }
 const asDataURL = (blob) => new Promise((r) => { const f = new FileReader(); f.onload = () => r(f.result); f.readAsDataURL(blob); });
-async function toggleMic(c) {
-  const btn = $('.micBtn', c.el.root);
+// QuorX asks once before it first uses the mic (the browser asks too); ⓘ by the name lists it and can take it back.
+async function micAllowed() {
+  if (G.perms?.mic === 'yes') return true;
+  const m = short(G.settings.tools.listen?.models?.[0] || '');
+  if (!(await uiConfirm(`Let QuorX use your microphone?\nIt listens only while the mic glows (click 🎤 or press ${G.settings.micKey || 'Alt+M'}), then sends that recording${m ? ` to ${m}` : ''} to turn it into text in the message box. Your browser asks as well.\nYou can take it back any time under ⓘ next to the QuorX name.`, { ok: 'Allow the mic' }))) return false;
+  (G.perms ||= {}).mic = 'yes'; savePrefs(); return true;
+}
+async function toggleMic(c, { byKey = false } = {}) {
+  const btn = $('.micBtn', c.el.root), box = $('.composer', c.el.root);
   if (G.rec) { G.rec.stop(); return; }
+  if (!(await micAllowed())) return;
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     const rec = new MediaRecorder(stream), chunks = [];
     rec.ondataavailable = (e) => chunks.push(e.data);
     rec.onstop = async () => {
       stream.getTracks().forEach((t) => t.stop());
+      box?.classList.remove('listening');
       G.rec = null; btn.classList.remove('rec'); btn.innerHTML = CMP_ICO.wait; btn.title = 'Transcribing…'; btn.disabled = true;
       try {
         const decoded = await new AudioContext().decodeAudioData(await new Blob(chunks).arrayBuffer());
@@ -6318,11 +6572,62 @@ async function toggleMic(c) {
         G.sessionCost += r.cost || 0; renderSpend();
         if (r.cost) { c.agent.extraUsage.push({ kind: 'listen', model: r.model, cost: r.cost, at: Date.now() }); saveChat(c); renderChatHead(c); }
       } catch (e) { uiAlert(`Transcription failed: ${e.message}`); }
-      btn.innerHTML = CMP_ICO.mic; btn.title = 'Speak your message (transcribed into the box)'; btn.disabled = false;
+      btn.innerHTML = CMP_ICO.mic; btn.title = micTip(); btn.disabled = false;
     };
-    rec.start(); G.rec = rec; btn.classList.add('rec'); btn.innerHTML = CMP_ICO.rec; btn.title = 'Stop recording';
+    rec.start(); G.rec = rec; btn.classList.add('rec'); btn.innerHTML = CMP_ICO.rec; btn.title = 'Listening · click to stop';
+    box?.classList.add('listening');
+    // Hold mode: the key may have been let go while the browser was still asking.
+    if (byKey && G.settings.micMode === 'hold' && !G.micHeld) rec.stop();
   } catch (e) { uiAlert(`Microphone unavailable: ${e.message}`); }
 }
+// ⓘ by the name: what QuorX may use on this computer, as QuorX and the browser each see it, with a way to take it back.
+async function drawPerms() {
+  const pop = $('#permPop'); if (!pop) return;
+  const q = async (name) => { try { return (await navigator.permissions.query({ name })).state; } catch { return ''; } };
+  const [mic, note] = await Promise.all([q('microphone'), Promise.resolve('Notification' in window ? Notification.permission : '')]);
+  const BR = { granted: ['ok', 'allowed'], prompt: ['', 'asks first'], default: ['', 'asks first'], denied: ['bad', 'blocked'] };
+  const st = (cls, txt) => `<span class="pm-st ${cls}">${esc(txt)}</span>`;
+  const micOn = G.perms?.mic === 'yes';
+  const rows = [
+    ['🎤', 'Microphone', 'Only while the mic glows, to type what you say.', micOn ? st('ok', 'allowed') : st('', 'not asked yet'), mic ? `Browser: ${BR[mic]?.[1] || mic}` : '', micOn ? '<button type="button" class="pm-act" data-pm="mic-off">Take back</button>' : ''],
+    ['🔔', 'Notifications', 'When a reply finishes or needs you while QuorX is in the background.', note ? st(BR[note]?.[0] || '', BR[note]?.[1] || note) : st('', 'not available'), '', ''],
+    ['🧩', 'Chrome extension', 'Lets the agent use your own Chrome, signed in as you.', extReady() ? st('ok', 'connected') : st('', G.ext?.outdated ? 'needs a reload' : 'not set up'), '', `<button type="button" class="pm-act" data-pm="ext">${extReady() ? 'Settings' : 'Set up'}</button>`],
+  ];
+  pop.innerHTML = `<div class="pm-h"><b>What QuorX may use</b><small>On this computer, in this browser</small></div>${rows.map(([ico, name, what, state, br, act]) => `<div class="pm-row"><span class="pm-ico" aria-hidden="true">${ico}</span><div class="pm-main"><div class="pm-top"><b>${name}</b>${state}</div><small>${esc(what)}${br ? ` · ${esc(br)}` : ''}</small></div>${act}</div>`).join('')}<p class="pm-note">Taking the mic back here makes QuorX ask again. To block it in the browser too, use the site settings (🔒 in the address bar) or Windows privacy settings.</p>`;
+  const mo = $('[data-pm="mic-off"]', pop); if (mo) mo.onclick = () => { delete G.perms.mic; savePrefs(); drawPerms(); };
+  $('[data-pm="ext"]', pop).onclick = () => { closePerms(); openChromeSetup(); };
+}
+function closePerms() { const pop = $('#permPop'), b = $('#permBtn'); if (!pop || pop.hidden) return; pop.hidden = true; b.setAttribute('aria-expanded', 'false'); b.classList.remove('on'); }
+{
+  const b = $('#permBtn'), pop = $('#permPop');
+  if (pop) document.body.append(pop); // the top bar is hidden on wider screens (its name moves into the sidebar)
+  if (b && pop) {
+    b.onclick = () => { if (!pop.hidden) return closePerms(); const r = b.getBoundingClientRect(); pop.style.left = `${Math.max(8, Math.min(r.left, innerWidth - 340))}px`; pop.style.top = `${r.bottom + 6}px`; pop.hidden = false; b.classList.add('on'); b.setAttribute('aria-expanded', 'true'); drawPerms(); };
+    addEventListener('pointerdown', (e) => { if (!pop.hidden && !pop.contains(e.target) && !b.contains(e.target)) closePerms(); }, true);
+    addEventListener('keydown', (e) => { if (e.key === 'Escape') closePerms(); });
+  }
+}
+const micTip = () => `Speak your message · ${G.settings.micKey || 'Alt+M'}\nWhat you say is typed into the box.${G.settings.micMode === 'hold' ? ' Hold the key while you talk.' : ' Press again to stop.'}`;
+// 🎤 The mic key (⚙ Settings → Shortcuts): Toggle = press to start, press again to stop; Hold = listens while held.
+const keyCombo = (e) => {
+  if (['Control', 'Shift', 'Alt', 'Meta', 'AltGraph'].includes(e.key)) return '';
+  const k = e.code?.startsWith('Key') ? e.code.slice(3) : e.code?.startsWith('Digit') ? e.code.slice(5) : e.key === ' ' ? 'Space' : e.key.length === 1 ? e.key.toUpperCase() : e.key;
+  return [e.ctrlKey && 'Ctrl', e.shiftKey && 'Shift', e.altKey && 'Alt', e.metaKey && 'Meta', k].filter(Boolean).join('+');
+};
+const micTarget = () => { const c = focused(); if (c?.el?.root?.isConnected) return c; return G.homeDraft?.el?.root?.isConnected ? G.homeDraft : null; };
+document.addEventListener('keydown', (e) => {
+  if (e.repeat || e.target.closest?.('.st-keycap') || G.settings?.tools?.listen?.on === false) return;
+  if (keyCombo(e) !== (G.settings.micKey || 'Alt+M')) return;
+  const c = micTarget(); if (!c) return;
+  e.preventDefault();
+  if (G.settings.micMode === 'hold') { G.micHeld = true; if (!G.rec) toggleMic(c, { byKey: true }); } else toggleMic(c, { byKey: true });
+}, true);
+document.addEventListener('keyup', (e) => {
+  if (G.settings?.micMode !== 'hold' || !G.micHeld) return;
+  const keys = (G.settings.micKey || 'Alt+M').split('+'), k = keyCombo({ ...e, key: e.key, code: e.code, ctrlKey: false, shiftKey: false, altKey: false, metaKey: false }) || ({ Control: 'Ctrl', Shift: 'Shift', Alt: 'Alt', Meta: 'Meta' })[e.key];
+  if (!keys.includes(k)) return;
+  G.micHeld = false; G.rec?.stop();
+}, true);
 
 // ---------- layout: resizing, theme, sidebar ----------
 function applySizes() {
@@ -6396,9 +6701,11 @@ async function boot() {
   G.settings.tools = Object.fromEntries(Object.entries(d.tools).map(([k, v]) => [k, { ...structuredClone(v), ...(saved?.settings?.tools?.[k] || {}) }]));
   delete G.settings.media; delete G.settings.mediaEnabled;
   if ((G.settings.modelDefaultV || 0) < 2) { G.settings.model = d.chatModel || G.settings.model; G.settings.modelDefaultV = 2; }
-  if ((G.settings.maxSteps || 0) < d.maxSteps) G.settings.maxSteps = d.maxSteps; // building and checking needs room
-  G.settings.maxSteps = Math.min(120, G.settings.maxSteps);
-  G.sideHidden = !!saved?.sideHidden; G.projectOrder = saved?.projectOrder || []; G.foldedProjects = saved?.foldedProjects || []; G.favModels = saved?.favModels || {}; G.spaceSeen = saved?.spaceSeen || {}; G.followAgent = saved?.followAgent !== false; G.budgetSeen = saved?.budgetSeen || {}; G.recentModels = saved?.recentModels || {}; G.pickerSort = saved?.pickerSort || {}; G.sizes = saved?.sizes || {}; G.theme = saved?.theme || null;
+  // Once: the default went from 60 to 500 steps, and no silent extra rounds, so the ⏱ card asks right at the limit.
+  // After that, whatever you set (lower or higher) stays.
+  if ((G.settings.stepsDefaultV || 0) < 3) { if ((G.settings.maxSteps || 0) < d.maxSteps) G.settings.maxSteps = d.maxSteps; G.settings.continueRounds = 0; G.settings.stepsDefaultV = 3; }
+  G.settings.maxSteps = Math.max(2, Math.min(1000, Number(G.settings.maxSteps) || d.maxSteps));
+  G.sideHidden = !!saved?.sideHidden; G.projectOrder = saved?.projectOrder || []; G.foldedProjects = saved?.foldedProjects || []; G.favModels = saved?.favModels || {}; G.followAgent = saved?.followAgent !== false; G.quickRow = saved?.quickRow !== false; G.perms = saved?.perms || {}; G.budgetSeen = saved?.budgetSeen || {}; G.recentModels = saved?.recentModels || {}; G.pickerSort = saved?.pickerSort || {}; G.sizes = saved?.sizes || {}; G.theme = saved?.theme || null;
   G.sessionCost = saved?.sessionCost || 0; G.templates = saved?.templates || [];
   applySizes(); applyTheme();
   const start = G.settings.ui?.sidebarStart || 'remember';
@@ -6466,7 +6773,7 @@ async function boot() {
   // 🔍 on the rail opens the sidebar with the cursor in the search box.
   $('#railSearch').onclick = () => { G.sideHidden = false; savePrefs(); syncLayout(); setTimeout(() => $('#chatSearch')?.focus(), 60); };
   matchMedia('(max-width: 900px)').addEventListener('change', () => { $('#sidebar').classList.remove('mobile-open'); syncLayout(); });
-  $('#chatSearch').oninput = renderSidebar;
+  $('#chatSearch').oninput = sidebarSearch;
   $('#newProjectBtn').onclick = () => editProject(null);
   $('#popBtn').onclick = () => {
     if (G.paneUrl && !G.paneUrl.startsWith('data:')) return DESK ? window.ohDesktop.openExternal(G.paneUrl) : window.open(G.paneUrl, '_blank', 'noopener');
@@ -6595,42 +6902,127 @@ function folderNotices() {
 // Folders can disappear while the app is in the background: look again when the window comes back.
 window.addEventListener('focus', () => { if (Date.now() - (G.focusCheck || 0) > 4000) { G.focusCheck = Date.now(); refreshSidebar(); } });
 
-// ---------- the agent's own folder (.quorx): ask before it takes too much room ----------
-async function checkSpace(c, force) {
-  if (!c?.el || projectOf(c)?.missing || projectOf(c)?.needsFolder) return;
-  const at = (G.spaceAt ||= {});
-  if (!force && Date.now() - (at[c.projectId] || 0) < 30e3) return;
-  at[c.projectId] = Date.now();
-  const r = await getJ(`/api/agent-space?project=${encodeURIComponent(c.projectId)}`);
-  if (!r || r.error || !c.el) return;
+// ---------- the agent's own folder (.quorx): a 🧹 next to Delete, glowing while it is past the limit ----------
+// Nothing in the conversation: the button opens a popover with the sizes, Open .quorx and Clear… (tick parts, read
+// what each one loses, confirm). The glow stays until the folder is under the limit (⚙ Code & servers → Agent folder).
+const SPACE_CLEAR = {
+  scratch: ['Research & scratch', 'The agent\'s research scripts, downloads, scrapes and test files. Anything it saved there to reuse later is gone, and it may have to look things up again.'],
+  trash: ['Deleted files', 'Copies of files the agent deleted or replaced. ↶ Undo for one file can no longer bring them back.'],
+  checkpoints: ['Older undo history', 'Undo copies of replies older than the newest ones you keep. Those replies can no longer be undone with ↶ Undo.'],
+  objects: ['Command snapshots', 'The copy for undoing the last command. That command can no longer be undone; the next command takes a fresh snapshot.'],
+};
+// ⚙ Project settings → Agent folder: the same sizes, Open and Clear… as the 🧹 in a chat header.
+async function projectSpace(p, box, note = '') {
+  const r = await getJ(`/api/agent-space?project=${encodeURIComponent(p.id)}`);
+  if (!box.isConnected) return;
+  if (!r || r.error) { box.innerHTML = `<p class="sp-note">Couldn't measure: ${esc(r?.error || 'no answer from QuorX')}</p>`; return; }
+  const limit = (Number(G.settings.agentSpaceMB) || 500) * 1e6, over = r.total > limit;
+  box.innerHTML = `<div class="pj-space">
+    <div class="sp-head"><b>Uses ${mbText(r.total)}</b><small>${over ? `<span class="sp-over">Over your limit of ${mbText(limit)}</span>` : `Within your limit of ${mbText(limit)}`} · never committed</small></div>
+    ${note ? `<p class="sp-done" role="status">${esc(note)}</p>` : ''}
+    <p class="sp-note">Not part of your git repo or your project's files. Clearing it removes the research and undo copies kept here, so the agent may need to redo some work. Your chats stay.</p>
+    <div class="sp-acts"><button type="button" class="sp-open">📂 Open .quorx</button><button type="button" class="sp-clear">🧹 Clear…</button></div></div>`;
+  $('.sp-open', box).onclick = () => openFolder(p.id, '.quorx');
+  $('.sp-clear', box).onclick = () => spaceClearView({ projectId: p.id }, box, () => projectSpace(p, box), (msg) => {
+    for (const c of G.open.values()) if (c.projectId === p.id) checkSpace(c, true);
+    projectSpace(p, box, msg);
+  });
+}
+function spaceClearView(c, pop, back, done) {
+  const keep = Number(G.settings?.undoKeep) || 10;
+  pop.innerHTML = '<div class="sp-head"><b>Clear the agent\'s folder</b><small>Measuring what each part would free…</small></div>';
+  getJ(`/api/agent-space/clear?project=${encodeURIComponent(c.projectId)}&keep=${keep}`).then((r) => {
+    if (pop.hidden) return;
+    if (!r || r.error) { pop.innerHTML = `<div class="sp-head"><b>Couldn't measure</b><small>${esc(r?.error || 'no answer from QuorX')}</small></div><div class="sp-acts"><button type="button" class="ghost sp-back">Back</button></div>`; $('.sp-back', pop).onclick = back; return; }
+    const parts = r.parts.filter((x) => x.bytes > 0);
+    const rows = parts.map((x) => `<label class="sp-pick"><span class="sq-check"><input type="checkbox" data-part="${x.part}" ${x.part === 'scratch' ? 'checked' : ''}></span><span class="sp-pick-text"><b>${esc(SPACE_CLEAR[x.part][0])}</b><small>${esc(SPACE_CLEAR[x.part][1])}</small></span><span class="sp-pick-size">${mbText(x.bytes)}<small>${x.files.toLocaleString()} file${x.files === 1 ? '' : 's'}</small></span></label>`).join('');
+    pop.innerHTML = `<div class="sp-head"><b>Clear the agent's folder</b><small>Tick what to remove from <code>.quorx/</code> in “${esc(projectOf(c)?.name || c.projectId)}”</small></div>
+      ${parts.length ? `<div class="sp-picks">${rows}</div>` : '<p class="sp-note">Nothing here can be cleared: what is left is your notes, attached documents and settings.</p>'}
+      ${r.busy ? '<p class="sp-warn">A reply is running in this project. Wait for it to end, or stop it, then clear.</p>' : ''}
+      <p class="sp-warn">⚠ Command snapshots are deleted. Everything else goes to the Windows Recycle Bin, so you can still restore it from there until it is emptied. Your project's own files, notes, attached documents and settings are never touched.</p>
+      <div class="sp-acts"><button type="button" class="ghost sp-back">Back</button><button type="button" class="sp-go danger" disabled>Clear</button></div>`;
+    const go = $('.sp-go', pop), boxes = [...pop.querySelectorAll('input[data-part]')];
+    const upd = () => {
+      const picked = parts.filter((x) => boxes.find((b) => b.dataset.part === x.part)?.checked);
+      const bytes = picked.reduce((a, x) => a + x.bytes, 0);
+      go.disabled = !picked.length || r.busy;
+      go.textContent = picked.length ? `Clear ${mbText(bytes)}` : 'Clear';
+      return picked;
+    };
+    boxes.forEach((b) => { b.onchange = upd; });
+    upd();
+    $('.sp-back', pop).onclick = back;
+    go.onclick = async () => {
+      const picked = upd();
+      if (!picked.length) return;
+      go.disabled = true; go.textContent = 'Clearing…';
+      const res = await postJ('/api/agent-space/clear', { projectId: c.projectId, parts: picked.map((x) => x.part), keep });
+      if (res?.error) { go.textContent = 'Not cleared'; return uiAlert(`Not cleared: ${res.error}`); }
+      const freed = (res.results || []).reduce((a, x) => a + (x.bytes || 0), 0), left = (res.results || []).reduce((a, x) => a + (x.skipped?.length || 0), 0);
+      done(`Freed ${mbText(freed)}.${left ? ` ${left} item${left === 1 ? ' was' : 's were'} in use and stayed.` : ''}`);
+    };
+  });
+}
+async function checkSpace(c, force, note = '') {
+  if (!c?.el) return;
+  const missing = projectOf(c)?.missing || projectOf(c)?.needsFolder;
+  // Measured at most every 30 s per project; every chat header (drawn afresh when a chat opens) shows the last measure.
+  const at = (G.spaceAt ||= {}), last = (G.spaceLast ||= {});
+  if (!missing && (force || !last[c.projectId] || Date.now() - (at[c.projectId] || 0) >= 30e3)) {
+    at[c.projectId] = Date.now();
+    const got = await getJ(`/api/agent-space?project=${encodeURIComponent(c.projectId)}`);
+    if (got && !got.error) last[c.projectId] = got;
+  }
+  // The header as it is now (opening or switching chats draws it again while the size is measured).
+  const btn = c.el && $('.ch-space', c.el.root), pop = c.el && $('.space-pop', c.el.root);
+  if (!btn || !pop) return;
+  const hide = () => { btn.hidden = true; pop.hidden = true; btn.setAttribute('aria-expanded', 'false'); };
+  const r = last[c.projectId];
+  if (missing || !r) return hide();
   const limit = (Number(G.settings.agentSpaceMB) || 500) * 1e6;
-  const seen = (G.spaceSeen || {})[c.projectId] || 0;
-  const old = $('.space-notice', c.el.root);
-  if (r.total <= limit || r.total <= seen * 1.2) { old?.remove(); return; }
+  const over = r.total > limit;
+  btn.hidden = false;
+  btn.classList.toggle('over', over);
+  btn.setAttribute('aria-label', `The agent's folder: ${mbText(r.total)}${over ? ', over your limit' : ''}`);
+  btn.title = `The agent's folder (.quorx) uses ${mbText(r.total)} of your ${mbText(limit)} limit${over ? ': over it' : ''}. Click for details`;
   const p = projectOf(c);
-  const part = (n) => r.parts.find((x) => x.name === n) || { bytes: 0, files: 0 };
-  const LABEL = { scratch: 'research & scratch', checkpoints: 'undo history', trash: 'deleted files', other: 'notes & other' };
-  const html = `<div class="budget-notice space-notice" role="status">
-    <span class="bn-ico">🧹</span>
-    <div class="bn-text"><b>The agent's folder in “${esc(p?.name || c.projectId)}” uses ${mbText(r.total)}</b> (your limit: ${mbText(limit)})
-      <small>${r.parts.filter((x) => x.bytes).map((x) => `${LABEL[x.name]} ${mbText(x.bytes)}`).join(' · ')} · in <code>.quorx/</code>, never committed</small></div>
-    <span class="sn-acts">
-      ${part('scratch').bytes ? `<button type="button" data-clear="scratch" title="Delete the agent's research scripts, downloads and test files (${part('scratch').files} files)">Clear scratch</button>` : ''}
-      ${part('trash').bytes ? '<button type="button" data-clear="trash" title="Files the agent deleted are kept here; empty it">Empty agent trash</button>' : ''}
-      ${part('checkpoints').bytes ? '<button type="button" data-clear="checkpoints" title="Keeps Undo for the ${Number(G.settings?.undoKeep) || 10} newest replies; older replies can no longer be undone">Trim undo history</button>' : ''}
-    </span>
-    <button type="button" class="bn-x" title="Keep it: don't ask again until it grows" aria-label="Keep">✕</button></div>`;
-  if (old) old.outerHTML = html; else $('.chat-head', c.el.root).insertAdjacentHTML('afterend', html);
-  const el = $('.space-notice', c.el.root);
-  for (const b of el.querySelectorAll('[data-clear]')) b.onclick = async () => {
-    const what = b.dataset.clear, x = part(what);
-    const msg = { scratch: `Delete the agent's scratch files in this project (${x.files} files, ${mbText(x.bytes)})?`, trash: `Permanently delete the files the agent moved to its trash (${mbText(x.bytes)})?`, checkpoints: `Remove undo history older than the ${Number(G.settings?.undoKeep) || 10} newest replies? Those replies can no longer be undone.` }[what];
-    if (!await uiConfirm(`${msg}\nThis can't be undone.`)) return;
-    const res = await postJ('/api/agent-space/clear', { projectId: c.projectId, what, keep: Number(G.settings?.undoKeep) || 10 });
-    if (res.error) return uiAlert(res.error);
-    checkSpace(c, true);
+  const LABEL = { scratch: 'research & scratch', checkpoints: 'undo history', trash: 'deleted files', objects: 'command snapshots', other: 'notes & other' };
+  const summary = (note = '') => {
+    pop.innerHTML = `<div class="sp-head"><b>The agent's folder in “${esc(p?.name || c.projectId)}” uses ${mbText(r.total)}</b><small>${over ? `<span class="sp-over">Over your limit of ${mbText(limit)}</span>` : `Within your limit of ${mbText(limit)}`} · in <code>.quorx/</code>, never committed</small></div>
+      ${note ? `<p class="sp-done" role="status">${esc(note)}</p>` : ''}
+      ${r.parts.some((x) => x.bytes) ? `<div class="sp-parts">${r.parts.filter((x) => x.bytes).sort((a, b) => b.bytes - a.bytes).map((x) => `<div class="sp-row"><span>${esc(LABEL[x.name] || x.name)}</span><b>${mbText(x.bytes)}</b></div>`).join('')}</div>` : ''}
+      <p class="sp-note">The agent's own working folder: not part of your git repo or your project's files. Clearing it removes the research and undo copies kept here, so the agent may need to redo some work. Your chats stay.</p>
+      <p class="sp-note">${over ? 'The 🧹 glows until it is back under the limit. ' : ''}<button type="button" class="sp-link sp-limit">Change the limit</button></p>
+      <div class="sp-acts"><button type="button" class="ghost sp-cancel">Cancel</button><button type="button" class="sp-open">📂 Open .quorx</button><button type="button" class="sp-clear">🧹 Clear…</button></div>`;
+    $('.sp-cancel', pop).onclick = close;
+    $('.sp-open', pop).onclick = () => { close(); openFolder(c.projectId, '.quorx'); };
+    // Straight to the limit: Storage, scrolled to the Agent folder card, which flashes once.
+    $('.sp-limit', pop).onclick = () => {
+      close(); openSettings('storage');
+      const toCard = (flash) => {
+        const card = [...document.querySelectorAll('#settings .st-card')].find((x) => /^Agent folder/.test(x.querySelector('.st-card-title')?.textContent || ''));
+        if (!card) return;
+        card.scrollIntoView({ block: 'center' });
+        if (flash) { card.classList.remove('sx-flash'); void card.offsetWidth; card.classList.add('sx-flash'); }
+      };
+      setTimeout(() => toCard(true), 120);
+      // The sizes above it are measured after the page opens and push it down: follow it once they are drawn.
+      const sto = $('#stStorage');
+      if (sto) { const mo = new MutationObserver(() => { mo.disconnect(); requestAnimationFrame(() => toCard(false)); }); mo.observe(sto, { childList: true }); setTimeout(() => mo.disconnect(), 15e3); }
+    };
+    // After clearing: measure again and show the new sizes with what was freed.
+    $('.sp-clear', pop).onclick = () => spaceClearView(c, pop, () => summary(), (msg) => checkSpace(c, true, msg));
   };
-  $('.bn-x', el).onclick = () => { (G.spaceSeen ??= {})[c.projectId] = r.total; savePrefs(); el.remove(); };
+  // One click-outside listener per popover, whichever checkSpace drew it last.
+  const close = () => { pop.hidden = true; btn.setAttribute('aria-expanded', 'false'); document.removeEventListener('pointerdown', pop._outside, true); };
+  const open = () => {
+    document.removeEventListener('pointerdown', pop._outside, true);
+    pop._outside = (e) => { if (!pop.contains(e.target) && !btn.contains(e.target)) close(); };
+    pop.hidden = false; btn.setAttribute('aria-expanded', 'true');
+    document.addEventListener('pointerdown', pop._outside, true);
+  };
+  btn.onclick = () => { if (!pop.hidden) return close(); summary(); open(); };
+  if (note) { summary(note); open(); } else if (pop.hidden) summary();
 }
 
 // ---------- 🖥 servers: the project's launch configs, with run / stop / restart / open ----------
@@ -7114,6 +7506,26 @@ function termLocal(t, u, label, lines) {
   for (const text of lines) termApply(t, { kind: 'out', job, text, stream: 'note', at: Date.now() });
   termApply(t, { kind: 'end', job, code: 0, at: Date.now() });
 }
+// ✕ in the Terminal header is the emergency stop: it lists everything it will close, and after you confirm, every
+// command, job, server and agent terminal in the project stops, your terminal tabs close (their shells end), a reply
+// working in this project stops, and the pane goes back. Files stay as they are.
+async function closeAllTerm(c) {
+  const t = termState(c.projectId);
+  const r = await getJ(`/api/running?project=${encodeURIComponent(c.projectId)}`).catch(() => null);
+  const items = (r?.items || []).filter((x) => x.kind !== 'your-term');
+  const replies = [...G.open.values()].filter((h) => (h.projectId || 'scratch') === (c.projectId || 'scratch') && h.running);
+  const lines = [
+    ...replies.map((h) => `• 🤖 The agent's reply in “${clip(h.title || 'a chat', 40)}”`),
+    ...items.map((x) => `• ${x.kind === 'agent-term' ? '🤖 ' : ''}${RUN_KIND[x.kind] || x.kind}: ${clip(x.label || '', 60)}`),
+    ...t.terms.map((u) => `• Your terminal: ${u.name}`),
+  ];
+  if (!(await uiConfirm(`Close the terminal and stop everything in it?\n${lines.join('\n') || 'Nothing is running.'}\nYour files stay as they are.`, { ok: 'Close all', danger: true }))) return;
+  for (const h of replies) h.running?.abort();
+  if (items.length) await postJ('/api/running/stop-all', { projectId: c.projectId }).catch(() => {});
+  for (const u of t.terms) { postJ('/api/term/close', { projectId: t.projectId, tab: u.id }).catch(() => {}); dropXterm(t.projectId, u.id, true); }
+  closeTermStream(); G.term = null;
+  G.view.term = false; if (c.srvPop?.inline) closeServers(c); syncLayout(); renderPane();
+}
 const SVG_RUN = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg>';
 function renderTerm(c) {
   const body = $('#paneBody'), bar = $('#appBar');
@@ -7123,9 +7535,9 @@ function renderTerm(c) {
   const sec = (k, ico, label, tip) => `<button type="button" class="tsec ${t.sec === k ? 'on' : ''}" data-sec="${k}" role="tab" aria-selected="${t.sec === k}" title="${tip}">${ico}<span class="tsec-l">${label}</span><span class="tsec-n" hidden></span></button>`;
   bar.innerHTML = `<span class="term-title">${SVG_TERM}<b>Terminal</b></span><span class="dim">${esc(p?.name || c.projectId)}</span>
     <span class="tsecs" role="tablist" aria-label="Terminal sections">${sec('term', SVG_TERM, 'Terminals', 'Your terminals and the live output of every command and server, in panes you can stack')}${sec('run', SVG_RUN, 'Running', 'Everything running in this project (background jobs, commands, servers, terminals), each with a Stop')}${sec('srv', SVG_SERVER, 'Servers', 'This project’s saved servers: run, stop, edit, open')}</span><span class="spacer"></span>
-    ${t.sec === 'term' ? '<button type="button" class="term-share" title="Send what the active pane shows to the chat, with your next message: the text you selected, or the last lines (you can also drag a terminal tab onto the chat)">↪ Send to chat</button><button type="button" class="term-clear" title="Clear the active pane’s finished output (running ones stay)">⌫ Clear output</button>' : t.sec === 'run' ? '<button type="button" class="run-stopall danger" title="Stop every command, background job, server and agent terminal in this project (your terminal tabs stay open)" disabled>■ Stop all</button>' : ''}<button type="button" class="back" title="Close the terminal">✕ Close</button>`;
+    ${t.sec === 'term' ? '<button type="button" class="term-share" title="Send what the active pane shows to the chat, with your next message: the text you selected, or the last lines (you can also drag a terminal tab onto the chat)">↪<span class="tb-l"> Send to chat</span></button><button type="button" class="term-clear" title="Clear the active pane’s finished output (running ones stay)">⌫<span class="tb-l"> Clear output</span></button>' : t.sec === 'run' ? '<button type="button" class="run-stopall danger" title="Stop every command, background job, server and agent terminal in this project (your terminal tabs stay open)" disabled>■<span class="tb-l"> Stop all</span></button>' : ''}<button type="button" class="back" title="Close all: stops every command, server, background job and agent terminal in this project, closes your terminal tabs and stops a reply that is working. Lists them first and asks." aria-label="Close all terminals">✕<span class="tb-l"> Close all</span></button>`;
   for (const b of bar.querySelectorAll('.tsec')) b.onclick = () => { if (t.sec === b.dataset.sec) return; t.sec = b.dataset.sec; termSave(t); renderTerm(c); };
-  $('.back', bar).onclick = () => { G.view.term = false; closeTermStream(); if (c.srvPop?.inline) closeServers(c); syncLayout(); renderPane(); };
+  $('.back', bar).onclick = () => closeAllTerm(c);
   termSecCounts(c);
   termOpenStream(t);
   if (t.sec === 'run') {
@@ -7948,15 +8360,12 @@ setTimeout(checkStale, 1500);
 // the page area. A loop keeps it there, and hides it whenever it would cover something: another pane
 // tab, a dialog (a snapshot stands in), the hidden pane or a phone-sized window.
 const DESK = !!window.ohDesktop?.available;
-// The desktop app run from your QuorX folder (npm run desktop) looks different from the installed one: an amber DEV
-// badge by the name, a thin amber line along the top, and DEV in the window title, so the two are never mixed up.
+// The desktop app run from your QuorX folder (npm run desktop) looks different from the installed one: a thin amber
+// line along the top and DEV in the window title, so the two are never mixed up.
 // Only when the desktop app says so itself (its DEV value: not packaged and a git checkout).
 if (DESK) window.ohDesktop.info().then((i) => { if (i?.dev === true) markDevBuild(); }).catch(() => {});function markDevBuild() {
   document.body.classList.add('dev-build');
   document.title = 'QuorX · DEV';
-  // Inside the name, so it moves with it: on wider windows the name moves from the top bar into the sidebar.
-  const b = $('#brandHome');
-  if (b && !$('.dev-badge')) b.insertAdjacentHTML('beforeend', '<span class="dev-badge" title="Running from your QuorX folder (npm run desktop), not the installed app">DEV</span>');
 }
 function deskStage(t, stage) {
   if (!t.agent && t.opened !== t.url) { t.opened = t.url; t.error = null; window.ohDesktop.open(t.sid, t.url).catch((e) => { t.error = e.message; deskPlace(true); }); }

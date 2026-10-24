@@ -37,7 +37,7 @@ async function pidsOf(jobId) {
   const j = getBackground(jobId);
   if (!j) throw new Error(`no background job ${jobId}: start the app with shell and background: true first`);
   if (j.status !== 'running') throw new Error(`job ${jobId} has ${j.status}${j.code != null ? ` (exit code ${j.code})` : ''}; start the app again`);
-  if (!j.proc?.qxJob) throw new Error('desktop apps can only be reached when the job host is running (⚙ Safety & commands → Stop)');
+  if (!j.proc?.qxJob) throw new Error('desktop apps can only be reached when the job host is running (⚙ Approvals & safety → Stop)');
   const c = await jobCount(j.proc.qxJob);
   if (!c.pids.length) throw new Error(`job ${jobId} has no running processes`);
   return c.pids.map(Number);

@@ -208,7 +208,7 @@ test('a long reply is trimmed, and every result carries the step meter', async (
   const { events, bodies } = await run((body, i) => (i < 6 ? reply('', [['write_file', { path: `f${i}.txt`, content: body20k }]]) : reply('ok')), { settings: { trimAt: 30000 } });
   assert.ok(of(events, 'trimmed').length >= 1);
   assert.match(JSON.stringify(bodies.at(-1).messages), /written earlier; removed/);
-  assert.match(toolResults(bodies[1])[0], /\[steps: 1 of 60 used( · project budget: \$[\d.]+ of \$[\d.]+ used)?\]$/);
+  assert.match(toolResults(bodies[1])[0], /\[steps: 1 of 500 used( · project budget: \$[\d.]+ of \$[\d.]+ used)?\]$/);
 });
 
 test('the wrap-up nudge comes at 80% of the steps', async () => {
@@ -900,6 +900,36 @@ test('a plan over the media budget is turned down before anyone is asked, and ca
   assert.doesNotMatch(d.seen[0].questions[0], /production plan/);
 });
 
+// ⚖️ Deciders off in a chat: no decider is asked; the plan and each paid call wait for you, and no answer skips them.
+const noDeciders = () => { const d = { calls: 0 }; d.fn = async () => { d.calls++; throw new Error('the deciders should not be asked'); }; return d; };
+test('YOLO with the deciders off: the plan and each paid call wait for you, and no answer skips them', async () => {
+  const d = noDeciders(), made = [];
+  const { events, bodies } = await run((body, i) => [
+    reply('', [['media_plan', { why: 'x', items: [{ kind: 'image', count: 1, what: 'a frame' }] }]]),
+    reply('', [['imagine', { prompt: 'frame one', why: 'x' }]]),
+    reply('Done.'),
+  ][i], { settings: planSettings({ deciders: false, yoloWaitSecs: 1 }), ensemble: d.fn, generateImage: async (b) => { made.push(b.prompt); return { images: [PLAN_PNG], usage: { cost: 0.01 }, ms: 1 }; } });
+  assert.equal(d.calls, 0, 'no decider was asked');
+  const cards = of(events, 'approval').filter((e) => e.wait);
+  assert.deepEqual(cards.map((e) => [e.tool, e.wait.then]), [['media_plan', 'skip-off'], ['imagine', 'skip-off']]);
+  assert.match(cards[0].why, /deciders are off in this chat/);
+  assert.deepEqual(of(events, 'approval_done').map((x) => [x.by, x.approve]), [['timeout', false], ['timeout', false]]);
+  assert.match(toolResults(bodies[1]).at(-1), /Nobody did not approve this plan.*deciders are off/s);
+  assert.deepEqual(made, []);
+});
+test('YOLO with the deciders off and paid media set to run: no vote, budget caps still apply', async () => {
+  const d = noDeciders(), made = [];
+  const { events } = await run((body, i) => [
+    reply('', [['media_plan', { why: 'x', items: [{ kind: 'image', count: 1, what: 'a frame' }] }]]),
+    reply('', [['imagine', { prompt: 'frame one', why: 'x' }]]),
+    reply('', [['imagine', { prompt: 'frame two', why: 'x' }]]),
+    reply('Done.'),
+  ][i], { settings: planSettings({ deciders: false, decidersOff: { media: 'run' } }), ensemble: d.fn, generateImage: async (b) => { made.push(b.prompt); return { images: [PLAN_PNG], usage: { cost: 0.01 }, ms: 1 }; } });
+  assert.equal(d.calls, 0, 'no decider was asked');
+  assert.deepEqual(of(events, 'approval_done').map((x) => x.by), ['deciders off', 'plan', 'deciders off']);
+  assert.deepEqual(made, ['frame one', 'frame two']);
+});
+
 test('a plan item of a kind that is switched off is refused with the kinds that are on', async () => {
   const { bodies, events } = await run((body, i) => [
     reply('', [['media_plan', { why: 'x', items: [{ kind: 'video', count: 1, what: 'clip' }] }]]),
@@ -1220,7 +1250,7 @@ test('when the steps run out while the plan has open items, the reply keeps goin
   let b = 0;
   const { events, bodies } = await run(() => (b++ === 0
     ? reply('', [['plan', { spec: 'A page.', items: [{ text: 'Build it', status: 'doing' }, { text: 'Polish it', status: 'todo' }] }]])
-    : reply('', [['list_files', {}]])), { settings: { maxSteps: 10, continueRounds: 1 } });
+    : reply('', [['list_files', {}]])), { settings: { maxSteps: 10, continueRounds: 1, moreSteps: 10 } });
   const extra = events.filter((e) => e.t === 'note' && /more steps \(round 1 of 1\)/.test(e.msg));
   assert.equal(extra.length, 1, 'one extra round');
   assert.ok(bodies.length > 10 && bodies.length <= 20, `ran past the first limit (${bodies.length} calls)`);

@@ -1233,7 +1233,8 @@ const RANK = { allow: 0, ask: 1, deny: 2 };
  *        yolo: { check: { web, inline, build, install, unknown, reads }, external, opaque, outside, global } }
  *        check: what YOLO sends to the deciders instead of running it (left out: every one is checked, the careful default);
  *        external, opaque, outside, global: what the deciders may approve instead of asking you. See safety.js yoloOf().
- * Returns { verdict: 'allow'|'ask'|'deny', who: 'user'|'deciders'|null, why, decidedBy, segments: [...], hint? }.
+ * Returns { verdict: 'allow'|'ask'|'deny', who: 'user'|'deciders'|null, why, decidedBy, segments: [...], hint?, standIn }.
+ * standIn: the deciders vote on it in place of the user (without them it would pause for you), not as a check first.
  */
 export async function decide(line, ctx) {
   let shell = ctx.shell || (WIN ? 'powershell' : 'bash');
@@ -1251,7 +1252,7 @@ export async function decide(line, ctx) {
   }
   // Commands a script runs (see "scripts") join the queue just before the command that runs the script.
   const queue = [...split.segs], written = [];
-  // What YOLO runs on its own, and what it checks with the deciders first (⚙ Safety & commands → ⚡ YOLO). Strict is
+  // What YOLO runs on its own, and what it checks with the deciders first (⚙ Approvals & safety → ⚡ YOLO). Strict is
   // none of these: anything that isn't read-only asks you.
   const yolo = ctx.mode === 'yolo', Y = ctx.yolo || {};
   const check = (k) => !yolo || !Y.check || Y.check[k] !== false;
@@ -1270,7 +1271,8 @@ export async function decide(line, ctx) {
     written.push(...paths.filter((p) => p.kind === 'write' && p.resolved).map((p) => p.resolved));
     const seg = { text: s.text, program: s.program, cls: k.cls, why: k.why, global: !!k.global, paths, rule: null, suggest: suggestions(s), ...(s.via ? { via: s.via } : {}) };
     if (!s.ctx) trackCd(s, c);
-    let v = 'allow', who = null, by = `class:${k.cls}`, why = k.why;
+    // stand: the deciders vote in place of the user (without them it would pause for you), not as a check first.
+    let v = 'allow', who = null, by = `class:${k.cls}`, why = k.why, stand = false;
     const writes = paths.filter((p) => p.kind !== 'read'), reads = paths.filter((p) => p.kind === 'read');
     const blocked = writes.find((p) => p.zone === 'blocked' || p.zone === 'protected');
     const unknownPath = paths.find((p) => p.zone === 'unknown');
@@ -1291,21 +1293,21 @@ export async function decide(line, ctx) {
       const many = paths.reduce((n, p) => n + (p.resolved ? countMatches(p.resolved) : 0), 0);
       if (recursive || many > 20) { v = 'deny'; by = 'code'; why = `it deletes ${recursive ? 'a whole folder' : `${many} files`}`; seg.hint = 'Use delete_file instead: it moves files and folders to .quorx/trash, so the user can get them back.'; }
     }
-    else if (unknownPath) { v = 'ask'; who = Y.opaque ? 'deciders' : 'user'; by = 'path'; why = `a path it touches (${unknownPath.raw}) ${unknownPath.why}`; }
+    else if (unknownPath) { v = 'ask'; who = Y.opaque ? 'deciders' : 'user'; stand = true; by = 'path'; why = `a path it touches (${unknownPath.raw}) ${unknownPath.why}`; }
     // A read outside the project the user wants checked goes to the deciders; a write or delete there pauses for you.
-    else if (outside && !readOnlyOutside) { v = 'ask'; who = (outside.kind === 'read' || Y.outside) ? 'deciders' : 'user'; risk = outside.kind === 'read' ? null : 'warn'; by = 'path'; why = `it ${outside.kind === 'write' ? 'writes' : outside.kind === 'read' ? 'reads' : 'deletes or moves'} outside the project (${outside.resolved})`; }
-    else if (k.cls === 'opaque') { v = 'ask'; who = Y.opaque && !k.ends ? 'deciders' : 'user'; risk = k.ends ? 'warn' : null; why = k.why || 'QuorX can’t check it'; }
+    else if (outside && !readOnlyOutside) { v = 'ask'; who = (outside.kind === 'read' || Y.outside) ? 'deciders' : 'user'; stand = outside.kind !== 'read'; risk = outside.kind === 'read' ? null : 'warn'; by = 'path'; why = `it ${outside.kind === 'write' ? 'writes' : outside.kind === 'read' ? 'reads' : 'deletes or moves'} outside the project (${outside.resolved})`; }
+    else if (k.cls === 'opaque') { v = 'ask'; who = Y.opaque && !k.ends ? 'deciders' : 'user'; stand = true; risk = k.ends ? 'warn' : null; why = k.why || 'QuorX can’t check it'; }
     // What changes a remote, installs for the whole computer or throws work away pauses for you (amber card).
-    else if (k.cls === 'external') { v = 'ask'; who = Y.external ? 'deciders' : 'user'; risk = 'warn'; }
+    else if (k.cls === 'external') { v = 'ask'; who = Y.external ? 'deciders' : 'user'; stand = true; risk = 'warn'; }
     else if (k.cls === 'discard') { v = 'ask'; who = 'user'; risk = 'warn'; }
-    else if (k.cls === 'install' && k.global) { v = 'ask'; who = Y.global && !k.sudo ? 'deciders' : 'user'; risk = 'warn'; }
+    else if (k.cls === 'install' && k.global) { v = 'ask'; who = Y.global && !k.sudo ? 'deciders' : 'user'; stand = true; risk = 'warn'; }
     // Web reads, readable one-liners, builds, project scripts, local installs and plain unknown commands run, unless
     // YOLO checks that kind first; snapshots make them undoable. An unknown command with a named concern (docker,
     // macOS defaults, a cmdlet that can change things) always goes to the deciders.
     else if (['net', 'build', 'install', 'unknown'].includes(k.cls)) {
       const kind = k.cls === 'net' ? 'web' : k.inline ? 'inline' : k.cls;
       if (!check(kind) && !(k.cls === 'unknown' && k.why)) by = `yolo:${kind}`;
-      else { v = 'ask'; who = 'deciders'; why = why || (k.cls === 'net' ? `${s.rawProgram} reaches the web` : k.cls === 'unknown' ? 'no rule covers this command' : `no rule allows ${seg.suggest.prefix.replace(/\*$/, '')} yet`); }
+      else { v = 'ask'; who = 'deciders'; stand = k.cls === 'unknown' && !!k.why; why = why || (k.cls === 'net' ? `${s.rawProgram} reaches the web` : k.cls === 'unknown' ? 'no rule covers this command' : `no rule allows ${seg.suggest.prefix.replace(/\*$/, '')} yet`); }
     }
     // Rules
     if (v !== 'deny' || (by !== 'path' && k.cls !== 'never' && by !== 'code')) {
@@ -1321,7 +1323,7 @@ export async function decide(line, ctx) {
     }
     if (ctx.mode !== 'yolo' && v === 'ask') who = 'user';
     if (s.viaWhy) why = why ? `${why} (${s.viaWhy})` : s.viaWhy;
-    Object.assign(seg, { verdict: v, who, decidedBy: by, why, ...(v === 'ask' && risk ? { risk } : {}) });
+    Object.assign(seg, { verdict: v, who, decidedBy: by, why, ...(v === 'ask' && risk ? { risk } : {}), ...(v === 'ask' && who === 'deciders' && stand ? { standIn: true } : {}) });
     segments.push(seg);
   }
   // The strictest command decides; one that needs you makes the whole line need you.
@@ -1329,6 +1331,7 @@ export async function decide(line, ctx) {
   for (const s of segments) if (RANK[s.verdict] > RANK[top.verdict] || (s.verdict === top.verdict && s.who === 'user' && top.who !== 'user')) top = s;
   return { verdict: top.verdict, who: top.verdict === 'ask' ? (segments.some((s) => s.verdict === 'ask' && s.who === 'user') ? 'user' : 'deciders') : null,
     why: top.why, decidedBy: top.decidedBy, hint: segments.find((s) => s.hint)?.hint, segments, shell,
+    standIn: segments.some((s) => s.standIn),
     risk: segments.reduce((r, s) => ((RISK[s.risk] || 0) > (RISK[r] || 0) ? s.risk : r), null) };
 }
 

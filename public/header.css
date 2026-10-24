@@ -135,4 +135,4 @@
 .dir-a-head .dir-a-actions-sep { display: none !important; }
 .dir-a-head .dir-a-identity { flex: 1 1 auto; min-width: 0; }
 .dir-a-head .dir-a-state-badge { margin-left: auto; }
-.dir-a-head .ch-more-pop, .dir-a-head .usage-pop { left: 10px; right: auto; }
+.dir-a-head .ch-more-pop, .dir-a-head .usage-pop, .dir-a-head .space-pop { left: 10px; right: auto; }

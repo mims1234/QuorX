@@ -28,10 +28,10 @@ function makeHome() {
   fs.mkdirSync(path.join(data, 'chats'), { recursive: true });
   fs.writeFileSync(path.join(data, 'projects.json'), JSON.stringify([
     { id: 'scratch', name: 'Scratch', path: scratch, created: 1 },
-    { id: 'p1', name: 'App', path: proj, created: 1 },
-    { id: 'p2', name: 'Gone', path: path.join(proj, 'no-such-folder'), created: 1 },
+    { id: 'p01', name: 'App', path: proj, created: 1 },
+    { id: 'p02', name: 'Gone', path: path.join(proj, 'no-such-folder'), created: 1 },
   ]));
-  write(path.join(data, 'chats', 'c1.json'), JSON.stringify({ id: 'c1', title: 't', projectId: 'p1', agent: { messages: [{ role: 'user', content: `see /blob/${BLOB_USED}` }] } }));
+  write(path.join(data, 'chats', 'c1.json'), JSON.stringify({ id: 'c1', title: 't', projectId: 'p01', agent: { messages: [{ role: 'user', content: `see /blob/${BLOB_USED}` }] } }));
   age(write(path.join(data, 'blobs', BLOB_USED), 'used'), 3 * 3600e3);
   age(write(path.join(data, 'blobs', BLOB_FREE), 'free'), 3 * 3600e3);
   write(path.join(data, 'trash', `old-${stamp(Date.now() - 40 * DAY)}.json`), '{}');
@@ -74,7 +74,7 @@ async function quorx(home) {
   return { call, stop: () => new Promise((r) => { child.once('exit', r); child.kill(); }) };
 }
 
-test('Storage: measures every part, clears each one, and leaves what it only shows', async () => {
+test('Storage: measures every part, clears QuorX\'s own, and never touches a project folder', async () => {
   const h = makeHome();
   const q = await quorx(h.home);
   try {
@@ -85,18 +85,20 @@ test('Storage: measures every part, clears each one, and leaves what it only sho
     assert.equal(by.oldlogs.files, 2, 'the rotated log and the benchmark');
     assert.equal(by.logs.how, null, 'current logs are only shown');
     assert.equal(by.trash.count, 3, 'two chats and one skill');
-    assert.equal(by['proj:p1:checkpoints'].count, 2, 'all but the newest one kept');
-    assert.ok(by['proj:p1:scratch'].bytes >= 2e6);
-    assert.equal(by['proj:p1:uploads'].how, null);
-    assert.equal(by['proj:p2'].missing, true);
+    assert.equal(by['proj:p01:checkpoints'].count, 2, 'all but the newest one kept');
+    assert.ok(by['proj:p01:scratch'].bytes >= 2e6);
+    assert.ok(m.items.filter((x) => x.group === 'projects').every((x) => x.how === null), 'project parts are only shown');
+    assert.equal(by['proj:p02'].missing, true);
     assert.ok(m.items.every((x) => !x.project || x.project.id !== 'scratch' || x.bytes === 0), 'the pinned scratch folder is empty');
 
     // A part that grew since it was shown is left, with its new size.
-    const grew = (await q.call('/api/storage/clear', { items: [{ id: 'proj:p1:scratch', expect: 0 }], keep: 1 })).body.results[0];
+    write(path.join(h.data, 'blobs', `${'ef'.repeat(32)}.png`), Buffer.alloc(3e6));
+    age(path.join(h.data, 'blobs', `${'ef'.repeat(32)}.png`), 3 * 3600e3);
+    const grew = (await q.call('/api/storage/clear', { items: [{ id: 'blobs', expect: by.blobs.bytes }], keep: 1 })).body.results[0];
     assert.equal(grew.changed, true);
-    assert.ok(fs.existsSync(path.join(h.q, 'scratch', 'big.bin')));
+    fs.rmSync(path.join(h.data, 'blobs', `${'ef'.repeat(32)}.png`));
 
-    const ids = ['blobs', 'runs', 'shots', 'oldlogs', 'trash', 'proj:p1:scratch', 'proj:p1:checkpoints', 'proj:p1:objects'];
+    const ids = ['blobs', 'runs', 'shots', 'oldlogs', 'trash'];
     const r = (await q.call('/api/storage/clear', { items: ids.map((id) => ({ id, expect: by[id].bytes })), keep: 1 })).body;
     for (const x of r.results) assert.ok(!x.error && !x.changed && !x.skipped.length, `${x.id}: ${JSON.stringify(x)}`);
     assert.ok(!fs.existsSync(path.join(h.data, 'blobs', BLOB_FREE)));
@@ -104,13 +106,13 @@ test('Storage: measures every part, clears each one, and leaves what it only sho
     assert.ok(!fs.existsSync(path.join(h.data, 'runs', 'r-old.jsonl')) && fs.existsSync(path.join(h.data, 'runs', 'r-new.jsonl')));
     assert.deepEqual(fs.readdirSync(path.join(h.home, 'logs')).sort(), ['audit.jsonl', 'check-shots', 'storage.jsonl']);
     assert.deepEqual(fs.readdirSync(path.join(h.data, 'trash', 'skills')), []);
-    assert.deepEqual(fs.readdirSync(path.join(h.q, 'checkpoints')), ['r3'], 'the newest undo stays');
-    assert.ok(!fs.existsSync(path.join(h.q, 'objects')) && !fs.existsSync(path.join(h.q, 'snapindex.json')));
-    for (const keep of ['uploads/doc.pdf', 'log.md', 'trash']) assert.ok(fs.existsSync(path.join(h.q, keep)), `${keep} stays`);
     assert.ok(fs.existsSync(path.join(h.data, 'chats', 'c1.json')) && fs.existsSync(path.join(h.data, 'app-key')));
 
-    const bad = (await q.call('/api/storage/clear', { items: [{ id: 'logs' }, { id: 'proj:p1:uploads' }, { id: 'proj:p2:scratch' }, { id: '../x' }] })).body.results;
-    assert.deepEqual(bad.map((x) => !!x.error), [true, true, true, true]);
+    // Nothing in a project folder can be cleared, by any name.
+    const bad = (await q.call('/api/storage/clear', { items: ['logs', 'proj:p01:scratch', 'proj:p01:trash', 'proj:p01:checkpoints', 'proj:p01:objects', 'proj:p01:uploads', 'proj:p02:scratch', '../x'].map((id) => ({ id })) })).body.results;
+    assert.ok(bad.every((x) => x.error), JSON.stringify(bad));
+    assert.equal((await q.call('/api/storage/downloads')).status, 404, 'Downloads is never looked at');
+    for (const keep of ['scratch/big.bin', 'checkpoints/r1', 'checkpoints/r2', 'checkpoints/r3', 'objects/aa/bb', 'snapindex.json', 'uploads/doc.pdf', 'log.md', 'trash']) assert.ok(fs.existsSync(path.join(h.q, keep)), `${keep} stays`);
 
     const log = (await q.call('/api/storage/log')).body;
     assert.ok(log.length >= ids.length && log.every((x) => !x.auto));
@@ -129,15 +131,34 @@ test('Storage: measures every part, clears each one, and leaves what it only sho
   } finally { await q.stop(); }
 });
 
-test('Compact chats moves pictures out of chat files, and old installers in Downloads go only when picked', async () => {
+test('🧹 in a chat header: shows what each part would free, clears only the ticked ones, never your own files', async () => {
+  const h = makeHome();
+  const q = await quorx(h.home);
+  try {
+    const pre = (await q.call('/api/agent-space/clear?project=p01&keep=1')).body;
+    const by = Object.fromEntries(pre.parts.map((x) => [x.part, x]));
+    assert.deepEqual(Object.keys(by).sort(), ['checkpoints', 'objects', 'scratch', 'trash'], 'only these four are offered');
+    assert.ok(by.scratch.bytes >= 2e6);
+    assert.equal(by.checkpoints.count, 2, 'all but the newest undo');
+    assert.equal(pre.busy, false);
+    assert.match((await q.call('/api/agent-space/clear', { projectId: 'p01', parts: ['uploads', 'index', '../x'] })).body.error, /nothing picked/);
+    const r = (await q.call('/api/agent-space/clear', { projectId: 'p01', parts: ['scratch', 'checkpoints', 'uploads'], keep: 1 })).body;
+    assert.deepEqual(r.results.map((x) => x.part), ['scratch', 'checkpoints']);
+    assert.ok(r.results.every((x) => !x.skipped.length), JSON.stringify(r));
+    assert.ok(!fs.existsSync(path.join(h.q, 'scratch', 'big.bin')));
+    assert.deepEqual(fs.readdirSync(path.join(h.q, 'checkpoints')), ['r3'], 'the newest undo stays');
+    for (const keep of ['trash', 'objects/aa/bb', 'snapindex.json', 'uploads/doc.pdf', 'log.md']) assert.ok(fs.existsSync(path.join(h.q, keep)), `${keep} stays (not ticked, or never offered)`);
+    assert.match((await q.call('/api/agent-space/clear', { projectId: 'p02', parts: ['scratch'] })).body.error, /not on this computer/);
+    assert.ok((await q.call('/api/storage/log')).body.some((x) => x.id === 'proj:p01:scratch' && !x.auto), 'logged as yours');
+  } finally { await q.stop(); }
+});
+
+test('Compact chats moves pictures out of chat files', async () => {
   const h = makeHome();
   const png = `data:image/png;base64,${crypto.randomBytes(30000).toString('base64')}`;
-  const chat = { id: 'old1', title: 'Pictures', projectId: 'p1', created: 5, updated: 7, rev: 'r-old', agent: { setup: {}, messages: [{ role: 'user', content: 'draw' }], artifacts: [{ id: 'a1', kind: 'image', title: 'one', url: png }, { id: 'a2', kind: 'image', title: 'same again', url: png }] } };
+  const chat = { id: 'old1', title: 'Pictures', projectId: 'p01', created: 5, updated: 7, rev: 'r-old', agent: { setup: {}, messages: [{ role: 'user', content: 'draw' }], artifacts: [{ id: 'a1', kind: 'image', title: 'one', url: png }, { id: 'a2', kind: 'image', title: 'same again', url: png }] } };
   fs.writeFileSync(path.join(h.data, 'chats', 'old1.json'), JSON.stringify(chat));
   const before = fs.statSync(path.join(h.data, 'chats', 'old1.json')).size;
-  const dl = tempDir('qx-downloads-');
-  for (const [n, size] of [['QuorX-Setup-0.2.10.exe', 700], ['QuorX-Store-0.2.10.appx', 900], ['QuorX-Store-0.2.10 (1).appx', 900], ['QuorX-Setup-9.9.9.exe', 800], ['QuorX Installer.exe', 300], ['quorx-backup-2026-10-21.zip', 50], ['notes.txt', 10]]) write(path.join(dl, n), Buffer.alloc(size));
-  process.env.QX_DOWNLOADS = dl;
   const q = await quorx(h.home);
   try {
     const by = Object.fromEntries((await q.call('/api/storage')).body.items.map((x) => [x.id, x]));
@@ -155,30 +176,19 @@ test('Compact chats moves pictures out of chat files, and old installers in Down
     const blob = fs.readFileSync(path.join(h.data, 'blobs', urls[0].slice(6)));
     assert.equal(`data:image/png;base64,${blob.toString('base64')}`, png, 'the picture is exactly the one it was');
     assert.equal((await q.call('/api/storage')).body.items.find((x) => x.id === 'compact').how, null, 'nothing left to compact');
-
-    const scan = (await q.call('/api/storage/downloads')).body;
-    const f = Object.fromEntries(scan.files.map((x) => [x.name, x]));
-    assert.deepEqual(Object.keys(f).sort(), ['QuorX Installer.exe', 'QuorX-Setup-0.2.10.exe', 'QuorX-Setup-9.9.9.exe', 'QuorX-Store-0.2.10 (1).appx', 'QuorX-Store-0.2.10.appx'], 'installers only: no backup, nothing else');
-    assert.equal(f['QuorX-Setup-9.9.9.exe'].newer, true); assert.equal(f['QuorX-Setup-9.9.9.exe'].old, false);
-    assert.equal(f['QuorX Installer.exe'].old, false, 'no version: not ticked');
-    assert.equal(f['QuorX-Store-0.2.10 (1).appx'].copy, true);
-    assert.equal(f['QuorX-Setup-0.2.10.exe'].old, true);
-    const gone = (await q.call('/api/storage/downloads', { names: ['QuorX-Setup-0.2.10.exe', 'QuorX-Store-0.2.10 (1).appx', 'notes.txt', '..\\x.exe'] })).body;
-    assert.equal(gone.removed, 2); assert.equal(gone.notListed, 2); assert.equal(gone.bytes, 1600);
-    assert.deepEqual(fs.readdirSync(dl).sort(), ['QuorX Installer.exe', 'QuorX-Setup-9.9.9.exe', 'QuorX-Store-0.2.10.appx', 'notes.txt', 'quorx-backup-2026-10-21.zip']);
-  } finally { await q.stop(); delete process.env.QX_DOWNLOADS; }
+  } finally { await q.stop(); }
 });
 
-test('Automatic cleanup: trash past its days goes, newer trash and everything else stay', async () => {
+test('Automatic cleanup: QuorX\'s trash past its days goes; newer trash and every project folder stay', async () => {
   const h = makeHome();
   // In this process: OH_HOME is the throwaway home test-home.mjs made, so the fixtures go there.
   const home = process.env.OH_HOME;
   fs.cpSync(h.home, home, { recursive: true });
   const { runRetention, trashedAt } = await import('../server/storage.js');
   const r = await runRetention({ autoClean: true, trashDays: 30, shotKeep: 0, logMaxMB: 50 });
-  assert.equal(r.trashed, 3, 'the old chat, the old skill and the project\'s old agent trash');
+  assert.equal(r.trashed, 2, 'the old chat and the old skill');
   assert.deepEqual(fs.readdirSync(path.join(home, 'data', 'trash')).filter((n) => n.endsWith('.json')).map((n) => n.split('-')[0]), ['new']);
-  assert.deepEqual(fs.readdirSync(path.join(h.q, 'trash')).length, 1);
+  assert.equal(fs.readdirSync(path.join(h.q, 'trash')).length, 2, 'a project\'s agent trash is never touched, however old');
   assert.ok(fs.existsSync(path.join(h.q, 'scratch', 'big.bin')), 'scratch is never cleared by itself');
   assert.equal(fs.readdirSync(path.join(home, 'logs', 'check-shots')).length, 0, 'screenshots past the number kept');
   assert.ok(!fs.existsSync(path.join(home, 'data', 'storage.lock')), 'the lease is given back');

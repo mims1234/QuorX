@@ -1,4 +1,4 @@
-/* The safety layer: the command card, its "Always allow…" choices, and Settings → Safety & commands.
+/* The safety layer: the command card, its "Always allow…" choices, and Settings → Approvals & safety.
    Class chips and buttons look different on purpose: chips are labels (pill, no hover), buttons are square-ish and press. */
 
 /* ---------- the command card ---------- */
@@ -31,7 +31,7 @@
 .sc-warn { font-size: 12px; color: var(--warn); }
 .sc-warn[hidden] { display: none; }
 
-/* ---------- Settings → Safety & commands: rules ---------- */
+/* ---------- Settings → Approvals & safety: rules ---------- */
 .pr { display: grid; gap: 8px; }
 .pr h5 { margin: 8px 0 0; font: 600 12px var(--font-ui); color: var(--text); }
 .pr h5 small { font-weight: 400; color: var(--muted); margin-left: 4px; }
@@ -52,7 +52,7 @@
 .pr-verdict[data-v="ask"] { border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
 .pr-verdict[data-v="deny"] { border-color: color-mix(in srgb, var(--bad) 45%, transparent); }
 
-/* ---------- Settings → Safety & commands: audit log ---------- */
+/* ---------- Settings → Approvals & safety: audit log ---------- */
 .au { display: grid; gap: 2px; max-height: 360px; overflow: auto; }
 .au-row { display: grid; grid-template-columns: 150px 92px minmax(0, 1fr) auto; grid-template-areas: "time kind cmd by" ". . detail detail"; align-items: center; gap: 2px 8px; padding: 4px 6px; border-bottom: 1px solid var(--line); font-size: 12px; }
 .au-row time { grid-area: time; color: var(--muted); font: 11px var(--mono); }
@@ -106,7 +106,7 @@
 .run-else { font-size: 12px; color: var(--muted); padding-top: 4px; border-top: 1px dashed var(--line); }
 #paneTabs [data-tab="run"] .pt-n.busy { color: var(--accent); }
 
-/* ---------- Settings → Safety & commands: the simple top (YOLO in short, your choices) and Advanced ---------- */
+/* ---------- Settings → Approvals & safety: the simple top (YOLO in short, your choices) and Advanced ---------- */
 .sf-short { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; padding: 12px 14px 14px; }
 @media (max-width: 760px) { .sf-short { grid-template-columns: 1fr; } }
 .sf-col { --c: var(--ok); --c-dim: var(--ok-dim); min-width: 0; padding: 10px 12px; border-radius: 10px; border: 1px solid color-mix(in srgb, var(--c) 38%, transparent); border-top-width: 3px; background: var(--c-dim); }

@@ -319,6 +319,19 @@ dialog.pal[open] .pal-box { animation: pal-in var(--dur-menu, .2s) var(--ease-ou
 .sc-cmd { justify-self: start; margin-top: 4px; font: 11.5px var(--mono); padding: 2px 6px; border-radius: 5px; border: 1px solid var(--line); background: var(--surface-inset, var(--bg)); user-select: all; }
 .sc-msg { font-size: 12px; color: var(--accent); } .sc-msg:empty { display: none; } .sc-msg.bad { color: var(--bad); }
 @media (max-width: 560px) { .sc-row { grid-template-columns: 1fr; } }
+/* listFilter (app.js): words narrow the rows, the segmented control (or a dropdown when it doesn't fit) picks a group;
+   rows are only hidden, so their buttons keep working. Shared by Setup check, Skills and any long Settings list. */
+.lf { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.lf-q { flex: 1 1 220px; min-width: 0; height: 32px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--line-strong); background: var(--surface-inset, var(--bg)); color: var(--text); font: 13px var(--font-ui); }
+.lf-q:focus { outline: none; border-color: var(--accent); }
+.lf-seg { flex: 0 1 auto; min-width: 0; max-width: 100%; flex-wrap: nowrap; overflow: hidden; }
+.lf-seg[hidden], .lf-sel[hidden] { display: none !important; }
+.lf-seg small { margin-left: 3px; font: 600 10.5px var(--mono); opacity: .7; }
+.lf-sel { height: 32px; max-width: 100%; }
+.lf .sx-filter-acts { margin-left: auto; }
+#stSetup .sc-row[hidden], #skillList .st-skill-item[hidden] { display: none; }
+.lf:has(.lf-none:not([hidden])) + * { display: none; }
+.lf-none { flex-basis: 100%; margin: 0; padding: 14px; border: 1px dashed var(--line-strong); border-radius: 12px; text-align: center; font-size: 12.5px; color: var(--muted); }
 /* Sign in with OpenRouter: the main way in; pasting a key sits below a divider */
 .kx-signin { display: grid; gap: 8px; }
 .kx-signin-btn { height: 40px; font-size: 13.5px; justify-self: start; padding: 0 18px; }
@@ -651,7 +664,9 @@ dialog.pj-dialog::backdrop { background: rgba(4, 6, 6, .72); backdrop-filter: bl
 .brand { cursor: pointer; }
 
 /* ---------- near-budget notice in the chat area ---------- */
-.budget-notice { --bn: var(--amber, #f59e0b); display: flex; align-items: center; gap: 10px; margin: 8px 12px 0; padding: 9px 10px 9px 12px; border-radius: 10px; border: 1px solid color-mix(in srgb, var(--bn) 45%, transparent); background: color-mix(in srgb, var(--bn) 10%, var(--panel)); }
+/* Icon · text · actions · ✕ in one row; when the notice itself is narrow (a thin chat column, whatever the window), the
+   actions move under the text. */
+.budget-notice { --bn: var(--amber, #f59e0b); container-type: inline-size; display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 6px 10px; margin: 8px 12px 0; padding: 9px 10px 9px 12px; border-radius: 10px; border: 1px solid color-mix(in srgb, var(--bn) 45%, transparent); background: color-mix(in srgb, var(--bn) 10%, var(--panel)); }
 .budget-notice.full { --bn: var(--bad); }
 .bn-ico { font-size: 16px; }
 .bn-text { flex: 1; min-width: 0; display: grid; gap: 3px; }
@@ -663,7 +678,10 @@ dialog.pj-dialog::backdrop { background: rgba(4, 6, 6, .72); backdrop-filter: bl
 .budget-notice.full .bn-raise { color: #fff; }
 .bn-x { width: 26px; height: 26px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }
 .bn-x:hover { background: var(--panel-2); color: var(--text); }
-@media (max-width: 600px) { .budget-notice { flex-wrap: wrap; } .bn-raise { margin-left: 26px; } }
+@container (max-width: 520px) {
+  .budget-notice > .bn-raise { grid-row: 2; grid-column: 2 / 4; justify-self: start; }
+  .budget-notice > .bn-ico, .budget-notice > .bn-x { align-self: start; }
+}
 
 /* 🧰 Tools: models are buttons; the mic row has no switch */
 .cmp-tp-row .tm-pick { border: 1px solid transparent; background: transparent; padding: 1px 6px; border-radius: 6px; cursor: pointer; font: 10.5px var(--mono); color: var(--violet, #a78bfa); max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1838,6 +1856,9 @@ img.shot:hover, img.dsnap:hover, .msg .msg-md img:hover { outline: 2px solid var
 .chat-head .ch-panel.on { color: var(--accent) !important; background: var(--accent-dim) !important; border-color: color-mix(in srgb, var(--accent) 45%, transparent) !important; box-shadow: 0 0 10px -2px var(--accent-glow, rgba(31, 200, 219, .35)); }
 .chat-head .ch-panel.on:hover { box-shadow: 0 0 14px -2px var(--accent-glow, rgba(31, 200, 219, .45)); }
 @media (max-width: 900px) { .chat-head .ch-panel { display: none !important; } }
+/* 🧹 past the agent-folder limit: lit like ◧, in amber (a warning). */
+.chat-head .ch-space.over { color: var(--amber, #f59e0b) !important; background: color-mix(in srgb, var(--amber, #f59e0b) 16%, transparent) !important; border-color: color-mix(in srgb, var(--amber, #f59e0b) 45%, transparent) !important; box-shadow: 0 0 10px -2px color-mix(in srgb, var(--amber, #f59e0b) 45%, transparent); }
+.chat-head .ch-space.over:hover, .chat-head .ch-space.over[aria-expanded="true"] { box-shadow: 0 0 14px -2px color-mix(in srgb, var(--amber, #f59e0b) 60%, transparent); }
 
 /* ---------- home: the top is one compact row (logo + title, then the project and how to start), so more shows below ---------- */
 .landing { padding-top: 16px !important; gap: 12px !important; }
@@ -2709,6 +2730,152 @@ body.dev-build::before { content: ''; position: fixed; left: 0; right: 0; top: 0
 /* Home: the start box holds a draft chat's own message box (every option a chat has), under the project chip. */
 .ld-sbox.has-draft { padding: 8px 8px 8px; gap: 8px; }
 .ld-sbox.has-draft > .ld-sb-row { padding: 0 4px; }
+/* Only the message box inside glows on focus; the start box around it stays plain. */
+.ld-sbox.has-draft:focus-within { border-color: var(--line-strong); box-shadow: none; }
 .chatpane.home-draft { display: block; min-height: 0 !important; height: auto !important; border: 0; background: transparent; }
 .chatpane.home-draft > .chat-head, .chatpane.home-draft > .msgs { display: none !important; }
 .chatpane.home-draft .composer { margin: 0; padding: 0; position: static; }
+
+/* ---------- quick row above the model: Thinking, Strict / YOLO, tools and caps one click each; ⋯ opens the window ---------- */
+/* one row when the box is wide; a narrower box wraps onto a second line rather than hiding anything */
+.chatpane .cmp-quick[hidden] { display: none !important; }
+/* the show / hide button for the quick rows, next to the model; hidden rows leave YOLO and the thinking level on it */
+.chatpane .cmp-control-rack .cq-toggle { flex: none; display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 8px; border-radius: 8px; border: 1px solid var(--line); background: transparent; color: var(--muted); font: 600 11.5px var(--font-ui); white-space: nowrap; cursor: pointer; }
+.chatpane .cmp-control-rack .cq-toggle:hover { color: var(--text); background: var(--panel-2); border-color: var(--line-strong); }
+.chatpane .cmp-control-rack .cq-toggle.on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+.chatpane .cmp-control-rack .cq-toggle.yolo:not(.on) { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 50%, transparent); }
+.chatpane .cmp-control-rack .cq-toggle svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.chatpane .cmp-control-rack .cq-toggle .cq-chev { width: 12px; height: 12px; }
+.chatpane .cmp-control-rack .cq-toggle .cq-tsum { font: 600 10.5px var(--mono); }
+.chatpane .cmp-control-rack .cq-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.chatpane .cmp-quick .cq-sep { display: none !important; }
+/* card buttons in a narrow chat (out of steps, approvals): the label wraps inside the card instead of running past its edge */
+.msg .approval .acts { min-width: 0; }
+.msg .approval .acts > button { max-width: 100%; min-width: 0; white-space: normal !important; flex-wrap: wrap; text-align: left; height: auto; min-height: 30px; overflow-wrap: anywhere; }
+.msg .approval .acts > button :is(small, .oos-rec) { white-space: nowrap; }
+/* Plan first, beside the caps */
+.chatpane .cmp-quick .lvl.cq-plan { --lc: var(--accent); }
+/* The same two rows at any width, on the home page and in a chat: thinking, style and permission, then tools, caps
+   and plan. (Left to wrap freely, a wide chat pulled the tools up beside Strict / YOLO and the home page did not.) */
+.chatpane .cmp-quick .cq-br { flex: 0 0 100%; height: 0; margin-top: -6px; }
+/* narrow chats: every group may take a line of its own and its words share that line, so nothing runs past the edge */
+.chatpane .cmp-quick { max-width: 100%; }
+.chatpane .cmp-quick .cq-lv { display: contents !important; }
+.chatpane .cmp-quick > *, .chatpane .cmp-quick .lvl { max-width: 100%; }
+@container cmpbox (max-width: 480px) {
+  .chatpane .cmp-quick .lvl { flex: 1 1 100% !important; }
+  .chatpane .cmp-quick .lvl-b { flex: 1 1 auto !important; justify-content: center; padding: 0 4px !important; }
+  .chatpane .cmp-quick .seg.perm { flex: 1 1 100% !important; }
+  .chatpane .cmp-quick .seg.perm button { flex: 1; justify-content: center; }
+} /* spacing, not lines: a line would dangle where the row wraps */
+.chatpane .cmp-quick { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; min-width: 0; padding: 0 2px 8px; margin-bottom: 8px; border-bottom: 1px solid var(--line); }
+.chatpane .cmp-quick .cq-grp.cs-tools { flex-wrap: wrap; }
+.chatpane .cmp-quick:empty { display: none; }
+.chatpane .cmp-quick .cq-grp { flex: none; display: inline-flex; align-items: center; gap: 4px; }
+.chatpane .cmp-quick .cq-sep { flex: none; width: 1px; height: 20px; background: var(--line); margin: 0 2px; }
+.chatpane .cmp-quick .cq-sp { flex: 1; min-width: 4px; }
+/* Thinking and Creativity: a segmented control of words, readable at a glance; the one in use is filled in its colour */
+.chatpane :is(.chat-set, .cmp-quick) .lvl { --lc: var(--violet, #a78bfa); flex: none; display: inline-flex; align-items: stretch; gap: 2px; height: 28px; padding: 2px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-inset, var(--bg)); }
+.chatpane :is(.chat-set, .cmp-quick) .lvl-creative { --lc: var(--amber, #f59e0b); }
+.chatpane :is(.chat-set, .cmp-quick) .lvl.na { opacity: .55; }
+.chatpane :is(.chat-set, .cmp-quick) .lvl-ico { align-self: center; font-size: 13px; margin: 0 3px 0 4px; cursor: help; }
+.chatpane :is(.chat-set, .cmp-quick) .lvl-b { width: auto; height: auto; min-height: 0 !important; min-width: 0 !important; display: inline-flex; align-items: center; padding: 0 7px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font: 600 11.5px var(--font-ui); white-space: nowrap; cursor: pointer; transition: background .12s, color .12s; }
+.chatpane :is(.chat-set, .cmp-quick) .lvl-b:hover { color: var(--text); background: var(--panel-2); }
+.chatpane :is(.chat-set, .cmp-quick) .lvl-b.on { color: var(--lc-ink, #0d0d12); background: var(--lc); box-shadow: 0 0 8px -2px var(--lc); }
+.chatpane :is(.chat-set, .cmp-quick) .lvl-b:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.chatpane .chat-set .lvl { height: 30px; }
+.chatpane .chat-set .lvl-b { padding: 0 9px; font-size: 12px; }
+.chatpane .cmp-quick .seg.perm { flex: none; display: inline-flex !important; align-items: stretch; height: 28px; }
+.chatpane .cmp-quick .seg.perm button { height: 100%; min-height: 0 !important; padding: 0 9px; font-size: 12px; white-space: nowrap; display: inline-flex; align-items: center; }
+.chatpane .cmp-quick :is(.qt-b, .lvl-b, .cq-adv) { min-height: 0 !important; min-width: 0 !important; }
+.chatpane .cmp-quick .qt-group { display: inline-flex; gap: 3px; }
+.chatpane .cmp-quick .qt-sep { width: 1px; height: 18px; background: var(--line); margin: 0 2px; }
+.chatpane .cmp-quick .qt-b { position: relative; width: 28px; height: 28px; display: grid; place-items: center; padding: 0; font-size: 13px; line-height: 1; border-radius: 7px; border: 1px solid var(--line); background: transparent; cursor: pointer; filter: grayscale(1); opacity: .5; transition: opacity .12s, filter .12s, box-shadow .12s; }
+.chatpane .cmp-quick .qt-b:hover { opacity: .85; }
+.chatpane .cmp-quick .qt-b.on { filter: none; opacity: 1; border-color: color-mix(in srgb, var(--ok) 55%, transparent); background: var(--ok-dim); box-shadow: 0 0 8px -3px var(--ok); }
+.chatpane .cmp-quick .qt-b.paid::after { content: '$'; position: absolute; right: 1px; bottom: -1px; font: 700 8px var(--mono); color: var(--amber, #f59e0b); }
+.chatpane .cmp-quick :is(.qt-b, .lvl-b, .cq-adv):focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.chatpane .cmp-quick .cq-cap { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; color: var(--muted); cursor: help; }
+.chatpane .cmp-quick .cs-inp { display: inline-flex; align-items: center; height: 28px; padding: 0 6px; border-radius: 7px; border: 1px solid var(--line); background: var(--surface-inset, var(--bg)); }
+.chatpane .cmp-quick .cs-inp:focus-within { border-color: var(--accent); }
+.chatpane .cmp-quick .cs-inp i { font: 600 11.5px var(--mono); color: var(--amber, #f59e0b); font-style: normal; }
+.chatpane .cmp-quick .cs-inp input, .chatpane .cmp-quick .cs-inp input:focus, .chatpane .cmp-quick .cs-inp input:focus-visible { width: 38px; border: 0 !important; outline: none !important; box-shadow: none !important; background: transparent !important; height: auto !important; min-height: 0 !important; padding: 0 0 0 2px !important; border-radius: 0 !important; color: var(--amber, #f59e0b); font: 600 12px var(--mono); -moz-appearance: textfield; appearance: textfield; }
+.chatpane .cmp-quick .cs-inp input::-webkit-inner-spin-button, .chatpane .cmp-quick .cs-inp input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.chatpane .cmp-quick .cq-adv { flex: none; margin-left: auto; height: 28px; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px 0 8px; font: 500 12px var(--font-ui); white-space: nowrap; border-radius: 7px; border: 1px solid var(--line); background: var(--panel); color: var(--muted); cursor: pointer; }
+.chatpane .cmp-quick .cq-adv:hover { color: var(--text); background: var(--panel-2); border-color: var(--line-strong); }
+.chatpane .cmp-quick .cq-adv svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; }
+/* the quick row holds what "This chat" used to open, so the model row keeps only model, Follow and Chrome (the button stays for the window's own logic) */
+.chatpane .cmp-control-rack .cmp-set-btn { display: none !important; }
+
+/* Sidebar: Show more chats (inside a project, under its chats) and Show more projects (at the end of the list). */
+.sb-more { display: flex; align-items: center; gap: 6px; width: calc(100% - 14px); margin: 2px 0 6px 14px; padding: 5px 12px; border: 1px dashed var(--line-strong); border-radius: 8px; background: transparent; color: var(--muted); font: 600 11.5px var(--font-ui); text-align: left; cursor: pointer; }
+.sb-more small { margin-left: auto; font: 500 10.5px var(--mono); color: var(--dim); }
+.sb-more:hover { color: var(--text); border-style: solid; border-color: var(--accent); }
+.sb-more:disabled { opacity: .6; cursor: wait; }
+.sb-more.sb-more-proj { width: 100%; margin: 8px 0; }
+.sb-project.folded .sb-more { display: none; }
+
+/* ---------- Terminal header: shrinks in steps well before it runs out of room, so it never wraps or jumps at the edge ----------
+   project name first, then the buttons' words, then the section words, then the Terminal word; every tip stays */
+.pane-tool:has(.tsecs) > #appBar > :is(.term-share, .term-clear, .run-stopall, .back) { flex: none; display: inline-flex; align-items: center; justify-content: center; min-width: 26px; white-space: nowrap; }
+.pane-tool:has(.tsecs) > #appBar > :is(.term-title, .tsecs) { flex: none; }
+.pane-tool:has(.tsecs) > #appBar > .dim { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@container (max-width: 900px) { .pane-tool:has(.tsecs) > #appBar > .dim { display: none; } }
+@container (max-width: 780px) { .pane-tool:has(.tsecs) > #appBar .tb-l { display: none; } .pane-tool:has(.tsecs) > #appBar > :is(.term-share, .term-clear, .run-stopall, .back) { width: 28px; padding: 0 !important; } }
+@container (max-width: 560px) { .pane-tool:has(.tsecs) .tsec-l { display: none; } .pane-tool:has(.tsecs) .tsec { padding: 0 7px; } }
+@container (max-width: 380px) { .pane-tool:has(.tsecs) .term-title b { display: none; } }
+/* Servers live in the Terminal tab (its Servers section), so the pane tabs drop their own 🖥 button */
+#pane .pane-tabs > #paneSrvBtn { display: none !important; }
+/* ✕ Close all in the Terminal header is the emergency stop: red, so it never reads as a plain close */
+.pane-tool:has(.tsecs) > #appBar > .back { color: var(--bad) !important; border: 1px solid color-mix(in srgb, var(--bad) 45%, transparent) !important; background: transparent !important; border-radius: 6px; height: 26px; padding: 0 9px; font: 600 12px var(--font-ui); }
+.pane-tool:has(.tsecs) > #appBar > .back:hover { background: var(--bad-dim) !important; }
+
+/* ---------- model row: Follow and the Chrome extension as compact icon buttons (lit when on); words on hover ---------- */
+.chatpane .cmp-control-rack .cmp-ico { flex: none; width: 28px; height: 28px; min-width: 0 !important; min-height: 0 !important; display: grid; place-items: center; padding: 0 !important; border-radius: 8px; border: 1px solid var(--line); background: transparent; color: var(--muted); cursor: pointer; position: relative; }
+.chatpane .cmp-control-rack .cmp-ico svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.chatpane .cmp-control-rack .cmp-ico:hover { color: var(--text); background: var(--panel-2); border-color: var(--line-strong); }
+.chatpane .cmp-control-rack .cmp-ico.on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: var(--accent-dim); }
+.chatpane .cmp-control-rack .cmp-chrome-b.on { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); background: var(--ok-dim); }
+/* not set up yet: a small amber dot says the click opens its setup */
+.chatpane .cmp-control-rack .cmp-chrome-b.nosetup::after { content: ''; position: absolute; top: 3px; right: 3px; width: 6px; height: 6px; border-radius: 50%; background: var(--amber, #f59e0b); }
+.chatpane .cmp-control-rack .cmp-ico:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ---------- message box actions: every one a compact icon (attach, mic, enhance, send) ---------- */
+.cmp-actions-left .cmp-act-btn.enhBtn { width: 30px !important; height: 30px !important; padding: 0 !important; justify-content: center; gap: 0; }
+.chatpane .cmp-act-btn, .chatpane .cmp-send-btn, .chatpane .cmp-stop-btn { width: 30px !important; height: 30px !important; }
+
+/* ---------- ⓘ by the name: what QuorX may use ---------- */
+.perm-btn { flex: none; width: 24px; height: 24px; min-height: 0 !important; display: grid; place-items: center; padding: 0; margin-left: 2px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }
+.perm-btn svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; }
+.perm-btn:hover, .perm-btn.on { color: var(--accent); background: var(--panel-2); border-color: var(--line); }
+.perm-pop { position: fixed; z-index: 1000; width: 330px; max-width: calc(100vw - 16px); display: grid; gap: 2px; padding: 10px; border-radius: 12px; border: 1px solid var(--line-strong); background: var(--panel-2, var(--panel)); box-shadow: 0 16px 44px rgba(0,0,0,.55); animation: popFade .15s ease-out; }
+.perm-pop[hidden] { display: none; }
+.perm-pop .pm-h { display: grid; gap: 1px; padding: 0 2px 6px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+.perm-pop .pm-h b { font-size: 13px; color: var(--text-bright, var(--text)); }
+.perm-pop .pm-h small, .perm-pop .pm-main small, .perm-pop .pm-note { font-size: 11.5px; color: var(--muted); line-height: 1.4; }
+.perm-pop .pm-row { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 6px 2px; }
+.perm-pop .pm-ico { font-size: 15px; text-align: center; }
+.perm-pop .pm-top { display: flex; align-items: center; gap: 6px; }
+.perm-pop .pm-top b { font-size: 12.5px; color: var(--text); }
+.perm-pop .pm-st { font: 600 10.5px var(--font-ui); padding: 1px 6px; border-radius: 5px; color: var(--muted); background: var(--panel-2); }
+.perm-pop .pm-st.ok { color: var(--ok); background: var(--ok-dim); }
+.perm-pop .pm-st.bad { color: var(--bad); background: var(--bad-dim); }
+.perm-pop .pm-act { height: 24px; padding: 0 9px; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: var(--text); font: 600 11.5px var(--font-ui); cursor: pointer; white-space: nowrap; }
+.perm-pop .pm-act:hover { background: var(--panel-2); }
+.perm-pop .pm-note { margin: 6px 2px 0; padding-top: 6px; border-top: 1px solid var(--line); }
+
+/* ---------- listening: a wave of light along the bottom of the chat while the mic is on ---------- */
+.chatpane .composer { position: relative; }
+.chatpane .composer.listening::after { content: ''; position: absolute; left: 0; right: 0; bottom: 1px; height: 64px; pointer-events: none; z-index: 3; border-radius: 0 0 12px 12px;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--violet, #a78bfa) 55%, transparent), color-mix(in srgb, var(--accent) 45%, transparent), color-mix(in srgb, var(--violet, #a78bfa) 55%, transparent), transparent) 0 100% / 200% 4px no-repeat,
+    radial-gradient(70% 100% at 50% 100%, color-mix(in srgb, var(--violet, #a78bfa) 30%, transparent), transparent 72%);
+  animation: micWave 2.4s linear infinite, micBreath 1.6s ease-in-out infinite; }
+.chatpane .composer.listening .composer-box, .chatpane .composer.listening .composer-box:focus-within { border-color: var(--violet, #a78bfa) !important; box-shadow: 0 0 0 1px color-mix(in srgb, var(--violet, #a78bfa) 60%, transparent), 0 10px 34px -8px var(--violet, #a78bfa) !important; }
+@keyframes micWave { from { background-position: 200% 100%, 0 0; } to { background-position: 0% 100%, 0 0; } }
+@keyframes micBreath { 0%, 100% { opacity: .65; } 50% { opacity: 1; } }
+:root.reduce-motion .chatpane .composer.listening::after { animation: none; }
+@media (prefers-reduced-motion: reduce) { .chatpane .composer.listening::after { animation: none; } }
+
+/* ---------- ⚙ Shortcuts: the mic key box ---------- */
+.st-keycap { width: 150px; cursor: pointer; text-align: center; font: 600 12.5px var(--mono) !important; caret-color: transparent; }
+.st-keycap:focus { border-color: var(--accent) !important; box-shadow: 0 0 0 3px var(--accent-dim) !important; }

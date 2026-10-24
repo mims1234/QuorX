@@ -28,8 +28,8 @@ import { shellRun, shellClose, shellInfo } from './server/shell.js';
 import { ptyAvailable, ptyOpen, ptyWrite, ptyResize, ptyFollow, ptyClose } from './server/pty.js';
 // Pages the agent wrote, served from this app's own address, get their own opaque origin: their requests to /api are refused.
 const SANDBOX_CSP = 'sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads';
-import { listChats, getChat, saveChat, patchChat, settleReply, trashChat, validId, listProjects, saveProject, forgetProject, setProjectColor, setProjectFlags, costSummary, costChats } from './server/store.js';
-import { ALLOWED, copyTemplate, workspaceDir, safePath, listFiles, listServers, stopServerWait, restartServer, serverLog, startServer, restoreCheckpoint, listCheckpoints, pruneCheckpoints, undoConflicts, changedFiles, reviewFiles, reviewDiff, undoFile, serverOverview, launchConfigs, saveLaunchConfig, removeLaunchConfig, ensureAgentDir, agentSpace, clearAgentSpace } from './server/workspace.js';
+import { listChats, sidebarChats, chatPage, chatPictureRefs, pictureRefCounts, getTrace, getChatForPage, getChat, saveChat, patchChat, settleReply, trashChat, validId, listProjects, saveProject, forgetProject, setProjectColor, setProjectFlags, costSummary, costChats } from './server/store.js';
+import { ALLOWED, copyTemplate, workspaceDir, safePath, listFiles, listDir, listServers, stopServerWait, restartServer, serverLog, startServer, restoreCheckpoint, listCheckpoints, pruneCheckpoints, undoConflicts, changedFiles, reviewFiles, reviewDiff, undoFile, serverOverview, launchConfigs, saveLaunchConfig, removeLaunchConfig, ensureAgentDir, agentSpace } from './server/workspace.js';
 import { followTerm, runningJobs, stopJob } from './server/terminal.js';
 import { runningIn, stopRunning, stopAllIn } from './server/running.js';
 import { decide as decideCommand, loadRules, saveRules, suggestedRules } from './server/cmdpolicy.js';
@@ -50,8 +50,8 @@ import { exportBackup, findBackups, inspectBackup, importBackup } from './server
 import { artifactContent, servedArtifact, ARTIFACT_HEADERS, folderStamp } from './server/artifacts.js';
 import { gate, appGate, appLink, hostAllowed, crossSiteApi, isLoopback } from './server/access.js';
 import { gitHubRemote, gitHubInfo } from './server/github.js';
-import { serveBlob, startSweeping } from './server/blobs.js';
-import { measureStorage, clearStorage, recentClears, startStorageRules, scanInstallers, clearInstallers } from './server/storage.js';
+import { serveBlob, startSweeping, chatFootprint } from './server/blobs.js';
+import { measureStorage, clearStorage, clearProjectParts, previewProjectParts, recentClears, startStorageRules } from './server/storage.js';
 import { storageRules, saveStorageRules, rotateLog, RULE_DEFAULTS } from './server/storagerules.js';
 import { listDesignSystems, readDesignSystem, projectDesign, applyDesignSystem, saveProjectDesign } from './server/design.js';
 import { newsRoute } from './server/news.js';
@@ -164,7 +164,14 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/api/config') return json(res, 200, { ...codeChanged(), version: VERSION, platform: process.platform, pagePort: runtime.pagePort || null, shell: shellInfo().name, pty: ptyAvailable(), defaults: DEFAULTS, docDefaults: DOC_DEFAULTS, storageDefaults: RULE_DEFAULTS, checks: CHECKS, media: MEDIA, newsRemote: newsRemoteState().on, hasKey: !!currentKey(), browser: browserPath(), allowed: ALLOWED });
 
     // ---- chat history (data/chats; delete = move to data/trash) ----
+    // The sidebar: each project's newest chats, the open ones by id, and every project's counts (store.js sidebarChats).
+    if (url.pathname === '/api/chats' && req.method === 'GET' && url.searchParams.get('view') === 'sidebar') {
+      const ids = String(url.searchParams.get('ids') || '').split(',').filter(validId).slice(0, 50);
+      return json(res, 200, sidebarChats({ per: Math.max(1, Math.min(200, Number(url.searchParams.get('per')) || 30)), ids }));
+    }
     if (url.pathname === '/api/chats' && req.method === 'GET') return json(res, 200, listChats());
+    // A page of chats: a project's older ones (Show more), or a search across every project.
+    if (url.pathname === '/api/chats/page' && req.method === 'GET') return json(res, 200, chatPage({ project: url.searchParams.get('project') || '', q: url.searchParams.get('q') || '', offset: url.searchParams.get('offset'), limit: url.searchParams.get('limit') }));
     if (url.pathname === '/api/costs' && req.method === 'GET') return json(res, 200, costSummary({ per: Number(url.searchParams.get('per')) || 5, sort: url.searchParams.get('sort') || 'cost' }));
     if (url.pathname === '/api/costs/chats' && req.method === 'GET') {
       const q = url.searchParams;
@@ -173,9 +180,15 @@ const server = http.createServer(async (req, res) => {
     // A short brief of a whole chat (/fresh, and attaching a chat to another), cached until the chat changes.
     const brm = url.pathname.match(/^\/api\/chats\/([a-z0-9-]+)\/brief$/i);
     if (brm && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e4) || '{}'); try { return json(res, 200, await briefForChat(brm[1], { model: b.model })); } catch (e) { return json(res, 400, { error: e.message }); } }
+    // An older reply's steps, kept apart from its chat (store.js splitTraces): the page asks when that reply is shown.
+    const trm = url.pathname.match(/^\/api\/chats\/([a-z0-9-]+)\/trace\/([\w-]+)$/i);
+    if (trm && req.method === 'GET') { const t = getTrace(trm[1], trm[2]); return t ? json(res, 200, t) : json(res, 404, { error: 'no such steps' }); }
+    // What deleting a chat frees once QuorX's trash is emptied (its file, and pictures no other chat uses).
+    const csm = url.pathname.match(/^\/api\/chats\/([a-z0-9-]+)\/footprint$/i);
+    if (csm && req.method === 'GET') { if (!validId(csm[1])) return json(res, 400, { error: 'bad chat id' }); const f = await chatFootprint(chatPictureRefs(csm[1]), pictureRefCounts()); return f ? json(res, 200, f) : json(res, 404, { error: 'no such chat' }); }
     const cm = url.pathname.match(/^\/api\/chats\/([a-z0-9-]+)$/i);
     if (cm) {
-      if (req.method === 'GET') { const c = getChat(cm[1]); return c ? json(res, 200, c) : json(res, 404, { error: 'no such chat' }); }
+      if (req.method === 'GET') { const c = getChatForPage(cm[1]); return c ? json(res, 200, c) : json(res, 404, { error: 'no such chat' }); }
       if (req.method === 'PUT') return json(res, 200, saveChat(cm[1], JSON.parse(await readBody(req, 200e6))));
       // Only what changed since the page's last save; 409 when the file has moved on, and the page sends it whole.
       if (req.method === 'PATCH') { const r = patchChat(cm[1], JSON.parse(await readBody(req, 200e6))); return json(res, r.stale ? 409 : 200, r); }
@@ -300,10 +313,22 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, { text: text.slice(off, off + 100000), offset: off, total: text.length, more: off + 100000 < text.length });
       } catch (e) { return json(res, 200, { error: e.message }); }
     }
+    // A flat list for the pickers (@ files, the palette, a project as context): `limit` paths (20 000 by default), or
+    // with q only paths holding every word, found within 2 s. The Files pane reads folder by folder (/api/files/dir).
     if (url.pathname === '/api/files' && req.method === 'GET') {
       const pid = url.searchParams.get('project');
       if (!validId(pid)) return json(res, 400, { error: 'bad project id' });
-      return json(res, 200, listFiles(workspaceDir(pid)));
+      const limit = Math.max(1, Math.min(100000, Number(url.searchParams.get('limit')) || 20000));
+      const words = String(url.searchParams.get('q') || '').toLowerCase().split(/\s+/).filter(Boolean);
+      // At most 1.5 s of walking either way: a project with a million files never holds the server up.
+      return json(res, 200, listFiles(workspaceDir(pid), limit, { until: Date.now() + 1500, ...(words.length ? { match: (p) => words.every((w) => p.includes(w)) } : {}) }));
+    }
+    // One folder of a project for the Files pane, a page at a time.
+    if (url.pathname === '/api/files/dir' && req.method === 'GET') {
+      const pid = url.searchParams.get('project');
+      if (!validId(pid)) return json(res, 400, { error: 'bad project id' });
+      try { return json(res, 200, await listDir(workspaceDir(pid), String(url.searchParams.get('path') || ''), { offset: url.searchParams.get('offset'), limit: url.searchParams.get('limit') })); }
+      catch (e) { return json(res, 200, { error: e.code === 'ENOENT' ? 'that folder is gone' : e.message }); }
     }
     // When anything in a project folder last changed (previews of sites and apps reload on a change).
     if (url.pathname === '/api/files/stamp' && req.method === 'GET') {
@@ -708,18 +733,25 @@ const server = http.createServer(async (req, res) => {
       if (!validId(pid)) return json(res, 400, { error: 'bad project id' });
       try { const root = workspaceDir(pid); ensureAgentDir(root); return json(res, 200, agentSpace(root)); } catch (e) { return json(res, 200, { error: e.message, code: e.code }); }
     }
+    // 🧹 in a chat header: the parts of .quorx you ticked and confirmed (scratch, agent trash, older undo, snapshots).
+    if (url.pathname === '/api/agent-space/clear' && req.method === 'GET') {
+      const pid = url.searchParams.get('project');
+      if (!validId(pid)) return json(res, 400, { error: 'bad project id' });
+      return json(res, 200, await previewProjectParts(pid, { keep: Number(url.searchParams.get('keep')) || 10 }));
+    }
     if (url.pathname === '/api/agent-space/clear' && req.method === 'POST') {
-      const b = JSON.parse(await readBody(req, 1e4));
+      const b = JSON.parse(await readBody(req, 1e4) || '{}');
       if (!validId(b.projectId)) return json(res, 400, { error: 'bad project id' });
-      try { const root = workspaceDir(b.projectId); return json(res, 200, { cleared: clearAgentSpace(root, b.what, Number(b.keep) || 10), ...agentSpace(root) }); } catch (e) { return json(res, 200, { error: e.message }); }
+      const r = await clearProjectParts(b.projectId, Array.isArray(b.parts) ? b.parts : [], { keep: Number(b.keep) || 10 });
+      return json(res, r.busy ? 409 : 200, r);
     }
 
-    // ---- ⚙ Settings → Storage (server/storage.js): sizes, clearing, and the automatic cleanup rules ----
+    // ---- ⚙ Settings → Storage (server/storage.js): sizes, clearing (QuorX's own data folder only), and the automatic cleanup rules ----
     if (url.pathname === '/api/storage' && req.method === 'GET') return json(res, 200, await measureStorage({ keep: Number(url.searchParams.get('keep')) || 10 }));
     if (url.pathname === '/api/storage/clear' && req.method === 'POST') {
       const b = JSON.parse(await readBody(req, 1e5) || '{}');
       if (!Array.isArray(b.items) || !b.items.length) return json(res, 400, { error: 'nothing to clear' });
-      const r = await clearStorage(b.items.slice(0, 500), { keep: Math.max(1, Number(b.keep) || 10) });
+      const r = await clearStorage(b.items.slice(0, 500));
       return json(res, r.busy ? 409 : 200, r);
     }
     if (url.pathname === '/api/storage/rules') {
@@ -727,11 +759,6 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, storageRules());
     }
     if (url.pathname === '/api/storage/log' && req.method === 'GET') return json(res, 200, recentClears());
-    // Old QuorX installers in your Downloads folder: listed only when you ask, moved to the Recycle Bin only when you pick them.
-    if (url.pathname === '/api/storage/downloads') {
-      if (req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e5) || '{}'); return json(res, 200, await clearInstallers(Array.isArray(b.names) ? b.names.slice(0, 200) : [], VERSION)); }
-      return json(res, 200, { current: VERSION, ...scanInstallers(VERSION) });
-    }
 
     // ---- "Browse…": the computer's own folder dialog (only for someone sitting at this computer) ----
     // A template starts a NEW project: a fresh folder <parent>/<name>, the template copied in, then the project.

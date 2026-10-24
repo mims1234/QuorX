@@ -12,9 +12,9 @@ const STEPS = [
       <p><b>Scratch</b> is for quick questions and throwaway things. Give each project its own folder: don't make a project inside another project's folder.</p>`,
   },
   {
-    at: ['.chatpane.focus .cmp-set-btn', '#ldStart'], title: '🔒 Strict or ⚡ YOLO',
+    at: ['.chatpane.focus .cq-perm', '#ldStart'], title: '🔒 Strict or ⚡ YOLO',
     html: `<div class="tr-seg" aria-hidden="true"><span>🔒 Strict</span><span>⚡ YOLO</span></div>
-      <p>Each chat has one or the other, under <b>This chat</b> beside its message box. <b>Strict</b> asks you before every tool it uses. <b>YOLO</b> works on its own: the deciders answer its questions, and the safety rules and your budget cap still apply.</p>`,
+      <p>Each chat has one or the other, in the row of switches above its message box. <b>Strict</b> asks you before every tool it uses. <b>YOLO</b> works on its own: the deciders answer its questions, and the safety rules and your budget cap still apply.</p>`,
   },
   {
     at: ['#settingsBtn', '#railSettings'], title: 'The deciders and the reviewer',

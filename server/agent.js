@@ -85,12 +85,16 @@ export const YOLO_GROUPS = {
 const PLAN_GATED = new Set([...YOLO_GROUPS.files, 'shell', 'run_command', 'terminal', 'start_server', 'edit_video']);
 const YOLO_GROUP_OF = Object.fromEntries(Object.entries(YOLO_GROUPS).flatMap(([g, names]) => names.map((n) => [n, g])));
 
+export const MAX_STEPS = 1000; // the highest step limit a reply can be given in Settings
+// The "steps are running out" point: 80% for short limits, the last 15 steps for long ones (80% of 500 is far too early).
+const nearEnd = (step, maxSteps) => step + 1 >= Math.max(Math.floor(maxSteps * 0.8), maxSteps - 15);
+
 export const DEFAULTS = {
   chatModel: 'deepseek/deepseek-v4.1-flash-1017', // new chats (the 1017 build did best in the build benchmark; the older v4.1 Flash is 🔴)
   voters: ['typesafe/jev-1.14', 'liquid/d1-ultra', 'openai/gpt-6-luna-decisions'],
   gate: { ...GATE },
-  maxSteps: 60,            // model calls per reply; a wrap-up nudge at 80% and trimming keep long builds on track
-  continueRounds: 2,       // when the steps run out while the plan still has open items: extra rounds of half the step limit (0 = stop)
+  maxSteps: 500,           // model calls per reply; the budget caps do the real stopping. At the limit the ⏱ card asks: keep going, another model, or a fresh chat
+  continueRounds: 0,       // when the steps run out while the plan still has open items: extra rounds of moreSteps each (0 = stop and show the ⏱ card)
   fixSteps: 12,
   freshEyes: true,         // when the same problem shows up a second time, a clean-context model diagnoses it before the next step
   freshEyesModel: '',      // '' = the helper model (fast and cheap); 'strong' tier below uses the strong reviewer model
@@ -148,6 +152,7 @@ export const DEFAULTS = {
   ...LOOK_DEFAULTS,        // look and the harness checks ask one decider that reads pictures well, the rest only when it is unsure
   checks: { ...CHECK_DEFAULTS }, // the harness's own questions (server/harness-checks.js): gap check, screenshot and click checks
   yoloCheck: true,         // in yolo, the deciders still vote on whether a paid call is needed and fairly priced
+  decidersOff: { commands: 'ask', media: 'ask' }, // ⚡ YOLO in a chat whose ⚖️ Deciders are off: 'ask' waits for you (no answer in time skips), 'run' goes ahead without a check
   budget: 0.5,             // hard cap in $ for media per reply, enforced by code in both modes
   budgetGrace: 10,         // % over the project budget a running reply may spend to finish its work before it is force-stopped
   safety: { ...SAFETY_DEFAULTS }, // the shell, snapshots, tripwire and decider rules (server/safety.js)
@@ -987,6 +992,9 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
   const systemFor1 = systemFor;
   if (cardsNote) systemFor = (decideOn) => systemFor1(decideOn) + cardsNote;
   const decidersOn = S.deciders !== false;
+  // ⚖️ Deciders off in this chat (🧰): no approval goes to a vote. ⚙ Approvals & safety says, for commands and for
+  // paid media, whether what the deciders would have checked runs without a check or waits for you.
+  const decidersOff = { ...DEFAULTS.decidersOff, ...(req.settings?.decidersOff || {}) };
   // Requests that only read ("check my feed", "summarise the channel"): typing into the user's account outside a
   // search box asks them first. ⚙ Settings → Chrome extension turns this off.
   const READ_REQ = /\b(read|check|see|look|show|summar\w*|find|search|what|which|who|list|get|scan|tell me|report|dashboard|analy\w*|review|latest|feed|go to|open|visit|browse)\b/i;
@@ -1074,10 +1082,10 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
   const firstOwn = resumed ? resumed.firstOwn : messages.length; // where this reply's own turns begin
   const trimmedOnce = new WeakSet();
   const trimAt = Math.max(30000, Number(S.trimAt) || DEFAULTS.trimAt);
-  let maxSteps = Math.max(2, Math.min(200, Number(S.maxSteps) || DEFAULTS.maxSteps));
+  let maxSteps = Math.max(2, Math.min(MAX_STEPS, Number(S.maxSteps) || DEFAULTS.maxSteps));
   if (carryOn) maxSteps = resumed.step + 1 + carryOn.steps; // the steps already used, plus the new allowance
   else if (resumed) maxSteps = Math.max(maxSteps, Number(resumed.maxSteps) || 0, resumed.step + 1 + 5); // a restart keeps the reply's (extended) limit, and always leaves room to act
-  const planSteps = Math.max(0, Math.min(200, Number(S.planSteps ?? DEFAULTS.planSteps) || 0));
+  const planSteps = Math.max(0, Math.min(MAX_STEPS, Number(S.planSteps ?? DEFAULTS.planSteps) || 0));
   const planFirst = root && ['big', 'always'].includes(S.planFirst) ? S.planFirst : 'off'; // no project folder: nothing to protect
   const run = { mediaPlan: null, stop: 'answered', steps: 0, retries: 0, trimmed: 0, tools: 0, lookStreak: 0, warned: false, verifyRounds: 0, questions: 0, cacheMarks: true, passReasoning: true, routing: true, plan: resumed?.plan || null, planGate: resumed?.plan ? 'approved' : null, reviewRounds: 0, reviews: [], inbox: [], linted: {}, startedAt: resumed?.startedAt || Date.now() };
   runControls.set(runId, {
@@ -1392,15 +1400,15 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (run.readStreak === 3 && !run.helperNudged && helpersOn) { run.helperNudged = true; signals.push('You have spent 3 steps reading files yourself. Hand the rest of the exploring to helpers with delegate (several at once for separate questions), and keep your own context for the answer and the changes.'); }
     const openItems = run.plan ? run.plan.items.filter((x) => x.status !== 'done') : [];
     const rounds = Math.max(0, Math.min(5, Number(S.continueRounds ?? DEFAULTS.continueRounds) || 0));
-    if (!run.warned && maxSteps >= 10 && step + 1 >= Math.floor(maxSteps * 0.8) && openItems.length && (run.extended || 0) < rounds && !run.budgetOver && !run.budgetWarned) {
+    if (!run.warned && maxSteps >= 10 && nearEnd(step, maxSteps) && openItems.length && (run.extended || 0) < rounds && !run.budgetOver && !run.budgetWarned) {
       // The plan isn't finished: keep going instead of wrapping up (budget caps still apply).
       run.extended = (run.extended || 0) + 1;
-      const add = Math.max(10, Math.round((run.baseSteps || maxSteps) / 2));
+      const add = Math.max(5, Math.min(200, Number(S.moreSteps ?? DEFAULTS.moreSteps) || 30));
       maxSteps += add;
       signals.push(`Your plan still has ${openItems.length} open item${openItems.length > 1 ? 's' : ''} (${openItems.slice(0, 4).map((x) => `"${clip(x.text, 60)}"`).join(', ')}${openItems.length > 4 ? ', …' : ''}), so this reply gets ${add} more steps (extra round ${run.extended} of ${rounds}). Carry on with them in order; keep the plan current.`);
       emit({ t: 'note', level: 'info', msg: `Steps were running out with ${openItems.length} plan item${openItems.length > 1 ? 's' : ''} left: ${add} more steps (round ${run.extended} of ${rounds}).`, at: at() });
     }
-    if (!run.warned && maxSteps >= 10 && step + 1 >= Math.floor(maxSteps * 0.8)) { run.warned = true; signals.push(`Only ${maxSteps - step - 1} steps are left in this reply. Stop adding features: make sure what you have works, then give your final reply.`); }
+    if (!run.warned && maxSteps >= 10 && nearEnd(step, maxSteps)) { run.warned = true; signals.push(`Only ${maxSteps - step - 1} steps are left in this reply. Stop adding features: make sure what you have works, then give your final reply.`); }
     const pb = projectId && !req.bench ? budgetState(projectId) : null;
     if (pb?.budget != null && !run.budgetOver && pb.spent >= pb.budget) { run.budgetOver = run.budgetWarned = true; signals.push(`The project budget is used up ($${pb.spent.toFixed(2)} of $${pb.budget.toFixed(2)}). Finish the task you are on in as few steps as possible, add nothing new, then give your final reply. This reply is stopped at $${(pb.budget * (1 + grace)).toFixed(2)}.`); }
     else if (pb?.budget != null && !run.budgetWarned && pb.spent >= pb.budget * 0.85) { run.budgetWarned = true; signals.push(`The project budget is almost used up ($${pb.spent.toFixed(2)} of $${pb.budget.toFixed(2)}). Finish what you are doing and give your final reply.`); }
@@ -1436,7 +1444,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     const why = run.budgetStop === 'reply'
       ? `This reply reached its $${capOf().toFixed(2)} cap ($${stats.cost.toFixed(3)} spent by every model it used), so it stopped.`
       : `Today's spending across all projects reached the $${Number(S.dailyBudget).toFixed(2)} daily cap ($${spentToday().toFixed(3)}), so the reply stopped.`;
-    reply = `${reply.trim() ? `${reply.trim()}\n\n` : ''}⚠ ${why}${journal.length ? ` Done so far: ${clip(journal.slice(-12).join('; '), 600)}.` : ''} ${run.budgetStop === 'reply' ? 'Send a message to carry on (a new reply starts with a fresh cap), or raise the cap in ⚙ Settings → Budget & approvals.' : 'Raise the daily cap in ⚙ Settings → Budget & approvals, then send a message to carry on.'}`;
+    reply = `${reply.trim() ? `${reply.trim()}\n\n` : ''}⚠ ${why}${journal.length ? ` Done so far: ${clip(journal.slice(-12).join('; '), 600)}.` : ''} ${run.budgetStop === 'reply' ? 'Send a message to carry on (a new reply starts with a fresh cap), or raise the cap in ⚙ Settings → Budget.' : 'Raise the daily cap in ⚙ Settings → Budget, then send a message to carry on.'}`;
     emit({ t: 'note', level: 'warn', msg: why, at: at() });
   } else if (run.stop === 'budget') {
     const bs = budgetState(projectId);
@@ -2250,6 +2258,11 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (S.approval !== 'yolo' || req.bench || (deps.quiet && req.settings?.yoloWaitSecs == null)) return 0;
     return Math.max(0, Math.min(600, Number(S.yoloWaitSecs ?? DEFAULTS.yoloWaitSecs) || 0)) * 1000;
   }
+  // The card's countdown when the deciders are off in this chat: no answer in time skips it (see decidersOff).
+  function offWait(what) {
+    const ms = yoloWait(), secs = Math.round(ms / 1000);
+    return ms ? { ms, then: 'skip-off', onTimeout: () => ({ approve: false, by: 'timeout', reason: `No answer in ${secs}s, and the deciders are off in this chat, so nobody checked ${what}: it was skipped.` }) } : null;
+  }
   // What the page needs for the countdown: when it ends, and what happens then.
   function waitInfo(ms, then) { return { secs: Math.round(ms / 1000), until: Date.now() + ms, then, runId }; }
   // The user's answer, or { timedOut: true } once ms pass. "Wait for me" (holdCard) stops the clock for good.
@@ -3058,6 +3071,21 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     // Rules made by a button can't lift these, so the card doesn't offer "Always allow" for them.
     card.noAlways = d.segments.some((s) => ['opaque', 'external', 'discard', 'never'].includes(s.cls) || s.risk === 'danger' || s.global || (s.paths || []).some((p) => p.zone === 'outside' || p.zone === 'unknown'));
     let unsure = null;
+    // Deciders off: a command they would only check first runs or waits for you (⚙ Approvals & safety); one they
+    // would approve in your place always waits for you.
+    if (who === 'deciders' && !decidersOn) {
+      if (!d.standIn && decidersOff.commands === 'run') {
+        const reason = 'The deciders are off in this chat, and ⚙ Approvals & safety runs such commands without a check.';
+        emit({ t: 'approval', ...card, mode: 'yolo', at: at() });
+        emit({ t: 'approval_done', id: card.id, approve: true, by: 'deciders off', reason, at: at() });
+        aud({ kind: 'approved', command: line, by: 'deciders off', reason });
+        if (!hook) approvedLines.add(sameLine);
+        return { ok: true, by: 'deciders off' };
+      }
+      who = 'user';
+      card.why = `${card.why}. The deciders are off in this chat, so it waits for you`;
+      unsure = offWait('this command');
+    }
     if (who === 'deciders') {
       emit({ t: 'approval', ...card, mode: 'yolo', at: at() });
       const facts = { command: line, shell, ...(hook ? { chosen_by: `the user, as a hook (${hook}) in project settings${fileFromAgent ? '; the file name in it was chosen by the agent' : '; the agent did not ask for it'}` } : {}), parts: d.segments.map((s) => ({ text: clip(s.text, 200), class: s.cls, ...(s.via ? { run_by_script: s.via } : {}), touches: (s.paths || []).map((p) => `${p.resolved || p.raw} (${p.zone === 'inside' ? 'inside the project' : p.zone})`) })),
@@ -3984,8 +4012,16 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
       emit({ t: 'approval', ...card, at: at() }); emit({ t: 'approval_done', id, ...ans, at: at() });
       return { ...ans, plan };
     }
+    if (yoloAuto && !decidersOn && decidersOff.media === 'run') {
+      const ans = { approve: true, by: 'deciders off', reason: 'The deciders are off in this chat, and ⚙ Approvals & safety runs paid calls without a check (budget caps still apply).' };
+      emit({ t: 'approval', ...card, at: at() }); emit({ t: 'approval_done', id, ...ans, at: at() });
+      return { ...ans, plan };
+    }
     let unsure = null;
-    if (yoloAuto) {
+    if (yoloAuto && !decidersOn) {
+      card.why = 'The deciders are off in this chat, so this paid call waits for you.';
+      unsure = offWait('this paid call');
+    } else if (yoloAuto) {
       emit({ t: 'approval', ...card, at: at() });
       // The judge sees the user's own words and the harness's facts; not the agent's "why" (agent-written text).
       const j = await approvalJudge({ kind: 'media', userMessages: userTurns(), reading: run.reading?.text, facts: { tool, model: plan.model, estimated_cost_usd: +plan.est.toFixed(4), prompt_written_by_agent: what },
@@ -4034,7 +4070,12 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     } else if (S.approval === 'yolo' && (S.yoloAuto?.media !== false || allowed.has('media_plan'))) {
       shown();
       if (S.yoloCheck === false) ans = done({ approve: true, by: 'yolo', reason: 'YOLO mode without checks: approved automatically (budget cap still applies).' });
-      else {
+      else if (!decidersOn && decidersOff.media === 'run') ans = done({ approve: true, by: 'deciders off', reason: 'The deciders are off in this chat, and ⚙ Approvals & safety runs paid calls without a check (budget caps still apply).' });
+      else if (!decidersOn) {
+        card.why = 'The deciders are off in this chat, so this production plan waits for you.';
+        const w = offWait('this plan');
+        ans = done(await askUser(card, w && { ...w, onTimeout: () => ({ ...w.onTimeout(), reason: `No answer in ${Math.round(w.ms / 1000)}s, and the deciders are off in this chat, so nobody checked this plan: each paid call is judged on its own instead.` }) }));
+      } else {
         // Judged once, as a whole: the user's words, the enhancer's reading and the harness's prices; never the agent's "why".
         const j = await approvalJudge({ kind: 'plan', userMessages: userTurns(), reading: run.reading?.text, facts: planFacts(plan, S.budget), voters: S.voters, chatModel: setup.model, gate: S.gate, signal, account, sf: SF,
           log: { runId, chatId: req.chatId || null, project: projectId }, ...(deps.ensemble ? { ensembleFn: deps.ensemble } : {}) });

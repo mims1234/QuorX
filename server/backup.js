@@ -7,7 +7,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { HOME } from './openrouter.js';
 import { zipBuffer } from './zip.js';
-import { listProjects, validId } from './store.js';
+import { listProjects, validId, getWholeChat } from './store.js';
 import { loadRules, saveRules } from './cmdpolicy.js';
 import { loadMemory, saveMemory, checkMemory } from './memory.js';
 
@@ -69,7 +69,8 @@ export function exportBackup({ dir, settings = null, includeLogs = false, includ
     if (own.length) add(`rules/projects/${p.id}.json`, { rules: own });
   }
   const chats = files(path.join(DATA, 'chats'), (n) => n.endsWith('.json') && CHAT_ID.test(n.slice(0, -5)));
-  for (const n of chats) add(`chats/${n}`, fs.readFileSync(path.join(DATA, 'chats', n)));
+  // Whole chats: an older reply's steps kept apart (data/traces) go back inside it, so the backup restores anywhere.
+  for (const n of chats) { const raw = fs.readFileSync(path.join(DATA, 'chats', n)); add(`chats/${n}`, raw.includes('"traceRef"') ? JSON.stringify(getWholeChat(n.slice(0, -5))) : raw); }
   // Pictures and files the chats point at (stored once each, by their hash).
   const blobs = files(path.join(DATA, 'blobs'), (n) => BLOB.test(n));
   for (const n of blobs) add(`blobs/${n}`, fs.readFileSync(path.join(DATA, 'blobs', n)));

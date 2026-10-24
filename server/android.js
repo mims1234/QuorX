@@ -1,7 +1,7 @@
 // Android apps for the agent, through adb: boot an emulator, list devices, install an APK built in the project,
 // launch it, read its screen as numbered controls (uiautomator's view hierarchy), tap, type, press keys, take a
 // picture, read the log (with the newest crash summed up first).
-// Only emulators are used unless the user allows physical phones in ⚙ Safety & commands (a phone holds real data).
+// Only emulators are used unless the user allows physical phones in ⚙ Approvals & safety (a phone holds real data).
 // Every adb call is made by QuorX with fixed arguments; the agent never types an adb command line here.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -34,10 +34,10 @@ export async function pickDevice(serial, { phones = false } = {}) {
   if (serial) {
     const d = list.find((x) => x.serial === serial);
     if (!d) throw new Error(`no device ${serial} (connected: ${list.map((x) => x.serial).join(', ') || 'none'})`);
-    if (!d.emulator && !phones) throw new Error(`${serial} is a physical phone; QuorX uses emulators only unless you allow phones in ⚙ Settings → Safety & commands`);
+    if (!d.emulator && !phones) throw new Error(`${serial} is a physical phone; QuorX uses emulators only unless you allow phones in ⚙ Settings → Approvals & safety`);
     return d.serial;
   }
-  if (!usable.length) throw new Error(list.length ? 'only physical phones are connected; start an emulator, or allow phones in ⚙ Settings → Safety & commands' : 'no emulator is running (android avds lists the virtual devices; android start {avd} boots one)');
+  if (!usable.length) throw new Error(list.length ? 'only physical phones are connected; start an emulator, or allow phones in ⚙ Settings → Approvals & safety' : 'no emulator is running (android avds lists the virtual devices; android start {avd} boots one)');
   return usable[0].serial;
 }
 

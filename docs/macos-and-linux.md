@@ -34,7 +34,7 @@ If QuorX itself is killed, there is no job to close with it. Instead each gate c
 its parent; when it isn't, the gate ends its own group.
 
 The code is `server/procgroup.js`, behind the same functions as the Windows job host (`server/jobhost.js`), so the rest
-of QuorX doesn't change. **⚙ Settings → Safety & commands → Stop** shows "Process groups: every process, confirmed".
+of QuorX doesn't change. **⚙ Settings → Approvals & safety → Stop** shows "Process groups: every process, confirmed".
 
 ### Rules for bash and zsh
 
