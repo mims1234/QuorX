@@ -31,14 +31,14 @@ window.TEXTS = (t) => [{ text, x0, y0, x1, y1 }];   // optional: every text on s
 - `TEXTS(t)` lets a script check that every text stays long enough to read (`film-review`).
 
 ## 3. Capture
-QuorX's own browser tool is for looking, not batch capture, so write a small Node script in the project:
-1. Check `ffmpeg -version` first. Installing a browser library (for example `puppeteer-core`, pointed at the installed Edge or Chrome) is a package install, so say so and get approval.
-2. Open the page at the output size, wait for `window.READY`, then for each frame `n` call `render(n / fps)` and save a JPEG screenshot (JPEG is much faster than PNG).
-3. Run 2-4 workers, each with its own browser and its own range of frames.
-4. Encode: `ffmpeg -framerate 30 -i frames/%05d.jpg -c:v libx264 -pix_fmt yuv420p -crf 18 out/video.mp4`.
-5. Add film grain in ffmpeg (`noise` filter), not in the page: grain drawn in the page makes every frame slow to compress.
+In QuorX, use **`render_film`**: give it the page, the output .mp4, the fps (30), the shape (16:9, 9:16, 1:1) and the soundtrack (the `fit_music` output). QuorX opens the page in its own browser at the film's size, waits for `window.READY`, calls `render(n / fps)` for every frame, and encodes the frames with ffmpeg. There is no capture script to write and no command to approve. A 15 s film at 30 fps takes about a minute.
 
-Write the steps into one Node build script so the whole film rebuilds with one command. Name every program it runs in plain text (`execFileSync('ffmpeg', [...])`): QuorX reads the script and runs it like those commands. A program name from a variable, `shell: true`, or a `.cmd` wrapper can't be checked, so it waits for approval. The ffmpeg notes in `film-from-images` apply here too.
+Only when `render_film` is not offered (outside Video Mode), write a capture script yourself:
+1. Check `ffmpeg -version` first. Installing a browser library (for example `puppeteer-core`) is a package install, so say so and get approval.
+2. Open the page at the output size, wait for `window.READY`, then for each frame call `render(n / fps)` and save a JPEG screenshot.
+3. Encode: `ffmpeg -framerate 30 -i frames/%05d.jpg -c:v libx264 -pix_fmt yuv420p -crf 18 out/video.mp4`.
+
+Add film grain in ffmpeg (`noise` filter), not in the page: grain drawn in the page makes every frame slow to compress. Name every program a script runs in plain text (`execFileSync('ffmpeg', [...])`): a program from a variable (a browser path in a constant), `shell: true` or a `.cmd` wrapper can't be checked, so it waits for approval.
 
 ## 4. Formats
 - Master: 1920×1080, 24 or 30 fps, H.264, CRF 18, `yuv420p`.

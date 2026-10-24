@@ -26,6 +26,7 @@ import { matchPlan, usePlan } from '../server/mediaplan.js';
 import { setSecret, parseEnv, secretKind, scrubSecrets } from '../server/projectsecrets.js';
 import { looksLikeFilm, videoModeFor, filmFacts, factsText, finishedFilms, videoRules, recommendedRoute, recommendedMusic, VIDEO_DEFAULTS } from '../server/videomode.js';
 import { settleTempo, analyse, tempoOf, barsOf, fitPlan, pickWindows, cutsVsBeats } from '../server/musicmap.js';
+import { checkHtml } from '../server/checks.js';
 
 let n = 0;
 const reply = (text, calls = [], finishReason = 'stop') => ({ text, toolCalls: calls.map(([name, args], i) => ({ id: `c${++n}_${i}`, type: 'function', function: { name, arguments: typeof args === 'string' ? args : JSON.stringify(args) } })), usage: { cost: 0.0001 }, ms: 1, firstMs: 1, finishReason });
@@ -2975,4 +2976,84 @@ test('a film is reviewed as a film: picture, motion, sound, rhythm and story', (
   assert.match(film, /rhythm \(cuts land on the music's beats/);
   assert.doesNotMatch(film, /accessibility/);
   assert.match(REVIEW_SYSTEM(3, true), /accessibility/, 'a page is still reviewed as a page');
+});
+
+// ---------- the motion test: render without scripts, switch paid tools on, pick models ----------
+test('render_film plays a page frame by frame in QuorX\'s browser and encodes it, with no command to approve', { skip: (!(await import('../server/browser.js')).browserPath() && 'no Chromium browser installed') || (!hasFfmpeg && 'ffmpeg is not installed') }, async () => {
+  const page = '<!doctype html><html><body style="margin:0;background:#000"><canvas id="c" width="1080" height="1080"></canvas><script>const g = document.getElementById("c").getContext("2d"); window.DUR = 1; window.render = (t) => { g.fillStyle = "#000"; g.fillRect(0, 0, 1080, 1080); g.fillStyle = "#c6ff3d"; g.fillRect(100 + t * 600, 440, 200, 200); }; window.READY = true;</script></body></html>';
+  const { bodies, events, dir } = await run((body, i) => [
+    reply('', [['render_film', { page: 'film/index.html', out: 'assets/edits/box.mp4', fps: 12, aspect: '1:1' }]]),
+    reply('', [['render_film', { page: 'film/empty.html', out: 'assets/edits/none.mp4' }]]),
+    reply('Done.'),
+  ][i], {
+    text: 'make a 1 second motion graphics teaser', videoMode: 'on', settings: { approval: 'strict', tools: { browser: { on: true } } },
+    prep: (d) => { fs.mkdirSync(path.join(d, 'film'), { recursive: true }); fs.writeFileSync(path.join(d, 'film', 'index.html'), page); fs.writeFileSync(path.join(d, 'film', 'empty.html'), '<!doctype html><p>no film here</p>'); },
+  });
+  assert.match(toolResults(bodies[1]).at(-1), /^Rendered assets\/edits\/box\.mp4: 1 s, 12 frames at 12 fps, 1080×1080, no sound/);
+  const probe = execFileSync('ffprobe', ['-v', 'error', '-count_frames', '-show_entries', 'stream=nb_read_frames,width,height', '-of', 'csv=p=0', path.join(dir, 'assets', 'edits', 'box.mp4')]).toString().trim().replace(/,+$/, '');
+  assert.equal(probe, '1080,1080,12');
+  assert.equal(of(events, 'approval').length, 0, 'nothing to approve');
+  assert.match(toolResults(bodies[2]).at(-1), /has no window\.render\(t\)/);
+});
+
+test('enable_media: one card switches paid tools on for the chat, with the model the user picked', async () => {
+  let runId;
+  const { bodies, events } = await run((body, i) => [
+    reply('', [['enable_media', { kinds: ['music'], why: 'a real score instead of one written in code' }]]),
+    reply('', [['enable_media', { kinds: ['video'], why: 'moving shots' }]]),
+    reply('Done.'),
+  ][i], {
+    text: 'make a teaser', settings: { approval: 'strict', mediaEnabled: true, tools: { browser: { on: false }, image: { on: true }, video: { on: false }, music: { on: false }, speech: { on: false } } },
+    onEvent: (e) => { if (e.t === 'start') runId = e.runId; if (e.t === 'approval') setTimeout(() => answerApproval(runId, e.id, e.kinds?.includes('music') ? { approve: true, models: { music: 'google/lyria-3-pro-preview' } } : { approve: false }), 5); },
+  });
+  const names = (b) => b.tools.map((t) => t.function.name);
+  assert.ok(names(bodies[0]).includes('enable_media'));
+  assert.ok(!names(bodies[0]).includes('compose_music'));
+  const card = of(events, 'approval')[0];
+  assert.deepEqual(card.kinds, ['music']);
+  assert.match(toolResults(bodies[1]).at(-1), /^Switched on for this chat: music \(models: music google\/lyria-3-pro-preview\)/);
+  assert.ok(names(bodies[1]).includes('compose_music'), 'its tool is offered at once');
+  assert.deepEqual(of(events, 'tools_on')[0].kinds, ['music']);
+  assert.match(toolResults(bodies[2]).at(-1), /^The user kept video clips off/);
+  assert.ok(!names(bodies[2]).includes('make_video'));
+});
+
+test('enable_media in YOLO switches on after the wait (switching on spends nothing)', async () => {
+  const { bodies } = await run((body, i) => [reply('', [['enable_media', { kinds: ['music'], why: 'score' }]]), reply('Done.')][i], {
+    text: 'make a teaser', settings: { approval: 'yolo', mediaEnabled: true, tools: { browser: { on: false }, music: { on: false } } },
+  });
+  assert.match(toolResults(bodies[1]).at(-1), /^Switched on for this chat: music/);
+});
+
+test('every generate card has a model choice: a production plan line, and a single call, can switch to any model of that kind', async () => {
+  primeCatalogue('videos', [TEST_VIDEO, TEST_VIDEO_TEXT]);
+  let runId;
+  const { bodies, events } = await run((body, i) => [
+    reply('', [['media_plan', { why: 'two shots', items: [{ kind: 'video', count: 2, seconds: 5, what: 'two shots' }] }]]),
+    reply('', [['make_video', { prompt: 'a lighthouse at dusk', why: 'an extra shot' }]]),
+    reply('Done.'),
+  ][i], {
+    settings: { ...videoSettings('test/vid-start'), approval: 'strict' },
+    generateVideo: async () => ({ url: `data:video/mp4;base64,${Buffer.from('mp4').toString('base64')}`, usage: { cost: 0.1 }, ms: 5 }),
+    onEvent: (e) => { if (e.t === 'start') runId = e.runId; if (e.t === 'approval' && e.mode === 'strict') setTimeout(() => answerApproval(runId, e.id, e.tool === 'media_plan' ? { approve: true, models: { 0: 'test/vid-text' } } : { approve: true, model: 'test/vid-start' }), 5); },
+  });
+  const planCard = of(events, 'approval').find((e) => e.tool === 'media_plan');
+  assert.deepEqual(planCard.items[0].options.map((o) => o.model), ['test/vid-start'], 'each line offers the kind\'s models with prices');
+  assert.match(toolResults(bodies[1]).at(-1), /^Plan approved/);
+  assert.match(toolResults(bodies[1]).at(-1), /test\/vid-text/, 'the model picked from the catalogue is in the plan');
+  // The later call uses the model picked on the plan, so it fits the plan and needs no second card.
+  const call = of(events, 'approval').find((e) => e.tool === 'make_video');
+  assert.equal(call.model, 'test/vid-text');
+  assert.equal(of(events, 'approval_done').find((e) => e.id === call.id).by, 'plan');
+});
+
+test('the link check skips tags a script builds as text, and still finds a real broken link', async () => {
+  const dir = tempDir('quorx-links-');
+  const html = '<!doctype html><body><img src="missing.png"><script>const a = `<img src="out/${n}.png">`; const b = \'<img src="teaser/stills/t\' + t + \'.png">\';</script></body>';
+  const problems = await checkHtml(html, { label: 'review.html', dir });
+  assert.deepEqual(problems.filter((p) => /links to/.test(p)), ['review.html: links to missing.png, which does not exist']);
+});
+
+test('silent, draft and test copies of a film are not reviewed as films', () => {
+  assert.deepEqual(finishedFilms([{ r: 'assets/edits/quorx-teaser-silent.mp4', t: 9 }, { r: 'assets/edits/quorx-teaser.mp4', t: 8 }, { r: 'assets/edits/teaser_draft.mp4', t: 7 }]), ['assets/edits/quorx-teaser.mp4']);
 });

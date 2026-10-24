@@ -129,14 +129,14 @@ export function videoRules(S, { first, ask, limit, yolo, waitS, gate, text, cats
     return `[Video Mode is on for this chat: the harness reads it as a film. The brief and the story were settled earlier in this chat: don't ask them again unless the user changes direction. Keep the order for what is left: ${gate ? 'an approved storyboard before any paid media (call storyboard again if the shots change), ' : ''}music first and cuts on its bars (music_map, fit_music), moving pictures, render scripts that name their programs (edit them with edit_file), check the real frames, and deliver ${deliver}.]`;
   }
   return `[Video Mode: the harness reads this request as a film, so it loaded the video skills below for you. A film is judged by sound, rhythm and movement before looks. Work in this order; the user sees each step. Questions go through ${how}
-1. Brief, once: one ask_user card with questions (up to 4) on what the request leaves open: length and shapes (recommend about ${len} s, ${shapes}); how the picture is made (recommend ${ROUTE_TEXT[route]}, ${ROUTE_COST(route, len)}; offer the cheaper routes with their prices); music (recommend ${MUSIC_TEXT[music]}); the user's own material and real people (theirs first; real people are allowed: ask how to show them, e.g. generated likenesses, licensed photos or the user's own, and credit the photos).${off.length ? ` This chat has ${off.map((c) => (c === 'video' ? 'video clips' : 'music')).join(' and ')} switched off: say in the brief that the user can switch ${off.length > 1 ? 'them' : 'it'} on in the chat's 🧰 Tools for a better film, and plan without ${off.length > 1 ? 'them' : 'it'}.` : ''}
+1. Brief, once: one ask_user card with questions (up to 4) on what the request leaves open: length and shapes (recommend about ${len} s, ${shapes}); how the picture is made (recommend ${ROUTE_TEXT[route]}, ${ROUTE_COST(route, len)}; offer the cheaper routes with their prices); music (recommend ${MUSIC_TEXT[music]}); the user's own material and real people (theirs first; real people are allowed: ask how to show them, e.g. generated likenesses, licensed photos or the user's own, and credit the photos).${off.length ? ` This chat has ${off.map((c) => (c === 'video' ? 'video clips' : 'music')).join(' and ')} switched off: before the brief, call enable_media for ${off.join(' and ')} (one card where the user switches ${off.length > 1 ? 'them' : 'it'} on and picks the model), then recommend from what is on.` : ''}
 2. Story: one ask_user with three different structures, one line each (a journey, a countdown, a before and after…). Your pick first; avoid the obvious cliché.
 3. Plan: call plan with the spec (logline, length, shapes, route, music, the real facts it uses) and the items; done_when names the film files and the checks.
 4. Storyboard: call storyboard with 6 to 9 key shots (time, framing, camera move, what we see, sound)${gate ? '. The harness refuses paid media until the user approves it' : ''}. Then load the route skill with use_skill (${[...new Set(Object.values(ROUTE_SKILLS).flatMap((v) => v.split(' and ')))].join(', ')}).
 5. Paid media: list every paid call in one media_plan (stills, clips, music), then make them.
 6. Music first. ${music === 'ai' ? 'compose_music: instrumental, the tempo (e.g. "96 BPM"), the sections in order and "a clean ending"; a music model ignores the exact length, so then' : music === 'own' ? 'Take the user\'s track, then' : 'Write the score (keep 20-150 Hz below the rest; no endless noise beds), then'} call music_map on it (with the tempo you asked for) for its bars, the places it changes and its ending, and fit_music to the film's length (it trims from the front on a bar line so the real ending stays, or plays whole bars again). Re-time the shots to the bar lines: cut on bars and accents, vary shot lengths (1, 2 or 3 bars), and put the key moment on the biggest change.
 7. Pictures that move: ${route === 'animate' || route === 'hybrid' ? `make the stills first (they keep people and places consistent), then make_video from each still (start_image) for ${route === 'hybrid' ? 'the 3 or 4 key shots, and camera moves for the rest' : 'every shot'}, as long as its bars.` : route === 'images' ? 'every still gets a clear camera move (push, pan, tilt, parallax) and something moving inside the frame (rain, steam, light, particles); keep shots short.' : 'every shot has movement in it, not only a camera move.'}
-8. Build and render: scripts go in .quorx/scratch and call programs by name (execFileSync('ffmpeg', [...]), spawn('node', [...])), so the command checks can read them; change a script with edit_file, never with Get-Content/Set-Content or sed. Finished films go in assets/edits/<name>.mp4, plus the other shapes asked for; master at about -14 LUFS.
+8. Build and render: ${route === 'code' ? 'draw the film as a page with window.render(t), window.DUR and window.READY (film-render skill) and render it with render_film, with the fitted music as its audio: QuorX plays it frame by frame in its own browser, so there is no capture script and nothing to approve. Other ' : ''}scripts go in .quorx/scratch and call programs by name (execFileSync('ffmpeg', [...]), spawn('node', [...])), so the command checks can read them; change a script with edit_file, never with Get-Content/Set-Content or sed. Finished films go in assets/edits/<name>.mp4, plus the other shapes asked for; master at about -14 LUFS.
 9. Check the film, not the plan: make a contact sheet (ffmpeg -vf "fps=1/2,scale=480:-1,tile=4x3" → assets/edits/sheet.jpg) and look at it; fix what fails. The harness measures the rest (length, sound, loudness, bass, cuts against the beat) for the reviewer.
 10. Deliver ${deliver}. Say in your reply what was spent and what you assumed.]`;
 }
@@ -155,6 +155,28 @@ export const FIT_MUSIC_TOOL = { type: 'function', function: { name: 'fit_music',
     seconds: { type: 'number', description: 'The film\'s length; the result is the nearest length on bar lines' },
     bpm: { type: 'number', description: 'The tempo you asked for, as for music_map' },
     keep_ending: { type: 'boolean', description: 'When shortening: keep the track\'s ending (default true) or end on a bar line' } } } } };
+
+// ---------- rendering a film drawn in code ----------
+// QuorX's own browser plays the page frame by frame and ffmpeg encodes it: no capture script for the agent to write,
+// and nothing to approve. A motion piece's capture scripts (Edge started from a path in a variable) waited for the user
+// about 20 times in one test.
+export const RENDER_FILM_TOOL = { type: 'function', function: { name: 'render_film', description: 'Video Mode: render a film drawn in code to an .mp4. The page in the project must define window.render(t) (draw the frame at time t, in seconds; it may return a promise) and set window.READY = true once fonts and images have loaded; window.DUR gives the length. QuorX opens it in its own browser at the film\'s size, calls render for every frame, and encodes it with ffmpeg, with the music if you give it. Free; no command to run.', parameters: {
+  type: 'object', required: ['page', 'out'], properties: {
+    page: { type: 'string', description: 'The film page in the project, e.g. film/index.html' },
+    out: { type: 'string', description: 'Where to save the film, e.g. assets/edits/teaser.mp4' },
+    seconds: { type: 'number', description: 'Length; default window.DUR' },
+    fps: { type: 'integer', minimum: 12, maximum: 60, description: 'Frames per second (default 30)' },
+    aspect: { type: 'string', enum: ['16:9', '9:16', '1:1'], description: 'Shape: 1920×1080, 1080×1920 or 1080×1080 (default 16:9)' },
+    audio: { type: 'string', description: 'Optional: the soundtrack in the project (e.g. the fit_music output), cut to the film\'s length' },
+    start: { type: 'number', description: 'Optional: start at this time in the page (default 0)' } } } } };
+export const RENDER_SIZES = { '16:9': [1920, 1080], '9:16': [1080, 1920], '1:1': [1080, 1080] };
+
+/** ffmpeg's arguments for frames piped in as JPEGs, with an optional soundtrack cut to the picture. */
+export function renderArgs({ fps, seconds, out, audio = '' }) {
+  return ['-v', 'error', '-y', '-f', 'image2pipe', '-framerate', String(fps), '-i', '-', ...(audio ? ['-i', audio] : []),
+    '-map', '0:v', ...(audio ? ['-map', '1:a', '-c:a', 'aac', '-b:a', '192k'] : []),
+    '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '18', '-preset', 'medium', '-r', String(fps), '-t', String(seconds), '-movflags', '+faststart', out];
+}
 
 // ---------- the storyboard ----------
 export const STORYBOARD_TOOL = { type: 'function', function: { name: 'storyboard', description: 'Video Mode: show the storyboard (6 to 9 key shots) in one sheet in the user\'s pane, and wait for them to approve it before paid pictures, clips, music or voice. Call it again with the changed shots when they ask for changes.', parameters: {
@@ -228,7 +250,8 @@ export function saveStoryboard(root, chatId, data) {
  */
 export function finishedFilms(found) {
   const parts = /(^|\/)(clips?|shots?|takes?|generated|scratch|frames|tmp|temp|raw|parts)\//i;
-  const partName = /^(shot|clip|take|part|seg|video_)[\w-]*\.\w+$/i;
+  // …and copies that are not the film: a silent picture-only cut was reviewed as "no sound".
+  const partName = /^(shot|clip|take|part|seg|video_)[\w-]*\.\w+$|[-_.](silent|nosound|no-sound|mute|muted|draft|test|tmp|temp|preview|proxy)\.\w+$/i;
   const finals = /(^|\/)(edits?|final|finals|export|exports|out|output|renders?|films?)\//i;
   return found.filter((x) => !parts.test(x.r) && !partName.test(x.r.split('/').pop()))
     .sort((a, b) => (finals.test(b.r) - finals.test(a.r)) || b.t - a.t).map((x) => x.r);

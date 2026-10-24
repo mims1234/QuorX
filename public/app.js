@@ -65,7 +65,7 @@ const BUCKET = {
   unclear: ['deciders unsure', 'The deciders could not settle it (low confidence).'],
   unmatched: ['guess unclear', 'The agent\'s guess did not match any option, so it can\'t be compared.'],
 };
-const TOOL_NAME = { remember: '📌 Remember this in every chat', media_plan: '🎞 Production plan', imagine: '🖼 Make a picture', make_video: '🎬 Make a video', compose_music: '🎵 Compose music', speak: '🗣 Speak aloud',
+const TOOL_NAME = { remember: '📌 Remember this in every chat', media_plan: '🎞 Production plan', enable_media: '🧰 Switch on paid tools', imagine: '🖼 Make a picture', make_video: '🎬 Make a video', compose_music: '🎵 Compose music', speak: '🗣 Speak aloud',
   write_artifact: '📄 Write a page', edit_artifact: '✏️ Edit a page', read_artifact: '👀 Read a page', decide: '⚖️ Ask the deciders',
   list_files: '🗂 List files', read_file: '👀 Read a file', write_file: '📝 Write a file', append_file: '📝 Append to a file', edit_file: '✏️ Edit a file',
   search_docs: '🔎 Search the attached documents', read_doc: '📄 Read an attached document', list_docs: '📎 List attached documents',
@@ -3574,6 +3574,7 @@ function traceHTML(m) {
       if (i >= 0) out[i] = out[i].replace(`<span class="sub" data-llm="${e.step}"></span>`, `<div class="sub">${secs(e.ms)} · <span class="tok-out">${e.tokensOut} tokens out</span> · ${money(e.cost, 5)}${e.provider ? ` · via <span class="tr-prov" title="The provider OpenRouter routed this call to">${esc(e.provider)}</span>` : ''}${e.model && e.model !== m.trace.find((x) => x.t === 'llm_start' && x.step === e.step)?.model ? ` · <b class="tr-fallback" title="The chat's model was unavailable, so OpenRouter used the fallback model">fallback ${esc(short(e.model))}</b>` : ''}${e.toolCalls.length ? ` · then ${e.toolCalls.join(', ')}` : ''}</div>${e.aside ? `<div class="aside">💬 ${esc(e.aside)}</div>` : ''}`);
     } else if (e.t === 'tool' && e.name !== 'decide') row(e.at, `${e.by === 'reviewer' ? '🧪 <span class="tr-rv">reviewer</span> ' : e.by === 'helper' ? `🤝 <span class="tr-hp">helper ${e.helper || ''}</span> ` : ''}${TOOL_NAME[e.name]?.split(' ')[0] || '🔧'} <b>${esc(e.name)}</b><div class="sub">${esc(argSummary(e))}</div>`, e.by === 'reviewer' ? 'browser' : 'tool');
     else if (e.t === 'reading') row(e.at, `📝 <b>Prompt enhancer</b> ${esc(short(e.model))} read the request${e.late ? ' (too late for the first step; the deciders still use it)' : ''} · ${secs(e.ms)} · ${money(e.cost, 5)}<div class="sub" style="white-space:pre-wrap">${linkUrls(esc(e.text))}</div>`, 'note');
+    else if (e.t === 'tools_on') row(e.at, `🧰 Switched on for this chat: ${(e.kinds || []).map((k) => esc({ image: 'pictures', video: 'video clips', music: 'music', speech: 'voice' }[k] || k)).join(', ')}${Object.keys(e.models || {}).length ? ` · ${Object.entries(e.models).map(([k, mm]) => `${esc(k)}: ${esc(short(mm))}`).join(', ')}` : ''}`, 'note');
     else if (e.t === 'video_mode') row(e.at, e.on ? `🎬 <b>Video Mode</b> on${e.skills?.length ? ` · loaded ${e.skills.map(esc).join(', ')}` : ''}<div class="sub">Brief, story and storyboard come before anything is spent${e.first ? '' : ' (the brief was settled earlier in this chat)'}.</div>` : '🎬 Video Mode off: you said this is not a film', 'note');
     else if (e.t === 'reading_edit') row(e.at, e.text ? `📝 You corrected the reading<div class="sub" style="white-space:pre-wrap">${esc(e.text)}</div>` : '📝 You dropped the reading', 'note');
     else if (e.t === 'fresh_eyes_start') row(e.at, `👀 <b>Fresh eyes</b> ${esc(short(e.model))}: a problem came back, so a clean-context model takes a look<div class="sub">${(e.problems || []).map(esc).join('<br>')}</div>`, 'note');
@@ -3708,7 +3709,7 @@ function waitHTML(card) {
   const w = card.wait;
   if (!w) return '';
   if (w.held) return '<div class="aw held"><span class="aw-text">⏸ Waiting for you: nothing happens until you answer.</span></div>';
-  const then = { deciders: 'the deciders answer for you', recommended: 'the agent\'s recommendations stand', 'go ahead': 'the storyboard stands and the agent goes ahead', run: 'it runs (the deciders saw little risk)', skip: 'it is skipped (the deciders weren\'t sure it is harmless)', stop: 'the agent stops waiting and carries on without it' }[w.then] || 'the reply carries on';
+  const then = { deciders: 'the deciders answer for you', recommended: 'the agent\'s recommendations stand', 'go ahead': 'the storyboard stands and the agent goes ahead', run: 'it runs (the deciders saw little risk)', 'switch on': 'they are switched on (every paid call is still priced and approved)', skip: 'it is skipped (the deciders weren\'t sure it is harmless)', stop: 'the agent stops waiting and carries on without it' }[w.then] || 'the reply carries on';
   const left = Math.max(0, Math.ceil((w.until - Date.now()) / 1000));
   return `<div class="aw" data-until="${w.until}" data-secs="${w.secs}" data-run="${esc(w.runId || '')}" data-id="${esc(card.id)}"><span class="aw-bar" aria-hidden="true"><i style="width:${Math.min(100, (left / (w.secs || 1)) * 100)}%"></i></span><span class="aw-text">⚡ No answer in <b class="aw-n">${left}</b>s and ${then}.</span><button type="button" class="aw-hold" title="Stop the clock: the card waits until you answer">Wait for me</button></div>`;
 }
@@ -3797,10 +3798,16 @@ function approvalHTML(a, live = true) {
   const finalModel = o?.model || c.model;
   const name = TOOL_NAME[c.tool] || esc(c.tool);
   const head = c.free ? `<h4>${name} <small>(free)</small></h4>` : `<h4>${name} · <span class="cost">${money(c.est, 3)}</span> <small>(${esc(c.basis || 'estimated')})</small></h4>`;
-  // A production plan (media_plan): one row per kind of paid call, approved together.
-  const planRows = c.items ? `<ul class="ap-plan">${c.items.map((x) => `<li><b>${x.count} ×</b> ${esc({ image: '🖼 picture', video: '🎬 clip', music: '🎵 music', speech: '🗣 voice' }[x.kind] || x.kind)} · ${esc(short(x.model))}${x.detail ? ` · ${esc(x.detail)}` : ''}<span class="cost">${money(x.each * x.count, 3)}</span>${x.what ? `<div class="dim">${esc(x.what)}</div>` : ''}</li>`).join('')}</ul>` : '';
-  const model = c.free ? '' : c.items ? planRows : waiting && opts.length > 1
-    ? `<label class="what">Model <select class="pickModel">${opts.map((x) => `<option value="${esc(x.model)}" data-est="${x.est}" ${x.model === c.model ? 'selected' : ''}>${esc(short(x.model))} · ${money(x.est, 3)} · ${esc(x.detail)}${x.model === c.model ? (c.pickedBy === 'agent' ? ' (agent’s choice)' : ' (your default)') : ''}</option>`).join('')}</select></label>`
+  // Every card that asks to generate something has a model dropdown: the kind's models from Settings with their prices,
+  // and "More models…" for any other model of that kind (priced when you approve).
+  const modelSelect = (kind, current, options, key = '') => `<select class="pickModel" data-kind="${esc(kind)}" ${key !== '' ? `data-key="${esc(key)}"` : ''} aria-label="Model">${(options?.length ? options : [{ model: current, est: null, detail: '' }]).map((x) => `<option value="${esc(x.model)}" ${x.est != null ? `data-est="${x.est}"` : ''} ${x.model === current ? 'selected' : ''}>${esc(short(x.model))}${x.est != null ? ` · ${money(x.est, 3)}` : ''}${x.detail ? ` · ${esc(x.detail)}` : ''}</option>`).join('')}<option value="__more">More models…</option></select>`;
+  const KIND_LABEL = { image: '🖼 picture', video: '🎬 clip', music: '🎵 music', speech: '🗣 voice' };
+  // A production plan (media_plan): one row per kind of paid call, approved together; while it waits, each row's model can change.
+  const planRows = c.items ? `<ul class="ap-plan">${c.items.map((x, i) => `<li><b>${x.count} ×</b> ${esc(KIND_LABEL[x.kind] || x.kind)} · ${waiting ? modelSelect(x.kind, x.model, x.options, i) : esc(short(x.model))}${x.detail && !waiting ? ` · ${esc(x.detail)}` : ''}<span class="cost">${money(x.each * x.count, 3)}</span>${x.what ? `<div class="dim">${esc(x.what)}</div>` : ''}</li>`).join('')}</ul>` : '';
+  // Switching paid tools on: one row per tool, each with the model it will use.
+  const enableRows = c.kinds ? `<ul class="ap-plan">${c.kinds.map((k) => { const cur = c.kindOptions?.[k]?.[0]?.model || ''; return `<li>${esc({ image: '🖼 Pictures', video: '🎬 Video clips', music: '🎵 Music', speech: '🗣 Voice' }[k] || k)} · ${waiting ? modelSelect(k, cur, c.kindOptions?.[k], k) : esc(short(cur))}</li>`; }).join('')}</ul>` : '';
+  const model = c.kinds ? enableRows : c.free ? '' : c.items ? planRows : waiting && c.cat
+    ? `<label class="what">Model ${modelSelect(c.cat, c.model, opts)}${c.pickedBy === 'agent' ? ' <small class="dim">agent’s choice</small>' : ''}</label>`
     : `<div class="what">${esc(short(finalModel))} · ${esc(c.detail)}${c.pickedBy === 'agent' && finalModel === c.model ? ' · chosen by the agent' : ''}</div>`;
   // Answered (or no longer waiting): one line, ✓/⛔ + the tool + what it did + the price; click it for the details.
   if (!waiting) {
@@ -3826,17 +3833,33 @@ function approvalHTML(a, live = true) {
 function wireApproval(card, m) {
   if (card.classList.contains('shell-card')) return wireShellCard(card, m);
   const id = card.dataset.id;
-  const sel = $('.pickModel', card);
-  if (sel) sel.onchange = () => { $('.yes', card).textContent = `Approve ${money(Number(sel.selectedOptions[0].dataset.est), 3)}`; };
+  const sels = [...card.querySelectorAll('.pickModel')];
+  const sel = sels.length === 1 && !sels[0].dataset.key ? sels[0] : null; // a single paid call's model
+  for (const s of sels) {
+    let last = s.value;
+    s.onchange = async () => {
+      // "More models…": the model browser for that kind; the pick joins the list (priced by the harness on approval).
+      if (s.value === '__more') {
+        const chosen = await pickModel(s.dataset.kind, last, { context: `Model for this ${s.dataset.kind === 'image' ? 'picture' : s.dataset.kind}` });
+        if (!chosen) { s.value = last; return; }
+        if (![...s.options].some((o) => o.value === chosen)) s.insertAdjacentHTML('afterbegin', `<option value="${esc(chosen)}">${esc(short(chosen))} · priced on approval</option>`);
+        s.value = chosen;
+      }
+      last = s.value;
+      const yes = $('.yes', card), est = s.selectedOptions[0]?.dataset.est;
+      if (sel && yes) yes.textContent = est != null ? `Approve ${money(Number(est), 3)}` : 'Approve';
+    };
+  }
   const answer = async (approve, always = false) => {
     card.querySelectorAll('button, select').forEach((b) => (b.disabled = true));
     const reason = $('textarea', card)?.value.trim() || '';
-    await fetch('/api/approve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ runId: m.runId, id, approve, always, reason, model: sel?.value }) }).catch(() => {});
+    const models = sel ? null : Object.fromEntries(sels.map((s) => [s.dataset.key, s.value]).filter(([, v]) => v && v !== '__more'));
+    await fetch('/api/approve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ runId: m.runId, id, approve, always, reason, model: sel?.value, ...(models && Object.keys(models).length ? { models } : {}) }) }).catch(() => {});
   };
   $('.yes', card).onclick = () => answer(true);
   const always = $('.always', card); if (always) always.onclick = () => answer(true, true);
   $('.no', card).onclick = () => answer(false);
-  noteLeadsToNo(card, 'Decline', () => $('.no', card).click());
+  noteLeadsToNo(card, $('.no', card).textContent || 'Decline', () => $('.no', card).click()); // the card's own word ("Keep off")
 }
 
 // ---------- the project budget card (🔒 Strict, when a reply reaches the budget) ----------
@@ -4300,6 +4323,8 @@ async function followRun(c, m, open) {
         if (e.t === 'error') { m.error = e.msg; if (e.stats && !m.stats) { m.stats = { ...e.stats, partial: true }; G.sessionCost += e.stats.cost || 0; renderSpend(); } }
         if (e.t === 'interrupted') { m.error = 'The harness restarted while this reply was running.'; m.resumable = !!e.resumable; }
         if (e.t === 'compacted') { a.summary = e.summary; a.summaryAt = e.cutoffAt; }
+        // You switched paid tools on from the agent's card: they stay on for this chat (its 🧰 Tools menu shows them).
+        if (e.t === 'tools_on') { for (const k of e.kinds || []) if (CHAT_TOOLS.includes(k)) c.tools[k] = true; saveChat(c); renderToolbars(); }
         if (e.t === 'video_mode') {
           const u = a.messages[a.messages.indexOf(m) - 1];
           if (e.on) a.videoMode = 'on';
