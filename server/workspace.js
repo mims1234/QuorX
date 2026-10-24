@@ -17,8 +17,8 @@ import { jobsAvailable, adoptPid, jobCount, killJob, closeJob, startDetached } f
 import { snapshot, changesSince, objectFor, pruneObjects } from './snapshot.js';
 import { freshPath } from './userenv.js';
 
-// Programs a server or launch config starts without a check (as before the shell tool). Any other program is judged
-// by the command engine first (agent.js start_server); here it only has to be one plain program name or path.
+// The usual programs a server or launch config starts with. Every start, these included, is judged by the command
+// engine first (agent.js start_server); here it only has to be one plain program name or path.
 export const ALLOWED = ['node', 'npm', 'npx', 'python', 'python3', 'py', 'pip', 'pip3', 'deno', 'bun', 'pnpm', 'yarn', 'uv'];
 const PROGRAM = /^[\w.\-\\/:@+]+$/;
 const BAD = /[&|<>^%`$;"'\r\n(){}!]/;
@@ -217,11 +217,21 @@ export function checkCommand(cmd, args) {
   return exe;
 }
 
+// No pager, editor or terminal prompt for the agent's commands and terminals: a read-only command (git log, git diff,
+// man) would otherwise open less or vim, and those take commands of their own from whatever is typed next. Output goes
+// straight through (cat); git's editor is `true`, which git runs through its own sh on Windows too, so a merge, an
+// amend or a rebase keeps the text git wrote and a commit without -m stops for want of a message; git never waits for
+// a password at the terminal; and less, if it is started anyway, can't run commands (LESSSECURE). EDITOR and VISUAL
+// are the same `true`: a program that opens one either finds nothing to open or carries on unchanged.
+export const NO_PAGER_ENV = { PAGER: 'cat', GIT_PAGER: 'cat', MANPAGER: 'cat', SYSTEMD_PAGER: 'cat', LESSSECURE: '1',
+  GIT_EDITOR: 'true', GIT_SEQUENCE_EDITOR: 'true', EDITOR: 'true', VISUAL: 'true', GIT_TERMINAL_PROMPT: '0' };
+
 // No secrets for code the agent wrote: drop anything that looks like a key, token or password. PATH is brought up to
-// date (userenv.js), so a tool installed during the chat is found at once.
+// date (userenv.js), so a tool installed during the chat is found at once. NO_PAGER_ENV comes last, so a project's
+// own variables can't bring a pager back.
 export function childEnv(extra = {}) {
   const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/KEY|TOKEN|SECRET|PASSW|PASSPHRASE|PWD_|OPENROUTER|CREDENTIAL|AUTH|COOKIE|SESSION_?(TOKEN|KEY|SECRET|ID$)|_PAT$|PRIVATE|DSN|DATABASE_URL|_URI$|CONNECTION_STRING|WEBHOOK|SSH_AUTH_SOCK|GPG_AGENT|CLIENT_ID|CLIENT_SECRET/i.test(k) || k === 'PWD' || k === 'OLDPWD'));
-  return { ...freshPath(env), ...extra, FORCE_COLOR: '0', BROWSER: 'none' };
+  return { ...freshPath(env), ...extra, FORCE_COLOR: '0', BROWSER: 'none', ...NO_PAGER_ENV };
 }
 
 // The command line for one program and its plain arguments.
@@ -284,8 +294,9 @@ export function stopNote(r) {
 }
 
 // Agent commands get no keyboard, so tools that would stop to ask are told not to: no prompts, no MSBuild
-// processes left running (they make `dotnet build` look hung), no telemetry banners, no colour codes in logs.
-const NON_INTERACTIVE = { CI: '1', GIT_TERMINAL_PROMPT: '0', PIP_NO_INPUT: '1', MSBUILDDISABLENODEREUSE: '1', DOTNET_CLI_TELEMETRY_OPTOUT: '1',
+// processes left running (they make `dotnet build` look hung), no telemetry banners, no colour codes in logs. (No pager,
+// editor or git prompt comes from childEnv, for the agent's terminal too.)
+const NON_INTERACTIVE = { CI: '1', PIP_NO_INPUT: '1', MSBUILDDISABLENODEREUSE: '1', DOTNET_CLI_TELEMETRY_OPTOUT: '1',
   DOTNET_NOLOGO: '1', NO_COLOR: '1', CARGO_TERM_COLOR: 'never', npm_config_yes: 'true', POWERSHELL_TELEMETRY_OPTOUT: '1' };
 
 // `term` ({ projectId, source, chatId }) sends the command and its output to the terminal feed as it runs.

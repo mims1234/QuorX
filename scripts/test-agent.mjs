@@ -2374,6 +2374,53 @@ test('launch_config lists, saves, renames and removes saved servers; direct writ
   assert.deepEqual(file.configurations.map((c) => c.name), ['site']);
 });
 
+// npm, npx and pip used to skip the command check in start_server. Now every line gets it: a plain dev server still
+// starts with no card, and in Strict a package fetched and run (new or saved) or an install asks, as it does in shell.
+test('start_server: every line, saved or new, goes through the command check; a plain dev server still starts', async () => {
+  let b = 0, cards = [];
+  const { events, bodies } = await run(() => [
+    reply('', [['start_server', { name: 'web', command: 'npm', args: ['run', 'dev'] }]]),
+    reply('', [['start_server', { name: 'api', command: 'node', args: ['server.js'] }]]),
+    reply('', [['start_server', { name: 'tool', command: 'npx', args: ['-y', 'somepkg'] }]]),
+    reply('', [['start_server', { name: 'deps', command: 'pip', args: ['install', '-r', 'requirements.txt'] }]]),
+    reply('', [['launch_config', { action: 'save', name: 'fetched', command: 'npx', args: ['-y', 'otherpkg'] }]]),
+    reply('', [['start_server', { name: 'fetched' }]]),
+    reply('Done.'),
+  ][b++], { settings: { approval: 'strict' },
+    prep: (d) => { fs.writeFileSync(path.join(d, 'package.json'), JSON.stringify({ scripts: { dev: 'vite' } })); fs.writeFileSync(path.join(d, 'server.js'), 'console.log(1);\n'); fs.writeFileSync(path.join(d, 'requirements.txt'), 'flask\n'); },
+    onEvent: (e, id) => { if (e.t === 'approval') { cards.push(e.what); setTimeout(() => answerApproval(id, e.id, { approve: false }), 5); } } });
+  const results = toolResults(bodies.at(-1));
+  assert.match(results[0], /Server "web" is running/);
+  assert.match(results[1], /Server "api" is running/);
+  assert.doesNotMatch(results[2], /is running/);
+  assert.doesNotMatch(results[3], /is running/);
+  assert.doesNotMatch(results[5], /is running/, 'a saved config is checked the same way');
+  assert.deepEqual(cards, ['npx -y somepkg', 'pip install -r requirements.txt', 'npx -y otherpkg']);
+  assert.deepEqual(of(events, 'server').map((e) => e.name), ['web', 'api']);
+});
+
+// ⚡ YOLO with its default settings: everyday starts, local installs included, run with no card and no vote, as in shell.
+test('start_server in YOLO: dev servers, npx vite and local installs start with no card and no decider vote', async () => {
+  const real = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    const u = String(url);
+    if (u.startsWith('https://registry.npmjs.org/left-pad')) return new Response(JSON.stringify({ time: { created: '2014-03-14T00:00:00Z' } }));
+    if (u.startsWith('https://api.npmjs.org/downloads/')) return new Response(JSON.stringify({ downloads: 2000000 }));
+    return real(url, init);
+  };
+  const starts = [['web', 'npm', ['run', 'dev']], ['api', 'node', ['server.js']], ['py', 'python', ['-m', 'http.server', '{PORT}']], ['vite', 'npx', ['vite']],
+    ['deps', 'npm', ['install']], ['pad', 'npm', ['install', 'left-pad']], ['req', 'pip', ['install', '-r', 'requirements.txt']]];
+  let b = 0;
+  try {
+    const { events, bodies } = await run(() => [...starts.map(([name, command, args]) => reply('', [['start_server', { name, command, args }]])), reply('Done.')][b++], {
+      prep: (d) => { fs.writeFileSync(path.join(d, 'package.json'), JSON.stringify({ scripts: { dev: 'vite' } })); fs.writeFileSync(path.join(d, 'server.js'), 'console.log(1);\n'); fs.writeFileSync(path.join(d, 'requirements.txt'), 'flask\n'); } });
+    const results = toolResults(bodies.at(-1));
+    starts.forEach(([name], k) => assert.match(results[k], new RegExp(`Server "${name}" is running`), name));
+    assert.deepEqual(of(events, 'approval'), [], 'no card and no vote');
+    assert.deepEqual(of(events, 'server').map((e) => e.name), starts.map(([name]) => name));
+  } finally { globalThis.fetch = real; }
+});
+
 test('✨ Enhance rewrites a draft with the given model, sees earlier turns, and drops fences or quotes', async () => {
   const { rewritePrompt, REWRITE_SYSTEM } = await import('../server/enhancer.js');
   let sent = null;

@@ -1227,12 +1227,31 @@ function suggestions(s) {
 // ---------- the decision ----------
 const RANK = { allow: 0, ask: 1, deny: 2 };
 
+// start_server (ctx.server): the project's own server started by node, npm, python and the like is what the tool is
+// for, so that start doesn't ask, as before. A package fetched and run (npx, uvx, npm exec, pnpm dlx, bun x, npm create,
+// uv run --with, a URL), an install, inline code, a line inside a project script the rules flag, every path and every
+// rule are judged as for any command.
+const SERVER_RUNNERS = new Set(['node', 'npm', 'pnpm', 'yarn', 'bun', 'deno', 'python', 'python3', 'py', 'uv']);
+const FETCH_RUN = new Set(['exec', 'x', 'dlx', 'create', 'init', 'innit', 'tool', 'tools']);
+function serverStart(s, k) {
+  if (k.cls !== 'build' || k.inline || s.via || s.dynamicProgram || s.opaque || !SERVER_RUNNERS.has(s.program)) return false;
+  const words = s.args.map((a) => low(a.text)), plain = s.args.filter((a) => !a.param).map((a) => low(a.text));
+  return !plain.slice(0, 2).some((w) => FETCH_RUN.has(w)) && !words.some((w) => /^--with(-requirements|-editable)?(=|$)|:\/\//.test(w));
+}
+
+// The agent's terminal (ctx.terminal): pagers and editors started there read keys as their own commands (open a file,
+// write one, run a shell), and nothing the agent types afterwards is checked, so starting one counts as opaque.
+// (PowerShell's man and help page through more.)
+const TERM_APPS = new Set(['less', 'more', 'most', 'pg', 'man', 'help', 'info', 'vi', 'vim', 'nvim', 'view', 'vimdiff', 'ex', 'ed', 'nano', 'pico',
+  'emacs', 'micro', 'joe', 'mcedit', 'mc', 'edit']);
+
 /**
  * Decides what happens to a command line before it runs.
  * ctx: { shell: 'powershell'|'pwsh'|'cmd'|'bash'|'zsh'|'direct', root, cwd?, env?, rules: [{effect, match, by, scope}], mode: 'strict'|'yolo',
  *        yolo: { check: { web, inline, build, install, unknown, reads }, external, opaque, outside, global } }
  *        check: what YOLO sends to the deciders instead of running it (left out: every one is checked, the careful default);
  *        external, opaque, outside, global: what the deciders may approve instead of asking you. See safety.js yoloOf().
+ *        server: true for start_server (see serverStart); terminal: true for the agent's terminal (see TERM_APPS).
  * Returns { verdict: 'allow'|'ask'|'deny', who: 'user'|'deciders'|null, why, decidedBy, segments: [...], hint?, standIn }.
  * standIn: the deciders vote on it in place of the user (without them it would pause for you), not as a check first.
  */
@@ -1266,7 +1285,7 @@ export async function decide(line, ctx) {
       if (r?.opaque) s.opaque ||= r.opaque;
       if (r?.extra.length) { queue.unshift(...r.extra, s); continue; }
     }
-    const k = classify(s, s.shell || shell);
+    const k = ctx.terminal && TERM_APPS.has(s.program) ? { cls: 'opaque', why: `${s.rawProgram} in a terminal takes commands of its own from whatever is typed next` } : classify(s, s.shell || shell);
     const paths = pathsOf(s, k, s.ctx || c);
     written.push(...paths.filter((p) => p.kind === 'write' && p.resolved).map((p) => p.resolved));
     const seg = { text: s.text, program: s.program, cls: k.cls, why: k.why, global: !!k.global, paths, rule: null, suggest: suggestions(s), ...(s.via ? { via: s.via } : {}) };
@@ -1307,6 +1326,7 @@ export async function decide(line, ctx) {
     else if (['net', 'build', 'install', 'unknown'].includes(k.cls)) {
       const kind = k.cls === 'net' ? 'web' : k.inline ? 'inline' : k.cls;
       if (!check(kind) && !(k.cls === 'unknown' && k.why)) by = `yolo:${kind}`;
+      else if (ctx.server && serverStart(s, k)) by = 'server';
       else { v = 'ask'; who = 'deciders'; stand = k.cls === 'unknown' && !!k.why; why = why || (k.cls === 'net' ? `${s.rawProgram} reaches the web` : k.cls === 'unknown' ? 'no rule covers this command' : `no rule allows ${seg.suggest.prefix.replace(/\*$/, '')} yet`); }
     }
     // Rules

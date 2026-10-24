@@ -343,6 +343,10 @@ test("your own terminal gets the normal environment; the agent's commands still 
     assert.equal(agent.GITHUB_TOKEN, undefined);
     assert.equal(agent.FORCE_COLOR, '0');
     assert.equal(agent.BROWSER, 'none');
+    // No pager, editor or git prompt for the agent, whatever the project's own variables say; your own terminal keeps yours.
+    const quiet = childEnv({ PAGER: 'less', GIT_PAGER: 'less', EDITOR: 'vim' });
+    for (const [k, v] of Object.entries({ PAGER: 'cat', GIT_PAGER: 'cat', MANPAGER: 'cat', LESSSECURE: '1', GIT_EDITOR: 'true', GIT_SEQUENCE_EDITOR: 'true', EDITOR: 'true', VISUAL: 'true', GIT_TERMINAL_PROMPT: '0' })) assert.equal(quiet[k], v, k);
+    assert.equal(mine.GIT_PAGER, process.env.GIT_PAGER);
   } finally {
     for (const [k, v] of [['GITHUB_TOKEN', was.token], ['FORCE_COLOR', was.color], ['ELECTRON_RUN_AS_NODE', was.run]]) { if (v == null) delete process.env[k]; else process.env[k] = v; }
   }
