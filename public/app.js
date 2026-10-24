@@ -189,7 +189,7 @@ function normalise(doc) {
   return { id: doc.id, title: doc.title || 'New chat', projectId: doc.projectId || 'scratch', created: doc.created || Date.now(),
     approval: doc.approval || G.settings.approval || 'strict', paneHidden: doc.paneHidden,
     tools: { ...DEFAULT_CHAT_TOOLS, ...(doc.tools || {}) },
-    agent: { setup, allowed: agent.allowed || [], extraUsage: agent.extraUsage || [], summary: agent.summary, summaryAt: agent.summaryAt, ...(agent.videoMode ? { videoMode: agent.videoMode } : {}), messages: (agent.messages || []).map((m) => ({ ...m, live: false, arts: m.arts && dedupeArts(m.arts) })), artifacts },
+    agent: { setup, allowed: agent.allowed || [], extraUsage: agent.extraUsage || [], summary: agent.summary, summaryAt: agent.summaryAt, ...(agent.videoMode ? { videoMode: agent.videoMode } : {}), ...(agent.videoFrom ? { videoFrom: agent.videoFrom } : {}), messages: (agent.messages || []).map((m) => ({ ...m, live: false, arts: m.arts && dedupeArts(m.arts) })), artifacts },
     ctx: [], images: [], docs: [], running: null, el: null };
 }
 const dedupeArts = (list) => [...new Map(list.map((a) => [a.id, { id: a.id, kind: a.kind, title: a.title }])).values()];
@@ -3866,6 +3866,8 @@ function openFreshChat(c, brief, model) {
   n.tools = JSON.parse(JSON.stringify(c.tools || {}));
   n.agent.setup = { ...JSON.parse(JSON.stringify(c.agent.setup)), model };
   n.remixOf = { chatId: c.id, title: c.title, at: Date.now() };
+  // 🎬 A film carries on as a film: Video Mode stays on (no new brief), and the storyboard approved there still counts.
+  if (c.agent.videoMode) { n.agent.videoMode = c.agent.videoMode; n.agent.videoFrom = c.id; }
   G.open.set(n.id, n); G.panes = [n.id]; G.focus = 0;
   G.view = { id: null, src: false, files: false }; G.traceRun = null;
   renderPanes(); saveChat(n, true); savePrefs(); renderSidebar();
@@ -4169,7 +4171,7 @@ async function runChat(c, text, ctx, imgs, { resumeOf, docs = [], more = 0, mode
   const artifacts = Object.fromEntries(Object.entries(a.artifacts).map(([id, x]) => [id, x.kind === 'html' ? { kind: 'html', title: x.title, html: x.html, v: 1 } : x.kind === 'md' ? { kind: 'md', title: x.title, md: x.md || '', v: 1 } : { kind: x.kind, title: x.title, url: x.url?.startsWith('data:') ? undefined : x.url, v: 1 }]));
   const settings = { ...G.settings, approval: c.approval, tools: chatTools(c), ...qualitySettings(c), chromeAccess: !!c.tools?.chrome };
   const body = resumeOf ? { runId: m.runId, chatId: c.id, resume: resumeOf, settings, allowed: a.allowed, cmdRules: a.cmdRules || [], reading: a.reading?.text || '', ...(more ? { continue: more, ...(model ? { model } : {}) } : {}) }
-    : { runId: m.runId, chatId: c.id, projectId: c.projectId, chatTitle: c.title, setup: a.setup, settings, allowed: a.allowed, cmdRules: a.cmdRules || [], history, summary: a.summary || '', reading: a.reading?.text || '', text, artifacts, context: ctx?.text || '', images: imgs.map((x) => x.full), docs: docs.map((d) => d.id), ...(cmts.length ? { comments: cmts } : {}), ...(a.videoMode ? { videoMode: a.videoMode } : {}) };
+    : { runId: m.runId, chatId: c.id, projectId: c.projectId, chatTitle: c.title, setup: a.setup, settings, allowed: a.allowed, cmdRules: a.cmdRules || [], history, summary: a.summary || '', reading: a.reading?.text || '', text, artifacts, context: ctx?.text || '', images: imgs.map((x) => x.full), docs: docs.map((d) => d.id), ...(cmts.length ? { comments: cmts } : {}), ...(a.videoMode ? { videoMode: a.videoMode } : {}), ...(a.videoMode === 'on' && a.videoFrom ? { videoFrom: a.videoFrom } : {}) };
   // Saved straight away, so a reload finds the running reply and reattaches to it.
   saveChat(c, true);
   return followRun(c, m, (signal) => fetch('/api/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal, body: JSON.stringify(body) }));
@@ -5289,9 +5291,11 @@ function settingsPanels(S) {
         + stRow('Questions in a film reply', 'The brief, the story and storyboard changes. Your usual limit (Agent loop) applies when it is higher, and none when questions are off.', stStep('videoAskLimit', S.videoAskLimit ?? d.videoAskLimit, 0, 20))
         + stRow('⚡ YOLO waits for you', 'How long the brief, story and storyboard cards wait in YOLO before the agent\'s recommendations stand. 0 = they stand at once.', stStep('videoWaitSecs', S.videoWaitSecs ?? d.videoWaitSecs, 0, 600, 15, 's'))
         + stRow('Storyboard before paid media', 'Pictures, clips, music and voice wait until you approve the storyboard.', stSwitch('videoStoryboard', S.videoStoryboard !== false))
-        + stRow('Review the film', 'The reviewer gets each new film\'s length, size, sound, loudness and a contact sheet, and scores the film, not only its page.', stSwitch('videoReview', S.videoReview !== false)))),
+        + stRow('Review the film', 'The reviewer gets each new film\'s length, size, sound, loudness, bass balance, cuts against the beat and a contact sheet, and scores the film itself.', stSwitch('videoReview', S.videoReview !== false))
+        + stRow('Viewer page', 'Off: the film is the deliverable, and it opens in the Browser tab. On: the agent also builds a page around it.', stSwitch('videoViewer', S.videoViewer === true)))),
       stCard('What the brief recommends', 'The agent puts these first in the brief; you can pick anything else there.', pad(
-        stRow('How the picture is made', 'By subject: code for products, data and motion design; your footage when you have it; stills with camera moves otherwise.', stSeg('videoRoute', [['auto', 'By subject'], ['images', 'Stills'], ['code', 'Code'], ['clips', 'AI clips'], ['footage', 'Your footage']], S.videoRoute ?? d.videoRoute))
+        stRow('How the picture is made', 'By subject: code for products, data and motion design; your footage when you have it; otherwise stills turned into moving clips (needs 🎬 Video in the chat\'s tools, else stills with camera moves). Moving: every shot is an AI clip that starts from its still, about $1 for 30 s. Mixed: the key shots move, the rest pan and zoom.', stSeg('videoRoute', [['auto', 'By subject'], ['animate', 'Moving'], ['hybrid', 'Mixed'], ['images', 'Stills'], ['code', 'Code'], ['clips', 'AI clips'], ['footage', 'Your footage']], S.videoRoute ?? d.videoRoute))
+        + stRow('Music', 'AI music: a music model writes it (about $0.04 for 30 s, needs 🎵 Music in the chat\'s tools), then it is fitted to the film on bar lines. Code: written in code, free. Yours: the agent asks for your track.', stSeg('videoMusic', [['ai', 'AI music'], ['code', 'Code'], ['own', 'Yours']], S.videoMusic ?? d.videoMusic))
         + stRow('Length', '', stStep('videoLength', S.videoLength ?? d.videoLength, 5, 600, 5, 's'))
         + stRow('Shapes', '', stSeg('videoShapes', [['both', '16:9 + 9:16'], ['16:9', '16:9'], ['9:16', '9:16'], ['1:1', '1:1']], S.videoShapes ?? d.videoShapes)))),
     ]],

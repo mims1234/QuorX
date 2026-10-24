@@ -56,7 +56,8 @@ import { modelNotes } from './modelcards.js';
 import { ownAddresses } from './access.js';
 import { safeFetch } from './safefetch.js';
 import { videoBody, canStartFromImage, editCommand, ffmpegMajor } from './video.js';
-import { VIDEO_DEFAULTS, VIDEO_SKILLS, STORYBOARD_TOOL, videoModeFor, videoRules, normalizeStoryboard, storyboardHtml, loadStoryboard, saveStoryboard, filmFacts, factsText } from './videomode.js';
+import { mapMusic, pickWindows, fitPlan, writeFit } from './musicmap.js';
+import { VIDEO_DEFAULTS, VIDEO_SKILLS, STORYBOARD_TOOL, MUSIC_MAP_TOOL, FIT_MUSIC_TOOL, videoModeFor, videoRules, normalizeStoryboard, storyboardHtml, loadStoryboard, saveStoryboard, filmFacts, factsText } from './videomode.js';
 
 // The paid media categories and the tool each one gives the agent.
 export const MEDIA = {
@@ -204,6 +205,16 @@ export function compactPaths(paths) {
   const by = new Map();
   for (const p of paths) { const i = p.lastIndexOf('/', p.endsWith('/') ? p.length - 2 : p.length); const dir = i < 0 ? '' : p.slice(0, i + 1); (by.get(dir) || by.set(dir, []).get(dir)).push(p.slice(i + 1)); }
   return [...by].map(([dir, names]) => (dir && names.length > 1 ? `${dir}{${names.join(', ')}}` : names.map((n) => dir + n).join(', '))).join(', ');
+}
+// The file a command edits in place, or ''. PowerShell: (Get-Content f [-Raw]) -replace … | Set-Content f (or .Replace(…),
+// Out-File, the same file on both sides); POSIX: sed -i … f.
+export function inPlaceEdit(line) {
+  const t = String(line || '');
+  const norm = (p) => String(p).replace(/^\.[\\/]/, '').replaceAll('\\', '/').toLowerCase();
+  const ps = t.match(/\(\s*(?:Get-Content|gc|cat|type)\s+(?:-(?:Raw|Path|LiteralPath)\s+)*['"]?([^\s'")]+)['"]?[^)]*\)\s*(?:-c?replace\b|\.Replace\()[\s\S]*?\|\s*(?:Set-Content|sc|Out-File)\s+(?:-(?:Path|LiteralPath|FilePath)\s+)?['"]?([^\s'";|]+)/i);
+  if (ps && norm(ps[1]) === norm(ps[2])) return ps[1];
+  const sed = t.match(/\bsed\s+-[a-zA-Z]*i[a-zA-Z]*\s+(?:''\s+)?(?:-e\s+)?(?:'[^']*'|"[^"]*")\s+['"]?([^\s'";|&]+)/);
+  return sed ? sed[1] : '';
 }
 const projectSize = (root) => { try { return listFiles(root, 400).filter((f) => !/skipped\)$/.test(f.path)).length; } catch { return 0; } };
 // Skills by name; descriptions only for those whose name or description shares a word with the request (the agent
@@ -1068,7 +1079,7 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
   else if (resumed) maxSteps = Math.max(maxSteps, Number(resumed.maxSteps) || 0, resumed.step + 1 + 5); // a restart keeps the reply's (extended) limit, and always leaves room to act
   const planSteps = Math.max(0, Math.min(200, Number(S.planSteps ?? DEFAULTS.planSteps) || 0));
   const planFirst = root && ['big', 'always'].includes(S.planFirst) ? S.planFirst : 'off'; // no project folder: nothing to protect
-  const run = { mediaPlan: null, stop: 'answered', steps: 0, retries: 0, trimmed: 0, tools: 0, lookStreak: 0, warned: false, verifyRounds: 0, questions: 0, cacheMarks: true, passReasoning: true, routing: true, plan: resumed?.plan || null, planGate: resumed?.plan ? 'approved' : null, reviewRounds: 0, reviews: [], inbox: [], linted: {} };
+  const run = { mediaPlan: null, stop: 'answered', steps: 0, retries: 0, trimmed: 0, tools: 0, lookStreak: 0, warned: false, verifyRounds: 0, questions: 0, cacheMarks: true, passReasoning: true, routing: true, plan: resumed?.plan || null, planGate: resumed?.plan ? 'approved' : null, reviewRounds: 0, reviews: [], inbox: [], linted: {}, startedAt: resumed?.startedAt || Date.now() };
   runControls.set(runId, {
     // Switching to YOLO also approves the cards waiting right now (the budget caps still apply).
     setApproval: (mode) => {
@@ -1299,10 +1310,14 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         messages.push({ role: 'assistant', content: r.text || 'Done.' });
         continue;
       }
-      if (last) run.stop = 'steps';
+      // A final answer on the last step with the plan all ticked off is a finished reply, not one cut short: it is
+      // checked and reviewed like any other (a send-back gets the steps it needs), and gets no out-of-steps card.
+      const finished = last && !!run.plan?.items.length && run.plan.items.every((x) => x.status === 'done');
+      if (last && !finished) run.stop = 'steps';
+      const canSend = !last || finished;
       // The gate before the final answer: re-check what this reply changed and open what it built.
       const v = S.verify !== false && !qaBench ? await verifyWork(step) : null;
-      if (v && !v.ok && run.verifyRounds < Math.max(0, Number(S.verifyRounds ?? DEFAULTS.verifyRounds)) && !last) {
+      if (v && !v.ok && run.verifyRounds < Math.max(0, Number(S.verifyRounds ?? DEFAULTS.verifyRounds)) && canSend) {
         run.verifyRounds++;
         reply = replyBefore;
         if (r.text) { asides.push(r.text); run.answerBefore ??= r.text; }
@@ -1315,7 +1330,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       }
       if (v) stats.verify = { ok: v.ok, problems: v.problems.slice(0, 8), rounds: run.verifyRounds, lint: v.lint };
       // #4: a separate model plays what was built and scores it. Below the bar, the builder gets its bugs to fix.
-      if ((!v || v.ok) && !last && wantReview()) {
+      if ((!v || v.ok) && canSend && wantReview()) {
         const rv = await review(step, r.text);
         if (rv) {
           run.reviews.push(rv);
@@ -1478,7 +1493,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   // with it, so a reply whose budget was extended (plan rounds, fixes) keeps it after a restart.
   function checkpointAt(atStep) {
     if (req.bench) return;
-    saveCheckpoint(runId, { req: ckptReq, undoId: filesId, cost: stats.cost, spend: { byRole: stats.byRole, byModel: stats.byModel, llmCalls: stats.llmCalls, tokensIn: stats.tokensIn, tokensOut: stats.tokensOut, mediaSpent: stats.mediaSpent }, messages, step: atStep, maxSteps, journal, notes, firstOwn, arts: Object.fromEntries(arts), plan: run.plan, at: Date.now(), ...(run.video ? { video: true } : {}),
+    saveCheckpoint(runId, { req: ckptReq, undoId: filesId, cost: stats.cost, spend: { byRole: stats.byRole, byModel: stats.byModel, llmCalls: stats.llmCalls, tokensIn: stats.tokensIn, tokensOut: stats.tokensOut, mediaSpent: stats.mediaSpent }, messages, step: atStep, maxSteps, journal, notes, firstOwn, arts: Object.fromEntries(arts), plan: run.plan, at: Date.now(), startedAt: run.startedAt, ...(run.video ? { video: true } : {}),
       touched: { arts: [...touched.arts], apps: [...touched.apps], sites: [...touched.sites] } });
   }
 
@@ -1802,7 +1817,12 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     const first = req.videoMode !== 'on' && !resumed;
     run.video = { why, first, skills: [] };
     if (loadStoryboard(root, req.chatId)?.approved && req.chatId) run.storyboard = 'approved';
-    if (!tools.includes(STORYBOARD_TOOL)) tools.push(STORYBOARD_TOOL);
+    // A chat continued from a film chat (✦ Fresh chat) keeps the storyboard approved there.
+    else if (req.chatId && req.videoFrom) {
+      const was = loadStoryboard(root, String(req.videoFrom));
+      if (was?.approved) { run.storyboard = 'approved'; const { chatId: _from, at: _at, ...rest } = was; saveStoryboard(root, req.chatId, rest); }
+    }
+    for (const t of [STORYBOARD_TOOL, MUSIC_MAP_TOOL, FIT_MUSIC_TOOL]) if (!tools.includes(t)) tools.push(t);
     const loaded = VIDEO_SKILLS.map((n) => readSkill(root, n, req.settings?.skillsOff || [])).filter(Boolean);
     run.video.skills = loaded.map((k) => k.name);
     if (!quiet) {
@@ -1875,13 +1895,57 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     const changed = root ? changedFiles(root, filesId) : [];
     if (changed.some((f) => /\.(html?|css|m?js)$/i.test(f))) for (const lc of launchConfigs(projectId)) if (lc.args?.[0] === '.quorx/serve.mjs' && lc.args[1]) { const t = `site:${lc.args[1]}`; if (!targets.includes(t)) targets.push(t); }
     if (changed.some((f) => /\.(html?|css|m?js)$/i.test(f))) for (const a of arts.values()) if (a.kind === 'site' && a.url?.startsWith(`/ws/${projectId}/`)) { const t = `site:${a.url.slice(`/ws/${projectId}/`.length)}`; if (!targets.includes(t)) targets.push(t); }
-    // Video Mode: a film with no page around it is still something to review (the site server plays it).
-    if (run.video && !targets.length) for (const f of filmsChanged().slice(0, 2)) targets.push(`site:${f}`);
+    // Video Mode: the films are what was built (the site server plays them), first in line; the storyboard sheet is
+    // the plan, not the build.
+    if (run.video) {
+      const films = filmsChanged().slice(0, 2).map((f) => `site:${f}`);
+      return [...films, ...targets.filter((t) => t !== `artifact:${run.storyboardId}` && !films.includes(t))];
+    }
     return targets;
   }
-  // The films this reply made or changed (not the agent's scratch copies).
+  // The films this reply made or changed (not the agent's scratch copies), newest first. Found by when they were
+  // written, not from the undo checkpoint: it leaves out big files, and a 25 MB film was never seen there.
   function filmsChanged() {
-    return root ? changedFiles(root, filesId).map((f) => f.replaceAll('\\', '/')).filter((f) => /\.(mp4|webm|mov|m4v)$/i.test(f) && !/^\.quorx\//i.test(f) && fs.existsSync(path.join(root, f))) : [];
+    if (!root) return [];
+    const found = [], skip = /^(\.quorx|\.git|node_modules|\.venv|dist|build)$/i;
+    const walk = (dir, rel, depth) => {
+      if (depth > 4 || found.length > 50) return;
+      let list = [];
+      try { list = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+      for (const e of list) {
+        const r = rel ? `${rel}/${e.name}` : e.name;
+        if (e.isDirectory()) { if (!skip.test(e.name)) walk(path.join(dir, e.name), r, depth + 1); continue; }
+        if (!/\.(mp4|webm|mov|m4v)$/i.test(e.name)) continue;
+        try { const t = fs.statSync(path.join(dir, e.name)).mtimeMs; if (t >= run.startedAt - 2000) found.push({ r, t }); } catch { /* gone */ }
+      }
+    };
+    walk(root, '', 0);
+    return found.sort((a, b) => b.t - a.t).map((x) => x.r);
+  }
+  // music_map and fit_music (server/musicmap.js): the track's bars, changes and ending; a copy fitted to a length on bar lines.
+  async function musicTool(name, args) {
+    const rel = String(args.path || '').trim();
+    if (!rel) return 'Error: give path, a track in the project.';
+    let file;
+    try { file = safePath(root, rel); } catch (e) { return `Error: ${e.message}`; }
+    if (!fs.existsSync(file)) return `Error: no file ${rel} in the project.`;
+    let m;
+    try { m = await mapMusic(file, { bpm: args.bpm }); } catch (e) { return `Error: could not read ${rel} (${clip(e.message, 200)}). ffmpeg must be installed (⚙ Settings → Setup check).`; }
+    const tempo = m.tempo.source === 'hint' ? `${m.bpm} BPM (the tempo asked for; the detector heard ${m.tempo.detected})` : `${m.bpm} BPM`;
+    const head = `${tempo}, a bar every ${m.bar.toFixed(3)} s`;
+    if (name === 'music_map') {
+      const wins = args.seconds ? pickWindows(m, { seconds: Number(args.seconds), shape: args.shape || 'peak' }) : [];
+      return `${rel}: ${m.dur} s, ${head}.\nBar lines (s): ${m.bars.join(', ')}\nChanges: ${m.changes.length ? m.changes.map((c) => `${c.t} s ${c.to} (${c.db > 0 ? '+' : ''}${c.db} dB)`).join('; ') : 'none over 4 dB'}.\nEnding: ${m.ending.clean ? 'it ends cleanly (fades or rings out)' : 'it stops abruptly: keep this track\'s end off the film\'s end, or fade it'}.${wins.length ? `\nBest ${args.shape || 'peak'} stretches of about ${args.seconds} s (whole bars): ${wins.map((w) => `${w.start}-${w.end} s (${w.seconds} s)`).join('; ')}.` : ''}`;
+    }
+    const outRel = String(args.out || '').trim();
+    if (!outRel || !/\.(mp3|wav|m4a|aac|ogg|flac)$/i.test(outRel)) return 'Error: give out, an audio file to write in the project, e.g. assets/audio/score-35s.mp3.';
+    let out;
+    try { out = safePath(root, outRel); } catch (e) { return `Error: ${e.message}`; }
+    const plan = fitPlan(m, Number(args.seconds), { keepEnding: args.keep_ending !== false });
+    try { fs.mkdirSync(path.dirname(out), { recursive: true }); await writeFit(file, out, plan); } catch (e) { return `Error: could not write ${outRel} (${clip(e.message, 200)}).`; }
+    notes.push(`fitted ${rel} to ${plan.seconds} s → ${outRel}`);
+    const fitted = await mapMusic(out, { bpm: m.bpm }).catch(() => null);
+    return `Wrote ${outRel}: ${plan.seconds} s (asked ${args.seconds} s; lengths come in whole bars of ${m.bar.toFixed(3)} s), ${plan.method}. ${head}.${fitted ? `\nIts bar lines (s): ${fitted.bars.join(', ')}\nCut the pictures on these.` : ''}`;
   }
 
   // ================= #4 the reviewer: a separate model, fresh context, plays it and scores it =================
@@ -2257,6 +2321,8 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (name === 'remember') return `Remember in every chat: “${clip(args.text, 200)}”`;
     if (name === 'save_skill') return `Save a project skill "${args.name}": ${clip(args.description, 80)}`;
     if (name === 'use_skill') return `Load the skill "${args.name}"`;
+    if (name === 'music_map') return `Map the music in ${clip(args.path, 80)}`;
+    if (name === 'fit_music') return `Fit ${clip(args.path, 60)} to ${args.seconds} s → ${clip(args.out, 60)}`;
     if (name === 'storyboard') return `Show the storyboard "${clip(args.title, 60)}" (${Array.isArray(args.shots) ? args.shots.length : 0} shots)`;
     if (name === 'ask_user') return Array.isArray(args.questions) && args.questions.length ? `Ask you ${args.questions.length} questions: "${clip(args.questions[0]?.question, 80)}"…` : `Ask you: "${clip(args.question, 100)}"`;
     if (name === 'search_docs') return `Search the attached documents for "${clip(args.query, 100)}"`;
@@ -2515,7 +2581,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     }
     if (name === 'decide') return decide(args, step);
     if (name === 'plan') return planTool(args, step);
-    if (['browser', 'use_skill', 'fetch_url', 'ask_user', 'look', 'extract_design', 'media_plan', 'storyboard'].includes(name) || CAT_OF[name]) return runToolRest(name, args, step);
+    if (['browser', 'use_skill', 'fetch_url', 'ask_user', 'look', 'extract_design', 'media_plan', 'storyboard', 'music_map', 'fit_music'].includes(name) || CAT_OF[name]) return runToolRest(name, args, step);
     if (name === 'run_command' || [...CODE_TOOLS, ...PROJECT_TOOLS].some((t) => t.function.name === name)) return codeTool(name, args);
     if (['list_docs', 'read_doc', 'search_docs'].includes(name)) return docTool(name, args);
     if (name === 'delegate') return delegate(args, step);
@@ -2549,6 +2615,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (CAT_OF[name]) return media(name, args, step);
     if (name === 'media_plan') return mediaPlanTool(args);
     if (name === 'storyboard') return run.video ? storyboardTool(args) : 'Error: storyboard is only for Video Mode (a film request).';
+    if (name === 'music_map' || name === 'fit_music') return run.video ? musicTool(name, args) : `Error: ${name} is only for Video Mode (a film request).`;
     return `Error: unknown tool ${name}.`;
   }
 
@@ -2678,6 +2745,10 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       const argv = alias ? (args.args || []).map(String) : [];
       const line = alias ? lineOf(args.command, argv) : String(args.command ?? '').trim();
       const shell = alias ? 'direct' : SF.shell;
+      // A file edited in place by a command ((Get-Content f) -replace … | Set-Content f, sed -i): edit_file does it exactly,
+      // checked and undoable, with no approval; as a command it went to the approval vote, which turned it down as unasked.
+      const inPlace = alias ? '' : inPlaceEdit(line);
+      if (inPlace) return `Not run: this command edits ${inPlace} in place. Make that change with edit_file (exact find and replace, checked, and it can be undone), then run the rest of the command on its own.`;
       let cwd = root;
       if (!alias && args.cwd) {
         cwd = safePath(root, String(args.cwd));

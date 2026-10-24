@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadCards, cardText, limitsLine, cardFile, CARDS_DIR, CARD_CHARS } from '../server/modelcards.js';
-import { runAgent, answerQuestion, answerSecret, answerApproval, answerBudget, setRunApproval, steerRun, holdCard } from '../server/agent.js';
+import { runAgent, inPlaceEdit, answerQuestion, answerSecret, answerApproval, answerBudget, setRunApproval, steerRun, holdCard } from '../server/agent.js';
 import { saveProject, forgetProject, setProjectBudget } from '../server/store.js';
 import { loadCheckpoint, dropCheckpoint, ledger } from '../server/runs.js';
 import { setBudget, projectSpend, budgetState, live as liveRuns } from '../server/budget.js';
@@ -24,14 +24,15 @@ import { startRun, follow, getRun, readLog } from '../server/runs.js';
 import { getChat, saveChat as storeChat, listProjects, listChats } from '../server/store.js';
 import { matchPlan, usePlan } from '../server/mediaplan.js';
 import { setSecret, parseEnv, secretKind, scrubSecrets } from '../server/projectsecrets.js';
-import { looksLikeFilm, videoModeFor, filmFacts, factsText } from '../server/videomode.js';
+import { looksLikeFilm, videoModeFor, filmFacts, factsText, videoRules, recommendedRoute, recommendedMusic, VIDEO_DEFAULTS } from '../server/videomode.js';
+import { settleTempo, analyse, tempoOf, barsOf, fitPlan, pickWindows, cutsVsBeats } from '../server/musicmap.js';
 
 let n = 0;
 const reply = (text, calls = [], finishReason = 'stop') => ({ text, toolCalls: calls.map(([name, args], i) => ({ id: `c${++n}_${i}`, type: 'function', function: { name, arguments: typeof args === 'string' ? args : JSON.stringify(args) } })), usage: { cost: 0.0001 }, ms: 1, firstMs: 1, finishReason });
 
 /** Runs one reply. `script(body, i)` returns the model's i-th answer (or throws). */
 // `budget` sets the project's budget and `spent` seeds what it has already spent (as a ledger row).
-async function run(script, { settings = {}, text = 'build it', resume, onEvent, signal, history, budget, spent, setup = {}, openTab, generateImage, generateVideo, ensemble, checks, chatId, prep, cont, images, comments, enhance, reading, catalogue, videoMode } = {}) {
+async function run(script, { settings = {}, text = 'build it', resume, onEvent, signal, history, budget, spent, setup = {}, openTab, generateImage, generateVideo, ensemble, checks, chatId, prep, cont, images, comments, enhance, reading, catalogue, videoMode, videoFrom } = {}) {
   const id = `t${Date.now().toString(36)}${(n++).toString(36)}`;
   const dir = tempDir('quorx-run-');
   saveProject({ id, name: 'test', path: dir });
@@ -42,7 +43,7 @@ async function run(script, { settings = {}, text = 'build it', resume, onEvent, 
   let i = 0;
   const chatStream = async (body, sig, onText) => { bodies.push(structuredClone(body)); const r = await script(body, i++); if (r.text && onText) onText(r.text); return r; };
   try {
-    await runAgent({ runId: id, projectId: id, ...(chatId ? { chatId } : {}), ...(images ? { images } : {}), ...(comments ? { comments } : {}), text, resume, ...(cont ? { continue: cont } : {}), ...(reading ? { reading } : {}), ...(videoMode ? { videoMode } : {}), history, setup: { model: 'test/model', ...setup }, settings: { approval: 'yolo', mediaEnabled: false, tools: { browser: { on: false } }, ...settings } },
+    await runAgent({ runId: id, projectId: id, ...(chatId ? { chatId } : {}), ...(images ? { images } : {}), ...(comments ? { comments } : {}), text, resume, ...(cont ? { continue: cont } : {}), ...(reading ? { reading } : {}), ...(videoMode ? { videoMode } : {}), ...(videoFrom ? { videoFrom } : {}), history, setup: { model: 'test/model', ...setup }, settings: { approval: 'yolo', mediaEnabled: false, tools: { browser: { on: false } }, ...settings } },
       (e) => { events.push(e); onEvent?.(e, id); }, signal || new AbortController().signal, { chatStream, catalogue: catalogue || [{ id: 'test/model', maxOut: 4000 }], quiet: true, startServer: async ({ name, args }) => ({ key: `fake-${name}`, url: 'http://localhost:9/', status: 'running', command: ['node', ...(args || [])].join(' '), log: '' }), ...(openTab ? { openTab } : {}), ...(generateImage ? { generateImage } : {}), ...(generateVideo ? { generateVideo } : {}), ...(ensemble ? { ensemble } : {}), ...(checks ? { checks } : {}), ...(enhance ? { enhance } : {}) });
     return { events, bodies, dir, id, done: events.find((e) => e.t === 'done') };
   } finally { forgetProject(id); ledger.delete(`seed-${id}`); }
@@ -2813,10 +2814,118 @@ test('Video Mode: the film facts read ffprobe and ffmpeg\'s loudness and black-f
     if (cmd === 'ffprobe') return { ok: true, out: JSON.stringify({ format: { duration: '28.8' }, streams: [{ codec_type: 'video', width: 1280, height: 720, r_frame_rate: '30/1' }, { codec_type: 'audio' }] }), err: '' };
     if (args.includes('ebur128=peak=true')) return { ok: true, out: '', err: 'Summary:\n  Integrated loudness:\n    I:         -14.2 LUFS\n  True peak:\n    Peak:       -1.3 dBFS\n' };
     if (args.some((a) => String(a).startsWith('blackdetect'))) return { ok: true, out: '', err: '[blackdetect] black_start:0 black_end:0.6 black_duration:0.6\n' };
+    if (args.some((a) => String(a).includes('astats'))) return { ok: true, out: '', err: `Overall\nRMS level dB: ${args.some((a) => String(a).startsWith('lowpass')) ? '-18.0' : '-22.5'}\n` };
     fs.writeFileSync(args.at(-1), 'jpg'); return { ok: true, out: '', err: '' };
   };
-  const f = await filmFacts(dir, 'assets/film.mp4', { ff });
-  assert.deepEqual({ ...f, sheet: !!f.sheet }, { rel: 'assets/film.mp4', seconds: 28.8, width: 1280, height: 720, fps: 30, audio: true, lufs: -14.2, peak: -1.3, black: 0.6, sheet: true });
-  assert.equal(factsText(f), 'assets/film.mp4: 28.8 s, 1280×720 at 30 fps, sound at -14.2 LUFS, peak -1.3 dBFS, 0.6 s black');
-  assert.match(factsText({ ...f, audio: false, lufs: null, peak: null }), /Off: it has no sound track/);
+  const beats = Array.from({ length: 46 }, (_, i) => +(i * 0.625).toFixed(3));
+  const music = async () => ({ bpm: 96, beats, ending: { clean: false } });
+  const f = await filmFacts(dir, 'assets/film.mp4', { ff, music, cuts: async () => [4, 8.125, 12.5, 16, 20.9] });
+  assert.deepEqual({ ...f, sheet: !!f.sheet }, { rel: 'assets/film.mp4', seconds: 28.8, width: 1280, height: 720, fps: 30, audio: true, lufs: -14.2, peak: -1.3, black: 0.6, bassDb: 4.5, bpm: 96, endsClean: false, cuts: { cuts: 5, onBeat: 2, offsets: [0.25, 0, 0, 0.25, 0.275], worst: 0.275 }, sheet: true });
+  assert.equal(factsText(f), 'assets/film.mp4: 28.8 s, 1280×720 at 30 fps, sound at -14.2 LUFS, peak -1.3 dBFS, 0.6 s black, bass +4.5 dB against the rest, 96 BPM, 2 of 5 cuts on the beat. Off: the bass (below 150 Hz) is 4.5 dB louder than everything above it, so it rumbles; keep it about 3 dB below; only 2 of 5 cuts land on a beat (within 2 frames); the sound stops abruptly at the end instead of ending');
+  const plain = { rel: 'a.mp4', seconds: 10, width: 1280, height: 720, fps: 30, audio: true, lufs: -14, peak: -1.5, black: 0 };
+  assert.equal(factsText(plain), 'a.mp4: 10 s, 1280×720 at 30 fps, sound at -14 LUFS, peak -1.5 dBFS', 'a film measured without the music checks reads as before');
+  assert.match(factsText({ ...plain, audio: false, lufs: null, peak: null }), /Off: it has no sound track/);
+});
+
+// ---------- Video Mode v2: music first, moving pictures, files not pages ----------
+test('music map: the tempo asked for settles a detector that lands on a related tempo', () => {
+  assert.deepEqual(settleTempo(95.7, 96), { bpm: 95.7, source: 'detected', detected: 95.7 });
+  assert.deepEqual(settleTempo(129.2, 96), { bpm: 96, source: 'hint', detected: 129.2 });
+  assert.deepEqual(settleTempo(110, 0), { bpm: 110, source: 'detected', detected: 110 });
+});
+
+test('music map: a click track\'s tempo and bars are found', () => {
+  const sr = 11025, bpm = 120, x = new Float32Array(sr * 12);
+  for (let b = 0; b * 0.5 < 12; b++) { const at = Math.round((0.25 + b * 0.5) * sr), loud = b % 4 === 0 ? 1 : 0.5; for (let k = 0; k < 400 && at + k < x.length; k++) x[at + k] = loud * Math.sin(k / 3) * Math.exp(-k / 120); }
+  const a = analyse(x, sr);
+  const t = tempoOf(a.onset, a.fps);
+  assert.ok(Math.abs(t.bpm - bpm) / bpm < 0.04, `tempo ${t.bpm}`);
+  const g = barsOf(a, bpm);
+  assert.equal(g.bar, 2);
+  assert.ok(Math.abs(g.bars[0] - 0.25) < 0.06, `first bar at ${g.bars[0]}`);
+});
+
+test('fit music: shorter keeps the ending and starts on a bar; longer plays whole bars again on the downbeat', () => {
+  const bars = Array.from({ length: 11 }, (_, i) => +(1.881 + i * 2.508).toFixed(3));
+  const map = { dur: 27.9, bar: 2.508, bars, loud: Array(56).fill(-12) };
+  const longer = fitPlan(map, 35);
+  assert.deepEqual(longer.parts, [[0, 14.421], [6.897, 14.421], [14.421, 27.9]]);
+  assert.ok(Math.abs(longer.seconds - 35.42) < 0.02);
+  const shorter = fitPlan(map, 20);
+  assert.equal(shorter.parts.length, 1);
+  assert.equal(shorter.parts[0][1], 27.9, 'the ending stays');
+  assert.ok(bars.includes(shorter.parts[0][0]), 'it starts on a bar line');
+  assert.equal(fitPlan(map, 28).method, 'as is');
+  const peak = pickWindows({ ...map, loud: map.loud.map((v, i) => (i >= 34 && i < 49 ? -6 : v)) }, { seconds: 8, shape: 'peak' })[0];
+  assert.equal(peak.start, 16.929);
+  assert.equal(peak.bars, 3);
+  assert.deepEqual(cutsVsBeats([1, 1.6, 3], [0, 0.5, 1, 1.5, 2, 2.5, 3]), { cuts: 3, onBeat: 2, offsets: [0, 0.1, 0], worst: 0.1 });
+});
+
+test('Video Mode v2: the brief recommends moving stills and AI music when those tools are on, and the film is delivered as a file', () => {
+  const on = videoRules({ ...VIDEO_DEFAULTS }, { first: true, ask: true, limit: 8, text: 'make a film about a monsoon evening in Mumbai', cats: ['image', 'video', 'music'] });
+  assert.match(on, /each turned into a short AI clip that starts from it/);
+  assert.match(on, /music from the music model/);
+  assert.match(on, /music_map/);
+  assert.match(on, /site:assets\/edits\/<name>\.mp4/);
+  assert.doesNotMatch(on, /index\.html/);
+  assert.doesNotMatch(on, /switched off/);
+  const off = videoRules({ ...VIDEO_DEFAULTS }, { first: true, ask: true, limit: 8, text: 'make a film about a monsoon evening in Mumbai', cats: ['image'] });
+  assert.match(off, /stills with camera moves only/);
+  assert.match(off, /a score written in code/);
+  assert.match(off, /video clips and music switched off/);
+  assert.match(videoRules({ ...VIDEO_DEFAULTS, videoViewer: true }, { first: true, ask: true, limit: 8, text: 'a film', cats: [] }), /viewer page \(index\.html\)/);
+  assert.equal(recommendedRoute(VIDEO_DEFAULTS, 'a launch video for my app', ['video']), 'code');
+  assert.equal(recommendedMusic({ videoMusic: 'ai' }, []), 'code');
+});
+
+test('Video Mode v2: music_map and fit_music work on a track in the project', async () => {
+  const { bodies, dir } = await run((body, i) => [
+    reply('', [['music_map', { path: 'assets/audio/beat.wav', bpm: 96, seconds: 5, shape: 'peak' }]]),
+    reply('', [['fit_music', { path: 'assets/audio/beat.wav', out: 'assets/audio/beat-30s.wav', seconds: 30, bpm: 96 }]]),
+    reply('', [['fit_music', { path: 'assets/audio/beat.wav', out: '../outside.wav', seconds: 30 }]]),
+    reply('Done.'),
+  ][i], {
+    text: 'make a trailer for my band',
+    prep: (d) => { fs.mkdirSync(path.join(d, 'assets', 'audio'), { recursive: true }); execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'aevalsrc=0.8*sin(2*PI*90*t)*exp(-30*mod(t-0.1\\,0.625)):s=44100:d=20', path.join(d, 'assets', 'audio', 'beat.wav')]); },
+  });
+  const map = toolResults(bodies[1]).at(-1);
+  assert.match(map, /assets\/audio\/beat\.wav: 20 s, 9[5-7](\.\d)? BPM/);
+  assert.match(map, /Bar lines \(s\): /);
+  assert.match(map, /Best peak stretches of about 5 s/);
+  const fit = toolResults(bodies[2]).at(-1);
+  assert.match(fit, /^Wrote assets\/audio\/beat-30s\.wav: \d+\.\d+ s \(asked 30 s/);
+  const secs = Number(execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', path.join(dir, 'assets', 'audio', 'beat-30s.wav')]).toString());
+  assert.ok(Math.abs(secs - 30) < 2.6, `about 30 s on bar lines, got ${secs}`);
+  assert.match(toolResults(bodies[3]).at(-1), /^Error: /, 'outside the project is refused');
+});
+
+test('a command that edits a file in place is steered to edit_file, before any approval', async () => {
+  const { bodies, events } = await run((body, i) => [reply('', [['shell', { command: "(Get-Content src/app.js -Raw) -replace 'a','b' | Set-Content src/app.js; node build.mjs" }]]), reply('Done.')][i], { settings: { approval: 'strict' } });
+  assert.match(toolResults(bodies[1])[0], /^Not run: this command edits src\/app\.js in place\. Make that change with edit_file/);
+  assert.equal(of(events, 'approval').length, 0);
+  assert.equal(inPlaceEdit('sed -i "s/x/y/" a.txt'), 'a.txt');
+  assert.equal(inPlaceEdit('(Get-Content a.txt) -replace x,y | Set-Content b.txt'), '');
+  assert.equal(inPlaceEdit('Get-Content log.txt | Select-String error'), '');
+});
+
+test('a reply that finishes its plan on the very last step is not "out of steps"; one with items left still is', async () => {
+  const items = (s) => [{ text: 'a', status: s }, { text: 'b', status: s }];
+  const done = await run((body, i) => [reply('', [['plan', { spec: 'x', items: items('done') }]]), reply('All done.')][i], { settings: { maxSteps: 2, review: 'off' } });
+  assert.equal(of(done.events, 'out_of_steps').length, 0);
+  assert.equal(done.done.stats.stop, 'answered');
+  const open = await run((body, i) => [reply('', [['plan', { spec: 'x', items: items('todo') }]]), reply('Ran out.')][i], { settings: { maxSteps: 2, review: 'off', continueRounds: 0 } });
+  assert.equal(of(open.events, 'out_of_steps').length, 1);
+});
+
+test('Video Mode: a chat continued from a film chat keeps Video Mode and the storyboard approved there', async () => {
+  const { bodies, events } = await run((body, i) => [reply('', [['imagine', { prompt: 'x', why: 'y' }]]), reply('Done.')][i], {
+    text: 'Carry on with this work.', chatId: 'chat-new', videoMode: 'on', videoFrom: 'chat-old',
+    settings: { approval: 'strict', mediaEnabled: true, tools: { browser: { on: false }, image: { on: true } } },
+    prep: (d) => { fs.mkdirSync(path.join(d, '.quorx', 'video'), { recursive: true }); fs.writeFileSync(path.join(d, '.quorx', 'video', 'storyboard.json'), JSON.stringify({ chatId: 'chat-old', approved: true, title: 'T', shots: [] })); },
+    onEvent: (e, id) => { if (e.t === 'approval') setTimeout(() => answerApproval(id, e.id, { approve: false }), 5); },
+  });
+  assert.equal(of(events, 'video_mode')[0].first, false, 'no new brief');
+  assert.match(userText(bodies[0]), /The brief and the story were settled earlier/);
+  assert.doesNotMatch(toolResults(bodies[1])[0], /storyboard/i, 'the approval carried over');
 });
