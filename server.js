@@ -250,6 +250,15 @@ const server = http.createServer(async (req, res) => {
       let file = safePath(root, rel || 'index.html');
       if (fs.existsSync(file) && fs.statSync(file).isDirectory()) file = path.join(file, 'index.html');
       if (!fs.existsSync(file)) return json(res, 404, { error: 'not found' });
+      // ?player=1 on a film, a sound or a picture: a plain player page around it. A bare .mp4 in a tab sat under a black
+      // band, and agents built pages just to centre it. The file loads from the same address, so it stays in this project.
+      const kindOf = (f) => (/\.(mp4|webm|mov|m4v)$/i.test(f) ? 'video' : /\.(mp3|wav|m4a|ogg|flac)$/i.test(f) ? 'audio' : /\.(png|jpe?g|gif|webp|avif)$/i.test(f) ? 'img' : '');
+      if (url.searchParams.get('player') === '1' && kindOf(file)) {
+        const name = path.basename(file), src = encodeURIComponent(name), title = name.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+        const tag = { video: `<video src="${src}" controls autoplay playsinline></video>`, audio: `<audio src="${src}" controls autoplay></audio>`, img: `<img src="${src}" alt="${title}">` }[kindOf(file)];
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache', ...(!req.pageOrigin ? { 'Content-Security-Policy': SANDBOX_CSP } : {}) });
+        return res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>html,body{margin:0;height:100%;background:#000}body{display:grid;place-items:center}video,img{max-width:100vw;max-height:100vh;display:block}audio{width:min(640px,90vw)}</style></head><body>${tag}</body></html>`);
+      }
       // Project files are the agent's work: sandboxed (a separate origin), so a page can't use this app's own routes.
       // A sandboxed project page loading its own scripts (module scripts need CORS): its Origin is "null" and its
       // Referer is a page of this project (or an artifact or preview page) on this app's address. Other sites, and

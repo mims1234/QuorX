@@ -56,8 +56,9 @@ import { modelNotes } from './modelcards.js';
 import { ownAddresses } from './access.js';
 import { safeFetch } from './safefetch.js';
 import { videoBody, canStartFromImage, editCommand, ffmpegMajor } from './video.js';
+import { execFileSync } from 'node:child_process';
 import { mapMusic, pickWindows, fitPlan, writeFit } from './musicmap.js';
-import { VIDEO_DEFAULTS, VIDEO_SKILLS, STORYBOARD_TOOL, MUSIC_MAP_TOOL, FIT_MUSIC_TOOL, videoModeFor, videoRules, normalizeStoryboard, storyboardHtml, loadStoryboard, saveStoryboard, filmFacts, factsText } from './videomode.js';
+import { VIDEO_DEFAULTS, VIDEO_SKILLS, STORYBOARD_TOOL, MUSIC_MAP_TOOL, FIT_MUSIC_TOOL, finishedFilms, videoModeFor, videoRules, normalizeStoryboard, storyboardHtml, loadStoryboard, saveStoryboard, filmFacts, factsText } from './videomode.js';
 
 // The paid media categories and the tool each one gives the agent.
 export const MEDIA = {
@@ -198,6 +199,8 @@ const short = (m) => String(m).split('/').pop();
 // Tools that put the agent's text into a file or an artifact, and the note trimming leaves in place of old text (loop.js).
 const WRITES_CONTENT = new Set(['write_file', 'append_file', 'edit_file', 'write_artifact', 'edit_artifact']);
 const SCRATCH_SCRIPT = /^\s*(?:node|python3?|py|deno|bun|tsx)\s+["']?(?:\.[/\\])?\.quorx[/\\]scratch[/\\][\w.-]+\.(?:mjs|cjs|js|ts|py)["']?(?:\s+[\w.:=/\\-]+)*\s*$/i;
+// A target that is a media file, not a page (site:assets/edits/film.mp4).
+const MEDIA_TARGET = /^site:.+\.(mp4|webm|mov|m4v|mp3|wav|m4a|ogg|flac|png|jpe?g|gif|webp|avif)$/i;
 const WRITE_TOOLS = new Set(['write_file', 'append_file', 'edit_file', 'write_artifact', 'edit_artifact', 'delete_file']);
 const PLAN_START_STEPS = 10;
 // Paths grouped by folder ("src/{a.js, b.js}"), so a folder's name isn't repeated for every file in it.
@@ -205,6 +208,16 @@ export function compactPaths(paths) {
   const by = new Map();
   for (const p of paths) { const i = p.lastIndexOf('/', p.endsWith('/') ? p.length - 2 : p.length); const dir = i < 0 ? '' : p.slice(0, i + 1); (by.get(dir) || by.set(dir, []).get(dir)).push(p.slice(i + 1)); }
   return [...by].map(([dir, names]) => (dir && names.length > 1 ? `${dir}{${names.join(', ')}}` : names.map((n) => dir + n).join(', '))).join(', ');
+}
+// A picture from the project for the deciders, as a data URL, at most 1280 px on its longest side. A decider model
+// turned down a 1920×810 contact sheet and 1920×1080 frames ("Invalid image dimensions") and took 1024×576 stills,
+// so a big picture left a check with one judge fewer. Scaled with ffmpeg when it is installed; else sent as it is.
+export function deciderPicture(file, type, run = execFileSync) {
+  try {
+    const jpg = run('ffmpeg', ['-v', 'error', '-i', file, '-vf', "scale='min(1280,iw)':'min(1280,ih)':force_original_aspect_ratio=decrease", '-frames:v', '1', '-q:v', '4', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-'], { maxBuffer: 2e7, timeout: 20000, windowsHide: true });
+    if (jpg?.length > 500) return `data:image/jpeg;base64,${Buffer.from(jpg).toString('base64')}`;
+  } catch { /* no ffmpeg, or a picture it can't read: the original goes */ }
+  return `data:${type};base64,${fs.readFileSync(file).toString('base64')}`;
 }
 // The file a command edits in place, or ''. PowerShell: (Get-Content f [-Raw]) -replace … | Set-Content f (or .Replace(…),
 // Out-File, the same file on both sides); POSIX: sed -i … f.
@@ -248,6 +261,8 @@ export const HELPER_MODEL = 'qwen/qwen3.7-flash';
 // The four scores the build benchmark has always passed on, plus accessibility. A project with a DESIGN.md also gets a brand score.
 export const CORE_KEYS = ['function', 'craft', 'design', 'originality'];
 export const REVIEW_KEYS = [...CORE_KEYS, 'accessibility'];
+// A film (Video Mode) is scored as a film; every one of these counts.
+export const FILM_KEYS = ['picture', 'motion', 'sound', 'rhythm', 'story'];
 // Creativity (per chat): no temperature at all by default, so each model uses its own. Sent only to models
 // that accept it; Claude with thinking on accepts only 1, so "Focused" is skipped there.
 const CREATIVITY = { focused: 0.3, creative: 1 };
@@ -462,7 +477,16 @@ Plan first (the user's setting): before you change any file or run any command, 
 Plan first for big tasks (the user's setting): for anything bigger than a small fix (a new app, game, site or tool, or a change across several files), call plan before you change anything. The user reads it and answers Go ahead, Stop here, or asks for changes; until they say Go ahead, file changes and commands are refused. Small fixes can go straight ahead.` : '');
 
 // The reviewer's own instructions (it never sees the builder's rules or conversation).
-export const REVIEW_SYSTEM = (bar, sees, brand = false) => `You are an independent, skeptical QA reviewer. Another AI built what you are testing. You did not build it, and you have no reason to go easy on it.
+// A film: watched, not clicked. The harness measures what a person can't judge by eye (length, sound, cuts against the beat).
+const FILM_REVIEW = (bar, sees) => `You are an independent, skeptical film reviewer. Another AI made the film you are reviewing. You did not make it, and you have no reason to go easy on it.
+Open each target with the browser tool: a film opens in a player; let it play, and seek to a few moments.${sees ? ' You get a screenshot after each action, and contact sheets of the film (frames in order) in the brief.' : ''} Use at most 6 browser actions. The harness's measured facts in the brief are facts: trust them over the builder's claims, and over your own guesses about timing or loudness.
+Then call submit_review once with:
+- scores from 1 to 5: picture (sharp enough for its size, one consistent look, the same people and places from shot to shot, no broken or garbled frames), motion (the shots move: the camera and things inside the frame, not a slideshow of stills), sound (the music fits the mood, no rumble, hiss or noise beds, a clean ending, a sensible level), rhythm (cuts land on the music's beats and accents, shot lengths vary, the pace builds where the story does), story (it shows what the user asked for, with a clear start, turn and end).
+- bugs: only problems you saw yourself or that the harness's facts list under "Off:", each as did (what you did, or "read the harness's film facts"), saw, expected and severity: "breaks" (it won't play, has no sound when sound was asked for, or misses what the user asked for), "annoying" (a viewer would notice: a garbled frame, a cut off the beat, an abrupt ending) or "minor" (polish).
+- summary: two or three sentences.
+Score what you actually saw and what the harness measured, not what the builder claims. ${bar} means acceptable.`;
+
+export const REVIEW_SYSTEM = (bar, sees, brand = false, film = false) => film ? FILM_REVIEW(bar, sees) : `You are an independent, skeptical QA reviewer. Another AI built what you are testing. You did not build it, and you have no reason to go easy on it.
 Test it like a demanding user: open each target with the browser tool, start it, use its controls (click, press keys, type), play or use it for a while, and try the obvious paths plus one or two edge cases.${sees ? ' After each action you get a screenshot of the page.' : ''} Use at most 10 browser actions.
 Then call submit_review once with:
 - scores from 1 to 5: function (works as asked, no errors, nothing broken), craft (layout, readable text, nothing cut off or overlapping), design (looks intentional and polished, not like a generic template), originality (for games and creative work: more than a basic demo, with depth or a twist; for tools and apps: complete for what the user asked), accessibility (text has enough contrast and size to read, buttons and inputs say what they do, Tab moves through the controls with a visible focus, and it still works at phone width: open it once with width 390)${brand ? ', brand (follows the project\'s design system given in the brief: its colours, type, spacing and components)' : ''}.
@@ -1920,9 +1944,18 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       }
     };
     walk(root, '', 0);
-    return found.sort((a, b) => b.t - a.t).map((x) => x.r);
+    return finishedFilms(found);
   }
   // music_map and fit_music (server/musicmap.js): the track's bars, changes and ending; a copy fitted to a length on bar lines.
+  // The tempo the film's music was asked for: from this reply's music_map / fit_music, else as this project last kept it.
+  function rememberBpm(bpm) {
+    run.musicBpm = bpm;
+    try { fs.mkdirSync(path.join(root, '.quorx', 'video'), { recursive: true }); fs.writeFileSync(path.join(root, '.quorx', 'video', 'music.json'), JSON.stringify({ bpm, at: Date.now() })); } catch { /* a convenience */ }
+  }
+  function musicBpm() {
+    if (run.musicBpm) return run.musicBpm;
+    try { return Number(JSON.parse(fs.readFileSync(path.join(root, '.quorx', 'video', 'music.json'), 'utf8')).bpm) || 0; } catch { return 0; }
+  }
   async function musicTool(name, args) {
     const rel = String(args.path || '').trim();
     if (!rel) return 'Error: give path, a track in the project.';
@@ -1930,7 +1963,8 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     try { file = safePath(root, rel); } catch (e) { return `Error: ${e.message}`; }
     if (!fs.existsSync(file)) return `Error: no file ${rel} in the project.`;
     let m;
-    try { m = await mapMusic(file, { bpm: args.bpm }); } catch (e) { return `Error: could not read ${rel} (${clip(e.message, 200)}). ffmpeg must be installed (⚙ Settings → Setup check).`; }
+    if (Number(args.bpm) > 0) rememberBpm(Number(args.bpm));
+    try { m = await mapMusic(file, { bpm: args.bpm || musicBpm() }); } catch (e) { return `Error: could not read ${rel} (${clip(e.message, 200)}). ffmpeg must be installed (⚙ Settings → Setup check).`; }
     const tempo = m.tempo.source === 'hint' ? `${m.bpm} BPM (the tempo asked for; the detector heard ${m.tempo.detected})` : `${m.bpm} BPM`;
     const head = `${tempo}, a bar every ${m.bar.toFixed(3)} s`;
     if (name === 'music_map') {
@@ -1975,7 +2009,12 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     // A project with a DESIGN.md (its design system) is also scored on how well the build follows it.
     let brandDoc = '';
     try { if (root && fs.existsSync(path.join(root, 'DESIGN.md'))) brandDoc = fs.readFileSync(path.join(root, 'DESIGN.md'), 'utf8').trim(); } catch { /* unreadable: no brand score */ }
-    const keys = brandDoc ? [...REVIEW_KEYS, 'brand'] : REVIEW_KEYS;
+    // Video Mode: the films are measured (length, size, sound, loudness, cuts against the music's real tempo) and tiled
+    // on a contact sheet, and a film is scored as a film (picture, motion, sound, rhythm, story).
+    const films = run.video && S.videoReview !== false ? (await Promise.all(filmsChanged().slice(0, 2).map((f) => filmFacts(root, f, { bpm: musicBpm() }).catch(() => null)))).filter(Boolean) : [];
+    const film = films.length > 0;
+    const keys = film ? FILM_KEYS : brandDoc ? [...REVIEW_KEYS, 'brand'] : REVIEW_KEYS;
+    const core = film ? FILM_KEYS : CORE_KEYS;
     emit({ t: 'review_start', step, round, model, targets, at: at() });
     const p = run.plan;
     const brief = [
@@ -1986,12 +2025,9 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       draft ? `The builder's own summary. These are claims to check, not facts:\n<summary>\n${clip(draft, 800)}\n</summary>` : '',
       brandDoc ? `The project's design system (DESIGN.md), for the brand score:\n<design>\n${clip(brandDoc, 3000)}\n</design>` : '',
     ].filter(Boolean).join('\n\n');
-    // Video Mode: the films are measured (length, size, sound, loudness, black frames) and tiled on a contact sheet, so
-    // the reviewer scores the film itself, not only the page that plays it.
-    const films = run.video && S.videoReview !== false ? (await Promise.all(filmsChanged().slice(0, 2).map((f) => filmFacts(root, f).catch(() => null)))).filter(Boolean) : [];
-    if (films.length) emit({ t: 'note', level: 'info', msg: `🎬 Film checks: ${films.map(factsText).join(' · ')}`, at: at() });
-    const filmBrief = films.length ? `The films this build made, measured by the harness (facts, not claims):\n${films.map((f) => `- ${factsText(f)}`).join('\n')}\nReview the film as a film: function is whether it plays and matches the brief (length, shapes, sound); craft is pacing, framing, type and sound level, judged from the contact sheet${films.some((f) => f.sheet) && sees ? 's below' : ''} and the page. Report each "Off:" item as a bug (did: "read the harness's film facts"), severity annoying, or breaks when the film has no sound and the request implies sound.` : '';
-    const rmsgs = [{ role: 'system', content: REVIEW_SYSTEM(bar, sees, !!brandDoc) }, { role: 'user', content: filmBrief ? `${brief}\n\n${filmBrief}` : brief }];
+    if (film) emit({ t: 'note', level: 'info', msg: `🎬 Film checks: ${films.map(factsText).join(' · ')}`, at: at() });
+    const filmBrief = film ? `The films this build made, measured by the harness (facts, not claims):\n${films.map((f) => `- ${factsText(f)}`).join('\n')}\nJudge picture and motion from the contact sheet${films.some((f) => f.sheet) && sees ? 's below' : ''} and the player; sound and rhythm from these facts and what you hear described. Report each "Off:" item as a bug (did: "read the harness's film facts"), severity annoying, or breaks when the film has no sound and the request implies sound.` : '';
+    const rmsgs = [{ role: 'system', content: REVIEW_SYSTEM(bar, sees, !!brandDoc, film) }, { role: 'user', content: filmBrief ? `${brief}\n\n${filmBrief}` : brief }];
     if (sees) for (const f of films.filter((x) => x.sheet)) { try { rmsgs.push({ role: 'user', content: [{ type: 'text', text: `Contact sheet of ${f.rel}: frames in order, left to right, top to bottom.` }, { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${fs.readFileSync(path.join(root, f.sheet)).toString('base64')}` } }] }); } catch { /* no sheet to show */ } }
     const shots = new WeakSet();
     let result = null, opened = 0, tried = 0;
@@ -2031,7 +2067,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     // The reviewer could not open a single page: its scores would only say the browser failed, not how the build is.
     if (tried && !opened) { emit({ t: 'note', level: 'warn', msg: `The reviewer (${short(model)}) could not open any page (the browser failed every time), so there is no review this round.`, at: at() }); return null; }
     // A missing core score counts as 1 (nothing to show for it); a missing accessibility or brand score is left out, not failed.
-    const scores = Object.fromEntries(keys.filter((k) => CORE_KEYS.includes(k) || result.scores?.[k] != null).map((k) => [k, Math.max(1, Math.min(5, Math.round(Number(result.scores?.[k])) || 1))]));
+    const scores = Object.fromEntries(keys.filter((k) => core.includes(k) || result.scores?.[k] != null).map((k) => [k, Math.max(1, Math.min(5, Math.round(Number(result.scores?.[k])) || 1))]));
     // A bug counts only with its steps and what happened: something the builder can reproduce and fix.
     const raw = Array.isArray(result.bugs) ? result.bugs : [];
     const SEV = ['breaks', 'annoying', 'minor'];
@@ -2106,7 +2142,9 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
             const media = await vt.eval('document.body ? document.body.querySelectorAll("img,svg,video,canvas,iframe").length : 0').catch(() => 1);
             const blank = !(sum.text || '').trim() && !sum.controls.length && !media;
             const found = [...errs.slice(0, 5).map((e) => `${target}: ${e}`), ...(blank ? [`${target}: the page shows nothing`] : [])];
-            if (!blank && checksLive) { const C = checkSettings(S); if (C.shots || C.click) found.push(...(await pageChecks(vt, target, 'verify')).problems); }
+            // A film, picture or sound file is not a web page: the page checks read signage in a film's frames as cut-off
+            // text and sent a finished film back twice. Films get the film checks instead.
+            if (!blank && checksLive && !MEDIA_TARGET.test(target)) { const C = checkSettings(S); if (C.shots || C.click) found.push(...(await pageChecks(vt, target, 'verify')).problems); }
             problems.push(...found);
             pages.push({ target, problems: found.length, image: await vt.screenshot().catch(() => null) });
           } catch (e) {
@@ -2630,7 +2668,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
           const rel = ref.slice(5).replace(/^[/\\]+/, '');
           const type = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif' }[rel.split('.').pop().toLowerCase()];
           const full = path.resolve(root, rel);
-          if (type && full.startsWith(path.resolve(root) + path.sep) && fs.existsSync(full)) out.push(`data:${type};base64,${fs.readFileSync(full).toString('base64')}`);
+          if (type && full.startsWith(path.resolve(root) + path.sep) && fs.existsSync(full)) out.push(deciderPicture(full, type));
         }
         else if (ref.startsWith('artifact:')) {
           const a = arts.get(ref.slice(9));
@@ -3361,6 +3399,8 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     // web:<address>: a site in QuorX's own browser (not signed in). page:<id or path>: your own work.
     if (/^web:/i.test(target)) { const u = target.slice(4).trim(); return /^https?:\/\//i.test(u) ? u : `https://${u}`; }
     if (/^page:/i.test(target)) { const x = target.slice(5).trim(); return resolveTarget(arts.has(x) ? `artifact:${x}` : `site:${x}`); }
+    // file:<path> is how decide names a project file; look and browser take it too (it opens like site:<path>).
+    if (/^file:/i.test(target)) return resolveTarget(`site:${target.slice(5).trim().replace(/^[/\\]+/, '')}`);
     if (target.startsWith('artifact:')) {
       const a = arts.get(target.slice(9));
       if (!a) throw new Error(`no artifact ${target.slice(9)}`);
@@ -3374,7 +3414,8 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
       // A site running from the launch file (serve.mjs) opens there: its own origin, so storage works.
       const entry = target.slice(5).replace(/^[/\\]+/, '') || 'index.html';
       const sv = listServers(projectId).find((x) => x.status !== 'stopped' && /\.quorx[/\\]serve\.mjs/.test(x.command || '') && x.url);
-      return sv ? new URL(entry, sv.url).href : `${pages}/ws/${projectId}/${entry}`;
+      // A film, a sound or a picture opens in QuorX's own plain player (centred, on black), not as a bare file.
+      return sv ? new URL(entry, sv.url).href : `${pages}/ws/${projectId}/${entry}${MEDIA_TARGET.test(target) ? '?player=1' : ''}`;
     }
     if (target.startsWith('app:')) {
       // app:<server name>, or app:<server name>/<page> for a page on it.
@@ -3384,7 +3425,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
       if (!sv) throw new Error(`no server named ${nm}${launchConfigs(projectId).length ? ` (servers in the launch file: ${launchConfigs(projectId).map((x) => x.name).join(', ')}; start one with start_server)` : ''}`);
       return `http://localhost:${sv.port}/${page.replace(/^\/+/, '')}`;
     }
-    throw new Error('target must be artifact:<id>, site:<path>, app:<name>, or an http(s) URL');
+    throw new Error('target must be artifact:<id>, site:<path> (or file:<path>), app:<name>, or an http(s) URL');
   }
   // Pages from the outside web are labelled untrusted; the agent's own pages and apps are not (an app's window
   // loaded from its own files, too).
@@ -4060,6 +4101,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     const cat = CAT_OF[name];
     if (!T[cat]?.on) return `Error: ${name} is switched off by the user.`;
     const board = storyboardRefusal(); if (board) return board;
+    if (cat === 'music' && run.video) { const b = String(args.prompt || '').match(/\b(\d{2,3})\s*BPM\b/i); if (b) rememberBpm(Number(b[1])); }
     const plan = await estimateFor(cat, modelFor(cat, args), args, T);
     // A start picture is read, and the model checked, before anyone is asked to pay for it.
     let firstFrame = null;

@@ -221,6 +221,19 @@ export function saveStoryboard(root, chatId, data) {
   } catch { /* the file is a convenience */ }
 }
 
+/**
+ * The finished films among the video files a reply wrote ([{ r: project path, t: written at }]), best first. The parts
+ * a film is made from (generated clips, a shot, a take) are left out: a 3 s shot "stops abruptly" by nature, and it
+ * was reviewed as a film. Films in an edits/final/export folder come first, then the newest.
+ */
+export function finishedFilms(found) {
+  const parts = /(^|\/)(clips?|shots?|takes?|generated|scratch|frames|tmp|temp|raw|parts)\//i;
+  const partName = /^(shot|clip|take|part|seg|video_)[\w-]*\.\w+$/i;
+  const finals = /(^|\/)(edits?|final|finals|export|exports|out|output|renders?|films?)\//i;
+  return found.filter((x) => !parts.test(x.r) && !partName.test(x.r.split('/').pop()))
+    .sort((a, b) => (finals.test(b.r) - finals.test(a.r)) || b.t - a.t).map((x) => x.r);
+}
+
 // ---------- the film's facts, for the reviewer ----------
 const run = (cmd, args, ms = 60000) => new Promise((resolve) => {
   execFile(cmd, args, { timeout: ms, maxBuffer: 8e6, windowsHide: true }, (err, stdout, stderr) => resolve({ ok: !err, out: String(stdout || ''), err: String(stderr || '') }));
@@ -230,7 +243,7 @@ const run = (cmd, args, ms = 60000) => new Promise((resolve) => {
  * Measures one film: { rel, seconds, width, height, fps, audio, lufs, peak, black, sheet } (sheet: a contact sheet
  * saved in .quorx/video/, as a project path). null when ffprobe can't read it.
  */
-export async function filmFacts(root, rel, { ff = run, music = mapMusic, cuts = cutsOf } = {}) {
+export async function filmFacts(root, rel, { ff = run, music = mapMusic, cuts = cutsOf, bpm = 0 } = {}) {
   const file = path.join(root, rel);
   const p = await ff('ffprobe', ['-v', 'error', '-show_entries', 'format=duration:stream=codec_type,width,height,r_frame_rate', '-of', 'json', file], 20000);
   if (!p.ok) return null;
@@ -253,7 +266,8 @@ export async function filmFacts(root, rel, { ff = run, music = mapMusic, cuts = 
     if (lo != null && hi != null) facts.bassDb = +(lo - hi).toFixed(1);
     // The music's beats against the picture's cuts, and whether the sound ends or just stops.
     try {
-      const m = await music(file);
+      // The tempo the music was made at settles the detector, which can land on a related tempo (129 for 96).
+      const m = await music(file, { bpm });
       facts.bpm = m.bpm;
       facts.endsClean = m.ending.clean;
       const c = await cuts(file);

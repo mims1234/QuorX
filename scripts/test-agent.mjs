@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadCards, cardText, limitsLine, cardFile, CARDS_DIR, CARD_CHARS } from '../server/modelcards.js';
-import { runAgent, inPlaceEdit, answerQuestion, answerSecret, answerApproval, answerBudget, setRunApproval, steerRun, holdCard } from '../server/agent.js';
+import { runAgent, inPlaceEdit, deciderPicture, REVIEW_SYSTEM, FILM_KEYS, answerQuestion, answerSecret, answerApproval, answerBudget, setRunApproval, steerRun, holdCard } from '../server/agent.js';
 import { saveProject, forgetProject, setProjectBudget } from '../server/store.js';
 import { loadCheckpoint, dropCheckpoint, ledger } from '../server/runs.js';
 import { setBudget, projectSpend, budgetState, live as liveRuns } from '../server/budget.js';
@@ -24,7 +24,7 @@ import { startRun, follow, getRun, readLog } from '../server/runs.js';
 import { getChat, saveChat as storeChat, listProjects, listChats } from '../server/store.js';
 import { matchPlan, usePlan } from '../server/mediaplan.js';
 import { setSecret, parseEnv, secretKind, scrubSecrets } from '../server/projectsecrets.js';
-import { looksLikeFilm, videoModeFor, filmFacts, factsText, videoRules, recommendedRoute, recommendedMusic, VIDEO_DEFAULTS } from '../server/videomode.js';
+import { looksLikeFilm, videoModeFor, filmFacts, factsText, finishedFilms, videoRules, recommendedRoute, recommendedMusic, VIDEO_DEFAULTS } from '../server/videomode.js';
 import { settleTempo, analyse, tempoOf, barsOf, fitPlan, pickWindows, cutsVsBeats } from '../server/musicmap.js';
 
 let n = 0;
@@ -2898,6 +2898,7 @@ test('Video Mode v2: music_map and fit_music work on a track in the project', { 
   const secs = Number(execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', path.join(dir, 'assets', 'audio', 'beat-30s.wav')]).toString());
   assert.ok(Math.abs(secs - 30) < 2.6, `about 30 s on bar lines, got ${secs}`);
   assert.match(toolResults(bodies[3]).at(-1), /^Error: /, 'outside the project is refused');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, '.quorx', 'video', 'music.json'), 'utf8')).bpm, 96, 'the tempo asked for is kept for the film checks');
 });
 
 test('a command that edits a file in place is steered to edit_file, before any approval', async () => {
@@ -2928,4 +2929,50 @@ test('Video Mode: a chat continued from a film chat keeps Video Mode and the sto
   assert.equal(of(events, 'video_mode')[0].first, false, 'no new brief');
   assert.match(userText(bodies[0]), /The brief and the story were settled earlier/);
   assert.doesNotMatch(toolResults(bodies[1])[0], /storyboard/i, 'the approval carried over');
+});
+
+// ---------- fixes from the first real v2 film (false alarms from QuorX's own checks) ----------
+test('Video Mode: only finished films are reviewed as films, not the clips they are made from', () => {
+  const found = [{ r: 'assets/clips/shot09.mp4', t: 9 }, { r: 'assets/generated/video_slow_crane.mp4', t: 8 }, { r: 'assets/edits/mumbai-monsoon.mp4', t: 5 }, { r: 'teaser.mp4', t: 7 }, { r: 'assets/shot01.mp4', t: 10 }];
+  assert.deepEqual(finishedFilms(found), ['assets/edits/mumbai-monsoon.mp4', 'teaser.mp4']);
+});
+
+test('Video Mode: the film checks measure the beat at the tempo the music was made at', async () => {
+  const dir = tempDir('quorx-film-');
+  fs.mkdirSync(path.join(dir, 'assets'), { recursive: true });
+  const ff = async (cmd, args) => {
+    if (cmd === 'ffprobe') return { ok: true, out: JSON.stringify({ format: { duration: '30' }, streams: [{ codec_type: 'video', width: 1920, height: 1080, r_frame_rate: '24/1' }, { codec_type: 'audio' }] }), err: '' };
+    if (args.some((a) => String(a).includes('astats'))) return { ok: true, out: '', err: 'RMS level dB: -20\n' };
+    if (args.includes('ebur128=peak=true')) return { ok: true, out: '', err: 'Summary:\n    I:   -14.0 LUFS\n    Peak:   -1.2 dBFS\n' };
+    if (args.some((a) => String(a).startsWith('blackdetect'))) return { ok: true, out: '', err: '' };
+    fs.writeFileSync(args.at(-1), 'jpg'); return { ok: true, out: '', err: '' };
+  };
+  const asked = [];
+  const music = async (file, opts) => { asked.push(opts.bpm); const bpm = opts.bpm || 129.2, beat = 60 / bpm; return { bpm, beats: Array.from({ length: Math.ceil(30 / beat) }, (_, i) => +(i * beat).toFixed(3)), ending: { clean: true } }; };
+  const cuts = async () => [5, 7.5, 10, 15, 17.5, 20, 25, 27.5];
+  const right = await filmFacts(dir, 'assets/film.mp4', { ff, music, cuts, bpm: 96 });
+  assert.equal(asked[0], 96);
+  assert.equal(right.cuts.onBeat, 8, 'at 96 BPM all eight cuts are on the beat');
+  assert.doesNotMatch(factsText(right), /cuts land on a beat/);
+  const wrong = await filmFacts(dir, 'assets/film.mp4', { ff, music, cuts });
+  assert.ok(wrong.cuts.onBeat < 8, 'without the tempo, a detector that hears 129 BPM makes them look off');
+});
+
+test('a picture for the deciders is scaled down first, and sent as it is when that fails', () => {
+  const dir = tempDir('quorx-pic-'), file = path.join(dir, 'sheet.png');
+  fs.writeFileSync(file, Buffer.alloc(64, 7));
+  let args = null;
+  const small = deciderPicture(file, 'image/png', (cmd, a) => { args = a; return Buffer.alloc(800, 1); });
+  assert.match(small, /^data:image\/jpeg;base64,/);
+  assert.ok(args.some((a) => String(a).includes("min(1280,iw)")));
+  assert.match(deciderPicture(file, 'image/png', () => { throw new Error('no ffmpeg'); }), /^data:image\/png;base64,/);
+});
+
+test('a film is reviewed as a film: picture, motion, sound, rhythm and story', () => {
+  assert.deepEqual(FILM_KEYS, ['picture', 'motion', 'sound', 'rhythm', 'story']);
+  const film = REVIEW_SYSTEM(3, true, false, true);
+  assert.match(film, /skeptical film reviewer/);
+  assert.match(film, /rhythm \(cuts land on the music's beats/);
+  assert.doesNotMatch(film, /accessibility/);
+  assert.match(REVIEW_SYSTEM(3, true), /accessibility/, 'a page is still reviewed as a page');
 });
