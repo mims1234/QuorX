@@ -2879,7 +2879,7 @@ test('Video Mode v2: the brief recommends moving stills and AI music when those 
   assert.equal(recommendedMusic({ videoMusic: 'ai' }, []), 'code');
 });
 
-test('Video Mode v2: music_map and fit_music work on a track in the project', async () => {
+test('Video Mode v2: music_map and fit_music work on a track in the project', { skip: !hasFfmpeg && 'ffmpeg is not installed' }, async () => {
   const { bodies, dir } = await run((body, i) => [
     reply('', [['music_map', { path: 'assets/audio/beat.wav', bpm: 96, seconds: 5, shape: 'peak' }]]),
     reply('', [['fit_music', { path: 'assets/audio/beat.wav', out: 'assets/audio/beat-30s.wav', seconds: 30, bpm: 96 }]]),
