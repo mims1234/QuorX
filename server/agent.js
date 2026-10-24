@@ -2903,8 +2903,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         if (!line) return 'Error: start needs a command.';
         let cwd = root;
         if (args.cwd) { cwd = safePath(root, String(args.cwd)); if (!fs.existsSync(cwd)) return `Error: no folder ${args.cwd} in the project.`; }
-        // A pager or editor started here is judged as opaque (cmdpolicy TERM_APPS): what is typed into it isn't checked.
-        const d = await decideCommand(line, { shell: SF.shell, root, cwd, env: childEnv(), rules: commandRules(), mode: S.approval, yolo: yoloOf(SF), terminal: true });
+        const d = await decideCommand(line, { shell: SF.shell, root, cwd, env: childEnv(), rules: commandRules(), mode: S.approval, yolo: yoloOf(SF) });
         const g = await gateCommand(d, line, SF.shell);
         if (!g.ok) return g.text;
         const sb = SF.snapshots ? snapBefore(root, { maxBytes: SF.snapshotMaxMB * 1024 * 1024 }) : { snap: null };

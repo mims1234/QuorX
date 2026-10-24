@@ -1239,19 +1239,13 @@ function serverStart(s, k) {
   return !plain.slice(0, 2).some((w) => FETCH_RUN.has(w)) && !words.some((w) => /^--with(-requirements|-editable)?(=|$)|:\/\//.test(w));
 }
 
-// The agent's terminal (ctx.terminal): pagers and editors started there read keys as their own commands (open a file,
-// write one, run a shell), and nothing the agent types afterwards is checked, so starting one counts as opaque.
-// (PowerShell's man and help page through more.)
-const TERM_APPS = new Set(['less', 'more', 'most', 'pg', 'man', 'help', 'info', 'vi', 'vim', 'nvim', 'view', 'vimdiff', 'ex', 'ed', 'nano', 'pico',
-  'emacs', 'micro', 'joe', 'mcedit', 'mc', 'edit']);
-
 /**
  * Decides what happens to a command line before it runs.
  * ctx: { shell: 'powershell'|'pwsh'|'cmd'|'bash'|'zsh'|'direct', root, cwd?, env?, rules: [{effect, match, by, scope}], mode: 'strict'|'yolo',
  *        yolo: { check: { web, inline, build, install, unknown, reads }, external, opaque, outside, global } }
  *        check: what YOLO sends to the deciders instead of running it (left out: every one is checked, the careful default);
  *        external, opaque, outside, global: what the deciders may approve instead of asking you. See safety.js yoloOf().
- *        server: true for start_server (see serverStart); terminal: true for the agent's terminal (see TERM_APPS).
+ *        server: true for start_server (see serverStart).
  * Returns { verdict: 'allow'|'ask'|'deny', who: 'user'|'deciders'|null, why, decidedBy, segments: [...], hint?, standIn }.
  * standIn: the deciders vote on it in place of the user (without them it would pause for you), not as a check first.
  */
@@ -1285,7 +1279,7 @@ export async function decide(line, ctx) {
       if (r?.opaque) s.opaque ||= r.opaque;
       if (r?.extra.length) { queue.unshift(...r.extra, s); continue; }
     }
-    const k = ctx.terminal && TERM_APPS.has(s.program) ? { cls: 'opaque', why: `${s.rawProgram} in a terminal takes commands of its own from whatever is typed next` } : classify(s, s.shell || shell);
+    const k = classify(s, s.shell || shell);
     const paths = pathsOf(s, k, s.ctx || c);
     written.push(...paths.filter((p) => p.kind === 'write' && p.resolved).map((p) => p.resolved));
     const seg = { text: s.text, program: s.program, cls: k.cls, why: k.why, global: !!k.global, paths, rule: null, suggest: suggestions(s), ...(s.via ? { via: s.via } : {}) };

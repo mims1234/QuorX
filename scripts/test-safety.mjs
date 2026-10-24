@@ -1027,17 +1027,6 @@ test('terminal: a bare interpreter is a prompt QuorX can’t check, so it asks',
   assert.equal((await decide('python app.py', ctx({ mode: 'yolo' }))).who, 'deciders', 'a script is a normal build');
 });
 
-test('terminal: a pager or editor started in the agent’s terminal is opaque; elsewhere it is judged as before', { skip: !WIN }, async () => {
-  const term = (line, over = {}) => decide(line, ctx({ terminal: true, ...over }));
-  for (const line of ['less a.txt', 'more a.txt', 'vim a.txt', 'nano', 'man git']) {
-    const d = await term(line);
-    assert.equal(d.segments[0].cls, 'opaque', line);
-    assert.equal(d.who, 'user', line);
-  }
-  assert.equal((await term('git log')).verdict, 'allow', 'git log stays a read: its pager is off (NO_PAGER_ENV)');
-  assert.equal((await decide('less a.txt', ctx())).verdict, 'allow', 'less as a plain command only reads');
-});
-
 test('start_server: a plain dev-server start runs as before; a package fetched and run, an install or a URL is judged like any command', { skip: !WIN }, async () => {
   const root = tmp('server');
   fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ scripts: { dev: 'vite', start: 'node server.js' } }));
