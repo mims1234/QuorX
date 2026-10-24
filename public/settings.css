@@ -636,6 +636,7 @@
 #projDlg .pj-sec { padding-top: 14px; padding-bottom: 14px; }
 #projDlg .pj-folder { border-radius: 9px; }
 #projDlg .kx-btn { border-radius: 8px; border-color: var(--line-strong); background: var(--panel-2); }
+#projDlg .kx-btn.primary { background: var(--ok); border-color: var(--ok); color: var(--ok-ink); }
 #settings #checkList { padding: 0 18px 16px; }
 #settings #checkList .st-check-title { margin: 14px 0 6px; font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--dim); }
 #settings #checkList .st-check { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 10px; align-items: start; padding: 6px 0; }

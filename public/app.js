@@ -988,7 +988,7 @@ Every chat in this project reads, writes and runs programs in this folder.">${es
   // After a save: the Budget figure above the chat list follows.
   $('#pjBudget', box).addEventListener('budget-saved', (e) => { const b = $('#pjKpis > div:nth-child(3) b', box); if (b) b.textContent = e.detail.budget != null ? `$${e.detail.budget.toFixed(2)}` : 'No limit'; });
   // Folded to one row: which design system (or none); the starters and editing open from it.
-  mountDesign(p, $('#pjDesign', box)).then(() => { const st = $('#pjDesignState', box), cur = $('#pjDesign .ds-current b', box); if (st) { st.textContent = cur ? cur.textContent : 'None'; st.classList.toggle('none', !cur); } });
+  mountDesign(p, $('#pjDesign', box));
   mountHooks(p, $('#pjHooks', box), (n) => { const st = $('#pjHooksState', box); if (st) { st.textContent = n ? `${n} on` : 'None'; st.classList.toggle('none', !n); } });
   if (!dlg.open) dlg.showModal();
   if (focusOn === 'hooks') { $('#pjHooksFold', box).open = true; $('#pjHooksSec', box).scrollIntoView({ block: 'start' }); }
@@ -1051,7 +1051,9 @@ async function mountHooks(p, el, onCount) {
 // Replacing or removing moves the old files to the project's .quorx/trash, so nothing is lost.
 async function mountDesign(p, el) {
   if (!el) return;
-  if (p.missing || p.needsFolder) { el.innerHTML = '<p class="pj-hint">Pick a folder for this project first.</p>'; return; }
+  // The folded row's label follows every redraw (after Switch, Remove or Save too), not only the first.
+  const label = (name) => { const st = el.closest('details')?.querySelector('.pj-fold-state'); if (st) { st.textContent = name || 'None'; st.classList.toggle('none', !name); } };
+  if (p.missing || p.needsFolder) { label(''); el.innerHTML = '<p class="pj-hint">Pick a folder for this project first.</p>'; return; }
   const [cur, systems] = await Promise.all([
     fetch(`/api/projects/${p.id}/design`).then((r) => r.json()).catch(() => ({ error: 'could not load' })),
     fetch('/api/design-systems').then((r) => r.json()).catch(() => []),
@@ -1066,7 +1068,7 @@ async function mountDesign(p, el) {
       <button type="button" class="kx-btn sm ds-use" data-id="${esc(s.id)}">${replace ? 'Switch to this' : 'Use this'}</button>
     </div>`).join('')}</div>`;
   const hint = '<p class="pj-hint">Or make one from a reference: in a chat, ask "make a design system from https://…" or attach a screenshot and ask for one.</p>';
-  if (cur.error) { el.innerHTML = `<p class="pf-warn">Could not read the design files: ${esc(cur.error)}</p>`; return; }
+  if (cur.error) { label(''); el.innerHTML = `<p class="pf-warn">Could not read the design files: ${esc(cur.error)}</p>`; return; }
   el.innerHTML = has ? `
     <div class="ds-current">
       <div class="ds-cur-top"><b>${esc(cur.name || 'Project design system')}</b><span class="ds-files">${[cur.md ? 'DESIGN.md' : '', cur.tokens ? `tokens.css · ${cur.colors} colours` : ''].filter(Boolean).join(' · ')}</span></div>
@@ -1074,6 +1076,7 @@ async function mountDesign(p, el) {
       <div class="ds-panel" hidden></div>
     </div>`
     : `<p class="pj-hint">None yet: each chat picks its own look. Pick a starter to give every chat in this project the same colours, type and components.</p>${grid(false)}${hint}`;
+  label(has ? (cur.name || 'Project design system') : '');
   const panel = $('.ds-panel', el);
   const reload = () => mountDesign(p, el);
   const apply = async (id, overwrite) => {
@@ -1081,11 +1084,13 @@ async function mountDesign(p, el) {
     if (r?.error) return uiAlert(`Could not use that design system: ${r.error}`);
     if (r.applied === false) {
       // A DESIGN.md or tokens.css is already there: confirm in place before replacing it.
+      // One question at a time: a second click (or a click on another card) replaces the open one.
       const card = el.querySelector(`.ds-use[data-id="${CSS.escape(id)}"]`)?.closest('.ds-card');
-      const ask = document.createElement('div'); ask.className = 'ds-confirm';
+      el.querySelectorAll('.ds-ask').forEach((a) => a.remove());
+      const ask = document.createElement('div'); ask.className = 'ds-confirm ds-ask';
       ask.innerHTML = `<p>This project already has ${esc(r.exists.join(' and '))}. Replace ${r.exists.length > 1 ? 'them' : 'it'}? The old ${r.exists.length > 1 ? 'files go' : 'file goes'} to the project's trash.</p><div class="ds-acts"><button type="button" class="kx-btn primary sm ds-yes">Replace</button><button type="button" class="kx-btn sm ds-no">Cancel</button></div>`;
       (card || el).appendChild(ask);
-      $('.ds-yes', ask).onclick = () => apply(id, true);
+      $('.ds-yes', ask).onclick = async (e) => { const b = e.currentTarget; b.disabled = true; await apply(id, true); b.disabled = false; };
       $('.ds-no', ask).onclick = () => ask.remove();
       return;
     }
