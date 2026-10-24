@@ -6644,6 +6644,8 @@ document.addEventListener('keydown', (e) => {
   if (e.repeat || e.target.closest?.('.st-keycap') || G.settings?.tools?.listen?.on === false) return;
   if (keyCombo(e) !== (G.settings.micKey || 'Alt+M')) return;
   const c = micTarget(); if (!c) return;
+  // It starts listening only while you're typing in that chat's message box (not in Settings or other fields); it stops from anywhere.
+  if (!G.rec && !(e.target.closest?.('.composer .input') && c.el.root.contains(e.target))) return;
   e.preventDefault();
   if (G.settings.micMode === 'hold') { G.micHeld = true; if (!G.rec) toggleMic(c, { byKey: true }); } else toggleMic(c, { byKey: true });
 }, true);
