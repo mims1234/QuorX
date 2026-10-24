@@ -4,7 +4,7 @@ Status (2026-10-19): **built** on the `worktree-safety-layer` branch, with tests
 - **Stop:** the job host also parses PowerShell for the rule engine (one helper process, `server/jobhost.ps1`), and commands start through `server/jobgate.cjs`, which waits on stdin rather than on a go-file. Without the job host (not Windows, or PowerShell can't load it), Stop falls back to killing the process tree and says "basic mode". There is no periodic process-snapshot tracker.
 - **Commands that leave processes behind:** when a command ends, anything it started that is still running is ended too, and named in the result.
 - **Escalation:** after the deciders block 3 commands in a row (or 20 in a reply), the reply doesn't pause on a card. Instead, commands that need a vote ask you for the rest of that reply.
-- **Reply cap:** in Strict, the card raises the cap for this reply only (`/api/raise-cap`); the default cap is in ⚙ Budget & approvals.
+- **Reply cap:** in Strict, the card raises the cap for this reply only (`/api/raise-cap`); the default cap is in ⚙ Budget.
 - **OpenRouter key limit:** a 402/403 limit error stops the reply with a clear message. Reading the key's limit into ⚙ Models isn't built.
 - **Not built yet:** a separate OpenRouter key per mode, and the backup-status chip next to YOLO.
 

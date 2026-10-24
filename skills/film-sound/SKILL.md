@@ -14,11 +14,12 @@ Sound is half the film. A silent or generic soundtrack makes good pictures feel 
 - At least **two real silences** (or near-silences) before the turn or the peak. The first sound after a silence should be one of the most important in the film.
 - Use sound as a transition at least twice: the next scene's sound starts early (J-cut), or the last scene's sound runs over the cut (L-cut).
 
-## 2. Music
-- The user's own music comes first. `compose_music` is paid and needs approval.
-- Free route: write the score as events `(time, instrument, pitch, length, velocity, pan)` and play them with samples from free libraries (VSCO 2 Community Edition, VCSL, FreePats, Salamander piano and others; check each licence and list it in CREDITS), or synthesise with numpy for chiptune, drones and effects.
-- Tempo first, then the picture locks to the bar grid. Check that every visual hit lands on its cue; aim for 0 ms, accept one frame.
-- Balance the low end: synthetic scores get bass-heavy. Keep 20-120 Hz about 3 dB below the rest, skip pad notes below MIDI 48, and give the bass some upper harmonics so it speaks on phone speakers.
+## 2. Music, first
+- The user's own music comes first. Otherwise **a music model** (`compose_music`, paid, needs approval): Lyria 3 Clip makes about 28-30 s for about $0.04, Lyria 3 Pro a longer piece for about $0.08. Ask for: instrumental (unless there is singing), the tempo ("96 BPM"), the instruments, the sections in order (quiet intro, build, full, ending) and "a clean ending".
+- Measured in QuorX (October 2026): Pro ignores the length asked (35 s asked, 60 s made) but keeps the sections in order; Clip is 28-30 s; the same `seed` gives a different take. So **make the track, then fit the film to it**, not the other way round.
+- In Video Mode: `music_map` gives the tempo (pass the tempo you asked for: the detector can land on a related one), the bar lines, where it gets louder or quieter and whether it ends cleanly, and the best stretch for a part ("peak", "build", "calm", "ending"). `fit_music` makes a copy of the film's length on bar lines: shorter by starting later (the real ending stays; a faded-out ending sounds cheap), longer by playing whole bars from the middle again, joined on the downbeat.
+- Then the picture locks to that bar grid: cut on bars and accents, vary shot lengths (1, 2 or 3 bars) so cuts don't become predictable, and put the key moment on the biggest change. Aim for every cut within one frame of its beat.
+- Written in code only for small accents and effects, or when the user wants it free. Scores written in code so far all rumbled: endless filtered-noise beds ("rain", "crowd") swelling under everything, which the -14 LUFS master then turned up. If you write one: no noise bed louder than the music, keep 20-150 Hz about 3 dB below the rest (high-pass the ambience at 150 Hz), skip pad notes below MIDI 48, and give the bass upper harmonics so it speaks on phone speakers.
 
 ## 3. Voice
 - The user's own recording comes first. Otherwise `speak` (paid, approval) or a local voice model if one is installed.

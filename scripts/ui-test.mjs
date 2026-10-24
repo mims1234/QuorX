@@ -155,7 +155,7 @@ async function settingsScenario() {
   let proj = null;
   await step('QuorX opens', async () => { await waitFor(`document.querySelector('#settingsBtn') && document.querySelector('#projectList')`, 30000, 'the app'); return `Loaded ${await js('return location.href')}`; });
   await step('A project of the test’s own for the rule checks', async () => { proj = await testProject('rules'); return `${proj.name} at ${proj.dir}`; });
-  await step('Settings → Safety & commands', async () => {
+  await step('Settings → Approvals & safety', async () => {
     await click('#settingsBtn');
     await waitFor(`document.querySelector('#settings')?.open`, 5000, 'the settings dialog');
     await click('#stNav [data-cat="safety"]');

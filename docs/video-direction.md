@@ -226,6 +226,30 @@ anyone saw a shot. Video Mode (`server/videomode.js`, ⚙ Settings → Video) ch
 
 A request that is not a film gets the same prompt, tools and question limit as before; a test compares the two.
 
+## 10. Video Mode v2: music first, moving pictures
+
+The first real films (a 30 s Mumbai monsoon film and a 58 s cricket film) showed four problems:
+- **Music:** every score written in code rumbled. The sound below 150 Hz was 4-4.5 dB louder than everything above it: filtered-noise "rain" and "crowd" beds swelling under the music, which the -14 LUFS master then turned up.
+- **Cuts:** shots of a fixed 4 s ran at 6.4 beats each, so only 1 of 5 cuts landed on a beat.
+- **Motion:** stills with a 9% zoom over 4 s read as a slideshow.
+- **Viewer page:** 13-37% of the agent's tool calls went to a page around the film.
+
+What changed:
+1. **Music first.** The brief recommends a music model (Lyria 3 Clip, about $0.04 for 30 s) when music is on. Measured through OpenRouter: Pro ignores the length asked (35 s asked, 60 s made) but keeps the sections in order; Clip makes 28-30 s; the same seed gives a different take. So the film fits the music:
+   - `music_map` finds the tempo (checked against the tempo asked for), the bar lines, the changes and whether the track ends cleanly;
+   - `fit_music` trims from the front on a bar line, keeping the real ending, or plays whole bars from the middle again with 25 ms crossfades on the downbeat. A 28 s clip made 35 s this way sounded seamless when listened to.
+2. **Moving pictures.** With video clips on, the brief recommends turning each still into a clip with `make_video` from that still (about $1 for 30 s at 720p), so the shots move and stay consistent. It also offers a mixed route (key shots move) and plain stills.
+3. **The film is the deliverable.** It opens in the Browser tab; a viewer page only when asked (⚙ Video → Viewer page). The reviewer now opens the film itself, not the storyboard sheet.
+4. **More film checks:**
+   - the bass against the rest;
+   - the tempo, and how many cuts land within 2 frames of a beat;
+   - whether the sound ends or just stops.
+   Films are found by when they were written, since the undo checkpoint leaves out big files, so a 25 MB film is now measured.
+5. **Fixes from the same runs:**
+   - A reply that ticks off its whole plan on its last step is reviewed, not called "out of steps".
+   - A command that edits a file in place (`(Get-Content f) -replace … | Set-Content f`, `sed -i`) is steered to `edit_file` instead of going to the approval vote, which had turned two of them down as unasked.
+   - A chat continued from a film chat (✦ Fresh chat) keeps Video Mode and the storyboard approved there.
+
 ## Sources
 
 Skills and toolkits: [EveryInc product-launch-video](https://github.com/EveryInc/product-launch-video) ·

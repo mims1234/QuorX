@@ -1,5 +1,5 @@
 // What works in the agent's shell, so it writes commands for the shell it really has instead of guessing and retrying.
-// The user picks the shell in ⚙ Settings → Safety & commands (server/safety.js): on Windows 'powershell' (5.1, the
+// The user picks the shell in ⚙ Settings → Approvals & safety (server/safety.js): on Windows 'powershell' (5.1, the
 // default), 'pwsh' (7), 'cmd' or 'bash' (Git Bash); elsewhere 'bash' or 'zsh'. 'direct' is one program with its
 // arguments, no shell at all (the old run_command).
 

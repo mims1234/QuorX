@@ -3,11 +3,13 @@
 // back by themselves, or nothing refers to them); your own things (deleted chats, the agent's trash and scratch, older
 // undo history) go to the Windows Recycle Bin, so they can still be brought back. Some parts are only shown: current
 // logs, attached documents and their search index, keys and settings are never cleared from here.
+// Cleanup on its own only ever clears inside QuorX's own data folder. Project folders (their .quorx included) are
+// measured and shown here; the one way in is the 🧹 popover in a chat header, where you tick parts and confirm
+// (clearProjectParts).
 // The desktop app's own caches (Electron) are measured and cleared by desktop/main.js; the page shows both together.
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
-import { spawn, execFileSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { HOME } from './openrouter.js';
 import { listProjects, getChat, compactChat } from './store.js';
 import { activeRuns } from './runs.js';
@@ -67,7 +69,7 @@ function trashEntries(dir) {
 
 // ---------- the parts ----------
 // Each part: { id, group, label, help, how: 'delete' | 'recycle' | null (only shown), safe (in "Clear safe caches"),
-// list(ctx) → paths }. Projects add one part per kind of thing in their .quorx folder.
+// list(ctx) → paths }. Projects add one part per kind of thing in their .quorx folder, shown only.
 const LOG_OLD = (n) => /\.1\.\w+$/.test(n) || /^bench-|^test-results/i.test(n) || n === 'harness.log';
 const PARTS = [
   { id: 'blobs', group: 'cache', label: 'Unused pictures', how: 'delete', safe: true,
@@ -92,14 +94,14 @@ const PARTS = [
     help: 'Kept here so you can bring them back.',
     list: async () => trashEntries(path.join(DATA, 'trash')) },
 ];
-// A project's .quorx folder, part by part. Older undo history keeps the newest `keep` replies' copies.
+// A project's .quorx folder, part by part (shown only). Older undo history counts all but the newest `keep` replies' copies.
 const PROJECT_PARTS = [
-  { part: 'scratch', label: 'Research & scratch', how: 'recycle', help: 'The agent\'s research scripts, downloads, scrapes and test files.' },
-  { part: 'trash', label: 'Agent trash', how: 'recycle', help: 'Files the agent deleted or replaced, kept so you can take them back.' },
-  { part: 'checkpoints', label: 'Older undo history', how: 'recycle', help: 'Copies for ↶ Undo of replies older than the newest ones you keep.' },
-  { part: 'objects', label: 'Command snapshots', how: 'delete', help: 'Copies for undoing the last command. The next command takes a fresh snapshot.' },
-  { part: 'collected', label: 'Collected pages', how: 'recycle', help: 'Lists the agent collected from web pages.' },
-  { part: 'edits', label: 'Picture edits', how: 'recycle', help: 'Working copies from editing pictures.' },
+  { part: 'scratch', label: 'Research & scratch', how: null, help: 'The agent\'s research scripts, downloads, scrapes and test files.' },
+  { part: 'trash', label: 'Agent trash', how: null, help: 'Files the agent deleted or replaced, kept so you can take them back.' },
+  { part: 'checkpoints', label: 'Older undo history', how: null, help: 'Copies for ↶ Undo of replies older than the newest ones you keep. Undo trims these itself as new replies start.' },
+  { part: 'objects', label: 'Command snapshots', how: null, help: 'Copies for undoing the last command. The next command takes a fresh snapshot.' },
+  { part: 'collected', label: 'Collected pages', how: null, help: 'Lists the agent collected from web pages.' },
+  { part: 'edits', label: 'Picture edits', how: null, help: 'Working copies from editing pictures.' },
   { part: 'uploads', label: 'Attached documents', how: null, help: 'Documents you attached. Remove them from the chat\'s attachments.' },
   { part: 'index', label: 'Document search index', how: null, help: 'Made once per document; making it again costs money.' },
 ];
@@ -111,7 +113,7 @@ function projectList(root, part, keep) {
   if (part === 'checkpoints') list = list.filter((p) => { try { return fs.lstatSync(p).isDirectory(); } catch { return false; } }).sort((a, b) => checkpointTime(b) - checkpointTime(a)).slice(keep);
   return list.filter((p) => { try { return !fs.lstatSync(p).isSymbolicLink(); } catch { return false; } });
 }
-// Projects with a reply running: nothing in their .quorx is cleared until it ends.
+// Projects with a reply running (their rows say so).
 function busyProjects() {
   const out = new Set();
   for (const r of activeRuns()) { const c = r.chatId ? getChat(r.chatId) : null; if (c?.projectId) out.add(c.projectId); }
@@ -167,7 +169,7 @@ async function chatParts() {
       help: 'Every chat, with its messages and plans. Delete a chat from the sidebar; it goes to QuorX\'s trash.' },
     { id: 'compact', group: 'chats', label: 'Pictures kept inside older chats', how: chats.length ? 'compact' : null, bytes: inline, files: chats.reduce((a, c) => a + c.count, 0), count: chats.length,
       saves: Math.max(0, inline - decoded), busy: chats.length > 0 && chats.every((c) => c.live),
-      help: `Chats from before pictures were stored on their own keep each picture inside the chat file. Compacting moves them to the picture store: the chats look exactly the same, open faster, and take about ${Math.round(100 * Math.max(0, inline - decoded) / (inline || 1))}% less room (repeated pictures are stored once).` },
+      help: `Chats from before pictures were stored on their own keep each picture inside the chat file. Compacting moves them to QuorX's picture store (data/blobs in its data folder) and leaves a short link in the chat: the chats look exactly the same, open faster, and take about ${Math.round(100 * Math.max(0, inline - decoded) / (inline || 1))}% less room (repeated pictures are stored once).` },
   ];
 }
 // Each chat in turn; a chat with a reply running is left for later.
@@ -183,54 +185,6 @@ async function compactChats() {
   return { saved, done, skipped };
 }
 
-// ---------- old QuorX installers in your Downloads folder (only when you ask to look) ----------
-// QuorX didn't put them there, so it never looks on its own. Only installers named QuorX or OpenHarness count;
-// backups (quorx-backup-….zip) and anything else are never listed.
-const INSTALLER = /^(quorx|openharness)(?!.*backup).*\.(exe|msi|msix|msixbundle|appx|appxbundle)$/i;
-export function downloadsDir() {
-  if (process.env.QX_DOWNLOADS) return process.env.QX_DOWNLOADS;
-  if (process.platform === 'win32') {
-    try {
-      // Downloads can be moved (to D:\Downloads…): Windows keeps where in the user's shell folders.
-      const out = execFileSync('reg', ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders', '/v', '{374DE290-123F-4565-9164-39C4925E467B}'], { encoding: 'utf8', windowsHide: true, timeout: 5000 });
-      const m = /REG_(?:EXPAND_)?SZ\s+(.+)/.exec(out);
-      if (m) { const dir = m[1].trim().replace(/%([^%]+)%/g, (_, k) => process.env[k] || ''); if (exists(dir)) return dir; }
-    } catch { /* the usual place */ }
-  }
-  return path.join(os.homedir(), 'Downloads');
-}
-const verOf = (name) => (/(\d+)\.(\d+)\.(\d+)/.exec(name) || []).slice(1).map(Number);
-const cmpVer = (a, b) => { for (let i = 0; i < 3; i++) { if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) - (b[i] || 0); } return 0; };
-/** → { dir, files: [{ name, bytes, at, version, newer, copy, old }] }: old = an installed or older version, or a second copy. */
-export function scanInstallers(current) {
-  const dir = downloadsDir(), cur = verOf(current), files = [];
-  for (const n of names(dir).filter((x) => INSTALLER.test(x))) {
-    const p = path.join(dir, n);
-    let st; try { st = fs.lstatSync(p); } catch { continue; }
-    if (!st.isFile()) continue;
-    const v = verOf(n);
-    files.push({ name: n, bytes: st.size, at: st.mtimeMs, version: v.length ? v.join('.') : null, newer: v.length > 0 && cur.length > 0 && cmpVer(v, cur) > 0 });
-  }
-  // "QuorX-Store-0.2.10 (1).appx": a second download of the same file.
-  for (const f of files) {
-    const base = f.name.replace(/ \(\d+\)(?=\.\w+$)/, '');
-    f.copy = base !== f.name && files.some((g) => g.name === base && g.bytes === f.bytes);
-    f.old = f.copy || (!!f.version && !f.newer);
-  }
-  return { dir, files: files.sort((a, b) => b.at - a.at) };
-}
-/** Moves the named installers (only ones the scan lists) to the Recycle Bin. */
-export async function clearInstallers(picked, current) {
-  const { dir, files } = scanInstallers(current);
-  const want = new Set((picked || []).map(String));
-  const list = files.filter((f) => want.has(f.name));
-  const r = await removePaths(list.map((f) => path.join(dir, f.name)), 'recycle');
-  const left = new Set(r.skipped.map((x) => path.basename(x.path)));
-  const bytes = list.filter((f) => !left.has(f.name)).reduce((a, f) => a + f.bytes, 0);
-  logClear({ auto: false, id: 'downloads', bytes, files: list.length, wentTo: r.wentTo, skipped: r.skipped.length });
-  return { id: 'downloads', bytes, files: list.length, removed: r.removed, wentTo: r.wentTo, skipped: r.skipped, ...(list.length < want.size ? { notListed: want.size - list.length } : {}) };
-}
-
 async function sumOf(paths) {
   let bytes = 0, files = 0, partial = false;
   const deadline = Date.now() + 10e3;
@@ -240,18 +194,11 @@ async function sumOf(paths) {
 
 // ---------- clearing ----------
 /** Finds a part by id and the paths clearing it would remove (or an error). */
-async function findPart(id, keep) {
+async function findPart(id) {
   const d = PARTS.find((x) => x.id === id);
   if (d) return { def: d, paths: await d.list() };
-  const m = /^proj:([\w-]{1,64}):(\w+)$/.exec(String(id));
-  const pd = m && PROJECT_PARTS.find((x) => x.part === m[2]);
-  if (!pd) return { error: 'nothing to clear by that name' };
-  const p = listProjects().find((x) => x.id === m[1]);
-  if (!p) return { error: 'no such project' };
-  const root = projectRoot(p);
-  if (!root) return { error: 'the project\'s folder is not on this computer' };
-  if (busyProjects().has(p.id)) return { error: 'a reply is running in this project: wait for it to end, or stop it', busy: true };
-  return { def: { ...pd, id }, paths: projectList(root, pd.part, keep) };
+  if (/^proj:/.test(String(id))) return { error: 'QuorX never clears inside a project folder: open it and tidy it yourself' };
+  return { error: 'nothing to clear by that name' };
 }
 
 /**
@@ -259,11 +206,11 @@ async function findPart(id, keep) {
  * grown by more than a fifth (and 1 MB) since, it is left and the new size comes back for a new question.
  * → { results: [{ id, bytes, files, removed, wentTo, skipped: [{ path, error }], error?, changed? }] }
  */
-export async function clearStorage(items, { keep = 10, auto = false } = {}) {
+export async function clearStorage(items, { auto = false } = {}) {
   if (!auto && !takeStorageLease()) return { error: 'another QuorX using this data folder is cleaning up right now; try again in a minute', busy: true };
-  try { return await clearParts(items, { keep, auto }); } finally { if (!auto) dropStorageLease(); }
+  try { return await clearParts(items, { auto }); } finally { if (!auto) dropStorageLease(); }
 }
-async function clearParts(items, { keep, auto }) {
+async function clearParts(items, { auto }) {
   const results = [];
   for (const it of items || []) {
     const id = String(it?.id || '');
@@ -273,7 +220,7 @@ async function clearParts(items, { keep, auto }) {
       logClear({ auto, id, bytes: c.saved, files: c.done, wentTo: 'compacted', skipped: c.skipped.length });
       continue;
     }
-    const r = await findPart(id, keep);
+    const r = await findPart(id);
     if (r.error) { results.push({ id, error: r.error, ...(r.busy ? { busy: true } : {}) }); continue; }
     if (!r.def.how) { results.push({ id, error: 'this part is only shown here' }); continue; }
     const s = await sumOf(r.paths);
@@ -283,6 +230,39 @@ async function clearParts(items, { keep, auto }) {
     if (done.skipped.length) { const left = await sumOf(done.skipped.map((x) => x.path)); res.bytes = Math.max(0, s.bytes - left.bytes); }
     results.push(res);
     logClear({ auto, id, bytes: res.bytes, files: s.files, wentTo: done.wentTo, skipped: done.skipped.length });
+  }
+  return { results };
+}
+
+// ---------- the 🧹 popover in a chat header: parts of one project's .quorx you ticked and confirmed ----------
+// Only these four; your files, notes, uploads and settings in .quorx are never offered. The snapshot store is made
+// again by the next command, so it is deleted; the rest go to the Recycle Bin.
+const PROJECT_CLEAR = { scratch: 'recycle', trash: 'recycle', checkpoints: 'recycle', objects: 'delete' };
+/** What clearing would take, part by part, before you confirm: → { parts: [{ part, bytes, files, count }], busy } */
+export async function previewProjectParts(projectId, { keep = 10 } = {}) {
+  const p = listProjects().find((x) => x.id === projectId);
+  const root = p && projectRoot(p);
+  if (!root) return { error: 'the project\'s folder is not on this computer' };
+  const parts = [];
+  for (const part of Object.keys(PROJECT_CLEAR)) parts.push({ part, ...await sumOf(projectList(root, part, Math.max(1, keep))) });
+  return { parts, busy: busyProjects().has(p.id) };
+}
+/** → { results: [{ part, bytes, files, removed, wentTo, skipped }] } or { error, busy? } */
+export async function clearProjectParts(projectId, parts, { keep = 10 } = {}) {
+  const want = [...new Set((parts || []).map(String))].filter((x) => PROJECT_CLEAR[x]);
+  if (!want.length) return { error: 'nothing picked to clear' };
+  const p = listProjects().find((x) => x.id === projectId);
+  if (!p) return { error: 'no such project' };
+  const root = projectRoot(p);
+  if (!root) return { error: 'the project\'s folder is not on this computer' };
+  if (busyProjects().has(p.id)) return { error: 'a reply is running in this project: wait for it to end, or stop it', busy: true };
+  const results = [];
+  for (const part of want) {
+    const paths = projectList(root, part, Math.max(1, keep));
+    const s = await sumOf(paths);
+    const done = await removePaths(paths, PROJECT_CLEAR[part]);
+    results.push({ part, bytes: s.bytes, files: s.files, removed: done.removed, wentTo: done.wentTo, skipped: done.skipped });
+    logClear({ auto: false, id: `proj:${p.id}:${part}`, bytes: s.bytes, files: s.files, wentTo: done.wentTo, skipped: done.skipped.length });
   }
   return { results };
 }
@@ -378,19 +358,13 @@ export function dropStorageLease() {
   try { if (JSON.parse(fs.readFileSync(LEASE(), 'utf8')).pid === process.pid) fs.rmSync(LEASE(), { force: true }); } catch { /* not ours */ }
 }
 
-/** Trash past its days goes to the Recycle Bin (QuorX's trash and each project's agent trash); check screenshots past the
- * number kept are removed. → { trashed, shots, skipped } */
+/** Trash past its days in QuorX's own trash goes to the Recycle Bin (a project's agent trash is never touched); check
+ * screenshots past the number kept are removed. → { trashed, shots, skipped } */
 export async function runRetention(rules = storageRules(), now = Date.now()) {
   if (!takeStorageLease(now)) return { busy: true };
   try {
-    const old = now - rules.trashDays * DAY, busy = busyProjects();
+    const old = now - rules.trashDays * DAY;
     const expired = trashEntries(path.join(DATA, 'trash')).filter((p) => trashedAt(p) < old);
-    for (const p of listProjects()) {
-      const root = projectRoot(p);
-      if (!root || busy.has(p.id)) continue;
-      const dir = path.join(root, AGENT_DIR, 'trash');
-      for (const n of names(dir)) { const q = path.join(dir, n); if (trashedAt(q) < old) expired.push(q); }
-    }
     let trashed = 0, skipped = 0;
     if (expired.length) {
       const s = await sumOf(expired);

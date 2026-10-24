@@ -194,7 +194,7 @@ test('rules: deny > ask > allow, and only typed rules relax risky classes', { sk
   assert.equal(await run('cargo build; git push', RULES), 'ask:user', 'a cargo rule does not carry git push along');
 });
 
-// ⚡ YOLO (⚙ Safety & commands): what runs on its own, what the deciders vote on, what pauses for you, what never runs.
+// ⚡ YOLO (⚙ Approvals & safety): what runs on its own, what the deciders vote on, what pauses for you, what never runs.
 // decide() only: none of these commands runs.
 const YOLO = { checkAll: yoloOf(safetySettings({ yoloLevel: 'careful' })), checkBuilds: yoloOf(safetySettings({ yoloLevel: 'balanced' })), defaults: yoloOf(safetySettings({})) };
 const yrun = async (line, yolo, mode = 'yolo', rules = []) => { const d = await decide(line, ctx({ mode, rules, yolo })); return d.verdict === 'ask' ? `ask:${d.who}${d.risk ? `:${d.risk}` : ''}` : d.verdict; };
@@ -745,6 +745,44 @@ test('shell: in YOLO you can run a command the deciders said no to', { skip: !WI
     const last = of(events, 'approval_done').at(-1);
     assert.equal(last.approve, true);
     assert.match(toolOut(bodies, 1), /built/);
+  });
+});
+// ⚖️ Deciders off in a chat: no command goes to a vote. What they'd check first waits for you (or runs, if set);
+// what they'd approve in your place always waits for you. No answer in time skips it.
+const buildJs = (d) => fs.writeFileSync(path.join(d, 'build.js'), "console.log('built')");
+test('shell: in YOLO with the deciders off, a command they would check waits for you, and no answer skips it', { skip: !WIN }, async () => {
+  await withDeciders(voteAll({ needed: 0.95, other: 0.03 }), async (sent) => {
+    const { events, bodies } = await agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('OK.')][i], {
+      settings: { approval: 'yolo', deciders: false, yoloWaitSecs: 1, safety: { yoloLevel: 'careful' } }, prep: buildJs });
+    assert.equal(sent.length, 0, 'no decider was asked');
+    const card = of(events, 'approval').find((e) => e.mode === 'strict');
+    assert.equal(card?.wait?.then, 'skip-off');
+    assert.match(card.why, /deciders are off in this chat, so it waits for you/);
+    const done = of(events, 'approval_done').at(-1);
+    assert.deepEqual([done.by, done.approve], ['timeout', false]);
+    assert.doesNotMatch(toolOut(bodies, 1), /built/);
+  });
+});
+test('shell: in YOLO with the deciders off and commands set to run, it runs without a vote', { skip: !WIN }, async () => {
+  await withDeciders(voteAll({ needed: 0.05, other: 0.95 }), async (sent) => {
+    const { events, bodies } = await agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('Done.')][i], {
+      settings: { approval: 'yolo', deciders: false, decidersOff: { commands: 'run' }, safety: { yoloLevel: 'careful' } }, prep: buildJs });
+    assert.equal(sent.length, 0, 'no decider was asked');
+    const done = of(events, 'approval_done').at(-1);
+    assert.deepEqual([done.by, done.approve], ['deciders off', true]);
+    assert.match(toolOut(bodies, 1), /built/);
+  });
+});
+test('shell: with the deciders off, a command they would approve in your place waits for you even when set to run', { skip: !WIN }, async () => {
+  await withDeciders(voteAll({ needed: 0.95, other: 0.03 }), async (sent) => {
+    let asked = 0;
+    const { events, bodies } = await agentRun((b, i) => [reply('', [['shell', { command: 'cmd /c echo hi-from-cmd' }]]), reply('Done.')][i], {
+      settings: { approval: 'yolo', deciders: false, decidersOff: { commands: 'run' }, yoloWaitSecs: 5, safety: { yoloLevel: 'careful', yoloOpaque: true } },
+      onEvent: (e, id) => { if (e.t === 'approval' && e.mode === 'strict') { asked++; setTimeout(() => answerApproval(id, e.id, { approve: true }), 20); } } });
+    assert.equal(sent.length, 0, 'no decider was asked');
+    assert.equal(asked, 1, 'the card went to you');
+    assert.equal(of(events, 'approval_done').at(-1).by, 'user');
+    assert.match(toolOut(bodies, 1), /hi-from-cmd/);
   });
 });
 // ---------- tripwire ----------

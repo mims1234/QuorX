@@ -11,13 +11,14 @@ Use this first for any video request. It covers the decisions every route shares
 | Route | Picture comes from | Load | Cost |
 |---|---|---|---|
 | Code | `render(t)` on a canvas, SVG, WebGL or three.js page | `film-render` | free |
-| Images | the user's photos, screenshots or `imagine` stills, moved by a camera | `film-from-images` | free, or paid per image |
+| Moving stills | `imagine` stills (or the user's photos), each turned into a clip with `make_video` from that still | `film-from-images`, `film-from-ai-clips` | about $1 for 30 s plus the stills |
+| Images | the user's photos, screenshots or `imagine` stills, moved by a camera only | `film-from-images` | free, or paid per image; reads as a slideshow |
 | AI clips | `make_video` shots of up to 15 s, joined | `film-from-ai-clips` | paid per clip, usually the most expensive |
 | Footage | the user's recordings, screen captures or interviews, cut together | `film-from-footage` | free |
 | Mix | any of the above in one timeline, for example code titles over footage or AI clips inside a code-drawn frame | the skills for each part | sum of the parts |
 
 - Default to **code** for product, data and motion-design films: every frame can be re-rendered, and it costs nothing.
-- Use **images** when the subject is photographic or the user has pictures; **AI clips** only for live-action-looking shots code can't draw; **footage** when the user has real recordings.
+- Use **moving stills** when the subject is photographic and video clips are on: the stills keep the look consistent and every shot moves. Plain **images** with camera moves only when clips are off or the user wants it free. **AI clips** from text only when no still is needed; **footage** when the user has real recordings.
 - Short design-led pieces (5-15 s): also load `motion-graphics`. 3D objects or characters built from a reference picture: `three-from-image`.
 - Every route also loads `film-sound` and `film-review`. Load `film-style` when the user names a look or wants a reusable one.
 
@@ -56,6 +57,7 @@ Keep sections, tempo, beats and hit points in one `timeline.json`. The picture, 
 Render three style frames (or a model sheet for characters) with the real route, and check them against the style. With a storyboard requested: 6-9 key shots tiled in one sheet with shot number, framing and duration, then wait for approval. In QuorX's Video Mode the `storyboard` tool draws that sheet and waits for the user's Go ahead; paid media waits for it.
 
 ## 7. Deliver
+- The film is the deliverable: open it in the browser (`site:assets/edits/<name>.mp4`). Build a viewer page only when the user asks.
 - `<name>.mp4` (1920×1080 by default, other shapes recomposed rather than cropped), `poster.jpg`, `<name>.srt` when there is speech or subtitles, `TREATMENT.md`, and a one-command build script for code routes.
 - `CREDITS`: every third-party asset with its source and licence (CC0, CC BY or OFL only, unless the user owns it). A film that states facts keeps `FACTS.md`: each claim with its source.
 - Never post anywhere yourself. Hand over the files and a caption.

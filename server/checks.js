@@ -82,8 +82,12 @@ export async function checkHtml(html, { label = 'page', dir = null, root = null 
   }
   if (dir) {
     const seen = new Set();
+    // Tags a script builds as text ('<img src="out/' + n + '.png">', `<img src="${p}">`) are not links yet: their
+    // addresses are made at run time. Two films were sent back for "links to out/${n}.png, which does not exist".
+    const scripts = [...html.matchAll(/<script\b[^>]*>[\s\S]*?<\/script>/gi)].map((s) => [s.index + s[0].indexOf('>') + 1, s.index + s[0].length]);
     for (const m of html.matchAll(/<(?:script|img|audio|video|source|link|iframe)\b[^>]*?\b(?:src|href)\s*=\s*["']([^"']+)["'][^>]*>/gi)) {
       const ref = m[1].split(/[?#]/)[0];
+      if (scripts.some(([a, b]) => m.index > a && m.index < b) || /\$\{|\{\{/.test(ref)) continue;
       if (!LOCAL(ref) || seen.has(ref)) continue;
       seen.add(ref);
       if (/^<link/i.test(m[0]) && !/rel\s*=\s*["']?(stylesheet|icon|manifest|modulepreload|preload)/i.test(m[0])) continue;

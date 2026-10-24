@@ -109,17 +109,22 @@ export async function unusedBlobs(minAgeMs = KEEP_MS) {
   try { names = await fs.promises.readdir(DIR); } catch { return []; }
   if (!names.length) return [];
   const used = new Set();
-  for (const sub of ['chats', 'trash', 'runs']) {
-    const dir = path.join(HOME, 'data', sub);
-    let files = [];
-    try { files = await fs.promises.readdir(dir); } catch { continue; }
-    for (const f of files) {
-      if (!/\.(json|jsonl)$/.test(f)) continue;
+  // Chats, deleted chats, run logs, and older replies' steps kept apart (data/traces, and in the trash with their chat).
+  const look = async (dir, deep) => {
+    let list = [];
+    try { list = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of list) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) { if (deep) await look(p, deep - 1); continue; }
+      if (!/\.(json|jsonl)$/.test(e.name)) continue;
       let text;
-      try { text = await fs.promises.readFile(path.join(dir, f), 'utf8'); } catch { continue; }
+      try { text = await fs.promises.readFile(p, 'utf8'); } catch { continue; }
       for (const m of text.matchAll(/\/blob\/([0-9a-f]{64}\.[a-z0-9]{2,5})/g)) used.add(m[1]);
     }
-  }
+  };
+  for (const sub of ['chats', 'runs']) await look(path.join(HOME, 'data', sub), 0);
+  await look(path.join(HOME, 'data', 'traces'), 1);
+  await look(path.join(HOME, 'data', 'trash'), 2);
   const now = Date.now(), out = [];
   for (const n of names) {
     if (used.has(n)) continue;
@@ -127,6 +132,40 @@ export async function unusedBlobs(minAgeMs = KEEP_MS) {
     try { const st = await fs.promises.stat(p); if (st.isFile() && now - st.mtimeMs > minAgeMs) out.push({ name: n, path: p, bytes: st.size }); } catch { /* gone */ }
   }
   return out;
+}
+// ---------- what deleting one chat frees (the delete question and the sidebar's 🗑 hover) ----------
+// The pictures each saved chat (and deleted chat) names, remembered per file by its size and time, so asking again
+// only reads the files that changed.
+const NAMED = new Map(); // path → { mtime, size, names: Set }
+async function namesIn(p) {
+  let st; try { st = await fs.promises.stat(p); } catch { NAMED.delete(p); return null; }
+  const hit = NAMED.get(p);
+  if (hit && hit.mtime === st.mtimeMs && hit.size === st.size) return hit;
+  let text; try { text = await fs.promises.readFile(p, 'utf8'); } catch { return null; }
+  const rec = { mtime: st.mtimeMs, size: st.size, names: new Set([...text.matchAll(/\/blob\/([0-9a-f]{64}\.[a-z0-9]{2,5})/g)].map((m) => m[1])) };
+  NAMED.set(p, rec);
+  return rec;
+}
+/**
+ * → { chat: bytes of the chat file, pictures: bytes of pictures no other chat names, count } or null. `refs` and
+ * `counts` come from the chat index (store.js chatPictureRefs, pictureRefCounts), so no chat file is read; only
+ * QuorX's trash (deleted chats, usually few) is looked through. Run logs are left out: they go by themselves within 3 days.
+ */
+export async function chatFootprint(refs, counts) {
+  if (!refs) return null;
+  const inTrash = new Set(), dir = path.join(HOME, 'data', 'trash');
+  let files = []; try { files = await fs.promises.readdir(dir); } catch { /* none */ }
+  for (const f of files) {
+    if (!f.endsWith('.json')) continue;
+    const r = await namesIn(path.join(dir, f));
+    if (r) for (const n of refs.blobs) if (r.names.has(n)) inTrash.add(n);
+  }
+  let pictures = 0, count = 0;
+  for (const n of refs.blobs) {
+    if ((counts.get(n) || 0) > 1 || inTrash.has(n)) continue;
+    try { pictures += (await fs.promises.stat(path.join(DIR, n))).size; count++; } catch { /* gone */ }
+  }
+  return { chat: refs.size, pictures, count };
 }
 export function startSweeping() {
   setTimeout(() => sweep().catch(() => {}), 60e3).unref();

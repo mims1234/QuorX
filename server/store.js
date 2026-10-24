@@ -23,13 +23,22 @@ export const validId = (id) => typeof id === 'string' && /^[a-z0-9][a-z0-9-]{2,6
 // ---------- projects: a folder that many chats can work in ----------
 // path = null means the default folder workspaces/<id>; otherwise any folder the user chose.
 const PROJECTS = path.join(HOME, 'data', 'projects.json');
+// Read once and kept until projects.json changes; whether each folder still exists is looked at again every 2 s.
+// (Many requests ask for the list, some once per project: re-reading it each time made 200 projects take minutes.)
+let PCACHE = null; // { key, at, list }
+const writeProjects = (list) => { fs.writeFileSync(PROJECTS, JSON.stringify(list, null, 2)); PCACHE = null; };
 export function listProjects() {
-  let list = [];
-  try { list = JSON.parse(fs.readFileSync(PROJECTS, 'utf8')); } catch (e) { if (e.code && e.code !== 'ENOENT') throw new Error(`QuorX can't read its project list (${e.code}). Your projects are safe; restart QuorX to repair the data folder.`); }
-  if (!list.some((p) => p.id === 'scratch')) list.unshift({ id: 'scratch', name: 'Scratch', path: null, created: Date.now() });
-  // A folder the user chose can be moved or deleted outside the app: say so instead of quietly making an empty one.
-  // needsFolder: a project whose files sit inside the harness (no folder picked, or one inside the app): it must pick a folder.
-  return list.map((p) => ({ ...p, dir: p.path || path.join(WORKSPACES, p.id), missing: !!p.path && !fs.existsSync(p.path), needsFolder: !p.path || insideHarness(p.path) }));
+  let key = '';
+  try { const st = fs.statSync(PROJECTS); key = `${st.size}:${st.mtimeMs}`; } catch { /* none yet */ }
+  if (!PCACHE || PCACHE.key !== key || Date.now() - PCACHE.at > 2000) {
+    let list = [];
+    try { list = JSON.parse(fs.readFileSync(PROJECTS, 'utf8')); } catch (e) { if (e.code && e.code !== 'ENOENT') throw new Error(`QuorX can't read its project list (${e.code}). Your projects are safe; restart QuorX to repair the data folder.`); }
+    if (!list.some((p) => p.id === 'scratch')) list.unshift({ id: 'scratch', name: 'Scratch', path: null, created: Date.now() });
+    // A folder the user chose can be moved or deleted outside the app: say so instead of quietly making an empty one.
+    // needsFolder: a project whose files sit inside the harness (no folder picked, or one inside the app): it must pick a folder.
+    PCACHE = { key, at: Date.now(), list: list.map((p) => ({ ...p, dir: p.path || path.join(WORKSPACES, p.id), missing: !!p.path && !fs.existsSync(p.path), needsFolder: !p.path || insideHarness(p.path) })) };
+  }
+  return PCACHE.list.map((p) => ({ ...p }));
 }
 // Scratch moves out of the harness once: to Documents\QuorX\Scratch, with its old files copied over.
 (function adoptScratch() {
@@ -43,7 +52,7 @@ export function listProjects() {
     if (fs.existsSync(old)) fs.cpSync(old, SCRATCH_HOME, { recursive: true, force: false, errorOnExist: false });
     if (sc) sc.path = SCRATCH_HOME; else list.unshift({ id: 'scratch', name: 'Scratch', path: SCRATCH_HOME, created: Date.now() });
     fs.mkdirSync(path.dirname(PROJECTS), { recursive: true });
-    fs.writeFileSync(PROJECTS, JSON.stringify(list, null, 2));
+    writeProjects(list);
   } catch { /* Scratch stays where it is until next start */ }
 })();
 const rawProjects = () => listProjects().map(({ dir: _d, missing: _m, needsFolder: _n, ...p }) => p);
@@ -67,7 +76,7 @@ export function saveProject({ id, path: dir }) {
   const from = i >= 0 && p.path && (!list[i].path || insideHarness(list[i].path)) ? list[i].path || path.join(WORKSPACES, id) : null;
   if (from && fs.existsSync(from)) { try { fs.cpSync(from, p.path, { recursive: true, force: false, errorOnExist: false }); } catch { /* best effort */ } }
   if (i >= 0) list[i] = p; else list.push(p);
-  fs.writeFileSync(PROJECTS, JSON.stringify(list, null, 2));
+  writeProjects(list);
   return { ...p, dir: p.path || path.join(WORKSPACES, id) };
 }
 // Deleting a project forgets it and moves its chats to data/trash. Its folder is never touched.
@@ -75,7 +84,7 @@ export function forgetProject(id) {
   if (id === 'scratch' || !listProjects().some((p) => p.id === id)) return false;
   for (const c of listChats()) if (c.projectId === id) trashChat(c.id);
   const list = rawProjects().filter((p) => p.id !== id);
-  fs.writeFileSync(PROJECTS, JSON.stringify(list, null, 2));
+  writeProjects(list);
   return true;
 }
 export function projectDir(id) {
@@ -145,31 +154,155 @@ function summarise(c) {
     runIds: [...msgs.filter((m) => m.runId && replySpend(m)).map((m) => m.runId), ...(c.agent?.extraUsage || []).filter((x) => x.runId).map((x) => x.runId)],
   };
 }
+// ---------- the chat index ----------
+// Every chat's summary stays in memory and is saved to data/index/chats.json, so the sidebar, budgets and costs never
+// read every chat file again, and a restart doesn't either. A chat written or deleted here updates its entry at once.
+// A change from outside (another QuorX on the same data folder, a restored backup) is seen by a folder watcher, and a
+// background pass every minute catches anything the watcher missed, a few hundred files at a time, so it never holds
+// the server up. Only the very first start, with no saved index yet, reads every chat before answering.
+const INDEX = path.join(HOME, 'data', 'index', 'chats.json');
+const INDEX_V = 2; // 2: each entry also names the pictures its chat uses
+// The pictures a chat names (/blob/…), for what deleting it would free.
+const blobsIn = (text) => [...new Set(String(text).match(/\/blob\/[0-9a-f]{64}\.[a-z0-9]{2,5}/g) || [])].map((x) => x.slice(6));
+const keyOf = (st) => `${st.size}:${st.mtimeMs}`;
+let indexReady = false, indexVersion = 0, indexSaved = 0, reconcileAt = 0, reconciling = false, saveTimer = null;
+const dirty = new Set(); // file names the watcher saw change
+const changed = () => { indexVersion++; LIST = null; ROLLUP = null; if (!saveTimer) saveTimer = setTimeout(saveIndex, 15e3).unref?.() ?? null; };
+function readSummary(f) {
+  try {
+    const p = path.join(DIR, f), st = fs.statSync(p), key = keyOf(st), hit = SUMMARIES.get(f);
+    if (hit?.key === key) return;
+    const text = fs.readFileSync(p, 'utf8');
+    SUMMARIES.set(f, { key, s: summarise(JSON.parse(text)), blobs: blobsIn(text) }); changed();
+  } catch (e) { if (e.code === 'ENOENT' && SUMMARIES.delete(f)) changed(); /* else: being written right now, next time */ }
+}
+function loadIndex() {
+  indexReady = true;
+  try {
+    const saved = JSON.parse(fs.readFileSync(INDEX, 'utf8'));
+    if (saved?.v === INDEX_V && saved.entries) { for (const [f, e] of Object.entries(saved.entries)) SUMMARIES.set(f, e); changed(); indexSaved = indexVersion; reconcileAt = Date.now() - 57e3; return; } // catch up 3 s after start
+  } catch { /* none yet, or unreadable: read every chat once */ }
+  for (const f of fs.readdirSync(DIR)) if (f.endsWith('.json')) readSummary(f);
+  reconcileAt = Date.now();
+  saveIndex({ now: true });
+}
+// Saved a while after a change, written in the background (and at once when QuorX exits).
+let saving = null;
+function saveIndex({ now = false } = {}) {
+  clearTimeout(saveTimer); saveTimer = null;
+  if (indexSaved === indexVersion || (saving && !now)) return saving;
+  const v = indexVersion, text = JSON.stringify({ v: INDEX_V, at: Date.now(), entries: Object.fromEntries(SUMMARIES) });
+  const done = () => { indexSaved = Math.max(indexSaved, v); saving = null; };
+  try {
+    fs.mkdirSync(path.dirname(INDEX), { recursive: true });
+    if (now) { fs.writeFileSync(INDEX + '.tmp', text); fs.renameSync(INDEX + '.tmp', INDEX); done(); return null; }
+  } catch { return null; }
+  saving = fs.promises.writeFile(INDEX + '.tmp2', text).then(() => fs.promises.rename(INDEX + '.tmp2', INDEX)).then(done, () => { saving = null; });
+  return saving;
+}
+// The background pass: files that appeared, went or changed since the index last looked.
+async function reconcile() {
+  if (reconciling) return;
+  reconciling = true; reconcileAt = Date.now();
+  try {
+    const names = (await fs.promises.readdir(DIR)).filter((f) => f.endsWith('.json'));
+    const seen = new Set(names);
+    for (const f of [...SUMMARIES.keys()]) if (!seen.has(f)) { SUMMARIES.delete(f); changed(); }
+    // Small batches with a pause between them: the file reads share a few threads with every request's own reads.
+    for (let i = 0; i < names.length; i += 32) {
+      await Promise.all(names.slice(i, i + 32).map(async (f) => {
+        try {
+          const p = path.join(DIR, f), st = await fs.promises.stat(p), key = keyOf(st);
+          if (SUMMARIES.get(f)?.key === key) return;
+          const text = await fs.promises.readFile(p, 'utf8');
+          SUMMARIES.set(f, { key, s: summarise(JSON.parse(text)), blobs: blobsIn(text) }); changed();
+        } catch { /* being written right now: next pass */ }
+      }));
+      await new Promise((r) => setTimeout(r, 4)); // let requests through between batches
+    }
+  } finally { reconciling = false; }
+}
+let watcher = null;
+function watchChats() {
+  if (watcher) return;
+  try { watcher = fs.watch(DIR, (_, f) => { if (f && String(f).endsWith('.json')) dirty.add(String(f)); }); watcher.on('error', () => { watcher = null; }); watcher.unref?.(); } catch { /* the minute pass still catches up */ }
+}
+process.on('exit', () => { if (indexReady) saveIndex({ now: true }); });
+/** Saves the chat index now (it otherwise saves 15 s after a change, and on exit). For tests. */
+export const flushChatIndex = () => saveIndex({ now: true });
+let LIST = null, ROLLUP = null;
 function summaries() {
-  const names = fs.readdirSync(DIR).filter((f) => f.endsWith('.json'));
-  const seen = new Set(names);
-  for (const k of SUMMARIES.keys()) if (!seen.has(k)) SUMMARIES.delete(k);
-  const out = [];
-  for (const f of names) {
-    try {
-      const st = fs.statSync(path.join(DIR, f)), key = `${st.size}:${st.mtimeMs}`;
-      let hit = SUMMARIES.get(f);
-      if (!hit || hit.key !== key) { hit = { key, s: summarise(JSON.parse(fs.readFileSync(path.join(DIR, f), 'utf8'))) }; SUMMARIES.set(f, hit); }
-      out.push(hit.s);
-    } catch { /* a file being written right now: skip it this time */ }
-  }
-  return out;
+  if (!indexReady) { loadIndex(); watchChats(); }
+  for (const f of dirty) readSummary(f);
+  dirty.clear();
+  if (!reconciling && Date.now() - reconcileAt > 60e3) reconcile().catch(() => {});
+  return (LIST ??= [...SUMMARIES.values()].map((x) => x.s));
 }
 // A short summary per chat for the sidebar, without reading whole message histories into the page.
+let SLIM = null, slimV = -1;
 export function listChats() {
-  return summaries().map(({ spend: _s, models: _m, runIds: _r, ...c }) => c).sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0));
+  const all = summaries();
+  if (slimV !== indexVersion) { SLIM = all.map(({ spend: _s, models: _m, runIds: _r, ...c }) => c).sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0)); slimV = indexVersion; }
+  return SLIM;
+}
+// Per project, worked out once per change: what its saved chats cost, which replies those costs come from, how many
+// chats it has (and how many have messages), and when it was last used.
+function rollups() {
+  const all = summaries();
+  if (ROLLUP) return ROLLUP;
+  const m = new Map();
+  for (const c of all) {
+    const r = m.get(c.projectId) || m.set(c.projectId, { cost: 0, runIds: new Set(), chats: 0, active: 0, lastAt: 0 }).get(c.projectId);
+    r.cost += c.cost; r.chats++; if (c.messages) r.active++; r.lastAt = Math.max(r.lastAt, c.lastAt || 0);
+    for (const id of c.runIds) r.runIds.add(id);
+  }
+  return (ROLLUP = m);
 }
 // What a project's saved chats cost, and which replies those costs come from.
 export function projectChatsSpend(projectId) {
-  let cost = 0;
-  const runIds = new Set();
-  for (const c of summaries()) if (c.projectId === projectId) { cost += c.cost; for (const id of c.runIds) runIds.add(id); }
-  return { cost, runIds };
+  const r = rollups().get(projectId);
+  return { cost: r?.cost || 0, runIds: r?.runIds || new Set() };
+}
+/** Per-project counts for the sidebar: { [projectId]: { chats, active, cost, lastAt } }. */
+export function projectChatStats() {
+  return Object.fromEntries([...rollups()].map(([id, r]) => [id, { chats: r.chats, active: r.active, cost: r.cost, lastAt: r.lastAt }]));
+}
+/**
+ * The sidebar's chats: each project's newest `per` chats with messages, plus any chat asked for by id (open panes),
+ * and every project's counts. A project's older chats, and search, come a page at a time (chatPage).
+ */
+export function sidebarChats({ per = 30, ids = [] } = {}) {
+  const want = new Set(ids), n = new Map(), out = [];
+  for (const c of listChats()) {
+    const k = c.projectId || 'scratch', i = n.get(k) || 0;
+    if (want.has(c.id) || (c.messages > 0 && i < per)) { out.push(c); if (c.messages > 0) n.set(k, i + 1); }
+  }
+  return { chats: out, stats: projectChatStats(), total: listChats().length };
+}
+/** One page of chats, newest first: in a project, or matching words in the title or preview across all projects. */
+export function chatPage({ project = '', q = '', offset = 0, limit = 50 } = {}) {
+  const words = String(q).toLowerCase().split(/\s+/).filter(Boolean);
+  const list = listChats().filter((c) => c.messages > 0 && (!project || (c.projectId || 'scratch') === project) && words.every((w) => `${c.title} ${c.preview || ''}`.toLowerCase().includes(w)));
+  offset = Math.max(0, Number(offset) || 0); limit = Math.max(1, Math.min(200, Number(limit) || 50));
+  return { total: list.length, offset, chats: list.slice(offset, offset + limit) };
+}
+// A chat written by this QuorX: its entry updated at once (the watcher would also see it, a moment later).
+function indexWrite(id, doc, text) {
+  const f = `${id}.json`;
+  try { SUMMARIES.set(f, { key: keyOf(fs.statSync(path.join(DIR, f))), s: summarise(doc), blobs: blobsIn(text) }); changed(); } catch { dirty.add(f); }
+}
+/** For what deleting a chat frees: its file's size and the pictures it names, from the index (null: no such chat). */
+export function chatPictureRefs(id) {
+  summaries();
+  const e = SUMMARIES.get(`${id}.json`);
+  return e ? { size: Number(String(e.key).split(':')[0]) || 0, blobs: e.blobs || [] } : null;
+}
+// How many saved chats name each picture, worked out once per change.
+let REFS = null, refsV = -1;
+export function pictureRefCounts() {
+  summaries();
+  if (refsV !== indexVersion) { REFS = new Map(); for (const e of SUMMARIES.values()) for (const b of e.blobs || []) REFS.set(b, (REFS.get(b) || 0) + 1); refsV = indexVersion; }
+  return REFS;
 }
 // The project's budget in dollars, or null for none. Checks (never below what is spent) are in budget.js.
 export function setProjectBudget(id, budget) {
@@ -177,7 +310,7 @@ export function setProjectBudget(id, budget) {
   const p = list.find((x) => x.id === id);
   if (!p) throw new Error('no such project');
   p.budget = budget;
-  fs.writeFileSync(PROJECTS, JSON.stringify(list, null, 2));
+  writeProjects(list);
   return p;
 }
 
@@ -189,7 +322,7 @@ export function setProjectColor(id, color) {
   if (!p && id === 'scratch') { p = listProjects().find((x) => x.id === 'scratch'); p = { id: p.id, name: p.name, path: p.path, created: p.created }; list.unshift(p); }
   if (!p) throw new Error('no such project');
   if (color) p.color = color.toLowerCase(); else delete p.color;
-  fs.writeFileSync(PROJECTS, JSON.stringify(list, null, 2));
+  writeProjects(list);
   return { id: p.id, color: p.color || null };
 }
 
@@ -208,13 +341,58 @@ export function setProjectFlags(id, { pinned, archived } = {}) {
     if (list.filter((x) => x.pinned && !x.archived).length >= MAX_PINNED) throw new Error(`up to ${MAX_PINNED} projects can be pinned: unpin one first`);
     p.pinned = Date.now();
   } else if (pinned === false) delete p.pinned;
-  fs.writeFileSync(PROJECTS, JSON.stringify(list, null, 2));
+  writeProjects(list);
   return { id: p.id, pinned: p.pinned || null, archived: p.archived || null };
 }
 
 export function getChat(id) {
   if (!validId(id) || !fs.existsSync(file(id))) return null;
   return JSON.parse(fs.readFileSync(file(id), 'utf8'));
+}
+
+// ---------- Steps of older replies, in files of their own ----------
+// A long chat's file would hold every step of every reply and be read and written whole on each save. So a finished
+// reply older than the newest TRACE_KEEP, with at least TRACE_MIN steps, keeps its steps in data/traces/<chat>/<run>.json
+// and only a note in the chat ({ trace: [], traceRef: { n, bytes } }). The page loads them when that reply is shown
+// (GET /api/chats/<id>/trace/<run>). New and running replies always stay in the chat file.
+const TRACES = path.join(HOME, 'data', 'traces');
+const TRACE_KEEP = 5, TRACE_MIN = 50;
+const RUN_ID = /^[\w-]{1,80}$/;
+const traceFile = (id, runId) => path.join(TRACES, id, `${runId}.json`);
+function splitTraces(id, doc) {
+  const msgs = doc?.agent?.messages;
+  if (!Array.isArray(msgs)) return doc;
+  const replies = msgs.map((m, i) => (m?.role === 'assistant' ? i : -1)).filter((i) => i >= 0);
+  let out = null;
+  for (const i of replies.slice(0, Math.max(0, replies.length - TRACE_KEEP))) {
+    const m = msgs[i];
+    if (!Array.isArray(m.trace) || m.trace.length < TRACE_MIN || !RUN_ID.test(String(m.runId || '')) || !m.stats || m.stats.partial || m.live || m.runActive) continue;
+    const text = JSON.stringify(m.trace), f = traceFile(id, m.runId);
+    try {
+      if (!(fs.existsSync(f) && fs.statSync(f).size === Buffer.byteLength(text))) { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f + '.tmp', text); fs.renameSync(f + '.tmp', f); }
+    } catch { continue; } // couldn't write it: it stays in the chat
+    (out ??= msgs.slice())[i] = { ...m, trace: [], traceRef: { n: m.trace.length, bytes: text.length } };
+  }
+  return out ? { ...doc, agent: { ...doc.agent, messages: out } } : doc;
+}
+/** A chat for the page. A big one saved before steps were kept apart is split the first time it opens (its rev stays,
+ * so a page that has it open goes on saving as before). */
+export function getChatForPage(id) {
+  const c = getChat(id);
+  if (!c) return null;
+  try { if (fs.statSync(file(id)).size > 2e6) { const s = splitTraces(id, c); if (s !== c) { writeChat(id, s); return s; } } } catch { /* as it is */ }
+  return c;
+}
+/** One older reply's steps (null: none kept apart). */
+export function getTrace(id, runId) {
+  if (!validId(id) || !RUN_ID.test(String(runId))) return null;
+  try { return JSON.parse(fs.readFileSync(traceFile(id, runId), 'utf8')); } catch { return null; }
+}
+/** The chat with every reply's steps back inside it (for a backup, which must hold whole chats). */
+export function getWholeChat(id) {
+  const c = getChat(id);
+  for (const m of c?.agent?.messages || []) if (m?.traceRef && !m.trace?.length) { const t = getTrace(id, m.runId); if (t) { m.trace = t; delete m.traceRef; } }
+  return c;
 }
 
 // ---------- saving: the whole chat, or only what changed ----------
@@ -228,8 +406,11 @@ const newRev = () => `${Date.now().toString(36)}-${(++revs).toString(36)}${Math.
 const LAST = new Map(); // id → { key, doc }
 const stamp = (id) => { try { const st = fs.statSync(file(id)); return `${st.size}:${st.mtimeMs}`; } catch { return null; } };
 function writeChat(id, doc) {
-  fs.writeFileSync(file(id) + '.tmp', JSON.stringify(doc));
+  doc = splitTraces(id, doc);
+  const text = JSON.stringify(doc);
+  fs.writeFileSync(file(id) + '.tmp', text);
   fs.renameSync(file(id) + '.tmp', file(id));
+  if (indexReady) indexWrite(id, doc, text);
   LAST.delete(id); LAST.set(id, { key: stamp(id), doc });
   if (LAST.size > 8) LAST.delete(LAST.keys().next().value);
   return { id, updated: doc.updated, rev: doc.rev };
@@ -346,6 +527,9 @@ export function trashChat(id) {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   fs.mkdirSync(TRASH, { recursive: true });
   fs.renameSync(file(id), path.join(TRASH, `${id}-${stamp}.json`));
+  // Its older replies' steps go with it (data/trash/traces/<chat>-<when>), to come back or be emptied together.
+  try { if (fs.existsSync(path.join(TRACES, id))) { fs.mkdirSync(path.join(TRASH, 'traces'), { recursive: true }); fs.renameSync(path.join(TRACES, id), path.join(TRASH, 'traces', `${id}-${stamp}`)); } } catch { /* stays; the chat is gone either way */ }
+  if (SUMMARIES.delete(`${id}.json`)) changed();
   return true; // the project folder is shared with other chats, so it stays
 }
 

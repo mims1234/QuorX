@@ -1,16 +1,17 @@
 // ⚙ Settings → Storage: how much room QuorX takes on this computer, part by part, and clearing what it doesn't need.
 // The harness measures its data folder and every project's .quorx folder (/api/storage, server/storage.js); the
-// desktop app adds its own caches (desktop/storage.js). Each part has its own button; "Clear safe caches" clears the
-// ones that come back by themselves, after a list where each can be unticked. app.js hands in its helpers.
+// desktop app adds its own caches (desktop/storage.js). Each part of QuorX's own data has its own button; "Clear safe
+// caches" clears the ones that come back by themselves, after a list where each can be unticked. Project folders are
+// only shown, with a way to open them. app.js hands in its helpers.
 let H = null; // { getJ, postJ, esc, ask, uiAlert, keep () → undo replies kept, desk (op, arg) → Promise | null, openCat (id) }
-const V = { items: null, at: 0, home: '', busy: false, open: new Set(), status: '', recent: [], dl: null, dlPick: new Set(), focus: null };
+const V = { items: null, at: 0, home: '', busy: false, open: new Set(), status: '', recent: [], focus: null };
 
 const GROUPS = {
   cache: ['Caches & leftovers', 'Made again when needed, or used by nothing any more.'],
   chats: ['Chats', 'Your chats, and pictures older chats keep inside their files.'],
   logs: ['Logs', 'What QuorX records while you work.'],
   trash: ['QuorX\'s trash', 'Things you deleted, kept so you can bring them back.'],
-  projects: ['Projects', 'The agent\'s own folder (.quorx) inside each project. Git ignores it.'],
+  projects: ['Projects', 'The agent\'s own folder (.quorx) inside each project. Git ignores it. QuorX never deletes anything in a project folder: open it to tidy up yourself.'],
 };
 // What clearing a part loses, in a sentence for its question.
 const LOST = {
@@ -24,17 +25,12 @@ const LOST = {
   'desk:tabs': 'Nothing you need: sites send the files again. Your sign-ins and site settings stay.',
   'desk:legacy': 'The folder goes to the Windows Recycle Bin. QuorX copied what it needed from it the first time it started.',
   'desk:updates': 'Nothing: these versions are already installed.',
-  scratch: 'They go to the Windows Recycle Bin.',
-  trashPart: 'The agent\'s backup copies go to the Windows Recycle Bin. After that, ↶ Undo for one file can\'t bring them back.',
-  checkpoints: 'Those replies can no longer be undone with ↶ Undo. The undo copies go to the Windows Recycle Bin.',
-  objects: 'The last command can no longer be undone. The next command takes a fresh snapshot.',
-  collected: 'They go to the Windows Recycle Bin.',
-  edits: 'They go to the Windows Recycle Bin.',
-  compact: 'Nothing is lost: every chat looks and works the same. Each picture moves to the picture store, checked by its content before the chat file is replaced.',
+  compact: 'Nothing is lost: every chat looks and works the same. Each picture moves to the QuorX picture store (data/blobs in its data folder), checked by its content before the chat file is replaced.',
 };
-const lostOf = (it) => LOST[it.part === 'trash' ? 'trashPart' : it.part || it.id] || (it.how === 'recycle' ? 'They go to the Windows Recycle Bin.' : 'They are deleted.');
+const lostOf = (it) => LOST[it.id] ||(it.how === 'recycle' ? 'They go to the Windows Recycle Bin.' : 'They are deleted.');
 
-export const storageCard = () => '<div id="stStorage" class="sto"><section class="st-card"><div class="st-row-help">Measuring…</div></section></div>';
+const MEASURING = '<section class="st-card sto-summary"><div class="sto-wait" role="status"><span class="sto-spin" aria-hidden="true"></span>Measuring what QuorX keeps on this computer…</div></section>';
+export const storageCard = () => `<div id="stStorage" class="sto">${MEASURING}</div>`;
 
 export function drawStorage(helpers) {
   H = helpers;
@@ -44,6 +40,7 @@ export function drawStorage(helpers) {
 
 export const fmtBytes = (b) => {
   b = Number(b) || 0;
+  if (b >= 1e12) return `${(b / 1e12).toFixed(b >= 1e13 ? 0 : 1)} TB`;
   if (b >= 1e9) return `${(b / 1e9).toFixed(b >= 1e10 ? 0 : 1)} GB`;
   if (b >= 1e6) return `${(b / 1e6).toFixed(b >= 1e8 ? 0 : 1)} MB`;
   if (b >= 1e3) return `${Math.round(b / 1e3)} KB`;
@@ -74,22 +71,23 @@ function paint() {
   const box = document.getElementById('stStorage');
   if (!box) return;
   const { esc } = H;
-  if (!V.items) { box.innerHTML = `<section class="st-card"><div class="st-row-help">${V.busy ? 'Measuring…' : esc(V.status || '')}</div>${V.busy ? '' : '<button type="button" class="st-btn secondary sm" data-sto="measure">↻ Measure again</button>'}</section>`; return wire(box); }
+  if (!V.items) { box.innerHTML = V.busy ? MEASURING : `<section class="st-card sto-summary"><div class="sto-wait">${esc(V.status || '')}<button type="button" class="st-btn secondary sm" data-sto="measure">↻ Measure again</button></div></section>`; return wire(box); }
   const items = V.items, total = items.reduce((a, x) => a + (x.bytes || 0), 0);
   const safe = safeParts(items).filter((x) => x.on).reduce((a, x) => a + x.bytes, 0);
   const byGroup = Object.keys(GROUPS).map((g) => [g, items.filter((x) => x.group === g).reduce((a, x) => a + (x.bytes || 0), 0)]);
   const bar = byGroup.filter(([, b]) => b).map(([g, b]) => `<span class="sto-seg g-${g}" style="flex-grow:${Math.max(b / (total || 1), 0.004)}" title="${esc(GROUPS[g][0])}: ${fmtBytes(b)}"></span>`).join('');
-  const legend = byGroup.map(([g, b]) => `<span class="sto-key"><i class="sto-dot g-${g}"></i>${esc(GROUPS[g][0])} <b class="sto-size">${fmtBytes(b)}</b></span>`).join('');
-  const recent = V.recent.length ? `<div class="sto-recent"><span>Recently cleared:</span> ${V.recent.map((r) => `${esc(labelOf(r.id))} <b class="sto-size">${fmtBytes(r.bytes)}</b>${r.auto ? ' (automatic)' : ''} · ${esc(new Date(r.ts).toLocaleDateString())}`).join(' · ')}</div>` : '';
+  const legend = byGroup.map(([g, b]) => `<span class="sto-key"><i class="sto-dot g-${g}"></i><span>${esc(GROUPS[g][0])}</span><b class="sto-size">${fmtBytes(b)}</b></span>`).join('');
+  const when = (ts) => { const d = new Date(ts); return `${d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })} ${d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`; };
+  const recent = V.recent.length ? `<div class="sto-line sto-recent"><span class="sto-k">Recently cleared</span><div class="sto-recent-list">${V.recent.map((r) => `<div class="sto-recent-row"><span class="sto-recent-what">${esc(labelOf(r.id))}${r.auto ? ' <span class="sto-tag">auto</span>' : ''}</span><b class="sto-size">${fmtBytes(r.bytes)}</b><time>${esc(when(r.ts))}</time></div>`).join('')}</div></div>` : '';
   let html = `<section class="st-card sto-summary">
-    <div class="sto-total"><div><div class="sto-total-num">${fmtBytes(total)}</div><div class="st-row-help">QuorX uses this much on this computer${V.home ? `, data in <code class="blurable">${esc(V.home)}</code>` : ''}. Measured ${new Date(V.at).toLocaleTimeString()}.</div></div>
+    ${V.home ? `<div class="sto-line"><span class="sto-k">Data folder</span><code class="blurable sto-home" title="${esc(V.home)}">${esc(V.home)}</code></div>` : ''}
+    <div class="sto-total"><div><div class="sto-total-num">${fmtBytes(total)}</div><div class="sto-sub">Used by QuorX on this computer · measured ${new Date(V.at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}</div></div>
       <div class="sto-total-acts"><button type="button" class="st-btn primary sm" data-sto="safe" ${safe ? '' : 'disabled'}>🧹 Clear safe caches${safe ? ` · ${fmtBytes(safe)}` : ''}</button><button type="button" class="st-btn secondary sm" data-sto="measure" ${V.busy ? 'disabled' : ''}>${V.busy ? 'Measuring…' : '↻ Measure again'}</button></div></div>
     <div class="sto-bar" role="img" aria-label="Room used by each kind">${bar}</div><div class="sto-legend">${legend}</div>
     ${V.status ? `<div class="sto-status" role="status">${esc(V.status)}</div>` : ''}${recent}</section>`;
   for (const g of ['cache', 'chats', 'logs', 'trash']) {
     const list = items.filter((x) => x.group === g && (x.bytes || x.how || x.id === 'trash'));
     if (list.length) html += `<section class="st-card"><div class="st-card-head"><div class="st-card-title">${esc(GROUPS[g][0])}</div><div class="st-card-subtitle">${esc(GROUPS[g][1])}</div></div>${list.map(row).join('')}</section>`;
-    if (g === 'cache') html += downloadsCard();
   }
   html += projectsCard(items.filter((x) => x.group === 'projects'));
   box.innerHTML = html;
@@ -109,7 +107,7 @@ function button(it) {
   if (!it.how) return '<span class="sto-tag">kept</span>';
   if (it.busy) return '<span class="sto-tag warn" title="A reply is running in this project; clear it when the reply has ended">reply running</span>';
   if (!it.bytes) return '<span class="sto-tag ok">empty</span>';
-  if (it.how === 'compact') return `<button type="button" class="st-btn secondary sm" data-clear="compact" title="Moves the pictures out of the chat files; nothing is deleted">Compact…</button>`;
+  if (it.how === 'compact') return `<button type="button" class="st-btn secondary sm" data-clear="compact" title="Moves the pictures out of the chat files into data/blobs (QuorX's picture store); the chats link to them, nothing is deleted">Compact…</button>`;
   const name = it.id === 'trash' || it.part === 'trash' ? 'Empty…' : it.part === 'checkpoints' ? 'Trim…' : 'Clear…';
   return `<button type="button" class="st-btn ${it.how === 'recycle' || it.safe ? 'secondary' : 'danger'} sm" data-clear="${esc(it.id)}" title="${it.how === 'recycle' ? 'Moves them to the Windows Recycle Bin' : 'Deletes them'}">${name}</button>`;
 }
@@ -128,28 +126,21 @@ function projectsCard(parts) {
   const rows = list.map((p) => {
     const open = V.open.has(p.project.id);
     const fold = p.missing ? '' : `data-fold="${esc(p.project.id)}"`;
-    const head = `<div class="st-row sto-row sto-proj ${p.missing ? '' : 'can-open'}" ${fold}><div class="st-row-info"><div class="st-row-label-wrap"><button type="button" class="sto-fold" ${fold} aria-expanded="${open}" aria-label="${open ? 'Hide' : 'Show'} the parts of ${esc(p.project.name)}" ${p.missing ? 'disabled' : ''}>${p.missing ? '–' : open ? '▾' : '▸'}</button><span class="st-row-label">${esc(p.project.name)}</span>${p.busy ? '<span class="sto-tag warn">reply running</span>' : ''}</div><div class="st-row-help"><code class="blurable sto-path" title="${esc(p.project.dir || '')}">${esc(p.project.dir || '')}</code></div></div><div class="st-row-ctrl sto-ctrl">${p.missing ? '<span class="sto-tag warn">folder not found</span>' : `<span class="sto-size">${fmtBytes(p.bytes)}</span>`}</div></div>`;
+    const head = `<div class="st-row sto-row sto-proj ${p.missing ? '' : 'can-open'}" ${fold}><div class="st-row-info"><div class="st-row-label-wrap"><button type="button" class="sto-fold" ${fold} aria-expanded="${open}" aria-label="${open ? 'Hide' : 'Show'} the parts of ${esc(p.project.name)}" ${p.missing ? 'disabled' : ''}>${p.missing ? '–' : open ? '▾' : '▸'}</button><span class="st-row-label">${esc(p.project.name)}</span>${p.busy ? '<span class="sto-tag warn">reply running</span>' : ''}</div><div class="st-row-help"><code class="blurable sto-path" title="${esc(p.project.dir || '')}">${esc(p.project.dir || '')}</code></div></div><div class="st-row-ctrl sto-ctrl">${p.missing ? '<span class="sto-tag warn">folder not found</span>' : `<span class="sto-size">${fmtBytes(p.bytes)}</span><button type="button" class="st-btn secondary sm" data-open="${esc(p.project.id)}" title="Open this project's .quorx folder in File Explorer">📂 Open</button>`}</div></div>`;
     return head + (open && !p.missing ? `<div class="sto-parts">${p.parts.filter((x) => x.bytes || x.how).map(row).join('')}</div>` : '');
   }).join('');
-  return `<section class="st-card"><div class="st-card-head"><div class="st-card-title">${esc(GROUPS.projects[0])}</div><div class="st-card-subtitle">${esc(GROUPS.projects[1])} Open a project to clear its parts.</div></div>${rows}</section>`;
+  return `<section class="st-card"><div class="st-card-head"><div class="st-card-title">${esc(GROUPS.projects[0])}</div><div class="st-card-subtitle">${esc(GROUPS.projects[1])}</div></div>${rows}</section>`;
 }
 
 function wire(box) {
   box.onclick = async (e) => {
-    const t = e.target.closest('[data-sto],[data-clear],[data-fold],[data-dl]');
+    const t = e.target.closest('[data-sto],[data-clear],[data-fold],[data-open]');
     if (!t || t.disabled) return;
+    if (t.dataset.open) return H.openFolder?.(t.dataset.open, '.quorx');
     if (t.dataset.fold) { const id = t.dataset.fold; if (V.open.has(id)) V.open.delete(id); else V.open.add(id); return paint(); }
     if (t.dataset.sto === 'measure') { V.status = ''; return measure(); }
     if (t.dataset.sto === 'safe') return clearSafe();
-    if (t.dataset.dl === 'scan') return scanDownloads();
-    if (t.dataset.dl === 'clear') return clearDownloads();
     if (t.dataset.clear) return clearOne(V.items.find((x) => x.id === t.dataset.clear));
-  };
-  box.onchange = (e) => {
-    const n = e.target.dataset?.dlname;
-    if (n == null) return;
-    if (e.target.checked) V.dlPick.add(n); else V.dlPick.delete(n);
-    paint();
   };
 }
 
@@ -175,43 +166,6 @@ async function compactOne(it) {
   if (a === 'alt') return H.openCat('data');
   if (a !== true) return;
   await run([it]);
-}
-
-// ---------- old QuorX installers in Downloads: only when you ask to look ----------
-function downloadsCard() {
-  const { esc } = H;
-  const head = '<div class="st-card-head"><div class="st-card-title">Old installers in Downloads</div><div class="st-card-subtitle">QuorX setup files you downloaded. QuorX doesn\'t look in your Downloads folder unless you ask.</div></div>';
-  const D = V.dl;
-  if (!D) return `<section class="st-card">${head}<div class="st-row sto-row"><div class="st-row-info"><div class="st-row-help">Lists files named QuorX or OpenHarness that are installers (.exe, .msi, .appx, .msix). Nothing else is looked at.</div></div><div class="st-row-ctrl sto-ctrl"><button type="button" class="st-btn secondary sm" data-dl="scan">🔍 Look in Downloads</button></div></div></section>`;
-  if (D.busy) return `<section class="st-card">${head}<div class="st-row-help">Looking…</div></section>`;
-  if (D.error) return `<section class="st-card">${head}<div class="st-row-help">Couldn't look: ${esc(D.error)}</div><button type="button" class="st-btn secondary sm" data-dl="scan">Look again</button></section>`;
-  if (!D.files.length) return `<section class="st-card">${head}<div class="st-row sto-row"><div class="st-row-info"><div class="st-row-help">No QuorX installers in <code class="blurable">${esc(D.dir)}</code>.</div></div><div class="st-row-ctrl sto-ctrl"><button type="button" class="st-btn secondary sm" data-dl="scan">Look again</button></div></div></section>`;
-  const picked = D.files.filter((f) => V.dlPick.has(f.name)), bytes = picked.reduce((a, f) => a + f.bytes, 0);
-  const tag = (f) => f.newer ? '<span class="sto-tag ok" title="Newer than this QuorX: you may still want to install it">newer than yours</span>'
-    : f.copy ? '<span class="sto-tag">second copy</span>' : f.version ? `<span class="sto-tag">${f.version === D.current ? 'installed version' : 'older version'}</span>` : '<span class="sto-tag" title="No version in its name">version unknown</span>';
-  const rows = D.files.map((f) => `<label class="st-row sto-row sto-dl-row"><div class="st-row-info"><div class="st-row-label-wrap"><span class="sq-check"><input type="checkbox" data-dlname="${esc(f.name)}" ${V.dlPick.has(f.name) ? 'checked' : ''}></span><span class="st-row-label sto-dl-name">${esc(f.name)}</span>${tag(f)}</div><div class="st-row-help">${esc(new Date(f.at).toLocaleDateString())}</div></div><div class="st-row-ctrl sto-ctrl"><span class="sto-size">${fmtBytes(f.bytes)}</span></div></label>`).join('');
-  return `<section class="st-card sto-dl">${head}<div class="st-row-help">In <code class="blurable">${esc(D.dir)}</code>. Older versions and second copies are ticked; newer ones and ones without a version are not.</div>${rows}
-    <div class="sto-dl-acts"><button type="button" class="st-btn secondary sm" data-dl="scan">↻ Look again</button><button type="button" class="st-btn primary sm" data-dl="clear" ${picked.length ? '' : 'disabled'}>Move ${picked.length ? `${pl(picked.length, 'file')} · ${fmtBytes(bytes)}` : 'them'} to the Recycle Bin</button></div></section>`;
-}
-async function scanDownloads() {
-  V.dl = { busy: true }; paint();
-  const r = await H.getJ('/api/storage/downloads');
-  if (!r || r.error) { V.dl = { error: r?.error || 'no answer from QuorX' }; return paint(); }
-  V.dl = r;
-  V.dlPick = new Set(r.files.filter((f) => f.old).map((f) => f.name));
-  paint();
-}
-async function clearDownloads() {
-  const D = V.dl, picked = D.files.filter((f) => V.dlPick.has(f.name));
-  if (!picked.length) return;
-  const bytes = picked.reduce((a, f) => a + f.bytes, 0);
-  const ok = await H.ask(`Move ${pl(picked.length, 'installer')} to the Recycle Bin?\n${picked.map((f) => `• ${f.name} (${fmtBytes(f.bytes)})`).join('\n')}\n\nThey go to the Windows Recycle Bin, ${fmtBytes(bytes)} in all. The space is freed when the Recycle Bin is emptied.`, { ok: 'Move to Recycle Bin', danger: false });
-  if (ok !== true) return;
-  V.status = 'Moving…'; paint();
-  const r = await H.postJ('/api/storage/downloads', { names: picked.map((f) => f.name) });
-  V.status = r?.error ? `Not moved: ${r.error}` : summary([r]);
-  await scanDownloads();
-  V.at = 0; measure();
 }
 
 // ---------- the dot on Storage in the Settings menu: a lot can be cleared ----------
