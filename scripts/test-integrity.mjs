@@ -60,11 +60,16 @@ test('projects: with no readable copy at all it refuses, and nothing saves over 
   fs.writeFileSync(PROJECTS, '[]'); fs.rmSync(PROJECTS + '.bak');
 });
 
-// A server that sends one file the way the app does.
+// A server that sends one file the way the app does; `closed` settles when the file it opened is closed again.
 async function serving(file) {
-  const server = http.createServer((req, res) => { res.writeHead(200, { 'Content-Type': 'application/octet-stream' }); sendFile(file, res); });
+  let closed;
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/octet-stream' });
+    const src = sendFile(file, res);
+    closed = new Promise((r) => src.once('close', r));
+  });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
-  return { url: `http://127.0.0.1:${server.address().port}/`, close: () => new Promise((r) => { server.closeAllConnections?.(); server.close(r); }) };
+  return { url: `http://127.0.0.1:${server.address().port}/`, closed: () => closed, close: () => new Promise((r) => { server.closeAllConnections?.(); server.close(r); }) };
 }
 
 test('files: one that is gone by the time it opens ends that response, not the server', async () => {
@@ -76,7 +81,7 @@ test('files: one that is gone by the time it opens ends that response, not the s
   } finally { await s.close(); }
 });
 
-test('files: a download cut off midway closes the file, so it can be replaced at once', async () => {
+test('files: a download cut off midway closes the file', async () => {
   const file = path.join(tempDir('qx-send-'), 'big.bin');
   fs.writeFileSync(file, Buffer.alloc(32 * 1024 * 1024, 1));
   const s = await serving(file);
@@ -86,8 +91,7 @@ test('files: a download cut off midway closes the file, so it can be replaced at
       req.on('error', () => {});
       setTimeout(() => reject(new Error('no data')), 5000);
     });
-    let gone = false;
-    for (let i = 0; i < 40 && !gone; i++) { try { fs.rmSync(file); gone = true; } catch { await new Promise((r) => setTimeout(r, 50)); } }
-    assert.ok(gone, 'the file is no longer held open');
+    const shut = await Promise.race([s.closed().then(() => true), new Promise((r) => setTimeout(() => r(false), 3000))]);
+    assert.ok(shut, 'the file is closed once the download is cut off');
   } finally { await s.close(); }
 });

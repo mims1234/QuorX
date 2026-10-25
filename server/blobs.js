@@ -11,10 +11,10 @@ import { HOME } from './openrouter.js';
 
 /**
  * Streams a file into a response. A file that is gone or locked by the time it opens (the agent replacing it,
- * antivirus) ends that one response instead of the whole server, and a closed tab closes the file, so Windows
- * doesn't keep it locked against the agent's next write.
+ * antivirus) ends that one response instead of the whole server, and a tab closed mid-download closes the file
+ * instead of leaving it open for as long as the server runs.
  */
-export const sendFile = (file, res, opts) => { pipeline(fs.createReadStream(file, opts), res, () => { /* ended or cut off */ }); };
+export const sendFile = (file, res, opts) => { const src = fs.createReadStream(file, opts); pipeline(src, res, () => { /* ended or cut off */ }); return src; };
 
 const DIR = path.join(HOME, 'data', 'blobs');
 const MIN = 16 * 1024; // smaller data URLs stay where they are
