@@ -4,7 +4,7 @@
 import { tempDir } from './test-home.mjs';
 import { resolver } from '../server/safefetch.js';
 import { videoBody, editCommand, ffmpegMajor } from '../server/video.js';
-import { primeCatalogue, chatStream as realChatStream, generationCost } from '../server/openrouter.js';
+import { primeCatalogue } from '../server/openrouter.js';
 import { execFileSync } from 'node:child_process';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -15,6 +15,7 @@ import { runAgent, inPlaceEdit, deciderPicture, REVIEW_SYSTEM, FILM_KEYS, answer
 import { saveProject, forgetProject, setProjectBudget } from '../server/store.js';
 import { loadCheckpoint, dropCheckpoint, ledger } from '../server/runs.js';
 import { setBudget, projectSpend, budgetState, live as liveRuns } from '../server/budget.js';
+import { chatStream as realChatStream, generationCost } from '../server/openrouter.js';
 import { reviewCode, collectChanges, parseGitDiff, checkFindings, pickReviewer } from '../server/codereview.js';
 import { saveHooks, loadHooks, matchHooks, fileMatches, commandMatches, hookLine, cleanHook, safeHookFile } from '../server/hooks.js';
 import { nextAfter, cleanWhen, cleanSchedule, describeWhen, createScheduler, saveSchedules as saveScheds, loadSchedules as loadScheds, GRACE_MS } from '../server/schedules.js';
