@@ -23,7 +23,7 @@ import { createScheduler, loadSchedules, saveSchedules, cleanSchedule, describeW
 import { startScheduledChat } from './server/schedrun.js';
 import { loadMemory, saveMemory, memoryTokens, MEMORY_TOKENS } from './server/memory.js';
 import { CHECKS } from './server/harness-checks.js';
-import { startRun, getRun, stopRun, follow, runStatus, activeRuns, validRunId, scorecard, readLog, recordRun, onRunEvent } from './server/runs.js';
+import { startRun, getRun, stopRun, follow, runStatus, activeRuns, runningForChat, validRunId, scorecard, readLog, recordRun, onRunEvent } from './server/runs.js';
 import { setBudget, budgetState } from './server/budget.js';
 import { shellRun, shellClose, shellInfo } from './server/shell.js';
 import { ptyAvailable, ptyOpen, ptyWrite, ptyResize, ptyFollow, ptyClose } from './server/pty.js';
@@ -895,6 +895,9 @@ const server = http.createServer(async (req, res) => {
       const body = JSON.parse(await readBody(req));
       const runId = validRunId(String(body.runId || '')) ? String(body.runId) : `r${Date.now().toString(36)}`;
       body.runId = runId;
+      // One reply at a time per chat: a second one would race the first over the same history and files.
+      const busy = !getRun(runId) && runningForChat(body.chatId);
+      if (busy) return json(res, 409, { error: 'This chat is already running a reply: stop it or wait for it to finish.', runId: busy.id });
       if (!getRun(runId)) startRun({ runId, chatId: body.chatId, onEnd: (end) => body.chatId && settleReply(String(body.chatId), runId, end) }, (emit, signal) => runAgent(body, emit, signal));
       return stream(res, runId, 0);
     }

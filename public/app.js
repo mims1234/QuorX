@@ -4546,6 +4546,8 @@ async function followRun(c, m, open) {
   let lost = false;
   try {
     const res = await open(ac.signal);
+    // Refused (this chat already has a reply running, say): say why instead of streaming nothing.
+    if (res.status === 409) { let why = ''; try { why = (await res.json()).error; } catch { /* no body */ } throw Object.assign(new Error(why || 'The harness refused to start this reply.'), { refused: true }); }
     const reader = res.body.getReader(), dec = new TextDecoder();
     let buf = '';
     for (;;) {
@@ -4614,7 +4616,8 @@ async function followRun(c, m, open) {
     }
     if (!m.stats && !m.error) lost = true;
   } catch (err) {
-    if (ac.signal.aborted) m.error = 'Stopped.'; else lost = true;
+    if (err?.refused) m.error = err.message;
+    else if (ac.signal.aborted) m.error = 'Stopped.'; else lost = true;
   } finally {
     following.delete(m.runId);
     if (leaving) return; // the reply goes on; the next page load reattaches to it
