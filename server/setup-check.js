@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // ⚙ Settings → Setup check: what this computer has, what each thing is for, and one Fix per missing piece.
 // Every check is read-only and quick (each command has a 5 s limit). Fixes never run by themselves: on Windows the
 // page can ask to open winget in its own console window, where the user sees and answers winget's own prompts.

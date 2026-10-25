@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Starts a scheduled chat on the server (no page needed), the way the page starts one: a new chat in the
 // schedule's project with its prompt, model, mode and settings. Strict approvals and questions wait for you like in
 // any chat; you get a notification when it waits and when it ends. When it ends, its reply is saved into the chat,

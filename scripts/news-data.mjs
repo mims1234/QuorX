@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Builds the data files of News's reports (news/reports/<slug>/*.json) from sources anyone can reproduce, and the
 // parts of each report that depend on whether that data exists. No personal data: no chats, prompts, keys, file
 // paths or project names, only benchmark results, test results, the pack registry and the git history.

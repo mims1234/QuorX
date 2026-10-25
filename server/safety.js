@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // The safety layer's settings (docs/shell-safety-plan.md). Every value is editable in ⚙ Safety; these are the
 // defaults and the limits each one is held to.
 const WIN = process.platform === 'win32';

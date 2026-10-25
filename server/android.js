@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Android apps for the agent, through adb: boot an emulator, list devices, install an APK built in the project,
 // launch it, read its screen as numbered controls (uiautomator's view hierarchy), tap, type, press keys, take a
 // picture, read the log (with the newest crash summed up first).

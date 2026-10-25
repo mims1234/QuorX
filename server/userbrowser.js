@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // The pane's Browser tab: pages run in tabs of the harness's headless browser and the pane shows their
 // live picture; clicks, scrolling and typing are passed through. Your tabs are one session each. The
 // agent's own tab is shared as "agent-<chat>": watch-only while its reply runs, yours to use after,

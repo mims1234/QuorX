@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // The first-run tour: five short steps over the real page (projects and Scratch, 🔒 Strict / ⚡ YOLO, the deciders
 // and the reviewer, where costs show, the Terminal and Running tabs), then a first build to try. It shows once per
 // browser, can be skipped at any step, and comes back from ⚙ Settings → About → Show the tour.

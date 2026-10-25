@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // ⚙ Settings → Data & storage → Backup: "Export my QuorX" writes one .zip into a folder the user picks; "Import"
 // reads one back on this or another computer. Both go through /api/backup/* (server/backup.js).
 // app.js hands in its helpers, so this file stays on its own.

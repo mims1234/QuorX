@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // fetch_url's network access: public https pages only. Every hop (the first address and each redirect) is checked
 // by the address its name resolves to, so a name or a redirect can't lead to this computer or the local network.
 import dns from 'node:dns/promises';

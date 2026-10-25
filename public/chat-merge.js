@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // When a chat's save is refused because its file moved on (another window, or another QuorX on the same data
 // folder), the page merges its copy with the server's instead of saving over it. Three copies take part: base (what
 // this page last saved), mine (the page now) and theirs (the server now). No DOM here, so the tests load it in node.

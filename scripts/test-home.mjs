@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Imported first by the test files: every test writes into a throwaway data folder, never into your real
 // chats, projects, run logs and keys. (OH_HOME is read when server/openrouter.js loads, so this must come first.)
 import fs from 'node:fs';

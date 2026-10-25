@@ -1,3 +1,4 @@
+/* Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0 */
 /* Projects vs chats in the sidebar: a project is a coloured section (its own hue), its chats sit
    inside it along a guide line in that colour. Projects have square 📁 badges; chats have round avatars.
    Loaded last so theme layers don't flatten it. */

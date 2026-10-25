@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Your own terminals: a real shell for each terminal tab in the pane (PowerShell on Windows, your login shell on
 // macOS and Linux), started in the project folder. Only your own windows reach it (the harness refuses requests
 // from other sites, and pages the agent writes are served sandboxed); the agent never gets it: its run_command keeps

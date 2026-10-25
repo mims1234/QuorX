@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // The harness's own icons: each emoji the UI uses maps to one generated SVG in this folder.
 // `draw` is the image-model prompt (scripts/make-icons.mjs). Plain UI icons are cyan with `tint` as the second
 // colour; icons whose meaning lives in colour (money, status, media, folders…) give their own `colors`.

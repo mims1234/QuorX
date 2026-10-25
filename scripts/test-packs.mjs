@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // The tester kit: runs every platform pack's self-test that this computer can run, and writes a report to paste into
 // a pull request or an issue. Packs whose toolchain isn't installed are listed as not tested, with what they need.
 //

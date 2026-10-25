@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // What every kind of project uses: version control, and ffmpeg for edit_video (joining clips, a voice-over and music).
 export default {
   id: 'core',

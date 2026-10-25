@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // A real debugger for the agent: start a program paused, set breakpoints, step, read the stack and local variables,
 // evaluate an expression in a frame. Node programs use V8's inspector (the same DevTools protocol as the browser
 // tool). Every other language goes through the Debug Adapter Protocol, the one most debuggers speak (debugpy for

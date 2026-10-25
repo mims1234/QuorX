@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Node.js and TypeScript: scripts, tools, servers, and the JavaScript half of Electron and Tauri apps.
 // (Node programs are debugged with V8's own inspector, built into server/debugger.js.)
 import fs from 'node:fs';

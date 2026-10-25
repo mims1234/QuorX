@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // QuorX in your everyday Chrome. It keeps one WebSocket to the QuorX on this computer and does only this:
 // a tab you give to a chat (from the popup, a right-click, or by dragging it into a chat's tab group) can be used by
 // that chat's agent, and only while the agent works. Chrome shows its own "started debugging" bar while the debugger

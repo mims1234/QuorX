@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // The page operations (server/pageops.js) in a real headless tab, on local pages that copy what made the agent
 // fail on real sites: a "Loading…" shell that fills in late, a virtual feed that removes posts as you scroll,
 // controls covered by a dialog, and refs that go stale when the page changes.

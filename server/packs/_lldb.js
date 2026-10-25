@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // LLDB's debug adapters, shared by the C/C++ and Rust packs: lldb-dap from LLVM (LLVM 18 and later; older builds
 // name it lldb-vscode) and CodeLLDB's adapter (VS Code's Rust debugger, used when it is installed). Both speak the
 // Debug Adapter Protocol and listen on a local port. (Files starting with "_" are not packs.)

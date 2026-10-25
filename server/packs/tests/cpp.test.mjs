@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // C/C++ pack self-test: CMake configures and builds a small program with whichever compiler it finds, and it runs;
 // the CMake build check catches an error in a changed file; lldb-dap stops at a breakpoint and reads a variable.
 import { project, tool, skipUnless, WIN } from './_kit.mjs';

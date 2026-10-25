@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Apple pack self-test. On any computer: the simulators' list, Xcode's error lines, crash reports, which scheme and
 // platform a project builds, the notes and the rules for Apple's tools, all on fixtures. On a Mac with Xcode: Xcode and
 // the simulators are found, the compiler check catches an error, a program builds and runs, a real crash report is

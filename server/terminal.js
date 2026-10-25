@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // The terminal feed: what runs in each project folder, as it happens. Commands the agent or the user
 // runs and the output of dev servers are pushed here line by line; the page follows them over
 // Server-Sent Events (/api/term/stream), so you can watch the agent work like a real terminal.

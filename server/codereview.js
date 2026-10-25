@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // /review: a reviewer model reads what changed in a project (the last reply's changes, the uncommitted git
 // changes, or a branch against main) and reports concrete bugs with file:line, severity and why.
 // The harness collects the diff and the changed files itself; the reviewer gets no tools and reads nothing

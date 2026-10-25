@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Go pack self-test: go vet catches a mistake in a changed file, a program runs, and Delve stops at a breakpoint.
 import { project, skipUnless, WIN } from './_kit.mjs';
 import test from 'node:test';

@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Skills: playbooks the agent loads only when they're relevant.
 // Built-in skills live in skills/<name>/SKILL.md; your own skills, for every project, in data/skills/<name>/SKILL.md
 // (⚙ Settings → Skills); each project can add its own in <project>/.quorx/skills/<name>/SKILL.md (the agent can save

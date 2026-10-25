@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Export my QuorX / Import: one .zip with the chats, the projects (their folders' paths and settings, never their
 // files), the page's settings, the command rules, your own skills (data/skills), memory, schedules when there are
 // any, and, when asked, the logs and the API keys. Import restores it on another computer: it never overwrites without being told to, and a project whose

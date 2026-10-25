@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Is there an Electron release whose built-in Node has the October 2026 security fixes (Brotli, TLS hostnames), and
 // does the desktop app use one yet? The desktop app runs QuorX's server on Electron's own Node, so the fix reaches
 // installed apps only through an Electron bump. Run daily by .github/workflows/electron-watch.yml; by hand:

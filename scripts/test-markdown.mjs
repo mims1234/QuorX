@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Chat Markdown (public/markdown.js): a streaming reply drawn in pieces (the finished blocks once, then only the text
 // after them) is exactly the whole reply drawn at once, at every token.
 import './test-home.mjs';

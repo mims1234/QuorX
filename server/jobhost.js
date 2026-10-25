@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Windows Job Objects for everything the agent runs. One long-lived PowerShell (jobhost.ps1) holds the jobs;
 // each command or server starts through jobgate.cjs, is put in a fresh job, and only then is told to go. So:
 //   - Stop ends every process the command started, even one whose parent already exited;

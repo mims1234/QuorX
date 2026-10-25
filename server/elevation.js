@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Commands that need administrator rights. QuorX runs the agent's commands as the user, never elevated, and hidden,
 // so an installer that needs admin fails (or would wait on a UAC prompt nobody sees). QuorX never elevates anything:
 // it spots the failure and hands the command to the user, to run in a terminal they opened as administrator.

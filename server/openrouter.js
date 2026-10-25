@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // OpenRouter access: chat completions (plain, streaming, with tools), Decisions, catalogues.
 import fs from 'node:fs';
 import path from 'node:path';

@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Rust pack self-test: QuorX knows whether Rust can build here, cargo check catches errors, a build runs, the
 // debugger finds the binary for a file and stops at a breakpoint.
 import { project, tool, skipUnless, WIN } from './_kit.mjs';

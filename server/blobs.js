@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Big pictures, recordings and videos are kept as files of their own (data/blobs/<sha256>.<ext>) instead of as
 // base64 inside chat files and run logs. Every browser screenshot used to ride along in the chat: one chat reached
 // 109 MB, and the page sent all of it back to the server on every save. Now events and saved chats carry a short

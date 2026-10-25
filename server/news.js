@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // News (docs/news-format.md): What's new, articles and reports, their data files and pictures, and the user's own
 // numbers. They come from the copy downloaded from the QuorX website (server/newsremote.js, data/news-cache/) or, as
 // the fallback, the news/ folder that ships with QuorX; both are laid out the same way. Only files inside that folder

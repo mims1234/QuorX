@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Generated from server/pageops.js by scripts/sync-extension.mjs: don't edit here.
 (function qxPage() {
   const KEY = Symbol.for('quorx.ops'), VERSION = 5;

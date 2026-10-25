@@ -46,6 +46,9 @@ npm start
 
 Then open the link it prints (QuorX opens at http://quorx.localhost:5188) and sign in with OpenRouter. The full setup is in [Getting started](docs/GETTING-STARTED.md).
 
+**Official downloads** come only from the Microsoft Store, this repository's
+[releases](https://github.com/mims1234/QuorX/releases) and [quorx.genxmims.org](https://quorx.genxmims.org).
+
 ## Learn more
 
 | | |
@@ -78,4 +81,5 @@ Like most open-source software, QuorX comes as is, without a warranty ([licence]
 
 Open source under the [Apache License 2.0](LICENSE): use it, change it and fork it, for personal or commercial work,
 as long as you keep the licence and the [NOTICE](NOTICE). The QuorX name and logo aren't covered by the licence, so a
-fork should use its own.
+fork should use its own; [Trademarks](TRADEMARKS.md) says what's welcome. Writing about QuorX or its research? GitHub's
+**Cite this repository** button gives the citation.

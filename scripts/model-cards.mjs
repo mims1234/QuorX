@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Refreshes the OpenRouter-sourced part of the model cards in models/cards/: each card's name and `limits`
 // (context, tool calls, picture input, video lengths and shapes, voices…) from the public catalogues. The hand-written
 // parts (quirks, tips, bench, sources) are never touched. No key is needed, and nothing else is fetched: QuorX never

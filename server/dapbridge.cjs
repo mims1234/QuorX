@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // A bridge for debug adapters that speak the Debug Adapter Protocol only over stdin and stdout (dart debug_adapter,
 // flutter debug_adapter, lldb-dap): it starts the adapter, listens on a local port, and passes bytes both ways
 // between the one connection it accepts (QuorX's debugger) and the adapter. It runs as the debug session's

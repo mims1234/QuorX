@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // The QuorX Chrome extension (extension/): your everyday Chrome, linked to this harness, so a tab you give to a chat
 // can be used by the agent with your own sign-ins. The link is one WebSocket (Chrome keeps an extension's service
 // worker awake while one is active). Only a Chrome extension may connect (its Origin), and only with the key you

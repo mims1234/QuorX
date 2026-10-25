@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // ⚙ Settings → Storage: how much room QuorX takes on this computer, part by part, and clearing what it doesn't need.
 // The harness measures its data folder and every project's .quorx folder (/api/storage, server/storage.js); the
 // desktop app adds its own caches (desktop/storage.js). Each part of QuorX's own data has its own button; "Clear safe

@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Which toolchains this computer has, so the agent doesn't guess (and the Setup check can offer to install one).
 // The list comes from the platform packs (server/packs/): each says how to find its toolchain, whether it really
 // builds here, and how to install it. Each probe runs a version command with a short limit; results are cached.

@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // The Apple pack's plain data work, apart from the pack so it is tested on any computer: the simulators' list
 // (xcrun simctl list -j), Xcode's and Swift's error lines, crash reports (.ips), and which scheme and platform an
 // Xcode project builds. (Files starting with "_" are not packs.)

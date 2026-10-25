@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Harness checks: fixed questions that QuorX asks the deciders at fixed moments, so a small
 // model gets checked even when it doesn't know what to ask.
 //   gap   · before a build, about the request: is it a build, and what does it leave out?

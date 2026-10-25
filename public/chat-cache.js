@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Which opened chats the page can let go of. Every chat you open stays in the page (its messages, steps and
 // artifacts) so switching back is instant; past KEEP_OPEN idle ones, the least recently shown go, and opening one
 // again loads it from the server as the first time. A chat on screen, or one that is busy (a reply running or

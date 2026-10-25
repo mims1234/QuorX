@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Tests for the harness's own protections: who may connect, file paths, commands, and media kept as blobs.
 import { tempDir } from './test-home.mjs';
 import test from 'node:test';

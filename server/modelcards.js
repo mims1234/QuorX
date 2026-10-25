@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Model cards (models/cards/*.json): short notes per model for the agent and the user. Each card has
 //   limits   – facts from the OpenRouter catalogue (context, tools, video lengths, shapes, picture input…), refreshed
 //              by scripts/model-cards.mjs;

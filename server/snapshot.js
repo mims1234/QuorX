@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Snapshots of a project before a command runs, so Undo and Review changes cover what commands do (builds,
 // scripts, `rm` in a shell), not only the agent's own file edits.
 // Files are stored by content in <project>/.quorx/objects/<aa>/<sha1> and an index (.quorx/snapindex.json) keeps

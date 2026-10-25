@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // The one judge for every approval YOLO hands to the deciders (commands and paid media). Hardened per
 // docs/shell-safety-plan.md §5:
 //   - it sees only the user's own messages, the prompt enhancer's reading of them (written from those messages

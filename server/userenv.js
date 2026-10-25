@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // The environment for the user's own terminal, and a PATH that keeps up with installers.
 // - userEnv(): your Terminal tabs are a normal terminal: everything QuorX was started with (your tokens too),
 //   colours on, and programs may open the browser (gh auth login, npm login). The agent's commands use childEnv()

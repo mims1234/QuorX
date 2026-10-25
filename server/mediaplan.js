@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // A production plan for paid media. Work like a movie trailer needs pieces the user never names (stills, clips, a
 // voice-over, music); judged one call at a time, literal deciders turn the in-between steps down. So the agent lists
 // the paid calls it intends first (media_plan), the harness prices them with the same estimates the single-call

@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Runs live on the server, not in the browser tab that started them. Closing or reloading the page
 // no longer stops a reply: the page reattaches and replays what it missed. Every event is also
 // written to data/runs/<runId>.jsonl and the loop saves a checkpoint each step, so a reply cut off by

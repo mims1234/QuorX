@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Godot pack self-test. The error parser and the log folder are tested anywhere; with Godot 4 installed (or QX_GODOT
 // set to its editor), QuorX finds it, the check catches a script error in a changed file (also one that needs the
 // project's class list), a scene runs headless, and the debugger stops at a breakpoint in a running game.

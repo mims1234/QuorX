@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Build benchmark (node scripts/bench.mjs --set build): does a harness change make real builds better?
 //
 //   node scripts/bench.mjs --set build --limit 2

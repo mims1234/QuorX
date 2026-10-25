@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Electron: desktop apps made of a Node main process and web-page windows. The windows are driven through the app's
 // own DevTools port (the browser tool's cdp:<port> target); the main process is debugged by attaching to its Node
 // inspector (debug attach). TypeScript in an Electron project is checked by the Node pack.

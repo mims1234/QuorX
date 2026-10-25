@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // The bridge the app's own page gets in the desktop app (browse tabs get nothing). With it, the pane's
 // Browser tab uses real Chromium tabs; without it (other browsers) it streams pictures as before.
 const { contextBridge, ipcRenderer } = require('electron');

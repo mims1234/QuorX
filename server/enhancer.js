@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // The prompt enhancer: a cheap model reads the user's request (their words only) and spells out what it plainly
 // implies, so literal-minded readers don't miss it. "Make a 30-second movie" says nothing about voices, music or
 // sound, yet a movie without them disappoints; a decider judging "did the user ask for speech?" from the words alone

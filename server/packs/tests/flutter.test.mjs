@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Flutter and Dart pack self-test. Run everywhere: the flutter doctor and flutter test parsers, and Dart debugging
 // through the stdio bridge with a stand-in adapter (so the bridge, the debugger and Stop are tested without Dart).
 // With Dart: a real breakpoint. With Flutter: flutter analyze catches an error; on Windows, a new app is built, its

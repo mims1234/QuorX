@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Tests for QuorX on macOS and Linux: Stop through process groups, the bash and zsh rules, the folders that are off
 // limits there, and the desktop tool's keys and text. The logic is tested on any computer (a fake process table, POSIX
 // paths passed in); the tests that start real processes run only on macOS and Linux.

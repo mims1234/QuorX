@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // A project's own secrets (.env, private keys): the agent knows their names, the commands and servers it starts get
 // their values, and the model never sees them. read_file and search_files show .env files as names only, every tool
 // result is cleaned of the values before it goes to the model, and request_secret lets the user type a missing one

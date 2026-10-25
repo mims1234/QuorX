@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // A headless browser for the agent: Edge or Chrome driven over the DevTools protocol (Node's built-in
 // WebSocket, no dependencies). The agent opens what it built, reads it, clicks and types, and takes
 // screenshots that the decision models can look at.

@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Memory: a short list of facts and preferences the user approved ("I use pnpm", "prefer dark themes"), given to
 // every chat in every project. It is kept small on purpose (about 300 tokens in all), so it fits the smallest
 // models. The agent may propose an item with the remember tool; it is saved only when the user says yes, in YOLO

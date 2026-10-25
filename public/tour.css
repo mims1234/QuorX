@@ -1,3 +1,4 @@
+/* Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0 */
 /* The first-run tour (public/tour.js): a spotlight on the real page and a card beside it. */
 .tr-shade { position: fixed; inset: 0; z-index: 9990; background: transparent; }
 .tr-shade.dim { background: rgba(0, 0, 0, .55); }

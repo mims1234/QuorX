@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // The agent's own terminal, for programs that need one: prompts, menus, full-screen terminal apps (TUIs), REPLs.
 // Each session is a pseudo-terminal (node-pty: ConPTY on Windows) whose program starts through jobgate.cjs and waits
 // until it is inside a Windows job, like every other agent command, so Stop ends everything it started. What it

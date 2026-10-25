@@ -1,3 +1,4 @@
+# Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 # QuorX's Python check before the final reply (see python.js). Run in a project folder, it prints one line per
 # problem as "path:line: message": syntax errors in every .py file, as the project's own Python sees them, and, when
 # the project already has ruff or pyflakes, names that are used but never defined. It writes nothing (no .pyc files,

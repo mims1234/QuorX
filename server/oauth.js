@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Sign in with OpenRouter (OAuth PKCE). The user approves on openrouter.ai, can set a spending limit for the new key
 // there, and OpenRouter hands back a code that only this server can trade for the key: the code_verifier never leaves
 // the server, and the page only gets the sign-in address, then asks how it went.

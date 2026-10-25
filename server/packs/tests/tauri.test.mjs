@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Tauri pack self-test: Tauri projects (1 and 2) are found with how they run, the start line opens a DevTools port
 // QuorX lets the agent attach to, the Rust check runs in src-tauri, and (with the toolchain) a tiny app builds and its
 // window is read and clicked through WebView2's DevTools port.

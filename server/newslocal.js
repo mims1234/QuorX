@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // The user's own numbers for News (`local` blocks, GET /api/news/local?view=…; docs/news-format.md). Everything is
 // computed from this computer's logs and only counts and model names leave this file: never a prompt, a question's
 // text, a file path or a project name. Nothing here is ever written into news/.

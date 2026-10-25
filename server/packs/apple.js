@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Apple apps: iPhone, iPad and Mac apps (SwiftUI, UIKit, AppKit) built with Xcode, and Swift packages. Needs a Mac:
 // Xcode, the simulators and Apple's signing only run on macOS.
 // Detect: Xcode (and that it is the active developer folder, licensed and set up), the simulators (lldb-dap is the C and C++ pack's LLDB row).

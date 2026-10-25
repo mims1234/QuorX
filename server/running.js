@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Everything running in a project, in one list, for the pane's Running tab: dev servers, commands (yours and the
 // agent's, including the ones that moved to the background), the agent's own terminals, and your terminal tabs.
 // Each row can be stopped from there. The agent keeps working while things run; this is where you see them and

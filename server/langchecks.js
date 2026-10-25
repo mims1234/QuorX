@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Compiler checks before the final reply, for languages a file-by-file syntax check can't cover. The checks come from
 // the platform packs (server/packs/): Rust (cargo check), C# (dotnet build), Go (go vet), TypeScript (tsc --noEmit)
 // and whatever packs add. Each runs once per project folder the reply changed, only when that toolchain is installed,

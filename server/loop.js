@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Pure helpers for the agent loop: reading files in windows, grouping look-ups to run side by side,
 // trimming a long transcript, prompt-cache marks and labelling outside text. Kept free of I/O so the
 // tests in scripts/test-loop.mjs can exercise them directly.

@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Background jobs: commands that keep running after the agent's tool call returns. Long builds whose time limit
 // ran out (only commands that read, write in the project or build: never installs, pushes or deletes), and
 // programs started with background: true (a desktop app, a watcher, a test server). Each one is still a normal

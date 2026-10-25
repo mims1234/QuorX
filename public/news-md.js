@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // News pages (docs/news-format.md): a small, safe Markdown renderer for articles and reports, and each interactive
 // block drawn complete at rest, as HTML and SVG strings. Everything from the file is escaped; only the subset in the
 // contract becomes markup. No DOM here, so it runs in the page and in the tests alike; app.js adds the motion.

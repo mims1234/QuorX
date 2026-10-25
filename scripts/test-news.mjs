@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // News: the format checker (docs/news-format.md), the news/ folder QuorX ships, the /api/news routes, the page's
 // renderer (public/news-md.js), and the user's own numbers (server/newslocal.js).
 import './test-home.mjs';

@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Swaps the UI's emoji for the harness's own icons as the page renders, so app.js keeps writing plain emoji and
 // every place they appear gets the same icon family. Chat text, thinking, code and form fields keep real emoji:
 // only the harness's own chrome changes.

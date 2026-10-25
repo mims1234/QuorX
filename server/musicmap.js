@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Music for films (Video Mode): map a track (tempo, bar lines, how loud each moment is, where it changes, how it ends),
 // pick the best stretch for a part of the film, and fit a track to a length on bar lines: trimmed from the front so
 // its own ending stays, or lengthened by playing whole bars again with short crossfades on the downbeat.

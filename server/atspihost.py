@@ -1,3 +1,4 @@
+# Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 # QuorX desktop helper for Linux: reads and drives the windows of programs the agent started, through AT-SPI (the
 # structure Orca reads). GTK apps take part by default; Qt apps when started with QT_ACCESSIBILITY=1, Electron apps
 # with --force-renderer-accessibility. Keys and clicks use AT-SPI's synthetic events, which work on X11 (and

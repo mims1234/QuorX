@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Stop on macOS and Linux: the same promise as the Windows job host (jobhost.js), kept with process groups.
 // Every agent command and server starts through jobgate.cjs in a new session and process group of its own (Node's
 // detached: true calls setsid), so the gate's pid is the group's id and everything the command starts joins it.

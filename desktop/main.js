@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // QuorX desktop: the same page in a window, plus real Chromium tabs for the pane's Browser tab.
 // The page draws the tab strip and the address bar; this process places a native browser view (a real
 // Chromium page: smooth scrolling, video and sound, sign-ins that last, downloads, DevTools) exactly

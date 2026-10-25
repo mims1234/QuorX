@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Opened chats the page lets go of (public/chat-cache.js): past the limit, the idle ones least recently shown, never
 // one on screen or busy.
 import './test-home.mjs';

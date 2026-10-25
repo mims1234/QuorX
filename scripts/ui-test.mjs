@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // QuorX UI test: starts the QuorX desktop app from this checkout, with its own data folder and port, drives its
 // window the way a person would, and saves a screenshot of every step with an HTML report.
 //

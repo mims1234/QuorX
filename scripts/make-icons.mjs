@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Generates the harness's own icon set (public/icons/*.svg) with an OpenRouter image model,
 // one icon per emoji the UI uses. Run: node scripts/make-icons.mjs [slug ...] [--model id] [--force] [--clean]
 // The key comes from .env (OPENROUTER_API_KEY or OPENROUTER_API_KEY_BOT). Existing icons are kept unless --force.

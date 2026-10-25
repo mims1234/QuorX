@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Hosting artifacts at a URL (/art/<chat>/<artifact>), always the newest version: while a reply is
 // running, the agent's latest copy; otherwise what the chat file holds. Pages are served as they are;
 // Markdown documents are served rendered, as a readable page that suits both themes.

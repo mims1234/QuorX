@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // QuorX copies this into a project as .quorx/serve.mjs to host a static site (HTML, CSS, JS, assets)
 // from the project folder, so it runs like any other server: from the launch file, listed under 🖥, opened in
 // the Browser tab. It has no dependencies. Usage: node .quorx/serve.mjs [entry.html]   (port from PORT)

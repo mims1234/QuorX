@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Unity pack self-test. The compile-log parser, the test-results summary and finding editors are tested anywhere on
 // fixtures. With a Unity editor (and a license), a small project is imported, the check catches a C# error in a
 // changed file, and EditMode tests run with their results summarised. The import takes a few minutes.

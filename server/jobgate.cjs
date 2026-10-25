@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // The gate every agent command and server starts through. It waits for one line on stdin (QuorX sends it once
 // this process is inside its Windows job, so nothing the command starts can escape the job), then runs the
 // command with stdin closed and forwards its output and exit code.

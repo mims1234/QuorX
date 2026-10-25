@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Python: scripts, command-line tools, services and desktop apps (tkinter, PyQt, PySide).
 // A project's own virtual environment (.venv, venv) is used for everything when it has one: the compiler check, the
 // debugger, and the commands the notes give the agent. Debugging goes through debugpy, over the Debug Adapter Protocol.

@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Writes extension/pageops.js from server/pageops.js, so the extension's page scripts and the debugger path run the
 // very same page operations. Run after changing server/pageops.js (scripts/test-browser.mjs fails until you do).
 import fs from 'node:fs';

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // QuorX as an MCP server (stdio), so Claude Code, OpenDesign or any MCP client can hand work to QuorX.
 // It talks to the QuorX you have running (QUORX_URL, default http://localhost:<AGENT_PORT or 5188>) over its own
 // HTTP API, so every reply it starts is an ordinary chat in your sidebar, with your budgets and checks.

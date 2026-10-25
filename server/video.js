@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Video helpers: the make_video request body (with a picture as the first frame), and edit_video, which joins
 // clips and stills, a voice-over and music into one finished file with ffmpeg. For edit_video this file only builds
 // the command line and the filter graph; the agent runs the line through the same command policy and approval as

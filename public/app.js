@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // QuorX front end. One agent per chat; up to two chats side by side, each with its own
 // run, so chats work in parallel. Every run streams events from /api/run; approvals are answered
 // through /api/approve. Chats live on the server; preferences stay in this browser. Plain JS.
@@ -5740,6 +5741,7 @@ function settingsPanels(S) {
         + stRow('Address', '', `<code>${esc(location.origin)}</code>`)
         + stRow('OpenRouter key', '', G.cfg.hasKey ? stTag('ok', 'active') : stStatus('bad', 'none yet'))
         + stRow('Your data', 'Chats, projects, keys and logs stay in this folder.', '<code>data/</code>')
+        + stRow('Open source', 'Apache License 2.0. Forks are welcome, under a name of their own.', `<span class="sx-links"><a class="st-btn secondary sm" href="${QX_REPO}" target="_blank" rel="noopener noreferrer">Source on GitHub</a><a class="st-btn secondary sm" href="${QX_REPO}/issues/new" target="_blank" rel="noopener noreferrer">Report a problem</a></span>`)
         + stRow('Tour', 'Five short steps over the page: projects, Strict and YOLO, the deciders and reviewer, costs, the terminal.', '<button type="button" class="st-btn secondary sm" data-act="tour">Show the tour</button>')
         + '</section>',
       ...(DESK ? ['<div id="stDesktop"></div>'] : []),
@@ -6086,6 +6088,8 @@ function cancelSettings() { G.theme = ST.themeAtOpen; applyTheme(); if ($('#sett
 // one click (Allow here), and whether it is connected. The key is a fallback, under "Use a key instead".
 // The QuorX article on connecting the extension (a plain link: it opens in the user's browser when clicked).
 const EXT_HOWTO = 'https://quorx.genxmims.org/news/articles/your-own-browser-for-the-agent/';
+// The official repository, linked from ⚙ Settings → About (source and issues)
+const QX_REPO = 'https://github.com/mims1234/QuorX';
 const extReady = () => !!(G.ext?.connected && !G.ext.outdated);
 // Ticking 🧩 Chrome (a chat, or a scheduled chat) while the extension isn't connected (or is outdated): the tick stays,
 // and ⚙ Code & servers opens at the extension's card with a line saying why. Connected, or unticking: nothing opens.

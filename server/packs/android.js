@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Android: apps built with Gradle, run on an emulator and driven through adb (the android tool, server/android.js).
 // This file finds the SDK (adb, the emulator, sdkmanager and avdmanager are often not on the PATH), lists the
 // virtual devices (AVDs), compiles the project before the final reply, and turns a logcat crash into a short summary:
