@@ -2650,7 +2650,7 @@ test('a Chrome tab given through the QuorX extension: only an extension with the
   const { openTab, closeBrowser } = await import('../server/browser.js');
   const page = '<!doctype html><meta charset="utf-8"><title>Mail</title><button aria-label="Delete">🗑</button><a href="#x">Open message</a>';
   const srv = http.createServer((q, r) => { r.writeHead(200, { 'Content-Type': 'text/html' }); r.end(page); });
-  srv.on('upgrade', (q, s) => extUpgrade(q, s));
+  srv.on('upgrade', (q, s) => extUpgrade(q, s)); extKey(true); // a new key, not pinned to another test's extension ID yet
   await new Promise((ok) => srv.listen(0, '127.0.0.1', ok));
   const port = srv.address().port, ORIGIN = `chrome-extension://${'a'.repeat(32)}`;
   // The "Chrome tab": a headless tab, driven only through the extension link.
@@ -2707,7 +2707,7 @@ test('🧩 Chrome on in a chat: the agent opens its own tab in the user’s Chro
   const { takeBackTab, givenTab } = await import('../server/userbrowser.js');
   const { openTab, closeBrowser } = await import('../server/browser.js');
   const srv = http.createServer((q, r) => { r.writeHead(200, { 'Content-Type': 'text/html' }); r.end('<!doctype html><meta charset="utf-8"><title>Inbox</title><a href="#m">Open message</a>'); });
-  srv.on('upgrade', (q, s) => extUpgrade(q, s));
+  srv.on('upgrade', (q, s) => extUpgrade(q, s)); extKey(true);
   await new Promise((ok) => srv.listen(0, '127.0.0.1', ok));
   const port = srv.address().port, real = await openTab({ own: true });
   const opened = [];
@@ -2864,7 +2864,7 @@ test('🧩 Chrome read through page scripts: opening, reading and collecting nev
   const { openTab, closeBrowser } = await import('../server/browser.js');
   const { pageOp } = await import('../server/pageops.js');
   const srv = http.createServer((q, r) => { r.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); r.end(CHAT_PAGE); });
-  srv.on('upgrade', (q, s) => extUpgrade(q, s));
+  srv.on('upgrade', (q, s) => extUpgrade(q, s)); extKey(true);
   await new Promise((ok) => srv.listen(0, '127.0.0.1', ok));
   const port = srv.address().port, real = await openTab({ own: true });
   const cdp = [], calls = [];
@@ -2946,6 +2946,59 @@ test('the extension connects with one click: it waits until Allow in QuorX, Deny
     assert.equal(b.got[1].key, extKey()); assert.equal(extReady(), true);
     b.ws.close();
   } finally { srv.close(); }
+});
+
+test('extension pairing shows which extension asks and a code to match; the key stays with that extension; one request at a time; little is read before hello', async () => {
+  const http = await import('node:http');
+  const { extUpgrade, extKey, extPairing, extPair } = await import('../server/extlink.js');
+  const { HOME } = await import('../server/openrouter.js');
+  const PIN = path.join(HOME, 'data', 'extension-origin');
+  const srv = http.createServer(); srv.on('upgrade', (q, s) => extUpgrade(q, s));
+  await new Promise((ok) => srv.listen(0, '127.0.0.1', ok));
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const id = (c) => c.repeat(32), origin = (c) => `chrome-extension://${id(c)}`;
+  const open = (c, first) => new Promise((ok) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${srv.address().port}/api/ext/socket`, { headers: { Origin: origin(c) } });
+    const x = { ws, got: [], closed: false }; ws.onmessage = (ev) => x.got.push(JSON.parse(ev.data));
+    ws.onclose = ws.onerror = () => { x.closed = true; };
+    ws.onopen = () => { ws.send(typeof first === 'string' ? first : JSON.stringify(first)); ok(x); };
+  });
+  const pair = (c) => open(c, { t: 'hello', pair: true, browser: 'Chrome', version: '0.3.2' });
+  const withKey = (c, key = extKey()) => open(c, { t: 'hello', key, version: '0.3.2' });
+  try {
+    extKey(true);
+    // The prompt names the extension's ID and a code, and the extension gets the same code to show in its popup.
+    const a = await pair('h'); await wait(150);
+    assert.equal(a.got[0].t, 'pairing'); assert.match(a.got[0].code, /^[A-HJ-NP-Z2-9]{6}$/);
+    assert.deepEqual({ id: extPairing().id, code: extPairing().code }, { id: id('h'), code: a.got[0].code });
+    // Another extension asking meanwhile is refused and told why; the first request still waits.
+    const b = await pair('i'); await wait(150);
+    assert.equal(b.got.at(-1).t, 'denied'); assert.match(b.got.at(-1).why, /another extension is already waiting/); assert.equal(b.closed, true);
+    assert.equal(extPairing()?.id, id('h'));
+    // Allow: the key is pinned to that extension, and the same key from another ID is turned away.
+    extPair(true); await wait(150);
+    assert.deepEqual(a.got.map((m) => m.t), ['pairing', 'paired', 'welcome']);
+    assert.equal(fs.readFileSync(PIN, 'utf8'), origin('h'));
+    const thief = await withKey('j'); await wait(150);
+    assert.deepEqual(thief.got.map((m) => m.t), ['denied']); assert.match(thief.got[0].why, /belongs to another extension/); assert.equal(thief.closed, true);
+    // A connected extension may send more than the before-hello limit.
+    a.ws.send(JSON.stringify({ t: 'ping', pad: 'x'.repeat(100000) })); await wait(150);
+    assert.equal(a.got.at(-1).t, 'pong');
+    a.ws.close(); await wait(100);
+    // A key from before pinning (no ID stored) still connects, and its ID is pinned then.
+    fs.rmSync(PIN, { force: true });
+    const old = await withKey('k'); await wait(150);
+    assert.deepEqual(old.got.map((m) => m.t), ['welcome']);
+    assert.equal(fs.readFileSync(PIN, 'utf8'), origin('k'));
+    old.ws.close(); await wait(100);
+    assert.deepEqual((await withKey('h').then(async (x) => { await wait(150); x.ws.close(); return x; })).got.map((m) => m.t), ['denied']);
+    // A pairing request whose extension went away no longer blocks another one.
+    const gone = await pair('l'); await wait(150); gone.ws.close(); await wait(150);
+    assert.equal(extPairing(), null);
+    // More than 64 KB before hello: the socket is closed (it used to wait for the 10 s hello timer).
+    const big = await open('m', 'x'.repeat(70000)); await wait(400);
+    assert.equal(big.closed, true); assert.deepEqual(big.got, []);
+  } finally { extPair(false); srv.close(); }
 });
 
 // ---------- Video Mode (server/videomode.js): a film gets a brief, a story pick and a storyboard first ----------

@@ -2711,6 +2711,8 @@ body.link-mod a[data-cl] { cursor: pointer; }
 .ext-pair-notice { position: fixed; right: 18px; bottom: 18px; z-index: 900; width: min(360px, calc(100vw - 36px)); display: grid; gap: 6px; padding: 14px; border-radius: 12px; border: 1px solid color-mix(in srgb, var(--violet, #a78bfa) 60%, transparent); background: var(--panel-overlay, var(--panel)); box-shadow: 0 12px 32px rgba(0, 0, 0, .45); font-size: 13px; }
 .ext-pair-notice p { margin: 0; color: var(--muted); font-size: 12px; }
 .ext-pair-notice .acts { display: flex; justify-content: flex-end; gap: 6px; }
+.ext-pair-id { display: block; color: var(--muted); font: 11.5px var(--mono); cursor: help; }
+.ext-pair-code { font: 700 14px var(--mono); letter-spacing: .14em; color: var(--violet, #a78bfa); }
 
 /* ↪ terminal output into the chat */
 .tj-share { height: 22px; padding: 0 8px; margin-left: 6px; border-radius: 6px; border: 1px solid var(--line-strong); background: transparent; color: var(--muted); font: 600 11px var(--font-ui); cursor: pointer; white-space: nowrap; }

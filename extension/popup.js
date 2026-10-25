@@ -18,6 +18,7 @@ async function draw() {
   [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const showPair = s.state === 'pairing' || !s.paired || s.state === 'denied';
   $('pairWait').hidden = s.state !== 'pairing'; $('pairBtn').disabled = s.state === 'pairing';
+  $('pairCode').textContent = s.code || ''; $('pairCode').hidden = !s.code;
   $('pair').hidden = !showPair; $('give').hidden = showPair;
   $('address').value = s.address || 'http://127.0.0.1:5188';
   if (s.error && s.state !== 'on') say(s.error);
