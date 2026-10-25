@@ -50,7 +50,7 @@ import { exportBackup, findBackups, inspectBackup, importBackup } from './server
 import { artifactContent, servedArtifact, ARTIFACT_HEADERS, folderStamp } from './server/artifacts.js';
 import { gate, appGate, appLink, hostAllowed, crossSiteApi, isLoopback } from './server/access.js';
 import { gitHubRemote, gitHubInfo } from './server/github.js';
-import { serveBlob, startSweeping, chatFootprint } from './server/blobs.js';
+import { serveBlob, startSweeping, chatFootprint, sendFile } from './server/blobs.js';
 import { measureStorage, clearStorage, clearProjectParts, previewProjectParts, recentClears, startStorageRules } from './server/storage.js';
 import { storageRules, saveStorageRules, rotateLog, RULE_DEFAULTS } from './server/storagerules.js';
 import { listDesignSystems, readDesignSystem, projectDesign, applyDesignSystem, saveProjectDesign } from './server/design.js';
@@ -121,7 +121,7 @@ function sendStatic(req, res, file, type, extra = {}) {
     return res.end(z.buf);
   }
   res.writeHead(200, head);
-  return fs.createReadStream(file).pipe(res);
+  return sendFile(file, res);
 }
 // A path from the address bar; a malformed %-escape is a bad request, not a server error.
 const decodePath = (s) => { try { return decodeURIComponent(s); } catch { return null; } };
@@ -282,7 +282,7 @@ const server = http.createServer(async (req, res) => {
       const own = req.headers.origin === 'null' && ref.startsWith(`${base}ws/${wm[1]}/`);
       const type = MIME[path.extname(file).toLowerCase()] || 'application/octet-stream';
       res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-cache', ...(/html|svg|xml/.test(type) && !req.pageOrigin ? { 'Content-Security-Policy': SANDBOX_CSP } : {}), ...(own ? { 'Access-Control-Allow-Origin': 'null' } : {}) });
-      return fs.createReadStream(file).pipe(res);
+      return sendFile(file, res);
     }
     // Open a project's folder in the computer's own file manager (File Explorer on Windows). With a path inside the
     // project, a folder opens and a file is shown selected in its folder (Files → right-click → Show in File Explorer).
@@ -916,7 +916,7 @@ const server = http.createServer(async (req, res) => {
       const full = path.join(ROOT, 'node_modules', 'katex', 'dist', kxm[1]);
       if (!fs.existsSync(full)) return json(res, 404, { error: 'KaTeX is not installed (run npm install)' });
       res.writeHead(200, { 'Content-Type': MIME[path.extname(full)] || 'application/octet-stream', 'Cache-Control': 'max-age=86400', 'X-Content-Type-Options': 'nosniff' });
-      return fs.createReadStream(full).pipe(res);
+      return sendFile(full, res);
     }
     const vm = url.pathname.match(/^\/vendor\/(xterm\.js|xterm\.css|addon-fit\.js)$/);
     if (vm && req.method === 'GET') {
@@ -924,7 +924,7 @@ const server = http.createServer(async (req, res) => {
       const full = path.join(ROOT, file);
       if (!fs.existsSync(full)) return json(res, 404, { error: 'xterm.js is not installed (run npm install)' });
       res.writeHead(200, { 'Content-Type': vm[1].endsWith('.css') ? 'text/css; charset=utf-8' : 'text/javascript; charset=utf-8', 'Cache-Control': 'max-age=86400' });
-      return fs.createReadStream(full).pipe(res);
+      return sendFile(full, res);
     }
     // Pictures and other media kept out of chat files (see server/blobs.js): named by their content, so never stale.
     const blm = url.pathname.match(/^\/blob\/([0-9a-f]{64}\.[a-z0-9]{2,5})$/);

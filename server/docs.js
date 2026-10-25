@@ -27,10 +27,14 @@ const dirs = (projectId) => {
   fs.mkdirSync(up, { recursive: true }); fs.mkdirSync(idx, { recursive: true });
   return { root, up, idx, reg: path.join(up, 'docs.json') };
 };
-// Entries name a file in uploads/ only (the folder can arrive with a project, so a stray entry is dropped, not followed).
-const okEntry = (x) => x && typeof x.id === 'string' && /^[w-]{1,64}$/.test(x.id) && typeof x.file === 'string' && /^[w][w .()-]{0,190}$/.test(x.file) && !x.file.includes('..');
+// Entries name a file in uploads/ only (the folder can arrive with a project, so a stray entry is dropped, not followed):
+// saveUpload names each one `<id>-<name>`, a plain file name with no folder, drive or stream in it. Any letters are
+// fine in the name part (résumé.pdf, report [1].pdf), as safeName already took out what Windows won't allow.
+export const okEntry = (x) => !!x && typeof x.id === 'string' && /^[\w-]{1,64}$/.test(x.id) && typeof x.file === 'string'
+  && x.file.length <= 200 && x.file.startsWith(`${x.id}-`) && !/[\\/:]/.test(x.file) && x.file === path.basename(x.file);
 const readReg = (d) => { try { const l = JSON.parse(fs.readFileSync(d.reg, 'utf8')); return Array.isArray(l) ? l.filter(okEntry) : []; } catch { return []; } };
-const writeReg = (d, list) => fs.writeFileSync(d.reg, JSON.stringify(list, null, 2));
+// Through a temp file, so a crash mid-write can't leave a half list that reads as no documents.
+const writeReg = (d, list) => { fs.writeFileSync(d.reg + '.tmp', JSON.stringify(list, null, 2)); fs.renameSync(d.reg + '.tmp', d.reg); };
 function update(projectId, id, patch) {
   const d = dirs(projectId), list = readReg(d), i = list.findIndex((x) => x.id === id);
   if (i < 0) throw new Error('no such document');
