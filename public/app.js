@@ -8557,27 +8557,46 @@ function deskStage(t, stage) {
   G.dsk = { sid: t.sid, ph, rect: '', shown: false, snap: false };
   deskPlace(true);
 }
-async function deskPlace(force) {
+// One placement at a time: each one waits on the desktop app (a snapshot, new bounds, show), which can take longer than
+// the 150 ms check below, so calls used to overlap and could show and hide the tab out of order. A call made while one
+// runs is done once after it (forced if any of them asked).
+let deskBusy = null, deskAgain = null;
+function deskPlace(force) {
+  if (deskBusy) { deskAgain = (deskAgain || false) || !!force; return deskBusy; }
+  deskBusy = deskPlaceNow(force).catch(() => {}).finally(() => {
+    deskBusy = null;
+    if (deskAgain != null) { const f = deskAgain; deskAgain = null; deskPlace(f); }
+  });
+  return deskBusy;
+}
+async function deskPlaceNow(force) {
   const d = G.dsk;
   if (!DESK || !d) return;
   const c0 = focused(), t = c0 ? browserTabs(c0).find((x) => x.sid === d.sid) : null;
   const visible = d.ph.isConnected && G.view.browser && t && paneVisible() && d.ph.getClientRects().length && document.visibilityState === 'visible';
   if (!visible) { if (d.shown || force) { window.ohDesktop.hideAll(); d.shown = false; } if (!d.ph.isConnected) G.dsk = null; return; }
   const err = $('.derr', d.ph);
-  if (t.error) { err.hidden = false; err.innerHTML = `⚠ ${esc(t.error)}<br><button type="button" class="derr-retry">Try again</button>`; $('.derr-retry', err).onclick = () => { t.error = null; t.opened = null; renderPane(); }; if (d.shown) { window.ohDesktop.hideAll(); d.shown = false; } return; }
-  err.hidden = true;
+  if (t.error) {
+    // Drawn once per error, not on every check: rebuilding it each time swallowed clicks on Try again.
+    if (err.hidden || d.errText !== t.error) { d.errText = t.error; err.hidden = false; err.innerHTML = `⚠ ${esc(t.error)}<br><button type="button" class="derr-retry">Try again</button>`; $('.derr-retry', err).onclick = () => { t.error = null; t.opened = null; renderPane(); }; }
+    if (d.shown) { window.ohDesktop.hideAll(); d.shown = false; }
+    return;
+  }
+  err.hidden = true; d.errText = null;
   // Something over the page (a dialog, the model picker, settings): show a snapshot and step aside.
   // The real tab is drawn above the page, so anything opened over it (a dialog, the 🖥 servers list) needs it to step aside.
   const covered = !!document.querySelector('dialog[open], #paneSrvPop:not([hidden]), .oh-tip.on.covers, #replyInfoPop.covers:not([hidden])');
   const snap = $('.dsnap', d.ph);
   if (covered) {
     if (d.shown) { const url = await window.ohDesktop.snapshot(d.sid).catch(() => null); if (url) { snap.src = url; snap.hidden = false; } }
-    // Hidden every time, not only when we think it's showing: a tab the app re-made under the same name may be
-    // showing without us knowing, and would sit on top of the servers list or a dialog.
-    window.ohDesktop.hideAll();
+    // Hidden when the cover starts and then once a second, not only when we think it's showing: a tab the app re-made
+    // under the same name may be showing without us knowing, and would sit on top of the servers list or a dialog.
+    // (Every check, about 7 times a second, was more than that needs.)
+    if (d.shown || force || !d.coverAt || Date.now() - d.coverAt > 1000) { window.ohDesktop.hideAll(); d.coverAt = Date.now(); }
     d.shown = false;
     return;
   }
+  d.coverAt = 0;
   snap.hidden = true;
   const r = d.ph.getBoundingClientRect(), key = `${r.x},${r.y},${r.width},${r.height}`;
   if (force || key !== d.rect) { d.rect = key; await window.ohDesktop.bounds(d.sid, { x: r.x, y: r.y, width: r.width, height: r.height }); }
