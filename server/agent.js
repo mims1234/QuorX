@@ -18,7 +18,7 @@ import { enhanceRequest } from './enhancer.js';
 import { validId, listProjects, getChat } from './store.js';
 import { needsAdmin, adminForAgent, adminForUser } from './elevation.js';
 import { secretKind, maskSecretText, scrubSecrets, projectEnv, setSecret, ENV_NAME, MASK } from './projectsecrets.js';
-import { searchFiles, trashFile, checkpoint, changedFiles, copyTemplate, snapBefore, commandChanges, safePath, childEnv, realish } from './workspace.js';
+import { searchFiles, searchNote, trashFile, checkpoint, changedFiles, copyTemplate, snapBefore, commandChanges, safePath, childEnv, realish } from './workspace.js';
 import { SAFETY_DEFAULTS, safetySettings, yoloOf } from './safety.js';
 import { decide as decideCommand, loadRules, addRule, agentWriteBlocked } from './cmdpolicy.js';
 import { approvalJudge } from './approvals.js';
@@ -585,7 +585,7 @@ const CODE_TOOLS = [
 // Tools for project memory, skills, templates and housekeeping (only with a project folder).
 const TEMPLATE_LIST = listTemplates();
 const PROJECT_TOOLS = [
-  { type: 'function', function: { name: 'search_files', description: 'Search the project files for a literal text (case-insensitive). Returns file, line and the matching line.', parameters: { type: 'object', required: ['query'], properties: { query: { type: 'string' }, glob: { type: 'string', description: 'Optional file filter, e.g. "*.js" or "src/**/*.css"' } } } } },
+  { type: 'function', function: { name: 'search_files', description: 'Search the project files for a literal text (case-insensitive). Returns file, line and the matching line. Files the project\'s .gitignore leaves out and build output (target, bin, obj, build, dist, out, coverage…) are skipped unless path or glob points into them.', parameters: { type: 'object', required: ['query'], properties: { query: { type: 'string' }, glob: { type: 'string', description: 'Optional file filter, e.g. "*.js" or "src/**/*.css"' }, path: { type: 'string', description: 'Optional folder or file to search in, e.g. "src" or "target/debug"' } } } } },
   { type: 'function', function: { name: 'request_secret', description: 'Ask the user for a secret the project needs (an API key, a password, a token). They type it into a card in the page; QuorX saves it to the project\'s .env (and adds .env to .gitignore). You only hear that it is set, never the value: use it by its name from the environment. Your work waits for the answer.', parameters: { type: 'object', required: ['name', 'why'], properties: { name: { type: 'string', description: 'The variable name, e.g. OPENAI_API_KEY' }, why: { type: 'string', description: 'One short sentence: what it is for and where the user gets it' } } } } },
   { type: 'function', function: { name: 'delete_file', description: 'Delete a file from the project (it moves to .quorx/trash, so it can be recovered).', parameters: { type: 'object', required: ['path'], properties: { path: { type: 'string' } } } } },
   ...(TEMPLATE_LIST.length ? [{ type: 'function', function: { name: 'scaffold', description: `Copy a starter template into the project (never overwrites existing files). Templates: ${TEMPLATE_LIST.map((t) => `${t.name} (${t.description})`).join('; ')}`, parameters: { type: 'object', required: ['template'], properties: { template: { type: 'string', enum: TEMPLATE_LIST.map((t) => t.name) } } } } }] : []),
@@ -2460,7 +2460,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       if (args.action === 'save') return `Save the launch config "${args.name}"${args.old_name && args.old_name !== args.name ? ` (renamed from "${args.old_name}")` : ''}: ${[args.command, ...(args.args || [])].join(' ')}${args.port ? ` on port ${args.port}` : ''}`;
       return 'List the saved launch configs';
     }
-    if (name === 'search_files') return `Search the project for "${clip(args.query, 60)}"${args.glob ? ` in ${args.glob}` : ''}`;
+    if (name === 'search_files') return `Search ${args.path ? clip(args.path, 60) : 'the project'} for "${clip(args.query, 60)}"${args.glob ? ` in ${args.glob}` : ''}`;
     if (name === 'fetch_url') return `Read the web page ${clip(args.url, 120)}`;
     if (name === 'edit_file') return Array.isArray(args.edits) && args.edits.length ? `Edit ${args.path}: ${args.edits.length} changes` : `Edit ${args.path}: replace "${clip(args.find, 80)}" with "${clip(args.replace, 80)}"`;
     if (name === 'browser') return Array.isArray(args.steps) && args.steps.length ? `Browser: ${args.steps.length} steps (${args.steps.slice(0, 4).map((x) => x?.action).join(', ')}${args.steps.length > 4 ? ', …' : ''})` : `Browser: ${args.action}${args.target ? ` ${args.target}` : ''}${args.ref ? ` ${args.ref}` : ''}${args.query ? ` "${clip(args.query, 60)}"` : ''}${args.text ? ` "${clip(args.text, 60)}"` : ''}${args.selector ? ` ${args.selector}` : ''}${args.key ? ` ${args.key}` : ''}${args.screens ? ` ${args.screens} screen(s)` : ''}${args.op ? ` ${args.op}${args.id ? ` ${args.id}` : ''}` : ''}${args.count ? ` ${args.count}` : ''}`;
@@ -2828,13 +2828,16 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (name === 'search_files') {
       // Secret files give names only (.env lines, matched as they are shown) or nothing (keys); no hit may hinge on a hidden value.
       const q = String(args.query || '').toLowerCase();
-      const hits = searchFiles(root, args.query, args.glob).flatMap((h) => {
+      let found;
+      try { found = await searchFiles(root, args.query, args.glob, 80, { sub: args.path ? String(args.path) : '' }); } catch (e) { return `Error: ${e.message}`; }
+      const hits = found.flatMap((h) => {
         const k = secretKind(h.path);
         if (k === 'file') return [];
         const text = k === 'env' ? maskSecretText(h.path, h.text, 'env') : scrubSecrets(root, h.text);
         return text.toLowerCase().includes(q) ? [{ ...h, text }] : [];
       });
-      return hits.length ? hits.map((h) => `${h.path}:${h.line}: ${h.text}`).join('\n') : `No matches for "${args.query}".`; }
+      const note = searchNote(found);
+      return (hits.length ? hits.map((h) => `${h.path}:${h.line}: ${h.text}`).join('\n') : `No matches for "${args.query}".`) + (note ? `\n(${note}.)` : ''); }
     if (name === 'delete_file') { const to = trashFile(root, args.path); emit({ t: 'file', path: args.path, deleted: true, at: at() }); notes.push(`deleted ${args.path}`); return `Deleted ${args.path} (moved to ${to}).`; }
     if (name === 'scaffold') {
       const t = TEMPLATE_LIST.find((x) => x.name === args.template);

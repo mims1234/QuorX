@@ -262,13 +262,13 @@ test('the write guard judges where a path lands, not how it is spelled', () => {
   }
 });
 
-test('search_files does not follow links out of the project', (t) => {
+test('search_files does not follow links out of the project', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qx-sec-'));
   const out = fs.mkdtempSync(path.join(os.tmpdir(), 'qx-out-'));
   fs.writeFileSync(path.join(out, 'secret.txt'), 'needle-outside');
   fs.writeFileSync(path.join(root, 'a.txt'), 'needle-inside');
   try { fs.symlinkSync(path.join(out, 'secret.txt'), path.join(root, 'link.txt')); } catch { return t.skip('this account cannot make links'); }
-  const hits = searchFiles(root, 'needle');
+  const hits = await searchFiles(root, 'needle');
   assert.deepEqual(hits.map((h) => h.path), ['a.txt']);
 });
 
