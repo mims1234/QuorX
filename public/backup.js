@@ -74,9 +74,17 @@ function wire(box) {
     if (keys.checked && !$('#bkKeysOk').checked) { out.textContent = 'Tick "I understand" to include your API keys, or untick "Include my API keys".'; return; }
     const pick = await postJ('/api/pick-folder', { start: '' });
     if (pick.error || !pick.path) { out.textContent = pick.error || ''; return; }
+    // Keys leave QuorX in plain text: one last yes, naming the folder, and only then a one-time pass for them.
+    let keyPass = null;
+    if (keys.checked) {
+      if (!await uiConfirm(`Put your API keys, in plain text, in a backup in ${pick.path}? Anyone who can open that folder can spend on your OpenRouter account.`, { ok: 'Export with my keys', danger: true })) { out.textContent = 'Not exported.'; return; }
+      const p = await postJ('/api/backup/key-pass', {});
+      if (p.error || !p.pass) { out.textContent = `Not exported: ${p.error || 'no pass for the keys'}`; return; }
+      keyPass = p.pass;
+    }
     btn.disabled = true; out.textContent = 'Exporting…';
     let settings = null; try { settings = JSON.parse(localStorage.getItem(H.store) || 'null'); } catch { /* none saved */ }
-    const r = await postJ('/api/backup/export', { dir: pick.path, settings, logs: $('#bkLogs').checked, keys: keys.checked, keysWarned: $('#bkKeysOk').checked });
+    const r = await postJ('/api/backup/export', { dir: pick.path, settings, logs: $('#bkLogs').checked, keys: keys.checked, keysWarned: $('#bkKeysOk').checked, keyPass });
     btn.disabled = false;
     if (r.error) { out.textContent = `Not exported: ${r.error}`; return; }
     const c = r.counts;
