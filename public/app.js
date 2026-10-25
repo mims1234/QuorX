@@ -1883,30 +1883,6 @@ async function openFolderAsProject(btn, errEl, { pickOnly = false } = {}) {
   if (pickOnly) return made.id;
   await newChat(made.id);
 }
-// ---------- the pane's tabs: icons only when their names don't fit (the servers and full-width buttons stay on) ----------
-(() => {
-  const bar = document.getElementById('paneTabs'); if (!bar || !window.ResizeObserver) return;
-  let w = -1, tm = 0;
-  // Icons only as soon as any tab's name stops fitting (tabs shrink before the bar overflows), with a little room to spare.
-  // Checked once the size has settled (the pane can be mid-resize when the size first changes).
-  const fit = () => { clearTimeout(tm); tm = setTimeout(check, 60); };
-  const check = () => {
-    w = bar.clientWidth;
-    bar.classList.remove('icons-only');
-    // What the tabs and buttons need side by side (the spacer between them takes whatever is left, so it doesn't count).
-    const kids = [...bar.children].filter((k) => !k.classList.contains('pt-spacer') && k.getClientRects().length);
-    const gap = parseFloat(getComputedStyle(bar).columnGap) || 0, pad = parseFloat(getComputedStyle(bar).paddingLeft) + parseFloat(getComputedStyle(bar).paddingRight);
-    const need = kids.reduce((n, k) => n + k.scrollWidth, 0) + gap * Math.max(0, kids.length - 1) + pad;
-    const squeezed = [...bar.querySelectorAll('[data-tab]')].some((t) => t.scrollWidth > t.clientWidth + 1) || need > bar.clientWidth - 8;
-    if (squeezed) bar.classList.add('icons-only');
-    // The pane may still have been resizing: look again shortly, and once more if the width moved since.
-    setTimeout(() => { if (bar.clientWidth !== w) fit(); }, 250);
-  };
-  const ro = new ResizeObserver(fit); ro.observe(bar);
-  const pane = document.getElementById('pane'); if (pane) { ro.observe(pane); pane.addEventListener('transitionend', fit); }
-  addEventListener('resize', fit);
-  new MutationObserver(() => fit()).observe(bar, { subtree: true, childList: true, characterData: true }); // counts and dots change the width
-})();
 // ---------- the row under the tabs (Stop all, Close, Replay…): its text buttons shrink to their symbol when it's tight ----------
 // A button whose label starts with a symbol (■ Stop all, ✕ Close, ⏵ Replay) keeps just the symbol, and its full label
 // moves to its tip. Undone as soon as there is room again.
@@ -7371,7 +7347,7 @@ function devBadges(projectId, r) {
   if (focused()?.projectId !== projectId) return;
   const sb = $('#paneSrvBtn'), tb = $('#paneTabs [data-tab="term"]');
   if (sb) { const n = $('.hdr-count', sb); n.textContent = running || ''; n.hidden = !running; sb.classList.toggle('has-live', !!running); sb.title = `Servers: ${running ? `${running} running` : 'none running'} · run, stop and edit this project's dev servers`; }
-  if (tb) { tb.classList.toggle('busy', !!busy); tb.title = busy ? `Terminal: ${busy} command${busy > 1 ? 's' : ''} running now` : 'Terminal: every command and server in this project, live, and what is running in the background'; }
+  if (tb) { tb.classList.toggle('busy', !!busy); tb.title = busy ? `Terminal\n${busy} command${busy > 1 ? 's' : ''} running now` : 'Terminal\nYour own terminals, and every command and server in this project, live'; }
 }
 function devAfter(projectId, r) {
   if (!r || r.error) return;
