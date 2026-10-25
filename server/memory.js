@@ -18,10 +18,23 @@ export function loadMemory() {
   try { const j = JSON.parse(fs.readFileSync(FILE(), 'utf8')); return { on: j.on !== false, items: Array.isArray(j.items) ? j.items.filter((x) => x && typeof x.text === 'string') : [] }; }
   catch { return { on: true, items: [] }; }
 }
+// On Windows a rename can fail for a moment while another program has the file open (antivirus, the search indexer,
+// a backup tool): EPERM, EBUSY or EACCES. So it is tried again a few times, about half a second in all, before the
+// save gives up.
+const BUSY = new Set(['EPERM', 'EBUSY', 'EACCES']);
+const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+function renameSoon(from, to) {
+  for (let i = 0; ; i++) {
+    try { return fs.renameSync(from, to); } catch (e) {
+      if (!BUSY.has(e.code) || i >= 8) throw e;
+      pause(20 + i * 10);
+    }
+  }
+}
 function write(mem) {
   fs.mkdirSync(path.dirname(FILE()), { recursive: true });
   fs.writeFileSync(FILE() + '.tmp', JSON.stringify({ version: 1, on: mem.on, items: mem.items }, null, 2));
-  fs.renameSync(FILE() + '.tmp', FILE());
+  renameSoon(FILE() + '.tmp', FILE());
   return mem;
 }
 

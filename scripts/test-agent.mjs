@@ -2087,6 +2087,23 @@ test('memory has a hard size limit, checked again on every save', () => {
   } finally { resetMemory(); }
 });
 
+test('a memory save waits out a file another program holds for a moment, and gives up only if it stays held', () => {
+  resetMemory();
+  const real = fs.renameSync;
+  const busy = (left, code = 'EPERM') => (from, to) => { if (String(to).endsWith('memory.json') && left-- > 0) throw Object.assign(new Error(`${code}: operation not permitted, rename`), { code }); return real(from, to); };
+  try {
+    fs.renameSync = busy(3);
+    assert.ok(addMemory('I use pnpm').item, 'saved after the file was free again');
+    assert.equal(loadMemory().items.length, 1);
+    fs.renameSync = busy(2, 'EBUSY');
+    assert.ok(addMemory('Prefer dark themes').item);
+    fs.renameSync = busy(Infinity);
+    assert.throws(() => addMemory('Short answers'), /EPERM/, 'a file that stays held still fails, after a short wait');
+    fs.renameSync = (from, to) => { throw Object.assign(new Error('ENOSPC: no space left'), { code: 'ENOSPC' }); };
+    assert.throws(() => addMemory('Tabs over spaces'), /ENOSPC/, 'other errors are not retried');
+  } finally { fs.renameSync = real; resetMemory(); }
+});
+
 test('every chat gets the memory, and the prompt stays small; small models get the facts but no remember tool', async () => {
   resetMemory();
   try {
