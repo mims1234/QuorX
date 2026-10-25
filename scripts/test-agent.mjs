@@ -2928,6 +2928,16 @@ test('🧩 in the user’s tab: a reading request asks before typing outside a s
     assert.match(res[2], /The user said no to that \(type "hi all" into textbox "Message #bat-cave"\)/);
     assert.match(res[3], /The user said no to opening example\.com in their Chrome/);
     assert.deepEqual(asked.map((w) => w.replace(/^In your tab on \S+: /, '')), ['type "hi all" into textbox "Message #bat-cave"', 'Open example.com in your Chrome, signed in as you']);
+    // ⚡ YOLO with "act in your tabs without asking": the same typing runs with no card, only a note.
+    asked.length = 0; const notes = [];
+    const yolo = await run((body, i) => [
+      reply('', [['browser', { action: 'open', target: 'given' }]]),
+      reply('', [['browser', { action: 'type', text: 'hi all', selector: 'input[aria-label="Message #bat-cave"]' }]]),
+      reply('Done.'),
+    ][i], { chatId, text: 'check the bat-cave channel and summarise the last messages', settings: { chromeAccess: true, approval: 'yolo', chromeYoloActs: true }, onEvent: (e, runId) => { if (e.t === 'note') notes.push(e.msg); if (e.t === 'approval' && e.tool === 'browser') { asked.push(e.what); setTimeout(() => answerApproval(runId, e.id, { approve: false }), 5); } } });
+    assert.deepEqual(asked, []);
+    assert.match(String(toolResults(yolo.bodies.at(-1))[1]), /typed 6 characters/);
+    assert.ok(notes.some((m) => /YOLO: ran without asking .*type "hi all"/.test(m)), notes.join('\n'));
   } finally { takeBackTab(chatId); await userBrowse(sid, 'close').catch(() => {}); srv.close(); (await import('../server/browser.js')).closeBrowser(); }
 });
 

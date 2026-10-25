@@ -5687,6 +5687,7 @@ function settingsPanels(S) {
       + stCard('In your tabs', 'What the agent may do in the tabs of your own Chrome.',
         stRow('Read-only for reading requests', 'When you ask to read, check or summarise, typing into your account outside a search box asks you first. A site your request didn\'t name always asks before it opens in your Chrome.', stSwitch('browseReadOnly', S.browseReadOnly !== false))
         + stRow('Deciders check typing in your tabs', 'Before the agent types or presses Enter in your own tab, the deciders judge from your request alone (never the page) whether it serves what you asked. Below 35%, you are asked. One decider call per step.', stSwitch('chromeCheck', S.chromeCheck !== false))
+        + stRow('⚡ YOLO: act in your tabs without asking', 'Ticked, in YOLO the agent sends, posts, submits, buys or deletes in your own tabs without the red card (each step is still noted in the chat). Typing into a password field still asks, and so does a step the deciders doubt. Strict always asks.', stSwitch('chromeYoloActs', S.chromeYoloActs === true))
         + stRow('Network reading in your tabs', 'The agent can list the data requests a page makes and read its JSON or text answers (GET only). Cookies, tokens and passwords are removed, and nothing is ever sent again.', stSwitch('chromeNetwork', S.chromeNetwork !== false))
         + stRow('Close the agent\'s tabs when it\'s done', 'Ticked: when a reply ends, the tabs it opened in your Chrome close, so an empty QuorX window means it has finished. Unticked (the default): they stay in the QuorX window, so you can see where it left off, and the chat\'s next reply carries on in its tab. Tabs you gave it always stay open.', stSwitch('chromeCloseTabs', S.chromeCloseTabs === true)))
       + stCard('Site rules', 'Which sites the agent may open in your Chrome, and where it may type.',
@@ -5976,7 +5977,7 @@ function resetCategory() {
     S.yoloAuto = {};
   }
   if (ST.cat === 'docs') { const dd = G.cfg.docDefaults || {}; Object.assign(S, { maxUploadMB: dd.maxUploadMB, inlineDocTokens: dd.inlineDocTokens, pdfNative: dd.pdfNative, embedModel: dd.embedModel, docIndexBudget: dd.docIndexBudget }); }
-  if (ST.cat === 'code') Object.assign(S, { browseReadOnly: d.browseReadOnly, chromeCheck: d.chromeCheck, chromeNetwork: d.chromeNetwork, chromeCloseTabs: d.chromeCloseTabs, chromeSitesNever: d.chromeSitesNever, chromeSitesAlways: d.chromeSitesAlways, chromeSitesRead: d.chromeSitesRead });
+  if (ST.cat === 'code') Object.assign(S, { browseReadOnly: d.browseReadOnly, chromeCheck: d.chromeCheck, chromeYoloActs: d.chromeYoloActs, chromeNetwork: d.chromeNetwork, chromeCloseTabs: d.chromeCloseTabs, chromeSitesNever: d.chromeSitesNever, chromeSitesAlways: d.chromeSitesAlways, chromeSitesRead: d.chromeSitesRead });
   // The agent folder's three have no server default: the agent falls back to these (server/agent.js).
   if (ST.cat === 'storage') { S.storage = { ...(G.cfg.storageDefaults || {}) }; Object.assign(S, { agentSpaceMB: 500, undoKeep: 10, undoDays: 7 }); }
   ST.dirty = true; drawSettings();
