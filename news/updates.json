@@ -24,6 +24,7 @@
         { "kind": "improved", "text": "Pane tabs are icons only, with each tab's name and what it does in its hover tip.", "pr": 131 },
         { "kind": "improved", "text": "Durations read as people say them: 21m 42s instead of 1301.5s.", "pr": 122 },
         { "kind": "improved", "text": "An update button next to ✕ in Settings, and a live update strip in the sidebar.", "pr": 103 },
+        { "kind": "safety", "text": "QuorX opens at its own address, quorx.localhost, so your sign-in no longer reaches dev servers you run on localhost.", "pr": 149 },
         { "kind": "safety", "text": "Starting a server gets the same check as any command, and Stop pressed before a command starts means it never runs.", "pr": 128 },
         { "kind": "safety", "text": "Reading your keys by any route asks you first, and private keys are hidden from the agent in full.", "pr": 130 },
         { "kind": "safety", "text": "Keys and clicks from the agent go only to apps it started, never to your own windows.", "pr": 130 },
