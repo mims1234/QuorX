@@ -772,10 +772,10 @@ npm install
 npm start
 ```
 
-Then open http://localhost:5188. QuorX needs Node.js 20 or newer. `npm install` adds only `node-pty` and xterm.js for
-the terminal tabs. `node-pty` ships ready-built for Windows and macOS (x64 and arm64); on Linux it compiles, which
-needs Python 3, `make` and a C++ compiler. Without it, terminal tabs fall back to a plain shell and everything else
-works.
+Then open the link `npm start` prints; QuorX opens at http://quorx.localhost:5188. QuorX needs Node.js 20 or newer.
+`npm install` adds only `node-pty` and xterm.js for the terminal tabs. `node-pty` ships ready-built for Windows and
+macOS (x64 and arm64); on Linux it compiles, which needs Python 3, `make` and a C++ compiler. Without it, terminal tabs
+fall back to a plain shell and everything else works.
 
 ⚙ Settings → **Setup check** has one row per thing this computer needs or can use (the OpenRouter key, the address,
 Git, Python 3, Edge or Chrome, pdftotext, PowerShell 7, the toolchains the packs know, free space, and whether there

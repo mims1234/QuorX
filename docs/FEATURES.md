@@ -26,11 +26,15 @@ a real browser and your real toolchains, and shows how it got every answer.
   who see only facts and your own messages. Deleting your profile, a drive root or anything above the project is
   refused outright.
 - **Undo covers commands too.** The project is snapshotted before each command, so ↶ Undo and Review changes cover
-  what a build script or an `rm` did as well as the agent's own file edits.
+  what a build script or an `rm` did as well as the agent's own file edits, also when commands run side by side. If a
+  file can't be covered, the command's result names it.
 - **Stop ends everything.** Each command runs in a Windows job (a process group on macOS and Linux), so Stop ends
   every process it started and confirms "0 processes left".
 - **A tripwire and spending caps.** A command that deletes many files outside the project is stopped. A cap per
-  reply, an optional daily cap, project budgets and a media cap keep spending where you set it.
+  reply, an optional daily cap, project budgets and a media cap keep spending where you set it. A call you stop, or one
+  that fails part-way, still counts at OpenRouter's own figure, so the totals match what you are billed.
+- **Video Mode.** A film starts with a brief, a pick of story directions and a storyboard, with the music chosen
+  first, before anything is spent. The finished film is the deliverable, put together from moving shots.
 - **Films from pictures, finished with ffmpeg.** A clip can start from a picture the agent made (or one in the project)
   when the video model takes a first frame, so characters and style hold from shot to shot. `edit_video` then joins
   clips, stills, a voice-over and music into one .mp4 in the project with ffmpeg, as an ordinary checked command.
@@ -42,7 +46,17 @@ a real browser and your real toolchains, and shows how it got every answer.
 - **The Running tab.** Everything running in a project in one list: background builds, servers, the agent's
   terminals and yours, who started each one, with Stop and Stop all.
 - **Real apps, driven like a person would.** A real browser (a real tab you can take over in the desktop app),
-  desktop windows through UI Automation, Android emulators, and terminal programs that ask questions.
+  desktop windows through UI Automation, Android emulators, and terminal programs that ask questions. Keys and clicks
+  go only to apps the agent started, never to your own windows.
+- **Your own Chrome, when you choose.** With the QuorX extension for Chrome, Brave or Edge, tick 🧩 Chrome in a chat
+  and the agent works in your own browser, signed in as you, or give it a single tab. Sending, posting or buying in your
+  account asks you first (unless you turn on ⚡ YOLO's "act in your tabs without asking"), and the deciders check each
+  step it types. The agent's tabs stay open, and the next reply carries
+  on in them. Pairing the extension shows a code in both places, so you know it is yours.
+- **Long replies, a steady app.** Up to 500 steps a reply by default, with a card at the limit that asks how to carry
+  on. A streaming reply keeps its finished text in place, so you can select it, and big projects, long runs and
+  searches no longer hold QuorX up. Search skips what `.gitignore` ignores and build output, and says when it stops
+  early.
 - **The agent tests its own work before it replies.** Every file is checked as it is written. Before the final
   reply, QuorX checks the changed files again, opens what was built, runs the compiler checks, catches weakened
   tests, and a separate reviewer model plays the result and scores it. Problems go back to the agent.
@@ -50,8 +64,14 @@ a real browser and your real toolchains, and shows how it got every answer.
   chat builds to it. Point at part of a page to say what should change, and export a page as PDF or PNG or the
   project as a ZIP. Any MCP client can hand work to QuorX ([details](REPORT.md#design-systems-comments-exports-and-replay)).
 - **News, inside the app.** What's new in each version, reports on models, tests and platforms, and research
-  articles with interactive charts and flows. Numbers about the computer it runs on are worked out from that
-  computer's own logs and never uploaded.
+  articles with interactive charts and flows. New articles arrive from the website between versions. Numbers about the
+  computer it runs on are worked out from that computer's own logs and never uploaded.
+- **Settings you can see through.** Each Settings category is laid out for what it controls, with Reset category to go
+  back to the defaults. Storage shows what QuorX takes on this computer and clears it; Skills lets you write, import and
+  edit your own skills, for every project or one.
+- **Backups of everything.** Export my QuorX saves your chats, projects, skills and memory to one file, and Import
+  brings them back on this or another computer. Big backups stream to disk without slowing QuorX. API keys go in only
+  when you ask, and only after one more yes that names the folder.
 
 | | |
 |---|---|
