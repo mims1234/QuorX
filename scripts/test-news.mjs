@@ -317,3 +317,7 @@ test('news local: test results are kept by each suite and shown, and the view is
   assert.equal(localView('tests').test.pass, 9, 'cached');
   assert.equal(localView('tests', { fresh: true }).empty, true);
 });
+
+// Chat save merging and the code viewer's Formatted view (kept in their own files).
+import './test-chatmerge.mjs';
+import './test-codeview.mjs';
