@@ -683,7 +683,7 @@ const server = http.createServer(async (req, res) => {
         if (fmt === 'zip') {
           if (!validId(b.projectId)) return json(res, 400, { error: 'bad project id' });
           const proj = listProjects().find((p) => p.id === b.projectId);
-          const r = zipFolder(workspaceDir(b.projectId));
+          const r = await zipFolder(workspaceDir(b.projectId));
           if (r.skipped.length) res.setHeader('X-Skipped', String(r.skipped.length));
           return send(r.zip, 'application/zip', `${safeName(proj?.name || b.projectId)}.zip`);
         }
@@ -704,7 +704,7 @@ const server = http.createServer(async (req, res) => {
       const b = JSON.parse(await readBody(req, 5e6) || '{}');
       try {
         // API keys go in only with both boxes ticked, and only from this computer.
-        if (url.pathname === '/api/backup/export') return json(res, 200, exportBackup({ dir: String(b.dir || ''), settings: b.settings && typeof b.settings === 'object' ? b.settings : null, includeLogs: b.logs === true, includeKeys: b.keys === true && b.keysWarned === true && isLoopback(req), version: VERSION }));
+        if (url.pathname === '/api/backup/export') return json(res, 200, await exportBackup({ dir: String(b.dir || ''), settings: b.settings && typeof b.settings === 'object' ? b.settings : null, includeLogs: b.logs === true, includeKeys: b.keys === true && b.keysWarned === true && isLoopback(req), version: VERSION }));
         if (url.pathname === '/api/backup/find') return json(res, 200, { backups: findBackups(String(b.dir || '')) });
         if (url.pathname === '/api/backup/inspect') return json(res, 200, inspectBackup(String(b.file || '')));
         if (url.pathname === '/api/backup/import') return json(res, 200, importBackup(String(b.file || ''), { overwrite: b.overwrite === true, folders: b.folders || {}, skip: Array.isArray(b.skip) ? b.skip : [], keys: b.keys === true && isLoopback(req) }));

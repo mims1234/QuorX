@@ -274,7 +274,7 @@ test('the ZIP export holds every project file, compressed or stored, and leaves 
   fs.mkdirSync(path.join(dir, 'css')); fs.writeFileSync(path.join(dir, 'css', 'site.css'), 'body{margin:0}');
   fs.mkdirSync(path.join(dir, '.quorx')); fs.writeFileSync(path.join(dir, '.quorx', 'log.md'), 'secret');
   fs.mkdirSync(path.join(dir, 'node_modules')); fs.writeFileSync(path.join(dir, 'node_modules', 'x.js'), 'x');
-  const { zip, files } = zipFolder(dir);
+  const { zip, files } = await zipFolder(dir);
   assert.equal(files, 2);
   assert.equal(zip.readUInt32LE(zip.length - 22), 0x06054b50, 'ends with the central directory record');
   assert.equal(zip.readUInt16LE(zip.length - 12), 2);
