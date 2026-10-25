@@ -174,12 +174,14 @@ export function syncNews({ force = false } = {}) {
       fs.rmSync(old, { recursive: true, force: true });
       if (fs.existsSync(cache)) fs.renameSync(cache, old);
       fs.renameSync(next, cache);
-      fs.rmSync(old, { recursive: true, force: true });
+      try { fs.rmSync(old, { recursive: true, force: true }); } catch { /* the new copy is in place; the old one goes next time */ }
       const now = new Date().toISOString();
       saveState({ syncedAt: now, checkedAt: now, generated: feed.generated, files: feed.files, error: undefined });
     } catch (e) {
-      fs.rmSync(next, { recursive: true, force: true });
-      saveState({ checkedAt: new Date().toISOString(), error: String(e && e.name === 'AbortError' ? 'the website didn\'t answer in time' : e.message || e).slice(0, 300) });
+      // The cleanup can fail too (antivirus holding a file, a full disk). Nothing here may throw: the callers don't
+      // wait for this, and an error out of it would end QuorX and every running reply.
+      try { fs.rmSync(next, { recursive: true, force: true }); } catch { /* removed on the next sync */ }
+      try { saveState({ checkedAt: new Date().toISOString(), error: String(e && e.name === 'AbortError' ? 'the website didn\'t answer in time' : e?.message || e).slice(0, 300) }); } catch { /* the state stays as it was */ }
     } finally { running = null; }
     return remoteState();
   })();

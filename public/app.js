@@ -451,6 +451,10 @@ function openPalette() {
   if (!d.open) d.showModal();
   $('#palInput', d).focus();
 }
+// Typing Chinese, Japanese or Korean, Enter picks the word the input method offers. It must not also send the
+// message, save a name or answer a card, so while a word is being composed no handler on the page sees that Enter
+// (the input method still gets it). keyCode 229 is what some browsers report during composition instead.
+window.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.isComposing || e.keyCode === 229)) e.stopImmediatePropagation(); }, true);
 document.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'k') {
     e.preventDefault();
@@ -7523,6 +7527,11 @@ async function startXterm(x) {
   x.es = new EventSource(`/api/pty/stream?project=${encodeURIComponent(x.projectId)}&tab=${encodeURIComponent(x.tab)}`);
   x.es.onmessage = (ev) => {
     const e = JSON.parse(ev.data);
+    // Each (re)connection starts with the shell's whole recent output: after a sleep or a network blip the stream
+    // reconnects by itself, so the screen is cleared first instead of showing everything twice.
+    if (e.replay) x.term.reset();
+    // The shell is gone (QuorX restarted, or it ended while the page was away): stop following it.
+    if (e.none) { x.exited = true; x.es.close(); x.term.write(`\r\n\x1b[90m[the shell ended · press Enter for a new one]\x1b[0m\r\n`); return; }
     if (e.d) x.term.write(e.d);
     if (e.exit != null && !e.closed) { x.exited = true; x.es.close(); x.term.write(`\r\n\x1b[90m[the shell ended${e.exit ? ` with code ${e.exit}` : ''} · press Enter for a new one]\x1b[0m\r\n`); }
   };

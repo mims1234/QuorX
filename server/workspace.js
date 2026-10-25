@@ -74,7 +74,7 @@ function otherProjectDirs(root) {
   try { return new Set(listProjects().map((p) => norm(p.dir)).filter((d) => d !== norm(root))); } catch { return new Set(); }
 }
 const isOtherProject = (dir, others) => others.has(norm(dir)) || fs.existsSync(path.join(dir, '.quorx')) || fs.existsSync(path.join(dir, '.openharness'));
-export const SKIPPED = /\((another project, )?skipped\)$/;
+export const SKIPPED = /\((another project, |unreadable, )?skipped\)$/;
 // match (optional): only paths it says yes to (the pickers' search); until (optional): stop at this time, with what
 // was found so far (a huge project never holds a search up).
 export function listFiles(root, max = 300, { match = null, until = 0 } = {}) {
@@ -83,8 +83,18 @@ export function listFiles(root, max = 300, { match = null, until = 0 } = {}) {
   // .quorx is listed last, so a full scratch folder never pushes the project's own files out of the list.
   let agentDir = null;
   const add = (rel, size) => { if (!match || match(rel.toLowerCase())) out.push({ path: rel, size: size() }); };
+  // A file can vanish or be locked between the listing and its size (a build rewriting it).
+  const sizeOf = (p) => () => { try { return fs.statSync(p).size; } catch { return 0; } };
   const walk = (dir) => {
-    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    let entries;
+    // A folder inside the project that can't be read (locked by its permissions, an offline OneDrive folder, a mount
+    // that answers with an error) is listed as skipped instead of failing the whole listing, the search and the reply.
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (err) {
+      if (dir === root) throw err;
+      if (!match) out.push({ path: path.relative(root, dir).replaceAll('\\', '/') + '/ (unreadable, skipped)', size: 0 });
+      return;
+    }
+    for (const e of entries) {
       if (out.length >= max || (until && Date.now() > until)) return;
       if (e.name === '.quorx' && dir === root && e.isDirectory()) { agentDir = path.join(dir, e.name); continue; }
       if (e.isSymbolicLink()) continue; // a link can lead outside the project
@@ -92,7 +102,7 @@ export function listFiles(root, max = 300, { match = null, until = 0 } = {}) {
       const p = path.join(dir, e.name);
       if (e.isDirectory() && isOtherProject(p, others)) { if (!match) out.push({ path: path.relative(root, p).replaceAll('\\', '/') + '/ (another project, skipped)', size: 0 }); continue; }
       if (e.isDirectory()) walk(p);
-      else add(path.relative(root, p).replaceAll('\\', '/'), () => fs.statSync(p).size);
+      else add(path.relative(root, p).replaceAll('\\', '/'), sizeOf(p));
     }
   };
   if (fs.existsSync(root)) walk(root);
@@ -101,7 +111,7 @@ export function listFiles(root, max = 300, { match = null, until = 0 } = {}) {
       if (out.length >= max) break;
       if (!AGENT_VISIBLE.has(k.name)) continue;
       const p = path.join(agentDir, k.name);
-      if (k.isDirectory()) walk(p); else add(path.relative(root, p).replaceAll('\\', '/'), () => fs.statSync(p).size);
+      if (k.isDirectory()) walk(p); else add(path.relative(root, p).replaceAll('\\', '/'), sizeOf(p));
     }
   }
   return out;

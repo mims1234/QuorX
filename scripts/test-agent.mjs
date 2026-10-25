@@ -1246,6 +1246,23 @@ test('a project inside another project is listed once and not walked, in list_fi
   } finally { forgetProject(id); }
 });
 
+test('a folder that can\'t be read is listed as skipped, and list_files and search_files carry on', { skip: process.platform !== 'win32' && 'uses Windows permissions' }, async () => {
+  const { listFiles, searchFiles } = await import('../server/workspace.js');
+  const { execFileSync } = await import('node:child_process');
+  const dir = tempDir('quorx-locked-');
+  for (const f of ['index.html', 'locked/secret.txt', 'src/app.js']) {
+    fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true }); fs.writeFileSync(path.join(dir, f), 'needle');
+  }
+  const locked = path.join(dir, 'locked'), me = process.env.USERNAME;
+  execFileSync('icacls', [locked, '/deny', `${me}:(RD)`], { windowsHide: true, stdio: 'ignore' });
+  try {
+    assert.throws(() => fs.readdirSync(locked), /EPERM|EACCES/, 'the folder really can\'t be listed');
+    const paths = listFiles(dir).map((x) => x.path);
+    assert.ok(paths.includes('locked/ (unreadable, skipped)'), paths.join(', '));
+    assert.ok(paths.includes('index.html') && paths.includes('src/app.js'), 'the rest is still listed');
+    assert.deepEqual(searchFiles(dir, 'needle').map((h) => h.path).sort(), ['index.html', 'src/app.js']);
+  } finally { execFileSync('icacls', [locked, '/remove:d', me], { windowsHide: true, stdio: 'ignore' }); }
+});
 
 test('when the steps run out while the plan has open items, the reply keeps going (extra rounds, then it wraps up)', async () => {
   let b = 0;

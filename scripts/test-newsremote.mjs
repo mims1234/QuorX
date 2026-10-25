@@ -196,3 +196,16 @@ test('news remote: the routes turn it on and off and check now', async () => {
     assert.equal(remoteState().on, false);
   } finally { await site.close(); setRemote(true); }
 });
+
+test('news remote: a failed download whose cleanup fails too ends quietly, never with an error out of the sync', async () => {
+  reset();
+  const state = path.join(process.env.OH_HOME, 'data', 'news-remote.json');
+  // The feed promises a file the site doesn't match, so the download fails. The state file can't be written either
+  // (a folder stands in its place, as a full disk or a locked file would), so the cleanup's own save fails too.
+  const wrongHash = (f) => { f.articles[0].files[0].sha256 = '0'.repeat(64); return f; };
+  const site = await fakeSite({ 'articles/hello': { 'index.md': md('Hello'), 'pic.png': PNG } }, { feedPatch: wrongHash });
+  fs.mkdirSync(state, { recursive: true });
+  try {
+    await assert.doesNotReject(syncNews({ force: true }));
+  } finally { await site.close(); fs.rmSync(state, { recursive: true, force: true }); }
+});
