@@ -92,64 +92,212 @@ function markup(code) {
 export function highlight(code, lang) { return lang === 'html' ? markup(code) : tokens(code, lang); }
 
 // ---------- formatting ----------
-// Walks the code once, tracking strings, comments and template literals, so braces and
-// semicolons inside them are never touched.
-function layoutBraces(code, { css = false } = {}) {
+// Formatting only ever changes whitespace between tokens: strings, template literals (with their ${} parts),
+// regex literals, comments, and in HTML the text, entities and attribute values, are kept exactly as written.
+
+// The end (exclusive) of the string, template or regex literal that starts at i, or -1 when it isn't one.
+function scanQuoted(code, i) {
+  const q = code[i];
+  let j = i + 1;
+  while (j < code.length && code[j] !== q) { if (code[j] === '\\') j++; else if (code[j] === '\n') return j; j++; }
+  return Math.min(j + 1, code.length);
+}
+function scanTemplate(code, i) {
+  let j = i + 1;
+  while (j < code.length) {
+    const c = code[j];
+    if (c === '\\') { j += 2; continue; }
+    if (c === '`') return j + 1;
+    if (c === '$' && code[j + 1] === '{') { j = scanExpr(code, j + 2); continue; }
+    j++;
+  }
+  return code.length;
+}
+// Inside ${ … }: up to its closing brace, past nested braces, strings, templates and comments.
+function scanExpr(code, j) {
+  let depth = 1;
+  while (j < code.length) {
+    const c = code[j], two = code.slice(j, j + 2);
+    if (two === '//') { const e = code.indexOf('\n', j); j = e < 0 ? code.length : e; continue; }
+    if (two === '/*') { const e = code.indexOf('*/', j + 2); j = e < 0 ? code.length : e + 2; continue; }
+    if (c === '"' || c === "'") { j = scanQuoted(code, j); continue; }
+    if (c === '`') { j = scanTemplate(code, j); continue; }
+    if (c === '{') depth++;
+    if (c === '}' && !--depth) return j + 1;
+    j++;
+  }
+  return code.length;
+}
+function scanRegex(code, i) {
+  let j = i + 1, cls = false;
+  while (j < code.length) {
+    const c = code[j];
+    if (c === '\n') return -1;
+    if (c === '\\') { j += 2; continue; }
+    if (c === '[') cls = true; else if (c === ']') cls = false; else if (c === '/' && !cls) break;
+    j++;
+  }
+  if (j >= code.length) return -1;
+  j++;
+  while (j < code.length && /[a-z]/i.test(code[j])) j++;
+  return j;
+}
+// A / starts a regex (not a division) after an operator, an opening bracket, a keyword like return, or nothing.
+const REGEX_AFTER_WORD = /^(?:return|typeof|instanceof|in|of|new|delete|void|throw|case|do|else|yield|await)$/;
+const regexCanStart = (last, line) => {
+  if (!last) return true;
+  if (/[\w$]/.test(last)) { const w = line.match(/([\w$]+)\s*$/); return !!w && REGEX_AFTER_WORD.test(w[1]); }
+  return /[(,=:[!&|?{};+\-*%<>~^]/.test(last);
+};
+// Walks the code once, lining up braces and semicolons; everything listed above is skipped over whole.
+// base: an indent put before every line it lays out (a <script> inside HTML); never inside a multi-line literal.
+function layoutBraces(code, { css = false, base = '' } = {}) {
   const minified = code.split('\n').some((l) => l.length > 220);
-  let out = '', depth = 0, i = 0, paren = 0, line = '';
-  const push = () => { const t = line.trim(); if (t) out += '  '.repeat(Math.max(0, depth)) + t + '\n'; else if (!minified && out && !out.endsWith('\n\n')) out += '\n'; line = ''; };
+  let out = '', depth = 0, i = 0, paren = 0, line = '', last = '';
+  const push = () => { const t = line.trim(); if (t) out += base + '  '.repeat(Math.max(0, depth)) + t + '\n'; else if (!minified && out && !out.endsWith('\n\n')) out += '\n'; line = ''; };
+  const take = (end) => { line += code.slice(i, end); i = end; };
   while (i < code.length) {
     const c = code[i], two = code.slice(i, i + 2);
-    if (two === '//' && !css) { const e = code.indexOf('\n', i); const end = e < 0 ? code.length : e; line += code.slice(i, end); i = end; continue; }
-    if (two === '/*') { const e = code.indexOf('*/', i + 2); const end = e < 0 ? code.length : e + 2; line += code.slice(i, end); i = end; continue; }
-    if (c === '"' || c === "'" || c === '`') {
-      let j = i + 1;
-      while (j < code.length && code[j] !== c) { if (code[j] === '\\') j++; else if (c !== '`' && code[j] === '\n') break; j++; }
-      line += code.slice(i, j + 1); i = j + 1; continue;
-    }
-    if (c === '\n') { if (!minified) push(); else line += ' '; i++; continue; }
+    if (two === '//' && !css) { const e = code.indexOf('\n', i); take(e < 0 ? code.length : e); continue; }
+    if (two === '/*') { const e = code.indexOf('*/', i + 2); take(e < 0 ? code.length : e + 2); continue; }
+    if (c === '"' || c === "'") { take(scanQuoted(code, i)); last = c; continue; }
+    if (c === '`' && !css) { take(scanTemplate(code, i)); last = c; continue; }
+    if (c === '/' && !css && regexCanStart(last, line)) { const e = scanRegex(code, i); if (e > 0) { take(e); last = 'r'; continue; } }
+    // A line break in the source stays one (some code leans on it: no semicolons).
+    if (c === '\n') { push(); i++; continue; }
     if (c === '(' || c === '[') paren++;
     if (c === ')' || c === ']') paren = Math.max(0, paren - 1);
-    if (c === '{') { line += ' {'; push(); depth++; i++; continue; }
-    if (c === '}') { push(); depth--; line = '}'; i++; if (/^\s*[;,)]/.test(code.slice(i))) continue; if (!/^\s*(else|catch|finally|while)\b/.test(code.slice(i))) push(); else line += ' '; continue; }
+    if (!/\s/.test(c)) last = c;
+    if (c === '{') { line = line.replace(/\s+$/, '') + ' {'; push(); depth++; i++; continue; }
+    if (c === '}') { push(); depth--; line = '}'; i++; if (/^\s*[;,)]/.test(code.slice(i, i + 200))) continue; if (!/^\s*(else|catch|finally|while)\b/.test(code.slice(i, i + 200))) push(); else line += ' '; continue; }
     if (c === ';' && paren === 0) { line += ';'; push(); i++; continue; }
     line += c; i++;
   }
   push();
-  return out.replace(/ {2,}\{/g, ' {').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
+  return out.trimEnd() + '\n';
 }
+
+// HTML is read by a small tokenizer, not the browser's parser: nothing is decoded (&lt;script&gt; stays as written)
+// and nothing is added (no implied <html>, <tbody> or closing tags), so the formatted page is the same page.
 const VOID = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr']);
 const INLINE = new Set(['a', 'b', 'i', 'em', 'strong', 'span', 'small', 'code', 'kbd', 'abbr', 'sup', 'sub', 'label', 'button', 'br']);
+// Kept exactly as written inside: their whitespace matters (or, for script and style, is laid out as code).
+const RAW = new Set(['script', 'style', 'pre', 'textarea', 'title']);
+// An open tag that closes the one before it when the source leaves the closing tag out.
+const AUTO_CLOSE = { li: ['li'], option: ['option'], dt: ['dt', 'dd'], dd: ['dt', 'dd'], tr: ['tr', 'td', 'th'], td: ['td', 'th'], th: ['td', 'th'], p: ['p'] };
+const CLOSES_P = new Set(['address', 'article', 'aside', 'blockquote', 'div', 'dl', 'fieldset', 'footer', 'form', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'header', 'hr', 'main', 'nav', 'ol', 'p', 'pre', 'section', 'table', 'ul']);
+const WS = /[ \t\n\r\f]+/g; // HTML's whitespace (not a no-break space)
+/** The source as tokens: text, comment, doctype, open (name, attrs as written, selfClose), close, and for RAW
+ * elements one token with its body. Exported for the tests. */
+export function htmlTokens(code) {
+  const out = [];
+  let i = 0, text = '';
+  const flush = () => { if (text) out.push({ t: 'text', raw: text }); text = ''; };
+  while (i < code.length) {
+    if (code[i] !== '<') { const n = code.indexOf('<', i); const end = n < 0 ? code.length : n; text += code.slice(i, end); i = end; continue; }
+    if (code.startsWith('<!--', i)) { const e = code.indexOf('-->', i + 4); const end = e < 0 ? code.length : e + 3; flush(); out.push({ t: 'comment', raw: code.slice(i, end) }); i = end; continue; }
+    if (code.startsWith('<![CDATA[', i)) { const e = code.indexOf(']]>', i + 9); const end = e < 0 ? code.length : e + 3; flush(); out.push({ t: 'comment', raw: code.slice(i, end) }); i = end; continue; }
+    if (/^<[!?]/.test(code.slice(i, i + 2))) { const e = code.indexOf('>', i); const end = e < 0 ? code.length : e + 1; flush(); out.push({ t: 'doctype', raw: code.slice(i, end) }); i = end; continue; }
+    const close = /^<\/([A-Za-z][\w:-]*)[^>]*>/.exec(code.slice(i, i + 300));
+    if (close) { flush(); out.push({ t: 'close', name: close[1].toLowerCase(), raw: close[0] }); i += close[0].length; continue; }
+    const open = /^<([A-Za-z][\w:-]*)/.exec(code.slice(i, i + 300));
+    if (!open) { text += '<'; i++; continue; }
+    // Attributes one at a time, so a > inside a quoted value doesn't end the tag.
+    let j = i + open[0].length, selfClose = false;
+    const attrs = [];
+    for (;;) {
+      while (j < code.length && /\s/.test(code[j])) j++;
+      if (j >= code.length) break;
+      if (code[j] === '>') { j++; break; }
+      if (code.startsWith('/>', j)) { selfClose = true; j += 2; break; }
+      const nm = /^[^\s"'>/=]+|^[/"'=]/.exec(code.slice(j, j + 300));
+      let a = nm[0]; j += a.length;
+      const eq = /^\s*=\s*/.exec(code.slice(j, j + 100));
+      if (eq && nm[0] !== '/') {
+        j += eq[0].length;
+        let v;
+        if (code[j] === '"' || code[j] === "'") { const e = code.indexOf(code[j], j + 1); v = code.slice(j, e < 0 ? code.length : e + 1); }
+        else v = /^[^\s>]*/.exec(code.slice(j))[0];
+        a += '=' + v; j += v.length;
+      }
+      if (a !== '/') attrs.push(a);
+    }
+    flush();
+    const name = open[1].toLowerCase(), tag = { t: 'open', name, attrs, selfClose, raw: code.slice(i, j) };
+    i = j;
+    if (RAW.has(name) && !selfClose) {
+      const m = new RegExp(`</${name}\\s*>`, 'i').exec(code.slice(i));
+      const end = m ? i + m.index : code.length;
+      out.push({ ...tag, t: 'raw', body: code.slice(i, end), close: m ? m[0] : '' });
+      i = m ? end + m[0].length : end;
+      continue;
+    }
+    out.push(tag);
+  }
+  flush();
+  return out;
+}
+// Tokens into a tree. A closing tag the source leaves out is never written in (closed stays false).
+function htmlTree(tokens) {
+  const root = { kids: [] }, stack = [root];
+  const top = () => stack[stack.length - 1];
+  for (const k of tokens) {
+    if (k.t === 'open' || k.t === 'raw') {
+      const shut = AUTO_CLOSE[k.name] || [];
+      while (stack.length > 1 && (shut.includes(top().name) || (top().name === 'p' && CLOSES_P.has(k.name)))) stack.pop();
+      const el = { ...k, kids: [], closed: false };
+      top().kids.push(el);
+      if (k.t === 'open' && !k.selfClose && !VOID.has(k.name)) stack.push(el);
+      continue;
+    }
+    if (k.t === 'close') {
+      const at = stack.findLastIndex((x, n) => n > 0 && x.name === k.name);
+      if (at < 0) { top().kids.push({ t: 'text', raw: k.raw, stray: true }); continue; }
+      stack[at].closed = true; stack[at].closeRaw = k.raw;
+      stack.length = at;
+      continue;
+    }
+    top().kids.push(k);
+  }
+  return root;
+}
+const isScript = (el) => {
+  const ty = /^type\s*=\s*["']?([^"'\s>]*)/i.exec(el.attrs.find((a) => /^type\s*=/i.test(a)) || '')?.[1]?.toLowerCase();
+  return !ty || /^(?:module|text\/javascript|application\/javascript|text\/ecmascript)$/.test(ty);
+};
 function formatHtml(code) {
-  const doc = new DOMParser().parseFromString(code, 'text/html');
-  const hasDoctype = /^\s*<!doctype/i.test(code), wholeDoc = /<html[\s>]/i.test(code);
-  const attrs = (el) => [...el.attributes].map((a) => (a.value === '' ? ` ${a.name}` : ` ${a.name}="${a.value.replace(/"/g, '&quot;')}"`)).join('');
   const lines = [];
+  const openTag = (el) => `<${el.raw.slice(1, 1 + el.name.length)}${el.attrs.map((a) => ' ' + a).join('')}${el.selfClose ? ' />' : '>'}`;
+  const closeTag = (el) => (el.closed ? el.closeRaw : '');
+  // A short run of text and plain inline tags, on one line (whitespace between words becomes one space).
+  const inline = (n) => n.t === 'text' ? n.raw.replace(WS, ' ') : n.t === 'comment' ? n.raw : `${openTag(n)}${n.kids.map(inline).join('')}${closeTag(n)}`;
   const walk = (node, d) => {
     const pad = '  '.repeat(d);
-    for (const n of node.childNodes) {
-      if (n.nodeType === 3) { const t = n.textContent.replace(/\s+/g, ' ').trim(); if (t) lines.push(pad + t); continue; }
-      if (n.nodeType === 8) { lines.push(`${pad}<!--${n.textContent}-->`); continue; }
-      if (n.nodeType !== 1) continue;
-      const name = n.tagName.toLowerCase(), open = `<${name}${attrs(n)}>`;
-      if (VOID.has(name)) { lines.push(pad + open); continue; }
-      if (name === 'script' || name === 'style') {
-        const body = n.textContent.trim();
-        if (!body) { lines.push(`${pad}${open}</${name}>`); continue; }
-        lines.push(pad + open);
-        for (const l of layoutBraces(body, { css: name === 'style' }).trimEnd().split('\n')) lines.push(l ? pad + '  ' + l : '');
-        lines.push(`${pad}</${name}>`); continue;
+    for (const n of node.kids) {
+      if (n.t === 'text') { const t = n.raw.replace(WS, ' ').trim(); if (t) lines.push(pad + t); continue; }
+      if (n.t === 'comment' || n.t === 'doctype') { lines.push(pad + n.raw); continue; }
+      const open = openTag(n);
+      if (n.t === 'raw') {
+        if ((n.name === 'script' && isScript(n)) || n.name === 'style') {
+          const body = n.body.trim();
+          if (!body) { lines.push(`${pad}${open}${n.close}`); continue; }
+          lines.push(pad + open);
+          lines.push(layoutBraces(body, { css: n.name === 'style', base: pad + '  ' }).trimEnd());
+          lines.push(pad + n.close); continue;
+        }
+        // pre, textarea, title, and scripts that hold data or templates: exactly as written.
+        lines.push(pad + open + n.body + n.close); continue;
       }
-      if (name === 'pre' || name === 'textarea') { lines.push(pad + n.outerHTML); continue; }
-      const kids = [...n.childNodes].filter((k) => !(k.nodeType === 3 && !k.textContent.trim()));
-      const simple = kids.every((k) => k.nodeType === 3 || (k.nodeType === 1 && INLINE.has(k.tagName.toLowerCase()) && k.children.length === 0));
-      if (simple && n.innerHTML.replace(/\s+/g, ' ').trim().length < 100) { lines.push(`${pad}${open}${n.innerHTML.replace(/\s+/g, ' ').trim()}</${name}>`); continue; }
-      lines.push(pad + open); walk(n, d + 1); lines.push(`${pad}</${name}>`);
+      if (VOID.has(n.name) || n.selfClose) { lines.push(pad + open); continue; }
+      const kids = n.kids.filter((k) => !(k.t === 'text' && !k.raw.replace(WS, '')));
+      const simple = kids.every((k) => k.t === 'text' || (k.t === 'open' && INLINE.has(k.name) && k.kids.every((x) => x.t === 'text')));
+      const flat = simple && n.kids.map(inline).join('').replace(WS, ' ').trim();
+      if (simple && flat.length < 100) { lines.push(`${pad}${open}${flat}${closeTag(n)}`); continue; }
+      lines.push(pad + open); walk(n, d + 1); if (n.closed) lines.push(pad + closeTag(n));
     }
   };
-  if (wholeDoc) { lines.push(`<html${attrs(doc.documentElement)}>`); for (const part of [doc.head, doc.body]) { lines.push(`  <${part.tagName.toLowerCase()}${attrs(part)}>`); walk(part, 2); lines.push(`  </${part.tagName.toLowerCase()}>`); } lines.push('</html>'); }
-  else { walk(doc.head, 0); walk(doc.body, 0); }
-  return (hasDoctype ? '<!doctype html>\n' : '') + lines.join('\n') + '\n';
+  walk(htmlTree(htmlTokens(code)), 0);
+  return lines.join('\n') + '\n';
 }
 export function beautify(code, lang) {
   try {
@@ -172,7 +320,7 @@ export function codeViewHTML(code, lang, { formatted = true, name = '' } = {}) {
   return `<div class="code-view">
     <div class="cv-bar"><span class="cv-lang">${esc(LANG_NAME[lang] || lang)}</span>${name ? `<span class="cv-name">${esc(name)}</span>` : ''}<span class="cv-lines">${n} lines</span>
       ${canFormat(lang) && !big ? `<div class="seg cv-mode"><button type="button" data-fmt="1" class="${formatted ? 'on' : ''}">✨ Formatted</button><button type="button" data-fmt="0" class="${formatted ? '' : 'on'}">Original</button></div>` : ''}
-      <button type="button" class="cv-copy" title="Copy">⧉ Copy</button></div>
+      <button type="button" class="cv-copy" title="Copy the code as written">⧉ Copy</button></div>
     <div class="cv-scroll"><pre class="cv-gutter" aria-hidden="true">${Array.from({ length: n }, (_, i) => i + 1).join('\n')}</pre><pre class="cv-code"><code>${html}</code></pre></div>
   </div>`;
 }
@@ -182,7 +330,8 @@ export function mountCode(el, code, lang, opts = {}) {
     el.innerHTML = codeViewHTML(code, lang, { ...opts, formatted });
     for (const b of el.querySelectorAll('.cv-mode button')) b.onclick = () => draw(b.dataset.fmt === '1');
     const copy = el.querySelector('.cv-copy');
-    copy.onclick = async () => { try { await navigator.clipboard.writeText(el.querySelector('.cv-code').textContent); copy.textContent = '✓ Copied'; setTimeout(() => (copy.textContent = '⧉ Copy'), 1200); } catch { copy.textContent = 'Copy failed'; } };
+    // Always the source as it is: the formatted view is for reading.
+    copy.onclick = async () => { try { await navigator.clipboard.writeText(code); copy.textContent = '✓ Copied'; setTimeout(() => (copy.textContent = '⧉ Copy'), 1200); } catch { copy.textContent = 'Copy failed'; } };
   };
   draw(opts.formatted !== false);
 }
