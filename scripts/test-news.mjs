@@ -320,4 +320,3 @@ test('news local: test results are kept by each suite and shown, and the view is
   assert.equal(localView('tests').test.pass, 9, 'cached');
   assert.equal(localView('tests', { fresh: true }).empty, true);
 });
-
