@@ -14,7 +14,7 @@ import { SECRET_FILES } from './keys.js';
 import { projectEnv } from './projectsecrets.js';
 import { termEvent, lineSplitter, newJob, endJob } from './terminal.js';
 import { jobsAvailable, adoptPid, jobCount, killJob, closeJob, startDetached } from './jobhost.js';
-import { snapshot, changesSince, objectFor, pruneObjects } from './snapshot.js';
+import { snapshot, changesSince, objectFor, pruneObjects, snapshotAsync, changesSinceAsync, pruneObjectsAsync } from './snapshot.js';
 import { freshPath } from './userenv.js';
 
 // Programs a server or launch config starts without a check (as before the shell tool). Any other program is judged
@@ -647,11 +647,9 @@ function recordBefore(root, runId, rel, before) {
  * Before a command: a snapshot of the project (null when snapshots are off or the project is over the size limit;
  * `why` then says so). After it: commandChanges() puts what the command changed into the reply's checkpoint.
  */
+const snapOrWhy = (s, opts) => s.over ? { snap: null, why: `the project is over the ${Math.round((opts.maxBytes ?? 1024 ** 3) / 1024 ** 2)} MB snapshot limit` } : { snap: s, why: '' };
 export function snapBefore(root, opts = {}) {
-  try {
-    const s = snapshot(root, opts);
-    return s.over ? { snap: null, why: `the project is over the ${Math.round((opts.maxBytes ?? 1024 ** 3) / 1024 ** 2)} MB snapshot limit` } : { snap: s, why: '' };
-  } catch (e) { return { snap: null, why: e.message }; }
+  try { return snapOrWhy(snapshot(root, opts), opts); } catch (e) { return { snap: null, why: e.message }; }
 }
 export function commandChanges(root, runId, before) {
   const ch = changesSince(root, before);
@@ -660,6 +658,32 @@ export function commandChanges(root, runId, before) {
   }
   pruneObjects(root);
   return { added: ch.added, modified: ch.modified, deleted: ch.deleted };
+}
+// The same two without blocking the event loop (the walk runs in a worker; snapshot.js). One project's snapshot
+// work runs one step at a time, in the order asked, as the sync calls did: a prune never lands mid-snapshot.
+const snapQueue = new Map();
+function inSnapQueue(root, fn) {
+  const key = path.resolve(root).toLowerCase();
+  const p = (snapQueue.get(key) || Promise.resolve()).then(fn, fn);
+  const tail = p.catch(() => {});
+  snapQueue.set(key, tail);
+  tail.then(() => { if (snapQueue.get(key) === tail) snapQueue.delete(key); });
+  return p;
+}
+export function snapBeforeAsync(root, opts = {}) {
+  return inSnapQueue(root, async () => {
+    try { return snapOrWhy(await snapshotAsync(root, opts), opts); } catch (e) { return { snap: null, why: e.message }; }
+  });
+}
+export function commandChangesAsync(root, runId, before) {
+  return inSnapQueue(root, async () => {
+    const ch = await changesSinceAsync(root, before);
+    for (const rel of [...ch.added, ...ch.modified, ...ch.deleted]) {
+      try { recordBefore(root, runId, rel, objectFor(root, before, rel)); } catch { /* best effort */ }
+    }
+    await pruneObjectsAsync(root);
+    return { added: ch.added, modified: ch.modified, deleted: ch.deleted };
+  });
 }
 
 export function changedFiles(root, runId) {

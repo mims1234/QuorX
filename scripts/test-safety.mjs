@@ -7,7 +7,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
-import { runLine, snapBefore, commandChanges, restoreCheckpoint, reviewFiles, agentSpace } from '../server/workspace.js';
+import { pathToFileURL } from 'node:url';
+import { runLine, snapBefore, commandChanges, snapBeforeAsync, commandChangesAsync, restoreCheckpoint, reviewFiles, agentSpace } from '../server/workspace.js';
+import { snapshot, changesSince, snapshotAsync, changesSinceAsync } from '../server/snapshot.js';
 import { jobsAvailable, jobHostStatus } from '../server/jobhost.js';
 import { decide, agentWriteBlocked, suggestedRules, saveRules, loadRules } from '../server/cmdpolicy.js';
 import { approvalJudge } from '../server/approvals.js';
@@ -101,12 +103,100 @@ test('snapshot: only changed files are read again, and old objects are pruned', 
   assert.equal(objects.files, 1, 'only the newest version is kept in the store');
 });
 
-test('snapshot: a project over the size limit is skipped, and says why', () => {
+test('snapshot: a project over the size limit is skipped, and says why', async () => {
   const dir = tmp('snap3');
   fs.writeFileSync(path.join(dir, 'a.bin'), Buffer.alloc(4096));
   const r = snapBefore(dir, { maxBytes: 1024 });
   assert.equal(r.snap, null);
   assert.match(r.why, /limit/);
+  assert.deepEqual(await snapBeforeAsync(dir, { maxBytes: 1024 }), r, 'the async path says the same');
+});
+
+// The async snapshot runs in a worker; it must give exactly what the sync walk gives (only `ms` differs).
+const noMs = ({ ms, ...s }) => s;
+function snapTree(name) {
+  const dir = tmp(name);
+  const w = (rel, data) => { fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true }); fs.writeFileSync(path.join(dir, rel), data); };
+  w('top.txt', 'top');
+  w('src/a.js', 'export const a = 1;');
+  w('src/deep/er/b.js', 'export const b = 2;');
+  w('src/deep/er/same.txt', 'top'); // same content as top.txt: one object, two names
+  w('assets/logo.bin', Buffer.from(Array.from({ length: 4096 }, (_, i) => (i * 37) & 255)));
+  w('assets/zero.bin', Buffer.alloc(1000));
+  w('gone/soon.txt', 'delete me');
+  w('node_modules/x/index.js', 'skipped');
+  w('dist/out.js', 'skipped');
+  fs.writeFileSync(path.join(dir, 'huge.dat'), '');
+  fs.truncateSync(path.join(dir, 'huge.dat'), 21 * 1024 * 1024); // over the 20 MB per-file limit
+  return dir;
+}
+const mutate = (dir) => {
+  fs.writeFileSync(path.join(dir, 'src', 'a.js'), 'export const a = 3;');
+  fs.writeFileSync(path.join(dir, 'assets', 'logo.bin'), Buffer.from([1, 2, 3, 0, 255]));
+  fs.rmSync(path.join(dir, 'gone'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'src', 'deep', 'new.txt'), 'made');
+};
+
+test('snapshot: the worker path gives the same snapshot and changes as the sync walk', async () => {
+  const dir = snapTree('snapeq');
+  // From scratch both ways (no index, no objects), then again with the index in place.
+  const fresh = await snapshotAsync(dir);
+  fs.rmSync(path.join(dir, '.quorx'), { recursive: true });
+  const freshSync = snapshot(dir);
+  assert.deepEqual(noMs(fresh), noMs(freshSync));
+  assert.equal(fresh.count, 7);
+  assert.deepEqual(fresh.skippedBig, ['huge.dat']);
+  assert.ok(!Object.keys(fresh.files).some((r) => /node_modules|dist/.test(r)), 'skipped folders stay skipped');
+  assert.deepEqual(noMs(await snapshotAsync(dir)), noMs(snapshot(dir)));
+  const before = snapshot(dir);
+  mutate(dir);
+  const sync = changesSince(dir, before);
+  const viaWorker = await changesSinceAsync(dir, before);
+  assert.deepEqual({ ...viaWorker, after: noMs(viaWorker.after) }, { ...sync, after: noMs(sync.after) });
+  assert.deepEqual([sync.added, sync.modified, sync.deleted], [['src/deep/new.txt'], ['assets/logo.bin', 'src/a.js'], ['gone/soon.txt']]);
+  assert.deepEqual(sync.after.skippedBig, ['huge.dat']);
+  // The same with the worker turned off (the fallback runs the sync walk in this thread).
+  const out = execSync(`node --input-type=module -e "const m = await import(process.env.QX_T_MOD); const s = await m.snapshotAsync(process.env.QX_T_DIR); delete s.ms; process.stdout.write(JSON.stringify(s))"`,
+    { env: { ...process.env, QX_SNAPSHOT_WORKER: '0', QX_T_MOD: pathToFileURL(path.resolve('server/snapshot.js')).href, QX_T_DIR: dir }, encoding: 'utf8' });
+  assert.deepEqual(JSON.parse(out), noMs(snapshot(dir)));
+});
+
+test('snapshot: Undo works the same through the worker path', async () => {
+  const dir = snapTree('snapundo');
+  const orig = (rel) => fs.readFileSync(path.join(dir, rel));
+  const keep = { a: orig('src/a.js'), logo: orig('assets/logo.bin'), soon: orig('gone/soon.txt') };
+  const { snap } = await snapBeforeAsync(dir);
+  assert.ok(snap);
+  mutate(dir);
+  const ch = await commandChangesAsync(dir, 'runw', snap);
+  assert.deepEqual([ch.added, ch.modified, ch.deleted], [['src/deep/new.txt'], ['assets/logo.bin', 'src/a.js'], ['gone/soon.txt']]);
+  restoreCheckpoint(dir, 'runw');
+  assert.deepEqual(orig('src/a.js'), keep.a);
+  assert.deepEqual(orig('assets/logo.bin'), keep.logo, 'binary files come back byte for byte');
+  assert.deepEqual(orig('gone/soon.txt'), keep.soon);
+  assert.equal(fs.existsSync(path.join(dir, 'src', 'deep', 'new.txt')), false);
+  assert.equal(fs.statSync(path.join(dir, 'huge.dat')).size, 21 * 1024 * 1024, 'the big file was left alone');
+});
+
+test('snapshot: the event loop keeps ticking while a big project is snapshotted', async () => {
+  const dir = tmp('snapbig');
+  for (let d = 0; d < 50; d++) {
+    fs.mkdirSync(path.join(dir, `d${d}`));
+    for (let i = 0; i < 100; i++) fs.writeFileSync(path.join(dir, `d${d}`, `f${i}.txt`), `file ${d}/${i}`);
+  }
+  let ticks = 0, last = Date.now(), maxGap = 0;
+  const t = setInterval(() => { const now = Date.now(); maxGap = Math.max(maxGap, now - last); last = now; ticks++; }, 10);
+  const t0 = Date.now();
+  try {
+    const before = await snapshotAsync(dir);
+    assert.equal(before.count, 5000);
+    fs.writeFileSync(path.join(dir, 'd0', 'f0.txt'), 'changed');
+    const ch = await changesSinceAsync(dir, before);
+    assert.deepEqual(ch.modified, ['d0/f0.txt']);
+  } finally { clearInterval(t); }
+  const ms = Date.now() - t0;
+  assert.ok(ticks >= Math.min(5, ms / 40), `the timer ticked ${ticks} times in ${ms} ms`);
+  assert.ok(maxGap < 250, `the longest stall was ${maxGap} ms`);
 });
 // ---------- the rule engine ----------
 const proj = tmp('policy');
