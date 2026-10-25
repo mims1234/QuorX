@@ -22,6 +22,7 @@ const WIN_SIZE = { width: 1400, height: 900 }; // the QuorX window the agent's t
 const IDLE_DETACH_MS = 20000; // reading through page scripts: the debugger lets go this long after its last command
 const ALL_SITES = { origins: ['<all_urls>'] };
 let ws = null, state = 'off', lastError = '', pingTimer = null, seq = 0;
+let pairCode = ''; // while waiting for Allow: the code QuorX shows too, so you can tell this request is yours
 const waiting = new Map(); // request id → resolve/reject
 const attached = new Set(); // tab ids the debugger is attached to right now
 const idle = new Map(); // tab id → timer that detaches the debugger
@@ -81,8 +82,8 @@ async function onMessage(sock, data) {
     refreshMenus();
     return;
   }
-  if (m.t === 'denied') { state = 'denied'; lastError = m.why || 'QuorX refused the key.'; return; }
-  if (m.t === 'pairing') { state = 'pairing'; lastError = ''; return; }
+  if (m.t === 'denied') { state = 'denied'; pairCode = ''; lastError = m.why || 'QuorX refused the key.'; return; }
+  if (m.t === 'pairing') { state = 'pairing'; pairCode = String(m.code || '').slice(0, 8); lastError = ''; return; }
   if (m.t === 'paired') { await chrome.storage.local.set({ key: String(m.key || '') }); return; }
   // QuorX is newer than this extension: reload from its folder (a loaded-unpacked extension reads its files again).
   if (m.t === 'reload') { setTimeout(() => chrome.runtime.reload(), 300); return; }
@@ -324,7 +325,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   (async () => {
     if (msg.q === 'state') {
       await connect(); const s = await settings();
-      return { state, error: lastError, address: s.address, paired: !!s.key, lent: await lentTabs(), status: await status(), allowOpen: (await chrome.storage.local.get('allowOpen')).allowOpen !== false, script: await canScript(), rec: await rec() };
+      return { state, error: lastError, code: state === 'pairing' ? pairCode : '', address: s.address, paired: !!s.key, lent: await lentTabs(), status: await status(), allowOpen: (await chrome.storage.local.get('allowOpen')).allowOpen !== false, script: await canScript(), rec: await rec() };
     }
     if (msg.q === 'allowOpen') { await chrome.storage.local.set({ allowOpen: !!msg.on }); return true; }
     if (msg.q === 'save') {

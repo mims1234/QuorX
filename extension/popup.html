@@ -38,6 +38,7 @@
   .box h2 { margin: 0; font-size: 12.5px; }
   .rec { border-color: color-mix(in srgb, var(--amber) 60%, transparent); }
   .rec b { color: var(--amber); }
+  .code { display: block; margin-top: 6px; font: 700 18px ui-monospace, Consolas, monospace; letter-spacing: .18em; color: var(--violet); text-align: center; }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -47,7 +48,7 @@
   <section id="pair" hidden>
     <p class="note">Connect this browser to QuorX once: press Connect, then <b>Allow</b> in QuorX.</p>
     <button class="main" id="pairBtn">Connect to QuorX</button>
-    <p class="note" id="pairWait" hidden>Waiting… switch to QuorX and press <b>Allow</b>.</p>
+    <p class="note" id="pairWait" hidden>Waiting… switch to QuorX and press <b>Allow</b> if it shows the same code:<b class="code" id="pairCode"></b></p>
     <details><summary class="note">QuorX address, or use a key</summary>
       <label>QuorX address<input id="address" spellcheck="false" placeholder="http://127.0.0.1:5188"></label>
       <label>Key (⚙ Settings → Chrome extension → Use a key instead)<input id="key" type="password" spellcheck="false" autocomplete="off" placeholder="paste the key from QuorX"></label>

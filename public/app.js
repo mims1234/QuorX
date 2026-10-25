@@ -5920,7 +5920,7 @@ async function drawExtPanel() {
   const paint = () => {
     box.innerHTML = `<div class="st-ext">
       <div class="st-ext-state ${r.connected ? (r.outdated ? 'warn' : 'on') : ''}"><i></i>${r.connected ? (r.outdated ? `Connected, but the extension is an older version: reload it once in ${esc(page)} (↻ on the QuorX card)` : `Connected to your ${esc(b.name)}`) : 'Not connected'}${r.lent?.length ? ` · ${r.lent.length} tab${r.lent.length > 1 ? 's' : ''} given to chats` : ''}</div>
-      ${r.pairing ? `<div class="st-ext-pair"><b>🧩 ${esc(r.pairing.browser)} wants to connect to QuorX.</b> Allow it only if you just pressed Connect in the extension.<span class="st-ext-acts"><button type="button" class="st-btn sm primary" data-x="allow">Allow</button><button type="button" class="st-btn sm" data-x="deny">Deny</button></span></div>` : ''}
+      ${r.pairing ? `<div class="st-ext-pair"><b>🧩 ${esc(r.pairing.browser)} wants to connect to QuorX.</b> <span>${extPairWho(r.pairing)}</span><span class="st-ext-acts"><button type="button" class="st-btn sm primary" data-x="allow">Allow</button><button type="button" class="st-btn sm" data-x="deny">Deny</button></span></div>` : ''}
       ${b.page === null ? `<p class="st-ext-warn">Your default browser is ${esc(b.name)}, which can't run this extension. Use Chrome, Brave or Edge for it.</p>` : ''}
       <ol class="st-ext-steps">
         <li>Open <code>${esc(page)}</code> in ${esc(b.name)} <span class="st-ext-acts"><button type="button" class="st-btn sm" data-x="chrome" title="Opens the extensions page in ${esc(b.name)}">Open in ${esc(b.name)}</button><button type="button" class="st-btn sm" data-x="copyurl">Copy</button></span> and turn on <b>Developer mode</b>.</li>
@@ -5942,6 +5942,11 @@ async function drawExtPanel() {
   };
   paint();
 }
+// Which extension is asking (its ID, shortened; the whole ID on hover) and the code its popup shows while it waits.
+function extPairWho(p) {
+  const id = String(p.id || ''), short = id.length > 10 ? `${id.slice(0, 4)}…${id.slice(-4)}` : id;
+  return `${id ? `<span class="ext-pair-id" title="${esc(id)}">Extension ID ${esc(short)}</span> ` : ''}${p.code ? `Allow only if your QuorX extension shows this code: <b class="ext-pair-code">${esc(p.code)}</b>` : 'Allow it only if you just pressed Connect in the QuorX extension.'}`;
+}
 // An extension asking to connect: a notice anywhere in QuorX with Allow / Deny (it waits up to 2 minutes).
 function extPairNotice() {
   let n = $('#extPairNotice');
@@ -5950,7 +5955,7 @@ function extPairNotice() {
   if (n && n.dataset.at === String(p.at)) return;
   n?.remove();
   n = document.createElement('div'); n.id = 'extPairNotice'; n.className = 'ext-pair-notice'; n.dataset.at = String(p.at); n.setAttribute('role', 'alertdialog');
-  n.innerHTML = `<b>🧩 ${esc(p.browser)} wants to connect to QuorX</b><p>Allow it only if you just pressed Connect in the QuorX extension.</p><div class="acts"><button type="button" class="st-btn sm" data-a="0">Deny</button><button type="button" class="st-btn sm primary" data-a="1">Allow</button></div>`;
+  n.innerHTML = `<b>🧩 ${esc(p.browser)} wants to connect to QuorX</b><p>${extPairWho(p)}</p><div class="acts"><button type="button" class="st-btn sm" data-a="0">Deny</button><button type="button" class="st-btn sm primary" data-a="1">Allow</button></div>`;
   document.body.append(n);
   for (const btn of n.querySelectorAll('[data-a]')) btn.onclick = async () => { n.remove(); await postJ('/api/ext/pair', { allow: btn.dataset.a === '1' }); drawExtPanel(); };
 }

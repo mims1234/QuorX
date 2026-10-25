@@ -1,7 +1,10 @@
 // The QuorX Chrome extension (extension/): your everyday Chrome, linked to this harness, so a tab you give to a chat
 // can be used by the agent with your own sign-ins. The link is one WebSocket (Chrome keeps an extension's service
 // worker awake while one is active). Only a Chrome extension may connect (its Origin), and only with the key you
-// paste into it from ⚙ Settings; the extension itself only ever touches tabs you gave.
+// paste into it from ⚙ Settings or that QuorX hands it when you press Allow; the extension itself only ever touches
+// tabs you gave. The key is pinned to the extension it went to (its ID, from the Origin): the same key under another
+// ID is turned away. A key from before pinning has no ID yet and takes the ID of its next good connection, so an
+// extension already set up keeps working without connecting again.
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -14,15 +17,24 @@ export function extKey(renew = false) {
   const k = crypto.randomBytes(24).toString('hex');
   fs.mkdirSync(path.dirname(KEY_FILE), { recursive: true });
   fs.writeFileSync(KEY_FILE, k, { mode: 0o600 });
+  fs.rmSync(ORIGIN_FILE, { force: true }); // a new key is not pinned yet: the first extension to use it gets it
   if (renew) link?.close(4001, 'new key');
   return k;
 }
+// The extension the key belongs to (chrome-extension://<id>), in its own file so an older QuorX still reads the key.
+const ORIGIN_FILE = path.join(HOME, 'data', 'extension-origin');
+const ORIGIN = /^chrome-extension:\/\/[a-p]{32}$/;
+const keyOrigin = () => { try { const o = fs.readFileSync(ORIGIN_FILE, 'utf8').trim(); return ORIGIN.test(o) ? o : ''; } catch { return ''; } };
+const pinOrigin = (o) => { fs.mkdirSync(path.dirname(ORIGIN_FILE), { recursive: true }); fs.writeFileSync(ORIGIN_FILE, o, { mode: 0o600 }); };
+const PRE_HELLO_BYTES = 65536; // all a connection may send before its hello is accepted
+// The code QuorX and the extension's popup both show while it waits for Allow (no 0/O or 1/I to mix up).
+const pairCode = () => Array.from(crypto.randomBytes(6), (b) => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[b & 31]).join('');
 
 let link = null; // { send(obj), close(code, why), at, version }
 const waiting = new Map(), subs = new Map(); // call id → { ok, no, timer }; tab → Set(fn)
 let handlers = {}; // what the extension asks of the harness: give, takeBack, closed, chats
-let pairing = null; // { me, browser, at, finish(allow) }: an extension asking to connect, waiting for Allow in QuorX
-export const extPairing = () => (pairing && Date.now() - pairing.at < 120000 ? { browser: pairing.browser, at: pairing.at } : null);
+let pairing = null; // { me, origin, id, code, browser, at, finish(allow) }: an extension asking to connect, waiting for Allow in QuorX
+export const extPairing = () => (pairing && Date.now() - pairing.at < 120000 ? { browser: pairing.browser, at: pairing.at, id: pairing.id, code: pairing.code } : null);
 /** Allow or Deny the extension that asked to connect (⚙ Settings or the notice in QuorX). */
 export function extPair(allow) { const p = pairing; pairing = null; if (!p) return false; p.finish(!!allow); return true; }
 export const extReady = () => !!link;
@@ -61,11 +73,11 @@ export function onExtTabEvents(tab, fn) {
 export function extUpgrade(req, socket) {
   const origin = String(req.headers.origin || '');
   const wsKey = req.headers['sec-websocket-key'];
-  if (!/^chrome-extension:\/\/[a-p]{32}$/.test(origin) || !wsKey || String(req.headers.upgrade || '').toLowerCase() !== 'websocket') { socket.destroy(); return; }
+  if (!ORIGIN.test(origin) || !wsKey || String(req.headers.upgrade || '').toLowerCase() !== 'websocket') { socket.destroy(); return; }
   const accept = crypto.createHash('sha1').update(`${wsKey}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest('base64');
   socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
   socket.setNoDelay(true);
-  let buf = Buffer.alloc(0), frags = [], hello = false;
+  let buf = Buffer.alloc(0), frags = [], hello = false, pre = 0;
   const frame = (op, data) => {
     const p = Buffer.from(data), n = p.length;
     const head = n < 126 ? Buffer.from([0x80 | op, n]) : n < 65536 ? Buffer.from([0x80 | op, 126, n >> 8, n & 255]) : Buffer.concat([Buffer.from([0x80 | op, 127]), (() => { const b = Buffer.alloc(8); b.writeBigUInt64BE(BigInt(n)); return b; })()]);
@@ -77,17 +89,27 @@ export function extUpgrade(req, socket) {
   const onText = (text) => {
     let m; try { m = JSON.parse(text); } catch { return; }
     if (!hello && m.t === 'hello' && m.pair && !m.key) {
-      // No key yet: it waits (up to 2 minutes) until you press Allow or Deny in QuorX.
+      // No key yet: it waits (up to 2 minutes) until you press Allow or Deny in QuorX. One request at a time: another
+      // extension asking meanwhile is turned away; the same extension asking again replaces its own request.
+      if (pairing && pairing.origin !== origin) { me.send({ t: 'denied', why: 'another extension is already waiting for Allow in QuorX: try again once that is answered' }); me.close(4009); return; }
       if (pairing) pairing.finish(false);
-      const p = { me, browser: String(m.browser || 'A browser').slice(0, 30), at: Date.now() };
-      p.finish = (allow) => { clearTimeout(p.timer); if (pairing === p) pairing = null; if (!allow) { me.send({ t: 'denied', why: 'not allowed in QuorX' }); me.close(4003); return; } me.send({ t: 'paired', key: extKey() }); onText(JSON.stringify({ t: 'hello', key: extKey(), version: m.version })); };
+      const p = { me, origin, id: origin.slice('chrome-extension://'.length), code: pairCode(), browser: String(m.browser || 'A browser').slice(0, 30), at: Date.now() };
+      p.finish = (allow) => {
+        clearTimeout(p.timer); if (pairing === p) pairing = null;
+        if (!allow) { me.send({ t: 'denied', why: 'not allowed in QuorX' }); me.close(4003); return; }
+        pinOrigin(origin); me.send({ t: 'paired', key: extKey() }); onText(JSON.stringify({ t: 'hello', key: extKey(), version: m.version }));
+      };
       p.timer = setTimeout(() => p.finish(false), 120000);
-      clearTimeout(helloTimer); pairing = p; me.send({ t: 'pairing' });
+      clearTimeout(helloTimer); pairing = p; me.send({ t: 'pairing', code: p.code });
       return;
     }
     if (!hello) {
       const want = Buffer.from(extKey()), got = Buffer.from(String(m.key || ''));
       if (m.t !== 'hello' || got.length !== want.length || !crypto.timingSafeEqual(got, want)) { me.send({ t: 'denied', why: 'wrong key: copy it again from QuorX ⚙ Settings → Chrome extension' }); me.close(4003); return; }
+      // The right key under another extension ID is not the extension it was given to. A key with no ID yet gets this one.
+      const pinned = keyOrigin();
+      if (pinned && pinned !== origin) { me.send({ t: 'denied', why: 'this key belongs to another extension: press Connect here, then Allow in QuorX' }); me.close(4003); return; }
+      if (!pinned) pinOrigin(origin);
       hello = true; clearTimeout(helloTimer);
       if (link && link !== me) link.close(4000);
       me.version = String(m.version || '').slice(0, 20);
@@ -107,6 +129,8 @@ export function extUpgrade(req, socket) {
     }
   };
   socket.on('data', (d) => {
+    // Until its hello is accepted a connection is nobody yet, so it may send only a little.
+    if (!hello && (pre += d.length) > PRE_HELLO_BYTES) { socket.destroy(); return; }
     buf = Buffer.concat([buf, d]);
     for (;;) {
       if (buf.length < 2) return;
@@ -127,6 +151,7 @@ export function extUpgrade(req, socket) {
   });
   const gone = () => {
     clearTimeout(helloTimer);
+    if (pairing?.me === me) { clearTimeout(pairing.timer); pairing = null; } // it stopped waiting: nothing left to Allow
     if (link !== me) return;
     link = null;
     for (const [id, w] of waiting) { clearTimeout(w.timer); w.no(new Error('the QuorX extension disconnected')); waiting.delete(id); }
