@@ -50,7 +50,7 @@ import { listDocs, docText, readDoc, searchDocs, DOC_DEFAULTS } from './docs.js'
 import { groupCalls, numberedWindow, untrusted, trimTranscript, trimPageViews, compactTranscript, transcriptChars, withCacheMarks, retryable, LOOK_TOOLS } from './loop.js';
 import { checkFile, checkHtml, CHECKED, lintFile, lintHtml, LINTED } from './checks.js';
 import { checkSettings, askDeciders, saveShot, logCheck, votesFor, MAIN_CONTROL_JS, KEY_PAGE_JS, KEY_TRIES, CHECK_DEFAULTS, LOOK_DEFAULTS } from './harness-checks.js';
-import { saveCheckpoint, loadCheckpoint, dropCheckpoint, recordRun } from './runs.js';
+import { saveCheckpoint, loadCheckpoint, dropCheckpoint, checkpointWritten, recordRun } from './runs.js';
 import { live, budgetState, spentToday } from './budget.js';
 import { blobData } from './blobs.js';
 import { modelNotes } from './modelcards.js';
@@ -1522,6 +1522,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         : recommend === 'model' ? `${recent} of the last 15 steps hit errors: it may be stuck, and another model often gets it unstuck.`
         : open.length ? `It was making progress: ${open.length} plan item${open.length === 1 ? '' : 's'} left.` : 'It was still working when the steps ran out.' };
     checkpointAt(Math.max(0, step - 1)); // "Keep going" continues from here, even if this reply never ran a step of its own
+    await checkpointWritten(runId); // on disk before the card offers it
     emit({ t: 'out_of_steps', ...stats.outOfSteps, runId, at: at() });
   }
   emit({ t: 'done', reply, historyNote, stats, journal: journal.slice(-120), at: at() });

@@ -22,7 +22,7 @@ import { createScheduler, loadSchedules, saveSchedules, cleanSchedule, describeW
 import { startScheduledChat } from './server/schedrun.js';
 import { loadMemory, saveMemory, memoryTokens, MEMORY_TOKENS } from './server/memory.js';
 import { CHECKS } from './server/harness-checks.js';
-import { startRun, getRun, stopRun, follow, runStatus, activeRuns, validRunId, scorecard, readLog, recordRun, onRunEvent } from './server/runs.js';
+import { startRun, getRun, stopRun, follow, runStatus, activeRuns, validRunId, scorecard, readLog, runEvents, recordRun, onRunEvent } from './server/runs.js';
 import { setBudget, budgetState } from './server/budget.js';
 import { shellRun, shellClose, shellInfo } from './server/shell.js';
 import { ptyAvailable, ptyOpen, ptyWrite, ptyResize, ptyFollow, ptyClose } from './server/pty.js';
@@ -1042,7 +1042,7 @@ function scheduleNotice(kind, { schedule, chatId = null, text = '', cost = 0 }) 
     desktopCall('app.notify', { title, body: `⏰ ${schedule.name}${n.text ? `\n${n.text}` : ''}`, chatId, silent: kind === 'done' }, 5000).catch(() => {});
   }
 }
-const scheduleDeps = { now: Date.now, listProjects, budgetState, saveChat, getChat, startRun, follow, runAgent, events: (id) => getRun(id)?.events || readLog(id), notify: scheduleNotice };
+const scheduleDeps = { now: Date.now, listProjects, budgetState, saveChat, getChat, startRun, follow, runAgent, events: runEvents, notify: scheduleNotice };
 const scheduler = createScheduler({ run: (s, info) => startScheduledChat(s, info, scheduleDeps) });
 if (!process.env.OH_NO_SCHEDULES) scheduler.start();
 

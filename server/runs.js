@@ -19,28 +19,47 @@ const ckptFile = (id) => path.join(DIR, `${id}.ckpt.json`);
 // Old files go on start.
 try { for (const f of fs.readdirSync(DIR)) { const p = path.join(DIR, f); if (Date.now() - fs.statSync(p).mtimeMs > KEEP_FILES_MS) fs.rmSync(p, { force: true }); } } catch { /* first run */ }
 
-const runs = new Map(); // runId → { id, chatId, status, events, listeners, ac, started, ended }
+const runs = new Map(); // runId → { id, chatId, status, events, listeners, ac, started, ended, pending, capped, logOk, logBytes, end }
 const watchers = new Set(); // fn(run, event | null) for every run: null when it ends
 /** Watches every run's events (the 🧩 Chrome status); returns a function that stops watching. */
 export function onRunEvent(fn) { watchers.add(fn); return () => watchers.delete(fn); }
 
+// Past either, a run's replay comes from its log on disk and memory keeps only the beginning.
+const KEEP_EVENTS = 20000, KEEP_BYTES = 32e6;
+const isDelta = (o) => o.t === 'token' || o.t === 'think';
+const sameRun = (a, o) => a && a.t === o.t && a.step === o.step; // the next piece of the same step's text
+const LOG_MARK = 'replay_from_log';
+const flat = (s) => { Number(s); return s; }; // reading it as a number makes V8 store the string in one piece
+
 /**
- * Starts a run in the background. `work(emit, signal)` is the agent loop. Tokens stay in memory
- * (they are many and small); on disk, each step's tokens are written as one combined event.
+ * Starts a run in the background. `work(emit, signal)` is the agent loop. Live followers get every token as it
+ * streams; what is kept for replay, in memory and on disk, joins a step's consecutive tokens (and thinking) into
+ * one event, which a page draws the same way.
  */
 export function startRun({ runId, chatId, onEnd }, work) {
-  const r = { id: runId, chatId: chatId || null, status: 'running', events: [], listeners: new Set(), ac: new AbortController(), started: Date.now(), ended: null };
+  const r = { id: runId, chatId: chatId || null, status: 'running', events: [], listeners: new Set(), ac: new AbortController(), started: Date.now(), ended: null, pending: null, capped: false, logOk: true, logBytes: 0, end: null };
   runs.set(runId, r);
-  let pending = null; // tokens of the current step, not yet on disk
-  const disk = (o) => { try { fs.appendFileSync(logFile(runId), JSON.stringify(o) + '\n'); } catch { /* disk full: memory still has it */ } };
-  const flush = () => { if (pending) { disk(pending); pending = null; } };
+  // r.pending: text of the current step, not yet on disk
+  const disk = (o) => { try { const line = JSON.stringify(o) + '\n'; fs.appendFileSync(logFile(runId), line); r.logBytes += line.length; } catch { r.logOk = false; /* disk full: memory still has it */ } };
+  const flush = () => { if (r.pending) { disk(r.pending); r.pending = null; } };
+  const keep = (o) => {
+    if (r.capped) return;
+    const last = r.events.at(-1);
+    if (isDelta(o) && sameRun(last, o)) { last.text += o.text; return; }
+    // A joined text is a chain of its pieces until something reads it as a whole; made one string, it takes a fraction of the room.
+    if (last && isDelta(last)) flat(last.text);
+    // Only when the log has every event so far: without it, coalescing alone keeps memory down.
+    if (r.logOk && (r.events.length >= KEEP_EVENTS || r.logBytes >= KEEP_BYTES)) { r.capped = true; r.events.push({ t: LOG_MARK }); return; }
+    r.events.push(isDelta(o) ? { ...o } : o); // a copy: later pieces are added to it, not to what followers got
+  };
   const emit = (o) => {
     // Screenshots and made media go to the page, the replay buffer and the log as /blob addresses, not base64.
-    if (o.t !== 'token' && o.t !== 'think') o = externalize(o);
-    r.events.push(o);
+    if (!isDelta(o)) o = externalize(o);
+    if (o.t === 'done' || o.t === 'error') r.end = o;
+    keep(o);
     for (const l of r.listeners) l(o);
     for (const w of watchers) { try { w(r, o); } catch { /* a watcher's problem stays its own */ } }
-    if (o.t === 'token') { if (pending && pending.step === o.step) pending.text += o.text; else { flush(); pending = { ...o }; } }
+    if (isDelta(o)) { if (sameRun(r.pending, o)) r.pending.text += o.text; else { flush(); r.pending = { ...o }; } }
     else { flush(); disk(o); }
   };
   // pid: which QuorX runs it, so another one on the same data folder can tell "running elsewhere" from "cut off".
@@ -58,13 +77,18 @@ export function startRun({ runId, chatId, onEnd }, work) {
       r.listeners.clear();
       for (const w of watchers) { try { w(r, null); } catch { /* ignore */ } }
       // The result goes into the chat from here too, so it is kept even when no page was there to save it.
-      if (onEnd) { try { onEnd(r.events.findLast((e) => e.t === 'done' || e.t === 'error') || null); } catch (e) { console.error(e); } }
+      if (onEnd) { try { onEnd(r.end); } catch (e) { console.error(e); } }
       setTimeout(() => runs.delete(runId), KEEP_MS).unref?.();
     });
   return r;
 }
 
 export const getRun = (id) => runs.get(id);
+// What a reattaching page replays: the kept events, or the log on disk (and the step's text not written yet) once
+// the run outgrew memory. Copies of the text events, as the last one can still grow.
+const replay = (r) => r.capped ? [...readLog(r.id), ...(r.pending ? [{ ...r.pending }] : [])] : r.events.map((e) => (isDelta(e) ? { ...e } : e));
+/** Every event of a run so far, from memory or from its log. */
+export const runEvents = (id) => { const r = runs.get(id); return r ? replay(r) : readLog(id); };
 export function stopRun(id) { const r = runs.get(id); if (!r || r.status !== 'running') return false; r.ac.abort(); return true; }
 export const activeRuns = () => [...runs.values()].filter((r) => r.status === 'running').map((r) => ({ runId: r.id, chatId: r.chatId, started: r.started }));
 
@@ -80,7 +104,7 @@ export function runStatus(id) {
   // A log that names its process settles it at once: that process is gone (a restart), so it was cut off.
   let fresh = false; try { fresh = !ended && Date.now() - fs.statSync(logFile(id)).mtimeMs < 90e3; } catch { /* gone */ }
   if (fresh) { const pid = ownerOf(id); if (pid && (pid === process.pid || !alive(pid))) fresh = false; }
-  return { status: ended ? 'done' : fresh ? 'elsewhere' : 'interrupted', resumable: !ended && !fresh && fs.existsSync(ckptFile(id)), events: events.length };
+  return { status: ended ? 'done' : fresh ? 'elsewhere' : 'interrupted', resumable: !ended && !fresh && hasCheckpoint(id), events: events.length };
 }
 // The process that started a run, from its log's first line (older logs don't say).
 function ownerOf(id) {
@@ -97,7 +121,8 @@ export function readLog(id) {
 }
 
 /**
- * Streams a run to one listener: everything from `from` on, then live events until it ends.
+ * Streams a run to one listener: everything from `from` on, then live events until it ends. `from` counts the
+ * replayed events, where a step's text is one event (the page always starts from 0).
  * Returns an unsubscribe function. `onEvent(null)` means the run is over.
  */
 export function follow(id, from, onEvent) {
@@ -105,27 +130,60 @@ export function follow(id, from, onEvent) {
   if (!r) {
     const events = readLog(id);
     events.slice(from).forEach(onEvent);
-    if (!events.some((e) => e.t === 'done' || e.t === 'error')) onEvent({ t: 'interrupted', resumable: fs.existsSync(ckptFile(id)) });
+    if (!events.some((e) => e.t === 'done' || e.t === 'error')) onEvent({ t: 'interrupted', resumable: hasCheckpoint(id) });
     onEvent(null);
     return () => {};
   }
-  r.events.slice(from).forEach(onEvent);
+  replay(r).slice(from).forEach(onEvent);
   if (r.status !== 'running') { onEvent(null); return () => {}; }
   r.listeners.add(onEvent);
   return () => r.listeners.delete(onEvent);
 }
 
 // ---------- checkpoints for resume ----------
+// Written in the background, one write at a time per run: a save made while one is being written waits, and only
+// the latest waiting one is written. Until it is on disk, reads here get it from memory.
+const ckpts = new Map(); // runId → { latest (JSON), next (JSON waiting to be written), writing (Promise), dropped }
+async function writeCkpt(id, c) {
+  const f = ckptFile(id);
+  while (c.next != null) {
+    const json = c.next; c.next = null;
+    try { await fs.promises.writeFile(f + '.tmp', json); await fs.promises.rename(f + '.tmp', f); } catch { /* best effort */ }
+  }
+  if (c.dropped) fs.rmSync(f, { force: true });
+  c.writing = null;
+  if (ckpts.get(id) === c) ckpts.delete(id);
+}
 export function saveCheckpoint(id, data) {
   if (!validRunId(id)) return;
-  const f = ckptFile(id);
-  try { fs.writeFileSync(f + '.tmp', JSON.stringify(data)); fs.renameSync(f + '.tmp', f); } catch { /* best effort */ }
+  let json; try { json = JSON.stringify(data); } catch { return; } // taken now: the loop goes on changing what it describes
+  let c = ckpts.get(id);
+  if (!c) ckpts.set(id, (c = { latest: null, next: null, writing: null, dropped: false }));
+  c.latest = c.next = json; c.dropped = false;
+  c.writing ||= writeCkpt(id, c);
 }
+/** Resolves once the run's latest checkpoint is on disk (or dropped). */
+export const checkpointWritten = (id) => ckpts.get(id)?.writing || Promise.resolve();
+// A harness that exits normally writes what is still waiting (a killed one keeps the last step that made it).
+process.on('exit', () => {
+  for (const [id, c] of ckpts) {
+    if (c.dropped || c.latest == null) continue;
+    try { fs.writeFileSync(ckptFile(id) + '.tmp', c.latest); fs.renameSync(ckptFile(id) + '.tmp', ckptFile(id)); } catch { /* best effort */ }
+  }
+});
 export function loadCheckpoint(id) {
   if (!validRunId(id)) return null;
+  const c = ckpts.get(id);
+  if (c) return c.dropped ? null : JSON.parse(c.latest);
   try { return JSON.parse(fs.readFileSync(ckptFile(id), 'utf8')); } catch { return null; }
 }
-export function dropCheckpoint(id) { if (validRunId(id)) fs.rmSync(ckptFile(id), { force: true }); }
+const hasCheckpoint = (id) => { const c = ckpts.get(id); return c ? !c.dropped : fs.existsSync(ckptFile(id)); };
+export function dropCheckpoint(id) {
+  if (!validRunId(id)) return;
+  const c = ckpts.get(id);
+  if (c) { c.next = null; c.dropped = true; } // a write under way removes the file again when it finishes
+  fs.rmSync(ckptFile(id), { force: true });
+}
 
 // ---------- scorecard and cost ledger: one row per reply ----------
 // Every reply's cost is written here when it ends, however it ends (finished, stopped, failed), so a
