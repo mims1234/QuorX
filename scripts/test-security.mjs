@@ -12,6 +12,7 @@ import { safePath, checkCommand, preApproved, searchFiles, childEnv } from '../s
 import { userEnv, mergePath } from '../server/userenv.js';
 import { needsAdmin, adminForAgent } from '../server/elevation.js';
 import { externalize, blobData } from '../server/blobs.js';
+import { redactSecrets } from '../server/secrets.js';
 
 const req = ({ host = 'localhost:5188', ip = '127.0.0.1', site, cookie, headers = {} } = {}) => ({ headers: { host, ...(site ? { 'sec-fetch-site': site } : {}), ...(cookie ? { cookie } : {}), ...headers }, socket: { remoteAddress: ip } });
 const res = () => { const r = { code: 0, headers: {}, body: '' }; r.writeHead = (c, h = {}) => { r.code = c; Object.assign(r.headers, h); return r; }; r.end = (b = '') => { r.body += b; return r; }; return r; };
@@ -213,6 +214,26 @@ test('read commands: your keys ask with a red card, outside the project asks; Qu
   assert.equal(await v(`cat ${fwd(path.join(os.tmpdir(), 'elsewhere.txt'))}`), 'ask');
   assert.equal(await v('cat README.md'), 'allow');
   assert.equal(await v('curl http://127.0.0.1:5188/api/config'), 'deny');
+});
+
+test('key reads by other routes ask too: git diff --no-index, and a search from your home folder down', async () => {
+  const root = tempDir('qx-sec-');
+  const fwd = (p) => p.split(path.sep).join('/'), home = fwd(os.homedir());
+  const yolo = async (line) => { const d = await decide(line, { shell: 'bash', root, mode: 'yolo', rules: [] }); return `${d.verdict}:${d.who}:${d.risk}`; };
+  assert.equal(await yolo(`git diff --no-index ${home}/.ssh/id_ed25519 /dev/null`), 'ask:user:danger', 'a key compared against nothing is a key read');
+  assert.equal(await yolo(`rg -uu PRIVATE ${home}`), 'ask:user:danger', 'a search from the home folder walks into .ssh');
+  assert.equal(await yolo(`grep -rn PRIVATE ${home}`), 'ask:user:danger');
+  // Everyday work is unchanged.
+  for (const line of ['git diff', 'git diff --no-index a.txt b.txt', 'rg TODO .', 'rg TODO src', 'grep -rn TODO .', `grep TODO ${home}/notes.txt`])
+    assert.notEqual(await yolo(line), 'ask:user:danger', line);
+});
+
+test('a private key is redacted whole, not just its first line', () => {
+  const key = ['-----BEGIN OPENSSH PRIVATE KEY-----', 'b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW', 'QyNTUxOQAAACBz', '-----END OPENSSH PRIVATE KEY-----'].join('\n');
+  const r = redactSecrets(`before\n${key}\nafter`);
+  assert.equal(r.text, 'before\n[secret removed]\nafter');
+  const cut = redactSecrets(`x ${key.split('\n').slice(0, 2).join('\n')}`);
+  assert.ok(!cut.text.includes('b3BlbnNz'), 'output cut off before the END line still loses the key');
 });
 
 test('the write guard judges where a path lands, not how it is spelled', () => {

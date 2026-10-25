@@ -8,7 +8,9 @@ export const KEY_PATTERNS = [
   [/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, 'an AWS key'],
   [/\bAIza[0-9A-Za-z_-]{30,}/g, 'a Google API key'],
   [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*/g, 'a login token (JWT)'],
-  [/-----BEGIN [A-Z ]*PRIVATE KEY-----/g, 'a private key'],
+  // The whole block, not just its first line: the key itself is the lines in between. Output cut off before the END
+  // line loses everything after BEGIN.
+  [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g, 'a private key'],
   [/\b([a-z][\w+.-]*:\/\/[^\s:@/'"]+:)[^\s@/'"]+@/gi, 'a password in an address'],
 ];
 // In code: a quoted value given to something named like a secret (password = "…", "apiKey": "…").

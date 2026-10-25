@@ -782,8 +782,16 @@ function pathsOf(s, c, ctx) {
       add(a.text, 'read');
     }
   }
+  // git diff --no-index compares any two files on the computer, not the repo's: those are reads like cat's.
+  if (c.cls === 'read' && s.program === 'git' && s.args.some((a) => low(a.text) === '--no-index')) {
+    for (const a of s.args.filter((x) => !x.param).slice(1)) add(a.text, 'read');
+  }
   return out;
 }
+// Searches that walk down through folders: rg always, grep -r, findstr /s.
+const recursiveSearch = (s) => s.program === 'rg'
+  || (['grep', 'egrep', 'fgrep'].includes(s.program) && s.args.some((a) => /^(--recursive|--dereference-recursive|-[a-z]*[rR][a-z]*)$/.test(a.text)))
+  || (s.program === 'findstr' && s.args.some((a) => /^\/s$/i.test(a.text)));
 const FILE_READERS = new Set(['awk', 'gawk', 'nawk', 'get-content', 'gc', 'cat', 'type', 'more', 'less', 'head', 'tail', 'select-string', 'sls', 'findstr', 'grep', 'rg', 'strings',
   'od', 'hexdump', 'xxd', 'get-filehash', 'sha1sum', 'sha256sum', 'md5sum', 'shasum', 'md5', 'cut', 'sort', 'uniq', 'nl', 'wc', 'jq', 'diff', 'fc', 'comp', 'cmp',
   'import-csv', 'import-clixml', 'get-item', 'get-itemproperty', 'test-json', 'select-xml', 'convertfrom-json', 'file', 'stat', 'plutil', 'base64', 'certutil']);
@@ -797,6 +805,11 @@ function secretRead(abs) {
   for (const d of SECRET_DIRS) { const q = path.join(home, d); if (same(p, q) || inside(p, q)) return `your ${d} (keys and sign-ins)`; }
   if (/[\\/](google[\\/]chrome|microsoft[\\/]edge|mozilla[\\/]firefox|bravesoftware)[\\/]/i.test(p)) return 'a browser profile (passwords and cookies)';
   return '';
+}
+// A search that walks down from here reaches your key folders when it starts at your home folder or above it.
+function secretBelow(abs) {
+  const p = realish(path.resolve(abs)), home = realish(os.homedir());
+  return same(p, home) || inside(home, p) ? 'your home folder, key folders (.ssh, .aws…) included' : '';
 }
 
 // ---------- scripts that run other programs ----------
@@ -1277,7 +1290,7 @@ export async function decide(line, ctx) {
     const blocked = writes.find((p) => p.zone === 'blocked' || p.zone === 'protected');
     const unknownPath = paths.find((p) => p.zone === 'unknown');
     // A read outside the project asks; reading keys never runs.
-    const secret = reads.map((p) => p.resolved && secretRead(p.resolved)).find(Boolean);
+    const secret = reads.map((p) => p.resolved && (secretRead(p.resolved) || (recursiveSearch(s) && secretBelow(p.resolved)))).find(Boolean);
     const outside = writes.find((p) => p.zone === 'outside') || reads.find((p) => p.resolved && p.zone !== 'inside' && p.zone !== 'protected' && p.why !== 'the project folder itself');
     // YOLO reads outside the project unless it checks those first (never keys or QuorX's data: see secret).
     const readOnlyOutside = yolo && !check('reads') && outside?.kind === 'read';
