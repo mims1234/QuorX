@@ -2412,6 +2412,7 @@ function paneHTML(c) {
           </div>
         </div>
         </div>
+        <div class="mic-hint" role="group" aria-label="The mic key"></div>
       </form>`;
 }
 function renderPanes() {
@@ -2799,6 +2800,7 @@ function renderChatTools(c) {
   // 🎙 off hides the mic in every message box, the home page's included (it is built after renderToolbars runs).
   const mic = $('.micBtn', c.el.root);
   if (mic) mic.hidden = mic.disabled = T.listen?.on === false;
+  drawMicHints();
   const on = CHAT_TOOLS.filter((k) => c.tools[k]);
   const qOff = QUALITY_TOOLS.filter((k) => c.tools[k] === false);
   const label = (k) => CATS.find((x) => x[0] === k)[1];
@@ -6640,6 +6642,17 @@ function closePerms() { const pop = $('#permPop'), b = $('#permBtn'); if (!pop |
 const MIC_KEY = 'Ctrl+,', MIC_MODE = 'hold'; // the defaults until you pick others in Settings → Shortcuts
 const micHold = () => (G.settings?.micMode || MIC_MODE) === 'hold';
 const micTip = () => `Speak your message · ${G.settings.micKey || MIC_KEY}\nWhat you say is typed into the box.${micHold() ? ' Hold the key while you talk.' : ' Press again to stop.'}`;
+// The mic key in sight beside every 🎤: the key, what it does, and Hold / Toggle to switch how it works right there
+// (the same setting as ⚙ Settings → Shortcuts).
+function drawMicHints() {
+  const hold = micHold(), off = G.settings?.tools?.listen?.on === false;
+  for (const el of document.querySelectorAll('.mic-hint')) {
+    el.hidden = off;
+    el.innerHTML = `<span aria-hidden="true">🎤</span><kbd title="The mic key (change it in ⚙ Settings → Shortcuts)">${esc(G.settings.micKey || MIC_KEY)}</kbd><span class="mh-txt">${hold ? 'hold to talk' : 'press to talk, again to stop'}</span><span class="mh-seg">${[['hold', 'Hold', 'Listens while you hold the key down'], ['toggle', 'Toggle', 'Press once to start listening, again to stop']].map(([v, l, t]) => `<button type="button" data-mm="${v}" class="${hold === (v === 'hold') ? 'on' : ''}" aria-pressed="${hold === (v === 'hold')}" title="${t}">${l}</button>`).join('')}</span>`;
+    for (const b of el.querySelectorAll('[data-mm]')) b.onclick = () => { G.settings.micMode = b.dataset.mm; savePrefs(); drawMicHints(); };
+  }
+  if (!G.rec) for (const b of document.querySelectorAll('.micBtn:not(:disabled)')) b.title = micTip();
+}
 // 🎤 The mic key (⚙ Settings → Shortcuts): Toggle = press to start, press again to stop; Hold = listens while held.
 const keyCombo = (e) => {
   if (['Control', 'Shift', 'Alt', 'Meta', 'AltGraph'].includes(e.key)) return '';
