@@ -135,6 +135,7 @@ export const DEFAULTS = {
   browseReadOnly: true,    // 🧩 Chrome and lent tabs: for a request that only reads, typing outside a search box asks the user
   chromeCheck: true,       // 🧩 Chrome and lent tabs: the deciders check each typing step against the request (never the page)
   chromeNetwork: true,     // 🧩 Chrome and lent tabs: the agent may read a page's JSON or text data responses (GET only, secrets removed)
+  chromeYoloActs: false,   // 🧩 Chrome in ⚡ YOLO: steps that send, post, submit, buy or delete in your tabs run without the card (passwords and decider doubts still ask)
   chromeCloseTabs: false,  // 🧩 Chrome: when a reply ends, close the tabs it opened (off: they stay, so you see where it left off and the next reply carries on there)
   chromeSitesNever: '',    // 🧩 Chrome: sites the agent may never open ("bank.com, mychart.org")
   chromeSitesAlways: '',   // 🧩 Chrome: sites it may open without the "your request didn't name it" ask
@@ -3856,8 +3857,14 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     const host = hostOf(lent.tab.url) || 'the page';
     if (args.action === 'open' && /^https?:\/\//i.test(String(args.target || ''))) { const okd = await siteAllowed(hostOf(args.target)); if (okd !== true) return okd; }
     if (['click', 'press', 'type'].includes(args.action)) {
-      const risk = await lent.tab.riskOf(args).catch(() => null);
-      const ro = !risk && (readOnlyAsk() || onSiteList(host, S.chromeSitesRead)) ? await typingOutsideSearch(lent.tab, args) : null;
+      let risk = await lent.tab.riskOf(args).catch(() => null);
+      let ro = !risk && (readOnlyAsk() || onSiteList(host, S.chromeSitesRead)) ? await typingOutsideSearch(lent.tab, args) : null;
+      // ⚡ YOLO with "Act in your tabs without asking" ticked: account actions and typing in a reading request just run
+      // (a password field still asks, and so does a step the deciders doubt).
+      if (S.approval === 'yolo' && S.chromeYoloActs === true && (risk || ro) && !/password/i.test(risk || '')) {
+        emit({ t: 'note', level: 'info', msg: `YOLO: ran without asking in your tab on ${host}: ${risk || ro}.`, at: at() });
+        risk = null; ro = null;
+      }
       // A decider no never blocks on its own: it brings the step to the user like the other two.
       const doubt = !risk && !ro && (args.action === 'type' || (args.action === 'press' && /enter/i.test(String(args.key || 'Enter')))) ? await deciderFit(host, args) : null;
       if (risk || ro || doubt) {
