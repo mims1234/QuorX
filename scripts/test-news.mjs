@@ -320,3 +320,5 @@ test('news local: test results are kept by each suite and shown, and the view is
 
 // The chat's Markdown renderer, streamed and whole (kept in its own file).
 import './test-markdown.mjs';
+// Which opened chats the page lets go of (kept in its own file).
+import './test-chat-cache.mjs';

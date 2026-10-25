@@ -5,6 +5,7 @@
 import { startTour, maybeStartTour } from './tour.js';
 import { backupCard, drawBackup } from './backup.js';
 import { storageCard, drawStorage, setRulesText, refreshStorageBadge, projectSizes, focusProject, fmtBytes } from './storage.js';
+import { chatsToRelease } from './chat-cache.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -180,12 +181,14 @@ async function sendChat(c) {
   const j = await r.json().catch(() => null);
   savedParts.set(c.id, { rev: j?.rev, ...parts });
 }
+const unsaved = new Set();    // chat ids whose last save failed: the page keeps them until a save goes through
 // A chat is saved once it has its first message; saves are debounced per chat.
 function saveChat(c, now = false) {
   if (!c || !c.agent.messages.length) return;
   clearTimeout(timers.get(c.id));
   const go = () => {
-    const p = (saving.get(c.id) || Promise.resolve()).then(() => sendChat(c)).then((sent) => { if (sent !== false) refreshSidebar(); }, () => { /* offline: retried on the next change */ });
+    timers.delete(c.id);
+    const p = (saving.get(c.id) || Promise.resolve()).then(() => sendChat(c)).then((sent) => { unsaved.delete(c.id); if (sent !== false) refreshSidebar(); }, () => { unsaved.add(c.id); /* offline: retried on the next change */ });
     saving.set(c.id, p);
     p.finally(() => { if (saving.get(c.id) === p) saving.delete(c.id); });
     return p;
@@ -861,6 +864,7 @@ async function deleteChat(id) {
   if (!await uiConfirm(`Delete "${c?.title}"?\nIt moves to data/trash (recoverable). The project folder and its files stay.${f ? `\n${footprintText(f)}` : ''}`)) return;
   footCache.delete(id);
   await fetch(`/api/chats/${id}`, { method: 'DELETE' });
+  if (G.open.has(id)) releasePane(G.open.get(id));
   G.open.delete(id);
   const i = G.panes.indexOf(id);
   if (i >= 0) { G.panes.splice(i, 1); if (!G.panes.length) showLanding(); else { G.focus = 0; renderPanes(); } }
@@ -1235,7 +1239,7 @@ async function deleteProject(p) {
   if (!await uiConfirm(`Delete the project "${p.name}"?\n\n• Its ${n} chat${n === 1 ? '' : 's'} move to data/trash (recoverable).\n• The folder ${p.dir} and its files are NOT touched.`)) return;
   const r = await fetch(`/api/projects/${p.id}`, { method: 'DELETE' }).then((x) => x.json()).catch(() => ({}));
   if (!r.ok) return uiAlert('Could not delete that project.');
-  for (const [id, c] of G.open) if (c.projectId === p.id) { G.open.delete(id); G.panes = G.panes.filter((x) => x !== id); }
+  for (const [id, c] of G.open) if (c.projectId === p.id) { releasePane(c); G.open.delete(id); G.panes = G.panes.filter((x) => x !== id); }
   if (!G.panes.length) showLanding(); else renderPanes();
   refreshSidebar();
 }
@@ -2323,7 +2327,9 @@ function keepAtBottom(c, msgs, root) {
   if ('ResizeObserver' in window) {
     const ro = new ResizeObserver(() => toEnd());
     for (const el of msgs.children) ro.observe(el);
-    new MutationObserver((list) => { for (const r of list) for (const n of r.addedNodes) if (n.nodeType === 1) ro.observe(n); toEnd(); }).observe(msgs, { childList: true });
+    const mo = new MutationObserver((list) => { for (const r of list) for (const n of r.addedNodes) if (n.nodeType === 1) ro.observe(n); toEnd(); });
+    mo.observe(msgs, { childList: true });
+    c.watchers = [ro, mo]; // stopped when the chat leaves the screen (releasePane)
   }
   toEnd();
   // Pictures, maths and code highlighting finish after the first paint: follow them too.
@@ -2414,12 +2420,49 @@ function paneHTML(c) {
         </div>
       </form>`;
 }
+// A chat off the screen lets go of its page: its observers stop and its elements can be freed. A reply running in
+// the background keeps updating the chat itself (its text and steps), and showing it again draws the latest state.
+function releasePane(c) {
+  for (const o of c.watchers || []) o.disconnect();
+  for (const m of c.agent.messages) { if (m.el) traceSeen?.unobserve(m.el); m.el = null; }
+  c.watchers = null; c.toEnd = null; c.el = null; c.suggest = null;
+}
+// Busy: on its way somewhere the page has to follow (a reply running, waiting for you or being reconnected, a code
+// review, a save not yet through) or holding what goes with the next message. A busy chat is never let go of.
+const chatBusy = (c) => !!(c.running || c.waiting || c.srvPop?.editing || c.srvPop?.busy || timers.has(c.id) || saving.has(c.id) || unsaved.has(c.id)
+  || c.ctx?.length || c.images?.length || c.docs?.length || c.comments?.length
+  || c.agent.messages.some((m) => m.live || m.runActive || m.pending || following.has(m.runId)));
+// Opened chats past the limit (chat-cache.js) leave the page, the least recently shown first; opening one again loads
+// it from the server (getChat), as the first time.
+function releaseColdChats() {
+  const ids = chatsToRelease([...G.open.values()].map((c) => ({ id: c.id, shownAt: c.shownAt || 0, visible: G.panes.includes(c.id), busy: chatBusy(c) })));
+  let redraw = false;
+  for (const id of ids) redraw = dropChat(G.open.get(id)) || redraw;
+  if (redraw) { syncLayout(); renderPane(); }
+}
+// Nothing else keeps a chat that left: its servers menu, a replay of its steps, the Steps pane showing one of its replies.
+function dropChat(c) {
+  const runs = new Set(c.agent.messages.map((m) => m.runId).filter(Boolean));
+  const body = $('#paneBody'), bar = $('#appBar');
+  const onPane = !!body && (runs.has($('.trace-pane', body)?.dataset.run) || (!!$('.replay-pane', body) && runs.has(G.replay?.run)));
+  releasePane(c); closeServers(c);
+  if (runs.has(G.replay?.run)) stopReplay();
+  let redraw = false;
+  if (runs.has(G.traceRun)) G.traceRun = null;
+  if (runs.has(G.view.trace)) { G.view.trace = null; redraw = true; }
+  if (onPane) { body.innerHTML = ''; if (bar) { bar.innerHTML = ''; bar.hidden = true; } }
+  for (const r of runs) delete G.traceFollow?.[r];
+  G.open.delete(c.id); savedParts.delete(c.id); timers.delete(c.id);
+  return redraw;
+}
 function renderPanes() {
   const box = $('#chats');
   G.panes = G.panes.filter((id) => G.open.has(id));
   syncHome();
+  // Every chat is drawn again from its state below; the ones that left the screen let go of their old page.
+  for (const c of G.open.values()) if (c.el) releasePane(c);
   box.innerHTML = '';
-  if (!G.panes.length) { renderLanding(box); syncLayout(); renderPane(); return; }
+  if (!G.panes.length) { renderLanding(box); syncLayout(); renderPane(); releaseColdChats(); return; }
   box.classList.toggle('split', G.panes.length > 1);
   G.panes.forEach((id, i) => {
     const c = G.open.get(id);
@@ -2435,11 +2478,13 @@ function renderPanes() {
     if (!c.agent.messages.length) msgs.innerHTML = `<div class="hint"><b>${esc(c.title)}</b><br>${esc(short(c.agent.setup.model))} · ${c.approval === 'strict' ? '🔒 Strict: asks before each tool it uses' : '⚡ YOLO: uses its tools without asking'}<br>The agent decides by itself when to ask the deciders.</div>`;
     for (const m of c.agent.messages) msgs.appendChild(renderMsg(c, m));
     keepAtBottom(c, msgs, root);
+    c.shownAt = Date.now();
   });
   renderToolbars(); syncLayout(); renderPane(); applyKeyLock(); budgetNotices(); folderNotices();
   for (const id of G.panes) checkSpace(G.open.get(id));
   for (const pid of new Set(G.panes.map((id) => G.open.get(id)?.projectId))) refreshUndoable(pid);
   pollDev();
+  releaseColdChats();
 }
 function wirePane(c, root, i) {
   root.addEventListener('pointerdown', () => { if (G.focus !== i) { G.focus = i; for (const p of document.querySelectorAll('.chatpane')) p.classList.toggle('focus', p === root); G.view = { id: null, src: false, files: false }; G.traceRun = null; renderPane(); syncLayout(); renderSidebar(); } }, true);
@@ -3308,6 +3353,7 @@ function restoreInputs(tl, saved) {
 }
 // The timeline drawn again from the reply's state, with its cards wired.
 function drawTimeline(c, m) {
+  if (offPage(m.el)) return;
   const el = m.el, tl = $('.timeline', el), was = cardInputs(tl);
   // Everything the agent did reads in order: its thinking (folded), what it said, one line per step's tool calls
   // (click for each call and its result), and any card that asks you something, right where it happened.
@@ -3327,9 +3373,12 @@ function drawHeld(m, id, card) {
     if (aw) aw.outerHTML = waitHTML(card);
   }
 }
+// A reply's element that is not on the page: none (its chat is off the screen), or left behind in a page drawn again.
+// A new one, still being put together (renderMsg), has no parent yet and is drawn.
+function offPage(el) { return !el || (!el.isConnected && !!el.parentNode); }
 function updateMsg(c, m, { bodyOnly = false } = {}) {
   const el = m.el;
-  if (!el) return;
+  if (offPage(el)) return; // a reply running off the screen: only its data changes, drawn when the chat is shown
   const body = $('.body', el);
   if (m.live && !m.error && !String(m.content || '').includes('\r')) streamBody(body, String(m.content || ''));
   else {
@@ -6696,9 +6745,8 @@ async function toggleMic(c, { byKey = false } = {}) {
         const audio = (await asDataURL(encodeWav((await off.startRendering()).getChannelData(0), 16000))).split(',')[1];
         const r = await fetch('/api/transcribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ audio, model: G.settings.tools.listen.models[0] }) }).then((x) => x.json());
         if (r.error) throw new Error(r.error);
-        const ta = $('.input', c.el.root);
-        ta.value = [ta.value.trim(), r.text].filter(Boolean).join(' ');
-        ta.focus();
+        const ta = c.el && $('.input', c.el.root); // none when the chat left the screen meanwhile
+        if (ta) { ta.value = [ta.value.trim(), r.text].filter(Boolean).join(' '); ta.focus(); }
         G.sessionCost += r.cost || 0; renderSpend();
         if (r.cost) { c.agent.extraUsage.push({ kind: 'listen', model: r.model, cost: r.cost, at: Date.now() }); saveChat(c); renderChatHead(c); }
       } catch (e) { uiAlert(`Transcription failed: ${e.message}`); }
