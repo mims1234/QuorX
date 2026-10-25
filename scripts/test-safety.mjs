@@ -1057,14 +1057,17 @@ $f.Controls.AddRange(@($l, $b)); [void]$f.ShowDialog()`;
     if (i === 0) return reply('', [['shell', { command: 'powershell -NoProfile -ExecutionPolicy Bypass -File app.ps1', background: true }]]);
     if (i === 1) { job = toolOut([b], 0).match(/job (bg\d+)/)[1]; return reply('', [['desktop', { action: 'read', job }]]); }
     if (i === 2) { const ref = toolOut([b], 0).match(/\[(\d+)\] Button "Add one"/)[1]; return reply('', [['desktop', { action: 'click', job, ref: Number(ref) }]]); }
-    if (i === 3) return reply('', [['desktop', { action: 'read', job: 'bg9999' }]]);
-    if (i === 4) return reply('', [['job_stop', { job }]]);
+    if (i === 3) return reply('', [['desktop', { action: 'keys', job, keys: 'qx' }]]);
+    if (i === 4) return reply('', [['desktop', { action: 'read', job: 'bg9999' }]]);
+    if (i === 5) return reply('', [['job_stop', { job }]]);
     return reply('Done.');
   }, { prep: (d) => { fs.writeFileSync(path.join(d, 'app.ps1'), app); allow(d, 'powershell -noprofile -executionpolicy bypass -file app.ps1*'); } });
   assert.match(toolOut(bodies, 2), /Window \d+:[\s\S]*Text "Count: 0"[\s\S]*\[\d+\] Button "Add one"/);
   assert.match(toolOut(bodies, 3), /pressed[\s\S]*Count: 1/);
-  assert.match(toolOut(bodies, 4), /no background job bg9999/);
-  assert.match(toolOut(bodies, 5), /0 processes left/);
+  // Keys go to the app's own window, or (when Windows keeps another window in front) nowhere: never to that window.
+  assert.match(toolOut(bodies, 4), /sent the keys|Windows kept another window in front, so nothing was typed/);
+  assert.match(toolOut(bodies, 5), /no background job bg9999/);
+  assert.match(toolOut(bodies, 6), /0 processes left/);
 });
 // ---------- P2: package guard, gamed tests, audit log ----------
 import { packagesOf, checkPackages } from '../server/pkgguard.js';

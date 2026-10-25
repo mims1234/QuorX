@@ -38,6 +38,43 @@ public static class QxUia {
   [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
   [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(POINT p);
   [DllImport("user32.dll")] static extern int GetSystemMetrics(int i);
+  [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] static extern IntPtr GetAncestor(IntPtr h, uint flags);
+  [DllImport("user32.dll")] static extern bool AttachThreadInput(uint a, uint b, bool attach);
+  [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+
+  // Whether a window (or the top-level window it sits in) belongs to a process the agent started.
+  static bool Ours(IntPtr w, int[] pids) {
+    if (w == IntPtr.Zero) return false;
+    IntPtr root = GetAncestor(w, 2); // GA_ROOT
+    if (root != IntPtr.Zero) w = root;
+    uint pid; GetWindowThreadProcessId(w, out pid);
+    foreach (int p in pids) if (p == (int)pid) return true;
+    return false;
+  }
+
+  // Keys and real clicks go to whatever window is in front, and Windows may refuse to bring the agent's window there
+  // (it keeps the focus with the window the user last used). So the window is brought forward and checked, and when
+  // it isn't in front nothing is sent: typing then would land in the user's own window.
+  static void Front(IntPtr h, int[] pids) {
+    if (IsIconic(h)) ShowWindow(h, 9);
+    for (int i = 0; i < 3; i++) {
+      IntPtr fg = GetForegroundWindow();
+      uint none, me = GetCurrentThreadId(), fgThread = fg == IntPtr.Zero ? 0 : GetWindowThreadProcessId(fg, out none);
+      // Joining the input of the window in front lets the focus move away from it.
+      bool joined = fgThread != 0 && fgThread != me && AttachThreadInput(me, fgThread, true);
+      SetForegroundWindow(h);
+      if (joined) AttachThreadInput(me, fgThread, false);
+      Thread.Sleep(150 + i * 100);
+      if (Ours(GetForegroundWindow(), pids)) return;
+    }
+    throw new Exception("Windows kept another window in front, so nothing was typed or clicked (it would have landed there): try again, or ask the user to click the app's window once");
+  }
+
+  // A real click lands on whatever window is at that point on screen.
+  static void Lands(POINT at, int[] pids) {
+    if (!Ours(WindowFromPoint(at), pids)) throw new Exception("another window covers that spot, so nothing was clicked (the click would have landed there): close or move it, then try again");
+  }
 
   static readonly Dictionary<long, List<AutomationElement>> Refs = new Dictionary<long, List<AutomationElement>>();
   static readonly HashSet<string> Interactive = new HashSet<string>(new string[] { "Button", "Edit", "CheckBox", "RadioButton", "ComboBox", "ListItem", "MenuItem", "TabItem", "Hyperlink", "TreeItem", "Slider", "Spinner", "SplitButton", "DataItem", "Document" });
@@ -132,7 +169,7 @@ public static class QxUia {
 
   static string Busy(bool done, string did) { return done ? did : did + " (the app is still busy: it may have opened a dialog; list the windows)"; }
 
-  public static string Click(long handle, int r) {
+  public static string Click(long handle, int r, int[] pids) {
     AutomationElement e = Ref(handle, r);
     object p;
     // Tk (Python's tkinter) makes a button's events from the real mouse: Invoke answers "pressed" but the command never
@@ -151,10 +188,10 @@ public static class QxUia {
     System.Windows.Rect rect = e.Current.BoundingRectangle;
     if (rect.IsEmpty) throw new Exception("that control has no place on screen to click");
     IntPtr h = new IntPtr(handle);
-    if (IsIconic(h)) ShowWindow(h, 9);
-    SetForegroundWindow(h); Thread.Sleep(200);
+    Front(h, pids);
     POINT at = new POINT { X = (int)(rect.Left + rect.Width / 2), Y = (int)(rect.Top + rect.Height / 2) };
     if (tk && e.Current.NativeWindowHandle != 0 && WindowFromPoint(at) != new IntPtr(e.Current.NativeWindowHandle)) throw new Exception("another window covers that button, so a click would land there: close or move it, then click again");
+    Lands(at, pids);
     if (!tk) { SetCursorPos(at.X, at.Y); mouse_event(0x2, 0, 0, 0, UIntPtr.Zero); mouse_event(0x4, 0, 0, 0, UIntPtr.Zero); }
     else {
       // Each event carries the point, so the user moving the mouse meanwhile can't send the press elsewhere; Tk must
@@ -170,18 +207,19 @@ public static class QxUia {
   }
 
   // A click at x,y inside the window (as in its picture): for apps whose controls UI Automation can't see.
-  public static string ClickAt(long handle, int x, int y) {
+  public static string ClickAt(long handle, int x, int y, int[] pids) {
     IntPtr h = new IntPtr(handle);
     if (IsIconic(h)) ShowWindow(h, 9);
     RECT r; GetWindowRect(h, out r);
     if (x < 0 || y < 0 || x >= r.R - r.L || y >= r.B - r.T) throw new Exception("that point is outside the window");
-    SetForegroundWindow(h); Thread.Sleep(200);
+    Front(h, pids);
+    Lands(new POINT { X = r.L + x, Y = r.T + y }, pids);
     SetCursorPos(r.L + x, r.T + y);
     mouse_event(0x2, 0, 0, 0, UIntPtr.Zero); mouse_event(0x4, 0, 0, 0, UIntPtr.Zero);
     return "clicked at " + x + "," + y;
   }
 
-  public static string Set(long handle, int r, string text) {
+  public static string Set(long handle, int r, string text, int[] pids) {
     AutomationElement e = Ref(handle, r);
     object p;
     if (e.TryGetCurrentPattern(ValuePattern.Pattern, out p)) {
@@ -190,8 +228,9 @@ public static class QxUia {
       return Busy(Within(delegate () { vp.SetValue(text); }, 3000), "set its text");
     }
     IntPtr h = new IntPtr(handle);
-    SetForegroundWindow(h); Thread.Sleep(150);
+    Front(h, pids);
     e.SetFocus();
+    if (!Ours(GetForegroundWindow(), pids)) throw new Exception("the window lost the focus before typing, so nothing was typed: try again");
     System.Windows.Forms.SendKeys.SendWait(Escape(text));
     return "typed into it";
   }
@@ -202,10 +241,9 @@ public static class QxUia {
     return b.ToString();
   }
 
-  public static string Keys(long handle, string keys) {
+  public static string Keys(long handle, string keys, int[] pids) {
     IntPtr h = new IntPtr(handle);
-    if (IsIconic(h)) ShowWindow(h, 9);
-    SetForegroundWindow(h); Thread.Sleep(200);
+    Front(h, pids);
     System.Windows.Forms.SendKeys.SendWait(keys);
     return "sent the keys";
   }
@@ -247,10 +285,10 @@ while ($true) {
         $out.windows = @(([QxUia]::Windows($pids)) -split "`n" | Where-Object { $_ } | ForEach-Object { $p = $_ -split "`t", 3; @{ handle = [long]$p[0]; pid = [int]$p[1]; title = $p[2] } })
       }
       'tree' { $out.text = [QxUia]::Tree([long]$m.handle, [int]($(if ($m.depth) { $m.depth } else { 25 })), [int]($(if ($m.max) { $m.max } else { 250 }))) }
-      'click' { $out.did = [QxUia]::Click([long]$m.handle, [int]$m.ref) }
-      'clickxy' { $out.did = [QxUia]::ClickAt([long]$m.handle, [int]$m.x, [int]$m.y) }
-      'set' { $out.did = [QxUia]::Set([long]$m.handle, [int]$m.ref, [string]$m.text) }
-      'keys' { $out.did = [QxUia]::Keys([long]$m.handle, [string]$m.keys) }
+      'click' { $out.did = [QxUia]::Click([long]$m.handle, [int]$m.ref, $pids) }
+      'clickxy' { $out.did = [QxUia]::ClickAt([long]$m.handle, [int]$m.x, [int]$m.y, $pids) }
+      'set' { $out.did = [QxUia]::Set([long]$m.handle, [int]$m.ref, [string]$m.text, $pids) }
+      'keys' { $out.did = [QxUia]::Keys([long]$m.handle, [string]$m.keys, $pids) }
       'shot' { $out.png = [QxUia]::Shot([long]$m.handle) }
       'close' { $out.did = [QxUia]::Close([long]$m.handle) }
       default { throw "unknown op $($m.op)" }
