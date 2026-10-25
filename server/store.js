@@ -26,13 +26,28 @@ const PROJECTS = path.join(HOME, 'data', 'projects.json');
 // Read once and kept until projects.json changes; whether each folder still exists is looked at again every 2 s.
 // (Many requests ask for the list, some once per project: re-reading it each time made 200 projects take minutes.)
 let PCACHE = null; // { key, at, list }
-const writeProjects = (list) => { fs.writeFileSync(PROJECTS, JSON.stringify(list, null, 2)); PCACHE = null; };
+// Saved through a temp file, keeping the last good list as projects.json.bak: a crash, a power cut or a full disk
+// mid-save can't leave a half list behind.
+const writeProjects = (list) => {
+  const text = JSON.stringify(list, null, 2);
+  try { if (Array.isArray(JSON.parse(fs.readFileSync(PROJECTS, 'utf8')))) fs.copyFileSync(PROJECTS, PROJECTS + '.bak'); } catch { /* no good list to keep yet */ }
+  fs.writeFileSync(PROJECTS + '.tmp', text); fs.renameSync(PROJECTS + '.tmp', PROJECTS); PCACHE = null;
+};
+// The saved list. An unreadable or damaged one (left by an older save that crashed halfway) falls back to the last good
+// copy; with neither, an error, so nothing saves a near-empty list over the projects.
+export function readProjectsFile() {
+  const read = (f) => { const l = JSON.parse(fs.readFileSync(f, 'utf8')); if (!Array.isArray(l)) throw new SyntaxError('not a list'); return l; };
+  try { return read(PROJECTS); } catch (e) {
+    if (e.code === 'ENOENT' && !fs.existsSync(PROJECTS + '.bak')) return [];
+    try { return read(PROJECTS + '.bak'); } catch { /* no good copy either */ }
+    throw new Error(`QuorX can't read its project list (${e.code || 'the file is damaged'}). Your projects are safe; restart QuorX to repair the data folder.`);
+  }
+}
 export function listProjects() {
   let key = '';
   try { const st = fs.statSync(PROJECTS); key = `${st.size}:${st.mtimeMs}`; } catch { /* none yet */ }
   if (!PCACHE || PCACHE.key !== key || Date.now() - PCACHE.at > 2000) {
-    let list = [];
-    try { list = JSON.parse(fs.readFileSync(PROJECTS, 'utf8')); } catch (e) { if (e.code && e.code !== 'ENOENT') throw new Error(`QuorX can't read its project list (${e.code}). Your projects are safe; restart QuorX to repair the data folder.`); }
+    const list = readProjectsFile();
     if (!list.some((p) => p.id === 'scratch')) list.unshift({ id: 'scratch', name: 'Scratch', path: null, created: Date.now() });
     // A folder the user chose can be moved or deleted outside the app: say so instead of quietly making an empty one.
     // needsFolder: a project whose files sit inside the harness (no folder picked, or one inside the app): it must pick a folder.
@@ -43,8 +58,7 @@ export function listProjects() {
 // Scratch moves out of the harness once: to Documents\QuorX\Scratch, with its old files copied over.
 (function adoptScratch() {
   try {
-    let list = [];
-    try { list = JSON.parse(fs.readFileSync(PROJECTS, 'utf8')); } catch (e) { if (e.code && e.code !== 'ENOENT') throw new Error(`QuorX can't read its project list (${e.code}). Your projects are safe; restart QuorX to repair the data folder.`); }
+    const list = readProjectsFile();
     const sc = list.find((p) => p.id === 'scratch');
     if (sc?.path) return;
     fs.mkdirSync(SCRATCH_HOME, { recursive: true });

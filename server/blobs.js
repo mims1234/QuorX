@@ -6,7 +6,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { pipeline } from 'node:stream';
 import { HOME } from './openrouter.js';
+
+/**
+ * Streams a file into a response. A file that is gone or locked by the time it opens (the agent replacing it,
+ * antivirus) ends that one response instead of the whole server, and a tab closed mid-download closes the file
+ * instead of leaving it open for as long as the server runs.
+ */
+export const sendFile = (file, res, opts) => { const src = fs.createReadStream(file, opts); pipeline(src, res, () => { /* ended or cut off */ }); return src; };
 
 const DIR = path.join(HOME, 'data', 'blobs');
 const MIN = 16 * 1024; // smaller data URLs stay where they are
@@ -89,10 +97,10 @@ export function serveBlob(req, res, name) {
     let end = range[1] && range[2] ? Math.min(Number(range[2]), st.size - 1) : st.size - 1;
     if (start > end || start >= st.size) { res.writeHead(416, { 'Content-Range': `bytes */${st.size}` }); return res.end(); }
     res.writeHead(206, { ...head, 'Content-Range': `bytes ${start}-${end}/${st.size}`, 'Content-Length': end - start + 1 });
-    return fs.createReadStream(file, { start, end }).pipe(res);
+    return sendFile(file, res, { start, end });
   }
   res.writeHead(200, { ...head, 'Content-Length': st.size });
-  return fs.createReadStream(file).pipe(res);
+  return sendFile(file, res);
 }
 
 // ---------- the sweep: blobs nothing refers to any more ----------
