@@ -150,8 +150,8 @@ function chatDoc(c) {
 }
 const timers = new Map();
 // What the server last confirmed for each chat: its rev, and each part as it was sent. The next save sends only
-// the messages and artifacts that differ (a PATCH); a chat with no rev yet, or one whose file has moved on since
-// (another tab, an older page), is sent whole.
+// the messages and artifacts that differ (a PATCH). A chat with no rev yet is sent whole; one whose file has moved
+// on since (another tab, another QuorX on the same data) is merged with the server's copy first (mergeServerCopy).
 const savedParts = new Map(); // chat id → { rev, head, msgs, arts }
 const saving = new Map();     // chat id → the save in flight: saves of one chat go one after another
 function chatParts(doc) {
@@ -160,7 +160,44 @@ function chatParts(doc) {
     arts: Object.fromEntries(Object.entries(artifacts || {}).map(([k, a]) => [k, JSON.stringify(a ?? null)])) };
 }
 const putChat = (id, doc) => fetch(`/api/chats/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(doc) });
-async function sendChat(c) {
+// A reply running in this page: its message is always this page's in a merge.
+const isLiveMsg = (c, m) => m.role === 'assistant' && !!m.runId && (m.live || (m.runActive && c.running?.runId === m.runId));
+// A save refused because the file moved on: the server's copy merged with this page's (public/chat-merge.js), or,
+// when both changed the same message or artifact, the server's copy kept. Either way the next save builds on the
+// server's rev, so a stale page never saves over newer messages. → false when the server has no copy of the chat.
+async function mergeServerCopy(c, last) {
+  const r = await fetch(`/api/chats/${c.id}`);
+  if (r.status === 404) return false;
+  const doc = r.ok ? await r.json().catch(() => null) : null;
+  if (!doc?.rev) throw new Error('save failed');
+  const server = normalise(doc), theirs = chatDoc(server), head = JSON.parse(last.head);
+  const base = { ...head, agent: { ...head.agent, messages: last.msgs.map((s) => JSON.parse(s)), artifacts: Object.fromEntries(Object.entries(last.arts).map(([k, s]) => [k, JSON.parse(s)])) } };
+  const mine = c.agent.messages, res = mergeChat(base, chatDoc(c), theirs, { live: (i) => isLiveMsg(c, mine[i]) });
+  const next = res.ok ? res.doc : theirs;
+  for (const k of ['title', 'projectId', 'created', 'approval', 'paneHidden', 'tools']) c[k] = next[k];
+  const { messages: _m, artifacts, ...agent } = next.agent;
+  for (const k of Object.keys(c.agent)) if (!(k in agent) && k !== 'messages' && k !== 'artifacts') delete c.agent[k];
+  Object.assign(c.agent, agent);
+  c.agent.artifacts = { ...artifacts };
+  if (res.ok) c.agent.messages = res.from.map(([side, i]) => (side === 'mine' ? mine[i] : server.agent.messages[i]));
+  else {
+    // The server's copy, with any reply still running here kept in it.
+    const msgs = server.agent.messages.slice();
+    for (const m of mine.filter((x) => isLiveMsg(c, x))) { const i = msgs.findIndex((x) => x.runId === m.runId); if (i >= 0) msgs[i] = m; else msgs.push(m); }
+    c.agent.messages = msgs;
+  }
+  savedParts.set(c.id, { rev: doc.rev, ...chatParts(theirs) });
+  // A reply the other window started and is still running: followed here too, as when the chat is opened.
+  if (c.agent.messages.some((m) => m.runActive && !isLiveMsg(c, m))) reattachRuns(c);
+  if ((!res.ok || res.changed) && c.el && G.panes.includes(c.id)) {
+    const box = $('.msgs', c.el.root);
+    if (box && c.agent.messages.length) { box.innerHTML = ''; for (const m of c.agent.messages) box.appendChild(renderMsg(c, m)); if (c.follow) c.toEnd?.(); }
+    renderChatHead(c); renderComposerBar(c);
+    if (!res.ok) flashTip($('.chat-head', c.el.root) || document.body, 'This chat changed in another window; reloaded the latest', 4000);
+  }
+  return true;
+}
+async function sendChat(c, tries = 0) {
   const doc = chatDoc(c), parts = chatParts(doc), last = savedParts.get(c.id);
   if (last?.rev) {
     // The body is put together from the parts already turned into text, so nothing is stringified twice.
@@ -173,7 +210,13 @@ async function sendChat(c) {
     const r = await fetch(`/api/chats/${c.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body });
     const j = r.ok ? await r.json().catch(() => null) : null;
     if (j?.rev) return void savedParts.set(c.id, { rev: j.rev, ...parts });
-    // Refused (the file moved on) or an older server: the whole chat instead.
+    // Refused because the file moved on: merge with the server's copy and send the difference from that. Never the
+    // whole chat over a newer one. An older server (no patches) still gets the whole chat.
+    if (r.status === 409) {
+      if (tries >= 3) { setTimeout(() => saveChat(c), 3000); throw new Error('the chat keeps changing elsewhere'); }
+      if (await mergeServerCopy(c, last)) return sendChat(c, tries + 1);
+      // The server has no copy any more: the whole chat, as before.
+    }
   }
   const r = await putChat(c.id, doc);
   if (!r.ok) throw new Error('save failed');
@@ -293,6 +336,7 @@ async function contextText(list) {
 // Typing @ suggests recent chats, this project's files and other projects; typing more filters
 // them. Picking one attaches it as context for the next message. / lists the chat commands.
 import { langOf, mountCode } from './code.js';
+import { mergeChat } from './chat-merge.js';
 import { renderMarkdown, enhance } from './markdown.js';
 
 // The message box's buttons: icons only, coloured by what they do.
