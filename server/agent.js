@@ -135,7 +135,7 @@ export const DEFAULTS = {
   browseReadOnly: true,    // 🧩 Chrome and lent tabs: for a request that only reads, typing outside a search box asks the user
   chromeCheck: true,       // 🧩 Chrome and lent tabs: the deciders check each typing step against the request (never the page)
   chromeNetwork: true,     // 🧩 Chrome and lent tabs: the agent may read a page's JSON or text data responses (GET only, secrets removed)
-  chromeCloseTabs: true,   // 🧩 Chrome: when a reply ends, close the tabs it opened (the ones you gave stay)
+  chromeCloseTabs: false,  // 🧩 Chrome: when a reply ends, close the tabs it opened (off: they stay, so you see where it left off and the next reply carries on there)
   chromeSitesNever: '',    // 🧩 Chrome: sites the agent may never open ("bank.com, mychart.org")
   chromeSitesAlways: '',   // 🧩 Chrome: sites it may open without the "your request didn't name it" ask
   chromeSitesRead: '',     // 🧩 Chrome: sites where typing outside a search box always asks, whatever the request
@@ -3680,6 +3680,14 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     // At most 6 of its own tabs per reply: past that, a new tab opens in the current one (the run above opened 16).
     const full = newTab && (run.chromeTabs || 0) >= 6;
     if ((!newTab || full) && onLent && lent && g?.own && g.sid === lent.sid) { const out = await lentStep({ action: 'open', target: url }); return full ? `${out}\n\n[This chat already has 6 tabs of its own open, so this opened in the current tab. Read pages one at a time; tabs lists and switch moves between the open ones.]` : out; }
+    // Closing unticked (the default): a new reply carries on in the chat's tab from before, so the QuorX window doesn't
+    // fill with one tab per reply. A tab the user gave this chat stays theirs.
+    if (!newTab && !onLent && !run.chromeReused && S.chromeCloseTabs !== true && (!g || g.own)) {
+      run.chromeReused = true;
+      const prev = await chatChromeTabs(req.chatId).then((l) => (Array.isArray(l) ? l : []), () => []);
+      const t = prev.find((x) => x.active) || prev.at(-1);
+      if (t && (await adoptChromeTab(req.chatId, t.id).then(() => true, () => false)) && !/^Error/.test(await useLentTab())) return lentStep({ action: 'open', target: url });
+    }
     run.chromeTabs = (run.chromeTabs || 0) + 1;
     try { await openChromeTab(req.chatId, url, clip(getChat(req.chatId)?.title || userText, 30)); }
     catch (e) { return `Error: ${e.message}${/not connected/i.test(e.message) ? '. Ask the user to open Chrome with the QuorX extension connected (⚙ Settings → Code & servers → Chrome extension).' : ''}`; }
@@ -3722,9 +3730,9 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
       if (err) return `Error: could not reach the user's tab (${err.message}).`;
       if (!lent) return 'Error: the tab the user gave is closed now. Ask them to give it again.';
       cleanups.push(async () => { if (lent) { await lent.tab.mark?.(false); lent.release(); await lent.tab.close().catch(() => {}); lent = null; } });
-      // When the reply ends (after letting go of the tab above), the tabs it opened close, so an empty Chrome window
-      // means it is done. Tabs the user gave stay.
-      if (fresh && !run.closesChrome) { run.closesChrome = true; cleanups.push(async () => { if (S.chromeCloseTabs !== false) await closeChatChromeTabs(req.chatId); }); }
+      // With "Close the agent's tabs" ticked, the tabs it opened close when the reply ends (after letting go of the tab
+      // above), so an empty Chrome window means it is done. Tabs the user gave stay.
+      if (fresh && !run.closesChrome) { run.closesChrome = true; cleanups.push(async () => { if (S.chromeCloseTabs === true) await closeChatChromeTabs(req.chatId); }); }
     }
     onLent = true; run.lentUsed = true;
     const t = lent.tab;
@@ -3743,19 +3751,18 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     return args.action === 'type' ? `type "${clip(args.text, 60)}" into ${f.what}` : `press Enter in ${f.what}`;
   }
   // The deciders as a second check on writing in the user's tab: they see only the request and the planned step,
-  // never the page, so a page can't talk them round. Below 35% that it serves the request, the step is refused.
+  // never the page, so a page can't talk them round. Below 35% that it serves the request, the user is asked.
   async function deciderFit(host, args) {
     // (A scripted model in tests has no deciders behind it unless the test gives an ensemble.)
     if (!decidersOn || S.chromeCheck === false || (deps.chatStream && !deps.ensemble)) return null;
     const desc = args.action === 'type' ? `type "${clip(args.text, 120)}"${args.ref || args.selector ? ` into ${args.ref || args.selector}` : ''}` : `press ${args.key || 'Enter'}`;
     const questions = [{ id: 'fit', type: 'noul', ask: 'This step plainly serves what the user asked for, and does nothing the user did not ask for.' }];
-    const state = `A user asked an AI agent:\n"${clip(userText, 1500)}"\n\nThe agent is working in the user's own signed-in browser tab on ${host}. Its next step: ${desc}.\nJudge only from the user's request. Typing a message, post or reply the user never asked for does not serve it; typing into a search box to find what they asked about does.`;
+    const state = `A user asked an AI agent (their own messages, newest last):\n${userTurns().filter(Boolean).map((m) => `"${clip(m, 700)}"`).join('\n')}\n\nThe agent is working in the user's own signed-in browser tab on ${host}. Its next step: ${desc}.\nJudge only from the user's request. Typing a message, post or reply the user never asked for does not serve it; typing into a search box to find what they asked about does.`;
     let d;
     try { d = await deciders({ S, state, questions, signal, account }); } catch (e) { if (signal.aborted) throw e; return null; }
     const r = d?.results?.fit, p = r?.n ? r.dist.yes : null;
     emit({ t: 'note', level: p != null && p < 0.35 ? 'warn' : 'info', msg: `The deciders checked "${desc}" in your tab on ${host}: ${p == null ? 'no answer' : `${Math.round(p * 100)}% that it serves your request`}.`, at: at() });
-    if (p != null && p < 0.35) return `The deciders judged that this step doesn't serve the user's request (${Math.round((1 - p) * 100)}% sure): ${desc}. Don't do it. If you think it's needed, tell the user what you want to type and why, or ask them with ask_user.`;
-    return null;
+    return p != null && p < 0.35 ? { desc, p } : null;
   }
   async function lentStep(args, o = {}) {
     const g = req.chatId ? givenTab(req.chatId) : null;
@@ -3766,16 +3773,18 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     if (['click', 'press', 'type'].includes(args.action)) {
       const risk = await lent.tab.riskOf(args).catch(() => null);
       const ro = !risk && (readOnlyAsk() || onSiteList(host, S.chromeSitesRead)) ? await typingOutsideSearch(lent.tab, args) : null;
-      if (risk || ro) {
-        const what = risk || ro;
-        const card = { id: newApprovalId(), tool: 'browser', free: true, est: 0, risk: 'danger', noAlways: true, what: `In your tab on ${host}: ${what}`, why: risk ? 'This acts in your own account, so only you can allow it.' : "Your request only reads, so QuorX asks before the agent types into your account (search boxes don't ask)." };
+      // A decider no never blocks on its own: it brings the step to the user like the other two.
+      const doubt = !risk && !ro && (args.action === 'type' || (args.action === 'press' && /enter/i.test(String(args.key || 'Enter')))) ? await deciderFit(host, args) : null;
+      if (risk || ro || doubt) {
+        const what = risk || ro || doubt.desc;
+        const why = risk ? 'This acts in your own account, so only you can allow it.'
+          : ro ? "Your request only reads, so QuorX asks before the agent types into your account (search boxes don't ask)."
+            : `The deciders put it at ${Math.round(doubt.p * 100)}% that this serves your request, so QuorX asks you.`;
+        const card = { id: newApprovalId(), tool: 'browser', free: true, est: 0, risk: 'danger', noAlways: true, what: `In your tab on ${host}: ${what}`, why };
         const ans = await askUser(card);
         // The answer closes the card in the page (without it the card stayed open after Allow once).
         emit({ t: 'approval_done', id: card.id, ...ans, at: at() });
         if (!ans.approve) return `The user said no to that (${what}). Don't try it another way: tell them what you wanted to do and why.`;
-      } else if (args.action === 'type' || (args.action === 'press' && /enter/i.test(String(args.key || 'Enter')))) {
-        const no = await deciderFit(host, args);
-        if (no) return no;
       }
     }
     try {

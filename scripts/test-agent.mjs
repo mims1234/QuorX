@@ -2577,12 +2577,12 @@ test('🧩 Chrome on in a chat: the agent opens its own tab in the user’s Chro
       reply('', [['browser', { action: 'open', target: `chrome:http://127.0.0.1:${port}/` }]]),
       reply('', [['browser', { action: 'click', text: 'Open message' }]]),
       reply('Done.'),
-    ][i], { chatId, settings: { chromeAccess: true } });
+    ][i], { chatId, settings: { chromeAccess: true, chromeCloseTabs: true } });
     assert.match(String(on.bodies[0].messages.at(-1).content), /use their own Chrome in this chat/);
     const res = toolResults(on.bodies.at(-1)).map(String);
     assert.equal(opened.length, 1); assert.equal(opened[0].chatId, chatId); assert.equal(opened[0].url, `http://127.0.0.1:${port}/`);
     assert.match(res[1], /clicked link "Open message"/);
-    assert.equal(givenTab(chatId), null); // the reply ended: the tab it opened was let go and closed
+    assert.equal(givenTab(chatId), null); // closing ticked: the reply ended, the tab it opened was let go and closed
   } finally { takeBackTab(chatId); ws.close(); await real.close().catch(() => {}); srv.close(); closeBrowser(); }
 });
 
@@ -2670,7 +2670,7 @@ test('🧩 in the user’s tab: a reading request asks before typing outside a s
   } finally { takeBackTab(chatId); await userBrowse(sid, 'close').catch(() => {}); srv.close(); (await import('../server/browser.js')).closeBrowser(); }
 });
 
-test('🧩 in the user’s tab: the deciders refuse typing the request never asked for, and a handoff gives the tab back until the user is done', { skip: !(await import('../server/browser.js')).browserPath() && 'no Chromium browser installed' }, async () => {
+test('🧩 in the user’s tab: the deciders bring typing the request never asked for to the user, and a handoff gives the tab back until the user is done', { skip: !(await import('../server/browser.js')).browserPath() && 'no Chromium browser installed' }, async () => {
   const http = await import('node:http');
   const { userBrowse, giveTab, takeBackTab } = await import('../server/userbrowser.js');
   const srv = http.createServer((_q, r) => { r.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); r.end(CHAT_PAGE); });
@@ -2689,10 +2689,14 @@ test('🧩 in the user’s tab: the deciders refuse typing the request never ask
       reply('', [['browser', { action: 'type', text: 'see you at 9', selector: 'input[aria-label="Message #bat-cave"]' }]]),
       reply('', [['browser', { action: 'handoff', reason: 'sign in to the server' }]]),
       reply('Done.'),
-    ][i], { chatId, text: 'reply "see you at 9" in the bat-cave channel', ensemble, settings: { checks: { on: false } }, onEvent: (e, runId) => { if (e.t === 'approval' && e.tool === 'browser') { cards.push(e); setTimeout(() => answerApproval(runId, e.id, { approve: true }), 5); } } });
+    ][i], { chatId, text: 'reply "see you at 9" in the bat-cave channel', ensemble, settings: { checks: { on: false } }, onEvent: (e, runId) => { if (e.t === 'approval' && e.tool === 'browser') { cards.push(e); setTimeout(() => answerApproval(runId, e.id, { approve: !/buy crypto/.test(e.what) }), 5); } } });
     const res = toolResults(bodies.at(-1)).map(String);
-    assert.match(res[1], /The deciders judged that this step doesn't serve the user's request \(90% sure\): type "buy crypto now"/);
+    // A decider no asks the user (who says no here); it never refuses on its own.
+    const doubt = cards.find((c) => /buy crypto/.test(c.what));
+    assert.match(doubt.why, /The deciders put it at 10% that this serves your request/);
+    assert.match(res[1], /The user said no to that \(type "buy crypto now"/);
     assert.match(res[2], /typed 12 characters/);
+    assert.ok(!cards.some((c) => /see you at 9/.test(c.what)), 'a step the deciders pass asks nobody');
     assert.ok(judged.every((s) => !/Batman at 9:/.test(s)), 'the deciders never see the page');
     assert.match(res[3], /The user finished: "sign in to the server"\. You can use the tab again/);
     const hand = cards.find((c) => /Your turn/.test(c.what));
@@ -2727,6 +2731,7 @@ test('🧩 Chrome read through page scripts: opening, reading and collecting nev
       if (m.cmd === 'tab.shot') return reply({ result: { image: await real.screenshot() } });
       if (m.cmd === 'tab.go') { await real.open(m.args.url, { width: 900, height: 600 }); return reply({ result: { href: m.args.url } }); }
       if (m.cmd === 'tab.list') return reply({ result: [{ id: 11, title: 'bat-cave', url: `http://127.0.0.1:${port}/chat`, active: true, lent: true }, { id: 12, title: 'Docs', url: 'https://docs.example/', active: false, lent: false }] });
+      if (m.cmd === 'tab.adopt') return reply({ result: { id: m.args.tab, title: 'bat-cave', url: `http://127.0.0.1:${port}/chat` } });
       if (m.cmd === 'tab.cdp') { cdp.push(m.args.method); return reply({ result: await real.cdp(m.args.method, m.args.params) }); }
       return reply({ result: true });
     } catch (e) { return reply({ error: e.message }); }
@@ -2741,7 +2746,7 @@ test('🧩 Chrome read through page scripts: opening, reading and collecting nev
       reply('', [['browser', { action: 'click', text: 'Meow' }]]),
       reply('', [['browser', { action: 'open', target: 'chrome:https://mybank.example/' }]]),
       reply('Done.'),
-    ][i], { chatId, text: 'summarise the bat-cave channel', settings: { chromeAccess: true, chromeSitesNever: 'mybank.example, health.example' } });
+    ][i], { chatId, text: 'summarise the bat-cave channel', settings: { chromeAccess: true, chromeCloseTabs: true, chromeSitesNever: 'mybank.example, health.example' } });
     const res = toolResults(bodies.at(-1)).map(String);
     assert.match(res[0], /You are in the user's own tab/);
     assert.match(res[0], /Snapshot s\d+/);
@@ -2755,7 +2760,14 @@ test('🧩 Chrome read through page scripts: opening, reading and collecting nev
     assert.ok(firstInput >= 0, cdp.join(','));
     assert.deepEqual(cdp.slice(0, firstInput).filter((x) => !/^(Page|Runtime|Log|Network|Emulation)\.(enable|setFocusEmulationEnabled)$/.test(x)), []);
     assert.ok(calls.includes('tab.op') && calls.includes('tab.shot'));
-    assert.equal(calls.at(-1), 'tab.closeOwn'); // the reply ended: the tabs it opened close
+    assert.equal(calls.at(-1), 'tab.closeOwn'); // closing ticked: the reply ended, the tabs it opened close
+    // Closing off (the default): the next reply carries on in the chat's open tab, not a new one, and leaves it open.
+    calls.length = 0;
+    const next = await run((body, i) => [reply('', [['browser', { action: 'open', target: `chrome:http://127.0.0.1:${port}/chat` }]]), reply('Done.')][i], { chatId, text: 'check the bat-cave channel again', settings: { chromeAccess: true } });
+    assert.match(String(toolResults(next.bodies.at(-1))[0]), /bat-cave/);
+    assert.ok(calls.includes('tab.list') && calls.includes('tab.adopt'), calls.join(','));
+    assert.ok(!calls.includes('tab.open'), calls.join(','));
+    assert.ok(!calls.includes('tab.closeOwn'), calls.join(','));
   } finally { takeBackTab(chatId); ws.close(); await real.close().catch(() => {}); srv.close(); closeBrowser(); }
 });
 
