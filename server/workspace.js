@@ -231,14 +231,16 @@ export const lineOf = (cmd, args) => [checkCommand(cmd, args), ...args.map((a) =
 // Linux its own process group), and only then starts running, so nothing it starts can escape Stop. `shell`: direct (Node's default shell), powershell, pwsh,
 // cmd or bash. Without the job host the process still runs, with proc.qxJob unset ("basic" Stop).
 const GATE = fileURLToPath(new URL('./jobgate.cjs', import.meta.url));
-async function launch(root, line, { shell = 'direct', env, memoryMB = 0 } = {}) {
+async function launch(root, line, { shell = 'direct', env, memoryMB = 0, signal } = {}) {
   const proc = spawn(process.execPath, [GATE, shell, line], { cwd: root, env: childEnv(env), windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], detached: startDetached });
   proc.stdin.on('error', () => { /* the gate is gone */ });
   if (proc.pid) {
     const job = `c${proc.pid}x${Date.now().toString(36)}`;
     try { if (await jobsAvailable()) { await adoptPid(job, proc.pid, memoryMB); proc.qxJob = job; } } catch { /* basic Stop */ }
   }
-  proc.stdin.end('go\n');
+  // Stop pressed while the job was being set up: the gate is never told to go, so the command never starts
+  // (runLine then ends the gate the usual way).
+  if (!signal?.aborted) proc.stdin.end('go\n');
   return proc;
 }
 
@@ -303,8 +305,10 @@ export function runCommand(root, cmd, args = [], opts = {}) {
 export function runLine(root, line, { shell = 'direct', timeout = 180e3, signal, term, label, memoryMB = 0, logTo, onStart, onJob, env = {} } = {}) {
   return new Promise((resolve, reject) => {
     (async () => {
+      // Stop already pressed (say while a before_command hook ran): nothing is started at all.
+      if (signal?.aborted) return resolve({ code: null, out: '[stopped before it started]', ms: 0, timedOut: false, stopped: { left: 0, names: [], mode: 'none', why: 'stopped' }, leftovers: null, log: null });
       let proc;
-      try { proc = await launch(root, line, { shell, memoryMB, env: { ...env, ...NON_INTERACTIVE } }); } catch (e) { return reject(e); }
+      try { proc = await launch(root, line, { shell, memoryMB, signal, env: { ...env, ...NON_INTERACTIVE } }); } catch (e) { return reject(e); }
       onStart?.(proc);
       const t0 = Date.now();
       label = label || line;
@@ -323,6 +327,7 @@ export function runLine(root, line, { shell = 'direct', timeout = 180e3, signal,
       const timer = setTimeout(() => { timedOut = true; note(`[stopped after ${Math.round(timeout / 1000)}s]`); stop('timeout'); }, timeout);
       const onAbort = () => stop('stopped');
       signal?.addEventListener('abort', onAbort, { once: true });
+      if (signal?.aborted) onAbort(); // pressed during launch: the abort event has already fired
       let done = false;
       const finish = async (code, err) => {
         if (done) return;
