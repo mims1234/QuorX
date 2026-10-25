@@ -38,8 +38,11 @@ QuorX is open source under the Apache License 2.0.
 
 ## What's new in this version
 
-Research in News: seven articles on what QuorX measured and learned, and rebuilt reports. The agent's browser can wait
-for timers and animations and press key combinations like Shift+R.
+Steadier, safer and faster. Video Mode plans a film with a brief, a story pick and a storyboard before anything is
+spent. Settings are redesigned, with Storage to see and clear what QuorX takes, and Skills you can write and share
+across projects. Long replies, big projects and large backups no longer slow QuorX down, and streaming text stays put
+so you can select it. QuorX opens at its own address, so your sign-in stays away from apps you build. The agent's
+commands, key reads and desktop clicks get stronger checks, and stopped calls now count toward your spend.
 
 ## Product features (up to 20, each up to 200 characters)
 
