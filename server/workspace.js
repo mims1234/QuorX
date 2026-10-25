@@ -49,7 +49,8 @@ export function realish(p) {
   return p;
 }
 const SECRET_REAL = () => SECRET_FILES.map((f) => realish(f).toLowerCase());
-export function safePath(root, rel) {
+// secrets (optional): SECRET_REAL() worked out once by a caller that checks many paths in a row (searchFiles).
+export function safePath(root, rel, secrets = null) {
   const r = String(rel || '').replace(/^[/\\]+/, '');
   // Windows: "file.txt:stream" (an alternate data stream) or a device name would get around the checks below.
   // (An absolute path with its drive letter, inside the project, is fine.)
@@ -61,7 +62,7 @@ export function safePath(root, rel) {
   const within = (a, b) => (process.platform === 'win32' ? a.toLowerCase() : a) === (process.platform === 'win32' ? b.toLowerCase() : b) || (process.platform === 'win32' ? a.toLowerCase().startsWith(b.toLowerCase() + path.sep) : a.startsWith(b + path.sep));
   if (!within(real, realRoot)) throw new Error('that path leads outside the project folder (through a link)');
   // A project may point at any folder, even the harness itself: its secrets stay unreadable.
-  if (SECRET_REAL().includes(real.toLowerCase()) || SECRET_FILES.some((f) => p.toLowerCase() === f.toLowerCase())) throw new Error('that file holds API keys and is off limits');
+  if ((secrets || SECRET_REAL()).includes(real.toLowerCase()) || SECRET_FILES.some((f) => p.toLowerCase() === f.toLowerCase())) throw new Error('that file holds API keys and is off limits');
   return p;
 }
 
@@ -575,27 +576,147 @@ function globToRegExp(glob) {
   return new RegExp(`^${out}$`, 'i');
 }
 
-// Case-insensitive literal search across text files in the project.
-export function searchFiles(root, query, glob = '', max = 80) {
+// One line of a .gitignore as a rule: the common forms (dir/, *.ext, /rooted, a/**/b, !negation, # comments).
+// base is the folder the .gitignore is in, relative to the project ('' for the root).
+function ignoreRule(line, base) {
+  let s = line.replace(/(?<!\\)\s+$/, '');
+  if (!s || s.startsWith('#')) return null;
+  const neg = s.startsWith('!');
+  if (neg) s = s.slice(1); else if (/^\\[#!]/.test(s)) s = s.slice(1);
+  const dirOnly = s.endsWith('/');
+  s = s.replace(/\/+$/, '');
+  const anchored = s.includes('/'); // a slash anywhere but the end ties it to its folder; otherwise any depth
+  s = s.replace(/^\//, '');
+  if (!s) return null;
+  let out = '';
+  for (let i = 0; i < s.length; i++) {
+    if (s.startsWith('**/', i)) { out += '(?:.*/)?'; i += 2; }
+    else if (s.startsWith('/**', i) && i + 3 === s.length) { out += '/.*'; break; }
+    else if (s.startsWith('**', i)) { out += '.*'; i++; }
+    else if (s[i] === '*') out += '[^/]*';
+    else if (s[i] === '?') out += '[^/]';
+    else if (s[i] === '[' && s.indexOf(']', i + 2) > 0) { const j = s.indexOf(']', i + 2); out += `[${s.slice(i + 1, j).replace(/^!/, '^').replace(/\\/g, '\\\\')}]`; i = j; }
+    else if (s[i] === '\\' && i + 1 < s.length) { i++; out += s[i].replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+    else out += s[i].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+  // Windows file names ignore case, and so does git there.
+  return { base, rx: new RegExp(`^${out}$`, process.platform === 'win32' ? 'i' : ''), neg, dirOnly, anchored };
+}
+async function readIgnore(dir, base) {
+  try {
+    const p = path.join(dir, '.gitignore');
+    if (!(await fs.promises.lstat(p)).isFile()) return [];
+    return (await fs.promises.readFile(p, 'utf8')).split(/\r?\n/).map((l) => ignoreRule(l, base)).filter(Boolean);
+  } catch { return []; }
+}
+// The last rule that matches decides, as in git. (A folder it leaves out is never entered, so nothing inside comes back.)
+function isIgnored(rel, isDir, rules) {
+  let hit = false;
+  for (const r of rules) {
+    if (r.dirOnly && !isDir) continue;
+    const sub = !r.base ? rel : rel.startsWith(`${r.base}/`) ? rel.slice(r.base.length + 1) : null;
+    if (sub === null) continue;
+    if (r.rx.test(r.anchored ? sub : sub.slice(sub.lastIndexOf('/') + 1))) hit = !r.neg;
+  }
+  return hit;
+}
+// Build output a search never wants by default; it goes in when the path or the pattern points into one.
+const BUILD_DIRS = new Set(['target', 'bin', 'obj', 'build', 'out', 'dist', 'coverage', '.next', '.nuxt', '__pycache__', '.venv', 'venv']);
+
+/**
+ * Case-insensitive literal search across text files in the project, off the event loop's back: folders are read
+ * with fs.promises, a few files at a time, and it stops at maxFiles files or after budgetMs. It skips what git
+ * ignores (.gitignore at the root and in sub-folders; .env files stay in, they are shown as names only) and build
+ * output, unless `sub` (a folder or file) or the pattern points there.
+ * → hits [{ path, line, text }], with .searched, .total (files that could be searched), .totalKnown and .stopped
+ * (why it stopped early, or '').
+ */
+export async function searchFiles(root, query, glob = '', max = 80, { sub = '', maxFiles = 5000, budgetMs = 5000 } = {}) {
   const q = String(query || '').toLowerCase();
   if (!q) throw new Error('query is empty');
   const rx = glob ? globToRegExp(glob) : null;
-  const out = [];
-  for (const f of listFiles(root, 2000)) {
-    if (out.length >= max || SKIPPED.test(f.path) || f.size > 1e6) continue;
-    if (rx && !rx.test(f.path) && !rx.test(path.basename(f.path))) continue;
+  const until = Date.now() + budgetMs;
+  const secrets = SECRET_REAL(), others = otherProjectDirs(root);
+  const start = sub ? safePath(root, sub, secrets) : root;
+  const startRel = path.relative(root, start).replaceAll('\\', '/');
+  // The folders a pattern like "target/**/*.rs" names before its first wildcard.
+  const lead = String(glob || '').replace(/^\.?\//, '').split('/').filter((s, i, a) => !a.slice(0, i + 1).some((x) => /[*?[]/.test(x))).join('/').toLowerCase();
+  const named = (rel) => `${lead}/`.startsWith(`${rel.toLowerCase()}/`);
+  const files = [];
+  let total = 0, stopped = '', totalKnown = true, agentLater = false;
+  // forced: inside a folder the path or pattern points into, where build output and ignored folders are searched too.
+  const walk = async (dir, rel, rules, inAgent, forced) => {
+    let list;
+    try { list = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return; }
+    if (!inAgent && list.some((e) => e.name === '.gitignore' && e.isFile())) rules = rules.concat(await readIgnore(dir, rel));
+    for (const e of list) {
+      if (Date.now() > until) { stopped ||= 'time'; totalKnown = false; return; }
+      // Past maxFiles it only counts, and gives up counting at ten times that.
+      if (total >= maxFiles * 10) { totalKnown = false; return; }
+      if (e.isSymbolicLink()) continue; // a link can lead outside the project
+      const r = rel ? `${rel}/${e.name}` : e.name, p = path.join(dir, e.name);
+      if (!rel && e.name === AGENT_DIR && e.isDirectory()) { agentLater = true; continue; }
+      if (rel === AGENT_DIR && !AGENT_VISIBLE.has(e.name)) continue;
+      if (e.isDirectory()) {
+        const build = BUILD_DIRS.has(e.name.toLowerCase()), ignored = !inAgent && isIgnored(r, true, rules);
+        const into = forced || ((build || ignored) && named(r));
+        if (build ? !into : SKIP.has(e.name)) continue;
+        if (ignored && !into) continue;
+        if (isOtherProject(p, others)) continue;
+        await walk(p, r, rules, inAgent, into);
+      } else if (e.isFile()) {
+        if (!inAgent && !forced && isIgnored(r, false, rules) && !/^\.env(\.|$)/i.test(e.name)) continue;
+        if (rx && !rx.test(r) && !rx.test(e.name)) continue;
+        if (++total <= maxFiles) files.push(r); else stopped ||= 'files';
+      }
+    }
+  };
+  const st = await fs.promises.lstat(start).catch(() => { throw new Error(`no file or folder ${sub}`); });
+  const inAgent = startRel.split('/')[0] === AGENT_DIR;
+  if (st.isFile()) { total = 1; files.push(startRel); }
+  else {
+    // The .gitignore files above the starting folder count too (its own is read by the walk).
+    let rules = [];
+    const segs = startRel ? startRel.split('/') : [];
+    if (!inAgent) for (let i = 0; i < segs.length; i++) rules = rules.concat(await readIgnore(path.join(root, ...segs.slice(0, i)), segs.slice(0, i).join('/')));
+    const forced = segs.some((s, i) => BUILD_DIRS.has(s.toLowerCase()) || isIgnored(segs.slice(0, i + 1).join('/'), true, rules));
+    await walk(start, startRel, rules, inAgent, forced);
+    // .quorx goes last, so a full scratch folder never pushes the project's own files out.
+    if (agentLater) await walk(path.join(root, AGENT_DIR), AGENT_DIR, [], true, false);
+  }
+  // A few files at a time; hits come back in walk order whatever order the reads finish in.
+  const found = new Array(files.length);
+  let next = 0, hits = 0, searched = 0;
+  const one = async (i) => {
     // Links can point outside the project (or at QuorX's own keys): skip them, and keep every read inside safePath.
     let text;
     try {
-      const p = safePath(root, f.path);
-      if (fs.lstatSync(p).isSymbolicLink()) continue;
-      text = fs.readFileSync(p, 'utf8');
-    } catch { continue; }
-    if (text.includes('\u0000')) continue;
-    text.split(/\r?\n/).forEach((line, i) => { if (out.length < max && line.toLowerCase().includes(q)) out.push({ path: f.path, line: i + 1, text: line.trim().slice(0, 200) }); });
-  }
+      const p = safePath(root, files[i], secrets);
+      const s = await fs.promises.lstat(p);
+      if (s.isSymbolicLink() || !s.isFile() || s.size > 1e6) return;
+      text = await fs.promises.readFile(p, 'utf8');
+    } catch { return; }
+    if (text.includes('\u0000')) return;
+    const mine = [];
+    text.split(/\r?\n/).forEach((line, n) => { if (mine.length < max && line.toLowerCase().includes(q)) mine.push({ path: files[i], line: n + 1, text: line.trim().slice(0, 200) }); });
+    found[i] = mine; hits += mine.length;
+  };
+  const worker = async () => {
+    while (next < files.length && hits < max) {
+      if (Date.now() > until) { stopped ||= 'time'; return; }
+      const i = next++; searched++;
+      await one(i);
+    }
+  };
+  await Promise.all(Array.from({ length: 8 }, worker));
+  const out = found.flatMap((x) => x || []).slice(0, max);
+  // Stopping because enough hits were found is not stopping early.
+  out.searched = searched; out.total = total; out.totalKnown = totalKnown;
+  out.stopped = hits >= max && stopped !== 'time' ? '' : stopped === 'time' ? `the ${Math.round(budgetMs / 1000)} s time limit` : stopped === 'files' ? `it reads at most ${maxFiles} files` : '';
   return out;
 }
+// The note an early stop adds to what the agent sees, or ''.
+export const searchNote = (h) => (h.stopped ? `searched ${h.searched} of ${h.totalKnown ? '' : 'at least '}${h.total} files (stopped early: ${h.stopped}); narrow it with a path or pattern` : '');
 
 // Deleting never destroys: the file moves to .quorx/trash/<time>/<path>.
 export function trashFile(root, rel) {

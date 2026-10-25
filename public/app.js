@@ -3790,7 +3790,7 @@ function argSummary(e) {
   if (e.name === 'read_doc') return `${a.doc} from line ${a.offset || 1}`;
   if (e.name === 'run_command' || e.name === 'start_server') return `${e.name === 'start_server' ? `"${a.name}": ` : ''}${[a.command, ...(a.args || [])].join(' ')}`;
   if (['write_file', 'read_file', 'edit_file', 'append_file', 'delete_file'].includes(e.name)) return a.path;
-  if (e.name === 'search_files') return `"${a.query}"${a.glob ? ` in ${a.glob}` : ''}`;
+  if (e.name === 'search_files') return `"${a.query}"${a.path ? ` in ${a.path}` : ''}${a.glob ? ` in ${a.glob}` : ''}`;
   if (e.name === 'use_skill' || e.name === 'save_skill') return a.name;
   if (e.name === 'scaffold') return a.template;
   if (e.name === 'fetch_url') return a.url;

@@ -1240,10 +1240,75 @@ test('a project inside another project is listed once and not walked, in list_fi
     assert.ok(paths.includes('registered/ (another project, skipped)'), 'a folder another project points at');
     assert.ok(!paths.some((x) => /inner\/src|registered\/lib/.test(x)), 'their files stay out');
     assert.ok(paths.includes('plain/util.js') && paths.includes('index.html'), 'ordinary folders are still walked');
-    const hits = searchFiles(dir, 'needle').map((h) => h.path).sort();
+    const hits = (await searchFiles(dir, 'needle')).map((h) => h.path).sort();
     assert.deepEqual(hits, ['index.html', 'plain/util.js']);
     assert.ok(listFiles(other).some((x) => x.path === 'lib.js'), 'the inner project still lists its own files');
   } finally { forgetProject(id); }
+});
+
+const tree = (files) => {
+  const dir = tempDir('quorx-search-');
+  for (const [f, text] of Object.entries(files)) { fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true }); fs.writeFileSync(path.join(dir, f), text); }
+  return dir;
+};
+const found = async (dir, ...a) => (await (await import('../server/workspace.js')).searchFiles(dir, 'needle', ...a)).map((h) => h.path).sort();
+
+test('search_files leaves out what .gitignore ignores (root and nested), but keeps .env and the scratch folder', async () => {
+  const dir = tree({
+    '.gitignore': '# build\nlogs/\n*.tmp\n/rooted.txt\ngen/**/*.js\n!keep.tmp\n.env\n',
+    'src/a.js': 'needle', 'src/rooted.txt': 'needle', 'rooted.txt': 'needle', 'x.tmp': 'needle', 'keep.tmp': 'needle',
+    'logs/today.txt': 'needle', 'deep/logs/old.txt': 'needle', 'gen/a/b/c.js': 'needle', 'gen/a/b/c.css': 'needle',
+    'pkg/.gitignore': 'local.txt\n', 'pkg/local.txt': 'needle', 'pkg/main.txt': 'needle', 'local.txt': 'needle',
+    '.env': 'NEEDLE=1', '.quorx/.gitignore': '*', '.quorx/scratch/note.md': 'needle',
+  });
+  assert.deepEqual(await found(dir), ['.env', '.quorx/scratch/note.md', 'gen/a/b/c.css', 'keep.tmp', 'local.txt', 'pkg/main.txt', 'src/a.js', 'src/rooted.txt']);
+  const { listFiles } = await import('../server/workspace.js');
+  assert.ok(listFiles(dir).some((f) => f.path === 'logs/today.txt'), 'list_files still lists ignored files');
+});
+
+test('search_files skips build output unless the path or the pattern points into it', async () => {
+  const dir = tree({ 'src/main.rs': 'needle', 'target/debug/build/x.rs': 'needle', 'bin/Debug/app.cs': 'needle', 'obj/a.cs': 'needle', 'coverage/lcov.info': 'needle', 'dist/app.js': 'needle', 'node_modules/m/i.js': 'needle' });
+  assert.deepEqual(await found(dir), ['src/main.rs']);
+  assert.deepEqual(await found(dir, '', 80, { sub: 'target' }), ['target/debug/build/x.rs'], 'a path into target searches all of it');
+  assert.deepEqual(await found(dir, 'bin/**'), ['bin/Debug/app.cs'], 'a pattern naming bin goes in');
+  assert.deepEqual(await found(dir, '', 80, { sub: 'dist/app.js' }), ['dist/app.js'], 'a single file');
+  const { searchFiles } = await import('../server/workspace.js');
+  await assert.rejects(searchFiles(dir, 'needle', '', 80, { sub: '../x' }), /outside the project/);
+});
+
+test('search_files says when it stopped early, and a full search adds no note', async () => {
+  const files = {};
+  for (let i = 0; i < 30; i++) files[`f${String(i).padStart(2, '0')}.txt`] = i === 29 ? 'needle' : 'hay';
+  const dir = tree(files);
+  const { searchFiles, searchNote } = await import('../server/workspace.js');
+  const capped = await searchFiles(dir, 'needle', '', 80, { maxFiles: 10 });
+  assert.equal(capped.length, 0);
+  assert.equal(searchNote(capped), 'searched 10 of 30 files (stopped early: it reads at most 10 files); narrow it with a path or pattern');
+  const timed = await searchFiles(dir, 'needle', '', 80, { budgetMs: -1 });
+  assert.match(searchNote(timed), /^searched 0 of at least 0 files \(stopped early: the 0 s time limit\)/);
+  const all = await searchFiles(dir, 'needle');
+  assert.deepEqual([all.length, searchNote(all)], [1, ''], 'a full search adds no note');
+  const { bodies } = await run((body, i) => [reply('', [['search_files', { query: 'zzz-nothing' }]]), reply('Done.')][i]);
+  assert.match(toolResults(bodies[1])[0], /^No matches for "zzz-nothing"\.$/m);
+});
+
+test('search_files over ~5k files keeps the event loop ticking', async () => {
+  const dir = tempDir('quorx-search-big-');
+  for (let d = 0; d < 50; d++) {
+    fs.mkdirSync(path.join(dir, `d${d}`));
+    for (let f = 0; f < 100; f++) fs.writeFileSync(path.join(dir, `d${d}`, `f${f}.txt`), `line one\nline two ${d === 49 && f === 99 ? 'needle' : ''}\n`);
+  }
+  const { searchFiles } = await import('../server/workspace.js');
+  let ticks = 0, last = Date.now(), gap = 0;
+  const timer = setInterval(() => { const now = Date.now(); gap = Math.max(gap, now - last); last = now; ticks++; }, 5);
+  const t0 = Date.now();
+  const hits = await searchFiles(dir, 'needle');
+  const took = Date.now() - t0;
+  clearInterval(timer);
+  assert.deepEqual(hits.map((h) => h.path), ['d49/f99.txt']);
+  assert.equal(hits.total, 5000);
+  assert.ok(ticks >= Math.min(5, took / 50), `timers ran while it searched (${ticks} ticks in ${took} ms)`);
+  assert.ok(gap < 250, `no long stall (longest gap ${gap} ms)`);
 });
 
 
