@@ -4,9 +4,8 @@
 // folder isn't there can be pointed at a new one.
 import fs from 'node:fs';
 import path from 'node:path';
-import zlib from 'node:zlib';
 import { HOME } from './openrouter.js';
-import { zipBuffer } from './zip.js';
+import { writeZip, fileSink, readZip, fileSource } from './zip.js';
 import { listProjects, validId, getWholeChat } from './store.js';
 import { loadRules, saveRules } from './cmdpolicy.js';
 import { loadMemory, saveMemory, checkMemory } from './memory.js';
@@ -54,11 +53,13 @@ export function backupName(dir, now = new Date()) {
 
 /**
  * Writes the backup into `dir`. settings: the page's own saved settings (they live in the browser). Keys go in only
- * with includeKeys; logs only with includeLogs. Returns { file, bytes, counts }.
+ * with includeKeys; logs only with includeLogs. Resolves to { file, bytes, counts }. The files are read and packed one
+ * at a time while the backup is written, so a big data/blobs neither fills the memory nor holds up the rest of QuorX.
  */
-export function exportBackup({ dir, settings = null, includeLogs = false, includeKeys = false, version = '' }) {
+export async function exportBackup({ dir, settings = null, includeLogs = false, includeKeys = false, version = '' }) {
   if (!dir || !path.isAbsolute(dir) || !fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) throw new Error('pick a folder that exists for the backup');
   const entries = [], add = (name, data) => entries.push({ name, data: Buffer.isBuffer(data) ? data : Buffer.from(typeof data === 'string' ? data : JSON.stringify(data, null, 2)) });
+  const addFile = (name, file) => entries.push({ name, file }); // read when its turn comes
   const projects = listProjects().map(({ dir: _d, missing: _m, needsFolder: _n, ...p }) => p);
   add('projects.json', projects);
   // Command rules: everywhere, and each project's own (kept by its folder on this computer, so saved by project id).
@@ -70,55 +71,55 @@ export function exportBackup({ dir, settings = null, includeLogs = false, includ
   }
   const chats = files(path.join(DATA, 'chats'), (n) => n.endsWith('.json') && CHAT_ID.test(n.slice(0, -5)));
   // Whole chats: an older reply's steps kept apart (data/traces) go back inside it, so the backup restores anywhere.
-  for (const n of chats) { const raw = fs.readFileSync(path.join(DATA, 'chats', n)); add(`chats/${n}`, raw.includes('"traceRef"') ? JSON.stringify(getWholeChat(n.slice(0, -5))) : raw); }
+  for (const n of chats) entries.push({ name: `chats/${n}`, data: () => { const raw = fs.readFileSync(path.join(DATA, 'chats', n)); return raw.includes('"traceRef"') ? JSON.stringify(getWholeChat(n.slice(0, -5))) : raw; } });
   // Pictures and files the chats point at (stored once each, by their hash).
   const blobs = files(path.join(DATA, 'blobs'), (n) => BLOB.test(n));
-  for (const n of blobs) add(`blobs/${n}`, fs.readFileSync(path.join(DATA, 'blobs', n)));
+  for (const n of blobs) addFile(`blobs/${n}`, path.join(DATA, 'blobs', n));
   if (fs.existsSync(path.join(DATA, 'schedules.json'))) add('schedules.json', fs.readFileSync(path.join(DATA, 'schedules.json')));
   // Your own skills (every file in each one's folder) and memory. Project skills live in the project folders.
   const skills = ownSkills();
-  for (const s of skills) for (const r of s.files) add(`skills/${s.name}/${r}`, fs.readFileSync(path.join(DATA, 'skills', s.name, r)));
+  for (const s of skills) for (const r of s.files) addFile(`skills/${s.name}/${r}`, path.join(DATA, 'skills', s.name, r));
   const mem = loadMemory();
   if (mem.items.length || fs.existsSync(path.join(DATA, 'memory.json'))) add('memory.json', { on: mem.on, items: mem.items });
   if (settings && typeof settings === 'object') add('settings.json', settings);
   const logs = includeLogs ? files(LOGS, (n) => ownLog(n) && fs.statSync(path.join(LOGS, n)).size <= MAX_LOG) : [];
-  for (const n of logs) add(`logs/${n}`, fs.readFileSync(path.join(LOGS, n)));
+  for (const n of logs) addFile(`logs/${n}`, path.join(LOGS, n));
   let keys = 0;
   if (includeKeys) { const k = readJson(path.join(DATA, 'keys.json'), null); if (k?.keys?.length) { add('keys.json', k); keys = k.keys.length; } }
   const counts = { projects: projects.filter((p) => p.id !== 'scratch').length, chats: chats.length, files: blobs.length, logs: logs.length, keys, schedules: entries.some((e) => e.name === 'schedules.json'), settings: !!settings, skills: skills.length, memory: mem.items.length };
   entries.unshift({ name: 'manifest.json', data: Buffer.from(JSON.stringify({ format: FORMAT, version: 1, app: version, created: new Date().toISOString(), platform: process.platform, counts }, null, 2)) });
-  const zip = zipBuffer(entries);
-  const file = path.join(dir, backupName(dir));
-  writeAtomic(file, zip);
-  return { file, bytes: zip.length, counts };
+  // Like writeAtomic, for a file written piece by piece: a temp file beside it, renamed to today's name once whole.
+  const tmp = path.join(dir, `quorx-backup.${process.pid}-${++tmpSeq}.tmp`);
+  let fh = null;
+  try {
+    fh = await fs.promises.open(tmp, 'w');
+    const bytes = await writeZip(fileSink(fh), entries);
+    await fh.close(); fh = null;
+    const file = path.join(dir, backupName(dir));
+    fs.renameSync(tmp, file);
+    return { file, bytes, counts };
+  } catch (e) {
+    await fh?.close().catch(() => {});
+    try { fs.rmSync(tmp, { force: true }); } catch { /* gone */ }
+    throw e;
+  }
 }
+let tmpSeq = 0;
 
 // ---------- reading a backup ----------
-// The entries of a ZIP (ours: no ZIP64), each read on demand, with a capped inflate.
-function unzip(buf) {
-  let eocd = -1;
-  for (let i = buf.length - 22; i >= Math.max(0, buf.length - 65557); i--) if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
-  if (eocd < 0) throw new Error('that file is not a QuorX backup (not a ZIP file)');
-  const out = new Map();
-  let p = buf.readUInt32LE(eocd + 16);
-  for (let n = buf.readUInt16LE(eocd + 10); n > 0 && buf.readUInt32LE(p) === 0x02014b50; n--) {
-    const method = buf.readUInt16LE(p + 10), csize = buf.readUInt32LE(p + 20), nlen = buf.readUInt16LE(p + 28), xlen = buf.readUInt16LE(p + 30), clen = buf.readUInt16LE(p + 32), off = buf.readUInt32LE(p + 42);
-    const name = buf.toString('utf8', p + 46, p + 46 + nlen);
-    out.set(name, () => {
-      const start = off + 30 + buf.readUInt16LE(off + 26) + buf.readUInt16LE(off + 28), data = buf.subarray(start, start + csize);
-      return method === 0 ? data : method === 8 ? zlib.inflateRawSync(data, { maxOutputLength: 512 * 1024 * 1024 }) : Buffer.alloc(0);
-    });
-    p += 46 + nlen + xlen + clen;
-  }
-  return out;
-}
+// Its entries are read from the file where they sit (never the whole file at once), ZIP64 or not; close() when done.
 function open(file) {
   if (!file || !path.isAbsolute(file) || !fs.existsSync(file) || !fs.statSync(file).isFile()) throw new Error('there is no backup file there');
-  const z = unzip(fs.readFileSync(file));
-  const json = (n, dflt = null) => { const f = z.get(n); if (!f) return dflt; try { return JSON.parse(f().toString('utf8')); } catch { return dflt; } };
-  const manifest = json('manifest.json');
-  if (manifest?.format !== FORMAT) throw new Error('that file is not a QuorX backup');
-  return { z, json, manifest };
+  const fd = fs.openSync(file, 'r'), close = () => fs.closeSync(fd);
+  try {
+    let z = null;
+    try { z = readZip(fileSource(fd)); } catch { /* not a ZIP */ }
+    if (!z) throw new Error('that file is not a QuorX backup (not a ZIP file)');
+    const json = (n, dflt = null) => { const f = z.get(n); if (!f) return dflt; try { return JSON.parse(f.read().toString('utf8')); } catch { return dflt; } };
+    const manifest = json('manifest.json');
+    if (manifest?.format !== FORMAT) throw new Error('that file is not a QuorX backup');
+    return { z, json, manifest, close };
+  } catch (e) { close(); throw e; }
 }
 
 /** The backups in a folder, newest first: [{ file, name, bytes, at }]. */
@@ -129,7 +130,10 @@ export function findBackups(dir) {
 
 /** What importing `file` would do: its projects (and whether each folder is on this computer), clashes, and what else it holds. */
 export function inspectBackup(file) {
-  const { z, json, manifest } = open(file);
+  const { z, json, manifest, close } = open(file);
+  try { return inspect(file, z, json, manifest); } finally { close(); }
+}
+function inspect(file, z, json, manifest) {
   const here = listProjects();
   const projects = (json('projects.json', []) || []).filter((p) => p && validId(p.id) && p.id !== 'scratch').map((p) => {
     const mine = here.find((x) => x.id === p.id);
@@ -170,8 +174,11 @@ const LOG_NAME = /^logs\/[\w-][\w.-]{0,120}$/;
  * if any part is broken. Imported schedules arrive paused: a backup may be old, or someone else's.
  * Returns what was done, plus the settings for the page to apply.
  */
-export function importBackup(file, { overwrite = false, folders = {}, skip = [], keys = false } = {}) {
-  const { z, json } = open(file);
+export function importBackup(file, opts = {}) {
+  const { z, json, close } = open(file);
+  try { return restore(z, json, opts); } finally { close(); }
+}
+function restore(z, json, { overwrite = false, folders = {}, skip = [], keys = false } = {}) {
   const done = { projects: 0, chats: 0, files: 0, rules: 0, schedules: 0, paused: 0, keys: 0, logs: 0, skills: 0, memory: 0, kept: 0, missing: [] };
   for (const [id, dir] of Object.entries(folders || {})) if (dir && (!path.isAbsolute(dir) || !fs.existsSync(dir) || !fs.statSync(dir).isDirectory())) throw new Error(`there is no folder at ${dir} (for ${id})`);
   const bad = (what) => { throw new Error(`the backup is damaged (${what}): nothing was imported`); };
@@ -180,7 +187,7 @@ export function importBackup(file, { overwrite = false, folders = {}, skip = [],
   const projects = json('projects.json', []);
   if (!Array.isArray(projects)) bad('projects.json');
   const chats = [], blobs = [], logs = [], skillFiles = [];
-  for (const [n, read] of z) {
+  for (const [n, { read }] of z) {
     const chat = n.match(/^chats\/([\w-]{1,100})\.json$/), blob = n.match(/^blobs\/([a-f0-9]{64}\.[a-z0-9]{1,8})$/), skill = n.match(SKILL_FILE);
     if (chat) {
       const data = read();
@@ -293,6 +300,6 @@ export function importBackup(file, { overwrite = false, folders = {}, skip = [],
 
   // Logs go beside this computer's own, in a folder of their own.
   const logDir = path.join(LOGS, `imported-${today()}`);
-  for (const n of logs) { const f = path.join(logDir, n.slice(5)); if (!fs.existsSync(f) || overwrite) { writeAtomic(f, z.get(n)()); done.logs++; } }
+  for (const n of logs) { const f = path.join(logDir, n.slice(5)); if (!fs.existsSync(f) || overwrite) { writeAtomic(f, z.get(n).read()); done.logs++; } }
   return { ...done, settings: json('settings.json') };
 }

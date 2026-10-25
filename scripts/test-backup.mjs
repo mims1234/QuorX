@@ -6,7 +6,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { zipBuffer } from '../server/zip.js';
+import zlib from 'node:zlib';
+import crypto from 'node:crypto';
+import { zipBuffer, writeZip, fileSink, readZip, fileSource } from '../server/zip.js';
 import { mergeSettings } from '../public/backup.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -277,4 +279,178 @@ test('import refuses a file that is not a QuorX backup', async () => {
     fs.writeFileSync(f, 'not a zip');
     assert.match((await qx.call('/api/backup/inspect', { file: f })).body.error, /not a QuorX backup/);
   } finally { await qx.stop(); }
+});
+
+// ---------- the ZIP itself: streamed, ZIP64 past the 32-bit limits, and the backups made before ----------
+// The writer and reader backups had before they were streamed, kept here as they were: the backups they made must
+// still import, and a new backup that needs no ZIP64 must be exactly what they made and read.
+const DOS = (d) => ({ time: (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1), date: ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate() });
+function oldZip(entries) {
+  const locals = [], centrals = [];
+  let offset = 0;
+  for (const e of entries) {
+    const name = Buffer.from(e.name, 'utf8'), raw = e.data, packed = zlib.deflateRawSync(raw), stored = packed.length >= raw.length;
+    const body = stored ? raw : packed, crc = zlib.crc32(raw) >>> 0, { time, date } = DOS(e.mtime || new Date());
+    const head = Buffer.alloc(30);
+    head.writeUInt32LE(0x04034b50, 0); head.writeUInt16LE(20, 4); head.writeUInt16LE(0x0800, 6); head.writeUInt16LE(stored ? 0 : 8, 8);
+    head.writeUInt16LE(time, 10); head.writeUInt16LE(date, 12); head.writeUInt32LE(crc, 14); head.writeUInt32LE(body.length, 18); head.writeUInt32LE(raw.length, 22); head.writeUInt16LE(name.length, 26);
+    locals.push(head, name, body);
+    const cen = Buffer.alloc(46);
+    cen.writeUInt32LE(0x02014b50, 0); cen.writeUInt16LE(20, 4); cen.writeUInt16LE(20, 6); cen.writeUInt16LE(0x0800, 8); cen.writeUInt16LE(stored ? 0 : 8, 10);
+    cen.writeUInt16LE(time, 12); cen.writeUInt16LE(date, 14); cen.writeUInt32LE(crc, 16); cen.writeUInt32LE(body.length, 20); cen.writeUInt32LE(raw.length, 24); cen.writeUInt16LE(name.length, 28); cen.writeUInt32LE(offset, 42);
+    centrals.push(cen, name);
+    offset += head.length + name.length + body.length;
+  }
+  const cdSize = centrals.reduce((n, b) => n + b.length, 0), end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(entries.length, 8); end.writeUInt16LE(entries.length, 10); end.writeUInt32LE(cdSize, 12); end.writeUInt32LE(offset, 16);
+  return Buffer.concat([...locals, ...centrals, end]);
+}
+function oldUnzip(buf) {
+  let eocd = -1;
+  for (let i = buf.length - 22; i >= Math.max(0, buf.length - 65557); i--) if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
+  const out = new Map();
+  let p = buf.readUInt32LE(eocd + 16);
+  for (let n = buf.readUInt16LE(eocd + 10); n > 0 && buf.readUInt32LE(p) === 0x02014b50; n--) {
+    const method = buf.readUInt16LE(p + 10), csize = buf.readUInt32LE(p + 20), nlen = buf.readUInt16LE(p + 28), xlen = buf.readUInt16LE(p + 30), clen = buf.readUInt16LE(p + 32), off = buf.readUInt32LE(p + 42);
+    const start = off + 30 + buf.readUInt16LE(off + 26) + buf.readUInt16LE(off + 28), data = buf.subarray(start, start + csize);
+    out.set(buf.toString('utf8', p + 46, p + 46 + nlen), method === 0 ? data : zlib.inflateRawSync(data));
+    p += 46 + nlen + xlen + clen;
+  }
+  return out;
+}
+// A sink that keeps only what was written, where it was written: an archive "past 4 GB" without 4 GB anywhere.
+function sparse() {
+  const parts = [];
+  return {
+    write: async (b, p) => { parts.push([p, Buffer.from(b)]); },
+    source: (size) => ({ size, read: (pos, len) => {
+      const out = Buffer.alloc(Math.max(0, Math.min(len, size - pos)));
+      for (const [p, b] of parts) { const s = Math.max(p, pos), e = Math.min(p + b.length, pos + out.length); if (s < e) b.copy(out, s - pos, s - p, e - p); }
+      return out;
+    } }),
+  };
+}
+const readAll = (z) => Object.fromEntries([...z].map(([n, e]) => [n, e.read()]));
+const zipFile = async (file, entries, opts) => { const fh = await fs.promises.open(file, 'w'); try { return await writeZip(fileSink(fh), entries, opts); } finally { await fh.close(); } };
+const openZip = (file) => { const fd = fs.openSync(file, 'r'); try { return readAll(readZip(fileSource(fd))); } finally { fs.closeSync(fd); } };
+// Big enough to go through in pieces (over 8 MB): one that deflates, one already compressed.
+const BIG = tempDir('qx-zip-big-');
+const bigText = path.join(BIG, 'big.txt'), bigVideo = path.join(BIG, 'big.mp4');
+fs.writeFileSync(bigText, crypto.randomBytes(4.5e6).toString('hex'));
+fs.writeFileSync(bigVideo, crypto.randomBytes(8.5e6));
+
+test('a backup that needs no ZIP64 is byte for byte what the old writer made, and the old reader reads it', async () => {
+  const mtime = new Date(2026, 9, 21, 12, 30, 4), j = (o) => Buffer.from(JSON.stringify(o, null, 2));
+  const small = path.join(tempDir('qx-zip-'), 'notes.md');
+  fs.writeFileSync(small, '# Notes\n' + 'a line that repeats\n'.repeat(500));
+  const items = [
+    { name: 'manifest.json', data: j({ format: 'quorx-backup', version: 1 }), mtime }, { name: 'chats/c1.json', data: j({ id: 'c1', title: 'hi', messages: ['x'.repeat(3000)] }), mtime },
+    { name: `blobs/${BLOB}`, data: Buffer.from([0x89, 0x50, 0x4e, 0x47]), mtime }, { name: 'blobs/empty.txt', data: Buffer.alloc(0), mtime },
+    { name: 'skills/s/notes.md', file: small, mtime }, { name: 'logs/big.txt', file: bigText, mtime },
+  ];
+  const file = path.join(tempDir('qx-zip-'), 'new.zip'), bytes = await zipFile(file, items);
+  const made = fs.readFileSync(file), old = oldZip(items.map((e) => ({ ...e, data: e.data || fs.readFileSync(e.file) })));
+  assert.equal(bytes, made.length);
+  assert.ok(made.equals(old), 'the same bytes as before, deflated in pieces or not');
+  assert.equal(made.indexOf(Buffer.from([0x50, 0x4b, 0x06, 0x06])), -1, 'no ZIP64 record');
+  const back = oldUnzip(made);
+  assert.ok(back.get('logs/big.txt').equals(fs.readFileSync(bigText)));
+  assert.equal(back.get('skills/s/notes.md').toString(), fs.readFileSync(small, 'utf8'));
+  assert.deepEqual(Object.keys(openZip(file)), items.map((e) => e.name), 'and the new reader too');
+});
+
+test('pictures and videos are stored as they are, everything else deflated; both read back the same', async () => {
+  const file = path.join(tempDir('qx-zip-'), 'mixed.zip');
+  await zipFile(file, [{ name: 'blobs/a.mp4', file: bigVideo }, { name: 'blobs/b.txt', file: bigText }, { name: 'blobs/c.png', data: Buffer.from('x'.repeat(5000)) }]);
+  const fd = fs.openSync(file, 'r');
+  try {
+    const z = readZip(fileSource(fd));
+    assert.equal(z.get('blobs/a.mp4').method, 0);
+    assert.equal(z.get('blobs/c.png').method, 0, 'stored by its kind, even when it would deflate');
+    assert.equal(z.get('blobs/b.txt').method, 8);
+    assert.ok(z.get('blobs/b.txt').csize < z.get('blobs/b.txt').size);
+    assert.ok(z.get('blobs/a.mp4').read().equals(fs.readFileSync(bigVideo)));
+    assert.ok(z.get('blobs/b.txt').read().equals(fs.readFileSync(bigText)));
+  } finally { fs.closeSync(fd); }
+  // A file that doesn't get smaller is stored instead, and the archive ends where it should.
+  const noise = path.join(BIG, 'noise.bin'), f2 = path.join(tempDir('qx-zip-'), 'noise.zip');
+  fs.copyFileSync(bigVideo, noise);
+  const end = await zipFile(f2, [{ name: 'blobs/n.bin', file: noise }, { name: 'z.json', data: Buffer.from('{}') }]);
+  assert.equal(fs.statSync(f2).size, end, 'nothing left past the end');
+  const back = openZip(f2);
+  assert.ok(back['blobs/n.bin'].equals(fs.readFileSync(noise)));
+  assert.equal(back['z.json'].toString(), '{}');
+});
+
+test('past 4 GB the offsets go in ZIP64 records, and the reader finds them', async () => {
+  const at = 2 ** 32 + 12345, sink = sparse(), j = Buffer.from('{"id":"c1"}');
+  const end = await writeZip(sink, [{ name: 'manifest.json', data: Buffer.from('{"format":"quorx-backup"}') }, { name: 'chats/c1.json', data: j }, { name: `blobs/${BLOB}`, data: Buffer.from([1, 2, 3]) }], { at });
+  const src = sink.source(end), last = src.read(end - 22, 22);
+  assert.equal(last.readUInt32LE(0), 0x06054b50);
+  assert.equal(last.readUInt32LE(16), 0xffffffff, 'the end record points at the ZIP64 one');
+  assert.equal(src.read(end - 42, 4).readUInt32LE(0), 0x07064b50, 'the locator is just before it');
+  const z = readZip(src);
+  assert.deepEqual([...z.keys()], ['manifest.json', 'chats/c1.json', `blobs/${BLOB}`]);
+  assert.ok(z.get('chats/c1.json').read().equals(j));
+  assert.deepEqual([...z.get(`blobs/${BLOB}`).read()], [1, 2, 3]);
+});
+
+test('sizes and entry counts past the limits get ZIP64 too (limits lowered, so nothing big is written)', async () => {
+  const file = path.join(tempDir('qx-zip-'), 'z64.zip'), names = Array.from({ length: 6 }, (_, i) => `logs/l${i}.txt`);
+  const end = await zipFile(file, [{ name: 'big.txt', file: bigText }, { name: 'big.mp4', file: bigVideo }, ...names.map((n) => ({ name: n, data: Buffer.from(n.repeat(100)) }))], { limits: { u32: 1000, u16: 4 } });
+  const buf = fs.readFileSync(file);
+  assert.equal(buf.length, end);
+  assert.equal(buf.readUInt16LE(end - 22 + 10), 0xffff, 'the count is in the ZIP64 record');
+  const back = openZip(file);
+  assert.ok(back['big.txt'].equals(fs.readFileSync(bigText)) && back['big.mp4'].equals(fs.readFileSync(bigVideo)));
+  for (const n of names) assert.equal(back[n].toString(), n.repeat(100));
+});
+
+test('a big export keeps the event loop free: a timer keeps ticking while it writes', async () => {
+  const dir = tempDir('qx-zip-loop-'), entries = [];
+  for (let i = 0; i < 4; i++) entries.push({ name: `blobs/t${i}.txt`, file: bigText }, { name: `blobs/v${i}.mp4`, file: bigVideo });
+  let last = Date.now(), worst = 0, ticks = 0;
+  const timer = setInterval(() => { const now = Date.now(); worst = Math.max(worst, now - last); last = now; ticks++; }, 5);
+  const t0 = Date.now();
+  try { await zipFile(path.join(dir, 'loop.zip'), entries); } finally { clearInterval(timer); }
+  const took = Date.now() - t0;
+  assert.ok(ticks >= Math.min(10, took / 50), `the timer ticked ${ticks} times in ${took} ms`);
+  assert.ok(worst < 250, `the longest wait between ticks was ${worst} ms over ${took} ms`);
+});
+
+test('a backup made before streaming still imports, and a new one brings back the same chats, projects and files', async () => {
+  const home = tempDir('qx-backup-old-'), keep = tempDir('qx-proj-old-'), j = (o) => Buffer.from(JSON.stringify(o, null, 2));
+  const pic = crypto.randomBytes(3000), chat = { id: 'old-chat', title: 'From before', projectId: 'old-app', agent: { messages: [{ role: 'user', content: 'hi', images: [`blob:${BLOB}`] }] } };
+  const old = path.join(tempDir('qx-out-'), 'quorx-backup-2026-01-01.zip');
+  fs.writeFileSync(old, oldZip([{ name: 'manifest.json', data: j({ format: 'quorx-backup', version: 1, counts: {} }) }, { name: 'projects.json', data: j([{ id: 'old-app', name: 'Old App', path: keep, created: 1 }]) },
+    { name: 'chats/old-chat.json', data: j(chat) }, { name: `blobs/${BLOB}`, data: pic }, { name: 'memory.json', data: j({ on: true, items: [{ text: 'Old memory' }] }) }]));
+  const qx = await quorx(home);
+  let file;
+  try {
+    const r = (await qx.call('/api/backup/import', { file: old })).body;
+    assert.ok(!r.error, r.error);
+    assert.deepEqual([r.projects, r.chats, r.files, r.memory], [1, 1, 1, 1]);
+    assert.equal((await qx.call('/api/chats/old-chat')).body.title, 'From before');
+    assert.ok(fs.readFileSync(path.join(home, 'data', 'blobs', BLOB)).equals(pic));
+    // A big file of its own next to it, then a new backup of all of it.
+    fs.copyFileSync(bigText, path.join(home, 'data', 'blobs', `${'cd'.repeat(32)}.txt`));
+    fs.copyFileSync(bigVideo, path.join(home, 'data', 'blobs', `${'ef'.repeat(32)}.mp4`));
+    const out = (await qx.call('/api/backup/export', { dir: tempDir('qx-out-') })).body;
+    assert.ok(!out.error, out.error);
+    assert.equal(out.bytes, fs.statSync(out.file).size);
+    assert.equal(out.counts.files, 3);
+    assert.deepEqual(fs.readdirSync(path.dirname(out.file)), [path.basename(out.file)], 'no temp file left beside it');
+    file = out.file;
+  } finally { await qx.stop(); }
+  const fresh = tempDir('qx-backup-new-'), qb = await quorx(fresh);
+  try {
+    const r = (await qb.call('/api/backup/import', { file })).body;
+    assert.ok(!r.error, r.error);
+    assert.equal(r.files, 3);
+    for (const n of fs.readdirSync(path.join(home, 'data', 'blobs'))) assert.ok(fs.readFileSync(path.join(fresh, 'data', 'blobs', n)).equals(fs.readFileSync(path.join(home, 'data', 'blobs', n))), `${n} came back whole`);
+    assert.deepEqual((await qb.call('/api/chats/old-chat')).body.agent, chat.agent);
+    const p = (await qb.call('/api/projects')).body.find((x) => x.id === 'old-app');
+    assert.equal(p.name, 'Old App');
+    assert.equal(path.resolve(p.path), path.resolve(keep));
+  } finally { await qb.stop(); }
 });
