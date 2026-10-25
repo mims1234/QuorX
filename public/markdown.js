@@ -78,53 +78,77 @@ function list(lines, keep) {
   return out;
 }
 
+const isList = (l) => /^\s*([-*+]|\d+[.)])\s+/.test(l);
+const isTableSep = (l) => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(l);
+// One block, from line i (not blank): [the line after it, its HTML]. Without `keep` it only finds where the block
+// ends (stableCut uses that).
+function block(lines, i, keep) {
+  const l = lines[i];
+  const fence = l.match(/^\s*(`{3,}|~{3,})(.*)$/);
+  if (fence) {
+    const body = []; i++;
+    while (i < lines.length && !lines[i].trim().startsWith(fence[1])) body.push(lines[i++]);
+    return [i + 1, keep && codeBlock(body.join('\n'), fence[2])];
+  }
+  const mathOpen = l.trim().match(/^(\$\$|\\\[)(.*)$/);
+  if (mathOpen) {
+    const close = mathOpen[1] === '$$' ? '$$' : '\\]';
+    let rest = mathOpen[2], body = [];
+    if (rest.trim().endsWith(close) && rest.trim().length > close.length - 1) { body.push(rest.trim().slice(0, -close.length)); i++; }
+    else { if (rest.trim()) body.push(rest); i++; while (i < lines.length && !lines[i].trim().endsWith(close)) body.push(lines[i++]); if (i < lines.length) { body.push(lines[i].trim().slice(0, -close.length)); i++; } }
+    const tex = body.join('\n').trim();
+    return [i, keep && `<div class="md-math-block"><div class="md-math" data-tex="${esc(tex)}" data-display="1">${esc(tex)}</div></div>`];
+  }
+  const h = l.match(/^(#{1,6})\s+(.*?)\s*#*\s*$/);
+  if (h) return [i + 1, keep && `<h${h[1].length} class="md-h">${inline(h[2], keep)}</h${h[1].length}>`];
+  if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(l)) return [i + 1, keep && '<hr class="md-hr">'];
+  if (/^\s*>/.test(l)) {
+    const q = []; while (i < lines.length && /^\s*>/.test(lines[i])) q.push(lines[i++].replace(/^\s*>\s?/, ''));
+    return [i, keep && `<blockquote class="md-quote">${renderMarkdown(q.join('\n'))}</blockquote>`];
+  }
+  if (l.includes('|') && i + 1 < lines.length && isTableSep(lines[i + 1])) {
+    const rows = []; while (i < lines.length && lines[i].includes('|') && lines[i].trim()) rows.push(lines[i++]);
+    return [i, keep && table(rows, keep)];
+  }
+  if (isList(l)) {
+    const items = []; while (i < lines.length && (isList(lines[i]) || (lines[i].trim() && /^\s{2,}/.test(lines[i])))) items.push(lines[i++]);
+    return [i, keep && list(items, keep)];
+  }
+  const para = [];
+  while (i < lines.length && lines[i].trim() && !/^\s*(`{3,}|~{3,}|#{1,6}\s|>|\$\$|\\\[)/.test(lines[i]) && !isList(lines[i]) && !(lines[i].includes('|') && i + 1 < lines.length && isTableSep(lines[i + 1]))) para.push(lines[i++]);
+  if (!para.length) return [i + 1, keep && `<p>${inline(l, keep)}</p>`];
+  return [i, keep && `<p>${para.map((p) => inline(p, keep)).join('<br>')}</p>`];
+}
+
 export function renderMarkdown(src) {
   const keep = [];
   const lines = String(src || '').replace(/\r\n?/g, '\n').split('\n');
   const out = [];
-  let i = 0;
-  const isList = (l) => /^\s*([-*+]|\d+[.)])\s+/.test(l);
-  const isTableSep = (l) => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(l);
+  let i = 0, html;
   while (i < lines.length) {
-    const l = lines[i];
-    if (!l.trim()) { i++; continue; }
-    const fence = l.match(/^\s*(`{3,}|~{3,})(.*)$/);
-    if (fence) {
-      const body = []; i++;
-      while (i < lines.length && !lines[i].trim().startsWith(fence[1])) body.push(lines[i++]);
-      i++;
-      out.push(codeBlock(body.join('\n'), fence[2])); continue;
-    }
-    const mathOpen = l.trim().match(/^(\$\$|\\\[)(.*)$/);
-    if (mathOpen) {
-      const close = mathOpen[1] === '$$' ? '$$' : '\\]';
-      let rest = mathOpen[2], body = [];
-      if (rest.trim().endsWith(close) && rest.trim().length > close.length - 1) { body.push(rest.trim().slice(0, -close.length)); i++; }
-      else { if (rest.trim()) body.push(rest); i++; while (i < lines.length && !lines[i].trim().endsWith(close)) body.push(lines[i++]); if (i < lines.length) { body.push(lines[i].trim().slice(0, -close.length)); i++; } }
-      const tex = body.join('\n').trim();
-      out.push(`<div class="md-math-block"><div class="md-math" data-tex="${esc(tex)}" data-display="1">${esc(tex)}</div></div>`); continue;
-    }
-    const h = l.match(/^(#{1,6})\s+(.*?)\s*#*\s*$/);
-    if (h) { out.push(`<h${h[1].length} class="md-h">${inline(h[2], keep)}</h${h[1].length}>`); i++; continue; }
-    if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(l)) { out.push('<hr class="md-hr">'); i++; continue; }
-    if (/^\s*>/.test(l)) {
-      const q = []; while (i < lines.length && /^\s*>/.test(lines[i])) q.push(lines[i++].replace(/^\s*>\s?/, ''));
-      out.push(`<blockquote class="md-quote">${renderMarkdown(q.join('\n'))}</blockquote>`); continue;
-    }
-    if (l.includes('|') && i + 1 < lines.length && isTableSep(lines[i + 1])) {
-      const rows = []; while (i < lines.length && lines[i].includes('|') && lines[i].trim()) rows.push(lines[i++]);
-      out.push(table(rows, keep)); continue;
-    }
-    if (isList(l)) {
-      const block = []; while (i < lines.length && (isList(lines[i]) || (lines[i].trim() && /^\s{2,}/.test(lines[i])))) block.push(lines[i++]);
-      out.push(list(block, keep)); continue;
-    }
-    const para = [];
-    while (i < lines.length && lines[i].trim() && !/^\s*(`{3,}|~{3,}|#{1,6}\s|>|\$\$|\\\[)/.test(lines[i]) && !isList(lines[i]) && !(lines[i].includes('|') && i + 1 < lines.length && isTableSep(lines[i + 1]))) para.push(lines[i++]);
-    if (!para.length) { out.push(`<p>${inline(l, keep)}</p>`); i++; continue; }
-    out.push(`<p>${para.map((p) => inline(p, keep)).join('<br>')}</p>`);
+    if (!lines[i].trim()) { i++; continue; }
+    [i, html] = block(lines, i, keep);
+    out.push(html);
   }
   return restore(out.join(''), keep);
+}
+
+// While a reply streams, only its last blocks can still change. The text before the offset this returns is blocks
+// that no more text can change: it ends on a blank line between blocks (never one inside a code fence or a $$ block)
+// with a line after it, so renderMarkdown(src.slice(0, cut)) + renderMarkdown(src.slice(cut)) is exactly
+// renderMarkdown(src), for src and for anything src grows into. `from` is an earlier cut of the same text, so only
+// what came after it is scanned. Text with \r in it is never cut (renderMarkdown reads \r\n as one line break).
+export function stableCut(src, from = 0) {
+  if (src.includes('\r')) return 0;
+  const lines = src.slice(from).split('\n');
+  let cut = from, at = from, i = 0;
+  // The last line is still being written, so a block that reaches it may still change.
+  while (i < lines.length - 1) {
+    if (!lines[i].trim()) { at += lines[i++].length + 1; cut = at; continue; }
+    const [next] = block(lines, i, null);
+    for (; i < next && i < lines.length; i++) at += lines[i].length + 1;
+  }
+  return cut;
 }
 
 // ---------- after the HTML is on the page: math and copy buttons ----------

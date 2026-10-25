@@ -293,7 +293,7 @@ async function contextText(list) {
 // Typing @ suggests recent chats, this project's files and other projects; typing more filters
 // them. Picking one attaches it as context for the next message. / lists the chat commands.
 import { langOf, mountCode } from './code.js';
-import { renderMarkdown, enhance } from './markdown.js';
+import { renderMarkdown, enhance, stableCut } from './markdown.js';
 
 // The message box's buttons: icons only, coloured by what they do.
 const CMP_ICO = {
@@ -3003,10 +3003,10 @@ function drawReading(c, m) {
   if (dr) dr.onclick = (e) => { e.preventDefault(); r.removed = true; a.reading = null; push(''); saveChat(c); drawReading(c, m); };
 }
 // The model's thinking, shown above the reply: open while it thinks, folded once it answers.
-function drawThinking(m) {
+function drawThinking(m, c) {
   const box = $('.thinking', m.el); if (!box) return;
   const tl = $('.timeline', m.el);
-  if (tl) { box.hidden = true; liveThinking(m, tl); return; }
+  if (tl) { box.hidden = true; liveThinking(m, tl, c); return; }
   const parts = Object.entries(m.thinking || {}).filter(([, t]) => t.trim());
   box.hidden = !parts.length;
   if (!parts.length) return;
@@ -3219,11 +3219,11 @@ function wireTimeline(m, el) {
 }
 // While the model thinks: update the word counts, and the text of an open thinking line. A step whose thinking
 // has no line yet (it started after the last redraw) gets one.
-function liveThinking(m, tl) {
+function liveThinking(m, tl, c) {
   for (const [step, text] of Object.entries(m.thinking || {})) {
     if (!String(text).trim()) continue;
     const row = tl.querySelector(`.tl-think[data-key="t${step}"]`);
-    if (!row) { tl.innerHTML = timelineHTML(m); wireTimeline(m, m.el); return; }
+    if (!row) { if (c) drawTimeline(c, m); else { tl.innerHTML = timelineHTML(m); wireTimeline(m, m.el); } return; }
     const w = $('.tl-words', row); if (w) w.textContent = `${String(text).trim().split(/\s+/).length.toLocaleString()} words`;
     if (row.open) {
       const body = $('.tl-think-body', row), TAIL = 12000, t = String(text);
@@ -3233,14 +3233,112 @@ function liveThinking(m, tl) {
     }
   }
 }
+// While a reply streams, the blocks it has finished stay on the page as they are (a selection in them, a code block's
+// scroll, its Copy button), and only the text after them is drawn again. Both together are exactly what md() draws
+// for the whole text; once the reply ends it is drawn whole, as before.
+const streamed = new WeakMap(); // a reply's body → { head: the finished text on the page, n: its nodes, last, src }
+function streamBody(body, src) {
+  let s = streamed.get(body);
+  if (s && src === s.src) return;
+  if (!s || !src.startsWith(s.head) || (s.n && body.childNodes[s.n - 1] !== s.last)) { body.textContent = ''; s = { head: '', n: 0, last: null }; streamed.set(body, s); }
+  while (body.childNodes.length > s.n) body.lastChild.remove();
+  const put = (html) => {
+    let x = body.lastChild;
+    body.insertAdjacentHTML('beforeend', html);
+    for (x = x ? x.nextSibling : body.firstChild; x; x = x.nextSibling) if (x.nodeType === 1) enhance(x);
+  };
+  const cut = stableCut(src, s.head.length);
+  if (cut > s.head.length) { put(md(src.slice(s.head.length, cut))); s.head = src.slice(0, cut); s.n = body.childNodes.length; s.last = body.lastChild; }
+  put(md(src.slice(cut)));
+  s.src = src;
+}
+// What you were doing in a card still waiting for you (typed text, picked options, an open rule panel, the caret)
+// carries over when the timeline is drawn again from the reply's state.
+function cardInputs(tl) {
+  const saved = new Map(), act = document.activeElement;
+  for (const card of tl.querySelectorAll('.approval[data-id]')) {
+    const fields = [...card.querySelectorAll('input, textarea, select')], ctl = [...card.querySelectorAll('input, textarea, select, button')];
+    const f = card === act ? -1 : ctl.includes(act) ? ctl.indexOf(act) : null, box = f !== null && f >= 0; // -1: the card itself
+    saved.set(card.dataset.id, {
+      values: fields.map((x) => (x.type === 'checkbox' ? x.checked : x.value)),
+      opts: fields.map((x) => (x.tagName === 'SELECT' ? x.selectedOptions[0]?.outerHTML : null)),
+      picks: [...card.querySelectorAll('.q-opts[role="radiogroup"], .sc-pick')].map((g) => [...g.children].findIndex((b) => b.classList.contains(g.matches('.sc-pick') ? 'on' : 'chosen'))),
+      rule: !!$('.sc-rule', card) && !$('.sc-rule', card).hidden,
+      aw: $('.aw[data-holding]', card), // "Wait for me" pressed, the harness not heard back from yet
+      focus: f,
+      sel: box && typeof act.selectionStart === 'number' ? [act.selectionStart, act.selectionEnd, act.selectionDirection] : null,
+      scroll: box ? act.scrollTop : 0,
+    });
+  }
+  return saved;
+}
+function restoreInputs(tl, saved) {
+  for (const card of tl.querySelectorAll('.approval[data-id]')) {
+    const s = saved.get(card.dataset.id);
+    const fields = [...card.querySelectorAll('input, textarea, select')];
+    if (!s || fields.length !== s.values.length) continue; // new, or not the same card any more
+    const aw = $('.aw[data-until]', card);
+    if (s.aw && aw) aw.replaceWith(s.aw);
+    // Picks first: typing in a question's own box clears its pick, so the boxes follow.
+    const groups = [...card.querySelectorAll('.q-opts[role="radiogroup"], .sc-pick')];
+    if (groups.length === s.picks.length) groups.forEach((g, k) => {
+      if (s.picks[k] < 0 && g.matches('.sc-pick')) return;
+      [...g.children].forEach((b, j) => {
+        const on = j === s.picks[k];
+        if (g.matches('.sc-pick')) b.classList.toggle('on', on); else { b.classList.toggle('chosen', on); b.setAttribute('aria-checked', String(on)); }
+      });
+    });
+    fields.forEach((x, k) => {
+      const v = s.values[k];
+      if (x.type === 'checkbox') { if (x.checked !== v) { x.checked = v; x.dispatchEvent(new Event('change')); } return; }
+      if (x.value === v || v === '__more') return;
+      if (x.tagName === 'SELECT' && ![...x.options].some((o) => o.value === v) && s.opts[k]) x.insertAdjacentHTML('afterbegin', s.opts[k]);
+      x.value = v;
+      x.dispatchEvent(new Event(x.tagName === 'SELECT' ? 'change' : 'input'));
+    });
+    const btn = $('.sc-always', card);
+    if (s.rule && btn?.onclick && $('.sc-rule', card)?.hidden) btn.onclick();
+    if (s.focus == null || (document.activeElement && document.activeElement !== document.body)) continue;
+    const t = s.focus === -1 ? card : [...card.querySelectorAll('input, textarea, select, button')][s.focus];
+    if (!t) continue;
+    t.focus({ preventScroll: true });
+    if (s.sel) try { t.setSelectionRange(...s.sel); } catch { /* not a text box any more */ }
+    if (s.scroll) t.scrollTop = s.scroll;
+  }
+}
+// The timeline drawn again from the reply's state, with its cards wired.
+function drawTimeline(c, m) {
+  const el = m.el, tl = $('.timeline', el), was = cardInputs(tl);
+  // Everything the agent did reads in order: its thinking (folded), what it said, one line per step's tool calls
+  // (click for each call and its result), and any card that asks you something, right where it happened.
+  tl.innerHTML = timelineHTML(m);
+  wireTimeline(m, el);
+  $('.approvals', el).innerHTML = outOfStepsHTML(m);
+  const oos = $('.oos-card[data-run]', el); if (oos) wireOutOfSteps(oos, c, m);
+  for (const card of el.querySelectorAll('.approval[data-id]:not(.question):not(.budget-card)')) wireApproval(card, m);
+  for (const card of el.querySelectorAll('.question[data-id]')) wireQuestion(card, m);
+  const bcard = $('.budget-card[data-id]', el); if (bcard) wireBudget(bcard, c, m);
+  restoreInputs(tl, was);
+}
+// ⚡ The clock on a card stopped (you started on it): only its countdown line changes, so the rest of the card stays.
+function drawHeld(m, id, card) {
+  for (const box of m.el?.querySelectorAll('.approval[data-id]') || []) {
+    const aw = box.dataset.id === id && $('.aw', box);
+    if (aw) aw.outerHTML = waitHTML(card);
+  }
+}
 function updateMsg(c, m, { bodyOnly = false } = {}) {
   const el = m.el;
   if (!el) return;
   const body = $('.body', el);
-  body.innerHTML = m.error && !stoppedByYou(m) ? `${md(m.content)}<p class="err">⚠ ${esc(m.error)}</p>` : md(m.content) || (m.live || stoppedByYou(m) ? '' : '<p class="err">(no reply)</p>');
+  if (m.live && !m.error && !String(m.content || '').includes('\r')) streamBody(body, String(m.content || ''));
+  else {
+    streamed.delete(body);
+    body.innerHTML = m.error && !stoppedByYou(m) ? `${md(m.content)}<p class="err">⚠ ${esc(m.error)}</p>` : md(m.content) || (m.live || stoppedByYou(m) ? '' : '<p class="err">(no reply)</p>');
+    enhance(body);
+  }
   body.classList.toggle('typing', !!m.live);
-  enhance(body);
-  drawThinking(m);
+  drawThinking(m, c);
   // The card's colour says what state the reply is in: working, waiting for you, or failed.
   const waiting = Object.values(m.approvals || {}).some((a) => !a.outcome);
   el.classList.toggle('is-live', !!m.live && !waiting);
@@ -3254,15 +3352,7 @@ function updateMsg(c, m, { bodyOnly = false } = {}) {
   const rh = $('.reply-head', el);
   if (rh) { const h = replyHeadHTML(m, model); if (rh._h !== h) { rh.innerHTML = h; rh._h = h; } }
   if (bodyOnly) return;
-  // Everything the agent did reads in order: its thinking (folded), what it said, one line per step's tool calls
-  // (click for each call and its result), and any card that asks you something, right where it happened.
-  $('.timeline', el).innerHTML = timelineHTML(m);
-  wireTimeline(m, el);
-  $('.approvals', el).innerHTML = outOfStepsHTML(m);
-  const oos = $('.oos-card[data-run]', el); if (oos) wireOutOfSteps(oos, c, m);
-  for (const card of el.querySelectorAll('.approval[data-id]:not(.question):not(.budget-card)')) wireApproval(card, m);
-  for (const card of el.querySelectorAll('.question[data-id]')) wireQuestion(card, m);
-  const bcard = $('.budget-card[data-id]', el); if (bcard) wireBudget(bcard, c, m);
+  drawTimeline(c, m);
   // One chip per artifact this reply made or changed (edits don't add a second chip).
   // Artifacts are reached from the pane's dropdown and the Files view, not as chips under each reply.
   // Steps: a button under the reply; the list of steps opens in the side pane.
@@ -4410,14 +4500,15 @@ async function followRun(c, m, open) {
   following.add(m.runId);
   c.running = { runId: m.runId, abort: () => { fetch(`/api/runs/${m.runId}/stop`, { method: 'POST' }).catch(() => ac.abort()); } };
   syncRunState(c); renderSidebar();
-  let lastStep = -1, stepStart = 0, raf = 0;
+  let lastStep = -1, stepStart = 0, raf = 0, whole = false;
   // After a reload the server replays a run's events in one burst: those are old news, so no notifications for them.
   const followT0 = Date.now(), note = (...x) => { if (Date.now() - followT0 > 1500) notifyRun(c, ...x); };
   const msgsEl =() => c.el && G.panes.includes(c.id) ? $('.msgs', c.el.root) : null;
   const stick = () => { if (msgsEl()) c.toEnd?.(); };
+  // At most one draw a frame: a burst of events (the replay after a reload) draws once, not once per event.
   const redraw = (bodyOnly) => {
-    if (bodyOnly) { if (!raf) raf = requestAnimationFrame(() => { raf = 0; updateMsg(c, m, { bodyOnly: true }); stick(); }); return; }
-    updateMsg(c, m); stick();
+    if (!bodyOnly) whole = true;
+    if (!raf) raf = requestAnimationFrame(() => { raf = 0; const all = whole; whole = false; updateMsg(c, m, { bodyOnly: !all }); stick(); });
   };
   // Text streamed in a step that turned out not to be the answer moves into the trace.
   const moveAside = (e) => { if (e.step === lastStep && m.content.length > stepStart) { e.aside = m.content.slice(stepStart).trim(); m.content = m.content.slice(0, stepStart).trimEnd(); } };
@@ -4453,7 +4544,14 @@ async function followRun(c, m, open) {
         if (e.t === 'allow_always') { if (!a.allowed.includes(e.tool)) a.allowed.push(e.tool); renderAllowed(c); saveChat(c); }
         if (e.t === 'cmd_rule' && e.rule?.scope === 'chat') { (a.cmdRules ??= []).push(e.rule); saveChat(c); }
         if (e.t === 'approval') { m.approvals[e.id] = { card: e }; if (e.mode === 'strict') { c.waiting = true; renderSidebar(); renderChatHead(c); note('approval', e.what || e.tool); } }
-        if (e.t === 'card_held') { const x = m.approvals?.[e.id] || m.questions?.[e.id]; if (x?.card?.wait) x.card.wait.held = true; }
+        // The clock stopped: only that card's countdown line is drawn again, so what you are typing in it stays.
+        if (e.t === 'card_held') {
+          const x = m.approvals?.[e.id] || m.questions?.[e.id];
+          if (x?.card?.wait) { x.card.wait.held = true; drawHeld(m, e.id, x.card); }
+          m.trace.push(e);
+          if (G.view.trace === m.runId && focused() === c) renderTracePane(c, m);
+          continue;
+        }
         if (e.t === 'approval_done' && m.approvals[e.id]) { m.approvals[e.id].outcome = e; c.waiting = false; renderSidebar(); renderChatHead(c); }
         if (e.t === 'question') { m.questions[e.id] = { card: e }; if (!e.auto) { c.waiting = 'answer'; renderSidebar(); renderChatHead(c); note('answer', e.question); } }
         if (e.t === 'budget_ask') { m.budgetAsk = { card: e }; c.waiting = 'budget'; renderSidebar(); renderChatHead(c); note('budget', 'Raise the budget to carry on, or wrap up.'); }
@@ -4505,7 +4603,9 @@ async function followRun(c, m, open) {
       if (m.error) note('error', m.error);
       else note('done', String(m.content || '').replace(/[#*_`>|]/g, '').slice(0, 200), `${took ? secs(took) : ''}${cost}`.replace(/^ · /, ''));
     }
-    updateMsg(c, m); syncRunState(c); saveChat(c, true); refreshSidebar(); checkSpace(c, true); refreshUndoable(c.projectId); if (G.view.browser && focused() === c) renderPane();
+    const due = raf; if (raf) { cancelAnimationFrame(raf); raf = 0; }
+    updateMsg(c, m); if (due) stick();
+    syncRunState(c); saveChat(c, true); refreshSidebar(); checkSpace(c, true); refreshUndoable(c.projectId); if (G.view.browser && focused() === c) renderPane();
     refreshBalance();
     // ⚙ Reviewer → "Review code changes": after a reply that changed code, a code review card (only when it finds something).
     if (G.settings.codeReview === 'auto' && m.stats && !m.error && (m.stats.changed || []).some((f) => CODE_FILE.test(f))) codeReview(c, 'reply', { auto: true, runId: m.runId });
