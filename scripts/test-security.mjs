@@ -8,7 +8,7 @@ import path from 'node:path';
 import { hostAllowed, crossSiteApi, gate, isLoopback, appGate, appKey } from '../server/access.js';
 import { privateAddress } from '../server/safefetch.js';
 import { decide, agentWriteBlocked } from '../server/cmdpolicy.js';
-import { safePath, checkCommand, preApproved, searchFiles, childEnv } from '../server/workspace.js';
+import { safePath, checkCommand, preApproved, searchFiles, childEnv, runLine } from '../server/workspace.js';
 import { userEnv, mergePath } from '../server/userenv.js';
 import { needsAdmin, adminForAgent } from '../server/elevation.js';
 import { externalize, blobData } from '../server/blobs.js';
@@ -234,6 +234,24 @@ test('a private key is redacted whole, not just its first line', () => {
   assert.equal(r.text, 'before\n[secret removed]\nafter');
   const cut = redactSecrets(`x ${key.split('\n').slice(0, 2).join('\n')}`);
   assert.ok(!cut.text.includes('b3BlbnNz'), 'output cut off before the END line still loses the key');
+});
+
+// Stop pressed before a command gets going (during a before_command hook, or while its job is being set up) must
+// mean it never runs, not that it runs with no way to stop it.
+test('Stop before a command starts: it never runs', async () => {
+  const root = tempDir('qx-stop-early-');
+  fs.writeFileSync(path.join(root, 'mark.js'), "require('fs').writeFileSync(require('path').join(__dirname, 'ran.txt'), 'x')");
+  const line = `"${process.execPath}" mark.js`;
+  const ac = new AbortController(); ac.abort();
+  const r = await runLine(root, line, { signal: ac.signal, timeout: 20000 });
+  assert.ok(r.stopped, 'reported as stopped');
+  const late = new AbortController();
+  const p = runLine(root, line, { signal: late.signal, timeout: 20000 });
+  late.abort(); // while launch is still setting up the job
+  const r2 = await p;
+  assert.ok(r2.stopped, 'reported as stopped');
+  await new Promise((res) => setTimeout(res, 500));
+  assert.equal(fs.existsSync(path.join(root, 'ran.txt')), false, 'the command never ran');
 });
 
 test('the write guard judges where a path lands, not how it is spelled', () => {

@@ -1268,21 +1268,3 @@ test('YOLO: safe .NET calls, GETs with plain headers and the line’s own functi
   assert.notEqual(await verdict('[IO.File]::Delete("C:/x.txt")'), 'allow', 'a .NET delete');
   assert.notEqual(await verdict('function cat($p) { Remove-Item -Recurse $p }; cat C:/Users'), 'allow', 'what a script function runs is still judged');
 });
-
-// Stop pressed before a command gets going (during a before_command hook, or while its job is being set up) must
-// mean it never runs, not that it runs with no way to stop it.
-test('Stop before a command starts: it never runs', async () => {
-  const root = tmp('stop-early');
-  fs.writeFileSync(path.join(root, 'mark.js'), "require('fs').writeFileSync(require('path').join(__dirname, 'ran.txt'), 'x')");
-  const line = `"${process.execPath}" mark.js`;
-  const ac = new AbortController(); ac.abort();
-  const r = await runLine(root, line, { signal: ac.signal, timeout: 20000 });
-  assert.ok(r.stopped, 'reported as stopped');
-  const late = new AbortController();
-  const p = runLine(root, line, { signal: late.signal, timeout: 20000 });
-  late.abort(); // while launch is still setting up the job
-  const r2 = await p;
-  assert.ok(r2.stopped, 'reported as stopped');
-  await new Promise((res) => setTimeout(res, 500));
-  assert.equal(fs.existsSync(path.join(root, 'ran.txt')), false, 'the command never ran');
-});
