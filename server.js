@@ -10,6 +10,7 @@ import './server/nobrotli.js';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { currentKey, PORT, runtime, ROOT, HOME, chat, chatModels, decisionModels, imageModels, speechModels, musicModels, videoModels, transcribe, clearCatalogues } from './server/openrouter.js';
 import { listKeys, addKey, removeKey, setActive, renameKey, keyUsage, activeUsage, accountCredits, startSampling, lockDown } from './server/keys.js';
@@ -104,6 +105,10 @@ function readRaw(req, limit) {
   });
 }
 const json = (res, code, body) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(body)); };
+// One-time passes for exporting API keys (see /api/backup/key-pass): each works once, within a minute.
+const KEY_PASSES = new Map();
+const keyPass = () => { const p = randomBytes(18).toString('base64url'); KEY_PASSES.set(p, Date.now() + 60e3); return p; };
+const takeKeyPass = (p) => { const until = typeof p === 'string' && KEY_PASSES.get(p); if (until) KEY_PASSES.delete(p); for (const [k, t] of KEY_PASSES) if (t < Date.now()) KEY_PASSES.delete(k); return !!until && until >= Date.now(); };
 // The app's own pages may run only its own scripts (KaTeX ships with the app, under /vendor/katex), so text that slipped into the page
 // unescaped can't run code with the harness's powers.
 const APP_CSP = "script-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'; form-action 'self'";
@@ -703,8 +708,15 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname.startsWith('/api/backup/') && req.method === 'POST') {
       const b = JSON.parse(await readBody(req, 5e6) || '{}');
       try {
-        // API keys go in only with both boxes ticked, and only from this computer.
-        if (url.pathname === '/api/backup/export') return json(res, 200, await exportBackup({ dir: String(b.dir || ''), settings: b.settings && typeof b.settings === 'object' ? b.settings : null, includeLogs: b.logs === true, includeKeys: b.keys === true && b.keysWarned === true && isLoopback(req), version: VERSION }));
+        // A pass for putting API keys in a backup: asked for by the page right after you confirm, used once, gone in a
+        // minute. Only the page's own request gets one (the browser marks it same-origin; other programs send no such
+        // header), so a program holding the app key can't export your keys in plain text unasked.
+        if (url.pathname === '/api/backup/key-pass') {
+          if (req.headers['sec-fetch-site'] !== 'same-origin' || req.headers['sec-fetch-dest'] !== 'empty') return json(res, 403, { error: 'only the QuorX page can ask to export your keys' });
+          return json(res, 200, { pass: keyPass() });
+        }
+        // API keys go in only with both boxes ticked and a fresh pass from the confirmation.
+        if (url.pathname === '/api/backup/export') return json(res, 200, await exportBackup({ dir: String(b.dir || ''), settings: b.settings && typeof b.settings === 'object' ? b.settings : null, includeLogs: b.logs === true, includeKeys: b.keys === true && b.keysWarned === true && takeKeyPass(b.keyPass), version: VERSION }));
         if (url.pathname === '/api/backup/find') return json(res, 200, { backups: findBackups(String(b.dir || '')) });
         if (url.pathname === '/api/backup/inspect') return json(res, 200, inspectBackup(String(b.file || '')));
         if (url.pathname === '/api/backup/import') return json(res, 200, importBackup(String(b.file || ''), { overwrite: b.overwrite === true, folders: b.folders || {}, skip: Array.isArray(b.skip) ? b.skip : [], keys: b.keys === true && isLoopback(req) }));

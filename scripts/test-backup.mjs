@@ -27,13 +27,15 @@ async function quorx(home) {
     child.once('exit', (c) => { clearTimeout(t); reject(new Error(`QuorX exited (${c}):\n${out}`)); });
   });
   const appKey = fs.readFileSync(path.join(home, 'data', 'app-key'), 'utf8').trim();
-  const call = async (p, body, key = appKey) => {
-    const r = await fetch(`http://127.0.0.1:${port}${p}`, { method: body ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', ...(key ? { 'x-quorx-key': key } : {}) }, body: body ? JSON.stringify(body) : undefined })
+  const call = async (p, body, key = appKey, extra = {}) => {
+    const r = await fetch(`http://127.0.0.1:${port}${p}`, { method: body ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', ...(key ? { 'x-quorx-key': key } : {}), ...extra }, body: body ? JSON.stringify(body) : undefined })
       .catch((e) => { throw new Error(`${p}: ${e.cause?.code || e.message} (exit ${child.exitCode}); QuorX said:
 ${out.slice(-1500)}`); });
     return { status: r.status, body: await r.json() };
   };
-  return { call, home, stop: () => new Promise((r) => { child.once('exit', r); child.kill(); }) };
+  // The pass the page gets after you confirm a key export (the browser marks the page's own request same-origin).
+  const keyPass = async () => (await call('/api/backup/key-pass', {}, appKey, { 'sec-fetch-site': 'same-origin', 'sec-fetch-dest': 'empty' })).body.pass;
+  return { call, keyPass, home, stop: () => new Promise((r) => { child.once('exit', r); child.kill(); }) };
 }
 
 // Computer A: two projects (one whose folder won't exist on B), a chat with a picture, rules, a schedule, logs, a key.
@@ -81,7 +83,13 @@ test('export leaves the API keys out unless both boxes are ticked, and logs out 
     assert.ok(!names.some((n) => /app-key|access\.json|key-usage/.test(n)), 'never the app key or pairing');
     const half = (await qx.call('/api/backup/export', { dir: out, keys: true })).body;
     assert.ok(!entries(half.file).includes('keys.json'), 'one box is not enough');
-    const full = (await qx.call('/api/backup/export', { dir: out, keys: true, keysWarned: true, logs: true })).body;
+    const both = (await qx.call('/api/backup/export', { dir: out, keys: true, keysWarned: true })).body;
+    assert.ok(!entries(both.file).includes('keys.json'), 'both boxes without the confirmation pass are not enough');
+    assert.equal((await qx.call('/api/backup/key-pass', {})).status, 403, 'only the page itself gets a pass');
+    const pass = await qx.keyPass();
+    const full = (await qx.call('/api/backup/export', { dir: out, keys: true, keysWarned: true, logs: true, keyPass: pass })).body;
+    const again = (await qx.call('/api/backup/export', { dir: out, keys: true, keysWarned: true, keyPass: pass })).body;
+    assert.ok(!entries(again.file).includes('keys.json'), 'a pass works once');
     assert.equal(full.counts.keys, 1);
     const fullNames = entries(full.file);
     assert.ok(fullNames.includes('keys.json') && fullNames.includes('logs/audit.jsonl'));
@@ -260,7 +268,7 @@ test('imported settings keep the safety settings of this computer', () => {
 test('keys come back only when the backup has them and the import asks for them', async () => {
   const a = homeA(), qa = await quorx(a.home);
   let file;
-  try { file = (await qa.call('/api/backup/export', { dir: tempDir('qx-out-'), keys: true, keysWarned: true })).body.file; } finally { await qa.stop(); }
+  try { file = (await qa.call('/api/backup/export', { dir: tempDir('qx-out-'), keys: true, keysWarned: true, keyPass: await qa.keyPass() })).body.file; } finally { await qa.stop(); }
   const qb = await quorx(tempDir('qx-backup-b-'));
   try {
     assert.equal((await qb.call('/api/backup/inspect', { file })).body.keys, 1);
