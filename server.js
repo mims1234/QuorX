@@ -49,7 +49,7 @@ import { hostedHtml, browserPath, openTab } from './server/browser.js';
 import { zipFolder } from './server/zip.js';
 import { exportBackup, findBackups, inspectBackup, importBackup } from './server/backup.js';
 import { artifactContent, servedArtifact, ARTIFACT_HEADERS, folderStamp } from './server/artifacts.js';
-import { gate, appGate, appLink, hostAllowed, crossSiteApi, isLoopback } from './server/access.js';
+import { gate, appGate, appLink, hostAllowed, crossSiteApi, isLoopback, handoffPut, handoffTake } from './server/access.js';
 import { gitHubRemote, gitHubInfo } from './server/github.js';
 import { serveBlob, startSweeping, chatFootprint, sendFile } from './server/blobs.js';
 import { measureStorage, clearStorage, clearProjectParts, previewProjectParts, recentClears, startStorageRules } from './server/storage.js';
@@ -166,6 +166,10 @@ const server = http.createServer(async (req, res) => {
         'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'" });
       return res.end(callbackPage({ ...r, desktop }));
     }
+    // Settings this browser kept at localhost:<port>, carried to quorx.localhost once (server/access.js, public/move.js).
+    const hfm = url.pathname.match(/^\/api\/prefs\/handoff\/([\w-]+)$/);
+    if (hfm && req.method === 'POST') { let b = {}; try { b = JSON.parse(await readBody(req, 8e6) || '{}'); } catch { /* below */ } return handoffPut(hfm[1], b.items) ? json(res, 200, { ok: true }) : json(res, 410, { error: 'this handoff is used or expired' }); }
+    if (hfm && req.method === 'GET') { const items = handoffTake(hfm[1]); return items ? json(res, 200, { items }) : json(res, 410, { error: 'this handoff is used or expired' }); }
     if (req.method === 'GET' && url.pathname === '/api/stale') return json(res, 200, codeChanged());
     if (req.method === 'GET' && url.pathname === '/api/config') return json(res, 200, { ...codeChanged(), version: VERSION, platform: process.platform, pagePort: runtime.pagePort || null, shell: shellInfo().name, pty: ptyAvailable(), defaults: DEFAULTS, docDefaults: DOC_DEFAULTS, storageDefaults: RULE_DEFAULTS, checks: CHECKS, media: MEDIA, newsRemote: newsRemoteState().on, hasKey: !!currentKey(), browser: browserPath(), allowed: ALLOWED });
 

@@ -17,10 +17,12 @@ export function startSignIn(origin) {
   sweep();
   const id = b64url(crypto.randomBytes(12)), verifier = b64url(crypto.randomBytes(32)), state = b64url(crypto.randomBytes(16));
   const challenge = b64url(crypto.createHash('sha256').update(verifier).digest());
-  const local = /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(String(origin || ''));
+  const local = /^http:\/\/(localhost|quorx\.localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(String(origin || ''));
   const label = `QuorX (${os.hostname()})`.slice(0, 60);
   const q = new URLSearchParams({ code_challenge: challenge, code_challenge_method: 'S256', key_label: label });
-  if (local) { q.set('callback_url', `${origin}/oauth/openrouter/callback`); q.set('state', state); }
+  // Back to localhost even from quorx.localhost (server/access.js): the callback needs no sign-in, and OpenRouter
+  // takes localhost addresses.
+  if (local) { q.set('callback_url', `${String(origin).replace(/^http:\/\/quorx\.localhost/i, 'http://localhost')}/oauth/openrouter/callback`); q.set('state', state); }
   flows.set(id, { verifier, state, created: Date.now(), status: 'waiting', error: null, label });
   return { id, url: `${BASE}/auth?${q}`, mode: local ? 'callback' : 'code' };
 }

@@ -58,6 +58,7 @@ const timeTag = (t) => { const mode = G.settings?.ui?.timestamps || 'time'; retu
 const hue = (s) => [...String(s)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 7);
 const initials = (s) => (String(s).match(/[A-Za-z0-9]/g) || ['?']).slice(0, 2).join('').toUpperCase();
 const STORE = 'quorx-v1';
+const APP_HOST = 'quorx.localhost'; // QuorX's own name on this computer (server/access.js)
 const ICON = { html: '📄', md: '📝', image: '🖼', audio: '🎵', video: '🎬', site: '🌐', app: '🚀' };
 const REASON = { off: 'Reasoning off', low: 'Reasoning: low', medium: 'Reasoning: medium', high: 'Reasoning: high', default: 'Reasoning: model default' };
 const BUCKET = {
@@ -2103,8 +2104,15 @@ document.addEventListener('wheel', (e) => {
 // allowed its origin. Only on this computer: the pages address answers no other device.
 function pageUrl(u) {
   const p = G.cfg?.pagePort;
-  if (!p || !/^\/(ws|art|preview)\//.test(u) || !/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname)) return u;
-  return `${location.protocol}//${location.hostname}:${p}${u}`;
+  if (!p || !/^\/(ws|art|preview)\//.test(u) || !/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname) && location.hostname !== APP_HOST) return u;
+  // At localhost, not QuorX's own name: those pages keep the storage they had, and stay another site than the app.
+  return `${location.protocol}//${location.hostname === APP_HOST ? 'localhost' : location.hostname}:${p}${u}`;
+}
+// quorx.localhost is QuorX's own name, and its cookie goes to every port under it (server/access.js): a page on
+// another port is shown at localhost instead, so it never gets the cookie.
+function offAppHost(u) {
+  try { const x = new URL(u, location.href); if (x.hostname === APP_HOST && x.port !== location.port) { x.hostname = 'localhost'; return x.href; } } catch { /* not an address */ }
+  return u;
 }
 const pageSandbox = (u) => `allow-scripts allow-forms allow-modals allow-popups allow-downloads${/^https?:/.test(u) && !u.startsWith(location.origin) ? ' allow-same-origin' : ''}`;
 // ---------- looking at what you sent: pictures large (← → between them), files in the Files preview ----------
@@ -4805,9 +4813,9 @@ function renderPane() {
   } else if (a.kind === 'site') {
     bar.hidden = false;
     bar.innerHTML = `🌐 <b>Site</b> <span class="dim">served from the project folder</span> <span class="dim live-note">● live: reloads when project files change</span>`;
-    frame(a.url); watchFolder(c);
+    frame(offAppHost(a.url)); watchFolder(c);
   } else if (a.kind === 'app') {
-    renderAppBar(c, a); frame(a.url); watchFolder(c);
+    renderAppBar(c, a); frame(offAppHost(a.url)); watchFolder(c);
   } else if (!a.url) {
     body.innerHTML = `<div class="empty">This ${a.kind} is no longer available.</div>`;
   } else {
@@ -6921,6 +6929,15 @@ async function boot() {
   G.cfg = await fetch('/api/config').then((r) => r.json());
   // Opened without the app link, every other /api call answers 401 and the wall above says what to do: stop here.
   if ((await fetch('/api/chats')).status === 401) return;
+  // Just moved from localhost:<port> (server/access.js): what this browser kept there is written here once, where it
+  // isn't set already, and the page starts again so everything reads it.
+  const moved = new URLSearchParams(location.search).get('prefs');
+  if (moved) {
+    const r = await fetch(`/api/prefs/handoff/${encodeURIComponent(moved)}`).then((x) => (x.ok ? x.json() : null)).catch(() => null);
+    try { for (const [k, v] of Object.entries(r?.items || {})) if (localStorage.getItem(k) == null) localStorage.setItem(k, v); } catch { /* storage off */ }
+    const u = new URL(location.href); u.searchParams.delete('prefs');
+    return location.replace(u.href);
+  }
   loadScores(); loadCards();
   getJ('/api/storage/rules').then((r) => { if (r && !r.error) G.storageRules = r; });
   const d = G.cfg.defaults;
@@ -8064,7 +8081,7 @@ function renderBrowser(c) {
   if (DESK && t.agent && t.desktop) { t.opened = t.url; return deskStage(t, stage); } // the agent's real tab: shown as it is, never reloaded
   if (DESK && !t.agent) return deskStage(t, stage);
   if (!t.agent && (t.mode || (t.mode = sameSite(t.url) ? 'frame' : 'remote')) === 'frame') {
-    const f = document.createElement('iframe'); f.title = t.url; f.src = t.url; stage.appendChild(f);
+    const f = document.createElement('iframe'); f.title = t.url; f.src = offAppHost(t.url); stage.appendChild(f);
     return;
   }
   stage.innerHTML = `<div class="ubview ${live ? 'locked' : ''}" tabindex="0"><img class="ub-shot" alt="The page"><textarea class="ub-keys" aria-label="Type into the page" autocomplete="off" autocapitalize="off" spellcheck="false"></textarea>${live ? '<div class="ub-lock">🤖 The agent is using this page. You can watch; it is yours when the reply ends.</div>' : ''}<div class="ub-status">${t.shot ? '' : 'Opening…'}</div></div>`;
@@ -8094,7 +8111,7 @@ function searchUrl(q) {
 function addressOf(v) {
   if (/^https?:\/\//i.test(v)) return v;
   if (/\s/.test(v)) return null;
-  if (/^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/i.test(v) || /^\d{1,3}(\.\d{1,3}){3}(:\d+)?(\/|$)/.test(v)) return `http://${v}`;
+  if (/^(([\w-]+\.)*localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/i.test(v) || /^\d{1,3}(\.\d{1,3}){3}(:\d+)?(\/|$)/.test(v)) return `http://${v}`;
   if (/^[\w-]+(\.[\w-]+)*\.[a-z]{2,}(:\d+)?([/?#]\S*)?$/i.test(v)) return `https://${v}`;
   return null;
 }
@@ -8105,6 +8122,7 @@ function typedToUrl(v) {
 }
 function browserGo(url) {
   const c = focused(); if (!c) return;
+  url = offAppHost(url);
   let t = activeBTab(c);
   if (!t || t.agent) t = newBTab(url);
   Object.assign(t, { url, title: '', mode: null, opened: null, shot: null });
@@ -8126,7 +8144,7 @@ function quorxPage(u) {
   return self && !/^\/(ws|art|preview|blob)\//.test(x.pathname); // its own work served by QuorX is fine
 }
 async function openLink(url, from) {
-  let u; try { u = new URL(String(url || ''), location.href); } catch { return; }
+  let u; try { u = new URL(offAppHost(String(url || '')), location.href); } catch { return; }
   if (!/^https?:$/.test(u.protocol)) return;
   const say = (text) => { if (from?.isConnected && from.getClientRects().length) flashTip(from, text, 2400); };
   if (quorxPage(u.href)) return say("QuorX's own pages don't open in its Browser tab");
@@ -8826,7 +8844,7 @@ function drawUpdate(u) {
 // Preview of the update strip in a browser on this computer: ?demo-update=available | downloading:42 | ready | error
 {
   const demo = new URLSearchParams(location.search).get('demo-update');
-  if (demo && !DESK && /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname)) {
+  if (demo && !DESK && (/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname) || location.hostname === APP_HOST)) {
     const [state, pct] = demo.split(':');
     setTimeout(() => drawUpdate({ demo: true, state, percent: Number(pct) || 0, version: '0.2.5', current: G.cfg?.version || '0.2.4', error: 'The download stopped (demo).' }), 1600);
   }
