@@ -23,7 +23,7 @@ import { createScheduler, loadSchedules, saveSchedules, cleanSchedule, describeW
 import { startScheduledChat } from './server/schedrun.js';
 import { loadMemory, saveMemory, memoryTokens, MEMORY_TOKENS } from './server/memory.js';
 import { CHECKS } from './server/harness-checks.js';
-import { startRun, getRun, stopRun, follow, runStatus, activeRuns, runningForChat, validRunId, scorecard, readLog, recordRun, onRunEvent } from './server/runs.js';
+import { startRun, getRun, stopRun, follow, runStatus, activeRuns, validRunId, scorecard, readLog, recordRun, onRunEvent } from './server/runs.js';
 import { setBudget, budgetState } from './server/budget.js';
 import { shellRun, shellClose, shellInfo } from './server/shell.js';
 import { ptyAvailable, ptyOpen, ptyWrite, ptyResize, ptyFollow, ptyClose } from './server/pty.js';
@@ -52,6 +52,7 @@ import { artifactContent, servedArtifact, ARTIFACT_HEADERS, folderStamp } from '
 import { gate, appGate, appLink, hostAllowed, crossSiteApi, isLoopback } from './server/access.js';
 import { gitHubRemote, gitHubInfo } from './server/github.js';
 import { serveBlob, startSweeping, chatFootprint, sendFile } from './server/blobs.js';
+import { runningForChat } from './server/runs.js';
 import { measureStorage, clearStorage, clearProjectParts, previewProjectParts, recentClears, startStorageRules } from './server/storage.js';
 import { storageRules, saveStorageRules, rotateLog, RULE_DEFAULTS } from './server/storagerules.js';
 import { listDesignSystems, readDesignSystem, projectDesign, applyDesignSystem, saveProjectDesign } from './server/design.js';
