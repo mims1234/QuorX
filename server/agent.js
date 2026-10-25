@@ -3025,14 +3025,19 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       const saved = !args.command && launchConfigs(projectId).find((x) => x.name.toLowerCase() === String(args.name || '').toLowerCase());
       if (!args.command && !saved) return `Error: no saved launch config named "${args.name}"; give a command.`;
       if (saved) { args.command = saved.command; args.args = saved.args; }
-      // node, npm, python and the like start as they always have; any other program (cargo run, wrangler dev,
-      // hugo server…) goes through the same check as a shell command first.
-      if (!preApproved(args.command)) {
-        const line = lineOf(args.command, (args.args || []).map(String));
-        const g = await gateCommand(await decideCommand(line, { shell: 'cmd', root, cwd: root, env: childEnv(), rules: commandRules(), mode: S.approval, yolo: yoloOf(SF) }), line, 'direct');
-        if (!g.ok) return g.text;
-      }
+      // Every server line, saved or new, gets the same check as a shell command. A plain start by node, npm, python and
+      // the like (npm run dev, node server.js) is what this tool is for, so it runs as it always has (cmdpolicy
+      // serverStart); an install, a package fetched and run (npx, uvx) or any other program asks or is refused like a command.
+      // For node, npm, python and the like, whether a line the rules allow still asks first is start_server's own setting
+      // (Strict: ask before every tool; YOLO: the servers group), as before, so it isn't asked twice.
+      const line = lineOf(args.command, (args.args || []).map(String));
+      const d = await decideCommand(line, { shell: 'cmd', root, cwd: root, env: childEnv(), rules: commandRules(), mode: S.approval, yolo: yoloOf(SF), server: true });
+      const g = await gateCommand(d, line, 'direct', { ownCard: preApproved(args.command) });
+      if (!g.ok) return g.text;
+      // What the start changed (an install, a build it runs first) goes in the snapshot, so Undo covers it as for a command.
+      const sb = SF.snapshots && !d.segments.every((s) => s.cls === 'read') ? snapBefore(root, { maxBytes: SF.snapshotMaxMB * 1024 * 1024 }) : { snap: null };
       const r = await (deps.startServer || startServer)({ projectId, name: args.name, cmd: args.command, args: (args.args || []).map(String), port: saved?.port || undefined });
+      if (sb.snap) { try { commandChanges(root, filesId, sb.snap); } catch { /* best effort */ } }
       emit({ t: 'server', name: String(args.name || 'app'), url: r.url, status: r.status, at: at() });
       notes.push(`started server ${args.name} on ${r.url}`);
       touched.apps.add(String(args.name || 'app'));
@@ -3151,7 +3156,8 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
 
   // Before a command runs: the rule engine's verdict, then the user or (YOLO) the deciders when it asks.
   // Returns { ok, by } to run it, or { ok: false, text } for the agent.
-  async function gateCommand(d, line, shell, { hook, fileFromAgent } = {}) {
+  // ownCard: the tool's own card (Strict's ask before every tool, YOLO's tool groups) decides whether an allowed line asks.
+  async function gateCommand(d, line, shell, { hook, fileFromAgent, ownCard } = {}) {
     // Installs: each package it names must exist on its registry; a very new or barely used one asks the user.
     if (d.verdict !== 'deny' && d.segments.some((s) => s.cls === 'install')) {
       const pk = await checkPackages(d.segments.filter((s) => s.cls === 'install').flatMap((s) => packagesOf(s.text))).catch(() => []);
@@ -3170,8 +3176,8 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       aud({ kind: 'blocked', command: line, why: d.why, by: d.decidedBy });
       return { ok: false, text: `Blocked by QuorX: ${d.why}.${d.hint ? ` ${d.hint}` : ''} Don't retry it in another form; find another way, or ask the user.` };
     }
-    const strictEvery = S.approval === 'strict' && (S.strictAsk || 'paid') === 'every';
-    const yoloAsksCommands = S.approval === 'yolo' && S.yoloAuto?.commands === false;
+    const strictEvery = S.approval === 'strict' && (S.strictAsk || 'paid') === 'every' && !ownCard;
+    const yoloAsksCommands = S.approval === 'yolo' && S.yoloAuto?.commands === false && !ownCard;
     if (d.verdict === 'allow' && !strictEvery && !yoloAsksCommands) return { ok: true, by: d.decidedBy };
     // The same command line approved earlier in this reply doesn't ask again, say when the agent moves it from shell
     // to its terminal or to the background. (Hooks are approved one by one: you didn't type them for this reply.)

@@ -1027,6 +1027,24 @@ test('terminal: a bare interpreter is a prompt QuorX can’t check, so it asks',
   assert.equal((await decide('python app.py', ctx({ mode: 'yolo' }))).who, 'deciders', 'a script is a normal build');
 });
 
+test('start_server: a plain dev-server start runs as before; a package fetched and run, an install or a URL is judged like any command', { skip: !WIN }, async () => {
+  const root = tmp('server');
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ scripts: { dev: 'vite', start: 'node server.js' } }));
+  fs.writeFileSync(path.join(root, 'server.js'), 'console.log(1);\n');
+  const v = async (line, mode = 'strict', yolo = {}) => { const d = await decide(line, { shell: 'cmd', root, rules: [], mode, yolo, server: true }); return d.verdict === 'ask' ? `ask:${d.who}` : d.verdict; };
+  for (const line of ['npm run dev', 'npm start', 'node server.js', 'python -m http.server 8000', 'uv run app.py']) {
+    assert.equal(await v(line), 'allow', `strict: ${line}`);
+    assert.equal(await v(line, 'yolo'), 'allow', `yolo, checking builds: ${line}`);
+  }
+  for (const line of ['npx -y somepkg', 'npm exec somepkg', 'npm create vite', 'pnpm dlx somepkg', 'bun x somepkg', 'uv run --with rich app.py', 'deno run https://example.com/a.ts', 'node -e 1', 'pip install somepkg']) {
+    assert.equal(await v(line), 'ask:user', `strict: ${line}`);
+  }
+  assert.equal(await v('npx -y somepkg', 'yolo'), 'ask:deciders', 'YOLO checking builds: the deciders, as for shell');
+  assert.equal(await v('npx -y somepkg', 'yolo', YOLO.defaults), (await decide('npx -y somepkg', { shell: 'cmd', root, rules: [], mode: 'yolo', yolo: YOLO.defaults })).verdict, 'YOLO defaults: the shell’s verdict');
+  assert.equal((await decide('npm run dev', { shell: 'cmd', root, rules: [{ effect: 'ask', match: 'npm run*', by: 'user' }], mode: 'strict', server: true })).who, 'user', 'your rules still apply');
+  assert.equal((await decide('npm run dev', { shell: 'cmd', root, rules: [], mode: 'strict' })).verdict, 'ask', 'only start_server lifts the plain start');
+});
+
 test('desktop: the agent reads and drives a WinForms app it started, and nothing else', { skip: !WIN }, async () => {
   const app = `Add-Type -AssemblyName System.Windows.Forms
 $f = New-Object Windows.Forms.Form; $f.Text = 'QX Agent Form'
@@ -1264,4 +1282,22 @@ test('YOLO: safe .NET calls, GETs with plain headers and the line’s own functi
   assert.notEqual(await verdict('Invoke-RestMethod -Uri "https://api.example.com/x" -Method Post -Body \'{}\''), 'allow', 'a POST');
   assert.notEqual(await verdict('[IO.File]::Delete("C:/x.txt")'), 'allow', 'a .NET delete');
   assert.notEqual(await verdict('function cat($p) { Remove-Item -Recurse $p }; cat C:/Users'), 'allow', 'what a script function runs is still judged');
+});
+
+// After the terminal tests above, which expect to get t1. A read-only command (git log, git diff, man) can't open a
+// pager or editor that takes commands of its own: not as a command, and not in the agent's terminal.
+test('commands and the agent’s terminal start with no pager, editor or git prompt', { skip: !WIN }, async () => {
+  const { termStart, termRead } = await import('../server/agentterm.js');
+  const root = tmp('nopager');
+  const keys = ['PAGER', 'GIT_PAGER', 'MANPAGER', 'LESSSECURE', 'GIT_EDITOR', 'EDITOR', 'VISUAL', 'GIT_TERMINAL_PROMPT'];
+  fs.writeFileSync(path.join(root, 'env.js'), `console.log('ENV=' + ${JSON.stringify(keys)}.map((k) => process.env[k]).join(','));\n`);
+  const want = 'ENV=cat,cat,cat,1,true,true,true,0';
+  const r = await runLine(root, 'node env.js', { shell: 'cmd', env: { PAGER: 'less' } });
+  assert.match(r.out, new RegExp(want));
+  const s = await termStart({ projectId: 'nopager', cwd: root, line: 'node env.js', shell: 'cmd', env: { GIT_PAGER: 'less' } });
+  try {
+    let screen = '';
+    for (let k = 0; k < 20 && !screen.includes('ENV='); k++) screen = (await termRead(s.id, 1000)).screen;
+    assert.match(screen.replace(/\s+/g, ''), new RegExp(want));
+  } finally { await termStop(s.id).catch(() => {}); }
 });
