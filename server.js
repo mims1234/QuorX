@@ -56,6 +56,7 @@ import { measureStorage, clearStorage, clearProjectParts, previewProjectParts, r
 import { storageRules, saveStorageRules, rotateLog, RULE_DEFAULTS } from './server/storagerules.js';
 import { listDesignSystems, readDesignSystem, projectDesign, applyDesignSystem, saveProjectDesign } from './server/design.js';
 import { newsRoute } from './server/news.js';
+import { runningForChat } from './server/runs.js';
 import { startNewsSync, remoteState as newsRemoteState } from './server/newsremote.js';
 import { uiCards } from './server/modelcards.js';
 import zlib from 'node:zlib';
@@ -895,6 +896,9 @@ const server = http.createServer(async (req, res) => {
       const body = JSON.parse(await readBody(req));
       const runId = validRunId(String(body.runId || '')) ? String(body.runId) : `r${Date.now().toString(36)}`;
       body.runId = runId;
+      // One reply at a time per chat: a second one would race the first over the same history and files.
+      const busy = !getRun(runId) && runningForChat(body.chatId);
+      if (busy) return json(res, 409, { error: 'This chat is already running a reply: stop it or wait for it to finish.', runId: busy.id });
       if (!getRun(runId)) startRun({ runId, chatId: body.chatId, onEnd: (end) => body.chatId && settleReply(String(body.chatId), runId, end) }, (emit, signal) => runAgent(body, emit, signal));
       return stream(res, runId, 0);
     }

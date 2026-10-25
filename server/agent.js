@@ -3337,8 +3337,17 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       emit({ t: 'note', level: 'warn', msg: adminForUser(line), at: at() });
     }
     parts.push(`Exit code ${r.code ?? '(none)'} after ${Math.round(r.ms / 1000)}s.${r.timedOut ? ` It was stopped at the ${SF.timeout}s limit${/\?\s*$|:\s*$|\(y\/n\)|press any key/i.test(r.out.slice(-300)) ? ' while it seemed to wait for input: pass a non-interactive flag (e.g. --yes, -y, /quiet)' : ''}.` : ''}`);
-    if (ch && changed) parts.push(`Files it changed (Undo covers them): ${[...ch.added.map((f) => `+${f}`), ...ch.modified.map((f) => `~${f}`), ...ch.deleted.map((f) => `-${f}`)].slice(0, 30).join(', ')}${changed > 30 ? ` … and ${changed - 30} more` : ''}.`);
-    else if (!sb.snap && !readOnly) parts.push(`No snapshot was taken (${sb.why}), so Undo can't restore what this command changed.`);
+    const uncovered = ch?.uncovered || [];
+    if (ch && changed) {
+      const lost = new Set(uncovered);
+      const shown = [...ch.added.map((f) => [f, `+${f}`]), ...ch.modified.map((f) => [f, `~${f}`]), ...ch.deleted.map((f) => [f, `-${f}`])].filter(([f]) => !lost.has(f)).map(([, s]) => s);
+      if (shown.length) parts.push(`Files it changed (Undo covers them): ${shown.slice(0, 30).join(', ')}${shown.length > 30 ? ` … and ${shown.length - 30} more` : ''}.`);
+      if (uncovered.length) {
+        const msg = `Undo can't cover: ${uncovered.slice(0, 30).join(', ')}${uncovered.length > 30 ? ` … and ${uncovered.length - 30} more` : ''} (their copy from before the command was missing).`;
+        parts.push(`${msg} Tell the user before relying on Undo for these.`);
+        emit({ t: 'note', level: 'warn', msg: `“${clip(label || line, 80)}”: ${msg}`, at: at() });
+      }
+    } else if (!sb.snap && !readOnly) parts.push(`No snapshot was taken (${sb.why}), so Undo can't restore what this command changed.`);
     parts.push(`Full output: ${logRel} (search it with search_files).`);
     // A pack's summary (dotnet test's failed tests, say), read from the full log: the tail below may cut them off.
     // JUnit's summary comes from the reports the run wrote in its folder, so the pack gets that folder and the start.

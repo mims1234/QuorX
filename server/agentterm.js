@@ -48,7 +48,7 @@ export async function termStart({ projectId, chatId = null, cwd, line, shell = '
     if (s.job) closeJob(s.job);
     try { fs.rmSync(goFile, { force: true }); } catch { /* gone */ }
     // The program is gone: release the terminal's own pipe and worker, or they keep QuorX's process busy.
-    setTimeout(() => { try { term.kill(); } catch { /* already released */ } }, 50);
+    setTimeout(() => release(term), 50);
     onExit?.(s);
   });
   if (term.pid) {
@@ -58,6 +58,15 @@ export async function termStart({ projectId, chatId = null, cwd, line, shell = '
   fs.writeFileSync(goFile, 'go');
   SESS.set(id, s);
   return s;
+}
+
+// node-pty's kill with the bundled ConPTY only closes its output worker when one more chunk of output arrives
+// afterwards; a program that already said everything leaves that worker running, and it keeps the process alive.
+// So the worker is closed shortly after the kill either way (closing it twice does no harm).
+function release(term) {
+  try { term.kill(); } catch { /* already released */ }
+  const t = setTimeout(() => { try { term._agent?._conoutSocketWorker?.dispose(); } catch { /* gone */ } }, 1500);
+  t.unref?.();
 }
 
 const getS = (id) => { const s = SESS.get(String(id)); if (!s) throw new Error(`no terminal session ${id}`); return s; };
@@ -114,7 +123,7 @@ export async function termStop(id) {
   // console's processes through a helper that fails when the console has already gone).
   const t0 = Date.now();
   while (!s.exited && Date.now() - t0 < 2000) await new Promise((x) => setTimeout(x, 100));
-  if (!s.exited) { try { s.term.kill(); } catch { /* gone */ } }
+  if (!s.exited) release(s.term);
   return r;
 }
 export const listTerms = (projectId) => [...SESS.values()].filter((s) => !projectId || s.projectId === projectId).map(view);

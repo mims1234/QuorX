@@ -4,7 +4,8 @@
 // each file's size, mtime and hash, so a snapshot only reads files that changed since the last one. After the
 // command, the files it added, changed or deleted get their before-state copied into the reply's normal
 // checkpoint, in the same format the file tools use; everything downstream (Undo, Undo one file, conflict
-// checks, pruning) works unchanged. Only the newest snapshot's objects are kept.
+// checks, pruning) works unchanged. Only the newest snapshot's objects are kept, plus those of any snapshot whose
+// command hasn't finished yet (a background job, another chat in the same project).
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -75,9 +76,10 @@ export function objectFor(root, snap, rel) {
   return e ? objPath(root, e[2]) : null;
 }
 
-/** Removes stored objects no longer named by the current index. Returns how many were removed. */
-export function pruneObjects(root) {
-  const keep = new Set(Object.values(readIndex(root)).map((e) => e[2]));
+/** Removes stored objects no longer named by the current index nor listed in `alsoKeep` (the hashes a snapshot
+ *  still waiting for its command needs). Returns how many were removed. */
+export function pruneObjects(root, alsoKeep = []) {
+  const keep = new Set([...Object.values(readIndex(root)).map((e) => e[2]), ...alsoKeep]);
   let n = 0;
   let subs; try { subs = fs.readdirSync(objDir(root)); } catch { return 0; }
   for (const s of subs) {
@@ -134,4 +136,4 @@ export const snapshotAsync = (root, opts = {}) => run('snapshot', [root, opts], 
 /** changesSince() without blocking the event loop. Same result. */
 export const changesSinceAsync = (root, before, opts = {}) => run('changesSince', [root, before, opts], () => changesSince(root, before, opts));
 /** pruneObjects() without blocking the event loop. */
-export const pruneObjectsAsync = (root) => run('pruneObjects', [root], () => pruneObjects(root));
+export const pruneObjectsAsync = (root, alsoKeep = []) => run('pruneObjects', [root, alsoKeep], () => pruneObjects(root, alsoKeep));

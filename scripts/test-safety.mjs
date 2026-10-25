@@ -19,6 +19,7 @@ import { startTripwire } from '../server/tripwire.js';
 import { listBackground, stopBackground } from '../server/bgjobs.js';
 import { listTerms, termStop } from '../server/agentterm.js';
 import { saveProject, forgetProject } from '../server/store.js';
+import { startRun, runningForChat } from '../server/runs.js';
 
 const WIN = process.platform === 'win32';
 const tmp = (name) => tempDir(`qx-${name}-`);
@@ -176,6 +177,59 @@ test('snapshot: Undo works the same through the worker path', async () => {
   assert.deepEqual(orig('gone/soon.txt'), keep.soon);
   assert.equal(fs.existsSync(path.join(dir, 'src', 'deep', 'new.txt')), false);
   assert.equal(fs.statSync(path.join(dir, 'huge.dat')).size, 21 * 1024 * 1024, 'the big file was left alone');
+});
+
+// A background job (or another chat) snapshots first; a foreground command snapshots, ends and prunes; the job ends last.
+test('snapshot: overlapping commands in one project, the earlier one ending last: Undo restores both', async () => {
+  for (const [label, before, after] of [['worker', snapBeforeAsync, commandChangesAsync], ['sync', async (d) => snapBefore(d), async (d, id, s) => commandChanges(d, id, s)]]) {
+    const dir = tmp(`snapover-${label}`);
+    const f = (rel) => path.join(dir, rel);
+    fs.writeFileSync(f('a.txt'), 'a original');
+    fs.writeFileSync(f('b.txt'), 'b original');
+    const A = (await before(dir)).snap;
+    fs.writeFileSync(f('a.txt'), 'a by the job'); // the job is still running
+    const B = (await before(dir)).snap;
+    fs.writeFileSync(f('b.txt'), 'b by the command');
+    const chB = await after(dir, 'runB', B);
+    assert.deepEqual([chB.modified, chB.uncovered], [['b.txt'], []], label);
+    const chA = await after(dir, 'runA', A);
+    assert.deepEqual([chA.modified, chA.uncovered], [['a.txt', 'b.txt'], []], `${label}: the job's before-copies survived the other command's prune`);
+    restoreCheckpoint(dir, 'runA');
+    assert.equal(fs.readFileSync(f('a.txt'), 'utf8'), 'a original', label);
+    assert.equal(fs.readFileSync(f('b.txt'), 'utf8'), 'b original', label);
+    // With nothing pending any more, the next prune keeps only the newest snapshot's objects again.
+    await after(dir, 'runC', (await before(dir)).snap);
+    assert.equal(agentSpace(dir).parts.find((p) => p.name === 'objects').files, 2, `${label}: pending objects are released`);
+  }
+});
+
+test('snapshot: a file whose before-copy is missing is reported, not silently left out of Undo', async () => {
+  const dir = tmp('snapmiss');
+  fs.writeFileSync(path.join(dir, 'a.txt'), 'one');
+  fs.writeFileSync(path.join(dir, 'b.txt'), 'two');
+  const { snap } = await snapBeforeAsync(dir);
+  fs.writeFileSync(path.join(dir, 'a.txt'), 'one changed');
+  fs.writeFileSync(path.join(dir, 'b.txt'), 'two changed');
+  fs.rmSync(path.join(dir, '.quorx', 'objects', snap.files['a.txt'][2].slice(0, 2), snap.files['a.txt'][2]));
+  const ch = await commandChangesAsync(dir, 'runm', snap);
+  assert.deepEqual([ch.modified, ch.uncovered], [['a.txt', 'b.txt'], ['a.txt']]);
+  restoreCheckpoint(dir, 'runm');
+  assert.equal(fs.readFileSync(path.join(dir, 'b.txt'), 'utf8'), 'two', 'the rest still comes back');
+});
+
+test('runs: a chat runs one reply at a time; another chat runs alongside', async () => {
+  let release;
+  const held = new Promise((r) => { release = r; });
+  const ended = [];
+  startRun({ runId: 'rbusy1', chatId: 'chatA', onEnd: () => ended.push('A') }, () => held);
+  assert.equal(runningForChat('chatA')?.id, 'rbusy1', 'the second /api/run for chatA is refused');
+  assert.equal(runningForChat('chatB'), null, 'another chat in the same project may start');
+  startRun({ runId: 'rbusy2', chatId: 'chatB', onEnd: () => ended.push('B') }, async () => {});
+  assert.equal(runningForChat(null), null, 'a run without a chat is never refused');
+  release();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(ended.sort(), ['A', 'B']);
+  assert.equal(runningForChat('chatA'), null, 'once it ends, the chat may run again');
 });
 
 test('snapshot: the event loop keeps ticking while a big project is snapshotted', async () => {
@@ -738,6 +792,19 @@ test('shell: a write inside the project runs at once, and Undo covers it', { ski
   assert.match(toolOut(bodies, 1), /Files it changed \(Undo covers them\): \+notes\.txt/);
   assert.equal(fs.readFileSync(path.join(dir, 'notes.txt'), 'utf8').trim(), 'hello');
   assert.ok(!events.some((e) => e.t === 'approval'), 'no card for an in-project write');
+});
+
+test('shell: a file Undo can\'t cover is named in the command result', { skip: !WIN }, async () => {
+  const { events, bodies } = await agentRun((b, i) => [reply('', [['shell', { command: 'Set-Content a.txt "changed"; Set-Content b.txt "changed"; node lose.js' }]]), reply('Done.')][i],
+    { settings: { approval: 'yolo' }, prep: (d) => {
+      fs.writeFileSync(path.join(d, 'a.txt'), 'one'); fs.writeFileSync(path.join(d, 'b.txt'), 'two');
+      // Stands in for whatever loses the stored copies mid-command.
+      fs.writeFileSync(path.join(d, 'lose.js'), "require('fs').rmSync(require('path').join('.quorx', 'objects'), { recursive: true, force: true });");
+    } });
+  const out = toolOut(bodies, 1);
+  assert.match(out, /Undo can't cover: a\.txt, b\.txt/, out);
+  assert.doesNotMatch(out, /Undo covers them\): ~a\.txt/);
+  assert.ok(of(events, 'note').some((e) => /Undo can't cover: a\.txt, b\.txt/.test(e.msg)), 'the page hears it too');
 });
 
 test('shell: a build asks you; "Always allow" saves a rule, and the next run does not ask', { skip: !WIN }, async () => {

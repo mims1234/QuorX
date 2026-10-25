@@ -795,16 +795,42 @@ function recordBefore(root, runId, rel, before) {
  * `why` then says so). After it: commandChanges() puts what the command changed into the reply's checkpoint.
  */
 const snapOrWhy = (s, opts) => s.over ? { snap: null, why: `the project is over the ${Math.round((opts.maxBytes ?? 1024 ** 3) / 1024 ** 2)} MB snapshot limit` } : { snap: s, why: '' };
+// One project's snapshots share one object store, and the index only names the newest. A snapshot whose command is
+// still running (a background job, another chat's command) stays here until its commandChanges(), so a prune made
+// when a later command ends keeps the before-copies it still needs.
+const pendingSnaps = new Map();
+const snapKey = (root) => path.resolve(root).toLowerCase();
+function holdSnap(root, r) {
+  if (r.snap) { const k = snapKey(root); if (!pendingSnaps.has(k)) pendingSnaps.set(k, new Set()); pendingSnaps.get(k).add(r.snap); }
+  return r;
+}
+function releaseSnap(root, snap) {
+  const k = snapKey(root), set = pendingSnaps.get(k);
+  if (set) { set.delete(snap); if (!set.size) pendingSnaps.delete(k); }
+}
+// The hashes every snapshot still waiting for its command needs: the prune keeps them beside the current index.
+function pendingObjects(root) {
+  const keep = new Set();
+  for (const s of pendingSnaps.get(snapKey(root)) || []) for (const e of Object.values(s.files || {})) keep.add(e[2]);
+  return [...keep];
+}
+// Copies each changed file's before-state into the checkpoint. Returns the files that couldn't be copied (their
+// stored copy is gone, say): Undo can't cover those, and the command's result says so.
+function recordChanges(root, runId, before, ch) {
+  const uncovered = [];
+  for (const rel of [...ch.added, ...ch.modified, ...ch.deleted]) {
+    try { recordBefore(root, runId, rel, objectFor(root, before, rel)); } catch { uncovered.push(rel); }
+  }
+  return uncovered;
+}
 export function snapBefore(root, opts = {}) {
-  try { return snapOrWhy(snapshot(root, opts), opts); } catch (e) { return { snap: null, why: e.message }; }
+  try { return holdSnap(root, snapOrWhy(snapshot(root, opts), opts)); } catch (e) { return { snap: null, why: e.message }; }
 }
 export function commandChanges(root, runId, before) {
-  const ch = changesSince(root, before);
-  for (const rel of [...ch.added, ...ch.modified, ...ch.deleted]) {
-    try { recordBefore(root, runId, rel, objectFor(root, before, rel)); } catch { /* best effort */ }
-  }
-  pruneObjects(root);
-  return { added: ch.added, modified: ch.modified, deleted: ch.deleted };
+  let ch, uncovered;
+  try { ch = changesSince(root, before); uncovered = recordChanges(root, runId, before, ch); } finally { releaseSnap(root, before); }
+  pruneObjects(root, pendingObjects(root));
+  return { added: ch.added, modified: ch.modified, deleted: ch.deleted, uncovered };
 }
 // The same two without blocking the event loop (the walk runs in a worker; snapshot.js). One project's snapshot
 // work runs one step at a time, in the order asked, as the sync calls did: a prune never lands mid-snapshot.
@@ -819,17 +845,15 @@ function inSnapQueue(root, fn) {
 }
 export function snapBeforeAsync(root, opts = {}) {
   return inSnapQueue(root, async () => {
-    try { return snapOrWhy(await snapshotAsync(root, opts), opts); } catch (e) { return { snap: null, why: e.message }; }
+    try { return holdSnap(root, snapOrWhy(await snapshotAsync(root, opts), opts)); } catch (e) { return { snap: null, why: e.message }; }
   });
 }
 export function commandChangesAsync(root, runId, before) {
   return inSnapQueue(root, async () => {
-    const ch = await changesSinceAsync(root, before);
-    for (const rel of [...ch.added, ...ch.modified, ...ch.deleted]) {
-      try { recordBefore(root, runId, rel, objectFor(root, before, rel)); } catch { /* best effort */ }
-    }
-    await pruneObjectsAsync(root);
-    return { added: ch.added, modified: ch.modified, deleted: ch.deleted };
+    let ch, uncovered;
+    try { ch = await changesSinceAsync(root, before); uncovered = recordChanges(root, runId, before, ch); } finally { releaseSnap(root, before); }
+    await pruneObjectsAsync(root, pendingObjects(root));
+    return { added: ch.added, modified: ch.modified, deleted: ch.deleted, uncovered };
   });
 }
 

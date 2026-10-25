@@ -67,6 +67,8 @@ export function startRun({ runId, chatId, onEnd }, work) {
 export const getRun = (id) => runs.get(id);
 export function stopRun(id) { const r = runs.get(id); if (!r || r.status !== 'running') return false; r.ac.abort(); return true; }
 export const activeRuns = () => [...runs.values()].filter((r) => r.status === 'running').map((r) => ({ runId: r.id, chatId: r.chatId, started: r.started }));
+/** The reply a chat already has running (one at a time per chat; other chats in the same project run alongside), or null. */
+export const runningForChat = (chatId) => (chatId ? [...runs.values()].find((r) => r.status === 'running' && String(r.chatId) === String(chatId)) || null : null);
 
 /** Where a run stands: running here, finished, cut off by a restart (resumable if it left a checkpoint), or unknown. */
 export function runStatus(id) {
