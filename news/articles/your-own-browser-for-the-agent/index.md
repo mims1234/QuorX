@@ -42,8 +42,8 @@ The extension is now version 0.3, and the agent is steadier in your browser:
   done, and the tab it works in gets a thin border.
 - **Read without the debugging bar.** Once you allow it, the agent reads pages without Chrome's "started debugging this
   browser" bar. The bar shows up only while it clicks or types.
-- **Tidy tabs.** The agent's tabs sit in a "QuorX · chat" tab group in their own window, at most 6 per reply, and they
-  close when the reply ends.
+- **Tidy tabs.** The agent's tabs sit in a "QuorX · chat" tab group in their own window, at most 6 per reply. They stay
+  open when the reply ends, and the chat's next reply carries on there.
 - **More ways to give a tab.** Right-click a page, a selection, a link or a picture, or drag a tab into a chat's group.
 - **Site rules.** List sites the agent may never open, sites it may always open, and sites where it only reads.
 - **Teach it a routine.** Do a task once while QuorX records it, and the agent follows the same steps next time.
@@ -72,7 +72,7 @@ The agent still builds and checks its own pages in its own browser. Your browser
   { "id": "ext", "title": "The QuorX extension", "sub": "in your browser", "cap": "The extension opens it in the chat's tab group, in a separate QuorX window, and works only in that chat's tabs." },
   { "id": "page", "title": "Your signed-in page", "sub": "your own session", "cap": "The page is yours: same sign-ins, same cookies. Each step waits for the page to settle, and the toolbar button shows the agent is working." },
   { "id": "ask", "title": "A red card for big steps", "sub": "send · delete · buy", "cap": "Before a click that sends, deletes, buys, posts or changes your account, QuorX asks you. Always, in every mode. If QuorX is in the background, Windows shows a notification that opens the chat." },
-  { "id": "answer", "title": "The answer in your chat", "sub": "tabs close", "new": true, "cap": "What it read and did comes back to the chat, step by step. When the reply ends, the tabs it opened close; tabs you gave stay." }
+  { "id": "answer", "title": "The answer in your chat", "sub": "tabs stay", "new": true, "cap": "What it read and did comes back to the chat, step by step. When the reply ends, its tabs stay open on the last page, and the next reply carries on there." }
 ], "loops": [{ "from": "page", "to": "agent", "label": "next step" }] }
 ```
 
@@ -135,8 +135,9 @@ browser's extension shortcuts page.
 The agent's window opens at 1400×900. If you shrink or minimise it, it goes back to that size, so the agent always
 sees a full page. A chat opens at most 6 tabs of its own per reply. After that it reuses the current one.
 
-When a reply ends, the tabs the agent opened close, so an empty QuorX window means it has finished. To keep them, turn
-off **Close the agent's tabs when it's done** in Settings.
+When a reply ends, the tabs the agent opened stay open on the last page it used, so you can see where it left off. The
+chat's next reply carries on in that tab instead of opening a new one. To have them close instead, so an empty QuorX
+window means it has finished, turn on **Close the agent's tabs when it's done** in Settings. Tabs you gave stay either way.
 
 ## Teach it a routine
 
