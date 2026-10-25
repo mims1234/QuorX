@@ -8,6 +8,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseFront, blocksOf, checkBlock, checkNews } from './news-check.mjs';
+// Chat save merging and the code viewer's Formatted view (kept in their own files).
+import './test-chatmerge.mjs';
+import './test-codeview.mjs';
 import { newsRoute, cmpVersion, lastRead } from '../server/news.js';
 import * as md from '../public/news-md.js';
 import { localView } from '../server/newslocal.js';
@@ -318,6 +321,3 @@ test('news local: test results are kept by each suite and shown, and the view is
   assert.equal(localView('tests', { fresh: true }).empty, true);
 });
 
-// Chat save merging and the code viewer's Formatted view (kept in their own files).
-import './test-chatmerge.mjs';
-import './test-codeview.mjs';

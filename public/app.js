@@ -3,6 +3,7 @@
 // through /api/approve. Chats live on the server; preferences stay in this browser. Plain JS.
 
 import { startTour, maybeStartTour } from './tour.js';
+import { mergeChat } from './chat-merge.js';
 import { backupCard, drawBackup } from './backup.js';
 import { storageCard, drawStorage, setRulesText, refreshStorageBadge, projectSizes, focusProject, fmtBytes } from './storage.js';
 
@@ -336,7 +337,6 @@ async function contextText(list) {
 // Typing @ suggests recent chats, this project's files and other projects; typing more filters
 // them. Picking one attaches it as context for the next message. / lists the chat commands.
 import { langOf, mountCode } from './code.js';
-import { mergeChat } from './chat-merge.js';
 import { renderMarkdown, enhance } from './markdown.js';
 
 // The message box's buttons: icons only, coloured by what they do.
