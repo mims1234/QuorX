@@ -9,7 +9,7 @@
 //                applies in both modes
 import fs from 'node:fs';
 import path from 'node:path';
-import { chat, chatStream, chatModels, imageModels, generateImage, speechModels, synthesize, composeMusic, musicModels, videoModels, generateVideo, HOME } from './openrouter.js';
+import { chat, chatStream, generationCost, chatModels, imageModels, generateImage, speechModels, synthesize, composeMusic, musicModels, videoModels, generateVideo, HOME } from './openrouter.js';
 import { ensemble, GATE } from './decisions.js';
 import { runtime } from './openrouter.js';
 import { pathToFileURL } from 'node:url';
@@ -857,6 +857,7 @@ export async function runAgent(req, emit, signal, deps = {}) {
   catch (e) {
     // A reply that fails or is stopped part-way has still paid for its calls: what it spent goes with the error,
     // so the chat, the Costs window and the budget count it like any other reply.
+    spent.closed = true; // a cut-off call's real cost found after this goes on a ledger row of its own
     if (spent.stats && e && typeof e === 'object') { try { e.stats = { ...structuredClone(spent.stats), ms: spent.at(), partial: true }; } catch { /* nothing to add */ } }
     throw e;
   }
@@ -872,7 +873,7 @@ const clipKeepEnd = (s, n) => { s = String(s ?? ''); return s.length > n ? `${s.
 const sleep = (ms, signal) => new Promise((resolve, reject) => { const t = setTimeout(resolve, ms); signal?.addEventListener('abort', () => { clearTimeout(t); reject(new Error('aborted')); }, { once: true }); });
 
 async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
-  const callModel = deps.chatStream || chatStream;
+  const streamModel = deps.chatStream || chatStream;
   // Resuming a reply that a harness restart cut off: start again from its last checkpoint.
   const resumed = req.resume ? loadCheckpoint(String(req.resume)) : null;
   if (req.resume && !resumed) throw new Error('Nothing to resume: the checkpoint for that reply is gone.');
@@ -935,6 +936,12 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
     stats.byRole[role] = (stats.byRole[role] || 0) + c;
     const m = (stats.byModel[model] ??= { role, calls: 0, cost: 0 });
     m.calls++; m.cost += c;
+    // A call that stopped before its usage arrived (see callModel): counted like any other, and marked.
+    if (u.partial) {
+      const p = (stats.partialCalls ??= { calls: 0, cost: 0, estimated: 0 });
+      p.calls++; p.cost += c; if (u.estimated) p.estimated++;
+      m.partial = (m.partial || 0) + 1;
+    }
     m.tokensIn = (m.tokensIn || 0) + (u.prompt_tokens || 0); m.tokensOut = (m.tokensOut || 0) + (u.completion_tokens || 0);
     stats.tokensIn += u.prompt_tokens || 0; stats.tokensOut += u.completion_tokens || 0;
     // Prompt caching, where the provider reports it: the share of tokens in read from the cache shows which models
@@ -942,9 +949,26 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
     const { read, write } = cacheTokens(u);
     if (read != null) { m.cacheRead = (m.cacheRead || 0) + read; m.cachedIn = (m.cachedIn || 0) + (u.prompt_tokens || 0); stats.cacheRead = (stats.cacheRead || 0) + read; stats.cachedIn = (stats.cachedIn || 0) + (u.prompt_tokens || 0); }
     if (write) { m.cacheWrite = (m.cacheWrite || 0) + write; stats.cacheWrite = (stats.cacheWrite || 0) + write; }
+    spendNow();
+  };
+  const spendNow = () => {
     const lv = live.get(runId); if (lv) lv.cost = stats.cost;
     // The page shows what this reply has spent so far, after every call (the chat, its header and the sidebar).
-    emit({ t: 'spend', cost: +stats.cost.toFixed(6), calls: Object.values(stats.byModel).reduce((n, x) => n + x.calls, 0), tokensIn: stats.tokensIn, tokensOut: stats.tokensOut, byModel: structuredClone(stats.byModel), at: at() });
+    emit({ t: 'spend', cost: +stats.cost.toFixed(6), calls: Object.values(stats.byModel).reduce((n, x) => n + x.calls, 0), tokensIn: stats.tokensIn, tokensOut: stats.tokensOut, byModel: structuredClone(stats.byModel), ...(stats.partialCalls ? { partialCalls: { ...stats.partialCalls, cost: +stats.partialCalls.cost.toFixed(6) } } : {}), at: at() });
+  };
+  // OpenRouter's own figure for a cut-off call, found after it was counted at an estimate: the difference goes on this
+  // reply while it runs, and on a ledger row of its own once the reply has ended (so budgets and today's spending see it).
+  let lateFixes = 0;
+  const correctPartial = (delta, model, role) => {
+    if (!spent.closed) {
+      stats.cost += delta;
+      stats.byRole[role] = (stats.byRole[role] || 0) + delta;
+      if (stats.byModel[model]) stats.byModel[model].cost += delta;
+      if (stats.partialCalls) { stats.partialCalls.cost += delta; stats.partialCalls.estimated = Math.max(0, stats.partialCalls.estimated - 1); }
+      spendNow();
+    } else if (projectId && !req.bench && !deps.quiet) {
+      recordRun({ ts: new Date().toISOString(), runId: `${runId}-late${++lateFixes}`, kind: 'partial', chatId: req.chatId || null, project: projectId, model, stop: 'cut-off call', cost: +delta.toFixed(6) });
+    }
   };
   // While this reply runs, its cost counts toward the project's budget. However it ends, the ledger
   // keeps what it cost (a stopped or failed reply never reaches a chat file with its cost).
@@ -953,7 +977,7 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
     cleanups.push(async () => {
       const lv = live.get(runId);
       live.delete(runId);
-      if (lv && !lv.recorded && !deps.quiet) recordRun({ ts: new Date().toISOString(), runId, chatId: req.chatId || null, project: projectId, model: setup.model, stop: signal.aborted ? 'stopped' : 'error', cost: +lv.cost.toFixed(6), resumed: !!resumed });
+      if (lv && !lv.recorded && !deps.quiet) recordRun({ ts: new Date().toISOString(), runId, chatId: req.chatId || null, project: projectId, model: setup.model, stop: signal.aborted ? 'stopped' : 'error', cost: +lv.cost.toFixed(6), ...(stats.partialCalls ? { partialCalls: stats.partialCalls.calls } : {}), resumed: !!resumed });
     });
   }
 
@@ -1525,12 +1549,13 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     await checkpointWritten(runId); // on disk before the card offers it
     emit({ t: 'out_of_steps', ...stats.outOfSteps, runId, at: at() });
   }
+  spent.closed = true;
   emit({ t: 'done', reply, historyNote, stats, journal: journal.slice(-120), at: at() });
   // A reply that ran out of steps keeps its checkpoint, so "Keep going" can carry on from it.
   if (!(run.stop === 'steps' && !req.bench)) dropCheckpoint(runId);
   if (!req.bench && !deps.quiet) recordRun({ ts: new Date().toISOString(), runId, chatId: req.chatId || null, project: projectId, model: setup.model, stop: run.stop, steps: run.steps, tools: run.tools,
     retries: run.retries, trimmed: run.trimmed, questions: run.questions, changed: stats.changed.length, verify: stats.verify ? { ok: stats.verify.ok, problems: stats.verify.problems.length, rounds: stats.verify.rounds, lint: stats.verify.lint || null } : null,
-    cost: +stats.cost.toFixed(6), tokensIn: stats.tokensIn, tokensOut: stats.tokensOut, ...(stats.cachedIn ? { cacheRead: stats.cacheRead, cachedIn: stats.cachedIn } : {}), ms: stats.ms, resumed: !!resumed, looksFirst: run.looksFirst || 0, firstWrite: run.firstWrite ?? null });
+    cost: +stats.cost.toFixed(6), tokensIn: stats.tokensIn, tokensOut: stats.tokensOut, ...(stats.cachedIn ? { cacheRead: stats.cacheRead, cachedIn: stats.cachedIn } : {}), ...(stats.partialCalls ? { partialCalls: stats.partialCalls.calls } : {}), ms: stats.ms, resumed: !!resumed, looksFirst: run.looksFirst || 0, firstWrite: run.firstWrite ?? null });
   if (live.has(runId)) live.get(runId).recorded = true;
 
   // ================= loop helpers =================
@@ -1593,6 +1618,53 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     return go;
   }
 
+  // Every streamed call (the agent's own steps, helpers, the reviewer, the strong writer) goes through here. OpenRouter
+  // sends a call's usage with its last chunk only, so a call that ends without it (Stop, an error part-way, a cut
+  // connection that is then retried) would cost nothing here while the provider still bills it. Such a call is counted
+  // once, at an estimate, the moment it ends (so the caps see it), and corrected to OpenRouter's own figure when the
+  // generation record turns up a few seconds later.
+  async function callModel(body, sig, onText, onThink, role = 'writer') {
+    try {
+      const r = await streamModel(body, sig, onText, onThink);
+      // The stream ended without its usage: the caller accounts r.usage as usual, so the estimate goes there.
+      if (r?.partial && !Object.keys(r.usage || {}).length) r.usage = partialUsage(r.partial, body, role);
+      return r;
+    } catch (e) {
+      if (e?.partial && !e.partial.counted) { e.partial.counted = true; account(partialUsage(e.partial, body, role), body.model, role); }
+      throw e;
+    }
+  }
+  // Tokens in, for a call that never reported them: about 4 characters a token over the messages and the tool
+  // definitions, with a flat allowance for each picture (its data URL says nothing about its tokens).
+  function promptTokens(body) {
+    let chars = 0, pics = 0;
+    const add = (c) => {
+      if (typeof c === 'string') chars += c.length;
+      else if (Array.isArray(c)) for (const p of c) { if (p?.type === 'text') chars += String(p.text || '').length; else if (p?.type === 'image_url') pics++; else chars += 200; }
+    };
+    for (const m of body.messages || []) { add(m.content); for (const tc of m.tool_calls || []) chars += String(tc.function?.arguments || '').length + 20; chars += 8; }
+    if (body.tools) chars += JSON.stringify(body.tools).length;
+    return Math.ceil(chars / 4) + pics * 1000;
+  }
+  function partialUsage(p, body, role) {
+    const model = body.model || p.model;
+    const [pin, pout] = catalogue.find((m) => m.id === model)?.price || [0, 0];
+    const prompt_tokens = promptTokens(body), completion_tokens = Math.ceil((p.outChars || 0) / 4);
+    const cost = (prompt_tokens * pin + completion_tokens * pout) / 1e6;
+    emit({ t: 'note', level: 'info', msg: `A call to ${short(model)} (${role}) ended before OpenRouter reported its cost; it is counted at an estimated $${cost.toFixed(4)}${p.id ? ' until the real figure arrives' : ''}.`, at: at() });
+    // The real figure. A scripted model in tests has no generation record unless the test gives a lookup.
+    const lookup = deps.generation || (deps.chatStream ? null : generationCost);
+    if (p.id && lookup) {
+      Promise.resolve().then(() => lookup(p.id)).then((g) => {
+        const real = Number(g?.cost);
+        if (!Number.isFinite(real) || Math.abs(real - cost) < 1e-9) return;
+        correctPartial(real - cost, model, role);
+        emit({ t: 'note', level: 'info', msg: `The cut-off call to ${short(model)} (${role}) cost $${real.toFixed(4)} (OpenRouter's figure; the estimate was $${cost.toFixed(4)}).`, at: at() });
+      }).catch(() => { /* the estimate stands */ });
+    }
+    return { prompt_tokens, completion_tokens, cost, partial: true, estimated: true };
+  }
+
   // One model call with retries: rate limits, network drops and provider errors get up to S.retries
   // more tries with growing waits. Anthropic models get prompt-cache marks.
   async function modelCall(body, step, onText) {
@@ -1601,7 +1673,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     const tries = Math.max(0, Math.min(6, Number(S.retries ?? DEFAULTS.retries)));
     for (let attempt = 0; ; attempt++) {
       const marked = run.cacheMarks ? withCacheMarks(body.messages, body.model) : body.messages;
-      try { return await callModel(marked === body.messages ? body : { ...body, messages: marked }, signal, onText, onThink); }
+      try { return await callModel(marked === body.messages ? body : { ...body, messages: marked }, signal, onText, onThink, 'writer'); }
       catch (e) {
         if (signal.aborted) throw e;
         // The provider refused the reasoning passed back: strip it from this reply and carry on without it.
@@ -1735,7 +1807,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       const body = { model, messages: hm, tools, tool_choice: last ? 'none' : 'auto', max_tokens: 6000, ...REASONING.off };
       if (last) hm.push({ role: 'user', content: 'Stop reading now and give your report.' });
       let r;
-      try { r = await reviewerCall(body); }
+      try { r = await reviewerCall(body, opts.role || 'helper'); }
       catch (e) { if (signal.aborted) throw e; emit({ t: 'helper_done', step, id, ok: false, steps: used, cost: stats.cost - cost0, ms: at() - t0, at: at() }); return `Error: the helper (${short(model)}) failed: ${clip(e.message, 160)}. Do the job yourself.`; }
       used++;
       account(r.usage, model, opts.role || 'helper');
@@ -2068,9 +2140,9 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (mode === 'builds' && !run.plan) return false;
     return builtTargets().length > 0;
   }
-  async function reviewerCall(body) {
+  async function reviewerCall(body, role = 'reviewer') {
     for (let a = 0; ; a++) {
-      try { return await callModel(body, signal, null, null); }
+      try { return await callModel(body, signal, null, null, role); }
       catch (e) { if (signal.aborted || !retryable(e) || a >= 2) throw e; await sleep(1000 * 2 ** a, signal); }
     }
   }
@@ -2338,7 +2410,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       { role: 'system', content: 'Several draft replies to the user disagree. Read the user message literally (watch for changed details in familiar puzzles) and write the correct, helpful final reply, following every instruction in the message. Output only the reply.' },
       ...history,
       { role: 'user', content: `${userText}\n\n[Draft replies that disagree, for reference]\n${drafts.map((d, i) => `--- draft ${i + 1} ---\n${clip(d, 2500)}`).join('\n')}` },
-    ] }, signal, (t) => emit({ t: 'token', step: 0, text: t }));
+    ] }, signal, (t) => emit({ t: 'token', step: 0, text: t }), null, 'strong');
     stats.llmCalls++;
     account(r.usage, model, 'strong');
     emit({ t: 'llm_done', step: 0, ms: r.ms, firstMs: r.firstMs, tokensOut: r.usage.completion_tokens || 0, cost: r.usage.cost || 0, toolCalls: [], at: at() });

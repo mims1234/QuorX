@@ -15,6 +15,7 @@ import { runAgent, inPlaceEdit, deciderPicture, REVIEW_SYSTEM, FILM_KEYS, answer
 import { saveProject, forgetProject, setProjectBudget } from '../server/store.js';
 import { loadCheckpoint, dropCheckpoint, saveCheckpoint, checkpointWritten, ledger } from '../server/runs.js';
 import { setBudget, projectSpend, budgetState, live as liveRuns } from '../server/budget.js';
+import { chatStream as realChatStream, generationCost } from '../server/openrouter.js';
 import { reviewCode, collectChanges, parseGitDiff, checkFindings, pickReviewer } from '../server/codereview.js';
 import { saveHooks, loadHooks, matchHooks, fileMatches, commandMatches, hookLine, cleanHook, safeHookFile } from '../server/hooks.js';
 import { nextAfter, cleanWhen, cleanSchedule, describeWhen, createScheduler, saveSchedules as saveScheds, loadSchedules as loadScheds, GRACE_MS } from '../server/schedules.js';
@@ -33,7 +34,7 @@ const reply = (text, calls = [], finishReason = 'stop') => ({ text, toolCalls: c
 
 /** Runs one reply. `script(body, i)` returns the model's i-th answer (or throws). */
 // `budget` sets the project's budget and `spent` seeds what it has already spent (as a ledger row).
-async function run(script, { settings = {}, text = 'build it', resume, onEvent, signal, history, budget, spent, setup = {}, openTab, generateImage, generateVideo, ensemble, checks, chatId, prep, cont, images, comments, enhance, reading, catalogue, videoMode, videoFrom } = {}) {
+async function run(script, { settings = {}, text = 'build it', resume, onEvent, signal, history, budget, spent, setup = {}, openTab, generateImage, generateVideo, ensemble, checks, chatId, prep, cont, images, comments, enhance, reading, catalogue, videoMode, videoFrom, generation } = {}) {
   const id = `t${Date.now().toString(36)}${(n++).toString(36)}`;
   const dir = tempDir('quorx-run-');
   saveProject({ id, name: 'test', path: dir });
@@ -45,7 +46,7 @@ async function run(script, { settings = {}, text = 'build it', resume, onEvent, 
   const chatStream = async (body, sig, onText) => { bodies.push(structuredClone(body)); const r = await script(body, i++); if (r.text && onText) onText(r.text); return r; };
   try {
     await runAgent({ runId: id, projectId: id, ...(chatId ? { chatId } : {}), ...(images ? { images } : {}), ...(comments ? { comments } : {}), text, resume, ...(cont ? { continue: cont } : {}), ...(reading ? { reading } : {}), ...(videoMode ? { videoMode } : {}), ...(videoFrom ? { videoFrom } : {}), history, setup: { model: 'test/model', ...setup }, settings: { approval: 'yolo', mediaEnabled: false, tools: { browser: { on: false } }, ...settings } },
-      (e) => { events.push(e); onEvent?.(e, id); }, signal || new AbortController().signal, { chatStream, catalogue: catalogue || [{ id: 'test/model', maxOut: 4000 }], quiet: true, startServer: async ({ name, args }) => ({ key: `fake-${name}`, url: 'http://localhost:9/', status: 'running', command: ['node', ...(args || [])].join(' '), log: '' }), ...(openTab ? { openTab } : {}), ...(generateImage ? { generateImage } : {}), ...(generateVideo ? { generateVideo } : {}), ...(ensemble ? { ensemble } : {}), ...(checks ? { checks } : {}), ...(enhance ? { enhance } : {}) });
+      (e) => { events.push(e); onEvent?.(e, id); }, signal || new AbortController().signal, { chatStream, catalogue: catalogue || [{ id: 'test/model', maxOut: 4000 }], quiet: true, startServer: async ({ name, args }) => ({ key: `fake-${name}`, url: 'http://localhost:9/', status: 'running', command: ['node', ...(args || [])].join(' '), log: '' }), ...(openTab ? { openTab } : {}), ...(generateImage ? { generateImage } : {}), ...(generateVideo ? { generateVideo } : {}), ...(ensemble ? { ensemble } : {}), ...(checks ? { checks } : {}), ...(enhance ? { enhance } : {}), ...(generation ? { generation } : {}) });
     return { events, bodies, dir, id, done: events.find((e) => e.t === 'done') };
   } finally { forgetProject(id); ledger.delete(`seed-${id}`); }
 }
@@ -151,6 +152,114 @@ test('a failed model call is retried', async () => {
   assert.equal(of(events, 'llm_retry').length, 1);
   assert.equal(done.reply, 'Hello.');
   assert.equal(done.stats.retries, 1);
+});
+
+// ---------- calls cut off before their usage arrived: still billed, so still counted ----------
+const priced = [{ id: 'test/model', maxOut: 4000, price: [2, 10] }];
+const cutOff = (msg, partial) => Object.assign(new Error(msg), { partial: { id: null, model: 'test/model', outChars: 0, ms: 5, ...partial } });
+
+test('cost: a reply stopped part-way through a call counts that call at an estimated partial cost', async () => {
+  const ac = new AbortController(), spends = [];
+  let err;
+  try {
+    await run((body, i) => {
+      if (i === 0) return reply('', [['write_file', { path: 'a.txt', content: 'a' }]]);
+      ac.abort();
+      throw Object.assign(cutOff('This operation was aborted', { outChars: 4000 }), { name: 'AbortError' });
+    }, { signal: ac.signal, catalogue: priced, onEvent: (e) => { if (e.t === 'spend') spends.push(e); } });
+  } catch (e) { err = e; }
+  assert.ok(err?.stats, 'the stopped reply carries what it spent');
+  const p = err.stats.partialCalls;
+  assert.equal(p.calls, 1); assert.equal(p.estimated, 1);
+  // 1000 output tokens at $10 per million is $0.01; the prompt (estimated from the messages) adds its part at $2 per million.
+  assert.ok(p.cost > 0.01 && p.cost < 0.05, `estimate ${p.cost}`);
+  assert.ok(Math.abs(err.stats.cost - (0.0001 + p.cost)) < 1e-9, 'it counts toward the reply\'s cost (and so the caps)');
+  assert.equal(err.stats.byModel['test/model'].partial, 1);
+  assert.ok(spends.at(-1).partialCalls && Math.abs(spends.at(-1).cost - err.stats.cost) < 1e-6, 'the page is told at once');
+});
+
+test('cost: a call that errors part-way and is retried counts the cut-off try once', async () => {
+  const { done, events } = await run((body, i) => {
+    if (i === 0) throw cutOff('terminated', { outChars: 400 });
+    return reply('Hello.');
+  }, { catalogue: priced });
+  assert.equal(done.reply, 'Hello.');
+  assert.equal(of(events, 'llm_retry').length, 1);
+  assert.equal(done.stats.partialCalls.calls, 1);
+  assert.equal(done.stats.byModel['test/model'].calls, 2, 'the cut-off try and the retry');
+  assert.ok(Math.abs(done.stats.cost - (0.0001 + done.stats.partialCalls.cost)) < 1e-9);
+  assert.equal(of(events, 'note').filter((e) => /ended before OpenRouter reported its cost/.test(e.msg)).length, 1);
+});
+
+test('cost: when OpenRouter\'s generation record gives the cost, that exact cost replaces the estimate', async () => {
+  const asked = [];
+  const { done, events } = await run((body, i) => {
+    if (i === 0) throw cutOff('terminated', { id: 'gen-abc', outChars: 400 });
+    return reply('Hello.');
+  }, { catalogue: priced, generation: async (id) => { asked.push(id); return { cost: 0.0123 }; } });
+  assert.deepEqual(asked, ['gen-abc']);
+  assert.ok(Math.abs(done.stats.cost - (0.0123 + 0.0001)) < 1e-9, `cost ${done.stats.cost}`);
+  assert.ok(Math.abs(done.stats.partialCalls.cost - 0.0123) < 1e-9);
+  assert.equal(done.stats.partialCalls.estimated, 0);
+  assert.ok(of(events, 'note').some((e) => /cost \$0\.0123 \(OpenRouter's figure/.test(e.msg)));
+});
+
+test('cost: a stream that ends without usage is estimated; one whose usage arrived adds nothing', async () => {
+  const lookups = [];
+  const { done } = await run((body, i) => [
+    { ...reply('', [['write_file', { path: 'a.txt', content: 'a' }]]), usage: {}, partial: { id: null, model: 'test/model', outChars: 40, ms: 1 } },
+    { ...reply('Done.'), partial: { id: 'gen-x', model: 'test/model', outChars: 5, ms: 1 } }, // usage arrived: no partial
+  ][i], { catalogue: priced, generation: async (id) => { lookups.push(id); return null; } });
+  assert.equal(done.stats.partialCalls.calls, 1);
+  assert.ok(Math.abs(done.stats.cost - (0.0001 + done.stats.partialCalls.cost)) < 1e-9);
+  assert.deepEqual(lookups, [], 'no lookup for a call without an id, nor for one whose usage arrived');
+  const plain = await run(() => reply('Hi.'), { text: 'hello', catalogue: priced });
+  assert.equal(plain.done.stats.partialCalls, undefined);
+  assert.ok(Math.abs(plain.done.stats.cost - 0.0001) < 1e-9);
+});
+
+// The real stream reader, fed by a stubbed fetch: what it hands over when the usage never comes.
+const sse = (parts, fail) => {
+  const enc = new TextEncoder();
+  let k = 0;
+  return new ReadableStream({ pull(c) { if (k < parts.length) c.enqueue(enc.encode(`data: ${JSON.stringify(parts[k++])}\n\n`)); else if (fail) c.error(new Error(fail)); else c.close(); } });
+};
+async function withFetch(fake, fn) {
+  const real = globalThis.fetch;
+  globalThis.fetch = fake;
+  try { return await fn(); } finally { globalThis.fetch = real; }
+}
+
+test('cost: the stream reader passes on the generation id and output so far when the usage never arrives', async () => {
+  const chunks = [{ id: 'gen-1', model: 'test/model', choices: [{ delta: { content: 'Hello there' } }] }, { id: 'gen-1', choices: [{ delta: { content: ', friend' } }] }];
+  const body = { model: 'test/model', messages: [{ role: 'user', content: 'hi' }] };
+  // A connection cut part-way: the error carries what was streamed.
+  const err = await withFetch(async () => new Response(sse(chunks, 'terminated')), () => realChatStream(body).then(() => null, (e) => e));
+  assert.equal(err?.message, 'terminated');
+  assert.equal(err.partial.id, 'gen-1');
+  assert.equal(err.partial.outChars, 'Hello there, friend'.length);
+  // A stream that ends without its usage chunk: the result says so.
+  const ended = await withFetch(async () => new Response(sse(chunks)), () => realChatStream(body));
+  assert.equal(ended.text, 'Hello there, friend');
+  assert.equal(ended.partial.id, 'gen-1');
+  // The usage arrived: nothing partial.
+  const full = await withFetch(async () => new Response(sse([...chunks, { id: 'gen-1', choices: [{ delta: {}, finish_reason: 'stop' }], usage: { cost: 0.002, prompt_tokens: 5, completion_tokens: 4 } }])), () => realChatStream(body));
+  assert.equal(full.partial, undefined);
+  assert.equal(full.usage.cost, 0.002);
+});
+
+test('cost: the generation lookup asks OpenRouter again until the record appears, then returns its cost', async () => {
+  const urls = [];
+  const g = await withFetch(async (url, opts) => {
+    urls.push(String(url));
+    assert.match(opts.headers.Authorization, /^Bearer /);
+    return urls.length < 2 ? new Response('{"error":{"message":"not found"}}', { status: 404 }) : Response.json({ data: { id: 'gen-1', total_cost: 0.0042, tokens_prompt: 120, tokens_completion: 30 } });
+  }, () => generationCost('gen-1', { delays: [0, 0, 0], timeout: 1000 }));
+  assert.deepEqual(g, { cost: 0.0042, prompt_tokens: 120, completion_tokens: 30 });
+  assert.equal(urls.length, 2);
+  assert.equal(urls[0], 'https://openrouter.ai/api/v1/generation?id=gen-1');
+  const none = await withFetch(async () => { throw new Error('offline'); }, () => generationCost('gen-2', { delays: [0, 0], timeout: 1000 }));
+  assert.equal(none, null);
 });
 
 test('a model that fails after real work keeps the work and says so', async () => {

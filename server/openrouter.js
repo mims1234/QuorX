@@ -88,50 +88,80 @@ async function chatStreamOnce(body, signal, onText, onThink) {
     throw e;
   }
   const dec = new TextDecoder();
-  let buf = '', text = '', thinking = '', usage = {}, firstMs = null, finish = null, provider = null, model = null;
+  let buf = '', text = '', thinking = '', usage = {}, firstMs = null, finish = null, provider = null, model = null, genId = null;
   const calls = [];
   // reasoning_details arrive in pieces; pieces with the same index belong to one block (text, summary or
   // encrypted data, plus a signature at the end). They are passed back unchanged on the next tool step.
   const details = [];
-  for await (const chunk of r.body) {
-    buf += dec.decode(chunk, { stream: true });
-    let i;
-    while ((i = buf.indexOf('\n')) >= 0) {
-      const line = buf.slice(0, i).trim();
-      buf = buf.slice(i + 1);
-      if (!line.startsWith('data:')) continue;
-      const data = line.slice(5).trim();
-      if (data === '[DONE]') continue;
-      let j; try { j = JSON.parse(data); } catch { continue; }
-      if (j.error) throw new Error(j.error.message || 'stream error');
-      const delta = j.choices?.[0]?.delta || {};
-      if (delta.content) { if (firstMs == null) firstMs = Date.now() - t; text += delta.content; onText?.(delta.content); }
-      // Thinking arrives as delta.reasoning (text) or delta.reasoning_details (parts with text or a summary).
-      const think = delta.reasoning || (delta.reasoning_details || []).map((x) => x.text || x.summary || '').join('');
-      if (think) { thinking += think; onThink?.(think); }
-      for (const d of delta.reasoning_details || []) {
-        const k = Number.isInteger(d.index) ? d.index : details.length;
-        const cur = details[k];
-        if (!cur) { details[k] = { ...d }; continue; }
-        for (const [f, v] of Object.entries(d)) {
-          if (v == null || f === 'index') continue;
-          cur[f] = (f === 'text' || f === 'summary' || f === 'data') && typeof cur[f] === 'string' ? cur[f] + v : v;
+  // Usage only comes with the last chunk. A stream that stops before it (Stop, an error part-way, a cut connection)
+  // was still billed, so what is needed to find or estimate its cost goes with the error or the result.
+  const sofar = () => ({ id: genId, model: model || body.model, outChars: text.length + thinking.length + calls.reduce((n, c) => n + (c?.function.arguments.length || 0) + (c?.function.name.length || 0), 0), ms: Date.now() - t });
+  try {
+    for await (const chunk of r.body) {
+      buf += dec.decode(chunk, { stream: true });
+      let i;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, i).trim();
+        buf = buf.slice(i + 1);
+        if (!line.startsWith('data:')) continue;
+        const data = line.slice(5).trim();
+        if (data === '[DONE]') continue;
+        let j; try { j = JSON.parse(data); } catch { continue; }
+        if (j.id && !genId) genId = j.id;
+        if (j.error) throw new Error(j.error.message || 'stream error');
+        const delta = j.choices?.[0]?.delta || {};
+        if (delta.content) { if (firstMs == null) firstMs = Date.now() - t; text += delta.content; onText?.(delta.content); }
+        // Thinking arrives as delta.reasoning (text) or delta.reasoning_details (parts with text or a summary).
+        const think = delta.reasoning || (delta.reasoning_details || []).map((x) => x.text || x.summary || '').join('');
+        if (think) { thinking += think; onThink?.(think); }
+        for (const d of delta.reasoning_details || []) {
+          const k = Number.isInteger(d.index) ? d.index : details.length;
+          const cur = details[k];
+          if (!cur) { details[k] = { ...d }; continue; }
+          for (const [f, v] of Object.entries(d)) {
+            if (v == null || f === 'index') continue;
+            cur[f] = (f === 'text' || f === 'summary' || f === 'data') && typeof cur[f] === 'string' ? cur[f] + v : v;
+          }
         }
+        if (j.provider && !provider) provider = j.provider;
+        if (j.model && !model) model = j.model;
+        for (const tc of delta.tool_calls || []) {
+          const k = tc.index ?? calls.length;
+          calls[k] ??= { id: '', type: 'function', function: { name: '', arguments: '' } };
+          if (tc.id) calls[k].id = tc.id;
+          if (tc.function?.name) calls[k].function.name += tc.function.name;
+          if (tc.function?.arguments) calls[k].function.arguments += tc.function.arguments;
+        }
+        if (j.choices?.[0]?.finish_reason) finish = j.choices[0].finish_reason;
+        if (j.usage) usage = j.usage;
       }
-      if (j.provider && !provider) provider = j.provider;
-      if (j.model && !model) model = j.model;
-      for (const tc of delta.tool_calls || []) {
-        const k = tc.index ?? calls.length;
-        calls[k] ??= { id: '', type: 'function', function: { name: '', arguments: '' } };
-        if (tc.id) calls[k].id = tc.id;
-        if (tc.function?.name) calls[k].function.name += tc.function.name;
-        if (tc.function?.arguments) calls[k].function.arguments += tc.function.arguments;
-      }
-      if (j.choices?.[0]?.finish_reason) finish = j.choices[0].finish_reason;
-      if (j.usage) usage = j.usage;
     }
+  } catch (e) {
+    if (e && typeof e === 'object' && !Object.keys(usage).length) { try { e.partial = sofar(); } catch { /* a frozen error carries nothing */ } }
+    throw e;
   }
-  return { text, thinking, reasoningDetails: details.filter(Boolean), toolCalls: calls.filter(Boolean), usage, ms: Date.now() - t, firstMs, finishReason: finish, provider, model };
+  return { text, thinking, reasoningDetails: details.filter(Boolean), toolCalls: calls.filter(Boolean), usage, ms: Date.now() - t, firstMs, finishReason: finish, provider, model,
+    ...(Object.keys(usage).length ? {} : { partial: sofar() }) };
+}
+
+/**
+ * What a finished call really cost, from OpenRouter's record of it (GET /api/v1/generation). The record appears a few
+ * seconds after the call, so it is asked for again after each wait in `delays`; every try has its own short timeout.
+ * Returns the cost in dollars with the token counts, or null when no record turned up.
+ */
+export async function generationCost(id, { delays = [2000, 4000, 8000], timeout = 5000 } = {}) {
+  if (!id) return null;
+  for (const wait of delays) {
+    await new Promise((r) => setTimeout(r, wait));
+    try {
+      const r = await fetch(`${BASE}/api/v1/generation?id=${encodeURIComponent(id)}`, { headers: headers(), signal: AbortSignal.timeout(timeout) });
+      if (!r.ok) continue;
+      const d = (await r.json().catch(() => ({}))).data || {};
+      const cost = Number(d.total_cost ?? d.usage);
+      if (Number.isFinite(cost)) return { cost, prompt_tokens: Number(d.tokens_prompt ?? d.native_tokens_prompt) || 0, completion_tokens: Number(d.tokens_completion ?? d.native_tokens_completion) || 0 };
+    } catch { /* not there yet, or the network is down: try again after the next wait */ }
+  }
+  return null;
 }
 
 // One Decisions request: a state plus many typed questions, answered in parallel by one model.
