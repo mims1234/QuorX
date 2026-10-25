@@ -35,7 +35,8 @@ npm install
 npm start
 ```
 
-Open http://localhost:5188 and choose **Sign in with OpenRouter** (⚙ Settings → API keys opens by itself the first
+Open the link `npm start` prints once (it signs this browser in; QuorX then opens at http://quorx.localhost:5188, a
+name only QuorX uses, so its sign-in never reaches dev servers on localhost) and choose **Sign in with OpenRouter** (⚙ Settings → API keys opens by itself the first
 time). openrouter.ai asks you to approve, lets you set a spending limit for the new key, and sends the key back to
 QuorX. You can paste a key instead, or put `OPENROUTER_API_KEY` in a `.env` file. Then ⚙ Settings → **Setup check**
 shows what this computer has (Git, Python, a browser, toolchains) and offers to install what is missing.

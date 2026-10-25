@@ -5,8 +5,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { hostAllowed, crossSiteApi, gate, isLoopback, appGate, appKey } from '../server/access.js';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { hostAllowed, crossSiteApi, gate, isLoopback, appGate, appKey, handoffPut, handoffTake } from '../server/access.js';
 import { privateAddress } from '../server/safefetch.js';
+import { startSignIn } from '../server/oauth.js';
 import { decide, agentWriteBlocked } from '../server/cmdpolicy.js';
 import { safePath, checkCommand, preApproved, searchFiles, childEnv, runLine } from '../server/workspace.js';
 import { userEnv, mergePath } from '../server/userenv.js';
@@ -18,7 +21,7 @@ const req = ({ host = 'localhost:5188', ip = '127.0.0.1', site, cookie, headers 
 const res = () => { const r = { code: 0, headers: {}, body: '' }; r.writeHead = (c, h = {}) => { r.code = c; Object.assign(r.headers, h); return r; }; r.end = (b = '') => { r.body += b; return r; }; return r; };
 
 test('the Host must name this computer: names a web page could rebind are refused', () => {
-  for (const h of ['localhost:5188', '127.0.0.1:5188', '[::1]:5188', '192.168.1.20:5188', `${os.hostname()}:5188`]) assert.ok(hostAllowed(req({ host: h })), h);
+  for (const h of ['localhost:5188', 'quorx.localhost:5188', '127.0.0.1:5188', '[::1]:5188', '192.168.1.20:5188', `${os.hostname()}:5188`]) assert.ok(hostAllowed(req({ host: h })), h);
   for (const h of ['evil.example:5188', 'localhost.:5188', 'app.localhost:5188', '']) assert.ok(!hostAllowed(req({ host: h })), h || '(none)');
 });
 
@@ -185,18 +188,115 @@ test('a chat saves only what changed; a stale patch is refused and a whole save 
 
 test('/api on this computer needs the app key; the app link sets it', () => {
   const u = (p) => new URL(p, 'http://x');
+  const app = { host: 'quorx.localhost:5188', ip: '127.0.0.1' };
   const r1 = res();
   assert.equal(appGate(req({ ip: '127.0.0.1' }), r1, u('/api/chats')), true);
   assert.equal(r1.code, 401, 'a program on this computer without the key');
   assert.equal(appGate(req({ ip: '127.0.0.1' }), res(), u('/api/config')), false, 'the version check stays open');
-  assert.equal(appGate(req({ ip: '127.0.0.1', headers: { cookie: `qx_app=${appKey}` } }), res(), u('/api/chats')), false);
+  assert.equal(appGate(req({ ...app, headers: { cookie: `qx_app_0=${appKey}` } }), res(), u('/api/chats')), false);
   assert.equal(appGate(req({ ip: '127.0.0.1', headers: { 'x-quorx-key': appKey } }), res(), u('/api/chats')), false);
   const r2 = res();
-  assert.equal(appGate(req({ ip: '127.0.0.1' }), r2, u(`/?k=${appKey}`)), true);
+  assert.equal(appGate(req(app), r2, u(`/?k=${appKey}`)), true);
   assert.equal(r2.code, 302);
+  assert.match(r2.headers['Set-Cookie'], /^qx_app_0=.+HttpOnly; SameSite=Strict$/);
   const r3 = res();
   assert.equal(appGate(req({ ip: '127.0.0.1' }), r3, u('/?k=wrong')), true);
   assert.equal(r3.code, 401);
+});
+
+test('S1: the cookie lives at quorx.localhost only, so dev servers on localhost never get it', () => {
+  const u = (p) => new URL(p, 'http://x');
+  const at = (host, cookie) => ({ method: 'GET', headers: { host, ...(cookie ? { cookie } : {}) }, socket: { remoteAddress: '127.0.0.1', localPort: 5188 } });
+  // The same cookie sent under another name (as a browser would to any localhost port) opens nothing.
+  for (const host of ['localhost:5188', '127.0.0.1:5188']) {
+    const r = res();
+    assert.equal(appGate(at(host, `qx_app_5188=${appKey}`), r, u('/api/chats')), true, host);
+    assert.equal(r.code, 401, host);
+  }
+  assert.equal(appGate(at('quorx.localhost:5188', `qx_app_5188=${appKey}`), res(), u('/api/chats')), false, 'at its own name it does');
+  assert.equal(appGate(at('quorx.localhost:5188', `qx_app=${appKey}`), res(), u('/api/chats')), true, 'the old name without a port is gone');
+  // The app link at localhost never sets a cookie there: it opens the move page, which removes the old ones.
+  const r = res();
+  assert.equal(appGate(at('localhost:5188'), r, u(`/?k=${appKey}&chat=c1`)), true);
+  assert.equal(r.code, 200);
+  assert.deepEqual(r.headers['Set-Cookie'], ['qx_app_5188=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict', 'qx_app=; Path=/; Max-Age=0']);
+  // Other ports' old cookies at localhost go too; other sites' cookies are left alone.
+  const o = res();
+  appGate(at('localhost:5188', 'qx_app_5199=a; devapp=1; qx_app_5331=b'), o, u('/'));
+  assert.deepEqual(o.headers['Set-Cookie'].map((c) => c.split('=')[0]), ['qx_app_5188', 'qx_app', 'qx_app_5199', 'qx_app_5331']);
+  assert.match(r.body, /<meta name="qx-next" content="http:\/\/quorx\.localhost:5188\/\?chat=c1">/, 'on to the same page at its own name');
+  assert.match(r.body, /<script src="\/move\.js"/);
+  assert.doesNotMatch(r.body, new RegExp(appKey), 'the key itself is not in the page');
+  assert.match(r.headers['Content-Security-Policy'], /script-src 'self'/);
+  // A bookmark at localhost (no link): the move page with no handoff, so nothing can be handed over.
+  const b = res();
+  assert.equal(appGate(at('localhost:5188'), b, u('/')), true);
+  assert.match(b.body, /<meta name="qx-move" content="">/);
+  // Other files at localhost still load (the agent's browser opens project files there), and are not moved.
+  assert.equal(appGate(at('localhost:5188'), res(), u('/ws/p1/index.html')), false);
+  assert.equal(appGate(at('localhost:5188'), res(), u('/app.js')), false);
+});
+
+test('S1: moving settings to quorx.localhost: only the app link makes a handoff, used once, and it signs in once', () => {
+  const u = (p) => new URL(p, 'http://x');
+  const at = (host, method = 'GET', cookie) => ({ method, headers: { host, ...(cookie ? { cookie } : {}) }, socket: { remoteAddress: '127.0.0.1', localPort: 5188 } });
+  const r = res();
+  appGate(at('localhost:5188'), r, u(`/?k=${appKey}`));
+  const id = r.body.match(/name="qx-move" content="([\w-]+)"/)[1];
+  assert.equal(id.length, 24);
+  // The old page posts its settings with the handoff's id as its key; a made-up id is refused like any call.
+  assert.equal(appGate(at('localhost:5188', 'POST'), res(), u(`/api/prefs/handoff/${id}`)), false);
+  const bad = res();
+  assert.equal(appGate(at('localhost:5188', 'POST'), bad, u('/api/prefs/handoff/AAAAAAAAAAAAAAAAAAAAAAAA')), true);
+  assert.equal(bad.code, 401);
+  assert.equal(handoffPut(id, ['x']), false, 'not a list');
+  assert.equal(handoffPut(id, { 'quorx-v1': '{"theme":"dark"}', 'oh-term-font': '15', n: 3 }), true);
+  assert.equal(handoffPut(id, { 'quorx-v1': '{"theme":"light"}' }), false, 'once');
+  assert.equal(appGate(at('localhost:5188', 'POST'), res(), u(`/api/prefs/handoff/${id}`)), true, 'and then the route is closed');
+  assert.equal(handoffTake(id), null, 'not before the new page is signed in');
+  // QuorX at its own name: the handoff's id signs in once and leaves ?prefs= for the page.
+  const s = res();
+  assert.equal(appGate(at('quorx.localhost:5188'), s, u(`/?moved=${id}&chat=c1`)), true);
+  assert.equal(s.code, 302);
+  assert.match(s.headers['Set-Cookie'], new RegExp(`^qx_app_5188=${appKey};`));
+  assert.equal(s.headers.Location, `/?chat=c1&prefs=${id}`);
+  const again = res();
+  appGate(at('quorx.localhost:5188'), again, u(`/?moved=${id}`));
+  assert.equal(again.headers['Set-Cookie'], undefined, 'a second visit with it gets no cookie');
+  assert.deepEqual(handoffTake(id), { 'quorx-v1': '{"theme":"dark"}', 'oh-term-font': '15' }, 'strings only');
+  assert.equal(handoffTake(id), null, 'read once');
+  // Nothing to carry: the id still signs in, then is gone.
+  const r2 = res(); appGate(at('localhost:5188'), r2, u(`/?k=${appKey}`));
+  const id2 = r2.body.match(/name="qx-move" content="([\w-]+)"/)[1];
+  const s2 = res(); appGate(at('quorx.localhost:5188'), s2, u(`/?moved=${id2}`));
+  assert.ok(s2.headers['Set-Cookie']);
+  assert.equal(s2.headers.Location, '/');
+  assert.equal(handoffPut(id2, { a: 'b' }), false, 'too late to send settings');
+  // A made-up id: no cookie.
+  const s3 = res(); appGate(at('quorx.localhost:5188'), s3, u('/?moved=nope'));
+  assert.equal(s3.headers['Set-Cookie'], undefined);
+});
+
+test('S1: OpenRouter sign-in from quorx.localhost still comes back by itself, to localhost', () => {
+  const back = (origin) => new URL(startSignIn(origin).url).searchParams.get('callback_url');
+  assert.equal(back('http://quorx.localhost:5188'), 'http://localhost:5188/oauth/openrouter/callback');
+  assert.equal(back('http://localhost:5188'), 'http://localhost:5188/oauth/openrouter/callback');
+  assert.equal(startSignIn('http://evil.example').mode, 'code', 'another site pastes the code');
+});
+
+test('S1: the app key made before quorx.localhost is replaced once, then kept', () => {
+  const home = tempDir('qx-key-');
+  fs.mkdirSync(path.join(home, 'data'), { recursive: true });
+  const old = 'k'.repeat(43);
+  fs.writeFileSync(path.join(home, 'data', 'app-key'), old);
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const load = () => execFileSync(process.execPath, ['--input-type=module', '-e', "import('./server/access.js').then((m) => process.stdout.write(m.appKey))"], { cwd: root, env: { ...process.env, OH_HOME: home } }).toString();
+  const first = load();
+  assert.notEqual(first, old, 'the old key went to dev servers with the cookie');
+  assert.equal(fs.readFileSync(path.join(home, 'data', 'app-key'), 'utf8'), first);
+  assert.ok(fs.existsSync(path.join(home, 'data', 'app-key-host')));
+  assert.equal(load(), first, 'once: the next start keeps it');
+  fs.rmSync(home, { recursive: true, force: true });
 });
 
 test('fetch_url refuses private, loopback and link-local addresses', () => {
@@ -296,7 +396,7 @@ test('data folder: 0.2.5 locked files are repaired at start, and the lock-down k
 });
 
 test('two QuorX on one computer keep their own cookies: each name carries the port', () => {
-  const at = (port, cookie) => ({ headers: { host: `localhost:${port}`, ...(cookie ? { cookie } : {}) }, socket: { remoteAddress: '127.0.0.1', localPort: port } });
+  const at = (port, cookie) => ({ headers: { host: `quorx.localhost:${port}`, ...(cookie ? { cookie } : {}) }, socket: { remoteAddress: '127.0.0.1', localPort: port } });
   const u = (p) => new URL(p, 'http://x');
   const r = res();
   assert.equal(appGate(at(5233), r, u(`/?k=${appKey}`)), true);
@@ -307,8 +407,7 @@ test('two QuorX on one computer keep their own cookies: each name carries the po
   const r2 = res();
   assert.equal(appGate(at(5262, `qx_app_5233=${appKey}`), r2, u('/api/chats')), true, "this key doesn't open the other port");
   assert.equal(r2.code, 401);
-  assert.equal(appGate(at(5233, `qx_app=${appKey}`), res(), u('/api/chats')), false, 'the old cookie name still works for now');
-  assert.equal(appGate(at(5233, `qx_app=${appKey}; qx_app_5233=wrong`), res(), u('/api/chats')), true, "this port's cookie wins over the old one");
+  assert.equal(appGate(at(5233, `qx_app=${appKey}; qx_app_5233=wrong`), res(), u('/api/chats')), true, "this port's cookie, not the old name");
 });
 
 // A main port above 64535 has no port 1000 above it for the pages address: QuorX must start anyway (it used to crash

@@ -44,7 +44,7 @@ npm install
 npm start
 ```
 
-Then open http://localhost:5188 and sign in with OpenRouter. The full setup is in [Getting started](docs/GETTING-STARTED.md).
+Then open the link it prints (QuorX opens at http://quorx.localhost:5188) and sign in with OpenRouter. The full setup is in [Getting started](docs/GETTING-STARTED.md).
 
 ## Learn more
 

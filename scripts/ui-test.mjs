@@ -64,7 +64,7 @@ const waiting = new Map();
 async function connect() {
   let target = null;
   for (let i = 0; i < 120 && !target; i++) {
-    try { target = (await (await fetch(`http://127.0.0.1:${CDP}/json/list`)).json()).find((t) => t.type === 'page' && t.url.startsWith(`http://localhost:${PORT}`)); } catch { /* starting */ }
+    try { target = (await (await fetch(`http://127.0.0.1:${CDP}/json/list`)).json()).find((t) => t.type === 'page' && [`http://quorx.localhost:${PORT}`, `http://localhost:${PORT}`].some((o) => t.url.startsWith(o))); } catch { /* starting */ }
     if (!target) await sleep(500);
   }
   if (!target) throw new Error('the QuorX window did not appear within a minute (see app.log)');

@@ -27,11 +27,17 @@ const readConfig = () => { try { return JSON.parse(fs.readFileSync(CONFIG(), 'ut
 const writeConfig = (c) => { fs.mkdirSync(path.dirname(CONFIG()), { recursive: true }); fs.writeFileSync(CONFIG(), JSON.stringify(c, null, 2)); };
 let HOME = null;
 // The harness's app key (server/access.js): the window opens with it once, and the app's own calls carry it.
-const appKey = () => { try { return fs.readFileSync(path.join(HOME || ROOT, 'data', 'app-key'), 'utf8').trim(); } catch { return ''; } };
+// The data folder the harness uses: the one chosen here, else OH_HOME (a test copy), else the repo.
+const appKey = () => { try { return fs.readFileSync(path.join(HOME || process.env.OH_HOME || ROOT, 'data', 'app-key'), 'utf8').trim(); } catch { return ''; } };
 const keyed = (h = {}) => ({ ...h, 'X-QuorX-Key': appKey() });
 const HIDDEN = process.argv.includes('--hidden'); // started at login: tray only
 let PORT = 5188;
 let server = null, origin = null, win = null, tray = null, quitting = false;
+// The window shows QuorX at its own name, quorx.localhost (server/access.js): its sign-in cookie never goes to dev
+// servers on localhost. `origin` (localhost) stays for this process's own calls, which carry the key instead.
+const appOrigin = () => origin && origin.replace('//localhost:', '//quorx.localhost:');
+// An address under QuorX's name on another port is somebody else's page: it opens at localhost, without the cookie.
+const offAppHost = (u) => { try { const x = new URL(u); if (x.hostname === 'quorx.localhost' && x.origin !== appOrigin()) { x.hostname = 'localhost'; return x.href; } } catch { /* not an address */ } return u; };
 
 // OH_USER_DATA: a separate settings folder, so a test copy can run next to your own (one copy per folder).
 if (process.env.OH_USER_DATA) app.setPath('userData', process.env.OH_USER_DATA);
@@ -129,22 +135,23 @@ function createWindow() {
   // (inside a frame, which the page never hears keys from), the terminal, or QuorX itself (it calls back 'zoom').
   win.webContents.on('before-input-event', (e, input) => { const dir = zoomKey(input); if (dir) { e.preventDefault(); send({ type: 'zoom-key', dir }); } });
   win.webContents.on('zoom-changed', (_e, dir) => send({ type: 'zoom-wheel', dir }));
+  // Through localhost first: the page there hands this window's saved settings over and opens QuorX at its own name.
   win.loadURL(`${origin}/?k=${encodeURIComponent(appKey())}`);
-  // The app window only shows the app; links elsewhere open in your browser.
+  // The app window only shows the app (and the move page on the way); links elsewhere open in your browser.
   // Same origin exactly (not just the same prefix), and only web and mail links go to the system: other schemes
   // (file:, protocol handlers) are dropped.
   win.webContents.on('will-navigate', (e, url) => {
-    let same = false; try { same = new URL(url).origin === new URL(origin).origin; } catch { /* not a URL */ }
+    let same = false; try { same = [origin, appOrigin()].includes(new URL(url).origin); } catch { /* not a URL */ }
     if (same) return;
     e.preventDefault();
-    if (/^(https?|mailto):/i.test(url)) shell.openExternal(url);
+    if (/^(https?|mailto):/i.test(url)) shell.openExternal(offAppHost(url));
   });
   // Ctrl+click (Cmd+click on a Mac) on a web link inside a frame of the app (an artifact, a page preview) opens it in the
   // pane's Browser tab. Links in QuorX's own content are handled by the page and never get here.
   // Anything else that opens a new window (↗, sign-in) goes to your default browser.
   win.webContents.setWindowOpenHandler(({ url, disposition }) => {
-    if (disposition === 'background-tab' && /^https?:\/\//i.test(url)) { send({ type: 'open-link', url }); return { action: 'deny' }; }
-    if (/^(https?|mailto):/i.test(url)) shell.openExternal(url);
+    if (disposition === 'background-tab' && /^https?:\/\//i.test(url)) { send({ type: 'open-link', url: offAppHost(url) }); return { action: 'deny' }; }
+    if (/^(https?|mailto):/i.test(url)) shell.openExternal(offAppHost(url));
     return { action: 'deny' };
   });
   // ✕ keeps the harness running in the tray (scheduled tasks still run), or quits, as you chose in the notice
@@ -201,14 +208,14 @@ function createTray() {
   tray.on('click', showWindow);
 }
 // The copy run from the QuorX folder (npm run desktop) says DEV everywhere, so it is never mixed up with the installed one.
-const trayTip = () => `QuorX${DEV ? ' DEV (from your folder)' : ''} is running · ${origin}${server ? ' · right-click to quit' : ''}`;
+const trayTip = () => `QuorX${DEV ? ' DEV (from your folder)' : ''} is running · ${appOrigin()}${server ? ' · right-click to quit' : ''}`;
 // Quit sits right under Open, so it is found without reading the whole menu.
 function createTrayMenu() {
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: 'Open QuorX', click: showWindow },
     { label: server ? 'Quit QuorX (stops the harness)' : 'Quit QuorX', click: quitApp },
     { type: 'separator' },
-    { label: `Address: ${origin}`, enabled: false },
+    { label: `Address: ${appOrigin()}`, enabled: false },
     ...(HOME ? [{ label: 'Open the data folder', click: () => shell.openPath(HOME) }] : []),
     { label: 'Restart the harness', click: async () => { const r = await restartHarness(); if (r.ok) win?.webContents.reload(); else dialog.showErrorBox('Restart failed', r.error); } },
     { label: 'Start at login', type: 'checkbox', checked: loginItem(), click: (m) => setLoginItem(m.checked) },
@@ -281,7 +288,7 @@ function zoomKey(input) {
   return null;
 }
 // Only the app's own page may drive tabs.
-const fromApp = (e) => { try { return new URL(e.senderFrame.url).origin === new URL(origin).origin; } catch { return false; } };
+const fromApp = (e) => { try { return new URL(e.senderFrame.url).origin === appOrigin(); } catch { return false; } };
 function handle(name, fn) { ipcMain.handle(`oh:${name}`, (e, ...a) => { if (!fromApp(e)) throw new Error('not allowed'); return fn(...a); }); }
 handle('open', (sid, url) => { if (!/^https?:\/\//i.test(String(url))) throw new Error('only http and https addresses'); tabFor(sid).view.webContents.loadURL(url).catch(() => {}); return true; });
 handle('bounds', (sid, r) => {
