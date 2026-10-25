@@ -1214,38 +1214,6 @@ test('edit_artifact takes several edits at once (all or none), like edit_file', 
   assert.doesNotMatch(last.md, /^x$/m, 'the failed batch changed nothing');
 });
 
-test('list_files shows your scratch, the launch file and the site server inside .quorx, not the harness records', async () => {
-  const { listFiles } = await import('../server/workspace.js');
-  const dir = tempDir('quorx-list-');
-  for (const f of ['index.html', '.quorx/launch.json', '.quorx/serve.mjs', '.quorx/scratch/check.mjs', '.quorx/trash/1/old.js', '.quorx/checkpoints/r1/a.js']) {
-    fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true }); fs.writeFileSync(path.join(dir, f), 'x');
-  }
-  const paths = listFiles(dir).map((x) => x.path);
-  for (const want of ['index.html', '.quorx/launch.json', '.quorx/serve.mjs', '.quorx/scratch/check.mjs']) assert.ok(paths.includes(want), want);
-  assert.ok(!paths.some((x) => /trash|checkpoints/.test(x)), 'harness records stay hidden');
-});
-
-test('a project inside another project is listed once and not walked, in list_files and search_files', async () => {
-  const { listFiles, searchFiles } = await import('../server/workspace.js');
-  const dir = tempDir('quorx-nest-');
-  const other = path.join(dir, 'registered');
-  for (const f of ['index.html', 'inner/.quorx/launch.json', 'inner/src/app.js', 'registered/lib.js', 'plain/util.js']) {
-    fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true }); fs.writeFileSync(path.join(dir, f), 'needle');
-  }
-  const id = `nest${Date.now().toString(36)}`;
-  saveProject({ id, name: 'nested', path: other });
-  try {
-    const paths = listFiles(dir).map((x) => x.path);
-    assert.ok(paths.includes('inner/ (another project, skipped)'), 'a folder with its own .quorx');
-    assert.ok(paths.includes('registered/ (another project, skipped)'), 'a folder another project points at');
-    assert.ok(!paths.some((x) => /inner\/src|registered\/lib/.test(x)), 'their files stay out');
-    assert.ok(paths.includes('plain/util.js') && paths.includes('index.html'), 'ordinary folders are still walked');
-    const hits = (await searchFiles(dir, 'needle')).map((h) => h.path).sort();
-    assert.deepEqual(hits, ['index.html', 'plain/util.js']);
-    assert.ok(listFiles(other).some((x) => x.path === 'lib.js'), 'the inner project still lists its own files');
-  } finally { forgetProject(id); }
-});
-
 const tree = (files) => {
   const dir = tempDir('quorx-search-');
   for (const [f, text] of Object.entries(files)) { fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true }); fs.writeFileSync(path.join(dir, f), text); }
@@ -1309,6 +1277,40 @@ test('search_files over ~5k files keeps the event loop ticking', async () => {
   assert.equal(hits.total, 5000);
   assert.ok(ticks >= Math.min(5, took / 50), `timers ran while it searched (${ticks} ticks in ${took} ms)`);
   assert.ok(gap < 250, `no long stall (longest gap ${gap} ms)`);
+});
+
+
+
+test('list_files shows your scratch, the launch file and the site server inside .quorx, not the harness records', async () => {
+  const { listFiles } = await import('../server/workspace.js');
+  const dir = tempDir('quorx-list-');
+  for (const f of ['index.html', '.quorx/launch.json', '.quorx/serve.mjs', '.quorx/scratch/check.mjs', '.quorx/trash/1/old.js', '.quorx/checkpoints/r1/a.js']) {
+    fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true }); fs.writeFileSync(path.join(dir, f), 'x');
+  }
+  const paths = listFiles(dir).map((x) => x.path);
+  for (const want of ['index.html', '.quorx/launch.json', '.quorx/serve.mjs', '.quorx/scratch/check.mjs']) assert.ok(paths.includes(want), want);
+  assert.ok(!paths.some((x) => /trash|checkpoints/.test(x)), 'harness records stay hidden');
+});
+
+test('a project inside another project is listed once and not walked, in list_files and search_files', async () => {
+  const { listFiles, searchFiles } = await import('../server/workspace.js');
+  const dir = tempDir('quorx-nest-');
+  const other = path.join(dir, 'registered');
+  for (const f of ['index.html', 'inner/.quorx/launch.json', 'inner/src/app.js', 'registered/lib.js', 'plain/util.js']) {
+    fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true }); fs.writeFileSync(path.join(dir, f), 'needle');
+  }
+  const id = `nest${Date.now().toString(36)}`;
+  saveProject({ id, name: 'nested', path: other });
+  try {
+    const paths = listFiles(dir).map((x) => x.path);
+    assert.ok(paths.includes('inner/ (another project, skipped)'), 'a folder with its own .quorx');
+    assert.ok(paths.includes('registered/ (another project, skipped)'), 'a folder another project points at');
+    assert.ok(!paths.some((x) => /inner\/src|registered\/lib/.test(x)), 'their files stay out');
+    assert.ok(paths.includes('plain/util.js') && paths.includes('index.html'), 'ordinary folders are still walked');
+    const hits = (await searchFiles(dir, 'needle')).map((h) => h.path).sort();
+    assert.deepEqual(hits, ['index.html', 'plain/util.js']);
+    assert.ok(listFiles(other).some((x) => x.path === 'lib.js'), 'the inner project still lists its own files');
+  } finally { forgetProject(id); }
 });
 
 
