@@ -4,7 +4,7 @@
 import { tempDir } from './test-home.mjs';
 import { resolver } from '../server/safefetch.js';
 import { videoBody, editCommand, ffmpegMajor } from '../server/video.js';
-import { primeCatalogue } from '../server/openrouter.js';
+import { primeCatalogue, HOME } from '../server/openrouter.js';
 import { execFileSync } from 'node:child_process';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -13,7 +13,7 @@ import path from 'node:path';
 import { loadCards, cardText, limitsLine, cardFile, CARDS_DIR, CARD_CHARS } from '../server/modelcards.js';
 import { runAgent, inPlaceEdit, deciderPicture, REVIEW_SYSTEM, FILM_KEYS, answerQuestion, answerSecret, answerApproval, answerBudget, setRunApproval, steerRun, holdCard } from '../server/agent.js';
 import { saveProject, forgetProject, setProjectBudget } from '../server/store.js';
-import { loadCheckpoint, dropCheckpoint, ledger } from '../server/runs.js';
+import { loadCheckpoint, dropCheckpoint, saveCheckpoint, checkpointWritten, ledger } from '../server/runs.js';
 import { setBudget, projectSpend, budgetState, live as liveRuns } from '../server/budget.js';
 import { reviewCode, collectChanges, parseGitDiff, checkFindings, pickReviewer } from '../server/codereview.js';
 import { saveHooks, loadHooks, matchHooks, fileMatches, commandMatches, hookLine, cleanHook, safeHookFile } from '../server/hooks.js';
@@ -312,6 +312,74 @@ test('a reply cut off mid-way resumes from its last checkpoint', async () => {
   assert.equal(done.stats.undoId, id); // ↶ Undo covers the files the first part changed
   assert.equal(loadCheckpoint(id)?.step, 0); // the old run's checkpoint stays until its files are cleaned up
   dropCheckpoint(id);
+});
+
+// What a page makes of a run's events: each step's text, and every other event in order.
+const pageView = (events) => {
+  const text = {}, think = {}, rest = [];
+  for (const e of events) {
+    if (e.t === 'token') text[e.step] = (text[e.step] || '') + e.text;
+    else if (e.t === 'think') think[e.step] = (think[e.step] || '') + e.text;
+    else rest.push(e);
+  }
+  return { text, think, rest };
+};
+const followAll = (id) => new Promise((done) => { const got = []; follow(id, 0, (e) => (e ? got.push(e) : done(got))); });
+
+test('a run keeps its tokens joined per step: a page that comes back later sees what one there from the start saw', async () => {
+  const id = `tok${Date.now().toString(36)}`;
+  let live;
+  await new Promise((ended) => {
+    startRun({ runId: id, onEnd: ended }, async (emit) => {
+      live = followAll(id);
+      for (let step = 0; step < 4; step++) {
+        emit({ t: 'llm_start', step });
+        for (let k = 0; k < 500; k++) emit({ t: 'think', step, text: `r${k} ` });
+        for (let k = 0; k < 25000; k++) emit({ t: 'token', step, text: `w${k} ` });
+        emit({ t: 'llm_done', step, toolCalls: [] });
+        await new Promise((x) => setImmediate(x));
+      }
+      emit({ t: 'done', reply: 'ok', stats: {} });
+    });
+  });
+  const first = await live;
+  assert.equal(of(first, 'token').length, 100000, 'a page there from the start gets every token as it streams');
+  assert.ok(getRun(id).events.length < 20, `kept: ${getRun(id).events.length}`);
+  const late = await followAll(id);
+  assert.deepEqual(pageView(late), pageView(first));
+  assert.deepEqual(pageView(readLog(id)), pageView(first)); // the log on disk joins them the same way
+});
+
+test('a run past the memory cap replays from its log, with every event', async () => {
+  const id = `cap${Date.now().toString(36)}`;
+  let live;
+  await new Promise((ended) => {
+    startRun({ runId: id, onEnd: ended }, async (emit) => {
+      live = followAll(id);
+      for (let step = 0; step < 21000; step++) { emit({ t: 'tool', step, name: 'read_file' }); emit({ t: 'token', step, text: `s${step}` }); }
+      emit({ t: 'done', reply: 'ok', stats: {} });
+    });
+  });
+  const first = await live;
+  assert.ok(getRun(id).events.length <= 20001, `kept: ${getRun(id).events.length}`);
+  const late = await followAll(id);
+  assert.equal(late.length, first.length);
+  assert.deepEqual(pageView(late), pageView(first));
+  assert.ok(late.every((e) => e.t !== 'replay_from_log'));
+});
+
+test('checkpoints are written in the background, the latest one wins, and a dropped one stays gone', async () => {
+  const id = `ck${Date.now().toString(36)}`;
+  for (let k = 0; k < 50; k++) saveCheckpoint(id, { step: k, messages: [{ role: 'user', content: 'x'.repeat(2e4) }] });
+  assert.equal(loadCheckpoint(id).step, 49, 'read back at once, before it is on disk');
+  await checkpointWritten(id);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(HOME, 'data', 'runs', `${id}.ckpt.json`), 'utf8')).step, 49);
+  saveCheckpoint(id, { step: 50 }); saveCheckpoint(id, { step: 51 });
+  dropCheckpoint(id);
+  assert.equal(loadCheckpoint(id), null);
+  await checkpointWritten(id);
+  assert.equal(fs.existsSync(path.join(HOME, 'data', 'runs', `${id}.ckpt.json`)), false);
+  assert.equal(loadCheckpoint(id), null);
 });
 
 test("records of earlier replies go to the system prompt, not into the agent's own words", async () => {
