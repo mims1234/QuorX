@@ -1260,7 +1260,7 @@ test('a folder that can\'t be read is listed as skipped, and list_files and sear
     const paths = listFiles(dir).map((x) => x.path);
     assert.ok(paths.includes('locked/ (unreadable, skipped)'), paths.join(', '));
     assert.ok(paths.includes('index.html') && paths.includes('src/app.js'), 'the rest is still listed');
-    assert.deepEqual(searchFiles(dir, 'needle').map((h) => h.path).sort(), ['index.html', 'src/app.js']);
+    assert.deepEqual((await searchFiles(dir, 'needle')).map((h) => h.path).sort(), ['index.html', 'src/app.js']);
   } finally { execFileSync('icacls', [locked, '/remove:d', me], { windowsHide: true, stdio: 'ignore' }); }
 });
 
