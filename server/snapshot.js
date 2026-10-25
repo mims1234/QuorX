@@ -8,6 +8,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { Worker } from 'node:worker_threads';
 
 const DIR = '.quorx';
 // Never snapshotted: dependencies, version control, build output and the harness's own folder.
@@ -87,3 +88,50 @@ export function pruneObjects(root) {
   }
   return n;
 }
+
+// ---------- off the main thread ----------
+// The walk above is synchronous: in a project of tens of thousands of files it holds the event loop for seconds.
+// The async versions run the very same functions in one long-lived worker (snapshot-worker.js), one job at a time,
+// so results match the sync path exactly. Where a worker can't start (or dies mid-job) they run the sync function.
+let worker = null, seq = 0;
+const jobs = new Map();
+function failAll(why) {
+  worker = null;
+  for (const [, j] of jobs) { try { j.resolve(j.sync()); } catch (e) { j.reject(e); } } // fall back for jobs in flight
+  jobs.clear();
+  if (why) console.warn(`snapshot worker stopped (${why}); snapshots run on the main thread`);
+}
+function getWorker() {
+  if (worker) return worker;
+  if (process.env.QX_SNAPSHOT_WORKER === '0') return null;
+  let w;
+  try { w = new Worker(new URL('./snapshot-worker.js', import.meta.url)); } catch { return null; }
+  w.on('message', ({ id, ok, value, error }) => {
+    const j = jobs.get(id);
+    if (!j) return;
+    jobs.delete(id);
+    if (!jobs.size) w.unref(); // an idle worker never keeps the app (or a test run) alive
+    ok ? j.resolve(value) : j.reject(new Error(error));
+  });
+  w.on('error', (e) => { if (worker === w) failAll(e.message); });
+  w.on('exit', (code) => { if (worker === w) failAll(code ? `exit code ${code}` : ''); });
+  w.unref();
+  return (worker = w);
+}
+function run(op, args, sync) {
+  const w = getWorker();
+  if (!w) return new Promise((resolve) => resolve(sync()));
+  return new Promise((resolve, reject) => {
+    const id = ++seq;
+    jobs.set(id, { resolve, reject, sync });
+    w.ref();
+    try { w.postMessage({ id, op, args }); } catch { jobs.delete(id); try { resolve(sync()); } catch (e2) { reject(e2); } }
+  });
+}
+
+/** snapshot() without blocking the event loop. Same result. */
+export const snapshotAsync = (root, opts = {}) => run('snapshot', [root, opts], () => snapshot(root, opts));
+/** changesSince() without blocking the event loop. Same result. */
+export const changesSinceAsync = (root, before, opts = {}) => run('changesSince', [root, before, opts], () => changesSince(root, before, opts));
+/** pruneObjects() without blocking the event loop. */
+export const pruneObjectsAsync = (root) => run('pruneObjects', [root], () => pruneObjects(root));

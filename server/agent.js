@@ -41,7 +41,7 @@ import { isCheckedFile, packNotes, outputSummary } from './packs/index.js';
 import { devices as adbDevices, pickDevice, readScreen, tap as adbTap, typeText as adbType, key as adbKey, screenshot as adbShot, install as adbInstall, launch as adbLaunch, logcat as adbLog, listAvds, startEmulator } from './android.js';
 import { listSkills, readSkill, saveSkill, listTemplates } from './skills.js';
 import { projectDesign } from './design.js';
-import { workspaceDir, listFiles, readFile, readText, writeFile, appendFile, editFile, editFileMulti, runLine, lineOf, preApproved, stopNote, endProc, startServer, stopServerWait, serverFor, serverLog, listServers, launchConfigs, saveLaunchConfig, removeLaunchConfig, ensureAgentDir, agentSpace, SCRATCH, sealCheckpoint, pruneCheckpoints } from './workspace.js';
+import { workspaceDir, listFiles, readFile, readText, writeFile, appendFile, editFile, editFileMulti, runLine, lineOf, preApproved, stopNote, endProc, startServer, stopServerWait, serverFor, serverLog, listServers, launchConfigs, saveLaunchConfig, removeLaunchConfig, ensureAgentDir, agentSpace, SCRATCH, sealCheckpoint, pruneCheckpoints , snapBeforeAsync, commandChangesAsync } from './workspace.js';
 import { openTab, hostHtml, startedWithDevtoolsPort } from './browser.js';
 import { pageOp } from './pageops.js';
 import { adoptAgentTab, releaseAgentTab, borrowTab, givenTab, openChromeTab, chatChromeTabs, adoptChromeTab, closeChatChromeTabs } from './userbrowser.js';
@@ -2909,9 +2909,9 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         const d = await decideCommand(line, { shell: SF.shell, root, cwd, env: childEnv(), rules: commandRules(), mode: S.approval, yolo: yoloOf(SF) });
         const g = await gateCommand(d, line, SF.shell);
         if (!g.ok) return g.text;
-        const sb = SF.snapshots ? snapBefore(root, { maxBytes: SF.snapshotMaxMB * 1024 * 1024 }) : { snap: null };
+        const sb = SF.snapshots ? await snapBeforeAsync(root, { maxBytes: SF.snapshotMaxMB * 1024 * 1024 }) : { snap: null };
         const s = await termStart({ projectId, chatId: req.chatId || null, cwd, line, shell: SF.shell, cols: Number(args.cols) || 100, rows: Number(args.rows) || 30, env: projectEnv(root),
-          onExit: () => { if (sb.snap) { try { commandChanges(root, filesId, sb.snap); } catch { /* best effort */ } } } });
+          onExit: () => { if (sb.snap) commandChangesAsync(root, filesId, sb.snap).catch(() => { /* best effort */ }); } });
         notes.push(`opened terminal ${s.id}: ${clip(line, 60)}`);
         const scr = show(s.id, await termRead(s.id, 8000, 1000), line); // a shell can take a few seconds to start
         return `Terminal ${s.id} started: ${line}${scr.session.running ? '' : ` (it already ended, exit code ${scr.session.code})`}\nScreen:\n${scr.screen || '(empty)'}\n(send types and presses keys; read shows it again; stop ends it.)`;
@@ -3138,9 +3138,9 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
           if (event === 'before_command' && h.feedback) { blocked = true; parts.push(`Your command did not run: the user's hook "${line}" runs first and was not allowed (${clip(g.text, 200)}).`); break; }
           continue;
         }
-        const sb = SF.snapshots ? snapBefore(root, { maxBytes: SF.snapshotMaxMB * 1024 * 1024 }) : { snap: null };
+        const sb = SF.snapshots ? await snapBeforeAsync(root, { maxBytes: SF.snapshotMaxMB * 1024 * 1024 }) : { snap: null };
         const r = await runLine(root, line, { shell: SF.shell, label: `hook: ${line}`, signal, env: projectEnv(root), timeout: h.timeout * 1000, memoryMB: SF.memoryMB, term: { projectId, source: 'agent', chatId: req.chatId } });
-        if (sb.snap) { try { commandChanges(root, filesId, sb.snap); } catch { /* best effort */ } }
+        if (sb.snap) { try { await commandChangesAsync(root, filesId, sb.snap); } catch { /* best effort */ } }
         const ok = r.code === 0 && !r.timedOut && !r.stopped;
         emit({ t: 'hook', event, command: line, file, code: r.code, ms: r.ms, ok, told: !ok && h.feedback, timedOut: r.timedOut || undefined, out: r.out.slice(-1500), decidedBy: g.by, at: at() });
         aud({ kind: 'hook', event, command: line, by: g.by, code: r.code, ms: r.ms, timedOut: r.timedOut || undefined });
@@ -3268,7 +3268,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   // background: start it and return at once (a GUI app, a watcher). backgroundable: a command that only reads, writes
   // in the project or builds may outlive the time limit by moving to the background instead of being killed.
   async function execCommand({ line, shell, label, cwd = root, readOnly = false, decidedBy, background = false, backgroundable = false }) {
-    const sb = readOnly ? { snap: null, why: 'read-only' } : !SF.snapshots ? { snap: null, why: 'snapshots are off' } : snapBefore(root, { maxBytes: SF.snapshotMaxMB * 1024 * 1024 });
+    const sb = readOnly ? { snap: null, why: 'read-only' } : !SF.snapshots ? { snap: null, why: 'snapshots are off' } : await snapBeforeAsync(root, { maxBytes: SF.snapshotMaxMB * 1024 * 1024 });
     const logRel = `${SCRATCH}/logs/${runId}-${run.cmdSeq = (run.cmdSeq || 0) + 1}.log`;
     // The tripwire stops the command if many files vanish outside the project while it runs.
     let proc = null, trip = null, bg = null;
@@ -3289,7 +3289,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       bg = startBackground({ projectId, chatId: req.chatId || null, termJob, label: label || line, logTo: path.join(root, logRel), logRel, running: { promise: runP, proc },
         onDone: (j, res) => {
           stopTripwire?.();
-          if (sb.snap) { try { commandChanges(root, filesId, sb.snap); } catch { /* best effort */ } }
+          if (sb.snap) commandChangesAsync(root, filesId, sb.snap).catch(() => { /* best effort */ });
           if (res?.stopped?.why === 'you') (run.userStops ||= []).push(`${j.id} (${clip(j.label, 80)})`);
         } });
       emit({ t: 'command', command: label || line, background: bg.id, why, log: logRel, decidedBy, at: at() });
@@ -3322,7 +3322,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     }
     if (background) stopTripwire?.();
     let ch = null;
-    if (sb.snap) { try { ch = commandChanges(root, filesId, sb.snap); } catch { ch = null; } }
+    if (sb.snap) { try { ch = await commandChangesAsync(root, filesId, sb.snap); } catch { ch = null; } }
     const changed = ch ? ch.added.length + ch.modified.length + ch.deleted.length : 0;
     aud({ kind: 'ran', command: label || line, by: decidedBy, code: r.code, ms: r.ms, changed, stopped: r.stopped ? r.stopped.left : undefined, timedOut: r.timedOut || undefined });
     if (changed) notes.push(`command changed ${changed} file${changed > 1 ? 's' : ''}`);
