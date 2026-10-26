@@ -21,7 +21,7 @@ import { needsAdmin, adminForAgent, adminForUser } from './elevation.js';
 import { secretKind, maskSecretText, scrubSecrets, projectEnv, setSecret, ENV_NAME, MASK } from './projectsecrets.js';
 import { searchFiles, searchNote, trashFile, checkpoint, changedFiles, copyTemplate, snapBefore, commandChanges, safePath, childEnv, realish, registerFolders, folderIndex } from './workspace.js';
 import { SAFETY_DEFAULTS, safetySettings, yoloOf } from './safety.js';
-import { decide as decideCommand, loadRules, addRule, agentWriteBlocked, ruleMatches, zoneOf } from './cmdpolicy.js';
+import { decide as decideCommand, loadRules, addRule, agentWriteBlocked, ruleMatches, zoneOf, noteRuleUse } from './cmdpolicy.js';
 import { approvalJudge } from './approvals.js';
 import { normalizePlan, pricePlan, itemLine, planFacts, matchPlan, usePlan } from './mediaplan.js';
 import { startTripwire } from './tripwire.js';
@@ -3348,7 +3348,19 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   // The rules for this chat's commands: the chat's own (kept by the page), the project's, then everywhere's.
   // (Function declarations: the reply loop above calls these before this point of the function is reached.)
   function chatRules() {
-    return (run.chatRules ??= (Array.isArray(req.cmdRules) ? req.cmdRules : []).filter((r) => r && typeof r.match === 'string').map((r) => ({ effect: r.effect || 'allow', match: r.match, by: r.by || 'button', scope: 'chat' })));
+    return (run.chatRules ??= (Array.isArray(req.cmdRules) ? req.cmdRules : []).filter((r) => r && typeof r.match === 'string').map((r) => ({ id: r.id, effect: r.effect || 'allow', match: r.match, by: r.by || 'button', on: r.on !== false, scope: 'chat' })));
+  }
+  // A rule that decided a command (let it run, made it ask, or stopped it) counts one use: saved rules in their file, a
+  // chat's own rules on the page (rule_used).
+  function countRuleUses(d) {
+    const seen = new Set();
+    for (const s of d.segments || []) {
+      const r = s.rule;
+      if (!r || seen.has(r.id || r.match) || !String(s.decidedBy || '').startsWith('rule:')) continue;
+      seen.add(r.id || r.match);
+      if (r.scope === 'chat') emit({ t: 'rule_used', id: r.id, match: r.match, at: at() });
+      else if (r.id && root) noteRuleUse(r.scope, r.id, root);
+    }
   }
   function commandRules() { return [...chatRules(), ...(root ? loadRules(root) : [])]; }
   function slimPolicy(d) {
@@ -3429,6 +3441,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     }
     const strictEvery = S.approval === 'strict' && (S.strictAsk || 'paid') === 'every' && !ownCard;
     const yoloAsksCommands = S.approval === 'yolo' && S.yoloAuto?.commands === false && !ownCard;
+    countRuleUses(d);
     if (d.verdict === 'allow' && !strictEvery && !yoloAsksCommands) return { ok: true, by: d.decidedBy };
     // The same command line approved earlier in this reply doesn't ask again, say when the agent moves it from shell
     // to its terminal or to the background. (Hooks are approved one by one: you didn't type them for this reply.)
@@ -3511,7 +3524,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       ans.rule = null;
     }
     if (ans.approve && ans.rule) {
-      const rule = { effect: 'allow', match: ans.rule.match, by: 'button' };
+      const rule = { id: Math.random().toString(36).slice(2, 12), effect: 'allow', match: ans.rule.match, by: 'button', at: Date.now() };
       try {
         if (ans.rule.scope === 'chat') chatRules().push({ ...rule, scope: 'chat' });
         else addRule(ans.rule.scope, rule, root);

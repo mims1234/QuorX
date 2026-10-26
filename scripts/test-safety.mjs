@@ -12,7 +12,7 @@ import { pathToFileURL } from 'node:url';
 import { runLine, snapBefore, commandChanges, snapBeforeAsync, commandChangesAsync, restoreCheckpoint, reviewFiles, agentSpace } from '../server/workspace.js';
 import { snapshot, changesSince, snapshotAsync, changesSinceAsync } from '../server/snapshot.js';
 import { jobsAvailable, jobHostStatus } from '../server/jobhost.js';
-import { decide, agentWriteBlocked, suggestedRules, saveRules, loadRules, ruleMatches, ruleProblem } from '../server/cmdpolicy.js';
+import { decide, agentWriteBlocked, suggestedRules, saveRules, loadRules, ruleMatches, ruleProblem, addRule, updateRule, removeRule } from '../server/cmdpolicy.js';
 import { approvalJudge } from '../server/approvals.js';
 import { SAFETY_DEFAULTS, safetySettings, yoloOf } from '../server/safety.js';
 import { runAgent, answerApproval, raiseCap, answerQuestion, appLevel } from '../server/agent.js';
@@ -1766,4 +1766,37 @@ test('folders: a chat\'s added folders are served at /wsf/<chat>/<n>/', async ()
   assert.deepEqual(folderIndex('chat-x', path.join(b, 'site', 'index.html')), { i: 1, rel: 'site/index.html' });
   assert.equal(folderIndex('chat-x', path.join(tmp('wsf-c'), 'x.html')), null);
   assert.equal(chatFolder('other-chat', 0), null);
+});
+
+// ---------- rules: on/off, ids and use counts ----------
+test('rules: a rule turned off is kept but not used; ids stay put; adding it again turns it back on', { skip: !WIN }, async () => {
+  const root = tmp('rules-onoff');
+  fs.writeFileSync(path.join(root, 'build.js'), '');
+  saveRules('project', [{ effect: 'allow', match: 'node build.js*', by: 'user' }], root);
+  const [r] = loadRules(root).filter((x) => x.scope === 'project');
+  assert.ok(r.id && r.on === true && r.hits === 0);
+  assert.equal(loadRules(root).find((x) => x.scope === 'project').id, r.id, 'the same id on every read');
+  const run = (rules) => decide('node build.js', { shell: 'powershell', root, rules, mode: 'strict', yolo: {} });
+  assert.equal((await run(loadRules(root))).verdict, 'allow');
+  updateRule('project', r.id, { on: false }, root);
+  assert.equal(loadRules(root).find((x) => x.scope === 'project').on, false);
+  assert.notEqual((await run(loadRules(root))).verdict, 'allow', 'an off rule lets nothing through');
+  addRule('project', { effect: 'allow', match: 'node build.js*', by: 'button' }, root);
+  const back = loadRules(root).filter((x) => x.scope === 'project');
+  assert.deepEqual([back.length, back[0].on, back[0].id], [1, true, r.id]);
+  assert.ok(removeRule('project', r.id, root));
+  assert.equal(loadRules(root).filter((x) => x.scope === 'project').length, 0);
+  assert.equal(updateRule('project', 'nope', { on: true }, root), null);
+});
+
+test('rules: each command a rule lets through counts one use; a chat rule\'s use goes to the page', { skip: !WIN }, async () => {
+  const { events, dir } = await agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('', [['shell', { command: 'node build.js --x' }]]), reply('Done.')][i], {
+    prep: (d) => { buildJs(d); saveRules('project', [{ effect: 'allow', match: 'node build.js*', by: 'user' }], d); } });
+  const r = loadRules(dir).find((x) => x.scope === 'project');
+  assert.equal(r.hits, 2);
+  assert.ok(r.lastUsed > Date.now() - 60e3);
+  assert.equal(of(events, 'rule_used').length, 0, 'saved rules count in their file');
+  const chat = await agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('Done.')][i], {
+    prep: buildJs, more: { cmdRules: [{ id: 'c1', effect: 'allow', match: 'node build.js*', by: 'button' }, { id: 'c2', effect: 'allow', match: 'node other*', by: 'button', on: false }] } });
+  assert.deepEqual(of(chat.events, 'rule_used').map((e) => e.id), ['c1']);
 });

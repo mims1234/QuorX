@@ -338,7 +338,10 @@ were typed, so `cmd /c copy a.txt D:\x\` asks like `Copy-Item` does, and `cmd /c
 **Rules** have the form `{ effect: allow | ask | deny, match: "cargo build*" }` and live per chat, per project
 (`data/project-rules/<hash of the project folder>.json`, in QuorX's data folder, so a cloned repository can't bring
 rules of its own) or everywhere (`data/permissions.json`). "Always allow…" only saves a rule that matches the command
-it came from, and Settings marks older rules that can never match.
+it came from, and Settings marks older rules that can never match. Each rule can be turned off (kept, not used) or
+removed, and shows how often it let a command run and when. Three places show them: the chat's 🔓 button (this
+chat's rules, tools, folders and apps, and the project's rules), project settings → Permissions (the project's rules
+and what each of its chats allows, searchable), and ⚙ Settings → Approvals & safety (everywhere rules too).
 
 - Deny beats ask beats allow. A rule can always make a class stricter.
 - A rule can lift *ask* to *allow* for read, write, build, install and unknown. It can lift opaque, external,

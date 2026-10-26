@@ -1275,7 +1275,7 @@ export const yoloIgnored = (rule) => RUNNER.test(String(rule.match || '').replac
 function matchRules(text, rules, mode) {
   const hits = { deny: null, ask: null, allow: null };
   for (const r of rules || []) {
-    if (!r || !r.match || !['allow', 'ask', 'deny'].includes(r.effect)) continue;
+    if (!r || !r.match || !['allow', 'ask', 'deny'].includes(r.effect) || r.on === false) continue;
     if (mode === 'yolo' && r.effect === 'allow' && yoloIgnored(r)) continue;
     if (!hits[r.effect] && ruleRx(r.match).test(text)) hits[r.effect] = r;
   }
@@ -1461,9 +1461,13 @@ const globalFile = () => path.join(HOME, 'data', 'permissions.json');
 // A project's rules live in QuorX's data folder, keyed by the project's real folder: a folder you open (a cloned repo)
 // can't bring rules of its own. A .quorx/permissions.json in a project is no longer read.
 const projectFile = (root) => path.join(HOME, 'data', 'project-rules', `${crypto.createHash('sha256').update(realish(path.resolve(root)).toLowerCase()).digest('hex').slice(0, 32)}.json`);
-const readRules = (f) => { try { const j = JSON.parse(fs.readFileSync(f, 'utf8')); return Array.isArray(j.rules) ? j.rules : []; } catch { return []; } };
-const cleanRule = (r) => ({ effect: ['allow', 'ask', 'deny'].includes(r.effect) ? r.effect : 'ask', match: String(r.match || '').trim().replace(/\s+/g, ' ').slice(0, RULE_MAX),
-  by: r.by === 'button' ? 'button' : 'user', note: String(r.note || '').slice(0, 200), at: r.at || Date.now() });
+// A rule's id: given when it is saved, or (rules saved before ids) worked out from what it says, so it stays the same.
+const ruleId = (r) => String(r.id || crypto.createHash('sha1').update(`${r.effect}|${r.match}`).digest('hex').slice(0, 12));
+const readRules = (f) => { try { const j = JSON.parse(fs.readFileSync(f, 'utf8')); return Array.isArray(j.rules) ? j.rules.map((r) => ({ ...r, id: ruleId(r) })) : []; } catch { return []; } };
+// on: false keeps a rule without using it (turned off in a permissions list). hits and lastUsed: how often and when it
+// last let a command run, or made one ask or stop.
+const cleanRule = (r) => ({ id: ruleId(r), effect: ['allow', 'ask', 'deny'].includes(r.effect) ? r.effect : 'ask', match: String(r.match || '').trim().replace(/\s+/g, ' ').slice(0, RULE_MAX),
+  by: r.by === 'button' ? 'button' : 'user', note: String(r.note || '').slice(0, 200), at: r.at || Date.now(), on: r.on !== false, hits: Math.max(0, Number(r.hits) || 0), lastUsed: r.lastUsed || null });
 
 /** Every rule that applies in a project: the project's first, then everywhere's. Each carries its scope. */
 export function loadRules(root) {
@@ -1477,13 +1481,38 @@ export function saveRules(scope, rules, root) {
   fs.writeFileSync(f, JSON.stringify({ version: 1, rules: list }, null, 2));
   return list;
 }
-/** Adds one rule (from "Always allow…" or the panel). */
+/** Adds one rule (from "Always allow…" or the panel). The same rule again is turned back on, keeping its count. */
 export function addRule(scope, rule, root) {
   const cur = scope === 'project' ? readRules(projectFile(root)) : readRules(globalFile());
   const r = cleanRule(rule);
   if (!r.match) throw new Error('a rule needs a pattern');
-  const next = [...cur.filter((x) => !(x.match === r.match && x.effect === r.effect)), r];
+  const old = cur.find((x) => x.match === r.match && x.effect === r.effect);
+  const next = [...cur.filter((x) => x !== old), old ? { ...old, on: true } : r];
   return saveRules(scope, next, root);
+}
+const rulesOf = (scope, root) => (scope === 'project' ? readRules(projectFile(root)) : readRules(globalFile()));
+/** Turns one rule on or off ({ on }), by id. Returns the scope's rules, or null when there is no such rule. */
+export function updateRule(scope, id, patch, root) {
+  const cur = rulesOf(scope, root);
+  const r = cur.find((x) => x.id === id);
+  if (!r) return null;
+  if ('on' in patch) r.on = patch.on !== false;
+  return saveRules(scope, cur, root);
+}
+/** Removes one rule, by id. */
+export function removeRule(scope, id, root) {
+  const cur = rulesOf(scope, root);
+  if (!cur.some((x) => x.id === id)) return null;
+  return saveRules(scope, cur.filter((x) => x.id !== id), root);
+}
+/** Counts one use of a saved rule (project or everywhere). Best effort: a count never stops a command. */
+export function noteRuleUse(scope, id, root) {
+  try {
+    const cur = rulesOf(scope, root), r = cur.find((x) => x.id === id);
+    if (!r) return;
+    r.hits = (Number(r.hits) || 0) + 1; r.lastUsed = Date.now();
+    saveRules(scope, cur, root);
+  } catch { /* the count is not worth an error */ }
 }
 
 // ---------- suggested rules from the toolchains a project uses ----------

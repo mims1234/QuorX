@@ -35,7 +35,7 @@ import { listChats, sidebarChats, chatPage, chatPictureRefs, pictureRefCounts, g
 import { ALLOWED, copyTemplate, workspaceDir, safePath, chatFolder, listFiles, listDir, listServers, stopServerWait, restartServer, serverLog, startServer, restoreCheckpoint, listCheckpoints, pruneCheckpoints, undoConflicts, changedFiles, reviewFiles, reviewDiff, undoFile, serverOverview, launchConfigs, saveLaunchConfig, removeLaunchConfig, ensureAgentDir, agentSpace } from './server/workspace.js';
 import { followTerm, runningJobs, stopJob } from './server/terminal.js';
 import { runningIn, stopRunning, stopAllIn } from './server/running.js';
-import { decide as decideCommand, loadRules, saveRules, suggestedRules, ruleProblem } from './server/cmdpolicy.js';
+import { decide as decideCommand, loadRules, saveRules, suggestedRules, ruleProblem, updateRule, removeRule } from './server/cmdpolicy.js';
 import { jobHostStatus, jobsAvailable } from './server/jobhost.js';
 import { safetySettings, yoloOf } from './server/safety.js';
 import { readAudit } from './server/audit.js';
@@ -515,6 +515,27 @@ const server = http.createServer(async (req, res) => {
       if (b.scope === 'project' && !validId(b.projectId)) return json(res, 400, { error: 'bad project id' });
       if (!['project', 'everywhere'].includes(b.scope)) return json(res, 400, { error: 'scope must be project or everywhere' });
       try { return json(res, 200, { ok: true, rules: saveRules(b.scope, b.rules, b.scope === 'project' ? workspaceDir(b.projectId) : null) }); } catch (e) { return json(res, 200, { error: e.message }); }
+    }
+    // One rule at a time, by id: turn it on or off (PATCH { on }), or remove it (DELETE).
+    if (url.pathname === '/api/permissions/rule' && (req.method === 'PATCH' || req.method === 'DELETE')) {
+      const b = JSON.parse(await readBody(req, 1e4) || '{}');
+      if (!['project', 'everywhere'].includes(b.scope)) return json(res, 400, { error: 'scope must be project or everywhere' });
+      if (b.scope === 'project' && !validId(b.projectId)) return json(res, 400, { error: 'bad project id' });
+      const root = b.scope === 'project' ? workspaceDir(b.projectId) : null;
+      const rules = req.method === 'PATCH' ? updateRule(b.scope, String(b.id || ''), { on: b.on }, root) : removeRule(b.scope, String(b.id || ''), root);
+      return rules ? json(res, 200, { ok: true, rules }) : json(res, 404, { error: 'no such rule' });
+    }
+    // What each chat of a project allows on its own (its rules, tools, apps and folders), for the project's
+    // Permissions section. Read only: a chat's own list changes in that chat.
+    if (url.pathname === '/api/permissions/chats' && req.method === 'GET') {
+      const pid = url.searchParams.get('project');
+      if (!validId(pid)) return json(res, 400, { error: 'bad project id' });
+      const chats = listChats().filter((c) => c.projectId === pid).slice(0, 300).flatMap((c) => {
+        const a = getChat(c.id)?.agent || {};
+        const n = (a.cmdRules || []).length + (a.allowed || []).length + (a.apps || []).length + (a.folders || []).length;
+        return n ? [{ id: c.id, title: c.title || 'Untitled chat', cmdRules: a.cmdRules || [], allowed: a.allowed || [], apps: a.apps || [], folders: a.folders || [] }] : [];
+      });
+      return json(res, 200, { chats });
     }
     // ---- memory: facts and preferences every chat gets (server/memory.js); the agent can only propose ----
     if (url.pathname === '/api/memory' && req.method === 'GET') { const m = loadMemory(); return json(res, 200, { ...m, tokens: memoryTokens(m.items), limit: MEMORY_TOKENS }); }

@@ -958,6 +958,12 @@ Every chat in this project reads, writes and runs programs in this folder.">${es
           <div id="pjHooks"><div class="kx-wait">Loading…</div></div>
         </details>
       </section>
+      <section class="pj-sec" id="pjPermsSec">
+        <details class="pj-fold" id="pjPermsFold">
+          <summary><h4>Permissions <small>what runs without asking in this project and its chats</small></h4><span class="pj-fold-state" id="pjPermsState">…</span><svg class="pj-fold-chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg></summary>
+          <div id="pjPerms"><div class="kx-wait">Loading…</div></div>
+        </details>
+      </section>
       <section class="pj-sec" id="pjBudgetSec">
         <div class="pj-sec-head"><h4>Budget <small>for all chats together</small></h4>
         <div class="pj-budget-mode"><button type="button" class="pj-mode ${p.budget == null ? 'on' : ''}" data-mode="none">No limit</button><button type="button" class="pj-mode ${p.budget != null ? 'on' : ''}" data-mode="set">Set a budget</button></div></div>
@@ -1046,6 +1052,8 @@ Every chat in this project reads, writes and runs programs in this folder.">${es
   mountDesign(p, $('#pjDesign', box));
   mountHooks(p, $('#pjHooks', box), (n) => { const st = $('#pjHooksState', box); if (st) { st.textContent = n ? `${n} on` : 'None'; st.classList.toggle('none', !n); } });
   if (!dlg.open) dlg.showModal();
+  mountPerms(p, $('#pjPerms', box), (n) => { const st = $('#pjPermsState', box); if (st) { st.textContent = n ? `${n} on` : 'None'; st.classList.toggle('none', !n); } });
+  if (focusOn === 'perms') { $('#pjPermsFold', box).open = true; $('#pjPermsSec', box).scrollIntoView({ block: 'start' }); }
   if (focusOn === 'hooks') { $('#pjHooksFold', box).open = true; $('#pjHooksSec', box).scrollIntoView({ block: 'start' }); }
   if (focusOn === 'budget') $('#pjBudgetSec', box).scrollIntoView({ block: 'start' });
   if (focusOn === 'space') $('#pjSpaceSec', box)?.scrollIntoView({ block: 'start' });
@@ -1055,6 +1063,36 @@ Every chat in this project reads, writes and runs programs in this folder.">${es
 // folder (never in the project), so a folder you open can't bring its own. Each still goes through the command rules.
 const HOOK_WHEN = { after_write: 'After a file write', before_command: 'Before a command', after_command: 'After a command' };
 const HOOK_MATCH_HINT = { after_write: 'files, e.g. *.ts, src/** (empty: every file)', before_command: 'commands, e.g. npm *, git push* (empty: every command)', after_command: 'commands, e.g. npm test* (empty: every command)' };
+// Project settings → Permissions: this project's rules (on/off, remove), and what each of its chats allows on its own,
+// listed to see in one place (each chat changes its own list with its 🔓 button). Searchable, by where.
+async function mountPerms(p, el, onCount) {
+  const [r, ch] = await Promise.all([
+    fetch(`/api/permissions?project=${encodeURIComponent(p.id)}`).then((x) => x.json()).catch((e) => ({ error: e.message })),
+    fetch(`/api/permissions/chats?project=${encodeURIComponent(p.id)}`).then((x) => x.json()).catch(() => ({ chats: [] })),
+  ]);
+  if (!el.isConnected) return;
+  if (r.error) { el.innerHTML = `<div class="st-row-help">Couldn't load them: ${esc(r.error)}</div>`; return; }
+  const chats = ch.chats || [];
+  const chatRows = (x) => [
+    ...(x.cmdRules || []).map((q, i) => permRowHTML({ kind: 'chat rule', key: q.id || `i${i}`, seg: x.id, label: q.match, effect: q.effect || 'allow', on: q.on, by: q.by, at: q.at, hits: q.hits || 0, lastUsed: q.lastUsed, toggle: false, remove: false })),
+    ...(x.allowed || []).map((t) => permRowHTML({ kind: 'tool', key: t, seg: x.id, label: TOOL_NAME[t] || t, chip: 'Tool', toggle: false, remove: false })),
+    ...(x.folders || []).map((f) => permRowHTML({ kind: 'folder', key: f.path, seg: x.id, label: f.path, chip: f.access === 'write' ? 'Read+write' : 'Read', toggle: false, remove: false })),
+    ...(x.apps || []).map((a) => permRowHTML({ kind: 'app', key: a.appId, seg: x.id, label: a.name, chip: `🖥 ${(APP_LEVEL[a.level || 'full'] || APP_LEVEL.full)[0]}`, toggle: false, remove: false })),
+  ].join('');
+  el.innerHTML = `<div class="pj-perms">
+    <div class="pj-perms-filter"></div>
+    <h5>This project <small>rules for every chat here</small></h5>
+    <div class="pr-list">${r.project?.length ? ruleRows(r.project, 'project', 'project').join('') : '<div class="st-row-help">No rules. “Always allow…” on a card, with This project, adds one.</div>'}</div>
+    ${chats.map((x) => `<h5 class="pj-perm-chat" data-chat="${esc(x.id)}">${esc(x.title)} <small>this chat only · change it there with 🔓</small> <button type="button" class="sp-link pj-perm-open" data-id="${esc(x.id)}">Open chat</button></h5><div class="pr-list">${chatRows(x)}</div>`).join('')}
+    <p class="st-row-help">Rules for every project are in ⚙ Settings → Approvals & safety. <button type="button" class="sp-link pj-perm-all">Open</button></p>
+  </div>`;
+  const titles = Object.fromEntries(chats.map((x) => [x.id, x.title]));
+  listFilter($('.pj-perms-filter', el), { key: `perms-${p.id}`, rows: () => el.querySelectorAll('.perm-row'), segLabel: (v) => (v === 'project' ? 'This project' : titles[v] || 'A chat'), segOrder: ['project'], placeholder: 'Filter: a command, a tool, “off”…', label: 'Where' });
+  wireRuleRows(el, p.id, () => mountPerms(p, el, onCount));
+  for (const b of el.querySelectorAll('.pj-perm-open')) b.onclick = () => { $('#projDlg')?.close?.(); showChat(b.dataset.id); };
+  $('.pj-perm-all', el).onclick = () => { $('#projDlg')?.close?.(); openSettings('safety'); };
+  onCount?.((r.project || []).filter((x) => x.on !== false).length + chats.reduce((n, x) => n + (x.cmdRules || []).filter((q) => q.on !== false).length + (x.allowed || []).length + (x.folders || []).length + (x.apps || []).length, 0));
+}
 async function mountHooks(p, el, onCount) {
   if (!el) return;
   if (p.missing || p.needsFolder) { el.innerHTML = '<p class="pj-hint">Pick a folder for this project first.</p>'; return; }
@@ -1812,7 +1850,7 @@ function wireStartBox(box, first, projects) {
   $('#ldDraft', box).appendChild(pane);
   d.el = { root: pane };
   wirePane(d, pane, 0);
-  renderComposerBar(d); renderChatTools(d); renderAllowed(d); renderAttachments(d); syncRunState(d);
+  renderComposerBar(d); renderChatTools(d); renderAttachments(d); syncRunState(d);
   const ta = $('.input', pane);
   ta.id = 'ldStartText';
   ta.placeholder = 'What are we building? Describe it, or ask about your code…  @ to add files or chats · / for commands';
@@ -2508,7 +2546,7 @@ function renderPanes() {
     box.appendChild(root);
     c.el = { root };
     wirePane(c, root, i);
-    renderChatHead(c); renderComposerBar(c); renderAllowed(c); renderAttachments(c); syncRunState(c);
+    renderChatHead(c); renderComposerBar(c); renderAttachments(c); syncRunState(c);
     const msgs = $('.msgs', root);
     if (!c.agent.messages.length) msgs.innerHTML = `<div class="hint"><b>${esc(c.title)}</b><br>${esc(short(c.agent.setup.model))} · ${c.approval === 'strict' ? '🔒 Strict: asks before each tool it uses' : '⚡ YOLO: uses its tools without asking'}<br>The agent decides by itself when to ask the deciders.</div>`;
     for (const m of c.agent.messages) msgs.appendChild(renderMsg(c, m));
@@ -2632,7 +2670,7 @@ function renderComposerBar(c) {
     <button type="button" class="cq-toggle ${qOn ? 'on' : ''} ${c.approval === 'yolo' ? 'yolo' : ''}" aria-pressed="${qOn}" title="${qOn ? 'Hide the quick settings above (all chats)' : 'Show the quick settings: thinking, Strict / YOLO, tools and caps (all chats)'}${qSum ? `\nNow: ${qSum}` : ''}" aria-label="${qOn ? 'Hide' : 'Show'} quick settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>${!qOn && qSum ? `<span class="cq-tsum">${esc(qSum)}</span>` : ''}<svg class="cq-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="${qOn ? 'M6 15l6-6 6 6' : 'M6 9l6 6 6-6'}"/></svg></button>
     <button type="button" class="cmp-ico cmp-follow-b ${G.followAgent !== false ? 'on' : ''}" aria-pressed="${G.followAgent !== false}" aria-label="Follow the agent" title="${esc(`Follow the agent: ${G.followAgent !== false ? 'on' : 'off'}\nThe side pane jumps to the page or terminal the agent is using, so you can watch.\nAll chats · click to turn ${G.followAgent !== false ? 'off' : 'on'}`)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
     <button type="button" class="cmp-ico cmp-chrome-b ${c.tools?.chrome ? 'on' : ''} ${extReady() ? '' : 'nosetup'}" aria-pressed="${!!c.tools?.chrome}" aria-label="Chrome extension" title="${esc(`Chrome extension: ${!extReady() ? (G.ext?.outdated ? 'needs a reload' : 'not set up') : c.tools?.chrome ? 'on for this chat' : 'off for this chat'}\n${extReady() ? 'Lets the agent use your own Chrome, signed in as you. Sending, buying and account changes ask you first.' : G.ext?.outdated ? 'The extension is an older version: reload it once in chrome://extensions.' : 'Lets the agent use your own Chrome, signed in as you.'}\n${extReady() ? `This chat only · click to turn ${c.tools?.chrome ? 'off' : 'on'}` : 'Click to set it up'}`)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 3.5a2 2 0 0 1 4 0V6h4v4h-1.5a2 2 0 0 0 0 4H18v4h-4v-1.5a2 2 0 0 0-4 0V18H6v-4h1.5a2 2 0 0 0 0-4H6V6h4z"/></svg></button>
-    ${appsButtonHTML(c)}
+    ${appsButtonHTML(c)}${permButtonHTML(c)}
 `;
   for (const inp of [...glob.querySelectorAll('.cs-num input'), ...quick.querySelectorAll('.cs-num input')]) inp.onchange = () => { const v = Math.min(Number(inp.dataset.max) || Infinity, Math.max(Number(inp.dataset.min) || 0, Number(inp.value) || 0)); inp.value = String(v); G.settings[inp.dataset.k] = v; savePrefs(); };
   for (const b of quick.querySelectorAll('[data-plan]')) b.onclick = () => { G.settings.planFirst = b.dataset.plan; savePrefs(); renderComposerBar(c); };
@@ -2698,8 +2736,8 @@ function renderComposerBar(c) {
   // Not set up: the click turns it on for this chat and opens the extension's setup, as the tick did.
   $('.cmp-chrome-b', followSlot).onclick = () => { c.tools.chrome = !c.tools?.chrome || !extReady(); saveChat(c); renderComposerBar(c); if (!extReady()) openChromeSetup(); };
   wireAppsButton(c, followSlot);
+  wirePermButton(c, followSlot);
   for (const b of both('.perm button')) b.onclick = () => { c.approval = b.dataset.approval; saveChat(c); renderComposerBar(c); if (c.running?.runId) postJ(`/api/runs/${c.running.runId}/mode`, { approval: c.approval }).catch(() => {}); };
-  renderAllowed(c);
 }
 // ---------- usage (per chat): every model this chat paid for, grouped by kind of call ----------
 const USAGE_KIND = {
@@ -2992,29 +3030,87 @@ function wireAppsButton(c, slot) {
   pop.onkeydown = (e) => { if (e.key === 'Escape') { close(); btn.focus(); } };
   if (G.appsPopOpen) { G.appsPopOpen = false; open(); }
 }
-function renderAllowed(c) {
-  const bar = c.el && $('.cbar', c.el.root);
-  if (!bar) return;
-  bar.querySelector('.allow-wrap')?.remove();
-  const list = c.agent.allowed;
-  if (!list.length) return;
-  const wrap = document.createElement('div');
-  wrap.className = 'allow-wrap';
-  wrap.innerHTML = `<button type="button" class="allow-btn" aria-haspopup="true" aria-expanded="false" title="Tools this chat may use without asking (in 🔒 Strict)">🔓 ${list.length} allowed</button>
-    <div class="allow-pop" role="dialog" aria-label="Always allowed in this chat" hidden>
-      <div class="ap-head">Allowed without asking <small>in this chat, while 🔒 Strict is on</small></div>
-      ${list.map((t) => `<div class="ap-row"><span>${esc(TOOL_NAME[t] || t)}</span><button type="button" class="ap-x" data-t="${esc(t)}" title="Ask again before ${esc(TOOL_NAME[t] || t)}">Ask again</button></div>`).join('')}
-      <div class="ap-foot"><button type="button" class="ap-all">Ask again for all</button></div>
-    </div>`;
-  const perm = bar.querySelector('.perm');
-  perm ? perm.after(wrap) : bar.appendChild(wrap);
-  const btn = $('.allow-btn', wrap), pop = $('.allow-pop', wrap);
-  const close = () => { pop.hidden = true; btn.setAttribute('aria-expanded', 'false'); document.removeEventListener('pointerdown', outside, true); };
-  const outside = (e) => { if (!wrap.contains(e.target)) close(); };
-  btn.onclick = () => { if (!pop.hidden) return close(); pop.hidden = false; btn.setAttribute('aria-expanded', 'true'); document.addEventListener('pointerdown', outside, true); };
-  const update = (keep) => { saveChat(c); renderAllowed(c); if (keep && c.agent.allowed.length) $('.cbar .allow-btn', c.el.root).click(); };
-  for (const b of pop.querySelectorAll('.ap-x')) b.onclick = () => { c.agent.allowed = c.agent.allowed.filter((t) => t !== b.dataset.t); update(true); };
-  $('.ap-all', pop).onclick = () => { c.agent.allowed = []; update(false); };
+// ---------- permissions: one look for every "always allowed" thing, in Settings, project settings and the chat ----------
+// A row: an on/off box (rules), what it allows, where it came from, since when and how often it was used, and Remove
+// (which asks once, in place). kind: rule, tool, app, folder. key: what the row's handlers find it by.
+function permRowHTML(x) {
+  const meta = [x.by === 'button' ? 'from a card' : x.by === 'user' ? 'typed by you' : x.by || '', x.at ? `since ${new Date(x.at).toLocaleDateString()}` : '',
+    x.hits != null ? (x.hits ? `used ${x.hits}×${x.lastUsed ? `, last ${ago(x.lastUsed)}` : ''}` : 'not used yet') : '', x.meta || ''].filter(Boolean).join(' · ');
+  const on = x.on !== false;
+  return `<div class="pr-rule perm-row ${on ? '' : 'off'} ${x.toggle === false ? 'notoggle' : ''}" data-kind="${esc(x.kind)}" data-key="${esc(x.key)}" ${x.scope ? `data-scope="${esc(x.scope)}"` : ''} data-lf-text="${esc(`${x.label} ${x.kind} ${on ? 'on' : 'off'} ${meta}`.toLowerCase())}" ${x.seg ? `data-lf-seg="${esc(x.seg)}"` : ''}>
+    ${x.toggle === false ? '<span class="perm-nobox" aria-hidden="true"></span>' : `<input type="checkbox" class="perm-on" ${on ? 'checked' : ''} aria-label="${on ? 'On' : 'Off'}: ${esc(x.label)}" title="${on ? 'On: click to turn it off (it is kept)' : 'Off: kept, but not used. Click to turn it on'}">`}
+    <span class="pr-eff" data-eff="${esc(x.effect || 'allow')}">${esc(x.chip || RULE_EFFECT[x.effect] || 'Allow')}</span><code title="${esc(x.label)}">${esc(x.label)}</code>
+    <span class="pr-by">${esc(meta)}</span>
+    ${x.remove === false ? '<span></span>' : `<button type="button" class="pp-btn perm-del" title="${esc(x.removeTip || 'Remove')}" aria-label="Remove ${esc(x.label)}">${ICO.trash}</button>`}
+    ${x.problem ? `<div class="pr-problem">⚠ Never matches: ${esc(x.problem)}. Remove it, or add a rule that starts like the command.</div>` : ''}
+  </div>`;
+}
+// Wires a box of rows: toggle(row, on) and remove(row). Remove asks once in place (the button turns into "Remove?").
+function wirePermRows(box, { toggle, remove }) {
+  for (const cb of box.querySelectorAll('.perm-row .perm-on')) cb.onchange = () => toggle?.(cb.closest('.perm-row'), cb.checked);
+  for (const b of box.querySelectorAll('.perm-row .perm-del')) b.onclick = () => {
+    if (!b.classList.contains('sure')) { b.classList.add('sure'); b.textContent = 'Remove?'; setTimeout(() => { if (b.isConnected && b.classList.contains('sure')) { b.classList.remove('sure'); b.innerHTML = ICO.trash; } }, 3000); return; }
+    remove?.(b.closest('.perm-row'));
+  };
+}
+const permJSON = (method, body) => fetch('/api/permissions/rule', { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((x) => x.json()).catch((e) => ({ error: e.message }));
+// Project and everywhere rules as rows (Settings, project settings, the chat).
+const ruleRows = (rules, scope, seg) => rules.map((r) => permRowHTML({ kind: 'rule', key: r.id, scope, seg, label: r.match, effect: r.effect, on: r.on, by: r.by, at: r.at, hits: r.hits || 0, lastUsed: r.lastUsed, problem: r.problem }));
+const wireRuleRows = (box, projectId, after) => wirePermRows(box, {
+  toggle: async (row, on) => { const r = await permJSON('PATCH', { scope: row.dataset.scope, projectId, id: row.dataset.key, on }); if (r.error) flashTip(row, r.error); after?.(); },
+  remove: async (row) => { const r = await permJSON('DELETE', { scope: row.dataset.scope, projectId, id: row.dataset.key }); if (r.error) flashTip(row, r.error); after?.(); },
+});
+
+// 🔓 in the chat, beside 🖥: what this chat and its project let run without asking. The chat's own items change here;
+// the project's rules too. Changes apply from the next reply.
+function chatAllowedCount(c) {
+  const a = c.agent || {};
+  return (a.allowed || []).length + (a.cmdRules || []).filter((r) => r.on !== false).length + (a.folders || []).length + (c.tools?.apps ? (a.apps || []).length : 0);
+}
+function permButtonHTML(c) {
+  const n = chatAllowedCount(c);
+  return `<span class="apps-wrap perm-wrap"><button type="button" class="cmp-ico cmp-perm-b ${n ? 'on' : ''}" aria-haspopup="dialog" aria-expanded="false" aria-label="Always allowed" title="${esc(`Always allowed: ${n ? `${n} thing${n > 1 ? 's' : ''} in this chat` : 'nothing in this chat yet'}\nWhat runs without asking here: this chat's rules, tools, folders and apps, and this project's rules. Turn each off or remove it.`)}"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.5-2"/></svg>${n ? `<span class="apps-n">${n}</span>` : ''}</button><div class="allow-pop apps-pop allowed-pop" role="dialog" aria-label="Always allowed" hidden></div></span>`;
+}
+function wirePermButton(c, slot) {
+  const btn = $('.cmp-perm-b', slot), pop = $('.allowed-pop', slot);
+  if (!btn) return;
+  const a = (c.agent ??= {});
+  const draw = async () => {
+    const chatRows = [
+      ...(a.cmdRules || []).map((r, i) => permRowHTML({ kind: 'chatrule', key: r.id || `i${i}`, label: r.match, effect: r.effect || 'allow', on: r.on, by: r.by, at: r.at, hits: r.hits || 0, lastUsed: r.lastUsed })),
+      ...(a.allowed || []).map((t) => permRowHTML({ kind: 'tool', key: t, label: TOOL_NAME[t] || t, chip: 'Tool', toggle: false, removeTip: 'Ask again before it' })),
+      ...(a.folders || []).map((f) => permRowHTML({ kind: 'folder', key: f.path, label: f.path, chip: f.access === 'write' ? 'Read+write' : 'Read', toggle: false, meta: 'outside the project' })),
+      ...(c.tools?.apps ? (a.apps || []).map((x) => permRowHTML({ kind: 'app', key: x.appId, label: x.name, chip: `🖥 ${(APP_LEVEL[x.level || 'full'] || APP_LEVEL.full)[0]}`, toggle: false, meta: 'level in 🖥' })) : []),
+    ].join('');
+    pop.innerHTML = `<div class="ap-head">Always allowed <small>runs without asking · changes apply from the next reply</small></div>
+      <h6 class="perm-h">This chat</h6><div class="pr-list perm-list" data-where="chat">${chatRows || '<div class="apps-note">Nothing yet. “Always allow…” on a card adds it here.</div>'}</div>
+      <h6 class="perm-h">This project</h6><div class="pr-list perm-list" data-where="project"><div class="apps-note">Loading…</div></div>
+      <div class="ap-foot"><button type="button" class="ap-all perm-proj">All of this project's permissions</button><button type="button" class="ap-all perm-all">Rules everywhere</button></div>`;
+    wirePermRows($('[data-where="chat"]', pop), {
+      toggle: (row, on) => { const r = (a.cmdRules || []).find((x, i) => (x.id || `i${i}`) === row.dataset.key); if (r) { r.on = on; saveChat(c); draw(); } },
+      remove: (row) => {
+        const k = row.dataset.key;
+        if (row.dataset.kind === 'chatrule') a.cmdRules = (a.cmdRules || []).filter((x, i) => (x.id || `i${i}`) !== k);
+        else if (row.dataset.kind === 'tool') a.allowed = (a.allowed || []).filter((t) => t !== k);
+        else if (row.dataset.kind === 'folder') a.folders = (a.folders || []).filter((f) => f.path !== k);
+        else if (row.dataset.kind === 'app') a.apps = (a.apps || []).filter((x) => x.appId !== k);
+        saveChat(c); G.permPopOpen = true; renderComposerBar(c);
+      },
+    });
+    $('.perm-proj', pop).onclick = () => { close(); const p = G.projects?.find((x) => x.id === c.projectId); if (p) openProjectSettings(p, 'perms'); };
+    $('.perm-all', pop).onclick = () => { close(); openSettings('safety'); };
+    const proj = $('[data-where="project"]', pop);
+    const r = c.projectId ? await fetch(`/api/permissions?project=${encodeURIComponent(c.projectId)}`).then((x) => x.json()).catch(() => null) : null;
+    if (!proj.isConnected) return;
+    proj.innerHTML = r?.project?.length ? ruleRows(r.project, 'project').join('') : '<div class="apps-note">No rules for this project.</div>';
+    wireRuleRows(proj, c.projectId, draw);
+  };
+  const outside = (e) => { if (!slot.contains(e.target)) close(); };
+  const close = () => { pop.hidden = true; btn.setAttribute('aria-expanded', 'false'); G.permPopOpen = false; document.removeEventListener('pointerdown', outside, true); };
+  const open = () => { draw(); pop.hidden = false; btn.setAttribute('aria-expanded', 'true'); G.permPopOpen = true; document.addEventListener('pointerdown', outside, true); };
+  btn.onclick = () => (pop.hidden ? open() : close());
+  pop.onkeydown = (e) => { if (e.key === 'Escape') { close(); btn.focus(); } };
+  if (G.permPopOpen) { G.permPopOpen = false; open(); }
 }
 function syncRunState(c) {
   if (!c.el) return;
@@ -4666,8 +4762,9 @@ async function followRun(c, m, open) {
         if (e.t === 'server') { serverUp(c, e); continue; }
         if (e.t === 'file' && G.watch?.chat === c.id) setTimeout(reloadPreview, 300);
         if (e.t === 'mode' && c.approval !== e.approval) { c.approval = e.approval; saveChat(c); renderComposerBar(c); }
-        if (e.t === 'allow_always') { if (!a.allowed.includes(e.tool)) a.allowed.push(e.tool); renderAllowed(c); saveChat(c); }
+        if (e.t === 'allow_always') { if (!a.allowed.includes(e.tool)) a.allowed.push(e.tool); renderComposerBar(c); saveChat(c); }
         if (e.t === 'cmd_rule' && e.rule?.scope === 'chat') { (a.cmdRules ??= []).push(e.rule); saveChat(c); }
+        if (e.t === 'rule_used') { const r = (a.cmdRules || []).find((x) => (e.id && x.id === e.id) || x.match === e.match); if (r) { r.hits = (r.hits || 0) + 1; r.lastUsed = Date.now(); saveChat(c); } }
         if (e.t === 'folder_added' && e.folder?.path) { a.folders = [...(a.folders || []).filter((x) => x.path.toLowerCase() !== e.folder.path.toLowerCase()), { path: e.folder.path, access: e.folder.access }]; saveChat(c); }
         if (e.t === 'app_allowed' && e.app?.appId) { a.apps = [...(a.apps || []).filter((x) => x.appId !== e.app.appId), { name: e.app.name, appId: e.app.appId, level: e.app.level || 'full' }]; saveChat(c); renderComposerBar(c); }
         if (e.t === 'approval') { m.approvals[e.id] = { card: e }; if (e.mode === 'strict') { c.waiting = true; renderSidebar(); renderChatHead(c); note('approval', e.what || e.tool); } }
@@ -6246,11 +6343,7 @@ async function drawPermsPanel() {
   const sm = $('#stStopMode');
   if (sm && r.stop) { sm.textContent = r.stop.mode === 'jobs' ? '✓ Job Objects: every process, confirmed' : r.stop.mode === 'groups' ? '✓ Process groups: every process, confirmed' : '⚠ Basic: process tree only'; sm.title = r.stop.error || ''; }
   if (r.error) { box.innerHTML = `<div class="st-row-help">Couldn't load the rules: ${esc(r.error)}</div>`; return; }
-  const list = (scope, rules) => rules.length ? rules.map((x, i) => `<div class="pr-rule" data-scope="${scope}" data-i="${i}">
-      <span class="pr-eff" data-eff="${esc(x.effect)}">${RULE_EFFECT[x.effect] || esc(x.effect)}</span><code>${esc(x.match)}</code>
-      <span class="pr-by">${x.by === 'button' ? 'from a card' : 'typed by you'}</span>
-      <button type="button" class="pp-btn del" data-pr-del title="Remove this rule" aria-label="Remove rule">${ICO.trash}</button>${x.problem ? `<div class="pr-problem">⚠ Never matches: ${esc(x.problem)}. Remove it, or add a rule that starts like the command.</div>` : ''}</div>`).join('')
-    : '<div class="st-row-help">No rules yet.</div>';
+  const list = (scope, rules) => (rules.length ? ruleRows(rules, scope).join('') : '<div class="st-row-help">No rules yet.</div>');
   box.innerHTML = `<div class="pr">
     <div class="pr-head"><label>Project <select data-pr-project>${projects.map((p) => `<option value="${esc(p.id)}" ${p.id === PERMS.project ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label></div>
     <h5>This project</h5><div class="pr-list">${list('project', r.project)}</div>
@@ -6276,7 +6369,7 @@ async function drawPermsPanel() {
   const segVal = (sel) => $(`${sel} button.on`, box)?.dataset.v;
   for (const g of box.querySelectorAll('.pr-add .seg, .pr-test .seg')) for (const b of g.children) b.onclick = () => { for (const x of g.children) x.classList.toggle('on', x === b); };
   $('[data-pr-project]', box).onchange = (e) => { PERMS.project = e.target.value; drawPermsPanel(); };
-  for (const b of box.querySelectorAll('[data-pr-del]')) b.onclick = () => { const row = b.closest('.pr-rule'); const scope = row.dataset.scope; save(scope, rules[scope].filter((_, i) => i !== Number(row.dataset.i))); };
+  wireRuleRows(box, PERMS.project, drawPermsPanel);
   for (const b of box.querySelectorAll('[data-pr-sug]')) b.onclick = () => save('project', [...rules.project, { effect: 'allow', match: b.dataset.prSug, by: 'user' }]);
   $('[data-pr-add]', box).onclick = () => {
     const match = $('[data-pr-match]', box).value.trim();
