@@ -569,6 +569,10 @@ export const appLevel = (name) => { const n = String(name || '').trim(); return 
 // Words in a decide call that mean it is about something seen (a window, a screen, a picture).
 const SEEN_WORDS = /\b(screenshot|on (the )?screen|the window|the picture|the image|visible (in|on))\b/i;
 // Buttons in the user's own apps that act for them: clicking one asks first.
+// A dialog whose plain Yes/OK replaces a file, throws work away or deletes, and the buttons that agree to it.
+// Only questions a dialog asks, not a Delete or Discard button that sits in the app's normal screen.
+const DESTRUCTIVE_DIALOG = /already exists|do you want to (replace|overwrite|delete|discard|remove)|overwrite (it|the existing)|without saving|(lose|discard) (your |any |all )?(unsaved )?changes|can(not|['’]t) be undone|permanently delete|are you sure/i;
+const DIALOG_YES = /^&?(yes|ok|okay|replace|overwrite|continue|discard|(don['’]t|do not) save|yes to all|delete)$/i;
 const RISKY_CLICK = /\b(send|submit|pay|buy|purchase|order|checkout|check out|delete|remove|erase|post|publish|transfer|confirm|sign|accept|agree|uninstall|format|reset)\b/i;
 const LEVEL_WORDS = { view: 'look at only (windows, read, screenshot, zoom, wait_for)', click: 'look, click, scroll and drag, not type', full: 'use fully' };
 
@@ -599,7 +603,7 @@ const CODE_TOOLS = [
     ref: { type: 'integer' }, x: { type: 'integer' }, y: { type: 'integer' }, text: { type: 'string' }, key: { type: 'string' } } } } },
   { type: 'function', function: { name: 'desktop', description: `See and use desktop apps. Two kinds: an installed app the user has (open it by its Start-menu name with open {app}: it reuses the window if the app is already open, the user allows each app once per chat, and it stays open afterwards so later steps and chats can use it again), or a program you built and started yourself with shell and background: true (pass that job id; WPF, WinForms, Cocoa, SwiftUI, GTK, Qt, tkinter, Electron, games…). running: the apps the user has open, by name. Then, with app or job: windows: its windows. read: a window's controls as text; interactive ones are numbered [n] with their position @x,y. A window with no readable controls (Unity, games, canvas apps) gets the words in its picture instead, read by Windows, each with its @x,y for click_at; read_text does that for any window. click {ref}: press a button, tick a box, pick an item. click_at {x, y}: a point, for apps whose controls can't be read. type {ref, text}: set a text field. keys {keys}: keyboard input in SendKeys form ({ENTER}, {TAB}, ^s for Ctrl+S, %{F4} for Alt+F4). screenshot: a picture of the window. zoom {x, y, width, height}: part of it enlarged, to read small text. Windows also: right_click, double_click, middle_click, hover, mouse_down, mouse_up {ref or x, y}; drag {x, y, to_x, to_y}; scroll {direction, amount, ref or x, y}; hold_key {key, seconds}; wait_for {text, seconds}: until the window shows that text; focus, minimize, maximize, restore, move {x, y}, resize {width, height}; clipboard: read it, or {text} to set it. close: only when the user asks (apps stay open for reuse). Every x,y is pixels from the window's top-left corner: the same in its picture, its controls' @x,y and click_at. steps: several actions in one call (up to 8, each like this tool's arguments; stops at the first error). After an action that changes the window you get its controls again. Only those apps' windows can be reached, never the user's other windows; clicks and keys bring the window to the front.${DESKTOP_OS}`, parameters: { type: 'object', properties: {
     action: { type: 'string', enum: ['open', 'running', 'windows', 'read', 'read_text', 'click', 'click_at', 'type', 'keys', 'screenshot', 'zoom', 'right_click', 'double_click', 'middle_click', 'hover', 'mouse_down', 'mouse_up', 'drag', 'scroll', 'hold_key', 'wait_for', 'focus', 'minimize', 'maximize', 'restore', 'move', 'resize', 'clipboard', 'close'] }, app: { type: 'string', description: 'An installed app by its Start-menu name, e.g. "Calculator" (spaces, case and version numbers don\'t matter), or the full path of its .exe when the Start menu doesn\'t list it (open it first with open; Windows)' }, job: { type: 'string', description: 'Or: the background job that runs your own program, e.g. "bg1"' },
-    window: { type: 'integer', description: 'A window handle from windows (default: its first window)' }, ref: { type: 'integer' }, x: { type: 'integer' }, y: { type: 'integer' }, to_x: { type: 'integer' }, to_y: { type: 'integer' }, width: { type: 'integer' }, height: { type: 'integer' },
+    window: { type: 'integer', description: 'A window handle from windows (default: its first window)' }, ref: { type: 'integer' }, x: { type: 'integer' }, y: { type: 'integer' }, to_x: { type: 'integer' }, to_y: { type: 'integer' }, button: { type: 'string', enum: ['left', 'right', 'middle'], description: 'drag, mouse_down, mouse_up: which mouse button (default left). 3D views usually turn with right or middle' }, width: { type: 'integer' }, height: { type: 'integer' },
     text: { type: 'string' }, keys: { type: 'string' }, key: { type: 'string', description: 'hold_key: a letter, digit, F1-F12, shift, ctrl, alt, space, enter or an arrow' }, seconds: { type: 'number' },
     direction: { type: 'string', enum: ['up', 'down', 'left', 'right'] }, amount: { type: 'integer', description: 'scroll: wheel notches (default 3)' },
     steps: { type: 'array', maxItems: 8, items: { type: 'object' }, description: 'Several desktop actions in a row, each like this tool\'s own arguments (app, job and window come from the call, or the step before, unless a step names its own; open may be the first step). Stops at the first error.' } } } } },
@@ -3174,6 +3178,13 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         if (appsOff) return appsOff;
         const app = chatApps.get(String(args.app).trim().toLowerCase());
         if (!app) return `Error: "${args.app}" isn't open for this chat yet: call desktop open with app: "${args.app}" first.`;
+        // An action above the app's level asks once per app in a reply to raise it (typing into Cline in VS Code, which
+        // starts at click); the user's no, or no answer, keeps the level.
+        const need = APP_ACTS.click.includes(act) ? 'click' : 'full';
+        if (APP_ACTS[app.level] && !APP_ACTS[app.level].includes(act) && !(run.levelAsked ??= new Set()).has(`${app.name}:${need}`)) {
+          run.levelAsked.add(`${app.name}:${need}`);
+          if ((await raiseApp(app, need, act)).approve) { app.level = need; emit({ t: 'app_allowed', app, at: at() }); }
+        }
         const may = APP_ACTS[app.level];
         if (may && !may.includes(act)) {
           const instead = app.level === 'view' && APP_VIEW.test(app.name) ? ' For a website, use the browser tool.' : app.level === 'click' && APP_CLICK.test(app.name) ? ' For a command, use shell; for a file, the file tools.' : '';
@@ -3196,18 +3207,26 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
           : typeof scope === 'object' ? `${who} has no open window: open it again with desktop open.` : `Job ${job} has no windows yet. It may still be starting (try again), or it isn't a windowed app (read its output with job_output).`;
       }
       if (act === 'read') { const r = await readWindow(scope, args.window); remember(r); emit({ t: 'desktop', job: who, action: act, window: r.handle, at: at() }); return `Window ${r.handle}:\n${r.text || '(no controls could be read: use screenshot and click_at)'}`; }
+      // In the user's own apps, a click that sends, pays or deletes asks them first, as in their lent Chrome tab. So does
+      // the plain Yes/OK of a dialog that replaces, overwrites or throws work away ("model.vroid already exists. Do you
+      // want to replace it?" was answered Yes with no card), and a click_at or Enter while such a dialog is up.
+      const shown = String(seen.get(`${who}:${args.window || ''}`) || '');
+      const warning = clip([...shown.matchAll(/"([^"]{3,300})"/g)].map((m) => m[1]).find((s) => DESTRUCTIVE_DIALOG.test(s)) || '', 160);
+      const askClick = async (what) => {
+        const card = { id: newApprovalId(), tool: 'desktop', free: true, est: 0, what: `${what} in ${who}`, why: warning ? `The app is asking: ${warning}. Your answer stands for you.` : 'This acts in your own app: it may send, pay, delete or post something.', risk: 'danger', yes: 'Do it', no: 'Don’t', noAlways: true };
+        const waitMs = S.approval === 'yolo' ? yoloWait() : 0;
+        const ans = await askUser({ ...card, mode: 'strict' }, waitMs ? { ms: waitMs, then: 'skip', onTimeout: () => ({ approve: false, by: 'timeout', reason: 'No answer, so it wasn’t done' }) } : null);
+        emit({ t: 'approval_done', id: card.id, ...ans, at: at() });
+        return ans.approve ? '' : `The user didn't let you ${what.charAt(0).toLowerCase()}${what.slice(1)}${ans.reason ? `: "${ans.reason}"` : ''}.${warning ? ' Answer the dialog the safe way (No or Cancel), or choose another name.' : ''}`;
+      };
       if (act === 'click') {
-        // In the user's own apps, a click that sends, pays or deletes asks them first, as in their lent Chrome tab.
-        const label = typeof scope === 'object' ? (String(seen.get(`${who}:${args.window || ''}`) || '').match(new RegExp(`\\[${Number(args.ref)}\\] \\w+ "([^"]*)"`))?.[1] || '') : '';
-        if (label && RISKY_CLICK.test(label)) {
-          const card = { id: newApprovalId(), tool: 'desktop', free: true, est: 0, what: `Click “${clip(label, 60)}” in ${who}`, why: 'This acts in your own app: it may send, pay, delete or post something.', risk: 'danger', yes: 'Click it', no: 'Don’t', noAlways: true };
-          const waitMs = S.approval === 'yolo' ? yoloWait() : 0;
-          const ans = await askUser({ ...card, mode: 'strict' }, waitMs ? { ms: waitMs, then: 'skip', onTimeout: () => ({ approve: false, by: 'timeout', reason: 'No answer, so it wasn’t clicked' }) } : null);
-          emit({ t: 'approval_done', id: card.id, ...ans, at: at() });
-          if (!ans.approve) return `The user didn't let you click “${label}”${ans.reason ? `: "${ans.reason}"` : ''}.`;
-        }
+        const label = shown.match(new RegExp(`\\[${Number(args.ref)}\\] \\w+ "([^"]*)"`))?.[1] || '';
+        if (label && ((typeof scope === 'object' && RISKY_CLICK.test(label)) || (warning && DIALOG_YES.test(label.trim())))) { const no = await askClick(`Click “${clip(label, 60)}”`); if (no) return no; }
         const did = await clickControl(scope, args.window, args.ref); emit({ t: 'desktop', job: who, action: act, did, at: at() }); return `${did}.${await again(args.window)}`; }
-      if (act === 'click_at') { const did = await clickAt(scope, args.window, args.x, args.y); emit({ t: 'desktop', job: who, action: act, did, at: at() }); return `${did}.${await again(args.window)}`; }
+      if (act === 'click_at') {
+        if (warning) { const no = await askClick(`Click at ${args.x},${args.y}`); if (no) return no; }
+        const did = await clickAt(scope, args.window, args.x, args.y); emit({ t: 'desktop', job: who, action: act, did, at: at() }); return `${did}.${await again(args.window)}`; }
+      if (act === 'keys' && warning && /\{enter\}|~|%[yo]|^\s*y\s*$/i.test(String(args.keys || ''))) { const no = await askClick(`Press ${clip(args.keys, 30)}`); if (no) return no; }
       if (act === 'type') { const did = await setControl(scope, args.window, args.ref, args.text); emit({ t: 'desktop', job: who, action: act, did, at: at() }); return `${did}.${await again(args.window)}`; }
       if (act === 'keys') { const did = await sendKeys(scope, args.window, args.keys); emit({ t: 'desktop', job: who, action: act, did, at: at() }); return `${did}.${await again(args.window)}`; }
       if (act === 'screenshot') {
@@ -3235,9 +3254,9 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
           const label = (String(seen.get(`${who}:${args.window || ''}`) || '').match(new RegExp(`\\[${Number(args.ref)}\\] \\w+ "([^"]*)"`))?.[1] || '');
           if (label && RISKY_CLICK.test(label)) return `Error: “${label}” acts for the user: use click on it, which asks them first.`;
         }
-        return done(await mouseAt(scope, args.window, MOUSE[act], { ref: args.ref, x: args.x, y: args.y }));
+        return done(await mouseAt(scope, args.window, MOUSE[act], { ref: args.ref, x: args.x, y: args.y, button: args.button }));
       }
-      if (act === 'drag') return done(await dragIn(scope, args.window, args.x, args.y, args.to_x, args.to_y));
+      if (act === 'drag') return done(await dragIn(scope, args.window, args.x, args.y, args.to_x, args.to_y, args.button));
       if (act === 'scroll') return done(await scrollIn(scope, args.window, String(args.direction || 'down'), args.amount, { ref: args.ref, x: args.x, y: args.y }));
       if (act === 'hold_key') return done(await holdKey(scope, args.window, args.key || args.keys, Number(args.seconds || 1) * 1000));
       if (['focus', 'minimize', 'maximize', 'restore', 'move', 'resize'].includes(act)) return done(await windowDo(scope, args.window, act, { x: args.x, y: args.y, w: args.width, h: args.height }));
@@ -4743,6 +4762,25 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     }
     const waitMs = S.approval === 'yolo' ? yoloWait() : 0;
     const ans = await askUser({ ...card, mode: 'strict' }, waitMs ? { ms: waitMs, then: 'skip', onTimeout: () => ({ approve: false, by: 'timeout', reason: `No answer in ${Math.round(waitMs / 1000)}s, so ${app.name} stays out of reach` }) } : null);
+    emit({ t: 'approval_done', id: card.id, ...ans, at: at() });
+    return ans;
+  }
+
+  // Raising an app's level for this chat (view → click, click → full), asked like allowing it: in ⚡ YOLO the deciders
+  // may say yes when the user's own words ask for that work in the app; otherwise the card waits for the user.
+  async function raiseApp(app, need, act) {
+    const why = `The agent wants to ${act.replace(/_/g, ' ')} in ${app.name}, but this chat lets it ${LEVEL_WORDS[app.level]} there. Allowing it lets the agent ${LEVEL_WORDS[need]} in ${app.name} in this chat (change it back under the 🖥 button).`;
+    const card = { id: newApprovalId(), tool: 'desktop', free: true, est: 0, what: `Let the agent ${need === 'full' ? 'type and use keys' : 'click'} in ${app.name} · ${app.level} → ${need}`, why, yes: 'Allow', no: 'Keep it', noAlways: true };
+    if (S.approval === 'yolo' && decidersOn) {
+      emit({ t: 'approval', ...card, mode: 'yolo', at: at() });
+      const j = await approvalJudge({ kind: 'command', userMessages: userTurns(), reading: run.reading?.text, voters: S.voters, chatModel: setup.model, gate: S.gate, signal, account, sf: SF,
+        facts: { command: `${need === 'full' ? 'type text and press keys' : 'click'} in the app "${app.name}" on the user's computer (it now may only ${LEVEL_WORDS[app.level]})`, parts: [{ text: app.name, class: 'an installed app on the user’s computer' }] },
+        log: { runId, chatId: req.chatId || null, project: projectId } });
+      if (j.approve === true) { emit({ t: 'approval_done', id: card.id, approve: true, by: 'deciders', reason: j.reason, votes: j.votes, at: at() }); return { approve: true }; }
+      card.why = `${why} ${j.reason}`;
+    }
+    const waitMs = S.approval === 'yolo' ? yoloWait() : 0;
+    const ans = await askUser({ ...card, mode: 'strict' }, waitMs ? { ms: waitMs, then: 'skip', onTimeout: () => ({ approve: false, by: 'timeout', reason: `No answer in ${Math.round(waitMs / 1000)}s, so ${app.name} stays at ${app.level}` }) } : null);
     emit({ t: 'approval_done', id: card.id, ...ans, at: at() });
     return ans;
   }

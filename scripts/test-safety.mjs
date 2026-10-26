@@ -1664,6 +1664,24 @@ test('computer use: each app starts at its kind’s level; some are never used',
   for (const n of ['QuorX', 'Claude', 'Electron', '1Password', 'Bitwarden', 'Registry Editor', 'Task Manager']) assert.equal(appLevel(n), 'never', n);
 });
 
+// Answers "Let the agent … in <app>" (raising an app's level) with no, so a test sees the level hold.
+const keepLevel = (e, id) => { if (e.t === 'approval' && e.tool === 'desktop' && /^Let the agent/.test(e.what || '')) setTimeout(() => answerApproval(id, e.id, { approve: false }), 10); };
+
+test('computer use: an action above an app\'s level asks once to raise it; yes raises it for the chat', async () => {
+  const apps = [{ name: 'Calculator', appId: 'Microsoft.WindowsCalculator_8wekyb3d8bbwe!App', level: 'view' }];
+  const cards = [];
+  const { events, bodies } = await agentRun((b, i) => [
+    reply('', [['desktop', { action: 'scroll', app: 'Calculator', direction: 'down' }]]),
+    reply('', [['desktop', { action: 'keys', app: 'Calculator', keys: '1' }]]),
+    reply('OK.'),
+  ][i], { chatId: 'apps-raise', settings: { appsAccess: true }, more: { apps },
+    onEvent: (e, id) => { if (e.t === 'approval' && e.tool === 'desktop') { cards.push(e.what); setTimeout(() => answerApproval(id, e.id, { approve: /click$/.test(e.what) }), 10); } } });
+  assert.deepEqual(cards, ['Let the agent click in Calculator · view → click', 'Let the agent type and use keys in Calculator · click → full']);
+  assert.doesNotMatch(toolOut(bodies, 1), /isn't allowed/, 'raised to click, so the scroll went ahead');
+  assert.match(toolOut(bodies, 2), /look, click, scroll and drag, not type in Calculator, so keys isn't allowed/, 'declined: the level stays');
+  assert.deepEqual(events.filter((e) => e.t === 'app_allowed').map((e) => e.app.level), ['click']);
+});
+
 test('computer use: off in a chat, the user’s apps are out of reach; on, each app is held to its level', async () => {
   let cards = 0;
   const off = await agentRun((b, i) => [reply('', [['desktop', { action: 'open', app: 'Calculator' }]]), reply('', [['desktop', { action: 'read', app: 'Calculator' }]]), reply('OK.')][i], { chatId: 'apps-off',
@@ -1677,7 +1695,7 @@ test('computer use: off in a chat, the user’s apps are out of reach; on, each 
     reply('', [['desktop', { action: 'keys', app: 'Visual Studio Code', keys: '^s' }]]),
     reply('', [['desktop', { action: 'read', app: 'QuorX' }]]),
     reply('OK.'),
-  ][i], { chatId: 'apps-on', settings: { appsAccess: true }, more: { apps } });
+  ][i], { chatId: 'apps-on', settings: { appsAccess: true }, more: { apps }, onEvent: keepLevel });
   assert.match(toolOut(on.bodies, 1), /look at only .* in Calculator, so type isn't allowed/);
   assert.match(toolOut(on.bodies, 2), /look, click, scroll and drag, not type in Visual Studio Code, so keys isn't allowed. For a command, use shell/);
   assert.match(toolOut(on.bodies, 3), /isn't open for this chat yet/, 'a never-used app is dropped even if the page sends it');
@@ -1691,7 +1709,7 @@ test('computer use: the new actions keep to each app’s level, and steps stop a
     reply('', [['desktop', { action: 'clipboard', app: 'Paint' }]]),
     reply('', [['desktop', { app: 'Paint', steps: [{ action: 'hold_key', key: 'shift' }, { action: 'drag', x: 1, y: 1, to_x: 5, to_y: 5 }] }]]),
     reply('OK.'),
-  ][i], { chatId: 'apps-levels', settings: { appsAccess: true }, more: { apps } });
+  ][i], { chatId: 'apps-levels', settings: { appsAccess: true }, more: { apps }, onEvent: keepLevel });
   assert.match(toolOut(bodies, 1), /look at only .* in Calculator, so scroll isn't allowed/);
   assert.match(toolOut(bodies, 2), /in Paint, so clipboard isn't allowed/);
   assert.match(toolOut(bodies, 3), /^Ran 1 of 2 steps:\n1\. hold_key: Error: .*so hold_key isn't allowed/, 'the second step never ran');
@@ -1703,7 +1721,7 @@ test('computer use: steps take the app from the step before when only the first 
     reply('', [['desktop', { steps: [{ action: 'scroll', app: 'Calculator', direction: 'down' }] }]]),
     reply('', [['desktop', { steps: [{ action: 'keys', app: 'Calculator', keys: '1' }, { action: 'type', ref: 1, text: '2' }] }]]),
     reply('OK.'),
-  ][i], { chatId: 'apps-steps-inherit', settings: { appsAccess: true }, more: { apps } });
+  ][i], { chatId: 'apps-steps-inherit', settings: { appsAccess: true }, more: { apps }, onEvent: keepLevel });
   assert.match(toolOut(bodies, 1), /in Calculator, so scroll isn't allowed/, 'a step\'s own app counts');
   assert.match(toolOut(bodies, 2), /^Ran 1 of 2 steps:\n1\. keys 1: Error: .*in Calculator, so keys isn't allowed/);
 });
@@ -1890,6 +1908,36 @@ test('desktop screenshot: named by reply too, and a model that can\'t see is poi
   } finally { closeForm('QX Shot Name Form'); }
 });
 
+test('desktop: type replaces and reads back, a right-button drag reaches the app, and a "replace it?" Yes asks first', { skip: !WIN }, async () => {
+  const app = `Add-Type -AssemblyName System.Windows.Forms
+$f = New-Object Windows.Forms.Form; $f.Text = 'QX Dialog Form'; $f.Width = 520; $f.Height = 360
+$t = New-Object Windows.Forms.TextBox; $t.Text = 'model'; $t.Top = 10; $t.Left = 10; $t.Width = 200
+$q = New-Object Windows.Forms.Label; $q.Text = 'model.vroid already exists. Do you want to replace it?'; $q.Top = 40; $q.Left = 10; $q.Width = 480
+$y = New-Object Windows.Forms.Button; $y.Text = 'Yes'; $y.Top = 70; $y.Left = 10
+$p = New-Object Windows.Forms.Panel; $p.Top = 110; $p.Left = 10; $p.Width = 300; $p.Height = 150; $p.BackColor = 'LightGray'
+$b = New-Object Windows.Forms.Label; $b.Text = 'Pressed: none'; $b.Top = 270; $b.Left = 10; $b.Width = 300
+$p.Add_MouseDown({ param($s, $e) $b.Text = "Pressed: $($e.Button)" })
+$f.Controls.AddRange(@($t, $q, $y, $p, $b)); [void]$f.ShowDialog()`;
+  let job = null, cards = [];
+  try {
+    const { bodies } = await agentRun((b, i) => {
+      if (i === 0) return reply('', [['shell', { command: 'powershell -NoProfile -ExecutionPolicy Bypass -File app.ps1', background: true }]]);
+      if (i === 1) { job = toolOut([b], 0).match(/job (bg\d+)/)[1]; return reply('', [['desktop', { action: 'read', job }]]); }
+      const out = toolOut([b], 0);
+      if (i === 2) return reply('', [['desktop', { action: 'type', job, ref: Number(out.match(/\[(\d+)\] Edit/)[1]), text: 'rem-rezero' }]]);
+      if (i === 3) return reply('', [['desktop', { action: 'click', job, ref: Number(out.match(/\[(\d+)\] Button "Yes"/)[1]) }]]);
+      if (i === 4) return reply('', [['desktop', { action: 'drag', job, x: 60, y: 160, to_x: 200, to_y: 200, button: 'right' }]]);
+      if (i === 5) return reply('', [['job_stop', { job }]]);
+      return reply('Done.');
+    }, { prep: (d) => { fs.writeFileSync(path.join(d, 'app.ps1'), app); allow(d, 'powershell -noprofile -executionpolicy bypass -file app.ps1*'); },
+      onEvent: (e, id) => { if (e.t === 'approval' && e.tool === 'desktop') { cards.push(e); setTimeout(() => answerApproval(id, e.id, { approve: false }), 10); } } });
+    assert.match(toolOut(bodies, 3), /^typed it \(it held "model" before\); it now holds "rem-rezero"/, toolOut(bodies, 3));
+    assert.match(toolOut(bodies, 4), /^The user didn't let you click “Yes”.*Answer the dialog the safe way/, toolOut(bodies, 4));
+    assert.match(cards[0]?.why || '', /already exists\. Do you want to replace it\?/);
+    assert.match(toolOut(bodies, 5), /^right-dragged from 60,160 to 200,200[\s\S]*Pressed: Right/, toolOut(bodies, 5));
+  } finally { closeForm('QX Dialog Form'); }
+});
+
 test('desktop open: app names match loosely (spaces, case, version numbers)', { skip: !WIN || !!process.env.CI }, async () => {
   const { findApps } = await import('../server/uia.js');
   for (const n of ['Calculator', 'calculator', 'Calcu lator', 'CALCULATOR 11.2']) assert.equal((await findApps(n))[0]?.name, 'Calculator', n);
@@ -1899,14 +1947,14 @@ test('computer use: the chat\'s saved apps count even when the page sends none',
   const { saveChat } = await import('../server/store.js');
   const chatId = 'cmsavedapps1';
   saveChat(chatId, { id: chatId, title: 't', projectId: 'scratch', agent: { messages: [], artifacts: {}, apps: [{ name: 'Calculator', appId: 'Microsoft.WindowsCalculator_8wekyb3d8bbwe!App', level: 'view' }] } });
-  const { bodies } = await agentRun((b, i) => [reply('', [['desktop', { action: 'type', app: 'Calculator', ref: 1, text: '1' }]]), reply('OK.')][i], { chatId, settings: { appsAccess: true }, more: { apps: [] } });
+  const { bodies } = await agentRun((b, i) => [reply('', [['desktop', { action: 'type', app: 'Calculator', ref: 1, text: '1' }]]), reply('OK.')][i], { chatId, settings: { appsAccess: true }, more: { apps: [] }, onEvent: keepLevel });
   assert.match(toolOut(bodies, 1), /look at only .* in Calculator/, 'known from the chat file, held to its level');
 });
 
 test('computer use off: one card turns it on for the chat, and the desktop call goes ahead', { skip: !WIN }, async () => {
   const { events, bodies } = await agentRun((b, i) => [reply('', [['desktop', { action: 'type', app: 'Calculator', ref: 1, text: '1' }]]), reply('OK.')][i], { chatId: 'apps-ask-on',
     more: { apps: [{ name: 'Calculator', appId: 'Microsoft.WindowsCalculator_8wekyb3d8bbwe!App', level: 'view' }] },
-    onEvent: (e, id) => { if (e.t === 'approval' && e.tool === 'computer_use') setTimeout(() => answerApproval(id, e.id, { approve: true }), 10); } });
+    onEvent: (e, id) => { if (e.t === 'approval' && e.tool === 'computer_use') setTimeout(() => answerApproval(id, e.id, { approve: true }), 10); keepLevel(e, id); } });
   assert.ok(events.some((e) => e.t === 'tools_on' && e.kinds.includes('apps')), 'the page hears it is on');
   assert.match(toolOut(bodies, 1), /look at only .* in Calculator/, 'past the switch, held to the app\'s level');
 });

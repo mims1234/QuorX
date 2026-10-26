@@ -331,21 +331,36 @@ public static class QxUia {
     return "clicked at " + x + "," + y;
   }
 
+  // Typing replaces what the field holds, with the keyboard as a person would (a Save dialog ignored a value set from
+  // outside and saved under its old name), then reads the field back. A field the keys can't reach gets its value set.
   public static string Set(long handle, int r, string text, int[] pids) {
     AutomationElement e = Ref(handle, r);
     object p;
-    if (e.TryGetCurrentPattern(ValuePattern.Pattern, out p)) {
-      ValuePattern vp = (ValuePattern)p;
-      if (vp.Current.IsReadOnly) throw new Exception("that field is read-only");
-      return Busy(Within(delegate () { vp.SetValue(text); }, 3000), "set its text");
-    }
+    ValuePattern vp = e.TryGetCurrentPattern(ValuePattern.Pattern, out p) ? (ValuePattern)p : null;
+    if (vp != null && vp.Current.IsReadOnly) throw new Exception("that field is read-only");
+    string was = vp != null ? Read(vp) : null;
     IntPtr h = new IntPtr(handle);
-    Front(h, pids);
-    e.SetFocus();
-    if (!Ours(GetForegroundWindow(), pids)) throw new Exception("the window lost the focus before typing, so nothing was typed: try again");
-    System.Windows.Forms.SendKeys.SendWait(Escape(text));
-    return "typed into it";
+    bool keyed = false;
+    try {
+      Front(h, pids);
+      e.SetFocus();
+      if (Ours(GetForegroundWindow(), pids)) {
+        System.Windows.Forms.SendKeys.SendWait("^a" + Escape(text));
+        Thread.Sleep(150);
+        keyed = true;
+      }
+    } catch (Exception) { if (vp == null) throw; }
+    if (vp == null) {
+      if (!keyed) throw new Exception("the window lost the focus before typing, so nothing was typed: try again");
+      return "typed into it (the field can't be read back: check it in a screenshot)";
+    }
+    string now = Read(vp);
+    if (now != text) { Busy(Within(delegate () { vp.SetValue(text); }, 3000), ""); Thread.Sleep(100); now = Read(vp); }
+    string before = string.IsNullOrEmpty(was) ? "" : " (it held \"" + Clip(was, 120) + "\" before)";
+    if (now == text) return (keyed ? "typed it" : "set its text") + before + "; it now holds \"" + Clip(now, 120) + "\"";
+    return "typed it" + before + ", but it now holds \"" + Clip(now, 120) + "\", not what you meant: click the field and type again, or use keys";
   }
+  static string Read(ValuePattern vp) { try { return vp.Current.Value ?? ""; } catch (Exception) { return ""; } }
 
   static string Escape(string s) {
     StringBuilder b = new StringBuilder();
@@ -436,22 +451,34 @@ public static class QxUia {
   }
   static void Btn(uint down, uint up, int times) { for (int i = 0; i < times; i++) { mouse_event(down, 0, 0, 0, UIntPtr.Zero); Thread.Sleep(20); mouse_event(up, 0, 0, 0, UIntPtr.Zero); Thread.Sleep(60); } }
 
-  // kind: right, middle, double, hover, down, up.
-  public static string Mouse(long handle, int r, int x, int y, string kind, int[] pids) {
+  // The press and release flags of a mouse button: left, right or middle (3D views turn with the right or middle one).
+  static uint[] Button(string b) {
+    if (b == "right") return new uint[] { 0x8, 0x10 };
+    if (b == "middle") return new uint[] { 0x20, 0x40 };
+    if (string.IsNullOrEmpty(b) || b == "left") return new uint[] { 0x2, 0x4 };
+    throw new Exception("button is left, right or middle");
+  }
+
+  // kind: right, middle, double, hover, down, up (down and up with button).
+  public static string Mouse(long handle, int r, int x, int y, string kind, string button, int[] pids) {
     POINT p = Target(handle, r, x, y, pids);
     SetCursorPos(p.X, p.Y); Thread.Sleep(30);
+    uint[] f = Button(button);
+    string name = string.IsNullOrEmpty(button) ? "left" : button;
     switch (kind) {
       case "right": Btn(0x8, 0x10, 1); return "right-clicked";
       case "middle": Btn(0x20, 0x40, 1); return "middle-clicked";
       case "double": Btn(0x2, 0x4, 2); return "double-clicked";
       case "hover": Thread.Sleep(500); return "the pointer rests there";
-      case "down": mouse_event(0x2, 0, 0, 0, UIntPtr.Zero); return "pressed the left button (send mouse up to let go)";
-      case "up": mouse_event(0x4, 0, 0, 0, UIntPtr.Zero); return "let go of the left button";
+      case "down": mouse_event(f[0], 0, 0, 0, UIntPtr.Zero); return "pressed the " + name + " button (send mouse_up with the same button to let go)";
+      case "up": mouse_event(f[1], 0, 0, 0, UIntPtr.Zero); return "let go of the " + name + " button";
     }
     throw new Exception("unknown mouse action " + kind);
   }
 
-  public static string Drag(long handle, int x, int y, int x2, int y2, int[] pids) {
+  public static string Drag(long handle, int x, int y, int x2, int y2, string button, int[] pids) {
+    uint[] f = Button(button);
+    int steps = f[0] == 0x2 ? 12 : 24; // a 3D view turns with the movement it sees, so a slower path turns it smoothly
     IntPtr h = new IntPtr(handle);
     POINT a = At(h, x, y, pids);
     RECT r; GetWindowRect(h, out r);
@@ -459,10 +486,10 @@ public static class QxUia {
     POINT b = new POINT { X = r.L + x2, Y = r.T + y2 };
     Lands(b, pids);
     SetCursorPos(a.X, a.Y); Thread.Sleep(40);
-    mouse_event(0x2, 0, 0, 0, UIntPtr.Zero); Thread.Sleep(80);
-    for (int i = 1; i <= 12; i++) { SetCursorPos(a.X + (b.X - a.X) * i / 12, a.Y + (b.Y - a.Y) * i / 12); Thread.Sleep(20); }
-    Thread.Sleep(80); mouse_event(0x4, 0, 0, 0, UIntPtr.Zero);
-    return "dragged from " + x + "," + y + " to " + x2 + "," + y2;
+    mouse_event(f[0], 0, 0, 0, UIntPtr.Zero); Thread.Sleep(80);
+    for (int i = 1; i <= steps; i++) { SetCursorPos(a.X + (b.X - a.X) * i / steps, a.Y + (b.Y - a.Y) * i / steps); Thread.Sleep(20); }
+    Thread.Sleep(80); mouse_event(f[1], 0, 0, 0, UIntPtr.Zero);
+    return (f[0] == 0x2 ? "dragged" : (f[0] == 0x8 ? "right-dragged" : "middle-dragged")) + " from " + x + "," + y + " to " + x2 + "," + y2;
   }
 
   // A control that can scroll itself is scrolled by its own means; otherwise the mouse wheel turns over the point (or
@@ -620,8 +647,8 @@ while ($true) {
       'shot' { $out.png = [QxUia]::Shot([long]$m.handle, $pids); $out.via = [QxUia]::LastVia }
       'ocr' { $f = [QxUia]::ShotFile([long]$m.handle, $pids); try { $out.text = Read-WindowText $f; $out.via = [QxUia]::LastVia } finally { Remove-Item $f -ErrorAction SilentlyContinue } }
       'zoom' { $out.png = [QxUia]::Zoom([long]$m.handle, [int]$m.x, [int]$m.y, [int]$m.w, [int]$m.h, $pids); $out.via = [QxUia]::LastVia }
-      'mouse' { $out.did = [QxUia]::Mouse([long]$m.handle, [int]$m.ref, [int]$m.x, [int]$m.y, [string]$m.kind, $pids) }
-      'drag' { $out.did = [QxUia]::Drag([long]$m.handle, [int]$m.x, [int]$m.y, [int]$m.x2, [int]$m.y2, $pids) }
+      'mouse' { $out.did = [QxUia]::Mouse([long]$m.handle, [int]$m.ref, [int]$m.x, [int]$m.y, [string]$m.kind, [string]$m.button, $pids) }
+      'drag' { $out.did = [QxUia]::Drag([long]$m.handle, [int]$m.x, [int]$m.y, [int]$m.x2, [int]$m.y2, [string]$m.button, $pids) }
       'scroll' { $out.did = [QxUia]::Scroll([long]$m.handle, [int]$m.ref, [int]$(if ($null -ne $m.x) { $m.x } else { -1 }), [int]$(if ($null -ne $m.y) { $m.y } else { -1 }), [string]$m.dir, [int]$(if ($m.amount) { $m.amount } else { 3 }), $pids) }
       'hold' { $out.did = [QxUia]::HoldKey([long]$m.handle, [string]$m.key, [int]$(if ($m.ms) { $m.ms } else { 1000 }), $pids) }
       'win' { $out.did = [QxUia]::Win([long]$m.handle, [string]$m.what, [int]$m.x, [int]$m.y, [int]$m.w, [int]$m.h, $pids) }
