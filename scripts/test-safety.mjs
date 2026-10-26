@@ -777,7 +777,7 @@ async function agentRun(script, { settings = {}, prep, onEvent, chatId, more = {
   let i = 0;
   const chatStream = async (body) => { bodies.push(structuredClone(body)); return script(body, i++); };
   try {
-    await runAgent({ runId: id, projectId: id, ...(chatId ? { chatId } : {}), ...more, text: 'build my app', setup: { model: 'test/model' }, settings: { approval: 'strict', mediaEnabled: false, verify: false, review: 'off', checks: { gap: false, shots: false, click: false }, tools: { browser: { on: false } }, ...settings } },
+    await runAgent({ runId: id, projectId: id, ...(chatId ? { chatId } : {}), ...more, text: more.text ?? 'build my app', setup: { model: 'test/model' }, settings: { approval: 'strict', mediaEnabled: false, verify: false, review: 'off', checks: { gap: false, shots: false, click: false }, tools: { browser: { on: false } }, ...settings } },
       (e) => { events.push(e); onEvent?.(e, id); }, new AbortController().signal, { chatStream, catalogue: [{ id: 'test/model', maxOut: 4000 }], quiet: true });
     return { events, bodies, dir, id };
   } finally {
@@ -1691,6 +1691,27 @@ test('chat notes: a chat off the project skips its notes, design and log, and ca
   assert.match(toolOut(bodies, 2), /^Refused: QuorX’s own files/);
   assert.match(fs.readFileSync(path.join(dir, 'AGENT.md'), 'utf8'), /ZEBRA/);
   assert.ok(!fs.existsSync(path.join(dir, '.quorx', 'log.md')) || !/notes\.txt/.test(fs.readFileSync(path.join(dir, '.quorx', 'log.md'), 'utf8')), 'nothing in the work log');
+});
+
+test('named in the user\'s message: a folder is read with no card; in YOLO an app is raised with no card (only the user\'s words count)', async () => {
+  const outside = tmp('named-folder');
+  fs.mkdirSync(path.join(outside, 'site'));
+  fs.writeFileSync(path.join(outside, 'site', 'index.html'), '<h1>NAMED PAGE</h1>');
+  let cards = 0;
+  const named = await agentRun((b, i) => [reply('', [['read_file', { path: path.join(outside, 'site', 'index.html') }]]), reply('OK.')][i], {
+    chatId: 'named-folder1', more: { text: `Open the folder ${path.join(outside, 'site')} and tell me what the page says.` },
+    onEvent: (e, id) => { if (e.t === 'approval') { cards++; setTimeout(() => answerApproval(id, e.id, { approve: false }), 10); } } });
+  assert.match(toolOut(named.bodies, 1), /NAMED PAGE/);
+  assert.equal(cards, 0, 'no card for a folder the user named');
+  const unnamed = await agentRun((b, i) => [reply('', [['read_file', { path: path.join(outside, 'site', 'index.html') }]]), reply('OK.')][i], {
+    chatId: 'named-folder2', onEvent: (e, id) => { if (e.t === 'approval') { cards++; setTimeout(() => answerApproval(id, e.id, { approve: false }), 10); } } });
+  assert.match(toolOut(unnamed.bodies, 1), /didn't add/);
+  assert.equal(cards, 1, 'a folder the user didn\'t name still asks');
+  const apps = [{ name: 'Visual Studio Code', appId: 'Microsoft.VisualStudioCode', level: 'click' }];
+  const raised = await agentRun((b, i) => [reply('', [['desktop', { action: 'keys', app: 'Visual Studio Code', keys: 'x' }]]), reply('OK.')][i], {
+    chatId: 'named-app1', settings: { approval: 'yolo', appsAccess: true }, more: { apps, text: 'Open VS Code and ask Cline to build a page.' } });
+  assert.doesNotMatch(toolOut(raised.bodies, 1), /isn't allowed/, toolOut(raised.bodies, 1));
+  assert.ok(raised.events.some((e) => e.t === 'app_allowed' && e.app.level === 'full'));
 });
 
 // Answers "Let the agent … in <app>" (raising an app's level) with no, so a test sees the level hold.

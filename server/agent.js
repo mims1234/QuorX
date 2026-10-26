@@ -1138,6 +1138,12 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
   const userText = (String(req.text || '').trim() || (pointed ? '(The user pointed at the element(s) below without a message: ask what they want changed unless their note says it.)' : (req.images?.length || req.docs?.length || req.context) ? '(The user sent this without a message. Look at what they attached and respond to it: say what it is and ask what they want done, unless that is obvious.)' : '')) + pointed;
   // The user's own turns in this chat, newest last: all an approval judge may read of the conversation.
   const userTurns = () => [...(req.history || []).filter((m) => m.role === 'user').slice(-5).map((m) => String(m.content ?? '')), userText];
+  // What the user named in their own messages: a folder (that folder or one inside it) or an app by its name or a
+  // common short one (VS Code). Only the user's words count, never a page or a file the agent read.
+  const normP = (s) => String(s).replaceAll('\\', '/').replace(/\/+$/, '').toLowerCase();
+  const userNamedPath = (dir) => { const d = normP(dir); return userTurns().some((t) => (t.match(/[a-z]:[\\/][^\s"'`<>|*?]+/gi) || []).map((p) => normP(p.replace(/[.,;:)\]]+$/, ''))).some((p) => p.split('/').length >= 2 && (d === p || d.startsWith(`${p}/`)))); };
+  const APP_ALIASES = { 'visual studio code': ['vs code', 'vscode'], 'microsoft edge': ['edge'], 'google chrome': ['chrome'], 'windows terminal': ['terminal'] };
+  const userNamedApp = (name) => { const n = String(name).toLowerCase().replace(/\s+\d[\d.]*$/, ''); const words = [n, ...(APP_ALIASES[n] || [])]; return userTurns().some((t) => words.some((w) => new RegExp(`(^|[^a-z0-9])${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|[^a-z0-9])`, 'i').test(t))); };
   // Output per call: the setting (64k by default), never above the model's own limit from the catalogue.
   // 32k was too little: a model with high reasoning could think through a whole game and run out before writing it.
   const catalogue = deps.catalogue || await chatModels().catch(() => []);
@@ -2689,7 +2695,10 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (checksLive) logCheck({ kind: 'ask', src: 'model', ask: question, options, pick: label, confidence: r ? +r.confidence.toFixed(3) : null, verdict: r?.verdict || 'failed', runId, chatId: req.chatId || null, project: projectId, builder: setup.model, bench: req.bench || null });
     const who = shown ? 'the user did not answer in time, and' : 'nobody is asked, and';
     if (label == null) return say(ev, `YOLO mode: ${who} the deciders could not settle this for the user. Decide yourself, and say in your reply what you chose.`);
-    return say(ev, `YOLO mode: ${shown ? 'the user did not answer in time, so ' : ''}the deciders answered for the user: "${label}" (${Math.round(r.confidence * 100)}% sure, ${r.verdict}). Go with it, and mention the choice in your reply so the user can change it.`, ev.choice);
+    // An option that says the user did something ("I've switched VS Code to full control") was only picked, not done:
+    // the deciders can't act on the computer, and the agent went on as if the switch had happened.
+    const didNot = /^\s*(i['’]ve|i have|i did|i['’]ll|i will|done\b|ok,? i)/i.test(label) ? ' The deciders only chose this option: they can\'t do anything on the computer, so whatever it says the user did has NOT happened. If it needs the user, say so in your reply.' : '';
+    return say(ev, `YOLO mode: ${shown ? 'the user did not answer in time, so ' : ''}the deciders answered for the user: "${label}" (${Math.round(r.confidence * 100)}% sure, ${r.verdict}). Go with it, and mention the choice in your reply so the user can change it.${didNot}`, ev.choice);
   }
 
   // ask_user: one question, or several in one card, answered in the page. The reply waits; nothing is spent meanwhile.
@@ -4687,7 +4696,13 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
       why: `The agent asked for ${abs}, outside the project. In this chat it may then ${write ? 'read, create and change' : 'read'} files in this folder and the folders inside it.${write ? ' Undo doesn’t cover changes there.' : ''} You can remove it under 🔓 Always allowed.`,
       yes: write ? 'Allow read and write' : 'Allow reading', no: 'Don’t allow', noAlways: true, ...(write ? { risk: 'warn' } : {}) };
     let ans = null;
-    if (!write && S.approval === 'yolo' && decidersOn) {
+    // A folder the user named in their own words ("open the folder D:\Coding\site") is theirs to read: no card. The
+    // deciders, seeing only the request, put such a folder at P=0.49 and the card timed out.
+    if (!write && userNamedPath(dir)) {
+      ans = { approve: true, by: 'user', reason: 'you named it in your message' };
+      emit({ t: 'note', level: 'info', msg: `Reading ${dir} in this chat: you named it in your message. Remove it under 🔓 Always allowed.`, at: at() });
+    }
+    if (!ans && !write && S.approval === 'yolo' && decidersOn) {
       emit({ t: 'approval', ...card, mode: 'yolo', at: at() });
       const j = await approvalJudge({ kind: 'command', userMessages: userTurns(), reading: run.reading?.text, voters: S.voters, chatModel: setup.model, gate: S.gate, signal, account, sf: SF,
         facts: { command: `read files in the folder ${dir} (outside the project)`, parts: [{ text: dir, class: 'a folder outside the project, read only' }] }, log: { runId, chatId: req.chatId || null, project: projectId } });
@@ -4763,6 +4778,8 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
   async function allowApp(app, open) {
     const why = `In this chat the agent may then ${LEVEL_WORDS[app.level]} in ${app.name}'s windows (change it under the 🖥 button). Your other apps stay out of its reach.`;
     const card = { id: newApprovalId(), tool: 'desktop', free: true, est: 0, what: `${open ? 'Use' : 'Open and use'} ${app.name} on your computer · ${app.level}`, why, yes: 'Allow', no: 'Don’t allow', noAlways: true };
+    // An app the user named in their own message ("Open VS Code…") is theirs to open at its usual level: no card.
+    if (userNamedApp(app.name)) { emit({ t: 'note', level: 'info', msg: `Using ${app.name} at ${app.level} in this chat: you named it in your message. Change it under the 🖥 button.`, at: at() }); return { approve: true, by: 'user' }; }
     if (S.approval === 'yolo' && decidersOn) {
       emit({ t: 'approval', ...card, mode: 'yolo', at: at() });
       const j = await approvalJudge({ kind: 'command', userMessages: userTurns(), reading: run.reading?.text, voters: S.voters, chatModel: setup.model, gate: S.gate, signal, account, sf: SF,
@@ -4782,6 +4799,9 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
   async function raiseApp(app, need, act) {
     const why = `The agent wants to ${act.replace(/_/g, ' ')} in ${app.name}, but this chat lets it ${LEVEL_WORDS[app.level]} there. Allowing it lets the agent ${LEVEL_WORDS[need]} in ${app.name} in this chat (change it back under the 🖥 button).`;
     const card = { id: newApprovalId(), tool: 'desktop', free: true, est: 0, what: `Let the agent ${need === 'full' ? 'type and use keys' : 'click'} in ${app.name} · ${app.level} → ${need}`, why, yes: 'Allow', no: 'Keep it', noAlways: true };
+    // ⚡ YOLO: work the user asked for in an app they named ("open Cline in VS Code and ask it to build…") needs the
+    // level to do it; the deciders put that at P=0.65 and the card timed out. In Strict the card asks as before.
+    if (S.approval === 'yolo' && userNamedApp(app.name)) { emit({ t: 'note', level: 'info', msg: `YOLO: ${app.name} is now at ${need} in this chat (the agent needed to ${act.replace(/_/g, ' ')}, and you named the app in your message). Change it under the 🖥 button.`, at: at() }); return { approve: true, by: 'user' }; }
     if (S.approval === 'yolo' && decidersOn) {
       emit({ t: 'approval', ...card, mode: 'yolo', at: at() });
       const j = await approvalJudge({ kind: 'command', userMessages: userTurns(), reading: run.reading?.text, voters: S.voters, chatModel: setup.model, gate: S.gate, signal, account, sf: SF,
