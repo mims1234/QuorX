@@ -32,7 +32,7 @@ import { ptyAvailable, ptyOpen, ptyWrite, ptyResize, ptyFollow, ptyClose } from 
 // Pages the agent wrote, served from this app's own address, get their own opaque origin: their requests to /api are refused.
 const SANDBOX_CSP = 'sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads';
 import { listChats, sidebarChats, chatPage, chatPictureRefs, pictureRefCounts, getTrace, getChatForPage, getChat, saveChat, patchChat, settleReply, trashChat, validId, listProjects, saveProject, forgetProject, setProjectColor, setProjectFlags, costSummary, costChats } from './server/store.js';
-import { ALLOWED, copyTemplate, workspaceDir, safePath, listFiles, listDir, listServers, stopServerWait, restartServer, serverLog, startServer, restoreCheckpoint, listCheckpoints, pruneCheckpoints, undoConflicts, changedFiles, reviewFiles, reviewDiff, undoFile, serverOverview, launchConfigs, saveLaunchConfig, removeLaunchConfig, ensureAgentDir, agentSpace } from './server/workspace.js';
+import { ALLOWED, copyTemplate, workspaceDir, safePath, chatFolder, listFiles, listDir, listServers, stopServerWait, restartServer, serverLog, startServer, restoreCheckpoint, listCheckpoints, pruneCheckpoints, undoConflicts, changedFiles, reviewFiles, reviewDiff, undoFile, serverOverview, launchConfigs, saveLaunchConfig, removeLaunchConfig, ensureAgentDir, agentSpace } from './server/workspace.js';
 import { followTerm, runningJobs, stopJob } from './server/terminal.js';
 import { runningIn, stopRunning, stopAllIn } from './server/running.js';
 import { decide as decideCommand, loadRules, saveRules, suggestedRules, ruleProblem } from './server/cmdpolicy.js';
@@ -292,6 +292,23 @@ const server = http.createServer(async (req, res) => {
       // On the pages address every project shares one origin: a page may load files of its own project only.
       if (req.pageOrigin && req.headers['sec-fetch-mode'] !== 'navigate' && !ref.startsWith(`${base}ws/${wm[1]}/`)) return json(res, 404, { error: 'not found' });
       const own = req.headers.origin === 'null' && ref.startsWith(`${base}ws/${wm[1]}/`);
+      const type = MIME[path.extname(file).toLowerCase()] || 'application/octet-stream';
+      res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-cache', ...(/html|svg|xml/.test(type) && !req.pageOrigin ? { 'Content-Security-Policy': SANDBOX_CSP } : {}), ...(own ? { 'Access-Control-Allow-Origin': 'null' } : {}) });
+      return sendFile(file, res);
+    }
+    // A folder outside the project that a chat added (/wsf/<chat>/<n>/<path>): its pages open in the browser like a
+    // project's, sandboxed the same way, and only while the chat has it.
+    const wf = url.pathname.match(/^\/wsf\/([a-z0-9-]+)\/(\d+)\/(.*)$/i);
+    if (wf && req.method === 'GET') {
+      const dir = chatFolder(wf[1], wf[2]), rel = decodePath(wf[3]);
+      if (!dir || rel == null || /(^|[/\\])\.(?!well-known([/\\]|$))/.test(rel)) return json(res, 404, { error: 'not found' });
+      let file;
+      try { file = safePath(dir, rel || 'index.html'); } catch { return json(res, 404, { error: 'not found' }); }
+      if (fs.existsSync(file) && fs.statSync(file).isDirectory()) file = path.join(file, 'index.html');
+      if (!fs.existsSync(file)) return json(res, 404, { error: 'not found' });
+      const ref = String(req.headers.referer || ''), base = `http://${req.headers.host}/`, mine = `${base}wsf/${wf[1]}/${wf[2]}/`;
+      if (req.pageOrigin && req.headers['sec-fetch-mode'] !== 'navigate' && !ref.startsWith(mine)) return json(res, 404, { error: 'not found' });
+      const own = req.headers.origin === 'null' && ref.startsWith(mine);
       const type = MIME[path.extname(file).toLowerCase()] || 'application/octet-stream';
       res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-cache', ...(/html|svg|xml/.test(type) && !req.pageOrigin ? { 'Content-Security-Policy': SANDBOX_CSP } : {}), ...(own ? { 'Access-Control-Allow-Origin': 'null' } : {}) });
       return sendFile(file, res);

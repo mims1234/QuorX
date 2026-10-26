@@ -51,6 +51,19 @@ export function realish(p) {
 }
 const SECRET_REAL = () => SECRET_FILES.map((f) => realish(f).toLowerCase());
 // secrets (optional): SECRET_REAL() worked out once by a caller that checks many paths in a row (searchFiles).
+// Folders outside the project each chat added (agent.js keeps them current while a reply runs), so the page can serve
+// their files to the browser at /wsf/<chat>/<n>/<path>: chat id → [folder paths].
+const CHAT_FOLDERS = new Map();
+export const registerFolders = (chatId, folders) => { if (chatId) CHAT_FOLDERS.set(String(chatId), (folders || []).map((f) => f.path)); };
+/** The chat's added folder number `i`, or null. */
+export const chatFolder = (chatId, i) => CHAT_FOLDERS.get(String(chatId))?.[Number(i)] ?? null;
+/** { i, rel } of the added folder `abs` is in, or null. */
+export function folderIndex(chatId, abs) {
+  const list = CHAT_FOLDERS.get(String(chatId)) || [];
+  for (const [i, d] of list.entries()) { const rel = path.relative(d, abs); if (!rel.startsWith('..') && !path.isAbsolute(rel)) return { i, rel: rel.replaceAll('\\', '/') }; }
+  return null;
+}
+
 export function safePath(root, rel, secrets = null) {
   const r = String(rel || '').replace(/^[/\\]+/, '');
   // Windows: "file.txt:stream" (an alternate data stream) or a device name would get around the checks below.

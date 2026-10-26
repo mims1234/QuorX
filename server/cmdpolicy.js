@@ -378,8 +378,10 @@ export function posixSystemZone(p, { platform = process.platform, home = os.home
   return null;
 }
 
-/** Where an absolute path is: { zone: 'blocked' | 'protected' | 'inside' | 'outside', why }. */
-export function zoneOf(abs, root) {
+/** Where an absolute path is: { zone: 'blocked' | 'protected' | 'inside' | 'outside', why }. `added`: folders outside the
+ *  project the user let this chat write in (a chat's added folders): inside one counts as inside, after every blocked
+ *  place is ruled out. */
+export function zoneOf(abs, root, added = []) {
   const p = realish(path.resolve(abs));
   const proj = realish(path.resolve(root));
   if (/^[a-z]:\\?$/i.test(p) || p === '/' || /^\\\\[^\\]+\\[^\\]+\\?$/.test(p)) return { zone: 'blocked', why: 'a drive root' };
@@ -399,6 +401,12 @@ export function zoneOf(abs, root) {
     if (rel.includes('.git')) return { zone: 'protected', why: 'git’s own folder (.git)' };
     if (rel[0] === '.quorx' && rel[1] !== 'scratch') return { zone: 'protected', why: 'QuorX’s own files (.quorx)' };
     return { zone: 'inside', why: '' };
+  }
+  for (const d of added) {
+    const dir = realish(path.resolve(d));
+    if (!same(p, dir) && !inside(p, dir)) continue;
+    if (path.relative(dir, p).split(path.sep).map(low).includes('.git')) return { zone: 'protected', why: 'git’s own folder (.git)' };
+    return { zone: 'inside', why: '', added: dir };
   }
   return { zone: 'outside', why: '' };
 }
@@ -755,9 +763,9 @@ function pathsOf(s, c, ctx) {
     if (/[*?]/.test(path.basename(abs))) {
       // A wildcard: what matters is the folder it matches in. Everything in a blocked folder is blocked too
       // (C:\*, ~\*); in the project folder itself, the matches are inside the project.
-      const zd = zoneOf(path.dirname(abs), ctx.root);
-      z = zd.zone === 'blocked' && zd.why !== 'the project folder itself' ? zd : zoneOf(path.join(path.dirname(abs), 'qx-wildcard-match'), ctx.root);
-    } else z = zoneOf(abs, ctx.root);
+      const zd = zoneOf(path.dirname(abs), ctx.root, ctx.added);
+      z = zd.zone === 'blocked' && zd.why !== 'the project folder itself' ? zd : zoneOf(path.join(path.dirname(abs), 'qx-wildcard-match'), ctx.root, ctx.added);
+    } else z = zoneOf(abs, ctx.root, ctx.added);
     out.push({ raw: text, resolved: abs, zone: z.zone, why: z.why, kind, redirect, wildcard: /[*?]/.test(path.basename(abs)) });
   };
   for (const r of s.redirects || []) add(r, 'write', true);
@@ -1349,7 +1357,7 @@ export async function decide(line, ctx) {
   // Off Windows there is no cmd, and Node's default shell (run_command's "direct") is /bin/sh: both are read as bash.
   if (!WIN && (shell === 'cmd' || shell === 'direct')) shell = 'bash';
   const root = path.resolve(ctx.root);
-  const c = { root, cwd: path.resolve(ctx.cwd || root), env: ctx.env || process.env };
+  const c = { root, cwd: path.resolve(ctx.cwd || root), env: ctx.env || process.env, added: Array.isArray(ctx.added) ? ctx.added : [] };
   const text = String(line || '').trim();
   if (!text) return { verdict: 'deny', who: null, why: 'empty command', decidedBy: 'code', segments: [] };
   const split = shell === 'powershell' || shell === 'pwsh' ? await splitPowerShell(text) : shell === 'bash' || shell === 'zsh' ? splitBash(text, shell === 'zsh') : splitCmd(text);

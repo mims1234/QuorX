@@ -326,6 +326,12 @@ flowchart TD
 | never | `format`, `diskpart`, `bcdedit`, `reg add HKLM`, `Set-ExecutionPolicy`, `net user`, `-Verb RunAs`, `sudo` + anything but an install | refused | refused |
 | unknown | everything else | asks | the deciders vote |
 
+**Folders outside the project.** A file tool given an absolute path outside the project asks the user once to add
+that folder to the chat: read only, or read and write. After that the file tools work there directly, commands treat
+a read-and-write folder like the project (its `.git` stays protected), the tripwire watches it, and its pages open in
+the browser from `/wsf/<chat>/<n>/`. Drive roots, the profile folder itself, system folders, QuorX's data and the
+folders above the project can't be added; deleting there goes through `shell`; Undo doesn't cover changes there.
+
 `cmd /c`, `powershell -Command` and `bash -c` with fixed text are split open: each command inside is judged as if it
 were typed, so `cmd /c copy a.txt D:\x\` asks like `Copy-Item` does, and `cmd /c dir` is a read.
 

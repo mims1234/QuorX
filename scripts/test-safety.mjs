@@ -1698,3 +1698,72 @@ $f.Controls.AddRange(@($l, $b)); [void]$f.ShowDialog()`;
     assert.match(toolOut(bodies, 4), /0 processes left/);
   } finally { closeForm('QX Steps Form'); }
 });
+
+// ---------- folders outside the project, added to a chat ----------
+test('folders: a write outside the project asks once to add its folder, then works there directly', async () => {
+  const other = tmp('added'), file = path.join(other, 'index.html');
+  let cards = 0;
+  const { events, bodies } = await agentRun((b, i) => [
+    reply('', [['write_file', { path: file, content: '<!doctype html><html><body>hi</body></html>' }]]),
+    reply('', [['edit_file', { path: file, find: 'hi', replace: 'hello' }]]),
+    reply('', [['read_file', { path: file }]]),
+    reply('Done.'),
+  ][i], { chatId: 'folders-ok', onEvent: (e, id) => { if (e.t === 'approval' && e.tool === 'folder') { cards++; assert.match(e.what, /^Read and write files in /); setTimeout(() => answerApproval(id, e.id, { approve: true }), 10); } } });
+  assert.equal(cards, 1, 'one card for the folder, none for the next changes');
+  assert.match(toolOut(bodies, 1), /Wrote .*index\.html .*\n\(Outside the project, in .*: Undo doesn't cover this change\.\)/);
+  assert.match(toolOut(bodies, 2), /Edited .*index\.html \(1 replacement\)/);
+  assert.match(toolOut(bodies, 3), /hello/);
+  assert.equal(fs.readFileSync(file, 'utf8'), '<!doctype html><html><body>hello</body></html>');
+  assert.deepEqual(of(events, 'folder_added').map((e) => e.folder), [{ path: other, access: 'write' }]);
+});
+
+test('folders: a folder the user doesn’t add stays out of reach; blocked places never get a card', async () => {
+  const other = tmp('declined');
+  let cards = 0;
+  const { bodies } = await agentRun((b, i) => [
+    reply('', [['write_file', { path: path.join(other, 'a.txt'), content: 'x' }]]),
+    reply('', [['write_file', { path: path.join(os.homedir(), 'qx-should-not-exist.txt'), content: 'x' }]]),
+    reply('', [['delete_file', { path: path.join(other, 'a.txt') }]]),
+    reply('OK.'),
+  ][i], { chatId: 'folders-no', onEvent: (e, id) => { if (e.t === 'approval' && e.tool === 'folder') { cards++; setTimeout(() => answerApproval(id, e.id, { approve: false }), 10); } } });
+  assert.match(toolOut(bodies, 1), /didn't add .* to this chat/);
+  assert.equal(fs.existsSync(path.join(other, 'a.txt')), false);
+  assert.match(toolOut(bodies, 2), /^Refused: .* can't be added to this chat: your profile folder/);
+  assert.match(toolOut(bodies, 3), /^Refused: delete_file works in the project only/);
+  assert.equal(cards, 1, 'the profile folder never got a card');
+});
+
+test('folders: a read-only folder reads without a card and asks again before writing', async () => {
+  const other = tmp('readonly');
+  fs.writeFileSync(path.join(other, 'notes.txt'), 'kept');
+  let cards = [];
+  const { bodies } = await agentRun((b, i) => [
+    reply('', [['read_file', { path: path.join(other, 'notes.txt') }]]),
+    reply('', [['write_file', { path: path.join(other, 'notes.txt'), content: 'changed' }]]),
+    reply('OK.'),
+  ][i], { chatId: 'folders-ro', more: { folders: [{ path: other, access: 'read' }] }, onEvent: (e, id) => { if (e.t === 'approval' && e.tool === 'folder') { cards.push(e.what); setTimeout(() => answerApproval(id, e.id, { approve: false }), 10); } } });
+  assert.match(toolOut(bodies, 1), /kept/);
+  assert.deepEqual(cards.map((w) => w.split(' files')[0]), ['Read and write']);
+  assert.equal(fs.readFileSync(path.join(other, 'notes.txt'), 'utf8'), 'kept');
+  assert.match(JSON.stringify(bodies[0].messages.at(-1).content), /Folders outside the project added to this chat .*\(read only\)/);
+});
+
+test('folders: commands treat a read-and-write folder like the project', { skip: !WIN }, async () => {
+  const other = tmp('cmdfolder');
+  const outside = await decide(`Set-Content "${path.join(other, 'a.txt')}" hi`, { shell: 'powershell', root: scripts, rules: [], mode: 'strict', yolo: {} });
+  assert.match(outside.why, /writes outside the project/);
+  const added = await decide(`Set-Content "${path.join(other, 'a.txt')}" hi`, { shell: 'powershell', root: scripts, rules: [], mode: 'strict', yolo: {}, added: [other] });
+  assert.equal(added.verdict, 'allow');
+  const git = await decide(`Set-Content "${path.join(other, '.git', 'config')}" x`, { shell: 'powershell', root: scripts, rules: [], mode: 'strict', yolo: {}, added: [other] });
+  assert.equal(git.verdict, 'deny', 'its .git stays protected');
+});
+
+test('folders: a chat\'s added folders are served at /wsf/<chat>/<n>/', async () => {
+  const { registerFolders, chatFolder, folderIndex } = await import('../server/workspace.js');
+  const a = tmp('wsf-a'), b = tmp('wsf-b');
+  registerFolders('chat-x', [{ path: a, access: 'read' }, { path: b, access: 'write' }]);
+  assert.equal(chatFolder('chat-x', 1), b);
+  assert.deepEqual(folderIndex('chat-x', path.join(b, 'site', 'index.html')), { i: 1, rel: 'site/index.html' });
+  assert.equal(folderIndex('chat-x', path.join(tmp('wsf-c'), 'x.html')), null);
+  assert.equal(chatFolder('other-chat', 0), null);
+});
