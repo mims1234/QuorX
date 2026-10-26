@@ -320,14 +320,19 @@ flowchart TD
 | install | `npm i x`, `pip install x`, `cargo add x` | asks | the deciders vote |
 | install, whole computer | `winget`, `choco`, `scoop`, `rustup`, `npm -g`, `brew`, `apt`, `sudo` + an install | asks | asks you |
 | external | `git push`, publishing, deploy CLIs (`gh`, `vercel`, `aws`, `kubectl`…) | asks | asks you (unless you ticked "YOLO may approve external actions") |
-| opaque | `python -c`, `node -e`, `cmd /c`, `iex`, `Start-Process`, `& $var`, UNC paths, ending other programs | asks | asks you (unless ticked) |
+| opaque | `python -c`, `node -e`, `cmd /c` or `powershell -Command` with a variable in the text, `iex`, `Start-Process`, `& $var`, UNC paths, ending other programs | asks | asks you (unless ticked) |
 | discard | `git clean`, `git reset --hard`, `git restore .` | asks | asks you |
 | delete | `Remove-Item`, `rm`, `del`, `rimraf` | see [the delete guard](#paths-and-the-delete-guard) | same |
 | never | `format`, `diskpart`, `bcdedit`, `reg add HKLM`, `Set-ExecutionPolicy`, `net user`, `-Verb RunAs`, `sudo` + anything but an install | refused | refused |
 | unknown | everything else | asks | the deciders vote |
 
+`cmd /c`, `powershell -Command` and `bash -c` with fixed text are split open: each command inside is judged as if it
+were typed, so `cmd /c copy a.txt D:\x\` asks like `Copy-Item` does, and `cmd /c dir` is a read.
+
 **Rules** have the form `{ effect: allow | ask | deny, match: "cargo build*" }` and live per chat, per project
-(`<project>/.quorx/permissions.json`) or everywhere (`data/permissions.json`).
+(`data/project-rules/<hash of the project folder>.json`, in QuorX's data folder, so a cloned repository can't bring
+rules of its own) or everywhere (`data/permissions.json`). "Always allow…" only saves a rule that matches the command
+it came from, and Settings marks older rules that can never match.
 
 - Deny beats ask beats allow. A rule can always make a class stricter.
 - A rule can lift *ask* to *allow* for read, write, build, install and unknown. It can lift opaque, external,

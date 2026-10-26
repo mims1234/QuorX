@@ -21,7 +21,7 @@ import { needsAdmin, adminForAgent, adminForUser } from './elevation.js';
 import { secretKind, maskSecretText, scrubSecrets, projectEnv, setSecret, ENV_NAME, MASK } from './projectsecrets.js';
 import { searchFiles, searchNote, trashFile, checkpoint, changedFiles, copyTemplate, snapBefore, commandChanges, safePath, childEnv, realish } from './workspace.js';
 import { SAFETY_DEFAULTS, safetySettings, yoloOf } from './safety.js';
-import { decide as decideCommand, loadRules, addRule, agentWriteBlocked } from './cmdpolicy.js';
+import { decide as decideCommand, loadRules, addRule, agentWriteBlocked, ruleMatches } from './cmdpolicy.js';
 import { approvalJudge } from './approvals.js';
 import { normalizePlan, pricePlan, itemLine, planFacts, matchPlan, usePlan } from './mediaplan.js';
 import { startTripwire } from './tripwire.js';
@@ -206,7 +206,6 @@ export function cacheTokens(u = {}) {
 const short = (m) => String(m).split('/').pop();
 // Tools that put the agent's text into a file or an artifact, and the note trimming leaves in place of old text (loop.js).
 const WRITES_CONTENT = new Set(['write_file', 'append_file', 'edit_file', 'write_artifact', 'edit_artifact']);
-const SCRATCH_SCRIPT = /^\s*(?:node|python3?|py|deno|bun|tsx)\s+["']?(?:\.[/\\])?\.quorx[/\\]scratch[/\\][\w.-]+\.(?:mjs|cjs|js|ts|py)["']?(?:\s+[\w.:=/\\-]+)*\s*$/i;
 // A target that is a media file, not a page (site:assets/edits/film.mp4).
 const MEDIA_TARGET = /^site:.+\.(mp4|webm|mov|m4v|mp3|wav|m4a|ogg|flac|png|jpe?g|gif|webp|avif)$/i;
 const WRITE_TOOLS = new Set(['write_file', 'append_file', 'edit_file', 'write_artifact', 'edit_artifact', 'delete_file']);
@@ -581,8 +580,8 @@ const CODE_TOOLS = [
     window: { type: 'integer', description: 'A window handle from windows (default: its first window)' }, ref: { type: 'integer' }, x: { type: 'integer' }, y: { type: 'integer' }, text: { type: 'string' }, keys: { type: 'string' } } } } },
   { type: 'function', function: { name: 'start_server', description: 'Start (or restart) a long-running dev server in your project folder. It gets a free port in the PORT environment variable and as {PORT} in arguments, and opens in the user\'s Browser tab. Its command is saved to the project\'s launch file, so the user can start and stop it later; give only the name to rerun a saved one.', parameters: { type: 'object', required: ['name'], properties: { name: { type: 'string', description: 'Short name, e.g. "web"' }, command: { type: 'string', description: 'Leave out to rerun the saved launch config with this name' }, args: { type: 'array', items: { type: 'string' } } } } } },
   { type: 'function', function: { name: 'stop_server', description: 'Stop a dev server you started.', parameters: { type: 'object', required: ['name'], properties: { name: { type: 'string' } } } } },
-  { type: 'function', function: { name: 'launch_config', description: 'The project’s saved launch configs (.quorx/launch.json): the servers the user can start and stop from the chat header. list shows them; save creates one or updates it (old_name renames it); remove deletes one (a running server keeps running: stop_server ends it). Use this, not write_file, for that file. Saving does not start anything: start_server with the name does.', parameters: { type: 'object', required: ['action'], properties: { action: { type: 'string', enum: ['list', 'save', 'remove'] }, name: { type: 'string', description: 'Short name, e.g. "web" (save, remove)' }, command: { type: 'string', description: 'The program, e.g. npm, node, python, cargo (save)' }, args: { type: 'array', items: { type: 'string' }, description: 'Its arguments; {PORT} becomes the server’s port (save)' }, port: { type: 'integer', description: 'A fixed port, only if the app needs one; otherwise it gets a free one (save)' }, old_name: { type: 'string', description: 'The config’s current name when renaming it (save)' } } } } },
-  { type: 'function', function: { name: 'preview_site', description: 'Run a static site from your project folder (an HTML file and the files it loads) on a small local server, saved to the launch file as "site" (or the name you give), and open it in the user\'s Browser tab.', parameters: { type: 'object', required: ['title'], properties: { title: { type: 'string' }, name: { type: 'string', description: 'Launch entry name, default "site"' }, path: { type: 'string', description: 'Entry HTML file, default index.html' } } } } },
+  { type: 'function', function: { name: 'launch_config', description: 'The project’s saved launch configs (.quorx/launch.json): the servers the user can start and stop from the chat header. list shows them; save creates one or updates one you made in this reply; replacing or renaming an existing entry needs old_name and asks the user first; remove deletes one (a running server keeps running: stop_server ends it). Use this, not write_file, for that file. Saving does not start anything: start_server with the name does.', parameters: { type: 'object', required: ['action'], properties: { action: { type: 'string', enum: ['list', 'save', 'remove'] }, name: { type: 'string', description: 'Short name, e.g. "web" (save, remove)' }, command: { type: 'string', description: 'The program, e.g. npm, node, python, cargo (save)' }, args: { type: 'array', items: { type: 'string' }, description: 'Its arguments; {PORT} becomes the server’s port (save)' }, port: { type: 'integer', description: 'A fixed port, only if the app needs one; otherwise it gets a free one (save)' }, old_name: { type: 'string', description: 'The config’s current name when renaming it (save)' } } } } },
+  { type: 'function', function: { name: 'preview_site', description: 'Run a static site from your project folder (an HTML file and the files it loads) on a small local server, saved to the launch file as "site" (or the name you give), and open it in the user\'s Browser tab. An entry that already runs something else is never replaced: without a name the site gets its own entry named after its page.', parameters: { type: 'object', required: ['title'], properties: { title: { type: 'string' }, name: { type: 'string', description: 'Launch entry name, default "site" (or "site-<page>" when "site" runs another page)' }, path: { type: 'string', description: 'Entry HTML file, default index.html' } } } } },
 ];
 // Tools for project memory, skills, templates and housekeeping (only with a project folder).
 const TEMPLATE_LIST = listTemplates();
@@ -1737,7 +1736,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (['write_file', 'edit_file', 'append_file', 'delete_file', 'write_artifact', 'edit_artifact', 'run_command', 'shell', 'terminal', 'start_server'].includes(name)) {
       (run.actionSteps ||= []).push(step);
       // Which file it touched ('' for a command, which could make any file), so a missing link can wait for its file.
-      (run.actionPaths ||= []).push({ step, path: /_file$/.test(name) && !broken ? String(args?.path || '').replaceAll('\\', '/').replace(/^\.\//, '') : '' });
+      (run.actionPaths ||= []).push({ step, name, path: /_file$/.test(name) && !broken ? String(args?.path || '').replaceAll('\\', '/').replace(/^\.\//, '') : '' });
     }
     noteProblems(name, String(result), step);
     if (!broken) result += await loopWatch(name, args, first, step);
@@ -1856,6 +1855,10 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       // back once the agent has touched something other than that page since it first showed up, and it is still there.
       const page = line.match(/^(.+?): links to .+, which does not exist$/)?.[1];
       if (tried && page && !(run.actionPaths || []).some((x) => x.step > prev.first && x.step <= step && x.path !== page)) tried = false;
+      // "May be cut off" while a page is written in parts: each append_file to it repeats the line until the last
+      // part closes it. Only another kind of change, or a change to another file, counts as an attempt.
+      const cut = line.match(/^(.+?): does not end with <\/html>; it may be cut off$/)?.[1];
+      if (tried && cut && (run.actionPaths || []).filter((x) => x.step > prev.step && x.step <= step).every((x) => x.name === 'append_file' && x.path === cut)) tried = false;
       const n = !prev ? 1 : tried ? prev.n + 1 : prev.n;
       seen.set(key, { n, text: clip(line, 600), source, step, first: prev?.first ?? step });
       if (n === 2 && !(run.freshDone ||= new Set()).has(key)) { run.freshDone.add(key); (run.freshQueue ||= []).push({ key, text: line, source }); }
@@ -2012,9 +2015,15 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     // The agent's own scratch pages (self-tests in .quorx/) are not what it built.
     const targets = [...htmlArts.map((id) => `artifact:${id}`), ...[...touched.sites].filter((p) => !/^\.?quorx[\\/]|^\.quorx/i.test(p)).map((p) => `site:${p}`), ...[...touched.apps].filter((n) => serverFor(projectId, n)?.status === 'running').map((n) => `app:${n}`)];
     // A site opened in an earlier reply counts too when its files changed now.
-    const changed = root ? changedFiles(root, filesId) : [];
-    if (changed.some((f) => /\.(html?|css|m?js)$/i.test(f))) for (const lc of launchConfigs(projectId)) if (lc.args?.[0] === '.quorx/serve.mjs' && lc.args[1]) { const t = `site:${lc.args[1]}`; if (!targets.includes(t)) targets.push(t); }
-    if (changed.some((f) => /\.(html?|css|m?js)$/i.test(f))) for (const a of arts.values()) if (a.kind === 'site' && a.url?.startsWith(`/ws/${projectId}/`)) { const t = `site:${a.url.slice(`/ws/${projectId}/`.length)}`; if (!targets.includes(t)) targets.push(t); }
+    // Only a site whose own files changed: its page, or a file in its folder (for a page at the top of the project,
+    // a file at the top). A change in one site doesn't send the reviewer through every other site of the project.
+    const changed = root ? changedFiles(root, filesId).map((f) => String(f).replaceAll('\\', '/')).filter((f) => /\.(html?|css|m?js)$/i.test(f)) : [];
+    const ofSite = (entry) => {
+      const e = String(entry).replaceAll('\\', '/').replace(/^\.\//, ''), dir = path.posix.dirname(e);
+      return changed.some((f) => f === e || (dir === '.' ? !f.includes('/') : f.startsWith(`${dir}/`)));
+    };
+    for (const lc of launchConfigs(projectId)) if (lc.args?.[0] === '.quorx/serve.mjs' && lc.args[1] && ofSite(lc.args[1])) { const t = `site:${lc.args[1]}`; if (!targets.includes(t)) targets.push(t); }
+    for (const a of arts.values()) if (a.kind === 'site' && a.url?.startsWith(`/ws/${projectId}/`) && ofSite(a.url.slice(`/ws/${projectId}/`.length))) { const t = `site:${a.url.slice(`/ws/${projectId}/`.length)}`; if (!targets.includes(t)) targets.push(t); }
     // Video Mode: the films are what was built (the site server plays them), first in line; the storyboard sheet is
     // the plan, not the build.
     if (run.video) {
@@ -3128,9 +3137,25 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       if (args.action === 'save') {
         if (!args.name) return 'Error: give the config a name.';
         try {
-          const old = args.old_name && launchConfigs(projectId).find((x) => x.name.toLowerCase() === String(args.old_name).toLowerCase());
+          const list = launchConfigs(projectId), byName = (n) => list.find((x) => x.name.toLowerCase() === String(n).toLowerCase());
+          const old = args.old_name && byName(args.old_name);
           if (args.old_name && !old) return `Error: no saved launch config named "${args.old_name}".`;
-          const c = saveLaunchConfig(projectId, { name: String(args.name), command: args.command ?? old?.command, args: (args.args ?? old?.args ?? []).map(String), port: args.port ?? old?.port, oldName: args.old_name });
+          const next = { name: String(args.name), command: args.command ?? old?.command, args: (args.args ?? old?.args ?? []).map(String), port: args.port ?? old?.port };
+          const sameRun = (a, b) => a.command === b.command && JSON.stringify(a.args || []) === JSON.stringify(b.args || []);
+          // The user's own entries are theirs: saving over one by name is refused, and replacing one on purpose
+          // (old_name) asks them first. Entries this reply made itself can change freely.
+          const own = (run.ownConfigs ??= new Set());
+          const clash = !old && byName(next.name);
+          if (clash && !sameRun(clash, next) && !own.has(clash.name.toLowerCase())) return `Error: a launch config named "${clash.name}" already exists (${show(clash).slice(2)}). Save under another name, or pass old_name: "${clash.name}" to replace it, which asks the user first.`;
+          if (old && !own.has(old.name.toLowerCase()) && !(sameRun(old, next) && old.name === next.name && old.port === next.port)) {
+            const card = { id: newApprovalId(), tool: 'launch_config', free: true, est: 0, what: `Replace the launch entry "${old.name}"`, why: `${show(old).slice(2)} → ${show(next).slice(2)}`, yes: 'Replace', no: 'Keep mine', noAlways: true, mode: S.approval };
+            const wait = S.approval === 'yolo' ? { ms: yoloWait() || 1, then: 'keep yours', onTimeout: () => ({ approve: false, by: 'timeout', reason: 'No answer, so your entry was kept.' }) } : null;
+            const ans = await askUser(card, wait);
+            emit({ t: 'approval_done', id: card.id, ...ans, at: at() });
+            if (!ans.approve) return `The user kept their launch entry "${old.name}" as it is${ans.reason ? `: "${ans.reason}"` : ''}. Save yours under another name.`;
+          }
+          const c = saveLaunchConfig(projectId, { ...next, oldName: args.old_name });
+          own.add(c.name.toLowerCase());
           notes.push(`saved launch config ${c.name}`);
           return `Saved:\n${show(c)}\nStart it with start_server and the name "${c.name}".`;
         } catch (e) { return `Error: ${e.message}`; }
@@ -3147,11 +3172,24 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (name === 'preview_site') {
       const entry = String(args.path || 'index.html').replace(/^[/\\]+/, '');
       readFile(root, entry, 10);
-      const sname = String(args.name || 'site').trim() || 'site';
+      // A launch entry already serving another page (or running something else) is left alone: without a name the
+      // site gets its own entry named after its page ("site-receipts" for receipts/index.html); a name the agent
+      // gives that is taken is refused.
+      const configs = launchConfigs(projectId), own = (run.ownConfigs ??= new Set());
+      const entryOf = (n) => configs.find((x) => x.name.toLowerCase() === n.toLowerCase());
+      const fits = (n) => { const x = entryOf(n); return !x || own.has(n.toLowerCase()) || (x.args?.[0] === '.quorx/serve.mjs' && String(x.args?.[1] || '').replaceAll('\\', '/') === entry.replaceAll('\\', '/')); };
+      let sname = String(args.name || '').trim();
+      if (sname && !fits(sname)) return `Error: the launch entry "${sname}" already runs something else. Pick another name for this site.`;
+      if (!sname) {
+        const base = entry.replaceAll('\\', '/').replace(/\/?index\.html?$/i, '').replace(/\.html?$/i, '');
+        const stem = base ? `site-${base.split('/').pop().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'page'}` : 'site';
+        sname = [stem, ...Array.from({ length: 20 }, (_, i) => `${stem}-${i + 2}`)].find(fits) || `${stem}-${Date.now().toString(36)}`;
+      }
+      own.add(sname.toLowerCase());
       // The harness's small static server goes in .quorx (git-ignored), refreshed each time.
       fs.mkdirSync(path.join(root, '.quorx'), { recursive: true });
       fs.copyFileSync(new URL('./serve-static.mjs', import.meta.url), path.join(root, '.quorx', 'serve.mjs'));
-      const saved = launchConfigs(projectId).find((x) => x.name.toLowerCase() === sname.toLowerCase());
+      const saved = configs.find((x) => x.name.toLowerCase() === sname.toLowerCase());
       const r = await (deps.startServer || startServer)({ projectId, name: sname, cmd: 'node', args: ['.quorx/serve.mjs', entry], port: saved?.port || undefined });
       emit({ t: 'server', name: sname, url: r.url, status: r.status, entry, at: at() });
       notes.push(`ran site ${entry} as server ${sname} on ${r.url}`);
@@ -3180,7 +3218,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   function commandRules() { return [...chatRules(), ...(root ? loadRules(root) : [])]; }
   function slimPolicy(d) {
     return { verdict: d.verdict, who: d.who, why: d.why, decidedBy: d.decidedBy, hint: d.hint, shell: d.shell, packages: d.packages,
-      segments: d.segments.map((s) => ({ text: clip(s.text, 300), cls: s.cls, verdict: s.verdict, why: s.why, global: s.global || undefined, via: s.via, suggest: s.suggest,
+      segments: d.segments.map((s) => ({ text: clip(s.text, 300), cls: s.cls, verdict: s.verdict, why: s.why, global: s.global || undefined, via: s.via, wrap: s.wrap, suggest: s.suggest,
         paths: (s.paths || []).slice(0, 8).map((p) => ({ path: p.resolved || p.raw, zone: p.zone, kind: p.kind })) })) };
   }
 
@@ -3260,7 +3298,11 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     // The same command line approved earlier in this reply doesn't ask again, say when the agent moves it from shell
     // to its terminal or to the background. (Hooks are approved one by one: you didn't type them for this reply.)
     const sameLine = line.replace(/\s+/g, ' ').trim(), approvedLines = (run.approvedLines ??= new Set());
-    if (!hook && approvedLines.has(sameLine)) { aud({ kind: 'approved', command: line, by: 'earlier', reason: 'approved earlier in this reply' }); return { ok: true, by: 'earlier' }; }
+    if (!hook && approvedLines.has(sameLine)) {
+      aud({ kind: 'approved', command: line, by: 'earlier', reason: 'approved earlier in this reply' });
+      emit({ t: 'note', level: 'info', msg: `Ran without asking again: “${clip(line, 80)}” was approved earlier in this reply.`, at: at() });
+      return { ok: true, by: 'earlier' };
+    }
     let who = d.verdict === 'allow' || S.approval !== 'yolo' || yoloAsksCommands || run.cmdEscalated ? 'user' : d.who;
     const card = { id: newApprovalId(), tool: 'shell', free: true, est: 0, what: line, why: hook ? `your hook (${hook}) runs this${fileFromAgent ? ', with a file name the agent chose' : ', not the agent'}; ${d.why}` : d.why, policy, ...(d.risk ? { risk: d.risk } : {}) };
     // Rules made by a button can't lift these, so the card doesn't offer "Always allow" for them.
@@ -3288,8 +3330,9 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       // A helper script the agent wrote in its own scratch folder (and QuorX read): judged on harm only.
       // Also when all it adds is reading the output (2>&1 | Select-Object -Last 3, | tail): the deciders asked "did the
       // user ask for this?" about a render script four times in a row and turned it down each time.
-      const firstPart = String(d.segments[0]?.text || '').replace(/\s+\d?>&\d\s*$/, '').trim();
-      const scratch = d.segments.length >= 1 && SCRATCH_SCRIPT.test(firstPart) && d.segments.slice(1).every((s) => s.cls === 'read');
+      // QuorX marks the scratch script while reading the command (any language: .ps1, .bat, .sh, .js, .py); the lines
+      // it read inside the script come along, and the rest may only read.
+      const scratch = d.segments.some((s) => s.scratch) && d.segments.every((s) => s.scratch || /^\.quorx\/scratch\//i.test(s.via || '') || s.cls === 'read');
       const j = await approvalJudge({ kind: 'command', userMessages: userTurns(), reading: run.reading?.text, harmOnly: scratch, facts, voters: S.voters, chatModel: setup.model, gate: S.gate, signal, account, sf: SF,
         log: { runId, chatId: req.chatId || null, project: projectId } });
       if (j.approve === true) {
@@ -3317,13 +3360,21 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       const waitMs = unsure ? 0 : yoloWait();
       if (!unsure) card.why = j.reason;
       if (waitMs) {
-        const low = j.pOther != null && j.pOther <= (SF.harmMax ?? 0.2), secs = Math.round(waitMs / 1000);
+        // Only work inside the project runs when nobody answers. Reaching past it (files outside, the web, another
+        // program it starts) waits for a real yes, however harmless the deciders think it is.
+        const past = d.segments.some((s) => ['opaque', 'external', 'net', 'never'].includes(s.cls) || s.global || (s.paths || []).some((p) => p.zone === 'outside' || p.zone === 'unknown'));
+        const low = !past && j.pOther != null && j.pOther <= (SF.harmMax ?? 0.2), secs = Math.round(waitMs / 1000);
         unsure = { ms: waitMs, then: low ? 'run' : 'skip', onTimeout: () => (low
           ? { approve: true, by: 'timeout', reason: `No answer in ${secs}s, and the deciders saw little risk (harm P=${j.pOther.toFixed(2)}), so it ran.` }
-          : { approve: false, by: 'timeout', reason: `No answer in ${secs}s, and the deciders weren't sure it is harmless, so it was skipped.` }) };
+          : { approve: false, by: 'timeout', reason: past ? `No answer in ${secs}s. It reaches outside the project or starts another program, which only runs on your yes, so it was skipped.` : `No answer in ${secs}s, and the deciders weren't sure it is harmless, so it was skipped.` }) };
       }
     }
     const ans = await askUser({ ...card, mode: 'strict' }, unsure);
+    // A rule that wouldn't match the command it was made for is not saved: it would keep asking while looking allowed.
+    if (ans.approve && ans.rule && !d.segments.some((s) => ruleMatches(ans.rule.match, s.ruleText))) {
+      emit({ t: 'note', level: 'warn', msg: `The rule “${clip(ans.rule.match, 120)}” wasn't saved: it doesn't match this command, so it would never apply. The command ran once.`, at: at() });
+      ans.rule = null;
+    }
     if (ans.approve && ans.rule) {
       const rule = { effect: 'allow', match: ans.rule.match, by: 'button' };
       try {
@@ -3336,7 +3387,8 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     emit({ t: 'approval_done', id: card.id, ...ans, at: at() });
     aud({ kind: ans.approve ? 'approved' : 'declined', command: line, by: ans.by || 'user', reason: ans.reason || undefined });
     if (!ans.approve) return { ok: false, text: declined('shell', ans) };
-    if (!hook) approvedLines.add(sameLine);
+    // Running because nobody answered is not a yes: the same line asks again next time.
+    if (!hook && ans.by !== 'timeout') approvedLines.add(sameLine);
     return { ok: true, by: ans.by === 'timeout' ? 'timeout' : 'you' };
   }
 

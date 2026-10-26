@@ -34,7 +34,7 @@ import { listChats, sidebarChats, chatPage, chatPictureRefs, pictureRefCounts, g
 import { ALLOWED, copyTemplate, workspaceDir, safePath, listFiles, listDir, listServers, stopServerWait, restartServer, serverLog, startServer, restoreCheckpoint, listCheckpoints, pruneCheckpoints, undoConflicts, changedFiles, reviewFiles, reviewDiff, undoFile, serverOverview, launchConfigs, saveLaunchConfig, removeLaunchConfig, ensureAgentDir, agentSpace } from './server/workspace.js';
 import { followTerm, runningJobs, stopJob } from './server/terminal.js';
 import { runningIn, stopRunning, stopAllIn } from './server/running.js';
-import { decide as decideCommand, loadRules, saveRules, suggestedRules } from './server/cmdpolicy.js';
+import { decide as decideCommand, loadRules, saveRules, suggestedRules, ruleProblem } from './server/cmdpolicy.js';
 import { jobHostStatus, jobsAvailable } from './server/jobhost.js';
 import { safetySettings, yoloOf } from './server/safety.js';
 import { readAudit } from './server/audit.js';
@@ -488,7 +488,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/permissions' && req.method === 'GET') {
       const pid = url.searchParams.get('project');
       const root = pid && validId(pid) ? workspaceDir(pid) : null;
-      const rules = loadRules(root);
+      const rules = loadRules(root).map((r) => ({ ...r, problem: ruleProblem(r.match) || undefined }));
       return json(res, 200, { project: rules.filter((r) => r.scope === 'project'), everywhere: rules.filter((r) => r.scope === 'everywhere'),
         suggested: root ? suggestedRules(root, rules) : [], stop: (await jobsAvailable(), jobHostStatus()), shell: shellInfo().name });
     }

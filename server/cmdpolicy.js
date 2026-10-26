@@ -54,6 +54,9 @@ const WRITE = new Set(['new-item', 'ni', 'mkdir', 'md', 'set-content', 'add-cont
   'tee', 'ln', 'chmod', 'chown', 'chgrp', 'ditto', 'xattr', 'chflags', 'truncate']);
 const DELETE = new Set(['remove-item', 'rm', 'ri', 'del', 'erase', 'rd', 'rmdir', 'rimraf', 'del-cli', 'clear-content', 'clear-item', 'trash', 'unlink', 'shred', 'srm']);
 const MOVES = new Set(['move-item', 'mv', 'move', 'rename-item', 'ren', 'rename']);
+// Windows-only tools whose switches start with / and may carry a value (/R:3, /EXCLUDE:list.txt). Never tools that
+// also exist on macOS and Linux (mkdir, rmdir), where /tmp is a path.
+const CMD_SWITCH_TOOLS = new Set(WIN ? ['copy', 'xcopy', 'robocopy', 'move', 'del', 'erase'] : []);
 const BUILD = new Set(['cargo', 'rustc', 'dotnet', 'go', 'cmake', 'ctest', 'make', 'nmake', 'ninja', 'msbuild', 'cl', 'gcc', 'g++', 'clang', 'clang++',
   'javac', 'java', 'gradle', 'gradlew', 'mvn', 'mvnw', 'kotlinc', 'kotlin', 'swift', 'swiftc', 'zig', 'tsc', 'vite', 'webpack', 'esbuild', 'rollup',
   'eslint', 'prettier', 'jest', 'vitest', 'mocha', 'pytest', 'ruff', 'mypy', 'black', 'flake8', 'pylint', 'pyinstaller', 'electron', 'electron-builder',
@@ -765,7 +768,11 @@ function pathsOf(s, c, ctx) {
       if (skip) { skip = false; continue; }
       if (a.param) { if (VALUE_PARAMS.has(low(a.text))) skip = true; continue; }
       if (a.kind === 'ScriptBlockExpressionAst') continue;
+      // Windows tools' switches with values (robocopy /R:3 /LOG:x, xcopy /EXCLUDE:f) are not paths.
+      if (CMD_SWITCH_TOOLS.has(s.program) && /^\/[a-z]+(?::.*)?$/i.test(a.text)) continue;
       plain++;
+      // robocopy source destination [files…]: what follows the two folders are file name patterns.
+      if (s.program === 'robocopy' && plain > 2) continue;
       // Set-Content/Add-Content/Out-File take content after the path; only the first plain argument is the path.
       if (['set-content', 'add-content', 'out-file', 'tee-object'].includes(s.program) && plain > 1) continue;
       // A move deletes its source (the first argument) and writes its destination.
@@ -1078,7 +1085,8 @@ async function judgeCommands(segs, lang, ic, rel, depth, out) {
     // (PowerShell's Add-Type and COM, which WinForms and WPF scripts use, are judged by LAUNCHERS and members above.)
     if (lang === 'sh' && k.cls === 'opaque') { out.launch ||= runs; continue; }
     const paths = pathsOf(s, k, ic);
-    if (k.cls === 'never' || (k.cls === 'install' && k.global) || ['external', 'discard'].includes(k.cls) || KILLERS.has(s.program) || paths.some((p) => p.zone === 'blocked' || p.zone === 'protected')) {
+    // A line that writes or deletes outside the project shows on the card as if typed: a script is no way around it.
+    if (k.cls === 'never' || (k.cls === 'install' && k.global) || ['external', 'discard'].includes(k.cls) || KILLERS.has(s.program) || paths.some((p) => p.zone === 'blocked' || p.zone === 'protected' || (p.zone === 'outside' && p.kind !== 'read'))) {
       out.extra.push({ ...s, ctx: { ...ic }, shell: SHELL_OF[lang], via: rel, viaWhy: `inside ${rel}`, depth: depth + 1 });
     }
   }
@@ -1172,6 +1180,39 @@ async function inspectPkg(s, run, c, written) {
 }
 
 /**
+ * cmd /c, powershell -Command and bash -c run the text after them as a command line. When that text is fixed (no
+ * variables), it is split and each command in it is judged like any other, so `cmd /c copy a D:\x` gets the same
+ * card as the copy itself. Returns those commands, or null to judge the line as before ("can't read").
+ */
+const CMD_PRE = /^\/([dqsua]|[efvt]:\w+)$/i;
+async function innerCommands(s) {
+  if (s.dynamicProgram || s.opaque || (s.wrapDepth || 0) >= 3) return null;
+  const a = s.args;
+  let i = -1, kind;
+  if (s.program === 'cmd') {
+    i = a.findIndex((x) => /^\/[ckr]$/i.test(x.text));
+    if (i < 0 || !a.slice(0, i).every((x) => CMD_PRE.test(x.text))) return null;
+    kind = 'cmd';
+  } else if (s.program === 'powershell' || s.program === 'pwsh') {
+    i = a.findIndex((x) => /^-(c|command)$/i.test(x.text));
+    if (i < 0 || a.slice(0, i).some((x) => /^-(e|ec|enc|encodedcommand|f|file)$/i.test(x.text))) return null;
+    kind = 'powershell';
+  } else if (['bash', 'sh', 'zsh'].includes(s.program)) {
+    i = a.findIndex((x) => x.text === '-c' || x.text === '-lc');
+    kind = s.program === 'zsh' ? 'zsh' : 'bash';
+  } else return null;
+  const rest = a.slice(i + 1);
+  // bash -c 'cmd' name args: the extra words become $0 $1 …, which the command can use; that is left as it was.
+  if (i < 0 || !rest.length || rest.some((x) => x.static === false) || (kind !== 'cmd' && kind !== 'powershell' && rest.length > 1)) return null;
+  const text = rest.length === 1 ? rest[0].text : rest.map((x) => (/\s/.test(x.text) ? `"${x.text}"` : x.text)).join(' ');
+  if (!text.trim() || (kind === 'powershell' && /^\s*[{-]/.test(text))) return null;
+  const split = kind === 'cmd' ? splitCmd(text) : kind === 'powershell' ? await splitPowerShell(text) : splitBash(text, kind === 'zsh');
+  if (split.opaque || !split.segs.length) return null;
+  const wrap = `${s.rawProgram} ${a[i].text}`, ctx = s.ctx ? { ...s.ctx } : null;
+  return split.segs.map((x) => ({ ...x, shell: kind, wrapDepth: (s.wrapDepth || 0) + 1, wrap, depth: s.depth, ...(ctx ? { ctx } : {}) }));
+}
+
+/**
  * Reads the script a command runs, if it is in the project. Returns null, or { opaque: why, extra: [segments] }:
  * the commands to judge alongside it (what it passes its arguments on to, and what its own lines do).
  * written: files earlier commands of the same line write.
@@ -1190,6 +1231,9 @@ async function inspectRun(s, c, written) {
   if (zoneOf(abs, c.root).zone !== 'inside') return null;
   const rel = path.relative(c.root, abs).replaceAll('\\', '/');
   if (written.some((w) => same(w, abs))) return { opaque: `this command writes ${rel} and then runs it, so QuorX can’t read it first`, extra: [] };
+  // A helper the agent wrote in its own scratch folder, in any language: the deciders judge its harm, not whether
+  // the user asked for it by name (they never do).
+  if (/^\.quorx\/scratch\//i.test(rel)) s.scratch = rel;
   const depth = s.depth || 0;
   const r = await readScript(abs, run.lang, c, depth, new Set());
   if (!r) return null;
@@ -1230,12 +1274,49 @@ function matchRules(text, rules, mode) {
   return hits;
 }
 
+// Options of a program that take the next word as their value (PowerShell accepts any unique start of a name).
+// The value is not the command's first argument: `powershell -ExecutionPolicy Bypass -File x.ps1` runs x.ps1.
+const PS_HOST_VALUES = ['-executionpolicy', '-ep', '-ex', '-exe', '-exec', '-windowstyle', '-w', '-win', '-window', '-file', '-f',
+  '-workingdirectory', '-wd', '-wo', '-outputformat', '-o', '-of', '-inputformat', '-if', '-i', '-configurationname', '-config',
+  '-settingsfile', '-settings', '-psconsolefile', '-version', '-v', '-custompipename'];
+const VALUE_FLAGS = { powershell: new Set(PS_HOST_VALUES), pwsh: new Set(PS_HOST_VALUES), git: new Set(['-c', '-C', '--git-dir', '--work-tree', '--namespace']) };
+// Options that name the script the program runs: a rule for it can cover the script's folder.
+const SCRIPT_FLAGS = new Set(['-file', '-f']);
+
 // Suggested rules for "Always allow…": this exact command, commands starting like it, or any use of the program.
+// "Starting like it" is cut from the same words the rules are matched against (ruleText), so it always matches
+// the command it was made from: everything up to the first real argument, options and their values included.
 function suggestions(s) {
-  const plain = s.args.filter((a) => !a.param).map((a) => a.text);
   const exact = ruleText(s);
-  const prefix = plain.length ? `${s.program} ${plain[0]}*` : `${s.program}*`;
-  return { exact, prefix, program: `${s.program}*` };
+  const vals = VALUE_FLAGS[s.program], words = [s.program];
+  let anchor = null;
+  for (let i = 0; i < s.args.length; i++) {
+    const a = s.args[i];
+    if (!a.param) { anchor = a.text; break; }
+    words.push(a.text);
+    const flag = a.text.split(':')[0], next = s.args[i + 1];
+    if (!next || next.param || !(vals?.has(flag) || vals?.has(low(flag)))) continue;
+    i++;
+    // A script in a folder: the rule covers that folder's scripts (powershell … -File .quorx\scratch\*).
+    const dir = SCRIPT_FLAGS.has(low(flag)) ? next.text.match(/^(.*[\\/])[^\\/]+$/)?.[1] : null;
+    if (dir) { anchor = dir; break; }
+    words.push(next.text);
+  }
+  const prefix = `${[...words, ...(anchor != null ? [anchor] : [])].join(' ').replace(/\s+/g, ' ').trim()}*`;
+  return { exact: exact.length <= RULE_MAX ? exact : prefix, prefix, program: `${s.program}*` };
+}
+const RULE_MAX = 1000;
+/** Whether a rule's pattern matches a command's rule text (what "Always allow…" checks before it saves). */
+export const ruleMatches = (match, text) => ruleRx(match).test(String(text || '').replace(/\s+/g, ' ').trim());
+/** Why a saved rule can never match anything, or ''. */
+export function ruleProblem(match) {
+  const m = String(match || '').trim();
+  if (/[;|]|&&/.test(m.replace(/\*$/, ''))) return 'it holds several commands; a rule matches one command at a time';
+  const [p, second] = m.split(/\s+/);
+  const vals = VALUE_FLAGS[progName(p)];
+  // powershell Bypass*: the value of an option without the option in front of it is never where the rule looks.
+  if (vals && second && !/^-/.test(second) && /^(bypass|unrestricted|remotesigned|allsigned|restricted|default|undefined|hidden|minimized|maximized|normal)\*?$/i.test(second)) return `"${second.replace(/\*$/, '')}" is an option's value, but the option in front of it is missing`;
+  return '';
 }
 
 // ---------- the decision ----------
@@ -1287,6 +1368,8 @@ export async function decide(line, ctx) {
   const RISK = { danger: 2, warn: 1 };
   while (queue.length) {
     const s = queue.shift();
+    const inner = await innerCommands(s);
+    if (inner) { queue.unshift(...inner); continue; }
     if (!s.inspected && (s.depth || 0) <= SCRIPT_DEPTH) {
       s.inspected = true;
       const r = await inspectRun(s, s.ctx || c, written);
@@ -1296,7 +1379,7 @@ export async function decide(line, ctx) {
     const k = classify(s, s.shell || shell);
     const paths = pathsOf(s, k, s.ctx || c);
     written.push(...paths.filter((p) => p.kind === 'write' && p.resolved).map((p) => p.resolved));
-    const seg = { text: s.text, program: s.program, cls: k.cls, why: k.why, global: !!k.global, paths, rule: null, suggest: suggestions(s), ...(s.via ? { via: s.via } : {}) };
+    const seg = { text: s.text, program: s.program, cls: k.cls, why: k.why, global: !!k.global, paths, rule: null, suggest: suggestions(s), ruleText: ruleText(s), ...(s.via ? { via: s.via } : {}), ...(s.scratch ? { scratch: s.scratch } : {}), ...(s.wrap ? { wrap: s.wrap } : {}) };
     if (!s.ctx) trackCd(s, c);
     // stand: the deciders vote in place of the user (without them it would pause for you), not as a check first.
     let v = 'allow', who = null, by = `class:${k.cls}`, why = k.why, stand = false;
@@ -1364,14 +1447,14 @@ export async function decide(line, ctx) {
 }
 
 // ---------- rule storage ----------
-// Rules live in data/permissions.json (everywhere) and <project>/.quorx/permissions.json (one project). The agent
-// can't write either: .quorx is off limits to its file tools, and data/ is blocked for commands.
+// Rules live in data/permissions.json (everywhere) and data/project-rules/<hash>.json (one project). The agent can't
+// write either: data/ is blocked for its commands and outside its file tools.
 const globalFile = () => path.join(HOME, 'data', 'permissions.json');
 // A project's rules live in QuorX's data folder, keyed by the project's real folder: a folder you open (a cloned repo)
 // can't bring rules of its own. A .quorx/permissions.json in a project is no longer read.
 const projectFile = (root) => path.join(HOME, 'data', 'project-rules', `${crypto.createHash('sha256').update(realish(path.resolve(root)).toLowerCase()).digest('hex').slice(0, 32)}.json`);
 const readRules = (f) => { try { const j = JSON.parse(fs.readFileSync(f, 'utf8')); return Array.isArray(j.rules) ? j.rules : []; } catch { return []; } };
-const cleanRule = (r) => ({ effect: ['allow', 'ask', 'deny'].includes(r.effect) ? r.effect : 'ask', match: String(r.match || '').trim().replace(/\s+/g, ' ').slice(0, 300),
+const cleanRule = (r) => ({ effect: ['allow', 'ask', 'deny'].includes(r.effect) ? r.effect : 'ask', match: String(r.match || '').trim().replace(/\s+/g, ' ').slice(0, RULE_MAX),
   by: r.by === 'button' ? 'button' : 'user', note: String(r.note || '').slice(0, 200), at: r.at || Date.now() });
 
 /** Every rule that applies in a project: the project's first, then everywhere's. Each carries its scope. */

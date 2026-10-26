@@ -4051,7 +4051,7 @@ document.addEventListener('focusin', (e) => {
 });
 function shellCardHTML(a) {
   const c = a.card, p = c.policy || {};
-  const segs = (p.segments || []).map((s) => `<div class="sc-seg"><code>${esc(clip(s.text, 200))}</code><span class="sc-cls" data-cls="${esc(s.cls)}">${esc(CMD_CLASS[s.cls] || s.cls)}${s.global ? ' · whole computer' : ''}${s.via ? ` · run by ${esc(s.via)}` : ''}</span>${(s.paths || []).map((x) => `<span class="sc-path" data-zone="${esc(x.zone)}">${esc(CMD_ZONE[x.zone] || x.zone)} · ${esc(clip(x.path, 90))}</span>`).join('')}</div>`).join('');
+  const segs = (p.segments || []).map((s) => `<div class="sc-seg"><code>${esc(clip(s.text, 200))}</code><span class="sc-cls" data-cls="${esc(s.cls)}">${esc(CMD_CLASS[s.cls] || s.cls)}${s.global ? ' · whole computer' : ''}${s.via ? ` · run by ${esc(s.via)}` : ''}${s.wrap ? ` · inside ${esc(s.wrap)}` : ''}</span>${(s.paths || []).map((x) => `<span class="sc-path" data-zone="${esc(x.zone)}">${esc(CMD_ZONE[x.zone] || x.zone)} · ${esc(clip(x.path, 90))}</span>`).join('')}</div>`).join('');
   const sug = (p.segments || []).find((s) => s.verdict !== 'allow')?.suggest || p.segments?.[0]?.suggest || { exact: c.what, prefix: c.what, program: c.what };
   const seg = (group, opts) => `<div class="seg sc-pick" data-group="${group}">${opts.map(([v, l], i) => `<button type="button" data-v="${esc(v)}" class="${i === 0 ? 'on' : ''}">${l}</button>`).join('')}</div>`;
   const risk = c.risk === 'danger' ? '<div class="sc-risk" data-risk="danger">⛔ This reads your keys or sign-ins. Only say yes if you asked for exactly this.</div>'
@@ -6208,7 +6208,7 @@ async function drawPermsPanel() {
   const list = (scope, rules) => rules.length ? rules.map((x, i) => `<div class="pr-rule" data-scope="${scope}" data-i="${i}">
       <span class="pr-eff" data-eff="${esc(x.effect)}">${RULE_EFFECT[x.effect] || esc(x.effect)}</span><code>${esc(x.match)}</code>
       <span class="pr-by">${x.by === 'button' ? 'from a card' : 'typed by you'}</span>
-      <button type="button" class="pp-btn del" data-pr-del title="Remove this rule" aria-label="Remove rule">${ICO.trash}</button></div>`).join('')
+      <button type="button" class="pp-btn del" data-pr-del title="Remove this rule" aria-label="Remove rule">${ICO.trash}</button>${x.problem ? `<div class="pr-problem">⚠ Never matches: ${esc(x.problem)}. Remove it, or add a rule that starts like the command.</div>` : ''}</div>`).join('')
     : '<div class="st-row-help">No rules yet.</div>';
   box.innerHTML = `<div class="pr">
     <div class="pr-head"><label>Project <select data-pr-project>${projects.map((p) => `<option value="${esc(p.id)}" ${p.id === PERMS.project ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label></div>

