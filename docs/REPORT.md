@@ -566,6 +566,13 @@ lines, with ■ Stop. **■ Stop all** ends every command, background job, serve
   go through the browser tool), terminals and code editors at Click (commands go through `shell`), File Explorer
   at View; QuorX itself, password managers and system tools (Registry Editor, Task Manager…) are never used. In
   an allowed app, clicking a button named like Send, Pay, Delete or Post asks the user first.
+- The desktop tool counts every point in window pixels from the window's top-left corner: its picture, the
+  controls' `@x,y` from `read` and `click_at` all use the same pixels, and the helper is per-monitor DPI aware, so
+  a point read off a picture lands on scaled displays too. Besides click, type and keys it can zoom into part of a
+  window, right-, double- and middle-click, hover, drag, scroll (the control's own scrolling first, else the
+  wheel), hold a key, wait for text to appear, move, resize, minimise and maximise a window, and read or set the
+  clipboard. `steps` runs up to 8 of these in one call, each checked like a call of its own. A window that draws
+  black for a normal capture is copied from the screen instead. `look` and `decide` take `desktop:<app or job>`.
 - A command still running at its time limit moves to the background instead of being killed. A long build, or an
   install stopped part-way, would be wasted work or a half-installed tool. If its last output looks like a prompt,
   the agent is told that a background job never gets input.

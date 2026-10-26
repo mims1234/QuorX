@@ -104,3 +104,19 @@ export async function sendKeys(scope, handle, keys) {
 }
 export async function windowShot(scope, handle) { const p = await pick(scope, handle); return `data:image/png;base64,${(await U.call('shot', p, 20000)).png}`; }
 export async function closeWindow(scope, handle) { const p = await pick(scope, handle); return (await U.call('close', p, 15000)).did; }
+
+// Windows only: the helpers for macOS and Linux don't have these yet.
+const winOnly = (what) => { if (OS !== 'win32') throw new Error(`${what} works on Windows for now`); };
+const num = (v, d = 0) => (v == null || v === '' || Number.isNaN(Number(v)) ? d : Math.round(Number(v)));
+/** Part of the window (window pixels), enlarged to read small text. */
+export async function zoomWindow(scope, handle, x, y, w, h) { winOnly('zoom'); const p = await pick(scope, handle); return `data:image/png;base64,${(await U.call('zoom', { ...p, x: num(x), y: num(y), w: num(w, 200), h: num(h, 200) }, 20000)).png}`; }
+/** kind: right, middle, double, hover, down, up; at a control (ref) or window pixels (x, y). */
+export async function mouseAt(scope, handle, kind, { ref, x, y } = {}) { winOnly('that mouse action'); const p = await pick(scope, handle); return (await U.call('mouse', { ...p, kind, ref: num(ref), x: num(x), y: num(y) }, 15000)).did; }
+export async function dragIn(scope, handle, x, y, x2, y2) { winOnly('drag'); const p = await pick(scope, handle); return (await U.call('drag', { ...p, x: num(x), y: num(y), x2: num(x2), y2: num(y2) }, 15000)).did; }
+/** dir: up, down, left, right; at a control (ref), a point (x, y) or the window's middle. */
+export async function scrollIn(scope, handle, dir, amount, { ref, x, y } = {}) { winOnly('scroll'); const p = await pick(scope, handle); return (await U.call('scroll', { ...p, dir, amount: num(amount, 3), ref: num(ref), ...(x != null ? { x: num(x), y: num(y) } : {}) }, 15000)).did; }
+export async function holdKey(scope, handle, key, ms) { winOnly('hold_key'); const p = await pick(scope, handle); return (await U.call('hold', { ...p, key: String(key || ''), ms: num(ms, 1000) }, 20000)).did; }
+/** what: focus, minimize, maximize, restore, move (x, y: screen pixels), resize (w, h). */
+export async function windowDo(scope, handle, what, { x, y, w, h } = {}) { winOnly('window actions'); const p = await pick(scope, handle); return (await U.call('win', { ...p, what, x: num(x), y: num(y), w: num(w), h: num(h) }, 15000)).did; }
+/** The clipboard's text, or puts `text` on it. */
+export async function clipboard(text = null) { winOnly('the clipboard'); const r = await U.call('board', text == null ? {} : { set: true, text: String(text) }, 10000); return text == null ? String(r.text ?? '') : r.did; }

@@ -1651,7 +1651,50 @@ test('computer use: off in a chat, the user’s apps are out of reach; on, each 
     reply('OK.'),
   ][i], { chatId: 'apps-on', settings: { appsAccess: true }, more: { apps } });
   assert.match(toolOut(on.bodies, 1), /look at only .* in Calculator, so type isn't allowed/);
-  assert.match(toolOut(on.bodies, 2), /look and click, not type in Visual Studio Code, so keys isn't allowed. For a command, use shell/);
+  assert.match(toolOut(on.bodies, 2), /look, click, scroll and drag, not type in Visual Studio Code, so keys isn't allowed. For a command, use shell/);
   assert.match(toolOut(on.bodies, 3), /isn't open for this chat yet/, 'a never-used app is dropped even if the page sends it');
   assert.match(JSON.stringify(on.bodies[0].messages.at(-1).content), /Computer use\)[\s\S]*Allowed so far: Calculator \(view\), Visual Studio Code \(click\)/);
+});
+
+test('computer use: the new actions keep to each app’s level, and steps stop at the first refusal', async () => {
+  const apps = [{ name: 'Calculator', appId: 'Microsoft.WindowsCalculator_8wekyb3d8bbwe!App', level: 'view' }, { name: 'Paint', appId: 'Microsoft.Paint_8wekyb3d8bbwe!App', level: 'click' }];
+  const { bodies } = await agentRun((b, i) => [
+    reply('', [['desktop', { action: 'scroll', app: 'Calculator', direction: 'down' }]]),
+    reply('', [['desktop', { action: 'clipboard', app: 'Paint' }]]),
+    reply('', [['desktop', { app: 'Paint', steps: [{ action: 'hold_key', key: 'shift' }, { action: 'drag', x: 1, y: 1, to_x: 5, to_y: 5 }] }]]),
+    reply('OK.'),
+  ][i], { chatId: 'apps-levels', settings: { appsAccess: true }, more: { apps } });
+  assert.match(toolOut(bodies, 1), /look at only .* in Calculator, so scroll isn't allowed/);
+  assert.match(toolOut(bodies, 2), /in Paint, so clipboard isn't allowed/);
+  assert.match(toolOut(bodies, 3), /^Ran 1 of 2 steps:\n1\. hold_key: Error: .*so hold_key isn't allowed/, 'the second step never ran');
+});
+
+// Last (it starts a background job): the agent's own WinForms program, driven with the new actions in one call.
+test('desktop: steps run several actions at once: double-click, wait for text, zoom and resize', { skip: !WIN }, async () => {
+  const app = `Add-Type -AssemblyName System.Windows.Forms
+$f = New-Object Windows.Forms.Form; $f.Text = 'QX Steps Form'; $f.Width = 320; $f.Height = 220
+$l = New-Object Windows.Forms.Label; $l.Text = 'Count: 0'; $l.Top = 10; $l.Left = 10
+$b = New-Object Windows.Forms.Button; $b.Text = 'Add one'; $b.Top = 40; $b.Left = 10; $b.Width = 120; $b.Height = 40
+$script:n = 0; $b.Add_Click({ $script:n++; $l.Text = "Count: $script:n" })
+$f.Controls.AddRange(@($l, $b)); [void]$f.ShowDialog()`;
+  let job = null, at = null;
+  try {
+    const { bodies } = await agentRun((b, i) => {
+      if (i === 0) return reply('', [['shell', { command: 'powershell -NoProfile -ExecutionPolicy Bypass -File app.ps1', background: true }]]);
+      if (i === 1) { job = toolOut([b], 0).match(/job (bg\d+)/)[1]; return reply('', [['desktop', { action: 'read', job }]]); }
+      if (i === 2) {
+        at = toolOut([b], 0).match(/Button "Add one" @(\d+),(\d+)/).slice(1).map(Number);
+        return reply('', [['desktop', { job, steps: [{ action: 'double_click', x: at[0], y: at[1] }, { action: 'wait_for', text: 'Count: 2', seconds: 5 }, { action: 'zoom', x: 0, y: 0, width: 150, height: 80 }, { action: 'resize', width: 420, height: 300 }] }]]);
+      }
+      if (i === 3) return reply('', [['job_stop', { job }]]);
+      return reply('Done.');
+    }, { prep: (d) => { fs.writeFileSync(path.join(d, 'app.ps1'), app); allow(d, 'powershell -noprofile -executionpolicy bypass -file app.ps1*'); } });
+    const out = toolOut(bodies, 3);
+    assert.match(out, /^Ran 4 of 4 steps:/, out);
+    assert.match(out, /1\. double_click at \d+,\d+: double-clicked/);
+    assert.match(out, /2\. wait_for "Count: 2": "Count: 2" is there/, 'the double click reached the button through the same pixels the read gave');
+    assert.match(out, /3\. zoom at 0,0: Zoomed in/);
+    assert.match(out, /4\. resize: resized it to 420x300/);
+    assert.match(toolOut(bodies, 4), /0 processes left/);
+  } finally { closeForm('QX Steps Form'); }
 });

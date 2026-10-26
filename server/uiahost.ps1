@@ -13,6 +13,14 @@
 #   keys    {pids, handle, keys}         -> {did}   (SendKeys syntax: {ENTER}, ^s, %{F4} …)
 #   shot    {pids, handle}               -> {png}   (base64)
 #   close   {pids, handle}               -> {did}
+#   zoom    {pids, handle, x, y, w, h}   -> {png}   (part of the window, enlarged)
+#   mouse   {pids, handle, ref|x,y, kind} -> {did}  (right, middle, double, hover, down, up)
+#   drag    {pids, handle, x, y, x2, y2} -> {did}
+#   scroll  {pids, handle, ref|x,y, dir, amount} -> {did}
+#   hold    {pids, handle, key, ms}      -> {did}
+#   win     {pids, handle, what, x, y, w, h} -> {did} (focus, minimize, maximize, restore, move, resize)
+#   board   {set, text}                  -> {did} or {text}   (the clipboard)
+# Every x,y is window pixels from its top-left corner: the same in its picture, its controls @x,y and click_at.
 #   apps    {name}                       -> {apps: [{name, appId}]}   (Start-menu apps whose name matches)
 #   appwins {appId, name}                -> {windows: [{handle, pid, appPid, title}]}   (that app's open windows)
 #   openapps {}                          -> {names: [..]}   (apps with a window open now: names only, no titles)
@@ -47,6 +55,9 @@ public static class QxUia {
   [DllImport("user32.dll")] static extern IntPtr GetAncestor(IntPtr h, uint flags);
   [DllImport("user32.dll")] static extern bool AttachThreadInput(uint a, uint b, bool attach);
   [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+  [DllImport("user32.dll")] static extern bool SetProcessDpiAwarenessContext(IntPtr v);
+  [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
+  [DllImport("user32.dll")] static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
   [DllImport("kernel32.dll")] static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
   [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
   [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern bool QueryFullProcessImageNameW(IntPtr p, int flags, StringBuilder s, ref int size);
@@ -192,12 +203,17 @@ public static class QxUia {
     return sb.ToString();
   }
 
+  // Real pixels on every monitor (per-monitor DPI aware), so a window's picture, its controls' @x,y and click_at all
+  // count the same pixels from the window's top-left corner, however the display is scaled.
+  public static void Dpi() { try { SetProcessDpiAwarenessContext(new IntPtr(-4)); } catch { } }
+
   public static string Tree(long handle, int depth, int max) {
     AutomationElement el = AutomationElement.FromHandle(new IntPtr(handle));
     List<AutomationElement> list = new List<AutomationElement>();
     StringBuilder sb = new StringBuilder();
     int lines = 0;
-    System.Windows.Rect origin = el.Current.BoundingRectangle;
+    RECT wr; GetWindowRect(new IntPtr(handle), out wr);
+    System.Windows.Rect origin = new System.Windows.Rect(wr.L, wr.T, Math.Max(0, wr.R - wr.L), Math.Max(0, wr.B - wr.T));
     Walk(el, 0, 0, depth, max, list, sb, ref lines, origin);
     Refs[handle] = list;
     if (lines >= max) sb.Append("… (more controls not shown)\n");
@@ -338,15 +354,158 @@ public static class QxUia {
     return "sent the keys";
   }
 
-  public static string Shot(long handle) {
-    IntPtr h = new IntPtr(handle);
+  // A picture of the window. Some apps (games, video, GPU-drawn ones) draw black for PrintWindow: then the window is
+  // brought to the front and the screen under it is copied instead.
+  static Bitmap Grab(IntPtr h, int[] pids) {
     RECT r; GetWindowRect(h, out r);
     int w = r.R - r.L, ht = r.B - r.T;
     if (w <= 0 || ht <= 0 || IsIconic(h)) throw new Exception("the window is minimised or has no size");
-    using (Bitmap bmp = new Bitmap(w, ht)) {
-      using (Graphics g = Graphics.FromImage(bmp)) { IntPtr dc = g.GetHdc(); PrintWindow(h, dc, 2); g.ReleaseHdc(dc); }
-      using (MemoryStream ms = new MemoryStream()) { bmp.Save(ms, ImageFormat.Png); return Convert.ToBase64String(ms.ToArray()); }
+    Bitmap bmp = new Bitmap(w, ht);
+    using (Graphics g = Graphics.FromImage(bmp)) { IntPtr dc = g.GetHdc(); PrintWindow(h, dc, 2); g.ReleaseHdc(dc); }
+    if (!Blank(bmp)) return bmp;
+    Front(h, pids);
+    GetWindowRect(h, out r);
+    using (Graphics g = Graphics.FromImage(bmp)) g.CopyFromScreen(r.L, r.T, 0, 0, new Size(w, ht));
+    return bmp;
+  }
+  static bool Blank(Bitmap b) {
+    for (int i = 1; i < 8; i++) for (int j = 1; j < 8; j++) { Color c = b.GetPixel(b.Width * i / 8, b.Height * j / 8); if (c.R > 8 || c.G > 8 || c.B > 8) return false; }
+    return true;
+  }
+  static string Png(Bitmap b) { using (MemoryStream ms = new MemoryStream()) { b.Save(ms, ImageFormat.Png); return Convert.ToBase64String(ms.ToArray()); } }
+  public static string Shot(long handle, int[] pids) { using (Bitmap b = Grab(new IntPtr(handle), pids)) return Png(b); }
+
+  // A part of the window, enlarged (up to 4x, to about 1000 pixels on its long side) to read small text. Its x,y,w,h
+  // are window pixels, the same ones click_at takes.
+  public static string Zoom(long handle, int x, int y, int w, int h, int[] pids) {
+    using (Bitmap full = Grab(new IntPtr(handle), pids)) {
+      x = Math.Max(0, Math.Min(x, full.Width - 1)); y = Math.Max(0, Math.Min(y, full.Height - 1));
+      w = Math.Max(1, Math.Min(w, full.Width - x)); h = Math.Max(1, Math.Min(h, full.Height - y));
+      double k = Math.Max(1.0, Math.Min(4.0, 1000.0 / Math.Max(w, h)));
+      using (Bitmap part = new Bitmap((int)(w * k), (int)(h * k))) {
+        using (Graphics g = Graphics.FromImage(part)) { g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic; g.DrawImage(full, new Rectangle(0, 0, part.Width, part.Height), new Rectangle(x, y, w, h), GraphicsUnit.Pixel); }
+        return Png(part);
+      }
     }
+  }
+
+  // ---- more ways to use a window: each point is a control [ref] or window pixels x,y, checked like a click ----
+  static POINT At(IntPtr h, int x, int y, int[] pids) {
+    if (IsIconic(h)) ShowWindow(h, 9);
+    RECT r; GetWindowRect(h, out r);
+    if (x < 0 || y < 0 || x >= r.R - r.L || y >= r.B - r.T) throw new Exception("that point is outside the window");
+    Front(h, pids);
+    POINT p = new POINT { X = r.L + x, Y = r.T + y };
+    Lands(p, pids);
+    return p;
+  }
+  static POINT Target(long handle, int r, int x, int y, int[] pids) {
+    IntPtr h = new IntPtr(handle);
+    if (r <= 0) return At(h, x, y, pids);
+    System.Windows.Rect b = Ref(handle, r).Current.BoundingRectangle;
+    if (b.IsEmpty) throw new Exception("that control has no place on screen");
+    Front(h, pids);
+    POINT p = new POINT { X = (int)(b.Left + b.Width / 2), Y = (int)(b.Top + b.Height / 2) };
+    Lands(p, pids);
+    return p;
+  }
+  static void Btn(uint down, uint up, int times) { for (int i = 0; i < times; i++) { mouse_event(down, 0, 0, 0, UIntPtr.Zero); Thread.Sleep(20); mouse_event(up, 0, 0, 0, UIntPtr.Zero); Thread.Sleep(60); } }
+
+  // kind: right, middle, double, hover, down, up.
+  public static string Mouse(long handle, int r, int x, int y, string kind, int[] pids) {
+    POINT p = Target(handle, r, x, y, pids);
+    SetCursorPos(p.X, p.Y); Thread.Sleep(30);
+    switch (kind) {
+      case "right": Btn(0x8, 0x10, 1); return "right-clicked";
+      case "middle": Btn(0x20, 0x40, 1); return "middle-clicked";
+      case "double": Btn(0x2, 0x4, 2); return "double-clicked";
+      case "hover": Thread.Sleep(500); return "the pointer rests there";
+      case "down": mouse_event(0x2, 0, 0, 0, UIntPtr.Zero); return "pressed the left button (send mouse up to let go)";
+      case "up": mouse_event(0x4, 0, 0, 0, UIntPtr.Zero); return "let go of the left button";
+    }
+    throw new Exception("unknown mouse action " + kind);
+  }
+
+  public static string Drag(long handle, int x, int y, int x2, int y2, int[] pids) {
+    IntPtr h = new IntPtr(handle);
+    POINT a = At(h, x, y, pids);
+    RECT r; GetWindowRect(h, out r);
+    if (x2 < 0 || y2 < 0 || x2 >= r.R - r.L || y2 >= r.B - r.T) throw new Exception("the end point is outside the window");
+    POINT b = new POINT { X = r.L + x2, Y = r.T + y2 };
+    Lands(b, pids);
+    SetCursorPos(a.X, a.Y); Thread.Sleep(40);
+    mouse_event(0x2, 0, 0, 0, UIntPtr.Zero); Thread.Sleep(80);
+    for (int i = 1; i <= 12; i++) { SetCursorPos(a.X + (b.X - a.X) * i / 12, a.Y + (b.Y - a.Y) * i / 12); Thread.Sleep(20); }
+    Thread.Sleep(80); mouse_event(0x4, 0, 0, 0, UIntPtr.Zero);
+    return "dragged from " + x + "," + y + " to " + x2 + "," + y2;
+  }
+
+  // A control that can scroll itself is scrolled by its own means; otherwise the mouse wheel turns over the point (or
+  // the window's middle).
+  public static string Scroll(long handle, int r, int x, int y, string dir, int amount, int[] pids) {
+    amount = Math.Max(1, Math.Min(20, amount));
+    bool horiz = dir == "left" || dir == "right", back = dir == "up" || dir == "left";
+    if (r > 0) {
+      object p;
+      AutomationElement e = Ref(handle, r);
+      if (e.TryGetCurrentPattern(ScrollPattern.Pattern, out p)) {
+        ScrollPattern sp = (ScrollPattern)p;
+        if (horiz ? sp.Current.HorizontallyScrollable : sp.Current.VerticallyScrollable) {
+          ScrollAmount step = back ? ScrollAmount.SmallDecrement : ScrollAmount.SmallIncrement;
+          for (int i = 0; i < amount; i++) { if (horiz) sp.ScrollHorizontal(step); else sp.ScrollVertical(step); }
+          return "scrolled it " + dir;
+        }
+      }
+    }
+    IntPtr h = new IntPtr(handle);
+    if (r <= 0 && x < 0) { RECT wr; GetWindowRect(h, out wr); x = (wr.R - wr.L) / 2; y = (wr.B - wr.T) / 2; }
+    POINT at = Target(handle, r, x, y, pids);
+    SetCursorPos(at.X, at.Y); Thread.Sleep(30);
+    int delta = 120 * amount * (back ? 1 : -1);
+    if (horiz) delta = -delta;
+    mouse_event(horiz ? 0x1000u : 0x0800u, 0, 0, (uint)delta, UIntPtr.Zero);
+    return "turned the wheel " + dir + " " + amount + (amount > 1 ? " notches" : " notch");
+  }
+
+  static readonly Dictionary<string, byte> Vk = new Dictionary<string, byte>(StringComparer.OrdinalIgnoreCase) {
+    { "shift", 0x10 }, { "ctrl", 0x11 }, { "control", 0x11 }, { "alt", 0x12 }, { "win", 0x5B }, { "space", 0x20 }, { "enter", 0x0D }, { "tab", 0x09 }, { "escape", 0x1B }, { "esc", 0x1B },
+    { "left", 0x25 }, { "up", 0x26 }, { "right", 0x27 }, { "down", 0x28 }, { "backspace", 0x08 }, { "delete", 0x2E }, { "home", 0x24 }, { "end", 0x23 }, { "pageup", 0x21 }, { "pagedown", 0x22 }
+  };
+  public static string HoldKey(long handle, string key, int ms, int[] pids) {
+    byte vk;
+    if (!Vk.TryGetValue(key, out vk)) {
+      if (key.Length == 1 && char.IsLetterOrDigit(key[0])) vk = (byte)char.ToUpperInvariant(key[0]);
+      else if (key.Length >= 2 && (key[0] == 'f' || key[0] == 'F')) { int n; if (!int.TryParse(key.Substring(1), out n) || n < 1 || n > 12) throw new Exception("unknown key " + key); vk = (byte)(0x6F + n); }
+      else throw new Exception("unknown key " + key + " (use a letter, a digit, F1-F12, shift, ctrl, alt, space, enter, an arrow…)");
+    }
+    Front(new IntPtr(handle), pids);
+    keybd_event(vk, 0, 0, UIntPtr.Zero);
+    Thread.Sleep(Math.Max(50, Math.Min(10000, ms)));
+    keybd_event(vk, 0, 2, UIntPtr.Zero);
+    return "held " + key + " for " + Math.Max(50, Math.Min(10000, ms)) + " ms";
+  }
+
+  // what: focus, minimize, maximize, restore, move {x, y}, resize {w, h}.
+  public static string Win(long handle, string what, int x, int y, int w, int ht, int[] pids) {
+    IntPtr h = new IntPtr(handle);
+    switch (what) {
+      case "focus": Front(h, pids); return "brought it to the front";
+      case "minimize": ShowWindow(h, 6); return "minimised it";
+      case "maximize": ShowWindow(h, 3); return "maximised it";
+      case "restore": ShowWindow(h, 9); return "restored it";
+      case "move": SetWindowPos(h, IntPtr.Zero, x, y, 0, 0, 0x1 | 0x4); return "moved it to " + x + "," + y;
+      case "resize": if (w < 50 || ht < 50) throw new Exception("too small: at least 50 by 50"); SetWindowPos(h, IntPtr.Zero, 0, 0, w, ht, 0x2 | 0x4); return "resized it to " + w + "x" + ht;
+    }
+    throw new Exception("unknown window action " + what);
+  }
+
+  // The clipboard needs a single-threaded apartment thread.
+  public static string Board(string text, bool set) {
+    string got = null; Exception err = null;
+    Thread t = new Thread(delegate () { try { if (set) { if (string.IsNullOrEmpty(text)) System.Windows.Forms.Clipboard.Clear(); else System.Windows.Forms.Clipboard.SetText(text); } else got = System.Windows.Forms.Clipboard.ContainsText() ? System.Windows.Forms.Clipboard.GetText() : ""; } catch (Exception x) { err = x; } });
+    t.SetApartmentState(ApartmentState.STA); t.Start(); t.Join(5000);
+    if (err != null) throw err;
+    return set ? "put the text on the clipboard" : got;
   }
 
   public static string Close(long handle) {
@@ -357,6 +516,7 @@ public static class QxUia {
   }
 }
 '@
+[QxUia]::Dpi()
 [Console]::Out.WriteLine('{"ready":true}')
 [Console]::Out.Flush()
 while ($true) {
@@ -369,7 +529,7 @@ while ($true) {
     $id = $m.id
     $out = @{ id = $id; ok = $true }
     $pids = [int[]]@($m.pids | ForEach-Object { [int]$_ })
-    if ($m.op -notin @('windows', 'apps', 'appwins', 'openapps')) { [QxUia]::Check([long]$m.handle, $pids) }
+    if ($m.op -notin @('windows', 'apps', 'appwins', 'openapps', 'board')) { [QxUia]::Check([long]$m.handle, $pids) }
     switch ($m.op) {
       'apps' {
         # Start-menu apps by name: exact names first, then names that contain it.
@@ -397,7 +557,14 @@ while ($true) {
       'clickxy' { $out.did = [QxUia]::ClickAt([long]$m.handle, [int]$m.x, [int]$m.y, $pids) }
       'set' { $out.did = [QxUia]::Set([long]$m.handle, [int]$m.ref, [string]$m.text, $pids) }
       'keys' { $out.did = [QxUia]::Keys([long]$m.handle, [string]$m.keys, $pids) }
-      'shot' { $out.png = [QxUia]::Shot([long]$m.handle) }
+      'shot' { $out.png = [QxUia]::Shot([long]$m.handle, $pids) }
+      'zoom' { $out.png = [QxUia]::Zoom([long]$m.handle, [int]$m.x, [int]$m.y, [int]$m.w, [int]$m.h, $pids) }
+      'mouse' { $out.did = [QxUia]::Mouse([long]$m.handle, [int]$m.ref, [int]$m.x, [int]$m.y, [string]$m.kind, $pids) }
+      'drag' { $out.did = [QxUia]::Drag([long]$m.handle, [int]$m.x, [int]$m.y, [int]$m.x2, [int]$m.y2, $pids) }
+      'scroll' { $out.did = [QxUia]::Scroll([long]$m.handle, [int]$m.ref, [int]$(if ($null -ne $m.x) { $m.x } else { -1 }), [int]$(if ($null -ne $m.y) { $m.y } else { -1 }), [string]$m.dir, [int]$(if ($m.amount) { $m.amount } else { 3 }), $pids) }
+      'hold' { $out.did = [QxUia]::HoldKey([long]$m.handle, [string]$m.key, [int]$(if ($m.ms) { $m.ms } else { 1000 }), $pids) }
+      'win' { $out.did = [QxUia]::Win([long]$m.handle, [string]$m.what, [int]$m.x, [int]$m.y, [int]$m.w, [int]$m.h, $pids) }
+      'board' { if ($m.set) { $out.did = [QxUia]::Board([string]$m.text, $true) } else { $out.text = [QxUia]::Board($null, $false) } }
       'close' { $out.did = [QxUia]::Close([long]$m.handle) }
       default { throw "unknown op $($m.op)" }
     }
