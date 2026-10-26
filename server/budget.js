@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Project budgets: one dollar limit shared by every chat in a project. What a project has spent is
 //   saved chat costs (what the sidebar shows)
 // + replies in the cost ledger whose cost never reached a chat file (stopped, page closed, chat deleted)

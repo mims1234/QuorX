@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Teach by showing: while you record a routine from the QuorX popup, this notes what you do in the tab as steps a
 // person would describe ("click the button Meow", "type into Search"), never screen positions. What you type is kept
 // only for search boxes; anything typed elsewhere is noted as "(your text)", and password or payment fields are never

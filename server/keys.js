@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // OpenRouter keys: the one in .env plus any the user adds in ⚙ Settings. Keys live only in
 // data/keys.json on this computer; the page only ever sees them masked, and agent processes never get them.
 import fs from 'node:fs';

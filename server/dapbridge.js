@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // For packs whose debug adapter speaks DAP over stdin/stdout instead of a port: debug.start() returns
 // { stdio: true, line: 'dart debug_adapter', … } and the debugger runs that line behind dapbridge.cjs, which listens
 // on the session's port. The bridge is the background job itself, so Stop still ends the adapter and the program.

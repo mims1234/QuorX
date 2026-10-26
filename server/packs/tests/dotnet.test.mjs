@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // .NET pack self-test. Without the SDK: the SDK list, build errors, test results and the built dll are read correctly.
 // With the .NET SDK: dotnet build catches C# and XAML errors in changed files, a console program runs, a WinForms app is
 // built and driven through UI Automation, dotnet test failures are summed up, and (with netcoredbg) the debugger stops

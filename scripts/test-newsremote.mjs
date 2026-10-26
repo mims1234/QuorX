@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // News from the website (server/newsremote.js), against a small fake website on this computer: the feed is read,
 // only what changed is fetched, every file is checked, a bad download keeps the copy QuorX has, and turning it off
 // goes back to the news/ folder that ships with QuorX.

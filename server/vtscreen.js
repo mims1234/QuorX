@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // A small terminal screen: feeds it what a program writes to a terminal (text and the common VT/ANSI escape codes)
 // and it keeps the screen the user would see, as rows of text. Enough for menus, prompts, progress bars and most
 // full-screen terminal programs; colours and styles are dropped. Used by the agent's terminal tool.

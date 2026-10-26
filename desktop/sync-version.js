@@ -1,4 +1,5 @@
-// Copies the desktop app's version into the main package.json and package-lock.json, so the app, the
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
+// Copies the desktop app's version into the main package.json, package-lock.json and CITATION.cff, so the app, the
 // harness and the sidebar show one version and a later "npm install" leaves the lockfile alone.
 // Run by "npm run release" after the version is raised.
 const fs = require('node:fs');
@@ -14,5 +15,11 @@ if (fs.existsSync(lockFile)) {
   lock.version = v;
   if (lock.packages && lock.packages['']) lock.packages[''].version = v;
   fs.writeFileSync(lockFile, JSON.stringify(lock, null, 2) + '\n');
+}
+// The citation names the version too; its release date is today's, the day the version is raised
+const citeFile = path.join(root, 'CITATION.cff');
+if (fs.existsSync(citeFile)) {
+  const today = new Date().toISOString().slice(0, 10);
+  fs.writeFileSync(citeFile, fs.readFileSync(citeFile, 'utf8').replace(/^version: "[^"]*"/m, `version: "${v}"`).replace(/^date-released: "[^"]*"/m, `date-released: "${today}"`));
 }
 console.log(`version ${v} everywhere`);

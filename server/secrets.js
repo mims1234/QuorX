@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Recognising secrets in text and files, so they never leave this computer for a model.
 // /review (server/codereview.js) skips secrets files and redacts key-like strings before the reviewer reads a diff.
 // The patterns are specific on purpose: code is full of long identifiers and numbers that must stay readable.

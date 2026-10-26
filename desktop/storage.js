@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // ⚙ Settings → Storage, the desktop app's part: Chromium caches (the app window, the browser agent's tabs, your tabs),
 // the settings folder left from before the name QuorX (%APPDATA%\OpenHarness), and update downloads that have been
 // installed. The harness measures and clears its own data (server/storage.js); the page shows both together.

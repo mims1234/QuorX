@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // QuorX: a chat agent with artifacts, self-built decisions and paid media behind an
 // approval gate. Zero dependencies (Node 20+). The OpenRouter key stays on this server; every
 // step of a run streams to the page as Server-Sent Events.

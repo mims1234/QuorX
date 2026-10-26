@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // A project's GitHub repo: the link from its own git settings (a local file read), and whether the repo is public or
 // private and owned by a person or an organization (from GitHub, cached). The page shows these on project cards and in
 // project settings; nothing here is given to the agent.

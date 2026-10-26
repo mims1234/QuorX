@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // A node --test reporter that prints nothing: when the run ends it saves the totals (and the names of failed tests) to
 // logs/test-results.json for News. npm test runs it next to the usual spec reporter.
 import { saveTestResult } from './test-results.mjs';

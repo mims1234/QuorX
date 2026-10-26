@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Markdown for chat messages, with no dependencies (KaTeX, shipped with the app, loads only when a message has math).
 // Supports: headings, paragraphs (single newlines kept), bold/italic/strike, inline code, links,
 // autolinks, images, block quotes, ordered/unordered/task lists (nested by indentation), tables

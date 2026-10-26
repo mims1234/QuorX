@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Chat history and projects on disk: one JSON file per chat in data/chats, projects in
 // data/projects.json. Deleting a chat moves it to data/trash; project folders are never deleted.
 import fs from 'node:fs';

@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // .NET (C#): console apps, WinForms, WPF, ASP.NET, and MAUI's Windows target.
 // The SDK is found with `dotnet --list-sdks` (a runtime alone can run apps but not build them) and checked by building
 // a tiny console app. Debugging goes through netcoredbg (Samsung's open-source .NET debugger) over DAP: QuorX builds the

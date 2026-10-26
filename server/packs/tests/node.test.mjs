@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Node pack self-test: the debugger (V8's inspector) stops at a breakpoint and evaluates in the paused frame.
 import { project, skipUnless } from './_kit.mjs';
 import test from 'node:test';

@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Project folders, commands and dev servers for the agent.
 // A project is one folder shared by all its chats (workspaces/<project> or a folder the user chose).
 // Paths can't leave it, commands

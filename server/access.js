@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Who may use the harness. Anyone who reaches it can run commands in a real shell, so:
 //   - only this computer (loopback): QuorX listens on 127.0.0.1, and anything else that reaches it is refused;
 //   - the Host header must name this computer (localhost, an IP address, or its own name), so a web page can't

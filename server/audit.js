@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // The audit log: one line per thing that let the agent act, or stopped it. Every command (what ran, who let it
 // run, its exit code, how many files it changed), every block, every rule added, every tripwire. Decider votes
 // have their own log (logs/approvals.jsonl) with each voter's answer; this one answers "who let this happen?".

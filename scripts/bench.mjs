@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Known-answer benchmark: does letting a small model ask the deciders make it stronger?
 //
 //   node scripts/bench.mjs --setups A,C,E --limit 10

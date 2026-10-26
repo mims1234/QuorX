@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // The tripwire: while an agent command runs, watch the places a runaway delete would hurt most (your profile
 // outside AppData, the folders around the project, the project's .git) and stop the command if many files vanish
 // there in a short time. The rule engine can't see deletes made by the project's own code (a build script, a bug in

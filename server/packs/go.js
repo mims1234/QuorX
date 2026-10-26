@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Go: command-line programs and services. Debugging goes through Delve (dlv dap), over the Debug Adapter Protocol:
 // Delve builds the package with debug info, starts it paused and stops on breakpoints and unrecovered panics.
 import fs from 'node:fs';

@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Tauri: desktop apps with a Rust back end and a web front end, shown in the system's web view (WebView2 on Windows).
 // The Rust half is checked by the rust pack (cargo check runs in src-tauri, the nearest Cargo.toml) and the front
 // end's TypeScript by the node pack. This pack finds the Tauri CLI and WebView2, and tells the agent how to start the

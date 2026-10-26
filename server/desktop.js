@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // The link to the desktop app (desktop/main.js), when one is running. The app opens an event stream
 // here (/api/desktop/link) and answers commands with POST /api/desktop/reply; it also forwards the
 // DevTools events of the real tabs it hosts. With the link, the agent's browser tab is a real view in

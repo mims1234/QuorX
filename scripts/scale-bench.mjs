@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Scale check: a throwaway QuorX home with many projects and chats, one chat with a very long Steps log and one project
 // folder with many files; then a real QuorX on it, timing what the page asks for. Nothing touches your own data.
 //   node scripts/scale-bench.mjs [--chats 20000] [--projects 200] [--trace-mb 50] [--files 50000] [--keep DIR]

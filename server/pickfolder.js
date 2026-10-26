@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // "Browse…" for project folders: opens the computer's own folder dialog (on the machine running the
 // harness) and returns the chosen path, or null when cancelled. One dialog at a time.
 // On Windows it is the modern Explorer-style picker, owned by a small always-on-top window (with a taskbar

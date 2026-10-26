@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // The QuorX popup: connect once, give the current tab to a chat or take it back, see and stop the agent, allow
 // reading without the debugging bar, and record a routine.
 const $ = (id) => document.getElementById(id);

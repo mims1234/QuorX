@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Java and Kotlin: Gradle and Maven builds, one-file programs, JUnit, and a debugger (Android builds use the android
 // pack too). The compiler check and the debugger use the project's own wrapper (gradlew, mvnw) before a global
 // Gradle or Maven. Debugging goes through jvm-debug/QxDebug.java: a small Debug Adapter Protocol server on the JDK's

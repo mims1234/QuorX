@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Things that must never quietly break: attached documents reaching the list, the project list surviving a save cut
 // off halfway, and one missing or locked file ending one response instead of the whole server.
 import { tempDir } from './test-home.mjs';

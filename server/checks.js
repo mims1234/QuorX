@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Checks on what the agent writes. QuorX runs real tools rather than only parsing files, so a
 // JS file is checked by Node itself (node --check, which handles both ES modules and CommonJS) and a
 // Python file by Python. HTML gets its inline scripts parsed and its local links resolved.

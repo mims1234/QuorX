@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Python pack self-test: the project's venv is found and used, the compiler check catches an error in a changed file,
 // a tkinter window is read and clicked with the desktop tool, the debugger (debugpy, over DAP) stops at a breakpoint
 // and in a button handler after a click, and pytest's output is summed up.

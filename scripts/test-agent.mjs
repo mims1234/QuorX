@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // The agent loop with a scripted model: no network, no money. node --test scripts/
 // Each test gets a throwaway project in the temp folder, removed afterwards.
 // test-home.mjs comes first: it points QuorX at a throwaway data folder before any server module reads it.

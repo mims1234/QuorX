@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // A small code viewer with no dependencies: syntax colours for the languages agents usually write,
 // line numbers, and a formatter that lays out minified or messy HTML, CSS, JS and JSON.
 

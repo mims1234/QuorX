@@ -51,7 +51,9 @@
           "skills/**/*",
           "templates/**/*",
           "extension/**/*",
-          "README.md"
+          "README.md",
+          "LICENSE",
+          "NOTICE"
         ]
       },
       {

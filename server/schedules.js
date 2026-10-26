@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Scheduled tasks: "every weekday at 9, in project X, run this prompt", or "in an hour, remind me".
 // A schedule starts a normal chat with its saved prompt, model, mode and settings (server/schedrun.js). It runs
 // while QuorX runs (the desktop app or its tray process). A run missed while the computer slept, or while QuorX

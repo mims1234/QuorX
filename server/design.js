@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Design systems: a DESIGN.md (the look in words: colours with roles, type, spacing, components) and a tokens.css
 // (the same values as CSS custom properties). Starters live in design-systems/<id>/. A project uses one by having
 // DESIGN.md, and usually tokens.css, in its folder root: every chat in it reads DESIGN.md, the design lint checks

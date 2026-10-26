@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // The code viewer's Formatted view (public/code.js): it may only move whitespace. Each sample is formatted and read
 // back: JS and CSS compared with all whitespace taken out, HTML token by token (tags, attributes as written, text
 // with its whitespace runs made one space, and the insides of pre, textarea, script and style).

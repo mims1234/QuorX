@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Windows installers: MSI packages built with WiX (v4 and later: the `wix` command) and MSIX packages made with
 // MakeAppx and signed with SignTool (both in the Windows SDK). The check builds changed .wxs files into a throwaway
 // MSI; packaging notes cover the apps QuorX builds (Electron, .NET, Rust) and signing with a test certificate only.

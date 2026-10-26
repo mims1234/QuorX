@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Attached documents: any file the user uploads to a chat is kept in the project's git-ignored
 // .quorx/uploads/. The harness reads text out of what it can (plain text and code, PDF, Word,
 // PowerPoint, Excel, OpenDocument, EPUB, HTML); small documents go into the message whole, big ones

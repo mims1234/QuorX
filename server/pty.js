@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Your terminal tabs as a true terminal: a pseudo-terminal (node-pty: ConPTY on Windows, a pty elsewhere) running
 // your shell, drawn on the page by xterm.js. Ctrl+C, colours, Tab completion, full-screen programs (vim, htop, less),
 // password prompts and arrow-key menus all work. Output streams to the page over Server-Sent Events; keystrokes and

@@ -1,3 +1,4 @@
+# Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 # QuorX job host: keeps Windows Job Objects for the commands and servers the agent starts, so Stop ends
 # every process a command started (even ones whose parent already exited), and so they all end if QuorX dies.
 # Talks JSON lines on stdin/stdout:

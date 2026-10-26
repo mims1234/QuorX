@@ -1,3 +1,4 @@
+/* Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0 */
 /* Motion tokens: one scale for every animation in the app (loaded last, after phone.css).
    Enter with --ease-out; exits run at about 65% of the enter time. :root.reduce-motion (⚙ Appearance → Motion,
    "Follow system" by default) sets them all to 0. New and edited rules should use these instead of literal times. */

@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Java and Kotlin pack self-test. Without a JDK: the JUnit report summary (fixture reports), compiler error lines,
 // the check's command line, and the whole compiler check through a stand-in gradlew. With a JDK: QuorX sees that it
 // builds, a one-file program runs, the debugger stops at a breakpoint and reads variables; with Gradle or Maven too,

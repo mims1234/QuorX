@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Godot 4: games and apps in GDScript (C# Godot projects are also .NET projects: the dotnet pack checks those).
 // The check parses each changed script headless with --check-only; debugging goes through the Debug Adapter Protocol
 // server inside the Godot editor, which runs headless too (--editor --headless --dap-port) and starts the game itself.

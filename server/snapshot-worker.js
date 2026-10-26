@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // The worker behind snapshotAsync/changesSinceAsync/pruneObjectsAsync (snapshot.js): it runs the same functions the
 // sync path runs, off the main thread, so a walk of a big project never freezes streams, Stop or approvals.
 import { parentPort } from 'node:worker_threads';

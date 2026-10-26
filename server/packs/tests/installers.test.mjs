@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Windows installers pack self-test. WiX's error parser, the extensions a .wxs needs, the check's command and
 // finding the SDK tools are tested anywhere. With WiX (v4 or later, its EULA accepted where it asks), the check
 // catches an error in a changed .wxs and a good one builds an MSI; with the Windows SDK, an MSIX is packed and signed

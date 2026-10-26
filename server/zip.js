@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // A small ZIP writer and reader (deflate, no dependencies): a project's files from the pane, and the backup.
 import fs from 'node:fs';
 import path from 'node:path';

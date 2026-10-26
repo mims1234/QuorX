@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Platform packs: everything QuorX knows about one kind of app, in one file. A pack says how to find its toolchain
 // (and check that it really builds), how to install it, which compiler checks run before a reply ends, how to start
 // its debugger, and what the agent should know to build, run, test and read crashes. Each file in this folder is one

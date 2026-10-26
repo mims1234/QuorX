@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // C and C++: CMake projects with the Microsoft compiler, GCC or Clang. Changed files are checked by building the
 // project's existing CMake build folder; debugging goes through lldb-dap (LLVM), which launches the program CMake
 // built for the file (found through CMake's file API) or the `program` the agent names.

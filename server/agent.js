@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // One agent run: a chat model in a tool loop, in a web page.
 //   - artifacts: write_artifact / read_artifact / edit_artifact (self-contained HTML pages)
 //   - decide:    the agent builds its own questions for the deciders, committing its OWN guess

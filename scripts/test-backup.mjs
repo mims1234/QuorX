@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Export my QuorX / Import, through the API with the app key: two throwaway QuorX homes stand in for two computers.
 import { tempDir } from './test-home.mjs';
 import test from 'node:test';

@@ -1,3 +1,4 @@
+# Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 # QuorX desktop helper: reads and drives the windows of programs the agent started, through Windows UI Automation
 # (the structure screen readers use), with a picture of a window as the fallback. Its own process, apart from the job
 # host, because an app that opens a modal dialog can block a UI Automation call; every call that acts runs on a

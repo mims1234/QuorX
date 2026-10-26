@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // The page at the old address (localhost:<port>): QuorX opens at quorx.localhost now (server/access.js). What this
 // browser kept for QuorX here goes with it once, sent to the handoff the app link made, then QuorX opens there.
 (async () => {

@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Other agent CLIs as builders, for the build benchmark only (scripts/bench-build.mjs --mode cli:<id>).
 // Each one is a plain data object: the program, its arguments, how the prompt gets in, and how to read its answer.
 // QuorX's approvals can't reach inside another agent, so these run only in the bench's throwaway folders, with each

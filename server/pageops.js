@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // What the agent's browser does inside a page: wait until it is ready, read what is on screen, list what can be
 // pointed at (a snapshot with refs), find things, scroll the part that scrolls, check a control before clicking it,
 // and collect a feed while scrolling. One function, injected as source and run in the page (every transport: the

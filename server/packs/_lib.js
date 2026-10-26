@@ -1,4 +1,5 @@
-﻿// Small helpers the platform packs share. (Files starting with "_" are not packs.)
+﻿// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
+// Small helpers the platform packs share. (Files starting with "_" are not packs.)
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';

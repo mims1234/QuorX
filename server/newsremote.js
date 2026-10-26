@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // News from the QuorX website. QuorX downloads the News feed (https://quorx.genxmims.org/news/feed.json) and keeps a
 // copy in data/news-cache/, laid out like news/, so server/news.js reads it the same way. New articles, reports and
 // What's new then reach QuorX without a new version. The news/ folder that ships with QuorX is the fallback: before

@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // ⚙ Settings → Storage: measuring and clearing through the API on a throwaway QuorX home, the automatic cleanup,
 // log rotation, the desktop app's part with stand-in sessions, and the page's own sums. Nothing goes to the real
 // Recycle Bin: QX_TRASH=delete makes "to the Recycle Bin" a plain delete here.

@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Checks the news/ folder against docs/news-format.md: updates.json, each article's and report's front matter, and the
 // JSON of every interactive block (and the data files they point at). npm run news:check — exits 1 on a problem.
 import fs from 'node:fs';

@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // The desktop tool's parts that don't depend on the system: SendKeys text turned into key presses, and a window's
 // controls written as the numbered text the agent reads. The Windows helper (uiahost.ps1) does both itself; the
 // macOS helper (axhost.swift) and the Linux one (atspihost.py) return plain data and these turn it into the same

@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // The chat index (server/store.js): the sidebar's chats per project, pages and search, and an index that follows
 // chats written here and by anyone else on the same data folder, and comes back after a restart.
 import './test-home.mjs';

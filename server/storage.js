@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // ⚙ Settings → Storage: what QuorX keeps on this computer, how much room each part takes, and clearing it.
 // Every part is a list of entries (files or folders) that clearing removes. Caches and leftovers are deleted (they come
 // back by themselves, or nothing refers to them); your own things (deleted chats, the agent's trash and scratch, older

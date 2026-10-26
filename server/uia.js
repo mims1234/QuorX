@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // The agent's view of desktop apps it started: their windows, their controls as numbered text, clicking, typing,
 // keys, a picture of a window, closing. Windows uses UI Automation (uiahost.ps1), macOS the Accessibility API
 // (axhost.swift, built once with Apple's Command Line Tools), Linux AT-SPI (atspihost.py). Every call is limited to

@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Shared by the pack self-tests: a throwaway data folder (imported first), a temp project, and what is installed.
 // Self-tests drive QuorX's real code paths (compiler checks, the debugger, builds) with no model and no key, and
 // skip themselves when their toolchain is missing, so anyone can run them: npm run test:packs.

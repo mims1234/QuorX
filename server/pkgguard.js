@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Before an install runs: does each package it names exist on its registry, and how new is it? Models invent
 // plausible package names (about 1 in 5 code samples in a 2025 study), and attackers register those names
 // ("slopsquatting"). A name that doesn't exist is blocked; a very new or barely used one goes to the user, even in

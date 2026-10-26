@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Gamed tests: an agent can make a failing build "pass" by deleting a test file or weakening its assertions.
 // Before the final reply, every test file this reply changed is compared with its undo copy: fewer assertions,
 // skipped tests, or a deleted test file are reported, so the agent must restore them or explain, and the user sees it.

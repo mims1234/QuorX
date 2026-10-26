@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // The decider ensemble (adapted from the Synapse workshop): one Decisions request per decider
 // carrying every question, averaged into a soft vote. Choice options are shuffled per decider
 // (some deciders lean toward the first option) and confidence uses TypeSafe's per-type formulas.

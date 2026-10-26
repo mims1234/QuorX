@@ -1,3 +1,4 @@
+/* Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0 */
 /* ⚙ Settings → Storage (public/storage.js). Sizes are plain monospace numbers, tags are outlined, buttons are buttons. */
 .sto { display: contents; }
 .sto-summary { gap: 10px; }

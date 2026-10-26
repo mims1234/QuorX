@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Video Mode: a request for a film gets a director's workflow instead of being treated like any other build.
 // The harness notices the film (the prompt enhancer's "kind", or plain words when there is no reading), loads the
 // video skills itself, and has the agent take a brief, pick a story and show a storyboard before anything is spent.

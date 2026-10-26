@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // ⚙ Settings → Storage → Automatic cleanup: the rules live in data/storage.json (not in the page), so they apply while
 // no window is open, and the desktop app reads the two that are its own. Log files that only ever grow call rotateLog
 // before they append: past the limit the file becomes <name>.1.<ext> (replacing an older one), so each log takes at

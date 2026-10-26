@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Unity: games and apps in C#. Editors are installed per version through Unity Hub, and a project names the version
 // it needs in ProjectSettings/ProjectVersion.txt. The check is a batchmode compile with that editor; tests run with
 // -runTests and write an NUnit XML file. Unity's debugger is its own (not DAP), so debugging here is logs.

@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Node's Brotli decoder had a remote-code-execution bug (CVE-2026-111497, the Node.js security releases of 21 October
 // 2026), and fetch decompresses Brotli by itself. Until QuorX runs on a fixed Node (22.23.4, 24.22.1, 26.12.1 or later;
 // the desktop app gets one with the next Electron, see .github/workflows/electron-watch.yml), its own web requests

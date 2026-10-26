@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Android pack self-test. Run everywhere: the logcat crash parser, AVD list parsing, the Gradle check (with a
 // stand-in gradlew, so no SDK is needed) and the Gradle failure summary. With the SDK, an emulator and an AVD: an
 // emulator boots as a background job, an app is launched, its screen read and a control tapped.

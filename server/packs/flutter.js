@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Flutter and Dart: one Dart codebase for Windows, macOS, Linux and Android (and plain Dart programs).
 // flutter analyze (dart analyze) is the check before the final reply; flutter test and flutter doctor get a short
 // summary; Dart debugging goes through `dart debug_adapter` / `flutter debug_adapter`, which speak DAP over stdio,

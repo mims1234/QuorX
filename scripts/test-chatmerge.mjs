@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // A chat saved from two windows (public/chat-merge.js): a refused save merges this page's copy with the server's
 // instead of saving over it. base = what this page last saved, mine = the page now, theirs = the server now.
 import test from 'node:test';

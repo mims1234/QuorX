@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // The rule engine: decides, before a command runs, whether it runs, asks, or is blocked (docs/shell-safety-plan.md §1–2).
 //   1. Split the line into commands. PowerShell lines go through PowerShell's own parser (jobhost.ps1 "parse");
 //      cmd, bash and zsh lines through small, conservative tokenizers. Anything they can't read is "opaque".

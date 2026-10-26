@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Writes the winget manifests for the desktop installer that `npm run desktop:dist` built, so the app can be
 // installed with `winget install QuorX.QuorX`. Run: npm run winget -- [--url <download base>] [--validate]
 //

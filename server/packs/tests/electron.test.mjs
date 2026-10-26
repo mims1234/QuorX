@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Electron pack self-test: a tiny app (a window with a button whose click goes to the main process) is started as a
 // background job with its DevTools port, its button is clicked through that port and the page text read, and the main
 // process is stopped at a breakpoint through its Node inspector (debug attach). The app tests need an Electron binary:

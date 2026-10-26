@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // A stand-in debug adapter that speaks DAP over stdin/stdout like `dart debug_adapter`, for the bridge's self-test on
 // computers without Dart: it answers the requests QuorX's debugger sends, "stops" at the first breakpoint it is
 // given (with a local `total = 42`), and ends on the next continue. It writes its pid to QX_FAKE_DAP_PID if set.

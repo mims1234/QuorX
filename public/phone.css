@@ -1,3 +1,4 @@
+/* Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0 */
 /* Phones and small tablets (≤ 900px): a dedicated layout. One full-screen view at a time, picked from a bottom tab bar:
    Chats (projects and chats), Chat (the conversation), Preview (artifacts, explorer, trace), Settings. */
 .mnav { display: none; }

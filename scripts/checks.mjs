@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Improving the harness checks (server/harness-checks.js) from what they did in real chats and benchmarks.
 //
 //   node scripts/checks.mjs report                      how each question did: fired, failed, unsure, fixed after a "no", labels

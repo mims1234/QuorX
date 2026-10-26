@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Hooks: commands the user chooses that the harness runs around the agent's tool calls ("after every file write,
 // run npm run lint"; "before a command, run X"). The model never decides to run them and can't change them.
 // They live in QuorX's data folder, keyed by the project's real folder like its command rules

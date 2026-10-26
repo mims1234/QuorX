@@ -1,3 +1,4 @@
+/* Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0 */
 /* News: the sidebar entry, the News view (What's new, Reports, Articles), article pages and their interactive blocks.
    Colours are QuorX's own tokens, so light and dark follow the app. Everything is complete at rest; the motion
    below only replays it, and stops for prefers-reduced-motion and QuorX's own "reduce motion". */

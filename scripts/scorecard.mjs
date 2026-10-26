@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Per-model results from logs/runs.jsonl (one row per reply): how replies ended, how often the
 // checks before the final answer passed, steps, cost and time.  npm run scorecard -- --days 30
 import { scorecard } from '../server/runs.js';

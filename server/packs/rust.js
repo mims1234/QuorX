@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Rust: command-line programs, libraries, and the Rust half of Tauri apps. Debugging builds the crate with cargo,
 // finds the binary from cargo's own build messages, and runs it under CodeLLDB (when installed: it knows Rust's
 // types) or lldb-dap with the Rust formatters that ship with the toolchain.

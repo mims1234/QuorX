@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Tests for the P0 safety layer: Stop that ends every process, snapshots that let Undo cover commands, the
 // rule engine, the delete guard, the hardened deciders and the budgets.
 import { tempDir } from './test-home.mjs';

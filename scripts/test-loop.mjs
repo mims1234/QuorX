@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Tests for the loop helpers and the file checks: node --test scripts/
 import { tempDir } from './test-home.mjs';
 import test from 'node:test';

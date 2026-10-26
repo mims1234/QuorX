@@ -1,3 +1,4 @@
+// Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Refreshes the news/ folder that ships with QuorX from the QuorX website's News feed, so a release carries current
 // News for the first start and for computers that don't download it. npm run news:snapshot
 // It downloads with the same checks QuorX uses (server/newsremote.js) into a throwaway folder, then replaces the

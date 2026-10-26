@@ -1,3 +1,4 @@
+/* Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0 */
 /* ⚙ Settings: one visual system for every category (loaded last, everything scoped to #settings).
    Shared: the shell (header, nav, footer), a hero per category that says in one line what is set, cards, rows and
    controls. Each category then lays out its own content: choice cards, toggle tiles, money caps, a pipeline, seats,
@@ -364,6 +365,9 @@
 #settings .sx-identity img { width: 64px; height: 64px; border-radius: 16px; }
 #settings .sx-identity h4 { margin: 0; font-size: 18px; color: var(--text-bright); }
 #settings .sx-identity p { margin: 3px 0 0; font-size: 12.5px; color: var(--muted); }
+/* About → Open source: the repository and issue links, as buttons */
+#settings .sx-links { display: inline-flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+#settings a.st-btn { text-decoration: none; }
 
 /* ---------- footer: status · Reset category · Cancel · Save ---------- */
 #settings .st-foot { height: 60px; padding: 0 16px 0 20px; background: var(--panel); border-top: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 12px; }
