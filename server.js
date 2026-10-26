@@ -250,6 +250,23 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, { error: 'give system, md or remove' });
       } catch (e) { return json(res, 200, { error: e.message }); }
     }
+    // A chat's own notes (<project>/.quorx/chats/<chat>.md), which its agent keeps: read and edited from the chat header.
+    const cnm = url.pathname.match(/^\/api\/chats\/([a-z0-9-]+)\/notes$/i);
+    if (cnm && (req.method === 'GET' || req.method === 'POST')) {
+      try {
+        // A chat not saved yet (no message sent) is found by the project the page names.
+        const chat = validId(cnm[1]) ? getChat(cnm[1]) : null, pid = chat?.projectId || url.searchParams.get('project') || '';
+        if (!validId(cnm[1]) || !listProjects().some((p) => p.id === pid)) return json(res, 200, { error: 'no such chat' });
+        const rel = `.quorx/chats/${cnm[1]}.md`, abs = path.join(workspaceDir(pid), rel);
+        if (req.method === 'POST') {
+          const b = JSON.parse(await readBody(req, 2e5) || '{}');
+          if (typeof b.md !== 'string') return json(res, 200, { error: 'give md' });
+          fs.mkdirSync(path.dirname(abs), { recursive: true });
+          if (b.md.trim()) fs.writeFileSync(abs, b.md); else fs.rmSync(abs, { force: true });
+        }
+        return json(res, 200, { rel, md: fs.existsSync(abs) ? fs.readFileSync(abs, 'utf8') : '' });
+      } catch (e) { return json(res, 200, { error: e.message }); }
+    }
     // Pin (up to 3) or archive a project.
     const pfm = url.pathname.match(/^\/api\/projects\/([a-z0-9-]+)\/flags$/i);
     if (pfm && req.method === 'POST') {

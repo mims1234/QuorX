@@ -2925,3 +2925,23 @@ body.dev-build::before { content: ''; position: fixed; left: 0; right: 0; top: 0
 .pj-perms .pj-perm-chat { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; margin-top: 12px; }
 .pj-perms .pj-perm-chat small { color: var(--muted); font-weight: 400; }
 .pj-perms .pr-list { display: grid; gap: 4px; }
+
+/* This chat's notes, beside the project tag: In project / Own chat, and the notes its agent keeps. */
+.ch-notes-wrap { position: relative; flex: none; margin-left: 4px; }
+.ch-notes { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 8px 0 6px; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: var(--muted); font: 500 11px var(--font-ui); cursor: pointer; white-space: nowrap; }
+.ch-notes svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.ch-notes:hover, .ch-notes.on { color: var(--text); background: var(--panel-2); border-color: var(--line-strong); }
+.ch-notes.off { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.ch-notes-pop { position: fixed; bottom: auto; width: 400px; gap: 8px; z-index: 80; }
+.ch-notes-pop .cn-check { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 8px; align-items: start; cursor: pointer; font: 12px var(--font-ui); }
+.ch-notes-pop .cn-check span { display: grid; gap: 2px; }
+.ch-notes-pop { white-space: normal; text-transform: none; letter-spacing: normal; }
+.ch-notes-pop .cn-check small { color: var(--muted); line-height: 1.4; }
+.ch-notes-pop .cn-check input { appearance: none; -webkit-appearance: none; width: 20px; height: 20px; margin: 0; border-radius: 6px; border: 1.5px solid var(--line-strong); background: var(--surface-inset); display: inline-grid; place-content: center; cursor: pointer; }
+.ch-notes-pop .cn-check input::after { content: '✓'; font: 800 13px/1 var(--font-ui); color: var(--ok-ink); opacity: 0; }
+.ch-notes-pop .cn-check input:checked { background: var(--ok); border-color: var(--ok); }
+.ch-notes-pop .cn-check input:checked::after { opacity: 1; }
+.ch-notes-pop .cn-md { width: 100%; box-sizing: border-box; resize: vertical; min-height: 120px; max-height: 50vh; font: 12px/1.5 var(--font-mono, ui-monospace, monospace); background: var(--surface-inset); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+.ch-notes-pop .ap-foot { display: flex; align-items: center; gap: 6px; }
+.ch-notes-pop .cn-path { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.ch-notes-pop .cn-save:disabled { color: var(--muted); cursor: default; text-decoration: none; }

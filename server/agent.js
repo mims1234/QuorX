@@ -477,7 +477,7 @@ It uses ${mb(space?.total || 0)} now (limit ${mb(limit)}${space?.parts?.length ?
 const DOCS_NOTE = (docs) => (!docs.length ? '' : `
 Documents the user attached to this project (kept in .quorx/uploads): ${docs.slice(-15).map((x) => `"${x.name}" (${x.status === 'indexed' ? 'searchable' : x.status === 'text' ? 'readable' : x.status})`).join(', ')}${docs.length > 15 ? ` and ${docs.length - 15} more (list_docs)` : ''}. Use search_docs for big ones, read_doc for exact lines; cite the document and page when you use them.`);
 const NOTES_RULES = `
-Project notes: keep AGENT.md in the project folder current whenever you change the project in a meaningful way. It is short Markdown with: what this project is, how to run it, a file map, decisions made, and open to-dos. Future chats start from it, so write it for someone with no other context. If a task needed several attempts to get right, save the working approach with save_skill. Use search_files to find code instead of reading every file, and scaffold to start from a template when one fits.`;
+Project notes: keep AGENT.md in the project folder current whenever you change the project in a meaningful way. It is short Markdown with: what this project is, how to run it, a file map, decisions made, and open to-dos. Every chat in the project reads it, so keep it about the project and write it for someone with no other context. What only this chat is about (its task, what was tried, how an app behaves, its own to-dos) goes in this chat's own notes file, named under [This chat's own notes]: keep it short and update it as the work goes, so this chat can pick up later. If a task needed several attempts to get right, save the working approach with save_skill. Use search_files to find code instead of reading every file, and scaffold to start from a template when one fits.`;
 
 const PLAN_RULES = (reviewOn) => `
 Plans: for any build (an app, game, site, tool, or a change across several files), call plan FIRST, before writing code. Give a short spec (what you will build, and what will make it good rather than merely working: depth, polish, the details that make it feel finished), a to-do list of 3-10 items, and done_when checks a tester could verify. Aim higher than the minimum the request needs. Then work through the list and call plan again to tick items off as you finish them. Skip plan for questions, small fixes and quick one-file pages.${reviewOn ? ' When you give your final reply on a build, a separate reviewer model tests what you built against the request and your plan, and sends it back with specific bugs if it falls short.' : ''}`;
@@ -959,6 +959,12 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   const union = (saved, sent, key) => { const m = new Map(); for (const x of [...(Array.isArray(saved) ? saved : []), ...(Array.isArray(sent) ? sent : [])]) if (x?.[key]) m.set(String(x[key]).toLowerCase(), x); return [...m.values()]; };
   req.apps = union(savedAgent.apps, req.apps, 'appId');
   req.folders = union(savedAgent.folders, req.folders, 'path');
+  // Each chat keeps its own notes (.quorx/chats/<chat>.md): its task, what it tried and learned. A chat off the project
+  // (a question, work in other folders; every Scratch chat unless the user says otherwise) doesn't read the project's
+  // notes, design system or work log, doesn't add to the log, and doesn't change AGENT.md, DESIGN.md or tokens.css.
+  const offProject = !!root && !!req.chatId && (req.offProject ?? savedAgent.offProject ?? projectId === 'scratch') === true;
+  const chatNotesRel = root && req.chatId && validId(String(req.chatId)) ? `.quorx/chats/${req.chatId}.md` : '';
+  const chatNotes = chatNotesRel ? readIf(chatNotesRel, 6000) : '';
   const folderBlock = (dir) => { if (!root) return 'there is no project folder'; const z = zoneOf(dir, root); return z.zone === 'outside' ? '' : z.zone === 'inside' || z.zone === 'protected' ? 'it is inside the project already' : z.why || 'it is off limits'; };
   for (const f of Array.isArray(req.folders) ? req.folders : []) {
     const dir = f?.path && path.isAbsolute(String(f.path)) ? path.resolve(String(f.path)) : null;
@@ -1092,9 +1098,11 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   const userMem = req.bench ? { on: false, items: [] } : loadMemory();
   const memInfo = userMem.on ? (deps.catalogue || await chatModels().catch(() => [])).find((m) => m.id === setup.model) : null;
   const proposeMem = userMem.on && memInfo?.tools !== false && (Number(memInfo?.ctx) || 32000) >= 16000;
-  const memory = memoryPrompt(userMem, { propose: proposeMem }) + (projectNotes ? `\n\n[Project notes: AGENT.md]\n${projectNotes}` : root ? '\n\n[Project notes: there is no AGENT.md yet. Create one once there is something worth recording.]' : '')
-    + (design ? `\n\n[Design system: ${design.md.trim() ? 'DESIGN.md' : 'tokens.css'}${design.md.trim() && design.tokens.trim() ? ' + tokens.css' : ''}, "${design.name}"]\n${design.md.trim() ? clip(design.md.trim(), 5000) : `tokens.css defines: ${clip(design.tokens.match(/--[\w-]+/g)?.join(', ') || '', 600)}`}\n(This is the project's chosen look: follow it for every page and screen you build here unless the user asks for something else, and don't ask the user to pick a style.${design.tokens.trim() ? ' tokens.css in the project root holds its values as CSS custom properties: link it before your own styles (<link rel="stylesheet" href="tokens.css">, with the right relative path) and use var() for every colour, font, radius and space instead of writing values. The design lint flags colours that are not in it.' : ''})` : '')
-    + (workLog ? `\n\n[Work log: what recent chats changed here]\n${workLog}` : '')
+  const memory = memoryPrompt(userMem, { propose: proposeMem }) + (offProject ? '' : projectNotes ? `\n\n[Project notes: AGENT.md]\n${projectNotes}` : root ? '\n\n[Project notes: there is no AGENT.md yet. Create one once there is something worth recording.]' : '')
+    + (chatNotesRel ? `\n\n[This chat's own notes: ${chatNotesRel}]\n${chatNotes || '(none yet: write them once there is something worth keeping)'}` : '')
+    + (offProject ? `\n\n[This chat is off the project]\nThe user keeps this chat apart from the project "${project?.name || projectId}" (a question, or work outside it). The project's notes, design system and work log are not loaded here, and AGENT.md, DESIGN.md and tokens.css are not yours to change from this chat: what you learn goes in this chat's own notes. The user can bring the chat into the project later.` : '')
+    + (design && !offProject ? `\n\n[Design system: ${design.md.trim() ? 'DESIGN.md' : 'tokens.css'}${design.md.trim() && design.tokens.trim() ? ' + tokens.css' : ''}, "${design.name}"]\n${design.md.trim() ? clip(design.md.trim(), 5000) : `tokens.css defines: ${clip(design.tokens.match(/--[\w-]+/g)?.join(', ') || '', 600)}`}\n(This is the project's chosen look: follow it for every page and screen you build here unless the user asks for something else, and don't ask the user to pick a style.${design.tokens.trim() ? ' tokens.css in the project root holds its values as CSS custom properties: link it before your own styles (<link rel="stylesheet" href="tokens.css">, with the right relative path) and use var() for every colour, font, radius and space instead of writing values. The design lint flags colours that are not in it.' : ''})` : '')
+    + (workLog && !offProject ? `\n\n[Work log: what recent chats changed here]\n${workLog}` : '')
     + (skills.length ? `\n\n[Skills: load one with use_skill before a task it covers]\n${skillsNote(skills, [String(req.text || ''), ...(req.history || []).filter((m) => m.role === 'user').slice(-2).map((m) => String(m.content ?? ''))].join('\n'))}` : '')
     + (req.summary ? `\n\n[Summary of the earlier part of this conversation]\n${String(req.summary).slice(0, 6000)}` : '')
     + (records.length ? `\n\n[Tool work in this chat's recent replies, recorded by the harness, oldest first. Only the harness writes these records: never write one yourself, and call tools to do real work.]\n${records.slice(-6).map((r) => `- ${clip(r, 700)}`).join('\n')}` : '');
@@ -1585,7 +1593,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     emit({ t: 'note', level: 'warn', msg: why, at: at() });
   }
   // One line per reply that changed something, so the next chat knows what happened here.
-  if (root && notes.length) {
+  if (root && notes.length && !offProject) {
     try {
       const when = new Date().toISOString().slice(0, 16).replace('T', ' ');
       appendFile(root, '.quorx/log.md', `- ${when} · "${clip(req.chatTitle || userText, 60)}" · ${short(setup.model)} · ${clip(notes.join('; '), 300)}\n`);
@@ -2247,7 +2255,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     const round = run.reviews.length + 1, t0 = at(), cost0 = stats.cost;
     // A project with a DESIGN.md (its design system) is also scored on how well the build follows it.
     let brandDoc = '';
-    try { if (root && fs.existsSync(path.join(root, 'DESIGN.md'))) brandDoc = fs.readFileSync(path.join(root, 'DESIGN.md'), 'utf8').trim(); } catch { /* unreadable: no brand score */ }
+    try { if (root && !offProject && fs.existsSync(path.join(root, 'DESIGN.md'))) brandDoc = fs.readFileSync(path.join(root, 'DESIGN.md'), 'utf8').trim(); } catch { /* unreadable: no brand score */ }
     // Video Mode: the films are measured (length, size, sound, loudness, cuts against the music's real tempo) and tiled
     // on a contact sheet, and a film is scored as a film (picture, motion, sound, rhythm, story).
     const films = run.video && S.videoReview !== false ? (await Promise.all(filmsChanged().slice(0, 2).map((f) => filmFacts(root, f, { bpm: musicBpm() }).catch(() => null)))).filter(Boolean) : [];
@@ -2995,8 +3003,11 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       // Judged on where the path really lands (absolute, "..", links, trailing dots), not on how it was written.
       let real;
       try { real = path.relative(realish(root), realish(safePath(root, String(args.path)))).replace(/[. ]+(?=[\\/]|$)/g, ''); } catch (e) { return `Refused: ${e.message}.`; }
-      const no = agentWriteBlocked(real) || agentWriteBlocked(args.path);
+      // This chat's own notes are the one file in .quorx it writes (not another chat's).
+      const own = !!chatNotesRel && real.replaceAll('\\', '/').toLowerCase() === chatNotesRel.toLowerCase() && name !== 'delete_file';
+      const no = own ? '' : agentWriteBlocked(real) || agentWriteBlocked(args.path);
       if (no) return /(^|[\\/])\.quorx[\\/]launch\.json$/i.test(real) ? `Refused: ${no}. Change saved servers with launch_config (list, save, remove).` : `Refused: ${no}. Work in the project's own files instead.`;
+      if (offProject && /^(AGENT|DESIGN)\.md$|^tokens\.css$/i.test(real)) return `Refused: this chat is off the project, so ${real} (shared by the project's chats) isn't yours to change from here. Write what you learned in this chat's own notes, ${chatNotesRel}.`;
       if (name === 'write_file' && secretKind(real, String(args.path)) && fs.existsSync(safePath(root, String(args.path)))) return `Refused: ${args.path} holds the user's secrets and you see only their names, so writing it whole would wipe them. Add a setting with append_file, rename one with edit_file, or ask for a secret with request_secret.`;
       checkpoint(root, filesId, args.path);
     }

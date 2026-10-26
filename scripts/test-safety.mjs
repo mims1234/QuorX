@@ -1664,6 +1664,35 @@ test('computer use: each app starts at its kind’s level; some are never used',
   for (const n of ['QuorX', 'Claude', 'Electron', '1Password', 'Bitwarden', 'Registry Editor', 'Task Manager']) assert.equal(appLevel(n), 'never', n);
 });
 
+// ---------- each chat's own agent notes, and chats kept off the project ----------
+test('chat notes: a chat reads and writes its own notes; in the project it reads AGENT.md and the log too', async () => {
+  const chatId = 'cnotesin1';
+  const { bodies, dir } = await agentRun((b, i) => [reply('', [['append_file', { path: `.quorx/chats/${chatId}.md`, content: '- VRoid: right-drag turns the camera\n' }]]), reply('Done.')][i], {
+    chatId, prep: (d) => { fs.writeFileSync(path.join(d, 'AGENT.md'), '# Proj\nShared project fact ZEBRA.\n'); fs.mkdirSync(path.join(d, '.quorx', 'chats'), { recursive: true }); fs.writeFileSync(path.join(d, '.quorx', 'chats', `${chatId}.md`), 'Chat fact OTTER.\n'); } });
+  const sys = JSON.stringify(bodies[0].messages);
+  assert.match(sys, /\[Project notes: AGENT\.md\][^]*ZEBRA/);
+  assert.match(sys, /\[This chat's own notes: \.quorx\/chats\/cnotesin1\.md\][^]*OTTER/);
+  assert.match(toolOut(bodies, 1), /^(Appended|Added|Wrote)/i, toolOut(bodies, 1));
+  assert.match(fs.readFileSync(path.join(dir, '.quorx', 'chats', `${chatId}.md`), 'utf8'), /right-drag turns the camera/);
+});
+
+test('chat notes: a chat off the project skips its notes, design and log, and can\'t change AGENT.md; another chat\'s notes stay off limits', async () => {
+  const chatId = 'cnotesoff1';
+  const { bodies, dir } = await agentRun((b, i) => [
+    reply('', [['edit_file', { path: 'AGENT.md', find: 'ZEBRA', replace: 'LION' }]]),
+    reply('', [['write_file', { path: '.quorx/chats/otherchat1.md', content: 'x' }]]),
+    reply('', [['write_file', { path: 'notes.txt', content: 'hi' }]]),
+    reply('Done.'),
+  ][i], { chatId, more: { offProject: true }, prep: (d) => { fs.writeFileSync(path.join(d, 'AGENT.md'), '# Proj\nShared project fact ZEBRA.\n'); fs.writeFileSync(path.join(d, 'DESIGN.md'), '# Look\nCORAL accents.\n'); } });
+  const sys = JSON.stringify(bodies[0].messages);
+  assert.doesNotMatch(sys, /ZEBRA|CORAL/, 'the project notes and design are not loaded');
+  assert.match(sys, /\[This chat is off the project\]/);
+  assert.match(toolOut(bodies, 1), /^Refused: this chat is off the project, so AGENT\.md/);
+  assert.match(toolOut(bodies, 2), /^Refused: QuorX’s own files/);
+  assert.match(fs.readFileSync(path.join(dir, 'AGENT.md'), 'utf8'), /ZEBRA/);
+  assert.ok(!fs.existsSync(path.join(dir, '.quorx', 'log.md')) || !/notes\.txt/.test(fs.readFileSync(path.join(dir, '.quorx', 'log.md'), 'utf8')), 'nothing in the work log');
+});
+
 // Answers "Let the agent … in <app>" (raising an app's level) with no, so a test sees the level hold.
 const keepLevel = (e, id) => { if (e.t === 'approval' && e.tool === 'desktop' && /^Let the agent/.test(e.what || '')) setTimeout(() => answerApproval(id, e.id, { approve: false }), 10); };
 

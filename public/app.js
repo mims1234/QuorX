@@ -2432,6 +2432,7 @@ function paneHTML(c) {
           <div class="dir-a-crumbs">
             <button type="button" class="ch-proj-tag proj-hue-tag" title="Open the project folder in File Explorer"><svg class="proj-folder-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6l2 3h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/></svg><span class="ch-proj-name"></span></button>
             <a class="ch-gh" target="_blank" rel="noopener noreferrer" aria-label="Open on GitHub" hidden></a>
+            <span class="ch-notes-wrap"><button type="button" class="ch-notes" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6z"/><path d="M9 11h7M9 15h7M9 7h3"/></svg><span class="ch-notes-word"></span></button><div class="ch-notes-pop allow-pop" role="dialog" aria-label="This chat's notes" hidden></div></span>
             <span class="dir-a-crumb-sep">/</span>
             <span class="dir-a-msgs-count"></span>
           </div>
@@ -2572,6 +2573,7 @@ function wirePane(c, root, i) {
   $('.tc-no', tconf).onclick = undoTitle;
   $('.ch-cost', root).onclick = () => toggleUsage(c);
   $('.ch-proj-tag', root).onclick = () => openFolder(c.projectId);
+  wireChatNotes(c, root);
   // Rename and delete on the header; the project tag opens the folder (servers and the terminal live in the pane's tab bar).
   $('.ch-rename', root).onclick = () => { const n = $('.ch-name', root); n.focus(); n.select(); };
   $('.ch-panel', root).onclick = () => { if (G.paneMax) $('#paneMaxBtn')?.click(); setPaneHidden(!G.paneHidden); };
@@ -2617,6 +2619,41 @@ function chatTotals(c) {
   const all = c.agent.messages, done = all.filter((m) => m.role === 'assistant' && m.stats);
   return { cost: done.reduce((s, m) => s + ownCost(m, all), 0) + (c.agent.extraUsage || []).reduce((s, x) => s + (x.cost || 0), 0) + liveOf(c), replies: done.length, msgs: all.filter((m) => m.role === 'user').length };
 }
+// Each chat has its own agent notes (.quorx/chats/<chat>.md). A chat off the project (every Scratch chat unless you say
+// otherwise) reads only those: not the project's notes, design system or work log, and it can't change them.
+const chatOffProject = (c) => (c.agent?.offProject ?? c.projectId === 'scratch') === true;
+function wireChatNotes(c, root) {
+  const btn = $('.ch-notes', root), pop = $('.ch-notes-pop', root), wrap = $('.ch-notes-wrap', root);
+  if (!btn) return;
+  let saved = '';
+  const draw = async () => {
+    const off = chatOffProject(c), p = G.projects.find((x) => x.id === c.projectId), pname = esc(p?.name || c.projectId);
+    pop.innerHTML = `<div class="ap-head">This chat's notes <small>what its agent keeps for itself: the task, what it tried, what it learned</small></div>
+      <label class="cn-check"><input type="checkbox" class="cn-in" ${off ? '' : 'checked'}><span><b>Part of the project “${pname}”</b><small>${off ? 'Off: this chat keeps to its own notes. The project’s notes (AGENT.md), design system and work log aren’t loaded, and it can’t change them.' : 'Reads the project’s notes (AGENT.md), design system and work log, and keeps them current. Untick for a chat apart: a question, or work outside the project.'}</small></span></label>
+      <textarea class="cn-md" rows="8" spellcheck="false" placeholder="Loading…" aria-label="This chat's notes"></textarea>
+      <div class="ap-foot"><small class="cn-path"></small><span class="cq-sp"></span>${off ? `<button type="button" class="ap-all cn-bring" title="Make it part of ${pname} and have the agent add what matters for the whole project to AGENT.md">Bring into project</button>` : ''}<button type="button" class="ap-all cn-save" disabled>Save notes</button></div>`;
+    const ta = $('.cn-md', pop), sv = $('.cn-save', pop);
+    $('.cn-in', pop).onchange = (e) => { c.agent.offProject = !e.target.checked; saveChat(c); renderChatHead(c); draw(); };
+    ta.oninput = () => { sv.disabled = ta.value === saved; };
+    sv.onclick = async () => { const r = await postJ(`/api/chats/${c.id}/notes?project=${encodeURIComponent(c.projectId)}`, { md: ta.value }).catch((e) => ({ error: e.message })); if (r.error) { $('.cn-path', pop).textContent = `Not saved: ${r.error}`; return; } saved = r.md; sv.disabled = true; };
+    const bring = $('.cn-bring', pop);
+    if (bring) bring.onclick = () => {
+      c.agent.offProject = false; saveChat(c); renderChatHead(c); close();
+      send(c, `Bring this chat into the project: read this chat's notes and add to AGENT.md what matters for the whole project (what it is, how to run it, files, decisions). Keep this chat's own steps and quirks in its notes.`);
+    };
+    const r = await fetch(`/api/chats/${c.id}/notes?project=${encodeURIComponent(c.projectId)}`).then((x) => x.json()).catch(() => ({ error: 'could not load' }));
+    if (!ta.isConnected) return;
+    saved = r.md || ''; ta.value = saved; ta.placeholder = r.error ? r.error : 'Nothing yet: the agent writes here as it works, and you can too.';
+    $('.cn-path', pop).textContent = r.rel || '';
+  };
+  const outside = (e) => { if (!wrap.contains(e.target)) close(); };
+  const close = () => { pop.hidden = true; btn.setAttribute('aria-expanded', 'false'); btn.classList.remove('on'); document.removeEventListener('pointerdown', outside, true); };
+  // Fixed under the button: the header's crumbs row clips anything that hangs out of it.
+  const place = () => { const b = btn.getBoundingClientRect(), w = Math.min(400, innerWidth - 24); pop.style.width = `${w}px`; pop.style.top = `${Math.round(b.bottom + 8)}px`; pop.style.left = `${Math.round(Math.max(12, Math.min(b.left, innerWidth - w - 12)))}px`; };
+  const open = () => { draw(); place(); pop.hidden = false; btn.setAttribute('aria-expanded', 'true'); btn.classList.add('on'); document.addEventListener('pointerdown', outside, true); };
+  btn.onclick = () => (pop.hidden ? open() : close());
+  pop.onkeydown = (e) => { if (e.key === 'Escape') { close(); btn.focus(); } };
+}
 function renderChatHead(c) {
   if (!c.el) return;
   const p = G.projects.find((x) => x.id === c.projectId);
@@ -2626,6 +2663,13 @@ function renderChatHead(c) {
   if (p?.color) head.style.setProperty('--pcx', p.color); else head.style.removeProperty('--pcx');
   $('.ch-proj-name', r).textContent = p?.name || c.projectId;
   $('.ch-proj-tag', r).title = `Open the project folder in File Explorer\n${p?.dir || ''}`;
+  const off = chatOffProject(c), nb = $('.ch-notes', r);
+  if (nb) {
+    nb.classList.toggle('off', off);
+    $('.ch-notes-word', r).textContent = off ? 'Own chat' : 'In project';
+    nb.title = off ? `This chat keeps to itself: its own notes only, not ${p?.name || 'the project'}'s notes, design or work log.\nClick for its notes, or to bring it into the project.`
+      : `This chat is part of ${p?.name || 'the project'}: it reads the project's notes (AGENT.md), design and work log, and keeps its own notes too.\nClick for its notes, or to keep it apart.`;
+  }
   const gh = $('.ch-gh', r);
   if (gh) { gh.hidden = !p?.github; if (p?.github && gh.getAttribute('href') !== p.github.url) { gh.href = p.github.url; gh.title = `Open ${p.github.owner}/${p.github.repo} on GitHub`; gh.innerHTML = GH_ICO; } }
   $('.dir-a-msgs-count', r).textContent = `${t.msgs} msg${t.msgs === 1 ? '' : 's'}`;
@@ -4643,7 +4687,7 @@ async function runChat(c, text, ctx, imgs, { resumeOf, docs = [], more = 0, mode
   const artifacts = Object.fromEntries(Object.entries(a.artifacts).map(([id, x]) => [id, x.kind === 'html' ? { kind: 'html', title: x.title, html: x.html, v: 1 } : x.kind === 'md' ? { kind: 'md', title: x.title, md: x.md || '', v: 1 } : { kind: x.kind, title: x.title, url: x.url?.startsWith('data:') ? undefined : x.url, v: 1 }]));
   const settings = { ...G.settings, approval: c.approval, tools: chatTools(c), ...qualitySettings(c), chromeAccess: !!c.tools?.chrome, appsAccess: !!c.tools?.apps };
   const body = resumeOf ? { runId: m.runId, chatId: c.id, resume: resumeOf, settings, allowed: a.allowed, cmdRules: a.cmdRules || [], apps: a.apps || [], folders: a.folders || [], reading: a.reading?.text || '', ...(more ? { continue: more, ...(model ? { model } : {}) } : {}) }
-    : { runId: m.runId, chatId: c.id, projectId: c.projectId, chatTitle: c.title, setup: a.setup, settings, allowed: a.allowed, cmdRules: a.cmdRules || [], apps: a.apps || [], folders: a.folders || [], history, summary: a.summary || '', reading: a.reading?.text || '', text, artifacts, context: ctx?.text || '', images: imgs.map((x) => x.full), docs: docs.map((d) => d.id), ...(cmts.length ? { comments: cmts } : {}), ...(a.videoMode ? { videoMode: a.videoMode } : {}), ...(a.videoMode === 'on' && a.videoFrom ? { videoFrom: a.videoFrom } : {}) };
+    : { runId: m.runId, chatId: c.id, projectId: c.projectId, chatTitle: c.title, setup: a.setup, settings, allowed: a.allowed, cmdRules: a.cmdRules || [], apps: a.apps || [], folders: a.folders || [], offProject: chatOffProject(c), history, summary: a.summary || '', reading: a.reading?.text || '', text, artifacts, context: ctx?.text || '', images: imgs.map((x) => x.full), docs: docs.map((d) => d.id), ...(cmts.length ? { comments: cmts } : {}), ...(a.videoMode ? { videoMode: a.videoMode } : {}), ...(a.videoMode === 'on' && a.videoFrom ? { videoFrom: a.videoFrom } : {}) };
   // Saved straight away, so a reload finds the running reply and reattaches to it.
   saveChat(c, true);
   return followRun(c, m, (signal) => fetch('/api/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal, body: JSON.stringify(body) }));
