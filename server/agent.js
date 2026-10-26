@@ -30,7 +30,7 @@ import { shellNote, shellHint } from './shellnotes.js';
 import { startBackground, jobOutput, stopBackground, listBackground } from './bgjobs.js';
 import { markJob } from './terminal.js';
 import { termStart, termSend, termRead, termStop } from './agentterm.js';
-import { appWindows, readWindow, clickControl, clickAt, setControl, sendKeys, windowShot, closeWindow, findApps, windowsOfApp, openAppNames, zoomWindow, mouseAt, dragIn, scrollIn, holdKey, windowDo, clipboard } from './uia.js';
+import { appWindows, readWindow, clickControl, clickAt, setControl, sendKeys, windowShot, closeWindow, findApps, windowsOfApp, openAppNames, shotVia, windowText, zoomWindow, mouseAt, dragIn, scrollIn, holdKey, windowDo, clipboard } from './uia.js';
 import { openDetached } from './userenv.js';
 import { languageChecks } from './langchecks.js';
 import { loadHooks, matchHooks, hookLine, safeHookFile } from './hooks.js';
@@ -558,7 +558,7 @@ const DESKTOP_OS = process.platform === 'darwin'
 // changes it under the 🖥 button. Browsers are for the browser tool (it knows sign-ins and what sends or buys);
 // terminals and code editors take commands, which go through shell and its checks; some apps are never used.
 const APP_LEVELS = ['view', 'click', 'full'];
-const VIEW_ACTS = ['windows', 'read', 'screenshot', 'zoom', 'wait_for'];
+const VIEW_ACTS = ['windows', 'read', 'read_text', 'screenshot', 'zoom', 'wait_for'];
 const CLICK_ACTS = [...VIEW_ACTS, 'click', 'click_at', 'right_click', 'double_click', 'middle_click', 'hover', 'mouse_down', 'mouse_up', 'drag', 'scroll', 'focus', 'minimize', 'maximize', 'restore', 'move', 'resize'];
 const APP_ACTS = { view: VIEW_ACTS, click: CLICK_ACTS, full: null }; // full: also type, keys, hold_key, clipboard, close
 const APP_NEVER = /^(quorx|claude|electron|1password|bitwarden|keepass(xc)?|lastpass|dashlane|keeper|nordpass|proton pass|windows security|registry editor|task manager|services|local security policy|group policy|credential manager|computer management|disk management|windows powershell \(admin\)|terminal \(admin\))\b/i;
@@ -595,8 +595,8 @@ const CODE_TOOLS = [
   { type: 'function', function: { name: 'android', description: 'Test an Android app on an emulator (adb). avds: the virtual devices this computer has. start {avd}: boot one as a background job (Stop ends it) and wait until it is ready. devices: what is connected. install {apk}: an APK from the project. launch {package}. read: the screen as text; interactive controls are numbered [n] with their position @x,y. tap {ref} or {x, y}. type {text}: into the focused field. key {key}: back, home, enter, tab, delete, up/down/left/right. screenshot: a picture for the user. log {package}: recent errors and the app\'s own log lines. Emulators only, unless the user allows phones.', parameters: { type: 'object', required: ['action'], properties: {
     action: { type: 'string', enum: ['avds', 'start', 'devices', 'install', 'launch', 'read', 'tap', 'type', 'key', 'screenshot', 'log'] }, device: { type: 'string' }, avd: { type: 'string' }, apk: { type: 'string' }, package: { type: 'string' },
     ref: { type: 'integer' }, x: { type: 'integer' }, y: { type: 'integer' }, text: { type: 'string' }, key: { type: 'string' } } } } },
-  { type: 'function', function: { name: 'desktop', description: `See and use desktop apps. Two kinds: an installed app the user has (open it by its Start-menu name with open {app}: it reuses the window if the app is already open, the user allows each app once per chat, and it stays open afterwards so later steps and chats can use it again), or a program you built and started yourself with shell and background: true (pass that job id; WPF, WinForms, Cocoa, SwiftUI, GTK, Qt, tkinter, Electron, games…). running: the apps the user has open, by name. Then, with app or job: windows: its windows. read: a window's controls as text; interactive ones are numbered [n] with their position @x,y. click {ref}: press a button, tick a box, pick an item. click_at {x, y}: a point, for apps whose controls can't be read. type {ref, text}: set a text field. keys {keys}: keyboard input in SendKeys form ({ENTER}, {TAB}, ^s for Ctrl+S, %{F4} for Alt+F4). screenshot: a picture of the window. zoom {x, y, width, height}: part of it enlarged, to read small text. Windows also: right_click, double_click, middle_click, hover, mouse_down, mouse_up {ref or x, y}; drag {x, y, to_x, to_y}; scroll {direction, amount, ref or x, y}; hold_key {key, seconds}; wait_for {text, seconds}: until the window shows that text; focus, minimize, maximize, restore, move {x, y}, resize {width, height}; clipboard: read it, or {text} to set it. close: only when the user asks (apps stay open for reuse). Every x,y is pixels from the window's top-left corner: the same in its picture, its controls' @x,y and click_at. steps: several actions in one call (up to 8, each like this tool's arguments; stops at the first error). After an action that changes the window you get its controls again. Only those apps' windows can be reached, never the user's other windows; clicks and keys bring the window to the front.${DESKTOP_OS}`, parameters: { type: 'object', properties: {
-    action: { type: 'string', enum: ['open', 'running', 'windows', 'read', 'click', 'click_at', 'type', 'keys', 'screenshot', 'zoom', 'right_click', 'double_click', 'middle_click', 'hover', 'mouse_down', 'mouse_up', 'drag', 'scroll', 'hold_key', 'wait_for', 'focus', 'minimize', 'maximize', 'restore', 'move', 'resize', 'clipboard', 'close'] }, app: { type: 'string', description: 'An installed app by its Start-menu name, e.g. "Calculator" (open it first with open; Windows)' }, job: { type: 'string', description: 'Or: the background job that runs your own program, e.g. "bg1"' },
+  { type: 'function', function: { name: 'desktop', description: `See and use desktop apps. Two kinds: an installed app the user has (open it by its Start-menu name with open {app}: it reuses the window if the app is already open, the user allows each app once per chat, and it stays open afterwards so later steps and chats can use it again), or a program you built and started yourself with shell and background: true (pass that job id; WPF, WinForms, Cocoa, SwiftUI, GTK, Qt, tkinter, Electron, games…). running: the apps the user has open, by name. Then, with app or job: windows: its windows. read: a window's controls as text; interactive ones are numbered [n] with their position @x,y. A window with no readable controls (Unity, games, canvas apps) gets the words in its picture instead, read by Windows, each with its @x,y for click_at; read_text does that for any window. click {ref}: press a button, tick a box, pick an item. click_at {x, y}: a point, for apps whose controls can't be read. type {ref, text}: set a text field. keys {keys}: keyboard input in SendKeys form ({ENTER}, {TAB}, ^s for Ctrl+S, %{F4} for Alt+F4). screenshot: a picture of the window. zoom {x, y, width, height}: part of it enlarged, to read small text. Windows also: right_click, double_click, middle_click, hover, mouse_down, mouse_up {ref or x, y}; drag {x, y, to_x, to_y}; scroll {direction, amount, ref or x, y}; hold_key {key, seconds}; wait_for {text, seconds}: until the window shows that text; focus, minimize, maximize, restore, move {x, y}, resize {width, height}; clipboard: read it, or {text} to set it. close: only when the user asks (apps stay open for reuse). Every x,y is pixels from the window's top-left corner: the same in its picture, its controls' @x,y and click_at. steps: several actions in one call (up to 8, each like this tool's arguments; stops at the first error). After an action that changes the window you get its controls again. Only those apps' windows can be reached, never the user's other windows; clicks and keys bring the window to the front.${DESKTOP_OS}`, parameters: { type: 'object', properties: {
+    action: { type: 'string', enum: ['open', 'running', 'windows', 'read', 'read_text', 'click', 'click_at', 'type', 'keys', 'screenshot', 'zoom', 'right_click', 'double_click', 'middle_click', 'hover', 'mouse_down', 'mouse_up', 'drag', 'scroll', 'hold_key', 'wait_for', 'focus', 'minimize', 'maximize', 'restore', 'move', 'resize', 'clipboard', 'close'] }, app: { type: 'string', description: 'An installed app by its Start-menu name, e.g. "Calculator" (spaces, case and version numbers don\'t matter), or the full path of its .exe when the Start menu doesn\'t list it (open it first with open; Windows)' }, job: { type: 'string', description: 'Or: the background job that runs your own program, e.g. "bg1"' },
     window: { type: 'integer', description: 'A window handle from windows (default: its first window)' }, ref: { type: 'integer' }, x: { type: 'integer' }, y: { type: 'integer' }, to_x: { type: 'integer' }, to_y: { type: 'integer' }, width: { type: 'integer' }, height: { type: 'integer' },
     text: { type: 'string' }, keys: { type: 'string' }, key: { type: 'string', description: 'hold_key: a letter, digit, F1-F12, shift, ctrl, alt, space, enter or an arrow' }, seconds: { type: 'number' },
     direction: { type: 'string', enum: ['up', 'down', 'left', 'right'] }, amount: { type: 'integer', description: 'scroll: wheel notches (default 3)' },
@@ -946,6 +946,12 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   // them with the chat (folder_added) and sends them with every reply; each is checked again here, so a folder that
   // became off limits (a drive root, the profile folder, the project's own parent…) is dropped.
   const chatFolders = [];
+  // What the chat allowed is read from its saved file too, not only from what the page sends: a page that lost its
+  // list (a reload, a merge with another window) made VRoid ask again on every reply. The page's entries win.
+  const savedAgent = (req.chatId && validId(String(req.chatId)) && getChat(String(req.chatId))?.agent) || {};
+  const union = (saved, sent, key) => { const m = new Map(); for (const x of [...(Array.isArray(saved) ? saved : []), ...(Array.isArray(sent) ? sent : [])]) if (x?.[key]) m.set(String(x[key]).toLowerCase(), x); return [...m.values()]; };
+  req.apps = union(savedAgent.apps, req.apps, 'appId');
+  req.folders = union(savedAgent.folders, req.folders, 'path');
   const folderBlock = (dir) => { if (!root) return 'there is no project folder'; const z = zoneOf(dir, root); return z.zone === 'outside' ? '' : z.zone === 'inside' || z.zone === 'protected' ? 'it is inside the project already' : z.why || 'it is off limits'; };
   for (const f of Array.isArray(req.folders) ? req.folders : []) {
     const dir = f?.path && path.isAbsolute(String(f.path)) ? path.resolve(String(f.path)) : null;
@@ -3189,7 +3195,8 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         // Saved in the agent's scratch folder too, so the deciders can look at it (apps whose controls can't be read, such as tkinter).
         const rel = `${SCRATCH}/shots/${who.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${(run.shotSeq = (run.shotSeq || 0) + 1)}.png`;
         try { fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true }); fs.writeFileSync(path.join(root, rel), Buffer.from(img.split(',')[1], 'base64')); } catch { return 'Screenshot taken; the user sees it in the trace. Read the window for its controls as text.'; }
-        return `Screenshot taken; the user sees it in the trace. Saved as ${rel}: to check what it shows (text, layout, a result), call decide with images ["file:${rel}"]. Read the window for its controls as text.`;
+        const via = shotVia(), how = via && via !== 'window' ? ` Taken from the ${via}.` : '';
+        return `Screenshot taken${how}; the user sees it in the trace. Saved as ${rel}: to check what it shows (text, layout, a result), call decide with images ["file:${rel}"]. Read the window for its controls as text.`;
       }
       if (act === 'close') { const did = await closeWindow(scope, args.window); return `${did}.`; }
       // The rest act like a person with a mouse and keyboard, on a control [ref] or at window pixels x,y (the same
@@ -3225,6 +3232,12 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
           if (Date.now() >= until) return `"${args.text}" didn't show up within ${secs} s. Read the window to see what it shows.`;
           await sleep(700, signal);
         }
+      }
+      if (act === 'read_text') {
+        const r = await windowText(scope, args.window);
+        emit({ t: 'desktop', job: who, action: act, window: r.handle, at: at() });
+        return `Text in window ${r.handle}, read from its picture${r.via !== 'window' ? ` (taken from the ${r.via})` : ''}; each line with its middle point for click_at:
+${r.text || '(no text found)'}`;
       }
       if (act === 'zoom') {
         const img = await zoomWindow(scope, args.window, args.x, args.y, args.width, args.height);
@@ -4615,7 +4628,10 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     if (process.platform !== 'win32') return 'Error: desktop open works on Windows for now. Here, start the app with shell and background: true.';
     const want = String(args.app || '').trim();
     if (!want) return 'Error: give app: its name as the Start menu shows it, e.g. "Calculator" or "Visual Studio Code".';
-    const found = await findApps(want);
+    // An installed program's own path works too, for one the Start menu doesn't list.
+    const byPath = path.isAbsolute(want) && /\.exe$/i.test(want);
+    if (byPath && !fs.existsSync(want)) return `Error: there is no program at ${want}.`;
+    const found = byPath ? [{ name: path.basename(want, path.extname(want)), appId: path.resolve(want) }] : await findApps(want);
     if (!found.length) return `Error: no app called "${want}" in the Start menu. Try the name it has there; a program that isn't installed as an app can be started with shell.`;
     const key = found[0].name.toLowerCase();
     if (appLevel(found[0].name) === 'never') return `Error: QuorX never lets the agent use ${found[0].name}: it holds passwords, runs QuorX itself or changes the system. Ask the user to do it themselves.`;
@@ -4630,7 +4646,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     if (want.toLowerCase() !== key) chatApps.set(want.toLowerCase(), app);
     const reused = wins.length > 0;
     if (!reused) {
-      openDetached('explorer.exe', [`shell:AppsFolder\\${app.appId}`]);
+      openDetached('explorer.exe', [path.isAbsolute(app.appId) ? app.appId : `shell:AppsFolder\\${app.appId}`]);
       for (const t0 = Date.now(); !wins.length && Date.now() - t0 < 20000;) { await sleep(500, signal); wins = await windowsOfApp(app); }
       if (!wins.length) return `Started ${app.name}, but no window of it showed up within 20 s. It may still be starting: check with desktop windows and app: "${app.name}".`;
     }

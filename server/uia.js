@@ -88,10 +88,27 @@ const pick = async (scope, handle) => {
   return { pids: r.pids, handle: h };
 };
 // Windows' helper writes the text itself; the others return nodes, written the same way by deskkit.js.
+/** The words in a window's picture (Windows text recognition): "text" @x,y per line. */
+export async function windowText(scope, handle) {
+  winOnly('reading text from a picture');
+  const p = await pick(scope, handle);
+  const r = await U.call('ocr', p, 45000);
+  return { ...p, text: String(r.text || '').trim(), via: r.via || 'window' };
+}
+// The title bar's own controls: a window that shows only these has no readable controls of its own.
+const TITLE_BAR = /^\s*\[\d+\] (MenuItem "System"|Button "(Minimi[sz]e|Maximi[sz]e|Restore|Close)\b)/;
+/** A window's controls as text. With none of its own (Unity, games, canvas apps) on Windows, the words in its picture
+ *  are added, read by Windows' text recognition, each with the point to click_at. */
 export async function readWindow(scope, handle, { depth = 25, max = 250 } = {}) {
   const p = await pick(scope, handle);
   const r = await U.call('tree', { ...p, depth, max }, 30000);
-  return { ...p, text: r.nodes ? treeText(r.nodes, { more: r.more }) : r.text };
+  const text = r.nodes ? treeText(r.nodes, { more: r.more }) : r.text;
+  const own = String(text).split('\n').filter((l) => /^\s*\[\d+\]/.test(l) && !TITLE_BAR.test(l));
+  if (OS !== 'win32' || own.length) return { ...p, text };
+  const seen = await U.call('ocr', p, 45000).catch((e) => ({ error: e.message }));
+  if (seen.error) return { ...p, text: `${text}\n(No controls can be read in this window, and its text couldn't be read from its picture: ${seen.error}. Use screenshot and click_at.)` };
+  const via = seen.via && seen.via !== 'window' ? ` (picture taken from the ${seen.via})` : '';
+  return { ...p, ocr: true, text: `${text}\nThis window has no readable controls. Text read from its picture${via}, each line with its middle point for click_at:\n${String(seen.text || '').trim() || '(no text found: the window may be blank or still loading)'}` };
 }
 export async function clickControl(scope, handle, ref) { const p = await pick(scope, handle); return (await U.call('click', { ...p, ref: Number(ref) }, 15000)).did; }
 export async function clickAt(scope, handle, x, y) { const p = await pick(scope, handle); return (await U.call('clickxy', { ...p, x: Math.round(Number(x)), y: Math.round(Number(y)) }, 15000)).did; }
@@ -102,7 +119,10 @@ export async function sendKeys(scope, handle, keys) {
   const args = OS === 'win32' ? { keys: k } : { events: OS === 'darwin' ? macKeyEvents(k) : parseSendKeys(k) };
   return (await U.call('keys', { ...p, ...args }, 15000)).did;
 }
-export async function windowShot(scope, handle) { const p = await pick(scope, handle); return `data:image/png;base64,${(await U.call('shot', p, 20000)).png}`; }
+// How the last picture was taken: 'window', or from the screen when the window's own picture was one flat colour.
+let lastVia = '';
+export const shotVia = () => lastVia;
+export async function windowShot(scope, handle) { const p = await pick(scope, handle); const r = await U.call('shot', p, 20000); lastVia = r.via || 'window'; return `data:image/png;base64,${r.png}`; }
 export async function closeWindow(scope, handle) { const p = await pick(scope, handle); return (await U.call('close', p, 15000)).did; }
 
 // Windows only: the helpers for macOS and Linux don't have these yet.

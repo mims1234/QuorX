@@ -14,7 +14,7 @@ import { projectDir, listProjects } from './store.js';
 import { SECRET_FILES } from './keys.js';
 import { projectEnv } from './projectsecrets.js';
 import { termEvent, lineSplitter, newJob, endJob } from './terminal.js';
-import { jobsAvailable, adoptPid, jobCount, killJob, closeJob, releaseJob, startDetached } from './jobhost.js';
+import { jobsAvailable, adoptPid, jobCount, killJob, closeJob, releaseJob, keepOnClose, startDetached } from './jobhost.js';
 import { snapshot, changesSince, objectFor, pruneObjects, snapshotAsync, changesSinceAsync, pruneObjectsAsync } from './snapshot.js';
 import { freshPath } from './userenv.js';
 
@@ -378,6 +378,15 @@ export function runLine(root, line, { shell = 'direct', timeout = 180e3, signal,
       const note = (text) => { out += `\n${text}\n`; log?.write(`\n${text}\n`); if (job) termEvent(term.projectId, { kind: 'out', job, text, stream: 'note' }); };
       proc.stdout.on('data', add('out')); proc.stderr.on('data', add('err'));
       const timer = setTimeout(() => { timedOut = true; note(`[stopped after ${Math.round(timeout / 1000)}s]`); stop('timeout'); }, timeout);
+      // untilEmpty (background jobs): once its program shows a window, QuorX closing or restarting no longer ends it,
+      // since the user may be working in it (an unsaved model in VRoid was lost that way). Stop and job_stop still do.
+      let kept = false;
+      const keepIfWindowed = async () => {
+        if (kept || !proc.qxJob) return;
+        const c = await jobCount(proc.qxJob, { windows: true }).catch(() => null);
+        if (c?.windowed?.length && !kept) { kept = true; await keepOnClose(proc.qxJob).catch(() => { kept = false; }); }
+      };
+      const watch = untilEmpty ? setInterval(keepIfWindowed, 1500) : null;
       const onAbort = () => stop('stopped');
       signal?.addEventListener('abort', onAbort, { once: true });
       if (signal?.aborted) onAbort(); // pressed during launch: the abort event has already fired
@@ -392,6 +401,7 @@ export function runLine(root, line, { shell = 'direct', timeout = 180e3, signal,
           if (!c.active) break;
           await new Promise((r) => setTimeout(r, 1000));
         }
+        if (watch) clearInterval(watch);
         clearTimeout(timer);
         signal?.removeEventListener('abort', onAbort);
         const stopped = stopping ? await stopping : null;

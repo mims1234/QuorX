@@ -14,6 +14,7 @@
 #   shot    {pids, handle}               -> {png}   (base64)
 #   close   {pids, handle}               -> {did}
 #   zoom    {pids, handle, x, y, w, h}   -> {png}   (part of the window, enlarged)
+#   ocr     {pids, handle}               -> {text}  (the words in its picture, "text" @x,y per line: Windows text recognition)
 #   mouse   {pids, handle, ref|x,y, kind} -> {did}  (right, middle, double, hover, down, up)
 #   drag    {pids, handle, x, y, x2, y2} -> {did}
 #   scroll  {pids, handle, ref|x,y, dir, amount} -> {did}
@@ -354,26 +355,45 @@ public static class QxUia {
     return "sent the keys";
   }
 
-  // A picture of the window. Some apps (games, video, GPU-drawn ones) draw black for PrintWindow: then the window is
-  // brought to the front and the screen under it is copied instead.
+  // A picture of the window. Some apps (Unity and other GPU-drawn ones, games, video) come back from PrintWindow as one
+  // flat colour, black or white: then the window is brought to the front and the screen under it is copied instead.
+  // LastVia says which way the last picture was taken.
+  public static string LastVia = "";
   static Bitmap Grab(IntPtr h, int[] pids) {
+    if (IsIconic(h)) ShowWindow(h, 9);
     RECT r; GetWindowRect(h, out r);
     int w = r.R - r.L, ht = r.B - r.T;
     if (w <= 0 || ht <= 0 || IsIconic(h)) throw new Exception("the window is minimised or has no size");
     Bitmap bmp = new Bitmap(w, ht);
     using (Graphics g = Graphics.FromImage(bmp)) { IntPtr dc = g.GetHdc(); PrintWindow(h, dc, 2); g.ReleaseHdc(dc); }
-    if (!Blank(bmp)) return bmp;
-    Front(h, pids);
+    LastVia = "window";
+    if (!Flat(bmp)) return bmp;
+    try { Front(h, pids); }
+    catch { LastVia = "window, one flat colour: Windows kept another window in front, so the screen under it couldn't be copied (ask the user to click the app once)"; return bmp; }
+    Thread.Sleep(250); // the app draws again once it is in front
     GetWindowRect(h, out r);
     using (Graphics g = Graphics.FromImage(bmp)) g.CopyFromScreen(r.L, r.T, 0, 0, new Size(w, ht));
+    LastVia = Flat(bmp) ? "screen, still one flat colour: the app may really be blank, or still loading" : "screen (the window's own picture was one flat colour)";
     return bmp;
   }
-  static bool Blank(Bitmap b) {
-    for (int i = 1; i < 8; i++) for (int j = 1; j < 8; j++) { Color c = b.GetPixel(b.Width * i / 8, b.Height * j / 8); if (c.R > 8 || c.G > 8 || c.B > 8) return false; }
+  // One flat colour below the title bar: every sample within a few levels of the first.
+  static bool Flat(Bitmap b) {
+    int top = Math.Min(b.Height - 1, 40);
+    Color f = b.GetPixel(b.Width / 2, top + (b.Height - top) / 2);
+    for (int i = 1; i < 10; i++) for (int j = 1; j < 10; j++) {
+      Color c = b.GetPixel(b.Width * i / 10, top + (b.Height - top) * j / 10);
+      if (Math.Abs(c.R - f.R) > 6 || Math.Abs(c.G - f.G) > 6 || Math.Abs(c.B - f.B) > 6) return false;
+    }
     return true;
   }
   static string Png(Bitmap b) { using (MemoryStream ms = new MemoryStream()) { b.Save(ms, ImageFormat.Png); return Convert.ToBase64String(ms.ToArray()); } }
   public static string Shot(long handle, int[] pids) { using (Bitmap b = Grab(new IntPtr(handle), pids)) return Png(b); }
+  // The window's picture as a file, for Windows' own text recognition (ocr below).
+  public static string ShotFile(long handle, int[] pids) {
+    string f = Path.Combine(Path.GetTempPath(), "qx-ocr-" + handle + ".png");
+    using (Bitmap b = Grab(new IntPtr(handle), pids)) b.Save(f, ImageFormat.Png);
+    return f;
+  }
 
   // A part of the window, enlarged (up to 4x, to about 1000 pixels on its long side) to read small text. Its x,y,w,h
   // are window pixels, the same ones click_at takes.
@@ -517,6 +537,35 @@ public static class QxUia {
 }
 '@
 [QxUia]::Dpi()
+
+# Windows' own text recognition (Windows.Media.Ocr), for windows whose controls can't be read (Unity, games, canvas
+# apps). Loaded on first use. Lines: "text @x,y" with x,y the middle of the line in window pixels (what click_at takes).
+$script:ocr = $null
+function Read-WindowText([string]$file) {
+  if (-not $script:ocr) {
+    Add-Type -AssemblyName System.Runtime.WindowsRuntime
+    $script:asTask = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' })[0]
+    [Windows.Storage.StorageFile, Windows.Storage, ContentType = WindowsRuntime] | Out-Null
+    [Windows.Graphics.Imaging.BitmapDecoder, Windows.Graphics.Imaging, ContentType = WindowsRuntime] | Out-Null
+    [Windows.Media.Ocr.OcrEngine, Windows.Media, ContentType = WindowsRuntime] | Out-Null
+    $script:ocr = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
+    if (-not $script:ocr) { throw 'Windows text recognition has no language installed (Settings > Time & language > Language)' }
+  }
+  $await = { param($op, $type) $t = $script:asTask.MakeGenericMethod($type).Invoke($null, @($op)); $t.Wait(-1) | Out-Null; $t.Result }
+  $f = & $await ([Windows.Storage.StorageFile]::GetFileFromPathAsync($file)) ([Windows.Storage.StorageFile])
+  $s = & $await ($f.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
+  try {
+    $d = & $await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($s)) ([Windows.Graphics.Imaging.BitmapDecoder])
+    $b = & $await ($d.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
+    $r = & $await ($script:ocr.RecognizeAsync($b)) ([Windows.Media.Ocr.OcrResult])
+  } finally { $s.Dispose() }
+  $out = foreach ($line in @($r.Lines)) {
+    $x0 = 1e9; $y0 = 1e9; $x1 = 0; $y1 = 0
+    foreach ($w in @($line.Words)) { $q = $w.BoundingRect; $x0 = [Math]::Min($x0, $q.X); $y0 = [Math]::Min($y0, $q.Y); $x1 = [Math]::Max($x1, $q.X + $q.Width); $y1 = [Math]::Max($y1, $q.Y + $q.Height) }
+    '"{0}" @{1},{2}' -f ($line.Text -replace '"', "'"), [int](($x0 + $x1) / 2), [int](($y0 + $y1) / 2)
+  }
+  ($out -join "`n")
+}
 [Console]::Out.WriteLine('{"ready":true}')
 [Console]::Out.Flush()
 while ($true) {
@@ -538,6 +587,12 @@ while ($true) {
         $hits = @($all | Where-Object { $_.Name -ieq $q }) + @($all | Where-Object { $_.Name -ine $q -and $_.Name -ilike $like })
         # A program may call itself more than its Start-menu name ("Brave Browser" for Brave): the longest name it starts with.
         if (-not $hits.Count) { $hits = @($all | Where-Object { $q.StartsWith($_.Name + ' ', [StringComparison]::OrdinalIgnoreCase) } | Sort-Object { $_.Name.Length } -Descending) }
+        # Spaces, case and a version number don't matter: "VRoid Studio" finds "VRoidStudio 2.3.0".
+        if (-not $hits.Count) {
+          $norm = { param($t) (($t -replace '[\s._-]*v?\d+(\.\d+)+\s*$', '') -replace '[^A-Za-z0-9]', '').ToLowerInvariant() }
+          $k = & $norm $q
+          if ($k.Length -ge 3) { $hits = @($all | Where-Object { $n = & $norm $_.Name; $n -eq $k -or $n.StartsWith($k) -or ($k.StartsWith($n) -and $n.Length -ge 4) } | Sort-Object { $_.Name.Length }) }
+        }
         $out.apps = @($hits | Select-Object -First 8 | ForEach-Object { @{ name = $_.Name; appId = $_.AppID } })
       }
       'openapps' {
@@ -557,8 +612,9 @@ while ($true) {
       'clickxy' { $out.did = [QxUia]::ClickAt([long]$m.handle, [int]$m.x, [int]$m.y, $pids) }
       'set' { $out.did = [QxUia]::Set([long]$m.handle, [int]$m.ref, [string]$m.text, $pids) }
       'keys' { $out.did = [QxUia]::Keys([long]$m.handle, [string]$m.keys, $pids) }
-      'shot' { $out.png = [QxUia]::Shot([long]$m.handle, $pids) }
-      'zoom' { $out.png = [QxUia]::Zoom([long]$m.handle, [int]$m.x, [int]$m.y, [int]$m.w, [int]$m.h, $pids) }
+      'shot' { $out.png = [QxUia]::Shot([long]$m.handle, $pids); $out.via = [QxUia]::LastVia }
+      'ocr' { $f = [QxUia]::ShotFile([long]$m.handle, $pids); try { $out.text = Read-WindowText $f; $out.via = [QxUia]::LastVia } finally { Remove-Item $f -ErrorAction SilentlyContinue } }
+      'zoom' { $out.png = [QxUia]::Zoom([long]$m.handle, [int]$m.x, [int]$m.y, [int]$m.w, [int]$m.h, $pids); $out.via = [QxUia]::LastVia }
       'mouse' { $out.did = [QxUia]::Mouse([long]$m.handle, [int]$m.ref, [int]$m.x, [int]$m.y, [string]$m.kind, $pids) }
       'drag' { $out.did = [QxUia]::Drag([long]$m.handle, [int]$m.x, [int]$m.y, [int]$m.x2, [int]$m.y2, $pids) }
       'scroll' { $out.did = [QxUia]::Scroll([long]$m.handle, [int]$m.ref, [int]$(if ($null -ne $m.x) { $m.x } else { -1 }), [int]$(if ($null -ne $m.y) { $m.y } else { -1 }), [string]$m.dir, [int]$(if ($m.amount) { $m.amount } else { 3 }), $pids) }

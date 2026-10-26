@@ -123,6 +123,13 @@ public static class QxJob {
     return keep.ToArray();
   }
 
+  // The job stays (Stop and job_stop still end it), but QuorX closing or restarting no longer does: for a program
+  // with a window that the user may still be working in.
+  public static void KeepOnClose(IntPtr job) {
+    EXT info = new EXT();
+    SetInformationJobObject(job, 9, ref info, (uint)Marshal.SizeOf(typeof(EXT)));
+  }
+
   // Ends every process of the job except `keep`, then lets the kept ones go: the job no longer ends them when QuorX
   // closes it (a process can't leave a job, so its limits are lifted instead).
   public static void Release(IntPtr job, long[] keep) {
@@ -205,6 +212,7 @@ while ($true) {
         $out.members = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.InvokeMemberExpressionAst] }, $true) | ForEach-Object { $_.Extent.Text })
       }
       'kill' { if ($jobs.ContainsKey($m.job)) { [QxJob]::Kill($jobs[$m.job]) } }
+      'keep' { if ($jobs.ContainsKey($m.job)) { [QxJob]::KeepOnClose($jobs[$m.job]) } }
       'release' { if ($jobs.ContainsKey($m.job)) { [QxJob]::Release($jobs[$m.job], [long[]]@($m.keep)); $jobs.Remove($m.job) } }
       'close' { if ($jobs.ContainsKey($m.job)) { [QxJob]::Close($jobs[$m.job]); $jobs.Remove($m.job) } }
       default { throw "unknown op $($m.op)" }

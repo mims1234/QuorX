@@ -115,6 +115,8 @@ export async function jobCount(job, { windows = false } = {}) {
   const arr = (x) => (x == null ? [] : Array.isArray(x) ? x : [x]);
   return { active: r.active || 0, pids: arr(r.pids), names: arr(r.names), windowed: arr(r.windowed), gui: arr(r.gui) };
 }
+/** Keeps the job (Stop still ends it) but stops QuorX closing from ending it. */
+export const keepOnClose = (job) => (G ? Promise.resolve() : J.call('keep', { job }));
 /** Ends every process of the job but `keep`, and lets those live on after QuorX: the job is forgotten. */
 export const releaseJob = (job, keep) => (G ? Promise.resolve() : J.call('release', { job, keep: keep.map(Number) }));
 /** Ends every process in the job, then waits (up to `wait` ms) until none is left. Returns what is left, and the

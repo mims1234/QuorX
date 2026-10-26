@@ -1800,3 +1800,50 @@ test('rules: each command a rule lets through counts one use; a chat rule\'s use
     prep: buildJs, more: { cmdRules: [{ id: 'c1', effect: 'allow', match: 'node build.js*', by: 'button' }, { id: 'c2', effect: 'allow', match: 'node other*', by: 'button', on: false }] } });
   assert.deepEqual(of(chat.events, 'rule_used').map((e) => e.id), ['c1']);
 });
+
+// ---------- Phase 5: white captures, text from pictures, app lifetime, remembered apps ----------
+test('desktop: a flat white capture is taken again from the screen; a window\'s text is read from its picture', { skip: !WIN }, async () => {
+  const { windowShot, shotVia, windowText } = await import('../server/uia.js');
+  const { startBackground, stopBackground } = await import('../server/bgjobs.js');
+  const root = tmp('flat');
+  fs.writeFileSync(path.join(root, 'white.ps1'), "Add-Type -AssemblyName System.Windows.Forms\n$f = New-Object Windows.Forms.Form; $f.Text = 'QX White Form'; $f.BackColor = 'White'; $f.Width = 420; $f.Height = 260\n[void]$f.ShowDialog()\n");
+  fs.writeFileSync(path.join(root, 'words.ps1'), "Add-Type -AssemblyName System.Windows.Forms\n$f = New-Object Windows.Forms.Form; $f.Text = 'QX Words Form'; $f.BackColor = 'White'; $f.Width = 520; $f.Height = 260\n$l = New-Object Windows.Forms.Label; $l.Text = 'Hello Rem Studio'; $l.Font = New-Object Drawing.Font('Segoe UI', 20); $l.AutoSize = $true; $l.Top = 60; $l.Left = 40\n$f.Controls.Add($l); [void]$f.ShowDialog()\n");
+  const jobs = [];
+  try {
+    for (const f of ['white.ps1', 'words.ps1']) jobs.push(startBackground({ projectId: 'flat', cwd: root, line: `powershell -NoProfile -ExecutionPolicy Bypass -File ${f}`, shell: 'powershell', label: f }));
+    await new Promise((r) => setTimeout(r, 3500));
+    await windowShot(jobs[0].id, null);
+    assert.match(shotVia(), /flat/, `a flat picture is noticed and taken again from the screen when Windows lets it (${shotVia()})`);
+    const t = await windowText(jobs[1].id, null);
+    assert.match(t.text, /"Hello Rem Studio" @\d+,\d+/, t.text);
+  } finally { for (const j of jobs) await stopBackground(j.id).catch(() => {}); closeForm('QX White Form'); closeForm('QX Words Form'); }
+});
+
+test('desktop: a background job\'s window survives QuorX letting go of its job (a restart)', { skip: !WIN }, async () => {
+  const { runLine } = await import('../server/workspace.js');
+  const { closeJob } = await import('../server/jobhost.js');
+  const root = tmp('keepjob');
+  fs.writeFileSync(path.join(root, 'form.ps1'), FORM('QX Keep Job Form'));
+  let proc = null;
+  try {
+    runLine(root, 'powershell -NoProfile -ExecutionPolicy Bypass -File form.ps1', { shell: 'powershell', untilEmpty: true, timeout: 60e3, onStart: (p) => { proc = p; } });
+    for (let i = 0; i < 20 && !formOpen('QX Keep Job Form'); i++) await new Promise((r) => setTimeout(r, 300));
+    await new Promise((r) => setTimeout(r, 2500)); // the job notices the window and keeps it
+    await closeJob(proc.qxJob); // what QuorX quitting does to every job
+    await new Promise((r) => setTimeout(r, 800));
+    assert.ok(formOpen('QX Keep Job Form'), 'the window is still open');
+  } finally { closeForm('QX Keep Job Form'); }
+});
+
+test('desktop open: app names match loosely (spaces, case, version numbers)', { skip: !WIN || !!process.env.CI }, async () => {
+  const { findApps } = await import('../server/uia.js');
+  for (const n of ['Calculator', 'calculator', 'Calcu lator', 'CALCULATOR 11.2']) assert.equal((await findApps(n))[0]?.name, 'Calculator', n);
+});
+
+test('computer use: the chat\'s saved apps count even when the page sends none', async () => {
+  const { saveChat } = await import('../server/store.js');
+  const chatId = 'cmsavedapps1';
+  saveChat(chatId, { id: chatId, title: 't', projectId: 'scratch', agent: { messages: [], artifacts: {}, apps: [{ name: 'Calculator', appId: 'Microsoft.WindowsCalculator_8wekyb3d8bbwe!App', level: 'view' }] } });
+  const { bodies } = await agentRun((b, i) => [reply('', [['desktop', { action: 'type', app: 'Calculator', ref: 1, text: '1' }]]), reply('OK.')][i], { chatId, settings: { appsAccess: true }, more: { apps: [] } });
+  assert.match(toolOut(bodies, 1), /look at only .* in Calculator/, 'known from the chat file, held to its level');
+});
