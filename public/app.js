@@ -2632,6 +2632,7 @@ function renderComposerBar(c) {
     <button type="button" class="cq-toggle ${qOn ? 'on' : ''} ${c.approval === 'yolo' ? 'yolo' : ''}" aria-pressed="${qOn}" title="${qOn ? 'Hide the quick settings above (all chats)' : 'Show the quick settings: thinking, Strict / YOLO, tools and caps (all chats)'}${qSum ? `\nNow: ${qSum}` : ''}" aria-label="${qOn ? 'Hide' : 'Show'} quick settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>${!qOn && qSum ? `<span class="cq-tsum">${esc(qSum)}</span>` : ''}<svg class="cq-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="${qOn ? 'M6 15l6-6 6 6' : 'M6 9l6 6 6-6'}"/></svg></button>
     <button type="button" class="cmp-ico cmp-follow-b ${G.followAgent !== false ? 'on' : ''}" aria-pressed="${G.followAgent !== false}" aria-label="Follow the agent" title="${esc(`Follow the agent: ${G.followAgent !== false ? 'on' : 'off'}\nThe side pane jumps to the page or terminal the agent is using, so you can watch.\nAll chats · click to turn ${G.followAgent !== false ? 'off' : 'on'}`)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
     <button type="button" class="cmp-ico cmp-chrome-b ${c.tools?.chrome ? 'on' : ''} ${extReady() ? '' : 'nosetup'}" aria-pressed="${!!c.tools?.chrome}" aria-label="Chrome extension" title="${esc(`Chrome extension: ${!extReady() ? (G.ext?.outdated ? 'needs a reload' : 'not set up') : c.tools?.chrome ? 'on for this chat' : 'off for this chat'}\n${extReady() ? 'Lets the agent use your own Chrome, signed in as you. Sending, buying and account changes ask you first.' : G.ext?.outdated ? 'The extension is an older version: reload it once in chrome://extensions.' : 'Lets the agent use your own Chrome, signed in as you.'}\n${extReady() ? `This chat only · click to turn ${c.tools?.chrome ? 'off' : 'on'}` : 'Click to set it up'}`)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 3.5a2 2 0 0 1 4 0V6h4v4h-1.5a2 2 0 0 0 0 4H18v4h-4v-1.5a2 2 0 0 0-4 0V18H6v-4h1.5a2 2 0 0 0 0-4H6V6h4z"/></svg></button>
+    ${appsButtonHTML(c)}
 `;
   for (const inp of [...glob.querySelectorAll('.cs-num input'), ...quick.querySelectorAll('.cs-num input')]) inp.onchange = () => { const v = Math.min(Number(inp.dataset.max) || Infinity, Math.max(Number(inp.dataset.min) || 0, Number(inp.value) || 0)); inp.value = String(v); G.settings[inp.dataset.k] = v; savePrefs(); };
   for (const b of quick.querySelectorAll('[data-plan]')) b.onclick = () => { G.settings.planFirst = b.dataset.plan; savePrefs(); renderComposerBar(c); };
@@ -2696,6 +2697,7 @@ function renderComposerBar(c) {
   $('.cmp-follow-b', followSlot).onclick = () => { G.followAgent = G.followAgent === false; savePrefs(); for (const ch of [...G.open.values(), G.homeDraft]) if (ch?.el?.root?.isConnected) renderComposerBar(ch); };
   // Not set up: the click turns it on for this chat and opens the extension's setup, as the tick did.
   $('.cmp-chrome-b', followSlot).onclick = () => { c.tools.chrome = !c.tools?.chrome || !extReady(); saveChat(c); renderComposerBar(c); if (!extReady()) openChromeSetup(); };
+  wireAppsButton(c, followSlot);
   for (const b of both('.perm button')) b.onclick = () => { c.approval = b.dataset.approval; saveChat(c); renderComposerBar(c); if (c.running?.runId) postJ(`/api/runs/${c.running.runId}/mode`, { approval: c.approval }).catch(() => {}); };
   renderAllowed(c);
 }
@@ -2954,6 +2956,42 @@ function renderToolbars() {
 // Tools this chat's agent may use without asking (strict mode); click one to take the permission back.
 // "Always allowed" tools are part of this chat's permissions, so they live with 🔒 Strict / ⚡ YOLO in the
 // message box: a small 🔓 control that lists them and lets you take any back. Nothing sits in the conversation.
+// ---------- 🖥 Computer use: this chat may use apps on this computer, each at its own level ----------
+// Off by default, like 🧩 Chrome. The panel turns it on or off for this chat and lists the apps the agent was allowed
+// (each asks once), with how far it may go in each: View (look), Click (also click), Full (also type).
+const APP_LEVEL = { view: ['View', 'Look only: its windows, their text, a screenshot'], click: ['Click', 'Look, and click buttons and points'], full: ['Full', 'Look, click, type and send keys'] };
+const appsHere = () => !G.cfg?.platform || G.cfg.platform === 'win32';
+function appsButtonHTML(c) {
+  if (!appsHere()) return '';
+  const on = !!c.tools?.apps, n = (c.agent?.apps || []).length;
+  return `<span class="apps-wrap"><button type="button" class="cmp-ico cmp-apps-b ${on ? 'on' : ''}" aria-pressed="${on}" aria-haspopup="dialog" aria-expanded="false" aria-label="Computer use" title="${esc(`Computer use: ${on ? 'on' : 'off'} for this chat\nLets the agent use apps on this computer (Calculator, VS Code…). Each app asks you once, and you choose how far it may go.`)}"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>${on && n ? `<span class="apps-n">${n}</span>` : ''}</button><div class="allow-pop apps-pop" role="dialog" aria-label="Computer use in this chat" hidden></div></span>`;
+}
+function wireAppsButton(c, slot) {
+  const btn = $('.cmp-apps-b', slot), pop = $('.apps-pop', slot);
+  if (!btn) return;
+  const draw = () => {
+    const apps = c.agent.apps || [];
+    pop.innerHTML = `<div class="ap-head">🖥 Computer use <small>this chat only</small></div>
+      <label class="ap-row apps-on"><input type="checkbox" ${c.tools?.apps ? 'checked' : ''}> Let the agent use apps on this computer</label>
+      <div class="apps-note">Each app asks you once. Apps stay open after use, so they can be used again.</div>
+      ${apps.length ? apps.map((a) => `<div class="ap-row apps-app" data-id="${esc(a.appId)}"><span class="apps-name">${esc(a.name)}</span><span class="seg apps-lvl" role="group" aria-label="How far the agent may go in ${esc(a.name)}">${Object.entries(APP_LEVEL).map(([k, [w, tip]]) => `<button type="button" data-lvl="${k}" class="${(a.level || 'full') === k ? 'on' : ''}" title="${esc(tip)}">${w}</button>`).join('')}</span><button type="button" class="ap-x" title="Remove ${esc(a.name)}: the agent asks again next time">Remove</button></div>`).join('')
+        : '<div class="apps-note">No apps allowed yet.</div>'}`;
+    $('.apps-on input', pop).onchange = (e) => { c.tools.apps = e.target.checked; saveChat(c); reopen(); };
+    for (const row of pop.querySelectorAll('.apps-app')) {
+      const app = apps.find((a) => a.appId === row.dataset.id);
+      for (const b of row.querySelectorAll('[data-lvl]')) b.onclick = () => { app.level = b.dataset.lvl; saveChat(c); draw(); };
+      $('.ap-x', row).onclick = () => { c.agent.apps = apps.filter((a) => a !== app); saveChat(c); reopen(); };
+    }
+  };
+  const outside = (e) => { if (!slot.contains(e.target)) close(); };
+  const close = () => { pop.hidden = true; btn.setAttribute('aria-expanded', 'false'); G.appsPopOpen = false; document.removeEventListener('pointerdown', outside, true); };
+  const open = () => { draw(); pop.hidden = false; btn.setAttribute('aria-expanded', 'true'); G.appsPopOpen = true; document.addEventListener('pointerdown', outside, true); };
+  // The button's count and colour change with the panel: draw the bar again; the new panel opens itself (G.appsPopOpen: the draft's chat can be a new object once saved).
+  const reopen = () => { document.removeEventListener('pointerdown', outside, true); renderComposerBar(c); };
+  btn.onclick = () => (pop.hidden ? open() : close());
+  pop.onkeydown = (e) => { if (e.key === 'Escape') { close(); btn.focus(); } };
+  if (G.appsPopOpen) { G.appsPopOpen = false; open(); }
+}
 function renderAllowed(c) {
   const bar = c.el && $('.cbar', c.el.root);
   if (!bar) return;
@@ -4507,7 +4545,7 @@ async function runChat(c, text, ctx, imgs, { resumeOf, docs = [], more = 0, mode
   if (box && cut) { updateMsg(c, m); c.follow = true; c.toEnd?.(); }
   else if (box) { if (box.querySelector('.hint')) box.innerHTML = ''; if (user) box.appendChild(renderMsg(c, user)); box.appendChild(renderMsg(c, m)); c.follow = true; c.toEnd?.(); }
   const artifacts = Object.fromEntries(Object.entries(a.artifacts).map(([id, x]) => [id, x.kind === 'html' ? { kind: 'html', title: x.title, html: x.html, v: 1 } : x.kind === 'md' ? { kind: 'md', title: x.title, md: x.md || '', v: 1 } : { kind: x.kind, title: x.title, url: x.url?.startsWith('data:') ? undefined : x.url, v: 1 }]));
-  const settings = { ...G.settings, approval: c.approval, tools: chatTools(c), ...qualitySettings(c), chromeAccess: !!c.tools?.chrome };
+  const settings = { ...G.settings, approval: c.approval, tools: chatTools(c), ...qualitySettings(c), chromeAccess: !!c.tools?.chrome, appsAccess: !!c.tools?.apps };
   const body = resumeOf ? { runId: m.runId, chatId: c.id, resume: resumeOf, settings, allowed: a.allowed, cmdRules: a.cmdRules || [], apps: a.apps || [], reading: a.reading?.text || '', ...(more ? { continue: more, ...(model ? { model } : {}) } : {}) }
     : { runId: m.runId, chatId: c.id, projectId: c.projectId, chatTitle: c.title, setup: a.setup, settings, allowed: a.allowed, cmdRules: a.cmdRules || [], apps: a.apps || [], history, summary: a.summary || '', reading: a.reading?.text || '', text, artifacts, context: ctx?.text || '', images: imgs.map((x) => x.full), docs: docs.map((d) => d.id), ...(cmts.length ? { comments: cmts } : {}), ...(a.videoMode ? { videoMode: a.videoMode } : {}), ...(a.videoMode === 'on' && a.videoFrom ? { videoFrom: a.videoFrom } : {}) };
   // Saved straight away, so a reload finds the running reply and reattaches to it.
@@ -4630,7 +4668,7 @@ async function followRun(c, m, open) {
         if (e.t === 'mode' && c.approval !== e.approval) { c.approval = e.approval; saveChat(c); renderComposerBar(c); }
         if (e.t === 'allow_always') { if (!a.allowed.includes(e.tool)) a.allowed.push(e.tool); renderAllowed(c); saveChat(c); }
         if (e.t === 'cmd_rule' && e.rule?.scope === 'chat') { (a.cmdRules ??= []).push(e.rule); saveChat(c); }
-        if (e.t === 'app_allowed' && e.app?.appId) { a.apps = [...(a.apps || []).filter((x) => x.appId !== e.app.appId), { name: e.app.name, appId: e.app.appId }]; saveChat(c); }
+        if (e.t === 'app_allowed' && e.app?.appId) { a.apps = [...(a.apps || []).filter((x) => x.appId !== e.app.appId), { name: e.app.name, appId: e.app.appId, level: e.app.level || 'full' }]; saveChat(c); renderComposerBar(c); }
         if (e.t === 'approval') { m.approvals[e.id] = { card: e }; if (e.mode === 'strict') { c.waiting = true; renderSidebar(); renderChatHead(c); note('approval', e.what || e.tool); } }
         // The clock stopped: only that card's countdown line is drawn again, so what you are typing in it stays.
         if (e.t === 'card_held') {

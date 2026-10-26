@@ -2895,3 +2895,16 @@ body.dev-build::before { content: ''; position: fixed; left: 0; right: 0; top: 0
 .mic-hint .mh-seg button.on { color: var(--text); background: color-mix(in srgb, var(--violet, #a78bfa) 18%, transparent); }
 .mic-hint .mh-seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 @media (max-width: 640px) { .mic-hint .mh-txt { display: none; } }
+
+/* 🖥 Computer use: the button beside 🧩 Chrome, and its panel (apps this chat may use, each with its level) */
+.chatpane .cmp-control-rack .apps-wrap { position: relative; display: inline-flex; }
+.chatpane .cmp-control-rack .cmp-apps-b { position: relative; }
+.chatpane .cmp-control-rack .cmp-apps-b.on { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); background: var(--ok-dim); }
+.cmp-apps-b .apps-n { position: absolute; top: -4px; right: -4px; min-width: 15px; height: 15px; padding: 0 3px; border-radius: 8px; background: var(--ok); color: var(--bg); font: 600 10px/15px var(--font-ui); text-align: center; }
+.apps-pop { left: auto; right: 0; width: 320px; }
+.apps-pop .apps-on { gap: 8px; cursor: pointer; }
+.apps-pop .apps-note { font-size: 11px; color: var(--muted); padding: 2px 0 4px; }
+.apps-pop .apps-app { gap: 8px; }
+.apps-pop .apps-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.apps-pop .apps-lvl { flex: none; }
+.apps-pop .apps-lvl button { font-size: 11px; padding: 2px 7px; }

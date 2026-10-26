@@ -57,6 +57,11 @@ export async function findApps(name) {
   if (OS !== 'win32') throw new Error('opening apps by name works on Windows for now');
   return arr((await U.call('apps', { name: String(name) }, 30000)).apps);
 }
+/** The names of the apps that have a window open now (Store apps by their Start-menu name). Windows only. */
+export async function openAppNames() {
+  if (OS !== 'win32') return [];
+  return arr((await U.call('openapps', {}, 30000)).names).map(String);
+}
 /** The windows `app` ({ name, appId }) has open now: [{ handle, pid, appPid, title }]. */
 export async function windowsOfApp(app) {
   if (OS !== 'win32') return [];

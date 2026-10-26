@@ -15,6 +15,7 @@
 #   close   {pids, handle}               -> {did}
 #   apps    {name}                       -> {apps: [{name, appId}]}   (Start-menu apps whose name matches)
 #   appwins {appId, name}                -> {windows: [{handle, pid, appPid, title}]}   (that app's open windows)
+#   openapps {}                          -> {names: [..]}   (apps with a window open now: names only, no titles)
 # Apps the agent opened by name (desktop open) are reached the same way: QuorX passes their windows' processes.
 $ErrorActionPreference = 'Stop'
 Add-Type -ReferencedAssemblies UIAutomationClient, UIAutomationTypes, System.Drawing, System.Windows.Forms, WindowsBase -TypeDefinition @'
@@ -75,6 +76,27 @@ public static class QxUia {
       } catch { }
     }
     return "";
+  }
+  // Every app with a window open now: its Store id (or "") and its program's own name. No window titles.
+  public static string OpenApps() {
+    StringBuilder sb = new StringBuilder();
+    AutomationElementCollection all = AutomationElement.RootElement.FindAll(TreeScope.Children, Condition.TrueCondition);
+    foreach (AutomationElement w in all) {
+      try {
+        AutomationElement.AutomationElementInformation c = w.Current;
+        if (c.IsOffscreen || string.IsNullOrEmpty(c.Name)) continue;
+        int appPid = c.ProcessId; string path = ExeOf(appPid);
+        if (path.EndsWith("ApplicationFrameHost.exe", StringComparison.OrdinalIgnoreCase)) {
+          AutomationElement core = w.FindFirst(TreeScope.Children, new PropertyCondition(AutomationElement.ClassNameProperty, "Windows.UI.Core.CoreWindow"));
+          if (core == null) continue;
+          appPid = core.Current.ProcessId; path = ExeOf(appPid);
+        }
+        string own = "";
+        if (path.Length > 0) { System.Diagnostics.FileVersionInfo v = System.Diagnostics.FileVersionInfo.GetVersionInfo(path); own = (v.FileDescription ?? "").Trim(); if (own.Length == 0) own = Path.GetFileNameWithoutExtension(path); }
+        sb.Append(AumidOf(appPid)).Append('\t').Append(own.Replace('\t', ' ')).Append('\n');
+      } catch { }
+    }
+    return sb.ToString();
   }
   // A program's own name for itself is the app's name, or starts with it ("Brave Browser" for Brave).
   static bool Named(string own, string name) {
@@ -347,14 +369,22 @@ while ($true) {
     $id = $m.id
     $out = @{ id = $id; ok = $true }
     $pids = [int[]]@($m.pids | ForEach-Object { [int]$_ })
-    if ($m.op -notin @('windows', 'apps', 'appwins')) { [QxUia]::Check([long]$m.handle, $pids) }
+    if ($m.op -notin @('windows', 'apps', 'appwins', 'openapps')) { [QxUia]::Check([long]$m.handle, $pids) }
     switch ($m.op) {
       'apps' {
         # Start-menu apps by name: exact names first, then names that contain it.
         $q = [string]$m.name; $all = @(Get-StartApps)
         $like = '*' + [System.Management.Automation.WildcardPattern]::Escape($q) + '*'
         $hits = @($all | Where-Object { $_.Name -ieq $q }) + @($all | Where-Object { $_.Name -ine $q -and $_.Name -ilike $like })
+        # A program may call itself more than its Start-menu name ("Brave Browser" for Brave): the longest name it starts with.
+        if (-not $hits.Count) { $hits = @($all | Where-Object { $q.StartsWith($_.Name + ' ', [StringComparison]::OrdinalIgnoreCase) } | Sort-Object { $_.Name.Length } -Descending) }
         $out.apps = @($hits | Select-Object -First 8 | ForEach-Object { @{ name = $_.Name; appId = $_.AppID } })
+      }
+      'openapps' {
+        # Store apps by their Start-menu name; other programs by their own name for themselves.
+        $start = @{}; foreach ($a in @(Get-StartApps)) { if (-not $start.ContainsKey($a.AppID)) { $start[$a.AppID] = $a.Name } }
+        $names = @(([QxUia]::OpenApps()) -split "`n" | Where-Object { $_ } | ForEach-Object { $p = $_ -split "`t", 2; if ($p[0] -and $start.ContainsKey($p[0])) { $start[$p[0]] } else { $p[1] } } | Where-Object { $_ })
+        $out.names = @($names | Sort-Object -Unique)
       }
       'appwins' {
         $out.windows = @(([QxUia]::AppWindows([string]$m.appId, [string]$m.name)) -split "`n" | Where-Object { $_ } | ForEach-Object { $p = $_ -split "`t", 4; @{ handle = [long]$p[0]; pid = [int]$p[1]; appPid = [int]$p[2]; title = $p[3] } })

@@ -559,7 +559,13 @@ lines, with ■ Stop. **■ Stop all** ends every command, background job, serve
   (`Start-Process`, `code.cmd`), the job keeps running for as long as the program it started does.
 - Installed apps the user has (Calculator, VS Code) are not background jobs: the agent opens them by their
   Start-menu name with `desktop open`, which reuses an open window or starts the app through Explorer, outside
-  QuorX, so it stays open for later steps and chats. The user allows each app once per chat.
+  QuorX, so it stays open for later steps and chats. This needs 🖥 Computer use on in the chat (off by default,
+  like 🧩 Chrome); `desktop running` lists the apps that are open, by name only.
+- The user allows each app once per chat, at a level they can change under the 🖥 button: **View** (windows,
+  read, screenshot), **Click** (also click) or **Full** (also type, keys, close). Browsers start at View (websites
+  go through the browser tool), terminals and code editors at Click (commands go through `shell`), File Explorer
+  at View; QuorX itself, password managers and system tools (Registry Editor, Task Manager…) are never used. In
+  an allowed app, clicking a button named like Send, Pay, Delete or Post asks the user first.
 - A command still running at its time limit moves to the background instead of being killed. A long build, or an
   install stopped part-way, would be wasted work or a half-installed tool. If its last output looks like a prompt,
   the agent is told that a background job never gets input.

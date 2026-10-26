@@ -15,7 +15,7 @@ import { jobsAvailable, jobHostStatus } from '../server/jobhost.js';
 import { decide, agentWriteBlocked, suggestedRules, saveRules, loadRules, ruleMatches, ruleProblem } from '../server/cmdpolicy.js';
 import { approvalJudge } from '../server/approvals.js';
 import { SAFETY_DEFAULTS, safetySettings, yoloOf } from '../server/safety.js';
-import { runAgent, answerApproval, raiseCap, answerQuestion } from '../server/agent.js';
+import { runAgent, answerApproval, raiseCap, answerQuestion, appLevel } from '../server/agent.js';
 import { startTripwire } from '../server/tripwire.js';
 import { listBackground, stopBackground } from '../server/bgjobs.js';
 import { listTerms, termStop } from '../server/agentterm.js';
@@ -767,7 +767,7 @@ test('deciders see the user’s words and the facts, never the agent’s reasons
 // ---------- the shell tool, end to end (scripted model, no network) ----------
 let rn = 0;
 const reply = (text, calls = []) => ({ text, toolCalls: calls.map(([name, args], i) => ({ id: `s${++rn}_${i}`, type: 'function', function: { name, arguments: JSON.stringify(args) } })), usage: { cost: 0 }, ms: 1, firstMs: 1, finishReason: 'stop' });
-async function agentRun(script, { settings = {}, prep, onEvent, chatId } = {}) {
+async function agentRun(script, { settings = {}, prep, onEvent, chatId, more = {} } = {}) {
   const id = `sh${Date.now().toString(36)}${(rn++).toString(36)}`;
   // Each project gets its own parent folder, so the tripwire watches that and not the busy shared Temp folder.
   const dir = path.join(tmp('agent'), 'p'); fs.mkdirSync(dir);
@@ -777,7 +777,7 @@ async function agentRun(script, { settings = {}, prep, onEvent, chatId } = {}) {
   let i = 0;
   const chatStream = async (body) => { bodies.push(structuredClone(body)); return script(body, i++); };
   try {
-    await runAgent({ runId: id, projectId: id, ...(chatId ? { chatId } : {}), text: 'build my app', setup: { model: 'test/model' }, settings: { approval: 'strict', mediaEnabled: false, verify: false, review: 'off', checks: { gap: false, shots: false, click: false }, tools: { browser: { on: false } }, ...settings } },
+    await runAgent({ runId: id, projectId: id, ...(chatId ? { chatId } : {}), ...more, text: 'build my app', setup: { model: 'test/model' }, settings: { approval: 'strict', mediaEnabled: false, verify: false, review: 'off', checks: { gap: false, shots: false, click: false }, tools: { browser: { on: false } }, ...settings } },
       (e) => { events.push(e); onEvent?.(e, id); }, new AbortController().signal, { chatStream, catalogue: [{ id: 'test/model', maxOut: 4000 }], quiet: true });
     return { events, bodies, dir, id };
   } finally {
@@ -1622,9 +1622,36 @@ test('desktop open: an app the user doesn’t allow is not opened; an unknown na
     reply('', [['desktop', { action: 'open', app: 'Calculator' }]]),
     reply('', [['desktop', { action: 'read', app: 'Calculator' }]]),
     reply('OK.'),
-  ][i], { onEvent: (e, id) => { if (e.t === 'approval' && e.tool === 'desktop') { card = e; setTimeout(() => answerApproval(id, e.id, { approve: false }), 10); } } });
+  ][i], { chatId: 'apps-chat', settings: { appsAccess: true }, onEvent: (e, id) => { if (e.t === 'approval' && e.tool === 'desktop') { card = e; setTimeout(() => answerApproval(id, e.id, { approve: false }), 10); } } });
   assert.match(toolOut(bodies, 1), /no app called "No Such App Qx"/);
   assert.match(card?.what || '', /Calculator on your computer/);
   assert.match(toolOut(bodies, 2), /didn't allow Calculator/);
   assert.match(toolOut(bodies, 3), /isn't open for this chat yet/, 'a declined app stays out of reach');
+});
+
+test('computer use: each app starts at its kind’s level; some are never used', () => {
+  assert.equal(appLevel('Calculator'), 'full');
+  assert.equal(appLevel('Brave'), 'view', 'browsers: the browser tool acts there');
+  assert.equal(appLevel('Google Chrome'), 'view');
+  assert.equal(appLevel('File Explorer'), 'view', 'it can delete files');
+  assert.equal(appLevel('Visual Studio Code'), 'click', 'commands go through shell');
+  assert.equal(appLevel('Windows Terminal'), 'click');
+  for (const n of ['QuorX', 'Claude', 'Electron', '1Password', 'Bitwarden', 'Registry Editor', 'Task Manager']) assert.equal(appLevel(n), 'never', n);
+});
+
+test('computer use: off in a chat, the user’s apps are out of reach; on, each app is held to its level', async () => {
+  const off = await agentRun((b, i) => [reply('', [['desktop', { action: 'open', app: 'Calculator' }]]), reply('', [['desktop', { action: 'read', app: 'Calculator' }]]), reply('OK.')][i], { chatId: 'apps-off' });
+  assert.match(toolOut(off.bodies, 1), /computer use is off in this chat/);
+  assert.match(toolOut(off.bodies, 2), /computer use is off in this chat/);
+  const apps = [{ name: 'Calculator', appId: 'Microsoft.WindowsCalculator_8wekyb3d8bbwe!App', level: 'view' }, { name: 'Visual Studio Code', appId: 'Microsoft.VisualStudioCode', level: 'click' }, { name: 'QuorX', appId: 'QuorX', level: 'full' }];
+  const on = await agentRun((b, i) => [
+    reply('', [['desktop', { action: 'type', app: 'Calculator', ref: 1, text: '12' }]]),
+    reply('', [['desktop', { action: 'keys', app: 'Visual Studio Code', keys: '^s' }]]),
+    reply('', [['desktop', { action: 'read', app: 'QuorX' }]]),
+    reply('OK.'),
+  ][i], { chatId: 'apps-on', settings: { appsAccess: true }, more: { apps } });
+  assert.match(toolOut(on.bodies, 1), /look at only .* in Calculator, so type isn't allowed/);
+  assert.match(toolOut(on.bodies, 2), /look and click, not type in Visual Studio Code, so keys isn't allowed. For a command, use shell/);
+  assert.match(toolOut(on.bodies, 3), /isn't open for this chat yet/, 'a never-used app is dropped even if the page sends it');
+  assert.match(JSON.stringify(on.bodies[0].messages.at(-1).content), /Computer use\)[\s\S]*Allowed so far: Calculator \(view\), Visual Studio Code \(click\)/);
 });
