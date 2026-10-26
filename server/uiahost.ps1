@@ -165,7 +165,12 @@ public static class QxUia {
       uint none, me = GetCurrentThreadId(), fgThread = fg == IntPtr.Zero ? 0 : GetWindowThreadProcessId(fg, out none);
       // Joining the input of the window in front lets the focus move away from it.
       bool joined = fgThread != 0 && fgThread != me && AttachThreadInput(me, fgThread, true);
+      // Windows lets only the process that had the last input change the window in front. Holding Alt (our own key
+      // event) makes that us; Alt is let go after the switch, so it opens no menu. The QuorX window the user just
+      // typed in is in front otherwise, and every click was refused.
+      if (i > 0 || fg == IntPtr.Zero || !Ours(fg, pids)) keybd_event(0x12, 0, 0, UIntPtr.Zero);
       SetForegroundWindow(h);
+      keybd_event(0x12, 0, 2, UIntPtr.Zero);
       if (joined) AttachThreadInput(me, fgThread, false);
       Thread.Sleep(150 + i * 100);
       if (Ours(GetForegroundWindow(), pids)) return;

@@ -2920,6 +2920,8 @@ body.dev-build::before { content: ''; position: fixed; left: 0; right: 0; top: 0
 .allowed-pop .pr-rule.perm-row .pr-by { grid-column: 3 / -1; grid-row: 2; }
 .allowed-pop .ap-foot { display: flex; gap: 8px; justify-content: space-between; margin-top: 8px; }
 .chatpane .cmp-control-rack .cmp-perm-b.on { color: var(--accent); }
+.chatpane .cmp-control-rack .cmp-perm-b { position: relative; }
+.cmp-perm-b .apps-n { position: absolute; top: -4px; right: -4px; min-width: 15px; height: 15px; padding: 0 3px; border-radius: 8px; background: var(--accent); color: var(--bg); font: 600 10px/15px var(--font-ui); text-align: center; }
 .pj-perms .pj-perm-chat { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; margin-top: 12px; }
 .pj-perms .pj-perm-chat small { color: var(--muted); font-weight: 400; }
 .pj-perms .pr-list { display: grid; gap: 4px; }
