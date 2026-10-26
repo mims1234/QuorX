@@ -1813,8 +1813,10 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   async function loopWatch(name, args, first, step) {
     if (run.loopOff) return '';
     // Polling a job, ticking the plan, looking around a page and listing files repeat by nature: for them only the same
-    // failing call twice in a row counts (a model once opened the browser with no target six times).
-    const natural = ['job_output', 'plan', 'look', 'browser', 'list_files', 'list_docs'].includes(name);
+    // failing call twice in a row counts (a model once opened the browser with no target six times). Working in an app
+    // is the same: a screenshot after every click, or Control+A in each field, is one call many times over (it ended
+    // a VRoid reply after its fourth screenshot).
+    const natural = ['job_output', 'plan', 'look', 'browser', 'desktop', 'list_files', 'list_docs'].includes(name);
     const key = `${name}:${JSON.stringify(args)}`;
     const err = /^\s*(Error|Blocked|Refused)|declined/.test(first) ? first.slice(0, 160) : null;
     const h = (run.callHist ??= []);

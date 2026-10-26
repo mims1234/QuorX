@@ -1163,6 +1163,15 @@ test('loops: in Strict the user can say keep going, and it is not checked again'
   assert.equal(bodies.length, 13, 'it ran to the end');
 });
 
+test('loops: the same desktop screenshot after each step is not a loop; the same failing desktop call twice is', async () => {
+  const shots = Array.from({ length: 6 }, () => reply('', [['desktop', { action: 'windows', job: 'bg97' }]]));
+  const { events } = await agentRun((b, i) => (i < 6 ? shots[i] : reply('Done.')), { settings: { approval: 'yolo' } });
+  const loops = events.filter((e) => e.t === 'loop');
+  assert.ok(loops.length >= 1 && loops.every((e) => /same failing desktop call twice/.test(e.what)), JSON.stringify(loops));
+  const { events: ok } = await agentRun((b, i) => [reply('', [['plan', { items: [{ text: 'a', status: 'doing' }] }]]), ...Array.from({ length: 5 }, () => reply('', [['plan', { items: [{ text: 'a', status: 'doing' }] }]])), reply('Done.')][i], { settings: { approval: 'yolo' } });
+  assert.equal(ok.filter((e) => e.t === 'loop').length, 0, 'calls that succeed repeat freely');
+});
+
 test('look with no target right after desktop work looks at that window, not an empty browser tab', async () => {
   const { bodies } = await agentRun((b, i) => [
     reply('', [['desktop', { action: 'read', job: 'bg98' }]]),
