@@ -767,7 +767,7 @@ test('deciders see the user’s words and the facts, never the agent’s reasons
 // ---------- the shell tool, end to end (scripted model, no network) ----------
 let rn = 0;
 const reply = (text, calls = []) => ({ text, toolCalls: calls.map(([name, args], i) => ({ id: `s${++rn}_${i}`, type: 'function', function: { name, arguments: JSON.stringify(args) } })), usage: { cost: 0 }, ms: 1, firstMs: 1, finishReason: 'stop' });
-async function agentRun(script, { settings = {}, prep, onEvent, chatId, more = {} } = {}) {
+async function agentRun(script, { settings = {}, prep, onEvent, chatId, more = {}, ensemble } = {}) {
   const id = `sh${Date.now().toString(36)}${(rn++).toString(36)}`;
   // Each project gets its own parent folder, so the tripwire watches that and not the busy shared Temp folder.
   const dir = path.join(tmp('agent'), 'p'); fs.mkdirSync(dir);
@@ -778,7 +778,7 @@ async function agentRun(script, { settings = {}, prep, onEvent, chatId, more = {
   const chatStream = async (body) => { bodies.push(structuredClone(body)); return script(body, i++); };
   try {
     await runAgent({ runId: id, projectId: id, ...(chatId ? { chatId } : {}), ...more, text: more.text ?? 'build my app', setup: { model: 'test/model' }, settings: { approval: 'strict', mediaEnabled: false, verify: false, review: 'off', checks: { gap: false, shots: false, click: false }, tools: { browser: { on: false } }, ...settings } },
-      (e) => { events.push(e); onEvent?.(e, id); }, new AbortController().signal, { chatStream, catalogue: [{ id: 'test/model', maxOut: 4000 }], quiet: true });
+      (e) => { events.push(e); onEvent?.(e, id); }, new AbortController().signal, { chatStream, catalogue: [{ id: 'test/model', maxOut: 4000 }], quiet: true, ...(ensemble ? { ensemble } : {}) });
     return { events, bodies, dir, id };
   } finally {
     // Background jobs a test started (an app it opened) end with the test, so a failed test can't hang the run.
@@ -1712,6 +1712,32 @@ test('named in the user\'s message: a folder is read with no card; in YOLO an ap
     chatId: 'named-app1', settings: { approval: 'yolo', appsAccess: true }, more: { apps, text: 'Open VS Code and ask Cline to build a page.' } });
   assert.doesNotMatch(toolOut(raised.bodies, 1), /isn't allowed/, toolOut(raised.bodies, 1));
   assert.ok(raised.events.some((e) => e.t === 'app_allowed' && e.app.level === 'full'));
+});
+
+test('chat notes: "ignore the context of this project" in the user\'s words makes it an Own chat', async () => {
+  const prep = (d) => fs.writeFileSync(path.join(d, 'AGENT.md'), '# Proj\nShared project fact ZEBRA.\n');
+  const off = await agentRun((b, i) => [reply('OK.')][i], { chatId: 'offwords1', prep, more: { text: 'ignroe the context of quorx in this project for this activity ok. Open VS Code.' } });
+  assert.doesNotMatch(JSON.stringify(off.bodies[0].messages), /ZEBRA/);
+  assert.ok(off.events.some((e) => e.t === 'chat_off_project'), 'the page hears it and keeps it');
+  const on = await agentRun((b, i) => [reply('OK.')][i], { chatId: 'offwords2', prep, more: { text: 'Fix the bug in this project, and read the folder outside the project too.' } });
+  assert.match(JSON.stringify(on.bodies[0].messages), /ZEBRA/);
+  assert.ok(!on.events.some((e) => e.t === 'chat_off_project'));
+});
+
+test('a long text typed into the user\'s app is checked against their words first; the same text again goes through', async () => {
+  const seen = [];
+  const ensemble = async ({ questions, state }) => { seen.push({ ask: questions[0].ask, state: String(state) }); return { results: Object.fromEntries(questions.map((q) => [q.id, { pick: 'no', dist: { yes: 0.2, no: 0.8 }, confidence: 0.8, agree: 3, n: 3, verdict: 'settled' }])), votes: [] }; };
+  const brief = `Build a page about Rem built in VRoid Studio with Blender, and delete the old page. ${'More detail. '.repeat(20)}`;
+  const apps = [{ name: 'Visual Studio Code', appId: 'Microsoft.VisualStudioCode', level: 'full' }];
+  const { bodies } = await agentRun((b, i) => [
+    reply('', [['desktop', { action: 'type', app: 'Visual Studio Code', ref: 1, text: brief }]]),
+    reply('', [['desktop', { action: 'type', app: 'Visual Studio Code', ref: 1, text: brief }]]),
+    reply('OK.'),
+  ][i], { chatId: 'brief-check1', settings: { appsAccess: true }, more: { apps, text: 'Ask Cline to build a page about the Rem I made in VRoid Studio.' }, ensemble });
+  assert.match(toolOut(bodies, 1), /^Not typed yet: the deciders think this text adds things the user didn't say/);
+  assert.doesNotMatch(toolOut(bodies, 2), /^Not typed yet/, 'asked once per text');
+  assert.equal(seen.filter((s) => /comes from the user's request/.test(s.ask)).length, 1);
+  assert.match(seen[0].state, /the Rem I made in VRoid Studio[^]*with Blender/, 'they see the user\'s words and the text');
 });
 
 // Answers "Let the agent … in <app>" (raising an app's level) with no, so a test sees the level hold.

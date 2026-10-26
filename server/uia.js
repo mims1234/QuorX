@@ -112,12 +112,15 @@ export async function readWindow(scope, handle, { depth = 25, max = 250 } = {}) 
 }
 export async function clickControl(scope, handle, ref) { const p = await pick(scope, handle); return (await U.call('click', { ...p, ref: Number(ref) }, 15000)).did; }
 export async function clickAt(scope, handle, x, y) { const p = await pick(scope, handle); return (await U.call('clickxy', { ...p, x: Math.round(Number(x)), y: Math.round(Number(y)) }, 15000)).did; }
-export async function setControl(scope, handle, ref, text) { const p = await pick(scope, handle); return (await U.call('set', { ...p, ref: Number(ref), text: String(text ?? '') }, 15000)).did; }
+// Typing goes key by key: a 1,500-character brief into Cline took longer than 15 s and came back "timed out" while it
+// was still typing. The wait grows with the text (about 60 ms a character, up to 3 minutes).
+const typeMs = (text) => Math.min(180000, 15000 + String(text ?? '').length * 60);
+export async function setControl(scope, handle, ref, text) { const p = await pick(scope, handle); return (await U.call('set', { ...p, ref: Number(ref), text: String(text ?? '') }, typeMs(text))).did; }
 // SendKeys text on every system; on macOS ^ is the Command key, as Ctrl is on Windows (^s saves, ^c copies).
 export async function sendKeys(scope, handle, keys) {
   const p = await pick(scope, handle), k = String(keys ?? '');
   const args = OS === 'win32' ? { keys: k } : { events: OS === 'darwin' ? macKeyEvents(k) : parseSendKeys(k) };
-  return (await U.call('keys', { ...p, ...args }, 15000)).did;
+  return (await U.call('keys', { ...p, ...args }, typeMs(k))).did;
 }
 // How the last picture was taken: 'window', or from the screen when the window's own picture was one flat colour.
 let lastVia = '';

@@ -962,7 +962,13 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   // Each chat keeps its own notes (.quorx/chats/<chat>.md): its task, what it tried and learned. A chat off the project
   // (a question, work in other folders; every Scratch chat unless the user says otherwise) doesn't read the project's
   // notes, design system or work log, doesn't add to the log, and doesn't change AGENT.md, DESIGN.md or tokens.css.
-  const offProject = !!root && !!req.chatId && (req.offProject ?? savedAgent.offProject ?? projectId === 'scratch') === true;
+  let offProject = !!root && !!req.chatId && (req.offProject ?? savedAgent.offProject ?? projectId === 'scratch') === true;
+  // "Ignore the context of quorx in this project for this activity": said in words, it switches the chat to Own chat
+  // (the page keeps it, and the header's checkbox undoes it).
+  // (Typos count: the user wrote "ignroe". A folder "outside the project" is about reading it, not about this chat.)
+  const OFF_WORDS = /\b(ign[a-z]{2,4}|skip|leave out|don['’]?t use|do not use|without)\b[^.\n]{0,40}\b(context|notes|memory)\b[^.\n]{0,40}\b(this|the) project\b|\b(not about|nothing to do with|unrelated to|not related to)\b[^.\n]{0,12}\b(this|the) project\b|\boff[- ]project\b/i;
+  const offSaid = root && req.chatId && !offProject && OFF_WORDS.test(String(req.text || '')) ? clip(String(req.text).match(OFF_WORDS)[0], 80) : '';
+  if (offSaid) offProject = true; // the page hears it once at() exists, below
   const chatNotesRel = root && req.chatId && validId(String(req.chatId)) ? `.quorx/chats/${req.chatId}.md` : '';
   const chatNotes = chatNotesRel ? readIf(chatNotesRel, 6000) : '';
   const folderBlock = (dir) => { if (!root) return 'there is no project folder'; const z = zoneOf(dir, root); return z.zone === 'outside' ? '' : z.zone === 'inside' || z.zone === 'protected' ? 'it is inside the project already' : z.why || 'it is off limits'; };
@@ -994,6 +1000,7 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   let lent = null, onLent = false; // a tab the user lent to this chat (🤖 Give to agent), and whether the agent is in it
   const T0 = Date.now();
   const at = () => Date.now() - T0;
+  if (offSaid) emit({ t: 'chat_off_project', why: offSaid, at: at() });
 
   // A reply resumed after a restart is the same reply, so it carries what it had spent (and on what). "Continue"
   // after the step limit is a new reply: the one before keeps its own cost, so this one starts at zero (carrying it
@@ -1536,7 +1543,8 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       else if (r.toolCalls.every((c) => LOOK_TOOLS.has(c.function.name))) run.looksFirst = (run.looksFirst || 0) + 1;
     }
     const signals = [];
-    if (run.lookStreak === 8) signals.push('You have only looked around for 8 steps in a row. Make the changes now.');
+    // Not after the changes were made in an app (Cline wrote the page in VS Code): looking at the result then is checking.
+    if (run.lookStreak === 8 && !run.deskActed) signals.push('You have only looked around for 8 steps in a row. Make the changes now.');
     // #6: three steps of reading files yourself → hand the rest of the exploring to helpers (once per reply).
     run.readStreak = r.toolCalls.every((c) => ['read_file', 'search_files', 'list_files'].includes(c.function.name)) ? (run.readStreak || 0) + 1 : 0;
     // A plan nobody started: in a real build the agent read for 8 minutes with every item still "todo".
@@ -3214,6 +3222,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       } else if (!job) return 'Error: give app (an installed app you opened with open) or job (a background job running your own program).';
       const who = typeof scope === 'object' ? scope.app.name : job;
       run.lastDesk = who; run.lastSurface = 'desktop'; // look with no target looks here
+      if (!VIEW_ACTS.includes(act)) run.deskActed = true; // it changed something through the app
       // A program paused at a breakpoint can't answer for its windows: say where it stopped instead of waiting on it.
       const paused = async (wait) => { if (typeof scope === 'object') return ''; const p = await debugPausedIn(job, wait); return p ? `The app is paused at a breakpoint (debug session ${p.id}, ${p.at}), so its window can't respond: use debug state and eval, then debug continue.` : ''; };
       // The controls last read in each window, so a click can be named before it happens (refs change with each read).
@@ -3247,6 +3256,8 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         if (warning) { const no = await askClick(`Click at ${args.x},${args.y}`); if (no) return no; }
         const did = await clickAt(scope, args.window, args.x, args.y); emit({ t: 'desktop', job: who, action: act, did, at: at() }); return `${did}.${await again(args.window)}`; }
       if (act === 'keys' && warning && /\{enter\}|~|%[yo]|^\s*y\s*$/i.test(String(args.keys || ''))) { const no = await askClick(`Press ${clip(args.keys, 30)}`); if (no) return no; }
+      // A long text into one of the user's apps (a brief for another tool) is checked against the user's words first.
+      if ((act === 'type' || act === 'keys') && typeof scope === 'object') { const off = await briefCheck(who, act === 'type' ? args.text : args.keys); if (off) return off; }
       if (act === 'type') { const did = await setControl(scope, args.window, args.ref, args.text); emit({ t: 'desktop', job: who, action: act, did, at: at() }); return `${did}.${await again(args.window)}`; }
       if (act === 'keys') { const did = await sendKeys(scope, args.window, args.keys); emit({ t: 'desktop', job: who, action: act, did, at: at() }); return `${did}.${await again(args.window)}`; }
       if (act === 'screenshot') {
@@ -4151,6 +4162,22 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     const f = await pageOpOn(t, 'field', { ref: args.ref, selector: args.selector }).catch(() => null);
     if (!f || f.err || f.none || f.search) return null;
     return args.action === 'type' ? `type "${clip(args.text, 60)}" into ${f.what}` : `press Enter in ${f.what}`;
+  }
+  // A long text the agent types into another app is often a brief for another tool (a prompt to Cline). The deciders
+  // check it against the user's own words, so it doesn't add what they never said: Rem "built in VRoid Studio with
+  // Blender", "delete the old page", "0 cloud dependencies". Below 50% it comes back to the agent once to fix.
+  async function briefCheck(app, text) {
+    if (!decidersOn || String(text).length < 200 || (deps.chatStream && !deps.ensemble)) return '';
+    const key = String(text).trim();
+    if ((run.briefsChecked ??= new Set()).has(key)) return '';
+    run.briefsChecked.add(key);
+    const questions = [{ id: 'brief', type: 'noul', ask: 'Everything in this text comes from the user\'s request: it states no fact, tool, number or claim the user did not give, and asks for nothing the user did not ask for (such as deleting existing work).' }];
+    const state = `A user asked an AI agent (their own messages, newest last):\n${userTurns().filter(Boolean).map((m) => `"${clip(m, 900)}"`).join('\n')}\n\nThe agent is about to type this text into ${app} on the user's computer (for example as instructions to another AI tool):\n"""\n${clip(text, 2500)}\n"""\nJudge only against the user's messages. Rewording and adding detail the user asked for is fine; inventing facts, tools or claims, or asking to remove what exists, is not.`;
+    let d;
+    try { d = await deciders({ S, state, questions, signal, account }); } catch (e) { if (signal.aborted) throw e; return ''; }
+    const r = d?.results?.brief, p = r?.n ? r.dist.yes : null;
+    emit({ t: 'note', level: p != null && p < 0.5 ? 'warn' : 'info', msg: `The deciders checked the text for ${app} against your message: ${p == null ? 'no answer' : `${Math.round(p * 100)}% that it adds nothing you didn't say`}.`, at: at() });
+    return p != null && p < 0.5 ? `Not typed yet: the deciders think this text adds things the user didn't say or ask for (P=${p.toFixed(2)} that it doesn't). Re-read the user's message, take out any fact, tool, number, claim or deletion that isn't in it, and type the corrected text. (If you're sure it is right, typing the same text again goes through.)` : '';
   }
   // The deciders as a second check on writing in the user's tab: they see only the request and the planned step,
   // never the page, so a page can't talk them round. Below 35% that it serves the request, the user is asked.
