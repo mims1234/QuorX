@@ -6,7 +6,7 @@
 // - freshPath(): on Windows an installer (winget, rustup, the Node or Python setup) adds its folder to PATH in the
 //   registry, but QuorX keeps the PATH it started with, so a tool installed during a chat would not be found until
 //   QuorX restarted. Every command's PATH is QuorX's own, then whatever the registry has that it lacks.
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 
 const WIN = process.platform === 'win32';
 
@@ -67,4 +67,17 @@ export function userEnv(extra = {}) {
   const env = { ...process.env };
   for (const k of QUORX_ONLY) delete env[k];
   return { ...freshPath(env), ...extra };
+}
+
+/**
+ * Starts a program on its own: outside every job and QuorX's process tree, with the user's environment rather than
+ * QuorX's (under the desktop app, QuorX's would make an Electron app such as VS Code run as plain Node). Started
+ * through Explorer or `start`, it outlives QuorX too. A program that fails to start is dropped quietly: callers look
+ * for its window.
+ */
+export function openDetached(cmd, args = [], { verbatim = false } = {}) {
+  const p = spawn(cmd, args, { detached: true, stdio: 'ignore', env: userEnv(), ...(verbatim ? { windowsVerbatimArguments: true } : {}) });
+  p.on('error', () => {});
+  p.unref();
+  return p;
 }

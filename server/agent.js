@@ -30,7 +30,8 @@ import { shellNote, shellHint } from './shellnotes.js';
 import { startBackground, jobOutput, stopBackground, listBackground } from './bgjobs.js';
 import { markJob } from './terminal.js';
 import { termStart, termSend, termRead, termStop } from './agentterm.js';
-import { appWindows, readWindow, clickControl, clickAt, setControl, sendKeys, windowShot, closeWindow } from './uia.js';
+import { appWindows, readWindow, clickControl, clickAt, setControl, sendKeys, windowShot, closeWindow, findApps, windowsOfApp } from './uia.js';
+import { openDetached } from './userenv.js';
 import { languageChecks } from './langchecks.js';
 import { loadHooks, matchHooks, hookLine, safeHookFile } from './hooks.js';
 import { loadMemory, memoryPrompt, checkMemory, addMemory, REMEMBER_TOOL } from './memory.js';
@@ -575,8 +576,8 @@ const CODE_TOOLS = [
   { type: 'function', function: { name: 'android', description: 'Test an Android app on an emulator (adb). avds: the virtual devices this computer has. start {avd}: boot one as a background job (Stop ends it) and wait until it is ready. devices: what is connected. install {apk}: an APK from the project. launch {package}. read: the screen as text; interactive controls are numbered [n] with their position @x,y. tap {ref} or {x, y}. type {text}: into the focused field. key {key}: back, home, enter, tab, delete, up/down/left/right. screenshot: a picture for the user. log {package}: recent errors and the app\'s own log lines. Emulators only, unless the user allows phones.', parameters: { type: 'object', required: ['action'], properties: {
     action: { type: 'string', enum: ['avds', 'start', 'devices', 'install', 'launch', 'read', 'tap', 'type', 'key', 'screenshot', 'log'] }, device: { type: 'string' }, avd: { type: 'string' }, apk: { type: 'string' }, package: { type: 'string' },
     ref: { type: 'integer' }, x: { type: 'integer' }, y: { type: 'integer' }, text: { type: 'string' }, key: { type: 'string' } } } } },
-  { type: 'function', function: { name: 'desktop', description: `See and use a desktop app you started (WPF, WinForms, Cocoa, SwiftUI, GTK, Qt, tkinter, Electron, games…). Start it first with shell and background: true, then pass that job id. windows: its windows. read: a window\'s controls as text; interactive ones are numbered [n] with their position @x,y in the window. click {ref}: press a button, tick a box, pick an item. click_at {x, y}: a point in the window, for apps whose controls can\'t be read. type {ref, text}: set a text field. keys {keys}: keyboard input in SendKeys form ({ENTER}, {TAB}, ^s for Ctrl+S, %{F4} for Alt+F4). screenshot: a picture of the window for the user. close: close the window. After click, type and keys you get the window\'s controls again. Only windows of programs you started can be reached; clicks and keys bring that window to the front.${DESKTOP_OS}`, parameters: { type: 'object', required: ['action', 'job'], properties: {
-    action: { type: 'string', enum: ['windows', 'read', 'click', 'click_at', 'type', 'keys', 'screenshot', 'close'] }, job: { type: 'string', description: 'The background job that runs the app, e.g. "bg1"' },
+  { type: 'function', function: { name: 'desktop', description: `See and use desktop apps. Two kinds: an installed app the user has (open it by its Start-menu name with open {app}: it reuses the window if the app is already open, the user allows each app once per chat, and it stays open afterwards so later steps and chats can use it again), or a program you built and started yourself with shell and background: true (pass that job id; WPF, WinForms, Cocoa, SwiftUI, GTK, Qt, tkinter, Electron, games…). Then, with app or job: windows: its windows. read: a window's controls as text; interactive ones are numbered [n] with their position @x,y in the window. click {ref}: press a button, tick a box, pick an item. click_at {x, y}: a point in the window, for apps whose controls can't be read. type {ref, text}: set a text field. keys {keys}: keyboard input in SendKeys form ({ENTER}, {TAB}, ^s for Ctrl+S, %{F4} for Alt+F4). screenshot: a picture of the window. close: close the window (only when the user asks: apps stay open for reuse). After click, type and keys you get the window's controls again. Only those apps' windows can be reached, never the user's other windows; clicks and keys bring the window to the front.${DESKTOP_OS}`, parameters: { type: 'object', required: ['action'], properties: {
+    action: { type: 'string', enum: ['open', 'windows', 'read', 'click', 'click_at', 'type', 'keys', 'screenshot', 'close'] }, app: { type: 'string', description: 'An installed app by its Start-menu name, e.g. "Calculator" (open it first with open; Windows)' }, job: { type: 'string', description: 'Or: the background job that runs your own program, e.g. "bg1"' },
     window: { type: 'integer', description: 'A window handle from windows (default: its first window)' }, ref: { type: 'integer' }, x: { type: 'integer' }, y: { type: 'integer' }, text: { type: 'string' }, keys: { type: 'string' } } } } },
   { type: 'function', function: { name: 'start_server', description: 'Start (or restart) a long-running dev server in your project folder. It gets a free port in the PORT environment variable and as {PORT} in arguments, and opens in the user\'s Browser tab. Its command is saved to the project\'s launch file, so the user can start and stop it later; give only the name to rerun a saved one.', parameters: { type: 'object', required: ['name'], properties: { name: { type: 'string', description: 'Short name, e.g. "web"' }, command: { type: 'string', description: 'Leave out to rerun the saved launch config with this name' }, args: { type: 'array', items: { type: 'string' } } } } } },
   { type: 'function', function: { name: 'stop_server', description: 'Stop a dev server you started.', parameters: { type: 'object', required: ['name'], properties: { name: { type: 'string' } } } } },
@@ -882,7 +883,7 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   const carryOn = resumed && req.continue ? { steps: Math.max(5, Math.min(200, Number(req.continue) || DEFAULTS.moreSteps)), model: String(req.model || '').trim() || null, from: resumed.req?.setup?.model } : null;
   // File checkpoints (for ↶ Undo and the final check) stay under the reply that was resumed.
   const undoId = resumed ? resumed.undoId || String(req.resume) : null;
-  if (resumed) req = { ...resumed.req, runId: req.runId, chatId: req.chatId, settings: req.settings || resumed.req.settings, allowed: req.allowed || resumed.req.allowed, resume: undefined, ...(carryOn?.model ? { setup: { ...resumed.req.setup, model: carryOn.model } } : {}) };
+  if (resumed) req = { ...resumed.req, runId: req.runId, chatId: req.chatId, settings: req.settings || resumed.req.settings, allowed: req.allowed || resumed.req.allowed, apps: req.apps || resumed.req.apps, resume: undefined, ...(carryOn?.model ? { setup: { ...resumed.req.setup, model: carryOn.model } } : {}) };
   // The model decides when to use the deciders: from the page, decide is always offered and never forced.
   // Forced asking and draft strategies remain only for the benchmark (req.bench).
   const setup = req.bench ? { ...DEFAULTS.setups.C, ...(req.setup || {}) }
@@ -917,6 +918,10 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   const filesId = undoId || runId;
   // Tools the user chose to "always allow" in this conversation (strict mode skips asking for them).
   const allowed = new Set(Array.isArray(req.allowed) ? req.allowed.map(String) : []);
+  // Apps on the user's computer this chat may use (desktop open, allowed once per app): lower-case name → { name, appId }.
+  // The page keeps them with the chat (app_allowed) and sends them with every reply.
+  const chatApps = new Map();
+  for (const a of Array.isArray(req.apps) ? req.apps : []) if (a?.name && a?.appId) chatApps.set(String(a.name).toLowerCase(), { name: String(a.name), appId: String(a.appId) });
   // Approval cards still waiting, so "Always allow" on one also answers the others for the same tool
   // (look-ups run side by side, so several cards can be open at once).
   const openCards = new Map();
@@ -2510,7 +2515,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (name === 'job_output') return `Read the output of job ${args.job}${args.wait_s ? ` (waiting up to ${args.wait_s}s)` : ''}`;
     if (name === 'job_stop') return `Stop job ${args.job}`;
     if (name === 'terminal') return args.action === 'start' ? `Open a terminal: ${clip(args.command, 200)}` : args.action === 'send' ? `Terminal ${args.id}: type ${[args.text && `"${clip(args.text, 60)}"`, ...(args.keys || [])].filter(Boolean).join(' ')}` : `Terminal ${args.id}: ${args.action}`;
-    if (name === 'desktop') return `Desktop app ${args.job}: ${args.action}${args.ref ? ` [${args.ref}]` : ''}${args.x != null ? ` at ${args.x},${args.y}` : ''}${args.text ? ` "${clip(args.text, 60)}"` : ''}${args.keys ? ` ${clip(args.keys, 40)}` : ''}`;
+    if (name === 'desktop') return args.action === 'open' ? `Open the app "${args.app}" on your computer` : `Desktop app ${args.app || args.job}: ${args.action}${args.ref ? ` [${args.ref}]` : ''}${args.x != null ? ` at ${args.x},${args.y}` : ''}${args.text ? ` "${clip(args.text, 60)}"` : ''}${args.keys ? ` ${clip(args.keys, 40)}` : ''}`;
     if (name === 'start_server') {
       const saved = !args.command && root && launchConfigs(projectId).find((x) => x.name.toLowerCase() === String(args.name || '').toLowerCase());
       return `Start server "${args.name}": ${saved ? `${[saved.command, ...saved.args].join(' ')} (saved launch config)` : [args.command, ...(args.args || [])].join(' ')}`;
@@ -3074,29 +3079,39 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (name === 'desktop') {
       if (!['win32', 'darwin', 'linux'].includes(process.platform)) return `Error: the desktop tool doesn't work on ${process.platform} yet.`;
       const act = String(args.action || ''), job = String(args.job || '');
+      if (act === 'open') return await openApp(args);
+      // What it acts on: an app this chat opened by name, or a background job that runs the agent's own program.
+      let scope = job;
+      if (String(args.app ?? '').trim()) {
+        const app = chatApps.get(String(args.app).trim().toLowerCase());
+        if (!app) return `Error: "${args.app}" isn't open for this chat yet: call desktop open with app: "${args.app}" first.`;
+        scope = { app };
+      } else if (!job) return 'Error: give app (an installed app you opened with open) or job (a background job running your own program).';
+      const who = typeof scope === 'object' ? scope.app.name : job;
       // A program paused at a breakpoint can't answer for its windows: say where it stopped instead of waiting on it.
-      const paused = async (wait) => { const p = await debugPausedIn(job, wait); return p ? `The app is paused at a breakpoint (debug session ${p.id}, ${p.at}), so its window can't respond: use debug state and eval, then debug continue.` : ''; };
-      const again = async (h) => { await sleep(450, signal); const p = await paused(800); if (p) return `\n${p}`; const r = await readWindow(job, h).catch((e) => ({ text: `(could not read it again: ${e.message})` })); return `\nWindow now:\n${r.text}`; };
+      const paused = async (wait) => { if (typeof scope === 'object') return ''; const p = await debugPausedIn(job, wait); return p ? `The app is paused at a breakpoint (debug session ${p.id}, ${p.at}), so its window can't respond: use debug state and eval, then debug continue.` : ''; };
+      const again = async (h) => { await sleep(450, signal); const p = await paused(800); if (p) return `\n${p}`; const r = await readWindow(scope, h).catch((e) => ({ text: `(could not read it again: ${e.message})` })); return `\nWindow now:\n${r.text}`; };
       const stopped = await paused();
       if (stopped) return stopped;
       if (act === 'windows') {
-        const w = await appWindows(job, 8000);
-        return w.length ? `Windows of ${job}:\n${w.map((x) => `- window ${x.handle}: "${x.title}" (process ${x.pid})`).join('\n')}` : `Job ${job} has no windows yet. It may still be starting (try again), or it isn't a windowed app (read its output with job_output).`;
+        const w = await appWindows(scope, 8000).catch((e) => (typeof scope === 'object' ? [] : Promise.reject(e)));
+        return w.length ? `Windows of ${who}:\n${w.map((x) => `- window ${x.handle}: "${x.title}" (process ${x.pid})`).join('\n')}`
+          : typeof scope === 'object' ? `${who} has no open window: open it again with desktop open.` : `Job ${job} has no windows yet. It may still be starting (try again), or it isn't a windowed app (read its output with job_output).`;
       }
-      if (act === 'read') { const r = await readWindow(job, args.window); emit({ t: 'desktop', job, action: act, window: r.handle, at: at() }); return `Window ${r.handle}:\n${r.text || '(no controls could be read: use screenshot and click_at)'}`; }
-      if (act === 'click') { const did = await clickControl(job, args.window, args.ref); emit({ t: 'desktop', job, action: act, did, at: at() }); return `${did}.${await again(args.window)}`; }
-      if (act === 'click_at') { const did = await clickAt(job, args.window, args.x, args.y); emit({ t: 'desktop', job, action: act, did, at: at() }); return `${did}.${await again(args.window)}`; }
-      if (act === 'type') { const did = await setControl(job, args.window, args.ref, args.text); emit({ t: 'desktop', job, action: act, did, at: at() }); return `${did}.${await again(args.window)}`; }
-      if (act === 'keys') { const did = await sendKeys(job, args.window, args.keys); emit({ t: 'desktop', job, action: act, did, at: at() }); return `${did}.${await again(args.window)}`; }
+      if (act === 'read') { const r = await readWindow(scope, args.window); emit({ t: 'desktop', job: who, action: act, window: r.handle, at: at() }); return `Window ${r.handle}:\n${r.text || '(no controls could be read: use screenshot and click_at)'}`; }
+      if (act === 'click') { const did = await clickControl(scope, args.window, args.ref); emit({ t: 'desktop', job: who, action: act, did, at: at() }); return `${did}.${await again(args.window)}`; }
+      if (act === 'click_at') { const did = await clickAt(scope, args.window, args.x, args.y); emit({ t: 'desktop', job: who, action: act, did, at: at() }); return `${did}.${await again(args.window)}`; }
+      if (act === 'type') { const did = await setControl(scope, args.window, args.ref, args.text); emit({ t: 'desktop', job: who, action: act, did, at: at() }); return `${did}.${await again(args.window)}`; }
+      if (act === 'keys') { const did = await sendKeys(scope, args.window, args.keys); emit({ t: 'desktop', job: who, action: act, did, at: at() }); return `${did}.${await again(args.window)}`; }
       if (act === 'screenshot') {
-        const img = await windowShot(job, args.window);
-        emit({ t: 'screenshot', action: 'desktop', target: `desktop:${job}`, url: '', image: img, at: at() });
+        const img = await windowShot(scope, args.window);
+        emit({ t: 'screenshot', action: 'desktop', target: `desktop:${who}`, url: '', image: img, at: at() });
         // Saved in the agent's scratch folder too, so the deciders can look at it (apps whose controls can't be read, such as tkinter).
-        const rel = `${SCRATCH}/shots/${job}-${(run.shotSeq = (run.shotSeq || 0) + 1)}.png`;
+        const rel = `${SCRATCH}/shots/${who.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${(run.shotSeq = (run.shotSeq || 0) + 1)}.png`;
         try { fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true }); fs.writeFileSync(path.join(root, rel), Buffer.from(img.split(',')[1], 'base64')); } catch { return 'Screenshot taken; the user sees it in the trace. Read the window for its controls as text.'; }
         return `Screenshot taken; the user sees it in the trace. Saved as ${rel}: to check what it shows (text, layout, a result), call decide with images ["file:${rel}"]. Read the window for its controls as text.`;
       }
-      if (act === 'close') { const did = await closeWindow(job, args.window); return `${did}.`; }
+      if (act === 'close') { const did = await closeWindow(scope, args.window); return `${did}.`; }
       return 'Error: unknown desktop action.';
     }
     if (name === 'job_output') {
@@ -3408,7 +3423,8 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     } }) : null;
     const long = background || backgroundable;
     let termJob = null;
-    const runP = runLine(cwd, line, { shell, label, signal, env: projectEnv(root), timeout: long ? 24 * 3600e3 : SF.timeout * 1000, memoryMB: SF.memoryMB, logTo: path.join(root, logRel),
+    // background: its program runs on after a launcher (Start-Process, code.cmd) exits, until it ends or is stopped.
+    const runP = runLine(cwd, line, { shell, label, signal, env: projectEnv(root), timeout: long ? 24 * 3600e3 : SF.timeout * 1000, memoryMB: SF.memoryMB, untilEmpty: background, logTo: path.join(root, logRel),
       term: { projectId, source: 'agent', chatId: req.chatId }, onStart: (p) => { proc = p; if (bg) bg.proc = p; if (trip) endProc(p); }, onJob: (j) => { termJob = j; if (bg) { bg.termJob = j; markJob(j, { bg: bg.id }); } } });
     // A job that outlives this tool call keeps its tripwire, and records what it changed when it ends. When you stop
     // it from the page while this reply still works, the agent hears about it before its next step.
@@ -4344,6 +4360,53 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
   // enable_media: one card to switch on paid tools that are off in this chat, each with its model to pick. Strict waits
   // for the user; ⚡ YOLO waits its usual time, then switches on (switching on spends nothing; every call is still
   // priced and approved, and the budget caps apply).
+  // desktop open: an installed app by its Start-menu name. Its open window is used again when it has one; otherwise it
+  // starts through Explorer, outside QuorX, so it stays open after the reply (and after QuorX) for later steps and chats.
+  async function openApp(args) {
+    if (process.platform !== 'win32') return 'Error: desktop open works on Windows for now. Here, start the app with shell and background: true.';
+    const want = String(args.app || '').trim();
+    if (!want) return 'Error: give app: its name as the Start menu shows it, e.g. "Calculator" or "Visual Studio Code".';
+    const found = await findApps(want);
+    if (!found.length) return `Error: no app called "${want}" in the Start menu. Try the name it has there; a program that isn't installed as an app can be started with shell.`;
+    const app = found[0], key = app.name.toLowerCase();
+    let wins = await windowsOfApp(app);
+    if (!chatApps.has(key)) {
+      const ans = await allowApp(app, wins.length > 0);
+      if (!ans.approve) return `The user didn't allow ${app.name}${ans.reason ? `: "${ans.reason}"` : ''}. Do without it, or ask them.`;
+      chatApps.set(key, app);
+      emit({ t: 'app_allowed', app, at: at() });
+    }
+    if (want.toLowerCase() !== key) chatApps.set(want.toLowerCase(), app);
+    const reused = wins.length > 0;
+    if (!reused) {
+      openDetached('explorer.exe', [`shell:AppsFolder\\${app.appId}`]);
+      for (const t0 = Date.now(); !wins.length && Date.now() - t0 < 20000;) { await sleep(500, signal); wins = await windowsOfApp(app); }
+      if (!wins.length) return `Started ${app.name}, but no window of it showed up within 20 s. It may still be starting: check with desktop windows and app: "${app.name}".`;
+    }
+    emit({ t: 'desktop', job: app.name, action: reused ? 'use' : 'open', at: at() });
+    const others = found.slice(1, 4).map((x) => x.name);
+    return `${reused ? `${app.name} was already open; using it` : `Opened ${app.name}`}. Its windows:\n${wins.map((w) => `- window ${w.handle}: "${w.title}"`).join('\n')}\n`
+      + `Act on it with desktop and app: "${app.name}" (read, click, type, keys, screenshot). It stays open after this reply, so later steps and chats can use it again; close it only if the user asks.${others.length ? `\nOther apps matching "${want}": ${others.join(', ')}.` : ''}`;
+  }
+  // Using an app on the user's computer: they allow it once per app in a chat. In ⚡ YOLO the deciders may allow it in
+  // their place when the user's own words ask for that app; otherwise the card waits for the user (no answer: not allowed).
+  async function allowApp(app, open) {
+    const why = `The agent can then read ${app.name}'s windows and click and type in them during this chat. Your other apps stay out of its reach.`;
+    const card = { id: newApprovalId(), tool: 'desktop', free: true, est: 0, what: `${open ? 'Use' : 'Open and use'} ${app.name} on your computer`, why, yes: 'Allow', no: 'Don’t allow', noAlways: true };
+    if (S.approval === 'yolo' && decidersOn) {
+      emit({ t: 'approval', ...card, mode: 'yolo', at: at() });
+      const j = await approvalJudge({ kind: 'command', userMessages: userTurns(), reading: run.reading?.text, voters: S.voters, chatModel: setup.model, gate: S.gate, signal, account, sf: SF,
+        facts: { command: `${open ? 'use the app' : 'open the app'} "${app.name}" on the user's computer, then read and click in its windows`, parts: [{ text: app.name, class: 'an installed app on the user’s computer' }] },
+        log: { runId, chatId: req.chatId || null, project: projectId } });
+      if (j.approve === true) { emit({ t: 'approval_done', id: card.id, approve: true, by: 'deciders', reason: j.reason, votes: j.votes, at: at() }); return { approve: true }; }
+      card.why = `${why} ${j.reason}`;
+    }
+    const waitMs = S.approval === 'yolo' ? yoloWait() : 0;
+    const ans = await askUser({ ...card, mode: 'strict' }, waitMs ? { ms: waitMs, then: 'skip', onTimeout: () => ({ approve: false, by: 'timeout', reason: `No answer in ${Math.round(waitMs / 1000)}s, so ${app.name} stays out of reach` }) } : null);
+    emit({ t: 'approval_done', id: card.id, ...ans, at: at() });
+    return ans;
+  }
+
   async function enableMediaTool(args) {
     const off = mediaOff();
     const want = [...new Set((Array.isArray(args.kinds) ? args.kinds : []).map(String))].filter((k) => off.includes(k));

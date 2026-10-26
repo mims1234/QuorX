@@ -13,6 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { openDetached } from './server/userenv.js';
 import { currentKey, PORT, runtime, ROOT, HOME, chat, chatModels, decisionModels, imageModels, speechModels, musicModels, videoModels, transcribe, clearCatalogues } from './server/openrouter.js';
 import { listKeys, addKey, removeKey, setActive, renameKey, keyUsage, activeUsage, accountCredits, startSampling, lockDown } from './server/keys.js';
 import { setupCheck, runFix } from './server/setup-check.js';
@@ -306,7 +307,7 @@ const server = http.createServer(async (req, res) => {
         catch (e) { return json(res, 400, { error: e.code === 'ENOENT' ? 'that file is gone' : e.message }); }
       }
       const [cmd, args] = process.platform === 'win32' ? ['explorer.exe', [file ? `/select,${file}` : dir]] : process.platform === 'darwin' ? ['open', file ? ['-R', file] : [dir]] : ['xdg-open', [dir]];
-      try { spawn(cmd, args, { detached: true, stdio: 'ignore' }).on('error', () => {}).unref(); return json(res, 200, { ok: true, dir }); }
+      try { openDetached(cmd, args); return json(res, 200, { ok: true, dir }); }
       catch (e) { return json(res, 500, { error: e.message }); }
     }
     if (url.pathname === '/api/files/text' && req.method === 'GET') {
@@ -667,12 +668,12 @@ const server = http.createServer(async (req, res) => {
       const b = await defaultBrowser();
       if (!b) return json(res, 200, { error: 'no Chromium browser (Chrome, Brave, Edge…) was found on this computer' });
       if (!b.page) return json(res, 200, { error: `${b.name} can't run this extension: use Chrome, Brave or Edge` });
-      try { spawn(b.exe, [b.page], { detached: true, stdio: 'ignore' }).on('error', () => {}).unref(); return json(res, 200, { ok: true, browser: b.name }); } catch (e) { return json(res, 200, { error: e.message }); }
+      try { openDetached(b.exe, [b.page]); return json(res, 200, { ok: true, browser: b.name }); } catch (e) { return json(res, 200, { error: e.message }); }
     }
     if (url.pathname === '/api/ext/show-folder' && req.method === 'POST') {
       const dir = path.join(ROOT, 'extension');
       const [cmd, args] = process.platform === 'win32' ? ['explorer.exe', [dir]] : process.platform === 'darwin' ? ['open', [dir]] : ['xdg-open', [dir]];
-      try { spawn(cmd, args, { detached: true, stdio: 'ignore' }).on('error', () => {}).unref(); return json(res, 200, { ok: true }); } catch (e) { return json(res, 200, { error: e.message }); }
+      try { openDetached(cmd, args); return json(res, 200, { ok: true }); } catch (e) { return json(res, 200, { error: e.message }); }
     }
     // ---- 🤖 Give to agent: lend one of your Browser tabs to a chat, or take it back ----
     if (url.pathname === '/api/given-tab') {

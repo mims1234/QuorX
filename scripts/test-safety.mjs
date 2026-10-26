@@ -1577,3 +1577,54 @@ test('commands and the agent’s terminal start with no pager, editor or git pro
     assert.match(screen.replace(/\s+/g, ''), new RegExp(want));
   } finally { await termStop(s.id).catch(() => {}); }
 });
+
+// ---------- apps stay open after use (last: it starts background jobs) ----------
+// A program a command opened and left showing a window is what the command was for: it stays open, outside QuorX's
+// job, so the agent and the user can keep using it. Windowless leftovers (a stray ping) are still ended.
+const FORM = (title) => `Add-Type -AssemblyName System.Windows.Forms\n$f = New-Object Windows.Forms.Form; $f.Text = '${title}'\n[void]$f.ShowDialog()\n`;
+const formOpen = (title) => /powershell/i.test(execSync(`tasklist /FI "WINDOWTITLE eq ${title}" /NH`).toString());
+const closeForm = (title) => { try { execSync(`taskkill /FI "WINDOWTITLE eq ${title}" /F`, { stdio: 'ignore' }); } catch { /* gone */ } };
+test('stop: a window a command opened stays open after it; a windowless leftover is still ended', { skip: !WIN }, async () => {
+  const root = tmp('kept');
+  fs.writeFileSync(path.join(root, 'form.ps1'), FORM('QX Kept Form'));
+  try {
+    const r = await runLine(root, "Start-Process powershell -ArgumentList '-NoProfile','-File','form.ps1'", { shell: 'powershell' });
+    assert.ok(r.leftovers?.kept?.some((n) => /powershell/i.test(n)), JSON.stringify(r.leftovers));
+    assert.match(r.out, /kept open: .*powershell\.exe/i);
+    await new Promise((x) => setTimeout(x, 500));
+    assert.ok(formOpen('QX Kept Form'), 'the form is still open');
+    const p = await runLine(root, 'start /b ping -n 30 127.0.0.1 >nul & echo started', { shell: 'cmd' });
+    assert.ok(p.leftovers?.ended?.some((n) => /ping/i.test(n)) && !p.leftovers.kept, JSON.stringify(p.leftovers));
+    assert.equal(pingsLeft(), 0);
+  } finally { closeForm('QX Kept Form'); }
+});
+
+test('desktop: a background job whose launcher exits keeps running while its window is open, and job_stop ends it', { skip: !WIN }, async () => {
+  let job = null;
+  try {
+    const { bodies } = await agentRun((b, i) => {
+      if (i === 0) return reply('', [['shell', { command: "Start-Process powershell -ArgumentList '-NoProfile','-File','form.ps1'", background: true }]]);
+      if (i === 1) { job = toolOut([b], 0).match(/job (bg\d+)/)[1]; return reply('', [['desktop', { action: 'windows', job }]]); }
+      if (i === 2) return reply('', [['job_stop', { job }]]);
+      return reply('Done.');
+    }, { prep: (d) => { fs.writeFileSync(path.join(d, 'form.ps1'), FORM('QX Bg Form')); allow(d, 'start-process powershell*'); } });
+    assert.match(toolOut(bodies, 2), /QX Bg Form/, 'the job still reaches the window after its launcher exited');
+    assert.match(toolOut(bodies, 3), /0 processes left/);
+    assert.equal(formOpen('QX Bg Form'), false);
+  } finally { closeForm('QX Bg Form'); }
+});
+
+// desktop open needs the Start menu, which CI's Windows Server images may not have.
+test('desktop open: an app the user doesn’t allow is not opened; an unknown name says so', { skip: !WIN || !!process.env.CI }, async () => {
+  let card = null;
+  const { bodies } = await agentRun((b, i) => [
+    reply('', [['desktop', { action: 'open', app: 'No Such App Qx' }]]),
+    reply('', [['desktop', { action: 'open', app: 'Calculator' }]]),
+    reply('', [['desktop', { action: 'read', app: 'Calculator' }]]),
+    reply('OK.'),
+  ][i], { onEvent: (e, id) => { if (e.t === 'approval' && e.tool === 'desktop') { card = e; setTimeout(() => answerApproval(id, e.id, { approve: false }), 10); } } });
+  assert.match(toolOut(bodies, 1), /no app called "No Such App Qx"/);
+  assert.match(card?.what || '', /Calculator on your computer/);
+  assert.match(toolOut(bodies, 2), /didn't allow Calculator/);
+  assert.match(toolOut(bodies, 3), /isn't open for this chat yet/, 'a declined app stays out of reach');
+});

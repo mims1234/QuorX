@@ -14,7 +14,7 @@ import { projectDir, listProjects } from './store.js';
 import { SECRET_FILES } from './keys.js';
 import { projectEnv } from './projectsecrets.js';
 import { termEvent, lineSplitter, newJob, endJob } from './terminal.js';
-import { jobsAvailable, adoptPid, jobCount, killJob, closeJob, startDetached } from './jobhost.js';
+import { jobsAvailable, adoptPid, jobCount, killJob, closeJob, releaseJob, startDetached } from './jobhost.js';
 import { snapshot, changesSince, objectFor, pruneObjects, snapshotAsync, changesSinceAsync, pruneObjectsAsync } from './snapshot.js';
 import { freshPath } from './userenv.js';
 
@@ -289,12 +289,29 @@ export async function endProc(proc) {
   await exited(proc, 2000);
   return { left: proc.exitCode == null && proc.signalCode == null ? 1 : 0, names: [], mode: 'basic' };
 }
-// After a command ends by itself: processes it left running (a detached child) are ended too, and named.
+// After a command ends by itself: processes it left running (a detached child) are ended too, and named. A program
+// it opened that shows a window (an editor, a calculator) is what the command was for: it stays open, no longer
+// under QuorX, so the agent and the user can keep using it. Launchers (code.cmd) exit before the window shows, so
+// leftovers get a moment to show one: a program built to show windows a few seconds, anything else (python or
+// powershell drawing a form) less.
+const WINDOW_WAIT = { gui: 3000, other: 1500 };
 async function sweep(proc) {
   if (!proc.qxJob) return null;
   try {
-    const c = await jobCount(proc.qxJob);
+    let c = await jobCount(proc.qxJob, { windows: true });
     if (!c.active) { closeJob(proc.qxJob); return null; }
+    const wait = c.gui.length ? WINDOW_WAIT.gui : WINDOW_WAIT.other;
+    for (const t0 = Date.now(); !c.windowed.length && c.active && Date.now() - t0 < wait;) {
+      await new Promise((r) => setTimeout(r, 300));
+      c = await jobCount(proc.qxJob, { windows: true });
+    }
+    if (!c.active) { closeJob(proc.qxJob); return null; }
+    if (c.windowed.length) {
+      const keep = new Set(c.windowed.map(Number)), name = (p) => c.names[c.pids.map(Number).indexOf(Number(p))] || `pid ${p}`;
+      await releaseJob(proc.qxJob, [...keep]);
+      proc.qxJob = null;
+      return { ended: c.pids.filter((p) => !keep.has(Number(p))).map(name), kept: [...new Set([...keep].map(name))], left: 0, names: [] };
+    }
     const k = await killJob(proc.qxJob);
     if (!k.left) closeJob(proc.qxJob);
     return { ended: c.names, left: k.left, names: k.names };
@@ -325,7 +342,7 @@ export function runCommand(root, cmd, args = [], opts = {}) {
  * { code, out (last 8,000 chars), ms, timedOut, stopped: endProc result | null, leftovers: sweep result | null, log }.
  * `logTo`: a file that gets the full output. `onStart(proc)`: called once it runs (for the tripwire).
  */
-export function runLine(root, line, { shell = 'direct', timeout = 180e3, signal, term, label, memoryMB = 0, logTo, onStart, onJob, env = {} } = {}) {
+export function runLine(root, line, { shell = 'direct', timeout = 180e3, signal, term, label, memoryMB = 0, logTo, onStart, onJob, env = {}, untilEmpty = false } = {}) {
   return new Promise((resolve, reject) => {
     (async () => {
       // Stop already pressed (say while a before_command hook ran): nothing is started at all.
@@ -355,6 +372,13 @@ export function runLine(root, line, { shell = 'direct', timeout = 180e3, signal,
       const finish = async (code, err) => {
         if (done) return;
         done = true;
+        // untilEmpty (background jobs): a launcher that exits (code.cmd, Start-Process) leaves its program running in
+        // the job; the job runs on until that program ends or is stopped, so the agent can still use it.
+        while (untilEmpty && !stopping && proc.qxJob) {
+          const c = await jobCount(proc.qxJob).catch(() => ({ active: 0 }));
+          if (!c.active) break;
+          await new Promise((r) => setTimeout(r, 1000));
+        }
         clearTimeout(timer);
         signal?.removeEventListener('abort', onAbort);
         const stopped = stopping ? await stopping : null;
@@ -363,7 +387,8 @@ export function runLine(root, line, { shell = 'direct', timeout = 180e3, signal,
         await Promise.race([new Promise((r) => (proc.stdout.readableEnded ? r() : proc.stdout.once('close', r))), new Promise((r) => setTimeout(r, 1500))]);
         if (job) split.flush('out');
         if (stopped) note(stopNote(stopped));
-        if (leftovers) note(`(${leftovers.ended.length} process${leftovers.ended.length > 1 ? 'es' : ''} it left running ${leftovers.left ? 'could not all be ended' : 'were ended'}: ${leftovers.ended.join(', ')})`);
+        if (leftovers?.kept?.length) note(`(kept open: ${leftovers.kept.join(', ')}. It shows a window, so it stays open after the command and QuorX no longer stops it.)`);
+        if (leftovers?.ended?.length) note(`(${leftovers.ended.length} process${leftovers.ended.length > 1 ? 'es' : ''} it left running ${leftovers.left ? 'could not all be ended' : 'were ended'}: ${leftovers.ended.join(', ')})`);
         log?.end();
         if (job) { termEvent(term.projectId, { kind: 'end', job, code, ms: Date.now() - t0, error: err, stopped: stopped ? { left: stopped.left, names: stopped.names, mode: stopped.mode } : undefined }); endJob(job); }
         if (err != null && code == null) return reject(new Error(err));

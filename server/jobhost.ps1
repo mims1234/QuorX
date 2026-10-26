@@ -4,13 +4,29 @@
 # Talks JSON lines on stdin/stdout:
 #   {"id":1,"op":"adopt","job":"j1","pid":1234,"memoryMB":0} -> {"id":1,"ok":true}
 #   {"id":2,"op":"count","job":"j1"}                        -> {"id":2,"ok":true,"active":3,"pids":[..]}
+#   {"id":2,"op":"count","job":"j1","windows":true}         -> also "windowed":[..] (processes showing a window, and
+#                                                              their helpers) and "gui":[..] (programs built to show one)
 #   {"id":3,"op":"kill","job":"j1"}                         -> {"id":3,"ok":true}
 #   {"id":4,"op":"close","job":"j1"}                        -> {"id":4,"ok":true}
+#   {"id":5,"op":"release","job":"j1","keep":[..]}          -> ends the rest, lets the kept ones live on without QuorX
 $ErrorActionPreference = 'Stop'
 Add-Type -TypeDefinition @'
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 public static class QxJob {
+  delegate bool EnumProc(IntPtr h, IntPtr l);
+  [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr l);
+  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr h, uint cmd);
+  [DllImport("user32.dll")] static extern int GetWindowTextLength(IntPtr h);
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] struct PE32 { public uint dwSize; public uint cntUsage; public uint th32ProcessID; public IntPtr th32DefaultHeapID; public uint th32ModuleID; public uint cntThreads; public uint th32ParentProcessID; public int pcPriClassBase; public uint dwFlags; [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string szExeFile; }
+  [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint pid);
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern bool Process32FirstW(IntPtr snap, ref PE32 e);
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern bool Process32NextW(IntPtr snap, ref PE32 e);
+  [DllImport("kernel32.dll", SetLastError = true)] static extern bool TerminateProcess(IntPtr p, uint code);
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern bool QueryFullProcessImageNameW(IntPtr p, int flags, System.Text.StringBuilder s, ref int size);
   [StructLayout(LayoutKind.Sequential)] struct BASIC { public long PerProcessUserTimeLimit; public long PerJobUserTimeLimit; public uint LimitFlags; public UIntPtr MinimumWorkingSetSize; public UIntPtr MaximumWorkingSetSize; public uint ActiveProcessLimit; public UIntPtr Affinity; public uint PriorityClass; public uint SchedulingClass; }
   [StructLayout(LayoutKind.Sequential)] struct IO { public ulong a, b, c, d, e, f; }
   [StructLayout(LayoutKind.Sequential)] struct EXT { public BASIC Basic; public IO Io; public UIntPtr ProcessMemoryLimit; public UIntPtr JobMemoryLimit; public UIntPtr PeakProcessMemoryUsed; public UIntPtr PeakJobMemoryUsed; }
@@ -56,6 +72,71 @@ public static class QxJob {
   }
   public static void Kill(IntPtr job) { TerminateJobObject(job, 1); }
   public static void Close(IntPtr job) { CloseHandle(job); }
+
+  // Programs built to show windows (the PE header's subsystem is "Windows GUI"), as opposed to console tools.
+  public static long[] Gui(long[] pids) {
+    List<long> r = new List<long>();
+    foreach (long pid in pids) {
+      IntPtr p = OpenProcess(0x1000, false, (int)pid); // PROCESS_QUERY_LIMITED_INFORMATION
+      if (p == IntPtr.Zero) continue;
+      try {
+        System.Text.StringBuilder sb = new System.Text.StringBuilder(1024); int n = sb.Capacity;
+        if (!QueryFullProcessImageNameW(p, 0, sb, ref n)) continue;
+        using (System.IO.FileStream f = new System.IO.FileStream(sb.ToString(), System.IO.FileMode.Open, System.IO.FileAccess.Read, System.IO.FileShare.ReadWrite | System.IO.FileShare.Delete)) {
+          byte[] b = new byte[4]; f.Seek(0x3C, System.IO.SeekOrigin.Begin); f.Read(b, 0, 4);
+          int pe = BitConverter.ToInt32(b, 0); byte[] s = new byte[2];
+          f.Seek(pe + 0x5C, System.IO.SeekOrigin.Begin); f.Read(s, 0, 2);
+          if (BitConverter.ToUInt16(s, 0) == 2) r.Add(pid);
+        }
+      } catch { } finally { CloseHandle(p); }
+    }
+    return r.ToArray();
+  }
+
+  // Processes among `pids` that show a visible top-level window with a title, and their child processes (an
+  // editor's renderer and GPU helpers), which go with it.
+  public static long[] Windowed(long[] pids) {
+    Dictionary<uint, bool> inJob = new Dictionary<uint, bool>(), owners = new Dictionary<uint, bool>();
+    foreach (long p in pids) inJob[(uint)p] = true;
+    EnumWindows(delegate (IntPtr h, IntPtr l) {
+      if (IsWindowVisible(h) && GetWindow(h, 4) == IntPtr.Zero && GetWindowTextLength(h) > 0) { uint pid; GetWindowThreadProcessId(h, out pid); if (inJob.ContainsKey(pid)) owners[pid] = true; }
+      return true;
+    }, IntPtr.Zero);
+    if (owners.Count == 0) return new long[0];
+    Dictionary<uint, uint> parent = new Dictionary<uint, uint>();
+    IntPtr snap = CreateToolhelp32Snapshot(0x2, 0);
+    if (snap != IntPtr.Zero && snap != new IntPtr(-1)) {
+      try {
+        PE32 e = new PE32(); e.dwSize = (uint)Marshal.SizeOf(typeof(PE32));
+        if (Process32FirstW(snap, ref e)) do { parent[e.th32ProcessID] = e.th32ParentProcessID; } while (Process32NextW(snap, ref e));
+      } finally { CloseHandle(snap); }
+    }
+    List<long> keep = new List<long>();
+    foreach (uint pid in inJob.Keys) {
+      uint cur = pid;
+      for (int i = 0; i < 16; i++) {
+        if (owners.ContainsKey(cur)) { keep.Add(pid); break; }
+        uint up; if (!parent.TryGetValue(cur, out up) || up == cur || !inJob.ContainsKey(up)) break;
+        cur = up;
+      }
+    }
+    return keep.ToArray();
+  }
+
+  // Ends every process of the job except `keep`, then lets the kept ones go: the job no longer ends them when QuorX
+  // closes it (a process can't leave a job, so its limits are lifted instead).
+  public static void Release(IntPtr job, long[] keep) {
+    Dictionary<long, bool> k = new Dictionary<long, bool>();
+    foreach (long p in keep) k[p] = true;
+    foreach (long pid in Pids(job)) {
+      if (k.ContainsKey(pid)) continue;
+      IntPtr p = OpenProcess(0x0001, false, (int)pid);
+      if (p != IntPtr.Zero) { TerminateProcess(p, 1); CloseHandle(p); }
+    }
+    EXT info = new EXT();
+    SetInformationJobObject(job, 9, ref info, (uint)Marshal.SizeOf(typeof(EXT)));
+    CloseHandle(job);
+  }
 }
 '@
 $jobs = @{}
@@ -80,6 +161,7 @@ while ($true) {
           $out.active = [QxJob]::Active($jobs[$m.job])
           $out.pids = @([QxJob]::Pids($jobs[$m.job]))
           $out.names = @($out.pids | ForEach-Object { try { (Get-Process -Id $_ -ErrorAction Stop).ProcessName + '.exe' } catch { "pid $_" } })
+          if ($m.windows -and $out.pids.Count) { $out.windowed = @([QxJob]::Windowed([long[]]$out.pids)); $out.gui = @([QxJob]::Gui([long[]]$out.pids)) }
         } else { $out.active = 0; $out.pids = @(); $out.names = @() }
       }
       'parse' {
@@ -123,6 +205,7 @@ while ($true) {
         $out.members = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.InvokeMemberExpressionAst] }, $true) | ForEach-Object { $_.Extent.Text })
       }
       'kill' { if ($jobs.ContainsKey($m.job)) { [QxJob]::Kill($jobs[$m.job]) } }
+      'release' { if ($jobs.ContainsKey($m.job)) { [QxJob]::Release($jobs[$m.job], [long[]]@($m.keep)); $jobs.Remove($m.job) } }
       'close' { if ($jobs.ContainsKey($m.job)) { [QxJob]::Close($jobs[$m.job]); $jobs.Remove($m.job) } }
       default { throw "unknown op $($m.op)" }
     }

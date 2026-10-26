@@ -13,6 +13,9 @@
 #   keys    {pids, handle, keys}         -> {did}   (SendKeys syntax: {ENTER}, ^s, %{F4} …)
 #   shot    {pids, handle}               -> {png}   (base64)
 #   close   {pids, handle}               -> {did}
+#   apps    {name}                       -> {apps: [{name, appId}]}   (Start-menu apps whose name matches)
+#   appwins {appId, name}                -> {windows: [{handle, pid, appPid, title}]}   (that app's open windows)
+# Apps the agent opened by name (desktop open) are reached the same way: QuorX passes their windows' processes.
 $ErrorActionPreference = 'Stop'
 Add-Type -ReferencedAssemblies UIAutomationClient, UIAutomationTypes, System.Drawing, System.Windows.Forms, WindowsBase -TypeDefinition @'
 using System;
@@ -43,6 +46,70 @@ public static class QxUia {
   [DllImport("user32.dll")] static extern IntPtr GetAncestor(IntPtr h, uint flags);
   [DllImport("user32.dll")] static extern bool AttachThreadInput(uint a, uint b, bool attach);
   [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+  [DllImport("kernel32.dll")] static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
+  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern bool QueryFullProcessImageNameW(IntPtr p, int flags, StringBuilder s, ref int size);
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern int GetApplicationUserModelId(IntPtr p, ref uint len, StringBuilder s);
+  [DllImport("shell32.dll")] static extern int SHGetKnownFolderPath(ref Guid id, uint flags, IntPtr token, out IntPtr path);
+
+  // ---- apps by name (desktop open): which windows belong to a Start-menu app ----
+  static string ExeOf(int pid) {
+    IntPtr p = OpenProcess(0x1000, false, pid); // PROCESS_QUERY_LIMITED_INFORMATION
+    if (p == IntPtr.Zero) return "";
+    try { StringBuilder sb = new StringBuilder(1024); int n = sb.Capacity; return QueryFullProcessImageNameW(p, 0, sb, ref n) ? sb.ToString() : ""; } finally { CloseHandle(p); }
+  }
+  // A Store app's id (Microsoft.WindowsCalculator_8wekyb3d8bbwe!App); "" for a classic program.
+  static string AumidOf(int pid) {
+    IntPtr p = OpenProcess(0x1000, false, pid);
+    if (p == IntPtr.Zero) return "";
+    try { uint n = 512; StringBuilder sb = new StringBuilder(512); return GetApplicationUserModelId(p, ref n, sb) == 0 ? sb.ToString() : ""; } finally { CloseHandle(p); }
+  }
+  // A classic program's Start-menu id is often its path under a known folder: {6D809377-…}\Microsoft VS Code\Code.exe.
+  static string PathOfAppId(string appId) {
+    if (string.IsNullOrEmpty(appId)) return "";
+    if (Path.IsPathRooted(appId)) return appId;
+    if (appId.Length > 39 && appId[0] == '{' && appId[37] == '}' && appId[38] == '\\') {
+      try {
+        Guid g = new Guid(appId.Substring(0, 38)); IntPtr s;
+        if (SHGetKnownFolderPath(ref g, 0, IntPtr.Zero, out s) == 0) { string b = Marshal.PtrToStringUni(s); Marshal.FreeCoTaskMem(s); return Path.Combine(b, appId.Substring(39)); }
+      } catch { }
+    }
+    return "";
+  }
+  // A program's own name for itself is the app's name, or starts with it ("Brave Browser" for Brave).
+  static bool Named(string own, string name) {
+    own = (own ?? "").Trim();
+    return name.Length > 0 && (string.Equals(own, name, StringComparison.OrdinalIgnoreCase) || own.StartsWith(name + " ", StringComparison.OrdinalIgnoreCase));
+  }
+  // The windows of one app: its Store id, its program file, or a program whose own description is the app's name
+  // (Code.exe says "Visual Studio Code"). A window's title never decides: a browser tab can be called "Calculator".
+  // A Store app's window is drawn by ApplicationFrameHost, with the app's own process in a child window.
+  // Lines: handle, the window's process, the app's process, title.
+  public static string AppWindows(string appId, string name) {
+    string exe = PathOfAppId(appId);
+    StringBuilder sb = new StringBuilder();
+    AutomationElementCollection all = AutomationElement.RootElement.FindAll(TreeScope.Children, Condition.TrueCondition);
+    foreach (AutomationElement w in all) {
+      try {
+        AutomationElement.AutomationElementInformation c = w.Current;
+        int appPid = c.ProcessId; string path = ExeOf(appPid);
+        if (path.EndsWith("ApplicationFrameHost.exe", StringComparison.OrdinalIgnoreCase)) {
+          AutomationElement core = w.FindFirst(TreeScope.Children, new PropertyCondition(AutomationElement.ClassNameProperty, "Windows.UI.Core.CoreWindow"));
+          if (core == null) continue;
+          appPid = core.Current.ProcessId; path = ExeOf(appPid);
+        }
+        bool hit = false;
+        string aumid = AumidOf(appPid);
+        if (aumid.Length > 0) hit = string.Equals(aumid, appId, StringComparison.OrdinalIgnoreCase);
+        else if (path.Length > 0) {
+          if (exe.Length > 0) hit = string.Equals(Path.GetFullPath(exe), path, StringComparison.OrdinalIgnoreCase);
+          if (!hit) { System.Diagnostics.FileVersionInfo v = System.Diagnostics.FileVersionInfo.GetVersionInfo(path); hit = Named(v.FileDescription, name) || Named(v.ProductName, name); }
+        }
+        if (hit) sb.Append(c.NativeWindowHandle).Append('\t').Append(c.ProcessId).Append('\t').Append(appPid).Append('\t').Append((c.Name ?? "").Replace('\t', ' ').Replace('\n', ' ')).Append('\n');
+      } catch { }
+    }
+    return sb.ToString();
+  }
 
   // Whether a window (or the top-level window it sits in) belongs to a process the agent started.
   static bool Ours(IntPtr w, int[] pids) {
@@ -280,8 +347,18 @@ while ($true) {
     $id = $m.id
     $out = @{ id = $id; ok = $true }
     $pids = [int[]]@($m.pids | ForEach-Object { [int]$_ })
-    if ($m.op -ne 'windows') { [QxUia]::Check([long]$m.handle, $pids) }
+    if ($m.op -notin @('windows', 'apps', 'appwins')) { [QxUia]::Check([long]$m.handle, $pids) }
     switch ($m.op) {
+      'apps' {
+        # Start-menu apps by name: exact names first, then names that contain it.
+        $q = [string]$m.name; $all = @(Get-StartApps)
+        $like = '*' + [System.Management.Automation.WildcardPattern]::Escape($q) + '*'
+        $hits = @($all | Where-Object { $_.Name -ieq $q }) + @($all | Where-Object { $_.Name -ine $q -and $_.Name -ilike $like })
+        $out.apps = @($hits | Select-Object -First 8 | ForEach-Object { @{ name = $_.Name; appId = $_.AppID } })
+      }
+      'appwins' {
+        $out.windows = @(([QxUia]::AppWindows([string]$m.appId, [string]$m.name)) -split "`n" | Where-Object { $_ } | ForEach-Object { $p = $_ -split "`t", 4; @{ handle = [long]$p[0]; pid = [int]$p[1]; appPid = [int]$p[2]; title = $p[3] } })
+      }
       'windows' {
         $out.windows = @(([QxUia]::Windows($pids)) -split "`n" | Where-Object { $_ } | ForEach-Object { $p = $_ -split "`t", 3; @{ handle = [long]$p[0]; pid = [int]$p[1]; title = $p[2] } })
       }

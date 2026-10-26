@@ -33,49 +33,69 @@ const U = OS === 'win32' ? psHost('./uiahost.ps1', { label: 'desktop helper', re
   : lineHost(() => null, { why: `the desktop tool doesn't work on ${OS} yet` });
 export const desktopAvailable = U.available;
 
-// The processes a job may show windows for: everything still alive in its job (Windows job or process group).
-async function pidsOf(jobId) {
-  const j = getBackground(jobId);
-  if (!j) throw new Error(`no background job ${jobId}: start the app with shell and background: true first`);
+const arr = (x) => (x == null ? [] : Array.isArray(x) ? x : [x]);
+
+// What a call may reach (`scope`): a background job's id ("bg1": every process still alive in its job), or
+// { app: { name, appId } }, an app the chat opened by name (desktop open): the windows that app has open now.
+async function reach(scope) {
+  if (scope && typeof scope === 'object') {
+    const wins = await windowsOfApp(scope.app);
+    if (!wins.length) throw new Error(`${scope.app.name} has no open window: open it again with desktop open`);
+    return { pids: [...new Set(wins.flatMap((w) => [w.pid, w.appPid]))], wins };
+  }
+  const jobId = scope, j = getBackground(jobId);
+  if (!j) throw new Error(`no background job ${jobId}: start the app with shell and background: true first, or open an installed app with desktop open`);
   if (j.status !== 'running') throw new Error(`job ${jobId} has ${j.status}${j.code != null ? ` (exit code ${j.code})` : ''}; start the app again`);
   if (!j.proc?.qxJob) throw new Error('desktop apps can only be reached when the job host is running (⚙ Approvals & safety → Stop)');
   const c = await jobCount(j.proc.qxJob);
   if (!c.pids.length) throw new Error(`job ${jobId} has no running processes`);
-  return c.pids.map(Number);
+  return { pids: c.pids.map(Number), wins: null };
 }
 
-const arr = (x) => (x == null ? [] : Array.isArray(x) ? x : [x]);
+/** Start-menu apps whose name matches `name` (exact names first): [{ name, appId }]. Windows only. */
+export async function findApps(name) {
+  if (OS !== 'win32') throw new Error('opening apps by name works on Windows for now');
+  return arr((await U.call('apps', { name: String(name) }, 30000)).apps);
+}
+/** The windows `app` ({ name, appId }) has open now: [{ handle, pid, appPid, title }]. */
+export async function windowsOfApp(app) {
+  if (OS !== 'win32') return [];
+  return arr((await U.call('appwins', { appId: app.appId, name: app.name }, 20000)).windows);
+}
 
-/** The job's top-level windows: [{ handle, pid, title }]. Waits up to `wait` ms for the first one to appear. */
-export async function appWindows(jobId, wait = 0) {
+/** The top-level windows in reach: [{ handle, pid, title }]. Waits up to `wait` ms for the first one to appear. */
+export async function appWindows(scope, wait = 0) {
   const t0 = Date.now();
   for (;;) {
-    const r = await U.call('windows', { pids: await pidsOf(jobId) }, 20000);
-    const w = arr(r.windows);
+    const r = await reach(scope);
+    const w = r.wins || arr((await U.call('windows', { pids: r.pids }, 20000)).windows);
     if (w.length || Date.now() - t0 >= wait) return w;
     await new Promise((x) => setTimeout(x, 500));
   }
 }
-const pick = async (jobId, handle) => {
-  const pids = await pidsOf(jobId);
+const pick = async (scope, handle) => {
+  const r = await reach(scope);
   let h = Number(handle);
-  if (!h) { const w = await appWindows(jobId, 8000); if (!w.length) throw new Error(`job ${jobId} has no window yet`); h = w[0].handle; }
-  return { pids, handle: h };
+  // An app's other windows are its own; any other window of the same host process (every Store app's frame is drawn
+  // by ApplicationFrameHost) is not.
+  if (h && r.wins && !r.wins.some((w) => Number(w.handle) === h)) throw new Error(`window ${h} isn't one of ${scope.app.name}'s windows: list them with windows`);
+  if (!h) { const w = r.wins || await appWindows(scope, 8000); if (!w.length) throw new Error(`${typeof scope === 'object' ? scope.app.name : `job ${scope}`} has no window yet`); h = w[0].handle; }
+  return { pids: r.pids, handle: h };
 };
 // Windows' helper writes the text itself; the others return nodes, written the same way by deskkit.js.
-export async function readWindow(jobId, handle, { depth = 25, max = 250 } = {}) {
-  const p = await pick(jobId, handle);
+export async function readWindow(scope, handle, { depth = 25, max = 250 } = {}) {
+  const p = await pick(scope, handle);
   const r = await U.call('tree', { ...p, depth, max }, 30000);
   return { ...p, text: r.nodes ? treeText(r.nodes, { more: r.more }) : r.text };
 }
-export async function clickControl(jobId, handle, ref) { const p = await pick(jobId, handle); return (await U.call('click', { ...p, ref: Number(ref) }, 15000)).did; }
-export async function clickAt(jobId, handle, x, y) { const p = await pick(jobId, handle); return (await U.call('clickxy', { ...p, x: Math.round(Number(x)), y: Math.round(Number(y)) }, 15000)).did; }
-export async function setControl(jobId, handle, ref, text) { const p = await pick(jobId, handle); return (await U.call('set', { ...p, ref: Number(ref), text: String(text ?? '') }, 15000)).did; }
+export async function clickControl(scope, handle, ref) { const p = await pick(scope, handle); return (await U.call('click', { ...p, ref: Number(ref) }, 15000)).did; }
+export async function clickAt(scope, handle, x, y) { const p = await pick(scope, handle); return (await U.call('clickxy', { ...p, x: Math.round(Number(x)), y: Math.round(Number(y)) }, 15000)).did; }
+export async function setControl(scope, handle, ref, text) { const p = await pick(scope, handle); return (await U.call('set', { ...p, ref: Number(ref), text: String(text ?? '') }, 15000)).did; }
 // SendKeys text on every system; on macOS ^ is the Command key, as Ctrl is on Windows (^s saves, ^c copies).
-export async function sendKeys(jobId, handle, keys) {
-  const p = await pick(jobId, handle), k = String(keys ?? '');
+export async function sendKeys(scope, handle, keys) {
+  const p = await pick(scope, handle), k = String(keys ?? '');
   const args = OS === 'win32' ? { keys: k } : { events: OS === 'darwin' ? macKeyEvents(k) : parseSendKeys(k) };
   return (await U.call('keys', { ...p, ...args }, 15000)).did;
 }
-export async function windowShot(jobId, handle) { const p = await pick(jobId, handle); return `data:image/png;base64,${(await U.call('shot', p, 20000)).png}`; }
-export async function closeWindow(jobId, handle) { const p = await pick(jobId, handle); return (await U.call('close', p, 15000)).did; }
+export async function windowShot(scope, handle) { const p = await pick(scope, handle); return `data:image/png;base64,${(await U.call('shot', p, 20000)).png}`; }
+export async function closeWindow(scope, handle) { const p = await pick(scope, handle); return (await U.call('close', p, 15000)).did; }

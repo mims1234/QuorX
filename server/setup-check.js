@@ -3,7 +3,8 @@
 // Every check is read-only and quick (each command has a 5 s limit). Fixes never run by themselves: on Windows the
 // page can ask to open winget in its own console window, where the user sees and answers winget's own prompts.
 import fs from 'node:fs';
-import { execFile, spawn } from 'node:child_process';
+import { execFile } from 'node:child_process';
+import { openDetached } from './userenv.js';
 import { activeKey, fetchKeyInfo } from './keys.js';
 import { runtime, PORT, HOME } from './openrouter.js';
 import { browserPath } from './browser.js';
@@ -86,6 +87,6 @@ export function runFix(id) {
   if (!WIN) throw new Error('Installing from here works on Windows only. Use your package manager.');
   const pkg = WINGET[id];
   if (!pkg) throw new Error('unknown fix');
-  spawn('cmd.exe', ['/c', 'start', `"Install ${pkg}"`, 'cmd.exe', '/k', `${wingetLine(id)} --source winget`], { detached: true, stdio: 'ignore', windowsVerbatimArguments: true }).on('error', () => {}).unref();
+  openDetached('cmd.exe', ['/c', 'start', `"Install ${pkg}"`, 'cmd.exe', '/k', `${wingetLine(id)} --source winget`], { verbatim: true });
   return { ok: true, pkg };
 }

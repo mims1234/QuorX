@@ -84,7 +84,8 @@ const CATS = [
 const CHAT_TOOLS = ['image', 'video', 'music', 'speech'];
 // The quality tools: on by default (the best value in the build benchmark); each chat can switch them off in 🧰.
 const QUALITY_TOOLS = ['enhancer', 'reviewer', 'freshEyes', 'deciders', 'helpers'];
-const DEFAULT_CHAT_TOOLS = { image: false, video: false, music: false, speech: false, enhancer: true, reviewer: true, freshEyes: true, deciders: true, helpers: true };
+// The prompt enhancer starts off: a chat turns it on in 🧰 when wanted (its reading also helps the deciders judge commands).
+const DEFAULT_CHAT_TOOLS = { image: false, video: false, music: false, speech: false, enhancer: false, reviewer: true, freshEyes: true, deciders: true, helpers: true };
 // Files a code review reads (an automatic review skips replies that only changed pictures, data or docs).
 const CODE_FILE = /\.(m?[jt]sx?|cjs|py|rb|go|rs|java|kt|swift|c|cc|cpp|h|hpp|cs|php|lua|sh|ps1|vue|svelte|html?|css|scss|sql)$/i;
 const REVIEW_CHEAP = 'openai/gpt-6-luna', REVIEW_STRONG = 'anthropic/claude-sonnet-5.5', HELPER_DEFAULT = 'qwen/qwen3.7-flash', LOOK_DEFAULT = 'openai/gpt-6-luna-decisions';
@@ -2857,7 +2858,7 @@ function qualitySettings(c) {
   return {
     review: t.reviewer ? (G.settings.review && G.settings.review !== 'off' ? G.settings.review : 'builds') : 'off',
     freshEyes: t.freshEyes !== false,
-    enhancer: t.enhancer !== false,
+    enhancer: !!t.enhancer,
     deciders: !!t.deciders,
     helpers: !!t.helpers,
   };
@@ -3916,13 +3917,13 @@ function traceHTML(m) {
     else if (e.t === 'debug') row(e.at, `🐞 debugger ${esc(e.id || '')} · ${esc(e.action)}${e.file ? ` <code>${esc(e.file)}</code>` : ''}${e.text ? `<details class="out"><summary>where it is</summary><pre>${esc(e.text)}</pre></details>` : ''}`, 'cmd');
     else if (e.t === 'android') row(e.at, `📱 android ${esc(e.device)} · ${esc(e.action)}`, 'browser');
     else if (e.t === 'packages') row(e.at, `📦 checked ${e.packages.length} package${e.packages.length === 1 ? '' : 's'} for <code>${esc(clip(e.command, 80))}</code><div class="sub">${e.packages.map((p) => `${esc(p.name)} (${esc(p.eco)}): ${p.verdict === 'ok' ? `exists${p.ageDays != null ? `, ${Math.round(p.ageDays / 36.5) / 10} years old` : ''}${p.weekly != null ? `, ${p.weekly.toLocaleString()}/week` : ''}` : esc(p.note)}`).join('<br>')}</div>`, e.packages.some((p) => p.verdict === 'missing') ? 'err' : 'cmd');
-    else if (e.t === 'desktop') row(e.at, `🪟 desktop app ${esc(e.job)} · ${esc(e.action)}${e.did ? `: ${esc(e.did)}` : ''}`, 'browser');
+    else if (e.t === 'desktop') row(e.at, `🪟 ${e.action === 'open' ? 'opened' : e.action === 'use' ? 'using the open' : 'desktop app'} ${esc(e.job)}${['open', 'use'].includes(e.action) ? '' : ` · ${esc(e.action)}`}${e.did ? `: ${esc(e.did)}` : ''}`, 'browser');
     else if (e.t === 'command') {
       const ch = e.changes, n = ch ? ch.added.length + ch.modified.length + ch.deleted.length : 0;
       const by = !e.decidedBy ? '' : e.decidedBy === 'you' ? 'you allowed it' : e.decidedBy === 'deciders' ? 'the deciders allowed it' : e.decidedBy.startsWith('rule:') ? `your rule (${esc(e.decidedBy.slice(5))}) allowed it` : `runs without asking (${esc(e.decidedBy.replace(/^class:/, ''))})`;
       const undo = n ? `changed ${n} file${n > 1 ? 's' : ''} · Undo covers project files` : e.snap?.off && e.snap.off !== 'read-only' ? `no snapshot (${esc(e.snap.off)}): Undo can't restore what it changed` : '';
       const stop = e.stopped ? (e.stopped.left ? `⚠ ${e.stopped.left} process${e.stopped.left > 1 ? 'es' : ''} did not stop: ${esc((e.stopped.names || []).join(', '))}` : `■ stopped · 0 processes left${e.stopped.mode === 'basic' ? ' (basic mode)' : ''}`) : e.timedOut ? 'stopped at the time limit' : '';
-      row(e.at, `⌨️ <code>${esc(e.command)}</code> → exit ${e.code ?? '–'} · ${secs(e.ms)}<div class="sub">${[by, undo, stop, e.leftovers?.ended?.length ? `ended ${e.leftovers.ended.length} process${e.leftovers.ended.length > 1 ? 'es' : ''} it left running` : '', 'not covered: files outside the project, ignored folders (node_modules, target), pushes, installs, databases'].filter(Boolean).join(' · ')}</div>${ch && n ? `<details class="out"><summary>files</summary><pre>${esc([...ch.added.map((f) => `+ ${f}`), ...ch.modified.map((f) => `~ ${f}`), ...ch.deleted.map((f) => `- ${f}`)].join('\n'))}</pre></details>` : ''}${e.out ? `<details class="out"><summary>output</summary><pre>${esc(e.out)}</pre>${e.log ? `<div class="sub">Full log: ${esc(e.log)}</div>` : ''}</details>` : ''}`, e.code || e.stopped?.left ? 'err' : 'cmd');
+      row(e.at, `⌨️ <code>${esc(e.command)}</code> → exit ${e.code ?? '–'} · ${secs(e.ms)}<div class="sub">${[by, undo, stop, e.leftovers?.ended?.length ? `ended ${e.leftovers.ended.length} process${e.leftovers.ended.length > 1 ? 'es' : ''} it left running` : '', e.leftovers?.kept?.length ? `kept open: ${esc(e.leftovers.kept.join(', '))}` : '', 'not covered: files outside the project, ignored folders (node_modules, target), pushes, installs, databases'].filter(Boolean).join(' · ')}</div>${ch && n ? `<details class="out"><summary>files</summary><pre>${esc([...ch.added.map((f) => `+ ${f}`), ...ch.modified.map((f) => `~ ${f}`), ...ch.deleted.map((f) => `- ${f}`)].join('\n'))}</pre></details>` : ''}${e.out ? `<details class="out"><summary>output</summary><pre>${esc(e.out)}</pre>${e.log ? `<div class="sub">Full log: ${esc(e.log)}</div>` : ''}</details>` : ''}`, e.code || e.stopped?.left ? 'err' : 'cmd');
     }
     else if (e.t === 'hook') row(e.at, `🪝 hook <code>${esc(clip(e.command, 160))}</code> ${e.skipped ? 'did not run' : `→ ${e.ok ? 'ok' : e.timedOut ? 'stopped at its time limit' : `exit ${e.code ?? '–'}`} · ${secs(e.ms)}`}<div class="sub">${esc(HOOK_WHEN[e.event] || e.event)}${e.file ? `: ${esc(e.file)}` : ''}${e.skipped ? ` · ${esc(e.why || '')}` : e.told ? (e.event === 'before_command' ? ' · the command did not run; the agent sees why' : ' · the agent sees its output') : ''}</div>${e.out ? `<details class="out"${e.ok ? '' : ' open'}><summary>output</summary><pre>${esc(e.out)}</pre></details>` : ''}`, e.ok ? 'cmd' : 'err');
     else if (e.t === 'memory_saved') row(e.at, `📌 saved to memory: “${esc(e.text)}”<div class="sub">Every chat gets it from now on · ⚙ Settings → Memory</div>`, 'ok');
@@ -4507,8 +4508,8 @@ async function runChat(c, text, ctx, imgs, { resumeOf, docs = [], more = 0, mode
   else if (box) { if (box.querySelector('.hint')) box.innerHTML = ''; if (user) box.appendChild(renderMsg(c, user)); box.appendChild(renderMsg(c, m)); c.follow = true; c.toEnd?.(); }
   const artifacts = Object.fromEntries(Object.entries(a.artifacts).map(([id, x]) => [id, x.kind === 'html' ? { kind: 'html', title: x.title, html: x.html, v: 1 } : x.kind === 'md' ? { kind: 'md', title: x.title, md: x.md || '', v: 1 } : { kind: x.kind, title: x.title, url: x.url?.startsWith('data:') ? undefined : x.url, v: 1 }]));
   const settings = { ...G.settings, approval: c.approval, tools: chatTools(c), ...qualitySettings(c), chromeAccess: !!c.tools?.chrome };
-  const body = resumeOf ? { runId: m.runId, chatId: c.id, resume: resumeOf, settings, allowed: a.allowed, cmdRules: a.cmdRules || [], reading: a.reading?.text || '', ...(more ? { continue: more, ...(model ? { model } : {}) } : {}) }
-    : { runId: m.runId, chatId: c.id, projectId: c.projectId, chatTitle: c.title, setup: a.setup, settings, allowed: a.allowed, cmdRules: a.cmdRules || [], history, summary: a.summary || '', reading: a.reading?.text || '', text, artifacts, context: ctx?.text || '', images: imgs.map((x) => x.full), docs: docs.map((d) => d.id), ...(cmts.length ? { comments: cmts } : {}), ...(a.videoMode ? { videoMode: a.videoMode } : {}), ...(a.videoMode === 'on' && a.videoFrom ? { videoFrom: a.videoFrom } : {}) };
+  const body = resumeOf ? { runId: m.runId, chatId: c.id, resume: resumeOf, settings, allowed: a.allowed, cmdRules: a.cmdRules || [], apps: a.apps || [], reading: a.reading?.text || '', ...(more ? { continue: more, ...(model ? { model } : {}) } : {}) }
+    : { runId: m.runId, chatId: c.id, projectId: c.projectId, chatTitle: c.title, setup: a.setup, settings, allowed: a.allowed, cmdRules: a.cmdRules || [], apps: a.apps || [], history, summary: a.summary || '', reading: a.reading?.text || '', text, artifacts, context: ctx?.text || '', images: imgs.map((x) => x.full), docs: docs.map((d) => d.id), ...(cmts.length ? { comments: cmts } : {}), ...(a.videoMode ? { videoMode: a.videoMode } : {}), ...(a.videoMode === 'on' && a.videoFrom ? { videoFrom: a.videoFrom } : {}) };
   // Saved straight away, so a reload finds the running reply and reattaches to it.
   saveChat(c, true);
   return followRun(c, m, (signal) => fetch('/api/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal, body: JSON.stringify(body) }));
@@ -4629,6 +4630,7 @@ async function followRun(c, m, open) {
         if (e.t === 'mode' && c.approval !== e.approval) { c.approval = e.approval; saveChat(c); renderComposerBar(c); }
         if (e.t === 'allow_always') { if (!a.allowed.includes(e.tool)) a.allowed.push(e.tool); renderAllowed(c); saveChat(c); }
         if (e.t === 'cmd_rule' && e.rule?.scope === 'chat') { (a.cmdRules ??= []).push(e.rule); saveChat(c); }
+        if (e.t === 'app_allowed' && e.app?.appId) { a.apps = [...(a.apps || []).filter((x) => x.appId !== e.app.appId), { name: e.app.name, appId: e.app.appId }]; saveChat(c); }
         if (e.t === 'approval') { m.approvals[e.id] = { card: e }; if (e.mode === 'strict') { c.waiting = true; renderSidebar(); renderChatHead(c); note('approval', e.what || e.tool); } }
         // The clock stopped: only that card's countdown line is drawn again, so what you are typing in it stays.
         if (e.t === 'card_held') {

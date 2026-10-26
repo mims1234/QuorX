@@ -444,7 +444,10 @@ sequenceDiagram
 - **QuorX crashes, everything ends:** jobs are created with kill-on-close, so if QuorX or the job host dies, so does
   every agent process.
 - **Leftovers are swept:** when a command ends by itself, anything it started that is still running is ended too,
-  and named in the result.
+  and named in the result. A program it left showing a window (an editor, a calculator) is the exception on
+  Windows: it is what the command was for, so it stays open, released from the job (the job host lifts its
+  kill-on-close and lets go of it), and the result says "kept open". Launchers such as `code.cmd` exit before
+  the window shows, so leftovers get a moment to show one first.
 - **macOS and Linux** use process groups behind the same functions (`server/procgroup.js`): the gate starts in a new
   session, Stop sends SIGTERM then SIGKILL to the group and counts again, a child that leaves its group (`setsid`)
   is still followed, and each gate ends its own group if QuorX goes away.
@@ -552,7 +555,11 @@ lines, with ■ Stop. **■ Stop all** ends every command, background job, serve
 **Background jobs** (`server/bgjobs.js`) come two ways:
 
 - The agent starts one with `background: true` (a desktop app, a watcher, a test server). Only commands that read,
-  write inside the project or build may do this; installs, pushes and deletes can't.
+  write inside the project or build may do this; installs, pushes and deletes can't. When its launcher exits
+  (`Start-Process`, `code.cmd`), the job keeps running for as long as the program it started does.
+- Installed apps the user has (Calculator, VS Code) are not background jobs: the agent opens them by their
+  Start-menu name with `desktop open`, which reuses an open window or starts the app through Explorer, outside
+  QuorX, so it stays open for later steps and chats. The user allows each app once per chat.
 - A command still running at its time limit moves to the background instead of being killed. A long build, or an
   install stopped part-way, would be wasted work or a half-installed tool. If its last output looks like a prompt,
   the agent is told that a background job never gets input.
