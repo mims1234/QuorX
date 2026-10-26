@@ -566,6 +566,8 @@ const APP_VIEW = /^(google chrome|chrome|microsoft edge|edge|brave|firefox|mozil
 const APP_CLICK = /^(terminal|windows terminal|windows powershell|powershell|command prompt|git bash|wsl|ubuntu|debian|visual studio code|visual studio|code|cursor|windsurf|intellij|pycharm|webstorm|rider|clion|goland|android studio|sublime text|notepad\+\+)\b/i;
 /** The level an app starts at: 'never', 'view', 'click' or 'full'. */
 export const appLevel = (name) => { const n = String(name || '').trim(); return APP_NEVER.test(n) ? 'never' : APP_VIEW.test(n) ? 'view' : APP_CLICK.test(n) ? 'click' : 'full'; };
+// Words in a decide call that mean it is about something seen (a window, a screen, a picture).
+const SEEN_WORDS = /\b(screenshot|on (the )?screen|the window|the picture|the image|visible (in|on))\b/i;
 // Buttons in the user's own apps that act for them: clicking one asks first.
 const RISKY_CLICK = /\b(send|submit|pay|buy|purchase|order|checkout|check out|delete|remove|erase|post|publish|transfer|confirm|sign|accept|agree|uninstall|format|reset)\b/i;
 const LEVEL_WORDS = { view: 'look at only (windows, read, screenshot, zoom, wait_for)', click: 'look, click, scroll and drag, not type', full: 'use fully' };
@@ -600,7 +602,7 @@ const CODE_TOOLS = [
     window: { type: 'integer', description: 'A window handle from windows (default: its first window)' }, ref: { type: 'integer' }, x: { type: 'integer' }, y: { type: 'integer' }, to_x: { type: 'integer' }, to_y: { type: 'integer' }, width: { type: 'integer' }, height: { type: 'integer' },
     text: { type: 'string' }, keys: { type: 'string' }, key: { type: 'string', description: 'hold_key: a letter, digit, F1-F12, shift, ctrl, alt, space, enter or an arrow' }, seconds: { type: 'number' },
     direction: { type: 'string', enum: ['up', 'down', 'left', 'right'] }, amount: { type: 'integer', description: 'scroll: wheel notches (default 3)' },
-    steps: { type: 'array', maxItems: 8, items: { type: 'object' }, description: 'Several desktop actions in a row, each like this tool\'s own arguments (app, job and window come from the call unless a step names its own). Stops at the first error.' } } } } },
+    steps: { type: 'array', maxItems: 8, items: { type: 'object' }, description: 'Several desktop actions in a row, each like this tool\'s own arguments (app, job and window come from the call, or the step before, unless a step names its own; open may be the first step). Stops at the first error.' } } } } },
   { type: 'function', function: { name: 'start_server', description: 'Start (or restart) a long-running dev server in your project folder. It gets a free port in the PORT environment variable and as {PORT} in arguments, and opens in the user\'s Browser tab. Its command is saved to the project\'s launch file, so the user can start and stop it later; give only the name to rerun a saved one.', parameters: { type: 'object', required: ['name'], properties: { name: { type: 'string', description: 'Short name, e.g. "web"' }, command: { type: 'string', description: 'Leave out to rerun the saved launch config with this name' }, args: { type: 'array', items: { type: 'string' } } } } } },
   { type: 'function', function: { name: 'stop_server', description: 'Stop a dev server you started.', parameters: { type: 'object', required: ['name'], properties: { name: { type: 'string' } } } } },
   { type: 'function', function: { name: 'launch_config', description: 'The project’s saved launch configs (.quorx/launch.json): the servers the user can start and stop from the chat header. list shows them; save creates one or updates one you made in this reply; replacing or renaming an existing entry needs old_name and asks the user first; remove deletes one (a running server keeps running: stop_server ends it). Use this, not write_file, for that file. Saving does not start anything: start_server with the name does.', parameters: { type: 'object', required: ['action'], properties: { action: { type: 'string', enum: ['list', 'save', 'remove'] }, name: { type: 'string', description: 'Short name, e.g. "web" (save, remove)' }, command: { type: 'string', description: 'The program, e.g. npm, node, python, cargo (save)' }, args: { type: 'array', items: { type: 'string' }, description: 'Its arguments; {PORT} becomes the server’s port (save)' }, port: { type: 'integer', description: 'A fixed port, only if the app needs one; otherwise it gets a free one (save)' }, old_name: { type: 'string', description: 'The config’s current name when renaming it (save)' } } } } },
@@ -644,7 +646,8 @@ export const BROWSER_TOOLS = [
     action: { type: 'string', enum: ['open', 'snapshot', 'click', 'type', 'press', 'scroll', 'wait', 'wait_for', 'find', 'read', 'collect', 'network', 'handoff', 'tabs', 'switch'], description: 'open a target · snapshot: look again without acting · click/type/press on a ref · scroll the page or the list under a ref · wait seconds · wait_for text, a ref or a request · find words or a role on the page · read the screen or the whole page as text · collect a feed or channel while scrolling · network: list the page\'s data requests or read one · handoff: in the user\'s tab, ask them to do one step themselves (sign in, a CAPTCHA, a 2FA code) and wait · tabs: list this chat\'s tabs in the user\'s Chrome · switch to one of them by index' },
     target: { type: 'string', description: 'open: artifact:<id> or site:<path> (your work), app:<server name>, web:<address> or an http(s) URL (a site in QuorX\'s own browser, not signed in), chrome:<address> (the user\'s own Chrome, signed in as them; only when they turned Chrome on for this chat), given (the tab the user lent to this chat), or cdp:<port> for an Electron app you started with shell (background: true) and --remote-debugging-port=<port>' },
     ref: { type: 'string', description: 'click/type/scroll/wait_for: a ref from the latest snapshot or find, like s3:e12' },
-    selector: { type: 'string', description: 'click/type: CSS selector (when there is no ref)' }, text: { type: 'string', description: 'click: visible text of the element (when there is no ref) · type: the text to type · wait_for: text that should appear' },
+    selector: { type: 'string', description: 'click/type: CSS selector (when there is no ref)' }, text: { type: 'string', description: 'click: visible text of the element (when there is no ref) · type: the text to type (it replaces what the field holds) · wait_for: text that should appear' },
+    append: { type: 'boolean', description: 'type: add to what the field already holds instead of replacing it' },
     key: { type: 'string', description: 'press: Enter, Tab, Escape, Space, Backspace, ArrowUp/Down/Left/Right, PageUp/PageDown, a character (r, R, 5), or a combination like Shift+R, Control+S or Control+Shift+Z' },
     seconds: { type: 'number', description: 'wait: let the page run this long (up to 30), e.g. for a timer, a round or an animation · wait_for: how long to wait at most (default 10)' },
     screens: { type: 'number', description: 'scroll: how many screens (negative = up); better than dy on feeds and chat apps' },
@@ -667,7 +670,7 @@ export const BROWSER_TOOLS = [
     index: { type: 'integer', description: 'switch: the tab number from tabs' },
     width: { type: 'integer', description: 'open: viewport width, e.g. 390 for a phone, default 1280' } } } } },
   { type: 'function', function: { name: 'look', description: 'Screenshot the page open in the browser (or open a target first) and have fast vision judges answer your yes/no checks about it. Commit your own guess for each check first.', parameters: { type: 'object', required: ['checks'], properties: {
-    target: { type: 'string', description: 'Optional: open this first (same forms as browser.open), or desktop:<app or job> for a window on the desktop (desktop:Calculator, desktop:bg1)' }, width: { type: 'integer' },
+    target: { type: 'string', description: 'Optional: open this first (same forms as browser.open), or desktop:<app or job> for a window on the desktop (desktop:Calculator, desktop:bg1). With none, right after desktop work it looks at that window' }, width: { type: 'integer' },
     checks: { type: 'array', minItems: 1, maxItems: 8, items: { type: 'object', required: ['ask', 'my_guess', 'my_confidence'], properties: {
       ask: { type: 'string', description: 'A yes/no statement about what the screenshot shows' }, my_guess: { type: 'string', enum: ['yes', 'no'] }, my_confidence: { type: 'number', minimum: 0, maximum: 1 } } } } } } } },
 ];
@@ -1808,20 +1811,23 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   // agent is told to change approach; the second time the user decides (keep going, and the reply isn't checked
   // again, or stop and report). In YOLO nobody is there to ask, so the reply wraps up.
   async function loopWatch(name, args, first, step) {
-    // Polling a job, ticking the plan, looking around a page and listing files repeat by nature.
-    if (run.loopOff || ['job_output', 'plan', 'look', 'browser', 'list_files', 'list_docs'].includes(name)) return '';
+    if (run.loopOff) return '';
+    // Polling a job, ticking the plan, looking around a page and listing files repeat by nature: for them only the same
+    // failing call twice in a row counts (a model once opened the browser with no target six times).
+    const natural = ['job_output', 'plan', 'look', 'browser', 'list_files', 'list_docs'].includes(name);
     const key = `${name}:${JSON.stringify(args)}`;
     const err = /^\s*(Error|Blocked|Refused)|declined/.test(first) ? first.slice(0, 160) : null;
     const h = (run.callHist ??= []);
     h.push({ key, err });
     if (h.length > 12) h.shift();
-    const same = h.filter((x) => x.key === key).length;
-    const last3 = h.slice(-3);
-    const sameErr = last3.length === 3 && last3.every((x) => x.err && x.err === last3[0].err);
-    if (same < 4 && !sameErr) return '';
+    const same = natural ? 0 : h.filter((x) => x.key === key).length;
+    const last2 = h.slice(-2), last3 = h.slice(-3);
+    const twice = natural && last2.length === 2 && last2.every((x) => x.err && x.key === key);
+    const sameErr = !natural && last3.length === 3 && last3.every((x) => x.err && x.err === last3[0].err);
+    if (same < 4 && !sameErr && !twice) return '';
     h.length = 0;
     run.loops = (run.loops || 0) + 1;
-    const what = sameErr ? `got the same error 3 times in a row (“${clip(last3[0].err, 100)}”)` : `made the same ${name} call ${same} times`;
+    const what = twice ? `made the same failing ${name} call twice in a row (“${clip(err, 100)}”)` : sameErr ? `got the same error 3 times in a row (“${clip(last3[0].err, 100)}”)` : `made the same ${name} call ${same} times`;
     emit({ t: 'loop', what, count: run.loops, at: at() });
     if (run.loops === 1) return `\n\n[QuorX: you have ${what}. Doing it again won't change the result. Stop and think: read the error, try a different approach, or ask the user.]`;
     let keepGoing = false;
@@ -1987,11 +1993,16 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     return `The user wants the plan changed: "${clip(String(ans.text || ''), 1000)}". Call plan again with the changed plan; they will read it and decide again. Change no files before they say Go ahead.`;
   }
   // Tools that change the project (PLAN_GATED) wait for the plan's Go ahead ('always': from the start; 'big': once a plan is shown).
-  function gateRefusal(name) {
+  // A shell line that only reads (Get-Process, git status, dir) is a look-up, not a change: it runs before the plan.
+  async function gateRefusal(name, args) {
     if (planFirst === 'off' || !PLAN_GATED.has(name) || run.planGate === 'approved') return null;
+    if (name === 'shell' && args?.command && !args.background && run.planGate !== 'stopped') {
+      const d = await decideCommand(String(args.command), { shell: SF.shell, root, cwd: root, env: childEnv(), rules: commandRules(), added: writeFolders(), mode: S.approval, yolo: yoloOf(SF) }).catch(() => null);
+      if (d?.verdict === 'allow' && d.segments.length && d.segments.every((x) => x.cls === 'read')) return null;
+    }
     if (run.planGate === 'stopped') return 'Refused: the user said Stop here at the plan. Change nothing; end your reply with a short summary.';
     if (run.planGate === 'waiting' || run.planGate === 'changes') return 'Refused: the user has not said Go ahead to the plan yet. Call plan with the (changed) plan and wait for their answer.';
-    if (planFirst === 'always') return 'Refused: plan first (the user\'s setting). Call plan with your plan; the user says Go ahead before files change or commands run.';
+    if (planFirst === 'always') return 'Refused: plan first (the user\'s setting). Call plan with your plan; the user says Go ahead before files change or commands run. Commands that only read (listing, Get-Process, git status) run without it.';
     return null; // 'big' with no plan shown: a small fix may go ahead
   }
 
@@ -2779,7 +2790,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   async function runTool(name, args, step) {
     emit({ t: 'tool', step, name, args: name === 'write_artifact' ? { ...args, html: `(${String(args.html || '').length} chars)`, ...(args.markdown ? { markdown: `(${String(args.markdown).length} chars)` } : {}) } : args, at: at() });
     if (['write_artifact', 'read_artifact', 'edit_artifact'].includes(name) && !T.artifacts.on) return 'Error: artifacts are switched off by the user.';
-    const gated = gateRefusal(name); if (gated) return gated;
+    const gated = await gateRefusal(name, args); if (gated) return gated;
     // The harness's own trim note ("[N characters written earlier; removed …]") stands in for content the agent wrote
     // earlier; copied back into a file it breaks it (it did: a SyntaxError in a real build). Never written to disk.
     // The stand-ins for hidden secrets are not the secrets: written into a file, they would replace the real values.
@@ -2916,7 +2927,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
 
   async function decide(args, step) {
     // Small models often send open questions as yes/no; bounce those back with the fix instead of wasting a call.
-    const open = (Array.isArray(args.questions) ? args.questions : []).filter((q) => q?.type === 'noul' && /^\s*(what|which|how|where|who|when|why)/i.test(String(q.ask || '')));
+    const open = (Array.isArray(args.questions) ? args.questions : []).filter((q) => q?.type === 'noul' && /^\s*(what|which|how|where|who|when|why)\b/i.test(String(q.ask || '')));
     if (open.length) return `Not asked: ${open.map((q) => `"${clip(q.ask, 80)}"`).join(', ')} ${open.length > 1 ? 'are open questions' : 'is an open question'}, but noul is only for yes/no statements. Use type "choice" with options instead, e.g. {"type":"choice","ask":"What shape is shown?","options":["circle","square","triangle","other"]}, or rewrite it as a statement ("The shape is a circle").`;
     const round = ++stats.decide.calls;
     const questions = normalizeQuestions(args.questions, round);
@@ -2927,7 +2938,13 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     // Measured: confident agent notes pulled the deciders to P=0.77 for a misread answer; labelled
     // as unverified, with this rule, the same deciders gave it P=0.04.
     // Images the agent named; if it named none, the user's attached images go along automatically.
-    const pics = await decideImages(Array.isArray(args.images) && args.images.length ? args.images : attachedImages.map((_, i) => `attached:${i + 1}`));
+    let pics = await decideImages(Array.isArray(args.images) && args.images.length ? args.images : attachedImages.map((_, i) => `attached:${i + 1}`));
+    // A question about what is on screen with no picture: the deciders would answer from the words alone (they said
+    // 86% yes to tiles they never saw). The last desktop picture goes along, or the call is refused.
+    if (!pics.length && SEEN_WORDS.test(`${args.state || ''} ${JSON.stringify(args.questions || [])}`)) {
+      if (run.lastDeskShot) pics = [run.lastDeskShot];
+      else return 'Error: these questions are about what is on screen, but no picture was given. Take a screenshot first (desktop screenshot, or the browser), then pass it in images ("desktop:<app or job>", "screenshot", "file:<path>").';
+    }
     const textState = { user_message_verbatim: clip(userText, 2000), ...(notes && notes !== userText ? {
       agent_notes_unverified: clip(notes, 1500),
       rule: 'The user message is the ground truth. The agent notes may misread it; where they conflict, follow the user message exactly as written.',
@@ -3144,7 +3161,9 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       if (Array.isArray(args.steps)) return await desktopSteps(args);
       const act = String(args.action || ''), job = String(args.job || '');
       // The user's own apps need 🖥 Computer use on in this chat; the agent's own programs (a job) don't.
-      const appsOff = !S.appsAccess || !req.chatId ? 'Error: computer use is off in this chat. The user can turn it on with the 🖥 button next to the message box; then open apps with desktop open.' : '';
+      // Off, the user is asked once in the reply to turn it on (a card, like switching on paid media).
+      const needsApps = act === 'open' || act === 'running' || !!String(args.app ?? '').trim();
+      const appsOff = needsApps && !(await askAppsOn()) ? `Error: computer use is off in this chat${run.appsAsked ? ' and the user kept it off' : ''}. The user can turn it on with the 🖥 button next to the message box; then open apps with desktop open.` : '';
       if (act === 'open') return appsOff || await openApp(args);
       if (act === 'running') return appsOff || await runningApps();
       // What it acts on: an app this chat opened by name, or a background job that runs the agent's own program.
@@ -3161,6 +3180,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         scope = { app };
       } else if (!job) return 'Error: give app (an installed app you opened with open) or job (a background job running your own program).';
       const who = typeof scope === 'object' ? scope.app.name : job;
+      run.lastDesk = who; run.lastSurface = 'desktop'; // look with no target looks here
       // A program paused at a breakpoint can't answer for its windows: say where it stopped instead of waiting on it.
       const paused = async (wait) => { if (typeof scope === 'object') return ''; const p = await debugPausedIn(job, wait); return p ? `The app is paused at a breakpoint (debug session ${p.id}, ${p.at}), so its window can't respond: use debug state and eval, then debug continue.` : ''; };
       // The controls last read in each window, so a click can be named before it happens (refs change with each read).
@@ -3192,11 +3212,16 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         const img = await windowShot(scope, args.window);
         emit({ t: 'screenshot', action: 'desktop', target: `desktop:${who}`, url: '', image: img, at: at() });
         if (seesImages) run.visionShot = img; // a model that sees pictures gets it with its next turn
+        run.lastDeskShot = img;
         // Saved in the agent's scratch folder too, so the deciders can look at it (apps whose controls can't be read, such as tkinter).
-        const rel = `${SCRATCH}/shots/${who.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${(run.shotSeq = (run.shotSeq || 0) + 1)}.png`;
+        // Named by reply too, so the next reply's pictures don't replace this one's.
+        const rel = `${SCRATCH}/shots/${who.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${String(runId).slice(-5)}-${(run.shotSeq = (run.shotSeq || 0) + 1)}.png`;
         try { fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true }); fs.writeFileSync(path.join(root, rel), Buffer.from(img.split(',')[1], 'base64')); } catch { return 'Screenshot taken; the user sees it in the trace. Read the window for its controls as text.'; }
         const via = shotVia(), how = via && via !== 'window' ? ` Taken from the ${via}.` : '';
-        return `Screenshot taken${how}; the user sees it in the trace. Saved as ${rel}: to check what it shows (text, layout, a result), call decide with images ["file:${rel}"]. Read the window for its controls as text.`;
+        // A model that can't see pictures worked every look through yes/no questions: its words come from read_text,
+        // and the user hears once that a model that sees would do better here.
+        if (!seesImages && !run.blindNote) { run.blindNote = true; emit({ t: 'note', level: 'info', msg: `${short(setup.model)} can't see pictures, so it reads the window's words (read_text) and asks the deciders about the rest. For work in apps, a model that sees pictures does better.`, at: at() }); }
+        return `Screenshot taken${how}; the user sees it in the trace. Saved as ${rel}: to check what it shows (text, layout, a result), call decide with images ["file:${rel}"]. Read the window for its controls as text${seesImages ? '' : ', and use read_text for the words in its picture (you don\'t see pictures yourself)'}.`;
       }
       if (act === 'close') { const did = await closeWindow(scope, args.window); return `${did}.`; }
       // The rest act like a person with a mouse and keyboard, on a control [ref] or at window pixels x,y (the same
@@ -3243,6 +3268,7 @@ ${r.text || '(no text found)'}`;
         const img = await zoomWindow(scope, args.window, args.x, args.y, args.width, args.height);
         emit({ t: 'screenshot', action: 'desktop', target: `desktop:${who}`, url: '', image: img, at: at() });
         if (seesImages) run.visionShot = img;
+        run.lastDeskShot = img;
         return `Zoomed in on ${args.width || 200}x${args.height || 200} at ${args.x || 0},${args.y || 0}; ${seesImages ? 'you see it now' : 'check what it shows with decide and images ["desktop:' + who + '"] or read the window'}. Its points are still window pixels from the window's top-left corner.`;
       }
       return 'Error: unknown desktop action.';
@@ -3547,7 +3573,7 @@ ${r.text || '(no text found)'}`;
     }
     emit({ t: 'approval_done', id: card.id, ...ans, at: at() });
     aud({ kind: ans.approve ? 'approved' : 'declined', command: line, by: ans.by || 'user', reason: ans.reason || undefined });
-    if (!ans.approve) return { ok: false, text: declined('shell', ans) };
+    if (!ans.approve) return { ok: false, text: declined('shell', ans) + desktopWay(line) };
     // Running because nobody answered is not a yes: the same line asks again next time.
     if (!hook && ans.by !== 'timeout') approvedLines.add(sameLine);
     return { ok: true, by: ans.by === 'timeout' ? 'timeout' : 'you' };
@@ -3936,6 +3962,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
   }
   function browserTool(args, o = {}) { return untilStopped(browserToolRun(args, o)); }
   async function browserToolRun(args, o = {}) {
+    run.lastSurface = 'browser';
     if (Array.isArray(args.steps) && args.steps.length) return browserSteps(args.steps, o);
     if (args.action === 'handoff') return handoff(args);
     // The same failed click, key or typing a second time is refused: the Discord run pressed Control+K four times.
@@ -3971,10 +3998,14 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
   async function desktopSteps(args) {
     const list = args.steps.slice(0, 8), lines = [];
     let last = '';
+    // Each step acts on the app or job the call names, or the one the step before named (models put app on the
+    // first step only, or open the app as a step).
+    let on = { app: args.app, job: args.job, window: args.window };
     for (const [i, s] of list.entries()) {
       if (signal.aborted) throw new Error('Stopped.');
-      if (!s || typeof s !== 'object' || Array.isArray(s.steps) || !s.action || s.action === 'open') { last = `Error: step ${i + 1} is not a desktop action (open goes in a call of its own).`; lines.push(`${i + 1}. ${last}`); break; }
-      const step = { app: args.app, job: args.job, window: args.window, ...s, quietStep: i < list.length - 1 };
+      if (!s || typeof s !== 'object' || Array.isArray(s.steps) || !s.action) { last = `Error: step ${i + 1} is not a desktop action.`; lines.push(`${i + 1}. ${last}`); break; }
+      if (s.app || s.job) on = { app: s.app, job: s.job, window: s.window };
+      const step = { ...on, ...s, quietStep: i < list.length - 1 };
       delete step.steps;
       last = String(await codeTool('desktop', step));
       lines.push(`${i + 1}. ${s.action}${s.ref ? ` [${s.ref}]` : s.x != null ? ` at ${s.x},${s.y}` : ''}${s.text ? ` "${clip(s.text, 40)}"` : s.keys ? ` ${clip(s.keys, 30)}` : ''}: ${clip(last.split('\n')[0], 160)}`);
@@ -4101,12 +4132,17 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     const host = hostOf(lent.tab.url) || 'the page';
     if (args.action === 'open' && /^https?:\/\//i.test(String(args.target || ''))) { const okd = await siteAllowed(hostOf(args.target)); if (okd !== true) return okd; }
     if (['click', 'press', 'type'].includes(args.action)) {
+      // A click or Enter may send what the box holds: read it first, so the card (and the user) see the words that go
+      // out, not only what the agent meant to type (a box that held "hi" once sent "hih").
+      const sends = args.action === 'click' || (args.action === 'press' && /enter/i.test(String(args.key || 'Enter')));
+      const box = sends ? await pageOpOn(lent.tab, 'value', {}).catch(() => null) : null;
+      const holds = box && !box.none && String(box.value || '').trim() ? `"${clip(box.value, 300)}"` : '';
       let risk = await lent.tab.riskOf(args).catch(() => null);
       let ro = !risk && (readOnlyAsk() || onSiteList(host, S.chromeSitesRead)) ? await typingOutsideSearch(lent.tab, args) : null;
       // ⚡ YOLO with "Act in your tabs without asking" ticked: account actions and typing in a reading request just run
       // (a password field still asks, and so does a step the deciders doubt).
       if (S.approval === 'yolo' && S.chromeYoloActs === true && (risk || ro) && !/password/i.test(risk || '')) {
-        emit({ t: 'note', level: 'info', msg: `YOLO: ran without asking in your tab on ${host}: ${risk || ro}.`, at: at() });
+        emit({ t: 'note', level: 'info', msg: `YOLO: ran without asking in your tab on ${host}: ${risk || ro}${holds ? ` (the box held ${holds})` : ''}.`, at: at() });
         risk = null; ro = null;
       }
       // A decider no never blocks on its own: it brings the step to the user like the other two.
@@ -4116,7 +4152,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
         const why = risk ? 'This acts in your own account, so only you can allow it.'
           : ro ? "Your request only reads, so QuorX asks before the agent types into your account (search boxes don't ask)."
             : `The deciders put it at ${Math.round(doubt.p * 100)}% that this serves your request, so QuorX asks you.`;
-        const card = { id: newApprovalId(), tool: 'browser', free: true, est: 0, risk: 'danger', noAlways: true, what: `In your tab on ${host}: ${what}`, why };
+        const card = { id: newApprovalId(), tool: 'browser', free: true, est: 0, risk: 'danger', noAlways: true, what: `In your tab on ${host}: ${what}${holds ? ` · the box holds ${holds}` : ''}`, why };
         const ans = await askUser(card);
         // The answer closes the card in the page (without it the card stayed open after Allow once).
         emit({ t: 'approval_done', id: card.id, ...ans, at: at() });
@@ -4400,7 +4436,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
   // desktop:<app or job> in look and decide: a window of an app this chat may use, or of the agent's own program.
   function desktopScope(name) {
     const n = String(name || '').trim();
-    if (/^bgd+$/i.test(n)) return n;
+    if (/^bg\d+$/i.test(n)) return n;
     if (!S.appsAccess || !req.chatId) return 'Error: computer use is off in this chat. The user can turn it on with the 🖥 button next to the message box.';
     const app = chatApps.get(n.toLowerCase());
     return app ? { app } : `Error: "${n}" isn't open for this chat yet: call desktop open with app: "${n}" first.`;
@@ -4408,7 +4444,8 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
   async function look(args, step) {
     let t, image;
     // A window on the desktop: desktop:Calculator (an app this chat may use) or desktop:bg1 (the agent's own program).
-    const deskName = String(args.target || '').trim().match(/^desktop:(.+)$/i)?.[1];
+    // No target after desktop work (the last thing used): the last desktop window, not an empty browser tab.
+    const deskName = String(args.target || '').trim().match(/^desktop:(.+)$/i)?.[1] || (!args.target && !(onLent && lent) && run.lastSurface === 'desktop' ? run.lastDesk : undefined);
     const desk = deskName ? desktopScope(deskName) : null;
     if (typeof desk === 'string' && desk.startsWith('Error')) return desk;
     if (desk) {
@@ -4429,7 +4466,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
       if (tt.url === 'about:blank') return null;
       t = tt; return tt.screenshot();
     });
-    if (!shot) return theirs ? "Error: no screenshot of the user's tab came back (Chrome may not be drawing the window while it is behind others or minimised). Read the page report instead, or ask the user to bring the window forward." : 'Nothing is open: give a target, or open one with the browser first (a new tab starts empty).';
+    if (!shot) return theirs ? "Error: no screenshot of the user's tab came back (Chrome may not be drawing the window while it is behind others or minimised). Read the page report instead, or ask the user to bring the window forward." : `Nothing is open: give a target, or open one with the browser first (a new tab starts empty).${run.lastDesk ? ` For the desktop window, target "desktop:${run.lastDesk}".` : process.platform === 'win32' ? ' For a window on the desktop, target "desktop:<app or job>".' : ''}`;
     image = shot;
     const round = ++stats.decide.calls;
     const questions = normalizeQuestions((Array.isArray(args.checks) ? args.checks : []).map((c) => ({ ...c, type: 'noul' })), round);
@@ -4551,6 +4588,23 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
   // enable_media: one card to switch on paid tools that are off in this chat, each with its model to pick. Strict waits
   // for the user; ⚡ YOLO waits its usual time, then switches on (switching on spends nothing; every call is still
   // priced and approved, and the budget caps apply).
+  // 🖥 Computer use off in this chat: one card per reply asks to turn it on. No answer (⚡ YOLO's wait) keeps it off:
+  // using the user's own apps is theirs to switch on.
+  async function askAppsOn() {
+    if (S.appsAccess && req.chatId) return true;
+    if (!req.chatId || process.platform !== 'win32' || run.appsAsked) return false;
+    run.appsAsked = true;
+    const card = { id: newApprovalId(), tool: 'computer_use', free: true, est: 0, what: 'Turn on 🖥 Computer use for this chat',
+      why: 'The agent wants to use apps on this computer. Each app still asks you once, at a level you can change under the 🖥 button.', yes: 'Turn on', no: 'Keep it off', noAlways: true };
+    const waitMs = S.approval === 'yolo' ? yoloWait() : 0;
+    const ans = await askUser({ ...card, mode: 'strict' }, waitMs ? { ms: waitMs, then: 'keep off', onTimeout: () => ({ approve: false, by: 'timeout', reason: 'No answer, so computer use stays off' }) } : null);
+    emit({ t: 'approval_done', id: card.id, ...ans, at: at() });
+    if (!ans.approve) return false;
+    S.appsAccess = true;
+    emit({ t: 'tools_on', kinds: ['apps'], at: at() });
+    return true;
+  }
+
   // ---------- folders outside the project (added to the chat by the user, one card each) ----------
   async function folderTool(name, args, abs) {
     const writes = ['write_file', 'append_file', 'edit_file', 'delete_file'].includes(name), need = writes ? 'write' : 'read';
@@ -4624,6 +4678,16 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
 
   // desktop open: an installed app by its Start-menu name. Its open window is used again when it has one; otherwise it
   // starts through Explorer, outside QuorX, so it stays open after the reply (and after QuorX) for later steps and chats.
+  // A shell line that wasn't run but has a desktop way: starting an installed program (Start-Process "…\App.exe"),
+  // or a scratch script that reads text from a picture or brings a window forward. Those asked the user and timed out
+  // in YOLO; desktop open and read_text don't need a script.
+  function desktopWay(line) {
+    if (process.platform !== 'win32' || !req.chatId) return '';
+    const exe = /(?:start-process\s+(?:-filepath\s+)?|^\s*&\s*|start\s+"[^"]*"\s+)["']?([a-z]:\\[^"'\n]+?\.exe)/i.exec(line)?.[1];
+    if (exe) return `\nTo start an installed program, use desktop open with app: "${exe}" (it asks the user once per chat, then acts in its windows).`;
+    if (/\b(ocr|front|focus|screenshot|window)\w*\.ps1\b/i.test(line)) return '\nThe desktop tool does this without a script: read_text reads the words in a window\'s picture, focus brings it forward, screenshot takes its picture.';
+    return '';
+  }
   async function openApp(args) {
     if (process.platform !== 'win32') return 'Error: desktop open works on Windows for now. Here, start the app with shell and background: true.';
     const want = String(args.app || '').trim();

@@ -69,7 +69,7 @@ const BUCKET = {
   unclear: ['deciders unsure', 'The deciders could not settle it (low confidence).'],
   unmatched: ['guess unclear', 'The agent\'s guess did not match any option, so it can\'t be compared.'],
 };
-const TOOL_NAME = { folder: '📁 A folder outside the project', remember: '📌 Remember this in every chat', media_plan: '🎞 Production plan', enable_media: '🧰 Switch on paid tools', imagine: '🖼 Make a picture', make_video: '🎬 Make a video', compose_music: '🎵 Compose music', speak: '🗣 Speak aloud',
+const TOOL_NAME = { computer_use: '🖥 Computer use', folder: '📁 A folder outside the project', remember: '📌 Remember this in every chat', media_plan: '🎞 Production plan', enable_media: '🧰 Switch on paid tools', imagine: '🖼 Make a picture', make_video: '🎬 Make a video', compose_music: '🎵 Compose music', speak: '🗣 Speak aloud',
   write_artifact: '📄 Write a page', edit_artifact: '✏️ Edit a page', read_artifact: '👀 Read a page', decide: '⚖️ Ask the deciders',
   list_files: '🗂 List files', read_file: '👀 Read a file', write_file: '📝 Write a file', append_file: '📝 Append to a file', edit_file: '✏️ Edit a file',
   search_docs: '🔎 Search the attached documents', read_doc: '📄 Read an attached document', list_docs: '📎 List attached documents',
@@ -4023,7 +4023,7 @@ function traceHTML(m) {
       if (i >= 0) out[i] = out[i].replace(`<span class="sub" data-llm="${e.step}"></span>`, `<div class="sub">${secs(e.ms)} · <span class="tok-out">${e.tokensOut} tokens out</span> · ${money(e.cost, 5)}${e.provider ? ` · via <span class="tr-prov" title="The provider OpenRouter routed this call to">${esc(e.provider)}</span>` : ''}${e.model && e.model !== m.trace.find((x) => x.t === 'llm_start' && x.step === e.step)?.model ? ` · <b class="tr-fallback" title="The chat's model was unavailable, so OpenRouter used the fallback model">fallback ${esc(short(e.model))}</b>` : ''}${e.toolCalls.length ? ` · then ${e.toolCalls.join(', ')}` : ''}</div>${e.aside ? `<div class="aside">💬 ${esc(e.aside)}</div>` : ''}`);
     } else if (e.t === 'tool' && e.name !== 'decide') row(e.at, `${e.by === 'reviewer' ? '🧪 <span class="tr-rv">reviewer</span> ' : e.by === 'helper' ? `🤝 <span class="tr-hp">helper ${e.helper || ''}</span> ` : ''}${TOOL_NAME[e.name]?.split(' ')[0] || '🔧'} <b>${esc(e.name)}</b><div class="sub">${esc(argSummary(e))}</div>`, e.by === 'reviewer' ? 'browser' : 'tool');
     else if (e.t === 'reading') row(e.at, `📝 <b>Prompt enhancer</b> ${esc(short(e.model))} read the request${e.late ? ' (too late for the first step; the deciders still use it)' : ''} · ${secs(e.ms)} · ${money(e.cost, 5)}<div class="sub" style="white-space:pre-wrap">${linkUrls(esc(e.text))}</div>`, 'note');
-    else if (e.t === 'tools_on') row(e.at, `🧰 Switched on for this chat: ${(e.kinds || []).map((k) => esc({ image: 'pictures', video: 'video clips', music: 'music', speech: 'voice' }[k] || k)).join(', ')}${Object.keys(e.models || {}).length ? ` · ${Object.entries(e.models).map(([k, mm]) => `${esc(k)}: ${esc(short(mm))}`).join(', ')}` : ''}`, 'note');
+    else if (e.t === 'tools_on') row(e.at, `🧰 Switched on for this chat: ${(e.kinds || []).map((k) => esc({ image: 'pictures', video: 'video clips', music: 'music', speech: 'voice', apps: '🖥 computer use' }[k] || k)).join(', ')}${Object.keys(e.models || {}).length ? ` · ${Object.entries(e.models).map(([k, mm]) => `${esc(k)}: ${esc(short(mm))}`).join(', ')}` : ''}`, 'note');
     else if (e.t === 'video_mode') row(e.at, e.on ? `🎬 <b>Video Mode</b> on${e.skills?.length ? ` · loaded ${e.skills.map(esc).join(', ')}` : ''}<div class="sub">Brief, story and storyboard come before anything is spent${e.first ? '' : ' (the brief was settled earlier in this chat)'}.</div>` : '🎬 Video Mode off: you said this is not a film', 'note');
     else if (e.t === 'reading_edit') row(e.at, e.text ? `📝 You corrected the reading<div class="sub" style="white-space:pre-wrap">${esc(e.text)}</div>` : '📝 You dropped the reading', 'note');
     else if (e.t === 'fresh_eyes_start') row(e.at, `👀 <b>Fresh eyes</b> ${esc(short(e.model))}: a problem came back, so a clean-context model takes a look<div class="sub">${(e.problems || []).map(esc).join('<br>')}</div>`, 'note');
@@ -4786,7 +4786,7 @@ async function followRun(c, m, open) {
         if (e.t === 'interrupted') { m.error = 'The harness restarted while this reply was running.'; m.resumable = !!e.resumable; }
         if (e.t === 'compacted') { a.summary = e.summary; a.summaryAt = e.cutoffAt; }
         // You switched paid tools on from the agent's card: they stay on for this chat (its 🧰 Tools menu shows them).
-        if (e.t === 'tools_on') { for (const k of e.kinds || []) if (CHAT_TOOLS.includes(k)) c.tools[k] = true; saveChat(c); renderToolbars(); }
+        if (e.t === 'tools_on') { for (const k of e.kinds || []) if (CHAT_TOOLS.includes(k) || k === 'apps') c.tools[k] = true; if ((e.kinds || []).includes('apps')) renderComposerBar(c); saveChat(c); renderToolbars(); }
         if (e.t === 'video_mode') {
           const u = a.messages[a.messages.indexOf(m) - 1];
           if (e.on) a.videoMode = 'on';

@@ -458,11 +458,21 @@ export async function openTab({ chatId, cdpPort, own = false, attachTab, extTab 
       await settle(); // an anchor link may scroll smoothly; the next screenshot should show where it lands
       return `clicked ${pt.what}${pt.others ? ` (${pt.others} other element${pt.others > 1 ? 's' : ''} also match; use a ref to be exact)` : ''}`;
     },
-    async type({ ref, selector, text }) {
-      if (ref || selector) { const f = await op('focus', { ref, selector }); if (f.err) throw new Error(f.err); }
-      await send('Input.insertText', { text: String(text ?? '') });
+    // Typing into a ref replaces what the field holds (append: add to it), then reads the field back: a box that
+    // already held "hi" once sent "hih".
+    async type({ ref, selector, text, append }) {
+      const want = String(text ?? '');
+      let was = null;
+      if (ref || selector) { const f = await op('focus', { ref, selector, select: !append }); if (f.err) throw new Error(f.err); was = f.was ?? null; }
+      await send('Input.insertText', { text: want });
       await sleep(200);
-      return `typed ${String(text).length} characters`;
+      const now = await op('value', {}).catch(() => null);
+      const before = was ? ` (it held "${was.length > 80 ? `${was.slice(0, 80)}…` : was}" before${append ? '' : ', replaced'})` : '';
+      if (!now || now.none) return `typed ${want.length} characters${before}`;
+      const expect = append && was ? was + want : want;
+      const shown = now.value.length > 200 ? `${now.value.slice(0, 200)}…` : now.value;
+      if (now.value.trim() === expect.trim() || (!ref && !selector && now.value.includes(want))) return `typed ${want.length} characters${before}; the field now holds "${shown}"`;
+      return `typed ${want.length} characters${before}, but the field now holds "${shown}", not what you meant. Fix it before sending: type again with the whole text (it replaces), or press Backspace.`;
     },
     async press(combo) {
       // A real keyboard event: key (what was typed), code (which physical key) and the key code. Pages check any of

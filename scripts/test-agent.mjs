@@ -2717,7 +2717,7 @@ test('✨ Enhance rewrites a draft with the given model, sees earlier turns, and
 test('a tab the user lends works only through target "given", asks before Send or a password, and stops when taken back', { skip: !(await import('../server/browser.js')).browserPath() && 'no Chromium browser installed' }, async () => {
   const http = await import('node:http');
   const { userBrowse, giveTab, takeBackTab } = await import('../server/userbrowser.js');
-  const page = '<!doctype html><meta charset="utf-8"><title>Inbox</title><a href="#more" id="more">Read more</a><button id="send" aria-label="Send">➤</button><form><input id="pw" type="password"></form>';
+  const page = '<!doctype html><meta charset="utf-8"><title>Inbox</title><a href="#more" id="more">Read more</a><button id="send" aria-label="Send">➤</button><form><input id="pw" type="password"></form><textarea id="msg" aria-label="Message">hi hih</textarea>';
   const srv = http.createServer((_q, r) => { r.writeHead(200, { 'Content-Type': 'text/html' }); r.end(page); });
   await new Promise((ok) => srv.listen(0, '127.0.0.1', ok));
   const sid = `usertab${Date.now().toString(36)}`, chatId = `chat-${Date.now().toString(36)}`;
@@ -2729,7 +2729,7 @@ test('a tab the user lends works only through target "given", asks before Send o
       if (i === 5) takeBackTab(chatId);
       return [
         reply('', [['browser', { action: 'open', target: 'given' }]]),
-        reply('', [['browser', { action: 'click', text: 'Read more' }]]),
+        reply('', [['browser', { action: 'click', selector: '#msg' }]]),
         reply('', [['browser', { action: 'click', selector: '#send' }]]),
         reply('', [['browser', { action: 'type', selector: '#pw', text: 'x' }]]),
         reply('', [['browser', { action: 'scroll', dy: 100 }]]),
@@ -2740,11 +2740,11 @@ test('a tab the user lends works only through target "given", asks before Send o
     assert.match(String(bodies[0].messages.at(-1).content), /given you one of their own browser tabs for this chat: "Inbox"/);
     const res = toolResults(bodies.at(-1)).map(String);
     assert.match(res[0], /You are in the user's own tab \("Inbox"\)/);
-    assert.match(res[1], /clicked link "Read more"/);
+    assert.match(res[1], /clicked textbox "Message"/);
     assert.match(res[2], /The user said no to that \(click "➤ · Send"\)/);
     assert.match(res[3], /typed 1 characters/);
     assert.match(res[5], /took their tab back/);
-    assert.deepEqual(asked.map((w) => w.replace(/^In your tab on \S+: /, '')), ['click "➤ · Send"', 'type into a password field']);
+    assert.deepEqual(asked.map((w) => w.replace(/^In your tab on \S+: /, '')), ['click "➤ · Send" · the box holds "hi hih"', 'type into a password field'], 'the card shows the words that would go out');
     // Each card is closed in the page once answered (it stayed open after Allow once before).
     const shown = events.filter((e) => e.t === 'approval' && e.tool === 'browser').map((e) => e.id);
     const closed = events.filter((e) => e.t === 'approval_done').map((e) => e.id);

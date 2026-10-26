@@ -101,6 +101,7 @@ const PS_VERBS = new Set(['add', 'clear', 'close', 'copy', 'enter', 'exit', 'fin
 // PowerShell verbs that only read, compute or print.
 const SAFE_VERBS = new Set(['get', 'test', 'select', 'measure', 'compare', 'find', 'resolve', 'join', 'split', 'sort', 'group', 'where', 'foreach',
   'show', 'read', 'convertto', 'convertfrom', 'format', 'out', 'write', 'trace', 'search', 'watch', 'wait', 'confirm', 'debug']);
+const READ_VERBS = new Set(['get', 'test', 'select', 'measure', 'compare', 'resolve', 'sort', 'group', 'where', 'convertto', 'convertfrom', 'format', 'split', 'join']);
 // Read-only uses of programs that are otherwise never allowed.
 const NEVER_READ = { systemctl: ['status', 'is-active', 'is-enabled', 'list-units', 'show', 'cat'], launchctl: ['list', 'print', 'blame'], crontab: ['-l'],
   diskutil: ['list', 'info'], route: ['print'], spctl: ['--assess', '-a', '--status'], sysctl: ['-n', '-a', 'hw.ncpu', 'hw.memsize'], csrutil: ['status'] };
@@ -308,7 +309,7 @@ const READ_ONLY_METHODS = new Set(['substring', 'indexof', 'lastindexof', 'index
   'compareto', 'normalize', 'gettype', 'replace']);
 const READ_ONLY_STATIC = /\[(?:system\.)?math\]::(?:min|max|round|floor|ceiling|abs|pow|sqrt|truncate|sign)\s*\(|\[(?:system\.)?string\]::(?:join|isnullorempty|isnullorwhitespace|format|concat|equals|compare)\s*\(|\[(?:(?:system\.)?text\.regularexpressions\.)?regex\]::(?:matches|match|ismatch|escape|unescape|split|replace)\s*\(|\[(?:system\.)?(?:int|int32|int64|long|double|decimal|bool|boolean|datetime|timespan|guid|version)\]::(?:parse|tryparse|parseexact|compare)\s*\(|\[(?:system\.)?(?:io\.)?path\]::(?:getfilename|getfilenamewithoutextension|getextension|getdirectoryname|combine|join|hasextension|isrooted|changeextension)\s*\(|\[(?:system\.)?convert\]::(?:toint32|toint64|todouble|tostring|toboolean|tobase64string|frombase64string)\s*\(/gi;
 // Read-only static values ([datetime]::Now, [Environment]::NewLine…), dropped before the check like the calls above.
-const READ_ONLY_VALUES = /\[(?:system\.)?(?:datetime|datetimeoffset)\]::(?:now|utcnow|today)|\[(?:system\.)?environment\]::newline|\[(?:system\.)?(?:int|int32|int64|double)\]::(?:maxvalue|minvalue)|\[(?:system\.)?string\]::empty/gi;
+const READ_ONLY_VALUES = /\[(?:system\.)?(?:datetime|datetimeoffset)\]::(?:now|utcnow|today)\b|\[(?:system\.)?environment\]::newline\b|\[(?:system\.)?(?:int|int32|int64|double)\]::(?:maxvalue|minvalue)\b|\[(?:system\.)?string\]::empty\b/gi;
 const STRING_PROPS = /\.(?:fullname|name|basename|extension|directoryname|line|path|text|value|filename)\s*\.replace\s*\($/i;
 export function readOnlyMember(text) {
   const raw = String(text).replace(READ_ONLY_VALUES, '0');
@@ -745,6 +746,9 @@ function classify(s, shell) {
   // A PowerShell cmdlet QuorX doesn't know whose verb can change things (Stop-, Set-, Disable-…): the deciders vote even at Open.
   const verb = /^([a-z]+)-[a-z]/.exec(p)?.[1];
   if (verb && PS_VERBS.has(verb) && !SAFE_VERBS.has(verb)) return { cls: 'unknown', why: `${s.rawProgram} is a PowerShell command QuorX doesn’t know, and ${verb} can change your system` };
+  // Verbs that only look (Get-NetTCPConnection, Test-Path, Measure-Object): reads, like the cmdlets QuorX knows by name.
+  // Get-Credential asks for a password, so it isn't one.
+  if (verb && READ_VERBS.has(verb) && p !== 'get-credential') return { cls: 'read', why: '' };
   return { cls: 'unknown', why: '' };
 }
 

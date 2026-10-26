@@ -1162,6 +1162,22 @@ test('loops: in Strict the user can say keep going, and it is not checked again'
   assert.equal(events.filter((e) => e.t === 'loop').length, 2);
   assert.equal(bodies.length, 13, 'it ran to the end');
 });
+
+test('look with no target right after desktop work looks at that window, not an empty browser tab', async () => {
+  const { bodies } = await agentRun((b, i) => [
+    reply('', [['desktop', { action: 'read', job: 'bg98' }]]),
+    reply('', [['look', { checks: [{ ask: 'The window shows a number', my_guess: 'yes', my_confidence: 0.5 }] }]]),
+    reply('OK.'),
+  ][i]);
+  assert.match(toolOut(bodies, 2), /bg98/, toolOut(bodies, 2));
+  assert.doesNotMatch(toolOut(bodies, 2), /Nothing is open/);
+});
+
+test('loops: a tool that repeats by nature (the browser, look) is caught on the same failing call twice in a row', async () => {
+  const { bodies, events } = await agentRun((b, i) => (i < 6 ? reply('', [['look', { target: 'desktop:bg99' }]]) : reply('Stuck.')), { settings: { approval: 'yolo' } });
+  assert.match(toolOut(bodies, 2), /made the same failing look call twice in a row/, toolOut(bodies, 2));
+  assert.ok(events.some((e) => e.t === 'loop'));
+});
 // ---------- the agent's terminal and desktop apps (P1) ----------
 const allow = (d, match) => { fs.mkdirSync(path.join(d, '.quorx'), { recursive: true }); saveRules('project', [{ effect: 'allow', match, by: 'user' }], d); };
 
@@ -1640,9 +1656,12 @@ test('computer use: each app starts at its kind’s level; some are never used',
 });
 
 test('computer use: off in a chat, the user’s apps are out of reach; on, each app is held to its level', async () => {
-  const off = await agentRun((b, i) => [reply('', [['desktop', { action: 'open', app: 'Calculator' }]]), reply('', [['desktop', { action: 'read', app: 'Calculator' }]]), reply('OK.')][i], { chatId: 'apps-off' });
-  assert.match(toolOut(off.bodies, 1), /computer use is off in this chat/);
+  let cards = 0;
+  const off = await agentRun((b, i) => [reply('', [['desktop', { action: 'open', app: 'Calculator' }]]), reply('', [['desktop', { action: 'read', app: 'Calculator' }]]), reply('OK.')][i], { chatId: 'apps-off',
+    onEvent: (e, id) => { if (e.t === 'approval' && e.tool === 'computer_use') { cards++; setTimeout(() => answerApproval(id, e.id, { approve: false }), 10); } } });
+  assert.match(toolOut(off.bodies, 1), /computer use is off in this chat and the user kept it off/);
   assert.match(toolOut(off.bodies, 2), /computer use is off in this chat/);
+  if (WIN) assert.equal(cards, 1, 'one card per reply');
   const apps = [{ name: 'Calculator', appId: 'Microsoft.WindowsCalculator_8wekyb3d8bbwe!App', level: 'view' }, { name: 'Visual Studio Code', appId: 'Microsoft.VisualStudioCode', level: 'click' }, { name: 'QuorX', appId: 'QuorX', level: 'full' }];
   const on = await agentRun((b, i) => [
     reply('', [['desktop', { action: 'type', app: 'Calculator', ref: 1, text: '12' }]]),
@@ -1667,6 +1686,17 @@ test('computer use: the new actions keep to each app’s level, and steps stop a
   assert.match(toolOut(bodies, 1), /look at only .* in Calculator, so scroll isn't allowed/);
   assert.match(toolOut(bodies, 2), /in Paint, so clipboard isn't allowed/);
   assert.match(toolOut(bodies, 3), /^Ran 1 of 2 steps:\n1\. hold_key: Error: .*so hold_key isn't allowed/, 'the second step never ran');
+});
+
+test('computer use: steps take the app from the step before when only the first names it', async () => {
+  const apps = [{ name: 'Calculator', appId: 'Microsoft.WindowsCalculator_8wekyb3d8bbwe!App', level: 'view' }];
+  const { bodies } = await agentRun((b, i) => [
+    reply('', [['desktop', { steps: [{ action: 'scroll', app: 'Calculator', direction: 'down' }] }]]),
+    reply('', [['desktop', { steps: [{ action: 'keys', app: 'Calculator', keys: '1' }, { action: 'type', ref: 1, text: '2' }] }]]),
+    reply('OK.'),
+  ][i], { chatId: 'apps-steps-inherit', settings: { appsAccess: true }, more: { apps } });
+  assert.match(toolOut(bodies, 1), /in Calculator, so scroll isn't allowed/, 'a step\'s own app counts');
+  assert.match(toolOut(bodies, 2), /^Ran 1 of 2 steps:\n1\. keys 1: Error: .*in Calculator, so keys isn't allowed/);
 });
 
 // Last (it starts a background job): the agent's own WinForms program, driven with the new actions in one call.
@@ -1835,6 +1865,22 @@ test('desktop: a background job\'s window survives QuorX letting go of its job (
   } finally { closeForm('QX Keep Job Form'); }
 });
 
+test('desktop screenshot: named by reply too, and a model that can\'t see is pointed to read_text (the user hears once)', { skip: !WIN }, async () => {
+  let job = null;
+  try {
+    const { bodies, events, id } = await agentRun((b, i) => {
+      if (i === 0) return reply('', [['shell', { command: 'powershell -NoProfile -ExecutionPolicy Bypass -File form.ps1', background: true }]]);
+      if (i === 1) { job = toolOut([b], 0).match(/job (bg\d+)/)[1]; return reply('', [['desktop', { action: 'screenshot', job }]]); }
+      if (i === 2) return reply('', [['desktop', { action: 'screenshot', job }]]);
+      return reply('Done.');
+    }, { prep: (d) => { fs.writeFileSync(path.join(d, 'form.ps1'), FORM('QX Shot Name Form')); allow(d, 'powershell -noprofile -executionpolicy bypass -file form.ps1*'); } });
+    const out = toolOut(bodies, 2);
+    assert.match(out, new RegExp(`Saved as \\.quorx/scratch/shots/${job}-${id.slice(-5)}-1\\.png`), out);
+    assert.match(out, /use read_text for the words in its picture/);
+    assert.equal(events.filter((e) => e.t === 'note' && /can't see pictures/.test(e.msg)).length, 1, 'said once per reply');
+  } finally { closeForm('QX Shot Name Form'); }
+});
+
 test('desktop open: app names match loosely (spaces, case, version numbers)', { skip: !WIN || !!process.env.CI }, async () => {
   const { findApps } = await import('../server/uia.js');
   for (const n of ['Calculator', 'calculator', 'Calcu lator', 'CALCULATOR 11.2']) assert.equal((await findApps(n))[0]?.name, 'Calculator', n);
@@ -1846,4 +1892,49 @@ test('computer use: the chat\'s saved apps count even when the page sends none',
   saveChat(chatId, { id: chatId, title: 't', projectId: 'scratch', agent: { messages: [], artifacts: {}, apps: [{ name: 'Calculator', appId: 'Microsoft.WindowsCalculator_8wekyb3d8bbwe!App', level: 'view' }] } });
   const { bodies } = await agentRun((b, i) => [reply('', [['desktop', { action: 'type', app: 'Calculator', ref: 1, text: '1' }]]), reply('OK.')][i], { chatId, settings: { appsAccess: true }, more: { apps: [] } });
   assert.match(toolOut(bodies, 1), /look at only .* in Calculator/, 'known from the chat file, held to its level');
+});
+
+test('computer use off: one card turns it on for the chat, and the desktop call goes ahead', { skip: !WIN }, async () => {
+  const { events, bodies } = await agentRun((b, i) => [reply('', [['desktop', { action: 'type', app: 'Calculator', ref: 1, text: '1' }]]), reply('OK.')][i], { chatId: 'apps-ask-on',
+    more: { apps: [{ name: 'Calculator', appId: 'Microsoft.WindowsCalculator_8wekyb3d8bbwe!App', level: 'view' }] },
+    onEvent: (e, id) => { if (e.t === 'approval' && e.tool === 'computer_use') setTimeout(() => answerApproval(id, e.id, { approve: true }), 10); } });
+  assert.ok(events.some((e) => e.t === 'tools_on' && e.kinds.includes('apps')), 'the page hears it is on');
+  assert.match(toolOut(bodies, 1), /look at only .* in Calculator/, 'past the switch, held to the app\'s level');
+});
+
+test('shell: a declined program start points to desktop open; a declined OCR script to read_text', { skip: !WIN }, async () => {
+  const { bodies } = await agentRun((b, i) => [
+    reply('', [['shell', { command: 'Start-Process -FilePath "C:\\Windows\\System32\\notepad.exe"' }]]),
+    reply('', [['shell', { command: 'powershell -File .quorx/scratch/ocr.ps1 shot.png' }]]),
+    reply('OK.'),
+  ][i], { chatId: 'shell-desk-way', onEvent: (e, id) => { if (e.t === 'approval' && e.mode === 'strict') setTimeout(() => answerApproval(id, e.id, { approve: false }), 10); } });
+  assert.match(toolOut(bodies, 1), /use desktop open with app: "C:\\Windows\\System32\\notepad\.exe"/, toolOut(bodies, 1));
+  assert.match(toolOut(bodies, 2), /read_text reads the words/, toolOut(bodies, 2));
+});
+
+test('plan first: a shell line that only reads runs before the plan; a change waits', { skip: !WIN }, async () => {
+  const { bodies } = await agentRun((b, i) => [
+    reply('', [['shell', { command: 'Get-ChildItem' }]]),
+    reply('', [['shell', { command: 'Set-Content a.txt hi' }]]),
+    reply('OK.'),
+  ][i], { settings: { planFirst: 'always' } });
+  assert.match(toolOut(bodies, 1), /Exit code 0/);
+  assert.match(toolOut(bodies, 2), /^Refused: plan first.*Commands that only read/);
+});
+
+test('commands: unknown cmdlets with a reading verb are reads (Get-NetTCPConnection, Measure-Object); Get-Credential isn\'t', async () => {
+  for (const line of ['Get-NetTCPConnection -LocalPort 5188', 'Get-Process | Measure-Object', 'Get-AppxPackage *calc*']) {
+    const d = await decide(line, ctx({ shell: 'powershell' }));
+    assert.equal(d.verdict, 'allow', line);
+    assert.ok(d.segments.every((s) => s.cls === 'read'), line);
+  }
+  assert.notEqual((await decide('Get-Credential', ctx({ shell: 'powershell' }))).segments[0].cls, 'read');
+});
+
+test('decide: a question about the screen with no picture is refused, or takes the last desktop picture', async () => {
+  const { bodies } = await agentRun((b, i) => [
+    reply('', [['decide', { state: 'The window shows a red tile', questions: [{ type: 'noul', ask: 'The tile in the screenshot is red', my_guess: 'yes', my_confidence: 0.9 }] }]]),
+    reply('OK.'),
+  ][i]);
+  assert.match(toolOut(bodies, 1), /^Error: these questions are about what is on screen, but no picture was given/);
 });

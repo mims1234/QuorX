@@ -7,7 +7,7 @@
 
 /* eslint-disable no-restricted-globals */
 export function qxPage() {
-  const KEY = Symbol.for('quorx.ops'), VERSION = 5;
+  const KEY = Symbol.for('quorx.ops'), VERSION = 6;
   if (window[KEY] && window[KEY].v === VERSION) return;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const clean = (s, n) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim().slice(0, n);
@@ -282,13 +282,28 @@ export function qxPage() {
       await sleep(120);
     }
   }
-  function focus({ ref, selector, text }) {
+  // The text in a field: an input's value, or the words in an editable box (a chat composer).
+  const fieldText = (el) => (el && ('value' in el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) ? String(el.value) : el && el.isContentEditable ? String(el.innerText || '').replace(/\n$/, '') : null));
+  const activeField = () => { let el = document.activeElement; for (let i = 0; i < 5 && el && /^(IFRAME|FRAME)$/.test(el.tagName); i++) { try { el = el.contentDocument.activeElement; } catch (e) { break; } } return el; };
+  // select: select what the field holds, so typed text replaces it (Control+A doesn't select in every page's box).
+  function focus({ ref, selector, text, select }) {
     const got = locate({ ref, selector, text });
     if (got.err) return { err: got.err };
-    const el = got.el;
+    let el = got.el;
     try { el.scrollIntoView({ block: 'center', behavior: 'instant' }); el.focus(); } catch (e) { /* not focusable */ }
-    return { what: describe(el), focused: el.ownerDocument.activeElement === el };
+    // A ref on a wrapper: the editable box inside it.
+    if (fieldText(el) == null) { const inner = el.querySelector && el.querySelector('input, textarea, [contenteditable=""], [contenteditable="true"]'); if (inner) { try { inner.focus(); el = inner; } catch (e) { /* keep the wrapper */ } } }
+    const was = fieldText(el);
+    if (select && was) {
+      try {
+        if (typeof el.select === 'function') el.select();
+        else { const d = el.ownerDocument, r = d.createRange(); r.selectNodeContents(el); const s = d.defaultView.getSelection(); s.removeAllRanges(); s.addRange(r); }
+      } catch (e) { /* left as it is: the check after typing says so */ }
+    }
+    return { what: describe(el), focused: el.ownerDocument.activeElement === el, was };
   }
+  // What the focused field holds now (after typing).
+  function value() { const el = activeField(); const v = fieldText(el); return v == null ? { none: true } : { value: v, what: describe(el) }; }
 
   // The field a type or Enter would go into, and whether it is a search box (typing there only looks things up).
   function field({ ref, selector } = {}) {
@@ -448,7 +463,7 @@ export function qxPage() {
     return { on: true };
   }
 
-  Object.defineProperty(window, KEY, { value: { v: VERSION, ready, screenText, pageText, snapshot, find, point, focus, field, scroll, state, collect, scrollItems, summary, where, risk, mark }, configurable: true });
+  Object.defineProperty(window, KEY, { value: { v: VERSION, ready, screenText, pageText, snapshot, find, point, focus, value, field, scroll, state, collect, scrollItems, summary, where, risk, mark }, configurable: true });
 }
 
 /** A DevTools expression that runs one of the page operations above with these arguments. */
