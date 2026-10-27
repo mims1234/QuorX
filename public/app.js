@@ -184,7 +184,8 @@ async function mergeServerCopy(c, last) {
   for (const k of Object.keys(c.agent)) if (!(k in agent) && k !== 'messages' && k !== 'artifacts') delete c.agent[k];
   Object.assign(c.agent, agent);
   c.agent.artifacts = { ...artifacts };
-  if (res.ok) c.agent.messages = res.from.map(([side, i]) => (side === 'mine' ? mine[i] : server.agent.messages[i]));
+  // (A reply kept from this page can carry the server's result on it: patch.)
+  if (res.ok) c.agent.messages = res.from.map(([side, i, patch]) => (side === 'mine' ? (patch ? Object.assign(mine[i], patch) : mine[i]) : server.agent.messages[i]));
   else {
     // The server's copy, with any reply still running here kept in it.
     const msgs = server.agent.messages.slice();
@@ -3912,7 +3913,27 @@ function openTrace(c, m) {
   c.paneHidden = false;
   G.view = { id: G.view.id, src: false, files: false, trace: m.runId };
   syncLayout(); renderPane(); refreshTraceButtons();
-  loadTrace(c, m); // an older reply's steps: they draw when they arrive
+  loadTrace(c, m).then(() => repairTrace(c, m)); // an older reply's steps: they draw when they arrive
+}
+// A finished reply saved with fewer steps than it took: a save that clashed with the server's copy kept the steps of
+// the page's save mid-reply (an app allowed after the first step left 7 of 265). QuorX's own log of the run has them
+// all: they replace the short list once, and the chat is saved with them.
+const repaired = new WeakSet();
+const NOT_STEPS = new Set(['run', 'start', 'think', 'spend', 'token', 'artifact', 'server']);
+async function repairTrace(c, m) {
+  if (repaired.has(m) || !m?.runId || m.live || m.runActive || m.traceRef || !(m.stats || m.error)) return;
+  repaired.add(m);
+  const r = await fetch(`/api/runs/${encodeURIComponent(m.runId)}/log`).then((x) => x.json()).catch(() => null);
+  const all = Array.isArray(r?.events) ? r.events : [];
+  const steps = all.filter((e) => e && !NOT_STEPS.has(e.t));
+  if (steps.length <= (m.trace?.length || 0)) return;
+  m.trace = steps;
+  const thinking = {};
+  for (const e of all) if (e?.t === 'think' && e.text) thinking[e.step] = (thinking[e.step] || '') + e.text;
+  if (Object.keys(thinking).length > Object.keys(m.thinking || {}).length) m.thinking = thinking;
+  saveChat(c);
+  if (m.el?.isConnected) updateMsg(c, m);
+  if (G.view.trace === m.runId && focused() === c) renderPane();
 }
 function closeTrace() { G.traceRun = null; G.view.trace = null; syncLayout(); renderPane(); refreshTraceButtons(); }
 function refreshTraceButtons() { for (const b of document.querySelectorAll('.trace-btn')) b.classList.remove('on'); const c = focused(); const m = c?.agent.messages.find((x) => x.runId === G.traceRun); if (m?.el) $('.trace-btn', m.el)?.classList.add('on'); }
@@ -3956,6 +3977,7 @@ function renderTracePane(c, m) {
 const REPLAY_MARK = new Set(['llm_start', 'tool', 'review', 'review_start', 'verify', 'question', 'answer', 'approval', 'sent_back', 'check', 'lint', 'decide_start', 'done', 'error']);
 async function startReplay(c, m) {
   await loadTrace(c, m);
+  await repairTrace(c, m);
   let trace = m.trace || [];
   // A reply whose steps the page never saw (started over MCP, or while the page was closed): QuorX's own log.
   if (!trace.length && m.runId) { const r = await fetch(`/api/runs/${encodeURIComponent(m.runId)}/log`).then((x) => x.json()).catch(() => null); trace = r?.events || []; }

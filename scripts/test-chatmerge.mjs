@@ -135,3 +135,24 @@ test('chat merge: messages are known by run id, else kind and time', () => {
   const r = mergeChat(base, mine, copy(base));
   assert.equal(r.doc.agent.messages.length, 2);
 });
+
+test('chat merge: a reply the server settled keeps every step this page saw, with the server\'s result on it', () => {
+  const steps = (n) => Array.from({ length: n }, (_, i) => ({ t: 'tool', step: i, name: 'desktop' }));
+  // Saved mid-reply (an app was allowed after the first step): 7 steps, still running.
+  const base = chat([user(100, 'draw a cat'), { role: 'assistant', runId: 'r1', at: 101, content: '', runActive: true, trace: steps(7) }]);
+  // The server wrote the result into its copy, which has those 7 steps.
+  const theirs = copy(base); Object.assign(theirs.agent.messages[1], { runActive: false, stats: { cost: 0.04 }, doneAt: 900, content: 'Here is the cat.' });
+  // This page went on to see all 60 steps, and ended.
+  const mine = copy(base); Object.assign(mine.agent.messages[1], { runActive: false, trace: steps(60), stats: { cost: 0.04 }, content: 'Here is the cat.' });
+  const r = mergeChat(base, mine, theirs);
+  assert.equal(r.ok, true);
+  assert.equal(r.doc.agent.messages[1].trace.length, 60, 'the steps after the save mid-reply are kept');
+  assert.equal(r.doc.agent.messages[1].doneAt, 900, 'the server\'s result is on it');
+  assert.deepEqual(r.from[1].slice(0, 2), ['mine', 1]);
+  // This page saw no more steps than the server has: a clash on that reply ends as before (the server's copy is kept).
+  const mine2 = copy(base); mine2.agent.messages[1].runActive = false;
+  assert.equal(mergeChat(base, mine2, theirs).ok, false);
+  // Unchanged here, finished there: the server's copy.
+  const r3 = mergeChat(base, copy(base), theirs);
+  assert.deepEqual(r3.from[1], ['theirs', 1]);
+});
