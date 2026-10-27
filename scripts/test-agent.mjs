@@ -1571,6 +1571,16 @@ test('out of steps: the reply keeps its checkpoint, says why, and "Keep going" c
   dropCheckpoint(id);
 });
 
+test('a scheduled run out of steps gets no card and keeps no checkpoint; its stats say it was scheduled', async () => {
+  let id;
+  const { events, done } = await run((body, i) => (i < 3 ? reply('', [['write_file', { path: `f${i}.txt`, content: 'x' }]]) : reply('Ran out.')),
+    { scheduledBy: 'sdemo', settings: { maxSteps: 4, review: 'off', verify: false }, onEvent: (e) => { if (e.t === 'start') id = e.runId; } });
+  assert.equal(done.stats.stop, 'steps');
+  assert.equal(done.stats.scheduled, true);
+  assert.equal(of(events, 'out_of_steps').length, 0, 'nobody is there to press it');
+  assert.equal(loadCheckpoint(id), null, 'nothing to keep going from');
+});
+
 test('Stop ends a reply in the middle of slow browser steps, and the rest of the batch never runs', async () => {
   let opened = 0;
   // Each page takes 3 s to open, like a busy site waiting to settle.
@@ -2305,6 +2315,28 @@ test('a scheduled chat runs like a normal chat and is saved complete, with no pa
     assert.ok(!m.trace.some((e) => e.t === 'token'));
     assert.equal(fs.readFileSync(path.join(dir, 'notes.txt'), 'utf8'), 'hi');
     assert.equal(loadScheds()[0].lastRun.status, 'done');
+  } finally { forgetProject(pid); saveScheds([]); }
+});
+
+test('a scheduled run cut off by the step limit counts as failed, says why, and keeps its reply', async () => {
+  const dir = tempDir('quorx-sched-'), pid = `so${Date.now().toString(36)}`;
+  saveProject({ id: pid, name: 'sched', path: dir });
+  try {
+    const s = cleanSchedule({ name: 'Long', prompt: 'write files', projectId: pid, model: 'test/model', when: { kind: 'daily', time: '09:00', days: [] }, settings: { maxSteps: 4, review: 'off', verify: false, mediaEnabled: false, tools: { browser: { on: false } } } });
+    saveScheds([s]);
+    const end = ended();
+    const r = startScheduledChat(s, {}, schedDeps((b, k) => (k < 3 ? reply('', [['write_file', { path: `f${k}.txt`, content: 'x' }]]) : reply('Wrote three of five.')), { onNotify: end.on }));
+    const list = loadScheds(); list[0].lastRun = { at: Date.now(), runId: r.runId, chatId: r.chatId, status: 'running' }; saveScheds(list);
+    const fin = await end.p;
+    assert.equal(fin.k, 'error');
+    assert.match(fin.info.text, /ran out of steps \(4\)\. Wrote three of five\./);
+    const after = loadScheds()[0];
+    assert.equal(after.lastRun.status, 'failed');
+    assert.equal(after.fails, 1);
+    const m = getChat(r.chatId).agent.messages[1];
+    assert.equal(m.content, 'Wrote three of five.');
+    assert.equal(m.stats.scheduled, true);
+    assert.ok(!m.trace.some((e) => e.t === 'out_of_steps'), 'no card');
   } finally { forgetProject(pid); saveScheds([]); }
 });
 

@@ -66,7 +66,7 @@ export function startScheduledChat(s, { missed = false, due = null } = {}, deps)
         deps.closeChromeTabs(chatId)?.catch?.(() => {});
       }, CLOSE_TABS_MS).unref?.();
       if (r?.paused) deps.notify?.('error', { schedule: s, chatId, text: `“${s.name}” failed ${PAUSE_AFTER_FAILS} times in a row, so it is paused. Resume it in Schedules once it is fixed. Last error: ${ended.error}`, cost: ended.cost });
-      else if (r ? r.notify : true) deps.notify?.(status === 'done' ? 'done' : 'error', { schedule: s, chatId, text: ended.error || ended.reply, cost: ended.cost, changed: r?.changed });
+      else if (r ? r.notify : true) deps.notify?.(status === 'done' ? 'done' : 'error', { schedule: s, chatId, text: ended.error && ended.reply ? `${ended.error} ${ended.reply}` : ended.error || ended.reply, cost: ended.cost, changed: r?.changed });
       return;
     }
     if (WAIT_EVENTS(e) && !told.has(e.id ?? e.t)) {
@@ -86,7 +86,10 @@ export function startScheduledChat(s, { missed = false, due = null } = {}, deps)
 export function finishChat(chatId, runId, deps) {
   const events = deps.events(runId);
   const done = events.find((e) => e.t === 'done'), err = [...events].reverse().find((e) => e.t === 'error');
-  const out = { reply: done?.reply || '', error: done ? '' : err?.msg || 'The reply ended without an answer.', stopped: !!err?.stopped, cost: done?.stats?.cost ?? err?.stats?.cost ?? 0 };
+  // A run cut off before it finished (out of steps, or ended by the loop guard for going in circles) failed at its
+  // job, even with a reply: it counts towards the pause after failures, and its chat says why.
+  const cut = done?.stats?.stop === 'steps' ? (done.stats.loopEnd ? 'It went in circles (the same failing call again), so it was stopped.' : `It ran out of steps (${done.stats.steps}).`) : '';
+  const out = { reply: done?.reply || '', error: done ? cut : err?.msg || 'The reply ended without an answer.', stopped: !!err?.stopped, cost: done?.stats?.cost ?? err?.stats?.cost ?? 0 };
   const doc = deps.getChat(chatId), m = doc?.agent?.messages?.find((x) => x.runId === runId);
   if (!m || !m.runActive) return out;
   const trace = [], approvals = {}, questions = {}, arts = [];

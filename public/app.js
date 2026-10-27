@@ -775,10 +775,13 @@ function renderSidebar() {
         const live = G.open.get(c.id);
         const running = !!live?.running, waiting = running && live.waiting;
         const spent = (c.cost || 0) + liveOf(G.open.get(c.id));
+        // ⏰ A schedule chat: its runs start fresh, with only the schedule's prompt; what you type in it has the whole chat.
+        const sch = schedsOf(c.id), schOn = sch.some((s) => !s.paused && s.nextAt != null);
+        const schTag = sch.length ? `<span class="sb-sched ${schOn ? 'on' : 'off'}" title="Schedule chat: ${esc(sch.map((s) => `${s.name} (${s.paused ? 'paused' : s.whenText})`).join(', '))}. Each run starts fresh and sees only the schedule's prompt; what you type here sees the whole chat, every run included.">⏰${schOn ? '' : ' paused'}</span>` : '';
         const tip = [c.title || 'Untitled', ...(c.model ? [`Model\t${short(c.model)}`] : []), `Last message\t${new Date(c.lastAt || c.updated || Date.now()).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`, ...(c.messages ? [`Messages\t${c.messages}`] : []), ...(running ? [`Now\t${waiting ? 'waiting for you' : 'working'}`] : []), `Spent\t$${spent.toFixed(3)}`].join('\n');
         return `<div class="sb-chat sb-chat-item ${G.panes.includes(c.id) ? 'on active' : ''} ${running ? 'running' : ''}" data-c="${esc(c.id)}" data-tip-delay="900" title="${esc(tip)}">
           <div class="sb-chat-content">
-            <div class="sb-chat-topline"><span class="sb-chat-title">${esc(c.title)}</span>${running ? '<span class="live-dot" aria-label="Running"></span>' : ''}</div>
+            <div class="sb-chat-topline"><span class="sb-chat-title">${esc(c.title)}</span>${schTag}${running ? '<span class="live-dot" aria-label="Running"></span>' : ''}</div>
             ${waiting ? `<div class="sb-chat-prev"><b class="needs">${waiting === 'answer' ? 'Waiting for your answer' : waiting === 'budget' ? 'Waiting: project budget reached' : 'Waiting for your approval'}</b></div>` : running ? '<div class="sb-chat-prev"><i>Working…</i></div>' : ''}
             <div class="sb-chat-meta"><span>${ago(c.lastAt || c.updated || Date.now())}</span>${c.model ? `<span>· ${esc(short(c.model))}</span>` : ''}${c.cost || liveOf(G.open.get(c.id)) ? `<span class="cost${liveOf(G.open.get(c.id)) ? ' live' : ''}">· $${((c.cost || 0) + liveOf(G.open.get(c.id))).toFixed(3)}</span>` : ''}</div>
           </div>
@@ -2720,13 +2723,13 @@ function renderChatHead(c) {
   // ⏰ the schedules that post in this chat: how many, and whether they are on; click for them in Schedules.
   const sc = $('.ch-sched', r);
   if (sc) {
-    const mine = (SCHED.list || []).filter((s) => s.chatId === c.id), on = mine.filter((s) => !s.paused && s.nextAt != null);
+    const mine = schedsOf(c.id), on = mine.filter((s) => !s.paused && s.nextAt != null);
     sc.hidden = !mine.length;
     if (mine.length) {
       sc.className = `ch-sched ${on.length ? 'on' : 'off'}`;
       // Short, for a narrow header: the next run's time (today's without the word), or how many are on and paused.
       sc.textContent = `⏰ ${mine.length === 1 ? (on.length ? when2(on[0].nextAt).replace(/^Today /, '') : 'paused') : `${on.length} on${mine.length > on.length ? ` · ${mine.length - on.length} paused` : ''}`}`;
-      sc.title = `${mine.map((s) => `${s.name}: ${s.whenText}${s.paused ? ' (paused)' : ''}`).join('\n')}\nIts runs post in this chat. Ask here what they saw, or to change them. Click for them in Schedules.`;
+      sc.title = `${mine.map((s) => `${s.name}: ${s.whenText}${s.paused ? ' (paused)' : ''}`).join('\n')}\nIts runs post in this chat. Each run starts fresh, with only the schedule's prompt; what you type here sees the whole chat, so ask what they saw, or to change them. Click for them in Schedules.`;
       sc.onclick = () => { SCHED.focus = c.id; openSchedules(); };
     }
   }
@@ -3231,7 +3234,7 @@ function renderMsg(c, m) {
   if (needsTrace(m)) watchTrace(c, m, el);
   if (m.role === 'user') {
     el.className = 'msg user';
-    el.innerHTML = `${m.scheduled ? `<div class="u-sched" title="${m.scheduled.missed ? 'QuorX was closed or the computer slept at the planned time, so this ran when it was back' : 'Started by a schedule'}">⏰ ${m.scheduled.missed ? 'Missed run, started late' : 'Scheduled'}: ${esc(m.scheduled.name)}</div>` : ''}<div class="utext"></div>${m.imgs?.length ? `<div class="u-imgs" data-views="${esc(JSON.stringify(m.imgViews || []))}">${m.imgs.map((u, k) => `<img src="${u}" alt="attached picture" data-k="${k}" title="Click to see it large">`).join('')}</div>` : ''}${m.docs?.length ? `<div class="u-docs">${m.docs.map((d) => `<button type="button" class="u-doc" data-doc="${esc(JSON.stringify(d))}" title="${esc(d.name)} · ${esc(docSize(d.size))} · click to preview">${DOC_ICON[d.kind] || '📄'} ${esc(d.name)}</button>`).join('')}</div>` : ''}${m.ctx?.length ? `<div class="ctx-used">${m.ctx.map((t) => `<span>📎 ${esc(t)}</span>`).join('')}</div>` : ''}${m.cmts?.length ? `<div class="ctx-used cmts-used">${m.cmts.map((x) => `<span title="${esc(x.selector)}">💬 ${esc(x.tag)} "${esc(clip(x.text || '', 40))}"${x.note ? `: ${esc(clip(x.note, 60))}` : ''}</span>`).join('')}</div>` : ''}${m.at ? timeTag(m.at) : ''}`;
+    el.innerHTML = `${m.scheduled ? `<div class="u-sched" title="${m.scheduled.missed ? 'QuorX was closed or the computer slept at the planned time, so this ran when it was back' : 'Started by a schedule'}. A scheduled run starts fresh: it sees only this prompt, not the chat above it. What you type in this chat sees everything, these runs included.">⏰ ${m.scheduled.missed ? 'Missed run, started late' : 'Scheduled'}: ${esc(m.scheduled.name)} <span class="u-fresh">fresh run · sees only this prompt</span></div>` : ''}<div class="utext"></div>${m.imgs?.length ? `<div class="u-imgs" data-views="${esc(JSON.stringify(m.imgViews || []))}">${m.imgs.map((u, k) => `<img src="${u}" alt="attached picture" data-k="${k}" title="Click to see it large">`).join('')}</div>` : ''}${m.docs?.length ? `<div class="u-docs">${m.docs.map((d) => `<button type="button" class="u-doc" data-doc="${esc(JSON.stringify(d))}" title="${esc(d.name)} · ${esc(docSize(d.size))} · click to preview">${DOC_ICON[d.kind] || '📄'} ${esc(d.name)}</button>`).join('')}</div>` : ''}${m.ctx?.length ? `<div class="ctx-used">${m.ctx.map((t) => `<span>📎 ${esc(t)}</span>`).join('')}</div>` : ''}${m.cmts?.length ? `<div class="ctx-used cmts-used">${m.cmts.map((x) => `<span title="${esc(x.selector)}">💬 ${esc(x.tag)} "${esc(clip(x.text || '', 40))}"${x.note ? `: ${esc(clip(x.note, 60))}` : ''}</span>`).join('')}</div>` : ''}${m.at ? timeTag(m.at) : ''}`;
     $('.utext', el).innerHTML = md(m.content);
     enhance($('.utext', el));
     el.insertAdjacentHTML('beforeend', '<div class="u-reading-slot"></div><div class="u-video-slot"></div>');
@@ -3690,7 +3693,8 @@ function updateMsg(c, m, { bodyOnly = false } = {}) {
   const s = m.stats, when = m.doneAt || m.at;
   const checkTag = s?.verify ? (s.verify.ok ? '<span class="check-ok" title="Before this reply ended, the harness re-checked the changed files and opened what was built: no errors.">✓ Checked</span>'
     : `<span class="check-bad" title="${esc(s.verify.problems.join('\n'))}">⚠ ${s.verify.problems.length} problem${s.verify.problems.length === 1 ? '' : 's'} left</span>`) : '';
-  const stopTag = s?.stop === 'steps' ? '<span title="The reply used all its steps (⚙ Settings → Agent loop)">step limit reached</span>'
+  const stopTag = s?.stop === 'steps' && s.scheduled ? `<span class="stop-sched" title="A scheduled run that ended before it finished counts as failed in its schedule (three in a row pause it). The next run starts fresh, so there is nothing to keep going from.">⏰ run failed: ${s.loopEnd ? 'went in circles' : 'out of steps'}</span>`
+    : s?.stop === 'steps' ? `<span title="${s.loopEnd ? 'The agent made the same failing call again after a warning, so the reply was wrapped up' : 'The reply used all its steps (⚙ Settings → Agent loop)'}">${s.loopEnd ? 'stopped: going in circles' : 'step limit reached'}</span>`
     : s?.stop === 'budget' ? (s.budgetStop === 'hard' ? '<span title="The reply went past the project budget and its allowance for finishing work (⚙ Settings → Budget), so it was stopped">stopped past the budget</span>'
       : '<span title="The project budget was used up, so the reply did not start; raise it with the $ next to the project in the sidebar">budget reached</span>') : '';
   let undoRow = $('.f-undo-row', el);
@@ -5386,6 +5390,9 @@ const SCHED = { list: [], since: 0, edit: null, timer: 0, now: Date.now() };
 const SCHED_STATUS = { starting: ['Starting', 'run'], running: ['Running', 'run'], waiting: ['Waits for you', 'wait'], done: ['Finished', 'ok'], failed: ['Failed', 'bad'], stopped: ['Stopped', 'bad'], skipped: ['Skipped', 'wait'] };
 const WEEK = [[1, 'Mon'], [2, 'Tue'], [3, 'Wed'], [4, 'Thu'], [5, 'Fri'], [6, 'Sat'], [0, 'Sun']];
 const when2 = (t) => { if (!t) return '–'; const d = new Date(t), today = new Date(); const same = d.toDateString() === today.toDateString(); const tmr = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1).toDateString() === d.toDateString(); return `${same ? 'Today' : tmr ? 'Tomorrow' : d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })} ${d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`; };
+// The chat a schedule posts in (the one it was made from, or its first run's), and the schedules posting in a chat.
+function schedChatId(s) { return s.newChat ? null : s.chatId || s.lastRun?.chatId || null; }
+function schedsOf(chatId) { try { return SCHED.list.filter((s) => schedChatId(s) === chatId); } catch { return []; } } // (none before SCHED is set up)
 // The sidebar's Schedules row: how many are on (they still have a next run) and how many are paused.
 function drawSchedCount() {
   const el = $('#schedCount'); if (!el) return;
@@ -5400,6 +5407,9 @@ async function loadSchedules() {
   const first = !SCHED.since && !SCHED.seen;
   SCHED.list = r.schedules; SCHED.now = r.now; SCHED.seen = true;
   drawSchedCount();
+  // The sidebar marks schedule chats: drawn again when that set (or a schedule's on/paused) changes.
+  const marks = SCHED.list.map((s) => `${schedChatId(s)}:${!s.paused && s.nextAt != null}`).join();
+  if (marks !== SCHED.marks) { SCHED.marks = marks; renderSidebar(); }
   for (const c of G.open.values()) renderChatHead(c); // their ⏰ chips
   // Notices from before this page loaded are old news: only later ones notify.
   if (!first) for (const n of r.notices) scheduleNoticed(n);
