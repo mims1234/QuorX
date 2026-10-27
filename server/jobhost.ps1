@@ -147,6 +147,8 @@ public static class QxJob {
 }
 '@
 $jobs = @{}
+# Answers go out as UTF-8 (in the console's own code page "•" is the control byte 0x07, which breaks the JSON).
+[Console]::OutputEncoding = New-Object Text.UTF8Encoding $false
 [Console]::Out.WriteLine('{"ready":true}')
 [Console]::Out.Flush()
 while ($true) {

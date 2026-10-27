@@ -1251,7 +1251,7 @@ $t = New-Object Windows.Forms.TextBox; $t.Text = 'model'; $t.Top = 90; $t.Left =
 $q = New-Object Windows.Forms.Label; $q.Text = 'model.vroid already exists. Do you want to replace it?'; $q.Top = 120; $q.Left = 10; $q.Width = 480
 $y = New-Object Windows.Forms.Button; $y.Text = 'Yes'; $y.Top = 145; $y.Left = 10
 $p = New-Object Windows.Forms.Panel; $p.Top = 180; $p.Left = 10; $p.Width = 300; $p.Height = 120; $p.BackColor = 'LightGray'
-$pr = New-Object Windows.Forms.Label; $pr.Text = 'Pressed: none'; $pr.Top = 305; $pr.Left = 10; $pr.Width = 300
+$pr = New-Object Windows.Forms.Label; $pr.Text = "Pressed $([char]0x2022) none"; $pr.Top = 305; $pr.Left = 10; $pr.Width = 300
 $p.Add_MouseDown({ param($s, $e) $pr.Text = "Pressed: $($e.Button)" })
 $st = New-Object Windows.Forms.Label; $st.Text = 'Idle'; $st.Top = 330; $st.Left = 10; $st.Width = 200
 $ld = New-Object Windows.Forms.Button; $ld.Text = 'Load'; $ld.Top = 355; $ld.Left = 10
@@ -1279,6 +1279,9 @@ $f.Controls.AddRange(@($l, $b, $t, $q, $y, $p, $pr, $st, $ld)); [void]$f.ShowDia
     }, { prep: (d) => { fs.writeFileSync(path.join(d, 'app.ps1'), app); allow(d, 'powershell -noprofile -executionpolicy bypass -file app.ps1*'); },
       onEvent: (e, id) => { if (e.t === 'approval' && e.tool === 'desktop') { cards.push(e); setTimeout(() => answerApproval(id, e.id, { approve: false }), 10); } } });
     assert.match(toolOut(bodies, 2), /Window \d+:[\s\S]*Text "Count: 0"[\s\S]*\[\d+\] Button "Add one"/);
+    // A "•" in a window's text comes through whole (in the console's own code page it was a control byte that made the
+    // helper's answer unreadable, and every read waited out its timeout).
+    assert.match(toolOut(bodies, 2), /Text "Pressed • none"/);
     assert.match(toolOut(bodies, 3), /pressed[\s\S]*Count: 1/);
     // Keys go to the app's own window, or (when Windows keeps another window in front) nowhere: never to that window.
     assert.match(toolOut(bodies, 4), /sent the keys|Windows kept another window in front, so nothing was typed/);
@@ -2031,6 +2034,24 @@ test('app notes: learned points are kept per app across chats, without repeats, 
   assert.match(toolOut(bodies, 1), /^Saved for Visual Studio Code/);
   assert.match(readNotes('app', 'Visual Studio Code'), /Open View > Cline/);
   assert.match(toolOut(bodies, 2), /^Error: give app: the name of an app this chat opened \("Notepad" isn't one\)/);
+});
+
+test('helpers: an answer that isn\'t JSON fails its call at once, and UTF-8 characters split between chunks arrive whole', async () => {
+  const { lineHost } = await import('../server/jobhost.js');
+  const { spawn } = await import('node:child_process');
+  // A stand-in helper: ready, then for each request an answer with a control byte in it (what "•" became), or a good
+  // one whose "•" arrives split across two writes.
+  const src = `process.stdout.write('{"ready":true}\\n');
+require('readline').createInterface({ input: process.stdin }).on('line', (l) => {
+  const m = JSON.parse(l);
+  if (m.op === 'bad') process.stdout.write('{"id":' + m.id + ',"ok":true,"text":"a \\u0007 b"}\\n'.replace('\\\\u0007', String.fromCharCode(7)));
+  else { const b = Buffer.from(JSON.stringify({ id: m.id, ok: true, text: 'x • y' }) + '\\n'); const i = b.indexOf(0xe2) + 1; process.stdout.write(b.subarray(0, i)); setTimeout(() => process.stdout.write(b.subarray(i)), 50); }
+});`;
+  const h = lineHost(() => spawn(process.execPath, ['-e', src], { stdio: ['pipe', 'pipe', 'pipe'] }), { label: 'test helper' });
+  const t0 = Date.now();
+  await assert.rejects(h.call('bad', {}, 20000), /test helper's answer couldn't be read/);
+  assert.ok(Date.now() - t0 < 5000, 'not after the 20 s timeout');
+  assert.equal((await h.call('good', {}, 5000)).text, 'x • y');
 });
 
 test('desktop open: app names match loosely (spaces, case, version numbers)', { skip: !WIN || !!process.env.CI }, async () => {

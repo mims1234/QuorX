@@ -221,21 +221,29 @@ public static class QxUia {
     RECT wr; GetWindowRect(new IntPtr(handle), out wr);
     System.Windows.Rect origin = new System.Windows.Rect(wr.L, wr.T, Math.Max(0, wr.R - wr.L), Math.Max(0, wr.B - wr.T));
     int off = 0, offHidden = 0;
+    Visited = 0; Capped = false; Clock = System.Diagnostics.Stopwatch.StartNew();
     Walk(el, 0, 0, depth, max, list, sb, ref lines, origin, ref off, ref offHidden);
     Refs[handle] = list;
-    if (offHidden > 0) sb.Append("… ").Append(offHidden).Append(" more controls are off screen and not listed: scroll to them, then read again\n");
-    if (lines >= max) sb.Append("… (more controls not shown)\n");
+    if (offHidden > 0) sb.Append("\u2026 ").Append(offHidden).Append(" more controls are off screen and not listed: scroll to them, then read again\n");
+    if (Capped) sb.Append("\u2026 (a very large window: the read stopped after ").Append(Visited).Append(" controls; for the rest, use screenshot, read_text or click_at)\n");
+    else if (lines >= max) sb.Append("\u2026 (more controls not shown)\n");
     return sb.ToString();
   }
+  // Every control looked at costs a call into the app. Off-screen controls aren't listed, but they were still walked:
+  // Discord's whole message history took each read past its 30 s limit after every action. A read stops after
+  // VisitMax controls or ReadMs, whichever comes first.
+  const int VisitMax = 1500, ReadMs = 5000;
+  static int Visited; static bool Capped; static System.Diagnostics.Stopwatch Clock = new System.Diagnostics.Stopwatch();
   // A long list (a Save dialog's folder tree, its file rows) filled the read before the File name box and the Save
   // button: past the first few, controls off screen are only counted, and a run of one kind of control under one
   // parent stops after SameRun with a count.
   const int OffShown = 8, SameRun = 20;
 
-  static string Clip(string s, int n) { if (s == null) return ""; s = s.Replace("\r", " ").Replace("\n", " "); return s.Length > n ? s.Substring(0, n) + "…" : s; }
+  static string Clip(string s, int n) { if (s == null) return ""; s = s.Replace("\r", " ").Replace("\n", " "); return s.Length > n ? s.Substring(0, n) + "\u2026" : s; }
 
   static void Walk(AutomationElement e, int indent, int level, int depth, int max, List<AutomationElement> list, StringBuilder sb, ref int lines, System.Windows.Rect origin, ref int off, ref int offHidden) {
-    if (lines >= max || level > depth) return;
+    if (lines >= max || level > depth || Capped) return;
+    if (++Visited > VisitMax || Clock.ElapsedMilliseconds > ReadMs) { Capped = true; return; }
     AutomationElement.AutomationElementInformation c;
     try { c = e.Current; } catch { return; }
     if (c.IsOffscreen && level > 0 && ++off > OffShown) { offHidden++; return; } // its children are off screen too
@@ -265,15 +273,18 @@ public static class QxUia {
     try { ch = walker.GetFirstChild(e); } catch { }
     Dictionary<string, int> kinds = new Dictionary<string, int>();
     Dictionary<string, int> skipped = new Dictionary<string, int>();
-    while (ch != null && lines < max) {
+    while (ch != null && lines < max && !Capped) {
       string k = "";
       try { k = ch.Current.ControlType.ProgrammaticName.Replace("ControlType.", ""); } catch { }
       int n; kinds.TryGetValue(k, out n); kinds[k] = ++n;
-      if (n > SameRun && k != "Pane" && k != "Group" && k != "Custom") { int s; skipped.TryGetValue(k, out s); skipped[k] = s + 1; }
+      if (n > SameRun && k != "Pane" && k != "Group" && k != "Custom") {
+        int s; skipped.TryGetValue(k, out s); skipped[k] = s + 1;
+        if (++Visited > VisitMax || Clock.ElapsedMilliseconds > ReadMs) { Capped = true; break; }
+      }
       else Walk(ch, show ? indent + 1 : indent, level + 1, depth, max, list, sb, ref lines, origin, ref off, ref offHidden);
       try { ch = walker.GetNextSibling(ch); } catch { break; }
     }
-    foreach (KeyValuePair<string, int> s in skipped) { sb.Append(new string(' ', (show ? indent + 1 : indent) * 2)).Append("… ").Append(s.Value).Append(" more ").Append(s.Key).Append(" (scroll or use find to reach one)\n"); lines++; }
+    foreach (KeyValuePair<string, int> s in skipped) { sb.Append(new string(' ', (show ? indent + 1 : indent) * 2)).Append("\u2026 ").Append(s.Value).Append(" more ").Append(s.Key).Append(" (scroll or use find to reach one)\n"); lines++; }
   }
 
   static AutomationElement Ref(long handle, int r) {
@@ -545,7 +556,7 @@ public static class QxUia {
     if (!Vk.TryGetValue(key, out vk)) {
       if (key.Length == 1 && char.IsLetterOrDigit(key[0])) vk = (byte)char.ToUpperInvariant(key[0]);
       else if (key.Length >= 2 && (key[0] == 'f' || key[0] == 'F')) { int n; if (!int.TryParse(key.Substring(1), out n) || n < 1 || n > 12) throw new Exception("unknown key " + key); vk = (byte)(0x6F + n); }
-      else throw new Exception("unknown key " + key + " (use a letter, a digit, F1-F12, shift, ctrl, alt, space, enter, an arrow…)");
+      else throw new Exception("unknown key " + key + " (use a letter, a digit, F1-F12, shift, ctrl, alt, space, enter, an arrow\u2026)");
     }
     Front(new IntPtr(handle), pids);
     keybd_event(vk, 0, 0, UIntPtr.Zero);
@@ -615,6 +626,9 @@ function Read-WindowText([string]$file) {
   }
   ($out -join "`n")
 }
+# Answers go out as UTF-8. In the console's own code page some characters become control bytes ("•" is 0x07), which
+# made the JSON unreadable, and the call waited out its timeout.
+[Console]::OutputEncoding = New-Object Text.UTF8Encoding $false
 [Console]::Out.WriteLine('{"ready":true}')
 [Console]::Out.Flush()
 while ($true) {
