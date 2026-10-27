@@ -17,6 +17,7 @@ import { pathToFileURL } from 'node:url';
 import { rotateLog } from './storagerules.js';
 import { enhanceRequest } from './enhancer.js';
 import { validId, listProjects, getChat } from './store.js';
+import { loadSchedules, cleanSchedule, scheduleView, addSchedule, changeSchedule, removeSchedule, runScheduleNow } from './schedules.js';
 import { needsAdmin, adminForAgent, adminForUser } from './elevation.js';
 import { secretKind, maskSecretText, scrubSecrets, projectEnv, setSecret, ENV_NAME, MASK } from './projectsecrets.js';
 import { searchFiles, searchNote, trashFile, checkpoint, changedFiles, copyTemplate, snapBefore, commandChanges, safePath, childEnv, realish, registerFolders, folderIndex } from './workspace.js';
@@ -724,6 +725,18 @@ const DESIGN_NEXT = (root) => {
 };
 
 // Documents the user attached (kept in the project's .quorx/uploads): search the big ones, read any of them.
+// Schedules: jobs QuorX runs on its own (server/schedules.js). Made from a chat, a schedule posts its runs in that chat,
+// so the user (and you, in that chat) can look back at every run and change the job; each run starts fresh.
+const SCHEDULE_TOOL = { type: 'function', function: { name: 'schedule', description: 'The user\'s schedules: jobs QuorX runs on its own at set times, like "every 3 minutes type /ldrop in the bot channel" or "weekdays at 9 summarise my inbox". Each run starts fresh with only its prompt (no memory of this chat), uses its own model and mode, and posts its reply in the schedule\'s chat; a schedule made here posts in THIS chat, so later the user can ask you here what the runs saw. Actions: list (every schedule, this chat\'s first, with recent runs); create (name, prompt, when; write the prompt as complete instructions for a fresh agent: where to go, what to do, what to report); update (id, then any of name, prompt, when, notify, model, approval); pause / resume / run_now / delete (id). when: {"kind":"every","minutes":15} (3 or more), {"kind":"daily","time":"09:00","days":[1,2,3,4,5]} (0 = Sunday; no days = every day) or {"kind":"once","at":"2026-10-28T18:30"} (local time). notify: always, failure (only when a run fails), needs (only when a run waits for the user) or changed (only when the result differs from last time). Creating, changing, resuming, running now and deleting ask the user first.', parameters: { type: 'object', required: ['action'], properties: {
+  action: { type: 'string', enum: ['list', 'create', 'update', 'pause', 'resume', 'run_now', 'delete'] },
+  id: { type: 'string', description: 'The schedule, from list (update, pause, resume, run_now, delete)' },
+  name: { type: 'string' }, prompt: { type: 'string' },
+  when: { type: 'object', description: 'kind every (minutes), daily (time, days) or once (at)' },
+  notify: { type: 'string', enum: ['always', 'failure', 'needs', 'changed'] },
+  model: { type: 'string', description: 'Model id for its runs (default: this chat\'s)' },
+  approval: { type: 'string', enum: ['strict', 'yolo'], description: 'Its runs\' mode (default: this chat\'s)' },
+  why: { type: 'string', description: 'One line for the user\'s card: why' },
+} } } };
 const PLAN_TOOL = { type: 'function', function: { name: 'plan', description: 'Write or update your plan for this reply: a short spec, a to-do list the user sees as a live checklist, and checks that prove it is done. Call it first for any build, then again to tick items off.', parameters: { type: 'object', required: ['items'], properties: {
   spec: { type: 'string', description: 'First call: 3-8 lines. What you will build, what makes it good (depth, polish), how you will check it' },
   items: { type: 'array', minItems: 1, maxItems: 12, items: { type: 'object', required: ['text', 'status'], properties: { text: { type: 'string' }, status: { type: 'string', enum: ['todo', 'doing', 'done'] } } } },
@@ -1226,6 +1239,7 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
   // Paid tools off in this chat can be asked for (enable_media); not in benchmarks, or where paid media is off entirely.
   const mediaOff = () => (req.bench || req.settings?.mediaEnabled === false ? [] : Object.keys(MEDIA).filter((c) => !T[c].on));
   if (mediaOff().length) tools.push(ENABLE_MEDIA_TOOL(mediaOff()));
+  if (req.chatId && S.schedules !== false) tools.push(SCHEDULE_TOOL); // ⏰ the user's scheduled jobs
   emit({ t: 'start', runId, setup, voters: S.voters, approval: S.approval, system, at: 0 });
 
   let reply = '';
@@ -2605,6 +2619,72 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     return `Saved to the user's memory: "${text}". Every future chat will see it.`;
   }
   function newApprovalId() { return `ap${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`; }
+
+  // ⏰ schedule: the user's scheduled jobs. A scheduled run itself may only look at them and pause its own schedule
+  // (it stops itself once its goal is met); it never makes or changes jobs.
+  async function scheduleTool(args) {
+    const act = String(args.action || ''), mine = req.scheduledBy || null;
+    const list = loadSchedules(), find = (id) => list.find((s) => s.id === String(id || ''));
+    const ago = (t) => (t ? new Date(t).toLocaleString() : 'never');
+    const line = (s) => `${s.id} · ${s.name} · ${scheduleView(s).whenText}${s.paused ? ` · PAUSED${s.pausedWhy ? ` (${s.pausedWhy})` : ''}` : ` · next ${ago(s.nextAt)}`} · ${s.approval} · notify ${s.notify || 'always'}${s.chatId === req.chatId ? ' · posts in this chat' : ''}\n  prompt: ${clip(s.prompt, 300)}\n  last runs: ${(s.history || []).slice(-5).map((h) => `${new Date(h.at).toLocaleTimeString()} ${h.status}`).join(', ') || 'none yet'}`;
+    if (act === 'list') {
+      const sorted = [...list].sort((a, b) => (b.chatId === req.chatId) - (a.chatId === req.chatId));
+      return sorted.length ? `${sorted.length} schedule${sorted.length === 1 ? '' : 's'}:\n${sorted.map(line).join('\n')}` : 'No schedules yet.';
+    }
+    if (mine && !(act === 'pause' && String(args.id || mine) === mine)) return 'Refused: this is a scheduled run. It can list schedules and pause its own (id omitted) once its goal is met; making or changing jobs happens in a chat with the user.';
+    const s = act === 'create' ? null : find(args.id || mine);
+    if (act !== 'create' && !s) return `Error: no schedule ${args.id || '(no id)'}. Call schedule list for the ids.`;
+    const when = (w) => (w?.kind === 'once' && typeof w.at === 'string' ? { kind: 'once', at: new Date(w.at).getTime() } : w);
+    const say = (x) => { emit({ t: 'schedules_changed', id: x?.id || s?.id, action: act, at: at() }); return x; };
+    // Making, changing, resuming, running and deleting ask: a card in Strict, the deciders first in YOLO.
+    const ask = async (what) => {
+      const card = { id: newApprovalId(), tool: 'schedule', free: true, est: 0, noAlways: true, what, why: clip(args.why || 'The agent wants to change your scheduled jobs.', 240), yes: 'Allow', no: 'Don\'t' };
+      if (S.approval === 'yolo' && decidersOn) {
+        emit({ t: 'approval', ...card, mode: 'yolo', at: at() });
+        const j = await approvalJudge({ kind: 'command', userMessages: userTurns(), reading: run.reading?.text, voters: S.voters, chatModel: setup.model, gate: S.gate, signal, account, sf: SF,
+          facts: { command: `${what} (a job QuorX runs on its own on a timer, spending on each run)`, parts: [{ text: what, class: 'a scheduled job' }] }, log: { runId, chatId: req.chatId || null, project: projectId } });
+        if (j.approve === true) { emit({ t: 'approval_done', id: card.id, approve: true, by: 'deciders', reason: j.reason, votes: j.votes, at: at() }); return { approve: true }; }
+      }
+      const waitMs = S.approval === 'yolo' ? yoloWait() : 0;
+      const ans = await askUser({ ...card, mode: 'strict' }, waitMs ? { ms: waitMs, then: 'skip', onTimeout: () => ({ approve: false, by: 'timeout', reason: `No answer in ${Math.round(waitMs / 1000)}s, so nothing changed` }) } : null);
+      emit({ t: 'approval_done', id: card.id, ...ans, at: at() });
+      return ans;
+    };
+    try {
+      if (act === 'pause') { const x = say(changeSchedule(s.id, { paused: true })); return `Paused "${x.name}". The user can resume it in Schedules${mine ? '' : ', or ask you to'}.`; }
+      if (act === 'create') {
+        const b = { name: args.name, prompt: args.prompt, when: when(args.when), projectId, model: args.model || setup.model, reasoning: setup.reasoning, approval: args.approval || (S.approval === 'yolo' ? 'yolo' : 'strict'),
+          notify: args.notify, chatId: req.chatId, settings: { ...(req.settings || {}) }, tools: { chrome: !!req.settings?.chromeAccess } };
+        const probe = cleanSchedule(b); // checks it before the user is asked
+        const ans = await ask(`Create the schedule "${probe.name}": ${scheduleView(probe).whenText}, ${probe.approval === 'yolo' ? '⚡ YOLO' : '🔒 Strict'}, runs post in this chat. Prompt: ${clip(probe.prompt, 220)}`);
+        if (!ans.approve) return declined('schedule', ans);
+        const x = say(addSchedule(b, { projects: listProjects() }));
+        return `Created schedule ${x.id} "${x.name}" (${scheduleView(x).whenText}; next run ${ago(x.nextAt)}). Its runs post in this chat. The user sees it in Schedules and on the ⏰ chip in this chat's header.`;
+      }
+      if (act === 'update' || act === 'resume') {
+        const b = act === 'resume' ? { paused: false } : Object.fromEntries(Object.entries({ name: args.name, prompt: args.prompt, when: args.when && when(args.when), notify: args.notify, model: args.model, approval: args.approval }).filter(([, v]) => v != null));
+        if (!Object.keys(b).length) return 'Error: say what to change (name, prompt, when, notify, model or approval).';
+        const probe = cleanSchedule(b, Date.now(), s);
+        const ans = await ask(act === 'resume' ? `Resume the schedule "${s.name}" (${scheduleView(s).whenText})` : `Change the schedule "${s.name}": ${Object.keys(b).map((k) => (k === 'when' ? `when → ${scheduleView(probe).whenText}` : k === 'prompt' ? `prompt → ${clip(probe.prompt, 160)}` : `${k} → ${probe[k]}`)).join('; ')}`);
+        if (!ans.approve) return declined('schedule', ans);
+        const x = say(changeSchedule(s.id, b));
+        return `${act === 'resume' ? 'Resumed' : 'Changed'} "${x.name}": ${scheduleView(x).whenText}${x.paused ? ', paused' : `, next run ${ago(x.nextAt)}`}.`;
+      }
+      if (act === 'run_now') {
+        const ans = await ask(`Run the schedule "${s.name}" now`);
+        if (!ans.approve) return declined('schedule', ans);
+        const r = await runScheduleNow(s.id); say(s);
+        return r.status === 'skipped' ? `It did not run: ${r.note}.` : `Started a run of "${s.name}"; its reply goes in ${r.chatId === req.chatId ? 'this chat' : 'its chat'} when it is done (this reply does not wait for it).`;
+      }
+      if (act === 'delete') {
+        const ans = await ask(`Delete the schedule "${s.name}" (${scheduleView(s).whenText}). The chats it posted in stay.`);
+        if (!ans.approve) return declined('schedule', ans);
+        removeSchedule(s.id); say(s);
+        return `Deleted the schedule "${s.name}".`;
+      }
+      return 'Error: action is list, create, update, pause, resume, run_now or delete.';
+    } catch (e) { if (signal.aborted) throw e; return `Error: ${e.message}.`; }
+  }
   function declined(name, ans) { return `${ans.by === 'user' ? 'The user' : ans.by === 'budget' ? 'The budget check' : 'The automatic approval check'} declined this ${name} call${ans.reason ? `. Reason: "${ans.reason}"` : ' without giving a reason'}. Decide how to proceed with that in mind: adapt, offer an alternative, or continue without it. Do not repeat the identical call.`; }
   function toolSummary(name, args) {
     if (name === 'write_artifact') return `${args.id && arts.has(args.id) ? `Replace \`${args.id}\`` : args.markdown && !args.html ? 'Create a new document' : 'Create a new page'}: "${clip(args.title, 60)}" (${args.markdown && !args.html ? `${String(args.markdown).length} characters of Markdown` : `${String(args.html || '').length} characters of HTML`})`;
@@ -2835,6 +2915,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (WRITES_CONTENT.has(name) && TRIM_NOTE.test(JSON.stringify(args))) return `Refused: this ${name} call contains the harness's note "[… characters written earlier; removed from the conversation to save space …]". That note only stands in for text that was trimmed from this conversation; it is not file content. ${name.includes('artifact') ? 'Use read_artifact' : 'Use read_file'} to get the real text back, then write that.`;
     // remember asks the user itself, in YOLO too (never the deciders), so it gets no generic card.
     if (name === 'remember') return remember(args);
+    if (name === 'schedule') return scheduleTool(args); // asks for itself: a card for changes, none to list or pause
     // Strict asks before paid media (inside media(), with the price), helpers or decider checks only if the user chose that, or before
     // every tool when the user chose that. A plan asks once in Strict; ticking its items off later doesn't.
     // Commands have their own gate (the rule engine, in codeTool), so they never get a second, generic card.

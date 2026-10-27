@@ -19,7 +19,7 @@ import { setBudget, projectSpend, budgetState, live as liveRuns } from '../serve
 import { chatStream as realChatStream, generationCost } from '../server/openrouter.js';
 import { reviewCode, collectChanges, parseGitDiff, checkFindings, pickReviewer } from '../server/codereview.js';
 import { saveHooks, loadHooks, matchHooks, fileMatches, commandMatches, hookLine, cleanHook, safeHookFile } from '../server/hooks.js';
-import { nextAfter, cleanWhen, cleanSchedule, describeWhen, createScheduler, saveSchedules as saveScheds, loadSchedules as loadScheds, GRACE_MS } from '../server/schedules.js';
+import { nextAfter, cleanWhen, cleanSchedule, describeWhen, createScheduler, saveSchedules as saveScheds, loadSchedules as loadScheds, GRACE_MS, endRun, PAUSE_AFTER_FAILS } from '../server/schedules.js';
 import { startScheduledChat } from '../server/schedrun.js';
 import { loadMemory, saveMemory, addMemory, checkMemory, looksSecret, memoryPrompt, memoryTokens, MEMORY_TOKENS } from '../server/memory.js';
 import { startRun, follow, getRun, readLog } from '../server/runs.js';
@@ -35,7 +35,7 @@ const reply = (text, calls = [], finishReason = 'stop') => ({ text, toolCalls: c
 
 /** Runs one reply. `script(body, i)` returns the model's i-th answer (or throws). */
 // `budget` sets the project's budget and `spent` seeds what it has already spent (as a ledger row).
-async function run(script, { settings = {}, text = 'build it', resume, onEvent, signal, history, budget, spent, setup = {}, openTab, generateImage, generateVideo, ensemble, checks, chatId, prep, cont, images, comments, enhance, reading, catalogue, videoMode, videoFrom, generation } = {}) {
+async function run(script, { settings = {}, text = 'build it', resume, onEvent, signal, history, budget, spent, setup = {}, openTab, generateImage, generateVideo, ensemble, checks, chatId, prep, cont, images, comments, enhance, reading, catalogue, videoMode, videoFrom, generation, scheduledBy } = {}) {
   const id = `t${Date.now().toString(36)}${(n++).toString(36)}`;
   const dir = tempDir('quorx-run-');
   saveProject({ id, name: 'test', path: dir });
@@ -46,7 +46,7 @@ async function run(script, { settings = {}, text = 'build it', resume, onEvent, 
   let i = 0;
   const chatStream = async (body, sig, onText) => { bodies.push(structuredClone(body)); const r = await script(body, i++); if (r.text && onText) onText(r.text); return r; };
   try {
-    await runAgent({ runId: id, projectId: id, ...(chatId ? { chatId } : {}), ...(images ? { images } : {}), ...(comments ? { comments } : {}), text, resume, ...(cont ? { continue: cont } : {}), ...(reading ? { reading } : {}), ...(videoMode ? { videoMode } : {}), ...(videoFrom ? { videoFrom } : {}), history, setup: { model: 'test/model', ...setup }, settings: { approval: 'yolo', mediaEnabled: false, tools: { browser: { on: false } }, ...settings } },
+    await runAgent({ runId: id, projectId: id, ...(chatId ? { chatId } : {}), ...(scheduledBy ? { scheduledBy } : {}), ...(images ? { images } : {}), ...(comments ? { comments } : {}), text, resume, ...(cont ? { continue: cont } : {}), ...(reading ? { reading } : {}), ...(videoMode ? { videoMode } : {}), ...(videoFrom ? { videoFrom } : {}), history, setup: { model: 'test/model', ...setup }, settings: { approval: 'yolo', mediaEnabled: false, tools: { browser: { on: false } }, ...settings } },
       (e) => { events.push(e); onEvent?.(e, id); }, signal || new AbortController().signal, { chatStream, catalogue: catalogue || [{ id: 'test/model', maxOut: 4000 }], quiet: true, startServer: async ({ name, args }) => ({ key: `fake-${name}`, url: 'http://localhost:9/', status: 'running', command: ['node', ...(args || [])].join(' '), log: '' }), ...(openTab ? { openTab } : {}), ...(generateImage ? { generateImage } : {}), ...(generateVideo ? { generateVideo } : {}), ...(ensemble ? { ensemble } : {}), ...(checks ? { checks } : {}), ...(enhance ? { enhance } : {}), ...(generation ? { generation } : {}) });
     return { events, bodies, dir, id, done: events.find((e) => e.t === 'done') };
   } finally { forgetProject(id); ledger.delete(`seed-${id}`); }
@@ -2308,7 +2308,7 @@ test('a scheduled chat runs like a normal chat and is saved complete, with no pa
   } finally { forgetProject(pid); saveScheds([]); }
 });
 
-test('a schedule keeps one chat: the next run goes on there with the earlier runs as context; newChat starts afresh', async () => {
+test('a schedule keeps one chat: every run posts there but starts fresh; newChat starts a chat of its own', async () => {
   const dir = tempDir('quorx-sched-'), pid = `sr${Date.now().toString(36)}`;
   saveProject({ id: pid, name: 'sched', path: dir });
   try {
@@ -2325,13 +2325,78 @@ test('a schedule keeps one chat: the next run goes on there with the earlier run
     assert.equal(r2.chatId, r1.chatId, 'the same chat');
     const msgs = getChat(r1.chatId).agent.messages;
     assert.deepEqual(msgs.map((m) => `${m.role}:${m.content}`), ['user:type ldrop', 'assistant:Typed it (1).', 'user:type ldrop', 'assistant:Typed it (2).']);
-    assert.ok(seen[1].some((x) => x.includes('Typed it (1).')), `the second run sees the first: ${JSON.stringify(seen[1])}`);
+    assert.ok(!seen[1].some((x) => x.includes('Typed it (1).')), `each run starts fresh, with only its prompt: ${JSON.stringify(seen[1])}`);
     // The scheduler remembers the chat, and an edit keeps it.
     assert.equal(cleanSchedule({ prompt: 'type ldrop again' }, Date.now(), { ...s, chatId: r1.chatId }).chatId, r1.chatId);
     const r3 = await once({ ...s, chatId: r1.chatId, newChat: true }, 'Fresh.');
     assert.notEqual(r3.chatId, r1.chatId, 'newChat: a chat of its own');
     assert.equal(getChat(r3.chatId).agent.messages.length, 2);
   } finally { forgetProject(pid); saveScheds([]); }
+});
+
+test('a schedule tells you as its rule says, keeps its last runs, and pauses itself after 3 failures in a row', () => {
+  const base = (notify) => cleanSchedule({ name: 'N', prompt: 'check', projectId: 'p', model: 'test/model', when: { kind: 'every', minutes: 5 }, notify });
+  try {
+    const f = base('failure'), c = base('changed'), a = base('always');
+    saveScheds([f, c, a]);
+    assert.equal(endRun(f.id, 'r1', { status: 'done', reply: 'all fine' }).notify, false, 'failure: a good run is quiet');
+    assert.equal(endRun(f.id, 'r2', { status: 'failed', error: 'x' }).notify, true, 'failure: a failed one tells you');
+    assert.equal(endRun(c.id, 'r1', { status: 'done', reply: 'In stock: no (checked 10:01)' }).notify, true, 'changed: the first result tells you');
+    assert.equal(endRun(c.id, 'r2', { status: 'done', reply: 'In stock: no (checked 10:04)' }).notify, false, 'changed: the same, only a time differs');
+    const r3 = endRun(c.id, 'r3', { status: 'done', reply: 'In stock: YES, 3 left' });
+    assert.deepEqual([r3.notify, r3.changed], [true, true]);
+    assert.equal(endRun(a.id, 'r1', { status: 'stopped' }).notify, true);
+    assert.equal(loadScheds().find((s) => s.id === c.id).history.length, 3);
+    // Failures in a row pause it (a stopped run is no failure, a good run resets the count).
+    endRun(a.id, 'r2', { status: 'failed', error: 'e1' });
+    endRun(a.id, 'r3', { status: 'done', reply: 'ok' });
+    for (let i = 1; i < PAUSE_AFTER_FAILS; i++) endRun(a.id, `f${i}`, { status: 'failed', error: `e${i}` });
+    assert.equal(loadScheds().find((s) => s.id === a.id).paused, false, 'not yet');
+    const last = endRun(a.id, 'f9', { status: 'failed', error: 'the page did not load' });
+    assert.equal(last.paused, true);
+    const s = loadScheds().find((x) => x.id === a.id);
+    assert.equal(s.paused, true);
+    assert.equal(s.nextAt, null);
+    assert.match(s.pausedWhy, /3 failed runs in a row \(last: the page did not load\)/);
+    assert.equal(cleanSchedule({ paused: false }, Date.now(), s).fails, 0, 'resuming clears the count');
+    assert.ok(loadScheds().find((x) => x.id === a.id).history.length <= 10, 'ten runs kept');
+  } finally { saveScheds([]); }
+});
+
+test('the agent manages schedules from a chat: a card first, its runs post in this chat; a scheduled run may only pause its own', async () => {
+  saveScheds([]);
+  const chatId = `cs${Date.now().toString(36)}`;
+  try {
+    let pid = null, cards = 0;
+    const { bodies, done } = await run((body, i) => [
+      reply('', [['schedule', { action: 'create', name: 'Lumina drop', prompt: 'Open the bot-test channel and type /ldrop', when: { kind: 'every', minutes: 15 }, notify: 'failure', why: 'you asked for it every 15 minutes' }]]),
+      reply('', [['schedule', { action: 'list' }]]),
+      reply('', [['schedule', { action: 'delete', id: loadScheds()[0]?.id }]]),
+      reply('Set up: every 15 minutes.'),
+    ][i], { chatId, settings: { approval: 'strict' }, onEvent: (e, id) => {
+      if (e.t === 'start') pid = id;
+      if (e.t === 'approval' && e.tool === 'schedule') { cards++; setTimeout(() => answerApproval(id, e.id, { approve: !/^Delete/.test(e.what) }), 5); }
+    } });
+    assert.equal(done.reply, 'Set up: every 15 minutes.');
+    assert.equal(cards, 2, 'creating and deleting each asked');
+    const [s] = loadScheds();
+    assert.equal(s.name, 'Lumina drop');
+    assert.equal(s.chatId, chatId, 'its runs post in this chat');
+    assert.equal(s.projectId, pid);
+    assert.equal(s.notify, 'failure');
+    assert.equal(s.when.minutes, 15);
+    const results = toolResults(bodies[3]);
+    assert.match(results[0], /Created schedule .* "Lumina drop" \(every 15 minutes/);
+    assert.match(results[1], /Lumina drop · every 15 minutes .* posts in this chat/);
+    assert.match(results[2], /declined this schedule call/, 'you said no to deleting it: it stays');
+    // A scheduled run: no new jobs, but it can pause its own schedule once its goal is met.
+    const r2 = await run((body, i) => [reply('', [['schedule', { action: 'create', name: 'more', prompt: 'x', when: { kind: 'every', minutes: 5 } }], ['schedule', { action: 'pause' }]]), reply('Paused it: the drop is done.')][i], { chatId, scheduledBy: s.id });
+    const res2 = toolResults(r2.bodies[1]);
+    assert.match(res2[0], /Refused: this is a scheduled run/);
+    assert.match(res2[1], /Paused "Lumina drop"/);
+    assert.equal(loadScheds().length, 1);
+    assert.equal(loadScheds()[0].paused, true);
+  } finally { saveScheds([]); }
 });
 
 test('a scheduled chat in Strict waits for your approval (and says so), even if the saved settings say YOLO', async () => {

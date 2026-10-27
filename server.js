@@ -21,7 +21,7 @@ import { startSignIn, signInStatus, cancelSignIn, finishByCallback, finishWithCo
 import { runAgent, answerApproval, answerQuestion, answerSecret, answerBudget, raiseCap, setRunApproval, steerRun, setRunReading, setRunVideo, holdCard, DEFAULTS, MEDIA, briefFor, briefForChat, REVIEW_MODEL, HELPER_MODEL, REVIEW_ALT, REVIEW_STRONG, REVIEW_STRONG_ALT } from './server/agent.js';
 import { reviewCode, pickReviewer } from './server/codereview.js';
 import { loadHooks, saveHooks, HOOK_EVENTS } from './server/hooks.js';
-import { createScheduler, loadSchedules, saveSchedules, cleanSchedule, describeWhen, MAX_SCHEDULES } from './server/schedules.js';
+import { createScheduler, loadSchedules, scheduleView, addSchedule, changeSchedule, removeSchedule, runScheduleNow, scheduleHooks } from './server/schedules.js';
 import { startScheduledChat } from './server/schedrun.js';
 import { loadMemory, saveMemory, memoryTokens, MEMORY_TOKENS } from './server/memory.js';
 import { CHECKS } from './server/harness-checks.js';
@@ -581,39 +581,25 @@ const server = http.createServer(async (req, res) => {
     // ---- scheduled tasks: list, add, change (pause, resume), remove, run now; and notices for the page ----
     if (url.pathname === '/api/schedules' && req.method === 'GET') {
       const since = Number(url.searchParams.get('since')) || 0;
-      return json(res, 200, { schedules: loadSchedules().map((s) => ({ ...s, settings: undefined, whenText: describeWhen(s.when) })), notices: notices.filter((n) => n.id > since), noticeSeq, now: Date.now() });
+      return json(res, 200, { schedules: loadSchedules().map(scheduleView), notices: notices.filter((n) => n.id > since), noticeSeq, now: Date.now() });
     }
     if (url.pathname === '/api/schedules' && req.method === 'POST') {
       const b = JSON.parse(await readBody(req, 5e5) || '{}');
-      try {
-        if (!listProjects().some((p) => p.id === b.projectId)) throw new Error('unknown project');
-        const list = loadSchedules();
-        if (list.length >= MAX_SCHEDULES) throw new Error(`at most ${MAX_SCHEDULES} schedules`);
-        const s = cleanSchedule(b);
-        if (s.nextAt == null && !s.paused) throw new Error('that time has already passed');
-        saveSchedules([...list, s]);
-        return json(res, 200, { ok: true, schedule: { ...s, settings: undefined, whenText: describeWhen(s.when) } });
-      } catch (e) { return json(res, 200, { error: e.message }); }
+      try { return json(res, 200, { ok: true, schedule: scheduleView(addSchedule(b, { projects: listProjects() })) }); }
+      catch (e) { return json(res, 200, { error: e.message }); }
     }
     const scm = url.pathname.match(/^\/api\/schedules\/([\w-]{1,40})(\/run)?$/);
     if (scm) {
-      const list = loadSchedules(), i = list.findIndex((s) => s.id === scm[1]);
-      if (i < 0) return json(res, 404, { error: 'no such schedule' });
-      if (req.method === 'DELETE' && !scm[2]) { list.splice(i, 1); saveSchedules(list); return json(res, 200, { ok: true }); }
+      if (!loadSchedules().some((s) => s.id === scm[1])) return json(res, 404, { error: 'no such schedule' });
+      if (req.method === 'DELETE' && !scm[2]) { removeSchedule(scm[1]); return json(res, 200, { ok: true }); }
       if (req.method === 'PUT' && !scm[2]) {
         const b = JSON.parse(await readBody(req, 5e5) || '{}');
-        try { list[i] = cleanSchedule(b, Date.now(), list[i]); saveSchedules(list); return json(res, 200, { ok: true, schedule: { ...list[i], settings: undefined, whenText: describeWhen(list[i].when) } }); }
+        try { return json(res, 200, { ok: true, schedule: scheduleView(changeSchedule(scm[1], b)) }); }
         catch (e) { return json(res, 200, { error: e.message }); }
       }
       if (req.method === 'POST' && scm[2]) {
-        const s = list[i];
-        try {
-          const r = startScheduledChat(s, { missed: false, due: Date.now() }, scheduleDeps);
-          s.lastRun = { at: Date.now(), due: Date.now(), missed: false, now: true, chatId: r.chatId || null, runId: r.runId || null, status: r.status, ...(r.note ? { note: r.note } : {}) };
-          s.runs = (s.runs || 0) + 1;
-          saveSchedules(list);
-          return json(res, 200, { ok: true, ...r });
-        } catch (e) { return json(res, 200, { error: e.message }); }
+        try { return json(res, 200, { ok: true, ...(await runScheduleNow(scm[1])) }); }
+        catch (e) { return json(res, 200, { error: e.message }); }
       }
     }
     // ---- hooks: the user's commands around the agent's tool calls, per project, kept in the data folder ----
@@ -1146,6 +1132,8 @@ function scheduleNotice(kind, { schedule, chatId = null, text = '', cost = 0 }) 
 }
 const scheduleDeps = { now: Date.now, listProjects, budgetState, saveChat, getChat, startRun, follow, runAgent, events: runEvents, notify: scheduleNotice };
 const scheduler = createScheduler({ run: (s, info) => startScheduledChat(s, info, scheduleDeps), running: (id) => runStatus(id).status === 'running' });
+// ▶ Run now, from the Schedules window or the agent's schedule tool.
+scheduleHooks.runNow = (s) => startScheduledChat(s, { missed: false, due: Date.now() }, scheduleDeps);
 if (!process.env.OH_NO_SCHEDULES) scheduler.start();
 
 // Pages the agent made (project files, artifacts) also load from a second address on this computer. There they have

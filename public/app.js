@@ -2475,6 +2475,7 @@ function paneHTML(c) {
             <button type="button" class="ch-proj-tag proj-hue-tag" title="Open the project folder in File Explorer"><svg class="proj-folder-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6l2 3h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/></svg><span class="ch-proj-name"></span></button>
             <a class="ch-gh" target="_blank" rel="noopener noreferrer" aria-label="Open on GitHub" hidden></a>
             <span class="ch-notes-wrap"><button type="button" class="ch-notes" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6z"/><path d="M9 11h7M9 15h7M9 7h3"/></svg><span class="ch-notes-word"></span></button><div class="ch-notes-pop allow-pop" role="dialog" aria-label="This chat's notes" hidden></div></span>
+            <button type="button" class="ch-sched" hidden></button>
             <span class="dir-a-crumb-sep">/</span>
             <span class="dir-a-msgs-count"></span>
           </div>
@@ -2716,6 +2717,19 @@ function renderChatHead(c) {
   if (gh) { gh.hidden = !p?.github; if (p?.github && gh.getAttribute('href') !== p.github.url) { gh.href = p.github.url; gh.title = `Open ${p.github.owner}/${p.github.repo} on GitHub`; gh.innerHTML = GH_ICO; } }
   $('.dir-a-msgs-count', r).textContent = `${t.msgs} msg${t.msgs === 1 ? '' : 's'}`;
   $('.ch-cost', r).textContent = money(t.cost, t.cost < 1 ? 4 : 2);
+  // ⏰ the schedules that post in this chat: how many, and whether they are on; click for them in Schedules.
+  const sc = $('.ch-sched', r);
+  if (sc) {
+    const mine = (SCHED.list || []).filter((s) => s.chatId === c.id), on = mine.filter((s) => !s.paused && s.nextAt != null);
+    sc.hidden = !mine.length;
+    if (mine.length) {
+      sc.className = `ch-sched ${on.length ? 'on' : 'off'}`;
+      // Short, for a narrow header: the next run's time (today's without the word), or how many are on and paused.
+      sc.textContent = `⏰ ${mine.length === 1 ? (on.length ? when2(on[0].nextAt).replace(/^Today /, '') : 'paused') : `${on.length} on${mine.length > on.length ? ` · ${mine.length - on.length} paused` : ''}`}`;
+      sc.title = `${mine.map((s) => `${s.name}: ${s.whenText}${s.paused ? ' (paused)' : ''}`).join('\n')}\nIts runs post in this chat. Ask here what they saw, or to change them. Click for them in Schedules.`;
+      sc.onclick = () => { SCHED.focus = c.id; openSchedules(); };
+    }
+  }
   // State: Ready, Running, or waiting for your approval.
   const st = $('.dir-a-state-badge', r), state = c.waiting ? 'waiting' : c.running ? 'running' : 'idle'; // not 'approval': that class belongs to the approval cards
   st.className = `dir-a-state-badge ${state}`;
@@ -3697,9 +3711,10 @@ function updateMsg(c, m, { bodyOnly = false } = {}) {
   right.append(tb);
   $('.foot', el).append(right);
   if (s && !m.live && !m.runActive) {
-    right.insertAdjacentHTML('beforeend', `<span class="msg-tools"><button type="button" class="mt-btn mt-copy" title="Copy this reply (Markdown)" aria-label="Copy reply">${msgIcon('copy')}</button><button type="button" class="mt-btn mt-remix" title="Remix: a new chat in this project with the conversation up to here. Files are not touched." aria-label="Remix in a new chat">${msgIcon('branch')}</button></span>`);
+    right.insertAdjacentHTML('beforeend', `<span class="msg-tools"><button type="button" class="mt-btn mt-copy" title="Copy this reply (Markdown)" aria-label="Copy reply">${msgIcon('copy')}</button><button type="button" class="mt-btn mt-remix" title="Remix: a new chat in this project with the conversation up to here. Files are not touched." aria-label="Remix in a new chat">${msgIcon('branch')}</button>${m.error ? '' : '<button type="button" class="mt-btn mt-repeat" title="⏰ Repeat this: a schedule that asks for this again at set times. Its runs post in this chat." aria-label="Repeat this on a schedule">⏰</button>'}</span>`);
     wireIconCopy($('.foot .mt-copy', el), () => m.content);
     $('.foot .mt-remix', el).onclick = () => remixFrom(c, m);
+    const rep = $('.foot .mt-repeat', el); if (rep) rep.onclick = () => repeatReply(c, m);
   }
   const undo = $('.f-undo-row .undo', el);
   if (undo) undo.onclick = () => undoReply(c, m);
@@ -4131,6 +4146,7 @@ function traceHTML(m) {
     } else if (e.t === 'tool' && e.name !== 'decide') row(e.at, `${e.by === 'reviewer' ? '🧪 <span class="tr-rv">reviewer</span> ' : e.by === 'helper' ? `🤝 <span class="tr-hp">helper ${e.helper || ''}</span> ` : ''}${TOOL_NAME[e.name]?.split(' ')[0] || '🔧'} <b>${esc(e.name)}</b><div class="sub">${esc(argSummary(e))}</div>`, e.by === 'reviewer' ? 'browser' : 'tool');
     else if (e.t === 'reading') row(e.at, `📝 <b>Prompt enhancer</b> ${esc(short(e.model))} read the request${e.late ? ' (too late for the first step; the deciders still use it)' : ''} · ${secs(e.ms)} · ${money(e.cost, 5)}<div class="sub" style="white-space:pre-wrap">${linkUrls(esc(e.text))}</div>`, 'note');
     else if (e.t === 'chat_off_project') row(e.at, `📝 Own chat from now on: you said “${esc(e.why || '')}”, so this chat leaves the project's notes, design and log alone. Tick Part of the project in the header to undo.`, 'note');
+    else if (e.t === 'schedules_changed') row(e.at, `⏰ schedule ${esc({ create: 'created', update: 'changed', pause: 'paused', resume: 'resumed', run_now: 'run now', delete: 'deleted' }[e.action] || e.action)}<div class="sub">See ⏰ Schedules, or the ⏰ chip in this chat's header</div>`, 'ok');
     else if (e.t === 'tools_on') row(e.at, `🧰 Switched on for this chat: ${(e.kinds || []).map((k) => esc({ image: 'pictures', video: 'video clips', music: 'music', speech: 'voice', apps: '🖥 computer use' }[k] || k)).join(', ')}${Object.keys(e.models || {}).length ? ` · ${Object.entries(e.models).map(([k, mm]) => `${esc(k)}: ${esc(short(mm))}`).join(', ')}` : ''}`, 'note');
     else if (e.t === 'video_mode') row(e.at, e.on ? `🎬 <b>Video Mode</b> on${e.skills?.length ? ` · loaded ${e.skills.map(esc).join(', ')}` : ''}<div class="sub">Brief, story and storyboard come before anything is spent${e.first ? '' : ' (the brief was settled earlier in this chat)'}.</div>` : '🎬 Video Mode off: you said this is not a film', 'note');
     else if (e.t === 'reading_edit') row(e.at, e.text ? `📝 You corrected the reading<div class="sub" style="white-space:pre-wrap">${esc(e.text)}</div>` : '📝 You dropped the reading', 'note');
@@ -4895,6 +4911,7 @@ async function followRun(c, m, open) {
         if (e.t === 'interrupted') { m.error = 'The harness restarted while this reply was running.'; m.resumable = !!e.resumable; }
         if (e.t === 'compacted') { a.summary = e.summary; a.summaryAt = e.cutoffAt; }
         // You switched paid tools on from the agent's card: they stay on for this chat (its 🧰 Tools menu shows them).
+        if (e.t === 'schedules_changed') loadSchedules().then(() => { if ($('#schedules')?.open) drawSchedules(); renderChatHead(c); });
         if (e.t === 'tools_on') { for (const k of e.kinds || []) if (CHAT_TOOLS.includes(k) || k === 'apps') c.tools[k] = true; if ((e.kinds || []).includes('apps')) renderComposerBar(c); saveChat(c); renderToolbars(); }
         if (e.t === 'video_mode') {
           const u = a.messages[a.messages.indexOf(m) - 1];
@@ -5383,6 +5400,7 @@ async function loadSchedules() {
   const first = !SCHED.since && !SCHED.seen;
   SCHED.list = r.schedules; SCHED.now = r.now; SCHED.seen = true;
   drawSchedCount();
+  for (const c of G.open.values()) renderChatHead(c); // their ⏰ chips
   // Notices from before this page loaded are old news: only later ones notify.
   if (!first) for (const n of r.notices) scheduleNoticed(n);
   SCHED.since = Math.max(SCHED.since, r.noticeSeq || 0);
@@ -5418,15 +5436,41 @@ function blankSchedule() {
   const at = new Date(Date.now() + 3600e3); at.setSeconds(0, 0);
   return { name: '', projectId: pid, prompt: '', model: c?.agent.setup.model || G.settings.model, approval: 'strict', when: { kind: 'daily', time: '09:00', days: [1, 2, 3, 4, 5] }, onceAt: at.getTime(), everyN: 2, everyUnit: 'hours' };
 }
+// A schedule's chat (where its runs post) and its last runs as dots: green done, red failed, amber waiting for you,
+// grey stopped or skipped. Hover a dot for when, how long and what it cost; click it for that run's chat.
+const SCHED_DOT = { done: 'ok', failed: 'bad', stopped: 'off', waiting: 'wait', running: 'run', skipped: 'off' };
+const PAUSE_FAILS = 3; // server/schedules.js PAUSE_AFTER_FAILS
+const NOTIFY_LABEL = { always: 'every run', failure: 'only failures', needs: 'only when it needs me', changed: 'only when the result changes' };
+function schedLinks(s) {
+  const chat = s.chatId && G.chats.find((c) => c.id === s.chatId);
+  const dots = (s.history || []).map((h) => `<button type="button" class="sc-dot ${SCHED_DOT[h.status] || 'off'}" data-chat="${esc(h.chatId || s.chatId || '')}" title="${esc(`${when2(h.at)} · ${h.status}${h.ms ? ` · ${secs(h.ms)}` : ''}${h.cost ? ` · ${money(h.cost, 4)}` : ''}`)}" aria-label="${esc(`${h.status} ${when2(h.at)}`)}"></button>`).join('');
+  return `<div class="sc-links">${chat ? `<button type="button" class="mp-link sc-open" data-chat="${esc(chat.id)}" title="Every run posts its reply here; ask its agent there what the runs saw, or to change this schedule">💬 ${esc(clip(chat.title || 'its chat', 40))}</button>` : '<span class="sc-dim">Its first run makes its chat</span>'}${dots ? `<span class="sc-dots" aria-label="Last runs">${dots}</span>` : ''}<span class="sc-dim">Tells you: ${esc(NOTIFY_LABEL[s.notify || 'always'])}</span></div>`;
+}
+// ⏰ Repeat this, under a reply that went well: a new schedule with the message that asked for it, this chat's model and
+// mode, posting its runs in this chat. You pick when (every hour to start with) and save.
+async function repeatReply(c, m) {
+  const msgs = c.agent.messages, i = msgs.indexOf(m);
+  const ask = [...msgs.slice(0, i)].reverse().find((x) => x.role === 'user' && String(x.content || '').trim());
+  if (!ask) return uiAlert('There is no message before this reply to repeat.');
+  const e = blankSchedule();
+  Object.assign(e, { name: clip(c.title || 'Repeat', 60), prompt: String(ask.content).trim(), projectId: c.projectId, model: c.agent.setup.model, approval: c.approval === 'yolo' ? 'yolo' : 'strict',
+    chrome: !!c.tools?.chrome, chatId: c.id, when: { kind: 'every', minutes: 60 }, everyN: 1, everyUnit: 'hours' });
+  SCHED.edit = e;
+  await loadSchedules();
+  if (!$('#schedules').open) $('#schedules').showModal();
+  drawSchedules();
+  $('#scName')?.focus();
+}
 function drawSchedules() {
   const body = $('#schedBody');
   const proj = (id) => G.projects.find((p) => p.id === id)?.name || id;
   const rows = SCHED.list.map((s) => {
     const st = s.lastRun ? SCHED_STATUS[s.lastRun.status] || [s.lastRun.status, ''] : null;
-    return `<li class="sc-row ${s.paused ? 'paused' : ''}" data-id="${esc(s.id)}">
+    return `<li class="sc-row ${s.paused ? 'paused' : ''} ${SCHED.focus && s.chatId === SCHED.focus ? 'focus' : ''}" data-id="${esc(s.id)}">
       <div class="sc-main"><div class="sc-top"><b class="sc-name">${esc(s.name)}</b><span class="tag sc-proj">📁 ${esc(proj(s.projectId))}</span><span class="tag sc-mode ${s.approval}" title="${s.approval === 'yolo' ? 'YOLO: the deciders answer for you, nothing waits' : 'Strict: approvals and questions wait for you'}">${s.approval === 'yolo' ? '⚡ YOLO' : '🔒 Strict'}</span></div>
         <div class="sc-when">${esc(s.whenText)} · ${recDot(s.model, 'chat')} ${esc(short(s.model))}</div>
         <div class="sc-prompt" title="${esc(s.prompt)}">${esc(clip(s.prompt.replace(/\s+/g, ' '), 140))}</div>
+        ${schedLinks(s)}${s.paused && s.pausedWhy ? `<small class="sc-note sc-bad">⏸ ${esc(s.pausedWhy)}</small>` : ''}
         <div class="sc-runs"><span>Next: <b>${s.paused ? 'paused' : s.nextAt ? esc(when2(s.nextAt)) : 'none'}</b></span>${s.lastRun ? `<span>Last: ${esc(when2(s.lastRun.at))} <span class="sc-st ${st[1]}">${esc(st[0])}</span>${s.lastRun.missed ? '<span class="sc-st missed" title="QuorX was closed or the computer slept at the planned time, so it ran when QuorX was back">missed, ran late</span>' : ''}${s.lastRun.cost ? ` <span class="cost">${money(s.lastRun.cost, 4)}</span>` : ''}${s.lastRun.chatId ? ` <button type="button" class="mp-link sc-open" data-chat="${esc(s.lastRun.chatId)}">Open chat</button>` : ''}${s.lastRun.note ? `<small class="sc-note">${esc(s.lastRun.note)}</small>` : ''}${s.lastRun.skipped ? `<small class="sc-note">${s.lastRun.skipped} turn${s.lastRun.skipped === 1 ? '' : 's'} skipped while it was still going</small>` : ''}</span>` : '<span class="sc-dim">Not run yet</span>'}</div></div>
       <div class="sc-acts"><button type="button" class="kx-btn sm sc-now" title="Start this chat now (the schedule stays as it is)">▶ Run now</button><button type="button" class="kx-btn sm sc-pause">${s.paused ? 'Resume' : 'Pause'}</button><button type="button" class="kx-btn sm sc-edit">Edit</button><button type="button" class="kx-btn sm sc-del" title="Delete this schedule (its chats stay)">🗑</button></div></li>`;
   }).join('');
@@ -5439,7 +5483,7 @@ function drawSchedules() {
     $('.sc-del', row).onclick = async () => { if (!(await uiConfirm(`Delete the schedule “${s.name}”? Chats it already started stay.`))) return; await postJ(`/api/schedules/${s.id}`, null, 'DELETE'); await loadSchedules(); drawSchedules(); };
     $('.sc-edit', row).onclick = () => { const at = s.when.kind === 'once' ? s.when.at : Date.now() + 3600e3; SCHED.edit = { ...s, onceAt: at, everyN: s.when.kind === 'every' ? (s.when.minutes % 60 ? s.when.minutes : s.when.minutes / 60) : 2, everyUnit: s.when.kind === 'every' && s.when.minutes % 60 ? 'minutes' : 'hours' }; drawSchedules(); };
     $('.sc-now', row).onclick = async (e) => { e.target.disabled = true; const r = await postJ(`/api/schedules/${s.id}/run`, {}); if (r?.error) { e.target.disabled = false; return uiAlert(`It did not start: ${r.error}`); } await loadSchedules(); drawSchedules(); refreshSidebar(); };
-    const open = $('.sc-open', row); if (open) open.onclick = () => { $('#schedules').close(); showChat(open.dataset.chat); if (isPhone()) setMView('chat'); };
+    for (const open of row.querySelectorAll('.sc-open, .sc-dot[data-chat]:not([data-chat=""])')) open.onclick = () => { $('#schedules').close(); showChat(open.dataset.chat); if (isPhone()) setMView('chat'); };
   }
   if (SCHED.edit) wireScheduleForm(body);
   pollSchedules();
@@ -5462,7 +5506,8 @@ function scheduleForm(e) {
     <div class="sc-f"><span>Model</span><button type="button" class="st-chip sc-model">${recDot(e.model, 'chat')} ${esc(short(e.model))} <small>${esc(shortPrice(e.model))}</small></button></div>
     <div class="sc-f"><span>Mode</span><div class="mp-sorts sc-mode-pick" role="radiogroup" aria-label="Permission mode">${[['strict', '🔒 Strict'], ['yolo', '⚡ YOLO']].map(([k, l]) => `<button type="button" class="mp-sort ${e.approval === k ? 'on' : ''}" data-mode="${k}" role="radio" aria-checked="${e.approval === k}">${l}</button>`).join('')}</div><small class="sc-dim sc-mode-note">${e.approval === 'yolo' ? 'Nothing waits: the deciders answer the agent\'s questions and approve commands for you.' : 'Approvals and questions wait for you, with a notification.'}</small></div>
     <div class="sc-f sc-wide"><span>Chrome</span><label class="sq-check"><input type="checkbox" id="scChrome" ${(e.chrome ?? e.tools?.chrome) ? 'checked' : ''}><span>🧩 Let it use my Chrome, signed in as me (Chrome must be open; sending, posting and buying still wait for you)</span></label></div>
-    <div class="sc-f sc-wide"><span>Chat</span><label class="sq-check"><input type="checkbox" id="scNewChat" ${e.newChat ? 'checked' : ''}><span>Start a new chat every run (off: every run goes on in this schedule's one chat, with its earlier runs as context)</span></label></div>
+    <div class="sc-f sc-wide"><span>Chat</span>${(() => { const ch = e.chatId && G.chats.find((x) => x.id === e.chatId); return ch ? `<small class="sc-dim">Runs post in 💬 <b>${esc(clip(ch.title || 'its chat', 50))}</b>. Ask its agent there what the runs saw, or to change this schedule.</small>` : ''; })()}<label class="sq-check"><input type="checkbox" id="scNewChat" ${e.newChat ? 'checked' : ''}><span>Start a new chat every run (off: every run posts in this schedule's one chat). Each run starts fresh, with only the prompt.</span></label></div>
+    <div class="sc-f sc-wide"><span>Tell me</span><div class="mp-sorts sc-notify" role="radiogroup" aria-label="When to tell you">${Object.entries(NOTIFY_LABEL).map(([k, l]) => `<button type="button" class="mp-sort ${(e.notify || 'always') === k ? 'on' : ''}" data-notify="${k}" role="radio" aria-checked="${(e.notify || 'always') === k}">${esc(l[0].toUpperCase() + l.slice(1))}</button>`).join('')}</div><small class="sc-dim">A run that waits for you always tells you. ${PAUSE_FAILS} failed runs in a row pause the schedule, and tell you.</small></div>
     <div class="sc-form-acts"><span class="sc-err" role="alert"></span><button type="button" class="kx-btn sc-cancel">Cancel</button><button type="submit" class="kx-btn primary">${e.id ? 'Save' : 'Create schedule'}</button></div>
   </form>`;
 }
@@ -5477,6 +5522,7 @@ function wireScheduleForm(body) {
     drawSchedules();
   };
   for (const b of f.querySelectorAll('.sc-mode-pick button')) b.onclick = () => { keep(); e.approval = b.dataset.mode; drawSchedules(); };
+  for (const b of f.querySelectorAll('.sc-notify button')) b.onclick = () => { keep(); e.notify = b.dataset.notify; drawSchedules(); };
   for (const b of f.querySelectorAll('.sc-quick')) b.onclick = () => {
     const t = new Date(); if (b.dataset.in === 'tomorrow') { t.setDate(t.getDate() + 1); t.setHours(9, 0, 0, 0); } else { t.setMinutes(t.getMinutes() + Number(b.dataset.in)); t.setSeconds(0, 0); }
     $('#scAt', f).value = localInput(t.getTime());
@@ -5497,7 +5543,7 @@ function wireScheduleForm(body) {
     const c = blankChat(e.projectId);
     c.approval = e.approval;
     c.tools = { ...c.tools, chrome: !!e.chrome };
-    const payload = { name: e.name, projectId: e.projectId, prompt: e.prompt, model: e.model, reasoning: c.agent.setup.reasoning, approval: e.approval, when, tools: c.tools, newChat: $('#scNewChat', f).checked,
+    const payload = { name: e.name, projectId: e.projectId, prompt: e.prompt, model: e.model, reasoning: c.agent.setup.reasoning, approval: e.approval, when, tools: c.tools, newChat: $('#scNewChat', f).checked, notify: e.notify || 'always', ...(e.chatId ? { chatId: e.chatId } : {}),
       settings: { ...G.settings, approval: e.approval, tools: chatTools(c), ...qualitySettings(c), chromeAccess: !!e.chrome } };
     const r = await postJ(e.id ? `/api/schedules/${e.id}` : '/api/schedules', payload, e.id ? 'PUT' : 'POST');
     if (!r || r.error) { err.textContent = r?.error ? `${r.error[0].toUpperCase()}${r.error.slice(1)}.` : 'Not saved.'; return; }
@@ -7228,8 +7274,9 @@ async function boot() {
   $('#stSearch').oninput = () => searchSettings($('#stSearch').value);
   $('#newBtn').onclick = () => newChat();
   $('#costsBtn').onclick = openCosts;
-  $('#schedBtn').onclick = () => openSchedules();
+  $('#schedBtn').onclick = () => { SCHED.focus = null; openSchedules(); };
   $('#schedClose').onclick = () => $('#schedules').close();
+  $('#schedules').addEventListener('close', () => { SCHED.focus = null; });
   loadSchedules().then(pollSchedules);
   $('#costClose').onclick = () => $('#costs').close();
   $('#themeBtn').onclick = () => { const i = THEMES.findIndex((t) => t[0] === (G.theme || null)); G.theme = THEMES[(i + 1) % THEMES.length][0]; applyTheme(); savePrefs(); };
