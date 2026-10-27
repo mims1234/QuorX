@@ -5369,11 +5369,20 @@ const SCHED = { list: [], since: 0, edit: null, timer: 0, now: Date.now() };
 const SCHED_STATUS = { starting: ['Starting', 'run'], running: ['Running', 'run'], waiting: ['Waits for you', 'wait'], done: ['Finished', 'ok'], failed: ['Failed', 'bad'], stopped: ['Stopped', 'bad'], skipped: ['Skipped', 'wait'] };
 const WEEK = [[1, 'Mon'], [2, 'Tue'], [3, 'Wed'], [4, 'Thu'], [5, 'Fri'], [6, 'Sat'], [0, 'Sun']];
 const when2 = (t) => { if (!t) return '–'; const d = new Date(t), today = new Date(); const same = d.toDateString() === today.toDateString(); const tmr = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1).toDateString() === d.toDateString(); return `${same ? 'Today' : tmr ? 'Tomorrow' : d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })} ${d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`; };
+// The sidebar's Schedules row: how many are on (they still have a next run) and how many are paused.
+function drawSchedCount() {
+  const el = $('#schedCount'); if (!el) return;
+  const on = SCHED.list.filter((s) => !s.paused && s.nextAt != null).length, off = SCHED.list.filter((s) => s.paused).length;
+  el.hidden = !on && !off;
+  el.innerHTML = `${on ? `<span class="on">${on}</span>` : ''}${off ? `<span class="off">${off} paused</span>` : ''}`;
+  el.closest('button').title = `Schedules: ${on} on, ${off} paused. Chats QuorX starts on its own, like every weekday at 9`;
+}
 async function loadSchedules() {
   const r = await fetch(`/api/schedules?since=${SCHED.since}`).then((x) => x.json()).catch(() => null);
   if (!r || r.error) return null;
   const first = !SCHED.since && !SCHED.seen;
   SCHED.list = r.schedules; SCHED.now = r.now; SCHED.seen = true;
+  drawSchedCount();
   // Notices from before this page loaded are old news: only later ones notify.
   if (!first) for (const n of r.notices) scheduleNoticed(n);
   SCHED.since = Math.max(SCHED.since, r.noticeSeq || 0);
@@ -5403,7 +5412,9 @@ async function openSchedules(editId) {
   drawSchedules();
 }
 function blankSchedule() {
-  const c = focused(), pid = c?.projectId && G.projects.some((p) => p.id === c.projectId) ? c.projectId : (G.projects.find((p) => !p.archived && p.id !== 'scratch') || G.projects[0])?.id;
+  // New schedules go to the Schedules project (pick another in the form); without it, the chat's project as before.
+  const c = focused(), has = (id) => G.projects.some((p) => p.id === id && !p.archived);
+  const pid = has('schedules') ? 'schedules' : c?.projectId && has(c.projectId) ? c.projectId : (G.projects.find((p) => !p.archived && p.id !== 'scratch') || G.projects[0])?.id;
   const at = new Date(Date.now() + 3600e3); at.setSeconds(0, 0);
   return { name: '', projectId: pid, prompt: '', model: c?.agent.setup.model || G.settings.model, approval: 'strict', when: { kind: 'daily', time: '09:00', days: [1, 2, 3, 4, 5] }, onceAt: at.getTime(), everyN: 2, everyUnit: 'hours' };
 }
@@ -5416,7 +5427,7 @@ function drawSchedules() {
       <div class="sc-main"><div class="sc-top"><b class="sc-name">${esc(s.name)}</b><span class="tag sc-proj">📁 ${esc(proj(s.projectId))}</span><span class="tag sc-mode ${s.approval}" title="${s.approval === 'yolo' ? 'YOLO: the deciders answer for you, nothing waits' : 'Strict: approvals and questions wait for you'}">${s.approval === 'yolo' ? '⚡ YOLO' : '🔒 Strict'}</span></div>
         <div class="sc-when">${esc(s.whenText)} · ${recDot(s.model, 'chat')} ${esc(short(s.model))}</div>
         <div class="sc-prompt" title="${esc(s.prompt)}">${esc(clip(s.prompt.replace(/\s+/g, ' '), 140))}</div>
-        <div class="sc-runs"><span>Next: <b>${s.paused ? 'paused' : s.nextAt ? esc(when2(s.nextAt)) : 'none'}</b></span>${s.lastRun ? `<span>Last: ${esc(when2(s.lastRun.at))} <span class="sc-st ${st[1]}">${esc(st[0])}</span>${s.lastRun.missed ? '<span class="sc-st missed" title="QuorX was closed or the computer slept at the planned time, so it ran when QuorX was back">missed, ran late</span>' : ''}${s.lastRun.cost ? ` <span class="cost">${money(s.lastRun.cost, 4)}</span>` : ''}${s.lastRun.chatId ? ` <button type="button" class="mp-link sc-open" data-chat="${esc(s.lastRun.chatId)}">Open chat</button>` : ''}${s.lastRun.note ? `<small class="sc-note">${esc(s.lastRun.note)}</small>` : ''}</span>` : '<span class="sc-dim">Not run yet</span>'}</div></div>
+        <div class="sc-runs"><span>Next: <b>${s.paused ? 'paused' : s.nextAt ? esc(when2(s.nextAt)) : 'none'}</b></span>${s.lastRun ? `<span>Last: ${esc(when2(s.lastRun.at))} <span class="sc-st ${st[1]}">${esc(st[0])}</span>${s.lastRun.missed ? '<span class="sc-st missed" title="QuorX was closed or the computer slept at the planned time, so it ran when QuorX was back">missed, ran late</span>' : ''}${s.lastRun.cost ? ` <span class="cost">${money(s.lastRun.cost, 4)}</span>` : ''}${s.lastRun.chatId ? ` <button type="button" class="mp-link sc-open" data-chat="${esc(s.lastRun.chatId)}">Open chat</button>` : ''}${s.lastRun.note ? `<small class="sc-note">${esc(s.lastRun.note)}</small>` : ''}${s.lastRun.skipped ? `<small class="sc-note">${s.lastRun.skipped} turn${s.lastRun.skipped === 1 ? '' : 's'} skipped while it was still going</small>` : ''}</span>` : '<span class="sc-dim">Not run yet</span>'}</div></div>
       <div class="sc-acts"><button type="button" class="kx-btn sm sc-now" title="Start this chat now (the schedule stays as it is)">▶ Run now</button><button type="button" class="kx-btn sm sc-pause">${s.paused ? 'Resume' : 'Pause'}</button><button type="button" class="kx-btn sm sc-edit">Edit</button><button type="button" class="kx-btn sm sc-del" title="Delete this schedule (its chats stay)">🗑</button></div></li>`;
   }).join('');
   body.innerHTML = `${SCHED.edit ? scheduleForm(SCHED.edit) : `<div class="sc-head"><p class="pj-hint">Schedules start a normal chat on their own, with the saved prompt, model and mode. They run while QuorX is open or in the tray; a run missed while the computer slept runs once when it wakes. Budgets and caps apply as in any chat.</p><button type="button" class="kx-btn primary sc-new">+ New schedule</button></div>`}
@@ -5446,17 +5457,18 @@ function scheduleForm(e) {
       <div class="mp-sorts sc-kind" role="radiogroup" aria-label="How often">${[['once', 'Once'], ['daily', 'Daily'], ['every', 'Repeat every']].map(([k, l]) => `<button type="button" class="mp-sort ${kind === k ? 'on' : ''}" data-kind="${k}" role="radio" aria-checked="${kind === k}">${l}</button>`).join('')}</div>
       <div class="sc-kind-body" data-for="once" ${kind === 'once' ? '' : 'hidden'}><input type="datetime-local" id="scAt" value="${localInput(kind === 'once' ? w.at : e.onceAt)}"><button type="button" class="kx-btn sm sc-quick" data-in="60">In 1 hour</button><button type="button" class="kx-btn sm sc-quick" data-in="tomorrow">Tomorrow 9:00</button></div>
       <div class="sc-kind-body" data-for="daily" ${kind === 'daily' ? '' : 'hidden'}><input type="time" id="scTime" value="${esc(kind === 'daily' ? w.time : '09:00')}"><span class="sc-days">${WEEK.map(([d, l]) => `<label class="sq-check"><input type="checkbox" class="sc-day" value="${d}" ${!days.length || days.includes(d) ? 'checked' : ''}><span>${l}</span></label>`).join('')}</span><button type="button" class="kx-btn sm sc-preset" data-days="1,2,3,4,5">Weekdays</button><button type="button" class="kx-btn sm sc-preset" data-days="0,1,2,3,4,5,6">Every day</button></div>
-      <div class="sc-kind-body" data-for="every" ${kind === 'every' ? '' : 'hidden'}><input type="number" id="scEvery" min="1" max="10080" value="${esc(String(e.everyN))}"><select id="scUnit"><option value="minutes" ${e.everyUnit === 'minutes' ? 'selected' : ''}>minutes</option><option value="hours" ${e.everyUnit === 'hours' ? 'selected' : ''}>hours</option></select><small class="sc-dim">at least 15 minutes</small></div>
+      <div class="sc-kind-body" data-for="every" ${kind === 'every' ? '' : 'hidden'}><input type="number" id="scEvery" min="1" max="10080" value="${esc(String(e.everyN))}"><select id="scUnit"><option value="minutes" ${e.everyUnit === 'minutes' ? 'selected' : ''}>minutes</option><option value="hours" ${e.everyUnit === 'hours' ? 'selected' : ''}>hours</option></select><small class="sc-dim">at least 3 minutes; a turn is skipped while the last run is still going</small></div>
     </div></div>
     <div class="sc-f"><span>Model</span><button type="button" class="st-chip sc-model">${recDot(e.model, 'chat')} ${esc(short(e.model))} <small>${esc(shortPrice(e.model))}</small></button></div>
     <div class="sc-f"><span>Mode</span><div class="mp-sorts sc-mode-pick" role="radiogroup" aria-label="Permission mode">${[['strict', '🔒 Strict'], ['yolo', '⚡ YOLO']].map(([k, l]) => `<button type="button" class="mp-sort ${e.approval === k ? 'on' : ''}" data-mode="${k}" role="radio" aria-checked="${e.approval === k}">${l}</button>`).join('')}</div><small class="sc-dim sc-mode-note">${e.approval === 'yolo' ? 'Nothing waits: the deciders answer the agent\'s questions and approve commands for you.' : 'Approvals and questions wait for you, with a notification.'}</small></div>
     <div class="sc-f sc-wide"><span>Chrome</span><label class="sq-check"><input type="checkbox" id="scChrome" ${(e.chrome ?? e.tools?.chrome) ? 'checked' : ''}><span>🧩 Let it use my Chrome, signed in as me (Chrome must be open; sending, posting and buying still wait for you)</span></label></div>
+    <div class="sc-f sc-wide"><span>Chat</span><label class="sq-check"><input type="checkbox" id="scNewChat" ${e.newChat ? 'checked' : ''}><span>Start a new chat every run (off: every run goes on in this schedule's one chat, with its earlier runs as context)</span></label></div>
     <div class="sc-form-acts"><span class="sc-err" role="alert"></span><button type="button" class="kx-btn sc-cancel">Cancel</button><button type="submit" class="kx-btn primary">${e.id ? 'Save' : 'Create schedule'}</button></div>
   </form>`;
 }
 function wireScheduleForm(body) {
   const e = SCHED.edit, f = $('#scForm', body);
-  const keep = () => { e.name = $('#scName', f).value; e.projectId = $('#scProject', f).value; e.prompt = $('#scPrompt', f).value; e.chrome = $('#scChrome', f).checked; };
+  const keep = () => { e.name = $('#scName', f).value; e.projectId = $('#scProject', f).value; e.prompt = $('#scPrompt', f).value; e.chrome = $('#scChrome', f).checked; e.newChat = $('#scNewChat', f).checked; };
   $('#scChrome', f).addEventListener('change', (ev) => { e.chrome = ev.target.checked; if (ev.target.checked && !extReady()) openChromeSetup(); });
   for (const b of f.querySelectorAll('.sc-kind button')) b.onclick = () => {
     keep();
@@ -5485,7 +5497,7 @@ function wireScheduleForm(body) {
     const c = blankChat(e.projectId);
     c.approval = e.approval;
     c.tools = { ...c.tools, chrome: !!e.chrome };
-    const payload = { name: e.name, projectId: e.projectId, prompt: e.prompt, model: e.model, reasoning: c.agent.setup.reasoning, approval: e.approval, when, tools: c.tools,
+    const payload = { name: e.name, projectId: e.projectId, prompt: e.prompt, model: e.model, reasoning: c.agent.setup.reasoning, approval: e.approval, when, tools: c.tools, newChat: $('#scNewChat', f).checked,
       settings: { ...G.settings, approval: e.approval, tools: chatTools(c), ...qualitySettings(c), chromeAccess: !!e.chrome } };
     const r = await postJ(e.id ? `/api/schedules/${e.id}` : '/api/schedules', payload, e.id ? 'PUT' : 'POST');
     if (!r || r.error) { err.textContent = r?.error ? `${r.error[0].toUpperCase()}${r.error.slice(1)}.` : 'Not saved.'; return; }

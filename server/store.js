@@ -17,6 +17,9 @@ fs.mkdirSync(DIR, { recursive: true });
 // projects from before that rule, until they get a folder.)
 const DOCS = [path.join(os.homedir(), 'Documents'), os.homedir()].find((d) => fs.existsSync(d));
 export const SCRATCH_HOME = path.join(DOCS, 'QuorX', 'Scratch');
+// Schedules have a project of their own beside Scratch, where a new schedule goes unless you pick another.
+export const SCHEDULES_PROJECT = 'schedules';
+export const SCHEDULES_HOME = path.join(DOCS, 'QuorX', 'Schedules');
 // True for a folder inside the harness itself (the app's folder or its data folder): projects may not live there.
 export const insideHarness = (d) => !!d && [HOME, ROOT].some((h) => { const a = path.resolve(d).toLowerCase(), b = path.resolve(h).toLowerCase(); return a === b || a.startsWith(b + path.sep); });
 
@@ -70,6 +73,22 @@ export function listProjects() {
     fs.mkdirSync(path.dirname(PROJECTS), { recursive: true });
     writeProjects(list);
   } catch { /* Scratch stays where it is until next start */ }
+})();
+// The Schedules project is made once, in Documents\QuorX\Schedules. Remove it and it stays removed (a note in data/
+// says it was made); schedules then go to Scratch or the project you pick.
+(function adoptSchedules() {
+  const made = path.join(HOME, 'data', 'schedules-project-made');
+  try {
+    if (fs.existsSync(made)) return;
+    const list = readProjectsFile();
+    if (!list.some((p) => p.id === SCHEDULES_PROJECT)) {
+      fs.mkdirSync(SCHEDULES_HOME, { recursive: true });
+      list.push({ id: SCHEDULES_PROJECT, name: 'Schedules', path: SCHEDULES_HOME, created: Date.now() });
+      fs.mkdirSync(path.dirname(PROJECTS), { recursive: true });
+      writeProjects(list);
+    }
+    fs.writeFileSync(made, '');
+  } catch { /* tried again next start */ }
 })();
 const rawProjects = () => listProjects().map(({ dir: _d, missing: _m, needsFolder: _n, ...p }) => p);
 // A project is an existing folder on this computer, and its name is always that folder's name: it changes only

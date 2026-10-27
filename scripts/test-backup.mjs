@@ -120,7 +120,7 @@ test('round trip: import on another computer asks before overwriting and re-poin
     assert.equal(look.chats, 1);
     assert.equal(look.chatClashes, 1, 'the clash is reported before anything is written');
     assert.equal(look.keys, 0);
-    assert.deepEqual(look.projects.map((p) => [p.id, p.found]).sort(), [['keep-app', true], ['moved-app', false]]);
+    assert.deepEqual(look.projects.filter((p) => p.id !== 'schedules').map((p) => [p.id, p.found]).sort(), [['keep-app', true], ['moved-app', false]]); // Schedules: built in, like Scratch
 
     // Without overwrite the chat that is here stays as it is.
     const moved = tempDir('qx-proj-new-');

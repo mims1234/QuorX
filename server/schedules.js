@@ -12,7 +12,7 @@ import { renameSoon } from './fsretry.js';
 
 const FILE = () => path.join(HOME, 'data', 'schedules.json');
 export const GRACE_MS = 2 * 60e3;      // a run this late is still on time; later than this it is "missed"
-export const MIN_EVERY = 15;           // minutes between runs of an "every" schedule, at least
+export const MIN_EVERY = 3;            // minutes between runs of an "every" schedule, at least
 export const MAX_SCHEDULES = 50;
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -78,6 +78,9 @@ export function cleanSchedule(b, now = Date.now(), old = null) {
     tools: b.tools && typeof b.tools === 'object' && !Array.isArray(b.tools) ? b.tools : old?.tools || {},
     when, paused: b.paused ?? old?.paused ?? false, created,
     lastRun: old?.lastRun || null, runs: old?.runs || 0,
+    // Its runs go on in one chat (chatId, once it has run); newChat: a fresh chat every run instead.
+    newChat: typeof b.newChat === 'boolean' ? b.newChat : !!old?.newChat,
+    ...(old?.chatId ? { chatId: old.chatId } : {}),
   };
   // The anchor of an "every" schedule is when it was made (or changed), so "every 2 hours" counts from then.
   if (when.kind === 'every' && JSON.stringify(when) !== JSON.stringify(old?.when)) s.created = now;
@@ -91,8 +94,10 @@ export function cleanSchedule(b, now = Date.now(), old = null) {
  *   now()                  the clock (Date.now)
  *   run(schedule, info)    starts the chat; info = { missed, due, late }. Returns { chatId, runId } (or throws).
  *   load() / save(list)    storage (loadSchedules / saveSchedules)
+ *   running(runId)         whether a run is still going: a schedule whose last run is still going skips its turn (a
+ *                          3-minute repeat must not start a second run on the same Chrome or desktop)
  */
-export function createScheduler({ now = Date.now, run, load = loadSchedules, save = saveSchedules, tickMs = 30e3, lease = takeLease } = {}) {
+export function createScheduler({ now = Date.now, run, load = loadSchedules, save = saveSchedules, tickMs = 30e3, lease = takeLease, running = () => false } = {}) {
   let timer = null, busy = false;
   async function tick() {
     if (busy) return [];
@@ -108,12 +113,15 @@ export function createScheduler({ now = Date.now, run, load = loadSchedules, sav
         const due = s.nextAt, late = t - due, missed = late > GRACE_MS;
         // Whatever happens, the next run is the first one after now: missed runs collapse into this one.
         s.nextAt = nextAfter(s.when, t, s.created);
+        changed = true;
+        if (s.lastRun?.runId && running(s.lastRun.runId)) { s.lastRun.skipped = (s.lastRun.skipped || 0) + 1; continue; }
         s.runs = (s.runs || 0) + 1;
         s.lastRun = { at: t, due, missed, status: 'starting' };
         changed = true;
         try {
           const r = await run(s, { missed, due, late });
           Object.assign(s.lastRun, { chatId: r?.chatId || null, runId: r?.runId || null, status: r?.status || 'running', ...(r?.note ? { note: r.note } : {}) });
+          if (r?.chatId) s.chatId = r.chatId; // its chat: the next run goes on there
           started.push({ id: s.id, ...s.lastRun });
         } catch (e) { Object.assign(s.lastRun, { status: 'failed', note: String(e.message || e).slice(0, 300) }); }
       }
