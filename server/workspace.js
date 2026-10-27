@@ -80,6 +80,17 @@ export function safePath(root, rel, secrets = null) {
   return p;
 }
 
+/** A path a reply names: the full path when it is one on this computer (C:\…, C:/…, file:///…), '' when it is
+ *  relative (to the project), null for a network path (\\server\…, file://server/…): looking one up can send the
+ *  computer's sign-in to that server, so those are never touched. */
+export function fullLocalPath(p) {
+  let s = String(p || '').trim();
+  if (/^file:/i.test(s)) { try { s = fileURLToPath(s); } catch { return null; } }
+  if (/^[\\/]{2}/.test(s)) return null;
+  if (process.platform === 'win32') return /^[a-z]:[\\/]/i.test(s) ? path.resolve(s) : '';
+  return path.isAbsolute(s) ? path.resolve(s) : '';
+}
+
 // Inside .quorx only what the agent (and you) work with is listed; the harness's own records are not.
 const AGENT_VISIBLE = new Set(['scratch', 'skills', 'launch.json', 'serve.mjs']);
 // A folder inside this project that is a project of its own (it has a .quorx folder, or another project points

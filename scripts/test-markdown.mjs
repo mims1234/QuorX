@@ -40,6 +40,18 @@ test('markdown: a reply drawn in pieces while it streams is the whole reply draw
   assert.ok(frames > 5000);
 });
 
+test('markdown: local paths are marked for File Explorer links; commands, web links and network paths are not', () => {
+  const paths = (s) => [...md(s).matchAll(/data-path="([^"]*)"/g)].map((m) => m[1]);
+  assert.deepEqual(paths('Made `site/index.html`, `package.json` and `assets/`'), ['site/index.html', 'package.json', 'assets/']);
+  assert.deepEqual(paths('Saved to D:\\Work\\quorx\\index.html.'), ['D:\\Work\\quorx\\index.html'], 'a bare full path, without the full stop');
+  assert.deepEqual(paths('In **C:\\x_y\\z.txt**'), ['C:\\x_y\\z.txt']);
+  assert.deepEqual(paths('`C:/Users/x/a b/c.txt` and `file:///D:/a/b.html`'), ['C:/Users/x/a b/c.txt', 'file:///D:/a/b.html']);
+  assert.deepEqual(paths('See [the page](site/index.html) or [web](https://example.com/a.html)'), ['site/index.html']);
+  assert.deepEqual(paths('Run `npm run dev`, `npm -v`, `\\\\server\\share\\x.txt`, `https://a.com/x.js`, `./` or `v1.2`'), []);
+  assert.doesNotMatch(md('[x](javascript:alert(1))'), /data-path|<a /, 'a script link stays text');
+  assert.match(md('`a"b.txt`'), /<code class="md-ic">a&quot;b.txt<\/code>/, 'a quote is never a path');
+});
+
 test('markdown: the finished part never ends inside a code fence or a math block', () => {
   const text = 'Intro.\n\n```js\na\n\nb\n```\n\n$$\nx\n\ny\n$$\n\nEnd.\n';
   const cuts = new Set();
