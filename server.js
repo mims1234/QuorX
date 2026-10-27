@@ -1120,7 +1120,7 @@ function scheduleNotice(kind, { schedule, chatId = null, text = '', cost = 0 }) 
   }
 }
 const scheduleDeps = { now: Date.now, listProjects, budgetState, saveChat, getChat, startRun, follow, runAgent, events: runEvents, notify: scheduleNotice };
-const scheduler = createScheduler({ run: (s, info) => startScheduledChat(s, info, scheduleDeps) });
+const scheduler = createScheduler({ run: (s, info) => startScheduledChat(s, info, scheduleDeps), running: (id) => runStatus(id).status === 'running' });
 if (!process.env.OH_NO_SCHEDULES) scheduler.start();
 
 // Pages the agent made (project files, artifacts) also load from a second address on this computer. There they have

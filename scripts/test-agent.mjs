@@ -2206,7 +2206,8 @@ test('schedules: the next run of a daily, weekday, one-off and repeating schedul
   assert.equal(nextAfter({ kind: 'once', at: at(2026, 10, 21, 15) }, at(2026, 10, 21, 15)), null);
   const every = cleanWhen({ kind: 'every', minutes: 120 });
   assert.equal(nextAfter(every, at(2026, 10, 21, 13, 10), at(2026, 10, 21, 12)), at(2026, 10, 21, 14));
-  assert.throws(() => cleanWhen({ kind: 'every', minutes: 5 }), /15 minutes/);
+  assert.throws(() => cleanWhen({ kind: 'every', minutes: 2 }), /3 minutes/);
+  assert.equal(cleanWhen({ kind: 'every', minutes: 3 }).minutes, 3);
   assert.throws(() => cleanWhen({ kind: 'daily', time: '25:00' }), /time like/);
   assert.equal(describeWhen(weekdays), 'weekdays at 09:00');
   assert.equal(describeWhen(every), 'every 2 hours');
@@ -2246,6 +2247,17 @@ test('the scheduler runs what is due, runs a missed run once on wake (labelled),
   assert.equal(store[0].nextAt, at(2026, 10, 22, 9, 0));
   now += 60e3; await sched.tick();                                       // nothing more until Thursday
   assert.equal(ran.length, 3);
+  // A repeat whose last run is still going skips its turn instead of starting a second run beside it.
+  let going = true, n = 0, list = [cleanSchedule({ prompt: 'drop', projectId: 'p', model: 'test/model', name: 'Drop', when: { kind: 'every', minutes: 3 } }, now)];
+  const rep = createScheduler({ now: () => now, load: () => list, save: (l) => { list = l; }, lease: false, running: () => going, run: async () => ({ chatId: 'c', runId: `rr-${++n}` }) });
+  now += 3 * 60e3; await rep.tick();
+  assert.equal(n, 1);
+  now += 3 * 60e3; await rep.tick();
+  assert.equal(n, 1, 'still going: skipped');
+  assert.equal(list[0].lastRun.skipped, 1);
+  assert.ok(list[0].nextAt > now, 'the next turn is planned');
+  going = false; now += 3 * 60e3; await rep.tick();
+  assert.equal(n, 2, 'finished: the next turn runs');
   // A run that fails to start is recorded, and the schedule carries on.
   const bad = createScheduler({ now: () => at(2026, 10, 22, 9, 1), load: () => store, save: (l) => { store = l; }, lease: false, run: async () => { throw new Error('its project no longer exists'); } });
   await bad.tick();
