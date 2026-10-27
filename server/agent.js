@@ -563,7 +563,7 @@ const VIEW_ACTS = ['windows', 'read', 'read_text', 'screenshot', 'zoom', 'wait_f
 const CLICK_ACTS = [...VIEW_ACTS, 'click', 'click_at', 'right_click', 'double_click', 'middle_click', 'hover', 'mouse_down', 'mouse_up', 'drag', 'scroll', 'focus', 'minimize', 'maximize', 'restore', 'move', 'resize'];
 const APP_ACTS = { view: VIEW_ACTS, click: CLICK_ACTS, full: null }; // full: also type, keys, hold_key, clipboard, close
 // Never: the operating system's own system tools and admin shells (Windows, macOS, Linux).
-const APP_NEVER = /^(keychain access|activity monitor|disk utility|directory utility|gparted|disks|system monitor|windows security|registry editor|task manager|services|local security policy|group policy|credential manager|computer management|disk management|windows powershell \(admin\)|terminal \(admin\))\b/i;
+const APP_NEVER = /^(keychain access|activity monitor|disk utility|directory utility|gparted|disks|system monitor|windows security|registry editor|task manager|services|local security policy|group policy|credential manager|computer management|disk management|windows powershell \(admin\)|terminal \(admin\))(?!\w)/i;
 const APP_VIEW = /^(google chrome|chrome|microsoft edge|edge|brave|firefox|mozilla firefox|opera|opera gx|vivaldi|arc|chromium|tor browser|settings|control panel|windows explorer|file explorer|explorer)\b/i;
 const APP_CLICK = /^(terminal|windows terminal|windows powershell|powershell|command prompt|git bash|wsl|ubuntu|debian|visual studio code|visual studio|code|cursor|windsurf|intellij|pycharm|webstorm|rider|clion|goland|android studio|sublime text|notepad\+\+)\b/i;
 /** The level an app starts at: 'never', 'view', 'click' or 'full'. */

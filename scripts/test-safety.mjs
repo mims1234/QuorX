@@ -1809,11 +1809,11 @@ test('computer use: off in a chat, the user’s apps are out of reach; on, each 
   assert.match(toolOut(off.bodies, 1), /computer use is off in this chat and the user kept it off/);
   assert.match(toolOut(off.bodies, 2), /computer use is off in this chat/);
   if (WIN) assert.equal(cards, 1, 'one card per reply');
-  const apps = [{ name: 'Calculator', appId: 'Microsoft.WindowsCalculator_8wekyb3d8bbwe!App', level: 'view' }, { name: 'Visual Studio Code', appId: 'Microsoft.VisualStudioCode', level: 'click' }, { name: 'QuorX', appId: 'QuorX', level: 'full' }];
+  const apps = [{ name: 'Calculator', appId: 'Microsoft.WindowsCalculator_8wekyb3d8bbwe!App', level: 'view' }, { name: 'Visual Studio Code', appId: 'Microsoft.VisualStudioCode', level: 'click' }, { name: 'Registry Editor', appId: 'regedit', level: 'full' }];
   const on = await agentRun((b, i) => [
     reply('', [['desktop', { action: 'type', app: 'Calculator', ref: 1, text: '12' }]]),
     reply('', [['desktop', { action: 'keys', app: 'Visual Studio Code', keys: '^s' }]]),
-    reply('', [['desktop', { action: 'read', app: 'QuorX' }]]),
+    reply('', [['desktop', { action: 'read', app: 'Registry Editor' }]]),
     reply('OK.'),
   ][i], { chatId: 'apps-on', settings: { appsAccess: true }, more: { apps }, onEvent: keepLevel });
   assert.match(toolOut(on.bodies, 1), /look at only .* in Calculator, so type isn't allowed/);
