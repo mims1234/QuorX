@@ -12,6 +12,15 @@ Linux. A few tests count real processes or wait on a terminal; on a busy PC, rer
 `terminal: …prompts` test alone.
 
 ```bash
+npm run test:desktop
+```
+
+The desktop tool's tests on Windows: they open real windows (a WinForms app, a Save dialog), click, type and take
+pictures, so they use the screen and the keyboard for about a minute and a half. `npm test` skips them on a PC (they
+show as skipped with "opens windows"); CI runs them on every pull request. Run them when a change touches the desktop
+tool, and leave the mouse and keyboard alone until they finish: a key pressed meanwhile can land in their windows.
+
+```bash
 npm run test:packs
 ```
 

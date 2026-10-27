@@ -28,6 +28,10 @@ The tests drive the agent with a scripted model: no OpenRouter key, no network c
 into a throwaway data folder, never into your own chats and projects. Some tests need macOS or Linux and skip on
 Windows. [Testing](docs/TESTING.md) has the details, the UI tests (`npm run test:ui`) and the platform pack tests.
 
+On Windows, the desktop-tool tests open real windows and send keystrokes, so `npm test` skips them on your PC. When
+a change touches the desktop tool, run them on their own with `npm run test:desktop` (about a minute and a half) and
+leave the mouse and keyboard alone meanwhile. CI runs them on every pull request.
+
 Every pull request runs the same suites on Windows, and the macOS and Linux tests on Linux. A pull request merges only
 when they pass.
 
