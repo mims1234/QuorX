@@ -2986,3 +2986,9 @@ a.md-pathlink.md-path, .md-pathtext.md-path { color: var(--accent); }
 .sb-sched.off { color: var(--muted); }
 .u-fresh { margin-left: 6px; font: 10.5px var(--mono); padding: 0 5px; border-radius: 4px; border: 1px dashed var(--line); color: var(--muted); white-space: nowrap; }
 .stop-sched { color: var(--red, #ef4444); }
+/* ⚙ Models → Blocked providers */
+#stBlocked { display: grid; gap: 8px; width: 100%; }
+.bp-sum { font-size: 12px; color: var(--text); }
+.bp-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 4px 12px; max-height: 220px; overflow: auto; padding: 6px; border: 1px solid var(--line); border-radius: 8px; }
+.bp-row[hidden] { display: none; }
+.bp-row span { white-space: normal; min-width: 0; }

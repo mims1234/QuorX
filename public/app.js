@@ -5841,7 +5841,8 @@ function settingsPanels(S) {
         `<div class="sx-pad" data-live="routing"></div>`
         + stRow('Provider order', 'Auto favours providers with reliable tool calling (OpenRouter’s Exacto). Cheapest and Fastest sort by price or speed instead.', stCards('providerSort', [['auto', '🎯', 'Auto', 'Reliable tool calling'], ['price', '💲', 'Cheapest', 'Lowest price first'], ['throughput', '⚡', 'Fastest', 'Highest throughput first']], S.providerSort || 'auto', 'compact'), { cls: 'sx-row-wide', id: 'stRowOrder' })
         + stRow('Only providers that support every feature', 'Skips providers that would silently drop tools, reasoning or other settings. If none qualifies, that reply uses the default routing.', stSwitch('requireParams', S.requireParams !== false), { id: 'stRowFeatures' })
-        + stRow('Zero data retention only', 'Only providers that keep no copy of your prompts. Fewer models qualify.', stSwitch('zdrOnly', !!S.zdrOnly), { id: 'stRowZdr' })),
+        + stRow('Zero data retention only', 'Only providers that keep no copy of your prompts. Fewer models qualify.', stSwitch('zdrOnly', !!S.zdrOnly), { id: 'stRowZdr' })
+        + stRow('Blocked providers', 'OpenRouter never sends the agent’s calls to these, for any model. Block one that keeps breaking tool calls (the provider shows as “via …” above each reply). If only blocked providers serve a model, that reply uses them anyway, and says so.', '<div id="stBlocked"><div class="st-row-help">Loading providers…</div></div>', { cls: 'sx-row-wide', id: 'stRowBlocked' })),
     ]],
     newchats: ['New chats', 'What a fresh chat starts with. Each chat can change these in its message box.', [
       `<p class="sx-sec-help sx-mode-link">New chats start in ${S.approval === 'yolo' ? '⚡ YOLO' : '🔒 Strict'}. <button type="button" class="sp-link" data-act="openMode">Change it in 🛡 Approvals &amp; safety</button></p>`,
@@ -6142,7 +6143,7 @@ const ST_LIVE = {
     return `<div class="sx-preview ${U.density === 'compact' ? 'compact' : ''}" style="--pv-size:${U.fontSize}px" aria-hidden="true"><div class="sx-pv-side"><i></i><i></i><i></i><i style="width:70%"></i><i></i></div><div class="sx-pv-chat"><div class="sx-pv-msg me">Build me a pomodoro timer${t}</div><div class="sx-pv-msg">Done: a 25/5 timer with a start button and a chime. Open it in the preview.${t}</div></div></div>`; },
   window: (S) => { const U = uiOf(S);
     return `<div class="sx-window"><button type="button" class="${U.sidebarStart === 'rail' ? 'rail' : ''}" data-jump="stRowSidebar">Sidebar<small>${SIDE_START[U.sidebarStart] || ''}</small></button><button type="button" data-jump="stRowSidebar" tabindex="-1">Chat</button><button type="button" class="${U.paneMode === 'never' ? 'dim' : ''}" data-jump="stRowPane">Artifact pane<small>${PANE_MODE[U.paneMode] || ''}</small></button></div>`; },
-  routing: (S) => stFlow([['1', 'Your call', 'the chat’s model', ''], ['2', 'Order', PROVIDER_SORT[S.providerSort || 'auto'], 'stRowOrder'], ['3', 'Features', S.requireParams !== false ? 'all supported' : 'any provider', 'stRowFeatures', S.requireParams === false], ['4', 'Retention', S.zdrOnly ? 'zero retention' : 'any provider', 'stRowZdr', !S.zdrOnly], ['5', 'Fallback', S.fallbackModel ? short(S.fallbackModel) : 'none', 'stRowFallback', !S.fallbackModel]]),
+  routing: (S) => stFlow([['1', 'Your call', 'the chat’s model', ''], ['2', 'Order', PROVIDER_SORT[S.providerSort || 'auto'], 'stRowOrder'], ['3', 'Features', S.requireParams !== false ? 'all supported' : 'any provider', 'stRowFeatures', S.requireParams === false], ['4', 'Retention', S.zdrOnly ? 'zero retention' : 'any provider', 'stRowZdr', !S.zdrOnly], ['5', 'Fallback', S.fallbackModel ? short(S.fallbackModel) : 'none', 'stRowFallback', !S.fallbackModel], ['6', 'Blocked', blockedOf(S).length ? `${blockedOf(S).length} provider${blockedOf(S).length === 1 ? '' : 's'}` : 'none', 'stRowBlocked', !blockedOf(S).length]]),
   loopflow: (S) => stFlow([['1', 'Plan', PLAN_FIRST[S.planFirst || 'off'], 'stLoopPlan', (S.planFirst || 'off') === 'off'], ['2', 'Work', `${S.maxSteps} calls`, 'stLoopWork'], ['3', 'Check', S.verify !== false ? `on · ${S.verifyRounds ?? 2} rounds` : 'off', 'stLoopCheck', S.verify === false], ['4', 'Review', (S.review || 'builds') === 'off' ? 'off' : `${S.review || 'builds'} · ${S.reviewTier || 'cheap'}`, 'stLoopReview', S.review === 'off'], ['5', 'Helpers', S.helpers !== false ? `≥ ${S.helperMinFiles ?? 40} files` : 'off', 'stLoopHelpers', S.helpers === false], ['6', 'Long chats', S.compact !== false ? `summarise > ${kTok(S.compactAt || 24000)}` : 'trim only', 'stLoopMemory']]),
   scale: (S) => { const lo = Math.max(0, Math.min(1, Number(S.gate?.confirm) || 0)), hi = Math.max(lo, Math.min(1, Number(S.gate?.act) || 0));
     return `<div class="sx-scale" aria-hidden="true"><div class="sx-scale-track"><span class="sx-z-unsure" style="flex:${lo}">unsure</span><span class="sx-z-lean" style="flex:${hi - lo}">${hi - lo >= 0.1 ? 'lean' : ''}</span><span class="sx-z-settled" style="flex:${1 - hi}">settled</span></div><div class="sx-scale-axis"><span>0</span><span>lean at ${lo.toFixed(2)}</span><span>settled at ${hi.toFixed(2)}</span><span>1</span></div></div>`; },
@@ -6257,6 +6258,7 @@ function wireSettings() {
   drawPermsPanel();
   drawKeysPanel();
   drawModelLimit();
+  drawBlockedProviders(mark);
   drawMemoryPanel();
   drawSetupPanel();
   drawExtPanel();
@@ -6297,7 +6299,7 @@ function resetCategory() {
   if (uiKeys) for (const k of uiKeys) U[k] = UI_DEFAULTS[k];
   if (ST.cat === 'appearance') { S.theme = null; G.theme = null; applyTheme(); }
   if (ST.cat === 'privacy') S.newsRemote = true;
-  if (ST.cat === 'models') { S.model = d.chatModel || d.setups.C.model; S.reasoning = 'off'; Object.assign(S, { providerSort: 'auto', requireParams: true, zdrOnly: false, fallbackModel: '' }); }
+  if (ST.cat === 'models') { S.model = d.chatModel || d.setups.C.model; S.reasoning = 'off'; Object.assign(S, { providerSort: 'auto', requireParams: true, zdrOnly: false, fallbackModel: '', blockedProviders: [...(d.blockedProviders || [])] }); }
   if (ST.cat === 'newchats') S.newChatTools = { ...DEFAULT_CHAT_TOOLS };
   if (ST.cat === 'loop') { S.maxSteps = d.maxSteps; S.compact = true; S.compactAt = 24000; Object.assign(S, { planFirst: d.planFirst, planSteps: d.planSteps, continueRounds: d.continueRounds, maxOutput: d.maxOutput, thinkShare: d.thinkShare, review: d.review, reviewModel: '', reviewTier: d.reviewTier, reviewSendBack: d.reviewSendBack, codeReview: d.codeReview, designLint: d.designLint, fixSteps: d.fixSteps, reviewRounds: d.reviewRounds, reviewBar: d.reviewBar, helpers: d.helpers, helperModel: '', helperSteps: d.helperSteps, helperMinFiles: d.helperMinFiles, retries: d.retries, parallel: d.parallel, verify: d.verify, verifyRounds: d.verifyRounds, askLimit: d.askLimit, trimAt: d.trimAt, buildThinking: d.buildThinking }); }
   if (ST.cat === 'deciders') { S.voters = [...d.voters]; S.gate = { ...d.gate }; S.lookVoters = [...d.lookVoters]; S.lookEscalate = d.lookEscalate; S.checks = structuredClone(d.checks); }
@@ -6877,6 +6879,30 @@ async function drawMemoryPanel(msg = '') {
 }
 // The 👁 / 🙈 button that shows or masks amounts, switched in place.
 function revealButton(b, shown) { if (!b) return; b.title = shown ? 'Hide amounts' : 'Show amounts'; b.textContent = shown ? '🙈' : '👁'; }
+// ⚙ Models → Blocked providers: every OpenRouter provider with a ✓ box, blocked ones first, with a search and a
+// Blocked / Allowed filter (there are over a hundred). Names as replies show them ("via …"); the server maps them to
+// OpenRouter's slugs.
+function blockedOf(S) { return Array.isArray(S?.blockedProviders) ? S.blockedProviders : G.cfg?.defaults?.blockedProviders || []; }
+async function drawBlockedProviders(mark) {
+  const box = $('#stBlocked'); if (!box) return;
+  const r = await fetch('/api/providers').then((x) => x.json()).catch(() => ({ providers: [] }));
+  if (!$('#stBlocked')) return;
+  const S = ST.draft, on = new Set(blockedOf(S));
+  const names = [...new Set([...on, ...(r.providers || []).map((p) => p.name)])];
+  names.sort((a, b) => (on.has(b) - on.has(a)) || a.localeCompare(b));
+  const sum = () => (on.size ? `Blocked: ${[...on].map(esc).join(', ')}` : 'None blocked: OpenRouter may use any provider.');
+  box.innerHTML = `<div class="bp-sum">${sum()}</div><div class="bp-filter"></div>${r.error && !r.providers?.length ? `<div class="st-row-help">The provider list didn't load (${esc(r.error)}); the blocked ones are still listed.</div>` : ''}
+    <div class="bp-list">${names.map((n) => `<label class="sq-check bp-row" data-lf-text="${esc(n.toLowerCase())}" data-lf-seg="${on.has(n) ? 'blocked' : 'allowed'}"><input type="checkbox" value="${esc(n)}" ${on.has(n) ? 'checked' : ''}><span>${esc(n)}</span></label>`).join('')}</div>`;
+  listFilter($('.bp-filter', box), { key: 'blockedProviders', rows: () => box.querySelectorAll('.bp-row'), segOrder: ['blocked', 'allowed'], segLabel: (v) => (v === 'blocked' ? 'Blocked' : 'Allowed'), placeholder: 'Find a provider', label: 'Show' });
+  box.onchange = (e) => {
+    const x = e.target.closest('.bp-row input'); if (!x) return;
+    if (x.checked) on.add(x.value); else on.delete(x.value);
+    x.closest('.bp-row').dataset.lfSeg = x.checked ? 'blocked' : 'allowed';
+    S.blockedProviders = [...on];
+    $('.bp-sum', box).innerHTML = sum();
+    mark(); stRefresh();
+  };
+}
 // ⚙ Models: what the active key has left. The amounts stay hidden until 👁 here, every time Settings opens,
 // whatever "Hide amounts" says, since this page is open while picking models (often on a stream).
 async function drawModelLimit() {

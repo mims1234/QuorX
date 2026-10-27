@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { chat, chatStream, generationCost, chatModels, imageModels, generateImage, speechModels, synthesize, composeMusic, musicModels, videoModels, generateVideo, HOME } from './openrouter.js';
 import { ensemble, GATE } from './decisions.js';
-import { runtime } from './openrouter.js';
+import { runtime, knownProviders } from './openrouter.js';
 import { pathToFileURL } from 'node:url';
 import { rotateLog } from './storagerules.js';
 import { enhanceRequest } from './enhancer.js';
@@ -121,6 +121,9 @@ export const DEFAULTS = {
   providerSort: 'auto',
   requireParams: true,     // only providers that support every parameter sent (tools, reasoning, …)
   zdrOnly: false,          // only providers with zero data retention
+  // Providers OpenRouter never routes the agent's calls to, by name as replies show it ("via …"). InferenceNet sent
+  // deepseek-v4.1-flash's browser calls without their arguments (just {"action":"open"}), so runs went in circles.
+  blockedProviders: ['InferenceNet'],
   fallbackModel: '',       // tried by OpenRouter when the chat's model fails or is unavailable ('' = none)
   // The reviewer (#4): a separate model plays what was built and scores it before the final reply.
   codeReview: 'off',       // /review on its own after a reply that changed code: 'off' · 'auto' (a card only when the reviewer finds bugs)
@@ -284,8 +287,16 @@ function samplingFor(model, info, creativity, reasoning) {
   if (/^anthropic\//.test(model) && reasoning && reasoning !== 'off' && t !== 1) return {};
   return { temperature: t };
 }
-function routingFor(S, model) {
+// OpenRouter's ignore list takes slugs ("inference-net"), replies name the provider ("InferenceNet"): the provider
+// list maps one to the other; a name it doesn't know is guessed the same way (words split, lower case, hyphens).
+export function providerSlugs(names, list = []) {
+  const by = new Map(list.map((p) => [String(p.name).toLowerCase(), p.slug]));
+  return [...new Set((names || []).map((n) => String(n || '').trim()).filter(Boolean)
+    .map((n) => by.get(n.toLowerCase()) || n.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')))];
+}
+export function routingFor(S, model, slugs = []) {
   const provider = {};
+  if (slugs.length) provider.ignore = slugs;
   if (['price', 'throughput', 'latency'].includes(S.providerSort)) provider.sort = S.providerSort;
   if (S.requireParams !== false) provider.require_parameters = true;
   if (S.zdrOnly) provider.zdr = true;
@@ -934,6 +945,7 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   const setup = req.bench ? { ...DEFAULTS.setups.C, ...(req.setup || {}) }
     : { model: req.setup?.model || DEFAULTS.chatModel, reasoning: req.setup?.reasoning || 'off', creativity: ['focused', 'creative'].includes(req.setup?.creativity) ? req.setup.creativity : 'default', decide: 'auto' };
   const S = { ...DEFAULTS, ...(req.settings || {}) };
+  const blockedSlugs = Array.isArray(S.blockedProviders) && S.blockedProviders.length ? providerSlugs(S.blockedProviders, knownProviders()) : [];
   const SF = safetySettings(req.settings?.safety);
   // The Q&A benchmark skips the build gates (verify, reviewer); the build benchmark (bench: 'build') keeps them.
   const qaBench = !!req.bench && req.bench !== 'build';
@@ -1407,7 +1419,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (transcriptChars(messages) > trimAt * 2 && compactTranscript(messages, firstOwn, progressSummary(), 10)) emit({ t: 'compacted_run', step, size: transcriptChars(messages), at: at() });
     const forceDecide = step === 0 && setup.decide === 'force-first';
     let toolChoice = last ? 'none' : forceDecide ? { type: 'function', function: { name: 'decide' } } : 'auto';
-    const body = { model: setup.model, messages, tools, tool_choice: toolChoice, max_tokens: maxOut, ...samplingFor(setup.model, modelInfo, setup.creativity, reasonNow), ...reasoningFor(reasonNow, maxOut, S.thinkShare), ...(run.routing ? routingFor(S, setup.model) : {}) };
+    const body = { model: setup.model, messages, tools, tool_choice: toolChoice, max_tokens: maxOut, ...samplingFor(setup.model, modelInfo, setup.creativity, reasonNow), ...reasoningFor(reasonNow, maxOut, S.thinkShare), ...(run.routing === 'blocked' ? { provider: { ignore: blockedSlugs } } : run.routing ? routingFor(S, setup.model, blockedSlugs) : {}) };
     emit({ t: 'llm_start', step, model: setup.model, forced: forceDecide, at: at() });
     let r;
     // On a forced step the text is held back until we know the model really asked the deciders.
@@ -1801,10 +1813,17 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
           continue;
         }
         // No provider matched the routing filters (e.g. none supports every parameter): drop them for this reply.
+        // Blocked providers stay blocked as long as another provider is left: the other filters go first.
         if (body.provider && /no endpoints|no allowed providers|require_parameters|zdr|data policy/i.test(e.message)) {
-          run.routing = false; attempt--;
-          const { provider, models, ...rest } = body; body = rest;
-          emit({ t: 'note', level: 'warn', msg: `No provider matched the routing settings (${clip(e.message, 100)}); this reply uses OpenRouter's default routing.`, at: at() });
+          attempt--;
+          const { provider, models, ...rest } = body;
+          if (run.routing === true && blockedSlugs.length && Object.keys(provider).length > 1) {
+            run.routing = 'blocked'; body = { ...rest, provider: { ignore: blockedSlugs } };
+            emit({ t: 'note', level: 'warn', msg: `No provider matched the routing settings (${clip(e.message, 100)}); this reply uses OpenRouter's default routing, still without your blocked providers.`, at: at() });
+          } else {
+            run.routing = false; body = rest;
+            emit({ t: 'note', level: 'warn', msg: `No provider matched the routing settings (${clip(e.message, 100)})${blockedSlugs.length ? `, and only blocked providers serve ${short(setup.model)}` : ''}; this reply uses OpenRouter's default routing.`, at: at() });
+          }
           continue;
         }
         // The key's own spending limit or credits: stop and say so, never retry or switch models to get round it.

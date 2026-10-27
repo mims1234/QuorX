@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadCards, cardText, limitsLine, cardFile, CARDS_DIR, CARD_CHARS } from '../server/modelcards.js';
-import { runAgent, inPlaceEdit, deciderPicture, REVIEW_SYSTEM, FILM_KEYS, answerQuestion, answerSecret, answerApproval, answerBudget, setRunApproval, steerRun, holdCard } from '../server/agent.js';
+import { runAgent, inPlaceEdit, deciderPicture, REVIEW_SYSTEM, FILM_KEYS, answerQuestion, answerSecret, answerApproval, answerBudget, setRunApproval, steerRun, holdCard, providerSlugs } from '../server/agent.js';
 import { saveProject, forgetProject, setProjectBudget } from '../server/store.js';
 import { loadCheckpoint, dropCheckpoint, saveCheckpoint, checkpointWritten, ledger } from '../server/runs.js';
 import { setBudget, projectSpend, budgetState, live as liveRuns } from '../server/budget.js';
@@ -703,24 +703,36 @@ test('no temperature by default; Creativity sets it only where the model takes i
 
 test('routing: only providers that support every parameter, by default; sort and fallback from settings', async () => {
   const a = await run(() => reply('ok'));
-  assert.deepEqual(a.bodies[0].provider, { require_parameters: true });
+  assert.deepEqual(a.bodies[0].provider, { ignore: ['inference-net'], require_parameters: true }, 'InferenceNet is blocked by default');
   assert.equal('models' in a.bodies[0], false);
-  const b = await run(() => reply('ok'), { settings: { providerSort: 'price', zdrOnly: true, fallbackModel: 'test/backup' } });
+  const b = await run(() => reply('ok'), { settings: { providerSort: 'price', zdrOnly: true, fallbackModel: 'test/backup', blockedProviders: [] } });
   assert.deepEqual(b.bodies[0].provider, { sort: 'price', require_parameters: true, zdr: true });
   assert.deepEqual(b.bodies[0].models, ['test/model', 'test/backup']);
-  const c = await run(() => reply('ok'), { settings: { requireParams: false } });
+  const c = await run(() => reply('ok'), { settings: { requireParams: false, blockedProviders: [] } });
   assert.equal('provider' in c.bodies[0], false);
 });
 
+test('blocked providers: names map to OpenRouter slugs and are sent as ignore', async () => {
+  assert.deepEqual(providerSlugs(['InferenceNet', 'DeepInfra', 'Some Odd Name']), ['inference-net', 'deep-infra', 'some-odd-name']);
+  assert.deepEqual(providerSlugs(['deepinfra', 'Inference Net'], [{ name: 'DeepInfra', slug: 'deepinfra' }]), ['deepinfra', 'inference-net']);
+  assert.deepEqual(providerSlugs(['', '  ', 'InferenceNet', 'InferenceNet']), ['inference-net']);
+  const r = await run(() => reply('ok'), { settings: { requireParams: false, blockedProviders: ['InferenceNet', 'Novita'] } });
+  assert.deepEqual(r.bodies[0].provider, { ignore: ['inference-net', 'novita'] });
+});
+
 test('when no provider matches the routing filters, the reply carries on with default routing', async () => {
-  const { bodies, events, done } = await run((body, i) => {
-    if (i === 0) { const e = new Error('No endpoints found that can handle the requested parameters.'); e.status = 404; throw e; }
-    return reply('ok');
-  });
+  const fail = () => { const e = new Error('No endpoints found that can handle the requested parameters.'); e.status = 404; throw e; };
+  const { bodies, events, done } = await run((body, i) => (i === 0 ? fail() : reply('ok')), { settings: { blockedProviders: [] } });
   assert.ok(bodies[0].provider);
   assert.equal('provider' in bodies[1], false);
   assert.ok(of(events, 'note').some((n) => /No provider matched/.test(n.msg)));
   assert.equal(done.reply, 'ok');
+  // Blocked providers stay blocked while the other filters go; only when that fails too is the block dropped.
+  const k = await run((body, i) => (i < 2 ? fail() : reply('ok')));
+  assert.deepEqual(k.bodies[1].provider, { ignore: ['inference-net'] });
+  assert.equal('provider' in k.bodies[2], false);
+  assert.ok(of(k.events, 'note').some((n) => /only blocked providers serve/.test(n.msg)));
+  assert.equal(k.done.reply, 'ok');
 });
 
 // ---------- Phase 2: the plan (#3) and the reviewer (#4) ----------

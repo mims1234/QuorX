@@ -197,6 +197,14 @@ export const chatModels = () => cached('chat', async () => {
   const j = await (await fetch(`${BASE}/api/v1/models`)).json();
   return j.data.filter((m) => !m.id.endsWith(':batch')).map((m) => slim(m, 'chat'));
 });
+// OpenRouter's providers ({ name, slug }), for ⚙ Blocked providers. The last list fetched is kept, so a reply maps
+// blocked names to slugs without waiting on the network.
+let providersNow = [];
+export const providerList = () => cached('providers', async () => {
+  const j = await (await fetch(`${BASE}/api/v1/providers`)).json();
+  return (j.data || []).map((p) => ({ name: p.name, slug: p.slug })).filter((p) => p.name && p.slug).sort((a, b) => a.name.localeCompare(b.name));
+}).then((l) => (providersNow = l));
+export const knownProviders = () => providersNow;
 // Embedding models (for searching big attached documents), with their price per million tokens.
 export const embeddingModels = () => cached('embeddings', async () => {
   const j = await (await fetch(`${BASE}/api/v1/embeddings/models`)).json();
