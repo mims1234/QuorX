@@ -23,7 +23,7 @@ export function startBackground({ projectId, chatId, cwd, line, shell, label, lo
   const id = `bg${++seq}`;
   const job = { id, projectId, chatId, termJob, line, label: label || line, logTo, logRel, started: Date.now(), status: 'running', proc: running?.proc || null };
   if (termJob) markJob(termJob, { bg: id });
-  const p = running?.promise || runLine(cwd, line, { shell, label, timeout: 24 * 3600e3, memoryMB, logTo, term, onStart: (pr) => { job.proc = pr; }, onJob: (tj) => { job.termJob = tj; markJob(tj, { bg: id }); } });
+  const p = running?.promise || runLine(cwd, line, { shell, label, timeout: 24 * 3600e3, memoryMB, logTo, term, untilEmpty: true, onStart: (pr) => { job.proc = pr; }, onJob: (tj) => { job.termJob = tj; markJob(tj, { bg: id }); } });
   job.promise = p.then((r) => { job.status = r.stopped ? 'stopped' : 'ended'; job.code = r.code; job.ended = Date.now(); job.result = r; onDone?.(job, r); return r; },
     (e) => { job.status = 'failed'; job.error = e.message; job.ended = Date.now(); onDone?.(job, null); });
   JOBS.set(id, job);

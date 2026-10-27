@@ -45,6 +45,7 @@
 .pr-eff[data-eff="ask"] { color: var(--warn); background: var(--warn-dim); }
 .pr-eff[data-eff="deny"] { color: var(--bad); background: var(--bad-dim); }
 .pr-by { font-size: 11px; color: var(--muted); }
+.pr-problem { grid-column: 1 / -1; font-size: 11px; color: var(--warn); }
 .pr-add, .pr-test { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .pr-add input, .pr-test input { flex: 1 1 220px; min-width: 0; font: 12px var(--mono); padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface-inset, var(--bg)); color: var(--text); }
 .pr-result { display: grid; gap: 4px; font-size: 12px; }

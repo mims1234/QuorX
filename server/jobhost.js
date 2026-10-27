@@ -107,13 +107,18 @@ export const startDetached = !!G;
 
 /** Puts a running process (and everything it starts from now on) in the job named `job`. */
 export const adoptPid = (job, pid, memoryMB = 0) => (G ? G.adopt(job, pid) : J.call('adopt', { job, pid, memoryMB: Math.max(0, Number(memoryMB) || 0) }));
-/** How many processes in the job are still alive, with their pids and names. */
-export async function jobCount(job) {
-  if (G) return G.count(job);
-  const r = await J.call('count', { job });
+/** How many processes in the job are still alive, with their pids and names. `windows`: also which of them show a
+ *  window (and their helper processes) and which are built to show one (Windows only; elsewhere both are empty). */
+export async function jobCount(job, { windows = false } = {}) {
+  if (G) return { ...(await G.count(job)), windowed: [], gui: [] };
+  const r = await J.call('count', { job, windows });
   const arr = (x) => (x == null ? [] : Array.isArray(x) ? x : [x]);
-  return { active: r.active || 0, pids: arr(r.pids), names: arr(r.names) };
+  return { active: r.active || 0, pids: arr(r.pids), names: arr(r.names), windowed: arr(r.windowed), gui: arr(r.gui) };
 }
+/** Keeps the job (Stop still ends it) but stops QuorX closing from ending it. */
+export const keepOnClose = (job) => (G ? Promise.resolve() : J.call('keep', { job }));
+/** Ends every process of the job but `keep`, and lets those live on after QuorX: the job is forgotten. */
+export const releaseJob = (job, keep) => (G ? Promise.resolve() : J.call('release', { job, keep: keep.map(Number) }));
 /** Ends every process in the job, then waits (up to `wait` ms) until none is left. Returns what is left, and the
  *  mode that confirmed it ('jobs' on Windows, 'groups' elsewhere). */
 export async function killJob(job, wait = 5000) {

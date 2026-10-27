@@ -132,7 +132,7 @@ export function trimPageViews(messages, { keep = 2, batch = 6, over = 1500, done
   for (const m of views.slice(0, -keep)) {
     done.add(m);
     const head = m.content.split('\n').slice(0, 2).join('\n').slice(0, 400);
-    const note = `${head}\n[An older page view (${m.content.length} characters) was removed to save space; the newest page views are further down.]`;
+    const note = `${head}\n[An older page view (${m.content.length} characters) was removed to save space; the newest page views and window reads are further down.]`;
     saved += m.content.length - note.length;
     m.content = note;
   }

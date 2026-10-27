@@ -8,6 +8,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { HOME } from './openrouter.js';
 import { findKey } from './secrets.js';
+import { renameSoon } from './fsretry.js';
 
 const FILE = () => path.join(HOME, 'data', 'memory.json');
 export const MEMORY_TOKENS = 300, ITEM_CHARS = 200, MAX_ITEMS = 30;
@@ -18,19 +19,6 @@ export const memoryTokens = (items) => items.reduce((n, x) => n + tokensOf(x.tex
 export function loadMemory() {
   try { const j = JSON.parse(fs.readFileSync(FILE(), 'utf8')); return { on: j.on !== false, items: Array.isArray(j.items) ? j.items.filter((x) => x && typeof x.text === 'string') : [] }; }
   catch { return { on: true, items: [] }; }
-}
-// On Windows a rename can fail for a moment while another program has the file open (antivirus, the search indexer,
-// a backup tool): EPERM, EBUSY or EACCES. So it is tried again a few times, about half a second in all, before the
-// save gives up.
-const BUSY = new Set(['EPERM', 'EBUSY', 'EACCES']);
-const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-function renameSoon(from, to) {
-  for (let i = 0; ; i++) {
-    try { return fs.renameSync(from, to); } catch (e) {
-      if (!BUSY.has(e.code) || i >= 8) throw e;
-      pause(20 + i * 10);
-    }
-  }
 }
 function write(mem) {
   fs.mkdirSync(path.dirname(FILE()), { recursive: true });

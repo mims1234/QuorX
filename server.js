@@ -13,6 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { openDetached } from './server/userenv.js';
 import { currentKey, PORT, runtime, ROOT, HOME, chat, chatModels, decisionModels, imageModels, speechModels, musicModels, videoModels, transcribe, clearCatalogues } from './server/openrouter.js';
 import { listKeys, addKey, removeKey, setActive, renameKey, keyUsage, activeUsage, accountCredits, startSampling, lockDown } from './server/keys.js';
 import { setupCheck, runFix } from './server/setup-check.js';
@@ -31,10 +32,10 @@ import { ptyAvailable, ptyOpen, ptyWrite, ptyResize, ptyFollow, ptyClose } from 
 // Pages the agent wrote, served from this app's own address, get their own opaque origin: their requests to /api are refused.
 const SANDBOX_CSP = 'sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads';
 import { listChats, sidebarChats, chatPage, chatPictureRefs, pictureRefCounts, getTrace, getChatForPage, getChat, saveChat, patchChat, settleReply, trashChat, validId, listProjects, saveProject, forgetProject, setProjectColor, setProjectFlags, costSummary, costChats } from './server/store.js';
-import { ALLOWED, copyTemplate, workspaceDir, safePath, listFiles, listDir, listServers, stopServerWait, restartServer, serverLog, startServer, restoreCheckpoint, listCheckpoints, pruneCheckpoints, undoConflicts, changedFiles, reviewFiles, reviewDiff, undoFile, serverOverview, launchConfigs, saveLaunchConfig, removeLaunchConfig, ensureAgentDir, agentSpace } from './server/workspace.js';
+import { ALLOWED, copyTemplate, workspaceDir, safePath, chatFolder, listFiles, listDir, listServers, stopServerWait, restartServer, serverLog, startServer, restoreCheckpoint, listCheckpoints, pruneCheckpoints, undoConflicts, changedFiles, reviewFiles, reviewDiff, undoFile, serverOverview, launchConfigs, saveLaunchConfig, removeLaunchConfig, ensureAgentDir, agentSpace } from './server/workspace.js';
 import { followTerm, runningJobs, stopJob } from './server/terminal.js';
 import { runningIn, stopRunning, stopAllIn } from './server/running.js';
-import { decide as decideCommand, loadRules, saveRules, suggestedRules } from './server/cmdpolicy.js';
+import { decide as decideCommand, loadRules, saveRules, suggestedRules, ruleProblem, updateRule, removeRule } from './server/cmdpolicy.js';
 import { jobHostStatus, jobsAvailable } from './server/jobhost.js';
 import { safetySettings, yoloOf } from './server/safety.js';
 import { readAudit } from './server/audit.js';
@@ -249,6 +250,23 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, { error: 'give system, md or remove' });
       } catch (e) { return json(res, 200, { error: e.message }); }
     }
+    // A chat's own notes (<project>/.quorx/chats/<chat>.md), which its agent keeps: read and edited from the chat header.
+    const cnm = url.pathname.match(/^\/api\/chats\/([a-z0-9-]+)\/notes$/i);
+    if (cnm && (req.method === 'GET' || req.method === 'POST')) {
+      try {
+        // A chat not saved yet (no message sent) is found by the project the page names.
+        const chat = validId(cnm[1]) ? getChat(cnm[1]) : null, pid = chat?.projectId || url.searchParams.get('project') || '';
+        if (!validId(cnm[1]) || !listProjects().some((p) => p.id === pid)) return json(res, 200, { error: 'no such chat' });
+        const rel = `.quorx/chats/${cnm[1]}.md`, abs = path.join(workspaceDir(pid), rel);
+        if (req.method === 'POST') {
+          const b = JSON.parse(await readBody(req, 2e5) || '{}');
+          if (typeof b.md !== 'string') return json(res, 200, { error: 'give md' });
+          fs.mkdirSync(path.dirname(abs), { recursive: true });
+          if (b.md.trim()) fs.writeFileSync(abs, b.md); else fs.rmSync(abs, { force: true });
+        }
+        return json(res, 200, { rel, md: fs.existsSync(abs) ? fs.readFileSync(abs, 'utf8') : '' });
+      } catch (e) { return json(res, 200, { error: e.message }); }
+    }
     // Pin (up to 3) or archive a project.
     const pfm = url.pathname.match(/^\/api\/projects\/([a-z0-9-]+)\/flags$/i);
     if (pfm && req.method === 'POST') {
@@ -295,6 +313,23 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-cache', ...(/html|svg|xml/.test(type) && !req.pageOrigin ? { 'Content-Security-Policy': SANDBOX_CSP } : {}), ...(own ? { 'Access-Control-Allow-Origin': 'null' } : {}) });
       return sendFile(file, res);
     }
+    // A folder outside the project that a chat added (/wsf/<chat>/<n>/<path>): its pages open in the browser like a
+    // project's, sandboxed the same way, and only while the chat has it.
+    const wf = url.pathname.match(/^\/wsf\/([a-z0-9-]+)\/(\d+)\/(.*)$/i);
+    if (wf && req.method === 'GET') {
+      const dir = chatFolder(wf[1], wf[2]), rel = decodePath(wf[3]);
+      if (!dir || rel == null || /(^|[/\\])\.(?!well-known([/\\]|$))/.test(rel)) return json(res, 404, { error: 'not found' });
+      let file;
+      try { file = safePath(dir, rel || 'index.html'); } catch { return json(res, 404, { error: 'not found' }); }
+      if (fs.existsSync(file) && fs.statSync(file).isDirectory()) file = path.join(file, 'index.html');
+      if (!fs.existsSync(file)) return json(res, 404, { error: 'not found' });
+      const ref = String(req.headers.referer || ''), base = `http://${req.headers.host}/`, mine = `${base}wsf/${wf[1]}/${wf[2]}/`;
+      if (req.pageOrigin && req.headers['sec-fetch-mode'] !== 'navigate' && !ref.startsWith(mine)) return json(res, 404, { error: 'not found' });
+      const own = req.headers.origin === 'null' && ref.startsWith(mine);
+      const type = MIME[path.extname(file).toLowerCase()] || 'application/octet-stream';
+      res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-cache', ...(/html|svg|xml/.test(type) && !req.pageOrigin ? { 'Content-Security-Policy': SANDBOX_CSP } : {}), ...(own ? { 'Access-Control-Allow-Origin': 'null' } : {}) });
+      return sendFile(file, res);
+    }
     // Open a project's folder in the computer's own file manager (File Explorer on Windows). With a path inside the
     // project, a folder opens and a file is shown selected in its folder (Files → right-click → Show in File Explorer).
     if (url.pathname === '/api/open-folder' && req.method === 'POST') {
@@ -306,7 +341,7 @@ const server = http.createServer(async (req, res) => {
         catch (e) { return json(res, 400, { error: e.code === 'ENOENT' ? 'that file is gone' : e.message }); }
       }
       const [cmd, args] = process.platform === 'win32' ? ['explorer.exe', [file ? `/select,${file}` : dir]] : process.platform === 'darwin' ? ['open', file ? ['-R', file] : [dir]] : ['xdg-open', [dir]];
-      try { spawn(cmd, args, { detached: true, stdio: 'ignore' }).on('error', () => {}).unref(); return json(res, 200, { ok: true, dir }); }
+      try { openDetached(cmd, args); return json(res, 200, { ok: true, dir }); }
       catch (e) { return json(res, 500, { error: e.message }); }
     }
     if (url.pathname === '/api/files/text' && req.method === 'GET') {
@@ -488,7 +523,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/permissions' && req.method === 'GET') {
       const pid = url.searchParams.get('project');
       const root = pid && validId(pid) ? workspaceDir(pid) : null;
-      const rules = loadRules(root);
+      const rules = loadRules(root).map((r) => ({ ...r, problem: ruleProblem(r.match) || undefined }));
       return json(res, 200, { project: rules.filter((r) => r.scope === 'project'), everywhere: rules.filter((r) => r.scope === 'everywhere'),
         suggested: root ? suggestedRules(root, rules) : [], stop: (await jobsAvailable(), jobHostStatus()), shell: shellInfo().name });
     }
@@ -497,6 +532,27 @@ const server = http.createServer(async (req, res) => {
       if (b.scope === 'project' && !validId(b.projectId)) return json(res, 400, { error: 'bad project id' });
       if (!['project', 'everywhere'].includes(b.scope)) return json(res, 400, { error: 'scope must be project or everywhere' });
       try { return json(res, 200, { ok: true, rules: saveRules(b.scope, b.rules, b.scope === 'project' ? workspaceDir(b.projectId) : null) }); } catch (e) { return json(res, 200, { error: e.message }); }
+    }
+    // One rule at a time, by id: turn it on or off (PATCH { on }), or remove it (DELETE).
+    if (url.pathname === '/api/permissions/rule' && (req.method === 'PATCH' || req.method === 'DELETE')) {
+      const b = JSON.parse(await readBody(req, 1e4) || '{}');
+      if (!['project', 'everywhere'].includes(b.scope)) return json(res, 400, { error: 'scope must be project or everywhere' });
+      if (b.scope === 'project' && !validId(b.projectId)) return json(res, 400, { error: 'bad project id' });
+      const root = b.scope === 'project' ? workspaceDir(b.projectId) : null;
+      const rules = req.method === 'PATCH' ? updateRule(b.scope, String(b.id || ''), { on: b.on }, root) : removeRule(b.scope, String(b.id || ''), root);
+      return rules ? json(res, 200, { ok: true, rules }) : json(res, 404, { error: 'no such rule' });
+    }
+    // What each chat of a project allows on its own (its rules, tools, apps and folders), for the project's
+    // Permissions section. Read only: a chat's own list changes in that chat.
+    if (url.pathname === '/api/permissions/chats' && req.method === 'GET') {
+      const pid = url.searchParams.get('project');
+      if (!validId(pid)) return json(res, 400, { error: 'bad project id' });
+      const chats = listChats().filter((c) => c.projectId === pid).slice(0, 300).flatMap((c) => {
+        const a = getChat(c.id)?.agent || {};
+        const n = (a.cmdRules || []).length + (a.allowed || []).length + (a.apps || []).length + (a.folders || []).length;
+        return n ? [{ id: c.id, title: c.title || 'Untitled chat', cmdRules: a.cmdRules || [], allowed: a.allowed || [], apps: a.apps || [], folders: a.folders || [] }] : [];
+      });
+      return json(res, 200, { chats });
     }
     // ---- memory: facts and preferences every chat gets (server/memory.js); the agent can only propose ----
     if (url.pathname === '/api/memory' && req.method === 'GET') { const m = loadMemory(); return json(res, 200, { ...m, tokens: memoryTokens(m.items), limit: MEMORY_TOKENS }); }
@@ -667,12 +723,12 @@ const server = http.createServer(async (req, res) => {
       const b = await defaultBrowser();
       if (!b) return json(res, 200, { error: 'no Chromium browser (Chrome, Brave, Edge…) was found on this computer' });
       if (!b.page) return json(res, 200, { error: `${b.name} can't run this extension: use Chrome, Brave or Edge` });
-      try { spawn(b.exe, [b.page], { detached: true, stdio: 'ignore' }).on('error', () => {}).unref(); return json(res, 200, { ok: true, browser: b.name }); } catch (e) { return json(res, 200, { error: e.message }); }
+      try { openDetached(b.exe, [b.page]); return json(res, 200, { ok: true, browser: b.name }); } catch (e) { return json(res, 200, { error: e.message }); }
     }
     if (url.pathname === '/api/ext/show-folder' && req.method === 'POST') {
       const dir = path.join(ROOT, 'extension');
       const [cmd, args] = process.platform === 'win32' ? ['explorer.exe', [dir]] : process.platform === 'darwin' ? ['open', [dir]] : ['xdg-open', [dir]];
-      try { spawn(cmd, args, { detached: true, stdio: 'ignore' }).on('error', () => {}).unref(); return json(res, 200, { ok: true }); } catch (e) { return json(res, 200, { error: e.message }); }
+      try { openDetached(cmd, args); return json(res, 200, { ok: true }); } catch (e) { return json(res, 200, { error: e.message }); }
     }
     // ---- 🤖 Give to agent: lend one of your Browser tabs to a chat, or take it back ----
     if (url.pathname === '/api/given-tab') {

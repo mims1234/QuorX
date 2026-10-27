@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { HOME } from './openrouter.js';
+import { renameSoon } from './fsretry.js';
 
 const FILE = () => path.join(HOME, 'data', 'schedules.json');
 export const GRACE_MS = 2 * 60e3;      // a run this late is still on time; later than this it is "missed"
@@ -51,7 +52,7 @@ export function loadSchedules() { try { const j = JSON.parse(fs.readFileSync(FIL
 export function saveSchedules(list) {
   fs.mkdirSync(path.dirname(FILE()), { recursive: true });
   fs.writeFileSync(FILE() + '.tmp', JSON.stringify({ version: 1, schedules: list }, null, 2));
-  fs.renameSync(FILE() + '.tmp', FILE());
+  renameSoon(FILE() + '.tmp', FILE());
 }
 /**
  * A new or edited schedule from the page. The page sends the settings and tools a new chat in that project

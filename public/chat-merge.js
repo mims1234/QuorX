@@ -42,9 +42,18 @@ export function mergeChat(base, mine, theirs, { live = () => false } = {}) {
   const bm = base?.agent?.messages || [], mm = mine.agent?.messages || [], tm = theirs.agent?.messages || [];
   const bk = keyed(bm), mk = keyed(mm), tk = keyed(tm);
   const bAt = new Map(bk.map((k, i) => [k, canon(bm[i])])), mAt = new Map(mk.map((k, i) => [k, i])), tAt = new Map(tk.map((k, i) => [k, i]));
-  const out = []; // { key, side, i, at }
+  const out = []; // { key, side, i, at, patch? }
   for (const [j, k] of tk.entries()) {
     const i = mAt.get(k), side = pick(bAt.get(k), i == null ? undefined : canon(mm[i]), canon(tm[j]), i != null && live(i));
+    // One reply changed on both sides: the server wrote its result (settleReply) while this page added its steps.
+    // Steps are compared apart (canon leaves them out), so taking the server's copy dropped every step after the
+    // page's last save mid-reply. This page's copy with more steps is kept, with the server's result on it.
+    if (i != null && mm[i]?.runId && (side === 'theirs' || side === null) && stepsOf(mm[i]) > stepsOf(tm[j])) {
+      const patch = resultOf(mm[i], tm[j]);
+      if (Object.keys(patch).length) changed = true;
+      out.push({ key: k, side: 'mine', i, at: mm[i]?.at, patch });
+      continue;
+    }
     if (side === null) return { ok: false, why: `message ${k} changed here and in another window` };
     if (side === 'gone') { if (i != null) changed = true; continue; }
     if (side === 'theirs') changed = true;
@@ -97,6 +106,18 @@ export function mergeChat(base, mine, theirs, { live = () => false } = {}) {
   };
   const top = merge(headOf(base), headOf(mine), headOf(theirs));
   const agent = merge(agentOf(base), agentOf(mine), agentOf(theirs));
-  const messages = out.map((x) => (x.side === 'mine' ? mm[x.i] : tm[x.i]));
-  return { ok: true, doc: { ...top, agent: { ...agent, messages, artifacts } }, from: out.map((x) => [x.side, x.i]), changed };
+  const messages = out.map((x) => (x.side === 'mine' ? (x.patch ? { ...mm[x.i], ...x.patch } : mm[x.i]) : tm[x.i]));
+  return { ok: true, doc: { ...top, agent: { ...agent, messages, artifacts } }, from: out.map((x) => (x.patch ? [x.side, x.i, x.patch] : [x.side, x.i])), changed };
+}
+
+// How many steps a copy of a reply holds (in the chat, or kept apart by the server).
+const stepsOf = (m) => (Array.isArray(m?.trace) ? m.trace.length : 0) + (Number(m?.traceRef?.n) || 0);
+// What the server's copy of a reply knows that this page's doesn't: its result and that it has ended.
+function resultOf(mine, theirs) {
+  const p = {};
+  for (const k of ['stats', 'doneAt', 'note']) if (theirs[k] != null && (mine[k] == null || (k === 'stats' && mine.stats?.partial && !theirs.stats.partial))) p[k] = theirs[k];
+  if (theirs.content && !mine.content) p.content = theirs.content;
+  if (theirs.error && !mine.error && !mine.stats) p.error = theirs.error;
+  if (theirs.runActive === false && mine.runActive) p.runActive = false;
+  return p;
 }

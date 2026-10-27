@@ -21,6 +21,7 @@ const PAGES = {
   '/form': `<!doctype html><meta charset="utf-8"><title>Form</title><form role="search"><input id="q" placeholder="Search people"></form><label>Note <input id="note"></label>
     <button id="go" disabled>Go</button><button id="b">Toggle</button><button aria-label="Delete">🗑</button><ul>${Array.from({ length: 30 }, (_, i) => `<li role="listitem">Row ${i} with some text in it</li>`).join('')}</ul>
     <script>document.getElementById('b').onclick = () => { document.querySelector('ul').innerHTML = '<li>new</li>'; };</script>`,
+  '/compose': '<!doctype html><meta charset="utf-8"><title>Compose</title><input id="q" aria-label="Ask" value="hi"><div id="box" contenteditable="true" role="textbox" aria-label="Message">hello there</div>',
 };
 let srv, base, tab;
 test.before(async () => {
@@ -40,7 +41,9 @@ test('ready waits for a "Loading…" shell to fill in, and reports a page that n
   assert.match((await tab.summary()).text, /Post number 4/);
   const busy = await tab.eval(`(() => { setInterval(() => { document.body.append(document.createElement('i')); }, 100); return 1; })()`);
   assert.equal(busy, 1);
-  const r2 = await tab.ready({ quiet: 500, cap: 1200 });
+  // (A slow machine runs a background tab's timers about once a second: a quiet window longer than that still sees
+  // the page change, so it can't pass for quiet.)
+  const r2 = await tab.ready({ quiet: 1500, cap: 3000 });
   assert.equal(r2.quiet, false);
 });
 
@@ -76,6 +79,17 @@ test('snapshot refs: a click by ref works, a disabled button is refused with why
   await tab.open(`${base}/feed`, { width: 1000, height: 700 });
   await assert.rejects(tab.click({ ref: `s${s1.n}:${toggle}` }), /too old/);
   assert.ok((await tab.snapshot()).n > f.n);
+});
+
+test('type replaces what a field holds and reads it back (an input and a chat box); append adds to it', { skip: noBrowser }, async () => {
+  await tab.open(`${base}/compose`, { width: 1000, height: 700 });
+  const s1 = await tab.snapshot();
+  const ask = `s${s1.n}:${/(e\d+) textbox "Ask"/.exec(s1.text)[1]}`, box = `s${s1.n}:${/(e\d+) textbox "Message"/.exec(s1.text)[1]}`;
+  assert.match(await tab.type({ ref: ask, text: 'hi' }), /held "hi" before, replaced\); the field now holds "hi"$/, 'not "hihi"');
+  assert.equal(await tab.eval('document.getElementById("q").value'), 'hi');
+  assert.match(await tab.type({ ref: box, text: 'new words' }), /the field now holds "new words"$/);
+  assert.equal(await tab.eval('document.getElementById("box").innerText.trim()'), 'new words');
+  assert.match(await tab.type({ ref: ask, text: ' there', append: true }), /the field now holds "hi there"$/);
 });
 
 test('the risk check, summary and the agent’s mark are page operations too: a click by ref on Delete is caught', { skip: noBrowser }, async () => {

@@ -2895,3 +2895,53 @@ body.dev-build::before { content: ''; position: fixed; left: 0; right: 0; top: 0
 .mic-hint .mh-seg button.on { color: var(--text); background: color-mix(in srgb, var(--violet, #a78bfa) 18%, transparent); }
 .mic-hint .mh-seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 @media (max-width: 640px) { .mic-hint .mh-txt { display: none; } }
+
+/* 🖥 Computer use: the button beside 🧩 Chrome, and its panel (apps this chat may use, each with its level) */
+.chatpane .cmp-control-rack .apps-wrap { position: relative; display: inline-flex; }
+.chatpane .cmp-control-rack .cmp-apps-b { position: relative; }
+.chatpane .cmp-control-rack .cmp-apps-b.on { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); background: var(--ok-dim); }
+.cmp-apps-b .apps-n { position: absolute; top: -4px; right: -4px; min-width: 15px; height: 15px; padding: 0 3px; border-radius: 8px; background: var(--ok); color: var(--bg); font: 600 10px/15px var(--font-ui); text-align: center; }
+.apps-pop { left: auto; right: 0; width: 320px; }
+.apps-pop .apps-on { gap: 8px; cursor: pointer; }
+.apps-pop .apps-note { font-size: 11px; color: var(--muted); padding: 2px 0 4px; }
+.apps-pop .apps-app { gap: 8px; }
+.apps-pop .apps-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.apps-pop .apps-lvl { flex: none; }
+.apps-pop .apps-lvl button { font-size: 11px; padding: 2px 7px; }
+
+/* Permission rows (Settings → Command rules, project settings → Permissions, the chat's 🔓): on/off, what, where from, uses */
+.pr-rule.perm-row { grid-template-columns: 18px 76px minmax(0, 1fr) auto auto; }
+.pr-rule.perm-row .perm-nobox { width: 18px; }
+.pr-rule.perm-row.off code, .pr-rule.perm-row.off .pr-eff { opacity: .5; text-decoration: line-through; text-decoration-color: var(--line-strong); }
+.pr-rule.perm-row .perm-del.sure { width: auto; padding: 0 8px; color: var(--bad); font: 600 11px var(--font-ui); }
+.allowed-pop { width: 380px; max-height: min(70vh, 560px); overflow: auto; }
+.allowed-pop .perm-h { margin: 10px 0 4px; font: 600 11px var(--font-ui); color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.allowed-pop .pr-rule.perm-row { grid-template-columns: 18px 64px minmax(0, 1fr) auto; }
+.allowed-pop .pr-rule.perm-row .pr-by { grid-column: 3 / -1; grid-row: 2; }
+.allowed-pop .ap-foot { display: flex; gap: 8px; justify-content: space-between; margin-top: 8px; }
+.chatpane .cmp-control-rack .cmp-perm-b.on { color: var(--accent); }
+.chatpane .cmp-control-rack .cmp-perm-b { position: relative; }
+.cmp-perm-b .apps-n { position: absolute; top: -4px; right: -4px; min-width: 15px; height: 15px; padding: 0 3px; border-radius: 8px; background: var(--accent); color: var(--bg); font: 600 10px/15px var(--font-ui); text-align: center; }
+.pj-perms .pj-perm-chat { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; margin-top: 12px; }
+.pj-perms .pj-perm-chat small { color: var(--muted); font-weight: 400; }
+.pj-perms .pr-list { display: grid; gap: 4px; }
+
+/* This chat's notes, beside the project tag: In project / Own chat, and the notes its agent keeps. */
+.ch-notes-wrap { position: relative; flex: none; margin-left: 4px; }
+.ch-notes { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 8px 0 6px; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: var(--muted); font: 500 11px var(--font-ui); cursor: pointer; white-space: nowrap; }
+.ch-notes svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.ch-notes:hover, .ch-notes.on { color: var(--text); background: var(--panel-2); border-color: var(--line-strong); }
+.ch-notes.off { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.ch-notes-pop { position: fixed; bottom: auto; width: 400px; gap: 8px; z-index: 80; }
+.ch-notes-pop .cn-check { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 8px; align-items: start; cursor: pointer; font: 12px var(--font-ui); }
+.ch-notes-pop .cn-check span { display: grid; gap: 2px; }
+.ch-notes-pop { white-space: normal; text-transform: none; letter-spacing: normal; }
+.ch-notes-pop .cn-check small { color: var(--muted); line-height: 1.4; }
+.ch-notes-pop .cn-check input { appearance: none; -webkit-appearance: none; width: 20px; height: 20px; margin: 0; border-radius: 6px; border: 1.5px solid var(--line-strong); background: var(--surface-inset); display: inline-grid; place-content: center; cursor: pointer; }
+.ch-notes-pop .cn-check input::after { content: '✓'; font: 800 13px/1 var(--font-ui); color: var(--ok-ink); opacity: 0; }
+.ch-notes-pop .cn-check input:checked { background: var(--ok); border-color: var(--ok); }
+.ch-notes-pop .cn-check input:checked::after { opacity: 1; }
+.ch-notes-pop .cn-md { width: 100%; box-sizing: border-box; resize: vertical; min-height: 120px; max-height: 50vh; font: 12px/1.5 var(--font-mono, ui-monospace, monospace); background: var(--surface-inset); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+.ch-notes-pop .ap-foot { display: flex; align-items: center; gap: 6px; }
+.ch-notes-pop .cn-path { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.ch-notes-pop .cn-save:disabled { color: var(--muted); cursor: default; text-decoration: none; }
