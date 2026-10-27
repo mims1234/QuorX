@@ -103,6 +103,9 @@ public static class QxUia {
           if (core == null) continue;
           appPid = core.Current.ProcessId; path = ExeOf(appPid);
         }
+        // explorer.exe draws the taskbar and the desktop too: only its folder windows are File Explorer, listed by
+        // the Start menu's id so they read "File Explorer" (it calls itself "Windows Explorer", which opens nothing).
+        if (IsExplorer(path)) { if (c.ClassName == "CabinetWClass") sb.Append(ExplorerId).Append("\tFile Explorer\n"); continue; }
         string own = "";
         if (path.Length > 0) { System.Diagnostics.FileVersionInfo v = System.Diagnostics.FileVersionInfo.GetVersionInfo(path); own = (v.FileDescription ?? "").Trim(); if (own.Length == 0) own = Path.GetFileNameWithoutExtension(path); }
         sb.Append(AumidOf(appPid)).Append('\t').Append(own.Replace('\t', ' ')).Append('\n');
@@ -110,6 +113,8 @@ public static class QxUia {
     }
     return sb.ToString();
   }
+  const string ExplorerId = "Microsoft.Windows.Explorer"; // File Explorer's id in the Start menu
+  static bool IsExplorer(string path) { return string.Equals(Path.GetFileName(path ?? ""), "explorer.exe", StringComparison.OrdinalIgnoreCase); }
   // A program's own name for itself is the app's name, or starts with it ("Brave Browser" for Brave).
   static bool Named(string own, string name) {
     own = (own ?? "").Trim();
@@ -131,6 +136,12 @@ public static class QxUia {
           AutomationElement core = w.FindFirst(TreeScope.Children, new PropertyCondition(AutomationElement.ClassNameProperty, "Windows.UI.Core.CoreWindow"));
           if (core == null) continue;
           appPid = core.Current.ProcessId; path = ExeOf(appPid);
+        }
+        // File Explorer: its folder windows only, never the taskbar or the desktop that the same process draws.
+        if (IsExplorer(path)) {
+          if (c.ClassName == "CabinetWClass" && (string.Equals(appId, ExplorerId, StringComparison.OrdinalIgnoreCase) || Named("File Explorer", name)))
+            sb.Append(c.NativeWindowHandle).Append('\t').Append(c.ProcessId).Append('\t').Append(appPid).Append('\t').Append((c.Name ?? "").Replace('\t', ' ').Replace('\n', ' ')).Append('\n');
+          continue;
         }
         bool hit = false;
         string aumid = AumidOf(appPid);
@@ -247,7 +258,7 @@ public static class QxUia {
     AutomationElement.AutomationElementInformation c;
     try { c = e.Current; } catch { return; }
     if (c.IsOffscreen && level > 0 && ++off > OffShown) { offHidden++; return; } // its children are off screen too
-    string type = c.ControlType.ProgrammaticName.Replace("ControlType.", "");
+    string type = c.ControlType == null ? "Custom" : c.ControlType.ProgrammaticName.Replace("ControlType.", ""); // some File Explorer parts have none
     string name = Clip(c.Name, 80);
     bool inter = Interactive.Contains(type) && c.IsEnabled;
     string val = null, toggle = null;
