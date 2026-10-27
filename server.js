@@ -14,7 +14,7 @@ import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { openDetached } from './server/userenv.js';
-import { currentKey, PORT, runtime, ROOT, HOME, chat, chatModels, decisionModels, imageModels, speechModels, musicModels, videoModels, transcribe, clearCatalogues } from './server/openrouter.js';
+import { currentKey, PORT, runtime, ROOT, HOME, chat, chatModels, decisionModels, imageModels, speechModels, musicModels, videoModels, transcribe, clearCatalogues, providerList, knownProviders } from './server/openrouter.js';
 import { listKeys, addKey, removeKey, setActive, renameKey, keyUsage, activeUsage, accountCredits, startSampling, lockDown } from './server/keys.js';
 import { setupCheck, runFix } from './server/setup-check.js';
 import { startSignIn, signInStatus, cancelSignIn, finishByCallback, finishWithCode, callbackPage } from './server/oauth.js';
@@ -880,8 +880,13 @@ const server = http.createServer(async (req, res) => {
     }
     // Model cards (models/cards/): limits, quirks, tips and QuorX's results, shown on hover next to each rating.
     if (req.method === 'GET' && url.pathname === '/api/model-cards') return json(res, 200, uiCards());
+    // OpenRouter's providers, for ⚙ Blocked providers.
+    if (req.method === 'GET' && url.pathname === '/api/providers') {
+      try { return json(res, 200, { providers: await providerList() }); } catch (e) { return json(res, 200, { providers: knownProviders(), error: e.message }); }
+    }
     if (req.method === 'GET' && url.pathname === '/api/models') {
       if (url.searchParams.get('refresh')) clearCatalogues();
+      providerList().catch(() => {}); // replies map blocked provider names with it
       // Each catalogue loads on its own, so one failing list doesn't hide the others. The lists are
       // public (no key needed); if none of them load, the page shows why and offers a retry.
       const errors = [];

@@ -775,10 +775,13 @@ function renderSidebar() {
         const live = G.open.get(c.id);
         const running = !!live?.running, waiting = running && live.waiting;
         const spent = (c.cost || 0) + liveOf(G.open.get(c.id));
+        // ⏰ A schedule chat: its runs start fresh, with only the schedule's prompt; what you type in it has the whole chat.
+        const sch = schedsOf(c.id), schOn = sch.some((s) => !s.paused && s.nextAt != null);
+        const schTag = sch.length ? `<span class="sb-sched ${schOn ? 'on' : 'off'}" title="Schedule chat: ${esc(sch.map((s) => `${s.name} (${s.paused ? 'paused' : s.whenText})`).join(', '))}. Each run starts fresh and sees only the schedule's prompt; what you type here sees the whole chat, every run included.">⏰${schOn ? '' : ' paused'}</span>` : '';
         const tip = [c.title || 'Untitled', ...(c.model ? [`Model\t${short(c.model)}`] : []), `Last message\t${new Date(c.lastAt || c.updated || Date.now()).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`, ...(c.messages ? [`Messages\t${c.messages}`] : []), ...(running ? [`Now\t${waiting ? 'waiting for you' : 'working'}`] : []), `Spent\t$${spent.toFixed(3)}`].join('\n');
         return `<div class="sb-chat sb-chat-item ${G.panes.includes(c.id) ? 'on active' : ''} ${running ? 'running' : ''}" data-c="${esc(c.id)}" data-tip-delay="900" title="${esc(tip)}">
           <div class="sb-chat-content">
-            <div class="sb-chat-topline"><span class="sb-chat-title">${esc(c.title)}</span>${running ? '<span class="live-dot" aria-label="Running"></span>' : ''}</div>
+            <div class="sb-chat-topline"><span class="sb-chat-title">${esc(c.title)}</span>${schTag}${running ? '<span class="live-dot" aria-label="Running"></span>' : ''}</div>
             ${waiting ? `<div class="sb-chat-prev"><b class="needs">${waiting === 'answer' ? 'Waiting for your answer' : waiting === 'budget' ? 'Waiting: project budget reached' : 'Waiting for your approval'}</b></div>` : running ? '<div class="sb-chat-prev"><i>Working…</i></div>' : ''}
             <div class="sb-chat-meta"><span>${ago(c.lastAt || c.updated || Date.now())}</span>${c.model ? `<span>· ${esc(short(c.model))}</span>` : ''}${c.cost || liveOf(G.open.get(c.id)) ? `<span class="cost${liveOf(G.open.get(c.id)) ? ' live' : ''}">· $${((c.cost || 0) + liveOf(G.open.get(c.id))).toFixed(3)}</span>` : ''}</div>
           </div>
@@ -2720,13 +2723,13 @@ function renderChatHead(c) {
   // ⏰ the schedules that post in this chat: how many, and whether they are on; click for them in Schedules.
   const sc = $('.ch-sched', r);
   if (sc) {
-    const mine = (SCHED.list || []).filter((s) => s.chatId === c.id), on = mine.filter((s) => !s.paused && s.nextAt != null);
+    const mine = schedsOf(c.id), on = mine.filter((s) => !s.paused && s.nextAt != null);
     sc.hidden = !mine.length;
     if (mine.length) {
       sc.className = `ch-sched ${on.length ? 'on' : 'off'}`;
       // Short, for a narrow header: the next run's time (today's without the word), or how many are on and paused.
       sc.textContent = `⏰ ${mine.length === 1 ? (on.length ? when2(on[0].nextAt).replace(/^Today /, '') : 'paused') : `${on.length} on${mine.length > on.length ? ` · ${mine.length - on.length} paused` : ''}`}`;
-      sc.title = `${mine.map((s) => `${s.name}: ${s.whenText}${s.paused ? ' (paused)' : ''}`).join('\n')}\nIts runs post in this chat. Ask here what they saw, or to change them. Click for them in Schedules.`;
+      sc.title = `${mine.map((s) => `${s.name}: ${s.whenText}${s.paused ? ' (paused)' : ''}`).join('\n')}\nIts runs post in this chat. Each run starts fresh, with only the schedule's prompt; what you type here sees the whole chat, so ask what they saw, or to change them. Click for them in Schedules.`;
       sc.onclick = () => { SCHED.focus = c.id; openSchedules(); };
     }
   }
@@ -3231,7 +3234,7 @@ function renderMsg(c, m) {
   if (needsTrace(m)) watchTrace(c, m, el);
   if (m.role === 'user') {
     el.className = 'msg user';
-    el.innerHTML = `${m.scheduled ? `<div class="u-sched" title="${m.scheduled.missed ? 'QuorX was closed or the computer slept at the planned time, so this ran when it was back' : 'Started by a schedule'}">⏰ ${m.scheduled.missed ? 'Missed run, started late' : 'Scheduled'}: ${esc(m.scheduled.name)}</div>` : ''}<div class="utext"></div>${m.imgs?.length ? `<div class="u-imgs" data-views="${esc(JSON.stringify(m.imgViews || []))}">${m.imgs.map((u, k) => `<img src="${u}" alt="attached picture" data-k="${k}" title="Click to see it large">`).join('')}</div>` : ''}${m.docs?.length ? `<div class="u-docs">${m.docs.map((d) => `<button type="button" class="u-doc" data-doc="${esc(JSON.stringify(d))}" title="${esc(d.name)} · ${esc(docSize(d.size))} · click to preview">${DOC_ICON[d.kind] || '📄'} ${esc(d.name)}</button>`).join('')}</div>` : ''}${m.ctx?.length ? `<div class="ctx-used">${m.ctx.map((t) => `<span>📎 ${esc(t)}</span>`).join('')}</div>` : ''}${m.cmts?.length ? `<div class="ctx-used cmts-used">${m.cmts.map((x) => `<span title="${esc(x.selector)}">💬 ${esc(x.tag)} "${esc(clip(x.text || '', 40))}"${x.note ? `: ${esc(clip(x.note, 60))}` : ''}</span>`).join('')}</div>` : ''}${m.at ? timeTag(m.at) : ''}`;
+    el.innerHTML = `${m.scheduled ? `<div class="u-sched" title="${m.scheduled.missed ? 'QuorX was closed or the computer slept at the planned time, so this ran when it was back' : 'Started by a schedule'}. A scheduled run starts fresh: it sees only this prompt, not the chat above it. What you type in this chat sees everything, these runs included.">⏰ ${m.scheduled.missed ? 'Missed run, started late' : 'Scheduled'}: ${esc(m.scheduled.name)} <span class="u-fresh">fresh run · sees only this prompt</span></div>` : ''}<div class="utext"></div>${m.imgs?.length ? `<div class="u-imgs" data-views="${esc(JSON.stringify(m.imgViews || []))}">${m.imgs.map((u, k) => `<img src="${u}" alt="attached picture" data-k="${k}" title="Click to see it large">`).join('')}</div>` : ''}${m.docs?.length ? `<div class="u-docs">${m.docs.map((d) => `<button type="button" class="u-doc" data-doc="${esc(JSON.stringify(d))}" title="${esc(d.name)} · ${esc(docSize(d.size))} · click to preview">${DOC_ICON[d.kind] || '📄'} ${esc(d.name)}</button>`).join('')}</div>` : ''}${m.ctx?.length ? `<div class="ctx-used">${m.ctx.map((t) => `<span>📎 ${esc(t)}</span>`).join('')}</div>` : ''}${m.cmts?.length ? `<div class="ctx-used cmts-used">${m.cmts.map((x) => `<span title="${esc(x.selector)}">💬 ${esc(x.tag)} "${esc(clip(x.text || '', 40))}"${x.note ? `: ${esc(clip(x.note, 60))}` : ''}</span>`).join('')}</div>` : ''}${m.at ? timeTag(m.at) : ''}`;
     $('.utext', el).innerHTML = md(m.content);
     enhance($('.utext', el));
     el.insertAdjacentHTML('beforeend', '<div class="u-reading-slot"></div><div class="u-video-slot"></div>');
@@ -3690,7 +3693,8 @@ function updateMsg(c, m, { bodyOnly = false } = {}) {
   const s = m.stats, when = m.doneAt || m.at;
   const checkTag = s?.verify ? (s.verify.ok ? '<span class="check-ok" title="Before this reply ended, the harness re-checked the changed files and opened what was built: no errors.">✓ Checked</span>'
     : `<span class="check-bad" title="${esc(s.verify.problems.join('\n'))}">⚠ ${s.verify.problems.length} problem${s.verify.problems.length === 1 ? '' : 's'} left</span>`) : '';
-  const stopTag = s?.stop === 'steps' ? '<span title="The reply used all its steps (⚙ Settings → Agent loop)">step limit reached</span>'
+  const stopTag = s?.stop === 'steps' && s.scheduled ? `<span class="stop-sched" title="A scheduled run that ended before it finished counts as failed in its schedule (three in a row pause it). The next run starts fresh, so there is nothing to keep going from.">⏰ run failed: ${s.loopEnd ? 'went in circles' : 'out of steps'}</span>`
+    : s?.stop === 'steps' ? `<span title="${s.loopEnd ? 'The agent made the same failing call again after a warning, so the reply was wrapped up' : 'The reply used all its steps (⚙ Settings → Agent loop)'}">${s.loopEnd ? 'stopped: going in circles' : 'step limit reached'}</span>`
     : s?.stop === 'budget' ? (s.budgetStop === 'hard' ? '<span title="The reply went past the project budget and its allowance for finishing work (⚙ Settings → Budget), so it was stopped">stopped past the budget</span>'
       : '<span title="The project budget was used up, so the reply did not start; raise it with the $ next to the project in the sidebar">budget reached</span>') : '';
   let undoRow = $('.f-undo-row', el);
@@ -5386,20 +5390,52 @@ const SCHED = { list: [], since: 0, edit: null, timer: 0, now: Date.now() };
 const SCHED_STATUS = { starting: ['Starting', 'run'], running: ['Running', 'run'], waiting: ['Waits for you', 'wait'], done: ['Finished', 'ok'], failed: ['Failed', 'bad'], stopped: ['Stopped', 'bad'], skipped: ['Skipped', 'wait'] };
 const WEEK = [[1, 'Mon'], [2, 'Tue'], [3, 'Wed'], [4, 'Thu'], [5, 'Fri'], [6, 'Sat'], [0, 'Sun']];
 const when2 = (t) => { if (!t) return '–'; const d = new Date(t), today = new Date(); const same = d.toDateString() === today.toDateString(); const tmr = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1).toDateString() === d.toDateString(); return `${same ? 'Today' : tmr ? 'Tomorrow' : d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })} ${d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`; };
-// The sidebar's Schedules row: how many are on (they still have a next run) and how many are paused.
+// The chat a schedule posts in (the one it was made from, or its first run's), and the schedules posting in a chat.
+function schedChatId(s) { return s.newChat ? null : s.chatId || s.lastRun?.chatId || null; }
+function schedsOf(chatId) { try { return SCHED.list.filter((s) => schedChatId(s) === chatId); } catch { return []; } } // (none before SCHED is set up)
+// A run going on now (or waiting for you), and the time left until a run: "4:32", "1h 05m", "2d 3h". The server's
+// clock counts (SCHED.skew), so a page on another device counts down to the same second.
+const schedLive = (s) => ['starting', 'running', 'waiting'].includes(s.lastRun?.status) && !s.lastRun.ended;
+function countdown(at) {
+  const left = Math.round((at - (Date.now() + (SCHED.skew || 0))) / 1000);
+  if (left <= 0) return 'starting…';
+  const d = Math.floor(left / 86400), h = Math.floor(left / 3600) % 24, m = Math.floor(left / 60) % 60, sec = left % 60;
+  return d ? `${d}d ${h}h` : h ? `${h}h ${String(m).padStart(2, '0')}m` : `${m}:${String(sec).padStart(2, '0')}`;
+}
+// Every second: each countdown on the page ([data-cd] = the time it counts to). One that reaches 0 asks the server
+// a few seconds later, so the run that just started shows up as running without waiting for the 30 s poll.
+setInterval(() => {
+  let due = false;
+  for (const el of document.querySelectorAll('[data-cd]')) {
+    const t = countdown(Number(el.dataset.cd));
+    if (el.textContent !== t) el.textContent = t;
+    if (t === 'starting…' && !(SCHED.asked ??= new Set()).has(el.dataset.cd)) { SCHED.asked.add(el.dataset.cd); due = true; } // once per run time
+  }
+  if (due && !SCHED.dueAsk) SCHED.dueAsk = setTimeout(async () => { SCHED.dueAsk = 0; await loadSchedules(); if ($('#schedules')?.open) drawSchedules(); pollSchedules(); }, 4e3);
+}, 1000);
+// The sidebar's Schedules row: a run going on now (pulsing, amber when it waits for you), else how many are on, the
+// next run's countdown, and how many are paused.
 function drawSchedCount() {
   const el = $('#schedCount'); if (!el) return;
-  const on = SCHED.list.filter((s) => !s.paused && s.nextAt != null).length, off = SCHED.list.filter((s) => s.paused).length;
-  el.hidden = !on && !off;
-  el.innerHTML = `${on ? `<span class="on">${on}</span>` : ''}${off ? `<span class="off">${off} paused</span>` : ''}`;
-  el.closest('button').title = `Schedules: ${on} on, ${off} paused. Chats QuorX starts on its own, like every weekday at 9`;
+  const onList = SCHED.list.filter((s) => !s.paused && s.nextAt != null), on = onList.length, off = SCHED.list.filter((s) => s.paused).length;
+  const live = SCHED.list.filter(schedLive), waits = live.some((s) => s.lastRun.status === 'waiting');
+  const next = onList.map((s) => s.nextAt).sort((a, b) => a - b)[0];
+  el.hidden = !on && !off && !live.length;
+  el.classList.toggle('live', !!live.length);
+  el.innerHTML = live.length ? `<span class="sched-live ${waits ? 'waiting' : 'running'}"><span class="live-beacon ${waits ? 'waiting' : 'running'}"></span>${waits ? 'waits for you' : live.length > 1 ? `${live.length} running` : 'running'}</span>`
+    : `${on ? `<span class="on">${on}</span>` : ''}${next ? `<span class="sched-cd" data-cd="${next}">${countdown(next)}</span>` : ''}${off ? `<span class="off">${off} paused</span>` : ''}`;
+  el.closest('button').title = `Schedules: ${on} on, ${off} paused${live.length ? `. Running now: ${live.map((s) => s.name).join(', ')}` : next ? `. Next run: ${when2(next)}` : ''}. Chats QuorX starts on its own, like every weekday at 9`;
 }
 async function loadSchedules() {
   const r = await fetch(`/api/schedules?since=${SCHED.since}`).then((x) => x.json()).catch(() => null);
   if (!r || r.error) return null;
   const first = !SCHED.since && !SCHED.seen;
   SCHED.list = r.schedules; SCHED.now = r.now; SCHED.seen = true;
+  if (r.now) SCHED.skew = r.now - Date.now();
   drawSchedCount();
+  // The sidebar marks schedule chats: drawn again when that set (or a schedule's on/paused) changes.
+  const marks = SCHED.list.map((s) => `${schedChatId(s)}:${!s.paused && s.nextAt != null}`).join();
+  if (marks !== SCHED.marks) { SCHED.marks = marks; renderSidebar(); }
   for (const c of G.open.values()) renderChatHead(c); // their ⏰ chips
   // Notices from before this page loaded are old news: only later ones notify.
   if (!first) for (const n of r.notices) scheduleNoticed(n);
@@ -5424,10 +5460,11 @@ async function scheduleNoticed(n) {
   const title = { done: '✓ Scheduled chat finished', error: '✕ Scheduled chat stopped', approval: '⏸ Scheduled chat needs your approval', answer: '❓ Scheduled chat has a question', budget: '💲 Project budget reached' }[n.kind] || 'QuorX';
   try { const x = new Notification(title, { body: `⏰ ${n.name}${n.text ? `\n${n.text}` : ''}`, icon: 'brand/quorx-192.png', tag: `oh-sched-${n.scheduleId}`, silent: n.kind === 'done' }); x.onclick = () => { window.focus(); if (n.chatId) showChat(n.chatId); x.close(); }; } catch { /* needs a service worker in some browsers */ }
 }
-// Every 30 s while any schedule exists (the list is short and the server answers from one small file).
+// Every 30 s while any schedule exists (the list is short and the server answers from one small file); every 5 s
+// while a run is going on, so the sidebar and the list show it end when it does.
 function pollSchedules() {
   clearTimeout(SCHED.timer);
-  SCHED.timer = setTimeout(async () => { await loadSchedules(); if ($('#schedules')?.open) drawSchedules(); pollSchedules(); }, SCHED.list.length ? 30e3 : 120e3);
+  SCHED.timer = setTimeout(async () => { await loadSchedules(); if ($('#schedules')?.open) drawSchedules(); pollSchedules(); }, SCHED.list.some(schedLive) ? 5e3 : SCHED.list.length ? 30e3 : 120e3);
 }
 async function openSchedules(editId) {
   const d = $('#schedules');
@@ -5474,12 +5511,13 @@ function drawSchedules() {
   const proj = (id) => G.projects.find((p) => p.id === id)?.name || id;
   const rows = SCHED.list.map((s) => {
     const st = s.lastRun ? SCHED_STATUS[s.lastRun.status] || [s.lastRun.status, ''] : null;
-    return `<li class="sc-row ${s.paused ? 'paused' : ''} ${SCHED.focus && s.chatId === SCHED.focus ? 'focus' : ''}" data-id="${esc(s.id)}">
+    const live = schedLive(s), waits = live && s.lastRun.status === 'waiting';
+    return `<li class="sc-row ${s.paused ? 'paused' : ''} ${live ? `live ${waits ? 'waiting' : 'running'}` : ''} ${SCHED.focus && s.chatId === SCHED.focus ? 'focus' : ''}" data-id="${esc(s.id)}">
       <div class="sc-main"><div class="sc-top"><b class="sc-name">${esc(s.name)}</b><span class="tag sc-proj">📁 ${esc(proj(s.projectId))}</span><span class="tag sc-mode ${s.approval}" title="${s.approval === 'yolo' ? 'YOLO: the deciders answer for you, nothing waits' : 'Strict: approvals and questions wait for you'}">${s.approval === 'yolo' ? '⚡ YOLO' : '🔒 Strict'}</span>${s.trusted ? '<span class="tag sc-trusted" title="Trusted: its runs send, post and submit in your tabs as the prompt says, without asking (a password or a payment still asks)">✓ Trusted</span>' : ''}</div>
         <div class="sc-when">${esc(s.whenText)} · ${recDot(s.model, 'chat')} ${esc(short(s.model))}</div>
         <div class="sc-prompt" title="${esc(s.prompt)}">${esc(clip(s.prompt.replace(/\s+/g, ' '), 140))}</div>
         ${schedLinks(s)}${s.paused && s.pausedWhy ? `<small class="sc-note sc-bad">⏸ ${esc(s.pausedWhy)}</small>` : ''}
-        <div class="sc-runs"><span>Next: <b>${s.paused ? 'paused' : s.nextAt ? esc(when2(s.nextAt)) : 'none'}</b></span>${s.lastRun ? `<span>Last: ${esc(when2(s.lastRun.at))} <span class="sc-st ${st[1]}">${esc(st[0])}</span>${s.lastRun.missed ? '<span class="sc-st missed" title="QuorX was closed or the computer slept at the planned time, so it ran when QuorX was back">missed, ran late</span>' : ''}${s.lastRun.cost ? ` <span class="cost">${money(s.lastRun.cost, 4)}</span>` : ''}${s.lastRun.chatId ? ` <button type="button" class="mp-link sc-open" data-chat="${esc(s.lastRun.chatId)}">Open chat</button>` : ''}${s.lastRun.note ? `<small class="sc-note">${esc(s.lastRun.note)}</small>` : ''}${s.lastRun.skipped ? `<small class="sc-note">${s.lastRun.skipped} turn${s.lastRun.skipped === 1 ? '' : 's'} skipped while it was still going</small>` : ''}</span>` : '<span class="sc-dim">Not run yet</span>'}</div></div>
+        <div class="sc-runs">${live ? `<span class="sc-now ${waits ? 'waiting' : 'running'}"><span class="live-beacon ${waits ? 'waiting' : 'running'}"></span>${waits ? 'Waits for you now' : 'Running now'} <small>since ${esc(when2(s.lastRun.at).replace(/^Today /, ''))}</small></span>` : ''}<span>Next: <b>${s.paused ? 'paused' : s.nextAt ? esc(when2(s.nextAt)) : 'none'}</b>${!s.paused && s.nextAt ? ` <span class="sc-cd" data-cd="${s.nextAt}" title="Time left until this run">${countdown(s.nextAt)}</span>` : ''}</span>${s.lastRun && !live ? `<span>Last: ${esc(when2(s.lastRun.at))} <span class="sc-st ${st[1]}">${esc(st[0])}</span>${s.lastRun.missed ? '<span class="sc-st missed" title="QuorX was closed or the computer slept at the planned time, so it ran when QuorX was back">missed, ran late</span>' : ''}${s.lastRun.cost ? ` <span class="cost">${money(s.lastRun.cost, 4)}</span>` : ''}${s.lastRun.chatId ? ` <button type="button" class="mp-link sc-open" data-chat="${esc(s.lastRun.chatId)}">Open chat</button>` : ''}${s.lastRun.note ? `<small class="sc-note">${esc(s.lastRun.note)}</small>` : ''}${s.lastRun.skipped ? `<small class="sc-note">${s.lastRun.skipped} turn${s.lastRun.skipped === 1 ? '' : 's'} skipped while it was still going</small>` : ''}</span>` : live ? '' : '<span class="sc-dim">Not run yet</span>'}</div></div>
       <div class="sc-acts"><button type="button" class="kx-btn sm sc-now" title="Start this chat now (the schedule stays as it is)">▶ Run now</button><button type="button" class="kx-btn sm sc-pause">${s.paused ? 'Resume' : 'Pause'}</button><button type="button" class="kx-btn sm sc-edit">Edit</button><button type="button" class="kx-btn sm sc-del" title="Delete this schedule (its chats stay)">🗑</button></div></li>`;
   }).join('');
   body.innerHTML = `${SCHED.edit ? scheduleForm(SCHED.edit) : `<div class="sc-head"><p class="pj-hint">Schedules start a normal chat on their own, with the saved prompt, model and mode. They run while QuorX is open or in the tray; a run missed while the computer slept runs once when it wakes. Budgets and caps apply as in any chat.</p><button type="button" class="kx-btn primary sc-new">+ New schedule</button></div>`}
@@ -5831,7 +5869,8 @@ function settingsPanels(S) {
         `<div class="sx-pad" data-live="routing"></div>`
         + stRow('Provider order', 'Auto favours providers with reliable tool calling (OpenRouter’s Exacto). Cheapest and Fastest sort by price or speed instead.', stCards('providerSort', [['auto', '🎯', 'Auto', 'Reliable tool calling'], ['price', '💲', 'Cheapest', 'Lowest price first'], ['throughput', '⚡', 'Fastest', 'Highest throughput first']], S.providerSort || 'auto', 'compact'), { cls: 'sx-row-wide', id: 'stRowOrder' })
         + stRow('Only providers that support every feature', 'Skips providers that would silently drop tools, reasoning or other settings. If none qualifies, that reply uses the default routing.', stSwitch('requireParams', S.requireParams !== false), { id: 'stRowFeatures' })
-        + stRow('Zero data retention only', 'Only providers that keep no copy of your prompts. Fewer models qualify.', stSwitch('zdrOnly', !!S.zdrOnly), { id: 'stRowZdr' })),
+        + stRow('Zero data retention only', 'Only providers that keep no copy of your prompts. Fewer models qualify.', stSwitch('zdrOnly', !!S.zdrOnly), { id: 'stRowZdr' })
+        + stRow('Blocked providers', 'OpenRouter never sends the agent’s calls to these: for every model, or only the models you pick (a provider can be fine for one model and break another). Block one that keeps breaking tool calls (the provider shows as “via …” above each reply). If only blocked providers serve a model, that reply uses them anyway, and says so.', '<div id="stBlocked"><div class="st-row-help">Loading providers…</div></div>', { cls: 'sx-row-wide', id: 'stRowBlocked' })),
     ]],
     newchats: ['New chats', 'What a fresh chat starts with. Each chat can change these in its message box.', [
       `<p class="sx-sec-help sx-mode-link">New chats start in ${S.approval === 'yolo' ? '⚡ YOLO' : '🔒 Strict'}. <button type="button" class="sp-link" data-act="openMode">Change it in 🛡 Approvals &amp; safety</button></p>`,
@@ -6132,7 +6171,7 @@ const ST_LIVE = {
     return `<div class="sx-preview ${U.density === 'compact' ? 'compact' : ''}" style="--pv-size:${U.fontSize}px" aria-hidden="true"><div class="sx-pv-side"><i></i><i></i><i></i><i style="width:70%"></i><i></i></div><div class="sx-pv-chat"><div class="sx-pv-msg me">Build me a pomodoro timer${t}</div><div class="sx-pv-msg">Done: a 25/5 timer with a start button and a chime. Open it in the preview.${t}</div></div></div>`; },
   window: (S) => { const U = uiOf(S);
     return `<div class="sx-window"><button type="button" class="${U.sidebarStart === 'rail' ? 'rail' : ''}" data-jump="stRowSidebar">Sidebar<small>${SIDE_START[U.sidebarStart] || ''}</small></button><button type="button" data-jump="stRowSidebar" tabindex="-1">Chat</button><button type="button" class="${U.paneMode === 'never' ? 'dim' : ''}" data-jump="stRowPane">Artifact pane<small>${PANE_MODE[U.paneMode] || ''}</small></button></div>`; },
-  routing: (S) => stFlow([['1', 'Your call', 'the chat’s model', ''], ['2', 'Order', PROVIDER_SORT[S.providerSort || 'auto'], 'stRowOrder'], ['3', 'Features', S.requireParams !== false ? 'all supported' : 'any provider', 'stRowFeatures', S.requireParams === false], ['4', 'Retention', S.zdrOnly ? 'zero retention' : 'any provider', 'stRowZdr', !S.zdrOnly], ['5', 'Fallback', S.fallbackModel ? short(S.fallbackModel) : 'none', 'stRowFallback', !S.fallbackModel]]),
+  routing: (S) => stFlow([['1', 'Your call', 'the chat’s model', ''], ['2', 'Order', PROVIDER_SORT[S.providerSort || 'auto'], 'stRowOrder'], ['3', 'Features', S.requireParams !== false ? 'all supported' : 'any provider', 'stRowFeatures', S.requireParams === false], ['4', 'Retention', S.zdrOnly ? 'zero retention' : 'any provider', 'stRowZdr', !S.zdrOnly], ['5', 'Fallback', S.fallbackModel ? short(S.fallbackModel) : 'none', 'stRowFallback', !S.fallbackModel], ['6', 'Blocked', blockedOf(S).length ? `${blockedOf(S).length} provider${blockedOf(S).length === 1 ? '' : 's'}` : 'none', 'stRowBlocked', !blockedOf(S).length]]),
   loopflow: (S) => stFlow([['1', 'Plan', PLAN_FIRST[S.planFirst || 'off'], 'stLoopPlan', (S.planFirst || 'off') === 'off'], ['2', 'Work', `${S.maxSteps} calls`, 'stLoopWork'], ['3', 'Check', S.verify !== false ? `on · ${S.verifyRounds ?? 2} rounds` : 'off', 'stLoopCheck', S.verify === false], ['4', 'Review', (S.review || 'builds') === 'off' ? 'off' : `${S.review || 'builds'} · ${S.reviewTier || 'cheap'}`, 'stLoopReview', S.review === 'off'], ['5', 'Helpers', S.helpers !== false ? `≥ ${S.helperMinFiles ?? 40} files` : 'off', 'stLoopHelpers', S.helpers === false], ['6', 'Long chats', S.compact !== false ? `summarise > ${kTok(S.compactAt || 24000)}` : 'trim only', 'stLoopMemory']]),
   scale: (S) => { const lo = Math.max(0, Math.min(1, Number(S.gate?.confirm) || 0)), hi = Math.max(lo, Math.min(1, Number(S.gate?.act) || 0));
     return `<div class="sx-scale" aria-hidden="true"><div class="sx-scale-track"><span class="sx-z-unsure" style="flex:${lo}">unsure</span><span class="sx-z-lean" style="flex:${hi - lo}">${hi - lo >= 0.1 ? 'lean' : ''}</span><span class="sx-z-settled" style="flex:${1 - hi}">settled</span></div><div class="sx-scale-axis"><span>0</span><span>lean at ${lo.toFixed(2)}</span><span>settled at ${hi.toFixed(2)}</span><span>1</span></div></div>`; },
@@ -6247,6 +6286,7 @@ function wireSettings() {
   drawPermsPanel();
   drawKeysPanel();
   drawModelLimit();
+  drawBlockedProviders(mark);
   drawMemoryPanel();
   drawSetupPanel();
   drawExtPanel();
@@ -6287,7 +6327,7 @@ function resetCategory() {
   if (uiKeys) for (const k of uiKeys) U[k] = UI_DEFAULTS[k];
   if (ST.cat === 'appearance') { S.theme = null; G.theme = null; applyTheme(); }
   if (ST.cat === 'privacy') S.newsRemote = true;
-  if (ST.cat === 'models') { S.model = d.chatModel || d.setups.C.model; S.reasoning = 'off'; Object.assign(S, { providerSort: 'auto', requireParams: true, zdrOnly: false, fallbackModel: '' }); }
+  if (ST.cat === 'models') { S.model = d.chatModel || d.setups.C.model; S.reasoning = 'off'; Object.assign(S, { providerSort: 'auto', requireParams: true, zdrOnly: false, fallbackModel: '', blockedProviders: [...(d.blockedProviders || [])] }); }
   if (ST.cat === 'newchats') S.newChatTools = { ...DEFAULT_CHAT_TOOLS };
   if (ST.cat === 'loop') { S.maxSteps = d.maxSteps; S.compact = true; S.compactAt = 24000; Object.assign(S, { planFirst: d.planFirst, planSteps: d.planSteps, continueRounds: d.continueRounds, maxOutput: d.maxOutput, thinkShare: d.thinkShare, review: d.review, reviewModel: '', reviewTier: d.reviewTier, reviewSendBack: d.reviewSendBack, codeReview: d.codeReview, designLint: d.designLint, fixSteps: d.fixSteps, reviewRounds: d.reviewRounds, reviewBar: d.reviewBar, helpers: d.helpers, helperModel: '', helperSteps: d.helperSteps, helperMinFiles: d.helperMinFiles, retries: d.retries, parallel: d.parallel, verify: d.verify, verifyRounds: d.verifyRounds, askLimit: d.askLimit, trimAt: d.trimAt, buildThinking: d.buildThinking }); }
   if (ST.cat === 'deciders') { S.voters = [...d.voters]; S.gate = { ...d.gate }; S.lookVoters = [...d.lookVoters]; S.lookEscalate = d.lookEscalate; S.checks = structuredClone(d.checks); }
@@ -6867,6 +6907,61 @@ async function drawMemoryPanel(msg = '') {
 }
 // The 👁 / 🙈 button that shows or masks amounts, switched in place.
 function revealButton(b, shown) { if (!b) return; b.title = shown ? 'Hide amounts' : 'Show amounts'; b.textContent = shown ? '🙈' : '👁'; }
+// ⚙ Models → Blocked providers: every OpenRouter provider with a ✓ box, blocked ones first, with a search and a
+// Blocked / Allowed filter (there are over a hundred). Names as replies show them ("via …"); the server maps them to
+// OpenRouter's slugs. A blocked provider covers every model, or only some: model ids or patterns ("deepseek/*").
+function blockedOf(S) { return Array.isArray(S?.blockedProviders) ? S.blockedProviders : G.cfg?.defaults?.blockedProviders || []; }
+async function drawBlockedProviders(mark) {
+  const box = $('#stBlocked'); if (!box) return;
+  const r = await fetch('/api/providers').then((x) => x.json()).catch(() => ({ providers: [] }));
+  if (!$('#stBlocked')) return;
+  const S = ST.draft;
+  // name → { models, some }: "some" with no models yet still blocks every model until one is added; ST.bkSome keeps
+  // that choice across redraws, since nothing is saved for it yet.
+  const some = (ST.bkSome ||= new Set());
+  const on = new Map(blockedOf(S).filter((b) => b && (typeof b === 'string' || b.name)).map((b) => (typeof b === 'string' ? [b, { models: [], some: some.has(b) }] : [b.name, { models: [...(b.models || [])], some: !!b.models?.length || some.has(b.name) }])));
+  const names = [...new Set([...on.keys(), ...(r.providers || []).map((p) => p.name)])];
+  names.sort((a, b) => (on.has(b) - on.has(a)) || a.localeCompare(b));
+  const forWhat = (b) => (b.models.length ? b.models.map(esc).join(', ') : 'every model');
+  const sum = () => (on.size ? `Blocked: ${[...on].map(([n, b]) => `<b>${esc(n)}</b> <span class="bk-for">(${forWhat(b)})</span>`).join(', ')}` : 'None blocked: OpenRouter may use any provider.');
+  const save = () => {
+    S.blockedProviders = [...on].map(([name, b]) => (b.models.length ? { name, models: [...b.models] } : name));
+    $('.bp-sum', box).innerHTML = sum();
+    mark(); stRefresh();
+  };
+  const scopes = () => (on.size ? [...on].map(([n, b]) => `<div class="bk-item" data-bk="${esc(n)}">
+      <b class="bk-name">${esc(n)}</b>
+      <div class="st-segmented bk-scope" role="radiogroup" aria-label="Which models ${esc(n)} is blocked for">${[['all', 'All models'], ['some', 'Only some']].map(([k, l]) => `<button type="button" class="st-seg-btn ${(b.some ? 'some' : 'all') === k ? 'active' : ''}" role="radio" aria-checked="${(b.some ? 'some' : 'all') === k}" data-bk-scope="${k}">${l}</button>`).join('')}</div>
+      ${b.some ? `<div class="bk-models">${b.models.map((m) => `<span class="bk-model">${esc(m)}<button type="button" data-bk-drop="${esc(m)}" title="Don't block ${esc(n)} for ${esc(m)}" aria-label="Remove ${esc(m)}">✕</button></span>`).join('')}
+        <button type="button" class="st-btn secondary sm" data-bk-pick>+ Model</button>
+        <input class="bk-pat" placeholder="or a pattern, e.g. deepseek/*" title="A model id or a pattern with *, then Enter" aria-label="Model id or pattern for ${esc(n)}">
+        ${b.models.length ? '' : '<span class="bk-hint">Add a model: until then every model is blocked.</span>'}</div>` : ''}
+    </div>`).join('') : '');
+  const drawScopes = () => { $('.bk-items', box).innerHTML = scopes(); };
+  box.innerHTML = `<div class="bp-sum">${sum()}</div><div class="bk-items">${scopes()}</div><div class="bp-filter"></div>${r.error && !r.providers?.length ? `<div class="st-row-help">The provider list didn't load (${esc(r.error)}); the blocked ones are still listed.</div>` : ''}
+    <div class="bp-list">${names.map((n) => `<label class="sq-check bp-row" data-lf-text="${esc(n.toLowerCase())}" data-lf-seg="${on.has(n) ? 'blocked' : 'allowed'}"><input type="checkbox" value="${esc(n)}" ${on.has(n) ? 'checked' : ''}><span>${esc(n)}</span></label>`).join('')}</div>`;
+  listFilter($('.bp-filter', box), { key: 'blockedProviders', rows: () => box.querySelectorAll('.bp-row'), segOrder: ['blocked', 'allowed'], segLabel: (v) => (v === 'blocked' ? 'Blocked' : 'Allowed'), placeholder: 'Find a provider', label: 'Show' });
+  const addModel = (n, m) => { const b = on.get(n); m = String(m || '').trim(); if (!b || !m || b.models.includes(m)) return; b.models.push(m); save(); drawScopes(); $(`.bk-item[data-bk="${CSS.escape(n)}"] .bk-pat`, box)?.focus(); };
+  box.onchange = (e) => {
+    const x = e.target.closest('.bp-row input'); if (!x) return;
+    if (x.checked) on.set(x.value, { models: [], some: false }); else on.delete(x.value);
+    x.closest('.bp-row').dataset.lfSeg = x.checked ? 'blocked' : 'allowed';
+    save(); drawScopes();
+  };
+  box.onclick = async (e) => {
+    const item = e.target.closest('.bk-item'); if (!item) return;
+    const n = item.dataset.bk, b = on.get(n); if (!b) return;
+    const scope = e.target.closest('[data-bk-scope]')?.dataset.bkScope;
+    if (scope) { b.some = scope === 'some'; if (b.some) some.add(n); else { some.delete(n); b.models = []; } save(); drawScopes(); if (b.some) $(`.bk-item[data-bk="${CSS.escape(n)}"] .bk-pat`, box)?.focus(); return; }
+    const drop = e.target.closest('[data-bk-drop]')?.dataset.bkDrop;
+    if (drop != null) { b.models = b.models.filter((m) => m !== drop); save(); drawScopes(); return; }
+    if (e.target.closest('[data-bk-pick]')) { const id = await pickModel('chat', '', { context: `Block ${n} for this model` }); if (id) addModel(n, id); }
+  };
+  box.onkeydown = (e) => {
+    const x = e.target.closest('.bk-pat'); if (!x || e.key !== 'Enter') return;
+    e.preventDefault(); addModel(x.closest('.bk-item').dataset.bk, x.value);
+  };
+}
 // ⚙ Models: what the active key has left. The amounts stay hidden until 👁 here, every time Settings opens,
 // whatever "Hide amounts" says, since this page is open while picking models (often on a stream).
 async function drawModelLimit() {

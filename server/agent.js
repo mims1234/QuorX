@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { chat, chatStream, generationCost, chatModels, imageModels, generateImage, speechModels, synthesize, composeMusic, musicModels, videoModels, generateVideo, HOME } from './openrouter.js';
 import { ensemble, GATE } from './decisions.js';
-import { runtime } from './openrouter.js';
+import { runtime, knownProviders } from './openrouter.js';
 import { pathToFileURL } from 'node:url';
 import { rotateLog } from './storagerules.js';
 import { enhanceRequest } from './enhancer.js';
@@ -121,6 +121,9 @@ export const DEFAULTS = {
   providerSort: 'auto',
   requireParams: true,     // only providers that support every parameter sent (tools, reasoning, …)
   zdrOnly: false,          // only providers with zero data retention
+  // Providers OpenRouter never routes the agent's calls to, by name as replies show it ("via …"). InferenceNet sent
+  // deepseek-v4.1-flash's browser calls without their arguments (just {"action":"open"}), so runs went in circles.
+  blockedProviders: [{ name: 'InferenceNet', models: ['deepseek/*'] }],
   fallbackModel: '',       // tried by OpenRouter when the chat's model fails or is unavailable ('' = none)
   // The reviewer (#4): a separate model plays what was built and scores it before the final reply.
   codeReview: 'off',       // /review on its own after a reply that changed code: 'off' · 'auto' (a card only when the reviewer finds bugs)
@@ -284,8 +287,26 @@ function samplingFor(model, info, creativity, reasoning) {
   if (/^anthropic\//.test(model) && reasoning && reasoning !== 'off' && t !== 1) return {};
   return { temperature: t };
 }
-function routingFor(S, model) {
+// OpenRouter's ignore list takes slugs ("inference-net"), replies name the provider ("InferenceNet"): the provider
+// list maps one to the other; a name it doesn't know is guessed the same way (words split, lower case, hyphens).
+export function providerSlugs(names, list = []) {
+  const by = new Map(list.map((p) => [String(p.name).toLowerCase(), p.slug]));
+  return [...new Set((names || []).map((n) => String(n || '').trim()).filter(Boolean)
+    .map((n) => by.get(n.toLowerCase()) || n.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')))];
+}
+// A block is a provider name ("Novita": every model) or { name, models }: only those models, each an id or a
+// pattern with * ("deepseek/*" is every DeepSeek model). Gives the names blocked for this model.
+export function blockedFor(list, model) {
+  const fits = (p) => new RegExp(`^${String(p).trim().replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`, 'i').test(String(model || ''));
+  return (Array.isArray(list) ? list : []).filter((b) => {
+    if (typeof b === 'string') return true;
+    const ms = (Array.isArray(b?.models) ? b.models : []).filter((m) => String(m || '').trim());
+    return !ms.length || ms.some(fits);
+  }).map((b) => (typeof b === 'string' ? b : b?.name));
+}
+export function routingFor(S, model, slugs = []) {
   const provider = {};
+  if (slugs.length) provider.ignore = slugs;
   if (['price', 'throughput', 'latency'].includes(S.providerSort)) provider.sort = S.providerSort;
   if (S.requireParams !== false) provider.require_parameters = true;
   if (S.zdrOnly) provider.zdr = true;
@@ -934,6 +955,8 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   const setup = req.bench ? { ...DEFAULTS.setups.C, ...(req.setup || {}) }
     : { model: req.setup?.model || DEFAULTS.chatModel, reasoning: req.setup?.reasoning || 'off', creativity: ['focused', 'creative'].includes(req.setup?.creativity) ? req.setup.creativity : 'default', decide: 'auto' };
   const S = { ...DEFAULTS, ...(req.settings || {}) };
+  const blockedNames = blockedFor(S.blockedProviders, setup.model);
+  const blockedSlugs = blockedNames.length ? providerSlugs(blockedNames, knownProviders()) : [];
   const SF = safetySettings(req.settings?.safety);
   // The Q&A benchmark skips the build gates (verify, reviewer); the build benchmark (bench: 'build') keeps them.
   const qaBench = !!req.bench && req.bench !== 'build';
@@ -1407,7 +1430,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (transcriptChars(messages) > trimAt * 2 && compactTranscript(messages, firstOwn, progressSummary(), 10)) emit({ t: 'compacted_run', step, size: transcriptChars(messages), at: at() });
     const forceDecide = step === 0 && setup.decide === 'force-first';
     let toolChoice = last ? 'none' : forceDecide ? { type: 'function', function: { name: 'decide' } } : 'auto';
-    const body = { model: setup.model, messages, tools, tool_choice: toolChoice, max_tokens: maxOut, ...samplingFor(setup.model, modelInfo, setup.creativity, reasonNow), ...reasoningFor(reasonNow, maxOut, S.thinkShare), ...(run.routing ? routingFor(S, setup.model) : {}) };
+    const body = { model: setup.model, messages, tools, tool_choice: toolChoice, max_tokens: maxOut, ...samplingFor(setup.model, modelInfo, setup.creativity, reasonNow), ...reasoningFor(reasonNow, maxOut, S.thinkShare), ...(run.routing === 'blocked' ? { provider: { ignore: blockedSlugs } } : run.routing ? routingFor(S, setup.model, blockedSlugs) : {}) };
     emit({ t: 'llm_start', step, model: setup.model, forced: forceDecide, at: at() });
     let r;
     // On a forced step the text is held back until we know the model really asked the deciders.
@@ -1634,14 +1657,17 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   if (root && stats.changed.length) { try { sealCheckpoint(root, filesId); } catch { /* best effort */ } }
   if (filesId !== runId) stats.undoId = filesId;
   stats.ms = at();
-  Object.assign(stats, { steps: run.steps, stop: run.stop, budgetStop: run.budgetStop, retries: run.retries, trimmed: run.trimmed, tools: run.tools, questions: run.questions, resumed: !!resumed, looksFirst: run.looksFirst || 0, firstWrite: run.firstWrite ?? null });
+  Object.assign(stats, { steps: run.steps, stop: run.stop, ...(run.loopEnd ? { loopEnd: true } : {}), ...(req.scheduledBy ? { scheduled: true } : {}), budgetStop: run.budgetStop, retries: run.retries, trimmed: run.trimmed, tools: run.tools, questions: run.questions, resumed: !!resumed, looksFirst: run.looksFirst || 0, firstWrite: run.firstWrite ?? null });
   // The next reply sees what this one did and how its checks ended (the page adds this to history).
   const did = journal.length ? `What I did: ${clip(journal.join('; '), 900)}.` : '';
   const checkNote = stats.verify ? (stats.verify.ok ? 'Checks passed.' : `Checks still found ${stats.verify.problems.length} problem(s): ${clip(stats.verify.problems.join('; '), 300)}.`) : '';
   const planNote = run.plan ? `Plan: ${stats.plan.done} of ${stats.plan.of} items done.` : '';
   const reviewNote = lastReview ? `Reviewer (${short(lastReview.model)}): ${lastReview.pass ? 'passed' : 'not passed'} (${scoreLine(lastReview.scores)}).` : '';
   const historyNote = did || checkNote || planNote || reviewNote ? `\n\n[${[did, checkNote, planNote, reviewNote].filter(Boolean).join(' ')}]` : '';
-  if (run.stop === 'steps' && !req.bench) {
+  // A scheduled run gets no card: nobody is there to press it, and the next run starts fresh anyway. The run counts as
+  // failed in its schedule (see schedrun.js), so its chat and Schedules say so.
+  const oosCard = run.stop === 'steps' && !req.bench && !req.scheduledBy;
+  if (oosCard) {
     // The card on the page: keep going, keep going with another model, or a fresh chat from a brief.
     const used = Math.max(run.steps, step), perStep = used ? stats.cost / used : 0, more = Math.max(5, Math.min(200, Number(S.moreSteps ?? DEFAULTS.moreSteps) || 30));
     const recent = (run.errSteps || []).filter((x) => x >= step - 15).length;
@@ -1660,7 +1686,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   spent.closed = true;
   emit({ t: 'done', reply, historyNote, stats, journal: journal.slice(-120), at: at() });
   // A reply that ran out of steps keeps its checkpoint, so "Keep going" can carry on from it.
-  if (!(run.stop === 'steps' && !req.bench)) dropCheckpoint(runId);
+  if (!oosCard) dropCheckpoint(runId);
   if (!req.bench && !deps.quiet) recordRun({ ts: new Date().toISOString(), runId, chatId: req.chatId || null, project: projectId, model: setup.model, stop: run.stop, steps: run.steps, tools: run.tools,
     retries: run.retries, trimmed: run.trimmed, questions: run.questions, changed: stats.changed.length, verify: stats.verify ? { ok: stats.verify.ok, problems: stats.verify.problems.length, rounds: stats.verify.rounds, lint: stats.verify.lint || null } : null,
     cost: +stats.cost.toFixed(6), tokensIn: stats.tokensIn, tokensOut: stats.tokensOut, ...(stats.cachedIn ? { cacheRead: stats.cacheRead, cachedIn: stats.cachedIn } : {}), ...(stats.partialCalls ? { partialCalls: stats.partialCalls.calls } : {}), ms: stats.ms, resumed: !!resumed, looksFirst: run.looksFirst || 0, firstWrite: run.firstWrite ?? null });
@@ -1798,10 +1824,17 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
           continue;
         }
         // No provider matched the routing filters (e.g. none supports every parameter): drop them for this reply.
+        // Blocked providers stay blocked as long as another provider is left: the other filters go first.
         if (body.provider && /no endpoints|no allowed providers|require_parameters|zdr|data policy/i.test(e.message)) {
-          run.routing = false; attempt--;
-          const { provider, models, ...rest } = body; body = rest;
-          emit({ t: 'note', level: 'warn', msg: `No provider matched the routing settings (${clip(e.message, 100)}); this reply uses OpenRouter's default routing.`, at: at() });
+          attempt--;
+          const { provider, models, ...rest } = body;
+          if (run.routing === true && blockedSlugs.length && Object.keys(provider).length > 1) {
+            run.routing = 'blocked'; body = { ...rest, provider: { ignore: blockedSlugs } };
+            emit({ t: 'note', level: 'warn', msg: `No provider matched the routing settings (${clip(e.message, 100)}); this reply uses OpenRouter's default routing, still without your blocked providers.`, at: at() });
+          } else {
+            run.routing = false; body = rest;
+            emit({ t: 'note', level: 'warn', msg: `No provider matched the routing settings (${clip(e.message, 100)})${blockedSlugs.length ? `, and only blocked providers serve ${short(setup.model)}` : ''}; this reply uses OpenRouter's default routing.`, at: at() });
+          }
           continue;
         }
         // The key's own spending limit or credits: stop and say so, never retry or switch models to get round it.
@@ -1890,6 +1923,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     }
     if (keepGoing) { run.loopOff = true; return `\n\n[QuorX: the user says keep going${run.loopNote ? `: "${clip(run.loopNote, 200)}"` : ''}. You won't be checked for loops again in this reply.]`; }
     maxSteps = Math.min(maxSteps, step + 2); // the next model call is the last one, with no tools
+    run.loopEnd = true;
     emit({ t: 'note', level: 'warn', msg: `The agent ${what} after a warning, so the reply is wrapping up${S.approval === 'strict' ? ' as you chose' : ' (YOLO: nobody to ask)'}.`, at: at() });
     return `\n\n[QuorX: you are going in circles, so this reply ends now. Give your final reply: what you tried, what is still wrong, and what you would try next.]`;
   }

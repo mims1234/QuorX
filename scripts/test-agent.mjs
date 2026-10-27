@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadCards, cardText, limitsLine, cardFile, CARDS_DIR, CARD_CHARS } from '../server/modelcards.js';
-import { runAgent, inPlaceEdit, deciderPicture, REVIEW_SYSTEM, FILM_KEYS, answerQuestion, answerSecret, answerApproval, answerBudget, setRunApproval, steerRun, holdCard } from '../server/agent.js';
+import { runAgent, inPlaceEdit, deciderPicture, REVIEW_SYSTEM, FILM_KEYS, answerQuestion, answerSecret, answerApproval, answerBudget, setRunApproval, steerRun, holdCard, providerSlugs, blockedFor } from '../server/agent.js';
 import { saveProject, forgetProject, setProjectBudget } from '../server/store.js';
 import { loadCheckpoint, dropCheckpoint, saveCheckpoint, checkpointWritten, ledger } from '../server/runs.js';
 import { setBudget, projectSpend, budgetState, live as liveRuns } from '../server/budget.js';
@@ -703,24 +703,46 @@ test('no temperature by default; Creativity sets it only where the model takes i
 
 test('routing: only providers that support every parameter, by default; sort and fallback from settings', async () => {
   const a = await run(() => reply('ok'));
-  assert.deepEqual(a.bodies[0].provider, { require_parameters: true });
+  assert.deepEqual(a.bodies[0].provider, { require_parameters: true }, 'the default block is for DeepSeek models only');
+  const d = await run(() => reply('ok'), { setup: { model: 'deepseek/deepseek-v4.1-flash' } });
+  assert.deepEqual(d.bodies[0].provider, { ignore: ['inference-net'], require_parameters: true }, 'InferenceNet is blocked for DeepSeek by default');
   assert.equal('models' in a.bodies[0], false);
-  const b = await run(() => reply('ok'), { settings: { providerSort: 'price', zdrOnly: true, fallbackModel: 'test/backup' } });
+  const b = await run(() => reply('ok'), { settings: { providerSort: 'price', zdrOnly: true, fallbackModel: 'test/backup', blockedProviders: [] } });
   assert.deepEqual(b.bodies[0].provider, { sort: 'price', require_parameters: true, zdr: true });
   assert.deepEqual(b.bodies[0].models, ['test/model', 'test/backup']);
-  const c = await run(() => reply('ok'), { settings: { requireParams: false } });
+  const c = await run(() => reply('ok'), { settings: { requireParams: false, blockedProviders: [] } });
   assert.equal('provider' in c.bodies[0], false);
 });
 
+test('blocked providers: names map to OpenRouter slugs and are sent as ignore', async () => {
+  assert.deepEqual(providerSlugs(['InferenceNet', 'DeepInfra', 'Some Odd Name']), ['inference-net', 'deep-infra', 'some-odd-name']);
+  assert.deepEqual(providerSlugs(['deepinfra', 'Inference Net'], [{ name: 'DeepInfra', slug: 'deepinfra' }]), ['deepinfra', 'inference-net']);
+  assert.deepEqual(providerSlugs(['', '  ', 'InferenceNet', 'InferenceNet']), ['inference-net']);
+  const r = await run(() => reply('ok'), { settings: { requireParams: false, blockedProviders: ['InferenceNet', 'Novita'] } });
+  assert.deepEqual(r.bodies[0].provider, { ignore: ['inference-net', 'novita'] });
+  // A block can cover only some models: ids or patterns with *.
+  const list = [{ name: 'InferenceNet', models: ['deepseek/*'] }, { name: 'Novita', models: ['test/model'] }, { name: 'Chutes', models: [] }, 'Parasail'];
+  assert.deepEqual(blockedFor(list, 'deepseek/deepseek-v4.1-flash'), ['InferenceNet', 'Chutes', 'Parasail']);
+  assert.deepEqual(blockedFor(list, 'DeepSeek/R2'), ['InferenceNet', 'Chutes', 'Parasail']);
+  assert.deepEqual(blockedFor(list, 'test/model'), ['Novita', 'Chutes', 'Parasail']);
+  assert.deepEqual(blockedFor(list, 'test/model-2'), ['Chutes', 'Parasail'], 'an id matches only itself');
+  const p = await run(() => reply('ok'), { settings: { requireParams: false, blockedProviders: list } });
+  assert.deepEqual(p.bodies[0].provider, { ignore: ['novita', 'chutes', 'parasail'] });
+});
+
 test('when no provider matches the routing filters, the reply carries on with default routing', async () => {
-  const { bodies, events, done } = await run((body, i) => {
-    if (i === 0) { const e = new Error('No endpoints found that can handle the requested parameters.'); e.status = 404; throw e; }
-    return reply('ok');
-  });
+  const fail = () => { const e = new Error('No endpoints found that can handle the requested parameters.'); e.status = 404; throw e; };
+  const { bodies, events, done } = await run((body, i) => (i === 0 ? fail() : reply('ok')), { settings: { blockedProviders: [] } });
   assert.ok(bodies[0].provider);
   assert.equal('provider' in bodies[1], false);
   assert.ok(of(events, 'note').some((n) => /No provider matched/.test(n.msg)));
   assert.equal(done.reply, 'ok');
+  // Blocked providers stay blocked while the other filters go; only when that fails too is the block dropped.
+  const k = await run((body, i) => (i < 2 ? fail() : reply('ok')), { settings: { blockedProviders: ['InferenceNet'] } });
+  assert.deepEqual(k.bodies[1].provider, { ignore: ['inference-net'] });
+  assert.equal('provider' in k.bodies[2], false);
+  assert.ok(of(k.events, 'note').some((n) => /only blocked providers serve/.test(n.msg)));
+  assert.equal(k.done.reply, 'ok');
 });
 
 // ---------- Phase 2: the plan (#3) and the reviewer (#4) ----------
@@ -1571,6 +1593,16 @@ test('out of steps: the reply keeps its checkpoint, says why, and "Keep going" c
   dropCheckpoint(id);
 });
 
+test('a scheduled run out of steps gets no card and keeps no checkpoint; its stats say it was scheduled', async () => {
+  let id;
+  const { events, done } = await run((body, i) => (i < 3 ? reply('', [['write_file', { path: `f${i}.txt`, content: 'x' }]]) : reply('Ran out.')),
+    { scheduledBy: 'sdemo', settings: { maxSteps: 4, review: 'off', verify: false }, onEvent: (e) => { if (e.t === 'start') id = e.runId; } });
+  assert.equal(done.stats.stop, 'steps');
+  assert.equal(done.stats.scheduled, true);
+  assert.equal(of(events, 'out_of_steps').length, 0, 'nobody is there to press it');
+  assert.equal(loadCheckpoint(id), null, 'nothing to keep going from');
+});
+
 test('Stop ends a reply in the middle of slow browser steps, and the rest of the batch never runs', async () => {
   let opened = 0;
   // Each page takes 3 s to open, like a busy site waiting to settle.
@@ -2305,6 +2337,28 @@ test('a scheduled chat runs like a normal chat and is saved complete, with no pa
     assert.ok(!m.trace.some((e) => e.t === 'token'));
     assert.equal(fs.readFileSync(path.join(dir, 'notes.txt'), 'utf8'), 'hi');
     assert.equal(loadScheds()[0].lastRun.status, 'done');
+  } finally { forgetProject(pid); saveScheds([]); }
+});
+
+test('a scheduled run cut off by the step limit counts as failed, says why, and keeps its reply', async () => {
+  const dir = tempDir('quorx-sched-'), pid = `so${Date.now().toString(36)}`;
+  saveProject({ id: pid, name: 'sched', path: dir });
+  try {
+    const s = cleanSchedule({ name: 'Long', prompt: 'write files', projectId: pid, model: 'test/model', when: { kind: 'daily', time: '09:00', days: [] }, settings: { maxSteps: 4, review: 'off', verify: false, mediaEnabled: false, tools: { browser: { on: false } } } });
+    saveScheds([s]);
+    const end = ended();
+    const r = startScheduledChat(s, {}, schedDeps((b, k) => (k < 3 ? reply('', [['write_file', { path: `f${k}.txt`, content: 'x' }]]) : reply('Wrote three of five.')), { onNotify: end.on }));
+    const list = loadScheds(); list[0].lastRun = { at: Date.now(), runId: r.runId, chatId: r.chatId, status: 'running' }; saveScheds(list);
+    const fin = await end.p;
+    assert.equal(fin.k, 'error');
+    assert.match(fin.info.text, /ran out of steps \(4\)\. Wrote three of five\./);
+    const after = loadScheds()[0];
+    assert.equal(after.lastRun.status, 'failed');
+    assert.equal(after.fails, 1);
+    const m = getChat(r.chatId).agent.messages[1];
+    assert.equal(m.content, 'Wrote three of five.');
+    assert.equal(m.stats.scheduled, true);
+    assert.ok(!m.trace.some((e) => e.t === 'out_of_steps'), 'no card');
   } finally { forgetProject(pid); saveScheds([]); }
 });
 
