@@ -42,7 +42,7 @@ import { stopDesktopNow } from './server/uia.js';
 import { safetySettings, yoloOf } from './server/safety.js';
 import { readAudit } from './server/audit.js';
 import { pickFolder } from './server/pickfolder.js';
-import { userBrowse, giveTab, givenTab, takeBackTab, takeBackSid, lentChromeTabs } from './server/userbrowser.js';
+import { userBrowse, giveTab, givenTab, takeBackTab, takeBackSid, lentChromeTabs, closeChatChromeTabs } from './server/userbrowser.js';
 import { rewritePrompt } from './server/enhancer.js';
 import { extUpgrade, extKey, extInfo, onExtRequest, defaultBrowser, extPairing, extPair, extPush } from './server/extlink.js';
 import { openLink, linkReply, desktopReady, desktopCall } from './server/desktop.js';
@@ -1131,7 +1131,7 @@ function scheduleNotice(kind, { schedule, chatId = null, text = '', cost = 0 }) 
     desktopCall('app.notify', { title, body: `⏰ ${schedule.name}${n.text ? `\n${n.text}` : ''}`, chatId, silent: kind === 'done' }, 5000).catch(() => {});
   }
 }
-const scheduleDeps = { now: Date.now, listProjects, budgetState, saveChat, getChat, startRun, follow, runAgent, events: runEvents, notify: scheduleNotice };
+const scheduleDeps = { now: Date.now, listProjects, budgetState, saveChat, getChat, startRun, follow, runAgent, events: runEvents, notify: scheduleNotice, closeChromeTabs: closeChatChromeTabs };
 const scheduler = createScheduler({ run: (s, info) => startScheduledChat(s, info, scheduleDeps), running: (id) => runStatus(id).status === 'running' });
 // ▶ Run now, from the Schedules window or the agent's schedule tool.
 scheduleHooks.runNow = (s) => startScheduledChat(s, { missed: false, due: Date.now() }, scheduleDeps);

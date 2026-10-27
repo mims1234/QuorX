@@ -92,6 +92,10 @@ export function cleanSchedule(b, now = Date.now(), old = null) {
     // Trusted: its runs do what the prompt says in your tabs (send, post, submit) without a card or the deciders'
     // second guess; a password or a payment still asks.
     trusted: typeof b.trusted === 'boolean' ? b.trusted : !!old?.trusted,
+    // How long a card in its run waits for you before it counts as no (seconds), and whether the Chrome tabs (and the
+    // tab group) a run opened close 30 s after a run that went well.
+    cardWaitSecs: Math.max(1, Math.min(3600, Math.round(Number(b.cardWaitSecs ?? old?.cardWaitSecs ?? 15)) || 15)),
+    closeTabs: typeof b.closeTabs === 'boolean' ? b.closeTabs : old?.closeTabs ?? true,
     history: old?.history || [], fails: old?.fails || 0,
   };
   if (b.paused === false && old?.paused) s.fails = 0; // resumed: the failures that paused it are behind it

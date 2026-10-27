@@ -5,8 +5,9 @@
 // When it ends, its reply is saved into the chat, so the chat is complete even if no page was open. A page that
 // opens it while it runs follows it live as usual.
 import crypto from 'node:crypto';
-import { noteRun, endRun, PAUSE_AFTER_FAILS } from './schedules.js';
+import { noteRun, endRun, loadSchedules, PAUSE_AFTER_FAILS } from './schedules.js';
 
+export const CLOSE_TABS_MS = 30e3; // after a run that went well, its Chrome tabs close this much later
 const rid = (p, t) => `${p}${t.toString(36)}${crypto.randomBytes(3).toString('hex')}`;
 const WAIT_EVENTS = (e) => (e.t === 'approval' && e.mode === 'strict') || (e.t === 'question' && !e.auto) || e.t === 'budget_ask';
 
@@ -45,7 +46,7 @@ export function startScheduledChat(s, { missed = false, due = null } = {}, deps)
   } else deps.saveChat(chatId, { id: chatId, title, projectId: s.projectId, created: at, approval, tools: s.tools || {}, scheduled: { id: s.id, name: s.name },
     agent: { setup, messages: [user, bot], artifacts: {}, allowed: [], cmdRules: [] } });
   const a = doc?.agent || {};
-  const body = { runId, chatId, projectId: s.projectId, chatTitle: title, setup, settings: { ...(s.settings || {}), approval, chromeAccess: s.settings?.chromeAccess ?? !!s.tools?.chrome }, allowed: a.allowed || [], cmdRules: a.cmdRules || [],
+  const body = { runId, chatId, projectId: s.projectId, chatTitle: title, setup, settings: { ...(s.settings || {}), approval, chromeAccess: s.settings?.chromeAccess ?? !!s.tools?.chrome, schedCardWaitSecs: s.cardWaitSecs || 15 }, allowed: a.allowed || [], cmdRules: a.cmdRules || [],
     ...(a.apps ? { apps: a.apps } : {}), history: [], summary: '', reading: '', text: s.prompt, artifacts: a.artifacts || {}, context: '', images: [], docs: [], scheduledBy: s.id, scheduleTrusted: s.trusted === true };
   deps.startRun({ runId, chatId }, (emit, signal) => deps.runAgent(body, emit, signal));
   // A page that has this chat open learns of the new run (its copy of the chat doesn't have it), and follows it live.
@@ -56,6 +57,14 @@ export function startScheduledChat(s, { missed = false, due = null } = {}, deps)
       const ended = finishChat(chatId, runId, deps);
       const status = ended.error ? (ended.stopped ? 'stopped' : 'failed') : 'done';
       const r = endRun(s.id, runId, { status, cost: ended.cost, reply: ended.reply, error: ended.error, ms: deps.now() - at, now: deps.now() });
+      // A run that went well: the Chrome tabs it opened (and their tab group) close 30 s later, so Chrome isn't left
+      // holding them until the next run. A failed run keeps them, for you to see what it saw. Tabs you gave stay.
+      if (status === 'done' && s.closeTabs !== false && deps.closeChromeTabs) setTimeout(() => {
+        // (Not when a newer run of it has started meanwhile: that one uses the tabs.)
+        const now = loadSchedules().find((x) => x.id === s.id);
+        if (now?.lastRun?.runId && now.lastRun.runId !== runId) return;
+        deps.closeChromeTabs(chatId)?.catch?.(() => {});
+      }, CLOSE_TABS_MS).unref?.();
       if (r?.paused) deps.notify?.('error', { schedule: s, chatId, text: `“${s.name}” failed ${PAUSE_AFTER_FAILS} times in a row, so it is paused. Resume it in Schedules once it is fixed. Last error: ${ended.error}`, cost: ended.cost });
       else if (r ? r.notify : true) deps.notify?.(status === 'done' ? 'done' : 'error', { schedule: s, chatId, text: ended.error || ended.reply, cost: ended.cost, changed: r?.changed });
       return;

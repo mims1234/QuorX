@@ -2416,6 +2416,46 @@ test('a card in a scheduled run that no one answers counts as no, so the run end
   assert.equal(d2.reply, 'ok');
 });
 
+test('a schedule waits as long as you set for a card (1 s to an hour, 15 s unless set) and closes its Chrome tabs after a good run unless told not to', () => {
+  const base = { name: 'W', prompt: 'p', projectId: 'p', model: 'test/model', when: { kind: 'every', minutes: 5 } };
+  assert.equal(cleanSchedule(base).cardWaitSecs, 15);
+  assert.equal(cleanSchedule({ ...base, cardWaitSecs: 1 }).cardWaitSecs, 1);
+  assert.equal(cleanSchedule({ ...base, cardWaitSecs: 0.2 }).cardWaitSecs, 15, 'nonsense falls back');
+  assert.equal(cleanSchedule({ ...base, cardWaitSecs: 99999 }).cardWaitSecs, 3600);
+  assert.equal(cleanSchedule(base).closeTabs, true);
+  const off = cleanSchedule({ ...base, closeTabs: false });
+  assert.equal(cleanSchedule({ prompt: 'q' }, Date.now(), off).closeTabs, false, 'kept over an edit');
+});
+
+test('after a good scheduled run its Chrome tabs close 30 s later, unless the schedule says to keep them', async () => {
+  const dir = tempDir('quorx-sched-'), pid = `sc${Date.now().toString(36)}`;
+  saveProject({ id: pid, name: 'sched', path: dir });
+  const { CLOSE_TABS_MS } = await import('../server/schedrun.js');
+  assert.equal(CLOSE_TABS_MS, 30e3);
+  try {
+    const closed = [];
+    const go = async (s, text) => {
+      const end = ended(); saveScheds([s]);
+      const deps = { ...schedDeps(() => (text ? reply(text) : { text: '', toolCalls: [], usage: { cost: 0 }, ms: 1, firstMs: 1, finishReason: 'error', error: 'model down' }), { onNotify: end.on }), closeChromeTabs: async (c) => { closed.push(c); } };
+      const r = startScheduledChat(s, {}, deps);
+      const list = loadScheds(); list[0].lastRun = { at: Date.now(), runId: r.runId, chatId: r.chatId, status: 'running' }; saveScheds(list);
+      await end.p; return r;
+    };
+    const s = cleanSchedule({ name: 'Drop', prompt: 'type ldrop', projectId: pid, model: 'test/model', when: { kind: 'every', minutes: 5 }, settings: { mediaEnabled: false, tools: { browser: { on: false } } } });
+    // The close waits 30 s: here the timer is run at once.
+    const realSet = globalThis.setTimeout;
+    globalThis.setTimeout = (fn, ms, ...a) => realSet(fn, ms === CLOSE_TABS_MS ? 0 : ms, ...a);
+    try {
+      const r = await go(s, 'Sent.');
+      await new Promise((ok) => realSet(ok, 50));
+      assert.deepEqual(closed, [r.chatId]);
+      await go({ ...s, closeTabs: false }, 'Sent.');
+      await new Promise((ok) => realSet(ok, 50));
+      assert.equal(closed.length, 1, 'closeTabs off: kept');
+    } finally { globalThis.setTimeout = realSet; }
+  } finally { forgetProject(pid); saveScheds([]); }
+});
+
 test('a schedule can be trusted to act without asking; an edit keeps it, and the card for making one says so', () => {
   const s = cleanSchedule({ name: 'Drop', prompt: 'send /ldrop', projectId: 'p', model: 'test/model', when: { kind: 'every', minutes: 5 }, trusted: true });
   assert.equal(s.trusted, true);
@@ -3115,6 +3155,8 @@ test('🧩 in the user’s tab: the deciders bring typing the request never aske
     assert.match(res[1], /The user said no to that \(type "buy crypto now"/);
     assert.match(res[2], /typed 12 characters/);
     assert.ok(!cards.some((c) => /see you at 9/.test(c.what)), 'a step the deciders pass asks nobody');
+    assert.ok(!judged.some((s) => /Its next step: type "see you at 9"/.test(s)), 'text the request names word for word is not even checked');
+    assert.ok(judged.some((s) => /Its next step: type "buy crypto now"/.test(s)), 'other text still is');
     assert.ok(judged.every((s) => !/Batman at 9:/.test(s)), 'the deciders never see the page');
     assert.match(res[3], /The user finished: "sign in to the server"\. You can use the tab again/);
     const hand = cards.find((c) => /Your turn/.test(c.what));
