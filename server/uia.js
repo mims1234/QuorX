@@ -32,6 +32,8 @@ const U = OS === 'win32' ? psHost('./uiahost.ps1', { label: 'desktop helper', re
   : OS === 'linux' ? lineHost(() => spawn('python3', ['-I', here('./atspihost.py')], { stdio: ['pipe', 'pipe', 'pipe'] }), { label: 'desktop helper', readyMs: 30000 })
   : lineHost(() => null, { why: `the desktop tool doesn't work on ${OS} yet` });
 export const desktopAvailable = U.available;
+/** The kill switch: ends the desktop helper at once, so a click or long typing it is in the middle of stops too. */
+export const stopDesktopNow = () => U.kill();
 
 const arr = (x) => (x == null ? [] : Array.isArray(x) ? x : [x]);
 
