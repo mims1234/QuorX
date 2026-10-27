@@ -1125,6 +1125,7 @@ let noticeSeq = 0;
 function scheduleNotice(kind, { schedule, chatId = null, text = '', cost = 0 }) {
   const n = { id: ++noticeSeq, at: Date.now(), kind, scheduleId: schedule.id, name: schedule.name, projectId: schedule.projectId, chatId, text: String(text || '').replace(/\s+/g, ' ').slice(0, 200), cost };
   notices.push(n); if (notices.length > 50) notices.shift();
+  if (kind === 'start') return; // only for open pages to follow the run: no notification
   if (desktopReady()) {
     const title = { done: '✓ Scheduled chat finished', error: '✕ Scheduled chat stopped', approval: '⏸ Scheduled chat needs your approval', answer: '❓ Scheduled chat has a question', budget: '💲 Project budget reached' }[kind] || 'QuorX';
     desktopCall('app.notify', { title, body: `⏰ ${schedule.name}${n.text ? `\n${n.text}` : ''}`, chatId, silent: kind === 'done' }, 5000).catch(() => {});

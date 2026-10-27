@@ -89,6 +89,9 @@ export function cleanSchedule(b, now = Date.now(), old = null) {
     // When you hear about a run: always, only when one fails, only when it waits for you, or when its result changed.
     // (A run waiting for you always tells you.)
     notify: NOTIFY.includes(b.notify) ? b.notify : old?.notify || 'always',
+    // Trusted: its runs do what the prompt says in your tabs (send, post, submit) without a card or the deciders'
+    // second guess; a password or a payment still asks.
+    trusted: typeof b.trusted === 'boolean' ? b.trusted : !!old?.trusted,
     history: old?.history || [], fails: old?.fails || 0,
   };
   if (b.paused === false && old?.paused) s.fails = 0; // resumed: the failures that paused it are behind it
