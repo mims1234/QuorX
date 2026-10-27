@@ -13,23 +13,42 @@ const safeUrl = (u, img = false) => (/^(https?:|mailto:)/i.test(u) || (img && /^
 // click handler does that). A mail link stays an ordinary link. `href` is already escaped.
 const link = (href, text) => (/^https?:/i.test(href) ? `<a href="${href}" rel="noopener noreferrer" data-cl="1">${text}</a>` : `<a href="${href}" target="_blank" rel="noopener noreferrer">${text}</a>`);
 
+// A local path (C:\x\y.html, C:/x/y, file:///…, or one relative to the project such as site/index.html or
+// package.json) gets data-path: the page asks which of them are there and makes those links that show them in File
+// Explorer. A bare word with a dot (console.log) is asked about too, and stays text when no such file is there.
+const REL_PATH = /^(?:\.{1,2}[\\/])?[\w@~-][\w@.~ -]*(?:[\\/][\w@.~ -]+)*[\\/]?$/;
+const looksPath = (s) => {
+  s = String(s).trim();
+  if (!s || s.length > 400 || /[\n<>"|?*]/.test(s)) return false;
+  if (/^[a-z]:[\\/]/i.test(s) || /^file:\/\/\//i.test(s)) return true;
+  if (/^[a-z][\w+.-]*:/i.test(s) || /^[\\/]/.test(s) || /\s{2}|^\S+\s+-/.test(s)) return false; // a scheme, a command
+  if (!REL_PATH.test(s) || (/ /.test(s) && !/[\\/]/.test(s))) return false;
+  return /[\\/]/.test(s.replace(/^\.{1,2}[\\/]/, '')) || /\.[a-z][a-z0-9]{0,7}$/i.test(s); // a/b, a/ (a folder), a.txt
+};
+const BARE_PATH = /(^|[\s(*])([a-z]:[\\/][^\s<>"|?*&]*[^\s<>"|?*&.,;:!)'])/gi;
+
 // ---------- inline ----------
 // Code spans and math are cut out first (as placeholders) so their contents are never formatted.
 function inline(src, keep) {
   let s = String(src);
   const hold = (html) => { keep.push(html); return `\u0000${keep.length - 1}\u0000`; };
-  s = s.replace(/(`+)([\s\S]*?[^`])\1(?!`)/g, (_, _t, code) => hold(`<code class="md-ic">${esc(code.trim())}</code>`));
+  s = s.replace(/(`+)([\s\S]*?[^`])\1(?!`)/g, (_, _t, code) => hold(`<code class="md-ic"${looksPath(code) ? ` data-path="${esc(code.trim())}"` : ''}>${esc(code.trim())}</code>`));
   s = s.replace(/\\\(([\s\S]+?)\\\)/g, (_, tex) => hold(`<span class="md-math" data-tex="${esc(tex)}">${esc(tex)}</span>`));
   // $…$ only when it looks like math: no space just inside, and no digit right after the closing $ (so "$5 and $10" stays text)
   s = s.replace(/(^|[^\\$\w])\$(?![\s\d$])([^$\n]+?)(?<!\s)\$(?![\d$])/g, (_, pre, tex) => pre + hold(`<span class="md-math" data-tex="${esc(tex)}">${esc(tex)}</span>`));
   s = esc(s);
   s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (m, alt, url) => { const u = safeUrl(url.replace(/&amp;/g, '&'), true); return u ? `<img class="md-img" src="${esc(u)}" alt="${alt}" loading="lazy">` : m; });
-  s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, text, url) => { const u = safeUrl(url.replace(/&amp;/g, '&')); return u ? link(esc(u), text) : m; });
+  s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, text, url) => {
+    const raw = url.replace(/&amp;/g, '&'), u = safeUrl(raw);
+    if (u) return link(esc(u), text);
+    return looksPath(raw) ? `<a class="md-pathlink" data-path="${url}">${text}</a>` : m; // url is already escaped
+  });
   // Bare URLs in text only: never inside a tag made above (an alt or href), and never inside a link's own text.
   let inA = 0;
   s = s.split(/(<[^>]*>)/).map((part, i) => {
     if (i % 2) { if (/^<a[\s>]/i.test(part)) inA++; else if (/^<\/a>/i.test(part)) inA = Math.max(0, inA - 1); return part; }
-    return inA ? part : part.replace(/(^|[\s(])((?:https?:\/\/)[^\s<)"]+[^\s<).,;:!?'"])/g, (_, pre, url) => `${pre}${link(url, url)}`);
+    return inA ? part : part.replace(/(^|[\s(])((?:https?:\/\/)[^\s<)"]+[^\s<).,;:!?'"])/g, (_, pre, url) => `${pre}${link(url, url)}`)
+      .replace(BARE_PATH, (_, pre, p) => `${pre}<span class="md-pathtext" data-path="${p}">${p}</span>`);
   }).join('');
   s = s.replace(/\*\*\*([^*]+)\*\*\*/g, '<strong><em>$1</em></strong>')
     .replace(/\*\*([^*\n]+?)\*\*/g, '<strong>$1</strong>').replace(/__([^_\n]+?)__/g, '<strong>$1</strong>')

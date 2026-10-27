@@ -344,7 +344,7 @@ async function contextText(list) {
 // Typing @ suggests recent chats, this project's files and other projects; typing more filters
 // them. Picking one attaches it as context for the next message. / lists the chat commands.
 import { langOf, mountCode } from './code.js';
-import { renderMarkdown, enhance, stableCut } from './markdown.js';
+import { renderMarkdown, enhance as enhanceMd, stableCut } from './markdown.js';
 
 // The message box's buttons: icons only, coloured by what they do.
 const CMP_ICO = {
@@ -1693,6 +1693,47 @@ async function loadModels(refresh = false) {
 // ---------- tiny markdown ----------
 // Chat markdown (headings, lists, tables, code with Copy, math…) lives in markdown.js.
 const md = (src) => renderMarkdown(src);
+const enhance = (root) => { markPaths(root); return enhanceMd(root); };
+// Paths in a reply (markdown.js marks them with data-path): the ones that are there, in the chat's project or as full
+// paths on this computer, become links that show the file in File Explorer (a folder opens). New paths are asked
+// about together; an answer is kept a while (a missing one only briefly: the agent may be about to make it).
+const PATHS = { seen: new Map(), queue: new Set(), timer: null };
+const chatOfEl = (el) => { const pane = el.closest?.('.chatpane'); return (pane && G.open.get(G.panes[Number(pane.dataset.pane)])) || focused(); };
+function markPaths(root) {
+  if (!root?.querySelectorAll) return;
+  for (const el of [...(root.matches?.('[data-path]') ? [root] : []), ...root.querySelectorAll('[data-path]:not([data-pk])')]) PATHS.queue.add(el);
+  if (PATHS.queue.size && !PATHS.timer) PATHS.timer = setTimeout(checkPaths, 150);
+}
+async function checkPaths() {
+  PATHS.timer = null;
+  const els = [...PATHS.queue]; PATHS.queue.clear();
+  const ask = new Map(), now = Date.now();
+  for (const el of els) {
+    if (el.dataset.pk) continue;
+    // Still being put together off the page: tried again shortly (a few times).
+    if (!el.isConnected) { if ((el._pathTries = (el._pathTries || 0) + 1) < 20) PATHS.queue.add(el); continue; }
+    const pid = chatOfEl(el)?.projectId || '', key = `${pid}\n${el.dataset.path}`, s = PATHS.seen.get(key);
+    el.dataset.pk = pid;
+    if (s && now - s.at < (s.kind ? 300e3 : 8e3)) { showPath(el, s.kind); continue; }
+    (ask.get(pid) || ask.set(pid, new Set()).get(pid)).add(el.dataset.path);
+  }
+  for (const [pid, paths] of ask) {
+    const r = await postJ('/api/paths/check', { projectId: pid, paths: [...paths] }).catch(() => null);
+    for (const p of paths) PATHS.seen.set(`${pid}\n${p}`, { kind: r?.found?.[p] || '', at: Date.now() });
+  }
+  for (const el of els) if (el.dataset.pk != null && !el.classList.contains('md-path')) showPath(el, PATHS.seen.get(`${el.dataset.pk}\n${el.dataset.path}`)?.kind);
+  if (PATHS.queue.size && !PATHS.timer) PATHS.timer = setTimeout(checkPaths, 150);
+}
+function showPath(el, kind) {
+  if (!kind) return;
+  el.classList.add('md-path');
+  el.dataset.kind = kind;
+  el.setAttribute('role', 'link'); el.tabIndex = 0;
+  el.title = kind === 'dir' ? 'Open this folder in File Explorer' : 'Show this file in File Explorer';
+}
+const openPathEl = (el) => openFolder(el.dataset.pk || chatOfEl(el)?.projectId, el.dataset.path);
+document.addEventListener('click', (e) => { const el = e.target.closest?.('.md-path'); if (el) { e.preventDefault(); openPathEl(el); } });
+document.addEventListener('keydown', (e) => { const el = e.key === 'Enter' && e.target.closest?.('.md-path'); if (el) { e.preventDefault(); openPathEl(el); } });
 
 // ---------- landing: where the app opens, and where you land when the open chat or project is deleted ----------
 function showLanding() { G.panes = []; G.focus = 0; G.view = { id: null, src: false, files: false }; G.traceRun = null; renderPanes(); savePrefs(); renderSidebar(); syncHome(); }
@@ -5913,7 +5954,7 @@ function settingsPanels(S) {
     ]],
     usage: ['Usage & costs', 'What chats and projects cost, from this computer’s records.', [
       '<div id="stUsage"><div class="st-row-help">Adding up costs…</div></div>',
-      stCard('In chats', '', stRow('Show the cost badge in chat headers', 'The amber cost next to the model; click it for the per-chat usage breakdown (also /usage).', stSwitch('ui.usageBtn', U.usageBtn))),
+      stCard('In chats', '', stRow('Show the cost badge in chat headers', 'The amber cost next to the model; click it for the per-chat usage breakdown (also /usage). Off also hides the total next to Spending in the sidebar.',stSwitch('ui.usageBtn', U.usageBtn))),
       stCard('Everything', '', stRow('Costs per project and chat', 'Every chat’s cost, sorted and searchable.', '<button type="button" class="st-btn secondary sm" data-act="openCosts">💲 Open costs</button>')),
     ]],
     storage: ['Storage', 'How much room QuorX takes on this computer, and clearing what it doesn\'t need. Caches are deleted; your own things go to the Windows Recycle Bin.', [
