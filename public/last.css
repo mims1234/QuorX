@@ -812,7 +812,7 @@ input[type="checkbox"]:disabled { opacity: .45; cursor: not-allowed; }
 .bc-more:hover { text-decoration: underline; }
 
 /* the cost badge is the way into usage (📊 removed); make it read as a button */
-:root.no-usage-btn .ch-cost { display: none !important; }
+:root.no-usage-btn :is(.ch-cost, #costsPill) { display: none !important; } /* the sidebar's Spending total too */
 .dir-a-head .ch-cost { cursor: pointer; }
 .dir-a-head .ch-cost::after { content: ' ▾'; font-size: 9px; opacity: .7; }
 .dir-a-head .ch-cost:hover { filter: brightness(1.1); box-shadow: 0 0 0 1px var(--amber, #f59e0b); }
@@ -2967,3 +2967,12 @@ body.dev-build::before { content: ''; position: fixed; left: 0; right: 0; top: 0
 .ch-sched.on { border-color: color-mix(in srgb, var(--ok, #22c55e) 55%, var(--line)); }
 .ch-sched.off { color: var(--muted); }
 .ch-sched:hover { border-color: var(--accent); }
+
+/* A path in a reply that is there on this computer: a click shows it in File Explorer. Dotted, with a folder mark, so
+   it reads differently from a web link (which needs Ctrl+click). */
+.md-path { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; text-decoration-thickness: 1px; }
+.md-path::after { content: "\1F4C2"; font-size: .8em; margin-left: .3em; opacity: .7; font-family: initial; }
+.md-path:hover, .md-path:focus-visible { text-decoration-style: solid; outline: none; }
+.md-path:hover::after, .md-path:focus-visible::after { opacity: 1; }
+.md-path:focus-visible { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); border-radius: 4px; }
+a.md-pathlink.md-path, .md-pathtext.md-path { color: var(--accent); }

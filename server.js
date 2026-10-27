@@ -32,7 +32,7 @@ import { ptyAvailable, ptyOpen, ptyWrite, ptyResize, ptyFollow, ptyClose } from 
 // Pages the agent wrote, served from this app's own address, get their own opaque origin: their requests to /api are refused.
 const SANDBOX_CSP = 'sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads';
 import { listChats, sidebarChats, chatPage, chatPictureRefs, pictureRefCounts, getTrace, getChatForPage, getChat, saveChat, patchChat, settleReply, trashChat, validId, listProjects, saveProject, forgetProject, setProjectColor, setProjectFlags, costSummary, costChats } from './server/store.js';
-import { ALLOWED, copyTemplate, workspaceDir, safePath, chatFolder, listFiles, listDir, listServers, stopServerWait, restartServer, serverLog, startServer, restoreCheckpoint, listCheckpoints, pruneCheckpoints, undoConflicts, changedFiles, reviewFiles, reviewDiff, undoFile, serverOverview, launchConfigs, saveLaunchConfig, removeLaunchConfig, ensureAgentDir, agentSpace } from './server/workspace.js';
+import { ALLOWED, copyTemplate, workspaceDir, safePath, fullLocalPath,chatFolder, listFiles, listDir, listServers, stopServerWait, restartServer, serverLog, startServer, restoreCheckpoint, listCheckpoints, pruneCheckpoints, undoConflicts, changedFiles, reviewFiles, reviewDiff, undoFile, serverOverview, launchConfigs, saveLaunchConfig, removeLaunchConfig, ensureAgentDir, agentSpace } from './server/workspace.js';
 import { followTerm, runningJobs, stopJob } from './server/terminal.js';
 import { runningIn, stopRunning, stopAllIn } from './server/running.js';
 import { decide as decideCommand, loadRules, saveRules, suggestedRules, ruleProblem, updateRule, removeRule } from './server/cmdpolicy.js';
@@ -132,8 +132,7 @@ function sendStatic(req, res, file, type, extra = {}) {
   return sendFile(file, res);
 }
 // A path from the address bar; a malformed %-escape is a bad request, not a server error.
-const decodePath = (s) => { try { return decodeURIComponent(s); } catch { return null; } };
-// Server-Sent Events for one run, from event number `from`. Closing the page only stops listening.
+const decodePath = (s) => { try { return decodeURIComponent(s); } catch { return null; } };// Server-Sent Events for one run, from event number `from`. Closing the page only stops listening.
 function stream(res, runId, from) {
   res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
   const ping = setInterval(() => { if (!res.writableEnded) res.write(': ping\n\n'); }, 20000);
@@ -332,17 +331,34 @@ const server = http.createServer(async (req, res) => {
     }
     // Open a project's folder in the computer's own file manager (File Explorer on Windows). With a path inside the
     // project, a folder opens and a file is shown selected in its folder (Files → right-click → Show in File Explorer).
+    // A full path (C:\…, file:///…), as a reply names it, opens the same way, wherever it is on this computer.
     if (url.pathname === '/api/open-folder' && req.method === 'POST') {
       const b = JSON.parse(await readBody(req, 1e4) || '{}');
-      if (!validId(b.projectId) || !listProjects().some((p) => p.id === b.projectId)) return json(res, 400, { error: 'unknown project' });
-      let dir = workspaceDir(b.projectId), file = null;
+      const full = b.path && fullLocalPath(b.path);
+      if (full === null) return json(res, 400, { error: 'that is a network path: QuorX only opens folders on this computer' });
+      if (!full && (!validId(b.projectId) || !listProjects().some((p) => p.id === b.projectId))) return json(res, 400, { error: 'unknown project' });
+      let dir = full ? '' : workspaceDir(b.projectId), file = null;
       if (b.path) {
-        try { const t = safePath(dir, String(b.path)); if (fs.statSync(t).isDirectory()) dir = t; else { file = t; dir = path.dirname(t); } }
+        try { const t = full || safePath(dir, String(b.path)); if (fs.statSync(t).isDirectory()) dir = t; else { file = t; dir = path.dirname(t); } }
         catch (e) { return json(res, 400, { error: e.code === 'ENOENT' ? 'that file is gone' : e.message }); }
       }
       const [cmd, args] = process.platform === 'win32' ? ['explorer.exe', [file ? `/select,${file}` : dir]] : process.platform === 'darwin' ? ['open', file ? ['-R', file] : [dir]] : ['xdg-open', [dir]];
       try { openDetached(cmd, args); return json(res, 200, { ok: true, dir }); }
       catch (e) { return json(res, 500, { error: e.message }); }
+    }
+    // Which of the paths a reply names are there: { found: { path: 'file' | 'dir' } }. The page makes those into links
+    // that show them in File Explorer. A path is inside the project (relative to it) or a full one.
+    if (url.pathname === '/api/paths/check' && req.method === 'POST') {
+      const b = JSON.parse(await readBody(req, 1e5) || '{}');
+      const root = validId(b.projectId) && listProjects().some((p) => p.id === b.projectId) ? workspaceDir(b.projectId) : null;
+      const found = {};
+      for (const p of (Array.isArray(b.paths) ? b.paths : []).slice(0, 200).map(String)) {
+        try {
+          const full = fullLocalPath(p), t = full || (full === '' && root ? safePath(root, p) : null);
+          if (t) found[p] = fs.statSync(t).isDirectory() ? 'dir' : 'file';
+        } catch { /* not there, or outside the project */ }
+      }
+      return json(res, 200, { found });
     }
     if (url.pathname === '/api/files/text' && req.method === 'GET') {
       const pid = url.searchParams.get('project');
