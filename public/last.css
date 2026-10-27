@@ -2976,3 +2976,5 @@ body.dev-build::before { content: ''; position: fixed; left: 0; right: 0; top: 0
 .md-path:hover::after, .md-path:focus-visible::after { opacity: 1; }
 .md-path:focus-visible { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); border-radius: 4px; }
 a.md-pathlink.md-path, .md-pathtext.md-path { color: var(--accent); }
+.sc-trusted { color: var(--ok, #22c55e); border-color: color-mix(in srgb, var(--ok, #22c55e) 45%, var(--line)); }
+.sc-trust, .sc-trust span { white-space: normal; min-width: 0; }

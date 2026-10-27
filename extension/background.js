@@ -275,7 +275,7 @@ async function onPush(m) {
     await chrome.storage.session.set({ status: s });
     badgeAll();
     const lent = await lentTabs();
-    for (const t of Object.keys(lent).filter((id) => lent[id].chatId === m.chatId).map(Number)) glow(t, m.state !== 'done');
+    for (const t of Object.keys(lent).filter((id) => lent[id].chatId === m.chatId).map(Number)) glow(t, m.state === 'working') // while it waits for you, or is done, the tab is yours;
   }
 }
 
@@ -288,7 +288,7 @@ async function glow(tab, on) {
   await chrome.scripting.executeScript({ target: { tabId: tab }, files: ['glow.js'] }).catch(() => null);
   await run((text) => window[Symbol.for('quorx.glow')]?.on(text), ['QuorX is working in this tab · Stop']);
 }
-const working = async (tab) => { const l = (await lentTabs())[tab]; const st = l && (await status())[l.chatId]?.state; return !!st && st !== 'done'; };
+const working = async (tab) => { const l = (await lentTabs())[tab]; return !!l && (await status())[l.chatId]?.state === 'working'; };
 // A page that loads afresh loses the glow: it goes back on while the agent is still working there.
 chrome.tabs.onUpdated.addListener(async (tab, change) => { if (change.status === 'complete' && await working(tab)) glow(tab, true); });
 // The keyboard shortcut (Alt+Shift+Q by default; chrome://extensions/shortcuts) stops every reply using your Chrome.

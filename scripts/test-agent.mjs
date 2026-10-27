@@ -2292,7 +2292,7 @@ test('a scheduled chat runs like a normal chat and is saved complete, with no pa
     assert.equal(r.status, 'running');
     const fin = await end.p;
     assert.equal(fin.k, 'done');
-    assert.deepEqual(notes, ['done']);
+    assert.deepEqual(notes, ['start', 'done'], 'an open page hears the run start (silently), then that it is done');
     const doc = getChat(r.chatId);
     assert.equal(doc.title, '⏰ Notes');
     assert.equal(doc.approval, 'strict');
@@ -2397,6 +2397,31 @@ test('the agent manages schedules from a chat: a card first, its runs post in th
     assert.equal(loadScheds().length, 1);
     assert.equal(loadScheds()[0].paused, true);
   } finally { saveScheds([]); }
+});
+
+test('a card in a scheduled run that no one answers counts as no, so the run ends instead of holding on to Chrome', async () => {
+  const t0 = Date.now();
+  const { events, bodies, done } = await run((body, i) => [reply('', [['remember', { text: 'The bot channel is #bot-test' }]]), reply('Carried on without it.')][i],
+    { scheduledBy: 'sdemo', settings: { approval: 'strict', schedCardWaitSecs: 1 } });
+  const card = of(events, 'approval')[0];
+  assert.ok(card?.wait, 'the card says how long it waits');
+  assert.equal(of(events, 'approval_done')[0].by, 'timeout');
+  assert.match(toolResults(bodies[1])[0], /declined this remember call.*No answer within 1 s, and this is a scheduled run/);
+  assert.equal(done.reply, 'Carried on without it.');
+  assert.ok(Date.now() - t0 < 20000);
+  // Not a scheduled run: the same card waits for you as before (answered here).
+  const { events: e2, done: d2 } = await run((body, i) => [reply('', [['remember', { text: 'x y z' }]]), reply('ok')][i], { settings: { approval: 'strict', schedCardWaitSecs: 1 },
+    onEvent: (e, id) => { if (e.t === 'approval') setTimeout(() => answerApproval(id, e.id, { approve: false }), 1500); } });
+  assert.equal(of(e2, 'approval_done')[0].by, 'user', 'it waited past the scheduled-run limit for your answer');
+  assert.equal(d2.reply, 'ok');
+});
+
+test('a schedule can be trusted to act without asking; an edit keeps it, and the card for making one says so', () => {
+  const s = cleanSchedule({ name: 'Drop', prompt: 'send /ldrop', projectId: 'p', model: 'test/model', when: { kind: 'every', minutes: 5 }, trusted: true });
+  assert.equal(s.trusted, true);
+  assert.equal(cleanSchedule({ prompt: 'send /ldrop now' }, Date.now(), s).trusted, true, 'kept over an edit');
+  assert.equal(cleanSchedule({ trusted: false }, Date.now(), s).trusted, false);
+  assert.equal(cleanSchedule({ name: 'x', prompt: 'y', projectId: 'p', model: 'test/model', when: { kind: 'every', minutes: 5 } }).trusted, false, 'off unless asked');
 });
 
 test('a scheduled chat in Strict waits for your approval (and says so), even if the saved settings say YOLO', async () => {
@@ -3204,8 +3229,8 @@ test('extension pairing shows which extension asks and a code to match; the key 
     ws.onclose = ws.onerror = () => { x.closed = true; };
     ws.onopen = () => { ws.send(typeof first === 'string' ? first : JSON.stringify(first)); ok(x); };
   });
-  const pair = (c) => open(c, { t: 'hello', pair: true, browser: 'Chrome', version: '0.3.3' });
-  const withKey = (c, key = extKey()) => open(c, { t: 'hello', key, version: '0.3.3' });
+  const pair = (c) => open(c, { t: 'hello', pair: true, browser: 'Chrome', version: '0.3.4' });
+  const withKey = (c, key = extKey()) => open(c, { t: 'hello', key, version: '0.3.4' });
   try {
     extKey(true);
     // The prompt names the extension's ID and a code, and the extension gets the same code to show in its popup.

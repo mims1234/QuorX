@@ -46,8 +46,10 @@ export function startScheduledChat(s, { missed = false, due = null } = {}, deps)
     agent: { setup, messages: [user, bot], artifacts: {}, allowed: [], cmdRules: [] } });
   const a = doc?.agent || {};
   const body = { runId, chatId, projectId: s.projectId, chatTitle: title, setup, settings: { ...(s.settings || {}), approval, chromeAccess: s.settings?.chromeAccess ?? !!s.tools?.chrome }, allowed: a.allowed || [], cmdRules: a.cmdRules || [],
-    ...(a.apps ? { apps: a.apps } : {}), history: [], summary: '', reading: '', text: s.prompt, artifacts: a.artifacts || {}, context: '', images: [], docs: [], scheduledBy: s.id };
+    ...(a.apps ? { apps: a.apps } : {}), history: [], summary: '', reading: '', text: s.prompt, artifacts: a.artifacts || {}, context: '', images: [], docs: [], scheduledBy: s.id, scheduleTrusted: s.trusted === true };
   deps.startRun({ runId, chatId }, (emit, signal) => deps.runAgent(body, emit, signal));
+  // A page that has this chat open learns of the new run (its copy of the chat doesn't have it), and follows it live.
+  deps.notify?.('start', { schedule: s, chatId });
   const told = new Set();
   deps.follow(runId, 0, (e) => {
     if (e === null) {

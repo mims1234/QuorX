@@ -735,6 +735,7 @@ const SCHEDULE_TOOL = { type: 'function', function: { name: 'schedule', descript
   notify: { type: 'string', enum: ['always', 'failure', 'needs', 'changed'] },
   model: { type: 'string', description: 'Model id for its runs (default: this chat\'s)' },
   approval: { type: 'string', enum: ['strict', 'yolo'], description: 'Its runs\' mode (default: this chat\'s)' },
+  trusted: { type: 'boolean', description: 'Its runs send, post and submit in the user\'s tabs as the prompt says, without asking (passwords and payments still ask). Only when the user asks for it.' },
   why: { type: 'string', description: 'One line for the user\'s card: why' },
 } } } };
 const PLAN_TOOL = { type: 'function', function: { name: 'plan', description: 'Write or update your plan for this reply: a short spec, a to-do list the user sees as a live checklist, and checks that prove it is done. Call it first for any build, then again to tick items off.', parameters: { type: 'object', required: ['items'], properties: {
@@ -2565,6 +2566,8 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   // Strict mode: pause on a card until the user answers. "Always allow" applies to the rest of the conversation.
   // ⚡ YOLO: how long a question or an unsettled approval waits for the user (0 = it doesn't). Benchmarks never wait,
   // and scripted tests only when they set it.
+  // How long a card in a scheduled run waits for you before it counts as no: 10 minutes (Settings: schedCardWaitSecs).
+  function schedCardMs() { return Math.max(1, Math.min(86400, Number(S.schedCardWaitSecs) || 600)) * 1000; }
   function yoloWait() {
     if (S.approval !== 'yolo' || req.bench || (deps.quiet && req.settings?.yoloWaitSecs == null)) return 0;
     return Math.max(0, Math.min(600, Number(S.yoloWaitSecs ?? DEFAULTS.yoloWaitSecs) || 0)) * 1000;
@@ -2588,6 +2591,9 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   }
   // wait: { ms, then, onTimeout } for a ⚡ YOLO card the deciders couldn't settle: after ms, onTimeout() answers it.
   async function askUser(card, wait = null) {
+    // A scheduled run has no one watching it: a card waits schedCardMs() (10 minutes), then counts as no and the run goes on (and
+    // ends), so it never holds your Chrome tab, or the schedule's next turns, until you happen to look.
+    if (!wait && req.scheduledBy) wait = { ms: schedCardMs(), then: 'skip', onTimeout: () => ({ approve: false, by: 'timeout', reason: `No answer within ${Math.round(schedCardMs() / 1000)} s, and this is a scheduled run, so it was skipped` }) };
     const ms = wait?.ms || 0;
     emit({ t: 'approval', ...card, mode: 'strict', ...(ms ? { wait: waitInfo(ms, wait.then) } : {}), at: at() });
     openCards.set(card.id, card.tool);
@@ -2595,7 +2601,11 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       pending.set(`${runId}:${card.id}`, resolve);
       signal.addEventListener('abort', () => { pending.delete(`${runId}:${card.id}`); reject(new Error('aborted')); }, { once: true });
     });
-    let ans = await userOrTimeout(card.id, ms, userP).finally(() => openCards.delete(card.id));
+    // While it waits for you, your tab is yours: QuorX lets go of it (Chrome's debugging bar and the glow go), and takes
+    // it back once you answer.
+    const held = lent;
+    held?.release();
+    let ans = await userOrTimeout(card.id, ms, userP).finally(() => { openCards.delete(card.id); if (held && lent === held) held.relock(); });
     if (ans.timedOut) { pending.delete(`${runId}:${card.id}`); ans = wait.onTimeout(); }
     if (ans.approve && ans.always && card.tool !== 'shell') {
       allowed.add(card.tool); emit({ t: 'allow_always', tool: card.tool, at: at() });
@@ -2654,15 +2664,15 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       if (act === 'pause') { const x = say(changeSchedule(s.id, { paused: true })); return `Paused "${x.name}". The user can resume it in Schedules${mine ? '' : ', or ask you to'}.`; }
       if (act === 'create') {
         const b = { name: args.name, prompt: args.prompt, when: when(args.when), projectId, model: args.model || setup.model, reasoning: setup.reasoning, approval: args.approval || (S.approval === 'yolo' ? 'yolo' : 'strict'),
-          notify: args.notify, chatId: req.chatId, settings: { ...(req.settings || {}) }, tools: { chrome: !!req.settings?.chromeAccess } };
+          notify: args.notify, trusted: args.trusted === true, chatId: req.chatId, settings: { ...(req.settings || {}) }, tools: { chrome: !!req.settings?.chromeAccess } };
         const probe = cleanSchedule(b); // checks it before the user is asked
-        const ans = await ask(`Create the schedule "${probe.name}": ${scheduleView(probe).whenText}, ${probe.approval === 'yolo' ? '⚡ YOLO' : '🔒 Strict'}, runs post in this chat. Prompt: ${clip(probe.prompt, 220)}`);
+        const ans = await ask(`Create the schedule "${probe.name}": ${scheduleView(probe).whenText}, ${probe.approval === 'yolo' ? '⚡ YOLO' : '🔒 Strict'}${probe.trusted ? ', ✓ trusted (its runs send and post in your tabs without asking)' : ''}, runs post in this chat. Prompt: ${clip(probe.prompt, 220)}`);
         if (!ans.approve) return declined('schedule', ans);
         const x = say(addSchedule(b, { projects: listProjects() }));
         return `Created schedule ${x.id} "${x.name}" (${scheduleView(x).whenText}; next run ${ago(x.nextAt)}). Its runs post in this chat. The user sees it in Schedules and on the ⏰ chip in this chat's header.`;
       }
       if (act === 'update' || act === 'resume') {
-        const b = act === 'resume' ? { paused: false } : Object.fromEntries(Object.entries({ name: args.name, prompt: args.prompt, when: args.when && when(args.when), notify: args.notify, model: args.model, approval: args.approval }).filter(([, v]) => v != null));
+        const b = act === 'resume' ? { paused: false } : Object.fromEntries(Object.entries({ name: args.name, prompt: args.prompt, when: args.when && when(args.when), notify: args.notify, model: args.model, approval: args.approval, trusted: typeof args.trusted === 'boolean' ? args.trusted : null }).filter(([, v]) => v != null));
         if (!Object.keys(b).length) return 'Error: say what to change (name, prompt, when, notify, model or approval).';
         const probe = cleanSchedule(b, Date.now(), s);
         const ans = await ask(act === 'resume' ? `Resume the schedule "${s.name}" (${scheduleView(s).whenText})` : `Change the schedule "${s.name}": ${Object.keys(b).map((k) => (k === 'when' ? `when → ${scheduleView(probe).whenText}` : k === 'prompt' ? `prompt → ${clip(probe.prompt, 160)}` : `${k} → ${probe[k]}`)).join('; ')}`);
@@ -2814,7 +2824,8 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     // Video Mode in ⚡ YOLO: the card waits the Video Mode time, and then (or at once, with no wait) the agent's
     // recommendation stands; the deciders answer only a question without one.
     const recs = run.video && S.approval === 'yolo';
-    const waitMs = recs ? Math.max(yoloWait(), videoWait()) : yoloWait();
+    // A scheduled run in Strict: no one is watching, so its question waits schedCardMs() too, then the deciders answer.
+    const waitMs = (recs ? Math.max(yoloWait(), videoWait()) : yoloWait()) || (req.scheduledBy ? schedCardMs() : 0);
     const recommendedAnswer = async (id, q, shown) => {
       if (q.recommended == null) return deciderPick(id, q.question, q.options, { shown, silent: true });
       return { choice: q.recommended, msg: `${shown ? 'The user did not answer in time, so your' : 'Your'} recommendation stands (⚡ YOLO, Video Mode): "${q.options[q.recommended]}". Go with it, and mention it in your reply so the user can change it.` };
@@ -4353,8 +4364,15 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
         emit({ t: 'note', level: 'info', msg: `YOLO: ran without asking in your tab on ${host}: ${risk || ro}${holds ? ` (the box held ${holds})` : ''}.`, at: at() });
         risk = null; ro = null;
       }
+      // ⏰ A schedule you trust does what its prompt says on purpose (send /ldrop every few minutes): its sends, posts
+      // and submits run without a card or the deciders' second guess. A password or a payment still asks.
+      const trusted = !!req.scheduledBy && req.scheduleTrusted === true;
+      if (trusted && (risk || ro) && !/password|pay|purchase|buy|checkout|card/i.test(risk || '')) {
+        emit({ t: 'note', level: 'info', msg: `Trusted schedule: ran without asking in your tab on ${host}: ${risk || ro}${holds ? ` (the box held ${holds})` : ''}.`, at: at() });
+        risk = null; ro = null;
+      }
       // A decider no never blocks on its own: it brings the step to the user like the other two.
-      const doubt = !risk && !ro && (args.action === 'type' || (args.action === 'press' && /enter/i.test(String(args.key || 'Enter')))) ? await deciderFit(host, args) : null;
+      const doubt = !trusted && !risk && !ro && (args.action === 'type' || (args.action === 'press' && /enter/i.test(String(args.key || 'Enter')))) ? await deciderFit(host, args) : null;
       if (risk || ro || doubt) {
         const what = risk || ro || doubt.desc;
         const why = risk ? 'This acts in your own account, so only you can allow it.'

@@ -5406,9 +5406,17 @@ async function loadSchedules() {
   SCHED.since = Math.max(SCHED.since, r.noticeSeq || 0);
   return r;
 }
-function scheduleNoticed(n) {
+async function scheduleNoticed(n) {
   if (n.chatId) refreshSidebar();
-  if (n.kind !== 'done' && n.kind !== 'error') { const c = G.open.get(n.chatId); if (c && !c.running) reattachRuns(c); }
+  // A scheduled run goes on in its chat. A page that has that chat open got its copy before the run was added, so
+  // it takes the server's copy (the new run in it, with any card waiting for you) and follows the run live.
+  const c = G.open.get(n.chatId);
+  if (c && !c.running) {
+    const last = savedParts.get(c.id);
+    if (last) await mergeServerCopy(c, last).catch(() => {});
+    if (n.kind !== 'done' && n.kind !== 'error') reattachRuns(c);
+  }
+  if (n.kind === 'start') return; // no notification for a run starting
   // The desktop app shows these itself (the harness sends them), so only a browser notifies here.
   if (window.ohDesktop) return;
   const pref = uiOf(G.settings).notify;
@@ -5467,7 +5475,7 @@ function drawSchedules() {
   const rows = SCHED.list.map((s) => {
     const st = s.lastRun ? SCHED_STATUS[s.lastRun.status] || [s.lastRun.status, ''] : null;
     return `<li class="sc-row ${s.paused ? 'paused' : ''} ${SCHED.focus && s.chatId === SCHED.focus ? 'focus' : ''}" data-id="${esc(s.id)}">
-      <div class="sc-main"><div class="sc-top"><b class="sc-name">${esc(s.name)}</b><span class="tag sc-proj">📁 ${esc(proj(s.projectId))}</span><span class="tag sc-mode ${s.approval}" title="${s.approval === 'yolo' ? 'YOLO: the deciders answer for you, nothing waits' : 'Strict: approvals and questions wait for you'}">${s.approval === 'yolo' ? '⚡ YOLO' : '🔒 Strict'}</span></div>
+      <div class="sc-main"><div class="sc-top"><b class="sc-name">${esc(s.name)}</b><span class="tag sc-proj">📁 ${esc(proj(s.projectId))}</span><span class="tag sc-mode ${s.approval}" title="${s.approval === 'yolo' ? 'YOLO: the deciders answer for you, nothing waits' : 'Strict: approvals and questions wait for you'}">${s.approval === 'yolo' ? '⚡ YOLO' : '🔒 Strict'}</span>${s.trusted ? '<span class="tag sc-trusted" title="Trusted: its runs send, post and submit in your tabs as the prompt says, without asking (a password or a payment still asks)">✓ Trusted</span>' : ''}</div>
         <div class="sc-when">${esc(s.whenText)} · ${recDot(s.model, 'chat')} ${esc(short(s.model))}</div>
         <div class="sc-prompt" title="${esc(s.prompt)}">${esc(clip(s.prompt.replace(/\s+/g, ' '), 140))}</div>
         ${schedLinks(s)}${s.paused && s.pausedWhy ? `<small class="sc-note sc-bad">⏸ ${esc(s.pausedWhy)}</small>` : ''}
@@ -5505,6 +5513,7 @@ function scheduleForm(e) {
     </div></div>
     <div class="sc-f"><span>Model</span><button type="button" class="st-chip sc-model">${recDot(e.model, 'chat')} ${esc(short(e.model))} <small>${esc(shortPrice(e.model))}</small></button></div>
     <div class="sc-f"><span>Mode</span><div class="mp-sorts sc-mode-pick" role="radiogroup" aria-label="Permission mode">${[['strict', '🔒 Strict'], ['yolo', '⚡ YOLO']].map(([k, l]) => `<button type="button" class="mp-sort ${e.approval === k ? 'on' : ''}" data-mode="${k}" role="radio" aria-checked="${e.approval === k}">${l}</button>`).join('')}</div><small class="sc-dim sc-mode-note">${e.approval === 'yolo' ? 'Nothing waits: the deciders answer the agent\'s questions and approve commands for you.' : 'Approvals and questions wait for you, with a notification.'}</small></div>
+    <div class="sc-f sc-wide"><span>Trust</span><label class="sq-check sc-trust"><input type="checkbox" id="scTrusted" ${e.trusted ? 'checked' : ''}><span>Trust this schedule: its runs send, post and submit in your tabs as the prompt says, without asking (a password or a payment still asks)</span></label><small class="sc-dim">A card no one answers within 10 minutes counts as no, and the run ends, so it never holds your Chrome tab.</small></div>
     <div class="sc-f sc-wide"><span>Chrome</span><label class="sq-check"><input type="checkbox" id="scChrome" ${(e.chrome ?? e.tools?.chrome) ? 'checked' : ''}><span>🧩 Let it use my Chrome, signed in as me (Chrome must be open; sending, posting and buying still wait for you)</span></label></div>
     <div class="sc-f sc-wide"><span>Chat</span>${(() => { const ch = e.chatId && G.chats.find((x) => x.id === e.chatId); return ch ? `<small class="sc-dim">Runs post in 💬 <b>${esc(clip(ch.title || 'its chat', 50))}</b>. Ask its agent there what the runs saw, or to change this schedule.</small>` : ''; })()}<label class="sq-check"><input type="checkbox" id="scNewChat" ${e.newChat ? 'checked' : ''}><span>Start a new chat every run (off: every run posts in this schedule's one chat). Each run starts fresh, with only the prompt.</span></label></div>
     <div class="sc-f sc-wide"><span>Tell me</span><div class="mp-sorts sc-notify" role="radiogroup" aria-label="When to tell you">${Object.entries(NOTIFY_LABEL).map(([k, l]) => `<button type="button" class="mp-sort ${(e.notify || 'always') === k ? 'on' : ''}" data-notify="${k}" role="radio" aria-checked="${(e.notify || 'always') === k}">${esc(l[0].toUpperCase() + l.slice(1))}</button>`).join('')}</div><small class="sc-dim">A run that waits for you always tells you. ${PAUSE_FAILS} failed runs in a row pause the schedule, and tell you.</small></div>
@@ -5513,7 +5522,7 @@ function scheduleForm(e) {
 }
 function wireScheduleForm(body) {
   const e = SCHED.edit, f = $('#scForm', body);
-  const keep = () => { e.name = $('#scName', f).value; e.projectId = $('#scProject', f).value; e.prompt = $('#scPrompt', f).value; e.chrome = $('#scChrome', f).checked; e.newChat = $('#scNewChat', f).checked; };
+  const keep = () => { e.name = $('#scName', f).value; e.projectId = $('#scProject', f).value; e.prompt = $('#scPrompt', f).value; e.chrome = $('#scChrome', f).checked; e.newChat = $('#scNewChat', f).checked; e.trusted = $('#scTrusted', f).checked; };
   $('#scChrome', f).addEventListener('change', (ev) => { e.chrome = ev.target.checked; if (ev.target.checked && !extReady()) openChromeSetup(); });
   for (const b of f.querySelectorAll('.sc-kind button')) b.onclick = () => {
     keep();
@@ -5543,7 +5552,7 @@ function wireScheduleForm(body) {
     const c = blankChat(e.projectId);
     c.approval = e.approval;
     c.tools = { ...c.tools, chrome: !!e.chrome };
-    const payload = { name: e.name, projectId: e.projectId, prompt: e.prompt, model: e.model, reasoning: c.agent.setup.reasoning, approval: e.approval, when, tools: c.tools, newChat: $('#scNewChat', f).checked, notify: e.notify || 'always', ...(e.chatId ? { chatId: e.chatId } : {}),
+    const payload = { name: e.name, projectId: e.projectId, prompt: e.prompt, model: e.model, reasoning: c.agent.setup.reasoning, approval: e.approval, when, tools: c.tools, newChat: $('#scNewChat', f).checked, trusted: $('#scTrusted', f).checked, notify: e.notify || 'always', ...(e.chatId ? { chatId: e.chatId } : {}),
       settings: { ...G.settings, approval: e.approval, tools: chatTools(c), ...qualitySettings(c), chromeAccess: !!e.chrome } };
     const r = await postJ(e.id ? `/api/schedules/${e.id}` : '/api/schedules', payload, e.id ? 'PUT' : 'POST');
     if (!r || r.error) { err.textContent = r?.error ? `${r.error[0].toUpperCase()}${r.error.slice(1)}.` : 'Not saved.'; return; }
