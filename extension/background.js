@@ -172,7 +172,7 @@ async function call(cmd, { tab, method, params, locked, url, chatId, chatTitle, 
     if (!(await canScript())) await attach(tab);
     return true;
   }
-  if (cmd === 'tab.release') { netOn.delete(tab); await detach(tab); await pageOp(tab, 'mark', { on: false }).catch(() => {}); delete lent[tab]; await setLent(lent); badge(tab); return true; }
+  if (cmd === 'tab.release') { netOn.delete(tab); await detach(tab); await pageOp(tab, 'mark', { on: false }).catch(() => {}); await glow(tab, false); delete lent[tab]; await setLent(lent); badge(tab); return true; }
   throw new Error(`unknown command ${cmd}`);
 }
 async function attach(tab) {
@@ -222,6 +222,7 @@ async function takeBack(tab) {
   const lent = await lentTabs();
   delete lent[tab]; await setLent(lent); badge(tab);
   netOn.delete(tab);
+  glow(tab, false);
   await detach(tab);
   await req('takeBack', { tab }).catch(() => {});
 }
@@ -273,8 +274,23 @@ async function onPush(m) {
     s[m.chatId] = { state: m.state, what: String(m.what || '').slice(0, 200), at: Date.now() };
     await chrome.storage.session.set({ status: s });
     badgeAll();
+    const lent = await lentTabs();
+    for (const t of Object.keys(lent).filter((id) => lent[id].chatId === m.chatId).map(Number)) glow(t, m.state !== 'done');
   }
 }
+
+// ---------- the glow: an edge and a Stop button on a tab while its chat's agent works there (glow.js) ----------
+// Needs leave to run page scripts (the popup's "read pages" button); without it the tab keeps QuorX's thin mark.
+async function glow(tab, on) {
+  if (!(await canScript())) return;
+  const run = (func, args = []) => chrome.scripting.executeScript({ target: { tabId: tab }, func, args }).catch(() => null);
+  if (!on) { await run(() => window[Symbol.for('quorx.glow')]?.off()); return; }
+  await chrome.scripting.executeScript({ target: { tabId: tab }, files: ['glow.js'] }).catch(() => null);
+  await run((text) => window[Symbol.for('quorx.glow')]?.on(text), ['QuorX is working in this tab · Stop']);
+}
+const working = async (tab) => { const l = (await lentTabs())[tab]; const st = l && (await status())[l.chatId]?.state; return !!st && st !== 'done'; };
+// A page that loads afresh loses the glow: it goes back on while the agent is still working there.
+chrome.tabs.onUpdated.addListener(async (tab, change) => { if (change.status === 'complete' && await working(tab)) glow(tab, true); });
 // The keyboard shortcut (Alt+Shift+Q by default; chrome://extensions/shortcuts) stops every reply using your Chrome.
 chrome.commands?.onCommand.addListener((c) => { if (c === 'stop-agent') req('stopAll').catch(() => {}); });
 
@@ -345,6 +361,8 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     if (msg.q === 'give') { await give(msg.tab, msg.chatId); return true; }
     if (msg.q === 'takeBack') { await takeBack(msg.tab); return true; }
     if (msg.q === 'stop') return req('stop', { chatId: msg.chatId });
+    // Stop on a tab's glow: the chat working in that tab.
+    if (msg.q === 'stopTab') { const l = sender.tab && (await lentTabs())[sender.tab.id]; if (!l) return { stopped: 0 }; glow(sender.tab.id, false); return req('stop', { chatId: l.chatId }); }
     if (msg.q === 'open') return req('focus', { chatId: msg.chatId });
     // The permission request itself runs in the popup (Chrome needs your click there); this only tells QuorX.
     if (msg.q === 'caps') { send({ t: 'caps', caps: await caps() }); return caps(); }

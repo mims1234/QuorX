@@ -3101,8 +3101,8 @@ test('extension pairing shows which extension asks and a code to match; the key 
     ws.onclose = ws.onerror = () => { x.closed = true; };
     ws.onopen = () => { ws.send(typeof first === 'string' ? first : JSON.stringify(first)); ok(x); };
   });
-  const pair = (c) => open(c, { t: 'hello', pair: true, browser: 'Chrome', version: '0.3.2' });
-  const withKey = (c, key = extKey()) => open(c, { t: 'hello', key, version: '0.3.2' });
+  const pair = (c) => open(c, { t: 'hello', pair: true, browser: 'Chrome', version: '0.3.3' });
+  const withKey = (c, key = extKey()) => open(c, { t: 'hello', key, version: '0.3.3' });
   try {
     extKey(true);
     // The prompt names the extension's ID and a code, and the extension gets the same code to show in its popup.

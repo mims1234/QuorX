@@ -28,4 +28,6 @@ if (!process.env.OH_HOME) {
 }
 // Tests never download News from the website (server/newsremote.js); a test that needs it points this at a local server.
 process.env.QUORX_NEWS_SITE ||= 'off';
+// Nor do they put the glowing edge and Stop button round your screens (server/glow.js).
+process.env.QX_NO_GLOW ||= '1';
 process.on('exit', () => { for (const dir of made) remove(dir); });

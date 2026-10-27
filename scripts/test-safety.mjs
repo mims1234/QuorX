@@ -11,7 +11,9 @@ import { execSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { runLine, snapBefore, commandChanges, snapBeforeAsync, commandChangesAsync, restoreCheckpoint, reviewFiles, agentSpace } from '../server/workspace.js';
 import { snapshot, changesSince, snapshotAsync, changesSinceAsync } from '../server/snapshot.js';
-import { jobsAvailable, jobHostStatus } from '../server/jobhost.js';
+import { jobsAvailable, jobHostStatus, lineHost } from '../server/jobhost.js';
+import { glowOn, glowOff, glowRuns, onGlowStop, stopNow } from '../server/glow.js';
+import { spawn } from 'node:child_process';
 import { decide, agentWriteBlocked, suggestedRules, saveRules, loadRules, ruleMatches, ruleProblem, addRule, updateRule, removeRule } from '../server/cmdpolicy.js';
 import { approvalJudge } from '../server/approvals.js';
 import { SAFETY_DEFAULTS, safetySettings, yoloOf } from '../server/safety.js';
@@ -2111,4 +2113,35 @@ test('decide: a question about the screen with no picture is refused, or takes t
     reply('OK.'),
   ][i]);
   assert.match(toolOut(bodies, 1), /^Error: these questions are about what is on screen, but no picture was given/);
+});
+
+test('the screen glow is on while a reply uses the desktop; your Stop ends exactly those replies', () => {
+  const stopped = [];
+  onGlowStop((runs, how) => stopped.push([runs, how]));
+  glowOn('run-a', 'Paint a bat'); glowOn('run-b', 'Discord drop'); glowOn('run-a', 'Paint a bat');
+  assert.deepEqual(glowRuns(), ['run-a', 'run-b'], 'once per reply');
+  glowOff('run-b');
+  assert.deepEqual(glowRuns(), ['run-a'], 'a reply that ends leaves it');
+  glowOn('run-c', 'VS Code');
+  assert.deepEqual(stopNow('keys'), ['run-a', 'run-c']);
+  assert.deepEqual(stopped, [[['run-a', 'run-c'], 'keys']]);
+  assert.deepEqual(glowRuns(), [], 'and the glow goes');
+  assert.deepEqual(stopNow('button'), [], 'nothing left to stop');
+});
+
+test('a helper can say things unasked (Stop pressed), and can be ended at once and started again', async () => {
+  // A stand-in helper: ready, then for each request an unasked event before its answer.
+  const code = "process.stdout.write(JSON.stringify({ready:true})+String.fromCharCode(10));require('readline').createInterface({input:process.stdin}).on('line',(l)=>{const m=JSON.parse(l);process.stdout.write(JSON.stringify({event:'stop',how:'button'})+String.fromCharCode(10));if(m.op!=='hang')process.stdout.write(JSON.stringify({id:m.id,ok:true,pid:process.pid})+String.fromCharCode(10));});";
+  const events = [];
+  const h = lineHost(() => spawn(process.execPath, ['-e', code], { stdio: ['pipe', 'pipe', 'pipe'] }), { label: 'test helper', onEvent: (m) => events.push(m) });
+  const first = await h.call('show');
+  assert.equal(first.ok, true);
+  assert.deepEqual(events, [{ event: 'stop', how: 'button' }]);
+  const hanging = h.call('hang', {}, 20000);
+  while (events.length < 2) await new Promise((r) => setTimeout(r, 20)); // it got the request and is busy with it
+  assert.equal(h.kill(), true);
+  await assert.rejects(hanging, /stopped/, 'what it was doing fails at once, not at its timeout');
+  const again = await h.call('show');
+  assert.notEqual(again.pid, first.pid, 'the next call starts a new helper');
+  h.kill();
 });
