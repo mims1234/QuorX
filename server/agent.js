@@ -562,7 +562,8 @@ const APP_LEVELS = ['view', 'click', 'full'];
 const VIEW_ACTS = ['windows', 'read', 'read_text', 'screenshot', 'zoom', 'wait_for'];
 const CLICK_ACTS = [...VIEW_ACTS, 'click', 'click_at', 'right_click', 'double_click', 'middle_click', 'hover', 'mouse_down', 'mouse_up', 'drag', 'scroll', 'focus', 'minimize', 'maximize', 'restore', 'move', 'resize'];
 const APP_ACTS = { view: VIEW_ACTS, click: CLICK_ACTS, full: null }; // full: also type, keys, hold_key, clipboard, close
-const APP_NEVER = /^(quorx|claude|electron|1password|bitwarden|keepass(xc)?|lastpass|dashlane|keeper|nordpass|proton pass|windows security|registry editor|task manager|services|local security policy|group policy|credential manager|computer management|disk management|windows powershell \(admin\)|terminal \(admin\))\b/i;
+// Never: the operating system's own system tools and admin shells (Windows, macOS, Linux).
+const APP_NEVER = /^(keychain access|activity monitor|disk utility|directory utility|gparted|disks|system monitor|windows security|registry editor|task manager|services|local security policy|group policy|credential manager|computer management|disk management|windows powershell \(admin\)|terminal \(admin\))(?!\w)/i;
 const APP_VIEW = /^(google chrome|chrome|microsoft edge|edge|brave|firefox|mozilla firefox|opera|opera gx|vivaldi|arc|chromium|tor browser|settings|control panel|windows explorer|file explorer|explorer)\b/i;
 const APP_CLICK = /^(terminal|windows terminal|windows powershell|powershell|command prompt|git bash|wsl|ubuntu|debian|visual studio code|visual studio|code|cursor|windsurf|intellij|pycharm|webstorm|rider|clion|goland|android studio|sublime text|notepad\+\+)\b/i;
 /** The level an app starts at: 'never', 'view', 'click' or 'full'. */
@@ -4830,7 +4831,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     const found = byPath ? [{ name: path.basename(want, path.extname(want)), appId: path.resolve(want) }] : await findApps(want);
     if (!found.length) return `Error: no app called "${want}" in the Start menu. Try the name it has there; a program that isn't installed as an app can be started with shell.`;
     const key = found[0].name.toLowerCase();
-    if (appLevel(found[0].name) === 'never') return `Error: QuorX never lets the agent use ${found[0].name}: it holds passwords, runs QuorX itself or changes the system. Ask the user to do it themselves.`;
+    if (appLevel(found[0].name) === 'never') return `Error: QuorX never lets the agent use ${found[0].name}: it changes the system or runs with administrator rights. Ask the user to do it themselves.`;
     const app = chatApps.get(key) || { ...found[0], level: appLevel(found[0].name) };
     let wins = await windowsOfApp(app);
     if (!chatApps.has(key)) {
