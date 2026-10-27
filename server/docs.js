@@ -14,6 +14,7 @@ import { workspaceDir, ensureAgentDir } from './workspace.js';
 import { chat, chatModels, embed, embeddingModels } from './openrouter.js';
 import { recordRun } from './runs.js';
 import { numberedWindow } from './loop.js';
+import { renameSoon } from './fsretry.js';
 
 export const DOC_DEFAULTS = { embedModel: 'openai/text-embedding-3-small', inlineDocTokens: 15000, docIndexBudget: 0.5, maxUploadMB: 100, pdfNative: false, readerModel: '' };
 const TEXT_EXT = new Set('txt md markdown mdx rst csv tsv json jsonl ndjson yaml yml toml ini cfg conf properties env xml html htm xhtml css scss less js mjs cjs ts tsx jsx vue svelte py pyw ipynb rb go rs java kt kts swift c h cc cpp hpp cs fs php pl lua r m dart scala sh bash zsh ps1 psm1 bat cmd sql graphql gql proto log tex bib srt vtt svg gradle make mk dockerfile gitignore'.split(' '));
@@ -35,7 +36,7 @@ export const okEntry = (x) => !!x && typeof x.id === 'string' && /^[\w-]{1,64}$/
   && x.file.length <= 200 && x.file.startsWith(`${x.id}-`) && !/[\\/:]/.test(x.file) && x.file === path.basename(x.file);
 const readReg = (d) => { try { const l = JSON.parse(fs.readFileSync(d.reg, 'utf8')); return Array.isArray(l) ? l.filter(okEntry) : []; } catch { return []; } };
 // Through a temp file, so a crash mid-write can't leave a half list that reads as no documents.
-const writeReg = (d, list) => { fs.writeFileSync(d.reg + '.tmp', JSON.stringify(list, null, 2)); fs.renameSync(d.reg + '.tmp', d.reg); };
+const writeReg = (d, list) => { fs.writeFileSync(d.reg + '.tmp', JSON.stringify(list, null, 2)); renameSoon(d.reg + '.tmp', d.reg); };
 function update(projectId, id, patch) {
   const d = dirs(projectId), list = readReg(d), i = list.findIndex((x) => x.id === id);
   if (i < 0) throw new Error('no such document');

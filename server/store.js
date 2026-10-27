@@ -7,6 +7,7 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import { HOME, ROOT } from './openrouter.js';
 import { externalize } from './blobs.js';
+import { renameSoon } from './fsretry.js';
 
 const DIR = path.join(HOME, 'data', 'chats');
 const TRASH = path.join(HOME, 'data', 'trash');
@@ -32,7 +33,7 @@ let PCACHE = null; // { key, at, list }
 const writeProjects = (list) => {
   const text = JSON.stringify(list, null, 2);
   try { if (Array.isArray(JSON.parse(fs.readFileSync(PROJECTS, 'utf8')))) fs.copyFileSync(PROJECTS, PROJECTS + '.bak'); } catch { /* no good list to keep yet */ }
-  fs.writeFileSync(PROJECTS + '.tmp', text); fs.renameSync(PROJECTS + '.tmp', PROJECTS); PCACHE = null;
+  fs.writeFileSync(PROJECTS + '.tmp', text); renameSoon(PROJECTS + '.tmp', PROJECTS); PCACHE = null;
 };
 // The saved list. An unreadable or damaged one (left by an older save that crashed halfway) falls back to the last good
 // copy; with neither, an error, so nothing saves a near-empty list over the projects.
@@ -210,7 +211,7 @@ function saveIndex({ now = false } = {}) {
   const done = () => { indexSaved = Math.max(indexSaved, v); saving = null; };
   try {
     fs.mkdirSync(path.dirname(INDEX), { recursive: true });
-    if (now) { fs.writeFileSync(INDEX + '.tmp', text); fs.renameSync(INDEX + '.tmp', INDEX); done(); return null; }
+    if (now) { fs.writeFileSync(INDEX + '.tmp', text); renameSoon(INDEX + '.tmp', INDEX); done(); return null; }
   } catch { return null; }
   saving = fs.promises.writeFile(INDEX + '.tmp2', text).then(() => fs.promises.rename(INDEX + '.tmp2', INDEX)).then(done, () => { saving = null; });
   return saving;
@@ -384,7 +385,7 @@ function splitTraces(id, doc) {
     if (!Array.isArray(m.trace) || m.trace.length < TRACE_MIN || !RUN_ID.test(String(m.runId || '')) || !m.stats || m.stats.partial || m.live || m.runActive) continue;
     const text = JSON.stringify(m.trace), f = traceFile(id, m.runId);
     try {
-      if (!(fs.existsSync(f) && fs.statSync(f).size === Buffer.byteLength(text))) { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f + '.tmp', text); fs.renameSync(f + '.tmp', f); }
+      if (!(fs.existsSync(f) && fs.statSync(f).size === Buffer.byteLength(text))) { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f + '.tmp', text); renameSoon(f + '.tmp', f); }
     } catch { continue; } // couldn't write it: it stays in the chat
     (out ??= msgs.slice())[i] = { ...m, trace: [], traceRef: { n: m.trace.length, bytes: text.length } };
   }
@@ -424,7 +425,7 @@ function writeChat(id, doc) {
   doc = splitTraces(id, doc);
   const text = JSON.stringify(doc);
   fs.writeFileSync(file(id) + '.tmp', text);
-  fs.renameSync(file(id) + '.tmp', file(id));
+  renameSoon(file(id) + '.tmp', file(id));
   if (indexReady) indexWrite(id, doc, text);
   LAST.delete(id); LAST.set(id, { key: stamp(id), doc });
   if (LAST.size > 8) LAST.delete(LAST.keys().next().value);

@@ -6,6 +6,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { renameSoon } from './fsretry.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const HOME = process.env.OH_HOME ? path.resolve(process.env.OH_HOME) : ROOT; // see openrouter.js
@@ -54,7 +55,7 @@ function load() {
 function save(s) {
   fs.mkdirSync(DATA, { recursive: true });
   fs.writeFileSync(FILE + '.tmp', JSON.stringify(s, null, 2));
-  fs.renameSync(FILE + '.tmp', FILE);
+  renameSoon(FILE + '.tmp', FILE);
 }
 // Every key, .env first (it can be switched away from, not removed).
 function all() {

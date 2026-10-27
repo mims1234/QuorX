@@ -3247,7 +3247,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       // its picture: that read is slow, and a screenshot shows the rest.)
       const again = async (h) => {
         if (args.quietStep) return '';
-        await sleep(450, signal);
+        await sleep(250, signal);
         const p = await paused(800); if (p) return `\n${p}`;
         const read = () => readWindow(scope, h).catch((e) => ({ text: `(could not read it again: ${e.message})` }));
         // A window that says it is loading ("Loading", "Please wait", "Saving…") isn't settled even when two reads agree:
@@ -3257,7 +3257,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         for (const t0 = Date.now(); !r.ocr && !/^\(could not/.test(r.text);) {
           const waiting = busy(r.text);
           if (Date.now() - t0 > (waiting ? 6000 : 2500)) { moving = true; break; }
-          await sleep(500, signal);
+          await sleep(250, signal); // short: most windows are settled by the second read, and each wait adds to every action
           const r2 = await read();
           if (r2.text === r.text && !waiting) break;
           r = r2;
