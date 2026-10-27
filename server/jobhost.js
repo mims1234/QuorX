@@ -20,7 +20,7 @@ const WIN = process.platform === 'win32';
  * first use, never keeps QuorX alive by itself, and reports why when it can't start. `launch()` returns the process
  * (or throws why it can't); `why` is the reason it won't run here at all (wrong system, missing program).
  */
-export function lineHost(launch, { label = 'helper', readyMs = 20000, off = false, why = '' } = {}) {
+export function lineHost(launch, { label = 'helper', readyMs = 20000, off = false, why = '', onEvent = null } = {}) {
   let host = null;
   let lastError = why;
   let disabled = off || !!why;
@@ -43,6 +43,7 @@ export function lineHost(launch, { label = 'helper', readyMs = 20000, off = fals
         return;
       }
       if (m.ready) { h.ok = true; clearTimeout(timer); readyFn(true); return; }
+      if (m.event) { try { onEvent?.(m); } catch { /* the listener's own problem */ } return; } // said unasked (Stop pressed)
       const p = h.pending.get(m.id);
       if (!p) return;
       h.pending.delete(m.id);
@@ -84,6 +85,8 @@ export function lineHost(launch, { label = 'helper', readyMs = 20000, off = fals
     /** True once the host is running (starts it on first use). */
     available: async () => { const h = start(); return !!h && (await h.ready); },
     status: () => ({ on: !!host?.ok, error: host?.ok ? '' : lastError }),
+    /** Ends the helper now (what it was doing stops with it; its calls fail). The next call starts a new one. */
+    kill: () => { const h = host; if (!h) return false; host = null; try { h.proc.kill(); } catch { /* gone */ } return true; },
   };
 }
 
