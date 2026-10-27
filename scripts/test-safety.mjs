@@ -23,6 +23,13 @@ import { saveProject, forgetProject } from '../server/store.js';
 import { startRun, runningForChat } from '../server/runs.js';
 
 const WIN = process.platform === 'win32';
+// Tests that open windows or send keystrokes take the screen and keyboard for minutes: they run on CI, and on a PC
+// only when asked (npm run test:desktop sets QX_DESKTOP_TESTS=1).
+const UI_SKIP = !WIN ? true : process.env.CI || process.env.QX_DESKTOP_TESTS === '1' ? false : 'opens windows: npm run test:desktop';
+// A small WinForms window with a title, and checks on it by title.
+const FORM = (title) => `Add-Type -AssemblyName System.Windows.Forms\n$f = New-Object Windows.Forms.Form; $f.Text = '${title}'\n[void]$f.ShowDialog()\n`;
+const formOpen = (title) => /powershell/i.test(execSync(`tasklist /FI "WINDOWTITLE eq ${title}" /NH`).toString());
+const closeForm = (title) => { try { execSync(`taskkill /FI "WINDOWTITLE eq ${title}" /F`, { stdio: 'ignore' }); } catch { /* gone */ } };
 const tmp = (name) => tempDir(`qx-${name}-`);
 const pingsLeft = () => (WIN ? (execSync('tasklist /FI "IMAGENAME eq PING.EXE" /NH').toString().match(/PING\.EXE/gi) || []).length : 0);
 
@@ -1231,29 +1238,63 @@ test('start_server: a plain dev-server start runs as before; a package fetched a
   assert.equal((await decide('npm run dev', { shell: 'cmd', root, rules: [], mode: 'strict' })).verdict, 'ask', 'only start_server lifts the plain start');
 });
 
-test('desktop: the agent reads and drives a WinForms app it started, and nothing else', { skip: !WIN }, async () => {
+// One window for the desktop tool's checks on the agent's own program (each test used to start its own): reading and
+// driving it, keys never reaching other windows, steps, typing that replaces, a right-button drag, a "replace it?"
+// Yes that asks first, and a window read until it settles.
+test('desktop: the agent drives a WinForms app it started: read, click, keys, steps, typing, drag, a "replace it?" card, settling', { skip: UI_SKIP }, async () => {
   const app = `Add-Type -AssemblyName System.Windows.Forms
-$f = New-Object Windows.Forms.Form; $f.Text = 'QX Agent Form'
+$f = New-Object Windows.Forms.Form; $f.Text = 'QX Agent Form'; $f.Width = 540; $f.Height = 460
 $l = New-Object Windows.Forms.Label; $l.Text = 'Count: 0'; $l.Top = 10; $l.Left = 10
-$b = New-Object Windows.Forms.Button; $b.Text = 'Add one'; $b.Top = 40; $b.Left = 10
+$b = New-Object Windows.Forms.Button; $b.Text = 'Add one'; $b.Top = 40; $b.Left = 10; $b.Width = 120; $b.Height = 40
 $script:n = 0; $b.Add_Click({ $script:n++; $l.Text = "Count: $script:n" })
-$f.Controls.AddRange(@($l, $b)); [void]$f.ShowDialog()`;
-  let job = null;
-  const { bodies } = await agentRun((b, i) => {
-    if (i === 0) return reply('', [['shell', { command: 'powershell -NoProfile -ExecutionPolicy Bypass -File app.ps1', background: true }]]);
-    if (i === 1) { job = toolOut([b], 0).match(/job (bg\d+)/)[1]; return reply('', [['desktop', { action: 'read', job }]]); }
-    if (i === 2) { const ref = toolOut([b], 0).match(/\[(\d+)\] Button "Add one"/)[1]; return reply('', [['desktop', { action: 'click', job, ref: Number(ref) }]]); }
-    if (i === 3) return reply('', [['desktop', { action: 'keys', job, keys: 'qx' }]]);
-    if (i === 4) return reply('', [['desktop', { action: 'read', job: 'bg9999' }]]);
-    if (i === 5) return reply('', [['job_stop', { job }]]);
-    return reply('Done.');
-  }, { prep: (d) => { fs.writeFileSync(path.join(d, 'app.ps1'), app); allow(d, 'powershell -noprofile -executionpolicy bypass -file app.ps1*'); } });
-  assert.match(toolOut(bodies, 2), /Window \d+:[\s\S]*Text "Count: 0"[\s\S]*\[\d+\] Button "Add one"/);
-  assert.match(toolOut(bodies, 3), /pressed[\s\S]*Count: 1/);
-  // Keys go to the app's own window, or (when Windows keeps another window in front) nowhere: never to that window.
-  assert.match(toolOut(bodies, 4), /sent the keys|Windows kept another window in front, so nothing was typed/);
-  assert.match(toolOut(bodies, 5), /no background job bg9999/);
-  assert.match(toolOut(bodies, 6), /0 processes left/);
+$t = New-Object Windows.Forms.TextBox; $t.Text = 'model'; $t.Top = 90; $t.Left = 10; $t.Width = 200
+$q = New-Object Windows.Forms.Label; $q.Text = 'model.vroid already exists. Do you want to replace it?'; $q.Top = 120; $q.Left = 10; $q.Width = 480
+$y = New-Object Windows.Forms.Button; $y.Text = 'Yes'; $y.Top = 145; $y.Left = 10
+$p = New-Object Windows.Forms.Panel; $p.Top = 180; $p.Left = 10; $p.Width = 300; $p.Height = 120; $p.BackColor = 'LightGray'
+$pr = New-Object Windows.Forms.Label; $pr.Text = 'Pressed: none'; $pr.Top = 305; $pr.Left = 10; $pr.Width = 300
+$p.Add_MouseDown({ param($s, $e) $pr.Text = "Pressed: $($e.Button)" })
+$st = New-Object Windows.Forms.Label; $st.Text = 'Idle'; $st.Top = 330; $st.Left = 10; $st.Width = 200
+$ld = New-Object Windows.Forms.Button; $ld.Text = 'Load'; $ld.Top = 355; $ld.Left = 10
+$tm = New-Object Windows.Forms.Timer; $tm.Interval = 1200; $tm.Add_Tick({ $st.Text = 'Loaded 42 items'; $tm.Stop() })
+$ld.Add_Click({ $st.Text = 'Loading'; $tm.Start() })
+$f.Controls.AddRange(@($l, $b, $t, $q, $y, $p, $pr, $st, $ld)); [void]$f.ShowDialog()`;
+  let job = null, at = null, seen = null; // seen: the read after the steps, whose refs the later clicks use
+  const cards = [];
+  const ref = (b, label) => Number(toolOut([b], 0).match(new RegExp(`\\[(\\d+)\\] ${label}`))[1]);
+  try {
+    const { bodies } = await agentRun((b, i) => {
+      if (i === 0) return reply('', [['shell', { command: 'powershell -NoProfile -ExecutionPolicy Bypass -File app.ps1', background: true }]]);
+      if (i === 1) { job = toolOut([b], 0).match(/job (bg\d+)/)[1]; return reply('', [['desktop', { action: 'read', job }]]); }
+      if (i === 2) { at = toolOut([b], 0).match(/Button "Add one" @(\d+),(\d+)/).slice(1).map(Number); return reply('', [['desktop', { action: 'click', job, ref: ref(b, 'Button "Add one"') }]]); }
+      if (i === 3) return reply('', [['desktop', { action: 'keys', job, keys: 'qx' }]]);
+      if (i === 4) return reply('', [['desktop', { action: 'read', job: 'bg9999' }]]);
+      if (i === 5) return reply('', [['desktop', { job, steps: [{ action: 'double_click', x: at[0], y: at[1] }, { action: 'wait_for', text: 'Count: 3', seconds: 5 }, { action: 'zoom', x: 0, y: 0, width: 150, height: 80 }, { action: 'resize', width: 560, height: 480 }] }]]);
+      if (i === 6) return reply('', [['desktop', { action: 'read', job }]]);
+      if (i === 7) { seen = b; return reply('', [['desktop', { action: 'type', job, ref: ref(seen, 'Edit'), text: 'rem-rezero' }]]); }
+      if (i === 8) return reply('', [['desktop', { action: 'click', job, ref: ref(seen, 'Button "Yes"') }]]);
+      if (i === 9) return reply('', [['desktop', { action: 'drag', job, x: 60, y: 230, to_x: 200, to_y: 270, button: 'right' }]]);
+      if (i === 10) return reply('', [['desktop', { action: 'click', job, ref: ref(seen, 'Button "Load"') }]]);
+      if (i === 11) return reply('', [['job_stop', { job }]]);
+      return reply('Done.');
+    }, { prep: (d) => { fs.writeFileSync(path.join(d, 'app.ps1'), app); allow(d, 'powershell -noprofile -executionpolicy bypass -file app.ps1*'); },
+      onEvent: (e, id) => { if (e.t === 'approval' && e.tool === 'desktop') { cards.push(e); setTimeout(() => answerApproval(id, e.id, { approve: false }), 10); } } });
+    assert.match(toolOut(bodies, 2), /Window \d+:[\s\S]*Text "Count: 0"[\s\S]*\[\d+\] Button "Add one"/);
+    assert.match(toolOut(bodies, 3), /pressed[\s\S]*Count: 1/);
+    // Keys go to the app's own window, or (when Windows keeps another window in front) nowhere: never to that window.
+    assert.match(toolOut(bodies, 4), /sent the keys|Windows kept another window in front, so nothing was typed/);
+    assert.match(toolOut(bodies, 5), /no background job bg9999/);
+    const steps = toolOut(bodies, 6);
+    assert.match(steps, /^Ran 4 of 4 steps:/, steps);
+    assert.match(steps, /2\. wait_for "Count: 3": "Count: 3" is there/, 'the double click reached the button through the same pixels the read gave');
+    assert.match(steps, /3\. zoom at 0,0: Zoomed in/);
+    assert.match(steps, /4\. resize: resized it to 560x480/);
+    assert.match(toolOut(bodies, 8), /^typed it \(it held "model" before\); it now holds "rem-rezero"/, toolOut(bodies, 8));
+    assert.match(toolOut(bodies, 9), /^The user didn't let you click “Yes”.*Answer the dialog the safe way/, toolOut(bodies, 9));
+    assert.match(cards[0]?.why || '', /already exists\. Do you want to replace it\?/);
+    assert.match(toolOut(bodies, 10), /^right-dragged from 60,230 to 200,270[\s\S]*Pressed: Right/, toolOut(bodies, 10));
+    assert.match(toolOut(bodies, 11), /Loaded 42 items/, 'read until it settled, not at "Loading"');
+    assert.match(toolOut(bodies, 12), /0 processes left/);
+  } finally { closeForm('QX Agent Form'); }
 });
 // ---------- P2: package guard, gamed tests, audit log ----------
 import { packagesOf, checkPackages } from '../server/pkgguard.js';
@@ -1606,10 +1647,7 @@ test('commands and the agent’s terminal start with no pager, editor or git pro
 // ---------- apps stay open after use (last: it starts background jobs) ----------
 // A program a command opened and left showing a window is what the command was for: it stays open, outside QuorX's
 // job, so the agent and the user can keep using it. Windowless leftovers (a stray ping) are still ended.
-const FORM = (title) => `Add-Type -AssemblyName System.Windows.Forms\n$f = New-Object Windows.Forms.Form; $f.Text = '${title}'\n[void]$f.ShowDialog()\n`;
-const formOpen = (title) => /powershell/i.test(execSync(`tasklist /FI "WINDOWTITLE eq ${title}" /NH`).toString());
-const closeForm = (title) => { try { execSync(`taskkill /FI "WINDOWTITLE eq ${title}" /F`, { stdio: 'ignore' }); } catch { /* gone */ } };
-test('stop: a window a command opened stays open after it; a windowless leftover is still ended', { skip: !WIN }, async () => {
+test('stop: a window a command opened stays open after it; a windowless leftover is still ended', { skip: UI_SKIP }, async () => {
   const root = tmp('kept');
   fs.writeFileSync(path.join(root, 'form.ps1'), FORM('QX Kept Form'));
   try {
@@ -1624,7 +1662,7 @@ test('stop: a window a command opened stays open after it; a windowless leftover
   } finally { closeForm('QX Kept Form'); }
 });
 
-test('desktop: a background job whose launcher exits keeps running while its window is open, and job_stop ends it', { skip: !WIN }, async () => {
+test('desktop: a background job whose launcher exits keeps running while its window is open, and job_stop ends it', { skip: UI_SKIP }, async () => {
   let job = null;
   try {
     const { bodies } = await agentRun((b, i) => {
@@ -1805,35 +1843,6 @@ test('computer use: steps take the app from the step before when only the first 
 });
 
 // Last (it starts a background job): the agent's own WinForms program, driven with the new actions in one call.
-test('desktop: steps run several actions at once: double-click, wait for text, zoom and resize', { skip: !WIN }, async () => {
-  const app = `Add-Type -AssemblyName System.Windows.Forms
-$f = New-Object Windows.Forms.Form; $f.Text = 'QX Steps Form'; $f.Width = 320; $f.Height = 220
-$l = New-Object Windows.Forms.Label; $l.Text = 'Count: 0'; $l.Top = 10; $l.Left = 10
-$b = New-Object Windows.Forms.Button; $b.Text = 'Add one'; $b.Top = 40; $b.Left = 10; $b.Width = 120; $b.Height = 40
-$script:n = 0; $b.Add_Click({ $script:n++; $l.Text = "Count: $script:n" })
-$f.Controls.AddRange(@($l, $b)); [void]$f.ShowDialog()`;
-  let job = null, at = null;
-  try {
-    const { bodies } = await agentRun((b, i) => {
-      if (i === 0) return reply('', [['shell', { command: 'powershell -NoProfile -ExecutionPolicy Bypass -File app.ps1', background: true }]]);
-      if (i === 1) { job = toolOut([b], 0).match(/job (bg\d+)/)[1]; return reply('', [['desktop', { action: 'read', job }]]); }
-      if (i === 2) {
-        at = toolOut([b], 0).match(/Button "Add one" @(\d+),(\d+)/).slice(1).map(Number);
-        return reply('', [['desktop', { job, steps: [{ action: 'double_click', x: at[0], y: at[1] }, { action: 'wait_for', text: 'Count: 2', seconds: 5 }, { action: 'zoom', x: 0, y: 0, width: 150, height: 80 }, { action: 'resize', width: 420, height: 300 }] }]]);
-      }
-      if (i === 3) return reply('', [['job_stop', { job }]]);
-      return reply('Done.');
-    }, { prep: (d) => { fs.writeFileSync(path.join(d, 'app.ps1'), app); allow(d, 'powershell -noprofile -executionpolicy bypass -file app.ps1*'); } });
-    const out = toolOut(bodies, 3);
-    assert.match(out, /^Ran 4 of 4 steps:/, out);
-    assert.match(out, /1\. double_click at \d+,\d+: double-clicked/);
-    assert.match(out, /2\. wait_for "Count: 2": "Count: 2" is there/, 'the double click reached the button through the same pixels the read gave');
-    assert.match(out, /3\. zoom at 0,0: Zoomed in/);
-    assert.match(out, /4\. resize: resized it to 420x300/);
-    assert.match(toolOut(bodies, 4), /0 processes left/);
-  } finally { closeForm('QX Steps Form'); }
-});
-
 // ---------- folders outside the project, added to a chat ----------
 test('folders: a write outside the project asks once to add its folder, then works there directly', async () => {
   const other = tmp('added'), file = path.join(other, 'index.html');
@@ -1937,7 +1946,7 @@ test('rules: each command a rule lets through counts one use; a chat rule\'s use
 });
 
 // ---------- Phase 5: white captures, text from pictures, app lifetime, remembered apps ----------
-test('desktop: a flat white capture is taken again from the screen; a window\'s text is read from its picture', { skip: !WIN }, async () => {
+test('desktop: a flat white capture is taken again from the screen; a window\'s text is read from its picture', { skip: UI_SKIP }, async () => {
   const { windowShot, shotVia, windowText } = await import('../server/uia.js');
   const { startBackground, stopBackground } = await import('../server/bgjobs.js');
   const root = tmp('flat');
@@ -1954,7 +1963,7 @@ test('desktop: a flat white capture is taken again from the screen; a window\'s 
   } finally { for (const j of jobs) await stopBackground(j.id).catch(() => {}); closeForm('QX White Form'); closeForm('QX Words Form'); }
 });
 
-test('desktop: a background job\'s window survives QuorX letting go of its job (a restart)', { skip: !WIN }, async () => {
+test('desktop: a background job\'s window survives QuorX letting go of its job (a restart)', { skip: UI_SKIP }, async () => {
   const { runLine } = await import('../server/workspace.js');
   const { closeJob } = await import('../server/jobhost.js');
   const root = tmp('keepjob');
@@ -1970,7 +1979,7 @@ test('desktop: a background job\'s window survives QuorX letting go of its job (
   } finally { closeForm('QX Keep Job Form'); }
 });
 
-test('desktop screenshot: named by reply too, and a model that can\'t see is pointed to read_text (the user hears once)', { skip: !WIN }, async () => {
+test('desktop screenshot: named by reply too, and a model that can\'t see is pointed to read_text (the user hears once)', { skip: UI_SKIP }, async () => {
   let job = null;
   try {
     const { bodies, events, id } = await agentRun((b, i) => {
@@ -1986,37 +1995,7 @@ test('desktop screenshot: named by reply too, and a model that can\'t see is poi
   } finally { closeForm('QX Shot Name Form'); }
 });
 
-test('desktop: type replaces and reads back, a right-button drag reaches the app, and a "replace it?" Yes asks first', { skip: !WIN }, async () => {
-  const app = `Add-Type -AssemblyName System.Windows.Forms
-$f = New-Object Windows.Forms.Form; $f.Text = 'QX Dialog Form'; $f.Width = 520; $f.Height = 360
-$t = New-Object Windows.Forms.TextBox; $t.Text = 'model'; $t.Top = 10; $t.Left = 10; $t.Width = 200
-$q = New-Object Windows.Forms.Label; $q.Text = 'model.vroid already exists. Do you want to replace it?'; $q.Top = 40; $q.Left = 10; $q.Width = 480
-$y = New-Object Windows.Forms.Button; $y.Text = 'Yes'; $y.Top = 70; $y.Left = 10
-$p = New-Object Windows.Forms.Panel; $p.Top = 110; $p.Left = 10; $p.Width = 300; $p.Height = 150; $p.BackColor = 'LightGray'
-$b = New-Object Windows.Forms.Label; $b.Text = 'Pressed: none'; $b.Top = 270; $b.Left = 10; $b.Width = 300
-$p.Add_MouseDown({ param($s, $e) $b.Text = "Pressed: $($e.Button)" })
-$f.Controls.AddRange(@($t, $q, $y, $p, $b)); [void]$f.ShowDialog()`;
-  let job = null, cards = [];
-  try {
-    const { bodies } = await agentRun((b, i) => {
-      if (i === 0) return reply('', [['shell', { command: 'powershell -NoProfile -ExecutionPolicy Bypass -File app.ps1', background: true }]]);
-      if (i === 1) { job = toolOut([b], 0).match(/job (bg\d+)/)[1]; return reply('', [['desktop', { action: 'read', job }]]); }
-      const out = toolOut([b], 0);
-      if (i === 2) return reply('', [['desktop', { action: 'type', job, ref: Number(out.match(/\[(\d+)\] Edit/)[1]), text: 'rem-rezero' }]]);
-      if (i === 3) return reply('', [['desktop', { action: 'click', job, ref: Number(out.match(/\[(\d+)\] Button "Yes"/)[1]) }]]);
-      if (i === 4) return reply('', [['desktop', { action: 'drag', job, x: 60, y: 160, to_x: 200, to_y: 200, button: 'right' }]]);
-      if (i === 5) return reply('', [['job_stop', { job }]]);
-      return reply('Done.');
-    }, { prep: (d) => { fs.writeFileSync(path.join(d, 'app.ps1'), app); allow(d, 'powershell -noprofile -executionpolicy bypass -file app.ps1*'); },
-      onEvent: (e, id) => { if (e.t === 'approval' && e.tool === 'desktop') { cards.push(e); setTimeout(() => answerApproval(id, e.id, { approve: false }), 10); } } });
-    assert.match(toolOut(bodies, 3), /^typed it \(it held "model" before\); it now holds "rem-rezero"/, toolOut(bodies, 3));
-    assert.match(toolOut(bodies, 4), /^The user didn't let you click “Yes”.*Answer the dialog the safe way/, toolOut(bodies, 4));
-    assert.match(cards[0]?.why || '', /already exists\. Do you want to replace it\?/);
-    assert.match(toolOut(bodies, 5), /^right-dragged from 60,160 to 200,200[\s\S]*Pressed: Right/, toolOut(bodies, 5));
-  } finally { closeForm('QX Dialog Form'); }
-});
-
-test('desktop type: a Save dialog\'s file name is replaced, not added to', { skip: !WIN }, async () => {
+test('desktop type: a Save dialog\'s file name is replaced, not added to', { skip: UI_SKIP }, async () => {
   const app = `Add-Type -AssemblyName System.Windows.Forms
 $d = New-Object Windows.Forms.SaveFileDialog; $d.Title = 'QX Save Test'; $d.FileName = 'bat.png'; $d.InitialDirectory = $env:TEMP
 [void]$d.ShowDialog()`;
@@ -2034,27 +2013,6 @@ $d = New-Object Windows.Forms.SaveFileDialog; $d.Title = 'QX Save Test'; $d.File
     assert.match(toolOut(bodies, 4), /^typed it \(it held "bat(\.png)?" before\); it now holds "C:\\Temp\\quorx-bat\.png"/, toolOut(bodies, 4));
     assert.ok(toolOut(bodies, 3).length < 9000, `the folder tree and file rows are collapsed (${toolOut(bodies, 3).length} chars)`);
   } finally { closeForm('QX Save Test'); }
-});
-
-test('desktop: after a click the window is read until it settles, so a change a moment later is seen', { skip: !WIN }, async () => {
-  const app = `Add-Type -AssemblyName System.Windows.Forms
-$f = New-Object Windows.Forms.Form; $f.Text = 'QX Settle Form'; $f.Width = 320; $f.Height = 200
-$l = New-Object Windows.Forms.Label; $l.Text = 'Idle'; $l.Top = 10; $l.Left = 10; $l.Width = 200
-$b = New-Object Windows.Forms.Button; $b.Text = 'Load'; $b.Top = 40; $b.Left = 10
-$t = New-Object Windows.Forms.Timer; $t.Interval = 1200; $t.Add_Tick({ $l.Text = 'Loaded 42 items'; $t.Stop() })
-$b.Add_Click({ $l.Text = 'Loading'; $t.Start() })
-$f.Controls.AddRange(@($l, $b)); [void]$f.ShowDialog()`;
-  let job = null;
-  try {
-    const { bodies } = await agentRun((b, i) => {
-      if (i === 0) return reply('', [['shell', { command: 'powershell -NoProfile -ExecutionPolicy Bypass -File app.ps1', background: true }]]);
-      if (i === 1) { job = toolOut([b], 0).match(/job (bg\d+)/)[1]; return reply('', [['desktop', { action: 'read', job }]]); }
-      if (i === 2) return reply('', [['desktop', { action: 'click', job, ref: Number(toolOut([b], 0).match(/\[(\d+)\] Button "Load"/)[1]) }]]);
-      if (i === 3) return reply('', [['job_stop', { job }]]);
-      return reply('Done.');
-    }, { prep: (d) => { fs.writeFileSync(path.join(d, 'app.ps1'), app); allow(d, 'powershell -noprofile -executionpolicy bypass -file app.ps1*'); } });
-    assert.match(toolOut(bodies, 3), /Loaded 42 items/, toolOut(bodies, 3).slice(0, 600));
-  } finally { closeForm('QX Settle Form'); }
 });
 
 test('app notes: learned points are kept per app across chats, without repeats, and only for apps the chat opened', async () => {
