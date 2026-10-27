@@ -854,6 +854,24 @@ test('the browser tells the agent whether the page made a sound, which nobody ca
   assert.match(out(5), /Sound: the page started 2 sounds \(1 of 1 Web Audio context running\)/);
 });
 
+test('checks: a site at the top of the project is checked when it or a file it links to changed, not for any new file beside it', async () => {
+  const prep = (d) => {
+    fs.writeFileSync(path.join(d, 'index.html'), '<!doctype html><link rel="stylesheet" href="style.css"><script src="./app.js"></script><button>Add</button>');
+    fs.writeFileSync(path.join(d, 'style.css'), 'body{}'); fs.writeFileSync(path.join(d, 'app.js'), '1');
+    fs.mkdirSync(path.join(d, '.quorx'), { recursive: true });
+    fs.writeFileSync(path.join(d, '.quorx', 'launch.json'), JSON.stringify({ configurations: [{ name: 'site', command: 'node', args: ['.quorx/serve.mjs', 'index.html'] }] }));
+  };
+  const tried = async (file) => {
+    let b = 0, asked = 0;
+    const { events } = await run((body) => [reply('', [['write_file', { path: file, content: '<p>x</p>' }]]), reply('Done.')][b++], { prep, settings: { tools: { browser: { on: true } }, review: 'off' }, openTab: async () => { asked++; throw new Error('no browser in this test'); } });
+    return { asked, verify: of(events, 'verify') };
+  };
+  const other = await tried('quorx-art.html');
+  assert.equal(other.asked, 0, 'a new page beside index.html doesn\'t send index.html to the checks');
+  const linkedFile = await tried('app.js');
+  assert.ok(linkedFile.asked > 0, 'a file index.html links to does');
+});
+
 test('a browser that will not start is a note from the checks, never a problem sent back to the agent', async () => {
   let b = 0;
   const { events } = await run((body) => [

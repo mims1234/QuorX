@@ -966,7 +966,7 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   // "Ignore the context of quorx in this project for this activity": said in words, it switches the chat to Own chat
   // (the page keeps it, and the header's checkbox undoes it).
   // (Typos count: the user wrote "ignroe". A folder "outside the project" is about reading it, not about this chat.)
-  const OFF_WORDS = /\b(ign[a-z]{2,4}|skip|leave out|don['’]?t use|do not use|without)\b[^.\n]{0,40}\b(context|notes|memory)\b[^.\n]{0,40}\b(this|the) project\b|\b(not about|nothing to do with|unrelated to|not related to)\b[^.\n]{0,12}\b(this|the) project\b|\boff[- ]project\b/i;
+  const OFF_WORDS = /\b(ign[a-z]{2,4}|skip|leave out|don['’]?t use|do not use|without)\b[^.\n]{0,40}\b(context|notes|memory)\b[^.\n]{0,40}\b(this|the) project\b|\b(ign[a-z]{2,4}|skip|leave out|don['’]?t use|do not use|without)\b[^.\n]{0,20}\b(this|the) project(['’]s)? (context|notes|memory)\b|\b(not about|nothing to do with|unrelated to|not related to)\b[^.\n]{0,12}\b(this|the) project\b|\boff[- ]project\b/i;
   const offSaid = root && req.chatId && !offProject && OFF_WORDS.test(String(req.text || '')) ? clip(String(req.text).match(OFF_WORDS)[0], 80) : '';
   if (offSaid) offProject = true; // the page hears it once at() exists, below
   const chatNotesRel = root && req.chatId && validId(String(req.chatId)) ? `.quorx/chats/${req.chatId}.md` : '';
@@ -1384,7 +1384,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (last && step > 0) messages.push({ role: 'user', content: '(You have reached the step limit for this reply. Do not call tools. Tell the user briefly what you did, what works, and what is left to do.)' });
     // Keep the conversation inside the model's window: trim old file bodies, then summarise if that is not enough.
     const saved = trimTranscript(messages, { at: trimAt, to: Math.round(trimAt / 2), done: trimmedOnce });
-    const views = trimPageViews(messages, { done: trimmedOnce });
+    const views = trimPageViews(messages, { done: trimmedOnce, names: ['browser', 'desktop'] }); // desktop too: a window read after every step filled the model's context in the VRoid and Paint replies
     if (views) { run.trimmed += views; emit({ t: 'trimmed', step, saved: views, size: transcriptChars(messages), at: at() }); }
     if (saved) { run.trimmed += saved; run.trimEvents = (run.trimEvents || 0) + 1; emit({ t: 'trimmed', step, saved, size: transcriptChars(messages), at: at() }); }
     if (transcriptChars(messages) > trimAt * 2 && compactTranscript(messages, firstOwn, progressSummary(), 10)) emit({ t: 'compacted_run', step, size: transcriptChars(messages), at: at() });
@@ -2118,9 +2118,13 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     // Only a site whose own files changed: its page, or a file in its folder (for a page at the top of the project,
     // a file at the top). A change in one site doesn't send the reviewer through every other site of the project.
     const changed = root ? changedFiles(root, filesId).map((f) => String(f).replaceAll('\\', '/')).filter((f) => /\.(html?|css|m?js)$/i.test(f)) : [];
+    // A page at the top of the project shares its folder with everything else there, so only the page and the files it
+    // links to (href, src) count: a new quorx-art.html next to a to-do app's index.html sent its Add button to the checks.
+    const linked = (e) => { try { return new Set([...fs.readFileSync(path.join(root, e), 'utf8').matchAll(/\b(?:href|src)\s*=\s*["']([^"'#?]+)/gi)].map((m) => path.posix.normalize(m[1].replace(/^\.\//, '')))); } catch { return new Set(); } };
     const ofSite = (entry) => {
       const e = String(entry).replaceAll('\\', '/').replace(/^\.\//, ''), dir = path.posix.dirname(e);
-      return changed.some((f) => f === e || (dir === '.' ? !f.includes('/') : f.startsWith(`${dir}/`)));
+      if (dir === '.') { const refs = linked(e); return changed.some((f) => f === e || refs.has(f)); }
+      return changed.some((f) => f === e || f.startsWith(`${dir}/`));
     };
     for (const lc of launchConfigs(projectId)) if (lc.args?.[0] === '.quorx/serve.mjs' && lc.args[1] && ofSite(lc.args[1])) { const t = `site:${lc.args[1]}`; if (!targets.includes(t)) targets.push(t); }
     for (const a of arts.values()) if (a.kind === 'site' && a.url?.startsWith(`/ws/${projectId}/`) && ofSite(a.url.slice(`/ws/${projectId}/`.length))) { const t = `site:${a.url.slice(`/ws/${projectId}/`.length)}`; if (!targets.includes(t)) targets.push(t); }

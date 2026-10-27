@@ -1719,6 +1719,8 @@ test('chat notes: "ignore the context of this project" in the user\'s words make
   const off = await agentRun((b, i) => [reply('OK.')][i], { chatId: 'offwords1', prep, more: { text: 'ignroe the context of quorx in this project for this activity ok. Open VS Code.' } });
   assert.doesNotMatch(JSON.stringify(off.bodies[0].messages), /ZEBRA/);
   assert.ok(off.events.some((e) => e.t === 'chat_off_project'), 'the page hears it and keeps it');
+  const off2 = await agentRun((b, i) => [reply('OK.')][i], { chatId: 'offwords3', prep, more: { text: 'ignore this project context and work on this but save in this project' } });
+  assert.ok(off2.events.some((e) => e.t === 'chat_off_project'), '"this project context" too');
   const on = await agentRun((b, i) => [reply('OK.')][i], { chatId: 'offwords2', prep, more: { text: 'Fix the bug in this project, and read the folder outside the project too.' } });
   assert.match(JSON.stringify(on.bodies[0].messages), /ZEBRA/);
   assert.ok(!on.events.some((e) => e.t === 'chat_off_project'));
@@ -2012,6 +2014,26 @@ $f.Controls.AddRange(@($t, $q, $y, $p, $b)); [void]$f.ShowDialog()`;
     assert.match(cards[0]?.why || '', /already exists\. Do you want to replace it\?/);
     assert.match(toolOut(bodies, 5), /^right-dragged from 60,160 to 200,200[\s\S]*Pressed: Right/, toolOut(bodies, 5));
   } finally { closeForm('QX Dialog Form'); }
+});
+
+test('desktop type: a Save dialog\'s file name is replaced, not added to', { skip: !WIN }, async () => {
+  const app = `Add-Type -AssemblyName System.Windows.Forms
+$d = New-Object Windows.Forms.SaveFileDialog; $d.Title = 'QX Save Test'; $d.FileName = 'bat.png'; $d.InitialDirectory = $env:TEMP
+[void]$d.ShowDialog()`;
+  let job = null;
+  try {
+    const { bodies } = await agentRun((b, i) => {
+      if (i === 0) return reply('', [['shell', { command: 'powershell -NoProfile -ExecutionPolicy Bypass -File save.ps1', background: true }]]);
+      if (i === 1) { job = toolOut([b], 0).match(/job (bg\d+)/)[1]; return reply('', [['desktop', { action: 'wait_for', job, text: 'File name', seconds: 15 }]]); }
+      if (i === 2) return reply('', [['desktop', { action: 'read', job }]]);
+      if (i === 3) { const ref = Number(toolOut([b], 0).match(/\[(\d+)\] (?:Edit|ComboBox) "File name:"/)?.[1]); return reply('', [['desktop', { action: 'type', job, ref, text: 'C:\\Temp\\quorx-bat.png' }]]); }
+      if (i === 4) return reply('', [['job_stop', { job }]]);
+      return reply('Done.');
+    }, { prep: (d) => { fs.writeFileSync(path.join(d, 'save.ps1'), app); allow(d, 'powershell -noprofile -executionpolicy bypass -file save.ps1*'); } });
+    assert.match(toolOut(bodies, 3), /(\[\d+\] (Edit|ComboBox) "File name:")/, 'the File name box is in the read, not cut off by the folder tree');
+    assert.match(toolOut(bodies, 4), /^typed it \(it held "bat(\.png)?" before\); it now holds "C:\\Temp\\quorx-bat\.png"/, toolOut(bodies, 4));
+    assert.ok(toolOut(bodies, 3).length < 9000, `the folder tree and file rows are collapsed (${toolOut(bodies, 3).length} chars)`);
+  } finally { closeForm('QX Save Test'); }
 });
 
 test('desktop open: app names match loosely (spaces, case, version numbers)', { skip: !WIN || !!process.env.CI }, async () => {

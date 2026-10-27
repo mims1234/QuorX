@@ -220,18 +220,25 @@ public static class QxUia {
     int lines = 0;
     RECT wr; GetWindowRect(new IntPtr(handle), out wr);
     System.Windows.Rect origin = new System.Windows.Rect(wr.L, wr.T, Math.Max(0, wr.R - wr.L), Math.Max(0, wr.B - wr.T));
-    Walk(el, 0, 0, depth, max, list, sb, ref lines, origin);
+    int off = 0, offHidden = 0;
+    Walk(el, 0, 0, depth, max, list, sb, ref lines, origin, ref off, ref offHidden);
     Refs[handle] = list;
+    if (offHidden > 0) sb.Append("… ").Append(offHidden).Append(" more controls are off screen and not listed: scroll to them, then read again\n");
     if (lines >= max) sb.Append("… (more controls not shown)\n");
     return sb.ToString();
   }
+  // A long list (a Save dialog's folder tree, its file rows) filled the read before the File name box and the Save
+  // button: past the first few, controls off screen are only counted, and a run of one kind of control under one
+  // parent stops after SameRun with a count.
+  const int OffShown = 8, SameRun = 20;
 
   static string Clip(string s, int n) { if (s == null) return ""; s = s.Replace("\r", " ").Replace("\n", " "); return s.Length > n ? s.Substring(0, n) + "…" : s; }
 
-  static void Walk(AutomationElement e, int indent, int level, int depth, int max, List<AutomationElement> list, StringBuilder sb, ref int lines, System.Windows.Rect origin) {
+  static void Walk(AutomationElement e, int indent, int level, int depth, int max, List<AutomationElement> list, StringBuilder sb, ref int lines, System.Windows.Rect origin, ref int off, ref int offHidden) {
     if (lines >= max || level > depth) return;
     AutomationElement.AutomationElementInformation c;
     try { c = e.Current; } catch { return; }
+    if (c.IsOffscreen && level > 0 && ++off > OffShown) { offHidden++; return; } // its children are off screen too
     string type = c.ControlType.ProgrammaticName.Replace("ControlType.", "");
     string name = Clip(c.Name, 80);
     bool inter = Interactive.Contains(type) && c.IsEnabled;
@@ -256,10 +263,17 @@ public static class QxUia {
     TreeWalker walker = TreeWalker.ControlViewWalker;
     AutomationElement ch = null;
     try { ch = walker.GetFirstChild(e); } catch { }
+    Dictionary<string, int> kinds = new Dictionary<string, int>();
+    Dictionary<string, int> skipped = new Dictionary<string, int>();
     while (ch != null && lines < max) {
-      Walk(ch, show ? indent + 1 : indent, level + 1, depth, max, list, sb, ref lines, origin);
+      string k = "";
+      try { k = ch.Current.ControlType.ProgrammaticName.Replace("ControlType.", ""); } catch { }
+      int n; kinds.TryGetValue(k, out n); kinds[k] = ++n;
+      if (n > SameRun && k != "Pane" && k != "Group" && k != "Custom") { int s; skipped.TryGetValue(k, out s); skipped[k] = s + 1; }
+      else Walk(ch, show ? indent + 1 : indent, level + 1, depth, max, list, sb, ref lines, origin, ref off, ref offHidden);
       try { ch = walker.GetNextSibling(ch); } catch { break; }
     }
+    foreach (KeyValuePair<string, int> s in skipped) { sb.Append(new string(' ', (show ? indent + 1 : indent) * 2)).Append("… ").Append(s.Value).Append(" more ").Append(s.Key).Append(" (scroll or use find to reach one)\n"); lines++; }
   }
 
   static AutomationElement Ref(long handle, int r) {
@@ -345,7 +359,10 @@ public static class QxUia {
       Front(h, pids);
       e.SetFocus();
       if (Ours(GetForegroundWindow(), pids)) {
-        System.Windows.Forms.SendKeys.SendWait("^a" + Escape(text));
+        // Ctrl+Home, Ctrl+Shift+End selects what the field holds in every kind of text box: the classic one in a Save
+        // dialog ignores Ctrl+A (the name went in after the old one: "bat.pngC:\..."), and in a drawing app Ctrl+A
+        // selects the whole picture.
+        System.Windows.Forms.SendKeys.SendWait("^{HOME}^+{END}" + Escape(text));
         Thread.Sleep(150);
         keyed = true;
       }

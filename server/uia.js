@@ -101,7 +101,13 @@ const TITLE_BAR = /^\s*\[\d+\] (MenuItem "System"|Button "(Minimi[sz]e|Maximi[sz
  *  are added, read by Windows' text recognition, each with the point to click_at. */
 export async function readWindow(scope, handle, { depth = 25, max = 250 } = {}) {
   const p = await pick(scope, handle);
-  const r = await U.call('tree', { ...p, depth, max }, 30000);
+  // A window still filling in (a Save dialog listing its folders) can drop controls while they are read: wait a
+  // little and read again before giving up. A read that timed out is not tried again.
+  let r;
+  for (let i = 0; ; i++) {
+    try { r = await U.call('tree', { ...p, depth, max }, 30000); break; }
+    catch (e) { if (i >= 2 || /timed out/i.test(e.message)) throw e; await new Promise((ok) => setTimeout(ok, 700 * (i + 1))); }
+  }
   const text = r.nodes ? treeText(r.nodes, { more: r.more }) : r.text;
   const own = String(text).split('\n').filter((l) => /^\s*\[\d+\]/.test(l) && !TITLE_BAR.test(l));
   if (OS !== 'win32' || own.length) return { ...p, text };
