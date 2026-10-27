@@ -41,7 +41,9 @@ test('ready waits for a "Loading…" shell to fill in, and reports a page that n
   assert.match((await tab.summary()).text, /Post number 4/);
   const busy = await tab.eval(`(() => { setInterval(() => { document.body.append(document.createElement('i')); }, 100); return 1; })()`);
   assert.equal(busy, 1);
-  const r2 = await tab.ready({ quiet: 500, cap: 1200 });
+  // (A slow machine runs a background tab's timers about once a second: a quiet window longer than that still sees
+  // the page change, so it can't pass for quiet.)
+  const r2 = await tab.ready({ quiet: 1500, cap: 3000 });
   assert.equal(r2.quiet, false);
 });
 
