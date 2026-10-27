@@ -35,7 +35,13 @@ export function lineHost(launch, { label = 'helper', readyMs = 20000, off = fals
     const timer = setTimeout(() => { if (!h.ok) { lastError = `the ${label} did not start within ${readyMs / 1000} s`; disabled = true; readyFn(false); try { proc.kill(); } catch { /* gone */ } } }, readyMs);
     // Replies are whole JSON lines, however long (a window's picture is one line of base64).
     const lines = lineSplitter((line) => {
-      let m; try { m = JSON.parse(line); } catch { return; }
+      // A reply that isn't JSON fails its call now: dropped, the call waited out its whole timeout (30-45 s after every
+      // desktop action in Discord, whose "•" came through as a control character).
+      let m; try { m = JSON.parse(line); } catch {
+        const id = Number(/"id"\s*:\s*(\d+)/.exec(line)?.[1]), p = h.pending.get(id);
+        if (p) { h.pending.delete(id); p.reject(new Error(`the ${label}'s answer couldn't be read`)); }
+        return;
+      }
       if (m.ready) { h.ok = true; clearTimeout(timer); readyFn(true); return; }
       const p = h.pending.get(m.id);
       if (!p) return;
@@ -43,6 +49,7 @@ export function lineHost(launch, { label = 'helper', readyMs = 20000, off = fals
       m.ok ? p.resolve(m) : p.reject(new Error(m.error || `${label} error`));
     }, Infinity);
     let err = '';
+    proc.stdout.setEncoding('utf8'); // the helpers write UTF-8; a character split between two chunks stays whole
     proc.stdout.on('data', (d) => lines.push(d));
     proc.stderr.on('data', (d) => { err = (err + d).slice(-2000); });
     proc.on('error', (e) => { lastError = e.message; });
