@@ -2566,8 +2566,9 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   // Strict mode: pause on a card until the user answers. "Always allow" applies to the rest of the conversation.
   // ⚡ YOLO: how long a question or an unsettled approval waits for the user (0 = it doesn't). Benchmarks never wait,
   // and scripted tests only when they set it.
-  // How long a card in a scheduled run waits for you before it counts as no: 10 minutes (Settings: schedCardWaitSecs).
-  function schedCardMs() { return Math.max(1, Math.min(86400, Number(S.schedCardWaitSecs) || 600)) * 1000; }
+  // How long a card in a scheduled run waits for you before it counts as no: the schedule's own wait (15 s unless
+  // set in its form; schedCardWaitSecs).
+  function schedCardMs() { return Math.max(1, Math.min(86400, Number(S.schedCardWaitSecs) || 15)) * 1000; }
   function yoloWait() {
     if (S.approval !== 'yolo' || req.bench || (deps.quiet && req.settings?.yoloWaitSecs == null)) return 0;
     return Math.max(0, Math.min(600, Number(S.yoloWaitSecs ?? DEFAULTS.yoloWaitSecs) || 0)) * 1000;
@@ -2591,7 +2592,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   }
   // wait: { ms, then, onTimeout } for a ⚡ YOLO card the deciders couldn't settle: after ms, onTimeout() answers it.
   async function askUser(card, wait = null) {
-    // A scheduled run has no one watching it: a card waits schedCardMs() (10 minutes), then counts as no and the run goes on (and
+    // A scheduled run has no one watching it: a card waits schedCardMs() (the schedule's wait, 15 s unless set), then counts as no and the run goes on (and
     // ends), so it never holds your Chrome tab, or the schedule's next turns, until you happen to look.
     if (!wait && req.scheduledBy) wait = { ms: schedCardMs(), then: 'skip', onTimeout: () => ({ approve: false, by: 'timeout', reason: `No answer within ${Math.round(schedCardMs() / 1000)} s, and this is a scheduled run, so it was skipped` }) };
     const ms = wait?.ms || 0;
@@ -4259,6 +4260,14 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
   }
   // A site the request didn't name asks before it opens in the user's own Chrome (once per site per reply). Sites the
   // user named, lent or already allowed don't ask.
+  // The text (trimmed) when the user's messages contain it word for word, as a whole word or phrase: "ldrop" in "type
+  // ldrop", not "drop". Two characters at least, and at most 300, so a stray letter never counts.
+  function textInRequest(text) {
+    const t = String(text || '').replace(/﻿/g, '').trim();
+    if (t.length < 2 || t.length > 300) return '';
+    const esc = t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+    return new RegExp(`(^|[^\\p{L}\\p{N}])${esc}([^\\p{L}\\p{N}]|$)`, 'iu').test(userTurns().join('\n')) ? t : '';
+  }
   function namedInRequest(host) {
     const said = userTurns().join('\n').toLowerCase();
     if (!host || said.includes(host)) return true;
@@ -4371,8 +4380,12 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
         emit({ t: 'note', level: 'info', msg: `Trusted schedule: ran without asking in your tab on ${host}: ${risk || ro}${holds ? ` (the box held ${holds})` : ''}.`, at: at() });
         risk = null; ro = null;
       }
+      // Text the user's own request names word for word ("type ldrop" in the bot channel) is what they asked for:
+      // typing it, or Enter with exactly it in the box, needs no second guess. Anything else the agent writes does.
+      const named = textInRequest(args.action === 'type' ? args.text : sends ? box?.value : '');
+      if (named) emit({ t: 'note', level: 'info', msg: `No check needed in your tab on ${host}: "${clip(named, 80)}" is in your request word for word.`, at: at() });
       // A decider no never blocks on its own: it brings the step to the user like the other two.
-      const doubt = !trusted && !risk && !ro && (args.action === 'type' || (args.action === 'press' && /enter/i.test(String(args.key || 'Enter')))) ? await deciderFit(host, args) : null;
+      const doubt = !trusted && !named && !risk && !ro && (args.action === 'type' || (args.action === 'press' && /enter/i.test(String(args.key || 'Enter')))) ? await deciderFit(host, args) : null;
       if (risk || ro || doubt) {
         const what = risk || ro || doubt.desc;
         const why = risk ? 'This acts in your own account, so only you can allow it.'

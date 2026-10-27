@@ -2978,3 +2978,5 @@ body.dev-build::before { content: ''; position: fixed; left: 0; right: 0; top: 0
 a.md-pathlink.md-path, .md-pathtext.md-path { color: var(--accent); }
 .sc-trusted { color: var(--ok, #22c55e); border-color: color-mix(in srgb, var(--ok, #22c55e) 45%, var(--line)); }
 .sc-trust, .sc-trust span { white-space: normal; min-width: 0; }
+.sc-wait { font-size: 11.5px; color: var(--muted); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.sc-wait input { width: 64px; font: 12px var(--mono); }
