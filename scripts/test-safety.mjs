@@ -2036,6 +2036,45 @@ $d = New-Object Windows.Forms.SaveFileDialog; $d.Title = 'QX Save Test'; $d.File
   } finally { closeForm('QX Save Test'); }
 });
 
+test('desktop: after a click the window is read until it settles, so a change a moment later is seen', { skip: !WIN }, async () => {
+  const app = `Add-Type -AssemblyName System.Windows.Forms
+$f = New-Object Windows.Forms.Form; $f.Text = 'QX Settle Form'; $f.Width = 320; $f.Height = 200
+$l = New-Object Windows.Forms.Label; $l.Text = 'Idle'; $l.Top = 10; $l.Left = 10; $l.Width = 200
+$b = New-Object Windows.Forms.Button; $b.Text = 'Load'; $b.Top = 40; $b.Left = 10
+$t = New-Object Windows.Forms.Timer; $t.Interval = 1200; $t.Add_Tick({ $l.Text = 'Loaded 42 items'; $t.Stop() })
+$b.Add_Click({ $l.Text = 'Loading'; $t.Start() })
+$f.Controls.AddRange(@($l, $b)); [void]$f.ShowDialog()`;
+  let job = null;
+  try {
+    const { bodies } = await agentRun((b, i) => {
+      if (i === 0) return reply('', [['shell', { command: 'powershell -NoProfile -ExecutionPolicy Bypass -File app.ps1', background: true }]]);
+      if (i === 1) { job = toolOut([b], 0).match(/job (bg\d+)/)[1]; return reply('', [['desktop', { action: 'read', job }]]); }
+      if (i === 2) return reply('', [['desktop', { action: 'click', job, ref: Number(toolOut([b], 0).match(/\[(\d+)\] Button "Load"/)[1]) }]]);
+      if (i === 3) return reply('', [['job_stop', { job }]]);
+      return reply('Done.');
+    }, { prep: (d) => { fs.writeFileSync(path.join(d, 'app.ps1'), app); allow(d, 'powershell -noprofile -executionpolicy bypass -file app.ps1*'); } });
+    assert.match(toolOut(bodies, 3), /Loaded 42 items/, toolOut(bodies, 3).slice(0, 600));
+  } finally { closeForm('QX Settle Form'); }
+});
+
+test('app notes: learned points are kept per app across chats, without repeats, and only for apps the chat opened', async () => {
+  const { readNotes, addNotes } = await import('../server/appnotes.js');
+  addNotes('app', 'Paint 11.2', '- New shapes stay selected: click outside before drawing the next\nCtrl+A selects the whole canvas');
+  addNotes('app', 'paint', 'Ctrl+A selects the whole canvas\n- Text tool: click the canvas, then type');
+  const n = readNotes('app', 'Paint');
+  assert.equal(n.split('\n').length, 3, n);
+  assert.match(n, /^- New shapes stay selected/);
+  const apps = [{ name: 'Visual Studio Code', appId: 'Microsoft.VisualStudioCode', level: 'view' }];
+  const { bodies } = await agentRun((b, i) => [
+    reply('', [['desktop', { action: 'learn', app: 'Visual Studio Code', text: 'Cline opens from View > Open View > Cline' }]]),
+    reply('', [['desktop', { action: 'learn', app: 'Notepad', text: 'x' }]]),
+    reply('OK.'),
+  ][i], { chatId: 'appnotes1', settings: { appsAccess: true }, more: { apps } });
+  assert.match(toolOut(bodies, 1), /^Saved for Visual Studio Code/);
+  assert.match(readNotes('app', 'Visual Studio Code'), /Open View > Cline/);
+  assert.match(toolOut(bodies, 2), /^Error: give app: the name of an app this chat opened \("Notepad" isn't one\)/);
+});
+
 test('desktop open: app names match loosely (spaces, case, version numbers)', { skip: !WIN || !!process.env.CI }, async () => {
   const { findApps } = await import('../server/uia.js');
   for (const n of ['Calculator', 'calculator', 'Calcu lator', 'CALCULATOR 11.2']) assert.equal((await findApps(n))[0]?.name, 'Calculator', n);
