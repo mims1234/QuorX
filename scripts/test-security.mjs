@@ -12,7 +12,7 @@ import { hostAllowed, crossSiteApi, gate, isLoopback, appGate, appKey, handoffPu
 import { privateAddress } from '../server/safefetch.js';
 import { startSignIn } from '../server/oauth.js';
 import { decide, agentWriteBlocked } from '../server/cmdpolicy.js';
-import { safePath, checkCommand, preApproved, searchFiles, childEnv, runLine } from '../server/workspace.js';
+import { safePath, fullLocalPath, checkCommand,preApproved, searchFiles, childEnv, runLine } from '../server/workspace.js';
 import { userEnv, mergePath } from '../server/userenv.js';
 import { needsAdmin, adminForAgent } from '../server/elevation.js';
 import { externalize, blobData } from '../server/blobs.js';
@@ -61,6 +61,19 @@ test('file paths stay inside the project: links, streams and device names too', 
     try { fs.symlinkSync(outside, path.join(root, 'link'), 'junction'); } catch { linked = false; }
     if (linked) assert.throws(() => safePath(root, 'link/secret.txt'), /through a link/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(outside, { recursive: true, force: true }); }
+});
+
+test('a path a reply names: full ones on this computer, relative ones in the project, never a network path', () => {
+  assert.equal(fullLocalPath('site/index.html'), '', 'relative: looked up in the project');
+  assert.equal(fullLocalPath('\\\\server\\share\\x.txt'), null);
+  assert.equal(fullLocalPath('//server/share/x.txt'), null);
+  assert.equal(fullLocalPath('file://server/share/x.txt'), null);
+  if (process.platform === 'win32') {
+    assert.equal(fullLocalPath('D:\\Work\\a.txt'), 'D:\\Work\\a.txt');
+    assert.equal(fullLocalPath('D:/Work/a.txt'), 'D:\\Work\\a.txt');
+    assert.equal(fullLocalPath('file:///D:/Work/a%20b.txt'), 'D:\\Work\\a b.txt');
+    assert.equal(fullLocalPath('\\Work\\a.txt'), '', 'no drive letter: in the project');
+  } else assert.equal(fullLocalPath('/tmp/a.txt'), '/tmp/a.txt');
 });
 
 test('{PORT} is allowed in server arguments; shell characters are not', () => {
