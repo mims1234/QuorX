@@ -156,8 +156,12 @@ async function headlessTransport({ own = false } = {}) {
   const { port } = await ensureBrowser();
   let t;
   if (own) {
-    if (!userContext || userContext.port !== port) userContext = { port, id: (await browserCall(port, 'Target.createBrowserContext', { disposeOnDetach: false })).browserContextId };
-    const { targetId } = await browserCall(port, 'Target.createTarget', { url: 'about:blank', browserContextId: userContext.id });
+    const fresh = async () => (userContext = { port, id: (await browserCall(port, 'Target.createBrowserContext', { disposeOnDetach: false })).browserContextId });
+    if (!userContext || userContext.port !== port) await fresh();
+    // A browser started again on the same port has none of the old contexts ("Failed to find browser context"): make
+    // a new one and try once more.
+    const { targetId } = await browserCall(port, 'Target.createTarget', { url: 'about:blank', browserContextId: userContext.id })
+      .catch(async (e) => { if (!/browser context/i.test(e.message)) throw e; await fresh(); return browserCall(port, 'Target.createTarget', { url: 'about:blank', browserContextId: userContext.id }); });
     t = { id: targetId, webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/page/${targetId}` };
   } else t = await (await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, { method: 'PUT' })).json();
   const ws = new WebSocket(t.webSocketDebuggerUrl);
