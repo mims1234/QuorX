@@ -3250,16 +3250,20 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         await sleep(450, signal);
         const p = await paused(800); if (p) return `\n${p}`;
         const read = () => readWindow(scope, h).catch((e) => ({ text: `(could not read it again: ${e.message})` }));
+        // A window that says it is loading ("Loading", "Please wait", "Saving…") isn't settled even when two reads agree:
+        // a loading label can stand still for a second. It gets up to 6 s.
+        const busy = (t) => /"[^"\n]*\b(loading|please wait|saving|opening|processing|connecting|downloading|uploading|starting up|busy)\b[^"\n]*"/i.test(t);
         let r = await read(), moving = false;
         for (const t0 = Date.now(); !r.ocr && !/^\(could not/.test(r.text);) {
-          if (Date.now() - t0 > 2500) { moving = true; break; }
+          const waiting = busy(r.text);
+          if (Date.now() - t0 > (waiting ? 6000 : 2500)) { moving = true; break; }
           await sleep(500, signal);
           const r2 = await read();
-          if (r2.text === r.text) break;
+          if (r2.text === r.text && !waiting) break;
           r = r2;
         }
         remember(r);
-        return `\nWindow now${moving ? ' (still changing after 2.5 s: it may be loading or animating; wait_for what you expect, or read again)' : ''}:\n${r.text}`;
+        return `\nWindow now${moving ? ` (${busy(r.text) ? 'still loading after 6 s' : 'still changing after 2.5 s: it may be loading or animating'}; wait_for what you expect, or read again)` : ''}:\n${r.text}`;
       };
       const stopped = await paused();
       if (stopped) return stopped;
