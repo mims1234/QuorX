@@ -5,8 +5,8 @@ title: "QuorX"
 abstract: "An open-source AI agent that builds on your own computer, with a quorum of models checking its work."
 authors:
   - name: "The QuorX authors"
-version: "0.2.12"
-date-released: "2026-10-25"
+version: "0.2.13"
+date-released: "2026-10-28"
 license: Apache-2.0
 repository-code: "https://github.com/mims1234/QuorX"
 url: "https://quorx.genxmims.org"

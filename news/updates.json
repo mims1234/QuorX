@@ -1,6 +1,36 @@
 {
   "versions": [
     {
+      "version": "0.2.13",
+      "date": "2026-10-28",
+      "title": "Schedules that run themselves, and your desktop apps",
+      "items": [
+        { "kind": "new", "text": "Computer use: allow apps per chat at View, Click or Full, and the agent works in apps that are already open or opens installed ones by name.", "pr": 161 },
+        { "kind": "new", "text": "A glowing edge and a Stop button while the agent uses your desktop or one of your Chrome tabs.", "pr": 168 },
+        { "kind": "new", "text": "Schedules as jobs: manage them from a chat, Repeat this on any reply, notify rules, auto-pause after three failures, and run dots.", "pr": 169 },
+        { "kind": "new", "text": "Each schedule has one chat, schedules have a project of their own, and they can repeat as often as every 3 minutes.", "pr": 167 },
+        { "kind": "new", "text": "Schedules show live: a countdown to each next run, and a run going on now glows in the list and pulses in the sidebar.", "pr": 172 },
+        { "kind": "new", "text": "Blocked providers in Settings, for every model or only some (deepseek/*); InferenceNet is blocked for DeepSeek models by default.", "pr": 172 },
+        { "kind": "new", "text": "Always allowed rules turn on and off and count their uses, in one view in the chat, project settings and Settings.", "pr": 161 },
+        { "kind": "new", "text": "Each chat has its own agent notes, and a chat can be kept off its project.", "pr": 161 },
+        { "kind": "improved", "text": "Schedule chats are marked, and a scheduled turn says it sees only its prompt.", "pr": 172 },
+        { "kind": "improved", "text": "Open chats pick up new scheduled runs and their cards; a schedule’s card waits 15 s (settable), and an unanswered one ends the run.", "pr": 170 },
+        { "kind": "improved", "text": "A scheduled run’s Chrome tabs close 30 s after it goes well; a failed one keeps them for you to look at.", "pr": 171 },
+        { "kind": "improved", "text": "A scheduled run cut short counts as failed, with no out-of-steps card.", "pr": 172 },
+        { "kind": "improved", "text": "Folders outside the project: one card adds the folder to the chat, and the file tools work there.", "pr": 161 },
+        { "kind": "improved", "text": "Paths to local files in replies open in File Explorer.", "pr": 166 },
+        { "kind": "improved", "text": "Desktop actions are quicker and steadier: windows settle before the next step, typing reads itself back, and long typing no longer times out.", "pr": 163 },
+        { "kind": "improved", "text": "A reply keeps every step it took, and replies saved short get them back.", "pr": 161 },
+        { "kind": "safety", "text": "Approvals do what they say: rules match what they name, scratch scripts and cmd /c are checked, and waits are safer.", "pr": 154 },
+        { "kind": "safety", "text": "Only system tools and admin shells are never used on the desktop; what you named in your message is your go-ahead.", "pr": 165 },
+        { "kind": "safety", "text": "A decider’s answer can’t claim you did something, and Replace it? dialogs ask you first.", "pr": 161 },
+        { "kind": "fixed", "text": "File Explorer is found by its Start-menu name, with its open folder windows.", "pr": 164 },
+        { "kind": "fixed", "text": "White screenshots, scaled displays and apps that outlive QuorX are handled.", "pr": 161 },
+        { "kind": "fixed", "text": "Turning off the cost badge hides the Spending total too.", "pr": 166 },
+        { "kind": "fixed", "text": "Saves retry a file Windows has locked, and the browser recovers when its context is gone.", "pr": 161 }
+      ]
+    },
+    {
       "version": "0.2.12",
       "date": "2026-10-26",
       "title": "Steadier, safer and faster",
