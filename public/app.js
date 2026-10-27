@@ -5393,19 +5393,45 @@ const when2 = (t) => { if (!t) return '–'; const d = new Date(t), today = new 
 // The chat a schedule posts in (the one it was made from, or its first run's), and the schedules posting in a chat.
 function schedChatId(s) { return s.newChat ? null : s.chatId || s.lastRun?.chatId || null; }
 function schedsOf(chatId) { try { return SCHED.list.filter((s) => schedChatId(s) === chatId); } catch { return []; } } // (none before SCHED is set up)
-// The sidebar's Schedules row: how many are on (they still have a next run) and how many are paused.
+// A run going on now (or waiting for you), and the time left until a run: "4:32", "1h 05m", "2d 3h". The server's
+// clock counts (SCHED.skew), so a page on another device counts down to the same second.
+const schedLive = (s) => ['starting', 'running', 'waiting'].includes(s.lastRun?.status) && !s.lastRun.ended;
+function countdown(at) {
+  const left = Math.round((at - (Date.now() + (SCHED.skew || 0))) / 1000);
+  if (left <= 0) return 'starting…';
+  const d = Math.floor(left / 86400), h = Math.floor(left / 3600) % 24, m = Math.floor(left / 60) % 60, sec = left % 60;
+  return d ? `${d}d ${h}h` : h ? `${h}h ${String(m).padStart(2, '0')}m` : `${m}:${String(sec).padStart(2, '0')}`;
+}
+// Every second: each countdown on the page ([data-cd] = the time it counts to). One that reaches 0 asks the server
+// a few seconds later, so the run that just started shows up as running without waiting for the 30 s poll.
+setInterval(() => {
+  let due = false;
+  for (const el of document.querySelectorAll('[data-cd]')) {
+    const t = countdown(Number(el.dataset.cd));
+    if (el.textContent !== t) el.textContent = t;
+    if (t === 'starting…' && !(SCHED.asked ??= new Set()).has(el.dataset.cd)) { SCHED.asked.add(el.dataset.cd); due = true; } // once per run time
+  }
+  if (due && !SCHED.dueAsk) SCHED.dueAsk = setTimeout(async () => { SCHED.dueAsk = 0; await loadSchedules(); if ($('#schedules')?.open) drawSchedules(); pollSchedules(); }, 4e3);
+}, 1000);
+// The sidebar's Schedules row: a run going on now (pulsing, amber when it waits for you), else how many are on, the
+// next run's countdown, and how many are paused.
 function drawSchedCount() {
   const el = $('#schedCount'); if (!el) return;
-  const on = SCHED.list.filter((s) => !s.paused && s.nextAt != null).length, off = SCHED.list.filter((s) => s.paused).length;
-  el.hidden = !on && !off;
-  el.innerHTML = `${on ? `<span class="on">${on}</span>` : ''}${off ? `<span class="off">${off} paused</span>` : ''}`;
-  el.closest('button').title = `Schedules: ${on} on, ${off} paused. Chats QuorX starts on its own, like every weekday at 9`;
+  const onList = SCHED.list.filter((s) => !s.paused && s.nextAt != null), on = onList.length, off = SCHED.list.filter((s) => s.paused).length;
+  const live = SCHED.list.filter(schedLive), waits = live.some((s) => s.lastRun.status === 'waiting');
+  const next = onList.map((s) => s.nextAt).sort((a, b) => a - b)[0];
+  el.hidden = !on && !off && !live.length;
+  el.classList.toggle('live', !!live.length);
+  el.innerHTML = live.length ? `<span class="sched-live ${waits ? 'waiting' : 'running'}"><span class="live-beacon ${waits ? 'waiting' : 'running'}"></span>${waits ? 'waits for you' : live.length > 1 ? `${live.length} running` : 'running'}</span>`
+    : `${on ? `<span class="on">${on}</span>` : ''}${next ? `<span class="sched-cd" data-cd="${next}">${countdown(next)}</span>` : ''}${off ? `<span class="off">${off} paused</span>` : ''}`;
+  el.closest('button').title = `Schedules: ${on} on, ${off} paused${live.length ? `. Running now: ${live.map((s) => s.name).join(', ')}` : next ? `. Next run: ${when2(next)}` : ''}. Chats QuorX starts on its own, like every weekday at 9`;
 }
 async function loadSchedules() {
   const r = await fetch(`/api/schedules?since=${SCHED.since}`).then((x) => x.json()).catch(() => null);
   if (!r || r.error) return null;
   const first = !SCHED.since && !SCHED.seen;
   SCHED.list = r.schedules; SCHED.now = r.now; SCHED.seen = true;
+  if (r.now) SCHED.skew = r.now - Date.now();
   drawSchedCount();
   // The sidebar marks schedule chats: drawn again when that set (or a schedule's on/paused) changes.
   const marks = SCHED.list.map((s) => `${schedChatId(s)}:${!s.paused && s.nextAt != null}`).join();
@@ -5434,10 +5460,11 @@ async function scheduleNoticed(n) {
   const title = { done: '✓ Scheduled chat finished', error: '✕ Scheduled chat stopped', approval: '⏸ Scheduled chat needs your approval', answer: '❓ Scheduled chat has a question', budget: '💲 Project budget reached' }[n.kind] || 'QuorX';
   try { const x = new Notification(title, { body: `⏰ ${n.name}${n.text ? `\n${n.text}` : ''}`, icon: 'brand/quorx-192.png', tag: `oh-sched-${n.scheduleId}`, silent: n.kind === 'done' }); x.onclick = () => { window.focus(); if (n.chatId) showChat(n.chatId); x.close(); }; } catch { /* needs a service worker in some browsers */ }
 }
-// Every 30 s while any schedule exists (the list is short and the server answers from one small file).
+// Every 30 s while any schedule exists (the list is short and the server answers from one small file); every 5 s
+// while a run is going on, so the sidebar and the list show it end when it does.
 function pollSchedules() {
   clearTimeout(SCHED.timer);
-  SCHED.timer = setTimeout(async () => { await loadSchedules(); if ($('#schedules')?.open) drawSchedules(); pollSchedules(); }, SCHED.list.length ? 30e3 : 120e3);
+  SCHED.timer = setTimeout(async () => { await loadSchedules(); if ($('#schedules')?.open) drawSchedules(); pollSchedules(); }, SCHED.list.some(schedLive) ? 5e3 : SCHED.list.length ? 30e3 : 120e3);
 }
 async function openSchedules(editId) {
   const d = $('#schedules');
@@ -5484,12 +5511,13 @@ function drawSchedules() {
   const proj = (id) => G.projects.find((p) => p.id === id)?.name || id;
   const rows = SCHED.list.map((s) => {
     const st = s.lastRun ? SCHED_STATUS[s.lastRun.status] || [s.lastRun.status, ''] : null;
-    return `<li class="sc-row ${s.paused ? 'paused' : ''} ${SCHED.focus && s.chatId === SCHED.focus ? 'focus' : ''}" data-id="${esc(s.id)}">
+    const live = schedLive(s), waits = live && s.lastRun.status === 'waiting';
+    return `<li class="sc-row ${s.paused ? 'paused' : ''} ${live ? `live ${waits ? 'waiting' : 'running'}` : ''} ${SCHED.focus && s.chatId === SCHED.focus ? 'focus' : ''}" data-id="${esc(s.id)}">
       <div class="sc-main"><div class="sc-top"><b class="sc-name">${esc(s.name)}</b><span class="tag sc-proj">📁 ${esc(proj(s.projectId))}</span><span class="tag sc-mode ${s.approval}" title="${s.approval === 'yolo' ? 'YOLO: the deciders answer for you, nothing waits' : 'Strict: approvals and questions wait for you'}">${s.approval === 'yolo' ? '⚡ YOLO' : '🔒 Strict'}</span>${s.trusted ? '<span class="tag sc-trusted" title="Trusted: its runs send, post and submit in your tabs as the prompt says, without asking (a password or a payment still asks)">✓ Trusted</span>' : ''}</div>
         <div class="sc-when">${esc(s.whenText)} · ${recDot(s.model, 'chat')} ${esc(short(s.model))}</div>
         <div class="sc-prompt" title="${esc(s.prompt)}">${esc(clip(s.prompt.replace(/\s+/g, ' '), 140))}</div>
         ${schedLinks(s)}${s.paused && s.pausedWhy ? `<small class="sc-note sc-bad">⏸ ${esc(s.pausedWhy)}</small>` : ''}
-        <div class="sc-runs"><span>Next: <b>${s.paused ? 'paused' : s.nextAt ? esc(when2(s.nextAt)) : 'none'}</b></span>${s.lastRun ? `<span>Last: ${esc(when2(s.lastRun.at))} <span class="sc-st ${st[1]}">${esc(st[0])}</span>${s.lastRun.missed ? '<span class="sc-st missed" title="QuorX was closed or the computer slept at the planned time, so it ran when QuorX was back">missed, ran late</span>' : ''}${s.lastRun.cost ? ` <span class="cost">${money(s.lastRun.cost, 4)}</span>` : ''}${s.lastRun.chatId ? ` <button type="button" class="mp-link sc-open" data-chat="${esc(s.lastRun.chatId)}">Open chat</button>` : ''}${s.lastRun.note ? `<small class="sc-note">${esc(s.lastRun.note)}</small>` : ''}${s.lastRun.skipped ? `<small class="sc-note">${s.lastRun.skipped} turn${s.lastRun.skipped === 1 ? '' : 's'} skipped while it was still going</small>` : ''}</span>` : '<span class="sc-dim">Not run yet</span>'}</div></div>
+        <div class="sc-runs">${live ? `<span class="sc-now ${waits ? 'waiting' : 'running'}"><span class="live-beacon ${waits ? 'waiting' : 'running'}"></span>${waits ? 'Waits for you now' : 'Running now'} <small>since ${esc(when2(s.lastRun.at).replace(/^Today /, ''))}</small></span>` : ''}<span>Next: <b>${s.paused ? 'paused' : s.nextAt ? esc(when2(s.nextAt)) : 'none'}</b>${!s.paused && s.nextAt ? ` <span class="sc-cd" data-cd="${s.nextAt}" title="Time left until this run">${countdown(s.nextAt)}</span>` : ''}</span>${s.lastRun && !live ? `<span>Last: ${esc(when2(s.lastRun.at))} <span class="sc-st ${st[1]}">${esc(st[0])}</span>${s.lastRun.missed ? '<span class="sc-st missed" title="QuorX was closed or the computer slept at the planned time, so it ran when QuorX was back">missed, ran late</span>' : ''}${s.lastRun.cost ? ` <span class="cost">${money(s.lastRun.cost, 4)}</span>` : ''}${s.lastRun.chatId ? ` <button type="button" class="mp-link sc-open" data-chat="${esc(s.lastRun.chatId)}">Open chat</button>` : ''}${s.lastRun.note ? `<small class="sc-note">${esc(s.lastRun.note)}</small>` : ''}${s.lastRun.skipped ? `<small class="sc-note">${s.lastRun.skipped} turn${s.lastRun.skipped === 1 ? '' : 's'} skipped while it was still going</small>` : ''}</span>` : live ? '' : '<span class="sc-dim">Not run yet</span>'}</div></div>
       <div class="sc-acts"><button type="button" class="kx-btn sm sc-now" title="Start this chat now (the schedule stays as it is)">▶ Run now</button><button type="button" class="kx-btn sm sc-pause">${s.paused ? 'Resume' : 'Pause'}</button><button type="button" class="kx-btn sm sc-edit">Edit</button><button type="button" class="kx-btn sm sc-del" title="Delete this schedule (its chats stay)">🗑</button></div></li>`;
   }).join('');
   body.innerHTML = `${SCHED.edit ? scheduleForm(SCHED.edit) : `<div class="sc-head"><p class="pj-hint">Schedules start a normal chat on their own, with the saved prompt, model and mode. They run while QuorX is open or in the tray; a run missed while the computer slept runs once when it wakes. Budgets and caps apply as in any chat.</p><button type="button" class="kx-btn primary sc-new">+ New schedule</button></div>`}

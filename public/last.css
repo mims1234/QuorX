@@ -2992,3 +2992,17 @@ a.md-pathlink.md-path, .md-pathtext.md-path { color: var(--accent); }
 .bp-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 4px 12px; max-height: 220px; overflow: auto; padding: 6px; border: 1px solid var(--line); border-radius: 8px; }
 .bp-row[hidden] { display: none; }
 .bp-row span { white-space: normal; min-width: 0; }
+/* Schedules, live: the next run's countdown, and a run going on now (pulsing; amber when it waits for you). */
+.sc-cd, .sched-cd { font: 600 11px var(--mono); color: var(--accent); font-variant-numeric: tabular-nums; }
+.sc-cd { margin-left: 4px; padding: 0 5px; border-radius: 4px; border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line)); }
+.sched-cd { color: var(--muted); }
+.sc-now { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; color: var(--ok, #22c55e); }
+.sc-now.waiting { color: var(--amber, #f59e0b); }
+.sc-now small { font-weight: 400; color: var(--muted); }
+.sc-row.live { border-color: color-mix(in srgb, var(--ok, #22c55e) 60%, var(--line)); animation: sc-live 1.6s ease-in-out infinite; }
+.sc-row.live.waiting { border-color: color-mix(in srgb, var(--amber, #f59e0b) 60%, var(--line)); animation-name: sc-live-amber; }
+@keyframes sc-live { 50% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--ok, #22c55e) 45%, transparent), 0 0 14px color-mix(in srgb, var(--ok, #22c55e) 30%, transparent); } }
+@keyframes sc-live-amber { 50% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--amber, #f59e0b) 45%, transparent), 0 0 14px color-mix(in srgb, var(--amber, #f59e0b) 30%, transparent); } }
+.sched-live { display: inline-flex; align-items: center; gap: 5px; font: 600 10.5px var(--mono); color: var(--ok, #22c55e); }
+.sched-live.waiting { color: var(--amber, #f59e0b); }
+@media (prefers-reduced-motion: reduce) { .sc-row.live { animation: none; } }
