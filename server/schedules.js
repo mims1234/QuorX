@@ -15,6 +15,10 @@ export const GRACE_MS = 2 * 60e3;      // a run this late is still on time; late
 export const MIN_EVERY = 3;            // minutes between runs of an "every" schedule, at least
 export const MAX_SCHEDULES = 50;
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+export const NOTIFY = ['always', 'failure', 'needs', 'changed'];
+export const PAUSE_AFTER_FAILS = 3;     // failed runs in a row before a schedule pauses itself
+const HISTORY = 10;                     // runs kept on a schedule (the dots on its card)
+const validChat = (id) => typeof id === 'string' && /^[a-z0-9][a-z0-9-]{2,63}$/i.test(id);
 
 // ---------- when: { kind: 'once', at } · { kind: 'daily', time: 'HH:MM', days: [0-6] (empty: every day) } · { kind: 'every', minutes } ----------
 export function cleanWhen(w = {}) {
@@ -78,10 +82,16 @@ export function cleanSchedule(b, now = Date.now(), old = null) {
     tools: b.tools && typeof b.tools === 'object' && !Array.isArray(b.tools) ? b.tools : old?.tools || {},
     when, paused: b.paused ?? old?.paused ?? false, created,
     lastRun: old?.lastRun || null, runs: old?.runs || 0,
-    // Its runs go on in one chat (chatId, once it has run); newChat: a fresh chat every run instead.
+    // Its runs go on in one chat (chatId: the chat it was made from, or its first run's); newChat: a fresh chat every
+    // run instead. Each run starts fresh (only the prompt); the chat holds every run, for you and its agent to look back on.
     newChat: typeof b.newChat === 'boolean' ? b.newChat : !!old?.newChat,
-    ...(old?.chatId ? { chatId: old.chatId } : {}),
+    ...(validChat(b.chatId) ? { chatId: b.chatId } : old?.chatId ? { chatId: old.chatId } : {}),
+    // When you hear about a run: always, only when one fails, only when it waits for you, or when its result changed.
+    // (A run waiting for you always tells you.)
+    notify: NOTIFY.includes(b.notify) ? b.notify : old?.notify || 'always',
+    history: old?.history || [], fails: old?.fails || 0,
   };
+  if (b.paused === false && old?.paused) s.fails = 0; // resumed: the failures that paused it are behind it
   // The anchor of an "every" schedule is when it was made (or changed), so "every 2 hours" counts from then.
   if (when.kind === 'every' && JSON.stringify(when) !== JSON.stringify(old?.when)) s.created = now;
   s.nextAt = s.paused ? null : nextAfter(when, now, s.created);
@@ -149,6 +159,73 @@ export function takeLease(t = Date.now()) {
   } catch { /* no lease yet */ }
   try { fs.mkdirSync(path.dirname(LEASE()), { recursive: true }); fs.writeFileSync(LEASE(), JSON.stringify({ pid: process.pid, at: t })); } catch { return false; }
   return true;
+}
+
+// ---------- what the Schedules window and the agent's schedule tool both do ----------
+/** A schedule as the page and the agent see it (its saved settings left out). */
+export const scheduleView = (s) => ({ ...s, settings: undefined, whenText: describeWhen(s.when) });
+/** Set by the server: starts a run now ({ chatId, runId, status }). */
+export const scheduleHooks = { runNow: null };
+export function addSchedule(b, { projects, now = Date.now() } = {}) {
+  if (projects && !projects.some((p) => p.id === b.projectId)) throw new Error('unknown project');
+  const list = loadSchedules();
+  if (list.length >= MAX_SCHEDULES) throw new Error(`at most ${MAX_SCHEDULES} schedules`);
+  const s = cleanSchedule(b, now);
+  if (s.nextAt == null && !s.paused) throw new Error('that time has already passed');
+  saveSchedules([...list, s]);
+  return s;
+}
+export function changeSchedule(id, b, now = Date.now()) {
+  const list = loadSchedules(), i = list.findIndex((s) => s.id === id);
+  if (i < 0) throw new Error('no such schedule');
+  list[i] = cleanSchedule(b, now, list[i]);
+  saveSchedules(list);
+  return list[i];
+}
+export function removeSchedule(id) {
+  const list = loadSchedules(), i = list.findIndex((s) => s.id === id);
+  if (i < 0) return false;
+  list.splice(i, 1); saveSchedules(list);
+  return true;
+}
+/** Starts a run of the schedule now, as the scheduler would (outside its timing). */
+export async function runScheduleNow(id, now = Date.now()) {
+  if (!scheduleHooks.runNow) throw new Error('schedules are not running in this copy of QuorX');
+  const list = loadSchedules(), s = list.find((x) => x.id === id);
+  if (!s) throw new Error('no such schedule');
+  const r = await scheduleHooks.runNow(s);
+  const fresh = loadSchedules(), t = fresh.find((x) => x.id === id);
+  if (t) {
+    t.lastRun = { at: now, due: now, missed: false, now: true, chatId: r.chatId || null, runId: r.runId || null, status: r.status, ...(r.note ? { note: r.note } : {}) };
+    t.runs = (t.runs || 0) + 1;
+    if (r.chatId) t.chatId = r.chatId;
+    saveSchedules(fresh);
+  }
+  return r;
+}
+
+// A reply's gist, to tell "the result changed" from "the same as last time": the words, without numbers that change
+// every run anyway (times, counts) and without spacing or case.
+const gist = (text) => crypto.createHash('sha1').update(String(text || '').toLowerCase().replace(/\d+/g, '#').replace(/\s+/g, ' ').trim()).digest('hex').slice(0, 16);
+/**
+ * A scheduled run ended: it goes in the schedule's history, failures in a row are counted (PAUSE_AFTER_FAILS pause
+ * it), and the answer says whether you hear about it under the schedule's notify rule. A run you stopped is no failure.
+ * Returns { notify, paused, changed } (null when the schedule is gone).
+ */
+export function endRun(scheduleId, runId, { status, cost = 0, reply = '', error = '', ms = 0, now = Date.now() } = {}) {
+  const list = loadSchedules(), s = list.find((x) => x.id === scheduleId);
+  if (!s) return null;
+  const failed = status === 'failed', h = gist(reply), changed = status === 'done' && !!s.lastGist && s.lastGist !== h;
+  s.history = [...(s.history || []), { at: now, status, cost, ms, runId, chatId: s.lastRun?.runId === runId ? s.lastRun.chatId : s.chatId || null }].slice(-HISTORY);
+  if (status === 'done') { s.fails = 0; s.lastGist = h; }
+  if (failed) s.fails = (s.fails || 0) + 1;
+  let paused = false;
+  if (failed && s.fails >= PAUSE_AFTER_FAILS && !s.paused) { s.paused = true; s.nextAt = null; paused = true; s.pausedWhy = `paused after ${s.fails} failed runs in a row (last: ${String(error).slice(0, 160)})`; }
+  if (s.lastRun?.runId === runId) Object.assign(s.lastRun, { status, ended: now, cost, ...(error ? { note: error } : {}) });
+  saveSchedules(list);
+  const rule = s.notify || 'always';
+  const notify = paused || rule === 'always' || (rule === 'failure' && failed) || (rule === 'changed' && (changed || failed || !s.history.some((x) => x.status === 'done' && x.runId !== runId)));
+  return { notify, paused, changed };
 }
 
 /** Records how a scheduled chat ended (or that it waits for you) on its schedule's last run. */

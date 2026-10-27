@@ -1,10 +1,11 @@
 // Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
-// Starts a scheduled chat on the server (no page needed), the way the page starts one: a new chat in the
-// schedule's project with its prompt, model, mode and settings. Strict approvals and questions wait for you like in
-// any chat; you get a notification when it waits and when it ends. When it ends, its reply is saved into the chat,
-// so the chat is complete even if no page was open. A page that opens it while it runs follows it live as usual.
+// Starts a scheduled run on the server (no page needed), the way the page starts a reply: in the schedule's chat
+// (made on its first run), with its prompt, model, mode and settings. Strict approvals and questions wait for you
+// like in any chat; you hear about a run as the schedule's notify rule says (a run waiting for you always tells you).
+// When it ends, its reply is saved into the chat, so the chat is complete even if no page was open. A page that
+// opens it while it runs follows it live as usual.
 import crypto from 'node:crypto';
-import { noteRun } from './schedules.js';
+import { noteRun, endRun, PAUSE_AFTER_FAILS } from './schedules.js';
 
 const rid = (p, t) => `${p}${t.toString(36)}${crypto.randomBytes(3).toString('hex')}`;
 const WAIT_EVENTS = (e) => (e.t === 'approval' && e.mode === 'strict') || (e.t === 'question' && !e.auto) || e.t === 'budget_ask';
@@ -27,33 +28,34 @@ export function startScheduledChat(s, { missed = false, due = null } = {}, deps)
   const approval = s.approval === 'yolo' ? 'yolo' : 'strict'; // YOLO only when chosen for this schedule
   const user = { role: 'user', content: s.prompt, at, scheduled: { id: s.id, name: s.name, missed, due } };
   const bot = { role: 'assistant', content: '', at, trace: [], approvals: {}, questions: {}, arts: [], runId, runActive: true };
-  // Each run goes on in the schedule's own chat (its earlier runs are the context, and there is one chat to look at),
-  // unless the schedule asks for a new chat every time or that chat was deleted or moved to another project.
+  // Each run is posted in the schedule's chat (the one it was made from, or its first run's), so there is one chat to
+  // look at, and you can ask its agent there what the runs saw or to change the schedule. The run itself starts
+  // fresh: only the prompt, never the chat's history, so it can't drift on an earlier run's mistakes and costs the
+  // same every time. A new chat every run when the schedule asks for that, or when its chat was deleted or moved.
   const prevId = s.newChat ? null : s.chatId || s.lastRun?.chatId;
   const prev = prevId && deps.getChat(prevId);
-  const doc = prev && prev.projectId === s.projectId && prev.scheduled?.id === s.id ? prev : null;
+  const doc = prev && prev.projectId === s.projectId ? prev : null;
   const chatId = doc ? prevId : rid('c', at), title = doc?.title || `⏰ ${s.name}`;
-  // The earlier messages, as the page sends them: past the summary, no failed or unfinished replies.
-  const since = doc?.agent?.summaryAt || 0;
-  const history = (doc?.agent?.messages || []).filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.error && !m.runActive && (m.at || 0) >= since)
-    .map((m) => ({ role: m.role, at: m.at, content: m.role === 'assistant' ? `${m.content || ''}${m.note || ''}` : String(m.content || '') }));
   if (doc) {
-    Object.assign(doc, { approval, tools: s.tools || doc.tools || {} });
+    // A chat the schedule made follows its mode and tools; a chat of yours it was made from keeps its own (the run
+    // still uses the schedule's).
+    if (doc.scheduled?.id === s.id) Object.assign(doc, { approval, tools: s.tools || doc.tools || {} });
     doc.agent = { ...doc.agent, setup, messages: [...(doc.agent?.messages || []), user, bot] };
     deps.saveChat(chatId, doc);
   } else deps.saveChat(chatId, { id: chatId, title, projectId: s.projectId, created: at, approval, tools: s.tools || {}, scheduled: { id: s.id, name: s.name },
     agent: { setup, messages: [user, bot], artifacts: {}, allowed: [], cmdRules: [] } });
   const a = doc?.agent || {};
   const body = { runId, chatId, projectId: s.projectId, chatTitle: title, setup, settings: { ...(s.settings || {}), approval, chromeAccess: s.settings?.chromeAccess ?? !!s.tools?.chrome }, allowed: a.allowed || [], cmdRules: a.cmdRules || [],
-    ...(a.apps ? { apps: a.apps } : {}), history, summary: a.summary || '', reading: '', text: s.prompt, artifacts: a.artifacts || {}, context: '', images: [], docs: [] };
+    ...(a.apps ? { apps: a.apps } : {}), history: [], summary: '', reading: '', text: s.prompt, artifacts: a.artifacts || {}, context: '', images: [], docs: [], scheduledBy: s.id };
   deps.startRun({ runId, chatId }, (emit, signal) => deps.runAgent(body, emit, signal));
   const told = new Set();
   deps.follow(runId, 0, (e) => {
     if (e === null) {
       const ended = finishChat(chatId, runId, deps);
       const status = ended.error ? (ended.stopped ? 'stopped' : 'failed') : 'done';
-      noteRun(s.id, runId, { status, ended: deps.now(), cost: ended.cost, ...(ended.error ? { note: ended.error } : {}) });
-      deps.notify?.(status === 'done' ? 'done' : 'error', { schedule: s, chatId, text: ended.error || ended.reply, cost: ended.cost });
+      const r = endRun(s.id, runId, { status, cost: ended.cost, reply: ended.reply, error: ended.error, ms: deps.now() - at, now: deps.now() });
+      if (r?.paused) deps.notify?.('error', { schedule: s, chatId, text: `“${s.name}” failed ${PAUSE_AFTER_FAILS} times in a row, so it is paused. Resume it in Schedules once it is fixed. Last error: ${ended.error}`, cost: ended.cost });
+      else if (r ? r.notify : true) deps.notify?.(status === 'done' ? 'done' : 'error', { schedule: s, chatId, text: ended.error || ended.reply, cost: ended.cost, changed: r?.changed });
       return;
     }
     if (WAIT_EVENTS(e) && !told.has(e.id ?? e.t)) {

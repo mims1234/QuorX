@@ -2951,3 +2951,19 @@ body.dev-build::before { content: ''; position: fixed; left: 0; right: 0; top: 0
 .sb-nav-sched .on { color: var(--ok, #22c55e); display: inline-flex; align-items: center; gap: 4px; }
 .sb-nav-sched .on::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .sb-nav-sched .off { opacity: .8; }
+
+/* ⏰ Schedules: where a schedule's runs post, its last runs as dots, and the chip in a chat's header. */
+.sc-links { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-top: 4px; font-size: 12px; }
+.sc-dots { display: inline-flex; gap: 4px; align-items: center; }
+.sc-dot { flex: none; box-sizing: border-box; width: 9px; height: 9px; min-width: 0; min-height: 0; padding: 0; margin: 0; line-height: 0; border-radius: 50%; border: 0; background: var(--muted); opacity: .55; cursor: pointer; }
+.sc-dot.ok { background: var(--ok, #22c55e); opacity: 1; }
+.sc-dot.bad { background: var(--bad, #ef4444); opacity: 1; }
+.sc-dot.wait { background: var(--amber, #f59e0b); opacity: 1; }
+.sc-dot.run { background: var(--accent); opacity: 1; }
+.sc-dot:hover, .sc-dot:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 1px; }
+.sc-note.sc-bad { color: var(--bad, #ef4444); }
+.sc-row.focus { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.ch-sched { display: inline-flex; align-items: center; gap: 4px; font: 600 11px var(--mono); padding: 2px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface-inset, var(--bg)); color: var(--text); cursor: pointer; white-space: nowrap; }
+.ch-sched.on { border-color: color-mix(in srgb, var(--ok, #22c55e) 55%, var(--line)); }
+.ch-sched.off { color: var(--muted); }
+.ch-sched:hover { border-color: var(--accent); }
