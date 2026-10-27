@@ -1702,7 +1702,8 @@ test('computer use: each app starts at its kind’s level; some are never used',
   assert.equal(appLevel('File Explorer'), 'view', 'it can delete files');
   assert.equal(appLevel('Visual Studio Code'), 'click', 'commands go through shell');
   assert.equal(appLevel('Windows Terminal'), 'click');
-  for (const n of ['QuorX', 'Claude', 'Electron', '1Password', 'Bitwarden', 'Registry Editor', 'Task Manager']) assert.equal(appLevel(n), 'never', n);
+  for (const n of ['Claude', 'QuorX', 'Electron', '1Password', 'Bitwarden']) assert.equal(appLevel(n), 'full', n);
+  for (const n of ['Registry Editor', 'Task Manager', 'Windows PowerShell (Admin)', 'Keychain Access', 'Disk Utility', 'GParted']) assert.equal(appLevel(n), 'never', n);
 });
 
 // ---------- each chat's own agent notes, and chats kept off the project ----------
