@@ -2945,3 +2945,9 @@ body.dev-build::before { content: ''; position: fixed; left: 0; right: 0; top: 0
 .ch-notes-pop .ap-foot { display: flex; align-items: center; gap: 6px; }
 .ch-notes-pop .cn-path { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .ch-notes-pop .cn-save:disabled { color: var(--muted); cursor: default; text-decoration: none; }
+
+/* Schedules in the sidebar: how many are on (green dot) and paused (muted). A status, not money: no amber. */
+.sb-nav-sched { flex: none; margin-left: auto; display: inline-flex; gap: 8px; font: 600 11px var(--mono); color: var(--muted); }
+.sb-nav-sched .on { color: var(--ok, #22c55e); display: inline-flex; align-items: center; gap: 4px; }
+.sb-nav-sched .on::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.sb-nav-sched .off { opacity: .8; }

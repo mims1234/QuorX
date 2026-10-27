@@ -2308,6 +2308,32 @@ test('a scheduled chat runs like a normal chat and is saved complete, with no pa
   } finally { forgetProject(pid); saveScheds([]); }
 });
 
+test('a schedule keeps one chat: the next run goes on there with the earlier runs as context; newChat starts afresh', async () => {
+  const dir = tempDir('quorx-sched-'), pid = `sr${Date.now().toString(36)}`;
+  saveProject({ id: pid, name: 'sched', path: dir });
+  try {
+    const s = cleanSchedule({ name: 'Drop', prompt: 'type ldrop', projectId: pid, model: 'test/model', when: { kind: 'every', minutes: 3 }, settings: { mediaEnabled: false, tools: { browser: { on: false } } } });
+    const seen = [];
+    const once = async (sched, text) => {
+      const end = ended();
+      const r = startScheduledChat(sched, {}, schedDeps((b) => { seen.push(b.messages.filter((m) => m.role !== 'system').map((m) => `${m.role}: ${String(m.content).slice(0, 40)}`)); return reply(text); }, { onNotify: end.on }));
+      await end.p;
+      return r;
+    };
+    const r1 = await once(s, 'Typed it (1).');
+    const r2 = await once({ ...s, chatId: r1.chatId }, 'Typed it (2).');
+    assert.equal(r2.chatId, r1.chatId, 'the same chat');
+    const msgs = getChat(r1.chatId).agent.messages;
+    assert.deepEqual(msgs.map((m) => `${m.role}:${m.content}`), ['user:type ldrop', 'assistant:Typed it (1).', 'user:type ldrop', 'assistant:Typed it (2).']);
+    assert.ok(seen[1].some((x) => x.includes('Typed it (1).')), `the second run sees the first: ${JSON.stringify(seen[1])}`);
+    // The scheduler remembers the chat, and an edit keeps it.
+    assert.equal(cleanSchedule({ prompt: 'type ldrop again' }, Date.now(), { ...s, chatId: r1.chatId }).chatId, r1.chatId);
+    const r3 = await once({ ...s, chatId: r1.chatId, newChat: true }, 'Fresh.');
+    assert.notEqual(r3.chatId, r1.chatId, 'newChat: a chat of its own');
+    assert.equal(getChat(r3.chatId).agent.messages.length, 2);
+  } finally { forgetProject(pid); saveScheds([]); }
+});
+
 test('a scheduled chat in Strict waits for your approval (and says so), even if the saved settings say YOLO', async () => {
   const dir = tempDir('quorx-sched-'), pid = `sq${Date.now().toString(36)}`;
   saveProject({ id: pid, name: 'sched', path: dir });

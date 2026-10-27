@@ -78,6 +78,9 @@ export function cleanSchedule(b, now = Date.now(), old = null) {
     tools: b.tools && typeof b.tools === 'object' && !Array.isArray(b.tools) ? b.tools : old?.tools || {},
     when, paused: b.paused ?? old?.paused ?? false, created,
     lastRun: old?.lastRun || null, runs: old?.runs || 0,
+    // Its runs go on in one chat (chatId, once it has run); newChat: a fresh chat every run instead.
+    newChat: typeof b.newChat === 'boolean' ? b.newChat : !!old?.newChat,
+    ...(old?.chatId ? { chatId: old.chatId } : {}),
   };
   // The anchor of an "every" schedule is when it was made (or changed), so "every 2 hours" counts from then.
   if (when.kind === 'every' && JSON.stringify(when) !== JSON.stringify(old?.when)) s.created = now;
@@ -118,6 +121,7 @@ export function createScheduler({ now = Date.now, run, load = loadSchedules, sav
         try {
           const r = await run(s, { missed, due, late });
           Object.assign(s.lastRun, { chatId: r?.chatId || null, runId: r?.runId || null, status: r?.status || 'running', ...(r?.note ? { note: r.note } : {}) });
+          if (r?.chatId) s.chatId = r.chatId; // its chat: the next run goes on there
           started.push({ id: s.id, ...s.lastRun });
         } catch (e) { Object.assign(s.lastRun, { status: 'failed', note: String(e.message || e).slice(0, 300) }); }
       }

@@ -22,16 +22,30 @@ export function startScheduledChat(s, { missed = false, due = null } = {}, deps)
     deps.notify?.('budget', { schedule: s, text: `${project.name} has reached its budget, so “${s.name}” did not run.` });
     return { status: 'skipped', note: 'the project has reached its budget' };
   }
-  const at = deps.now(), chatId = rid('c', at), runId = rid('r', at);
-  const title = `⏰ ${s.name}`;
+  const at = deps.now(), runId = rid('r', at);
   const setup = { model: s.model, reasoning: s.reasoning || 'off' };
   const approval = s.approval === 'yolo' ? 'yolo' : 'strict'; // YOLO only when chosen for this schedule
   const user = { role: 'user', content: s.prompt, at, scheduled: { id: s.id, name: s.name, missed, due } };
   const bot = { role: 'assistant', content: '', at, trace: [], approvals: {}, questions: {}, arts: [], runId, runActive: true };
-  deps.saveChat(chatId, { id: chatId, title, projectId: s.projectId, created: at, approval, tools: s.tools || {}, scheduled: { id: s.id, name: s.name },
+  // Each run goes on in the schedule's own chat (its earlier runs are the context, and there is one chat to look at),
+  // unless the schedule asks for a new chat every time or that chat was deleted or moved to another project.
+  const prevId = s.newChat ? null : s.chatId || s.lastRun?.chatId;
+  const prev = prevId && deps.getChat(prevId);
+  const doc = prev && prev.projectId === s.projectId && prev.scheduled?.id === s.id ? prev : null;
+  const chatId = doc ? prevId : rid('c', at), title = doc?.title || `⏰ ${s.name}`;
+  // The earlier messages, as the page sends them: past the summary, no failed or unfinished replies.
+  const since = doc?.agent?.summaryAt || 0;
+  const history = (doc?.agent?.messages || []).filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.error && !m.runActive && (m.at || 0) >= since)
+    .map((m) => ({ role: m.role, at: m.at, content: m.role === 'assistant' ? `${m.content || ''}${m.note || ''}` : String(m.content || '') }));
+  if (doc) {
+    Object.assign(doc, { approval, tools: s.tools || doc.tools || {} });
+    doc.agent = { ...doc.agent, setup, messages: [...(doc.agent?.messages || []), user, bot] };
+    deps.saveChat(chatId, doc);
+  } else deps.saveChat(chatId, { id: chatId, title, projectId: s.projectId, created: at, approval, tools: s.tools || {}, scheduled: { id: s.id, name: s.name },
     agent: { setup, messages: [user, bot], artifacts: {}, allowed: [], cmdRules: [] } });
-  const body = { runId, chatId, projectId: s.projectId, chatTitle: title, setup, settings: { ...(s.settings || {}), approval, chromeAccess: s.settings?.chromeAccess ?? !!s.tools?.chrome }, allowed: [], cmdRules: [],
-    history: [], summary: '', reading: '', text: s.prompt, artifacts: {}, context: '', images: [], docs: [] };
+  const a = doc?.agent || {};
+  const body = { runId, chatId, projectId: s.projectId, chatTitle: title, setup, settings: { ...(s.settings || {}), approval, chromeAccess: s.settings?.chromeAccess ?? !!s.tools?.chrome }, allowed: a.allowed || [], cmdRules: a.cmdRules || [],
+    ...(a.apps ? { apps: a.apps } : {}), history, summary: a.summary || '', reading: '', text: s.prompt, artifacts: a.artifacts || {}, context: '', images: [], docs: [] };
   deps.startRun({ runId, chatId }, (emit, signal) => deps.runAgent(body, emit, signal));
   const told = new Set();
   deps.follow(runId, 0, (e) => {
