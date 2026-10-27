@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadCards, cardText, limitsLine, cardFile, CARDS_DIR, CARD_CHARS } from '../server/modelcards.js';
-import { runAgent, inPlaceEdit, deciderPicture, REVIEW_SYSTEM, FILM_KEYS, answerQuestion, answerSecret, answerApproval, answerBudget, setRunApproval, steerRun, holdCard, providerSlugs } from '../server/agent.js';
+import { runAgent, inPlaceEdit, deciderPicture, REVIEW_SYSTEM, FILM_KEYS, answerQuestion, answerSecret, answerApproval, answerBudget, setRunApproval, steerRun, holdCard, providerSlugs, blockedFor } from '../server/agent.js';
 import { saveProject, forgetProject, setProjectBudget } from '../server/store.js';
 import { loadCheckpoint, dropCheckpoint, saveCheckpoint, checkpointWritten, ledger } from '../server/runs.js';
 import { setBudget, projectSpend, budgetState, live as liveRuns } from '../server/budget.js';
@@ -703,7 +703,9 @@ test('no temperature by default; Creativity sets it only where the model takes i
 
 test('routing: only providers that support every parameter, by default; sort and fallback from settings', async () => {
   const a = await run(() => reply('ok'));
-  assert.deepEqual(a.bodies[0].provider, { ignore: ['inference-net'], require_parameters: true }, 'InferenceNet is blocked by default');
+  assert.deepEqual(a.bodies[0].provider, { require_parameters: true }, 'the default block is for DeepSeek models only');
+  const d = await run(() => reply('ok'), { setup: { model: 'deepseek/deepseek-v4.1-flash' } });
+  assert.deepEqual(d.bodies[0].provider, { ignore: ['inference-net'], require_parameters: true }, 'InferenceNet is blocked for DeepSeek by default');
   assert.equal('models' in a.bodies[0], false);
   const b = await run(() => reply('ok'), { settings: { providerSort: 'price', zdrOnly: true, fallbackModel: 'test/backup', blockedProviders: [] } });
   assert.deepEqual(b.bodies[0].provider, { sort: 'price', require_parameters: true, zdr: true });
@@ -718,6 +720,14 @@ test('blocked providers: names map to OpenRouter slugs and are sent as ignore', 
   assert.deepEqual(providerSlugs(['', '  ', 'InferenceNet', 'InferenceNet']), ['inference-net']);
   const r = await run(() => reply('ok'), { settings: { requireParams: false, blockedProviders: ['InferenceNet', 'Novita'] } });
   assert.deepEqual(r.bodies[0].provider, { ignore: ['inference-net', 'novita'] });
+  // A block can cover only some models: ids or patterns with *.
+  const list = [{ name: 'InferenceNet', models: ['deepseek/*'] }, { name: 'Novita', models: ['test/model'] }, { name: 'Chutes', models: [] }, 'Parasail'];
+  assert.deepEqual(blockedFor(list, 'deepseek/deepseek-v4.1-flash'), ['InferenceNet', 'Chutes', 'Parasail']);
+  assert.deepEqual(blockedFor(list, 'DeepSeek/R2'), ['InferenceNet', 'Chutes', 'Parasail']);
+  assert.deepEqual(blockedFor(list, 'test/model'), ['Novita', 'Chutes', 'Parasail']);
+  assert.deepEqual(blockedFor(list, 'test/model-2'), ['Chutes', 'Parasail'], 'an id matches only itself');
+  const p = await run(() => reply('ok'), { settings: { requireParams: false, blockedProviders: list } });
+  assert.deepEqual(p.bodies[0].provider, { ignore: ['novita', 'chutes', 'parasail'] });
 });
 
 test('when no provider matches the routing filters, the reply carries on with default routing', async () => {
@@ -728,7 +738,7 @@ test('when no provider matches the routing filters, the reply carries on with de
   assert.ok(of(events, 'note').some((n) => /No provider matched/.test(n.msg)));
   assert.equal(done.reply, 'ok');
   // Blocked providers stay blocked while the other filters go; only when that fails too is the block dropped.
-  const k = await run((body, i) => (i < 2 ? fail() : reply('ok')));
+  const k = await run((body, i) => (i < 2 ? fail() : reply('ok')), { settings: { blockedProviders: ['InferenceNet'] } });
   assert.deepEqual(k.bodies[1].provider, { ignore: ['inference-net'] });
   assert.equal('provider' in k.bodies[2], false);
   assert.ok(of(k.events, 'note').some((n) => /only blocked providers serve/.test(n.msg)));

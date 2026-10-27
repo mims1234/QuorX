@@ -123,7 +123,7 @@ export const DEFAULTS = {
   zdrOnly: false,          // only providers with zero data retention
   // Providers OpenRouter never routes the agent's calls to, by name as replies show it ("via …"). InferenceNet sent
   // deepseek-v4.1-flash's browser calls without their arguments (just {"action":"open"}), so runs went in circles.
-  blockedProviders: ['InferenceNet'],
+  blockedProviders: [{ name: 'InferenceNet', models: ['deepseek/*'] }],
   fallbackModel: '',       // tried by OpenRouter when the chat's model fails or is unavailable ('' = none)
   // The reviewer (#4): a separate model plays what was built and scores it before the final reply.
   codeReview: 'off',       // /review on its own after a reply that changed code: 'off' · 'auto' (a card only when the reviewer finds bugs)
@@ -293,6 +293,16 @@ export function providerSlugs(names, list = []) {
   const by = new Map(list.map((p) => [String(p.name).toLowerCase(), p.slug]));
   return [...new Set((names || []).map((n) => String(n || '').trim()).filter(Boolean)
     .map((n) => by.get(n.toLowerCase()) || n.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')))];
+}
+// A block is a provider name ("Novita": every model) or { name, models }: only those models, each an id or a
+// pattern with * ("deepseek/*" is every DeepSeek model). Gives the names blocked for this model.
+export function blockedFor(list, model) {
+  const fits = (p) => new RegExp(`^${String(p).trim().replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`, 'i').test(String(model || ''));
+  return (Array.isArray(list) ? list : []).filter((b) => {
+    if (typeof b === 'string') return true;
+    const ms = (Array.isArray(b?.models) ? b.models : []).filter((m) => String(m || '').trim());
+    return !ms.length || ms.some(fits);
+  }).map((b) => (typeof b === 'string' ? b : b?.name));
 }
 export function routingFor(S, model, slugs = []) {
   const provider = {};
@@ -945,7 +955,8 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   const setup = req.bench ? { ...DEFAULTS.setups.C, ...(req.setup || {}) }
     : { model: req.setup?.model || DEFAULTS.chatModel, reasoning: req.setup?.reasoning || 'off', creativity: ['focused', 'creative'].includes(req.setup?.creativity) ? req.setup.creativity : 'default', decide: 'auto' };
   const S = { ...DEFAULTS, ...(req.settings || {}) };
-  const blockedSlugs = Array.isArray(S.blockedProviders) && S.blockedProviders.length ? providerSlugs(S.blockedProviders, knownProviders()) : [];
+  const blockedNames = blockedFor(S.blockedProviders, setup.model);
+  const blockedSlugs = blockedNames.length ? providerSlugs(blockedNames, knownProviders()) : [];
   const SF = safetySettings(req.settings?.safety);
   // The Q&A benchmark skips the build gates (verify, reviewer); the build benchmark (bench: 'build') keeps them.
   const qaBench = !!req.bench && req.bench !== 'build';

@@ -5870,7 +5870,7 @@ function settingsPanels(S) {
         + stRow('Provider order', 'Auto favours providers with reliable tool calling (OpenRouter’s Exacto). Cheapest and Fastest sort by price or speed instead.', stCards('providerSort', [['auto', '🎯', 'Auto', 'Reliable tool calling'], ['price', '💲', 'Cheapest', 'Lowest price first'], ['throughput', '⚡', 'Fastest', 'Highest throughput first']], S.providerSort || 'auto', 'compact'), { cls: 'sx-row-wide', id: 'stRowOrder' })
         + stRow('Only providers that support every feature', 'Skips providers that would silently drop tools, reasoning or other settings. If none qualifies, that reply uses the default routing.', stSwitch('requireParams', S.requireParams !== false), { id: 'stRowFeatures' })
         + stRow('Zero data retention only', 'Only providers that keep no copy of your prompts. Fewer models qualify.', stSwitch('zdrOnly', !!S.zdrOnly), { id: 'stRowZdr' })
-        + stRow('Blocked providers', 'OpenRouter never sends the agent’s calls to these, for any model. Block one that keeps breaking tool calls (the provider shows as “via …” above each reply). If only blocked providers serve a model, that reply uses them anyway, and says so.', '<div id="stBlocked"><div class="st-row-help">Loading providers…</div></div>', { cls: 'sx-row-wide', id: 'stRowBlocked' })),
+        + stRow('Blocked providers', 'OpenRouter never sends the agent’s calls to these: for every model, or only the models you pick (a provider can be fine for one model and break another). Block one that keeps breaking tool calls (the provider shows as “via …” above each reply). If only blocked providers serve a model, that reply uses them anyway, and says so.', '<div id="stBlocked"><div class="st-row-help">Loading providers…</div></div>', { cls: 'sx-row-wide', id: 'stRowBlocked' })),
     ]],
     newchats: ['New chats', 'What a fresh chat starts with. Each chat can change these in its message box.', [
       `<p class="sx-sec-help sx-mode-link">New chats start in ${S.approval === 'yolo' ? '⚡ YOLO' : '🔒 Strict'}. <button type="button" class="sp-link" data-act="openMode">Change it in 🛡 Approvals &amp; safety</button></p>`,
@@ -6909,26 +6909,57 @@ async function drawMemoryPanel(msg = '') {
 function revealButton(b, shown) { if (!b) return; b.title = shown ? 'Hide amounts' : 'Show amounts'; b.textContent = shown ? '🙈' : '👁'; }
 // ⚙ Models → Blocked providers: every OpenRouter provider with a ✓ box, blocked ones first, with a search and a
 // Blocked / Allowed filter (there are over a hundred). Names as replies show them ("via …"); the server maps them to
-// OpenRouter's slugs.
+// OpenRouter's slugs. A blocked provider covers every model, or only some: model ids or patterns ("deepseek/*").
 function blockedOf(S) { return Array.isArray(S?.blockedProviders) ? S.blockedProviders : G.cfg?.defaults?.blockedProviders || []; }
 async function drawBlockedProviders(mark) {
   const box = $('#stBlocked'); if (!box) return;
   const r = await fetch('/api/providers').then((x) => x.json()).catch(() => ({ providers: [] }));
   if (!$('#stBlocked')) return;
-  const S = ST.draft, on = new Set(blockedOf(S));
-  const names = [...new Set([...on, ...(r.providers || []).map((p) => p.name)])];
+  const S = ST.draft;
+  // name → { models, some }: "some" with no models yet still blocks every model until one is added; ST.bkSome keeps
+  // that choice across redraws, since nothing is saved for it yet.
+  const some = (ST.bkSome ||= new Set());
+  const on = new Map(blockedOf(S).filter((b) => b && (typeof b === 'string' || b.name)).map((b) => (typeof b === 'string' ? [b, { models: [], some: some.has(b) }] : [b.name, { models: [...(b.models || [])], some: !!b.models?.length || some.has(b.name) }])));
+  const names = [...new Set([...on.keys(), ...(r.providers || []).map((p) => p.name)])];
   names.sort((a, b) => (on.has(b) - on.has(a)) || a.localeCompare(b));
-  const sum = () => (on.size ? `Blocked: ${[...on].map(esc).join(', ')}` : 'None blocked: OpenRouter may use any provider.');
-  box.innerHTML = `<div class="bp-sum">${sum()}</div><div class="bp-filter"></div>${r.error && !r.providers?.length ? `<div class="st-row-help">The provider list didn't load (${esc(r.error)}); the blocked ones are still listed.</div>` : ''}
-    <div class="bp-list">${names.map((n) => `<label class="sq-check bp-row" data-lf-text="${esc(n.toLowerCase())}" data-lf-seg="${on.has(n) ? 'blocked' : 'allowed'}"><input type="checkbox" value="${esc(n)}" ${on.has(n) ? 'checked' : ''}><span>${esc(n)}</span></label>`).join('')}</div>`;
-  listFilter($('.bp-filter', box), { key: 'blockedProviders', rows: () => box.querySelectorAll('.bp-row'), segOrder: ['blocked', 'allowed'], segLabel: (v) => (v === 'blocked' ? 'Blocked' : 'Allowed'), placeholder: 'Find a provider', label: 'Show' });
-  box.onchange = (e) => {
-    const x = e.target.closest('.bp-row input'); if (!x) return;
-    if (x.checked) on.add(x.value); else on.delete(x.value);
-    x.closest('.bp-row').dataset.lfSeg = x.checked ? 'blocked' : 'allowed';
-    S.blockedProviders = [...on];
+  const forWhat = (b) => (b.models.length ? b.models.map(esc).join(', ') : 'every model');
+  const sum = () => (on.size ? `Blocked: ${[...on].map(([n, b]) => `<b>${esc(n)}</b> <span class="bk-for">(${forWhat(b)})</span>`).join(', ')}` : 'None blocked: OpenRouter may use any provider.');
+  const save = () => {
+    S.blockedProviders = [...on].map(([name, b]) => (b.models.length ? { name, models: [...b.models] } : name));
     $('.bp-sum', box).innerHTML = sum();
     mark(); stRefresh();
+  };
+  const scopes = () => (on.size ? [...on].map(([n, b]) => `<div class="bk-item" data-bk="${esc(n)}">
+      <b class="bk-name">${esc(n)}</b>
+      <div class="st-segmented bk-scope" role="radiogroup" aria-label="Which models ${esc(n)} is blocked for">${[['all', 'All models'], ['some', 'Only some']].map(([k, l]) => `<button type="button" class="st-seg-btn ${(b.some ? 'some' : 'all') === k ? 'active' : ''}" role="radio" aria-checked="${(b.some ? 'some' : 'all') === k}" data-bk-scope="${k}">${l}</button>`).join('')}</div>
+      ${b.some ? `<div class="bk-models">${b.models.map((m) => `<span class="bk-model">${esc(m)}<button type="button" data-bk-drop="${esc(m)}" title="Don't block ${esc(n)} for ${esc(m)}" aria-label="Remove ${esc(m)}">✕</button></span>`).join('')}
+        <button type="button" class="st-btn secondary sm" data-bk-pick>+ Model</button>
+        <input class="bk-pat" placeholder="or a pattern, e.g. deepseek/*" title="A model id or a pattern with *, then Enter" aria-label="Model id or pattern for ${esc(n)}">
+        ${b.models.length ? '' : '<span class="bk-hint">Add a model: until then every model is blocked.</span>'}</div>` : ''}
+    </div>`).join('') : '');
+  const drawScopes = () => { $('.bk-items', box).innerHTML = scopes(); };
+  box.innerHTML = `<div class="bp-sum">${sum()}</div><div class="bk-items">${scopes()}</div><div class="bp-filter"></div>${r.error && !r.providers?.length ? `<div class="st-row-help">The provider list didn't load (${esc(r.error)}); the blocked ones are still listed.</div>` : ''}
+    <div class="bp-list">${names.map((n) => `<label class="sq-check bp-row" data-lf-text="${esc(n.toLowerCase())}" data-lf-seg="${on.has(n) ? 'blocked' : 'allowed'}"><input type="checkbox" value="${esc(n)}" ${on.has(n) ? 'checked' : ''}><span>${esc(n)}</span></label>`).join('')}</div>`;
+  listFilter($('.bp-filter', box), { key: 'blockedProviders', rows: () => box.querySelectorAll('.bp-row'), segOrder: ['blocked', 'allowed'], segLabel: (v) => (v === 'blocked' ? 'Blocked' : 'Allowed'), placeholder: 'Find a provider', label: 'Show' });
+  const addModel = (n, m) => { const b = on.get(n); m = String(m || '').trim(); if (!b || !m || b.models.includes(m)) return; b.models.push(m); save(); drawScopes(); $(`.bk-item[data-bk="${CSS.escape(n)}"] .bk-pat`, box)?.focus(); };
+  box.onchange = (e) => {
+    const x = e.target.closest('.bp-row input'); if (!x) return;
+    if (x.checked) on.set(x.value, { models: [], some: false }); else on.delete(x.value);
+    x.closest('.bp-row').dataset.lfSeg = x.checked ? 'blocked' : 'allowed';
+    save(); drawScopes();
+  };
+  box.onclick = async (e) => {
+    const item = e.target.closest('.bk-item'); if (!item) return;
+    const n = item.dataset.bk, b = on.get(n); if (!b) return;
+    const scope = e.target.closest('[data-bk-scope]')?.dataset.bkScope;
+    if (scope) { b.some = scope === 'some'; if (b.some) some.add(n); else { some.delete(n); b.models = []; } save(); drawScopes(); if (b.some) $(`.bk-item[data-bk="${CSS.escape(n)}"] .bk-pat`, box)?.focus(); return; }
+    const drop = e.target.closest('[data-bk-drop]')?.dataset.bkDrop;
+    if (drop != null) { b.models = b.models.filter((m) => m !== drop); save(); drawScopes(); return; }
+    if (e.target.closest('[data-bk-pick]')) { const id = await pickModel('chat', '', { context: `Block ${n} for this model` }); if (id) addModel(n, id); }
+  };
+  box.onkeydown = (e) => {
+    const x = e.target.closest('.bk-pat'); if (!x || e.key !== 'Enter') return;
+    e.preventDefault(); addModel(x.closest('.bk-item').dataset.bk, x.value);
   };
 }
 // ⚙ Models: what the active key has left. The amounts stay hidden until 👁 here, every time Settings opens,
