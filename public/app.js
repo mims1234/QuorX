@@ -1612,7 +1612,7 @@ function drawList() {
   const favs = plain ? (G.favModels?.[PK.kind] || []).map((id) => all.find((m) => m.id === id)).filter((m) => m && here(m)) : [];
   const recent = plain ? (G.recentModels?.[PK.kind] || []).filter((id) => !favs.some((f) => f.id === id)).map((id) => all.find((m) => m.id === id)).filter((m) => m && here(m)).slice(0, 5) : [];
   PK.list = [...favs, ...recent, ...list];
-  count.innerHTML = `<b>${list.length}</b> of ${all.length} ${KIND_TITLE[PK.kind]?.toLowerCase() || 'model'}s${list.length !== all.length ? ' match' : ''} · sorted by ${SORTS.find((x) => x[0] === PK.sort)[1].toLowerCase()} <span class="rec-legend" title="From QuorX's own benchmarks where a model was tested; otherwise from what the catalogue says it can do. Hover a dot for the reason.">🟢 recommended · 🟡 OK or untested · 🔴 avoid</span>`;
+  count.innerHTML = `<b>${list.length}</b> of ${all.length} ${KIND_TITLE[PK.kind]?.toLowerCase() || 'model'}s${list.length !== all.length ? ' match' : ''} · sorted by ${SORTS.find((x) => x[0] === PK.sort)[1].toLowerCase()}`;
   if (!list.length && !favs.length) {
     box.innerHTML = `<div class="mp-empty"><b>No model matches.</b><p>${q ? `Nothing for “${esc(q)}”. ` : ''}Try fewer filters.</p>${PK.filters.size || PK.providers.size || PK.subs.size || q ? '<button type="button" class="mp-btn" id="pkClearAll">Clear search and filters</button>' : ''}</div>`;
     const c = $('#pkClearAll'); if (c) c.onclick = () => { $('#pkSearch').value = ''; PK.filters.clear(); PK.providers.clear(); PK.subs.clear(); drawPicker(); };
@@ -1655,12 +1655,28 @@ function scoreBadge(id) {
 }
 // Without an OpenRouter key, a chat model on OpenRouter can't run: it shows, locked.
 const orLocked = (id) => !G.cfg?.hasKey && PK.kind === 'chat' && !sourceOfId(id);
+// Everything about a model, for its row's hover: who made it, where it runs, price, limits, abilities, rating.
+function modelTip(m, caps, locked) {
+  const r = rateModel(m, PK.kind), sc = G.scores?.[m.id];
+  return [
+    locked ? 'Runs on OpenRouter: add an OpenRouter key first (⚙ Settings → API keys).' : '',
+    `${cleanName(m)} · ${PROVIDER_NAME(makerOf(m))}`,
+    m.id,
+    `Runs on: ${m.source ? `${SOURCE_NAME[m.source] || m.source}${m.providerName ? `, through ${m.providerName}` : ''}` : 'OpenRouter'}`,
+    `Price: ${priceText(m)}`,
+    [m.ctx ? `Context: ${ctxText(m.ctx)} tokens` : '', m.maxOut ? `output up to ${ctxText(m.maxOut)}` : ''].filter(Boolean).join(', '),
+    caps.length ? `Can: ${caps.map(([, t]) => t.toLowerCase()).join(', ')}` : '',
+    m.created ? `Released: ${new Date(m.created * 1000).toLocaleDateString()} (${agoDate(m.created)})` : '',
+    r ? `QuorX's rating: ${{ g: 'recommended', y: 'OK or untested', r: 'avoid' }[r.r] || 'untested'}${r.why ? `. ${r.why}` : ''}` : '',
+    sc && sc.checked >= 3 ? `Your last 30 days: ${sc.passed} of ${sc.checked} replies passed the checks` : '',
+    m.desc ? `\n${m.desc}` : '',
+  ].filter(Boolean).join('\n');
+}
 function rowHTML(m, i) {
-  const p = providerOf(m.id), fav = (G.favModels?.[m.kind] || []).includes(m.id), locked = orLocked(m.id);
+  const fav = (G.favModels?.[m.kind] || []).includes(m.id), locked = orLocked(m.id);
   const caps = [(m.in || []).includes('image') && m.kind !== 'image' ? ['👁', 'Sees images'] : null, m.tools ? ['🧰', 'Uses tools'] : null, m.reasoning ? ['🧠', 'Reasoning'] : null, (m.in || []).includes('audio') ? ['🎙', 'Hears audio'] : null, m.voices?.length ? ['🗣', `${m.voices.length} voices`] : null].filter(Boolean);
-  return `<div class="mp-row ${m.id === PK.current ? 'cur' : ''} ${locked ? 'locked' : ''}" role="option" data-i="${i}" data-id="${esc(m.id)}" aria-selected="false" ${locked ? 'aria-disabled="true" ' : ''}title="${esc(locked ? 'Runs on OpenRouter: add an OpenRouter key first (⚙ Settings → API keys)' : m.desc || priceText(m))}">
-    <span class="mp-ava" style="--h:${hue(p)}" title="${esc(PROVIDER_NAME(p))}">${esc(initials(PROVIDER_NAME(p)))}</span>
-    <span class="mp-main"><span class="mp-name">${recDot(m, PK.kind)}${cardChip(m.id)} ${esc(cleanName(m))}${m.source ? ` <span class="mp-src" title="Runs through ${esc(SOURCE_NAME[m.source])} (⚙ Settings → Apps on this PC)">${esc(SOURCE_SHORT[m.source])}</span>` : ''}${m.id === PK.current ? ' <span class="mp-tag cur">current</span>' : ''}</span><span class="mp-id">${esc(m.id)}</span></span>
+  return `<div class="mp-row ${m.id === PK.current ? 'cur' : ''} ${locked ? 'locked' : ''}" role="option" data-i="${i}" data-id="${esc(m.id)}" aria-selected="false" ${locked ? 'aria-disabled="true" ' : ''}title="${esc(modelTip(m, caps, locked))}">
+    <span class="mp-main"><span class="mp-name">${cardChip(m.id)} ${esc(cleanName(m))}${m.source ? ` <span class="mp-src" title="Runs through ${esc(SOURCE_NAME[m.source])} (⚙ Settings → Apps on this PC)">${esc(SOURCE_SHORT[m.source])}</span>` : ''}${m.id === PK.current ? ' <span class="mp-tag cur">current</span>' : ''}</span><span class="mp-id">${esc(m.id)}</span></span>
     <span class="mp-caps">${caps.map(([i2, t]) => `<span title="${t}">${i2}</span>`).join('')}</span>
     <span class="mp-meta">${scoreBadge(m.id)}${m.ctx ? `<span title="Context window">${ctxText(m.ctx)}</span>` : ''}${m.created ? `<span title="${new Date(m.created * 1000).toLocaleDateString()}">${agoDate(m.created)}</span>` : ''}</span>
     <span class="mp-price" title="${esc(priceText(m))}">${priceCell(m)}</span>
