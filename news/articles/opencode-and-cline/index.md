@@ -1,13 +1,13 @@
 ---
-title: Run a chat through OpenCode on your PC
+title: Run a chat through OpenCode or Cline on your PC
 date: 2026-10-28
-summary: A chat's main model can now run through the OpenCode app on your computer, with every provider you connected there, while OpenRouter stays behind everything else. How to switch it on, what it costs, and what happens when a call fails.
+summary: A chat's main model can now run through the OpenCode app or the Cline CLI on your computer, with the providers and accounts you connected there, while OpenRouter stays behind everything else. How to switch them on, what they cost, and what happens when a call fails.
 tags: models, cost, setup
 version: 0.2.14
 ---
 
-If you use OpenCode, QuorX can now run a chat through it: every provider you connected in OpenCode (your plans, keys
-and sign-ins) shows up in QuorX's model picker. A chat's main model runs there, and every tool, file, command, browser
+If you use OpenCode or Cline, QuorX can now run a chat through it: every provider you connected in OpenCode (your plans,
+keys and sign-ins), and the account you signed in to in Cline, show up in QuorX's model picker. A chat's main model runs there, and every tool, file, command, browser
 step, check and schedule works the same as on any other model. Everything here is in **⚙ Settings → Models → Apps on
 this PC**.
 
@@ -26,6 +26,25 @@ QuorX holds no key for it. If OpenCode isn't installed yet, the page shows the c
 Once it's on, its models show in the chat model pickers, tagged **This PC**. On one test computer that was 854 models.
 The **Where it runs** switch at the top of the picker shows one source at a time, so a long list stays short.
 
+## Cline on your PC
+
+Cline works the same way: tick **Cline on this PC** and press **Test the connection**. QuorX finds the Cline CLI
+(`npm i -g cline`) and the account you signed in to there (Cline credits, ClinePass or a ChatGPT subscription), and
+its models show in the picker, tagged **Cline**. Cline makes each call itself, so QuorX holds no key and never touches
+Cline's sign-in.
+
+Three things differ from OpenCode:
+
+- **Cline reports no usage**, so QuorX counts each call at an estimate: its characters at the model's list price. Free
+  models and subscriptions count $0.
+- **Cline keeps every call in its own session history**, and it gives other apps no way to remove them, so QuorX's calls
+  show up there.
+- **Pictures stay with QuorX**: Cline passes only text on, so a Cline model can't see screenshots (the deciders still can,
+  when you have an OpenRouter key).
+
+Cline always offers the model its own tools too. QuorX refuses every one before it runs, and a model that reaches for
+one gets a second try with a reminder to use QuorX's tools.
+
 ## How it works
 
 QuorX starts OpenCode's own server in the background when a chat needs it, and stops it after a quiet quarter of an
@@ -37,9 +56,9 @@ that QuorX deletes afterwards, so your own session list stays as it was.
 
 ```flow
 { "nodes": [
-  { "id": "on", "title": "Switch it on", "sub": "and test the connection", "cap": "QuorX finds OpenCode and the providers connected in it. No key goes into QuorX." },
-  { "id": "pick", "title": "Pick its model", "sub": "tagged This PC", "cap": "Choose a This PC model in the chat's model button. Where it runs filters the list to one source." },
-  { "id": "run", "title": "OpenCode makes the call", "sub": "on your provider", "cap": "Each step of the reply runs through OpenCode. Tools, files, commands and checks work as usual." },
+  { "id": "on", "title": "Switch it on", "sub": "and test the connection", "cap": "QuorX finds OpenCode or Cline and what you connected in it. No key goes into QuorX." },
+  { "id": "pick", "title": "Pick its model", "sub": "tagged This PC or Cline", "cap": "Choose one in the chat's model button. Where it runs filters the list to one source." },
+  { "id": "run", "title": "The app makes the call", "sub": "on your provider or account", "cap": "Each step of the reply runs through the app. Tools, files, commands and checks work as usual." },
   { "id": "fail", "title": "If a call fails", "sub": "the reply stops and says why", "new": true, "cap": "The reply stops and says which model failed and why; you pick the next model. A fallback to OpenRouter is there only if you choose one." },
   { "id": "rest", "title": "Everything else", "sub": "on OpenRouter", "cap": "Deciders, paid media, the prompt enhancer, helpers and the reviewer keep running on OpenRouter." }
 ] }
@@ -47,15 +66,21 @@ that QuorX deletes afterwards, so your own session list stays as it was.
 
 ## What runs where
 
-Only the chat's main model runs through OpenCode (its summaries of a long chat too). Deciders, paid media, the prompt
+Only the chat's main model runs through the app (its summaries of a long chat too). Deciders, paid media, the prompt
 enhancer, helpers and the reviewer stay on OpenRouter, so you still need an OpenRouter key. You can switch a chat
-between OpenRouter and OpenCode at any time. The conversation carries over.
+between OpenRouter and an app on your PC at any time. The conversation carries over.
 
 ## What it costs
 
 When a provider reports a call's cost, QuorX counts it in the reply, the project and your daily caps; otherwise it
 counts the call's tokens at the provider's list price. Plan and free models count $0, and each step on a plan shows
 what it counted against the plan, at list price.
+
+## No OpenRouter key yet?
+
+You can still chat: with no OpenRouter key, the models tagged **This PC** and **Cline** run, and the others show locked
+until you add a key. The deciders, the prompt enhancer, helpers, the reviewer and paid media need OpenRouter, so they are
+off until then.
 
 ## When it fails
 
@@ -66,7 +91,7 @@ QuorX never switches your model behind your back.
   conversation carries over.
 - **A model that keeps failing** is skipped by every chat for a while instead of each one waiting on it: until its plan
   window resets or for up to 30 minutes, and under 5 minutes after a server error. Each provider is separate, so one
-  model reaching its limit leaves the others working. Only OpenCode itself missing or unreachable affects them all.
+  model reaching its limit leaves the others working. Only the app itself missing or unreachable affects them all.
 
 Any text streamed before a failure moves into the steps, so the reply isn't written twice. No tool call from a failed
 answer ever runs.

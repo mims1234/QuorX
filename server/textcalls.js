@@ -1,13 +1,16 @@
 // Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
-// Tool calls written as text, for a model QuorX reaches through an app that runs its own agent (the OpenCode on this
-// computer: opencodelocal.js). That app can't take QuorX's tools, so the system prompt describes them and the model
-// writes each call as a <tool_call> block with JSON inside; QuorX reads the blocks back into the same tool_calls an
-// API would have sent. The conversation goes over as one text transcript, so any model with text in and text out works.
+// Tool calls written as text, for a model QuorX reaches through an app that runs its own agent (OpenCode or Cline on
+// this computer: opencodelocal.js, clinelocal.js). That app can't take QuorX's tools, so the prompt describes them and
+// the model writes each call as a block with JSON inside; QuorX reads the blocks back into the same tool_calls an API
+// would have sent. The conversation goes over as one text transcript, so any model with text in and text out works.
+// Two styles of block: <tool_call>…</tool_call>, and a ```tool_call fence for an app that strips that tag from what it
+// passes on (Cline). Both are read back whichever was asked for.
 
-const OPEN = '<tool_call>', CLOSE = '</tool_call>';
+const OPEN = '<tool_call>', CLOSE = '</tool_call>', FENCE = '```tool_call', FENCE_END = '```';
+const block = (json, style) => (style === 'fence' ? `${FENCE}\n${json}\n${FENCE_END}` : `${OPEN}${json}${CLOSE}`);
 
 /** The part of the system prompt that teaches the model QuorX's tools and how to call them. */
-export function toolPrompt(tools = [], toolChoice = 'auto') {
+export function toolPrompt(tools = [], toolChoice = 'auto', style = 'tags') {
   const fns = (tools || []).filter((t) => t?.function?.name).map((t) => ({ name: t.function.name, description: t.function.description || '', parameters: t.function.parameters || { type: 'object', properties: {} } }));
   if (!fns.length) return '';
   const rule = toolChoice === 'none' ? 'Do not call any tool in this reply: answer in plain text.'
@@ -15,7 +18,7 @@ export function toolPrompt(tools = [], toolChoice = 'auto') {
     : toolChoice === 'required' ? 'In this reply, call at least one tool.' : '';
   return `\n\n[Tools]
 You can use the tools listed below. To call one, write a block exactly like this, with the arguments as one JSON object:
-${OPEN}{"name": "write_file", "arguments": {"path": "a.txt", "content": "hello"}}${CLOSE}
+${block('{"name": "write_file", "arguments": {"path": "a.txt", "content": "hello"}}', style)}
 - Write several blocks in one reply to call several tools; they run in order.
 - After your tool calls, stop writing: the results come back in the next message as <tool_result> blocks.
 - Text outside the blocks is shown to the user; put nothing else inside a block.
@@ -26,16 +29,16 @@ ${fns.map((f) => JSON.stringify(f)).join('\n')}`;
 }
 
 const text = (c) => (typeof c === 'string' ? c : Array.isArray(c) ? c.map((p) => (p?.type === 'text' ? p.text || '' : p?.type === 'image_url' ? '[picture attached]' : p?.type === 'file' ? `[file attached: ${p.file?.filename || 'file'}]` : '')).filter(Boolean).join('\n') : '');
-const callBlock = (c) => {
+const callBlock = (c, style) => {
   let args = {};
   try { args = JSON.parse(c.function?.arguments || '{}'); } catch { args = { _raw: String(c.function?.arguments || '') }; }
-  return `${OPEN}${JSON.stringify({ name: c.function?.name, arguments: args })}${CLOSE}`;
+  return block(JSON.stringify({ name: c.function?.name, arguments: args }), style);
 };
 /**
  * QuorX's conversation (OpenAI-style messages) as { system, transcript }: the system messages joined, and every other
  * turn written out in order, the model's own earlier calls as the blocks it wrote and each result after its call.
  */
-export function renderTranscript(messages = []) {
+export function renderTranscript(messages = [], style = 'tags') {
   const system = messages.filter((m) => m?.role === 'system').map((m) => text(m.content)).filter(Boolean).join('\n\n');
   const names = new Map();
   const out = [];
@@ -44,11 +47,11 @@ export function renderTranscript(messages = []) {
     if (m.role === 'user') out.push(`<user>\n${text(m.content)}\n</user>`);
     else if (m.role === 'assistant') {
       for (const c of m.tool_calls || []) names.set(c.id, c.function?.name);
-      const body = [text(m.content), ...(m.tool_calls || []).map(callBlock)].filter(Boolean).join('\n');
+      const body = [text(m.content), ...(m.tool_calls || []).map((c) => callBlock(c, style))].filter(Boolean).join('\n');
       out.push(`<assistant>\n${body}\n</assistant>`);
     } else if (m.role === 'tool') out.push(`<tool_result name="${names.get(m.tool_call_id) || 'tool'}">\n${text(m.content)}\n</tool_result>`);
   }
-  out.push(`Write your next reply as the assistant now (text, tool calls, or both), following the instructions above. To call a tool, write ${OPEN}{"name": "…", "arguments": {…}}${CLOSE}, one block per call, in exactly that format.`);
+  out.push(`Write your next reply as the assistant now (text, tool calls, or both), following the instructions above. To call a tool, write ${style === 'fence' ? `a ${FENCE} block with {"name": "…", "arguments": {…}} inside` : `${OPEN}{"name": "…", "arguments": {…}}${CLOSE}`}, one block per call, in exactly that format.`);
   return { system, transcript: out.join('\n\n') };
 }
 
@@ -90,17 +93,21 @@ export function parseToolCalls(reply, idBase = 'call') {
   let said = '', i = 0;
   const s = nativeCalls(String(reply || ''), idBase, calls);
   while (i < s.length) {
-    const a = s.indexOf(OPEN, i);
+    const t = s.indexOf(OPEN, i), f = s.indexOf(FENCE, i);
+    const fence = f >= 0 && (t < 0 || f < t), a = fence ? f : t;
     if (a < 0) { said += s.slice(i); break; }
     said += s.slice(i, a);
-    const b = s.indexOf(CLOSE, a + OPEN.length);
-    const inner = s.slice(a + OPEN.length, b < 0 ? s.length : b);
-    i = b < 0 ? s.length : b + CLOSE.length;
+    const [o, c] = fence ? [FENCE, FENCE_END] : [OPEN, CLOSE];
+    const b = s.indexOf(c, a + o.length);
+    const inner = s.slice(a + o.length, b < 0 ? s.length : b);
+    i = b < 0 ? s.length : b + c.length;
     const j = loose(inner);
     const name = j && typeof j === 'object' ? String(j.name || j.tool || j.function?.name || '') : '';
     const args = j && typeof j === 'object' ? j.arguments ?? j.args ?? j.parameters ?? j.function?.arguments ?? {} : null;
     calls.push({ id: `${idBase}_${calls.length}`, type: 'function', function: { name: name || 'invalid', arguments: args == null ? inner.trim() : typeof args === 'string' ? args : JSON.stringify(args) } });
   }
+  // No block, but the whole reply is one call's JSON (a model that left the block's markers out).
+  if (!calls.length) { const j = loose(said); if (j && typeof j === 'object' && typeof j.name === 'string' && j.name && j.arguments && typeof j.arguments === 'object') return { text: '', calls: [{ id: `${idBase}_0`, type: 'function', function: { name: j.name, arguments: JSON.stringify(j.arguments) } }] }; }
   return { text: said.replace(/\n{3,}/g, '\n\n').trim(), calls };
 }
 
@@ -110,7 +117,8 @@ export function parseToolCalls(reply, idBase = 'call') {
  */
 // Where the calls start: QuorX's own block, or a model's native format (DeepSeek's starts "<｜"). Text after the first
 // call is rare and is still in the final reply; the stream shows only what came before.
-const OPENERS = [OPEN, '<｜', '<|'];
+const OPENERS = [OPEN, FENCE, '<｜', '<|'];
+const LONGEST = Math.max(...OPENERS.map((o) => o.length));
 export function textFilter(onText) {
   let pending = '', stopped = false;
   return (d) => {
@@ -120,7 +128,7 @@ export function textFilter(onText) {
     if (at !== Infinity) { stopped = true; if (at) onText(pending.slice(0, at)); pending = ''; return; }
     // Keep back a tail that could be the start of an opener.
     let keep = 0;
-    for (let k = Math.min(OPEN.length - 1, pending.length); k > 0 && !keep; k--) if (OPENERS.some((o) => o.startsWith(pending.slice(-k)))) keep = k;
+    for (let k = Math.min(LONGEST - 1, pending.length); k > 0 && !keep; k--) if (OPENERS.some((o) => o.startsWith(pending.slice(-k)))) keep = k;
     const out = pending.slice(0, pending.length - keep);
     pending = pending.slice(pending.length - keep);
     if (out) onText(out);

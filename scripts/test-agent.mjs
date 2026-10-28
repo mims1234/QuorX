@@ -35,6 +35,7 @@ import { sourceOf, sourceStream, sameOnOpenRouter, failureKind, noteSourceResult
 import { SECRET_FILES } from '../server/keys.js';
 import { toolPrompt, renderTranscript, parseToolCalls, textFilter } from '../server/textcalls.js';
 import { localStream, localModels } from '../server/opencodelocal.js';
+import { ensureCline, stopCline, clineModels, clineStream } from '../server/clinelocal.js';
 
 let n = 0;
 const reply = (text, calls = [], finishReason = 'stop') => ({ text, toolCalls: calls.map(([name, args], i) => ({ id: `c${++n}_${i}`, type: 'function', function: { name, arguments: typeof args === 'string' ? args : JSON.stringify(args) } })), usage: { cost: 0.0001 }, ms: 1, firstMs: 1, finishReason });
@@ -4032,4 +4033,76 @@ test('OpenCode on this PC lists every text model of every provider connected the
     assert.equal(sameOnOpenRouter('opencode-local/deepseek/deepseek-flash', [{ id: 'deepseek/deepseek-flash', tools: true }]), 'deepseek/deepseek-flash', 'it falls back to the same model on OpenRouter');
     assert.equal(sameOnOpenRouter('opencode-local/openrouter/z-ai/glm-5.3', [{ id: 'z-ai/glm-5.3', tools: true }]), 'z-ai/glm-5.3');
   } finally { await oc.close(); }
+});
+
+// ---------- Cline on this PC: `cline --acp` (server/clinelocal.js), here a fake agent that speaks the same JSON-RPC ----------
+// It answers with a ```tool_call block, unless the prompt says OWN_TOOL: then it first asks to run Cline's own editor
+// (and only uses QuorX's block once QuorX has told it that tool is off).
+const FAKE_CLINE = `
+let buf = '', id = 100, waiting = null;
+const out = (j) => process.stdout.write(JSON.stringify(j) + '\\n');
+const chunk = (sid, kind, text) => out({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: sid, update: { sessionUpdate: kind, content: { type: 'text', text } } } });
+process.stdin.on('data', (d) => {
+  buf += d;
+  let i;
+  while ((i = buf.indexOf('\\n')) >= 0) {
+    const line = buf.slice(0, i); buf = buf.slice(i + 1);
+    if (!line.trim()) continue;
+    const j = JSON.parse(line);
+    if (j.id != null && !j.method) { process.stderr.write('PERMISSION ' + JSON.stringify(j.result) + '\\n'); waiting?.(); continue; }
+    if (j.method === 'initialize') out({ jsonrpc: '2.0', id: j.id, result: { protocolVersion: 1, agentInfo: { name: 'cline', version: '9.9.9' } } });
+    else if (j.method === 'session/new') out({ jsonrpc: '2.0', id: j.id, result: { sessionId: 's' + (++id), models: { availableModels: [{ modelId: 'anthropic/claude-sonnet-5.5', name: 'Claude Sonnet 5.5' }, { modelId: 'recursive/flint-v1.0:free', name: 'Flint (free)' }], currentModelId: 'anthropic/claude-sonnet-5.5' }, configOptions: [{ id: 'provider', currentValue: 'cline' }] } });
+    else if (j.method === 'session/set_model') out({ jsonrpc: '2.0', id: j.id, result: {} });
+    else if (j.method === 'session/cancel') {}
+    else if (j.method === 'session/prompt') {
+      const sid = j.params.sessionId, text = j.params.prompt[0].text;
+      if (/RPC_ERROR/.test(text)) { out({ jsonrpc: '2.0', id: j.id, error: { code: -32603, message: 'Internal error: Unauthorized: please sign in again' } }); continue; }
+      chunk(sid, 'agent_thought_chunk', 'Thinking. ');
+      if (/OWN_TOOL/.test(text) && !/switched off here, so nothing ran/.test(text)) {
+        chunk(sid, 'agent_message_chunk', 'On it.');
+        out({ jsonrpc: '2.0', id: 900, method: 'session/request_permission', params: { sessionId: sid, toolCall: { title: 'editor' }, options: [{ optionId: 'a', kind: 'allow_once' }, { optionId: 'r', kind: 'reject_once' }] } });
+        waiting = () => { waiting = null; out({ jsonrpc: '2.0', id: j.id, result: { stopReason: 'cancelled' } }); };
+        continue;
+      }
+      chunk(sid, 'agent_message_chunk', 'Writing it.\\n\\n\\u0060\\u0060\\u0060tool_');
+      chunk(sid, 'agent_message_chunk', 'call\\n{"name": "write_file", "arguments": {"path": "a.txt", "content": "hi"}}\\n\\u0060\\u0060\\u0060');
+      out({ jsonrpc: '2.0', id: j.id, result: { stopReason: 'end_turn' } });
+    }
+  }
+});`;
+async function withFakeCline(fn) {
+  const dir = tempDir('quorx-cline-'), script = path.join(dir, 'fake-cline.cjs');
+  fs.writeFileSync(script, FAKE_CLINE);
+  const { spawn } = await import('node:child_process');
+  let stderr = '';
+  stopCline();
+  await ensureCline({ find: () => path.join(dir, 'cline.exe'), start: (exe, args, opts) => { const c = spawn(process.execPath, [script], { ...opts, cwd: dir }); c.stderr.on('data', (d) => { stderr += d; }); return c; } });
+  try { return await fn(() => stderr); } finally { stopCline(); }
+}
+
+test('Cline on this PC lists the models of the account signed in there, priced like OpenRouter’s, free ones free', async () => {
+  await withFakeCline(async () => {
+    const l = await clineModels({ orList: [{ id: 'anthropic/claude-sonnet-5.5', price: [2, 10], ctx: 1e6, maxOut: 128000, reasoning: true }, { id: 'recursive/flint-v1.0', price: [0.1, 0.4], ctx: 262144 }] });
+    assert.deepEqual(l.map((m) => [m.id, m.plan, m.price, m.ctx, m.in]), [['cline-local/anthropic/claude-sonnet-5.5', 'paid', [2, 10], 1e6, ['text']], ['cline-local/recursive/flint-v1.0:free', 'free', [0, 0], 262144, ['text']]]);
+    assert.equal(sourceOf('cline-local/anthropic/claude-sonnet-5.5')?.source, 'cline-local');
+    assert.equal(sameOnOpenRouter('cline-local/anthropic/claude-sonnet-5.5', [{ id: 'anthropic/claude-sonnet-5.5', tools: true }], l[0]), 'anthropic/claude-sonnet-5.5', 'Cline’s ids are OpenRouter’s');
+  });
+});
+
+test('a call through Cline on this PC reads QuorX’s fenced tool calls, streams only the text, and refuses Cline’s own tools', async () => {
+  await withFakeCline(async (stderr) => {
+    const tools = [{ type: 'function', function: { name: 'write_file', parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } } } } }];
+    const shown = [], thought = [];
+    const r = await clineStream({ model: 'cline-local/anthropic/claude-sonnet-5.5', tools, messages: [{ role: 'user', content: 'make a.txt' }] }, new AbortController().signal, (d) => shown.push(d), (d) => thought.push(d), { info: { plan: 'paid' } });
+    assert.deepEqual(r.toolCalls.map((c) => [c.function.name, JSON.parse(c.function.arguments)]), [['write_file', { path: 'a.txt', content: 'hi' }]]);
+    assert.equal(shown.join(''), 'Writing it.\n\n', 'the block never reaches the page');
+    assert.deepEqual([r.text, thought.join(''), r.usage.estimated], ['Writing it.', 'Thinking. ', true]);
+    const own = await clineStream({ model: 'cline-local/anthropic/claude-sonnet-5.5', tools, messages: [{ role: 'user', content: 'OWN_TOOL make a.txt' }] }, new AbortController().signal, null, null, {});
+    assert.equal(own.toolCalls[0]?.function.name, 'write_file', 'after a refused tool of Cline’s own, one more go with a reminder');
+    assert.match(stderr(), /PERMISSION \{"outcome":\{"outcome":"selected","optionId":"r"\}\}/, 'Cline’s own tool was refused');
+    const bad = await clineStream({ model: 'cline-local/anthropic/claude-sonnet-5.5', tools, messages: [{ role: 'user', content: 'RPC_ERROR' }] }, new AbortController().signal, null, null, {}).catch((e) => e);
+    assert.equal(failureKind(bad), 'auth', 'a sign-in problem says so');
+    const ac = new AbortController(); ac.abort();
+    await assert.rejects(clineStream({ model: 'cline-local/anthropic/claude-sonnet-5.5', messages: [{ role: 'user', content: 'x' }] }, ac.signal), /Stopped|abort/i);
+  });
 });

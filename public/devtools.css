@@ -357,8 +357,11 @@ input.kx-name:focus { outline: none; border-color: var(--accent); background: va
 .mt-btn.done { color: var(--ok); }
 .mt-remix:hover { color: var(--violet); }
 .mt-rewind:hover { color: var(--amber); }
-.u-tools { position: absolute; right: 4px; bottom: -30px; opacity: 0; transition: opacity .15s; margin: 0; }
-.msg.user { position: relative; margin-bottom: 30px; }
+/* Inside your bubble, on the left of its time line: below it, the next reply covered them */
+.u-tools { position: absolute; left: 8px; bottom: 4px; opacity: .45; transition: opacity .15s; margin: 0; }
+.u-tools .mt-btn { width: 22px; height: 22px; }
+.u-tools .mt-btn svg { width: 13px; height: 13px; }
+.msg.user { position: relative; }
 .msg.user:hover .u-tools, .u-tools:focus-within { opacity: 1; }
 @media (hover: none) { .u-tools { opacity: .8; } }
 
