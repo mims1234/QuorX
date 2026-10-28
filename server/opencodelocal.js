@@ -178,12 +178,13 @@ const dataUrl = (u) => { const m = /^data:([^;,]+);base64,/.exec(String(u || '')
  * .status/.errorType/.kind when OpenCode or its provider refuses (sources.js classifies it).
  */
 export async function localStream(body, signal, onText, onThink, opts = {}) {
-  // A model that made a native function call (some providers turn a written tag into one, and OpenCode, with its own
-  // tools off, refuses it) gets one more go, told to write the block as text.
+  // A model whose calls didn't reach QuorX gets one more go, told why: a native function call (some providers turn a
+  // written tag into one, and OpenCode, with its own tools off, refuses it), or blocks left in the middle of a line. The
+  // second go's text isn't streamed again: the page already shows the first.
   try { return await localOnce(body, signal, onText, onThink, opts); }
   catch (e) {
-    if (!e?.native || signal?.aborted) throw e;
-    return localOnce(body, signal, onText, onThink, { ...opts, reminder: `Your last answer made a native function call${e.native.tool ? ` (${e.native.tool})` : ''}, which never reaches QuorX, so nothing ran. Write each call as a text block in your reply, exactly as the instructions show.` });
+    if (!e?.retryWith || signal?.aborted) throw e;
+    return localOnce(body, signal, null, onThink, { ...opts, reminder: e.retryWith });
   }
 }
 async function localOnce(body, signal, onText, onThink, { info = {}, idleMs = 180e3, server, reminder = '' } = {}) {
@@ -242,9 +243,9 @@ async function localOnce(body, signal, onText, onThink, { info = {}, idleMs = 18
       if ((e.type === 'message.part.updated' && mine.has(p.part?.messageID)) || (e.type === 'message.part.delta' && mine.has(p.messageID))) return;
       // A native tool call: OpenCode would refuse it and let the model try again inside this one call. Stop here.
       if (e.type === 'message.part.updated' && p.part?.type === 'tool') {
-        const inv = p.part.tool === 'invalid';
-        native ||= { tool: String((inv ? p.part.state?.input?.tool : p.part.tool) || ''), input: inv ? null : p.part.state?.input || null };
-        done = true;
+        const inv = p.part.tool === 'invalid', st = p.part.state || {};
+        native = { tool: String((inv ? st.input?.tool : p.part.tool) || native?.tool || ''), input: inv ? null : st.input && Object.keys(st.input).length ? st.input : native?.input || null };
+        if (st.status && st.status !== 'pending') done = true;
         return;
       }
       if (e.type === 'message.part.updated' && p.part) {
@@ -296,8 +297,10 @@ async function localOnce(body, signal, onText, onThink, { info = {}, idleMs = 18
     if (native && !parsed.calls.length) {
       const offered = (body.tools || []).some((x) => x?.function?.name === native.tool);
       if (offered && native.input && typeof native.input === 'object' && Object.keys(native.input).length) parsed.calls = [{ id: `call_${t.toString(36)}_n`, type: 'function', function: { name: native.tool, arguments: JSON.stringify(native.input) } }];
-      else throw err(`The model made a native function call${native.tool ? ` (${native.tool})` : ''}, which OpenCode can't pass on to QuorX`, { kind: 'shape', native });
+      else throw err(`The model made a native function call${native.tool ? ` (${native.tool})` : ''}, which OpenCode can't pass on to QuorX`, { kind: 'shape', native, retryWith: `Your last answer made a native function call${native.tool ? ` (${native.tool})` : ''}, which never reaches QuorX, so nothing ran. Write each call as a text block in your reply, exactly as the instructions show.`, partial: { outChars, ms: Date.now() - t } });
     }
+    // Keyed blocks written mid-line weren't run: with nothing else to run, one more go, told why.
+    if (!parsed.calls.length && parsed.skipped) throw err(`The model's ${parsed.skipped} call block${parsed.skipped > 1 ? 's were' : ' was'} not on a line of its own, so nothing ran`, { kind: 'shape', retryWith: 'Your last answer had call blocks in the middle of a line of text, so nothing ran. Put each block on a line of its own, exactly as the instructions show.', partial: { outChars, ms: Date.now() - t } });
     const tk = lastInfo?.tokens || {}, cache = tk.cache || {};
     const said = costs.size ? [...costs.values()].reduce((a, b) => a + b, 0) : Number(lastInfo?.cost);
     const usage = lastInfo ? {
