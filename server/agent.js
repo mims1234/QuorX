@@ -1869,7 +1869,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         else if (body.tool_choice?.function?.name) r.toolCalls = r.toolCalls.filter((c) => c?.function?.name === body.tool_choice.function.name);
         if (r.toolCalls.length > 25) r.toolCalls = r.toolCalls.slice(0, 25);
         for (const c of r.toolCalls) textCalls.add(c);
-        if (r.skippedCalls) emit({ t: 'note', level: 'warn', msg: `${short(sm)} wrote ${r.skippedCalls} call block${r.skippedCalls > 1 ? 's' : ''} in the middle of its text, not on a line of ${r.skippedCalls > 1 ? 'their' : 'its'} own, so ${r.skippedCalls > 1 ? 'they were' : 'it was'} not run.`, at: at() });
+        if (r.skippedCalls) emit({ t: 'note', level: 'warn', msg: `${short(sm)} wrote ${r.skippedCalls} call block${r.skippedCalls > 1 ? 's' : ''} QuorX doesn't run (in the middle of a line, inside an HTML comment or <pre>, or in its own call format), so ${r.skippedCalls > 1 ? 'they were' : 'it was'} not run.`, at: at() });
         run.sourceFails[s.source] = 0;
         return { r };
       } catch (e0) {
