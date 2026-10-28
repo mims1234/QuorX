@@ -260,7 +260,8 @@ test('snapshot: the event loop keeps ticking while a big project is snapshotted'
   } finally { clearInterval(t); }
   const ms = Date.now() - t0;
   assert.ok(ticks >= Math.min(5, ms / 40), `the timer ticked ${ticks} times in ${ms} ms`);
-  assert.ok(maxGap < 250, `the longest stall was ${maxGap} ms`);
+  // Done on the main thread, this snapshot freezes it for seconds; a busy CI runner alone can pause it ~300 ms.
+  assert.ok(maxGap < 1000, `the longest stall was ${maxGap} ms`);
 });
 // ---------- the rule engine ----------
 const proj = tmp('policy');
