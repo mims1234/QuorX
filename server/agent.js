@@ -251,6 +251,16 @@ export function inPlaceEdit(line) {
   const sed = t.match(/\bsed\s+-[a-zA-Z]*i[a-zA-Z]*\s+(?:''\s+)?(?:-e\s+)?(?:'[^']*'|"[^"]*")\s+['"]?([^\s'";|&]+)/);
   return sed ? sed[1] : '';
 }
+// Whether a reply's last sentence says what the model does next ("I'll open Paint.", "Checking the window first."),
+// not a question for the user or a "let me know".
+export function announcesStep(text) {
+  const t = String(text || '').trim();
+  if (!t || /\?\s*$/.test(t)) return false;
+  const lastSentence = t.replace(/[.!…:\s]+$/, '').split(/(?<=[.!?…])\s+|\n+/).pop() || '';
+  if (/\blet me know\b|\bif you\b|\bwant me to\b/i.test(lastSentence)) return false;
+  return /\b(I'?ll|I will|I'm going to|I am going to|let me|let's|next,? I|now I|first,? I)\b/i.test(lastSentence)
+    || /^(Checking|Opening|Starting|Loading|Taking|Reading|Looking|Drawing|Running|Writing|Creating|Searching|Clicking|Launching|Trying)\b/i.test(lastSentence.trim());
+}
 const projectSize = (root) => { try { return listFiles(root, 400).filter((f) => !/skipped\)$/.test(f.path)).length; } catch { return 0; } };
 // Skills by name; descriptions only for those whose name or description shares a word with the request (the agent
 // loads any skill with use_skill, so a short list still covers the rest).
@@ -1555,6 +1565,18 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         reply = replyBefore;
         if (r.text) asides.push(r.text);
         messages.push({ role: 'assistant', content: r.text || 'Done.' });
+        continue;
+      }
+      // A reply that ends saying what it does next ("Checking the window first.") but wrote no call stopped short: some
+      // models (Grok Build, writing calls as text) do this. Sent back once per reply; never for a call it wrote but that
+      // wasn't run (that one may be an example: it is never asked for again).
+      if (!last && !run.stallNudged && !r.skippedCalls && announcesStep(r.text)) {
+        run.stallNudged = true;
+        reply = replyBefore;
+        if (r.text) asides.push(r.text);
+        emit({ t: 'note', level: 'warn', msg: `${short(setup.model)} said what it would do next but wrote no tool call; asking it to make the call.`, at: at() });
+        messages.push({ role: 'assistant', content: r.text });
+        messages.push({ role: 'user', content: '(Your last turn said what you would do next but contained no tool call, so nothing ran and the reply would end there. Make that call now, written exactly as the instructions describe. If you meant that as your final answer, write the final answer again in full.)' });
         continue;
       }
       // A final answer on the last step with the plan all ticked off is a finished reply, not one cut short: it is
