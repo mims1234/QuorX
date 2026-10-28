@@ -4950,7 +4950,7 @@ async function followRun(c, m, open) {
         if (e.t === 'budget_done' && m.budgetAsk) { m.budgetAsk.outcome = e; c.waiting = false; refreshSidebar(); renderChatHead(c); }
         if (e.t === 'answer' && m.questions[e.id]) { const qc = m.questions[e.id].card; e.label = e.answers ? (e.defaults ? 'the recommended answers' : e.answers.map((x, i) => (x.choice != null ? qc.questions?.[i]?.options[x.choice] : x.text || '–')).join(' · ')) : e.choice != null ? qc.options[e.choice] : e.text; m.questions[e.id].answer = e; c.waiting = false; renderSidebar(); renderChatHead(c); }
         if (e.t === 'done') { m.doneAt = Date.now(); m.content = e.reply; m.note = e.historyNote; m.stats = e.stats; G.sessionCost += e.stats.cost; renderSpend(); loadScores(); }
-        if (e.t === 'error') { m.error = e.msg; if (e.stats && !m.stats) { m.stats = { ...e.stats, partial: true }; G.sessionCost += e.stats.cost || 0; renderSpend(); } }
+        if (e.t === 'error') { m.error = e.msg; m.failed = !e.stopped; if (e.stats && !m.stats) { m.stats = { ...e.stats, partial: true }; G.sessionCost += e.stats.cost || 0; renderSpend(); } }
         if (e.t === 'interrupted') { m.error = 'The harness restarted while this reply was running.'; m.resumable = !!e.resumable; }
         if (e.t === 'compacted') { a.summary = e.summary; a.summaryAt = e.cutoffAt; }
         // You switched paid tools on from the agent's card: they stay on for this chat (its 🧰 Tools menu shows them).
@@ -8924,16 +8924,26 @@ function drawRunningPane(c, r) {
 // Only the newest reply, when it failed: your message before it goes again, on the chat's model as it is now.
 function retryable(c, m) {
   const msgs = c.agent?.messages || [];
-  return !c.running && msgs[msgs.length - 1] === m && msgs[msgs.length - 2]?.role === 'user';
+  return !c.running && m.failed && !m.resumable && !m.runActive && !m.live && msgs[msgs.length - 1] === m && msgs[msgs.length - 2]?.role === 'user';
 }
 async function retryReply(c, m) {
   if (!retryable(c, m)) return;
   const msgs = c.agent.messages, u = msgs[msgs.length - 2];
+  const ta = c.el && $('.input', c.el.root);
+  // What waits in the message box is yours: Retry doesn't take it or mix it in.
+  if (String(ta?.value || '').trim() || c.images?.length || c.docs?.length || c.ctx?.length || c.comments?.length) return uiAlert('Send or clear what’s in the message box first, then Retry.');
+  const imgs = (u.imgViews || []).map((full, i) => ({ thumb: u.imgs?.[i] || full, full, view: full }));
+  if (!String(u.content || '').trim() && !imgs.length && !u.docs?.length && !u.cmts?.length) return uiAlert('There is nothing in that message to send again.');
   c.agent.messages = msgs.slice(0, -2);
   await saveChat(c, true);
   renderPanes(); refreshSidebar();
+  // The message goes again with its pictures, files and pointed-at elements. @-context keeps only its titles, so it is
+  // named in the text instead.
+  c.images = imgs;
   if (u.docs?.length) c.docs = u.docs.map((d) => ({ ...d, busy: null }));
-  send(c, u.content || '');
+  if (u.cmts?.length) c.comments = u.cmts.map((x) => ({ ...x }));
+  const ctxNote = u.ctx?.length ? `\n\n(Context I attached before: ${u.ctx.join(', ')}.)` : '';
+  send(c, `${u.content || ''}${ctxNote}`);
 }
 
 // ---------- ↩ rewind to one of your messages, ⑂ remix a reply into a new chat ----------
