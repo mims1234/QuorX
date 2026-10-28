@@ -302,7 +302,8 @@ async function localOnce(body, signal, onText, onThink, { info = {}, idleMs = 18
     if (failure) throw failure;
     if (!done) throw err('OpenCode ended the stream before the answer was done', { kind: 'network' });
     const full = order.filter((id) => kinds.get(id) !== 'reasoning').map((id) => finalText.get(id) || '').join('');
-    const parsed = parseToolCalls(full, `call_${t.toString(36)}`, key);
+    // DeepSeek models also write calls in their own format, which carries no key: read it only from them.
+    const parsed = parseToolCalls(full, `call_${t.toString(36)}`, key, { dsml: /deepseek/i.test(rest) });
     // The native call is QuorX's when it names one of this step's tools with its arguments; otherwise, one more go.
     if (native && !parsed.calls.length) {
       const offered = (body.tools || []).some((x) => x?.function?.name === native.tool);
