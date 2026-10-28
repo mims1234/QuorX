@@ -134,3 +134,16 @@ dialog.mp-dialog::backdrop { background: rgba(4, 6, 6, .72); backdrop-filter: bl
 /* The model card tag beside the rating (the card shows on hover) */
 .mp-card { display: inline-block; margin-left: 4px; padding: 0 5px; border: 1px solid var(--line); border-radius: 4px; font-size: 10px; line-height: 15px; color: var(--dim); text-transform: uppercase; letter-spacing: .04em; vertical-align: 1px; cursor: help; }
 .mp-card:hover { color: var(--text, inherit); border-color: var(--dim); }
+/* Models of an app on this PC: where a model runs (a segmented switch, not a filter chip), its source tag, and a plan price */
+.mp-src-seg { display: inline-flex; padding: 2px; gap: 2px; border-radius: 8px; background: var(--surface-inset, var(--bg)); border: 1px solid var(--border-inset, var(--line)); margin-right: 6px; flex-wrap: wrap; }
+.mp-src-seg .st-seg-btn { height: 24px; padding: 0 10px; border-radius: 6px; border: 1px solid transparent; background: transparent; color: var(--muted); font: 600 11.5px var(--font-ui); cursor: pointer; white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; }
+.mp-src-seg .st-seg-btn small { font: 10.5px var(--mono); color: var(--dim); }
+.mp-src-seg .st-seg-btn:hover { color: var(--text); }
+.mp-src-seg .st-seg-btn.active { background: var(--panel); border-color: var(--line-strong, var(--line)); color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, .12); }
+.mp-src { display: inline-block; margin-left: 4px; padding: 0 5px; border-radius: 4px; font: 700 9.5px/15px var(--font-ui); text-transform: uppercase; letter-spacing: .06em; background: var(--violet-dim, var(--accent-dim)); color: var(--violet, var(--accent)); vertical-align: 1px; cursor: help; }
+.mp-plan { font: 600 12px var(--mono); color: var(--violet, var(--accent)); font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* No OpenRouter key: its chat models show, locked; a click on one flashes the banner that says why */
+.mp-row.locked { opacity: .45; cursor: not-allowed; }
+.mp-row.locked:hover { background: transparent; }
+#pkBanner.flash { animation: pk-flash .6s ease 2; }
+@keyframes pk-flash { 50% { filter: brightness(1.6); } }

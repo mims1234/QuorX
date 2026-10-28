@@ -11,7 +11,7 @@ import zlib from 'node:zlib';
 import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { workspaceDir, ensureAgentDir } from './workspace.js';
-import { chat, chatModels, embed, embeddingModels } from './openrouter.js';
+import { chat, chatModels, embed, embeddingModels, currentKey } from './openrouter.js';
 import { recordRun } from './runs.js';
 import { numberedWindow } from './loop.js';
 import { renameSoon } from './fsretry.js';
@@ -275,6 +275,8 @@ export async function processDoc(projectId, id, opts = {}) {
     const base = { chars: text.length, tokens, lines, pages, method, error: null, cost: +((doc.cost || 0) + spent).toFixed(6) };
     // 2. Small enough to send whole: done.
     if (tokens <= Number(S.inlineDocTokens)) return update(projectId, id, { ...base, status: 'text', note: `${tokens.toLocaleString()} tokens: sent whole with your message.` });
+    // No OpenRouter key: searching needs its embeddings, but the text is here, so the agent reads it in parts.
+    if (!currentKey()) return update(projectId, id, { ...base, status: 'text', note: `${tokens.toLocaleString()} tokens: the agent reads it with read_doc. Making it searchable needs an OpenRouter key (⚙ Settings → API keys).` });
     // 3. Big: index it, unless that costs more than the budget and the user hasn't said yes.
     const model = String(S.embedModel || DOC_DEFAULTS.embedModel);
     const est = await estimateEmbedCost(model, tokens);
@@ -297,7 +299,8 @@ export async function processDoc(projectId, id, opts = {}) {
     fs.writeFileSync(idxFile, JSON.stringify({ model, dims: vectors[0]?.length || 0, built: Date.now(), chunks, vectors: toB64(vectors) }));
     return update(projectId, id, { ...base, cost: +((doc.cost || 0) + spent).toFixed(6), status: 'indexed', embedModel: model, chunks: chunks.length, note: `${tokens.toLocaleString()} tokens in ${chunks.length} passages: the agent searches it.` });
   } catch (e) {
-    return update(projectId, id, { status: 'error', error: e.message, note: `Could not read it: ${e.message}`, cost: +((doc.cost || 0) + spent).toFixed(6) });
+    const why = !currentKey() && /auth|401|credential/i.test(String(e.message)) ? 'this needs an OpenRouter key (⚙ Settings → API keys)' : e.message;
+    return update(projectId, id, { status: 'error', error: why, note: `Could not read it: ${why}`, cost: +((doc.cost || 0) + spent).toFixed(6) });
   }
 }
 

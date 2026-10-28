@@ -363,7 +363,7 @@ const ICO = {
   trash: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg>',
 };
 const COMMANDS = [
-  ['model', 'Choose this chat\'s model', (c, arg) => { if (!arg) return $('.model', c.el.root).click(); const id = findModel(c, arg); if (!id) return uiAlert(`No model matches "${arg}".`); c.agent.setup.model = id; saveChat(c); renderComposerBar(c); renderChatHead(c); }],
+  ['model', 'Choose this chat\'s model', (c, arg) => { if (!arg) return $('.model', c.el.root).click(); const id = findModel(c, arg); if (!id) return uiAlert(`No model matches "${arg}".`); c.agent.setup.model = id; saveChat(c); renderComposerBar(c); renderChatHead(c); applyKeyLock(); }],
   ['reason', 'How much the model thinks first', (c, arg) => { if (REASON[arg]) { c.agent.setup.reasoning = arg; saveChat(c); renderComposerBar(c); } }],
   ['creativity', 'How varied the answers are', (c, arg) => { if (CREATIVITY_INFO[arg]) { c.agent.setup.creativity = arg; saveChat(c); renderComposerBar(c); } }],
   ['strict', 'Ask before every tool (this chat)', (c) => { c.approval = 'strict'; saveChat(c); renderComposerBar(c); }],
@@ -1430,6 +1430,8 @@ function rateModel(idOrModel, kind) {
   if (k === 'chat' || (!k && m?.tools !== undefined)) {
     if (m && !m.tools) return { r: 'r', why: 'Can\'t call tools, so in QuorX it can\'t write files, use the browser or check its work.' };
     if (/:free$|^openrouter\/free/.test(id)) return { r: 'r', why: 'Free tier: in our tests free models hit rate limits and provider errors and gave up.' };
+    if (m?.status === 'deprecated') return { r: 'r', why: `${SOURCE_NAME[m.source] || 'Its source'} marks it deprecated: it may stop answering soon (the reply then stops and says so).` };
+    if (m?.source) return { r: 'y', why: `Runs through ${SOURCE_NAME[m.source]}; not tested in QuorX yet. When a call fails there, the reply stops and says why, and you pick another model.${m.plan === 'free' ? ` Free: ${SOURCE_NAME[m.source]} may keep it for its own app; if it says no, the reply stops and says so.` : ''}${!(m.in || []).includes('image') ? ' It can\'t see screenshots (the deciders still can).' : ''}` };
     return { r: 'y', why: `Not tested in QuorX yet.${m && !(m.in || []).includes('image') ? ' It can\'t see screenshots (the deciders still can).' : ''}` };
   }
   if (k === 'decision') return { r: 'y', why: (m?.in || []).includes('image') ? 'Not tested here yet. Reads images, so it can do screenshot checks.' : 'Not tested here yet. Text only: it can\'t do screenshot checks.' };
@@ -1440,8 +1442,12 @@ function recDot(id, kind) {
   const r = rateModel(id, kind);
   return r ? `<span class="rec rec-${r.r}" title="${esc(`${REC_WORD[r.r]}: ${r.why}`)}" aria-label="${REC_WORD[r.r]}">${REC_ICON[r.r]}</span>` : '';
 }
-const shortPrice = (id) => { const m = G.byId.get(id); return m && m.kind === 'chat' ? `$${m.price[0].toFixed(2)}/$${m.price[1].toFixed(2)}` : ''; };
+// Whose plan pays: Go (through the OpenCode on this PC), else the source's own.
+const planName = (m) => (m.providerID === 'opencode-go' ? 'Go' : SOURCE_SHORT[m.source] || '');
+const shortPrice = (id) => { const m = G.byId.get(id); return !m || m.kind !== 'chat' ? '' : m.plan === 'plan' ? `${planName(m)} plan` : m.source && m.plan === 'free' ? 'free' : `$${m.price[0].toFixed(2)}/$${m.price[1].toFixed(2)}`; };
 function priceText(m, extra = {}) {
+  if (m.source && m.plan === 'plan') return `${SOURCE_NAME[m.source] || m.source} plan: nothing to pay per call (your subscription's usage limits apply) · list price $${(m.listPrice?.[0] || 0).toFixed(2)} in / $${(m.listPrice?.[1] || 0).toFixed(2)} out per M tokens`;
+  if (m.source && m.plan === 'free') return `Free on ${SOURCE_NAME[m.source] || m.source}, if it lets apps other than its own use it (when it doesn’t, the reply stops and says so). Free models may be rate limited, and their providers may use prompts to improve them`;
   if (m.kind === 'decision') return `$${m.price[0].toFixed(3)}/M in · output free`;
   if (m.kind === 'image') return m.perImage ? `$${m.perImage} per picture` : m.price[1] ? `≈ $${(m.price[1] * 15000 / 1e6).toFixed(3)} per 1K picture` : 'price unknown';
   if (m.kind === 'speech') return `$${m.price[0].toFixed(2)} per M characters · ≈ $${(m.price[0] * 500 / 1e6).toFixed(4)} per 500 chars`;
@@ -1467,7 +1473,8 @@ const KIND_TITLE = { chat: 'Chat model', decision: 'Decider model', image: 'Pict
 const KIND_NOTE = { chat: 'Models that can use tools (the agent needs them).', decision: 'Fast judges that answer yes/no, choice and score questions.', image: 'Text-to-picture models.', video: 'Text-to-video models.', music: 'Music models.', speech: 'Text-to-speech models.', listen: 'Chat models that accept audio (used for the mic).' };
 const SORTS = [['best', 'Recommended'], ['cheap', 'Cheapest'], ['pricey', 'Priciest'], ['new', 'Newest'], ['old', 'Oldest'], ['name', 'Name'], ['ctx', 'Largest context']];
 const FILTERS = [
-  ['free', 'Free', (m) => priceNum(m) === 0 || /:free$/.test(m.id)],
+  ['free', 'Free', (m) => (priceNum(m) === 0 || /:free$/.test(m.id)) && m.plan !== 'plan'],
+  ['plan', 'On a plan', (m) => m.plan === 'plan'],
   ['vision', '👁 Sees images', (m) => (m.in || []).includes('image') && m.kind !== 'image'],
   ['tools', '🧰 Uses tools', (m) => !!m.tools],
   ['reasoning', '🧠 Reasoning', (m) => !!m.reasoning],
@@ -1476,13 +1483,18 @@ const FILTERS = [
   ['fav', '★ Favourites', (m) => (G.favModels?.[m.kind] || []).includes(m.id)],
 ];
 const providerOf = (id) => String(id).replace(/^~/, '').split('/')[0] || 'other';
-const PROVIDER_NAME = (p) => ({ 'x-ai': 'xAI', openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google', 'meta-llama': 'Meta', mistralai: 'Mistral', deepseek: 'DeepSeek', qwen: 'Qwen', nvidia: 'NVIDIA', cohere: 'Cohere', inclusionai: 'inclusionAI', openrouter: 'OpenRouter', 'black-forest-labs': 'Black Forest Labs', elevenlabs: 'ElevenLabs' }[p] || p.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
+// Models of an app on this PC (⚙ Settings → Apps on this PC) are the source, a slash, and that app's own id.
+const SOURCE_NAME = { 'opencode-local': 'OpenCode on this PC' };
+const SOURCE_SHORT = { 'opencode-local': 'This PC' };
+const sourceOfId = (id) => { const s = String(id || ''), h = s.split('/')[0]; return SOURCE_NAME[h] && s.length > h.length + 1 ? h : null; };
+const PROVIDER_NAME = (p) => ({ 'x-ai': 'xAI', openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google', 'meta-llama': 'Meta', mistralai: 'Mistral', deepseek: 'DeepSeek', qwen: 'Qwen', nvidia: 'NVIDIA', cohere: 'Cohere', inclusionai: 'inclusionAI', openrouter: 'OpenRouter', 'black-forest-labs': 'Black Forest Labs', elevenlabs: 'ElevenLabs', ...SOURCE_NAME }[p] || p.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
 const cleanName = (m) => String(m.name || m.id).replace(/\s*\(free\)\s*$/i, '').replace(/^[^:]+:\s*/, '');
 const ctxText = (n) => (!n ? '' : n >= 1e6 ? `${+(n / 1e6).toFixed(1)}M` : `${Math.round(n / 1000)}k`);
 const agoDate = (sec) => { if (!sec) return ''; const d = (Date.now() / 1000 - sec) / 86400; return d < 1 ? 'today' : d < 30 ? `${Math.round(d)}d ago` : d < 365 ? `${Math.round(d / 30)}mo ago` : `${+(d / 365).toFixed(1)}y ago`; };
 // A short, comparable price for the list; the full wording stays in the tooltip.
 function priceCell(m) {
   const n = priceNum(m), usd = (x, d = 2) => (x > 0 && x < 0.01 ? `$${Number(x.toPrecision(2))}` : `$${x.toFixed(d)}`);
+  if (m.plan === 'plan') return `<span class="mp-plan">${esc(planName(m))} plan</span>`;
   if (n === 0 || /:free$/.test(m.id)) return '<span class="mp-free">Free</span>';
   if (m.kind === 'chat' || m.kind === 'listen') return `<span class="mp-money">${usd(m.price[0])}</span><small>in</small><span class="mp-money">${usd(m.price[1])}</span><small>out /M</small>`;
   if (m.kind === 'decision') return `<span class="mp-money">${usd(m.price[0], 3)}</span><small>/M in</small>`;
@@ -1492,12 +1504,14 @@ function priceCell(m) {
   if (m.kind === 'speech') return `<span class="mp-money">${usd(m.price[0])}</span><small>/M chars</small>`;
   return esc(priceText(m));
 }
-const PK = { kind: 'chat', current: '', filters: new Set(), providers: new Set(), sort: 'cheap', q: '', sel: 0, shown: 0, list: [], done: null, observer: null };
+const PK = { kind: 'chat', current: '', filters: new Set(), providers: new Set(), sort: 'cheap', q: '', sel: 0, shown: 0, list: [], done: null, observer: null, source: 'all', orOnly: false };
 
-// pickModel(kind, current, { context }) → the chosen id, or null.
+// pickModel(kind, current, { context, openRouterOnly, source }) → the chosen id, or null. openRouterOnly: for the
+// places only an OpenRouter model makes sense (its fallback model, a blocked provider's models); source: open on one
+// source's models ('openrouter', 'opencode-local').
 function pickModel(kind, current, opts = {}) {
   return new Promise((resolve) => {
-    Object.assign(PK, { kind, current: current || '', q: '', sel: 0, providers: new Set(), filters: new Set(), context: opts.context || '' });
+    Object.assign(PK, { kind, current: current || '', q: '', sel: 0, providers: new Set(), filters: new Set(), context: opts.context || '', orOnly: !!opts.openRouterOnly, source: opts.source || 'all' });
     PK.sort = G.pickerSort?.[kind] || 'best';
     PK.done = (v) => { if ($('#picker').open) $('#picker').close(); PK.done = null; resolve(v); };
     $('#pkSearch').value = '';
@@ -1507,15 +1521,17 @@ function pickModel(kind, current, opts = {}) {
     setTimeout(() => $('#pkSearch').focus(), 30);
   });
 }
-function pickerModels() { return (G.models || []).filter((m) => m.kind === PK.kind); }
+function pickerModels() { return (G.models || []).filter((m) => m.kind === PK.kind && !(PK.orOnly && m.source) && !(m.source && m.status === 'deprecated' && m.id !== PK.current)); }
+// Where a model runs: OpenRouter, or the OpenCode source it names.
+const sourceKey = (m) => m.source || 'openrouter';
 function drawPicker(full = false) {
   const all = pickerModels();
   $('#pkTitle').textContent = `Choose a ${(KIND_TITLE[PK.kind] || 'model').toLowerCase()}`;
   $('#pkSub').textContent = [PK.context, KIND_NOTE[PK.kind]].filter(Boolean).join(' · ');
-  // No key yet: browsing works (the lists are public), running doesn't.
+  // No key yet: browsing works (the lists are public); only models through an app on this PC run.
   const banner = $('#pkBanner');
   banner.hidden = !!G.cfg?.hasKey;
-  banner.innerHTML = G.cfg?.hasKey ? '' : '🔑 <b>No OpenRouter key yet.</b> You can browse models and prices now; nothing runs until you add a key. <button type="button" class="mp-link" id="pkAddKey">Add a key →</button>';
+  banner.innerHTML = G.cfg?.hasKey ? '' : `🔑 <b>No OpenRouter key yet.</b> ${PK.kind === 'chat' ? 'Models tagged This PC run now; the others wait for a key.' : 'You can browse models and prices now; they run once you add a key.'} <button type="button" class="mp-link" id="pkAddKey">Add a key →</button>`;
   const ak = $('#pkAddKey'); if (ak) ak.onclick = () => { PK.done?.(null); openSettings('keys'); };
   // What is chosen now.
   const cur = G.byId.get(PK.current) || all.find((m) => m.id === PK.current);
@@ -1528,10 +1544,15 @@ function drawPicker(full = false) {
     for (const b of document.querySelectorAll('#pkSort .mp-sort')) b.onclick = () => { PK.sort = b.dataset.sort; (G.pickerSort ??= {})[PK.kind] = PK.sort; savePrefs(); drawPicker(true); };
   }
   const usable = FILTERS.filter(([k, , f]) => k === 'fav' ? (G.favModels?.[PK.kind] || []).length : all.some(f) && !all.every(f));
-  $('#pkFilters').innerHTML = usable.map(([k, l, f]) => `<button type="button" class="mp-chip ${PK.filters.has(k) ? 'on' : ''}" data-f="${k}" aria-pressed="${PK.filters.has(k)}">${l} <small>${all.filter(f).length}</small></button>`).join('')
+  // Where the models run, once OpenCode adds its own (one segment per source the list has, with counts).
+  const srcs = [...new Set(all.map(sourceKey))];
+  if (!srcs.includes(PK.source)) PK.source = 'all';
+  const srcBar = srcs.length > 1 ? `<div class="st-segmented mp-src-seg" role="radiogroup" aria-label="Where the model runs">${[['all', 'All'], ...['openrouter', ...Object.keys(SOURCE_NAME)].filter((k) => srcs.includes(k)).map((k) => [k, k === 'openrouter' ? 'OpenRouter' : SOURCE_NAME[k]])].map(([k, l]) => `<button type="button" class="st-seg-btn ${PK.source === k ? 'active' : ''}" role="radio" aria-checked="${PK.source === k}" data-src="${k}">${l} <small>${k === 'all' ? all.length : all.filter((m) => sourceKey(m) === k).length}</small></button>`).join('')}</div>` : '';
+  $('#pkFilters').innerHTML = srcBar + usable.map(([k, l, f]) => `<button type="button" class="mp-chip ${PK.filters.has(k) ? 'on' : ''}" data-f="${k}" aria-pressed="${PK.filters.has(k)}">${l} <small>${all.filter(f).length}</small></button>`).join('')
     + `<div class="mp-prov-wrap"><button type="button" class="mp-chip mp-prov-btn ${PK.providers.size ? 'on' : ''}" aria-haspopup="true">🏢 ${PK.providers.size ? `${PK.providers.size} provider${PK.providers.size > 1 ? 's' : ''}` : 'All providers'} ▾</button><div class="mp-prov-pop" hidden></div></div>`
     + (PK.filters.size || PK.providers.size ? '<button type="button" class="mp-link mp-clear">Clear filters</button>' : '');
   for (const b of document.querySelectorAll('#pkFilters .mp-chip[data-f]')) b.onclick = () => { PK.filters.has(b.dataset.f) ? PK.filters.delete(b.dataset.f) : PK.filters.add(b.dataset.f); PK.sel = 0; drawPicker(); };
+  for (const b of document.querySelectorAll('#pkFilters [data-src]')) b.onclick = () => { PK.source = b.dataset.src; PK.sel = 0; drawPicker(); };
   const clr = $('#pkFilters .mp-clear'); if (clr) clr.onclick = () => { PK.filters.clear(); PK.providers.clear(); drawPicker(); };
   // Providers: a searchable multi-select with counts.
   const provBtn = $('#pkFilters .mp-prov-btn'), provPop = $('#pkFilters .mp-prov-pop');
@@ -1562,15 +1583,16 @@ function drawList() {
   const q = ($('#pkSearch').value || '').trim().toLowerCase();
   const all = pickerModels();
   const active = FILTERS.filter(([k]) => PK.filters.has(k));
-  let list = all.filter((m) => active.every(([, , f]) => f(m)) && (!PK.providers.size || PK.providers.has(providerOf(m.id)))
+  let list = all.filter((m) => active.every(([, , f]) => f(m)) && (!PK.providers.size || PK.providers.has(providerOf(m.id))) && (PK.source === 'all' || sourceKey(m) === PK.source)
     && (!q || `${m.id} ${m.name} ${PROVIDER_NAME(providerOf(m.id))}`.toLowerCase().includes(q)));
   const RANK = { g: 0, y: 1, r: 2 };
   const by = { best: (a, b) => RANK[rateModel(a, PK.kind)?.r ?? 'y'] - RANK[rateModel(b, PK.kind)?.r ?? 'y'] || priceNum(a) - priceNum(b), cheap: (a, b) => priceNum(a) - priceNum(b), pricey: (a, b) => priceNum(b) - priceNum(a), new: (a, b) => (b.created || 0) - (a.created || 0), old: (a, b) => (a.created || 0) - (b.created || 0), name: (a, b) => cleanName(a).localeCompare(cleanName(b)), ctx: (a, b) => (b.ctx || 0) - (a.ctx || 0) }[PK.sort];
   list.sort((a, b) => by(a, b) || cleanName(a).localeCompare(cleanName(b)));
   // Favourites and recent ones first when nothing narrows the list.
   const plain = !q && !PK.filters.size && !PK.providers.size;
-  const favs = plain ? (G.favModels?.[PK.kind] || []).map((id) => all.find((m) => m.id === id)).filter(Boolean) : [];
-  const recent = plain ? (G.recentModels?.[PK.kind] || []).filter((id) => !favs.some((f) => f.id === id)).map((id) => all.find((m) => m.id === id)).filter(Boolean).slice(0, 5) : [];
+  const here = (m) => PK.source === 'all' || sourceKey(m) === PK.source;
+  const favs = plain ? (G.favModels?.[PK.kind] || []).map((id) => all.find((m) => m.id === id)).filter((m) => m && here(m)) : [];
+  const recent = plain ? (G.recentModels?.[PK.kind] || []).filter((id) => !favs.some((f) => f.id === id)).map((id) => all.find((m) => m.id === id)).filter((m) => m && here(m)).slice(0, 5) : [];
   PK.list = [...favs, ...recent, ...list];
   count.innerHTML = `<b>${list.length}</b> of ${all.length} ${KIND_TITLE[PK.kind]?.toLowerCase() || 'model'}s${list.length !== all.length ? ' match' : ''} · sorted by ${SORTS.find((x) => x[0] === PK.sort)[1].toLowerCase()} <span class="rec-legend" title="From QuorX's own benchmarks where a model was tested; otherwise from what the catalogue says it can do. Hover a dot for the reason.">🟢 recommended · 🟡 OK or untested · 🔴 avoid</span>`;
   if (!list.length && !favs.length) {
@@ -1613,12 +1635,14 @@ function scoreBadge(id) {
   const pct = Math.round((s.passed / s.checked) * 100), tone = pct >= 80 ? 'ok' : pct >= 50 ? 'warn' : 'bad';
   return `<span class="mp-score" data-tone="${tone}" title="Your last 30 days: ${s.passed} of ${s.checked} replies passed QuorX's checks; ${s.replies} replies in all, about ${money(s.avgCost, 3)} and ${s.avgSteps} steps each.">✓ ${pct}% <small>of ${s.checked}</small></span>`;
 }
+// Without an OpenRouter key, a chat model on OpenRouter can't run: it shows, locked.
+const orLocked = (id) => !G.cfg?.hasKey && PK.kind === 'chat' && !sourceOfId(id);
 function rowHTML(m, i) {
-  const p = providerOf(m.id), fav = (G.favModels?.[m.kind] || []).includes(m.id);
+  const p = providerOf(m.id), fav = (G.favModels?.[m.kind] || []).includes(m.id), locked = orLocked(m.id);
   const caps = [(m.in || []).includes('image') && m.kind !== 'image' ? ['👁', 'Sees images'] : null, m.tools ? ['🧰', 'Uses tools'] : null, m.reasoning ? ['🧠', 'Reasoning'] : null, (m.in || []).includes('audio') ? ['🎙', 'Hears audio'] : null, m.voices?.length ? ['🗣', `${m.voices.length} voices`] : null].filter(Boolean);
-  return `<div class="mp-row ${m.id === PK.current ? 'cur' : ''}" role="option" data-i="${i}" data-id="${esc(m.id)}" aria-selected="false" title="${esc(m.desc || priceText(m))}">
+  return `<div class="mp-row ${m.id === PK.current ? 'cur' : ''} ${locked ? 'locked' : ''}" role="option" data-i="${i}" data-id="${esc(m.id)}" aria-selected="false" ${locked ? 'aria-disabled="true" ' : ''}title="${esc(locked ? 'Runs on OpenRouter: add an OpenRouter key first (⚙ Settings → API keys)' : m.desc || priceText(m))}">
     <span class="mp-ava" style="--h:${hue(p)}" title="${esc(PROVIDER_NAME(p))}">${esc(initials(PROVIDER_NAME(p)))}</span>
-    <span class="mp-main"><span class="mp-name">${recDot(m, PK.kind)}${cardChip(m.id)} ${esc(cleanName(m))}${m.id === PK.current ? ' <span class="mp-tag cur">current</span>' : ''}</span><span class="mp-id">${esc(m.id)}</span></span>
+    <span class="mp-main"><span class="mp-name">${recDot(m, PK.kind)}${cardChip(m.id)} ${esc(cleanName(m))}${m.source ? ` <span class="mp-src" title="Runs through ${esc(SOURCE_NAME[m.source])} (⚙ Settings → Apps on this PC)">${esc(SOURCE_SHORT[m.source])}</span>` : ''}${m.id === PK.current ? ' <span class="mp-tag cur">current</span>' : ''}</span><span class="mp-id">${esc(m.id)}</span></span>
     <span class="mp-caps">${caps.map(([i2, t]) => `<span title="${t}">${i2}</span>`).join('')}</span>
     <span class="mp-meta">${scoreBadge(m.id)}${m.ctx ? `<span title="Context window">${ctxText(m.ctx)}</span>` : ''}${m.created ? `<span title="${new Date(m.created * 1000).toLocaleDateString()}">${agoDate(m.created)}</span>` : ''}</span>
     <span class="mp-price" title="${esc(priceText(m))}">${priceCell(m)}</span>
@@ -1652,6 +1676,7 @@ function markSel(scroll = true) {
   for (const r of document.querySelectorAll('#pkList .mp-row')) { const on = Number(r.dataset.i) === PK.sel; r.classList.toggle('kb', on); r.setAttribute('aria-selected', String(on)); if (on && scroll) r.scrollIntoView({ block: 'nearest' }); }
 }
 function choose(id) {
+  if (orLocked(id)) { const b = $('#pkBanner'); if (b) { b.hidden = false; b.classList.remove('flash'); void b.offsetWidth; b.classList.add('flash'); } return; }
   const list = ((G.recentModels ??= {})[PK.kind] ??= []);
   const i = list.indexOf(id); if (i >= 0) list.splice(i, 1);
   list.unshift(id); list.length = Math.min(list.length, 8); savePrefs();
@@ -1898,8 +1923,10 @@ function wireStartBox(box, first, projects) {
   renderComposerBar(d); renderChatTools(d); renderAttachments(d); syncRunState(d);
   const ta = $('.input', pane);
   ta.id = 'ldStartText';
-  ta.placeholder = 'What are we building? Describe it, or ask about your code…  @ to add files or chats · / for commands';
+  d.placeholder = 'What are we building? Describe it, or ask about your code…  @ to add files or chats · / for commands';
+  ta.placeholder = d.placeholder;
   ta.setAttribute('aria-label', 'Your first message');
+  G.homeDraftChat = d; applyKeyLock();
   ta.value = G.landingDraft || '';
   const fit = () => fitInput(ta);
   fit();
@@ -2745,7 +2772,9 @@ function renderComposerBar(c) {
   const s = c.agent.setup;
   const bar = $('.cbar', c.el.root);
   const rack = bar.closest('.cmp-control-rack'), slot = $('.cmp-model-slot', rack), glob = $('.cs-glob', rack), setBtn = $('.cmp-set-btn', rack), panel = $('.chat-set', rack), followSlot = $('.cmp-follow-slot', rack), scrim = $('.cs-scrim', rack);
-  slot.innerHTML = `<button type="button" class="mbtn model cmp-model-chip" title="Model for this chat: ${esc(priceOf(s.model))} (click to pick any model)">${recDot(s.model, 'chat')} ${esc(short(s.model))} <small>${esc(shortPrice(s.model))}</small></button>`;
+  // A model on OpenCode says whose account it runs on.
+  const srcId = sourceOfId(s.model);
+  slot.innerHTML = `<button type="button" class="mbtn model cmp-model-chip" title="Model for this chat${srcId ? `, on your ${esc(SOURCE_NAME[srcId])} account` : ''}: ${esc(priceOf(s.model))} (click to pick any model)">${recDot(s.model, 'chat')} ${esc(short(s.model))}${srcId ? ` <span class="mp-src">${esc(SOURCE_SHORT[srcId])}</span>` : ''} <small>${esc(shortPrice(s.model))}</small></button>`;
   const permHTML = (cls = '') => `<div class="seg perm cmp-perm-switch ${cls}" title="How much permission this chat's agent asks for">
       <button type="button" data-approval="strict" class="${c.approval === 'strict' ? 'on' : ''}" title="${esc(`🔒 Strict${c.approval === 'strict' ? ' (now)' : ''}\nAsks you before paid media, and the agent's questions come to you.\nSettings → Approvals & safety says what else it asks before.`)}">🔒 Strict</button>
       <button type="button" data-approval="yolo" class="${c.approval === 'yolo' ? 'on' : ''}" title="${esc(`⚡ YOLO${c.approval === 'yolo' ? ' (now)' : ''}\nUses its tools without asking; the deciders answer its questions.\nThe budget cap and the safety rules still apply.`)}">⚡ YOLO</button>
@@ -2823,7 +2852,7 @@ function renderComposerBar(c) {
     $('.cs-x', panel).onclick = () => discard(true);
     undoBtn.onclick = () => discard(false);
   }
-  $('.model', slot).onclick = async () => { const id = await pickModel('chat', s.model, { context: `For “${clip(c.title, 40)}”` }); if (id) { s.model = id; saveChat(c); renderComposerBar(c); renderChatHead(c); } };
+  $('.model', slot).onclick = async () => { const id = await pickModel('chat', s.model, { context: `For “${clip(c.title, 40)}”` }); if (id) { s.model = id; saveChat(c); renderComposerBar(c); renderChatHead(c); applyKeyLock(); } };
   $('.cq-adv', quick).onclick = () => setBtn.click();
   const both = (sel) => [...bar.querySelectorAll(sel), ...quick.querySelectorAll(sel)];
   for (const b of both('.lvl[data-key] .lvl-b')) b.onclick = () => { c.agent.setup[b.closest('.lvl').dataset.key] = b.dataset.v; saveChat(c); renderComposerBar(c); };
@@ -3073,7 +3102,7 @@ function renderChatTools(c) {
   for (const b of menu.querySelectorAll('.q-pick')) b.onclick = async (e) => {
     e.preventDefault(); e.stopPropagation();
     const k = b.dataset.q, q = QUALITY_INFO[k];
-    const id = await pickModel(q.kind, q.model(), { context: k === 'enhancer' ? 'Prompt enhancer (all chats): a fast, cheap model is enough' : k === 'freshEyes' ? 'Fresh eyes (all chats): it must use tools' : k === 'reviewer' ? 'Reviewer (all chats): it must use tools and see images' : k === 'deciders' ? 'Decider for screenshot checks (all chats): it must read images' : 'Helper model (all chats): it must use tools' });
+    const id = await pickModel(q.kind, q.model(), { openRouterOnly: true, context: k === 'enhancer' ? 'Prompt enhancer (all chats): a fast, cheap model is enough' : k === 'freshEyes' ? 'Fresh eyes (all chats): it must use tools' : k === 'reviewer' ? 'Reviewer (all chats): it must use tools and see images' : k === 'deciders' ? 'Decider for screenshot checks (all chats): it must read images' : 'Helper model (all chats): it must use tools' });
     if (id) { if (k === 'enhancer') G.settings.enhancerModel = id; else if (k === 'reviewer') G.settings.reviewModel = id; else if (k === 'freshEyes') G.settings.freshEyesModel = id; else if (k === 'helpers') G.settings.helperModel = id; else G.settings.lookVoters = [id]; savePrefs(); }
     reopen();
   };
@@ -3656,8 +3685,9 @@ function updateMsg(c, m, { bodyOnly = false } = {}) {
   if (m.live && !m.error && !String(m.content || '').includes('\r')) streamBody(body, String(m.content || ''));
   else {
     streamed.delete(body);
-    body.innerHTML = m.error && !stoppedByYou(m) ? `${md(m.content)}<p class="err">⚠ ${esc(m.error)}</p>` : md(m.content) || (m.live || stoppedByYou(m) ? '' : '<p class="err">(no reply)</p>');
+    body.innerHTML = m.error && !stoppedByYou(m) ? `${md(m.content)}<p class="err">⚠ ${esc(m.error)}</p>${retryable(c, m) ? `<button type="button" class="err-retry" title="Send your message again on the chat's model now (change it in the model button first if you like). This failed reply leaves the chat; files stay as they are.">↻ Retry</button>` : ''}` : md(m.content) || (m.live || stoppedByYou(m) ? '' : '<p class="err">(no reply)</p>');
     enhance(body);
+    const rb = $('.err-retry', body); if (rb) rb.onclick = () => retryReply(c, m);
   }
   body.classList.toggle('typing', !!m.live);
   drawThinking(m, c);
@@ -3806,8 +3836,11 @@ function replyHeadHTML(m, fallback) {
   const actual = last?.actual && orBase(last.actual) !== orBase(model) && !last.actual.startsWith(orBase(model)) ? last.actual : '';
   const models = [...new Set(calls.map((e) => e.actual && !e.actual.startsWith(orBase(e.model)) ? e.actual : e.model).filter(Boolean))];
   const providers = [...new Set(calls.map((e) => e.provider).filter(Boolean))];
-  const idChip = (id, cls, tip) => `<span class="rh-id ${cls}" title="${esc(tip)}">${esc(id)}</span><button type="button" class="rh-btn rh-copy" data-copy="${esc(id)}" title="Copy ${esc(id)}" aria-label="Copy the model id">${msgIcon('copy')}</button><button type="button" class="rh-btn rh-open" data-or="${esc(orBase(id))}" title="Open ${esc(orBase(id))} on openrouter.ai" aria-label="Open on OpenRouter"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg></button>`;
-  return `${idChip(model, 'rh-model', models.length > 1 ? `Models in this reply: ${models.join(', ')}` : 'The OpenRouter model id')}${models.length > 1 ? `<small class="rh-more" title="${esc(models.join('\n'))}">+${models.length - 1}</small>` : ''}`
+  // An OpenCode model has no OpenRouter page: its chip says where it ran instead.
+  const idChip = (id, cls, tip) => `<span class="rh-id ${cls}" title="${esc(tip)}">${esc(id)}</span><button type="button" class="rh-btn rh-copy" data-copy="${esc(id)}" title="Copy ${esc(id)}" aria-label="Copy the model id">${msgIcon('copy')}</button>${sourceOfId(id) ? '' : `<button type="button" class="rh-btn rh-open" data-or="${esc(orBase(id))}" title="Open ${esc(orBase(id))} on openrouter.ai" aria-label="Open on OpenRouter"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg></button>`}`;
+  const fellBack = calls.filter((e) => e.fellBackFrom).length;
+  return `${idChip(model, 'rh-model', models.length > 1 ? `Models in this reply: ${models.join(', ')}` : sourceOfId(model) ? `Runs on your ${SOURCE_NAME[sourceOfId(model)]} account` : 'The OpenRouter model id')}${models.length > 1 ? `<small class="rh-more" title="${esc(models.join('\n'))}">+${models.length - 1}</small>` : ''}`
+    + (fellBack ? `<span class="rh-fell" title="${fellBack} step${fellBack === 1 ? '' : 's'} of this reply went to OpenRouter because ${esc(SOURCE_NAME[sourceOfId(calls.find((e) => e.fellBackFrom).fellBackFrom)] || 'the source')} failed (see Steps)">⤵ ${fellBack} on OpenRouter</span>` : '')
     + (actual ? `<span class="rh-arrow" aria-hidden="true">→</span>${idChip(actual, 'rh-actual', `${model} picked this model to answer`)}` : '')
     + (providers.length ? `<span class="rh-via" title="The provider OpenRouter routed this reply to">via ${esc(providers.join(', '))}</span>` : '');
 }
@@ -4146,7 +4179,7 @@ function traceHTML(m) {
     if (e.t === 'llm_start') row(e.at, `🧠 <b>${esc(short(e.model))}</b> thinks<span class="sub" data-llm="${e.step}"></span>${m.thinking?.[e.step]?.trim() ? `<details class="think-trace"><summary>💭 Thinking · ${m.thinking[e.step].split(/\s+/).filter(Boolean).length} words</summary><div class="tt-body">${md(m.thinking[e.step])}</div></details>` : ''}`, 'think');
     else if (e.t === 'llm_done') {
       const i = out.findLastIndex((h) => h.includes(`data-llm="${e.step}"`));
-      if (i >= 0) out[i] = out[i].replace(`<span class="sub" data-llm="${e.step}"></span>`, `<div class="sub">${secs(e.ms)} · <span class="tok-out">${e.tokensOut} tokens out</span> · ${money(e.cost, 5)}${e.provider ? ` · via <span class="tr-prov" title="The provider OpenRouter routed this call to">${esc(e.provider)}</span>` : ''}${e.model && e.model !== m.trace.find((x) => x.t === 'llm_start' && x.step === e.step)?.model ? ` · <b class="tr-fallback" title="The chat's model was unavailable, so OpenRouter used the fallback model">fallback ${esc(short(e.model))}</b>` : ''}${e.toolCalls.length ? ` · then ${e.toolCalls.join(', ')}` : ''}</div>${e.aside ? `<div class="aside">💬 ${esc(e.aside)}</div>` : ''}`);
+      if (i >= 0) out[i] = out[i].replace(`<span class="sub" data-llm="${e.step}"></span>`, `<div class="sub">${secs(e.ms)} · <span class="tok-out">${e.tokensOut} tokens out</span> · ${money(e.cost, 5)}${e.planCost ? ` · <span title="What this call counted against your ${esc(SOURCE_NAME[e.source] || '')} plan's limits, at list price">plan ${money(e.planCost, 4)}</span>` : ''}${e.provider ? ` · via <span class="tr-prov" title="${e.source ? 'The account this call ran on' : 'The provider OpenRouter routed this call to'}">${esc(e.provider)}</span>` : ''}${e.model && e.model !== m.trace.find((x) => x.t === 'llm_start' && x.step === e.step)?.model ? ` · <b class="tr-fallback" title="${e.fellBackFrom ? `${esc(SOURCE_NAME[sourceOfId(e.fellBackFrom)] || 'The source')} failed, so this step ran on OpenRouter (see ⤵)` : 'The chat\'s model was unavailable, so OpenRouter used the fallback model'}">fallback ${esc(short(e.model))}</b>` : ''}${e.toolCalls.length ? ` · then ${e.toolCalls.map(esc).join(', ')}` : ''}</div>${e.aside ? `<div class="aside">💬 ${esc(e.aside)}</div>` : ''}`);
     } else if (e.t === 'tool' && e.name !== 'decide') row(e.at, `${e.by === 'reviewer' ? '🧪 <span class="tr-rv">reviewer</span> ' : e.by === 'helper' ? `🤝 <span class="tr-hp">helper ${e.helper || ''}</span> ` : ''}${TOOL_NAME[e.name]?.split(' ')[0] || '🔧'} <b>${esc(e.name)}</b><div class="sub">${esc(argSummary(e))}</div>`, e.by === 'reviewer' ? 'browser' : 'tool');
     else if (e.t === 'reading') row(e.at, `📝 <b>Prompt enhancer</b> ${esc(short(e.model))} read the request${e.late ? ' (too late for the first step; the deciders still use it)' : ''} · ${secs(e.ms)} · ${money(e.cost, 5)}<div class="sub" style="white-space:pre-wrap">${linkUrls(esc(e.text))}</div>`, 'note');
     else if (e.t === 'chat_off_project') row(e.at, `📝 Own chat from now on: you said “${esc(e.why || '')}”, so this chat leaves the project's notes, design and log alone. Tick Part of the project in the header to undo.`, 'note');
@@ -4196,6 +4229,8 @@ function traceHTML(m) {
     else if (e.t === 'compacted') row(e.at, `🗜 Earlier turns summarised to keep the context small<details class="out"><summary>summary</summary><pre>${esc(e.summary)}</pre></details>`, 'note');
     else if (e.t === 'note') row(e.at, `<span class="${e.level === 'info' ? '' : 'warn'}">${e.level === 'info' ? 'ℹ' : '⚠'} ${esc(e.msg)}</span>`, e.level === 'info' ? 'note' : 'warn');
     else if (e.t === 'llm_retry') row(e.at, `<span class="warn">↻ The model call failed (${esc(e.msg)}); retry ${e.attempt} of ${e.of} after ${secs(e.wait)}</span>`, 'warn');
+    // An OpenCode call that failed (or a source skipped for the rest of the reply): OpenRouter answered.
+    else if (e.t === 'source_fallback') row(e.at, `<span class="warn">⤵ ${e.kind === 'skipped' ? `${esc(SOURCE_NAME[e.source] || e.source)} skipped` : esc(e.why)} → <code>${esc(e.to)}</code> on OpenRouter${e.role && e.role !== 'writer' ? ` (${esc(e.role)})` : ''}</span>${e.kind === 'skipped' ? `<div class="sub">${esc(e.why)}</div>` : e.rest ? '<div class="sub">The rest of this reply stays on OpenRouter. Every chat skips that model for a while (Test the connection tries it again at once).</div>' : ''}${e.aside ? `<div class="aside">💬 ${esc(e.aside)}</div>` : ''}`, 'warn');
     else if (e.t === 'parallel') row(e.at, `⇉ ${e.names.length} look-ups at the same time: ${esc(e.names.join(', '))}`, 'tool');
     else if (e.t === 'lint') row(e.at, `🎨 Design lint: ${e.hits.length} note${e.hits.length === 1 ? '' : 's'} on ${esc(e.path)}<div class="sub">${e.hits.map((h) => `<b>${h.level === 'fix' ? 'fix' : 'consider'}</b> · ${esc(h.msg)}`).join('<br>')}</div>`);
     else if (e.t === 'check') row(e.at, `<span class="warn">🔎 Check found ${e.problems.length} problem${e.problems.length === 1 ? '' : 's'} in ${esc(e.path)}</span><div class="sub">${e.problems.map(esc).join('<br>')}</div>`, 'warn');
@@ -4505,7 +4540,7 @@ function wireOutOfSteps(card, c, m) {
   $('.oos-model', card).onclick = async () => {
     const id = await pickModel('chat', c.agent.setup.model, { context: 'Keep going with another model (same context)' });
     if (!id) return;
-    c.agent.setup.model = id; saveChat(c); renderComposerBar(c);
+    c.agent.setup.model = id; saveChat(c); renderComposerBar(c); applyKeyLock();
     go({ model: id }, `model:${id}`);
   };
   $('.oos-fresh', card).onclick = async () => {
@@ -4884,8 +4919,9 @@ async function followRun(c, m, open) {
         }
         // A step that ended in tool calls was working out loud: move its text into the trace.
         if (e.t === 'llm_done' && e.toolCalls.length) moveAside(e);
-        // A retried call starts its text again; a reply sent back to fix problems was not the answer.
-        if (e.t === 'llm_retry' || e.t === 'sent_back') { moveAside(e); lastStep = -1; }
+        // A retried call starts its text again (an OpenCode call that fell back to OpenRouter too); a reply
+        // sent back to fix problems was not the answer.
+        if (e.t === 'llm_retry' || e.t === 'sent_back' || (e.t === 'source_fallback' && e.role === 'writer')) { moveAside(e); lastStep = -1; }
         if (e.t === 'artifact') { addArtifact(c, m, e.artifact); continue; }
         if (e.t === 'server') { serverUp(c, e); continue; }
         if (e.t === 'file' && G.watch?.chat === c.id) setTimeout(reloadPreview, 300);
@@ -5713,7 +5749,7 @@ const UI_DEFAULTS = { density: 'comfortable', fontSize: 14, reduceMotion: 'syste
   showBalance: false, maskAmounts: true, blurPaths: false, usageBtn: true, notify: 'all', searchEngine: 'google', searchCustom: '' };
 const SETTINGS_NAV = [
   ['Harness', [['setup', '🧪', 'Setup check'], ['appearance', '🎨', 'Appearance'], ['privacy', '🕶', 'Privacy & display']]],
-  ['OpenRouter', [['keys', '🔑', 'API keys'], ['models', '🧠', 'Models & catalogue']]],
+  ['Models', [['keys', '🔑', 'API keys'], ['models', '🧠', 'Models & catalogue'], ['sources', '🔌', 'Apps on this PC']]],
   ['Agent', [['newchats', '✨', 'New chats'], ['loop', '🔁', 'Agent loop'], ['deciders', '⚖️', 'Deciders'], ['tools', '🧰', 'Tools & media'], ['video', '🎬', 'Video'], ['safety', '🛡', 'Approvals & safety'], ['budget', '💵', 'Budget'], ['skills', '🧩', 'Skills'], ['memory', '📌', 'Memory']]],
   ['Workspace', [['projects', '📁', 'Projects'], ['code', '💻', 'Code & servers'], ['docs', '📎', 'Documents']]],
   ['Data', [['usage', '📊', 'Usage & costs'], ['data', '🗄', 'Data & storage'], ['storage', '🧹', 'Storage'], ['shortcuts', '⌨️', 'Shortcuts'], ['about', 'ℹ️', 'About']]],
@@ -5858,19 +5894,22 @@ function settingsPanels(S) {
     ]],
     keys: ['API keys', 'QuorX uses one active OpenRouter key for every call. Add as many as you like and switch between them.', [`<div id="stKeys"><div class="st-row-help">Loading keys…</div></div>`]],
     models: ['Models & catalogue', 'Model lists and prices come from OpenRouter. Pick what new chats start with, and how each call finds a provider.', [
-      stCard('Spending limit', 'What the active OpenRouter key has left, while you pick models by price. Hidden until you click 👁.', '<div id="stModelLimit"><div class="st-row-help">Loading…</div></div>', 'sx-limit'),
-      stCard('Catalogue', '', stRow('Model lists and prices', `<span id="stCatInfo">${G.models ? `${G.models.length} models loaded` : 'Loading…'}</span>`, `<button type="button" class="st-btn secondary sm" data-act="refreshModels">↻ Refresh now</button>`)),
-      `<div class="sx-grid two">`
-      + stCard('New chats start with', 'Each chat can still pick any model from its message box.', stRow('Default chat model', '', `<button type="button" class="sx-model" data-act="pickDefModel" id="defModel" data-id="${esc(S.model)}"><span class="sx-av" aria-hidden="true">${esc((short(S.model)[0] || '?').toUpperCase())}</span>${recDot(S.model, 'chat')} ${esc(short(S.model))} <small>${esc(shortPrice(S.model))}</small><span class="sx-change">Change</span></button>`)
-        + stRow('Default reasoning', '', stSeg('reasoning', [['off', 'Off'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']], S.reasoning || 'off')))
-      + stCard('When the model fails', '', stRow('Fallback model', 'OpenRouter switches to it when a chat’s model fails or is down, billed at its own price. The trace marks steps it answered.', `<div class="st-fb">${modelField('pickFallback', S.fallbackModel, 'fbModel', 'None')}${S.fallbackModel ? '<button type="button" class="st-btn secondary sm" data-act="clearFallback" title="No fallback model">✕</button>' : ''}</div>`, { id: 'stRowFallback' }), '', 'stCardFallback')
-      + `</div>`,
-      stCard('Routing: how a call finds a provider', 'For every chat’s agent calls. The provider that answered shows on each step in “Steps”.',
-        `<div class="sx-pad" data-live="routing"></div>`
-        + stRow('Provider order', 'Auto favours providers with reliable tool calling (OpenRouter’s Exacto). Cheapest and Fastest sort by price or speed instead.', stCards('providerSort', [['auto', '🎯', 'Auto', 'Reliable tool calling'], ['price', '💲', 'Cheapest', 'Lowest price first'], ['throughput', '⚡', 'Fastest', 'Highest throughput first']], S.providerSort || 'auto', 'compact'), { cls: 'sx-row-wide', id: 'stRowOrder' })
+      stCard('OpenRouter', 'The active key’s spending limit (hidden until you click 👁) and the model list.', '<div id="stModelLimit"><div class="st-row-help">Loading…</div></div>'
+        + stRow('Model lists and prices', `<span id="stCatInfo">${G.models ? `${G.models.length} models loaded` : 'Loading…'}</span>`, `<button type="button" class="st-btn secondary sm" data-act="refreshModels">↻ Refresh now</button>`), 'sx-limit'),
+      stCard('Models', 'What new chats start with; each chat can still pick any model from its message box.', stRow('Default chat model', '', `<button type="button" class="sx-model" data-act="pickDefModel" id="defModel" data-id="${esc(S.model)}"><span class="sx-av" aria-hidden="true">${esc((short(S.model)[0] || '?').toUpperCase())}</span>${recDot(S.model, 'chat')} ${esc(short(S.model))} <small>${esc(shortPrice(S.model))}</small><span class="sx-change">Change</span></button>`)
+        + stRow('Default reasoning', '', stSeg('reasoning', [['off', 'Off'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']], S.reasoning || 'off'))
+        + stRow('Fallback model', 'OpenRouter switches to it when a chat’s model fails or is down, billed at its own price. The trace marks steps it answered.', `<div class="st-fb">${modelField('pickFallback', S.fallbackModel, 'fbModel', 'None')}${S.fallbackModel ? '<button type="button" class="st-btn secondary sm" data-act="clearFallback" title="No fallback model">✕</button>' : ''}</div>`, { id: 'stRowFallback' }), '', 'stCardFallback'),
+      stCard('Routing', 'How each agent call finds a provider. The one that answered shows on each step in “Steps”.',
+        stRow('Provider order', 'Auto favours providers with reliable tool calling (OpenRouter’s Exacto). Cheapest and Fastest sort by price or speed instead.', stCards('providerSort', [['auto', '🎯', 'Auto', 'Reliable tool calling'], ['price', '💲', 'Cheapest', 'Lowest price first'], ['throughput', '⚡', 'Fastest', 'Highest throughput first']], S.providerSort || 'auto', 'compact'), { cls: 'sx-row-wide', id: 'stRowOrder' })
         + stRow('Only providers that support every feature', 'Skips providers that would silently drop tools, reasoning or other settings. If none qualifies, that reply uses the default routing.', stSwitch('requireParams', S.requireParams !== false), { id: 'stRowFeatures' })
         + stRow('Zero data retention only', 'Only providers that keep no copy of your prompts. Fewer models qualify.', stSwitch('zdrOnly', !!S.zdrOnly), { id: 'stRowZdr' })
         + stRow('Blocked providers', 'OpenRouter never sends the agent’s calls to these: for every model, or only the models you pick (a provider can be fine for one model and break another). Block one that keeps breaking tool calls (the provider shows as “via …” above each reply). If only blocked providers serve a model, that reply uses them anyway, and says so.', '<div id="stBlocked"><div class="st-row-help">Loading providers…</div></div>', { cls: 'sx-row-wide', id: 'stRowBlocked' })),
+    ]],
+    sources: ['Apps on this PC', 'A chat’s main model can run through OpenCode on this computer, with the providers you connected there. Everything else stays on OpenRouter.', [
+      stCard('OpenCode', '', '<div id="stSources"><div class="st-row-help">Checking OpenCode on this PC…</div></div>', '', 'stSrcConnect'),
+      stCard('When a call fails', 'By default the reply stops and says why, and you pick another model. QuorX switches only if you choose a fallback.',
+        stRow('Fall back to', '', stCards('sourceFallback', [['off', '✋', 'Stop and tell me', 'You pick the next model'], ['same', '🔁', 'Same model on OpenRouter', 'When OpenRouter has it, else the model below'], ['model', '🎯', 'Always this model', 'The fallback model below']], S.sourceFallback || G.cfg.defaults.sourceFallback || 'off', 'compact'), { cls: 'sx-row-wide', id: 'stRowSrcFb' })
+        + stRow('Fallback model', 'Used when OpenRouter lacks the same model, and for every failed call with “Always this model”. Empty: your OpenRouter fallback model, else the default chat model. Billed at OpenRouter’s price.', `<div class="st-fb">${modelField('pickSourceFallback', S.sourceFallbackModel, 'srcFbModel', 'Default chat model')}${S.sourceFallbackModel ? '<button type="button" class="st-btn secondary sm" data-act="clearSourceFallback" title="Use the default chat model">✕</button>' : ''}</div>`)),
     ]],
     newchats: ['New chats', 'What a fresh chat starts with. Each chat can change these in its message box.', [
       `<p class="sx-sec-help sx-mode-link">New chats start in ${S.approval === 'yolo' ? '⚡ YOLO' : '🔒 Strict'}. <button type="button" class="sp-link" data-act="openMode">Change it in 🛡 Approvals &amp; safety</button></p>`,
@@ -6139,8 +6178,11 @@ function stSummary(id, S) {
     case 'setup': { const r = ST.setup; if (!r) return ['', '']; return [r.missing ? `${r.missing} missing` : `${r.ok} ready`, stStatus('ok', `${r.ok} ready`) + (r.warn ? stStatus('warn', `${r.warn} optional`) : '') + (r.missing ? stStatus('bad', `${r.missing} missing`) : ''), r.missing ? 'bad' : '']; }
     case 'appearance': { const t = S.theme === 'dark' ? 'Dark' : S.theme === 'light' ? 'Light' : 'System'; return [t, stStatus('info', `${t} theme`) + stStatus('info', U.density === 'compact' ? 'Compact' : 'Comfortable') + stStatus('info', `${U.fontSize} px text`) + stStatus('info', `Motion: ${{ system: 'follows system', full: 'on', reduce: 'reduced' }[motionPref(U)]}`) + stStatus('info', `Sidebar: ${SIDE_START[U.sidebarStart] || U.sidebarStart}`) + stStatus('info', `Artifact pane: ${PANE_MODE[U.paneMode] || U.paneMode}`)]; }
     case 'privacy': return [U.maskAmounts ? 'masked' : 'visible', stStatus(U.maskAmounts ? 'ok' : 'warn', U.maskAmounts ? 'Amounts masked' : 'Amounts visible') + stStatus(U.showBalance ? 'warn' : 'off', U.showBalance ? 'Balance button shown' : 'Balance button hidden') + on(U.blurPaths, 'Paths blurred', 'Paths visible')];
-    case 'keys': { const k = ST.keys; if (!G.cfg.hasKey) return ['add one', stStatus('bad', 'No key yet: nothing can run'), 'bad']; if (!k) return ['', '']; return [`${k.n} key${k.n === 1 ? '' : 's'}`, stStatus('ok', `${esc(k.active || 'A key')} is active`) + stStatus('off', `${k.n} key${k.n === 1 ? '' : 's'} on this computer`)]; }
+    case 'keys': { const k = ST.keys; if (!G.cfg.hasKey) return ['add one', stStatus('bad', 'No key yet: only models through an app on this PC run'), 'bad']; if (!k) return ['', '']; return [`${k.n} key${k.n === 1 ? '' : 's'}`, stStatus('ok', `${esc(k.active || 'A key')} is active`) + stStatus('off', `${k.n} key${k.n === 1 ? '' : 's'} on this computer`)]; }
     case 'models': return [short(S.model), stStatus('info', `New chats: ${esc(short(S.model))}`) + (G.models ? stStatus('ok', `${G.models.length} models loaded`) : '') + stStatus('info', `${PROVIDER_SORT[S.providerSort || 'auto']} routing`) + on(S.fallbackModel, `Fallback: ${esc(short(S.fallbackModel || ''))}`, 'No fallback')];
+    case 'sources': { const l = ST.sources; if (!l) return ['', ''];
+      const live = l.filter((x) => x.on && srcReady(x)), fb = S.sourceFallback || G.cfg.defaults.sourceFallback || 'off';
+      return [live.length ? `${live.length} on` : 'off', l.map((x) => { const st = srcState(x); return stStatus(st.cls, `${esc(x.name)}: ${esc(st.word)}`); }).join('') + stStatus(fb === 'off' ? 'info' : 'warn', fb === 'off' ? 'A failed call stops: you pick the model' : `Fallback: ${fb === 'model' && S.sourceFallbackModel ? esc(short(S.sourceFallbackModel)) : 'same model on OpenRouter'}`), live.some((x) => srcState(x).cls === 'bad') ? 'bad' : '']; }
     case 'newchats': { const q = QUALITY_TOOLS.filter((k) => S.newChatTools?.[k] !== false).length, p = CHAT_TOOLS.filter((k) => S.newChatTools?.[k]).length;
       return [S.approval === 'yolo' ? '⚡ YOLO' : '🔒 Strict', stStatus('info', S.approval === 'yolo' ? '⚡ YOLO: never asks' : `🔒 Strict: asks before ${S.strictAsk === 'every' ? 'every tool' : 'paid media'}`) + stStatus(q ? 'ok' : 'off', `${q} of ${QUALITY_TOOLS.length} checking tools on`) + stStatus(p ? 'warn' : 'off', p ? `${p} paid media on` : 'Paid media off')]; }
     case 'loop': return [`${S.maxSteps} steps`, stStatus('info', `${S.maxSteps} calls a reply`) + stStatus('info', `Plan first: ${PLAN_FIRST[S.planFirst || 'off']}`) + on(S.verify !== false, 'Checks on', 'Checks off') + on((S.review || 'builds') !== 'off', `Reviewer: ${S.review || 'builds'}`, 'No reviewer')];
@@ -6171,7 +6213,6 @@ const ST_LIVE = {
     return `<div class="sx-preview ${U.density === 'compact' ? 'compact' : ''}" style="--pv-size:${U.fontSize}px" aria-hidden="true"><div class="sx-pv-side"><i></i><i></i><i></i><i style="width:70%"></i><i></i></div><div class="sx-pv-chat"><div class="sx-pv-msg me">Build me a pomodoro timer${t}</div><div class="sx-pv-msg">Done: a 25/5 timer with a start button and a chime. Open it in the preview.${t}</div></div></div>`; },
   window: (S) => { const U = uiOf(S);
     return `<div class="sx-window"><button type="button" class="${U.sidebarStart === 'rail' ? 'rail' : ''}" data-jump="stRowSidebar">Sidebar<small>${SIDE_START[U.sidebarStart] || ''}</small></button><button type="button" data-jump="stRowSidebar" tabindex="-1">Chat</button><button type="button" class="${U.paneMode === 'never' ? 'dim' : ''}" data-jump="stRowPane">Artifact pane<small>${PANE_MODE[U.paneMode] || ''}</small></button></div>`; },
-  routing: (S) => stFlow([['1', 'Your call', 'the chat’s model', ''], ['2', 'Order', PROVIDER_SORT[S.providerSort || 'auto'], 'stRowOrder'], ['3', 'Features', S.requireParams !== false ? 'all supported' : 'any provider', 'stRowFeatures', S.requireParams === false], ['4', 'Retention', S.zdrOnly ? 'zero retention' : 'any provider', 'stRowZdr', !S.zdrOnly], ['5', 'Fallback', S.fallbackModel ? short(S.fallbackModel) : 'none', 'stRowFallback', !S.fallbackModel], ['6', 'Blocked', blockedOf(S).length ? `${blockedOf(S).length} provider${blockedOf(S).length === 1 ? '' : 's'}` : 'none', 'stRowBlocked', !blockedOf(S).length]]),
   loopflow: (S) => stFlow([['1', 'Plan', PLAN_FIRST[S.planFirst || 'off'], 'stLoopPlan', (S.planFirst || 'off') === 'off'], ['2', 'Work', `${S.maxSteps} calls`, 'stLoopWork'], ['3', 'Check', S.verify !== false ? `on · ${S.verifyRounds ?? 2} rounds` : 'off', 'stLoopCheck', S.verify === false], ['4', 'Review', (S.review || 'builds') === 'off' ? 'off' : `${S.review || 'builds'} · ${S.reviewTier || 'cheap'}`, 'stLoopReview', S.review === 'off'], ['5', 'Helpers', S.helpers !== false ? `≥ ${S.helperMinFiles ?? 40} files` : 'off', 'stLoopHelpers', S.helpers === false], ['6', 'Long chats', S.compact !== false ? `summarise > ${kTok(S.compactAt || 24000)}` : 'trim only', 'stLoopMemory']]),
   scale: (S) => { const lo = Math.max(0, Math.min(1, Number(S.gate?.confirm) || 0)), hi = Math.max(lo, Math.min(1, Number(S.gate?.act) || 0));
     return `<div class="sx-scale" aria-hidden="true"><div class="sx-scale-track"><span class="sx-z-unsure" style="flex:${lo}">unsure</span><span class="sx-z-lean" style="flex:${hi - lo}">${hi - lo >= 0.1 ? 'lean' : ''}</span><span class="sx-z-settled" style="flex:${1 - hi}">settled</span></div><div class="sx-scale-axis"><span>0</span><span>lean at ${lo.toFixed(2)}</span><span>settled at ${hi.toFixed(2)}</span><span>1</span></div></div>`; },
@@ -6180,6 +6221,94 @@ const ST_LIVE = {
     return `${cap ? `<div class="sx-meter ${pct >= 85 ? 'bad' : pct >= 60 ? 'warn' : ''}"><i style="width:${pct}%"></i></div>` : ''}<span class="sx-cap-zero">${stMoney(`$${t.toFixed(2)}`)} spent today${cap ? ` · ${Math.round(pct)}% of the cap` : ''}</span>`; },
   docflow: (S) => stFlow([['1', 'Attach', `up to ${S.maxUploadMB ?? 100} MB`, ''], ['2', 'Read the text', 'PDF, Word, Excel…', ''], ['3', 'Small', `≤ ${kTok(S.inlineDocTokens ?? 15000)} tokens: whole`, ''], ['4', 'Big: index', `asks above $${Number(S.docIndexBudget ?? 0.5).toFixed(2)}`, ''], ['5', 'Search', 'search_docs, read_doc', '']]),
 };
+// ---------- ⚙ Apps on this PC (server/sources.js) ----------
+// What a source's status says in one word, and its colour: on and working, on but failing, installed but off, or not installed.
+// A source is ready when its app is installed on this computer (it needs no key).
+const srcReady = (x) => !!x.installed;
+function srcState(x) {
+  if (!srcReady(x)) return { cls: 'off', word: 'not installed' };
+  if (!x.on) return { cls: 'off', word: 'off' };
+  if (x.last && !x.last.ok) return { cls: 'warn', word: 'last call failed' };
+  return { cls: 'ok', word: 'on' };
+}
+// What each source is, in a line, and how to install its app.
+const SRC_GUIDE = {
+  'opencode-local': { what: 'Runs a chat through the OpenCode app on this computer, with the providers you connected in it. Each provider bills as it does in OpenCode; plans and free tiers cost nothing here.', install: 'npm i -g opencode-ai' },
+};
+// The app as QuorX found it: its version and its server, or how to install it.
+function srcInfoHTML(x, g) {
+  if (!x.installed) return `<p class="src-info">Not installed. To install it: <code>${esc(g.install)}</code> <button type="button" class="kx-icon" data-copy-cmd="${esc(g.install)}" title="Copy the command">⧉</button></p>`;
+  const sv = x.server || {};
+  const run = sv.running ? `server running (port ${sv.port})` : 'its server starts when a chat needs it';
+  return `<p class="src-info">${esc(x.appName || x.app)}${x.app_?.version ? ` ${esc(x.app_.version)}` : ''} · ${run}</p>`;
+}
+async function drawSourcesPanel(say = null) {
+  const box = $('#stSources'); if (!box) return;
+  const r = await fetch(`/api/sources${ST.cat === 'sources' ? '?full=1' : ''}`).then((x) => x.json()).catch((e) => ({ error: e.message }));
+  if (!$('#stSources')) return;
+  if (r.error || !Array.isArray(r.sources)) { box.innerHTML = `<div class="kx-wait bad">⚠ Couldn’t read the sources (${esc(r.error || 'no answer')}).</div>`; return; }
+  ST.sources = r.sources; stRefresh();
+  const when = (t) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const card = (x) => {
+    const g = SRC_GUIDE[x.id] || {}, st = srcState(x);
+    const last = x.last ? (x.last.ok ? `<span class="src-last ok">✓ Last call ${when(x.last.at)} worked</span>` : `<span class="src-last ${x.last.kind === 'auth' || x.last.kind === 'quota' ? 'bad' : 'warn'}">⚠ ${when(x.last.at)}: ${esc(x.last.why || x.last.kind)}${x.last.until > Date.now() ? ` · skipped until ${when(x.last.until)}` : ''}</span>`) : '';
+    return `<section class="src-card ${x.on && srcReady(x) ? 'on' : ''}" data-src="${esc(x.id)}">
+      <header class="src-head">
+        <span class="mp-ava" style="--h:${hue(x.id)}" aria-hidden="true">${esc(initials(x.name))}</span>
+        <b class="src-name">${esc(x.name)}</b>
+        ${stTag(x.billing === 'plan' ? 'info' : x.billing === 'mixed' ? 'violet' : 'warn', x.billing === 'plan' ? 'subscription' : x.billing === 'mixed' ? 'your providers' : 'pay per use')}
+        ${stStatus(st.cls, st.word)}
+        ${x.models ? `<span class="src-count">${x.models} models</span>` : ''}
+        <span class="kx-spacer"></span>
+        <label class="sx-check src-on" title="${srcReady(x) ? `Show ${esc(x.name)}’s models in the model pickers` : `Install ${esc(x.appName || x.app)} first`}"><input type="checkbox" data-src-on ${x.on && srcReady(x) ? 'checked' : ''} ${!srcReady(x) ? 'disabled' : ''} aria-label="Use ${esc(x.name)}"><span class="sx-word"></span></label>
+      </header>
+      <p class="st-row-help src-what">${esc(g.what || '')}</p>
+      ${srcInfoHTML(x, g)}
+      <div class="src-test"><button type="button" class="kx-btn sm" data-src-act="test" ${srcReady(x) ? '' : 'disabled'}>Test the connection</button><button type="button" class="kx-btn sm" data-src-act="pick" ${x.on && srcReady(x) ? '' : 'disabled'}>Choose a model for new chats</button>${last}</div>
+      <p class="kx-note src-test-msg" hidden></p><p class="kx-note src-msg" hidden></p>
+      ${x.catalogueError ? `<p class="kx-wait warn">⚠ Its model list didn’t load (${esc(x.catalogueError)})${x.models ? '; the last good list is used' : ''}.</p>` : ''}
+    </section>`;
+  };
+  box.innerHTML = `<div class="src-cards">${r.sources.map(card).join('')}</div>`;
+  // A message from the action that redrew the page goes in once the new cards are there.
+  if (say) { const el = $(`.src-card[data-src="${say.id}"] .${say.where}`, box); if (el) { el.hidden = false; el.classList.toggle('bad', !!say.bad); el.textContent = say.text; } }
+  // The server has rebuilt its list already: the pickers just ask for it again.
+  const redraw = async (sources, msg) => { if (sources) ST.sources = sources; await loadModels(false); await drawSourcesPanel(msg); };
+  box.onchange = async (e) => {
+    const cb = e.target.closest('[data-src-on]'); if (!cb) return;
+    const id = cb.closest('.src-card').dataset.src;
+    cb.disabled = true;
+    const res = await postJ(`/api/sources/${id}/on`, { on: cb.checked }).catch((er) => ({ error: er.message }));
+    if (res.error) { cb.checked = !cb.checked; cb.disabled = false; const m = $(`.src-card[data-src="${id}"] .src-msg`, box); if (m) { m.hidden = false; m.classList.add('bad'); m.textContent = `⚠ ${res.error}`; } return; }
+    redraw(res.sources);
+  };
+  box.onclick = async (e) => {
+    const cmd = e.target.closest('[data-copy-cmd]')?.dataset.copyCmd;
+    if (cmd) { navigator.clipboard?.writeText(cmd).then(() => flashTip(e.target, 'Copied')).catch(() => uiPrompt('Copy the command', cmd, { ok: 'Done', cancel: 'Close' })); return; }
+    const c = e.target.closest('.src-card'); if (!c) return;
+    const id = c.dataset.src, x = r.sources.find((s) => s.id === id);
+    const act = e.target.closest('[data-src-act]')?.dataset.srcAct; if (!act) return;
+    const msg = $('.src-msg', c), tmsg = $('.src-test-msg', c), btn = e.target.closest('button');
+    const say = (el, t, bad) => { el.hidden = false; el.classList.toggle('bad', !!bad); el.textContent = t; };
+    if (act === 'test') {
+      btn.disabled = true; say(tmsg, `Asking ${x.name}…`);
+      const t = await postJ(`/api/sources/${id}/test`, {}).catch((er) => ({ ok: false, error: er.message }));
+      btn.disabled = false;
+      say(tmsg, t.ok ? `✓ ${x.appName || x.name} answered: ${t.models} models${!t.providers.length ? '' : t.providers.length === 1 ? ` on ${t.providers[0]}` : ` from ${t.providers.length} providers (${t.providers.join(', ')})`}.` : `⚠ ${t.error}`, !t.ok);
+      const fresh = await fetch('/api/sources').then((y) => y.json()).catch(() => null);
+      if (fresh?.sources) { ST.sources = fresh.sources; stRefresh(); }
+      return;
+    }
+    if (act === 'pick') {
+      const pick = await pickModel('chat', ST.draft.model, { context: `New chats start with a ${x.name} model`, source: id });
+      if (pick) {
+        ST.draft.model = pick; ST.dirty = true; ST.changed?.add('model'); updateDirty(); stRefresh();
+        const b = $('#defModel'); if (b) { b.dataset.id = pick; b.innerHTML = `<span class="sx-av" aria-hidden="true">${esc((short(pick)[0] || '?').toUpperCase())}</span>${recDot(pick, 'chat')} ${esc(short(pick))} <small>${esc(shortPrice(pick))}</small><span class="sx-change">Change</span>`; }
+        say(tmsg, `New chats will start with ${short(pick)} once you save. A chat can still change its model.`);
+      }
+    }
+  };
+}
 function stRefresh() {
   const S = ST.draft; if (!S || !$('#settings').open && !$('#stMain .st-panel')) return;
   for (const b of document.querySelectorAll('#stNav .st-nav-item')) {
@@ -6228,8 +6357,11 @@ function wireSettings() {
     const act = e.target.closest('[data-act]')?.dataset.act;
     if (!act) return;
     if (act === 'pickDefModel') { const id = await pickModel('chat', S.model, { context: 'Default for new chats' }); if (id) { S.model = id; const b = $('#defModel'); b.dataset.id = id; b.innerHTML = `<span class="sx-av" aria-hidden="true">${esc((short(id)[0] || '?').toUpperCase())}</span>${recDot(id, 'chat')} ${esc(short(id))} <small>${esc(shortPrice(id))}</small><span class="sx-change">Change</span>`; mark(); } }
-    if (act === 'pickFallback') { const id = await pickModel('chat', S.fallbackModel || '', { context: 'Fallback when a chat’s model fails' }); if (id) { S.fallbackModel = id; mark(); drawSettings(); } }
+    if (act === 'pickFallback') { const id = await pickModel('chat', S.fallbackModel || '', { context: 'Fallback when a chat’s model fails', openRouterOnly: true }); if (id) { S.fallbackModel = id; mark(); drawSettings(); } }
     if (act === 'clearFallback') { S.fallbackModel = ''; mark(); drawSettings(); }
+    if (act === 'openSources') { ST.cat = 'sources'; drawSettings(); $('#stMain').scrollTop = 0; }
+    if (act === 'pickSourceFallback') { const id = await pickModel('chat', S.sourceFallbackModel || '', { context: 'When a call through an app on this PC fails', openRouterOnly: true }); if (id) { S.sourceFallbackModel = id; mark(); drawSettings(); } }
+    if (act === 'clearSourceFallback') { S.sourceFallbackModel = ''; mark(); drawSettings(); }
     if (act === 'openSafety') { ST.cat = 'safety'; drawSettings(); }
     // New chats → "Change it": Approvals & safety, at the Permission mode card.
     if (act === 'openMode') {
@@ -6238,9 +6370,9 @@ function wireSettings() {
       if (card) { card.scrollIntoView({ block: 'start' }); card.classList.add('sx-flash'); }
     }
     if (act === 'openStorage') { ST.cat = 'storage'; drawSettings(); }
-    if (act === 'pickReviewer') { const id = await pickModel('chat', S.reviewModel || '', { context: 'Reviewer: tests what was built' }); if (id) { S.reviewModel = id; mark(); drawSettings(); } }
+    if (act === 'pickReviewer') { const id = await pickModel('chat', S.reviewModel || '', { context: 'Reviewer: tests what was built', openRouterOnly: true }); if (id) { S.reviewModel = id; mark(); drawSettings(); } }
     if (act === 'clearReviewer') { S.reviewModel = ''; mark(); drawSettings(); }
-    if (act === 'pickHelper') { const id = await pickModel('chat', S.helperModel || '', { context: 'Helper: read-only jobs' }); if (id) { S.helperModel = id; mark(); drawSettings(); } }
+    if (act === 'pickHelper') { const id = await pickModel('chat', S.helperModel || '', { context: 'Helper: read-only jobs', openRouterOnly: true }); if (id) { S.helperModel = id; mark(); drawSettings(); } }
     if (act === 'clearHelper') { S.helperModel = ''; mark(); drawSettings(); }
     if (act === 'refreshModels') { $('#stCatInfo').textContent = 'Refreshing…'; await loadModels(true); $('#stCatInfo').textContent = `${G.models?.length || 0} models loaded · refreshed ${new Date().toLocaleTimeString()}`; }
     if (act === 'resetOrder') { G.projectOrder = []; savePrefs(); renderSidebar(); e.target.textContent = 'Done'; }
@@ -6286,6 +6418,7 @@ function wireSettings() {
   drawPermsPanel();
   drawKeysPanel();
   drawModelLimit();
+  drawSourcesPanel();
   drawBlockedProviders(mark);
   drawMemoryPanel();
   drawSetupPanel();
@@ -6328,6 +6461,7 @@ function resetCategory() {
   if (ST.cat === 'appearance') { S.theme = null; G.theme = null; applyTheme(); }
   if (ST.cat === 'privacy') S.newsRemote = true;
   if (ST.cat === 'models') { S.model = d.chatModel || d.setups.C.model; S.reasoning = 'off'; Object.assign(S, { providerSort: 'auto', requireParams: true, zdrOnly: false, fallbackModel: '', blockedProviders: [...(d.blockedProviders || [])] }); }
+  if (ST.cat === 'sources') Object.assign(S, { sourceFallback: d.sourceFallback || 'off', sourceFallbackModel: '' });
   if (ST.cat === 'newchats') S.newChatTools = { ...DEFAULT_CHAT_TOOLS };
   if (ST.cat === 'loop') { S.maxSteps = d.maxSteps; S.compact = true; S.compactAt = 24000; Object.assign(S, { planFirst: d.planFirst, planSteps: d.planSteps, continueRounds: d.continueRounds, maxOutput: d.maxOutput, thinkShare: d.thinkShare, review: d.review, reviewModel: '', reviewTier: d.reviewTier, reviewSendBack: d.reviewSendBack, codeReview: d.codeReview, designLint: d.designLint, fixSteps: d.fixSteps, reviewRounds: d.reviewRounds, reviewBar: d.reviewBar, helpers: d.helpers, helperModel: '', helperSteps: d.helperSteps, helperMinFiles: d.helperMinFiles, retries: d.retries, parallel: d.parallel, verify: d.verify, verifyRounds: d.verifyRounds, askLimit: d.askLimit, trimAt: d.trimAt, buildThinking: d.buildThinking }); }
   if (ST.cat === 'deciders') { S.voters = [...d.voters]; S.gate = { ...d.gate }; S.lookVoters = [...d.lookVoters]; S.lookEscalate = d.lookEscalate; S.checks = structuredClone(d.checks); }
@@ -6955,7 +7089,7 @@ async function drawBlockedProviders(mark) {
     if (scope) { b.some = scope === 'some'; if (b.some) some.add(n); else { some.delete(n); b.models = []; } save(); drawScopes(); if (b.some) $(`.bk-item[data-bk="${CSS.escape(n)}"] .bk-pat`, box)?.focus(); return; }
     const drop = e.target.closest('[data-bk-drop]')?.dataset.bkDrop;
     if (drop != null) { b.models = b.models.filter((m) => m !== drop); save(); drawScopes(); return; }
-    if (e.target.closest('[data-bk-pick]')) { const id = await pickModel('chat', '', { context: `Block ${n} for this model` }); if (id) addModel(n, id); }
+    if (e.target.closest('[data-bk-pick]')) { const id = await pickModel('chat', '', { context: `Block ${n} for this model`, openRouterOnly: true }); if (id) addModel(n, id); }
   };
   box.onkeydown = (e) => {
     const x = e.target.closest('.bk-pat'); if (!x || e.key !== 'Enter') return;
@@ -7122,14 +7256,16 @@ async function keysChanged() {
   refreshBalance();
   const nav = $('#stNav .st-nav-item[data-cat="keys"] .st-nav-badge'); if (nav && G.cfg.hasKey) nav.remove();
 }
-// Without a key nothing can run: the message boxes lock and point to ⚙ Settings → API keys.
+// Without a key only a chat on a model through an app on this PC can run; the other message boxes lock and point
+// to ⚙ Settings → API keys, or to a This PC model.
 function applyKeyLock() {
   document.body.classList.toggle('no-key', !G.cfg.hasKey);
-  for (const c of G.open.values()) {
-    if (!c.el) continue;
+  for (const c of [...G.open.values(), G.homeDraftChat]) {
+    if (!c?.el?.root?.isConnected) continue;
     const ta = $('.input', c.el.root), send = $('.sendBtn', c.el.root);
-    ta.disabled = send.disabled = !G.cfg.hasKey;
-    ta.placeholder = G.cfg.hasKey ? 'Ask, or ask for something to be built…  @ to add files or chats · / for commands' : 'Add an OpenRouter key in ⚙ Settings → API keys to start.';
+    const can = !!G.cfg.hasKey || !!sourceOfId(c.agent?.setup?.model);
+    ta.disabled = send.disabled = !can;
+    ta.placeholder = can ? c.placeholder || 'Ask, or ask for something to be built…  @ to add files or chats · / for commands' : 'No OpenRouter key yet: pick a model tagged This PC (the model button above), or add a key in ⚙ Settings → API keys.';
   }
 }
 async function exportChats(btn) {
@@ -7451,7 +7587,7 @@ async function boot() {
   // Chats with a reply still running on the server (started before a reload) reattach too.
   fetch('/api/runs').then((r) => r.json()).then(async (list) => { for (const r of list) if (r.chatId && !G.open.has(r.chatId)) { await getChat(r.chatId); renderSidebar(); } }).catch(() => {});
   loadModels();
-  if (!G.cfg.hasKey) openSettings('keys');
+  if (!G.cfg.hasKey) fetch('/api/sources').then((r) => r.json()).then((j) => { if (!(j.sources || []).some((x) => x.on && x.installed)) openSettings('keys'); }).catch(() => openSettings('keys'));
   else firstSetupCheck();
   maybeStartTour({ fill: fillStart });
 }
@@ -8779,6 +8915,22 @@ function drawRunningPane(c, r) {
     const op = $('.run-open', row); if (op) op.onclick = () => showServerInPane(c, { url: x.url });
     const ch = $('.run-chat', row); if (ch) ch.onclick = () => showChat(ch.dataset.chat);
   }
+}
+
+// ---------- ↻ retry a failed reply ----------
+// Only the newest reply, when it failed: your message before it goes again, on the chat's model as it is now.
+function retryable(c, m) {
+  const msgs = c.agent?.messages || [];
+  return !c.running && msgs[msgs.length - 1] === m && msgs[msgs.length - 2]?.role === 'user';
+}
+async function retryReply(c, m) {
+  if (!retryable(c, m)) return;
+  const msgs = c.agent.messages, u = msgs[msgs.length - 2];
+  c.agent.messages = msgs.slice(0, -2);
+  await saveChat(c, true);
+  renderPanes(); refreshSidebar();
+  if (u.docs?.length) c.docs = u.docs.map((d) => ({ ...d, busy: null }));
+  send(c, u.content || '');
 }
 
 // ---------- ↩ rewind to one of your messages, ⑂ remix a reply into a new chat ----------

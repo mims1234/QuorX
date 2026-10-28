@@ -76,8 +76,16 @@ export function safePath(root, rel, secrets = null) {
   const within = (a, b) => (process.platform === 'win32' ? a.toLowerCase() : a) === (process.platform === 'win32' ? b.toLowerCase() : b) || (process.platform === 'win32' ? a.toLowerCase().startsWith(b.toLowerCase() + path.sep) : a.startsWith(b + path.sep));
   if (!within(real, realRoot)) throw new Error('that path leads outside the project folder (through a link)');
   // A project may point at any folder, even the harness itself: its secrets stay unreadable.
-  if ((secrets || SECRET_REAL()).includes(real.toLowerCase()) || SECRET_FILES.some((f) => p.toLowerCase() === f.toLowerCase())) throw new Error('that file holds API keys and is off limits');
+  if ((secrets || SECRET_REAL()).includes(real.toLowerCase()) || SECRET_FILES.some((f) => p.toLowerCase() === f.toLowerCase()) || hardLinkedSecret(p)) throw new Error('that file holds API keys and is off limits');
   return p;
+}
+// A hard link is a second name for the same file, so its path says nothing: one with more than one name is compared
+// with the key files by file id.
+const fileId = (f) => { try { const s = fs.statSync(f, { bigint: true }); return s.isFile() ? { id: `${s.dev}:${s.ino}`, links: s.nlink } : null; } catch { return null; } };
+function hardLinkedSecret(p) {
+  const me = fileId(p);
+  if (!me || me.links < 2n) return false;
+  return SECRET_FILES.some((f) => fileId(f)?.id === me.id);
 }
 
 /** A path a reply names: the full path when it is one on this computer (C:\…, C:/…, file:///…), '' when it is

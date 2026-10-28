@@ -4,6 +4,7 @@
 // The patterns are specific on purpose: code is full of long identifiers and numbers that must stay readable.
 export const KEY_PATTERNS = [
   [/\b(?:sk|pk|rk)[-_][A-Za-z0-9_-]{16,}/g, 'an API key'],
+  [/\boc_sk_[A-Za-z0-9_-]{8,}/g, 'an OpenCode key'],
   [/\bgh[pousr]_[A-Za-z0-9]{20,}|\bgithub_pat_[A-Za-z0-9_]{20,}/g, 'a GitHub token'],
   [/\bxox[abprs]-[A-Za-z0-9-]{10,}/g, 'a Slack token'],
   [/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, 'an AWS key'],
@@ -18,7 +19,7 @@ export const KEY_PATTERNS = [
 const ASSIGNED = /\b(?:passwords?|passwd|pwd|secret|client[_-]?secret|api[_-]?key|apikey|access[_-]?key|(?:access|auth|bearer|refresh)[_-]?token|token|private[_-]?key)["']?\s*[:=]\s*(['"`])[^'"`\s]{6,}\1/gi;
 
 // Files that hold secrets by their nature: never sent, whatever is in them.
-export const SECRET_FILE = /(^|\/)(\.env(\.[\w.-]+)?|[^/]*\.(pem|key|p12|pfx|jks|keystore|kdbx|ppk|asc)|id_(rsa|dsa|ecdsa|ed25519)(\.pub)?|\.npmrc|\.pypirc|\.netrc|\.git-credentials|\.htpasswd|credentials(\.[\w]+)?|[^/]*secrets?\.(json|ya?ml|toml|ini|env)|service-account[^/]*\.json)$/i;
+export const SECRET_FILE = /(^|\/)(\.env(\.[\w.-]+)?|[^/]*\.(pem|key|p12|pfx|jks|keystore|kdbx|ppk|asc)|id_(rsa|dsa|ecdsa|ed25519)(\.pub)?|\.npmrc|\.pypirc|\.netrc|\.git-credentials|\.htpasswd|credentials(\.[\w]+)?|[^/]*secrets?\.(json|ya?ml|toml|ini|env)|service-account[^/]*\.json|opencode\/auth\.json|\.cline\/(?:[^/]+\/)*providers\.json)$/i;
 
 /** What kind of secret `text` holds ('' when none of the patterns match). */
 export function findKey(text) {

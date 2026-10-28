@@ -4,6 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { renameSoon } from './fsretry.js';
@@ -14,7 +15,11 @@ const DATA = path.join(HOME, 'data');
 const FILE = path.join(DATA, 'keys.json');
 const USAGE = path.join(DATA, 'key-usage.json');
 // Files the agent's file tools and the /ws file server must never read, whatever folder a project points at.
-export const SECRET_FILES = [path.join(ROOT, '.env'), path.join(HOME, '.env'), FILE, USAGE, path.join(DATA, 'app-key'), path.join(DATA, 'access.json'), path.join(DATA, 'tls', 'lan-key.pem')];
+// sources.json holds the OpenCode and Cline keys (server/sources.js); OpenCode's and Cline's own key files hold the same
+// keys and their sign-ins.
+const USER = os.homedir();
+export const SECRET_FILES = [path.join(ROOT, '.env'), path.join(HOME, '.env'), FILE, USAGE, path.join(DATA, 'app-key'), path.join(DATA, 'access.json'), path.join(DATA, 'tls', 'lan-key.pem'), path.join(DATA, 'sources.json'),
+  path.join(process.env.XDG_DATA_HOME || path.join(USER, '.local', 'share'), 'opencode', 'auth.json'), path.join(USER, '.cline', 'data', 'settings', 'providers.json'), path.join(USER, '.cline', 'data', 'secrets.json')];
 const BASE = 'https://openrouter.ai';
 
 // The data folder (keys, the app key, chats) and .env belong to this account only. On a second drive Windows lets

@@ -5618,7 +5618,7 @@ dialog.st-dialog::backdrop { background: rgba(4, 6, 6, .78); backdrop-filter: bl
 :root.reduce-motion *, :root.reduce-motion *::before, :root.reduce-motion *::after { animation: none !important; transition: none !important; }
 :root.blur-paths #appBar code, :root.blur-paths .blurable { filter: blur(4px); transition: filter .15s; }
 :root.blur-paths #appBar code:hover, :root.blur-paths .blurable:hover { filter: none; }
-body.no-key .cmp-textarea::placeholder { color: var(--warn); }
+body.no-key .cmp-textarea:disabled::placeholder { color: var(--warn); }
 
 /* fold a project's chats away (click its header) */
 .sb-ph .sb-fold { width: 12px; flex: none; color: var(--dim); font-size: 9px; transition: transform .15s; }
