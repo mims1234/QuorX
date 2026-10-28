@@ -27,7 +27,7 @@ const GROK_TOOLS = ['run_terminal_cmd', 'grep', 'read_file', 'search_replace', '
 const SYSTEM = 'You are a language model called by the QuorX app. You have no tools or functions of your own and must never try to use one. The message holds QuorX\'s instructions, the tools QuorX offers (call them only by writing the text blocks it describes) and the conversation. Follow those instructions exactly. Start every call block on a new line of its own, never in the middle of a sentence or after other text on the same line: a block that does not start a line is not run. Every reply either makes its calls or is your final answer: when you say what you will do next, write its call blocks in that same reply, right after that sentence. A reply that only says what you will do ends the conversation with nothing done.';
 export const grokArgs = ({ model, effort, file }) => ['--no-auto-update', '-m', model, ...(effort ? ['--effort', effort] : []), '--output-format', 'streaming-messages-json', '--include-partial-messages',
   '--max-turns', '1', '--no-subagents', '--disable-web-search', '--permission-mode', 'default', '--system-prompt-override', SYSTEM,
-  '--tools', 'todo_write', '--disallowed-tools', GROK_TOOLS.join(','), '--verbatim', '--prompt-file', file];
+  '--tools', 'todo_write', '--disallowed-tools', GROK_TOOLS.join(','), '--prompt-file', file];
 // Grok also reads Claude Code's and Cursor's skills, MCP servers, rules, hooks and agents, its memory and workflows,
 // and lists them beside QuorX's prompt: switched off for QuorX's calls only (the user's own Grok setup is untouched).
 export const GROK_ENV = Object.fromEntries([
@@ -35,6 +35,9 @@ export const GROK_ENV = Object.fromEntries([
   ['GROK_MANAGED_MCPS_ENABLED', 'false'], ['GROK_MEMORY', '0'], ['GROK_WORKFLOWS', '0'],
 ]);
 
+// Where a reply stops being the model's own: a turn tag carrying this call's key (renderTranscript's turns).
+const TURN = (key) => new RegExp(`<(?:user|assistant|tool_result) key="${key}"`);
+const MAX_REPLY = 300e3; // characters in one reply; far past any file a step writes
 const err = (msg, extra = {}) => Object.assign(new Error(msg), extra);
 const running = new Set();
 export const grokRunning = () => running.size;
@@ -151,9 +154,18 @@ export async function grokStream(body, signal, onText, onThink, { info = {}, idl
     } else if (j.type === 'stream_event') {
       const d = j.event?.delta || {};
       if (j.event?.type === 'content_block_delta' && d.type === 'text_delta' && typeof d.text === 'string') {
+        if (result?.cut) return;
         const piece = d.text.replace(EOS, '');
         if (firstMs == null) firstMs = Date.now() - t;
         text += piece; outChars += piece.length; show(piece);
+        // A reply that runs away: the model writes the conversation's next turns itself (a tool's result, the user's
+        // reply) or doesn't stop. Its reply ends where that starts, and the model is stopped; nothing after it is read.
+        const turn = text.search(TURN(key));
+        if (turn >= 0 || text.length > MAX_REPLY) {
+          if (turn >= 0) text = text.slice(0, turn);
+          result ||= { stop_reason: turn >= 0 ? 'end_turn' : 'max_tokens', usage: {}, cut: true };
+          kill();
+        }
       } else if (j.event?.type === 'content_block_delta' && d.type === 'thinking_delta' && typeof d.thinking === 'string') {
         thinking += d.thinking; outChars += d.thinking.length; onThink?.(d.thinking);
       }

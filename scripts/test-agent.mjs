@@ -4423,7 +4423,10 @@ test('a Grok Build that starts with a built-in tool, or asks for any tool, is st
   const inline = await viaFakeGrok('inline', GROK_BODY);
   assert.deepEqual([inline.r.toolCalls.length, inline.r.skippedCalls], [0, 1], 'a call written mid-sentence is not run, and is counted so the chat says so');
   assert.match(inline.call.args[inline.call.args.indexOf('--system-prompt-override') + 1], /line of its own/, 'its prompt asks for each call on a line of its own');
-  assert.ok(inline.call.args.includes('--verbatim'), 'the prompt goes to the model as written');
+  assert.ok(!inline.call.args.includes('--verbatim'), 'Grok keeps its own wrapping of the prompt (without it, models wrote on past their turn)');
+  const away = await viaFakeGrok('runaway', GROK_BODY);
+  assert.equal(away.e, undefined, away.e?.message);
+  assert.deepEqual([away.r.text, away.r.toolCalls.map((c) => c.function.name), away.r.finishReason], ['Opening it.', ['read_file'], 'tool_calls'], 'a reply that writes the next turns itself ends where they start, its call kept');
   assert.deepEqual([GROK_ENV.GROK_CLAUDE_SKILLS_ENABLED, GROK_ENV.GROK_CURSOR_MCPS_ENABLED, GROK_ENV.GROK_MEMORY], ['false', 'false', '0'], 'Claude Code’s and Cursor’s skills and servers, and Grok’s memory, stay out of its prompt');
 });
 
