@@ -147,3 +147,11 @@ dialog.mp-dialog::backdrop { background: rgba(4, 6, 6, .72); backdrop-filter: bl
 .mp-row.locked:hover { background: transparent; }
 #pkBanner.flash { animation: pk-flash .6s ease 2; }
 @keyframes pk-flash { 50% { filter: brightness(1.6); } }
+/* First where the model runs, then that source's own filters on a row of their own */
+.mp-filters { flex-direction: column; align-items: stretch; gap: 8px; }
+.mp-src-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.mp-row-label { font: 600 11px var(--font-ui); color: var(--dim); text-transform: uppercase; letter-spacing: .04em; }
+.mp-filter-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.mp-src-row .mp-src-seg { margin-right: 0; }
+.mp-source { padding-bottom: 0; }
+.mp-source[hidden] { display: none; }
