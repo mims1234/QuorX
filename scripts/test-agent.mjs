@@ -36,6 +36,7 @@ import { SECRET_FILES } from '../server/keys.js';
 import { toolPrompt, renderTranscript, parseToolCalls, textFilter } from '../server/textcalls.js';
 import { localStream, localModels } from '../server/opencodelocal.js';
 import { claudeStream, claudeModels, claudeError, effortFor } from '../server/claudelocal.js';
+import { grokStream, grokModels, grokEffort, GROK_ARGS } from '../server/groklocal.js';
 
 let n = 0;
 const reply = (text, calls = [], finishReason = 'stop') => ({ text, toolCalls: calls.map(([name, args], i) => ({ id: `c${++n}_${i}`, type: 'function', function: { name, arguments: typeof args === 'string' ? args : JSON.stringify(args) } })), usage: { cost: 0.0001 }, ms: 1, firstMs: 1, finishReason });
@@ -4162,4 +4163,79 @@ test('Claude Code’s models follow its own names, priced by how the user signed
   assert.deepEqual([key[0].plan, key[0].priceFromApp], ['paid', true]);
   assert.deepEqual([effortFor({ effort: 'high' }, sub[1].variants), effortFor({ enabled: false }, sub[1].variants), effortFor({ effort: 'minimal' }, sub[1].variants), effortFor({ effort: 'high' }, [])], ['high', 'low', 'low', null]);
   assert.deepEqual(sourcePriced({ plan: 'plan' }, { plan_cost: 0.02, prompt_tokens: 10 }), { cost: 0, plan_cost: 0.02 }, 'its own list-price figure is kept');
+});
+
+// ---------- Grok Build on this PC (groklocal.js), against scripts/fake-grok.mjs ----------
+const FAKE_GROK = path.join(path.dirname(FAKE_CLAUDE), 'fake-grok.mjs');
+const grokOpts = { find: () => 'grok.exe', start: (cmd, args, o) => spawn(process.execPath, [FAKE_GROK, ...args], o) };
+async function viaFakeGrok(mode, body, opts = {}) {
+  const log = path.join(tempDir('fake-grok-'), 'call.json');
+  const keep = { mode: process.env.FAKE_GROK_MODE, log: process.env.FAKE_GROK_LOG, or: process.env.OPENROUTER_API_KEY };
+  Object.assign(process.env, { FAKE_GROK_MODE: mode, FAKE_GROK_LOG: log, OPENROUTER_API_KEY: 'sk-or-test' });
+  const shown = [], thought = [];
+  try {
+    const out = await grokStream(body, opts.signal || new AbortController().signal, (d) => shown.push(d), (d) => thought.push(d),
+      { info: { plan: 'plan', in: ['text', 'image'], variants: ['high', 'low'], ...opts.info }, idleMs: opts.idleMs || 20e3, ...grokOpts }).then((r) => ({ r }), (e) => ({ e }));
+    await new Promise((res) => setTimeout(res, 100));
+    let call = null;
+    try { call = JSON.parse(fs.readFileSync(log, 'utf8')); } catch { /* it never got that far */ }
+    return { ...out, call, shown: shown.join(''), thought: thought.join('') };
+  } finally {
+    for (const [k, v] of [['FAKE_GROK_MODE', keep.mode], ['FAKE_GROK_LOG', keep.log], ['OPENROUTER_API_KEY', keep.or]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  }
+}
+const GROK_BODY = { ...CLAUDE_BODY, model: 'grok-local/grok-4.7' };
+
+test('Grok Build on this PC: its built-in tools removed, QuorX’s system prompt over ACP, the picture along, keyed calls back', async () => {
+  const { r, e, call, shown, thought } = await viaFakeGrok('normal', GROK_BODY);
+  assert.equal(e, undefined, e?.message);
+  assert.deepEqual([r.text, shown, thought], ['Writing it.', 'Writing it. ', 'Plan it.']);
+  assert.deepEqual(r.toolCalls.map((c) => [c.function.name, c.function.arguments]), [['write_file', '{"path":"a.js"}']]);
+  assert.deepEqual([r.usage.prompt_tokens, r.usage.completion_tokens, r.usage.plan_cost, r.usage.cost, r.provider], [400, 50, 0.0123, undefined, 'xAI through Grok Build']);
+  const a = call.args, flag = (f) => a[a.indexOf(f) + 1];
+  assert.deepEqual(a.slice(-2), ['agent', 'stdio']);
+  assert.equal(flag('--tools'), 'todo_write');
+  for (const t of ['todo_write', 'run_terminal_cmd', 'read_file', 'search_replace', 'web_search', 'task']) assert.ok(flag('--disallowed-tools').split(',').includes(t), t);
+  assert.ok(a.includes('--no-subagents') && a.includes('--disable-web-search'));
+  assert.equal(flag('--permission-mode'), 'default', 'never the user’s always-approve');
+  const by = (m) => call.calls.filter((c) => c.method === m);
+  assert.deepEqual(by('authenticate')[0].params, { methodId: 'cached_token' });
+  const ses = by('session/new')[0].params;
+  assert.deepEqual(ses.mcpServers, []);
+  assert.match(ses._meta.systemPromptOverride, /^Rules\.\n\nYou have no tools or functions of your own[\s\S]*\[Tools\]/);
+  assert.deepEqual(by('session/set_config_option').map((c) => [c.params.configId, c.params.value]), [['model', 'grok-4.7'], ['reasoning_effort', 'high']], 'the model, then its effort');
+  assert.deepEqual(by('session/prompt')[0].params.prompt.map((p) => p.type), ['text', 'image']);
+  assert.equal(by('session/prompt')[0].params.prompt[1].mimeType, 'image/png');
+  assert.equal(call.openrouter, false);
+  assert.match(call.cwd, /grok-local$/);
+});
+
+test('a Grok Build that asks for, or starts, a tool of its own is refused and the call stopped', async () => {
+  const asked = await viaFakeGrok('perm', GROK_BODY);
+  assert.equal(failureKind(asked.e), 'shape');
+  assert.match(asked.e.message, /tool of its own \(Run ls\)/);
+  assert.deepEqual(asked.call.permissionAnswer, { outcome: { outcome: 'selected', optionId: 'no' } }, 'refused with its own reject option');
+  const ran = await viaFakeGrok('toolcall', GROK_BODY);
+  assert.equal(failureKind(ran.e), 'shape');
+  assert.match(ran.e.message, /read_file/);
+});
+
+test('Grok Build signed out says to run grok login; a Grok that can’t see pictures gets none; Stop ends it at once', async () => {
+  const out = await viaFakeGrok('signedout', GROK_BODY);
+  assert.equal(failureKind(out.e), 'auth');
+  assert.match(out.e.message, /grok login/);
+  const blind = await viaFakeGrok('nopics', GROK_BODY);
+  assert.deepEqual(blind.call.calls.find((c) => c.method === 'session/prompt').params.prompt.map((p) => p.type), ['text']);
+  const ac = new AbortController();
+  setTimeout(() => ac.abort(), 600);
+  const t = Date.now();
+  const stopped = await viaFakeGrok('hang', GROK_BODY, { signal: ac.signal });
+  assert.ok(stopped.e && Date.now() - t < 8000);
+});
+
+test('Grok Build’s models come from its own list, with pictures and effort levels, and nothing is sent to a model', async () => {
+  const l = await grokModels(grokOpts);
+  assert.deepEqual(l.map((m) => [m.id, m.ctx, m.plan, m.planLabel, m.in.join('+'), m.variants.join('/')]), [['grok-local/grok-4.7', 256000, 'plan', 'Grok', 'text+image', 'high/low'], ['grok-local/grok-4.6', 256000, 'plan', 'Grok', 'text+image', 'high/low']]);
+  assert.deepEqual([grokEffort({ effort: 'xhigh' }, ['high', 'low']), grokEffort({ enabled: false }, ['high', 'low']), sourceOf('grok-local/grok-4.6')?.source], ['high', 'low', 'grok-local']);
+  assert.ok(GROK_ARGS.includes('--no-auto-update'));
 });
