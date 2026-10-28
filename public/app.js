@@ -5894,34 +5894,22 @@ function settingsPanels(S) {
     ]],
     keys: ['API keys', 'QuorX uses one active OpenRouter key for every call. Add as many as you like and switch between them.', [`<div id="stKeys"><div class="st-row-help">Loading keys…</div></div>`]],
     models: ['Models & catalogue', 'Model lists and prices come from OpenRouter. Pick what new chats start with, and how each call finds a provider.', [
-      stCard('Spending limit', 'What the active OpenRouter key has left, while you pick models by price. Hidden until you click 👁.', '<div id="stModelLimit"><div class="st-row-help">Loading…</div></div>', 'sx-limit'),
-      stCard('Catalogue', '', stRow('Model lists and prices', `<span id="stCatInfo">${G.models ? `${G.models.length} models loaded` : 'Loading…'}</span>`, `<button type="button" class="st-btn secondary sm" data-act="refreshModels">↻ Refresh now</button>`)),
-      `<div class="sx-grid two">`
-      + stCard('New chats start with', 'Each chat can still pick any model from its message box.', stRow('Default chat model', '', `<button type="button" class="sx-model" data-act="pickDefModel" id="defModel" data-id="${esc(S.model)}"><span class="sx-av" aria-hidden="true">${esc((short(S.model)[0] || '?').toUpperCase())}</span>${recDot(S.model, 'chat')} ${esc(short(S.model))} <small>${esc(shortPrice(S.model))}</small><span class="sx-change">Change</span></button>`)
-        + stRow('Default reasoning', '', stSeg('reasoning', [['off', 'Off'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']], S.reasoning || 'off')))
-      + stCard('When the model fails', '', stRow('Fallback model', 'OpenRouter switches to it when a chat’s model fails or is down, billed at its own price. The trace marks steps it answered.', `<div class="st-fb">${modelField('pickFallback', S.fallbackModel, 'fbModel', 'None')}${S.fallbackModel ? '<button type="button" class="st-btn secondary sm" data-act="clearFallback" title="No fallback model">✕</button>' : ''}</div>`, { id: 'stRowFallback' }), '', 'stCardFallback')
-      + `</div>`,
-      stCard('Apps on this PC', 'A chat’s main model can also run through OpenCode on this computer, with the providers you connected there. Everything else stays on OpenRouter.', `<div class="sx-pad src-mini" id="stSrcMini">${srcMiniHTML()}</div>`),
-      stCard('Routing: how a call finds a provider', 'For every chat’s agent calls. The provider that answered shows on each step in “Steps”.',
-        `<div class="sx-pad" data-live="routing"></div>`
-        + stRow('Provider order', 'Auto favours providers with reliable tool calling (OpenRouter’s Exacto). Cheapest and Fastest sort by price or speed instead.', stCards('providerSort', [['auto', '🎯', 'Auto', 'Reliable tool calling'], ['price', '💲', 'Cheapest', 'Lowest price first'], ['throughput', '⚡', 'Fastest', 'Highest throughput first']], S.providerSort || 'auto', 'compact'), { cls: 'sx-row-wide', id: 'stRowOrder' })
+      stCard('OpenRouter', 'The active key’s spending limit (hidden until you click 👁) and the model list.', '<div id="stModelLimit"><div class="st-row-help">Loading…</div></div>'
+        + stRow('Model lists and prices', `<span id="stCatInfo">${G.models ? `${G.models.length} models loaded` : 'Loading…'}</span>`, `<button type="button" class="st-btn secondary sm" data-act="refreshModels">↻ Refresh now</button>`), 'sx-limit'),
+      stCard('Models', 'What new chats start with; each chat can still pick any model from its message box.', stRow('Default chat model', '', `<button type="button" class="sx-model" data-act="pickDefModel" id="defModel" data-id="${esc(S.model)}"><span class="sx-av" aria-hidden="true">${esc((short(S.model)[0] || '?').toUpperCase())}</span>${recDot(S.model, 'chat')} ${esc(short(S.model))} <small>${esc(shortPrice(S.model))}</small><span class="sx-change">Change</span></button>`)
+        + stRow('Default reasoning', '', stSeg('reasoning', [['off', 'Off'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']], S.reasoning || 'off'))
+        + stRow('Fallback model', 'OpenRouter switches to it when a chat’s model fails or is down, billed at its own price. The trace marks steps it answered.', `<div class="st-fb">${modelField('pickFallback', S.fallbackModel, 'fbModel', 'None')}${S.fallbackModel ? '<button type="button" class="st-btn secondary sm" data-act="clearFallback" title="No fallback model">✕</button>' : ''}</div>`, { id: 'stRowFallback' }), '', 'stCardFallback'),
+      stCard('Routing', 'How each agent call finds a provider. The one that answered shows on each step in “Steps”.',
+        stRow('Provider order', 'Auto favours providers with reliable tool calling (OpenRouter’s Exacto). Cheapest and Fastest sort by price or speed instead.', stCards('providerSort', [['auto', '🎯', 'Auto', 'Reliable tool calling'], ['price', '💲', 'Cheapest', 'Lowest price first'], ['throughput', '⚡', 'Fastest', 'Highest throughput first']], S.providerSort || 'auto', 'compact'), { cls: 'sx-row-wide', id: 'stRowOrder' })
         + stRow('Only providers that support every feature', 'Skips providers that would silently drop tools, reasoning or other settings. If none qualifies, that reply uses the default routing.', stSwitch('requireParams', S.requireParams !== false), { id: 'stRowFeatures' })
         + stRow('Zero data retention only', 'Only providers that keep no copy of your prompts. Fewer models qualify.', stSwitch('zdrOnly', !!S.zdrOnly), { id: 'stRowZdr' })
         + stRow('Blocked providers', 'OpenRouter never sends the agent’s calls to these: for every model, or only the models you pick (a provider can be fine for one model and break another). Block one that keeps breaking tool calls (the provider shows as “via …” above each reply). If only blocked providers serve a model, that reply uses them anyway, and says so.', '<div id="stBlocked"><div class="st-row-help">Loading providers…</div></div>', { cls: 'sx-row-wide', id: 'stRowBlocked' })),
     ]],
-    sources: ['Apps on this PC', 'Run a chat’s main model through OpenCode on this computer, with the providers, plans and sign-ins you connected there. The deciders, paid media, helpers and the reviewer stay on OpenRouter, and a call that fails there stops the reply with the reason, so you can pick another model (or choose a fallback below).', [
-      '<div data-live="sourceflow"></div>',
-      stCard(`${stNum(1)} Connect an app`, 'An app you switch on adds the models of every provider you connected in it to the chat model pickers, tagged This PC. Each provider bills as it does in that app.', '<div id="stSources"><div class="st-row-help">Checking the apps on this PC…</div></div>', '', 'stSrcConnect'),
-      stCard(`${stNum(2)} Pick a model`, '', stRow('In any chat', 'Click the chat’s model in its message box and pick a model tagged This PC; “Where it runs” at the top of the picker shows one source at a time. Switch a chat between OpenRouter and a source whenever you like: the conversation carries over.', '<button type="button" class="st-btn secondary sm" data-act="browseSources">Browse their models</button>'), '', 'stSrcPick'),
-      stCard(`${stNum(3)} When a call fails`, 'A provider can be down, slow or out of usage. By default the reply stops and says which model failed and why, and you pick another model; QuorX never switches by itself unless you choose a fallback here.',
+    sources: ['Apps on this PC', 'A chat’s main model can run through OpenCode on this computer, with the providers you connected there. Everything else stays on OpenRouter.', [
+      stCard('OpenCode', '', '<div id="stSources"><div class="st-row-help">Checking OpenCode on this PC…</div></div>', '', 'stSrcConnect'),
+      stCard('When a call fails', 'By default the reply stops and says why, and you pick another model. QuorX switches only if you choose a fallback.',
         stRow('Fall back to', '', stCards('sourceFallback', [['off', '✋', 'Stop and tell me', 'You pick the next model'], ['same', '🔁', 'Same model on OpenRouter', 'When OpenRouter has it, else the model below'], ['model', '🎯', 'Always this model', 'The fallback model below']], S.sourceFallback || G.cfg.defaults.sourceFallback || 'off', 'compact'), { cls: 'sx-row-wide', id: 'stRowSrcFb' })
-        + stRow('Fallback model', 'For a model OpenRouter doesn’t have (and every failed call, with “Always this model”). Empty: the same model when OpenRouter has it, else your OpenRouter fallback model (Models &amp; catalogue), else the default chat model (QuorX’s own when yours runs on a source). Billed at its OpenRouter price, and the reply’s cap counts it.', `<div class="st-fb">${modelField('pickSourceFallback', S.sourceFallbackModel, 'srcFbModel', 'Default chat model')}${S.sourceFallbackModel ? '<button type="button" class="st-btn secondary sm" data-act="clearSourceFallback" title="Use the default chat model">✕</button>' : ''}</div>`)
-        + stRow('How it decides', 'A hiccup (a rate limit with a short wait, a server error, a dropped connection) gets one quick retry first. A source that refuses its key, runs out of credit or plan usage, or fails twice in a reply is skipped for the rest of that reply, and other chats skip it for a short while instead of waiting on it. The next reply tries it again.', ''), '', 'stSrcFail'),
-      stCard('What stays the same', '', `<ul class="src-same">
-        <li><b>Tools and work</b>: files, commands, servers, the browser, checks and schedules work the same on any model.</li>
-        <li><b>OpenRouter's parts</b>: the deciders, paid media, helpers, the reviewer and the prompt enhancer still run there, with your OpenRouter key.</li>
-        <li><b>Costs</b>: OpenCode calls count at the price they report in the reply, project and daily caps. Go calls count ${stMoney('$0.00')}: your plan pays, and each step shows what it would have cost at list price.</li>
-        <li><b>Keys</b>: kept only on this computer (data/sources.json). The page never sees them again, and agent processes don’t get them.</li></ul>`),
+        + stRow('Fallback model', 'Used when OpenRouter lacks the same model, and for every failed call with “Always this model”. Empty: your OpenRouter fallback model, else the default chat model. Billed at OpenRouter’s price.', `<div class="st-fb">${modelField('pickSourceFallback', S.sourceFallbackModel, 'srcFbModel', 'Default chat model')}${S.sourceFallbackModel ? '<button type="button" class="st-btn secondary sm" data-act="clearSourceFallback" title="Use the default chat model">✕</button>' : ''}</div>`)),
     ]],
     newchats: ['New chats', 'What a fresh chat starts with. Each chat can change these in its message box.', [
       `<p class="sx-sec-help sx-mode-link">New chats start in ${S.approval === 'yolo' ? '⚡ YOLO' : '🔒 Strict'}. <button type="button" class="sp-link" data-act="openMode">Change it in 🛡 Approvals &amp; safety</button></p>`,
@@ -6225,7 +6213,6 @@ const ST_LIVE = {
     return `<div class="sx-preview ${U.density === 'compact' ? 'compact' : ''}" style="--pv-size:${U.fontSize}px" aria-hidden="true"><div class="sx-pv-side"><i></i><i></i><i></i><i style="width:70%"></i><i></i></div><div class="sx-pv-chat"><div class="sx-pv-msg me">Build me a pomodoro timer${t}</div><div class="sx-pv-msg">Done: a 25/5 timer with a start button and a chime. Open it in the preview.${t}</div></div></div>`; },
   window: (S) => { const U = uiOf(S);
     return `<div class="sx-window"><button type="button" class="${U.sidebarStart === 'rail' ? 'rail' : ''}" data-jump="stRowSidebar">Sidebar<small>${SIDE_START[U.sidebarStart] || ''}</small></button><button type="button" data-jump="stRowSidebar" tabindex="-1">Chat</button><button type="button" class="${U.paneMode === 'never' ? 'dim' : ''}" data-jump="stRowPane">Artifact pane<small>${PANE_MODE[U.paneMode] || ''}</small></button></div>`; },
-  routing: (S) => stFlow([['1', 'Your call', 'the chat’s model', ''], ['2', 'Order', PROVIDER_SORT[S.providerSort || 'auto'], 'stRowOrder'], ['3', 'Features', S.requireParams !== false ? 'all supported' : 'any provider', 'stRowFeatures', S.requireParams === false], ['4', 'Retention', S.zdrOnly ? 'zero retention' : 'any provider', 'stRowZdr', !S.zdrOnly], ['5', 'Fallback', S.fallbackModel ? short(S.fallbackModel) : 'none', 'stRowFallback', !S.fallbackModel], ['6', 'Blocked', blockedOf(S).length ? `${blockedOf(S).length} provider${blockedOf(S).length === 1 ? '' : 's'}` : 'none', 'stRowBlocked', !blockedOf(S).length]]),
   loopflow: (S) => stFlow([['1', 'Plan', PLAN_FIRST[S.planFirst || 'off'], 'stLoopPlan', (S.planFirst || 'off') === 'off'], ['2', 'Work', `${S.maxSteps} calls`, 'stLoopWork'], ['3', 'Check', S.verify !== false ? `on · ${S.verifyRounds ?? 2} rounds` : 'off', 'stLoopCheck', S.verify === false], ['4', 'Review', (S.review || 'builds') === 'off' ? 'off' : `${S.review || 'builds'} · ${S.reviewTier || 'cheap'}`, 'stLoopReview', S.review === 'off'], ['5', 'Helpers', S.helpers !== false ? `≥ ${S.helperMinFiles ?? 40} files` : 'off', 'stLoopHelpers', S.helpers === false], ['6', 'Long chats', S.compact !== false ? `summarise > ${kTok(S.compactAt || 24000)}` : 'trim only', 'stLoopMemory']]),
   scale: (S) => { const lo = Math.max(0, Math.min(1, Number(S.gate?.confirm) || 0)), hi = Math.max(lo, Math.min(1, Number(S.gate?.act) || 0));
     return `<div class="sx-scale" aria-hidden="true"><div class="sx-scale-track"><span class="sx-z-unsure" style="flex:${lo}">unsure</span><span class="sx-z-lean" style="flex:${hi - lo}">${hi - lo >= 0.1 ? 'lean' : ''}</span><span class="sx-z-settled" style="flex:${1 - hi}">settled</span></div><div class="sx-scale-axis"><span>0</span><span>lean at ${lo.toFixed(2)}</span><span>settled at ${hi.toFixed(2)}</span><span>1</span></div></div>`; },
@@ -6233,8 +6220,6 @@ const ST_LIVE = {
     const pct = cap ? Math.min(100, (t / cap) * 100) : 0;
     return `${cap ? `<div class="sx-meter ${pct >= 85 ? 'bad' : pct >= 60 ? 'warn' : ''}"><i style="width:${pct}%"></i></div>` : ''}<span class="sx-cap-zero">${stMoney(`$${t.toFixed(2)}`)} spent today${cap ? ` · ${Math.round(pct)}% of the cap` : ''}</span>`; },
   docflow: (S) => stFlow([['1', 'Attach', `up to ${S.maxUploadMB ?? 100} MB`, ''], ['2', 'Read the text', 'PDF, Word, Excel…', ''], ['3', 'Small', `≤ ${kTok(S.inlineDocTokens ?? 15000)} tokens: whole`, ''], ['4', 'Big: index', `asks above $${Number(S.docIndexBudget ?? 0.5).toFixed(2)}`, ''], ['5', 'Search', 'search_docs, read_doc', '']]),
-  sourceflow: (S) => { const l = ST.sources || [], live = l.filter((x) => x.on && srcReady(x)), fb = S.sourceFallback || G.cfg.defaults.sourceFallback || 'off';
-    return stFlow([['1', 'Connect', l.length ? `${live.length} of ${l.length} on` : 'checking…', 'stSrcConnect', !live.length], ['2', 'Pick a model', 'in any chat', 'stSrcPick', !live.length], ['3', 'If it fails', fb === 'off' ? 'stop and say so' : 'OpenRouter answers', 'stSrcFail', fb === 'off'], ['4', 'The rest', 'deciders, media: OpenRouter', '']]); },
 };
 // ---------- ⚙ Apps on this PC (server/sources.js) ----------
 // What a source's status says in one word, and its colour: on and working, on but failing, installed but off, or not installed.
@@ -6245,11 +6230,6 @@ function srcState(x) {
   if (!x.on) return { cls: 'off', word: 'off' };
   if (x.last && !x.last.ok) return { cls: 'warn', word: 'last call failed' };
   return { cls: 'ok', word: 'on' };
-}
-// The short version on ⚙ Models & catalogue: one status per source and the way to the full page.
-function srcMiniHTML() {
-  const l = ST.sources;
-  return `${l ? l.map((x) => { const st = srcState(x); return stStatus(st.cls, `${esc(x.name)}: ${esc(st.word)}`); }).join('') : '<span class="st-row-help">Checking…</span>'}<span class="kx-spacer"></span><button type="button" class="st-btn secondary sm" data-act="openSources">${l?.some((x) => x.on && srcReady(x)) ? 'Manage' : 'Set up'} apps on this PC →</button>`;
 }
 // What each source is, in a line, and how to install its app.
 const SRC_GUIDE = {
@@ -6268,7 +6248,6 @@ async function drawSourcesPanel(say = null) {
   if (!$('#stSources')) return;
   if (r.error || !Array.isArray(r.sources)) { box.innerHTML = `<div class="kx-wait bad">⚠ Couldn’t read the sources (${esc(r.error || 'no answer')}).</div>`; return; }
   ST.sources = r.sources; stRefresh();
-  const mini = $('#stSrcMini'); if (mini) mini.innerHTML = srcMiniHTML();
   const when = (t) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const card = (x) => {
     const g = SRC_GUIDE[x.id] || {}, st = srcState(x);
@@ -6317,7 +6296,7 @@ async function drawSourcesPanel(say = null) {
       btn.disabled = false;
       say(tmsg, t.ok ? `✓ ${x.appName || x.name} answered: ${t.models} models${!t.providers.length ? '' : t.providers.length === 1 ? ` on ${t.providers[0]}` : ` from ${t.providers.length} providers (${t.providers.join(', ')})`}.` : `⚠ ${t.error}`, !t.ok);
       const fresh = await fetch('/api/sources').then((y) => y.json()).catch(() => null);
-      if (fresh?.sources) { ST.sources = fresh.sources; stRefresh(); const mini2 = $('#stSrcMini'); if (mini2) mini2.innerHTML = srcMiniHTML(); }
+      if (fresh?.sources) { ST.sources = fresh.sources; stRefresh(); }
       return;
     }
     if (act === 'pick') {
@@ -6381,7 +6360,6 @@ function wireSettings() {
     if (act === 'pickFallback') { const id = await pickModel('chat', S.fallbackModel || '', { context: 'Fallback when a chat’s model fails', openRouterOnly: true }); if (id) { S.fallbackModel = id; mark(); drawSettings(); } }
     if (act === 'clearFallback') { S.fallbackModel = ''; mark(); drawSettings(); }
     if (act === 'openSources') { ST.cat = 'sources'; drawSettings(); $('#stMain').scrollTop = 0; }
-    if (act === 'browseSources') await pickModel('chat', '', { context: 'Models on OpenCode (pick one in a chat’s model button to use it)', source: (ST.sources || []).find((x) => x.on && srcReady(x))?.id || 'all' });
     if (act === 'pickSourceFallback') { const id = await pickModel('chat', S.sourceFallbackModel || '', { context: 'When a call through an app on this PC fails', openRouterOnly: true }); if (id) { S.sourceFallbackModel = id; mark(); drawSettings(); } }
     if (act === 'clearSourceFallback') { S.sourceFallbackModel = ''; mark(); drawSettings(); }
     if (act === 'openSafety') { ST.cat = 'safety'; drawSettings(); }
