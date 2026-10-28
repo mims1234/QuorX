@@ -3272,6 +3272,9 @@ function renderMsg(c, m) {
     el.insertAdjacentHTML('beforeend', `<div class="msg-tools u-tools"><button type="button" class="mt-btn mt-rewind" title="Rewind to here: this message and everything after it leave the chat, and it goes back in the box to edit. You choose whether file changes are undone too." aria-label="Rewind to here">${msgIcon('rewind')}</button><button type="button" class="mt-btn mt-copy" title="Copy this message" aria-label="Copy message">${msgIcon('copy')}</button></div>`);
     wireIconCopy($('.mt-copy', el), () => m.content);
     $('.mt-rewind', el).onclick = () => rewindTo(c, m);
+    // Rewind and Copy share the time's line, so nothing below the message (its "Read as" line) can sit on them.
+    const when = $('.utext', el)?.nextElementSibling;
+    if (when && !when.className) { const foot = document.createElement('div'); foot.className = 'u-foot'; when.before(foot); foot.append($('.u-tools', el), when); }
     return el;
   }
   if (m.role === 'usage') {

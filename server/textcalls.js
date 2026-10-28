@@ -1,20 +1,22 @@
 // Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Tool calls written as text, for a model QuorX reaches through an app that runs its own agent (the OpenCode on this
 // computer: opencodelocal.js). That app can't take QuorX's tools, so the prompt describes them and the model writes
-// each call as a <tool_call key="…"> block with JSON inside; QuorX reads the blocks back into the same tool_calls an API
+// each call as a <quorx_call key="…"> block with JSON inside; QuorX reads the blocks back into the same tool_calls an API
 // would have sent. The conversation goes over as one text transcript, so any model with text in and text out works.
 // The key is new for every call and only the prompt names it: a block the model quotes from a file, a page or a tool's
 // output can't carry it, so it stays text and never runs. The transcript's own tags inside any content are made inert
-// the same way, so a page can't fake a turn of the user's or a tool's result.
+// the same way, so a page can't fake a turn of the user's or a tool's result. The tag is QuorX's own: some providers'
+// servers turn a <tool_call> a model writes into a native call, which then never reaches QuorX. An older
+// <tool_call key="…"> block is still read.
 import crypto from 'node:crypto';
 
-const CLOSE = '</tool_call>';
+const TAG = 'quorx_call', CLOSE = `</${TAG}>`;
 /** A fresh key for one call's tool blocks. */
 export const callKey = () => crypto.randomBytes(4).toString('hex');
-const openTag = (key) => (key ? `<tool_call key="${key}">` : '<tool_call>');
+const openTag = (key) => (key ? `<${TAG} key="${key}">` : `<${TAG}>`);
 const block = (json, key) => `${openTag(key)}${json}${CLOSE}`;
 // The transcript's tags (and DeepSeek's call markers) inside content, made inert: shown, but never read as structure.
-const TAGS = /<(\/?)(user|assistant|tool_result|tool_call)\b/gi;
+const TAGS = /<(\/?)(user|assistant|tool_result|tool_call|quorx_call)\b/gi;
 const inert = (s) => String(s || '').replace(TAGS, '‹$1$2').replace(/<([｜|]+\s*DSML)/g, '‹$1');
 
 /** The part of the system prompt that teaches the model QuorX's tools and how to call them. */
@@ -29,7 +31,8 @@ You can use the tools listed below. To call one, write a block exactly like this
 ${block('{"name": "write_file", "arguments": {"path": "a.txt", "content": "hello"}}', key)}
 - Write several blocks in one reply to call several tools; they run in order.${key ? `\n- Every block starts with exactly ${openTag(key)}: a block without that key is not run.` : ''}
 - After your tool calls, stop writing: the results come back in the next message as <tool_result> blocks.
-- Text outside the blocks is shown to the user; put nothing else inside a block. Inside a JSON string, write </tool_call> as <\\/tool_call>.
+- Text outside the blocks is shown to the user; put nothing else inside a block. Inside a JSON string, write ${CLOSE} as <\\/${TAG}>.
+- Write the block as text in your reply. Native function calls don't reach QuorX: nothing would run.
 - Never write a <tool_result> yourself, and never pretend a tool ran.
 ${rule ? `- ${rule}\n` : ''}
 Tools (JSON Schema for each tool's arguments):
@@ -125,7 +128,7 @@ export function parseToolCalls(reply, idBase = 'call', key = '') {
   const calls = [];
   let said = '', i = 0;
   const s = nativeCalls(String(reply || ''), idBase, calls);
-  const opener = key ? new RegExp(`<tool_call\\s+key\\s*=\\s*["']?${key}["']?\\s*>`, 'g') : /<tool_call>/g;
+  const opener = key ? new RegExp(`<(${TAG}|tool_call)\\s+key\\s*=\\s*["']?${key}["']?\\s*>`, 'g') : new RegExp(`<(${TAG}|tool_call)>`, 'g');
   const code = codeRanges(s);
   while (i < s.length) {
     opener.lastIndex = i;
@@ -135,12 +138,13 @@ export function parseToolCalls(reply, idBase = 'call', key = '') {
     if (!m) { said += s.slice(i); break; }
     const a = m.index, from = a + m[0].length;
     said += s.slice(i, a);
-    // The block ends at the first </tool_call> after which its JSON reads (one written inside a string comes earlier).
-    let b = s.indexOf(CLOSE, from), j;
-    for (let c = b; c >= 0; c = s.indexOf(CLOSE, c + CLOSE.length)) { const t = loose(s.slice(from, c)); if (t !== undefined) { b = c; j = t; break; } }
+    // The block ends at the first closing tag after which its JSON reads (one written inside a string comes earlier).
+    const close = `</${m[1]}>`;
+    let b = s.indexOf(close, from), j;
+    for (let c = b; c >= 0; c = s.indexOf(close, c + close.length)) { const t = loose(s.slice(from, c)); if (t !== undefined) { b = c; j = t; break; } }
     const inner = s.slice(from, b < 0 ? s.length : b);
     if (j === undefined) j = loose(inner);
-    i = b < 0 ? s.length : b + CLOSE.length;
+    i = b < 0 ? s.length : b + close.length;
     const name = j && typeof j === 'object' ? String(j.name || j.tool || j.function?.name || '') : (/"name"\s*:\s*"([^"]{1,80})"/.exec(inner)?.[1] || '');
     const args = j && typeof j === 'object' ? j.arguments ?? j.args ?? j.parameters ?? j.function?.arguments ?? {} : null;
     calls.push({ id: `${idBase}_${calls.length}`, type: 'function', function: { name: name || 'invalid', arguments: args == null ? inner.trim() : typeof args === 'string' ? args : JSON.stringify(args) } });
@@ -154,7 +158,7 @@ export function parseToolCalls(reply, idBase = 'call', key = '') {
  */
 // Where the calls start: QuorX's own block, or a model's native format (DeepSeek's starts "<｜"). Text after the first
 // call is rare and is still in the final reply; the stream shows only what came before.
-const OPENERS = ['<tool_call', '<｜', '<|'];
+const OPENERS = [`<${TAG}`, '<tool_call', '<｜', '<|'];
 const LONGEST = Math.max(...OPENERS.map((o) => o.length));
 export function textFilter(onText) {
   let pending = '', stopped = false;
