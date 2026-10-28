@@ -1486,9 +1486,12 @@ const FILTERS = [
 const providerOf = (id) => String(id).replace(/^~/, '').split('/')[0] || 'other';
 // Models of an app on this PC (⚙ Settings → Apps on this PC) are the source, a slash, and that app's own id.
 const SOURCE_NAME = { 'opencode-local': 'OpenCode on this PC', 'claude-local': 'Claude Code on this PC', 'grok-local': 'Grok Build on this PC' };
+// Each source's own logo (public/icons/brand), in the text colour (Claude's in its orange), with its name on hover.
+const SOURCE_LOGO = { openrouter: 'openrouter', 'opencode-local': 'opencode', 'claude-local': 'claude', 'grok-local': 'grok' };
+const srcLogo = (k, title = k === 'openrouter' ? 'OpenRouter' : SOURCE_NAME[k] || k) => SOURCE_LOGO[k] ? `<span class="src-logo src-logo-${SOURCE_LOGO[k]}" style="--ico:url('icons/brand/${SOURCE_LOGO[k]}.svg')" role="img" aria-label="${esc(title)}" title="${esc(title)}"></span>` : esc(title);
 const SOURCE_SHORT = { 'opencode-local': 'This PC', 'claude-local': 'Claude Code', 'grok-local': 'Grok Build' };
 // The apps' tags as words: "This PC, Claude Code or Grok Build".
-const srcTags = () => { const t = [...new Set(Object.values(SOURCE_SHORT))]; return t.length > 1 ? `${t.slice(0, -1).join(', ')} or ${t.at(-1)}` : t[0] || ''; };
+const srcApps = () => { const t = ['OpenCode', ...Object.values(SOURCE_SHORT).filter((x) => x !== 'This PC')]; return t.length > 1 ? `${t.slice(0, -1).join(', ')} or ${t.at(-1)}` : t[0] || ''; };
 const sourceOfId = (id) => { const s = String(id || ''), h = s.split('/')[0]; return SOURCE_NAME[h] && s.length > h.length + 1 ? h : null; };
 const PROVIDER_NAME = (p) => ({ 'x-ai': 'xAI', openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google', 'meta-llama': 'Meta', mistralai: 'Mistral', deepseek: 'DeepSeek', qwen: 'Qwen', nvidia: 'NVIDIA', cohere: 'Cohere', inclusionai: 'inclusionAI', openrouter: 'OpenRouter', 'black-forest-labs': 'Black Forest Labs', elevenlabs: 'ElevenLabs', ...SOURCE_NAME }[p] || p.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
 const cleanName = (m) => String(m.name || m.id).replace(/\s*\(free\)\s*$/i, '').replace(/^[^:]+:\s*/, '');
@@ -1541,7 +1544,7 @@ function drawPicker(full = false) {
   // No key yet: browsing works (the lists are public); only models through an app on this PC run.
   const banner = $('#pkBanner');
   banner.hidden = !!G.cfg?.hasKey;
-  banner.innerHTML = G.cfg?.hasKey ? '' : `🔑 <b>No OpenRouter key yet.</b> ${PK.kind === 'chat' ? `Models of an app on this PC (tagged ${srcTags()}) run now; the others wait for a key.` : 'You can browse models and prices now; they run once you add a key.'} <button type="button" class="mp-link" id="pkAddKey">Add a key →</button>`;
+  banner.innerHTML = G.cfg?.hasKey ? '' : `🔑 <b>No OpenRouter key yet.</b> ${PK.kind === 'chat' ? `Models of an app on this PC (marked with that app’s logo: ${srcApps()}) run now; the others wait for a key.` : 'You can browse models and prices now; they run once you add a key.'} <button type="button" class="mp-link" id="pkAddKey">Add a key →</button>`;
   const ak = $('#pkAddKey'); if (ak) ak.onclick = () => { PK.done?.(null); openSettings('keys'); };
   // What is chosen now.
   const cur = G.byId.get(PK.current) || all.find((m) => m.id === PK.current);
@@ -1558,7 +1561,7 @@ function drawPicker(full = false) {
   if (!srcs.includes(PK.source)) PK.source = 'all';
   const scoped = all.filter(inSource), sub = SOURCE_SUB[PK.source];
   const usable = FILTERS.filter(([k, , f]) => k === 'fav' ? (G.favModels?.[PK.kind] || []).length : scoped.some(f) && !scoped.every(f));
-  const srcBar = srcs.length > 1 ? `<div class="mp-src-row"><span class="mp-row-label">Where it runs</span><div class="st-segmented mp-src-seg" role="radiogroup" aria-label="Where the model runs">${[['all', 'All'], ...['openrouter', ...Object.keys(SOURCE_NAME)].filter((k) => srcs.includes(k)).map((k) => [k, k === 'openrouter' ? 'OpenRouter' : SOURCE_NAME[k]])].map(([k, l]) => `<button type="button" class="st-seg-btn ${PK.source === k ? 'active' : ''}" role="radio" aria-checked="${PK.source === k}" data-src="${k}">${esc(l)} <small>${k === 'all' ? all.length : all.filter((m) => sourceKey(m) === k).length}</small></button>`).join('')}</div></div>` : '';
+  const srcBar = srcs.length > 1 ? `<div class="mp-src-row"><span class="mp-row-label">Where it runs</span><div class="st-segmented mp-src-seg" role="radiogroup" aria-label="Where the model runs">${[['all', 'All'], ...['openrouter', ...Object.keys(SOURCE_NAME)].filter((k) => srcs.includes(k)).map((k) => [k, k === 'openrouter' ? 'OpenRouter' : SOURCE_NAME[k]])].map(([k, l]) => `<button type="button" class="st-seg-btn ${PK.source === k ? 'active' : ''}" role="radio" aria-checked="${PK.source === k}" aria-label="${esc(l)}" title="${esc(l)}" data-src="${k}">${k === 'all' ? 'All' : srcLogo(k, l)} <small>${k === 'all' ? all.length : all.filter((m) => sourceKey(m) === k).length}</small></button>`).join('')}</div></div>` : '';
   const popBtn = (cls, icon, set, none, one) => `<div class="mp-prov-wrap"><button type="button" class="mp-chip ${cls} ${set.size ? 'on' : ''}" aria-haspopup="true">${icon} ${set.size ? `${set.size} ${one}${set.size > 1 ? 's' : ''}` : none} ▾</button><div class="mp-prov-pop" hidden></div></div>`;
   const sb = $('#pkSource'); if (sb) { sb.innerHTML = srcBar; sb.hidden = !srcBar; }
   $('#pkFilters').innerHTML = (sb ? '' : srcBar) + `<div class="mp-filter-row">`
@@ -1680,7 +1683,7 @@ function rowHTML(m, i) {
   const fav = (G.favModels?.[m.kind] || []).includes(m.id), locked = orLocked(m.id);
   const caps = [(m.in || []).includes('image') && m.kind !== 'image' ? ['👁', 'Sees images'] : null, m.tools ? ['🧰', 'Uses tools'] : null, m.reasoning ? ['🧠', 'Reasoning'] : null, (m.in || []).includes('audio') ? ['🎙', 'Hears audio'] : null, m.voices?.length ? ['🗣', `${m.voices.length} voices`] : null].filter(Boolean);
   return `<div class="mp-row ${m.id === PK.current ? 'cur' : ''} ${locked ? 'locked' : ''}" role="option" data-i="${i}" data-id="${esc(m.id)}" aria-selected="false" ${locked ? 'aria-disabled="true" ' : ''}title="${esc(modelTip(m, caps, locked))}">
-    <span class="mp-main"><span class="mp-name">${cardChip(m.id)} ${esc(cleanName(m))}${m.source ? ` <span class="mp-src" title="Runs through ${esc(SOURCE_NAME[m.source])} (⚙ Settings → Apps on this PC)">${esc(SOURCE_SHORT[m.source])}</span>` : ''}${m.id === PK.current ? ' <span class="mp-tag cur">current</span>' : ''}</span><span class="mp-id">${esc(m.id)}</span></span>
+    <span class="mp-main"><span class="mp-name">${cardChip(m.id)} ${esc(cleanName(m))}${m.source ? ` ${srcLogo(m.source, `Runs through ${SOURCE_NAME[m.source]} (⚙ Settings → Apps on this PC)`)}` : ''}${m.id === PK.current ? ' <span class="mp-tag cur">current</span>' : ''}</span><span class="mp-id">${esc(m.id)}</span></span>
     <span class="mp-caps">${caps.map(([i2, t]) => `<span title="${t}">${i2}</span>`).join('')}</span>
     <span class="mp-meta">${scoreBadge(m.id)}${m.ctx ? `<span title="Context window">${ctxText(m.ctx)}</span>` : ''}${m.created ? `<span title="${new Date(m.created * 1000).toLocaleDateString()}">${agoDate(m.created)}</span>` : ''}</span>
     <span class="mp-price" title="${esc(priceText(m))}">${priceCell(m)}</span>
@@ -6297,7 +6300,7 @@ async function drawSourcesPanel(say = null) {
     const last = x.last ? (x.last.ok ? `<span class="src-last ok">✓ Last call ${when(x.last.at)} worked</span>` : `<span class="src-last ${x.last.kind === 'auth' || x.last.kind === 'quota' ? 'bad' : 'warn'}">⚠ ${when(x.last.at)}: ${esc(x.last.why || x.last.kind)}${x.last.until > Date.now() ? ` · skipped until ${when(x.last.until)}` : ''}</span>`) : '';
     return `<section class="src-card ${x.on && srcReady(x) ? 'on' : ''}" data-src="${esc(x.id)}">
       <header class="src-head">
-        <span class="mp-ava" style="--h:${hue(x.id)}" aria-hidden="true">${esc(initials(x.name))}</span>
+        ${SOURCE_LOGO[x.id] ? srcLogo(x.id, x.name) : `<span class="mp-ava" style="--h:${hue(x.id)}" aria-hidden="true">${esc(initials(x.name))}</span>`}
         <b class="src-name">${esc(x.name)}</b>
         ${stTag(x.billing === 'plan' ? 'info' : x.billing === 'mixed' ? 'violet' : 'warn', x.billing === 'plan' ? 'subscription' : x.billing === 'mixed' ? 'your providers' : 'pay per use')}
         ${stStatus(st.cls, st.word)}
@@ -7173,7 +7176,7 @@ async function drawKeysPanel() {
   ST.keys = { n: keys.length, active: keys.find((k) => k.active)?.label || '' }; stRefresh();
   const U = uiOf(ST.draft);
   const addForm = (hero) => `<div class="kx-add ${hero ? 'hero' : ''}" ${hero ? '' : 'hidden'}>
-      ${hero ? '<div class="kx-hero"><div class="kx-hero-ico">🔑</div><div><h4>Connect OpenRouter to start</h4><p>Models, prices, deciders and media all run through OpenRouter.</p></div></div>' : ''}
+      ${hero ? `<div class="kx-hero"><div class="kx-hero-ico">${srcLogo('openrouter')}</div><div><h4>Connect OpenRouter to start</h4><p>Models, prices, deciders and media all run through OpenRouter.</p></div></div>` : ''}
       <div class="kx-signin">
         <button type="button" class="kx-btn primary kx-signin-btn" data-signin>Sign in with OpenRouter</button>
         <div class="kx-signin-wait" hidden>
@@ -7308,7 +7311,7 @@ function applyKeyLock() {
     const ta = $('.input', c.el.root), send = $('.sendBtn', c.el.root);
     const can = !!G.cfg.hasKey || !!sourceOfId(c.agent?.setup?.model);
     ta.disabled = send.disabled = !can;
-    ta.placeholder = can ? c.placeholder || 'Ask, or ask for something to be built…  @ to add files or chats · / for commands' : `No OpenRouter key yet: pick a model of an app on this PC, tagged ${srcTags()} (the model button above), or add a key in ⚙ Settings → API keys.`;
+    ta.placeholder = can ? c.placeholder || 'Ask, or ask for something to be built…  @ to add files or chats · / for commands' : `No OpenRouter key yet: pick a model of an app on this PC (${srcApps()}: marked with its logo in the model button above), or add a key in ⚙ Settings → API keys.`;
   }
 }
 async function exportChats(btn) {
