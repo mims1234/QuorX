@@ -66,7 +66,7 @@ dialog.mp-dialog::backdrop { background: rgba(4, 6, 6, .72); backdrop-filter: bl
 /* the list */
 .mp-list { flex: 1; min-height: 0; overflow: auto; padding: 4px 10px 10px; border-top: 1px solid var(--line); }
 .mp-sec { font: 700 10px var(--font-ui); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); padding: 12px 8px 4px; }
-.mp-row { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto auto 150px 28px; align-items: center; column-gap: 12px; padding: 8px 8px; border-radius: 9px; cursor: pointer; border: 1px solid transparent; }
+.mp-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto 150px 28px; align-items: center; column-gap: 12px; padding: 8px 8px; border-radius: 9px; cursor: pointer; border: 1px solid transparent; }
 .mp-row + .mp-row { margin-top: 1px; }
 .mp-row:hover, .mp-row.kb { background: var(--panel-2); border-color: var(--line); }
 .mp-row.cur { background: var(--ok-dim); border-color: var(--ok-border, rgba(47, 179, 111, .35)); }
@@ -102,11 +102,10 @@ dialog.mp-dialog::backdrop { background: rgba(4, 6, 6, .72); backdrop-filter: bl
 .mp-foot kbd { font: 10px var(--mono); padding: 1px 5px; border-radius: 4px; border: 1px solid var(--line-strong); background: var(--panel-2); color: var(--muted); margin-right: 2px; }
 
 @media (max-width: 720px) {
-  .mp-row { grid-template-columns: 28px minmax(0, 1fr) auto 26px; row-gap: 4px; }
-  .mp-ava { width: 28px; height: 28px; }
+  .mp-row { grid-template-columns: minmax(0, 1fr) auto 26px; row-gap: 4px; }
   .mp-caps, .mp-meta { display: none; }
-  .mp-price { grid-column: 2 / 4; justify-content: flex-start; }
-  .mp-star { grid-row: 1; grid-column: 4; opacity: 1; }
+  .mp-price { grid-column: 1 / 3; justify-content: flex-start; }
+  .mp-star { grid-row: 1; grid-column: 3; opacity: 1; }
   .mp-sorts { width: 100%; overflow-x: auto; flex-wrap: nowrap; }
   dialog.mp-dialog[open] { width: 100vw; height: 100dvh; }
   .mp { border-radius: 0; }
@@ -147,3 +146,11 @@ dialog.mp-dialog::backdrop { background: rgba(4, 6, 6, .72); backdrop-filter: bl
 .mp-row.locked:hover { background: transparent; }
 #pkBanner.flash { animation: pk-flash .6s ease 2; }
 @keyframes pk-flash { 50% { filter: brightness(1.6); } }
+/* First where the model runs, then that source's own filters on a row of their own */
+.mp-filters { flex-direction: column; align-items: stretch; gap: 8px; }
+.mp-src-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.mp-row-label { font: 600 11px var(--font-ui); color: var(--dim); text-transform: uppercase; letter-spacing: .04em; }
+.mp-filter-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.mp-src-row .mp-src-seg { margin-right: 0; }
+.mp-source { padding-bottom: 0; }
+.mp-source[hidden] { display: none; }
