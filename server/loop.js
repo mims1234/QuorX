@@ -45,7 +45,9 @@ export function numberedWindow(text, { offset = 1, limit = 400, maxChars = 60000
 const ORDERS = [
   /\b(ignore|disregard|forget|override)\b.{0,40}\b(previous|prior|above|earlier|all|your|the)\b.{0,30}\b(instructions?|prompts?|rules?|directions?)\b/i,
   /\b(you are now|act as|pretend to be|from now on,? you)\b/i,
-  /\b(system prompt|developer message)|<\/?(system|assistant|user|instructions?|tool_result|tool_call)\b/i,
+  /\b(system prompt|developer message|<\/?(system|assistant|instructions?)>)/i,
+  // A line that is nothing but a chat-turn tag (ordinary XML, JSX and docs keep theirs).
+  /^\s*<\/?(user|assistant|system|tool_result|tool_call|quorx_call)(\s[^>]*)?>\s*$/i,
   /\b(new|updated|real) instructions?\s*:/i,
   /\b(assistant|ai|agent|llm|model)\s*[,:]\s*(please\s+)?(run|execute|delete|send|call|use|open|download|write|reveal|print)\b/i,
 ];
