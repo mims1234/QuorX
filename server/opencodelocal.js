@@ -309,8 +309,6 @@ async function localOnce(body, signal, onText, onThink, { info = {}, idleMs = 18
       if (offered && native.input && typeof native.input === 'object' && Object.keys(native.input).length) parsed.calls = [{ id: `call_${t.toString(36)}_n`, type: 'function', function: { name: native.tool, arguments: JSON.stringify(native.input) } }];
       else throw err(`The model made a native function call${native.tool ? ` (${native.tool})` : ''}, which OpenCode can't pass on to QuorX`, { kind: 'shape', native, firstCost: costs.size ? [...costs.values()].reduce((x, y) => x + y, 0) : Number(lastInfo?.cost), retryWith: `Your last answer made a native function call${native.tool ? ` (${native.tool})` : ''}, which never reaches QuorX, so nothing ran. Write each call as a text block in your reply, exactly as the instructions show.`, partial: { outChars, ms: Date.now() - t } });
     }
-    // Calls written in a model's own format (DeepSeek's) carry no key, so they never run: one more go, asking for QuorX's.
-    if (parsed.dsml && !parsed.calls.length && !reminder) throw err('The model wrote its calls in its own format, which QuorX only runs as keyed blocks', { kind: 'shape', firstCost: costs.size ? [...costs.values()].reduce((x, y) => x + y, 0) : Number(lastInfo?.cost), retryWith: `Your last answer wrote ${parsed.dsml > 1 ? `${parsed.dsml} calls` : 'a call'} in your own tool-call format, which QuorX doesn't run, so nothing ran. Write each call as a text block exactly as the instructions show, starting <quorx_call key="${key}">.`, partial: { outChars, ms: Date.now() - t } });
     const tk = lastInfo?.tokens || {}, cache = tk.cache || {};
     const said = costs.size ? [...costs.values()].reduce((a, b) => a + b, 0) : Number(lastInfo?.cost);
     const usage = lastInfo ? {
@@ -319,7 +317,8 @@ async function localOnce(body, signal, onText, onThink, { info = {}, idleMs = 18
       // OpenCode prices a call from its catalogue: real money for a paid provider; a plan's list price otherwise.
       ...(Number.isFinite(said) ? (info.plan === 'paid' ? { cost: said } : { opencode: { list_cost: said } }) : {}),
     } : {};
-    // Blocks that didn't run (mid-line, hidden, or in its own format after the one more go) are never asked for again.
+    // Blocks that didn't run (mid-line, hidden, or in a model's own keyless format such as DeepSeek's) are shown as
+    // text with a warning and never asked for again: asking could turn one the model only quoted into a real call.
     return { text: parsed.text, thinking, reasoningDetails: [], toolCalls: parsed.calls, ...(parsed.skipped + parsed.dsml ? { skippedCalls: parsed.skipped + parsed.dsml } : {}), usage, ms: Date.now() - t, firstMs, finishReason: lastInfo?.finish === 'length' ? 'length' : parsed.calls.length ? 'tool_calls' : 'stop', provider: `${info.providerName || providerID} through OpenCode`, model: body.model, seen: seen || 1 };
   } catch (e) {
     if (accepted && e && typeof e === 'object' && !e.partial) e.partial = { outChars, ms: Date.now() - t };
