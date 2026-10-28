@@ -1523,7 +1523,8 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       ...(r.source ? { source: r.source } : {}), ...(r.servedBy ? { fellBackFrom: setup.model } : {}), ...(r.usage.plan_cost ? { planCost: r.usage.plan_cost } : {}), at: at() });
     // Nothing came back (no text, no tool call): usually all of the output went on thinking. Never end
     // a reply silently on that: tell the model to act, think less, and try again (twice at most).
-    if (!r.toolCalls.length && !String(r.text || '').trim()) {
+    // A call written on a step that allows none was dropped (viaSource): that is the step limit, not an empty answer.
+    if (!r.toolCalls.length && !String(r.text || '').trim() && !(r.droppedCalls && toolChoice === 'none')) {
       const out = r.usage.completion_tokens || 0, cut = r.finishReason === 'length' || out >= maxOut * 0.95;
       const why = cut ? `used its whole ${maxOut.toLocaleString()}-token output on thinking (${Math.round(r.ms / 1000)}s)` : `returned an empty answer${out ? ` after ${out.toLocaleString()} tokens of thinking` : ''}`;
       if (!last && emptyTries < 2) {
@@ -1864,7 +1865,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         noteSourceResult(s.source, sm, null);
         // Calls written as text follow the step as an API's would: none on a step that allows none, only the tool a
         // step asks for, and (in callTool) never a tool this chat doesn't offer.
-        if (body.tool_choice === 'none') r.toolCalls = [];
+        if (body.tool_choice === 'none' && r.toolCalls.length) { r.droppedCalls = r.toolCalls.length; r.toolCalls = []; }
         else if (body.tool_choice?.function?.name) r.toolCalls = r.toolCalls.filter((c) => c?.function?.name === body.tool_choice.function.name);
         if (r.toolCalls.length > 25) r.toolCalls = r.toolCalls.slice(0, 25);
         for (const c of r.toolCalls) textCalls.add(c);

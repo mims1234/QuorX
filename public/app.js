@@ -1508,14 +1508,14 @@ function priceCell(m) {
   if (m.kind === 'speech') return `<span class="mp-money">${usd(m.price[0])}</span><small>/M chars</small>`;
   return esc(priceText(m));
 }
-const PK = { kind: 'chat', current: '', filters: new Set(), providers: new Set(), sort: 'cheap', q: '', sel: 0, shown: 0, list: [], done: null, observer: null, source: 'all', orOnly: false };
+const PK = { kind: 'chat', current: '', filters: new Set(), providers: new Set(), subs: new Set(), sort: 'cheap', q: '', sel: 0, shown: 0, list: [], done: null, observer: null, source: 'all', orOnly: false };
 
 // pickModel(kind, current, { context, openRouterOnly, source }) → the chosen id, or null. openRouterOnly: for the
 // places only an OpenRouter model makes sense (its fallback model, a blocked provider's models); source: open on one
 // source's models ('openrouter', 'opencode-local').
 function pickModel(kind, current, opts = {}) {
   return new Promise((resolve) => {
-    Object.assign(PK, { kind, current: current || '', q: '', sel: 0, providers: new Set(), filters: new Set(), context: opts.context || '', orOnly: !!opts.openRouterOnly, source: opts.source || 'all' });
+    Object.assign(PK, { kind, current: current || '', q: '', sel: 0, providers: new Set(), subs: new Set(), filters: new Set(), context: opts.context || '', orOnly: !!opts.openRouterOnly, source: opts.source || 'all' });
     PK.sort = G.pickerSort?.[kind] || 'best';
     PK.done = (v) => { if ($('#picker').open) $('#picker').close(); PK.done = null; resolve(v); };
     $('#pkSearch').value = '';
@@ -1526,8 +1526,14 @@ function pickModel(kind, current, opts = {}) {
   });
 }
 function pickerModels() { return (G.models || []).filter((m) => m.kind === PK.kind && !(PK.orOnly && m.source) && !(m.source && m.status === 'deprecated' && m.id !== PK.current)); }
-// Where a model runs: OpenRouter, or the OpenCode source it names.
+// Where a model runs: OpenRouter, or the source it names (an app on this PC).
 const sourceKey = (m) => m.source || 'openrouter';
+// Who made it: OpenRouter's first part (anthropic/…); through an app, the maker inside its id
+// (opencode-local/nvidia/minimaxai/minimax-m3 → minimaxai), else the app's provider.
+const makerOf = (m) => { if (!m.source) return providerOf(m.id); const p = String(m.realId || m.id.slice(m.source.length + 1)).split('/'); return p.length >= 3 ? p[p.length - 2] : m.providerID || p[0] || 'other'; };
+// A source's own filter, shown once that source is picked: OpenCode's is the provider it calls through.
+const SOURCE_SUB = { 'opencode-local': { label: 'Through', all: 'every OpenCode provider', key: (m) => m.providerID || 'other', name: (m) => m.providerName || m.providerID || 'other' } };
+const inSource = (m) => PK.source === 'all' || sourceKey(m) === PK.source;
 function drawPicker(full = false) {
   const all = pickerModels();
   $('#pkTitle').textContent = `Choose a ${(KIND_TITLE[PK.kind] || 'model').toLowerCase()}`;
@@ -1547,29 +1553,40 @@ function drawPicker(full = false) {
     $('#pkSort').innerHTML = SORTS.map(([k, l]) => `<button type="button" class="mp-sort ${PK.sort === k ? 'on' : ''}" data-sort="${k}" aria-pressed="${PK.sort === k}">${l}</button>`).join('');
     for (const b of document.querySelectorAll('#pkSort .mp-sort')) b.onclick = () => { PK.sort = b.dataset.sort; (G.pickerSort ??= {})[PK.kind] = PK.sort; savePrefs(); drawPicker(true); };
   }
-  const usable = FILTERS.filter(([k, , f]) => k === 'fav' ? (G.favModels?.[PK.kind] || []).length : all.some(f) && !all.every(f));
-  // Where the models run, once OpenCode adds its own (one segment per source the list has, with counts).
+  // First where the model runs (one segment per source the list has, with counts), then filters for that source only.
   const srcs = [...new Set(all.map(sourceKey))];
   if (!srcs.includes(PK.source)) PK.source = 'all';
-  const srcBar = srcs.length > 1 ? `<div class="st-segmented mp-src-seg" role="radiogroup" aria-label="Where the model runs">${[['all', 'All'], ...['openrouter', ...Object.keys(SOURCE_NAME)].filter((k) => srcs.includes(k)).map((k) => [k, k === 'openrouter' ? 'OpenRouter' : SOURCE_NAME[k]])].map(([k, l]) => `<button type="button" class="st-seg-btn ${PK.source === k ? 'active' : ''}" role="radio" aria-checked="${PK.source === k}" data-src="${k}">${l} <small>${k === 'all' ? all.length : all.filter((m) => sourceKey(m) === k).length}</small></button>`).join('')}</div>` : '';
-  $('#pkFilters').innerHTML = srcBar + usable.map(([k, l, f]) => `<button type="button" class="mp-chip ${PK.filters.has(k) ? 'on' : ''}" data-f="${k}" aria-pressed="${PK.filters.has(k)}">${l} <small>${all.filter(f).length}</small></button>`).join('')
-    + `<div class="mp-prov-wrap"><button type="button" class="mp-chip mp-prov-btn ${PK.providers.size ? 'on' : ''}" aria-haspopup="true">🏢 ${PK.providers.size ? `${PK.providers.size} provider${PK.providers.size > 1 ? 's' : ''}` : 'All providers'} ▾</button><div class="mp-prov-pop" hidden></div></div>`
-    + (PK.filters.size || PK.providers.size ? '<button type="button" class="mp-link mp-clear">Clear filters</button>' : '');
+  const scoped = all.filter(inSource), sub = SOURCE_SUB[PK.source];
+  const usable = FILTERS.filter(([k, , f]) => k === 'fav' ? (G.favModels?.[PK.kind] || []).length : scoped.some(f) && !scoped.every(f));
+  const srcBar = srcs.length > 1 ? `<div class="mp-src-row"><span class="mp-row-label">Where it runs</span><div class="st-segmented mp-src-seg" role="radiogroup" aria-label="Where the model runs">${[['all', 'All'], ...['openrouter', ...Object.keys(SOURCE_NAME)].filter((k) => srcs.includes(k)).map((k) => [k, k === 'openrouter' ? 'OpenRouter' : SOURCE_NAME[k]])].map(([k, l]) => `<button type="button" class="st-seg-btn ${PK.source === k ? 'active' : ''}" role="radio" aria-checked="${PK.source === k}" data-src="${k}">${esc(l)} <small>${k === 'all' ? all.length : all.filter((m) => sourceKey(m) === k).length}</small></button>`).join('')}</div></div>` : '';
+  const popBtn = (cls, icon, set, none, one) => `<div class="mp-prov-wrap"><button type="button" class="mp-chip ${cls} ${set.size ? 'on' : ''}" aria-haspopup="true">${icon} ${set.size ? `${set.size} ${one}${set.size > 1 ? 's' : ''}` : none} ▾</button><div class="mp-prov-pop" hidden></div></div>`;
+  const sb = $('#pkSource'); if (sb) { sb.innerHTML = srcBar; sb.hidden = !srcBar; }
+  $('#pkFilters').innerHTML = (sb ? '' : srcBar) + `<div class="mp-filter-row">`
+    + (sub ? popBtn('mp-sub-btn', '🔌', PK.subs, `${sub.label}: ${sub.all}`, 'provider') : '')
+    + usable.map(([k, l, f]) => `<button type="button" class="mp-chip ${PK.filters.has(k) ? 'on' : ''}" data-f="${k}" aria-pressed="${PK.filters.has(k)}">${l} <small>${scoped.filter(f).length}</small></button>`).join('')
+    + popBtn('mp-prov-btn', '🏢', PK.providers, 'All makers', 'maker')
+    + (PK.filters.size || PK.providers.size || PK.subs.size ? '<button type="button" class="mp-link mp-clear">Clear filters</button>' : '') + '</div>';
   for (const b of document.querySelectorAll('#pkFilters .mp-chip[data-f]')) b.onclick = () => { PK.filters.has(b.dataset.f) ? PK.filters.delete(b.dataset.f) : PK.filters.add(b.dataset.f); PK.sel = 0; drawPicker(); };
-  for (const b of document.querySelectorAll('#pkFilters [data-src]')) b.onclick = () => { PK.source = b.dataset.src; PK.sel = 0; drawPicker(); };
-  const clr = $('#pkFilters .mp-clear'); if (clr) clr.onclick = () => { PK.filters.clear(); PK.providers.clear(); drawPicker(); };
-  // Providers: a searchable multi-select with counts.
-  const provBtn = $('#pkFilters .mp-prov-btn'), provPop = $('#pkFilters .mp-prov-pop');
-  provBtn.onclick = () => {
-    if (!provPop.hidden) { provPop.hidden = true; return; }
-    const counts = {}; for (const m of all) { const p = providerOf(m.id); counts[p] = (counts[p] || 0) + 1; }
-    const list = Object.entries(counts).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-    provPop.innerHTML = `<input class="mp-prov-q" placeholder="Find a provider" aria-label="Find a provider"><div class="mp-prov-list">${list.map(([p, n]) => `<label class="mp-prov-row"><input type="checkbox" value="${esc(p)}" ${PK.providers.has(p) ? 'checked' : ''}><span class="mp-ava sm" style="--h:${hue(p)}">${esc(initials(PROVIDER_NAME(p)))}</span><span>${esc(PROVIDER_NAME(p))}</span><small>${n}</small></label>`).join('')}</div>`;
-    provPop.hidden = false;
-    $('.mp-prov-q', provPop).oninput = (e) => { const q = e.target.value.toLowerCase(); for (const r of provPop.querySelectorAll('.mp-prov-row')) r.hidden = !r.textContent.toLowerCase().includes(q); };
-    for (const cb of provPop.querySelectorAll('input[type=checkbox]')) cb.onchange = () => { cb.checked ? PK.providers.add(cb.value) : PK.providers.delete(cb.value); PK.sel = 0; drawList(); provBtn.innerHTML = `🏢 ${PK.providers.size ? `${PK.providers.size} provider${PK.providers.size > 1 ? 's' : ''}` : 'All providers'} ▾`; provBtn.classList.toggle('on', PK.providers.size > 0); };
-    $('.mp-prov-q', provPop).focus();
+  // A new source starts with its own filters clear.
+  for (const b of document.querySelectorAll('#pkSource [data-src], #pkFilters [data-src]')) b.onclick = () => { if (PK.source !== b.dataset.src) { PK.source = b.dataset.src; PK.providers.clear(); PK.subs.clear(); } PK.sel = 0; drawPicker(); };
+  const clr = $('#pkFilters .mp-clear'); if (clr) clr.onclick = () => { PK.filters.clear(); PK.providers.clear(); PK.subs.clear(); drawPicker(); };
+  // A searchable multi-select with counts, over this source's models: makers, and the source's own filter.
+  const pop = (btn, set, keyOf, nameOf, find, label) => {
+    if (!btn) return;
+    const box = btn.nextElementSibling;
+    btn.onclick = () => {
+      if (!box.hidden) { box.hidden = true; return; }
+      const counts = new Map(); for (const m of scoped) { const k = keyOf(m); counts.set(k, { n: (counts.get(k)?.n || 0) + 1, name: nameOf(m) }); }
+      const list = [...counts].sort((a, b) => b[1].n - a[1].n || a[0].localeCompare(b[0]));
+      box.innerHTML = `<input class="mp-prov-q" placeholder="${esc(find)}" aria-label="${esc(find)}"><div class="mp-prov-list">${list.map(([k, v]) => `<label class="mp-prov-row"><input type="checkbox" value="${esc(k)}" ${set.has(k) ? 'checked' : ''}><span>${esc(v.name)}</span><small>${v.n}</small></label>`).join('')}</div>`;
+      box.hidden = false;
+      $('.mp-prov-q', box).oninput = (e) => { const q = e.target.value.toLowerCase(); for (const r of box.querySelectorAll('.mp-prov-row')) r.hidden = !r.textContent.toLowerCase().includes(q); };
+      for (const cb of box.querySelectorAll('input[type=checkbox]')) cb.onchange = () => { cb.checked ? set.add(cb.value) : set.delete(cb.value); PK.sel = 0; drawList(); btn.firstChild.textContent = label(); };
+      $('.mp-prov-q', box).focus();
+    };
   };
+  pop($('#pkFilters .mp-prov-btn'), PK.providers, makerOf, (m) => PROVIDER_NAME(makerOf(m)), 'Find a maker', () => `🏢 ${PK.providers.size ? `${PK.providers.size} maker${PK.providers.size > 1 ? 's' : ''}` : 'All makers'} ▾`);
+  if (sub) pop($('#pkFilters .mp-sub-btn'), PK.subs, sub.key, sub.name, `Find a provider in ${SOURCE_NAME[PK.source] || 'this source'}`, () => `🔌 ${PK.subs.size ? `${PK.subs.size} provider${PK.subs.size > 1 ? 's' : ''}` : `${sub.label}: ${sub.all}`} ▾`);
   drawList();
 }
 function drawList() {
@@ -1587,21 +1604,22 @@ function drawList() {
   const q = ($('#pkSearch').value || '').trim().toLowerCase();
   const all = pickerModels();
   const active = FILTERS.filter(([k]) => PK.filters.has(k));
-  let list = all.filter((m) => active.every(([, , f]) => f(m)) && (!PK.providers.size || PK.providers.has(providerOf(m.id))) && (PK.source === 'all' || sourceKey(m) === PK.source)
-    && (!q || `${m.id} ${m.name} ${PROVIDER_NAME(providerOf(m.id))}`.toLowerCase().includes(q)));
+  const sub = SOURCE_SUB[PK.source];
+  let list = all.filter((m) => active.every(([, , f]) => f(m)) && (!PK.providers.size || PK.providers.has(makerOf(m))) && inSource(m) && (!sub || !PK.subs.size || PK.subs.has(sub.key(m)))
+    && (!q || `${m.id} ${m.name} ${PROVIDER_NAME(makerOf(m))} ${m.providerName || ''}`.toLowerCase().includes(q)));
   const RANK = { g: 0, y: 1, r: 2 };
   const by = { best: (a, b) => RANK[rateModel(a, PK.kind)?.r ?? 'y'] - RANK[rateModel(b, PK.kind)?.r ?? 'y'] || priceNum(a) - priceNum(b), cheap: (a, b) => priceNum(a) - priceNum(b), pricey: (a, b) => priceNum(b) - priceNum(a), new: (a, b) => (b.created || 0) - (a.created || 0), old: (a, b) => (a.created || 0) - (b.created || 0), name: (a, b) => cleanName(a).localeCompare(cleanName(b)), ctx: (a, b) => (b.ctx || 0) - (a.ctx || 0) }[PK.sort];
   list.sort((a, b) => by(a, b) || cleanName(a).localeCompare(cleanName(b)));
   // Favourites and recent ones first when nothing narrows the list.
-  const plain = !q && !PK.filters.size && !PK.providers.size;
-  const here = (m) => PK.source === 'all' || sourceKey(m) === PK.source;
+  const plain = !q && !PK.filters.size && !PK.providers.size && !PK.subs.size;
+  const here = inSource;
   const favs = plain ? (G.favModels?.[PK.kind] || []).map((id) => all.find((m) => m.id === id)).filter((m) => m && here(m)) : [];
   const recent = plain ? (G.recentModels?.[PK.kind] || []).filter((id) => !favs.some((f) => f.id === id)).map((id) => all.find((m) => m.id === id)).filter((m) => m && here(m)).slice(0, 5) : [];
   PK.list = [...favs, ...recent, ...list];
-  count.innerHTML = `<b>${list.length}</b> of ${all.length} ${KIND_TITLE[PK.kind]?.toLowerCase() || 'model'}s${list.length !== all.length ? ' match' : ''} · sorted by ${SORTS.find((x) => x[0] === PK.sort)[1].toLowerCase()} <span class="rec-legend" title="From QuorX's own benchmarks where a model was tested; otherwise from what the catalogue says it can do. Hover a dot for the reason.">🟢 recommended · 🟡 OK or untested · 🔴 avoid</span>`;
+  count.innerHTML = `<b>${list.length}</b> of ${all.length} ${KIND_TITLE[PK.kind]?.toLowerCase() || 'model'}s${list.length !== all.length ? ' match' : ''} · sorted by ${SORTS.find((x) => x[0] === PK.sort)[1].toLowerCase()}`;
   if (!list.length && !favs.length) {
-    box.innerHTML = `<div class="mp-empty"><b>No model matches.</b><p>${q ? `Nothing for “${esc(q)}”. ` : ''}Try fewer filters.</p>${PK.filters.size || PK.providers.size || q ? '<button type="button" class="mp-btn" id="pkClearAll">Clear search and filters</button>' : ''}</div>`;
-    const c = $('#pkClearAll'); if (c) c.onclick = () => { $('#pkSearch').value = ''; PK.filters.clear(); PK.providers.clear(); drawPicker(); };
+    box.innerHTML = `<div class="mp-empty"><b>No model matches.</b><p>${q ? `Nothing for “${esc(q)}”. ` : ''}Try fewer filters.</p>${PK.filters.size || PK.providers.size || PK.subs.size || q ? '<button type="button" class="mp-btn" id="pkClearAll">Clear search and filters</button>' : ''}</div>`;
+    const c = $('#pkClearAll'); if (c) c.onclick = () => { $('#pkSearch').value = ''; PK.filters.clear(); PK.providers.clear(); PK.subs.clear(); drawPicker(); };
     return;
   }
   const section = (t) => `<div class="mp-sec">${t}</div>`;
@@ -1641,12 +1659,28 @@ function scoreBadge(id) {
 }
 // Without an OpenRouter key, a chat model on OpenRouter can't run: it shows, locked.
 const orLocked = (id) => !G.cfg?.hasKey && PK.kind === 'chat' && !sourceOfId(id);
+// Everything about a model, for its row's hover: who made it, where it runs, price, limits, abilities, rating.
+function modelTip(m, caps, locked) {
+  const r = rateModel(m, PK.kind), sc = G.scores?.[m.id];
+  return [
+    locked ? 'Runs on OpenRouter: add an OpenRouter key first (⚙ Settings → API keys).' : '',
+    `${cleanName(m)} · ${PROVIDER_NAME(makerOf(m))}`,
+    m.id,
+    `Runs on: ${m.source ? `${SOURCE_NAME[m.source] || m.source}${m.providerName ? `, through ${m.providerName}` : ''}` : 'OpenRouter'}`,
+    `Price: ${priceText(m)}`,
+    [m.ctx ? `Context: ${ctxText(m.ctx)} tokens` : '', m.maxOut ? `output up to ${ctxText(m.maxOut)}` : ''].filter(Boolean).join(', '),
+    caps.length ? `Can: ${caps.map(([, t]) => t.toLowerCase()).join(', ')}` : '',
+    m.created ? `Released: ${new Date(m.created * 1000).toLocaleDateString()} (${agoDate(m.created)})` : '',
+    r ? `QuorX's rating: ${{ g: 'recommended', y: 'OK or untested', r: 'avoid' }[r.r] || 'untested'}${r.why ? `. ${r.why}` : ''}` : '',
+    sc && sc.checked >= 3 ? `Your last 30 days: ${sc.passed} of ${sc.checked} replies passed the checks` : '',
+    m.desc ? `\n${m.desc}` : '',
+  ].filter(Boolean).join('\n');
+}
 function rowHTML(m, i) {
-  const p = providerOf(m.id), fav = (G.favModels?.[m.kind] || []).includes(m.id), locked = orLocked(m.id);
+  const fav = (G.favModels?.[m.kind] || []).includes(m.id), locked = orLocked(m.id);
   const caps = [(m.in || []).includes('image') && m.kind !== 'image' ? ['👁', 'Sees images'] : null, m.tools ? ['🧰', 'Uses tools'] : null, m.reasoning ? ['🧠', 'Reasoning'] : null, (m.in || []).includes('audio') ? ['🎙', 'Hears audio'] : null, m.voices?.length ? ['🗣', `${m.voices.length} voices`] : null].filter(Boolean);
-  return `<div class="mp-row ${m.id === PK.current ? 'cur' : ''} ${locked ? 'locked' : ''}" role="option" data-i="${i}" data-id="${esc(m.id)}" aria-selected="false" ${locked ? 'aria-disabled="true" ' : ''}title="${esc(locked ? 'Runs on OpenRouter: add an OpenRouter key first (⚙ Settings → API keys)' : m.desc || priceText(m))}">
-    <span class="mp-ava" style="--h:${hue(p)}" title="${esc(PROVIDER_NAME(p))}">${esc(initials(PROVIDER_NAME(p)))}</span>
-    <span class="mp-main"><span class="mp-name">${recDot(m, PK.kind)}${cardChip(m.id)} ${esc(cleanName(m))}${m.source ? ` <span class="mp-src" title="Runs through ${esc(SOURCE_NAME[m.source])} (⚙ Settings → Apps on this PC)">${esc(SOURCE_SHORT[m.source])}</span>` : ''}${m.id === PK.current ? ' <span class="mp-tag cur">current</span>' : ''}</span><span class="mp-id">${esc(m.id)}</span></span>
+  return `<div class="mp-row ${m.id === PK.current ? 'cur' : ''} ${locked ? 'locked' : ''}" role="option" data-i="${i}" data-id="${esc(m.id)}" aria-selected="false" ${locked ? 'aria-disabled="true" ' : ''}title="${esc(modelTip(m, caps, locked))}">
+    <span class="mp-main"><span class="mp-name">${cardChip(m.id)} ${esc(cleanName(m))}${m.source ? ` <span class="mp-src" title="Runs through ${esc(SOURCE_NAME[m.source])} (⚙ Settings → Apps on this PC)">${esc(SOURCE_SHORT[m.source])}</span>` : ''}${m.id === PK.current ? ' <span class="mp-tag cur">current</span>' : ''}</span><span class="mp-id">${esc(m.id)}</span></span>
     <span class="mp-caps">${caps.map(([i2, t]) => `<span title="${t}">${i2}</span>`).join('')}</span>
     <span class="mp-meta">${scoreBadge(m.id)}${m.ctx ? `<span title="Context window">${ctxText(m.ctx)}</span>` : ''}${m.created ? `<span title="${new Date(m.created * 1000).toLocaleDateString()}">${agoDate(m.created)}</span>` : ''}</span>
     <span class="mp-price" title="${esc(priceText(m))}">${priceCell(m)}</span>
@@ -3276,6 +3310,9 @@ function renderMsg(c, m) {
     el.insertAdjacentHTML('beforeend', `<div class="msg-tools u-tools"><button type="button" class="mt-btn mt-rewind" title="Rewind to here: this message and everything after it leave the chat, and it goes back in the box to edit. You choose whether file changes are undone too." aria-label="Rewind to here">${msgIcon('rewind')}</button><button type="button" class="mt-btn mt-copy" title="Copy this message" aria-label="Copy message">${msgIcon('copy')}</button></div>`);
     wireIconCopy($('.mt-copy', el), () => m.content);
     $('.mt-rewind', el).onclick = () => rewindTo(c, m);
+    // Rewind and Copy share the time's line, so nothing below the message (its "Read as" line) can sit on them.
+    const when = $('.utext', el)?.nextElementSibling;
+    if (when && !when.className) { const foot = document.createElement('div'); foot.className = 'u-foot'; when.before(foot); foot.append($('.u-tools', el), when); }
     return el;
   }
   if (m.role === 'usage') {
@@ -4951,7 +4988,7 @@ async function followRun(c, m, open) {
         if (e.t === 'budget_done' && m.budgetAsk) { m.budgetAsk.outcome = e; c.waiting = false; refreshSidebar(); renderChatHead(c); }
         if (e.t === 'answer' && m.questions[e.id]) { const qc = m.questions[e.id].card; e.label = e.answers ? (e.defaults ? 'the recommended answers' : e.answers.map((x, i) => (x.choice != null ? qc.questions?.[i]?.options[x.choice] : x.text || '–')).join(' · ')) : e.choice != null ? qc.options[e.choice] : e.text; m.questions[e.id].answer = e; c.waiting = false; renderSidebar(); renderChatHead(c); }
         if (e.t === 'done') { m.doneAt = Date.now(); m.content = e.reply; m.note = e.historyNote; m.stats = e.stats; G.sessionCost += e.stats.cost; renderSpend(); loadScores(); }
-        if (e.t === 'error') { m.error = e.msg; if (e.stats && !m.stats) { m.stats = { ...e.stats, partial: true }; G.sessionCost += e.stats.cost || 0; renderSpend(); } }
+        if (e.t === 'error') { m.error = e.msg; m.failed = !e.stopped; if (e.stats && !m.stats) { m.stats = { ...e.stats, partial: true }; G.sessionCost += e.stats.cost || 0; renderSpend(); } }
         if (e.t === 'interrupted') { m.error = 'The harness restarted while this reply was running.'; m.resumable = !!e.resumable; }
         if (e.t === 'compacted') { a.summary = e.summary; a.summaryAt = e.cutoffAt; }
         // You switched paid tools on from the agent's card: they stay on for this chat (its 🧰 Tools menu shows them).
@@ -8927,16 +8964,26 @@ function drawRunningPane(c, r) {
 // Only the newest reply, when it failed: your message before it goes again, on the chat's model as it is now.
 function retryable(c, m) {
   const msgs = c.agent?.messages || [];
-  return !c.running && msgs[msgs.length - 1] === m && msgs[msgs.length - 2]?.role === 'user';
+  return !c.running && m.failed && !m.resumable && !m.runActive && !m.live && msgs[msgs.length - 1] === m && msgs[msgs.length - 2]?.role === 'user';
 }
 async function retryReply(c, m) {
   if (!retryable(c, m)) return;
   const msgs = c.agent.messages, u = msgs[msgs.length - 2];
+  const ta = c.el && $('.input', c.el.root);
+  // What waits in the message box is yours: Retry doesn't take it or mix it in.
+  if (String(ta?.value || '').trim() || c.images?.length || c.docs?.length || c.ctx?.length || c.comments?.length) return uiAlert('Send or clear what’s in the message box first, then Retry.');
+  const imgs = (u.imgViews || []).map((full, i) => ({ thumb: u.imgs?.[i] || full, full, view: full }));
+  if (!String(u.content || '').trim() && !imgs.length && !u.docs?.length && !u.cmts?.length) return uiAlert('There is nothing in that message to send again.');
   c.agent.messages = msgs.slice(0, -2);
   await saveChat(c, true);
   renderPanes(); refreshSidebar();
+  // The message goes again with its pictures, files and pointed-at elements. @-context keeps only its titles, so it is
+  // named in the text instead.
+  c.images = imgs;
   if (u.docs?.length) c.docs = u.docs.map((d) => ({ ...d, busy: null }));
-  send(c, u.content || '');
+  if (u.cmts?.length) c.comments = u.cmts.map((x) => ({ ...x }));
+  const ctxNote = u.ctx?.length ? `\n\n(Context I attached before: ${u.ctx.join(', ')}.)` : '';
+  send(c, `${u.content || ''}${ctxNote}`);
 }
 
 // ---------- ↩ rewind to one of your messages, ⑂ remix a reply into a new chat ----------

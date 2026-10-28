@@ -252,13 +252,15 @@ export async function processDoc(projectId, id, opts = {}) {
       else if (ZIP_KINDS[doc.kind]) { text = readZipDoc(doc.kind, buf); method = `${ZIP_KINDS[doc.kind]} text`; }
       else if (doc.kind === 'pdf') {
         if (opts.ocr) {
+          if (!currentKey()) throw new Error('this needs an OpenRouter key (⚙ Settings → API keys)');
           const r = await parseViaOpenRouter(file, doc.name, 'mistral-ocr', await readerModel(S.readerModel, (doc.pages || 50) * 600));
           charge(r.cost, r.model, 'doc-ocr'); text = r.text; method = `OCR (mistral-ocr via ${r.model})`;
         } else {
           const local = await pdfToText(file);
           if (local) { text = local.text; pages = local.pages; method = 'pdftotext (local, free)'; }
           else {
-            const r = await parseViaOpenRouter(file, doc.name, 'cloudflare-ai', await readerModel(S.readerModel, doc.size / 8));
+            if (!currentKey()) throw new Error('this needs an OpenRouter key (⚙ Settings → API keys)');
+          const r = await parseViaOpenRouter(file, doc.name, 'cloudflare-ai', await readerModel(S.readerModel, doc.size / 8));
             charge(r.cost, r.model, 'doc-parse'); text = r.text; method = `OpenRouter file parser via ${r.model}`;
           }
           // Almost no text on the pages: a scan. OCR costs money, so it waits for the user.

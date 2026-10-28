@@ -21,8 +21,7 @@ const NO_TOOLS = Object.fromEntries([['*', false], ...OC_TOOLS.map((t) => [t, fa
 // QuorX's agent inside OpenCode: QuorX writes the whole system prompt, and OpenCode's own tools are off.
 // No compaction inside a call either: QuorX trims its own transcript, and OpenCode's would be two more paid calls.
 const CONFIG = { agent: { quorx: { mode: 'primary', description: 'Calls from QuorX', prompt: 'Follow the system instructions you are given exactly.', tools: { '*': false } } }, autoupdate: false, share: 'disabled', compaction: { auto: false, prune: false } };
-// The most a call may write: QuorX's own output limit is per step, so OpenCode's 32k default would cut big files.
-const OUTPUT_MAX = 128000;
+
 const IDLE_STOP_MS = 15 * 60e3;
 
 /** A program on PATH (Windows: with its .cmd/.exe), or null. */
@@ -90,7 +89,7 @@ export async function ensureLocalServer({ start = spawn, find = findOnPath, read
   const port = await freePort(), pass = crypto.randomBytes(18).toString('base64url');
   // OpenCode uses its own sign-ins and keys: QuorX's OpenRouter key stays out of its environment.
   const env = { ...process.env, OPENCODE_SERVER_PASSWORD: pass, OPENCODE_CONFIG_CONTENT: JSON.stringify(CONFIG), OPENCODE_DISABLE_CLAUDE_CODE: '1', OPENCODE_DISABLE_PROJECT_CONFIG: '1', OPENCODE_DISABLE_AUTOUPDATE: '1', OPENCODE_DISABLE_EXTERNAL_SKILLS: '1', OPENCODE_DISABLE_LSP_DOWNLOAD: '1',
-    OPENCODE_SERVER_USERNAME: 'opencode', OPENCODE_DISABLE_AUTOCOMPACT: '1', OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX: String(OUTPUT_MAX) };
+    OPENCODE_SERVER_USERNAME: 'opencode', OPENCODE_DISABLE_AUTOCOMPACT: '1' };
   for (const k of Object.keys(env)) if (/^OPENROUTER_API_KEY/i.test(k)) delete env[k];
   const cmd = /\.(cmd|bat)$/i.test(exe);
   const proc = cmd
@@ -158,14 +157,19 @@ export async function localModels({ server } = {}) {
 
 // The reasoning variant OpenCode has for this model closest to what QuorX asked for (none when it has none).
 const LADDER = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
-function variantFor(reasoning, variants = []) {
+// Models that think by default when no variant is sent: for Off they get their lightest instead.
+const THINKS_BY_DEFAULT = /gemini-3|gpt-5|claude-[a-z]+-5[.-][1-9]|claude-5/i;
+function variantFor(reasoning, variants = [], modelID = '') {
   if (!reasoning || !variants.length) return null;
   const want = reasoning.enabled === false ? 'none' : reasoning.effort || (reasoning.max_tokens ? (reasoning.max_tokens <= 4000 ? 'low' : reasoning.max_tokens <= 10000 ? 'medium' : 'high') : null);
   if (!want) return null;
   const vs = variants.filter((v) => LADDER.includes(v));
   if (vs.includes(want)) return want;
-  if (want === 'none') return vs.includes('minimal') ? 'minimal' : [...vs].sort((a, b) => LADDER.indexOf(a) - LADDER.indexOf(b))[0] || null;
-  return [...vs].sort((a, b) => Math.abs(LADDER.indexOf(a) - LADDER.indexOf(want)) - Math.abs(LADDER.indexOf(b) - LADDER.indexOf(want)))[0] || null;
+  if (want === 'none') return vs.includes('minimal') ? 'minimal' : THINKS_BY_DEFAULT.test(modelID) ? [...vs].sort((a, b) => LADDER.indexOf(a) - LADDER.indexOf(b))[0] || null : null;
+  // A level of thinking: never 'none'; a model whose only other variant is off the ladder ('thinking') gets that.
+  const on = vs.filter((v) => v !== 'none');
+  if (!on.length) return variants.find((v) => v !== 'none' && !LADDER.includes(v)) || null;
+  return [...on].sort((a, b) => Math.abs(LADDER.indexOf(a) - LADDER.indexOf(want)) - Math.abs(LADDER.indexOf(b) - LADDER.indexOf(want)))[0] || null;
 }
 const dataUrl = (u) => { const m = /^data:([^;,]+);base64,/.exec(String(u || '')); return m ? m[1] : null; };
 
@@ -173,7 +177,17 @@ const dataUrl = (u) => { const m = /^data:([^;,]+);base64,/.exec(String(u || '')
  * One call through the OpenCode on this computer, read into openrouter.js chatStream's result shape. Throws with
  * .status/.errorType/.kind when OpenCode or its provider refuses (sources.js classifies it).
  */
-export async function localStream(body, signal, onText, onThink, { info = {}, idleMs = 180e3, server } = {}) {
+export async function localStream(body, signal, onText, onThink, opts = {}) {
+  // A model whose calls didn't reach QuorX gets one more go, told why: a native function call (some providers turn a
+  // written tag into one, and OpenCode, with its own tools off, refuses it), or blocks left in the middle of a line. The
+  // second go's text isn't streamed again: the page already shows the first.
+  try { return await localOnce(body, signal, onText, onThink, opts); }
+  catch (e) {
+    if (!e?.retryWith || signal?.aborted) throw e;
+    return localOnce(body, signal, null, onThink, { ...opts, reminder: e.retryWith });
+  }
+}
+async function localOnce(body, signal, onText, onThink, { info = {}, idleMs = 180e3, server, reminder = '' } = {}) {
   const rest = String(body.model || '').slice(LOCAL_ID.length + 1);
   const cut = rest.indexOf('/');
   if (cut <= 0) throw err(`${body.model} names no OpenCode provider`, { kind: 'request' });
@@ -195,15 +209,15 @@ export async function localStream(body, signal, onText, onThink, { info = {}, id
     if (!sid) throw err('OpenCode gave no session', { kind: 'shape' });
     // This call's key: only blocks carrying it are calls (textcalls.js).
     const key = callKey();
-    const { system, transcript } = renderTranscript(body.messages, key);
-    const parts = [{ type: 'text', text: transcript }];
+    const { system, transcript } = renderTranscript(body.messages, key, { calls: !!body.tools?.length && body.tool_choice !== 'none' });
+    const parts = [{ type: 'text', text: `${transcript}${reminder ? `\n\n[QuorX] ${reminder}` : ''}` }];
     // Pictures go along when the model can see them: the newest four from any user message (the user's own attachment
     // stays after a later screenshot), oldest first.
     if ((info.in || []).includes('image')) {
       const pics = (body.messages || []).filter((m) => m.role === 'user' && Array.isArray(m.content)).flatMap((m) => m.content.filter((p) => p?.type === 'image_url' && dataUrl(p.image_url?.url))).slice(-4);
       for (const p of pics) parts.push({ type: 'file', mime: dataUrl(p.image_url.url), url: p.image_url.url, filename: `picture-${parts.length}` });
     }
-    const variant = variantFor(body.reasoning, info.variants);
+    const variant = variantFor(body.reasoning, info.variants, modelID);
     // Events first, so nothing of this call's stream is missed.
     const opening = setTimeout(() => ac.abort(), 30e3); // an event stream that never opens
     const ev = await fetch(`${s.base}/event`, { headers: s.auth ? { Authorization: s.auth } : {}, signal: ac.signal }).finally(() => clearTimeout(opening));
@@ -213,7 +227,7 @@ export async function localStream(body, signal, onText, onThink, { info = {}, id
     accepted = true;
     // Only the model's own message counts: OpenCode streams the prompt's parts too (QuorX's transcript).
     const kinds = new Map(), finalText = new Map(), order = [], mine = new Set();
-    let thinking = '', firstMs = null, done = false, seen = 0, lastInfo = null, failure = null, idle = null;
+    let thinking = '', firstMs = null, done = false, seen = 0, lastInfo = null, failure = null, idle = null, native = null;
     const costs = new Map(); // every assistant message's final cost: a call OpenCode made on its own is counted too
     const show = textFilter(onText);
     const arm = () => { clearTimeout(idle); idle = setTimeout(() => { failure ||= err(`OpenCode sent nothing for ${Math.round(idleMs / 1000)} s`, { name: 'TimeoutError', kind: 'timeout' }); ac.abort(); }, idleMs); };
@@ -227,6 +241,13 @@ export async function localStream(body, signal, onText, onThink, { info = {}, id
       seen++; arm();
       if (e.type === 'message.updated' && p.info?.role === 'user') { mine.add(p.info.id); return; }
       if ((e.type === 'message.part.updated' && mine.has(p.part?.messageID)) || (e.type === 'message.part.delta' && mine.has(p.messageID))) return;
+      // A native tool call: OpenCode would refuse it and let the model try again inside this one call. Stop here.
+      if (e.type === 'message.part.updated' && p.part?.type === 'tool') {
+        const inv = p.part.tool === 'invalid', st = p.part.state || {};
+        native = { tool: String((inv ? st.input?.tool : p.part.tool) || native?.tool || ''), input: inv ? null : st.input && Object.keys(st.input).length ? st.input : native?.input || null };
+        if (st.status && st.status !== 'pending') done = true;
+        return;
+      }
       if (e.type === 'message.part.updated' && p.part) {
         const part = p.part;
         kinds.set(part.id, part.type);
@@ -250,6 +271,11 @@ export async function localStream(body, signal, onText, onThink, { info = {}, id
           const free = /free/i.test(msg) || /free_tier/i.test(String(p.status.action?.reason || ''));
           failure ||= err(msg, { status: spent ? (free ? 429 : 402) : /limit|429|rate|too many/i.test(msg) ? 429 : 503, ...(free ? { errorType: 'FreeUsageLimitError' } : {}), retryAfter: wait > 0 ? Math.max(1, Math.round(wait / 1000)) : undefined });
           done = true;
+        } else {
+          // Waited out: the attempt so far is thrown away and the next one starts clean (what it streamed is still
+          // counted in outChars, for the cost of a cut call).
+          for (const id of order) if (kinds.get(id) !== 'reasoning') finalText.delete(id);
+          order.length = 0; thinking = ''; native = null;
         }
       } else if (e.type === 'session.error') { failure ||= fromError(p.error); done = true; }
       else if (e.type === 'session.idle') done = true;
@@ -267,6 +293,14 @@ export async function localStream(body, signal, onText, onThink, { info = {}, id
     if (!done) throw err('OpenCode ended the stream before the answer was done', { kind: 'network' });
     const full = order.filter((id) => kinds.get(id) !== 'reasoning').map((id) => finalText.get(id) || '').join('');
     const parsed = parseToolCalls(full, `call_${t.toString(36)}`, key);
+    // The native call is QuorX's when it names one of this step's tools with its arguments; otherwise, one more go.
+    if (native && !parsed.calls.length) {
+      const offered = (body.tools || []).some((x) => x?.function?.name === native.tool);
+      if (offered && native.input && typeof native.input === 'object' && Object.keys(native.input).length) parsed.calls = [{ id: `call_${t.toString(36)}_n`, type: 'function', function: { name: native.tool, arguments: JSON.stringify(native.input) } }];
+      else throw err(`The model made a native function call${native.tool ? ` (${native.tool})` : ''}, which OpenCode can't pass on to QuorX`, { kind: 'shape', native, retryWith: `Your last answer made a native function call${native.tool ? ` (${native.tool})` : ''}, which never reaches QuorX, so nothing ran. Write each call as a text block in your reply, exactly as the instructions show.`, partial: { outChars, ms: Date.now() - t } });
+    }
+    // Keyed blocks written mid-line weren't run: with nothing else to run, one more go, told why.
+    if (!parsed.calls.length && parsed.skipped) throw err(`The model's ${parsed.skipped} call block${parsed.skipped > 1 ? 's were' : ' was'} not on a line of its own, so nothing ran`, { kind: 'shape', retryWith: 'Your last answer had call blocks in the middle of a line of text, so nothing ran. Put each block on a line of its own, exactly as the instructions show.', partial: { outChars, ms: Date.now() - t } });
     const tk = lastInfo?.tokens || {}, cache = tk.cache || {};
     const said = costs.size ? [...costs.values()].reduce((a, b) => a + b, 0) : Number(lastInfo?.cost);
     const usage = lastInfo ? {
