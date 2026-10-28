@@ -286,6 +286,8 @@ export async function testSource(id) {
     await ensureLocalServer();
     const list = await LISTERS[id]();
     noteSourceResult(id, null, null);
+    // A passing test means it works again: models set aside after a failure are tried at once.
+    dropModels(id);
     return { ok: true, how: 'local', ms: Date.now() - t, cost: 0, models: list.length, providers: [...new Set(list.map((m) => m.providerName).filter(Boolean))] };
   } catch (e) { noteSourceResult(id, null, e); return { ok: false, kind: failureKind(e), error: String(e.message || e).slice(0, 300) }; }
 }

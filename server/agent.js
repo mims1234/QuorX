@@ -987,7 +987,8 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   const noOpenRouter = deps.noOpenRouter ?? (!deps.chatStream && !currentKey());
   if (noOpenRouter) {
     if (!sourceOf(carryOn?.model || setup.model)) throw Object.assign(new Error(`${carryOn?.model || setup.model} runs on OpenRouter, and there is no OpenRouter key yet. Pick a model tagged This PC (⚙ Settings → Apps on this PC), or add an OpenRouter key in ⚙ Settings → API keys.`), { status: 400 });
-    Object.assign(S, { deciders: false, approval: 'strict', enhancer: false, freshEyes: false, review: 'off', codeReview: 'off', helpers: false, sourceFallback: 'off', fallbackModel: '', buildThinking: 'off' });
+    Object.assign(S, { deciders: false, enhancer: false, freshEyes: false, review: 'off', codeReview: 'off', helpers: false, sourceFallback: 'off', fallbackModel: '', buildThinking: 'off' });
+    emit({ t: 'note', level: 'info', msg: 'No OpenRouter key yet: the deciders, the reviewer, the prompt enhancer, helpers, fresh eyes and paid media are off for this reply (they run on OpenRouter). Add a key in ⚙ Settings → API keys to use them.', at: 0 });
   }
   const blockedNames = blockedFor(S.blockedProviders, setup.model);
   const blockedSlugs = blockedNames.length ? providerSlugs(blockedNames, knownProviders()) : [];
@@ -1295,11 +1296,13 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
   // ask_user goes to the user in Strict and to the deciders in YOLO (so a YOLO benchmark can offer it too).
   const askOn = (!req.bench || S.approval === 'yolo') && Number(S.askLimit ?? DEFAULTS.askLimit) > 0;
   // A chat with the deciders off gets no decide and no look (the browser stays); the harness checks are off too.
+  // Tool calls a model wrote as text (an app on this PC): checked against this chat's tools before they run.
+  const textCalls = new WeakSet();
   let tools = TOOLS({ artifacts: T.artifacts.on, decide: decidersOn && setup.decide !== 'off', cats, choices, code: !!root, browser: browserOn, skills: skills.length > 0, ask: askOn, docs: docsOn, helpers: helpersOn });
   if (!decidersOn) tools = tools.filter((t) => t.function.name !== 'look');
   if (proposeMem) tools.push(REMEMBER_TOOL);
   // Paid tools off in this chat can be asked for (enable_media); not in benchmarks, or where paid media is off entirely.
-  const mediaOff = () => (req.bench || req.settings?.mediaEnabled === false ? [] : Object.keys(MEDIA).filter((c) => !T[c].on));
+  const mediaOff = () => (req.bench || noOpenRouter || req.settings?.mediaEnabled === false ? [] : Object.keys(MEDIA).filter((c) => !T[c].on));
   if (mediaOff().length) tools.push(ENABLE_MEDIA_TOOL(mediaOff()));
   if (req.chatId && S.schedules !== false) tools.push(SCHEDULE_TOOL); // ⏰ the user's scheduled jobs
   emit({ t: 'start', runId, setup, voters: S.voters, approval: S.approval, system, at: 0 });
@@ -1489,7 +1492,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       if (signal.aborted) throw e;
       // Nothing done yet: report the error as before. After real work, keep it and say what happened.
       if (run.steps === 1 && !resumed) throw e;
-      run.stop = 'model_error';
+      run.stop = 'model_error'; run.modelError = clip(e.message, 300);
       reply += `${reply ? '\n\n' : ''}⚠ The model stopped responding (${clip(e.message, 160)}). Everything done so far is kept; send a message to carry on.`;
       emit({ t: 'note', level: 'warn', msg: `${short(setup.model)} kept failing: ${clip(e.message, 160)}. The reply ends here; the work so far is kept.`, at: at() });
       break;
@@ -1702,7 +1705,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   if (root && stats.changed.length) { try { sealCheckpoint(root, filesId); } catch { /* best effort */ } }
   if (filesId !== runId) stats.undoId = filesId;
   stats.ms = at();
-  Object.assign(stats, { steps: run.steps, stop: run.stop, ...(run.loopEnd ? { loopEnd: true } : {}), ...(req.scheduledBy ? { scheduled: true } : {}), budgetStop: run.budgetStop, retries: run.retries, trimmed: run.trimmed, tools: run.tools, questions: run.questions, resumed: !!resumed, looksFirst: run.looksFirst || 0, firstWrite: run.firstWrite ?? null });
+  Object.assign(stats, { steps: run.steps, stop: run.stop, ...(run.loopEnd ? { loopEnd: true } : {}), ...(run.modelError ? { modelError: run.modelError } : {}), ...(req.scheduledBy ? { scheduled: true } : {}), budgetStop: run.budgetStop, retries: run.retries, trimmed: run.trimmed, tools: run.tools, questions: run.questions, resumed: !!resumed, looksFirst: run.looksFirst || 0, firstWrite: run.firstWrite ?? null });
   // The next reply sees what this one did and how its checks ended (the page adds this to history).
   const did = journal.length ? `What I did: ${clip(journal.join('; '), 900)}.` : '';
   const checkNote = stats.verify ? (stats.verify.ok ? 'Checks passed.' : `Checks still found ${stats.verify.problems.length} problem(s): ${clip(stats.verify.problems.join('; '), 300)}.`) : '';
@@ -1859,6 +1862,12 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         if (r.partial && !Object.keys(r.usage || {}).length) r.usage = sourcePartial(r.partial, body);
         r.usage ??= {};
         noteSourceResult(s.source, sm, null);
+        // Calls written as text follow the step as an API's would: none on a step that allows none, only the tool a
+        // step asks for, and (in callTool) never a tool this chat doesn't offer.
+        if (body.tool_choice === 'none') r.toolCalls = [];
+        else if (body.tool_choice?.function?.name) r.toolCalls = r.toolCalls.filter((c) => c?.function?.name === body.tool_choice.function.name);
+        if (r.toolCalls.length > 25) r.toolCalls = r.toolCalls.slice(0, 25);
+        for (const c of r.toolCalls) textCalls.add(c);
         run.sourceFails[s.source] = 0;
         return { r };
       } catch (e0) {
@@ -2005,6 +2014,9 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         ? `Your output was cut off at the ${maxOut}-token limit, so this ${name} call was NOT run and nothing was written. Write large files in parts: write_file the first ~300 lines, then append_file the rest in chunks of about 300 lines.`
         : `Error: the arguments for ${name} were not valid JSON, so nothing was run. Try again with smaller arguments.`;
       emit({ t: 'note', level: 'warn', msg: finishReason === 'length' ? `Output hit the ${maxOut}-token limit; the ${name} call was cut off and not run. The agent was told to write in parts.` : `Malformed ${name} arguments; not run.`, at: at() });
+    } else if (textCalls.has(tc) && !tools.some((t) => t.function?.name === name)) {
+      result = `Error: ${name} is not one of your tools in this chat, so nothing was run. Your tools: ${tools.map((t) => t.function?.name).filter(Boolean).join(', ')}.`;
+      emit({ t: 'note', level: 'warn', msg: `The model asked for ${clip(name, 40)}, which this chat doesn't offer; not run.`, at: at() });
     } else {
       try { result = await runTool(name, args, step); }
       catch (e) { if (signal.aborted) throw e; if (process.env.QX_DEBUG) console.error(e.stack); result = `Error: ${e.message}`; }
@@ -5199,6 +5211,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
   }
 
   async function enableMediaTool(args) {
+    if (noOpenRouter) return 'Error: paid media runs on OpenRouter, and there is no OpenRouter key yet (⚙ Settings → API keys).';
     const off = mediaOff();
     const want = [...new Set((Array.isArray(args.kinds) ? args.kinds : []).map(String))].filter((k) => off.includes(k));
     if (!want.length) return off.length ? `Error: give kinds, from the paid tools that are off here: ${off.join(', ')}.` : 'Every paid tool is already on in this chat.';
@@ -5444,6 +5457,9 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
 // A brief on a model of an app on this PC is written there; when that fails, OpenRouter's fallback model writes it.
 const briefChat = (body) => chatAny(body, undefined, { orChat: chat, fallback: async (id) => sourceFallbackFor(id, {}, [...await chatModels().catch(() => []), ...await sourceModels().catch(() => [])]) });
 // A cheap model reads the stopped reply's transcript and writes what a new agent needs to carry on.
+// The model a brief is written with: the helper model, or with no OpenRouter key the chat's own model through an app on
+// this PC (the helper runs on OpenRouter).
+const helperFor = (chatModel) => (!currentKey() && sourceOf(chatModel) ? chatModel : HELPER_MODEL);
 export async function briefFor(runId, { model } = {}) {
   const ck = loadCheckpoint(String(runId));
   if (!ck) throw new Error('That reply has no saved state any more, so there is nothing to summarise.');
@@ -5455,7 +5471,7 @@ export async function briefFor(runId, { model } = {}) {
     if (m.role === 'tool') lines.push(`[tool result] ${clip(text, 400)}`);
     else lines.push(`[${m.role}] ${clip(text, 1500)}${calls ? ` · calls: ${calls}` : ''}`);
   }
-  const use = String(model || '').trim() || HELPER_MODEL;
+  const use = String(model || '').trim() || helperFor(ck.req?.setup?.model);
   const r = await briefChat({ model: use, max_tokens: 1400, temperature: 0.2, ...REASONING.off, messages: [
     { role: 'system', content: 'You write a handover brief so a fresh AI agent can continue a coding task in a new chat. Use these headings, with short bullet points under each: Goal (what the user asked for, with their exact requirements); Built so far (files, what each does, how to open or run it); Works; Left to do (in order); Known bugs and what was tried; Decisions and user preferences. Under 350 words. Facts only from the transcript.' },
     { role: 'user', content: `${ck.plan ? `Plan: ${ck.plan.spec || ''}\nItems: ${(ck.plan.items || []).map((x) => `${x.status === 'done' ? '[x]' : '[ ]'} ${x.text}`).join('; ')}\n\n` : ''}Transcript (oldest first):\n${lines.join('\n').slice(-90000)}` }] });
@@ -5476,7 +5492,7 @@ export async function briefForChat(chatId, { model } = {}) {
   if (!msgs.length) throw new Error('That chat has no messages yet.');
   const lines = msgs.map((m) => `${m.role === 'user' ? 'User' : 'Agent'}: ${clip(String(m.content || '').replace(/\s+/g, ' '), 2500)}${m.note ? ` ${clip(m.note.replace(/\s+/g, ' '), 600)}` : ''}`);
   const arts = Object.values(a.artifacts || {}).map((x) => `${x.kind} "${x.title}"`).slice(0, 30);
-  const use = String(model || '').trim() || HELPER_MODEL;
+  const use = String(model || '').trim() || helperFor(a.setup?.model);
   const r = await briefChat({ model: use, max_tokens: 1400, temperature: 0.2, ...REASONING.off, messages: [
     { role: 'system', content: 'You write a handover brief of a conversation between a user and an AI agent, so a fresh agent (or another chat) can pick it up. Use these headings, with short bullet points under each: Goal (what the user asked for, with their exact requirements, including the very first request); Built so far (files, artifacts, how to open or run them); Works; Left to do (in order); Known bugs and what was tried; Decisions and user preferences. Under 350 words. Facts only from the conversation.' },
     { role: 'user', content: `Chat "${doc.title || chatId}" (model ${a.setup?.model || '?'}).${a.summary ? `\nEarlier summary: ${a.summary}` : ''}${arts.length ? `\nArtifacts: ${arts.join('; ')}` : ''}\n\nConversation (oldest first):\n${lines.join('\n').slice(-90000)}` }] });

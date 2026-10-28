@@ -12,14 +12,17 @@ import net from 'node:net';
 import crypto from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { HOME } from './openrouter.js';
-import { toolPrompt, renderTranscript, parseToolCalls, textFilter } from './textcalls.js';
+import { toolPrompt, renderTranscript, parseToolCalls, textFilter, callKey } from './textcalls.js';
 
 export const LOCAL_ID = 'opencode-local';
 const DIR = path.join(HOME, 'data', 'opencode-local'); // the folder OpenCode runs in: empty, so no project files reach the model
 const OC_TOOLS = ['invalid', 'question', 'bash', 'read', 'glob', 'grep', 'edit', 'write', 'task', 'webfetch', 'todowrite', 'websearch', 'skill', 'apply_patch'];
 const NO_TOOLS = Object.fromEntries([['*', false], ...OC_TOOLS.map((t) => [t, false])]);
 // QuorX's agent inside OpenCode: QuorX writes the whole system prompt, and OpenCode's own tools are off.
-const CONFIG = { agent: { quorx: { mode: 'primary', description: 'Calls from QuorX', prompt: 'Follow the system instructions you are given exactly.', tools: { '*': false } } }, autoupdate: false, share: 'disabled' };
+// No compaction inside a call either: QuorX trims its own transcript, and OpenCode's would be two more paid calls.
+const CONFIG = { agent: { quorx: { mode: 'primary', description: 'Calls from QuorX', prompt: 'Follow the system instructions you are given exactly.', tools: { '*': false } } }, autoupdate: false, share: 'disabled', compaction: { auto: false, prune: false } };
+// The most a call may write: QuorX's own output limit is per step, so OpenCode's 32k default would cut big files.
+const OUTPUT_MAX = 128000;
 const IDLE_STOP_MS = 15 * 60e3;
 
 /** A program on PATH (Windows: with its .cmd/.exe), or null. */
@@ -86,7 +89,8 @@ export async function ensureLocalServer({ start = spawn, find = findOnPath, read
   reapLeftover();
   const port = await freePort(), pass = crypto.randomBytes(18).toString('base64url');
   // OpenCode uses its own sign-ins and keys: QuorX's OpenRouter key stays out of its environment.
-  const env = { ...process.env, OPENCODE_SERVER_PASSWORD: pass, OPENCODE_CONFIG_CONTENT: JSON.stringify(CONFIG), OPENCODE_DISABLE_CLAUDE_CODE: '1', OPENCODE_DISABLE_PROJECT_CONFIG: '1', OPENCODE_DISABLE_AUTOUPDATE: '1', OPENCODE_DISABLE_EXTERNAL_SKILLS: '1', OPENCODE_DISABLE_LSP_DOWNLOAD: '1' };
+  const env = { ...process.env, OPENCODE_SERVER_PASSWORD: pass, OPENCODE_CONFIG_CONTENT: JSON.stringify(CONFIG), OPENCODE_DISABLE_CLAUDE_CODE: '1', OPENCODE_DISABLE_PROJECT_CONFIG: '1', OPENCODE_DISABLE_AUTOUPDATE: '1', OPENCODE_DISABLE_EXTERNAL_SKILLS: '1', OPENCODE_DISABLE_LSP_DOWNLOAD: '1',
+    OPENCODE_SERVER_USERNAME: 'opencode', OPENCODE_DISABLE_AUTOCOMPACT: '1', OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX: String(OUTPUT_MAX) };
   for (const k of Object.keys(env)) if (/^OPENROUTER_API_KEY/i.test(k)) delete env[k];
   const cmd = /\.(cmd|bat)$/i.test(exe);
   const proc = cmd
@@ -104,13 +108,16 @@ export async function ensureLocalServer({ start = spawn, find = findOnPath, read
     while (Date.now() < until && !me.dead) {
       try {
         const r = await fetch(`${me.base}/agent`, { headers: { Authorization: me.auth }, signal: AbortSignal.timeout(3000) });
+        // A refused password or a broken OpenCode config won't change by waiting: say so now.
+        if (r.status === 401) throw err('OpenCode’s server refused QuorX’s password (is OPENCODE_SERVER_USERNAME or a proxy in the way?)', { kind: 'auth', permanent: true });
+        if (r.status === 400) { const t = await r.text().catch(() => ''); throw err(`OpenCode’s server refused QuorX: ${(/"message"\s*:\s*"([^"]+)/.exec(t)?.[1] || t).slice(0, 200) || 'HTTP 400'} (check your OpenCode config)`, { kind: 'request', permanent: true }); }
         if (r.ok) {
           const agents = await r.json().catch(() => []);
           if (!Array.isArray(agents) || !agents.some((a) => a?.name === 'quorx')) throw err('this OpenCode did not take QuorX’s agent settings (it may be too old: update it with "opencode upgrade")');
           me.up = true; lastError = '';
           return;
         }
-      } catch (e) { if (/agent settings/.test(e.message)) throw e; }
+      } catch (e) { if (/agent settings/.test(e.message) || e.permanent) throw e; }
       await new Promise((r) => setTimeout(r, 400));
     }
     throw err(`OpenCode's server did not start${me.log ? `: ${me.log.replace(/\s+/g, ' ').trim().slice(-200)}` : ''}`, { kind: 'network' });
@@ -157,7 +164,7 @@ function variantFor(reasoning, variants = []) {
   if (!want) return null;
   const vs = variants.filter((v) => LADDER.includes(v));
   if (vs.includes(want)) return want;
-  if (want === 'none') return vs.includes('minimal') ? 'minimal' : null;
+  if (want === 'none') return vs.includes('minimal') ? 'minimal' : [...vs].sort((a, b) => LADDER.indexOf(a) - LADDER.indexOf(b))[0] || null;
   return [...vs].sort((a, b) => Math.abs(LADDER.indexOf(a) - LADDER.indexOf(want)) - Math.abs(LADDER.indexOf(b) - LADDER.indexOf(want)))[0] || null;
 }
 const dataUrl = (u) => { const m = /^data:([^;,]+);base64,/.exec(String(u || '')); return m ? m[1] : null; };
@@ -180,29 +187,34 @@ export async function localStream(body, signal, onText, onThink, { info = {}, id
   const ac = new AbortController();
   const stop = () => ac.abort();
   signal?.addEventListener('abort', stop, { once: true });
-  let sid = null;
+  let sid = null, accepted = false, outChars = 0;
   try {
     const created = await call(s, 'POST', '/session', { title: 'QuorX' }, AbortSignal.any([ac.signal, AbortSignal.timeout(30000)]));
     if (!created.ok) throw err(`OpenCode's server said HTTP ${created.status}`, { status: created.status >= 500 ? created.status : 502 });
     sid = (await created.json())?.id;
     if (!sid) throw err('OpenCode gave no session', { kind: 'shape' });
-    const { system, transcript } = renderTranscript(body.messages);
+    // This call's key: only blocks carrying it are calls (textcalls.js).
+    const key = callKey();
+    const { system, transcript } = renderTranscript(body.messages, key);
     const parts = [{ type: 'text', text: transcript }];
-    // Pictures in the newest user message go along when the model can see them.
+    // Pictures go along when the model can see them: the newest four from any user message (the user's own attachment
+    // stays after a later screenshot), oldest first.
     if ((info.in || []).includes('image')) {
-      const last = [...(body.messages || [])].reverse().find((m) => m.role === 'user');
-      for (const p of Array.isArray(last?.content) ? last.content : []) if (p?.type === 'image_url' && dataUrl(p.image_url?.url) && parts.length < 5) parts.push({ type: 'file', mime: dataUrl(p.image_url.url), url: p.image_url.url, filename: `picture-${parts.length}` });
+      const pics = (body.messages || []).filter((m) => m.role === 'user' && Array.isArray(m.content)).flatMap((m) => m.content.filter((p) => p?.type === 'image_url' && dataUrl(p.image_url?.url))).slice(-4);
+      for (const p of pics) parts.push({ type: 'file', mime: dataUrl(p.image_url.url), url: p.image_url.url, filename: `picture-${parts.length}` });
     }
     const variant = variantFor(body.reasoning, info.variants);
     // Events first, so nothing of this call's stream is missed.
     const opening = setTimeout(() => ac.abort(), 30e3); // an event stream that never opens
     const ev = await fetch(`${s.base}/event`, { headers: s.auth ? { Authorization: s.auth } : {}, signal: ac.signal }).finally(() => clearTimeout(opening));
     if (!ev.ok || !ev.body) throw err(`OpenCode's event stream said HTTP ${ev.status}`, { status: 502 });
-    const sent = await call(s, 'POST', `/session/${sid}/prompt_async`, { agent: 'quorx', model: { providerID, modelID }, system: `${system}${toolPrompt(body.tools, body.tool_choice)}`, tools: NO_TOOLS, ...(variant ? { variant } : {}), parts }, ac.signal);
+    const sent = await call(s, 'POST', `/session/${sid}/prompt_async`, { agent: 'quorx', model: { providerID, modelID }, system: `${system}${toolPrompt(body.tools, body.tool_choice, key)}`, tools: NO_TOOLS, ...(variant ? { variant } : {}), parts }, ac.signal);
     if (!sent.ok) throw err(`OpenCode refused the prompt (HTTP ${sent.status}): ${(await sent.text().catch(() => '')).slice(0, 200)}`, { status: sent.status });
+    accepted = true;
     // Only the model's own message counts: OpenCode streams the prompt's parts too (QuorX's transcript).
     const kinds = new Map(), finalText = new Map(), order = [], mine = new Set();
     let thinking = '', firstMs = null, done = false, seen = 0, lastInfo = null, failure = null, idle = null;
+    const costs = new Map(); // every assistant message's final cost: a call OpenCode made on its own is counted too
     const show = textFilter(onText);
     const arm = () => { clearTimeout(idle); idle = setTimeout(() => { failure ||= err(`OpenCode sent nothing for ${Math.round(idleMs / 1000)} s`, { name: 'TimeoutError', kind: 'timeout' }); ac.abort(); }, idleMs); };
     arm();
@@ -222,15 +234,23 @@ export async function localStream(body, signal, onText, onThink, { info = {}, id
         if (typeof part.text === 'string') finalText.set(part.id, part.text);
       } else if (e.type === 'message.part.delta' && typeof p.delta === 'string' && (p.field || 'text') === 'text') {
         const k = kinds.get(p.partID);
+        outChars += p.delta.length;
         if (k === 'reasoning') { thinking += p.delta; onThink?.(p.delta); }
         else if (k === 'text' || !k) { if (firstMs == null) firstMs = Date.now() - t; if (!order.includes(p.partID)) order.push(p.partID); finalText.set(p.partID, (finalText.get(p.partID) || '') + p.delta); show(p.delta); }
       } else if (e.type === 'message.updated' && p.info?.role === 'assistant') {
         lastInfo = p.info;
+        if (Number.isFinite(Number(p.info.cost))) costs.set(p.info.id, Number(p.info.cost));
         if (p.info.error) failure ||= fromError(p.info.error);
       } else if (e.type === 'session.status' && p.status?.type === 'retry') {
-        // OpenCode would keep trying (a used-up free tier, a rate limit): this call fails now and QuorX falls back.
-        failure ||= err(String(p.status.message || 'the provider refused the call'), { status: /limit|429|rate/i.test(String(p.status.message)) ? 429 : 503, retryAfter: p.status.next ? Math.max(1, Math.round((Number(p.status.next) - Date.now()) / 1000)) : undefined });
-        done = true;
+        // A short wait (an overload, a brief rate limit) is OpenCode's to sit out: its retries are few and the idle timer
+        // still applies. A used-up free tier, plan or credit, or a long wait, fails the call now.
+        const msg = String(p.status.message || 'the provider refused the call'), wait = p.status.next ? Number(p.status.next) - Date.now() : 0;
+        const spent = /free|quota|credit|balance|insufficient|usage limit|plan limit|limit reached|exceeded your/i.test(msg) || /free_tier|account_rate/i.test(String(p.status.action?.reason || ''));
+        if (spent || wait > 30e3) {
+          const free = /free/i.test(msg) || /free_tier/i.test(String(p.status.action?.reason || ''));
+          failure ||= err(msg, { status: spent ? (free ? 429 : 402) : /limit|429|rate|too many/i.test(msg) ? 429 : 503, ...(free ? { errorType: 'FreeUsageLimitError' } : {}), retryAfter: wait > 0 ? Math.max(1, Math.round(wait / 1000)) : undefined });
+          done = true;
+        }
       } else if (e.type === 'session.error') { failure ||= fromError(p.error); done = true; }
       else if (e.type === 'session.idle') done = true;
     };
@@ -246,21 +266,24 @@ export async function localStream(body, signal, onText, onThink, { info = {}, id
     if (failure) throw failure;
     if (!done) throw err('OpenCode ended the stream before the answer was done', { kind: 'network' });
     const full = order.filter((id) => kinds.get(id) !== 'reasoning').map((id) => finalText.get(id) || '').join('');
-    const parsed = parseToolCalls(full, `call_${t.toString(36)}`);
+    const parsed = parseToolCalls(full, `call_${t.toString(36)}`, key);
     const tk = lastInfo?.tokens || {}, cache = tk.cache || {};
-    const said = Number(lastInfo?.cost);
+    const said = costs.size ? [...costs.values()].reduce((a, b) => a + b, 0) : Number(lastInfo?.cost);
     const usage = lastInfo ? {
       prompt_tokens: (tk.input || 0) + (cache.read || 0) + (cache.write || 0), completion_tokens: (tk.output || 0) + (tk.reasoning || 0),
       prompt_tokens_details: { cached_tokens: cache.read || 0, cache_write_tokens: cache.write || 0 },
       // OpenCode prices a call from its catalogue: real money for a paid provider; a plan's list price otherwise.
       ...(Number.isFinite(said) ? (info.plan === 'paid' ? { cost: said } : { opencode: { list_cost: said } }) : {}),
     } : {};
-    return { text: parsed.text, thinking, reasoningDetails: [], toolCalls: parsed.calls, usage, ms: Date.now() - t, firstMs, finishReason: parsed.calls.length ? 'tool_calls' : lastInfo?.finish === 'length' ? 'length' : 'stop', provider: `${info.providerName || providerID} through OpenCode`, model: body.model, seen: seen || 1 };
+    return { text: parsed.text, thinking, reasoningDetails: [], toolCalls: parsed.calls, usage, ms: Date.now() - t, firstMs, finishReason: lastInfo?.finish === 'length' ? 'length' : parsed.calls.length ? 'tool_calls' : 'stop', provider: `${info.providerName || providerID} through OpenCode`, model: body.model, seen: seen || 1 };
+  } catch (e) {
+    if (accepted && e && typeof e === 'object' && !e.partial) e.partial = { outChars, ms: Date.now() - t };
+    throw e;
   } finally {
     signal?.removeEventListener('abort', stop);
-    if (signal?.aborted && sid) call(s, 'POST', `/session/${sid}/abort`, {}, AbortSignal.timeout(5000)).catch(() => {});
     ac.abort();
-    if (sid) call(s, 'DELETE', `/session/${sid}`, null, AbortSignal.timeout(10000)).catch(() => {});
+    // Deleting a session doesn't stop OpenCode's own retries or generation: it is told to stop first, always.
+    if (sid) call(s, 'POST', `/session/${sid}/abort`, {}, AbortSignal.timeout(5000)).catch(() => {}).finally(() => call(s, 'DELETE', `/session/${sid}`, null, AbortSignal.timeout(10000)).catch(() => {}));
     s.active = Math.max(0, (s.active || 1) - 1); s.lastUse = Date.now();
   }
 }

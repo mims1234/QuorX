@@ -472,6 +472,7 @@ const server = http.createServer(async (req, res) => {
     // /review in a chat: a reviewer model reads what changed (the last reply, uncommitted changes, or the branch)
     // and returns bugs with file:line. Its cost goes to the project's ledger and budget like a reply's.
     if (url.pathname === '/api/code-review' && req.method === 'POST') {
+      if (!currentKey()) return json(res, 200, { error: 'The reviewer runs on OpenRouter: add a key in ⚙ Settings → API keys.' });
       const b = JSON.parse(await readBody(req, 1e4) || '{}');
       if (!validId(b.projectId)) return json(res, 400, { error: 'bad project id' });
       const st = budgetState(b.projectId);
@@ -898,7 +899,7 @@ const server = http.createServer(async (req, res) => {
       const safe = (name, p) => p.catch((e) => { errors.push(`${name}: ${e.message}`); return []; });
       // The models of the apps on this PC, when they are switched on (⚙ Settings → Apps on this PC), join the chat models.
       const [chat, dec, img, tts, mus, vid, src] = await Promise.all([safe('chat', chatModels()), safe('decisions', decisionModels()), safe('images', imageModels()), safe('voices', speechModels()), safe('music', musicModels()), safe('video', videoModels()), safe('sources', sourceModels({ refresh }))]);
-      if (!chat.length && !dec.length) return json(res, 502, { error: `Could not load the model lists from OpenRouter (${errors[0] || 'no answer'}).` });
+      if (!chat.length && !dec.length && !src.length) return json(res, 502, { error: `Could not load the model lists from OpenRouter (${errors[0] || 'no answer'}).` });
       // Audio-capable chat models double as the "listen" (speech-to-text) category.
       const ears = chat.filter((m) => m.in.includes('audio')).map((m) => ({ ...m, kind: 'listen' }));
       return json(res, 200, [...dec, ...img, ...tts, ...mus, ...vid, ...ears, ...chat.filter((m) => m.tools), ...src.filter((m) => m.tools)]);
@@ -956,6 +957,7 @@ const server = http.createServer(async (req, res) => {
       } catch (e) { return json(res, 400, { error: e.message }); }
     }
     if (req.method === 'POST' && url.pathname === '/api/transcribe') {
+      if (!currentKey()) return json(res, 200, { error: 'Speech to text runs on OpenRouter: add a key in ⚙ Settings → API keys.' });
       // The mic: a WAV recording from the page goes to an audio-capable chat model.
       const b = JSON.parse(await readBody(req, 30e6));
       const allowed = DEFAULTS.tools.listen.models;

@@ -15,7 +15,9 @@ this PC**.
 
 QuorX finds OpenCode on this computer and the providers you already connected in it. Tick **OpenCode on this PC** and
 press **Test the connection**: it shows how many models OpenCode offers and from which providers. Nothing to pay, and
-QuorX holds no key for it. If OpenCode isn't installed yet, the page shows the command: `npm i -g opencode-ai`.
+QuorX holds no key for it. If OpenCode isn't installed yet, the page shows the command: `npm i -g opencode-ai` (in Windows
+itself, not only in WSL: QuorX looks for it on the Windows PATH). To add a provider, run `opencode auth login` in a
+terminal, then test the connection again.
 
 | What you connected in OpenCode | What you pay with | Model ids look like |
 |---|---|---|
@@ -48,7 +50,7 @@ that QuorX deletes afterwards, so your own session list stays as it was.
 ## What runs where
 
 Only the chat's main model runs through the app (its summaries of a long chat too). Deciders, paid media, the prompt
-enhancer, helpers and the reviewer stay on OpenRouter, so you still need an OpenRouter key. You can switch a chat
+enhancer, helpers and the reviewer stay on OpenRouter, so they need an OpenRouter key (without one, see below). You can switch a chat
 between OpenRouter and an app on your PC at any time. The conversation carries over.
 
 ## What it costs
@@ -70,8 +72,10 @@ QuorX never switches your model behind your back.
 - **The reply stops** and says which model failed and why (an expired key, a used-up plan, a free tier that ran out).
   The work done so far stays. Pick another model in the chat's model button and send a message to carry on: the
   conversation carries over.
-- **A model that keeps failing** is skipped by every chat for a while instead of each one waiting on it: until its plan
-  window resets or for up to 30 minutes, and under 5 minutes after a server error. Each provider is separate, so one
+- **A model that failed** is skipped by every chat, this one included, for a while instead of each one waiting on it:
+  10 minutes after a refused key, up to 30 minutes after a used-up plan, up to 6 hours after a free tier says no, and
+  under 5 minutes after a server error. A passing **Test the connection** tries them all again at once. A short
+  overload or rate limit is waited out first, the way OpenCode retries it. Each provider is separate, so one
   model reaching its limit leaves the others working. Only the app itself missing or unreachable affects them all.
 
 Any text streamed before a failure moves into the steps, so the reply isn't written twice. No tool call from a failed

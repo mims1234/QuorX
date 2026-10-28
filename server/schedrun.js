@@ -88,7 +88,8 @@ export function finishChat(chatId, runId, deps) {
   const done = events.find((e) => e.t === 'done'), err = [...events].reverse().find((e) => e.t === 'error');
   // A run cut off before it finished (out of steps, or ended by the loop guard for going in circles) failed at its
   // job, even with a reply: it counts towards the pause after failures, and its chat says why.
-  const cut = done?.stats?.stop === 'steps' ? (done.stats.loopEnd ? 'It went in circles (the same failing call again), so it was stopped.' : `It ran out of steps (${done.stats.steps}).`) : '';
+  // A model that stopped answering part-way failed too (the work so far is kept, but the job wasn't done).
+  const cut = done?.stats?.stop === 'model_error' ? `The model stopped answering: ${done.stats.modelError || 'see the chat'}` : done?.stats?.stop === 'steps' ? (done.stats.loopEnd ? 'It went in circles (the same failing call again), so it was stopped.' : `It ran out of steps (${done.stats.steps}).`) : '';
   const out = { reply: done?.reply || '', error: done ? cut : err?.msg || 'The reply ended without an answer.', stopped: !!err?.stopped, cost: done?.stats?.cost ?? err?.stats?.cost ?? 0 };
   const doc = deps.getChat(chatId), m = doc?.agent?.messages?.find((x) => x.runId === runId);
   if (!m || !m.runActive) return out;
