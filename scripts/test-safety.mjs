@@ -1827,12 +1827,12 @@ test('computer use: off in a chat, the user’s apps are out of reach; on, each 
 test('computer use: the new actions keep to each app’s level, and steps stop at the first refusal', async () => {
   const apps = [{ name: 'Calculator', appId: 'Microsoft.WindowsCalculator_8wekyb3d8bbwe!App', level: 'view' }, { name: 'Paint', appId: 'Microsoft.Paint_8wekyb3d8bbwe!App', level: 'click' }];
   const { bodies } = await agentRun((b, i) => [
-    reply('', [['desktop', { action: 'scroll', app: 'Calculator', direction: 'down' }]]),
+    reply('', [['desktop', { action: 'path', app: 'Calculator', points: [[1, 1], [5, 5]] }]]),
     reply('', [['desktop', { action: 'clipboard', app: 'Paint' }]]),
     reply('', [['desktop', { app: 'Paint', steps: [{ action: 'hold_key', key: 'shift' }, { action: 'drag', x: 1, y: 1, to_x: 5, to_y: 5 }] }]]),
     reply('OK.'),
   ][i], { chatId: 'apps-levels', settings: { appsAccess: true }, more: { apps }, onEvent: keepLevel });
-  assert.match(toolOut(bodies, 1), /look at only .* in Calculator, so scroll isn't allowed/);
+  assert.match(toolOut(bodies, 1), /look at only .* in Calculator, so path isn't allowed/, 'a freehand stroke needs the click level, like drag');
   assert.match(toolOut(bodies, 2), /in Paint, so clipboard isn't allowed/);
   assert.match(toolOut(bodies, 3), /^Ran 1 of 2 steps:\n1\. hold_key: Error: .*so hold_key isn't allowed/, 'the second step never ran');
 });
