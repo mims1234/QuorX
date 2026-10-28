@@ -30,6 +30,13 @@ if (args.includes('agent')) {
   if (mode === 'hang') setInterval(() => {}, 1000);
   else {
     const delta = (d) => say({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: d } });
+    if (mode === 'inline') { // its call mid-sentence, as grok-4.7-build-fast sometimes writes it
+      const inline = `Opening it now. <quorx_call key="${key}">{"name":"read_file","arguments":{"path":"a.js"}}</quorx_call>`;
+      delta({ type: 'text_delta', text: inline });
+      say({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: inline }], stop_reason: 'end_turn' } });
+      say({ type: 'result', subtype: 'success', is_error: false, total_cost_usd: 0.01, stop_reason: 'end_turn', usage: { input_tokens: 300, output_tokens: 20 } });
+      process.exit(0);
+    }
     delta({ type: 'thinking_delta', thinking: 'Plan it.' });
     delta({ type: 'text_delta', text: `Writing it.\n<quorx_call key="${key}">{"name":"write_file",` });
     delta({ type: 'text_delta', text: `"arguments":{"path":"a.js"}}</quorx_call>${mode === 'eos' ? '<|eos|>' : ''}` });

@@ -4371,6 +4371,9 @@ test('a Grok Build that starts with a built-in tool, or asks for any tool, is st
   assert.equal(mcp.e, undefined, mcp.e?.message);
   const eos = await viaFakeGrok('eos', GROK_BODY);
   assert.equal(eos.r.text, 'Writing it.', 'its end-of-text token never shows');
+  const inline = await viaFakeGrok('inline', GROK_BODY);
+  assert.deepEqual([inline.r.toolCalls.length, inline.r.skippedCalls], [0, 1], 'a call written mid-sentence is not run, and is counted so the chat says so');
+  assert.match(inline.call.args[inline.call.args.indexOf('--system-prompt-override') + 1], /line of its own/, 'its prompt asks for each call on a line of its own');
 });
 
 test('Grok Build signed out says to run grok login; Stop ends it at once', async () => {
