@@ -88,8 +88,14 @@ async function chatStreamOnce(body, signal, onText, onThink) {
     e.status = r.status; // the loop retries rate limits and server errors, not bad requests
     throw e;
   }
+  return readChatStream(r, body, t, onText, onThink);
+}
+
+// Reads an OpenAI-style chat completion stream (OpenRouter's, or any gateway that speaks the same format: see
+// sources.js). `seen` counts the chunks that parsed, so a caller can tell a stream of nothing from a short answer.
+export async function readChatStream(r, body, t, onText, onThink) {
   const dec = new TextDecoder();
-  let buf = '', text = '', thinking = '', usage = {}, firstMs = null, finish = null, provider = null, model = null, genId = null;
+  let buf = '', text = '', thinking = '', usage = {}, firstMs = null, finish = null, provider = null, model = null, genId = null, seen = 0;
   const calls = [];
   // reasoning_details arrive in pieces; pieces with the same index belong to one block (text, summary or
   // encrypted data, plus a signature at the end). They are passed back unchanged on the next tool step.
@@ -97,51 +103,66 @@ async function chatStreamOnce(body, signal, onText, onThink) {
   // Usage only comes with the last chunk. A stream that stops before it (Stop, an error part-way, a cut connection)
   // was still billed, so what is needed to find or estimate its cost goes with the error or the result.
   const sofar = () => ({ id: genId, model: model || body.model, outChars: text.length + thinking.length + calls.reduce((n, c) => n + (c?.function.arguments.length || 0) + (c?.function.name.length || 0), 0), ms: Date.now() - t });
+  const line = (raw) => {
+    const s = raw.trim();
+    if (!s.startsWith('data:')) return;
+    const data = s.slice(5).trim();
+    if (data === '[DONE]') return;
+    let j; try { j = JSON.parse(data); } catch { return; }
+    seen++;
+    if (j.id && !genId) genId = j.id;
+    if (j.error) throw Object.assign(new Error(j.error.message || 'stream error'), { streamStatus: Number(j.error.code) || null });
+    // An error after the stream started can also come inside the choice (finish_reason "error"), as Cline sends it.
+    const ce = j.choices?.[0]?.error;
+    if (ce) throw Object.assign(new Error(ce.message || String(ce.code || 'stream error')), { streamStatus: Number(ce.code) || null, errorType: typeof ce.code === 'string' ? ce.code : undefined });
+    const delta = j.choices?.[0]?.delta || {};
+    if (typeof delta.content === 'string' && delta.content) { if (firstMs == null) firstMs = Date.now() - t; text += delta.content; onText?.(delta.content); }
+    // Thinking arrives as delta.reasoning (text) or delta.reasoning_details (parts with text or a summary); other
+    // gateways send it as delta.reasoning_content.
+    const think = delta.reasoning || delta.reasoning_content || (delta.reasoning_details || []).map((x) => x.text || x.summary || '').join('');
+    if (typeof think === 'string' && think) { thinking += think; onThink?.(think); }
+    for (const d of delta.reasoning_details || []) {
+      const k = Number.isInteger(d.index) ? d.index : details.length;
+      const cur = details[k];
+      if (!cur) { details[k] = { ...d }; continue; }
+      for (const [f, v] of Object.entries(d)) {
+        if (v == null || f === 'index') continue;
+        cur[f] = (f === 'text' || f === 'summary' || f === 'data') && typeof cur[f] === 'string' ? cur[f] + v : v;
+      }
+    }
+    if (j.provider && !provider) provider = j.provider;
+    if (j.model && !model) model = j.model;
+    for (const tc of delta.tool_calls || []) {
+      const k = tc.index ?? calls.length;
+      calls[k] ??= { id: '', type: 'function', function: { name: '', arguments: '' } };
+      if (tc.id) calls[k].id = tc.id;
+      // A gateway that repeats the whole name in every chunk would otherwise double it.
+      if (tc.function?.name && tc.function.name !== calls[k].function.name) calls[k].function.name += tc.function.name;
+      const a = tc.function?.arguments;
+      if (a != null && a !== '') calls[k].function.arguments += typeof a === 'string' ? a : JSON.stringify(a);
+    }
+    if (j.choices?.[0]?.finish_reason) finish = j.choices[0].finish_reason;
+    if (finish === 'error') throw Object.assign(new Error('the stream ended with an error'), { streamStatus: null });
+    if (j.usage) usage = j.usage;
+    // A gateway may send its cost as a frame of its own after the answer ({ "cost": "0.0012" }).
+    if (j.cost != null && usage.cost == null && Number.isFinite(Number(j.cost))) usage = { ...usage, cost: Number(j.cost) };
+  };
   try {
     for await (const chunk of r.body) {
       buf += dec.decode(chunk, { stream: true });
       let i;
       while ((i = buf.indexOf('\n')) >= 0) {
-        const line = buf.slice(0, i).trim();
+        const s = buf.slice(0, i);
         buf = buf.slice(i + 1);
-        if (!line.startsWith('data:')) continue;
-        const data = line.slice(5).trim();
-        if (data === '[DONE]') continue;
-        let j; try { j = JSON.parse(data); } catch { continue; }
-        if (j.id && !genId) genId = j.id;
-        if (j.error) throw new Error(j.error.message || 'stream error');
-        const delta = j.choices?.[0]?.delta || {};
-        if (delta.content) { if (firstMs == null) firstMs = Date.now() - t; text += delta.content; onText?.(delta.content); }
-        // Thinking arrives as delta.reasoning (text) or delta.reasoning_details (parts with text or a summary).
-        const think = delta.reasoning || (delta.reasoning_details || []).map((x) => x.text || x.summary || '').join('');
-        if (think) { thinking += think; onThink?.(think); }
-        for (const d of delta.reasoning_details || []) {
-          const k = Number.isInteger(d.index) ? d.index : details.length;
-          const cur = details[k];
-          if (!cur) { details[k] = { ...d }; continue; }
-          for (const [f, v] of Object.entries(d)) {
-            if (v == null || f === 'index') continue;
-            cur[f] = (f === 'text' || f === 'summary' || f === 'data') && typeof cur[f] === 'string' ? cur[f] + v : v;
-          }
-        }
-        if (j.provider && !provider) provider = j.provider;
-        if (j.model && !model) model = j.model;
-        for (const tc of delta.tool_calls || []) {
-          const k = tc.index ?? calls.length;
-          calls[k] ??= { id: '', type: 'function', function: { name: '', arguments: '' } };
-          if (tc.id) calls[k].id = tc.id;
-          if (tc.function?.name) calls[k].function.name += tc.function.name;
-          if (tc.function?.arguments) calls[k].function.arguments += tc.function.arguments;
-        }
-        if (j.choices?.[0]?.finish_reason) finish = j.choices[0].finish_reason;
-        if (j.usage) usage = j.usage;
+        line(s);
       }
     }
+    if (buf) line(buf); // a last chunk with no newline after it
   } catch (e) {
     if (e && typeof e === 'object' && !Object.keys(usage).length) { try { e.partial = sofar(); } catch { /* a frozen error carries nothing */ } }
     throw e;
   }
-  return { text, thinking, reasoningDetails: details.filter(Boolean), toolCalls: calls.filter(Boolean), usage, ms: Date.now() - t, firstMs, finishReason: finish, provider, model,
+  return { text, thinking, reasoningDetails: details.filter(Boolean), toolCalls: calls.filter(Boolean), usage, ms: Date.now() - t, firstMs, finishReason: finish, provider, model, seen,
     ...(Object.keys(usage).length ? {} : { partial: sofar() }) };
 }
 

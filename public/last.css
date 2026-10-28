@@ -3019,3 +3019,5 @@ a.md-pathlink.md-path, .md-pathtext.md-path { color: var(--accent); }
 .bk-pat { height: 26px; width: 210px; max-width: 100%; padding: 0 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface-inset, var(--bg)); color: var(--text); font: 12px var(--mono); }
 .bk-hint { font-size: 11px; color: var(--amber, #f59e0b); }
 .bk-for { color: var(--muted); font-family: var(--mono); font-size: 11px; }
+/* A reply on an OpenCode or Cline model whose steps went to OpenRouter (the source failed) */
+.msg .reply-head .rh-fell { font: 600 11px var(--font-ui); color: var(--amber); white-space: nowrap; cursor: help; }

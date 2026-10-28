@@ -80,7 +80,7 @@
 #settings .sx-hero-act { align-self: center; display: flex; gap: 8px; }
 /* each group has its colour */
 #settings [data-group="harness"] { --sx-g: var(--muted); --sx-g-dim: color-mix(in srgb, var(--muted) 12%, transparent); --sx-g-line: color-mix(in srgb, var(--muted) 28%, transparent); }
-#settings [data-group="openrouter"] { --sx-g: var(--accent); --sx-g-dim: var(--accent-dim); --sx-g-line: var(--accent-border); }
+#settings [data-group="models"] { --sx-g: var(--accent); --sx-g-dim: var(--accent-dim); --sx-g-line: var(--accent-border); }
 #settings [data-group="agent"] { --sx-g: var(--violet); --sx-g-dim: var(--violet-dim); --sx-g-line: var(--violet-line); }
 #settings [data-group="workspace"] { --sx-g: var(--ok); --sx-g-dim: var(--ok-dim); --sx-g-line: var(--ok-border); }
 #settings [data-group="data"] { --sx-g: var(--amber); --sx-g-dim: var(--amber-dim); --sx-g-line: var(--amber-line); }
@@ -714,3 +714,40 @@
 #settings #stStorage .st-card > .st-row-help { padding: 0 18px 12px; margin: 0; }
 #settings #stStorage .st-card > .st-btn { margin: 0 18px 14px; }
 #settings #stStorage .sto-dl-acts { display: flex; justify-content: flex-end; gap: 8px; padding: 10px 18px 14px; border-top: 1px solid var(--line-subtle); }
+/* ⚙ OpenCode & Cline: a card per source, its steps numbered and ticked off as they are done */
+#settings .src-mini { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+#settings .src-cards { display: grid; gap: 12px; padding: 0 18px 16px; }
+#settings .src-card { border: 1px solid var(--line); border-radius: var(--sx-r, 12px); background: var(--panel); padding: 12px 14px 10px; min-width: 0; }
+#settings .src-card.on { border-color: var(--ok-border); }
+#settings .src-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; }
+#settings .src-head .mp-ava { width: 26px; height: 26px; border-radius: 7px; display: inline-grid; place-items: center; font: 700 10.5px var(--font-ui); color: #fff; background: hsl(var(--h) 45% 42%); flex: none; }
+#settings .src-name { font-size: 14px; }
+#settings .src-count { font: 11.5px var(--mono); color: var(--dim); }
+#settings .src-what { margin: 6px 0 4px; }
+#settings .src-steps { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 10px; }
+#settings .src-steps > li { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 10px; align-items: start; }
+#settings .src-steps > li > div > b { font-size: 12.5px; }
+#settings .src-steps > li > div > b small { font-weight: 500; color: var(--dim); }
+#settings .src-steps p { margin: 3px 0 6px; font-size: 12px; color: var(--muted); }
+#settings .src-steps code { font: 11.5px var(--mono); background: var(--surface-inset, var(--bg)); border: 1px solid var(--line); border-radius: 5px; padding: 1px 6px; color: var(--text); }
+#settings .src-steps a { color: var(--accent); }
+#settings .src-n { width: 22px; height: 22px; border-radius: 6px; border: 1.5px solid var(--line-strong, var(--line)); display: grid; place-items: center; font: 700 12px var(--font-ui); color: transparent; counter-increment: srcstep; position: relative; }
+#settings .src-steps { counter-reset: srcstep; }
+#settings .src-n::after { content: counter(srcstep); position: absolute; color: var(--dim); font-size: 11px; }
+#settings .src-steps > li.done .src-n { background: var(--ok-dim); border-color: var(--ok-border); color: var(--ok); }
+#settings .src-steps > li.done .src-n::after { content: ''; }
+#settings .src-key { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 4px 0 8px; }
+#settings .src-key .kx-masked { margin-left: 0; }
+#settings .src-form { grid-template-columns: minmax(0, 1fr) auto auto; margin: 4px 0; }
+#settings .src-note { font-size: 11.5px; color: var(--dim); }
+#settings .src-test { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; }
+#settings .src-last { font-size: 12px; }
+#settings .src-last.ok { color: var(--ok); }
+#settings .src-last.warn { color: var(--amber); }
+#settings .src-last.bad { color: var(--bad); }
+#settings .src-msg, #settings .src-test-msg { margin-top: 6px; }
+#settings .src-msg.bad, #settings .src-test-msg.bad { color: var(--bad); }
+#settings .src-on { margin-left: 2px; }
+#settings .src-same { margin: 0; padding: 4px 18px 14px 34px; display: grid; gap: 6px; font-size: 12.5px; color: var(--muted); }
+#settings .src-same b { color: var(--text); font-weight: 600; }
+@media (max-width: 640px) { #settings .src-form { grid-template-columns: 1fr; } }

@@ -13,6 +13,7 @@ import path from 'node:path';
 import { chat, chatStream, generationCost, chatModels, imageModels, generateImage, speechModels, synthesize, composeMusic, musicModels, videoModels, generateVideo, HOME } from './openrouter.js';
 import { ensemble, GATE } from './decisions.js';
 import { runtime, knownProviders } from './openrouter.js';
+import { sourceOf, sourceStream, sourceModels, sourceOn, sourceSkip, noteSourceResult, failureKind, kindWords, sameOnOpenRouter, stripPass, chatAny, sessionFor } from './sources.js';
 import { pathToFileURL } from 'node:url';
 import { rotateLog } from './storagerules.js';
 import { enhanceRequest } from './enhancer.js';
@@ -125,6 +126,11 @@ export const DEFAULTS = {
   // deepseek-v4.1-flash's browser calls without their arguments (just {"action":"open"}), so runs went in circles.
   blockedProviders: [{ name: 'InferenceNet', models: ['deepseek/*'] }],
   fallbackModel: '',       // tried by OpenRouter when the chat's model fails or is unavailable ('' = none)
+  // OpenCode & Cline (server/sources.js): a chat whose model runs there falls back to OpenRouter when a call fails.
+  // 'same' = the same model on OpenRouter when it has one, else sourceFallbackModel (else the default chat model) ·
+  // 'model' = always sourceFallbackModel · 'off' = stop and say so, spending nothing on OpenRouter.
+  sourceFallback: 'same',
+  sourceFallbackModel: '',
   // The reviewer (#4): a separate model plays what was built and scores it before the final reply.
   codeReview: 'off',       // /review on its own after a reply that changed code: 'off' · 'auto' (a card only when the reviewer finds bugs)
   review: 'builds',        // 'off' · 'builds' (when the agent made a plan for this reply) · 'always' (whenever something openable was built or changed)
@@ -284,7 +290,7 @@ const CREATIVITY = { focused: 0.3, creative: 1 };
 function samplingFor(model, info, creativity, reasoning) {
   const t = CREATIVITY[creativity];
   if (t == null || info?.temp === false) return {};
-  if (/^anthropic\//.test(model) && reasoning && reasoning !== 'off' && t !== 1) return {};
+  if (/^anthropic\//.test(sourceOf(model)?.model || model) && reasoning && reasoning !== 'off' && t !== 1) return {}; // Claude through Cline too
   return { temperature: t };
 }
 // OpenRouter's ignore list takes slugs ("inference-net"), replies name the provider ("InferenceNet"): the provider
@@ -312,6 +318,16 @@ export function routingFor(S, model, slugs = []) {
   if (S.zdrOnly) provider.zdr = true;
   const fb = String(S.fallbackModel || '').trim();
   return { ...(Object.keys(provider).length ? { provider } : {}), ...(fb && fb !== model ? { models: [model, fb] } : {}) };
+}
+// The OpenRouter model a failed OpenCode or Cline call falls back to (see DEFAULTS.sourceFallback), or null when the
+// settings say not to fall back. `list` is the chat catalogue (OpenRouter's models and the sources').
+export function sourceFallbackFor(id, S = {}, list = []) {
+  const mode = S.sourceFallback || DEFAULTS.sourceFallback;
+  if (mode === 'off') return null;
+  const ok = (x) => (x = String(x || '').trim()) && !sourceOf(x) ? x : null;
+  const chosen = ok(S.sourceFallbackModel);
+  if (mode === 'model' && chosen) return chosen;
+  return sameOnOpenRouter(id, list.filter((m) => !sourceOf(m.id)), list.find((m) => m.id === id)) || chosen || ok(S.fallbackModel) || ok(S.model) || DEFAULTS.chatModel;
 }
 
 // Real media costs seen so far ("model|size" → $), so later approval cards show measured prices.
@@ -942,6 +958,16 @@ const sleep = (ms, signal) => new Promise((resolve, reject) => { const t = setTi
 
 async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   const streamModel = deps.chatStream || chatStream;
+  // OpenCode and Cline models (sources.js) go to their source; tests script it with deps.sourceStream.
+  const fromSource = deps.sourceStream || sourceStream;
+  // The chat catalogue: OpenRouter's models and those of the sources that are switched on. Loaded once, when first
+  // needed (a long chat's summary can come before the rest of the setup).
+  let catalogueP = null;
+  // One session id per chat for OpenCode (its Go plan needs it, and it keeps the gateway's prompt cache warm).
+  const sourceSession = () => sessionFor(req.chatId || req.runId || 'quorx');
+  // A whole answer (a long chat's summary, setup D's drafts) on a source model: there, else OpenRouter's fallback.
+  const sourceChatOpts = () => ({ orChat: chat, stream: (b, sg) => fromSource(b, sg, null, null, { session: sourceSession() }), checkOn: !deps.sourceStream, fallback: async (id) => sourceFallbackFor(id, S, await getCatalogue()) });
+  const getCatalogue = () => (catalogueP ??= deps.catalogue ? Promise.resolve(deps.catalogue) : Promise.all([chatModels().catch(() => []), sourceModels().catch(() => [])]).then(([a, b]) => [...a, ...b]));
   // Resuming a reply that a harness restart cut off: start again from its last checkpoint.
   const resumed = req.resume ? loadCheckpoint(String(req.resume)) : null;
   if (req.resume && !resumed) throw new Error('Nothing to resume: the checkpoint for that reply is gone.');
@@ -1117,10 +1143,12 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   if (!resumed && S.compact !== false && history.reduce((n, m) => n + m.content.length, 0) > Math.max(8000, Number(S.compactAt) || 24000) && history.length > 10) {
     const keep = history.slice(-8), old = history.slice(0, -8);
     try {
-      const sum = await chat({ model: setup.model, max_tokens: 900, temperature: 0.2, ...REASONING.off, messages: [
+      // A chat on OpenCode or Cline summarises there too; when that fails, OpenRouter's fallback model does it.
+      const sum = await chatAny({ model: setup.model, max_tokens: 900, temperature: 0.2, ...REASONING.off, messages: [
         { role: 'system', content: 'Summarise this conversation between a user and an AI agent for the agent to continue it. Keep: the goal, decisions, what was built (files, servers, artifacts), open problems and the user\'s preferences. Under 350 words, plain bullet points.' },
-        { role: 'user', content: `${req.summary ? `Earlier summary:\n${req.summary}\n\n` : ''}${old.map((m) => `${m.role === 'user' ? 'User' : 'Agent'}: ${m.content}`).join('\n\n').slice(-60000)}` }] }, signal);
-      account(sum.usage, setup.model, 'summary');
+        { role: 'user', content: `${req.summary ? `Earlier summary:\n${req.summary}\n\n` : ''}${old.map((m) => `${m.role === 'user' ? 'User' : 'Agent'}: ${m.content}`).join('\n\n').slice(-60000)}` }] }, signal,
+      sourceChatOpts());
+      account(sum.usage, sum.model || setup.model, 'summary');
       req.summary = String(sum.message.content || '').trim();
       history = keep;
       emit({ t: 'compacted', summary: req.summary, cutoffAt: keep[0]?.at || Date.now(), at: 0 });
@@ -1192,7 +1220,7 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
   const userNamedApp = (name) => { const n = String(name).toLowerCase().replace(/\s+\d[\d.]*$/, ''); const words = [n, ...(APP_ALIASES[n] || [])]; return userTurns().some((t) => words.some((w) => new RegExp(`(^|[^a-z0-9])${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|[^a-z0-9])`, 'i').test(t))); };
   // Output per call: the setting (64k by default), never above the model's own limit from the catalogue.
   // 32k was too little: a model with high reasoning could think through a whole game and run out before writing it.
-  const catalogue = deps.catalogue || await chatModels().catch(() => []);
+  const catalogue = await getCatalogue();
   const outCap = Math.max(4000, Math.min(128000, Number(S.maxOutput) || DEFAULTS.maxOutput));
   const outFor = (id) => Math.min(outCap, catalogue.find((m) => m.id === id)?.maxOut || 16000);
   const modelInfo = catalogue.find((m) => m.id === setup.model);
@@ -1432,6 +1460,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     let toolChoice = last ? 'none' : forceDecide ? { type: 'function', function: { name: 'decide' } } : 'auto';
     const body = { model: setup.model, messages, tools, tool_choice: toolChoice, max_tokens: maxOut, ...samplingFor(setup.model, modelInfo, setup.creativity, reasonNow), ...reasoningFor(reasonNow, maxOut, S.thinkShare), ...(run.routing === 'blocked' ? { provider: { ignore: blockedSlugs } } : run.routing ? routingFor(S, setup.model, blockedSlugs) : {}) };
     emit({ t: 'llm_start', step, model: setup.model, forced: forceDecide, at: at() });
+    run.stepNow = step;
     let r;
     // On a forced step the text is held back until we know the model really asked the deciders.
     const onText = forceDecide ? null : (d) => emit({ t: 'token', step, text: d });
@@ -1457,7 +1486,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       // Some providers ignore a named tool_choice and the model answers from memory. Send it back
       // once; if it still won't ask, keep the answer and count the run as "skipped".
       stats.llmCalls++;
-      account(r.usage, setup.model, 'writer');
+      account(r.usage, r.servedBy || setup.model, 'writer');
       emit({ t: 'note', level: 'warn', msg: `${short(setup.model)} answered without asking the deciders; sending it back to ask first.`, at: at() });
       r = await modelCall({ ...body, tool_choice: 'required', messages: [...messages, { role: 'assistant', content: r.text || '' },
         { role: 'user', content: 'Before answering, call the decide tool: commit your own guess for each question, then let the deciders answer.' }] }, step, null)
@@ -1469,12 +1498,14 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     }
     if (forceDecide && r.text) emit({ t: 'token', step, text: r.text });
     stats.llmCalls++;
-    // Which model really answered: the fallback, when OpenRouter had to use it.
+    // Which model really answered: OpenRouter's, when an OpenCode or Cline call failed (r.servedBy); the fallback,
+    // when OpenRouter had to use it.
     const fb = String(S.fallbackModel || '').trim();
-    const served = fb && r.model && r.model.startsWith(fb) && !r.model.startsWith(setup.model) ? fb : setup.model;
-    if (served !== setup.model) emit({ t: 'note', level: 'warn', msg: `${short(setup.model)} was unavailable, so OpenRouter answered with the fallback model ${short(served)}.`, at: at() });
+    const served = r.servedBy || (fb && r.model && r.model.startsWith(fb) && !r.model.startsWith(setup.model) ? fb : setup.model);
+    if (served !== setup.model && !r.servedBy) emit({ t: 'note', level: 'warn', msg: `${short(setup.model)} was unavailable, so OpenRouter answered with the fallback model ${short(served)}.`, at: at() });
     account(r.usage, served, 'writer');
-    emit({ t: 'llm_done', step, ms: r.ms, firstMs: r.firstMs, tokensOut: r.usage.completion_tokens || 0, cost: r.usage.cost || 0, toolCalls: r.toolCalls.map((c) => c.function.name), provider: r.provider || null, model: served, actual: r.model || null, at: at() });
+    emit({ t: 'llm_done', step, ms: r.ms, firstMs: r.firstMs, tokensOut: r.usage.completion_tokens || 0, cost: r.usage.cost || 0, toolCalls: r.toolCalls.map((c) => c.function.name), provider: r.provider || null, model: served, actual: r.model || null,
+      ...(r.source ? { source: r.source } : {}), ...(r.servedBy ? { fellBackFrom: setup.model } : {}), ...(r.usage.plan_cost ? { planCost: r.usage.plan_cost } : {}), at: at() });
     // Nothing came back (no text, no tool call): usually all of the output went on thinking. Never end
     // a reply silently on that: tell the model to act, think less, and try again (twice at most).
     if (!r.toolCalls.length && !String(r.text || '').trim()) {
@@ -1558,7 +1589,9 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     // The model's reasoning goes back with its tool calls, unchanged, so the next step continues its thinking
     // instead of starting cold (OpenRouter's reasoning_details; only within this reply).
     const rd = run.passReasoning !== false && r.reasoningDetails?.length ? { reasoning_details: r.reasoningDetails } : {};
-    messages.push({ role: 'assistant', content: r.text || null, tool_calls: r.toolCalls, ...rd });
+    // What an OpenCode or Cline model needs back on its next step (thinking signatures, its reasoning): sources.js
+    // reads it there, and every other route drops it.
+    messages.push({ role: 'assistant', content: r.text || null, tool_calls: r.toolCalls, ...rd, ...(r.passBack && run.passReasoning !== false ? { qx_pass: r.passBack } : {}) });
     run.tools += r.toolCalls.length;
     // Neighbouring look-ups run side by side; writes, commands and everything else run alone, in order.
     // Past the budget allowance (paid media, deciders), the rest of the step's calls are not run.
@@ -1758,15 +1791,104 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   // once, at an estimate, the moment it ends (so the caps see it), and corrected to OpenRouter's own figure when the
   // generation record turns up a few seconds later.
   async function callModel(body, sig, onText, onThink, role = 'writer') {
+    // An OpenCode or Cline model: its source first. When that fails, the same call goes to OpenRouter (viaSource
+    // says which model), and the step carries on as if nothing happened, apart from a note.
+    let fell = null;
+    if (sourceOf(body.model)) {
+      const got = await viaSource(body, sig, onText, onThink, role);
+      if (got.r) return got.r;
+      fell = body.model; body = got.body;
+    } else if (body.messages?.some((m) => m?.qx_pass)) body = { ...body, messages: stripPass(body.messages) };
     try {
-      const r = await streamModel(body, sig, onText, onThink);
+      let r;
+      try { r = await streamModel(body, sig, onText, onThink); }
+      catch (e) {
+        // The routing filters can leave a fallback model with no provider: it goes with OpenRouter's default routing.
+        if (!fell || !body.provider || sig.aborted || !/no endpoints|no allowed providers|require_parameters|zdr|data policy/i.test(e?.message || '')) throw e;
+        const { provider: _p, models: _m, ...rest } = body;
+        body = rest;
+        r = await streamModel(body, sig, onText, onThink);
+      }
       // The stream ended without its usage: the caller accounts r.usage as usual, so the estimate goes there.
       if (r?.partial && !Object.keys(r.usage || {}).length) r.usage = partialUsage(r.partial, body, role);
+      // OpenRouter's own fallback (⚙ Models) can answer a fallback call too: name the model that really did.
+      if (fell && r) { const alt = String(S.fallbackModel || '').trim(); r.servedBy = alt && r.model && r.model.startsWith(alt) && !r.model.startsWith(body.model) ? alt : body.model; }
       return r;
     } catch (e) {
       if (e?.partial && !e.partial.counted) { e.partial.counted = true; account(partialUsage(e.partial, body, role), body.model, role); }
       throw e;
     }
+  }
+  // One call to the source a model id names. Returns { r } with its answer, or { body } for OpenRouter: the same call
+  // for the fallback model. Throws only when the settings say not to fall back (or on Stop). A source that refused
+  // its key or ran out of usage, or failed twice in this reply, is skipped for the rest of the reply.
+  async function viaSource(body, sig, onText, onThink, role) {
+    const sm = body.model, s = sourceOf(sm), name = s.def.name;
+    run.sourceFails ??= {}; run.sourceOff ??= {};
+    // A source switched off, or one that failed for other chats a moment ago, is not waited on again (tests script
+    // the source, so only the real one is checked).
+    let why = run.sourceOff[s.source] || (deps.sourceStream ? '' : !sourceOn(s.source) ? `${name} is switched off or has no key (⚙ Settings → OpenCode & Cline)` : sourceSkip(s.source, sm));
+    let kind = why ? 'skipped' : null;
+    for (let again = true; !why && again;) {
+      again = false;
+      try {
+        const r = await fromSource(body, sig, onText, onThink, { session: sourceSession() });
+        if (!r || typeof r !== 'object' || !Array.isArray(r.toolCalls)) throw Object.assign(new Error(`${name} gave QuorX nothing it could read`), { kind: 'shape' });
+        // An answer that ended without its usage (a gateway that left the last chunk out) counts at an estimate.
+        if (r.partial && !Object.keys(r.usage || {}).length) r.usage = sourcePartial(r.partial, body);
+        r.usage ??= {};
+        noteSourceResult(s.source, sm, null);
+        run.sourceFails[s.source] = 0;
+        return { r };
+      } catch (e0) {
+        const e = e0 && typeof e0 === 'object' ? e0 : new Error(String(e0));
+        // Cut off part-way (Stop too): maybe billed, so it counts at an estimate (plan models cost nothing).
+        if (e.partial?.outChars && !e.partial.counted) { e.partial.counted = true; account(sourcePartial(e.partial, body), sm, role); }
+        if (sig.aborted) throw e0;
+        kind = failureKind(e);
+        // A refused request with earlier steps' pass-backs in it (a thinking signature the source no longer takes):
+        // once more without them, as with OpenRouter's reasoning.
+        if (kind === 'request' && /reasoning|signature|thinking|reasoning_content/i.test(e.message || '') && run.passReasoning !== false && body.messages?.some((m) => m?.qx_pass)) {
+          run.passReasoning = false;
+          for (const m of body.messages) delete m.qx_pass;
+          emit({ t: 'note', level: 'warn', msg: `${name} refused the reasoning passed back between steps (${clip(e.message, 100)}); continuing without it.`, at: at() });
+          again = true;
+          continue;
+        }
+        noteSourceResult(s.source, sm, e);
+        why = `${name} ${kindWords(kind)} (${clip(e.message || kind, 160)})`;
+        run.sourceFails[s.source] = (run.sourceFails[s.source] || 0) + 1;
+        if (kind === 'auth' || kind === 'quota' || run.sourceFails[s.source] >= 2) run.sourceOff[s.source] = why;
+      }
+    }
+    const to = sourceFallbackFor(sm, S, catalogue);
+    if (!to) throw Object.assign(new Error(`${why}. QuorX didn't switch to OpenRouter, as ⚙ Settings → OpenCode & Cline asks. Fix ${name} or pick another model, then send a message to carry on.`), { status: 400, source: s.source });
+    const rest = !!run.sourceOff[s.source], first = rest && !run.sourceOffSaid?.[s.source];
+    if (first) (run.sourceOffSaid ??= {})[s.source] = true;
+    emit({ t: 'source_fallback', step: role === 'writer' ? run.stepNow ?? null : null, role, from: sm, to, source: s.source, kind, why: clip(why, 300), rest, at: at() });
+    if (kind !== 'skipped' || first) emit({ t: 'note', level: 'warn', msg: `${why}. ${role === 'writer' ? 'This step' : `The ${role}'s call`} used ${short(to)} on OpenRouter instead${rest ? ', and so does the rest of this reply' : ''}; the chat carries on.`, at: at() });
+    return { body: forOpenRouter(body, to) };
+  }
+  // A call meant for a source, made fit for OpenRouter's model `to`: its routing, its output limit, no pass-backs.
+  function forOpenRouter(body, to) {
+    const { provider: _p, models: _m, ...rest } = body;
+    const cap = outFor(to);
+    const out = { ...rest, model: to, messages: stripPass(body.messages), max_tokens: Math.min(Number(body.max_tokens) || cap, cap) };
+    if (out.reasoning?.max_tokens && out.reasoning.max_tokens >= out.max_tokens) out.reasoning = { ...out.reasoning, max_tokens: Math.max(1024, Math.floor(out.max_tokens * Math.max(5, Math.min(60, Number(S.thinkShare) || 25)) / 100)) };
+    if (catalogue.find((m) => m.id === to)?.temp === false) delete out.temperature;
+    const slugs = providerSlugs(blockedFor(S.blockedProviders, to), knownProviders());
+    if (run.routing === 'blocked') { if (slugs.length) out.provider = { ignore: slugs }; }
+    else if (run.routing) Object.assign(out, routingFor(S, to, slugs));
+    return out;
+  }
+  // A source call cut off before its usage arrived: about 4 characters a token, at the catalogue's price.
+  function sourcePartial(p, body) {
+    const info = catalogue.find((m) => m.id === body.model);
+    const [pin, pout] = info?.price || [0, 0];
+    const prompt_tokens = promptTokens(body), completion_tokens = Math.ceil((p.outChars || 0) / 4);
+    const cost = (prompt_tokens * pin + completion_tokens * pout) / 1e6;
+    if (cost) emit({ t: 'note', level: 'info', msg: `A call to ${short(body.model)} ended part-way; it is counted at an estimated $${cost.toFixed(4)}.`, at: at() });
+    return { prompt_tokens, completion_tokens, cost, partial: true, estimated: true };
   }
   // Tokens in, for a call that never reported them: about 4 characters a token over the messages and the tool
   // definitions, with a flat allowance for each picture (its data URL says nothing about its tokens).
@@ -2491,8 +2613,8 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     signal.addEventListener('abort', stop, { once: true });
     emit({ t: 'drafts_start', n, model: setup.model, at: at() });
     const msgs = [{ role: 'system', content: 'You are a helpful assistant. Answer the user directly in chat (you have no tools in this mode). Keep replies short, under 150 words.' }, ...history, { role: 'user', content: userText }];
-    const draftsP = Promise.all(Array.from({ length: n }, () => chat({ model: setup.model, messages: msgs, temperature: 0.9, max_tokens: 1500, ...REASONING[setup.reasoning || 'off'] }, dac.signal)
-      .then((r) => { stats.llmCalls++; account(r.usage, setup.model, 'writer'); return String(r.message.content || '').trim(); })
+    const draftsP = Promise.all(Array.from({ length: n }, () => chatAny({ model: setup.model, messages: msgs, temperature: 0.9, max_tokens: 1500, ...REASONING[setup.reasoning || 'off'] }, dac.signal, sourceChatOpts())
+      .then((r) => { stats.llmCalls++; account(r.usage, r.model || setup.model, 'writer'); return String(r.message.content || '').trim(); })
       .catch((e) => { if (signal.aborted) throw e; return ''; })));
     // While the drafts are written, one quick question: does the user want something built?
     const b = await ensemble({ voters: S.voters, signal, account, gate: S.gate,
@@ -5298,6 +5420,8 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
 }
 
 // ---------- the handover brief (the out-of-steps card's "Fresh chat") ----------
+// A brief on an OpenCode or Cline model is written there; when that fails, OpenRouter's fallback model writes it.
+const briefChat = (body) => chatAny(body, undefined, { orChat: chat, fallback: async (id) => sourceFallbackFor(id, {}, [...await chatModels().catch(() => []), ...await sourceModels().catch(() => [])]) });
 // A cheap model reads the stopped reply's transcript and writes what a new agent needs to carry on.
 export async function briefFor(runId, { model } = {}) {
   const ck = loadCheckpoint(String(runId));
@@ -5311,10 +5435,10 @@ export async function briefFor(runId, { model } = {}) {
     else lines.push(`[${m.role}] ${clip(text, 1500)}${calls ? ` · calls: ${calls}` : ''}`);
   }
   const use = String(model || '').trim() || HELPER_MODEL;
-  const r = await chat({ model: use, max_tokens: 1400, temperature: 0.2, ...REASONING.off, messages: [
+  const r = await briefChat({ model: use, max_tokens: 1400, temperature: 0.2, ...REASONING.off, messages: [
     { role: 'system', content: 'You write a handover brief so a fresh AI agent can continue a coding task in a new chat. Use these headings, with short bullet points under each: Goal (what the user asked for, with their exact requirements); Built so far (files, what each does, how to open or run it); Works; Left to do (in order); Known bugs and what was tried; Decisions and user preferences. Under 350 words. Facts only from the transcript.' },
     { role: 'user', content: `${ck.plan ? `Plan: ${ck.plan.spec || ''}\nItems: ${(ck.plan.items || []).map((x) => `${x.status === 'done' ? '[x]' : '[ ]'} ${x.text}`).join('; ')}\n\n` : ''}Transcript (oldest first):\n${lines.join('\n').slice(-90000)}` }] });
-  return { brief: String(r.message?.content || '').trim(), model: use, cost: Number(r.usage?.cost) || 0, project: ck.req?.projectId || null };
+  return { brief: String(r.message?.content || '').trim(), model: r.model || use, cost: Number(r.usage?.cost) || 0, project: ck.req?.projectId || null };
 }
 
 // A brief of a whole chat (for /fresh, and for attaching one chat to another): its goal, what was built,
@@ -5332,10 +5456,10 @@ export async function briefForChat(chatId, { model } = {}) {
   const lines = msgs.map((m) => `${m.role === 'user' ? 'User' : 'Agent'}: ${clip(String(m.content || '').replace(/\s+/g, ' '), 2500)}${m.note ? ` ${clip(m.note.replace(/\s+/g, ' '), 600)}` : ''}`);
   const arts = Object.values(a.artifacts || {}).map((x) => `${x.kind} "${x.title}"`).slice(0, 30);
   const use = String(model || '').trim() || HELPER_MODEL;
-  const r = await chat({ model: use, max_tokens: 1400, temperature: 0.2, ...REASONING.off, messages: [
+  const r = await briefChat({ model: use, max_tokens: 1400, temperature: 0.2, ...REASONING.off, messages: [
     { role: 'system', content: 'You write a handover brief of a conversation between a user and an AI agent, so a fresh agent (or another chat) can pick it up. Use these headings, with short bullet points under each: Goal (what the user asked for, with their exact requirements, including the very first request); Built so far (files, artifacts, how to open or run them); Works; Left to do (in order); Known bugs and what was tried; Decisions and user preferences. Under 350 words. Facts only from the conversation.' },
     { role: 'user', content: `Chat "${doc.title || chatId}" (model ${a.setup?.model || '?'}).${a.summary ? `\nEarlier summary: ${a.summary}` : ''}${arts.length ? `\nArtifacts: ${arts.join('; ')}` : ''}\n\nConversation (oldest first):\n${lines.join('\n').slice(-90000)}` }] });
-  const out = { key, brief: String(r.message?.content || '').trim(), model: use, title: doc.title || '', project: doc.projectId || 'scratch', chatModel: a.setup?.model || null, at: Date.now() };
+  const out = { key, brief: String(r.message?.content || '').trim(), model: r.model || use, title: doc.title || '', project: doc.projectId || 'scratch', chatModel: a.setup?.model || null, at: Date.now() };
   try { fs.mkdirSync(BRIEF_DIR, { recursive: true }); fs.writeFileSync(cacheFile, JSON.stringify(out)); } catch { /* the cache is a convenience */ }
   return { ...out, cost: Number(r.usage?.cost) || 0, cached: false };
 }

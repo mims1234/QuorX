@@ -29,13 +29,18 @@ import { setSecret, parseEnv, secretKind, scrubSecrets } from '../server/project
 import { looksLikeFilm, videoModeFor, filmFacts, factsText, finishedFilms, videoRules, recommendedRoute, recommendedMusic, VIDEO_DEFAULTS } from '../server/videomode.js';
 import { settleTempo, analyse, tempoOf, barsOf, fitPlan, pickWindows, cutsVsBeats } from '../server/musicmap.js';
 import { checkHtml } from '../server/checks.js';
+import http from 'node:http';
+import { DEFAULTS, sourceFallbackFor } from '../server/agent.js';
+import { sourceOf, sourceStream, sourceModels, sameOnOpenRouter, failureKind, noteSourceResult, sourceSkip, forgetSourceHealth, priced as sourcePriced, setSourceKey, removeSourceKey, keyFor, importOpenCodeKey, chatAny, primeSources } from '../server/sources.js';
+import { toAnthropic, toGoogle, toResponses, toChat, googleSchema } from '../server/wire.js';
+import { SECRET_FILES } from '../server/keys.js';
 
 let n = 0;
 const reply = (text, calls = [], finishReason = 'stop') => ({ text, toolCalls: calls.map(([name, args], i) => ({ id: `c${++n}_${i}`, type: 'function', function: { name, arguments: typeof args === 'string' ? args : JSON.stringify(args) } })), usage: { cost: 0.0001 }, ms: 1, firstMs: 1, finishReason });
 
 /** Runs one reply. `script(body, i)` returns the model's i-th answer (or throws). */
 // `budget` sets the project's budget and `spent` seeds what it has already spent (as a ledger row).
-async function run(script, { settings = {}, text = 'build it', resume, onEvent, signal, history, budget, spent, setup = {}, openTab, generateImage, generateVideo, ensemble, checks, chatId, prep, cont, images, comments, enhance, reading, catalogue, videoMode, videoFrom, generation, scheduledBy } = {}) {
+async function run(script, { settings = {}, text = 'build it', resume, onEvent, signal, history, budget, spent, setup = {}, openTab, generateImage, generateVideo, ensemble, checks, chatId, prep, cont, images, comments, enhance, reading, catalogue, videoMode, videoFrom, generation, scheduledBy, sourceStream } = {}) {
   const id = `t${Date.now().toString(36)}${(n++).toString(36)}`;
   const dir = tempDir('quorx-run-');
   saveProject({ id, name: 'test', path: dir });
@@ -47,7 +52,7 @@ async function run(script, { settings = {}, text = 'build it', resume, onEvent, 
   const chatStream = async (body, sig, onText) => { bodies.push(structuredClone(body)); const r = await script(body, i++); if (r.text && onText) onText(r.text); return r; };
   try {
     await runAgent({ runId: id, projectId: id, ...(chatId ? { chatId } : {}), ...(scheduledBy ? { scheduledBy } : {}), ...(images ? { images } : {}), ...(comments ? { comments } : {}), text, resume, ...(cont ? { continue: cont } : {}), ...(reading ? { reading } : {}), ...(videoMode ? { videoMode } : {}), ...(videoFrom ? { videoFrom } : {}), history, setup: { model: 'test/model', ...setup }, settings: { approval: 'yolo', mediaEnabled: false, tools: { browser: { on: false } }, ...settings } },
-      (e) => { events.push(e); onEvent?.(e, id); }, signal || new AbortController().signal, { chatStream, catalogue: catalogue || [{ id: 'test/model', maxOut: 4000 }], quiet: true, startServer: async ({ name, args }) => ({ key: `fake-${name}`, url: 'http://localhost:9/', status: 'running', command: ['node', ...(args || [])].join(' '), log: '' }), ...(openTab ? { openTab } : {}), ...(generateImage ? { generateImage } : {}), ...(generateVideo ? { generateVideo } : {}), ...(ensemble ? { ensemble } : {}), ...(checks ? { checks } : {}), ...(enhance ? { enhance } : {}), ...(generation ? { generation } : {}) });
+      (e) => { events.push(e); onEvent?.(e, id); }, signal || new AbortController().signal, { chatStream, catalogue: catalogue || [{ id: 'test/model', maxOut: 4000 }], quiet: true, startServer: async ({ name, args }) => ({ key: `fake-${name}`, url: 'http://localhost:9/', status: 'running', command: ['node', ...(args || [])].join(' '), log: '' }), ...(openTab ? { openTab } : {}), ...(generateImage ? { generateImage } : {}), ...(generateVideo ? { generateVideo } : {}), ...(ensemble ? { ensemble } : {}), ...(checks ? { checks } : {}), ...(enhance ? { enhance } : {}), ...(generation ? { generation } : {}), ...(sourceStream ? { sourceStream } : {}) });
     return { events, bodies, dir, id, done: events.find((e) => e.t === 'done') };
   } finally { forgetProject(id); ledger.delete(`seed-${id}`); }
 }
@@ -3729,4 +3734,408 @@ test('the link check skips tags a script builds as text, and still finds a real 
 
 test('silent, draft and test copies of a film are not reviewed as films', () => {
   assert.deepEqual(finishedFilms([{ r: 'assets/edits/quorx-teaser-silent.mp4', t: 9 }, { r: 'assets/edits/quorx-teaser.mp4', t: 8 }, { r: 'assets/edits/teaser_draft.mp4', t: 7 }]), ['assets/edits/quorx-teaser.mp4']);
+});
+
+// ---------- OpenCode & Cline: the main model on another source (server/sources.js, server/wire.js) ----------
+// A Go model as the catalogue lists it, and a local gateway that answers each request with the next scripted answer.
+const goInfo = (over = {}) => ({ id: 'opencode-go/glm-5.3', realId: 'glm-5.3', source: 'opencode-go', kind: 'chat', format: 'chat', plan: 'plan', price: [0, 0], listPrice: [1.4, 4.4], cost: { input: 1.4, output: 4.4, cache_read: 0.26 },
+  tools: true, temp: true, reasoning: true, reasoningOptions: [{ type: 'effort', values: ['high', 'max'] }], interleaved: 'reasoning_content', maxOut: 4000, in: ['text'], canonical: 'zhipuai/glm-5.3', ...over });
+const SRC_CAT = [{ id: 'test/model', maxOut: 4000 }, { id: 'z-ai/glm-5.3', maxOut: 4000, tools: true }, goInfo()];
+async function gateway(answers) {
+  const seen = [];
+  let i = 0;
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => { body += c; });
+    req.on('end', () => {
+      seen.push({ url: req.url, headers: req.headers, body: body ? JSON.parse(body) : null });
+      const a = answers[Math.min(i++, answers.length - 1)];
+      res.writeHead(a.status || 200, { 'Content-Type': a.type || 'text/event-stream', ...(a.headers || {}) });
+      res.end(a.body);
+    });
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  return { url: `http://127.0.0.1:${server.address().port}/v1`, seen, close: () => new Promise((r) => server.close(r)) };
+}
+const srcSse = (...chunks) => chunks.map((c) => `data: ${typeof c === 'string' ? c : JSON.stringify(c)}\n\n`).join('');
+const SRC_KEY = 'oc_sk_test_0123456789';
+const srcReply = (text, calls, over = {}) => ({ ...reply(text, calls), provider: 'OpenCode Go', source: 'opencode-go', usage: { cost: 0, plan_cost: 0.002 }, ...over });
+// The conversation every format test converts: a system prompt, a picture, two tool calls (one with an id only some
+// gateways use), their results and a harness note.
+const CONV = { model: 'opencode/claude-x', max_tokens: 8000, temperature: 0.3, reasoning: { max_tokens: 3000, exclude: false }, tool_choice: 'auto',
+  tools: [{ type: 'function', function: { name: 'write_file', description: 'Write a file', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'], additionalProperties: false } } }],
+  messages: [
+    { role: 'system', content: 'Rules.' },
+    { role: 'user', content: [{ type: 'text', text: 'Build it' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } }] },
+    { role: 'assistant', content: 'Writing.', tool_calls: [{ id: 'functions.write_file:0', type: 'function', function: { name: 'write_file', arguments: '{"path":"a.js"}' } }, { id: 'call_2', type: 'function', function: { name: 'write_file', arguments: '{"path":"b.js"}' } }] },
+    { role: 'tool', tool_call_id: 'functions.write_file:0', content: 'ok a' },
+    { role: 'tool', tool_call_id: 'call_2', content: 'ok b' },
+    { role: 'user', content: '[steps: 1 of 9 used]' },
+  ] };
+
+test('a source model id says where its call goes, and no OpenRouter id is taken for one', () => {
+  const pick = (s) => s && { source: s.source, model: s.model };
+  assert.deepEqual(pick(sourceOf('opencode-go/glm-5.3')), { source: 'opencode-go', model: 'glm-5.3' });
+  assert.deepEqual(pick(sourceOf('cline/anthropic/claude-sonnet-5.5')), { source: 'cline', model: 'anthropic/claude-sonnet-5.5' });
+  for (const id of [DEFAULTS.chatModel, 'anthropic/claude-opus-5.5', 'openrouter/auto', 'opencode', 'cline/', '']) assert.equal(sourceOf(id), null, id);
+  assert.ok(SECRET_FILES.some((f) => f.endsWith(path.join('data', 'sources.json'))), 'the file tools never read the source keys');
+});
+
+test('a failed source call falls back to the same model on OpenRouter, else the chosen one, and never to a source model', () => {
+  const or = [{ id: 'z-ai/glm-5.3', tools: true }, { id: 'z-ai/glm-5.3:free', tools: true }, { id: 'anthropic/claude-sonnet-4.5', tools: true }, { id: 'moonshotai/kimi-k3', tools: true }, { id: DEFAULTS.chatModel, tools: true }];
+  assert.equal(sameOnOpenRouter('opencode-go/glm-5.3', or, goInfo()), 'z-ai/glm-5.3', 'the catalogue’s vendor name maps to OpenRouter’s');
+  assert.equal(sameOnOpenRouter('opencode/claude-sonnet-4-5', or, { canonical: 'anthropic/claude-sonnet-4-5' }), 'anthropic/claude-sonnet-4.5', 'dashes and dots are the same version');
+  assert.equal(sameOnOpenRouter('cline/moonshotai/kimi-k3', or), 'moonshotai/kimi-k3', 'Cline ids are OpenRouter’s');
+  assert.equal(sameOnOpenRouter('opencode-go/mimo-v2.6-pro', or, {}), null);
+  const list = [...or, goInfo()];
+  assert.equal(sourceFallbackFor('opencode-go/glm-5.3', {}, list), 'z-ai/glm-5.3');
+  assert.equal(sourceFallbackFor('opencode-go/mimo-v2.6-pro', { sourceFallbackModel: 'moonshotai/kimi-k3' }, list), 'moonshotai/kimi-k3');
+  assert.equal(sourceFallbackFor('opencode-go/mimo-v2.6-pro', { model: 'anthropic/claude-sonnet-4.5' }, list), 'anthropic/claude-sonnet-4.5', 'else the default chat model');
+  assert.equal(sourceFallbackFor('opencode-go/mimo-v2.6-pro', { model: 'cline/x/y', sourceFallbackModel: 'opencode/z' }, list), DEFAULTS.chatModel, 'never a source model');
+  assert.equal(sourceFallbackFor('opencode-go/glm-5.3', { sourceFallback: 'model', sourceFallbackModel: 'moonshotai/kimi-k3' }, list), 'moonshotai/kimi-k3');
+  assert.equal(sourceFallbackFor('opencode-go/glm-5.3', { sourceFallback: 'off' }, list), null);
+});
+
+test('the Anthropic format gets alternating turns, ids it accepts, every result, and thinking only with its own signature', () => {
+  const info = { realId: 'claude-x', source: 'opencode', reasoning: true, reasoningOptions: [{ type: 'budget_tokens', min: 1024 }] };
+  const a = toAnthropic(CONV, info);
+  assert.equal(a.system[0].text, 'Rules.');
+  assert.deepEqual(a.messages.map((m) => m.role), ['user', 'assistant', 'user'], 'the results and the note share one user turn');
+  assert.equal(a.messages[0].content[1].source.media_type, 'image/png');
+  assert.equal(a.messages[1].content[1].id, 'functions_write_file_0');
+  assert.deepEqual(a.messages[2].content.map((b) => b.type), ['tool_result', 'tool_result', 'text']);
+  assert.equal(a.messages[2].content[0].tool_use_id, 'functions_write_file_0');
+  assert.equal(a.thinking, undefined, 'the last tool call has no signed thinking (it came from elsewhere), so no thinking');
+  assert.equal(a.temperature, undefined, 'no temperature in this format (newer models refuse it)');
+  assert.deepEqual(a.tool_choice, { type: 'auto' });
+  assert.deepEqual(toAnthropic({ ...CONV, tool_choice: { type: 'function', function: { name: 'write_file' } } }, info).tool_choice, { type: 'auto' }, 'a forced tool is left to the model');
+  assert.deepEqual(a.tools[0].input_schema.required, ['path']);
+  const signed = structuredClone(CONV);
+  signed.messages[2].qx_pass = { source: 'opencode', model: 'claude-x', anthropic: [{ type: 'thinking', thinking: 'plan', signature: 'sig' }] };
+  const b = toAnthropic(signed, info);
+  assert.equal(b.messages[1].content[0].type, 'thinking', 'the signed thinking goes first');
+  assert.equal(b.thinking.budget_tokens, 3000);
+  assert.equal(b.temperature, undefined, 'no temperature with thinking');
+  assert.equal(toAnthropic(signed, { ...info, realId: 'claude-y' }).messages[1].content[0].type, 'text', 'another model’s signature is never sent');
+  assert.match(JSON.stringify(toAnthropic({ ...CONV, messages: CONV.messages.slice(0, 3) }, info).messages.at(-1)), /the call was not run/, 'a call cut off part-way still gets a result');
+  // A model that takes effort levels thinks adaptively at the nearest one; its own turn goes back as it wrote it.
+  const own = structuredClone(CONV);
+  own.messages[2].qx_pass = { source: 'opencode', model: 'claude-x', anthropicContent: [{ type: 'thinking', thinking: 'a', signature: 's1' }, { type: 'tool_use', id: 'functions.write_file:0', name: 'write_file', input: { path: 'a.js' } }, { type: 'thinking', thinking: 'b', signature: 's2' }, { type: 'tool_use', id: 'call_2', name: 'write_file', input: { path: 'b.js' } }] };
+  const c = toAnthropic({ ...own, reasoning: { effort: 'high' } }, { realId: 'claude-x', source: 'opencode', reasoning: true, reasoningOptions: [{ type: 'effort', values: ['low', 'xhigh', 'max'] }] });
+  assert.deepEqual([c.thinking, c.output_config], [{ type: 'adaptive' }, { effort: 'xhigh' }], 'the nearest level it takes');
+  assert.deepEqual(c.messages[1].content.map((x) => x.type), ['thinking', 'tool_use', 'thinking', 'tool_use'], 'in the order the model wrote it');
+  assert.equal(c.messages[1].content[1].id, 'functions_write_file_0');
+  assert.equal(toAnthropic({ ...own, reasoning: { enabled: false } }, info).messages[1].content[0].type, 'thinking', 'its own thinking stays even when this call asks for none');
+});
+
+test('the Gemini, Responses and chat formats each get the conversation in their own shape', () => {
+  const g = toGoogle({ ...CONV, reasoning: { effort: 'low' } }, { realId: 'gemini-x', source: 'opencode', reasoning: true, reasoningOptions: [{ type: 'effort', values: ['low', 'high'] }] });
+  assert.equal(g.systemInstruction.parts[0].text, 'Rules.');
+  assert.deepEqual(g.contents.map((c) => c.role), ['user', 'model', 'user']);
+  assert.equal(g.contents[1].parts[1].functionCall.name, 'write_file');
+  assert.equal(g.contents[1].parts[1].thoughtSignature, 'skip_thought_signature_validator', 'a call from elsewhere gets the documented stand-in');
+  assert.equal(g.contents[2].parts[0].functionResponse.name, 'write_file', 'a result names the function it answers');
+  assert.equal(g.tools[0].functionDeclarations[0].parameters.type, 'OBJECT');
+  assert.equal(g.tools[0].functionDeclarations[0].parameters.additionalProperties, undefined, 'keys Gemini refuses are dropped');
+  assert.deepEqual(g.generationConfig.thinkingConfig, { includeThoughts: true, thinkingLevel: 'low' });
+  assert.deepEqual(googleSchema({ type: ['string', 'null'] }), { type: 'STRING', nullable: true });
+  assert.deepEqual(googleSchema({ anyOf: [{ type: 'null' }, { type: 'integer' }], description: 'n' }), { type: 'INTEGER', description: 'n' });
+  assert.deepEqual(googleSchema({ type: 'object', properties: { opts: { type: 'object', description: 'Options' } } }).properties.opts, { type: 'STRING', description: 'Options (a JSON object, as text)' }, 'Gemini refuses an object with no properties');
+  const bare = toGoogle({ ...CONV, tools: [{ type: 'function', function: { name: 'list_files', parameters: { type: 'object', properties: {} } } }] }, {});
+  assert.equal('parameters' in bare.tools[0].functionDeclarations[0], false, 'a tool with no parameters sends none');
+  assert.match(JSON.stringify(toGoogle({ ...CONV, messages: CONV.messages.slice(0, 3) }, {}).contents.at(-1)), /the call was not run/);
+  assert.match(JSON.stringify(toResponses({ ...CONV, messages: CONV.messages.slice(0, 3) }, {}).input.at(-1)), /the call was not run/);
+
+  const r = toResponses({ ...CONV, reasoning: { effort: 'medium' } }, { realId: 'gpt-x', reasoning: true, reasoningOptions: [{ type: 'effort', values: ['none', 'low', 'medium', 'high'] }] }, { session: 'ses_1' });
+  assert.equal(r.instructions, 'Rules.');
+  assert.deepEqual(r.input.map((x) => x.type || x.role), ['user', 'assistant', 'function_call', 'function_call', 'function_call_output', 'function_call_output', 'user']);
+  assert.deepEqual(r.reasoning, { effort: 'medium', summary: 'auto' });
+  assert.equal(r.prompt_cache_key, 'ses_1');
+  assert.equal(r.store, false);
+
+  const msgs = structuredClone(CONV.messages);
+  Object.assign(msgs[2], { reasoning_details: [{ type: 'reasoning.text', text: 'r' }], qx_pass: { source: 'opencode-go', model: 'glm-5.3', thinking: 'I will write a.js' } });
+  msgs.push({ role: 'assistant', content: 'From OpenRouter.' });
+  const c = toChat({ ...CONV, messages: msgs, provider: { ignore: ['x'] }, models: ['a', 'b'], usage: { include: true }, reasoning: { effort: 'low' } }, goInfo({ temp: false }));
+  assert.equal(c.model, 'glm-5.3');
+  for (const k of ['provider', 'models', 'usage', 'reasoning', 'temperature']) assert.equal(c[k], undefined, k);
+  assert.deepEqual(c.stream_options, { include_usage: true }, 'without it the gateway sends no cost');
+  assert.equal(c.reasoning_effort, 'high', 'the nearest effort the model takes');
+  const asst = c.messages.filter((m) => m.role === 'assistant');
+  assert.equal(asst[0].reasoning_content, 'I will write a.js', 'its own reasoning goes back');
+  assert.equal(asst[1].reasoning_content, '', 'every assistant turn carries the field, empty when it came from elsewhere');
+  assert.equal(asst[0].qx_pass, undefined);
+  assert.equal(asst[0].reasoning_details, undefined);
+  const cl = toChat({ ...CONV, reasoning: { effort: 'low' } }, { realId: 'x/y' }, { openrouterLike: true });
+  assert.deepEqual([cl.reasoning, cl.usage], [{ effort: 'low' }, { include: true }], 'Cline takes OpenRouter’s own extras');
+});
+
+test('a source call streams like OpenRouter: text, reasoning, tool calls and its own cost, sent with QuorX’s own headers', async () => {
+  setSourceKey('opencode-go', SRC_KEY);
+  const gw = await gateway([{ body: srcSse(
+    { id: 'g1', choices: [{ delta: { role: 'assistant', reasoning_content: 'Plan: write a.js. ' } }] },
+    { choices: [{ delta: { content: 'Writing it.' } }] },
+    { choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_a', type: 'function', function: { name: 'write_file', arguments: '{"path":' } }] } }] },
+    { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '"a.js"}' } }] }, finish_reason: 'tool_calls' }] },
+    { choices: [], usage: { prompt_tokens: 1200, completion_tokens: 40, cost: 0, opencode: { billing_source: 'go', allowance: 0.0021, list_cost: 0.0021 } } },
+    '[DONE]') }]);
+  try {
+    const texts = [];
+    const r = await sourceStream({ model: 'opencode-go/glm-5.3', max_tokens: 4000, messages: [{ role: 'user', content: 'hi' }] }, new AbortController().signal, (t) => texts.push(t), null, { info: goInfo({ api: gw.url }), session: 'ses_test' });
+    assert.deepEqual([r.text, texts, r.thinking], ['Writing it.', ['Writing it.'], 'Plan: write a.js. ']);
+    assert.deepEqual(r.toolCalls.map((x) => [x.id, x.function.name, x.function.arguments]), [['call_a', 'write_file', '{"path":"a.js"}']]);
+    assert.deepEqual([r.usage.cost, r.usage.plan_cost], [0, 0.0021], 'the plan pays; what it counted against the plan is kept');
+    assert.deepEqual([r.provider, r.model, r.source], ['OpenCode Go', 'opencode-go/glm-5.3', 'opencode-go']);
+    assert.deepEqual(r.passBack, { thinking: 'Plan: write a.js. ', source: 'opencode-go', model: 'glm-5.3' });
+    const { url, headers } = gw.seen[0];
+    assert.equal(url, '/v1/chat/completions');
+    assert.equal(headers.authorization, `Bearer ${SRC_KEY}`);
+    assert.match(headers['user-agent'], /^QuorX\//, 'its own name, never another app’s');
+    assert.equal(headers['x-opencode-session'], 'ses_test');
+  } finally { await gw.close(); removeSourceKey('opencode-go'); forgetSourceHealth(); }
+});
+
+test('an answer QuorX can’t read, a refused key or a used-up plan fails cleanly with its kind, so the agent can fall back', async () => {
+  setSourceKey('opencode', SRC_KEY);
+  const gw = await gateway([
+    { type: 'text/html', body: '<!doctype html><title>Just a moment…</title>' },
+    { body: 'event: ping\n\n' },
+    { type: 'application/json', body: JSON.stringify({ choices: [{ message: { content: 'whole answer' }, finish_reason: 'stop' }], usage: { prompt_tokens: 5, completion_tokens: 2 } }) },
+    { status: 401, type: 'application/json', body: JSON.stringify({ type: 'error', error: { type: 'AuthError', message: 'Invalid API key.' } }) },
+    { status: 429, type: 'application/json', headers: { 'retry-after': '3600' }, body: JSON.stringify({ type: 'error', error: { type: 'GoUsageLimitError', message: '5-hour usage limit reached.' } }) },
+    { status: 503, type: 'application/json', body: '{"error":{"message":"overloaded"}}' },
+    { body: srcSse({ choices: [{ delta: { content: 'back' }, finish_reason: 'stop' }] }, { choices: [], usage: { prompt_tokens: 1, completion_tokens: 1, cost: 0.00001 } }) },
+  ]);
+  const info = { id: 'opencode/glm-x', realId: 'glm-x', source: 'opencode', format: 'chat', api: gw.url, cost: { input: 1, output: 2 }, plan: 'paid' };
+  const call = () => sourceStream({ model: 'opencode/glm-x', max_tokens: 100, messages: [{ role: 'user', content: 'hi' }] }, new AbortController().signal, null, null, { info });
+  try {
+    let e = await call().catch((x) => x);
+    assert.deepEqual([failureKind(e), /web page/.test(e.message)], ['shape', true], 'a CDN page is not an answer');
+    e = await call().catch((x) => x);
+    assert.deepEqual([failureKind(e), /nothing QuorX could read/.test(e.message)], ['shape', true], 'a stream with nothing in it');
+    const whole = await call();
+    assert.equal(whole.text, 'whole answer', 'an answer that came back whole is read too');
+    assert.ok(whole.usage.cost > 0 && whole.usage.estimated_cost, 'no cost from the source: priced from the catalogue');
+    e = await call().catch((x) => x);
+    assert.deepEqual([failureKind(e), e.errorType], ['auth', 'AuthError']);
+    e = await call().catch((x) => x);
+    assert.deepEqual([failureKind(e), e.retryAfter], ['quota', 3600]);
+    assert.equal(gw.seen.length, 5, 'none of these is tried twice');
+    const back = await call();
+    assert.equal(back.text, 'back', 'a server error gets one quick retry');
+    assert.equal(gw.seen.length, 7);
+  } finally { await gw.close(); removeSourceKey('opencode'); forgetSourceHealth(); }
+});
+
+test('Anthropic, Responses and Gemini streams read back into the same result, with signatures kept for the next step', async () => {
+  setSourceKey('opencode', SRC_KEY);
+  const gw = await gateway([
+    { body: srcSse(
+      { type: 'message_start', message: { id: 'm1', model: 'claude-x', usage: { input_tokens: 100, cache_read_input_tokens: 900, cache_creation_input_tokens: 0, output_tokens: 1 } } },
+      { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'Write a.js.' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature: 'sig1' } },
+      { type: 'content_block_stop', index: 0 },
+      { type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } },
+      { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'On it.' } },
+      { type: 'content_block_start', index: 2, content_block: { type: 'tool_use', id: 'toolu_1', name: 'write_file', input: {} } },
+      { type: 'content_block_delta', index: 2, delta: { type: 'input_json_delta', partial_json: '{"path":' } },
+      { type: 'content_block_delta', index: 2, delta: { type: 'input_json_delta', partial_json: '"a.js"}' } },
+      { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 50, cost: 0.0012 } },
+      { type: 'message_stop' }) },
+    { body: srcSse(
+      { type: 'response.created', response: { id: 'r1', model: 'gpt-x' } },
+      { type: 'response.reasoning_summary_text.delta', delta: 'Think.' },
+      { type: 'response.output_text.delta', delta: 'Hi.' },
+      { type: 'response.output_item.added', item: { type: 'function_call', id: 'fc1', call_id: 'call_9', name: 'list_files', arguments: '' } },
+      { type: 'response.function_call_arguments.delta', item_id: 'fc1', delta: '{}' },
+      { type: 'response.completed', response: { model: 'gpt-x', usage: { input_tokens: 10, output_tokens: 5, input_tokens_details: { cached_tokens: 4 }, cost: 0.0001 } } }) },
+    { body: srcSse({ candidates: [{ content: { role: 'model', parts: [{ text: 'Thinking…', thought: true }, { text: 'Sure.' }, { functionCall: { name: 'list_files', args: { path: '.' } }, thoughtSignature: 'gsig' }] }, finishReason: 'STOP' }], usageMetadata: { promptTokenCount: 20, candidatesTokenCount: 6, thoughtsTokenCount: 4 }, usage: { cost: 0.00002 } }) },
+  ]);
+  const go = (model, format) => sourceStream({ model: `opencode/${model}`, max_tokens: 2000, messages: [{ role: 'user', content: 'hi' }] }, new AbortController().signal, null, null, { info: { realId: model, source: 'opencode', format, api: gw.url, plan: 'paid', cost: {} } });
+  const calls = (r) => r.toolCalls.map((x) => [x.function.name, x.function.arguments]);
+  try {
+    const a = await go('claude-x', 'anthropic');
+    assert.equal(gw.seen[0].url, '/v1/messages');
+    assert.deepEqual([gw.seen[0].headers['x-api-key'], gw.seen[0].headers['anthropic-version']], [SRC_KEY, '2023-06-01']);
+    assert.deepEqual([a.text, a.thinking, a.finishReason, calls(a)], ['On it.', 'Write a.js.', 'tool_calls', [['write_file', '{"path":"a.js"}']]]);
+    assert.deepEqual([a.usage.prompt_tokens, a.usage.prompt_tokens_details.cached_tokens, a.usage.cost], [1000, 900, 0.0012]);
+    assert.deepEqual(a.passBack.anthropicContent, [{ type: 'thinking', thinking: 'Write a.js.', signature: 'sig1' }, { type: 'text', text: 'On it.' }, { type: 'tool_use', id: 'toolu_1', name: 'write_file', input: { path: 'a.js' } }], 'the whole turn, in order');
+    const r = await go('gpt-x', 'responses');
+    assert.equal(gw.seen[1].url, '/v1/responses');
+    assert.deepEqual([r.text, r.thinking, r.finishReason, calls(r), r.toolCalls[0].id, r.usage.cost], ['Hi.', 'Think.', 'tool_calls', [['list_files', '{}']], 'call_9', 0.0001]);
+    const g = await go('gemini-x', 'google');
+    assert.equal(gw.seen[2].url, '/v1/models/gemini-x:streamGenerateContent?alt=sse');
+    assert.equal(gw.seen[2].headers['x-goog-api-key'], SRC_KEY);
+    assert.deepEqual([g.text, g.thinking, g.finishReason, calls(g), g.usage.completion_tokens, g.usage.cost], ['Sure.', 'Thinking…', 'tool_calls', [['list_files', '{"path":"."}']], 10, 0.00002]);
+    assert.equal(g.passBack.gemini.calls[g.toolCalls[0].id], 'gsig');
+  } finally { await gw.close(); removeSourceKey('opencode'); forgetSourceHealth(); }
+});
+
+test('a Cline call sends OpenRouter’s extras and QuorX’s name, and an error inside the stream fails the call', async () => {
+  setSourceKey('cline', 'cline_test_0123456789');
+  const gw = await gateway([{ body: srcSse({ choices: [{ delta: { content: 'par' } }] }, { choices: [{ finish_reason: 'error', error: { code: 'rate_limit', message: 'Rate limit exceeded' } }] }) }]);
+  try {
+    const e = await sourceStream({ model: 'cline/anthropic/claude-sonnet-5.5', max_tokens: 100, messages: [{ role: 'user', content: 'hi' }] }, new AbortController().signal, () => {}, null, { info: { realId: 'anthropic/claude-sonnet-5.5', source: 'cline', format: 'chat', api: gw.url, plan: 'paid', cost: {} } }).catch((x) => x);
+    assert.equal(failureKind(e), 'rate');
+    assert.equal(gw.seen.length, 1, 'text had reached the page, so no retry: the agent falls back');
+    const { headers, body } = gw.seen[0];
+    assert.deepEqual([headers['x-title'], headers['x-opencode-session'], body.model], ['QuorX', undefined, 'anthropic/claude-sonnet-5.5']);
+    assert.deepEqual([body.usage, body.stream_options], [{ include: true }, { include_usage: true }]);
+  } finally { await gw.close(); removeSourceKey('cline'); forgetSourceHealth(); }
+});
+
+test('a failing source is skipped by other calls for a while: a refused key until it changes, a missing model only for that model', () => {
+  forgetSourceHealth();
+  setSourceKey('opencode-go', 'oc_sk_test_aaaaaaaaaa');
+  const now = Date.now(), err = (o) => Object.assign(new Error(o.m || ''), o);
+  noteSourceResult('opencode-go', 'opencode-go/glm-5.3', err({ status: 401, m: 'bad key' }), { now });
+  assert.match(sourceSkip('opencode-go', 'opencode-go/kimi-k3', now + 1000), /refused its key/);
+  setSourceKey('opencode-go', 'oc_sk_test_bbbbbbbbbb');
+  assert.equal(sourceSkip('opencode-go', 'opencode-go/kimi-k3', now + 1000), '', 'a new key is tried at once');
+  noteSourceResult('opencode-go', 'opencode-go/glm-5.3', err({ status: 404, m: 'Model not found' }), { now });
+  assert.match(sourceSkip('opencode-go', 'opencode-go/glm-5.3', now + 1000), /does not have that model/);
+  assert.equal(sourceSkip('opencode-go', 'opencode-go/kimi-k3', now + 1000), '', 'other models still go');
+  noteSourceResult('opencode-go', 'opencode-go/kimi-k3', null);
+  noteSourceResult('opencode-go', null, err({ m: 'fetch failed', cause: { code: 'ECONNREFUSED' } }), { now });
+  assert.match(sourceSkip('opencode-go', 'opencode-go/kimi-k3', now + 1000), /could not be reached/);
+  assert.equal(sourceSkip('opencode-go', 'opencode-go/kimi-k3', now + 25e3), '', 'tried again after a short while');
+  const k = (o) => failureKind(err(o));
+  assert.deepEqual([k({ status: 402 }), k({ status: 429, m: 'Free usage limit reached.' }), k({ status: 429 }), k({ status: 503 }), k({ status: 400, m: 'bad' }), k({ name: 'TimeoutError' }), k({ errorType: 'insufficient_credits' }), k({ kind: 'shape' })],
+    ['quota', 'quota', 'rate', 'server', 'request', 'timeout', 'quota', 'shape']);
+  removeSourceKey('opencode-go'); forgetSourceHealth();
+});
+
+test('a source call costs what the source says, else its tokens at list price (context tiers too); a plan model costs nothing per call', () => {
+  assert.deepEqual(sourcePriced({ plan: 'paid', cost: { input: 2, output: 10 } }, { cost: 0.5 }), { cost: 0.5 });
+  const cost = { input: 2, output: 10, cache_read: 0.2, tiers: [{ input: 4, output: 15, cache_read: 0.4, tier: { type: 'context', size: 200000 } }] };
+  const est = sourcePriced({ plan: 'paid', cost }, { prompt_tokens: 1000, completion_tokens: 100, prompt_tokens_details: { cached_tokens: 500 } });
+  assert.ok(Math.abs(est.cost - (500 * 2 + 500 * 0.2 + 100 * 10) / 1e6) < 1e-12 && est.estimated_cost);
+  assert.ok(Math.abs(sourcePriced({ plan: 'paid', cost }, { prompt_tokens: 300000, completion_tokens: 0 }).cost - 1.2) < 1e-9, 'past 200k tokens the higher tier applies');
+  assert.deepEqual(sourcePriced({ plan: 'plan', cost: { input: 1.4, output: 4.4 } }, { prompt_tokens: 1000, completion_tokens: 0, cost: 0, opencode: { allowance: 0.0014 } }), { cost: 0, plan_cost: 0.0014 });
+  assert.equal(sourcePriced({ plan: 'plan', cost: { input: 1.4, output: 4.4 } }, { prompt_tokens: 1000, completion_tokens: 0, cost: 0.0014 }).cost, 0.0014, 'usage billed to credit past the plan counts');
+});
+
+test('the pickers list OpenCode and Cline models only once switched on, never the free ones, and not the ones a gateway dropped', async () => {
+  const md = (id, o = {}) => ({ id, name: id, tool_call: true, cost: { input: 1, output: 2 }, limit: { context: 1e6, output: 64000 }, modalities: { input: ['text'], output: ['text'] }, ...o });
+  const dev = async () => ({
+    opencode: { api: 'https://x/openai/v1', npm: '@ai-sdk/openai-compatible', models: { 'glm-5.3': md('glm-5.3', { cost: { input: 1.4, output: 4.4 }, modalities: { input: ['text', 'image', 'pdf'], output: ['text'] }, interleaved: { field: 'reasoning_content' } }), 'big-pickle': md('big-pickle', { cost: { input: 0, output: 0 } }), 'claude-x': md('claude-x', { provider: { npm: '@ai-sdk/anthropic', api: 'https://opencode.ai/inference/anthropic/v1' } }), 'odd-host': md('odd-host', { provider: { api: 'https://evil.example/v1' } }), 'gone-1': md('gone-1'), 'no-tools': md('no-tools', { tool_call: false }) } },
+    'opencode-go': { api: 'https://x/go/openai/v1', models: { 'kimi-k3': md('kimi-k3') } },
+  });
+  const fetchJSON = async (url) => {
+    if (/inference\/v1\/models/.test(url)) return { data: ['glm-5.3', 'big-pickle', 'claude-x', 'odd-host', 'a', 'b', 'c'].map((id) => ({ id })) };
+    if (/cline/.test(url)) return { data: [{ id: 'anthropic/claude-sonnet-5.5', pricing: { prompt: '0.000002', completion: '0.00001' }, supported_parameters: ['tools', 'reasoning'], context_length: 1e6 }, { id: 'reflection/beam-free', pricing: { prompt: '0', completion: '0' } }, { id: 'cline-pass/glm-5.3', pricing: { prompt: '0.0000014', completion: '0.0000044' }, supported_parameters: ['tools'] }, { id: 'x/y:batch', pricing: {} }] };
+    throw new Error('offline');
+  };
+  try {
+    assert.deepEqual(await sourceModels({ refresh: true, dev, fetchJSON }), [], 'nothing switched on, nothing listed');
+    setSourceKey('opencode', SRC_KEY); setSourceKey('cline', 'cline_test_0123456789');
+    const l = await sourceModels({ refresh: true, dev, fetchJSON });
+    assert.deepEqual(l.map((m) => m.id).sort(), ['cline/anthropic/claude-sonnet-5.5', 'cline/cline-pass/glm-5.3', 'opencode/claude-x', 'opencode/glm-5.3', 'opencode/odd-host'], 'OpenCode Go got the key too, but stays off until switched on');
+    const by = Object.fromEntries(l.map((m) => [m.id, m]));
+    assert.deepEqual([by['opencode/glm-5.3'].format, by['opencode/glm-5.3'].interleaved, by['opencode/glm-5.3'].in, by['opencode/glm-5.3'].price], ['chat', 'reasoning_content', ['text', 'image'], [1.4, 4.4]]);
+    assert.deepEqual([by['opencode/claude-x'].format, by['opencode/claude-x'].api], ['anthropic', 'https://opencode.ai/inference/anthropic/v1']);
+    assert.equal(by['opencode/odd-host'].api, 'https://opencode.ai/inference/openai/v1', 'a key never goes to a host the catalogue names outside opencode.ai');
+    assert.deepEqual([by['cline/cline-pass/glm-5.3'].plan, by['cline/cline-pass/glm-5.3'].price], ['plan', [0, 0]]);
+    assert.deepEqual(by['cline/anthropic/claude-sonnet-5.5'].price, [2, 10]);
+  } finally { removeSourceKey('opencode'); removeSourceKey('opencode-go'); removeSourceKey('cline'); primeSources([]); }
+});
+
+test('the key OpenCode keeps can be copied in on request: an API key only, never a sign-in', () => {
+  const dir = tempDir('quorx-oc-'), old = process.env.XDG_DATA_HOME, file = path.join(dir, 'opencode', 'auth.json');
+  process.env.XDG_DATA_HOME = dir;
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ anthropic: { type: 'oauth', access: 'x', refresh: 'y' } }));
+    assert.throws(() => importOpenCodeKey('opencode-go'), /no API key/);
+    fs.writeFileSync(file, JSON.stringify({ 'opencode-go': { type: 'api', key: 'oc_sk_from_opencode_123' }, anthropic: { type: 'oauth' } }));
+    importOpenCodeKey('opencode-go');
+    assert.deepEqual(keyFor('opencode-go'), { key: 'oc_sk_from_opencode_123', from: 'opencode' });
+    assert.equal(keyFor('opencode')?.key, 'oc_sk_from_opencode_123', 'one OpenCode key serves both');
+    assert.throws(() => importOpenCodeKey('cline'), /Only OpenCode keys/);
+    assert.throws(() => setSourceKey('cline', 'sk-or-v1-abcdefabcdef'), /OpenRouter key/);
+  } finally { if (old == null) delete process.env.XDG_DATA_HOME; else process.env.XDG_DATA_HOME = old; removeSourceKey('opencode-go'); removeSourceKey('opencode'); }
+});
+
+test('an OpenCode call that fails part-way falls back to the same model on OpenRouter for that step, and the chat carries on', async () => {
+  const calls = [];
+  const sourceStream = async (body, sig, onText) => {
+    calls.push(structuredClone(body));
+    if (calls.length === 1) { onText?.('Let me'); throw Object.assign(new Error('upstream exploded'), { status: 502 }); }
+    return srcReply('Done on Go.');
+  };
+  const { events, bodies, done } = await run((body, i) => [reply('', [['write_file', { path: 'a.txt', content: 'a' }]])][i], { setup: { model: 'opencode-go/glm-5.3' }, catalogue: SRC_CAT, sourceStream });
+  assert.equal(bodies.length, 1, 'OpenRouter answered one step');
+  assert.equal(bodies[0].model, 'z-ai/glm-5.3');
+  assert.equal(calls.length, 2, 'the next step went back to the source');
+  const fb = of(events, 'source_fallback');
+  assert.deepEqual(fb.map((e) => [e.from, e.to, e.kind, e.role, e.step, e.rest]), [['opencode-go/glm-5.3', 'z-ai/glm-5.3', 'server', 'writer', 0, false]]);
+  assert.ok(events.indexOf(events.find((e) => e.t === 'token' && e.text === 'Let me')) < events.indexOf(fb[0]), 'the page moves the cut-off text aside');
+  const done2 = of(events, 'llm_done');
+  assert.deepEqual([done2[0].model, done2[0].fellBackFrom, done2[1].model, done2[1].source, done2[1].planCost], ['z-ai/glm-5.3', 'opencode-go/glm-5.3', 'opencode-go/glm-5.3', 'opencode-go', 0.002]);
+  assert.ok(of(events, 'note').some((n) => /used glm-5\.3 on OpenRouter instead/.test(n.msg)));
+  assert.equal(done.reply, 'Done on Go.');
+  assert.deepEqual([done.stats.byModel['z-ai/glm-5.3'].calls, done.stats.byModel['opencode-go/glm-5.3'].calls], [1, 1], 'each call is counted on the model that answered');
+});
+
+test('a source that refuses its key is skipped for the rest of the reply, and says so once', async () => {
+  let n = 0;
+  const sourceStream = async () => { n++; throw Object.assign(new Error('Invalid API key.'), { status: 401 }); };
+  const { events, done } = await run((body, i) => [reply('', [['write_file', { path: 'a.txt', content: 'a' }]]), reply('Done on OpenRouter.')][i], { setup: { model: 'opencode-go/glm-5.3' }, catalogue: SRC_CAT, sourceStream });
+  assert.equal(n, 1, 'tried once');
+  assert.deepEqual(of(events, 'source_fallback').map((e) => [e.kind, e.rest]), [['auth', true], ['skipped', true]]);
+  assert.equal(of(events, 'note').filter((x) => /refused its key/.test(x.msg)).length, 1);
+  assert.equal(done.reply, 'Done on OpenRouter.');
+});
+
+test('two failures in one reply keep the rest of it on OpenRouter, and an answer that isn’t one counts as a failure', async () => {
+  let n = 0;
+  const sourceStream = async () => { n++; return n === 1 ? undefined : { text: 'x' }; }; // nothing, then no toolCalls list
+  const { events, done } = await run((body, i) => [reply('', [['write_file', { path: 'a.txt', content: 'a' }]]), reply('', [['write_file', { path: 'b.txt', content: 'b' }]]), reply('Done.')][i], { setup: { model: 'opencode-go/glm-5.3' }, catalogue: SRC_CAT, sourceStream });
+  assert.equal(n, 2);
+  assert.deepEqual(of(events, 'source_fallback').map((e) => [e.kind, e.rest]), [['shape', false], ['shape', true], ['skipped', true]]);
+  assert.equal(done.reply, 'Done.');
+});
+
+test('with the fallback off, a failed source call stops the reply and says why, keeping the work done, and nothing goes to OpenRouter', async () => {
+  let n = 0;
+  const sourceStream = async () => { if (++n === 1) return srcReply('', [['write_file', { path: 'a.txt', content: 'a' }]]); throw Object.assign(new Error('5-hour usage limit reached.'), { status: 429, errorType: 'GoUsageLimitError' }); };
+  const never = () => { throw new Error('OpenRouter must not be called'); };
+  const { events, dir, done } = await run(never, { setup: { model: 'opencode-go/glm-5.3' }, catalogue: SRC_CAT, sourceStream, settings: { sourceFallback: 'off' } });
+  assert.ok(fs.existsSync(path.join(dir, 'a.txt')), 'the work done is kept');
+  assert.match(done.reply, /out of credit or plan usage/);
+  assert.equal(of(events, 'source_fallback').length, 0);
+  const err = await run(never, { setup: { model: 'opencode-go/glm-5.3' }, catalogue: SRC_CAT, settings: { sourceFallback: 'off' }, sourceStream: async () => { throw Object.assign(new Error('down'), { status: 503 }); } }).catch((e) => e);
+  assert.match(err.message, /didn't switch to OpenRouter/, 'failing at once, the reply ends with why');
+});
+
+test('a source model gets its own reasoning back on its next step, and OpenRouter never does', async () => {
+  const calls = [];
+  const sourceStream = async (body) => {
+    calls.push(structuredClone(body));
+    if (calls.length === 1) return srcReply('', [['write_file', { path: 'a.txt', content: 'a' }]], { passBack: { thinking: 'plan', source: 'opencode-go', model: 'glm-5.3' } });
+    if (calls.length === 2) throw Object.assign(new Error('boom'), { status: 500 });
+    return srcReply('Done.');
+  };
+  const { bodies, done } = await run((body, i) => [reply('', [['write_file', { path: 'b.txt', content: 'b' }]])][i], { setup: { model: 'opencode-go/glm-5.3' }, catalogue: SRC_CAT, sourceStream });
+  assert.equal(done.reply, 'Done.');
+  assert.ok(!JSON.stringify(bodies[0].messages).includes('qx_pass'), 'the fallback call carries no pass-back');
+  assert.equal(calls[2].messages.find((m) => m.role === 'assistant').qx_pass.thinking, 'plan');
+});
+
+test('a summary or brief on a source model falls back to OpenRouter when the source fails', async () => {
+  forgetSourceHealth();
+  let seen = null;
+  const orChat = async (b) => { seen = b; return { message: { content: 'summary' }, usage: { cost: 0.001 }, ms: 1 }; };
+  const r = await chatAny({ model: 'opencode-go/glm-5.3', messages: [{ role: 'user', content: 'sum' }, { role: 'assistant', content: 'x', qx_pass: { thinking: 'y' } }] }, undefined,
+    { orChat, stream: async () => { throw Object.assign(new Error('down'), { status: 503 }); }, fallback: async () => 'z-ai/glm-5.3' });
+  assert.deepEqual([r.model, r.fellBack, r.message.content, seen.model, 'qx_pass' in seen.messages[1]], ['z-ai/glm-5.3', true, 'summary', 'z-ai/glm-5.3', false]);
+  let asked = 0;
+  const stream = async () => { asked++; return srcReply('from Go'); };
+  const soon = await chatAny({ model: 'opencode-go/glm-5.3', messages: [{ role: 'user', content: 'sum' }] }, undefined, { orChat, stream, fallback: async () => 'z-ai/glm-5.3' });
+  assert.deepEqual([soon.model, asked], ['z-ai/glm-5.3', 0], 'a source that just failed is not waited on again');
+  forgetSourceHealth();
+  const ok = await chatAny({ model: 'opencode-go/glm-5.3', messages: [{ role: 'user', content: 'sum' }] }, undefined, { orChat, stream, fallback: async () => 'z-ai/glm-5.3' });
+  assert.deepEqual([ok.model, ok.message.content, ok.fellBack], ['opencode-go/glm-5.3', 'from Go', undefined]);
+  forgetSourceHealth();
 });

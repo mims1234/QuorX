@@ -1430,6 +1430,8 @@ function rateModel(idOrModel, kind) {
   if (k === 'chat' || (!k && m?.tools !== undefined)) {
     if (m && !m.tools) return { r: 'r', why: 'Can\'t call tools, so in QuorX it can\'t write files, use the browser or check its work.' };
     if (/:free$|^openrouter\/free/.test(id)) return { r: 'r', why: 'Free tier: in our tests free models hit rate limits and provider errors and gave up.' };
+    if (m?.status === 'deprecated') return { r: 'r', why: `${SOURCE_NAME[m.source] || 'Its source'} marks it deprecated: it may stop answering soon (QuorX then falls back to OpenRouter).` };
+    if (m?.source) return { r: 'y', why: `Runs on your ${SOURCE_NAME[m.source]} account; not tested in QuorX yet. When a call fails there, that step falls back to OpenRouter.${m.plan === 'free' ? ' Free models may be rate limited.' : ''}${!(m.in || []).includes('image') ? ' It can\'t see screenshots (the deciders still can).' : ''}` };
     return { r: 'y', why: `Not tested in QuorX yet.${m && !(m.in || []).includes('image') ? ' It can\'t see screenshots (the deciders still can).' : ''}` };
   }
   if (k === 'decision') return { r: 'y', why: (m?.in || []).includes('image') ? 'Not tested here yet. Reads images, so it can do screenshot checks.' : 'Not tested here yet. Text only: it can\'t do screenshot checks.' };
@@ -1440,8 +1442,10 @@ function recDot(id, kind) {
   const r = rateModel(id, kind);
   return r ? `<span class="rec rec-${r.r}" title="${esc(`${REC_WORD[r.r]}: ${r.why}`)}" aria-label="${REC_WORD[r.r]}">${REC_ICON[r.r]}</span>` : '';
 }
-const shortPrice = (id) => { const m = G.byId.get(id); return m && m.kind === 'chat' ? `$${m.price[0].toFixed(2)}/$${m.price[1].toFixed(2)}` : ''; };
+const shortPrice = (id) => { const m = G.byId.get(id); return !m || m.kind !== 'chat' ? '' : m.plan === 'plan' ? `${SOURCE_SHORT[m.source] || ''} plan` : m.source && m.plan === 'free' ? 'free' : `$${m.price[0].toFixed(2)}/$${m.price[1].toFixed(2)}`; };
 function priceText(m, extra = {}) {
+  if (m.source && m.plan === 'plan') return `${SOURCE_NAME[m.source] || m.source} plan: nothing to pay per call (your subscription's usage limits apply) · list price $${(m.listPrice?.[0] || 0).toFixed(2)} in / $${(m.listPrice?.[1] || 0).toFixed(2)} out per M tokens`;
+  if (m.source && m.plan === 'free') return `Free on ${SOURCE_NAME[m.source] || m.source}: may be rate limited, and its provider may use prompts to improve the model`;
   if (m.kind === 'decision') return `$${m.price[0].toFixed(3)}/M in · output free`;
   if (m.kind === 'image') return m.perImage ? `$${m.perImage} per picture` : m.price[1] ? `≈ $${(m.price[1] * 15000 / 1e6).toFixed(3)} per 1K picture` : 'price unknown';
   if (m.kind === 'speech') return `$${m.price[0].toFixed(2)} per M characters · ≈ $${(m.price[0] * 500 / 1e6).toFixed(4)} per 500 chars`;
@@ -1467,7 +1471,8 @@ const KIND_TITLE = { chat: 'Chat model', decision: 'Decider model', image: 'Pict
 const KIND_NOTE = { chat: 'Models that can use tools (the agent needs them).', decision: 'Fast judges that answer yes/no, choice and score questions.', image: 'Text-to-picture models.', video: 'Text-to-video models.', music: 'Music models.', speech: 'Text-to-speech models.', listen: 'Chat models that accept audio (used for the mic).' };
 const SORTS = [['best', 'Recommended'], ['cheap', 'Cheapest'], ['pricey', 'Priciest'], ['new', 'Newest'], ['old', 'Oldest'], ['name', 'Name'], ['ctx', 'Largest context']];
 const FILTERS = [
-  ['free', 'Free', (m) => priceNum(m) === 0 || /:free$/.test(m.id)],
+  ['free', 'Free', (m) => (priceNum(m) === 0 || /:free$/.test(m.id)) && m.plan !== 'plan'],
+  ['plan', 'On a plan', (m) => m.plan === 'plan'],
   ['vision', '👁 Sees images', (m) => (m.in || []).includes('image') && m.kind !== 'image'],
   ['tools', '🧰 Uses tools', (m) => !!m.tools],
   ['reasoning', '🧠 Reasoning', (m) => !!m.reasoning],
@@ -1476,13 +1481,18 @@ const FILTERS = [
   ['fav', '★ Favourites', (m) => (G.favModels?.[m.kind] || []).includes(m.id)],
 ];
 const providerOf = (id) => String(id).replace(/^~/, '').split('/')[0] || 'other';
-const PROVIDER_NAME = (p) => ({ 'x-ai': 'xAI', openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google', 'meta-llama': 'Meta', mistralai: 'Mistral', deepseek: 'DeepSeek', qwen: 'Qwen', nvidia: 'NVIDIA', cohere: 'Cohere', inclusionai: 'inclusionAI', openrouter: 'OpenRouter', 'black-forest-labs': 'Black Forest Labs', elevenlabs: 'ElevenLabs' }[p] || p.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
+// OpenCode and Cline models (⚙ Settings → OpenCode & Cline) are the source, a slash, and that source's own id.
+const SOURCE_NAME = { opencode: 'OpenCode', 'opencode-go': 'OpenCode Go', cline: 'Cline' };
+const SOURCE_SHORT = { opencode: 'OpenCode', 'opencode-go': 'Go', cline: 'Cline' };
+const sourceOfId = (id) => { const s = String(id || ''), h = s.split('/')[0]; return SOURCE_NAME[h] && s.length > h.length + 1 ? h : null; };
+const PROVIDER_NAME = (p) => ({ 'x-ai': 'xAI', openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google', 'meta-llama': 'Meta', mistralai: 'Mistral', deepseek: 'DeepSeek', qwen: 'Qwen', nvidia: 'NVIDIA', cohere: 'Cohere', inclusionai: 'inclusionAI', openrouter: 'OpenRouter', 'black-forest-labs': 'Black Forest Labs', elevenlabs: 'ElevenLabs', ...SOURCE_NAME }[p] || p.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
 const cleanName = (m) => String(m.name || m.id).replace(/\s*\(free\)\s*$/i, '').replace(/^[^:]+:\s*/, '');
 const ctxText = (n) => (!n ? '' : n >= 1e6 ? `${+(n / 1e6).toFixed(1)}M` : `${Math.round(n / 1000)}k`);
 const agoDate = (sec) => { if (!sec) return ''; const d = (Date.now() / 1000 - sec) / 86400; return d < 1 ? 'today' : d < 30 ? `${Math.round(d)}d ago` : d < 365 ? `${Math.round(d / 30)}mo ago` : `${+(d / 365).toFixed(1)}y ago`; };
 // A short, comparable price for the list; the full wording stays in the tooltip.
 function priceCell(m) {
   const n = priceNum(m), usd = (x, d = 2) => (x > 0 && x < 0.01 ? `$${Number(x.toPrecision(2))}` : `$${x.toFixed(d)}`);
+  if (m.plan === 'plan') return `<span class="mp-plan">${esc(SOURCE_SHORT[m.source] || '')} plan</span>`;
   if (n === 0 || /:free$/.test(m.id)) return '<span class="mp-free">Free</span>';
   if (m.kind === 'chat' || m.kind === 'listen') return `<span class="mp-money">${usd(m.price[0])}</span><small>in</small><span class="mp-money">${usd(m.price[1])}</span><small>out /M</small>`;
   if (m.kind === 'decision') return `<span class="mp-money">${usd(m.price[0], 3)}</span><small>/M in</small>`;
@@ -1492,12 +1502,14 @@ function priceCell(m) {
   if (m.kind === 'speech') return `<span class="mp-money">${usd(m.price[0])}</span><small>/M chars</small>`;
   return esc(priceText(m));
 }
-const PK = { kind: 'chat', current: '', filters: new Set(), providers: new Set(), sort: 'cheap', q: '', sel: 0, shown: 0, list: [], done: null, observer: null };
+const PK = { kind: 'chat', current: '', filters: new Set(), providers: new Set(), sort: 'cheap', q: '', sel: 0, shown: 0, list: [], done: null, observer: null, source: 'all', orOnly: false };
 
-// pickModel(kind, current, { context }) → the chosen id, or null.
+// pickModel(kind, current, { context, openRouterOnly, source }) → the chosen id, or null. openRouterOnly: for the
+// places only an OpenRouter model makes sense (its fallback model, a blocked provider's models); source: open on one
+// source's models ('openrouter', 'opencode', 'opencode-go', 'cline').
 function pickModel(kind, current, opts = {}) {
   return new Promise((resolve) => {
-    Object.assign(PK, { kind, current: current || '', q: '', sel: 0, providers: new Set(), filters: new Set(), context: opts.context || '' });
+    Object.assign(PK, { kind, current: current || '', q: '', sel: 0, providers: new Set(), filters: new Set(), context: opts.context || '', orOnly: !!opts.openRouterOnly, source: opts.source || 'all' });
     PK.sort = G.pickerSort?.[kind] || 'best';
     PK.done = (v) => { if ($('#picker').open) $('#picker').close(); PK.done = null; resolve(v); };
     $('#pkSearch').value = '';
@@ -1507,7 +1519,9 @@ function pickModel(kind, current, opts = {}) {
     setTimeout(() => $('#pkSearch').focus(), 30);
   });
 }
-function pickerModels() { return (G.models || []).filter((m) => m.kind === PK.kind); }
+function pickerModels() { return (G.models || []).filter((m) => m.kind === PK.kind && !(PK.orOnly && m.source) && !(m.source && m.status === 'deprecated' && m.id !== PK.current)); }
+// Where a model runs: OpenRouter, or the OpenCode or Cline source it names.
+const sourceKey = (m) => m.source || 'openrouter';
 function drawPicker(full = false) {
   const all = pickerModels();
   $('#pkTitle').textContent = `Choose a ${(KIND_TITLE[PK.kind] || 'model').toLowerCase()}`;
@@ -1528,10 +1542,15 @@ function drawPicker(full = false) {
     for (const b of document.querySelectorAll('#pkSort .mp-sort')) b.onclick = () => { PK.sort = b.dataset.sort; (G.pickerSort ??= {})[PK.kind] = PK.sort; savePrefs(); drawPicker(true); };
   }
   const usable = FILTERS.filter(([k, , f]) => k === 'fav' ? (G.favModels?.[PK.kind] || []).length : all.some(f) && !all.every(f));
-  $('#pkFilters').innerHTML = usable.map(([k, l, f]) => `<button type="button" class="mp-chip ${PK.filters.has(k) ? 'on' : ''}" data-f="${k}" aria-pressed="${PK.filters.has(k)}">${l} <small>${all.filter(f).length}</small></button>`).join('')
+  // Where the models run, once OpenCode or Cline adds its own (one segment per source the list has, with counts).
+  const srcs = [...new Set(all.map(sourceKey))];
+  if (!srcs.includes(PK.source)) PK.source = 'all';
+  const srcBar = srcs.length > 1 ? `<div class="st-segmented mp-src-seg" role="radiogroup" aria-label="Where the model runs">${[['all', 'All'], ...['openrouter', ...Object.keys(SOURCE_NAME)].filter((k) => srcs.includes(k)).map((k) => [k, k === 'openrouter' ? 'OpenRouter' : SOURCE_NAME[k]])].map(([k, l]) => `<button type="button" class="st-seg-btn ${PK.source === k ? 'active' : ''}" role="radio" aria-checked="${PK.source === k}" data-src="${k}">${l} <small>${k === 'all' ? all.length : all.filter((m) => sourceKey(m) === k).length}</small></button>`).join('')}</div>` : '';
+  $('#pkFilters').innerHTML = srcBar + usable.map(([k, l, f]) => `<button type="button" class="mp-chip ${PK.filters.has(k) ? 'on' : ''}" data-f="${k}" aria-pressed="${PK.filters.has(k)}">${l} <small>${all.filter(f).length}</small></button>`).join('')
     + `<div class="mp-prov-wrap"><button type="button" class="mp-chip mp-prov-btn ${PK.providers.size ? 'on' : ''}" aria-haspopup="true">🏢 ${PK.providers.size ? `${PK.providers.size} provider${PK.providers.size > 1 ? 's' : ''}` : 'All providers'} ▾</button><div class="mp-prov-pop" hidden></div></div>`
     + (PK.filters.size || PK.providers.size ? '<button type="button" class="mp-link mp-clear">Clear filters</button>' : '');
   for (const b of document.querySelectorAll('#pkFilters .mp-chip[data-f]')) b.onclick = () => { PK.filters.has(b.dataset.f) ? PK.filters.delete(b.dataset.f) : PK.filters.add(b.dataset.f); PK.sel = 0; drawPicker(); };
+  for (const b of document.querySelectorAll('#pkFilters [data-src]')) b.onclick = () => { PK.source = b.dataset.src; PK.sel = 0; drawPicker(); };
   const clr = $('#pkFilters .mp-clear'); if (clr) clr.onclick = () => { PK.filters.clear(); PK.providers.clear(); drawPicker(); };
   // Providers: a searchable multi-select with counts.
   const provBtn = $('#pkFilters .mp-prov-btn'), provPop = $('#pkFilters .mp-prov-pop');
@@ -1562,15 +1581,16 @@ function drawList() {
   const q = ($('#pkSearch').value || '').trim().toLowerCase();
   const all = pickerModels();
   const active = FILTERS.filter(([k]) => PK.filters.has(k));
-  let list = all.filter((m) => active.every(([, , f]) => f(m)) && (!PK.providers.size || PK.providers.has(providerOf(m.id)))
+  let list = all.filter((m) => active.every(([, , f]) => f(m)) && (!PK.providers.size || PK.providers.has(providerOf(m.id))) && (PK.source === 'all' || sourceKey(m) === PK.source)
     && (!q || `${m.id} ${m.name} ${PROVIDER_NAME(providerOf(m.id))}`.toLowerCase().includes(q)));
   const RANK = { g: 0, y: 1, r: 2 };
   const by = { best: (a, b) => RANK[rateModel(a, PK.kind)?.r ?? 'y'] - RANK[rateModel(b, PK.kind)?.r ?? 'y'] || priceNum(a) - priceNum(b), cheap: (a, b) => priceNum(a) - priceNum(b), pricey: (a, b) => priceNum(b) - priceNum(a), new: (a, b) => (b.created || 0) - (a.created || 0), old: (a, b) => (a.created || 0) - (b.created || 0), name: (a, b) => cleanName(a).localeCompare(cleanName(b)), ctx: (a, b) => (b.ctx || 0) - (a.ctx || 0) }[PK.sort];
   list.sort((a, b) => by(a, b) || cleanName(a).localeCompare(cleanName(b)));
   // Favourites and recent ones first when nothing narrows the list.
   const plain = !q && !PK.filters.size && !PK.providers.size;
-  const favs = plain ? (G.favModels?.[PK.kind] || []).map((id) => all.find((m) => m.id === id)).filter(Boolean) : [];
-  const recent = plain ? (G.recentModels?.[PK.kind] || []).filter((id) => !favs.some((f) => f.id === id)).map((id) => all.find((m) => m.id === id)).filter(Boolean).slice(0, 5) : [];
+  const here = (m) => PK.source === 'all' || sourceKey(m) === PK.source;
+  const favs = plain ? (G.favModels?.[PK.kind] || []).map((id) => all.find((m) => m.id === id)).filter((m) => m && here(m)) : [];
+  const recent = plain ? (G.recentModels?.[PK.kind] || []).filter((id) => !favs.some((f) => f.id === id)).map((id) => all.find((m) => m.id === id)).filter((m) => m && here(m)).slice(0, 5) : [];
   PK.list = [...favs, ...recent, ...list];
   count.innerHTML = `<b>${list.length}</b> of ${all.length} ${KIND_TITLE[PK.kind]?.toLowerCase() || 'model'}s${list.length !== all.length ? ' match' : ''} · sorted by ${SORTS.find((x) => x[0] === PK.sort)[1].toLowerCase()} <span class="rec-legend" title="From QuorX's own benchmarks where a model was tested; otherwise from what the catalogue says it can do. Hover a dot for the reason.">🟢 recommended · 🟡 OK or untested · 🔴 avoid</span>`;
   if (!list.length && !favs.length) {
@@ -1618,7 +1638,7 @@ function rowHTML(m, i) {
   const caps = [(m.in || []).includes('image') && m.kind !== 'image' ? ['👁', 'Sees images'] : null, m.tools ? ['🧰', 'Uses tools'] : null, m.reasoning ? ['🧠', 'Reasoning'] : null, (m.in || []).includes('audio') ? ['🎙', 'Hears audio'] : null, m.voices?.length ? ['🗣', `${m.voices.length} voices`] : null].filter(Boolean);
   return `<div class="mp-row ${m.id === PK.current ? 'cur' : ''}" role="option" data-i="${i}" data-id="${esc(m.id)}" aria-selected="false" title="${esc(m.desc || priceText(m))}">
     <span class="mp-ava" style="--h:${hue(p)}" title="${esc(PROVIDER_NAME(p))}">${esc(initials(PROVIDER_NAME(p)))}</span>
-    <span class="mp-main"><span class="mp-name">${recDot(m, PK.kind)}${cardChip(m.id)} ${esc(cleanName(m))}${m.id === PK.current ? ' <span class="mp-tag cur">current</span>' : ''}</span><span class="mp-id">${esc(m.id)}</span></span>
+    <span class="mp-main"><span class="mp-name">${recDot(m, PK.kind)}${cardChip(m.id)} ${esc(cleanName(m))}${m.source ? ` <span class="mp-src" title="Runs on your ${esc(SOURCE_NAME[m.source])} account (⚙ Settings → OpenCode &amp; Cline)">${esc(SOURCE_SHORT[m.source])}</span>` : ''}${m.id === PK.current ? ' <span class="mp-tag cur">current</span>' : ''}</span><span class="mp-id">${esc(m.id)}</span></span>
     <span class="mp-caps">${caps.map(([i2, t]) => `<span title="${t}">${i2}</span>`).join('')}</span>
     <span class="mp-meta">${scoreBadge(m.id)}${m.ctx ? `<span title="Context window">${ctxText(m.ctx)}</span>` : ''}${m.created ? `<span title="${new Date(m.created * 1000).toLocaleDateString()}">${agoDate(m.created)}</span>` : ''}</span>
     <span class="mp-price" title="${esc(priceText(m))}">${priceCell(m)}</span>
@@ -2745,7 +2765,9 @@ function renderComposerBar(c) {
   const s = c.agent.setup;
   const bar = $('.cbar', c.el.root);
   const rack = bar.closest('.cmp-control-rack'), slot = $('.cmp-model-slot', rack), glob = $('.cs-glob', rack), setBtn = $('.cmp-set-btn', rack), panel = $('.chat-set', rack), followSlot = $('.cmp-follow-slot', rack), scrim = $('.cs-scrim', rack);
-  slot.innerHTML = `<button type="button" class="mbtn model cmp-model-chip" title="Model for this chat: ${esc(priceOf(s.model))} (click to pick any model)">${recDot(s.model, 'chat')} ${esc(short(s.model))} <small>${esc(shortPrice(s.model))}</small></button>`;
+  // A model on OpenCode or Cline says whose account it runs on.
+  const srcId = sourceOfId(s.model);
+  slot.innerHTML = `<button type="button" class="mbtn model cmp-model-chip" title="Model for this chat${srcId ? `, on your ${esc(SOURCE_NAME[srcId])} account` : ''}: ${esc(priceOf(s.model))} (click to pick any model)">${recDot(s.model, 'chat')} ${esc(short(s.model))}${srcId ? ` <span class="mp-src">${esc(SOURCE_SHORT[srcId])}</span>` : ''} <small>${esc(shortPrice(s.model))}</small></button>`;
   const permHTML = (cls = '') => `<div class="seg perm cmp-perm-switch ${cls}" title="How much permission this chat's agent asks for">
       <button type="button" data-approval="strict" class="${c.approval === 'strict' ? 'on' : ''}" title="${esc(`🔒 Strict${c.approval === 'strict' ? ' (now)' : ''}\nAsks you before paid media, and the agent's questions come to you.\nSettings → Approvals & safety says what else it asks before.`)}">🔒 Strict</button>
       <button type="button" data-approval="yolo" class="${c.approval === 'yolo' ? 'on' : ''}" title="${esc(`⚡ YOLO${c.approval === 'yolo' ? ' (now)' : ''}\nUses its tools without asking; the deciders answer its questions.\nThe budget cap and the safety rules still apply.`)}">⚡ YOLO</button>
@@ -3073,7 +3095,7 @@ function renderChatTools(c) {
   for (const b of menu.querySelectorAll('.q-pick')) b.onclick = async (e) => {
     e.preventDefault(); e.stopPropagation();
     const k = b.dataset.q, q = QUALITY_INFO[k];
-    const id = await pickModel(q.kind, q.model(), { context: k === 'enhancer' ? 'Prompt enhancer (all chats): a fast, cheap model is enough' : k === 'freshEyes' ? 'Fresh eyes (all chats): it must use tools' : k === 'reviewer' ? 'Reviewer (all chats): it must use tools and see images' : k === 'deciders' ? 'Decider for screenshot checks (all chats): it must read images' : 'Helper model (all chats): it must use tools' });
+    const id = await pickModel(q.kind, q.model(), { openRouterOnly: true, context: k === 'enhancer' ? 'Prompt enhancer (all chats): a fast, cheap model is enough' : k === 'freshEyes' ? 'Fresh eyes (all chats): it must use tools' : k === 'reviewer' ? 'Reviewer (all chats): it must use tools and see images' : k === 'deciders' ? 'Decider for screenshot checks (all chats): it must read images' : 'Helper model (all chats): it must use tools' });
     if (id) { if (k === 'enhancer') G.settings.enhancerModel = id; else if (k === 'reviewer') G.settings.reviewModel = id; else if (k === 'freshEyes') G.settings.freshEyesModel = id; else if (k === 'helpers') G.settings.helperModel = id; else G.settings.lookVoters = [id]; savePrefs(); }
     reopen();
   };
@@ -3806,8 +3828,11 @@ function replyHeadHTML(m, fallback) {
   const actual = last?.actual && orBase(last.actual) !== orBase(model) && !last.actual.startsWith(orBase(model)) ? last.actual : '';
   const models = [...new Set(calls.map((e) => e.actual && !e.actual.startsWith(orBase(e.model)) ? e.actual : e.model).filter(Boolean))];
   const providers = [...new Set(calls.map((e) => e.provider).filter(Boolean))];
-  const idChip = (id, cls, tip) => `<span class="rh-id ${cls}" title="${esc(tip)}">${esc(id)}</span><button type="button" class="rh-btn rh-copy" data-copy="${esc(id)}" title="Copy ${esc(id)}" aria-label="Copy the model id">${msgIcon('copy')}</button><button type="button" class="rh-btn rh-open" data-or="${esc(orBase(id))}" title="Open ${esc(orBase(id))} on openrouter.ai" aria-label="Open on OpenRouter"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg></button>`;
-  return `${idChip(model, 'rh-model', models.length > 1 ? `Models in this reply: ${models.join(', ')}` : 'The OpenRouter model id')}${models.length > 1 ? `<small class="rh-more" title="${esc(models.join('\n'))}">+${models.length - 1}</small>` : ''}`
+  // An OpenCode or Cline model has no OpenRouter page: its chip says where it ran instead.
+  const idChip = (id, cls, tip) => `<span class="rh-id ${cls}" title="${esc(tip)}">${esc(id)}</span><button type="button" class="rh-btn rh-copy" data-copy="${esc(id)}" title="Copy ${esc(id)}" aria-label="Copy the model id">${msgIcon('copy')}</button>${sourceOfId(id) ? '' : `<button type="button" class="rh-btn rh-open" data-or="${esc(orBase(id))}" title="Open ${esc(orBase(id))} on openrouter.ai" aria-label="Open on OpenRouter"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg></button>`}`;
+  const fellBack = calls.filter((e) => e.fellBackFrom).length;
+  return `${idChip(model, 'rh-model', models.length > 1 ? `Models in this reply: ${models.join(', ')}` : sourceOfId(model) ? `Runs on your ${SOURCE_NAME[sourceOfId(model)]} account` : 'The OpenRouter model id')}${models.length > 1 ? `<small class="rh-more" title="${esc(models.join('\n'))}">+${models.length - 1}</small>` : ''}`
+    + (fellBack ? `<span class="rh-fell" title="${fellBack} step${fellBack === 1 ? '' : 's'} of this reply went to OpenRouter because ${esc(SOURCE_NAME[sourceOfId(calls.find((e) => e.fellBackFrom).fellBackFrom)] || 'the source')} failed (see Steps)">⤵ ${fellBack} on OpenRouter</span>` : '')
     + (actual ? `<span class="rh-arrow" aria-hidden="true">→</span>${idChip(actual, 'rh-actual', `${model} picked this model to answer`)}` : '')
     + (providers.length ? `<span class="rh-via" title="The provider OpenRouter routed this reply to">via ${esc(providers.join(', '))}</span>` : '');
 }
@@ -4146,7 +4171,7 @@ function traceHTML(m) {
     if (e.t === 'llm_start') row(e.at, `🧠 <b>${esc(short(e.model))}</b> thinks<span class="sub" data-llm="${e.step}"></span>${m.thinking?.[e.step]?.trim() ? `<details class="think-trace"><summary>💭 Thinking · ${m.thinking[e.step].split(/\s+/).filter(Boolean).length} words</summary><div class="tt-body">${md(m.thinking[e.step])}</div></details>` : ''}`, 'think');
     else if (e.t === 'llm_done') {
       const i = out.findLastIndex((h) => h.includes(`data-llm="${e.step}"`));
-      if (i >= 0) out[i] = out[i].replace(`<span class="sub" data-llm="${e.step}"></span>`, `<div class="sub">${secs(e.ms)} · <span class="tok-out">${e.tokensOut} tokens out</span> · ${money(e.cost, 5)}${e.provider ? ` · via <span class="tr-prov" title="The provider OpenRouter routed this call to">${esc(e.provider)}</span>` : ''}${e.model && e.model !== m.trace.find((x) => x.t === 'llm_start' && x.step === e.step)?.model ? ` · <b class="tr-fallback" title="The chat's model was unavailable, so OpenRouter used the fallback model">fallback ${esc(short(e.model))}</b>` : ''}${e.toolCalls.length ? ` · then ${e.toolCalls.join(', ')}` : ''}</div>${e.aside ? `<div class="aside">💬 ${esc(e.aside)}</div>` : ''}`);
+      if (i >= 0) out[i] = out[i].replace(`<span class="sub" data-llm="${e.step}"></span>`, `<div class="sub">${secs(e.ms)} · <span class="tok-out">${e.tokensOut} tokens out</span> · ${money(e.cost, 5)}${e.planCost ? ` · <span title="What this call counted against your ${esc(SOURCE_NAME[e.source] || '')} plan's limits, at list price">plan ${money(e.planCost, 4)}</span>` : ''}${e.provider ? ` · via <span class="tr-prov" title="${e.source ? 'The account this call ran on' : 'The provider OpenRouter routed this call to'}">${esc(e.provider)}</span>` : ''}${e.model && e.model !== m.trace.find((x) => x.t === 'llm_start' && x.step === e.step)?.model ? ` · <b class="tr-fallback" title="${e.fellBackFrom ? `${esc(SOURCE_NAME[sourceOfId(e.fellBackFrom)] || 'The source')} failed, so this step ran on OpenRouter (see ⤵)` : 'The chat\'s model was unavailable, so OpenRouter used the fallback model'}">fallback ${esc(short(e.model))}</b>` : ''}${e.toolCalls.length ? ` · then ${e.toolCalls.join(', ')}` : ''}</div>${e.aside ? `<div class="aside">💬 ${esc(e.aside)}</div>` : ''}`);
     } else if (e.t === 'tool' && e.name !== 'decide') row(e.at, `${e.by === 'reviewer' ? '🧪 <span class="tr-rv">reviewer</span> ' : e.by === 'helper' ? `🤝 <span class="tr-hp">helper ${e.helper || ''}</span> ` : ''}${TOOL_NAME[e.name]?.split(' ')[0] || '🔧'} <b>${esc(e.name)}</b><div class="sub">${esc(argSummary(e))}</div>`, e.by === 'reviewer' ? 'browser' : 'tool');
     else if (e.t === 'reading') row(e.at, `📝 <b>Prompt enhancer</b> ${esc(short(e.model))} read the request${e.late ? ' (too late for the first step; the deciders still use it)' : ''} · ${secs(e.ms)} · ${money(e.cost, 5)}<div class="sub" style="white-space:pre-wrap">${linkUrls(esc(e.text))}</div>`, 'note');
     else if (e.t === 'chat_off_project') row(e.at, `📝 Own chat from now on: you said “${esc(e.why || '')}”, so this chat leaves the project's notes, design and log alone. Tick Part of the project in the header to undo.`, 'note');
@@ -4196,6 +4221,8 @@ function traceHTML(m) {
     else if (e.t === 'compacted') row(e.at, `🗜 Earlier turns summarised to keep the context small<details class="out"><summary>summary</summary><pre>${esc(e.summary)}</pre></details>`, 'note');
     else if (e.t === 'note') row(e.at, `<span class="${e.level === 'info' ? '' : 'warn'}">${e.level === 'info' ? 'ℹ' : '⚠'} ${esc(e.msg)}</span>`, e.level === 'info' ? 'note' : 'warn');
     else if (e.t === 'llm_retry') row(e.at, `<span class="warn">↻ The model call failed (${esc(e.msg)}); retry ${e.attempt} of ${e.of} after ${secs(e.wait)}</span>`, 'warn');
+    // An OpenCode or Cline call that failed (or a source skipped for the rest of the reply): OpenRouter answered.
+    else if (e.t === 'source_fallback') row(e.at, `<span class="warn">⤵ ${e.kind === 'skipped' ? `${esc(SOURCE_NAME[e.source] || e.source)} skipped` : esc(e.why)} → <code>${esc(e.to)}</code> on OpenRouter${e.role && e.role !== 'writer' ? ` (${esc(e.role)})` : ''}</span>${e.kind === 'skipped' ? `<div class="sub">${esc(e.why)}</div>` : e.rest ? '<div class="sub">The rest of this reply stays on OpenRouter; the next reply tries the source again.</div>' : ''}${e.aside ? `<div class="aside">💬 ${esc(e.aside)}</div>` : ''}`, 'warn');
     else if (e.t === 'parallel') row(e.at, `⇉ ${e.names.length} look-ups at the same time: ${esc(e.names.join(', '))}`, 'tool');
     else if (e.t === 'lint') row(e.at, `🎨 Design lint: ${e.hits.length} note${e.hits.length === 1 ? '' : 's'} on ${esc(e.path)}<div class="sub">${e.hits.map((h) => `<b>${h.level === 'fix' ? 'fix' : 'consider'}</b> · ${esc(h.msg)}`).join('<br>')}</div>`);
     else if (e.t === 'check') row(e.at, `<span class="warn">🔎 Check found ${e.problems.length} problem${e.problems.length === 1 ? '' : 's'} in ${esc(e.path)}</span><div class="sub">${e.problems.map(esc).join('<br>')}</div>`, 'warn');
@@ -4884,8 +4911,9 @@ async function followRun(c, m, open) {
         }
         // A step that ended in tool calls was working out loud: move its text into the trace.
         if (e.t === 'llm_done' && e.toolCalls.length) moveAside(e);
-        // A retried call starts its text again; a reply sent back to fix problems was not the answer.
-        if (e.t === 'llm_retry' || e.t === 'sent_back') { moveAside(e); lastStep = -1; }
+        // A retried call starts its text again (an OpenCode or Cline call that fell back to OpenRouter too); a reply
+        // sent back to fix problems was not the answer.
+        if (e.t === 'llm_retry' || e.t === 'sent_back' || (e.t === 'source_fallback' && e.role === 'writer')) { moveAside(e); lastStep = -1; }
         if (e.t === 'artifact') { addArtifact(c, m, e.artifact); continue; }
         if (e.t === 'server') { serverUp(c, e); continue; }
         if (e.t === 'file' && G.watch?.chat === c.id) setTimeout(reloadPreview, 300);
@@ -5713,7 +5741,7 @@ const UI_DEFAULTS = { density: 'comfortable', fontSize: 14, reduceMotion: 'syste
   showBalance: false, maskAmounts: true, blurPaths: false, usageBtn: true, notify: 'all', searchEngine: 'google', searchCustom: '' };
 const SETTINGS_NAV = [
   ['Harness', [['setup', '🧪', 'Setup check'], ['appearance', '🎨', 'Appearance'], ['privacy', '🕶', 'Privacy & display']]],
-  ['OpenRouter', [['keys', '🔑', 'API keys'], ['models', '🧠', 'Models & catalogue']]],
+  ['Models', [['keys', '🔑', 'API keys'], ['models', '🧠', 'Models & catalogue'], ['sources', '🔌', 'OpenCode & Cline']]],
   ['Agent', [['newchats', '✨', 'New chats'], ['loop', '🔁', 'Agent loop'], ['deciders', '⚖️', 'Deciders'], ['tools', '🧰', 'Tools & media'], ['video', '🎬', 'Video'], ['safety', '🛡', 'Approvals & safety'], ['budget', '💵', 'Budget'], ['skills', '🧩', 'Skills'], ['memory', '📌', 'Memory']]],
   ['Workspace', [['projects', '📁', 'Projects'], ['code', '💻', 'Code & servers'], ['docs', '📎', 'Documents']]],
   ['Data', [['usage', '📊', 'Usage & costs'], ['data', '🗄', 'Data & storage'], ['storage', '🧹', 'Storage'], ['shortcuts', '⌨️', 'Shortcuts'], ['about', 'ℹ️', 'About']]],
@@ -5865,12 +5893,27 @@ function settingsPanels(S) {
         + stRow('Default reasoning', '', stSeg('reasoning', [['off', 'Off'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']], S.reasoning || 'off')))
       + stCard('When the model fails', '', stRow('Fallback model', 'OpenRouter switches to it when a chat’s model fails or is down, billed at its own price. The trace marks steps it answered.', `<div class="st-fb">${modelField('pickFallback', S.fallbackModel, 'fbModel', 'None')}${S.fallbackModel ? '<button type="button" class="st-btn secondary sm" data-act="clearFallback" title="No fallback model">✕</button>' : ''}</div>`, { id: 'stRowFallback' }), '', 'stCardFallback')
       + `</div>`,
+      stCard('OpenCode & Cline', 'A chat’s main model can also run on your own OpenCode, OpenCode Go or Cline account. Everything else stays on OpenRouter.', `<div class="sx-pad src-mini" id="stSrcMini">${srcMiniHTML()}</div>`),
       stCard('Routing: how a call finds a provider', 'For every chat’s agent calls. The provider that answered shows on each step in “Steps”.',
         `<div class="sx-pad" data-live="routing"></div>`
         + stRow('Provider order', 'Auto favours providers with reliable tool calling (OpenRouter’s Exacto). Cheapest and Fastest sort by price or speed instead.', stCards('providerSort', [['auto', '🎯', 'Auto', 'Reliable tool calling'], ['price', '💲', 'Cheapest', 'Lowest price first'], ['throughput', '⚡', 'Fastest', 'Highest throughput first']], S.providerSort || 'auto', 'compact'), { cls: 'sx-row-wide', id: 'stRowOrder' })
         + stRow('Only providers that support every feature', 'Skips providers that would silently drop tools, reasoning or other settings. If none qualifies, that reply uses the default routing.', stSwitch('requireParams', S.requireParams !== false), { id: 'stRowFeatures' })
         + stRow('Zero data retention only', 'Only providers that keep no copy of your prompts. Fewer models qualify.', stSwitch('zdrOnly', !!S.zdrOnly), { id: 'stRowZdr' })
         + stRow('Blocked providers', 'OpenRouter never sends the agent’s calls to these: for every model, or only the models you pick (a provider can be fine for one model and break another). Block one that keeps breaking tool calls (the provider shows as “via …” above each reply). If only blocked providers serve a model, that reply uses them anyway, and says so.', '<div id="stBlocked"><div class="st-row-help">Loading providers…</div></div>', { cls: 'sx-row-wide', id: 'stRowBlocked' })),
+    ]],
+    sources: ['OpenCode & Cline', 'Run a chat’s main model on your own OpenCode or Cline account. The deciders, paid media, helpers and the reviewer stay on OpenRouter, and a call that fails there falls back to OpenRouter, so the chat carries on.', [
+      '<div data-live="sourceflow"></div>',
+      stCard(`${stNum(1)} Connect a source`, 'Each source has its own models and its own bill. A source you switch on adds its models to every model picker, tagged OpenCode, Go or Cline.', '<div id="stSources"><div class="st-row-help">Checking OpenCode and Cline on this computer…</div></div>', '', 'stSrcConnect'),
+      stCard(`${stNum(2)} Pick a model`, '', stRow('In any chat', 'Click the chat’s model in its message box and pick a model tagged OpenCode, Go or Cline; “Where it runs” at the top of the picker shows one source at a time. Switch a chat between OpenRouter and a source whenever you like: the conversation carries over.', '<button type="button" class="st-btn secondary sm" data-act="browseSources">Browse their models</button>'), '', 'stSrcPick'),
+      stCard(`${stNum(3)} When a call fails`, 'OpenCode and Cline change often, and a server can be down, slow or out of usage. QuorX doesn’t stop the chat for that: the step goes to OpenRouter, and the reply’s steps say so (⤵).',
+        stRow('Fall back to', '', stCards('sourceFallback', [['same', '🔁', 'Same model on OpenRouter', 'When OpenRouter has it, else the model below'], ['model', '🎯', 'Always this model', 'The fallback model below'], ['off', '✋', 'Stop and tell me', 'Nothing is spent on OpenRouter']], S.sourceFallback || 'same', 'compact'), { cls: 'sx-row-wide', id: 'stRowSrcFb' })
+        + stRow('Fallback model', 'For a model OpenRouter doesn’t have (and every failed call, with “Always this model”). Empty: the same model when OpenRouter has it, else the default chat model. Billed at its OpenRouter price, and the reply’s cap counts it.', `<div class="st-fb">${modelField('pickSourceFallback', S.sourceFallbackModel, 'srcFbModel', 'Default chat model')}${S.sourceFallbackModel ? '<button type="button" class="st-btn secondary sm" data-act="clearSourceFallback" title="Use the default chat model">✕</button>' : ''}</div>`)
+        + stRow('How it decides', 'A hiccup (a rate limit with a short wait, a server error, a dropped connection) gets one quick retry first. A source that refuses its key, runs out of credit or plan usage, or fails twice in a reply is skipped for the rest of that reply, and other chats skip it for a short while instead of waiting on it. The next reply tries it again.', ''), '', 'stSrcFail'),
+      stCard('What stays the same', '', `<ul class="src-same">
+        <li><b>Tools and work</b>: files, commands, servers, the browser, checks and schedules work the same on any model.</li>
+        <li><b>OpenRouter's parts</b>: the deciders, paid media, helpers, the reviewer and the prompt enhancer still run there, with your OpenRouter key.</li>
+        <li><b>Costs</b>: OpenCode and Cline calls count at the price they report in the reply, project and daily caps. Go calls count ${stMoney('$0.00')}: your plan pays, and each step shows what it would have cost at list price.</li>
+        <li><b>Keys</b>: kept only on this computer (data/sources.json). The page never sees them again, and agent processes don’t get them.</li></ul>`),
     ]],
     newchats: ['New chats', 'What a fresh chat starts with. Each chat can change these in its message box.', [
       `<p class="sx-sec-help sx-mode-link">New chats start in ${S.approval === 'yolo' ? '⚡ YOLO' : '🔒 Strict'}. <button type="button" class="sp-link" data-act="openMode">Change it in 🛡 Approvals &amp; safety</button></p>`,
@@ -6141,6 +6184,9 @@ function stSummary(id, S) {
     case 'privacy': return [U.maskAmounts ? 'masked' : 'visible', stStatus(U.maskAmounts ? 'ok' : 'warn', U.maskAmounts ? 'Amounts masked' : 'Amounts visible') + stStatus(U.showBalance ? 'warn' : 'off', U.showBalance ? 'Balance button shown' : 'Balance button hidden') + on(U.blurPaths, 'Paths blurred', 'Paths visible')];
     case 'keys': { const k = ST.keys; if (!G.cfg.hasKey) return ['add one', stStatus('bad', 'No key yet: nothing can run'), 'bad']; if (!k) return ['', '']; return [`${k.n} key${k.n === 1 ? '' : 's'}`, stStatus('ok', `${esc(k.active || 'A key')} is active`) + stStatus('off', `${k.n} key${k.n === 1 ? '' : 's'} on this computer`)]; }
     case 'models': return [short(S.model), stStatus('info', `New chats: ${esc(short(S.model))}`) + (G.models ? stStatus('ok', `${G.models.length} models loaded`) : '') + stStatus('info', `${PROVIDER_SORT[S.providerSort || 'auto']} routing`) + on(S.fallbackModel, `Fallback: ${esc(short(S.fallbackModel || ''))}`, 'No fallback')];
+    case 'sources': { const l = ST.sources; if (!l) return ['', ''];
+      const live = l.filter((x) => x.on && x.key), fb = S.sourceFallback || 'same';
+      return [live.length ? `${live.length} on` : 'off', l.map((x) => { const st = srcState(x); return stStatus(st.cls, `${esc(x.name)}: ${esc(st.word)}`); }).join('') + stStatus(fb === 'off' ? 'warn' : 'info', fb === 'off' ? 'No fallback: a failed call stops' : `Fallback: ${fb === 'model' && S.sourceFallbackModel ? esc(short(S.sourceFallbackModel)) : 'same model on OpenRouter'}`), live.some((x) => srcState(x).cls === 'bad') ? 'bad' : '']; }
     case 'newchats': { const q = QUALITY_TOOLS.filter((k) => S.newChatTools?.[k] !== false).length, p = CHAT_TOOLS.filter((k) => S.newChatTools?.[k]).length;
       return [S.approval === 'yolo' ? '⚡ YOLO' : '🔒 Strict', stStatus('info', S.approval === 'yolo' ? '⚡ YOLO: never asks' : `🔒 Strict: asks before ${S.strictAsk === 'every' ? 'every tool' : 'paid media'}`) + stStatus(q ? 'ok' : 'off', `${q} of ${QUALITY_TOOLS.length} checking tools on`) + stStatus(p ? 'warn' : 'off', p ? `${p} paid media on` : 'Paid media off')]; }
     case 'loop': return [`${S.maxSteps} steps`, stStatus('info', `${S.maxSteps} calls a reply`) + stStatus('info', `Plan first: ${PLAN_FIRST[S.planFirst || 'off']}`) + on(S.verify !== false, 'Checks on', 'Checks off') + on((S.review || 'builds') !== 'off', `Reviewer: ${S.review || 'builds'}`, 'No reviewer')];
@@ -6179,7 +6225,124 @@ const ST_LIVE = {
     const pct = cap ? Math.min(100, (t / cap) * 100) : 0;
     return `${cap ? `<div class="sx-meter ${pct >= 85 ? 'bad' : pct >= 60 ? 'warn' : ''}"><i style="width:${pct}%"></i></div>` : ''}<span class="sx-cap-zero">${stMoney(`$${t.toFixed(2)}`)} spent today${cap ? ` · ${Math.round(pct)}% of the cap` : ''}</span>`; },
   docflow: (S) => stFlow([['1', 'Attach', `up to ${S.maxUploadMB ?? 100} MB`, ''], ['2', 'Read the text', 'PDF, Word, Excel…', ''], ['3', 'Small', `≤ ${kTok(S.inlineDocTokens ?? 15000)} tokens: whole`, ''], ['4', 'Big: index', `asks above $${Number(S.docIndexBudget ?? 0.5).toFixed(2)}`, ''], ['5', 'Search', 'search_docs, read_doc', '']]),
+  sourceflow: (S) => { const l = ST.sources || [], live = l.filter((x) => x.on && x.key), fb = S.sourceFallback || 'same';
+    return stFlow([['1', 'Connect', l.length ? `${live.length} of ${l.length} on` : 'checking…', 'stSrcConnect', !live.length], ['2', 'Pick a model', 'in any chat', 'stSrcPick', !live.length], ['3', 'If it fails', fb === 'off' ? 'stop and say so' : 'OpenRouter answers', 'stSrcFail', fb === 'off'], ['4', 'The rest', 'deciders, media: OpenRouter', '']]); },
 };
+// ---------- ⚙ OpenCode & Cline (server/sources.js) ----------
+// What a source's status says in one word, and its colour: on and working, on but failing, connected but off, or not connected.
+function srcState(x) {
+  if (!x.key) return { cls: 'off', word: 'not connected' };
+  if (!x.on) return { cls: 'off', word: 'off' };
+  if (x.last && !x.last.ok && (x.last.kind === 'auth' || x.last.kind === 'quota')) return { cls: 'bad', word: x.last.kind === 'auth' ? 'key refused' : 'out of usage' };
+  if (x.last && !x.last.ok) return { cls: 'warn', word: 'last call failed' };
+  return { cls: 'ok', word: 'on' };
+}
+// The short version on ⚙ Models & catalogue: one status per source and the way to the full page.
+function srcMiniHTML() {
+  const l = ST.sources;
+  return `${l ? l.map((x) => { const st = srcState(x); return stStatus(st.cls, `${esc(x.name)}: ${esc(st.word)}`); }).join('') : '<span class="st-row-help">Checking…</span>'}<span class="kx-spacer"></span><button type="button" class="st-btn secondary sm" data-act="openSources">${l?.some((x) => x.on && x.key) ? 'Manage' : 'Set up'} OpenCode &amp; Cline →</button>`;
+}
+// What each source is, where its key comes from, and what QuorX can't do with it (each source's free models are
+// kept for its own apps).
+const SRC_GUIDE = {
+  opencode: { what: 'Pay as you go on OpenCode Console (formerly Zen): you add credit on opencode.ai, and each call costs what OpenCode reports, at list price.', install: 'npm i -g opencode-ai',
+    key: 'On opencode.ai/console: Account → Personal API keys → Add API key (it starts with oc_sk_). One key from your Personal workspace works for pay as you go and for Go. If OpenCode on this computer already has a key (opencode auth login), QuorX can copy it.',
+    free: 'OpenCode’s free models (Big Pickle and the -free ones) are kept for OpenCode itself, so they don’t show here.' },
+  'opencode-go': { what: 'A monthly plan with usage limits (a 5-hour, a weekly and a monthly window per model). Calls cost nothing per call here; each step shows how much of the plan it used, at list price.', install: 'npm i -g opencode-ai',
+    key: 'Subscribe to OpenCode Go on opencode.ai, then use a Console API key from the same workspace: paste it, or let QuorX copy the one OpenCode has. Go is meant for coding agents like QuorX; OpenCode watches for other kinds of traffic.',
+    free: 'When a window’s limit is reached, calls fall back to OpenRouter until it resets (or OpenCode bills your credit, if you turned on Extra usage there).' },
+  cline: { what: 'Your Cline credits: each call costs what Cline reports (OpenRouter’s prices, for the same models). ClinePass models cost nothing per call if you subscribe.', install: 'npm i -g cline',
+    key: 'On app.cline.bot: Settings → API Keys → create a key, and paste it here (it is shown once). QuorX can’t use the Cline app’s own sign-in: its token lasts about an hour, and refreshing it from QuorX would sign the Cline app out.',
+    free: 'Cline’s free models work only inside Cline’s own apps, so they don’t show here.' },
+};
+async function drawSourcesPanel(say = null) {
+  const box = $('#stSources'); if (!box) return;
+  const r = await fetch(`/api/sources${ST.cat === 'sources' ? '?full=1' : ''}`).then((x) => x.json()).catch((e) => ({ error: e.message }));
+  if (!$('#stSources')) return;
+  if (r.error || !Array.isArray(r.sources)) { box.innerHTML = `<div class="kx-wait bad">⚠ Couldn’t read the sources (${esc(r.error || 'no answer')}).</div>`; return; }
+  ST.sources = r.sources; stRefresh();
+  const mini = $('#stSrcMini'); if (mini) mini.innerHTML = srcMiniHTML();
+  const when = (t) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const card = (x) => {
+    const g = SRC_GUIDE[x.id] || {}, st = srcState(x), app = x.app_ || {}, appName = x.app === 'opencode' ? 'OpenCode' : 'Cline';
+    const keyLine = x.key
+      ? `<div class="src-key"><code class="kx-masked">${esc(x.key.masked)}</code><span class="sx-tag">${esc({ pasted: 'pasted here', opencode: 'copied from OpenCode', env: 'from the environment' }[x.key.from] || x.key.from)}</span>${x.key.from === 'env' ? '' : '<button type="button" class="kx-icon danger" data-src-act="remove" title="Remove this key from QuorX">🗑</button>'}</div>`
+      : '';
+    const form = `<div class="kx-form src-form"><div class="kx-input"><input type="password" class="src-key-in" autocomplete="off" spellcheck="false" placeholder="${x.key ? 'Paste a new key to replace it' : 'Paste the key'}" aria-label="${esc(x.name)} API key"><button type="button" class="src-eye" aria-label="Show or hide the key" title="Show or hide">👁</button></div><button type="button" class="kx-btn primary sm" data-src-act="save">Save &amp; check</button>${x.app === 'opencode' && x.found?.openCodeKey ? '<button type="button" class="kx-btn sm" data-src-act="import" title="Copies the API key OpenCode keeps on this computer into QuorX">Use the key OpenCode has</button>' : ''}</div>`;
+    const last = x.last ? (x.last.ok ? `<span class="src-last ok">✓ Last call ${when(x.last.at)} worked</span>` : `<span class="src-last ${x.last.kind === 'auth' || x.last.kind === 'quota' ? 'bad' : 'warn'}">⚠ ${when(x.last.at)}: ${esc(x.last.why || x.last.kind)}${x.last.until > Date.now() ? ` · skipped until ${when(x.last.until)}` : ''}</span>`) : '';
+    const step = (done, title, body) => `<li class="${done ? 'done' : ''}"><span class="src-n" aria-hidden="true">${done ? '✓' : ''}</span><div><b>${title}</b>${body}</div></li>`;
+    return `<section class="src-card ${x.on && x.key ? 'on' : ''}" data-src="${esc(x.id)}">
+      <header class="src-head">
+        <span class="mp-ava" style="--h:${hue(x.id)}" aria-hidden="true">${esc(initials(x.name))}</span>
+        <b class="src-name">${esc(x.name)}</b>
+        ${stTag(x.billing === 'plan' ? 'info' : 'warn', x.billing === 'plan' ? 'subscription' : 'pay per use')}
+        ${stStatus(st.cls, st.word)}
+        ${x.models ? `<span class="src-count">${x.models} models</span>` : ''}
+        <span class="kx-spacer"></span>
+        <label class="sx-check src-on" title="${x.key ? `Show ${esc(x.name)}’s models in the model pickers` : 'Add a key first'}"><input type="checkbox" data-src-on ${x.on && x.key ? 'checked' : ''} ${!x.key ? 'disabled' : ''} aria-label="Use ${esc(x.name)}"><span class="sx-word"></span></label>
+      </header>
+      <p class="st-row-help src-what">${esc(g.what || '')}</p>
+      <ol class="src-steps">
+        ${step(app.installed, `${appName} on this computer <small>(optional)</small>`, app.installed ? `<p>Found: ${esc(appName)} ${esc(app.version || '')}. ${x.app === 'opencode' ? (x.found?.openCodeKey ? 'It has an API key QuorX can copy (step 2).' : 'It has no API key for Zen or Go yet.') : 'QuorX doesn’t need it: it talks to Cline’s API with a key.'}</p>` : `<p>Not needed${x.app === 'opencode' ? ', but with it QuorX can copy its key' : ''}. To install it: <code>${esc(g.install)}</code> <button type="button" class="kx-icon" data-copy-cmd="${esc(g.install)}" title="Copy the command">⧉</button></p>`)}
+        ${step(!!x.key, 'Get a key and connect it', `<p>${esc(g.key || '')} <a href="${esc(x.keyUrl)}" target="_blank" rel="noopener">${esc(x.keyUrl.replace(/^https:\/\//, ''))}</a></p>${keyLine}${form}<p class="src-note">${esc(g.free || '')}</p><p class="kx-note src-msg" hidden></p>`)}
+        ${step(!!(x.last?.ok), 'Check the connection', `<p>${x.id === 'cline' ? 'Asks Cline whether it knows the key (no call to a model, nothing to pay).' : x.billing === 'plan' ? 'A tiny call to one of its models (nothing to pay on the plan).' : 'A tiny call to its cheapest model (well under a cent).'}</p><div class="src-test"><button type="button" class="kx-btn sm" data-src-act="test" ${x.key ? '' : 'disabled'}>Test the connection</button><button type="button" class="kx-btn sm" data-src-act="pick" ${x.on && x.key ? '' : 'disabled'}>Choose a model for new chats</button>${last}</div><p class="kx-note src-test-msg" hidden></p>`)}
+      </ol>
+      ${x.catalogueError ? `<p class="kx-wait warn">⚠ Its model list didn’t load (${esc(x.catalogueError)})${x.models ? '; the last good list is used' : ''}.</p>` : ''}
+    </section>`;
+  };
+  box.innerHTML = `<div class="src-cards">${r.sources.map(card).join('')}</div>`;
+  // A message from the action that redrew the page goes in once the new cards are there.
+  if (say) { const el = $(`.src-card[data-src="${say.id}"] .${say.where}`, box); if (el) { el.hidden = false; el.classList.toggle('bad', !!say.bad); el.textContent = say.text; } }
+  // The server has rebuilt its list already: the pickers just ask for it again.
+  const redraw = async (sources, msg) => { if (sources) ST.sources = sources; await loadModels(false); await drawSourcesPanel(msg); };
+  box.onchange = async (e) => {
+    const cb = e.target.closest('[data-src-on]'); if (!cb) return;
+    const id = cb.closest('.src-card').dataset.src;
+    cb.disabled = true;
+    const res = await postJ(`/api/sources/${id}/on`, { on: cb.checked }).catch((er) => ({ error: er.message }));
+    if (res.error) { cb.checked = !cb.checked; cb.disabled = false; const m = $(`.src-card[data-src="${id}"] .src-msg`, box); if (m) { m.hidden = false; m.classList.add('bad'); m.textContent = `⚠ ${res.error}`; } return; }
+    redraw(res.sources);
+  };
+  box.onclick = async (e) => {
+    const cmd = e.target.closest('[data-copy-cmd]')?.dataset.copyCmd;
+    if (cmd) { navigator.clipboard?.writeText(cmd).then(() => flashTip(e.target, 'Copied')).catch(() => uiPrompt('Copy the command', cmd, { ok: 'Done', cancel: 'Close' })); return; }
+    const c = e.target.closest('.src-card'); if (!c) return;
+    const id = c.dataset.src, x = r.sources.find((s) => s.id === id);
+    if (e.target.closest('.src-eye')) { const i = $('.src-key-in', c); i.type = i.type === 'password' ? 'text' : 'password'; return; }
+    const act = e.target.closest('[data-src-act]')?.dataset.srcAct; if (!act) return;
+    const msg = $('.src-msg', c), tmsg = $('.src-test-msg', c), btn = e.target.closest('button');
+    const say = (el, t, bad) => { el.hidden = false; el.classList.toggle('bad', !!bad); el.textContent = t; };
+    if (act === 'save' || act === 'import') {
+      btn.disabled = true; say(msg, act === 'import' ? 'Copying the key from OpenCode…' : 'Saving…');
+      const res = await postJ(`/api/sources/${id}/${act === 'import' ? 'import' : 'key'}`, act === 'save' ? { key: $('.src-key-in', c).value } : {}).catch((er) => ({ error: er.message }));
+      btn.disabled = false;
+      if (res.error) { say(msg, `⚠ ${res.error}`, true); return; }
+      // Saved: check it at once, so a wrong key shows here and not in a chat.
+      say(msg, 'Saved. Checking it…');
+      const t = await postJ(`/api/sources/${id}/test`, {}).catch((er) => ({ ok: false, error: er.message }));
+      await redraw(res.sources, { id, where: 'src-msg', bad: !t.ok, text: t.ok ? `✓ Connected${t.how === 'account' ? '' : `: ${short(t.model)} answered in ${secs(t.ms)}`}.` : `⚠ Saved, but the check failed: ${t.error}` });
+      return;
+    }
+    if (act === 'remove') { if (!await uiConfirm(`Remove the ${x.name} key from QuorX? Chats on its models then fall back to OpenRouter until you connect it again.`)) return; await fetch(`/api/sources/${id}/key`, { method: 'DELETE' }); redraw(); return; }
+    if (act === 'test') {
+      btn.disabled = true; say(tmsg, `Asking ${x.name}…`);
+      const t = await postJ(`/api/sources/${id}/test`, {}).catch((er) => ({ ok: false, error: er.message }));
+      btn.disabled = false;
+      say(tmsg, t.ok ? (t.how === 'account' ? `✓ ${x.name} knows this key (${secs(t.ms)}).` : `✓ ${short(t.model)} answered in ${secs(t.ms)}${t.cost ? ` (${money(t.cost, 5)})` : ''}.`) : `⚠ ${t.model ? `${short(t.model)}: ` : ''}${t.error}`, !t.ok);
+      const fresh = await fetch('/api/sources').then((y) => y.json()).catch(() => null);
+      if (fresh?.sources) { ST.sources = fresh.sources; stRefresh(); const mini2 = $('#stSrcMini'); if (mini2) mini2.innerHTML = srcMiniHTML(); }
+      return;
+    }
+    if (act === 'pick') {
+      const pick = await pickModel('chat', ST.draft.model, { context: `New chats start with a ${x.name} model`, source: id });
+      if (pick) {
+        ST.draft.model = pick; ST.dirty = true; ST.changed?.add('model'); updateDirty(); stRefresh();
+        const b = $('#defModel'); if (b) { b.dataset.id = pick; b.innerHTML = `<span class="sx-av" aria-hidden="true">${esc((short(pick)[0] || '?').toUpperCase())}</span>${recDot(pick, 'chat')} ${esc(short(pick))} <small>${esc(shortPrice(pick))}</small><span class="sx-change">Change</span>`; }
+        say(tmsg, `New chats will start with ${short(pick)} once you save. A chat can still change its model.`);
+      }
+    }
+  };
+}
 function stRefresh() {
   const S = ST.draft; if (!S || !$('#settings').open && !$('#stMain .st-panel')) return;
   for (const b of document.querySelectorAll('#stNav .st-nav-item')) {
@@ -6228,8 +6391,12 @@ function wireSettings() {
     const act = e.target.closest('[data-act]')?.dataset.act;
     if (!act) return;
     if (act === 'pickDefModel') { const id = await pickModel('chat', S.model, { context: 'Default for new chats' }); if (id) { S.model = id; const b = $('#defModel'); b.dataset.id = id; b.innerHTML = `<span class="sx-av" aria-hidden="true">${esc((short(id)[0] || '?').toUpperCase())}</span>${recDot(id, 'chat')} ${esc(short(id))} <small>${esc(shortPrice(id))}</small><span class="sx-change">Change</span>`; mark(); } }
-    if (act === 'pickFallback') { const id = await pickModel('chat', S.fallbackModel || '', { context: 'Fallback when a chat’s model fails' }); if (id) { S.fallbackModel = id; mark(); drawSettings(); } }
+    if (act === 'pickFallback') { const id = await pickModel('chat', S.fallbackModel || '', { context: 'Fallback when a chat’s model fails', openRouterOnly: true }); if (id) { S.fallbackModel = id; mark(); drawSettings(); } }
     if (act === 'clearFallback') { S.fallbackModel = ''; mark(); drawSettings(); }
+    if (act === 'openSources') { ST.cat = 'sources'; drawSettings(); $('#stMain').scrollTop = 0; }
+    if (act === 'browseSources') await pickModel('chat', '', { context: 'Models on OpenCode and Cline (pick one in a chat’s model button to use it)', source: (ST.sources || []).find((x) => x.on && x.key)?.id || 'all' });
+    if (act === 'pickSourceFallback') { const id = await pickModel('chat', S.sourceFallbackModel || '', { context: 'When an OpenCode or Cline call fails', openRouterOnly: true }); if (id) { S.sourceFallbackModel = id; mark(); drawSettings(); } }
+    if (act === 'clearSourceFallback') { S.sourceFallbackModel = ''; mark(); drawSettings(); }
     if (act === 'openSafety') { ST.cat = 'safety'; drawSettings(); }
     // New chats → "Change it": Approvals & safety, at the Permission mode card.
     if (act === 'openMode') {
@@ -6238,9 +6405,9 @@ function wireSettings() {
       if (card) { card.scrollIntoView({ block: 'start' }); card.classList.add('sx-flash'); }
     }
     if (act === 'openStorage') { ST.cat = 'storage'; drawSettings(); }
-    if (act === 'pickReviewer') { const id = await pickModel('chat', S.reviewModel || '', { context: 'Reviewer: tests what was built' }); if (id) { S.reviewModel = id; mark(); drawSettings(); } }
+    if (act === 'pickReviewer') { const id = await pickModel('chat', S.reviewModel || '', { context: 'Reviewer: tests what was built', openRouterOnly: true }); if (id) { S.reviewModel = id; mark(); drawSettings(); } }
     if (act === 'clearReviewer') { S.reviewModel = ''; mark(); drawSettings(); }
-    if (act === 'pickHelper') { const id = await pickModel('chat', S.helperModel || '', { context: 'Helper: read-only jobs' }); if (id) { S.helperModel = id; mark(); drawSettings(); } }
+    if (act === 'pickHelper') { const id = await pickModel('chat', S.helperModel || '', { context: 'Helper: read-only jobs', openRouterOnly: true }); if (id) { S.helperModel = id; mark(); drawSettings(); } }
     if (act === 'clearHelper') { S.helperModel = ''; mark(); drawSettings(); }
     if (act === 'refreshModels') { $('#stCatInfo').textContent = 'Refreshing…'; await loadModels(true); $('#stCatInfo').textContent = `${G.models?.length || 0} models loaded · refreshed ${new Date().toLocaleTimeString()}`; }
     if (act === 'resetOrder') { G.projectOrder = []; savePrefs(); renderSidebar(); e.target.textContent = 'Done'; }
@@ -6286,6 +6453,7 @@ function wireSettings() {
   drawPermsPanel();
   drawKeysPanel();
   drawModelLimit();
+  drawSourcesPanel();
   drawBlockedProviders(mark);
   drawMemoryPanel();
   drawSetupPanel();
@@ -6328,6 +6496,7 @@ function resetCategory() {
   if (ST.cat === 'appearance') { S.theme = null; G.theme = null; applyTheme(); }
   if (ST.cat === 'privacy') S.newsRemote = true;
   if (ST.cat === 'models') { S.model = d.chatModel || d.setups.C.model; S.reasoning = 'off'; Object.assign(S, { providerSort: 'auto', requireParams: true, zdrOnly: false, fallbackModel: '', blockedProviders: [...(d.blockedProviders || [])] }); }
+  if (ST.cat === 'sources') Object.assign(S, { sourceFallback: d.sourceFallback || 'same', sourceFallbackModel: '' });
   if (ST.cat === 'newchats') S.newChatTools = { ...DEFAULT_CHAT_TOOLS };
   if (ST.cat === 'loop') { S.maxSteps = d.maxSteps; S.compact = true; S.compactAt = 24000; Object.assign(S, { planFirst: d.planFirst, planSteps: d.planSteps, continueRounds: d.continueRounds, maxOutput: d.maxOutput, thinkShare: d.thinkShare, review: d.review, reviewModel: '', reviewTier: d.reviewTier, reviewSendBack: d.reviewSendBack, codeReview: d.codeReview, designLint: d.designLint, fixSteps: d.fixSteps, reviewRounds: d.reviewRounds, reviewBar: d.reviewBar, helpers: d.helpers, helperModel: '', helperSteps: d.helperSteps, helperMinFiles: d.helperMinFiles, retries: d.retries, parallel: d.parallel, verify: d.verify, verifyRounds: d.verifyRounds, askLimit: d.askLimit, trimAt: d.trimAt, buildThinking: d.buildThinking }); }
   if (ST.cat === 'deciders') { S.voters = [...d.voters]; S.gate = { ...d.gate }; S.lookVoters = [...d.lookVoters]; S.lookEscalate = d.lookEscalate; S.checks = structuredClone(d.checks); }
@@ -6955,7 +7124,7 @@ async function drawBlockedProviders(mark) {
     if (scope) { b.some = scope === 'some'; if (b.some) some.add(n); else { some.delete(n); b.models = []; } save(); drawScopes(); if (b.some) $(`.bk-item[data-bk="${CSS.escape(n)}"] .bk-pat`, box)?.focus(); return; }
     const drop = e.target.closest('[data-bk-drop]')?.dataset.bkDrop;
     if (drop != null) { b.models = b.models.filter((m) => m !== drop); save(); drawScopes(); return; }
-    if (e.target.closest('[data-bk-pick]')) { const id = await pickModel('chat', '', { context: `Block ${n} for this model` }); if (id) addModel(n, id); }
+    if (e.target.closest('[data-bk-pick]')) { const id = await pickModel('chat', '', { context: `Block ${n} for this model`, openRouterOnly: true }); if (id) addModel(n, id); }
   };
   box.onkeydown = (e) => {
     const x = e.target.closest('.bk-pat'); if (!x || e.key !== 'Enter') return;
