@@ -202,7 +202,7 @@ export async function claudeStream(body, signal, onText, onThink, { info = {}, i
       ...(Number.isFinite(said) ? (info.plan === 'plan' ? { plan_cost: said } : { cost: said }) : {}),
     };
     const length = last?.stop_reason === 'max_tokens';
-    return { text: parsed.text, thinking, reasoningDetails: [], toolCalls: parsed.calls, usage, ms: Date.now() - t, firstMs, finishReason: length ? 'length' : parsed.calls.length ? 'tool_calls' : 'stop', provider: 'Anthropic through Claude Code', model: body.model, seen: seen || 1 };
+    return { text: parsed.text, thinking, reasoningDetails: [], toolCalls: parsed.calls, ...(parsed.skipped ? { skippedCalls: parsed.skipped } : {}), usage, ms: Date.now() - t, firstMs, finishReason: length ? 'length' : parsed.calls.length ? 'tool_calls' : 'stop', provider: 'Anthropic through Claude Code', model: body.model, seen: seen || 1 };
   } catch (e) {
     if (started && e && typeof e === 'object' && !e.partial) e.partial = { outChars, ms: Date.now() - t };
     throw e;
