@@ -4187,7 +4187,7 @@ const CLAUDE_BODY = { model: 'claude-local/opus', reasoning: { effort: 'high' },
 test('Claude Code on this PC runs with every tool of its own off and QuorX’s system prompt, and its keyed calls come back', async () => {
   const { r, e, call, shown, thought } = await viaFakeClaude('normal', CLAUDE_BODY);
   assert.equal(e, undefined, e?.message);
-  assert.deepEqual([r.text, shown, thought], ['Writing it.', 'Writing it. ', 'Plan it.'], 'the block never reaches the page');
+  assert.deepEqual([r.text, shown, thought], ['Writing it.', 'Writing it.\n', 'Plan it.'], 'the block never reaches the page');
   assert.deepEqual(r.toolCalls.map((c) => [c.function.name, c.function.arguments]), [['write_file', '{"path":"a.js"}']]);
   assert.equal(r.finishReason, 'tool_calls');
   assert.deepEqual([r.usage.prompt_tokens, r.usage.completion_tokens, r.usage.plan_cost, r.usage.cost, r.provider], [420, 40, 0.0123, undefined, 'Anthropic through Claude Code'], 'a subscription call counts against the plan, not as money');
@@ -4200,7 +4200,7 @@ test('Claude Code on this PC runs with every tool of its own off and QuorX’s s
   assert.equal(call.openrouter, false, 'QuorX’s OpenRouter key stays out of its environment');
   assert.match(call.cwd, /claude-local$/, 'it runs in QuorX’s empty folder');
   assert.deepEqual(call.input.message.content.map((c) => c.type), ['text', 'image'], 'the picture goes along');
-  assert.match(call.input.message.content[0].text, /<user>\nBuild it\n\[picture attached\]\n<\/user>/);
+  assert.match(call.input.message.content[0].text, /<user key="[0-9a-f]+">\nBuild it\n\[picture attached\]\n<\/user>/);
 });
 
 test('a Claude Code that starts with tools of its own, or asks for one, is stopped and never runs it', async () => {

@@ -123,7 +123,7 @@ export async function claudeStream(body, signal, onText, onThink, { info = {}, i
   fs.mkdirSync(DIR, { recursive: true });
   // This call's key: only blocks carrying it are calls (textcalls.js).
   const key = callKey();
-  const { system, transcript } = renderTranscript(body.messages, key);
+  const { system, transcript } = renderTranscript(body.messages, key, { calls: !!body.tools?.length && body.tool_choice !== 'none' });
   // The system prompt goes in a file: on Windows a command line holds at most 32,767 characters.
   const tag = crypto.randomBytes(6).toString('hex');
   const sysFile = path.join(DIR, `system-${tag}.txt`), mcpFile = path.join(DIR, 'no-mcp.json');
