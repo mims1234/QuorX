@@ -116,9 +116,9 @@ function proseState() {
     get code() { return !!fence || pre; },
   };
 }
-// A call starts at the start of a line (at most three spaces in, or after a list marker), outside quotes, code and inline
-// code.
-const callStart = (lineBefore) => /^ {0,3}(?:(?:[-*+]|\d{1,3}[.)])\s+)?$/.test(lineBefore);
+// A call starts at the start of a line (at most three spaces in), outside quotes, code and inline code. Not after a list
+// marker: a list of calls is a plan the model is showing.
+const callStart = (lineBefore) => /^ {0,3}$/.test(lineBefore);
 
 // Some models answer in the tool-call format they were trained on, whatever the prompt says. DeepSeek's:
 // <｜DSML｜invoke name="get_time"><｜DSML｜parameter name="zone" string="true">UTC</｜DSML｜parameter></｜DSML｜invoke>
@@ -135,10 +135,19 @@ function nativeCalls(s, idBase, calls) {
   let at = 0;
   for (const l of s.split('\n')) { codeAt.push([at, st.code]); st.line(l); at += l.length + 1; }
   const inCode = (i) => { let c = false; for (const [a, v] of codeAt) { if (a > i) break; c = v; } return c; };
-  const WRAP_BEFORE = new RegExp(`^ {0,3}(?:<${BAR}DSML${BAR}(?!invoke|parameter)\\w*\\s*>\\s*)*$`);
-  const atStart = (i) => WRAP_BEFORE.test(s.slice(s.lastIndexOf('\n', i - 1) + 1, i));
+  // Only wrapper tags (or another invoke that ran) may come before an invoke on its line. The check looks back a short
+  // way only, so a reply on one huge line stays linear.
+  const WRAP_ONLY = new RegExp(`^ {0,3}(?:<${BAR}DSML${BAR}(?!invoke|parameter)\\w*\\s*>\\s*)*$`);
+  const nls = []; for (let n = s.indexOf('\n'); n >= 0; n = s.indexOf('\n', n + 1)) nls.push(n);
+  const lineStartOf = (i) => { let lo = 0, hi = nls.length; while (lo < hi) { const mid = (lo + hi) >> 1; if (nls[mid] < i) lo = mid + 1; else hi = mid; } return lo ? nls[lo - 1] + 1 : 0; };
+  let lastEnd = -1;
+  const atStart = (i) => {
+    const ls = lineStartOf(i), from = lastEnd >= ls ? lastEnd : ls;
+    return i - from <= 300 && WRAP_ONLY.test(lastEnd >= ls ? ` ${s.slice(from, i).trim()}`.replace(/^ /, '') : s.slice(from, i));
+  };
   const out = s.replace(DSML_INVOKE, (whole, name, body, off) => {
     if (calls.length >= MAX_CALLS || inCode(off) || !atStart(off)) return whole;
+    lastEnd = off + whole.length;
     let args = {};
     for (const [, k, str, v] of body.matchAll(DSML_PARAM)) {
       // string="true": the value exactly as written (DeepSeek's own format writes it inline, line breaks and all).
@@ -187,10 +196,17 @@ export function parseToolCalls(reply, idBase = 'call', key = '') {
     const inner = s.slice(from, b < 0 ? next : b);
     if (j === undefined) j = loose(inner);
     said += s.slice(i, a);
-    i = b < 0 ? next : b + close.length;
-    after = i;
-    // The fence tracker skips the call's own text: it carries on from the next line.
-    const nl = s.indexOf('\n', i); fed = Math.max(fed, nl < 0 ? s.length : nl + 1);
+    if (b >= 0) { i = b + close.length; after = i; }
+    else {
+      // No closing tag: a cut-off call at the end takes the rest; with another block after it, it ends at its own line,
+      // and what follows is read as text again (through the code and quote checks), never as "right after a call".
+      const eol = s.indexOf('\n', from);
+      i = next === s.length ? s.length : eol < 0 || eol > next ? next : eol + 1;
+      after = -1;
+    }
+    // The fence tracker skips the call's own text: it carries on from the next line (after an unclosed call, from where
+    // it was cut, which is a line start).
+    const nl = s.indexOf('\n', i); fed = Math.max(fed, b < 0 ? i : nl < 0 ? s.length : nl + 1);
     const name = j && typeof j === 'object' ? String(j.name || j.tool || j.function?.name || '') : (/"name"\s*:\s*"([^"]{1,80})"/.exec(inner)?.[1] || '');
     const args = j && typeof j === 'object' ? j.arguments ?? j.args ?? j.parameters ?? j.function?.arguments ?? {} : null;
     calls.push({ id: `${idBase}_${calls.length}`, type: 'function', function: { name: name || 'invalid', arguments: args == null ? inner.trim() : typeof args === 'string' ? args : JSON.stringify(args) } });
@@ -198,7 +214,7 @@ export function parseToolCalls(reply, idBase = 'call', key = '') {
   if (i < s.length) said += s.slice(i);
   // DeepSeek's own format, read only from the text outside QuorX's blocks.
   const rest = nativeCalls(said, idBase, calls);
-  // skipped: keyed blocks left in the middle of a line of prose, so not run (the caller tells the model).
+  // skipped: keyed blocks in the middle of a line of prose, not run (the caller says so; it never asks for them again).
   return { text: rest.replace(/\n{3,}/g, '\n\n').trim(), calls, skipped };
 }
 

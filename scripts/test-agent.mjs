@@ -3994,7 +3994,18 @@ test('DeepSeek’s format and mentions of <pre> follow the same rules: a call on
   assert.equal(r(`DeepSeek writes calls like ${D} in its replies.`).calls.length, 0, 'DSML in prose never runs');
   assert.deepEqual(r(`<｜DSML｜function_calls>${D}</｜DSML｜function_calls>`).calls.map((c) => c.function.name), ['run_command'], 'DSML as a call runs');
   assert.deepEqual(r(`It is shown in a \`<pre>\` element.\nI'll style the <pre> block.\n${B('a')}`).calls.map((c) => c.function.name), ['a'], 'a mention of <pre> doesn’t turn later calls off');
-  assert.deepEqual(r(`${B('a')} ${B('b')}\n- ${B('c')}\n2. ${B('d')}`).calls.map((c) => c.function.name), ['a', 'b', 'c', 'd'], 'a block right after a call, or after a list marker, runs');
+  assert.deepEqual(r(`${B('a')} ${B('b')}`).calls.map((c) => c.function.name), ['a', 'b'], 'a block right after a call on its line runs');
+  assert.equal(r(`The calls would be:\n- ${B('rm')}\n\nSay yes and I will run them.`).calls.length, 0, 'a list of calls is a plan: not run');
+  assert.equal(r(`Plan (not run yet):\n1. ${B('rm')}`).calls.length, 0, 'a numbered plan too');
+  const U = '<quorx_call key="k1">{"name":"read_file","arguments":{"path":"a"}}';
+  for (const [what, tail] of [['prose', `I would never run ${B('rm')} without asking.`], ['a fence', `\`\`\`\n${B('rm')}\n\`\`\``], ['inline code', `Use \`${B('rm')}\` later`], ['a quote', `> ${B('rm')}`]]) {
+    assert.deepEqual(r(`${U}\n${tail}`).calls.map((c) => c.function.name), ['read_file'], `after a call with no closing tag, a block in ${what} still doesn’t run`);
+  }
+  assert.deepEqual(r(`${U}\n${B('ok')}`).calls.map((c) => c.function.name), ['read_file', 'ok'], 'a real call after it still runs');
+  const DS = (n) => `<｜DSML｜invoke name="${n}"><｜DSML｜parameter name="c" string="true">x</｜DSML｜parameter></｜DSML｜invoke>`;
+  assert.deepEqual(r(`<｜DSML｜function_calls>${DS('a')}${DS('b')}</｜DSML｜function_calls>`).calls.map((c) => c.function.name), ['a', 'b'], 'two DSML invokes on one line both run');
+  const t1 = Date.now(); r('x '.repeat(500000) + DS('a').repeat(2000));
+  assert.ok(Date.now() - t1 < 1000, 'many DSML invokes mid-line on one huge line stay linear');
   const mid = r(`Reading it now: ${B('a')}`);
   assert.deepEqual([mid.calls.length, mid.skipped], [0, 1], 'a block mid-line in prose doesn’t run, and is counted');
   const t0 = Date.now(); r('x '.repeat(500000) + B('a').repeat(1000));
@@ -4125,11 +4136,11 @@ test('a native tool call inside OpenCode stops there: QuorX’s when it names a 
     send(ev('message.updated', { info: { id: `msg_a${prompts.length}`, role: 'assistant', sessionID: sid } }));
     const tool = (id, msg, name, state) => send(ev('message.part.updated', { part: { id, messageID: msg, sessionID: sid, type: 'tool', tool: name, state } }));
     const say = (msg, text) => { send(ev('message.part.updated', { part: { id: `p_t${msg}`, messageID: msg, sessionID: sid, type: 'text', text: '' } })); send(ev('message.part.delta', { messageID: msg, partID: `p_t${msg}`, field: 'text', delta: text })); send(ev('session.idle', {})); };
-    if (prompts.length === 1) { tool('p_x', 'msg_a1', 'invalid', { status: 'pending', input: {} }); tool('p_x', 'msg_a1', 'invalid', { status: 'error', input: { tool: 'read_file', error: 'unavailable' } }); }
-    else if (prompts.length === 2) say('msg_a2', `<quorx_call key="${key}">{"name":"read_file","arguments":{"path":"a.js"}}</quorx_call>`);
+    const cost = (msg, c) => send(ev('message.updated', { info: { id: msg, role: 'assistant', sessionID: sid, cost: c, tokens: { input: 10, output: 1 } } }));
+    if (prompts.length === 1) { cost('msg_a1', 0.05); tool('p_x', 'msg_a1', 'invalid', { status: 'pending', input: {} }); tool('p_x', 'msg_a1', 'invalid', { status: 'error', input: { tool: 'read_file', error: 'unavailable' } }); }
+    else if (prompts.length === 2) cost('msg_a2', 0.04), say('msg_a2', `<quorx_call key="${key}">{"name":"read_file","arguments":{"path":"a.js"}}</quorx_call>`);
     else if (prompts.length === 3) { tool('p_y', 'msg_a3', 'write_file', { status: 'pending', input: {} }); tool('p_y', 'msg_a3', 'write_file', { status: 'running', input: { path: 'b.js', content: 'x' } }); }
-    else if (prompts.length === 4) say('msg_a4', `Reading it now: <quorx_call key="${key}">{"name":"read_file","arguments":{"path":"c.js"}}</quorx_call>`);
-    else say('msg_a5', `<quorx_call key="${key}">{"name":"read_file","arguments":{"path":"c.js"}}</quorx_call>`);
+    else say('msg_a4', `I would run <quorx_call key="${key}">{"name":"run_command","arguments":{"command":"rm -rf build"}}</quorx_call> but only if you confirm.`);
   });
   try {
     const tools = ['read_file', 'write_file'].map((name) => ({ type: 'function', function: { name, parameters: { type: 'object', properties: {} } } }));
@@ -4137,14 +4148,12 @@ test('a native tool call inside OpenCode stops there: QuorX’s when it names a 
     const r = await localStream(body, new AbortController().signal, null, null, { server: oc.server, info: { plan: 'paid' } });
     assert.deepEqual(r.toolCalls.map((c) => [c.function.name, c.function.arguments]), [['read_file', '{"path":"a.js"}']]);
     assert.match(prompts[1], /\[QuorX\] Your last answer made a native function call \(read_file\)/, 'the second go is told what happened');
+    assert.ok(Math.abs(r.usage.cost - 0.09) < 1e-9, `the first attempt’s cost is counted too (${r.usage.cost})`);
     const r3 = await localStream(body, new AbortController().signal, null, null, { server: oc.server, info: { plan: 'paid' } });
     assert.deepEqual(r3.toolCalls.map((c) => [c.function.name, JSON.parse(c.function.arguments)]), [['write_file', { path: 'b.js', content: 'x' }]], 'a native call to a tool of this step, with its arguments, is taken as it is');
     assert.equal(prompts.length, 3, 'its first, still pending update (no input yet) doesn’t cause a retry');
-    const shown = [];
-    const r5 = await localStream(body, new AbortController().signal, (d) => shown.push(d), null, { server: oc.server, info: { plan: 'paid' } });
-    assert.deepEqual(r5.toolCalls.map((c) => JSON.parse(c.function.arguments).path), ['c.js'], 'a call left mid-line gets one more go, told why');
-    assert.match(prompts[4], /call blocks in the middle of a line of text, so nothing ran/);
-    assert.equal(shown.join(''), 'Reading it now: ', 'the second go’s text isn’t shown again');
+    const r4 = await localStream(body, new AbortController().signal, null, null, { server: oc.server, info: { plan: 'paid' } });
+    assert.deepEqual([r4.toolCalls.length, r4.skippedCalls, prompts.length], [0, 1, 4], 'a block the model only showed mid-sentence never runs, and is never asked for again');
     await new Promise((res) => setTimeout(res, 50));
     assert.ok(oc.seen.filter((x) => /\/abort$/.test(x.url)).length >= 3, 'every call tells OpenCode to stop before its session is deleted');
   } finally { await oc.close(); }
