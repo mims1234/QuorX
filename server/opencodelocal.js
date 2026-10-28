@@ -302,14 +302,15 @@ async function localOnce(body, signal, onText, onThink, { info = {}, idleMs = 18
     if (failure) throw failure;
     if (!done) throw err('OpenCode ended the stream before the answer was done', { kind: 'network' });
     const full = order.filter((id) => kinds.get(id) !== 'reasoning').map((id) => finalText.get(id) || '').join('');
-    // DeepSeek models also write calls in their own format, which carries no key: read it only from them.
-    const parsed = parseToolCalls(full, `call_${t.toString(36)}`, key, { dsml: /deepseek/i.test(rest) });
+    const parsed = parseToolCalls(full, `call_${t.toString(36)}`, key);
     // The native call is QuorX's when it names one of this step's tools with its arguments; otherwise, one more go.
     if (native && !parsed.calls.length) {
       const offered = (body.tools || []).some((x) => x?.function?.name === native.tool);
       if (offered && native.input && typeof native.input === 'object' && Object.keys(native.input).length) parsed.calls = [{ id: `call_${t.toString(36)}_n`, type: 'function', function: { name: native.tool, arguments: JSON.stringify(native.input) } }];
       else throw err(`The model made a native function call${native.tool ? ` (${native.tool})` : ''}, which OpenCode can't pass on to QuorX`, { kind: 'shape', native, firstCost: costs.size ? [...costs.values()].reduce((x, y) => x + y, 0) : Number(lastInfo?.cost), retryWith: `Your last answer made a native function call${native.tool ? ` (${native.tool})` : ''}, which never reaches QuorX, so nothing ran. Write each call as a text block in your reply, exactly as the instructions show.`, partial: { outChars, ms: Date.now() - t } });
     }
+    // Calls written in a model's own format (DeepSeek's) carry no key, so they never run: one more go, asking for QuorX's.
+    if (parsed.dsml && !parsed.calls.length && !reminder) throw err('The model wrote its calls in its own format, which QuorX only runs as keyed blocks', { kind: 'shape', firstCost: costs.size ? [...costs.values()].reduce((x, y) => x + y, 0) : Number(lastInfo?.cost), retryWith: `Your last answer wrote ${parsed.dsml > 1 ? `${parsed.dsml} calls` : 'a call'} in your own tool-call format, which QuorX doesn't run, so nothing ran. Write each call as a text block exactly as the instructions show, starting <quorx_call key="${key}">.`, partial: { outChars, ms: Date.now() - t } });
     const tk = lastInfo?.tokens || {}, cache = tk.cache || {};
     const said = costs.size ? [...costs.values()].reduce((a, b) => a + b, 0) : Number(lastInfo?.cost);
     const usage = lastInfo ? {
@@ -318,8 +319,8 @@ async function localOnce(body, signal, onText, onThink, { info = {}, idleMs = 18
       // OpenCode prices a call from its catalogue: real money for a paid provider; a plan's list price otherwise.
       ...(Number.isFinite(said) ? (info.plan === 'paid' ? { cost: said } : { opencode: { list_cost: said } }) : {}),
     } : {};
-    // Keyed blocks left mid-line in prose are not run, and never asked for again (they may be ones the model only showed).
-    return { text: parsed.text, thinking, reasoningDetails: [], toolCalls: parsed.calls, ...(parsed.skipped ? { skippedCalls: parsed.skipped } : {}), usage, ms: Date.now() - t, firstMs, finishReason: lastInfo?.finish === 'length' ? 'length' : parsed.calls.length ? 'tool_calls' : 'stop', provider: `${info.providerName || providerID} through OpenCode`, model: body.model, seen: seen || 1 };
+    // Blocks that didn't run (mid-line, hidden, or in its own format after the one more go) are never asked for again.
+    return { text: parsed.text, thinking, reasoningDetails: [], toolCalls: parsed.calls, ...(parsed.skipped + parsed.dsml ? { skippedCalls: parsed.skipped + parsed.dsml } : {}), usage, ms: Date.now() - t, firstMs, finishReason: lastInfo?.finish === 'length' ? 'length' : parsed.calls.length ? 'tool_calls' : 'stop', provider: `${info.providerName || providerID} through OpenCode`, model: body.model, seen: seen || 1 };
   } catch (e) {
     if (accepted && e && typeof e === 'object' && !e.partial) e.partial = { outChars, ms: Date.now() - t };
     throw e;

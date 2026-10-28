@@ -96,6 +96,19 @@ function loose(s) {
   try { return JSON.parse(dropTrailingCommas(t)); } catch { /* one more */ }
   try { return JSON.parse(dropTrailingCommas(escapeInStrings(t))); } catch { return undefined; }
 }
+// Where the JSON object or array starting at i ends: brackets counted outside strings, escapes followed, raw line breaks
+// allowed in strings. -1 when it never closes or a bracket doesn't match.
+function jsonEnd(s, i) {
+  const open = [];
+  for (let inStr = false; i < s.length; i++) {
+    const ch = s[i];
+    if (inStr) { if (ch === '\\') i++; else if (ch === '"') inStr = false; continue; }
+    if (ch === '"') inStr = true;
+    else if (ch === '{' || ch === '[') open.push(ch === '{' ? '}' : ']');
+    else if (ch === '}' || ch === ']') { if (open.pop() !== ch) return -1; if (!open.length) return i + 1; }
+  }
+  return -1;
+}
 
 // Where a call can be written: tracks, line by line, whether the text so far is inside a code fence (``` or ~~~ of any
 // length), a <pre> block or an HTML comment. Fed only prose, never a call's own JSON.
@@ -120,6 +133,7 @@ function proseState() {
       if (pre && /<\/pre>/i.test(t) && !/<pre\b[^>]*>\s*$/i.test(t.slice(t.search(/<\/pre>/i)))) pre = false;
     },
     get code() { return !!fence || pre || comment; },
+    get fenced() { return !!fence; },
   };
 }
 // A call starts at the start of a line (at most three spaces in), outside quotes, code and inline code. Not after a list
@@ -128,17 +142,17 @@ const callStart = (lineBefore) => /^ {0,3}$/.test(lineBefore);
 
 // Some models answer in the tool-call format they were trained on, whatever the prompt says. DeepSeek's:
 // <｜DSML｜invoke name="get_time"><｜DSML｜parameter name="zone" string="true">UTC</｜DSML｜parameter></｜DSML｜invoke>
-// (the bars are full-width ｜ or plain |, sometimes doubled, sometimes with spaces). It has no key, so it is read only
-// when the caller asks (a DeepSeek model), and only as the end of the reply: invokes from a line start to the end, with
-// nothing but their wrapper tags between and after. An invoke shown in prose, or quoted back from a file, has text after.
+// (the bars are full-width ｜ or plain |, sometimes doubled, sometimes with spaces). It has no key, so with a key it never
+// runs: its calls that end the reply (invokes from a line start to the end, with nothing but their wrapper tags between
+// and after) are only counted, and the caller asks once for QuorX's blocks. Without a key (no transcript), they run.
 const BAR = '[｜|]+\\s*';
 const DSML_OPEN = new RegExp(`<${BAR}DSML${BAR}invoke\\s+name="([^"]+)"\\s*>`, 'g');
 const DSML_CLOSE = new RegExp(`<\\/${BAR}DSML${BAR}invoke\\s*>`, 'g');
 const DSML_PARAM = new RegExp(`<${BAR}DSML${BAR}parameter\\s+name="([^"]+)"(?:\\s+string="(true|false)")?[^>]*>([\\s\\S]*?)<\\/${BAR}DSML${BAR}parameter\\s*>`, 'g');
 // The wrapper around the invokes (function_calls, calls…), removed once its calls were read.
 const DSML_WRAP = new RegExp(`<\\/?${BAR}DSML${BAR}(?!invoke|parameter)\\w*\\s*>`, 'g');
-function nativeCalls(s, idBase, calls) {
-  if (!/DSML/.test(s)) return s;
+function nativeCalls(s, idBase, calls, run) {
+  if (!/DSML/.test(s)) return { text: s, dsml: 0 };
   // Every invoke with its closing tag, in one pass (each opener takes the first closing tag after it).
   const closes = [...s.matchAll(DSML_CLOSE)];
   const found = [];
@@ -157,13 +171,14 @@ function nativeCalls(s, idBase, calls) {
     first--;
     while (first > 0 && onlyWraps(s.slice(found[first - 1].b, found[first].a))) first--;
   }
-  if (first === found.length) return s;
+  if (first === found.length) return { text: s, dsml: 0 };
   // Its first invoke starts a line (after wrapper tags at most), outside code.
   const a = found[first].a, ls = s.lastIndexOf('\n', a - 1) + 1;
-  if (!/^ {0,3}(?! )/.test(s.slice(ls, a + 1)) || !onlyWraps(s.slice(ls, a))) return s;
+  if (!/^ {0,3}(?![ \t])/.test(s.slice(ls, a + 1)) || !onlyWraps(s.slice(ls, a))) return { text: s, dsml: 0 };
   const st = proseState();
   for (let p = 0; p < ls;) { let nl = s.indexOf('\n', p); if (nl < 0 || nl >= ls) nl = ls; st.line(s.slice(p, nl)); p = nl + 1; }
-  if (st.code) return s;
+  if (st.code) return { text: s, dsml: 0 };
+  if (!run) return { text: s, dsml: found.length - first };
   for (const { name, body } of found.slice(first, first + Math.max(0, MAX_CALLS - calls.length))) {
     let args = {};
     for (const [, k, str, v] of body.matchAll(DSML_PARAM)) {
@@ -175,17 +190,18 @@ function nativeCalls(s, idBase, calls) {
     }
     calls.push({ id: `${idBase}_${calls.length}`, type: 'function', function: { name, arguments: JSON.stringify(args) } });
   }
-  return s.slice(0, a).replace(DSML_WRAP, '');
+  return { text: s.slice(0, a).replace(DSML_WRAP, ''), dsml: 0 };
 }
 
 /**
  * The model's reply split into what it said and the calls it wrote: { text, calls: [{ id, type, function }] }. With a
  * key, only blocks carrying it are calls, and only where a call is written (see callStart); any other block stays
  * text. A block that isn't valid JSON still becomes a call (named when its name can be read, with its raw text as
- * arguments), so the agent tells the model which call didn't parse instead of the call vanishing. dsml: also read
- * DeepSeek's own format (see nativeCalls); with a key, only when asked for.
+ * arguments), so the agent tells the model which call didn't parse instead of the call vanishing; nothing after a
+ * broken block is read. DeepSeek's own format runs only without a key; with one, `dsml` counts its calls at the end.
  */
-export function parseToolCalls(reply, idBase = 'call', key = '', { dsml = !key } = {}) {
+export function parseToolCalls(reply, idBase = 'call', key = '') {
+  const run = !key;
   const calls = [];
   const s = String(reply || '').slice(0, 4e6);
   const opener = key ? new RegExp(`<(${TAG}|tool_call)\\s+key\\s*=\\s*["']?${key}["']?\\s*>`, 'g') : new RegExp(`<(${TAG}|tool_call)>`, 'g');
@@ -202,50 +218,42 @@ export function parseToolCalls(reply, idBase = 'call', key = '', { dsml = !key }
     // Right after another call on the same line counts as a line start too.
     const startsHere = callStart(s.slice(ls, a)) || (after >= ls && !s.slice(after, a).trim());
     if (st.code || !startsHere) {
-      // Counted when it sat in plain prose; one in inline code or a quote is an example the model meant to show.
-      if (!st.code && !/`/.test(s.slice(ls, a)) && !/^\s*>/.test(s.slice(ls, a))) skipped++;
+      // Counted (the caller warns) when it looked like a call: at a line start inside an HTML comment or <pre>, or
+      // mid-line in plain prose. One in a code fence, inline code or a quote is an example the model meant to show.
+      const before = s.slice(ls, a);
+      if (st.code ? !st.fenced && startsHere : (before.match(/`/g) || []).length % 2 === 0 && !/^\s*>/.test(before)) skipped++;
       said += s.slice(i, a + 1); i = a + 1; continue;
     }
     const from = a + m[0].length, close = `</${m[1]}>`;
-    opener.lastIndex = from;
-    const next = opener.exec(s)?.index ?? s.length;
-    // Its end: the first closing tag after which its JSON reads. A block inside the call's own text (an example in a
-    // file it writes) is nested: its closing tag isn't this call's, so blocks are counted open and closed, and a call
-    // whose JSON never reads ends where that count comes back to zero. Once it has, a new block is a new call.
-    const tok = new RegExp(`${opener.source}|${close}`, 'g');
-    tok.lastIndex = from;
-    let b = -1, j, depth = 1, tried = 0;
-    for (let t; tried < 8 && (t = tok.exec(s));) {
-      if (!t[0].startsWith('</')) { if (b >= 0) break; depth++; continue; }
-      depth--; tried++;
-      const v = loose(s.slice(from, t.index));
-      if (v !== undefined) { b = t.index; j = v; break; }
-      if (depth === 0 && b < 0) b = t.index;
-    }
     said += s.slice(i, a);
-    let inner;
-    if (b >= 0) { inner = s.slice(from, b); i = b + close.length; after = i; }
-    else {
-      // No closing tag: a cut-off call at the end takes the rest; with another block after it, it ends at its own line,
-      // and what follows is read as text again (through the code and quote checks), never as "right after a call".
-      const eol = s.indexOf('\n', from);
-      i = next === s.length ? s.length : eol < 0 || eol > next ? next : eol + 1;
-      inner = s.slice(from, i);
-      after = -1;
+    // Its end is where its JSON ends (strings and escapes followed, so a block inside a string, such as an example in a
+    // file it writes, is part of it), then its closing tag if one follows. A ```json fence around the JSON is allowed.
+    const lead = /^\s*(?:```(?:json)?\s*)?/i.exec(s.slice(from, from + 40))[0].length;
+    const e = s[from + lead] === '{' ? jsonEnd(s, from + lead) : -1;
+    const j = e < 0 ? undefined : loose(s.slice(from + lead, e));
+    if (!j || typeof j !== 'object' || Array.isArray(j)) {
+      // Broken: nothing after it is read (anything in it could look like a call). It still reaches the agent, named
+      // when its name can be read, so the model is told which call didn't parse.
+      const c = s.indexOf(close, from), raw = s.slice(from, c >= 0 ? c : s.length).trim().slice(0, 20000);
+      calls.push({ id: `${idBase}_${calls.length}`, type: 'function', function: { name: /"name"\s*:\s*"([^"]{1,80})"/.exec(raw)?.[1] || 'invalid', arguments: raw } });
+      i = s.length; fed = s.length;
+      break;
     }
-    if (j === undefined) j = loose(inner);
-    // The fence tracker skips the call's own text: it carries on from the next line (after an unclosed call, from where
-    // it was cut, which is a line start).
-    const nl = s.indexOf('\n', i); fed = Math.max(fed, b < 0 ? i : nl < 0 ? s.length : nl + 1);
-    const name = j && typeof j === 'object' ? String(j.name || j.tool || j.function?.name || '') : (/"name"\s*:\s*"([^"]{1,80})"/.exec(inner)?.[1] || '');
-    const args = j && typeof j === 'object' ? j.arguments ?? j.args ?? j.parameters ?? j.function?.arguments ?? {} : null;
-    calls.push({ id: `${idBase}_${calls.length}`, type: 'function', function: { name: name || 'invalid', arguments: args == null ? inner.trim() : typeof args === 'string' ? args : JSON.stringify(args) } });
+    const tail = /^\s*(?:```\s*)?/.exec(s.slice(e, e + 40))[0].length;
+    if (s.startsWith(close, e + tail)) { i = e + tail + close.length; after = i; }
+    else { i = e; after = -1; } // no closing tag after whole JSON: what follows is read as text again
+    // The fence tracker skips the call's own text: it carries on from the next line.
+    const nl = s.indexOf('\n', i); fed = Math.max(fed, nl < 0 ? s.length : nl + 1);
+    const name = String(j.name || j.tool || j.function?.name || '');
+    const args = j.arguments ?? j.args ?? j.parameters ?? j.function?.arguments ?? {};
+    calls.push({ id: `${idBase}_${calls.length}`, type: 'function', function: { name: name || 'invalid', arguments: typeof args === 'string' ? args : JSON.stringify(args) } });
   }
   if (i < s.length) said += s.slice(i);
-  // DeepSeek's own format (when asked for), read only from the text outside QuorX's blocks.
-  const rest = dsml ? nativeCalls(said, idBase, calls) : said;
-  // skipped: keyed blocks in the middle of a line of prose, not run (the caller says so; it never asks for them again).
-  return { text: rest.replace(/\n{3,}/g, '\n\n').trim(), calls, skipped };
+  // DeepSeek's own format has no key: run only without one (when the caller has no key to check); with a key, its calls
+  // that end the reply are counted, so the caller can ask once for QuorX's blocks instead.
+  const { text: rest, dsml } = nativeCalls(said, idBase, calls, run);
+  // skipped: blocks that looked like calls but weren't run (the caller says so; it never asks for them again).
+  return { text: rest.replace(/\n{3,}/g, '\n\n').trim(), calls, skipped, dsml };
 }
 
 /**
