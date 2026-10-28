@@ -6,7 +6,7 @@ import { tempDir } from './test-home.mjs';
 import { resolver } from '../server/safefetch.js';
 import { videoBody, editCommand, ffmpegMajor } from '../server/video.js';
 import { primeCatalogue, HOME } from '../server/openrouter.js';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -35,6 +35,7 @@ import { sourceOf, sourceStream, sameOnOpenRouter, failureKind, noteSourceResult
 import { SECRET_FILES } from '../server/keys.js';
 import { toolPrompt, renderTranscript, parseToolCalls, textFilter } from '../server/textcalls.js';
 import { localStream, localModels } from '../server/opencodelocal.js';
+import { claudeStream, claudeModels, claudeError, effortFor } from '../server/claudelocal.js';
 
 let n = 0;
 const reply = (text, calls = [], finishReason = 'stop') => ({ text, toolCalls: calls.map(([name, args], i) => ({ id: `c${++n}_${i}`, type: 'function', function: { name, arguments: typeof args === 'string' ? args : JSON.stringify(args) } })), usage: { cost: 0.0001 }, ms: 1, firstMs: 1, finishReason });
@@ -4160,3 +4161,83 @@ test('OpenCode on this PC lists every text model of every provider connected the
   } finally { await oc.close(); }
 });
 
+
+// ---------- Claude Code on this PC (claudelocal.js), against scripts/fake-claude.mjs ----------
+const FAKE_CLAUDE = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/(\w:)/, '$1')), 'fake-claude.mjs');
+async function viaFakeClaude(mode, body, opts = {}) {
+  const log = path.join(tempDir('fake-claude-'), 'call.json');
+  const keep = { mode: process.env.FAKE_CLAUDE_MODE, log: process.env.FAKE_CLAUDE_LOG, or: process.env.OPENROUTER_API_KEY };
+  Object.assign(process.env, { FAKE_CLAUDE_MODE: mode, FAKE_CLAUDE_LOG: log, OPENROUTER_API_KEY: 'sk-or-test' });
+  const shown = [], thought = [];
+  try {
+    const out = await claudeStream(body, opts.signal || new AbortController().signal, (d) => shown.push(d), (d) => thought.push(d),
+      { info: { plan: 'plan', in: ['text', 'image'], variants: ['low', 'medium', 'high', 'xhigh', 'max'], ...opts.info }, idleMs: opts.idleMs || 20e3, find: () => 'claude.exe', start: (cmd, args, o) => spawn(process.execPath, [FAKE_CLAUDE, ...args], o) })
+      .then((r) => ({ r }), (e) => ({ e }));
+    let call = null;
+    try { call = JSON.parse(fs.readFileSync(log, 'utf8')); } catch { /* it never got that far */ }
+    return { ...out, call, shown: shown.join(''), thought: thought.join('') };
+  } finally {
+    for (const [k, v] of [['FAKE_CLAUDE_MODE', keep.mode], ['FAKE_CLAUDE_LOG', keep.log], ['OPENROUTER_API_KEY', keep.or]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  }
+}
+const PIC = 'data:image/png;base64,iVBORw0KGgo=';
+const CLAUDE_BODY = { model: 'claude-local/opus', reasoning: { effort: 'high' }, tools: [{ type: 'function', function: { name: 'write_file', parameters: { type: 'object', properties: {} } } }],
+  messages: [{ role: 'system', content: 'Rules.' }, { role: 'user', content: [{ type: 'text', text: 'Build it' }, { type: 'image_url', image_url: { url: PIC } }] }] };
+
+test('Claude Code on this PC runs with every tool of its own off and QuorX’s system prompt, and its keyed calls come back', async () => {
+  const { r, e, call, shown, thought } = await viaFakeClaude('normal', CLAUDE_BODY);
+  assert.equal(e, undefined, e?.message);
+  assert.deepEqual([r.text, shown, thought], ['Writing it.', 'Writing it.\n', 'Plan it.'], 'the block never reaches the page');
+  assert.deepEqual(r.toolCalls.map((c) => [c.function.name, c.function.arguments]), [['write_file', '{"path":"a.js"}']]);
+  assert.equal(r.finishReason, 'tool_calls');
+  assert.deepEqual([r.usage.prompt_tokens, r.usage.completion_tokens, r.usage.plan_cost, r.usage.cost, r.provider], [420, 40, 0.0123, undefined, 'Anthropic through Claude Code'], 'a subscription call counts against the plan, not as money');
+  const a = call.args, flag = (f) => a[a.indexOf(f) + 1];
+  assert.deepEqual([flag('--tools'), flag('--setting-sources'), flag('--model'), flag('--effort'), flag('--max-turns')], ['', '', 'opus', 'high', '1'], 'no tools, no settings files');
+  for (const f of ['-p', '--strict-mcp-config', '--no-session-persistence', '--include-partial-messages']) assert.ok(a.includes(f), f);
+  assert.equal(JSON.parse(fs.readFileSync(flag('--mcp-config'), 'utf8')).mcpServers && Object.keys(JSON.parse(fs.readFileSync(flag('--mcp-config'), 'utf8')).mcpServers).length, 0, 'an empty MCP list');
+  assert.match(call.system, /^Rules\.\n\n\[Tools\]/, 'QuorX’s own system prompt, from a file');
+  assert.equal(fs.existsSync(flag('--system-prompt-file')), false, 'the prompt file is removed afterwards');
+  assert.equal(call.openrouter, false, 'QuorX’s OpenRouter key stays out of its environment');
+  assert.match(call.cwd, /claude-local$/, 'it runs in QuorX’s empty folder');
+  assert.deepEqual(call.input.message.content.map((c) => c.type), ['text', 'image'], 'the picture goes along');
+  assert.match(call.input.message.content[0].text, /<user key="[0-9a-f]+">\nBuild it\n\[picture attached\]\n<\/user>/);
+});
+
+test('a Claude Code that starts with tools of its own, or asks for one, is stopped and never runs it', async () => {
+  const on = await viaFakeClaude('tools', CLAUDE_BODY);
+  assert.equal(failureKind(on.e), 'shape');
+  assert.match(on.e.message, /tools of its own \(Bash, Read\)/);
+  const asked = await viaFakeClaude('tooluse', CLAUDE_BODY);
+  assert.equal(failureKind(asked.e), 'shape');
+  assert.match(asked.e.message, /its own tools/);
+});
+
+test('Claude Code’s refusals say what to do: a used-up plan waits for its reset, a signed-out one says to sign in', async () => {
+  const lim = await viaFakeClaude('limit', CLAUDE_BODY);
+  assert.equal(failureKind(lim.e), 'quota');
+  assert.ok(lim.e.retryAfter > 3500 && lim.e.retryAfter <= 3600, String(lim.e.retryAfter));
+  assert.doesNotMatch(lim.e.message, /\|\d/, 'the reset time is not shown raw');
+  const out = await viaFakeClaude('signedout', CLAUDE_BODY);
+  assert.equal(failureKind(out.e), 'auth');
+  assert.equal(failureKind(claudeError('API Error: 529 Overloaded')), 'server');
+  assert.equal(failureKind(claudeError('Credit balance is too low')), 'quota');
+});
+
+test('Stop ends a Claude Code call at once, and its process with it', async () => {
+  const ac = new AbortController();
+  setTimeout(() => ac.abort(), 600);
+  const t = Date.now();
+  const { e } = await viaFakeClaude('hang', CLAUDE_BODY, { signal: ac.signal });
+  assert.ok(e, 'it rejects');
+  assert.ok(Date.now() - t < 8000, 'no waiting for the idle timer');
+});
+
+test('Claude Code’s models follow its own names, priced by how the user signed in, with effort levels where it has them', async () => {
+  const sub = await claudeModels({ authInfo: { subscription: true, plan: 'max' } });
+  assert.deepEqual(sub.map((m) => [m.id, m.plan, m.planLabel]), [['claude-local/fable', 'plan', 'Max'], ['claude-local/opus', 'plan', 'Max'], ['claude-local/sonnet', 'plan', 'Max'], ['claude-local/haiku', 'plan', 'Max']]);
+  assert.deepEqual([sub[1].in, sub[3].variants, sourceOf('claude-local/opus')?.model], [['text', 'image'], [], 'opus']);
+  const key = await claudeModels({ authInfo: { subscription: false } });
+  assert.deepEqual([key[0].plan, key[0].priceFromApp], ['paid', true]);
+  assert.deepEqual([effortFor({ effort: 'high' }, sub[1].variants), effortFor({ enabled: false }, sub[1].variants), effortFor({ effort: 'minimal' }, sub[1].variants), effortFor({ effort: 'high' }, [])], ['high', 'low', 'low', null]);
+  assert.deepEqual(sourcePriced({ plan: 'plan' }, { plan_cost: 0.02, prompt_tokens: 10 }), { cost: 0, plan_cost: 0.02 }, 'its own list-price figure is kept');
+});
