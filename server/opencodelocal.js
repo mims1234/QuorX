@@ -184,7 +184,17 @@ export async function localStream(body, signal, onText, onThink, opts = {}) {
   try { return await localOnce(body, signal, onText, onThink, opts); }
   catch (e) {
     if (!e?.retryWith || signal?.aborted) throw e;
-    return localOnce(body, signal, null, onThink, { ...opts, reminder: e.retryWith });
+    const r = await localOnce(body, signal, null, onThink, { ...opts, reminder: e.retryWith });
+    // The first attempt was a call too: its cost is added to the one that answered.
+    const first = Number(e.firstCost);
+    if (Number.isFinite(first) && first > 0) {
+      const u = (r.usage ||= {});
+      if (u.cost != null) u.cost += first;
+      else if (u.opencode) u.opencode.list_cost = (Number(u.opencode.list_cost) || 0) + first;
+      else if ((opts.info?.plan || 'paid') === 'paid') u.cost = first;
+      else u.opencode = { list_cost: first };
+    }
+    return r;
   }
 }
 async function localOnce(body, signal, onText, onThink, { info = {}, idleMs = 180e3, server, reminder = '' } = {}) {
@@ -297,10 +307,8 @@ async function localOnce(body, signal, onText, onThink, { info = {}, idleMs = 18
     if (native && !parsed.calls.length) {
       const offered = (body.tools || []).some((x) => x?.function?.name === native.tool);
       if (offered && native.input && typeof native.input === 'object' && Object.keys(native.input).length) parsed.calls = [{ id: `call_${t.toString(36)}_n`, type: 'function', function: { name: native.tool, arguments: JSON.stringify(native.input) } }];
-      else throw err(`The model made a native function call${native.tool ? ` (${native.tool})` : ''}, which OpenCode can't pass on to QuorX`, { kind: 'shape', native, retryWith: `Your last answer made a native function call${native.tool ? ` (${native.tool})` : ''}, which never reaches QuorX, so nothing ran. Write each call as a text block in your reply, exactly as the instructions show.`, partial: { outChars, ms: Date.now() - t } });
+      else throw err(`The model made a native function call${native.tool ? ` (${native.tool})` : ''}, which OpenCode can't pass on to QuorX`, { kind: 'shape', native, firstCost: costs.size ? [...costs.values()].reduce((x, y) => x + y, 0) : Number(lastInfo?.cost), retryWith: `Your last answer made a native function call${native.tool ? ` (${native.tool})` : ''}, which never reaches QuorX, so nothing ran. Write each call as a text block in your reply, exactly as the instructions show.`, partial: { outChars, ms: Date.now() - t } });
     }
-    // Keyed blocks written mid-line weren't run: with nothing else to run, one more go, told why.
-    if (!parsed.calls.length && parsed.skipped) throw err(`The model's ${parsed.skipped} call block${parsed.skipped > 1 ? 's were' : ' was'} not on a line of its own, so nothing ran`, { kind: 'shape', retryWith: 'Your last answer had call blocks in the middle of a line of text, so nothing ran. Put each block on a line of its own, exactly as the instructions show.', partial: { outChars, ms: Date.now() - t } });
     const tk = lastInfo?.tokens || {}, cache = tk.cache || {};
     const said = costs.size ? [...costs.values()].reduce((a, b) => a + b, 0) : Number(lastInfo?.cost);
     const usage = lastInfo ? {
@@ -309,7 +317,8 @@ async function localOnce(body, signal, onText, onThink, { info = {}, idleMs = 18
       // OpenCode prices a call from its catalogue: real money for a paid provider; a plan's list price otherwise.
       ...(Number.isFinite(said) ? (info.plan === 'paid' ? { cost: said } : { opencode: { list_cost: said } }) : {}),
     } : {};
-    return { text: parsed.text, thinking, reasoningDetails: [], toolCalls: parsed.calls, usage, ms: Date.now() - t, firstMs, finishReason: lastInfo?.finish === 'length' ? 'length' : parsed.calls.length ? 'tool_calls' : 'stop', provider: `${info.providerName || providerID} through OpenCode`, model: body.model, seen: seen || 1 };
+    // Keyed blocks left mid-line in prose are not run, and never asked for again (they may be ones the model only showed).
+    return { text: parsed.text, thinking, reasoningDetails: [], toolCalls: parsed.calls, ...(parsed.skipped ? { skippedCalls: parsed.skipped } : {}), usage, ms: Date.now() - t, firstMs, finishReason: lastInfo?.finish === 'length' ? 'length' : parsed.calls.length ? 'tool_calls' : 'stop', provider: `${info.providerName || providerID} through OpenCode`, model: body.model, seen: seen || 1 };
   } catch (e) {
     if (accepted && e && typeof e === 'object' && !e.partial) e.partial = { outChars, ms: Date.now() - t };
     throw e;
