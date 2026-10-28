@@ -126,10 +126,11 @@ export const DEFAULTS = {
   // deepseek-v4.1-flash's browser calls without their arguments (just {"action":"open"}), so runs went in circles.
   blockedProviders: [{ name: 'InferenceNet', models: ['deepseek/*'] }],
   fallbackModel: '',       // tried by OpenRouter when the chat's model fails or is unavailable ('' = none)
-  // OpenCode & Cline (server/sources.js): a chat whose model runs there falls back to OpenRouter when a call fails.
+  // OpenCode & Cline (server/sources.js): when a call to a chat's model there fails. 'off' (the default) = the reply
+  // stops and says which model failed and why, and the user picks another model; nothing goes to OpenRouter.
   // 'same' = the same model on OpenRouter when it has one, else sourceFallbackModel (else the default chat model) ·
-  // 'model' = always sourceFallbackModel · 'off' = stop and say so, spending nothing on OpenRouter.
-  sourceFallback: 'same',
+  // 'model' = always sourceFallbackModel.
+  sourceFallback: 'off',
   sourceFallbackModel: '',
   // The reviewer (#4): a separate model plays what was built and scores it before the final reply.
   codeReview: 'off',       // /review on its own after a reply that changed code: 'off' · 'auto' (a card only when the reviewer finds bugs)
@@ -1862,7 +1863,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       }
     }
     const to = sourceFallbackFor(sm, S, catalogue);
-    if (!to) throw Object.assign(new Error(`${why}. QuorX didn't switch to OpenRouter, as ⚙ Settings → OpenCode & Cline asks. Fix ${name} or pick another model, then send a message to carry on.`), { status: 400, source: s.source });
+    if (!to) throw Object.assign(new Error(`${why}. Pick another model in the chat's model button (or fix ${name}), then send a message to carry on. QuorX doesn't switch models by itself (⚙ Settings → OpenCode & Cline → When a call fails).`), { status: 400, source: s.source });
     const rest = !!run.sourceOff[s.source], first = rest && !run.sourceOffSaid?.[s.source];
     if (first) (run.sourceOffSaid ??= {})[s.source] = true;
     emit({ t: 'source_fallback', step: role === 'writer' ? run.stepNow ?? null : null, role, from: sm, to, source: s.source, kind, why: clip(why, 300), rest, at: at() });

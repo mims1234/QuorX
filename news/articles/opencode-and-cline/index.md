@@ -35,7 +35,7 @@ You can switch a chat between OpenRouter and a source at any time. The conversat
   { "id": "connect", "title": "Connect a source", "sub": "paste a key, test it", "cap": "Paste an OpenCode or Cline API key in Settings and press Test the connection." },
   { "id": "pick", "title": "Pick its model", "sub": "tagged OpenCode, Go or Cline", "cap": "Choose a source model in the chat's model picker. Where it runs filters the list to one source." },
   { "id": "run", "title": "The main model runs there", "sub": "your plan or credits", "cap": "Each step of the reply calls the source. Tools, files, commands and checks work as usual." },
-  { "id": "fail", "title": "If a call fails", "sub": "one retry, then ⤵ OpenRouter", "new": true, "cap": "A hiccup gets one quick retry. If it still fails, that step goes to OpenRouter and the steps show ⤵ with why. The chat never stops for it." },
+  { "id": "fail", "title": "If a call fails", "sub": "one retry, then it stops and says why", "new": true, "cap": "A hiccup gets one quick retry. If it still fails, the reply stops and says which model failed and why; you pick the next model. A fallback to OpenRouter is there only if you choose one." },
   { "id": "rest", "title": "Everything else", "sub": "on OpenRouter", "cap": "Deciders, paid media, the prompt enhancer, and helpers and the reviewer on their usual models keep running on OpenRouter." }
 ] }
 ```
@@ -101,34 +101,34 @@ calls count $0, since the plan pays, and each step shows what it counted against
 ## When it fails
 
 These services change often. While this was being built, OpenCode moved its gateway address twice (from `/zen/v1` to
-`/inference`), and Cline's CLI updated itself twice in one day. So QuorX never stops a chat because a source failed.
+`/inference`), and Cline's CLI updated itself twice in one day. QuorX never crashes over it, and it never switches
+your model behind your back.
 
 - **A hiccup** (a rate limit with a short wait, a server error, a dropped connection) gets one quick retry.
-- **Then the step goes to OpenRouter.** By default it's the same model on OpenRouter when it has it (for example
-  `opencode-go/glm-5.3` becomes `z-ai/glm-5.3`), otherwise a fallback model you choose, otherwise the default chat
-  model. The reply's steps show ⤵ with why.
-- **A source that refuses its key, runs out of credit or plan usage, or fails twice in a reply** is skipped for the
-  rest of that reply. Other chats skip it for a short while instead of waiting, and the next reply tries again.
+- **Then the reply stops** and says which model failed and why (an expired key, a used-up plan, a free model the source
+  keeps for its own app). The work done so far stays. Pick another model in the chat's model button and send a message
+  to carry on: the conversation carries over.
+- **A source that keeps failing** is skipped by other chats for a short while instead of each one waiting on it.
 - **Answers QuorX can't read** count as failures too: a web page from a CDN, an empty stream, a shape it doesn't know.
 
 Any text streamed before a failure moves into the steps, so the reply isn't written twice. No tool call from a failed
 answer ever runs.
 
-You choose what happens in **⚙ Settings → Models → OpenCode & Cline → When a call fails**: **Same model on
-OpenRouter**, **Always this model**, or **Stop and tell me**, which spends nothing on OpenRouter and keeps the work
-done so far.
+If you'd rather have the reply carry on by itself, choose a fallback in **⚙ Settings → Models → OpenCode & Cline →
+When a call fails**: **Same model on OpenRouter** (for example `opencode-go/glm-5.3` becomes `z-ai/glm-5.3`) or
+**Always this model**. A step that falls back shows ⤵ with why, and costs OpenRouter's price.
 
 ```compare
 { "prompt": "Go hits its 5-hour limit halfway through a reply", "options": [
+  { "label": "Stop and tell me (the default)", "steps": [
+    { "title": "Go says the plan's usage is used up", "text": "for this model, in this 5-hour window" },
+    { "title": "The reply stops there", "text": "and says which model and why" },
+    { "title": "You choose", "text": "wait for the window, or pick another model in the chat's model button" }
+  ], "verdict": { "title": "Nothing changes behind your back", "text": "The work so far stays, nothing is spent elsewhere, and the chat carries on with the model you pick." } },
   { "label": "Same model on OpenRouter", "steps": [
     { "title": "Go says the plan's usage is used up", "text": "for this model, in this 5-hour window" },
     { "title": "QuorX skips Go for the rest of the reply", "text": "and the next step runs z-ai/glm-5.3 on OpenRouter" },
     { "title": "The steps show ⤵", "text": "with why, and what OpenRouter charged" }
-  ], "verdict": { "title": "The reply finishes", "text": "Same model, same conversation, paid on OpenRouter until Go's window resets. The next reply tries Go again." } },
-  { "label": "Stop and tell me", "steps": [
-    { "title": "Go says the plan's usage is used up", "text": "for this model, in this 5-hour window" },
-    { "title": "The reply stops there", "text": "and says why", "bad": true },
-    { "title": "Nothing is spent on OpenRouter", "text": "you decide whether to wait, switch model or switch source" }
-  ], "verdict": { "title": "Nothing extra spent", "text": "The work waits for you. Switch the chat to OpenRouter, or come back when the window resets." } }
+  ], "verdict": { "title": "The reply finishes by itself", "text": "Same model, same conversation, paid on OpenRouter until Go's window resets. The next reply tries Go again." } }
 ] }
 ```

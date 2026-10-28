@@ -3790,10 +3790,12 @@ test('a failed source call falls back to the same model on OpenRouter, else the 
   assert.equal(sameOnOpenRouter('cline/moonshotai/kimi-k3', or), 'moonshotai/kimi-k3', 'Cline ids are OpenRouter’s');
   assert.equal(sameOnOpenRouter('opencode-go/mimo-v2.6-pro', or, {}), null);
   const list = [...or, goInfo()];
-  assert.equal(sourceFallbackFor('opencode-go/glm-5.3', {}, list), 'z-ai/glm-5.3');
-  assert.equal(sourceFallbackFor('opencode-go/mimo-v2.6-pro', { sourceFallbackModel: 'moonshotai/kimi-k3' }, list), 'moonshotai/kimi-k3');
-  assert.equal(sourceFallbackFor('opencode-go/mimo-v2.6-pro', { model: 'anthropic/claude-sonnet-4.5' }, list), 'anthropic/claude-sonnet-4.5', 'else the default chat model');
-  assert.equal(sourceFallbackFor('opencode-go/mimo-v2.6-pro', { model: 'cline/x/y', sourceFallbackModel: 'opencode/z' }, list), DEFAULTS.chatModel, 'never a source model');
+  assert.equal(sourceFallbackFor('opencode-go/glm-5.3', {}, list), null, 'by default a failed call stops: the user picks the next model');
+  const on = { sourceFallback: 'same' };
+  assert.equal(sourceFallbackFor('opencode-go/glm-5.3', on, list), 'z-ai/glm-5.3');
+  assert.equal(sourceFallbackFor('opencode-go/mimo-v2.6-pro', { ...on, sourceFallbackModel: 'moonshotai/kimi-k3' }, list), 'moonshotai/kimi-k3');
+  assert.equal(sourceFallbackFor('opencode-go/mimo-v2.6-pro', { ...on, model: 'anthropic/claude-sonnet-4.5' }, list), 'anthropic/claude-sonnet-4.5', 'else the default chat model');
+  assert.equal(sourceFallbackFor('opencode-go/mimo-v2.6-pro', { ...on, model: 'cline/x/y', sourceFallbackModel: 'opencode/z' }, list), DEFAULTS.chatModel, 'never a source model');
   assert.equal(sourceFallbackFor('opencode-go/glm-5.3', { sourceFallback: 'model', sourceFallbackModel: 'moonshotai/kimi-k3' }, list), 'moonshotai/kimi-k3');
   assert.equal(sourceFallbackFor('opencode-go/glm-5.3', { sourceFallback: 'off' }, list), null);
 });
@@ -4071,7 +4073,7 @@ test('an OpenCode call that fails part-way falls back to the same model on OpenR
     if (calls.length === 1) { onText?.('Let me'); throw Object.assign(new Error('upstream exploded'), { status: 502 }); }
     return srcReply('Done on Go.');
   };
-  const { events, bodies, done } = await run((body, i) => [reply('', [['write_file', { path: 'a.txt', content: 'a' }]])][i], { setup: { model: 'opencode-go/glm-5.3' }, catalogue: SRC_CAT, sourceStream });
+  const { events, bodies, done } = await run((body, i) => [reply('', [['write_file', { path: 'a.txt', content: 'a' }]])][i], { setup: { model: 'opencode-go/glm-5.3' }, catalogue: SRC_CAT, sourceStream, settings: { sourceFallback: 'same' } });
   assert.equal(bodies.length, 1, 'OpenRouter answered one step');
   assert.equal(bodies[0].model, 'z-ai/glm-5.3');
   assert.equal(calls.length, 2, 'the next step went back to the source');
@@ -4088,7 +4090,7 @@ test('an OpenCode call that fails part-way falls back to the same model on OpenR
 test('a source that refuses its key is skipped for the rest of the reply, and says so once', async () => {
   let n = 0;
   const sourceStream = async () => { n++; throw Object.assign(new Error('Invalid API key.'), { status: 401 }); };
-  const { events, done } = await run((body, i) => [reply('', [['write_file', { path: 'a.txt', content: 'a' }]]), reply('Done on OpenRouter.')][i], { setup: { model: 'opencode-go/glm-5.3' }, catalogue: SRC_CAT, sourceStream });
+  const { events, done } = await run((body, i) => [reply('', [['write_file', { path: 'a.txt', content: 'a' }]]), reply('Done on OpenRouter.')][i], { setup: { model: 'opencode-go/glm-5.3' }, catalogue: SRC_CAT, sourceStream, settings: { sourceFallback: 'same' } });
   assert.equal(n, 1, 'tried once');
   assert.deepEqual(of(events, 'source_fallback').map((e) => [e.kind, e.rest]), [['auth', true], ['skipped', true]]);
   assert.equal(of(events, 'note').filter((x) => /refused its key/.test(x.msg)).length, 1);
@@ -4099,7 +4101,7 @@ test('a free model its source keeps for its own app is asked once, then the repl
   let n = 0;
   const sourceStream = async () => { n++; throw Object.assign(new Error('Free usage limit reached. Free models work in OpenCode.'), { status: 429, errorType: 'FreeUsageLimitError' }); };
   const cat = [...SRC_CAT, goInfo({ id: 'opencode/glm-5.3-flash-free', realId: 'glm-5.3-flash-free', source: 'opencode', plan: 'free', canonical: 'zhipuai/glm-5.3' })];
-  const { events, done } = await run((body, i) => [reply('', [['write_file', { path: 'a.txt', content: 'a' }]]), reply('Done.')][i], { setup: { model: 'opencode/glm-5.3-flash-free' }, catalogue: cat, sourceStream });
+  const { events, done } = await run((body, i) => [reply('', [['write_file', { path: 'a.txt', content: 'a' }]]), reply('Done.')][i], { setup: { model: 'opencode/glm-5.3-flash-free' }, catalogue: cat, sourceStream, settings: { sourceFallback: 'same' } });
   assert.equal(n, 1, 'asked once, honestly');
   assert.deepEqual(of(events, 'source_fallback').map((e) => [e.kind, e.to, e.rest]), [['free', 'z-ai/glm-5.3', true], ['skipped', 'z-ai/glm-5.3', true]]);
   assert.ok(of(events, 'note').some((x) => /keeps that free model for its own app/.test(x.msg)));
@@ -4109,7 +4111,7 @@ test('a free model its source keeps for its own app is asked once, then the repl
 test('two failures in one reply keep the rest of it on OpenRouter, and an answer that isn’t one counts as a failure', async () => {
   let n = 0;
   const sourceStream = async () => { n++; return n === 1 ? undefined : { text: 'x' }; }; // nothing, then no toolCalls list
-  const { events, done } = await run((body, i) => [reply('', [['write_file', { path: 'a.txt', content: 'a' }]]), reply('', [['write_file', { path: 'b.txt', content: 'b' }]]), reply('Done.')][i], { setup: { model: 'opencode-go/glm-5.3' }, catalogue: SRC_CAT, sourceStream });
+  const { events, done } = await run((body, i) => [reply('', [['write_file', { path: 'a.txt', content: 'a' }]]), reply('', [['write_file', { path: 'b.txt', content: 'b' }]]), reply('Done.')][i], { setup: { model: 'opencode-go/glm-5.3' }, catalogue: SRC_CAT, sourceStream, settings: { sourceFallback: 'same' } });
   assert.equal(n, 2);
   assert.deepEqual(of(events, 'source_fallback').map((e) => [e.kind, e.rest]), [['shape', false], ['shape', true], ['skipped', true]]);
   assert.equal(done.reply, 'Done.');
@@ -4124,7 +4126,9 @@ test('with the fallback off, a failed source call stops the reply and says why, 
   assert.match(done.reply, /out of credit or plan usage/);
   assert.equal(of(events, 'source_fallback').length, 0);
   const err = await run(never, { setup: { model: 'opencode-go/glm-5.3' }, catalogue: SRC_CAT, settings: { sourceFallback: 'off' }, sourceStream: async () => { throw Object.assign(new Error('down'), { status: 503 }); } }).catch((e) => e);
-  assert.match(err.message, /didn't switch to OpenRouter/, 'failing at once, the reply ends with why');
+  assert.match(err.message, /Pick another model/, 'failing at once, the reply ends with why and what to do');
+  const dflt = await run(never, { setup: { model: 'opencode-go/glm-5.3' }, catalogue: SRC_CAT, sourceStream: async () => { throw Object.assign(new Error('Invalid API key.'), { status: 401 }); } }).catch((e) => e);
+  assert.match(dflt.message, /refused its key[\s\S]*Pick another model/, 'with no setting at all, nothing goes to OpenRouter either');
 });
 
 test('a source model gets its own reasoning back on its next step, and OpenRouter never does', async () => {
@@ -4135,7 +4139,7 @@ test('a source model gets its own reasoning back on its next step, and OpenRoute
     if (calls.length === 2) throw Object.assign(new Error('boom'), { status: 500 });
     return srcReply('Done.');
   };
-  const { bodies, done } = await run((body, i) => [reply('', [['write_file', { path: 'b.txt', content: 'b' }]])][i], { setup: { model: 'opencode-go/glm-5.3' }, catalogue: SRC_CAT, sourceStream });
+  const { bodies, done } = await run((body, i) => [reply('', [['write_file', { path: 'b.txt', content: 'b' }]])][i], { setup: { model: 'opencode-go/glm-5.3' }, catalogue: SRC_CAT, sourceStream, settings: { sourceFallback: 'same' } });
   assert.equal(done.reply, 'Done.');
   assert.ok(!JSON.stringify(bodies[0].messages).includes('qx_pass'), 'the fallback call carries no pass-back');
   assert.equal(calls[2].messages.find((m) => m.role === 'assistant').qx_pass.thinking, 'plan');

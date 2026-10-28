@@ -36,8 +36,36 @@ export const localServer = () => (srv && !srv.dead && srv.up ? { running: true, 
 let lastError = '';
 const freePort = () => new Promise((resolve, reject) => { const s = net.createServer(); s.once('error', reject); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); }); });
 const killTree = (pid) => { try { if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true }); else process.kill(-pid, 'SIGKILL'); } catch { /* gone */ } };
-export function stopLocalServer() { const s = srv; srv = null; if (s?.proc?.pid && !s.dead) killTree(s.proc.pid); }
+export function stopLocalServer() { const s = srv; srv = null; if (s?.proc?.pid && !s.dead) killTree(s.proc.pid); forget(); }
 process.once('exit', stopLocalServer);
+// A QuorX that was killed (Task Manager, a crash, the app closing it hard) never ran its exit handler, so the server it
+// started is written down, and the next QuorX stops it: only when that process is still a cmd.exe or opencode.exe,
+// never a process that happens to have reused the number.
+const PIDFILE = path.join(DIR, 'server.json');
+const forget = () => { try { fs.rmSync(PIDFILE, { force: true }); } catch { /* gone */ } };
+function isOurs(pid) {
+  if (process.platform !== 'win32') { try { process.kill(pid, 0); return true; } catch { return false; } }
+  const r = spawnSync('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], { windowsHide: true, encoding: 'utf8', timeout: 10000 });
+  return /^"(cmd|opencode)\.exe"/im.test(String(r.stdout || ''));
+}
+// The OpenCode server QuorX started on that port: its command line names the port, which was free and random.
+function serverPids(port) {
+  if (!Number.isInteger(port) || process.platform !== 'win32') return [];
+  const ps = `Get-CimInstance Win32_Process -Filter "Name='opencode.exe'" | Where-Object { $_.CommandLine -match 'serve --hostname 127\\.0\\.0\\.1 --port ${port}( |$)' } | ForEach-Object { $_.ProcessId }`;
+  const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], { windowsHide: true, encoding: 'utf8', timeout: 20000 });
+  return String(r.stdout || '').split(/\s+/).map(Number).filter((n) => Number.isInteger(n) && n > 0);
+}
+export function reapLeftover() {
+  let rec = null;
+  try { rec = JSON.parse(fs.readFileSync(PIDFILE, 'utf8')); } catch { return false; }
+  if (!rec?.pid || (srv && srv.proc?.pid === rec.pid)) return false;
+  // The cmd.exe that started it may be gone already (it dies with QuorX); OpenCode itself is found by its port.
+  const pids = new Set([...(isOurs(rec.pid) ? [rec.pid] : []), ...serverPids(Number(rec.port))]);
+  for (const pid of pids) killTree(pid);
+  forget();
+  return pids.size > 0;
+}
+setTimeout(() => { try { reapLeftover(); } catch { /* best effort */ } }, 2000).unref();
 // OpenCode takes a few hundred MB: it stops after a quiet quarter of an hour, and starts again on the next call.
 setInterval(() => { if (srv && !srv.active && Date.now() - srv.lastUse > IDLE_STOP_MS) stopLocalServer(); }, 60e3).unref();
 
@@ -55,6 +83,7 @@ export async function ensureLocalServer({ start = spawn, find = findOnPath, read
   const exe = find('opencode');
   if (!exe) throw err('OpenCode is not installed on this computer (npm i -g opencode-ai), or not on PATH.', { kind: 'notinstalled' });
   fs.mkdirSync(DIR, { recursive: true });
+  reapLeftover();
   const port = await freePort(), pass = crypto.randomBytes(18).toString('base64url');
   // OpenCode uses its own sign-ins and keys: QuorX's OpenRouter key stays out of its environment.
   const env = { ...process.env, OPENCODE_SERVER_PASSWORD: pass, OPENCODE_CONFIG_CONTENT: JSON.stringify(CONFIG), OPENCODE_DISABLE_CLAUDE_CODE: '1', OPENCODE_DISABLE_PROJECT_CONFIG: '1', OPENCODE_DISABLE_AUTOUPDATE: '1', OPENCODE_DISABLE_EXTERNAL_SKILLS: '1', OPENCODE_DISABLE_LSP_DOWNLOAD: '1' };
@@ -66,7 +95,8 @@ export async function ensureLocalServer({ start = spawn, find = findOnPath, read
   const me = { base: `http://127.0.0.1:${port}`, auth: `Basic ${Buffer.from(`opencode:${pass}`).toString('base64')}`, proc, startedAt: Date.now(), lastUse: Date.now(), active: 0, log: '', up: false, dead: false };
   const keep = (d) => { me.log = (me.log + String(d)).slice(-2000); };
   proc.stdout?.on('data', keep); proc.stderr?.on('data', keep);
-  proc.on('exit', () => { me.dead = true; if (srv === me) srv = null; });
+  proc.on('exit', () => { me.dead = true; if (srv === me) { srv = null; forget(); } });
+  try { if (proc.pid) fs.writeFileSync(PIDFILE, JSON.stringify({ pid: proc.pid, port, at: me.startedAt })); } catch { /* best effort */ }
   proc.on('error', (e) => { me.dead = true; keep(e.message); });
   srv = me;
   me.ready = (async () => {
