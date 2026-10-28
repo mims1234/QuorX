@@ -46,6 +46,7 @@ public static class QxUia {
   [DllImport("user32.dll")] static extern bool IsWindow(IntPtr h);
   [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
   [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
+  [DllImport("user32.dll")] static extern bool GetCursorPos(out POINT p);
   [DllImport("user32.dll")] static extern void mouse_event(uint f, uint x, uint y, uint d, UIntPtr e);
   [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int cmd);
   [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
@@ -499,20 +500,59 @@ public static class QxUia {
   }
 
   // kind: right, middle, double, hover, down, up (down and up with button).
+  // While a button is held (mouse_down until mouse_up), the pointer glides to each next point, as a hand would: a drawing
+  // app draws the whole way, and a drag follows it.
+  static bool held;
   public static string Mouse(long handle, int r, int x, int y, string kind, string button, int[] pids) {
     POINT p = Target(handle, r, x, y, pids);
-    SetCursorPos(p.X, p.Y); Thread.Sleep(30);
+    POINT c;
+    if (held && GetCursorPos(out c)) Glide(c, p); else SetCursorPos(p.X, p.Y);
+    Thread.Sleep(30);
     uint[] f = Button(button);
     string name = string.IsNullOrEmpty(button) ? "left" : button;
     switch (kind) {
       case "right": Btn(0x8, 0x10, 1); return "right-clicked";
       case "middle": Btn(0x20, 0x40, 1); return "middle-clicked";
       case "double": Btn(0x2, 0x4, 2); return "double-clicked";
-      case "hover": Thread.Sleep(500); return "the pointer rests there";
-      case "down": mouse_event(f[0], 0, 0, 0, UIntPtr.Zero); return "pressed the " + name + " button (send mouse_up with the same button to let go)";
-      case "up": mouse_event(f[1], 0, 0, 0, UIntPtr.Zero); return "let go of the " + name + " button";
+      case "hover": Thread.Sleep(held ? 30 : 500); return held ? "moved there with the button held" : "the pointer rests there";
+      case "down": mouse_event(f[0], 0, 0, 0, UIntPtr.Zero); held = true; return "pressed the " + name + " button (send mouse_up with the same button to let go)";
+      case "up": mouse_event(f[1], 0, 0, 0, UIntPtr.Zero); held = false; return "let go of the " + name + " button";
     }
     throw new Exception("unknown mouse action " + kind);
+  }
+  // The pointer from a to b in small moves (a few pixels each), each sent as real mouse input: apps that read pointer
+  // input (Windows 11 Paint) don't draw for a cursor that is only placed with SetCursorPos.
+  static void Glide(POINT a, POINT b) {
+    int d = Math.Max(Math.Abs(b.X - a.X), Math.Abs(b.Y - a.Y)), steps = Math.Max(1, Math.Min(80, d / 3));
+    for (int i = 1; i <= steps; i++) { MoveTo(new POINT { X = a.X + (b.X - a.X) * i / steps, Y = a.Y + (b.Y - a.Y) * i / steps }); Thread.Sleep(8); }
+  }
+  static void MoveTo(POINT p) {
+    int vx = GetSystemMetrics(76), vy = GetSystemMetrics(77), vw = Math.Max(1, GetSystemMetrics(78) - 1), vh = Math.Max(1, GetSystemMetrics(79) - 1);
+    mouse_event(0x8000 | 0x4000 | 0x1, (uint)((p.X - vx) * 65535L / vw), (uint)((p.Y - vy) * 65535L / vh), 0, UIntPtr.Zero); // absolute, whole desktop, a move
+  }
+
+  // path: press at the first point, glide through every point after it, let go: one freehand stroke (a curve, a
+  // whisker, a line of handwriting). pts: x,y window pixels, flat.
+  public static string Stroke(long handle, string pts, string button, int[] pids) {
+    uint[] f = Button(button);
+    string[] v = (pts ?? "").Split(new char[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
+    int n = v.Length / 2;
+    if (n < 2 || v.Length % 2 != 0) throw new Exception("give points: at least two [x, y] pairs");
+    IntPtr h = new IntPtr(handle);
+    POINT[] p = new POINT[n];
+    p[0] = At(h, int.Parse(v[0]), int.Parse(v[1]), pids);
+    RECT r; GetWindowRect(h, out r);
+    for (int i = 1; i < n; i++) {
+      int x = int.Parse(v[2 * i]), y = int.Parse(v[2 * i + 1]);
+      if (x < 0 || y < 0 || x >= r.R - r.L || y >= r.B - r.T) throw new Exception("point " + (i + 1) + " (" + x + "," + y + ") is outside the window, so nothing was drawn");
+      p[i] = new POINT { X = r.L + x, Y = r.T + y };
+      Lands(p[i], pids);
+    }
+    SetCursorPos(p[0].X, p[0].Y); MoveTo(p[0]); Thread.Sleep(40);
+    mouse_event(f[0], 0, 0, 0, UIntPtr.Zero); Thread.Sleep(50);
+    try { for (int i = 1; i < n; i++) Glide(p[i - 1], p[i]); }
+    finally { Thread.Sleep(40); mouse_event(f[1], 0, 0, 0, UIntPtr.Zero); held = false; }
+    return "drew one stroke through " + n + " points, from " + v[0] + "," + v[1] + " to " + v[v.Length - 2] + "," + v[v.Length - 1];
   }
 
   public static string Drag(long handle, int x, int y, int x2, int y2, string button, int[] pids) {
@@ -524,9 +564,9 @@ public static class QxUia {
     if (x2 < 0 || y2 < 0 || x2 >= r.R - r.L || y2 >= r.B - r.T) throw new Exception("the end point is outside the window");
     POINT b = new POINT { X = r.L + x2, Y = r.T + y2 };
     Lands(b, pids);
-    SetCursorPos(a.X, a.Y); Thread.Sleep(40);
+    SetCursorPos(a.X, a.Y); MoveTo(a); Thread.Sleep(40);
     mouse_event(f[0], 0, 0, 0, UIntPtr.Zero); Thread.Sleep(80);
-    for (int i = 1; i <= steps; i++) { SetCursorPos(a.X + (b.X - a.X) * i / steps, a.Y + (b.Y - a.Y) * i / steps); Thread.Sleep(20); }
+    for (int i = 1; i <= steps; i++) { MoveTo(new POINT { X = a.X + (b.X - a.X) * i / steps, Y = a.Y + (b.Y - a.Y) * i / steps }); Thread.Sleep(20); }
     Thread.Sleep(80); mouse_event(f[1], 0, 0, 0, UIntPtr.Zero);
     return (f[0] == 0x2 ? "dragged" : (f[0] == 0x8 ? "right-dragged" : "middle-dragged")) + " from " + x + "," + y + " to " + x2 + "," + y2;
   }
@@ -691,6 +731,7 @@ while ($true) {
       'zoom' { $out.png = [QxUia]::Zoom([long]$m.handle, [int]$m.x, [int]$m.y, [int]$m.w, [int]$m.h, $pids); $out.via = [QxUia]::LastVia }
       'mouse' { $out.did = [QxUia]::Mouse([long]$m.handle, [int]$m.ref, [int]$m.x, [int]$m.y, [string]$m.kind, [string]$m.button, $pids) }
       'drag' { $out.did = [QxUia]::Drag([long]$m.handle, [int]$m.x, [int]$m.y, [int]$m.x2, [int]$m.y2, [string]$m.button, $pids) }
+      'stroke' { $out.did = [QxUia]::Stroke([long]$m.handle, [string]$m.pts, [string]$m.button, $pids) }
       'scroll' { $out.did = [QxUia]::Scroll([long]$m.handle, [int]$m.ref, [int]$(if ($null -ne $m.x) { $m.x } else { -1 }), [int]$(if ($null -ne $m.y) { $m.y } else { -1 }), [string]$m.dir, [int]$(if ($m.amount) { $m.amount } else { 3 }), $pids) }
       'hold' { $out.did = [QxUia]::HoldKey([long]$m.handle, [string]$m.key, [int]$(if ($m.ms) { $m.ms } else { 1000 }), $pids) }
       'win' { $out.did = [QxUia]::Win([long]$m.handle, [string]$m.what, [int]$m.x, [int]$m.y, [int]$m.w, [int]$m.h, $pids) }

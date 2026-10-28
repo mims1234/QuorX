@@ -144,6 +144,8 @@ export async function zoomWindow(scope, handle, x, y, w, h) { winOnly('zoom'); c
 /** kind: right, middle, double, hover, down, up; at a control (ref) or window pixels (x, y). */
 export async function mouseAt(scope, handle, kind, { ref, x, y, button } = {}) { winOnly('that mouse action'); const p = await pick(scope, handle); return (await U.call('mouse', { ...p, kind, ref: num(ref), x: num(x), y: num(y), button: button || '' }, 15000)).did; }
 export async function dragIn(scope, handle, x, y, x2, y2, button) { winOnly('drag'); const p = await pick(scope, handle); return (await U.call('drag', { ...p, x: num(x), y: num(y), x2: num(x2), y2: num(y2), button: button || '' }, 15000)).did; }
+/** One held stroke through points ([[x, y], …], window pixels): a freehand line in a drawing app. */
+export async function strokeIn(scope, handle, points, button) { winOnly('path'); const p = await pick(scope, handle); return (await U.call('stroke', { ...p, pts: points.map(([x, y]) => `${num(x)},${num(y)}`).join(','), button: button || '' }, 60000)).did; }
 /** dir: up, down, left, right; at a control (ref), a point (x, y) or the window's middle. */
 export async function scrollIn(scope, handle, dir, amount, { ref, x, y } = {}) { winOnly('scroll'); const p = await pick(scope, handle); return (await U.call('scroll', { ...p, dir, amount: num(amount, 3), ref: num(ref), ...(x != null ? { x: num(x), y: num(y) } : {}) }, 15000)).did; }
 export async function holdKey(scope, handle, key, ms) { winOnly('hold_key'); const p = await pick(scope, handle); return (await U.call('hold', { ...p, key: String(key || ''), ms: num(ms, 1000) }, 20000)).did; }
