@@ -1225,6 +1225,8 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
   const outCap = Math.max(4000, Math.min(128000, Number(S.maxOutput) || DEFAULTS.maxOutput));
   const outFor = (id) => Math.min(outCap, catalogue.find((m) => m.id === id)?.maxOut || 16000);
   const modelInfo = catalogue.find((m) => m.id === setup.model);
+  // The builder as OpenRouter names it, so a source copy of the reviewer model never reviews its own work.
+  const builder = () => (sourceOf(setup.model) ? sameOnOpenRouter(setup.model, catalogue.filter((m) => !sourceOf(m.id)), modelInfo) || setup.model : setup.model);
   const maxOut = outFor(setup.model);
   // Images the user attached (data URLs). The chat model sees them if it can; the deciders always can, via decide.
   const attachedImages = (Array.isArray(req.images) ? req.images : []).filter((u) => /^data:image\//.test(String(u))).slice(0, 4);
@@ -1429,6 +1431,8 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     return bs.budget != null && bs.spent >= bs.budget * (1 + grace) ? bs : null;
   };
   for (; !handled && step < maxSteps; step++) {
+    // Stop pressed while a tool ran (a tool can finish normally after it): no further model call.
+    if (signal.aborted) throw new Error('Stopped.');
     if (projectId && !req.bench && step === firstStep && !resumed) {
       const bs = budgetState(projectId);
       if (bs.budget != null && bs.spent >= bs.budget && !(await budgetReached(bs, step))) { run.stop = 'budget'; run.budgetStop = 'start'; break; }
@@ -1794,20 +1798,28 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   async function callModel(body, sig, onText, onThink, role = 'writer') {
     // An OpenCode or Cline model: its source first. When that fails, the same call goes to OpenRouter (viaSource
     // says which model), and the step carries on as if nothing happened, apart from a note.
-    let fell = null;
+    let fell = null, unmarked = null;
     if (sourceOf(body.model)) {
       const got = await viaSource(body, sig, onText, onThink, role);
       if (got.r) return got.r;
       fell = body.model; body = got.body;
+      // The marks were placed for the source's id: the OpenRouter model (a Claude one) gets its own.
+      const mk = run.cacheMarks ? withCacheMarks(body.messages, body.model) : body.messages;
+      if (mk !== body.messages) { unmarked = body; body = { ...body, messages: mk }; }
     } else if (body.messages?.some((m) => m?.qx_pass)) body = { ...body, messages: stripPass(body.messages) };
     try {
       let r;
       try { r = await streamModel(body, sig, onText, onThink); }
       catch (e) {
         // The routing filters can leave a fallback model with no provider: it goes with OpenRouter's default routing.
-        if (!fell || !body.provider || sig.aborted || !/no endpoints|no allowed providers|require_parameters|zdr|data policy/i.test(e?.message || '')) throw e;
-        const { provider: _p, models: _m, ...rest } = body;
-        body = rest;
+        if (fell && body.provider && !sig.aborted && /no endpoints|no allowed providers|require_parameters|zdr|data policy/i.test(e?.message || '')) {
+          const { provider: _p, models: _m, ...rest } = body;
+          body = rest;
+        } else if (unmarked && e?.status === 400 && !sig.aborted) {
+          // The provider refused the cache marks: this reply goes on without them.
+          run.cacheMarks = false; body = unmarked;
+          emit({ t: 'note', level: 'warn', msg: `Prompt-cache marks were refused (${clip(e.message, 100)}); continuing without them.`, at: at() });
+        } else throw e;
         r = await streamModel(body, sig, onText, onThink);
       }
       // The stream ended without its usage: the caller accounts r.usage as usual, so the estimate goes there.
@@ -1824,6 +1836,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   // for the fallback model. Throws only when the settings say not to fall back (or on Stop). A source that refused
   // its key or ran out of usage, or failed twice in this reply, is skipped for the rest of the reply.
   async function viaSource(body, sig, onText, onThink, role) {
+    if (sig.aborted) throw new Error('Stopped.');
     const sm = body.model, s = sourceOf(sm), name = s.def.name;
     run.sourceFails ??= {}; run.sourceOff ??= {};
     // A source switched off, or one that failed for other chats a moment ago, is not waited on again (tests script
@@ -2144,7 +2157,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     for (const m of messages.slice(-24)) for (const tc of m.tool_calls || []) tried.push(`${tc.function?.name}(${clip(tc.function?.arguments || '', 140)})`);
     const changed = root ? changedFiles(root, filesId).slice(0, 20) : [];
     const strong = S.freshEyesTier === 'strong';
-    const model = String(S.freshEyesModel || '').trim() || (strong ? (setup.model === REVIEW_STRONG ? REVIEW_STRONG_ALT : REVIEW_STRONG) : (String(S.helperModel || '').trim() || HELPER_MODEL));
+    const model = String(S.freshEyesModel || '').trim() || (strong ? (builder() === REVIEW_STRONG ? REVIEW_STRONG_ALT : REVIEW_STRONG) : (String(S.helperModel || '').trim() || HELPER_MODEL));
     const task = `An AI agent hit ${problems.length > 1 ? 'these problems' : 'this problem'} twice while working on: "${clip(userText, 500)}"\n\n${problems.map((p) => `Problem (${p.source}): ${clip(p.text, 900)}`).join('\n')}\n\nIts recent attempts, newest last:\n${tried.slice(-10).map((x) => `- ${x}`).join('\n') || '(none)'}${changed.length ? `\n\nFiles it changed in this reply: ${changed.join(', ')}` : ''}`;
     emit({ t: 'fresh_eyes_start', step, model, problems: problems.map((p) => clip(p.text, 200)), at: at() });
     const r = await delegate({ task }, step, { model, system: FRESH_EYES_SYSTEM, steps: 6, role: 'freshEyes', fresh: true });
@@ -2440,7 +2453,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (!targets.length) return null;
     const chosen = String(S.reviewModel || '').trim();
     const strong = S.reviewTier === 'strong';
-    const model = chosen || (strong ? (setup.model === REVIEW_STRONG ? REVIEW_STRONG_ALT : REVIEW_STRONG) : (setup.model === REVIEW_MODEL ? REVIEW_ALT : REVIEW_MODEL));
+    const model = chosen || (strong ? (builder() === REVIEW_STRONG ? REVIEW_STRONG_ALT : REVIEW_STRONG) : (builder() === REVIEW_MODEL ? REVIEW_ALT : REVIEW_MODEL));
     const info = catalogue.find((m) => m.id === model);
     const sees = !info || (info.in || []).includes('image');
     const bar = Math.max(1, Math.min(5, Math.round(Number(S.reviewBar ?? DEFAULTS.reviewBar)) || 3));

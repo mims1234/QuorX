@@ -16,7 +16,7 @@ import { spawn } from 'node:child_process';
 import { openDetached } from './server/userenv.js';
 import { currentKey, PORT, runtime, ROOT, HOME, chat, chatModels, decisionModels, imageModels, speechModels, musicModels, videoModels, transcribe, clearCatalogues, providerList, knownProviders } from './server/openrouter.js';
 import { listKeys, addKey, removeKey, setActive, renameKey, keyUsage, activeUsage, accountCredits, startSampling, lockDown } from './server/keys.js';
-import { sourceStatus, sourceModels, setSourceKey, removeSourceKey, setSourceOn, importOpenCodeKey, testSource } from './server/sources.js';
+import { sourceStatus, sourceModels, setSourceKey, removeSourceKey, setSourceOn, importOpenCodeKey, testSource, sourceOf, sameOnOpenRouter } from './server/sources.js';
 import { setupCheck, runFix } from './server/setup-check.js';
 import { startSignIn, signInStatus, cancelSignIn, finishByCallback, finishWithCode, callbackPage } from './server/oauth.js';
 import { runAgent, answerApproval, answerQuestion, answerSecret, answerBudget, raiseCap, setRunApproval, steerRun, setRunReading, setRunVideo, holdCard, DEFAULTS, MEDIA, briefFor, briefForChat, REVIEW_MODEL, HELPER_MODEL, REVIEW_ALT, REVIEW_STRONG, REVIEW_STRONG_ALT } from './server/agent.js';
@@ -477,8 +477,11 @@ const server = http.createServer(async (req, res) => {
       const st = budgetState(b.projectId);
       if (st.budget != null && st.left <= 0) return json(res, 200, { error: 'This project has reached its budget. Raise it in the sidebar to run a review.' });
       try {
-        const model = pickReviewer({ reviewModel: b.reviewModel, reviewTier: b.reviewTier }, String(b.chatModel || ''), { REVIEW_MODEL, REVIEW_ALT, REVIEW_STRONG, REVIEW_STRONG_ALT });
-        const info = (await chatModels().catch(() => [])).find((m) => m.id === model) || {};
+        // A chat on an OpenCode or Cline model is compared as its OpenRouter twin, so the model never reviews its own work.
+        const orModels = await chatModels().catch(() => []);
+        const chatModel = String(b.chatModel || ''), twin = sourceOf(chatModel) ? sameOnOpenRouter(chatModel, orModels) || chatModel : chatModel;
+        const model = pickReviewer({ reviewModel: b.reviewModel, reviewTier: b.reviewTier }, twin, { REVIEW_MODEL, REVIEW_ALT, REVIEW_STRONG, REVIEW_STRONG_ALT });
+        const info = orModels.find((m) => m.id === model) || {};
         const r = await reviewCode(workspaceDir(b.projectId), { scope: String(b.scope || 'auto'), runId: validRunId(String(b.runId || '')) ? String(b.runId) : '', base: String(b.base || ''), ask: String(b.ask || ''), model, info }, { chat });
         const id = `cr-${Date.now().toString(36)}`;
         if (r.cost) recordRun({ ts: new Date().toISOString(), runId: id, kind: 'review', project: b.projectId, chatId: b.chatId || null, model, stop: r.scope, cost: +r.cost.toFixed(6) });

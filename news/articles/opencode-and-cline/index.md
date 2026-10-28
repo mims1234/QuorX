@@ -19,14 +19,13 @@ model. Everything here is in **⚙ Settings → Models → OpenCode & Cline**.
 | **OpenCode Go** | A $10/month plan, with usage limits per model in a 5-hour, a weekly and a monthly window | `opencode-go/glm-5.3` |
 | **Cline** | Your Cline credits; ClinePass models are paid by that plan | `cline/…` |
 
-Once a source is connected, its models show in every model picker, tagged **OpenCode**, **Go** or **Cline**. The
+Once a source is connected, its models show in the chat model pickers, tagged **OpenCode**, **Go** or **Cline**. The
 **Where it runs** switch at the top of the picker shows one source at a time, so a long list stays short.
 
 ## What runs where
 
-Only the chat's main model runs on the source, plus the helper or reviewer if you pick a source model for them.
-Deciders, paid media, the prompt enhancer, and helpers and the reviewer on their usual models stay on OpenRouter, so
-you still need an OpenRouter key.
+Only the chat's main model runs on the source (its summaries of a long chat too). Deciders, paid media, the prompt
+enhancer, helpers and the reviewer stay on OpenRouter, so you still need an OpenRouter key.
 
 You can switch a chat between OpenRouter and a source at any time. The conversation carries over.
 
@@ -36,7 +35,7 @@ You can switch a chat between OpenRouter and a source at any time. The conversat
   { "id": "pick", "title": "Pick its model", "sub": "tagged OpenCode, Go or Cline", "cap": "Choose a source model in the chat's model picker. Where it runs filters the list to one source." },
   { "id": "run", "title": "The main model runs there", "sub": "your plan or credits", "cap": "Each step of the reply calls the source. Tools, files, commands and checks work as usual." },
   { "id": "fail", "title": "If a call fails", "sub": "one retry, then it stops and says why", "new": true, "cap": "A hiccup gets one quick retry. If it still fails, the reply stops and says which model failed and why; you pick the next model. A fallback to OpenRouter is there only if you choose one." },
-  { "id": "rest", "title": "Everything else", "sub": "on OpenRouter", "cap": "Deciders, paid media, the prompt enhancer, and helpers and the reviewer on their usual models keep running on OpenRouter." }
+  { "id": "rest", "title": "Everything else", "sub": "on OpenRouter", "cap": "Deciders, paid media, the prompt enhancer, helpers and the reviewer keep running on OpenRouter." }
 ] }
 ```
 
@@ -56,7 +55,8 @@ OpenCode and lists its models: nothing to pay.
 
 1. Open [OpenCode Console](https://opencode.ai/console), go to **Account → Personal API keys** and press
    **Add API key**. The key starts with `oc_sk_`.
-2. Paste it in QuorX. One key from a Personal workspace serves both pay as you go and Go.
+2. Paste it in QuorX, in the OpenCode card or the OpenCode Go card. One key from a Personal workspace serves both:
+   QuorX offers it to the other card too, so to use both, tick the other one as well.
 
 If OpenCode on your computer already has a key (from `opencode auth login`), press **Use the key OpenCode has** and
 QuorX copies it. It only ever copies an API key, never a sign-in. Installing OpenCode isn't needed; if you want it,
@@ -108,7 +108,10 @@ your model behind your back.
 - **Then the reply stops** and says which model failed and why (an expired key, a used-up plan, a free model the source
   keeps for its own app). The work done so far stays. Pick another model in the chat's model button and send a message
   to carry on: the conversation carries over.
-- **A source that keeps failing** is skipped by other chats for a short while instead of each one waiting on it.
+- **A model that keeps failing** is skipped by every chat for a while instead of each one waiting on it: until its
+  plan window resets or for up to 30 minutes, and under 5 minutes after a server error. Only a refused key, spent
+  account credit or an unreachable gateway skips the whole source; one Go model reaching its limit leaves the others
+  working.
 - **Answers QuorX can't read** count as failures too: a web page from a CDN, an empty stream, a shape it doesn't know.
 
 Any text streamed before a failure moves into the steps, so the reply isn't written twice. No tool call from a failed
@@ -127,8 +130,8 @@ When a call fails**: **Same model on OpenRouter** (for example `opencode-go/glm-
   ], "verdict": { "title": "Nothing changes behind your back", "text": "The work so far stays, nothing is spent elsewhere, and the chat carries on with the model you pick." } },
   { "label": "Same model on OpenRouter", "steps": [
     { "title": "Go says the plan's usage is used up", "text": "for this model, in this 5-hour window" },
-    { "title": "QuorX skips Go for the rest of the reply", "text": "and the next step runs z-ai/glm-5.3 on OpenRouter" },
+    { "title": "QuorX skips that Go model for the rest of the reply", "text": "and the next step runs z-ai/glm-5.3 on OpenRouter" },
     { "title": "The steps show ⤵", "text": "with why, and what OpenRouter charged" }
-  ], "verdict": { "title": "The reply finishes by itself", "text": "Same model, same conversation, paid on OpenRouter until Go's window resets. The next reply tries Go again." } }
+  ], "verdict": { "title": "The reply finishes by itself", "text": "Same model, same conversation, paid on OpenRouter until Go's window resets. Then Go is tried again." } }
 ] }
 ```

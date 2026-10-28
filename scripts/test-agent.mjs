@@ -32,7 +32,7 @@ import { checkHtml } from '../server/checks.js';
 import http from 'node:http';
 import { DEFAULTS, sourceFallbackFor } from '../server/agent.js';
 import { sourceOf, sourceStream, sourceModels, sameOnOpenRouter, failureKind, noteSourceResult, sourceSkip, forgetSourceHealth, priced as sourcePriced, setSourceKey, removeSourceKey, keyFor, importOpenCodeKey, chatAny, primeSources } from '../server/sources.js';
-import { toAnthropic, toGoogle, toResponses, toChat, googleSchema } from '../server/wire.js';
+import { toAnthropic, toGoogle, toResponses, toChat, googleSchema, readWhole, READ } from '../server/wire.js';
 import { SECRET_FILES } from '../server/keys.js';
 import { toolPrompt, renderTranscript, parseToolCalls, textFilter } from '../server/textcalls.js';
 import { localStream, localModels } from '../server/opencodelocal.js';
@@ -3844,7 +3844,7 @@ test('the Gemini, Responses and chat formats each get the conversation in their 
   assert.deepEqual(g.generationConfig.thinkingConfig, { includeThoughts: true, thinkingLevel: 'low' });
   assert.deepEqual(googleSchema({ type: ['string', 'null'] }), { type: 'STRING', nullable: true });
   assert.deepEqual(googleSchema({ anyOf: [{ type: 'null' }, { type: 'integer' }], description: 'n' }), { type: 'INTEGER', description: 'n' });
-  assert.deepEqual(googleSchema({ type: 'object', properties: { opts: { type: 'object', description: 'Options' } } }).properties.opts, { type: 'STRING', description: 'Options (a JSON object, as text)' }, 'Gemini refuses an object with no properties');
+  assert.deepEqual(JSON.parse(JSON.stringify(googleSchema({ type: 'object', properties: { opts: { type: 'object', description: 'Options' } } }).properties.opts)), { type: 'STRING', description: 'Options (a JSON object, as text)' }, 'Gemini refuses an object with no properties');
   const bare = toGoogle({ ...CONV, tools: [{ type: 'function', function: { name: 'list_files', parameters: { type: 'object', properties: {} } } }] }, {});
   assert.equal('parameters' in bare.tools[0].functionDeclarations[0], false, 'a tool with no parameters sends none');
   assert.match(JSON.stringify(toGoogle({ ...CONV, messages: CONV.messages.slice(0, 3) }, {}).contents.at(-1)), /the call was not run/);
@@ -4013,6 +4013,69 @@ test('a failing source is skipped by other calls for a while: a refused key unti
   removeSourceKey('opencode-go'); forgetSourceHealth();
 });
 
+test('one model’s own limit or outage sets only that model aside; a refused key, spent credit or a failed account check is the whole source’s', () => {
+  forgetSourceHealth();
+  setSourceKey('opencode-go', 'oc_sk_test_aaaaaaaaaa'); setSourceKey('cline', 'cline_test_0123456789');
+  const now = Date.now(), err = (o) => Object.assign(new Error(o.m || ''), o);
+  noteSourceResult('opencode-go', 'opencode-go/glm-5.3', err({ status: 429, errorType: 'GoUsageLimitError', m: '5-hour usage limit reached.', retryAfter: 3600 }), { now });
+  assert.match(sourceSkip('opencode-go', 'opencode-go/glm-5.3', now + 1000), /out of credit or plan usage/, 'the model whose window is spent waits');
+  assert.equal(sourceSkip('opencode-go', 'opencode-go/kimi-k3', now + 1000), '', 'another Go model with its own window still goes');
+  noteSourceResult('opencode-go', 'opencode-go/kimi-k3', err({ status: 502, m: 'bad gateway' }), { now });
+  assert.match(sourceSkip('opencode-go', 'opencode-go/kimi-k3', now + 1000), /server error/);
+  assert.match(sourceSkip('opencode-go', 'opencode-go/glm-5.3', now + 1000), /out of credit or plan usage/, 'one model’s outage doesn’t clear another’s limit');
+  assert.equal(sourceSkip('opencode-go', 'opencode-go/minimax-m3', now + 1000), '');
+  noteSourceResult('cline', 'cline/anthropic/claude-sonnet-5.5', err({ status: 429, m: 'slow down', retryAfter: 1200 }), { now });
+  assert.equal(sourceSkip('cline', 'cline/moonshotai/kimi-k3', now + 1000), '', 'a rate limit on one Cline model leaves the rest');
+  noteSourceResult('cline', null, err({ status: 404, m: 'Not found' }), { now });
+  assert.equal(sourceSkip('cline', 'cline/moonshotai/kimi-k3', now + 1000), '', 'an account check that found no page skips nothing');
+  noteSourceResult('cline', 'cline/moonshotai/kimi-k3', err({ status: 402, m: 'Insufficient credits' }), { now });
+  assert.match(sourceSkip('cline', 'cline/z-ai/glm-5.3', now + 1000), /out of credit/, 'spent account credit is every model’s');
+  removeSourceKey('opencode-go'); removeSourceKey('cline'); forgetSourceHealth();
+});
+
+test('Stop reaches the source: a stopped call never goes out, and a reply stopped during a tool makes no next call', async () => {
+  setSourceKey('opencode-go', SRC_KEY);
+  const gw = await gateway([{ body: srcSse({ choices: [{ delta: { content: 'x' }, finish_reason: 'stop' }] }, '[DONE]') }]);
+  try {
+    const ac = new AbortController(); ac.abort();
+    await assert.rejects(sourceStream({ model: 'opencode-go/glm-5.3', max_tokens: 100, messages: [{ role: 'user', content: 'hi' }] }, ac.signal, null, null, { info: goInfo({ api: gw.url }) }));
+    assert.equal(gw.seen.length, 0, 'nothing reached the gateway');
+  } finally { await gw.close(); removeSourceKey('opencode-go'); forgetSourceHealth(); }
+  let n = 0;
+  const ac = new AbortController();
+  const src = async () => { n++; if (n === 1) { ac.abort(); return srcReply('', [['write_file', { path: 'a.txt', content: 'a' }]]); } return srcReply('Done.'); };
+  await run(() => { throw new Error('OpenRouter must not be called'); }, { setup: { model: 'opencode-go/glm-5.3' }, catalogue: SRC_CAT, sourceStream: src, signal: ac.signal }).catch(() => {});
+  assert.equal(n, 1, 'no paid call after Stop');
+});
+
+test('thinking Off asks each format for its lightest level, where a model can’t turn thinking off', () => {
+  const off = { ...CONV, reasoning: { enabled: false } };
+  const eff = (values) => ({ realId: 'm', source: 'opencode', reasoning: true, reasoningOptions: [{ type: 'effort', values }] });
+  assert.equal(toChat(off, eff(['none', 'low', 'high'])).reasoning_effort, 'none');
+  assert.equal(toChat(off, eff(['high', 'low', 'max'])).reasoning_effort, 'low', 'no “none”: the lowest it takes');
+  const a = toAnthropic(off, eff(['low', 'medium', 'high']));
+  assert.deepEqual([a.thinking, a.output_config], [{ type: 'adaptive' }, { effort: 'low' }]);
+  const after = toAnthropic({ ...CONV, reasoning: { effort: 'low' } }, eff(['low', 'high']));
+  assert.deepEqual(after.output_config, { effort: 'low' }, 'a tool turn from elsewhere keeps the effort asked for');
+  assert.equal(toResponses(off, eff(['low', 'medium', 'high'])).reasoning.effort, 'low');
+  assert.equal(toGoogle(off, eff(['low', 'high'])).generationConfig.thinkingConfig.thinkingLevel, 'low');
+});
+
+test('a Gemini model’s free-form object arguments come back as objects', async () => {
+  const tools = [{ type: 'function', function: { name: 'schedule', parameters: { type: 'object', properties: { when: { type: 'object', description: 'When' }, note: { type: 'string' } } } } },
+    { type: 'function', function: { name: 'browser', parameters: { type: 'object', properties: { steps: { type: 'array', items: { type: 'object' } } } } } }];
+  const g = toGoogle({ model: 'opencode/gemini-x', messages: [{ role: 'user', content: 'hi' }], tools }, { realId: 'gemini-x' });
+  assert.equal(g.tools[0].functionDeclarations[0].parameters.properties.when.type, 'STRING', 'Gemini is asked for the object as text');
+  assert.ok(!JSON.stringify(g).includes('asText'), 'the mark never goes on the wire');
+  const parts = [{ functionCall: { name: 'schedule', args: { when: '{"kind":"daily","time":"09:00"}', note: '{"stays":"text"}' } } }, { functionCall: { name: 'browser', args: { steps: ['{"act":"open","url":"https://x.test"}', '{"act":"read"}'] } } }];
+  const r = readWhole('google', { candidates: [{ content: { parts } }] }, Date.now(), null, null, tools);
+  const args = r.toolCalls.map((c) => JSON.parse(c.function.arguments));
+  assert.deepEqual(args[0], { when: { kind: 'daily', time: '09:00' }, note: '{"stays":"text"}' }, 'only the fields asked for as text are read back');
+  assert.deepEqual(args[1].steps, [{ act: 'open', url: 'https://x.test' }, { act: 'read' }]);
+  const s = await READ.google(new Response(srcSse({ candidates: [{ content: { parts } }] })), { tools }, Date.now());
+  assert.deepEqual(JSON.parse(s.toolCalls[0].function.arguments).when, { kind: 'daily', time: '09:00' }, 'streamed too');
+});
+
 test('a source call costs what the source says, else its tokens at list price (context tiers too); a plan model costs nothing per call', () => {
   assert.deepEqual(sourcePriced({ plan: 'paid', cost: { input: 2, output: 10 } }, { cost: 0.5 }), { cost: 0.5 });
   const cost = { input: 2, output: 10, cache_read: 0.2, tiers: [{ input: 4, output: 15, cache_read: 0.4, tier: { type: 'context', size: 200000 } }] };
@@ -4031,20 +4094,20 @@ test('the pickers list OpenCode and Cline models only once switched on, their fr
   });
   const fetchJSON = async (url) => {
     if (/inference\/v1\/models/.test(url)) return { data: ['glm-5.3', 'big-pickle', 'claude-x', 'odd-host', 'a', 'b', 'c'].map((id) => ({ id })) };
-    if (/recommended/.test(url)) return { free: [{ id: 'reflection/beam-free', name: 'Beam' }, { id: 'cline-free/solar-mini4', name: 'Solar Mini 4' }] };
-    if (/cline/.test(url)) return { data: [{ id: 'anthropic/claude-sonnet-5.5', pricing: { prompt: '0.000002', completion: '0.00001' }, supported_parameters: ['tools', 'reasoning'], context_length: 1e6 }, { id: 'reflection/beam-free', pricing: { prompt: '0', completion: '0' } }, { id: 'cline-pass/glm-5.3', pricing: { prompt: '0.0000014', completion: '0.0000044' }, supported_parameters: ['tools'] }, { id: 'x/y:batch', pricing: {} }] };
+    if (/recommended/.test(url)) return { free: [{ id: 'reflection/beam-free', name: 'Beam' }, { id: 'cline-free/solar-mini4', name: 'Solar Mini 4' }], clinePass: [{ id: 'cline-pass/glm-5.3', name: 'GLM 5.3 (ClinePass)' }] };
+    if (/cline/.test(url)) return { data: [{ id: 'anthropic/claude-sonnet-5.5', pricing: { prompt: '0.000002', completion: '0.00001' }, supported_parameters: ['tools', 'reasoning'], context_length: 1e6 }, { id: 'reflection/beam-free', pricing: { prompt: '0', completion: '0' } }, { id: 'z-ai/glm-5.3', pricing: { prompt: '0.0000014', completion: '0.0000044' }, supported_parameters: ['tools'], context_length: 200000 }, { id: 'x/y:batch', pricing: {} }] };
     throw new Error('offline');
   };
   try {
     assert.deepEqual(await sourceModels({ refresh: true, dev, fetchJSON }), [], 'nothing switched on, nothing listed');
     setSourceKey('opencode', SRC_KEY); setSourceKey('cline', 'cline_test_0123456789');
     const l = await sourceModels({ refresh: true, dev, fetchJSON });
-    assert.deepEqual(l.map((m) => m.id).sort(), ['cline/anthropic/claude-sonnet-5.5', 'cline/cline-free/solar-mini4', 'cline/cline-pass/glm-5.3', 'cline/reflection/beam-free', 'opencode/big-pickle', 'opencode/claude-x', 'opencode/glm-5.3', 'opencode/odd-host'], 'OpenCode Go got the key too, but stays off until switched on');
+    assert.deepEqual(l.map((m) => m.id).sort(), ['cline/anthropic/claude-sonnet-5.5', 'cline/cline-free/solar-mini4', 'cline/cline-pass/glm-5.3', 'cline/reflection/beam-free', 'cline/z-ai/glm-5.3', 'opencode/big-pickle', 'opencode/claude-x', 'opencode/glm-5.3', 'opencode/odd-host'], 'OpenCode Go got the key too, but stays off until switched on');
     const by = Object.fromEntries(l.map((m) => [m.id, m]));
     assert.deepEqual([by['opencode/glm-5.3'].format, by['opencode/glm-5.3'].interleaved, by['opencode/glm-5.3'].in, by['opencode/glm-5.3'].price], ['chat', 'reasoning_content', ['text', 'image'], [1.4, 4.4]]);
     assert.deepEqual([by['opencode/claude-x'].format, by['opencode/claude-x'].api], ['anthropic', 'https://opencode.ai/inference/anthropic/v1']);
     assert.equal(by['opencode/odd-host'].api, 'https://opencode.ai/inference/openai/v1', 'a key never goes to a host the catalogue names outside opencode.ai');
-    assert.deepEqual([by['cline/cline-pass/glm-5.3'].plan, by['cline/cline-pass/glm-5.3'].price], ['plan', [0, 0]]);
+    assert.deepEqual([by['cline/cline-pass/glm-5.3'].plan, by['cline/cline-pass/glm-5.3'].price, by['cline/cline-pass/glm-5.3'].listPrice, by['cline/cline-pass/glm-5.3'].ctx], ['plan', [0, 0], [1.4, 4.4], 200000], 'ClinePass models come from the recommended list, priced like their credits twin');
     assert.deepEqual(by['cline/anthropic/claude-sonnet-5.5'].price, [2, 10]);
     assert.deepEqual([by['opencode/big-pickle'].plan, by['opencode/big-pickle'].price, by['cline/cline-free/solar-mini4'].plan, by['cline/reflection/beam-free'].name], ['free', [0, 0], 'free', 'Beam'], 'free models are listed, tagged free');
   } finally { removeSourceKey('opencode'); removeSourceKey('opencode-go'); removeSourceKey('cline'); primeSources([]); }

@@ -69,7 +69,7 @@ export function cleanSchedule(b, now = Date.now(), old = null) {
   const projectId = String(b.projectId ?? old?.projectId ?? '');
   if (!/^[\w-]{1,64}$/.test(projectId)) throw new Error('a schedule needs a project');
   const model = String(b.model ?? old?.model ?? '').trim();
-  if (!/^[\w.:/-]{3,120}$/.test(model)) throw new Error('a schedule needs a model');
+  if (!/^[\w.:/@~-]{3,160}$/.test(model)) throw new Error('a schedule needs a model');
   const when = cleanWhen(b.when ?? old?.when);
   const created = old?.created || now;
   const s = {

@@ -171,7 +171,10 @@ export async function localStream(body, signal, onText, onThink, { info = {}, id
   const cut = rest.indexOf('/');
   if (cut <= 0) throw err(`${body.model} names no OpenCode provider`, { kind: 'request' });
   const providerID = rest.slice(0, cut), modelID = rest.slice(cut + 1);
+  const halt = () => { if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error('Stopped.'); };
+  halt();
   const s = server || await ensureLocalServer();
+  halt();
   s.active = (s.active || 0) + 1; s.lastUse = Date.now();
   const t = Date.now();
   const ac = new AbortController();

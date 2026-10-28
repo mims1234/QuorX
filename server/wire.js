@@ -47,6 +47,8 @@ export function nearestEffort(want, values) {
   const w = LADDER.indexOf(want);
   return [...vs].sort((a, b) => Math.abs(LADDER.indexOf(a) - w) - Math.abs(LADDER.indexOf(b) - w) || LADDER.indexOf(a) - LADDER.indexOf(b))[0];
 }
+// "Off" on a model that can't turn thinking off: its lowest level, never the provider's (often high) default.
+export const lowestEffort = (values) => [...(values || [])].filter((v) => LADDER.includes(v)).sort((a, b) => LADDER.indexOf(a) - LADDER.indexOf(b))[0] || null;
 const optionOf = (info, type) => { const o = Array.isArray(info?.reasoningOptions) ? info.reasoningOptions.find((x) => x?.type === type) : null; return o && type === 'effort' ? (Array.isArray(o.values) && o.values.length ? o : null) : o; };
 
 // Errors read the same way whatever the format: { message, status }.
@@ -121,7 +123,7 @@ export function toChat(body, info = {}, { openrouterLike = false } = {}) {
     out.stream_options = { include_usage: true };
     const lv = reasoningLevel(body.reasoning), eff = optionOf(info, 'effort');
     if (lv && info.reasoning !== false && eff) {
-      const pick = lv.off ? (eff.values.includes('none') ? 'none' : null) : nearestEffort(lv.effort, eff.values);
+      const pick = lv.off ? (eff.values.includes('none') ? 'none' : lowestEffort(eff.values)) : nearestEffort(lv.effort, eff.values);
       if (pick) out.reasoning_effort = pick;
     }
   }
@@ -161,10 +163,12 @@ export function toAnthropic(body, info = {}) {
     if (m.role === 'system') continue;
     if (m.role === 'tool') { add('user', [{ type: 'tool_result', tool_use_id: anthropicId(m.tool_call_id), content: text(m.content) || '(empty)' }]); continue; }
     if (m.role === 'assistant') {
-      // The model's own turn goes back exactly as it wrote it (thinking between calls, in order, signed); a turn from
-      // elsewhere is rebuilt from its text and calls.
+      // The model's own turn goes back as it wrote it (thinking between calls, in order, signed), with each call's
+      // input from the transcript, so old file bodies trimmed there are trimmed here too; a turn from elsewhere is
+      // rebuilt from its text and calls.
       const qp = passOf(m, info.source, model);
-      const blocks = qp?.anthropicContent?.length ? qp.anthropicContent.map((b) => (b.type === 'tool_use' ? { ...b, id: anthropicId(b.id) } : b))
+      const inputs = new Map(callsOf(m).map((c) => [c.id, c.function.arguments]));
+      const blocks = qp?.anthropicContent?.length ? qp.anthropicContent.map((b) => (b.type === 'tool_use' ? { ...b, id: anthropicId(b.id), ...(inputs.has(b.id) ? { input: parseArgs(inputs.get(b.id)) } : {}) } : b))
         : [...(qp?.anthropic || []), ...parts(m.content).map((p) => anthropicPart(p, info)).filter(Boolean),
           ...callsOf(m).map((c) => ({ type: 'tool_use', id: anthropicId(c.id), name: c.function.name, input: parseArgs(c.function.arguments) }))];
       add('assistant', blocks);
@@ -181,7 +185,9 @@ export function toAnthropic(body, info = {}) {
   // With thinking on, the last assistant turn, when it called tools, must start with the model's own signed thinking.
   // A step that came from elsewhere (thinking off, another model, a fallback) has none, so this call goes without.
   const lastA = [...turns].reverse().find((t) => t.role === 'assistant');
-  if (think && lastA?.content.some((b) => b.type === 'tool_use') && !['thinking', 'redacted_thinking'].includes(lastA.content[0]?.type)) think = false;
+  const effA = optionOf(info, 'effort'), budA = optionOf(info, 'budget_tokens');
+  const adaptive = !!(effA && !budA && info.reasoning !== false);
+  if (think && !adaptive && lastA?.content.some((b) => b.type === 'tool_use') && !['thinking', 'redacted_thinking'].includes(lastA.content[0]?.type)) think = false;
   // The model's own thinking blocks stay either way (newer models think whether asked or not).
   for (const t of turns) if (!t.content.length) t.content.push({ type: 'text', text: '(empty)' });
   const tools = (body.tools || []).filter((x) => x?.function?.name).map((x) => ({ name: x.function.name, description: x.function.description || '', input_schema: x.function.parameters || { type: 'object', properties: {} } }));
@@ -200,11 +206,9 @@ export function toAnthropic(body, info = {}) {
   }
   // Thinking as the model takes it: an effort level (adaptive thinking, the newer models) or a token budget (older
   // ones). No temperature: newer models refuse one, and the Messages API is moving away from it.
-  if (think) {
-    const eff = optionOf(info, 'effort'), bud = optionOf(info, 'budget_tokens');
-    if (eff && !bud) { out.thinking = { type: 'adaptive' }; out.output_config = { effort: nearestEffort(lv.effort, eff.values) || 'medium' }; }
-    else out.thinking = { type: 'enabled', budget_tokens: Math.max(Number(bud?.min) || 1024, Math.min(lv.budget, maxTokens - 1024)) };
-  }
+  // A model that takes effort levels thinks whether asked or not: it always gets one (the lowest for "Off").
+  if (adaptive && lv) { out.thinking = { type: 'adaptive' }; out.output_config = { effort: (lv.off ? lowestEffort(effA.values) : nearestEffort(lv.effort, effA.values)) || 'low' }; }
+  else if (think) out.thinking = { type: 'enabled', budget_tokens: Math.max(Number(budA?.min) || 1024, Math.min(lv.budget, maxTokens - 1024)) };
   return out;
 }
 export async function readAnthropicStream(r, t, onText, onThink) {
@@ -292,7 +296,7 @@ export function toResponses(body, info = {}, { session } = {}) {
   }
   const lv = reasoningLevel(body.reasoning), eff = optionOf(info, 'effort');
   if (lv && info.reasoning !== false) {
-    const pick = eff ? (lv.off ? nearestEffort('none', eff.values.filter((v) => ['none', 'minimal'].includes(v))) : nearestEffort(lv.effort, eff.values)) : lv.off ? null : lv.effort;
+    const pick = eff ? (lv.off ? nearestEffort('none', eff.values.filter((v) => ['none', 'minimal'].includes(v))) || lowestEffort(eff.values) : nearestEffort(lv.effort, eff.values)) : lv.off ? null : lv.effort;
     if (pick) out.reasoning = { effort: pick, ...(pick !== 'none' ? { summary: 'auto' } : {}) };
   }
   if (body.temperature != null && info.temp !== false && !out.reasoning) out.temperature = body.temperature;
@@ -340,6 +344,7 @@ export async function readResponsesStream(r, t, onText, onThink) {
 
 // ---------- google: Gemini generateContent ----------
 // Gemini takes a narrow subset of JSON Schema for tool parameters (OpenAPI 3.0's): anything else is refused.
+const AS_TEXT = Symbol('asText');
 const G_KEEP = new Set(['type', 'description', 'enum', 'items', 'properties', 'required', 'nullable', 'format', 'minimum', 'maximum', 'minItems', 'maxItems', 'minLength', 'maxLength', 'pattern', 'title']);
 export function googleSchema(s, nested = false) {
   if (!s || typeof s !== 'object' || Array.isArray(s)) return { type: 'string' };
@@ -359,11 +364,45 @@ export function googleSchema(s, nested = false) {
   }
   if (!out.type) out.type = out.properties ? 'OBJECT' : out.items ? 'ARRAY' : 'STRING';
   if (out.type === 'OBJECT' && out.properties && !Object.keys(out.properties).length) delete out.properties;
-  // Gemini refuses an object with no properties; inside a tool's parameters a free-form object is sent as JSON text.
-  if (out.type === 'OBJECT' && !out.properties && nested) return { type: 'STRING', description: `${out.description ? `${out.description} ` : ''}(a JSON object, as text)`, ...(out.nullable ? { nullable: true } : {}) };
+  // Gemini refuses an object with no properties; inside a tool's parameters a free-form object is sent as JSON text,
+  // marked (a symbol key, so it never goes on the wire) so the answer's text can be read back into an object.
+  if (out.type === 'OBJECT' && !out.properties && nested) return { type: 'STRING', description: `${out.description ? `${out.description} ` : ''}(a JSON object, as text)`, ...(out.nullable ? { nullable: true } : {}), [AS_TEXT]: true };
   if (Array.isArray(out.required) && out.properties) out.required = out.required.filter((k) => k in out.properties);
   else delete out.required;
   return out;
+}
+// Where in each tool's arguments googleSchema asked for an object as text: tool name -> paths ('[]' = each item).
+function textPaths(tools) {
+  const out = new Map();
+  const walk = (s, path, acc) => {
+    if (!s || typeof s !== 'object') return;
+    if (s[AS_TEXT]) { acc.push(path); return; }
+    for (const [k, v] of Object.entries(s.properties || {})) walk(v, [...path, k], acc);
+    if (s.items) walk(s.items, [...path, '[]'], acc);
+  };
+  for (const x of tools || []) {
+    if (!x?.function?.name || !x.function.parameters) continue;
+    const acc = [];
+    walk(googleSchema(x.function.parameters), [], acc);
+    if (acc.length) out.set(x.function.name, acc);
+  }
+  return out;
+}
+// A Gemini call's arguments with those text fields parsed back into the objects the tool expects.
+export function googleArgs(name, args, tools) {
+  const paths = textPaths(tools).get(name);
+  if (!paths || !args || typeof args !== 'object') return args || {};
+  const fix = (v, path) => {
+    if (!path.length) {
+      if (typeof v !== 'string') return v;
+      try { const o = JSON.parse(v); return o && typeof o === 'object' ? o : v; } catch { return v; }
+    }
+    const [k, ...rest] = path;
+    if (k === '[]') return Array.isArray(v) ? v.map((x) => fix(x, rest)) : v;
+    if (v && typeof v === 'object' && !Array.isArray(v) && k in v) return { ...v, [k]: fix(v[k], rest) };
+    return v;
+  };
+  return paths.reduce((a, p) => fix(a, p), args);
 }
 // Gemini 3 wants each function call it made sent back with its thought signature; one we don't have (a step from
 // elsewhere) gets the value Google documents for exactly that case.
@@ -413,10 +452,11 @@ export function toGoogle(body, info = {}) {
   if (body.temperature != null && info.temp !== false) out.generationConfig.temperature = body.temperature;
   const lv = reasoningLevel(body.reasoning), eff = optionOf(info, 'effort');
   if (info.reasoning !== false && lv && !lv.off) out.generationConfig.thinkingConfig = { includeThoughts: true, ...(eff ? { thinkingLevel: nearestEffort(lv.effort, eff.values) || lv.effort } : { thinkingBudget: lv.budget }) };
+  else if (info.reasoning !== false && lv?.off && eff) out.generationConfig.thinkingConfig = { thinkingLevel: lowestEffort(eff.values) };
   else if (info.reasoning !== false && !lv) out.generationConfig.thinkingConfig = { includeThoughts: true };
   return out;
 }
-export async function readGoogleStream(r, t, onText, onThink) {
+export async function readGoogleStream(r, t, onText, onThink, tools) {
   const st = fresh(), sigs = {};
   let n = 0;
   try {
@@ -427,7 +467,7 @@ export async function readGoogleStream(r, t, onText, onThink) {
       for (const p of cand.content?.parts || []) {
         if (p.functionCall) {
           const id = p.functionCall.id || `call_${Date.now().toString(36)}_${n++}`;
-          st.calls.push({ id, name: p.functionCall.name || '', args: JSON.stringify(p.functionCall.args || {}) });
+          st.calls.push({ id, name: p.functionCall.name || '', args: JSON.stringify(googleArgs(p.functionCall.name, p.functionCall.args, tools)) });
           if (p.thoughtSignature) sigs[id] = p.thoughtSignature;
         } else if (typeof p.text === 'string' && p.text) {
           if (p.thought) { st.thinking += p.text; onThink?.(p.text); }
@@ -442,7 +482,9 @@ export async function readGoogleStream(r, t, onText, onThink) {
         ...(extra.cost != null ? { cost: extra.cost } : u.cost != null ? { cost: u.cost } : {}), ...(extra.opencode ? { opencode: extra.opencode } : {}) };
     });
   } catch (e) {
-    if (e && typeof e === 'object') { try { e.partial = result(st, t).partial; } catch { /* nothing to add */ } }
+    // Gemini repeats its running usage on every chunk, so a cut stream has usage but no final count: it is counted
+    // as cut-off, whatever usage came so far.
+    if (e && typeof e === 'object') { try { const u = st.usage; st.usage = null; e.partial = result(st, t).partial; st.usage = u; } catch { /* nothing to add */ } }
     throw e;
   }
   if (st.calls.length) { if (st.finish === 'stop' || !st.finish) st.finish = 'tool_calls'; st.pass = { gemini: { calls: sigs } }; }
@@ -451,13 +493,13 @@ export async function readGoogleStream(r, t, onText, onThink) {
 
 // ---------- one call, any format ----------
 export const BUILD = { chat: toChat, responses: toResponses, anthropic: toAnthropic, google: toGoogle };
-export const READ = { chat: (r, body, t, onText, onThink) => readChatStream(r, body, t, onText, onThink), responses: (r, body, t, a, b) => readResponsesStream(r, t, a, b), anthropic: (r, body, t, a, b) => readAnthropicStream(r, t, a, b), google: (r, body, t, a, b) => readGoogleStream(r, t, a, b) };
+export const READ = { chat: (r, body, t, onText, onThink) => readChatStream(r, body, t, onText, onThink), responses: (r, body, t, a, b) => readResponsesStream(r, t, a, b), anthropic: (r, body, t, a, b) => readAnthropicStream(r, t, a, b), google: (r, body, t, a, b) => readGoogleStream(r, t, a, b, body?.tools) };
 
 /**
  * An answer that came back whole (some gateways ignore stream: true) in any of the four shapes, read into the same
  * result. Returns null when it is none of them.
  */
-export function readWhole(format, j, t, onText, onThink) {
+export function readWhole(format, j, t, onText, onThink, tools) {
   const st = fresh();
   st.seen = 1;
   if (format === 'chat' && Array.isArray(j?.choices)) {
@@ -495,7 +537,7 @@ export function readWhole(format, j, t, onText, onThink) {
     const sigs = {};
     let n = 0;
     for (const p of j.candidates[0]?.content?.parts || []) {
-      if (p.functionCall) { const id = p.functionCall.id || `call_${n++}`; st.calls.push({ id, name: p.functionCall.name, args: JSON.stringify(p.functionCall.args || {}) }); if (p.thoughtSignature) sigs[id] = p.thoughtSignature; }
+      if (p.functionCall) { const id = p.functionCall.id || `call_${n++}`; st.calls.push({ id, name: p.functionCall.name, args: JSON.stringify(googleArgs(p.functionCall.name, p.functionCall.args, tools)) }); if (p.thoughtSignature) sigs[id] = p.thoughtSignature; }
       else if (p.thought) st.thinking += p.text || '';
       else st.text += p.text || '';
     }

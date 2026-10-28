@@ -66,6 +66,8 @@ export function transcriptChars(messages) {
   for (const m of messages) {
     n += partChars(m.content);
     for (const tc of m.tool_calls || []) n += (tc.function?.name || '').length + (tc.function?.arguments || '').length;
+    // A source model's own thinking, sent back with its turn.
+    for (const b of m.qx_pass?.anthropicContent || []) n += (b.thinking || b.data || '').length;
   }
   return n;
 }

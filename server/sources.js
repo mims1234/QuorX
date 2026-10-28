@@ -102,7 +102,7 @@ export function setSourceKey(id, key, from = 'pasted') {
   if (SOURCES[id].app === 'opencode') for (const o of SOURCE_IDS) if (o !== id && SOURCES[o].app === 'opencode' && !SOURCES[o].local && !s[o]?.key) s[o] = { ...(s[o] || {}), key, from, added: Date.now(), on: !!s[o]?.on };
   save(s);
   clearHealth(id);
-  dropCatalogue();
+  dropCatalogue(id);
 }
 // Removing a key switches the source off, and takes the same key from the other OpenCode source it was offered to.
 export function removeSourceKey(id) {
@@ -114,7 +114,7 @@ export function removeSourceKey(id) {
     clearHealth(o);
   }
   save(s);
-  dropCatalogue();
+  dropCatalogue(id);
 }
 export function setSourceOn(id, on) {
   known(id);
@@ -124,7 +124,7 @@ export function setSourceOn(id, on) {
   s[id] = next;
   save(s);
   clearHealth(id);
-  dropCatalogue();
+  dropCatalogue(id);
 }
 
 // ---------- the apps on this computer ----------
@@ -180,8 +180,9 @@ export function appVersion(name, { refresh = false, run = execFile } = {}) {
 }
 
 // ---------- model lists ----------
-let catalogue = null; // { at, list, error }
-const dropCatalogue = () => { catalogue = null; };
+let catalogue = null; // { at: { source: when listed }, ids, list, errors }
+// A source whose key or switch changed is listed again on the next call; the others keep their lists.
+const dropCatalogue = (id) => { if (catalogue) catalogue = { ...catalogue, ids: catalogue.ids.filter((x) => x !== id) }; };
 // models.dev is edited by the community: a key goes only to the source's own site, whatever address it names.
 const safeApi = (src, api) => { try { const u = new URL(String(api || '')); return u.protocol === 'https:' && u.origin === new URL(SOURCES[src].api.chat).origin ? u.href.replace(/\/+$/, '') : null; } catch { return null; } };
 const FORMAT_OF = { '@ai-sdk/openai-compatible': 'chat', '@ai-sdk/openai': 'responses', '@ai-sdk/anthropic': 'anthropic', '@ai-sdk/google': 'google', '@ai-sdk/mistral': 'chat' };
@@ -207,7 +208,9 @@ export function fromModelsDev(src, prov, m) {
 // A free model. OpenCode and Cline keep most of theirs for their own apps today: QuorX lists them and asks honestly,
 // and when the source says no (failureKind 'free') only that model is set aside and the step goes to OpenRouter.
 // If a source opens its free models to other apps, they simply work.
-export const isFreeModel = (src, m) => (src === 'cline' ? /(^cline-free\/|-free$|:free$)/.test(m.id) : /-free$/.test(m.id) || (per(m.cost?.input) === 0 && per(m.cost?.output) === 0));
+// A price that is missing or unreadable says nothing: only one given as 0 makes a model free.
+const zero = (x) => x != null && x !== '' && Number(x) === 0;
+export const isFreeModel = (src, m) => (src === 'cline' ? /(^cline-free\/|-free$|:free$)/.test(m.id) : /-free$/.test(m.id) || (zero(m.cost?.input) && zero(m.cost?.output)));
 // One model from Cline's list (OpenRouter's catalogue format; ClinePass models are paid for by the plan).
 export function fromCline(m) {
   const p = m.pricing || {};
@@ -232,66 +235,101 @@ async function modelsDev() {
   try { return await getJSON(MODELS_DEV); }
   catch (e) { try { return JSON.parse(fs.readFileSync(OPENCODE_MODELS(), 'utf8')); } catch { throw e; } }
 }
+// Each source's list is built on its own, and a model entry QuorX can't read skips that model only.
+const each = (items, make, keep) => { const out = []; for (const m of items) { try { if (keep(m)) out.push(make(m)); } catch { /* one odd entry */ } } return out; };
+const bare = (id) => String(id || '').split('/').pop().replace(/-\d{4}$/, '').toLowerCase();
+// The lists of `ids`, fetched side by side: { per: { source: models }, errors: { source: why } }.
+async function fetchLists(ids, { fetchJSON, dev }) {
+  const per = {}, errors = {};
+  const md = ids.filter((id) => SOURCES[id].md);
+  const jobs = [];
+  if (md.length) jobs.push((async () => {
+    let j = null;
+    try { j = await dev(); } catch (e) { for (const id of md) errors[id] = e.message; return; }
+    await Promise.all(md.map(async (id) => {
+      const prov = j?.[SOURCES[id].md];
+      if (!prov?.models || typeof prov.models !== 'object') { errors[id] = 'not in the catalogue'; return; }
+      // The ids the gateway serves today (no key needed): a model it dropped is left out. When the list doesn't
+      // load, the catalogue's own list stands.
+      const live = await fetchJSON(SOURCES[id].models, {}, 10000).then((x) => new Set((Array.isArray(x?.data) ? x.data : []).map((m) => m?.id).filter(Boolean))).catch(() => null);
+      per[id] = each(Object.values(prov.models), (m) => fromModelsDev(id, prov, m), (m) => m?.id && m.tool_call !== false && (Array.isArray(m.modalities?.output) ? m.modalities.output : ['text']).includes('text') && !(live?.size >= 5 && !live.has(m.id)));
+    }));
+  })());
+  // The OpenCode on this computer: its server lists every model of every provider connected there.
+  // Only once it is switched on: listing them starts OpenCode, which Settings alone never should.
+  if (ids.includes(LOCAL_ID) && sourceOn(LOCAL_ID)) jobs.push(localModels().then((l) => { per[LOCAL_ID] = l; }, (e) => { errors[LOCAL_ID] = e.message; }));
+  if (ids.includes('cline')) jobs.push((async () => {
+    try {
+      const [j, rec] = await Promise.all([fetchJSON(SOURCES.cline.models, { Accept: 'application/json' }), fetchJSON(SOURCES.cline.recommended, { Accept: 'application/json' }, 10000).catch(() => null)]);
+      const data = Array.isArray(j?.data) ? j.data : Array.isArray(j) ? j : [];
+      if (!data.length) throw new Error('Cline sent an empty model list');
+      per.cline = each(data, fromCline, (m) => m?.id && !/:batch$/.test(m.id) && (Array.isArray(m.architecture?.output_modalities) ? m.architecture.output_modalities : ['text']).includes('text'));
+      // Cline's free and ClinePass models are not in that list: its recommended list names them. A ClinePass model
+      // takes its context and list price from the credits model of the same name.
+      const have = new Set(per.cline.map((m) => m.realId));
+      const extra = (arr, o) => { for (const m of Array.isArray(arr) ? arr : []) {
+        if (!m?.id) continue;
+        if (have.has(m.id)) { const x = per.cline.find((y) => y.realId === m.id); if (x && x.name === x.realId && m.name && m.name !== m.id) x.name = m.name; continue; }
+        const twin = o.plan ? data.find((d) => d?.id && !/^cline-pass\//.test(d.id) && bare(d.id) === bare(m.id)) : null;
+        try { per.cline.push(fromCline({ ...(twin || {}), id: m.id, name: m.name && m.name !== m.id ? m.name : twin?.name || m.id, description: m.description || twin?.description, ...(o.free ? { free: true, pricing: { prompt: '0', completion: '0' } } : {}) })); have.add(m.id); } catch { /* one odd entry */ }
+      } };
+      extra(rec?.free, { free: true });
+      extra(rec?.clinePass, { plan: true });
+    } catch (e) { errors.cline = e.message; }
+  })());
+  await Promise.all(jobs);
+  return { per, errors };
+}
+let refreshing = null; // the refresh under way: { ids, p }
+function refreshLists(ids, opts) {
+  if (refreshing && ids.every((id) => refreshing.ids.includes(id))) return refreshing.p;
+  const after = refreshing?.p || Promise.resolve();
+  const job = { ids, p: after.catch(() => {}).then(async () => {
+    const { per, errors } = await fetchLists(ids, opts);
+    // A list that failed, or came back empty, keeps its last good copy (in memory, else on disk).
+    let old = catalogue?.list || [];
+    if (!old.length) { try { old = JSON.parse(fs.readFileSync(CATALOGUE_COPY, 'utf8')).list || []; } catch { old = []; } }
+    const now = Date.now(), at = { ...(catalogue?.at || {}) }, errs = { ...(catalogue?.errors || {}) };
+    for (const id of ids) {
+      // The OpenCode on this computer is listed only once it is switched on (see fetchLists).
+      if (id === LOCAL_ID && !sourceOn(LOCAL_ID)) { delete errs[id]; at[id] = now; per[id] = []; continue; }
+      if (per[id]?.length) { delete errs[id]; at[id] = now; continue; }
+      errs[id] = errors[id] || `${SOURCES[id].name} listed no models QuorX can use`;
+      at[id] = now;
+      per[id] = old.filter((m) => m.source === id);
+    }
+    const keepIds = (catalogue?.ids || []).filter((id) => !ids.includes(id));
+    const list = [...(catalogue?.list || []).filter((m) => keepIds.includes(m.source)), ...ids.flatMap((id) => per[id] || [])];
+    catalogue = { at, ids: [...keepIds, ...ids], list, errors: errs };
+    if (list.length) { try { fs.mkdirSync(DATA, { recursive: true }); fs.writeFileSync(CATALOGUE_COPY, JSON.stringify({ at: now, list })); } catch { /* a cache only */ } }
+  }).finally(() => { if (refreshing === job) refreshing = null; }) };
+  refreshing = job;
+  return job.p;
+}
 /**
- * The models of every source that is switched on (cached an hour; the last good list stays when a refresh fails).
- * `all`: every source's models whether it is on or not (Settings shows how many each has).
+ * The models of every source that is switched on. A good list lasts an hour and a failed one is tried again after a
+ * minute, in the background: the last list is answered at once, so a slow gateway never holds up a reply. Only a
+ * source with no list yet (or `refresh`) is waited for. `all`: every source's models whether it is on or not
+ * (Settings shows how many each has).
  */
 export async function sourceModels({ refresh = false, all = false, fetchJSON = getJSON, dev = modelsDev } = {}) {
   const want = SOURCE_IDS.filter((id) => all || sourceOn(id));
   if (!want.length) return [];
-  // A list that failed is tried again after a minute; a good one lasts an hour.
-  const stale = !catalogue || Date.now() - catalogue.at > (Object.keys(catalogue.errors || {}).length ? 60e3 : 3600e3);
-  if (refresh || stale || want.some((id) => !catalogue.ids.includes(id))) {
-    const per = {}, errors = {};
-    const ids = [...new Set([...(catalogue?.ids || []), ...want])];
-    // Each source's list is built on its own, and a model entry QuorX can't read skips that model only.
-    const each = (src, items, make, keep) => { const out = []; for (const m of items) { try { if (keep(m)) out.push(make(m)); } catch { /* one odd entry */ } } return out; };
-    if (ids.some((id) => SOURCES[id].md)) {
-      let j = null;
-      try { j = await dev(); } catch (e) { for (const id of ids.filter((x) => SOURCES[x].md)) errors[id] = e.message; }
-      for (const id of j ? ids.filter((x) => SOURCES[x].md) : []) {
-        const prov = j?.[SOURCES[id].md];
-        if (!prov?.models || typeof prov.models !== 'object') { errors[id] = 'not in the catalogue'; continue; }
-        // The ids the gateway serves today (no key needed): a model it dropped is left out. When the list doesn't
-        // load, the catalogue's own list stands.
-        const live = await fetchJSON(SOURCES[id].models, {}, 10000).then((x) => new Set((Array.isArray(x?.data) ? x.data : []).map((m) => m?.id).filter(Boolean))).catch(() => null);
-        per[id] = each(id, Object.values(prov.models), (m) => fromModelsDev(id, prov, m), (m) => m?.id && m.tool_call !== false && (Array.isArray(m.modalities?.output) ? m.modalities.output : ['text']).includes('text') && !(live?.size >= 5 && !live.has(m.id)));
-      }
-    }
-    // The OpenCode on this computer: its server lists every model of every provider connected there.
-    // Only once it is switched on: listing them starts OpenCode, which Settings alone never should.
-    if (ids.includes(LOCAL_ID) && sourceOn(LOCAL_ID)) { try { per[LOCAL_ID] = await localModels(); } catch (e) { errors[LOCAL_ID] = e.message; } }
-    if (ids.includes('cline')) {
-      try {
-        const j = await fetchJSON(SOURCES.cline.models, { Accept: 'application/json' });
-        const data = Array.isArray(j?.data) ? j.data : Array.isArray(j) ? j : [];
-        if (!data.length) throw new Error('Cline sent an empty model list');
-        per.cline = each('cline', data, fromCline, (m) => m?.id && !/:batch$/.test(m.id) && (Array.isArray(m.architecture?.output_modalities) ? m.architecture.output_modalities : ['text']).includes('text'));
-        // Cline's free models are not in that list: its recommended list names them.
-        const rec = await fetchJSON(SOURCES.cline.recommended, { Accept: 'application/json' }, 10000).catch(() => null);
-        const have = new Set(per.cline.map((m) => m.realId));
-        for (const m of Array.isArray(rec?.free) ? rec.free : []) {
-          if (!m?.id) continue;
-          if (have.has(m.id)) { const x = per.cline.find((y) => y.realId === m.id); if (x && x.name === x.realId && m.name && m.name !== m.id) x.name = m.name; continue; }
-          try { per.cline.push(fromCline({ id: m.id, name: m.name && m.name !== m.id ? m.name : m.id, description: m.description, free: true, pricing: { prompt: '0', completion: '0' } })); } catch { /* one odd entry */ }
-        }
-      } catch (e) { errors.cline = e.message; }
-    }
-    // A list that failed keeps its last good copy (in memory, else on disk); each good list is saved for next time.
-    let old = catalogue?.list || [];
-    if (!old.length) { try { old = JSON.parse(fs.readFileSync(CATALOGUE_COPY, 'utf8')).list || []; } catch { old = []; } }
-    for (const id of ids) if (!per[id]) per[id] = old.filter((m) => m.source === id);
-    const list = ids.flatMap((id) => per[id] || []);
-    catalogue = { at: Date.now(), ids, list, errors };
-    if (list.length) { try { fs.mkdirSync(DATA, { recursive: true }); fs.writeFileSync(CATALOGUE_COPY, JSON.stringify({ at: catalogue.at, list })); } catch { /* a cache only */ } }
+  const now = Date.now(), opts = { fetchJSON, dev };
+  const missing = want.filter((id) => !catalogue?.ids.includes(id));
+  const stale = want.filter((id) => !missing.includes(id) && now - (catalogue.at?.[id] || 0) > (catalogue.errors?.[id] ? 60e3 : 3600e3));
+  if (refresh) await refreshLists(want, opts);
+  else {
+    if (missing.length) await refreshLists(missing, opts);
+    if (stale.length) refreshLists(stale, opts).catch(() => {});
   }
-  return catalogue.list.filter((m) => all || want.includes(m.source));
+  return catalogue.list.filter((m) => want.includes(m.source));
 }
 /** A source model's catalogue entry from the list already loaded (no network), or null. */
 export const sourceInfo = (id) => catalogue?.list.find((m) => m.id === id) || null;
 export const catalogueErrors = () => ({ ...(catalogue?.errors || {}) });
 // Tests put a list in place of the network's.
-export function primeSources(list) { catalogue = { at: Date.now(), ids: [...new Set(list.map((m) => m.source))], list, errors: {} }; }
+export function primeSources(list) { const ids = [...new Set(list.map((m) => m.source))]; catalogue = { at: Object.fromEntries(ids.map((id) => [id, Date.now()])), ids, list, errors: {} }; }
 
 /** The same model on OpenRouter, when its catalogue has one: what a failed source call falls back to first. */
 const VENDOR = { zhipuai: 'z-ai', 'z-ai': 'z-ai', xai: 'x-ai', 'x-ai': 'x-ai', moonshot: 'moonshotai', moonshotai: 'moonshotai', meta: 'meta-llama', mistral: 'mistralai', alibaba: 'qwen', minimax: 'minimax' };
@@ -312,10 +350,12 @@ export function sameOnOpenRouter(id, orList = [], info = sourceInfo(id)) {
 }
 
 // ---------- health: what failed lately ----------
-const health = new Map(); // source → { ok, at, kind, why, until, model, keyHash, fails }
-const clearHealth = (id) => health.delete(id);
+const health = new Map(); // source → { ok, at, kind, why, until, model, scoped, keyHash, fails }: its last result
+const modelHealth = new Map(); // `${source}|${model}` → the same, for failures that only one model had
+const dropModels = (id) => { for (const k of [...modelHealth.keys()]) if (k.startsWith(`${id}|`)) modelHealth.delete(k); };
+const clearHealth = (id) => { health.delete(id); dropModels(id); };
 // Tests start each case clean.
-export const forgetSourceHealth = (id) => (id ? health.delete(id) : health.clear());
+export const forgetSourceHealth = (id) => (id ? clearHealth(id) : (health.clear(), modelHealth.clear()));
 /** How a failed call failed: auth, quota, rate, model, server, network, timeout, shape, request. */
 export function failureKind(e) {
   if (e?.kind) return e.kind;
@@ -331,8 +371,8 @@ export function failureKind(e) {
   if (s === 401 || (s === 403 && /auth|key|token|unauthori[sz]ed|forbidden|signature|expired|invalid/i.test(msg))) return 'auth';
   if (s === 402 || ([403, 429].includes(s) && /credit|balance|funds|quota|insufficient|billing|subscri|usage limit|plan limit|limit reached|exceeded your|budget exceeded|clinepass/i.test(msg))) return 'quota';
   if (s === 429) return 'rate';
-  if (s === 404 || /model[^.]{0,40}(not found|does not exist|unknown|not supported|unavailable|deprecated|disabled)|no such model|invalid model/i.test(msg)) return 'model';
   if (s >= 500 || s === 408) return 'server';
+  if (s === 404 || /model[^.]{0,40}(not found|does not exist|unknown|not supported|unavailable|deprecated|disabled)|no such model|invalid model/i.test(msg)) return 'model';
   if (s >= 400) return 'request';
   if (e?.name === 'TimeoutError') return 'timeout';
   if (/fetch failed|ECONN|ENOTFOUND|EAI_AGAIN|socket|network|terminated|other side closed|UND_ERR/i.test(msg + String(e?.cause?.code || '') + String(e?.cause?.message || ''))) return 'network';
@@ -340,25 +380,36 @@ export function failureKind(e) {
 }
 const KIND_WORDS = { notinstalled: 'is not installed on this computer', free: 'keeps that free model for its own app right now', auth: 'refused its key', quota: 'is out of credit or plan usage', rate: 'is rate limiting', model: 'does not have that model now', server: 'had a server error', network: 'could not be reached', timeout: 'did not answer in time', shape: 'answered in a shape QuorX can\'t read', request: 'refused the request', unknown: 'failed' };
 export const kindWords = (k) => KIND_WORDS[k] || KIND_WORDS.unknown;
+// What only one model's failure says (its own usage window, its upstream's rate limit or outage): that model is set
+// aside, the rest of the source keeps working. A refused key, spent account credit or an unreachable gateway is the
+// whole source's.
+const MODEL_KINDS = new Set(['model', 'shape', 'free', 'rate', 'server', 'timeout', 'unknown']);
+const modelScoped = (id, kind, err) => MODEL_KINDS.has(kind) || (kind === 'quota' && (SOURCES[id]?.local || /GoUsageLimitError/i.test(String(err?.errorType || ''))));
 export function noteSourceResult(id, model, err, { now = Date.now() } = {}) {
-  const prev = health.get(id) || {};
-  if (!err) { health.set(id, { ok: true, at: now, model, fails: 0 }); return; }
-  const kind = failureKind(err), fails = (prev.ok === false ? prev.fails || 0 : 0) + 1;
+  if (!err) { health.set(id, { ok: true, at: now, model, fails: 0 }); if (model) modelHealth.delete(`${id}|${model}`); return; }
+  const kind = failureKind(err), scoped = modelScoped(id, kind, err);
+  // A model-sized failure with no model named (the account check) is shown in Settings but skips nothing.
+  const key = scoped ? (model ? `${id}|${model}` : null) : id;
+  const prev = (key && (scoped ? modelHealth : health).get(key)) || {};
+  const fails = (prev.ok === false ? prev.fails || 0 : 0) + 1;
   const retryAfter = Math.min(30 * 60e3, Math.max(0, Number(err?.retryAfter) || 0) * 1000);
   // How long other calls skip this source: a refused key until the key changes (or ten minutes, in case it was the
   // gateway's hiccup); spent credit or plan usage until it resets; a server down for a growing while.
   const wait = kind === 'auth' ? 10 * 60e3 : kind === 'quota' ? retryAfter || 15 * 60e3 : kind === 'rate' ? retryAfter || 30e3
     : kind === 'model' ? 30 * 60e3 : kind === 'shape' ? 5 * 60e3 : kind === 'free' ? Math.min(6 * 3600e3, retryAfter || 6 * 3600e3)
     : ['server', 'network', 'timeout', 'unknown'].includes(kind) ? Math.min(5 * 60e3, 20e3 * 2 ** (fails - 1)) : 0;
-  health.set(id, { ok: false, at: now, kind, why: String(err?.message || kind).slice(0, 300), until: wait ? now + wait : 0, model: kind === 'model' || kind === 'shape' || kind === 'free' ? model : null, keyHash: hash(keyFor(id)?.key), fails });
+  const rec = { ok: false, at: now, kind, why: String(err?.message || kind).slice(0, 300), until: wait && key ? now + wait : 0, model: scoped ? model || null : null, scoped, keyHash: hash(keyFor(id)?.key), fails };
+  if (scoped && key) modelHealth.set(key, rec);
+  // Settings shows the last result either way; only a source-wide one makes other models skip.
+  health.set(id, scoped ? { ...rec, until: 0 } : rec);
 }
-/** Why calls should skip this source now (a short reason), or ''. A bad model or shape only skips that model. */
+const skipWhy = (id, h, now) => `${SOURCES[id].name} ${kindWords(h.kind)} ${Math.max(1, Math.round((now - h.at) / 1000))}s ago (${h.why.slice(0, 120)}); trying it again in ${Math.ceil((h.until - now) / 1000)}s`;
+/** Why calls should skip this source now (a short reason), or ''. A model-sized failure only skips that model. */
 export function sourceSkip(id, model, now = Date.now()) {
   const h = health.get(id);
-  if (!h || h.ok) return '';
-  if (h.kind === 'auth' && h.keyHash !== hash(keyFor(id)?.key)) return '';
-  if (h.model && h.model !== model) return '';
-  if (h.until && now < h.until) return `${SOURCES[id].name} ${kindWords(h.kind)} ${Math.max(1, Math.round((now - h.at) / 1000))}s ago (${h.why.slice(0, 120)}); trying it again in ${Math.ceil((h.until - now) / 1000)}s`;
+  if (h && !h.ok && !h.scoped && h.until && now < h.until && !(h.kind === 'auth' && h.keyHash !== hash(keyFor(id)?.key))) return skipWhy(id, h, now);
+  const m = model ? modelHealth.get(`${id}|${model}`) : null;
+  if (m && m.until && now < m.until) return skipWhy(id, m, now);
   return '';
 }
 
@@ -393,6 +444,7 @@ function quietGuard(r, ms, ac) {
   const arm = () => { clearTimeout(timer); timer = setTimeout(() => ac.abort(Object.assign(new Error(`no data for ${Math.round(ms / 1000)} s`), { name: 'TimeoutError' })), ms); };
   return { body: { async *[Symbol.asyncIterator]() { arm(); try { for await (const c of r.body) { arm(); yield c; } } finally { clearTimeout(timer); } } }, headers: r.headers, status: r.status, ok: r.ok };
 }
+const MUST_REASON = new Set();
 const shape = (msg) => Object.assign(new Error(msg), { kind: 'shape' });
 
 /**
@@ -400,12 +452,17 @@ const shape = (msg) => Object.assign(new Error(msg), { kind: 'shape' });
  * source's name as `provider` and the call's cost in usage.cost). Throws an Error with .status/.kind on any failure,
  * including an answer QuorX can't read; never falls back by itself (the agent decides that).
  */
+// Stop pressed before (or while) a call is set up: nothing goes out. An abort listener alone never fires for a signal
+// that is already aborted.
+const stopped = (signal) => { if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error('Stopped.'); };
 export async function sourceStream(body, signal, onText, onThink, { fetchFn = fetch, info: given, session, headersMs = HEADERS_MS, idleMs = IDLE_MS } = {}) {
+  stopped(signal);
   const s = sourceOf(body.model);
   if (!s) throw Object.assign(new Error(`${body.model} is not a source model`), { kind: 'request' });
   // The OpenCode on this computer needs no key: its own sign-ins make the call.
   if (s.def.local) {
     if (!given && !sourceInfo(body.model)) await sourceModels().catch(() => []);
+    stopped(signal);
     const info = given || sourceInfo(body.model) || { plan: 'paid' };
     const out = await localStream(body, signal, onText, onThink, { info, idleMs: Math.max(idleMs, 180e3) });
     out.usage = { ...(out.usage || {}), ...(Object.keys(out.usage || {}).length ? priced(info, out.usage) : {}) };
@@ -417,15 +474,20 @@ export async function sourceStream(body, signal, onText, onThink, { fetchFn = fe
   // Its catalogue entry says which format and address the model takes: right after a restart (a summary or a brief
   // before anything loaded the list) it is loaded first.
   if (!given && !sourceInfo(body.model)) await sourceModels().catch(() => []);
+  stopped(signal);
   const info = given || sourceInfo(body.model) || { id: body.model, realId: s.model, source: s.source, format: 'chat', api: def.api.chat };
   const format = info.format && BUILD[info.format] ? info.format : 'chat';
   // The agent passes its chat's session; a call from elsewhere (a brief, a test) takes one from its first message.
   const ses = session || sessionFor(JSON.stringify(body.messages?.find((m) => m.role === 'user')?.content ?? '').slice(0, 4000));
   const req = BUILD[format]({ ...body, model: s.model }, { ...info, realId: s.model, source: s.source }, { openrouterLike: !!def.openrouterLike, session: def.session ? ses : null });
+  // Through an OpenRouter-style gateway, a model that refuses "no thinking" gets the lightest instead (and is
+  // remembered), as openrouter.js does for OpenRouter's own calls.
+  if (def.openrouterLike && req.reasoning?.enabled === false && MUST_REASON.has(body.model)) req.reasoning = { effort: 'low', exclude: true };
   const t = Date.now();
   // A short wait and one more try for a hiccup (rate limit with a short Retry-After, a 5xx, a dropped connection),
   // as long as nothing has reached the page yet; anything longer is the agent's to decide (it falls back).
   for (let attempt = 0; ; attempt++) {
+    stopped(signal);
     const ac = new AbortController();
     const stop = () => ac.abort(signal.reason);
     signal?.addEventListener('abort', stop, { once: true });
@@ -436,7 +498,7 @@ export async function sourceStream(body, signal, onText, onThink, { fetchFn = fe
     const whole = async (r) => { const tm = setTimeout(() => ac.abort(Object.assign(new Error(`${def.name} stopped sending for ${Math.round(idleMs / 1000)} s`), { name: 'TimeoutError' })), idleMs); try { return await r.text(); } finally { clearTimeout(tm); } };
     try {
       let r;
-      try { r = await fetchFn(urlFor(info, format, def), { method: 'POST', headers: headersFor(def, format, k.key, ses), body: JSON.stringify(req), signal: ac.signal }); }
+      try { r = await fetchFn(urlFor(info, format, def), { method: 'POST', headers: headersFor(def, format, k.key, ses), body: JSON.stringify(req), signal: ac.signal, redirect: 'error' }); }
       finally { clearTimeout(headTimer); }
       if (!r.ok) {
         const raw = await whole(r).catch(() => '');
@@ -455,7 +517,7 @@ export async function sourceStream(body, signal, onText, onThink, { fetchFn = fe
         const raw = await whole(r);
         let j; try { j = JSON.parse(raw); } catch { throw shape(`${def.name} sent JSON QuorX could not read`); }
         if (j?.error) throw Object.assign(new Error(errorText(j, r.status)), { status: Number(j.error?.code) || null });
-        out = readWhole(format, j, t, tap(onText), tap(onThink));
+        out = readWhole(format, j, t, tap(onText), tap(onThink), req?.tools);
         if (!out) throw shape(`${def.name} answered in a shape QuorX doesn't know (${Object.keys(j || {}).slice(0, 6).join(', ') || 'empty'})`);
       } else if (/html/i.test(type)) {
         throw shape(`${def.name} sent a web page instead of an answer`);
@@ -463,7 +525,7 @@ export async function sourceStream(body, signal, onText, onThink, { fetchFn = fe
         out = await READ[format](quietGuard(r, idleMs, ac), req, t, tap(onText), tap(onThink));
         if (!out.seen) throw shape(`${def.name}'s answer had nothing QuorX could read`);
       }
-      out.toolCalls = (out.toolCalls || []).filter((c) => c?.function?.name && typeof c.function.name === 'string').map((c, i) => ({ ...c, id: c.id || `call_${t.toString(36)}_${i}` }));
+      out.toolCalls = (out.toolCalls || []).filter((c) => c?.function?.name && typeof c.function.name === 'string').map((c, i) => ({ ...c, id: c.id || `call_${t.toString(36)}_${i}`, function: { ...c.function, arguments: c.function.arguments || '{}' } }));
       if (!out.text && !out.toolCalls.length && !out.finishReason && !Object.keys(out.usage || {}).length && !out.thinking) throw shape(`${def.name} ended its answer without any text, tool call or reason`);
       // What the next step of the same model needs back, and what this call cost.
       if (format === 'chat' && info.interleaved && typeof info.interleaved === 'string' && out.thinking) out.passBack = { ...(out.passBack || {}), thinking: out.thinking };
@@ -479,9 +541,15 @@ export async function sourceStream(body, signal, onText, onThink, { fetchFn = fe
       if (signal?.aborted) throw e;
       if (ac.signal.aborted && ac.signal.reason?.name === 'TimeoutError') { e.kind = 'timeout'; e.message = ac.signal.reason.message; }
       e.source = s.source;
+      if (def.openrouterLike && req.reasoning?.enabled === false && /reasoning is mandatory|cannot be disabled/i.test(e.message || '') && !streamed) {
+        MUST_REASON.add(body.model); req.reasoning = { effort: 'low', exclude: true };
+        continue;
+      }
       const kind = failureKind(e);
       const wait = kind === 'rate' ? (e.retryAfter || 2) * 1000 : ['server', 'network'].includes(kind) ? 1500 : -1;
-      if (attempt === 0 && !streamed && wait >= 0 && wait <= 8000) { await sleep(wait, signal); continue; }
+      // Retried only when the failed attempt produced nothing (tool-call arguments count): one that did may have been
+      // billed, so it goes back with its partial and the agent counts it.
+      if (attempt === 0 && !streamed && !(e.partial?.outChars > 0) && wait >= 0 && wait <= 8000) { await sleep(wait, signal); continue; }
       throw e;
     } finally { signal?.removeEventListener('abort', stop); }
   }
@@ -527,7 +595,7 @@ export async function sourceStatus({ versions = true } = {}) {
       // OpenCode's one key serves pay as you go and Go, so a key for either can be used for both.
       found: def.app === 'opencode' ? { openCodeKey: has.length > 0 } : { clineSignedIn: !!signed },
       models: models.filter((m) => m.source === id).length, catalogueError: catalogue?.errors?.[id] || null,
-      last: h ? { ok: !!h.ok, at: h.at, kind: h.kind || null, why: h.why || null, until: h.until || 0, model: h.model || null } : null,
+      last: h ? { ok: !!h.ok, at: h.at, kind: h.kind || null, why: h.why || null, until: h.until || 0, model: h.model || null, scoped: !!h.scoped } : null,
     };
   });
 }
@@ -535,7 +603,7 @@ export async function sourceStatus({ versions = true } = {}) {
  * Checks a connection. Cline says whether a key is good without a paid call (its account page); OpenCode has no such
  * page, so a tiny call goes to its cheapest chat model (a Go model costs nothing; a pay-as-you-go one well under a cent).
  */
-export async function testSource(id, { model, fetchFn = fetch } = {}) {
+export async function testSource(id, { model, fetchFn = fetch, viaCall = false } = {}) {
   known(id);
   const def = SOURCES[id], k = keyFor(id), t = Date.now();
   // The OpenCode on this computer: starting its server and listing its providers' models costs nothing.
@@ -548,9 +616,11 @@ export async function testSource(id, { model, fetchFn = fetch } = {}) {
     } catch (e) { noteSourceResult(id, null, e); return { ok: false, kind: failureKind(e), error: String(e.message || e).slice(0, 300) }; }
   }
   if (!k) return { ok: false, kind: 'auth', error: `Add a key for ${def.name} first.` };
-  if (def.me && !model) {
+  if (def.me && !model && !viaCall) {
     try {
-      const r = await fetchFn(def.me, { headers: { Authorization: `Bearer ${k.key}`, Accept: 'application/json', 'User-Agent': `QuorX/${VERSION}` }, signal: AbortSignal.timeout(20000) });
+      const r = await fetchFn(def.me, { headers: { Authorization: `Bearer ${k.key}`, Accept: 'application/json', 'User-Agent': `QuorX/${VERSION}` }, signal: AbortSignal.timeout(20000), redirect: 'error' });
+      // The account page moved or isn't served to API keys: the tiny call below says whether the key works.
+      if (r.status === 404) return testSource(id, { fetchFn, viaCall: true });
       if (!r.ok) {
         const raw = await r.text().catch(() => '');
         let j = null; try { j = JSON.parse(raw); } catch { /* not JSON */ }
@@ -592,6 +662,7 @@ export { stripPass };
  */
 export async function chatAny(body, signal, { orChat, fallback, stream = sourceStream, checkOn = stream === sourceStream } = {}) {
   if (!isSourceModel(body.model)) { const r = await orChat({ ...body, messages: stripPass(body.messages) }, signal); return { ...r, model: body.model }; }
+  stopped(signal);
   const src = sourceOf(body.model).source;
   const skip = checkOn && !sourceOn(src) ? `${SOURCES[src].name} is switched off or has no key` : sourceSkip(src, body.model);
   let why = skip;
