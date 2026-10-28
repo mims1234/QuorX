@@ -20,6 +20,9 @@ const WIN = process.platform === 'win32';
  * first use, never keeps QuorX alive by itself, and reports why when it can't start. `launch()` returns the process
  * (or throws why it can't); `why` is the reason it won't run here at all (wrong system, missing program).
  */
+// A request as JSON with every non-ASCII character written as \uXXXX: a PowerShell helper reads its input in the
+// console's code page, not UTF-8, so “quotes”, accents and emoji would arrive garbled (â€œ).
+export const asciiJson = (v) => JSON.stringify(v).replace(/[^ -~]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
 export function lineHost(launch, { label = 'helper', readyMs = 20000, off = false, why = '', onEvent = null } = {}) {
   let host = null;
   let lastError = why;
@@ -76,7 +79,7 @@ export function lineHost(launch, { label = 'helper', readyMs = 20000, off = fals
     const id = ++h.seq;
     return new Promise((resolve, reject) => {
       h.pending.set(id, { resolve, reject });
-      h.proc.stdin.write(`${JSON.stringify({ id, op, ...args })}\n`);
+      h.proc.stdin.write(`${asciiJson({ id, op, ...args })}\n`);
       setTimeout(() => { if (h.pending.delete(id)) reject(new Error(`${label}: ${op} timed out`)); }, ms);
     });
   }

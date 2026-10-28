@@ -1557,6 +1557,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (emptyTries && (r.text || r.toolCalls.length) && reasonNow !== (setup.reasoning || 'off')) emptyTries = 0;
     // Text written alongside tool calls is "working out loud": it goes to the trace, not the reply.
     const replyBefore = reply;
+    if (r.toolCalls.length) run.stalls = 0;
     if (r.text && r.toolCalls.length) asides.push(r.text);
     else if (r.text) reply += (reply ? '\n\n' : '') + r.text;
     if (!r.toolCalls.length) {
@@ -1568,10 +1569,11 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         continue;
       }
       // A reply that ends saying what it does next ("Checking the window first.") but wrote no call stopped short: some
-      // models (Grok Build, writing calls as text) do this. Sent back once per reply; never for a call it wrote but that
-      // wasn't run (that one may be an example: it is never asked for again).
-      if (!last && !run.stallNudged && !r.skippedCalls && announcesStep(r.text)) {
-        run.stallNudged = true;
+      // models (Grok Build, writing calls as text) do this at every step. Sent back each time, at most twice in a row (a
+      // step whose calls ran starts the count again); never for a call it wrote but that wasn't run (that one may be an
+      // example: it is never asked for again).
+      if (!last && (run.stalls || 0) < 2 && !r.skippedCalls && announcesStep(r.text)) {
+        run.stalls = (run.stalls || 0) + 1;
         reply = replyBefore;
         if (r.text) asides.push(r.text);
         emit({ t: 'note', level: 'warn', msg: `${short(setup.model)} said what it would do next but wrote no tool call; asking it to make the call.`, at: at() });

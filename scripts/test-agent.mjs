@@ -4113,17 +4113,18 @@ test('a tool result or a file can’t fake a turn of the user’s, the model’s
   assert.match(transcript, /<quorx_call ran>\{"name":"fetch_url"/, 'the model’s own earlier call is shown as run, so copying it runs nothing');
 });
 
-test('a reply that says what it does next but writes no call is sent back once to make it', async () => {
+test('a reply that says what it does next but writes no call is sent back to make it, at most twice in a row', async () => {
   for (const t of ['I\'ll open Paint and draw a cat. Checking the window first so the strokes land on the canvas.', 'Let me look at the file.', 'First I\'ll load the notes, then start Paint.']) assert.ok(announcesStep(t), t);
   for (const t of ['The cat is drawn in Paint.', 'Want me to add colours?', 'Done. Let me know if you want changes.', 'It works now, so I fixed the bug.', '']) assert.ok(!announcesStep(t), t);
   let n = 0;
   const said = [];
-  const stalls = async (body) => { n++; said.push(JSON.stringify(body.messages.at(-1))); return n === 1 ? srcReply('Checking the folder first.') : n === 2 ? srcReply('', [['list_files', {}]]) : srcReply('Checking it again.'); };
+  // stall, call, stall, call, then stalls only: sent back after each stall, until two in a row didn't help.
+  const stalls = async (body) => { n++; said.push(JSON.stringify(body.messages.at(-1))); return [2, 4].includes(n) ? srcReply('', [['list_files', {}]]) : srcReply(`Checking it now (${n}).`); };
   const { events, done } = await run(() => { throw new Error('OpenRouter must not be called'); }, { setup: { model: 'grok-local/grok-4.7' }, catalogue: SRC_CAT, sourceStream: stalls });
-  assert.equal(n, 3, 'sent back once, then its call runs, and the next stall ends the reply');
+  assert.equal(n, 7, 'each stall after a call is sent back; the third stall in a row ends the reply');
   assert.match(said[1], /contained no tool call/);
-  assert.ok(of(events, 'tool_result').some((x) => x.name === 'list_files'));
-  assert.equal(done.reply, 'Checking it again.', 'only once per reply');
+  assert.equal(of(events, 'tool_result').filter((x) => x.name === 'list_files').length, 2);
+  assert.equal(done.reply, 'Checking it now (7).');
 });
 
 test('text calls follow the step: none on a step that allows none, and never a tool this chat doesn’t offer', async () => {
