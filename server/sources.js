@@ -1,8 +1,8 @@
 // Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Model sources: where a chat's main model runs. OpenRouter is the default and stays behind everything else QuorX
 // does (deciders, media, helpers, the reviewer, every fallback). An app on this computer can run the main model with
-// the providers, plans and sign-ins the user connected there: the OpenCode app (opencodelocal.js) and Claude Code
-// (claudelocal.js).
+// the providers, plans and sign-ins the user connected there: the OpenCode app (opencodelocal.js), Claude Code
+// (claudelocal.js) and Grok Build (groklocal.js).
 //   - A source model's id is the source, a slash, and the model as that app names it:
 //     opencode-local/deepseek/deepseek-v4-flash. OpenRouter has no vendor by that name, so the id alone says where a
 //     call goes and every picker, chat and schedule just works.
@@ -17,6 +17,7 @@ import { HOME } from './openrouter.js';
 import { renameSoon } from './fsretry.js';
 import { findOnPath, localModels, localStream, ensureLocalServer, localServer, LOCAL_ID } from './opencodelocal.js';
 import { claudeModels, claudeStream, claudeAuth, claudeRunning, CLAUDE_ID } from './claudelocal.js';
+import { grokModels, grokStream, grokRunning, GROK_ID } from './groklocal.js';
 
 const DATA = path.join(HOME, 'data');
 export const SOURCE_FILE = path.join(DATA, 'sources.json');
@@ -35,11 +36,19 @@ export const SOURCES = {
     site: 'https://claude.com/product/claude-code', keyUrl: 'https://code.claude.com/docs/en/setup', docs: 'https://code.claude.com/docs/en/headless',
     keyHint: 'No key: QuorX uses the account you signed in to Claude Code with.', install: 'npm i -g @anthropic-ai/claude-code', appName: 'Claude Code',
   },
+  // Grok Build on this computer (groklocal.js): the account it is signed in with (grok login).
+  [GROK_ID]: {
+    id: GROK_ID, name: 'Grok Build on this PC', short: 'Grok Build', app: 'grok', billing: 'mixed', local: true,
+    site: 'https://x.ai/cli', keyUrl: 'https://x.ai/cli', docs: 'https://x.ai/cli',
+    keyHint: 'No key: QuorX uses the account you signed in to Grok Build with (grok login).', install: 'curl -fsSL https://x.ai/cli/install.sh | bash', appName: 'Grok Build',
+  },
 };
 // How QuorX reaches each app: its model list, one call, a check that costs nothing, and what its process is doing.
 const APPS = {
   [LOCAL_ID]: { list: () => localModels(), stream: localStream, check: () => ensureLocalServer(), server: localServer },
   [CLAUDE_ID]: { list: () => claudeModels(), stream: claudeStream, check: () => claudeAuth({ refresh: true }), server: () => ({ running: claudeRunning() > 0, calls: claudeRunning(), perCall: true }) },
+  // Listing Grok's models starts it and signs in, so it is the check too.
+  [GROK_ID]: { list: () => grokModels(), stream: grokStream, check: async () => {}, server: () => ({ running: grokRunning() > 0, calls: grokRunning(), perCall: true }) },
 };
 export const SOURCE_IDS = Object.keys(SOURCES);
 

@@ -32,12 +32,12 @@ process.once('exit', () => { for (const p of running) if (p.pid) killTree(p.pid)
 
 // A .cmd runs through cmd.exe; /s strips the outer pair of quotes, so each quoted argument keeps its own.
 const quote = (a) => `"${String(a).replace(/"/g, '""')}"`;
-function launch(exe, args, opts, start = spawn) {
+export function launch(exe, args, opts, start = spawn) {
   if (/\.(cmd|bat)$/i.test(exe)) return start(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `"${[exe, ...args].map(quote).join(' ')}"`], { ...opts, windowsVerbatimArguments: true });
   return start(exe, args, opts);
 }
-// Claude Code's environment: its own sign-in, never QuorX's OpenRouter key, and not told it runs inside another Claude Code.
-function envFor() {
+// An app's environment: its own sign-in, never QuorX's OpenRouter key, and not told it runs inside another Claude Code.
+export function envFor() {
   const env = { ...process.env, DISABLE_AUTOUPDATER: '1' };
   for (const k of Object.keys(env)) if (/^OPENROUTER_API_KEY/i.test(k) || /^(CLAUDECODE|CLAUDE_CODE_ENTRYPOINT|CLAUDE_CODE_SSE_PORT)$/i.test(k)) delete env[k];
   return env;

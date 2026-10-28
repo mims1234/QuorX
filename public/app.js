@@ -1485,8 +1485,10 @@ const FILTERS = [
 ];
 const providerOf = (id) => String(id).replace(/^~/, '').split('/')[0] || 'other';
 // Models of an app on this PC (⚙ Settings → Apps on this PC) are the source, a slash, and that app's own id.
-const SOURCE_NAME = { 'opencode-local': 'OpenCode on this PC', 'claude-local': 'Claude Code on this PC' };
-const SOURCE_SHORT = { 'opencode-local': 'This PC', 'claude-local': 'Claude Code' };
+const SOURCE_NAME = { 'opencode-local': 'OpenCode on this PC', 'claude-local': 'Claude Code on this PC', 'grok-local': 'Grok Build on this PC' };
+const SOURCE_SHORT = { 'opencode-local': 'This PC', 'claude-local': 'Claude Code', 'grok-local': 'Grok Build' };
+// The apps' tags as words: "This PC, Claude Code or Grok Build".
+const srcTags = () => { const t = [...new Set(Object.values(SOURCE_SHORT))]; return t.length > 1 ? `${t.slice(0, -1).join(', ')} or ${t.at(-1)}` : t[0] || ''; };
 const sourceOfId = (id) => { const s = String(id || ''), h = s.split('/')[0]; return SOURCE_NAME[h] && s.length > h.length + 1 ? h : null; };
 const PROVIDER_NAME = (p) => ({ 'x-ai': 'xAI', openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google', 'meta-llama': 'Meta', mistralai: 'Mistral', deepseek: 'DeepSeek', qwen: 'Qwen', nvidia: 'NVIDIA', cohere: 'Cohere', inclusionai: 'inclusionAI', openrouter: 'OpenRouter', 'black-forest-labs': 'Black Forest Labs', elevenlabs: 'ElevenLabs', ...SOURCE_NAME }[p] || p.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
 const cleanName = (m) => String(m.name || m.id).replace(/\s*\(free\)\s*$/i, '').replace(/^[^:]+:\s*/, '');
@@ -1539,7 +1541,7 @@ function drawPicker(full = false) {
   // No key yet: browsing works (the lists are public); only models through an app on this PC run.
   const banner = $('#pkBanner');
   banner.hidden = !!G.cfg?.hasKey;
-  banner.innerHTML = G.cfg?.hasKey ? '' : `🔑 <b>No OpenRouter key yet.</b> ${PK.kind === 'chat' ? 'Models of an app on this PC (tagged This PC or Claude Code) run now; the others wait for a key.' : 'You can browse models and prices now; they run once you add a key.'} <button type="button" class="mp-link" id="pkAddKey">Add a key →</button>`;
+  banner.innerHTML = G.cfg?.hasKey ? '' : `🔑 <b>No OpenRouter key yet.</b> ${PK.kind === 'chat' ? `Models of an app on this PC (tagged ${srcTags()}) run now; the others wait for a key.` : 'You can browse models and prices now; they run once you add a key.'} <button type="button" class="mp-link" id="pkAddKey">Add a key →</button>`;
   const ak = $('#pkAddKey'); if (ak) ak.onclick = () => { PK.done?.(null); openSettings('keys'); };
   // What is chosen now.
   const cur = G.byId.get(PK.current) || all.find((m) => m.id === PK.current);
@@ -5944,7 +5946,7 @@ function settingsPanels(S) {
         + stRow('Zero data retention only', 'Only providers that keep no copy of your prompts. Fewer models qualify.', stSwitch('zdrOnly', !!S.zdrOnly), { id: 'stRowZdr' })
         + stRow('Blocked providers', 'OpenRouter never sends the agent’s calls to these: for every model, or only the models you pick (a provider can be fine for one model and break another). Block one that keeps breaking tool calls (the provider shows as “via …” above each reply). If only blocked providers serve a model, that reply uses them anyway, and says so.', '<div id="stBlocked"><div class="st-row-help">Loading providers…</div></div>', { cls: 'sx-row-wide', id: 'stRowBlocked' })),
     ]],
-    sources: ['Apps on this PC', 'A chat’s main model can run through OpenCode or Claude Code on this computer, on the providers and sign-ins you set up there. Everything else stays on OpenRouter.', [
+    sources: ['Apps on this PC', 'A chat’s main model can run through OpenCode, Claude Code or Grok Build on this computer, on the providers and sign-ins you set up there. Everything else stays on OpenRouter.', [
       stCard('Apps', '', '<div id="stSources"><div class="st-row-help">Checking the apps on this PC…</div></div>', '', 'stSrcConnect'),
       stCard('When a call fails', 'By default the reply stops and says why, and you pick another model. QuorX switches only if you choose a fallback.',
         stRow('Fall back to', '', stCards('sourceFallback', [['off', '✋', 'Stop and tell me', 'You pick the next model'], ['same', '🔁', 'Same model on OpenRouter', 'When OpenRouter has it, else the model below'], ['model', '🎯', 'Always this model', 'The fallback model below']], S.sourceFallback || G.cfg.defaults.sourceFallback || 'off', 'compact'), { cls: 'sx-row-wide', id: 'stRowSrcFb' })
@@ -6274,6 +6276,7 @@ function srcState(x) {
 const SRC_GUIDE = {
   'opencode-local': { what: 'Runs a chat through the OpenCode app on this computer, with the providers you connected in it. Each provider bills as it does in OpenCode; plans and free tiers cost nothing here.', install: 'npm i -g opencode-ai' },
   'claude-local': { what: 'Runs a chat through Claude Code on this computer, on the subscription or API key you signed in with. Its own tools stay off: QuorX\'s tools and approvals do the work.', install: 'npm i -g @anthropic-ai/claude-code' },
+  'grok-local': { what: 'Runs a chat through Grok Build on this computer, on the account you signed in with (grok login). Its own tools stay off: QuorX\'s tools and approvals do the work.', install: 'curl -fsSL https://x.ai/cli/install.sh | bash' },
 };
 // The app as QuorX found it: its version and its server, or how to install it.
 function srcInfoHTML(x, g) {
@@ -7305,7 +7308,7 @@ function applyKeyLock() {
     const ta = $('.input', c.el.root), send = $('.sendBtn', c.el.root);
     const can = !!G.cfg.hasKey || !!sourceOfId(c.agent?.setup?.model);
     ta.disabled = send.disabled = !can;
-    ta.placeholder = can ? c.placeholder || 'Ask, or ask for something to be built…  @ to add files or chats · / for commands' : 'No OpenRouter key yet: pick a model of an app on this PC, tagged This PC or Claude Code (the model button above), or add a key in ⚙ Settings → API keys.';
+    ta.placeholder = can ? c.placeholder || 'Ask, or ask for something to be built…  @ to add files or chats · / for commands' : `No OpenRouter key yet: pick a model of an app on this PC, tagged ${srcTags()} (the model button above), or add a key in ⚙ Settings → API keys.`;
   }
 }
 async function exportChats(btn) {
