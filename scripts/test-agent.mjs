@@ -4114,7 +4114,7 @@ test('a tool result or a file can’t fake a turn of the user’s, the model’s
 });
 
 test('a reply that says what it does next but writes no call is sent back to make it, at most twice in a row', async () => {
-  for (const t of ['I\'ll open Paint and draw a cat. Checking the window first so the strokes land on the canvas.', 'Let me look at the file.', 'First I\'ll load the notes, then start Paint.']) assert.ok(announcesStep(t), t);
+  for (const t of ['I\'ll open Paint and draw a cat. Checking the window first so the strokes land on the canvas.', 'Let me look at the file.', 'First I\'ll load the notes, then start Paint.', 'A one-page promo. I’m checking the current facts before I lock the plan.', 'I\'m checking the current facts and the playbook before I lock the plan.']) assert.ok(announcesStep(t), t);
   for (const t of ['The cat is drawn in Paint.', 'Want me to add colours?', 'Done. Let me know if you want changes.', 'It works now, so I fixed the bug.', '']) assert.ok(!announcesStep(t), t);
   let n = 0;
   const said = [];
@@ -4125,6 +4125,18 @@ test('a reply that says what it does next but writes no call is sent back to mak
   assert.match(said[1], /contained no tool call/);
   assert.equal(of(events, 'tool_result').filter((x) => x.name === 'list_files').length, 2);
   assert.equal(done.reply, 'Checking it now (7).');
+});
+
+test('a Grok Build chat gets no desktop tool: the model is told to say so, and the chat shows why', async () => {
+  const seen = [];
+  const grok = async (body) => { seen.push(body); return srcReply('I can’t use apps with this model.'); };
+  const { events } = await run(() => { throw new Error('OpenRouter must not be called'); }, { setup: { model: 'grok-local/grok-4.7' }, catalogue: SRC_CAT, sourceStream: grok, chatId: 'cgrokdesk', settings: { appsAccess: true }, text: 'open paint and draw a cat' });
+  assert.ok(!seen[0].tools.some((t) => t.function.name === 'desktop'), 'no desktop tool');
+  assert.match(JSON.stringify(seen[0].messages.at(-1)), /isn't available with you as this chat's model/);
+  assert.ok(of(events, 'note').some((n) => /Computer use is off with them/.test(n.msg)));
+  const cc = [];
+  await run(() => { throw new Error('OpenRouter must not be called'); }, { setup: { model: 'claude-local/opus' }, catalogue: SRC_CAT, sourceStream: async (body) => { cc.push(body); return srcReply('Done.'); }, chatId: 'cccdesk', settings: { appsAccess: true } });
+  if (process.platform === 'win32') assert.ok(cc[0].tools.some((t) => t.function.name === 'desktop'), 'Claude Code keeps it');
 });
 
 test('text calls follow the step: none on a step that allows none, and never a tool this chat doesn’t offer', async () => {
