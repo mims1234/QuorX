@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { chat, chatStream, generationCost, chatModels, imageModels, generateImage, speechModels, synthesize, composeMusic, musicModels, videoModels, generateVideo, HOME } from './openrouter.js';
 import { ensemble, GATE } from './decisions.js';
-import { runtime, knownProviders } from './openrouter.js';
+import { runtime, knownProviders, currentKey } from './openrouter.js';
 import { sourceOf, sourceStream, sourceModels, sourceOn, sourceSkip, noteSourceResult, failureKind, kindWords, sameOnOpenRouter, stripPass, chatAny, sessionFor } from './sources.js';
 import { pathToFileURL } from 'node:url';
 import { rotateLog } from './storagerules.js';
@@ -291,7 +291,7 @@ const CREATIVITY = { focused: 0.3, creative: 1 };
 function samplingFor(model, info, creativity, reasoning) {
   const t = CREATIVITY[creativity];
   if (t == null || info?.temp === false) return {};
-  if (/^anthropic\//.test(sourceOf(model)?.model || model) && reasoning && reasoning !== 'off' && t !== 1) return {}; // Claude through Cline too
+  if (/^anthropic\//.test(sourceOf(model)?.model || model) && reasoning && reasoning !== 'off' && t !== 1) return {}; // Claude through a source too
   return { temperature: t };
 }
 // OpenRouter's ignore list takes slugs ("inference-net"), replies name the provider ("InferenceNet"): the provider
@@ -982,12 +982,19 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   const setup = req.bench ? { ...DEFAULTS.setups.C, ...(req.setup || {}) }
     : { model: req.setup?.model || DEFAULTS.chatModel, reasoning: req.setup?.reasoning || 'off', creativity: ['focused', 'creative'].includes(req.setup?.creativity) ? req.setup.creativity : 'default', decide: 'auto' };
   const S = { ...DEFAULTS, ...(req.settings || {}) };
+  // No OpenRouter key yet: only a model through an app on this PC can run, and everything that would call OpenRouter
+  // (the deciders and checks, the enhancer, helpers, the reviewer, fresh eyes, paid media, a fallback) is off.
+  const noOpenRouter = deps.noOpenRouter ?? (!deps.chatStream && !currentKey());
+  if (noOpenRouter) {
+    if (!sourceOf(carryOn?.model || setup.model)) throw Object.assign(new Error(`${carryOn?.model || setup.model} runs on OpenRouter, and there is no OpenRouter key yet. Pick a model tagged This PC (⚙ Settings → Apps on this PC), or add an OpenRouter key in ⚙ Settings → API keys.`), { status: 400 });
+    Object.assign(S, { deciders: false, approval: 'strict', enhancer: false, freshEyes: false, review: 'off', codeReview: 'off', helpers: false, sourceFallback: 'off', fallbackModel: '', buildThinking: 'off' });
+  }
   const blockedNames = blockedFor(S.blockedProviders, setup.model);
   const blockedSlugs = blockedNames.length ? providerSlugs(blockedNames, knownProviders()) : [];
   const SF = safetySettings(req.settings?.safety);
   // The Q&A benchmark skips the build gates (verify, reviewer); the build benchmark (bench: 'build') keeps them.
   const qaBench = !!req.bench && req.bench !== 'build';
-  const T = toolSettings(req.settings?.tools, req.settings?.mediaEnabled !== false);
+  const T = toolSettings(req.settings?.tools, !noOpenRouter && req.settings?.mediaEnabled !== false);
   S.gate = { ...DEFAULTS.gate, ...(req.settings?.gate || {}) };
   S.voters = (Array.isArray(S.voters) && S.voters.length ? S.voters : DEFAULTS.voters).slice(0, 5);
   const cats = Object.keys(MEDIA).filter((c) => T[c].on);
@@ -1841,7 +1848,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     run.sourceFails ??= {}; run.sourceOff ??= {};
     // A source switched off, or one that failed for other chats a moment ago, is not waited on again (tests script
     // the source, so only the real one is checked).
-    let why = run.sourceOff[s.source] || (deps.sourceStream ? '' : !sourceOn(s.source) ? `${name} is switched off or has no key (⚙ Settings → OpenCode & Cline)` : sourceSkip(s.source, sm));
+    let why = run.sourceOff[s.source] || (deps.sourceStream ? '' : !sourceOn(s.source) ? `${name} is switched off or not installed (⚙ Settings → Apps on this PC)` : sourceSkip(s.source, sm));
     let kind = why ? 'skipped' : null;
     for (let again = true; !why && again;) {
       again = false;
@@ -1876,7 +1883,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       }
     }
     const to = sourceFallbackFor(sm, S, catalogue);
-    if (!to) throw Object.assign(new Error(`${why}. Pick another model in the chat's model button (or fix ${name}), then send a message to carry on. QuorX doesn't switch models by itself (⚙ Settings → OpenCode & Cline → When a call fails).`), { status: 400, source: s.source });
+    if (!to) throw Object.assign(new Error(`${why}. Pick another model in the chat's model button (or fix ${name}), then send a message to carry on. QuorX doesn't switch models by itself (⚙ Settings → Apps on this PC → When a call fails).`), { status: 400, source: s.source });
     const rest = !!run.sourceOff[s.source], first = rest && !run.sourceOffSaid?.[s.source];
     if (first) (run.sourceOffSaid ??= {})[s.source] = true;
     emit({ t: 'source_fallback', step: role === 'writer' ? run.stepNow ?? null : null, role, from: sm, to, source: s.source, kind, why: clip(why, 300), rest, at: at() });

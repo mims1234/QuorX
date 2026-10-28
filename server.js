@@ -16,7 +16,7 @@ import { spawn } from 'node:child_process';
 import { openDetached } from './server/userenv.js';
 import { currentKey, PORT, runtime, ROOT, HOME, chat, chatModels, decisionModels, imageModels, speechModels, musicModels, videoModels, transcribe, clearCatalogues, providerList, knownProviders } from './server/openrouter.js';
 import { listKeys, addKey, removeKey, setActive, renameKey, keyUsage, activeUsage, accountCredits, startSampling, lockDown } from './server/keys.js';
-import { sourceStatus, sourceModels, setSourceKey, removeSourceKey, setSourceOn, importOpenCodeKey, testSource, sourceOf, sameOnOpenRouter } from './server/sources.js';
+import { sourceStatus, sourceModels, setSourceOn, testSource, sourceOf, sameOnOpenRouter } from './server/sources.js';
 import { setupCheck, runFix } from './server/setup-check.js';
 import { startSignIn, signInStatus, cancelSignIn, finishByCallback, finishWithCode, callbackPage } from './server/oauth.js';
 import { runAgent, answerApproval, answerQuestion, answerSecret, answerBudget, raiseCap, setRunApproval, steerRun, setRunReading, setRunVideo, holdCard, DEFAULTS, MEDIA, briefFor, briefForChat, REVIEW_MODEL, HELPER_MODEL, REVIEW_ALT, REVIEW_STRONG, REVIEW_STRONG_ALT } from './server/agent.js';
@@ -896,29 +896,26 @@ const server = http.createServer(async (req, res) => {
       // public (no key needed); if none of them load, the page shows why and offers a retry.
       const errors = [];
       const safe = (name, p) => p.catch((e) => { errors.push(`${name}: ${e.message}`); return []; });
-      // The models of OpenCode and Cline, when they are switched on (⚙ Settings → OpenCode & Cline), join the chat models.
+      // The models of OpenCode and Cline, when they are switched on (⚙ Settings → Apps on this PC), join the chat models.
       const [chat, dec, img, tts, mus, vid, src] = await Promise.all([safe('chat', chatModels()), safe('decisions', decisionModels()), safe('images', imageModels()), safe('voices', speechModels()), safe('music', musicModels()), safe('video', videoModels()), safe('sources', sourceModels({ refresh }))]);
       if (!chat.length && !dec.length) return json(res, 502, { error: `Could not load the model lists from OpenRouter (${errors[0] || 'no answer'}).` });
       // Audio-capable chat models double as the "listen" (speech-to-text) category.
       const ears = chat.filter((m) => m.in.includes('audio')).map((m) => ({ ...m, kind: 'listen' }));
       return json(res, 200, [...dec, ...img, ...tts, ...mus, ...vid, ...ears, ...chat.filter((m) => m.tools), ...src.filter((m) => m.tools)]);
     }
-    // ---- OpenCode & Cline (server/sources.js): the main model on the user's own account there ----
+    // ---- Apps on this PC (server/sources.js): the main model through an app the user connected providers in ----
     // ?full=1 (the page is open): every source's model list and the apps' versions; otherwise only what is known.
     if (url.pathname === '/api/sources' && req.method === 'GET') {
       const full = !!url.searchParams.get('full');
       if (full) await sourceModels({ all: true, refresh: !!url.searchParams.get('refresh') }).catch(() => {});
       return json(res, 200, { sources: await sourceStatus({ versions: full }) });
     }
-    const srm = url.pathname.match(/^\/api\/sources\/([a-z-]+)\/(key|import|on|test)$/);
+    const srm = url.pathname.match(/^\/api\/sources\/([a-z-]+)\/(on|test)$/);
     if (srm) {
       try {
         const b = req.method === 'POST' ? JSON.parse(await readBody(req, 1e4) || '{}') : {};
-        if (srm[2] === 'test' && req.method === 'POST') return json(res, 200, await testSource(srm[1], { model: b.model }));
-        if (srm[2] === 'key' && req.method === 'POST') setSourceKey(srm[1], b.key);
-        else if (srm[2] === 'key' && req.method === 'DELETE') removeSourceKey(srm[1]);
-        else if (srm[2] === 'import' && req.method === 'POST') importOpenCodeKey(srm[1]);
-        else if (srm[2] === 'on' && req.method === 'POST') setSourceOn(srm[1], b.on === true);
+        if (srm[2] === 'test' && req.method === 'POST') return json(res, 200, await testSource(srm[1]));
+        if (srm[2] === 'on' && req.method === 'POST') setSourceOn(srm[1], b.on === true);
         else return json(res, 405, { error: 'method not allowed' });
         await sourceModels({ all: true }).catch(() => {});
         return json(res, 200, { ok: true, sources: await sourceStatus() });

@@ -363,7 +363,7 @@ const ICO = {
   trash: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg>',
 };
 const COMMANDS = [
-  ['model', 'Choose this chat\'s model', (c, arg) => { if (!arg) return $('.model', c.el.root).click(); const id = findModel(c, arg); if (!id) return uiAlert(`No model matches "${arg}".`); c.agent.setup.model = id; saveChat(c); renderComposerBar(c); renderChatHead(c); }],
+  ['model', 'Choose this chat\'s model', (c, arg) => { if (!arg) return $('.model', c.el.root).click(); const id = findModel(c, arg); if (!id) return uiAlert(`No model matches "${arg}".`); c.agent.setup.model = id; saveChat(c); renderComposerBar(c); renderChatHead(c); applyKeyLock(); }],
   ['reason', 'How much the model thinks first', (c, arg) => { if (REASON[arg]) { c.agent.setup.reasoning = arg; saveChat(c); renderComposerBar(c); } }],
   ['creativity', 'How varied the answers are', (c, arg) => { if (CREATIVITY_INFO[arg]) { c.agent.setup.creativity = arg; saveChat(c); renderComposerBar(c); } }],
   ['strict', 'Ask before every tool (this chat)', (c) => { c.approval = 'strict'; saveChat(c); renderComposerBar(c); }],
@@ -1431,7 +1431,7 @@ function rateModel(idOrModel, kind) {
     if (m && !m.tools) return { r: 'r', why: 'Can\'t call tools, so in QuorX it can\'t write files, use the browser or check its work.' };
     if (/:free$|^openrouter\/free/.test(id)) return { r: 'r', why: 'Free tier: in our tests free models hit rate limits and provider errors and gave up.' };
     if (m?.status === 'deprecated') return { r: 'r', why: `${SOURCE_NAME[m.source] || 'Its source'} marks it deprecated: it may stop answering soon (the reply then stops and says so).` };
-    if (m?.source) return { r: 'y', why: `Runs on your ${SOURCE_NAME[m.source]} account; not tested in QuorX yet. When a call fails there, the reply stops and says why, and you pick another model.${m.plan === 'free' ? ` Free: ${SOURCE_NAME[m.source]} may keep it for its own app; if it says no, the reply stops and says so.` : ''}${!(m.in || []).includes('image') ? ' It can\'t see screenshots (the deciders still can).' : ''}` };
+    if (m?.source) return { r: 'y', why: `Runs through ${SOURCE_NAME[m.source]}; not tested in QuorX yet. When a call fails there, the reply stops and says why, and you pick another model.${m.plan === 'free' ? ` Free: ${SOURCE_NAME[m.source]} may keep it for its own app; if it says no, the reply stops and says so.` : ''}${!(m.in || []).includes('image') ? ' It can\'t see screenshots (the deciders still can).' : ''}` };
     return { r: 'y', why: `Not tested in QuorX yet.${m && !(m.in || []).includes('image') ? ' It can\'t see screenshots (the deciders still can).' : ''}` };
   }
   if (k === 'decision') return { r: 'y', why: (m?.in || []).includes('image') ? 'Not tested here yet. Reads images, so it can do screenshot checks.' : 'Not tested here yet. Text only: it can\'t do screenshot checks.' };
@@ -1442,8 +1442,8 @@ function recDot(id, kind) {
   const r = rateModel(id, kind);
   return r ? `<span class="rec rec-${r.r}" title="${esc(`${REC_WORD[r.r]}: ${r.why}`)}" aria-label="${REC_WORD[r.r]}">${REC_ICON[r.r]}</span>` : '';
 }
-// Whose plan pays: Go (directly, or through the OpenCode on this PC), else the source's own (ClinePass).
-const planName = (m) => (m.providerID === 'opencode-go' || m.source === 'opencode-go' ? 'Go' : m.source === 'cline' ? 'ClinePass' : SOURCE_SHORT[m.source] || '');
+// Whose plan pays: Go (through the OpenCode on this PC), else the source's own.
+const planName = (m) => (m.providerID === 'opencode-go' ? 'Go' : SOURCE_SHORT[m.source] || '');
 const shortPrice = (id) => { const m = G.byId.get(id); return !m || m.kind !== 'chat' ? '' : m.plan === 'plan' ? `${planName(m)} plan` : m.source && m.plan === 'free' ? 'free' : `$${m.price[0].toFixed(2)}/$${m.price[1].toFixed(2)}`; };
 function priceText(m, extra = {}) {
   if (m.source && m.plan === 'plan') return `${SOURCE_NAME[m.source] || m.source} plan: nothing to pay per call (your subscription's usage limits apply) · list price $${(m.listPrice?.[0] || 0).toFixed(2)} in / $${(m.listPrice?.[1] || 0).toFixed(2)} out per M tokens`;
@@ -1483,9 +1483,9 @@ const FILTERS = [
   ['fav', '★ Favourites', (m) => (G.favModels?.[m.kind] || []).includes(m.id)],
 ];
 const providerOf = (id) => String(id).replace(/^~/, '').split('/')[0] || 'other';
-// OpenCode and Cline models (⚙ Settings → OpenCode & Cline) are the source, a slash, and that source's own id.
-const SOURCE_NAME = { 'opencode-local': 'OpenCode on this PC', opencode: 'OpenCode', 'opencode-go': 'OpenCode Go', cline: 'Cline' };
-const SOURCE_SHORT = { 'opencode-local': 'This PC', opencode: 'OpenCode', 'opencode-go': 'Go', cline: 'Cline' };
+// Models of an app on this PC (⚙ Settings → Apps on this PC) are the source, a slash, and that app's own id.
+const SOURCE_NAME = { 'opencode-local': 'OpenCode on this PC' };
+const SOURCE_SHORT = { 'opencode-local': 'This PC' };
 const sourceOfId = (id) => { const s = String(id || ''), h = s.split('/')[0]; return SOURCE_NAME[h] && s.length > h.length + 1 ? h : null; };
 const PROVIDER_NAME = (p) => ({ 'x-ai': 'xAI', openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google', 'meta-llama': 'Meta', mistralai: 'Mistral', deepseek: 'DeepSeek', qwen: 'Qwen', nvidia: 'NVIDIA', cohere: 'Cohere', inclusionai: 'inclusionAI', openrouter: 'OpenRouter', 'black-forest-labs': 'Black Forest Labs', elevenlabs: 'ElevenLabs', ...SOURCE_NAME }[p] || p.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
 const cleanName = (m) => String(m.name || m.id).replace(/\s*\(free\)\s*$/i, '').replace(/^[^:]+:\s*/, '');
@@ -1508,7 +1508,7 @@ const PK = { kind: 'chat', current: '', filters: new Set(), providers: new Set()
 
 // pickModel(kind, current, { context, openRouterOnly, source }) → the chosen id, or null. openRouterOnly: for the
 // places only an OpenRouter model makes sense (its fallback model, a blocked provider's models); source: open on one
-// source's models ('openrouter', 'opencode', 'opencode-go', 'cline').
+// source's models ('openrouter', 'opencode-local').
 function pickModel(kind, current, opts = {}) {
   return new Promise((resolve) => {
     Object.assign(PK, { kind, current: current || '', q: '', sel: 0, providers: new Set(), filters: new Set(), context: opts.context || '', orOnly: !!opts.openRouterOnly, source: opts.source || 'all' });
@@ -1528,10 +1528,10 @@ function drawPicker(full = false) {
   const all = pickerModels();
   $('#pkTitle').textContent = `Choose a ${(KIND_TITLE[PK.kind] || 'model').toLowerCase()}`;
   $('#pkSub').textContent = [PK.context, KIND_NOTE[PK.kind]].filter(Boolean).join(' · ');
-  // No key yet: browsing works (the lists are public), running doesn't.
+  // No key yet: browsing works (the lists are public); only models through an app on this PC run.
   const banner = $('#pkBanner');
   banner.hidden = !!G.cfg?.hasKey;
-  banner.innerHTML = G.cfg?.hasKey ? '' : '🔑 <b>No OpenRouter key yet.</b> You can browse models and prices now; nothing runs until you add a key. <button type="button" class="mp-link" id="pkAddKey">Add a key →</button>';
+  banner.innerHTML = G.cfg?.hasKey ? '' : `🔑 <b>No OpenRouter key yet.</b> ${PK.kind === 'chat' ? 'Models tagged This PC run now; the others wait for a key.' : 'You can browse models and prices now; they run once you add a key.'} <button type="button" class="mp-link" id="pkAddKey">Add a key →</button>`;
   const ak = $('#pkAddKey'); if (ak) ak.onclick = () => { PK.done?.(null); openSettings('keys'); };
   // What is chosen now.
   const cur = G.byId.get(PK.current) || all.find((m) => m.id === PK.current);
@@ -1635,12 +1635,14 @@ function scoreBadge(id) {
   const pct = Math.round((s.passed / s.checked) * 100), tone = pct >= 80 ? 'ok' : pct >= 50 ? 'warn' : 'bad';
   return `<span class="mp-score" data-tone="${tone}" title="Your last 30 days: ${s.passed} of ${s.checked} replies passed QuorX's checks; ${s.replies} replies in all, about ${money(s.avgCost, 3)} and ${s.avgSteps} steps each.">✓ ${pct}% <small>of ${s.checked}</small></span>`;
 }
+// Without an OpenRouter key, a chat model on OpenRouter can't run: it shows, locked.
+const orLocked = (id) => !G.cfg?.hasKey && PK.kind === 'chat' && !sourceOfId(id);
 function rowHTML(m, i) {
-  const p = providerOf(m.id), fav = (G.favModels?.[m.kind] || []).includes(m.id);
+  const p = providerOf(m.id), fav = (G.favModels?.[m.kind] || []).includes(m.id), locked = orLocked(m.id);
   const caps = [(m.in || []).includes('image') && m.kind !== 'image' ? ['👁', 'Sees images'] : null, m.tools ? ['🧰', 'Uses tools'] : null, m.reasoning ? ['🧠', 'Reasoning'] : null, (m.in || []).includes('audio') ? ['🎙', 'Hears audio'] : null, m.voices?.length ? ['🗣', `${m.voices.length} voices`] : null].filter(Boolean);
-  return `<div class="mp-row ${m.id === PK.current ? 'cur' : ''}" role="option" data-i="${i}" data-id="${esc(m.id)}" aria-selected="false" title="${esc(m.desc || priceText(m))}">
+  return `<div class="mp-row ${m.id === PK.current ? 'cur' : ''} ${locked ? 'locked' : ''}" role="option" data-i="${i}" data-id="${esc(m.id)}" aria-selected="false" ${locked ? 'aria-disabled="true" ' : ''}title="${esc(locked ? 'Runs on OpenRouter: add an OpenRouter key first (⚙ Settings → API keys)' : m.desc || priceText(m))}">
     <span class="mp-ava" style="--h:${hue(p)}" title="${esc(PROVIDER_NAME(p))}">${esc(initials(PROVIDER_NAME(p)))}</span>
-    <span class="mp-main"><span class="mp-name">${recDot(m, PK.kind)}${cardChip(m.id)} ${esc(cleanName(m))}${m.source ? ` <span class="mp-src" title="Runs on your ${esc(SOURCE_NAME[m.source])} account (⚙ Settings → OpenCode &amp; Cline)">${esc(SOURCE_SHORT[m.source])}</span>` : ''}${m.id === PK.current ? ' <span class="mp-tag cur">current</span>' : ''}</span><span class="mp-id">${esc(m.id)}</span></span>
+    <span class="mp-main"><span class="mp-name">${recDot(m, PK.kind)}${cardChip(m.id)} ${esc(cleanName(m))}${m.source ? ` <span class="mp-src" title="Runs through ${esc(SOURCE_NAME[m.source])} (⚙ Settings → Apps on this PC)">${esc(SOURCE_SHORT[m.source])}</span>` : ''}${m.id === PK.current ? ' <span class="mp-tag cur">current</span>' : ''}</span><span class="mp-id">${esc(m.id)}</span></span>
     <span class="mp-caps">${caps.map(([i2, t]) => `<span title="${t}">${i2}</span>`).join('')}</span>
     <span class="mp-meta">${scoreBadge(m.id)}${m.ctx ? `<span title="Context window">${ctxText(m.ctx)}</span>` : ''}${m.created ? `<span title="${new Date(m.created * 1000).toLocaleDateString()}">${agoDate(m.created)}</span>` : ''}</span>
     <span class="mp-price" title="${esc(priceText(m))}">${priceCell(m)}</span>
@@ -1674,6 +1676,7 @@ function markSel(scroll = true) {
   for (const r of document.querySelectorAll('#pkList .mp-row')) { const on = Number(r.dataset.i) === PK.sel; r.classList.toggle('kb', on); r.setAttribute('aria-selected', String(on)); if (on && scroll) r.scrollIntoView({ block: 'nearest' }); }
 }
 function choose(id) {
+  if (orLocked(id)) { const b = $('#pkBanner'); if (b) { b.hidden = false; b.classList.remove('flash'); void b.offsetWidth; b.classList.add('flash'); } return; }
   const list = ((G.recentModels ??= {})[PK.kind] ??= []);
   const i = list.indexOf(id); if (i >= 0) list.splice(i, 1);
   list.unshift(id); list.length = Math.min(list.length, 8); savePrefs();
@@ -1920,8 +1923,10 @@ function wireStartBox(box, first, projects) {
   renderComposerBar(d); renderChatTools(d); renderAttachments(d); syncRunState(d);
   const ta = $('.input', pane);
   ta.id = 'ldStartText';
-  ta.placeholder = 'What are we building? Describe it, or ask about your code…  @ to add files or chats · / for commands';
+  d.placeholder = 'What are we building? Describe it, or ask about your code…  @ to add files or chats · / for commands';
+  ta.placeholder = d.placeholder;
   ta.setAttribute('aria-label', 'Your first message');
+  G.homeDraftChat = d; applyKeyLock();
   ta.value = G.landingDraft || '';
   const fit = () => fitInput(ta);
   fit();
@@ -2847,7 +2852,7 @@ function renderComposerBar(c) {
     $('.cs-x', panel).onclick = () => discard(true);
     undoBtn.onclick = () => discard(false);
   }
-  $('.model', slot).onclick = async () => { const id = await pickModel('chat', s.model, { context: `For “${clip(c.title, 40)}”` }); if (id) { s.model = id; saveChat(c); renderComposerBar(c); renderChatHead(c); } };
+  $('.model', slot).onclick = async () => { const id = await pickModel('chat', s.model, { context: `For “${clip(c.title, 40)}”` }); if (id) { s.model = id; saveChat(c); renderComposerBar(c); renderChatHead(c); applyKeyLock(); } };
   $('.cq-adv', quick).onclick = () => setBtn.click();
   const both = (sel) => [...bar.querySelectorAll(sel), ...quick.querySelectorAll(sel)];
   for (const b of both('.lvl[data-key] .lvl-b')) b.onclick = () => { c.agent.setup[b.closest('.lvl').dataset.key] = b.dataset.v; saveChat(c); renderComposerBar(c); };
@@ -4534,7 +4539,7 @@ function wireOutOfSteps(card, c, m) {
   $('.oos-model', card).onclick = async () => {
     const id = await pickModel('chat', c.agent.setup.model, { context: 'Keep going with another model (same context)' });
     if (!id) return;
-    c.agent.setup.model = id; saveChat(c); renderComposerBar(c);
+    c.agent.setup.model = id; saveChat(c); renderComposerBar(c); applyKeyLock();
     go({ model: id }, `model:${id}`);
   };
   $('.oos-fresh', card).onclick = async () => {
@@ -5743,7 +5748,7 @@ const UI_DEFAULTS = { density: 'comfortable', fontSize: 14, reduceMotion: 'syste
   showBalance: false, maskAmounts: true, blurPaths: false, usageBtn: true, notify: 'all', searchEngine: 'google', searchCustom: '' };
 const SETTINGS_NAV = [
   ['Harness', [['setup', '🧪', 'Setup check'], ['appearance', '🎨', 'Appearance'], ['privacy', '🕶', 'Privacy & display']]],
-  ['Models', [['keys', '🔑', 'API keys'], ['models', '🧠', 'Models & catalogue'], ['sources', '🔌', 'OpenCode & Cline']]],
+  ['Models', [['keys', '🔑', 'API keys'], ['models', '🧠', 'Models & catalogue'], ['sources', '🔌', 'Apps on this PC']]],
   ['Agent', [['newchats', '✨', 'New chats'], ['loop', '🔁', 'Agent loop'], ['deciders', '⚖️', 'Deciders'], ['tools', '🧰', 'Tools & media'], ['video', '🎬', 'Video'], ['safety', '🛡', 'Approvals & safety'], ['budget', '💵', 'Budget'], ['skills', '🧩', 'Skills'], ['memory', '📌', 'Memory']]],
   ['Workspace', [['projects', '📁', 'Projects'], ['code', '💻', 'Code & servers'], ['docs', '📎', 'Documents']]],
   ['Data', [['usage', '📊', 'Usage & costs'], ['data', '🗄', 'Data & storage'], ['storage', '🧹', 'Storage'], ['shortcuts', '⌨️', 'Shortcuts'], ['about', 'ℹ️', 'About']]],
@@ -5895,7 +5900,7 @@ function settingsPanels(S) {
         + stRow('Default reasoning', '', stSeg('reasoning', [['off', 'Off'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']], S.reasoning || 'off')))
       + stCard('When the model fails', '', stRow('Fallback model', 'OpenRouter switches to it when a chat’s model fails or is down, billed at its own price. The trace marks steps it answered.', `<div class="st-fb">${modelField('pickFallback', S.fallbackModel, 'fbModel', 'None')}${S.fallbackModel ? '<button type="button" class="st-btn secondary sm" data-act="clearFallback" title="No fallback model">✕</button>' : ''}</div>`, { id: 'stRowFallback' }), '', 'stCardFallback')
       + `</div>`,
-      stCard('OpenCode & Cline', 'A chat’s main model can also run on your own OpenCode, OpenCode Go or Cline account. Everything else stays on OpenRouter.', `<div class="sx-pad src-mini" id="stSrcMini">${srcMiniHTML()}</div>`),
+      stCard('Apps on this PC', 'A chat’s main model can also run through OpenCode on this computer, with the providers you connected there. Everything else stays on OpenRouter.', `<div class="sx-pad src-mini" id="stSrcMini">${srcMiniHTML()}</div>`),
       stCard('Routing: how a call finds a provider', 'For every chat’s agent calls. The provider that answered shows on each step in “Steps”.',
         `<div class="sx-pad" data-live="routing"></div>`
         + stRow('Provider order', 'Auto favours providers with reliable tool calling (OpenRouter’s Exacto). Cheapest and Fastest sort by price or speed instead.', stCards('providerSort', [['auto', '🎯', 'Auto', 'Reliable tool calling'], ['price', '💲', 'Cheapest', 'Lowest price first'], ['throughput', '⚡', 'Fastest', 'Highest throughput first']], S.providerSort || 'auto', 'compact'), { cls: 'sx-row-wide', id: 'stRowOrder' })
@@ -5903,11 +5908,11 @@ function settingsPanels(S) {
         + stRow('Zero data retention only', 'Only providers that keep no copy of your prompts. Fewer models qualify.', stSwitch('zdrOnly', !!S.zdrOnly), { id: 'stRowZdr' })
         + stRow('Blocked providers', 'OpenRouter never sends the agent’s calls to these: for every model, or only the models you pick (a provider can be fine for one model and break another). Block one that keeps breaking tool calls (the provider shows as “via …” above each reply). If only blocked providers serve a model, that reply uses them anyway, and says so.', '<div id="stBlocked"><div class="st-row-help">Loading providers…</div></div>', { cls: 'sx-row-wide', id: 'stRowBlocked' })),
     ]],
-    sources: ['OpenCode & Cline', 'Run a chat’s main model on your own OpenCode or Cline account. The deciders, paid media, helpers and the reviewer stay on OpenRouter, and a call that fails there stops the reply with the reason, so you can pick another model (or choose a fallback below).', [
+    sources: ['Apps on this PC', 'Run a chat’s main model through OpenCode on this computer, with the providers, plans and sign-ins you connected there. The deciders, paid media, helpers and the reviewer stay on OpenRouter, and a call that fails there stops the reply with the reason, so you can pick another model (or choose a fallback below).', [
       '<div data-live="sourceflow"></div>',
-      stCard(`${stNum(1)} Connect a source`, 'Each source has its own models and its own bill. A source you switch on adds its models to every model picker, tagged OpenCode, Go or Cline.', '<div id="stSources"><div class="st-row-help">Checking OpenCode and Cline on this computer…</div></div>', '', 'stSrcConnect'),
-      stCard(`${stNum(2)} Pick a model`, '', stRow('In any chat', 'Click the chat’s model in its message box and pick a model tagged OpenCode, Go or Cline; “Where it runs” at the top of the picker shows one source at a time. Switch a chat between OpenRouter and a source whenever you like: the conversation carries over.', '<button type="button" class="st-btn secondary sm" data-act="browseSources">Browse their models</button>'), '', 'stSrcPick'),
-      stCard(`${stNum(3)} When a call fails`, 'OpenCode and Cline change often, and a server can be down, slow or out of usage. By default the reply stops and says which model failed and why, and you pick another model; QuorX never switches by itself unless you choose a fallback here.',
+      stCard(`${stNum(1)} Connect an app`, 'An app you switch on adds the models of every provider you connected in it to the chat model pickers, tagged This PC. Each provider bills as it does in that app.', '<div id="stSources"><div class="st-row-help">Checking the apps on this PC…</div></div>', '', 'stSrcConnect'),
+      stCard(`${stNum(2)} Pick a model`, '', stRow('In any chat', 'Click the chat’s model in its message box and pick a model tagged This PC; “Where it runs” at the top of the picker shows one source at a time. Switch a chat between OpenRouter and a source whenever you like: the conversation carries over.', '<button type="button" class="st-btn secondary sm" data-act="browseSources">Browse their models</button>'), '', 'stSrcPick'),
+      stCard(`${stNum(3)} When a call fails`, 'A provider can be down, slow or out of usage. By default the reply stops and says which model failed and why, and you pick another model; QuorX never switches by itself unless you choose a fallback here.',
         stRow('Fall back to', '', stCards('sourceFallback', [['off', '✋', 'Stop and tell me', 'You pick the next model'], ['same', '🔁', 'Same model on OpenRouter', 'When OpenRouter has it, else the model below'], ['model', '🎯', 'Always this model', 'The fallback model below']], S.sourceFallback || G.cfg.defaults.sourceFallback || 'off', 'compact'), { cls: 'sx-row-wide', id: 'stRowSrcFb' })
         + stRow('Fallback model', 'For a model OpenRouter doesn’t have (and every failed call, with “Always this model”). Empty: the same model when OpenRouter has it, else your OpenRouter fallback model (Models &amp; catalogue), else the default chat model (QuorX’s own when yours runs on a source). Billed at its OpenRouter price, and the reply’s cap counts it.', `<div class="st-fb">${modelField('pickSourceFallback', S.sourceFallbackModel, 'srcFbModel', 'Default chat model')}${S.sourceFallbackModel ? '<button type="button" class="st-btn secondary sm" data-act="clearSourceFallback" title="Use the default chat model">✕</button>' : ''}</div>`)
         + stRow('How it decides', 'A hiccup (a rate limit with a short wait, a server error, a dropped connection) gets one quick retry first. A source that refuses its key, runs out of credit or plan usage, or fails twice in a reply is skipped for the rest of that reply, and other chats skip it for a short while instead of waiting on it. The next reply tries it again.', ''), '', 'stSrcFail'),
@@ -6184,7 +6189,7 @@ function stSummary(id, S) {
     case 'setup': { const r = ST.setup; if (!r) return ['', '']; return [r.missing ? `${r.missing} missing` : `${r.ok} ready`, stStatus('ok', `${r.ok} ready`) + (r.warn ? stStatus('warn', `${r.warn} optional`) : '') + (r.missing ? stStatus('bad', `${r.missing} missing`) : ''), r.missing ? 'bad' : '']; }
     case 'appearance': { const t = S.theme === 'dark' ? 'Dark' : S.theme === 'light' ? 'Light' : 'System'; return [t, stStatus('info', `${t} theme`) + stStatus('info', U.density === 'compact' ? 'Compact' : 'Comfortable') + stStatus('info', `${U.fontSize} px text`) + stStatus('info', `Motion: ${{ system: 'follows system', full: 'on', reduce: 'reduced' }[motionPref(U)]}`) + stStatus('info', `Sidebar: ${SIDE_START[U.sidebarStart] || U.sidebarStart}`) + stStatus('info', `Artifact pane: ${PANE_MODE[U.paneMode] || U.paneMode}`)]; }
     case 'privacy': return [U.maskAmounts ? 'masked' : 'visible', stStatus(U.maskAmounts ? 'ok' : 'warn', U.maskAmounts ? 'Amounts masked' : 'Amounts visible') + stStatus(U.showBalance ? 'warn' : 'off', U.showBalance ? 'Balance button shown' : 'Balance button hidden') + on(U.blurPaths, 'Paths blurred', 'Paths visible')];
-    case 'keys': { const k = ST.keys; if (!G.cfg.hasKey) return ['add one', stStatus('bad', 'No key yet: nothing can run'), 'bad']; if (!k) return ['', '']; return [`${k.n} key${k.n === 1 ? '' : 's'}`, stStatus('ok', `${esc(k.active || 'A key')} is active`) + stStatus('off', `${k.n} key${k.n === 1 ? '' : 's'} on this computer`)]; }
+    case 'keys': { const k = ST.keys; if (!G.cfg.hasKey) return ['add one', stStatus('bad', 'No key yet: only models through an app on this PC run'), 'bad']; if (!k) return ['', '']; return [`${k.n} key${k.n === 1 ? '' : 's'}`, stStatus('ok', `${esc(k.active || 'A key')} is active`) + stStatus('off', `${k.n} key${k.n === 1 ? '' : 's'} on this computer`)]; }
     case 'models': return [short(S.model), stStatus('info', `New chats: ${esc(short(S.model))}`) + (G.models ? stStatus('ok', `${G.models.length} models loaded`) : '') + stStatus('info', `${PROVIDER_SORT[S.providerSort || 'auto']} routing`) + on(S.fallbackModel, `Fallback: ${esc(short(S.fallbackModel || ''))}`, 'No fallback')];
     case 'sources': { const l = ST.sources; if (!l) return ['', ''];
       const live = l.filter((x) => x.on && srcReady(x)), fb = S.sourceFallback || G.cfg.defaults.sourceFallback || 'off';
@@ -6230,46 +6235,30 @@ const ST_LIVE = {
   sourceflow: (S) => { const l = ST.sources || [], live = l.filter((x) => x.on && srcReady(x)), fb = S.sourceFallback || G.cfg.defaults.sourceFallback || 'off';
     return stFlow([['1', 'Connect', l.length ? `${live.length} of ${l.length} on` : 'checking…', 'stSrcConnect', !live.length], ['2', 'Pick a model', 'in any chat', 'stSrcPick', !live.length], ['3', 'If it fails', fb === 'off' ? 'stop and say so' : 'OpenRouter answers', 'stSrcFail', fb === 'off'], ['4', 'The rest', 'deciders, media: OpenRouter', '']]); },
 };
-// ---------- ⚙ OpenCode & Cline (server/sources.js) ----------
-// What a source's status says in one word, and its colour: on and working, on but failing, connected but off, or not connected.
-// A source is ready when it has a key; the OpenCode on this PC when it is installed (it needs no key).
-const srcReady = (x) => (x.local ? !!x.installed : !!x.key);
+// ---------- ⚙ Apps on this PC (server/sources.js) ----------
+// What a source's status says in one word, and its colour: on and working, on but failing, installed but off, or not installed.
+// A source is ready when its app is installed on this computer (it needs no key).
+const srcReady = (x) => !!x.installed;
 function srcState(x) {
-  if (!srcReady(x)) return { cls: 'off', word: x.local ? 'not installed' : 'not connected' };
+  if (!srcReady(x)) return { cls: 'off', word: 'not installed' };
   if (!x.on) return { cls: 'off', word: 'off' };
-  if (x.last && !x.last.ok && !x.last.scoped && (x.last.kind === 'auth' || x.last.kind === 'quota')) return { cls: 'bad', word: x.last.kind === 'auth' ? 'key refused' : 'out of usage' };
   if (x.last && !x.last.ok) return { cls: 'warn', word: 'last call failed' };
   return { cls: 'ok', word: 'on' };
 }
 // The short version on ⚙ Models & catalogue: one status per source and the way to the full page.
 function srcMiniHTML() {
   const l = ST.sources;
-  return `${l ? l.map((x) => { const st = srcState(x); return stStatus(st.cls, `${esc(x.name)}: ${esc(st.word)}`); }).join('') : '<span class="st-row-help">Checking…</span>'}<span class="kx-spacer"></span><button type="button" class="st-btn secondary sm" data-act="openSources">${l?.some((x) => x.on && srcReady(x)) ? 'Manage' : 'Set up'} OpenCode &amp; Cline →</button>`;
+  return `${l ? l.map((x) => { const st = srcState(x); return stStatus(st.cls, `${esc(x.name)}: ${esc(st.word)}`); }).join('') : '<span class="st-row-help">Checking…</span>'}<span class="kx-spacer"></span><button type="button" class="st-btn secondary sm" data-act="openSources">${l?.some((x) => x.on && srcReady(x)) ? 'Manage' : 'Set up'} apps on this PC →</button>`;
 }
-// What each source is, where its key comes from, and what QuorX can't do with it (each source's free models are
-// kept for its own apps).
+// What each source is, in a line, and how to install its app.
 const SRC_GUIDE = {
-  'opencode-local': { what: 'Uses the OpenCode app on this computer: every provider you connected in OpenCode (your plans, keys and sign-ins) runs the chat, and OpenCode makes each call itself. Calls cost what that provider charges you; plans and free tiers cost nothing here.', install: 'npm i -g opencode-ai',
-    key: 'In a terminal, connect the providers you want (OpenCode Go, OpenRouter, DeepSeek, NVIDIA…); their models show here, tagged This PC.',
-    free: 'OpenCode runs with its own tools off: QuorX describes its tools to the model, which writes its calls as text. A provider that refuses (a used-up free tier, an expired key) stops the reply with the reason, and you pick another model.' },
-  opencode: { what: 'Pay as you go on OpenCode Console (formerly Zen): you add credit on opencode.ai, and each call costs what OpenCode reports, at list price.', install: 'npm i -g opencode-ai',
-    key: 'On opencode.ai/console: Account → Personal API keys → Add API key (it starts with oc_sk_). One key from your Personal workspace works for pay as you go and for Go. If OpenCode on this computer already has a key (opencode auth login), QuorX can copy it.',
-    free: 'Its free models (Big Pickle and the -free ones) are listed too, tagged Free. Today OpenCode keeps them for its own app: QuorX asks under its own name, and when OpenCode says no, the reply stops and says so, and you pick another model. If OpenCode opens them to other apps, they just work.' },
-  'opencode-go': { what: 'A monthly plan with usage limits (a 5-hour, a weekly and a monthly window per model). Calls cost nothing per call here; each step shows how much of the plan it used, at list price.', install: 'npm i -g opencode-ai',
-    key: 'Subscribe to OpenCode Go on opencode.ai, then use a Console API key from the same workspace: paste it, or let QuorX copy the one OpenCode has. Go is meant for coding agents like QuorX; OpenCode watches for other kinds of traffic.',
-    free: 'When a window’s limit is reached, calls fall back to OpenRouter until it resets (or OpenCode bills your credit, if you turned on Extra usage there).' },
-  cline: { what: 'Your Cline credits: each call costs what Cline reports (OpenRouter’s prices, for the same models). ClinePass models cost nothing per call if you subscribe.', install: 'npm i -g cline',
-    key: 'On app.cline.bot: Settings → API Keys → create a key, and paste it here (it is shown once). QuorX can’t use the Cline app’s own sign-in: its token lasts about an hour, and refreshing it from QuorX would sign the Cline app out.',
-    free: 'Its free models are listed too, tagged Free. Today Cline keeps them for its own apps: QuorX asks under its own name, and when Cline says no, the reply stops and says so, and you pick another model. If Cline opens them to other apps, they just work.' },
+  'opencode-local': { what: 'Runs a chat through the OpenCode app on this computer, with the providers you connected in it. Each provider bills as it does in OpenCode; plans and free tiers cost nothing here.', install: 'npm i -g opencode-ai' },
 };
-// The OpenCode on this PC: no key, just OpenCode installed with its providers connected.
-function localSteps(x, g, step, last) {
-  const sv = x.server || {}, ready = !!x.installed;
-  return `<ol class="src-steps">
-    ${step(ready, 'OpenCode on this computer', ready ? `<p>Found${x.app_?.version ? `: OpenCode ${esc(x.app_.version)}` : ''}. ${sv.running ? `Its server is running for QuorX now (port ${sv.port}).` : 'QuorX starts its server in the background when a chat needs it, and stops it after a quiet quarter of an hour.'}</p>` : `<p>Install it: <code>${esc(g.install)}</code> <button type="button" class="kx-icon" data-copy-cmd="${esc(g.install)}" title="Copy the command">⧉</button></p>`)}
-    ${step(x.models > 0, 'Connect your providers in OpenCode', `<p>${esc(g.key || '')} <code>opencode auth login</code> <button type="button" class="kx-icon" data-copy-cmd="opencode auth login" title="Copy the command">⧉</button></p><p class="src-note">${esc(g.free || '')}</p><p class="kx-note src-msg" hidden></p>`)}
-    ${step(!!(x.last?.ok), 'Check the connection', `<p>Starts OpenCode's server and lists your providers' models: no call to a model, nothing to pay.</p><div class="src-test"><button type="button" class="kx-btn sm" data-src-act="test" ${ready ? '' : 'disabled'}>Test the connection</button><button type="button" class="kx-btn sm" data-src-act="pick" ${x.on && ready ? '' : 'disabled'}>Choose a model for new chats</button>${last}</div><p class="kx-note src-test-msg" hidden></p>`)}
-  </ol>`;
+// The app as QuorX found it: its version and its server, or how to install it.
+function srcInfoHTML(x, g) {
+  if (!x.installed) return `<p class="src-info">Not installed. To install it: <code>${esc(g.install)}</code> <button type="button" class="kx-icon" data-copy-cmd="${esc(g.install)}" title="Copy the command">⧉</button></p>`;
+  const sv = x.server || {};
+  return `<p class="src-info">${esc(x.app === 'opencode' ? 'OpenCode' : x.app)}${x.app_?.version ? ` ${esc(x.app_.version)}` : ''} · ${sv.running ? `server running (port ${sv.port})` : 'its server starts when a chat needs it'}</p>`;
 }
 async function drawSourcesPanel(say = null) {
   const box = $('#stSources'); if (!box) return;
@@ -6280,14 +6269,8 @@ async function drawSourcesPanel(say = null) {
   const mini = $('#stSrcMini'); if (mini) mini.innerHTML = srcMiniHTML();
   const when = (t) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const card = (x) => {
-    const g = SRC_GUIDE[x.id] || {}, st = srcState(x), app = x.app_ || {}, appName = x.app === 'opencode' ? 'OpenCode' : 'Cline';
-    const keyLine = x.key
-      ? `<div class="src-key"><code class="kx-masked">${esc(x.key.masked)}</code><span class="sx-tag">${esc({ pasted: 'pasted here', opencode: 'copied from OpenCode', env: 'from the environment' }[x.key.from] || x.key.from)}</span>${x.key.from === 'env' ? '' : '<button type="button" class="kx-icon danger" data-src-act="remove" title="Remove this key from QuorX">🗑</button>'}</div>`
-      : '';
-    const form = `<div class="kx-form src-form"><div class="kx-input"><input type="password" class="src-key-in" autocomplete="off" spellcheck="false" placeholder="${x.key ? 'Paste a new key to replace it' : 'Paste the key'}" aria-label="${esc(x.name)} API key"><button type="button" class="src-eye" aria-label="Show or hide the key" title="Show or hide">👁</button></div><button type="button" class="kx-btn primary sm" data-src-act="save">Save &amp; check</button>${x.app === 'opencode' && x.found?.openCodeKey ? '<button type="button" class="kx-btn sm" data-src-act="import" title="Copies the API key OpenCode keeps on this computer into QuorX">Use the key OpenCode has</button>' : ''}</div>`;
+    const g = SRC_GUIDE[x.id] || {}, st = srcState(x);
     const last = x.last ? (x.last.ok ? `<span class="src-last ok">✓ Last call ${when(x.last.at)} worked</span>` : `<span class="src-last ${x.last.kind === 'auth' || x.last.kind === 'quota' ? 'bad' : 'warn'}">⚠ ${when(x.last.at)}: ${esc(x.last.why || x.last.kind)}${x.last.until > Date.now() ? ` · skipped until ${when(x.last.until)}` : ''}</span>`) : '';
-    const step = (done, title, body) => `<li class="${done ? 'done' : ''}"><span class="src-n" aria-hidden="true">${done ? '✓' : ''}</span><div><b>${title}</b>${body}</div></li>`;
-    if (x.local) x.installed = !!x.installed;
     return `<section class="src-card ${x.on && srcReady(x) ? 'on' : ''}" data-src="${esc(x.id)}">
       <header class="src-head">
         <span class="mp-ava" style="--h:${hue(x.id)}" aria-hidden="true">${esc(initials(x.name))}</span>
@@ -6296,14 +6279,12 @@ async function drawSourcesPanel(say = null) {
         ${stStatus(st.cls, st.word)}
         ${x.models ? `<span class="src-count">${x.models} models</span>` : ''}
         <span class="kx-spacer"></span>
-        <label class="sx-check src-on" title="${srcReady(x) ? `Show ${esc(x.name)}’s models in the model pickers` : x.local ? 'Install OpenCode first' : 'Add a key first'}"><input type="checkbox" data-src-on ${x.on && srcReady(x) ? 'checked' : ''} ${!srcReady(x) ? 'disabled' : ''} aria-label="Use ${esc(x.name)}"><span class="sx-word"></span></label>
+        <label class="sx-check src-on" title="${srcReady(x) ? `Show ${esc(x.name)}’s models in the model pickers` : 'Install OpenCode first'}"><input type="checkbox" data-src-on ${x.on && srcReady(x) ? 'checked' : ''} ${!srcReady(x) ? 'disabled' : ''} aria-label="Use ${esc(x.name)}"><span class="sx-word"></span></label>
       </header>
       <p class="st-row-help src-what">${esc(g.what || '')}</p>
-      ${x.local ? localSteps(x, g, step, last) : `<ol class="src-steps">
-        ${step(app.installed, `${appName} on this computer <small>(optional)</small>`, app.installed ? `<p>Found: ${esc(appName)} ${esc(app.version || '')}. ${x.app === 'opencode' ? (x.found?.openCodeKey ? 'It has an API key QuorX can copy (step 2).' : 'It has no API key for Zen or Go yet.') : 'QuorX doesn’t need it: it talks to Cline’s API with a key.'}</p>` : `<p>Not needed${x.app === 'opencode' ? ', but with it QuorX can copy its key' : ''}. To install it: <code>${esc(g.install)}</code> <button type="button" class="kx-icon" data-copy-cmd="${esc(g.install)}" title="Copy the command">⧉</button></p>`)}
-        ${step(!!x.key, 'Get a key and connect it', `<p>${esc(g.key || '')} <a href="${esc(x.keyUrl)}" target="_blank" rel="noopener">${esc(x.keyUrl.replace(/^https:\/\//, ''))}</a></p>${keyLine}${form}<p class="src-note">${esc(g.free || '')}</p><p class="kx-note src-msg" hidden></p>`)}
-        ${step(!!(x.last?.ok), 'Check the connection', `<p>${x.id === 'cline' ? 'Asks Cline whether it knows the key (no call to a model, nothing to pay).' : x.billing === 'plan' ? 'A tiny call to one of its models (nothing to pay on the plan).' : 'A tiny call to its cheapest model (well under a cent).'}</p><div class="src-test"><button type="button" class="kx-btn sm" data-src-act="test" ${x.key ? '' : 'disabled'}>Test the connection</button><button type="button" class="kx-btn sm" data-src-act="pick" ${x.on && srcReady(x) ? '' : 'disabled'}>Choose a model for new chats</button>${last}</div><p class="kx-note src-test-msg" hidden></p>`)}
-      </ol>`}
+      ${srcInfoHTML(x, g)}
+      <div class="src-test"><button type="button" class="kx-btn sm" data-src-act="test" ${srcReady(x) ? '' : 'disabled'}>Test the connection</button><button type="button" class="kx-btn sm" data-src-act="pick" ${x.on && srcReady(x) ? '' : 'disabled'}>Choose a model for new chats</button>${last}</div>
+      <p class="kx-note src-test-msg" hidden></p><p class="kx-note src-msg" hidden></p>
       ${x.catalogueError ? `<p class="kx-wait warn">⚠ Its model list didn’t load (${esc(x.catalogueError)})${x.models ? '; the last good list is used' : ''}.</p>` : ''}
     </section>`;
   };
@@ -6325,27 +6306,14 @@ async function drawSourcesPanel(say = null) {
     if (cmd) { navigator.clipboard?.writeText(cmd).then(() => flashTip(e.target, 'Copied')).catch(() => uiPrompt('Copy the command', cmd, { ok: 'Done', cancel: 'Close' })); return; }
     const c = e.target.closest('.src-card'); if (!c) return;
     const id = c.dataset.src, x = r.sources.find((s) => s.id === id);
-    if (e.target.closest('.src-eye')) { const i = $('.src-key-in', c); i.type = i.type === 'password' ? 'text' : 'password'; return; }
     const act = e.target.closest('[data-src-act]')?.dataset.srcAct; if (!act) return;
     const msg = $('.src-msg', c), tmsg = $('.src-test-msg', c), btn = e.target.closest('button');
     const say = (el, t, bad) => { el.hidden = false; el.classList.toggle('bad', !!bad); el.textContent = t; };
-    if (act === 'save' || act === 'import') {
-      btn.disabled = true; say(msg, act === 'import' ? 'Copying the key from OpenCode…' : 'Saving…');
-      const res = await postJ(`/api/sources/${id}/${act === 'import' ? 'import' : 'key'}`, act === 'save' ? { key: $('.src-key-in', c).value } : {}).catch((er) => ({ error: er.message }));
-      btn.disabled = false;
-      if (res.error) { say(msg, `⚠ ${res.error}`, true); return; }
-      // Saved: check it at once, so a wrong key shows here and not in a chat.
-      say(msg, 'Saved. Checking it…');
-      const t = await postJ(`/api/sources/${id}/test`, {}).catch((er) => ({ ok: false, error: er.message }));
-      await redraw(res.sources, { id, where: 'src-msg', bad: !t.ok, text: t.ok ? `✓ Connected${t.how === 'account' ? '' : `: ${short(t.model)} answered in ${secs(t.ms)}`}.` : `⚠ Saved, but the check failed: ${t.error}` });
-      return;
-    }
-    if (act === 'remove') { if (!await uiConfirm(`Remove the ${x.name} key from QuorX? Chats on its models then fall back to OpenRouter until you connect it again.`)) return; await fetch(`/api/sources/${id}/key`, { method: 'DELETE' }); redraw(); return; }
     if (act === 'test') {
       btn.disabled = true; say(tmsg, `Asking ${x.name}…`);
       const t = await postJ(`/api/sources/${id}/test`, {}).catch((er) => ({ ok: false, error: er.message }));
       btn.disabled = false;
-      say(tmsg, t.ok ? (t.how === 'local' ? `✓ OpenCode answered: ${t.models} models from ${t.providers.length} provider${t.providers.length === 1 ? '' : 's'} (${t.providers.join(', ')}).` : t.how === 'account' ? `✓ ${x.name} knows this key (${secs(t.ms)}).` : `✓ ${short(t.model)} answered in ${secs(t.ms)}${t.cost ? ` (${money(t.cost, 5)})` : ''}.`) : `⚠ ${t.model ? `${short(t.model)}: ` : ''}${t.error}`, !t.ok);
+      say(tmsg, t.ok ? `✓ OpenCode answered: ${t.models} models from ${t.providers.length} provider${t.providers.length === 1 ? '' : 's'} (${t.providers.join(', ')}).` : `⚠ ${t.error}`, !t.ok);
       const fresh = await fetch('/api/sources').then((y) => y.json()).catch(() => null);
       if (fresh?.sources) { ST.sources = fresh.sources; stRefresh(); const mini2 = $('#stSrcMini'); if (mini2) mini2.innerHTML = srcMiniHTML(); }
       return;
@@ -6412,7 +6380,7 @@ function wireSettings() {
     if (act === 'clearFallback') { S.fallbackModel = ''; mark(); drawSettings(); }
     if (act === 'openSources') { ST.cat = 'sources'; drawSettings(); $('#stMain').scrollTop = 0; }
     if (act === 'browseSources') await pickModel('chat', '', { context: 'Models on OpenCode and Cline (pick one in a chat’s model button to use it)', source: (ST.sources || []).find((x) => x.on && srcReady(x))?.id || 'all' });
-    if (act === 'pickSourceFallback') { const id = await pickModel('chat', S.sourceFallbackModel || '', { context: 'When an OpenCode or Cline call fails', openRouterOnly: true }); if (id) { S.sourceFallbackModel = id; mark(); drawSettings(); } }
+    if (act === 'pickSourceFallback') { const id = await pickModel('chat', S.sourceFallbackModel || '', { context: 'When a call through an app on this PC fails', openRouterOnly: true }); if (id) { S.sourceFallbackModel = id; mark(); drawSettings(); } }
     if (act === 'clearSourceFallback') { S.sourceFallbackModel = ''; mark(); drawSettings(); }
     if (act === 'openSafety') { ST.cat = 'safety'; drawSettings(); }
     // New chats → "Change it": Approvals & safety, at the Permission mode card.
@@ -7308,14 +7276,16 @@ async function keysChanged() {
   refreshBalance();
   const nav = $('#stNav .st-nav-item[data-cat="keys"] .st-nav-badge'); if (nav && G.cfg.hasKey) nav.remove();
 }
-// Without a key nothing can run: the message boxes lock and point to ⚙ Settings → API keys.
+// Without a key only a chat on a model through an app on this PC can run; the other message boxes lock and point
+// to ⚙ Settings → API keys, or to a This PC model.
 function applyKeyLock() {
   document.body.classList.toggle('no-key', !G.cfg.hasKey);
-  for (const c of G.open.values()) {
-    if (!c.el) continue;
+  for (const c of [...G.open.values(), G.homeDraftChat]) {
+    if (!c?.el?.root?.isConnected) continue;
     const ta = $('.input', c.el.root), send = $('.sendBtn', c.el.root);
-    ta.disabled = send.disabled = !G.cfg.hasKey;
-    ta.placeholder = G.cfg.hasKey ? 'Ask, or ask for something to be built…  @ to add files or chats · / for commands' : 'Add an OpenRouter key in ⚙ Settings → API keys to start.';
+    const can = !!G.cfg.hasKey || !!sourceOfId(c.agent?.setup?.model);
+    ta.disabled = send.disabled = !can;
+    ta.placeholder = can ? c.placeholder || 'Ask, or ask for something to be built…  @ to add files or chats · / for commands' : 'No OpenRouter key yet: pick a model tagged This PC (the model button above), or add a key in ⚙ Settings → API keys.';
   }
 }
 async function exportChats(btn) {
@@ -7637,7 +7607,7 @@ async function boot() {
   // Chats with a reply still running on the server (started before a reload) reattach too.
   fetch('/api/runs').then((r) => r.json()).then(async (list) => { for (const r of list) if (r.chatId && !G.open.has(r.chatId)) { await getChat(r.chatId); renderSidebar(); } }).catch(() => {});
   loadModels();
-  if (!G.cfg.hasKey) openSettings('keys');
+  if (!G.cfg.hasKey) fetch('/api/sources').then((r) => r.json()).then((j) => { if (!(j.sources || []).some((x) => x.on && x.installed)) openSettings('keys'); }).catch(() => openSettings('keys'));
   else firstSetupCheck();
   maybeStartTour({ fill: fillStart });
 }
