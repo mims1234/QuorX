@@ -34,6 +34,8 @@ import { DEFAULTS, sourceFallbackFor } from '../server/agent.js';
 import { sourceOf, sourceStream, sourceModels, sameOnOpenRouter, failureKind, noteSourceResult, sourceSkip, forgetSourceHealth, priced as sourcePriced, setSourceKey, removeSourceKey, keyFor, importOpenCodeKey, chatAny, primeSources } from '../server/sources.js';
 import { toAnthropic, toGoogle, toResponses, toChat, googleSchema } from '../server/wire.js';
 import { SECRET_FILES } from '../server/keys.js';
+import { toolPrompt, renderTranscript, parseToolCalls, textFilter } from '../server/textcalls.js';
+import { localStream, localModels } from '../server/opencodelocal.js';
 
 let n = 0;
 const reply = (text, calls = [], finishReason = 'stop') => ({ text, toolCalls: calls.map(([name, args], i) => ({ id: `c${++n}_${i}`, type: 'function', function: { name, arguments: typeof args === 'string' ? args : JSON.stringify(args) } })), usage: { cost: 0.0001 }, ms: 1, firstMs: 1, finishReason });
@@ -4001,8 +4003,11 @@ test('a failing source is skipped by other calls for a while: a refused key unti
   assert.match(sourceSkip('opencode-go', 'opencode-go/kimi-k3', now + 1000), /could not be reached/);
   assert.equal(sourceSkip('opencode-go', 'opencode-go/kimi-k3', now + 25e3), '', 'tried again after a short while');
   const k = (o) => failureKind(err(o));
-  assert.deepEqual([k({ status: 402 }), k({ status: 429, m: 'Free usage limit reached.' }), k({ status: 429 }), k({ status: 503 }), k({ status: 400, m: 'bad' }), k({ name: 'TimeoutError' }), k({ errorType: 'insufficient_credits' }), k({ kind: 'shape' })],
-    ['quota', 'quota', 'rate', 'server', 'request', 'timeout', 'quota', 'shape']);
+  assert.deepEqual([k({ status: 402 }), k({ status: 429, m: 'Free usage limit reached.' }), k({ status: 429, errorType: 'FreeUsageLimitError' }), k({ status: 429 }), k({ status: 503 }), k({ status: 400, m: 'bad' }), k({ name: 'TimeoutError' }), k({ errorType: 'insufficient_credits' }), k({ kind: 'shape' })],
+    ['quota', 'free', 'free', 'rate', 'server', 'request', 'timeout', 'quota', 'shape']);
+  noteSourceResult('opencode-go', 'opencode-go/beam-free', err({ status: 429, errorType: 'FreeUsageLimitError', retryAfter: 3600 }), { now });
+  assert.match(sourceSkip('opencode-go', 'opencode-go/beam-free', now + 1000), /keeps that free model/, 'a refused free model is set aside');
+  assert.equal(sourceSkip('opencode-go', 'opencode-go/kimi-k3', now + 1000), '', 'the rest of the source still goes');
   removeSourceKey('opencode-go'); forgetSourceHealth();
 });
 
@@ -4016,7 +4021,7 @@ test('a source call costs what the source says, else its tokens at list price (c
   assert.equal(sourcePriced({ plan: 'plan', cost: { input: 1.4, output: 4.4 } }, { prompt_tokens: 1000, completion_tokens: 0, cost: 0.0014 }).cost, 0.0014, 'usage billed to credit past the plan counts');
 });
 
-test('the pickers list OpenCode and Cline models only once switched on, never the free ones, and not the ones a gateway dropped', async () => {
+test('the pickers list OpenCode and Cline models only once switched on, their free ones too, and not the ones a gateway dropped', async () => {
   const md = (id, o = {}) => ({ id, name: id, tool_call: true, cost: { input: 1, output: 2 }, limit: { context: 1e6, output: 64000 }, modalities: { input: ['text'], output: ['text'] }, ...o });
   const dev = async () => ({
     opencode: { api: 'https://x/openai/v1', npm: '@ai-sdk/openai-compatible', models: { 'glm-5.3': md('glm-5.3', { cost: { input: 1.4, output: 4.4 }, modalities: { input: ['text', 'image', 'pdf'], output: ['text'] }, interleaved: { field: 'reasoning_content' } }), 'big-pickle': md('big-pickle', { cost: { input: 0, output: 0 } }), 'claude-x': md('claude-x', { provider: { npm: '@ai-sdk/anthropic', api: 'https://opencode.ai/inference/anthropic/v1' } }), 'odd-host': md('odd-host', { provider: { api: 'https://evil.example/v1' } }), 'gone-1': md('gone-1'), 'no-tools': md('no-tools', { tool_call: false }) } },
@@ -4024,6 +4029,7 @@ test('the pickers list OpenCode and Cline models only once switched on, never th
   });
   const fetchJSON = async (url) => {
     if (/inference\/v1\/models/.test(url)) return { data: ['glm-5.3', 'big-pickle', 'claude-x', 'odd-host', 'a', 'b', 'c'].map((id) => ({ id })) };
+    if (/recommended/.test(url)) return { free: [{ id: 'reflection/beam-free', name: 'Beam' }, { id: 'cline-free/solar-mini4', name: 'Solar Mini 4' }] };
     if (/cline/.test(url)) return { data: [{ id: 'anthropic/claude-sonnet-5.5', pricing: { prompt: '0.000002', completion: '0.00001' }, supported_parameters: ['tools', 'reasoning'], context_length: 1e6 }, { id: 'reflection/beam-free', pricing: { prompt: '0', completion: '0' } }, { id: 'cline-pass/glm-5.3', pricing: { prompt: '0.0000014', completion: '0.0000044' }, supported_parameters: ['tools'] }, { id: 'x/y:batch', pricing: {} }] };
     throw new Error('offline');
   };
@@ -4031,13 +4037,14 @@ test('the pickers list OpenCode and Cline models only once switched on, never th
     assert.deepEqual(await sourceModels({ refresh: true, dev, fetchJSON }), [], 'nothing switched on, nothing listed');
     setSourceKey('opencode', SRC_KEY); setSourceKey('cline', 'cline_test_0123456789');
     const l = await sourceModels({ refresh: true, dev, fetchJSON });
-    assert.deepEqual(l.map((m) => m.id).sort(), ['cline/anthropic/claude-sonnet-5.5', 'cline/cline-pass/glm-5.3', 'opencode/claude-x', 'opencode/glm-5.3', 'opencode/odd-host'], 'OpenCode Go got the key too, but stays off until switched on');
+    assert.deepEqual(l.map((m) => m.id).sort(), ['cline/anthropic/claude-sonnet-5.5', 'cline/cline-free/solar-mini4', 'cline/cline-pass/glm-5.3', 'cline/reflection/beam-free', 'opencode/big-pickle', 'opencode/claude-x', 'opencode/glm-5.3', 'opencode/odd-host'], 'OpenCode Go got the key too, but stays off until switched on');
     const by = Object.fromEntries(l.map((m) => [m.id, m]));
     assert.deepEqual([by['opencode/glm-5.3'].format, by['opencode/glm-5.3'].interleaved, by['opencode/glm-5.3'].in, by['opencode/glm-5.3'].price], ['chat', 'reasoning_content', ['text', 'image'], [1.4, 4.4]]);
     assert.deepEqual([by['opencode/claude-x'].format, by['opencode/claude-x'].api], ['anthropic', 'https://opencode.ai/inference/anthropic/v1']);
     assert.equal(by['opencode/odd-host'].api, 'https://opencode.ai/inference/openai/v1', 'a key never goes to a host the catalogue names outside opencode.ai');
     assert.deepEqual([by['cline/cline-pass/glm-5.3'].plan, by['cline/cline-pass/glm-5.3'].price], ['plan', [0, 0]]);
     assert.deepEqual(by['cline/anthropic/claude-sonnet-5.5'].price, [2, 10]);
+    assert.deepEqual([by['opencode/big-pickle'].plan, by['opencode/big-pickle'].price, by['cline/cline-free/solar-mini4'].plan, by['cline/reflection/beam-free'].name], ['free', [0, 0], 'free', 'Beam'], 'free models are listed, tagged free');
   } finally { removeSourceKey('opencode'); removeSourceKey('opencode-go'); removeSourceKey('cline'); primeSources([]); }
 });
 
@@ -4086,6 +4093,17 @@ test('a source that refuses its key is skipped for the rest of the reply, and sa
   assert.deepEqual(of(events, 'source_fallback').map((e) => [e.kind, e.rest]), [['auth', true], ['skipped', true]]);
   assert.equal(of(events, 'note').filter((x) => /refused its key/.test(x.msg)).length, 1);
   assert.equal(done.reply, 'Done on OpenRouter.');
+});
+
+test('a free model its source keeps for its own app is asked once, then the reply carries on on OpenRouter', async () => {
+  let n = 0;
+  const sourceStream = async () => { n++; throw Object.assign(new Error('Free usage limit reached. Free models work in OpenCode.'), { status: 429, errorType: 'FreeUsageLimitError' }); };
+  const cat = [...SRC_CAT, goInfo({ id: 'opencode/glm-5.3-flash-free', realId: 'glm-5.3-flash-free', source: 'opencode', plan: 'free', canonical: 'zhipuai/glm-5.3' })];
+  const { events, done } = await run((body, i) => [reply('', [['write_file', { path: 'a.txt', content: 'a' }]]), reply('Done.')][i], { setup: { model: 'opencode/glm-5.3-flash-free' }, catalogue: cat, sourceStream });
+  assert.equal(n, 1, 'asked once, honestly');
+  assert.deepEqual(of(events, 'source_fallback').map((e) => [e.kind, e.to, e.rest]), [['free', 'z-ai/glm-5.3', true], ['skipped', 'z-ai/glm-5.3', true]]);
+  assert.ok(of(events, 'note').some((x) => /keeps that free model for its own app/.test(x.msg)));
+  assert.equal(done.reply, 'Done.');
 });
 
 test('two failures in one reply keep the rest of it on OpenRouter, and an answer that isn’t one counts as a failure', async () => {
@@ -4138,4 +4156,105 @@ test('a summary or brief on a source model falls back to OpenRouter when the sou
   const ok = await chatAny({ model: 'opencode-go/glm-5.3', messages: [{ role: 'user', content: 'sum' }] }, undefined, { orChat, stream, fallback: async () => 'z-ai/glm-5.3' });
   assert.deepEqual([ok.model, ok.message.content, ok.fellBack], ['opencode-go/glm-5.3', 'from Go', undefined]);
   forgetSourceHealth();
+});
+
+// ---------- OpenCode on this PC: tools as text, through OpenCode's own server (server/textcalls.js, opencodelocal.js) ----------
+test('tools go to a model as text and its calls come back as tool calls, in QuorX’s format or the model’s own', () => {
+  const tools = [{ type: 'function', function: { name: 'write_file', description: 'Write a file', parameters: { type: 'object', properties: { path: { type: 'string' } } } } }];
+  assert.match(toolPrompt(tools), /<tool_call>\{"name": "write_file"/);
+  assert.match(toolPrompt(tools), /"name":"write_file","description":"Write a file"/);
+  assert.equal(toolPrompt([]), '', 'no tools, nothing to teach');
+  assert.match(toolPrompt(tools, 'none'), /Do not call any tool/);
+  const { system, transcript } = renderTranscript(CONV.messages);
+  assert.equal(system, 'Rules.');
+  assert.match(transcript, /<user>\nBuild it\n\[picture attached\]\n<\/user>/);
+  assert.match(transcript, /<assistant>\nWriting\.\n<tool_call>\{"name":"write_file","arguments":\{"path":"a\.js"\}\}<\/tool_call>/);
+  assert.match(transcript, /<tool_result name="write_file">\nok a\n<\/tool_result>/, 'each result names the call it answers');
+  const own = parseToolCalls('On it.\n<tool_call>{"name":"write_file","arguments":{"path":"a.js",}}</tool_call>\n<tool_call>not json</tool_call>', 'c');
+  assert.equal(own.text, 'On it.');
+  assert.deepEqual(own.calls.map((x) => [x.id, x.function.name, x.function.arguments]), [['c_0', 'write_file', '{"path":"a.js"}'], ['c_1', 'invalid', 'not json']], 'a broken block still reaches the agent, which says so');
+  const ds = parseToolCalls('Checking.<｜｜DSML｜｜ calls>\n<｜｜DSML｜｜ invoke name="get_time">\n<｜｜DSML｜｜ parameter name="zone" string="true">UTC</｜｜DSML｜｜ parameter>\n</｜｜DSML｜｜ invoke>\n</｜｜DSML｜｜ calls>', 'd');
+  assert.deepEqual([ds.text, ds.calls[0].function.name, ds.calls[0].function.arguments], ['Checking.', 'get_time', '{"zone":"UTC"}'], 'DeepSeek’s own format');
+  const shown = [];
+  const f = textFilter((d) => shown.push(d));
+  for (const c of ['Hello, ', 'I will <to', 'ol_call>{"name":"x"}', '</tool_call> and more']) f(c);
+  assert.equal(shown.join(''), 'Hello, I will ', 'the page never shows a call block');
+});
+
+// A stand-in for OpenCode's server: /config/providers, sessions, prompt_async and the event stream it answers on.
+async function fakeOpenCode(script) {
+  const seen = [], listeners = new Set();
+  const send = (e) => { for (const res of listeners) res.write(`data: ${JSON.stringify(e)}\n\n`); };
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => { body += c; });
+    req.on('end', () => {
+      seen.push({ method: req.method, url: req.url, auth: req.headers.authorization, body: body ? JSON.parse(body) : null });
+      if (req.url === '/config/providers') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ providers: [{ id: 'deepseek', name: 'DeepSeek', models: { 'deepseek-flash': { id: 'deepseek-flash', name: 'DeepSeek Flash', capabilities: { input: { text: true, image: true }, output: { text: true }, reasoning: true }, cost: { input: 0.15, output: 0.6 }, limit: { context: 1e6, output: 64000 }, variants: { low: {}, high: {} } }, 'img-x': { id: 'img-x', capabilities: { output: { text: false } } } } }, { id: 'opencode-go', name: 'OpenCode Go', models: { 'glm-5.3': { id: 'glm-5.3', name: 'GLM-5.3', cost: { input: 1.4, output: 4.4 } } } }, { id: 'opencode', name: 'OpenCode', models: { 'big-pickle': { id: 'big-pickle', name: 'Big Pickle', cost: { input: 0, output: 0 } } } }] })); }
+      if (req.url === '/event') { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); res.write(`data: ${JSON.stringify({ type: 'server.connected', properties: {} })}\n\n`); listeners.add(res); res.on('close', () => listeners.delete(res)); return; }
+      if (req.method === 'POST' && req.url === '/session') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ id: 'ses_test1' })); }
+      if (/prompt_async$/.test(req.url)) { res.writeHead(204); res.end(); setTimeout(() => script(send), 20); return; }
+      res.writeHead(200, { 'Content-Type': 'application/json' }); res.end('true');
+    });
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  return { server: { base: `http://127.0.0.1:${server.address().port}`, auth: 'Basic dGVzdDp0ZXN0', active: 0 }, seen, close: () => { for (const r of listeners) r.end(); return new Promise((r) => server.close(r)); } };
+}
+
+test('a call through OpenCode on this PC streams the model’s own message, reads its calls, and leaves no session behind', async () => {
+  const sid = 'ses_test1', ev = (type, properties) => ({ type, properties: { sessionID: sid, ...properties } });
+  const oc = await fakeOpenCode((send) => {
+    send(ev('message.updated', { info: { id: 'msg_u', role: 'user', sessionID: sid } }));
+    send(ev('message.part.updated', { part: { id: 'p_u', messageID: 'msg_u', sessionID: sid, type: 'text', text: '<user>the prompt</user>' } }));
+    send({ type: 'message.part.updated', properties: { part: { id: 'p_other', messageID: 'msg_x', sessionID: 'ses_someone_else', type: 'text', text: 'not ours' } } });
+    send(ev('message.updated', { info: { id: 'msg_a', role: 'assistant', sessionID: sid } }));
+    send(ev('message.part.updated', { part: { id: 'p_r', messageID: 'msg_a', sessionID: sid, type: 'reasoning', text: '' } }));
+    send(ev('message.part.delta', { messageID: 'msg_a', partID: 'p_r', field: 'text', delta: 'Plan it.' }));
+    send(ev('message.part.updated', { part: { id: 'p_t', messageID: 'msg_a', sessionID: sid, type: 'text', text: '' } }));
+    send(ev('message.part.delta', { messageID: 'msg_a', partID: 'p_t', field: 'text', delta: 'Writing it. <tool_call>{"name":"write_file",' }));
+    send(ev('message.part.delta', { messageID: 'msg_a', partID: 'p_t', field: 'text', delta: '"arguments":{"path":"a.js"}}</tool_call>' }));
+    send(ev('message.updated', { info: { id: 'msg_a', role: 'assistant', sessionID: sid, cost: 0.0004, tokens: { input: 300, output: 40, reasoning: 10, cache: { read: 100, write: 0 } }, finish: 'tool-calls' } }));
+    send(ev('session.idle', {}));
+  });
+  try {
+    const shown = [], thought = [];
+    const r = await localStream({ model: 'opencode-local/deepseek/deepseek-flash', reasoning: { effort: 'high' }, tools: [{ type: 'function', function: { name: 'write_file', parameters: { type: 'object', properties: {} } } }], messages: [{ role: 'system', content: 'Rules.' }, { role: 'user', content: 'Build it' }] },
+      new AbortController().signal, (d) => shown.push(d), (d) => thought.push(d), { server: oc.server, info: { plan: 'paid', variants: ['low', 'high'], providerName: 'DeepSeek' } });
+    assert.deepEqual([r.text, shown.join(''), r.thinking], ['Writing it.', 'Writing it. ', 'Plan it.'], 'the prompt’s own parts and other sessions are left out');
+    assert.deepEqual(r.toolCalls.map((c) => [c.function.name, c.function.arguments]), [['write_file', '{"path":"a.js"}']]);
+    assert.equal(r.finishReason, 'tool_calls');
+    assert.deepEqual([r.usage.prompt_tokens, r.usage.completion_tokens, r.usage.cost, r.provider], [400, 50, 0.0004, 'DeepSeek through OpenCode']);
+    const prompt = oc.seen.find((x) => /prompt_async$/.test(x.url));
+    assert.equal(prompt.auth, 'Basic dGVzdDp0ZXN0');
+    assert.deepEqual([prompt.body.agent, prompt.body.model, prompt.body.variant, prompt.body.tools['*'], prompt.body.tools.bash], ['quorx', { providerID: 'deepseek', modelID: 'deepseek-flash' }, 'high', false, false], 'OpenCode’s own tools are off');
+    assert.match(prompt.body.system, /^Rules\.\n\n\[Tools\]/);
+    await new Promise((res) => setTimeout(res, 50));
+    assert.ok(oc.seen.some((x) => x.method === 'DELETE' && x.url === `/session/${sid}`), 'the session is deleted afterwards');
+  } finally { await oc.close(); }
+});
+
+test('a refusal OpenCode would keep retrying (a used-up free tier) fails the call at once, so QuorX can fall back', async () => {
+  const sid = 'ses_test1';
+  const oc = await fakeOpenCode((send) => {
+    send({ type: 'message.updated', properties: { sessionID: sid, info: { id: 'msg_a', role: 'assistant', sessionID: sid } } });
+    send({ type: 'session.status', properties: { sessionID: sid, status: { type: 'retry', attempt: 1, message: 'Free usage limit reached. Subscribe to OpenCode Go to keep going.', next: Date.now() + 60000 } } });
+  });
+  try {
+    const t = Date.now();
+    const e = await localStream({ model: 'opencode-local/opencode/big-pickle', messages: [{ role: 'user', content: 'hi' }] }, new AbortController().signal, null, null, { server: oc.server, info: { plan: 'free' } }).catch((x) => x);
+    assert.ok(Date.now() - t < 5000, 'no waiting on OpenCode’s retries');
+    assert.equal(failureKind(e), 'free');
+    assert.ok(e.retryAfter >= 50 && e.retryAfter <= 60);
+  } finally { await oc.close(); }
+});
+
+test('OpenCode on this PC lists every text model of every provider connected there, priced by how that provider bills', async () => {
+  const oc = await fakeOpenCode(() => {});
+  try {
+    const l = await localModels({ server: oc.server });
+    assert.deepEqual(l.map((m) => [m.id, m.plan, m.price]), [['opencode-local/deepseek/deepseek-flash', 'paid', [0.15, 0.6]], ['opencode-local/opencode-go/glm-5.3', 'plan', [0, 0]], ['opencode-local/opencode/big-pickle', 'free', [0, 0]]], 'a model with no text out is left out');
+    assert.deepEqual([l[0].name, l[0].in, l[0].variants, l[0].format], ['DeepSeek Flash · DeepSeek', ['text', 'image'], ['low', 'high'], 'opencode-local']);
+    assert.equal(sameOnOpenRouter('opencode-local/deepseek/deepseek-flash', [{ id: 'deepseek/deepseek-flash', tools: true }]), 'deepseek/deepseek-flash', 'it falls back to the same model on OpenRouter');
+    assert.equal(sameOnOpenRouter('opencode-local/openrouter/z-ai/glm-5.3', [{ id: 'z-ai/glm-5.3', tools: true }]), 'z-ai/glm-5.3');
+  } finally { await oc.close(); }
 });

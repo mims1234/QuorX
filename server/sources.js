@@ -18,6 +18,7 @@ import { execFile } from 'node:child_process';
 import { HOME, ROOT } from './openrouter.js';
 import { BUILD, READ, readWhole, errorText } from './wire.js';
 import { renameSoon } from './fsretry.js';
+import { findOnPath, localModels, localStream, ensureLocalServer, localServer, LOCAL_ID } from './opencodelocal.js';
 
 const DATA = path.join(HOME, 'data');
 export const SOURCE_FILE = path.join(DATA, 'sources.json');
@@ -25,9 +26,16 @@ const CATALOGUE_COPY = path.join(DATA, 'source-models.json'); // the last good l
 
 // What QuorX knows about each source. `api` is used when the catalogue gives no address for a model; `models` lists
 // the ids the source serves today (a model the catalogue still has but the source dropped is left out).
-// OpenCode's free models are for OpenCode itself (another app gets "Free usage limit reached"), and Cline's free
-// models work only in Cline's own apps, so neither source lists them. QuorX never borrows either app's sign-in.
+// Their free models are listed too. Today OpenCode keeps its free models for OpenCode itself (another app gets "Free
+// usage limit reached") and Cline keeps its own for its apps: QuorX asks honestly, under its own name, and a refusal sets
+// only that model aside (failureKind 'free'). QuorX never borrows either app's sign-in or poses as it.
 export const SOURCES = {
+  // The OpenCode app on this computer (opencodelocal.js): every provider connected there, with no key in QuorX.
+  [LOCAL_ID]: {
+    id: LOCAL_ID, name: 'OpenCode on this PC', short: 'This PC', app: 'opencode', billing: 'mixed', local: true, api: {},
+    site: 'https://opencode.ai', keyUrl: 'https://opencode.ai/docs/providers/', docs: 'https://opencode.ai/docs/server/',
+    keyHint: 'No key: QuorX uses the providers you connected in OpenCode (opencode auth login).',
+  },
   opencode: {
     id: 'opencode', name: 'OpenCode', short: 'OpenCode', app: 'opencode', billing: 'credits', session: true,
     md: 'opencode', api: { chat: 'https://opencode.ai/inference/openai/v1', responses: 'https://opencode.ai/inference/openai/v1', anthropic: 'https://opencode.ai/inference/anthropic/v1', google: 'https://opencode.ai/inference/google/v1beta' },
@@ -44,7 +52,7 @@ export const SOURCES = {
   },
   cline: {
     id: 'cline', name: 'Cline', short: 'Cline', app: 'cline', billing: 'credits', openrouterLike: true,
-    api: { chat: 'https://api.cline.bot/api/v1' }, models: 'https://api.cline.bot/api/v1/ai/cline/models', me: 'https://api.cline.bot/api/v1/users/me',
+    api: { chat: 'https://api.cline.bot/api/v1' }, models: 'https://api.cline.bot/api/v1/ai/cline/models', recommended: 'https://api.cline.bot/api/v1/ai/cline/recommended-models', me: 'https://api.cline.bot/api/v1/users/me',
     site: 'https://app.cline.bot', keyUrl: 'https://app.cline.bot', docs: 'https://docs.cline.bot/api/getting-started',
     keyHint: 'A Cline API key (app.cline.bot → Settings → API Keys).',
   },
@@ -81,7 +89,7 @@ export function keyFor(id) {
   return null;
 }
 /** Whether a source's models show in the pickers: switched on, with a way in. */
-export const sourceOn = (id) => !!load()[id]?.on && !!keyFor(id);
+export const sourceOn = (id) => !!load()[id]?.on && (SOURCES[id]?.local ? !!findOnPath('opencode') : !!keyFor(id));
 
 export function setSourceKey(id, key, from = 'pasted') {
   known(id);
@@ -91,7 +99,7 @@ export function setSourceKey(id, key, from = 'pasted') {
   const s = load();
   s[id] = { ...(s[id] || {}), key, from, added: Date.now(), on: true };
   // OpenCode's one key serves pay as you go and Go: saving it for one offers it to the other, without switching that one on.
-  if (SOURCES[id].app === 'opencode') for (const o of SOURCE_IDS) if (o !== id && SOURCES[o].app === 'opencode' && !s[o]?.key) s[o] = { ...(s[o] || {}), key, from, added: Date.now(), on: !!s[o]?.on };
+  if (SOURCES[id].app === 'opencode') for (const o of SOURCE_IDS) if (o !== id && SOURCES[o].app === 'opencode' && !SOURCES[o].local && !s[o]?.key) s[o] = { ...(s[o] || {}), key, from, added: Date.now(), on: !!s[o]?.on };
   save(s);
   clearHealth(id);
   dropCatalogue();
@@ -111,7 +119,8 @@ export function removeSourceKey(id) {
 export function setSourceOn(id, on) {
   known(id);
   const s = load(), next = { ...(s[id] || {}), on: !!on };
-  if (on && !next.key && !process.env[ENV[id]]) throw new Error(`Add a key for ${SOURCES[id].name} first.`);
+  if (on && SOURCES[id].local && !findOnPath('opencode')) throw new Error('OpenCode is not installed on this computer (npm i -g opencode-ai).');
+  if (on && !SOURCES[id].local && !next.key && !process.env[ENV[id]]) throw new Error(`Add a key for ${SOURCES[id].name} first.`);
   s[id] = next;
   save(s);
   clearHealth(id);
@@ -153,13 +162,6 @@ function clineSignedIn() {
 }
 // "opencode --version" and "cline --version", found on PATH (cached ten minutes).
 const apps = new Map();
-function findOnPath(name) {
-  const exts = process.platform === 'win32' ? (process.env.PATHEXT || '.EXE;.CMD;.BAT').split(';').map((e) => e.toLowerCase()) : [''];
-  for (const dir of String(process.env.PATH || '').split(path.delimiter).filter(Boolean)) {
-    for (const ext of exts) { const f = path.join(dir, name + ext); try { if (fs.statSync(f).isFile()) return f; } catch { /* not here */ } }
-  }
-  return null;
-}
 export function appVersion(name, { refresh = false, run = execFile } = {}) {
   const c = apps.get(name);
   if (c && !refresh && Date.now() - c.at < 10 * 60e3) return Promise.resolve(c.v);
@@ -189,31 +191,33 @@ export function fromModelsDev(src, prov, m) {
   const npm = m.provider?.npm || prov.npm;
   const format = FORMAT_OF[npm] || 'chat';
   const cost = m.cost || {};
-  const plan = SOURCES[src].billing === 'plan';
+  const plan = SOURCES[src].billing === 'plan', free = isFreeModel(src, m);
   const list = [per(cost.input), per(cost.output)];
   const inl = m.interleaved && typeof m.interleaved === 'object' ? m.interleaved.field || null : m.interleaved === true ? true : null;
   return {
     id: `${src}/${m.id}`, realId: m.id, source: src, name: m.name || m.id, kind: 'chat', ctx: m.limit?.context || null, maxOut: m.limit?.output || null,
     created: m.release_date ? Math.floor(Date.parse(m.release_date) / 1000) || 0 : 0,
     in: (m.modalities?.input || ['text']).filter((x) => x === 'text' || x === 'image'), out: m.modalities?.output || ['text'],
-    price: plan ? [0, 0] : list, listPrice: list, cost, plan: plan ? 'plan' : 'paid',
+    price: plan || free ? [0, 0] : list, listPrice: list, cost, plan: free ? 'free' : plan ? 'plan' : 'paid', ...(free ? { free: true } : {}),
     tools: m.tool_call !== false, temp: m.temperature !== false, reasoning: !!m.reasoning, reasoningOptions: Array.isArray(m.reasoning_options) ? m.reasoning_options : [],
     interleaved: inl, format, api: safeApi(src, m.provider?.api) || safeApi(src, prov.api) || SOURCES[src].api[format] || SOURCES[src].api.chat, status: m.status || null,
     canonical: m.canonical_model_id || null, desc: String(m.description || '').replace(/\s+/g, ' ').slice(0, 220),
   };
 }
-// A free model OpenCode keeps for OpenCode, or one Cline keeps for its own apps: neither answers QuorX.
-export const freeOnly = (src, m) => (src === 'cline' ? /(^cline-free\/|-free$|:free$)/.test(m.id) : /-free$/.test(m.id) || (per(m.cost?.input) === 0 && per(m.cost?.output) === 0));
+// A free model. OpenCode and Cline keep most of theirs for their own apps today: QuorX lists them and asks honestly,
+// and when the source says no (failureKind 'free') only that model is set aside and the step goes to OpenRouter.
+// If a source opens its free models to other apps, they simply work.
+export const isFreeModel = (src, m) => (src === 'cline' ? /(^cline-free\/|-free$|:free$)/.test(m.id) : /-free$/.test(m.id) || (per(m.cost?.input) === 0 && per(m.cost?.output) === 0));
 // One model from Cline's list (OpenRouter's catalogue format; ClinePass models are paid for by the plan).
 export function fromCline(m) {
   const p = m.pricing || {};
   const inP = per(p.prompt) * 1e6, outP = per(p.completion) * 1e6, cached = p.input_cache_read != null ? per(p.input_cache_read) * 1e6 : null;
   const sp = m.supported_parameters || [];
-  const plan = /^cline-pass\//.test(m.id);
+  const plan = /^cline-pass\//.test(m.id), free = isFreeModel('cline', m) || m.free === true;
   return {
     id: `cline/${m.id}`, realId: m.id, source: 'cline', name: m.name || m.id, kind: 'chat', ctx: m.context_length || m.top_provider?.context_length || null, maxOut: m.top_provider?.max_completion_tokens || null,
     created: m.created || 0, in: (m.architecture?.input_modalities || ['text']).filter((x) => x === 'text' || x === 'image'), out: m.architecture?.output_modalities || ['text'],
-    price: plan ? [0, 0] : [inP, outP], listPrice: [inP, outP], cost: { input: inP, output: outP, ...(cached != null ? { cache_read: cached } : {}) }, plan: plan ? 'plan' : 'paid',
+    price: plan || free ? [0, 0] : [inP, outP], listPrice: [inP, outP], cost: { input: inP, output: outP, ...(cached != null ? { cache_read: cached } : {}) }, plan: free ? 'free' : plan ? 'plan' : 'paid', ...(free ? { free: true } : {}),
     tools: sp.length ? sp.includes('tools') : true, temp: sp.length ? sp.includes('temperature') : true, reasoning: sp.some((x) => x === 'reasoning' || x === 'include_reasoning'), reasoningOptions: [],
     interleaved: null, format: 'chat', api: SOURCES.cline.api.chat, status: m.expiration_date ? 'deprecated' : null, canonical: m.canonical_slug || m.id, desc: String(m.description || '').replace(/\s+/g, ' ').slice(0, 220),
   };
@@ -251,15 +255,26 @@ export async function sourceModels({ refresh = false, all = false, fetchJSON = g
         // The ids the gateway serves today (no key needed): a model it dropped is left out. When the list doesn't
         // load, the catalogue's own list stands.
         const live = await fetchJSON(SOURCES[id].models, {}, 10000).then((x) => new Set((Array.isArray(x?.data) ? x.data : []).map((m) => m?.id).filter(Boolean))).catch(() => null);
-        per[id] = each(id, Object.values(prov.models), (m) => fromModelsDev(id, prov, m), (m) => m?.id && m.tool_call !== false && (Array.isArray(m.modalities?.output) ? m.modalities.output : ['text']).includes('text') && !freeOnly(id, m) && !(live?.size >= 5 && !live.has(m.id)));
+        per[id] = each(id, Object.values(prov.models), (m) => fromModelsDev(id, prov, m), (m) => m?.id && m.tool_call !== false && (Array.isArray(m.modalities?.output) ? m.modalities.output : ['text']).includes('text') && !(live?.size >= 5 && !live.has(m.id)));
       }
     }
+    // The OpenCode on this computer: its server lists every model of every provider connected there.
+    // Only once it is switched on: listing them starts OpenCode, which Settings alone never should.
+    if (ids.includes(LOCAL_ID) && sourceOn(LOCAL_ID)) { try { per[LOCAL_ID] = await localModels(); } catch (e) { errors[LOCAL_ID] = e.message; } }
     if (ids.includes('cline')) {
       try {
         const j = await fetchJSON(SOURCES.cline.models, { Accept: 'application/json' });
         const data = Array.isArray(j?.data) ? j.data : Array.isArray(j) ? j : [];
         if (!data.length) throw new Error('Cline sent an empty model list');
-        per.cline = each('cline', data, fromCline, (m) => m?.id && !/:batch$/.test(m.id) && !freeOnly('cline', m) && (Array.isArray(m.architecture?.output_modalities) ? m.architecture.output_modalities : ['text']).includes('text'));
+        per.cline = each('cline', data, fromCline, (m) => m?.id && !/:batch$/.test(m.id) && (Array.isArray(m.architecture?.output_modalities) ? m.architecture.output_modalities : ['text']).includes('text'));
+        // Cline's free models are not in that list: its recommended list names them.
+        const rec = await fetchJSON(SOURCES.cline.recommended, { Accept: 'application/json' }, 10000).catch(() => null);
+        const have = new Set(per.cline.map((m) => m.realId));
+        for (const m of Array.isArray(rec?.free) ? rec.free : []) {
+          if (!m?.id) continue;
+          if (have.has(m.id)) { const x = per.cline.find((y) => y.realId === m.id); if (x && x.name === x.realId && m.name && m.name !== m.id) x.name = m.name; continue; }
+          try { per.cline.push(fromCline({ id: m.id, name: m.name && m.name !== m.id ? m.name : m.id, description: m.description, free: true, pricing: { prompt: '0', completion: '0' } })); } catch { /* one odd entry */ }
+        }
       } catch (e) { errors.cline = e.message; }
     }
     // A list that failed keeps its last good copy (in memory, else on disk); each good list is saved for next time.
@@ -286,6 +301,7 @@ export function sameOnOpenRouter(id, orList = [], info = sourceInfo(id)) {
   if (!s) return null;
   const ids = orList.filter((m) => m?.id && !/:(free|batch)$/.test(m.id) && m.tools !== false).map((m) => m.id);
   if (ids.includes(s.model)) return s.model; // Cline's ids are OpenRouter's
+  if (s.source === LOCAL_ID && s.model.startsWith('openrouter/') && ids.includes(s.model.slice(11))) return s.model.slice(11); // OpenRouter through OpenCode
   const canon = String(info?.canonical || '');
   const [cv, cm] = canon.includes('/') ? canon.split('/') : ['', canon];
   const want = norm(cm || s.model.split('/').pop());
@@ -304,9 +320,11 @@ export const forgetSourceHealth = (id) => (id ? health.delete(id) : health.clear
 export function failureKind(e) {
   if (e?.kind) return e.kind;
   const s = Number(e?.status || e?.streamStatus) || 0, msg = String(e?.message || ''), ty = String(e?.errorType || '');
+  // A free model the source keeps for its own app: only that model is set aside.
+  if (/FreeUsageLimitError/i.test(ty) || /free (usage )?limit reached|free model usage is not supported|free models are only available|free tier[^.]{0,40}(only|not available)/i.test(msg)) return 'free';
   // OpenCode's error names and Cline's codes say it outright.
   if (/AuthError|invalid_api_key|unauthori[sz]ed/i.test(ty)) return 'auth';
-  if (/CreditsError|MonthlyLimitError|UserLimitError|GoUsageLimitError|FreeUsageLimitError|insufficient_credits/i.test(ty)) return 'quota';
+  if (/CreditsError|MonthlyLimitError|UserLimitError|GoUsageLimitError|insufficient_credits/i.test(ty)) return 'quota';
   if (/RateLimitError|rate_limit/i.test(ty)) return 'rate';
   if (/ModelError|model_not_found/i.test(ty)) return 'model';
   if (/RegionError|DataPolicyError|context_length/i.test(ty)) return 'request';
@@ -320,7 +338,7 @@ export function failureKind(e) {
   if (/fetch failed|ECONN|ENOTFOUND|EAI_AGAIN|socket|network|terminated|other side closed|UND_ERR/i.test(msg + String(e?.cause?.code || '') + String(e?.cause?.message || ''))) return 'network';
   return 'unknown';
 }
-const KIND_WORDS = { auth: 'refused its key', quota: 'is out of credit or plan usage', rate: 'is rate limiting', model: 'does not have that model now', server: 'had a server error', network: 'could not be reached', timeout: 'did not answer in time', shape: 'answered in a shape QuorX can\'t read', request: 'refused the request', unknown: 'failed' };
+const KIND_WORDS = { notinstalled: 'is not installed on this computer', free: 'keeps that free model for its own app right now', auth: 'refused its key', quota: 'is out of credit or plan usage', rate: 'is rate limiting', model: 'does not have that model now', server: 'had a server error', network: 'could not be reached', timeout: 'did not answer in time', shape: 'answered in a shape QuorX can\'t read', request: 'refused the request', unknown: 'failed' };
 export const kindWords = (k) => KIND_WORDS[k] || KIND_WORDS.unknown;
 export function noteSourceResult(id, model, err, { now = Date.now() } = {}) {
   const prev = health.get(id) || {};
@@ -330,9 +348,9 @@ export function noteSourceResult(id, model, err, { now = Date.now() } = {}) {
   // How long other calls skip this source: a refused key until the key changes (or ten minutes, in case it was the
   // gateway's hiccup); spent credit or plan usage until it resets; a server down for a growing while.
   const wait = kind === 'auth' ? 10 * 60e3 : kind === 'quota' ? retryAfter || 15 * 60e3 : kind === 'rate' ? retryAfter || 30e3
-    : kind === 'model' ? 30 * 60e3 : kind === 'shape' ? 5 * 60e3
+    : kind === 'model' ? 30 * 60e3 : kind === 'shape' ? 5 * 60e3 : kind === 'free' ? Math.min(6 * 3600e3, retryAfter || 6 * 3600e3)
     : ['server', 'network', 'timeout', 'unknown'].includes(kind) ? Math.min(5 * 60e3, 20e3 * 2 ** (fails - 1)) : 0;
-  health.set(id, { ok: false, at: now, kind, why: String(err?.message || kind).slice(0, 300), until: wait ? now + wait : 0, model: kind === 'model' || kind === 'shape' ? model : null, keyHash: hash(keyFor(id)?.key), fails });
+  health.set(id, { ok: false, at: now, kind, why: String(err?.message || kind).slice(0, 300), until: wait ? now + wait : 0, model: kind === 'model' || kind === 'shape' || kind === 'free' ? model : null, keyHash: hash(keyFor(id)?.key), fails });
 }
 /** Why calls should skip this source now (a short reason), or ''. A bad model or shape only skips that model. */
 export function sourceSkip(id, model, now = Date.now()) {
@@ -385,6 +403,15 @@ const shape = (msg) => Object.assign(new Error(msg), { kind: 'shape' });
 export async function sourceStream(body, signal, onText, onThink, { fetchFn = fetch, info: given, session, headersMs = HEADERS_MS, idleMs = IDLE_MS } = {}) {
   const s = sourceOf(body.model);
   if (!s) throw Object.assign(new Error(`${body.model} is not a source model`), { kind: 'request' });
+  // The OpenCode on this computer needs no key: its own sign-ins make the call.
+  if (s.def.local) {
+    if (!given && !sourceInfo(body.model)) await sourceModels().catch(() => []);
+    const info = given || sourceInfo(body.model) || { plan: 'paid' };
+    const out = await localStream(body, signal, onText, onThink, { info, idleMs: Math.max(idleMs, 180e3) });
+    out.usage = { ...(out.usage || {}), ...(Object.keys(out.usage || {}).length ? priced(info, out.usage) : {}) };
+    out.source = s.source;
+    return out;
+  }
   const def = s.def, k = keyFor(s.source);
   if (!k) throw Object.assign(new Error(`${def.name} has no key in QuorX (⚙ Settings → OpenCode & Cline)`), { kind: 'auth' });
   // Its catalogue entry says which format and address the model takes: right after a restart (a summary or a brief
@@ -472,6 +499,7 @@ export function priced(info, u = {}) {
     return { cost: said ?? 0, plan_cost: Number.isFinite(plan) ? plan : costOf(info, u) };
   }
   if (said != null) return { cost: said };
+  if (info?.plan === 'free') return { cost: 0 };
   return { cost: costOf(info, u), estimated_cost: true };
 }
 function costOf(info, u) {
@@ -494,7 +522,7 @@ export async function sourceStatus({ versions = true } = {}) {
     const def = SOURCES[id], k = keyFor(id), h = health.get(id);
     return {
       id, name: def.name, short: def.short, app: def.app, billing: def.billing, site: def.site, keyUrl: def.keyUrl, docs: def.docs, keyHint: def.keyHint,
-      on: !!s[id]?.on, key: k ? { masked: mask(k.key), from: k.from } : null,
+      on: !!s[id]?.on, key: k ? { masked: mask(k.key), from: k.from } : null, ...(def.local ? { local: true, installed: !!findOnPath('opencode'), server: localServer() } : {}),
       app_: def.app === 'opencode' ? (oc ? { installed: true, version: oc.version } : { installed: false }) : (cl ? { installed: true, version: cl.version } : { installed: false }),
       // OpenCode's one key serves pay as you go and Go, so a key for either can be used for both.
       found: def.app === 'opencode' ? { openCodeKey: has.length > 0 } : { clineSignedIn: !!signed },
@@ -510,6 +538,15 @@ export async function sourceStatus({ versions = true } = {}) {
 export async function testSource(id, { model, fetchFn = fetch } = {}) {
   known(id);
   const def = SOURCES[id], k = keyFor(id), t = Date.now();
+  // The OpenCode on this computer: starting its server and listing its providers' models costs nothing.
+  if (def.local) {
+    try {
+      await ensureLocalServer();
+      const list = await localModels();
+      noteSourceResult(id, null, null);
+      return { ok: true, how: 'local', ms: Date.now() - t, cost: 0, models: list.length, providers: [...new Set(list.map((m) => m.providerName))] };
+    } catch (e) { noteSourceResult(id, null, e); return { ok: false, kind: failureKind(e), error: String(e.message || e).slice(0, 300) }; }
+  }
   if (!k) return { ok: false, kind: 'auth', error: `Add a key for ${def.name} first.` };
   if (def.me && !model) {
     try {
@@ -527,7 +564,8 @@ export async function testSource(id, { model, fetchFn = fetch } = {}) {
     }
   }
   const list = await sourceModels({ all: true }).catch(() => []);
-  const mine = list.filter((m) => m.source === id && m.status !== 'deprecated');
+  // Never a free model: a source that keeps those for its own app would make a good key look broken.
+  const mine = list.filter((m) => m.source === id && m.status !== 'deprecated' && m.plan !== 'free');
   // Plan models first (nothing to pay), then the cheapest at list price; chat models before the other formats.
   const rank = (m) => (m.plan === 'plan' ? 0 : 1) * 10 + (m.format === 'chat' ? 0 : 1);
   const pick = model ? mine.find((m) => m.id === model) : [...mine].sort((a, b) => rank(a) - rank(b) || (a.listPrice[0] + a.listPrice[1]) - (b.listPrice[0] + b.listPrice[1]))[0];

@@ -1,19 +1,20 @@
 ---
 title: Run a chat on your OpenCode or Cline account
 date: 2026-10-28
-summary: A chat's main model can now run on your own OpenCode, OpenCode Go or Cline account, with OpenRouter still there for everything else. How to connect, what runs where, what it costs, and what happens when one of these services has a bad moment.
+summary: A chat's main model can now run through the OpenCode on your computer, with every provider you connected there, or on your OpenCode, Go or Cline account, with OpenRouter still behind everything else. How to connect, what it costs, and what happens when one fails.
 tags: models, cost, setup
 version: 0.2.14
 ---
 
-If you already pay for OpenCode or Cline, you can now use that account in QuorX. A chat's main model runs on your
-plan or credits, and every tool, file, command, browser step, check and schedule works the same as on any other
+If you use OpenCode or Cline, you can now use them in QuorX: the OpenCode on your computer with all the providers you
+connected there, or your OpenCode and Cline accounts directly. A chat's main model runs on your plan or credits, and every tool, file, command, browser step, check and schedule works the same as on any other
 model. Everything here is in **⚙ Settings → Models → OpenCode & Cline**.
 
 ## Three new places a model can run
 
 | Source | What you pay with | Model ids look like |
 |---|---|---|
+| **OpenCode on this PC** | Whatever each provider you connected in OpenCode bills: your plans, keys and sign-ins | `opencode-local/deepseek/…` |
 | **OpenCode** | Pay as you go on OpenCode Console (formerly Zen) | `opencode/…` |
 | **OpenCode Go** | A $10/month plan, with usage limits per model in a 5-hour, a weekly and a monthly window | `opencode-go/glm-5.3` |
 | **Cline** | Your Cline credits; ClinePass models are paid by that plan | `cline/…` |
@@ -39,7 +40,19 @@ You can switch a chat between OpenRouter and a source at any time. The conversat
 ] }
 ```
 
-## Connect OpenCode
+## Use the OpenCode on your computer
+
+If OpenCode is installed, switch on **OpenCode on this PC**: no key needed. QuorX starts OpenCode's own server in the
+background when a chat needs it (and stops it after a quiet quarter of an hour), and every provider you connected in
+OpenCode with `opencode auth login` shows up in the picker, tagged **This PC**: on one test computer that was 597
+models from 8 providers. OpenCode makes each call itself, so your plans and sign-ins work as they do in OpenCode.
+
+OpenCode runs with its own tools off. QuorX describes its tools to the model, and the model writes its calls as text
+that QuorX reads back (in QuorX's format, or the model's own, such as DeepSeek's). Each call is a fresh OpenCode session
+that QuorX deletes afterwards, so your own session list stays as it was. **Test the connection** here only starts
+OpenCode and lists its models: nothing to pay.
+
+## Connect OpenCode's services with a key
 
 1. Open [OpenCode Console](https://opencode.ai/console), go to **Account → Personal API keys** and press
    **Add API key**. The key starts with `oc_sk_`.
@@ -68,7 +81,7 @@ Keys stay on this computer, in QuorX's data folder. The Settings page only sees 
 never get them.
 
 ```callout
-{ "tone": "warn", "title": "No free models here", "text": "OpenCode's free models (Big Pickle and the -free ones) are kept for OpenCode itself; any other app gets \"Free usage limit reached\". Cline's free models work only inside Cline's own apps. So QuorX doesn't list either." }
+{ "tone": "info", "title": "Free models, when they're allowed", "text": "Every model OpenCode and Cline offer is in the list, free ones included, tagged Free. Today both keep their free models for their own apps: OpenCode answers other apps with \"Free usage limit reached\", and Cline's free models work only inside Cline. QuorX asks under its own name and never pretends to be either app. When one says no, only that model is set aside: the step runs on OpenRouter and says so, and the rest of that source keeps working. If they open their free models to other apps, they simply work." }
 ```
 
 ## How QuorX talks to them

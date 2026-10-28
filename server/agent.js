@@ -1858,7 +1858,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         noteSourceResult(s.source, sm, e);
         why = `${name} ${kindWords(kind)} (${clip(e.message || kind, 160)})`;
         run.sourceFails[s.source] = (run.sourceFails[s.source] || 0) + 1;
-        if (kind === 'auth' || kind === 'quota' || run.sourceFails[s.source] >= 2) run.sourceOff[s.source] = why;
+        if (kind === 'auth' || kind === 'quota' || kind === 'free' || run.sourceFails[s.source] >= 2) run.sourceOff[s.source] = why;
       }
     }
     const to = sourceFallbackFor(sm, S, catalogue);
