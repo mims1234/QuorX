@@ -144,7 +144,7 @@ const callStart = (lineBefore) => /^ {0,3}$/.test(lineBefore);
 // <｜DSML｜invoke name="get_time"><｜DSML｜parameter name="zone" string="true">UTC</｜DSML｜parameter></｜DSML｜invoke>
 // (the bars are full-width ｜ or plain |, sometimes doubled, sometimes with spaces). It has no key, so with a key it never
 // runs: its calls that end the reply (invokes from a line start to the end, with nothing but their wrapper tags between
-// and after) are only counted, and the caller asks once for QuorX's blocks. Without a key (no transcript), they run.
+// and after) are only counted, so the caller can warn; they stay text. Without a key (no transcript), they run.
 const BAR = '[｜|]+\\s*';
 const DSML_OPEN = new RegExp(`<${BAR}DSML${BAR}invoke\\s+name="([^"]+)"\\s*>`, 'g');
 const DSML_CLOSE = new RegExp(`<\\/${BAR}DSML${BAR}invoke\\s*>`, 'g');
@@ -212,36 +212,45 @@ export function parseToolCalls(reply, idBase = 'call', key = '') {
   const lineStart = (a) => { while (p < nls.length && nls[p] < a) p++; return p ? nls[p - 1] + 1 : 0; };
   let said = '', i = 0, fed = 0, after = -1, skipped = 0; // fed: prose through the fence tracker (a line start); after: the end of the last call
   const feed = (to) => { while (fed < to) { let nl = s.indexOf('\n', fed); if (nl < 0 || nl >= to) nl = to; st.line(s.slice(fed, nl)); fed = nl + 1; } };
+  // Per line, worked out as the openers come along it, so a reply on one huge line stays linear: the backticks before
+  // the opener (an odd count: inside inline code), whether the line is a quote, and whether only spaces have come since
+  // the last call on it (clean: how far that was checked).
+  let line = -1, ticks = 0, tickAt = 0, quote = false, clean = -1;
+  const QUOTE = /[ \t]*>/y;
   for (let m; calls.length < MAX_CALLS && (opener.lastIndex = i, m = opener.exec(s));) {
     const a = m.index, ls = lineStart(a);
     feed(ls);
+    if (ls !== line) { line = ls; ticks = 0; tickAt = ls; QUOTE.lastIndex = ls; quote = QUOTE.test(s); }
+    for (; tickAt < a; tickAt++) if (s.charCodeAt(tickAt) === 96) ticks++;
+    if (after >= ls) { for (; clean < a; clean++) if (s[clean].trim()) { after = -1; break; } }
     // Right after another call on the same line counts as a line start too.
-    const startsHere = callStart(s.slice(ls, a)) || (after >= ls && !s.slice(after, a).trim());
+    const startsHere = (a - ls <= 3 && callStart(s.slice(ls, a))) || after >= ls;
     if (st.code || !startsHere) {
       // Counted (the caller warns) when it looked like a call: at a line start inside an HTML comment or <pre>, or
       // mid-line in plain prose. One in a code fence, inline code or a quote is an example the model meant to show.
-      const before = s.slice(ls, a);
-      if (st.code ? !st.fenced && startsHere : (before.match(/`/g) || []).length % 2 === 0 && !/^\s*>/.test(before)) skipped++;
+      if (st.code ? !st.fenced && startsHere : ticks % 2 === 0 && !quote) skipped++;
       said += s.slice(i, a + 1); i = a + 1; continue;
     }
     const from = a + m[0].length, close = `</${m[1]}>`;
     said += s.slice(i, a);
-    // Its end is where its JSON ends (strings and escapes followed, so a block inside a string, such as an example in a
-    // file it writes, is part of it), then its closing tag if one follows. A ```json fence around the JSON is allowed.
-    const lead = /^\s*(?:```(?:json)?\s*)?/i.exec(s.slice(from, from + 40))[0].length;
-    const e = s[from + lead] === '{' ? jsonEnd(s, from + lead) : -1;
-    const j = e < 0 ? undefined : loose(s.slice(from + lead, e));
-    if (!j || typeof j !== 'object' || Array.isArray(j)) {
-      // Broken: nothing after it is read (anything in it could look like a call). It still reaches the agent, named
-      // when its name can be read, so the model is told which call didn't parse.
+    // Broken: nothing after it is read (anything in it could look like a call). It still reaches the agent, named when
+    // its name can be read, so the model is told which call didn't parse.
+    const broken = () => {
       const c = s.indexOf(close, from), raw = s.slice(from, c >= 0 ? c : s.length).trim().slice(0, 20000);
       calls.push({ id: `${idBase}_${calls.length}`, type: 'function', function: { name: /"name"\s*:\s*"([^"]{1,80})"/.exec(raw)?.[1] || 'invalid', arguments: raw } });
       i = s.length; fed = s.length;
-      break;
-    }
+    };
+    // Its end is where its JSON ends (strings and escapes followed, so a block inside a string, such as an example in a
+    // file it writes, is part of it), and its closing tag must follow (or nothing: the reply ends there). Anything
+    // else means the JSON closed early (a stray quote in its text), so the call is broken. A ```json fence is allowed.
+    const lead = /^\s*(?:```(?:json)?\s*)?/i.exec(s.slice(from, from + 40))[0].length;
+    const e = s[from + lead] === '{' ? jsonEnd(s, from + lead) : -1;
+    const j = e < 0 ? undefined : loose(s.slice(from + lead, e));
+    if (!j || typeof j !== 'object' || Array.isArray(j)) { broken(); break; }
     const tail = /^\s*(?:```\s*)?/.exec(s.slice(e, e + 40))[0].length;
-    if (s.startsWith(close, e + tail)) { i = e + tail + close.length; after = i; }
-    else { i = e; after = -1; } // no closing tag after whole JSON: what follows is read as text again
+    if (s.startsWith(close, e + tail)) { i = e + tail + close.length; after = i; clean = i; }
+    else if (e + tail >= s.length || !s.slice(e + tail).trim()) { i = s.length; after = -1; }
+    else { broken(); break; }
     // The fence tracker skips the call's own text: it carries on from the next line.
     const nl = s.indexOf('\n', i); fed = Math.max(fed, nl < 0 ? s.length : nl + 1);
     const name = String(j.name || j.tool || j.function?.name || '');
@@ -250,7 +259,7 @@ export function parseToolCalls(reply, idBase = 'call', key = '') {
   }
   if (i < s.length) said += s.slice(i);
   // DeepSeek's own format has no key: run only without one (when the caller has no key to check); with a key, its calls
-  // that end the reply are counted, so the caller can ask once for QuorX's blocks instead.
+  // that end the reply are counted (the caller warns; asking again could turn one the model only quoted into a call).
   const { text: rest, dsml } = nativeCalls(said, idBase, calls, run);
   // skipped: blocks that looked like calls but weren't run (the caller says so; it never asks for them again).
   return { text: rest.replace(/\n{3,}/g, '\n\n').trim(), calls, skipped, dsml };
