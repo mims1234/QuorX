@@ -1,7 +1,8 @@
 // Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Model sources: where a chat's main model runs. OpenRouter is the default and stays behind everything else QuorX
 // does (deciders, media, helpers, the reviewer, every fallback). An app on this computer can run the main model with
-// the providers, plans and sign-ins the user connected there: the OpenCode app (opencodelocal.js).
+// the providers, plans and sign-ins the user connected there: the OpenCode app (opencodelocal.js) and Claude Code
+// (claudelocal.js).
 //   - A source model's id is the source, a slash, and the model as that app names it:
 //     opencode-local/deepseek/deepseek-v4-flash. OpenRouter has no vendor by that name, so the id alone says where a
 //     call goes and every picker, chat and schedule just works.
@@ -15,6 +16,7 @@ import { execFile } from 'node:child_process';
 import { HOME } from './openrouter.js';
 import { renameSoon } from './fsretry.js';
 import { findOnPath, localModels, localStream, ensureLocalServer, localServer, LOCAL_ID } from './opencodelocal.js';
+import { claudeModels, claudeStream, claudeAuth, claudeRunning, CLAUDE_ID } from './claudelocal.js';
 
 const DATA = path.join(HOME, 'data');
 export const SOURCE_FILE = path.join(DATA, 'sources.json');
@@ -27,6 +29,17 @@ export const SOURCES = {
     site: 'https://opencode.ai', keyUrl: 'https://opencode.ai/docs/providers/', docs: 'https://opencode.ai/docs/server/',
     keyHint: 'No key: QuorX uses the providers you connected in OpenCode (opencode auth login).', install: 'npm i -g opencode-ai', appName: 'OpenCode',
   },
+  // Claude Code on this computer (claudelocal.js): the subscription or API key it is signed in with.
+  [CLAUDE_ID]: {
+    id: CLAUDE_ID, name: 'Claude Code on this PC', short: 'Claude Code', app: 'claude', billing: 'mixed', local: true,
+    site: 'https://claude.com/product/claude-code', keyUrl: 'https://code.claude.com/docs/en/setup', docs: 'https://code.claude.com/docs/en/headless',
+    keyHint: 'No key: QuorX uses the account you signed in to Claude Code with.', install: 'npm i -g @anthropic-ai/claude-code', appName: 'Claude Code',
+  },
+};
+// How QuorX reaches each app: its model list, one call, a check that costs nothing, and what its process is doing.
+const APPS = {
+  [LOCAL_ID]: { list: () => localModels(), stream: localStream, check: () => ensureLocalServer(), server: localServer },
+  [CLAUDE_ID]: { list: () => claudeModels(), stream: claudeStream, check: () => claudeAuth({ refresh: true }), server: () => ({ running: claudeRunning() > 0, calls: claudeRunning(), perCall: true }) },
 };
 export const SOURCE_IDS = Object.keys(SOURCES);
 
@@ -86,8 +99,8 @@ let catalogue = null; // { at: { source: when listed }, ids, list, errors }
 // A source whose switch changed is listed again on the next call; the others keep their lists.
 const dropCatalogue = (id) => { if (catalogue) catalogue = { ...catalogue, ids: catalogue.ids.filter((x) => x !== id) }; };
 const per = (x) => (Number.isFinite(Number(x)) ? Number(x) : 0);
-// How each source lists its models (the app's own server, started when needed).
-const LISTERS = { [LOCAL_ID]: () => localModels() };
+// How each source lists its models (the app itself, started when needed).
+const LISTERS = Object.fromEntries(Object.entries(APPS).map(([id, a]) => [id, a.list]));
 let refreshing = null; // the refresh under way: { ids, p }
 function refreshLists(ids, listers) {
   if (refreshing && ids.every((id) => refreshing.ids.includes(id))) return refreshing.p;
@@ -235,19 +248,19 @@ export async function sourceStream(body, signal, onText, onThink, { info: given,
   if (!given && !sourceInfo(body.model)) await sourceModels().catch(() => []);
   stopped(signal);
   const info = given || sourceInfo(body.model) || { plan: 'paid' };
-  const out = await localStream(body, signal, onText, onThink, { info, idleMs });
+  const out = await APPS[s.source].stream(body, signal, onText, onThink, { info, idleMs });
   out.usage = { ...(out.usage || {}), ...(Object.keys(out.usage || {}).length ? priced(info, out.usage) : {}) };
   out.source = s.source;
   return out;
 }
 /**
  * What a call cost: the figure the app reports when it sends one, else its tokens at the catalogue's prices (context
- * tiers too). A plan model (OpenCode Go) costs nothing per call; plan_cost is what it counted against the plan's
- * limits, at list price.
+ * tiers too). A plan model (OpenCode Go, a Claude subscription) costs nothing per call; plan_cost is what it counted
+ * against the plan's limits, at list price: the app's own figure when it gives one.
  */
 export function priced(info, u = {}) {
   const said = u.cost !== null && u.cost !== '' && u.cost !== undefined && Number.isFinite(Number(u.cost)) ? Number(u.cost) : null;
-  if (info?.plan === 'plan') return { cost: said ?? 0, plan_cost: costOf(info, u) };
+  if (info?.plan === 'plan') return { cost: said ?? 0, plan_cost: Number(u.plan_cost) > 0 ? Number(u.plan_cost) : costOf(info, u) };
   if (said != null) return { cost: said };
   if (info?.plan === 'free') return { cost: 0 };
   return { cost: costOf(info, u), estimated_cost: true };
@@ -271,7 +284,7 @@ export async function sourceStatus({ versions = true } = {}) {
     const v = versions ? await appVersion(def.app) : apps.get(def.app)?.v ?? null;
     return {
       id, name: def.name, short: def.short, app: def.app, billing: def.billing, site: def.site, keyUrl: def.keyUrl, docs: def.docs, keyHint: def.keyHint,
-      on: !!s[id]?.on, local: true, installed: !!findOnPath(def.app), server: localServer(), install: def.install, appName: def.appName,
+      on: !!s[id]?.on, local: true, installed: !!findOnPath(def.app), server: APPS[id].server(), install: def.install, appName: def.appName,
       app_: v ? { installed: true, version: v.version } : { installed: false },
       models: models.filter((m) => m.source === id).length, catalogueError: catalogue?.errors?.[id] || null,
       last: h ? { ok: !!h.ok, at: h.at, kind: h.kind || null, why: h.why || null, until: h.until || 0, model: h.model || null, scoped: !!h.scoped } : null,
@@ -283,7 +296,7 @@ export async function testSource(id) {
   known(id);
   const t = Date.now();
   try {
-    await ensureLocalServer();
+    await APPS[id].check();
     const list = await LISTERS[id]();
     noteSourceResult(id, null, null);
     // A passing test means it works again: models set aside after a failure are tried at once.

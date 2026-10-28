@@ -38,7 +38,7 @@ let srv = null; // { base, auth, proc, ready, startedAt, lastUse, active, log, d
 export const localServer = () => (srv && !srv.dead && srv.up ? { running: true, port: Number(new URL(srv.base).port), since: srv.startedAt, pid: srv.proc?.pid || null } : { running: false, ...(lastError ? { error: lastError } : {}) });
 let lastError = '';
 const freePort = () => new Promise((resolve, reject) => { const s = net.createServer(); s.once('error', reject); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); }); });
-const killTree = (pid) => { try { if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true }); else process.kill(-pid, 'SIGKILL'); } catch { /* gone */ } };
+export const killTree = (pid) => { try { if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true }); else process.kill(-pid, 'SIGKILL'); } catch { /* gone */ } };
 export function stopLocalServer() { const s = srv; srv = null; if (s?.proc?.pid && !s.dead) killTree(s.proc.pid); forget(); }
 process.once('exit', stopLocalServer);
 // A QuorX that was killed (Task Manager, a crash, the app closing it hard) never ran its exit handler, so the server it
