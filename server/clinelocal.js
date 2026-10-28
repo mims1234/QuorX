@@ -39,8 +39,11 @@ export async function ensureCline({ start = spawn, find = findOnPath, readyMs = 
   const exe = find('cline');
   if (!exe) throw err('Cline is not installed on this computer (npm i -g cline), or not on PATH.', { kind: 'notinstalled' });
   fs.mkdirSync(DIR, { recursive: true });
-  // Cline uses its own sign-in: QuorX's OpenRouter key stays out of its environment.
-  const env = { ...process.env, CLINE_NO_AUTO_UPDATE: '1' };
+  // Cline uses its own sign-in: QuorX's OpenRouter key stays out of its environment. The MCP servers set up in the
+  // user's Cline stay out too (an empty list of QuorX's own): they would add their tools, and start, on every call.
+  const mcp = path.join(DIR, 'mcp-settings.json');
+  try { if (!fs.existsSync(mcp)) fs.writeFileSync(mcp, '{\n  "mcpServers": {}\n}\n'); } catch { /* Cline then reads the user's */ }
+  const env = { ...process.env, CLINE_NO_AUTO_UPDATE: '1', CLINE_MCP_SETTINGS_PATH: mcp };
   for (const k of Object.keys(env)) if (/^OPENROUTER_API_KEY/i.test(k)) delete env[k];
   const cmd = /\.(cmd|bat)$/i.test(exe);
   const child = cmd
@@ -164,8 +167,10 @@ async function clineOnce(body, signal, onText, onThink, { info = {}, idleMs = 18
     await p.send('session/set_model', { sessionId: sid, modelId }, 30e3);
     halt();
     const { system, transcript } = renderTranscript(body.messages, 'fence');
-    const prompt = `[QuorX] You are the model inside QuorX, an app that runs its own tools. Your built-in tools are switched off here: every call to one is refused and ends your turn. Answer in text, and call QuorX's tools as described below.\n\n[Instructions from QuorX]\n${system}${toolPrompt(body.tools, body.tool_choice, 'fence')}\n\n[Conversation]\n${transcript}${reminder ? `\n\n[QuorX] ${reminder}` : ''}`;
-    let text = '', thinking = '', firstMs = null, ownTool = null, idle = null, failure = null, cancelled = false;
+    const prompt = `[QuorX] You are the model inside QuorX, an app that runs its own tools. Your built-in tools are switched off here: every call to one is refused, and nothing it would do happens. Answer in text, and call QuorX's tools as described below.\n\n[Instructions from QuorX]\n${system}${toolPrompt(body.tools, body.tool_choice, 'fence')}\n\n[Conversation]\n${transcript}${reminder ? `\n\n[QuorX] ${reminder}` : ''}`;
+    let text = '', thinking = '', firstMs = null, ownTool = null, refused = 0, idle = null, failure = null, cancelled = false;
+    const mapped = []; // Cline tool calls QuorX has its own tool for, as QuorX calls
+    const offered = new Set((body.tools || []).map((x) => x?.function?.name).filter(Boolean));
     const show = textFilter(onText);
     const cancel = () => { if (!cancelled) { cancelled = true; p.notify('session/cancel', { sessionId: sid }); } };
     const arm = () => { clearTimeout(idle); idle = setTimeout(() => { failure ||= err(`Cline sent nothing for ${Math.round(idleMs / 1000)} s`, { name: 'TimeoutError', kind: 'timeout' }); cancel(); }, idleMs); };
@@ -175,10 +180,18 @@ async function clineOnce(body, signal, onText, onThink, { info = {}, idleMs = 18
         const d = u.content?.type === 'text' ? String(u.content.text || '') : '';
         if (u.sessionUpdate === 'agent_message_chunk' && d) { if (firstMs == null) firstMs = Date.now() - t; text += d; show(d); }
         else if (u.sessionUpdate === 'agent_thought_chunk' && d) { thinking += d; onThink?.(d); }
-        else if (u.sessionUpdate === 'tool_call') { ownTool ||= u.title || u.kind || 'a tool'; cancel(); }
+        else if (u.sessionUpdate === 'tool_call') ownTool ||= u.title || u.kind || 'a tool';
       },
-      // One of Cline's own tools: refused (above), and the turn stops so the model doesn't carry on without it.
-      onOwnTool: (tc) => { ownTool ||= tc?.title || tc?.kind || 'a tool'; cancel(); },
+      // One of Cline's own tools: refused (above), so Cline runs nothing. When QuorX has the same tool (a search, a
+      // read, a command, a page, a file edit), the call becomes QuorX's and the turn ends there. Otherwise the model,
+      // told it was refused, often writes QuorX's block next in the same turn; the turn stops once it has, or after a
+      // third refusal.
+      onOwnTool: (tc) => {
+        ownTool ||= tc?.title || tc?.kind || 'a tool';
+        const as = asQuorX(tc, offered);
+        if (as.length) { mapped.push(...as); cancel(); return; }
+        if (++refused >= 3 || text.includes('```tool_call')) cancel();
+      },
       onDead: (why) => { failure ||= err(why, { kind: 'network' }); },
     });
     const stopNow = () => cancel();
@@ -190,10 +203,11 @@ async function clineOnce(body, signal, onText, onThink, { info = {}, idleMs = 18
     finally { clearTimeout(idle); signal?.removeEventListener('abort', stopNow); }
     halt();
     const parsed = parseToolCalls(text, `call_${t.toString(36)}`);
+    if (!parsed.calls.length && mapped.length) parsed.calls = mapped.map((c, i) => ({ id: `call_${t.toString(36)}_c${i}`, type: 'function', function: { name: c.name, arguments: JSON.stringify(c.arguments) } }));
     // A refused tool of Cline's own, with no call of QuorX's: whatever it said, nothing it meant to do ran.
     if (!parsed.calls.length && ownTool) throw err(`The model used Cline's own tool (${String(ownTool).slice(0, 60)}) instead of QuorX's`, { kind: 'shape', ownTool: String(ownTool).slice(0, 60) });
     if (failure && !(cancelled && ownTool && (parsed.calls.length || parsed.text))) throw failure;
-    if (!text && !thinking) {
+    if (!text && !thinking && !parsed.calls.length) {
       // Cline keeps a provider's refusal ("Insufficient balance…") in its own session file and sends nothing: read it.
       const said = savedAnswer(sid);
       throw said ? fromError(new Error(said)) : err('Cline ended the answer without any text', { kind: 'shape' });
@@ -206,6 +220,28 @@ async function clineOnce(body, signal, onText, onThink, { info = {}, idleMs = 18
     if (sid) p.calls.delete(sid);
     p.active = Math.max(0, p.active - 1); p.lastUse = Date.now();
   }
+}
+// A tool call of Cline's own as the same call to QuorX's tools, when the chat offers them: [{ name, arguments }]
+// (none when QuorX has no such tool). Cline works in QuorX's empty folder, so a path in it is a path in the project.
+const projectPath = (p) => {
+  const s = String(p || '').replace(/\\/g, '/'), dir = DIR.replace(/\\/g, '/');
+  return s.toLowerCase().startsWith(`${dir.toLowerCase()}/`) ? s.slice(dir.length + 1) : s.toLowerCase() === dir.toLowerCase() ? '.' : s;
+};
+export function asQuorX(tc, offered = new Set()) {
+  const name = String(tc?.title || '').split(':')[0].trim(), a = tc?.rawInput || {}, out = [];
+  const add = (tool, args) => { if (offered.has(tool)) out.push({ name: tool, arguments: args }); };
+  const list = (x) => (Array.isArray(x) ? x : x == null ? [] : [x]);
+  if (name === 'search_codebase') for (const q of list(a.queries ?? a.query)) add('search_files', { query: String(q) });
+  else if (name === 'read_files') for (const f of list(a.files ?? a.paths ?? a.path)) {
+    const fp = typeof f === 'string' ? f : f?.path, from = Number(f?.start_line) || 0, to = Number(f?.end_line) || 0;
+    if (fp) add('read_file', { path: projectPath(fp), ...(from ? { offset: from } : {}), ...(from && to >= from ? { limit: to - from + 1 } : {}) });
+  } else if (name === 'run_commands') for (const c of list(a.commands ?? a.command)) add('shell', { command: String(typeof c === 'string' ? c : c?.command || '') });
+  else if (name === 'fetch_web_content') for (const r of list(a.requests ?? a.urls ?? a.url)) { const u = typeof r === 'string' ? r : r?.url; if (u) add('fetch_url', { url: String(u) }); }
+  else if (name === 'editor' && a.path && typeof a.new_text === 'string') {
+    if (typeof a.old_text === 'string' && a.old_text) add('edit_file', { path: projectPath(a.path), find: a.old_text, replace: a.new_text });
+    else add('write_file', { path: projectPath(a.path), content: a.new_text });
+  }
+  return out.filter((c) => Object.values(c.arguments).every((v) => v !== ''));
 }
 // The last thing Cline saved as the model's answer in a session (its data folder: CLINE_DATA_DIR, else ~/.cline/data).
 const CLINE_DATA = () => process.env.CLINE_DATA_DIR || path.join(process.env.QX_SOURCES_HOME || os.homedir(), '.cline', 'data');

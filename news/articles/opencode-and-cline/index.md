@@ -42,8 +42,10 @@ Three things differ from OpenCode:
 - **Pictures stay with QuorX**: Cline passes only text on, so a Cline model can't see screenshots (the deciders still can,
   when you have an OpenRouter key).
 
-Cline always offers the model its own tools too. QuorX refuses every one before it runs, and a model that reaches for
-one gets a second try with a reminder to use QuorX's tools.
+Cline always offers the model its own tools too. QuorX refuses every one before it runs. When QuorX has the same kind
+of tool (a search, a file read or edit, a command, a web page), the call becomes QuorX's and runs with its usual checks;
+for any other, the model gets a second try with a reminder to use QuorX's tools. The MCP servers you set up in Cline
+stay out of QuorX's calls.
 
 ## How it works
 

@@ -35,7 +35,7 @@ import { sourceOf, sourceStream, sameOnOpenRouter, failureKind, noteSourceResult
 import { SECRET_FILES } from '../server/keys.js';
 import { toolPrompt, renderTranscript, parseToolCalls, textFilter } from '../server/textcalls.js';
 import { localStream, localModels } from '../server/opencodelocal.js';
-import { ensureCline, stopCline, clineModels, clineStream } from '../server/clinelocal.js';
+import { ensureCline, stopCline, clineModels, clineStream, asQuorX } from '../server/clinelocal.js';
 
 let n = 0;
 const reply = (text, calls = [], finishReason = 'stop') => ({ text, toolCalls: calls.map(([name, args], i) => ({ id: `c${++n}_${i}`, type: 'function', function: { name, arguments: typeof args === 'string' ? args : JSON.stringify(args) } })), usage: { cost: 0.0001 }, ms: 1, firstMs: 1, finishReason });
@@ -4061,7 +4061,7 @@ process.stdin.on('data', (d) => {
       if (/OWN_TOOL/.test(text) && !/switched off here, so nothing ran/.test(text)) {
         chunk(sid, 'agent_message_chunk', 'On it.');
         out({ jsonrpc: '2.0', id: 900, method: 'session/request_permission', params: { sessionId: sid, toolCall: { title: 'editor' }, options: [{ optionId: 'a', kind: 'allow_once' }, { optionId: 'r', kind: 'reject_once' }] } });
-        waiting = () => { waiting = null; out({ jsonrpc: '2.0', id: j.id, result: { stopReason: 'cancelled' } }); };
+        waiting = () => { waiting = null; if (/OWN_THEN/.test(text)) chunk(sid, 'agent_message_chunk', '\\u0060\\u0060\\u0060tool_call\\n{"name": "write_file", "arguments": {"path": "b.txt", "content": "yo"}}\\n\\u0060\\u0060\\u0060'); out({ jsonrpc: '2.0', id: j.id, result: { stopReason: /OWN_THEN/.test(text) ? 'end_turn' : 'cancelled' } }); };
         continue;
       }
       chunk(sid, 'agent_message_chunk', 'Writing it.\\n\\n\\u0060\\u0060\\u0060tool_');
@@ -4089,6 +4089,19 @@ test('Cline on this PC lists the models of the account signed in there, priced l
   });
 });
 
+test('a tool call of Cline’s own becomes the same call to QuorX’s tools, when the chat offers them', () => {
+  const all = new Set(['search_files', 'read_file', 'shell', 'fetch_url', 'write_file', 'edit_file']);
+  const as = (title, rawInput, offered = all) => asQuorX({ title, rawInput }, offered).map((c) => [c.name, c.arguments]);
+  assert.deepEqual(as('search_codebase: Kimi', { queries: ['Kimi', 'K3'] }), [['search_files', { query: 'Kimi' }], ['search_files', { query: 'K3' }]]);
+  assert.deepEqual(as('read_files: x', { files: [{ path: 'src/a.js', start_line: 5, end_line: 9 }] }), [['read_file', { path: 'src/a.js', offset: 5, limit: 5 }]]);
+  assert.deepEqual(as('run_commands: dir', { commands: ['dir'] }), [['shell', { command: 'dir' }]]);
+  assert.deepEqual(as('fetch_web_content: x', { requests: [{ url: 'https://example.com', prompt: 'p' }] }), [['fetch_url', { url: 'https://example.com' }]]);
+  assert.deepEqual(as('editor: x', { path: 'hello.txt', new_text: 'hi' }), [['write_file', { path: 'hello.txt', content: 'hi' }]]);
+  assert.deepEqual(as('editor: x', { path: 'a.txt', old_text: 'a', new_text: 'b' }), [['edit_file', { path: 'a.txt', find: 'a', replace: 'b' }]]);
+  assert.deepEqual(as('ask_question: x', { question: 'y' }), [], 'no QuorX tool of that kind');
+  assert.deepEqual(as('search_codebase: Kimi', { queries: ['Kimi'] }, new Set(['shell'])), [], 'only a tool the chat offers');
+});
+
 test('a call through Cline on this PC reads QuorX’s fenced tool calls, streams only the text, and refuses Cline’s own tools', async () => {
   await withFakeCline(async (stderr) => {
     const tools = [{ type: 'function', function: { name: 'write_file', parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } } } } }];
@@ -4099,6 +4112,8 @@ test('a call through Cline on this PC reads QuorX’s fenced tool calls, streams
     assert.deepEqual([r.text, thought.join(''), r.usage.estimated], ['Writing it.', 'Thinking. ', true]);
     const own = await clineStream({ model: 'cline-local/anthropic/claude-sonnet-5.5', tools, messages: [{ role: 'user', content: 'OWN_TOOL make a.txt' }] }, new AbortController().signal, null, null, {});
     assert.equal(own.toolCalls[0]?.function.name, 'write_file', 'after a refused tool of Cline’s own, one more go with a reminder');
+    const same = await clineStream({ model: 'cline-local/anthropic/claude-sonnet-5.5', tools, messages: [{ role: 'user', content: 'OWN_TOOL OWN_THEN make b.txt' }] }, new AbortController().signal, null, null, {});
+    assert.deepEqual(same.toolCalls.map((c) => JSON.parse(c.function.arguments).path), ['b.txt'], 'told its tool was refused, the model writes QuorX’s block in the same turn');
     assert.match(stderr(), /PERMISSION \{"outcome":\{"outcome":"selected","optionId":"r"\}\}/, 'Cline’s own tool was refused');
     const bad = await clineStream({ model: 'cline-local/anthropic/claude-sonnet-5.5', tools, messages: [{ role: 'user', content: 'RPC_ERROR' }] }, new AbortController().signal, null, null, {}).catch((e) => e);
     assert.equal(failureKind(bad), 'auth', 'a sign-in problem says so');
