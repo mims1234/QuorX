@@ -1577,14 +1577,26 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       // models (Grok Build, writing calls as text) do this at every step. Sent back each time, at most twice in a row (a
       // step whose calls ran starts the count again); never for a call it wrote but that wasn't run (that one may be an
       // example: it is never asked for again).
-      if (!last && (run.stalls || 0) < 2 && !r.skippedCalls && announcesStep(r.text)) {
+      // Calls carrying this step's key but put in a code fence: meant as calls (only the prompt has the key), so they
+      // are asked for again, on the same count. Their blocks are already out of the text.
+      const fenced = !r.skippedCalls && r.fencedCalls;
+      const stalled = !r.skippedCalls && (fenced || announcesStep(r.text));
+      if (!last && (run.stalls || 0) < 2 && stalled) {
         run.stalls = (run.stalls || 0) + 1;
         reply = replyBefore;
         if (r.text) asides.push(r.text);
-        emit({ t: 'note', level: 'warn', msg: `${short(setup.model)} said what it would do next but wrote no tool call; asking it to make the call.`, at: at() });
-        messages.push({ role: 'assistant', content: r.text });
-        messages.push({ role: 'user', content: '(Your last turn said what you would do next but contained no tool call, so nothing ran and the reply would end there. Make that call now, written exactly as the instructions describe. If you meant that as your final answer, write the final answer again in full.)' });
+        emit({ t: 'note', level: 'warn', msg: fenced ? `${short(setup.model)} put its tool call${fenced > 1 ? 's' : ''} inside a code block, so ${fenced > 1 ? 'they weren\'t' : 'it wasn\'t'} run; asking it to write ${fenced > 1 ? 'them' : 'it'} again.` : `${short(setup.model)} said what it would do next but wrote no tool call; asking it to make the call.`, at: at() });
+        messages.push({ role: 'assistant', content: r.text || 'Done.' });
+        messages.push({ role: 'user', content: fenced
+          ? `(Your last turn put ${fenced > 1 ? `${fenced} tool calls` : 'its tool call'} inside a code block (\`\`\`), so nothing ran. Write ${fenced > 1 ? 'them' : 'it'} again exactly as the instructions describe: each block on a line of its own, with no \`\`\` around it.)`
+          : '(Your last turn said what you would do next but contained no tool call, so nothing ran and the reply would end there. Make that call now, written exactly as the instructions describe. If you meant that as your final answer, write the final answer again in full.)' });
         continue;
+      }
+      // Still stopping short after both send-backs: the reply ends, and says so instead of ending on "I'll…".
+      if (!last && stalled) {
+        run.stop = 'stalled';
+        reply += `${reply ? '\n\n' : ''}⚠ ${short(setup.model)} kept saying what it would do next without making the call, so it stopped here with that step not done. Send a message to carry on, or pick another model.`;
+        emit({ t: 'note', level: 'warn', msg: `${short(setup.model)} stopped short three times in a row without making a call; the reply ends here.`, at: at() });
       }
       // A final answer on the last step with the plan all ticked off is a finished reply, not one cut short: it is
       // checked and reviewed like any other (a send-back gets the steps it needs), and gets no out-of-steps card.

@@ -261,9 +261,23 @@ export function parseToolCalls(reply, idBase = 'call', key = '') {
   // DeepSeek's own format has no key: run only without one (when the caller has no key to check); with a key, its calls
   // that end the reply are counted (the caller warns; asking again could turn one the model only quoted into a call).
   const { text: rest, dsml } = nativeCalls(said, idBase, calls, run);
+  // A code fence holding nothing but blocks with this call's key: the model meant them as calls (only the prompt has
+  // the key) but fenced them, so none ran. Taken out of the text, so the reply never shows them; `fenced` counts them,
+  // so the caller can ask for them again.
+  let fenced = 0;
+  const text = !key ? rest : rest.replace(new RegExp(`^[ \\t]*\`\`\`[^\\n]*\\n((?:\\s*<(?:${TAG}|tool_call)\\s+key\\s*=\\s*["']?${key}["']?\\s*>[\\s\\S]*?<\\/(?:${TAG}|tool_call)>)+)\\s*\`\`\`[ \\t]*$`, 'gm'), (_, body) => {
+    fenced += (body.match(new RegExp(`<(?:${TAG}|tool_call)\\s+key`, 'g')) || []).length;
+    return '';
+  });
   // skipped: blocks that looked like calls but weren't run (the caller says so; it never asks for them again).
-  return { text: rest.replace(/\n{3,}/g, '\n\n').trim(), calls, skipped, dsml };
+  return { text: text.replace(/\n{3,}/g, '\n\n').trim(), calls, skipped, dsml, fenced };
 }
+
+/** What a text-call source adds to its result about blocks that weren't run (see parseToolCalls). */
+export const notRun = (parsed) => ({
+  ...(parsed.skipped + parsed.dsml ? { skippedCalls: parsed.skipped + parsed.dsml } : {}),
+  ...(parsed.fenced ? { fencedCalls: parsed.fenced } : {}),
+});
 
 /**
  * Passes streamed text through to the page, but holds back anything that might be the start of a tool call, and

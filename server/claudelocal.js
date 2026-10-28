@@ -11,7 +11,7 @@ import crypto from 'node:crypto';
 import { spawn, execFile } from 'node:child_process';
 import { HOME } from './openrouter.js';
 import { findOnPath, killTree } from './opencodelocal.js';
-import { toolPrompt, renderTranscript, parseToolCalls, textFilter, callKey } from './textcalls.js';
+import { toolPrompt, renderTranscript, parseToolCalls, textFilter, callKey, notRun } from './textcalls.js';
 
 export const CLAUDE_ID = 'claude-local';
 const DIR = path.join(HOME, 'data', 'claude-local'); // the folder Claude Code runs in: empty, so no project files reach the model
@@ -202,7 +202,7 @@ export async function claudeStream(body, signal, onText, onThink, { info = {}, i
       ...(Number.isFinite(said) ? (info.plan === 'plan' ? { plan_cost: said } : { cost: said }) : {}),
     };
     const length = last?.stop_reason === 'max_tokens';
-    return { text: parsed.text, thinking, reasoningDetails: [], toolCalls: parsed.calls, ...(parsed.skipped + parsed.dsml ? { skippedCalls: parsed.skipped + parsed.dsml } : {}), usage, ms: Date.now() - t, firstMs, finishReason: length ? 'length' : parsed.calls.length ? 'tool_calls' : 'stop', provider: 'Anthropic through Claude Code', model: body.model, seen: seen || 1 };
+    return { text: parsed.text, thinking, reasoningDetails: [], toolCalls: parsed.calls, ...notRun(parsed), usage, ms: Date.now() - t, firstMs, finishReason: length ? 'length' : parsed.calls.length ? 'tool_calls' : 'stop', provider: 'Anthropic through Claude Code', model: body.model, seen: seen || 1 };
   } catch (e) {
     if (started && e && typeof e === 'object' && !e.partial) e.partial = { outChars, ms: Date.now() - t };
     throw e;
