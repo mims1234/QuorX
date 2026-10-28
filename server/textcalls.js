@@ -1,10 +1,10 @@
 // Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
-// Tool calls written as text, for a model QuorX reaches through an app that runs its own agent (OpenCode or Cline on
-// this computer: opencodelocal.js, clinelocal.js). That app can't take QuorX's tools, so the prompt describes them and
+// Tool calls written as text, for a model QuorX reaches through an app that runs its own agent (the OpenCode on this
+// computer: opencodelocal.js). That app can't take QuorX's tools, so the prompt describes them and
 // the model writes each call as a block with JSON inside; QuorX reads the blocks back into the same tool_calls an API
 // would have sent. The conversation goes over as one text transcript, so any model with text in and text out works.
 // Two styles of block: <tool_call>…</tool_call>, and a ```tool_call fence for an app that strips that tag from what it
-// passes on (Cline). Both are read back whichever was asked for.
+// passes on. Both are read back whichever was asked for, and so is a reply that is nothing but one call's JSON.
 
 const OPEN = '<tool_call>', CLOSE = '</tool_call>', FENCE = '```tool_call', FENCE_END = '```';
 const block = (json, style) => (style === 'fence' ? `${FENCE}\n${json}\n${FENCE_END}` : `${OPEN}${json}${CLOSE}`);

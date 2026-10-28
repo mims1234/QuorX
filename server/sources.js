@@ -1,10 +1,9 @@
 // Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Model sources: where a chat's main model runs. OpenRouter is the default and stays behind everything else QuorX
 // does (deciders, media, helpers, the reviewer, every fallback). An app on this computer can run the main model with
-// the providers, plans and sign-ins the user connected there: the OpenCode app (opencodelocal.js) and the Cline CLI
-// (clinelocal.js).
+// the providers, plans and sign-ins the user connected there: the OpenCode app (opencodelocal.js).
 //   - A source model's id is the source, a slash, and the model as that app names it:
-//     opencode-local/deepseek/deepseek-v4-flash, cline-local/anthropic/claude-sonnet-5.5. OpenRouter has no vendor by those names, so the id alone says where a
+//     opencode-local/deepseek/deepseek-v4-flash. OpenRouter has no vendor by that name, so the id alone says where a
 //     call goes and every picker, chat and schedule just works.
 //   - QuorX holds no key for a source: the app makes each call itself. data/sources.json only says which are on.
 //   - When a source fails, the reply stops and says why, unless the user chose a fallback to OpenRouter (agent.js).
@@ -13,10 +12,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { HOME, chatModels } from './openrouter.js';
+import { HOME } from './openrouter.js';
 import { renameSoon } from './fsretry.js';
 import { findOnPath, localModels, localStream, ensureLocalServer, localServer, LOCAL_ID } from './opencodelocal.js';
-import { clineModels, clineStream, ensureCline, clineServer, CLINE_ID } from './clinelocal.js';
 
 const DATA = path.join(HOME, 'data');
 export const SOURCE_FILE = path.join(DATA, 'sources.json');
@@ -28,12 +26,6 @@ export const SOURCES = {
     id: LOCAL_ID, name: 'OpenCode on this PC', short: 'This PC', app: 'opencode', billing: 'mixed', local: true,
     site: 'https://opencode.ai', keyUrl: 'https://opencode.ai/docs/providers/', docs: 'https://opencode.ai/docs/server/',
     keyHint: 'No key: QuorX uses the providers you connected in OpenCode (opencode auth login).', install: 'npm i -g opencode-ai', appName: 'OpenCode',
-  },
-  // The Cline CLI on this computer (clinelocal.js): the account signed in there (Cline credits, ClinePass, ChatGPT).
-  [CLINE_ID]: {
-    id: CLINE_ID, name: 'Cline on this PC', short: 'Cline', app: 'cline', billing: 'mixed', local: true,
-    site: 'https://cline.bot', keyUrl: 'https://docs.cline.bot', docs: 'https://docs.cline.bot',
-    keyHint: 'No key: QuorX uses the account you signed in to in Cline (cline auth).', install: 'npm i -g cline', appName: 'Cline',
   },
 };
 export const SOURCE_IDS = Object.keys(SOURCES);
@@ -70,7 +62,7 @@ export function setSourceOn(id, on) {
 }
 
 // ---------- the apps on this computer ----------
-// "opencode --version" and "cline --version", found on PATH (cached ten minutes).
+// "opencode --version", found on PATH (cached ten minutes).
 const apps = new Map();
 export function appVersion(name, { refresh = false, run = execFile } = {}) {
   const c = apps.get(name);
@@ -95,7 +87,7 @@ let catalogue = null; // { at: { source: when listed }, ids, list, errors }
 const dropCatalogue = (id) => { if (catalogue) catalogue = { ...catalogue, ids: catalogue.ids.filter((x) => x !== id) }; };
 const per = (x) => (Number.isFinite(Number(x)) ? Number(x) : 0);
 // How each source lists its models (the app's own server, started when needed).
-const LISTERS = { [LOCAL_ID]: () => localModels(), [CLINE_ID]: async () => clineModels({ orList: await chatModels().catch(() => []) }) };
+const LISTERS = { [LOCAL_ID]: () => localModels() };
 let refreshing = null; // the refresh under way: { ids, p }
 function refreshLists(ids, listers) {
   if (refreshing && ids.every((id) => refreshing.ids.includes(id))) return refreshing.p;
@@ -243,7 +235,7 @@ export async function sourceStream(body, signal, onText, onThink, { info: given,
   if (!given && !sourceInfo(body.model)) await sourceModels().catch(() => []);
   stopped(signal);
   const info = given || sourceInfo(body.model) || { plan: 'paid' };
-  const out = await (s.source === CLINE_ID ? clineStream : localStream)(body, signal, onText, onThink, { info, idleMs });
+  const out = await localStream(body, signal, onText, onThink, { info, idleMs });
   out.usage = { ...(out.usage || {}), ...(Object.keys(out.usage || {}).length ? priced(info, out.usage) : {}) };
   out.source = s.source;
   return out;
@@ -279,7 +271,7 @@ export async function sourceStatus({ versions = true } = {}) {
     const v = versions ? await appVersion(def.app) : apps.get(def.app)?.v ?? null;
     return {
       id, name: def.name, short: def.short, app: def.app, billing: def.billing, site: def.site, keyUrl: def.keyUrl, docs: def.docs, keyHint: def.keyHint,
-      on: !!s[id]?.on, local: true, installed: !!findOnPath(def.app), server: id === CLINE_ID ? clineServer() : localServer(), install: def.install, appName: def.appName,
+      on: !!s[id]?.on, local: true, installed: !!findOnPath(def.app), server: localServer(), install: def.install, appName: def.appName,
       app_: v ? { installed: true, version: v.version } : { installed: false },
       models: models.filter((m) => m.source === id).length, catalogueError: catalogue?.errors?.[id] || null,
       last: h ? { ok: !!h.ok, at: h.at, kind: h.kind || null, why: h.why || null, until: h.until || 0, model: h.model || null, scoped: !!h.scoped } : null,
@@ -291,7 +283,7 @@ export async function testSource(id) {
   known(id);
   const t = Date.now();
   try {
-    if (id !== CLINE_ID) await ensureLocalServer(); else await ensureCline();
+    await ensureLocalServer();
     const list = await LISTERS[id]();
     noteSourceResult(id, null, null);
     return { ok: true, how: 'local', ms: Date.now() - t, cost: 0, models: list.length, providers: [...new Set(list.map((m) => m.providerName).filter(Boolean))] };

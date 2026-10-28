@@ -477,7 +477,7 @@ const server = http.createServer(async (req, res) => {
       const st = budgetState(b.projectId);
       if (st.budget != null && st.left <= 0) return json(res, 200, { error: 'This project has reached its budget. Raise it in the sidebar to run a review.' });
       try {
-        // A chat on an OpenCode or Cline model is compared as its OpenRouter twin, so the model never reviews its own work.
+        // A chat on a model of an app on this PC is compared as its OpenRouter twin, so the model never reviews its own work.
         const orModels = await chatModels().catch(() => []);
         const chatModel = String(b.chatModel || ''), twin = sourceOf(chatModel) ? sameOnOpenRouter(chatModel, orModels) || chatModel : chatModel;
         const model = pickReviewer({ reviewModel: b.reviewModel, reviewTier: b.reviewTier }, twin, { REVIEW_MODEL, REVIEW_ALT, REVIEW_STRONG, REVIEW_STRONG_ALT });
@@ -896,7 +896,7 @@ const server = http.createServer(async (req, res) => {
       // public (no key needed); if none of them load, the page shows why and offers a retry.
       const errors = [];
       const safe = (name, p) => p.catch((e) => { errors.push(`${name}: ${e.message}`); return []; });
-      // The models of OpenCode and Cline, when they are switched on (⚙ Settings → Apps on this PC), join the chat models.
+      // The models of the apps on this PC, when they are switched on (⚙ Settings → Apps on this PC), join the chat models.
       const [chat, dec, img, tts, mus, vid, src] = await Promise.all([safe('chat', chatModels()), safe('decisions', decisionModels()), safe('images', imageModels()), safe('voices', speechModels()), safe('music', musicModels()), safe('video', videoModels()), safe('sources', sourceModels({ refresh }))]);
       if (!chat.length && !dec.length) return json(res, 502, { error: `Could not load the model lists from OpenRouter (${errors[0] || 'no answer'}).` });
       // Audio-capable chat models double as the "listen" (speech-to-text) category.

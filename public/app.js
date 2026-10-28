@@ -1442,8 +1442,8 @@ function recDot(id, kind) {
   const r = rateModel(id, kind);
   return r ? `<span class="rec rec-${r.r}" title="${esc(`${REC_WORD[r.r]}: ${r.why}`)}" aria-label="${REC_WORD[r.r]}">${REC_ICON[r.r]}</span>` : '';
 }
-// Whose plan pays: Go (through the OpenCode on this PC), ClinePass or ChatGPT (through Cline), else the source's own.
-const planName = (m) => (m.providerID === 'opencode-go' ? 'Go' : m.providerID === 'cline-pass' ? 'ClinePass' : m.providerID === 'openai-codex' ? 'ChatGPT' : SOURCE_SHORT[m.source] || '');
+// Whose plan pays: Go (through the OpenCode on this PC), else the source's own.
+const planName = (m) => (m.providerID === 'opencode-go' ? 'Go' : SOURCE_SHORT[m.source] || '');
 const shortPrice = (id) => { const m = G.byId.get(id); return !m || m.kind !== 'chat' ? '' : m.plan === 'plan' ? `${planName(m)} plan` : m.source && m.plan === 'free' ? 'free' : `$${m.price[0].toFixed(2)}/$${m.price[1].toFixed(2)}`; };
 function priceText(m, extra = {}) {
   if (m.source && m.plan === 'plan') return `${SOURCE_NAME[m.source] || m.source} plan: nothing to pay per call (your subscription's usage limits apply) · list price $${(m.listPrice?.[0] || 0).toFixed(2)} in / $${(m.listPrice?.[1] || 0).toFixed(2)} out per M tokens`;
@@ -1484,8 +1484,8 @@ const FILTERS = [
 ];
 const providerOf = (id) => String(id).replace(/^~/, '').split('/')[0] || 'other';
 // Models of an app on this PC (⚙ Settings → Apps on this PC) are the source, a slash, and that app's own id.
-const SOURCE_NAME = { 'opencode-local': 'OpenCode on this PC', 'cline-local': 'Cline on this PC' };
-const SOURCE_SHORT = { 'opencode-local': 'This PC', 'cline-local': 'Cline' };
+const SOURCE_NAME = { 'opencode-local': 'OpenCode on this PC' };
+const SOURCE_SHORT = { 'opencode-local': 'This PC' };
 const sourceOfId = (id) => { const s = String(id || ''), h = s.split('/')[0]; return SOURCE_NAME[h] && s.length > h.length + 1 ? h : null; };
 const PROVIDER_NAME = (p) => ({ 'x-ai': 'xAI', openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google', 'meta-llama': 'Meta', mistralai: 'Mistral', deepseek: 'DeepSeek', qwen: 'Qwen', nvidia: 'NVIDIA', cohere: 'Cohere', inclusionai: 'inclusionAI', openrouter: 'OpenRouter', 'black-forest-labs': 'Black Forest Labs', elevenlabs: 'ElevenLabs', ...SOURCE_NAME }[p] || p.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
 const cleanName = (m) => String(m.name || m.id).replace(/\s*\(free\)\s*$/i, '').replace(/^[^:]+:\s*/, '');
@@ -1508,7 +1508,7 @@ const PK = { kind: 'chat', current: '', filters: new Set(), providers: new Set()
 
 // pickModel(kind, current, { context, openRouterOnly, source }) → the chosen id, or null. openRouterOnly: for the
 // places only an OpenRouter model makes sense (its fallback model, a blocked provider's models); source: open on one
-// source's models ('openrouter', 'opencode-local', 'cline-local').
+// source's models ('openrouter', 'opencode-local').
 function pickModel(kind, current, opts = {}) {
   return new Promise((resolve) => {
     Object.assign(PK, { kind, current: current || '', q: '', sel: 0, providers: new Set(), filters: new Set(), context: opts.context || '', orOnly: !!opts.openRouterOnly, source: opts.source || 'all' });
@@ -1522,7 +1522,7 @@ function pickModel(kind, current, opts = {}) {
   });
 }
 function pickerModels() { return (G.models || []).filter((m) => m.kind === PK.kind && !(PK.orOnly && m.source) && !(m.source && m.status === 'deprecated' && m.id !== PK.current)); }
-// Where a model runs: OpenRouter, or the OpenCode or Cline source it names.
+// Where a model runs: OpenRouter, or the OpenCode source it names.
 const sourceKey = (m) => m.source || 'openrouter';
 function drawPicker(full = false) {
   const all = pickerModels();
@@ -1531,7 +1531,7 @@ function drawPicker(full = false) {
   // No key yet: browsing works (the lists are public); only models through an app on this PC run.
   const banner = $('#pkBanner');
   banner.hidden = !!G.cfg?.hasKey;
-  banner.innerHTML = G.cfg?.hasKey ? '' : `🔑 <b>No OpenRouter key yet.</b> ${PK.kind === 'chat' ? 'Models tagged This PC or Cline run now; the others wait for a key.' : 'You can browse models and prices now; they run once you add a key.'} <button type="button" class="mp-link" id="pkAddKey">Add a key →</button>`;
+  banner.innerHTML = G.cfg?.hasKey ? '' : `🔑 <b>No OpenRouter key yet.</b> ${PK.kind === 'chat' ? 'Models tagged This PC run now; the others wait for a key.' : 'You can browse models and prices now; they run once you add a key.'} <button type="button" class="mp-link" id="pkAddKey">Add a key →</button>`;
   const ak = $('#pkAddKey'); if (ak) ak.onclick = () => { PK.done?.(null); openSettings('keys'); };
   // What is chosen now.
   const cur = G.byId.get(PK.current) || all.find((m) => m.id === PK.current);
@@ -1544,7 +1544,7 @@ function drawPicker(full = false) {
     for (const b of document.querySelectorAll('#pkSort .mp-sort')) b.onclick = () => { PK.sort = b.dataset.sort; (G.pickerSort ??= {})[PK.kind] = PK.sort; savePrefs(); drawPicker(true); };
   }
   const usable = FILTERS.filter(([k, , f]) => k === 'fav' ? (G.favModels?.[PK.kind] || []).length : all.some(f) && !all.every(f));
-  // Where the models run, once OpenCode or Cline adds its own (one segment per source the list has, with counts).
+  // Where the models run, once OpenCode adds its own (one segment per source the list has, with counts).
   const srcs = [...new Set(all.map(sourceKey))];
   if (!srcs.includes(PK.source)) PK.source = 'all';
   const srcBar = srcs.length > 1 ? `<div class="st-segmented mp-src-seg" role="radiogroup" aria-label="Where the model runs">${[['all', 'All'], ...['openrouter', ...Object.keys(SOURCE_NAME)].filter((k) => srcs.includes(k)).map((k) => [k, k === 'openrouter' ? 'OpenRouter' : SOURCE_NAME[k]])].map(([k, l]) => `<button type="button" class="st-seg-btn ${PK.source === k ? 'active' : ''}" role="radio" aria-checked="${PK.source === k}" data-src="${k}">${l} <small>${k === 'all' ? all.length : all.filter((m) => sourceKey(m) === k).length}</small></button>`).join('')}</div>` : '';
@@ -2772,7 +2772,7 @@ function renderComposerBar(c) {
   const s = c.agent.setup;
   const bar = $('.cbar', c.el.root);
   const rack = bar.closest('.cmp-control-rack'), slot = $('.cmp-model-slot', rack), glob = $('.cs-glob', rack), setBtn = $('.cmp-set-btn', rack), panel = $('.chat-set', rack), followSlot = $('.cmp-follow-slot', rack), scrim = $('.cs-scrim', rack);
-  // A model on OpenCode or Cline says whose account it runs on.
+  // A model on OpenCode says whose account it runs on.
   const srcId = sourceOfId(s.model);
   slot.innerHTML = `<button type="button" class="mbtn model cmp-model-chip" title="Model for this chat${srcId ? `, on your ${esc(SOURCE_NAME[srcId])} account` : ''}: ${esc(priceOf(s.model))} (click to pick any model)">${recDot(s.model, 'chat')} ${esc(short(s.model))}${srcId ? ` <span class="mp-src">${esc(SOURCE_SHORT[srcId])}</span>` : ''} <small>${esc(shortPrice(s.model))}</small></button>`;
   const permHTML = (cls = '') => `<div class="seg perm cmp-perm-switch ${cls}" title="How much permission this chat's agent asks for">
@@ -3836,7 +3836,7 @@ function replyHeadHTML(m, fallback) {
   const actual = last?.actual && orBase(last.actual) !== orBase(model) && !last.actual.startsWith(orBase(model)) ? last.actual : '';
   const models = [...new Set(calls.map((e) => e.actual && !e.actual.startsWith(orBase(e.model)) ? e.actual : e.model).filter(Boolean))];
   const providers = [...new Set(calls.map((e) => e.provider).filter(Boolean))];
-  // An OpenCode or Cline model has no OpenRouter page: its chip says where it ran instead.
+  // An OpenCode model has no OpenRouter page: its chip says where it ran instead.
   const idChip = (id, cls, tip) => `<span class="rh-id ${cls}" title="${esc(tip)}">${esc(id)}</span><button type="button" class="rh-btn rh-copy" data-copy="${esc(id)}" title="Copy ${esc(id)}" aria-label="Copy the model id">${msgIcon('copy')}</button>${sourceOfId(id) ? '' : `<button type="button" class="rh-btn rh-open" data-or="${esc(orBase(id))}" title="Open ${esc(orBase(id))} on openrouter.ai" aria-label="Open on OpenRouter"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg></button>`}`;
   const fellBack = calls.filter((e) => e.fellBackFrom).length;
   return `${idChip(model, 'rh-model', models.length > 1 ? `Models in this reply: ${models.join(', ')}` : sourceOfId(model) ? `Runs on your ${SOURCE_NAME[sourceOfId(model)]} account` : 'The OpenRouter model id')}${models.length > 1 ? `<small class="rh-more" title="${esc(models.join('\n'))}">+${models.length - 1}</small>` : ''}`
@@ -4229,7 +4229,7 @@ function traceHTML(m) {
     else if (e.t === 'compacted') row(e.at, `🗜 Earlier turns summarised to keep the context small<details class="out"><summary>summary</summary><pre>${esc(e.summary)}</pre></details>`, 'note');
     else if (e.t === 'note') row(e.at, `<span class="${e.level === 'info' ? '' : 'warn'}">${e.level === 'info' ? 'ℹ' : '⚠'} ${esc(e.msg)}</span>`, e.level === 'info' ? 'note' : 'warn');
     else if (e.t === 'llm_retry') row(e.at, `<span class="warn">↻ The model call failed (${esc(e.msg)}); retry ${e.attempt} of ${e.of} after ${secs(e.wait)}</span>`, 'warn');
-    // An OpenCode or Cline call that failed (or a source skipped for the rest of the reply): OpenRouter answered.
+    // An OpenCode call that failed (or a source skipped for the rest of the reply): OpenRouter answered.
     else if (e.t === 'source_fallback') row(e.at, `<span class="warn">⤵ ${e.kind === 'skipped' ? `${esc(SOURCE_NAME[e.source] || e.source)} skipped` : esc(e.why)} → <code>${esc(e.to)}</code> on OpenRouter${e.role && e.role !== 'writer' ? ` (${esc(e.role)})` : ''}</span>${e.kind === 'skipped' ? `<div class="sub">${esc(e.why)}</div>` : e.rest ? '<div class="sub">The rest of this reply stays on OpenRouter; the next reply tries the source again.</div>' : ''}${e.aside ? `<div class="aside">💬 ${esc(e.aside)}</div>` : ''}`, 'warn');
     else if (e.t === 'parallel') row(e.at, `⇉ ${e.names.length} look-ups at the same time: ${esc(e.names.join(', '))}`, 'tool');
     else if (e.t === 'lint') row(e.at, `🎨 Design lint: ${e.hits.length} note${e.hits.length === 1 ? '' : 's'} on ${esc(e.path)}<div class="sub">${e.hits.map((h) => `<b>${h.level === 'fix' ? 'fix' : 'consider'}</b> · ${esc(h.msg)}`).join('<br>')}</div>`);
@@ -4919,7 +4919,7 @@ async function followRun(c, m, open) {
         }
         // A step that ended in tool calls was working out loud: move its text into the trace.
         if (e.t === 'llm_done' && e.toolCalls.length) moveAside(e);
-        // A retried call starts its text again (an OpenCode or Cline call that fell back to OpenRouter too); a reply
+        // A retried call starts its text again (an OpenCode call that fell back to OpenRouter too); a reply
         // sent back to fix problems was not the answer.
         if (e.t === 'llm_retry' || e.t === 'sent_back' || (e.t === 'source_fallback' && e.role === 'writer')) { moveAside(e); lastStep = -1; }
         if (e.t === 'artifact') { addArtifact(c, m, e.artifact); continue; }
@@ -5901,7 +5901,7 @@ function settingsPanels(S) {
         + stRow('Default reasoning', '', stSeg('reasoning', [['off', 'Off'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']], S.reasoning || 'off')))
       + stCard('When the model fails', '', stRow('Fallback model', 'OpenRouter switches to it when a chat’s model fails or is down, billed at its own price. The trace marks steps it answered.', `<div class="st-fb">${modelField('pickFallback', S.fallbackModel, 'fbModel', 'None')}${S.fallbackModel ? '<button type="button" class="st-btn secondary sm" data-act="clearFallback" title="No fallback model">✕</button>' : ''}</div>`, { id: 'stRowFallback' }), '', 'stCardFallback')
       + `</div>`,
-      stCard('Apps on this PC', 'A chat’s main model can also run through OpenCode or Cline on this computer, with what you connected there. Everything else stays on OpenRouter.', `<div class="sx-pad src-mini" id="stSrcMini">${srcMiniHTML()}</div>`),
+      stCard('Apps on this PC', 'A chat’s main model can also run through OpenCode on this computer, with the providers you connected there. Everything else stays on OpenRouter.', `<div class="sx-pad src-mini" id="stSrcMini">${srcMiniHTML()}</div>`),
       stCard('Routing: how a call finds a provider', 'For every chat’s agent calls. The provider that answered shows on each step in “Steps”.',
         `<div class="sx-pad" data-live="routing"></div>`
         + stRow('Provider order', 'Auto favours providers with reliable tool calling (OpenRouter’s Exacto). Cheapest and Fastest sort by price or speed instead.', stCards('providerSort', [['auto', '🎯', 'Auto', 'Reliable tool calling'], ['price', '💲', 'Cheapest', 'Lowest price first'], ['throughput', '⚡', 'Fastest', 'Highest throughput first']], S.providerSort || 'auto', 'compact'), { cls: 'sx-row-wide', id: 'stRowOrder' })
@@ -5909,10 +5909,10 @@ function settingsPanels(S) {
         + stRow('Zero data retention only', 'Only providers that keep no copy of your prompts. Fewer models qualify.', stSwitch('zdrOnly', !!S.zdrOnly), { id: 'stRowZdr' })
         + stRow('Blocked providers', 'OpenRouter never sends the agent’s calls to these: for every model, or only the models you pick (a provider can be fine for one model and break another). Block one that keeps breaking tool calls (the provider shows as “via …” above each reply). If only blocked providers serve a model, that reply uses them anyway, and says so.', '<div id="stBlocked"><div class="st-row-help">Loading providers…</div></div>', { cls: 'sx-row-wide', id: 'stRowBlocked' })),
     ]],
-    sources: ['Apps on this PC', 'Run a chat’s main model through OpenCode or Cline on this computer, with the providers, plans and sign-ins you connected there. The deciders, paid media, helpers and the reviewer stay on OpenRouter, and a call that fails there stops the reply with the reason, so you can pick another model (or choose a fallback below).', [
+    sources: ['Apps on this PC', 'Run a chat’s main model through OpenCode on this computer, with the providers, plans and sign-ins you connected there. The deciders, paid media, helpers and the reviewer stay on OpenRouter, and a call that fails there stops the reply with the reason, so you can pick another model (or choose a fallback below).', [
       '<div data-live="sourceflow"></div>',
-      stCard(`${stNum(1)} Connect an app`, 'An app you switch on adds its models to the chat model pickers, tagged This PC (OpenCode) or Cline. Each bills as it does in that app.', '<div id="stSources"><div class="st-row-help">Checking the apps on this PC…</div></div>', '', 'stSrcConnect'),
-      stCard(`${stNum(2)} Pick a model`, '', stRow('In any chat', 'Click the chat’s model in its message box and pick a model tagged This PC or Cline; “Where it runs” at the top of the picker shows one source at a time. Switch a chat between OpenRouter and a source whenever you like: the conversation carries over.', '<button type="button" class="st-btn secondary sm" data-act="browseSources">Browse their models</button>'), '', 'stSrcPick'),
+      stCard(`${stNum(1)} Connect an app`, 'An app you switch on adds the models of every provider you connected in it to the chat model pickers, tagged This PC. Each provider bills as it does in that app.', '<div id="stSources"><div class="st-row-help">Checking the apps on this PC…</div></div>', '', 'stSrcConnect'),
+      stCard(`${stNum(2)} Pick a model`, '', stRow('In any chat', 'Click the chat’s model in its message box and pick a model tagged This PC; “Where it runs” at the top of the picker shows one source at a time. Switch a chat between OpenRouter and a source whenever you like: the conversation carries over.', '<button type="button" class="st-btn secondary sm" data-act="browseSources">Browse their models</button>'), '', 'stSrcPick'),
       stCard(`${stNum(3)} When a call fails`, 'A provider can be down, slow or out of usage. By default the reply stops and says which model failed and why, and you pick another model; QuorX never switches by itself unless you choose a fallback here.',
         stRow('Fall back to', '', stCards('sourceFallback', [['off', '✋', 'Stop and tell me', 'You pick the next model'], ['same', '🔁', 'Same model on OpenRouter', 'When OpenRouter has it, else the model below'], ['model', '🎯', 'Always this model', 'The fallback model below']], S.sourceFallback || G.cfg.defaults.sourceFallback || 'off', 'compact'), { cls: 'sx-row-wide', id: 'stRowSrcFb' })
         + stRow('Fallback model', 'For a model OpenRouter doesn’t have (and every failed call, with “Always this model”). Empty: the same model when OpenRouter has it, else your OpenRouter fallback model (Models &amp; catalogue), else the default chat model (QuorX’s own when yours runs on a source). Billed at its OpenRouter price, and the reply’s cap counts it.', `<div class="st-fb">${modelField('pickSourceFallback', S.sourceFallbackModel, 'srcFbModel', 'Default chat model')}${S.sourceFallbackModel ? '<button type="button" class="st-btn secondary sm" data-act="clearSourceFallback" title="Use the default chat model">✕</button>' : ''}</div>`)
@@ -5920,7 +5920,7 @@ function settingsPanels(S) {
       stCard('What stays the same', '', `<ul class="src-same">
         <li><b>Tools and work</b>: files, commands, servers, the browser, checks and schedules work the same on any model.</li>
         <li><b>OpenRouter's parts</b>: the deciders, paid media, helpers, the reviewer and the prompt enhancer still run there, with your OpenRouter key.</li>
-        <li><b>Costs</b>: OpenCode and Cline calls count at the price they report in the reply, project and daily caps. Go calls count ${stMoney('$0.00')}: your plan pays, and each step shows what it would have cost at list price.</li>
+        <li><b>Costs</b>: OpenCode calls count at the price they report in the reply, project and daily caps. Go calls count ${stMoney('$0.00')}: your plan pays, and each step shows what it would have cost at list price.</li>
         <li><b>Keys</b>: kept only on this computer (data/sources.json). The page never sees them again, and agent processes don’t get them.</li></ul>`),
     ]],
     newchats: ['New chats', 'What a fresh chat starts with. Each chat can change these in its message box.', [
@@ -6254,13 +6254,12 @@ function srcMiniHTML() {
 // What each source is, in a line, and how to install its app.
 const SRC_GUIDE = {
   'opencode-local': { what: 'Runs a chat through the OpenCode app on this computer, with the providers you connected in it. Each provider bills as it does in OpenCode; plans and free tiers cost nothing here.', install: 'npm i -g opencode-ai' },
-  'cline-local': { what: 'Runs a chat through the Cline CLI on this computer, on the account you signed in to there (Cline credits, ClinePass or a ChatGPT subscription). Cline reports no usage, so calls are counted at an estimate; each call also shows in Cline’s own session history.', install: 'npm i -g cline' },
 };
 // The app as QuorX found it: its version and its server, or how to install it.
 function srcInfoHTML(x, g) {
   if (!x.installed) return `<p class="src-info">Not installed. To install it: <code>${esc(g.install)}</code> <button type="button" class="kx-icon" data-copy-cmd="${esc(g.install)}" title="Copy the command">⧉</button></p>`;
   const sv = x.server || {};
-  const run = sv.running ? (sv.port ? `server running (port ${sv.port})` : `running${sv.provider ? ` · signed in: ${esc({ cline: 'Cline credits', 'cline-pass': 'ClinePass', 'openai-codex': 'ChatGPT subscription' }[sv.provider] || sv.provider)}` : ''}`) : 'starts when a chat needs it';
+  const run = sv.running ? `server running (port ${sv.port})` : 'its server starts when a chat needs it';
   return `<p class="src-info">${esc(x.appName || x.app)}${x.app_?.version ? ` ${esc(x.app_.version)}` : ''} · ${run}</p>`;
 }
 async function drawSourcesPanel(say = null) {
@@ -6382,7 +6381,7 @@ function wireSettings() {
     if (act === 'pickFallback') { const id = await pickModel('chat', S.fallbackModel || '', { context: 'Fallback when a chat’s model fails', openRouterOnly: true }); if (id) { S.fallbackModel = id; mark(); drawSettings(); } }
     if (act === 'clearFallback') { S.fallbackModel = ''; mark(); drawSettings(); }
     if (act === 'openSources') { ST.cat = 'sources'; drawSettings(); $('#stMain').scrollTop = 0; }
-    if (act === 'browseSources') await pickModel('chat', '', { context: 'Models on OpenCode and Cline (pick one in a chat’s model button to use it)', source: (ST.sources || []).find((x) => x.on && srcReady(x))?.id || 'all' });
+    if (act === 'browseSources') await pickModel('chat', '', { context: 'Models on OpenCode (pick one in a chat’s model button to use it)', source: (ST.sources || []).find((x) => x.on && srcReady(x))?.id || 'all' });
     if (act === 'pickSourceFallback') { const id = await pickModel('chat', S.sourceFallbackModel || '', { context: 'When a call through an app on this PC fails', openRouterOnly: true }); if (id) { S.sourceFallbackModel = id; mark(); drawSettings(); } }
     if (act === 'clearSourceFallback') { S.sourceFallbackModel = ''; mark(); drawSettings(); }
     if (act === 'openSafety') { ST.cat = 'safety'; drawSettings(); }
@@ -7288,7 +7287,7 @@ function applyKeyLock() {
     const ta = $('.input', c.el.root), send = $('.sendBtn', c.el.root);
     const can = !!G.cfg.hasKey || !!sourceOfId(c.agent?.setup?.model);
     ta.disabled = send.disabled = !can;
-    ta.placeholder = can ? c.placeholder || 'Ask, or ask for something to be built…  @ to add files or chats · / for commands' : 'No OpenRouter key yet: pick a model tagged This PC or Cline (the model button above), or add a key in ⚙ Settings → API keys.';
+    ta.placeholder = can ? c.placeholder || 'Ask, or ask for something to be built…  @ to add files or chats · / for commands' : 'No OpenRouter key yet: pick a model tagged This PC (the model button above), or add a key in ⚙ Settings → API keys.';
   }
 }
 async function exportChats(btn) {

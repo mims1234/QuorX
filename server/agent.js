@@ -126,7 +126,7 @@ export const DEFAULTS = {
   // deepseek-v4.1-flash's browser calls without their arguments (just {"action":"open"}), so runs went in circles.
   blockedProviders: [{ name: 'InferenceNet', models: ['deepseek/*'] }],
   fallbackModel: '',       // tried by OpenRouter when the chat's model fails or is unavailable ('' = none)
-  // OpenCode & Cline (server/sources.js): when a call to a chat's model there fails. 'off' (the default) = the reply
+  // Apps on this PC (server/sources.js): when a call to a chat's model there fails. 'off' (the default) = the reply
   // stops and says which model failed and why, and the user picks another model; nothing goes to OpenRouter.
   // 'same' = the same model on OpenRouter when it has one, else sourceFallbackModel (else the default chat model) ·
   // 'model' = always sourceFallbackModel.
@@ -320,7 +320,7 @@ export function routingFor(S, model, slugs = []) {
   const fb = String(S.fallbackModel || '').trim();
   return { ...(Object.keys(provider).length ? { provider } : {}), ...(fb && fb !== model ? { models: [model, fb] } : {}) };
 }
-// The OpenRouter model a failed OpenCode or Cline call falls back to (see DEFAULTS.sourceFallback), or null when the
+// The OpenRouter model a failed call through an app on this PC falls back to (see DEFAULTS.sourceFallback), or null when the
 // settings say not to fall back. `list` is the chat catalogue (OpenRouter's models and the sources').
 export function sourceFallbackFor(id, S = {}, list = []) {
   const mode = S.sourceFallback || DEFAULTS.sourceFallback;
@@ -959,7 +959,7 @@ const sleep = (ms, signal) => new Promise((resolve, reject) => { const t = setTi
 
 async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   const streamModel = deps.chatStream || chatStream;
-  // OpenCode and Cline models (sources.js) go to their source; tests script it with deps.sourceStream.
+  // Models of an app on this PC (sources.js) go to their source; tests script it with deps.sourceStream.
   const fromSource = deps.sourceStream || sourceStream;
   // The chat catalogue: OpenRouter's models and those of the sources that are switched on. Loaded once, when first
   // needed (a long chat's summary can come before the rest of the setup).
@@ -1151,7 +1151,7 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   if (!resumed && S.compact !== false && history.reduce((n, m) => n + m.content.length, 0) > Math.max(8000, Number(S.compactAt) || 24000) && history.length > 10) {
     const keep = history.slice(-8), old = history.slice(0, -8);
     try {
-      // A chat on OpenCode or Cline summarises there too; when that fails, OpenRouter's fallback model does it.
+      // A chat on an app on this PC summarises there too; when that fails, OpenRouter's fallback model does it.
       const sum = await chatAny({ model: setup.model, max_tokens: 900, temperature: 0.2, ...REASONING.off, messages: [
         { role: 'system', content: 'Summarise this conversation between a user and an AI agent for the agent to continue it. Keep: the goal, decisions, what was built (files, servers, artifacts), open problems and the user\'s preferences. Under 350 words, plain bullet points.' },
         { role: 'user', content: `${req.summary ? `Earlier summary:\n${req.summary}\n\n` : ''}${old.map((m) => `${m.role === 'user' ? 'User' : 'Agent'}: ${m.content}`).join('\n\n').slice(-60000)}` }] }, signal,
@@ -1510,7 +1510,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     }
     if (forceDecide && r.text) emit({ t: 'token', step, text: r.text });
     stats.llmCalls++;
-    // Which model really answered: OpenRouter's, when an OpenCode or Cline call failed (r.servedBy); the fallback,
+    // Which model really answered: OpenRouter's, when a call through an app on this PC failed (r.servedBy); the fallback,
     // when OpenRouter had to use it.
     const fb = String(S.fallbackModel || '').trim();
     const served = r.servedBy || (fb && r.model && r.model.startsWith(fb) && !r.model.startsWith(setup.model) ? fb : setup.model);
@@ -1601,7 +1601,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     // The model's reasoning goes back with its tool calls, unchanged, so the next step continues its thinking
     // instead of starting cold (OpenRouter's reasoning_details; only within this reply).
     const rd = run.passReasoning !== false && r.reasoningDetails?.length ? { reasoning_details: r.reasoningDetails } : {};
-    // What an OpenCode or Cline model needs back on its next step (thinking signatures, its reasoning): sources.js
+    // What a model of an app on this PC needs back on its next step (thinking signatures, its reasoning): sources.js
     // reads it there, and every other route drops it.
     messages.push({ role: 'assistant', content: r.text || null, tool_calls: r.toolCalls, ...rd, ...(r.passBack && run.passReasoning !== false ? { qx_pass: r.passBack } : {}) });
     run.tools += r.toolCalls.length;
@@ -1803,7 +1803,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   // once, at an estimate, the moment it ends (so the caps see it), and corrected to OpenRouter's own figure when the
   // generation record turns up a few seconds later.
   async function callModel(body, sig, onText, onThink, role = 'writer') {
-    // An OpenCode or Cline model: its source first. When that fails, the same call goes to OpenRouter (viaSource
+    // A model of an app on this PC: its source first. When that fails, the same call goes to OpenRouter (viaSource
     // says which model), and the step carries on as if nothing happened, apart from a note.
     let fell = null, unmarked = null;
     if (sourceOf(body.model)) {
@@ -5441,7 +5441,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
 }
 
 // ---------- the handover brief (the out-of-steps card's "Fresh chat") ----------
-// A brief on an OpenCode or Cline model is written there; when that fails, OpenRouter's fallback model writes it.
+// A brief on a model of an app on this PC is written there; when that fails, OpenRouter's fallback model writes it.
 const briefChat = (body) => chatAny(body, undefined, { orChat: chat, fallback: async (id) => sourceFallbackFor(id, {}, [...await chatModels().catch(() => []), ...await sourceModels().catch(() => [])]) });
 // A cheap model reads the stopped reply's transcript and writes what a new agent needs to carry on.
 export async function briefFor(runId, { model } = {}) {
