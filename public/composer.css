@@ -1,0 +1,122 @@
+/* Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0 */
+/* The compact message box: the text on its own full-width row, then one footer row with the setup (Quorium, its
+   squares, the model), a chip per setting, the 👁 🧭 row and the buttons. The settings themselves open in a popover
+   over the box (app.js renderComposerBar / wireQuickSettings). As the box narrows things fold in this order: the
+   budget caps, the settings at their usual value, the model's price, the squares and the 👁 🧭 row, then every
+   setting into one summary chip. */
+
+.chatpane .composer-box, .composer-v2 .composer-box { position: relative; }
+
+/* the text: full width, its own row */
+.composer-v2 .cmp-input-row { display: block !important; padding: 10px 14px 4px !important; }
+.chatpane .composer-v2 .cmp-input-row textarea.cmp-textarea, .composer-v2 .cmp-input-row textarea.cmp-textarea { width: 100% !important; flex: none !important; display: block; }
+
+/* the footer row */
+.composer-v2 .cmp-foot { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 0 8px 8px; }
+.composer-v2 .cmp-foot .cmp-control-rack { flex: 1 1 auto; min-width: 0; display: flex !important; align-items: center; gap: 8px;
+  flex-wrap: nowrap !important; margin: 0 !important; padding: 0 !important; border: 0 !important; background: none !important; }
+.composer-v2 .cmp-foot .cmp-bottom-bar { flex: none; display: flex !important; align-items: center; gap: 4px; margin: 0 !important; padding: 0 !important; width: auto !important; }
+.composer-v2 .cmp-foot .cmp-actions-left, .composer-v2 .cmp-foot .cmp-actions-right { display: flex; align-items: center; gap: 4px; }
+.composer-v2 .cmp-set-btn { display: none !important; }
+
+/* the setup: Quorium + squares + model read as one unit */
+.composer-v2 .cmp-foot .cmp-q-slot { flex: none; }
+.composer-v2 .cmp-foot .cmp-model-slot { flex: none; min-width: 120px; display: flex; }
+/* the model keeps its whole name until the third fold step; from then on it gives way */
+.composer-box.fold3 .cmp-foot .cmp-model-slot { flex: 0 1 auto; }
+.composer-v2 .cmp-foot .cmp-model-slot .cmp-model-chip { min-width: 0 !important; max-width: 100%; flex: 0 1 auto !important; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* the chips: what each setting is now; the usual value is quiet (dashed), a changed one lights up */
+.composer-v2 .cmp-chips { display: flex; align-items: center; gap: 6px; margin-left: auto; flex: none; }
+.cq-chip { position: relative; display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 8px; border-radius: 7px;
+  border: 1px dashed var(--line-strong); background: transparent; color: var(--muted); font: 500 12px var(--font-ui); white-space: nowrap; cursor: pointer; flex: none; }
+.cq-chip:hover, .cq-chip[aria-expanded="true"] { background: var(--panel-3); color: var(--text); }
+.cq-chip[aria-expanded="true"] { border-color: var(--accent); }
+.cq-chip b { font-weight: 650; }
+.cq-chip .cq-cl { color: var(--dim); }
+.cq-chip .cq-ci { font-size: 12px; line-height: 1; }
+.cq-chip svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.cq-chip[data-state="changed"] { border-style: solid; }
+.cq-chip[data-state="changed"][data-tone="violet"] { color: var(--violet); background: var(--violet-dim); border-color: var(--violet-line); }
+.cq-chip[data-state="changed"][data-tone="accent"] { color: var(--accent); background: var(--accent-dim); border-color: var(--accent-border); }
+.cq-chip[data-state="changed"][data-tone="red"] { color: var(--bad); background: var(--bad-dim); border-color: var(--bad-border); }
+.cq-chip[data-state="changed"][data-tone="ok"] { color: var(--ok); background: var(--ok-dim); border-color: var(--ok-border); }
+.cq-chip[data-state="changed"] .cq-cl { color: inherit; opacity: .7; }
+/* money: amber mono, always */
+.cq-chip.cq-money { border-style: solid; border-color: var(--amber-line); background: var(--amber-dim); color: var(--amber); font-family: var(--mono); gap: 4px; }
+.cq-chip.cq-money .cq-ml { font: 400 11px var(--font-ui); color: var(--muted); }
+.cq-chip.cq-more { padding: 0 8px; font-size: 14px; letter-spacing: 1px; }
+.cq-chip.cq-sum { display: none; }
+.cq-mdot { display: none; position: absolute; top: -4px; right: -4px; width: 8px; height: 8px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 0 2px var(--panel); }
+
+/* 👁 🧭 Chrome, computer use, always allowed: a row; the tray button stands in for it when the box is narrow */
+.composer-v2 .cmp-follow-slot { display: flex; align-items: center; gap: 4px; flex: none; position: relative; }
+.composer-v2 .cmp-tray { display: flex; align-items: center; gap: 4px; }
+.composer-v2 .cmp-tray-b { display: none !important; position: relative; }
+
+/* the settings popover */
+.composer-v2 .cmp-quick { position: absolute !important; bottom: calc(100% + 8px); left: 0; z-index: 70; width: 400px; max-width: 100%;
+  display: flex !important; flex-direction: column; gap: 10px; padding: 12px !important; margin: 0 !important; border-radius: 10px;
+  border: 1px solid var(--line-strong) !important; background: var(--panel-overlay, var(--panel-2)) !important; box-shadow: 0 14px 40px rgba(0, 0, 0, .4); }
+.composer-v2 .cmp-quick[hidden] { display: none !important; }
+.composer-v2 .cmp-quick.one { width: 340px; }
+.cmp-quick .cq-head { display: flex; align-items: baseline; gap: 8px; }
+.cmp-quick .cq-head b { font-size: 13px; color: var(--text-bright, var(--text)); }
+.cmp-quick .cq-head small { color: var(--muted); font-size: 11.5px; }
+.cmp-quick .cq-x { margin-left: auto; width: 24px; height: 24px; display: grid; place-items: center; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }
+.cmp-quick .cq-x:hover { background: var(--panel-3); color: var(--text); }
+.cmp-quick.one .cq-head { display: none; }
+.composer-v2 .cmp-quick { align-items: stretch !important; justify-content: flex-start !important; text-align: left; }
+.cmp-quick .cq-sec { display: flex; flex-direction: column; align-items: stretch; gap: 6px; text-align: left; }
+.cmp-quick .cq-row { justify-content: flex-start !important; }
+.cmp-quick .cq-sec h6 { text-align: left; }
+.cmp-quick .cq-sec[hidden] { display: none; }
+.cmp-quick .cq-sec h6 { margin: 0; font: 600 11px var(--font-ui); letter-spacing: .04em; text-transform: uppercase; color: var(--dim); }
+.cmp-quick .cq-sec h6 small { text-transform: none; letter-spacing: 0; font-weight: 400; }
+.cmp-quick .cq-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.cmp-quick .cq-row .lvl, .cmp-quick .cq-row .seg { flex: 1 1 auto; }
+.cmp-quick .cs-caps { display: flex; flex-wrap: wrap; gap: 8px; }
+.cmp-quick .cs-caps .cs-num { display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; color: var(--muted); }
+.cmp-quick .cq-foot { display: flex; justify-content: flex-end; border-top: 1px solid var(--line); padding-top: 10px; }
+
+/* ---- folding: app.js fitComposer adds fold1, fold2… to the box, one step at a time, until the row fits ---- */
+/* 1. The budget caps fold first (into ⋯, an amber dot when one differs from the usual); the chips' labels drop */
+.composer-box.fold1 .cq-chip.cq-money { display: none; }
+.composer-box.fold1 .cq-chip .cq-mdot { display: block; }
+.composer-box.fold1 .cq-chip .cq-cl { display: none; }
+/* 2. Settings at their usual value, the model's price */
+.composer-box.fold2 .cq-chip[data-state="default"]:not(.cq-more):not(.cq-sum) { display: none; }
+.composer-box.fold2 .cmp-model-slot .cmp-model-chip small { display: none; }
+/* 3. The 👁 🧭 row goes behind its tray button; "changed" becomes a dot */
+.composer-box.fold3 .cmp-q-slot .qx-chg { font-size: 0; width: 7px; height: 7px; padding: 0; border-radius: 50%; background: var(--amber, #f59e0b); }
+.composer-box.fold3 .cmp-foot .cmp-model-slot { min-width: 96px; }
+.composer-v2 .composer-box.fold3 .cmp-tray-b { display: inline-grid !important; }
+.composer-box.fold3 .cmp-tray { display: none; position: absolute; bottom: calc(100% + 8px); right: 0; z-index: 70; padding: 6px; gap: 4px;
+  border-radius: 10px; border: 1px solid var(--line-strong); background: var(--panel-overlay, var(--panel-2)); box-shadow: 0 14px 40px rgba(0, 0, 0, .4); }
+.composer-box.fold3 .cmp-tray.open { display: flex; }
+/* 4. Every setting in one summary chip; the Quorium shows its squares only */
+.composer-box.fold4 .cq-chip:not(.cq-sum) { display: none !important; }
+.composer-box.fold4 .cq-chip.cq-sum { display: inline-flex; }
+.composer-box.fold4 .cmp-q-slot .qx-pick-l, .composer-box.fold4 .cmp-q-slot .qx-chg { display: none; }
+.composer-box.fold4 .cmp-foot { gap: 6px; padding: 0 6px 6px; }
+/* 5. Narrowest: the squares go too (the Quorium's list still shows them); enhance hides */
+.composer-box.fold5 .cmp-q-slot .qx-strip { display: none; }
+.composer-box.fold5 .enhBtn { display: none !important; }
+/* the Quorium button's own count of modules on, with their colours: shown once the squares have gone */
+.cmp-q-slot .qx-n { display: none; align-items: center; gap: 2px; }
+.cmp-q-slot .qx-n i { width: 7px; height: 7px; border-radius: 2px; background: var(--qk); }
+.cmp-q-slot .qx-n b { margin-left: 3px; font: 600 11.5px var(--mono); color: var(--muted); }
+.composer-box.fold5 .cmp-q-slot .qx-n { display: inline-flex; }
+/* the narrowest step also tightens the row: the model keeps its dot and the start of its name (the rest on hover) */
+.composer-box.fold5 .cmp-foot .cmp-model-slot { min-width: 56px; }
+.composer-box.fold5 .cmp-foot .cmp-control-rack { gap: 5px; }
+.composer-box.fold5 .cq-chip { padding: 0 6px; }
+/* 6. Too narrow even then: the buttons take their own line under the setup, so nothing overlaps */
+.composer-box.fold6 .cmp-foot { flex-wrap: wrap; row-gap: 6px; }
+.composer-box.fold6 .cmp-foot .cmp-control-rack { flex: 1 0 100%; }
+.composer-box.fold6 .cmp-foot .cmp-model-slot { flex: 0 1 auto; min-width: 0; }
+.composer-box.fold6 .cmp-foot .cmp-bottom-bar { margin-left: auto !important; }
+.composer-box.fold6 .enhBtn { display: inline-grid !important; }
+/* the tray button's count sits in its corner, like the other badges */
+.composer-v2 .cmp-tray-b .apps-n { position: absolute; top: -5px; right: -5px; min-width: 14px; height: 14px; padding: 0 3px; border-radius: 7px;
+  display: grid; place-items: center; font: 700 9px/1 var(--mono); background: var(--accent); color: var(--accent-ink); }

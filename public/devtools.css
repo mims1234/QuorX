@@ -404,7 +404,9 @@ html:root body .msgs .msg.bot { padding-left: 18px !important; }
 .sb-version:empty { display: none; }
 
 /* ---- ⟳ restart the harness ---- */
-#restartBtn.spinning { animation: ohSpin 1s linear infinite; cursor: progress; }
+/* while restarting only the ↻ turns; its box stays put */
+#restartBtn.spinning { cursor: progress; }
+#restartBtn.spinning svg { animation: ohSpin 1s linear infinite; transform-origin: 50% 50%; }
 @keyframes ohSpin { to { transform: rotate(360deg); } }
 .stale-note { cursor: pointer; }
 .stale-note:hover { background: var(--amber); color: var(--amber-ink, #1a1002); }
