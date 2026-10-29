@@ -96,6 +96,19 @@ function loose(s) {
   try { return JSON.parse(dropTrailingCommas(t)); } catch { /* one more */ }
   try { return JSON.parse(dropTrailingCommas(escapeInStrings(t))); } catch { return undefined; }
 }
+// A call whose JSON broke only in its last argument, a long text written with quotes unescaped:
+// {"name": "append_file", "arguments": {"path": "s.css", "content": ".x{font-family:"Inter"}"}}. Every argument before
+// it must be plain (a string with no quote in it, a number, true, false or null); the last one runs to the block's end,
+// with JSON's escapes read as they are meant (\n, \", \\) and any other quote kept. null when it isn't that shape.
+const SALVAGE = /^\{\s*"name"\s*:\s*"([\w.-]{1,80})"\s*,\s*"arguments"\s*:\s*\{((?:\s*"[\w-]{1,40}"\s*:\s*(?:"[^"\\]*"|-?\d+(?:\.\d+)?|true|false|null)\s*,)*)\s*"([\w-]{1,40})"\s*:\s*"([\s\S]*)"\s*\}\s*\}$/;
+function salvage(raw) {
+  const m = SALVAGE.exec(String(raw).replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, ''));
+  if (!m) return null;
+  let args;
+  try { args = JSON.parse(`{${m[2].replace(/,\s*$/, '')}}`); } catch { return null; }
+  args[m[3]] = m[4].replace(/\\(u[0-9a-fA-F]{4}|["\\/bfnrt])/g, (_, e) => (e[0] === 'u' ? String.fromCharCode(parseInt(e.slice(1), 16)) : { b: '\b', f: '\f', n: '\n', r: '\r', t: '\t' }[e] ?? e));
+  return { name: m[1], args };
+}
 // Where the JSON object or array starting at i ends: brackets counted outside strings, escapes followed, raw line breaks
 // allowed in strings. -1 when it never closes or a bracket doesn't match.
 function jsonEnd(s, i) {
@@ -180,7 +193,8 @@ function nativeCalls(s, idBase, calls, run) {
   const st = proseState();
   for (let p = 0; p < ls;) { let nl = s.indexOf('\n', p); if (nl < 0 || nl >= ls) nl = ls; st.line(s.slice(p, nl)); p = nl + 1; }
   if (st.code) return { text: s, dsml: 0 };
-  if (!run) return { text: s, dsml: found.length - first };
+  // With a key they never run: counted, and taken out of the text, so the reply never shows the raw markup.
+  if (!run) return { text: s.slice(0, a).replace(DSML_WRAP, ''), dsml: found.length - first };
   for (const { name, body } of found.slice(first, first + Math.max(0, MAX_CALLS - calls.length))) {
     let args = {};
     for (const [, k, str, v] of body.matchAll(DSML_PARAM)) {
@@ -261,8 +275,12 @@ export function parseToolCalls(reply, idBase = 'call', key = '') {
     // Broken: nothing after it is read (anything in it could look like a call). It still reaches the agent, named when
     // its name can be read, so the model is told which call didn't parse.
     const broken = () => {
-      const c = s.indexOf(close, from), raw = s.slice(from, c >= 0 ? c : s.length).trim().slice(0, 20000);
-      calls.push({ id: `${idBase}_${calls.length}`, type: 'function', function: { name: /"name"\s*:\s*"([^"]{1,80})"/.exec(raw)?.[1] || 'invalid', arguments: raw } });
+      const c = s.indexOf(close, from), whole = s.slice(from, c >= 0 ? c : s.length).trim(), raw = whole.slice(0, 20000);
+      // A closed block whose last argument is text with quotes left unescaped (CSS's font-family:"Inter"): read again
+      // with that text taken as it stands, up to the block's end.
+      const fixed = c >= 0 ? salvage(whole) : null;
+      if (fixed) calls.push({ id: `${idBase}_${calls.length}`, type: 'function', function: { name: fixed.name, arguments: JSON.stringify(fixed.args) } });
+      else calls.push({ id: `${idBase}_${calls.length}`, type: 'function', function: { name: /"name"\s*:\s*"([^"]{1,80})"/.exec(raw)?.[1] || 'invalid', arguments: raw } });
       i = s.length; fed = s.length;
     };
     // Its end is where its JSON ends (strings and escapes followed, so a block inside a string, such as an example in a
@@ -279,7 +297,9 @@ export function parseToolCalls(reply, idBase = 'call', key = '') {
     // The fence tracker skips the call's own text: it carries on from the next line.
     const nl = s.indexOf('\n', i); fed = Math.max(fed, nl < 0 ? s.length : nl + 1);
     const name = String(j.name || j.tool || j.function?.name || '');
-    const args = j.arguments ?? j.args ?? j.parameters ?? j.function?.arguments ?? {};
+    // Arguments flat beside the name ({"name": "read_file", "path": "a.js"}), as some models write them: the other keys.
+    const { name: _n, tool: _t, function: _f, type: _y, id: _i, ...flat } = j;
+    const args = j.arguments ?? j.args ?? j.parameters ?? j.function?.arguments ?? flat;
     calls.push({ id: `${idBase}_${calls.length}`, type: 'function', function: { name: name || 'invalid', arguments: typeof args === 'string' ? args : JSON.stringify(args) } });
   }
   if (i < s.length) said += s.slice(i);
@@ -290,22 +310,34 @@ export function parseToolCalls(reply, idBase = 'call', key = '') {
   // the key) but fenced them, so none ran. Taken out of the text, so the reply never shows them; `fenced` counts them,
   // so the caller can ask for them again.
   let fenced = 0;
-  const text = !key ? rest : rest.replace(new RegExp(`^[ \\t]*\`\`\`[^\\n]*\\n((?:\\s*<(?:${TAG}|tool_call)\\s+key\\s*=\\s*["']?${key}["']?\\s*>[\\s\\S]*?<\\/(?:${TAG}|tool_call)>)+)\\s*\`\`\`[ \\t]*$`, 'gm'), (_, body) => {
+  let text = !key ? rest : rest.replace(new RegExp(`^[ \\t]*\`\`\`[^\\n]*\\n((?:\\s*<(?:${TAG}|tool_call)\\s+key\\s*=\\s*["']?${key}["']?\\s*>[\\s\\S]*?<\\/(?:${TAG}|tool_call)>)+)\\s*\`\`\`[ \\t]*$`, 'gm'), (_, body) => {
     fenced += (body.match(new RegExp(`<(?:${TAG}|tool_call)\\s+key`, 'g')) || []).length;
     return '';
   });
+  // Blocks copied from how the conversation shows calls that already ran (<quorx_call ran>…), ending the reply on lines of
+  // their own: the model meant a call but wrote it without this step's key. Taken out of the text and counted in
+  // `copied`, so the caller asks for it again.
+  let copied = 0, t = text.trimEnd();
+  const RAN = `<${TAG} ran>`;
+  for (let o; key && t.endsWith(CLOSE) && (o = t.lastIndexOf(RAN)) >= 0 && t.indexOf(CLOSE, o) === t.length - CLOSE.length && /(^|\n)[ \t]*$/.test(t.slice(Math.max(0, o - 40), o));) {
+    copied++; t = t.slice(0, o).trimEnd();
+  }
+  if (copied) text = t;
   // skipped: blocks that looked like calls but weren't run (the caller says so; it never asks for them again).
-  return { text: text.replace(/\n{3,}/g, '\n\n').trim(), calls, skipped, dsml, fenced, midline };
+  return { text: text.replace(/\n{3,}/g, '\n\n').trim(), calls, skipped, dsml, fenced, midline, copied };
 }
 
 /** What a text-call source adds to its result about blocks that weren't run (see parseToolCalls). */
 // Misplaced blocks are asked for again only when nothing ran; beside calls that ran, they are only warned about.
 export const notRun = (parsed) => {
-  const ran = parsed.calls.length > 0, skipped = parsed.skipped + parsed.dsml + (ran ? parsed.fenced + parsed.midline : 0);
+  // DeepSeek's own format at the reply's end counts as misplaced too: never run, asked for again in QuorX's blocks.
+  const ran = parsed.calls.length > 0, skipped = parsed.skipped + (ran ? parsed.fenced + parsed.midline + parsed.dsml + (parsed.copied || 0) : 0);
   return {
     ...(skipped ? { skippedCalls: skipped } : {}),
     ...(!ran && parsed.fenced ? { fencedCalls: parsed.fenced } : {}),
     ...(!ran && parsed.midline ? { midlineCalls: parsed.midline } : {}),
+    ...(!ran && parsed.dsml ? { nativeCalls: parsed.dsml } : {}),
+    ...(!ran && parsed.copied ? { copiedCalls: parsed.copied } : {}),
   };
 };
 

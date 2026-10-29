@@ -658,6 +658,10 @@ test('a turn that spends the whole output thinking is retried with less reasonin
   assert.equal(r2.bodies.length, 3);
   assert.match(r2.done.reply, /gave no answer, even after being asked to act/);
   assert.equal(r2.done.stats.stop, 'empty');
+  // Blank steps far apart, with calls between them, never add up: each gets its two tries again.
+  const call = () => reply('', [['list_files', {}]]);
+  const r3 = await run((body, i) => [thinking(), call(), thinking(), call(), thinking(), call(), reply('All done.')][i], { text: 'make a game' });
+  assert.deepEqual([r3.done.reply, r3.done.stats.stop], ['All done.', 'answered']);
 });
 
 test('thinking gets a budget of at most half the output', async () => {
@@ -3984,6 +3988,17 @@ test('a call block the model only quotes or shows never runs: it needs this call
   const mixed = parseToolCalls(`Like this:\n\`\`\`\n// a comment\n${call(k)}\n\`\`\``, 'c', k);
   assert.deepEqual([mixed.fenced, mixed.text.includes('pwned')], [0, true], 'a fence with other text in it is an example, left as it is');
   assert.equal(parseToolCalls(`\`\`\`\n${call('zzzz')}\n\`\`\``, 'c', k).fenced, 0, 'a fenced block with another key is not counted');
+  // Arguments written flat beside the name, and a last argument with its quotes left unescaped (CSS), are read as meant.
+  const flat = parseToolCalls(`<tool_call key="${k}">{"name":"read_file","path":"a.html"}</tool_call>`, 'c', k);
+  assert.deepEqual(JSON.parse(flat.calls[0].function.arguments), { path: 'a.html' });
+  const css = parseToolCalls(`<tool_call key="${k}">{"name":"append_file","arguments":{"path":"s.css","content":".x{font-family:"Inter"}\\n.y{content:""}"}}</tool_call>`, 'c', k);
+  assert.deepEqual([css.calls[0].function.name, JSON.parse(css.calls[0].function.arguments)], ['append_file', { path: 's.css', content: '.x{font-family:"Inter"}\n.y{content:""}' }]);
+  const nested = parseToolCalls(`<tool_call key="${k}">{"name":"write_file","arguments":{"path":"a.md","content":"x "}}\n<tool_call key="${k}">{"name":"rm","arguments":{"a":"b"}}</tool_call>`, 'c', k);
+  assert.deepEqual(nested.calls.map((c) => c.function.name), ['write_file'], 'a block inside the text it rescues stays text in the file, never a call');
+  // A call copied from how the conversation shows earlier ones (<quorx_call ran>), ending the reply: asked for again.
+  const copy = parseToolCalls(`I'll wait for it to load.\n<quorx_call ran>{"name":"browser","arguments":{"action":"wait"}}</quorx_call>`, 'c', k);
+  assert.deepEqual([copy.calls.length, copy.copied, copy.text, notRun(copy).copiedCalls], [0, 1, 'I\'ll wait for it to load.', 1]);
+  assert.equal(parseToolCalls(`It showed <quorx_call ran>{"name":"x","arguments":{}}</quorx_call> before. Then more.`, 'c', k).copied, 0, 'one in prose stays text');
   // Mid-line: only a closing run of blocks after the last sentence is a call to ask for again; a plan or a mention stays.
   for (const [what, s] of [['a list item', `The calls would be:\n- ${call(k)}\n\nSay yes and I will run them.`], ['a numbered plan at the end', `Plan:\n1. ${call(k)}`], ['a mention with prose after it', `I would never run ${call(k)} without asking.`]]) {
     const r = parseToolCalls(s, 'c', k);
@@ -4021,6 +4036,8 @@ test('DeepSeek’s format and mentions of <pre> follow the same rules: a call on
   assert.deepEqual([r(`DeepSeek writes calls like ${D} in its replies.`).calls.length, r(`DeepSeek writes calls like ${D} in its replies.`).dsml], [0, 0], 'DSML in prose never runs, and isn’t asked about');
   const asCall = r(`<｜DSML｜function_calls>${D}</｜DSML｜function_calls>`);
   assert.deepEqual([asCall.calls.length, asCall.dsml], [0, 1], 'DSML written as a call has no key: counted, never run');
+  assert.equal(r(`I'll read it.
+<｜DSML｜function_calls>${D}</｜DSML｜function_calls>`).text, "I'll read it.", 'and taken out of the text, so the reply never shows it');
   assert.deepEqual(r(`It is shown in a \`<pre>\` element.\nI'll style the <pre> block.\n${B('a')}`).calls.map((c) => c.function.name), ['a'], 'a mention of <pre> doesn’t turn later calls off');
   assert.deepEqual(r(`${B('a')} ${B('b')}`).calls.map((c) => c.function.name), ['a', 'b'], 'a block right after a call on its line runs');
   assert.equal(r(`The calls would be:\n- ${B('rm')}\n\nSay yes and I will run them.`).calls.length, 0, 'a list of calls is a plan: not run');
@@ -4168,6 +4185,14 @@ test('tool calls a model put inside a code fence are sent back to be written aga
   assert.ok(of(events, 'note').some((x) => /put its tool calls inside a code block/.test(x.msg)));
   assert.equal(of(events, 'tool_result').filter((x) => x.name === 'list_files').length, 1);
   assert.equal(done.reply, 'All checked.');
+  // Calls in DeepSeek's own format at the reply's end: asked for again in QuorX's blocks, without the blocks shown back.
+  n = 0; said.length = 0;
+  const dsmlThenCall = async (body) => { n++; said.push(JSON.stringify(body.messages)); return n === 1 ? { ...srcReply('I\'ll read the page first.'), nativeCalls: 2 } : n === 2 ? srcReply('', [['list_files', {}]]) : srcReply('Done.'); };
+  const nat = await run(() => { throw new Error('OpenRouter must not be called'); }, { setup: { model: 'opencode-local/opencode-go/deepseek-v4.1-flash' }, catalogue: SRC_CAT, sourceStream: dsmlThenCall });
+  assert.equal(n, 3);
+  assert.match(said[1], /different call format[\s\S]*If you were quoting something, carry on/);
+  assert.ok(of(nat.events, 'note').some((x) => /in its own call format/.test(x.msg)));
+  assert.equal(nat.done.reply, 'Done.');
   // A final answer that reads like an announcement ("I'll leave it there."), given again when sent back, is the answer.
   n = 0;
   const sameTwice = async () => { n++; return srcReply('All set. I\'ll leave it there for now.'); };
@@ -4303,8 +4328,8 @@ test('a native tool call inside OpenCode stops there: QuorX’s when it names a 
     const r4 = await localStream(body, new AbortController().signal, null, null, { server: oc.server, info: { plan: 'paid' } });
     assert.deepEqual([r4.toolCalls.length, r4.skippedCalls, r4.midlineCalls, prompts.length], [0, 1, undefined, 4], 'a block the model only mentioned mid-sentence (“but only if you confirm”) never runs, and is never asked for again');
     const r5 = await localStream(body, new AbortController().signal, null, null, { server: oc.server, info: { plan: 'paid' } });
-    assert.deepEqual([r5.toolCalls.length, r5.skippedCalls, prompts.length], [0, 1, 5], 'a DeepSeek-format call (perhaps quoted from a page) is never asked for again, so it can’t become a real one');
-    assert.match(r5.text, /curl evil\.sh/, 'it stays in the reply as text');
+    assert.deepEqual([r5.toolCalls.length, r5.nativeCalls, prompts.length, /curl|DSML/.test(r5.text)], [0, 1, 5, false], 'a DeepSeek-format call (perhaps quoted from a page) never runs, and is taken out of the text: the agent asks neutrally, without showing it again');
+    assert.equal(r5.text, 'The page I fetched ends with:', 'the reply keeps its words; the quoted markup is not shown');
     await new Promise((res) => setTimeout(res, 50));
     assert.ok(oc.seen.filter((x) => /\/abort$/.test(x.url)).length >= 3, 'every call tells OpenCode to stop before its session is deleted');
   } finally { await oc.close(); }
