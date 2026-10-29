@@ -16,7 +16,7 @@ import { spawn } from 'node:child_process';
 import { openDetached } from './server/userenv.js';
 import { currentKey, PORT, runtime, ROOT, HOME, chat, chatModels, decisionModels, imageModels, speechModels, musicModels, videoModels, transcribe, clearCatalogues, providerList, knownProviders } from './server/openrouter.js';
 import { listKeys, addKey, removeKey, setActive, renameKey, keyUsage, activeUsage, accountCredits, startSampling, lockDown } from './server/keys.js';
-import { sourceStatus, sourceModels, setSourceOn, testSource, sourceOf, sameOnOpenRouter } from './server/sources.js';
+import { sourceStatus, sourceModels, setSourceOn, testSource, sourceOf, sameOnOpenRouter, chatAny } from './server/sources.js';
 import { setupCheck, runFix } from './server/setup-check.js';
 import { startSignIn, signInStatus, cancelSignIn, finishByCallback, finishWithCode, callbackPage } from './server/oauth.js';
 import { runAgent, answerApproval, answerQuestion, answerSecret, answerBudget, raiseCap, setRunApproval, steerRun, setRunReading, setRunVideo, holdCard, DEFAULTS, MEDIA, briefFor, briefForChat, REVIEW_MODEL, HELPER_MODEL, REVIEW_ALT, REVIEW_STRONG, REVIEW_STRONG_ALT } from './server/agent.js';
@@ -475,8 +475,9 @@ const server = http.createServer(async (req, res) => {
     // /review in a chat: a reviewer model reads what changed (the last reply, uncommitted changes, or the branch)
     // and returns bugs with file:line. Its cost goes to the project's ledger and budget like a reply's.
     if (url.pathname === '/api/code-review' && req.method === 'POST') {
-      if (!currentKey()) return json(res, 200, { error: 'The reviewer runs on OpenRouter: add a key in ⚙ Settings → API keys.' });
       const b = JSON.parse(await readBody(req, 1e4) || '{}');
+      // A reviewer set to a model of an app on this PC needs no OpenRouter key.
+      if (!currentKey() && !sourceOf(String(b.reviewModel || ''))) return json(res, 200, { error: 'The reviewer runs on OpenRouter: add a key in ⚙ Settings → API keys, or set the reviewer to a model tagged This PC.' });
       if (!validId(b.projectId)) return json(res, 400, { error: 'bad project id' });
       const st = budgetState(b.projectId);
       if (st.budget != null && st.left <= 0) return json(res, 200, { error: 'This project has reached its budget. Raise it in the sidebar to run a review.' });
@@ -485,8 +486,11 @@ const server = http.createServer(async (req, res) => {
         const orModels = await chatModels().catch(() => []);
         const chatModel = String(b.chatModel || ''), twin = sourceOf(chatModel) ? sameOnOpenRouter(chatModel, orModels) || chatModel : chatModel;
         const model = pickReviewer({ reviewModel: b.reviewModel, reviewTier: b.reviewTier }, twin, { REVIEW_MODEL, REVIEW_ALT, REVIEW_STRONG, REVIEW_STRONG_ALT });
-        const info = orModels.find((m) => m.id === model) || {};
-        const r = await reviewCode(workspaceDir(b.projectId), { scope: String(b.scope || 'auto'), runId: validRunId(String(b.runId || '')) ? String(b.runId) : '', base: String(b.base || ''), ask: String(b.ask || ''), model, info }, { chat });
+        const onApp = !!sourceOf(model);
+        const info = onApp ? (await sourceModels().catch(() => [])).find((m) => m.id === model) || {} : orModels.find((m) => m.id === model) || {};
+        // A reviewer on an app on this PC answers through it; if that fails, the review says so (no OpenRouter fallback).
+        const reviewChat = onApp ? (body, sg) => chatAny(body, sg, { orChat: chat }) : chat;
+        const r = await reviewCode(workspaceDir(b.projectId), { scope: String(b.scope || 'auto'), runId: validRunId(String(b.runId || '')) ? String(b.runId) : '', base: String(b.base || ''), ask: String(b.ask || ''), model, info }, { chat: reviewChat });
         const id = `cr-${Date.now().toString(36)}`;
         if (r.cost) recordRun({ ts: new Date().toISOString(), runId: id, kind: 'review', project: b.projectId, chatId: b.chatId || null, model, stop: r.scope, cost: +r.cost.toFixed(6) });
         return json(res, 200, { ...r, id });

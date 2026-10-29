@@ -3170,7 +3170,7 @@ function renderChatTools(c) {
   for (const b of menu.querySelectorAll('.q-pick')) b.onclick = async (e) => {
     e.preventDefault(); e.stopPropagation();
     const k = b.dataset.q, q = QUALITY_INFO[k];
-    const id = await pickModel(q.kind, q.model(), { openRouterOnly: true, context: k === 'enhancer' ? 'Prompt enhancer (all chats): a fast, cheap model is enough' : k === 'freshEyes' ? 'Fresh eyes (all chats): it must use tools' : k === 'reviewer' ? 'Reviewer (all chats): it must use tools and see images' : k === 'deciders' ? 'Decider for screenshot checks (all chats): it must read images' : 'Helper model (all chats): it must use tools' });
+    const id = await pickModel(q.kind, q.model(), { openRouterOnly: k === 'deciders', context: k === 'enhancer' ? 'Prompt enhancer (all chats): a fast, cheap model is enough' : k === 'freshEyes' ? 'Fresh eyes (all chats): it must use tools' : k === 'reviewer' ? 'Reviewer (all chats): it must use tools and see images' : k === 'deciders' ? 'Decider for screenshot checks (all chats): it must read images' : 'Helper model (all chats): it must use tools' });
     if (id) { if (k === 'enhancer') G.settings.enhancerModel = id; else if (k === 'reviewer') G.settings.reviewModel = id; else if (k === 'freshEyes') G.settings.freshEyesModel = id; else if (k === 'helpers') G.settings.helperModel = id; else G.settings.lookVoters = [id]; savePrefs(); }
     reopen();
   };
@@ -6449,9 +6449,9 @@ function wireSettings() {
       if (card) { card.scrollIntoView({ block: 'start' }); card.classList.add('sx-flash'); }
     }
     if (act === 'openStorage') { ST.cat = 'storage'; drawSettings(); }
-    if (act === 'pickReviewer') { const id = await pickModel('chat', S.reviewModel || '', { context: 'Reviewer: tests what was built', openRouterOnly: true }); if (id) { S.reviewModel = id; mark(); drawSettings(); } }
+    if (act === 'pickReviewer') { const id = await pickModel('chat', S.reviewModel || '', { context: 'Reviewer: tests what was built' }); if (id) { S.reviewModel = id; mark(); drawSettings(); } }
     if (act === 'clearReviewer') { S.reviewModel = ''; mark(); drawSettings(); }
-    if (act === 'pickHelper') { const id = await pickModel('chat', S.helperModel || '', { context: 'Helper: read-only jobs', openRouterOnly: true }); if (id) { S.helperModel = id; mark(); drawSettings(); } }
+    if (act === 'pickHelper') { const id = await pickModel('chat', S.helperModel || '', { context: 'Helper: read-only jobs' }); if (id) { S.helperModel = id; mark(); drawSettings(); } }
     if (act === 'clearHelper') { S.helperModel = ''; mark(); drawSettings(); }
     if (act === 'refreshModels') { $('#stCatInfo').textContent = 'Refreshing…'; await loadModels(true); $('#stCatInfo').textContent = `${G.models?.length || 0} models loaded · refreshed ${new Date().toLocaleTimeString()}`; }
     if (act === 'resetOrder') { G.projectOrder = []; savePrefs(); renderSidebar(); e.target.textContent = 'Done'; }

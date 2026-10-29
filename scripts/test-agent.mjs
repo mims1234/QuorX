@@ -3910,6 +3910,13 @@ test('with no OpenRouter key only a model through an app on this PC runs, and no
   assert.equal(done.reply, 'Done.');
   assert.equal(bodies.length, 0, 'no call went to OpenRouter');
   for (const t of ['decide', 'look', 'delegate', 'generate_image', 'imagine', 'enable_media', 'media_plan']) assert.ok(!tools.includes(t), `${t} is off`);
+  // Helpers set to a model of an app on this PC keep working without a key; the note names only what is off.
+  tools = null;
+  const kept = await run(never, { noOpenRouter: true, setup: { model: 'opencode-local/opencode-go/glm-5.3' }, catalogue: SRC_CAT, sourceStream, settings: { approval: 'yolo', helpers: true, helperMinFiles: 0, helperModel: 'opencode-local/opencode-go/glm-5.3' } });
+  assert.equal(kept.bodies.length, 0, 'still nothing went to OpenRouter');
+  assert.ok(tools.includes('delegate'), 'helpers on an app on this PC stay on');
+  const note = of(kept.events, 'note').find((x) => /No OpenRouter key yet/.test(x.msg))?.msg || '';
+  assert.ok(/the reviewer/.test(note) && !/helpers/.test(note), note);
 });
 
 test('a source model gets its own reasoning back on its next step, and OpenRouter never does', async () => {

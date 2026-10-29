@@ -1000,8 +1000,13 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   const noOpenRouter = deps.noOpenRouter ?? (!deps.chatStream && !currentKey());
   if (noOpenRouter) {
     if (!sourceOf(carryOn?.model || setup.model)) throw Object.assign(new Error(`${carryOn?.model || setup.model} runs on OpenRouter, and there is no OpenRouter key yet. Pick a model tagged This PC (⚙ Settings → Apps on this PC), or add an OpenRouter key in ⚙ Settings → API keys.`), { status: 400 });
-    Object.assign(S, { deciders: false, enhancer: false, freshEyes: false, review: 'off', codeReview: 'off', helpers: false, sourceFallback: 'off', fallbackModel: '', buildThinking: 'off' });
-    emit({ t: 'note', level: 'info', msg: 'No OpenRouter key yet: the deciders, the reviewer, the prompt enhancer, helpers, fresh eyes and paid media are off for this reply (they run on OpenRouter). Add a key in ⚙ Settings → API keys to use them.', at: 0 });
+    // A helper, reviewer, enhancer or fresh eyes set to a model of an app on this PC keeps working; the rest run on
+    // OpenRouter and are off.
+    const onApp = (m) => !!sourceOf(String(m || '').trim());
+    const keep = { enhancer: onApp(S.enhancerModel || S.helperModel), freshEyes: onApp(S.freshEyesModel) || (!S.freshEyesModel && S.freshEyesTier !== 'strong' && onApp(S.helperModel)), review: onApp(S.reviewModel), helpers: onApp(S.helperModel) };
+    Object.assign(S, { deciders: false, enhancer: keep.enhancer ? S.enhancer : false, freshEyes: keep.freshEyes ? S.freshEyes : false, review: keep.review ? S.review : 'off', codeReview: keep.review ? S.codeReview : 'off', helpers: keep.helpers ? S.helpers : false, sourceFallback: 'off', fallbackModel: '', buildThinking: 'off' });
+    const off = ['the deciders', ...[['review', 'the reviewer'], ['enhancer', 'the prompt enhancer'], ['helpers', 'helpers'], ['freshEyes', 'fresh eyes']].filter(([k]) => !keep[k]).map(([, w]) => w), 'paid media'];
+    emit({ t: 'note', level: 'info', msg: `No OpenRouter key yet: ${off.slice(0, -1).join(', ')} and ${off.at(-1)} are off for this reply (they run on OpenRouter). Add a key in ⚙ Settings → API keys, or set them to a model tagged This PC.`, at: 0 });
   }
   const blockedNames = blockedFor(S.blockedProviders, setup.model);
   const blockedSlugs = blockedNames.length ? providerSlugs(blockedNames, knownProviders()) : [];
@@ -4143,7 +4148,9 @@ ${r.text || '(no text found)'}`;
     const model = String(S.enhancerModel || '').trim() || String(S.helperModel || '').trim() || HELPER_MODEL;
     const t0 = Date.now();
     let late = false;
-    const job = enhanceRequest({ text: userText, earlier: userTurns().slice(0, -1), model, signal, ...(deps.enhance ? { call: deps.enhance } : {}) })
+    // A model of an app on this PC answers through it (no OpenRouter fallback: a failed reading just skips the enhancer).
+    const viaApp = sourceOf(model) ? { call: (b, sg) => chatAny(b, sg, { ...sourceChatOpts(), fallback: null }) } : {};
+    const job = enhanceRequest({ text: userText, earlier: userTurns().slice(0, -1), model, signal, ...viaApp, ...(deps.enhance ? { call: deps.enhance } : {}) })
       .then((r) => {
         if (!r) { emit({ t: 'note', level: 'info', msg: 'The prompt enhancer gave no usable reading, so the request goes as written.', at: at() }); return; }
         account(r.usage, model, 'enhancer');

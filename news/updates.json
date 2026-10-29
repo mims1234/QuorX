@@ -7,6 +7,8 @@
       "items": [
         { "kind": "new", "text": "Run a chat's main model through OpenCode on this PC, with the providers you connected there: your plans pay, and QuorX keeps its own tools.", "pr": 174 },
         { "kind": "improved", "text": "OpenCode's own free models answer only in OpenCode's app, so they show in the picker but can't be picked.", "pr": 187 },
+        { "kind": "new", "text": "Helpers, the reviewer, the prompt enhancer and fresh eyes can run on a model from an app on this PC too, even with no OpenRouter key.", "pr": 187 },
+        { "kind": "improved", "text": "A model your account settings there don't allow (OpenCode Go's Global regions) says so at once, instead of a server error after retries.", "pr": 187 },
         { "kind": "new", "text": "Claude Code on this PC: a chat's main model through the Claude Code you are signed in to.", "pr": 178 },
         { "kind": "new", "text": "Grok Build on this PC: a chat's main model through Grok, for text work (🖥 Computer use is off with it, and the chat says why).", "pr": 179 },
         { "kind": "new", "text": "Chats run without an OpenRouter key on a model from an app on this PC; what needs OpenRouter is switched off and says so.", "pr": 174 },
