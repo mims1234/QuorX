@@ -3,8 +3,9 @@
 // does (deciders, media, helpers, the reviewer, every fallback). An app on this computer can run the main model with
 // the providers, plans and sign-ins the user connected there: the OpenCode app (opencodelocal.js), Claude Code
 // (claudelocal.js) and Grok Build (groklocal.js). OpenCode Go runs over its API with the user's own key (opencodego.js).
-//   - The OpenCode app on this computer is retired: its models show nowhere, and a chat still set to one is told to
-//     pick another (a Go model it ran through the app moves to Go over the API when a Go key is in).
+//   - OpenCode's own providers inside the OpenCode app are left out (blockedLocal): its Zen provider doesn't answer
+//     calls from QuorX, and Go runs over its API. A chat still set to one is told to pick another (a Go model moves to
+//     Go over the API when a Go key is in).
 //   - A source model's id is the source, a slash, and the model as that app names it:
 //     opencode-local/deepseek/deepseek-v4-flash. OpenRouter has no vendor by that name, so the id alone says where a
 //     call goes and every picker, chat and schedule just works.
@@ -33,8 +34,6 @@ export const SOURCES = {
     id: LOCAL_ID, name: 'OpenCode on this PC', short: 'This PC', app: 'opencode', billing: 'mixed', local: true,
     site: 'https://opencode.ai', keyUrl: 'https://opencode.ai/docs/providers/', docs: 'https://opencode.ai/docs/server/',
     keyHint: 'No key: QuorX uses the providers you connected in OpenCode (opencode auth login).', install: 'npm i -g opencode-ai', appName: 'OpenCode',
-    // Not offered any more: its models show nowhere, and a chat still on one is told to pick another.
-    retired: 'OpenCode on this PC is no longer offered in QuorX. Pick another model in the chat\'s model button (OpenCode Go models run with your Go key: ⚙ Settings → API keys).',
   },
   // OpenCode Go over its API (opencodego.js), with the key from the user's Go workspace.
   [GO_ID]: {
@@ -67,8 +66,7 @@ const APPS = {
   // Go's list is public; a call and the check need the key.
   [GO_ID]: { list: () => goModels(), stream: (b, sg, t, th, o) => goStream(b, sg, t, th, { ...o, key: keyFor(GO_ID)?.key }), check: async () => { const k = keyFor(GO_ID)?.key; if (!k) throw Object.assign(new Error('Add your OpenCode Go key first.'), { kind: 'auth' }); await goCheck(k, await goModels()); }, server: () => ({ api: true }) },
 };
-// The sources Settings and the pickers offer (a retired one is still recognised in a model id, to say so).
-export const SOURCE_IDS = Object.keys(SOURCES).filter((id) => !SOURCES[id].retired);
+export const SOURCE_IDS = Object.keys(SOURCES);
 
 /** { source, model, def } for a source model id, or null for an OpenRouter one. */
 export function sourceOf(id) {
@@ -99,14 +97,13 @@ export function keyFor(id) {
 }
 const mask = (k) => (k.length > 16 ? `${k.slice(0, 6)}••••••••${k.slice(-4)}` : '••••••••');
 // Whether it can run at all: an app installed on this computer, or a key for an API.
-const ready = (id) => { const d = SOURCES[id]; return !!d && !d.retired && (d.needsKey ? !!keyFor(id) : !!findOnPath(d.app)); };
+const ready = (id) => { const d = SOURCES[id]; return !!d && (d.needsKey ? !!keyFor(id) : !!findOnPath(d.app)); };
 /** Whether a source's models show in the pickers: switched on, and its app installed (or its key in). */
 export const sourceOn = (id) => !!load()[id]?.on && ready(id);
-/** Why a source's models can't run now (retired, no key, not installed, switched off), or ''. */
+/** Why a source's models can't run now (no key, not installed, switched off), or ''. */
 export function sourceOffWhy(id) {
   const d = SOURCES[id];
   if (!d) return 'no such source';
-  if (d.retired) return d.retired;
   if (d.needsKey && !keyFor(id)) return `${d.name} has no key yet (⚙ Settings → API keys)`;
   if (!d.needsKey && !findOnPath(d.app)) return `${d.name} is not installed (⚙ Settings → Apps on this PC)`;
   return sourceOn(id) ? '' : `${d.name} is switched off (⚙ Settings → ${d.needsKey ? 'API keys' : 'Apps on this PC'})`;
@@ -116,7 +113,6 @@ const tidy = (all) => Object.fromEntries(Object.entries(all).filter(([k]) => Obj
 export function setSourceOn(id, on) {
   known(id);
   const d = SOURCES[id];
-  if (on && d.retired) throw new Error(d.retired);
   if (on && d.needsKey && !keyFor(id)) throw new Error(`Add your ${d.name} key first.`);
   if (on && !d.needsKey && !findOnPath(d.app)) throw new Error(`${d.appName} is not installed on this computer (${d.install}).`);
   const s = tidy(load());
@@ -149,8 +145,19 @@ export function removeSourceKey(id) {
   clearHealth(id);
   dropCatalogue(id);
 }
+// OpenCode's own providers inside the OpenCode app, which QuorX doesn't offer there: its Zen provider answers only
+// OpenCode's own app, and Go runs over its API with the user's key (opencodego.js).
+const BLOCKED_LOCAL = {
+  opencode: 'OpenCode’s own provider (OpenCode Zen) doesn’t answer calls from QuorX through the OpenCode app. Pick a model of another provider you connected in OpenCode, or an OpenCode Go model (⚙ Settings → API keys).',
+  [GO_ID]: 'OpenCode Go models run with your Go key (⚙ Settings → API keys), not through the OpenCode app. Pick the same model under OpenCode Go.',
+};
+/** Why a model of the OpenCode app isn't offered (one of OpenCode's own providers), or ''. */
+export function blockedLocal(id) {
+  const s = sourceOf(id);
+  return s?.source === LOCAL_ID ? BLOCKED_LOCAL[s.model.split('/')[0]] || '' : '';
+}
 /**
- * The model a chat set to a retired source's model runs on now: a Go model the OpenCode app ran
+ * The model a chat set to a blocked model runs on now: a Go model the OpenCode app ran
  * (opencode-local/opencode-go/glm-5.3) moves to Go over the API when Go is on. Anything else stays as it is.
  */
 export function movedModel(id) {
@@ -193,7 +200,7 @@ function refreshLists(ids, listers) {
   const job = { ids, p: after.catch(() => {}).then(async () => {
     const got = {}, errors = {};
     // Listing a source starts its app, which Settings alone never should: only one switched on is listed.
-    await Promise.all(ids.filter((id) => sourceOn(id)).map((id) => Promise.resolve().then(() => (listers[id] || LISTERS[id])()).then((l) => { got[id] = l; }, (e) => { errors[id] = e.message; })));
+    await Promise.all(ids.filter((id) => sourceOn(id)).map((id) => Promise.resolve().then(() => (listers[id] || LISTERS[id])()).then((l) => { got[id] = l.filter((m) => !blockedLocal(m.id)); }, (e) => { errors[id] = e.message; })));
     const now = Date.now(), at = { ...(catalogue?.at || {}) }, errs = { ...(catalogue?.errors || {}) }, old = catalogue?.list || [];
     for (const id of ids) {
       at[id] = now;
@@ -386,11 +393,10 @@ export async function sourceStatus({ versions = true } = {}) {
 /** Checks a connection: starting the app and listing its models costs nothing. */
 export async function testSource(id) {
   known(id);
-  if (SOURCES[id].retired) return { ok: false, kind: 'request', error: SOURCES[id].retired };
   const t = Date.now();
   try {
     await APPS[id].check();
-    const list = await LISTERS[id]();
+    const list = (await LISTERS[id]()).filter((m) => !blockedLocal(m.id));
     noteSourceResult(id, null, null);
     // A passing test means it works again: models set aside after a failure are tried at once.
     dropModels(id);
@@ -411,7 +417,7 @@ export async function chatAny(body, signal, { orChat, fallback, stream = sourceS
   stopped(signal);
   if (checkOn) body = { ...body, model: movedModel(body.model) };
   const src = sourceOf(body.model).source;
-  const skip = (checkOn && sourceOffWhy(src)) || sourceSkip(src, body.model);
+  const skip = (checkOn && (blockedLocal(body.model) || sourceOffWhy(src))) || sourceSkip(src, body.model);
   let why = skip;
   if (!skip) {
     try {

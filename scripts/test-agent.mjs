@@ -34,7 +34,7 @@ import http from 'node:http';
 import { DEFAULTS, sourceFallbackFor, announcesStep } from '../server/agent.js';
 import { sourceOf, sourceStream, sameOnOpenRouter, failureKind, noteSourceResult, sourceSkip, forgetSourceHealth, priced as sourcePriced, chatAny } from '../server/sources.js';
 import { SECRET_FILES } from '../server/keys.js';
-import { SOURCE_IDS, SOURCE_FILE, sourceOn, sourceOffWhy, setSourceOn, setSourceKey, removeSourceKey, keyFor, movedModel, sourceModels, sourceStatus, testSource } from '../server/sources.js';
+import { SOURCE_IDS, SOURCE_FILE, sourceOn, sourceOffWhy, blockedLocal, setSourceOn, setSourceKey, removeSourceKey, keyFor, movedModel, sourceModels, sourceStatus } from '../server/sources.js';
 import { goModels, goEntry, goBody, goStream, effortFor as goEffort } from '../server/opencodego.js';
 import { toolPrompt, renderTranscript, parseToolCalls, textFilter, notRun } from '../server/textcalls.js';
 import { localStream, localModels } from '../server/opencodelocal.js';
@@ -4571,7 +4571,7 @@ test('Grok Build’s models come from its handshake, with effort levels and no p
   try { await assert.rejects(grokModels(grokOpts), /grok login/); } finally { delete process.env.FAKE_GROK_MODE; }
 });
 
-// ---------- OpenCode Go over its API, with the user's key (server/opencodego.js); OpenCode on this PC retired ----------
+// ---------- OpenCode Go over its API, with the user's key (server/opencodego.js); OpenCode's own providers left out of the app ----------
 // Go's own list (ids only) and models.dev's entry for Go, as the two answer.
 const GO_LIVE = { object: 'list', data: [{ id: 'glm-5.3' }, { id: 'brand-new' }, { id: 'paint-1' }, { id: 'beam-free' }] };
 const GO_DEV = { 'opencode-go': { models: {
@@ -4653,50 +4653,63 @@ test('OpenCode Go streams with the key and the chat’s session; a refused key i
   await assert.rejects(goStream({ model: 'opencode-go/glm-5.3', messages: [] }, new AbortController().signal, null, null, { info, fetchFn }), /no OpenCode Go key/);
 });
 
-test('OpenCode on this PC is retired: none of its models list, its switch can’t go on, and a chat on one is told to pick another', async () => {
+test('OpenCode on this PC leaves out OpenCode’s own providers (Zen, and Go, which runs with its key); a chat on one is told what to pick', async () => {
   fs.mkdirSync(path.dirname(SOURCE_FILE), { recursive: true });
   const before = fs.existsSync(SOURCE_FILE) ? fs.readFileSync(SOURCE_FILE, 'utf8') : null;
-  const saved = process.env.OPENCODE_API_KEY; delete process.env.OPENCODE_API_KEY;
+  const saved = process.env.OPENCODE_API_KEY, savedPath = process.env.PATH; delete process.env.OPENCODE_API_KEY;
+  // An "opencode" on PATH, so the source can be on; the test's own lists stand in for the app's.
+  const bin = tempDir('qx-oc-bin-');
+  fs.writeFileSync(path.join(bin, process.platform === 'win32' ? 'opencode.cmd' : 'opencode'), process.platform === 'win32' ? '@echo off\r\n' : '#!/bin/sh\n', { mode: 0o755 });
+  process.env.PATH = `${bin}${path.delimiter}${savedPath}`;
+  const local = (provider, model) => ({ ...goInfo(), id: `opencode-local/${provider}/${model}`, realId: `${provider}/${model}`, providerID: provider, modelID: model });
+  const appList = async () => [local('opencode', 'big-pickle'), local('opencode', 'beam-free'), local('opencode-go', 'glm-5.3'), local('anthropic', 'claude-x'), local('deepseek', 'deepseek-v4')];
+  const listers = { 'opencode-local': appList, 'opencode-go': async () => goModels({ fetchJSON: goFetch }) };
   try {
-    fs.writeFileSync(SOURCE_FILE, JSON.stringify({ 'opencode-local': { on: true } }));
-    assert.ok(!SOURCE_IDS.includes('opencode-local'), 'Settings and the pickers don’t offer it');
-    assert.equal(sourceOn('opencode-local'), false, 'switched on before: still off now');
-    assert.throws(() => setSourceOn('opencode-local', true), /no longer offered/);
-    assert.match(sourceOffWhy('opencode-local'), /no longer offered.*Pick another model/);
-    const listed = await sourceModels({ refresh: true, all: true, listers: { 'opencode-local': async () => [goInfo()], 'opencode-go': async () => goModels({ fetchJSON: goFetch }) } });
-    assert.ok(!listed.some((m) => m.source === 'opencode-local'), 'none of its models list');
-    assert.ok(!(await sourceStatus({ versions: false })).some((x) => x.id === 'opencode-local'), 'no card in Settings');
-    assert.deepEqual(await testSource('opencode-local'), { ok: false, kind: 'request', error: sourceOffWhy('opencode-local') }, 'testing it starts nothing');
-    // A summary on one: refused with the reason, nothing called.
-    await assert.rejects(chatAny({ model: 'opencode-local/anthropic/claude-x', messages: [] }, null, { orChat: () => { throw new Error('no'); }, fallback: async () => null }), /no longer offered/);
-    // No Go key: Go's models don't show, and a chat's old Go-through-the-app model stays as it is.
+    fs.writeFileSync(SOURCE_FILE, '{}');
+    assert.ok(SOURCE_IDS.includes('opencode-local'), 'OpenCode on this PC is still offered');
+    setSourceOn('opencode-local', true);
+    assert.equal(sourceOn('opencode-local'), true);
+    const listed = await sourceModels({ refresh: true, listers });
+    assert.deepEqual(listed.filter((m) => m.source === 'opencode-local').map((m) => m.id), ['opencode-local/anthropic/claude-x', 'opencode-local/deepseek/deepseek-v4'], 'its other providers list; OpenCode’s own don’t');
+    assert.equal((await sourceStatus({ versions: false })).find((x) => x.id === 'opencode-local').models, 2, 'Settings counts only the models offered');
+    assert.match(blockedLocal('opencode-local/opencode/big-pickle'), /OpenCode Zen/);
+    assert.match(blockedLocal('opencode-local/opencode-go/glm-5.3'), /Go key/);
+    assert.equal(blockedLocal('opencode-local/anthropic/claude-x'), '');
+    assert.equal(blockedLocal('opencode-go/glm-5.3'), '');
+    // A summary on a blocked model: refused with the reason, nothing called.
+    await assert.rejects(chatAny({ model: 'opencode-local/opencode/big-pickle', messages: [] }, null, { orChat: () => { throw new Error('no'); }, fallback: async () => null }), /OpenCode Zen/);
+    // No Go key: Go's models don't show, and a chat's old Go-through-the-app model stays as it is (and is told why).
     assert.equal(sourceOn('opencode-go'), false);
     assert.match(sourceOffWhy('opencode-go'), /no key/);
     assert.equal(movedModel('opencode-local/opencode-go/glm-5.3'), 'opencode-local/opencode-go/glm-5.3');
+    await assert.rejects(chatAny({ model: 'opencode-local/opencode-go/glm-5.3', messages: [] }, null, { orChat: () => { throw new Error('no'); }, fallback: async () => null }), /Go key/);
     // The key goes in: on, listed, masked in Settings, and the old id moves to Go over the API.
     assert.throws(() => setSourceKey('opencode-go', 'short'), /does not look like a key/);
     assert.throws(() => setSourceKey('opencode-go', 'sk-or-v1-0123456789abcdef'), /OpenRouter key/);
     setSourceKey('opencode-go', 'test-go-key-0123456789');
     assert.equal(keyFor('opencode-go').key, 'test-go-key-0123456789');
     assert.equal(sourceOn('opencode-go'), true);
+    assert.equal(sourceOn('opencode-local'), true, 'saving the Go key keeps the app’s switch');
     const st = (await sourceStatus({ versions: false })).find((x) => x.id === 'opencode-go');
     assert.equal(st.needsKey, true);
     assert.equal(st.on, true);
     assert.ok(!JSON.stringify(st).includes('test-go-key-0123456789'), 'the page only sees the key masked');
-    const go = await sourceModels({ refresh: true, listers: { 'opencode-go': async () => goModels({ fetchJSON: goFetch }) } });
+    const go = await sourceModels({ refresh: true, listers });
     assert.ok(go.some((m) => m.id === 'opencode-go/glm-5.3'), 'Go’s models show in the pickers');
+    assert.ok(!go.some((m) => m.id === 'opencode-local/opencode-go/glm-5.3'), 'and only once');
     assert.equal(movedModel('opencode-local/opencode-go/glm-5.3'), 'opencode-go/glm-5.3');
-    assert.equal(movedModel('opencode-local/anthropic/claude-x'), 'opencode-local/anthropic/claude-x', 'another provider’s model has nowhere to go');
+    assert.equal(movedModel('opencode-local/anthropic/claude-x'), 'opencode-local/anthropic/claude-x', 'another provider’s model stays on the app');
     assert.equal(movedModel('opencode-go/glm-5.3'), 'opencode-go/glm-5.3');
     setSourceOn('opencode-go', false);
     assert.equal(keyFor('opencode-go').key, 'test-go-key-0123456789', 'switching off keeps the key');
-    assert.ok(!JSON.parse(fs.readFileSync(SOURCE_FILE, 'utf8'))['opencode-local']?.key);
     removeSourceKey('opencode-go');
     assert.equal(keyFor('opencode-go'), null);
     assert.equal(sourceOn('opencode-go'), false);
   } finally {
     if (before == null) fs.rmSync(SOURCE_FILE, { force: true }); else fs.writeFileSync(SOURCE_FILE, before);
     if (saved != null) process.env.OPENCODE_API_KEY = saved;
+    process.env.PATH = savedPath;
+    await sourceModels({ refresh: true, all: true, listers: { 'opencode-local': async () => [], 'opencode-go': async () => [] } }).catch(() => {});
     forgetSourceHealth();
   }
 });

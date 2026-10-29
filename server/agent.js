@@ -13,7 +13,7 @@ import path from 'node:path';
 import { chat, chatStream, generationCost, chatModels, imageModels, generateImage, speechModels, synthesize, composeMusic, musicModels, videoModels, generateVideo, HOME } from './openrouter.js';
 import { ensemble, GATE } from './decisions.js';
 import { runtime, knownProviders, currentKey } from './openrouter.js';
-import { sourceOf, sourceStream, sourceModels, sourceOffWhy, movedModel, sourceSkip, noteSourceResult, failureKind, kindWords, sameOnOpenRouter, stripPass, chatAny, sessionFor } from './sources.js';
+import { sourceOf, sourceStream, sourceModels, sourceOffWhy, blockedLocal, movedModel, sourceSkip, noteSourceResult, failureKind, kindWords, sameOnOpenRouter, stripPass, chatAny, sessionFor } from './sources.js';
 import { pathToFileURL } from 'node:url';
 import { rotateLog } from './storagerules.js';
 import { enhanceRequest } from './enhancer.js';
@@ -993,11 +993,11 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   const setup = req.bench ? { ...DEFAULTS.setups.C, ...(req.setup || {}) }
     : { model: req.setup?.model || DEFAULTS.chatModel, reasoning: req.setup?.reasoning || 'off', creativity: ['focused', 'creative'].includes(req.setup?.creativity) ? req.setup.creativity : 'default', decide: 'auto' };
   const S = { ...DEFAULTS, ...(req.settings || {}) };
-  // A chat still set to a Go model it ran through the OpenCode app (retired) carries on with the same model over Go's
+  // A chat still set to a Go model it ran through the OpenCode app carries on with the same model over Go's
   // API, when a Go key is in (tests script the source, so only real runs move).
   if (!deps.sourceStream) for (const o of [setup, carryOn]) {
     const to = o?.model ? movedModel(o.model) : null;
-    if (to && to !== o.model) { emit({ t: 'note', level: 'info', msg: `${o.model} ran through the OpenCode app on this PC, which QuorX no longer offers: this reply uses ${to} with your OpenCode Go key. Pick it in the chat's model button to keep it.`, at: 0 }); o.model = to; }
+    if (to && to !== o.model) { emit({ t: 'note', level: 'info', msg: `${o.model} ran through the OpenCode app on this PC; Go models now run with your key, so this reply uses ${to} with your OpenCode Go key. Pick it in the chat's model button to keep it.`, at: 0 }); o.model = to; }
   }
   // A source whose models can't use apps (sources.js noDesktop): no desktop tool in this reply, and the model says so.
   const noDesktop = sourceOf(carryOn?.model || setup.model)?.def.noDesktop || '';
@@ -1921,7 +1921,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     run.sourceFails ??= {}; run.sourceOff ??= {};
     // A source switched off, or one that failed for other chats a moment ago, is not waited on again (tests script
     // the source, so only the real one is checked).
-    let why = run.sourceOff[s.source] || (deps.sourceStream ? '' : sourceOffWhy(s.source) || sourceSkip(s.source, sm));
+    let why = run.sourceOff[s.source] || (deps.sourceStream ? '' : blockedLocal(sm) || sourceOffWhy(s.source) || sourceSkip(s.source, sm));
     let kind = why ? 'skipped' : null;
     for (let again = true; !why && again;) {
       again = false;
