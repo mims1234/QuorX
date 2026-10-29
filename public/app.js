@@ -2644,20 +2644,22 @@ function paneHTML(c) {
       <form class="composer composer-v2">
         <div class="composer-box">
         <div class="cmp-quick" role="toolbar" aria-label="Quick settings for this chat"></div>
-        <div class="cmp-control-rack opts-open"><span class="cmp-q-slot"></span><span class="cmp-model-slot"></span><button type="button" class="cmp-set-btn" aria-haspopup="dialog" aria-expanded="false" title="This chat's settings: reasoning, creativity, Strict / YOLO, tools"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg><span class="cmp-set-l">This chat</span><span class="cmp-set-sum"></span></button><span class="cmp-follow-slot"></span>
-          <div class="cs-scrim" hidden></div>
-          <div class="chat-set" role="dialog" aria-label="This chat's settings" hidden>
-            <div class="cs-head"><b>This chat's settings</b><small>Changes here apply to this chat only</small><button type="button" class="cs-gear" title="All settings: models, prices and defaults (⚙ Settings)" aria-label="Open all settings">${ICO.gear}</button><button type="button" class="cs-x" aria-label="Discard changes and close" title="Close (discards unsaved changes)">✕</button></div>
-            <div class="cbar"></div>
-            <div class="cs-glob"></div>
-            <details class="cs-adv" open><summary>Advanced <small>· each tool's model, strength and price</small></summary><div class="toolbar cmp-tools-wrap" aria-label="Tools the agent may use"></div></details>
-            <div class="cs-foot"><span class="cs-note">No changes</span><button type="button" class="cs-undo" title="Put back what was set when you opened this" disabled>Undo</button><button type="button" class="cs-ok" title="Save changes" disabled>✓ Save</button></div>
-          </div>
-        </div>
         <div class="attachments cmp-attachments-tray"></div>
         <div class="suggest cmp-suggest-popup" role="listbox" hidden></div>
         <div class="composer-row cmp-input-row">
           <textarea class="input cmp-textarea" rows="1" placeholder="Ask, or ask for something to be built…  @ to add files or chats · / for commands"></textarea>
+        </div>
+        <div class="cmp-foot">
+          <div class="cmp-control-rack opts-open"><span class="cmp-q-slot"></span><span class="cmp-model-slot"></span><span class="cmp-chips" role="group" aria-label="Settings for the next reply"></span><button type="button" class="cmp-set-btn" aria-haspopup="dialog" aria-expanded="false" title="This chat's settings: reasoning, creativity, Strict / YOLO, tools"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg><span class="cmp-set-l">This chat</span><span class="cmp-set-sum"></span></button><span class="cmp-follow-slot"></span>
+            <div class="cs-scrim" hidden></div>
+            <div class="chat-set" role="dialog" aria-label="This chat's settings" hidden>
+              <div class="cs-head"><b>This chat's settings</b><small>Changes here apply to this chat only</small><button type="button" class="cs-gear" title="All settings: models, prices and defaults (⚙ Settings)" aria-label="Open all settings">${ICO.gear}</button><button type="button" class="cs-x" aria-label="Discard changes and close" title="Close (discards unsaved changes)">✕</button></div>
+              <div class="cbar"></div>
+              <div class="cs-glob"></div>
+              <details class="cs-adv" open><summary>Advanced <small>· each tool's model, strength and price</small></summary><div class="toolbar cmp-tools-wrap" aria-label="Tools the agent may use"></div></details>
+              <div class="cs-foot"><span class="cs-note">No changes</span><button type="button" class="cs-undo" title="Put back what was set when you opened this" disabled>Undo</button><button type="button" class="cs-ok" title="Save changes" disabled>✓ Save</button></div>
+            </div>
+          </div>
           <div class="composer-actions cmp-bottom-bar">
             <div class="cmp-actions-left">
               <button type="button" class="cmp-act-btn imgBtn attachBtn" title="Attach files of any kind: documents, PDFs, spreadsheets, code, images… (or paste / drop them)" aria-label="Attach files">${CMP_ICO.attach}</button>
@@ -2898,23 +2900,46 @@ function renderComposerBar(c) {
     ['budget', 'Paid media per reply', '🖼', G.settings.budget, 0.05, 'A paid picture, voice, music or video call that would go over this is stopped, in Strict and in YOLO.']];
   const cap = ([k, label, , v, step, tip]) => `<label class="cs-num" title="${esc(tip)}"><span>${label}</span><span class="cs-inp"><i>$</i><input type="number" min="0" step="${step}" data-k="${k}" value="${esc(String(v))}" aria-label="${label} in dollars"></span></label>`;
   glob.innerHTML = `<div class="cs-sec"><h5>Budget <small>· all chats</small></h5><div class="cs-row cs-caps">${CAPS.map(cap).join('')}</div></div>`;
-  // The quick row above the model: the same switches as the window, one click each; ⋯ opens the window for the rest.
   const quick = $('.cmp-quick', c.el.root);
-  const qcap = ([k, label, ico, v, step, tip]) => `<label class="cs-num cq-cap" title="${esc(`${label} (all chats)\n${tip}`)}"><span aria-hidden="true">${ico}</span><span class="cs-inp"><i>$</i><input type="number" min="0" step="${step}" data-k="${k}" value="${esc(String(v))}" aria-label="${label} in dollars"></span></label>`;
-  quick.innerHTML = `<div class="cq-grp cq-lv">${levelsHTML(s)}</div><span class="cq-sep" aria-hidden="true"></span>${permHTML('cq-perm')}<span class="cq-br" aria-hidden="true"></span><span class="cq-sep" aria-hidden="true"></span><div class="cq-grp cs-tools">${quickToolsHTML(c, { micOnly: true })}</div><span class="cq-sep cq-sep-caps" aria-hidden="true"></span><div class="cq-grp cs-caps">${CAPS.map(qcap).join('')}</div>
-    <div class="lvl cq-plan" role="radiogroup" aria-label="Plan first"><span class="lvl-ico" title="Plan first (all chats): whether the agent shows its plan and waits for Go ahead" aria-hidden="true">🗺</span>${[['off', 'Off', 'Plans and builds in one go.'], ['big', 'Big', 'For a new app, site, game or a change across several files, it shows its plan and waits for Go ahead, Stop here, or your changes.'], ['always', 'Always', 'Before any file change or command, it shows its plan and waits.']].map(([v, w, tip]) => { const on = (G.settings.planFirst || 'off') === v; return `<button type="button" class="lvl-b ${on ? 'on' : ''}" role="radio" aria-checked="${on}" data-plan="${v}" title="${esc(`Plan first: ${w}${on ? ' (now)' : ''} · all chats\n${tip}`)}">${w}</button>`; }).join('')}</div><span class="cq-sp"></span>
-    <button type="button" class="cq-adv" aria-haspopup="dialog" title="All of this chat's settings: each tool's model, strength and price, Undo and Save" aria-label="Advanced settings for this chat"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg><span>Advanced</span></button>`;
-  // Show or hide the quick rows (all chats). Hidden, the button keeps what matters in view: YOLO and the thinking level.
-  const qOn = G.quickRow !== false, rWord = { default: 'Auto', off: '', low: 'Low', medium: 'Med', high: 'High' }[s.reasoning || 'off'];
-  quick.hidden = !qOn;
-  const qSum = [c.approval === 'yolo' ? 'YOLO' : '', rWord ? `🧠 ${rWord}` : ''].filter(Boolean).join(' · ');
+  // The settings live in one popover over the message box. The chips in the footer say what each is set to and open
+  // its part; ⋯ opens all of it. A setting at its usual value is quiet, a changed one lights up (the box folds the
+  // quiet ones first as it narrows, and the budget caps before everything: they change least).
+  const CAP_WORD = { replyBudget: 'reply', budget: 'media' };
+  const capLine = ([k, label, , v, step, tip]) => `<label class="cs-num" title="${esc(`${label} (all chats)\n${tip}`)}"><span>${CAP_WORD[k] || label}</span><span class="cs-inp"><i>$</i><input type="number" min="0" step="${step}" data-k="${k}" value="${esc(String(v))}" aria-label="${label} in dollars"></span></label>`;
+  // One line per setting: its name on the left ("all chats" under it when it is not this chat's own), the control on the right.
+  const sec = (k, title, body, note = '') => `<div class="cq-sec" data-sec="${k}"><h6>${title}${note ? `<small>${note}</small>` : ''}</h6><div class="cq-row">${body}</div></div>`;
+  const PLAN = [['off', 'Off', 'Plans and builds in one go.'], ['big', 'Big', 'For a new app, site, game or a change across several files, it shows its plan and waits for Go ahead, Stop here, or your changes.'], ['always', 'Always', 'Before any file change or command, it shows its plan and waits.']];
+  const pv = G.settings.planFirst || 'off';
+  quick.innerHTML = `<div class="cq-head"><b>This chat</b><button type="button" class="cq-adv" aria-haspopup="dialog" title="All of this chat's settings: each tool's model, strength and price, Undo and Save" aria-label="Advanced settings for this chat"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg><span>Advanced</span></button><button type="button" class="cq-x" aria-label="Close" title="Close (Esc)">✕</button></div>`
+    + sec('think', 'Thinking', levelsHTML(s, 'reason'))
+    + sec('creative', 'Creativity', levelsHTML(s, 'creative'))
+    + sec('safety', 'Mode', permHTML('cq-perm'))
+    + sec('plan', 'Plan', `<div class="lvl cq-plan" role="radiogroup" aria-label="Plan first"><span class="lvl-ico" aria-hidden="true">🗺</span>${PLAN.map(([v, w, tip]) => { const on = pv === v; return `<button type="button" class="lvl-b ${on ? 'on' : ''}" role="radio" aria-checked="${on}" data-plan="${v}" title="${esc(`Plan first: ${w}${on ? ' (now)' : ''} · all chats\n${tip}`)}">${w}</button>`; }).join('')}</div>`, 'all chats')
+    + sec('money', 'Budget', `<div class="cs-caps">${CAPS.map(capLine).join('')}</div>`, 'all chats')
+    + sec('mic', 'Mic', `<div class="cs-tools">${quickToolsHTML(c, { micOnly: true })}</div>`, 'all chats');
+  const chipsEl = $('.cmp-chips', rack);
+  const rv = s.reasoning || 'off', cv = CREATIVITY_INFO[s.creativity] ? s.creativity : 'default', yolo = c.approval === 'yolo';
+  const capNow = CAPS.map((x) => Number(x[3])), capWas = [G.cfg.defaults.replyBudget ?? 1, G.cfg.defaults.budget ?? 0.5].map(Number);
+  const moneyChanged = capNow.some((v, i) => v !== capWas[i]);
+  const ch = { think: rv !== (G.settings.reasoning || 'off'), creative: cv !== 'default', safety: c.approval !== (G.settings.approval || 'strict'), plan: pv !== 'off' };
+  const nCh = Object.values(ch).filter(Boolean).length;
+  const RWORD = { default: 'Auto', off: 'Off', low: 'Low', medium: 'Med', high: 'High' };
+  const chip = (k, ico, label, val, tone, tip) => `<button type="button" class="cq-chip cq-${k}" data-sec="${k}" data-state="${ch[k] || k === 'safety' ? 'changed' : 'default'}" data-tone="${tone}" aria-haspopup="dialog" aria-expanded="false" aria-label="${esc(`${label || tip.split(':')[0]}: ${val}${ch[k] ? '' : ' (usual)'}`)}" title="${esc(tip)}"><span class="cq-ci" aria-hidden="true">${ico}</span>${label ? `<span class="cq-cl">${label}</span>` : ''}<b>${esc(val)}</b></button>`;
+  const mdot = moneyChanged ? '<i class="cq-mdot" aria-hidden="true"></i>' : '';
+  chipsEl.innerHTML = chip('think', '🧠', 'Thinking', RWORD[rv] || rv, 'violet', `Thinking: ${REASON_INFO[rv]?.[0] || rv}\nHow much the model reasons before answering. Click to change.`)
+    + chip('creative', '🎨', '', CREATIVITY_INFO[cv][0], 'accent', `Creativity: ${CREATIVITY_INFO[cv][0]}\nHow varied the answers are. Click to change.`)
+    + chip('safety', yolo ? '⚡' : '🔒', '', yolo ? 'YOLO' : 'Strict', yolo ? 'red' : 'ok', yolo ? 'YOLO: uses its tools without asking; the deciders answer its questions. Click to change.' : 'Strict: asks you before paid media; its questions come to you. Click to change.')
+    + `<button type="button" class="cq-chip cq-money" data-sec="money" aria-haspopup="dialog" aria-expanded="false" aria-label="Budget: cap $${capNow[0]} per reply, paid media $${capNow[1]}" title="Budget per reply (all chats): everything a reply calls, and its paid media. Click to change."><span class="cq-ml">cap</span><b>$${capNow[0]}</b><span class="cq-ml">· media</span><b>$${capNow[1]}</b></button>`
+    + `<button type="button" class="cq-chip cq-sum" data-sec="" data-state="${nCh ? 'changed' : 'default'}" data-tone="accent" aria-haspopup="dialog" aria-expanded="false" aria-label="This chat's settings, ${nCh} changed${moneyChanged ? ', a budget cap changed' : ''}" title="This chat's settings: thinking, creativity, Strict / YOLO, plan, budget"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>${nCh ? `<b>${nCh}</b>` : ''}${mdot}</button>`
+    + `<button type="button" class="cq-chip cq-more" data-sec="" aria-haspopup="dialog" aria-expanded="false" aria-label="All of this chat's settings${moneyChanged ? ', a budget cap changed' : ''}" title="All of this chat's settings">⋯${mdot}</button>`;
+  // 👁 🧭 Chrome, computer use and always-allowed: in a row when there is room, behind one tray button when not.
+  const trayOn = [followsAgent(c), c.followSteps, c.tools?.chrome, c.tools?.apps, chatAllowedCount(c) > 0].filter(Boolean).length;
   followSlot.innerHTML = `
-    <button type="button" class="cq-toggle ${qOn ? 'on' : ''} ${c.approval === 'yolo' ? 'yolo' : ''}" aria-pressed="${qOn}" title="${qOn ? 'Hide the quick settings above (all chats)' : 'Show the quick settings: thinking, Strict / YOLO, tools and caps (all chats)'}${qSum ? `\nNow: ${qSum}` : ''}" aria-label="${qOn ? 'Hide' : 'Show'} quick settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>${!qOn && qSum ? `<span class="cq-tsum">${esc(qSum)}</span>` : ''}<svg class="cq-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="${qOn ? 'M6 15l6-6 6 6' : 'M6 9l6 6 6-6'}"/></svg></button>
+    <button type="button" class="cmp-ico cmp-tray-b ${trayOn ? 'on' : ''}" aria-haspopup="true" aria-expanded="${!!c._tray}" aria-label="Follow and access: ${trayOn} on" title="Follow the agent, the latest steps, Chrome, computer use and always allowed${trayOn ? ` (${trayOn} on)` : ''}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>${trayOn ? `<span class="apps-n">${trayOn}</span>` : ''}</button><span class="cmp-tray ${c._tray ? 'open' : ''}">
     <button type="button" class="cmp-ico cmp-follow-b ${followsAgent(c) ? 'on' : ''}" aria-pressed="${followsAgent(c)}" aria-label="Follow the agent" title="${esc(`Follow the agent: ${followsAgent(c) ? 'on' : c.followSteps && G.followAgent !== false ? 'off in this chat while 🧭 follows the steps' : 'off'}\nThe side pane jumps to the page or terminal the agent is using, so you can watch.\nAll chats · click to turn ${followsAgent(c) ? 'off' : 'on'}`)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
     <button type="button" class="cmp-ico cmp-steps-b ${c.followSteps ? 'on' : ''}" aria-pressed="${!!c.followSteps}" aria-label="Follow the latest steps" title="${esc(`Follow the latest steps: ${c.followSteps ? 'on' : 'off'}\nWhile a reply runs, the side pane shows its steps as they happen. 👁 Follow the agent pauses in this chat meanwhile.\nPicking an older reply's 🧭 turns this off.\nThis chat only · click to turn ${c.followSteps ? 'off' : 'on'}`)}"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/></svg></button>
     <button type="button" class="cmp-ico cmp-chrome-b ${c.tools?.chrome ? 'on' : ''} ${extReady() ? '' : 'nosetup'}" aria-pressed="${!!c.tools?.chrome}" aria-label="Chrome extension" title="${esc(`Chrome extension: ${!extReady() ? (G.ext?.outdated ? 'needs a reload' : 'not set up') : c.tools?.chrome ? 'on for this chat' : 'off for this chat'}\n${extReady() ? 'Lets the agent use your own Chrome, signed in as you. Sending, buying and account changes ask you first.' : G.ext?.outdated ? 'The extension is an older version: reload it once in chrome://extensions.' : 'Lets the agent use your own Chrome, signed in as you.'}\n${extReady() ? `This chat only · click to turn ${c.tools?.chrome ? 'off' : 'on'}` : 'Click to set it up'}`)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 3.5a2 2 0 0 1 4 0V6h4v4h-1.5a2 2 0 0 0 0 4H18v4h-4v-1.5a2 2 0 0 0-4 0V18H6v-4h1.5a2 2 0 0 0 0-4H6V6h4z"/></svg></button>
-    ${appsButtonHTML(c)}${permButtonHTML(c)}
-`;
+    ${appsButtonHTML(c)}${permButtonHTML(c)}</span>`;
   for (const inp of [...glob.querySelectorAll('.cs-num input'), ...quick.querySelectorAll('.cs-num input')]) inp.onchange = () => { const v = Math.min(Number(inp.dataset.max) || Infinity, Math.max(Number(inp.dataset.min) || 0, Number(inp.value) || 0)); inp.value = String(v); G.settings[inp.dataset.k] = v; savePrefs(); };
   for (const b of quick.querySelectorAll('[data-plan]')) b.onclick = () => { G.settings.planFirst = b.dataset.plan; savePrefs(); renderComposerBar(c); };
   // The button says what matters at a glance (YOLO in red, reasoning on) and opens the panel.
@@ -2963,7 +2988,9 @@ function renderComposerBar(c) {
     $('.cs-x', panel).onclick = () => discard(true);
     undoBtn.onclick = () => discard(false);
   }
-  $('.model', slot).onclick = async () => { const id = await pickModel('chat', s.model, { context: `For “${clip(c.title, 40)}”` }); if (id) { s.model = id; saveChat(c); renderComposerBar(c); renderChatHead(c); applyKeyLock(); } };
+  // The chat's setup is read when the pick comes back, not from this render: a save that merged with the server's
+  // copy while the picker was open (a reply running) replaces it, and the pick must land on the one in use.
+  $('.model', slot).onclick = async () => { const id = await pickModel('chat', c.agent.setup.model, { context: `For “${clip(c.title, 40)}”` }); if (id) { c.agent.setup.model = id; saveChat(c); renderComposerBar(c); renderChatHead(c); applyKeyLock(); } };
   $('.cq-adv', quick).onclick = () => setBtn.click();
   const both = (sel) => [...bar.querySelectorAll(sel), ...quick.querySelectorAll(sel)];
   for (const b of both('.lvl[data-key] .lvl-b')) b.onclick = () => { c.agent.setup[b.closest('.lvl').dataset.key] = b.dataset.v; saveChat(c); renderComposerBar(c); };
@@ -2974,7 +3001,7 @@ function renderComposerBar(c) {
     renderToolbars(); renderComposerBar(c);
   };
   const gear = $('.cs-gear', rack); if (gear && !gear.dataset.wired) { gear.dataset.wired = '1'; gear.onclick = () => openSettings(); }
-  $('.cq-toggle', followSlot).onclick = () => { G.quickRow = G.quickRow === false; savePrefs(); for (const ch of [...G.open.values(), G.homeDraft]) if (ch?.el?.root?.isConnected) renderComposerBar(ch); };
+  wireQuickSettings(c, quick, chipsEl, followSlot);
   // 👁 and 🧭 both steer the side pane, so one at a time in a chat: turning 👁 on here turns this chat's 🧭 off.
   $('.cmp-follow-b', followSlot).onclick = () => {
     if (c.followSteps) { c.followSteps = false; G.followAgent = true; saveChat(c); } else G.followAgent = G.followAgent === false;
@@ -2990,6 +3017,63 @@ function renderComposerBar(c) {
   wireAppsButton(c, followSlot);
   wirePermButton(c, followSlot);
   for (const b of both('.perm button')) b.onclick = () => { c.approval = b.dataset.approval; saveChat(c); renderComposerBar(c); if (c.running?.runId) postJ(`/api/runs/${c.running.runId}/mode`, { approval: c.approval }).catch(() => {}); };
+}
+// The settings popover over the message box: a chip opens its own part, ⋯ (or, in a narrow box, the one summary chip)
+// opens all of it. It stays open while you change things (each change draws the box again) and closes on a click
+// outside or Esc. The tray button, shown when the box is too narrow for the 👁 🧭 row, opens that row the same way.
+function wireQuickSettings(c, quick, chips, followSlot) {
+  const box = quick.closest('.composer-box');
+  quick._c = c; followSlot._c = c;
+  const place = () => {
+    const open = c._cq != null;
+    quick.hidden = !open;
+    const from = open ? [...chips.querySelectorAll(`.cq-chip[data-sec="${c._cq}"]`)].find((b) => b.offsetParent) : null;
+    for (const b of chips.querySelectorAll('.cq-chip')) b.setAttribute('aria-expanded', String(b === from));
+    if (!open) return;
+    for (const sec of quick.querySelectorAll('.cq-sec')) sec.hidden = !!c._cq && sec.dataset.sec !== c._cq;
+    quick.classList.toggle('one', !!c._cq);
+    const bw = box.clientWidth, pw = Math.min(quick.offsetWidth, bw);
+    const x = from && c._cq ? from.getBoundingClientRect().left - box.getBoundingClientRect().left : bw - pw;
+    quick.style.left = `${Math.max(0, Math.min(x, bw - pw))}px`;
+  };
+  fitComposer(box);
+  const tray = () => { $('.cmp-tray', followSlot)?.classList.toggle('open', !!c._tray); $('.cmp-tray-b', followSlot)?.setAttribute('aria-expanded', String(!!c._tray)); };
+  for (const b of chips.querySelectorAll('.cq-chip')) b.onclick = () => {
+    c._cq = c._cq === b.dataset.sec ? undefined : b.dataset.sec; c._tray = false; tray(); place();
+    if (c._cq != null) (quick.querySelector(`[data-sec="${c._cq || 'think'}"] .on, [data-sec="${c._cq || 'think'}"] input`))?.focus({ preventScroll: true });
+  };
+  $('.cq-x', quick).onclick = () => { c._cq = undefined; place(); };
+  $('.cq-adv', quick).addEventListener('click', () => { c._cq = undefined; place(); });
+  $('.cmp-tray-b', followSlot).onclick = () => { c._tray = !c._tray; c._cq = undefined; place(); tray(); };
+  place(); tray();
+  if (quick.dataset.wired) return;
+  quick.dataset.wired = '1';
+  // One pair of listeners per message box; they read the chat it shows now (the Home box changes chats).
+  document.addEventListener('pointerdown', (e) => {
+    const ch = quick._c, t = e.target;
+    if (!ch || !quick.isConnected || t.closest?.('dialog, .oh-tip, .chat-set, .allow-pop')) return;
+    if (ch._cq != null && !quick.contains(t) && !t.closest?.('.cq-chip')) { ch._cq = undefined; renderComposerBar(ch); }
+    else if (ch._tray && !followSlot.contains(t)) { ch._tray = false; renderComposerBar(ch); }
+  }, true);
+  document.addEventListener('keydown', (e) => {
+    const ch = quick._c;
+    if (e.key !== 'Escape' || !ch || !quick.isConnected || document.querySelector('dialog[open]') || (ch._cq == null && !ch._tray)) return;
+    e.stopPropagation(); ch._cq = undefined; ch._tray = false; renderComposerBar(ch);
+  }, true);
+}
+// The footer row folds one step at a time until it fits (composer.css says what each step hides): measured, not a
+// fixed width, as a long Quorium or model name, or many changed settings, need more room than a short one.
+const FOLDS = 6;
+function fitComposer(box) {
+  const rack = box && $('.cmp-control-rack', box);
+  if (!rack || !box.isConnected || !box.offsetWidth) return;
+  // A badge may stick out a few px. The model may shrink, but not below a readable name: until the last step (the
+  // buttons on their own line), a model squeezed under 110px counts as not fitting.
+  const model = $('.cmp-model-chip', rack);
+  const fits = (n) => rack.scrollWidth <= rack.clientWidth + 6 && (n >= FOLDS || !model || model.clientWidth >= Math.min(model.scrollWidth, 110));
+  let n = 0;
+  for (; n <= FOLDS; n++) { for (let i = 1; i <= FOLDS; i++) box.classList.toggle(`fold${i}`, i <= n); if (fits(n)) break; }
+  if (!box._fitRO) { box._fitRO = new ResizeObserver(() => fitComposer(box)); box._fitRO.observe(box); }
 }
 // ---------- usage (per chat): every model this chat paid for, grouped by kind of call ----------
 const USAGE_KIND = {
@@ -3121,7 +3205,7 @@ const CREATIVITY_INFO = { default: ['Default', "The model's own setting. Right f
 // Reasoning and creativity as labelled choices: an icon, then one word per option (Auto = the model's default).
 // What each option does, and for which model, shows on hover.
 const LVL_REASON = ['off', 'low', 'medium', 'high'], LVL_CREATIVE = ['focused', 'default', 'creative'];
-function levelsHTML(s) {
+function levelsHTML(s, which) {
   const m = G.byId.get(s.model), na = m && m.kind === 'chat' && m.reasoning === false, rv = s.reasoning || 'off';
   const cv = CREATIVITY_INFO[s.creativity] ? s.creativity : 'default';
   const noTemp = m && m.kind === 'chat' && m.temp === false;
@@ -3131,8 +3215,8 @@ function levelsHTML(s) {
   const forModel = `\nModel\t${short(s.model)}`;
   const rNote = (na ? '\nThis model has no reasoning setting; it applies if you switch to one that does.' : '') + forModel;
   const cNote = (noTemp ? '\nThis model has no temperature setting, so this has no effect on it.' : '') + forModel;
-  return `<div class="lvl lvl-reason ${na ? 'na' : ''}" role="radiogroup" aria-label="Thinking" data-key="reasoning"><span class="lvl-ico" title="Thinking: how much the model reasons before answering" aria-hidden="true">🧠</span>${['default', ...LVL_REASON].map((v) => step('Thinking', REASON_INFO, v, WORD[v], v === rv, rNote)).join('')}</div>`
-    + `<div class="lvl lvl-creative ${noTemp ? 'na' : ''}" role="radiogroup" aria-label="Creativity" data-key="creativity"><span class="lvl-ico" title="Creativity: how varied the answers are" aria-hidden="true">🎨</span>${LVL_CREATIVE.map((v) => step('Creativity', CREATIVITY_INFO, v, v === 'default' ? 'Default' : WORD[v], v === cv, cNote)).join('')}</div>`;
+  return (which === 'creative' ? '' : `<div class="lvl lvl-reason ${na ? 'na' : ''}" role="radiogroup" aria-label="Thinking" data-key="reasoning"><span class="lvl-ico" title="Thinking: how much the model reasons before answering" aria-hidden="true">🧠</span>${['default', ...LVL_REASON].map((v) => step('Thinking', REASON_INFO, v, WORD[v], v === rv, rNote)).join('')}</div>`)
+    + (which === 'reason' ? '' : `<div class="lvl lvl-creative ${noTemp ? 'na' : ''}" role="radiogroup" aria-label="Creativity" data-key="creativity"><span class="lvl-ico" title="Creativity: how varied the answers are" aria-hidden="true">🎨</span>${LVL_CREATIVE.map((v) => step('Creativity', CREATIVITY_INFO, v, v === 'default' ? 'Default' : WORD[v], v === cv, cNote)).join('')}</div>`);
 }
 // Every tool as one icon toggle (lit when on); the name, what it does and its price show on hover.
 // micOnly: the quick row above the model, where the Quorium's squares stand for the modules.
@@ -3267,9 +3351,10 @@ function renderQuoriumSlot(c) {
     const m = moduleModel(c, k), mine = !!c.qModels?.[k];
     return `<button type="button" class="qx-sq qx-k-${k}${mine ? ' mine' : ''}" data-k="${k}" aria-haspopup="dialog" aria-label="${esc(qName(k))}" title="${esc(`${qName(k)}\nModel\t${short(m) || 'not set'}${mine ? ' (this chat)' : ''}\nClick to change its model in this chat, or turn it off`)}">${qIcon(k)}</button>`;
   };
-  box.innerHTML = `<button type="button" class="qx-pick${changed ? ' changed' : ''}" aria-haspopup="dialog" aria-expanded="false" title="${esc(q ? `Quorium: ${q.name}${changed ? ' (changed in this chat)' : ''}\n${q.desc}\nClick to pick another or save this chat's modules` : 'No Quorium: this chat uses its own switches.\nClick to pick a Quorium')}"><span class="qx-pick-l">${esc(q ? q.name : 'No Quorium')}</span>${changed ? '<span class="qx-chg">changed</span>' : ''}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>`
+  box.innerHTML = `<button type="button" class="qx-pick${changed ? ' changed' : ''}" aria-haspopup="dialog" aria-expanded="false" title="${esc(q ? `Quorium: ${q.name}${changed ? ' (changed in this chat)' : ''}\n${q.desc}\nClick to pick another or save this chat's modules` : 'No Quorium: this chat uses its own switches.\nClick to pick a Quorium')}"><span class="qx-pick-l">${esc(q ? q.name : 'No Quorium')}</span>${changed ? '<span class="qx-chg">changed</span>' : ''}<span class="qx-n" aria-hidden="true">${on.slice(0, 3).map((k) => `<i class="qx-k-${k}"></i>`).join('')}<b>${on.length}</b></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>`
     + `<span class="qx-strip" role="group" aria-label="Modules on in this chat">${on.map(sq).join('')}${off.length ? '<button type="button" class="qx-sq qx-add" aria-haspopup="dialog" aria-label="Add a module to this chat" title="Add a module to this chat">+</button>' : ''}</span>`
     + '<div class="qx-pop" role="dialog" hidden></div>';
+  fitComposer(box.closest('.composer-box'));
   const pop = $('.qx-pop', box), pick = $('.qx-pick', box);
   const after = () => { saveChat(c); renderToolbars(); renderChatTools(c); };
   const close = () => { pop.hidden = true; pick.setAttribute('aria-expanded', 'false'); document.removeEventListener('pointerdown', outside, true); document.removeEventListener('keydown', onKey, true); };
@@ -7569,6 +7654,17 @@ function encodeWav(samples, rate) {
   return new Blob([buf], { type: 'audio/wav' });
 }
 const asDataURL = (blob) => new Promise((r) => { const f = new FileReader(); f.onload = () => r(f.result); f.readAsDataURL(blob); });
+// Whether a recording has speech in it. Speech-to-text models make up whole sentences from silence, so a recording
+// with less than about a third of a second well above the room's own hum is never sent. 20 ms frames; the room's
+// level is the quietest tenth of them.
+function heardSpeech(samples, rate) {
+  const n = Math.floor(rate * 0.02), rms = [];
+  for (let i = 0; i + n <= samples.length; i += n) { let s = 0; for (let j = i; j < i + n; j++) s += samples[j] * samples[j]; rms.push(Math.sqrt(s / n)); }
+  if (!rms.length) return false;
+  const floor = [...rms].sort((a, b) => a - b)[Math.floor(rms.length * 0.1)];
+  const loud = Math.max(0.015, floor * 2); // speech rises and falls between syllables; hum and hiss stay level
+  return rms.filter((x) => x > loud).length >= 15;
+}
 // QuorX asks once before it first uses the mic (the browser asks too); ⓘ by the name lists it and can take it back.
 async function micAllowed() {
   if (G.perms?.mic === 'yes') return true;
@@ -7592,7 +7688,9 @@ async function toggleMic(c, { byKey = false } = {}) {
         const decoded = await new AudioContext().decodeAudioData(await new Blob(chunks).arrayBuffer());
         const off = new OfflineAudioContext(1, Math.ceil(decoded.duration * 16000), 16000);
         const src = off.createBufferSource(); src.buffer = decoded; src.connect(off.destination); src.start();
-        const audio = (await asDataURL(encodeWav((await off.startRendering()).getChannelData(0), 16000))).split(',')[1];
+        const samples = (await off.startRendering()).getChannelData(0);
+        if (!heardSpeech(samples, 16000)) { btn.innerHTML = CMP_ICO.mic; btn.title = micTip(); btn.disabled = false; flashTip(btn, 'Didn’t hear anything, so nothing was sent', 2200); return; }
+        const audio = (await asDataURL(encodeWav(samples, 16000))).split(',')[1];
         const r = await fetch('/api/transcribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ audio, model: G.settings.tools.listen.models[0] }) }).then((x) => x.json());
         if (r.error) throw new Error(r.error);
         const ta = c.el && $('.input', c.el.root); // none when the chat left the screen meanwhile

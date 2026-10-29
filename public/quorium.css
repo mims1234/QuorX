@@ -83,11 +83,10 @@
 .qx-pop .qx-model i { font-style: normal; color: var(--muted); }
 .qx-pop .qx-note { margin: 0; color: var(--muted); font-size: 11.5px; }
 .qx-pop .qx-adds { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
-.qx-pop .qx-addk { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 7px; border: 1px solid transparent; background: transparent; color: var(--text); font: 500 12.5px var(--font-ui); cursor: pointer; text-align: left; }
+.qx-pop .qx-addk { width: 100%; min-width: 0; justify-content: flex-start; display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 7px; border: 1px solid transparent; background: transparent; color: var(--text); font: 500 12.5px var(--font-ui); cursor: pointer; text-align: left; }
 .qx-pop .qx-addk:hover { background: var(--panel-3); border-color: var(--line); }
 .qx-pop .qx-addk .qx-sq { cursor: inherit; }
 .qx-pop .paid-badge { margin-left: auto; }
 
-/* narrow message boxes: the squares get smaller, then go; the name stays */
-@container cmpbox (max-width: 620px) { .cmp-q-slot .qx-sq { width: 20px; height: 20px; font-size: 10px; border-radius: 5px; } .cmp-q-slot .qx-pick-l { max-width: 110px; } }
-@container cmpbox (max-width: 470px) { .cmp-q-slot .qx-strip { display: none; } .cmp-q-slot .qx-pick-l { max-width: 90px; } }
+/* narrow message boxes: smaller squares (composer.css folds the rest) */
+@container cmpbox (max-width: 780px) { .cmp-q-slot .qx-sq { width: 20px; height: 20px; font-size: 10px; border-radius: 5px; } .cmp-q-slot .qx-pick-l { max-width: 110px; } }
