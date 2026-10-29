@@ -1000,8 +1000,13 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   const noOpenRouter = deps.noOpenRouter ?? (!deps.chatStream && !currentKey());
   if (noOpenRouter) {
     if (!sourceOf(carryOn?.model || setup.model)) throw Object.assign(new Error(`${carryOn?.model || setup.model} runs on OpenRouter, and there is no OpenRouter key yet. Pick a model tagged This PC (⚙ Settings → Apps on this PC), or add an OpenRouter key in ⚙ Settings → API keys.`), { status: 400 });
-    Object.assign(S, { deciders: false, enhancer: false, freshEyes: false, review: 'off', codeReview: 'off', helpers: false, sourceFallback: 'off', fallbackModel: '', buildThinking: 'off' });
-    emit({ t: 'note', level: 'info', msg: 'No OpenRouter key yet: the deciders, the reviewer, the prompt enhancer, helpers, fresh eyes and paid media are off for this reply (they run on OpenRouter). Add a key in ⚙ Settings → API keys to use them.', at: 0 });
+    // A helper, reviewer, enhancer or fresh eyes set to a model of an app on this PC keeps working; the rest run on
+    // OpenRouter and are off.
+    const onApp = (m) => !!sourceOf(String(m || '').trim());
+    const keep = { enhancer: onApp(S.enhancerModel || S.helperModel), freshEyes: onApp(S.freshEyesModel) || (!S.freshEyesModel && S.freshEyesTier !== 'strong' && onApp(S.helperModel)), review: onApp(S.reviewModel), helpers: onApp(S.helperModel) };
+    Object.assign(S, { deciders: false, enhancer: keep.enhancer ? S.enhancer : false, freshEyes: keep.freshEyes ? S.freshEyes : false, review: keep.review ? S.review : 'off', codeReview: keep.review ? S.codeReview : 'off', helpers: keep.helpers ? S.helpers : false, sourceFallback: 'off', fallbackModel: '', buildThinking: 'off' });
+    const off = ['the deciders', ...[['review', 'the reviewer'], ['enhancer', 'the prompt enhancer'], ['helpers', 'helpers'], ['freshEyes', 'fresh eyes']].filter(([k]) => !keep[k]).map(([, w]) => w), 'paid media'];
+    emit({ t: 'note', level: 'info', msg: `No OpenRouter key yet: ${off.slice(0, -1).join(', ')} and ${off.at(-1)} are off for this reply (they run on OpenRouter). Add a key in ⚙ Settings → API keys, or set them to a model tagged This PC.`, at: 0 });
   }
   const blockedNames = blockedFor(S.blockedProviders, setup.model);
   const blockedSlugs = blockedNames.length ? providerSlugs(blockedNames, knownProviders()) : [];
@@ -1562,7 +1567,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (emptyTries && (r.text || r.toolCalls.length) && reasonNow !== (setup.reasoning || 'off')) emptyTries = 0;
     // Text written alongside tool calls is "working out loud": it goes to the trace, not the reply.
     const replyBefore = reply;
-    if (r.toolCalls.length) run.stalls = 0;
+    if (r.toolCalls.length) { run.stalls = 0; run.stallText = ''; }
     if (r.text && r.toolCalls.length) asides.push(r.text);
     else if (r.text) reply += (reply ? '\n\n' : '') + r.text;
     if (!r.toolCalls.length) {
@@ -1581,7 +1586,12 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       // are asked for again, on the same count. Their blocks are already out of the text.
       // The same for calls written mid-line, right after a sentence.
       const fenced = !r.skippedCalls && (r.fencedCalls || 0) + (r.midlineCalls || 0);
-      const stalled = !r.skippedCalls && (fenced || announcesStep(r.text));
+      // Sent back for an announcement and answering with the same words: that was its final answer ("I'll leave it
+      // there."), not a step it skipped.
+      const said = String(r.text || '').replace(/\s+/g, ' ').trim();
+      const repeated = !fenced && !!said && said === run.stallText;
+      const stalled = !r.skippedCalls && !repeated && (fenced || announcesStep(r.text));
+      run.stallText = !fenced && stalled ? said : '';
       if (!last && (run.stalls || 0) < 2 && stalled) {
         run.stalls = (run.stalls || 0) + 1;
         reply = replyBefore;
@@ -1913,7 +1923,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         else if (body.tool_choice?.function?.name) r.toolCalls = r.toolCalls.filter((c) => c?.function?.name === body.tool_choice.function.name);
         if (r.toolCalls.length > 25) r.toolCalls = r.toolCalls.slice(0, 25);
         for (const c of r.toolCalls) textCalls.add(c);
-        if (r.skippedCalls) emit({ t: 'note', level: 'warn', msg: `${short(sm)} wrote ${r.skippedCalls} call block${r.skippedCalls > 1 ? 's' : ''} QuorX doesn't run (in the middle of a line, inside an HTML comment or <pre>, or in its own call format), so ${r.skippedCalls > 1 ? 'they were' : 'it was'} not run.`, at: at() });
+        if (r.skippedCalls) emit({ t: 'note', level: 'warn', msg: `${short(sm)} wrote ${r.skippedCalls} call block${r.skippedCalls > 1 ? 's' : ''} QuorX doesn't run (in the middle of a line, inside a code block, an HTML comment or <pre>, or in its own call format), so ${r.skippedCalls > 1 ? 'they were' : 'it was'} not run.`, at: at() });
         run.sourceFails[s.source] = 0;
         return { r };
       } catch (e0) {
@@ -1934,7 +1944,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         noteSourceResult(s.source, sm, e);
         why = `${name} ${kindWords(kind)} (${clip(e.message || kind, 160)})`;
         run.sourceFails[s.source] = (run.sourceFails[s.source] || 0) + 1;
-        if (kind === 'auth' || kind === 'quota' || kind === 'free' || run.sourceFails[s.source] >= 2) run.sourceOff[s.source] = why;
+        if (kind === 'auth' || kind === 'quota' || kind === 'free' || kind === 'setting' || run.sourceFails[s.source] >= 2) run.sourceOff[s.source] = why;
       }
     }
     const to = sourceFallbackFor(sm, S, catalogue);
@@ -4138,7 +4148,9 @@ ${r.text || '(no text found)'}`;
     const model = String(S.enhancerModel || '').trim() || String(S.helperModel || '').trim() || HELPER_MODEL;
     const t0 = Date.now();
     let late = false;
-    const job = enhanceRequest({ text: userText, earlier: userTurns().slice(0, -1), model, signal, ...(deps.enhance ? { call: deps.enhance } : {}) })
+    // A model of an app on this PC answers through it (no OpenRouter fallback: a failed reading just skips the enhancer).
+    const viaApp = sourceOf(model) ? { call: (b, sg) => chatAny(b, sg, { ...sourceChatOpts(), fallback: null }) } : {};
+    const job = enhanceRequest({ text: userText, earlier: userTurns().slice(0, -1), model, signal, ...viaApp, ...(deps.enhance ? { call: deps.enhance } : {}) })
       .then((r) => {
         if (!r) { emit({ t: 'note', level: 'info', msg: 'The prompt enhancer gave no usable reading, so the request goes as written.', at: at() }); return; }
         account(r.usage, model, 'enhancer');

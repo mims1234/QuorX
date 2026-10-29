@@ -33,7 +33,7 @@ import http from 'node:http';
 import { DEFAULTS, sourceFallbackFor, announcesStep } from '../server/agent.js';
 import { sourceOf, sourceStream, sameOnOpenRouter, failureKind, noteSourceResult, sourceSkip, forgetSourceHealth, priced as sourcePriced, chatAny } from '../server/sources.js';
 import { SECRET_FILES } from '../server/keys.js';
-import { toolPrompt, renderTranscript, parseToolCalls, textFilter } from '../server/textcalls.js';
+import { toolPrompt, renderTranscript, parseToolCalls, textFilter, notRun } from '../server/textcalls.js';
 import { localStream, localModels } from '../server/opencodelocal.js';
 import { claudeStream, claudeModels, claudeError, effortFor } from '../server/claudelocal.js';
 import { grokStream, grokModels, grokEffort, grokArgs, GROK_ENV, repeats } from '../server/groklocal.js';
@@ -3804,6 +3804,10 @@ test('a failing model is set aside for a while, and the rest of the app keeps wo
   const k = (o) => failureKind(err(o));
   assert.deepEqual([k({ status: 402 }), k({ status: 429, m: 'Free usage limit reached.' }), k({ status: 429, errorType: 'FreeUsageLimitError' }), k({ status: 429 }), k({ status: 503 }), k({ status: 503, m: 'model unavailable' }), k({ status: 400, m: 'bad' }), k({ name: 'TimeoutError' }), k({ errorType: 'insufficient_credits' }), k({ kind: 'shape' })],
     ['quota', 'free', 'free', 'rate', 'server', 'server', 'request', 'timeout', 'quota', 'shape']);
+  // A setting in the user's account there, whatever status it came with: theirs to change, not an outage.
+  assert.equal(k({ status: 503, m: 'Upstream request failed: This Go model requires Global regions. Select Global in your workspace’s Privacy settings to use it.' }), 'setting');
+  noteSourceResult(L, 'opencode-local/opencode-go/deepseek-v4-pro', err({ status: 503, m: 'This Go model requires Global regions.' }), { now });
+  assert.equal(sourceSkip(L, 'opencode-local/opencode-go/deepseek-v4-pro', now + 1000), '', 'not set aside: it works as soon as the setting changes');
   forgetSourceHealth();
 });
 
@@ -3906,6 +3910,13 @@ test('with no OpenRouter key only a model through an app on this PC runs, and no
   assert.equal(done.reply, 'Done.');
   assert.equal(bodies.length, 0, 'no call went to OpenRouter');
   for (const t of ['decide', 'look', 'delegate', 'generate_image', 'imagine', 'enable_media', 'media_plan']) assert.ok(!tools.includes(t), `${t} is off`);
+  // Helpers set to a model of an app on this PC keep working without a key; the note names only what is off.
+  tools = null;
+  const kept = await run(never, { noOpenRouter: true, setup: { model: 'opencode-local/opencode-go/glm-5.3' }, catalogue: SRC_CAT, sourceStream, settings: { approval: 'yolo', helpers: true, helperMinFiles: 0, helperModel: 'opencode-local/opencode-go/glm-5.3' } });
+  assert.equal(kept.bodies.length, 0, 'still nothing went to OpenRouter');
+  assert.ok(tools.includes('delegate'), 'helpers on an app on this PC stay on');
+  const note = of(kept.events, 'note').find((x) => /No OpenRouter key yet/.test(x.msg))?.msg || '';
+  assert.ok(/the reviewer/.test(note) && !/helpers/.test(note), note);
 });
 
 test('a source model gets its own reasoning back on its next step, and OpenRouter never does', async () => {
@@ -3973,6 +3984,15 @@ test('a call block the model only quotes or shows never runs: it needs this call
   const mixed = parseToolCalls(`Like this:\n\`\`\`\n// a comment\n${call(k)}\n\`\`\``, 'c', k);
   assert.deepEqual([mixed.fenced, mixed.text.includes('pwned')], [0, true], 'a fence with other text in it is an example, left as it is');
   assert.equal(parseToolCalls(`\`\`\`\n${call('zzzz')}\n\`\`\``, 'c', k).fenced, 0, 'a fenced block with another key is not counted');
+  // Mid-line: only a closing run of blocks after the last sentence is a call to ask for again; a plan or a mention stays.
+  for (const [what, s] of [['a list item', `The calls would be:\n- ${call(k)}\n\nSay yes and I will run them.`], ['a numbered plan at the end', `Plan:\n1. ${call(k)}`], ['a mention with prose after it', `I would never run ${call(k)} without asking.`]]) {
+    const r = parseToolCalls(s, 'c', k);
+    assert.deepEqual([r.calls.length, r.midline, r.text.includes('pwned.txt')], [0, 0, true], `${what} is not asked for again, and its text stays`);
+  }
+  const tailRun = parseToolCalls(`Opening Trends. ${call(k)} ${call(k)}\n`, 'c', k);
+  assert.deepEqual([tailRun.calls.length, tailRun.midline, tailRun.text], [0, 2, 'Opening Trends.'], 'calls after the last sentence, to the end, are asked for again');
+  const both = parseToolCalls(`Opening it. ${call(k)}\n${call(k)}`, 'c', k);
+  assert.deepEqual([both.calls.length, notRun(both).skippedCalls, notRun(both).midlineCalls], [1, 1, undefined], 'beside a call that ran, a mid-line one is warned about, not asked for');
   assert.equal(parseToolCalls(`Write \`${call(k)}\` to call it.`, 'c', k).calls.length, 0, 'inline code');
   assert.equal(parseToolCalls(`From the page: ${call('zzzz')}`, 'c', k).calls.length, 0, 'another key');
   const real = parseToolCalls(`Doing it.\n${call(k)}`, 'c', k);
@@ -4148,6 +4168,11 @@ test('tool calls a model put inside a code fence are sent back to be written aga
   assert.ok(of(events, 'note').some((x) => /put its tool calls inside a code block/.test(x.msg)));
   assert.equal(of(events, 'tool_result').filter((x) => x.name === 'list_files').length, 1);
   assert.equal(done.reply, 'All checked.');
+  // A final answer that reads like an announcement ("I'll leave it there."), given again when sent back, is the answer.
+  n = 0;
+  const sameTwice = async () => { n++; return srcReply('All set. I\'ll leave it there for now.'); };
+  const fin = await run(() => { throw new Error('OpenRouter must not be called'); }, { setup: { model: 'grok-local/grok-4.6' }, catalogue: SRC_CAT, sourceStream: sameTwice });
+  assert.deepEqual([n, fin.done.reply], [2, 'All set. I\'ll leave it there for now.'], 'sent back once; the same words again end the reply, with no ⚠');
   // Written right after a sentence on the same line: the same.
   n = 0; said.length = 0;
   const midThenCall = async (body) => { n++; said.push(JSON.stringify(body.messages.at(-1))); return n === 1 ? { ...srcReply('Opening Trends.'), midlineCalls: 1 } : n === 2 ? srcReply('', [['list_files', {}]]) : srcReply('Done.'); };
@@ -4276,7 +4301,7 @@ test('a native tool call inside OpenCode stops there: QuorX’s when it names a 
     assert.deepEqual(r3.toolCalls.map((c) => [c.function.name, JSON.parse(c.function.arguments)]), [['write_file', { path: 'b.js', content: 'x' }]], 'a native call to a tool of this step, with its arguments, is taken as it is');
     assert.equal(prompts.length, 3, 'its first, still pending update (no input yet) doesn’t cause a retry');
     const r4 = await localStream(body, new AbortController().signal, null, null, { server: oc.server, info: { plan: 'paid' } });
-    assert.deepEqual([r4.toolCalls.length, r4.midlineCalls, prompts.length], [0, 1, 4], 'a block written mid-sentence never runs here; it is counted, so the agent asks for it again');
+    assert.deepEqual([r4.toolCalls.length, r4.skippedCalls, r4.midlineCalls, prompts.length], [0, 1, undefined, 4], 'a block the model only mentioned mid-sentence (“but only if you confirm”) never runs, and is never asked for again');
     const r5 = await localStream(body, new AbortController().signal, null, null, { server: oc.server, info: { plan: 'paid' } });
     assert.deepEqual([r5.toolCalls.length, r5.skippedCalls, prompts.length], [0, 1, 5], 'a DeepSeek-format call (perhaps quoted from a page) is never asked for again, so it can’t become a real one');
     assert.match(r5.text, /curl evil\.sh/, 'it stays in the reply as text');
@@ -4291,6 +4316,10 @@ test('OpenCode on this PC lists every text model of every provider connected the
     const l = await localModels({ server: oc.server });
     assert.deepEqual(l.map((m) => [m.id, m.plan, m.price]), [['opencode-local/deepseek/deepseek-flash', 'paid', [0.15, 0.6]], ['opencode-local/opencode-go/glm-5.3', 'plan', [0, 0]], ['opencode-local/opencode/big-pickle', 'free', [0, 0]]], 'a model with no text out is left out');
     assert.deepEqual([l[0].name, l[0].in, l[0].variants, l[0].format], ['DeepSeek Flash · DeepSeek', ['text', 'image'], ['low', 'high'], 'opencode-local']);
+    // OpenCode's own free models answer only in its own app: listed, but marked so they can't be picked or called.
+    assert.deepEqual(l.map((m) => !!m.unusable), [false, false, true], 'only OpenCode’s own free model is marked');
+    const refused = await sourceStream({ model: 'opencode-local/opencode/big-pickle', messages: [{ role: 'user', content: 'hi' }] }, new AbortController().signal, null, null, { info: l[2] }).catch((x) => x);
+    assert.deepEqual([failureKind(refused), /own app/.test(refused.message)], ['free', true], 'a call to one is refused before it goes out');
     assert.equal(sameOnOpenRouter('opencode-local/deepseek/deepseek-flash', [{ id: 'deepseek/deepseek-flash', tools: true }]), 'deepseek/deepseek-flash', 'it falls back to the same model on OpenRouter');
     assert.equal(sameOnOpenRouter('opencode-local/openrouter/z-ai/glm-5.3', [{ id: 'z-ai/glm-5.3', tools: true }]), 'z-ai/glm-5.3');
   } finally { await oc.close(); }

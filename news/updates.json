@@ -1,6 +1,32 @@
 {
   "versions": [
     {
+      "version": "0.2.14",
+      "date": "2026-10-29",
+      "title": "Your own AI apps as the chat model",
+      "items": [
+        { "kind": "new", "text": "Run a chat's main model through OpenCode on this PC, with the providers you connected there: your plans pay, and QuorX keeps its own tools.", "pr": 174 },
+        { "kind": "improved", "text": "OpenCode's own free models answer only in OpenCode's app, so they show in the picker but can't be picked.", "pr": 187 },
+        { "kind": "new", "text": "Helpers, the reviewer, the prompt enhancer and fresh eyes can run on a model from an app on this PC too, even with no OpenRouter key.", "pr": 187 },
+        { "kind": "improved", "text": "A model your account settings there don't allow (OpenCode Go's Global regions) says so at once, instead of a server error after retries.", "pr": 187 },
+        { "kind": "new", "text": "Claude Code on this PC: a chat's main model through the Claude Code you are signed in to.", "pr": 178 },
+        { "kind": "new", "text": "Grok Build on this PC: a chat's main model through Grok, for text work (🖥 Computer use is off with it, and the chat says why).", "pr": 179 },
+        { "kind": "new", "text": "Chats run without an OpenRouter key on a model from an app on this PC; what needs OpenRouter is switched off and says so.", "pr": 174 },
+        { "kind": "new", "text": "The model picker starts with where a model runs (OpenRouter or an app on this PC), each with its own logo, then that source's filters.", "pr": 177 },
+        { "kind": "new", "text": "Chat rows have one ⋯ menu, also on right-click: Rename, Duplicate and Delete.", "pr": 186 },
+        { "kind": "new", "text": "🧭 next to 👁 follows the running reply's steps in the side pane, for that chat only.", "pr": 186 },
+        { "kind": "new", "text": "Computer use draws freehand: one held stroke through many points, and up to 40 steps in one go.", "pr": 183 },
+        { "kind": "improved", "text": "A reply that says what it will do but makes no call is sent back to make it, and a model that keeps stopping short ends with a clear note.", "pr": 186 },
+        { "kind": "improved", "text": "Calls a model writes inside a code block or right after a sentence are asked for again instead of showing as raw text.", "pr": 186 },
+        { "kind": "improved", "text": "A reply that loops, writes the conversation's next turns itself, or runs far too long is stopped, keeping the calls it made before.", "pr": 186 },
+        { "kind": "improved", "text": "A failed call through an app on this PC stops the reply and says which model failed and why; falling back to OpenRouter is your choice in Settings.", "pr": 174 },
+        { "kind": "safety", "text": "Tool calls written as text run only with this step's key, on a line of their own, outside code, quotes and plans, so a page or file can't make one.", "pr": 182 },
+        { "kind": "safety", "text": "A plan or a mention of a call is never asked for as a call, and Claude Code's, Grok's, OpenCode's and Cline's sign-in files stay out of the agent's reach.", "pr": 187 },
+        { "kind": "fixed", "text": "The Stop banner's quotes and other non-English characters no longer come out garbled during computer use.", "pr": 186 },
+        { "kind": "fixed", "text": "A final answer that reads like a next step is kept as the answer, without a false warning.", "pr": 187 }
+      ]
+    },
+    {
       "version": "0.2.13",
       "date": "2026-10-28",
       "title": "Schedules that run themselves, and your desktop apps",

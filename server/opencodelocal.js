@@ -25,7 +25,17 @@ const CONFIG = { agent: { quorx: { mode: 'primary', description: 'Calls from Quo
 const IDLE_STOP_MS = 15 * 60e3;
 
 /** A program on PATH (Windows: with its .cmd/.exe), or null. */
+// Each look walks every PATH folder (hundreds of file checks), and the pickers ask often: kept 30 s when found, 5 s
+// when not (so an app just installed shows up quickly). A changed PATH looks again.
+const onPath = new Map();
 export function findOnPath(name) {
+  const k = `${name}\n${process.env.PATH || ''}`, hit = onPath.get(k);
+  if (hit && Date.now() - hit.at < (hit.f ? 30e3 : 5e3) && (!hit.f || fs.existsSync(hit.f))) return hit.f;
+  const f = lookOnPath(name);
+  onPath.set(k, { f, at: Date.now() });
+  return f;
+}
+function lookOnPath(name) {
   const exts = process.platform === 'win32' ? (process.env.PATHEXT || '.EXE;.CMD;.BAT').split(';').map((e) => e.toLowerCase()) : [''];
   for (const dir of String(process.env.PATH || '').split(path.delimiter).filter(Boolean)) {
     for (const ext of exts) { const f = path.join(dir, name + ext); try { if (fs.statSync(f).isFile()) return f; } catch { /* not here */ } }
@@ -127,6 +137,10 @@ export async function ensureLocalServer({ start = spawn, find = findOnPath, read
 
 const call = (s, method, p, body, signal) => fetch(s.base + p, { method, headers: { ...(s.auth ? { Authorization: s.auth } : {}), 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}), signal });
 
+// A refusal a setting in the user's account there causes ("This Go model requires Global regions. Select Global in your
+// workspace's Privacy settings"): theirs to change, never an outage.
+export const SETTING_REFUSAL = /requires? [\w-]+ regions?|(privacy|data[- ]policy|region) settings?|not available in your (region|country)|select [\w-]+ in your (workspace|account|organi[sz]ation)/i;
+export const FREE_OWN_APP = 'OpenCode keeps its free models for its own app: they don’t answer calls from QuorX. Pick a paid or plan model, or connect a provider in OpenCode.';
 /** Every model of every provider connected in OpenCode, as catalogue entries (opencode-local/<provider>/<model>). */
 export async function localModels({ server } = {}) {
   const s = server || await ensureLocalServer();
@@ -148,6 +162,9 @@ export async function localModels({ server } = {}) {
           price: plan === 'paid' ? list : [0, 0], listPrice: list, cost: { input: list[0], output: list[1], ...(c.cache?.read != null ? { cache_read: c.cache.read } : {}), ...(c.cache?.write != null ? { cache_write: c.cache.write } : {}) }, plan,
           tools: true, temp: m.capabilities?.temperature !== false, reasoning: !!m.capabilities?.reasoning, variants: Object.keys(m.variants || {}),
           format: LOCAL_ID, status: m.status === 'deprecated' ? 'deprecated' : null, canonical: null, desc: '',
+          // OpenCode's own free models (its "opencode" provider at no price) answer only inside OpenCode's own app: a
+          // call from QuorX is refused, so they show but can't be picked.
+          ...(p.id === 'opencode' && plan === 'free' ? { unusable: FREE_OWN_APP } : {}),
         });
       } catch { /* one odd entry */ }
     }
@@ -277,7 +294,9 @@ async function localOnce(body, signal, onText, onThink, { info = {}, idleMs = 18
         // still applies. A used-up free tier, plan or credit, or a long wait, fails the call now.
         const msg = String(p.status.message || 'the provider refused the call'), wait = p.status.next ? Number(p.status.next) - Date.now() : 0;
         const spent = /free|quota|credit|balance|insufficient|usage limit|plan limit|limit reached|exceeded your/i.test(msg) || /free_tier|account_rate/i.test(String(p.status.action?.reason || ''));
-        if (spent || wait > 30e3) {
+        // Refused by a setting in the user's account (a region, a privacy setting): retrying never helps, so it fails now.
+        if (SETTING_REFUSAL.test(msg)) { failure ||= err(msg, { status: 403, kind: 'setting' }); done = true; }
+        else if (spent || wait > 30e3) {
           const free = /free/i.test(msg) || /free_tier/i.test(String(p.status.action?.reason || ''));
           failure ||= err(msg, { status: spent ? (free ? 429 : 402) : /limit|429|rate|too many/i.test(msg) ? 429 : 503, ...(free ? { errorType: 'FreeUsageLimitError' } : {}), retryAfter: wait > 0 ? Math.max(1, Math.round(wait / 1000)) : undefined });
           done = true;

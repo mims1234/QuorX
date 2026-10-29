@@ -139,6 +139,8 @@ function proseState() {
 // A call starts at the start of a line (at most three spaces in), outside quotes, code and inline code. Not after a list
 // marker: a list of calls is a plan the model is showing.
 const callStart = (lineBefore) => /^ {0,3}$/.test(lineBefore);
+// A list item's marker: "- ", "* ", "1. ", "2) " (what comes after it is part of a list, a plan).
+const LIST_ITEM = /^\s*(?:[-*+•]|\d{1,3}[.)])\s/;
 
 // Some models answer in the tool-call format they were trained on, whatever the prompt says. DeepSeek's:
 // <｜DSML｜invoke name="get_time"><｜DSML｜parameter name="zone" string="true">UTC</｜DSML｜parameter></｜DSML｜invoke>
@@ -217,6 +219,20 @@ export function parseToolCalls(reply, idBase = 'call', key = '') {
   // the last call on it (clean: how far that was checked).
   let line = -1, ticks = 0, tickAt = 0, quote = false, clean = -1;
   const QUOTE = /[ \t]*>/y;
+  // Where the reply's closing run of keyed blocks starts (only blocks and spaces after it): worked out once, when needed.
+  let tail = -1;
+  const tailAt = () => {
+    if (tail >= 0) return tail;
+    const back = (e) => { while (e > 0 && /\s/.test(s[e - 1])) e--; return e; }; // the end, before trailing spaces
+    let end = back(s.length);
+    for (let n = 0; n < MAX_CALLS + 1; n++) {
+      const tag = [TAG, 'tool_call'].find((x) => s.startsWith(`</${x}>`, end - x.length - 3));
+      const o = tag ? s.lastIndexOf(`<${tag}`, end - tag.length - 3) : -1;
+      if (o < 0 || !new RegExp(`^<${tag}\\s+key\\s*=\\s*["']?${key}["']?\\s*>`).test(s.slice(o, o + 80))) break;
+      end = back(o);
+    }
+    return (tail = end);
+  };
   for (let m; calls.length < MAX_CALLS && (opener.lastIndex = i, m = opener.exec(s));) {
     const a = m.index, ls = lineStart(a);
     feed(ls);
@@ -228,9 +244,11 @@ export function parseToolCalls(reply, idBase = 'call', key = '') {
     if (st.code || !startsHere) {
       // Counted (the caller warns) when it looked like a call: at a line start inside an HTML comment or <pre>, or
       // mid-line in plain prose. One in a code fence, inline code or a quote is an example the model meant to show.
-      // Mid-line in plain prose with this call's key, closed: a call the model wrote after its sentence (only the
-      // prompt has the key). Not run, but taken out of the text and counted in `midline`, so the caller asks again.
-      if (key && !st.code && !startsHere && ticks % 2 === 0 && !quote) {
+      // Mid-line in plain prose with this call's key, closed, and with nothing but more call blocks after it to the
+      // reply's end: calls the model wrote after its last sentence (only the prompt has the key). Not run, but taken
+      // out of the text and counted in `midline`, so the caller asks again. One in a list, or with prose after it
+      // ("I'd run … once you say yes"), is a plan or a mention, and stays as it is.
+      if (key && !st.code && !startsHere && ticks % 2 === 0 && !quote && a >= tailAt() && !LIST_ITEM.test(s.slice(ls, a))) {
         const c = noClose ? -1 : s.indexOf(`</${m[1]}>`, a);
         if (c < 0) noClose = true; // none after this one, so none after any later one either
         else { midline++; said += s.slice(i, a); i = c + m[1].length + 3; continue; }
@@ -281,11 +299,15 @@ export function parseToolCalls(reply, idBase = 'call', key = '') {
 }
 
 /** What a text-call source adds to its result about blocks that weren't run (see parseToolCalls). */
-export const notRun = (parsed) => ({
-  ...(parsed.skipped + parsed.dsml ? { skippedCalls: parsed.skipped + parsed.dsml } : {}),
-  ...(parsed.fenced ? { fencedCalls: parsed.fenced } : {}),
-  ...(parsed.midline ? { midlineCalls: parsed.midline } : {}),
-});
+// Misplaced blocks are asked for again only when nothing ran; beside calls that ran, they are only warned about.
+export const notRun = (parsed) => {
+  const ran = parsed.calls.length > 0, skipped = parsed.skipped + parsed.dsml + (ran ? parsed.fenced + parsed.midline : 0);
+  return {
+    ...(skipped ? { skippedCalls: skipped } : {}),
+    ...(!ran && parsed.fenced ? { fencedCalls: parsed.fenced } : {}),
+    ...(!ran && parsed.midline ? { midlineCalls: parsed.midline } : {}),
+  };
+};
 
 /**
  * Passes streamed text through to the page, but holds back anything that might be the start of a tool call, and

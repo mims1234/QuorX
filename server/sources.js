@@ -15,7 +15,7 @@ import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { HOME } from './openrouter.js';
 import { renameSoon } from './fsretry.js';
-import { findOnPath, localModels, localStream, ensureLocalServer, localServer, LOCAL_ID } from './opencodelocal.js';
+import { findOnPath, localModels, localStream, ensureLocalServer, localServer, LOCAL_ID, SETTING_REFUSAL } from './opencodelocal.js';
 import { claudeModels, claudeStream, claudeAuth, claudeRunning, CLAUDE_ID } from './claudelocal.js';
 import { grokModels, grokStream, grokRunning, GROK_ID } from './groklocal.js';
 
@@ -192,6 +192,9 @@ export function failureKind(e) {
   const s = Number(e?.status || e?.streamStatus) || 0, msg = String(e?.message || ''), ty = String(e?.errorType || '');
   // A free model its provider keeps for its own app: only that model is set aside.
   if (/FreeUsageLimitError/i.test(ty) || /free (usage )?limit reached|free model usage is not supported|free models are only available|free tier[^.]{0,40}(only|not available)/i.test(msg)) return 'free';
+  // Refused by a setting in the user's account there ("This Go model requires Global regions. Select Global in your
+  // workspace's Privacy settings"): theirs to change, whatever status it came with, and not an outage.
+  if (SETTING_REFUSAL.test(msg)) return 'setting';
   // The provider's own error names say it outright (OpenCode passes them on).
   if (/AuthError|invalid_api_key|unauthori[sz]ed/i.test(ty)) return 'auth';
   if (/CreditsError|MonthlyLimitError|UserLimitError|GoUsageLimitError|insufficient_credits/i.test(ty)) return 'quota';
@@ -208,7 +211,7 @@ export function failureKind(e) {
   if (/fetch failed|ECONN|ENOTFOUND|EAI_AGAIN|socket|network|terminated|other side closed|UND_ERR/i.test(msg + String(e?.cause?.code || '') + String(e?.cause?.message || ''))) return 'network';
   return 'unknown';
 }
-const KIND_WORDS = { notinstalled: 'is not installed on this computer', free: 'keeps that free model for its own app right now', auth: 'refused its key', quota: 'is out of credit or plan usage', rate: 'is rate limiting', model: 'does not have that model now', server: 'had a server error', network: 'could not be reached', timeout: 'did not answer in time', shape: 'answered in a shape QuorX can\'t read', request: 'refused the request', unknown: 'failed' };
+const KIND_WORDS = { notinstalled: 'is not installed on this computer', free: 'keeps that free model for its own app right now', auth: 'refused its key', quota: 'is out of credit or plan usage', rate: 'is rate limiting', model: 'does not have that model now', server: 'had a server error', network: 'could not be reached', timeout: 'did not answer in time', shape: 'answered in a shape QuorX can\'t read', request: 'refused the request', setting: 'refused it because of a setting in your account there', unknown: 'failed' };
 export const kindWords = (k) => KIND_WORDS[k] || KIND_WORDS.unknown;
 // Each model of an app runs on its own provider, so a refused key, a spent plan or an outage is that model's: it is
 // set aside and the rest keep working. Only the app itself missing or unreachable is the whole source's.
@@ -260,6 +263,8 @@ export async function sourceStream(body, signal, onText, onThink, { info: given,
   if (!given && !sourceInfo(body.model)) await sourceModels().catch(() => []);
   stopped(signal);
   const info = given || sourceInfo(body.model) || { plan: 'paid' };
+  // A model its app keeps for itself (OpenCode's own free ones): refused here, before a call goes out.
+  if (info.unusable) throw Object.assign(new Error(info.unusable), { kind: 'free' });
   const out = await APPS[s.source].stream(body, signal, onText, onThink, { info, idleMs });
   out.usage = { ...(out.usage || {}), ...(Object.keys(out.usage || {}).length ? priced(info, out.usage) : {}) };
   out.source = s.source;
