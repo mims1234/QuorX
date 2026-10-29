@@ -1,7 +1,7 @@
 ---
 title: Run a chat through OpenCode on your PC
 date: 2026-10-28
-summary: A chat's main model can now run through the OpenCode app on your computer, with every provider you connected there, while OpenRouter stays behind everything else. How to switch it on, what it costs, and what happens when a call fails.
+summary: A chat's main model can now run through the OpenCode app on your computer, with every provider you connected there, and OpenRouter behind the rest by default. How to switch it on, what it costs, and what happens when a call fails.
 tags: models, cost, setup
 version: 0.2.14
 ---
@@ -23,7 +23,10 @@ terminal, then test the connection again.
 |---|---|---|
 | A provider's API key (DeepSeek, OpenRouter, NVIDIA…) | That provider's prices, on your key | `opencode-local/deepseek/…` |
 | A plan (OpenCode Go and others) | The plan: nothing per call here | `opencode-local/opencode-go/…` |
-| A free tier | Nothing, while the provider allows it | `opencode-local/…` |
+| Another provider's free tier | Nothing, while the provider allows it | `opencode-local/…` |
+
+OpenCode's own free models (its **OpenCode** provider, at no price) answer only inside OpenCode's own app. They show
+in QuorX's picker but locked: hover or click says why, and a call to one is refused before it goes out.
 
 Once it's on, its models show in the chat model pickers, tagged **This PC**. On one test computer that was 854 models.
 The **Where it runs** switch at the top of the picker shows one source at a time, so a long list stays short.
@@ -43,15 +46,16 @@ that QuorX deletes afterwards, so your own session list stays as it was.
   { "id": "pick", "title": "Pick its model", "sub": "tagged This PC", "cap": "Choose one in the chat's model button. Where it runs filters the list to one source." },
   { "id": "run", "title": "The app makes the call", "sub": "on your provider or account", "cap": "Each step of the reply runs through the app. Tools, files, commands and checks work as usual." },
   { "id": "fail", "title": "If a call fails", "sub": "the reply stops and says why", "new": true, "cap": "The reply stops and says which model failed and why; you pick the next model. A fallback to OpenRouter is there only if you choose one." },
-  { "id": "rest", "title": "Everything else", "sub": "on OpenRouter", "cap": "Deciders, paid media, the prompt enhancer, helpers and the reviewer keep running on OpenRouter." }
+  { "id": "rest", "title": "Everything else", "sub": "your choice", "cap": "Helpers, the reviewer, the prompt enhancer and fresh eyes can run on OpenRouter or an app on your PC. Deciders and paid media stay on OpenRouter." }
 ] }
 ```
 
 ## What runs where
 
-Only the chat's main model runs through the app (its summaries of a long chat too). Deciders, paid media, the prompt
-enhancer, helpers and the reviewer stay on OpenRouter, so they need an OpenRouter key (without one, see below). You can switch a chat
-between OpenRouter and an app on your PC at any time. The conversation carries over.
+The chat's main model runs through the app (its summaries of a long chat too). Helpers, the reviewer, the prompt
+enhancer and fresh eyes run on OpenRouter by default, and each can be set to a model tagged **This PC** in its model
+picker. For the reviewer, pick one that sees pictures: it looks at screenshots. Deciders and paid media always run on
+OpenRouter. You can switch a chat between OpenRouter and an app on your PC at any time. The conversation carries over.
 
 ## What it costs
 
@@ -62,14 +66,17 @@ what it counted against the plan, at list price.
 ## No OpenRouter key yet?
 
 You can still chat: with no OpenRouter key, the models tagged **This PC** run, and the others show locked
-until you add a key. The deciders, the prompt enhancer, helpers, the reviewer and paid media need OpenRouter, so they are
-off until then.
+until you add a key. The deciders and paid media need OpenRouter, so they are off until then. Helpers, the reviewer,
+the prompt enhancer and fresh eyes are off too, unless you set them to a model tagged **This PC**: then they keep
+working. The chat says which ones are off.
 
 ## When it fails
 
 QuorX never switches your model behind your back.
 
 - **The reply stops** and says which model failed and why (an expired key, a used-up plan, a free tier that ran out).
+  When a setting in your account there blocks the model (OpenCode Go: "This Go model requires Global regions"), it
+  says so at once: change it in your OpenCode workspace (Privacy → Global), or pick another model.
   The work done so far stays. Pick another model in the chat's model button and send a message to carry on: the
   conversation carries over.
 - **A model that failed** is skipped by every chat, this one included, for a while instead of each one waiting on it:
