@@ -36,7 +36,7 @@ import { SECRET_FILES } from '../server/keys.js';
 import { toolPrompt, renderTranscript, parseToolCalls, textFilter } from '../server/textcalls.js';
 import { localStream, localModels } from '../server/opencodelocal.js';
 import { claudeStream, claudeModels, claudeError, effortFor } from '../server/claudelocal.js';
-import { grokStream, grokModels, grokEffort, grokArgs, GROK_ENV } from '../server/groklocal.js';
+import { grokStream, grokModels, grokEffort, grokArgs, GROK_ENV, repeats } from '../server/groklocal.js';
 
 let n = 0;
 const reply = (text, calls = [], finishReason = 'stop') => ({ text, toolCalls: calls.map(([name, args], i) => ({ id: `c${++n}_${i}`, type: 'function', function: { name, arguments: typeof args === 'string' ? args : JSON.stringify(args) } })), usage: { cost: 0.0001 }, ms: 1, firstMs: 1, finishReason });
@@ -4434,6 +4434,10 @@ test('a Grok Build that starts with a built-in tool, or asks for any tool, is st
   const away = await viaFakeGrok('runaway', GROK_BODY);
   assert.equal(away.e, undefined, away.e?.message);
   assert.deepEqual([away.r.text, away.r.toolCalls.map((c) => c.function.name), away.r.finishReason], ['Opening it.', ['read_file'], 'tool_calls'], 'a reply that writes the next turns itself ends where they start, its call kept');
+  const t0 = Date.now(), loop = await viaFakeGrok('loop', GROK_BODY);
+  assert.equal(loop.e, undefined, loop.e?.message);
+  assert.ok(Date.now() - t0 < 5000 && loop.r.finishReason === 'length', 'a reply repeating itself is stopped within a few KB, not after minutes');
+  assert.ok(!repeats('a'.repeat(1999) + 'b'.repeat(400)) && repeats(('x'.repeat(399) + 'y').repeat(6)), 'a loop is the same 400 characters five times over');
   assert.deepEqual([GROK_ENV.GROK_CLAUDE_SKILLS_ENABLED, GROK_ENV.GROK_CURSOR_MCPS_ENABLED, GROK_ENV.GROK_MEMORY], ['false', 'false', '0'], 'Claude Code’s and Cursor’s skills and servers, and Grok’s memory, stay out of its prompt');
 });
 

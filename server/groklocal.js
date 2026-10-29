@@ -38,6 +38,14 @@ export const GROK_ENV = Object.fromEntries([
 // Where a reply stops being the model's own: a turn tag carrying this call's key (renderTranscript's turns).
 const TURN = (key) => new RegExp(`<(?:user|assistant|tool_result) key="${key}"`);
 const MAX_REPLY = 300e3; // characters in one reply; far past any file a step writes
+// Its last 400 characters, written 5 times or more: a model stuck in a loop (real files rarely repeat that much verbatim).
+export function repeats(text, n = 400, times = 5) {
+  if (text.length < n * times) return false;
+  const tail = text.slice(-n);
+  let seen = 0;
+  for (let i = text.indexOf(tail); i >= 0 && seen < times; i = text.indexOf(tail, i + 1)) seen++;
+  return seen >= times;
+}
 const err = (msg, extra = {}) => Object.assign(new Error(msg), extra);
 const running = new Set();
 export const grokRunning = () => running.size;
@@ -138,7 +146,7 @@ export async function grokStream(body, signal, onText, onThink, { info = {}, idl
   let proc;
   try { proc = launch(exe, grokArgs({ model, effort: grokEffort(body.reasoning, info.variants), file }), { cwd: DIR, env: { ...envFor(), ...GROK_ENV }, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' }, start); } catch (e) { fs.rmSync(file, { force: true }); throw err(`Grok Build didn't start: ${e.message}`, { kind: 'network' }); }
   running.add(proc);
-  let text = '', thinking = '', firstMs = null, seen = 0, result = null, failure = null, idle = null, outChars = 0, started = false, stderr = '';
+  let text = '', thinking = '', firstMs = null, seen = 0, result = null, failure = null, idle = null, outChars = 0, started = false, stderr = '', loopCheck = 8e3;
   const show = textFilter(onText);
   const kill = () => { if (proc.pid) killTree(proc.pid); };
   const arm = () => { clearTimeout(idle); idle = setTimeout(() => { failure ||= err(`Grok Build sent nothing for ${Math.round(idleMs / 1000)} s`, { name: 'TimeoutError', kind: 'timeout' }); kill(); }, idleMs); };
@@ -160,8 +168,12 @@ export async function grokStream(body, signal, onText, onThink, { info = {}, idl
         text += piece; outChars += piece.length; show(piece);
         // A reply that runs away: the model writes the conversation's next turns itself (a tool's result, the user's
         // reply) or doesn't stop. Its reply ends where that starts, and the model is stopped; nothing after it is read.
-        const turn = text.search(TURN(key));
-        if (turn >= 0 || text.length > MAX_REPLY) {
+        // Or one that repeats itself: the same stretch of text over and over (looked for every few KB, near the end only).
+        const from = Math.max(0, text.length - piece.length - 40), at = text.slice(from).search(TURN(key));
+        const turn = at < 0 ? -1 : from + at;
+        let loops = false;
+        if (text.length >= loopCheck) { loopCheck = text.length + 8e3; loops = repeats(text); }
+        if (turn >= 0 || loops || text.length > MAX_REPLY) {
           if (turn >= 0) text = text.slice(0, turn);
           result ||= { stop_reason: turn >= 0 ? 'end_turn' : 'max_tokens', usage: {}, cut: true };
           kill();

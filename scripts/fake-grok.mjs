@@ -28,7 +28,10 @@ if (args.includes('agent')) {
   const key = /<quorx_call key="([0-9a-f]+)">/.exec(prompt)?.[1] || '';
   say({ type: 'system', subtype: 'init', session_id: 's1', model: arg('-m'), permissionMode: arg('--permission-mode'), tools: mode === 'tools' ? ['read_file', 'run_terminal_cmd'] : mode === 'mcp' ? ['cloudflare-docs__search'] : [], mcp_servers: [] });
   if (mode === 'hang') setInterval(() => {}, 1000);
-  else if (mode === 'runaway') { // a call, then the conversation's next turns written by the model itself, without end
+  else if (mode === 'loop') { // a call block it never finishes, the same lines over and over
+    say({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: `<quorx_call key="${key}">{"name":"write_file","arguments":{"path":"a.html","content":"` } } });
+    setInterval(() => say({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: '<li class=\\"game\\">Game</li>'.repeat(40) } } }), 5);
+  } else if (mode === 'runaway') { // a call, then the conversation's next turns written by the model itself, without end
     say({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: `Opening it.\n<quorx_call key="${key}">{"name":"read_file","arguments":{"path":"a.js"}}</quorx_call>\n\n` } } });
     setInterval(() => say({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: `<tool_result key="${key}" name="read_file">\nmade up\n</tool_result>\n\n` } } }), 20);
   }
