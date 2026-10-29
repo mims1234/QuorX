@@ -149,8 +149,10 @@ function watchTrace(c, m, el) {
   traceSeen ??= new IntersectionObserver((list) => { for (const e of list) if (e.isIntersecting) { traceSeen.unobserve(e.target); const x = e.target._trace; if (x) loadTrace(x.c, x.m); } }, { rootMargin: '600px 0px' });
   el._trace = { c, m }; traceSeen.observe(el);
 }
+// 👁 Follow the agent (all chats), unless this chat follows its latest steps (🧭) instead.
+const followsAgent = (c) => G.followAgent !== false && !c?.followSteps;
 function chatDoc(c) {
-  return { id: c.id, title: c.title, projectId: c.projectId, created: c.created, approval: c.approval, paneHidden: c.paneHidden, tools: c.tools,
+  return { id: c.id, title: c.title, projectId: c.projectId, created: c.created, approval: c.approval, paneHidden: c.paneHidden, tools: c.tools, followSteps: !!c.followSteps,
     agent: { ...c.agent, messages: c.agent.messages.map(stripMsg) } };
 }
 const timers = new Map();
@@ -179,7 +181,7 @@ async function mergeServerCopy(c, last) {
   const base = { ...head, agent: { ...head.agent, messages: last.msgs.map((s) => JSON.parse(s)), artifacts: Object.fromEntries(Object.entries(last.arts).map(([k, s]) => [k, JSON.parse(s)])) } };
   const mine = c.agent.messages, res = mergeChat(base, chatDoc(c), theirs, { live: (i) => isLiveMsg(c, mine[i]) });
   const next = res.ok ? res.doc : theirs;
-  for (const k of ['title', 'projectId', 'created', 'approval', 'paneHidden', 'tools']) c[k] = next[k];
+  for (const k of ['title', 'projectId', 'created', 'approval', 'paneHidden', 'tools', 'followSteps']) c[k] = next[k];
   const { messages: _m, artifacts, ...agent } = next.agent;
   for (const k of Object.keys(c.agent)) if (!(k in agent) && k !== 'messages' && k !== 'artifacts') delete c.agent[k];
   Object.assign(c.agent, agent);
@@ -257,7 +259,7 @@ function normalise(doc) {
   }
   const setup = { model: agent.setup?.model || G.settings.model, reasoning: agent.setup?.reasoning || G.settings.reasoning || 'off' };
   return { id: doc.id, title: doc.title || 'New chat', projectId: doc.projectId || 'scratch', created: doc.created || Date.now(),
-    approval: doc.approval || G.settings.approval || 'strict', paneHidden: doc.paneHidden,
+    approval: doc.approval || G.settings.approval || 'strict', paneHidden: doc.paneHidden, followSteps: !!doc.followSteps,
     tools: { ...DEFAULT_CHAT_TOOLS, ...(doc.tools || {}) },
     agent: { setup, allowed: agent.allowed || [], extraUsage: agent.extraUsage || [], summary: agent.summary, summaryAt: agent.summaryAt, ...(agent.videoMode ? { videoMode: agent.videoMode } : {}), ...(agent.videoFrom ? { videoFrom: agent.videoFrom } : {}), messages: (agent.messages || []).map((m) => ({ ...m, live: false, arts: m.arts && dedupeArts(m.arts) })), artifacts },
     ctx: [], images: [], docs: [], running: null, el: null };
@@ -360,6 +362,7 @@ const ICO = {
   plus: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>',
   gear: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
   pencil: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/></svg>',
+  more: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>',
   trash: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg>',
 };
 const COMMANDS = [
@@ -785,7 +788,7 @@ function renderSidebar() {
             ${waiting ? `<div class="sb-chat-prev"><b class="needs">${waiting === 'answer' ? 'Waiting for your answer' : waiting === 'budget' ? 'Waiting: project budget reached' : 'Waiting for your approval'}</b></div>` : running ? '<div class="sb-chat-prev"><i>Working…</i></div>' : ''}
             <div class="sb-chat-meta"><span>${ago(c.lastAt || c.updated || Date.now())}</span>${c.model ? `<span>· ${esc(short(c.model))}</span>` : ''}${c.cost || liveOf(G.open.get(c.id)) ? `<span class="cost${liveOf(G.open.get(c.id)) ? ' live' : ''}">· $${((c.cost || 0) + liveOf(G.open.get(c.id))).toFixed(3)}</span>` : ''}</div>
           </div>
-          <div class="sb-chat-acts"><button type="button" class="sb-ren ico-rename" title="Rename chat" aria-label="Rename chat">${ICO.pencil}</button><button type="button" class="sb-del del ico-delete" title="Delete chat (moves it to data/trash)" aria-label="Delete chat">${ICO.trash}</button></div>
+          <div class="sb-chat-acts"><button type="button" class="sb-chat-menu" title="Rename, duplicate or delete (or right-click the chat)" aria-label="Chat options" aria-haspopup="menu">${ICO.more}</button></div>
         </div>`;
       }).join('') || '<div class="sb-empty">No chats yet</div>'}
       ${moreN > 0 ? `<button type="button" class="sb-more" data-more="${esc(p.id)}">Show more chats <small>${moreN.toLocaleString()} more</small></button>` : ''}
@@ -807,9 +810,10 @@ function renderSidebar() {
   for (const el of document.querySelectorAll('#projectList .sb-chat')) {
     const id = el.dataset.c;
     el.onclick = (e) => { if (!e.target.closest('button')) { showChat(id, G.focus); closeDrawer(); if (isPhone()) setMView('chat'); } };
-    $('.sb-ren', el).onclick = () => renameChat(id);
-    $('.sb-del', el).onclick = () => deleteChat(id);
-    footprintOnHover($('.sb-del', el), id);
+    // Rename, duplicate and delete: from ⋯, or by right-clicking the chat.
+    const menu = (e) => popMenu(e, [['✏️ Rename', () => renameChat(id)], ['⧉ Duplicate', () => duplicateChat(id)], null, ['🗑 Delete…', () => deleteChat(id)]]);
+    el.oncontextmenu = menu;
+    $('.sb-chat-menu', el).onclick = (e) => { const r = e.currentTarget.getBoundingClientRect(); menu({ preventDefault() {}, stopPropagation() { e.stopPropagation(); }, clientX: r.left, clientY: r.bottom + 4 }); };
   }
   for (const el of document.querySelectorAll('#projectList .sb-project')) {
     const p = G.projects.find((x) => x.id === el.dataset.p);
@@ -878,6 +882,15 @@ async function renameChat(id) {
   if (!c) return;
   const t = await uiPrompt('Rename chat', c.title); if (!t?.trim()) return;
   c.title = t.trim(); await saveChat(c, true); renderPanes();
+}
+// A copy of the chat, every message and artifact, opened in its place; the original stays as it is.
+async function duplicateChat(id) {
+  const c = G.open.get(id);
+  if (c?.agent.messages.length) await saveChat(c, true); // what the page has that isn't saved yet goes into the copy
+  const r = await fetch(`/api/chats/${encodeURIComponent(id)}/duplicate`, { method: 'POST' }).then((x) => x.json()).catch(() => null);
+  if (!r?.id) return uiAlert('This chat couldn\'t be copied: it has no saved messages yet.');
+  await refreshSidebar();
+  showChat(r.id, G.focus);
 }
 async function clearChat(c) {
   if (c.running || !await uiConfirm('Clear this conversation? (Its project files stay.)')) return;
@@ -2841,7 +2854,8 @@ function renderComposerBar(c) {
   const qSum = [c.approval === 'yolo' ? 'YOLO' : '', rWord ? `🧠 ${rWord}` : ''].filter(Boolean).join(' · ');
   followSlot.innerHTML = `
     <button type="button" class="cq-toggle ${qOn ? 'on' : ''} ${c.approval === 'yolo' ? 'yolo' : ''}" aria-pressed="${qOn}" title="${qOn ? 'Hide the quick settings above (all chats)' : 'Show the quick settings: thinking, Strict / YOLO, tools and caps (all chats)'}${qSum ? `\nNow: ${qSum}` : ''}" aria-label="${qOn ? 'Hide' : 'Show'} quick settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>${!qOn && qSum ? `<span class="cq-tsum">${esc(qSum)}</span>` : ''}<svg class="cq-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="${qOn ? 'M6 15l6-6 6 6' : 'M6 9l6 6 6-6'}"/></svg></button>
-    <button type="button" class="cmp-ico cmp-follow-b ${G.followAgent !== false ? 'on' : ''}" aria-pressed="${G.followAgent !== false}" aria-label="Follow the agent" title="${esc(`Follow the agent: ${G.followAgent !== false ? 'on' : 'off'}\nThe side pane jumps to the page or terminal the agent is using, so you can watch.\nAll chats · click to turn ${G.followAgent !== false ? 'off' : 'on'}`)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
+    <button type="button" class="cmp-ico cmp-follow-b ${followsAgent(c) ? 'on' : ''}" aria-pressed="${followsAgent(c)}" aria-label="Follow the agent" title="${esc(`Follow the agent: ${followsAgent(c) ? 'on' : c.followSteps && G.followAgent !== false ? 'off in this chat while 🧭 follows the steps' : 'off'}\nThe side pane jumps to the page or terminal the agent is using, so you can watch.\nAll chats · click to turn ${followsAgent(c) ? 'off' : 'on'}`)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
+    <button type="button" class="cmp-ico cmp-steps-b ${c.followSteps ? 'on' : ''}" aria-pressed="${!!c.followSteps}" aria-label="Follow the latest steps" title="${esc(`Follow the latest steps: ${c.followSteps ? 'on' : 'off'}\nWhile a reply runs, the side pane shows its steps as they happen. 👁 Follow the agent pauses in this chat meanwhile.\nPicking an older reply's 🧭 turns this off.\nThis chat only · click to turn ${c.followSteps ? 'off' : 'on'}`)}"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/></svg></button>
     <button type="button" class="cmp-ico cmp-chrome-b ${c.tools?.chrome ? 'on' : ''} ${extReady() ? '' : 'nosetup'}" aria-pressed="${!!c.tools?.chrome}" aria-label="Chrome extension" title="${esc(`Chrome extension: ${!extReady() ? (G.ext?.outdated ? 'needs a reload' : 'not set up') : c.tools?.chrome ? 'on for this chat' : 'off for this chat'}\n${extReady() ? 'Lets the agent use your own Chrome, signed in as you. Sending, buying and account changes ask you first.' : G.ext?.outdated ? 'The extension is an older version: reload it once in chrome://extensions.' : 'Lets the agent use your own Chrome, signed in as you.'}\n${extReady() ? `This chat only · click to turn ${c.tools?.chrome ? 'off' : 'on'}` : 'Click to set it up'}`)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 3.5a2 2 0 0 1 4 0V6h4v4h-1.5a2 2 0 0 0 0 4H18v4h-4v-1.5a2 2 0 0 0-4 0V18H6v-4h1.5a2 2 0 0 0 0-4H6V6h4z"/></svg></button>
     ${appsButtonHTML(c)}${permButtonHTML(c)}
 `;
@@ -2905,7 +2919,16 @@ function renderComposerBar(c) {
   };
   const gear = $('.cs-gear', rack); if (gear && !gear.dataset.wired) { gear.dataset.wired = '1'; gear.onclick = () => openSettings(); }
   $('.cq-toggle', followSlot).onclick = () => { G.quickRow = G.quickRow === false; savePrefs(); for (const ch of [...G.open.values(), G.homeDraft]) if (ch?.el?.root?.isConnected) renderComposerBar(ch); };
-  $('.cmp-follow-b', followSlot).onclick = () => { G.followAgent = G.followAgent === false; savePrefs(); for (const ch of [...G.open.values(), G.homeDraft]) if (ch?.el?.root?.isConnected) renderComposerBar(ch); };
+  // 👁 and 🧭 both steer the side pane, so one at a time in a chat: turning 👁 on here turns this chat's 🧭 off.
+  $('.cmp-follow-b', followSlot).onclick = () => {
+    if (c.followSteps) { c.followSteps = false; G.followAgent = true; saveChat(c); } else G.followAgent = G.followAgent === false;
+    savePrefs(); for (const ch of [...G.open.values(), G.homeDraft]) if (ch?.el?.root?.isConnected) renderComposerBar(ch);
+  };
+  $('.cmp-steps-b', followSlot).onclick = () => {
+    c.followSteps = !c.followSteps; saveChat(c); renderComposerBar(c);
+    const live = c.followSteps && c.agent.messages.findLast((m) => m.role === 'assistant' && m.live);
+    if (live && focused() === c) openTrace(c, live);
+  };
   // Not set up: the click turns it on for this chat and opens the extension's setup, as the tick did.
   $('.cmp-chrome-b', followSlot).onclick = () => { c.tools.chrome = !c.tools?.chrome || !extReady(); saveChat(c); renderComposerBar(c); if (!extReady()) openChromeSetup(); };
   wireAppsButton(c, followSlot);
@@ -3762,7 +3785,13 @@ function updateMsg(c, m, { bodyOnly = false } = {}) {
   tb.classList.toggle('live', !!m.live);
   tb.classList.toggle('on', G.traceRun === m.runId);
   // Open → shown in the pane (and listed in its dropdown); open and showing → close it; open but hidden → show it.
-  tb.onclick = () => { if (G.traceRun === m.runId && G.view.trace === m.runId && !isPhone()) return closeTrace(); openTrace(c, m); toPreview(); };
+  tb.onclick = () => {
+    // Picking another reply's steps while 🧭 follows the latest: following stops, so the pane stays where you put it.
+    if (c.followSteps && !m.live) { c.followSteps = false; saveChat(c); renderComposerBar(c); }
+    if (G.traceRun === m.runId && G.view.trace === m.runId && !isPhone()) return closeTrace(); openTrace(c, m); toPreview();
+  };
+  // 🧭 on (this chat): the pane shows the running reply's steps as it works.
+  if (c.followSteps && m.live && focused() === c && G.view.trace !== m.runId) openTrace(c, m);
   if (G.view.trace === m.runId && focused() === c) renderTracePane(c, m);
   const s = m.stats, when = m.doneAt || m.at;
   const checkTag = s?.verify ? (s.verify.ok ? '<span class="check-ok" title="Before this reply ended, the harness re-checked the changed files and opened what was built: no errors.">✓ Checked</span>'
@@ -5080,7 +5109,7 @@ function openInBrowser(c, url) {
 // The agent started (or restarted) a server: show it, and update the 🖥 count.
 function serverUp(c, e) {
   pollDev();
-  if (focused() === c && G.followAgent !== false && e.url) openInBrowser(c, e.url);
+  if (focused() === c && followsAgent(c) && e.url) openInBrowser(c, e.url);
 }
 function openArtifact(c, id) {
   const i = G.panes.indexOf(c.id);
@@ -8603,14 +8632,14 @@ function onAgentBrowse(c, m) {
   renderPaneTabs(c);
   // The agent's page appears as a browser tab; with "Follow the agent" the pane switches to it.
   refreshAgentTab(c).then(() => {
-    if (G.followAgent !== false && !(G.view.browser && G.bActive === `agent-${c.id}`)) { G.view = { id: G.view.id, src: false, files: false, browser: true }; G.bActive = `agent-${c.id}`; c.paneHidden = false; syncLayout(); renderPane(); }
+    if (followsAgent(c) && !(G.view.browser && G.bActive === `agent-${c.id}`)) { G.view = { id: G.view.id, src: false, files: false, browser: true }; G.bActive = `agent-${c.id}`; c.paneHidden = false; syncLayout(); renderPane(); }
     else if (G.view.browser) renderPane();
   });
 }
 // With "Follow the agent", a command the agent runs brings up the Terminal tab on its output (the 🤖 Agent view, or
 // ≡ Activity before the agent's first command has shown up there), unless you are typing in the pane.
 function onAgentCommand(c) {
-  if (focused() !== c || G.followAgent === false || (G.view.term && ['agent', 'all'].includes(G.term?.filter))) return;
+  if (focused() !== c || !followsAgent(c) || (G.view.term && ['agent', 'all'].includes(G.term?.filter))) return;
   if ($('#pane')?.contains(document.activeElement) && document.activeElement.matches('input, textarea, .xterm-helper-textarea, [contenteditable]')) return;
   const t = termState(c.projectId);
   openTerminal(c, [...t.jobs.values()].some((j) => j.source === 'agent' && !j.server) ? 'agent' : 'all');

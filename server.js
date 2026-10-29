@@ -32,7 +32,7 @@ import { shellRun, shellClose, shellInfo } from './server/shell.js';
 import { ptyAvailable, ptyOpen, ptyWrite, ptyResize, ptyFollow, ptyClose } from './server/pty.js';
 // Pages the agent wrote, served from this app's own address, get their own opaque origin: their requests to /api are refused.
 const SANDBOX_CSP = 'sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads';
-import { listChats, sidebarChats, chatPage, chatPictureRefs, pictureRefCounts, getTrace, getChatForPage, getChat, saveChat, patchChat, settleReply, trashChat, validId, listProjects, saveProject, forgetProject, setProjectColor, setProjectFlags, costSummary, costChats } from './server/store.js';
+import { listChats, sidebarChats, chatPage, chatPictureRefs, pictureRefCounts, getTrace, getChatForPage, getChat, saveChat, patchChat, settleReply, trashChat, duplicateChat, validId, listProjects, saveProject, forgetProject, setProjectColor, setProjectFlags, costSummary, costChats } from './server/store.js';
 import { ALLOWED, copyTemplate, workspaceDir, safePath, fullLocalPath,chatFolder, listFiles, listDir, listServers, stopServerWait, restartServer, serverLog, startServer, restoreCheckpoint, listCheckpoints, pruneCheckpoints, undoConflicts, changedFiles, reviewFiles, reviewDiff, undoFile, serverOverview, launchConfigs, saveLaunchConfig, removeLaunchConfig, ensureAgentDir, agentSpace } from './server/workspace.js';
 import { followTerm, runningJobs, stopJob } from './server/terminal.js';
 import { runningIn, stopRunning, stopAllIn } from './server/running.js';
@@ -200,6 +200,9 @@ const server = http.createServer(async (req, res) => {
     // What deleting a chat frees once QuorX's trash is emptied (its file, and pictures no other chat uses).
     const csm = url.pathname.match(/^\/api\/chats\/([a-z0-9-]+)\/footprint$/i);
     if (csm && req.method === 'GET') { if (!validId(csm[1])) return json(res, 400, { error: 'bad chat id' }); const f = await chatFootprint(chatPictureRefs(csm[1]), pictureRefCounts()); return f ? json(res, 200, f) : json(res, 404, { error: 'no such chat' }); }
+    // A copy of a chat, to carry on in another direction (the page opens it).
+    const dupm = url.pathname.match(/^\/api\/chats\/([a-z0-9-]+)\/duplicate$/i);
+    if (dupm && req.method === 'POST') { const id = duplicateChat(dupm[1]); return id ? json(res, 200, { id }) : json(res, 404, { error: 'no such chat' }); }
     const cm = url.pathname.match(/^\/api\/chats\/([a-z0-9-]+)$/i);
     if (cm) {
       if (req.method === 'GET') { const c = getChatForPage(cm[1]); return c ? json(res, 200, c) : json(res, 404, { error: 'no such chat' }); }
