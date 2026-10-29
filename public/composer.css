@@ -26,7 +26,8 @@
 .composer-box.fold3 .cmp-foot .cmp-model-slot { flex: 0 1 auto; }
 .composer-v2 .cmp-foot .cmp-model-slot .cmp-model-chip { min-width: 0 !important; max-width: 100%; flex: 0 1 auto !important; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* the chips: what each setting is now; the usual value is quiet (dashed), a changed one lights up */
+/* the chips: what each setting is now; the usual value is quiet (dashed), a changed one lights up. Strict / YOLO is
+   always lit and never folds: it matters most. Plan first lives in the popover only (⋯). */
 .composer-v2 .cmp-chips { display: flex; align-items: center; gap: 6px; margin-left: auto; flex: none; }
 .cq-chip { position: relative; display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 8px; border-radius: 7px;
   border: 1px dashed var(--line-strong); background: transparent; color: var(--muted); font: 500 12px var(--font-ui); white-space: nowrap; cursor: pointer; flex: none; }
@@ -94,8 +95,8 @@
 .composer-box.fold3 .cmp-tray { display: none; position: absolute; bottom: calc(100% + 8px); right: 0; z-index: 70; padding: 6px; gap: 4px;
   border-radius: 10px; border: 1px solid var(--line-strong); background: var(--panel-overlay, var(--panel-2)); box-shadow: 0 14px 40px rgba(0, 0, 0, .4); }
 .composer-box.fold3 .cmp-tray.open { display: flex; }
-/* 4. Every setting in one summary chip; the Quorium shows its squares only */
-.composer-box.fold4 .cq-chip:not(.cq-sum) { display: none !important; }
+/* 4. Every setting in one summary chip, except Strict / YOLO, which always shows; the Quorium shows its squares only */
+.composer-box.fold4 .cq-chip:not(.cq-sum):not(.cq-safety) { display: none !important; }
 .composer-box.fold4 .cq-chip.cq-sum { display: inline-flex; }
 .composer-box.fold4 .cmp-q-slot .qx-pick-l, .composer-box.fold4 .cmp-q-slot .qx-chg { display: none; }
 .composer-box.fold4 .cmp-foot { gap: 6px; padding: 0 6px 6px; }
@@ -120,3 +121,5 @@
 /* the tray button's count sits in its corner, like the other badges */
 .composer-v2 .cmp-tray-b .apps-n { position: absolute; top: -5px; right: -5px; min-width: 14px; height: 14px; padding: 0 3px; border-radius: 7px;
   display: grid; place-items: center; font: 700 9px/1 var(--mono); background: var(--accent); color: var(--accent-ink); }
+/* the narrowest boxes: Strict / YOLO keeps its 🔒 / ⚡ and its colour; the word shows on hover */
+.composer-box.fold6 .cq-chip.cq-safety b { display: none; }
