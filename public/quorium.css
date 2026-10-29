@@ -88,6 +88,15 @@
 .qx-pop .qx-addk .qx-sq { cursor: inherit; }
 .qx-pop .paid-badge { margin-left: auto; }
 
-/* narrow message boxes: the squares get smaller, then go; the name stays */
-@container cmpbox (max-width: 620px) { .cmp-q-slot .qx-sq { width: 20px; height: 20px; font-size: 10px; border-radius: 5px; } .cmp-q-slot .qx-pick-l { max-width: 110px; } }
-@container cmpbox (max-width: 470px) { .cmp-q-slot .qx-strip { display: none; } .cmp-q-slot .qx-pick-l { max-width: 90px; } }
+/* narrow message boxes: smaller squares; narrower still, the Quorium takes its own line above the model, so the
+   model and the buttons beside it keep their room inside the box */
+@container cmpbox (max-width: 780px) { .cmp-q-slot .qx-sq { width: 20px; height: 20px; font-size: 10px; border-radius: 5px; } .cmp-q-slot .qx-pick-l { max-width: 110px; } }
+@container cmpbox (max-width: 700px) {
+  .chatpane .cmp-control-rack, .cmp-control-rack { flex-wrap: wrap !important; row-gap: 6px; }
+  .chatpane .cmp-q-slot, .cmp-q-slot { flex: 1 0 100%; min-width: 0; }
+  .cmp-q-slot .qx-strip { flex-wrap: wrap; }
+  .cmp-q-slot .qx-pick-l { max-width: 160px; }
+  /* the model takes what is left of its line, so the buttons beside it stay on that line (in a very narrow box
+     they move to the next line rather than squeeze the model's name) */
+  .chatpane .cmp-model-slot .cmp-model-chip, .cmp-model-slot .cmp-model-chip { flex: 1 1 0 !important; min-width: 130px !important; }
+}

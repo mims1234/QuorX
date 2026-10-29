@@ -2963,7 +2963,9 @@ function renderComposerBar(c) {
     $('.cs-x', panel).onclick = () => discard(true);
     undoBtn.onclick = () => discard(false);
   }
-  $('.model', slot).onclick = async () => { const id = await pickModel('chat', s.model, { context: `For “${clip(c.title, 40)}”` }); if (id) { s.model = id; saveChat(c); renderComposerBar(c); renderChatHead(c); applyKeyLock(); } };
+  // The chat's setup is read when the pick comes back, not from this render: a save that merged with the server's
+  // copy while the picker was open (a reply running) replaces it, and the pick must land on the one in use.
+  $('.model', slot).onclick = async () => { const id = await pickModel('chat', c.agent.setup.model, { context: `For “${clip(c.title, 40)}”` }); if (id) { c.agent.setup.model = id; saveChat(c); renderComposerBar(c); renderChatHead(c); applyKeyLock(); } };
   $('.cq-adv', quick).onclick = () => setBtn.click();
   const both = (sel) => [...bar.querySelectorAll(sel), ...quick.querySelectorAll(sel)];
   for (const b of both('.lvl[data-key] .lvl-b')) b.onclick = () => { c.agent.setup[b.closest('.lvl').dataset.key] = b.dataset.v; saveChat(c); renderComposerBar(c); };
