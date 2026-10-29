@@ -7653,6 +7653,17 @@ function encodeWav(samples, rate) {
   return new Blob([buf], { type: 'audio/wav' });
 }
 const asDataURL = (blob) => new Promise((r) => { const f = new FileReader(); f.onload = () => r(f.result); f.readAsDataURL(blob); });
+// Whether a recording has speech in it. Speech-to-text models make up whole sentences from silence, so a recording
+// with less than about a third of a second well above the room's own hum is never sent. 20 ms frames; the room's
+// level is the quietest tenth of them.
+function heardSpeech(samples, rate) {
+  const n = Math.floor(rate * 0.02), rms = [];
+  for (let i = 0; i + n <= samples.length; i += n) { let s = 0; for (let j = i; j < i + n; j++) s += samples[j] * samples[j]; rms.push(Math.sqrt(s / n)); }
+  if (!rms.length) return false;
+  const floor = [...rms].sort((a, b) => a - b)[Math.floor(rms.length * 0.1)];
+  const loud = Math.max(0.015, floor * 2); // speech rises and falls between syllables; hum and hiss stay level
+  return rms.filter((x) => x > loud).length >= 15;
+}
 // QuorX asks once before it first uses the mic (the browser asks too); ⓘ by the name lists it and can take it back.
 async function micAllowed() {
   if (G.perms?.mic === 'yes') return true;
@@ -7676,7 +7687,9 @@ async function toggleMic(c, { byKey = false } = {}) {
         const decoded = await new AudioContext().decodeAudioData(await new Blob(chunks).arrayBuffer());
         const off = new OfflineAudioContext(1, Math.ceil(decoded.duration * 16000), 16000);
         const src = off.createBufferSource(); src.buffer = decoded; src.connect(off.destination); src.start();
-        const audio = (await asDataURL(encodeWav((await off.startRendering()).getChannelData(0), 16000))).split(',')[1];
+        const samples = (await off.startRendering()).getChannelData(0);
+        if (!heardSpeech(samples, 16000)) { btn.innerHTML = CMP_ICO.mic; btn.title = micTip(); btn.disabled = false; flashTip(btn, 'Didn’t hear anything, so nothing was sent', 2200); return; }
+        const audio = (await asDataURL(encodeWav(samples, 16000))).split(',')[1];
         const r = await fetch('/api/transcribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ audio, model: G.settings.tools.listen.models[0] }) }).then((x) => x.json());
         if (r.error) throw new Error(r.error);
         const ta = c.el && $('.input', c.el.root); // none when the chat left the screen meanwhile
