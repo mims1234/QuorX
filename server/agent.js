@@ -1564,7 +1564,9 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       emit({ t: 'note', level: 'warn', msg: `${short(setup.model)} kept thinking without answering; the reply ends here.`, at: at() });
       break;
     }
-    if (emptyTries && (r.text || r.toolCalls.length) && reasonNow !== (setup.reasoning || 'off')) emptyTries = 0;
+    // A step that made calls is progress: an empty answer later in the reply gets its two tries again (with reasoning
+    // already Off it can't be lowered, so counting across the whole reply ended long replies on their third blank step).
+    if (emptyTries && (r.toolCalls.length || (r.text && reasonNow !== (setup.reasoning || 'off')))) emptyTries = 0;
     // Text written alongside tool calls is "working out loud": it goes to the trace, not the reply.
     const replyBefore = reply;
     if (r.toolCalls.length) { run.stalls = 0; run.stallText = ''; }
@@ -1587,7 +1589,8 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       // The same for calls written mid-line, right after a sentence.
       // And for calls in the model's own trained format (DeepSeek's <｜DSML｜invoke>) that end the reply: never run,
       // asked for again in QuorX's blocks.
-      const fenced = !r.skippedCalls && (r.fencedCalls || 0) + (r.midlineCalls || 0) + (r.nativeCalls || 0);
+      // And for blocks copied from how earlier calls are shown (<quorx_call ran>): written without this step's key.
+      const fenced = !r.skippedCalls && (r.fencedCalls || 0) + (r.midlineCalls || 0) + (r.nativeCalls || 0) + (r.copiedCalls || 0);
       // Sent back for an announcement and answering with the same words: that was its final answer ("I'll leave it
       // there."), not a step it skipped.
       const said = String(r.text || '').replace(/\s+/g, ' ').trim();
@@ -1598,7 +1601,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         run.stalls = (run.stalls || 0) + 1;
         reply = replyBefore;
         if (r.text) asides.push(r.text);
-        const where = r.fencedCalls ? 'inside a code block' : r.nativeCalls ? 'in its own call format' : 'in the middle of a line';
+        const where = r.fencedCalls ? 'inside a code block' : r.nativeCalls ? 'in its own call format' : r.copiedCalls ? 'as a copy of an earlier call, without this step\'s key' : 'in the middle of a line';
         emit({ t: 'note', level: 'warn', msg: fenced ? `${short(setup.model)} put its tool call${fenced > 1 ? 's' : ''} ${where}, so ${fenced > 1 ? 'they weren\'t' : 'it wasn\'t'} run; asking it to write ${fenced > 1 ? 'them' : 'it'} again.` : `${short(setup.model)} said what it would do next but wrote no tool call; asking it to make the call.`, at: at() });
         messages.push({ role: 'assistant', content: r.text || 'Done.' });
         // DeepSeek's format: its blocks are already out of the text, so the model sees only its own words again, never
@@ -1606,7 +1609,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         messages.push({ role: 'user', content: r.nativeCalls && !r.fencedCalls && !r.midlineCalls
           ? '(Your last turn ended with blocks in a different call format (<｜DSML｜invoke …>), which this app does not read, so nothing ran. If you meant to call tools, write the calls again exactly as the instructions describe: <quorx_call> blocks with the key the instructions give, each alone on a new line. If you were quoting something, carry on without it.)'
           : fenced
-          ? `(Your last turn put ${fenced > 1 ? `${fenced} tool calls` : 'its tool call'} ${r.fencedCalls ? 'inside a code block (```)' : r.nativeCalls ? 'in a different call format (<｜DSML｜invoke …>), which this app does not read' : 'in the middle of a line, after other text'}, so nothing ran. Write ${fenced > 1 ? 'them' : 'it'} again exactly as the instructions describe: ${r.nativeCalls ? 'as <quorx_call> blocks, ' : ''}each block alone on a new line of its own${r.fencedCalls ? ', with no ``` around it' : ''}.)`
+          ? `(Your last turn put ${fenced > 1 ? `${fenced} tool calls` : 'its tool call'} ${r.fencedCalls ? 'inside a code block (```)' : r.copiedCalls ? 'in the shape the conversation shows calls that already ran (<quorx_call ran>), without this step\'s key' : r.nativeCalls ? 'in a different call format (<｜DSML｜invoke …>), which this app does not read' : 'in the middle of a line, after other text'}, so nothing ran. Write ${fenced > 1 ? 'them' : 'it'} again exactly as the instructions describe: ${r.nativeCalls ? 'as <quorx_call> blocks, ' : ''}each block alone on a new line of its own${r.fencedCalls ? ', with no ``` around it' : ''}.)`
           : '(Your last turn said what you would do next but contained no tool call, so nothing ran and the reply would end there. Make that call now, written exactly as the instructions describe. If you meant that as your final answer, write the final answer again in full.)' });
         continue;
       }
@@ -2075,7 +2078,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       result = finishReason === 'length'
         ? `Your output was cut off at the ${maxOut}-token limit, so this ${name} call was NOT run and nothing was written. Write large files in parts: write_file the first ~300 lines, then append_file the rest in chunks of about 300 lines.`
         : `Error: the arguments for ${name} were not valid JSON, so nothing was run. Try again with smaller arguments.`;
-      emit({ t: 'note', level: 'warn', msg: finishReason === 'length' ? `Output hit the ${maxOut}-token limit; the ${name} call was cut off and not run. The agent was told to write in parts.` : `Malformed ${name} arguments; not run.`, at: at() });
+      emit({ t: 'note', level: 'warn', msg: finishReason === 'length' ? `Output hit the ${maxOut}-token limit; the ${name} call was cut off and not run. The agent was told to write in parts.` : `Malformed ${name} arguments; not run.`, raw: clip(String(tc.function.arguments || ''), 400), at: at() });
     } else if (textCalls.has(tc) && !tools.some((t) => t.function?.name === name)) {
       result = `Error: ${name} is not one of your tools in this chat, so nothing was run. Your tools: ${tools.map((t) => t.function?.name).filter(Boolean).join(', ')}.`;
       emit({ t: 'note', level: 'warn', msg: `The model asked for ${clip(name, 40)}, which this chat doesn't offer; not run.`, at: at() });

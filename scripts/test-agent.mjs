@@ -658,6 +658,10 @@ test('a turn that spends the whole output thinking is retried with less reasonin
   assert.equal(r2.bodies.length, 3);
   assert.match(r2.done.reply, /gave no answer, even after being asked to act/);
   assert.equal(r2.done.stats.stop, 'empty');
+  // Blank steps far apart, with calls between them, never add up: each gets its two tries again.
+  const call = () => reply('', [['list_files', {}]]);
+  const r3 = await run((body, i) => [thinking(), call(), thinking(), call(), thinking(), call(), reply('All done.')][i], { text: 'make a game' });
+  assert.deepEqual([r3.done.reply, r3.done.stats.stop], ['All done.', 'answered']);
 });
 
 test('thinking gets a budget of at most half the output', async () => {
@@ -3984,6 +3988,17 @@ test('a call block the model only quotes or shows never runs: it needs this call
   const mixed = parseToolCalls(`Like this:\n\`\`\`\n// a comment\n${call(k)}\n\`\`\``, 'c', k);
   assert.deepEqual([mixed.fenced, mixed.text.includes('pwned')], [0, true], 'a fence with other text in it is an example, left as it is');
   assert.equal(parseToolCalls(`\`\`\`\n${call('zzzz')}\n\`\`\``, 'c', k).fenced, 0, 'a fenced block with another key is not counted');
+  // Arguments written flat beside the name, and a last argument with its quotes left unescaped (CSS), are read as meant.
+  const flat = parseToolCalls(`<tool_call key="${k}">{"name":"read_file","path":"a.html"}</tool_call>`, 'c', k);
+  assert.deepEqual(JSON.parse(flat.calls[0].function.arguments), { path: 'a.html' });
+  const css = parseToolCalls(`<tool_call key="${k}">{"name":"append_file","arguments":{"path":"s.css","content":".x{font-family:"Inter"}\\n.y{content:""}"}}</tool_call>`, 'c', k);
+  assert.deepEqual([css.calls[0].function.name, JSON.parse(css.calls[0].function.arguments)], ['append_file', { path: 's.css', content: '.x{font-family:"Inter"}\n.y{content:""}' }]);
+  const nested = parseToolCalls(`<tool_call key="${k}">{"name":"write_file","arguments":{"path":"a.md","content":"x "}}\n<tool_call key="${k}">{"name":"rm","arguments":{"a":"b"}}</tool_call>`, 'c', k);
+  assert.deepEqual(nested.calls.map((c) => c.function.name), ['write_file'], 'a block inside the text it rescues stays text in the file, never a call');
+  // A call copied from how the conversation shows earlier ones (<quorx_call ran>), ending the reply: asked for again.
+  const copy = parseToolCalls(`I'll wait for it to load.\n<quorx_call ran>{"name":"browser","arguments":{"action":"wait"}}</quorx_call>`, 'c', k);
+  assert.deepEqual([copy.calls.length, copy.copied, copy.text, notRun(copy).copiedCalls], [0, 1, 'I\'ll wait for it to load.', 1]);
+  assert.equal(parseToolCalls(`It showed <quorx_call ran>{"name":"x","arguments":{}}</quorx_call> before. Then more.`, 'c', k).copied, 0, 'one in prose stays text');
   // Mid-line: only a closing run of blocks after the last sentence is a call to ask for again; a plan or a mention stays.
   for (const [what, s] of [['a list item', `The calls would be:\n- ${call(k)}\n\nSay yes and I will run them.`], ['a numbered plan at the end', `Plan:\n1. ${call(k)}`], ['a mention with prose after it', `I would never run ${call(k)} without asking.`]]) {
     const r = parseToolCalls(s, 'c', k);
