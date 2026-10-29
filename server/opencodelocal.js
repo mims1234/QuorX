@@ -137,6 +137,7 @@ export async function ensureLocalServer({ start = spawn, find = findOnPath, read
 
 const call = (s, method, p, body, signal) => fetch(s.base + p, { method, headers: { ...(s.auth ? { Authorization: s.auth } : {}), 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}), signal });
 
+export const FREE_OWN_APP = 'OpenCode keeps its free models for its own app: they don’t answer calls from QuorX. Pick a paid or plan model, or connect a provider in OpenCode.';
 /** Every model of every provider connected in OpenCode, as catalogue entries (opencode-local/<provider>/<model>). */
 export async function localModels({ server } = {}) {
   const s = server || await ensureLocalServer();
@@ -158,6 +159,9 @@ export async function localModels({ server } = {}) {
           price: plan === 'paid' ? list : [0, 0], listPrice: list, cost: { input: list[0], output: list[1], ...(c.cache?.read != null ? { cache_read: c.cache.read } : {}), ...(c.cache?.write != null ? { cache_write: c.cache.write } : {}) }, plan,
           tools: true, temp: m.capabilities?.temperature !== false, reasoning: !!m.capabilities?.reasoning, variants: Object.keys(m.variants || {}),
           format: LOCAL_ID, status: m.status === 'deprecated' ? 'deprecated' : null, canonical: null, desc: '',
+          // OpenCode's own free models (its "opencode" provider at no price) answer only inside OpenCode's own app: a
+          // call from QuorX is refused, so they show but can't be picked.
+          ...(p.id === 'opencode' && plan === 'free' ? { unusable: FREE_OWN_APP } : {}),
         });
       } catch { /* one odd entry */ }
     }

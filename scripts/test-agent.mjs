@@ -4305,6 +4305,10 @@ test('OpenCode on this PC lists every text model of every provider connected the
     const l = await localModels({ server: oc.server });
     assert.deepEqual(l.map((m) => [m.id, m.plan, m.price]), [['opencode-local/deepseek/deepseek-flash', 'paid', [0.15, 0.6]], ['opencode-local/opencode-go/glm-5.3', 'plan', [0, 0]], ['opencode-local/opencode/big-pickle', 'free', [0, 0]]], 'a model with no text out is left out');
     assert.deepEqual([l[0].name, l[0].in, l[0].variants, l[0].format], ['DeepSeek Flash · DeepSeek', ['text', 'image'], ['low', 'high'], 'opencode-local']);
+    // OpenCode's own free models answer only in its own app: listed, but marked so they can't be picked or called.
+    assert.deepEqual(l.map((m) => !!m.unusable), [false, false, true], 'only OpenCode’s own free model is marked');
+    const refused = await sourceStream({ model: 'opencode-local/opencode/big-pickle', messages: [{ role: 'user', content: 'hi' }] }, new AbortController().signal, null, null, { info: l[2] }).catch((x) => x);
+    assert.deepEqual([failureKind(refused), /own app/.test(refused.message)], ['free', true], 'a call to one is refused before it goes out');
     assert.equal(sameOnOpenRouter('opencode-local/deepseek/deepseek-flash', [{ id: 'deepseek/deepseek-flash', tools: true }]), 'deepseek/deepseek-flash', 'it falls back to the same model on OpenRouter');
     assert.equal(sameOnOpenRouter('opencode-local/openrouter/z-ai/glm-5.3', [{ id: 'z-ai/glm-5.3', tools: true }]), 'z-ai/glm-5.3');
   } finally { await oc.close(); }

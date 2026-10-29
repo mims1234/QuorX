@@ -1675,11 +1675,13 @@ function scoreBadge(id) {
 }
 // Without an OpenRouter key, a chat model on OpenRouter can't run: it shows, locked.
 const orLocked = (id) => !G.cfg?.hasKey && PK.kind === 'chat' && !sourceOfId(id);
+// Why a row can't be picked ('' when it can): no OpenRouter key for it, or a model its app keeps for itself.
+const lockWhy = (m) => (m?.unusable ? m.unusable : orLocked(m?.id) ? 'Runs on OpenRouter: add an OpenRouter key first (⚙ Settings → API keys).' : '');
 // Everything about a model, for its row's hover: who made it, where it runs, price, limits, abilities, rating.
 function modelTip(m, caps, locked) {
   const r = rateModel(m, PK.kind), sc = G.scores?.[m.id];
   return [
-    locked ? 'Runs on OpenRouter: add an OpenRouter key first (⚙ Settings → API keys).' : '',
+    locked || '',
     `${cleanName(m)} · ${PROVIDER_NAME(makerOf(m))}`,
     m.id,
     `Runs on: ${m.source ? `${SOURCE_NAME[m.source] || m.source}${m.providerName ? `, through ${m.providerName}` : ''}` : 'OpenRouter'}`,
@@ -1693,7 +1695,7 @@ function modelTip(m, caps, locked) {
   ].filter(Boolean).join('\n');
 }
 function rowHTML(m, i) {
-  const fav = (G.favModels?.[m.kind] || []).includes(m.id), locked = orLocked(m.id);
+  const fav = (G.favModels?.[m.kind] || []).includes(m.id), locked = lockWhy(m);
   const caps = [(m.in || []).includes('image') && m.kind !== 'image' ? ['👁', 'Sees images'] : null, m.tools ? ['🧰', 'Uses tools'] : null, m.reasoning ? ['🧠', 'Reasoning'] : null, (m.in || []).includes('audio') ? ['🎙', 'Hears audio'] : null, m.voices?.length ? ['🗣', `${m.voices.length} voices`] : null].filter(Boolean);
   return `<div class="mp-row ${m.id === PK.current ? 'cur' : ''} ${locked ? 'locked' : ''}" role="option" data-i="${i}" data-id="${esc(m.id)}" aria-selected="false" ${locked ? 'aria-disabled="true" ' : ''}title="${esc(modelTip(m, caps, locked))}">
     <span class="mp-main"><span class="mp-name">${cardChip(m.id)} ${esc(cleanName(m))}${m.source ? ` ${srcLogo(m.source, `Runs through ${SOURCE_NAME[m.source]} (⚙ Settings → Apps on this PC)`)}` : ''}${m.id === PK.current ? ' <span class="mp-tag cur">current</span>' : ''}</span><span class="mp-id">${esc(m.id)}</span></span>
@@ -1730,6 +1732,8 @@ function markSel(scroll = true) {
   for (const r of document.querySelectorAll('#pkList .mp-row')) { const on = Number(r.dataset.i) === PK.sel; r.classList.toggle('kb', on); r.setAttribute('aria-selected', String(on)); if (on && scroll) r.scrollIntoView({ block: 'nearest' }); }
 }
 function choose(id) {
+  const um = (G.models || []).find((x) => x.id === id);
+  if (um?.unusable) { const row = document.querySelector(`#pkList .mp-row[data-id="${CSS.escape(id)}"]`); if (row) flashTip(row, um.unusable); return; }
   if (orLocked(id)) { const b = $('#pkBanner'); if (b) { b.hidden = false; b.classList.remove('flash'); void b.offsetWidth; b.classList.add('flash'); } return; }
   const list = ((G.recentModels ??= {})[PK.kind] ??= []);
   const i = list.indexOf(id); if (i >= 0) list.splice(i, 1);

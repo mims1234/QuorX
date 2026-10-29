@@ -260,6 +260,8 @@ export async function sourceStream(body, signal, onText, onThink, { info: given,
   if (!given && !sourceInfo(body.model)) await sourceModels().catch(() => []);
   stopped(signal);
   const info = given || sourceInfo(body.model) || { plan: 'paid' };
+  // A model its app keeps for itself (OpenCode's own free ones): refused here, before a call goes out.
+  if (info.unusable) throw Object.assign(new Error(info.unusable), { kind: 'free' });
   const out = await APPS[s.source].stream(body, signal, onText, onThink, { info, idleMs });
   out.usage = { ...(out.usage || {}), ...(Object.keys(out.usage || {}).length ? priced(info, out.usage) : {}) };
   out.source = s.source;

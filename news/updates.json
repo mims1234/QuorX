@@ -1,125 +1,57 @@
 {
   "versions": [
     {
+      "version": "0.2.14",
+      "date": "2026-10-29",
+      "title": "Your own AI apps as the chat model",
+      "items": [
+        { "kind": "new", "text": "Run a chat's main model through OpenCode on this PC, with the providers you connected there: your plans pay, and QuorX keeps its own tools.", "pr": 174 },
+        { "kind": "improved", "text": "OpenCode's own free models answer only in OpenCode's app, so they show in the picker but can't be picked.", "pr": 187 },
+        { "kind": "new", "text": "Claude Code on this PC: a chat's main model through the Claude Code you are signed in to.", "pr": 178 },
+        { "kind": "new", "text": "Grok Build on this PC: a chat's main model through Grok, for text work (🖥 Computer use is off with it, and the chat says why).", "pr": 179 },
+        { "kind": "new", "text": "Chats run without an OpenRouter key on a model from an app on this PC; what needs OpenRouter is switched off and says so.", "pr": 174 },
+        { "kind": "new", "text": "The model picker starts with where a model runs (OpenRouter or an app on this PC), each with its own logo, then that source's filters.", "pr": 177 },
+        { "kind": "new", "text": "Chat rows have one ⋯ menu, also on right-click: Rename, Duplicate and Delete.", "pr": 186 },
+        { "kind": "new", "text": "🧭 next to 👁 follows the running reply's steps in the side pane, for that chat only.", "pr": 186 },
+        { "kind": "new", "text": "Computer use draws freehand: one held stroke through many points, and up to 40 steps in one go.", "pr": 183 },
+        { "kind": "improved", "text": "A reply that says what it will do but makes no call is sent back to make it, and a model that keeps stopping short ends with a clear note.", "pr": 186 },
+        { "kind": "improved", "text": "Calls a model writes inside a code block or right after a sentence are asked for again instead of showing as raw text.", "pr": 186 },
+        { "kind": "improved", "text": "A reply that loops, writes the conversation's next turns itself, or runs far too long is stopped, keeping the calls it made before.", "pr": 186 },
+        { "kind": "improved", "text": "A failed call through an app on this PC stops the reply and says which model failed and why; falling back to OpenRouter is your choice in Settings.", "pr": 174 },
+        { "kind": "safety", "text": "Tool calls written as text run only with this step's key, on a line of their own, outside code, quotes and plans, so a page or file can't make one.", "pr": 182 },
+        { "kind": "safety", "text": "A plan or a mention of a call is never asked for as a call, and Claude Code's, Grok's, OpenCode's and Cline's sign-in files stay out of the agent's reach.", "pr": 187 },
+        { "kind": "fixed", "text": "The Stop banner's quotes and other non-English characters no longer come out garbled during computer use.", "pr": 186 },
+        { "kind": "fixed", "text": "A final answer that reads like a next step is kept as the answer, without a false warning.", "pr": 187 }
+      ]
+    },
+    {
       "version": "0.2.13",
       "date": "2026-10-28",
       "title": "Schedules that run themselves, and your desktop apps",
       "items": [
-        {
-          "kind": "new",
-          "text": "Computer use: allow apps per chat at View, Click or Full, and the agent works in apps that are already open or opens installed ones by name.",
-          "pr": 161
-        },
-        {
-          "kind": "new",
-          "text": "A glowing edge and a Stop button while the agent uses your desktop or one of your Chrome tabs.",
-          "pr": 168
-        },
-        {
-          "kind": "new",
-          "text": "Schedules as jobs: manage them from a chat, Repeat this on any reply, notify rules, auto-pause after three failures, and run dots.",
-          "pr": 169
-        },
-        {
-          "kind": "new",
-          "text": "Each schedule has one chat, schedules have a project of their own, and they can repeat as often as every 3 minutes.",
-          "pr": 167
-        },
-        {
-          "kind": "new",
-          "text": "Schedules show live: a countdown to each next run, and a run going on now glows in the list and pulses in the sidebar.",
-          "pr": 172
-        },
-        {
-          "kind": "new",
-          "text": "Blocked providers in Settings, for every model or only some (deepseek/*); InferenceNet is blocked for DeepSeek models by default.",
-          "pr": 172
-        },
-        {
-          "kind": "new",
-          "text": "Always allowed rules turn on and off and count their uses, in one view in the chat, project settings and Settings.",
-          "pr": 161
-        },
-        {
-          "kind": "new",
-          "text": "Each chat has its own agent notes, and a chat can be kept off its project.",
-          "pr": 161
-        },
-        {
-          "kind": "improved",
-          "text": "Schedule chats are marked, and a scheduled turn says it sees only its prompt.",
-          "pr": 172
-        },
-        {
-          "kind": "improved",
-          "text": "Open chats pick up new scheduled runs and their cards; a schedule’s card waits 15 s (settable), and an unanswered one ends the run.",
-          "pr": 170
-        },
-        {
-          "kind": "improved",
-          "text": "A scheduled run’s Chrome tabs close 30 s after it goes well; a failed one keeps them for you to look at.",
-          "pr": 171
-        },
-        {
-          "kind": "improved",
-          "text": "A scheduled run cut short counts as failed, with no out-of-steps card.",
-          "pr": 172
-        },
-        {
-          "kind": "improved",
-          "text": "Folders outside the project: one card adds the folder to the chat, and the file tools work there.",
-          "pr": 161
-        },
-        {
-          "kind": "improved",
-          "text": "Paths to local files in replies open in File Explorer.",
-          "pr": 166
-        },
-        {
-          "kind": "improved",
-          "text": "Desktop actions are quicker and steadier: windows settle before the next step, typing reads itself back, and long typing no longer times out.",
-          "pr": 163
-        },
-        {
-          "kind": "improved",
-          "text": "A reply keeps every step it took, and replies saved short get them back.",
-          "pr": 161
-        },
-        {
-          "kind": "safety",
-          "text": "Approvals do what they say: rules match what they name, scratch scripts and cmd /c are checked, and waits are safer.",
-          "pr": 154
-        },
-        {
-          "kind": "safety",
-          "text": "Only system tools and admin shells are never used on the desktop; what you named in your message is your go-ahead.",
-          "pr": 165
-        },
-        {
-          "kind": "safety",
-          "text": "A decider’s answer can’t claim you did something, and Replace it? dialogs ask you first.",
-          "pr": 161
-        },
-        {
-          "kind": "fixed",
-          "text": "File Explorer is found by its Start-menu name, with its open folder windows.",
-          "pr": 164
-        },
-        {
-          "kind": "fixed",
-          "text": "White screenshots, scaled displays and apps that outlive QuorX are handled.",
-          "pr": 161
-        },
-        {
-          "kind": "fixed",
-          "text": "Turning off the cost badge hides the Spending total too.",
-          "pr": 166
-        },
-        {
-          "kind": "fixed",
-          "text": "Saves retry a file Windows has locked, and the browser recovers when its context is gone.",
-          "pr": 161
-        }
+        { "kind": "new", "text": "Computer use: allow apps per chat at View, Click or Full, and the agent works in apps that are already open or opens installed ones by name.", "pr": 161 },
+        { "kind": "new", "text": "A glowing edge and a Stop button while the agent uses your desktop or one of your Chrome tabs.", "pr": 168 },
+        { "kind": "new", "text": "Schedules as jobs: manage them from a chat, Repeat this on any reply, notify rules, auto-pause after three failures, and run dots.", "pr": 169 },
+        { "kind": "new", "text": "Each schedule has one chat, schedules have a project of their own, and they can repeat as often as every 3 minutes.", "pr": 167 },
+        { "kind": "new", "text": "Schedules show live: a countdown to each next run, and a run going on now glows in the list and pulses in the sidebar.", "pr": 172 },
+        { "kind": "new", "text": "Blocked providers in Settings, for every model or only some (deepseek/*); InferenceNet is blocked for DeepSeek models by default.", "pr": 172 },
+        { "kind": "new", "text": "Always allowed rules turn on and off and count their uses, in one view in the chat, project settings and Settings.", "pr": 161 },
+        { "kind": "new", "text": "Each chat has its own agent notes, and a chat can be kept off its project.", "pr": 161 },
+        { "kind": "improved", "text": "Schedule chats are marked, and a scheduled turn says it sees only its prompt.", "pr": 172 },
+        { "kind": "improved", "text": "Open chats pick up new scheduled runs and their cards; a schedule’s card waits 15 s (settable), and an unanswered one ends the run.", "pr": 170 },
+        { "kind": "improved", "text": "A scheduled run’s Chrome tabs close 30 s after it goes well; a failed one keeps them for you to look at.", "pr": 171 },
+        { "kind": "improved", "text": "A scheduled run cut short counts as failed, with no out-of-steps card.", "pr": 172 },
+        { "kind": "improved", "text": "Folders outside the project: one card adds the folder to the chat, and the file tools work there.", "pr": 161 },
+        { "kind": "improved", "text": "Paths to local files in replies open in File Explorer.", "pr": 166 },
+        { "kind": "improved", "text": "Desktop actions are quicker and steadier: windows settle before the next step, typing reads itself back, and long typing no longer times out.", "pr": 163 },
+        { "kind": "improved", "text": "A reply keeps every step it took, and replies saved short get them back.", "pr": 161 },
+        { "kind": "safety", "text": "Approvals do what they say: rules match what they name, scratch scripts and cmd /c are checked, and waits are safer.", "pr": 154 },
+        { "kind": "safety", "text": "Only system tools and admin shells are never used on the desktop; what you named in your message is your go-ahead.", "pr": 165 },
+        { "kind": "safety", "text": "A decider’s answer can’t claim you did something, and Replace it? dialogs ask you first.", "pr": 161 },
+        { "kind": "fixed", "text": "File Explorer is found by its Start-menu name, with its open folder windows.", "pr": 164 },
+        { "kind": "fixed", "text": "White screenshots, scaled displays and apps that outlive QuorX are handled.", "pr": 161 },
+        { "kind": "fixed", "text": "Turning off the cost badge hides the Spending total too.", "pr": 166 },
+        { "kind": "fixed", "text": "Saves retry a file Windows has locked, and the browser recovers when its context is gone.", "pr": 161 }
       ]
     },
     {
@@ -127,166 +59,38 @@
       "date": "2026-10-26",
       "title": "Steadier, safer and faster",
       "items": [
-        {
-          "kind": "new",
-          "text": "Video Mode: a film starts with a brief, a story pick and a storyboard, then music first and moving pictures, before anything is spent.",
-          "pr": 124
-        },
-        {
-          "kind": "new",
-          "text": "Settings, redesigned: each category laid out for what it controls, with Reset category to bring it back to its defaults.",
-          "pr": 106
-        },
-        {
-          "kind": "new",
-          "text": "Storage in Settings: see what QuorX takes on this computer, clear it, and compact older chats.",
-          "pr": 112
-        },
-        {
-          "kind": "new",
-          "text": "Skills: write, import, edit and trash your own skills, for every project or just one.",
-          "pr": 109
-        },
-        {
-          "kind": "new",
-          "text": "News from the website: new articles, reports and What's new arrive between versions.",
-          "pr": 113
-        },
-        {
-          "kind": "new",
-          "text": "A slim line under every message box shows the mic key, what it does, and Hold or Toggle.",
-          "pr": 134
-        },
-        {
-          "kind": "new",
-          "text": "⚡ YOLO can act in your own Chrome tabs without asking: a setting, off by default, with a note for every step it takes.",
-          "pr": 148
-        },
-        {
-          "kind": "improved",
-          "text": "Up to 500 steps a reply; at the limit, a card asks how to carry on.",
-          "pr": 125
-        },
-        {
-          "kind": "improved",
-          "text": "A streaming reply keeps its finished text on the page, so you can select it and code blocks stay put.",
-          "pr": 132
-        },
-        {
-          "kind": "improved",
-          "text": "Big projects and long replies no longer freeze QuorX: snapshots, search and backups now work in the background.",
-          "pr": 140
-        },
-        {
-          "kind": "improved",
-          "text": "Search skips what .gitignore ignores and build output, and says when it stopped early.",
-          "pr": 139
-        },
-        {
-          "kind": "improved",
-          "text": "Backups over 4 GB work, and very long replies use a tenth of the memory they did.",
-          "pr": 136
-        },
-        {
-          "kind": "improved",
-          "text": "Chats you aren't looking at let go of their memory, and come back complete when you open them.",
-          "pr": 147
-        },
-        {
-          "kind": "improved",
-          "text": "The agent's Chrome tabs stay open, the next reply carries on in them, and a doubtful step asks you instead of being refused.",
-          "pr": 133
-        },
-        {
-          "kind": "improved",
-          "text": "The browser agent is steadier, can be stopped mid-browsing, and works with Chrome extension 0.3.",
-          "pr": 108
-        },
-        {
-          "kind": "improved",
-          "text": "The same chat open in two windows: saves are merged instead of one window overwriting the other.",
-          "pr": 146
-        },
-        {
-          "kind": "improved",
-          "text": "Pane tabs are icons only, with each tab's name and what it does in its hover tip.",
-          "pr": 131
-        },
-        {
-          "kind": "improved",
-          "text": "Durations read as people say them: 21m 42s instead of 1301.5s.",
-          "pr": 122
-        },
-        {
-          "kind": "improved",
-          "text": "An update button next to ✕ in Settings, and a live update strip in the sidebar.",
-          "pr": 103
-        },
-        {
-          "kind": "safety",
-          "text": "QuorX opens at its own address, quorx.localhost, so your sign-in no longer reaches dev servers you run on localhost.",
-          "pr": 149
-        },
-        {
-          "kind": "safety",
-          "text": "Starting a server gets the same check as any command, and Stop pressed before a command starts means it never runs.",
-          "pr": 128
-        },
-        {
-          "kind": "safety",
-          "text": "Reading your keys by any route asks you first, and private keys are hidden from the agent in full.",
-          "pr": 130
-        },
-        {
-          "kind": "safety",
-          "text": "Keys and clicks from the agent go only to apps it started, never to your own windows.",
-          "pr": 130
-        },
-        {
-          "kind": "safety",
-          "text": "Exporting your API keys asks once more, naming the folder they go to.",
-          "pr": 137
-        },
-        {
-          "kind": "safety",
-          "text": "Pairing the extension shows a code the extension shows too, and the key stays with that extension.",
-          "pr": 143
-        },
-        {
-          "kind": "fixed",
-          "text": "Attached documents reach the agent again.",
-          "pr": 129
-        },
-        {
-          "kind": "fixed",
-          "text": "The project list survives a crash mid-save, and a file in use no longer stops QuorX.",
-          "pr": 129
-        },
-        {
-          "kind": "fixed",
-          "text": "Stopped and failed calls now count toward spend, so budgets match what OpenRouter bills.",
-          "pr": 144
-        },
-        {
-          "kind": "fixed",
-          "text": "Undo covers commands that ran at the same time, and names any file it can't cover.",
-          "pr": 145
-        },
-        {
-          "kind": "fixed",
-          "text": "The terminal no longer repeats itself after a reconnect, and Enter while typing Chinese or Japanese doesn't send.",
-          "pr": 135
-        },
-        {
-          "kind": "fixed",
-          "text": "Copy in the code view gives the code exactly as written.",
-          "pr": 146
-        },
-        {
-          "kind": "fixed",
-          "text": "Smaller fixes: News sync errors, unreadable folders, memory saves on a busy disk, and the desktop Browser tab's placement.",
-          "pr": 142
-        }
+        { "kind": "new", "text": "Video Mode: a film starts with a brief, a story pick and a storyboard, then music first and moving pictures, before anything is spent.", "pr": 124 },
+        { "kind": "new", "text": "Settings, redesigned: each category laid out for what it controls, with Reset category to bring it back to its defaults.", "pr": 106 },
+        { "kind": "new", "text": "Storage in Settings: see what QuorX takes on this computer, clear it, and compact older chats.", "pr": 112 },
+        { "kind": "new", "text": "Skills: write, import, edit and trash your own skills, for every project or just one.", "pr": 109 },
+        { "kind": "new", "text": "News from the website: new articles, reports and What's new arrive between versions.", "pr": 113 },
+        { "kind": "new", "text": "A slim line under every message box shows the mic key, what it does, and Hold or Toggle.", "pr": 134 },
+        { "kind": "new", "text": "⚡ YOLO can act in your own Chrome tabs without asking: a setting, off by default, with a note for every step it takes.", "pr": 148 },
+        { "kind": "improved", "text": "Up to 500 steps a reply; at the limit, a card asks how to carry on.", "pr": 125 },
+        { "kind": "improved", "text": "A streaming reply keeps its finished text on the page, so you can select it and code blocks stay put.", "pr": 132 },
+        { "kind": "improved", "text": "Big projects and long replies no longer freeze QuorX: snapshots, search and backups now work in the background.", "pr": 140 },
+        { "kind": "improved", "text": "Search skips what .gitignore ignores and build output, and says when it stopped early.", "pr": 139 },
+        { "kind": "improved", "text": "Backups over 4 GB work, and very long replies use a tenth of the memory they did.", "pr": 136 },
+        { "kind": "improved", "text": "Chats you aren't looking at let go of their memory, and come back complete when you open them.", "pr": 147 },
+        { "kind": "improved", "text": "The agent's Chrome tabs stay open, the next reply carries on in them, and a doubtful step asks you instead of being refused.", "pr": 133 },
+        { "kind": "improved", "text": "The browser agent is steadier, can be stopped mid-browsing, and works with Chrome extension 0.3.", "pr": 108 },
+        { "kind": "improved", "text": "The same chat open in two windows: saves are merged instead of one window overwriting the other.", "pr": 146 },
+        { "kind": "improved", "text": "Pane tabs are icons only, with each tab's name and what it does in its hover tip.", "pr": 131 },
+        { "kind": "improved", "text": "Durations read as people say them: 21m 42s instead of 1301.5s.", "pr": 122 },
+        { "kind": "improved", "text": "An update button next to ✕ in Settings, and a live update strip in the sidebar.", "pr": 103 },
+        { "kind": "safety", "text": "QuorX opens at its own address, quorx.localhost, so your sign-in no longer reaches dev servers you run on localhost.", "pr": 149 },
+        { "kind": "safety", "text": "Starting a server gets the same check as any command, and Stop pressed before a command starts means it never runs.", "pr": 128 },
+        { "kind": "safety", "text": "Reading your keys by any route asks you first, and private keys are hidden from the agent in full.", "pr": 130 },
+        { "kind": "safety", "text": "Keys and clicks from the agent go only to apps it started, never to your own windows.", "pr": 130 },
+        { "kind": "safety", "text": "Exporting your API keys asks once more, naming the folder they go to.", "pr": 137 },
+        { "kind": "safety", "text": "Pairing the extension shows a code the extension shows too, and the key stays with that extension.", "pr": 143 },
+        { "kind": "fixed", "text": "Attached documents reach the agent again.", "pr": 129 },
+        { "kind": "fixed", "text": "The project list survives a crash mid-save, and a file in use no longer stops QuorX.", "pr": 129 },
+        { "kind": "fixed", "text": "Stopped and failed calls now count toward spend, so budgets match what OpenRouter bills.", "pr": 144 },
+        { "kind": "fixed", "text": "Undo covers commands that ran at the same time, and names any file it can't cover.", "pr": 145 },
+        { "kind": "fixed", "text": "The terminal no longer repeats itself after a reconnect, and Enter while typing Chinese or Japanese doesn't send.", "pr": 135 },
+        { "kind": "fixed", "text": "Copy in the code view gives the code exactly as written.", "pr": 146 },
+        { "kind": "fixed", "text": "Smaller fixes: News sync errors, unreadable folders, memory saves on a busy disk, and the desktop Browser tab's placement.", "pr": 142 }
       ]
     },
     {
@@ -294,113 +98,27 @@
       "date": "2026-10-22",
       "title": "Your own browser for the agent",
       "items": [
-        {
-          "kind": "new",
-          "text": "The QuorX extension for Chrome, Brave or Edge: tick 🧩 Chrome in a chat and the agent works in your own browser, signed in as you.",
-          "pr": 96,
-          "link": "articles/your-own-browser-for-the-agent"
-        },
-        {
-          "kind": "new",
-          "text": "Give one of your browser tabs to a chat by dragging it there; the agent works only in that tab, and Take back ends it.",
-          "pr": 93
-        },
-        {
-          "kind": "new",
-          "text": "The Terminal tab holds your terminals, what's running and your servers, with terminal panes you can stack and resize.",
-          "pr": 91
-        },
-        {
-          "kind": "new",
-          "text": "✨ Enhance rewrites what you typed clearer and fuller before you send it. Press it again to go further, or ↶ to undo.",
-          "pr": 95
-        },
-        {
-          "kind": "new",
-          "text": "Drag files, browser tabs or terminal output onto a chat, or right-click them → Add to chat.",
-          "pr": 100
-        },
-        {
-          "kind": "new",
-          "text": "Type words in the Browser tab's address bar to search, with Google, DuckDuckGo, Bing, Brave, Startpage or your own.",
-          "pr": 99
-        },
-        {
-          "kind": "new",
-          "text": "The agent can list, rename and remove the servers saved for a project, not only add them.",
-          "pr": 87
-        },
-        {
-          "kind": "improved",
-          "text": "⚡ YOLO runs most commands on its own; only extreme ones pause for you, in warning colours.",
-          "pr": 78
-        },
-        {
-          "kind": "improved",
-          "text": "Safety & commands settings show the simple choices first, with every detail under Advanced.",
-          "pr": 84
-        },
-        {
-          "kind": "improved",
-          "text": "Replies read in order: the plan sits above its Go ahead, each review where it happened, answered questions on one line.",
-          "pr": 97
-        },
-        {
-          "kind": "improved",
-          "text": "Your terminal is a normal terminal, and tools you just installed are found at once.",
-          "pr": 80
-        },
-        {
-          "kind": "improved",
-          "text": "Follow also switches to the Terminal tab when the agent runs a command.",
-          "pr": 90
-        },
-        {
-          "kind": "improved",
-          "text": "Links in chats and News open with Ctrl+click, in the Browser tab.",
-          "pr": 85
-        },
-        {
-          "kind": "improved",
-          "text": "Closing a tab that shows a running server asks whether to stop the server or keep it running.",
-          "pr": 92
-        },
-        {
-          "kind": "safety",
-          "text": "The agent knows the names of your project's secrets, never their values.",
-          "pr": 81
-        },
-        {
-          "kind": "safety",
-          "text": "Guarded against the October 2026 Node.js security issue until the desktop app's fix ships.",
-          "pr": 75
-        },
-        {
-          "kind": "fixed",
-          "text": "Screenshots of scrolled pages are no longer blank, so the agent stops re-checking pages that are fine.",
-          "pr": 73,
-          "link": "articles/the-screenshot-that-was-always-blank"
-        },
-        {
-          "kind": "fixed",
-          "text": "The agent's screenshots no longer stall while its tab is hidden in the desktop app.",
-          "pr": 82
-        },
-        {
-          "kind": "fixed",
-          "text": "Fresh eyes no longer raises an alarm about a file the agent hasn't written yet.",
-          "pr": 79
-        },
-        {
-          "kind": "fixed",
-          "text": "After OpenRouter sign-in, the browser tab says to close it and QuorX comes to the front.",
-          "pr": 73
-        },
-        {
-          "kind": "fixed",
-          "text": "Smaller fixes: the sidebar's title row, the ▶ in Servers, Clear output next to Close, and the Running stop button.",
-          "pr": 89
-        }
+        { "kind": "new", "text": "The QuorX extension for Chrome, Brave or Edge: tick 🧩 Chrome in a chat and the agent works in your own browser, signed in as you.", "pr": 96, "link": "articles/your-own-browser-for-the-agent" },
+        { "kind": "new", "text": "Give one of your browser tabs to a chat by dragging it there; the agent works only in that tab, and Take back ends it.", "pr": 93 },
+        { "kind": "new", "text": "The Terminal tab holds your terminals, what's running and your servers, with terminal panes you can stack and resize.", "pr": 91 },
+        { "kind": "new", "text": "✨ Enhance rewrites what you typed clearer and fuller before you send it. Press it again to go further, or ↶ to undo.", "pr": 95 },
+        { "kind": "new", "text": "Drag files, browser tabs or terminal output onto a chat, or right-click them → Add to chat.", "pr": 100 },
+        { "kind": "new", "text": "Type words in the Browser tab's address bar to search, with Google, DuckDuckGo, Bing, Brave, Startpage or your own.", "pr": 99 },
+        { "kind": "new", "text": "The agent can list, rename and remove the servers saved for a project, not only add them.", "pr": 87 },
+        { "kind": "improved", "text": "⚡ YOLO runs most commands on its own; only extreme ones pause for you, in warning colours.", "pr": 78 },
+        { "kind": "improved", "text": "Safety & commands settings show the simple choices first, with every detail under Advanced.", "pr": 84 },
+        { "kind": "improved", "text": "Replies read in order: the plan sits above its Go ahead, each review where it happened, answered questions on one line.", "pr": 97 },
+        { "kind": "improved", "text": "Your terminal is a normal terminal, and tools you just installed are found at once.", "pr": 80 },
+        { "kind": "improved", "text": "Follow also switches to the Terminal tab when the agent runs a command.", "pr": 90 },
+        { "kind": "improved", "text": "Links in chats and News open with Ctrl+click, in the Browser tab.", "pr": 85 },
+        { "kind": "improved", "text": "Closing a tab that shows a running server asks whether to stop the server or keep it running.", "pr": 92 },
+        { "kind": "safety", "text": "The agent knows the names of your project's secrets, never their values.", "pr": 81 },
+        { "kind": "safety", "text": "Guarded against the October 2026 Node.js security issue until the desktop app's fix ships.", "pr": 75 },
+        { "kind": "fixed", "text": "Screenshots of scrolled pages are no longer blank, so the agent stops re-checking pages that are fine.", "pr": 73, "link": "articles/the-screenshot-that-was-always-blank" },
+        { "kind": "fixed", "text": "The agent's screenshots no longer stall while its tab is hidden in the desktop app.", "pr": 82 },
+        { "kind": "fixed", "text": "Fresh eyes no longer raises an alarm about a file the agent hasn't written yet.", "pr": 79 },
+        { "kind": "fixed", "text": "After OpenRouter sign-in, the browser tab says to close it and QuorX comes to the front.", "pr": 73 },
+        { "kind": "fixed", "text": "Smaller fixes: the sidebar's title row, the ▶ in Servers, Clear output next to Close, and the Running stop button.", "pr": 89 }
       ]
     },
     {
@@ -408,31 +126,11 @@
       "date": "2026-10-21",
       "title": "In the Microsoft Store, and a browser that notices sound",
       "items": [
-        {
-          "kind": "new",
-          "text": "QuorX is in the Microsoft Store: Microsoft signs that copy and keeps it up to date, so Windows shows no warning.",
-          "pr": 68
-        },
-        {
-          "kind": "new",
-          "text": "The agent's browser tells it whether a page started any sound, so it can check a game or a player it can't hear.",
-          "pr": 69
-        },
-        {
-          "kind": "improved",
-          "text": "The Windows app is about 55 MB smaller: it carries only the terminal parts it uses.",
-          "pr": 69
-        },
-        {
-          "kind": "improved",
-          "text": "The Models report in News points to OpenRouter's rankings for choosing a model.",
-          "pr": 69
-        },
-        {
-          "kind": "fixed",
-          "text": "With another copy of QuorX already running, the desktop app starts its own instead of opening the other one.",
-          "pr": 71
-        }
+        { "kind": "new", "text": "QuorX is in the Microsoft Store: Microsoft signs that copy and keeps it up to date, so Windows shows no warning.", "pr": 68 },
+        { "kind": "new", "text": "The agent's browser tells it whether a page started any sound, so it can check a game or a player it can't hear.", "pr": 69 },
+        { "kind": "improved", "text": "The Windows app is about 55 MB smaller: it carries only the terminal parts it uses.", "pr": 69 },
+        { "kind": "improved", "text": "The Models report in News points to OpenRouter's rankings for choosing a model.", "pr": 69 },
+        { "kind": "fixed", "text": "With another copy of QuorX already running, the desktop app starts its own instead of opening the other one.", "pr": 71 }
       ]
     },
     {
@@ -440,31 +138,11 @@
       "date": "2026-10-21",
       "title": "Research in News, and a browser that can wait",
       "items": [
-        {
-          "kind": "new",
-          "text": "News has seven new articles on what 0.2.7 measured and learned, from the cache-friendly prompt to a lock-down post-mortem.",
-          "pr": 63
-        },
-        {
-          "kind": "improved",
-          "text": "The Models, Tests and Platforms reports in News are rebuilt with 0.2.7's benchmark and test results.",
-          "pr": 63
-        },
-        {
-          "kind": "new",
-          "text": "The agent's browser can wait for a timer, a round or an animation, instead of sleeping in the shell.",
-          "pr": 64
-        },
-        {
-          "kind": "improved",
-          "text": "The agent's browser presses key combinations like Shift+R and Control+S, and a capital letter holds Shift.",
-          "pr": 64
-        },
-        {
-          "kind": "fixed",
-          "text": "The Tests report in News shows each pack's results only, not details of the computer that ran the tests.",
-          "pr": 66
-        }
+        { "kind": "new", "text": "News has seven new articles on what 0.2.7 measured and learned, from the cache-friendly prompt to a lock-down post-mortem.", "pr": 63 },
+        { "kind": "improved", "text": "The Models, Tests and Platforms reports in News are rebuilt with 0.2.7's benchmark and test results.", "pr": 63 },
+        { "kind": "new", "text": "The agent's browser can wait for a timer, a round or an animation, instead of sleeping in the shell.", "pr": 64 },
+        { "kind": "improved", "text": "The agent's browser presses key combinations like Shift+R and Control+S, and a capital letter holds Shift.", "pr": 64 },
+        { "kind": "fixed", "text": "The Tests report in News shows each pack's results only, not details of the computer that ran the tests.", "pr": 66 }
       ]
     },
     {
@@ -472,116 +150,28 @@
       "date": "2026-10-21",
       "title": "Review, hooks, schedules and memory",
       "items": [
-        {
-          "kind": "new",
-          "text": "/review lists bugs in what changed (the last reply, uncommitted changes or the branch) with file:line; send the ones you agree with to the agent.",
-          "pr": 37
-        },
-        {
-          "kind": "new",
-          "text": "Hooks run your own commands around the agent's work, like npm run lint after every file write, set in each project's settings.",
-          "pr": 38
-        },
-        {
-          "kind": "new",
-          "text": "Schedules start a chat on their own, like every weekday at 9 in a project, with the prompt, model and mode you saved.",
-          "pr": 39
-        },
-        {
-          "kind": "new",
-          "text": "Memory: a short list of facts and preferences you approve, like \"I use pnpm\", that every chat gets; edit it in Settings.",
-          "pr": 45
-        },
-        {
-          "kind": "new",
-          "text": "Export my QuorX saves your chats, projects, settings and rules to one file, and Import restores it on any computer.",
-          "pr": 54
-        },
-        {
-          "kind": "new",
-          "text": "Paid media work with several parts is priced up front as one production plan and approved once.",
-          "pr": 44
-        },
-        {
-          "kind": "new",
-          "text": "A video clip can start from a picture, and edit_video joins clips, stills, voice and music into one .mp4 with ffmpeg.",
-          "pr": 47
-        },
-        {
-          "kind": "new",
-          "text": "Recommended models have a model card with their limits, quirks and tips, and the agent reads the ones it uses.",
-          "pr": 52
-        },
-        {
-          "kind": "new",
-          "text": "A short first-run tour shows projects, Strict and YOLO, the deciders, costs and the terminal.",
-          "pr": 56
-        },
-        {
-          "kind": "new",
-          "text": "Research notes for 0.2.7 in docs/research: how QuorX checks its agent across models, a cheaper prompt, and a 0.2.5 post-mortem.",
-          "pr": 62
-        },
-        {
-          "kind": "improved",
-          "text": "Each step's prompt is smaller and puts what doesn't change first, so more of it is read from the cache.",
-          "pr": 58
-        },
-        {
-          "kind": "improved",
-          "text": "Usage shows how much of each model's input came from the prompt cache.",
-          "pr": 42
-        },
-        {
-          "kind": "improved",
-          "text": "Closing the desktop window explains that QuorX keeps running in the tray, and Quit QuorX is easy to find.",
-          "pr": 49
-        },
-        {
-          "kind": "fixed",
-          "text": "The desktop app ships its full terminal again, plus the terminal view and math files the installer had left out.",
-          "pr": 53
-        },
-        {
-          "kind": "fixed",
-          "text": "A reply resumed after a restart stays in one bubble and keeps its result.",
-          "pr": 35
-        },
-        {
-          "kind": "fixed",
-          "text": "Two copies of QuorX on one computer no longer sign each other out.",
-          "pr": 57
-        },
-        {
-          "kind": "fixed",
-          "text": "A project inside another project's folder no longer fills that project's file list and prompts.",
-          "pr": 41
-        },
-        {
-          "kind": "fixed",
-          "text": "A file check that runs out of time no longer reports a syntax error in a file that is fine.",
-          "pr": 46
-        },
-        {
-          "kind": "safety",
-          "text": "QuorX answers only the computer it runs on: phone and other-device access is gone, and so is everything it opened up.",
-          "pr": 61
-        },
-        {
-          "kind": "safety",
-          "text": "Hook commands go through your command rules and approvals like the agent's own, and /review never sends secrets files.",
-          "pr": 38
-        },
-        {
-          "kind": "safety",
-          "text": "An imported backup never changes your approval settings, and its schedules arrive paused.",
-          "pr": 54
-        },
-        {
-          "kind": "safety",
-          "text": "Every pull request is tested on Windows and Linux, and new versions reach installed apps only once promoted.",
-          "pr": 43
-        }
+        { "kind": "new", "text": "/review lists bugs in what changed (the last reply, uncommitted changes or the branch) with file:line; send the ones you agree with to the agent.", "pr": 37 },
+        { "kind": "new", "text": "Hooks run your own commands around the agent's work, like npm run lint after every file write, set in each project's settings.", "pr": 38 },
+        { "kind": "new", "text": "Schedules start a chat on their own, like every weekday at 9 in a project, with the prompt, model and mode you saved.", "pr": 39 },
+        { "kind": "new", "text": "Memory: a short list of facts and preferences you approve, like \"I use pnpm\", that every chat gets; edit it in Settings.", "pr": 45 },
+        { "kind": "new", "text": "Export my QuorX saves your chats, projects, settings and rules to one file, and Import restores it on any computer.", "pr": 54 },
+        { "kind": "new", "text": "Paid media work with several parts is priced up front as one production plan and approved once.", "pr": 44 },
+        { "kind": "new", "text": "A video clip can start from a picture, and edit_video joins clips, stills, voice and music into one .mp4 with ffmpeg.", "pr": 47 },
+        { "kind": "new", "text": "Recommended models have a model card with their limits, quirks and tips, and the agent reads the ones it uses.", "pr": 52 },
+        { "kind": "new", "text": "A short first-run tour shows projects, Strict and YOLO, the deciders, costs and the terminal.", "pr": 56 },
+        { "kind": "new", "text": "Research notes for 0.2.7 in docs/research: how QuorX checks its agent across models, a cheaper prompt, and a 0.2.5 post-mortem.", "pr": 62 },
+        { "kind": "improved", "text": "Each step's prompt is smaller and puts what doesn't change first, so more of it is read from the cache.", "pr": 58 },
+        { "kind": "improved", "text": "Usage shows how much of each model's input came from the prompt cache.", "pr": 42 },
+        { "kind": "improved", "text": "Closing the desktop window explains that QuorX keeps running in the tray, and Quit QuorX is easy to find.", "pr": 49 },
+        { "kind": "fixed", "text": "The desktop app ships its full terminal again, plus the terminal view and math files the installer had left out.", "pr": 53 },
+        { "kind": "fixed", "text": "A reply resumed after a restart stays in one bubble and keeps its result.", "pr": 35 },
+        { "kind": "fixed", "text": "Two copies of QuorX on one computer no longer sign each other out.", "pr": 57 },
+        { "kind": "fixed", "text": "A project inside another project's folder no longer fills that project's file list and prompts.", "pr": 41 },
+        { "kind": "fixed", "text": "A file check that runs out of time no longer reports a syntax error in a file that is fine.", "pr": 46 },
+        { "kind": "safety", "text": "QuorX answers only the computer it runs on: phone and other-device access is gone, and so is everything it opened up.", "pr": 61 },
+        { "kind": "safety", "text": "Hook commands go through your command rules and approvals like the agent's own, and /review never sends secrets files.", "pr": 38 },
+        { "kind": "safety", "text": "An imported backup never changes your approval settings, and its schedules arrive paused.", "pr": 54 },
+        { "kind": "safety", "text": "Every pull request is tested on Windows and Linux, and new versions reach installed apps only once promoted.", "pr": 43 }
       ]
     },
     {
@@ -589,31 +179,11 @@
       "date": "2026-10-21",
       "title": "Your projects and terminal are back",
       "items": [
-        {
-          "kind": "fixed",
-          "text": "0.2.5 locked QuorX out of its own data files, so projects, chats and the Terminal seemed gone; nothing was lost.",
-          "pr": 34
-        },
-        {
-          "kind": "fixed",
-          "text": "QuorX repairs those files by itself when it starts, before it reads anything, with no administrator rights needed.",
-          "pr": 34
-        },
-        {
-          "kind": "fixed",
-          "text": "The desktop window no longer says its app link is not valid after a restart.",
-          "pr": 34
-        },
-        {
-          "kind": "safety",
-          "text": "The data folder stays private to your account: only the folder is locked, and its files inherit that.",
-          "pr": 34
-        },
-        {
-          "kind": "improved",
-          "text": "If the project list can't be read, QuorX says so instead of showing an empty list.",
-          "pr": 34
-        }
+        { "kind": "fixed", "text": "0.2.5 locked QuorX out of its own data files, so projects, chats and the Terminal seemed gone; nothing was lost.", "pr": 34 },
+        { "kind": "fixed", "text": "QuorX repairs those files by itself when it starts, before it reads anything, with no administrator rights needed.", "pr": 34 },
+        { "kind": "fixed", "text": "The desktop window no longer says its app link is not valid after a restart.", "pr": 34 },
+        { "kind": "safety", "text": "The data folder stays private to your account: only the folder is locked, and its files inherit that.", "pr": 34 },
+        { "kind": "improved", "text": "If the project list can't be read, QuorX says so instead of showing an empty list.", "pr": 34 }
       ]
     },
     {
@@ -621,45 +191,14 @@
       "date": "2026-10-21",
       "title": "Locked down by default",
       "items": [
-        {
-          "kind": "safety",
-          "text": "QuorX answers only its own windows: open the link it prints at start once per browser (the desktop app does this for you).",
-          "pr": 32
-        },
-        {
-          "kind": "safety",
-          "text": "Other devices are off for new installs, and QuorX listens only on this computer until you turn them on.",
-          "pr": 32
-        },
-        {
-          "kind": "safety",
-          "text": "Commands can't read QuorX's keys or browser profiles, and reading files outside the project asks first.",
-          "pr": 32
-        },
-        {
-          "kind": "safety",
-          "text": "Web fetches check every redirect, and a page from one chat can't read another chat's files.",
-          "pr": 32
-        },
-        {
-          "kind": "safety",
-          "text": "Releases are built by a read-only job and published by a separate step, with checksums checked in between.",
-          "pr": 32
-        },
-        {
-          "kind": "improved",
-          "text": "Command rules move from each project's folder into QuorX's own data folder; add any you saved before again.",
-          "pr": 32
-        },
-        {
-          "kind": "new",
-          "text": "A video direction skill for trailers, explainers and social cuts, with the research behind it.",
-          "pr": 31
-        },
-        {
-          "kind": "improved",
-          "text": "Code and styles for features that are gone were removed, about 1,100 lines lighter."
-        }
+        { "kind": "safety", "text": "QuorX answers only its own windows: open the link it prints at start once per browser (the desktop app does this for you).", "pr": 32 },
+        { "kind": "safety", "text": "Other devices are off for new installs, and QuorX listens only on this computer until you turn them on.", "pr": 32 },
+        { "kind": "safety", "text": "Commands can't read QuorX's keys or browser profiles, and reading files outside the project asks first.", "pr": 32 },
+        { "kind": "safety", "text": "Web fetches check every redirect, and a page from one chat can't read another chat's files.", "pr": 32 },
+        { "kind": "safety", "text": "Releases are built by a read-only job and published by a separate step, with checksums checked in between.", "pr": 32 },
+        { "kind": "improved", "text": "Command rules move from each project's folder into QuorX's own data folder; add any you saved before again.", "pr": 32 },
+        { "kind": "new", "text": "A video direction skill for trailers, explainers and social cuts, with the research behind it.", "pr": 31 },
+        { "kind": "improved", "text": "Code and styles for features that are gone were removed, about 1,100 lines lighter." }
       ]
     },
     {
@@ -667,28 +206,11 @@
       "date": "2026-10-20",
       "title": "Open source, under Apache 2.0",
       "items": [
-        {
-          "kind": "new",
-          "text": "QuorX is open source under the Apache License 2.0: use it, change it and fork it, for personal or commercial work."
-        },
-        {
-          "kind": "new",
-          "text": "Each release lists the installer's SHA-256 checksum and a signed proof that GitHub built it from this repository."
-        },
-        {
-          "kind": "improved",
-          "text": "A shorter README with the trailer, plus pages on getting started, features, privacy and security."
-        },
-        {
-          "kind": "fixed",
-          "text": "A project's spend in the sidebar no longer goes below zero while a reply is running.",
-          "pr": 29
-        },
-        {
-          "kind": "fixed",
-          "text": "The agent's own page in the Browser tab shows its picture after the reply, instead of a broken image.",
-          "pr": 30
-        }
+        { "kind": "new", "text": "QuorX is open source under the Apache License 2.0: use it, change it and fork it, for personal or commercial work." },
+        { "kind": "new", "text": "Each release lists the installer's SHA-256 checksum and a signed proof that GitHub built it from this repository." },
+        { "kind": "improved", "text": "A shorter README with the trailer, plus pages on getting started, features, privacy and security." },
+        { "kind": "fixed", "text": "A project's spend in the sidebar no longer goes below zero while a reply is running.", "pr": 29 },
+        { "kind": "fixed", "text": "The agent's own page in the Browser tab shows its picture after the reply, instead of a broken image.", "pr": 30 }
       ]
     },
     {
@@ -696,54 +218,18 @@
       "date": "2026-10-20",
       "title": "Read the request in full, and wait for you a moment",
       "items": [
-        {
-          "kind": "new",
-          "text": "Prompt enhancer: a small model spells out what your request implies, shown under your message for you to correct."
-        },
-        {
-          "kind": "improved",
-          "text": "The agent and the deciders read that reading, so a movie trailer's voice-over counts as asked for."
-        },
-        {
-          "kind": "new",
-          "text": "In YOLO, a question or an unsettled approval waits 15 seconds for you before the deciders answer or it carries on."
-        },
-        {
-          "kind": "improved",
-          "text": "Wait for me, or typing in the card, stops that clock; set the time in Settings under Budget & approvals."
-        },
-        {
-          "kind": "improved",
-          "text": "A helper script the agent writes in its own scratch folder is judged on harm only, so the deciders no longer turn it down for not being asked for."
-        },
-        {
-          "kind": "improved",
-          "text": "PowerShell lines that only work with text, such as $_.FullName.Replace(...), .IndexOf(...) and .Substring(...), count as reads and no longer wait for approval."
-        },
-        {
-          "kind": "improved",
-          "text": "A plan that nobody has started after 10 steps gets a nudge to begin."
-        },
-        {
-          "kind": "fixed",
-          "text": "An approval the deciders couldn't settle showed up as two identical cards."
-        },
-        {
-          "kind": "fixed",
-          "text": "The placeholder left when old text is trimmed from the conversation could be written into a file. Such writes are refused now."
-        },
-        {
-          "kind": "fixed",
-          "text": "Bugs the reviewer finds that a user would notice send the build back even when its scores pass."
-        },
-        {
-          "kind": "fixed",
-          "text": "After the checks send a build back, the final reply keeps its answer to your message and adds what was fixed."
-        },
-        {
-          "kind": "improved",
-          "text": "The cost card at the end of the steps is more compact."
-        }
+        { "kind": "new", "text": "Prompt enhancer: a small model spells out what your request implies, shown under your message for you to correct." },
+        { "kind": "improved", "text": "The agent and the deciders read that reading, so a movie trailer's voice-over counts as asked for." },
+        { "kind": "new", "text": "In YOLO, a question or an unsettled approval waits 15 seconds for you before the deciders answer or it carries on." },
+        { "kind": "improved", "text": "Wait for me, or typing in the card, stops that clock; set the time in Settings under Budget & approvals." },
+        { "kind": "improved", "text": "A helper script the agent writes in its own scratch folder is judged on harm only, so the deciders no longer turn it down for not being asked for." },
+        { "kind": "improved", "text": "PowerShell lines that only work with text, such as $_.FullName.Replace(...), .IndexOf(...) and .Substring(...), count as reads and no longer wait for approval." },
+        { "kind": "improved", "text": "A plan that nobody has started after 10 steps gets a nudge to begin." },
+        { "kind": "fixed", "text": "An approval the deciders couldn't settle showed up as two identical cards." },
+        { "kind": "fixed", "text": "The placeholder left when old text is trimmed from the conversation could be written into a file. Such writes are refused now." },
+        { "kind": "fixed", "text": "Bugs the reviewer finds that a user would notice send the build back even when its scores pass." },
+        { "kind": "fixed", "text": "After the checks send a build back, the final reply keeps its answer to your message and adds what was fixed." },
+        { "kind": "improved", "text": "The cost card at the end of the steps is more compact." }
       ]
     },
     {
@@ -751,16 +237,8 @@
       "date": "2026-10-20",
       "title": "News that reads as published writing",
       "items": [
-        {
-          "kind": "improved",
-          "text": "The reports, articles and What's new use neutral wording, written for anyone who reads them.",
-          "pr": 27
-        },
-        {
-          "kind": "improved",
-          "text": "Numbers worked out from the computer's own logs are labelled On this computer, and still never leave it.",
-          "pr": 27
-        }
+        { "kind": "improved", "text": "The reports, articles and What's new use neutral wording, written for anyone who reads them.", "pr": 27 },
+        { "kind": "improved", "text": "Numbers worked out from the computer's own logs are labelled On this computer, and still never leave it.", "pr": 27 }
       ]
     },
     {
@@ -768,14 +246,8 @@
       "date": "2026-10-20",
       "title": "A logo of its own",
       "items": [
-        {
-          "kind": "new",
-          "text": "QuorX has its own logo, a Q whose tail is an X, in the top bar, on Home, in Settings, by the version and as the tab icon."
-        },
-        {
-          "kind": "improved",
-          "text": "The desktop app uses the logo for its window, taskbar, tray, notifications and installer."
-        }
+        { "kind": "new", "text": "QuorX has its own logo, a Q whose tail is an X, in the top bar, on Home, in Settings, by the version and as the tab icon." },
+        { "kind": "improved", "text": "The desktop app uses the logo for its window, taskbar, tray, notifications and installer." }
       ]
     },
     {
@@ -783,174 +255,42 @@
       "date": "2026-10-20",
       "title": "Every kind of app, with the safety to match",
       "items": [
-        {
-          "kind": "new",
-          "text": "News in the sidebar: what's new in each version, reports and articles, with a dot when something is new.",
-          "pr": 16
-        },
-        {
-          "kind": "new",
-          "text": "Design systems: pick one of six starters or measure one from a site or screenshot, and every chat in the project builds to it."
-        },
-        {
-          "kind": "new",
-          "text": "Comment on part of a page in the Browser tab: point at an element, say what should change, and the agent changes only that."
-        },
-        {
-          "kind": "new",
-          "text": "Export a page as a PDF or a full-length PNG, or the project's files as a ZIP."
-        },
-        {
-          "kind": "new",
-          "text": "Any MCP client can hand work to QuorX: list projects, start a reply, follow it and stop it; approvals stay with the person at QuorX."
-        },
-        {
-          "kind": "new",
-          "text": "Replay a finished reply step by step with its real timing, a scrubber and speeds up to 16×."
-        },
-        {
-          "kind": "improved",
-          "text": "Home's start box picks a project, a recent folder or a template before typing."
-        },
-        {
-          "kind": "improved",
-          "text": "Projects show their GitHub repo, can be pinned or archived, and the chat header shows what the project has spent."
-        },
-        {
-          "kind": "improved",
-          "text": "Costs update live while a reply runs, and a reply that ended early still counts what its calls spent."
-        },
-        {
-          "kind": "improved",
-          "text": "A simpler message box: the model, then This chat's settings with the caps, reasoning and every tool as one icon."
-        },
-        {
-          "kind": "improved",
-          "text": "Home lists the projects, pinned ones first, each with its latest chats."
-        },
-        {
-          "kind": "fixed",
-          "text": "When the reviewer can't open any page, it says so instead of scoring a browser that failed."
-        },
-        {
-          "kind": "improved",
-          "text": "The side panel can be hidden for a chat-only view, text size and page zoom are set separately, and notifications carry QuorX's name."
-        },
-        {
-          "kind": "new",
-          "text": "The agent works through a real shell, so it can build command-line programs and desktop apps, not only web pages.",
-          "pr": 1
-        },
-        {
-          "kind": "safety",
-          "text": "Rules read every command before it runs; deleting the user profile, a drive or a system folder is blocked however it is written.",
-          "pr": 1
-        },
-        {
-          "kind": "safety",
-          "text": "Stop ends everything a command started and confirms nothing is left, and Undo now covers what commands change.",
-          "pr": 1
-        },
-        {
-          "kind": "safety",
-          "text": "A tripwire stops a command part-way when many files outside the project disappear.",
-          "pr": 1
-        },
-        {
-          "kind": "safety",
-          "text": "In YOLO the deciders vote on risky commands; they see only the facts, need a quorum, and never include the chat's own model.",
-          "pr": 1
-        },
-        {
-          "kind": "safety",
-          "text": "Spending caps per reply and per day, and installs for the whole computer always ask first.",
-          "pr": 1
-        },
-        {
-          "kind": "improved",
-          "text": "QuorX checks that a toolchain can really build here before the agent starts, and says what is missing.",
-          "pr": 1
-        },
-        {
-          "kind": "new",
-          "text": "The agent can answer prompts in terminal programs, click through Windows desktop apps and Android emulators, and use a debugger.",
-          "pr": 1
-        },
-        {
-          "kind": "new",
-          "text": "A Running tab shows everything running in a project and who started it, with Stop on each and Stop all.",
-          "pr": 2
-        },
-        {
-          "kind": "improved",
-          "text": "Long builds and installs move to the background instead of being cut off at a time limit.",
-          "pr": 2
-        },
-        {
-          "kind": "new",
-          "text": "Platform packs: one file per kind of app tells QuorX how to detect, check, run, debug and explain it.",
-          "pr": 3
-        },
-        {
-          "kind": "new",
-          "text": "Anyone can test the packs their computer supports with npm run test:packs, without an OpenRouter key.",
-          "pr": 3
-        },
-        {
-          "kind": "new",
-          "text": ".NET: WinForms and WPF apps are built and driven, dotnet test failures are summed up, and netcoredbg debugs them.",
-          "pr": 4
-        },
-        {
-          "kind": "safety",
-          "text": "Scripts that run other programs are read first and always ask, so a wrapper script can't hide what really runs.",
-          "pr": 5
-        },
-        {
-          "kind": "new",
-          "text": "Tauri apps are built, and their window is read and clicked through WebView2.",
-          "pr": 6
-        },
-        {
-          "kind": "new",
-          "text": "Go, C, C++ and Rust programs can be debugged with breakpoints, and C and C++ projects get a build check before the reply.",
-          "pr": 7
-        },
-        {
-          "kind": "new",
-          "text": "Electron apps are driven through their DevTools port, and the debugger attaches to the main process.",
-          "pr": 8
-        },
-        {
-          "kind": "new",
-          "text": "Godot and Unity projects are checked and their tests summed up; MSIX and WiX installers are built with test certificates only.",
-          "pr": 9
-        },
-        {
-          "kind": "new",
-          "text": "Android emulators are started and driven, crashes point to the first line of the project's own code, and Flutter apps are checked and debugged.",
-          "pr": 10
-        },
-        {
-          "kind": "new",
-          "text": "Java and Kotlin: Gradle and Maven compile checks, JUnit summaries, and a debugger built on the JDK's own.",
-          "pr": 11
-        },
-        {
-          "kind": "safety",
-          "text": "QuorX runs safely on macOS and Linux: Stop ends whole process groups, rules read bash and zsh, and key folders are off limits.",
-          "pr": 12
-        },
-        {
-          "kind": "new",
-          "text": "On a Mac, iPhone and Mac apps are built with Xcode, driven in the Simulator and debugged; crash reports are summed up.",
-          "pr": 13
-        },
-        {
-          "kind": "new",
-          "text": "Python desktop apps use the project's own virtual environment, and tkinter and PyQt windows are driven and debugged.",
-          "pr": 14
-        }
+        { "kind": "new", "text": "News in the sidebar: what's new in each version, reports and articles, with a dot when something is new.", "pr": 16 },
+        { "kind": "new", "text": "Design systems: pick one of six starters or measure one from a site or screenshot, and every chat in the project builds to it." },
+        { "kind": "new", "text": "Comment on part of a page in the Browser tab: point at an element, say what should change, and the agent changes only that." },
+        { "kind": "new", "text": "Export a page as a PDF or a full-length PNG, or the project's files as a ZIP." },
+        { "kind": "new", "text": "Any MCP client can hand work to QuorX: list projects, start a reply, follow it and stop it; approvals stay with the person at QuorX." },
+        { "kind": "new", "text": "Replay a finished reply step by step with its real timing, a scrubber and speeds up to 16×." },
+        { "kind": "improved", "text": "Home's start box picks a project, a recent folder or a template before typing." },
+        { "kind": "improved", "text": "Projects show their GitHub repo, can be pinned or archived, and the chat header shows what the project has spent." },
+        { "kind": "improved", "text": "Costs update live while a reply runs, and a reply that ended early still counts what its calls spent." },
+        { "kind": "improved", "text": "A simpler message box: the model, then This chat's settings with the caps, reasoning and every tool as one icon." },
+        { "kind": "improved", "text": "Home lists the projects, pinned ones first, each with its latest chats." },
+        { "kind": "fixed", "text": "When the reviewer can't open any page, it says so instead of scoring a browser that failed." },
+        { "kind": "improved", "text": "The side panel can be hidden for a chat-only view, text size and page zoom are set separately, and notifications carry QuorX's name." },
+        { "kind": "new", "text": "The agent works through a real shell, so it can build command-line programs and desktop apps, not only web pages.", "pr": 1 },
+        { "kind": "safety", "text": "Rules read every command before it runs; deleting the user profile, a drive or a system folder is blocked however it is written.", "pr": 1 },
+        { "kind": "safety", "text": "Stop ends everything a command started and confirms nothing is left, and Undo now covers what commands change.", "pr": 1 },
+        { "kind": "safety", "text": "A tripwire stops a command part-way when many files outside the project disappear.", "pr": 1 },
+        { "kind": "safety", "text": "In YOLO the deciders vote on risky commands; they see only the facts, need a quorum, and never include the chat's own model.", "pr": 1 },
+        { "kind": "safety", "text": "Spending caps per reply and per day, and installs for the whole computer always ask first.", "pr": 1 },
+        { "kind": "improved", "text": "QuorX checks that a toolchain can really build here before the agent starts, and says what is missing.", "pr": 1 },
+        { "kind": "new", "text": "The agent can answer prompts in terminal programs, click through Windows desktop apps and Android emulators, and use a debugger.", "pr": 1 },
+        { "kind": "new", "text": "A Running tab shows everything running in a project and who started it, with Stop on each and Stop all.", "pr": 2 },
+        { "kind": "improved", "text": "Long builds and installs move to the background instead of being cut off at a time limit.", "pr": 2 },
+        { "kind": "new", "text": "Platform packs: one file per kind of app tells QuorX how to detect, check, run, debug and explain it.", "pr": 3 },
+        { "kind": "new", "text": "Anyone can test the packs their computer supports with npm run test:packs, without an OpenRouter key.", "pr": 3 },
+        { "kind": "new", "text": ".NET: WinForms and WPF apps are built and driven, dotnet test failures are summed up, and netcoredbg debugs them.", "pr": 4 },
+        { "kind": "safety", "text": "Scripts that run other programs are read first and always ask, so a wrapper script can't hide what really runs.", "pr": 5 },
+        { "kind": "new", "text": "Tauri apps are built, and their window is read and clicked through WebView2.", "pr": 6 },
+        { "kind": "new", "text": "Go, C, C++ and Rust programs can be debugged with breakpoints, and C and C++ projects get a build check before the reply.", "pr": 7 },
+        { "kind": "new", "text": "Electron apps are driven through their DevTools port, and the debugger attaches to the main process.", "pr": 8 },
+        { "kind": "new", "text": "Godot and Unity projects are checked and their tests summed up; MSIX and WiX installers are built with test certificates only.", "pr": 9 },
+        { "kind": "new", "text": "Android emulators are started and driven, crashes point to the first line of the project's own code, and Flutter apps are checked and debugged.", "pr": 10 },
+        { "kind": "new", "text": "Java and Kotlin: Gradle and Maven compile checks, JUnit summaries, and a debugger built on the JDK's own.", "pr": 11 },
+        { "kind": "safety", "text": "QuorX runs safely on macOS and Linux: Stop ends whole process groups, rules read bash and zsh, and key folders are off limits.", "pr": 12 },
+        { "kind": "new", "text": "On a Mac, iPhone and Mac apps are built with Xcode, driven in the Simulator and debugged; crash reports are summed up.", "pr": 13 },
+        { "kind": "new", "text": "Python desktop apps use the project's own virtual environment, and tkinter and PyQt windows are driven and debugged.", "pr": 14 }
       ]
     },
     {
@@ -958,10 +298,7 @@
       "date": "2026-10-19",
       "title": "A compact update button",
       "items": [
-        {
-          "kind": "improved",
-          "text": "The update button in the sidebar is short and fills up like a progress bar while the update downloads."
-        }
+        { "kind": "improved", "text": "The update button in the sidebar is short and fills up like a progress bar while the update downloads." }
       ]
     },
     {
@@ -969,10 +306,7 @@
       "date": "2026-10-19",
       "title": "Updates in the folded sidebar",
       "items": [
-        {
-          "kind": "improved",
-          "text": "With the sidebar folded, a waiting update shows as an icon above restart, theme and settings."
-        }
+        { "kind": "improved", "text": "With the sidebar folded, a waiting update shows as an icon above restart, theme and settings." }
       ]
     },
     {
@@ -980,22 +314,10 @@
       "date": "2026-10-19",
       "title": "Page checks on more computers",
       "items": [
-        {
-          "kind": "fixed",
-          "text": "A reply no longer fails its final check when the hidden browser won't start; it uses the agent's own tab or checks the files."
-        },
-        {
-          "kind": "fixed",
-          "text": "QuorX finds Chrome installed for one user, 32-bit Chrome, Brave and Chromium, and says why a browser didn't start."
-        },
-        {
-          "kind": "improved",
-          "text": "Pages the agent makes load from their own local address, so storage works in artifacts and project pages."
-        },
-        {
-          "kind": "improved",
-          "text": "The side pane's tabs show only icons when the pane is narrow, and the servers button stays in view."
-        }
+        { "kind": "fixed", "text": "A reply no longer fails its final check when the hidden browser won't start; it uses the agent's own tab or checks the files." },
+        { "kind": "fixed", "text": "QuorX finds Chrome installed for one user, 32-bit Chrome, Brave and Chromium, and says why a browser didn't start." },
+        { "kind": "improved", "text": "Pages the agent makes load from their own local address, so storage works in artifacts and project pages." },
+        { "kind": "improved", "text": "The side pane's tabs show only icons when the pane is narrow, and the servers button stays in view." }
       ]
     },
     {
@@ -1003,10 +325,7 @@
       "date": "2026-10-19",
       "title": "Fresh eyes",
       "items": [
-        {
-          "kind": "new",
-          "text": "When the same problem comes back, a second model with a clean context finds the likely cause before the next try."
-        }
+        { "kind": "new", "text": "When the same problem comes back, a second model with a clean context finds the likely cause before the next try." }
       ]
     },
     {
@@ -1014,14 +333,8 @@
       "date": "2026-10-19",
       "title": "The first public version",
       "items": [
-        {
-          "kind": "new",
-          "text": "QuorX runs any model through OpenRouter, with a quorum of decider models behind its choices."
-        },
-        {
-          "kind": "new",
-          "text": "The agent builds web apps, sites and games, and opens each one in a browser to check it before it replies."
-        }
+        { "kind": "new", "text": "QuorX runs any model through OpenRouter, with a quorum of decider models behind its choices." },
+        { "kind": "new", "text": "The agent builds web apps, sites and games, and opens each one in a browser to check it before it replies." }
       ]
     }
   ]
