@@ -1585,7 +1585,9 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       // Calls carrying this step's key but put in a code fence: meant as calls (only the prompt has the key), so they
       // are asked for again, on the same count. Their blocks are already out of the text.
       // The same for calls written mid-line, right after a sentence.
-      const fenced = !r.skippedCalls && (r.fencedCalls || 0) + (r.midlineCalls || 0);
+      // And for calls in the model's own trained format (DeepSeek's <｜DSML｜invoke>) that end the reply: never run,
+      // asked for again in QuorX's blocks.
+      const fenced = !r.skippedCalls && (r.fencedCalls || 0) + (r.midlineCalls || 0) + (r.nativeCalls || 0);
       // Sent back for an announcement and answering with the same words: that was its final answer ("I'll leave it
       // there."), not a step it skipped.
       const said = String(r.text || '').replace(/\s+/g, ' ').trim();
@@ -1596,11 +1598,15 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         run.stalls = (run.stalls || 0) + 1;
         reply = replyBefore;
         if (r.text) asides.push(r.text);
-        const where = r.fencedCalls ? 'inside a code block' : 'in the middle of a line';
+        const where = r.fencedCalls ? 'inside a code block' : r.nativeCalls ? 'in its own call format' : 'in the middle of a line';
         emit({ t: 'note', level: 'warn', msg: fenced ? `${short(setup.model)} put its tool call${fenced > 1 ? 's' : ''} ${where}, so ${fenced > 1 ? 'they weren\'t' : 'it wasn\'t'} run; asking it to write ${fenced > 1 ? 'them' : 'it'} again.` : `${short(setup.model)} said what it would do next but wrote no tool call; asking it to make the call.`, at: at() });
         messages.push({ role: 'assistant', content: r.text || 'Done.' });
-        messages.push({ role: 'user', content: fenced
-          ? `(Your last turn put ${fenced > 1 ? `${fenced} tool calls` : 'its tool call'} ${r.fencedCalls ? 'inside a code block (```)' : 'in the middle of a line, after other text'}, so nothing ran. Write ${fenced > 1 ? 'them' : 'it'} again exactly as the instructions describe: each block alone on a new line of its own${r.fencedCalls ? ', with no ``` around it' : ''}.)`
+        // DeepSeek's format: its blocks are already out of the text, so the model sees only its own words again, never
+        // what the blocks said (they could be a page's, quoted): it decides afresh whether it meant a call.
+        messages.push({ role: 'user', content: r.nativeCalls && !r.fencedCalls && !r.midlineCalls
+          ? '(Your last turn ended with blocks in a different call format (<｜DSML｜invoke …>), which this app does not read, so nothing ran. If you meant to call tools, write the calls again exactly as the instructions describe: <quorx_call> blocks with the key the instructions give, each alone on a new line. If you were quoting something, carry on without it.)'
+          : fenced
+          ? `(Your last turn put ${fenced > 1 ? `${fenced} tool calls` : 'its tool call'} ${r.fencedCalls ? 'inside a code block (```)' : r.nativeCalls ? 'in a different call format (<｜DSML｜invoke …>), which this app does not read' : 'in the middle of a line, after other text'}, so nothing ran. Write ${fenced > 1 ? 'them' : 'it'} again exactly as the instructions describe: ${r.nativeCalls ? 'as <quorx_call> blocks, ' : ''}each block alone on a new line of its own${r.fencedCalls ? ', with no ``` around it' : ''}.)`
           : '(Your last turn said what you would do next but contained no tool call, so nothing ran and the reply would end there. Make that call now, written exactly as the instructions describe. If you meant that as your final answer, write the final answer again in full.)' });
         continue;
       }

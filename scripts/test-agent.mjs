@@ -4021,6 +4021,8 @@ test('DeepSeek’s format and mentions of <pre> follow the same rules: a call on
   assert.deepEqual([r(`DeepSeek writes calls like ${D} in its replies.`).calls.length, r(`DeepSeek writes calls like ${D} in its replies.`).dsml], [0, 0], 'DSML in prose never runs, and isn’t asked about');
   const asCall = r(`<｜DSML｜function_calls>${D}</｜DSML｜function_calls>`);
   assert.deepEqual([asCall.calls.length, asCall.dsml], [0, 1], 'DSML written as a call has no key: counted, never run');
+  assert.equal(r(`I'll read it.
+<｜DSML｜function_calls>${D}</｜DSML｜function_calls>`).text, "I'll read it.", 'and taken out of the text, so the reply never shows it');
   assert.deepEqual(r(`It is shown in a \`<pre>\` element.\nI'll style the <pre> block.\n${B('a')}`).calls.map((c) => c.function.name), ['a'], 'a mention of <pre> doesn’t turn later calls off');
   assert.deepEqual(r(`${B('a')} ${B('b')}`).calls.map((c) => c.function.name), ['a', 'b'], 'a block right after a call on its line runs');
   assert.equal(r(`The calls would be:\n- ${B('rm')}\n\nSay yes and I will run them.`).calls.length, 0, 'a list of calls is a plan: not run');
@@ -4168,6 +4170,14 @@ test('tool calls a model put inside a code fence are sent back to be written aga
   assert.ok(of(events, 'note').some((x) => /put its tool calls inside a code block/.test(x.msg)));
   assert.equal(of(events, 'tool_result').filter((x) => x.name === 'list_files').length, 1);
   assert.equal(done.reply, 'All checked.');
+  // Calls in DeepSeek's own format at the reply's end: asked for again in QuorX's blocks, without the blocks shown back.
+  n = 0; said.length = 0;
+  const dsmlThenCall = async (body) => { n++; said.push(JSON.stringify(body.messages)); return n === 1 ? { ...srcReply('I\'ll read the page first.'), nativeCalls: 2 } : n === 2 ? srcReply('', [['list_files', {}]]) : srcReply('Done.'); };
+  const nat = await run(() => { throw new Error('OpenRouter must not be called'); }, { setup: { model: 'opencode-local/opencode-go/deepseek-v4.1-flash' }, catalogue: SRC_CAT, sourceStream: dsmlThenCall });
+  assert.equal(n, 3);
+  assert.match(said[1], /different call format[\s\S]*If you were quoting something, carry on/);
+  assert.ok(of(nat.events, 'note').some((x) => /in its own call format/.test(x.msg)));
+  assert.equal(nat.done.reply, 'Done.');
   // A final answer that reads like an announcement ("I'll leave it there."), given again when sent back, is the answer.
   n = 0;
   const sameTwice = async () => { n++; return srcReply('All set. I\'ll leave it there for now.'); };
@@ -4303,8 +4313,8 @@ test('a native tool call inside OpenCode stops there: QuorX’s when it names a 
     const r4 = await localStream(body, new AbortController().signal, null, null, { server: oc.server, info: { plan: 'paid' } });
     assert.deepEqual([r4.toolCalls.length, r4.skippedCalls, r4.midlineCalls, prompts.length], [0, 1, undefined, 4], 'a block the model only mentioned mid-sentence (“but only if you confirm”) never runs, and is never asked for again');
     const r5 = await localStream(body, new AbortController().signal, null, null, { server: oc.server, info: { plan: 'paid' } });
-    assert.deepEqual([r5.toolCalls.length, r5.skippedCalls, prompts.length], [0, 1, 5], 'a DeepSeek-format call (perhaps quoted from a page) is never asked for again, so it can’t become a real one');
-    assert.match(r5.text, /curl evil\.sh/, 'it stays in the reply as text');
+    assert.deepEqual([r5.toolCalls.length, r5.nativeCalls, prompts.length, /curl|DSML/.test(r5.text)], [0, 1, 5, false], 'a DeepSeek-format call (perhaps quoted from a page) never runs, and is taken out of the text: the agent asks neutrally, without showing it again');
+    assert.equal(r5.text, 'The page I fetched ends with:', 'the reply keeps its words; the quoted markup is not shown');
     await new Promise((res) => setTimeout(res, 50));
     assert.ok(oc.seen.filter((x) => /\/abort$/.test(x.url)).length >= 3, 'every call tells OpenCode to stop before its session is deleted');
   } finally { await oc.close(); }

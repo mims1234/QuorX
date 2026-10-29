@@ -180,7 +180,8 @@ function nativeCalls(s, idBase, calls, run) {
   const st = proseState();
   for (let p = 0; p < ls;) { let nl = s.indexOf('\n', p); if (nl < 0 || nl >= ls) nl = ls; st.line(s.slice(p, nl)); p = nl + 1; }
   if (st.code) return { text: s, dsml: 0 };
-  if (!run) return { text: s, dsml: found.length - first };
+  // With a key they never run: counted, and taken out of the text, so the reply never shows the raw markup.
+  if (!run) return { text: s.slice(0, a).replace(DSML_WRAP, ''), dsml: found.length - first };
   for (const { name, body } of found.slice(first, first + Math.max(0, MAX_CALLS - calls.length))) {
     let args = {};
     for (const [, k, str, v] of body.matchAll(DSML_PARAM)) {
@@ -301,11 +302,13 @@ export function parseToolCalls(reply, idBase = 'call', key = '') {
 /** What a text-call source adds to its result about blocks that weren't run (see parseToolCalls). */
 // Misplaced blocks are asked for again only when nothing ran; beside calls that ran, they are only warned about.
 export const notRun = (parsed) => {
-  const ran = parsed.calls.length > 0, skipped = parsed.skipped + parsed.dsml + (ran ? parsed.fenced + parsed.midline : 0);
+  // DeepSeek's own format at the reply's end counts as misplaced too: never run, asked for again in QuorX's blocks.
+  const ran = parsed.calls.length > 0, skipped = parsed.skipped + (ran ? parsed.fenced + parsed.midline + parsed.dsml : 0);
   return {
     ...(skipped ? { skippedCalls: skipped } : {}),
     ...(!ran && parsed.fenced ? { fencedCalls: parsed.fenced } : {}),
     ...(!ran && parsed.midline ? { midlineCalls: parsed.midline } : {}),
+    ...(!ran && parsed.dsml ? { nativeCalls: parsed.dsml } : {}),
   };
 };
 
