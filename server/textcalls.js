@@ -210,7 +210,7 @@ export function parseToolCalls(reply, idBase = 'call', key = '') {
   const nls = []; for (let n = s.indexOf('\n'); n >= 0; n = s.indexOf('\n', n + 1)) nls.push(n);
   let p = 0;
   const lineStart = (a) => { while (p < nls.length && nls[p] < a) p++; return p ? nls[p - 1] + 1 : 0; };
-  let said = '', i = 0, fed = 0, after = -1, skipped = 0; // fed: prose through the fence tracker (a line start); after: the end of the last call
+  let said = '', i = 0, fed = 0, after = -1, skipped = 0, midline = 0, noClose = false; // fed: prose through the fence tracker (a line start); after: the end of the last call
   const feed = (to) => { while (fed < to) { let nl = s.indexOf('\n', fed); if (nl < 0 || nl >= to) nl = to; st.line(s.slice(fed, nl)); fed = nl + 1; } };
   // Per line, worked out as the openers come along it, so a reply on one huge line stays linear: the backticks before
   // the opener (an odd count: inside inline code), whether the line is a quote, and whether only spaces have come since
@@ -228,6 +228,13 @@ export function parseToolCalls(reply, idBase = 'call', key = '') {
     if (st.code || !startsHere) {
       // Counted (the caller warns) when it looked like a call: at a line start inside an HTML comment or <pre>, or
       // mid-line in plain prose. One in a code fence, inline code or a quote is an example the model meant to show.
+      // Mid-line in plain prose with this call's key, closed: a call the model wrote after its sentence (only the
+      // prompt has the key). Not run, but taken out of the text and counted in `midline`, so the caller asks again.
+      if (key && !st.code && !startsHere && ticks % 2 === 0 && !quote) {
+        const c = noClose ? -1 : s.indexOf(`</${m[1]}>`, a);
+        if (c < 0) noClose = true; // none after this one, so none after any later one either
+        else { midline++; said += s.slice(i, a); i = c + m[1].length + 3; continue; }
+      }
       if (st.code ? !st.fenced && startsHere : ticks % 2 === 0 && !quote) skipped++;
       said += s.slice(i, a + 1); i = a + 1; continue;
     }
@@ -270,13 +277,14 @@ export function parseToolCalls(reply, idBase = 'call', key = '') {
     return '';
   });
   // skipped: blocks that looked like calls but weren't run (the caller says so; it never asks for them again).
-  return { text: text.replace(/\n{3,}/g, '\n\n').trim(), calls, skipped, dsml, fenced };
+  return { text: text.replace(/\n{3,}/g, '\n\n').trim(), calls, skipped, dsml, fenced, midline };
 }
 
 /** What a text-call source adds to its result about blocks that weren't run (see parseToolCalls). */
 export const notRun = (parsed) => ({
   ...(parsed.skipped + parsed.dsml ? { skippedCalls: parsed.skipped + parsed.dsml } : {}),
   ...(parsed.fenced ? { fencedCalls: parsed.fenced } : {}),
+  ...(parsed.midline ? { midlineCalls: parsed.midline } : {}),
 });
 
 /**

@@ -4023,7 +4023,7 @@ test('DeepSeek’s format and mentions of <pre> follow the same rules: a call on
   const t1 = Date.now(); r('x '.repeat(500000) + DS('a').repeat(2000));
   assert.ok(Date.now() - t1 < 1000, 'many DSML invokes mid-line on one huge line stay linear');
   const mid = r(`Reading it now: ${B('a')}`);
-  assert.deepEqual([mid.calls.length, mid.skipped], [0, 1], 'a block mid-line in prose doesn’t run, and is counted');
+  assert.deepEqual([mid.calls.length, mid.midline, mid.text], [0, 1, 'Reading it now:'], 'a block mid-line in prose doesn’t run; it is counted and taken out of the text');
   const t0 = Date.now(); r('x '.repeat(500000) + B('a').repeat(1000));
   assert.ok(Date.now() - t0 < 1000, 'one huge line is read in linear time');
 });
@@ -4063,7 +4063,7 @@ test('a call ends where its JSON ends; a broken one stops the reading, so nothin
   const hid = parseToolCalls(`Use <!-- to start a comment.\n${O}{"name":"a","arguments":{}}${C}`, 'c', k);
   assert.deepEqual([hid.calls.length, hid.skipped], [0, 1], 'a call an unclosed <!-- hides is counted, so the user is told');
   const after = parseToolCalls(`I'll run \`ls\` now: ${O}{"name":"a","arguments":{}}${C}`, 'c', k);
-  assert.equal(after.skipped, 1, 'a block mid-line after inline code is counted too');
+  assert.equal(after.midline, 1, 'a block mid-line after inline code is counted too');
 });
 
 test('a call block inside a call’s own text is part of it, never a call of its own', () => {
@@ -4148,6 +4148,13 @@ test('tool calls a model put inside a code fence are sent back to be written aga
   assert.ok(of(events, 'note').some((x) => /put its tool calls inside a code block/.test(x.msg)));
   assert.equal(of(events, 'tool_result').filter((x) => x.name === 'list_files').length, 1);
   assert.equal(done.reply, 'All checked.');
+  // Written right after a sentence on the same line: the same.
+  n = 0; said.length = 0;
+  const midThenCall = async (body) => { n++; said.push(JSON.stringify(body.messages.at(-1))); return n === 1 ? { ...srcReply('Opening Trends.'), midlineCalls: 1 } : n === 2 ? srcReply('', [['list_files', {}]]) : srcReply('Done.'); };
+  const mid = await run(() => { throw new Error('OpenRouter must not be called'); }, { setup: { model: 'grok-local/grok-4.6' }, catalogue: SRC_CAT, sourceStream: midThenCall });
+  assert.equal(n, 3);
+  assert.match(said[1], /in the middle of a line/);
+  assert.equal(mid.done.reply, 'Done.');
 });
 
 test('a Grok Build chat gets no desktop tool: the model is told to say so, and the chat shows why', async () => {
@@ -4269,7 +4276,7 @@ test('a native tool call inside OpenCode stops there: QuorX’s when it names a 
     assert.deepEqual(r3.toolCalls.map((c) => [c.function.name, JSON.parse(c.function.arguments)]), [['write_file', { path: 'b.js', content: 'x' }]], 'a native call to a tool of this step, with its arguments, is taken as it is');
     assert.equal(prompts.length, 3, 'its first, still pending update (no input yet) doesn’t cause a retry');
     const r4 = await localStream(body, new AbortController().signal, null, null, { server: oc.server, info: { plan: 'paid' } });
-    assert.deepEqual([r4.toolCalls.length, r4.skippedCalls, prompts.length], [0, 1, 4], 'a block the model only showed mid-sentence never runs, and is never asked for again');
+    assert.deepEqual([r4.toolCalls.length, r4.midlineCalls, prompts.length], [0, 1, 4], 'a block written mid-sentence never runs here; it is counted, so the agent asks for it again');
     const r5 = await localStream(body, new AbortController().signal, null, null, { server: oc.server, info: { plan: 'paid' } });
     assert.deepEqual([r5.toolCalls.length, r5.skippedCalls, prompts.length], [0, 1, 5], 'a DeepSeek-format call (perhaps quoted from a page) is never asked for again, so it can’t become a real one');
     assert.match(r5.text, /curl evil\.sh/, 'it stays in the reply as text');
@@ -4421,7 +4428,7 @@ test('a Grok Build that starts with a built-in tool, or asks for any tool, is st
   const eos = await viaFakeGrok('eos', GROK_BODY);
   assert.equal(eos.r.text, 'Writing it.', 'its end-of-text token never shows');
   const inline = await viaFakeGrok('inline', GROK_BODY);
-  assert.deepEqual([inline.r.toolCalls.length, inline.r.skippedCalls], [0, 1], 'a call written mid-sentence is not run, and is counted so the chat says so');
+  assert.deepEqual([inline.r.toolCalls.length, inline.r.midlineCalls, inline.r.text], [0, 1, 'Opening it now.'], 'a call written mid-sentence is not run, never shown, and counted so the agent asks for it again');
   assert.match(inline.call.args[inline.call.args.indexOf('--system-prompt-override') + 1], /line of its own/, 'its prompt asks for each call on a line of its own');
   assert.ok(!inline.call.args.includes('--verbatim'), 'Grok keeps its own wrapping of the prompt (without it, models wrote on past their turn)');
   const away = await viaFakeGrok('runaway', GROK_BODY);

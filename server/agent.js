@@ -1579,16 +1579,18 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       // example: it is never asked for again).
       // Calls carrying this step's key but put in a code fence: meant as calls (only the prompt has the key), so they
       // are asked for again, on the same count. Their blocks are already out of the text.
-      const fenced = !r.skippedCalls && r.fencedCalls;
+      // The same for calls written mid-line, right after a sentence.
+      const fenced = !r.skippedCalls && (r.fencedCalls || 0) + (r.midlineCalls || 0);
       const stalled = !r.skippedCalls && (fenced || announcesStep(r.text));
       if (!last && (run.stalls || 0) < 2 && stalled) {
         run.stalls = (run.stalls || 0) + 1;
         reply = replyBefore;
         if (r.text) asides.push(r.text);
-        emit({ t: 'note', level: 'warn', msg: fenced ? `${short(setup.model)} put its tool call${fenced > 1 ? 's' : ''} inside a code block, so ${fenced > 1 ? 'they weren\'t' : 'it wasn\'t'} run; asking it to write ${fenced > 1 ? 'them' : 'it'} again.` : `${short(setup.model)} said what it would do next but wrote no tool call; asking it to make the call.`, at: at() });
+        const where = r.fencedCalls ? 'inside a code block' : 'in the middle of a line';
+        emit({ t: 'note', level: 'warn', msg: fenced ? `${short(setup.model)} put its tool call${fenced > 1 ? 's' : ''} ${where}, so ${fenced > 1 ? 'they weren\'t' : 'it wasn\'t'} run; asking it to write ${fenced > 1 ? 'them' : 'it'} again.` : `${short(setup.model)} said what it would do next but wrote no tool call; asking it to make the call.`, at: at() });
         messages.push({ role: 'assistant', content: r.text || 'Done.' });
         messages.push({ role: 'user', content: fenced
-          ? `(Your last turn put ${fenced > 1 ? `${fenced} tool calls` : 'its tool call'} inside a code block (\`\`\`), so nothing ran. Write ${fenced > 1 ? 'them' : 'it'} again exactly as the instructions describe: each block on a line of its own, with no \`\`\` around it.)`
+          ? `(Your last turn put ${fenced > 1 ? `${fenced} tool calls` : 'its tool call'} ${r.fencedCalls ? 'inside a code block (```)' : 'in the middle of a line, after other text'}, so nothing ran. Write ${fenced > 1 ? 'them' : 'it'} again exactly as the instructions describe: each block alone on a new line of its own${r.fencedCalls ? ', with no ``` around it' : ''}.)`
           : '(Your last turn said what you would do next but contained no tool call, so nothing ran and the reply would end there. Make that call now, written exactly as the instructions describe. If you meant that as your final answer, write the final answer again in full.)' });
         continue;
       }
