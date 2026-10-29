@@ -137,6 +137,9 @@ export async function ensureLocalServer({ start = spawn, find = findOnPath, read
 
 const call = (s, method, p, body, signal) => fetch(s.base + p, { method, headers: { ...(s.auth ? { Authorization: s.auth } : {}), 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}), signal });
 
+// A refusal a setting in the user's account there causes ("This Go model requires Global regions. Select Global in your
+// workspace's Privacy settings"): theirs to change, never an outage.
+export const SETTING_REFUSAL = /requires? [\w-]+ regions?|(privacy|data[- ]policy|region) settings?|not available in your (region|country)|select [\w-]+ in your (workspace|account|organi[sz]ation)/i;
 export const FREE_OWN_APP = 'OpenCode keeps its free models for its own app: they don’t answer calls from QuorX. Pick a paid or plan model, or connect a provider in OpenCode.';
 /** Every model of every provider connected in OpenCode, as catalogue entries (opencode-local/<provider>/<model>). */
 export async function localModels({ server } = {}) {
@@ -291,7 +294,9 @@ async function localOnce(body, signal, onText, onThink, { info = {}, idleMs = 18
         // still applies. A used-up free tier, plan or credit, or a long wait, fails the call now.
         const msg = String(p.status.message || 'the provider refused the call'), wait = p.status.next ? Number(p.status.next) - Date.now() : 0;
         const spent = /free|quota|credit|balance|insufficient|usage limit|plan limit|limit reached|exceeded your/i.test(msg) || /free_tier|account_rate/i.test(String(p.status.action?.reason || ''));
-        if (spent || wait > 30e3) {
+        // Refused by a setting in the user's account (a region, a privacy setting): retrying never helps, so it fails now.
+        if (SETTING_REFUSAL.test(msg)) { failure ||= err(msg, { status: 403, kind: 'setting' }); done = true; }
+        else if (spent || wait > 30e3) {
           const free = /free/i.test(msg) || /free_tier/i.test(String(p.status.action?.reason || ''));
           failure ||= err(msg, { status: spent ? (free ? 429 : 402) : /limit|429|rate|too many/i.test(msg) ? 429 : 503, ...(free ? { errorType: 'FreeUsageLimitError' } : {}), retryAfter: wait > 0 ? Math.max(1, Math.round(wait / 1000)) : undefined });
           done = true;

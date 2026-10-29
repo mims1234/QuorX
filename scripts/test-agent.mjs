@@ -3804,6 +3804,10 @@ test('a failing model is set aside for a while, and the rest of the app keeps wo
   const k = (o) => failureKind(err(o));
   assert.deepEqual([k({ status: 402 }), k({ status: 429, m: 'Free usage limit reached.' }), k({ status: 429, errorType: 'FreeUsageLimitError' }), k({ status: 429 }), k({ status: 503 }), k({ status: 503, m: 'model unavailable' }), k({ status: 400, m: 'bad' }), k({ name: 'TimeoutError' }), k({ errorType: 'insufficient_credits' }), k({ kind: 'shape' })],
     ['quota', 'free', 'free', 'rate', 'server', 'server', 'request', 'timeout', 'quota', 'shape']);
+  // A setting in the user's account there, whatever status it came with: theirs to change, not an outage.
+  assert.equal(k({ status: 503, m: 'Upstream request failed: This Go model requires Global regions. Select Global in your workspace’s Privacy settings to use it.' }), 'setting');
+  noteSourceResult(L, 'opencode-local/opencode-go/deepseek-v4-pro', err({ status: 503, m: 'This Go model requires Global regions.' }), { now });
+  assert.equal(sourceSkip(L, 'opencode-local/opencode-go/deepseek-v4-pro', now + 1000), '', 'not set aside: it works as soon as the setting changes');
   forgetSourceHealth();
 });
 
