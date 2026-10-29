@@ -1562,7 +1562,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (emptyTries && (r.text || r.toolCalls.length) && reasonNow !== (setup.reasoning || 'off')) emptyTries = 0;
     // Text written alongside tool calls is "working out loud": it goes to the trace, not the reply.
     const replyBefore = reply;
-    if (r.toolCalls.length) run.stalls = 0;
+    if (r.toolCalls.length) { run.stalls = 0; run.stallText = ''; }
     if (r.text && r.toolCalls.length) asides.push(r.text);
     else if (r.text) reply += (reply ? '\n\n' : '') + r.text;
     if (!r.toolCalls.length) {
@@ -1581,7 +1581,12 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       // are asked for again, on the same count. Their blocks are already out of the text.
       // The same for calls written mid-line, right after a sentence.
       const fenced = !r.skippedCalls && (r.fencedCalls || 0) + (r.midlineCalls || 0);
-      const stalled = !r.skippedCalls && (fenced || announcesStep(r.text));
+      // Sent back for an announcement and answering with the same words: that was its final answer ("I'll leave it
+      // there."), not a step it skipped.
+      const said = String(r.text || '').replace(/\s+/g, ' ').trim();
+      const repeated = !fenced && !!said && said === run.stallText;
+      const stalled = !r.skippedCalls && !repeated && (fenced || announcesStep(r.text));
+      run.stallText = !fenced && stalled ? said : '';
       if (!last && (run.stalls || 0) < 2 && stalled) {
         run.stalls = (run.stalls || 0) + 1;
         reply = replyBefore;
@@ -1913,7 +1918,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         else if (body.tool_choice?.function?.name) r.toolCalls = r.toolCalls.filter((c) => c?.function?.name === body.tool_choice.function.name);
         if (r.toolCalls.length > 25) r.toolCalls = r.toolCalls.slice(0, 25);
         for (const c of r.toolCalls) textCalls.add(c);
-        if (r.skippedCalls) emit({ t: 'note', level: 'warn', msg: `${short(sm)} wrote ${r.skippedCalls} call block${r.skippedCalls > 1 ? 's' : ''} QuorX doesn't run (in the middle of a line, inside an HTML comment or <pre>, or in its own call format), so ${r.skippedCalls > 1 ? 'they were' : 'it was'} not run.`, at: at() });
+        if (r.skippedCalls) emit({ t: 'note', level: 'warn', msg: `${short(sm)} wrote ${r.skippedCalls} call block${r.skippedCalls > 1 ? 's' : ''} QuorX doesn't run (in the middle of a line, inside a code block, an HTML comment or <pre>, or in its own call format), so ${r.skippedCalls > 1 ? 'they were' : 'it was'} not run.`, at: at() });
         run.sourceFails[s.source] = 0;
         return { r };
       } catch (e0) {

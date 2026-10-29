@@ -13,7 +13,7 @@ import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { HOME } from './openrouter.js';
 import { findOnPath, killTree } from './opencodelocal.js';
-import { launch, envFor, claudeError as appError } from './claudelocal.js';
+import { launch, envFor, claudeError as appError, sweepPrompts } from './claudelocal.js';
 import { toolPrompt, renderTranscript, parseToolCalls, textFilter, callKey, notRun } from './textcalls.js';
 
 export const GROK_ID = 'grok-local';
@@ -136,7 +136,7 @@ export async function grokStream(body, signal, onText, onThink, { info = {}, idl
   halt();
   const exe = find('grok');
   if (!exe) throw notInstalled();
-  fs.mkdirSync(DIR, { recursive: true });
+  fs.mkdirSync(DIR, { recursive: true }); sweepPrompts(DIR, 'prompt-');
   // This call's key: only blocks carrying it are calls (textcalls.js).
   const key = callKey();
   const { system, transcript } = renderTranscript(body.messages, key, { calls: !!body.tools?.length && body.tool_choice !== 'none' });

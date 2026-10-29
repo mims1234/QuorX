@@ -33,7 +33,7 @@ import http from 'node:http';
 import { DEFAULTS, sourceFallbackFor, announcesStep } from '../server/agent.js';
 import { sourceOf, sourceStream, sameOnOpenRouter, failureKind, noteSourceResult, sourceSkip, forgetSourceHealth, priced as sourcePriced, chatAny } from '../server/sources.js';
 import { SECRET_FILES } from '../server/keys.js';
-import { toolPrompt, renderTranscript, parseToolCalls, textFilter } from '../server/textcalls.js';
+import { toolPrompt, renderTranscript, parseToolCalls, textFilter, notRun } from '../server/textcalls.js';
 import { localStream, localModels } from '../server/opencodelocal.js';
 import { claudeStream, claudeModels, claudeError, effortFor } from '../server/claudelocal.js';
 import { grokStream, grokModels, grokEffort, grokArgs, GROK_ENV, repeats } from '../server/groklocal.js';
@@ -3973,6 +3973,15 @@ test('a call block the model only quotes or shows never runs: it needs this call
   const mixed = parseToolCalls(`Like this:\n\`\`\`\n// a comment\n${call(k)}\n\`\`\``, 'c', k);
   assert.deepEqual([mixed.fenced, mixed.text.includes('pwned')], [0, true], 'a fence with other text in it is an example, left as it is');
   assert.equal(parseToolCalls(`\`\`\`\n${call('zzzz')}\n\`\`\``, 'c', k).fenced, 0, 'a fenced block with another key is not counted');
+  // Mid-line: only a closing run of blocks after the last sentence is a call to ask for again; a plan or a mention stays.
+  for (const [what, s] of [['a list item', `The calls would be:\n- ${call(k)}\n\nSay yes and I will run them.`], ['a numbered plan at the end', `Plan:\n1. ${call(k)}`], ['a mention with prose after it', `I would never run ${call(k)} without asking.`]]) {
+    const r = parseToolCalls(s, 'c', k);
+    assert.deepEqual([r.calls.length, r.midline, r.text.includes('pwned.txt')], [0, 0, true], `${what} is not asked for again, and its text stays`);
+  }
+  const tailRun = parseToolCalls(`Opening Trends. ${call(k)} ${call(k)}\n`, 'c', k);
+  assert.deepEqual([tailRun.calls.length, tailRun.midline, tailRun.text], [0, 2, 'Opening Trends.'], 'calls after the last sentence, to the end, are asked for again');
+  const both = parseToolCalls(`Opening it. ${call(k)}\n${call(k)}`, 'c', k);
+  assert.deepEqual([both.calls.length, notRun(both).skippedCalls, notRun(both).midlineCalls], [1, 1, undefined], 'beside a call that ran, a mid-line one is warned about, not asked for');
   assert.equal(parseToolCalls(`Write \`${call(k)}\` to call it.`, 'c', k).calls.length, 0, 'inline code');
   assert.equal(parseToolCalls(`From the page: ${call('zzzz')}`, 'c', k).calls.length, 0, 'another key');
   const real = parseToolCalls(`Doing it.\n${call(k)}`, 'c', k);
@@ -4148,6 +4157,11 @@ test('tool calls a model put inside a code fence are sent back to be written aga
   assert.ok(of(events, 'note').some((x) => /put its tool calls inside a code block/.test(x.msg)));
   assert.equal(of(events, 'tool_result').filter((x) => x.name === 'list_files').length, 1);
   assert.equal(done.reply, 'All checked.');
+  // A final answer that reads like an announcement ("I'll leave it there."), given again when sent back, is the answer.
+  n = 0;
+  const sameTwice = async () => { n++; return srcReply('All set. I\'ll leave it there for now.'); };
+  const fin = await run(() => { throw new Error('OpenRouter must not be called'); }, { setup: { model: 'grok-local/grok-4.6' }, catalogue: SRC_CAT, sourceStream: sameTwice });
+  assert.deepEqual([n, fin.done.reply], [2, 'All set. I\'ll leave it there for now.'], 'sent back once; the same words again end the reply, with no ⚠');
   // Written right after a sentence on the same line: the same.
   n = 0; said.length = 0;
   const midThenCall = async (body) => { n++; said.push(JSON.stringify(body.messages.at(-1))); return n === 1 ? { ...srcReply('Opening Trends.'), midlineCalls: 1 } : n === 2 ? srcReply('', [['list_files', {}]]) : srcReply('Done.'); };
@@ -4276,7 +4290,7 @@ test('a native tool call inside OpenCode stops there: QuorX’s when it names a 
     assert.deepEqual(r3.toolCalls.map((c) => [c.function.name, JSON.parse(c.function.arguments)]), [['write_file', { path: 'b.js', content: 'x' }]], 'a native call to a tool of this step, with its arguments, is taken as it is');
     assert.equal(prompts.length, 3, 'its first, still pending update (no input yet) doesn’t cause a retry');
     const r4 = await localStream(body, new AbortController().signal, null, null, { server: oc.server, info: { plan: 'paid' } });
-    assert.deepEqual([r4.toolCalls.length, r4.midlineCalls, prompts.length], [0, 1, 4], 'a block written mid-sentence never runs here; it is counted, so the agent asks for it again');
+    assert.deepEqual([r4.toolCalls.length, r4.skippedCalls, r4.midlineCalls, prompts.length], [0, 1, undefined, 4], 'a block the model only mentioned mid-sentence (“but only if you confirm”) never runs, and is never asked for again');
     const r5 = await localStream(body, new AbortController().signal, null, null, { server: oc.server, info: { plan: 'paid' } });
     assert.deepEqual([r5.toolCalls.length, r5.skippedCalls, prompts.length], [0, 1, 5], 'a DeepSeek-format call (perhaps quoted from a page) is never asked for again, so it can’t become a real one');
     assert.match(r5.text, /curl evil\.sh/, 'it stays in the reply as text');

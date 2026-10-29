@@ -36,6 +36,10 @@ export function launch(exe, args, opts, start = spawn) {
   if (/\.(cmd|bat)$/i.test(exe)) return start(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `"${[exe, ...args].map(quote).join(' ')}"`], { ...opts, windowsVerbatimArguments: true });
   return start(exe, args, opts);
 }
+// A call's prompt file holds the chat; one left behind when QuorX was closed hard mid-call goes on the next call.
+export function sweepPrompts(dir, prefix, maxAge = 2 * 3600e3) {
+  try { for (const f of fs.readdirSync(dir)) if (f.startsWith(prefix) && f.endsWith('.txt')) { const p = path.join(dir, f); if (Date.now() - fs.statSync(p).mtimeMs > maxAge) fs.rmSync(p, { force: true }); } } catch { /* nothing to sweep */ }
+}
 // An app's environment: its own sign-in, never QuorX's OpenRouter key, and not told it runs inside another Claude Code.
 export function envFor() {
   const env = { ...process.env, DISABLE_AUTOUPDATER: '1' };
@@ -120,7 +124,7 @@ export async function claudeStream(body, signal, onText, onThink, { info = {}, i
   halt();
   const exe = find('claude');
   if (!exe) throw notInstalled();
-  fs.mkdirSync(DIR, { recursive: true });
+  fs.mkdirSync(DIR, { recursive: true }); sweepPrompts(DIR, 'system-');
   // This call's key: only blocks carrying it are calls (textcalls.js).
   const key = callKey();
   const { system, transcript } = renderTranscript(body.messages, key, { calls: !!body.tools?.length && body.tool_choice !== 'none' });

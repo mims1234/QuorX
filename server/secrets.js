@@ -19,7 +19,7 @@ export const KEY_PATTERNS = [
 const ASSIGNED = /\b(?:passwords?|passwd|pwd|secret|client[_-]?secret|api[_-]?key|apikey|access[_-]?key|(?:access|auth|bearer|refresh)[_-]?token|token|private[_-]?key)["']?\s*[:=]\s*(['"`])[^'"`\s]{6,}\1/gi;
 
 // Files that hold secrets by their nature: never sent, whatever is in them.
-export const SECRET_FILE = /(^|\/)(\.env(\.[\w.-]+)?|[^/]*\.(pem|key|p12|pfx|jks|keystore|kdbx|ppk|asc)|id_(rsa|dsa|ecdsa|ed25519)(\.pub)?|\.npmrc|\.pypirc|\.netrc|\.git-credentials|\.htpasswd|credentials(\.[\w]+)?|[^/]*secrets?\.(json|ya?ml|toml|ini|env)|service-account[^/]*\.json|opencode\/auth\.json|\.cline\/(?:[^/]+\/)*providers\.json)$/i;
+export const SECRET_FILE = /(^|\/)(\.env(\.[\w.-]+)?|[^/]*\.(pem|key|p12|pfx|jks|keystore|kdbx|ppk|asc)|id_(rsa|dsa|ecdsa|ed25519)(\.pub)?|\.npmrc|\.pypirc|\.netrc|\.git-credentials|\.htpasswd|credentials(\.[\w]+)?|[^/]*secrets?\.(json|ya?ml|toml|ini|env)|service-account[^/]*\.json|opencode\/auth\.json|\.cline\/(?:[^/]+\/)*providers\.json|\.claude\/\.credentials\.json|\.claude\.json|\.grok\/auth\.json)$/i;
 
 /** What kind of secret `text` holds ('' when none of the patterns match). */
 export function findKey(text) {

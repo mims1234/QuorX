@@ -25,7 +25,17 @@ const CONFIG = { agent: { quorx: { mode: 'primary', description: 'Calls from Quo
 const IDLE_STOP_MS = 15 * 60e3;
 
 /** A program on PATH (Windows: with its .cmd/.exe), or null. */
+// Each look walks every PATH folder (hundreds of file checks), and the pickers ask often: kept 30 s when found, 5 s
+// when not (so an app just installed shows up quickly). A changed PATH looks again.
+const onPath = new Map();
 export function findOnPath(name) {
+  const k = `${name}\n${process.env.PATH || ''}`, hit = onPath.get(k);
+  if (hit && Date.now() - hit.at < (hit.f ? 30e3 : 5e3) && (!hit.f || fs.existsSync(hit.f))) return hit.f;
+  const f = lookOnPath(name);
+  onPath.set(k, { f, at: Date.now() });
+  return f;
+}
+function lookOnPath(name) {
   const exts = process.platform === 'win32' ? (process.env.PATHEXT || '.EXE;.CMD;.BAT').split(';').map((e) => e.toLowerCase()) : [''];
   for (const dir of String(process.env.PATH || '').split(path.delimiter).filter(Boolean)) {
     for (const ext of exts) { const f = path.join(dir, name + ext); try { if (fs.statSync(f).isFile()) return f; } catch { /* not here */ } }
