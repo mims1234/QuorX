@@ -18,6 +18,11 @@ a real browser and your real toolchains, and shows how it got every answer.
   guess first so you can see whether asking changed anything. Fixed checks ask them about every build too.
 - **It reads your request in full.** A prompt enhancer spells out what a request implies (a movie trailer implies a
   voice-over and music) and shows it under your message, where you can correct it.
+- **Quoriums.** A Quorium is a saved combo of the helper modules a chat uses (the prompt enhancer, reviewer, fresh
+  eyes, deciders, helpers, pictures, video, music and voice), each on or off and each with its own model. Pick one
+  beside the model in the message box; a coloured square stands for each module that is on. Click a square to change
+  its model or turn it off in that chat, then save the changes back or as a new Quorium. Five come with QuorX
+  (Standard, Solo, Careful Coder, Web Builder, Creator); each can be edited and reset.
 - **A production plan for paid media.** Work that needs several paid pieces (a trailer: stills, clips, a voice-over,
   music) is priced up front and approved once, by you or in ⚡ YOLO by the deciders. Calls that match the plan then run
   without another vote; anything off the plan or over its estimate is judged on its own.

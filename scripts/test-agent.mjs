@@ -22,6 +22,7 @@ import { saveHooks, loadHooks, matchHooks, fileMatches, commandMatches, hookLine
 import { nextAfter, cleanWhen, cleanSchedule, describeWhen, createScheduler, saveSchedules as saveScheds, loadSchedules as loadScheds, GRACE_MS, endRun, PAUSE_AFTER_FAILS } from '../server/schedules.js';
 import { startScheduledChat } from '../server/schedrun.js';
 import { loadMemory, saveMemory, addMemory, checkMemory, looksSecret, memoryPrompt, memoryTokens, MEMORY_TOKENS } from '../server/memory.js';
+import { listQuoriums, saveQuorium, removeQuorium, cleanQuorium, BUILT_IN, MODULES as Q_MODULES } from '../server/quoriums.js';
 import { startRun, follow, getRun, readLog } from '../server/runs.js';
 import { getChat, saveChat as storeChat, listProjects, listChats } from '../server/store.js';
 import { matchPlan, usePlan } from '../server/mediaplan.js';
@@ -2565,6 +2566,59 @@ test('a scheduled chat does not start when its project has reached its budget', 
     assert.deepEqual(notes, ['budget']);
     assert.throws(() => startScheduledChat({ ...s, projectId: 'nope' }, {}, schedDeps(() => reply('x'))), /no longer exists/);
   } finally { forgetProject(pid); ledger.delete(`seed-${pid}`); }
+});
+
+// ---------- Quoriums: saved combos of helper modules (server/quoriums.js) ----------
+
+const resetQuoriums = () => { for (const q of listQuoriums()) removeQuorium(q.id); };
+
+test('QuorX comes with Quoriums, and Standard is what new chats had before', () => {
+  resetQuoriums();
+  const list = listQuoriums();
+  assert.deepEqual(list.map((q) => q.id), BUILT_IN.map((q) => q.id));
+  assert.ok(list.every((q) => q.builtIn && !q.edited && Q_MODULES.every((k) => typeof q.modules[k].on === 'boolean' && q.modules[k].model === '')));
+  const std = list.find((q) => q.id === 'standard');
+  assert.deepEqual(Q_MODULES.filter((k) => std.modules[k].on), ['reviewer', 'freshEyes', 'deciders', 'helpers']);
+  assert.deepEqual(Q_MODULES.filter((k) => list.find((q) => q.id === 'solo').modules[k].on), []);
+});
+
+test('a built-in Quorium can be edited and reset; yours are added, changed and deleted', () => {
+  resetQuoriums();
+  try {
+    const solo = listQuoriums().find((q) => q.id === 'solo');
+    const ed = saveQuorium({ ...solo, modules: { ...solo.modules, reviewer: { on: true, model: 'openai/gpt-6-luna' } } });
+    assert.equal(ed.edited, true);
+    const back = listQuoriums().find((q) => q.id === 'solo');
+    assert.equal(back.modules.reviewer.on, true);
+    assert.equal(back.modules.reviewer.model, 'openai/gpt-6-luna');
+    assert.equal(removeQuorium('solo'), true);
+    assert.equal(listQuoriums().find((q) => q.id === 'solo').modules.reviewer.on, false);
+    assert.equal(removeQuorium('solo'), false, 'nothing left to reset');
+
+    const mine = saveQuorium({ name: '  Game Builder  ', desc: 'Games', modules: { image: { on: true, model: 'opencode:big-pickle' }, nonsense: { on: true } } });
+    assert.match(mine.id, /^q[a-z0-9]+$/);
+    assert.equal(mine.name, 'Game Builder');
+    assert.deepEqual(Object.keys(mine.modules), Q_MODULES, 'only known modules are kept');
+    assert.equal(mine.modules.image.model, 'opencode:big-pickle');
+    const list = listQuoriums();
+    assert.equal(list.at(-1).id, mine.id);
+    assert.equal(list.at(-1).builtIn, false);
+    saveQuorium({ ...mine, name: 'Games' });
+    assert.equal(listQuoriums().filter((q) => !q.builtIn).length, 1, 'saving again changes it, it does not add another');
+    assert.equal(listQuoriums().at(-1).name, 'Games');
+    assert.equal(removeQuorium(mine.id), true);
+    assert.equal(listQuoriums().some((q) => q.id === mine.id), false);
+  } finally { resetQuoriums(); }
+});
+
+test('a Quorium save refuses what is not a name or a model id', () => {
+  assert.throws(() => cleanQuorium({ name: '   ' }), /name/);
+  assert.throws(() => cleanQuorium({ name: 'x', modules: { reviewer: { on: true, model: 'a b; rm -rf /' } } }), /not a model id/);
+  assert.throws(() => saveQuorium({ id: '../../etc', name: 'x' }), /Unknown Quorium/);
+  const c = cleanQuorium({ name: 'x'.repeat(500), desc: 'line\none', modules: {} });
+  assert.equal(c.name.length, 60);
+  assert.equal(c.desc, 'line one');
+  assert.ok(Q_MODULES.every((k) => c.modules[k].on === false && c.modules[k].model === ''));
 });
 
 // ---------- memory across projects (server/memory.js) ----------
