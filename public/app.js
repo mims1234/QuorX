@@ -112,6 +112,51 @@ const QUALITY_INFO = {
     tip: 'Hands read-only jobs (find, read, summarise code) to a cheaper model with its own context, so the main model\'s context stays small and each later step stays cheap. Most useful in big projects; rarely used on small builds. About $0.001–0.01 each time it is used.' },
 };
 
+// ---------- Quoriums (server/quoriums.js): a saved combo of the modules above, each on or off with its own model ----------
+// A chat picks one: it sets the chat's switches, and its models are used in place of ⚙ Settings' ones. Switching a
+// module or its model in the chat changes that chat only (the Quorium shows "changed") until you save it back.
+const Q_MODULES = [...QUALITY_TOOLS, ...CHAT_TOOLS];
+const qName = (k) => QUALITY_INFO[k]?.name || CATS.find((x) => x[0] === k)?.[1].replace(/^\S+\s/, '') || k;
+const qIcon = (k) => QUALITY_INFO[k]?.icon || CATS.find((x) => x[0] === k)?.[1].split(' ')[0] || '•';
+const qKind = (k) => QUALITY_INFO[k]?.kind || k;
+const quoriumById = (id) => (G.quoriums || []).find((q) => q.id === id) || null;
+const quoriumOf = (c) => (c?.quorium ? quoriumById(c.quorium) : null);
+const qOnKeys = (on) => Q_MODULES.filter((k) => on(k)).join(',');
+const chatOn = (c, k) => { const t = { ...DEFAULT_CHAT_TOOLS, ...c.tools }; return k === 'freshEyes' ? t.freshEyes !== false : !!t[k]; };
+// What ⚙ Settings would use for a module; the Quorium's own model, then this chat's pick, go before it.
+const settingsModel = (k) => (QUALITY_INFO[k] ? QUALITY_INFO[k].model() : G.settings.tools[k]?.models?.[0] || '');
+const quoriumModel = (c, k) => c?.qModels?.[k] || quoriumOf(c)?.modules?.[k]?.model || '';
+const moduleModel = (c, k) => quoriumModel(c, k) || settingsModel(k);
+function applyQuorium(c, q) {
+  c.quorium = q?.id || null; c.qModels = {};
+  if (!q) { delete c.qBase; return; }
+  for (const k of Q_MODULES) c.tools[k] = !!q.modules[k]?.on;
+  c.qBase = qOnKeys((k) => q.modules[k]?.on);
+}
+// A chat you haven't changed follows its Quorium when the Quorium is edited; one you changed keeps your changes.
+// A Quorium that was deleted leaves the chat with its switches as they are.
+function syncQuorium(c) {
+  if (!c?.quorium || !G.quoriums) return;
+  const q = quoriumOf(c);
+  if (!q) { c.quorium = null; c.qModels = {}; delete c.qBase; return; }
+  const now = qOnKeys((k) => q.modules[k]?.on), mine = qOnKeys((k) => chatOn(c, k));
+  if (c.qBase !== now && mine === c.qBase) applyQuorium(c, q);
+}
+const quoriumChanged = (c) => { const q = quoriumOf(c); return !!q && (qOnKeys((k) => chatOn(c, k)) !== qOnKeys((k) => q.modules[k]?.on) || Object.keys(c.qModels || {}).length > 0); };
+// The chat's modules as a Quorium would save them.
+const chatCombo = (c) => Object.fromEntries(Q_MODULES.map((k) => [k, { on: chatOn(c, k), model: quoriumModel(c, k) }]));
+async function putQuorium(q) {
+  const r = await postJ('/api/quoriums', q, 'PUT');
+  if (r?.quoriums) G.quoriums = r.quoriums;
+  return r;
+}
+async function dropQuorium(id) {
+  const r = await postJ(`/api/quoriums/${encodeURIComponent(id)}`, null, 'DELETE');
+  if (r?.quoriums) G.quoriums = r.quoriums;
+  return r;
+}
+const refreshQuoriumSlots = () => { for (const ch of [...G.open.values(), G.homeDraft]) if (ch?.el?.root?.isConnected) renderQuoriumSlot(ch); };
+
 const G = {
   cfg: null, settings: null, byId: new Map(), models: null,
   projects: [], chats: [],      // sidebar summaries from the server
@@ -153,6 +198,7 @@ function watchTrace(c, m, el) {
 const followsAgent = (c) => G.followAgent !== false && !c?.followSteps;
 function chatDoc(c) {
   return { id: c.id, title: c.title, projectId: c.projectId, created: c.created, approval: c.approval, paneHidden: c.paneHidden, tools: c.tools, followSteps: !!c.followSteps,
+    quorium: c.quorium || null, qModels: c.qModels || {}, ...(c.qBase != null ? { qBase: c.qBase } : {}),
     agent: { ...c.agent, messages: c.agent.messages.map(stripMsg) } };
 }
 const timers = new Map();
@@ -181,7 +227,7 @@ async function mergeServerCopy(c, last) {
   const base = { ...head, agent: { ...head.agent, messages: last.msgs.map((s) => JSON.parse(s)), artifacts: Object.fromEntries(Object.entries(last.arts).map(([k, s]) => [k, JSON.parse(s)])) } };
   const mine = c.agent.messages, res = mergeChat(base, chatDoc(c), theirs, { live: (i) => isLiveMsg(c, mine[i]) });
   const next = res.ok ? res.doc : theirs;
-  for (const k of ['title', 'projectId', 'created', 'approval', 'paneHidden', 'tools', 'followSteps']) c[k] = next[k];
+  for (const k of ['title', 'projectId', 'created', 'approval', 'paneHidden', 'tools', 'followSteps', 'quorium', 'qModels', 'qBase']) c[k] = next[k];
   const { messages: _m, artifacts, ...agent } = next.agent;
   for (const k of Object.keys(c.agent)) if (!(k in agent) && k !== 'messages' && k !== 'artifacts') delete c.agent[k];
   Object.assign(c.agent, agent);
@@ -261,14 +307,19 @@ function normalise(doc) {
   return { id: doc.id, title: doc.title || 'New chat', projectId: doc.projectId || 'scratch', created: doc.created || Date.now(),
     approval: doc.approval || G.settings.approval || 'strict', paneHidden: doc.paneHidden, followSteps: !!doc.followSteps,
     tools: { ...DEFAULT_CHAT_TOOLS, ...(doc.tools || {}) },
+    quorium: typeof doc.quorium === 'string' ? doc.quorium : null, qModels: doc.qModels && typeof doc.qModels === 'object' ? doc.qModels : {}, ...(typeof doc.qBase === 'string' ? { qBase: doc.qBase } : {}),
     agent: { setup, allowed: agent.allowed || [], extraUsage: agent.extraUsage || [], summary: agent.summary, summaryAt: agent.summaryAt, ...(agent.videoMode ? { videoMode: agent.videoMode } : {}), ...(agent.videoFrom ? { videoFrom: agent.videoFrom } : {}), messages: (agent.messages || []).map((m) => ({ ...m, live: false, arts: m.arts && dedupeArts(m.arts) })), artifacts },
     ctx: [], images: [], docs: [], running: null, el: null };
 }
 const dedupeArts = (list) => [...new Map(list.map((a) => [a.id, { id: a.id, kind: a.kind, title: a.title }])).values()];
 function blankChat(projectId) {
   const from = focused();
-  return normalise({ id: newId(), projectId, approval: from?.approval || G.settings.approval, tools: { ...DEFAULT_CHAT_TOOLS, ...(G.settings.newChatTools || {}) },
+  const c = normalise({ id: newId(), projectId, approval: from?.approval || G.settings.approval, tools: { ...DEFAULT_CHAT_TOOLS, ...(G.settings.newChatTools || {}) },
     agent: { setup: { model: G.settings.model, reasoning: G.settings.reasoning || 'off' } } });
+  // A new chat starts with the Quorium you picked last (none picked yet: ⚙ Settings → New chats' switches).
+  const q = quoriumById(G.settings.lastQuorium);
+  if (q) applyQuorium(c, q);
+  return c;
 }
 // One load per chat at a time: two callers at once share it, so a chat never has two copies
 // (one on screen and another that the running reply updates).
@@ -2593,7 +2644,7 @@ function paneHTML(c) {
       <form class="composer composer-v2">
         <div class="composer-box">
         <div class="cmp-quick" role="toolbar" aria-label="Quick settings for this chat"></div>
-        <div class="cmp-control-rack opts-open"><span class="cmp-model-slot"></span><button type="button" class="cmp-set-btn" aria-haspopup="dialog" aria-expanded="false" title="This chat's settings: reasoning, creativity, Strict / YOLO, tools"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg><span class="cmp-set-l">This chat</span><span class="cmp-set-sum"></span></button><span class="cmp-follow-slot"></span>
+        <div class="cmp-control-rack opts-open"><span class="cmp-q-slot"></span><span class="cmp-model-slot"></span><button type="button" class="cmp-set-btn" aria-haspopup="dialog" aria-expanded="false" title="This chat's settings: reasoning, creativity, Strict / YOLO, tools"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg><span class="cmp-set-l">This chat</span><span class="cmp-set-sum"></span></button><span class="cmp-follow-slot"></span>
           <div class="cs-scrim" hidden></div>
           <div class="chat-set" role="dialog" aria-label="This chat's settings" hidden>
             <div class="cs-head"><b>This chat's settings</b><small>Changes here apply to this chat only</small><button type="button" class="cs-gear" title="All settings: models, prices and defaults (⚙ Settings)" aria-label="Open all settings">${ICO.gear}</button><button type="button" class="cs-x" aria-label="Discard changes and close" title="Close (discards unsaved changes)">✕</button></div>
@@ -2833,6 +2884,7 @@ function renderComposerBar(c) {
   // A model on OpenCode says whose account it runs on.
   const srcId = sourceOfId(s.model);
   slot.innerHTML = `<button type="button" class="mbtn model cmp-model-chip" title="Model for this chat${srcId ? `, on your ${esc(SOURCE_NAME[srcId])} account` : ''}: ${esc(priceOf(s.model))} (click to pick any model)">${recDot(s.model, 'chat')} ${esc(short(s.model))}${srcId ? ` <span class="mp-src">${esc(SOURCE_SHORT[srcId])}</span>` : ''} <small>${esc(shortPrice(s.model))}</small></button>`;
+  renderQuoriumSlot(c);
   const permHTML = (cls = '') => `<div class="seg perm cmp-perm-switch ${cls}" title="How much permission this chat's agent asks for">
       <button type="button" data-approval="strict" class="${c.approval === 'strict' ? 'on' : ''}" title="${esc(`🔒 Strict${c.approval === 'strict' ? ' (now)' : ''}\nAsks you before paid media, and the agent's questions come to you.\nSettings → Approvals & safety says what else it asks before.`)}">🔒 Strict</button>
       <button type="button" data-approval="yolo" class="${c.approval === 'yolo' ? 'on' : ''}" title="${esc(`⚡ YOLO${c.approval === 'yolo' ? ' (now)' : ''}\nUses its tools without asking; the deciders answer its questions.\nThe budget cap and the safety rules still apply.`)}">⚡ YOLO</button>
@@ -2849,7 +2901,7 @@ function renderComposerBar(c) {
   // The quick row above the model: the same switches as the window, one click each; ⋯ opens the window for the rest.
   const quick = $('.cmp-quick', c.el.root);
   const qcap = ([k, label, ico, v, step, tip]) => `<label class="cs-num cq-cap" title="${esc(`${label} (all chats)\n${tip}`)}"><span aria-hidden="true">${ico}</span><span class="cs-inp"><i>$</i><input type="number" min="0" step="${step}" data-k="${k}" value="${esc(String(v))}" aria-label="${label} in dollars"></span></label>`;
-  quick.innerHTML = `<div class="cq-grp cq-lv">${levelsHTML(s)}</div><span class="cq-sep" aria-hidden="true"></span>${permHTML('cq-perm')}<span class="cq-br" aria-hidden="true"></span><span class="cq-sep" aria-hidden="true"></span><div class="cq-grp cs-tools">${quickToolsHTML(c)}</div><span class="cq-sep cq-sep-caps" aria-hidden="true"></span><div class="cq-grp cs-caps">${CAPS.map(qcap).join('')}</div>
+  quick.innerHTML = `<div class="cq-grp cq-lv">${levelsHTML(s)}</div><span class="cq-sep" aria-hidden="true"></span>${permHTML('cq-perm')}<span class="cq-br" aria-hidden="true"></span><span class="cq-sep" aria-hidden="true"></span><div class="cq-grp cs-tools">${quickToolsHTML(c, { micOnly: true })}</div><span class="cq-sep cq-sep-caps" aria-hidden="true"></span><div class="cq-grp cs-caps">${CAPS.map(qcap).join('')}</div>
     <div class="lvl cq-plan" role="radiogroup" aria-label="Plan first"><span class="lvl-ico" title="Plan first (all chats): whether the agent shows its plan and waits for Go ahead" aria-hidden="true">🗺</span>${[['off', 'Off', 'Plans and builds in one go.'], ['big', 'Big', 'For a new app, site, game or a change across several files, it shows its plan and waits for Go ahead, Stop here, or your changes.'], ['always', 'Always', 'Before any file change or command, it shows its plan and waits.']].map(([v, w, tip]) => { const on = (G.settings.planFirst || 'off') === v; return `<button type="button" class="lvl-b ${on ? 'on' : ''}" role="radio" aria-checked="${on}" data-plan="${v}" title="${esc(`Plan first: ${w}${on ? ' (now)' : ''} · all chats\n${tip}`)}">${w}</button>`; }).join('')}</div><span class="cq-sp"></span>
     <button type="button" class="cq-adv" aria-haspopup="dialog" title="All of this chat's settings: each tool's model, strength and price, Undo and Save" aria-label="Advanced settings for this chat"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg><span>Advanced</span></button>`;
   // Show or hide the quick rows (all chats). Hidden, the button keeps what matters in view: YOLO and the thinking level.
@@ -3083,24 +3135,34 @@ function levelsHTML(s) {
     + `<div class="lvl lvl-creative ${noTemp ? 'na' : ''}" role="radiogroup" aria-label="Creativity" data-key="creativity"><span class="lvl-ico" title="Creativity: how varied the answers are" aria-hidden="true">🎨</span>${LVL_CREATIVE.map((v) => step('Creativity', CREATIVITY_INFO, v, v === 'default' ? 'Default' : WORD[v], v === cv, cNote)).join('')}</div>`;
 }
 // Every tool as one icon toggle (lit when on); the name, what it does and its price show on hover.
-function quickToolsHTML(c) {
+// micOnly: the quick row above the model, where the Quorium's squares stand for the modules.
+function quickToolsHTML(c, { micOnly = false } = {}) {
   const t = { ...DEFAULT_CHAT_TOOLS, ...c.tools };
   const btn = (k, icon, name, lines, on, paid) => `<button type="button" class="qt-b ${on ? 'on' : ''} ${paid ? 'paid' : ''}" data-k="${k}" aria-pressed="${on}" aria-label="${esc(name)}" title="${esc([`${name}: ${on ? 'on' : 'off'}`, ...lines, on ? 'Click to turn it off' : 'Click to turn it on'].join('\n'))}">${icon}</button>`;
   const q = QUALITY_TOOLS.map((k) => { const x = QUALITY_INFO[k]; return btn(k, x.icon, x.name, [x.note, `Model\t${short(x.model())}`, `Cost\t${x.perBuild()}`], !!t[k]); }).join('');
   const media = CHAT_TOOLS.map((k) => { const [, label, note] = CATS.find((x) => x[0] === k); const icon = label.split(' ')[0], name = label.slice(icon.length + 1); return btn(k, icon, name, [note.replace(/^paid;?\s*/, '') || 'Costs money per use', `Model\t${short(G.settings.tools[k]?.models?.[0] || '')}`, 'Paid: stops at the paid media budget'], !!t[k], true); }).join('');
   const micOn = G.settings.tools.listen?.on !== false;
   const mic = btn('listen', '🎤', 'Mic · speech to text', ['Turns what you say into text in the message box', ...(G.settings.tools.listen?.models?.[0] ? [`Model\t${short(G.settings.tools.listen.models[0])}`] : []), 'All chats; off hides the mic button'], micOn);
+  if (micOnly) return `<span class="qt-group">${mic}</span>`;
   return `<span class="qt-group">${q}</span><span class="qt-sep" aria-hidden="true"></span><span class="qt-group">${media}</span><span class="qt-sep" aria-hidden="true"></span><span class="qt-group">${mic}</span>`;
 }
 // The quality tools for one reply: on/off from this chat's 🧰, models and strength from ⚙ Settings.
 function qualitySettings(c) {
+  syncQuorium(c);
   const t = { ...DEFAULT_CHAT_TOOLS, ...c.tools };
+  // A model from the chat's Quorium (or picked for this chat) goes in place of ⚙ Settings' one.
+  const m = (k) => quoriumModel(c, k);
   return {
     review: t.reviewer ? (G.settings.review && G.settings.review !== 'off' ? G.settings.review : 'builds') : 'off',
     freshEyes: t.freshEyes !== false,
     enhancer: !!t.enhancer,
     deciders: !!t.deciders,
     helpers: !!t.helpers,
+    ...(m('enhancer') ? { enhancerModel: m('enhancer') } : {}),
+    ...(m('reviewer') ? { reviewModel: m('reviewer') } : {}),
+    ...(m('freshEyes') ? { freshEyesModel: m('freshEyes') } : {}),
+    ...(m('helpers') ? { helperModel: m('helpers') } : {}),
+    ...(m('deciders') ? { lookVoters: [m('deciders'), ...(G.settings.lookVoters || []).filter((x) => x && x !== m('deciders'))] } : {}),
   };
 }
 // The tool settings for one chat: models come from ⚙ Settings, on/off from this chat's 🧰 Tools menu.
@@ -3108,12 +3170,19 @@ function chatTools(c) {
   const T = structuredClone(G.settings.tools);
   T.artifacts = { ...(T.artifacts || {}), on: true };
   T.browser = { ...(T.browser || {}), on: true };
-  for (const k of CHAT_TOOLS) if (T[k]) T[k].on = !!c.tools[k];
+  syncQuorium(c);
+  for (const k of CHAT_TOOLS) if (T[k]) {
+    T[k].on = !!c.tools[k];
+    // The Quorium's model (or this chat's pick) is used: it goes first, so 'fixed' picks it.
+    const m = quoriumModel(c, k);
+    if (m) T[k].models = [m, ...(T[k].models || []).filter((x) => x !== m)].slice(0, 3);
+  }
   return T;
 }
 // One 🧰 Tools button per chat; its menu switches tools on or off for that chat only.
 function renderChatTools(c) {
   if (!c.el) return;
+  renderQuoriumSlot(c);
   const box = $('.toolbar', c.el.root);
   const T = G.settings.tools;
   // 🎙 off hides the mic in every message box, the home page's included (it is built after renderToolbars runs).
@@ -3184,6 +3253,120 @@ function renderChatTools(c) {
     const id = await pickModel(k, t.models?.[0], { context: `${CATS.find((x) => x[0] === k)?.[1] || k} · model 1 (all chats)` });
     if (id) { t.models = [id, ...(t.models || []).filter((m) => m !== id)].slice(0, 3); savePrefs(); renderToolbars(); }
     $('.tools-btn', $('.toolbar', c.el.root))?.click();
+  };
+}
+// ---------- the Quorium in the message box: which one, and a square for each module that is on ----------
+// The squares are this chat's modules: click one to change its model here or turn it off; + adds one. The name opens
+// the list of Quoriums, with saving this chat's modules back to its Quorium or as a new one.
+function renderQuoriumSlot(c) {
+  const box = c?.el?.root && $('.cmp-q-slot', c.el.root);
+  if (!box) return;
+  syncQuorium(c);
+  const q = quoriumOf(c), changed = quoriumChanged(c), on = Q_MODULES.filter((k) => chatOn(c, k)), off = Q_MODULES.filter((k) => !on.includes(k));
+  const sq = (k) => {
+    const m = moduleModel(c, k), mine = !!c.qModels?.[k];
+    return `<button type="button" class="qx-sq qx-k-${k}${mine ? ' mine' : ''}" data-k="${k}" aria-haspopup="dialog" aria-label="${esc(qName(k))}" title="${esc(`${qName(k)}\nModel\t${short(m) || 'not set'}${mine ? ' (this chat)' : ''}\nClick to change its model in this chat, or turn it off`)}">${qIcon(k)}</button>`;
+  };
+  box.innerHTML = `<button type="button" class="qx-pick${changed ? ' changed' : ''}" aria-haspopup="dialog" aria-expanded="false" title="${esc(q ? `Quorium: ${q.name}${changed ? ' (changed in this chat)' : ''}\n${q.desc}\nClick to pick another or save this chat's modules` : 'No Quorium: this chat uses its own switches.\nClick to pick a Quorium')}"><span class="qx-pick-l">${esc(q ? q.name : 'No Quorium')}</span>${changed ? '<span class="qx-chg">changed</span>' : ''}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>`
+    + `<span class="qx-strip" role="group" aria-label="Modules on in this chat">${on.map(sq).join('')}${off.length ? '<button type="button" class="qx-sq qx-add" aria-haspopup="dialog" aria-label="Add a module to this chat" title="Add a module to this chat">+</button>' : ''}</span>`
+    + '<div class="qx-pop" role="dialog" hidden></div>';
+  const pop = $('.qx-pop', box), pick = $('.qx-pick', box);
+  const after = () => { saveChat(c); renderToolbars(); renderChatTools(c); };
+  const close = () => { pop.hidden = true; pick.setAttribute('aria-expanded', 'false'); document.removeEventListener('pointerdown', outside, true); document.removeEventListener('keydown', onKey, true); };
+  const outside = (e) => { if (!box.contains(e.target) && !$('#picker')?.open) close(); };
+  const onKey = (e) => { if (e.key === 'Escape' && !$('#picker')?.open) { e.stopPropagation(); close(); pick.focus(); } };
+  const open = (html, label) => {
+    pop.innerHTML = html; pop.setAttribute('aria-label', label); pop.hidden = false;
+    document.addEventListener('pointerdown', outside, true); document.addEventListener('keydown', onKey, true);
+    pop.querySelector('button, input')?.focus();
+  };
+  const err = (msg) => { const e = $('.qx-err', pop); if (e) e.textContent = msg || ''; };
+  // The list of Quoriums.
+  pick.onclick = () => {
+    if (!pop.hidden && pop.dataset.view === 'list') return close();
+    pop.dataset.view = 'list'; pick.setAttribute('aria-expanded', 'true');
+    const all = G.quoriums || [];
+    const mini = (x) => `<span class="qx-mini" aria-hidden="true">${Q_MODULES.map((k) => `<i class="qx-k-${k}${x.modules[k]?.on ? '' : ' off'}"></i>`).join('')}</span>`;
+    const row = (x) => `<div class="qx-row-w"><button type="button" class="qx-row" data-q="${esc(x.id)}" aria-current="${x.id === c.quorium}"><span class="qx-row-t"><b>${esc(x.name)}</b>${x.edited ? '<span class="qx-tag">edited</span>' : ''}${mini(x)}</span>${x.desc ? `<small>${esc(x.desc)}</small>` : ''}</button>${x.builtIn ? '' : `<button type="button" class="qx-del" data-del="${esc(x.id)}" title="Delete this Quorium (chats using it keep their switches)" aria-label="Delete ${esc(x.name)}">Delete</button>`}</div>`;
+    const group = (title, list) => (list.length ? `<div class="qx-grp"><h6>${title}</h6>${list.map(row).join('')}</div>` : '');
+    open(`<div class="qx-pop-h"><b>Quorium</b><small>Which modules this chat uses, and their models</small></div>
+      <div class="qx-list">${group('Comes with QuorX', all.filter((x) => x.builtIn))}${group('Yours', all.filter((x) => !x.builtIn))}
+        <div class="qx-grp"><div class="qx-row-w"><button type="button" class="qx-row" data-q="" aria-current="${!q}"><span class="qx-row-t"><b>No Quorium</b></span><small>This chat's own switches, as in ⚙ Settings → New chats</small></button></div></div></div>
+      <div class="qx-foot">
+        ${q && changed ? `<div class="qx-acts"><button type="button" class="btn-pri qx-save">Save changes to “${esc(q.name)}”</button><button type="button" class="qx-undo">Undo changes</button></div>` : ''}
+        ${q?.builtIn && q.edited ? `<button type="button" class="qx-reset" title="Put “${esc(q.name)}” back to how QuorX ships it">Reset “${esc(q.name)}”</button>` : ''}
+        <div class="qx-new" role="group"><label for="qxNew-${c.id}">Save this chat's modules as a new Quorium</label><span><input id="qxNew-${c.id}" maxlength="60" placeholder="Name, e.g. Game Builder" autocomplete="off"><button type="button">Save</button></span></div>
+        <p class="qx-err" role="alert"></p>
+      </div>`, 'Pick a Quorium');
+    for (const b of pop.querySelectorAll('.qx-row')) b.onclick = () => {
+      const x = quoriumById(b.dataset.q);
+      applyQuorium(c, x);
+      G.settings.lastQuorium = x?.id || ''; savePrefs();
+      close(); after();
+    };
+    for (const b of pop.querySelectorAll('.qx-del')) b.onclick = async () => {
+      if (b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = 'Delete?'; b.classList.add('sure'); return; }
+      const r = await dropQuorium(b.dataset.del);
+      if (r?.error) return err(r.error);
+      if (G.settings.lastQuorium === b.dataset.del) { G.settings.lastQuorium = ''; savePrefs(); }
+      close(); saveChat(c); refreshQuoriumSlots();
+    };
+    const saveBtn = $('.qx-save', pop);
+    if (saveBtn) saveBtn.onclick = async () => {
+      const r = await putQuorium({ id: q.id, name: q.name, desc: q.desc, modules: chatCombo(c) });
+      if (r?.error) return err(r.error);
+      applyQuorium(c, quoriumById(q.id));
+      close(); after(); refreshQuoriumSlots();
+    };
+    const undo = $('.qx-undo', pop);
+    if (undo) undo.onclick = () => { applyQuorium(c, q); close(); after(); };
+    const reset = $('.qx-reset', pop);
+    if (reset) reset.onclick = async () => {
+      const r = await dropQuorium(q.id);
+      if (r?.error) return err(r.error);
+      applyQuorium(c, quoriumById(q.id));
+      close(); after(); refreshQuoriumSlots();
+    };
+    // (Not a form: the message box is one, and Enter here must save the Quorium, never send the message.)
+    const nameIn = $('.qx-new input', pop);
+    nameIn.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); $('.qx-new button', pop).click(); } };
+    $('.qx-new button', pop).onclick = async () => {
+      const name = nameIn.value.trim();
+      if (!name) return err('Give it a name first.');
+      const r = await putQuorium({ name, desc: '', modules: chatCombo(c) });
+      if (r?.error) return err(r.error);
+      applyQuorium(c, r.quorium ? quoriumById(r.quorium.id) : null);
+      G.settings.lastQuorium = c.quorium || ''; savePrefs();
+      close(); after();
+    };
+  };
+  // One module: its model in this chat, or off.
+  for (const b of box.querySelectorAll('.qx-strip .qx-sq[data-k]')) b.onclick = () => {
+    const k = b.dataset.k;
+    if (!pop.hidden && pop.dataset.view === k) return close();
+    pop.dataset.view = k;
+    const m = moduleModel(c, k), mine = !!c.qModels?.[k], fromQ = !mine && !!quoriumOf(c)?.modules?.[k]?.model;
+    open(`<div class="qx-pop-h"><span class="qx-sq qx-k-${k}" aria-hidden="true">${qIcon(k)}</span><b>${esc(qName(k))}</b><small>in this chat</small></div>
+      <button type="button" class="mbtn qx-model" title="${esc(m ? `${m} · ${priceOf(m)}` : 'Choose a model')}">${m ? `${recDot(m, qKind(k))} ${esc(short(m))} <small>${esc(shortPrice(m))}</small>` : 'Choose a model'} <i>▾</i></button>
+      <p class="qx-note">${mine ? 'Picked for this chat.' : fromQ ? `From the Quorium “${esc(quoriumOf(c).name)}”.` : 'From ⚙ Settings.'}</p>
+      <div class="qx-acts">${mine ? `<button type="button" class="qx-unpick">${quoriumOf(c)?.modules?.[k]?.model ? 'Use the Quorium\'s model' : 'Use ⚙ Settings\' model'}</button>` : ''}<button type="button" class="qx-off">Turn off in this chat</button></div>`, `${qName(k)} in this chat`);
+    $('.qx-model', pop).onclick = async () => {
+      const id = await pickModel(qKind(k), m, { openRouterOnly: k === 'deciders', context: `${qName(k)} · this chat` });
+      if (id) { c.qModels = { ...(c.qModels || {}), [k]: id }; if (id === (quoriumOf(c)?.modules?.[k]?.model || '')) delete c.qModels[k]; after(); }
+      close();
+    };
+    const un = $('.qx-unpick', pop);
+    if (un) un.onclick = () => { const next = { ...c.qModels }; delete next[k]; c.qModels = next; close(); after(); };
+    $('.qx-off', pop).onclick = () => { c.tools[k] = false; close(); after(); };
+  };
+  // Add a module that is off.
+  const add = $('.qx-add', box);
+  if (add) add.onclick = () => {
+    if (!pop.hidden && pop.dataset.view === 'add') return close();
+    pop.dataset.view = 'add';
+    open(`<div class="qx-pop-h"><b>Add to this chat</b><small>Turns a module on here; the Quorium stays as it is</small></div>
+      <div class="qx-adds">${off.map((k) => `<button type="button" class="qx-addk" data-k="${k}"><span class="qx-sq qx-k-${k}" aria-hidden="true">${qIcon(k)}</span>${esc(qName(k))}${CHAT_TOOLS.includes(k) ? ' <span class="paid-badge">paid</span>' : ''}</button>`).join('')}</div>`, 'Add a module');
+    for (const x of pop.querySelectorAll('.qx-addk')) x.onclick = () => { c.tools[x.dataset.k] = true; close(); after(); };
   };
 }
 // Refresh every open chat's 🧰 Tools button (models may have changed in Settings).
@@ -7565,6 +7748,7 @@ async function boot() {
   loadScores(); loadCards();
   getJ('/api/storage/rules').then((r) => { if (r && !r.error) G.storageRules = r; });
   const d = G.cfg.defaults;
+  G.quoriums = Array.isArray(G.cfg.quoriums) ? G.cfg.quoriums : [];
   const saved = load();
   G.settings = { voters: d.voters, gate: d.gate, maxSteps: d.maxSteps, approval: d.approval, budget: d.budget, model: d.chatModel || d.setups.C.model, reasoning: 'off', ...(saved?.settings || {}) };
   G.settings.tools = Object.fromEntries(Object.entries(d.tools).map(([k, v]) => [k, { ...structuredClone(v), ...(saved?.settings?.tools?.[k] || {}) }]));

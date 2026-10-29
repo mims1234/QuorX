@@ -25,6 +25,7 @@ import { loadHooks, saveHooks, HOOK_EVENTS } from './server/hooks.js';
 import { createScheduler, loadSchedules, scheduleView, addSchedule, changeSchedule, removeSchedule, runScheduleNow, scheduleHooks } from './server/schedules.js';
 import { startScheduledChat } from './server/schedrun.js';
 import { loadMemory, saveMemory, memoryTokens, MEMORY_TOKENS } from './server/memory.js';
+import { listQuoriums, saveQuorium, removeQuorium } from './server/quoriums.js';
 import { CHECKS } from './server/harness-checks.js';
 import { startRun, getRun, stopRun, follow, runStatus, activeRuns, validRunId, scorecard, readLog, runEvents, recordRun, onRunEvent } from './server/runs.js';
 import { setBudget, budgetState } from './server/budget.js';
@@ -175,7 +176,7 @@ const server = http.createServer(async (req, res) => {
     if (hfm && req.method === 'POST') { let b = {}; try { b = JSON.parse(await readBody(req, 8e6) || '{}'); } catch { /* below */ } return handoffPut(hfm[1], b.items) ? json(res, 200, { ok: true }) : json(res, 410, { error: 'this handoff is used or expired' }); }
     if (hfm && req.method === 'GET') { const items = handoffTake(hfm[1]); return items ? json(res, 200, { items }) : json(res, 410, { error: 'this handoff is used or expired' }); }
     if (req.method === 'GET' && url.pathname === '/api/stale') return json(res, 200, codeChanged());
-    if (req.method === 'GET' && url.pathname === '/api/config') return json(res, 200, { ...codeChanged(), version: VERSION, platform: process.platform, pagePort: runtime.pagePort || null, shell: shellInfo().name, pty: ptyAvailable(), defaults: DEFAULTS, docDefaults: DOC_DEFAULTS, storageDefaults: RULE_DEFAULTS, checks: CHECKS, media: MEDIA, newsRemote: newsRemoteState().on, hasKey: !!currentKey(), browser: browserPath(), allowed: ALLOWED });
+    if (req.method === 'GET' && url.pathname === '/api/config') return json(res, 200, { ...codeChanged(), version: VERSION, platform: process.platform, pagePort: runtime.pagePort || null, shell: shellInfo().name, pty: ptyAvailable(), defaults: DEFAULTS, docDefaults: DOC_DEFAULTS, storageDefaults: RULE_DEFAULTS, checks: CHECKS, media: MEDIA, newsRemote: newsRemoteState().on, hasKey: !!currentKey(), browser: browserPath(), allowed: ALLOWED, quoriums: listQuoriums() });
 
     // ---- chat history (data/chats; delete = move to data/trash) ----
     // The sidebar: each project's newest chats, the open ones by id, and every project's counts (store.js sidebarChats).
@@ -589,6 +590,16 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/memory' && req.method === 'PUT') {
       const b = JSON.parse(await readBody(req, 1e5) || '{}');
       try { const m = saveMemory(b); return json(res, 200, { ok: true, ...m, tokens: memoryTokens(m.items), limit: MEMORY_TOKENS }); } catch (e) { return json(res, 200, { error: e.message }); }
+    }
+    // ---- Quoriums: saved combos of helper modules and their models (server/quoriums.js) ----
+    if (url.pathname === '/api/quoriums' && req.method === 'GET') return json(res, 200, { quoriums: listQuoriums() });
+    if (url.pathname === '/api/quoriums' && req.method === 'PUT') {
+      const b = JSON.parse(await readBody(req, 1e5) || '{}');
+      try { const q = saveQuorium(b); return json(res, 200, { ok: true, quorium: q, quoriums: listQuoriums() }); } catch (e) { return json(res, 200, { error: e.message }); }
+    }
+    if (url.pathname.startsWith('/api/quoriums/') && req.method === 'DELETE') {
+      const id = decodeURIComponent(url.pathname.slice('/api/quoriums/'.length));
+      return json(res, 200, { ok: removeQuorium(id), quoriums: listQuoriums() });
     }
     // ---- scheduled tasks: list, add, change (pause, resume), remove, run now; and notices for the page ----
     if (url.pathname === '/api/schedules' && req.method === 'GET') {
