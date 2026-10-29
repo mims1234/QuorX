@@ -12,7 +12,7 @@ import net from 'node:net';
 import crypto from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { HOME } from './openrouter.js';
-import { toolPrompt, renderTranscript, parseToolCalls, textFilter, callKey } from './textcalls.js';
+import { toolPrompt, renderTranscript, parseToolCalls, textFilter, callKey, notRun } from './textcalls.js';
 
 export const LOCAL_ID = 'opencode-local';
 const DIR = path.join(HOME, 'data', 'opencode-local'); // the folder OpenCode runs in: empty, so no project files reach the model
@@ -319,7 +319,7 @@ async function localOnce(body, signal, onText, onThink, { info = {}, idleMs = 18
     } : {};
     // Blocks that didn't run (mid-line, hidden, or in a model's own keyless format such as DeepSeek's) are shown as
     // text with a warning and never asked for again: asking could turn one the model only quoted into a real call.
-    return { text: parsed.text, thinking, reasoningDetails: [], toolCalls: parsed.calls, ...(parsed.skipped + parsed.dsml ? { skippedCalls: parsed.skipped + parsed.dsml } : {}), usage, ms: Date.now() - t, firstMs, finishReason: lastInfo?.finish === 'length' ? 'length' : parsed.calls.length ? 'tool_calls' : 'stop', provider: `${info.providerName || providerID} through OpenCode`, model: body.model, seen: seen || 1 };
+    return { text: parsed.text, thinking, reasoningDetails: [], toolCalls: parsed.calls, ...notRun(parsed), usage, ms: Date.now() - t, firstMs, finishReason: lastInfo?.finish === 'length' ? 'length' : parsed.calls.length ? 'tool_calls' : 'stop', provider: `${info.providerName || providerID} through OpenCode`, model: body.model, seen: seen || 1 };
   } catch (e) {
     if (accepted && e && typeof e === 'object' && !e.partial) e.partial = { outChars, ms: Date.now() - t };
     throw e;

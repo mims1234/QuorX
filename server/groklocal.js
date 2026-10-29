@@ -14,7 +14,7 @@ import { spawn } from 'node:child_process';
 import { HOME } from './openrouter.js';
 import { findOnPath, killTree } from './opencodelocal.js';
 import { launch, envFor, claudeError as appError } from './claudelocal.js';
-import { toolPrompt, renderTranscript, parseToolCalls, textFilter, callKey } from './textcalls.js';
+import { toolPrompt, renderTranscript, parseToolCalls, textFilter, callKey, notRun } from './textcalls.js';
 
 export const GROK_ID = 'grok-local';
 const DIR = path.join(HOME, 'data', 'grok-local'); // the folder Grok runs in: empty, so no project files reach the model
@@ -24,11 +24,28 @@ const GROK_TOOLS = ['run_terminal_cmd', 'grep', 'read_file', 'search_replace', '
   'Shell', 'StrReplace', 'EditNotebook', 'Delete', 'ReadLints', 'SwitchMode', 'AskQuestion', 'CreatePlan', 'CallMcpTool', 'FetchMcpResource', 'ListMcpResources',
   'GenerateImage', 'get_task_output', 'wait_tasks', 'kill_task', 'lsp', 'enter_plan_mode', 'workflow', 'monitor', 'image_gen', 'image_edit', 'glob', 'search_tool', 'use_tool'];
 // Grok's own prompt advertises its tools, so a short one replaces it; QuorX's real instructions travel in the message.
-const SYSTEM = 'You are a language model called by the QuorX app. You have no tools or functions of your own and must never try to use one. The message holds QuorX\'s instructions, the tools QuorX offers (call them only by writing the text blocks it describes) and the conversation. Follow those instructions exactly.';
+const SYSTEM = 'You are a language model called by the QuorX app. You have no tools or functions of your own and must never try to use one. The message holds QuorX\'s instructions, the tools QuorX offers (call them only by writing the text blocks it describes) and the conversation. Follow those instructions exactly. Start every call block on a new line of its own, never in the middle of a sentence or after other text on the same line: a block that does not start a line is not run. Every reply either makes its calls or is your final answer: when you say what you will do next, write its call blocks in that same reply, right after that sentence. A reply that only says what you will do ends the conversation with nothing done.';
 export const grokArgs = ({ model, effort, file }) => ['--no-auto-update', '-m', model, ...(effort ? ['--effort', effort] : []), '--output-format', 'streaming-messages-json', '--include-partial-messages',
   '--max-turns', '1', '--no-subagents', '--disable-web-search', '--permission-mode', 'default', '--system-prompt-override', SYSTEM,
   '--tools', 'todo_write', '--disallowed-tools', GROK_TOOLS.join(','), '--prompt-file', file];
+// Grok also reads Claude Code's and Cursor's skills, MCP servers, rules, hooks and agents, its memory and workflows,
+// and lists them beside QuorX's prompt: switched off for QuorX's calls only (the user's own Grok setup is untouched).
+export const GROK_ENV = Object.fromEntries([
+  ...['CLAUDE', 'CURSOR'].flatMap((v) => ['SKILLS', 'MCPS', 'RULES', 'AGENTS', 'HOOKS'].map((k) => [`GROK_${v}_${k}_ENABLED`, 'false'])),
+  ['GROK_MANAGED_MCPS_ENABLED', 'false'], ['GROK_MEMORY', '0'], ['GROK_WORKFLOWS', '0'],
+]);
 
+// Where a reply stops being the model's own: a turn tag carrying this call's key (renderTranscript's turns).
+const TURN = (key) => new RegExp(`<(?:user|assistant|tool_result) key="${key}"`);
+const MAX_REPLY = 300e3; // characters in one reply; far past any file a step writes
+// Its last 400 characters, written 5 times or more: a model stuck in a loop (real files rarely repeat that much verbatim).
+export function repeats(text, n = 400, times = 5) {
+  if (text.length < n * times) return false;
+  const tail = text.slice(-n);
+  let seen = 0;
+  for (let i = text.indexOf(tail); i >= 0 && seen < times; i = text.indexOf(tail, i + 1)) seen++;
+  return seen >= times;
+}
 const err = (msg, extra = {}) => Object.assign(new Error(msg), extra);
 const running = new Set();
 export const grokRunning = () => running.size;
@@ -42,7 +59,7 @@ async function handshake({ start = spawn, find = findOnPath } = {}) {
   const exe = find('grok');
   if (!exe) throw notInstalled();
   fs.mkdirSync(DIR, { recursive: true });
-  const proc = launch(exe, ['--no-auto-update', 'agent', 'stdio'], { cwd: DIR, env: envFor(), windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32' }, start);
+  const proc = launch(exe, ['--no-auto-update', 'agent', 'stdio'], { cwd: DIR, env: { ...envFor(), ...GROK_ENV }, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32' }, start);
   running.add(proc);
   const pending = new Map();
   let next = 1, buf = '', stderr = '';
@@ -127,9 +144,9 @@ export async function grokStream(body, signal, onText, onThink, { info = {}, idl
   fs.writeFileSync(file, `[QuorX's instructions]\n${system}${toolPrompt(body.tools, body.tool_choice, key)}\n\n${transcript}`);
   const t = Date.now();
   let proc;
-  try { proc = launch(exe, grokArgs({ model, effort: grokEffort(body.reasoning, info.variants), file }), { cwd: DIR, env: envFor(), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' }, start); } catch (e) { fs.rmSync(file, { force: true }); throw err(`Grok Build didn't start: ${e.message}`, { kind: 'network' }); }
+  try { proc = launch(exe, grokArgs({ model, effort: grokEffort(body.reasoning, info.variants), file }), { cwd: DIR, env: { ...envFor(), ...GROK_ENV }, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' }, start); } catch (e) { fs.rmSync(file, { force: true }); throw err(`Grok Build didn't start: ${e.message}`, { kind: 'network' }); }
   running.add(proc);
-  let text = '', thinking = '', firstMs = null, seen = 0, result = null, failure = null, idle = null, outChars = 0, started = false, stderr = '';
+  let text = '', thinking = '', firstMs = null, seen = 0, result = null, failure = null, idle = null, outChars = 0, started = false, stderr = '', loopCheck = 8e3;
   const show = textFilter(onText);
   const kill = () => { if (proc.pid) killTree(proc.pid); };
   const arm = () => { clearTimeout(idle); idle = setTimeout(() => { failure ||= err(`Grok Build sent nothing for ${Math.round(idleMs / 1000)} s`, { name: 'TimeoutError', kind: 'timeout' }); kill(); }, idleMs); };
@@ -145,9 +162,22 @@ export async function grokStream(body, signal, onText, onThink, { info = {}, idl
     } else if (j.type === 'stream_event') {
       const d = j.event?.delta || {};
       if (j.event?.type === 'content_block_delta' && d.type === 'text_delta' && typeof d.text === 'string') {
+        if (result?.cut) return;
         const piece = d.text.replace(EOS, '');
         if (firstMs == null) firstMs = Date.now() - t;
         text += piece; outChars += piece.length; show(piece);
+        // A reply that runs away: the model writes the conversation's next turns itself (a tool's result, the user's
+        // reply) or doesn't stop. Its reply ends where that starts, and the model is stopped; nothing after it is read.
+        // Or one that repeats itself: the same stretch of text over and over (looked for every few KB, near the end only).
+        const from = Math.max(0, text.length - piece.length - 40), at = text.slice(from).search(TURN(key));
+        const turn = at < 0 ? -1 : from + at;
+        let loops = false;
+        if (text.length >= loopCheck) { loopCheck = text.length + 8e3; loops = repeats(text); }
+        if (turn >= 0 || loops || text.length > MAX_REPLY) {
+          if (turn >= 0) text = text.slice(0, turn);
+          result ||= { stop_reason: turn >= 0 ? 'end_turn' : 'max_tokens', usage: {}, cut: true };
+          kill();
+        }
       } else if (j.event?.type === 'content_block_delta' && d.type === 'thinking_delta' && typeof d.thinking === 'string') {
         thinking += d.thinking; outChars += d.thinking.length; onThink?.(d.thinking);
       }
@@ -186,7 +216,7 @@ export async function grokStream(body, signal, onText, onThink, { info = {}, idl
       // Grok prices each call: on a Grok plan, what it counted against the plan.
       ...(Number.isFinite(cost) && cost > 0 ? (info.plan === 'plan' ? { plan_cost: cost } : { cost }) : {}),
     };
-    return { text: parsed.text, thinking, reasoningDetails: [], toolCalls: parsed.calls, usage, ms: Date.now() - t, firstMs, finishReason: result.stop_reason === 'max_tokens' ? 'length' : parsed.calls.length ? 'tool_calls' : 'stop', provider: 'xAI through Grok Build', model: body.model, seen: seen || 1 };
+    return { text: parsed.text, thinking, reasoningDetails: [], toolCalls: parsed.calls, ...notRun(parsed), usage, ms: Date.now() - t, firstMs, finishReason: result.stop_reason === 'max_tokens' ? 'length' : parsed.calls.length ? 'tool_calls' : 'stop', provider: 'xAI through Grok Build', model: body.model, seen: seen || 1 };
   } catch (e) {
     if (started && e && typeof e === 'object' && !e.partial) e.partial = { outChars, ms: Date.now() - t };
     throw e;

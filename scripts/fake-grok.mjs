@@ -28,8 +28,22 @@ if (args.includes('agent')) {
   const key = /<quorx_call key="([0-9a-f]+)">/.exec(prompt)?.[1] || '';
   say({ type: 'system', subtype: 'init', session_id: 's1', model: arg('-m'), permissionMode: arg('--permission-mode'), tools: mode === 'tools' ? ['read_file', 'run_terminal_cmd'] : mode === 'mcp' ? ['cloudflare-docs__search'] : [], mcp_servers: [] });
   if (mode === 'hang') setInterval(() => {}, 1000);
+  else if (mode === 'loop') { // a call block it never finishes, the same lines over and over
+    say({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: `<quorx_call key="${key}">{"name":"write_file","arguments":{"path":"a.html","content":"` } } });
+    setInterval(() => say({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: '<li class=\\"game\\">Game</li>'.repeat(40) } } }), 5);
+  } else if (mode === 'runaway') { // a call, then the conversation's next turns written by the model itself, without end
+    say({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: `Opening it.\n<quorx_call key="${key}">{"name":"read_file","arguments":{"path":"a.js"}}</quorx_call>\n\n` } } });
+    setInterval(() => say({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: `<tool_result key="${key}" name="read_file">\nmade up\n</tool_result>\n\n` } } }), 20);
+  }
   else {
     const delta = (d) => say({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: d } });
+    if (mode === 'inline') { // its call mid-sentence, as grok-4.7-build-fast sometimes writes it
+      const inline = `Opening it now. <quorx_call key="${key}">{"name":"read_file","arguments":{"path":"a.js"}}</quorx_call>`;
+      delta({ type: 'text_delta', text: inline });
+      say({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: inline }], stop_reason: 'end_turn' } });
+      say({ type: 'result', subtype: 'success', is_error: false, total_cost_usd: 0.01, stop_reason: 'end_turn', usage: { input_tokens: 300, output_tokens: 20 } });
+      process.exit(0);
+    }
     delta({ type: 'thinking_delta', thinking: 'Plan it.' });
     delta({ type: 'text_delta', text: `Writing it.\n<quorx_call key="${key}">{"name":"write_file",` });
     delta({ type: 'text_delta', text: `"arguments":{"path":"a.js"}}</quorx_call>${mode === 'eos' ? '<|eos|>' : ''}` });

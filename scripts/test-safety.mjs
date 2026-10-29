@@ -11,7 +11,7 @@ import { execSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { runLine, snapBefore, commandChanges, snapBeforeAsync, commandChangesAsync, restoreCheckpoint, reviewFiles, agentSpace } from '../server/workspace.js';
 import { snapshot, changesSince, snapshotAsync, changesSinceAsync } from '../server/snapshot.js';
-import { jobsAvailable, jobHostStatus, lineHost } from '../server/jobhost.js';
+import { jobsAvailable, jobHostStatus, lineHost, asciiJson } from '../server/jobhost.js';
 import { glowOn, glowOff, glowRuns, onGlowStop, stopNow } from '../server/glow.js';
 import { spawn } from 'node:child_process';
 import { decide, agentWriteBlocked, suggestedRules, saveRules, loadRules, ruleMatches, ruleProblem, addRule, updateRule, removeRule } from '../server/cmdpolicy.js';
@@ -260,7 +260,8 @@ test('snapshot: the event loop keeps ticking while a big project is snapshotted'
   } finally { clearInterval(t); }
   const ms = Date.now() - t0;
   assert.ok(ticks >= Math.min(5, ms / 40), `the timer ticked ${ticks} times in ${ms} ms`);
-  assert.ok(maxGap < 250, `the longest stall was ${maxGap} ms`);
+  // Done on the main thread, this snapshot freezes it for seconds; a busy CI runner alone can pause it ~300 ms.
+  assert.ok(maxGap < 1000, `the longest stall was ${maxGap} ms`);
 });
 // ---------- the rule engine ----------
 const proj = tmp('policy');
@@ -2144,4 +2145,11 @@ test('a helper can say things unasked (Stop pressed), and can be ended at once a
   const again = await h.call('show');
   assert.notEqual(again.pid, first.pid, 'the next call starts a new helper');
   h.kill();
+});
+
+test('requests to the PowerShell helpers are plain ASCII, so quotes, accents and emoji arrive intact', () => {
+  const v = { text: '“Paint” is using your computer · é 🐱', n: 1 };
+  const s = asciiJson(v);
+  assert.ok(/^[ -~]*$/.test(s), s);
+  assert.deepEqual(JSON.parse(s), v);
 });

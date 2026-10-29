@@ -506,6 +506,16 @@ export function saveChat(id, chat) {
   return writeChat(id, doc);
 }
 
+/** A copy of a chat under a new id, "(copy)" after its title: every message and artifact, no reply left running. */
+export function duplicateChat(id) {
+  const c = getWholeChat(id);
+  if (!c) return null;
+  const copy = `c${Date.now().toString(36)}${crypto.randomBytes(4).toString('hex').slice(0, 5)}`;
+  const messages = (c.agent?.messages || []).map((m) => (m && (m.live || m.runActive) ? { ...m, live: false, runActive: false } : m));
+  saveChat(copy, { ...c, id: copy, title: `${c.title || 'Untitled'} (copy)`, created: Date.now(), agent: { ...c.agent, messages } });
+  return copy;
+}
+
 // When a reply ends, its result goes into its chat from the server (server.js), so it is kept even when the page
 // that started it was closed, reloaded or lost track of it. A page that already saved the result is left alone.
 export function settleReply(chatId, runId, end) {

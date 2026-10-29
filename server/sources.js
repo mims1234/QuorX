@@ -41,6 +41,9 @@ export const SOURCES = {
     id: GROK_ID, name: 'Grok Build on this PC', short: 'Grok Build', app: 'grok', billing: 'mixed', local: true,
     site: 'https://x.ai/cli', keyUrl: 'https://x.ai/cli', docs: 'https://x.ai/cli',
     keyHint: 'No key: QuorX uses the account you signed in to Grok Build with (grok login).', install: 'curl -fsSL https://x.ai/cli/install.sh | bash', appName: 'Grok Build',
+    // Its models see no pictures here and stop short of long calls (a drawing's strokes), so a chat on one doesn't get
+    // the desktop tool: the model says it can't, instead of starting and stalling.
+    noDesktop: 'Grok Build models in QuorX read text only and stop short of long steps like drawing, so 🖥 Computer use is off with them. Pick a Claude Code model, or an OpenRouter model that sees pictures, to use apps on this computer.',
   },
 };
 // How QuorX reaches each app: its model list, one call, a check that costs nothing, and what its process is doing.

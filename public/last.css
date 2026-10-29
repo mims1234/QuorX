@@ -392,6 +392,10 @@ dialog.pal[open] .pal-box { animation: pal-in var(--dur-menu, .2s) var(--ease-ou
 .sidebar button.ico-rename svg, .sidebar button.ico-delete svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .sb-pactions, .sb-chat-acts { gap: 4px !important; }
 .sb-chat-acts button { width: 26px !important; height: 26px !important; }
+/* ⋯ on a chat row: Rename, Duplicate, Delete (the same menu as right-clicking the chat) */
+.sidebar .sb-chat-acts .sb-chat-menu { display: grid; place-items: center; color: var(--muted); }
+.sidebar .sb-chat-acts .sb-chat-menu:hover, .sidebar .sb-chat-acts .sb-chat-menu[aria-expanded="true"] { color: var(--text); background: var(--panel-3); }
+.sidebar .sb-chat-acts .sb-chat-menu svg { width: 16px; height: 16px; fill: currentColor; stroke: none; }
 /* chat header tools */
 .dir-a-head button.ch-pane { color: var(--accent) !important; }
 .dir-a-head button.ch-files { color: var(--amber, #f59e0b) !important; }
