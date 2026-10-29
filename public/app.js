@@ -2904,18 +2904,19 @@ function renderComposerBar(c) {
   // The settings live in one popover over the message box. The chips in the footer say what each is set to and open
   // its part; ⋯ opens all of it. A setting at its usual value is quiet, a changed one lights up (the box folds the
   // quiet ones first as it narrows, and the budget caps before everything: they change least).
-  const capLine = ([k, label, , v, step, tip]) => `<label class="cs-num" title="${esc(`${label} (all chats)\n${tip}`)}"><span>${label}</span><span class="cs-inp"><i>$</i><input type="number" min="0" step="${step}" data-k="${k}" value="${esc(String(v))}" aria-label="${label} in dollars"></span></label>`;
-  const sec = (k, title, body, note = '') => `<div class="cq-sec" data-sec="${k}"><h6>${title}${note ? ` <small>${note}</small>` : ''}</h6><div class="cq-row">${body}</div></div>`;
+  const CAP_WORD = { replyBudget: 'reply', budget: 'media' };
+  const capLine = ([k, label, , v, step, tip]) => `<label class="cs-num" title="${esc(`${label} (all chats)\n${tip}`)}"><span>${CAP_WORD[k] || label}</span><span class="cs-inp"><i>$</i><input type="number" min="0" step="${step}" data-k="${k}" value="${esc(String(v))}" aria-label="${label} in dollars"></span></label>`;
+  // One line per setting: its name on the left ("all chats" under it when it is not this chat's own), the control on the right.
+  const sec = (k, title, body, note = '') => `<div class="cq-sec" data-sec="${k}"><h6>${title}${note ? `<small>${note}</small>` : ''}</h6><div class="cq-row">${body}</div></div>`;
   const PLAN = [['off', 'Off', 'Plans and builds in one go.'], ['big', 'Big', 'For a new app, site, game or a change across several files, it shows its plan and waits for Go ahead, Stop here, or your changes.'], ['always', 'Always', 'Before any file change or command, it shows its plan and waits.']];
   const pv = G.settings.planFirst || 'off';
-  quick.innerHTML = `<div class="cq-head"><b>This chat</b><small>Settings for the next reply</small><button type="button" class="cq-x" aria-label="Close" title="Close (Esc)">✕</button></div>`
+  quick.innerHTML = `<div class="cq-head"><b>This chat</b><button type="button" class="cq-adv" aria-haspopup="dialog" title="All of this chat's settings: each tool's model, strength and price, Undo and Save" aria-label="Advanced settings for this chat"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg><span>Advanced</span></button><button type="button" class="cq-x" aria-label="Close" title="Close (Esc)">✕</button></div>`
     + sec('think', 'Thinking', levelsHTML(s, 'reason'))
     + sec('creative', 'Creativity', levelsHTML(s, 'creative'))
-    + sec('safety', 'Strict or YOLO', permHTML('cq-perm'))
-    + sec('plan', 'Plan first', `<div class="lvl cq-plan" role="radiogroup" aria-label="Plan first"><span class="lvl-ico" aria-hidden="true">🗺</span>${PLAN.map(([v, w, tip]) => { const on = pv === v; return `<button type="button" class="lvl-b ${on ? 'on' : ''}" role="radio" aria-checked="${on}" data-plan="${v}" title="${esc(`Plan first: ${w}${on ? ' (now)' : ''} · all chats\n${tip}`)}">${w}</button>`; }).join('')}</div>`, '· all chats')
-    + sec('money', 'Budget', `<div class="cs-caps">${CAPS.map(capLine).join('')}</div>`, '· all chats')
-    + sec('mic', 'Mic', `<div class="cs-tools">${quickToolsHTML(c, { micOnly: true })}</div>`, '· speech to text, all chats')
-    + `<div class="cq-foot"><button type="button" class="cq-adv" aria-haspopup="dialog" title="All of this chat's settings: each tool's model, strength and price, Undo and Save" aria-label="Advanced settings for this chat"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg><span>Advanced</span></button></div>`;
+    + sec('safety', 'Mode', permHTML('cq-perm'))
+    + sec('plan', 'Plan', `<div class="lvl cq-plan" role="radiogroup" aria-label="Plan first"><span class="lvl-ico" aria-hidden="true">🗺</span>${PLAN.map(([v, w, tip]) => { const on = pv === v; return `<button type="button" class="lvl-b ${on ? 'on' : ''}" role="radio" aria-checked="${on}" data-plan="${v}" title="${esc(`Plan first: ${w}${on ? ' (now)' : ''} · all chats\n${tip}`)}">${w}</button>`; }).join('')}</div>`, 'all chats')
+    + sec('money', 'Budget', `<div class="cs-caps">${CAPS.map(capLine).join('')}</div>`, 'all chats')
+    + sec('mic', 'Mic', `<div class="cs-tools">${quickToolsHTML(c, { micOnly: true })}</div>`, 'all chats');
   const chipsEl = $('.cmp-chips', rack);
   const rv = s.reasoning || 'off', cv = CREATIVITY_INFO[s.creativity] ? s.creativity : 'default', yolo = c.approval === 'yolo';
   const capNow = CAPS.map((x) => Number(x[3])), capWas = [G.cfg.defaults.replyBudget ?? 1, G.cfg.defaults.budget ?? 0.5].map(Number);

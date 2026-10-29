@@ -56,29 +56,36 @@
 .composer-v2 .cmp-tray-b { display: none !important; position: relative; }
 
 /* the settings popover */
-.composer-v2 .cmp-quick { position: absolute !important; bottom: calc(100% + 8px); left: 0; z-index: 70; width: 400px; max-width: 100%;
-  display: flex !important; flex-direction: column; gap: 10px; padding: 12px !important; margin: 0 !important; border-radius: 10px;
+.composer-v2 .cmp-quick { position: absolute !important; bottom: calc(100% + 8px); left: 0; z-index: 70; width: 360px; max-width: 100%;
+  display: grid !important; grid-template-columns: auto 1fr; align-items: center !important; justify-content: stretch !important; column-gap: 12px; row-gap: 6px;
+  padding: 8px 10px 10px !important; margin: 0 !important; border-radius: 10px; text-align: left;
   border: 1px solid var(--line-strong) !important; background: var(--panel-overlay, var(--panel-2)) !important; box-shadow: 0 14px 40px rgba(0, 0, 0, .4); }
 .composer-v2 .cmp-quick[hidden] { display: none !important; }
-.composer-v2 .cmp-quick.one { width: 340px; }
-.cmp-quick .cq-head { display: flex; align-items: baseline; gap: 8px; }
-.cmp-quick .cq-head b { font-size: 13px; color: var(--text-bright, var(--text)); }
-.cmp-quick .cq-head small { color: var(--muted); font-size: 11.5px; }
-.cmp-quick .cq-x { margin-left: auto; width: 24px; height: 24px; display: grid; place-items: center; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }
+.composer-v2 .cmp-quick.one { width: auto; min-width: 0; }
+/* the head: title, Advanced, ✕ */
+.cmp-quick .cq-head { grid-column: 1 / -1; display: flex; align-items: center; gap: 6px; margin-bottom: 2px; }
+.cmp-quick .cq-head b { font-size: 12.5px; color: var(--text-bright, var(--text)); }
+.cmp-quick .cq-adv { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 8px; border-radius: 6px;
+  border: 1px solid var(--line); background: transparent; color: var(--muted); font: 500 11.5px var(--font-ui); cursor: pointer; }
+.cmp-quick .cq-adv:hover { color: var(--text); background: var(--panel-3); }
+.cmp-quick .cq-adv svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.cmp-quick .cq-x { width: 24px; height: 24px; display: grid; place-items: center; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }
 .cmp-quick .cq-x:hover { background: var(--panel-3); color: var(--text); }
 .cmp-quick.one .cq-head { display: none; }
-.composer-v2 .cmp-quick { align-items: stretch !important; justify-content: flex-start !important; text-align: left; }
-.cmp-quick .cq-sec { display: flex; flex-direction: column; align-items: stretch; gap: 6px; text-align: left; }
-.cmp-quick .cq-row { justify-content: flex-start !important; }
-.cmp-quick .cq-sec h6 { text-align: left; }
+/* a setting: its name on the left, its control on the right (the two grid columns line them all up) */
+.cmp-quick .cq-sec { display: contents; }
 .cmp-quick .cq-sec[hidden] { display: none; }
-.cmp-quick .cq-sec h6 { margin: 0; font: 600 11px var(--font-ui); letter-spacing: .04em; text-transform: uppercase; color: var(--dim); }
-.cmp-quick .cq-sec h6 small { text-transform: none; letter-spacing: 0; font-weight: 400; }
-.cmp-quick .cq-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.cmp-quick .cq-row .lvl, .cmp-quick .cq-row .seg { flex: 1 1 auto; }
-.cmp-quick .cs-caps { display: flex; flex-wrap: wrap; gap: 8px; }
-.cmp-quick .cs-caps .cs-num { display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; color: var(--muted); }
-.cmp-quick .cq-foot { display: flex; justify-content: flex-end; border-top: 1px solid var(--line); padding-top: 10px; }
+.cmp-quick .cq-sec h6 { margin: 0; display: flex; flex-direction: column; gap: 0; font: 500 12px/1.2 var(--font-ui); color: var(--muted); white-space: nowrap; text-align: left; }
+.cmp-quick .cq-sec h6 small { font: 400 10px/1.2 var(--font-ui); color: var(--dim); }
+.cmp-quick .cq-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: flex-start !important; min-width: 0; }
+/* the segmented controls: compact, no icon (the name on the left says what it is) */
+.cmp-quick .cq-row .lvl, .cmp-quick .cq-row .seg { flex: 0 1 auto; margin: 0 !important; }
+.cmp-quick .cq-row .lvl-ico { display: none !important; }
+.cmp-quick .cq-row .lvl-b, .cmp-quick .cq-row .seg button { height: 24px !important; padding: 0 9px !important; font-size: 12px !important; }
+.cmp-quick .cs-caps { display: flex; flex-wrap: nowrap; gap: 8px; }
+.cmp-quick .cs-caps .cs-num { display: inline-flex; flex-direction: row; align-items: center; gap: 5px; font-size: 11.5px; color: var(--muted); }
+.cmp-quick .cs-caps .cs-inp { width: 64px; height: 24px; }
+.cmp-quick .cs-caps .cs-inp input { width: 100%; min-width: 0; }
 
 /* ---- folding: app.js fitComposer adds fold1, fold2… to the box, one step at a time, until the row fits ---- */
 /* 1. The budget caps fold first (into ⋯, an amber dot when one differs from the usual); the chips' labels drop */
