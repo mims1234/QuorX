@@ -2687,9 +2687,8 @@ body.top-in-sidebar .sb-titlebar { gap: 8px; }
 .sb-titlebar .brand#brandHome .brand-logo { width: 16px; height: 16px; }
 .sb-titlebar .brand-git { width: 26px; height: 26px; }
 .sb-titlebar .brand-git svg { width: 16px; height: 16px; }
-/* Links in content open only with Ctrl+click (Cmd+click on a Mac): the hand shows only while the key is held. */
-a[data-cl] { cursor: text; }
-body.link-mod a[data-cl] { cursor: pointer; }
+/* Links in content open with a click (in the Browser tab) or Ctrl+click (in your own browser): the hand shows on them. */
+a[data-cl] { cursor: pointer; }
 /* Where a link's tip in the terminal points (at the pointer). */
 .xt-tip-at { position: fixed; width: 1px; height: 16px; pointer-events: none; }
 
@@ -2973,7 +2972,7 @@ body.dev-build::before { content: ''; position: fixed; left: 0; right: 0; top: 0
 .ch-sched:hover { border-color: var(--accent); }
 
 /* A path in a reply that is there on this computer: a click shows it in File Explorer. Dotted, with a folder mark, so
-   it reads differently from a web link (which needs Ctrl+click). */
+   it reads differently from a web link (which opens in the Browser tab). */
 .md-path { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; text-decoration-thickness: 1px; }
 .md-path::after { content: "\1F4C2"; font-size: .8em; margin-left: .3em; opacity: .7; font-family: initial; }
 .md-path:hover, .md-path:focus-visible { text-decoration-style: solid; outline: none; }

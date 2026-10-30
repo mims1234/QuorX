@@ -33,14 +33,16 @@ export function artifactContent(chatId, id) {
 // Preview polish added to the served page only (the artifact itself is unchanged): thin scrollbars
 // that suit both themes instead of the browser's bright default.
 const POLISH = '<style data-harness>html{scrollbar-width:thin;scrollbar-color:rgba(140,150,145,.45) transparent}::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:rgba(140,150,145,.4);border-radius:10px;border:2px solid transparent;background-clip:padding-box}::-webkit-scrollbar-thumb:hover{background-color:rgba(160,170,165,.65)}::-webkit-scrollbar-corner{background:transparent}</style>';
-// Shown in QuorX's pane (in a frame), a link that leaves the page opens only with Ctrl+click (Cmd+click on a Mac),
-// in QuorX's Browser tab, never a new window: the page asks QuorX to open it. Links within the page work as usual,
-// and opened on its own (the agent's browser, a tab of its own) the page is unchanged.
-const LINKS = `<script data-harness>(function(){if(window.top===window)return;var tip=/Mac|iPhone|iPad/.test(navigator.platform||'')?'Cmd':'Ctrl';
+// Shown in QuorX's pane (in a frame), a link that leaves the page opens with a click in QuorX's Browser tab, and any
+// link with Ctrl+click (Cmd+click on a Mac) or a middle click in your own browser, never a new window: the page asks
+// QuorX to open it. Links within the page work as usual on a click, and opened on its own (the agent's browser, a tab
+// of its own) the page is unchanged.
+const LINKS = `<script data-harness>(function(){if(window.top===window)return;var tip='Click to open in the Browser tab\\n'+(/Mac|iPhone|iPad/.test(navigator.platform||'')?'Cmd':'Ctrl')+'+click to open in your browser';
 function out(a){var u;try{u=new URL(a.href,location.href)}catch(_){return null}if(!/^https?:$/.test(u.protocol))return null;return{u:u,leaves:a.target==='_blank'||u.origin!==location.origin}}
-document.addEventListener('click',function(e){var a=e.target.closest&&e.target.closest('a[href]');if(!a)return;var o=out(a);if(!o)return;var mod=e.ctrlKey||e.metaKey;if(!o.leaves&&!mod)return;e.preventDefault();if(mod&&e.button===0)parent.postMessage({quorx:'open-link',url:o.u.href},'*')},true);
-document.addEventListener('auxclick',function(e){var a=e.target.closest&&e.target.closest('a[href]');if(a&&out(a))e.preventDefault()},true);
-document.addEventListener('mouseover',function(e){var a=e.target.closest&&e.target.closest('a[href]');if(a&&!a.title&&out(a))a.title=tip+'+click to open in the Browser tab'},true)})();</script>`;
+function ask(u,outside){parent.postMessage({quorx:'open-link',url:u,outside:outside},'*')}
+document.addEventListener('click',function(e){var a=e.target.closest&&e.target.closest('a[href]');if(!a)return;var o=out(a);if(!o)return;var mod=e.ctrlKey||e.metaKey;if(!o.leaves&&!mod)return;e.preventDefault();if(e.button===0&&!e.shiftKey&&!e.altKey)ask(o.u.href,mod)},true);
+document.addEventListener('auxclick',function(e){var a=e.target.closest&&e.target.closest('a[href]');var o=a&&out(a);if(!o)return;e.preventDefault();if(e.button===1)ask(o.u.href,true)},true);
+document.addEventListener('mouseover',function(e){var a=e.target.closest&&e.target.closest('a[href]');if(a&&!a.title&&out(a))a.title=tip},true)})();</script>`;
 export function servedArtifact(content) {
   const html = content.kind === 'md' ? markdownPage(content.title, content.text) : content.text;
   return /<\/head>/i.test(html) ? html.replace(/<\/head>/i, `${POLISH}${LINKS}</head>`) : POLISH + LINKS + html;
