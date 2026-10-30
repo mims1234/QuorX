@@ -2510,13 +2510,11 @@ function showTip(t, override) {
 // In the desktop app the Browser tab's page is a real window drawn above everything on this page, so a tip or
 // popup that would land on it moves to its left; when there is no room, the tab shows its still picture meanwhile.
 function avoidDesk(box) {
-  box.classList.remove('covers');
   const d = G.dsk;
   if (!DESK || !d?.shown || !d.ph?.isConnected) return;
   const v = d.ph.getBoundingClientRect(), b = box.getBoundingClientRect();
   if (!(b.left < v.right && b.right > v.left && b.top < v.bottom && b.bottom > v.top)) return;
-  if (v.left - b.width - 8 >= 6) { box.style.left = `${Math.round(v.left - b.width - 8)}px`; return; }
-  box.classList.add('covers');
+  if (v.left - b.width - 8 >= 6) box.style.left = `${Math.round(v.left - b.width - 8)}px`;
 }
 function hideTip() {
   clearTimeout(TIP.timer);
@@ -9626,9 +9624,9 @@ async function deskPlaceNow(force) {
     return;
   }
   err.hidden = true; d.errText = null;
-  // Something over the page (a dialog, the model picker, settings): show a snapshot and step aside.
-  // The real tab is drawn above the page, so anything opened over it (a dialog, the 🖥 servers list) needs it to step aside.
-  const covered = !!document.querySelector('dialog[open], #paneSrvPop:not([hidden]), .oh-tip.on.covers, #replyInfoPop.covers:not([hidden])');
+  // Something over the page (a menu, a popover, a dialog, a tip): show a snapshot and step aside until it closes.
+  // The real tab is drawn above the whole page, so anything of ours that lands on its box would be hidden under it.
+  const covered = deskCovered(d.ph);
   const snap = $('.dsnap', d.ph);
   if (covered) {
     if (d.shown) { const url = await window.ohDesktop.snapshot(d.sid).catch(() => null); if (url) { snap.src = url; snap.hidden = false; } }
@@ -9645,8 +9643,40 @@ async function deskPlaceNow(force) {
   if (force || key !== d.rect) { d.rect = key; await window.ohDesktop.bounds(d.sid, { x: r.x, y: r.y, width: r.width, height: r.height }); }
   if (force || !d.shown) { await window.ohDesktop.show(d.sid); d.shown = true; }
 }
+// Is anything of ours drawn over the real tab's box? The page is asked what is on top on a grid over the box, so any
+// menu, popover, dialog, scrim or notice counts, whatever it is; tips that let clicks through are checked by where they are.
+// The answer is kept until the page changes (a node, an attribute, the pointer or a scroll), as asking costs a few ms.
+const DESK_GRID = 32;
+const deskSeen = { dirty: true, key: '', covered: false };
+function deskCovered(ph) {
+  if (document.querySelector('dialog[open]:modal')) return true;
+  const v = ph.getBoundingClientRect();
+  if (!v.width || !v.height) return false;
+  const key = `${v.x},${v.y},${v.width},${v.height}`;
+  if (!deskSeen.dirty && deskSeen.key === key) return deskSeen.covered;
+  deskSeen.dirty = false; deskSeen.key = key;
+  return (deskSeen.covered = deskHit(ph, v));
+}
+function deskHit(ph, v) {
+  const over = (b) => b.width > 0 && b.height > 0 && b.left < v.right && b.right > v.left && b.top < v.bottom && b.bottom > v.top;
+  for (const el of document.querySelectorAll('dialog[open], :popover-open, .oh-tip.on, #replyInfoPop:not([hidden])')) if (over(el.getBoundingClientRect())) return true;
+  const mine = (el) => !el || el === ph || ph.contains(el);
+  const xs = [], ys = [];
+  for (let x = v.left + 1; x < v.right - 1; x += DESK_GRID) xs.push(x);
+  for (let y = v.top + 1; y < v.bottom - 1; y += DESK_GRID) ys.push(y);
+  xs.push(v.right - 2); ys.push(v.bottom - 2);
+  for (const y of ys) for (const x of xs) if (!mine(document.elementFromPoint(x, y))) return true;
+  return false;
+}
 if (DESK) {
   setInterval(() => deskPlace(false), 150);
+  // A menu opens on a click or a key: check right after it, not on the next tick, so it isn't drawn under the tab meanwhile.
+  let deskSoon = 0;
+  const deskCheckSoon = () => { if (!G.dsk || deskSoon) return; deskSoon = requestAnimationFrame(() => { deskSoon = 0; deskPlace(false); }); };
+  for (const ev of ['click', 'pointerdown', 'keydown', 'focusin', 'toggle']) document.addEventListener(ev, deskCheckSoon, true);
+  const deskStale = () => { deskSeen.dirty = true; };
+  new MutationObserver(deskStale).observe(document.documentElement, { childList: true, subtree: true, attributes: true });
+  for (const ev of ['pointerover', 'scroll', 'transitionend', 'animationend']) document.addEventListener(ev, deskStale, true);
   window.addEventListener('resize', () => deskPlace(true));
   document.addEventListener('visibilitychange', () => deskPlace(true));
   window.ohDesktop.on((ev) => {
