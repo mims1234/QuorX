@@ -2773,9 +2773,9 @@ function wirePane(c, root, i) {
   $('.ch-pane', root).onclick = () => setMView(G.mview === 'preview' ? 'chat' : 'preview');
   const form = $('.composer', root), ta = $('.input', root);
   form.addEventListener('submit', () => setTimeout(() => fitInput(ta))); // the box shrinks back once it's cleared
-  form.onsubmit = (e) => { e.preventDefault(); const t = ta.value; if (/^\/\w+(\s|$)/.test(t.trim()) && runCommand(c, t.trim())) { ta.value = ''; return; } if (c.running?.runId && (t.trim() || hasAttachments(c))) { ta.value = ''; steer(c, t.trim()); return; } if ((t.trim() || hasAttachments(c)) && !c.running) { if (folderMissing(c)) return; if ((c.docs || []).some((d) => d.busy)) { uiAlert('Some attached files are still being read. Send when their chips say they are ready.'); return; } ta.value = ''; send(c, t); } };
+  form.onsubmit = (e) => { e.preventDefault(); const t = ta.value; if (/^\/\w+(\s|$)/.test(t.trim()) && runCommand(c, t.trim())) { ta.value = ''; return; } if (c.running?.runId && t.trim() && openApprovalCards(root).length) { ta.value = ''; for (const card of openApprovalCards(root)) card._reply?.(t.trim()); if (hasAttachments(c)) steer(c, ''); return; } if (c.running?.runId && (t.trim() || hasAttachments(c))) { ta.value = ''; steer(c, t.trim()); return; } if ((t.trim() || hasAttachments(c)) && !c.running) { if (folderMissing(c)) return; if ((c.docs || []).some((d) => d.busy)) { uiAlert('Some attached files are still being read. Send when their chips say they are ready.'); return; } ta.value = ''; send(c, t); } };
   ta.onkeydown = (e) => { if (suggestKey(c, e)) return; if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); form.requestSubmit(); } };
-  ta.oninput = () => { updateSuggest(c); fitInput(ta); };
+  ta.oninput = () => { updateSuggest(c); fitInput(ta); for (const card of openApprovalCards(root)) card._replySync?.(); };
   ta.onblur = () => setTimeout(() => hideSuggest(c), 150);
   ta.onpaste = (e) => { const files = [...(e.clipboardData?.files || [])]; if (files.length) { e.preventDefault(); addFiles(c, files); } };
   root.ondragover = (e) => { const ty = [...e.dataTransfer.types]; if (['Files', 'application/x-quorx-file', 'application/x-quorx-tab', 'application/x-quorx-term'].some((k) => ty.includes(k))) { e.preventDefault(); root.classList.add('drop'); } };
@@ -4554,7 +4554,7 @@ function traceHTML(m) {
     else if (e.t === 'decide_done') { if (rounds[e.round]) rounds[e.round].done = e; }
     else if (e.t === 'approval') row(e.at, e.free ? `✋ asks to use <b>${esc(e.tool)}</b>` : `💳 <b>${esc(e.tool)}</b> wants approval · ${money(e.est, 3)} (${esc(e.basis || 'estimated')})`, 'ask');
     else if (e.t === 'card_held') row(e.at, '⏸ You stopped the clock: the card waits for you', 'note');
-    else if (e.t === 'approval_done') row(e.at, `${e.approve ? '✅ approved' : '⛔ declined'} by ${byName(e.by)}${e.reason ? `<div class="sub">${esc(e.reason)}</div>` : ''}`, e.approve ? 'ok' : 'err');
+    else if (e.t === 'approval_done') row(e.at, e.reply ? `↩ neither allowed nor denied: you replied<div class="sub">${esc(e.reply)}</div>` : `${e.approve ? '✅ approved' : '⛔ declined'} by ${byName(e.by)}${e.reason ? `<div class="sub">${esc(e.reason)}</div>` : ''}`, e.approve ? 'ok' : e.reply ? 'note' : 'err');
     else if (e.t === 'media_status') mediaStatus = e;
     else if (e.t === 'screenshot') row(e.at, `📸 browser ${esc(e.action)}${e.target ? ` ${esc(e.target)}` : ''}<div class="sub">${linkUrls(esc(e.url || ''))}</div><img class="shot" src="${e.image}" alt="screenshot" loading="lazy">`, 'browser');
     else if (e.t === 'command' && e.background) row(e.at, `⏳ <code>${esc(e.command)}</code> → background job <b>${esc(e.background)}</b> · ${esc(e.why || '')}<div class="sub">It keeps running; its output goes to ${esc(e.log || 'its log')}. Stop it from the terminal, or the agent stops it with job_stop.</div>`, 'cmd');
@@ -4649,12 +4649,17 @@ function decideCard(r) {
 // ---------- approvals ----------
 // Cards can only be answered while their reply runs; older ones without an answer show as closed.
 // An answered approval, shown on the tool call it was about: ✓ / ⛔ / ⚡ and the price on the row, who and why inside.
+// An answered card: allowed, declined, or neither (you typed a reply instead, which went to the agent).
+const apState = (o, live) => (o ? (o.approve ? 'yes' : o.reply ? 'reply' : 'no') : live ? 'wait' : 'none');
+const apWho = (o, c) => (o.reply ? `Not allowed or denied: you replied “${esc(o.reply)}”`
+  : `${o.approve ? 'Allowed' : 'Declined'} by ${byName(o.by)}${o.always ? ' · always allowed from now on' : ''}${o.approve && o.model && o.model !== c.model ? ` · switched to ${esc(short(o.model))}` : ''}${o.reason ? ` · ${esc(o.reason)}` : ''}`);
+const AP_MARK = { yes: '✓', no: '⛔', reply: '↩', wait: '⚡', none: '·' };
 function approvalBadge(a, live) {
   const c = a.card, o = a.outcome;
-  const state = o ? (o.approve ? 'yes' : 'no') : live ? 'wait' : 'none';
-  const who = o ? `${o.approve ? 'Allowed' : 'Declined'} by ${byName(o.by)}${o.always ? ' · always allowed from now on' : ''}${o.approve && o.model && o.model !== c.model ? ` · switched to ${esc(short(o.model))}` : ''}${o.reason ? ` · ${esc(o.reason)}` : ''}`
+  const state = apState(o, live);
+  const who = o ? apWho(o, c)
     : live ? (c.tool === 'shell' ? 'The deciders are voting on this command…' : 'The deciders are checking whether this is needed and worth the price…') : 'Not answered: the reply ended';
-  const mark = { yes: '✓', no: '⛔', wait: '⚡', none: '·' }[state];
+  const mark = AP_MARK[state];
   const price = c.free ? '' : money(c.est, 3);
   return {
     badge: `<span class="tl-ap ${state}" title="${esc(who.replace(/<[^>]+>/g, ''))}">${mark}${price ? ` ${price}` : ''}</span>`,
@@ -4711,8 +4716,8 @@ function shellCardHTML(a) {
     ${(p.packages || []).length ? `<div class="sc-segs">${p.packages.map((k) => `<span class="sc-path" data-zone="${k.verdict === 'ok' ? 'inside' : k.verdict === 'missing' ? 'blocked' : 'unknown'}">📦 ${esc(k.name)} · ${esc(k.eco)} · ${k.verdict === 'ok' ? `${k.ageDays != null ? `${Math.round(k.ageDays / 365 * 10) / 10} years old` : 'exists'}${k.weekly != null ? ` · ${k.weekly.toLocaleString()}/week` : ''}` : esc(k.note)}</span>`).join('')}</div>` : ''}
     ${c.why ? `<div class="what">Why it asks: ${esc(c.why)}</div>` : ''}
     ${waitHTML(c)}
-    <textarea rows="1" placeholder="To deny it, you can add a note: why, or what to do instead. Enter denies and sends it."></textarea>
-    <div class="acts"><button type="button" class="primary yes">Run once</button>${c.noAlways ? '' : '<button type="button" class="sc-always" aria-expanded="false">Always allow…</button>'}<button type="button" class="no">Deny</button></div>
+    <textarea rows="1" placeholder="Or type to tell it something else. Enter sends it, without allowing or denying."></textarea>
+    <div class="acts"><button type="button" class="primary reply" hidden>Send to the agent</button><button type="button" class="primary yes">Run once</button>${c.noAlways ? '' : '<button type="button" class="sc-always" aria-expanded="false">Always allow…</button>'}<button type="button" class="no">Deny</button></div>
     ${c.noAlways ? '<div class="sc-note">A button can’t make a rule for this kind of command. If you’re sure, type one yourself in ⚙ Settings → Approvals & safety.</div>'
       : `<div class="sc-rule" hidden>
         <div class="sc-row"><span class="sc-k">What</span>${seg('match', [[sug.exact, 'This exact command'], [sug.prefix, `Starting with <code>${esc(sug.prefix.replace(/\*$/, ''))}</code>`], [sug.program, `Any <code>${esc(sug.program.replace(/\*$/, ''))}</code> command`]])}</div>
@@ -4722,25 +4727,47 @@ function shellCardHTML(a) {
       </div>`}
   </div>`;
 }
-// The note on an approval card goes with a "no": once there is one, the no button says so and Enter sends it.
-function noteLeadsToNo(card, label, no) {
-  const ta = $('textarea', card), b = $('.acts .no', card);
-  if (!ta || !b) return;
-  const sync = () => { const has = !!ta.value.trim(); b.textContent = has ? `${label} and send note` : label; b.classList.toggle('with-note', has); };
+// Typing instead of Allow or Deny, in the card's box or the chat's message box: what you type goes to the agent as
+// the answer to this request (neither yes nor no), so while there is text the yes buttons are off and Enter sends it.
+const cardComposer = (card) => $('.input', card.closest('.chatpane') || document.body);
+function typingIsReply(card, send) {
+  const ta = $('textarea', card), reply = $('.acts .reply', card);
+  if (!ta || !reply) return;
+  const typed = () => ta.value.trim() || cardComposer(card)?.value.trim() || '';
+  const sync = () => {
+    if (card.dataset.answered) return;
+    const has = !!typed();
+    reply.hidden = !has;
+    for (const b of card.querySelectorAll('.yes, .always, .sc-always, .sc-save')) { b.disabled = has; b.title = has ? 'Clear the text to allow it' : ''; }
+  };
+  // Sent from the card: the card's own text, or else what waits in the message box (which then empties).
+  const go = () => {
+    const t = typed();
+    if (!t || card.dataset.answered) return;
+    const box = !ta.value.trim() && cardComposer(card);
+    if (box) { box.value = ''; fitInput(box); }
+    send(t);
+  };
+  card._replySync = sync;
+  card._reply = send;
   ta.addEventListener('input', sync);
-  ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (ta.value.trim() && !b.disabled) no(); } });
+  ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); go(); } });
+  reply.onclick = go;
   sync();
 }
+// The approval cards of a chat still waiting on you (not questions or the budget card).
+const openApprovalCards = (root) => [...root.querySelectorAll('.msgs .approval[data-id]:not(.question):not(.budget-card)')].filter((x) => !x.dataset.answered);
 function wireShellCard(card, m) {
   const id = card.dataset.id;
-  const answer = async (approve, rule) => {
+  const answer = async (approve, rule, reply = '') => {
+    card.dataset.answered = '1';
     card.querySelectorAll('button, textarea').forEach((b) => (b.disabled = true));
-    const reason = $('textarea', card)?.value.trim() || '';
-    await fetch('/api/approve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ runId: m.runId, id, approve, reason, ...(rule ? { rule } : {}) }) }).catch(() => {});
+    const reason = reply ? '' : $('textarea', card)?.value.trim() || '';
+    await fetch('/api/approve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ runId: m.runId, id, approve, reason, ...(reply ? { reply } : {}), ...(rule ? { rule } : {}) }) }).catch(() => {});
   };
   $('.yes', card).onclick = () => answer(true);
   $('.no', card).onclick = () => answer(false);
-  noteLeadsToNo(card, 'Deny', () => answer(false));
+  typingIsReply(card, (t) => answer(false, null, t));
   const panel = $('.sc-rule', card), btn = $('.sc-always', card);
   if (!panel || !btn) return;
   const pick = (g) => $(`.sc-pick[data-group="${g}"] button.on`, card)?.dataset.v;
@@ -4773,9 +4800,9 @@ function approvalHTML(a, live = true) {
     : `<div class="what">${esc(short(finalModel))} · ${esc(c.detail)}${c.pickedBy === 'agent' && finalModel === c.model ? ' · chosen by the agent' : ''}</div>`;
   // Answered (or no longer waiting): one line, ✓/⛔ + the tool + what it did + the price; click it for the details.
   if (!waiting) {
-    const state = o ? (o.approve ? 'yes' : 'no') : live ? 'wait' : 'none';
-    const mark = { yes: '✓', no: '⛔', wait: '⚡', none: '·' }[state];
-    const who = o ? `${o.approve ? 'Allowed' : 'Declined'} by ${byName(o.by)}${o.always ? ' · always allowed from now on' : ''}${o.approve && o.model && o.model !== c.model ? ` · switched to ${esc(short(o.model))}` : ''}${o.reason ? ` · ${esc(o.reason)}` : ''}`
+    const state = apState(o, live);
+    const mark = AP_MARK[state];
+    const who = o ? apWho(o, c)
       : live ? (c.tool === 'shell' ? 'The deciders are voting on this command…' : 'Deciders are checking whether this is needed and worth the price…') : 'Not answered: the reply ended';
     return `<details class="approval-line ${state}"><summary title="${esc(who)}"><span class="al-mark">${mark}</span><b>${name}</b><span class="al-what">${esc(c.what)}</span><span class="al-price">${c.free ? 'free' : money(c.est, 3)}</span></summary>
       <div class="al-detail">${c.items ? planRows : `${c.free ? '' : `<div>${esc(short(finalModel))} · ${esc(c.detail || '')}</div>`}<div>${esc(c.what)}</div>`}${c.why ? `<div>Why: ${esc(c.why)}</div>` : ''}<div class="al-who ${state}">${who}</div></div></details>`;
@@ -4786,9 +4813,9 @@ function approvalHTML(a, live = true) {
     ${head}${model}${danger}
     ${c.items ? '' : `<div class="what">${c.free ? esc(c.what) : `“${esc(c.what)}”`}</div>`}
     ${c.why ? `<div class="what">Why: ${esc(c.why)}</div>` : ''}${c.items && waiting ? '<div class="what dim">Calls that match this plan then run without asking again; anything else asks on its own.</div>' : ''}
-    ${waiting ? `${waitHTML(c)}<textarea rows="1" placeholder="To decline, you can add a note: why, or what to do instead. Enter declines and sends it."></textarea>
-      <div class="acts"><button type="button" class="primary yes">${c.yes ? esc(c.yes) : c.tool === 'remember' ? 'Save to memory' : c.free ? 'Allow once' : `Approve ${money(c.est, 3)}`}</button>${c.noAlways ? '' : '<button type="button" class="always" title="Stop asking for this tool in this chat">Always allow</button>'}<button type="button" class="no">${c.no ? esc(c.no) : c.tool === 'remember' ? "Don't save" : 'Decline'}</button></div>`
-      : o ? `<div class="outcome ${o.approve ? 'yes' : 'no'}">${o.approve ? '✅ Allowed' : '⛔ Declined'} by ${byName(o.by)}${o.always ? ' · always allowed from now on' : ''}${o.approve && o.model && o.model !== c.model ? ` · switched to ${esc(short(o.model))}` : ''}${o.reason ? ` · ${esc(o.reason)}` : ''}</div>`
+    ${waiting ? `${waitHTML(c)}<textarea rows="1" placeholder="Or type to tell it something else. Enter sends it, without allowing or declining."></textarea>
+      <div class="acts"><button type="button" class="primary reply" hidden>Send to the agent</button><button type="button" class="primary yes">${c.yes ? esc(c.yes) : c.tool === 'remember' ? 'Save to memory' : c.free ? 'Allow once' : `Approve ${money(c.est, 3)}`}</button>${c.noAlways ? '' : '<button type="button" class="always" title="Stop asking for this tool in this chat">Always allow</button>'}<button type="button" class="no">${c.no ? esc(c.no) : c.tool === 'remember' ? "Don't save" : 'Decline'}</button></div>`
+      : o ? `<div class="outcome ${apState(o)}">${{ yes: '✅ ', no: '⛔ ', reply: '↩ ' }[apState(o)]}${apWho(o, c)}</div>`
       : !live ? '<div class="outcome">Not answered: the reply ended</div>' : `<div class="outcome">⚡ ${c.tool === 'shell' ? 'The deciders are voting on this command…' : 'Deciders are checking whether this is needed and worth the price…'}</div>`}
   </div>`;
 }
@@ -4812,16 +4839,17 @@ function wireApproval(card, m) {
       if (sel && yes) yes.textContent = est != null ? `Approve ${money(Number(est), 3)}` : 'Approve';
     };
   }
-  const answer = async (approve, always = false) => {
-    card.querySelectorAll('button, select').forEach((b) => (b.disabled = true));
-    const reason = $('textarea', card)?.value.trim() || '';
+  const answer = async (approve, always = false, reply = '') => {
+    card.dataset.answered = '1';
+    card.querySelectorAll('button, select, textarea').forEach((b) => (b.disabled = true));
+    const reason = reply ? '' : $('textarea', card)?.value.trim() || '';
     const models = sel ? null : Object.fromEntries(sels.map((s) => [s.dataset.key, s.value]).filter(([, v]) => v && v !== '__more'));
-    await fetch('/api/approve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ runId: m.runId, id, approve, always, reason, model: sel?.value, ...(models && Object.keys(models).length ? { models } : {}) }) }).catch(() => {});
+    await fetch('/api/approve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ runId: m.runId, id, approve, always, reason, ...(reply ? { reply } : {}), model: sel?.value, ...(models && Object.keys(models).length ? { models } : {}) }) }).catch(() => {});
   };
   $('.yes', card).onclick = () => answer(true);
   const always = $('.always', card); if (always) always.onclick = () => answer(true, true);
   $('.no', card).onclick = () => answer(false);
-  noteLeadsToNo(card, $('.no', card).textContent || 'Decline', () => $('.no', card).click()); // the card's own word ("Keep off")
+  typingIsReply(card, (t) => answer(false, false, t));
 }
 
 // ---------- the project budget card (🔒 Strict, when a reply reaches the budget) ----------
