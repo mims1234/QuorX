@@ -59,6 +59,7 @@ import { artifactContent, servedArtifact, ARTIFACT_HEADERS, folderStamp } from '
 import { gate, appGate, appLink, hostAllowed, crossSiteApi, isLoopback, handoffPut, handoffTake } from './server/access.js';
 import { gitHubRemote, gitHubInfo } from './server/github.js';
 import { serveBlob, startSweeping, chatFootprint, sendFile } from './server/blobs.js';
+import { mediaFile, serveMedia } from './server/media.js';
 import { measureStorage, clearStorage, clearProjectParts, previewProjectParts, recentClears, startStorageRules } from './server/storage.js';
 import { storageRules, saveStorageRules, rotateLog, RULE_DEFAULTS } from './server/storagerules.js';
 import { listDesignSystems, readDesignSystem, projectDesign, applyDesignSystem, saveProjectDesign } from './server/design.js';
@@ -359,14 +360,24 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/paths/check' && req.method === 'POST') {
       const b = JSON.parse(await readBody(req, 1e5) || '{}');
       const root = validId(b.projectId) && listProjects().some((p) => p.id === b.projectId) ? workspaceDir(b.projectId) : null;
-      const found = {};
+      const found = {}, media = {};
       for (const p of (Array.isArray(b.paths) ? b.paths : []).slice(0, 200).map(String)) {
         try {
           const full = fullLocalPath(p), t = full || (full === '' && root ? safePath(root, p) : null);
           if (t) found[p] = fs.statSync(t).isDirectory() ? 'dir' : 'file';
         } catch { /* not there, or outside the project */ }
+        // Pictures, videos, PDFs and Markdown the chat may show inline (GET /api/media serves them).
+        const mf = found[p] === 'file' && root && mediaFile(root, validId(b.chatId) ? b.chatId : '', p);
+        if (mf) media[p] = { kind: mf.kind, size: mf.size, v: Math.round(mf.mtime), key: mf.file };
       }
-      return json(res, 200, { found });
+      return json(res, 200, { found, media });
+    }
+    // One file shown inline in a chat (server/media.js): ?project=<id>&path=<as named>[&chat=<id>].
+    if (url.pathname === '/api/media' && (req.method === 'GET' || req.method === 'HEAD')) {
+      const pid = url.searchParams.get('project'), cid = url.searchParams.get('chat') || '';
+      if (!validId(pid) || !listProjects().some((p) => p.id === pid)) return json(res, 404, { error: 'not found' });
+      const mf = mediaFile(workspaceDir(pid), validId(cid) ? cid : '', url.searchParams.get('path'));
+      return mf ? serveMedia(req, res, mf) : json(res, 404, { error: 'not found' });
     }
     if (url.pathname === '/api/files/text' && req.method === 'GET') {
       const pid = url.searchParams.get('project');
