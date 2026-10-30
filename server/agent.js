@@ -401,6 +401,13 @@ function voiceFor(model, t, spec) {
   return want && (!spec?.voices?.length || spec.voices.includes(want)) ? want : spec?.voices?.[0];
 }
 
+// A plan call's value at list price, as a number QuorX can show and add up: a missing, negative or non-number value
+// is 0, and so is one no single call could cost (over $50), so a bad report never shows as a huge amount.
+export const PLAN_CALL_MAX = 50;
+export function planValue(x) { const n = Number(x); return Number.isFinite(n) && n > 0 && n <= PLAN_CALL_MAX ? n : 0; }
+// A total of those (a reply's, carried over a restart): 0 unless a sane number.
+export function planTotal(x) { const n = Number(x); return Number.isFinite(n) && n > 0 && n < 1e6 ? n : 0; }
+
 // ---------- approvals waiting on the user (strict mode) ----------
 const pending = new Map();
 const buttonsOnly = new Set(); // runId:id of the cards above that typed words can't answer
@@ -1127,7 +1134,7 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   // after the step limit is a new reply: the one before keeps its own cost, so this one starts at zero (carrying it
   // counted the earlier reply twice in the chat, the project budget and today's spending).
   const carried = resumed && !carryOn ? resumed : null;
-  const stats = { cost: carried?.cost || 0, byRole: { ...carried?.spend?.byRole }, byModel: structuredClone(carried?.spend?.byModel || {}), llmCalls: carried?.spend?.llmCalls || 0, tokensIn: carried?.spend?.tokensIn || 0, tokensOut: carried?.spend?.tokensOut || 0, decide: { calls: 0, questions: 0, theater: 0, confirmed: 0, flipped: 0, unclear: 0, unmatched: 0, skipped: 0 }, mediaSpent: carried?.spend?.mediaSpent || 0 };
+  const stats = { cost: carried?.cost || 0, byRole: { ...carried?.spend?.byRole }, byModel: structuredClone(carried?.spend?.byModel || {}), llmCalls: carried?.spend?.llmCalls || 0, tokensIn: carried?.spend?.tokensIn || 0, tokensOut: carried?.spend?.tokensOut || 0, decide: { calls: 0, questions: 0, theater: 0, confirmed: 0, flipped: 0, unclear: 0, unmatched: 0, skipped: 0 }, mediaSpent: carried?.spend?.mediaSpent || 0, planCost: planTotal(carried?.spend?.planCost) };
   spent.stats = stats; spent.at = () => at();
   const account = (u = {}, model = '?', role = 'writer') => {
     const c = Number(u.cost) || 0;
@@ -1135,6 +1142,9 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
     stats.byRole[role] = (stats.byRole[role] || 0) + c;
     const m = (stats.byModel[model] ??= { role, calls: 0, cost: 0 });
     m.calls++; m.cost += c;
+    // On a plan (OpenCode Go, Grok Build, Claude Code): what the call counted against its limits, at list price.
+    const pv = planValue(u.plan_cost);
+    if (pv) { stats.planCost = (stats.planCost || 0) + pv; m.planCost = (m.planCost || 0) + pv; }
     // A call that stopped before its usage arrived (see callModel): counted like any other, and marked.
     if (u.partial) {
       const p = (stats.partialCalls ??= { calls: 0, cost: 0, estimated: 0 });
@@ -1577,7 +1587,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (served !== setup.model && !r.servedBy) emit({ t: 'note', level: 'warn', msg: `${short(setup.model)} was unavailable, so OpenRouter answered with the fallback model ${short(served)}.`, at: at() });
     account(r.usage, served, 'writer');
     emit({ t: 'llm_done', step, ms: r.ms, firstMs: r.firstMs, tokensOut: r.usage.completion_tokens || 0, cost: r.usage.cost || 0, toolCalls: r.toolCalls.map((c) => c.function.name), provider: r.provider || null, model: served, actual: r.model || null,
-      ...(r.source ? { source: r.source } : {}), ...(r.servedBy ? { fellBackFrom: setup.model } : {}), ...(r.usage.plan_cost ? { planCost: r.usage.plan_cost } : {}), at: at() });
+      ...(r.source ? { source: r.source } : {}), ...(r.servedBy ? { fellBackFrom: setup.model } : {}), ...(planValue(r.usage.plan_cost) ? { planCost: planValue(r.usage.plan_cost) } : {}), at: at() });
     // Nothing came back (no text, no tool call): usually all of the output went on thinking. Never end
     // a reply silently on that: tell the model to act, think less, and try again (twice at most).
     // A call written on a step that allows none was dropped (viaSource): that is the step limit, not an empty answer.
@@ -1846,7 +1856,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   // with it, so a reply whose budget was extended (plan rounds, fixes) keeps it after a restart.
   function checkpointAt(atStep) {
     if (req.bench) return;
-    saveCheckpoint(runId, { req: ckptReq, undoId: filesId, cost: stats.cost, spend: { byRole: stats.byRole, byModel: stats.byModel, llmCalls: stats.llmCalls, tokensIn: stats.tokensIn, tokensOut: stats.tokensOut, mediaSpent: stats.mediaSpent }, messages, step: atStep, maxSteps, journal, notes, firstOwn, arts: Object.fromEntries(arts), plan: run.plan, at: Date.now(), startedAt: run.startedAt, ...(run.video ? { video: true } : {}),
+    saveCheckpoint(runId, { req: ckptReq, undoId: filesId, cost: stats.cost, spend: { byRole: stats.byRole, byModel: stats.byModel, llmCalls: stats.llmCalls, tokensIn: stats.tokensIn, tokensOut: stats.tokensOut, mediaSpent: stats.mediaSpent, planCost: stats.planCost }, messages, step: atStep, maxSteps, journal, notes, firstOwn, arts: Object.fromEntries(arts), plan: run.plan, at: Date.now(), startedAt: run.startedAt, ...(run.video ? { video: true } : {}),
       touched: { arts: [...touched.arts], apps: [...touched.apps], sites: [...touched.sites] } });
   }
 
