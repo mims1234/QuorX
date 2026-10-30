@@ -2290,7 +2290,7 @@ function traceCostHTML(c, m) {
     <div class="tc-sub">${calls} model call${calls === 1 ? '' : 's'}${s.tokensIn ? ` · <span class="tok-in">${k(s.tokensIn)} tokens in</span>` : ''}${s.tokensOut ? ` · <span class="tok-out">${k(s.tokensOut)} tokens out</span>` : ''}${cacheShare(sumCache(models)) != null ? ` · ${cacheTag(sumCache(models))}` : ''}${s.ms ? ` · ${secs(s.ms)}` : ''}${s.mediaSpent ? ` · media ${money(s.mediaSpent, 4)}` : ''}${planTag(s.planCost)}</div>
     ${rows ? `<table class="tc-table"><tbody>${rows}</tbody></table>` : ''}
     <div class="tc-chat"><span>Whole chat so far · ${t.replies} repl${t.replies === 1 ? 'y' : 'ies'}${t.msgs ? ` · ${t.msgs} message${t.msgs === 1 ? '' : 's'}` : ''}</span><b>${money(t.cost, 4)}</b></div>
-    ${t.plan ? `<div class="tc-chat tc-plan"><span>Plan value, whole chat <i>at list price, not paid</i></span><b>≈ ${money(t.plan, 4)}</b></div>` : ''}
+    ${t.plan ? `<div class="tc-chat tc-plan"><span>Sub value, whole chat <i>at list price, covered by your subscriptions</i></span><b>≈ ${money(t.plan, 4)}</b></div>` : ''}
   </div>`;
 }
 // ---------- zoom: Ctrl + / − / 0 (and Ctrl+wheel) ----------
@@ -2899,7 +2899,7 @@ function renderChatHead(c) {
   if (gh) { gh.hidden = !p?.github; if (p?.github && gh.getAttribute('href') !== p.github.url) { gh.href = p.github.url; gh.title = `Open ${p.github.owner}/${p.github.repo} on GitHub`; gh.innerHTML = GH_ICO; } }
   $('.dir-a-msgs-count', r).textContent = `${t.msgs} msg${t.msgs === 1 ? '' : 's'}`;
   $('.ch-cost', r).textContent = money(t.cost, t.cost < 1 ? 4 : 2);
-  $('.ch-cost', r).title = `What this chat has cost (click for the breakdown)${t.plan && !uiOf(G.settings).maskAmounts ? `\nPlan value ≈ ${money(t.plan, 4)}: what it counted against your plans' limits at list price (not paid per reply)` : ''}`;
+  $('.ch-cost', r).title = `What this chat has cost (click for the breakdown)${t.plan && !uiOf(G.settings).maskAmounts ? `\nSub value ≈ ${money(t.plan, 4)}: what it used of your subscriptions, at list price (covered, not paid per reply)` : ''}`;
   // ⏰ the schedules that post in this chat: how many, and whether they are on; click for them in Schedules.
   const sc = $('.ch-sched', r);
   if (sc) {
@@ -4252,10 +4252,10 @@ function callsLine(s) {
   const parts = Object.entries(by).sort((a, b) => (a[0] === 'writer' ? -1 : b[0] === 'writer' ? 1 : b[1] - a[1])).map(([r, n]) => `${n} ${r}${n === 1 ? '' : 's'}`);
   return parts.length > 1 ? `${total} <small>(${esc(parts.join(', '))})</small>` : String(total);
 }
-// Plan value: what replies on a plan (OpenCode Go, Grok Build, Claude Code) counted against its limits, at list
-// price. Never money spent, so it reads "plan ≈" and stays apart from the cost. A missing, negative or absurd value is 0.
+// Sub value: what replies on a subscription (OpenCode Go, Grok Build, Claude Code) used of its limits, at list
+// price. Never money spent, so it reads "sub value ≈" and stays apart from the cost. A missing, negative or absurd value is 0.
 function planTotal(x) { const n = Number(x); return Number.isFinite(n) && n > 0 && n < 1e6 ? n : 0; }
-const planTag = (x) => (planTotal(x) && !uiOf(G.settings).maskAmounts ? `<span class="f-plan" title="What this reply counted against your plan's limits, at list price. You don't pay it per reply.">plan ≈ ${money(planTotal(x), 4)}</span>` : '');
+const planTag = (x) => (planTotal(x) && !uiOf(G.settings).maskAmounts ? `<span class="f-plan" title="Sub value: what this reply used of your subscription, at list price. Your subscription covers it; you don't pay it per reply.">sub value ≈${money(planTotal(x), 4)}</span>` : '');
 function replyInfoHTML(s, when) {
   const k = (n) => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n || 0);
   const row = (label, value) => `<span class="fi-row"><span>${label}</span><b>${value}</b></span>`;
@@ -4263,7 +4263,7 @@ function replyInfoHTML(s, when) {
   return `<span class="f-info mt-btn" tabindex="0" role="button" aria-label="Reply details"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.3a2.5 2.5 0 0 1 4.8.9c0 1.7-2.4 2.2-2.4 3.6"/><circle cx="12" cy="17.2" r=".6" fill="currentColor"/></svg><span class="f-pop" role="tooltip">
     <span class="fi-total"><span>Total cost${s.partial ? ' <i>so far: the reply ended early</i>' : ''}</span><b>${money(s.cost, 5)}</b></span>
     ${when ? row('When', esc(new Date(when).toLocaleString())) : ''}
-    ${planTotal(s.planCost) ? row('Plan value', `≈ ${money(s.planCost, 4)} <i>at list price, not paid</i>`) : ''}
+    ${planTotal(s.planCost) ? row('Sub value', `≈ ${money(s.planCost, 4)} <i>at list price, covered by your subscription</i>`) : ''}
     ${row('Took', secs(s.ms))}
     ${row('Model calls', callsLine(s))}
     ${s.tokensIn || s.tokensOut ? `<span class="fi-row tok-in"><span><i class="tok-dot"></i>Tokens in</span><b>${k(s.tokensIn)}</b></span><span class="fi-row tok-out"><span><i class="tok-dot"></i>Tokens out</span><b>${k(s.tokensOut)}</b></span>` : ''}
@@ -4574,7 +4574,7 @@ function traceHTML(m) {
     if (e.t === 'llm_start') row(e.at, `🧠 <b>${esc(short(e.model))}</b> thinks<span class="sub" data-llm="${e.step}"></span>${m.thinking?.[e.step]?.trim() ? `<details class="think-trace"><summary>💭 Thinking · ${m.thinking[e.step].split(/\s+/).filter(Boolean).length} words</summary><div class="tt-body">${md(m.thinking[e.step])}</div></details>` : ''}`, 'think');
     else if (e.t === 'llm_done') {
       const i = out.findLastIndex((h) => h.includes(`data-llm="${e.step}"`));
-      if (i >= 0) out[i] = out[i].replace(`<span class="sub" data-llm="${e.step}"></span>`, `<div class="sub">${secs(e.ms)} · <span class="tok-out">${e.tokensOut} tokens out</span> · ${money(e.cost, 5)}${e.planCost ? ` · <span title="What this call counted against your ${esc(SOURCE_NAME[e.source] || '')} plan's limits, at list price">plan ${money(e.planCost, 4)}</span>` : ''}${e.provider ? ` · via <span class="tr-prov" title="${e.source ? 'The account this call ran on' : 'The provider OpenRouter routed this call to'}">${esc(e.provider)}</span>` : ''}${e.model && e.model !== m.trace.find((x) => x.t === 'llm_start' && x.step === e.step)?.model ? ` · <b class="tr-fallback" title="${e.fellBackFrom ? `${esc(SOURCE_NAME[sourceOfId(e.fellBackFrom)] || 'The source')} failed, so this step ran on OpenRouter (see ⤵)` : 'The chat\'s model was unavailable, so OpenRouter used the fallback model'}">fallback ${esc(short(e.model))}</b>` : ''}${e.toolCalls.length ? ` · then ${e.toolCalls.map(esc).join(', ')}` : ''}</div>${e.aside ? `<div class="aside">💬 ${esc(e.aside)}</div>` : ''}`);
+      if (i >= 0) out[i] = out[i].replace(`<span class="sub" data-llm="${e.step}"></span>`, `<div class="sub">${secs(e.ms)} · <span class="tok-out">${e.tokensOut} tokens out</span> · ${money(e.cost, 5)}${e.planCost ? ` · <span title="Sub value: what this call used of your ${esc(SOURCE_NAME[e.source] || '')} subscription, at list price (covered, not paid)">sub value ${money(e.planCost, 4)}</span>` : ''}${e.provider ? ` · via <span class="tr-prov" title="${e.source ? 'The account this call ran on' : 'The provider OpenRouter routed this call to'}">${esc(e.provider)}</span>` : ''}${e.model && e.model !== m.trace.find((x) => x.t === 'llm_start' && x.step === e.step)?.model ? ` · <b class="tr-fallback" title="${e.fellBackFrom ? `${esc(SOURCE_NAME[sourceOfId(e.fellBackFrom)] || 'The source')} failed, so this step ran on OpenRouter (see ⤵)` : 'The chat\'s model was unavailable, so OpenRouter used the fallback model'}">fallback ${esc(short(e.model))}</b>` : ''}${e.toolCalls.length ? ` · then ${e.toolCalls.map(esc).join(', ')}` : ''}</div>${e.aside ? `<div class="aside">💬 ${esc(e.aside)}</div>` : ''}`);
     } else if (e.t === 'tool' && e.name !== 'decide') row(e.at, `${e.by === 'reviewer' ? '🧪 <span class="tr-rv">reviewer</span> ' : e.by === 'helper' ? `🤝 <span class="tr-hp">helper ${e.helper || ''}</span> ` : ''}${TOOL_NAME[e.name]?.split(' ')[0] || '🔧'} <b>${esc(e.name)}</b><div class="sub">${esc(argSummary(e))}</div>`, e.by === 'reviewer' ? 'browser' : 'tool');
     else if (e.t === 'reading') row(e.at, `📝 <b>Prompt enhancer</b> ${esc(short(e.model))} read the request${e.late ? ' (too late for the first step; the deciders still use it)' : ''} · ${secs(e.ms)} · ${money(e.cost, 5)}<div class="sub" style="white-space:pre-wrap">${linkUrls(esc(e.text))}</div>`, 'note');
     else if (e.t === 'chat_off_project') row(e.at, `📝 Own chat from now on: you said “${esc(e.why || '')}”, so this chat leaves the project's notes, design and log alone. Tick Part of the project in the header to undo.`, 'note');
@@ -6091,7 +6091,7 @@ async function drawCosts() {
   if (!d) { body.innerHTML = '<div class="cx-empty">Could not load costs. <button type="button" class="mp-link" id="cxRetry">Try again</button></div>'; $('#cxRetry').onclick = drawCosts; return; }
   const max = Math.max(0.000001, ...d.projects.map((p) => p.cost));
   body.innerHTML = `
-    <div class="cost-totals cx-line"><div><small>Today</small><b>${money(d.total.today, 3)}</b></div><div><small>7 days</small><b>${money(d.total.week, 3)}</b></div><div><small>All time</small><b>${money(d.total.cost, 3)}</b></div><div><small>Chats</small><b class="cx-count">${d.total.chats}</b></div>${planTotal(d.total.plan) ? `<div class="cx-plan" title="What replies on your plans (OpenCode Go, Grok Build, Claude Code) counted against their limits, at list price. Not paid per reply: your subscriptions cover it."><small>Plan value</small><b>≈ ${money(planTotal(d.total.plan), 3)}</b></div>` : ''}</div>
+    <div class="cost-totals cx-line"><div><small>Today</small><b>${money(d.total.today, 3)}</b></div><div><small>7 days</small><b>${money(d.total.week, 3)}</b></div><div><small>All time</small><b>${money(d.total.cost, 3)}</b></div><div><small>Chats</small><b class="cx-count">${d.total.chats}</b></div>${planTotal(d.total.plan) ? `<div class="cx-plan" title="Sub value: what replies on your subscriptions (OpenCode Go, Grok Build, Claude Code) used of them, at list price. Not paid per reply: your subscriptions cover it."><small>Sub value</small><b>≈ ${money(planTotal(d.total.plan), 3)}</b></div>` : ''}</div>
     <div class="cx-tools">
       <label class="mp-search cx-search"><span aria-hidden="true">⌕</span><input id="cxSearch" placeholder="Search every chat by title" aria-label="Search chats" value="${esc(COSTS.q)}"></label>
       <div class="mp-sorts" role="group" aria-label="Sort chats">${[['recent', 'Recent'], ['cost', 'Total'], ['today', 'Today'], ['messages', 'Messages'], ['name', 'Name']].map(([k, l]) => `<button type="button" class="mp-sort ${COSTS.sort === k ? 'on' : ''}" data-sort="${k}">${l}</button>`).join('')}</div>
