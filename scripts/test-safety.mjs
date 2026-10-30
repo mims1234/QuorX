@@ -12,13 +12,13 @@ import { pathToFileURL } from 'node:url';
 import { runLine, snapBefore, commandChanges, snapBeforeAsync, commandChangesAsync, restoreCheckpoint, reviewFiles, agentSpace } from '../server/workspace.js';
 import { snapshot, changesSince, snapshotAsync, changesSinceAsync } from '../server/snapshot.js';
 import { jobsAvailable, jobHostStatus, lineHost, asciiJson } from '../server/jobhost.js';
-import { glowOn, glowOff, glowRuns, onGlowStop, onGlowScreen, stopNow } from '../server/glow.js';
+import { glowOn, glowOff, glowRuns, glowLabel, onGlowStop, onGlowScreen, stopNow } from '../server/glow.js';
 import { pickScreen } from '../server/workscreen.js';
 import { spawn } from 'node:child_process';
 import { decide, agentWriteBlocked, suggestedRules, saveRules, loadRules, ruleMatches, ruleProblem, addRule, updateRule, removeRule } from '../server/cmdpolicy.js';
 import { approvalJudge } from '../server/approvals.js';
 import { SAFETY_DEFAULTS, safetySettings, yoloOf } from '../server/safety.js';
-import { runAgent, answerApproval, raiseCap, answerQuestion, appLevel } from '../server/agent.js';
+import { runAgent, answerApproval, raiseCap, answerQuestion, appLevel, setRunAccess } from '../server/agent.js';
 import { startTripwire } from '../server/tripwire.js';
 import { listBackground, stopBackground } from '../server/bgjobs.js';
 import { listTerms, termStop } from '../server/agentterm.js';
@@ -1813,6 +1813,7 @@ test('computer use: off in a chat, the user’s apps are out of reach; on, each 
   assert.match(toolOut(off.bodies, 1), /computer use is off in this chat and the user kept it off/);
   assert.match(toolOut(off.bodies, 2), /computer use is off in this chat/);
   if (WIN) assert.equal(cards, 1, 'one card per reply');
+  assert.ok(!off.events.some((e) => e.t === 'control' && e.kind === 'desktop'), 'kept off: it never drives the desktop (no glow, no compact QuorX)');
   const apps = [{ name: 'Calculator', appId: 'Microsoft.WindowsCalculator_8wekyb3d8bbwe!App', level: 'view' }, { name: 'Visual Studio Code', appId: 'Microsoft.VisualStudioCode', level: 'click' }, { name: 'Registry Editor', appId: 'regedit', level: 'full' }];
   const on = await agentRun((b, i) => [
     reply('', [['desktop', { action: 'type', app: 'Calculator', ref: 1, text: '12' }]]),
@@ -1824,6 +1825,14 @@ test('computer use: off in a chat, the user’s apps are out of reach; on, each 
   assert.match(toolOut(on.bodies, 2), /look, click, scroll and drag, not type in Visual Studio Code, so keys isn't allowed. For a command, use shell/);
   assert.match(toolOut(on.bodies, 3), /isn't open for this chat yet/, 'a never-used app is dropped even if the page sends it');
   assert.match(JSON.stringify(on.bodies[0].messages.at(-1).content), /Computer use\)[\s\S]*Allowed so far: Calculator \(view\), Visual Studio Code \(click\)/);
+});
+
+test('computer use: an app the user doesn’t allow is never driven: no glow, no banner, QuorX stays as it was', async () => {
+  const asked = [], seen = [];
+  const { events, bodies } = await agentRun((b, i) => [reply('', [['desktop', { action: 'open', app: 'Calculator' }]]), reply('OK.')][i], { chatId: 'apps-refused', settings: { appsAccess: true },
+    onEvent: (e, id) => { seen.push(e); if (e.t === 'approval' && e.tool === 'desktop') { asked.push(seen.some((x) => x.t === 'control' && x.kind === 'desktop')); setTimeout(() => answerApproval(id, e.id, { approve: false }), 10); } } });
+  assert.ok(!events.some((e) => e.t === 'control' && e.kind === 'desktop'), 'not before the question, nor after the no');
+  if (WIN) { assert.deepEqual(asked, [false], 'asked once, while nothing was driven'); assert.match(toolOut(bodies, 1), /The user didn't allow Calculator/); }
 });
 
 test('computer use: the new actions keep to each app’s level, and steps stop at the first refusal', async () => {
@@ -2080,6 +2089,40 @@ test('computer use off: one card turns it on for the chat, and the desktop call 
   assert.match(toolOut(bodies, 1), /look at only .* in Calculator/, 'past the switch, held to the app\'s level');
 });
 
+test('the card that turns on computer use takes only a click: typed words don’t answer it, and switching to YOLO doesn’t either', { skip: !WIN }, async () => {
+  const tries = [];
+  const { events } = await agentRun((b, i) => [reply('', [['desktop', { action: 'running' }]]), reply('OK.')][i], { chatId: 'apps-button-only',
+    onEvent: (e, id) => {
+      if (e.t !== 'approval' || e.tool !== 'computer_use') return;
+      tries.push(e.buttonsOnly === true);
+      setTimeout(() => {
+        tries.push(answerApproval(id, e.id, { reply: 'ok turn it on and do it' }));
+        setTimeout(() => tries.push(answerApproval(id, e.id, { approve: true })), 10);
+      }, 10);
+    } });
+  assert.deepEqual(tries, [true, false, true], 'marked, the typed reply refused, the click taken');
+  assert.ok(events.some((e) => e.t === 'tools_on' && e.kinds.includes('apps')));
+});
+
+test('computer use switched off while a reply runs: its next app action is refused, and no card asks to turn it back on', async () => {
+  let cards = 0, off = false;
+  const apps = [{ name: 'Calculator', appId: 'Microsoft.WindowsCalculator_8wekyb3d8bbwe!App', level: 'full' }];
+  const { events, bodies } = await agentRun((b, i) => [reply('', [['shell', { command: 'echo hi' }]]), reply('', [['desktop', { action: 'read', app: 'Calculator' }]]), reply('OK.')][i], {
+    chatId: 'apps-off-mid', settings: { appsAccess: true }, more: { apps },
+    onEvent: (e, id) => { if (e.t === 'tool' && !off) { off = true; assert.ok(setRunAccess(id, { apps: false })); } if (e.t === 'approval' && e.tool === 'computer_use') cards++; } });
+  assert.match(toolOut(bodies, 2), /^Error: computer use is off in this chat and the user kept it off/);
+  assert.equal(cards, 0);
+  assert.ok(events.some((e) => e.t === 'access' && e.kind === 'apps' && e.on === false), 'the reply notes it');
+});
+
+test('Chrome off with no extension connected: no card, and the agent is told not to ask the user to tick it and retry', async () => {
+  let cards = 0;
+  const { bodies } = await agentRun((b, i) => [reply('', [['browser', { action: 'open', target: 'chrome:https://x.com/home' }]]), reply('OK.')][i], { chatId: 'chrome-off',
+    onEvent: (e) => { if (e.t === 'approval' && e.tool === 'chrome') cards++; } });
+  assert.equal(cards, 0);
+  assert.match(toolOut(bodies, 1), /^Error: Chrome is off in this chat and the QuorX extension isn't connected to Chrome\..*Don't ask them to tick it and retry/);
+});
+
 test('shell: a declined program start points to desktop open; a declined OCR script to read_text', { skip: !WIN }, async () => {
   const { bodies } = await agentRun((b, i) => [
     reply('', [['shell', { command: 'Start-Process -FilePath "C:\\Windows\\System32\\notepad.exe"' }]]),
@@ -2122,6 +2165,10 @@ test('the screen glow is on while a reply uses the desktop; your Stop ends exact
   onGlowStop((runs, how) => stopped.push([runs, how]));
   glowOn('run-a', 'Paint a bat'); glowOn('run-b', 'Discord drop'); glowOn('run-a', 'Paint a bat');
   assert.deepEqual(glowRuns(), ['run-a', 'run-b'], 'once per reply');
+  assert.equal(glowLabel(), 'QuorX is using computer use', 'no app named yet');
+  glowOn('run-a', 'Paint a bat', 'Paint'); glowOn('run-b', 'Discord drop', 'Discord');
+  assert.equal(glowLabel(), 'QuorX is using Paint, Discord', 'the banner names the apps in use');
+  assert.deepEqual(glowRuns(), ['run-a', 'run-b'], 'naming the app adds no reply');
   glowOff('run-b');
   assert.deepEqual(glowRuns(), ['run-a'], 'a reply that ends leaves it');
   glowOn('run-c', 'VS Code');

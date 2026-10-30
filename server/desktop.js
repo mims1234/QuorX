@@ -27,8 +27,12 @@ export function openLink(req, res, token) {
 }
 
 /** A reply to a command, or DevTools events from one of the app's tabs. */
+// Something the app says unasked: 'stop' (its system-wide stop shortcut was pressed while computer use runs).
+let onSignal = () => {};
+export function onDesktopSignal(fn) { onSignal = fn; }
 export function linkReply(body) {
   if (!link.token || body.token !== link.token) return false;
+  if (body.signal === 'stop') { try { onSignal('stop'); } catch { /* the server's own problem */ } }
   if (body.events) for (const e of body.events) for (const fn of link.listeners.get(e.tab) || []) { try { fn(e.method, e.params); } catch { /* listener's problem */ } }
   if (body.id != null) {
     const p = link.pending.get(body.id);

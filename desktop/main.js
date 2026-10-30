@@ -7,7 +7,7 @@
 // The server: if this data folder's harness already answers on its port, the window attaches to it (two servers on
 // the same data folder would fight). Another QuorX on that port (its own data folder, so its own app key) is left
 // alone, and this one starts server.js with Electron's own Node on the next free port.
-const { app, BrowserWindow, WebContentsView, Tray, Menu, nativeImage, ipcMain, session, shell, dialog, Notification, screen } = require('electron');
+const { app, BrowserWindow, WebContentsView, Tray, Menu, nativeImage, ipcMain, session, shell, dialog, Notification, screen, globalShortcut } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const { spawn } = require('node:child_process');
@@ -136,6 +136,20 @@ function createWindow() {
   // (inside a frame, which the page never hears keys from), the terminal, or QuorX itself (it calls back 'zoom').
   win.webContents.on('before-input-event', (e, input) => { const dir = zoomKey(input); if (dir) { e.preventDefault(); send({ type: 'zoom-key', dir }); } });
   win.webContents.on('zoom-changed', (_e, dir) => send({ type: 'zoom-wheel', dir }));
+  // Right-click, as in a browser: on a misspelled word, the spelling suggestions and Add to dictionary; in a text box,
+  // undo, cut, copy, paste and select all; on selected text, copy. (A part of the page with its own menu keeps it.)
+  win.webContents.on('context-menu', (_e, p) => {
+    const wc = win.webContents, items = [];
+    if (p.misspelledWord) {
+      for (const w of (p.dictionarySuggestions || []).slice(0, 6)) items.push({ label: w, click: () => wc.replaceMisspelling(w) });
+      if (!items.length) items.push({ label: 'No suggestions', enabled: false });
+      items.push({ type: 'separator' }, { label: 'Add to dictionary', click: () => wc.session.addWordToSpellCheckerDictionary(p.misspelledWord) }, { type: 'separator' });
+    }
+    if (p.isEditable) items.push({ role: 'undo', enabled: p.editFlags.canUndo }, { role: 'redo', enabled: p.editFlags.canRedo }, { type: 'separator' },
+      { role: 'cut', enabled: p.editFlags.canCut }, { role: 'copy', enabled: p.editFlags.canCopy }, { role: 'paste', enabled: p.editFlags.canPaste }, { type: 'separator' }, { role: 'selectAll' });
+    else if (p.selectionText?.trim()) items.push({ role: 'copy' });
+    if (items.length) Menu.buildFromTemplate(items).popup({ window: win });
+  });
   // Through localhost first: the page there hands this window's saved settings over and opens QuorX at its own name.
   win.loadURL(`${origin}/?k=${encodeURIComponent(appKey())}`);
   // The app window only shows the app (and the move page on the way); links elsewhere open in your browser.
@@ -592,7 +606,17 @@ async function viewPicture(t, p, seen) {
 // the window goes back to how you had it.
 let compact = null; // how the window was before: { bounds, max, full, min, top }
 const PHONE = 19.5 / 9;
+// While computer use runs, its stop shortcut works whichever window is in front: a system hotkey, besides the
+// screen glow's own keyboard watch (which Windows can drop, and which an app run as administrator doesn't reach).
+const STOP_KEYS = 'Control+Alt+Backspace';
+function stopShortcut(on) {
+  try {
+    if (on && !globalShortcut.isRegistered(STOP_KEYS)) globalShortcut.register(STOP_KEYS, () => postReply({ signal: 'stop' }));
+    if (!on && globalShortcut.isRegistered(STOP_KEYS)) globalShortcut.unregister(STOP_KEYS);
+  } catch { /* another program holds the keys: the glow's watch still works */ }
+}
 function computerUse({ on, work, chatId } = {}) {
+  stopShortcut(!!on);
   if (!win || win.isDestroyed()) return null;
   if (!on) {
     if (!compact) return true;
@@ -772,4 +796,5 @@ app.whenReady().then(async () => {
 app.on('window-all-closed', () => { if (!server) app.quit(); });
 app.on('activate', () => (win ? showWindow() : createWindow()));
 app.on('before-quit', () => { quitting = true; });
+app.on('will-quit', () => { try { globalShortcut.unregisterAll(); } catch { /* not ready */ } });
 app.on('quit', () => { if (server) { try { if (process.platform === 'win32') spawn('taskkill', ['/pid', String(server.pid), '/T', '/F'], { windowsHide: true }); else server.kill(); } catch { /* gone */ } } });

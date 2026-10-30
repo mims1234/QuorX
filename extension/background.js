@@ -286,7 +286,12 @@ async function glow(tab, on) {
   const run = (func, args = []) => chrome.scripting.executeScript({ target: { tabId: tab }, func, args }).catch(() => null);
   if (!on) { await run(() => window[Symbol.for('quorx.glow')]?.off()); return; }
   await chrome.scripting.executeScript({ target: { tabId: tab }, files: ['glow.js'] }).catch(() => null);
-  await run((text) => window[Symbol.for('quorx.glow')]?.on(text), ['QuorX is working in this tab · Stop']);
+  await run((text, keys) => window[Symbol.for('quorx.glow')]?.on(text, keys), ['QuorX is using Chrome', `${await stopKeys()} to stop`]);
+}
+// The stop shortcut as set in chrome://extensions/shortcuts (Alt+Shift+Q unless the user changed it), for the banner.
+async function stopKeys() {
+  try { const c = (await chrome.commands.getAll()).find((x) => x.name === 'stop-agent'); if (c?.shortcut) return c.shortcut; } catch { /* no commands API */ }
+  return 'Alt+Shift+Q';
 }
 const working = async (tab) => { const l = (await lentTabs())[tab]; return !!l && (await status())[l.chatId]?.state === 'working'; };
 // A page that loads afresh loses the glow: it goes back on while the agent is still working there.
