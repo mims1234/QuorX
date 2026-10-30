@@ -1585,7 +1585,7 @@ const SOURCE_NAME = { 'opencode-go': 'OpenCode Go', commandcode: 'Command Code',
 // Where in ⚙ Settings each source is set up.
 const srcWhere = (k) => (k === 'opencode-go' || k === 'commandcode' ? 'API keys' : 'Apps on this PC');
 // Each source's own logo (public/icons/brand), in the text colour (Claude's in its orange), with its name on hover.
-const SOURCE_LOGO = { openrouter: 'openrouter', 'opencode-go': 'opencode', 'opencode-local': 'opencode', 'claude-local': 'claude', 'grok-local': 'grok' };
+const SOURCE_LOGO = { openrouter: 'openrouter', 'opencode-go': 'opencode', commandcode: 'commandcode', 'opencode-local': 'opencode', 'claude-local': 'claude', 'grok-local': 'grok' };
 const srcLogo = (k, title = k === 'openrouter' ? 'OpenRouter' : SOURCE_NAME[k] || k) => SOURCE_LOGO[k] ? `<span class="src-logo src-logo-${SOURCE_LOGO[k]}" style="--ico:url('icons/brand/${SOURCE_LOGO[k]}.svg')" role="img" aria-label="${esc(title)}" title="${esc(title)}"></span>` : esc(title);
 const SOURCE_SHORT = { 'opencode-go': 'Go', commandcode: 'Command Code', 'opencode-local': 'This PC', 'claude-local': 'Claude Code', 'grok-local': 'Grok Build' };
 // The sources offered, as words: "OpenCode Go, Claude Code or Grok Build".
