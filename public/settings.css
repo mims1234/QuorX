@@ -724,6 +724,16 @@
 #settings .src-name { font-size: 14px; }
 #settings .src-count { font: 11.5px var(--mono); color: var(--dim); }
 #settings .src-what { margin: 6px 0 4px; }
+#settings .src-acc { margin: 0 0 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-inset, var(--bg)); }
+#settings .src-acc-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px 0 14px; font-size: 12.5px; }
+#settings .src-acc-plan { display: inline-flex; align-items: center; gap: 6px; }
+#settings .src-acc-plan small { color: var(--muted); font-size: 11.5px; }
+#settings .src-acc-grid { padding: 10px 14px 0; }
+#settings .src-acc-grid .kx-wait { padding: 0 0 10px; }
+#settings .src-acc .kx-metric small { font-size: 11px; color: var(--muted); }
+#settings .src-acc .src-win b { color: var(--text); }
+#settings .src-acc .src-win.over b { color: var(--bad); }
+#settings .src-acc .kx-checked { padding: 8px 14px 10px; }
 #settings .src-info { margin: 0 0 10px; font: 12px var(--mono); color: var(--muted); }
 #settings .src-info code { font: 11.5px var(--mono); background: var(--surface-inset, var(--bg)); border: 1px solid var(--line); border-radius: 5px; padding: 1px 6px; color: var(--text); }
 #settings .src-test { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; }
@@ -736,6 +746,6 @@
 #settings .src-on { margin-left: 2px; }
 #settings .src-same { margin: 0; padding: 4px 18px 14px 34px; display: grid; gap: 6px; font-size: 12.5px; color: var(--muted); }
 #settings .src-same b { color: var(--text); font-weight: 600; }
-#settings #stSources > .st-row-help, #settings #stSources > .kx-wait { margin: 0 18px 16px; }
+#settings :is(#stSources, #stApiSources) > :is(.st-row-help, .kx-wait) { margin: 0 18px 16px; }
 #settings .src-key { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; margin: 0 0 4px; }
 #settings .src-key .kx-input { flex: 1 1 260px; min-width: 0; }

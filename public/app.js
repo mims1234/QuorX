@@ -1582,13 +1582,13 @@ const FILTERS = [
 const providerOf = (id) => String(id).replace(/^~/, '').split('/')[0] || 'other';
 // Models of an app on this PC (⚙ Settings → Apps on this PC) or of OpenCode Go (⚙ Settings → API keys) are the source,
 // a slash, and its own id.
-const SOURCE_NAME = { 'opencode-go': 'OpenCode Go', 'opencode-local': 'OpenCode on this PC', 'claude-local': 'Claude Code on this PC', 'grok-local': 'Grok Build on this PC' };
+const SOURCE_NAME = { 'opencode-go': 'OpenCode Go', commandcode: 'Command Code', 'opencode-local': 'OpenCode on this PC', 'claude-local': 'Claude Code on this PC', 'grok-local': 'Grok Build on this PC' };
 // Where in ⚙ Settings each source is set up.
-const srcWhere = (k) => (k === 'opencode-go' ? 'API keys' : 'Apps on this PC');
+const srcWhere = (k) => (k === 'opencode-go' || k === 'commandcode' ? 'API keys' : 'Apps on this PC');
 // Each source's own logo (public/icons/brand), in the text colour (Claude's in its orange), with its name on hover.
-const SOURCE_LOGO = { openrouter: 'openrouter', 'opencode-go': 'opencode', 'opencode-local': 'opencode', 'claude-local': 'claude', 'grok-local': 'grok' };
+const SOURCE_LOGO = { openrouter: 'openrouter', 'opencode-go': 'opencode', commandcode: 'commandcode', 'opencode-local': 'opencode', 'claude-local': 'claude', 'grok-local': 'grok' };
 const srcLogo = (k, title = k === 'openrouter' ? 'OpenRouter' : SOURCE_NAME[k] || k) => SOURCE_LOGO[k] ? `<span class="src-logo src-logo-${SOURCE_LOGO[k]}" style="--ico:url('icons/brand/${SOURCE_LOGO[k]}.svg')" role="img" aria-label="${esc(title)}" title="${esc(title)}"></span>` : esc(title);
-const SOURCE_SHORT = { 'opencode-go': 'Go', 'opencode-local': 'This PC', 'claude-local': 'Claude Code', 'grok-local': 'Grok Build' };
+const SOURCE_SHORT = { 'opencode-go': 'Go', commandcode: 'Command Code', 'opencode-local': 'This PC', 'claude-local': 'Claude Code', 'grok-local': 'Grok Build' };
 // The sources offered, as words: "OpenCode Go, Claude Code or Grok Build".
 const srcApps = () => { const t = Object.keys(SOURCE_NAME).map((k) => SOURCE_NAME[k].replace(/ on this PC$/, '')); return t.length > 1 ? `${t.slice(0, -1).join(', ')} or ${t.at(-1)}` : t[0] || ''; };
 const sourceOfId = (id) => { const s = String(id || ''), h = s.split('/')[0]; return SOURCE_NAME[h] && s.length > h.length + 1 ? h : null; };
@@ -6451,7 +6451,7 @@ function settingsPanels(S) {
         + stRow('Custom search address', 'Used when Custom is picked: the address of a search with %s where the words go.', `<input type="text" class="st-input sx-wide-input" data-bind="ui.searchCustom" value="${esc(U.searchCustom || '')}" placeholder="https://example.com/search?q=%s" spellcheck="false">`)),
     ]],
     keys: ['API keys', 'QuorX uses one active OpenRouter key for every call. Add as many as you like and switch between them.', [`<div id="stKeys"><div class="st-row-help">Loading keys…</div></div>`,
-      stCard('OpenCode Go', 'A chat’s main model, or a Quorium module’s, can run on your OpenCode Go subscription with its API key. Calls count against the plan’s limits instead of costing per call.', '<div id="stApiSources"><div class="st-row-help">Loading…</div></div>', '', 'stSrcKeys')]],
+      stCard('Subscriptions', 'A chat’s main model, or a Quorium module’s, can run on your OpenCode Go or Command Code subscription with its API key. Calls count against the plan’s limits or credits instead of costing per call.', '<div id="stApiSources"><div class="st-row-help">Loading…</div></div>', '', 'stSrcKeys')]],
     models: ['Models & catalogue', 'Model lists and prices come from OpenRouter. Pick what new chats start with, and how each call finds a provider.', [
       stCard('OpenRouter', 'The active key’s spending limit (hidden until you click 👁) and the model list.', '<div id="stModelLimit"><div class="st-row-help">Loading…</div></div>'
         + stRow('Model lists and prices', `<span id="stCatInfo">${G.models ? `${G.models.length} models loaded` : 'Loading…'}</span>`, `<button type="button" class="st-btn secondary sm" data-act="refreshModels">↻ Refresh now</button>`), 'sx-limit'),
@@ -6464,7 +6464,7 @@ function settingsPanels(S) {
         + stRow('Zero data retention only', 'Only providers that keep no copy of your prompts. Fewer models qualify.', stSwitch('zdrOnly', !!S.zdrOnly), { id: 'stRowZdr' })
         + stRow('Blocked providers', 'OpenRouter never sends the agent’s calls to these: for every model, or only the models you pick (a provider can be fine for one model and break another). Block one that keeps breaking tool calls (the provider shows as “via …” above each reply). If only blocked providers serve a model, that reply uses them anyway, and says so.', '<div id="stBlocked"><div class="st-row-help">Loading providers…</div></div>', { cls: 'sx-row-wide', id: 'stRowBlocked' })),
     ]],
-    sources: ['Apps on this PC', 'A chat’s main model can run through OpenCode, Claude Code or Grok Build on this computer, on the providers and sign-ins you set up there. OpenCode Go runs with its key (⚙ API keys). Everything else stays on OpenRouter.', [
+    sources: ['Apps on this PC', 'A chat’s main model can run through OpenCode, Claude Code or Grok Build on this computer, on the providers and sign-ins you set up there. OpenCode Go and Command Code run with their keys (⚙ API keys). Everything else stays on OpenRouter.', [
       stCard('Apps', '', '<div id="stSources"><div class="st-row-help">Checking the apps on this PC…</div></div>', '', 'stSrcConnect'),
       stCard('When a call fails', 'By default the reply stops and says why, and you pick another model. QuorX switches only if you choose a fallback.',
         stRow('Fall back to', '', stCards('sourceFallback', [['off', '✋', 'Stop and tell me', 'You pick the next model'], ['same', '🔁', 'Same model on OpenRouter', 'When OpenRouter has it, else the model below'], ['model', '🎯', 'Always this model', 'The fallback model below']], S.sourceFallback || G.cfg.defaults.sourceFallback || 'off', 'compact'), { cls: 'sx-row-wide', id: 'stRowSrcFb' })
@@ -6796,10 +6796,11 @@ const SRC_GUIDE = {
   'claude-local': { what: 'Runs a chat through Claude Code on this computer, on the subscription or API key you signed in with. Its own tools stay off: QuorX\'s tools and approvals do the work.', install: 'npm i -g @anthropic-ai/claude-code' },
   'grok-local': { what: 'Runs a chat through Grok Build on this computer, on the account you signed in with (grok login). Its own tools stay off: QuorX\'s tools and approvals do the work.', install: 'curl -fsSL https://x.ai/cli/install.sh | bash' },
   'opencode-go': { what: 'Runs a chat on your OpenCode Go subscription (Go, Go Plus or Go Teams) over OpenCode’s API. Each model has 5-hour, weekly and monthly limits; prices shown are what a call counts against them.' },
+  commandcode: { what: 'Runs a chat on your Command Code plan over its Provider API: GPT, DeepSeek, Kimi, GLM, Qwen and the other open models, and Claude. Every plan but Go has API access; prices shown are what a call takes from your credits.' },
 };
 // The key of a source that takes one: masked with Remove, or a box to paste it in.
 function srcKeyHTML(x) {
-  if (x.key) return `<p class="src-info">Key ${esc(x.key.masked)}${x.key.from === 'env' ? ' (from the OPENCODE_API_KEY environment variable)' : ` <button type="button" class="kx-btn sm" data-src-act="unkey" title="Remove this key from QuorX">Remove</button>`}</p>`;
+  if (x.key) return `<p class="src-info">Key ${esc(x.key.masked)}${x.key.from === 'env' ? ` (from the ${esc(x.env || 'its')} environment variable)` : ` <button type="button" class="kx-btn sm" data-src-act="unkey" title="Remove this key from QuorX">Remove</button>`}</p>`;
   return `<div class="src-key"><div class="kx-input"><input type="password" data-src-key autocomplete="off" spellcheck="false" placeholder="Your ${esc(x.name)} API key" aria-label="${esc(x.name)} API key"></div><button type="button" class="kx-btn sm primary" data-src-act="key">Save key</button><a class="sp-link" href="${esc(x.keyUrl)}" target="_blank" rel="noopener noreferrer">Get a key</a></div><p class="st-row-help">${esc(x.keyHint || '')} It stays on this computer; the page only sees it masked.</p>`;
 }
 // The app as QuorX found it: its version and its server, or how to install it.
@@ -6821,6 +6822,26 @@ async function drawSourcesPanel(say = null) {
   }
   if (Array.isArray(r.sources)) { ST.sources = r.sources; stRefresh(); }
 }
+// A subscription's plan and what is left of it (Command Code): the plan and the share of each window used show; the
+// dollar amounts stay masked until 👁, like the OpenRouter credits.
+const srcAccShown = () => !!ST.revealSrcAcc || !uiOf(ST.draft || G.settings).maskAmounts;
+async function loadSrcAcc(el, refresh = false) {
+  if (!el) return;
+  const id = el.closest('.src-card')?.dataset.src;
+  el.acc = await fetch(`/api/sources/${id}/account${refresh ? '?refresh=1' : ''}`).then((x) => x.json()).catch((e) => ({ error: e.message }));
+  paintSrcAcc(el);
+}
+function paintSrcAcc(el) {
+  const a = el?.acc; if (!a) return;
+  const grid = $('.src-acc-grid', el), plan = $('.src-acc-plan', el), m = (v) => (srcAccShown() ? money(v ?? 0, 2) : '•••••');
+  if (a.error) { plan.textContent = ''; grid.innerHTML = `<div class="kx-wait">${a.kind === 'auth' ? 'The key wasn’t accepted' : 'Couldn’t read the plan'} (${esc(a.error)}).</div>`; return; }
+  const day = (t) => new Date(t).toLocaleDateString([], { month: 'short', day: 'numeric' });
+  const until = (t) => { const s = Math.max(0, Math.round((t - Date.now()) / 1000)); return s < 3600 ? `${Math.max(1, Math.round(s / 60))}m` : s < 86400 ? `${Math.floor(s / 3600)}h ${Math.round((s % 3600) / 60)}m` : `${Math.round(s / 86400)}d`; };
+  plan.innerHTML = `${stTag('info', `${a.plan} plan`)}${a.periodEnd ? ` <small>${a.cancels ? 'ends' : 'renews'} ${esc(day(a.periodEnd))}</small>` : ''}`;
+  const w = (name, x) => (x ? `<div class="kx-metric src-win${x.exceeded ? ' over' : ''}"><span>${name}</span><b>${Math.round((x.used / x.cap) * 100)}%</b><small>${m(x.used)} of ${m(x.cap)}${x.resetAt ? ` · resets in ${until(x.resetAt)}` : ''}</small></div>` : '');
+  const c = a.credits;
+  grid.innerHTML = `<div class="kx-metric left"><span>Credits left</span><b>${m(c.left)}</b><small>${srcAccShown() ? `this month ${money(c.monthly, 2)}${c.purchased ? ` · bought ${money(c.purchased, 2)}` : ''}${c.free ? ` · free ${money(c.free, 2)}` : ''}` : 'month, bought and free'}</small></div>${w('5-hour window', a.fiveHour)}${w('Weekly window', a.weekly)}<div class="kx-checked">Checked ${new Date(a.checked).toLocaleTimeString()}</div>`;
+}
 function drawSourceCards(box, r, list, say) {
   const when = (t) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const card = (x) => {
@@ -6838,12 +6859,14 @@ function drawSourceCards(box, r, list, say) {
       </header>
       <p class="st-row-help src-what">${esc(g.what || '')}</p>
       ${srcInfoHTML(x, g)}
+      ${x.account && x.key ? `<div class="src-acc" data-src-acc><header class="src-acc-head"><b>Your plan</b><span class="src-acc-plan"></span><span class="kx-spacer"></span><button type="button" class="kx-icon" data-src-act="acc-reveal" title="${srcAccShown() ? 'Hide amounts' : 'Show amounts'}">${srcAccShown() ? '🙈' : '👁'}</button><button type="button" class="kx-icon" data-src-act="acc-refresh" title="Check again">↻</button></header><div class="kx-acc-grid src-acc-grid"><div class="kx-wait">Loading…</div></div></div>` : ''}
       <div class="src-test"><button type="button" class="kx-btn sm" data-src-act="test" ${srcReady(x) ? '' : 'disabled'}>Test the connection</button><button type="button" class="kx-btn sm" data-src-act="pick" ${x.on && srcReady(x) ? '' : 'disabled'}>Choose a model for new chats</button>${last}</div>
       <p class="kx-note src-test-msg" hidden></p><p class="kx-note src-msg" hidden></p>
       ${x.catalogueError ? `<p class="kx-wait warn">⚠ Its model list didn’t load (${esc(x.catalogueError)})${x.models ? '; the last good list is used' : ''}.</p>` : ''}
     </section>`;
   };
   box.innerHTML = `<div class="src-cards">${list.map(card).join('')}</div>`;
+  for (const el of box.querySelectorAll('[data-src-acc]')) loadSrcAcc(el);
   // A message from the action that redrew the page goes in once the new cards are there.
   if (say) { const el = $(`.src-card[data-src="${say.id}"] .${say.where}`, box); if (el) { el.hidden = false; el.classList.toggle('bad', !!say.bad); el.textContent = say.text; } }
   // The server has rebuilt its list already: the pickers just ask for it again.
@@ -6864,6 +6887,8 @@ function drawSourceCards(box, r, list, say) {
     const act = e.target.closest('[data-src-act]')?.dataset.srcAct; if (!act) return;
     const msg = $('.src-msg', c), tmsg = $('.src-test-msg', c), btn = e.target.closest('button');
     const say = (el, t, bad) => { el.hidden = false; el.classList.toggle('bad', !!bad); el.textContent = t; };
+    if (act === 'acc-reveal') { ST.revealSrcAcc = !srcAccShown(); revealButton(btn, srcAccShown()); paintSrcAcc($('[data-src-acc]', c)); return; }
+    if (act === 'acc-refresh') { loadSrcAcc($('[data-src-acc]', c), true); return; }
     if (act === 'key' || act === 'unkey') {
       const inp = $('[data-src-key]', c), key = inp?.value.trim() || '';
       if (act === 'key' && !key) { say(msg, 'Paste the key first.', true); inp?.focus(); return; }
