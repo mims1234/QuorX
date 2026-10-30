@@ -10,6 +10,7 @@
 //                applies in both modes
 import fs from 'node:fs';
 import path from 'node:path';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { chat, chatStream, generationCost, chatModels, imageModels, generateImage, speechModels, synthesize, composeMusic, musicModels, videoModels, generateVideo, HOME } from './openrouter.js';
 import { ensemble, GATE } from './decisions.js';
 import { runtime, knownProviders, currentKey } from './openrouter.js';
@@ -401,6 +402,9 @@ function voiceFor(model, t, spec) {
 
 // ---------- approvals waiting on the user (strict mode) ----------
 const pending = new Map();
+// The tool call an approval card belongs to (calls in one step can run side by side), so a reply typed on its card
+// becomes that call's result.
+const toolCallCtx = new AsyncLocalStorage();
 export function answerApproval(runId, id, answer) {
   const resolve = pending.get(`${runId}:${id}`);
   if (!resolve) return false;
@@ -410,6 +414,10 @@ export function answerApproval(runId, id, answer) {
     ? { match: clip(answer.rule.match.trim(), 300), scope: answer.rule.scope } : null;
   // models: the model picked for each line of a production plan, or for each paid tool being switched on ({ key: id }).
   const models = answer.models && typeof answer.models === 'object' ? Object.fromEntries(Object.entries(answer.models).filter(([, v]) => typeof v === 'string' && v.trim()).slice(0, 20).map(([k, v]) => [String(k).slice(0, 20), clip(v.trim(), 120)])) : null;
+  // A reply: the user typed something instead of Allow or Deny. Neither yes nor no; it goes back to the agent as new
+  // context for this request (see replyResult), and the run goes on.
+  const reply = clip(String(answer.reply || '').trim(), 4000);
+  if (reply) { resolve({ approve: false, reply, reason: '', by: 'user' }); return true; }
   resolve({ approve: !!answer.approve, always: !!answer.always, reason: clip(answer.reason || '', 400), model: answer.model ? String(answer.model) : null, ...(models ? { models } : {}), rule, by: 'user' });
   return true;
 }
@@ -2089,8 +2097,11 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       result = `Error: ${name} is not one of your tools in this chat, so nothing was run. Your tools: ${tools.map((t) => t.function?.name).filter(Boolean).join(', ')}.`;
       emit({ t: 'note', level: 'warn', msg: `The model asked for ${clip(name, 40)}, which this chat doesn't offer; not run.`, at: at() });
     } else {
-      try { result = await runTool(name, args, step); }
+      const ctx = {};
+      try { result = await toolCallCtx.run(ctx, () => runTool(name, args, step)); }
       catch (e) { if (signal.aborted) throw e; if (process.env.QX_DEBUG) console.error(e.stack); result = `Error: ${e.message}`; }
+      // The user answered its card by typing: that, not "declined", is what the agent hears back.
+      if (ctx.reply) result = replyResult(name, ctx.reply);
     }
     // Nothing secret goes back to the model: the values in the project's .env files, and anything shaped like a key.
     result = scrubSecrets(root, String(result ?? ''));
@@ -2868,6 +2879,11 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     held?.release();
     let ans = await userOrTimeout(card.id, ms, userP).finally(() => { openCards.delete(card.id); if (held && lent === held) held.relock(); });
     if (ans.timedOut) { pending.delete(`${runId}:${card.id}`); ans = wait.onTimeout(); }
+    if (ans.reply) {
+      // The tool call this card is for answers with the reply; a card outside a tool call passes it on as a note.
+      const ctx = toolCallCtx.getStore();
+      if (ctx) ctx.reply = ans.reply; else run.inbox.push({ text: ans.reply });
+    }
     if (ans.approve && ans.always && card.tool !== 'shell') {
       allowed.add(card.tool); emit({ t: 'allow_always', tool: card.tool, at: at() });
       for (const [id, tool] of openCards) if (tool === card.tool) answerApproval(runId, id, { approve: true, reason: 'Covered by "Always allow" on another card.' });
@@ -2956,7 +2972,9 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       return 'Error: action is list, create, update, pause, resume, run_now or delete.';
     } catch (e) { if (signal.aborted) throw e; return `Error: ${e.message}.`; }
   }
-  function declined(name, ans) { return `${ans.by === 'user' ? 'The user' : ans.by === 'budget' ? 'The budget check' : 'The automatic approval check'} declined this ${name} call${ans.reason ? `. Reason: "${ans.reason}"` : ' without giving a reason'}. Decide how to proceed with that in mind: adapt, offer an alternative, or continue without it. Do not repeat the identical call.`; }
+  // The user typed instead of Allow or Deny: not a yes, not a no, but new context for this request.
+  function replyResult(name, reply) { return `The user did not approve or refuse this ${name} call, so it was not run. Instead they wrote: "${reply}". Treat that as their answer to this request: adjust the call and try again, ask them, or do something else, whatever their words call for.`; }
+  function declined(name, ans) { if (ans.reply) return replyResult(name, ans.reply); return `${ans.by === 'user' ? 'The user' : ans.by === 'budget' ? 'The budget check' : 'The automatic approval check'} declined this ${name} call${ans.reason ? `. Reason: "${ans.reason}"` : ' without giving a reason'}. Decide how to proceed with that in mind: adapt, offer an alternative, or continue without it. Do not repeat the identical call.`; }
   function toolSummary(name, args) {
     if (name === 'write_artifact') return `${args.id && arts.has(args.id) ? `Replace \`${args.id}\`` : args.markdown && !args.html ? 'Create a new document' : 'Create a new page'}: "${clip(args.title, 60)}" (${args.markdown && !args.html ? `${String(args.markdown).length} characters of Markdown` : `${String(args.html || '').length} characters of HTML`})`;
     if (name === 'edit_artifact') return Array.isArray(args.edits) && args.edits.length ? `Edit \`${args.id}\`: ${args.edits.length} changes (${args.edits.slice(0, 3).map((e) => `"${clip(e?.find, 40)}"`).join(', ')}${args.edits.length > 3 ? ', …' : ''})` : `Edit \`${args.id}\`: replace "${clip(args.find, 80)}" with "${clip(args.replace, 80)}"`;
@@ -4020,7 +4038,7 @@ ${r.text || '(no text found)'}`;
       } catch (e) { emit({ t: 'note', level: 'warn', msg: `The rule wasn't saved: ${e.message}`, at: at() }); }
     }
     emit({ t: 'approval_done', id: card.id, ...ans, at: at() });
-    aud({ kind: ans.approve ? 'approved' : 'declined', command: line, by: ans.by || 'user', reason: ans.reason || undefined });
+    aud({ kind: ans.approve ? 'approved' : ans.reply ? 'replied' : 'declined', command: line, by: ans.by || 'user', reason: ans.reply || ans.reason || undefined });
     if (!ans.approve) return { ok: false, text: declined('shell', ans) + desktopWay(line) };
     // Running because nobody answered is not a yes: the same line asks again next time.
     if (!hook && ans.by !== 'timeout') approvedLines.add(sameLine);

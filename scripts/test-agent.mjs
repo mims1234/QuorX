@@ -531,6 +531,80 @@ test('strict mode: parallel reads each ask, and "Always allow" on one answers th
   assert.ok(toolResults(bodies[2]).slice(-3).every((r) => /^1\tA/.test(r)));
 });
 
+// Typing on an approval card instead of Allow or Deny: the words go back to the agent as that call's answer.
+test('strict mode: a reply typed instead of Allow / Deny is the call\'s result, nothing runs, and the run goes on', async () => {
+  let runId;
+  const { events, bodies, dir, done } = await run((body, i) => [
+    reply('', [['write_file', { path: 'a.txt', content: 'A' }]]),
+    reply('', [['write_file', { path: 'notes/a.txt', content: 'A' }]]),
+    reply('Done.'),
+  ][i], {
+    settings: { approval: 'strict', strictAsk: 'every' },
+    onEvent: (e) => {
+      if (e.t === 'start') runId = e.runId;
+      if (e.t === 'approval' && e.what.includes('notes/')) setTimeout(() => answerApproval(runId, e.id, { approve: true }), 5);
+      else if (e.t === 'approval') setTimeout(() => answerApproval(runId, e.id, { approve: true, always: true, reply: '  put it in notes/ instead  ' }), 5);
+    },
+  });
+  assert.equal(bodies.length, 3, 'the run carried on after the reply');
+  assert.equal(done.stats.stop, 'answered');
+  const first = toolResults(bodies[1])[0];
+  assert.match(first, /^The user did not approve or refuse this write_file call, so it was not run\. Instead they wrote: "put it in notes\/ instead"\./);
+  assert.doesNotMatch(first, /declined/);
+  assert.ok(!fs.existsSync(path.join(dir, 'a.txt')), 'a reply is not a yes, even with approve set');
+  assert.ok(fs.existsSync(path.join(dir, 'notes', 'a.txt')), 'the adjusted call was asked again and allowed');
+  const ans = of(events, 'approval_done');
+  assert.equal(ans[0].approve, false);
+  assert.equal(ans[0].reply, 'put it in notes/ instead');
+  assert.equal(ans[0].by, 'user');
+  assert.equal(of(events, 'allow_always').length, 0, 'a reply never turns on "Always allow"');
+});
+
+test('strict mode: a reply on one of two side-by-side cards answers only that call', async () => {
+  let runId;
+  const { bodies } = await run((body, i) => [
+    reply('', [['write_file', { path: 'a.txt', content: 'A' }]]),
+    reply('', [['read_file', { path: 'a.txt' }], ['read_file', { path: 'missing.txt' }]]),
+    reply('Done.'),
+  ][i], {
+    settings: { approval: 'strict', strictAsk: 'every' },
+    onEvent: (e) => {
+      if (e.t === 'start') runId = e.runId;
+      if (e.t !== 'approval') return;
+      const answer = e.what.includes('missing') ? { reply: 'that file is gone, skip it' } : { approve: true };
+      setTimeout(() => answerApproval(runId, e.id, answer), e.what.includes('missing') ? 5 : 30);
+    },
+  });
+  const [read, skipped] = toolResults(bodies[2]).slice(-2);
+  assert.match(read, /^1\tA/);
+  assert.match(skipped, /did not approve or refuse this read_file call[\s\S]*"that file is gone, skip it"/);
+});
+
+test('a reply on a command card (start_server) reaches the agent in place of the card\'s own "no" text', async () => {
+  let b = 0;
+  const { bodies, events } = await run(() => [
+    reply('', [['start_server', { name: 'tool', command: 'npx', args: ['-y', 'somepkg'] }]]),
+    reply('Done.'),
+  ][b++], {
+    settings: { approval: 'strict' },
+    onEvent: (e, id) => { if (e.t === 'approval') setTimeout(() => answerApproval(id, e.id, { reply: 'use the dev script in package.json' }), 5); },
+  });
+  assert.equal(of(events, 'approval').length, 1);
+  const r = toolResults(bodies[1])[0];
+  assert.match(r, /^The user did not approve or refuse this start_server call, so it was not run\. Instead they wrote: "use the dev script in package\.json"/);
+  assert.doesNotMatch(r, /is running/);
+});
+
+test('an approval answer with an empty reply is an ordinary yes or no', async () => {
+  let runId;
+  const { bodies, dir } = await run((body, i) => [reply('', [['write_file', { path: 'a.txt', content: 'A' }]]), reply('Done.')][i], {
+    settings: { approval: 'strict', strictAsk: 'every' },
+    onEvent: (e) => { if (e.t === 'start') runId = e.runId; if (e.t === 'approval') setTimeout(() => answerApproval(runId, e.id, { approve: false, reason: 'not now', reply: '   ' }), 5); },
+  });
+  assert.match(toolResults(bodies[1])[0], /^The user declined this write_file call\. Reason: "not now"/);
+  assert.ok(!fs.existsSync(path.join(dir, 'a.txt')));
+});
+
 // ---------- project budgets ----------
 const costly = (text, calls = [], cost = 0.6) => ({ ...reply(text, calls), usage: { cost } });
 

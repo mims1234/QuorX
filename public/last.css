@@ -1753,6 +1753,11 @@ img.shot:hover, img.dsnap:hover, .msg .msg-md img:hover { outline: 2px solid var
 .approval .acts button.no { border: 1px solid color-mix(in srgb, var(--bad) 60%, transparent) !important; background: transparent !important; color: var(--bad) !important; }
 .approval .acts button.no:hover:not(:disabled) { background: color-mix(in srgb, var(--bad) 14%, transparent) !important; }
 .approval .acts button.no.with-note { background: var(--bad) !important; border-color: var(--bad) !important; color: #fff !important; }
+/* typed instead of Allow / Deny: the reply goes to the agent; Allow stays off while there is text */
+.approval .acts button.reply[hidden] { display: none; }
+.approval .acts button.yes:disabled, .approval .acts button.always:disabled, .approval .acts button.sc-always:disabled { background: transparent !important; border: 1px solid var(--line) !important; color: var(--dim) !important; box-shadow: none !important; cursor: not-allowed; }
+.approval-line.reply .al-mark, .approval-line .al-who.reply, .tl-ap-detail.reply, .approval .outcome.reply { color: var(--accent); }
+.tl-ap.reply { color: var(--accent); background: var(--accent-dim); }
 
 /* ---------- the reply breakdown: the total cost is the headline ---------- */
 .fi-total { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; margin: 0 0 8px; padding: 0 0 8px; border-bottom: 1px solid var(--line); }
