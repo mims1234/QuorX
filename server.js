@@ -39,7 +39,8 @@ import { followTerm, runningJobs, stopJob } from './server/terminal.js';
 import { runningIn, stopRunning, stopAllIn } from './server/running.js';
 import { decide as decideCommand, loadRules, saveRules, suggestedRules, ruleProblem, updateRule, removeRule } from './server/cmdpolicy.js';
 import { jobHostStatus, jobsAvailable } from './server/jobhost.js';
-import { glowOn, glowOff, glowRuns, onGlowStop } from './server/glow.js';
+import { glowOn, glowOff, glowRuns, onGlowStop, onGlowScreen } from './server/glow.js';
+import { startWork, endWork } from './server/workscreen.js';
 import { stopDesktopNow } from './server/uia.js';
 import { safetySettings, yoloOf } from './server/safety.js';
 import { readAudit } from './server/audit.js';
@@ -1115,12 +1116,13 @@ onExtRequest({
 // 🧩 The agent's status in your Chrome: the extension's button says working, needs you or done for the tab a chat's
 // agent uses, and a card waiting for you in such a chat shows a Windows notification (clicking it opens the chat).
 // Only chats with one of your Chrome tabs; nothing is sent for the others.
-// The glowing edge and Stop button round your screens while a reply uses the desktop tool (server/glow.js); your
-// Stop ends those replies and the desktop helper at once.
+// The glowing edge and Stop banner on the screen computer use works on while a reply uses the desktop tool
+// (server/glow.js, server/workscreen.js); your Stop ends those replies and the desktop helper at once.
 onRunEvent((r, e) => {
   if (e === null) { glowOff(r.id); return; }
-  if (e.t === 'tool' && e.name === 'desktop' && !glowRuns().includes(r.id)) glowOn(r.id, (r.chatId && getChat(r.chatId)?.title) || '');
+  if (e.t === 'tool' && e.name === 'desktop' && !glowRuns().includes(r.id)) glowOn(r.id, r.chatId || '');
 });
+onGlowScreen((chatId) => startWork(chatId).then((w) => w?.screen || null), endWork);
 onGlowStop((runs) => { stopDesktopNow(); for (const id of runs) stopRun(id); });
 const chromeState = new Map(); // chatId → the last state sent
 onRunEvent((r, e) => {

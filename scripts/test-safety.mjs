@@ -12,7 +12,8 @@ import { pathToFileURL } from 'node:url';
 import { runLine, snapBefore, commandChanges, snapBeforeAsync, commandChangesAsync, restoreCheckpoint, reviewFiles, agentSpace } from '../server/workspace.js';
 import { snapshot, changesSince, snapshotAsync, changesSinceAsync } from '../server/snapshot.js';
 import { jobsAvailable, jobHostStatus, lineHost, asciiJson } from '../server/jobhost.js';
-import { glowOn, glowOff, glowRuns, onGlowStop, stopNow } from '../server/glow.js';
+import { glowOn, glowOff, glowRuns, onGlowStop, onGlowScreen, stopNow } from '../server/glow.js';
+import { pickScreen } from '../server/workscreen.js';
 import { spawn } from 'node:child_process';
 import { decide, agentWriteBlocked, suggestedRules, saveRules, loadRules, ruleMatches, ruleProblem, addRule, updateRule, removeRule } from '../server/cmdpolicy.js';
 import { approvalJudge } from '../server/approvals.js';
@@ -2128,6 +2129,29 @@ test('the screen glow is on while a reply uses the desktop; your Stop ends exact
   assert.deepEqual(stopped, [[['run-a', 'run-c'], 'keys']]);
   assert.deepEqual(glowRuns(), [], 'and the glow goes');
   assert.deepEqual(stopNow('button'), [], 'nothing left to stop');
+});
+
+test('computer use works on one screen: one that is not the main one (the largest), else the only one', () => {
+  const scr = (w, h, primary = false, x = 0) => ({ bounds: { x, y: 0, w, h }, work: { x, y: 0, w, h: h - 40 }, primary });
+  const main = scr(1920, 1080, true), small = scr(1280, 720, false, -1280), big = scr(2560, 1440, false, 1920);
+  assert.equal(pickScreen([main]), main, 'one screen: that one');
+  assert.equal(pickScreen([main, small]), small, 'two: the other one');
+  assert.equal(pickScreen([small, main, big]), big, 'several others: the largest');
+  assert.equal(pickScreen([]), null);
+  assert.equal(pickScreen([{ bounds: { w: 0, h: 0 } }, main]), main, 'a screen with no size is skipped');
+});
+
+test('the glow starts making room at once, once per stretch of desktop use, and ends it when the last reply ends', () => {
+  const calls = [];
+  onGlowScreen((chatId) => { calls.push(['start', chatId]); return { x: -1680, y: 32, w: 1680, h: 1050 }; }, () => calls.push(['end']));
+  glowOn('run-1', 'chat-a');
+  assert.deepEqual(calls, [['start', 'chat-a']], 'started in the same tick, so the first action waits for its screen');
+  glowOn('run-2', 'chat-b');
+  glowOff('run-1');
+  assert.deepEqual(calls, [['start', 'chat-a']], 'still in use by run-2');
+  glowOff('run-2');
+  assert.deepEqual(calls, [['start', 'chat-a'], ['end']]);
+  onGlowScreen(() => null, () => {});
 });
 
 test('a helper can say things unasked (Stop pressed), and can be ended at once and started again', async () => {

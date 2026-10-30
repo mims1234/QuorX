@@ -87,8 +87,28 @@ const pick = async (scope, handle) => {
   // by ApplicationFrameHost) is not.
   if (h && r.wins && !r.wins.some((w) => Number(w.handle) === h)) throw new Error(`window ${h} isn't one of ${scope.app.name}'s windows: list them with windows`);
   if (!h) { const w = r.wins || await appWindows(scope, 8000); if (!w.length) throw new Error(`${typeof scope === 'object' ? scope.app.name : `job ${scope}`} has no window yet`); h = w[0].handle; }
+  await onWorkScreen(r.pids, h);
   return { pids: r.pids, handle: h };
 };
+
+// Computer use works on one screen (server/workscreen.js): while it runs, every window the agent acts on is pulled into
+// that screen's free area first (the part the compact QuorX window leaves), so it is never on another screen or under
+// QuorX. `area` is a promise of { x, y, w, h } in real pixels, or null when there is nothing to keep to.
+let area = null;
+/** Sets (or, with null, clears) the area computer use keeps the apps it acts on in. */
+export function setWorkArea(p) { area = p ? Promise.resolve(p).catch(() => null) : null; }
+async function onWorkScreen(pids, handle) {
+  if (OS !== 'win32' || !area) return;
+  const a = await area;
+  if (a) await U.call('place', { pids, handle: Number(handle), x: a.x, y: a.y, w: a.w, h: a.h }, 10000).catch(() => {});
+}
+/** Brings a window of `scope` onto the working screen now (desktop open does this before the first action). */
+export async function placeWindow(scope, handle) { await pick(scope, handle); }
+/** The screens, in real pixels: [{ bounds, work, primary }] (work leaves out the taskbar). Windows only. */
+export async function listScreens() {
+  if (OS !== 'win32') return [];
+  return arr((await U.call('screens', {}, 15000)).screens);
+}
 // Windows' helper writes the text itself; the others return nodes, written the same way by deskkit.js.
 /** The words in a window's picture (Windows text recognition): "text" @x,y per line. */
 export async function windowText(scope, handle) {

@@ -1,9 +1,10 @@
 # Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
-# While the agent uses the desktop: a glowing QuorX-coloured edge round every screen and a Stop button at the top,
-# both left out of screen captures (the agent's pictures never show them) and click-through (the agent's clicks go to
+# While the agent uses the desktop: a glowing QuorX-coloured edge round the screen computer use works on and a banner at
+# its top (what is happening, the shortcut, a Stop button), both left out of screen captures (the agent's pictures never show them) and click-through (the agent's clicks go to
 # the app underneath). Only YOUR mouse and keyboard can stop it: a real click on Stop, or Ctrl+Alt+Backspace, seen by
 # low-level hooks that tell your input from the input the agent sends.
-# Talks JSON lines: {"ready":true} once, then requests {"op":"show","text":…} / {"op":"hide"}; events {"event":"stop","how":…}.
+# Talks JSON lines: {"ready":true} once, then requests {"op":"show","text":…,"keys":…,"x","y","w","h" (the screen)} /
+# {"op":"hide"}; events {"event":"stop","how":…}.
 $ErrorActionPreference = 'Stop'
 Add-Type -ReferencedAssemblies System.Drawing, System.Windows.Forms -TypeDefinition @'
 using System;
@@ -32,6 +33,8 @@ public class QxGlow {
   [DllImport("user32.dll")] static extern IntPtr CallNextHookEx(IntPtr h, int code, IntPtr w, IntPtr l);
   [DllImport("user32.dll")] static extern short GetAsyncKeyState(int k);
   [DllImport("kernel32.dll")] static extern IntPtr GetModuleHandle(string n);
+  [DllImport("user32.dll")] static extern IntPtr MonitorFromPoint(Pt p, uint flags);
+  [DllImport("shcore.dll")] static extern int GetDpiForMonitor(IntPtr m, int type, out uint x, out uint y);
   [StructLayout(LayoutKind.Sequential)] struct Pt { public int X, Y; public Pt(int x, int y) { X = x; Y = y; } }
   [StructLayout(LayoutKind.Sequential)] struct Sz { public int W, H; public Sz(int w, int h) { W = w; H = h; } }
   [StructLayout(LayoutKind.Sequential, Pack = 1)] struct Blend { public byte Op, Flags, Alpha, Format; }
@@ -61,6 +64,7 @@ public class QxGlow {
   static readonly Color Teal = Color.FromArgb(60, 194, 201);
   static List<Layer> edges = new List<Layer>();
   static Layer pill;
+  static Rectangle stopAt; // the Stop button, on screen
   static Form host;
   static System.Windows.Forms.Timer pulse;
   static IntPtr mouseHook = IntPtr.Zero, keyHook = IntPtr.Zero;
@@ -89,38 +93,55 @@ public class QxGlow {
     }
     return bmp;
   }
-  // The Stop button: a dark rounded pill with the QuorX edge, a red square and the words.
-  static Bitmap Pill(string text, out int w, out int h) {
-    var font = new Font("Segoe UI Semibold", 10f);
-    Size ts; using (var probe = new Bitmap(1, 1)) using (var g0 = Graphics.FromImage(probe)) ts = Size.Ceiling(g0.MeasureString(text, font));
-    w = ts.Width + 46; h = Math.Max(30, ts.Height + 12);
+  static GraphicsPath Round(RectangleF r, float rad) {
+    var p = new GraphicsPath(); float d = rad * 2;
+    p.AddArc(r.X, r.Y, d, d, 180, 90); p.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+    p.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90); p.AddArc(r.X, r.Bottom - d, d, d, 90, 90); p.CloseFigure();
+    return p;
+  }
+  // The banner: a dark card with the QuorX edge, what is happening, the shortcut under it, and a red Stop button
+  // (stop: where the button is in the picture). k: the screen's scale (1 at 100 %).
+  static Bitmap Banner(string text, string keys, float k, out int w, out int h, out Rectangle stop) {
+    var big = new Font("Segoe UI Semibold", 14f * k, GraphicsUnit.Pixel); var small = new Font("Segoe UI", 12f * k, GraphicsUnit.Pixel); var btn = new Font("Segoe UI Semibold", 13f * k, GraphicsUnit.Pixel);
+    SizeF t1, t2, tb;
+    using (var probe = new Bitmap(1, 1)) using (var g0 = Graphics.FromImage(probe)) { t1 = g0.MeasureString(text, big); t2 = g0.MeasureString(keys, small); tb = g0.MeasureString("Stop", btn); }
+    float pad = 14 * k, dot = 10 * k, gap = 12 * k, bw = tb.Width + 34 * k, bh = 32 * k, textW = Math.Max(t1.Width, t2.Width);
+    w = (int)Math.Ceiling(pad + dot + gap + textW + 18 * k + bw + pad);
+    h = (int)Math.Ceiling(Math.Max(t1.Height + t2.Height, bh) + 2 * 10 * k);
+    stop = new Rectangle((int)(w - pad - bw), (int)((h - bh) / 2), (int)bw, (int)bh);
     var bmp = new Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
     using (var g = Graphics.FromImage(bmp)) {
       g.SmoothingMode = SmoothingMode.AntiAlias; g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
       g.Clear(Color.Transparent);
-      int r = h - 2;
-      using (var path = new GraphicsPath()) {
-        path.AddArc(1, 1, r, r, 90, 180); path.AddArc(w - r - 2, 1, r, r, 270, 180); path.CloseFigure();
-        using (var fill = new SolidBrush(Color.FromArgb(240, 14, 22, 24))) g.FillPath(fill, path);
-        using (var pen = new Pen(Color.FromArgb(255, Teal), 1.5f)) g.DrawPath(pen, path);
+      using (var card = Round(new RectangleF(1, 1, w - 3, h - 3), 10 * k)) {
+        using (var fill = new SolidBrush(Color.FromArgb(242, 14, 22, 24))) g.FillPath(fill, card);
+        using (var pen = new Pen(Color.FromArgb(255, Teal), 1.5f * k)) g.DrawPath(pen, card);
       }
-      using (var red = new SolidBrush(Color.FromArgb(255, 232, 72, 72))) g.FillRectangle(red, 14, h / 2 - 5, 10, 10);
-      using (var fg = new SolidBrush(Color.FromArgb(255, 235, 245, 246))) g.DrawString(text, font, fg, 32, (h - ts.Height) / 2f);
+      using (var b = new SolidBrush(Color.FromArgb(255, Teal))) g.FillEllipse(b, pad, h / 2f - dot / 2, dot, dot);
+      float tx = pad + dot + gap, ty = (h - t1.Height - t2.Height) / 2f;
+      using (var fg = new SolidBrush(Color.FromArgb(255, 235, 245, 246))) g.DrawString(text, big, fg, tx, ty);
+      using (var dim = new SolidBrush(Color.FromArgb(255, 160, 184, 186))) g.DrawString(keys, small, dim, tx, ty + t1.Height);
+      using (var bp = Round(new RectangleF(stop.X, stop.Y, stop.Width, stop.Height), 7 * k)) using (var red = new SolidBrush(Color.FromArgb(255, 214, 54, 58))) g.FillPath(red, bp);
+      float sq = 9 * k, bx = stop.X + 12 * k;
+      using (var white = new SolidBrush(Color.White)) { g.FillRectangle(white, bx, stop.Y + (bh - sq) / 2, sq, sq); g.DrawString("Stop", btn, white, bx + sq + 6 * k, stop.Y + (bh - tb.Height) / 2); }
     }
-    font.Dispose();
+    big.Dispose(); small.Dispose(); btn.Dispose();
     return bmp;
   }
 
-  static void Show(string text) {
+  // The glow and the banner on one screen: the one holding (x, y, w, h), or the main screen when none is given.
+  static void Show(string text, string keys, Rectangle at) {
     Hide();
-    foreach (var s in Screen.AllScreens) {
-      var b = s.Bounds; int band = Math.Max(10, Math.Min(b.Width, b.Height) / 70);
-      var l = new Layer(b) { Pic = Edge(b.Width, b.Height, band) };
-      l.Show(); l.Paint2(); edges.Add(l);
-    }
-    int w, h; var pic = Pill(text, out w, out h);
-    var wa = Screen.PrimaryScreen.WorkingArea;
-    pill = new Layer(new Rectangle(wa.Left + (wa.Width - w) / 2, wa.Top + 6, w, h)) { Pic = pic };
+    Screen s = at.Width > 0 ? Screen.FromRectangle(at) : Screen.PrimaryScreen;
+    var b = s.Bounds; int band = Math.Max(10, Math.Min(b.Width, b.Height) / 70);
+    var l = new Layer(b) { Pic = Edge(b.Width, b.Height, band) };
+    l.Show(); l.Paint2(); edges.Add(l);
+    float k = 1; uint dx, dy;
+    try { if (GetDpiForMonitor(MonitorFromPoint(new Pt(b.Left + b.Width / 2, b.Top + b.Height / 2), 2), 0, out dx, out dy) == 0) k = dx / 96f; } catch { }
+    int w, h; Rectangle stop; var pic = Banner(text, keys, k, out w, out h, out stop);
+    var wa = s.WorkingArea;
+    pill = new Layer(new Rectangle(wa.Left + (wa.Width - w) / 2, wa.Top + (int)(10 * k), w, h)) { Pic = pic };
+    stopAt = new Rectangle(pill.Left + stop.X, pill.Top + stop.Y, stop.Width, stop.Height);
     pill.Show(); pill.Paint2();
     if (mouseHook == IntPtr.Zero) mouseHook = SetWindowsHookEx(14, mouseFn, GetModuleHandle(null), 0);
     if (keyHook == IntPtr.Zero) keyHook = SetWindowsHookEx(13, keyFn, GetModuleHandle(null), 0);
@@ -135,11 +156,11 @@ public class QxGlow {
     if (keyHook != IntPtr.Zero) { UnhookWindowsHookEx(keyHook); keyHook = IntPtr.Zero; }
   }
 
-  // Your left click on Stop (not one the agent sent: those carry LLMHF_INJECTED) stops the agent and goes no further.
+  // Your left click on the Stop button (not one the agent sent: those carry LLMHF_INJECTED) stops the agent and goes no further.
   static IntPtr MouseHook(int code, IntPtr w, IntPtr l) {
     if (code >= 0 && (int)w == 0x201 && pill != null) {
       var m = (MouseLL)Marshal.PtrToStructure(l, typeof(MouseLL));
-      if ((m.flags & 1) == 0 && pill.Bounds.Contains(m.pt.X, m.pt.Y)) { Stop("button"); return (IntPtr)1; }
+      if ((m.flags & 1) == 0 && stopAt.Contains(m.pt.X, m.pt.Y)) { Stop("button"); return (IntPtr)1; }
     }
     return CallNextHookEx(IntPtr.Zero, code, w, l);
   }
@@ -166,9 +187,10 @@ public class QxGlow {
         string line = Console.In.ReadLine();
         if (line == null) { host.BeginInvoke(new Action(() => { Hide(); Application.Exit(); })); return; }
         line = line.Trim(); if (line.Length == 0) continue;
-        string op = Field(line, "op"), text = Field(line, "text"), id = Field(line, "id");
+        string op = Field(line, "op"), text = Field(line, "text"), keys = Field(line, "keys"), id = Field(line, "id");
+        int x, y, w, h; int.TryParse(Field(line, "x"), out x); int.TryParse(Field(line, "y"), out y); int.TryParse(Field(line, "w"), out w); int.TryParse(Field(line, "h"), out h);
         host.BeginInvoke(new Action(() => {
-          try { if (op == "show") Show(text.Length > 0 ? text : "QuorX is using your computer"); else if (op == "hide") Hide(); Say("{\"id\":" + id + ",\"ok\":true}"); }
+          try { if (op == "show") Show(text.Length > 0 ? text : "QuorX is using computer use", keys.Length > 0 ? keys : "Ctrl+Alt+Backspace to stop", new Rectangle(x, y, w, h)); else if (op == "hide") Hide(); Say("{\"id\":" + id + ",\"ok\":true}"); }
           catch (Exception ex) { Say("{\"id\":" + id + ",\"ok\":false,\"error\":\"" + ex.Message.Replace("\\", "/").Replace("\"", "'") + "\"}"); }
         }));
       }
