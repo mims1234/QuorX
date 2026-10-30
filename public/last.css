@@ -135,6 +135,10 @@
 #costs .cost-totals { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 #costs .cost-totals b.cx-count { color: var(--text); }
 #costs .cost-totals b { color: var(--amber, #f59e0b); }
+/* plan value: a fifth box when there is one, violet (never money spent) */
+#costs .cost-totals:has(.cx-plan) { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+#costs .cost-totals .cx-plan b { color: var(--violet, #a78bfa); }
+#costs .cost-totals .cx-plan { cursor: help; }
 .cx-tools { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
 .cx-search { flex: 1 1 220px; }
 .cx-n { color: var(--dim); font-size: 11px; margin-left: 4px; }
@@ -487,6 +491,9 @@ h4.md-h, h5.md-h, h6.md-h { font-size: 1em; color: var(--muted); text-transform:
 .msg .foot time { color: color-mix(in srgb, var(--accent) 45%, var(--dim)) !important; }
 .msg .foot .f-dur { color: color-mix(in srgb, var(--violet, #a78bfa) 50%, var(--dim)); }
 .msg .foot .f-cost { color: color-mix(in srgb, var(--amber, #f59e0b) 60%, var(--dim)); }
+/* plan value: not money spent, so violet and dashed, never amber */
+.msg .foot .f-plan { color: color-mix(in srgb, var(--violet, #a78bfa) 75%, var(--dim)); border-bottom: 1px dashed currentColor; font-variant-numeric: tabular-nums; cursor: help; }
+.f-pop .fi-row b i { font-style: normal; font-weight: 400; color: var(--dim); }
 .msg .foot .f-calls { color: color-mix(in srgb, var(--ok) 45%, var(--dim)); }
 .msg .foot .f-dec { color: color-mix(in srgb, #f59e0b 35%, var(--dim)); }
 

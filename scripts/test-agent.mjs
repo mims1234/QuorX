@@ -31,7 +31,8 @@ import { looksLikeFilm, videoModeFor, filmFacts, factsText, finishedFilms, video
 import { settleTempo, analyse, tempoOf, barsOf, fitPlan, pickWindows, cutsVsBeats } from '../server/musicmap.js';
 import { checkHtml } from '../server/checks.js';
 import http from 'node:http';
-import { DEFAULTS, sourceFallbackFor, announcesStep } from '../server/agent.js';
+import { DEFAULTS, sourceFallbackFor, announcesStep, planValue, planTotal } from '../server/agent.js';
+import { planOf, costSummary } from '../server/store.js';
 import { sourceOf, sourceStream, sameOnOpenRouter, failureKind, noteSourceResult, sourceSkip, forgetSourceHealth, priced as sourcePriced, chatAny } from '../server/sources.js';
 import { SECRET_FILES } from '../server/keys.js';
 import { SOURCE_IDS, SOURCE_FILE, sourceOn, sourceOffWhy, blockedLocal, setSourceOn, setSourceKey, removeSourceKey, keyFor, movedModel, sourceModels, sourceStatus } from '../server/sources.js';
@@ -4791,4 +4792,30 @@ test('OpenCode on this PC leaves out OpenCode’s own providers (Zen, and Go, wh
     await sourceModels({ refresh: true, all: true, listers: { 'opencode-local': async () => [], 'opencode-go': async () => [] } }).catch(() => {});
     forgetSourceHealth();
   }
+});
+
+test('plan value: a call’s value counts only when it is a sane number; anything else is 0, never a huge amount', () => {
+  assert.equal(planValue(0.0025), 0.0025);
+  for (const bad of [undefined, null, '', 'abc', NaN, -1, 0, Infinity, 51, 1e9, 1e300, '1e12', {}, []]) assert.equal(planValue(bad), 0, String(bad));
+  assert.equal(planValue('0.5'), 0.5, 'a number sent as text is read');
+  assert.equal(planTotal(120), 120, 'a reply’s total may pass one call’s cap');
+  for (const bad of [undefined, -5, NaN, Infinity, 1e6, 1e12]) assert.equal(planTotal(bad), 0, String(bad));
+});
+
+test('plan value of a reply: its own, and a reply carried on with Continue is not counted twice', () => {
+  assert.equal(planOf({ cost: 0, planCost: 0.02 }), 0.02);
+  assert.equal(planOf({ cost: 0, planCost: 1e15 }), 0, 'absurd: 0');
+  assert.equal(planOf({ cost: 0 }), 0, 'none: 0');
+  // Before 0.2.12 a resumed reply's totals held the one before's (cost 0.03 = 0.01 before + 0.02 its models).
+  const before = { cost: 0.01, planCost: 0.004 }, carried = { resumed: true, cost: 0.03, planCost: 0.01, byModel: { a: { cost: 0.02 } } };
+  assert.ok(Math.abs(planOf(carried, before) - 0.006) < 1e-9);
+  const own = { resumed: true, cost: 0.02, planCost: 0.01, byModel: { a: { cost: 0.02 } } };
+  assert.equal(planOf(own, before), 0.01, 'a resumed reply that holds only its own keeps it');
+});
+
+test('Spending adds up plan value apart from cost', () => {
+  const s = costSummary();
+  assert.equal(typeof s.total.plan, 'number');
+  assert.ok(Number.isFinite(s.total.plan) && s.total.plan >= 0);
+  for (const p of s.projects) assert.ok(Number.isFinite(p.plan) && p.plan >= 0);
 });

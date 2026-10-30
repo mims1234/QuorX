@@ -1511,9 +1511,35 @@ function recDot(id, kind) {
 // Whose plan pays: OpenCode Go, the subscription an app names (Claude Max), else the source's own.
 const planName = (m) => (m.providerID === 'opencode-go' || m.source === 'opencode-go' ? 'Go' : m.planLabel || SOURCE_SHORT[m.source] || '');
 // A Go model shows its list price too: what a call counts against the plan's limits.
-const shortPrice = (id) => { const m = G.byId.get(id); return !m || m.kind !== 'chat' ? '' : m.plan === 'plan' ? `${planName(m)} plan${m.source === 'opencode-go' && (m.listPrice?.[0] || m.listPrice?.[1]) ? ` · $${m.listPrice[0].toFixed(2)}/$${m.listPrice[1].toFixed(2)}` : ''}` : m.source && m.plan === 'free' ? 'free' : m.priceFromApp ? 'per call' : `$${m.price[0].toFixed(2)}/$${m.price[1].toFixed(2)}`; };
+// A plan model's list price per M tokens [in, out]: its own (OpenCode Go says it), or else the same model's price on
+// OpenRouter (Grok Build's grok-4.7 is x-ai/grok-4.7; Claude Code's "opus" is the newest anthropic/claude-opus-…).
+// null when there's no sane match: shown as nothing rather than a wrong number.
+const LIST_CACHE = new Map();
+const sanePrice = (p) => Array.isArray(p) && p.length >= 2 && p.slice(0, 2).every((x) => Number.isFinite(Number(x)) && Number(x) >= 0 && Number(x) <= 500) && (Number(p[0]) > 0 || Number(p[1]) > 0) ? [Number(p[0]), Number(p[1])] : null;
+function listPriceOf(m) {
+  if (!m || m.plan !== 'plan') return null;
+  const own = sanePrice(m.listPrice);
+  if (own) return own;
+  const key = `${m.id}|${G.byId.size}`;
+  if (LIST_CACHE.has(key)) return LIST_CACHE.get(key);
+  let found = null;
+  const or = (id) => { const x = G.byId.get(id); return x && !x.source && x.kind === 'chat' ? sanePrice(x.price) : null; };
+  const name = String(m.modelID || m.realId || '').toLowerCase();
+  if (m.providerID === 'x-ai' && name) {
+    const parts = name.split('-');
+    for (let n = parts.length; n >= 2 && !found; n--) found = or(`x-ai/${parts.slice(0, n).join('-')}`);
+  } else if (m.providerID === 'anthropic' && /^[a-z]+$/.test(name)) {
+    const pick = [...G.byId.values()].filter((x) => !x.source && x.kind === 'chat' && x.id.startsWith(`anthropic/claude-${name}`) && !x.id.includes(':')).sort((a, b) => (b.created || 0) - (a.created || 0))[0];
+    found = pick ? sanePrice(pick.price) : null;
+  }
+  LIST_CACHE.set(key, found);
+  return found;
+}
+const listWord = (p) => `$${p[0].toFixed(2)}/$${p[1].toFixed(2)}`;
+const shortPrice = (id) => { const m = G.byId.get(id); const lp = m && listPriceOf(m); return !m || m.kind !== 'chat' ? '' : m.plan === 'plan' ? `${planName(m)} plan${lp ? ` · ≈ ${listWord(lp)}` : ''}` : m.source && m.plan === 'free' ? 'free' : m.priceFromApp ? 'per call' : `$${m.price[0].toFixed(2)}/$${m.price[1].toFixed(2)}`; };
 function priceText(m, extra = {}) {
-  if (m.source && m.plan === 'plan') return `${SOURCE_NAME[m.source] || m.source} plan: nothing to pay per call (your subscription's usage limits apply)${m.listPrice?.[0] || m.listPrice?.[1] ? ` · list price $${(m.listPrice?.[0] || 0).toFixed(2)} in / $${(m.listPrice?.[1] || 0).toFixed(2)} out per M tokens` : ''}`;
+  const lp = listPriceOf(m);
+  if (m.source && m.plan === 'plan') return `${SOURCE_NAME[m.source] || m.source} plan: nothing to pay per call (your subscription's usage limits apply)${lp ? ` · list price ≈ $${lp[0].toFixed(2)} in / $${lp[1].toFixed(2)} out per M tokens${sanePrice(m.listPrice) ? '' : ' (the same model on OpenRouter)'}` : ''}`;
   if (m.source && m.priceFromApp) return `Billed per call to the API key ${SOURCE_NAME[m.source] || m.source} is signed in with; each reply shows what it cost`;
   if (m.source && m.plan === 'free') return `Free on ${SOURCE_NAME[m.source] || m.source}, if it lets apps other than its own use it (when it doesn’t, the reply stops and says so). Free models may be rate limited, and their providers may use prompts to improve them`;
   if (m.kind === 'decision') return `$${m.price[0].toFixed(3)}/M in · output free`;
@@ -1534,8 +1560,8 @@ function priceNum(m) {
   if (m.kind === 'image') return m.perImage ?? (m.price[1] ? (m.price[1] * 15000) / 1e6 : 1e9);
   if (m.kind === 'video') return videoNum(m);
   if (m.kind === 'music') return m.perUse ?? 1e9;
-  // A Go model sorts by its list price (what it counts against the plan), not as free.
-  if (m.source === 'opencode-go' && m.plan === 'plan' && m.listPrice) return m.listPrice[0] + m.listPrice[1];
+  // A plan model sorts by its list price (what it counts against the plan), not as free.
+  if (m.plan === 'plan') { const lp = listPriceOf(m); if (lp) return lp[0] + lp[1]; }
   return m.price[0] + m.price[1];
 }
 // ---------- the model picker (every place a model is chosen) ----------
@@ -1573,7 +1599,7 @@ const agoDate = (sec) => { if (!sec) return ''; const d = (Date.now() / 1000 - s
 function priceCell(m) {
   const n = priceNum(m), usd = (x, d = 2) => (x > 0 && x < 0.01 ? `$${Number(x.toPrecision(2))}` : `$${x.toFixed(d)}`);
   // A Go model also shows its list price: what a call counts against the plan's limits.
-  if (m.plan === 'plan') return `<span class="mp-plan">${esc(planName(m))} plan</span>${m.source === 'opencode-go' && (m.listPrice?.[0] || m.listPrice?.[1]) ? `<span class="mp-plan-list" title="List price: what a call counts against your Go limits"><span class="mp-money">${usd(m.listPrice[0])}</span><small>in</small><span class="mp-money">${usd(m.listPrice[1])}</span><small>out /M</small></span>` : ''}`;
+  if (m.plan === 'plan') return `<span class="mp-plan">${esc(planName(m))} plan</span>${listPriceOf(m) ? `<span class="mp-plan-list" title="List price${sanePrice(m.listPrice) ? '' : ' (the same model on OpenRouter)'}: what a call counts against your plan's limits. You don't pay it per call."><span class="mp-money">≈ ${usd(listPriceOf(m)[0])}</span><small>in</small><span class="mp-money">${usd(listPriceOf(m)[1])}</span><small>out /M</small></span>` : ''}`;
   if (m.priceFromApp) return '<small>billed per call</small>';
   if (n === 0 || /:free$/.test(m.id)) return '<span class="mp-free">Free</span>';
   if (m.kind === 'chat' || m.kind === 'listen') return `<span class="mp-money">${usd(m.price[0])}</span><small>in</small><span class="mp-money">${usd(m.price[1])}</span><small>out /M</small>`;
@@ -2261,9 +2287,10 @@ function traceCostHTML(c, m) {
   const rows = models.map(([id, v]) => `<tr><td><span class="tc-model" title="${esc(id)}">${esc(short(id))}</span>${v.role && v.role !== 'writer' ? ` <i>${esc(v.role)}</i>` : ''}</td><td>${v.calls || 0}×</td><td>${v.tokensIn || v.tokensOut ? `<span class="tok-in">${k(v.tokensIn)} in</span> · <span class="tok-out">${k(v.tokensOut)} out</span>` : ''}</td><td class="tc-cache">${cacheTag(v)}</td><td class="tc-c">${money(v.cost || 0, 5)}</td></tr>`).join('');
   return `<div class="trace-cost">
     <div class="tc-head"><span>💲 ${s.live ? 'Spent so far' : s.partial ? 'This reply spent (it ended early)' : 'This reply cost'}</span><b>${money(m.stats ? ownCost(m, c.agent.messages) : s.cost || 0, 5)}</b></div>
-    <div class="tc-sub">${calls} model call${calls === 1 ? '' : 's'}${s.tokensIn ? ` · <span class="tok-in">${k(s.tokensIn)} tokens in</span>` : ''}${s.tokensOut ? ` · <span class="tok-out">${k(s.tokensOut)} tokens out</span>` : ''}${cacheShare(sumCache(models)) != null ? ` · ${cacheTag(sumCache(models))}` : ''}${s.ms ? ` · ${secs(s.ms)}` : ''}${s.mediaSpent ? ` · media ${money(s.mediaSpent, 4)}` : ''}</div>
+    <div class="tc-sub">${calls} model call${calls === 1 ? '' : 's'}${s.tokensIn ? ` · <span class="tok-in">${k(s.tokensIn)} tokens in</span>` : ''}${s.tokensOut ? ` · <span class="tok-out">${k(s.tokensOut)} tokens out</span>` : ''}${cacheShare(sumCache(models)) != null ? ` · ${cacheTag(sumCache(models))}` : ''}${s.ms ? ` · ${secs(s.ms)}` : ''}${s.mediaSpent ? ` · media ${money(s.mediaSpent, 4)}` : ''}${planTag(s.planCost)}</div>
     ${rows ? `<table class="tc-table"><tbody>${rows}</tbody></table>` : ''}
     <div class="tc-chat"><span>Whole chat so far · ${t.replies} repl${t.replies === 1 ? 'y' : 'ies'}${t.msgs ? ` · ${t.msgs} message${t.msgs === 1 ? '' : 's'}` : ''}</span><b>${money(t.cost, 4)}</b></div>
+    ${t.plan ? `<div class="tc-chat tc-plan"><span>Plan value, whole chat <i>at list price, not paid</i></span><b>≈ ${money(t.plan, 4)}</b></div>` : ''}
   </div>`;
 }
 // ---------- zoom: Ctrl + / − / 0 (and Ctrl+wheel) ----------
@@ -2805,10 +2832,17 @@ function ownCost(m, all) {
   const prev = Number(before?.stats?.cost) || 0, models = Object.values(s.byModel || {}).reduce((n, v) => n + (Number(v.cost) || 0), 0);
   return prev > 0 && Math.abs(cost - prev - models) < 1e-6 ? cost - prev : cost;
 }
+// A reply's own plan value: a reply carried on with Continue started from the one before's total (as with ownCost).
+function ownPlan(m, all) {
+  const v = planTotal(m.stats?.planCost);
+  if (!v || !m.stats?.resumed) return v;
+  const before = all.slice(0, all.indexOf(m)).reverse().find((x) => x.role === 'assistant'), prev = planTotal(before?.stats?.planCost);
+  return prev && prev <= v && ownCost(m, all) !== (Number(m.stats.cost) || 0) ? v - prev : v;
+}
 function chatTotals(c) {
   for (const m of c.agent.messages) if (m.role === 'assistant' && !m.stats && !m.live && m.trace?.length) partialSpendQuiet(m); // older replies that ended part-way
   const all = c.agent.messages, done = all.filter((m) => m.role === 'assistant' && m.stats);
-  return { cost: done.reduce((s, m) => s + ownCost(m, all), 0) + (c.agent.extraUsage || []).reduce((s, x) => s + (x.cost || 0), 0) + liveOf(c), replies: done.length, msgs: all.filter((m) => m.role === 'user').length };
+  return { cost: done.reduce((s, m) => s + ownCost(m, all), 0) + (c.agent.extraUsage || []).reduce((s, x) => s + (x.cost || 0), 0) + liveOf(c), replies: done.length, msgs: all.filter((m) => m.role === 'user').length, plan: done.reduce((n, m) => n + ownPlan(m, all), 0) };
 }
 // Each chat has its own agent notes (.quorx/chats/<chat>.md). A chat off the project (every Scratch chat unless you say
 // otherwise) reads only those: not the project's notes, design system or work log, and it can't change them.
@@ -2865,6 +2899,7 @@ function renderChatHead(c) {
   if (gh) { gh.hidden = !p?.github; if (p?.github && gh.getAttribute('href') !== p.github.url) { gh.href = p.github.url; gh.title = `Open ${p.github.owner}/${p.github.repo} on GitHub`; gh.innerHTML = GH_ICO; } }
   $('.dir-a-msgs-count', r).textContent = `${t.msgs} msg${t.msgs === 1 ? '' : 's'}`;
   $('.ch-cost', r).textContent = money(t.cost, t.cost < 1 ? 4 : 2);
+  $('.ch-cost', r).title = `What this chat has cost (click for the breakdown)${t.plan && !uiOf(G.settings).maskAmounts ? `\nPlan value ≈ ${money(t.plan, 4)}: what it counted against your plans' limits at list price (not paid per reply)` : ''}`;
   // ⏰ the schedules that post in this chat: how many, and whether they are on; click for them in Schedules.
   const sc = $('.ch-sched', r);
   if (sc) {
@@ -4090,7 +4125,7 @@ function updateMsg(c, m, { bodyOnly = false } = {}) {
   // A reply cut off by a restart may carry partial stats (what it spent before the cut): it can still be resumed.
   $('.foot', el).innerHTML = (!s || s.partial) && m.resumable && !m.live ? '<button type="button" class="resume-btn primary" title="Carry on from the last finished step">▶ Resume where it stopped</button>'
     : !s && m.live && m.liveCost != null ? liveFootHTML(m)
-    : s ? `<span class="f-cost" title="What the reply cost">${money(s.cost, 5)}</span>${s.ms ? `<span class="f-dur" title="How long the reply took">${secs(s.ms)}</span>` : ''}${checkTag}${stopTag}` : '';
+    : s ? `<span class="f-cost" title="What the reply cost">${money(s.cost, 5)}</span>${planTag(s.planCost)}${s.ms ? `<span class="f-dur" title="How long the reply took">${secs(s.ms)}</span>` : ''}${checkTag}${stopTag}` : '';
   // A reply you stopped says so in one small tag down here, not in a box above.
   if (stoppedByYou(m) && !m.live) $('.foot', el).insertAdjacentHTML('afterbegin', '<span class="f-stopped" title="You stopped this reply">■ Stopped</span>');
   // Right side: 🧭 Steps (hover: what it cost; click: the steps, ending with the cost card), then copy and remix.
@@ -4217,6 +4252,10 @@ function callsLine(s) {
   const parts = Object.entries(by).sort((a, b) => (a[0] === 'writer' ? -1 : b[0] === 'writer' ? 1 : b[1] - a[1])).map(([r, n]) => `${n} ${r}${n === 1 ? '' : 's'}`);
   return parts.length > 1 ? `${total} <small>(${esc(parts.join(', '))})</small>` : String(total);
 }
+// Plan value: what replies on a plan (OpenCode Go, Grok Build, Claude Code) counted against its limits, at list
+// price. Never money spent, so it reads "plan ≈" and stays apart from the cost. A missing, negative or absurd value is 0.
+function planTotal(x) { const n = Number(x); return Number.isFinite(n) && n > 0 && n < 1e6 ? n : 0; }
+const planTag = (x) => (planTotal(x) && !uiOf(G.settings).maskAmounts ? `<span class="f-plan" title="What this reply counted against your plan's limits, at list price. You don't pay it per reply.">plan ≈ ${money(planTotal(x), 4)}</span>` : '');
 function replyInfoHTML(s, when) {
   const k = (n) => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n || 0);
   const row = (label, value) => `<span class="fi-row"><span>${label}</span><b>${value}</b></span>`;
@@ -4224,6 +4263,7 @@ function replyInfoHTML(s, when) {
   return `<span class="f-info mt-btn" tabindex="0" role="button" aria-label="Reply details"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.3a2.5 2.5 0 0 1 4.8.9c0 1.7-2.4 2.2-2.4 3.6"/><circle cx="12" cy="17.2" r=".6" fill="currentColor"/></svg><span class="f-pop" role="tooltip">
     <span class="fi-total"><span>Total cost${s.partial ? ' <i>so far: the reply ended early</i>' : ''}</span><b>${money(s.cost, 5)}</b></span>
     ${when ? row('When', esc(new Date(when).toLocaleString())) : ''}
+    ${planTotal(s.planCost) ? row('Plan value', `≈ ${money(s.planCost, 4)} <i>at list price, not paid</i>`) : ''}
     ${row('Took', secs(s.ms))}
     ${row('Model calls', callsLine(s))}
     ${s.tokensIn || s.tokensOut ? `<span class="fi-row tok-in"><span><i class="tok-dot"></i>Tokens in</span><b>${k(s.tokensIn)}</b></span><span class="fi-row tok-out"><span><i class="tok-dot"></i>Tokens out</span><b>${k(s.tokensOut)}</b></span>` : ''}
@@ -6051,7 +6091,7 @@ async function drawCosts() {
   if (!d) { body.innerHTML = '<div class="cx-empty">Could not load costs. <button type="button" class="mp-link" id="cxRetry">Try again</button></div>'; $('#cxRetry').onclick = drawCosts; return; }
   const max = Math.max(0.000001, ...d.projects.map((p) => p.cost));
   body.innerHTML = `
-    <div class="cost-totals cx-line"><div><small>Today</small><b>${money(d.total.today, 3)}</b></div><div><small>7 days</small><b>${money(d.total.week, 3)}</b></div><div><small>All time</small><b>${money(d.total.cost, 3)}</b></div><div><small>Chats</small><b class="cx-count">${d.total.chats}</b></div></div>
+    <div class="cost-totals cx-line"><div><small>Today</small><b>${money(d.total.today, 3)}</b></div><div><small>7 days</small><b>${money(d.total.week, 3)}</b></div><div><small>All time</small><b>${money(d.total.cost, 3)}</b></div><div><small>Chats</small><b class="cx-count">${d.total.chats}</b></div>${planTotal(d.total.plan) ? `<div class="cx-plan" title="What replies on your plans (OpenCode Go, Grok Build, Claude Code) counted against their limits, at list price. Not paid per reply: your subscriptions cover it."><small>Plan value</small><b>≈ ${money(planTotal(d.total.plan), 3)}</b></div>` : ''}</div>
     <div class="cx-tools">
       <label class="mp-search cx-search"><span aria-hidden="true">⌕</span><input id="cxSearch" placeholder="Search every chat by title" aria-label="Search chats" value="${esc(COSTS.q)}"></label>
       <div class="mp-sorts" role="group" aria-label="Sort chats">${[['recent', 'Recent'], ['cost', 'Total'], ['today', 'Today'], ['messages', 'Messages'], ['name', 'Name']].map(([k, l]) => `<button type="button" class="mp-sort ${COSTS.sort === k ? 'on' : ''}" data-sort="${k}">${l}</button>`).join('')}</div>
