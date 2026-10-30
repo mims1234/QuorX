@@ -147,11 +147,9 @@ function createWindow() {
     e.preventDefault();
     if (/^(https?|mailto):/i.test(url)) shell.openExternal(offAppHost(url));
   });
-  // Ctrl+click (Cmd+click on a Mac) on a web link inside a frame of the app (an artifact, a page preview) opens it in the
-  // pane's Browser tab. Links in QuorX's own content are handled by the page and never get here.
-  // Anything else that opens a new window (↗, sign-in) goes to your default browser.
-  win.webContents.setWindowOpenHandler(({ url, disposition }) => {
-    if (disposition === 'background-tab' && /^https?:\/\//i.test(url)) { send({ type: 'open-link', url: offAppHost(url) }); return { action: 'deny' }; }
+  // Anything that opens a new window (↗, sign-in, Ctrl+click on a link in a page preview) goes to your default browser.
+  // Links in QuorX's own content and in artifacts are handled by the page and never get here.
+  win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^(https?|mailto):/i.test(url)) shell.openExternal(offAppHost(url));
     return { action: 'deny' };
   });

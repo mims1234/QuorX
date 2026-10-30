@@ -9,8 +9,8 @@ import { highlight, langOf, LANG_NAME } from './code.js';
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const LANG_ALIAS = { js: 'js', javascript: 'js', ts: 'js', typescript: 'js', jsx: 'js', tsx: 'js', mjs: 'js', node: 'js', json: 'json', html: 'html', xml: 'html', svg: 'html', vue: 'html', css: 'css', scss: 'css', py: 'py', python: 'py', sh: 'sh', bash: 'sh', shell: 'sh', zsh: 'sh', powershell: 'sh', ps1: 'sh', cmd: 'sh', md: 'md', markdown: 'md' };
 const safeUrl = (u, img = false) => (/^(https?:|mailto:)/i.test(u) || (img && /^data:image\//i.test(u)) ? u : '');
-// A web link in content opens only with Ctrl+click (Cmd+click on a Mac), in QuorX's Browser tab (data-cl: the page's
-// click handler does that). A mail link stays an ordinary link. `href` is already escaped.
+// A web link in content opens with a click in QuorX's Browser tab, or with Ctrl+click (Cmd+click on a Mac) in your own
+// browser (data-cl: the page's click handler does that). A mail link stays an ordinary link. `href` is already escaped.
 const link = (href, text) => (/^https?:/i.test(href) ? `<a href="${href}" rel="noopener noreferrer" data-cl="1">${text}</a>` : `<a href="${href}" target="_blank" rel="noopener noreferrer">${text}</a>`);
 
 // A local path (C:\x\y.html, C:/x/y, file:///…, or one relative to the project such as site/index.html or

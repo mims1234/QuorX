@@ -1915,7 +1915,7 @@ function renderLanding(box) {
     <div class="ld-projects">${shownProjects.map((p) => {
       const mine = allRecent.filter((c) => (c.projectId || 'scratch') === p.id), n = G.chatStats?.[p.id]?.active ?? mine.length, spent = p.spent || 0;
       const share = p.budget ? Math.min(1, spent / p.budget) : 0, state = share >= 1 ? 'full' : share >= 0.8 ? 'near' : 'ok';
-      return `<div class="ld-project" style="${projStyle(p)}"><div class="ld-p-top">${p.pinned ? '<span class="ld-p-pin" title="Pinned" aria-label="Pinned"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4h6l-1 6 4 4H6l4-4z"/><path d="M12 14v6"/></svg></span>' : ''}<b>${esc(p.name)}</b>${p.github ? `<a class="ld-p-gh" href="${esc(p.github.url)}" target="_blank" rel="noopener noreferrer" title="Open ${esc(p.github.owner)}/${esc(p.github.repo)} on GitHub" aria-label="Open on GitHub">${GH_ICO}</a>` : ''}<button type="button" class="ld-p-set" data-set="${esc(p.id)}" title="Project settings" aria-label="Settings for ${esc(p.name)}">${ICO.gear}</button><button type="button" class="ld-p-plus" data-new="${esc(p.id)}" title="New chat in ${esc(p.name)}" aria-label="New chat in ${esc(p.name)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button></div>
+      return `<div class="ld-project" style="${projStyle(p)}"><div class="ld-p-top">${p.pinned ? '<span class="ld-p-pin" title="Pinned" aria-label="Pinned"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4h6l-1 6 4 4H6l4-4z"/><path d="M12 14v6"/></svg></span>' : ''}<b>${esc(p.name)}</b>${p.github ? `<a class="ld-p-gh" href="${esc(p.github.url)}" rel="noopener noreferrer" data-cl="1" title="Open ${esc(p.github.owner)}/${esc(p.github.repo)} on GitHub" aria-label="Open on GitHub">${GH_ICO}</a>` : ''}<button type="button" class="ld-p-set" data-set="${esc(p.id)}" title="Project settings" aria-label="Settings for ${esc(p.name)}">${ICO.gear}</button><button type="button" class="ld-p-plus" data-new="${esc(p.id)}" title="New chat in ${esc(p.name)}" aria-label="New chat in ${esc(p.name)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button></div>
         <small class="ld-p-meta">${n} chat${n === 1 ? '' : 's'} · <span class="money">$${spent.toFixed(3)}</span>${p.budget != null ? ` of $${p.budget.toFixed(2)}` : ' · no limit'}</small>
         ${p.budget != null ? `<span class="ld-bar ${state}"><i style="width:${(share * 100).toFixed(1)}%"></i></span>` : ''}
         <div class="ld-p-chats">${mine.slice(0, 3).map((c) => `<button type="button" class="ld-chat ld-pc" data-c="${esc(c.id)}" title="${esc(c.title)}"><b>${esc(c.title)}</b><small>${ago(c.lastAt || Date.now())}</small><span class="ld-cost">$${(c.cost || 0).toFixed(3)}</span></button>`).join('') || '<span class="ld-p-none">No chats yet</span>'}${n > 3 ? `<span class="ld-p-more">+${n - 3} more in the sidebar</span>` : ''}</div></div>`;
@@ -1988,7 +1988,7 @@ const GH_BADGE = {
 };
 const ghBadge = (k, title) => { const b = GH_BADGE[k]; return b ? `<span class="gh-b gh-${k.toLowerCase()}" title="${esc(title)}"><svg viewBox="0 0 24 24" aria-hidden="true">${b[0]}</svg><span class="gh-bl">${b[1]}</span></span>` : ''; };
 function ghLineHTML(g) {
-  return `<a class="gh-link" href="${esc(g.url)}" target="_blank" rel="noopener noreferrer" title="Open ${esc(g.owner)}/${esc(g.repo)} on GitHub">${GH_ICO}<span>${esc(g.owner)}/<b>${esc(g.repo)}</b></span></a><span class="gh-meta"></span>`;
+  return `<a class="gh-link" href="${esc(g.url)}" rel="noopener noreferrer" data-cl="1" title="Open ${esc(g.owner)}/${esc(g.repo)} on GitHub">${GH_ICO}<span>${esc(g.owner)}/<b>${esc(g.repo)}</b></span></a><span class="gh-meta"></span>`;
 }
 // Asked once per project per page (the server keeps the answer for an hour).
 function loadGhMeta(scope) {
@@ -2465,10 +2465,10 @@ function tipBox() {
   document.body.appendChild(el);
   return (TIP.el = el);
 }
-// A web link in content (data-cl) opens only with Ctrl+click (Cmd+click on a Mac), in the Browser tab: its tip says so,
-// with the address under it when the link's text doesn't show it.
+// A web link in content (data-cl) opens with a click in the Browser tab, and with Ctrl+click (Cmd+click on a Mac) in your
+// own browser: its tip says so, with the address under it when the link's text doesn't show it.
 const MAC = /Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent || '');
-const LINK_TIP = `${MAC ? 'Cmd' : 'Ctrl'}+click to open in the Browser tab`;
+const LINK_TIP = `Click to open in the Browser tab\n${MAC ? 'Cmd' : 'Ctrl'}+click to open in your browser`;
 function tipText(t) {
   const own = t.dataset.ohTitle ?? t.getAttribute('data-tip') ?? '';
   if (t.tagName !== 'A' || t.dataset.cl == null) return own;
@@ -2612,7 +2612,7 @@ function paneHTML(c) {
         <div class="dir-a-toprow">
           <div class="dir-a-crumbs">
             <button type="button" class="ch-proj-tag proj-hue-tag" title="Open the project folder in File Explorer"><svg class="proj-folder-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6l2 3h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/></svg><span class="ch-proj-name"></span></button>
-            <a class="ch-gh" target="_blank" rel="noopener noreferrer" aria-label="Open on GitHub" hidden></a>
+            <a class="ch-gh" rel="noopener noreferrer" data-cl="1" aria-label="Open on GitHub" hidden></a>
             <span class="ch-notes-wrap"><button type="button" class="ch-notes" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6z"/><path d="M9 11h7M9 15h7M9 7h3"/></svg><span class="ch-notes-word"></span></button><div class="ch-notes-pop allow-pop" role="dialog" aria-label="This chat's notes" hidden></div></span>
             <button type="button" class="ch-sched" hidden></button>
             <span class="dir-a-crumb-sep">/</span>
@@ -7908,8 +7908,8 @@ async function boot() {
   $('#homeBtn').onclick = goHome; $('#railHome').onclick = goHome;
   placeChrome(); matchMedia('(max-width: 900px)').addEventListener('change', placeChrome);
   for (const [rail, real] of [['#railRestart', '#restartBtn'], ['#railTheme', '#themeBtn'], ['#railSettings', '#settingsBtn']]) { const b = $(rail); if (b) b.onclick = () => $(real)?.click(); }
-  // The GitHub mark by the name is a control, not content: a plain click opens QuorX's code in the Browser tab.
-  const bg = $('#brandGit'); if (bg) bg.onclick = (e) => { e.preventDefault(); openLink(bg.getAttribute('href'), bg); };
+  // The GitHub mark by the name opens QuorX's code like any link: the Browser tab, or your browser with Ctrl+click.
+  const bg = $('#brandGit'); if (bg) bg.onclick = (e) => { e.preventDefault(); followLink(bg.getAttribute('href'), bg, e.ctrlKey || e.metaKey); };
   $('#brandHome').onclick = goHome; $('#brandHome').onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); goHome(); } };
   $('#sbCollapseBtn').onclick = () => { if (isNarrow()) return closeDrawer(); G.sideHidden = true; savePrefs(); syncLayout(); };
   $('#newBtn').addEventListener('click', closeDrawer);
@@ -9037,10 +9037,11 @@ function browserGo(url) {
   G.view = { id: G.view.id, src: false, files: false, browser: true };
   c.paneHidden = false; syncLayout(); renderPane();
 }
-// ---------- links in content: Ctrl+click (Cmd+click on a Mac) opens them in the Browser tab ----------
-// Chat messages, Steps, News, documents in the pane, artifact pages and the terminal. A plain click does nothing (text
-// selection works as usual). Only web addresses open, in a new tab of the pane's Browser, never in the system browser
-// or a new window. QuorX's own pages never open inside its Browser tab, as the agent's browser can't open them either.
+// ---------- links in content: a click opens them in the Browser tab, Ctrl+click (Cmd+click) in your browser ----------
+// Chat messages, Steps, News, documents in the pane, artifact pages and the terminal. A click opens the address in a new
+// tab of the pane's Browser; Ctrl+click (Cmd+click on a Mac) or a middle click opens it in your default browser instead
+// (in the browser page: a new tab of that browser). Only web addresses open. QuorX's own pages never open inside its
+// Browser tab, as the agent's browser can't open them either.
 function quorxPage(u) {
   let x; try { x = new URL(String(u || '')); } catch { return false; }
   const port = (p, proto) => Number(p || (proto === 'https:' ? 443 : 80));
@@ -9068,25 +9069,31 @@ async function openLink(url, from) {
   G.view = { id: G.view.id, src: false, files: false, browser: true };
   c.paneHidden = false; syncLayout(); renderPane(); toPreview();
 }
+function openOutside(url) {
+  let u; try { u = new URL(offAppHost(String(url || '')), location.href); } catch { return; }
+  if (!/^https?:$/.test(u.protocol)) return;
+  if (DESK) window.ohDesktop.openExternal(u.href); else window.open(u.href, '_blank', 'noopener');
+}
+const followLink = (url, from, outside) => (outside ? openOutside(url) : openLink(url, from));
 document.addEventListener('click', (e) => {
   const a = e.target.closest?.('a[data-cl]');
   if (!a) return;
   e.preventDefault();
-  if ((e.ctrlKey || e.metaKey) && e.button === 0) openLink(a.getAttribute('href'), a);
+  if (e.button === 0 && !e.shiftKey && !e.altKey) followLink(a.getAttribute('href'), a, e.ctrlKey || e.metaKey);
 }, true);
-// A middle click would open a new window: nothing, like a plain click.
-document.addEventListener('auxclick', (e) => { if (e.target.closest?.('a[data-cl]')) e.preventDefault(); }, true);
-// The hand shows on a link only while Ctrl (Cmd) is held, since only then a click opens it.
-const linkModKey = (e) => document.body.classList.toggle('link-mod', !!(e.ctrlKey || e.metaKey));
-document.addEventListener('keydown', linkModKey, true);
-document.addEventListener('keyup', linkModKey, true);
-window.addEventListener('blur', () => document.body.classList.remove('link-mod'));
-// Artifact pages (in frames) send their Ctrl+clicked links here (see server/artifacts.js); only from a frame of this page.
+// A middle click opens it in your browser, like Ctrl+click.
+document.addEventListener('auxclick', (e) => {
+  const a = e.target.closest?.('a[data-cl]');
+  if (!a) return;
+  e.preventDefault();
+  if (e.button === 1) openOutside(a.getAttribute('href'));
+}, true);
+// Artifact pages (in frames) send their clicked links here (see server/artifacts.js); only from a frame of this page.
 window.addEventListener('message', (e) => {
   const d = e.data;
   if (!d || d.quorx !== 'open-link' || typeof d.url !== 'string') return;
   const f = [...document.querySelectorAll('iframe')].find((x) => x.contentWindow === e.source);
-  if (f) openLink(d.url, f);
+  if (f) followLink(d.url, f, !!d.outside);
 });
 // The terminal: web addresses in its output (and OSC 8 links) open the same way, with the same tip at the pointer.
 function termTip(ev, text) {
@@ -9099,7 +9106,7 @@ function termTip(ev, text) {
   TIP.timer = setTimeout(() => TIP.target === a && showTip(a, text), 450);
 }
 const termLink = {
-  activate: (ev, url) => { if (ev.ctrlKey || ev.metaKey) openLink(url); },
+  activate: (ev, url) => followLink(url, null, ev.ctrlKey || ev.metaKey),
   hover: (ev, url) => termTip(ev, `${LINK_TIP}\n${url}`),
   leave: () => termTip(null),
   allowNonHttpProtocols: false,
@@ -9221,7 +9228,7 @@ function runRowHTML(c, x) {
   const chat = x.chatId && G.chats.find((h) => h.id === x.chatId);
   const who = x.source === 'agent' ? `<span class="run-who agent">🤖 agent</span>` : x.source === 'you' ? '<span class="run-who you">👤 you</span>' : '';
   const from = chat ? `<button type="button" class="run-chat linkish" data-chat="${esc(chat.id)}" title="Open the chat that started it">${esc(clip(chat.title || 'a chat', 34))}</button>` : '';
-  const port = x.url ? `<a class="run-url" href="${esc(x.url)}" target="_blank" rel="noopener" title="Open ${esc(x.url)}">:${esc(String(x.url).match(/:(\d+)/)?.[1] || '')}</a>` : '';
+  const port = x.url ? `<a class="run-url" href="${esc(x.url)}" rel="noopener" data-cl="1">:${esc(String(x.url).match(/:(\d+)/)?.[1] || '')}</a>` : '';
   const tag = `<span class="run-kind" data-kind="${esc(x.kind)}">${esc(RUN_KIND[x.kind] || x.kind)}${x.bg ? ` · ${esc(x.bg)}` : ''}</span>`;
   const label = x.kind === 'your-term' ? (G.term?.terms?.find((u) => u.id === x.tab)?.name || `Terminal ${String(x.tab || '').replace(/^u/, '')}`) + ` · ${x.label}` : x.label;
   const acts = [
@@ -9612,7 +9619,6 @@ if (DESK) {
   document.addEventListener('visibilitychange', () => deskPlace(true));
   window.ohDesktop.on((ev) => {
     const c = focused();
-    if (ev.type === 'open-link') { openLink(ev.url); return; }
     if (ev.type === 'popup') { newBTab(ev.url); if (c) { G.view = { id: G.view.id, src: false, files: false, browser: true }; syncLayout(); renderPane(); } return; }
     if (ev.type === 'download') { deskDownload(ev); return; }
     if (String(ev.sid || '').startsWith('agent-')) return deskAgentEvent(ev);
@@ -10219,7 +10225,7 @@ function newsClick(e) {
   if (!a) return;
   if (a.dataset.news) { e.preventDefault(); return openNews(a.dataset.news); }
   if (a.dataset.anchor) { e.preventDefault(); $(`#nw-${CSS.escape(a.dataset.anchor)}`, $('#newsView'))?.scrollIntoView({ block: 'start' }); return; }
-  if (a.dataset.cl) return; // a web link: Ctrl+click opens it in the Browser tab (see openLink)
+  if (a.dataset.cl) return; // a web link: the Browser tab, or your browser with Ctrl+click (see followLink)
   if (a.dataset.ext && DESK) { e.preventDefault(); window.ohDesktop.openExternal(a.href); }
 }
 
