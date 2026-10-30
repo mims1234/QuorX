@@ -34,6 +34,8 @@ import http from 'node:http';
 import { DEFAULTS, sourceFallbackFor, announcesStep } from '../server/agent.js';
 import { sourceOf, sourceStream, sameOnOpenRouter, failureKind, noteSourceResult, sourceSkip, forgetSourceHealth, priced as sourcePriced, chatAny } from '../server/sources.js';
 import { SECRET_FILES } from '../server/keys.js';
+import { SOURCE_IDS, SOURCE_FILE, sourceOn, sourceOffWhy, blockedLocal, setSourceOn, setSourceKey, removeSourceKey, keyFor, movedModel, sourceModels, sourceStatus } from '../server/sources.js';
+import { goModels, goEntry, goBody, goStream, effortFor as goEffort } from '../server/opencodego.js';
 import { toolPrompt, renderTranscript, parseToolCalls, textFilter, notRun } from '../server/textcalls.js';
 import { localStream, localModels } from '../server/opencodelocal.js';
 import { claudeStream, claudeModels, claudeError, effortFor } from '../server/claudelocal.js';
@@ -3819,7 +3821,7 @@ const CONV = { model: 'opencode/claude-x', max_tokens: 8000, temperature: 0.3, r
 test('a source model id says where its call goes, and no OpenRouter id is taken for one', () => {
   const pick = (s) => s && { source: s.source, model: s.model };
   assert.deepEqual(pick(sourceOf('opencode-local/opencode-go/glm-5.3')), { source: 'opencode-local', model: 'opencode-go/glm-5.3' });
-  for (const id of [DEFAULTS.chatModel, 'anthropic/claude-opus-5.5', 'openrouter/auto', 'opencode-local', 'opencode-local/', 'opencode/big-pickle', 'opencode-go/glm-5.3', 'cline/anthropic/claude-sonnet-5.5', '']) assert.equal(sourceOf(id), null, id);
+  for (const id of [DEFAULTS.chatModel, 'anthropic/claude-opus-5.5', 'openrouter/auto', 'opencode-local', 'opencode-local/', 'opencode/big-pickle', 'cline/anthropic/claude-sonnet-5.5', '']) assert.equal(sourceOf(id), null, id);
   assert.ok(SECRET_FILES.some((f) => f.endsWith(path.join('data', 'sources.json'))), 'the file tools never read the sources file');
 });
 
@@ -3961,7 +3963,7 @@ test('with the fallback off, a failed source call stops the reply and says why, 
 test('with no OpenRouter key only a model through an app on this PC runs, and nothing in the reply calls OpenRouter', async () => {
   const never = () => { throw new Error('OpenRouter must not be called'); };
   const err = await run(never, { noOpenRouter: true, setup: { model: 'z-ai/glm-5.3' }, catalogue: SRC_CAT }).catch((e) => e);
-  assert.match(err.message, /no OpenRouter key yet[\s\S]*This PC/, 'an OpenRouter model says what to do instead');
+  assert.match(err.message, /no OpenRouter key yet[\s\S]*app on this PC or of OpenCode Go/, 'an OpenRouter model says what to do instead');
   let tools = null;
   const sourceStream = async (body) => { tools ??= body.tools.map((t) => t.function.name); return srcReply('Done.'); };
   const { bodies, done } = await run(never, { noOpenRouter: true, setup: { model: 'opencode-local/opencode-go/glm-5.3' }, catalogue: SRC_CAT, sourceStream, settings: { approval: 'yolo', sourceFallback: 'same', mediaEnabled: true } });
@@ -4567,4 +4569,147 @@ test('Grok Build’s models come from its handshake, with effort levels and no p
   assert.ok(grokArgs({ model: 'grok-4.6', file: 'p.txt' }).includes('--no-auto-update'));
   process.env.FAKE_GROK_MODE = 'signedout';
   try { await assert.rejects(grokModels(grokOpts), /grok login/); } finally { delete process.env.FAKE_GROK_MODE; }
+});
+
+// ---------- OpenCode Go over its API, with the user's key (server/opencodego.js); OpenCode's own providers left out of the app ----------
+// Go's own list (ids only) and models.dev's entry for Go, as the two answer.
+const GO_LIVE = { object: 'list', data: [{ id: 'glm-5.3' }, { id: 'brand-new' }, { id: 'paint-1' }, { id: 'beam-free' }] };
+const GO_DEV = { 'opencode-go': { models: {
+  'glm-5.3': { id: 'glm-5.3', name: 'GLM-5.3', tool_call: true, temperature: true, reasoning: true, reasoning_options: [{ type: 'effort', values: ['low', 'high', 'max'] }], interleaved: { field: 'reasoning_content' }, modalities: { input: ['text'], output: ['text'] }, limit: { context: 1000000, output: 131072 }, cost: { input: 1.4, output: 4.4, cache_read: 0.26 }, canonical_model_id: 'zhipuai/glm-5.3', release_date: '2026-08-14' },
+  'paint-1': { id: 'paint-1', name: 'Paint', modalities: { input: ['text'], output: ['image'] }, cost: { input: 1, output: 1 } },
+  'beam-free': { id: 'beam-free', name: 'Beam Free', tool_call: true, modalities: { input: ['text', 'image'], output: ['text'] }, cost: { input: 0, output: 0 } },
+  'gone-model': { id: 'gone-model', name: 'Gone', modalities: { input: ['text'], output: ['text'] }, cost: { input: 1, output: 2 } },
+} } };
+const goFetch = async (url) => (/models\.dev/.test(url) ? GO_DEV : GO_LIVE);
+
+test('OpenCode Go lists the models Go serves now, with models.dev’s names, limits and list prices, as plan models', async () => {
+  const list = await goModels({ fetchJSON: goFetch });
+  assert.deepEqual(list.map((m) => m.id), ['opencode-go/glm-5.3', 'opencode-go/brand-new', 'opencode-go/beam-free'], 'a model only models.dev has is left out; one that draws is not a chat model');
+  const glm = list[0];
+  assert.equal(glm.source, 'opencode-go');
+  assert.equal(glm.name, 'GLM-5.3');
+  assert.equal(glm.plan, 'plan');
+  assert.deepEqual(glm.price, [0, 0], 'nothing to pay per call');
+  assert.deepEqual(glm.listPrice, [1.4, 4.4], 'the list price is what a call counts against the plan');
+  assert.equal(glm.ctx, 1000000);
+  assert.equal(glm.maker, 'zhipuai', 'the maker comes from the canonical id');
+  assert.deepEqual(glm.efforts, ['low', 'high', 'max']);
+  assert.equal(glm.interleaved, 'reasoning_content');
+  assert.equal(glm.tools, true);
+  assert.deepEqual(list[1], { ...list[1], name: 'Brand New', listPrice: [0, 0], tools: true }, 'a model models.dev doesn’t know yet still shows');
+  assert.deepEqual(list[2].in, ['text', 'image']);
+  const noDev = await goModels({ fetchJSON: async (url) => { if (/models\.dev/.test(url)) throw new Error('offline'); return GO_LIVE; } });
+  assert.equal(noDev.length, 4, 'models.dev down: Go’s own list still shows');
+  assert.ok(sourceOf('opencode-go/glm-5.3'), 'a Go model id names its source');
+});
+
+test('a call to OpenCode Go goes in the OpenAI chat format: its own model id, the reasoning it wants back, no OpenRouter fields', () => {
+  const info = goEntry('glm-5.3', GO_DEV['opencode-go'].models['glm-5.3']);
+  const b = goBody({ model: 'opencode-go/glm-5.3', max_tokens: 900, temperature: 0.2, provider: { order: ['x'] }, usage: { include: true }, reasoning: { effort: 'medium' }, tools: CONV.tools, tool_choice: 'auto',
+    messages: [{ role: 'system', content: [{ type: 'text', text: 'Rules.', cache_control: { type: 'ephemeral' } }] }, { role: 'assistant', content: null, tool_calls: [], reasoning_details: [{ text: 'x' }], qx_pass: { reasoning_content: 'I thought.' } }] }, info);
+  assert.equal(b.model, 'glm-5.3');
+  assert.equal(b.stream, true);
+  assert.deepEqual(b.stream_options, { include_usage: true });
+  assert.equal(b.provider, undefined);
+  assert.equal(b.usage, undefined);
+  assert.equal(b.reasoning, undefined);
+  assert.equal(b.reasoning_effort, 'low', 'the nearest effort the model has');
+  assert.deepEqual(b.tools, CONV.tools);
+  assert.deepEqual(b.messages[0].content, [{ type: 'text', text: 'Rules.' }], 'no cache marks');
+  assert.equal(b.messages[1].reasoning_content, 'I thought.', 'its reasoning goes back on its own step');
+  assert.equal(b.messages[1].qx_pass, undefined);
+  assert.equal(b.messages[1].reasoning_details, undefined);
+  assert.equal(goEffort({ enabled: false }, ['low', 'high']), null, 'thinking off on a model that can’t turn it off: nothing sent');
+  assert.equal(goEffort({ enabled: false }, ['none', 'low']), 'none');
+  assert.equal(goEffort({ max_tokens: 20000 }, ['low', 'high', 'max']), 'high');
+  assert.equal(goBody({ model: 'opencode-go/x', temperature: 1, messages: [] }, { temp: false }).temperature, undefined);
+});
+
+test('OpenCode Go streams with the key and the chat’s session; a refused key is an auth failure', async () => {
+  const info = goEntry('glm-5.3', GO_DEV['opencode-go'].models['glm-5.3']);
+  const sse = (frames) => ({ ok: true, status: 200, headers: new Headers(), body: (async function* () { for (const f of frames) yield new TextEncoder().encode(`data: ${JSON.stringify(f)}\n\n`); yield new TextEncoder().encode('data: [DONE]\n\n'); })() });
+  let seen = null;
+  const fetchFn = async (url, init) => { seen = { url, init }; return sse([
+    { id: 'g1', choices: [{ delta: { reasoning_content: 'Plan it.' } }] },
+    { choices: [{ delta: { content: 'Writing.' } }] },
+    { choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', function: { name: 'write_file', arguments: '{"path":' } }] } }] },
+    { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '"a.js"}' } }] }, finish_reason: 'tool_calls' }] },
+    { choices: [], usage: { prompt_tokens: 1000, completion_tokens: 100 } },
+  ]); };
+  let text = '';
+  const r = await goStream({ model: 'opencode-go/glm-5.3', messages: [{ role: 'user', content: 'hi' }] }, new AbortController().signal, (t) => { text += t; }, null, { info, key: 'test-go-key-0123456789', session: 'ses_qxabc', fetchFn });
+  assert.equal(seen.url, 'https://opencode.ai/inference/go/openai/v1/chat/completions');
+  assert.equal(seen.init.headers.Authorization, 'Bearer test-go-key-0123456789');
+  assert.equal(seen.init.headers['x-opencode-session'], 'ses_qxabc', 'Go refuses calls without a session');
+  assert.equal(JSON.parse(seen.init.body).model, 'glm-5.3');
+  assert.equal(text, 'Writing.');
+  assert.deepEqual(r.toolCalls, [{ id: 'c1', type: 'function', function: { name: 'write_file', arguments: '{"path":"a.js"}' } }]);
+  assert.deepEqual(r.passBack, { reasoning_content: 'Plan it.' });
+  assert.equal(r.usage.completion_tokens, 100);
+  assert.deepEqual(sourcePriced(info, r.usage), { cost: 0, plan_cost: (1000 * 1.4 + 100 * 4.4) / 1e6 }, 'a plan call costs nothing; what it counted is at list price');
+  const refused = async () => ({ ok: false, status: 401, headers: new Headers(), text: async () => JSON.stringify({ error: { type: 'server_error', message: 'Upstream request failed: Invalid credential' } }) });
+  const e = await goStream({ model: 'opencode-go/glm-5.3', messages: [] }, new AbortController().signal, null, null, { info, key: 'bad-key-0123456789ab', fetchFn: refused }).catch((x) => x);
+  assert.equal(failureKind(e), 'auth');
+  await assert.rejects(goStream({ model: 'opencode-go/glm-5.3', messages: [] }, new AbortController().signal, null, null, { info, fetchFn }), /no OpenCode Go key/);
+});
+
+test('OpenCode on this PC leaves out OpenCode’s own providers (Zen, and Go, which runs with its key); a chat on one is told what to pick', async () => {
+  fs.mkdirSync(path.dirname(SOURCE_FILE), { recursive: true });
+  const before = fs.existsSync(SOURCE_FILE) ? fs.readFileSync(SOURCE_FILE, 'utf8') : null;
+  const saved = process.env.OPENCODE_API_KEY, savedPath = process.env.PATH; delete process.env.OPENCODE_API_KEY;
+  // An "opencode" on PATH, so the source can be on; the test's own lists stand in for the app's.
+  const bin = tempDir('qx-oc-bin-');
+  fs.writeFileSync(path.join(bin, process.platform === 'win32' ? 'opencode.cmd' : 'opencode'), process.platform === 'win32' ? '@echo off\r\n' : '#!/bin/sh\n', { mode: 0o755 });
+  process.env.PATH = `${bin}${path.delimiter}${savedPath}`;
+  const local = (provider, model) => ({ ...goInfo(), id: `opencode-local/${provider}/${model}`, realId: `${provider}/${model}`, providerID: provider, modelID: model });
+  const appList = async () => [local('opencode', 'big-pickle'), local('opencode', 'beam-free'), local('opencode-go', 'glm-5.3'), local('anthropic', 'claude-x'), local('deepseek', 'deepseek-v4')];
+  const listers = { 'opencode-local': appList, 'opencode-go': async () => goModels({ fetchJSON: goFetch }) };
+  try {
+    fs.writeFileSync(SOURCE_FILE, '{}');
+    assert.ok(SOURCE_IDS.includes('opencode-local'), 'OpenCode on this PC is still offered');
+    setSourceOn('opencode-local', true);
+    assert.equal(sourceOn('opencode-local'), true);
+    const listed = await sourceModels({ refresh: true, listers });
+    assert.deepEqual(listed.filter((m) => m.source === 'opencode-local').map((m) => m.id), ['opencode-local/anthropic/claude-x', 'opencode-local/deepseek/deepseek-v4'], 'its other providers list; OpenCode’s own don’t');
+    assert.equal((await sourceStatus({ versions: false })).find((x) => x.id === 'opencode-local').models, 2, 'Settings counts only the models offered');
+    assert.match(blockedLocal('opencode-local/opencode/big-pickle'), /OpenCode Zen/);
+    assert.match(blockedLocal('opencode-local/opencode-go/glm-5.3'), /Go key/);
+    assert.equal(blockedLocal('opencode-local/anthropic/claude-x'), '');
+    assert.equal(blockedLocal('opencode-go/glm-5.3'), '');
+    // A summary on a blocked model: refused with the reason, nothing called.
+    await assert.rejects(chatAny({ model: 'opencode-local/opencode/big-pickle', messages: [] }, null, { orChat: () => { throw new Error('no'); }, fallback: async () => null }), /OpenCode Zen/);
+    // No Go key: Go's models don't show, and a chat's old Go-through-the-app model stays as it is (and is told why).
+    assert.equal(sourceOn('opencode-go'), false);
+    assert.match(sourceOffWhy('opencode-go'), /no key/);
+    assert.equal(movedModel('opencode-local/opencode-go/glm-5.3'), 'opencode-local/opencode-go/glm-5.3');
+    await assert.rejects(chatAny({ model: 'opencode-local/opencode-go/glm-5.3', messages: [] }, null, { orChat: () => { throw new Error('no'); }, fallback: async () => null }), /Go key/);
+    // The key goes in: on, listed, masked in Settings, and the old id moves to Go over the API.
+    assert.throws(() => setSourceKey('opencode-go', 'short'), /does not look like a key/);
+    assert.throws(() => setSourceKey('opencode-go', 'sk-or-v1-0123456789abcdef'), /OpenRouter key/);
+    setSourceKey('opencode-go', 'test-go-key-0123456789');
+    assert.equal(keyFor('opencode-go').key, 'test-go-key-0123456789');
+    assert.equal(sourceOn('opencode-go'), true);
+    assert.equal(sourceOn('opencode-local'), true, 'saving the Go key keeps the app’s switch');
+    const st = (await sourceStatus({ versions: false })).find((x) => x.id === 'opencode-go');
+    assert.equal(st.needsKey, true);
+    assert.equal(st.on, true);
+    assert.ok(!JSON.stringify(st).includes('test-go-key-0123456789'), 'the page only sees the key masked');
+    const go = await sourceModels({ refresh: true, listers });
+    assert.ok(go.some((m) => m.id === 'opencode-go/glm-5.3'), 'Go’s models show in the pickers');
+    assert.ok(!go.some((m) => m.id === 'opencode-local/opencode-go/glm-5.3'), 'and only once');
+    assert.equal(movedModel('opencode-local/opencode-go/glm-5.3'), 'opencode-go/glm-5.3');
+    assert.equal(movedModel('opencode-local/anthropic/claude-x'), 'opencode-local/anthropic/claude-x', 'another provider’s model stays on the app');
+    assert.equal(movedModel('opencode-go/glm-5.3'), 'opencode-go/glm-5.3');
+    setSourceOn('opencode-go', false);
+    assert.equal(keyFor('opencode-go').key, 'test-go-key-0123456789', 'switching off keeps the key');
+    removeSourceKey('opencode-go');
+    assert.equal(keyFor('opencode-go'), null);
+    assert.equal(sourceOn('opencode-go'), false);
+  } finally {
+    if (before == null) fs.rmSync(SOURCE_FILE, { force: true }); else fs.writeFileSync(SOURCE_FILE, before);
+    if (saved != null) process.env.OPENCODE_API_KEY = saved;
+    process.env.PATH = savedPath;
+    await sourceModels({ refresh: true, all: true, listers: { 'opencode-local': async () => [], 'opencode-go': async () => [] } }).catch(() => {});
+    forgetSourceHealth();
+  }
 });

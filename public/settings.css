@@ -737,3 +737,5 @@
 #settings .src-same { margin: 0; padding: 4px 18px 14px 34px; display: grid; gap: 6px; font-size: 12.5px; color: var(--muted); }
 #settings .src-same b { color: var(--text); font-weight: 600; }
 #settings #stSources > .st-row-help, #settings #stSources > .kx-wait { margin: 0 18px 16px; }
+#settings .src-key { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; margin: 0 0 4px; }
+#settings .src-key .kx-input { flex: 1 1 260px; min-width: 0; }

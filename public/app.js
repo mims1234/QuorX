@@ -1506,9 +1506,10 @@ function recDot(id, kind) {
   const r = rateModel(id, kind);
   return r ? `<span class="rec rec-${r.r}" title="${esc(`${REC_WORD[r.r]}: ${r.why}`)}" aria-label="${REC_WORD[r.r]}">${REC_ICON[r.r]}</span>` : '';
 }
-// Whose plan pays: Go (through the OpenCode on this PC), the subscription an app names (Claude Max), else the source's own.
-const planName = (m) => (m.providerID === 'opencode-go' ? 'Go' : m.planLabel || SOURCE_SHORT[m.source] || '');
-const shortPrice = (id) => { const m = G.byId.get(id); return !m || m.kind !== 'chat' ? '' : m.plan === 'plan' ? `${planName(m)} plan` : m.source && m.plan === 'free' ? 'free' : m.priceFromApp ? 'per call' : `$${m.price[0].toFixed(2)}/$${m.price[1].toFixed(2)}`; };
+// Whose plan pays: OpenCode Go, the subscription an app names (Claude Max), else the source's own.
+const planName = (m) => (m.providerID === 'opencode-go' || m.source === 'opencode-go' ? 'Go' : m.planLabel || SOURCE_SHORT[m.source] || '');
+// A Go model shows its list price too: what a call counts against the plan's limits.
+const shortPrice = (id) => { const m = G.byId.get(id); return !m || m.kind !== 'chat' ? '' : m.plan === 'plan' ? `${planName(m)} plan${m.source === 'opencode-go' && (m.listPrice?.[0] || m.listPrice?.[1]) ? ` · $${m.listPrice[0].toFixed(2)}/$${m.listPrice[1].toFixed(2)}` : ''}` : m.source && m.plan === 'free' ? 'free' : m.priceFromApp ? 'per call' : `$${m.price[0].toFixed(2)}/$${m.price[1].toFixed(2)}`; };
 function priceText(m, extra = {}) {
   if (m.source && m.plan === 'plan') return `${SOURCE_NAME[m.source] || m.source} plan: nothing to pay per call (your subscription's usage limits apply)${m.listPrice?.[0] || m.listPrice?.[1] ? ` · list price $${(m.listPrice?.[0] || 0).toFixed(2)} in / $${(m.listPrice?.[1] || 0).toFixed(2)} out per M tokens` : ''}`;
   if (m.source && m.priceFromApp) return `Billed per call to the API key ${SOURCE_NAME[m.source] || m.source} is signed in with; each reply shows what it cost`;
@@ -1531,6 +1532,8 @@ function priceNum(m) {
   if (m.kind === 'image') return m.perImage ?? (m.price[1] ? (m.price[1] * 15000) / 1e6 : 1e9);
   if (m.kind === 'video') return videoNum(m);
   if (m.kind === 'music') return m.perUse ?? 1e9;
+  // A Go model sorts by its list price (what it counts against the plan), not as free.
+  if (m.source === 'opencode-go' && m.plan === 'plan' && m.listPrice) return m.listPrice[0] + m.listPrice[1];
   return m.price[0] + m.price[1];
 }
 // ---------- the model picker (every place a model is chosen) ----------
@@ -1548,14 +1551,17 @@ const FILTERS = [
   ['fav', '★ Favourites', (m) => (G.favModels?.[m.kind] || []).includes(m.id)],
 ];
 const providerOf = (id) => String(id).replace(/^~/, '').split('/')[0] || 'other';
-// Models of an app on this PC (⚙ Settings → Apps on this PC) are the source, a slash, and that app's own id.
-const SOURCE_NAME = { 'opencode-local': 'OpenCode on this PC', 'claude-local': 'Claude Code on this PC', 'grok-local': 'Grok Build on this PC' };
+// Models of an app on this PC (⚙ Settings → Apps on this PC) or of OpenCode Go (⚙ Settings → API keys) are the source,
+// a slash, and its own id.
+const SOURCE_NAME = { 'opencode-go': 'OpenCode Go', 'opencode-local': 'OpenCode on this PC', 'claude-local': 'Claude Code on this PC', 'grok-local': 'Grok Build on this PC' };
+// Where in ⚙ Settings each source is set up.
+const srcWhere = (k) => (k === 'opencode-go' ? 'API keys' : 'Apps on this PC');
 // Each source's own logo (public/icons/brand), in the text colour (Claude's in its orange), with its name on hover.
-const SOURCE_LOGO = { openrouter: 'openrouter', 'opencode-local': 'opencode', 'claude-local': 'claude', 'grok-local': 'grok' };
+const SOURCE_LOGO = { openrouter: 'openrouter', 'opencode-go': 'opencode', 'opencode-local': 'opencode', 'claude-local': 'claude', 'grok-local': 'grok' };
 const srcLogo = (k, title = k === 'openrouter' ? 'OpenRouter' : SOURCE_NAME[k] || k) => SOURCE_LOGO[k] ? `<span class="src-logo src-logo-${SOURCE_LOGO[k]}" style="--ico:url('icons/brand/${SOURCE_LOGO[k]}.svg')" role="img" aria-label="${esc(title)}" title="${esc(title)}"></span>` : esc(title);
-const SOURCE_SHORT = { 'opencode-local': 'This PC', 'claude-local': 'Claude Code', 'grok-local': 'Grok Build' };
-// The apps' tags as words: "This PC, Claude Code or Grok Build".
-const srcApps = () => { const t = ['OpenCode', ...Object.values(SOURCE_SHORT).filter((x) => x !== 'This PC')]; return t.length > 1 ? `${t.slice(0, -1).join(', ')} or ${t.at(-1)}` : t[0] || ''; };
+const SOURCE_SHORT = { 'opencode-go': 'Go', 'opencode-local': 'This PC', 'claude-local': 'Claude Code', 'grok-local': 'Grok Build' };
+// The sources offered, as words: "OpenCode Go, Claude Code or Grok Build".
+const srcApps = () => { const t = Object.keys(SOURCE_NAME).map((k) => SOURCE_NAME[k].replace(/ on this PC$/, '')); return t.length > 1 ? `${t.slice(0, -1).join(', ')} or ${t.at(-1)}` : t[0] || ''; };
 const sourceOfId = (id) => { const s = String(id || ''), h = s.split('/')[0]; return SOURCE_NAME[h] && s.length > h.length + 1 ? h : null; };
 const PROVIDER_NAME = (p) => ({ 'x-ai': 'xAI', openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google', 'meta-llama': 'Meta', mistralai: 'Mistral', deepseek: 'DeepSeek', qwen: 'Qwen', nvidia: 'NVIDIA', cohere: 'Cohere', inclusionai: 'inclusionAI', openrouter: 'OpenRouter', 'black-forest-labs': 'Black Forest Labs', elevenlabs: 'ElevenLabs', ...SOURCE_NAME }[p] || p.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
 const cleanName = (m) => String(m.name || m.id).replace(/\s*\(free\)\s*$/i, '').replace(/^[^:]+:\s*/, '');
@@ -1564,7 +1570,8 @@ const agoDate = (sec) => { if (!sec) return ''; const d = (Date.now() / 1000 - s
 // A short, comparable price for the list; the full wording stays in the tooltip.
 function priceCell(m) {
   const n = priceNum(m), usd = (x, d = 2) => (x > 0 && x < 0.01 ? `$${Number(x.toPrecision(2))}` : `$${x.toFixed(d)}`);
-  if (m.plan === 'plan') return `<span class="mp-plan">${esc(planName(m))} plan</span>`;
+  // A Go model also shows its list price: what a call counts against the plan's limits.
+  if (m.plan === 'plan') return `<span class="mp-plan">${esc(planName(m))} plan</span>${m.source === 'opencode-go' && (m.listPrice?.[0] || m.listPrice?.[1]) ? `<span class="mp-plan-list" title="List price: what a call counts against your Go limits"><span class="mp-money">${usd(m.listPrice[0])}</span><small>in</small><span class="mp-money">${usd(m.listPrice[1])}</span><small>out /M</small></span>` : ''}`;
   if (m.priceFromApp) return '<small>billed per call</small>';
   if (n === 0 || /:free$/.test(m.id)) return '<span class="mp-free">Free</span>';
   if (m.kind === 'chat' || m.kind === 'listen') return `<span class="mp-money">${usd(m.price[0])}</span><small>in</small><span class="mp-money">${usd(m.price[1])}</span><small>out /M</small>`;
@@ -1597,7 +1604,7 @@ function pickerModels() { return (G.models || []).filter((m) => m.kind === PK.ki
 const sourceKey = (m) => m.source || 'openrouter';
 // Who made it: OpenRouter's first part (anthropic/…); through an app, the maker inside its id
 // (opencode-local/nvidia/minimaxai/minimax-m3 → minimaxai), else the app's provider.
-const makerOf = (m) => { if (!m.source) return providerOf(m.id); const p = String(m.realId || m.id.slice(m.source.length + 1)).split('/'); return p.length >= 3 ? p[p.length - 2] : m.providerID || p[0] || 'other'; };
+const makerOf = (m) => { if (!m.source) return providerOf(m.id); if (m.maker) return m.maker; const p = String(m.realId || m.id.slice(m.source.length + 1)).split('/'); return p.length >= 3 ? p[p.length - 2] : m.providerID || p[0] || 'other'; };
 // A source's own filter, shown once that source is picked: OpenCode's is the provider it calls through.
 const SOURCE_SUB = { 'opencode-local': { label: 'Through', all: 'every OpenCode provider', key: (m) => m.providerID || 'other', name: (m) => m.providerName || m.providerID || 'other' } };
 const inSource = (m) => PK.source === 'all' || sourceKey(m) === PK.source;
@@ -1749,7 +1756,7 @@ function rowHTML(m, i) {
   const fav = (G.favModels?.[m.kind] || []).includes(m.id), locked = lockWhy(m);
   const caps = [(m.in || []).includes('image') && m.kind !== 'image' ? ['👁', 'Sees images'] : null, m.tools ? ['🧰', 'Uses tools'] : null, m.reasoning ? ['🧠', 'Reasoning'] : null, (m.in || []).includes('audio') ? ['🎙', 'Hears audio'] : null, m.voices?.length ? ['🗣', `${m.voices.length} voices`] : null].filter(Boolean);
   return `<div class="mp-row ${m.id === PK.current ? 'cur' : ''} ${locked ? 'locked' : ''}" role="option" data-i="${i}" data-id="${esc(m.id)}" aria-selected="false" ${locked ? 'aria-disabled="true" ' : ''}title="${esc(modelTip(m, caps, locked))}">
-    <span class="mp-main"><span class="mp-name">${cardChip(m.id)} ${esc(cleanName(m))}${m.source ? ` ${srcLogo(m.source, `Runs through ${SOURCE_NAME[m.source]} (⚙ Settings → Apps on this PC)`)}` : ''}${m.id === PK.current ? ' <span class="mp-tag cur">current</span>' : ''}</span><span class="mp-id">${esc(m.id)}</span></span>
+    <span class="mp-main"><span class="mp-name">${cardChip(m.id)} ${esc(cleanName(m))}${m.source ? ` ${srcLogo(m.source, `Runs through ${SOURCE_NAME[m.source]} (⚙ Settings → ${srcWhere(m.source)})`)}` : ''}${m.id === PK.current ? ' <span class="mp-tag cur">current</span>' : ''}</span><span class="mp-id">${esc(m.id)}</span></span>
     <span class="mp-caps">${caps.map(([i2, t]) => `<span title="${t}">${i2}</span>`).join('')}</span>
     <span class="mp-meta">${scoreBadge(m.id)}${m.ctx ? `<span title="Context window">${ctxText(m.ctx)}</span>` : ''}${m.created ? `<span title="${new Date(m.created * 1000).toLocaleDateString()}">${agoDate(m.created)}</span>` : ''}</span>
     <span class="mp-price" title="${esc(priceText(m))}">${priceCell(m)}</span>
@@ -6237,7 +6244,8 @@ function settingsPanels(S) {
         stRow('Search with', '', stCards('ui.searchEngine', [...Object.entries(SEARCH_ENGINES).map(([k, [l]]) => [k, `<b class="sx-letter">${esc(l[0])}</b>`, l, '']), ['custom', '✎', 'Custom', '']], U.searchEngine || 'google', 'compact'), { cls: 'sx-row-wide' })
         + stRow('Custom search address', 'Used when Custom is picked: the address of a search with %s where the words go.', `<input type="text" class="st-input sx-wide-input" data-bind="ui.searchCustom" value="${esc(U.searchCustom || '')}" placeholder="https://example.com/search?q=%s" spellcheck="false">`)),
     ]],
-    keys: ['API keys', 'QuorX uses one active OpenRouter key for every call. Add as many as you like and switch between them.', [`<div id="stKeys"><div class="st-row-help">Loading keys…</div></div>`]],
+    keys: ['API keys', 'QuorX uses one active OpenRouter key for every call. Add as many as you like and switch between them.', [`<div id="stKeys"><div class="st-row-help">Loading keys…</div></div>`,
+      stCard('OpenCode Go', 'A chat’s main model, or a Quorium module’s, can run on your OpenCode Go subscription with its API key. Calls count against the plan’s limits instead of costing per call.', '<div id="stApiSources"><div class="st-row-help">Loading…</div></div>', '', 'stSrcKeys')]],
     models: ['Models & catalogue', 'Model lists and prices come from OpenRouter. Pick what new chats start with, and how each call finds a provider.', [
       stCard('OpenRouter', 'The active key’s spending limit (hidden until you click 👁) and the model list.', '<div id="stModelLimit"><div class="st-row-help">Loading…</div></div>'
         + stRow('Model lists and prices', `<span id="stCatInfo">${G.models ? `${G.models.length} models loaded` : 'Loading…'}</span>`, `<button type="button" class="st-btn secondary sm" data-act="refreshModels">↻ Refresh now</button>`), 'sx-limit'),
@@ -6250,7 +6258,7 @@ function settingsPanels(S) {
         + stRow('Zero data retention only', 'Only providers that keep no copy of your prompts. Fewer models qualify.', stSwitch('zdrOnly', !!S.zdrOnly), { id: 'stRowZdr' })
         + stRow('Blocked providers', 'OpenRouter never sends the agent’s calls to these: for every model, or only the models you pick (a provider can be fine for one model and break another). Block one that keeps breaking tool calls (the provider shows as “via …” above each reply). If only blocked providers serve a model, that reply uses them anyway, and says so.', '<div id="stBlocked"><div class="st-row-help">Loading providers…</div></div>', { cls: 'sx-row-wide', id: 'stRowBlocked' })),
     ]],
-    sources: ['Apps on this PC', 'A chat’s main model can run through OpenCode, Claude Code or Grok Build on this computer, on the providers and sign-ins you set up there. Everything else stays on OpenRouter.', [
+    sources: ['Apps on this PC', 'A chat’s main model can run through OpenCode, Claude Code or Grok Build on this computer, on the providers and sign-ins you set up there. OpenCode Go runs with its key (⚙ API keys). Everything else stays on OpenRouter.', [
       stCard('Apps', '', '<div id="stSources"><div class="st-row-help">Checking the apps on this PC…</div></div>', '', 'stSrcConnect'),
       stCard('When a call fails', 'By default the reply stops and says why, and you pick another model. QuorX switches only if you choose a fallback.',
         stRow('Fall back to', '', stCards('sourceFallback', [['off', '✋', 'Stop and tell me', 'You pick the next model'], ['same', '🔁', 'Same model on OpenRouter', 'When OpenRouter has it, else the model below'], ['model', '🎯', 'Always this model', 'The fallback model below']], S.sourceFallback || G.cfg.defaults.sourceFallback || 'off', 'compact'), { cls: 'sx-row-wide', id: 'stRowSrcFb' })
@@ -6523,9 +6531,9 @@ function stSummary(id, S) {
     case 'setup': { const r = ST.setup; if (!r) return ['', '']; return [r.missing ? `${r.missing} missing` : `${r.ok} ready`, stStatus('ok', `${r.ok} ready`) + (r.warn ? stStatus('warn', `${r.warn} optional`) : '') + (r.missing ? stStatus('bad', `${r.missing} missing`) : ''), r.missing ? 'bad' : '']; }
     case 'appearance': { const t = S.theme === 'dark' ? 'Dark' : S.theme === 'light' ? 'Light' : 'System'; return [t, stStatus('info', `${t} theme`) + stStatus('info', U.density === 'compact' ? 'Compact' : 'Comfortable') + stStatus('info', `${U.fontSize} px text`) + stStatus('info', `Motion: ${{ system: 'follows system', full: 'on', reduce: 'reduced' }[motionPref(U)]}`) + stStatus('info', `Sidebar: ${SIDE_START[U.sidebarStart] || U.sidebarStart}`) + stStatus('info', `Artifact pane: ${PANE_MODE[U.paneMode] || U.paneMode}`)]; }
     case 'privacy': return [U.maskAmounts ? 'masked' : 'visible', stStatus(U.maskAmounts ? 'ok' : 'warn', U.maskAmounts ? 'Amounts masked' : 'Amounts visible') + stStatus(U.showBalance ? 'warn' : 'off', U.showBalance ? 'Balance button shown' : 'Balance button hidden') + on(U.blurPaths, 'Paths blurred', 'Paths visible')];
-    case 'keys': { const k = ST.keys; if (!G.cfg.hasKey) return ['add one', stStatus('bad', 'No key yet: only models through an app on this PC run'), 'bad']; if (!k) return ['', '']; return [`${k.n} key${k.n === 1 ? '' : 's'}`, stStatus('ok', `${esc(k.active || 'A key')} is active`) + stStatus('off', `${k.n} key${k.n === 1 ? '' : 's'} on this computer`)]; }
+    case 'keys': { const k = ST.keys; if (!G.cfg.hasKey) return ['add one', stStatus('bad', 'No OpenRouter key yet: only models of an app on this PC or OpenCode Go run'), 'bad']; if (!k) return ['', '']; return [`${k.n} key${k.n === 1 ? '' : 's'}`, stStatus('ok', `${esc(k.active || 'A key')} is active`) + stStatus('off', `${k.n} key${k.n === 1 ? '' : 's'} on this computer`)]; }
     case 'models': return [short(S.model), stStatus('info', `New chats: ${esc(short(S.model))}`) + (G.models ? stStatus('ok', `${G.models.length} models loaded`) : '') + stStatus('info', `${PROVIDER_SORT[S.providerSort || 'auto']} routing`) + on(S.fallbackModel, `Fallback: ${esc(short(S.fallbackModel || ''))}`, 'No fallback')];
-    case 'sources': { const l = ST.sources; if (!l) return ['', ''];
+    case 'sources': { const l = ST.sources?.filter((x) => x.local); if (!l) return ['', ''];
       const live = l.filter((x) => x.on && srcReady(x)), fb = S.sourceFallback || G.cfg.defaults.sourceFallback || 'off';
       return [live.length ? `${live.length} on` : 'off', l.map((x) => { const st = srcState(x); return stStatus(st.cls, `${esc(x.name)}: ${esc(st.word)}`); }).join('') + stStatus(fb === 'off' ? 'info' : 'warn', fb === 'off' ? 'A failed call stops: you pick the model' : `Fallback: ${fb === 'model' && S.sourceFallbackModel ? esc(short(S.sourceFallbackModel)) : 'same model on OpenRouter'}`), live.some((x) => srcState(x).cls === 'bad') ? 'bad' : '']; }
     case 'newchats': { const q = QUALITY_TOOLS.filter((k) => S.newChatTools?.[k] !== false).length, p = CHAT_TOOLS.filter((k) => S.newChatTools?.[k]).length;
@@ -6571,30 +6579,43 @@ const ST_LIVE = {
 // A source is ready when its app is installed on this computer (it needs no key).
 const srcReady = (x) => !!x.installed;
 function srcState(x) {
-  if (!srcReady(x)) return { cls: 'off', word: 'not installed' };
+  if (!srcReady(x)) return { cls: 'off', word: x.needsKey ? 'no key' : 'not installed' };
   if (!x.on) return { cls: 'off', word: 'off' };
   if (x.last && !x.last.ok) return { cls: 'warn', word: 'last call failed' };
   return { cls: 'ok', word: 'on' };
 }
 // What each source is, in a line, and how to install its app.
 const SRC_GUIDE = {
-  'opencode-local': { what: 'Runs a chat through the OpenCode app on this computer, with the providers you connected in it. Each provider bills as it does in OpenCode; plans and free tiers cost nothing here.', install: 'npm i -g opencode-ai' },
+  'opencode-local': { what: 'Runs a chat through the OpenCode app on this computer, with the providers you connected in it. Each provider bills as it does in OpenCode; plans and free tiers cost nothing here. OpenCode’s own providers are left out: OpenCode Zen doesn’t answer QuorX, and Go runs with its key under API keys.', install: 'npm i -g opencode-ai' },
   'claude-local': { what: 'Runs a chat through Claude Code on this computer, on the subscription or API key you signed in with. Its own tools stay off: QuorX\'s tools and approvals do the work.', install: 'npm i -g @anthropic-ai/claude-code' },
   'grok-local': { what: 'Runs a chat through Grok Build on this computer, on the account you signed in with (grok login). Its own tools stay off: QuorX\'s tools and approvals do the work.', install: 'curl -fsSL https://x.ai/cli/install.sh | bash' },
+  'opencode-go': { what: 'Runs a chat on your OpenCode Go subscription (Go, Go Plus or Go Teams) over OpenCode’s API. Each model has 5-hour, weekly and monthly limits; prices shown are what a call counts against them.' },
 };
+// The key of a source that takes one: masked with Remove, or a box to paste it in.
+function srcKeyHTML(x) {
+  if (x.key) return `<p class="src-info">Key ${esc(x.key.masked)}${x.key.from === 'env' ? ' (from the OPENCODE_API_KEY environment variable)' : ` <button type="button" class="kx-btn sm" data-src-act="unkey" title="Remove this key from QuorX">Remove</button>`}</p>`;
+  return `<div class="src-key"><div class="kx-input"><input type="password" data-src-key autocomplete="off" spellcheck="false" placeholder="Your ${esc(x.name)} API key" aria-label="${esc(x.name)} API key"></div><button type="button" class="kx-btn sm primary" data-src-act="key">Save key</button><a class="sp-link" href="${esc(x.keyUrl)}" target="_blank" rel="noopener noreferrer">Get a key</a></div><p class="st-row-help">${esc(x.keyHint || '')} It stays on this computer; the page only sees it masked.</p>`;
+}
 // The app as QuorX found it: its version and its server, or how to install it.
 function srcInfoHTML(x, g) {
+  if (x.needsKey) return srcKeyHTML(x);
   if (!x.installed) return `<p class="src-info">Not installed. To install it: <code>${esc(g.install)}</code> <button type="button" class="kx-icon" data-copy-cmd="${esc(g.install)}" title="Copy the command">⧉</button></p>`;
   const sv = x.server || {};
   const run = sv.perCall ? (sv.calls ? `${sv.calls} call${sv.calls === 1 ? '' : 's'} running` : 'starts for each call') : sv.running ? `server running (port ${sv.port})` : 'its server starts when a chat needs it';
   return `<p class="src-info">${esc(x.appName || x.app)}${x.app_?.version ? ` ${esc(x.app_.version)}` : ''} · ${run}</p>`;
 }
+// The apps on this PC go in Apps on this PC; a source that takes a key (OpenCode Go) goes in API keys.
 async function drawSourcesPanel(say = null) {
-  const box = $('#stSources'); if (!box) return;
-  const r = await fetch(`/api/sources${ST.cat === 'sources' ? '?full=1' : ''}`).then((x) => x.json()).catch((e) => ({ error: e.message }));
-  if (!$('#stSources')) return;
-  if (r.error || !Array.isArray(r.sources)) { box.innerHTML = `<div class="kx-wait bad">⚠ Couldn’t read the sources (${esc(r.error || 'no answer')}).</div>`; return; }
-  ST.sources = r.sources; stRefresh();
+  if (!$('#stSources') && !$('#stApiSources')) return;
+  const r = await fetch(`/api/sources${ST.cat === 'sources' || ST.cat === 'keys' ? '?full=1' : ''}`).then((x) => x.json()).catch((e) => ({ error: e.message }));
+  for (const [sel, local] of [['#stSources', true], ['#stApiSources', false]]) {
+    const box = $(sel); if (!box) continue;
+    if (r.error || !Array.isArray(r.sources)) { box.innerHTML = `<div class="kx-wait bad">⚠ Couldn’t read the sources (${esc(r.error || 'no answer')}).</div>`; continue; }
+    drawSourceCards(box, r, r.sources.filter((x) => !!x.local === local), say);
+  }
+  if (Array.isArray(r.sources)) { ST.sources = r.sources; stRefresh(); }
+}
+function drawSourceCards(box, r, list, say) {
   const when = (t) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const card = (x) => {
     const g = SRC_GUIDE[x.id] || {}, st = srcState(x);
@@ -6607,7 +6628,7 @@ async function drawSourcesPanel(say = null) {
         ${stStatus(st.cls, st.word)}
         ${x.models ? `<span class="src-count">${x.models} models</span>` : ''}
         <span class="kx-spacer"></span>
-        <label class="sx-check src-on" title="${srcReady(x) ? `Show ${esc(x.name)}’s models in the model pickers` : `Install ${esc(x.appName || x.app)} first`}"><input type="checkbox" data-src-on ${x.on && srcReady(x) ? 'checked' : ''} ${!srcReady(x) ? 'disabled' : ''} aria-label="Use ${esc(x.name)}"><span class="sx-word"></span></label>
+        <label class="sx-check src-on" title="${srcReady(x) ? `Show ${esc(x.name)}’s models in the model pickers` : x.needsKey ? 'Add the key first' : `Install ${esc(x.appName || x.app)} first`}"><input type="checkbox" data-src-on ${x.on && srcReady(x) ? 'checked' : ''} ${!srcReady(x) ? 'disabled' : ''} aria-label="Use ${esc(x.name)}"><span class="sx-word"></span></label>
       </header>
       <p class="st-row-help src-what">${esc(g.what || '')}</p>
       ${srcInfoHTML(x, g)}
@@ -6616,7 +6637,7 @@ async function drawSourcesPanel(say = null) {
       ${x.catalogueError ? `<p class="kx-wait warn">⚠ Its model list didn’t load (${esc(x.catalogueError)})${x.models ? '; the last good list is used' : ''}.</p>` : ''}
     </section>`;
   };
-  box.innerHTML = `<div class="src-cards">${r.sources.map(card).join('')}</div>`;
+  box.innerHTML = `<div class="src-cards">${list.map(card).join('')}</div>`;
   // A message from the action that redrew the page goes in once the new cards are there.
   if (say) { const el = $(`.src-card[data-src="${say.id}"] .${say.where}`, box); if (el) { el.hidden = false; el.classList.toggle('bad', !!say.bad); el.textContent = say.text; } }
   // The server has rebuilt its list already: the pickers just ask for it again.
@@ -6637,6 +6658,17 @@ async function drawSourcesPanel(say = null) {
     const act = e.target.closest('[data-src-act]')?.dataset.srcAct; if (!act) return;
     const msg = $('.src-msg', c), tmsg = $('.src-test-msg', c), btn = e.target.closest('button');
     const say = (el, t, bad) => { el.hidden = false; el.classList.toggle('bad', !!bad); el.textContent = t; };
+    if (act === 'key' || act === 'unkey') {
+      const inp = $('[data-src-key]', c), key = inp?.value.trim() || '';
+      if (act === 'key' && !key) { say(msg, 'Paste the key first.', true); inp?.focus(); return; }
+      if (act === 'unkey' && !(await uiConfirm(`Remove the ${x.name} key from QuorX? Its models stop showing until you add a key again.`, { ok: 'Remove', danger: true }))) return;
+      btn.disabled = true;
+      const res = await fetch(`/api/sources/${id}/key`, { method: act === 'key' ? 'POST' : 'DELETE', headers: { 'Content-Type': 'application/json' }, ...(act === 'key' ? { body: JSON.stringify({ key }) } : {}) }).then((y) => y.json()).catch((er) => ({ error: er.message }));
+      if (inp) inp.value = '';
+      if (res.error) { btn.disabled = false; say(msg, `⚠ ${res.error}`, true); return; }
+      redraw(res.sources, { id, where: 'src-msg', text: act === 'key' ? `✓ Key saved: ${x.name}’s models are in the model pickers. Test the connection to check it.` : 'Key removed.' });
+      return;
+    }
     if (act === 'test') {
       btn.disabled = true; say(tmsg, `Asking ${x.name}…`);
       const t = await postJ(`/api/sources/${id}/test`, {}).catch((er) => ({ ok: false, error: er.message }));
