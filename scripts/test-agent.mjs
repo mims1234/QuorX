@@ -3215,8 +3215,13 @@ test('🧩 Chrome on in a chat: the agent opens its own tab in the user’s Chro
   }; ws.onopen = () => ws.send(JSON.stringify({ t: 'hello', key: extKey(), version: '0.2.11' })); });
   const chatId = `chat-${Date.now().toString(36)}`;
   try {
-    const off = await run((body, i) => [reply('', [['browser', { action: 'open', target: `chrome:127.0.0.1:${port}/` }]]), reply('Done.')][i], { chatId });
-    assert.match(String(toolResults(off.bodies.at(-1))[0]), /Chrome is off in this chat/);
+    // Off, with the extension connected: one card to turn it on (buttons only); kept off, the call is refused.
+    const cards = [];
+    const off = await run((body, i) => [reply('', [['browser', { action: 'open', target: `chrome:127.0.0.1:${port}/` }]]), reply('Done.')][i], { chatId,
+      onEvent: (e, id) => { if (e.t === 'approval' && e.tool === 'chrome') { cards.push(e); setTimeout(() => answerApproval(id, e.id, { approve: false }), 10); } } });
+    assert.equal(cards.length, 1); assert.equal(cards[0].buttonsOnly, true);
+    assert.match(String(toolResults(off.bodies.at(-1))[0]), /Chrome is off in this chat and the user kept it off/);
+    assert.equal(opened.length, 0, 'nothing opened in their Chrome');
     const on = await run((body, i) => [
       reply('', [['browser', { action: 'open', target: `chrome:http://127.0.0.1:${port}/` }]]),
       reply('', [['browser', { action: 'click', text: 'Open message' }]]),
