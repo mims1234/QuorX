@@ -3020,11 +3020,14 @@ function renderComposerBar(c) {
     if (live && focused() === c) openTrace(c, live);
   };
   // Not set up: the click turns it on for this chat and opens the extension's setup, as the tick did.
-  $('.cmp-chrome-b', followSlot).onclick = () => { c.tools.chrome = !c.tools?.chrome || !extReady(); saveChat(c); renderComposerBar(c); if (!extReady()) openChromeSetup(); };
+  $('.cmp-chrome-b', followSlot).onclick = () => { c.tools.chrome = !c.tools?.chrome || !extReady(); saveChat(c); pushAccess(c); renderComposerBar(c); if (!extReady()) openChromeSetup(); };
   wireAppsButton(c, followSlot);
   wirePermButton(c, followSlot);
   for (const b of both('.perm button')) b.onclick = () => { c.approval = b.dataset.approval; saveChat(c); renderComposerBar(c); if (c.running?.runId) postJ(`/api/runs/${c.running.runId}/mode`, { approval: c.approval }).catch(() => {}); };
 }
+// 🧩 Chrome and 🖥 Computer use reach a reply that is already running (as Strict / YOLO does): off stops it from
+// using them at its next step.
+function pushAccess(c) { if (c.running?.runId) postJ(`/api/runs/${c.running.runId}/mode`, { access: { chrome: !!c.tools?.chrome, apps: !!c.tools?.apps } }).catch(() => {}); }
 // The settings popover over the message box: a chip opens its own part, ⋯ (or, in a narrow box, the one summary chip)
 // opens all of it. It stays open while you change things (each change draws the box again) and closes on a click
 // outside or Esc. The tray button, shown when the box is too narrow for the 👁 🧭 row, opens that row the same way.
@@ -3489,7 +3492,7 @@ function wireAppsButton(c, slot) {
       <div class="apps-note">Each app asks you once. Apps stay open after use, so they can be used again.</div>
       ${apps.length ? apps.map((a) => `<div class="ap-row apps-app" data-id="${esc(a.appId)}"><span class="apps-name">${esc(a.name)}</span><span class="seg apps-lvl" role="group" aria-label="How far the agent may go in ${esc(a.name)}">${Object.entries(APP_LEVEL).map(([k, [w, tip]]) => `<button type="button" data-lvl="${k}" class="${(a.level || 'full') === k ? 'on' : ''}" title="${esc(tip)}">${w}</button>`).join('')}</span><button type="button" class="ap-x" title="Remove ${esc(a.name)}: the agent asks again next time">Remove</button></div>`).join('')
         : '<div class="apps-note">No apps allowed yet.</div>'}`;
-    $('.apps-on input', pop).onchange = (e) => { c.tools.apps = e.target.checked; saveChat(c); reopen(); };
+    $('.apps-on input', pop).onchange = (e) => { c.tools.apps = e.target.checked; saveChat(c); pushAccess(c); reopen(); };
     for (const row of pop.querySelectorAll('.apps-app')) {
       const app = apps.find((a) => a.appId === row.dataset.id);
       for (const b of row.querySelectorAll('[data-lvl]')) b.onclick = () => { app.level = b.dataset.lvl; saveChat(c); draw(); };
@@ -4536,7 +4539,7 @@ function traceHTML(m) {
     else if (e.t === 'reading') row(e.at, `📝 <b>Prompt enhancer</b> ${esc(short(e.model))} read the request${e.late ? ' (too late for the first step; the deciders still use it)' : ''} · ${secs(e.ms)} · ${money(e.cost, 5)}<div class="sub" style="white-space:pre-wrap">${linkUrls(esc(e.text))}</div>`, 'note');
     else if (e.t === 'chat_off_project') row(e.at, `📝 Own chat from now on: you said “${esc(e.why || '')}”, so this chat leaves the project's notes, design and log alone. Tick Part of the project in the header to undo.`, 'note');
     else if (e.t === 'schedules_changed') row(e.at, `⏰ schedule ${esc({ create: 'created', update: 'changed', pause: 'paused', resume: 'resumed', run_now: 'run now', delete: 'deleted' }[e.action] || e.action)}<div class="sub">See ⏰ Schedules, or the ⏰ chip in this chat's header</div>`, 'ok');
-    else if (e.t === 'tools_on') row(e.at, `🧰 Switched on for this chat: ${(e.kinds || []).map((k) => esc({ image: 'pictures', video: 'video clips', music: 'music', speech: 'voice', apps: '🖥 computer use' }[k] || k)).join(', ')}${Object.keys(e.models || {}).length ? ` · ${Object.entries(e.models).map(([k, mm]) => `${esc(k)}: ${esc(short(mm))}`).join(', ')}` : ''}`, 'note');
+    else if (e.t === 'tools_on') row(e.at, `🧰 Switched on for this chat: ${(e.kinds || []).map((k) => esc({ image: 'pictures', video: 'video clips', music: 'music', speech: 'voice', apps: '🖥 computer use', chrome: '🧩 Chrome' }[k] || k)).join(', ')}${Object.keys(e.models || {}).length ? ` · ${Object.entries(e.models).map(([k, mm]) => `${esc(k)}: ${esc(short(mm))}`).join(', ')}` : ''}`, 'note');
     else if (e.t === 'video_mode') row(e.at, e.on ? `🎬 <b>Video Mode</b> on${e.skills?.length ? ` · loaded ${e.skills.map(esc).join(', ')}` : ''}<div class="sub">Brief, story and storyboard come before anything is spent${e.first ? '' : ' (the brief was settled earlier in this chat)'}.</div>` : '🎬 Video Mode off: you said this is not a film', 'note');
     else if (e.t === 'reading_edit') row(e.at, e.text ? `📝 You corrected the reading<div class="sub" style="white-space:pre-wrap">${esc(e.text)}</div>` : '📝 You dropped the reading', 'note');
     else if (e.t === 'fresh_eyes_start') row(e.at, `👀 <b>Fresh eyes</b> ${esc(short(e.model))}: a problem came back, so a clean-context model takes a look<div class="sub">${(e.problems || []).map(esc).join('<br>')}</div>`, 'note');
@@ -4758,7 +4761,7 @@ function typingIsReply(card, send) {
   sync();
 }
 // The approval cards of a chat still waiting on you (not questions or the budget card).
-const openApprovalCards = (root) => [...root.querySelectorAll('.msgs .approval[data-id]:not(.question):not(.budget-card)')].filter((x) => !x.dataset.answered);
+const openApprovalCards = (root) => [...root.querySelectorAll('.msgs .approval[data-id]:not(.question):not(.budget-card):not([data-buttons-only])')].filter((x) => !x.dataset.answered);
 function wireShellCard(card, m) {
   const id = card.dataset.id;
   const answer = async (approve, rule, reply = '') => {
@@ -4811,11 +4814,11 @@ function approvalHTML(a, live = true) {
   }
   // A card that acts in the user's own account (a lent tab: send, delete, buy…) is red, and says so.
   const danger = c.risk === 'danger' && waiting ? '<div class="sc-risk" data-risk="danger">⛔ This acts in your own account. Only say yes if you want exactly this.</div>' : '';
-  return `<div class="approval ${o ? 'done' : ''} ${c.free ? 'free' : ''}" ${waiting ? `data-id="${esc(c.id)}" data-tool="${esc(c.tool)}"` : ''}${c.risk ? ` data-risk="${esc(c.risk)}"` : ''}>
+  return `<div class="approval ${o ? 'done' : ''} ${c.free ? 'free' : ''}" ${waiting ? `data-id="${esc(c.id)}" data-tool="${esc(c.tool)}"${c.buttonsOnly ? ' data-buttons-only="1"' : ''}` : ''}${c.risk ? ` data-risk="${esc(c.risk)}"` : ''}>
     ${head}${model}${danger}
     ${c.items ? '' : `<div class="what">${c.free ? esc(c.what) : `“${esc(c.what)}”`}</div>`}
     ${c.why ? `<div class="what">Why: ${esc(c.why)}</div>` : ''}${c.items && waiting ? '<div class="what dim">Calls that match this plan then run without asking again; anything else asks on its own.</div>' : ''}
-    ${waiting ? `${waitHTML(c)}<textarea rows="1" placeholder="Or type to tell it something else. Enter sends it, without allowing or declining."></textarea>
+    ${waiting ? `${waitHTML(c)}${c.buttonsOnly ? '<div class="what dim">Only these buttons switch it on: typed words don’t.</div>' : '<textarea rows="1" placeholder="Or type to tell it something else. Enter sends it, without allowing or declining."></textarea>'}
       <div class="acts"><button type="button" class="primary reply" hidden>Send to the agent</button><button type="button" class="primary yes">${c.yes ? esc(c.yes) : c.tool === 'remember' ? 'Save to memory' : c.free ? 'Allow once' : `Approve ${money(c.est, 3)}`}</button>${c.noAlways ? '' : '<button type="button" class="always" title="Stop asking for this tool in this chat">Always allow</button>'}<button type="button" class="no">${c.no ? esc(c.no) : c.tool === 'remember' ? "Don't save" : 'Decline'}</button></div>`
       : o ? `<div class="outcome ${apState(o)}">${{ yes: '✅ ', no: '⛔ ', reply: '↩ ' }[apState(o)]}${apWho(o, c)}</div>`
       : !live ? '<div class="outcome">Not answered: the reply ended</div>' : `<div class="outcome">⚡ ${c.tool === 'shell' ? 'The deciders are voting on this command…' : 'Deciders are checking whether this is needed and worth the price…'}</div>`}
@@ -5226,19 +5229,23 @@ async function reattachRuns(c) {
   }
 }
 // ---------- notifications: a reply needs you, or ended, while QuorX is in the background ----------
-// ⚙ Appearance → Notifications. One notification per chat at a time (tag), so a busy chat doesn't pile them up.
-const NOTIFY_TITLE = { approval: 'Needs your approval', answer: 'Question for you', budget: 'Project budget reached', done: 'Reply finished', error: 'Reply stopped' };
-const NOTIFY_MARK = { approval: '⏸', answer: '❓', budget: '💲', done: '✓', error: '✕' };
-function notifyRun(c, kind, body = '', meta = '') {
+// ⚙ Appearance → Notifications. One notification per chat at a time (tag), so a busy chat doesn't pile them up. Kept
+// short: what happened, then small tags (how long, what it cost, what it used). No chat name or reply text: a click
+// opens the chat.
+const NOTIFY_TITLE = { approval: '⏸ Needs you', answer: '❓ Question for you', budget: '💲 Budget reached', done: '✅ Done', error: '⚠️ Stopped' };
+// What a reply used, as tags: from its tool calls, or the tool a card asks about.
+const NOTIFY_TAG = { desktop: '🖥 Desktop', computer_use: '🖥 Desktop', chrome: '🧩 Chrome', browser: '🌐 Browser', shell: '💻 Command', start_server: '💻 Command',
+  image: '🎨 Media', video: '🎨 Media', music: '🎨 Media', speech: '🎨 Media', write_file: '📝 Files', edit_file: '📝 Files', write_artifact: '📝 Files' };
+function usedTags(m) {
+  const seen = new Set();
+  for (const e of m?.trace || []) if (e.t === 'tool') { const t = e.name === 'browser' && /^chrome:/.test(String(e.args?.target || '')) ? NOTIFY_TAG.chrome : NOTIFY_TAG[e.name]; if (t) seen.add(t); }
+  return [...seen].slice(0, 3);
+}
+function notifyRun(c, kind, tags = []) {
   const pref = uiOf(G.settings).notify;
   if (pref === 'off' || (pref === 'needs' && (kind === 'done' || kind === 'error'))) return;
   if (document.visibilityState === 'visible' && document.hasFocus()) return;
-  // Compact: the status (with how long and what it cost when done), then project · chat, then one short line.
-  const project = G.projects.find((p) => p.id === c.projectId)?.name || c.projectId || '';
-  const title = `${NOTIFY_MARK[kind] || '•'} ${NOTIFY_TITLE[kind] || 'QuorX'}${meta ? ` · ${meta}` : ''}`;
-  const line = String(body).replace(/\s+/g, ' ').trim();
-  const text = `${project ? `${project} · ` : ''}${c.title || 'Chat'}${line ? `
-${line.length > 110 ? `${line.slice(0, 109)}…` : line}` : ''}`;
+  const title = NOTIFY_TITLE[kind] || 'QuorX', text = tags.filter(Boolean).join(' · ');
   // In the desktop app it comes from the app itself: QuorX's name and logo, and a click opens the chat.
   if (window.ohDesktop?.notify) { window.ohDesktop.notify({ title, body: text, chatId: c.id, silent: kind === 'done' }).catch(() => {}); return; }
   if (!('Notification' in window) || Notification.permission !== 'granted') return;
@@ -5319,7 +5326,7 @@ async function followRun(c, m, open) {
         if (e.t === 'folder_added' && e.folder?.path) { a.folders = [...(a.folders || []).filter((x) => x.path.toLowerCase() !== e.folder.path.toLowerCase()), { path: e.folder.path, access: e.folder.access }]; saveChat(c); }
         if (e.t === 'chat_off_project') { a.offProject = true; saveChat(c); renderChatHead(c); }
         if (e.t === 'app_allowed' && e.app?.appId) { a.apps = [...(a.apps || []).filter((x) => x.appId !== e.app.appId), { name: e.app.name, appId: e.app.appId, level: e.app.level || 'full' }]; saveChat(c); renderComposerBar(c); }
-        if (e.t === 'approval') { m.approvals[e.id] = { card: e }; if (e.mode === 'strict') { c.waiting = true; renderSidebar(); renderChatHead(c); note('approval', e.what || e.tool); } }
+        if (e.t === 'approval') { m.approvals[e.id] = { card: e }; if (e.mode === 'strict') { c.waiting = true; renderSidebar(); renderChatHead(c); note('approval', [NOTIFY_TAG[e.tool]]); } }
         // The clock stopped: only that card's countdown line is drawn again, so what you are typing in it stays.
         if (e.t === 'card_held') {
           const x = m.approvals?.[e.id] || m.questions?.[e.id];
@@ -5329,8 +5336,8 @@ async function followRun(c, m, open) {
           continue;
         }
         if (e.t === 'approval_done' && m.approvals[e.id]) { m.approvals[e.id].outcome = e; c.waiting = false; renderSidebar(); renderChatHead(c); }
-        if (e.t === 'question') { m.questions[e.id] = { card: e }; if (!e.auto) { c.waiting = 'answer'; renderSidebar(); renderChatHead(c); note('answer', e.question); } }
-        if (e.t === 'budget_ask') { m.budgetAsk = { card: e }; c.waiting = 'budget'; renderSidebar(); renderChatHead(c); note('budget', 'Raise the budget to carry on, or wrap up.'); }
+        if (e.t === 'question') { m.questions[e.id] = { card: e }; if (!e.auto) { c.waiting = 'answer'; renderSidebar(); renderChatHead(c); note('answer'); } }
+        if (e.t === 'budget_ask') { m.budgetAsk = { card: e }; c.waiting = 'budget'; renderSidebar(); renderChatHead(c); note('budget'); }
         if (e.t === 'budget_done' && m.budgetAsk) { m.budgetAsk.outcome = e; c.waiting = false; refreshSidebar(); renderChatHead(c); }
         if (e.t === 'answer' && m.questions[e.id]) { const qc = m.questions[e.id].card; e.label = e.answers ? (e.defaults ? 'the recommended answers' : e.answers.map((x, i) => (x.choice != null ? qc.questions?.[i]?.options[x.choice] : x.text || '–')).join(' · ')) : e.choice != null ? qc.options[e.choice] : e.text; m.questions[e.id].answer = e; c.waiting = false; renderSidebar(); renderChatHead(c); }
         if (e.t === 'done') { m.doneAt = Date.now(); m.content = e.reply; m.note = e.historyNote; m.stats = e.stats; G.sessionCost += e.stats.cost; renderSpend(); loadScores(); }
@@ -5340,7 +5347,7 @@ async function followRun(c, m, open) {
         if (e.t === 'control') { c.driving = e.kind; markDriving(c); renderSidebar(); }
         // You switched paid tools on from the agent's card: they stay on for this chat (its 🧰 Tools menu shows them).
         if (e.t === 'schedules_changed') loadSchedules().then(() => { if ($('#schedules')?.open) drawSchedules(); renderChatHead(c); });
-        if (e.t === 'tools_on') { for (const k of e.kinds || []) if (CHAT_TOOLS.includes(k) || k === 'apps') c.tools[k] = true; if ((e.kinds || []).includes('apps')) renderComposerBar(c); saveChat(c); renderToolbars(); }
+        if (e.t === 'tools_on') { for (const k of e.kinds || []) if (CHAT_TOOLS.includes(k) || k === 'apps' || k === 'chrome') c.tools[k] = true; if ((e.kinds || []).some((k) => k === 'apps' || k === 'chrome')) renderComposerBar(c); saveChat(c); renderToolbars(); }
         if (e.t === 'video_mode') {
           const u = a.messages[a.messages.indexOf(m) - 1];
           if (e.on) a.videoMode = 'on';
@@ -5379,8 +5386,8 @@ async function followRun(c, m, open) {
     if (!lost && m.error !== 'Stopped.') {
       const took = m.stats?.ms ?? (m.doneAt && m.at ? m.doneAt - m.at : 0);
       const cost = m.stats && !uiOf(G.settings).maskAmounts ? ` · ${money(m.stats.cost, 3)}` : '';
-      if (m.error) note('error', m.error);
-      else note('done', String(m.content || '').replace(/[#*_`>|]/g, '').slice(0, 200), `${took ? secs(took) : ''}${cost}`.replace(/^ · /, ''));
+      const tookTag = `${took ? `⏱ ${secs(took)}` : ''}${cost}`.replace(/^ · /, '');
+      note(m.error ? 'error' : 'done', [tookTag, ...usedTags(m)]);
     }
     const due = raf; if (raf) { cancelAnimationFrame(raf); raf = 0; }
     updateMsg(c, m); if (due) stick();

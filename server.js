@@ -19,7 +19,7 @@ import { listKeys, addKey, removeKey, setActive, renameKey, keyUsage, activeUsag
 import { sourceStatus, sourceModels, setSourceOn, setSourceKey, removeSourceKey, testSource, sourceOf, sameOnOpenRouter, chatAny } from './server/sources.js';
 import { setupCheck, runFix } from './server/setup-check.js';
 import { startSignIn, signInStatus, cancelSignIn, finishByCallback, finishWithCode, callbackPage } from './server/oauth.js';
-import { runAgent, answerApproval, answerQuestion, answerSecret, answerBudget, raiseCap, setRunApproval, steerRun, setRunReading, setRunVideo, holdCard, DEFAULTS, MEDIA, briefFor, briefForChat, REVIEW_MODEL, HELPER_MODEL, REVIEW_ALT, REVIEW_STRONG, REVIEW_STRONG_ALT } from './server/agent.js';
+import { runAgent, answerApproval, answerQuestion, answerSecret, answerBudget, raiseCap, setRunApproval, setRunAccess, steerRun, setRunReading, setRunVideo, holdCard, DEFAULTS, MEDIA, briefFor, briefForChat, REVIEW_MODEL, HELPER_MODEL, REVIEW_ALT, REVIEW_STRONG, REVIEW_STRONG_ALT } from './server/agent.js';
 import { reviewCode, pickReviewer } from './server/codereview.js';
 import { loadHooks, saveHooks, HOOK_EVENTS } from './server/hooks.js';
 import { createScheduler, loadSchedules, scheduleView, addSchedule, changeSchedule, removeSchedule, runScheduleNow, scheduleHooks } from './server/schedules.js';
@@ -39,7 +39,7 @@ import { followTerm, runningJobs, stopJob } from './server/terminal.js';
 import { runningIn, stopRunning, stopAllIn } from './server/running.js';
 import { decide as decideCommand, loadRules, saveRules, suggestedRules, ruleProblem, updateRule, removeRule } from './server/cmdpolicy.js';
 import { jobHostStatus, jobsAvailable } from './server/jobhost.js';
-import { glowOn, glowOff, glowRuns, onGlowStop, onGlowScreen } from './server/glow.js';
+import { glowOn, glowOff, glowRuns, onGlowStop, onGlowScreen, stopNow as glowStopNow } from './server/glow.js';
 import { startWork, endWork } from './server/workscreen.js';
 import { stopDesktopNow } from './server/uia.js';
 import { safetySettings, yoloOf } from './server/safety.js';
@@ -48,7 +48,7 @@ import { pickFolder } from './server/pickfolder.js';
 import { userBrowse, giveTab, givenTab, takeBackTab, takeBackSid, lentChromeTabs, closeChatChromeTabs } from './server/userbrowser.js';
 import { rewritePrompt } from './server/enhancer.js';
 import { extUpgrade, extKey, extInfo, onExtRequest, defaultBrowser, extPairing, extPair, extPush } from './server/extlink.js';
-import { openLink, linkReply, desktopReady, desktopCall } from './server/desktop.js';
+import { openLink, linkReply, desktopReady, desktopCall, onDesktopSignal } from './server/desktop.js';
 import { saveUpload, processDoc, listDocs, removeDoc, DOC_DEFAULTS, officeText } from './server/docs.js';
 import { embeddingModels } from './server/openrouter.js';
 import { listSkills, listTemplates, saveSkill, getSkill, deleteSkill, skillId, routineSkill } from './server/skills.js';
@@ -1029,7 +1029,7 @@ const server = http.createServer(async (req, res) => {
       if (rm[2] === 'events' && req.method === 'GET') return stream(res, rm[1], Math.max(0, Number(url.searchParams.get('from')) || 0));
       if (rm[2] === 'stop' && req.method === 'POST') return json(res, 200, { ok: stopRun(rm[1]) });
       // While a reply runs: switch it between Strict and YOLO, or send it a note it reads at its next step.
-      if (rm[2] === 'mode' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e4) || '{}'); return json(res, 200, { ok: setRunApproval(rm[1], b.approval) }); }
+      if (rm[2] === 'mode' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e4) || '{}'); return json(res, 200, { ok: b.access ? setRunAccess(rm[1], b.access) : setRunApproval(rm[1], b.approval) }); }
       if (rm[2] === 'hold' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e4) || '{}'); return json(res, 200, { ok: holdCard(rm[1], String(b.id || '')) }); }
       if (rm[2] === 'video' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e3) || '{}'); return json(res, 200, { ok: setRunVideo(rm[1], b.on) }); }
       if (rm[2] === 'reading' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 2e4) || '{}'); return json(res, 200, { ok: setRunReading(rm[1], b.text) }); }
@@ -1120,10 +1120,14 @@ onExtRequest({
 // (server/glow.js, server/workscreen.js); your Stop ends those replies and the desktop helper at once.
 onRunEvent((r, e) => {
   if (e === null) { glowOff(r.id); return; }
-  if (e.t === 'tool' && e.name === 'desktop' && !glowRuns().includes(r.id)) glowOn(r.id, r.chatId || '');
+  // Not on the tool call itself: it may still be asking whether computer use, or the app, is allowed. The reply says it
+  // is driving the desktop only once both are, and names the app it moved to each time.
+  if (e.t === 'control' && e.kind === 'desktop') glowOn(r.id, r.chatId || '', e.app || '');
 });
 onGlowScreen((chatId) => startWork(chatId).then((w) => w?.screen || null), endWork);
 onGlowStop((runs) => { stopDesktopNow(); for (const id of runs) stopRun(id); });
+// The desktop app's own system-wide stop shortcut, the same as the glow's (it works whichever window is in front).
+onDesktopSignal((s) => { if (s === 'stop' && glowRuns().length) glowStopNow('keys'); });
 const chromeState = new Map(); // chatId → the last state sent
 onRunEvent((r, e) => {
   if (!r.chatId || !lentChromeTabs().some((x) => x.chatId === r.chatId)) return;
@@ -1132,7 +1136,8 @@ onRunEvent((r, e) => {
   if ((e.t === 'approval' && e.mode === 'strict') || (e.t === 'question' && !e.auto)) {
     const what = String(e.what || e.question || 'a question').slice(0, 200);
     push('needs', what);
-    if (desktopReady()) desktopCall('app.notify', { title: 'QuorX needs you', body: what, chatId: r.chatId }, 5000).catch(() => {});
+    // Short, as the page's own notifications: what happened and where, no chat or card text (a click opens the chat).
+    if (desktopReady()) desktopCall('app.notify', { title: e.t === 'question' ? '❓ Question for you' : '⏸ Needs you', body: '🧩 Chrome', chatId: r.chatId }, 5000).catch(() => {});
     return;
   }
   // Answered (or the agent moved on): working again.

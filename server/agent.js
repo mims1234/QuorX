@@ -51,6 +51,7 @@ import { openTab, hostHtml, startedWithDevtoolsPort } from './browser.js';
 import { pageOp } from './pageops.js';
 import { readNotes, addNotes } from './appnotes.js';
 import { adoptAgentTab, releaseAgentTab, borrowTab, givenTab, openChromeTab, chatChromeTabs, adoptChromeTab, closeChatChromeTabs } from './userbrowser.js';
+import { extReady } from './extlink.js';
 import { setLiveArtifact, markdownHtml } from './artifacts.js';
 import { listDocs, docText, readDoc, searchDocs, DOC_DEFAULTS } from './docs.js';
 import { groupCalls, numberedWindow, untrusted, trimTranscript, trimPageViews, compactTranscript, transcriptChars, withCacheMarks, retryable, LOOK_TOOLS } from './loop.js';
@@ -402,6 +403,7 @@ function voiceFor(model, t, spec) {
 
 // ---------- approvals waiting on the user (strict mode) ----------
 const pending = new Map();
+const buttonsOnly = new Set(); // runId:id of the cards above that typed words can't answer
 // The tool call an approval card belongs to (calls in one step can run side by side), so a reply typed on its card
 // becomes that call's result.
 const toolCallCtx = new AsyncLocalStorage();
@@ -417,6 +419,9 @@ export function answerApproval(runId, id, answer) {
   // A reply: the user typed something instead of Allow or Deny. Neither yes nor no; it goes back to the agent as new
   // context for this request (see replyResult), and the run goes on.
   const reply = clip(String(answer.reply || '').trim(), 4000);
+  // A card that only a button answers (switching on Chrome or computer use): typed words never count for it.
+  if (reply && buttonsOnly.has(`${runId}:${id}`)) { pending.set(`${runId}:${id}`, resolve); return false; }
+  buttonsOnly.delete(`${runId}:${id}`);
   if (reply) { resolve({ approve: false, reply, reason: '', by: 'user' }); return true; }
   resolve({ approve: !!answer.approve, always: !!answer.always, reason: clip(answer.reason || '', 400), model: answer.model ? String(answer.model) : null, ...(models ? { models } : {}), rule, by: 'user' });
   return true;
@@ -427,6 +432,13 @@ export function setRunApproval(runId, mode) {
   const ctl = runControls.get(runId);
   if (!ctl || !['strict', 'yolo'].includes(mode)) return false;
   ctl.setApproval(mode);
+  return true;
+}
+/** 🧩 Chrome or 🖥 Computer use switched while a reply runs: { chrome, apps }, each true, false or left out. */
+export function setRunAccess(runId, access) {
+  const ctl = runControls.get(runId);
+  if (!ctl || !access || typeof access !== 'object') return false;
+  ctl.setAccess({ chrome: typeof access.chrome === 'boolean' ? access.chrome : undefined, apps: typeof access.apps === 'boolean' ? access.apps : undefined });
   return true;
 }
 // ⚡ YOLO cards with a countdown: "Wait for me" (or starting to type) stops the clock, and the card waits for the user.
@@ -1107,7 +1119,8 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   const T0 = Date.now();
   const at = () => Date.now() - T0;
   // What the reply is driving now, your Chrome or your desktop: the chat glows in that kind's colour while it does.
-  const driving = (kind) => { if (run.driving !== kind) { run.driving = kind; emit({ t: 'control', kind, at: at() }); } };
+  // What the reply is driving now (the desktop or Chrome), and for the desktop the app by name, for the screen's banner.
+  const driving = (kind, app = '') => { if (run.driving !== kind || (app && run.drivingApp !== app)) { run.driving = kind; run.drivingApp = app; emit({ t: 'control', kind, ...(app ? { app } : {}), at: at() }); } };
   if (offSaid) emit({ t: 'chat_off_project', why: offSaid, at: at() });
 
   // A reply resumed after a restart is the same reply, so it carries what it had spent (and on what). "Continue"
@@ -1363,7 +1376,14 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
       if (S.approval === mode) return;
       S.approval = mode;
       emit({ t: 'mode', approval: mode, at: at() });
-      if (mode === 'yolo') for (const [id] of openCards) answerApproval(runId, id, { approve: true, reason: 'Approved: the user switched this chat to YOLO.' });
+      // Not a card only your click answers (switching on Chrome or computer use).
+      if (mode === 'yolo') for (const [id] of openCards) if (!buttonsOnly.has(`${runId}:${id}`)) answerApproval(runId, id, { approve: true, reason: 'Approved: the user switched this chat to YOLO.' });
+    },
+    // The user ticked 🧩 Chrome or 🖥 Computer use on or off while this reply runs: it takes effect now. Off also means
+    // no card asking to turn it back on in this reply.
+    setAccess: ({ chrome, apps } = {}) => {
+      if (typeof chrome === 'boolean' && S.chromeAccess !== chrome) { S.chromeAccess = chrome; if (!chrome) run.chromeAsked = true; emit({ t: 'access', kind: 'chrome', on: chrome, at: at() }); }
+      if (typeof apps === 'boolean' && S.appsAccess !== apps) { S.appsAccess = apps; if (!apps) run.appsAsked = true; emit({ t: 'access', kind: 'apps', on: apps, at: at() }); }
     },
     // The user corrected (or cleared) the prompt enhancer's reading: the agent hears it, the judges use it.
     setReading: (text) => {
@@ -2871,9 +2891,10 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     const ms = wait?.ms || 0;
     emit({ t: 'approval', ...card, mode: 'strict', ...(ms ? { wait: waitInfo(ms, wait.then) } : {}), at: at() });
     openCards.set(card.id, card.tool);
+    if (card.buttonsOnly) buttonsOnly.add(`${runId}:${card.id}`);
     const userP = new Promise((resolve, reject) => {
       pending.set(`${runId}:${card.id}`, resolve);
-      signal.addEventListener('abort', () => { pending.delete(`${runId}:${card.id}`); reject(new Error('aborted')); }, { once: true });
+      signal.addEventListener('abort', () => { pending.delete(`${runId}:${card.id}`); buttonsOnly.delete(`${runId}:${card.id}`); reject(new Error('aborted')); }, { once: true });
     });
     // While it waits for you, your tab is yours: QuorX lets go of it (Chrome's debugging bar and the glow go), and takes
     // it back once you answer.
@@ -3587,7 +3608,9 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       // Off, the user is asked once in the reply to turn it on (a card, like switching on paid media).
       const needsApps = act === 'open' || act === 'running' || !!String(args.app ?? '').trim();
       const appsOff = needsApps && !(await askAppsOn()) ? `Error: computer use is off in this chat${run.appsAsked ? ' and the user kept it off' : ''}. The user can turn it on with the 🖥 button next to the message box; then open apps with desktop open.` : '';
-      if (act === 'open') { if (appsOff) return appsOff; driving('desktop'); return await openApp(args); }
+      // It drives the desktop (the glow, the Stop banner, QuorX made compact) only once the user allowed this app, never
+      // while the question is still on screen or after a no.
+      if (act === 'open') { if (appsOff) return appsOff; return await openApp(args); }
       if (act === 'running') return appsOff || await runningApps();
       // What it acts on: an app this chat opened by name, or a background job that runs the agent's own program.
       let scope = job;
@@ -3611,7 +3634,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       } else if (!job) return 'Error: give app (an installed app you opened with open) or job (a background job running your own program).';
       const who = typeof scope === 'object' ? scope.app.name : job;
       run.lastDesk = who; run.lastSurface = 'desktop'; // look with no target looks here
-      driving('desktop');
+      driving('desktop', typeof scope === 'object' ? scope.app.name : '');
       if (!VIEW_ACTS.includes(act)) run.deskActed = true; // it changed something through the app
       // A program paused at a breakpoint can't answer for its windows: say where it stopped instead of waiting on it.
       const paused = async (wait) => { if (typeof scope === 'object') return ''; const p = await debugPausedIn(job, wait); return p ? `The app is paused at a breakpoint (debug session ${p.id}, ${p.at}), so its window can't respond: use debug state and eval, then debug continue.` : ''; };
@@ -4522,7 +4545,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
   // 🧩 Chrome on in this chat: the agent opens its own tab in the user's Chrome (a QuorX window, signed in as them)
   // and works there like in a given tab, with the same asks. Its next address stays in that tab.
   async function useChromeTab(address, { newTab = false } = {}) {
-    if (!S.chromeAccess) return 'Error: Chrome is off in this chat. The user can tick 🧩 Chrome under the message box to let you open tabs in their Chrome.';
+    if (!S.chromeAccess && !(await askChromeOn())) return `Error: Chrome is off in this chat${run.chromeAsked ? ' and the user kept it off' : !extReady() ? ' and the QuorX extension isn\'t connected to Chrome' : ''}. The user can tick 🧩 Chrome under the message box to let you open tabs in their Chrome. Don't ask them to tick it and retry in this reply: say so in your answer.`;
     let url = String(address || '').trim();
     if (!url) return 'Error: say which address to open, e.g. chrome:mail.google.com.';
     if (!/^https?:\/\//i.test(url)) url = `https://${url}`;
@@ -4644,6 +4667,9 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
   async function lentStep(args, o = {}) {
     const g = req.chatId ? givenTab(req.chatId) : null;
     if (!g || !lent || g.sid !== lent.sid) { onLent = false; if (lent) { await lent.tab.close().catch(() => {}); lent = null; } return 'The user took their tab back, so you can no longer use it. Carry on without it, or ask them to give it to you again.'; }
+    // The agent's own tab in the user's Chrome (not one they lent): only while 🧩 Chrome is on. Turned off mid-reply,
+    // it stops here.
+    if (g.own && !S.chromeAccess) { onLent = false; return 'Error: the user turned 🧩 Chrome off for this chat, so you can no longer use their Chrome. Carry on without it, or say what you needed it for.'; }
     run.lentUsed = true;
     const host = hostOf(lent.tab.url) || 'the page';
     if (args.action === 'open' && /^https?:\/\//i.test(String(args.target || ''))) { const okd = await siteAllowed(hostOf(args.target)); if (okd !== true) return okd; }
@@ -5121,7 +5147,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     if (S.appsAccess && req.chatId) return true;
     if (!req.chatId || process.platform !== 'win32' || run.appsAsked) return false;
     run.appsAsked = true;
-    const card = { id: newApprovalId(), tool: 'computer_use', free: true, est: 0, what: 'Turn on 🖥 Computer use for this chat',
+    const card = { id: newApprovalId(), tool: 'computer_use', free: true, est: 0, buttonsOnly: true, what: 'Turn on 🖥 Computer use for this chat',
       why: 'The agent wants to use apps on this computer. Each app still asks you once, at a level you can change under the 🖥 button.', yes: 'Turn on', no: 'Keep it off', noAlways: true };
     const waitMs = S.approval === 'yolo' ? yoloWait() : 0;
     const ans = await askUser({ ...card, mode: 'strict' }, waitMs ? { ms: waitMs, then: 'keep off', onTimeout: () => ({ approve: false, by: 'timeout', reason: 'No answer, so computer use stays off' }) } : null);
@@ -5129,6 +5155,23 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     if (!ans.approve) return false;
     S.appsAccess = true;
     emit({ t: 'tools_on', kinds: ['apps'], at: at() });
+    return true;
+  }
+  // 🧩 Chrome off in this chat, with the extension connected: one card in the reply turns it on, as for computer use.
+  // Ticking the switch while a reply runs doesn't reach that reply, so this is how a reply gets Chrome. No extension
+  // connected: no card (the error says how to set it up).
+  async function askChromeOn() {
+    if (S.chromeAccess && req.chatId) return true;
+    if (!req.chatId || run.chromeAsked || !extReady()) return false;
+    run.chromeAsked = true;
+    const card = { id: newApprovalId(), tool: 'chrome', free: true, est: 0, buttonsOnly: true, what: 'Turn on 🧩 Chrome for this chat',
+      why: 'The agent wants to open tabs in your own Chrome, signed in as you. Sending, buying, posting and account changes still ask you first.', yes: 'Turn on', no: 'Keep it off', noAlways: true };
+    const waitMs = S.approval === 'yolo' ? yoloWait() : 0;
+    const ans = await askUser({ ...card, mode: 'strict' }, waitMs ? { ms: waitMs, then: 'keep off', onTimeout: () => ({ approve: false, by: 'timeout', reason: 'No answer, so Chrome stays off' }) } : null);
+    emit({ t: 'approval_done', id: card.id, ...ans, at: at() });
+    if (!ans.approve) return false;
+    S.chromeAccess = true;
+    emit({ t: 'tools_on', kinds: ['chrome'], at: at() });
     return true;
   }
 
@@ -5241,6 +5284,9 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
       emit({ t: 'app_allowed', app, at: at() });
     }
     if (want.toLowerCase() !== key) chatApps.set(want.toLowerCase(), app);
+    // Allowed: now it drives the desktop (the screen it works on is picked, QuorX goes compact, the banner names the
+    // app), before the window is placed on that screen.
+    driving('desktop', app.name);
     const reused = wins.length > 0;
     if (!reused) {
       openDetached('explorer.exe', [path.isAbsolute(app.appId) ? app.appId : `shell:AppsFolder\\${app.appId}`]);
