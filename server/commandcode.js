@@ -319,7 +319,7 @@ export async function ccAccount(key, { fetchFn = fetch } = {}) {
   const [sub, cr] = await Promise.all([get('/alpha/billing/subscriptions'), get('/alpha/billing/credits')]);
   const d = sub?.data || {}, c = cr?.credits || {}, w = cr?.windowLimits || {};
   const credits = { monthly: usd(c.monthlyCredits), purchased: usd(c.purchasedCredits), free: usd(c.freeCredits) };
-  return {
+  const out = {
     planId: String(d.planId || 'free'), plan: planName(d.planId), status: String(d.status || 'none'),
     periodEnd: Date.parse(d.currentPeriodEnd || '') || null,
     // Set to stop at the end of the period (or on a date of its own): the period end is when it ends, not renews.
@@ -327,6 +327,9 @@ export async function ccAccount(key, { fetchFn = fetch } = {}) {
     credits: { ...credits, left: usd(credits.monthly + credits.purchased + credits.free) },
     fiveHour: win(w.fiveHour), weekly: win(w.weekly), checked: Date.now(),
   };
+  // The windows as every source's plan panel shows them: a share used, the amounts behind it, when it resets.
+  out.windows = [['5-hour window', out.fiveHour], ['Weekly window', out.weekly]].filter(([, x]) => x).map(([label, x]) => ({ label, percent: Math.min(100, (x.used / x.cap) * 100), used: x.used, cap: x.cap, over: x.exceeded, resetAt: x.resetAt }));
+  return out;
 }
 /**
  * Checks a key with the smallest call it takes: a few tokens from a free model, else its cheapest priced one (a model

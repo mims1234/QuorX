@@ -141,6 +141,23 @@ export async function goStream(body, signal, onText, onThink, { info = {}, idleM
     throw e;
   } finally { signal?.removeEventListener('abort', stop); }
 }
+/**
+ * What is used of the plan's limits, from Go's usage endpoint: the 5-hour, weekly and monthly windows, each as a share
+ * used (0–100) and when it resets. Go names no plan tier and no dollar amounts, so none are shown.
+ */
+export async function goAccount(key, { fetchFn = fetch } = {}) {
+  if (!key) throw Object.assign(new Error('Add your OpenCode Go key first.'), { kind: 'auth' });
+  const r = await fetchFn(`${BASE}/v1/usage`, { headers: { Authorization: `Bearer ${key}`, 'User-Agent': 'QuorX' }, signal: AbortSignal.timeout(15000) });
+  if (!r.ok) throw await failure(r);
+  const u = (await r.json())?.usage || {};
+  const win = (label, w) => {
+    const p = Number(w?.percent);
+    if (!w || typeof w !== 'object' || !Number.isFinite(p)) return null;
+    const percent = Math.max(0, Math.min(100, p));
+    return { label, percent, over: percent >= 100 || (typeof w.status === 'string' && w.status !== 'ok'), resetAt: Date.parse(w.resetsAt || '') || null };
+  };
+  return { plan: null, windows: [win('5-hour window', u.rolling), win('Weekly window', u.weekly), win('Monthly window', u.monthly)].filter(Boolean), checked: Date.now() };
+}
 /** Checks a key with the smallest call Go takes: a few tokens from its cheapest model, counted against the plan. */
 export async function goCheck(key, list, { fetchFn = fetch } = {}) {
   const cheap = [...list].filter((m) => m.tools).sort((a, b) => (a.listPrice[0] + a.listPrice[1]) - (b.listPrice[0] + b.listPrice[1]))[0] || list[0];
