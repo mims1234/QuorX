@@ -294,6 +294,40 @@ export async function ccStream(body, signal, onText, onThink, { info = {}, idleM
     throw e;
   } finally { signal?.removeEventListener('abort', stop); }
 }
+// ---------- the plan and what is left of it ----------
+// The plan's name from its id (goat_monthly, max_20x, …); Go has no API access, so a key on it never gets this far.
+export function planName(id) {
+  const s = String(id || '').toLowerCase();
+  return /enterprise/.test(s) ? 'Enterprise' : /provider/.test(s) ? 'Provider' : /team/.test(s) ? 'Teams' : /max/.test(s) ? (/20/.test(s) ? 'Max 20×' : 'Max 10×')
+    : /goat/.test(s) ? 'GOAT' : /pro/.test(s) ? 'Pro' : /go/.test(s) ? 'Go' : s && s !== 'free' ? s.replace(/[_-]+/g, ' ') : 'Free';
+}
+const usd = (x) => (Number.isFinite(Number(x)) && Number(x) >= 0 && Number(x) < 1e6 ? Math.round(Number(x) * 1e4) / 1e4 : 0);
+const win = (w) => (w && typeof w === 'object' && Number(w.cap) > 0 ? { used: usd(w.used), cap: usd(w.cap), exceeded: !!w.exceeded, resetAt: Number(w.resetAt) > 0 ? Number(w.resetAt) : null } : null);
+/**
+ * The plan a key is on and what is left of it, from the endpoints Command Code's own usage tools read (not in its
+ * public docs, so any field may be missing): the plan and its period, the credits left (the month's, bought and free)
+ * and the 5-hour and weekly windows. The plan's monthly allowance isn't given, so none is guessed.
+ */
+export async function ccAccount(key, { fetchFn = fetch } = {}) {
+  if (!key) throw Object.assign(new Error('Add your Command Code key first.'), { kind: 'auth' });
+  const root = BASE.replace(/\/provider\/v1$/, '');
+  const get = async (p) => {
+    const r = await fetchFn(`${root}${p}`, { headers: { Authorization: `Bearer ${key}`, 'User-Agent': 'QuorX' }, signal: AbortSignal.timeout(15000) });
+    if (!r.ok) throw await failure(r);
+    return r.json();
+  };
+  const [sub, cr] = await Promise.all([get('/alpha/billing/subscriptions'), get('/alpha/billing/credits')]);
+  const d = sub?.data || {}, c = cr?.credits || {}, w = cr?.windowLimits || {};
+  const credits = { monthly: usd(c.monthlyCredits), purchased: usd(c.purchasedCredits), free: usd(c.freeCredits) };
+  return {
+    planId: String(d.planId || 'free'), plan: planName(d.planId), status: String(d.status || 'none'),
+    periodEnd: Date.parse(d.currentPeriodEnd || '') || null,
+    // Set to stop at the end of the period (or on a date of its own): the period end is when it ends, not renews.
+    cancels: d.cancelAtPeriodEnd === true || Date.parse(d.cancelAt || '') > Date.now(),
+    credits: { ...credits, left: usd(credits.monthly + credits.purchased + credits.free) },
+    fiveHour: win(w.fiveHour), weekly: win(w.weekly), checked: Date.now(),
+  };
+}
 /**
  * Checks a key with the smallest call it takes: a few tokens from a free model, else its cheapest priced one (a model
  * models.dev has no price for may not be cheap).

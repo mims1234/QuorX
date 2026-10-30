@@ -16,7 +16,7 @@ import { spawn } from 'node:child_process';
 import { openDetached } from './server/userenv.js';
 import { currentKey, PORT, runtime, ROOT, HOME, chat, chatModels, decisionModels, imageModels, speechModels, musicModels, videoModels, transcribe, clearCatalogues, providerList, knownProviders } from './server/openrouter.js';
 import { listKeys, addKey, removeKey, setActive, renameKey, keyUsage, activeUsage, accountCredits, startSampling, lockDown } from './server/keys.js';
-import { sourceStatus, sourceModels, setSourceOn, setSourceKey, removeSourceKey, testSource, sourceOf, sameOnOpenRouter, chatAny } from './server/sources.js';
+import { sourceStatus, sourceModels, setSourceOn, setSourceKey, removeSourceKey, testSource, sourceAccount, failureKind, sourceOf, sameOnOpenRouter, chatAny } from './server/sources.js';
 import { setupCheck, runFix } from './server/setup-check.js';
 import { startSignIn, signInStatus, cancelSignIn, finishByCallback, finishWithCode, callbackPage } from './server/oauth.js';
 import { runAgent, answerApproval, answerQuestion, answerSecret, answerBudget, raiseCap, setRunApproval, setRunAccess, steerRun, setRunReading, setRunVideo, holdCard, DEFAULTS, MEDIA, briefFor, briefForChat, REVIEW_MODEL, HELPER_MODEL, REVIEW_ALT, REVIEW_STRONG, REVIEW_STRONG_ALT } from './server/agent.js';
@@ -929,6 +929,12 @@ const server = http.createServer(async (req, res) => {
       const full = !!url.searchParams.get('full');
       if (full) await sourceModels({ all: true, refresh: !!url.searchParams.get('refresh') }).catch(() => {});
       return json(res, 200, { sources: await sourceStatus({ versions: full }) });
+    }
+    // A subscription's plan and what is left of it (Command Code); ?refresh=1 asks again at once.
+    const sam = url.pathname.match(/^\/api\/sources\/([a-z-]+)\/account$/);
+    if (sam && req.method === 'GET') {
+      try { return json(res, 200, await sourceAccount(sam[1], { refresh: !!url.searchParams.get('refresh') })); }
+      catch (e) { return json(res, 200, { error: e.message, kind: failureKind(e) }); }
     }
     // A source that takes a key (OpenCode Go): POST /key saves it (the page never gets it back unmasked), DELETE removes it.
     const srm = url.pathname.match(/^\/api\/sources\/([a-z-]+)\/(on|test|key)$/);

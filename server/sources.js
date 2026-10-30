@@ -24,7 +24,7 @@ import { findOnPath, localModels, localStream, ensureLocalServer, localServer, L
 import { claudeModels, claudeStream, claudeAuth, claudeRunning, CLAUDE_ID } from './claudelocal.js';
 import { grokModels, grokStream, grokRunning, GROK_ID } from './groklocal.js';
 import { goModels, goStream, goCheck, GO_ID } from './opencodego.js';
-import { ccModels, ccStream, ccCheck, CC_ID } from './commandcode.js';
+import { ccModels, ccStream, ccCheck, ccAccount, CC_ID } from './commandcode.js';
 
 const DATA = path.join(HOME, 'data');
 export const SOURCE_FILE = path.join(DATA, 'sources.json');
@@ -73,8 +73,9 @@ const APPS = {
   [GROK_ID]: { list: () => grokModels(), stream: grokStream, check: async () => {}, server: () => ({ running: grokRunning() > 0, calls: grokRunning(), perCall: true }) },
   // Go's list is public; a call and the check need the key.
   [GO_ID]: { list: () => goModels(), stream: (b, sg, t, th, o) => goStream(b, sg, t, th, { ...o, key: keyFor(GO_ID)?.key }), check: async () => { const k = keyFor(GO_ID)?.key; if (!k) throw Object.assign(new Error('Add your OpenCode Go key first.'), { kind: 'auth' }); await goCheck(k, await goModels()); }, server: () => ({ api: true }) },
-  // Its list is public too; a call and the check need the key.
-  [CC_ID]: { list: () => ccModels(), stream: (b, sg, t, th, o) => ccStream(b, sg, t, th, { ...o, key: keyFor(CC_ID)?.key }), check: async () => { const k = keyFor(CC_ID)?.key; if (!k) throw Object.assign(new Error('Add your Command Code key first.'), { kind: 'auth' }); await ccCheck(k, await ccModels()); }, server: () => ({ api: true }) },
+  // Its list is public too; a call and the check need the key. Its models name the plan the key is on (GOAT plan).
+  [CC_ID]: { list: async () => { const [l, a] = await Promise.all([ccModels(), sourceAccount(CC_ID).catch(() => null)]); return a?.plan ? l.map((m) => ({ ...m, planLabel: a.plan })) : l; },
+    account: () => ccAccount(keyFor(CC_ID)?.key), stream: (b, sg, t, th, o) => ccStream(b, sg, t, th, { ...o, key: keyFor(CC_ID)?.key }), check: async () => { const k = keyFor(CC_ID)?.key; if (!k) throw Object.assign(new Error('Add your Command Code key first.'), { kind: 'auth' }); await ccCheck(k, await ccModels()); }, server: () => ({ api: true }) },
 };
 export const SOURCE_IDS = Object.keys(SOURCES);
 
@@ -142,6 +143,7 @@ export function setSourceKey(id, key) {
   const s = tidy(load());
   s[id] = { on: true, key, added: Date.now() };
   save(s);
+  accounts.delete(id);
   clearHealth(id);
   dropCatalogue(id);
 }
@@ -152,6 +154,7 @@ export function removeSourceKey(id) {
   if (s[id]) { delete s[id].key; delete s[id].added; }
   save(s);
   if (s[id]?.on && !keyFor(id)) { s[id].on = false; save(s); }
+  accounts.delete(id);
   clearHealth(id);
   dropCatalogue(id);
 }
@@ -381,6 +384,20 @@ function costOf(info, u) {
   return (fresh * p('input') + read * (tier.cache_read != null || c.cache_read != null ? p('cache_read') : p('input')) + write * (tier.cache_write != null || c.cache_write != null ? p('cache_write') : p('input')) + out * p('output')) / 1e6;
 }
 
+// ---------- a subscription's plan and what is left of it (Command Code) ----------
+const accounts = new Map(); // source → { at, p }: the last look-up, kept a minute
+/** The plan a source's key is on and what is left of it; `refresh` asks again at once. Throws for a source without one. */
+export function sourceAccount(id, { refresh = false } = {}) {
+  known(id);
+  if (!APPS[id].account) throw Object.assign(new Error(`${SOURCES[id].name} doesn’t report its plan`), { status: 404 });
+  const c = accounts.get(id);
+  if (c && !refresh && Date.now() - c.at < 60e3) return c.p;
+  const p = APPS[id].account();
+  accounts.set(id, { at: Date.now(), p });
+  p.catch(() => accounts.delete(id));
+  return p;
+}
+
 // ---------- what Settings shows ----------
 export async function sourceStatus({ versions = true } = {}) {
   const s = load();
@@ -393,6 +410,7 @@ export async function sourceStatus({ versions = true } = {}) {
     return {
       id, name: def.name, short: def.short, app: def.app, billing: def.billing, site: def.site, keyUrl: def.keyUrl, docs: def.docs, keyHint: def.keyHint,
       on: !!s[id]?.on && ready(id), local: !def.needsKey, installed: ready(id), server: APPS[id].server(), install: def.install, appName: def.appName,
+      ...(APPS[id].account ? { account: true } : {}),
       ...(def.needsKey ? { needsKey: true, env: def.env, key: k ? { masked: mask(k.key), from: k.from, added: s[id]?.added || 0 } : null } : {}),
       app_: v ? { installed: true, version: v.version } : { installed: false },
       models: models.filter((m) => m.source === id).length, catalogueError: catalogue?.errors?.[id] || null,

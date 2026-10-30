@@ -6699,6 +6699,26 @@ async function drawSourcesPanel(say = null) {
   }
   if (Array.isArray(r.sources)) { ST.sources = r.sources; stRefresh(); }
 }
+// A subscription's plan and what is left of it (Command Code): the plan and the share of each window used show; the
+// dollar amounts stay masked until 👁, like the OpenRouter credits.
+const srcAccShown = () => !!ST.revealSrcAcc || !uiOf(ST.draft || G.settings).maskAmounts;
+async function loadSrcAcc(el, refresh = false) {
+  if (!el) return;
+  const id = el.closest('.src-card')?.dataset.src;
+  el.acc = await fetch(`/api/sources/${id}/account${refresh ? '?refresh=1' : ''}`).then((x) => x.json()).catch((e) => ({ error: e.message }));
+  paintSrcAcc(el);
+}
+function paintSrcAcc(el) {
+  const a = el?.acc; if (!a) return;
+  const grid = $('.src-acc-grid', el), plan = $('.src-acc-plan', el), m = (v) => (srcAccShown() ? money(v ?? 0, 2) : '•••••');
+  if (a.error) { plan.textContent = ''; grid.innerHTML = `<div class="kx-wait">${a.kind === 'auth' ? 'The key wasn’t accepted' : 'Couldn’t read the plan'} (${esc(a.error)}).</div>`; return; }
+  const day = (t) => new Date(t).toLocaleDateString([], { month: 'short', day: 'numeric' });
+  const until = (t) => { const s = Math.max(0, Math.round((t - Date.now()) / 1000)); return s < 3600 ? `${Math.max(1, Math.round(s / 60))}m` : s < 86400 ? `${Math.floor(s / 3600)}h ${Math.round((s % 3600) / 60)}m` : `${Math.round(s / 86400)}d`; };
+  plan.innerHTML = `${stTag('info', `${a.plan} plan`)}${a.periodEnd ? ` <small>${a.cancels ? 'ends' : 'renews'} ${esc(day(a.periodEnd))}</small>` : ''}`;
+  const w = (name, x) => (x ? `<div class="kx-metric src-win${x.exceeded ? ' over' : ''}"><span>${name}</span><b>${Math.round((x.used / x.cap) * 100)}%</b><small>${m(x.used)} of ${m(x.cap)}${x.resetAt ? ` · resets in ${until(x.resetAt)}` : ''}</small></div>` : '');
+  const c = a.credits;
+  grid.innerHTML = `<div class="kx-metric left"><span>Credits left</span><b>${m(c.left)}</b><small>${srcAccShown() ? `this month ${money(c.monthly, 2)}${c.purchased ? ` · bought ${money(c.purchased, 2)}` : ''}${c.free ? ` · free ${money(c.free, 2)}` : ''}` : 'month, bought and free'}</small></div>${w('5-hour window', a.fiveHour)}${w('Weekly window', a.weekly)}<div class="kx-checked">Checked ${new Date(a.checked).toLocaleTimeString()}</div>`;
+}
 function drawSourceCards(box, r, list, say) {
   const when = (t) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const card = (x) => {
@@ -6716,12 +6736,14 @@ function drawSourceCards(box, r, list, say) {
       </header>
       <p class="st-row-help src-what">${esc(g.what || '')}</p>
       ${srcInfoHTML(x, g)}
+      ${x.account && x.key ? `<div class="src-acc" data-src-acc><header class="src-acc-head"><b>Your plan</b><span class="src-acc-plan"></span><span class="kx-spacer"></span><button type="button" class="kx-icon" data-src-act="acc-reveal" title="${srcAccShown() ? 'Hide amounts' : 'Show amounts'}">${srcAccShown() ? '🙈' : '👁'}</button><button type="button" class="kx-icon" data-src-act="acc-refresh" title="Check again">↻</button></header><div class="kx-acc-grid src-acc-grid"><div class="kx-wait">Loading…</div></div></div>` : ''}
       <div class="src-test"><button type="button" class="kx-btn sm" data-src-act="test" ${srcReady(x) ? '' : 'disabled'}>Test the connection</button><button type="button" class="kx-btn sm" data-src-act="pick" ${x.on && srcReady(x) ? '' : 'disabled'}>Choose a model for new chats</button>${last}</div>
       <p class="kx-note src-test-msg" hidden></p><p class="kx-note src-msg" hidden></p>
       ${x.catalogueError ? `<p class="kx-wait warn">⚠ Its model list didn’t load (${esc(x.catalogueError)})${x.models ? '; the last good list is used' : ''}.</p>` : ''}
     </section>`;
   };
   box.innerHTML = `<div class="src-cards">${list.map(card).join('')}</div>`;
+  for (const el of box.querySelectorAll('[data-src-acc]')) loadSrcAcc(el);
   // A message from the action that redrew the page goes in once the new cards are there.
   if (say) { const el = $(`.src-card[data-src="${say.id}"] .${say.where}`, box); if (el) { el.hidden = false; el.classList.toggle('bad', !!say.bad); el.textContent = say.text; } }
   // The server has rebuilt its list already: the pickers just ask for it again.
@@ -6742,6 +6764,8 @@ function drawSourceCards(box, r, list, say) {
     const act = e.target.closest('[data-src-act]')?.dataset.srcAct; if (!act) return;
     const msg = $('.src-msg', c), tmsg = $('.src-test-msg', c), btn = e.target.closest('button');
     const say = (el, t, bad) => { el.hidden = false; el.classList.toggle('bad', !!bad); el.textContent = t; };
+    if (act === 'acc-reveal') { ST.revealSrcAcc = !srcAccShown(); revealButton(btn, srcAccShown()); paintSrcAcc($('[data-src-acc]', c)); return; }
+    if (act === 'acc-refresh') { loadSrcAcc($('[data-src-acc]', c), true); return; }
     if (act === 'key' || act === 'unkey') {
       const inp = $('[data-src-key]', c), key = inp?.value.trim() || '';
       if (act === 'key' && !key) { say(msg, 'Paste the key first.', true); inp?.focus(); return; }

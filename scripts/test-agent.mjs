@@ -37,7 +37,7 @@ import { sourceOf, sourceStream, sameOnOpenRouter, failureKind, noteSourceResult
 import { SECRET_FILES } from '../server/keys.js';
 import { SOURCE_IDS, SOURCE_FILE, sourceOn, sourceOffWhy, blockedLocal, setSourceOn, setSourceKey, removeSourceKey, keyFor, movedModel, sourceModels, sourceStatus } from '../server/sources.js';
 import { goModels, goEntry, goBody, goStream, effortFor as goEffort } from '../server/opencodego.js';
-import { ccModels, ccEntry, ccStream, messagesBody, toMessages } from '../server/commandcode.js';
+import { ccModels, ccEntry, ccStream, messagesBody, toMessages, ccAccount, planName as ccPlanName } from '../server/commandcode.js';
 import { toolPrompt, renderTranscript, parseToolCalls, textFilter, notRun } from '../server/textcalls.js';
 import { localStream, localModels } from '../server/opencodelocal.js';
 import { claudeStream, claudeModels, claudeError, effortFor } from '../server/claudelocal.js';
@@ -4861,6 +4861,25 @@ test('Command Code streams the other models on the chat endpoint; its refusals s
   const down = await ccStream({ model: 'commandcode/deepseek/deepseek-v4-pro', messages: [] }, new AbortController().signal, null, null, { info, key: 'test-cc-key-0123456789', fetchFn: refuse(502, { message: 'down', code: 'upstream_unavailable' }) }).catch((x) => x);
   assert.equal(failureKind(down), 'server');
   await assert.rejects(ccStream({ model: 'commandcode/deepseek/deepseek-v4-pro', messages: [] }, new AbortController().signal, null, null, { info, fetchFn }), /no Command Code key/);
+});
+
+test('Command Code reports the plan a key is on and what is left: credits and the 5-hour and weekly windows', async () => {
+  const seen = [];
+  const fetchFn = async (url, init) => { seen.push([url, init.headers.Authorization]); return { ok: true, status: 200, headers: new Headers(), json: async () => (/subscriptions/.test(url)
+    ? { data: { status: 'active', planId: 'goat_monthly', currentPeriodEnd: '2026-11-30T00:00:00Z' } }
+    : { credits: { monthlyCredits: 42.5, purchasedCredits: 10, freeCredits: 'x' }, windowLimits: { fiveHour: { used: 3.2, cap: 10, resetAt: 1793400000000 }, weekly: { used: 0, cap: 0 } } }) }; };
+  const a = await ccAccount('test-cc-key-0123456789', { fetchFn });
+  assert.deepEqual(seen.map((x) => x[0]).sort(), ['https://api.commandcode.ai/alpha/billing/credits', 'https://api.commandcode.ai/alpha/billing/subscriptions']);
+  assert.equal(seen[0][1], 'Bearer test-cc-key-0123456789');
+  assert.deepEqual([a.plan, a.status, a.periodEnd, a.cancels], ['GOAT', 'active', Date.parse('2026-11-30T00:00:00Z'), false]);
+  assert.deepEqual(a.credits, { monthly: 42.5, purchased: 10, free: 0, left: 52.5 }, 'a field that isn’t a number counts as 0');
+  assert.deepEqual(a.fiveHour, { used: 3.2, cap: 10, exceeded: false, resetAt: 1793400000000 });
+  assert.equal(a.weekly, null, 'a window with no cap isn’t shown');
+  assert.deepEqual(['max_20x', 'max_10x', 'pro_monthly', 'team_pro', 'provider', '', 'go'].map(ccPlanName), ['Max 20×', 'Max 10×', 'Pro', 'Teams', 'Provider', 'Free', 'Go']);
+  const refused = async () => ({ ok: false, status: 401, headers: new Headers(), text: async () => JSON.stringify({ error: { message: 'Invalid token', code: 'UNAUTHORIZED' } }) });
+  const e = await ccAccount('bad-key-0123456789ab', { fetchFn: refused }).catch((x) => x);
+  assert.equal(failureKind(e), 'auth');
+  await assert.rejects(ccAccount(''), /key first/);
 });
 
 test('OpenCode on this PC leaves out OpenCode’s own providers (Zen, and Go, which runs with its key); a chat on one is told what to pick', async () => {
