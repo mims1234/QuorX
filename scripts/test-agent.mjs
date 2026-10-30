@@ -37,6 +37,7 @@ import { sourceOf, sourceStream, sameOnOpenRouter, failureKind, noteSourceResult
 import { SECRET_FILES } from '../server/keys.js';
 import { SOURCE_IDS, SOURCE_FILE, sourceOn, sourceOffWhy, blockedLocal, setSourceOn, setSourceKey, removeSourceKey, keyFor, movedModel, sourceModels, sourceStatus } from '../server/sources.js';
 import { goModels, goEntry, goBody, goStream, effortFor as goEffort } from '../server/opencodego.js';
+import { ccModels, ccEntry, ccStream, messagesBody, toMessages } from '../server/commandcode.js';
 import { toolPrompt, renderTranscript, parseToolCalls, textFilter, notRun } from '../server/textcalls.js';
 import { localStream, localModels } from '../server/opencodelocal.js';
 import { claudeStream, claudeModels, claudeError, effortFor } from '../server/claudelocal.js';
@@ -4731,6 +4732,135 @@ test('OpenCode Go streams with the key and the chat’s session; a refused key i
   const e = await goStream({ model: 'opencode-go/glm-5.3', messages: [] }, new AbortController().signal, null, null, { info, key: 'bad-key-0123456789ab', fetchFn: refused }).catch((x) => x);
   assert.equal(failureKind(e), 'auth');
   await assert.rejects(goStream({ model: 'opencode-go/glm-5.3', messages: [] }, new AbortController().signal, null, null, { info, fetchFn }), /no OpenCode Go key/);
+});
+
+// ---------- Command Code over its Provider API, with the user's key (server/commandcode.js) ----------
+const CC_LIVE = { object: 'list', data: [
+  { id: 'claude-opus-5-5', name: 'Claude Opus 5.5', context_length: 1000000, supported_endpoints: ['/messages'] },
+  { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5', context_length: 200000, supported_endpoints: ['/messages'] },
+  { id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro', context_length: 1000000, supported_endpoints: ['/chat/completions', '/responses'] },
+  { id: 'typesafe/jev', name: 'Jev', supported_endpoints: ['/systemone'] },
+] };
+const CC_DEV = { commandcode: { models: {
+  'claude-opus-5-5': { id: 'claude-opus-5-5', name: 'Claude Opus 5.5', tool_call: true, temperature: false, reasoning: true, reasoning_options: [{ type: 'effort', values: ['low', 'medium', 'high', 'xhigh', 'max'] }], modalities: { input: ['text', 'image', 'pdf'], output: ['text'] }, limit: { context: 1000000, output: 128000 }, cost: { input: 4, output: 20, cache_read: 0.4, cache_write: 5 } },
+  'claude-haiku-4-5-20251001': { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5', tool_call: true, temperature: true, reasoning: true, reasoning_options: [{ type: 'budget_tokens' }], modalities: { input: ['text', 'image'], output: ['text'] }, limit: { context: 200000, output: 64000 }, cost: { input: 1, output: 5 } },
+  'deepseek/deepseek-v4-pro': { id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro', tool_call: true, reasoning: true, interleaved: { field: 'reasoning_content' }, modalities: { input: ['text'], output: ['text'] }, limit: { context: 1000000, output: 64000 }, cost: { input: 0.5, output: 2 } },
+} } };
+const ccFetch = async (url) => (/models\.dev/.test(url) ? CC_DEV : CC_LIVE);
+const ccSSE = (frames) => ({ ok: true, status: 200, headers: new Headers(), body: (async function* () { for (const f of frames) yield new TextEncoder().encode(`event: ${f.type || 'x'}\ndata: ${JSON.stringify(f)}\n\n`); })() });
+
+test('Command Code lists the models it serves now, as plan models, with the endpoint each answers on', async () => {
+  const list = await ccModels({ fetchJSON: ccFetch });
+  assert.deepEqual(list.map((m) => [m.id, m.wire]), [['commandcode/claude-opus-5-5', 'messages'], ['commandcode/claude-haiku-4-5-20251001', 'messages'], ['commandcode/deepseek/deepseek-v4-pro', 'chat']], 'a decision model on neither endpoint is left out');
+  const [opus, haiku, ds] = list;
+  assert.deepEqual([opus.plan, opus.price, opus.listPrice, opus.maker, opus.temp], ['plan', [0, 0], [4, 20], 'anthropic', false]);
+  assert.deepEqual(opus.in, ['text', 'image'], 'pictures in (computer use), pdf left out');
+  assert.equal(haiku.budget, true);
+  assert.deepEqual([ds.maker, ds.interleaved], ['deepseek', 'reasoning_content']);
+  assert.ok(sourceOf('commandcode/deepseek/deepseek-v4-pro'), 'a Command Code model id names its source');
+  const noDev = await ccModels({ fetchJSON: async (url) => { if (/models\.dev/.test(url)) throw new Error('offline'); return CC_LIVE; } });
+  assert.deepEqual(noDev.map((m) => m.name), ['Claude Opus 5.5', 'Claude Haiku 4.5', 'DeepSeek V4 Pro'], 'models.dev down: its own list and names still show');
+});
+
+test('a Claude call to Command Code goes in the Messages format: tools, results, pictures, cache marks, effort, thinking passed back', () => {
+  const opus = ccEntry(CC_LIVE.data[0], CC_DEV.commandcode.models['claude-opus-5-5']);
+  const pic = 'data:image/png;base64,iVBORw0KGgo=';
+  const b = messagesBody({ model: 'commandcode/claude-opus-5-5', max_tokens: 9000, temperature: 0.3, reasoning: { effort: 'high' }, tool_choice: 'required', tools: CONV.tools, provider: { order: ['x'] },
+    messages: [
+      { role: 'system', content: [{ type: 'text', text: 'Rules.', cache_control: { type: 'ephemeral' } }] },
+      { role: 'user', content: 'Build it.' },
+      { role: 'assistant', content: 'On it.', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'write_file', arguments: '{"path":"a.js"}' } }, { id: 'c2', type: 'function', function: { name: 'look', arguments: '' } }],
+        qx_pass: { cc_thinking: [{ type: 'thinking', thinking: '', signature: 'sig1' }] } },
+      { role: 'tool', tool_call_id: 'c1', content: 'written' },
+      { role: 'tool', tool_call_id: 'c2', content: [{ type: 'text', text: 'screen' }, { type: 'image_url', image_url: { url: pic } }] },
+      { role: 'user', content: 'Also this.' },
+    ] }, opus);
+  assert.equal(b.model, 'claude-opus-5-5');
+  assert.equal(b.stream, true);
+  assert.equal(b.max_tokens, 9000);
+  assert.equal(b.temperature, undefined, 'the newest Claude models take no temperature');
+  assert.equal(b.provider, undefined);
+  assert.deepEqual(b.thinking, { type: 'adaptive', display: 'summarized' });
+  assert.deepEqual(b.output_config, { effort: 'high' });
+  assert.deepEqual(b.tool_choice, { type: 'auto' }, 'forced tool use is refused by the newest models');
+  assert.deepEqual([b.tools.length, b.tools[0].name, b.tools[0].input_schema], [CONV.tools.length, CONV.tools[0].function.name, CONV.tools[0].function.parameters]);
+  assert.deepEqual(b.tools.at(-1).cache_control, { type: 'ephemeral' });
+  assert.deepEqual(b.system, [{ type: 'text', text: 'Rules.', cache_control: { type: 'ephemeral' } }]);
+  assert.deepEqual(b.messages.map((m) => m.role), ['user', 'assistant', 'user']);
+  assert.deepEqual(b.messages[1].content, [{ type: 'thinking', thinking: '', signature: 'sig1' }, { type: 'text', text: 'On it.' }, { type: 'tool_use', id: 'c1', name: 'write_file', input: { path: 'a.js' } }, { type: 'tool_use', id: 'c2', name: 'look', input: {} }], 'its signed thinking goes back in front of its calls');
+  const after = b.messages[2].content;
+  assert.deepEqual(after.map((x) => x.type), ['tool_result', 'tool_result', 'text'], 'both results in one user turn, then the user’s words');
+  assert.deepEqual(after[1].content[1], { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' } });
+  assert.deepEqual(after[2].cache_control, { type: 'ephemeral' });
+  assert.deepEqual(b.messages[0].content.at(-1).cache_control, { type: 'ephemeral' }, 'the turn before is marked too');
+  const off = messagesBody({ model: 'commandcode/claude-opus-5-5', reasoning: { enabled: false }, messages: [{ role: 'user', content: 'hi' }] }, opus);
+  assert.deepEqual([off.thinking, off.output_config], [undefined, { effort: 'low' }], 'thinking off is the lowest effort');
+  const haiku = ccEntry(CC_LIVE.data[1], CC_DEV.commandcode.models['claude-haiku-4-5-20251001']);
+  const hb = messagesBody({ model: 'commandcode/claude-haiku-4-5-20251001', max_tokens: 2000, reasoning: { effort: 'medium' }, messages: [{ role: 'user', content: 'hi' }] }, haiku);
+  assert.deepEqual(hb.thinking, { type: 'enabled', budget_tokens: 8000 });
+  assert.ok(hb.max_tokens > 8000, 'room for the answer after the thinking');
+  assert.equal(messagesBody({ model: 'x', temperature: 0.4, messages: [{ role: 'user', content: 'hi' }] }, haiku).temperature, 0.4, 'an older model without thinking keeps its temperature');
+});
+
+test('the Messages conversation always pairs each tool call with a result and never ends on the assistant', () => {
+  const { messages } = toMessages([
+    { role: 'user', content: 'go' },
+    { role: 'assistant', content: null, tool_calls: [{ id: 'a', function: { name: 'x', arguments: '{}' } }, { id: 'b', function: { name: 'y', arguments: '{}' } }] },
+    { role: 'tool', tool_call_id: 'a', content: 'ok' },
+    { role: 'assistant', content: 'Done.' },
+  ]);
+  assert.deepEqual(messages[2].content.map((x) => [x.type, x.tool_use_id, x.is_error]), [['tool_result', 'a', undefined], ['tool_result', 'b', true]], 'a call the stream never answered is "not run"');
+  assert.equal(messages.at(-1).role, 'user', 'no prefill');
+  assert.equal(toMessages([{ role: 'tool', tool_call_id: 'zz', content: 'stray' }]).messages[0].content[0].type, 'text', 'a result for no call goes as text');
+});
+
+test('Command Code streams Claude over Messages into the usual shape: text, tool calls, thinking blocks back, usage with the cache', async () => {
+  const info = ccEntry(CC_LIVE.data[0], CC_DEV.commandcode.models['claude-opus-5-5']);
+  let seen = null;
+  const fetchFn = async (url, init) => { seen = { url, init }; return ccSSE([
+    { type: 'message_start', message: { id: 'msg_1', model: 'claude-opus-5-5', usage: { input_tokens: 100, cache_read_input_tokens: 900, cache_creation_input_tokens: 50, output_tokens: 1 } } },
+    { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '', signature: '' } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'Plan it.' } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature: 'sigX' } },
+    { type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } },
+    { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'Writing.' } },
+    { type: 'content_block_start', index: 2, content_block: { type: 'tool_use', id: 'toolu_1', name: 'write_file', input: {} } },
+    { type: 'content_block_delta', index: 2, delta: { type: 'input_json_delta', partial_json: '{"path":' } },
+    { type: 'content_block_delta', index: 2, delta: { type: 'input_json_delta', partial_json: '"a.js"}' } },
+    { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 200 } },
+    { type: 'message_stop' },
+  ]); };
+  let text = '', thought = '';
+  const r = await ccStream({ model: 'commandcode/claude-opus-5-5', messages: [{ role: 'user', content: 'hi' }] }, new AbortController().signal, (t) => { text += t; }, (t) => { thought += t; }, { info, key: 'test-cc-key-0123456789', fetchFn });
+  assert.equal(seen.url, 'https://api.commandcode.ai/provider/v1/messages');
+  assert.equal(seen.init.headers.Authorization, 'Bearer test-cc-key-0123456789');
+  assert.equal(seen.init.headers['anthropic-version'], '2023-06-01');
+  assert.deepEqual([text, thought, r.finishReason, r.provider], ['Writing.', 'Plan it.', 'tool_calls', 'Command Code']);
+  assert.deepEqual(r.toolCalls, [{ id: 'toolu_1', type: 'function', function: { name: 'write_file', arguments: '{"path":"a.js"}' } }]);
+  assert.deepEqual(r.passBack, { cc_thinking: [{ type: 'thinking', thinking: 'Plan it.', signature: 'sigX' }] });
+  assert.deepEqual(r.usage, { prompt_tokens: 1050, completion_tokens: 200, prompt_tokens_details: { cached_tokens: 900, cache_write_tokens: 50 } });
+  assert.deepEqual(sourcePriced(info, r.usage), { cost: 0, plan_cost: (100 * 4 + 900 * 0.4 + 50 * 5 + 200 * 20) / 1e6 }, 'what it took from the credits, cache at its own prices');
+  const declined = async () => ccSSE([{ type: 'message_start', message: { id: 'm', usage: { input_tokens: 5 } } }, { type: 'message_delta', delta: { stop_reason: 'refusal', stop_details: { category: 'cyber' } }, usage: { output_tokens: 0 } }]);
+  await assert.rejects(ccStream({ model: 'commandcode/claude-opus-5-5', messages: [] }, new AbortController().signal, null, null, { info, key: 'test-cc-key-0123456789', fetchFn: declined }), /declined to answer \(cyber\)/);
+});
+
+test('Command Code streams the other models on the chat endpoint; its refusals say what went wrong', async () => {
+  const info = ccEntry(CC_LIVE.data[2], CC_DEV.commandcode.models['deepseek/deepseek-v4-pro']);
+  let seen = null;
+  const sse = (frames) => ({ ok: true, status: 200, headers: new Headers(), body: (async function* () { for (const f of frames) yield new TextEncoder().encode(`data: ${JSON.stringify(f)}\n\n`); yield new TextEncoder().encode('data: [DONE]\n\n'); })() });
+  const fetchFn = async (url, init) => { seen = { url, init }; return sse([{ choices: [{ delta: { reasoning_content: 'Hmm.' } }] }, { choices: [{ delta: { content: 'Hi.' } }] }, { choices: [], usage: { prompt_tokens: 10, completion_tokens: 2 } }]); };
+  const r = await ccStream({ model: 'commandcode/deepseek/deepseek-v4-pro', temperature: 0.2, messages: [{ role: 'user', content: 'hi' }] }, new AbortController().signal, null, null, { info, key: 'test-cc-key-0123456789', fetchFn });
+  assert.equal(seen.url, 'https://api.commandcode.ai/provider/v1/chat/completions');
+  assert.equal(JSON.parse(seen.init.body).model, 'deepseek/deepseek-v4-pro');
+  assert.equal(seen.init.headers['anthropic-version'], undefined);
+  assert.deepEqual([r.text, r.passBack], ['Hi.', { reasoning_content: 'Hmm.' }]);
+  const refuse = (status, error) => async () => ({ ok: false, status, headers: new Headers(), text: async () => JSON.stringify({ error }) });
+  const go = await ccStream({ model: 'commandcode/deepseek/deepseek-v4-pro', messages: [] }, new AbortController().signal, null, null, { info, key: 'test-cc-key-0123456789', fetchFn: refuse(403, { message: 'Upgrade required', type: 'invalid_request_error', code: 'upgrade_required' }) }).catch((x) => x);
+  assert.equal(failureKind(go), 'auth');
+  assert.match(go.message, /Go plan has no API access/);
+  const down = await ccStream({ model: 'commandcode/deepseek/deepseek-v4-pro', messages: [] }, new AbortController().signal, null, null, { info, key: 'test-cc-key-0123456789', fetchFn: refuse(502, { message: 'down', code: 'upstream_unavailable' }) }).catch((x) => x);
+  assert.equal(failureKind(down), 'server');
+  await assert.rejects(ccStream({ model: 'commandcode/deepseek/deepseek-v4-pro', messages: [] }, new AbortController().signal, null, null, { info, fetchFn }), /no Command Code key/);
 });
 
 test('OpenCode on this PC leaves out OpenCode’s own providers (Zen, and Go, which runs with its key); a chat on one is told what to pick', async () => {

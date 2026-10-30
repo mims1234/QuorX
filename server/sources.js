@@ -2,7 +2,8 @@
 // Model sources: where a chat's main model runs. OpenRouter is the default and stays behind everything else QuorX
 // does (deciders, media, helpers, the reviewer, every fallback). An app on this computer can run the main model with
 // the providers, plans and sign-ins the user connected there: the OpenCode app (opencodelocal.js), Claude Code
-// (claudelocal.js) and Grok Build (groklocal.js). OpenCode Go runs over its API with the user's own key (opencodego.js).
+// (claudelocal.js) and Grok Build (groklocal.js). OpenCode Go and Command Code run over their APIs with the user's own
+// key (opencodego.js, commandcode.js).
 //   - OpenCode's own providers inside the OpenCode app are left out (blockedLocal): its Zen provider doesn't answer
 //     calls from QuorX, and Go runs over its API. A chat still set to one is told to pick another (a Go model moves to
 //     Go over the API when a Go key is in).
@@ -23,6 +24,7 @@ import { findOnPath, localModels, localStream, ensureLocalServer, localServer, L
 import { claudeModels, claudeStream, claudeAuth, claudeRunning, CLAUDE_ID } from './claudelocal.js';
 import { grokModels, grokStream, grokRunning, GROK_ID } from './groklocal.js';
 import { goModels, goStream, goCheck, GO_ID } from './opencodego.js';
+import { ccModels, ccStream, ccCheck, CC_ID } from './commandcode.js';
 
 const DATA = path.join(HOME, 'data');
 export const SOURCE_FILE = path.join(DATA, 'sources.json');
@@ -40,6 +42,12 @@ export const SOURCES = {
     id: GO_ID, name: 'OpenCode Go', short: 'Go', app: null, billing: 'plan', local: false, needsKey: true, env: 'OPENCODE_API_KEY',
     site: 'https://opencode.ai/go', keyUrl: 'https://opencode.ai/console', docs: 'https://opencode.ai/docs/go/',
     keyHint: 'An API key from the OpenCode Console workspace that has your Go subscription (opencode.ai/console → API keys).',
+  },
+  // Command Code over its Provider API (commandcode.js), with a key from Command Code Studio.
+  [CC_ID]: {
+    id: CC_ID, name: 'Command Code', short: 'Command Code', app: null, billing: 'plan', local: false, needsKey: true, env: 'CMD_API_KEY',
+    site: 'https://commandcode.ai', keyUrl: 'https://commandcode.ai/studio', docs: 'https://commandcode.ai/docs/provider',
+    keyHint: 'An API key from Command Code Studio. Every plan but Go has API access (GOAT, Pro, Max, Teams, Provider).',
   },
   // Claude Code on this computer (claudelocal.js): the subscription or API key it is signed in with.
   [CLAUDE_ID]: {
@@ -65,6 +73,8 @@ const APPS = {
   [GROK_ID]: { list: () => grokModels(), stream: grokStream, check: async () => {}, server: () => ({ running: grokRunning() > 0, calls: grokRunning(), perCall: true }) },
   // Go's list is public; a call and the check need the key.
   [GO_ID]: { list: () => goModels(), stream: (b, sg, t, th, o) => goStream(b, sg, t, th, { ...o, key: keyFor(GO_ID)?.key }), check: async () => { const k = keyFor(GO_ID)?.key; if (!k) throw Object.assign(new Error('Add your OpenCode Go key first.'), { kind: 'auth' }); await goCheck(k, await goModels()); }, server: () => ({ api: true }) },
+  // Its list is public too; a call and the check need the key.
+  [CC_ID]: { list: () => ccModels(), stream: (b, sg, t, th, o) => ccStream(b, sg, t, th, { ...o, key: keyFor(CC_ID)?.key }), check: async () => { const k = keyFor(CC_ID)?.key; if (!k) throw Object.assign(new Error('Add your Command Code key first.'), { kind: 'auth' }); await ccCheck(k, await ccModels()); }, server: () => ({ api: true }) },
 };
 export const SOURCE_IDS = Object.keys(SOURCES);
 
@@ -383,7 +393,7 @@ export async function sourceStatus({ versions = true } = {}) {
     return {
       id, name: def.name, short: def.short, app: def.app, billing: def.billing, site: def.site, keyUrl: def.keyUrl, docs: def.docs, keyHint: def.keyHint,
       on: !!s[id]?.on && ready(id), local: !def.needsKey, installed: ready(id), server: APPS[id].server(), install: def.install, appName: def.appName,
-      ...(def.needsKey ? { needsKey: true, key: k ? { masked: mask(k.key), from: k.from, added: s[id]?.added || 0 } : null } : {}),
+      ...(def.needsKey ? { needsKey: true, env: def.env, key: k ? { masked: mask(k.key), from: k.from, added: s[id]?.added || 0 } : null } : {}),
       app_: v ? { installed: true, version: v.version } : { installed: false },
       models: models.filter((m) => m.source === id).length, catalogueError: catalogue?.errors?.[id] || null,
       last: h ? { ok: !!h.ok, at: h.at, kind: h.kind || null, why: h.why || null, until: h.until || 0, model: h.model || null, scoped: !!h.scoped } : null,
