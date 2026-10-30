@@ -398,6 +398,7 @@ async function contextText(list) {
 // them. Picking one attaches it as context for the next message. / lists the chat commands.
 import { langOf, mountCode } from './code.js';
 import { renderMarkdown, enhance as enhanceMd, stableCut } from './markdown.js';
+import { mediaKind, writtenMedia } from './chat-media.js';
 
 // The message box's buttons: icons only, coloured by what they do.
 const CMP_ICO = {
@@ -1876,24 +1877,39 @@ function markPaths(root) {
   for (const el of [...(root.matches?.('[data-path]') ? [root] : []), ...root.querySelectorAll('[data-path]:not([data-pk])')]) PATHS.queue.add(el);
   if (PATHS.queue.size && !PATHS.timer) PATHS.timer = setTimeout(checkPaths, 150);
 }
+const pathKey = (pid, cid, p) => `${pid}\n${cid}\n${p}`;
+// Asks the server about paths it hasn't answered lately: { kind: 'file' | 'dir' | '', media: { kind, size, v, key } | null }.
+async function askPaths(pid, cid, paths) {
+  const now = Date.now(), fresh = (s) => s && now - s.at < (s.kind ? 300e3 : 8e3);
+  const ask = [...new Set(paths)].filter((p) => !fresh(PATHS.seen.get(pathKey(pid, cid, p))));
+  if (ask.length) {
+    const r = await postJ('/api/paths/check', { projectId: pid, chatId: cid, paths: ask }).catch(() => null);
+    for (const p of ask) PATHS.seen.set(pathKey(pid, cid, p), { kind: r?.found?.[p] || '', media: r?.media?.[p] || null, at: Date.now() });
+  }
+  return new Map(paths.map((p) => [p, PATHS.seen.get(pathKey(pid, cid, p))]));
+}
 async function checkPaths() {
   PATHS.timer = null;
   const els = [...PATHS.queue]; PATHS.queue.clear();
-  const ask = new Map(), now = Date.now();
+  const ask = new Map();
   for (const el of els) {
     if (el.dataset.pk) continue;
     // Still being put together off the page: tried again shortly (a few times).
     if (!el.isConnected) { if ((el._pathTries = (el._pathTries || 0) + 1) < 20) PATHS.queue.add(el); continue; }
-    const pid = chatOfEl(el)?.projectId || '', key = `${pid}\n${el.dataset.path}`, s = PATHS.seen.get(key);
-    el.dataset.pk = pid;
-    if (s && now - s.at < (s.kind ? 300e3 : 8e3)) { showPath(el, s.kind); continue; }
-    (ask.get(pid) || ask.set(pid, new Set()).get(pid)).add(el.dataset.path);
+    const c = chatOfEl(el), pid = c?.projectId || '', cid = c?.id || '';
+    el.dataset.pk = pid; el.dataset.pc = cid;
+    const k = `${pid}\n${cid}`;
+    (ask.get(k) || ask.set(k, []).get(k)).push(el.dataset.path);
   }
-  for (const [pid, paths] of ask) {
-    const r = await postJ('/api/paths/check', { projectId: pid, paths: [...paths] }).catch(() => null);
-    for (const p of paths) PATHS.seen.set(`${pid}\n${p}`, { kind: r?.found?.[p] || '', at: Date.now() });
+  for (const [k, paths] of ask) { const [pid, cid] = k.split('\n'); await askPaths(pid, cid, paths); }
+  for (const el of els) {
+    if (el.dataset.pk == null || el.classList.contains('md-path')) continue;
+    const s = PATHS.seen.get(pathKey(el.dataset.pk, el.dataset.pc || '', el.dataset.path));
+    showPath(el, s?.kind);
+    // A picture, video, PDF or Markdown file a message names is shown under it too (not one inside a shown file).
+    const c = chatOfEl(el);
+    if (s?.media && c && !el.closest('.mm-md')) addMedia(el.closest('.msg'), c, el.dataset.path, s.media);
   }
-  for (const el of els) if (el.dataset.pk != null && !el.classList.contains('md-path')) showPath(el, PATHS.seen.get(`${el.dataset.pk}\n${el.dataset.path}`)?.kind);
   if (PATHS.queue.size && !PATHS.timer) PATHS.timer = setTimeout(checkPaths, 150);
 }
 function showPath(el, kind) {
@@ -1902,6 +1918,111 @@ function showPath(el, kind) {
   el.dataset.kind = kind;
   el.setAttribute('role', 'link'); el.tabIndex = 0;
   el.title = kind === 'dir' ? 'Open this folder in File Explorer' : 'Show this file in File Explorer';
+}
+
+// ---------- files shown in the chat: pictures, videos, PDFs and Markdown a message wrote, made, named or attached ----------
+// Under each message, each file once: pictures as thumbnails (click: large), videos in a player, PDFs in the viewer,
+// Markdown rendered (or raw). Nothing is copied into the chat: the files load from the project (GET /api/media) as
+// they come into view, and a big Markdown file shows its first part only.
+const MM_SHOWN = 8, MM_MD_BYTES = 200e3, MM_PDF_INLINE = 60e6;
+const mediaSrc = (c, p, v) => `/api/media?project=${encodeURIComponent(c.projectId || '')}&chat=${encodeURIComponent(c.id)}&path=${encodeURIComponent(p)}${v ? `&v=${v}` : ''}`;
+const MM_LABEL = { image: 'Picture', video: 'Video', pdf: 'PDF', md: 'Markdown' };
+function mediaStrip(msgEl) {
+  let box = msgEl.querySelector(':scope > .msg-media');
+  if (box) return box;
+  box = document.createElement('div'); box.className = 'msg-media';
+  box.innerHTML = '<div class="mm-pics"></div><div class="mm-cards"></div><button type="button" class="mm-more secondary sm" hidden></button>';
+  box._keys = new Set();
+  const more = $('.mm-more', box);
+  more.onclick = () => { for (const x of box.querySelectorAll('.mm-extra')) x.classList.remove('mm-extra'); more.hidden = true; };
+  // A user's message: above its time and tools. A reply: above its undo line and foot.
+  const at = msgEl.classList.contains('user') ? msgEl.querySelector(':scope > .u-foot') : msgEl.querySelector(':scope > .f-undo-row') || msgEl.querySelector(':scope > .foot');
+  if (at) at.before(box); else msgEl.append(box);
+  return box;
+}
+// One file under a message. `p` is the path as named (or a key for a made picture); `info` is { kind, size, v, key, src }.
+function addMedia(msgEl, c, p, info) {
+  if (!msgEl || !info?.kind) return;
+  const box = mediaStrip(msgEl), key = String(info.key || p).replace(/\\/g, '/').toLowerCase();
+  if (box._keys.has(key)) return;
+  box._keys.add(key);
+  const src = info.src || mediaSrc(c, p, info.v), name = info.name || baseName(p), extra = box._keys.size > MM_SHOWN;
+  const meta = [MM_LABEL[info.kind], sizeText(info.size)].filter(Boolean).join(' · ');
+  const item = document.createElement(info.kind === 'image' ? 'figure' : 'div');
+  item._src = src; item._name = name; item._full = info.full ?? p; item._size = info.size; item._kind = info.kind;
+  if (extra) item.classList.add('mm-extra');
+  const head = (acts = '') => `<div class="mm-head"><span class="mm-ico" aria-hidden="true">${PV_ICON[info.kind] || '📄'}</span><b class="mm-name" title="${esc(item._full)}">${esc(name)}</b><span class="mm-info">${esc(meta)}</span><span class="mm-acts">${acts}<button type="button" class="pv-btn mm-open" title="Open it large">Open</button></span></div>`;
+  if (info.kind === 'image') {
+    item.className = `mm-pic${extra ? ' mm-extra' : ''}`;
+    item.innerHTML = `<button type="button" class="mm-thumb pv-checker" title="${esc(name)} · click to see it large"><img src="${esc(src)}" alt="${esc(name)}" loading="lazy" decoding="async"${/\.svg$/i.test(p) || /\.svg$/i.test(name) ? ' class="mm-svg"' : ''}></button><figcaption title="${esc(item._full)}">${esc(name)}</figcaption>`;
+    $('.mm-thumb', item).onclick = () => { const all = [...box.querySelectorAll('.mm-pic')]; viewPictures(all.map((x) => x._src), all.indexOf(item)); };
+    const img = $('img', item);
+    img.onerror = () => { item.classList.add('mm-broken'); $('figcaption', item).textContent = `${name} (could not be shown)`; };
+    $('.mm-pics', box).append(item);
+  } else {
+    item.className = `mm-card mm-k-${info.kind}${extra ? ' mm-extra' : ''}`;
+    if (info.kind === 'video') item.innerHTML = head() + `<video controls preload="metadata" playsinline src="${esc(src)}"></video>`;
+    else if (info.kind === 'pdf') item.innerHTML = head() + (info.size > MM_PDF_INLINE ? `<p class="mm-note">A large PDF (${esc(sizeText(info.size))}): Open shows it.</p>` : `<iframe class="mm-pdf-frame" loading="lazy" src="${esc(src)}#navpanes=0&view=FitH" title="${esc(name)}"></iframe>`);
+    else {
+      item.innerHTML = head('<span class="pv-seg mm-seg" role="group" aria-label="Show it as"><button type="button" data-m="rendered" class="on" aria-pressed="true">Rendered</button><button type="button" data-m="raw" aria-pressed="false">Raw</button></span>') + '<div class="mm-md-body"><div class="fx-empty">Loading…</div></div>';
+      loadMdCard(item);
+    }
+    $('.mm-open', item).onclick = () => openViewer((body) => { body.innerHTML = '<div class="lb-doc fview"></div>'; previewFile($('.lb-doc', body), { name, src, size: info.size, full: item._full, kind: info.kind }); });
+    $('.mm-cards', box).append(item);
+  }
+  const hidden = box.querySelectorAll('.mm-extra').length, more = $('.mm-more', box);
+  more.hidden = !hidden; more.textContent = `Show ${hidden} more file${hidden === 1 ? '' : 's'}`;
+}
+// A Markdown card reads its file when it comes into view: up to MM_MD_BYTES, rendered or raw.
+const mmSeen = 'IntersectionObserver' in window ? new IntersectionObserver((list) => { for (const x of list) if (x.isIntersecting) { mmSeen.unobserve(x.target); x.target._load?.(); } }, { rootMargin: '400px' }) : null;
+function loadMdCard(item) {
+  const body = $('.mm-md-body', item);
+  const draw = () => {
+    const raw = (G.mmMode || 'rendered') === 'raw';
+    for (const b of item.querySelectorAll('.mm-seg button')) { b.classList.toggle('on', (b.dataset.m === 'raw') === raw); b.setAttribute('aria-pressed', String((b.dataset.m === 'raw') === raw)); }
+    if (item._text == null) return;
+    const cut = item._cut ? `<p class="mm-note">The first ${esc(sizeText(MM_MD_BYTES))} of ${esc(sizeText(item._size))}: Open shows all of it.</p>` : '';
+    if (raw) { body.innerHTML = `<pre class="mm-raw"></pre>${cut}`; $('.mm-raw', body).textContent = item._text; return; }
+    body.innerHTML = `<div class="mm-md msg-md">${md(item._text)}</div>${cut}`;
+    enhanceMd($('.mm-md', body));
+  };
+  for (const b of item.querySelectorAll('.mm-seg button')) b.onclick = () => { G.mmMode = b.dataset.m; draw(); };
+  item._load = async () => {
+    try {
+      const r = await fetch(item._src, { headers: { Range: `bytes=0-${MM_MD_BYTES - 1}` } });
+      if (!r.ok) throw new Error(r.status === 404 ? 'it is not there any more' : `HTTP ${r.status}`);
+      let t = await r.text();
+      item._cut = r.status === 206 && item._size > MM_MD_BYTES;
+      if (item._cut) t = t.replace(/�$/, '');
+      item._text = t; draw();
+    } catch (e) { body.innerHTML = `<div class="fx-empty">Could not read it: ${esc(e.message)}</div>`; }
+  };
+  draw();
+  if (mmSeen) mmSeen.observe(item); else item._load();
+}
+// The files a message brings with it: pictures and videos a reply made, files its tools wrote, and your attachments.
+// (Paths named in the text come through checkPaths.)
+async function drawMsgMedia(c, m) {
+  const el = m.el;
+  if (!el || !c) return;
+  for (const a of m.arts || []) {
+    const art = c.agent.artifacts?.[a.id];
+    if ((a.kind === 'image' || a.kind === 'video') && art?.url) addMedia(el, c, `art:${a.id}`, { kind: a.kind, src: art.url, name: a.title || a.id, full: a.title || a.id });
+  }
+  const paths = m.role === 'user' ? (m.docs || []).filter((d) => d.rel && mediaKind(d.rel)).map((d) => d.rel) : writtenMedia(m.trace);
+  const todo = paths.filter((p) => !el._mmAsked?.has(p));
+  if (!todo.length) return;
+  const seen = await askPaths(c.projectId || '', c.id, todo);
+  for (const p of todo) {
+    const info = seen.get(p)?.media;
+    if (!info) continue;
+    (el._mmAsked ||= new Set()).add(p);
+    const doc = m.role === 'user' && (m.docs || []).find((d) => d.rel === p);
+    addMedia(el, c, p, doc ? { ...info, name: doc.name, full: doc.name } : info);
+    // An attachment shown here needs no chip as well.
+    if (doc) for (const b of el.querySelectorAll('.u-doc[data-doc]')) { try { if (JSON.parse(b.dataset.doc).rel === p) b.remove(); } catch { /* not one */ } }
+  }
+  const docs = el.querySelector('.u-docs'); if (docs && !docs.children.length) docs.remove();
 }
 const openPathEl = (el) => openFolder(el.dataset.pk || chatOfEl(el)?.projectId, el.dataset.path);
 document.addEventListener('click', (e) => { const el = e.target.closest?.('.md-path'); if (el) { e.preventDefault(); openPathEl(el); } });
@@ -3656,6 +3777,7 @@ function renderMsg(c, m) {
     // Rewind and Copy share the time's line, so nothing below the message (its "Read as" line) can sit on them.
     const when = $('.utext', el)?.nextElementSibling;
     if (when && !when.className) { const foot = document.createElement('div'); foot.className = 'u-foot'; when.before(foot); foot.append($('.u-tools', el), when); }
+    drawMsgMedia(c, m);
     return el;
   }
   if (m.role === 'usage') {
@@ -4089,6 +4211,7 @@ function updateMsg(c, m, { bodyOnly = false } = {}) {
   if (rh) { const h = replyHeadHTML(m, model); if (rh._h !== h) { rh.innerHTML = h; rh._h = h; } }
   if (bodyOnly) return;
   drawTimeline(c, m);
+  drawMsgMedia(c, m);
   // One chip per artifact this reply made or changed (edits don't add a second chip).
   // Artifacts are reached from the pane's dropdown and the Files view, not as chips under each reply.
   // Steps: a button under the reply; the list of steps opens in the side pane.

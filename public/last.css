@@ -3051,3 +3051,34 @@ a.md-pathlink.md-path, .md-pathtext.md-path { color: var(--accent); }
 /* ↻ Retry on a failed reply: the same message again, on the chat's model now */
 .msgs .msg.bot .body .err-retry { margin-top: 8px; font: 600 12.5px var(--font-ui); color: var(--text); background: var(--panel); border: 1px solid var(--line-strong, var(--line)); border-radius: 8px; padding: 6px 12px; cursor: pointer; }
 .msgs .msg.bot .body .err-retry:hover { border-color: var(--accent); color: var(--accent); }
+/* ---------- Files shown in the chat: pictures, videos, PDFs and Markdown under the message that wrote, named or attached them ---------- */
+.msg-media { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; min-width: 0; }
+.msg-media .mm-pics:empty, .msg-media .mm-cards:empty { display: none; }
+.msg-media .mm-extra { display: none !important; }
+.mm-pics { display: flex; flex-wrap: wrap; gap: 8px; }
+.mm-pic { margin: 0; display: flex; flex-direction: column; gap: 3px; max-width: 220px; min-width: 0; }
+.mm-thumb { --mm-h: 150px; display: grid; place-items: center; padding: 0; width: 100%; min-width: 96px; height: var(--mm-h); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; cursor: zoom-in; background-color: var(--panel); }
+.mm-thumb:hover { border-color: var(--accent); }
+.mm-thumb:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.mm-thumb img { max-width: 100%; max-height: calc(var(--mm-h) - 2px); object-fit: contain; display: block; }
+/* An SVG with only a viewBox has no size of its own: it fills the thumbnail. */
+.mm-thumb img.mm-svg { width: calc(var(--mm-h) - 2px); height: calc(var(--mm-h) - 2px); padding: 10px; box-sizing: border-box; }
+.mm-pic figcaption { font: 11px var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mm-pic.mm-broken .mm-thumb { height: 48px; cursor: default; }
+.mm-cards { display: flex; flex-direction: column; gap: 8px; }
+.mm-card { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); overflow: hidden; min-width: 0; max-width: 760px; }
+.mm-head { display: flex; align-items: center; gap: 8px; padding: 5px 8px 5px 10px; border-bottom: 1px solid var(--line); min-width: 0; }
+.mm-head .mm-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 12px var(--mono); color: var(--text); }
+.mm-head .mm-info { flex: none; font: 11px var(--mono); color: var(--muted); white-space: nowrap; }
+.mm-head .mm-acts { margin-left: auto; flex: none; display: flex; align-items: center; gap: 6px; }
+.mm-k-video video { display: block; width: 100%; max-height: 420px; background: #000; }
+.mm-pdf-frame { display: block; width: 100%; height: 420px; border: 0; background: #fff; }
+.mm-md-body { max-height: 360px; overflow: auto; }
+.mm-md { padding: 10px 14px; }
+.mm-raw { margin: 0; padding: 10px 14px; font: 12px/1.55 var(--mono); color: var(--text); white-space: pre-wrap; word-break: break-word; }
+.mm-note { margin: 6px 12px 8px; font-size: 11.5px; color: var(--dim); }
+.mm-more { align-self: flex-start; }
+/* The Rendered / Raw switch: chat buttons have their own background, so the lit side is set here. */
+.msg-media .mm-seg button { background: transparent; color: var(--muted); border: 0; }
+.msg-media .mm-seg button.on { background: var(--panel-3, var(--panel-2)); color: var(--text); }
+@media (max-width: 640px) { .mm-pic { max-width: calc(50% - 4px); } .mm-thumb { --mm-h: 120px; } .mm-pdf-frame { height: 320px; } .mm-head .mm-info { display: none; } }

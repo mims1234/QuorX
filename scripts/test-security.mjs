@@ -12,7 +12,11 @@ import { hostAllowed, crossSiteApi, gate, isLoopback, appGate, appKey, handoffPu
 import { privateAddress } from '../server/safefetch.js';
 import { startSignIn } from '../server/oauth.js';
 import { decide, agentWriteBlocked } from '../server/cmdpolicy.js';
-import { safePath, fullLocalPath, checkCommand,preApproved, searchFiles, childEnv, runLine } from '../server/workspace.js';
+import { PassThrough } from 'node:stream';
+import { safePath, fullLocalPath, checkCommand,preApproved, searchFiles, childEnv, runLine, registerFolders } from '../server/workspace.js';
+import { mediaFile, serveMedia } from '../server/media.js';
+import { mediaKind, writtenMedia } from '../public/chat-media.js';
+import { renderMarkdown } from '../public/markdown.js';
 import { userEnv, mergePath } from '../server/userenv.js';
 import { needsAdmin, adminForAgent } from '../server/elevation.js';
 import { externalize, blobData } from '../server/blobs.js';
@@ -74,6 +78,69 @@ test('a path a reply names: full ones on this computer, relative ones in the pro
     assert.equal(fullLocalPath('file:///D:/Work/a%20b.txt'), 'D:\\Work\\a b.txt');
     assert.equal(fullLocalPath('\\Work\\a.txt'), '', 'no drive letter: in the project');
   } else assert.equal(fullLocalPath('/tmp/a.txt'), '/tmp/a.txt');
+});
+
+test('files shown in a chat: only pictures, videos, PDFs and Markdown, from the project or the chat\'s folders', () => {
+  const root = tempDir('oh-media-'), other = tempDir('oh-media-out-');
+  const w = (dir, rel, body = 'x') => { fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true }); fs.writeFileSync(path.join(dir, rel), body); };
+  for (const f of ['out/a.png', 'notes.md', 'clip.mp4', 'doc.pdf', 'logo.svg', 'app.js', '.git/x.png', '.quorx/uploads/b.md', '.quorx/scratch/c.webp', '.quorx/index/d.png', 'site/.hidden/e.png']) w(root, f);
+  w(other, 'pic.jpg');
+  assert.equal(mediaFile(root, '', 'out/a.png')?.kind, 'image');
+  assert.equal(mediaFile(root, '', './out/a.png')?.file, path.join(root, 'out', 'a.png'));
+  assert.equal(mediaFile(root, '', 'out\\a.png')?.kind, 'image', 'Windows slashes');
+  assert.equal(mediaFile(root, '', path.join(root, 'notes.md'))?.kind, 'md', 'a full path inside the project');
+  assert.equal(mediaFile(root, '', 'clip.mp4')?.kind, 'video');
+  assert.equal(mediaFile(root, '', 'doc.pdf')?.kind, 'pdf');
+  assert.equal(mediaFile(root, '', 'logo.svg')?.kind, 'image');
+  assert.equal(mediaFile(root, '', '.quorx/uploads/b.md')?.kind, 'md', 'attachments');
+  assert.equal(mediaFile(root, '', '.quorx/scratch/c.webp')?.kind, 'image', "the agent's scratch space");
+  for (const p of ['app.js', '.git/x.png', '.quorx/index/d.png', 'site/.hidden/e.png', '../x.png', 'missing.png', '', 'out', '//server/share/a.png', '\\\\server\\share\\a.png'])
+    assert.equal(mediaFile(root, '', p), null, p || '(empty)');
+  // A full path outside the project: only in a folder this chat added.
+  const outside = path.join(other, 'pic.jpg');
+  assert.equal(mediaFile(root, 'chat-media-1', outside), null);
+  registerFolders('chat-media-1', [{ path: other }]);
+  assert.equal(mediaFile(root, 'chat-media-1', outside)?.kind, 'image');
+  assert.equal(mediaFile(root, 'chat-media-2', outside), null, "another chat doesn't get it");
+  registerFolders('chat-media-1', []);
+});
+
+test('a shown file is sent with its type, byte ranges for seeking, and SVG sandboxed', async () => {
+  const root = tempDir('oh-media-serve-');
+  fs.writeFileSync(path.join(root, 'v.mp4'), Buffer.alloc(1000, 7));
+  fs.writeFileSync(path.join(root, 'l.svg'), '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>');
+  const send = (rel, headers = {}) => new Promise((resolve) => {
+    const r = new PassThrough(), chunks = [];
+    r.headers = {}; r.code = 0;
+    r.writeHead = (c, h = {}) => { r.code = c; Object.assign(r.headers, h); return r; };
+    r.on('data', (b) => chunks.push(b)); r.on('end', () => resolve({ code: r.code, headers: r.headers, body: Buffer.concat(chunks) }));
+    serveMedia({ method: 'GET', headers }, r, mediaFile(root, '', rel));
+  });
+  const full = await send('v.mp4');
+  assert.equal(full.code, 200); assert.equal(full.headers['Content-Type'], 'video/mp4'); assert.equal(full.body.length, 1000);
+  const part = await send('v.mp4', { range: 'bytes=100-199' });
+  assert.equal(part.code, 206); assert.equal(part.headers['Content-Range'], 'bytes 100-199/1000'); assert.equal(part.body.length, 100);
+  const svg = await send('l.svg');
+  assert.equal(svg.headers['Content-Security-Policy'], 'sandbox', 'scripts in an SVG never run');
+  assert.equal(svg.headers['X-Content-Type-Options'], 'nosniff');
+});
+
+test('the chat finds the files a reply wrote, and pictures a reply names by a local path', () => {
+  assert.equal(mediaKind('a/B.PNG'), 'image'); assert.equal(mediaKind('x.webm'), 'video'); assert.equal(mediaKind('r.pdf'), 'pdf');
+  assert.equal(mediaKind('README.md'), 'md'); assert.equal(mediaKind('app.js'), ''); assert.equal(mediaKind('png'), '');
+  const trace = [
+    { t: 'tool', name: 'write_file', args: { path: 'notes.md' } }, { t: 'tool_result', name: 'write_file', result: 'Wrote notes.md' },
+    { t: 'tool', name: 'write_file', args: { path: 'app.js' } }, { t: 'tool_result', name: 'write_file', result: 'Wrote app.js' },
+    { t: 'tool', name: 'write_file', args: { path: 'bad.png' } }, { t: 'tool_result', name: 'write_file', result: 'Error: no room' },
+    { t: 'tool', name: 'edit_file', args: { path: 'notes.md' } }, { t: 'tool_result', name: 'edit_file', result: 'Edited' },
+    { t: 'tool', name: 'write_file', by: 'helper', args: { path: 'helper.png' } }, { t: 'tool_result', name: 'write_file', by: 'helper', result: 'ok' },
+    { t: 'tool', name: 'write_file', args: { path: 'out/chart.svg' } }, { t: 'tool_result', name: 'write_file', result: 'Wrote' },
+    { t: 'tool', name: 'write_file', args: { path: 'still-running.png' } },
+  ];
+  assert.deepEqual(writtenMedia(trace), ['notes.md', 'out/chart.svg']);
+  assert.match(renderMarkdown('![chart](out/chart.png)'), /<span class="md-pathtext" data-path="out\/chart\.png">chart<\/span>/);
+  assert.match(renderMarkdown('![x](https://example.com/a.png)'), /<img class="md-img" src="https:\/\/example\.com\/a\.png"/);
+  assert.doesNotMatch(renderMarkdown('![x](javascript:alert(1))'), /<img|data-path/);
 });
 
 test('{PORT} is allowed in server arguments; shell characters are not', () => {

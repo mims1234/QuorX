@@ -37,7 +37,12 @@ function inline(src, keep) {
   // $…$ only when it looks like math: no space just inside, and no digit right after the closing $ (so "$5 and $10" stays text)
   s = s.replace(/(^|[^\\$\w])\$(?![\s\d$])([^$\n]+?)(?<!\s)\$(?![\d$])/g, (_, pre, tex) => pre + hold(`<span class="md-math" data-tex="${esc(tex)}">${esc(tex)}</span>`));
   s = esc(s);
-  s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (m, alt, url) => { const u = safeUrl(url.replace(/&amp;/g, '&'), true); return u ? `<img class="md-img" src="${esc(u)}" alt="${alt}" loading="lazy">` : m; });
+  // A picture by a local path (![chart](out/chart.png)) is marked as a path: the chat shows it under the message.
+  s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (m, alt, url) => {
+    const raw = url.replace(/&amp;/g, '&'), u = safeUrl(raw, true);
+    if (u) return `<img class="md-img" src="${esc(u)}" alt="${alt}" loading="lazy">`;
+    return looksPath(raw) ? `<span class="md-pathtext" data-path="${url}">${alt || url}</span>` : m; // url is already escaped
+  });
   s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, text, url) => {
     const raw = url.replace(/&amp;/g, '&'), u = safeUrl(raw);
     if (u) return link(esc(u), text);
