@@ -1582,13 +1582,13 @@ const FILTERS = [
 const providerOf = (id) => String(id).replace(/^~/, '').split('/')[0] || 'other';
 // Models of an app on this PC (⚙ Settings → Apps on this PC) or of OpenCode Go (⚙ Settings → API keys) are the source,
 // a slash, and its own id.
-const SOURCE_NAME = { 'opencode-go': 'OpenCode Go', commandcode: 'Command Code', 'opencode-local': 'OpenCode on this PC', 'claude-local': 'Claude Code on this PC', 'grok-local': 'Grok Build on this PC' };
+const SOURCE_NAME = { 'opencode-go': 'OpenCode Go', commandcode: 'Command Code', 'opencode-local': 'OpenCode on this PC', 'ollama-local': 'Ollama on this PC', 'claude-local': 'Claude Code on this PC', 'grok-local': 'Grok Build on this PC' };
 // Where in ⚙ Settings each source is set up.
 const srcWhere = (k) => (k === 'opencode-go' || k === 'commandcode' ? 'API keys' : 'Apps on this PC');
 // Each source's own logo (public/icons/brand), in the text colour (Claude's in its orange), with its name on hover.
-const SOURCE_LOGO = { openrouter: 'openrouter', 'opencode-go': 'opencode', commandcode: 'commandcode', 'opencode-local': 'opencode', 'claude-local': 'claude', 'grok-local': 'grok' };
+const SOURCE_LOGO = { openrouter: 'openrouter', 'opencode-go': 'opencode', commandcode: 'commandcode', 'opencode-local': 'opencode', 'ollama-local': 'ollama', 'claude-local': 'claude', 'grok-local': 'grok' };
 const srcLogo = (k, title = k === 'openrouter' ? 'OpenRouter' : SOURCE_NAME[k] || k) => SOURCE_LOGO[k] ? `<span class="src-logo src-logo-${SOURCE_LOGO[k]}" style="--ico:url('icons/brand/${SOURCE_LOGO[k]}.svg')" role="img" aria-label="${esc(title)}" title="${esc(title)}"></span>` : esc(title);
-const SOURCE_SHORT = { 'opencode-go': 'Go', commandcode: 'Command Code', 'opencode-local': 'This PC', 'claude-local': 'Claude Code', 'grok-local': 'Grok Build' };
+const SOURCE_SHORT = { 'opencode-go': 'Go', commandcode: 'Command Code', 'opencode-local': 'This PC', 'ollama-local': 'Ollama', 'claude-local': 'Claude Code', 'grok-local': 'Grok Build' };
 // The sources offered, as words: "OpenCode Go, Claude Code or Grok Build".
 const srcApps = () => { const t = Object.keys(SOURCE_NAME).map((k) => SOURCE_NAME[k].replace(/ on this PC$/, '')); return t.length > 1 ? `${t.slice(0, -1).join(', ')} or ${t.at(-1)}` : t[0] || ''; };
 const sourceOfId = (id) => { const s = String(id || ''), h = s.split('/')[0]; return SOURCE_NAME[h] && s.length > h.length + 1 ? h : null; };
@@ -6464,7 +6464,7 @@ function settingsPanels(S) {
         + stRow('Zero data retention only', 'Only providers that keep no copy of your prompts. Fewer models qualify.', stSwitch('zdrOnly', !!S.zdrOnly), { id: 'stRowZdr' })
         + stRow('Blocked providers', 'OpenRouter never sends the agent’s calls to these: for every model, or only the models you pick (a provider can be fine for one model and break another). Block one that keeps breaking tool calls (the provider shows as “via …” above each reply). If only blocked providers serve a model, that reply uses them anyway, and says so.', '<div id="stBlocked"><div class="st-row-help">Loading providers…</div></div>', { cls: 'sx-row-wide', id: 'stRowBlocked' })),
     ]],
-    sources: ['Apps on this PC', 'A chat’s main model can run through OpenCode, Claude Code or Grok Build on this computer, on the providers and sign-ins you set up there. OpenCode Go and Command Code run with their keys (⚙ API keys). Everything else stays on OpenRouter.', [
+    sources: ['Apps on this PC', 'A chat’s main model can run through OpenCode, Ollama, Claude Code or Grok Build on this computer, on the providers and sign-ins you set up there. OpenCode Go and Command Code run with their keys (⚙ API keys). Everything else stays on OpenRouter.', [
       stCard('Apps', '', '<div id="stSources"><div class="st-row-help">Checking the apps on this PC…</div></div>', '', 'stSrcConnect'),
       stCard('When a call fails', 'By default the reply stops and says why, and you pick another model. QuorX switches only if you choose a fallback.',
         stRow('Fall back to', '', stCards('sourceFallback', [['off', '✋', 'Stop and tell me', 'You pick the next model'], ['same', '🔁', 'Same model on OpenRouter', 'When OpenRouter has it, else the model below'], ['model', '🎯', 'Always this model', 'The fallback model below']], S.sourceFallback || G.cfg.defaults.sourceFallback || 'off', 'compact'), { cls: 'sx-row-wide', id: 'stRowSrcFb' })
@@ -6794,6 +6794,7 @@ function srcState(x) {
 const SRC_GUIDE = {
   'opencode-local': { what: 'Runs a chat through the OpenCode app on this computer, with the providers you connected in it. Each provider bills as it does in OpenCode; plans and free tiers cost nothing here. OpenCode’s own providers are left out: OpenCode Zen doesn’t answer QuorX, and Go runs with its key under API keys.', install: 'npm i -g opencode-ai' },
   'claude-local': { what: 'Runs a chat through Claude Code on this computer, on the subscription or API key you signed in with. Its own tools stay off: QuorX\'s tools and approvals do the work.', install: 'npm i -g @anthropic-ai/claude-code' },
+  'ollama-local': { what: 'Runs a chat on the models you pulled into Ollama on this computer, for nothing, and on Ollama cloud models once you sign in (ollama signin). Only models that call tools are listed. QuorX starts Ollama when a chat needs it and it isn’t running.', install: 'winget install Ollama.Ollama' },
   'grok-local': { what: 'Runs a chat through Grok Build on this computer, on the account you signed in with (grok login). Its own tools stay off: QuorX\'s tools and approvals do the work.', install: 'curl -fsSL https://x.ai/cli/install.sh | bash' },
   'opencode-go': { what: 'Runs a chat on your OpenCode Go subscription (Go, Go Plus or Go Teams) over OpenCode’s API. Each model has 5-hour, weekly and monthly limits; prices shown are what a call counts against them.' },
   commandcode: { what: 'Runs a chat on your Command Code plan over its Provider API: GPT, DeepSeek, Kimi, GLM, Qwen and the other open models, and Claude. Every plan but Go has API access; prices shown are what a call takes from your credits.' },
@@ -6855,7 +6856,7 @@ function drawSourceCards(box, r, list, say) {
       <header class="src-head">
         ${SOURCE_LOGO[x.id] ? srcLogo(x.id, x.name) : `<span class="mp-ava" style="--h:${hue(x.id)}" aria-hidden="true">${esc(initials(x.name))}</span>`}
         <b class="src-name">${esc(x.name)}</b>
-        ${stTag(x.billing === 'plan' ? 'info' : x.billing === 'mixed' ? 'violet' : 'warn', x.billing === 'plan' ? 'subscription' : x.billing === 'mixed' ? 'your providers' : 'pay per use')}
+        ${stTag(x.billing === 'plan' ? 'info' : x.billing === 'mixed' ? 'violet' : x.billing === 'free' ? 'ok' : 'warn', x.billing === 'plan' ? 'subscription' : x.billing === 'mixed' ? 'your providers' : x.billing === 'free' ? 'free · on this PC' : 'pay per use')}
         ${stStatus(st.cls, st.word)}
         ${x.models ? `<span class="src-count">${x.models} models</span>` : ''}
         <span class="kx-spacer"></span>
