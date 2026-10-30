@@ -13,11 +13,11 @@
       host.style.cssText = 'all:initial;position:fixed;inset:0;z-index:2147483647;pointer-events:none;';
       const root = host.attachShadow({ mode: 'closed' });
       root.innerHTML = `<style>
-        .edge { position: fixed; inset: 0; pointer-events: none; box-shadow: inset 0 0 0 2px rgba(60,194,201,.95), inset 0 0 26px 6px rgba(60,194,201,.45); animation: qx 2.4s ease-in-out infinite; }
-        @keyframes qx { 50% { box-shadow: inset 0 0 0 2px rgba(60,194,201,.7), inset 0 0 14px 3px rgba(60,194,201,.25); } }
+        .edge { position: fixed; inset: 0; pointer-events: none; box-shadow: inset 0 0 0 2px rgba(155,123,255,.95), inset 0 0 26px 6px rgba(155,123,255,.45); animation: qx 2.4s ease-in-out infinite; }
+        @keyframes qx { 50% { box-shadow: inset 0 0 0 2px rgba(155,123,255,.7), inset 0 0 14px 3px rgba(155,123,255,.25); } }
         @media (prefers-reduced-motion: reduce) { .edge { animation: none; } }
         button { position: fixed; top: 8px; left: 50%; transform: translateX(-50%); pointer-events: auto; display: flex; align-items: center; gap: 8px;
-          font: 600 12px/1 system-ui, "Segoe UI", sans-serif; color: #ebf5f6; background: rgba(14,22,24,.94); border: 1.5px solid rgb(60,194,201);
+          font: 600 12px/1 system-ui, "Segoe UI", sans-serif; color: #ebf5f6; background: rgba(14,22,24,.94); border: 1.5px solid rgb(155,123,255);
           border-radius: 999px; padding: 7px 14px 7px 11px; cursor: pointer; box-shadow: 0 2px 10px rgba(0,0,0,.35); }
         button:hover, button:focus-visible { background: rgba(30,40,42,.98); outline: none; }
         i { width: 9px; height: 9px; border-radius: 2px; background: #e84848; }

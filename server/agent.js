@@ -32,7 +32,7 @@ import { shellNote, shellHint } from './shellnotes.js';
 import { startBackground, jobOutput, stopBackground, listBackground } from './bgjobs.js';
 import { markJob } from './terminal.js';
 import { termStart, termSend, termRead, termStop } from './agentterm.js';
-import { appWindows, readWindow, clickControl, clickAt, setControl, sendKeys, windowShot, closeWindow, findApps, windowsOfApp, openAppNames, shotVia, windowText, zoomWindow, mouseAt, dragIn, strokeIn, scrollIn, holdKey, windowDo, clipboard } from './uia.js';
+import { appWindows, readWindow, clickControl, clickAt, setControl, sendKeys, windowShot, closeWindow, findApps, windowsOfApp, openAppNames, shotVia, windowText, zoomWindow, mouseAt, dragIn, strokeIn, scrollIn, holdKey, windowDo, clipboard, placeWindow } from './uia.js';
 import { openDetached } from './userenv.js';
 import { languageChecks } from './langchecks.js';
 import { loadHooks, matchHooks, hookLine, safeHookFile } from './hooks.js';
@@ -1092,6 +1092,8 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   let lent = null, onLent = false; // a tab the user lent to this chat (🤖 Give to agent), and whether the agent is in it
   const T0 = Date.now();
   const at = () => Date.now() - T0;
+  // What the reply is driving now, your Chrome or your desktop: the chat glows in that kind's colour while it does.
+  const driving = (kind) => { if (run.driving !== kind) { run.driving = kind; emit({ t: 'control', kind, at: at() }); } };
   if (offSaid) emit({ t: 'chat_off_project', why: offSaid, at: at() });
 
   // A reply resumed after a restart is the same reply, so it carries what it had spent (and on what). "Continue"
@@ -3561,7 +3563,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       // Off, the user is asked once in the reply to turn it on (a card, like switching on paid media).
       const needsApps = act === 'open' || act === 'running' || !!String(args.app ?? '').trim();
       const appsOff = needsApps && !(await askAppsOn()) ? `Error: computer use is off in this chat${run.appsAsked ? ' and the user kept it off' : ''}. The user can turn it on with the 🖥 button next to the message box; then open apps with desktop open.` : '';
-      if (act === 'open') return appsOff || await openApp(args);
+      if (act === 'open') { if (appsOff) return appsOff; driving('desktop'); return await openApp(args); }
       if (act === 'running') return appsOff || await runningApps();
       // What it acts on: an app this chat opened by name, or a background job that runs the agent's own program.
       let scope = job;
@@ -3585,6 +3587,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       } else if (!job) return 'Error: give app (an installed app you opened with open) or job (a background job running your own program).';
       const who = typeof scope === 'object' ? scope.app.name : job;
       run.lastDesk = who; run.lastSurface = 'desktop'; // look with no target looks here
+      driving('desktop');
       if (!VIEW_ACTS.includes(act)) run.deskActed = true; // it changed something through the app
       // A program paused at a breakpoint can't answer for its windows: say where it stopped instead of waiting on it.
       const paused = async (wait) => { if (typeof scope === 'object') return ''; const p = await debugPausedIn(job, wait); return p ? `The app is paused at a breakpoint (debug session ${p.id}, ${p.at}), so its window can't respond: use debug state and eval, then debug continue.` : ''; };
@@ -4450,7 +4453,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     if (args.action === 'switch') return switchChatTab(args);
     // The agent's own pages, sites and apps open in its own tab; an address opened while in the lent tab stays there.
     if (args.action === 'open' && onLent && !/^https?:\/\//i.test(target)) onLent = false;
-    if (onLent) return lentStep(args, o);
+    if (onLent) { driving('chrome'); return lentStep(args, o); }
     if (args.action === 'open' && /^cdp:/i.test(target)) return attachApp(target);
     // Leaving an app's window for a page: a browser tab again (the app keeps running).
     if (args.action === 'open' && tab?.app) { const old = tab; tab = null; await old.close().catch(() => {}); }
@@ -4568,7 +4571,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
       // above), so an empty Chrome window means it is done. Tabs the user gave stay.
       if (fresh && !run.closesChrome) { run.closesChrome = true; cleanups.push(async () => { if (S.chromeCloseTabs === true) await closeChatChromeTabs(req.chatId); }); }
     }
-    onLent = true; run.lentUsed = true;
+    onLent = true; run.lentUsed = true; driving('chrome');
     const t = lent.tab;
     // A tab Chrome has just made starts blank: wait for its page to begin (15 s at most), then for it to be ready.
     if (fresh) for (let i = 0; i < 60; i++) { const r = await whereIs(t); if (r && r.href !== 'about:blank' && r.readyState !== 'loading') break; await sleep(250, signal); }
@@ -5220,6 +5223,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
       for (const t0 = Date.now(); !wins.length && Date.now() - t0 < 20000;) { await sleep(500, signal); wins = await windowsOfApp(app); }
       if (!wins.length) return `Started ${app.name}, but no window of it showed up within 20 s. It may still be starting: check with desktop windows and app: "${app.name}".`;
     }
+    await placeWindow({ app }, wins[0].handle).catch(() => {}); // onto the screen computer use works on, right away
     emit({ t: 'desktop', job: app.name, action: reused ? 'use' : 'open', at: at() });
     const others = found.slice(1, 4).map((x) => x.name);
     return `${reused ? `${app.name} was already open; using it` : `Opened ${app.name}`}. Its windows:\n${wins.map((w) => `- window ${w.handle}: "${w.title}"`).join('\n')}\n`

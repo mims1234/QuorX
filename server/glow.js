@@ -1,36 +1,47 @@
 // Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // The sign that the agent is using your computer, and the kill switch (Windows): while a reply uses the desktop tool,
-// every screen gets a glowing QuorX edge and a Stop button at the top (glowhost.ps1). Neither shows in the agent's
-// screen pictures, and the agent's clicks and keys pass through them; only your own click on Stop, or your own
-// Ctrl+Alt+Backspace, stops it. Stop ends every reply using the desktop and the desktop helper itself, so a click or
-// a long typing it is in the middle of stops as well.
+// the screen computer use works on (server/workscreen.js) gets a glowing QuorX edge and a banner at the top with the
+// shortcut and a Stop button (glowhost.ps1). Neither shows in the agent's screen pictures, and the agent's clicks and
+// keys pass through them; only your own click on Stop, or your own Ctrl+Alt+Backspace, stops it. Stop ends every reply
+// using the desktop and the desktop helper itself, so a click or a long typing it is in the middle of stops as well.
 import { psHost } from './jobhost.js';
 
 const WIN = process.platform === 'win32';
 const OFF = !WIN || process.env.QX_NO_GLOW === '1';
-const using = new Map(); // runId → what to show (the chat's title)
+export const STOP_KEYS = 'Ctrl+Alt+Backspace';
+const using = new Map(); // runId → the chat driving it
 let onStop = () => {};
-let shown = '';
+let begin = () => null, end = () => {};
+let on = false, chain = Promise.resolve();
 const H = psHost('./glowhost.ps1', { label: 'screen glow', readyMs: 30000, off: OFF, onEvent: (m) => { if (m.event === 'stop') stopNow(m.how); } });
 
-const line = () => {
-  const titles = [...new Set(using.values())].filter(Boolean);
-  const who = titles.length === 1 ? `“${titles[0].slice(0, 40)}”` : titles.length ? `${titles.length} chats` : 'QuorX';
-  return `${who} is using your computer · Stop   (Ctrl+Alt+Backspace)`;
-};
-// Shows, changes or hides the glow to match `using`. A helper that can't start (no PowerShell, a locked-down
-// computer) leaves the agent working as before: the sign is a help, never a gate.
-async function sync() {
-  const want = using.size ? line() : '';
-  if (want === shown) return;
-  shown = want;
-  await H.call(want ? 'show' : 'hide', want ? { text: want } : {}, 15000).catch(() => { shown = ''; });
+// Shows or hides the glow to match `using`, one change after another. Making room (begin) starts at once, so the
+// agent's first action already waits for its screen; the glow shows on that screen, or on the main one if it can't be
+// told. A helper that can't start (no PowerShell, a locked-down computer) leaves the agent working as before: the sign
+// is a help, never a gate.
+function sync() {
+  const want = using.size > 0;
+  if (want === on) return;
+  on = want;
+  if (want) {
+    let where; try { where = Promise.resolve(begin([...using.values()][0])).catch(() => null); } catch { where = Promise.resolve(null); }
+    chain = chain.then(async () => {
+      const s = await where;
+      if (!on) return;
+      await H.call('show', { text: 'QuorX is using computer use', keys: `${STOP_KEYS} to stop`, ...(s?.w ? { x: s.x, y: s.y, w: s.w, h: s.h } : {}) }, 15000).catch(() => {});
+    });
+  } else {
+    try { end(); } catch { /* the server's own problem */ }
+    chain = chain.then(() => H.call('hide', {}, 15000).catch(() => {}));
+  }
 }
 
 /** Called when you stop: (how) → the runs stopped. Set once by the server. */
 export function onGlowStop(fn) { onStop = fn; }
+/** Set once by the server: start(chatId) → the screen to glow on ({ x, y, w, h } or a promise of it), and end(). */
+export function onGlowScreen(start, stop) { begin = start; end = stop; }
 /** A reply started using the desktop: the glow is on until it ends. */
-export function glowOn(runId, title = '') { if (!runId || using.get(runId) === title) return; using.set(runId, String(title || '')); sync(); }
+export function glowOn(runId, chatId = '') { if (!runId || using.has(runId)) return; using.set(runId, String(chatId || '')); sync(); }
 /** A reply ended (or stopped). */
 export function glowOff(runId) { if (!using.delete(runId)) return; sync(); }
 /** The replies the glow is on for. */

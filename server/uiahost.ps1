@@ -50,6 +50,7 @@ public static class QxUia {
   [DllImport("user32.dll")] static extern void mouse_event(uint f, uint x, uint y, uint d, UIntPtr e);
   [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int cmd);
   [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
+  [DllImport("user32.dll")] static extern bool IsZoomed(IntPtr h);
   [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
   [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(POINT p);
   [DllImport("user32.dll")] static extern int GetSystemMetrics(int i);
@@ -630,6 +631,49 @@ public static class QxUia {
     throw new Exception("unknown window action " + what);
   }
 
+  // The screens in real pixels, one per line: bounds x y w h, working area x y w h (without the taskbar), primary 1/0.
+  public static string Screens() {
+    StringBuilder sb = new StringBuilder();
+    foreach (System.Windows.Forms.Screen s in System.Windows.Forms.Screen.AllScreens) {
+      Rectangle b = s.Bounds, w = s.WorkingArea;
+      sb.Append(b.X).Append('\t').Append(b.Y).Append('\t').Append(b.Width).Append('\t').Append(b.Height).Append('\t')
+        .Append(w.X).Append('\t').Append(w.Y).Append('\t').Append(w.Width).Append('\t').Append(w.Height).Append('\t').Append(s.Primary ? 1 : 0).Append('\n');
+    }
+    return sb.ToString();
+  }
+  // Computer use works on one screen: a window outside the area it keeps to (x, y, w, h) is moved in, made smaller if it
+  // doesn't fit. A window that is already inside stays as it is; a maximised one stays maximised when the area is its
+  // whole screen, and is fitted into it when the compact QuorX window shares that screen. "" when nothing moved.
+  public static string Place(long handle, int x, int y, int w, int ht) {
+    IntPtr h = new IntPtr(handle);
+    if (w < 100 || ht < 100) return "";
+    if (IsIconic(h)) ShowWindow(h, 9);
+    Rectangle A = new Rectangle(x, y, w, ht);
+    System.Windows.Forms.Screen scr = System.Windows.Forms.Screen.FromRectangle(A);
+    Rectangle wa = scr.WorkingArea;
+    bool whole = Math.Abs(wa.X - x) <= 2 && Math.Abs(wa.Y - y) <= 2 && Math.Abs(wa.Width - w) <= 2 && Math.Abs(wa.Height - ht) <= 2;
+    bool zoomed = IsZoomed(h);
+    if (zoomed) {
+      if (whole && System.Windows.Forms.Screen.FromHandle(h).DeviceName == scr.DeviceName) return "";
+      ShowWindow(h, 9); // restored, so it can move
+    }
+    const int slack = 10; // the invisible resize border round most windows
+    RECT r; GetWindowRect(h, out r);
+    if (!zoomed && r.L >= x - slack && r.T >= y - slack && r.R <= x + w + slack && r.B <= y + ht + slack) return "";
+    for (int i = 0; i < 2; i++) {
+      int nw = Math.Min(r.R - r.L, w), nh = Math.Min(r.B - r.T, ht), nx, ny;
+      if (A.Contains((r.L + r.R) / 2, (r.T + r.B) / 2)) { nx = Math.Max(x, Math.Min(r.L, x + w - nw)); ny = Math.Max(y, Math.Min(r.T, y + ht - nh)); }
+      else { nx = x + (w - nw) / 2; ny = y + (ht - nh) / 2; }
+      SetWindowPos(h, IntPtr.Zero, nx, ny, nw, nh, 0x4 | 0x10); // no z-order change, not activated
+      // On a screen with another scale the app may resize itself as it arrives: once more puts it right.
+      Thread.Sleep(60);
+      GetWindowRect(h, out r);
+      if (r.L >= x - slack && r.T >= y - slack && r.R <= x + w + slack && r.B <= y + ht + slack) break;
+    }
+    if (zoomed && whole) ShowWindow(h, 3);
+    return "moved it onto the screen computer use works on";
+  }
+
   // The clipboard needs a single-threaded apartment thread.
   public static string Board(string text, bool set) {
     string got = null; Exception err = null;
@@ -692,7 +736,7 @@ while ($true) {
     $id = $m.id
     $out = @{ id = $id; ok = $true }
     $pids = [int[]]@($m.pids | ForEach-Object { [int]$_ })
-    if ($m.op -notin @('windows', 'apps', 'appwins', 'openapps', 'board')) { [QxUia]::Check([long]$m.handle, $pids) }
+    if ($m.op -notin @('windows', 'apps', 'appwins', 'openapps', 'board', 'screens')) { [QxUia]::Check([long]$m.handle, $pids) }
     switch ($m.op) {
       'apps' {
         # Start-menu apps by name: exact names first, then names that contain it.
@@ -737,6 +781,10 @@ while ($true) {
       'win' { $out.did = [QxUia]::Win([long]$m.handle, [string]$m.what, [int]$m.x, [int]$m.y, [int]$m.w, [int]$m.h, $pids) }
       'board' { if ($m.set) { $out.did = [QxUia]::Board([string]$m.text, $true) } else { $out.text = [QxUia]::Board($null, $false) } }
       'close' { $out.did = [QxUia]::Close([long]$m.handle) }
+      'place' { $out.did = [QxUia]::Place([long]$m.handle, [int]$m.x, [int]$m.y, [int]$m.w, [int]$m.h) }
+      'screens' {
+        $out.screens = @(([QxUia]::Screens()) -split "`n" | Where-Object { $_ } | ForEach-Object { $p = @($_ -split "`t" | ForEach-Object { [int]$_ }); @{ bounds = @{ x = $p[0]; y = $p[1]; w = $p[2]; h = $p[3] }; work = @{ x = $p[4]; y = $p[5]; w = $p[6]; h = $p[7] }; primary = $p[8] -eq 1 } })
+      }
       default { throw "unknown op $($m.op)" }
     }
   } catch {

@@ -833,7 +833,9 @@ function renderSidebar() {
         const sch = schedsOf(c.id), schOn = sch.some((s) => !s.paused && s.nextAt != null);
         const schTag = sch.length ? `<span class="sb-sched ${schOn ? 'on' : 'off'}" title="Schedule chat: ${esc(sch.map((s) => `${s.name} (${s.paused ? 'paused' : s.whenText})`).join(', '))}. Each run starts fresh and sees only the schedule's prompt; what you type here sees the whole chat, every run included.">⏰${schOn ? '' : ' paused'}</span>` : '';
         const tip = [c.title || 'Untitled', ...(c.model ? [`Model\t${short(c.model)}`] : []), `Last message\t${new Date(c.lastAt || c.updated || Date.now()).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`, ...(c.messages ? [`Messages\t${c.messages}`] : []), ...(running ? [`Now\t${waiting ? 'waiting for you' : 'working'}`] : []), `Spent\t$${spent.toFixed(3)}`].join('\n');
-        return `<div class="sb-chat sb-chat-item ${G.panes.includes(c.id) ? 'on active' : ''} ${running ? 'running' : ''}" data-c="${esc(c.id)}" data-tip-delay="900" title="${esc(tip)}">
+        // Driving your Chrome or your desktop: the chat glows in that kind's colour (last.css, .drv-chrome / .drv-desktop).
+        const drv = running && live.driving ? `drv-${live.driving}` : '';
+        return `<div class="sb-chat sb-chat-item ${G.panes.includes(c.id) ? 'on active' : ''} ${running ? 'running' : ''} ${drv}" data-c="${esc(c.id)}" data-tip-delay="900" title="${esc(tip)}">
           <div class="sb-chat-content">
             <div class="sb-chat-topline"><span class="sb-chat-title">${esc(c.title)}</span>${schTag}${running ? '<span class="live-dot" aria-label="Running"></span>' : ''}</div>
             ${waiting ? `<div class="sb-chat-prev"><b class="needs">${waiting === 'answer' ? 'Waiting for your answer' : waiting === 'budget' ? 'Waiting: project budget reached' : 'Waiting for your approval'}</b></div>` : running ? '<div class="sb-chat-prev"><i>Working…</i></div>' : ''}
@@ -2731,7 +2733,7 @@ function renderPanes() {
     box.appendChild(root);
     c.el = { root };
     wirePane(c, root, i);
-    renderChatHead(c); renderComposerBar(c); renderAttachments(c); syncRunState(c);
+    renderChatHead(c); renderComposerBar(c); renderAttachments(c); syncRunState(c); markDriving(c);
     const msgs = $('.msgs', root);
     if (!c.agent.messages.length) msgs.innerHTML = `<div class="hint"><b>${esc(c.title)}</b><br>${esc(short(c.agent.setup.model))} · ${c.approval === 'strict' ? '🔒 Strict: asks before each tool it uses' : '⚡ YOLO: uses its tools without asking'}<br>The agent decides by itself when to ask the deciders.</div>`;
     for (const m of c.agent.messages) msgs.appendChild(renderMsg(c, m));
@@ -5217,6 +5219,13 @@ function askNotifyPermission() {
   if (!('Notification' in window) || Notification.permission !== 'default' || uiOf(G.settings).notify === 'off') return;
   Notification.requestPermission().catch(() => {});
 }
+// While a reply drives your Chrome or your desktop its chat glows, a colour for each (last.css).
+function markDriving(c) {
+  const root = c.el?.root;
+  if (!root) return;
+  root.classList.toggle('drv-chrome', c.driving === 'chrome');
+  root.classList.toggle('drv-desktop', c.driving === 'desktop');
+}
 // Follows one run's events. Closing the page only stops following; ■ Stop asks the server to stop.
 // Set while the page unloads: a reply's stream closing then is not a lost connection.
 let leaving = false;
@@ -5295,6 +5304,7 @@ async function followRun(c, m, open) {
         if (e.t === 'error') { m.error = e.msg; m.failed = !e.stopped; if (e.stats && !m.stats) { m.stats = { ...e.stats, partial: true }; G.sessionCost += e.stats.cost || 0; renderSpend(); } }
         if (e.t === 'interrupted') { m.error = 'The harness restarted while this reply was running.'; m.resumable = !!e.resumable; }
         if (e.t === 'compacted') { a.summary = e.summary; a.summaryAt = e.cutoffAt; }
+        if (e.t === 'control') { c.driving = e.kind; markDriving(c); renderSidebar(); }
         // You switched paid tools on from the agent's card: they stay on for this chat (its 🧰 Tools menu shows them).
         if (e.t === 'schedules_changed') loadSchedules().then(() => { if ($('#schedules')?.open) drawSchedules(); renderChatHead(c); });
         if (e.t === 'tools_on') { for (const k of e.kinds || []) if (CHAT_TOOLS.includes(k) || k === 'apps') c.tools[k] = true; if ((e.kinds || []).includes('apps')) renderComposerBar(c); saveChat(c); renderToolbars(); }
@@ -5323,7 +5333,7 @@ async function followRun(c, m, open) {
   } finally {
     following.delete(m.runId);
     if (leaving) return; // the reply goes on; the next page load reattaches to it
-    m.live = false; c.running = null; c.waiting = false;
+    m.live = false; c.running = null; c.waiting = false; c.driving = null; markDriving(c);
     // The harness went away mid-reply (restarted or closed): wait for it, then reattach or offer Resume.
     if (lost) { m.error = 'Lost the connection to the harness; reconnecting…'; reconnect(c, m); }
     else if (!m.stats) partialSpend(m);
@@ -9786,6 +9796,13 @@ if (DESK) {
   window.ohDesktop.on((ev) => { if (ev.type === 'update') drawUpdate(ev); });
   // A clicked notification opens its chat.
   window.ohDesktop.on((ev) => { if (ev.type === 'notify-click' && ev.chatId && !G.panes.includes(ev.chatId)) showChat(ev.chatId); });
+  // Computer use made the window phone-sized: the chat driving it is the one shown, so you watch it beside the app.
+  window.ohDesktop.on((ev) => {
+    if (ev.type !== 'compact') return;
+    document.body.classList.toggle('cu-compact', !!ev.on);
+    if (ev.on && ev.chatId && !G.panes.includes(ev.chatId)) showChat(ev.chatId);
+    if (ev.on && isPhone()) setMView('chat');
+  });
   setTimeout(() => window.ohDesktop.update('state').then(drawUpdate).catch(() => {}), 1500);
   const ub = $('#updNote');
   const rb = $('#railUpd'); if (rb) rb.onclick = () => ub?.click();

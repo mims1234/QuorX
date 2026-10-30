@@ -587,8 +587,54 @@ async function viewPicture(t, p, seen) {
   if (r.x || r.y || r.width !== s.width || r.height !== s.height) img = img.crop(r);
   return (p.format === 'png' ? img.toPNG() : img.toJPEG(p.quality || 80)).toString('base64');
 }
+// While computer use runs, QuorX shrinks to a phone-sized window (a phone's width and height) beside the screen the
+// agent works on, kept on top so you can watch both, and left out of every screen picture so the agent never sees
+// itself instead of the app. With other screens it goes to one of those (the one it is on, or the main one); alone on
+// one screen it sits at its right edge and the agent's apps keep to the rest (`area`, in real pixels). When it ends,
+// the window goes back to how you had it.
+let compact = null; // how the window was before: { bounds, max, full, min, top }
+const PHONE = 19.5 / 9;
+function computerUse({ on, work, chatId } = {}) {
+  if (!win || win.isDestroyed()) return null;
+  if (!on) {
+    if (!compact) return true;
+    const was = compact; compact = null;
+    win.setContentProtection(false);
+    win.setAlwaysOnTop(was.top);
+    win.setMinimumSize(...was.min);
+    win.setBounds(was.bounds);
+    if (was.max) win.maximize();
+    if (was.full) win.setFullScreen(true);
+    send({ type: 'compact', on: false });
+    return true;
+  }
+  const win32 = process.platform === 'win32';
+  const toDip = (r) => (win32 ? screen.screenToDipRect(null, { x: r.x, y: r.y, width: r.w, height: r.h }) : { x: r.x, y: r.y, width: r.w, height: r.h });
+  const toPx = (r) => { const p = win32 ? screen.dipToScreenRect(null, r) : r; return { x: p.x, y: p.y, w: p.width, h: p.height }; };
+  const workDip = work ? toDip(work) : screen.getPrimaryDisplay().workArea;
+  const there = screen.getDisplayMatching(workDip), all = screen.getAllDisplays(), here = screen.getDisplayMatching(win.getBounds());
+  const home = all.length < 2 ? there : here.id !== there.id ? here : all.find((d) => d.id === screen.getPrimaryDisplay().id && d.id !== there.id) || all.find((d) => d.id !== there.id);
+  const shared = home.id === there.id;
+  const wa = shared ? workDip : home.workArea, gap = 12;
+  let w = 412, h = Math.round(w * PHONE);
+  if (h > wa.height - 2 * gap) { h = wa.height - 2 * gap; w = Math.max(320, Math.round(h / PHONE)); }
+  const rect = { x: wa.x + wa.width - w - gap, y: wa.y + Math.round((wa.height - h) / 2), width: w, height: h };
+  if (!compact) compact = { bounds: win.getNormalBounds(), max: win.isMaximized(), full: win.isFullScreen(), min: win.getMinimumSize(), top: win.isAlwaysOnTop() };
+  if (win.isFullScreen()) win.setFullScreen(false);
+  if (win.isMaximized()) win.unmaximize();
+  win.setMinimumSize(300, 400);
+  win.setBounds(rect);
+  win.setAlwaysOnTop(true, 'floating');
+  win.setContentProtection(true);
+  if (win.isMinimized()) win.restore();
+  if (!win.isVisible()) win.showInactive();
+  send({ type: 'compact', on: true, chatId: chatId || null });
+  // Sharing the screen, the apps keep to the part left of QuorX.
+  return { area: shared ? toPx({ x: workDip.x, y: workDip.y, width: Math.max(0, rect.x - gap - workDip.x), height: workDip.height }) : null };
+}
 const COMMANDS = {
   async 'app.notify'(n) { return showNote(n); },
+  async 'app.computerUse'(a) { return computerUse(a); },
   // Sign-in with OpenRouter finished in the user's browser: back to QuorX.
   async 'app.focus'() { showWindow(); return true; },
   // The Chrome extension's "Open in QuorX": the window comes forward on that chat.
@@ -696,6 +742,7 @@ async function linkLoop() {
         }
       }
     } catch { /* the harness is restarting */ }
+    computerUse({ on: false }); // a harness that went away mid-reply can't say computer use ended
     await new Promise((res) => setTimeout(res, 3000));
   }
 }

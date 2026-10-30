@@ -1023,6 +1023,18 @@ input[type="checkbox"]:disabled { opacity: .45; cursor: not-allowed; }
 .sb-ph .sb-pworking { flex: none; width: 8px; height: 8px; margin: 0 4px 0 6px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 8px var(--ok); animation: sb-working-dot 1.2s ease-in-out infinite; }
 @keyframes sb-working-dot { 50% { transform: scale(.6); opacity: .55; } }
 .sidebar .sb-chat-item.running { box-shadow: inset 3px 0 0 var(--ok), 0 0 14px -4px color-mix(in srgb, var(--ok) 60%, transparent); }
+/* A reply driving your desktop (teal, like the glow round that screen) or your Chrome (violet, like the edge round its
+   tab): its chat glows in that colour, in the sidebar and round the chat itself, until the reply ends. The glow is a
+   layer of its own (::after), over the open chat's highlight, so it can breathe. */
+:root { --drv-desktop: #3cc2c9; --drv-chrome: #9b7bff; }
+:root[data-theme="light"] { --drv-desktop: #0e7490; --drv-chrome: #6d28d9; }
+.drv-desktop { --drv: var(--drv-desktop); }
+.drv-chrome { --drv: var(--drv-chrome); }
+html body .sidebar .sb-project .sb-chat.sb-chat-item.running:is(.drv-desktop, .drv-chrome) { --cc: var(--drv); position: relative; background: color-mix(in srgb, var(--drv) 12%, transparent) !important; box-shadow: inset 3px 0 0 var(--drv), inset 0 0 0 1px color-mix(in srgb, var(--drv) 45%, transparent) !important; }
+html body .sidebar .sb-project .sb-chat.sb-chat-item.running:is(.drv-desktop, .drv-chrome)::after { content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; box-shadow: 0 0 16px -1px color-mix(in srgb, var(--drv) 80%, transparent); animation: drv-breathe 2.4s ease-in-out infinite; }
+.chatpane:is(.drv-desktop, .drv-chrome)::after { content: ''; position: absolute; inset: 0; z-index: 5; pointer-events: none; border-radius: inherit; box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--drv) 90%, transparent), inset 0 0 30px -8px color-mix(in srgb, var(--drv) 75%, transparent); animation: drv-breathe 2.4s ease-in-out infinite; }
+@keyframes drv-breathe { 50% { opacity: .35; } }
+:root.reduce-motion .sb-chat-item:is(.drv-desktop, .drv-chrome)::after, :root.reduce-motion .chatpane:is(.drv-desktop, .drv-chrome)::after { animation: none; }
 :root.reduce-motion .sidebar .sb-project.working { animation: none; box-shadow: 0 0 0 1px var(--ok), 0 0 16px -2px color-mix(in srgb, var(--ok) 50%, transparent); }
 :root.reduce-motion .sb-ph .sb-pworking { animation: none; }
 
