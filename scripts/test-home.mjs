@@ -28,6 +28,8 @@ if (!process.env.OH_HOME) {
 }
 // Tests never download News from the website (server/newsremote.js); a test that needs it points this at a local server.
 process.env.QUORX_NEWS_SITE ||= 'off';
+// A run keeps 2 000 events in memory, not 20 000, so the test that passes the cap is quick (server/runs.js).
+process.env.QX_KEEP_EVENTS ||= '2000';
 // Nor do they put the glowing edge and Stop button round your screens (server/glow.js).
 process.env.QX_NO_GLOW ||= '1';
 process.on('exit', () => { for (const dir of made) remove(dir); });

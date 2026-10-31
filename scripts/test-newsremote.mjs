@@ -54,159 +54,160 @@ const reset = () => {
 };
 test.afterEach(() => { process.env.QUORX_NEWS_SITE = 'off'; });
 
-test('news remote: the feed is downloaded and News reads the copy, laid out like news/', async () => {
-  reset();
-  const site = await fakeSite({ 'articles/hello': { 'index.md': md('Hello'), 'pic.png': PNG } });
-  try {
-    const st = await syncNews({ force: true });
-    assert.equal(st.error, undefined, st.error);
-    assert.ok(st.syncedAt, 'syncedAt is recorded');
-    assert.equal(st.files, 2);
-    const cache = newsCacheDir();
-    assert.ok(fs.existsSync(path.join(cache, 'articles', 'hello', 'index.md')));
-    assert.ok(fs.existsSync(path.join(cache, 'articles', 'hello', 'pic.png')));
-    assert.ok(fs.existsSync(path.join(cache, 'updates.json')));
-    const ship = shipped();
-    assert.equal(activeNewsDir(ship), cache, 'the newer downloaded copy is used');
-    const r = await newsRoute({ method: 'GET', pathname: '/api/news', query: new URLSearchParams() }, activeNewsDir(ship));
-    assert.equal(r.body.source.from, 'website');
-    assert.deepEqual(r.body.articles.map((a) => a.slug), ['hello']);
-    assert.equal(r.body.updates.versions[0].version, '9.9.9');
-    assert.ok(site.asked.every((a) => a.path.startsWith('/news/')), 'only the site\'s own News addresses are asked for');
-    assert.match(site.asked[0].ua, /^QuorX\/\d+\.\d+\.\d+/, 'the user agent says QuorX and its version, nothing else');
-  } finally { await site.close(); }
-});
-
-test('news remote: a second check fetches only the feed when nothing changed, and only the changed file after', async () => {
-  reset();
-  const files = { 'articles/hello': { 'index.md': md('Hello'), 'pic.png': PNG } };
-  const site = await fakeSite(files);
-  try {
-    await syncNews({ force: true });
-    site.asked.length = 0;
-    await syncNews({ force: true });
-    assert.deepEqual(site.asked.map((a) => a.path), ['/news/feed.json']);
-    files['articles/hello']['index.md'] = md('Hello again');
-    site.asked.length = 0;
-    const st = await syncNews({ force: true });
-    assert.equal(st.error, undefined, st.error);
-    assert.deepEqual(site.asked.map((a) => a.path), ['/news/feed.json', '/news/content/articles/hello/index.md']);
-    assert.match(fs.readFileSync(path.join(newsCacheDir(), 'articles', 'hello', 'index.md'), 'utf8'), /Hello again/);
-    // Without force, a check soon after the last one doesn't ask the website again
-    site.asked.length = 0;
-    await syncNews();
-    assert.equal(site.asked.length, 0);
-  } finally { await site.close(); }
-});
-
-test('news remote: a file that doesn\'t match the feed keeps the copy QuorX already has', async () => {
-  reset();
-  const files = { 'articles/hello': { 'index.md': md('Hello'), 'pic.png': PNG } };
-  const site = await fakeSite(files);
-  try {
-    await syncNews({ force: true });
-    await site.close();
-  } catch (e) { await site.close(); throw e; }
-  // The website now serves a different picture than the feed says
-  files['articles/hello']['index.md'] = md('Changed');
-  const bad = await fakeSite(files, { serve: { 'articles/hello/index.md': Buffer.from('tampered') } });
-  try {
-    const st = await syncNews({ force: true });
-    assert.match(st.error, /didn't match the feed/);
-    assert.match(fs.readFileSync(path.join(newsCacheDir(), 'articles', 'hello', 'index.md'), 'utf8'), /title: Hello\n/, 'the old copy stays');
-    assert.ok(!fs.existsSync(`${newsCacheDir()}.next`), 'the half-made copy is removed');
-  } finally { await bad.close(); }
-});
-
-test('news remote: names, sizes and formats outside what News allows are refused', async () => {
-  const cases = [
-    ['a slug that climbs out', (f) => { f.articles[0].slug = '../../evil'; return f; }, /name News doesn't allow/],
-    ['a file name with a path', (f) => { f.articles[0].files[1].name = '../x.png'; return f; }, /file name News doesn't allow/],
-    ['a script file', (f) => { f.articles[0].files[1].name = 'run.js'; return f; }, /file name News doesn't allow/],
-    ['no index.md', (f) => { f.articles[0].files = f.articles[0].files.filter((x) => x.name !== 'index.md'); return f; }, /no index.md/],
-    ['a huge file', (f) => { f.articles[0].files[1].size = 9e9; return f; }, /too large/],
-    ['an unknown format', (f) => { f.format = 2; return f; }, /format this QuorX doesn't read/],
-  ];
-  for (const [what, feedPatch, error] of cases) {
+test('news remote: the feed is downloaded and read like news/, later checks fetch only what changed, and a newer shipped copy wins', async () => {
+  { // news remote: the feed is downloaded and News reads the copy, laid out like news/
     reset();
-    const site = await fakeSite({ 'articles/hello': { 'index.md': md('Hello'), 'pic.png': PNG } }, { feedPatch });
+    const site = await fakeSite({ 'articles/hello': { 'index.md': md('Hello'), 'pic.png': PNG } });
     try {
       const st = await syncNews({ force: true });
-      assert.match(String(st.error), error, what);
-      assert.ok(!fs.existsSync(path.join(newsCacheDir(), 'updates.json')), `${what}: nothing is kept`);
-      assert.ok(site.asked.every((a) => !a.path.includes('..') && !a.path.endsWith('.js')), `${what}: nothing outside News is fetched`);
+      assert.equal(st.error, undefined, st.error);
+      assert.ok(st.syncedAt, 'syncedAt is recorded');
+      assert.equal(st.files, 2);
+      const cache = newsCacheDir();
+      assert.ok(fs.existsSync(path.join(cache, 'articles', 'hello', 'index.md')));
+      assert.ok(fs.existsSync(path.join(cache, 'articles', 'hello', 'pic.png')));
+      assert.ok(fs.existsSync(path.join(cache, 'updates.json')));
+      const ship = shipped();
+      assert.equal(activeNewsDir(ship), cache, 'the newer downloaded copy is used');
+      const r = await newsRoute({ method: 'GET', pathname: '/api/news', query: new URLSearchParams() }, activeNewsDir(ship));
+      assert.equal(r.body.source.from, 'website');
+      assert.deepEqual(r.body.articles.map((a) => a.slug), ['hello']);
+      assert.equal(r.body.updates.versions[0].version, '9.9.9');
+      assert.ok(site.asked.every((a) => a.path.startsWith('/news/')), 'only the site\'s own News addresses are asked for');
+      assert.match(site.asked[0].ua, /^QuorX\/\d+\.\d+\.\d+/, 'the user agent says QuorX and its version, nothing else');
+    } finally { await site.close(); }
+  }
+  { // news remote: a second check fetches only the feed when nothing changed, and only the changed file after
+    reset();
+    const files = { 'articles/hello': { 'index.md': md('Hello'), 'pic.png': PNG } };
+    const site = await fakeSite(files);
+    try {
+      await syncNews({ force: true });
+      site.asked.length = 0;
+      await syncNews({ force: true });
+      assert.deepEqual(site.asked.map((a) => a.path), ['/news/feed.json']);
+      files['articles/hello']['index.md'] = md('Hello again');
+      site.asked.length = 0;
+      const st = await syncNews({ force: true });
+      assert.equal(st.error, undefined, st.error);
+      assert.deepEqual(site.asked.map((a) => a.path), ['/news/feed.json', '/news/content/articles/hello/index.md']);
+      assert.match(fs.readFileSync(path.join(newsCacheDir(), 'articles', 'hello', 'index.md'), 'utf8'), /Hello again/);
+      // Without force, a check soon after the last one doesn't ask the website again
+      site.asked.length = 0;
+      await syncNews();
+      assert.equal(site.asked.length, 0);
+    } finally { await site.close(); }
+  }
+  { // news remote: the copy that shipped wins when it's newer than the download
+    reset();
+    const site = await fakeSite({ 'articles/hello': { 'index.md': md('Hello'), 'pic.png': PNG } }, { version: '0.2.0' });
+    try {
+      await syncNews({ force: true });
+      const ship = shipped('0.3.0');
+      assert.equal(activeNewsDir(ship), ship, 'an update installed while offline shows its own News');
+      assert.equal(activeNewsDir(shipped('0.1.0')), newsCacheDir(), 'an older shipped copy gives way to the download');
     } finally { await site.close(); }
   }
 });
 
-test('news remote: an address in the feed is never followed; files come from the site\'s own News address', async () => {
-  reset();
-  const site = await fakeSite({ 'articles/hello': { 'index.md': md('Hello'), 'pic.png': PNG } }, {
-    feedPatch: (f) => { for (const x of f.articles[0].files) x.url = 'http://127.0.0.1:1/elsewhere'; return f; },
-  });
-  try {
-    const st = await syncNews({ force: true });
-    assert.equal(st.error, undefined, st.error);
-    assert.deepEqual(site.asked.map((a) => a.path).sort(), ['/news/content/articles/hello/index.md', '/news/content/articles/hello/pic.png', '/news/feed.json']);
-  } finally { await site.close(); }
+test('news remote: a file that doesn\'t match the feed, names, sizes and formats News doesn\'t allow, and addresses in the feed are all refused', async () => {
+  { // news remote: a file that doesn't match the feed keeps the copy QuorX already has
+    reset();
+    const files = { 'articles/hello': { 'index.md': md('Hello'), 'pic.png': PNG } };
+    const site = await fakeSite(files);
+    try {
+      await syncNews({ force: true });
+      await site.close();
+    } catch (e) { await site.close(); throw e; }
+    // The website now serves a different picture than the feed says
+    files['articles/hello']['index.md'] = md('Changed');
+    const bad = await fakeSite(files, { serve: { 'articles/hello/index.md': Buffer.from('tampered') } });
+    try {
+      const st = await syncNews({ force: true });
+      assert.match(st.error, /didn't match the feed/);
+      assert.match(fs.readFileSync(path.join(newsCacheDir(), 'articles', 'hello', 'index.md'), 'utf8'), /title: Hello\n/, 'the old copy stays');
+      assert.ok(!fs.existsSync(`${newsCacheDir()}.next`), 'the half-made copy is removed');
+    } finally { await bad.close(); }
+  }
+  { // news remote: names, sizes and formats outside what News allows are refused
+    const cases = [
+      ['a slug that climbs out', (f) => { f.articles[0].slug = '../../evil'; return f; }, /name News doesn't allow/],
+      ['a file name with a path', (f) => { f.articles[0].files[1].name = '../x.png'; return f; }, /file name News doesn't allow/],
+      ['a script file', (f) => { f.articles[0].files[1].name = 'run.js'; return f; }, /file name News doesn't allow/],
+      ['no index.md', (f) => { f.articles[0].files = f.articles[0].files.filter((x) => x.name !== 'index.md'); return f; }, /no index.md/],
+      ['a huge file', (f) => { f.articles[0].files[1].size = 9e9; return f; }, /too large/],
+      ['an unknown format', (f) => { f.format = 2; return f; }, /format this QuorX doesn't read/],
+    ];
+    for (const [what, feedPatch, error] of cases) {
+      reset();
+      const site = await fakeSite({ 'articles/hello': { 'index.md': md('Hello'), 'pic.png': PNG } }, { feedPatch });
+      try {
+        const st = await syncNews({ force: true });
+        assert.match(String(st.error), error, what);
+        assert.ok(!fs.existsSync(path.join(newsCacheDir(), 'updates.json')), `${what}: nothing is kept`);
+        assert.ok(site.asked.every((a) => !a.path.includes('..') && !a.path.endsWith('.js')), `${what}: nothing outside News is fetched`);
+      } finally { await site.close(); }
+    }
+  }
+  { // news remote: an address in the feed is never followed; files come from the site's own News address
+    reset();
+    const site = await fakeSite({ 'articles/hello': { 'index.md': md('Hello'), 'pic.png': PNG } }, {
+      feedPatch: (f) => { for (const x of f.articles[0].files) x.url = 'http://127.0.0.1:1/elsewhere'; return f; },
+    });
+    try {
+      const st = await syncNews({ force: true });
+      assert.equal(st.error, undefined, st.error);
+      assert.deepEqual(site.asked.map((a) => a.path).sort(), ['/news/content/articles/hello/index.md', '/news/content/articles/hello/pic.png', '/news/feed.json']);
+    } finally { await site.close(); }
+  }
 });
 
-test('news remote: off shows the shipped copy, removes the download and asks the website nothing', async () => {
-  reset();
-  const site = await fakeSite({ 'articles/hello': { 'index.md': md('Hello'), 'pic.png': PNG } });
-  try {
-    await syncNews({ force: true });
-    const ship = shipped();
-    assert.equal(setRemote(false).on, false);
-    assert.ok(!fs.existsSync(newsCacheDir()), 'the downloaded copy is removed');
-    assert.equal(activeNewsDir(ship), ship);
-    site.asked.length = 0;
-    await syncNews({ force: true });
-    assert.equal(site.asked.length, 0, 'nothing is asked while it\'s off');
-    assert.throws(() => setRemote('yes'), /true or false/);
-    assert.equal(setRemote(true).on, true);
-  } finally { await site.close(); }
+test('news remote: off shows the shipped copy and asks nothing, the routes turn it on and off, and a failed download ends quietly', async () => {
+  { // news remote: off shows the shipped copy, removes the download and asks the website nothing
+    reset();
+    const site = await fakeSite({ 'articles/hello': { 'index.md': md('Hello'), 'pic.png': PNG } });
+    try {
+      await syncNews({ force: true });
+      const ship = shipped();
+      assert.equal(setRemote(false).on, false);
+      assert.ok(!fs.existsSync(newsCacheDir()), 'the downloaded copy is removed');
+      assert.equal(activeNewsDir(ship), ship);
+      site.asked.length = 0;
+      await syncNews({ force: true });
+      assert.equal(site.asked.length, 0, 'nothing is asked while it\'s off');
+      assert.throws(() => setRemote('yes'), /true or false/);
+      assert.equal(setRemote(true).on, true);
+    } finally { await site.close(); }
+  }
+  { // news remote: the routes turn it on and off and check now
+    reset();
+    const site = await fakeSite({ 'articles/hello': { 'index.md': md('Hello'), 'pic.png': PNG } });
+    try {
+      const route = (method, pathname, body = '') => newsRoute({ method, pathname, query: new URLSearchParams(), body });
+      const on = await route('POST', '/api/news/remote', '{"on":true}');
+      assert.equal(on.code, 200);
+      assert.equal(on.body.source.on, true);
+      assert.ok(fs.existsSync(path.join(newsCacheDir(), 'updates.json')), 'turning it on downloads right away');
+      const now = await route('POST', '/api/news/sync');
+      assert.equal(now.code, 200);
+      assert.ok(now.body.source.syncedAt);
+      for (const body of ['{"on":"yes"}', '{}', 'not json']) assert.equal((await route('POST', '/api/news/remote', body)).code, 400, body);
+      const off = await route('POST', '/api/news/remote', '{"on":false}');
+      assert.equal(off.body.source.from, 'shipped');
+      assert.equal(remoteState().on, false);
+    } finally { await site.close(); setRemote(true); }
+  }
+  { // news remote: a failed download whose cleanup fails too ends quietly, never with an error out of the sync
+    reset();
+    const state = path.join(process.env.OH_HOME, 'data', 'news-remote.json');
+    // The feed promises a file the site doesn't match, so the download fails. The state file can't be written either
+    // (a folder stands in its place, as a full disk or a locked file would), so the cleanup's own save fails too.
+    const wrongHash = (f) => { f.articles[0].files[0].sha256 = '0'.repeat(64); return f; };
+    const site = await fakeSite({ 'articles/hello': { 'index.md': md('Hello'), 'pic.png': PNG } }, { feedPatch: wrongHash });
+    fs.mkdirSync(state, { recursive: true });
+    try {
+      await assert.doesNotReject(syncNews({ force: true }));
+    } finally { await site.close(); fs.rmSync(state, { recursive: true, force: true }); }
+  }
 });
 
-test('news remote: the copy that shipped wins when it\'s newer than the download', async () => {
-  reset();
-  const site = await fakeSite({ 'articles/hello': { 'index.md': md('Hello'), 'pic.png': PNG } }, { version: '0.2.0' });
-  try {
-    await syncNews({ force: true });
-    const ship = shipped('0.3.0');
-    assert.equal(activeNewsDir(ship), ship, 'an update installed while offline shows its own News');
-    assert.equal(activeNewsDir(shipped('0.1.0')), newsCacheDir(), 'an older shipped copy gives way to the download');
-  } finally { await site.close(); }
-});
-
-test('news remote: the routes turn it on and off and check now', async () => {
-  reset();
-  const site = await fakeSite({ 'articles/hello': { 'index.md': md('Hello'), 'pic.png': PNG } });
-  try {
-    const route = (method, pathname, body = '') => newsRoute({ method, pathname, query: new URLSearchParams(), body });
-    const on = await route('POST', '/api/news/remote', '{"on":true}');
-    assert.equal(on.code, 200);
-    assert.equal(on.body.source.on, true);
-    assert.ok(fs.existsSync(path.join(newsCacheDir(), 'updates.json')), 'turning it on downloads right away');
-    const now = await route('POST', '/api/news/sync');
-    assert.equal(now.code, 200);
-    assert.ok(now.body.source.syncedAt);
-    for (const body of ['{"on":"yes"}', '{}', 'not json']) assert.equal((await route('POST', '/api/news/remote', body)).code, 400, body);
-    const off = await route('POST', '/api/news/remote', '{"on":false}');
-    assert.equal(off.body.source.from, 'shipped');
-    assert.equal(remoteState().on, false);
-  } finally { await site.close(); setRemote(true); }
-});
-
-test('news remote: a failed download whose cleanup fails too ends quietly, never with an error out of the sync', async () => {
-  reset();
-  const state = path.join(process.env.OH_HOME, 'data', 'news-remote.json');
-  // The feed promises a file the site doesn't match, so the download fails. The state file can't be written either
-  // (a folder stands in its place, as a full disk or a locked file would), so the cleanup's own save fails too.
-  const wrongHash = (f) => { f.articles[0].files[0].sha256 = '0'.repeat(64); return f; };
-  const site = await fakeSite({ 'articles/hello': { 'index.md': md('Hello'), 'pic.png': PNG } }, { feedPatch: wrongHash });
-  fs.mkdirSync(state, { recursive: true });
-  try {
-    await assert.doesNotReject(syncNews({ force: true }));
-  } finally { await site.close(); fs.rmSync(state, { recursive: true, force: true }); }
-});

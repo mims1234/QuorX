@@ -75,31 +75,32 @@ test('the agent is told its real shell, and a command written for another shell 
   assert.equal(shellHint('pwsh', "The token '&&' is not a valid statement separator", 'a && b'), ''); // pwsh has &&
 });
 
-test('old page views are cut in batches, the newest two stay whole, and other tools are left alone', () => {
-  const big = (k) => `Opened page ${k}.\nTitle: P${k}\n${'x'.repeat(3000)}`;
-  const msgs = [{ role: 'system', content: 's' }, { role: 'user', content: 'read my feed' }];
-  for (let k = 0; k < 8; k++) msgs.push({ role: 'assistant', content: null, tool_calls: [{ id: `b${k}`, function: { name: 'browser', arguments: '{}' } }] }, { role: 'tool', tool_call_id: `b${k}`, content: big(k) });
-  msgs.push({ role: 'assistant', content: null, tool_calls: [{ id: 'r1', function: { name: 'read_file', arguments: '{}' } }] }, { role: 'tool', tool_call_id: 'r1', content: 'y'.repeat(3000) });
-  const done = new WeakSet();
-  assert.equal(trimPageViews(msgs, { done }), 0); // 8 views: not yet a batch
-  msgs.push({ role: 'assistant', content: null, tool_calls: [{ id: 'b8', function: { name: 'browser', arguments: '{}' } }] }, { role: 'tool', tool_call_id: 'b8', content: big(8) });
-  assert.ok(trimPageViews(msgs, { done }) > 6 * 2900);
-  const views = msgs.filter((m) => m.role === 'tool' && m.tool_call_id.startsWith('b'));
-  assert.match(views[0].content, /^Opened page 0\.\nTitle: P0\n\[An older page view/);
-  assert.equal(views[7].content, big(7)); assert.equal(views[8].content, big(8));
-  assert.equal(msgs.find((m) => m.tool_call_id === 'r1').content.length, 3000);
-  assert.equal(trimPageViews(msgs, { done }), 0); // nothing new to cut
-});
-
-test('old desktop window reads are cut like page views when desktop is named', () => {
-  const big = (k) => `clicked at ${k},${k}. Window now:\nWindow "Untitled - Paint"\n${'  [1] Button "Save" @1,1\n'.repeat(120)}`;
-  const msgs = [{ role: 'system', content: 's' }, { role: 'user', content: 'draw a bat in Paint' }];
-  for (let k = 0; k < 9; k++) msgs.push({ role: 'assistant', content: null, tool_calls: [{ id: `d${k}`, function: { name: 'desktop', arguments: '{}' } }] }, { role: 'tool', tool_call_id: `d${k}`, content: big(k) });
-  assert.equal(trimPageViews(msgs, { done: new WeakSet() }), 0, 'browser only by default');
-  assert.ok(trimPageViews(msgs, { done: new WeakSet(), names: ['browser', 'desktop'] }) > 6 * 2500);
-  const reads = msgs.filter((m) => m.role === 'tool');
-  assert.match(reads[0].content, /^clicked at 0,0\. Window now:\nWindow "Untitled - Paint"\n\[An older page view/);
-  assert.equal(reads[8].content, big(8));
+test('old page views and desktop window reads are cut in batches, the newest two stay whole, and other tools are left alone', () => {
+  { // old page views are cut in batches, the newest two stay whole, and other tools are left alone
+    const big = (k) => `Opened page ${k}.\nTitle: P${k}\n${'x'.repeat(3000)}`;
+    const msgs = [{ role: 'system', content: 's' }, { role: 'user', content: 'read my feed' }];
+    for (let k = 0; k < 8; k++) msgs.push({ role: 'assistant', content: null, tool_calls: [{ id: `b${k}`, function: { name: 'browser', arguments: '{}' } }] }, { role: 'tool', tool_call_id: `b${k}`, content: big(k) });
+    msgs.push({ role: 'assistant', content: null, tool_calls: [{ id: 'r1', function: { name: 'read_file', arguments: '{}' } }] }, { role: 'tool', tool_call_id: 'r1', content: 'y'.repeat(3000) });
+    const done = new WeakSet();
+    assert.equal(trimPageViews(msgs, { done }), 0); // 8 views: not yet a batch
+    msgs.push({ role: 'assistant', content: null, tool_calls: [{ id: 'b8', function: { name: 'browser', arguments: '{}' } }] }, { role: 'tool', tool_call_id: 'b8', content: big(8) });
+    assert.ok(trimPageViews(msgs, { done }) > 6 * 2900);
+    const views = msgs.filter((m) => m.role === 'tool' && m.tool_call_id.startsWith('b'));
+    assert.match(views[0].content, /^Opened page 0\.\nTitle: P0\n\[An older page view/);
+    assert.equal(views[7].content, big(7)); assert.equal(views[8].content, big(8));
+    assert.equal(msgs.find((m) => m.tool_call_id === 'r1').content.length, 3000);
+    assert.equal(trimPageViews(msgs, { done }), 0); // nothing new to cut
+  }
+  { // old desktop window reads are cut like page views when desktop is named
+    const big = (k) => `clicked at ${k},${k}. Window now:\nWindow "Untitled - Paint"\n${'  [1] Button "Save" @1,1\n'.repeat(120)}`;
+    const msgs = [{ role: 'system', content: 's' }, { role: 'user', content: 'draw a bat in Paint' }];
+    for (let k = 0; k < 9; k++) msgs.push({ role: 'assistant', content: null, tool_calls: [{ id: `d${k}`, function: { name: 'desktop', arguments: '{}' } }] }, { role: 'tool', tool_call_id: `d${k}`, content: big(k) });
+    assert.equal(trimPageViews(msgs, { done: new WeakSet() }), 0, 'browser only by default');
+    assert.ok(trimPageViews(msgs, { done: new WeakSet(), names: ['browser', 'desktop'] }) > 6 * 2500);
+    const reads = msgs.filter((m) => m.role === 'tool');
+    assert.match(reads[0].content, /^clicked at 0,0\. Window now:\nWindow "Untitled - Paint"\n\[An older page view/);
+    assert.equal(reads[8].content, big(8));
+  }
 });
 
 test('compaction keeps the request and starts the kept tail on an assistant turn', () => {
@@ -207,75 +208,75 @@ test('a check that runs out of time is "couldn’t check", never a syntax error'
   } finally { CHECK_TIMEOUTS.check = was; }
 });
 
-test('the design lint flags machine-made patterns and leaves a plain page alone', () => {
-  const slop = `<!doctype html><html><head><style>
-.hero{background:linear-gradient(135deg,#7c3aed 0%,#2563eb 100%)} .btn{background:#6366f1;outline:none}
-.card{border-left:4px solid #22c55e;border-radius:12px}
-</style></head><body><h1>🚀 Ship faster</h1><p>Teams are 10x faster with us.</p><ul><li>Feature one</li></ul>
-<img src="https://images.unsplash.com/x.jpg"></body></html>`;
-  const ids = lintHtml(slop).map((h) => h.id);
-  for (const id of ['default-indigo', 'trust-gradient', 'left-accent-card', 'focus-removed', 'emoji-icons', 'invented-metric', 'filler-copy', 'placeholder-images', 'img-alt', 'no-viewport']) assert.ok(ids.includes(id), id);
-  assert.equal(lintHtml(slop).find((h) => h.id === 'invented-metric').level, 'fix');
-  const plain = `<!doctype html><html><head><meta name="viewport" content="width=device-width"><style>:root{--a:#c2410c}a:focus-visible{outline:2px solid var(--a)}.card{border-left:4px solid var(--a);border-radius:0}</style></head><body><h1>Field notes</h1><button>▶ Play ✓</button><img src="a.png" alt=""><p>Released 3 versions in 2026.</p><canvas></canvas></body></html>`;
-  assert.deepEqual(lintHtml(plain), []);
-  assert.deepEqual(lintHtml('<div class="bg-gradient-to-r from-purple-500 to-blue-500 rounded-lg border-l-4"></div>').map((h) => h.id).sort(), ['default-indigo', 'left-accent-card', 'trust-gradient']);
-  // tokens don't count as raw colours; colours written into rules do
-  const tokens = `:root{${Array.from({ length: 20 }, (_, i) => `--c${i}:#${String(i).padStart(2, '0')}aa33;`).join('')}}`;
-  assert.deepEqual(lintCss(tokens), []);
-  assert.equal(lintCss(Array.from({ length: 13 }, (_, i) => `.x${i}{color:#${String(i).padStart(2, '0')}aa33}`).join('')).map((h) => h.id)[0], 'raw-hex');
-});
-
-test('every starter design system has readable colours, lints clean, and a sample page built on it lints clean', () => {
-  const lum = (h) => { const c = [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)); return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; };
-  const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
-  const systems = listDesignSystems();
-  assert.ok(systems.length >= 4, 'at least four starters');
-  for (const s of systems) {
-    const sys = readDesignSystem(s.id);
-    assert.match(sys.md, /^---\s*\n[\s\S]*?name:/, `${s.id}: DESIGN.md has front matter`);
-    for (const h of ['## Look', '## Colours', '## Type', '## Components']) assert.ok(sys.md.includes(h), `${s.id}: ${h}`);
-    assert.deepEqual(lintCss(sys.tokens), [], `${s.id}: tokens.css lints clean`);
-    for (const block of sys.tokens.split('@media')) {
-      const t = Object.fromEntries([...block.matchAll(/--([\w-]+)\s*:\s*(#[0-9a-f]{6})/gi)].map((m) => [m[1], m[2]]));
-      if (!t.bg) continue;
-      assert.ok(ratio(t.fg, t.bg) >= 7, `${s.id}: text on background`);
-      assert.ok(ratio(t.muted, t.bg) >= 4.5 && ratio(t.muted, t.surface) >= 4.5, `${s.id}: muted text`);
-      assert.ok(ratio(t['accent-ink'], t.accent) >= 4.5, `${s.id}: text on the accent`);
-    }
-    const page = '<!doctype html><html><head><meta name="viewport" content="width=device-width"><link rel="stylesheet" href="tokens.css"><style>body{background:var(--bg);color:var(--fg);font-family:var(--font-body)} .btn{background:var(--accent);color:var(--accent-ink)} .btn:focus-visible{outline:2px solid var(--focus)}</style></head><body><h1>Opening hours</h1><button class="btn">Order ahead</button></body></html>';
-    assert.deepEqual(lintHtml(page, { tokens: tokenColors(sys.tokens) }), [], `${s.id}: sample page`);
+test('the design lint flags machine-made patterns and colours outside the palette; every starter design system is readable and lints clean', () => {
+  { // the design lint flags machine-made patterns and leaves a plain page alone
+    const slop = `<!doctype html><html><head><style>
+  .hero{background:linear-gradient(135deg,#7c3aed 0%,#2563eb 100%)} .btn{background:#6366f1;outline:none}
+  .card{border-left:4px solid #22c55e;border-radius:12px}
+  </style></head><body><h1>🚀 Ship faster</h1><p>Teams are 10x faster with us.</p><ul><li>Feature one</li></ul>
+  <img src="https://images.unsplash.com/x.jpg"></body></html>`;
+    const ids = lintHtml(slop).map((h) => h.id);
+    for (const id of ['default-indigo', 'trust-gradient', 'left-accent-card', 'focus-removed', 'emoji-icons', 'invented-metric', 'filler-copy', 'placeholder-images', 'img-alt', 'no-viewport']) assert.ok(ids.includes(id), id);
+    assert.equal(lintHtml(slop).find((h) => h.id === 'invented-metric').level, 'fix');
+    const plain = `<!doctype html><html><head><meta name="viewport" content="width=device-width"><style>:root{--a:#c2410c}a:focus-visible{outline:2px solid var(--a)}.card{border-left:4px solid var(--a);border-radius:0}</style></head><body><h1>Field notes</h1><button>▶ Play ✓</button><img src="a.png" alt=""><p>Released 3 versions in 2026.</p><canvas></canvas></body></html>`;
+    assert.deepEqual(lintHtml(plain), []);
+    assert.deepEqual(lintHtml('<div class="bg-gradient-to-r from-purple-500 to-blue-500 rounded-lg border-l-4"></div>').map((h) => h.id).sort(), ['default-indigo', 'left-accent-card', 'trust-gradient']);
+    // tokens don't count as raw colours; colours written into rules do
+    const tokens = `:root{${Array.from({ length: 20 }, (_, i) => `--c${i}:#${String(i).padStart(2, '0')}aa33;`).join('')}}`;
+    assert.deepEqual(lintCss(tokens), []);
+    assert.equal(lintCss(Array.from({ length: 13 }, (_, i) => `.x${i}{color:#${String(i).padStart(2, '0')}aa33}`).join('')).map((h) => h.id)[0], 'raw-hex');
   }
-});
-
-test('the design lint flags colours outside the project palette, and a starter applies without losing files', () => {
-  const tokens = tokenColors(':root{--bg:#fff;--accent:#c2410c} @media (prefers-color-scheme: dark){:root{--bg:#0b1a24}}');
-  assert.deepEqual([...tokens].sort(), ['#0b1a24', '#c2410c', '#ffffff']);
-  assert.equal(lintCss('.a{color:#C2410C;background:#0b1a24} .b{border:1px solid #fff}', { tokens }).length, 0, 'on-palette colours, any case or short form');
-  const off = lintCss('.a{color:#ff00aa;background:var(--bg)}', { tokens });
-  assert.equal(off[0].id, 'off-palette');
-  assert.match(off[0].msg, /#ff00aa/);
-  assert.equal(lintCss('.a{color:#ff00aa}').length, 0, 'no palette, no off-palette notes');
-  const dir = tempDir('quorx-design-');
-  try {
-    assert.equal(projectDesign(dir), null);
-    const first = applyDesignSystem(dir, 'harbor');
-    assert.equal(first.applied, true);
-    assert.equal(projectDesign(dir).name, 'Harbor');
-    fs.writeFileSync(path.join(dir, 'page.css'), '.x{color:#ff00aa}');
-    assert.equal(lintFile(dir, 'page.css')[0].id, 'off-palette', 'project files are checked against its tokens.css');
-    assert.deepEqual(lintFile(dir, 'tokens.css'), [], 'tokens.css itself is the palette');
-    fs.writeFileSync(path.join(dir, 'DESIGN.md'), '# Mine');
-    const again = applyDesignSystem(dir, 'ledger');
-    assert.equal(again.applied, false, 'existing files are kept without overwrite');
-    assert.deepEqual(again.exists, ['DESIGN.md', 'tokens.css']);
-    const forced = applyDesignSystem(dir, 'ledger', { overwrite: true });
-    assert.equal(forced.trashed.length, 2, 'the old files go to the trash');
-    assert.ok(fs.readFileSync(path.join(dir, forced.trashed[0]), 'utf8').includes('# Mine'));
-    assert.equal(projectDesign(dir).name, 'Ledger');
-    saveProjectDesign(dir, null);
-    assert.equal(projectDesign(dir), null, 'remove takes both files away');
-    assert.throws(() => applyDesignSystem(dir, '../etc'), /no design system/);
-  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  { // every starter design system has readable colours, lints clean, and a sample page built on it lints clean
+    const lum = (h) => { const c = [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)); return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; };
+    const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+    const systems = listDesignSystems();
+    assert.ok(systems.length >= 4, 'at least four starters');
+    for (const s of systems) {
+      const sys = readDesignSystem(s.id);
+      assert.match(sys.md, /^---\s*\n[\s\S]*?name:/, `${s.id}: DESIGN.md has front matter`);
+      for (const h of ['## Look', '## Colours', '## Type', '## Components']) assert.ok(sys.md.includes(h), `${s.id}: ${h}`);
+      assert.deepEqual(lintCss(sys.tokens), [], `${s.id}: tokens.css lints clean`);
+      for (const block of sys.tokens.split('@media')) {
+        const t = Object.fromEntries([...block.matchAll(/--([\w-]+)\s*:\s*(#[0-9a-f]{6})/gi)].map((m) => [m[1], m[2]]));
+        if (!t.bg) continue;
+        assert.ok(ratio(t.fg, t.bg) >= 7, `${s.id}: text on background`);
+        assert.ok(ratio(t.muted, t.bg) >= 4.5 && ratio(t.muted, t.surface) >= 4.5, `${s.id}: muted text`);
+        assert.ok(ratio(t['accent-ink'], t.accent) >= 4.5, `${s.id}: text on the accent`);
+      }
+      const page = '<!doctype html><html><head><meta name="viewport" content="width=device-width"><link rel="stylesheet" href="tokens.css"><style>body{background:var(--bg);color:var(--fg);font-family:var(--font-body)} .btn{background:var(--accent);color:var(--accent-ink)} .btn:focus-visible{outline:2px solid var(--focus)}</style></head><body><h1>Opening hours</h1><button class="btn">Order ahead</button></body></html>';
+      assert.deepEqual(lintHtml(page, { tokens: tokenColors(sys.tokens) }), [], `${s.id}: sample page`);
+    }
+  }
+  { // the design lint flags colours outside the project palette, and a starter applies without losing files
+    const tokens = tokenColors(':root{--bg:#fff;--accent:#c2410c} @media (prefers-color-scheme: dark){:root{--bg:#0b1a24}}');
+    assert.deepEqual([...tokens].sort(), ['#0b1a24', '#c2410c', '#ffffff']);
+    assert.equal(lintCss('.a{color:#C2410C;background:#0b1a24} .b{border:1px solid #fff}', { tokens }).length, 0, 'on-palette colours, any case or short form');
+    const off = lintCss('.a{color:#ff00aa;background:var(--bg)}', { tokens });
+    assert.equal(off[0].id, 'off-palette');
+    assert.match(off[0].msg, /#ff00aa/);
+    assert.equal(lintCss('.a{color:#ff00aa}').length, 0, 'no palette, no off-palette notes');
+    const dir = tempDir('quorx-design-');
+    try {
+      assert.equal(projectDesign(dir), null);
+      const first = applyDesignSystem(dir, 'harbor');
+      assert.equal(first.applied, true);
+      assert.equal(projectDesign(dir).name, 'Harbor');
+      fs.writeFileSync(path.join(dir, 'page.css'), '.x{color:#ff00aa}');
+      assert.equal(lintFile(dir, 'page.css')[0].id, 'off-palette', 'project files are checked against its tokens.css');
+      assert.deepEqual(lintFile(dir, 'tokens.css'), [], 'tokens.css itself is the palette');
+      fs.writeFileSync(path.join(dir, 'DESIGN.md'), '# Mine');
+      const again = applyDesignSystem(dir, 'ledger');
+      assert.equal(again.applied, false, 'existing files are kept without overwrite');
+      assert.deepEqual(again.exists, ['DESIGN.md', 'tokens.css']);
+      const forced = applyDesignSystem(dir, 'ledger', { overwrite: true });
+      assert.equal(forced.trashed.length, 2, 'the old files go to the trash');
+      assert.ok(fs.readFileSync(path.join(dir, forced.trashed[0]), 'utf8').includes('# Mine'));
+      assert.equal(projectDesign(dir).name, 'Ledger');
+      saveProjectDesign(dir, null);
+      assert.equal(projectDesign(dir), null, 'remove takes both files away');
+      assert.throws(() => applyDesignSystem(dir, '../etc'), /no design system/);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  }
 });
 
 test('the gallery has many styles; your own systems save, apply, rename and delete', () => {
