@@ -7626,7 +7626,8 @@ function wireSignIn() {
     if (r.error) return signInUi('idle', `⚠ ${r.error}`, true);
     stopSignIn();
     SIGNIN = { ...r, timer: setInterval(pollSignIn, 1500) };
-    window.open(r.url, '_blank', 'noopener');
+    // In your default browser (Chrome), where you are signed in: never QuorX's own browser, which is signed in nowhere.
+    if (DESK) window.ohDesktop.openExternal(r.url); else window.open(r.url, '_blank', 'noopener');
     wireSignIn();
   };
   $('[data-signin-reopen]', el).onclick = () => { if (SIGNIN) window.open(SIGNIN.url, '_blank', 'noopener'); };
@@ -7898,7 +7899,8 @@ async function drawMcpPanel() {
     b.disabled = true; b.textContent = 'Opening…';
     const r = await postJ('/api/mcp/login', { name: n }).catch((x) => ({ error: x.message }));
     if (r?.error || !r?.url) { say(`Can't sign in to ${n}: ${r?.error || 'no sign-in page'}`); return; }
-    window.open(r.url, '_blank', 'noopener');
+    // In your default browser (Chrome), where you are signed in: never QuorX's own browser, which is signed in nowhere.
+    if (DESK) window.ohDesktop.openExternal(r.url); else window.open(r.url, '_blank', 'noopener');
     U.sel = n; say(`Finish signing in to ${n} in your browser. This updates by itself.`);
     for (let i = 0; i < 90; i++) {
       await new Promise((ok) => setTimeout(ok, 2000));
