@@ -8331,13 +8331,28 @@ async function drawPerms() {
   const BR = { granted: ['ok', 'allowed'], prompt: ['', 'asks first'], default: ['', 'asks first'], denied: ['bad', 'blocked'] };
   const st = (cls, txt) => `<span class="pm-st ${cls}">${esc(txt)}</span>`;
   const micOn = G.perms?.mic === 'yes';
+  // Notifications: which ones (the same choice as ⚙ Settings → Notifications), and in a browser, its own say. The
+  // desktop app shows them itself, so there only the choice matters.
+  const pref = uiOf(G.settings).notify, desk = !!window.ohDesktop?.notify;
+  const NOTE_PREF = [['all', '🔔', 'All', 'When a reply needs you or ends'], ['needs', '✋', 'Needs me', 'Only when a reply waits for you'], ['off', '🔕', 'Off', 'No notifications']];
+  const noteState = pref === 'off' ? st('', 'off') : !desk && note === 'denied' ? st('bad', 'blocked') : !desk && note !== 'granted' ? st('', note ? 'not allowed yet' : 'not available') : st('ok', pref === 'needs' ? 'needs me only' : 'on');
+  const noteAct = !desk && note === 'default' && pref !== 'off' ? '<button type="button" class="pm-act" data-pm="note-allow">Allow</button>' : '';
+  const noteSeg = `<div class="pm-seg" role="radiogroup" aria-label="Which notifications">${NOTE_PREF.map(([k, ico, l, tip]) => `<button type="button" role="radio" aria-checked="${pref === k}" class="${pref === k ? 'on' : ''}" data-note="${k}" title="${esc(tip)}">${ico} ${l}</button>`).join('')}</div>${!desk && note === 'denied' && pref !== 'off' ? '<small class="pm-warn">This browser blocks them: allow notifications in the site settings (🔒 in the address bar).</small>' : ''}`;
   const rows = [
     ['🎤', 'Microphone', 'Only while the mic glows, to type what you say.', micOn ? st('ok', 'allowed') : st('', 'not asked yet'), mic ? `Browser: ${BR[mic]?.[1] || mic}` : '', micOn ? '<button type="button" class="pm-act" data-pm="mic-off">Take back</button>' : ''],
-    ['🔔', 'Notifications', 'When a reply finishes or needs you while QuorX is in the background.', note ? st(BR[note]?.[0] || '', BR[note]?.[1] || note) : st('', 'not available'), '', ''],
+    ['🔔', 'Notifications', 'When a reply finishes or needs you while QuorX is in the background.', noteState, '', noteAct, noteSeg],
     ['🧩', 'Chrome extension', 'Lets the agent use your own Chrome, signed in as you.', extReady() ? st('ok', 'connected') : st('', G.ext?.outdated ? 'needs a reload' : 'not set up'), '', `<button type="button" class="pm-act" data-pm="ext">${extReady() ? 'Settings' : 'Set up'}</button>`],
   ];
-  pop.innerHTML = `<div class="pm-h"><b>What QuorX may use</b><small>On this computer, in this browser</small></div>${rows.map(([ico, name, what, state, br, act]) => `<div class="pm-row"><span class="pm-ico" aria-hidden="true">${ico}</span><div class="pm-main"><div class="pm-top"><b>${name}</b>${state}</div><small>${esc(what)}${br ? ` · ${esc(br)}` : ''}</small></div>${act}</div>`).join('')}<p class="pm-note">Taking the mic back here makes QuorX ask again. To block it in the browser too, use the site settings (🔒 in the address bar) or Windows privacy settings.</p>`;
+  pop.innerHTML = `<div class="pm-h"><b>What QuorX may use</b><small>On this computer, in this browser</small></div>${rows.map(([ico, name, what, state, br, act, more]) => `<div class="pm-row"><span class="pm-ico" aria-hidden="true">${ico}</span><div class="pm-main"><div class="pm-top"><b>${name}</b>${state}</div><small>${esc(what)}${br ? ` · ${esc(br)}` : ''}</small>${more || ''}</div>${act}</div>`).join('')}<p class="pm-note">Taking the mic back here makes QuorX ask again. To block it in the browser too, use the site settings (🔒 in the address bar) or Windows privacy settings.</p>`;
   const mo = $('[data-pm="mic-off"]', pop); if (mo) mo.onclick = () => { delete G.perms.mic; savePrefs(); drawPerms(); };
+  const na = $('[data-pm="note-allow"]', pop); if (na) na.onclick = async () => { try { await Notification.requestPermission(); } catch { /* the browser said no */ } drawPerms(); };
+  for (const b of pop.querySelectorAll('[data-note]')) b.onclick = async () => {
+    G.settings.ui = { ...(G.settings.ui || {}), notify: b.dataset.note };
+    savePrefs();
+    // Turning them on in a browser that hasn't been asked yet: ask now, on this click.
+    if (b.dataset.note !== 'off' && !desk && 'Notification' in window && Notification.permission === 'default') { try { await Notification.requestPermission(); } catch { /* the browser said no */ } }
+    drawPerms();
+  };
   $('[data-pm="ext"]', pop).onclick = () => { closePerms(); openChromeSetup(); };
 }
 function closePerms() { const pop = $('#permPop'), b = $('#permBtn'); if (!pop || pop.hidden) return; pop.hidden = true; b.setAttribute('aria-expanded', 'false'); b.classList.remove('on'); }
