@@ -823,7 +823,7 @@ function renderSidebar() {
     // A project with a chat working glows; with a chat open it's the current one; the rest fade back (see last.css).
     const working = chats.some((c) => G.open.get(c.id)?.running);
     return `<div class="sb-project ${p.id === curProject ? 'current' : ''} ${working ? 'working' : ''} ${folded ? 'folded' : ''} ${p.pinned ? 'pinned' : ''}" data-p="${esc(p.id)}" style="${projStyle(p)}">
-      <div class="sb-ph" aria-expanded="${!folded}">
+      <div class="sb-ph" tabindex="0" aria-expanded="${!folded}" aria-haspopup="menu" aria-label="${esc(p.name)}: Enter folds its chats, the menu key or Shift+F10 opens its actions">
         <div class="sb-pname-wrap"><b class="sb-pname" title="${esc(p.name)} · ${esc(p.dir)}">${esc(p.name)}</b><button type="button" class="sb-fold" aria-expanded="${!folded}" title="${folded ? 'Show' : 'Hide'} this project's chats" aria-label="${folded ? 'Show' : 'Hide'} chats of ${esc(p.name)}"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg></button>${p.missing ? '<button type="button" class="sb-missing" title="The project folder was moved, renamed or deleted: click to reselect it">⚠ missing</button>' : p.needsFolder ? '<button type="button" class="sb-missing needs" title="Pick a folder for this project: its files sit inside QuorX itself and are copied to the folder you pick" aria-label="Pick a folder for this project">📁</button>' : ''}${working ? '<span class="sb-pworking" title="A chat in this project is working" aria-label="Working"></span>' : ''}<span class="sb-psp"></span><button type="button" class="sb-pin sb-picon ${p.pinned ? 'on' : ''}" aria-pressed="${!!p.pinned}" title="${p.pinned ? 'Unpin' : 'Pin to the top (up to 3)'}" aria-label="${p.pinned ? 'Unpin' : 'Pin'} ${esc(p.name)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4h6l-1 6 4 4H6l4-4z"/><path d="M12 14v6"/></svg></button><button type="button" class="sb-edit sb-picon" title="Project settings: budget, pin, archive, folder, colour" aria-label="Settings for ${esc(p.name)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg></button><button type="button" class="sb-new sb-picon" title="New chat in ${esc(p.name)}" aria-label="New chat in ${esc(p.name)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button><span class="sb-grip" draggable="true" tabindex="0" role="button" title="Drag to move this project (or focus it and press ↑ / ↓)" aria-label="Move ${esc(p.name)}: drag, or press up or down"><svg viewBox="0 0 10 16" aria-hidden="true"><circle cx="2.5" cy="3" r="1.4"/><circle cx="7.5" cy="3" r="1.4"/><circle cx="2.5" cy="8" r="1.4"/><circle cx="7.5" cy="8" r="1.4"/><circle cx="2.5" cy="13" r="1.4"/><circle cx="7.5" cy="13" r="1.4"/></svg></span></div>
         ${p.id === curProject ? projectSpendHTML(p, total, cost, share, chats) : ''}
       </div>
@@ -880,15 +880,17 @@ function renderSidebar() {
 
     // Drag and drop to reorder projects: only the ⠿ grip drags, so the header's buttons stay easy to click.
     const ph = $('.sb-ph', el), grip = $('.sb-grip', el);
-    ph.title = 'Click to fold or unfold its chats';
+    ph.title = 'Click to fold or unfold its chats; right-click for more';
     // Click the header (not its buttons) to fold the project's chats away and get the space back.
     ph.onclick = (e) => {
       if (e.target.closest('button:not(.sb-fold), .bud-pop, .sb-pstrip, .sb-grip')) return;
-      const set = new Set(G.foldedProjects || []);
-      set.has(p.id) ? set.delete(p.id) : set.add(p.id);
-      G.foldedProjects = [...set]; savePrefs();
-      el.classList.toggle('folded', set.has(p.id)); ph.setAttribute('aria-expanded', String(!set.has(p.id)));
-      const fb = $('.sb-fold', ph), shut = set.has(p.id); fb.setAttribute('aria-expanded', String(!shut)); fb.title = `${shut ? 'Show' : 'Hide'} this project's chats`; fb.setAttribute('aria-label', `${shut ? 'Show' : 'Hide'} chats of ${p.name}`);
+      toggleProjectFold(p.id);
+    };
+    // Right-click, or the menu key / Shift+F10 on the header or one of its buttons: the project's quick actions.
+    ph.oncontextmenu = (e) => { if (e.target.closest('.bud-pop, .sb-pstrip')) return; projectMenu(e, p, el); };
+    ph.onkeydown = (e) => {
+      if (e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey)) { e.preventDefault(); projectMenu({ preventDefault() {}, stopPropagation() { e.stopPropagation(); }, clientX: 0, clientY: 0, anchor: ph }, p, el); return; }
+      if (e.target === ph && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); toggleProjectFold(p.id); }
     };
     // Dragging shows a small pill with the project's name under the pointer (not a faded copy of the whole card);
     // the project stays in place as an outline, and a bright line marks where it will land.
@@ -1000,7 +1002,7 @@ async function openProjectSettings(p0, focusOn) {
   const p = projects.find((x) => x.id === p0.id) || p0;
   box.innerHTML = `
     <header class="pj-head">
-      <div class="pj-title" style="--h:${hue(p.name)}${p.color ? `;--pcx:${p.color}` : ''}"><b class="pj-name" title="The project is named after its folder; pick another folder to change it">${esc(p.name)}</b><small>Project settings</small></div>
+      <div class="pj-title" style="--h:${hue(p.name)}${p.color ? `;--pcx:${p.color}` : ''}"><b class="pj-name" title="${p.folderName && p.folderName !== p.name ? `Folder: ${esc(p.folderName)}. ` : ''}Right-click the project in the sidebar → Rename to change its name in QuorX; the folder keeps its own">${esc(p.name)}</b><small>Project settings</small></div>
       <div class="pj-head-acts">
         <label class="pj-pick pj-hpick ${p.color ? 'on' : ''}" title="Name colour: pick any colour"><input type="color" value="${esc(p.color || autoHex(p.name))}" aria-label="Pick the name colour"><span class="pj-pick-sw" style="--sw:${esc(p.color || autoHex(p.name))}"></span><code class="pj-pick-hex">${esc(p.color || 'Auto')}</code></label>
         <button type="button" class="pj-auto pj-hbtn ${p.color ? '' : 'on'}" title="Back to the automatic colour (from the name)" aria-label="Automatic name colour" ${p.color ? '' : 'hidden'}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.3-5.7"/><path d="M4 4v4h4"/></svg></button>
@@ -1397,12 +1399,53 @@ function editBudget(p, suggest, mount) {
 async function deleteProject(p) {
   if ([...G.open.values()].some((c) => c.running && c.projectId === p.id)) return uiAlert('A chat in this project is still running. Stop it first.');
   const n = G.chatStats?.[p.id]?.chats ?? G.chats.filter((c) => (c.projectId || 'scratch') === p.id).length;
-  if (!await uiConfirm(`Delete the project "${p.name}"?\n\n• Its ${n} chat${n === 1 ? '' : 's'} move to data/trash (recoverable).\n• The folder ${p.dir} and its files are NOT touched.`)) return;
+  const ans = await uiConfirm(`Delete the project "${p.name}"?\n\n• It leaves QuorX, and its ${n} chat${n === 1 ? '' : 's'} move to data/trash (recoverable until the trash is emptied).\n• The folder ${p.dir} and every file in it are never touched.${p.archived ? '' : '\n• To keep the chats and only clear it from the sidebar, archive it instead.'}`, p.archived ? {} : { alt: 'Archive instead' });
+  if (ans === 'alt') return setProjectFlag(p, { archived: true });
+  if (ans !== true) return;
   const r = await fetch(`/api/projects/${p.id}`, { method: 'DELETE' }).then((x) => x.json()).catch(() => ({}));
   if (!r.ok) return uiAlert('Could not delete that project.');
   for (const [id, c] of G.open) if (c.projectId === p.id) { releasePane(c); G.open.delete(id); G.panes = G.panes.filter((x) => x !== id); }
   if (!G.panes.length) showLanding(); else renderPanes();
   refreshSidebar();
+}
+// Rename: a name of its own in QuorX; the folder keeps its name. Empty goes back to the folder's name.
+const BUILTIN_PROJECTS = new Set(['scratch', 'schedules']);
+async function renameProject(p) {
+  const folder = p.folderName || p.name;
+  const t = await uiPrompt(`Rename "${p.name}"\nThe name in QuorX only: the folder stays "${folder}". Leave it empty to use the folder's name again.`, p.name);
+  if (t == null || t.trim() === p.name) return;
+  const r = await postJ(`/api/projects/${encodeURIComponent(p.id)}/name`, { name: t }).catch((e) => ({ error: e.message }));
+  if (r?.error) return uiAlert(`Could not rename the project: ${r.error}`);
+  await refreshSidebar();
+  for (const ch of G.open.values()) if (ch.projectId === p.id && ch.el) renderChatHead(ch);
+  const land = $('.landing'); if (land) renderLanding(land.parentElement);
+}
+// Right-click a project's header (or focus it and press the menu key or Shift+F10): its quick actions.
+// Scratch can't be renamed, archived or deleted; Schedules keeps its name.
+function projectMenu(e, p, el) {
+  const folded = el.classList.contains('folded'), builtin = BUILTIN_PROJECTS.has(p.id);
+  const pinFull = !p.pinned && G.projects.filter((x) => x.pinned && !x.archived).length >= 3;
+  popMenu(e, [
+    ['＋ New chat in this project', () => newChat(p.id)],
+    ...(builtin ? [] : [['✏️ Rename…', () => renameProject(p)]]),
+    [p.pinned ? '📌 Unpin' : '📌 Pin to the top', () => setProjectFlag(p, { pinned: !p.pinned }), pinFull ? { disabled: true, title: 'Up to 3 projects can be pinned: unpin one first' } : undefined],
+    ['⚙ Project settings…', () => openProjectSettings(p)],
+    p.missing ? ['⚠ Reselect the folder…', () => editProject(p, { reselect: true })] : ['📂 Open folder in File Explorer', () => openFolder(p.id)],
+    [folded ? '▸ Expand' : '▾ Collapse', () => toggleProjectFold(p.id)],
+    ...(p.id === 'scratch' ? [] : [null,
+      ['🗄 Archive', () => setProjectFlag(p, { archived: true }), { title: 'Out of the sidebar and the start screen, chats kept: bring it back from Archived at the bottom of the sidebar' }],
+      ['🗑 Delete project…', () => deleteProject(p), { danger: true }]]),
+  ]);
+}
+// Fold a project's chats away (or show them again): the header click, ▸ and the right-click menu.
+function toggleProjectFold(id) {
+  const set = new Set(G.foldedProjects || []);
+  set.has(id) ? set.delete(id) : set.add(id);
+  G.foldedProjects = [...set]; savePrefs();
+  const el = $(`#projectList .sb-project[data-p="${CSS.escape(id)}"]`); if (!el) return;
+  const ph = $('.sb-ph', el), shut = set.has(id), name = G.projects.find((x) => x.id === id)?.name || '';
+  el.classList.toggle('folded', shut); ph.setAttribute('aria-expanded', String(!shut));
+  const fb = $('.sb-fold', ph); fb.setAttribute('aria-expanded', String(!shut)); fb.title = `${shut ? 'Show' : 'Hide'} this project's chats`; fb.setAttribute('aria-label', `${shut ? 'Show' : 'Hide'} chats of ${name}`);
 }
 
 // ---------- opening chats into the panes ----------
@@ -4585,22 +4628,35 @@ async function openFolder(projectId, path) {
   if (r.error) uiAlert(`Could not open the folder: ${r.error}`);
 }
 // Files → right-click a file or folder: show it in File Explorer, or copy its path.
-// A small right-click menu: items are [label, action] (null for a line between groups).
+// A small right-click menu: items are [label, action, { danger, disabled, title }?] (null for a line between groups).
+// ↑ / ↓ / Home / End move between items, Esc closes and gives focus back to where it was, Tab or a click outside closes.
+// Opened from the keyboard (the menu key or Shift+F10: no pointer position), it sits under the focused element.
 function popMenu(e, items) {
   e.preventDefault(); e.stopPropagation();
   document.querySelector('.exp-menu')?.remove();
+  const back = document.activeElement;
   const m = document.createElement('div'); m.className = 'exp-menu fx-menu'; m.setAttribute('role', 'menu');
   const acts = items.filter(Boolean);
-  m.innerHTML = items.map((x) => (x ? `<button type="button" role="menuitem" data-i="${acts.indexOf(x)}">${esc(x[0])}</button>` : '<hr class="fx-sep">')).join('');
+  m.innerHTML = items.map((x) => (x ? `<button type="button" role="menuitem" data-i="${acts.indexOf(x)}" class="${x[2]?.danger ? 'danger' : ''}" ${x[2]?.disabled ? 'disabled' : ''} ${x[2]?.title ? `title="${esc(x[2].title)}"` : ''}>${esc(x[0])}</button>` : '<hr class="fx-sep" role="separator">')).join('');
   document.body.append(m);
   const r = m.getBoundingClientRect();
-  m.style.left = `${Math.min(e.clientX, innerWidth - r.width - 8)}px`; m.style.top = `${Math.min(e.clientY, innerHeight - r.height - 8)}px`;
+  let x = e.clientX, y = e.clientY;
+  if (!x && !y) { const a = (e.anchor || back)?.getBoundingClientRect?.(); if (a) { x = a.left + 12; y = a.bottom + 2; } }
+  m.style.left = `${Math.max(8, Math.min(x, innerWidth - r.width - 8))}px`; m.style.top = `${Math.max(8, Math.min(y, innerHeight - r.height - 8))}px`;
+  const btns = () => [...m.querySelectorAll('button:not(:disabled)')];
   const away = (ev) => { if (!m.contains(ev.target)) close(); };
-  const key = (ev) => { if (ev.key === 'Escape') close(); };
+  const key = (ev) => {
+    if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); close(); if (back?.isConnected) back.focus(); return; }
+    if (ev.key === 'Tab') return close();
+    const list = btns(), i = list.indexOf(document.activeElement);
+    const to = { ArrowDown: i + 1, ArrowUp: i - 1, Home: 0, End: list.length - 1 }[ev.key];
+    if (to == null || !list.length) return;
+    ev.preventDefault(); list[(to + list.length) % list.length].focus();
+  };
   const close = () => { m.remove(); removeEventListener('pointerdown', away, true); removeEventListener('keydown', key, true); };
   addEventListener('pointerdown', away, true); addEventListener('keydown', key, true);
-  m.onclick = (ev) => { const b = ev.target.closest('[data-i]'); if (!b) return; close(); acts[Number(b.dataset.i)][1](); };
-  m.querySelector('button')?.focus();
+  m.onclick = (ev) => { const b = ev.target.closest('[data-i]'); if (!b || b.disabled) return; close(); acts[Number(b.dataset.i)][1](); };
+  btns()[0]?.focus();
 }
 // Files → right-click a file or folder: add a file to the chat, show it in File Explorer, or copy its path.
 function filesMenu(e, projectId, rel, full, isFile = true) {

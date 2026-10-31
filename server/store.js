@@ -56,7 +56,8 @@ export function listProjects() {
     if (!list.some((p) => p.id === 'scratch')) list.unshift({ id: 'scratch', name: 'Scratch', path: null, created: Date.now() });
     // A folder the user chose can be moved or deleted outside the app: say so instead of quietly making an empty one.
     // needsFolder: a project whose files sit inside the harness (no folder picked, or one inside the app): it must pick a folder.
-    PCACHE = { key, at: Date.now(), list: list.map((p) => ({ ...p, dir: p.path || path.join(WORKSPACES, p.id), missing: !!p.path && !fs.existsSync(p.path), needsFolder: !p.path || insideHarness(p.path) })) };
+    // name: the name you gave it (Rename), else its folder's; folderName keeps the folder's.
+    PCACHE = { key, at: Date.now(), list: list.map((p) => ({ ...p, name: p.alias || p.name, folderName: p.name, dir: p.path || path.join(WORKSPACES, p.id), missing: !!p.path && !fs.existsSync(p.path), needsFolder: !p.path || insideHarness(p.path) })) };
   }
   return PCACHE.list.map((p) => ({ ...p }));
 }
@@ -90,9 +91,10 @@ export function listProjects() {
     fs.writeFileSync(made, '');
   } catch { /* tried again next start */ }
 })();
-const rawProjects = () => listProjects().map(({ dir: _d, missing: _m, needsFolder: _n, ...p }) => p);
-// A project is an existing folder on this computer, and its name is always that folder's name: it changes only
-// when the project moves to another folder. (Scratch keeps its built-in name and folder.)
+const rawProjects = () => listProjects().map(({ dir: _d, missing: _m, needsFolder: _n, folderName, ...p }) => ({ ...p, name: folderName }));
+// A project is an existing folder on this computer, and its name is that folder's name: it changes only when the
+// project moves to another folder, or when you rename it (setProjectAlias: a name of its own, the folder stays as it
+// is). (Scratch keeps its built-in name and folder.)
 export function saveProject({ id, path: dir }) {
   if (!validId(id)) throw new Error('bad project id');
   const list = rawProjects();
@@ -368,6 +370,19 @@ export function setProjectColor(id, color) {
   if (color) p.color = color.toLowerCase(); else delete p.color;
   writeProjects(list);
   return { id: p.id, color: p.color || null };
+}
+
+// Rename: a name of its own for the sidebar and everywhere else; the folder is not renamed. Empty: its folder's name
+// again. The built-in projects keep theirs.
+export function setProjectAlias(id, name) {
+  if (id === 'scratch' || id === SCHEDULES_PROJECT) throw new Error('the built-in projects keep their names');
+  const list = rawProjects();
+  const p = list.find((x) => x.id === id);
+  if (!p) throw new Error('no such project');
+  const alias = String(name ?? '').replace(/\s+/g, ' ').trim().slice(0, 80);
+  if (alias && alias !== p.name) p.alias = alias; else delete p.alias;
+  writeProjects(list);
+  return { id: p.id, name: p.alias || p.name, folderName: p.name };
 }
 
 // Pinned (up to 3, kept at the top in the order they were pinned) and archived (out of the sidebar, the start screen
