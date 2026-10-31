@@ -1828,7 +1828,10 @@ img.shot:hover, img.dsnap:hover, .msg .msg-md img:hover { outline: 2px solid var
 .snd-menu .snd-h { font-weight: 650; font-size: 12px; color: var(--muted); padding: 0 2px 2px; }
 .snd-menu .snd-vol { display: grid; grid-template-columns: 18px 1fr 38px; align-items: center; gap: 8px; padding: 4px 2px 6px; }
 .snd-menu .snd-ico svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; display: block; }
-.snd-menu input[type="range"] { width: 100%; margin: 0; accent-color: var(--accent); }
+/* Not a text box: without the inputs' padding, border and focus ring, 0 and 100 sit right at the two ends. */
+.snd-menu input[type="range"] { width: 100%; min-width: 0; height: 18px; margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; accent-color: var(--accent); cursor: pointer; }
+.snd-menu input[type="range"]:focus { padding: 0; border: 0; box-shadow: none; }
+.snd-menu input[type="range"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
 .snd-menu .snd-pct { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
 .snd-menu .snd-ck { display: flex; align-items: flex-start; gap: 8px; padding: 5px 2px; border-radius: 6px; cursor: pointer; }
 .snd-menu .snd-ck:hover { background: var(--panel-3, var(--panel-2)); }

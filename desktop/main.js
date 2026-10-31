@@ -132,6 +132,9 @@ function createWindow() {
   win.once('ready-to-show', () => { if (!HIDDEN) win.show(); });
   // The zoom you left QuorX at; Ctrl+wheel on the app goes through the same steps (the page handles the keys).
   win.webContents.on('did-finish-load', () => { const z = Number(readConfig().zoom); if (z >= 0.5 && z <= 2) win.webContents.setZoomFactor(z); });
+  // The page (re)loaded (Restart harness, Ctrl+R): it starts with no tabs of yours, so the ones it had are gone from
+  // its tab strip but kept running unseen, sound and all. Closed, except one lent to an agent that may still be using it.
+  win.webContents.on('did-start-navigation', (e) => { if (!e.isMainFrame || e.isSameDocument) return; for (const [k, t] of [...tabs]) if (!t.agent && !t.onDbg) closeTab(k); });
   // Zoom keys and Ctrl+wheel in the app go to the page, which knows what you're on: an artifact or a page preview
   // (inside a frame, which the page never hears keys from), the terminal, or QuorX itself (it calls back 'zoom').
   win.webContents.on('before-input-event', (e, input) => { const dir = zoomKey(input); if (dir) { e.preventDefault(); send({ type: 'zoom-key', dir }); } });
@@ -795,6 +798,8 @@ async function linkLoop() {
       }
     } catch { /* the harness is restarting */ }
     computerUse({ on: false }); // a harness that went away mid-reply can't say computer use ended
+    // Nor use its agent's tabs again: closed, or they kept playing (a video, a game) where nothing could show or close them.
+    for (const [k, t] of [...tabs]) if (t.agent) closeTab(k);
     await new Promise((res) => setTimeout(res, 3000));
   }
 }
