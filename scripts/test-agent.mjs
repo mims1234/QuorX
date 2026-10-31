@@ -430,17 +430,18 @@ test('a run keeps its tokens joined per step: a page that comes back later sees 
 });
 
 test('a run past the memory cap replays from its log, with every event', async () => {
-  const id = `cap${Date.now().toString(36)}`;
+  const id = `cap${Date.now().toString(36)}`, cap = Number(process.env.QX_KEEP_EVENTS) || 20000;
   let live;
   await new Promise((ended) => {
     startRun({ runId: id, onEnd: ended }, async (emit) => {
       live = followAll(id);
-      for (let step = 0; step < 21000; step++) { emit({ t: 'tool', step, name: 'read_file' }); emit({ t: 'token', step, text: `s${step}` }); }
+      // test-home.mjs lowers the cap (QX_KEEP_EVENTS); two events a step make about twice what it keeps.
+      for (let step = 0; step < cap * 1.05; step++) { emit({ t: 'tool', step, name: 'read_file' }); emit({ t: 'token', step, text: `s${step}` }); }
       emit({ t: 'done', reply: 'ok', stats: {} });
     });
   });
   const first = await live;
-  assert.ok(getRun(id).events.length <= 20001, `kept: ${getRun(id).events.length}`);
+  assert.equal(getRun(id).events.length, cap + 1, 'memory keeps the cap and the replay-from-log mark');
   const late = await followAll(id);
   assert.equal(late.length, first.length);
   assert.deepEqual(pageView(late), pageView(first));
