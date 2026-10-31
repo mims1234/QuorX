@@ -10264,6 +10264,8 @@ const SND_ON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h4l5-4v
 const SND_OFF = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M17 9l5 6M22 9l-5 6"/></svg>';
 function sndMuted(t) { const s = G.sound; if (!s || !t) return false; return !!(s.muted || (t.agent && s.agentMuted) || s.tabs?.[t.sid]?.muted || s.volume === 0); }
 function sndBtnHTML(t) {
+  // A desktop app started before sound controls existed: the page is new but the app isn't, until it restarts.
+  if (!window.ohDesktop?.sound) return `<button type="button" class="bv-snd" disabled title="Restart the QuorX app to turn on volume and mute (reloading the page isn't enough)" aria-label="Sound (restart the app to use)">${SND_ON}</button>`;
   const off = sndMuted(t);
   return `<button type="button" class="bv-snd ${off ? 'off' : ''}" aria-haspopup="dialog" title="${off ? 'Sound is off for this tab' : `Sound: ${G.sound?.volume ?? 100}%`}. Click for volume and mute" aria-label="Sound">${off ? SND_OFF : SND_ON}</button>`;
 }
