@@ -639,6 +639,9 @@ dialog.pj-dialog::backdrop { background: rgba(4, 6, 6, .72); backdrop-filter: bl
 .pj-kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
 .pj-kpis > div { padding: 8px 12px; display: grid; gap: 2px; }
 .pj-kpis > div + div { border-left: 1px solid var(--line); }
+/* Why Spent is more than the chats add up to (deleted or rewound chats, stopped replies, replies running now). */
+.pj-gap { margin: 8px 0 0; padding: 7px 10px; border-radius: 8px; border: 1px dashed var(--line-strong); color: var(--muted); font-size: 12px; line-height: 1.45; }
+.pj-gap b { color: var(--amber, #f59e0b); font-weight: 600; }
 .pj-kpis small { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
 .pj-kpis b { font: 700 15px var(--mono); color: var(--amber, #f59e0b); }
 .pj-kpis b.plain { color: var(--text); }
