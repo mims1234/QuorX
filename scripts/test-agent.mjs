@@ -33,6 +33,7 @@ import { settleTempo, analyse, tempoOf, barsOf, fitPlan, pickWindows, cutsVsBeat
 import { checkHtml } from '../server/checks.js';
 import http from 'node:http';
 import { DEFAULTS, sourceFallbackFor, announcesStep, planValue, planTotal } from '../server/agent.js';
+import { startLogin as mcpStartLogin, finishLogin as mcpFinishLogin, signOut as mcpSignOut } from '../server/mcpauth.js';
 import { parseSetup as mcpParse, saveServers as mcpSave, listServers as mcpList, connect as mcpConnect, callTool as mcpCall, toolsFor as mcpToolsFor, stopAll as mcpStopAll, MASK as MCP_MASK } from '../server/mcpclient.js';
 import { planOf, costSummary } from '../server/store.js';
 import { sourceOf, sourceStream, sameOnOpenRouter, failureKind, noteSourceResult, sourceSkip, forgetSourceHealth, priced as sourcePriced, chatAny } from '../server/sources.js';
@@ -5162,4 +5163,55 @@ test('MCP setup from a chat: the card shows what will run and takes only a click
     assert.match(String(toolResults(bodies.at(-1))[1]), /^echo: new\n/);
     assert.ok(events.some((e) => e.t === 'mcp_on' && e.names.includes('echo')), 'the page hears it is ticked');
   } finally { mcpStopAll(); }
+});
+
+test('MCP sign-in: a server that answers 401 needs sign-in; QuorX finds its sign-in service, registers, trades the code (PKCE) and uses the token', async () => {
+  const { createHash } = await import('node:crypto');
+  let challenge = '', registered = 0;
+  const srv = http.createServer(async (q, r) => {
+    const base = `http://127.0.0.1:${srv.address().port}`, body = await new Promise((ok) => { let b = ''; q.on('data', (d) => { b += d; }); q.on('end', () => ok(b)); });
+    const send = (code, o, h = {}) => { r.writeHead(code, { 'Content-Type': 'application/json', ...h }); r.end(JSON.stringify(o)); };
+    if (q.url === '/.well-known/oauth-protected-resource') return send(200, { resource: `${base}/mcp`, authorization_servers: [base] });
+    if (q.url === '/.well-known/oauth-authorization-server') return send(200, { issuer: base, authorization_endpoint: `${base}/authorize`, token_endpoint: `${base}/token`, registration_endpoint: `${base}/register` });
+    if (q.url === '/register') { registered++; return send(201, { client_id: 'quorx-client' }); }
+    if (q.url === '/token') {
+      const p = new URLSearchParams(body);
+      if (p.get('code') !== 'good-code' || createHash('sha256').update(p.get('code_verifier') || '').digest('base64url') !== challenge) return send(400, { error: 'invalid_grant' });
+      return send(200, { access_token: 'tok-1', refresh_token: 'ref-1', expires_in: 3600 });
+    }
+    if (q.url === '/mcp') {
+      if (q.headers.authorization !== 'Bearer tok-1') return send(401, { error: 'unauthorized' }, { 'WWW-Authenticate': `Bearer resource_metadata="${base}/.well-known/oauth-protected-resource"` });
+      const m = JSON.parse(body);
+      if (m.id == null) { r.writeHead(202); return r.end(); }
+      if (m.method === 'initialize') return send(200, { jsonrpc: '2.0', id: m.id, result: { protocolVersion: m.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: 'oauthy' } } });
+      if (m.method === 'tools/list') return send(200, { jsonrpc: '2.0', id: m.id, result: { tools: [{ name: 'whoami', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } }] } });
+    }
+    send(404, {});
+  });
+  await new Promise((ok) => srv.listen(0, '127.0.0.1', ok));
+  const url = `http://127.0.0.1:${srv.address().port}/mcp`;
+  try {
+    mcpSave([{ name: 'oauthy', url }]);
+    await assert.rejects(mcpConnect('oauthy', { fresh: true }), /needs you to sign in/);
+    assert.equal(mcpList()[0].status, 'login');
+    assert.equal(mcpList()[0].signedIn, false);
+    const { url: go } = await mcpStartLogin('oauthy', url, 'http://quorx.localhost:5188');
+    const a = new URL(go);
+    assert.equal(a.pathname, '/authorize'); assert.equal(a.searchParams.get('client_id'), 'quorx-client');
+    assert.equal(a.searchParams.get('redirect_uri'), 'http://localhost:5188/oauth/mcp/callback', 'back to localhost, which needs no app key');
+    assert.equal(a.searchParams.get('code_challenge_method'), 'S256'); assert.equal(a.searchParams.get('resource'), url);
+    challenge = a.searchParams.get('code_challenge');
+    assert.equal((await mcpFinishLogin({ state: 'not-ours', code: 'good-code' })).ok, false, 'a state QuorX didn\'t start is refused');
+    const done = await mcpFinishLogin({ state: a.searchParams.get('state'), code: 'good-code' });
+    assert.equal(done.ok, true, done.message);
+    assert.equal((await mcpFinishLogin({ state: a.searchParams.get('state'), code: 'good-code' })).ok, false, 'used once');
+    const c = await mcpConnect('oauthy', { fresh: true });
+    assert.deepEqual(c.tools.map((t) => t.name), ['whoami']);
+    assert.equal(mcpList()[0].signedIn, true);
+    assert.ok(!JSON.stringify(mcpList()).includes('tok-1'), 'the page never sees the token');
+    await mcpStartLogin('oauthy', url, 'http://quorx.localhost:5188');
+    assert.equal(registered, 1, 'registered once, then reused');
+    mcpSignOut('oauthy');
+    await assert.rejects(mcpConnect('oauthy', { fresh: true }), /needs you to sign in/);
+  } finally { mcpStopAll(); srv.close(); mcpSave([]); }
 });

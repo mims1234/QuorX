@@ -9,6 +9,7 @@ import os from 'node:os';
 import { spawn } from 'node:child_process';
 import { HOME } from './openrouter.js';
 import { renameSoon } from './fsretry.js';
+import { tokenFor, signedIn, signOut } from './mcpauth.js';
 
 const FILE = () => path.join(HOME, 'data', 'mcp.json');
 export const MCP_MAX = 200, MASK = '••••••';
@@ -54,7 +55,7 @@ export function listServers() {
   return read().map((s) => {
     const c = clients.get(s.name);
     return { ...s, ...(s.env ? { env: masked(s.env) } : {}), ...(s.headers ? { headers: masked(s.headers) } : {}),
-      status: c?.state || 'stopped', error: c?.error || '', tools: (c?.tools || []).map((t) => ({ name: t.name, description: clipText(t.description, 300), readOnly: !!t.annotations?.readOnlyHint })) };
+      status: c?.state || 'stopped', error: c?.error || '', signedIn: s.type === 'http' && signedIn(s.name, s.url), tools: (c?.tools || []).map((t) => ({ name: t.name, description: clipText(t.description, 300), readOnly: !!t.annotations?.readOnlyHint })) };
   });
 }
 /** Saves the whole list from the page (masked values keep what was there). A changed server restarts when next used. */
@@ -67,7 +68,7 @@ export function saveServers(list) {
   const dup = names.find((n, i) => names.indexOf(n) !== i);
   if (dup) throw new Error(`Two servers are called "${dup}".`);
   for (const s of out) { const o = was.get(s.name); if (o && JSON.stringify(o) !== JSON.stringify(s)) stopServer(s.name); }
-  for (const n of was.keys()) if (!names.includes(n)) stopServer(n);
+  for (const n of was.keys()) if (!names.includes(n)) { stopServer(n); signOut(n); } // removed: stopped, and its sign-in forgotten
   write(out);
   return listServers();
 }
@@ -206,9 +207,12 @@ function stdioClient(s) {
 function httpClient(s) {
   let session = '', seq = 0;
   const post = async (body, ms) => {
-    const r = await fetch(s.url, { method: 'POST', signal: AbortSignal.timeout(ms), headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', 'MCP-Protocol-Version': PROTOCOL, ...(session ? { 'Mcp-Session-Id': session } : {}), ...s.headers }, body: JSON.stringify(body) });
+    // Signed in from QuorX (server/mcpauth.js): its token, renewed when it is about to run out. A key in the headers wins.
+    const token = s.headers?.Authorization || s.headers?.authorization ? '' : await tokenFor(s.name, s.url).catch(() => '');
+    const r = await fetch(s.url, { method: 'POST', signal: AbortSignal.timeout(ms), headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', 'MCP-Protocol-Version': PROTOCOL, ...(session ? { 'Mcp-Session-Id': session } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}), ...s.headers }, body: JSON.stringify(body) });
     session = r.headers.get('mcp-session-id') || session;
-    if (r.status === 401 || r.status === 403) throw new Error(`the server refused QuorX (${r.status}): it needs a key or a sign-in in its headers`);
+    if (r.status === 401) throw Object.assign(new Error(token ? 'the sign-in has run out or was taken back: sign in again' : 'it needs you to sign in (or a key in its headers)'), { login: true });
+    if (r.status === 403) throw new Error('the server refused QuorX (403): the account or key can\'t use it');
     if (!r.ok && r.status !== 202) throw new Error(`the server answered ${r.status}`);
     if (body.id == null) return null;
     const type = r.headers.get('content-type') || '', raw = await r.text();
@@ -247,7 +251,7 @@ export async function connect(name, { fresh = false } = {}) {
     }
     Object.assign(c, { state: 'running', tools: tools.slice(0, 200), server: init?.serverInfo || null, instructions: clipText(init?.instructions, 2000) });
     return c;
-  })().catch((e) => { Object.assign(c, { state: 'error', error: clipText(e.message, 400) }); c.io?.close(); throw e; });
+  })().catch((e) => { Object.assign(c, { state: e.login ? 'login' : 'error', error: clipText(e.message, 400) }); c.io?.close(); throw e; });
   return c.ready;
 }
 export function stopServer(name) { const c = clients.get(name); if (c) { c.io?.close(); clients.delete(name); } }

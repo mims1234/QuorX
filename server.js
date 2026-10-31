@@ -27,6 +27,7 @@ import { startScheduledChat } from './server/schedrun.js';
 import { loadMemory, saveMemory, memoryTokens, MEMORY_TOKENS } from './server/memory.js';
 import { listQuoriums, saveQuorium, removeQuorium } from './server/quoriums.js';
 import { listServers as mcpList, saveServers as mcpSave, addServers as mcpAdd, parseSetup as mcpParse, connect as mcpConnect, stopServer as mcpStop, foundServers as mcpFound, importFound as mcpImport } from './server/mcpclient.js';
+import { startLogin as mcpStartLogin, finishLogin as mcpFinishLogin, signOut as mcpSignOut, loginPage as mcpLoginPage } from './server/mcpauth.js';
 import { CHECKS } from './server/harness-checks.js';
 import { startRun, getRun, stopRun, follow, runStatus, activeRuns, validRunId, scorecard, readLog, runEvents, recordRun, onRunEvent } from './server/runs.js';
 import { setBudget, budgetState } from './server/budget.js';
@@ -162,6 +163,17 @@ const server = http.createServer(async (req, res) => {
     if (req.method !== 'GET' && req.headers.origin) {
       let same = false; try { same = new URL(req.headers.origin).host === req.headers.host; } catch { /* bad origin */ }
       if (!same) return json(res, 403, { error: 'requests from other sites are not allowed' });
+    }
+    // An MCP server's sign-in service sends the browser back here (server/mcpauth.js); the state ties it to the
+    // sign-in this QuorX started, so no app key is needed. The server then starts again with its token.
+    if (req.method === 'GET' && url.pathname === '/oauth/mcp/callback') {
+      const q = url.searchParams, r = await mcpFinishLogin({ state: q.get('state'), code: q.get('code'), error: q.get('error') });
+      if (r.ok && r.name) mcpConnect(r.name, { fresh: true }).catch(() => {});
+      const desktop = desktopReady();
+      if (desktop) desktopCall('app.focus', {}, 5000).catch(() => {});
+      res.writeHead(r.ok ? 200 : 400, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer',
+        'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'" });
+      return res.end(mcpLoginPage({ ...r, desktop }));
     }
     // OpenRouter sends the browser back here after "Sign in with OpenRouter" (a top-level visit from openrouter.ai).
     if (req.method === 'GET' && url.pathname === '/oauth/openrouter/callback') {
@@ -609,6 +621,13 @@ const server = http.createServer(async (req, res) => {
     // Servers already set up in Claude Code, Cursor and the like on this PC (names and key names only), and adding one.
     if (url.pathname === '/api/mcp/found' && req.method === 'GET') return json(res, 200, { found: mcpFound() });
     if (url.pathname === '/api/mcp/import' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e4) || '{}'); try { return json(res, 200, { servers: mcpImport(String(b.from || ''), String(b.name || '')) }); } catch (e) { return json(res, 400, { error: e.message }); } }
+    // Signing in to an MCP server on the web (server/mcpauth.js): the address to open, and forgetting the sign-in.
+    if (url.pathname === '/api/mcp/login' && req.method === 'POST') {
+      const b = JSON.parse(await readBody(req, 1e4) || '{}'), s = mcpList().find((x) => x.name === b.name);
+      if (!s || s.type !== 'http') return json(res, 400, { error: 'Only a server on the web signs in.' });
+      try { return json(res, 200, await mcpStartLogin(s.name, s.url, req.headers.origin || `http://${req.headers.host}`)); } catch (e) { return json(res, 400, { error: e.message }); }
+    }
+    if (url.pathname === '/api/mcp/logout' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e4) || '{}'); mcpSignOut(String(b.name || '')); mcpStop(String(b.name || '')); return json(res, 200, { servers: mcpList() }); }
     if (url.pathname === '/api/mcp/stop' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e4) || '{}'); mcpStop(String(b.name || '')); return json(res, 200, { servers: mcpList() }); }
     if (url.pathname === '/api/memory' && req.method === 'GET') { const m = loadMemory(); return json(res, 200, { ...m, tokens: memoryTokens(m.items), limit: MEMORY_TOKENS }); }
     if (url.pathname === '/api/memory' && req.method === 'PUT') {

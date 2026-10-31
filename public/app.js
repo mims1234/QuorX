@@ -3259,7 +3259,7 @@ function mcpRowHTML(c) {
   const q = String(c._mcpQ || '').trim().toLowerCase();
   const shown = list.filter((s) => (!c._mcpMine || mine.has(s.name)) && (!q || `${s.name} ${(s.tools || []).map((t) => t.name).join(' ')}`.toLowerCase().includes(q)))
     .sort((a, b) => (mine.has(b.name) - mine.has(a.name)) || a.name.localeCompare(b.name));
-  const sub = (s) => (s.status === 'error' ? '<small class="bad">can\'t start · fix in Settings</small>' : `<small>${s.tools?.length ? `${s.tools.length} tools · ` : ''}${s.type === 'http' ? 'web' : 'program'}</small>`);
+  const sub = (s) => (s.status === 'login' ? '<small class="bad">needs sign-in · in Settings</small>' : s.status === 'error' ? '<small class="bad">can\'t start · fix in Settings</small>' : `<small>${s.tools?.length ? `${s.tools.length} tools · ` : ''}${s.type === 'http' ? 'web' : 'program'}</small>`);
   const MAX = 100; // drawn at once; the search finds the rest
   return `${list.length > 6 ? `<span class="cq-mcp-tools"><input class="cq-mcp-q" placeholder="Search ${list.length} servers or their tools" value="${esc(c._mcpQ || '')}" aria-label="Search servers"><label class="cq-mcp-mine"><input type="checkbox" ${c._mcpMine ? 'checked' : ''}> Ticked only</label></span>` : ''}
     <span class="cq-mcp">${shown.slice(0, MAX).map((s) => `<label class="cq-mcp-one" title="${esc(`${s.type === 'http' ? s.url : [s.command, ...(s.args || [])].join(' ')}${s.tools?.length ? `\n${s.tools.length} tools: ${s.tools.map((t) => t.name).join(', ')}` : ''}`)}"><input type="checkbox" data-mcp="${esc(s.name)}" ${mine.has(s.name) ? 'checked' : ''}>${mcpMark(s, 'sm')}<span><b>${esc(s.name)}</b>${sub(s)}</span></label>`).join('') || '<small>No server matches.</small>'}</span>
@@ -7774,17 +7774,21 @@ const MCP_SUGGESTED = [
   { name: 'exa', setup: 'https://mcp.exa.ai/mcp', what: 'Web search and page reading' },
   { name: 'huggingface', setup: 'https://huggingface.co/mcp', what: 'Search Hugging Face models, datasets and Spaces' },
   { name: 'gitmcp', setup: 'https://gitmcp.io/docs', what: 'Docs and code of any GitHub project' },
+  // These ask you to sign in with your account (Sign in, once added): QuorX keeps the sign-in on this computer.
+  { name: 'notion', setup: 'https://mcp.notion.com/mcp', what: 'Your Notion pages and databases', signin: true },
+  { name: 'linear', setup: 'https://mcp.linear.app/mcp', what: 'Your Linear issues and projects', signin: true },
+  { name: 'sentry', setup: 'https://mcp.sentry.dev/mcp', what: 'Your Sentry errors and releases', signin: true },
 ];
 const MCP_FILTERS = [
-  ['running', 'Running', (s) => s.status === 'running'], ['stopped', 'Not started', (s) => s.status === 'stopped' || s.status === 'starting'], ['error', "Can't start", (s) => s.status === 'error'],
+  ['running', 'Running', (s) => s.status === 'running'], ['stopped', 'Not started', (s) => s.status === 'stopped' || s.status === 'starting'], ['error', "Can't start", (s) => s.status === 'error'], ['login', 'Needs sign-in', (s) => s.status === 'login'],
   ['on', 'On', (s) => s.on], ['off', 'Off', (s) => !s.on], ['program', 'Program', (s) => s.type !== 'http'], ['web', 'Web', (s) => s.type === 'http'],
   ['keys', 'Uses keys', (s) => Object.keys({ ...(s.env || {}), ...(s.headers || {}) }).length > 0], ['changes', 'Has tools that change things', (s) => (s.tools || []).some((t) => !t.readOnly)],
 ];
 // Filters in the same group widen the match (Running or Not started); different groups narrow it.
-const MCP_GROUP = { running: 'st', stopped: 'st', error: 'st', on: 'on', off: 'on', program: 'ty', web: 'ty', keys: 'k', changes: 'c' };
+const MCP_GROUP = { running: 'st', stopped: 'st', error: 'st', login: 'st', on: 'on', off: 'on', program: 'ty', web: 'ty', keys: 'k', changes: 'c' };
 const mcpRuns = (s) => (s.type === 'http' ? s.url : [s.command, ...(s.args || [])].join(' '));
 const mcpKeys = (s) => Object.keys({ ...(s.env || {}), ...(s.headers || {}) });
-const MCP_STATUS = { running: 'Running', stopped: 'Not started', starting: 'Starting', error: "Can't start" };
+const MCP_STATUS = { running: 'Running', stopped: 'Not started', starting: 'Starting', error: "Can't start", login: 'Needs sign-in' };
 const mcpStatus = (s) => `<span class="mcp-st ${s.status}"><i></i>${MCP_STATUS[s.status] || s.status}</span>`;
 async function drawMcpPanel() {
   const el = $('#mcpPanel');
@@ -7819,14 +7823,14 @@ async function drawMcpPanel() {
     ${list.length ? `<div class="seg mcp-tabs" role="tablist"><button type="button" data-tab="mine" class="${U.tab === 'mine' ? 'on' : ''}">Your servers <small>${list.length}</small></button><button type="button" data-tab="gal" class="${U.tab === 'gal' ? 'on' : ''}">Suggested <small>${sugg.length + found.length}</small></button></div>` : ''}`;
   const foundCard = (f) => `<div class="mcp-sug">${mcpMark(f)}<div><b>${esc(f.name)}</b><small>Set up in ${esc(f.from)}${f.keys.length ? ` · with ${f.keys.length} setting${f.keys.length > 1 ? 's' : ''} (${f.keys.slice(0, 3).map(esc).join(', ')}${f.keys.length > 3 ? '…' : ''})` : ''}</small><code title="${esc(f.runs)}">${esc(f.runs)}</code></div><span class="mcp-kind">${f.type === 'http' ? 'web' : 'program'}</span><button type="button" class="kx-btn sm" data-found="${esc(f.from)}" data-fname="${esc(f.name)}">Add</button></div>`;
   const foundSec = found.length ? `<h6 class="mcp-h">Found in your other tools <small>already set up on this PC: one click brings it into QuorX (yours stays as it is)</small></h6><div class="mcp-sug-grid">${found.map(foundCard).join('')}</div>` : '';
-  const sugCard = (x) => `<div class="mcp-sug">${mcpMark(x)}<div><b>${esc(x.name)}</b><small>${esc(x.what)}</small><code>${esc(x.setup)}</code></div><span class="mcp-kind">${/^https?:/.test(x.setup) ? 'web · no key' : 'program'}</span><button type="button" class="kx-btn sm" data-sug="${esc(x.name)}">Add</button></div>`;
+  const sugCard = (x) => `<div class="mcp-sug">${mcpMark(x)}<div><b>${esc(x.name)}</b><small>${esc(x.what)}</small><code>${esc(x.setup)}</code></div><span class="mcp-kind">${x.signin ? 'web · sign in' : /^https?:/.test(x.setup) ? 'web · no key' : 'program'}</span><button type="button" class="kx-btn sm" data-sug="${esc(x.name)}">Add</button></div>`;
   let body = '';
   if (U.tab === 'first') {
     body = `<div class="mcp-first"><b>Give the agent extra tools.</b><p>An MCP server is a set of tools from a program on this PC or a site on the web: docs to read, a browser to drive, a design app to use. Add one, then tick it in a chat.</p>
-      ${foundSec}${found.length ? '<h6 class="mcp-h">Need no key</h6>' : ''}<div class="mcp-sug-grid">${MCP_SUGGESTED.slice(0, 3).map(sugCard).join('')}</div>
+      ${foundSec}${found.length ? '<h6 class="mcp-h">Need no key</h6>' : ''}<div class="mcp-sug-grid">${MCP_SUGGESTED.filter((x) => !x.signin).slice(0, 3).map(sugCard).join('')}</div>
       <button type="button" class="kx-btn sm" id="mcpPasteOpen">Or paste a setup…</button></div>`;
   } else if (U.tab === 'gal') {
-    body = foundSec + (sugg.length ? `<h6 class="mcp-h">Need no key <small>free servers on the web</small></h6><div class="mcp-sug-grid">${sugg.map(sugCard).join('')}</div>` : '')
+    body = foundSec + (sugg.length ? `<h6 class="mcp-h">Need no key <small>free servers on the web</small></h6><div class="mcp-sug-grid">${sugg.filter((x) => !x.signin).map(sugCard).join('')}</div>${sugg.some((x) => x.signin) ? `<h6 class="mcp-h">Sign in with your account <small>add one, then Sign in: its page opens in your browser</small></h6><div class="mcp-sug-grid">${sugg.filter((x) => x.signin).map(sugCard).join('')}</div>` : ''}` : '')
       + (!sugg.length && !found.length ? '<p class="st-row-help">You have every suggested server. Paste any other setup with + Add a server.</p>' : '');
   } else {
     const count = (f) => list.filter((s) => MCP_FILTERS.find((x) => x[0] === f)[2](s)).length;
@@ -7834,12 +7838,13 @@ async function drawMcpPanel() {
     const rows = shown.map((s) => `<li class="mcp-row ${s.name === U.sel ? 'sel' : ''} ${s.on ? '' : 'off'}" data-n="${esc(s.name)}" tabindex="0">
         <label class="mcp-tick" title="On: chats can tick it. Off: no chat uses it."><input type="checkbox" class="mcp-on" ${s.on ? 'checked' : ''} aria-label="${esc(s.name)} on"></label>
         ${mcpMark(s)}<span class="mcp-nm"><b>${esc(s.name)}</b><code>${esc(mcpRuns(s))}</code></span><span class="mcp-kind">${s.type === 'http' ? 'web' : 'program'}</span>${mcpStatus(s)}<span class="mcp-tc">${s.tools?.length ? `${s.tools.length} tool${s.tools.length > 1 ? 's' : ''}` : '–'}</span>
-        <button type="button" class="mcp-ib mcp-restart" title="${s.status === 'running' ? 'Restart' : 'Start'} ${esc(s.name)}" aria-label="${s.status === 'running' ? 'Restart' : 'Start'} ${esc(s.name)}">↻</button></li>`).join('');
+        ${s.status === 'login' ? `<button type="button" class="kx-btn sm primary mcp-signin" data-n="${esc(s.name)}">Sign in</button>` : `<button type="button" class="mcp-ib mcp-restart" title="${s.status === 'running' ? 'Restart' : 'Start'} ${esc(s.name)}" aria-label="${s.status === 'running' ? 'Restart' : 'Start'} ${esc(s.name)}">↻</button>`}</li>`).join('');
     const tq = U.toolQ.trim().toLowerCase(), tl = (sel?.tools || []).filter((t) => !tq || `${t.name} ${t.description}`.toLowerCase().includes(tq));
     const panel = sel ? `<aside class="mcp-insp" aria-label="${esc(sel.name)}">
         <div class="mcp-insp-head">${mcpMark(sel, 'lg')}<div><b>${esc(sel.name)}</b><small>${sel.type === 'http' ? 'Server on the web' : 'Program on this PC'}</small></div><span class="mcp-kind">${sel.type === 'http' ? 'web' : 'program'}</span></div>
         <div class="mcp-insp-sec mcp-insp-run">${mcpStatus(sel)}${sel.tools?.length ? `<small>· ${sel.tools.length} tools</small>` : ''}<span class="cq-sp"></span><button type="button" class="kx-btn sm mcp-start">${sel.status === 'running' ? '↻ Restart' : 'Start'}</button>${sel.status === 'running' ? '<button type="button" class="kx-btn sm mcp-stop">Stop</button>' : ''}</div>
         ${sel.error ? `<p class="mcp-err">${esc(sel.error)}</p>` : ''}
+        ${sel.type === 'http' && (sel.signedIn || sel.status === 'login') ? `<div class="mcp-insp-sec mcp-insp-run">${sel.signedIn ? '<span class="mcp-st running"><i></i>Signed in from QuorX</span><span class="cq-sp"></span><button type="button" class="kx-btn sm mcp-signout">Sign out</button>' : `<small>It asks you to sign in with your ${esc(sel.name)} account. Your browser opens its sign-in page; QuorX keeps the sign-in on this computer.</small><button type="button" class="kx-btn sm primary mcp-signin" data-n="${esc(sel.name)}">Sign in</button>`}</div>` : ''}
         <div class="mcp-insp-sec"><label class="mcp-onrow"><span class="sx-check"><input type="checkbox" class="mcp-on2" ${sel.on ? 'checked' : ''}><span class="sx-word"></span></span><span><b>On</b><small>${sel.on ? 'Chats can tick it.' : 'No chat uses it.'}</small></span></label></div>
         <div class="mcp-insp-sec"><h6>${sel.type === 'http' ? 'Address' : 'Command'}</h6><div class="mcp-addr"><code>${esc(mcpRuns(sel))}</code><button type="button" class="mcp-ib mcp-copy" title="Copy" aria-label="Copy">⧉</button></div></div>
         <div class="mcp-insp-sec"><h6>Keys</h6>${mcpKeys(sel).length ? `<p>${mcpKeys(sel).map((k) => `<code>${esc(k)}</code>`).join(' ')} <small>kept on this computer, never shown</small></p>` : '<p><small>No keys. This server doesn\'t need any.</small></p>'}</div>
@@ -7885,6 +7890,23 @@ async function drawMcpPanel() {
   $('.mcp-clear', el)?.addEventListener('click', () => { U.filters.clear(); U.q = ''; drawMcpPanel(); });
   const setOn = (n, v) => save(list.map((x) => (x.name === n ? { ...x, on: v } : x)), `✓ ${n} is ${v ? 'on' : 'off'}`);
   const start = async (n, b) => { if (b) { b.disabled = true; b.textContent = '…'; } const r = await postJ('/api/mcp/test', { name: n }).catch(() => null); const now = (r?.servers || []).find((x) => x.name === n); U.msg = now?.status === 'running' ? `✓ ${n} is running: ${now.tools.length} tools` : `${n} could not start${now?.error ? `: ${now.error}` : ''}`; drawMcpPanel(); };
+  // Sign in: the service's own page opens in the browser; this panel checks back every 2 s (for 3 minutes) and
+  // shows the server running once the sign-in has come back to QuorX.
+  for (const b of el.querySelectorAll('.mcp-signin')) b.onclick = async (e) => {
+    e.stopPropagation();
+    const n = b.dataset.n;
+    b.disabled = true; b.textContent = 'Opening…';
+    const r = await postJ('/api/mcp/login', { name: n }).catch((x) => ({ error: x.message }));
+    if (r?.error || !r?.url) { say(`Can't sign in to ${n}: ${r?.error || 'no sign-in page'}`); return; }
+    window.open(r.url, '_blank', 'noopener');
+    U.sel = n; say(`Finish signing in to ${n} in your browser. This updates by itself.`);
+    for (let i = 0; i < 90; i++) {
+      await new Promise((ok) => setTimeout(ok, 2000));
+      const now = (await loadMcp()).find((x) => x.name === n);
+      if (now?.signedIn) { await postJ('/api/mcp/test', { name: n }).catch(() => null); U.msg = `✓ Signed in to ${n}. Tick it in a chat's settings (🧲) to use it.`; drawMcpPanel(); return; }
+    }
+  };
+  $('.mcp-signout', el)?.addEventListener('click', async () => { const n = U.sel; await postJ('/api/mcp/logout', { name: n }).catch(() => null); say(`✓ Signed out of ${n} in QuorX`); });
   for (const li of el.querySelectorAll('.mcp-row[data-n]')) {
     const n = li.dataset.n;
     li.onclick = (e) => { if (e.target.closest('label, button, input')) return; U.sel = n; U.toolQ = ''; drawMcpPanel(); };

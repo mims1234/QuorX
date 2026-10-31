@@ -103,3 +103,5 @@
 #mcpPanel .mcp-tick input { width: 16px; height: 16px; margin: 0; accent-color: var(--ok); cursor: pointer; }
 #mcpPanel .mcp-h { margin: 4px 0 0; font: 600 11px var(--font-ui); letter-spacing: .04em; text-transform: uppercase; color: var(--dim); }
 #mcpPanel .mcp-h small { text-transform: none; letter-spacing: 0; font-weight: 400; margin-left: 6px; }
+.mcp-st.login { color: var(--amber); } .mcp-st.login i { background: var(--amber); }
+#mcpPanel .mcp-row .mcp-signin { flex: none; height: 26px; padding: 0 10px; }
