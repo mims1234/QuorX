@@ -1832,6 +1832,13 @@ img.shot:hover, img.dsnap:hover, .msg .msg-md img:hover { outline: 2px solid var
 .exp-menu button { text-align: left; padding: 7px 10px; border-radius: 6px; border: 0; background: transparent; color: var(--text); font: 500 12.5px var(--font-ui); cursor: pointer; }
 .exp-menu button:hover:not(:disabled) { background: var(--panel-3, var(--panel-2)); }
 .exp-menu button:disabled { opacity: .5; cursor: default; }
+.exp-menu button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* A danger item (🗑 Delete…): red words, a red wash on hover, always last after a line */
+.exp-menu button.danger { color: var(--bad); }
+.exp-menu button.danger:hover:not(:disabled), .exp-menu button.danger:focus-visible { background: var(--bad-dim); color: var(--bad); }
+.exp-menu button.danger:focus-visible { outline-color: var(--bad) !important; }
+/* A project header is focusable (Enter folds, the menu key or Shift+F10 opens its actions) */
+.sb-project .sb-ph:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .snd-menu { position: fixed; z-index: 400; width: 260px; display: grid; gap: 4px; padding: 10px; border-radius: 9px; border: 1px solid var(--line-strong); background: var(--panel-overlay, var(--panel)); box-shadow: 0 10px 28px rgba(0, 0, 0, .35); color: var(--text); font: 500 12.5px var(--font-ui); }
 .snd-menu .snd-h { font-weight: 650; font-size: 12px; color: var(--muted); padding: 0 2px 2px; }
 .snd-menu .snd-vol { display: grid; grid-template-columns: 18px 1fr 38px; align-items: center; gap: 8px; padding: 4px 2px 6px; }

@@ -36,7 +36,7 @@ import { shellRun, shellClose, shellInfo } from './server/shell.js';
 import { ptyAvailable, ptyOpen, ptyWrite, ptyResize, ptyFollow, ptyClose } from './server/pty.js';
 // Pages the agent wrote, served from this app's own address, get their own opaque origin: their requests to /api are refused.
 const SANDBOX_CSP = 'sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads';
-import { listChats, sidebarChats, chatPage, chatPictureRefs, pictureRefCounts, getTrace, getChatForPage, getChat, saveChat, patchChat, settleReply, trashChat, duplicateChat, validId, listProjects, saveProject, forgetProject, setProjectColor, setProjectFlags, costSummary, costChats, providerUsage } from './server/store.js';
+import { listChats, sidebarChats, chatPage, chatPictureRefs, pictureRefCounts, getTrace, getChatForPage, getChat, saveChat, patchChat, settleReply, trashChat, duplicateChat, validId, listProjects, saveProject, forgetProject, setProjectColor, setProjectAlias, setProjectFlags, costSummary, costChats, providerUsage } from './server/store.js';
 import { runLine, ALLOWED, copyTemplate, workspaceDir, safePath, fullLocalPath,chatFolder, listFiles, listDir, listServers, stopServerWait, restartServer, serverLog, startServer, restoreCheckpoint, listCheckpoints, pruneCheckpoints, undoConflicts, changedFiles, reviewFiles, reviewDiff, undoFile, serverOverview, launchConfigs, saveLaunchConfig, removeLaunchConfig, ensureAgentDir, agentSpace } from './server/workspace.js';
 import { followTerm, runningJobs, stopJob } from './server/terminal.js';
 import { runningIn, runningAll, stopRunning, stopAllIn } from './server/running.js';
@@ -255,6 +255,12 @@ const server = http.createServer(async (req, res) => {
     if (pcm && req.method === 'POST') {
       const b = JSON.parse(await readBody(req, 1e4) || '{}');
       try { return json(res, 200, { ok: true, ...setProjectColor(pcm[1], b.color || null) }); } catch (e) { return json(res, 200, { error: e.message }); }
+    }
+    // Rename a project (the folder keeps its name); an empty name goes back to the folder's.
+    const pnm = url.pathname.match(/^\/api\/projects\/([a-z0-9-]+)\/name$/i);
+    if (pnm && req.method === 'POST') {
+      const b = JSON.parse(await readBody(req, 1e4) || '{}');
+      try { return json(res, 200, { ok: true, ...setProjectAlias(pnm[1], b.name) }); } catch (e) { return json(res, 200, { error: e.message }); }
     }
     // Design systems: the starters, and a project's own DESIGN.md + tokens.css (apply a starter, edit, remove).
     if (url.pathname === '/api/design-systems' && req.method === 'GET') return json(res, 200, listDesignSystems());
