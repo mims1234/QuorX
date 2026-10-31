@@ -3055,6 +3055,8 @@ a.md-pathlink.md-path, .md-pathtext.md-path { color: var(--accent); }
 .msg-media { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; min-width: 0; }
 .msg-media .mm-pics:empty, .msg-media .mm-cards:empty { display: none; }
 .msg-media .mm-extra { display: none !important; }
+/* Files at the spot the text names them, between its paragraphs. */
+.msg-media.mm-inline { margin: 6px 0 12px; }
 .mm-pics { display: flex; flex-wrap: wrap; gap: 8px; }
 .mm-pic { margin: 0; display: flex; flex-direction: column; gap: 3px; max-width: 220px; min-width: 0; }
 .mm-thumb { --mm-h: 150px; display: grid; place-items: center; padding: 0; width: 100%; min-width: 96px; height: var(--mm-h); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; cursor: zoom-in; background-color: var(--panel); }
@@ -3071,6 +3073,17 @@ a.md-pathlink.md-path, .md-pathtext.md-path { color: var(--accent); }
 .mm-head .mm-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 12px var(--mono); color: var(--text); }
 .mm-head .mm-info { flex: none; font: 11px var(--mono); color: var(--muted); white-space: nowrap; }
 .mm-head .mm-acts { margin-left: auto; flex: none; display: flex; align-items: center; gap: 6px; }
+/* A file folds to its name line: the whole name side is the ▸ toggle. */
+.mm-card.mm-shut .mm-head { border-bottom: 0; }
+.msg-media .mm-head { flex-wrap: wrap; }
+.msg-media .mm-tog { flex: 1 1 9em; display: flex; align-items: center; gap: 8px; min-width: 0; padding: 2px 0; background: transparent; border: 0; color: inherit; text-align: left; cursor: pointer; }
+.msg-media .mm-tog:hover .mm-name { color: var(--accent); }
+.msg-media .mm-tog:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+/* Narrow: the size gives way before the name does. */
+.msg-media .mm-tog .mm-name { flex: 0 1 auto; min-width: 4em; }
+.msg-media .mm-tog .mm-info { flex: 0 100 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.mm-chev { flex: none; width: 10px; font-size: 11px; color: var(--muted); transition: transform .15s; }
+.mm-tog[aria-expanded="true"] .mm-chev { transform: rotate(90deg); }
 .mm-k-video video { display: block; width: 100%; max-height: 420px; background: #000; }
 .mm-pdf-frame { display: block; width: 100%; height: 420px; border: 0; background: #fff; }
 .mm-md-body { max-height: 360px; overflow: auto; }

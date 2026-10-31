@@ -24,6 +24,7 @@ import { findOnPath, localModels, localStream, ensureLocalServer, localServer, L
 import { claudeModels, claudeStream, claudeAuth, claudeRunning, CLAUDE_ID } from './claudelocal.js';
 import { grokModels, grokStream, grokRunning, GROK_ID } from './groklocal.js';
 import { goModels, goStream, goCheck, goAccount, GO_ID } from './opencodego.js';
+import { ollamaModels, ollamaStream, ensureOllama, ollamaServer, OLLAMA_ID } from './ollamalocal.js';
 import { ccModels, ccStream, ccCheck, ccAccount, ccDecisionModels, ccDecisions, CC_ID } from './commandcode.js';
 
 const DATA = path.join(HOME, 'data');
@@ -55,6 +56,12 @@ export const SOURCES = {
     site: 'https://claude.com/product/claude-code', keyUrl: 'https://code.claude.com/docs/en/setup', docs: 'https://code.claude.com/docs/en/headless',
     keyHint: 'No key: QuorX uses the account you signed in to Claude Code with.', install: 'npm i -g @anthropic-ai/claude-code', appName: 'Claude Code',
   },
+  // Ollama on this computer (ollamalocal.js): the models pulled into it, and its cloud models once signed in.
+  [OLLAMA_ID]: {
+    id: OLLAMA_ID, name: 'Ollama on this PC', short: 'Ollama', app: 'ollama', billing: 'free', local: true,
+    site: 'https://ollama.com', keyUrl: 'https://ollama.com/download', docs: 'https://docs.ollama.com/api/chat',
+    keyHint: 'No key: QuorX uses the models you pulled into Ollama (ollama pull), and its cloud models once you sign in (ollama signin).', install: 'winget install Ollama.Ollama', appName: 'Ollama',
+  },
   // Grok Build on this computer (groklocal.js): the account it is signed in with (grok login).
   [GROK_ID]: {
     id: GROK_ID, name: 'Grok Build on this PC', short: 'Grok Build', app: 'grok', billing: 'mixed', local: true,
@@ -71,6 +78,8 @@ const APPS = {
   [CLAUDE_ID]: { list: () => claudeModels(), stream: claudeStream, check: () => claudeAuth({ refresh: true }), server: () => ({ running: claudeRunning() > 0, calls: claudeRunning(), perCall: true }) },
   // Listing Grok's models starts it and signs in, so it is the check too.
   [GROK_ID]: { list: () => grokModels(), stream: grokStream, check: async () => {}, server: () => ({ running: grokRunning() > 0, calls: grokRunning(), perCall: true }) },
+  // Ollama's server is started when it isn't running; listing its models is the check.
+  [OLLAMA_ID]: { list: () => ollamaModels(), stream: ollamaStream, check: () => ensureOllama(), server: ollamaServer },
   // Go's list is public; a call and the check need the key.
   [GO_ID]: { list: () => goModels(), stream: (b, sg, t, th, o) => goStream(b, sg, t, th, { ...o, key: keyFor(GO_ID)?.key }), check: async () => { const k = keyFor(GO_ID)?.key; if (!k) throw Object.assign(new Error('Add your OpenCode Go key first.'), { kind: 'auth' }); await goCheck(k, await goModels()); }, server: () => ({ api: true }),
     account: () => goAccount(keyFor(GO_ID)?.key) },
