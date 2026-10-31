@@ -4037,6 +4037,7 @@ function timelineHTML(m) {
   const row = (html, key, calls = [], think = 0, busy = false) => pieces.push({ html, row: true, key, calls, think, busy });
   const other = (html) => { if (html) pieces.push({ html, row: false }); };
   const usedAtt = new Set(); // which note's attachments are drawn already (two notes can say the same thing)
+  if (m.prep && m.live) other(`<div class="tl-row tl-wait"><span class="tl-spin"></span><span class="tl-label">${esc(m.prep)}</span></div>`);
   for (const it of timelineItems(m)) {
     if (it.kind === 'step') {
       const think = String(m.thinking?.[it.step] || '').trim();
@@ -5354,11 +5355,14 @@ async function send(c, text) {
   if (c.running || (!text && !c.images.length && !(c.docs || []).some((d) => d.id && !d.busy) && !c.ctx.length && !c.comments?.length)) return;
   c.enhUndo = []; renderEnhUndo(c);
   askNotifyPermission();
-  const ctx =c.ctx.length ? { titles: c.ctx.map((x) => x.title), text: await contextText(c.ctx) } : null;
+  // The message shows and the chat is busy at once; the @ context's text (a brief of an attached chat takes a model
+  // call) is gathered in the reply as its first step. Awaited here, the box kept its chips meanwhile and sent twice.
+  const ctxItems = c.ctx.splice(0);
+  const ctx = ctxItems.length ? { titles: ctxItems.map((x) => x.title), items: ctxItems } : null;
   const comments = (c.comments || []).splice(0);
   const imgs = [...c.images.splice(0), ...comments.filter((x) => x.crop).map((x) => ({ thumb: x.crop, full: x.crop }))];
   const docs = (c.docs || []).splice(0).filter((d) => d.id && !d.busy);
-  c.ctx = []; renderAttachments(c);
+  renderAttachments(c);
   if ((!c.title || c.title === 'New chat') && text) { c.title = text.replace(/\s+/g, ' ').slice(0, 60); if (c.el) { $('.ch-name', c.el.root).value = c.title; } }
   runChat(c, text, ctx, imgs, { docs, comments });
   if (c === G.homeDraft) promoteDraft(c);
@@ -5389,7 +5393,16 @@ async function runChat(c, text, ctx, imgs, { resumeOf, docs = [], more = 0, mode
     : { runId: m.runId, chatId: c.id, projectId: c.projectId, chatTitle: c.title, setup: a.setup, settings, allowed: a.allowed, cmdRules: a.cmdRules || [], apps: a.apps || [], folders: a.folders || [], offProject: chatOffProject(c), history, summary: a.summary || '', reading: a.reading?.text || '', text, artifacts, context: ctx?.text || '', images: imgs.map((x) => x.full), docs: docs.map((d) => d.id), ...(cmts.length ? { comments: cmts } : {}), ...(a.videoMode ? { videoMode: a.videoMode } : {}), ...(a.videoMode === 'on' && a.videoFrom ? { videoFrom: a.videoFrom } : {}) };
   // Saved straight away, so a reload finds the running reply and reattaches to it.
   saveChat(c, true);
-  return followRun(c, m, (signal) => fetch('/api/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal, body: JSON.stringify(body) }));
+  return followRun(c, m, async (signal) => {
+    if (ctx?.items) {
+      m.prep = ctx.items.some((x) => !x.type || x.type === 'chat') ? `Reading the attached chat${ctx.items.length > 1 ? 's' : ''}…` : 'Reading what you attached…';
+      updateMsg(c, m);
+      body.context = await contextText(ctx.items).catch(() => '');
+      delete m.prep; updateMsg(c, m);
+      if (signal.aborted) throw new DOMException('Stopped', 'AbortError'); // ■ pressed while it read
+    }
+    return fetch('/api/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal, body: JSON.stringify(body) });
+  });
 }
 // After a page reload: replies that were still running pick up again (everything so far is
 // replayed), finished ones get their result, and ones a harness restart cut off offer ▶ Resume.
@@ -5471,7 +5484,8 @@ async function followRun(c, m, open) {
   const a = c.agent;
   const ac = new AbortController();
   following.add(m.runId);
-  c.running = { runId: m.runId, abort: () => { fetch(`/api/runs/${m.runId}/stop`, { method: 'POST' }).catch(() => ac.abort()); } };
+  // A run the harness doesn't know (still reading attached context, not started yet) stops here.
+  c.running = { runId: m.runId, abort: () => { fetch(`/api/runs/${m.runId}/stop`, { method: 'POST' }).then((r) => r.json()).then((j) => { if (!j.ok) ac.abort(); }).catch(() => ac.abort()); } };
   syncRunState(c); renderSidebar();
   let lastStep = -1, stepStart = 0, raf = 0, whole = false;
   // After a reload the server replays a run's events in one burst: those are old news, so no notifications for them.

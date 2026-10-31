@@ -49,7 +49,7 @@ const reply = (text, calls = [], finishReason = 'stop') => ({ text, toolCalls: c
 
 /** Runs one reply. `script(body, i)` returns the model's i-th answer (or throws). */
 // `budget` sets the project's budget and `spent` seeds what it has already spent (as a ledger row).
-async function run(script, { settings = {}, text = 'build it', resume, onEvent, signal, history, budget, spent, setup = {}, openTab, generateImage, generateVideo, ensemble, checks, chatId, prep, cont, images, comments, enhance, reading, catalogue, videoMode, videoFrom, generation, scheduledBy, sourceStream, noOpenRouter } = {}) {
+async function run(script, { settings = {}, text = 'build it', resume, onEvent, signal, history, budget, spent, setup = {}, openTab, generateImage, generateVideo, ensemble, checks, chatId, prep, cont, images, context, comments, enhance, reading, catalogue, videoMode, videoFrom, generation, scheduledBy, sourceStream, noOpenRouter } = {}) {
   const id = `t${Date.now().toString(36)}${(n++).toString(36)}`;
   const dir = tempDir('quorx-run-');
   saveProject({ id, name: 'test', path: dir });
@@ -60,7 +60,7 @@ async function run(script, { settings = {}, text = 'build it', resume, onEvent, 
   let i = 0;
   const chatStream = async (body, sig, onText) => { bodies.push(structuredClone(body)); const r = await script(body, i++); if (r.text && onText) onText(r.text); return r; };
   try {
-    await runAgent({ runId: id, projectId: id, ...(chatId ? { chatId } : {}), ...(scheduledBy ? { scheduledBy } : {}), ...(images ? { images } : {}), ...(comments ? { comments } : {}), text, resume, ...(cont ? { continue: cont } : {}), ...(reading ? { reading } : {}), ...(videoMode ? { videoMode } : {}), ...(videoFrom ? { videoFrom } : {}), history, setup: { model: 'test/model', ...setup }, settings: { approval: 'yolo', mediaEnabled: false, tools: { browser: { on: false } }, ...settings } },
+    await runAgent({ runId: id, projectId: id, ...(chatId ? { chatId } : {}), ...(scheduledBy ? { scheduledBy } : {}), ...(images ? { images } : {}), ...(context ? { context } : {}), ...(comments ? { comments } : {}), text, resume, ...(cont ? { continue: cont } : {}), ...(reading ? { reading } : {}), ...(videoMode ? { videoMode } : {}), ...(videoFrom ? { videoFrom } : {}), history, setup: { model: 'test/model', ...setup }, settings: { approval: 'yolo', mediaEnabled: false, tools: { browser: { on: false } }, ...settings } },
       (e) => { events.push(e); onEvent?.(e, id); }, signal || new AbortController().signal, { chatStream, catalogue: catalogue || [{ id: 'test/model', maxOut: 4000 }], quiet: true, startServer: async ({ name, args }) => ({ key: `fake-${name}`, url: 'http://localhost:9/', status: 'running', command: ['node', ...(args || [])].join(' '), log: '' }), ...(openTab ? { openTab } : {}), ...(generateImage ? { generateImage } : {}), ...(generateVideo ? { generateVideo } : {}), ...(ensemble ? { ensemble } : {}), ...(checks ? { checks } : {}), ...(enhance ? { enhance } : {}), ...(generation ? { generation } : {}), ...(sourceStream ? { sourceStream } : {}), ...(noOpenRouter != null ? { noOpenRouter } : {}) });
     return { events, bodies, dir, id, done: events.find((e) => e.t === 'done') };
   } finally { forgetProject(id); ledger.delete(`seed-${id}`); }
@@ -1065,6 +1065,14 @@ test('helpers can be switched off, and then delegate is not offered', async () =
   assert.ok(!bodies[0].tools.some((t) => t.function.name === 'delegate'));
   const on = await run(() => reply('ok'), { settings: { helperMinFiles: 0 } });
   assert.ok(on.bodies[0].tools.some((t) => t.function.name === 'delegate'));
+});
+
+test('@ context goes in the user\'s message, not the system prompt', async () => {
+  const { bodies } = await run(() => reply('ok'), { text: 'what do you think abt this', context: '### Chat "Rinka": a brief of the whole chat\n- Goal: an original character' });
+  const msgs = bodies[0].messages, user = msgs.at(-1).content;
+  assert.match(user, /^what do you think abt this\n\n\[Attached by the user with this message: when the message says "this"/);
+  assert.match(user, /Goal: an original character/);
+  assert.doesNotMatch(msgs[0].content, /Goal: an original character/, 'the system prompt stays the same turn to turn');
 });
 
 test('helpers are offered only in projects big enough to explore (40 files by default)', async () => {
