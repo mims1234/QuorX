@@ -23,7 +23,7 @@ import { renameSoon } from './fsretry.js';
 import { findOnPath, localModels, localStream, ensureLocalServer, localServer, LOCAL_ID, SETTING_REFUSAL } from './opencodelocal.js';
 import { claudeModels, claudeStream, claudeAuth, claudeRunning, CLAUDE_ID } from './claudelocal.js';
 import { grokModels, grokStream, grokRunning, GROK_ID } from './groklocal.js';
-import { goModels, goStream, goCheck, GO_ID } from './opencodego.js';
+import { goModels, goStream, goCheck, goAccount, GO_ID } from './opencodego.js';
 import { ccModels, ccStream, ccCheck, ccAccount, CC_ID } from './commandcode.js';
 
 const DATA = path.join(HOME, 'data');
@@ -72,7 +72,8 @@ const APPS = {
   // Listing Grok's models starts it and signs in, so it is the check too.
   [GROK_ID]: { list: () => grokModels(), stream: grokStream, check: async () => {}, server: () => ({ running: grokRunning() > 0, calls: grokRunning(), perCall: true }) },
   // Go's list is public; a call and the check need the key.
-  [GO_ID]: { list: () => goModels(), stream: (b, sg, t, th, o) => goStream(b, sg, t, th, { ...o, key: keyFor(GO_ID)?.key }), check: async () => { const k = keyFor(GO_ID)?.key; if (!k) throw Object.assign(new Error('Add your OpenCode Go key first.'), { kind: 'auth' }); await goCheck(k, await goModels()); }, server: () => ({ api: true }) },
+  [GO_ID]: { list: () => goModels(), stream: (b, sg, t, th, o) => goStream(b, sg, t, th, { ...o, key: keyFor(GO_ID)?.key }), check: async () => { const k = keyFor(GO_ID)?.key; if (!k) throw Object.assign(new Error('Add your OpenCode Go key first.'), { kind: 'auth' }); await goCheck(k, await goModels()); }, server: () => ({ api: true }),
+    account: () => goAccount(keyFor(GO_ID)?.key) },
   // Its list is public too; a call and the check need the key. Its models name the plan the key is on (GOAT plan).
   [CC_ID]: { list: async () => { const [l, a] = await Promise.all([ccModels(), sourceAccount(CC_ID).catch(() => null)]); return a?.plan ? l.map((m) => ({ ...m, planLabel: a.plan })) : l; },
     account: () => ccAccount(keyFor(CC_ID)?.key), stream: (b, sg, t, th, o) => ccStream(b, sg, t, th, { ...o, key: keyFor(CC_ID)?.key }), check: async () => { const k = keyFor(CC_ID)?.key; if (!k) throw Object.assign(new Error('Add your Command Code key first.'), { kind: 'auth' }); await ccCheck(k, await ccModels()); }, server: () => ({ api: true }) },
@@ -384,7 +385,7 @@ function costOf(info, u) {
   return (fresh * p('input') + read * (tier.cache_read != null || c.cache_read != null ? p('cache_read') : p('input')) + write * (tier.cache_write != null || c.cache_write != null ? p('cache_write') : p('input')) + out * p('output')) / 1e6;
 }
 
-// ---------- a subscription's plan and what is left of it (Command Code) ----------
+// ---------- a subscription's plan and what is left of it (OpenCode Go, Command Code) ----------
 const accounts = new Map(); // source → { at, p }: the last look-up, kept a minute
 /** The plan a source's key is on and what is left of it; `refresh` asks again at once. Throws for a source without one. */
 export function sourceAccount(id, { refresh = false } = {}) {
