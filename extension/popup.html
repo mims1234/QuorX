@@ -13,10 +13,17 @@
   .dot i { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
   .dot.on i { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
   .dot.bad i { background: var(--bad); }
-  main { padding: 12px; display: grid; gap: 10px; }
-  section { display: grid; gap: 10px; }
-  label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
-  input, select { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 7px; padding: 7px 8px; font: inherit; }
+  /* Everything keeps to the popup's width: a long chat title in a list is cut with … instead of widening it. */
+  html, body { overflow-x: hidden; }
+  main { padding: 12px; display: grid; gap: 10px; grid-template-columns: minmax(0, 1fr); }
+  section, #giveForm, #recIdle { display: grid; gap: 10px; grid-template-columns: minmax(0, 1fr); min-width: 0; }
+  #giveForm, #recIdle { gap: 8px; }
+  label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); min-width: 0; }
+  input, select { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 7px; padding: 7px 8px; font: inherit; width: 100%; min-width: 0; box-sizing: border-box; }
+  select { text-overflow: ellipsis; }
+  .tab { min-width: 0; }
+  .tab b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .check input { width: auto; }
   button { height: 32px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text); font: 600 12.5px system-ui, sans-serif; cursor: pointer; }
   button:disabled { opacity: .5; cursor: default; }
   button.main { border-color: color-mix(in srgb, var(--violet) 60%, transparent); background: color-mix(in srgb, var(--violet) 18%, transparent); color: var(--violet); }

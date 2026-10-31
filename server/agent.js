@@ -20,6 +20,7 @@ import { rotateLog } from './storagerules.js';
 import { enhanceRequest } from './enhancer.js';
 import { validId, listProjects, getChat } from './store.js';
 import { loadSchedules, cleanSchedule, scheduleView, addSchedule, changeSchedule, removeSchedule, runScheduleNow } from './schedules.js';
+import { toolsFor as mcpToolsFor, callTool as mcpCallTool, parseSetup as mcpParseSetup, addServers as mcpAddServers, listServers as mcpListServers, connect as mcpConnect } from './mcpclient.js';
 import { needsAdmin, adminForAgent, adminForUser } from './elevation.js';
 import { secretKind, maskSecretText, scrubSecrets, projectEnv, setSecret, ENV_NAME, MASK } from './projectsecrets.js';
 import { searchFiles, searchNote, trashFile, checkpoint, changedFiles, copyTemplate, snapBefore, commandChanges, safePath, childEnv, realish, registerFolders, folderIndex } from './workspace.js';
@@ -803,6 +804,10 @@ const DESIGN_NEXT = (root) => {
 // Documents the user attached (kept in the project's .quorx/uploads): search the big ones, read any of them.
 // Schedules: jobs QuorX runs on its own (server/schedules.js). Made from a chat, a schedule posts its runs in that chat,
 // so the user (and you, in that chat) can look back at every run and change the job; each run starts fresh.
+// 🧲 Adding an MCP server to QuorX from a setup the user pasted (server/mcpclient.js). It runs a program or reaches a
+// server for them, so it always asks first, with buttons only.
+const MCP_SETUP_TOOL = { type: 'function', function: { name: 'mcp_setup', description: 'Add an MCP server to QuorX (its tools then become yours in this chat), or list the ones QuorX has. action "add" with setup: what the user gave you, as they gave it: an mcpServers JSON config, a command line such as "npx -y @scope/server" or "claude mcp add name -- npx -y pkg", or a server\'s https address; name: a short name if the setup has none. The user sees exactly what it will run and adds it with a click; it is then ticked for this chat and started, and its tools come back to you. action "list": the servers QuorX has and their tools. Setup instructions are often written for another tool (Claude Code, Codex, Cursor, VS Code, Gemini CLI…). When the user pasted such instructions without saying where they go, ask with ask_user whether to add it to QuorX (what they usually mean here) or to that tool; never edit another tool\'s own config files unless they say so. Keys a server needs go in its env or headers in the setup, never in your reply. The same goes for other setup pasted for another tool (a model provider or API key, a skill, a rule file): ask whether they mean QuorX, and if so say where it goes in QuorX (keys and providers: ⚙ Settings → API keys and Models; skills: ⚙ Settings → Skills) instead of asking for a key in the chat.', parameters: { type: 'object', required: ['action'], properties: {
+  action: { type: 'string', enum: ['add', 'list'] }, setup: { type: 'string', description: 'For add: the config, command line or address, as the user gave it.' }, name: { type: 'string', description: 'For add: a short name (letters, digits, - and _) when the setup gives none.' } } } } };
 const SCHEDULE_TOOL = { type: 'function', function: { name: 'schedule', description: 'The user\'s schedules: jobs QuorX runs on its own at set times, like "every 3 minutes type /ldrop in the bot channel" or "weekdays at 9 summarise my inbox". Each run starts fresh with only its prompt (no memory of this chat), uses its own model and mode, and posts its reply in the schedule\'s chat; a schedule made here posts in THIS chat, so later the user can ask you here what the runs saw. Actions: list (every schedule, this chat\'s first, with recent runs); create (name, prompt, when; write the prompt as complete instructions for a fresh agent: where to go, what to do, what to report); update (id, then any of name, prompt, when, notify, model, approval); pause / resume / run_now / delete (id). when: {"kind":"every","minutes":15} (3 or more), {"kind":"daily","time":"09:00","days":[1,2,3,4,5]} (0 = Sunday; no days = every day) or {"kind":"once","at":"2026-10-28T18:30"} (local time). notify: always, failure (only when a run fails), needs (only when a run waits for the user) or changed (only when the result differs from last time). Creating, changing, resuming, running now and deleting ask the user first.', parameters: { type: 'object', required: ['action'], properties: {
   action: { type: 'string', enum: ['list', 'create', 'update', 'pause', 'resume', 'run_now', 'delete'] },
   id: { type: 'string', description: 'The schedule, from list (update, pause, resume, run_now, delete)' },
@@ -1364,7 +1369,14 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
   const mediaOff = () => (req.bench || noOpenRouter || req.settings?.mediaEnabled === false ? [] : Object.keys(MEDIA).filter((c) => !T[c].on));
   if (mediaOff().length) tools.push(ENABLE_MEDIA_TOOL(mediaOff()));
   if (req.chatId && S.schedules !== false) tools.push(SCHEDULE_TOOL); // ⏰ the user's scheduled jobs
+  // 🧲 The MCP servers this chat ticked: their tools join this reply's (named mcp__<server>__<tool>). One that won't
+  // start is said in a note, and the reply goes on without it. Adding a server is a tool of its own (mcp_setup).
+  const mcpT = req.chatId && !req.bench && Array.isArray(S.mcpServers) && S.mcpServers.length
+    ? await mcpToolsFor(S.mcpServers).catch(() => ({ defs: [], byName: new Map(), notes: [] })) : { defs: [], byName: new Map(), notes: [] };
+  tools.push(...mcpT.defs);
+  if (req.chatId && !req.bench) tools.push(MCP_SETUP_TOOL);
   emit({ t: 'start', runId, setup, voters: S.voters, approval: S.approval, system, at: 0 });
+  if (mcpT.notes.length) emit({ t: 'note', level: 'warn', msg: `MCP server${mcpT.notes.length > 1 ? 's' : ''} not available in this reply: ${mcpT.notes.join('; ')}`, at: 0 });
   if (noDesktop && S.appsAccess && req.chatId) emit({ t: 'note', level: 'warn', msg: noDesktop, at: 0 });
 
   let reply = '';
@@ -2835,7 +2847,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       emit({ t: 'note', level: 'info', msg: `${why}, so D2 falls back to setup C: the agent must ask the deciders, guessing first.`, at: at() });
       setup.decide = 'force-first';
       messages[0].content = systemFor(true);
-      tools = TOOLS({ artifacts: T.artifacts.on, decide: true, cats, choices, code: !!root, browser: browserOn, skills: skills.length > 0, ask: askOn, docs: docsOn });
+      tools = [...TOOLS({ artifacts: T.artifacts.on, decide: true, cats, choices, code: !!root, browser: browserOn, skills: skills.length > 0, ask: askOn, docs: docsOn }), ...mcpT.defs];
       return false;
     }
     const model = setup.strong || 'anthropic/claude-sonnet-5.5';
@@ -2858,10 +2870,17 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   // YOLO, with this tool's group turned off: ask first (an "Always allow" answer stops the asking for the chat).
   function yoloAsks(name) {
     if (S.approval !== 'yolo' || allowed.has(name)) return false;
+    // An MCP server set to "Ask every time" asks in YOLO too.
+    if (mcpT.byName.get(name)?.ask === 'always') return true;
     const g = YOLO_GROUP_OF[name];
     return !!g && S.yoloAuto?.[g] === false;
   }
   function strictAsks(name) {
+    // An MCP tool: Strict asks before one that can change things (its server marks the read-only ones), and before
+    // every one of a server set to "Ask every time". mcp_setup asks for itself (buttons only).
+    const mt = mcpT.byName.get(name);
+    if (mt) return mt.ask === 'always' || !mt.readOnly;
+    if (name === 'mcp_setup') return false;
     if (CAT_OF[name] || name === 'ask_user' || name === 'request_secret' || name === 'media_plan' || name === 'enable_media' || name === 'storyboard') return false;
     if ((S.strictAsk || 'paid') === 'every') return true;
     return (S.strictAskHelpers === true && name === 'delegate') || (S.strictAskDeciders === true && ['decide', 'look', 'extract_design'].includes(name));
@@ -3009,6 +3028,8 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   function replyResult(name, reply) { return `The user did not approve or refuse this ${name} call, so it was not run. Instead they wrote: "${reply}". Treat that as their answer to this request: adjust the call and try again, ask them, or do something else, whatever their words call for.`; }
   function declined(name, ans) { if (ans.reply) return replyResult(name, ans.reply); return `${ans.by === 'user' ? 'The user' : ans.by === 'budget' ? 'The budget check' : 'The automatic approval check'} declined this ${name} call${ans.reason ? `. Reason: "${ans.reason}"` : ' without giving a reason'}. Decide how to proceed with that in mind: adapt, offer an alternative, or continue without it. Do not repeat the identical call.`; }
   function toolSummary(name, args) {
+    const mt = mcpT.byName.get(name);
+    if (mt) return `Use ${mt.tool} on the MCP server ${mt.server}${args && Object.keys(args).length ? `: ${clip(JSON.stringify(args), 200)}` : ''}`;
     if (name === 'write_artifact') return `${args.id && arts.has(args.id) ? `Replace \`${args.id}\`` : args.markdown && !args.html ? 'Create a new document' : 'Create a new page'}: "${clip(args.title, 60)}" (${args.markdown && !args.html ? `${String(args.markdown).length} characters of Markdown` : `${String(args.html || '').length} characters of HTML`})`;
     if (name === 'edit_artifact') return Array.isArray(args.edits) && args.edits.length ? `Edit \`${args.id}\`: ${args.edits.length} changes (${args.edits.slice(0, 3).map((e) => `"${clip(e?.find, 40)}"`).join(', ')}${args.edits.length > 3 ? ', …' : ''})` : `Edit \`${args.id}\`: replace "${clip(args.find, 80)}" with "${clip(args.replace, 80)}"`;
     if (name === 'read_artifact') return `Read the source of \`${args.id}\``;
@@ -3243,7 +3264,10 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     // every tool when the user chose that. A plan asks once in Strict; ticking its items off later doesn't.
     // Commands have their own gate (the rule engine, in codeTool), so they never get a second, generic card.
     if (((S.approval === 'strict' && strictAsks(name) && !allowed.has(name)) || yoloAsks(name)) && !(name === 'plan' && run.plan) && !(name === 'launch_config' && args.action === 'list') && !['shell', 'run_command', 'terminal', 'edit_video'].includes(name)) {
-      const card = { id: newApprovalId(), tool: name, free: true, est: 0, what: toolSummary(name, args), why: '' };
+      const mt = mcpT.byName.get(name);
+      const card = { id: newApprovalId(), tool: name, free: true, est: 0, what: toolSummary(name, args), why: '',
+        // An MCP tool: its server and tool, whether it can change things, and the exact input it will send.
+        ...(mt ? { mcp: { server: mt.server, tool: mt.tool, changes: !mt.readOnly, always: mt.ask === 'always', input: clip(JSON.stringify(args ?? {}, null, 2), 3000) } } : {}) };
       const ans = await askUser(card);
       emit({ t: 'approval_done', id: card.id, ...ans, at: at() });
       if (!ans.approve) return declined(name, ans);
@@ -3305,6 +3329,8 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (name === 'run_command' || [...CODE_TOOLS, ...PROJECT_TOOLS].some((t) => t.function.name === name)) return codeTool(name, args);
     if (['list_docs', 'read_doc', 'search_docs'].includes(name)) return docTool(name, args);
     if (name === 'delegate') return delegate(args, step);
+    if (name === 'mcp_setup') return mcpSetup(args);
+    if (mcpT.byName.has(name)) { const mt = mcpT.byName.get(name); return mcpCallTool(mt.server, mt.tool, args); }
     if (name === 'edit_video') return editVideo(args);
     return `Error: unknown tool ${name}.`;
   }
@@ -5166,6 +5192,36 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     S.appsAccess = true;
     emit({ t: 'tools_on', kinds: ['apps'], at: at() });
     return true;
+  }
+  // 🧲 mcp_setup: list QuorX's MCP servers, or add one from a setup the user pasted. Adding shows exactly what will run
+  // and waits for the user's click (in YOLO too; typed words don't count); then the server is ticked for this chat,
+  // started, and its tools join this reply.
+  async function mcpSetup(args) {
+    if (args.action === 'list') {
+      const l = mcpListServers();
+      if (!l.length) return 'QuorX has no MCP servers yet. Add one with action add.';
+      return `${l.map((s) => `- ${s.name} (${s.type === 'http' ? s.url : [s.command, ...s.args].join(' ')})${s.on ? '' : ' [off]'}: ${s.status}${s.tools.length ? `; tools: ${s.tools.map((t) => t.name).join(', ')}` : ''}`).join('\n')}\nTicked for this chat: ${(S.mcpServers || []).join(', ') || 'none'}.`;
+    }
+    if (args.action !== 'add') return 'Error: action is add or list.';
+    let p;
+    try { p = mcpParseSetup(args.setup, args.name); } catch (e) { return `Error: ${e.message}`; }
+    const runs = p.servers.map((s) => (s.type === 'http' ? `${s.name}: connects to ${s.url}` : `${s.name}: runs "${[s.command, ...s.args].join(' ')}" on this computer`)).join('\n');
+    const keys = [...new Set(p.servers.flatMap((s) => Object.keys({ ...(s.env || {}), ...(s.headers || {}) })))];
+    const other = p.from && !/config$/.test(p.from) ? `\nWritten for ${p.from}: this adds it to QuorX instead.` : '';
+    const card = { id: newApprovalId(), tool: 'mcp_setup', free: true, est: 0, buttonsOnly: true, noAlways: true, yes: 'Add to QuorX', no: "Don't add",
+      what: `Add ${p.servers.length > 1 ? `${p.servers.length} MCP servers` : 'an MCP server'} to QuorX`,
+      why: `${runs}${keys.length ? `\nWith ${keys.join(', ')} (kept in QuorX, never shown)` : ''}${other}\nIt runs with your permissions: add only servers you trust.` };
+    const ans = await askUser({ ...card, mode: 'strict' });
+    emit({ t: 'approval_done', id: card.id, ...ans, at: at() });
+    if (!ans.approve) return declined('mcp_setup', ans);
+    try { mcpAddServers(p.servers); } catch (e) { return `Error: ${e.message}`; }
+    const names = p.servers.map((s) => s.name);
+    S.mcpServers = [...new Set([...(S.mcpServers || []), ...names])];
+    emit({ t: 'mcp_on', names, at: at() });
+    const fresh = await mcpToolsFor(names).catch((e) => ({ defs: [], byName: new Map(), notes: [e.message] }));
+    for (const d of fresh.defs) if (!tools.some((t) => t.function.name === d.function.name)) tools.push(d);
+    for (const [k, v] of fresh.byName) mcpT.byName.set(k, v);
+    return `Added ${names.join(', ')} to QuorX and ticked ${names.length > 1 ? 'them' : 'it'} for this chat.${fresh.defs.length ? ` Its tools are yours now: ${fresh.defs.map((d) => d.function.name).join(', ')}.` : ''}${fresh.notes.length ? ` Not running yet: ${fresh.notes.join('; ')}. Tell the user what it said; they can fix it under ⚙ Settings → MCP servers.` : ''}`;
   }
   // 🧩 Chrome off in this chat, with the extension connected: one card in the reply turns it on, as for computer use.
   // Ticking the switch while a reply runs doesn't reach that reply, so this is how a reply gets Chrome. No extension

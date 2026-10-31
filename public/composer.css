@@ -130,3 +130,38 @@
   display: grid; place-items: center; font: 700 9px/1 var(--mono); background: var(--accent); color: var(--accent-ink); }
 /* the narrowest boxes: Strict / YOLO keeps its 🔒 / ⚡ and its colour; the word shows on hover */
 .composer-box.fold6 .cq-chip.cq-safety b { display: none; }
+/* 🧲 MCP in the settings popover: a tick per server (its mark, tools, web or program), search, All / None, Manage */
+.cmp-quick .cq-sec[data-sec="mcp"] .cq-row { flex-direction: column; align-items: stretch; gap: 6px; }
+.cmp-quick .cq-mcp-q { height: 26px; padding: 0 8px; border-radius: 6px; border: 1px solid var(--line-strong); background: var(--surface-inset, var(--bg)); color: var(--text); font: 400 12px var(--font-ui); }
+.cmp-quick .cq-mcp { display: flex; flex-direction: column; gap: 2px; max-height: 220px; overflow: auto; }
+.cmp-quick .cq-mcp-one { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 6px; cursor: pointer; }
+.cmp-quick .cq-mcp-one:hover { background: var(--panel-3); }
+.cmp-quick .cq-mcp-one input { accent-color: var(--accent); width: 14px; height: 14px; margin: 0; flex: none; }
+.cmp-quick .cq-mcp-one > span:last-child { display: flex; flex-direction: column; min-width: 0; }
+.cmp-quick .cq-mcp-one b { font: 600 12px var(--mono); color: var(--text); }
+.cmp-quick .cq-mcp-one small { font-size: 10.5px; color: var(--muted); }
+.cmp-quick .cq-mcp-one small.bad { color: var(--bad); }
+.cmp-quick .cq-mcp-foot { display: flex; align-items: center; gap: 4px; }
+.cmp-quick .cq-mcp-none { font-size: 12px; color: var(--muted); }
+.cmp-quick .cq-mcp-manage, .cmp-quick .cq-mcp-all { height: 22px; padding: 0 8px; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: var(--muted); font: 500 11.5px var(--font-ui); cursor: pointer; }
+.cmp-quick .cq-mcp-manage:hover, .cmp-quick .cq-mcp-all:hover { color: var(--text); background: var(--panel-3); }
+.cmp-quick.one[data-only="mcp"], .cmp-quick.one:has(.cq-sec[data-sec="mcp"]:not([hidden])) { width: 300px; }
+/* the 🧲 chip keeps its place as long as the settings chips do (a count of servers ticked) */
+.composer-box.fold4 .cq-chip.cq-mcpc[data-state="changed"] { display: inline-flex !important; }
+/* the 🧲 chip's popover (MCP alone): its name as a heading above the list, the list full width */
+.cmp-quick.one .cq-sec[data-sec="mcp"] > h6, .cmp-quick.one .cq-sec[data-sec="mcp"] > .cq-row { grid-column: 1 / -1; }
+.cmp-quick.one .cq-sec[data-sec="mcp"] > h6 { flex-direction: row; align-items: baseline; gap: 6px; font-size: 12.5px; color: var(--text); }
+.cmp-quick.one:has(.cq-sec[data-sec="mcp"]:not([hidden])) { width: 300px; }
+/* the MCP line in the full popover, and the list's search, Ticked only and count */
+.cmp-quick .cq-mcp-sum { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; }
+.cmp-quick .cq-mcp-sum b { font: 600 12px var(--mono); color: var(--text); white-space: nowrap; }
+.cmp-quick .cq-mcp-names { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-family: var(--mono); font-size: 11px; }
+.cmp-quick .cq-mcp-open { flex: none; height: 22px; padding: 0 8px; border-radius: 6px; border: 1px solid var(--accent-border); background: var(--accent-dim); color: var(--accent); font: 500 11.5px var(--font-ui); cursor: pointer; }
+.cmp-quick .cq-mcp-tools { display: flex; align-items: center; gap: 8px; }
+.cmp-quick .cq-mcp-tools .cq-mcp-q { flex: 1; min-width: 0; }
+.cmp-quick .cq-mcp-mine { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--muted); white-space: nowrap; cursor: pointer; }
+.cmp-quick .cq-mcp-mine input { accent-color: var(--accent); margin: 0; }
+.cmp-quick .cq-mcp-count { font: 400 11px var(--mono); color: var(--dim); }
+.cmp-quick .cq-mcp { max-height: min(320px, 45vh); }
+.cmp-quick .cq-mcp-foot { flex-wrap: wrap; row-gap: 4px; }
+.cmp-quick .cq-mcp-count { white-space: nowrap; }

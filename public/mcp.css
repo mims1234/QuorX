@@ -1,0 +1,107 @@
+/* Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0 */
+/* 🧲 MCP servers: ⚙ Settings → MCP servers (app.js drawMcpPanel), the 🧲 chip in the message box, and MCP steps in a
+   reply. Status is a dot and text, tags are small outlined mono, buttons are solid or ghost, keys show by name only. */
+
+/* a server's mark: a coloured square with its first letter (its hue comes from its name) */
+.mcp-mark { --mc: hsl(var(--mh, 180) 65% 62%); display: inline-grid; place-items: center; flex: none; width: 22px; height: 22px; border-radius: 5px;
+  border: 1.5px solid color-mix(in srgb, var(--mc) 75%, transparent); background: color-mix(in srgb, var(--mc) 16%, transparent);
+  color: var(--mc); font: 700 11px/1 var(--mono); text-transform: uppercase; }
+.mcp-mark.sm { width: 16px; height: 16px; font-size: 9px; border-radius: 4px; }
+.mcp-mark.lg { width: 32px; height: 32px; font-size: 14px; border-radius: 7px; }
+.mcp-kind { flex: none; font: 500 10px var(--mono); padding: 1px 5px; border: 1px solid var(--line-strong); border-radius: 3px; color: var(--muted); text-transform: uppercase; white-space: nowrap; }
+.mcp-st { display: inline-flex; align-items: center; gap: 6px; font: 500 12px var(--font-ui); color: var(--muted); white-space: nowrap; }
+.mcp-st i { width: 7px; height: 7px; border-radius: 50%; background: var(--dim); flex: none; }
+.mcp-st.running { color: var(--ok); } .mcp-st.running i { background: var(--ok); box-shadow: 0 0 6px var(--ok-glow); }
+.mcp-st.error { color: var(--bad); } .mcp-st.error i { background: var(--bad); }
+.mcp-st.starting i { background: var(--amber); }
+
+/* ---- Settings ---- */
+#mcpPanel .mcp-card { padding: 14px 16px 16px; display: flex; flex-direction: column; gap: 12px; }
+#mcpPanel .mcp-sum { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 16px; font-size: 12.5px; color: var(--muted); }
+#mcpPanel .mcp-showbad { border: 0; background: none; cursor: pointer; padding: 0; font: inherit; text-decoration: underline dotted; }
+#mcpPanel .mcp-tabs { align-self: flex-start; }
+#mcpPanel .mcp-tabs small { opacity: .7; margin-left: 4px; }
+#mcpPanel .mcp-addbox { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 9px; border: 1px solid var(--line); background: var(--panel-2); }
+#mcpPanel textarea { width: 100%; resize: vertical; min-height: 64px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line-strong); background: var(--surface-inset, var(--bg)); color: var(--text); font: 400 12px/1.5 var(--mono); }
+#mcpPanel .mcp-add-row { display: flex; gap: 8px; }
+#mcpPanel .mcp-add-row input, #mcpPanel .mcp-search, #mcpPanel .mcp-toolq { flex: 1; min-width: 0; height: 30px; padding: 0 10px; border-radius: 7px; border: 1px solid var(--line-strong); background: var(--surface-inset, var(--bg)); color: var(--text); font: 400 12.5px var(--font-ui); }
+#mcpPanel .mcp-preview { padding: 10px 12px; border-radius: 8px; border: 1px solid var(--accent-border); background: var(--accent-dim); font-size: 12.5px; }
+#mcpPanel .mcp-preview ul { margin: 6px 0; padding-left: 4px; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+#mcpPanel .mcp-preview li { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+#mcpPanel code { font: 400 11.5px var(--mono); color: var(--muted); }
+#mcpPanel .mcp-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+#mcpPanel .mcp-chip { height: 26px; padding: 0 9px; border-radius: 7px; border: 1px solid var(--line-strong); background: transparent; color: var(--muted); font: 500 12px var(--font-ui); cursor: pointer; }
+#mcpPanel .mcp-chip small { margin-left: 3px; font-family: var(--mono); opacity: .8; }
+#mcpPanel .mcp-chip:hover { color: var(--text); background: var(--panel-3); }
+#mcpPanel .mcp-chip.on { color: var(--accent); border-color: var(--accent-border); background: var(--accent-dim); }
+/* the list and the chosen server's panel side by side; under each other when the panel is narrow */
+#mcpPanel .mcp-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 340px); gap: 12px; align-items: start; }
+@container (max-width: 760px) { #mcpPanel .mcp-split { grid-template-columns: minmax(0, 1fr); } }
+#mcpPanel { container-type: inline-size; }
+#mcpPanel .mcp-rows { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+#mcpPanel .mcp-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-top: 1px solid var(--line); cursor: pointer; min-width: 0; }
+#mcpPanel .mcp-row:first-child { border-top: 0; }
+#mcpPanel .mcp-row:hover { background: var(--panel-2); }
+#mcpPanel .mcp-row.sel { background: var(--accent-dim); box-shadow: inset 2px 0 0 var(--accent); }
+#mcpPanel .mcp-row.off .mcp-nm, #mcpPanel .mcp-row.off .mcp-mark { opacity: .5; }
+#mcpPanel .mcp-nm { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+#mcpPanel .mcp-nm b { font: 600 12.5px var(--mono); color: var(--text-bright, var(--text)); }
+#mcpPanel .mcp-nm code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+#mcpPanel .mcp-row .mcp-st { width: 92px; }
+#mcpPanel .mcp-tc { width: 52px; text-align: right; font: 400 11.5px var(--mono); color: var(--muted); }
+#mcpPanel .mcp-ib { width: 26px; height: 26px; display: grid; place-items: center; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; font-size: 13px; }
+#mcpPanel .mcp-ib:hover { color: var(--text); background: var(--panel-3); border-color: var(--line); }
+#mcpPanel .mcp-none { padding: 14px; color: var(--muted); font-size: 12.5px; cursor: default; }
+@container (max-width: 560px) { #mcpPanel .mcp-row .mcp-kind, #mcpPanel .mcp-tc { display: none; } #mcpPanel .mcp-row .mcp-st { width: auto; } }
+/* the chosen server */
+#mcpPanel .mcp-insp { border: 1px solid var(--line); border-radius: 9px; background: var(--panel-2); display: flex; flex-direction: column; }
+#mcpPanel .mcp-insp-head { display: flex; align-items: center; gap: 10px; padding: 12px; border-bottom: 1px solid var(--line); }
+#mcpPanel .mcp-insp-head > div { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+#mcpPanel .mcp-insp-head b { font: 600 14px var(--mono); color: var(--text-bright, var(--text)); }
+#mcpPanel .mcp-insp-head small, #mcpPanel .mcp-insp small { color: var(--muted); font-size: 11.5px; }
+#mcpPanel .mcp-insp-sec { padding: 10px 12px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; }
+#mcpPanel .mcp-insp-head + .mcp-insp-sec { border-top: 0; }
+#mcpPanel .mcp-insp-run { flex-direction: row; align-items: center; gap: 6px; flex-wrap: wrap; }
+#mcpPanel .mcp-insp h6 { margin: 0; font: 600 11px var(--font-ui); letter-spacing: .04em; text-transform: uppercase; color: var(--dim); }
+#mcpPanel .mcp-insp p { margin: 0; }
+#mcpPanel .mcp-onrow { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+#mcpPanel .mcp-onrow > span:last-child { display: flex; flex-direction: column; }
+#mcpPanel .mcp-addr { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 7px; border: 1px solid var(--line); background: var(--surface-inset, var(--bg)); }
+#mcpPanel .mcp-addr code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+#mcpPanel .mcp-ask { align-self: flex-start; }
+#mcpPanel .mcp-ask button { height: 24px; padding: 0 9px; font-size: 11.5px; }
+#mcpPanel .mcp-insp-tools ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow: auto; }
+#mcpPanel .mcp-insp-tools li { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; font-size: 12px; }
+#mcpPanel .mcp-insp-tools li code { color: var(--text); }
+#mcpPanel .mcp-insp-tools li small { flex-basis: 100%; }
+#mcpPanel .mcp-ro, #mcpPanel .mcp-chg { font: 500 9.5px var(--mono); padding: 0 4px; border-radius: 3px; border: 1px solid currentColor; }
+#mcpPanel .mcp-ro { color: var(--ok); } #mcpPanel .mcp-chg { color: var(--amber); }
+#mcpPanel .mcp-err { margin: 0 12px 4px; font-size: 12px; color: var(--bad); }
+#mcpPanel .kx-btn.sure { color: var(--bad); border-color: var(--bad-border, var(--bad)); }
+/* suggested servers and the first run */
+#mcpPanel .mcp-sug-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 8px; }
+#mcpPanel .mcp-sug { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 9px; border: 1px solid var(--line); background: var(--panel-2); min-width: 0; }
+#mcpPanel .mcp-sug > div { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+#mcpPanel .mcp-sug b { font: 600 12.5px var(--mono); }
+#mcpPanel .mcp-sug small { color: var(--muted); font-size: 11.5px; }
+#mcpPanel .mcp-sug code { font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); }
+#mcpPanel .mcp-first { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+#mcpPanel .mcp-first > b { font-size: 14px; color: var(--text-bright, var(--text)); }
+#mcpPanel .mcp-first p { margin: 0; color: var(--muted); font-size: 12.5px; max-width: 620px; }
+#mcpPanel .mcp-first .mcp-sug-grid { width: 100%; }
+/* ---- in a reply: an MCP call reads "server › tool" with the server's mark and the first line of its result ---- */
+.tl-call.tl-mcp > summary .tl-ic { display: inline-grid; place-items: center; }
+.tl-call.tl-mcp > summary b { font-family: var(--mono); font-weight: 600; }
+.tl-call .tl-mcp-res { color: color-mix(in srgb, var(--ok) 80%, var(--muted)); }
+/* the approval card for an MCP tool: what it changes, and the exact input it will send */
+.approval .mcp-ap { display: flex; flex-direction: column; gap: 6px; margin: 4px 0; }
+.approval .mcp-ap-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; }
+.approval .mcp-ap-head b { font-family: var(--mono); }
+.approval .mcp-chg { font: 600 9.5px var(--mono); padding: 1px 5px; border-radius: 3px; border: 1px solid var(--amber); color: var(--amber); }
+.approval .mcp-ap pre { margin: 0; max-height: 180px; overflow: auto; padding: 8px 10px; border-radius: 7px; border: 1px solid var(--line); background: var(--surface-inset, var(--bg)); font: 400 11.5px/1.5 var(--mono); color: var(--text); white-space: pre-wrap; word-break: break-word; }
+#mcpPanel .mcp-tick { display: inline-grid; place-items: center; flex: none; width: 22px; height: 22px; cursor: pointer; }
+#mcpPanel .mcp-tick input { width: 16px; height: 16px; margin: 0; accent-color: var(--ok); cursor: pointer; }
+#mcpPanel .mcp-h { margin: 4px 0 0; font: 600 11px var(--font-ui); letter-spacing: .04em; text-transform: uppercase; color: var(--dim); }
+#mcpPanel .mcp-h small { text-transform: none; letter-spacing: 0; font-weight: 400; margin-left: 6px; }
+.mcp-st.login { color: var(--amber); } .mcp-st.login i { background: var(--amber); }
+#mcpPanel .mcp-row .mcp-signin { flex: none; height: 26px; padding: 0 10px; }
