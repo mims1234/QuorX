@@ -8,7 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { groupCalls, numberedWindow, untrusted, looksLikeInstruction, trimTranscript, trimPageViews, compactTranscript, transcriptChars, withCacheMarks, retryable } from '../server/loop.js';
 import { checkFile, checkHtml, lintHtml, lintCss, lintFile, CHECK_TIMEOUTS } from '../server/checks.js';
-import { listDesignSystems, readDesignSystem, tokenColors, projectDesign, applyDesignSystem, saveProjectDesign } from '../server/design.js';
+import { listDesignSystems, readDesignSystem, tokenColors, projectDesign, applyDesignSystem, saveProjectDesign, saveCustomSystem, deleteCustomSystem, designSpec, cleanSpec, contrastChecks } from '../server/design.js';
 
 const call = (name, args = {}, id = name + Math.random()) => ({ id, type: 'function', function: { name, arguments: JSON.stringify(args) } });
 
@@ -276,6 +276,47 @@ test('the design lint flags colours outside the project palette, and a starter a
     assert.equal(projectDesign(dir), null, 'remove takes both files away');
     assert.throws(() => applyDesignSystem(dir, '../etc'), /no design system/);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('the gallery has many styles; your own systems save, apply, rename and delete', () => {
+  const all = listDesignSystems();
+  assert.ok(all.length >= 24, 'a large gallery');
+  assert.ok(new Set(all.map((s) => s.family)).size >= 12, 'many style families');
+  assert.ok(all.every((s) => s.source === 'builtin' && s.spec && s.checks.length === 3));
+  // A starter written by hand reads back into a spec that can be duplicated.
+  const harbor = designSpec('harbor');
+  assert.equal(harbor.colors.base.accent, '#c2410c');
+  assert.equal(harbor.colors.dark.accent, '#ff8a4c');
+  assert.equal(harbor.fonts.display, 'Fraunces');
+  const mine = saveCustomSystem({ spec: { ...harbor, name: 'Harbor (mine)', colors: { ...harbor.colors, base: { ...harbor.colors.base, accent: '#0a7d5a' } } }, from: 'harbor' });
+  assert.match(mine.id, /^custom-harbor-mine-[0-9a-f]{6}$/);
+  assert.equal(listDesignSystems()[0].id, mine.id, 'yours are listed first');
+  assert.equal(listDesignSystems()[0].from, 'harbor');
+  const sys = readDesignSystem(mine.id);
+  assert.match(sys.tokens, /--accent: #0a7d5a;/);
+  assert.match(sys.md, new RegExp(`^---[\\s\\S]*?id: ${mine.id}`));
+  for (const h of ['## Look', '## Colours', '## Type', '## Components']) assert.ok(sys.md.includes(h), h);
+  assert.deepEqual(lintCss(sys.tokens), [], 'generated tokens lint clean');
+  const dir = tempDir('quorx-custom-ds-');
+  assert.equal(applyDesignSystem(dir, mine.id).applied, true);
+  assert.equal(projectDesign(dir).id, mine.id, 'the project knows which system it uses');
+  assert.equal(projectDesign(dir).name, 'Harbor (mine)');
+  applyDesignSystem(dir, 'harbor', { overwrite: true });
+  assert.equal(projectDesign(dir).id, 'harbor', 'a hand-written starter carries its id too');
+  // Rename keeps the id; built-in systems can't be changed or deleted.
+  const renamed = saveCustomSystem({ id: mine.id, spec: { ...designSpec(mine.id), name: 'Coastal' } });
+  assert.equal(renamed.id, mine.id);
+  assert.equal(designSpec(mine.id).name, 'Coastal');
+  assert.throws(() => saveCustomSystem({ id: 'harbor', spec: harbor }), /duplicate a built-in/);
+  assert.throws(() => deleteCustomSystem('harbor'), /can't be deleted/);
+  deleteCustomSystem(mine.id);
+  assert.equal(designSpec(mine.id), null);
+  // Bad values are cleaned, and the contrast checks catch unreadable text.
+  const odd = cleanSpec({ colors: { base: { bg: 'red; }', fg: '#ffffff' } }, radius: 999, fonts: { display: '"x";}' } });
+  assert.equal(odd.colors.base.bg, '#808080');
+  assert.equal(odd.radius, 40);
+  assert.equal(odd.fonts.display, 'x');
+  assert.equal(contrastChecks({ ...harbor.colors.base, fg: '#eeeeee' })[0].ok, false);
 });
 
 test('the ZIP export holds every project file, compressed or stored, and leaves the harness folder out', async () => {

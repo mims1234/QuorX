@@ -1,0 +1,292 @@
+{
+  "version": 1,
+  "note": "Ready-made design systems as plain values. QuorX writes DESIGN.md and tokens.css from these (server/design.js). The hand-written starters are the folders beside this file.",
+  "systems": [
+    {
+      "id": "paperwhite", "name": "Paperwhite", "family": "minimal", "dark": "yes",
+      "description": "Quiet, airy and almost colourless, with one ink-blue accent. For personal sites, docs, notes apps and anything where the words matter most.",
+      "look": "A sheet of good paper: warm white ground, near-black ink, wide margins and very little decoration. One ink-blue accent marks links and the main action. Everything else is spacing and type.",
+      "colors": {
+        "base": { "bg": "#fbfaf7", "surface": "#ffffff", "surface-2": "#f1efe9", "fg": "#1b1b1a", "muted": "#5d5b55", "line": "#e2dfd6", "accent": "#1f4fd1", "accent-ink": "#ffffff", "accent-2": "#1f4fd1", "ok": "#2f7a3a", "warn": "#8f5a00", "bad": "#b3261e", "focus": "#1f4fd1" },
+        "dark": { "bg": "#121211", "surface": "#1a1a19", "surface-2": "#222220", "fg": "#ecebe6", "muted": "#a6a49c", "line": "#2e2d2a", "accent": "#8fb0ff", "accent-ink": "#0b1430", "accent-2": "#8fb0ff", "ok": "#7fcf8a", "warn": "#e8b65a", "bad": "#ff8a80", "focus": "#8fb0ff" }
+      },
+      "fonts": { "display": "Inter", "body": "Inter", "mono": "JetBrains Mono" },
+      "type": { "base": 17, "ratio": 1.2, "displayWeight": 600 },
+      "radius": 6, "radiusSm": 4, "space": 8, "maxWidth": 760, "shadow": "none", "border": 1,
+      "dos": ["leave generous white space around every block", "keep pages to one column for reading"],
+      "donts": ["add icons, gradients or coloured panels for decoration", "use more than one accent"]
+    },
+    {
+      "id": "concrete", "name": "Concrete", "family": "brutalist", "dark": "no",
+      "description": "Raw and loud: thick black borders, hard offset shadows, square corners and a hazard-yellow accent. For portfolios, zines, indie products and launches that want to be noticed.",
+      "look": "Unpolished on purpose. Thick 3px black borders, square corners, hard shadows with no blur, a heavy grotesque in capitals for headlines and a mono for labels. Yellow is the one shout.",
+      "colors": {
+        "base": { "bg": "#f4f1ea", "surface": "#ffffff", "surface-2": "#e9e4d8", "fg": "#000000", "muted": "#4a4740", "line": "#000000", "accent": "#ffd400", "accent-ink": "#000000", "accent-2": "#0033cc", "ok": "#006b2e", "warn": "#8a4b00", "bad": "#c4001a", "focus": "#0033cc" }
+      },
+      "fonts": { "display": "Archivo Black", "body": "Space Grotesk", "mono": "Space Mono" },
+      "type": { "base": 16, "ratio": 1.333, "displayWeight": 400, "case": "upper" },
+      "radius": 0, "radiusSm": 0, "space": 8, "maxWidth": 1200, "shadow": "hard", "border": 3,
+      "dos": ["let blocks collide and overlap a little", "use the mono for labels, prices and dates"],
+      "donts": ["round any corner", "use soft shadows or gradients"]
+    },
+    {
+      "id": "frost", "name": "Frost", "family": "glass", "dark": "only",
+      "description": "Frosted glass panels floating over a deep blue-violet night, with soft light and an ice-cyan accent. For product launches, music, weather and app landing pages.",
+      "look": "Translucent cards over a dark, softly lit background. Panels use --surface at 70% opacity with backdrop-filter: blur(18px) and a 1px light border at 12%. Keep text on solid enough surfaces to read easily.",
+      "colors": {
+        "base": { "bg": "#0c1024", "surface": "#171d3a", "surface-2": "#20284d", "fg": "#eef1ff", "muted": "#a9b1d6", "line": "#2d3766", "accent": "#7fe7ff", "accent-ink": "#06202a", "accent-2": "#c4b5ff", "ok": "#7ee2a8", "warn": "#ffd27a", "bad": "#ff9aa8", "focus": "#7fe7ff" }
+      },
+      "fonts": { "display": "Outfit", "body": "Inter", "mono": "JetBrains Mono" },
+      "type": { "base": 16, "ratio": 1.25, "displayWeight": 600 },
+      "radius": 18, "radiusSm": 10, "space": 8, "maxWidth": 1140, "shadow": "strong", "border": 1,
+      "dos": ["put one or two large blurred colour blobs behind the content", "blur panels with backdrop-filter"],
+      "donts": ["stack glass on glass more than once", "put long body text on very transparent panels"]
+    },
+    {
+      "id": "broadsheet", "name": "Broadsheet", "family": "editorial", "dark": "yes",
+      "description": "A magazine page: high-contrast serif headlines, narrow columns, rules between sections and a deep red accent. For blogs, publications, long reads and newsletters.",
+      "look": "Classic editorial typography. A sharp display serif for headlines, a book serif for reading, thin rules between sections, small caps labels and a deep red for kickers and links.",
+      "colors": {
+        "base": { "bg": "#fdfcf8", "surface": "#ffffff", "surface-2": "#f3f0e7", "fg": "#141414", "muted": "#5a5650", "line": "#d9d4c7", "accent": "#a4161a", "accent-ink": "#ffffff", "accent-2": "#a4161a", "ok": "#2e6b34", "warn": "#875300", "bad": "#a4161a", "focus": "#a4161a" },
+        "dark": { "bg": "#111110", "surface": "#191917", "surface-2": "#22211e", "fg": "#f1eee6", "muted": "#aaa59a", "line": "#33312c", "accent": "#ff7b72", "accent-ink": "#2a0505", "accent-2": "#ff7b72", "ok": "#86d08f", "warn": "#e8b65a", "bad": "#ff7b72", "focus": "#ff7b72" }
+      },
+      "fonts": { "display": "Playfair Display", "body": "Source Serif 4", "mono": "IBM Plex Mono" },
+      "type": { "base": 18, "ratio": 1.333, "displayWeight": 700 },
+      "radius": 0, "radiusSm": 2, "space": 8, "maxWidth": 1100, "shadow": "none", "border": 1,
+      "dos": ["set reading text at 65 characters a line", "use thin rules instead of boxes"],
+      "donts": ["put headlines in the sans", "use rounded cards"]
+    },
+    {
+      "id": "confetti", "name": "Confetti", "family": "playful", "dark": "yes",
+      "description": "Bright, bouncy and rounded, with a bubbly headline face and a candy palette. For games, kids' apps, parties, clubs and friendly consumer products.",
+      "look": "Cheerful and soft: big rounded corners, chunky headlines, playful colour on a cream ground. One magenta accent for actions, with sunny yellow and mint as supporting colours in illustrations.",
+      "colors": {
+        "base": { "bg": "#fff8ef", "surface": "#ffffff", "surface-2": "#ffefd9", "fg": "#2a1840", "muted": "#5e4d70", "line": "#f0dcc4", "accent": "#d6246e", "accent-ink": "#ffffff", "accent-2": "#0f7d74", "ok": "#1f7a3e", "warn": "#8a5200", "bad": "#c0262d", "focus": "#0f7d74" },
+        "dark": { "bg": "#1c1029", "surface": "#261737", "surface-2": "#311f46", "fg": "#fbf1ff", "muted": "#c4b2d6", "line": "#3d2a55", "accent": "#ff7ab2", "accent-ink": "#2a0617", "accent-2": "#5fe0d1", "ok": "#7fe3a0", "warn": "#ffd37a", "bad": "#ff8f8f", "focus": "#5fe0d1" }
+      },
+      "fonts": { "display": "Fredoka", "body": "Nunito", "mono": "Space Mono" },
+      "type": { "base": 16, "ratio": 1.25, "displayWeight": 700 },
+      "radius": 22, "radiusSm": 12, "space": 8, "maxWidth": 1100, "shadow": "soft", "border": 2,
+      "dos": ["use simple shapes (circles, squiggles) as decoration", "keep buttons big and round"],
+      "donts": ["use thin, grey, serious type", "make every element a different colour"]
+    },
+    {
+      "id": "boardroom", "name": "Boardroom", "family": "corporate", "dark": "yes",
+      "description": "Clean, confident SaaS look: crisp sans, cool greys, a trustworthy blue and tidy cards. For B2B products, company sites, pricing pages and admin tools.",
+      "look": "Professional without being dull. Plenty of structure: a clear grid, cards with soft shadows, a dependable blue for actions and calm cool greys for everything else.",
+      "colors": {
+        "base": { "bg": "#f6f8fb", "surface": "#ffffff", "surface-2": "#eef2f7", "fg": "#0f1b2d", "muted": "#4d5b70", "line": "#dbe2ec", "accent": "#0b5cd6", "accent-ink": "#ffffff", "accent-2": "#0b5cd6", "ok": "#1c7a43", "warn": "#8f5800", "bad": "#b42318", "focus": "#0b5cd6" },
+        "dark": { "bg": "#0b111b", "surface": "#121a27", "surface-2": "#192333", "fg": "#e8eef7", "muted": "#9aa8bc", "line": "#243146", "accent": "#5b9dff", "accent-ink": "#04142e", "accent-2": "#5b9dff", "ok": "#6fd39a", "warn": "#f2bd5b", "bad": "#ff8a7a", "focus": "#5b9dff" }
+      },
+      "fonts": { "display": "Manrope", "body": "Inter", "mono": "JetBrains Mono" },
+      "type": { "base": 16, "ratio": 1.25, "displayWeight": 700 },
+      "radius": 10, "radiusSm": 6, "space": 8, "maxWidth": 1200, "shadow": "soft", "border": 1,
+      "dos": ["show real product screenshots", "keep one primary action per section"],
+      "donts": ["use stock photos of handshakes", "add a purple gradient hero"]
+    },
+    {
+      "id": "neon-grid", "name": "Neon Grid", "family": "neon", "dark": "only",
+      "description": "Cyberpunk night: near-black ground, glowing magenta and cyan, mono labels and a faint grid. For games, hackathons, crypto-free tech events and music.",
+      "look": "Electric and dark. A black-violet ground with a faint 40px grid, mono labels in capitals, and two neon colours that glow (text-shadow 0 0 12px at 60%). Magenta is the action; cyan is information.",
+      "colors": {
+        "base": { "bg": "#07060d", "surface": "#100e1c", "surface-2": "#181529", "fg": "#f2eeff", "muted": "#a59fc4", "line": "#2a2545", "accent": "#ff2bd6", "accent-ink": "#1a0016", "accent-2": "#00e5ff", "ok": "#3dffa2", "warn": "#ffd23d", "bad": "#ff4d6d", "focus": "#00e5ff" }
+      },
+      "fonts": { "display": "Unbounded", "body": "Space Grotesk", "mono": "JetBrains Mono" },
+      "type": { "base": 16, "ratio": 1.333, "displayWeight": 700, "case": "upper" },
+      "radius": 4, "radiusSm": 2, "space": 8, "maxWidth": 1200, "shadow": "none", "border": 1,
+      "dos": ["let the neon glow only on headings and the main action", "use thin 1px borders in --line"],
+      "donts": ["glow body text", "use more than two neon colours"]
+    },
+    {
+      "id": "arcade-84", "name": "Arcade 84", "family": "retro", "dark": "only",
+      "description": "Eighties arcade: pixel headlines, sunset orange and hot pink on deep purple, chunky borders. For games, retro shops, events and fun side projects.",
+      "look": "A cabinet at night. A pixel font for headlines only (short words), a clear sans for everything else, sunset orange and hot pink on a deep purple, and chunky square borders.",
+      "colors": {
+        "base": { "bg": "#1a0b2e", "surface": "#24113f", "surface-2": "#2f1752", "fg": "#fff4e6", "muted": "#c9b6e4", "line": "#46256f", "accent": "#ff9e2c", "accent-ink": "#2a1000", "accent-2": "#ff5fa2", "ok": "#5cf2a0", "warn": "#ffe066", "bad": "#ff6b6b", "focus": "#ffe066" }
+      },
+      "fonts": { "display": "Press Start 2P", "body": "Space Grotesk", "mono": "VT323" },
+      "type": { "base": 17, "ratio": 1.2, "displayWeight": 400, "case": "upper" },
+      "radius": 0, "radiusSm": 0, "space": 8, "maxWidth": 1100, "shadow": "hard", "border": 3,
+      "dos": ["keep pixel text to a few words", "use a horizon-line or sun graphic once"],
+      "donts": ["set paragraphs in the pixel font", "smooth the corners"]
+    },
+    {
+      "id": "material-sky", "name": "Material Sky", "family": "material", "dark": "yes",
+      "description": "Familiar app look: tonal surfaces, rounded containers, a friendly blue and clear elevation. For Android-style apps, dashboards, forms and productivity tools.",
+      "look": "Calm, systematic and familiar. Tonal surfaces instead of borders, pill-shaped buttons, rounded containers, and elevation by soft shadow. Blue is primary; teal is secondary.",
+      "colors": {
+        "base": { "bg": "#f8f9ff", "surface": "#ffffff", "surface-2": "#e9eef9", "fg": "#191c20", "muted": "#43474e", "line": "#c3c7cf", "accent": "#1b5fa8", "accent-ink": "#ffffff", "accent-2": "#006a6a", "ok": "#1b6c35", "warn": "#7f5700", "bad": "#ba1a1a", "focus": "#1b5fa8" },
+        "dark": { "bg": "#111318", "surface": "#1d2024", "surface-2": "#272a2f", "fg": "#e2e2e9", "muted": "#c3c6cf", "line": "#43474e", "accent": "#a4c9ff", "accent-ink": "#00315d", "accent-2": "#80d5d4", "ok": "#87d996", "warn": "#f6bd5a", "bad": "#ffb4ab", "focus": "#a4c9ff" }
+      },
+      "fonts": { "display": "Roboto Flex", "body": "Roboto", "mono": "JetBrains Mono" },
+      "type": { "base": 16, "ratio": 1.2, "displayWeight": 500 },
+      "radius": 16, "radiusSm": 8, "space": 8, "maxWidth": 1200, "shadow": "soft", "border": 0,
+      "dos": ["make buttons pill-shaped and 40px tall", "group content in tonal containers"],
+      "donts": ["draw borders around everything", "mix square and round corners"]
+    },
+    {
+      "id": "zurich", "name": "Zurich", "family": "swiss", "dark": "yes",
+      "description": "International Typographic Style: a strict 12-column grid, big grotesque headlines, flush-left text and one red. For agencies, museums, posters and architecture.",
+      "look": "Rational and bold. Everything aligns to a 12-column grid, text is flush left, headlines are huge and tight, and red is used like a printed spot colour. White space does the work.",
+      "colors": {
+        "base": { "bg": "#ffffff", "surface": "#ffffff", "surface-2": "#f0f0f0", "fg": "#0a0a0a", "muted": "#555555", "line": "#d6d6d6", "accent": "#d71921", "accent-ink": "#ffffff", "accent-2": "#0a0a0a", "ok": "#1d6f35", "warn": "#875a00", "bad": "#d71921", "focus": "#d71921" },
+        "dark": { "bg": "#0a0a0a", "surface": "#141414", "surface-2": "#1e1e1e", "fg": "#f5f5f5", "muted": "#a8a8a8", "line": "#2e2e2e", "accent": "#ff4b4b", "accent-ink": "#1a0000", "accent-2": "#f5f5f5", "ok": "#7fd18f", "warn": "#f0b85a", "bad": "#ff4b4b", "focus": "#ff4b4b" }
+      },
+      "fonts": { "display": "Archivo", "body": "Inter", "mono": "IBM Plex Mono" },
+      "type": { "base": 16, "ratio": 1.5, "displayWeight": 700 },
+      "radius": 0, "radiusSm": 0, "space": 8, "maxWidth": 1280, "shadow": "none", "border": 1,
+      "dos": ["align every edge to the grid", "use size contrast instead of colour"],
+      "donts": ["centre body text", "add shadows or rounded corners"]
+    },
+    {
+      "id": "terracotta", "name": "Terracotta", "family": "organic", "dark": "yes",
+      "description": "Warm and earthy: clay, sand and olive tones, a soft serif and gentle curves. For cafés, restaurants, wellness, crafts and sustainable brands.",
+      "look": "Sun-warmed and natural. Sand grounds, clay-red actions, olive accents, a soft serif for headlines and rounded, organic shapes. Photos of real materials suit it well.",
+      "colors": {
+        "base": { "bg": "#f7f0e6", "surface": "#fffaf3", "surface-2": "#efe3d2", "fg": "#2d211a", "muted": "#66574b", "line": "#e2d3bf", "accent": "#b5492a", "accent-ink": "#ffffff", "accent-2": "#5a6b2f", "ok": "#3f6b2a", "warn": "#8a5400", "bad": "#a8321f", "focus": "#5a6b2f" },
+        "dark": { "bg": "#1b1511", "surface": "#241c17", "surface-2": "#2e241d", "fg": "#f4e9dc", "muted": "#bfae9c", "line": "#3d3128", "accent": "#f08a63", "accent-ink": "#2a0c02", "accent-2": "#b9c97d", "ok": "#a6d38a", "warn": "#efbf6a", "bad": "#ff9478", "focus": "#b9c97d" }
+      },
+      "fonts": { "display": "Fraunces", "body": "DM Sans", "mono": "IBM Plex Mono" },
+      "type": { "base": 17, "ratio": 1.25, "displayWeight": 600 },
+      "radius": 14, "radiusSm": 8, "space": 8, "maxWidth": 1120, "shadow": "soft", "border": 1,
+      "dos": ["use organic blob shapes behind photos", "write in a warm, human voice"],
+      "donts": ["use pure black or pure white", "use neon or cold blues"]
+    },
+    {
+      "id": "maison", "name": "Maison", "family": "luxury", "dark": "yes",
+      "description": "Quiet luxury: a refined high-contrast serif, ivory and charcoal, thin gold lines and lots of space. For fashion, hotels, jewellery, real estate and fine dining.",
+      "look": "Expensive restraint. Ivory grounds, charcoal text, a light, elegant serif for headlines (often in capitals with wide spacing), hairline gold rules and generous margins. Nothing shouts.",
+      "colors": {
+        "base": { "bg": "#faf7f1", "surface": "#ffffff", "surface-2": "#f1ece2", "fg": "#1c1a17", "muted": "#5e5850", "line": "#e0d8c8", "accent": "#1c1a17", "accent-ink": "#faf7f1", "accent-2": "#8a6a2b", "ok": "#3b6b3f", "warn": "#80571c", "bad": "#9a2a22", "focus": "#8a6a2b" },
+        "dark": { "bg": "#0f0e0c", "surface": "#171614", "surface-2": "#1f1d1a", "fg": "#f3eee4", "muted": "#b0a796", "line": "#2f2b25", "accent": "#e4c98f", "accent-ink": "#1c1405", "accent-2": "#e4c98f", "ok": "#9fd09f", "warn": "#e9c07a", "bad": "#f29a8f", "focus": "#e4c98f" }
+      },
+      "fonts": { "display": "Cormorant Garamond", "body": "Manrope", "mono": "IBM Plex Mono" },
+      "type": { "base": 16, "ratio": 1.414, "displayWeight": 500, "case": "upper" },
+      "radius": 0, "radiusSm": 0, "space": 10, "maxWidth": 1200, "shadow": "none", "border": 1,
+      "dos": ["use large photography with lots of space around it", "letter-space small capital labels"],
+      "donts": ["use bright colours or emoji", "crowd the page"]
+    },
+    {
+      "id": "marshmallow", "name": "Marshmallow", "family": "pastel", "dark": "yes",
+      "description": "Soft pastels: lilac, peach and mint on a cloud-white ground, rounded and gentle. For lifestyle apps, journaling, baby products, beauty and gentle wellbeing tools.",
+      "look": "Light and gentle. Pastel surfaces (lilac, peach, mint) as card fills, deep plum text for readability, large rounded corners and soft shadows. The accent is a deeper violet-plum so buttons stay readable.",
+      "colors": {
+        "base": { "bg": "#fcfaff", "surface": "#ffffff", "surface-2": "#f1ebff", "fg": "#2b2140", "muted": "#5f5575", "line": "#e6def7", "accent": "#7a3e9d", "accent-ink": "#ffffff", "accent-2": "#b2456e", "ok": "#2c7a52", "warn": "#8a5a00", "bad": "#b3304a", "focus": "#7a3e9d" },
+        "dark": { "bg": "#1a1724", "surface": "#221e2f", "surface-2": "#2b263b", "fg": "#f6f1ff", "muted": "#bdb3d4", "line": "#3a3450", "accent": "#d7b4f3", "accent-ink": "#2a1240", "accent-2": "#ffb3c7", "ok": "#9fe2bf", "warn": "#ffd79a", "bad": "#ffa3b1", "focus": "#d7b4f3" }
+      },
+      "fonts": { "display": "Fredoka", "body": "DM Sans", "mono": "Space Mono" },
+      "type": { "base": 16, "ratio": 1.2, "displayWeight": 600 },
+      "radius": 20, "radiusSm": 12, "space": 8, "maxWidth": 1080, "shadow": "soft", "border": 1,
+      "dos": ["fill cards with soft pastel tints", "use simple line icons"],
+      "donts": ["put pastel text on white", "use harsh black borders"]
+    },
+    {
+      "id": "phosphor", "name": "Phosphor", "family": "terminal", "dark": "only",
+      "description": "A green-screen terminal: monospace everything, phosphor green on black, square boxes drawn with lines. For developer tools, CLIs, hacker events and retro-tech pages.",
+      "look": "An old monitor. Monospace for every piece of text, phosphor green on black, amber for warnings, boxes drawn with 1px lines and a blinking block cursor as the one flourish.",
+      "colors": {
+        "base": { "bg": "#050805", "surface": "#0a110a", "surface-2": "#101a10", "fg": "#b6ffb0", "muted": "#7fbf7a", "line": "#1d3a1d", "accent": "#39ff6a", "accent-ink": "#002208", "accent-2": "#ffc23d", "ok": "#39ff6a", "warn": "#ffc23d", "bad": "#ff5c5c", "focus": "#ffc23d" }
+      },
+      "fonts": { "display": "VT323", "body": "IBM Plex Mono", "mono": "IBM Plex Mono" },
+      "type": { "base": 15, "ratio": 1.2, "displayWeight": 400 },
+      "radius": 0, "radiusSm": 0, "space": 8, "maxWidth": 960, "shadow": "none", "border": 1,
+      "dos": ["prefix prompts with > or $", "use ASCII-style dividers"],
+      "donts": ["use a proportional font", "add images with colour"]
+    },
+    {
+      "id": "pulse-health", "name": "Pulse", "family": "corporate", "dark": "yes",
+      "description": "Calm and reassuring care look: soft teal, clean white, rounded friendly sans and plenty of space. For clinics, healthcare, insurance and support services.",
+      "look": "Clean and caring. White and pale-teal grounds, a deep teal for actions, a friendly rounded sans, clear forms with large hit areas and plain-language headings.",
+      "colors": {
+        "base": { "bg": "#f5faf9", "surface": "#ffffff", "surface-2": "#e6f2f0", "fg": "#10302d", "muted": "#4a625f", "line": "#d3e4e1", "accent": "#0b7268", "accent-ink": "#ffffff", "accent-2": "#2b5fa3", "ok": "#1e7a3f", "warn": "#8a5600", "bad": "#b3261e", "focus": "#2b5fa3" },
+        "dark": { "bg": "#0b1715", "surface": "#11211e", "surface-2": "#172b27", "fg": "#e5f3f1", "muted": "#9dbab5", "line": "#22403a", "accent": "#5fd4c4", "accent-ink": "#032420", "accent-2": "#8ab8ff", "ok": "#7fd6a0", "warn": "#f1bf62", "bad": "#ff9a8f", "focus": "#8ab8ff" }
+      },
+      "fonts": { "display": "Lexend", "body": "Lexend", "mono": "JetBrains Mono" },
+      "type": { "base": 17, "ratio": 1.2, "displayWeight": 600 },
+      "radius": 12, "radiusSm": 8, "space": 8, "maxWidth": 1100, "shadow": "soft", "border": 1,
+      "dos": ["make buttons and inputs at least 44px tall", "say what happens next in plain words"],
+      "donts": ["use red for anything but errors", "use medical stock photos"]
+    },
+    {
+      "id": "vault", "name": "Vault", "family": "data", "dark": "yes",
+      "description": "Precise fintech look: deep navy, mint for gains and coral for losses, tabular mono numbers. For banking, trading-free finance dashboards, budgets and invoices.",
+      "look": "Serious and exact. Deep navy text on near-white, mint and coral reserved for up and down, tabular mono numbers right-aligned, tight data tables and clear hierarchy in cards.",
+      "colors": {
+        "base": { "bg": "#f5f7fa", "surface": "#ffffff", "surface-2": "#eceff4", "fg": "#0c1a2e", "muted": "#4c5a6e", "line": "#d8dee8", "accent": "#0d3b66", "accent-ink": "#ffffff", "accent-2": "#0a7d5a", "ok": "#0a7d5a", "warn": "#8a5800", "bad": "#c0392b", "focus": "#0d3b66" },
+        "dark": { "bg": "#080e18", "surface": "#0f1724", "surface-2": "#162131", "fg": "#e6edf6", "muted": "#9aa9bd", "line": "#223147", "accent": "#7fb6ff", "accent-ink": "#04162e", "accent-2": "#4fd8a6", "ok": "#4fd8a6", "warn": "#f2c063", "bad": "#ff8a7a", "focus": "#7fb6ff" }
+      },
+      "fonts": { "display": "Space Grotesk", "body": "Inter", "mono": "JetBrains Mono" },
+      "type": { "base": 15, "ratio": 1.2, "displayWeight": 600 },
+      "radius": 8, "radiusSm": 4, "space": 8, "maxWidth": 1280, "shadow": "soft", "border": 1,
+      "dos": ["right-align numbers in the mono", "show gains and losses with a sign and a word, not only colour"],
+      "donts": ["use green and red as the brand colours", "round numbers without saying so"]
+    },
+    {
+      "id": "level-up", "name": "Level Up", "family": "neon", "dark": "only",
+      "description": "Gaming energy: dark slate, electric lime and violet, angled shapes and bold condensed headlines. For game studios, esports, streamers and gaming communities.",
+      "look": "Fast and bold. Dark slate grounds, electric lime for actions, violet for highlights, bold condensed capitals, and cut corners (clip-path) on buttons and cards.",
+      "colors": {
+        "base": { "bg": "#0d0f14", "surface": "#151922", "surface-2": "#1d2230", "fg": "#f1f4fa", "muted": "#a3abbd", "line": "#2a3142", "accent": "#b6ff3b", "accent-ink": "#132100", "accent-2": "#b18cff", "ok": "#5cf2a0", "warn": "#ffcf4d", "bad": "#ff5c7a", "focus": "#b18cff" }
+      },
+      "fonts": { "display": "Barlow Semi Condensed", "body": "Barlow", "mono": "JetBrains Mono" },
+      "type": { "base": 16, "ratio": 1.333, "displayWeight": 700, "case": "upper" },
+      "radius": 2, "radiusSm": 2, "space": 8, "maxWidth": 1240, "shadow": "strong", "border": 1,
+      "dos": ["cut one corner of buttons and cards at 45°", "use big key art behind the hero"],
+      "donts": ["use rounded, soft shapes", "use pastel colours"]
+    },
+    {
+      "id": "sketchbook", "name": "Sketchbook", "family": "playful", "dark": "no",
+      "description": "Handmade and personal: a handwritten headline face, notebook paper, marker-yellow highlights and wobbly lines. For personal blogs, workshops, teachers and craft makers.",
+      "look": "A page from a notebook. Cream paper with faint ruled lines, handwritten headlines, marker-yellow highlights behind key words, a blue-ink accent and slightly irregular hand-drawn borders.",
+      "colors": {
+        "base": { "bg": "#fbf7ec", "surface": "#fffdf6", "surface-2": "#f3ecd9", "fg": "#232019", "muted": "#5d574a", "line": "#d9cfb6", "accent": "#1d4ed8", "accent-ink": "#ffffff", "accent-2": "#a1401c", "ok": "#2f6b2f", "warn": "#875200", "bad": "#b02a1e", "focus": "#1d4ed8" }
+      },
+      "fonts": { "display": "Caveat", "body": "Nunito", "mono": "Space Mono" },
+      "type": { "base": 17, "ratio": 1.333, "displayWeight": 700 },
+      "radius": 6, "radiusSm": 4, "space": 8, "maxWidth": 980, "shadow": "none", "border": 2,
+      "dos": ["highlight a key word with a yellow marker stripe", "use doodle-style SVG arrows"],
+      "donts": ["set body text in the handwritten font", "use photos with heavy filters"]
+    },
+    {
+      "id": "fjord", "name": "Fjord", "family": "minimal", "dark": "yes",
+      "description": "Nordic calm: cool greys, birch white, a muted spruce green and clean geometric type. For furniture, architecture, design studios and thoughtful products.",
+      "look": "Scandinavian simplicity. Cool, light greys, a muted spruce green accent, clean geometric sans, honest materials in photos and a lot of quiet space.",
+      "colors": {
+        "base": { "bg": "#f4f5f4", "surface": "#ffffff", "surface-2": "#e9ecea", "fg": "#1a201d", "muted": "#545e59", "line": "#d7dcd9", "accent": "#2f5d50", "accent-ink": "#ffffff", "accent-2": "#2f5d50", "ok": "#2f6b3f", "warn": "#80571c", "bad": "#a8322a", "focus": "#2f5d50" },
+        "dark": { "bg": "#111513", "surface": "#181d1b", "surface-2": "#202623", "fg": "#e9eeeb", "muted": "#a3afa9", "line": "#2c3430", "accent": "#8cc7b4", "accent-ink": "#0b241c", "accent-2": "#8cc7b4", "ok": "#8fd3a3", "warn": "#e8be78", "bad": "#ff9a8f", "focus": "#8cc7b4" }
+      },
+      "fonts": { "display": "Outfit", "body": "DM Sans", "mono": "IBM Plex Mono" },
+      "type": { "base": 16, "ratio": 1.25, "displayWeight": 500 },
+      "radius": 4, "radiusSm": 2, "space": 8, "maxWidth": 1180, "shadow": "none", "border": 1,
+      "dos": ["use natural-light photography", "keep headlines short and quiet"],
+      "donts": ["use saturated colours", "use heavy shadows"]
+    },
+    {
+      "id": "clear-view", "name": "Clear View", "family": "accessible", "dark": "yes",
+      "description": "High-contrast and easy to read for everyone: big type, strong focus rings, underlined links and AAA contrast. For public services, forms, education and older audiences.",
+      "look": "Readability first. Large body text (18px), very high contrast, links always underlined, thick yellow-and-black focus rings, generous hit areas and one strong blue for actions.",
+      "colors": {
+        "base": { "bg": "#ffffff", "surface": "#ffffff", "surface-2": "#f2f2f2", "fg": "#0b0b0b", "muted": "#3d3d3d", "line": "#6b6b6b", "accent": "#003fa3", "accent-ink": "#ffffff", "accent-2": "#003fa3", "ok": "#006b2e", "warn": "#7a4b00", "bad": "#a3000b", "focus": "#ffbf00" },
+        "dark": { "bg": "#000000", "surface": "#0d0d0d", "surface-2": "#1a1a1a", "fg": "#ffffff", "muted": "#cfcfcf", "line": "#8a8a8a", "accent": "#ffd400", "accent-ink": "#000000", "accent-2": "#9cc3ff", "ok": "#8ff0a4", "warn": "#ffd27a", "bad": "#ff9a9a", "focus": "#ffd400" }
+      },
+      "fonts": { "display": "Atkinson Hyperlegible", "body": "Atkinson Hyperlegible", "mono": "JetBrains Mono" },
+      "type": { "base": 18, "ratio": 1.25, "displayWeight": 700 },
+      "radius": 4, "radiusSm": 4, "space": 8, "maxWidth": 1040, "shadow": "none", "border": 2,
+      "dos": ["underline every link", "show a 3px focus ring with an outline offset"],
+      "donts": ["rely on colour alone", "use text smaller than 16px"]
+    },
+    {
+      "id": "gazette", "name": "Gazette", "family": "editorial", "dark": "no",
+      "description": "An old newspaper front page: dense columns, a blackletter-feel serif masthead, hairline rules and sepia paper. For local news, history projects, archives and newsletters.",
+      "look": "Newsprint. Sepia paper, black ink, dense multi-column layout, hairline and double rules, a bold serif masthead, small caps datelines and no colour except a faded red for breaking items.",
+      "colors": {
+        "base": { "bg": "#f3ecdc", "surface": "#f8f2e4", "surface-2": "#e9e0cb", "fg": "#14110c", "muted": "#4f473a", "line": "#b9ab8c", "accent": "#14110c", "accent-ink": "#f3ecdc", "accent-2": "#8c2a1c", "ok": "#2f5f2f", "warn": "#7a4d00", "bad": "#8c2a1c", "focus": "#8c2a1c" }
+      },
+      "fonts": { "display": "DM Serif Display", "body": "Libre Baskerville", "mono": "IBM Plex Mono" },
+      "type": { "base": 16, "ratio": 1.414, "displayWeight": 400 },
+      "radius": 0, "radiusSm": 0, "space": 6, "maxWidth": 1240, "shadow": "none", "border": 1,
+      "dos": ["use three or four text columns on wide screens", "use double rules under the masthead"],
+      "donts": ["use rounded corners or shadows", "use bright colour"]
+    }
+  ]
+}

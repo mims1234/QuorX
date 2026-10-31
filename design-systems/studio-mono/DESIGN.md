@@ -2,6 +2,7 @@
 name: Studio Mono
 description: Black and white on a strict grid with one red, huge wide headlines and no decoration. For portfolios, agencies, architects, editorial pages and launches.
 dark: yes
+family: swiss
 ---
 
 # Studio Mono

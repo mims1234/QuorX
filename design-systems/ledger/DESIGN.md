@@ -2,6 +2,7 @@
 name: Ledger
 description: Dense, precise data look with semi-condensed headings, mono numbers and a fixed chart palette. For dashboards, admin panels, finance and analytics tools.
 dark: yes
+family: data
 ---
 
 # Ledger

@@ -21,7 +21,8 @@ import { setupCheck, runFix } from './server/setup-check.js';
 import { startSignIn, signInStatus, cancelSignIn, finishByCallback, finishWithCode, callbackPage } from './server/oauth.js';
 import { runAgent, answerApproval, answerQuestion, answerSecret, answerBudget, raiseCap, setRunApproval, setRunAccess, steerRun, setRunReading, setRunVideo, holdCard, DEFAULTS, MEDIA, briefFor, briefForChat, REVIEW_MODEL, HELPER_MODEL, REVIEW_ALT, REVIEW_STRONG, REVIEW_STRONG_ALT } from './server/agent.js';
 import { reviewCode, pickReviewer } from './server/codereview.js';
-import { loadHooks, saveHooks, HOOK_EVENTS } from './server/hooks.js';
+import { loadHooks, saveHooks, HOOK_EVENTS, cleanHook, hookLine, safeHookFile } from './server/hooks.js';
+import { projectEnv } from './server/projectsecrets.js';
 import { createScheduler, loadSchedules, scheduleView, addSchedule, changeSchedule, removeSchedule, runScheduleNow, scheduleHooks } from './server/schedules.js';
 import { startScheduledChat } from './server/schedrun.js';
 import { loadMemory, saveMemory, memoryTokens, MEMORY_TOKENS } from './server/memory.js';
@@ -36,7 +37,7 @@ import { ptyAvailable, ptyOpen, ptyWrite, ptyResize, ptyFollow, ptyClose } from 
 // Pages the agent wrote, served from this app's own address, get their own opaque origin: their requests to /api are refused.
 const SANDBOX_CSP = 'sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads';
 import { listChats, sidebarChats, chatPage, chatPictureRefs, pictureRefCounts, getTrace, getChatForPage, getChat, saveChat, patchChat, settleReply, trashChat, duplicateChat, validId, listProjects, saveProject, forgetProject, setProjectColor, setProjectFlags, costSummary, costChats, providerUsage } from './server/store.js';
-import { ALLOWED, copyTemplate, workspaceDir, safePath, fullLocalPath,chatFolder, listFiles, listDir, listServers, stopServerWait, restartServer, serverLog, startServer, restoreCheckpoint, listCheckpoints, pruneCheckpoints, undoConflicts, changedFiles, reviewFiles, reviewDiff, undoFile, serverOverview, launchConfigs, saveLaunchConfig, removeLaunchConfig, ensureAgentDir, agentSpace } from './server/workspace.js';
+import { runLine, ALLOWED, copyTemplate, workspaceDir, safePath, fullLocalPath,chatFolder, listFiles, listDir, listServers, stopServerWait, restartServer, serverLog, startServer, restoreCheckpoint, listCheckpoints, pruneCheckpoints, undoConflicts, changedFiles, reviewFiles, reviewDiff, undoFile, serverOverview, launchConfigs, saveLaunchConfig, removeLaunchConfig, ensureAgentDir, agentSpace } from './server/workspace.js';
 import { followTerm, runningJobs, stopJob } from './server/terminal.js';
 import { runningIn, runningAll, stopRunning, stopAllIn } from './server/running.js';
 import { decide as decideCommand, loadRules, saveRules, suggestedRules, ruleProblem, updateRule, removeRule } from './server/cmdpolicy.js';
@@ -64,7 +65,7 @@ import { serveBlob, startSweeping, chatFootprint, sendFile } from './server/blob
 import { mediaFile, serveMedia } from './server/media.js';
 import { measureStorage, clearStorage, clearProjectParts, previewProjectParts, recentClears, startStorageRules } from './server/storage.js';
 import { storageRules, saveStorageRules, rotateLog, RULE_DEFAULTS } from './server/storagerules.js';
-import { listDesignSystems, readDesignSystem, projectDesign, applyDesignSystem, saveProjectDesign } from './server/design.js';
+import { listDesignSystems, readDesignSystem, projectDesign, applyDesignSystem, saveProjectDesign, saveCustomSystem, deleteCustomSystem, specMarkdown, specTokens, contrastChecks, cleanSpec, FONTS as DESIGN_FONTS, FAMILIES as DESIGN_FAMILIES } from './server/design.js';
 import { newsRoute } from './server/news.js';
 import { runningForChat } from './server/runs.js';
 import { startNewsSync, remoteState as newsRemoteState } from './server/newsremote.js';
@@ -257,11 +258,23 @@ const server = http.createServer(async (req, res) => {
     }
     // Design systems: the starters, and a project's own DESIGN.md + tokens.css (apply a starter, edit, remove).
     if (url.pathname === '/api/design-systems' && req.method === 'GET') return json(res, 200, listDesignSystems());
+    if (url.pathname === '/api/design-fonts' && req.method === 'GET') return json(res, 200, { fonts: Object.keys(DESIGN_FONTS), google: Object.fromEntries(Object.entries(DESIGN_FONTS).filter(([, v]) => v[1]).map(([k, v]) => [k, v[1]])), families: DESIGN_FAMILIES });
     const dsm = url.pathname.match(/^\/api\/design-systems\/([a-z0-9-]+)$/i);
     if (dsm && req.method === 'GET') { const s = readDesignSystem(dsm[1]); return s ? json(res, 200, s) : json(res, 404, { error: 'no such design system' }); }
+    // Your own systems (kept in QuorX's data folder): save a new or changed one, or delete it. Built-in ones are read-only.
+    if (url.pathname === '/api/design-systems' && req.method === 'POST') {
+      const b = JSON.parse(await readBody(req, 1e5) || '{}');
+      try { return json(res, 200, { ok: true, system: saveCustomSystem({ id: b.id || null, spec: b.spec, from: b.from }) }); } catch (e) { return json(res, 200, { error: e.message }); }
+    }
+    if (dsm && req.method === 'DELETE') { try { return json(res, 200, { ok: true, ...deleteCustomSystem(dsm[1]) }); } catch (e) { return json(res, 200, { error: e.message }); } }
+    // What a spec would write (the editor's "View files"), without saving it.
+    if (url.pathname === '/api/design-systems/render' && req.method === 'POST') {
+      const b = JSON.parse(await readBody(req, 1e5) || '{}');
+      return json(res, 200, { md: specMarkdown(b.spec), tokens: specTokens(b.spec), checks: contrastChecks(cleanSpec(b.spec).colors.base) });
+    }
     const pdm = url.pathname.match(/^\/api\/projects\/([a-z0-9-]+)\/design$/i);
     if (pdm && req.method === 'GET') {
-      try { const d = projectDesign(workspaceDir(pdm[1])); return json(res, 200, d ? { md: d.md, tokens: d.tokens, name: d.name, colors: d.colors.size } : { md: '', tokens: '', name: null }); } catch (e) { return json(res, 200, { error: e.message }); }
+      try { const d = projectDesign(workspaceDir(pdm[1])); return json(res, 200, d ? { md: d.md, tokens: d.tokens, id: d.id, name: d.name, colors: d.colors.size } : { md: '', tokens: '', name: null }); } catch (e) { return json(res, 200, { error: e.message }); }
     }
     if (pdm && req.method === 'POST') {
       const b = JSON.parse(await readBody(req, 2e5) || '{}');
@@ -679,6 +692,26 @@ const server = http.createServer(async (req, res) => {
         const b = JSON.parse(await readBody(req, 1e5) || '{}');
         try { return json(res, 200, { ok: true, hooks: saveHooks(workspaceDir(hkm[1]), b.hooks) }); } catch (e) { return json(res, 200, { error: e.message }); }
       }
+    }
+    // Test one hook now (the Hooks window's Test): it runs once in the project folder, as you, with its time limit,
+    // and its output shows in the project's terminal too. Like a real hook, it never runs what would need a red card.
+    const hkt = url.pathname.match(/^\/api\/projects\/([a-z0-9-]+)\/hooks\/test$/i);
+    if (hkt && req.method === 'POST') {
+      if (!validId(hkt[1]) || !listProjects().some((p) => p.id === hkt[1])) return json(res, 400, { error: 'unknown project' });
+      const b = JSON.parse(await readBody(req, 2e4) || '{}');
+      try {
+        const root = workspaceDir(hkt[1]);
+        const h = cleanHook(b.hook);
+        if (!h.command) return json(res, 200, { error: 'the hook has no command' });
+        const file = String(b.file || '').trim();
+        if (h.command.includes('{file}') && !safeHookFile(file)) return json(res, 200, { error: 'give a plain file path to stand in for {file}' });
+        const line = hookLine(h, { file });
+        const S = safetySettings(b.safety);
+        const d = await decideCommand(line, { shell: S.shell, root, rules: loadRules(root), mode: 'strict', yolo: yoloOf(S) });
+        if (d.risk === 'danger' || d.verdict === 'deny') return json(res, 200, { line, ran: false, why: `hooks never run this: ${d.why}` });
+        const r = await runLine(root, line, { shell: S.shell, label: `hook test: ${line}`, env: projectEnv(root), timeout: h.timeout * 1000, term: { projectId: hkt[1], source: 'user' } });
+        return json(res, 200, { line, ran: true, code: r.code, ms: r.ms, timedOut: !!r.timedOut, ok: r.code === 0 && !r.timedOut, out: String(r.out || '').slice(-4000) });
+      } catch (e) { return json(res, 200, { error: e.message }); }
     }
     if (url.pathname === '/api/audit' && req.method === 'GET') {
       const pid = url.searchParams.get('project');

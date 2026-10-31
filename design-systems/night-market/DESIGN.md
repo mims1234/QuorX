@@ -2,6 +2,7 @@
 name: Night Market
 description: Warm, lively dark look with a chunky display face, saffron and teal. For events, food, music, nightlife and anything that should feel like an evening out.
 dark: only
+family: neon
 ---
 
 # Night Market
