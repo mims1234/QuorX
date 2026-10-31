@@ -6452,13 +6452,13 @@ function settingsPanels(S) {
     ]],
     keys: ['API keys', 'QuorX uses one active OpenRouter key for every call. Add as many as you like and switch between them.', [`<div id="stKeys"><div class="st-row-help">Loading keys…</div></div>`,
       stCard('Subscriptions', 'A chat’s main model, or a Quorium module’s, can run on your OpenCode Go or Command Code subscription with its API key. Calls count against the plan’s limits or credits instead of costing per call.', '<div id="stApiSources"><div class="st-row-help">Loading…</div></div>', '', 'stSrcKeys')]],
-    models: ['Models & catalogue', 'Model lists and prices come from OpenRouter. Pick what new chats start with, and how each call finds a provider.', [
+    models: ['Models & catalogue', 'What new chats start with, from any source: OpenRouter, a subscription (⚙ API keys) or an app on this PC. The OpenRouter and Routing cards apply to OpenRouter calls only.', [
       stCard('OpenRouter', 'The active key’s spending limit (hidden until you click 👁) and the model list.', '<div id="stModelLimit"><div class="st-row-help">Loading…</div></div>'
         + stRow('Model lists and prices', `<span id="stCatInfo">${G.models ? `${G.models.length} models loaded` : 'Loading…'}</span>`, `<button type="button" class="st-btn secondary sm" data-act="refreshModels">↻ Refresh now</button>`), 'sx-limit'),
-      stCard('Models', 'What new chats start with; each chat can still pick any model from its message box.', stRow('Default chat model', '', `<button type="button" class="sx-model" data-act="pickDefModel" id="defModel" data-id="${esc(S.model)}"><span class="sx-av" aria-hidden="true">${esc((short(S.model)[0] || '?').toUpperCase())}</span>${recDot(S.model, 'chat')} ${esc(short(S.model))} <small>${esc(shortPrice(S.model))}</small><span class="sx-change">Change</span></button>`)
+      stCard('Models', 'What new chats start with, from any source; each chat can still pick any model from its message box.', stRow('Default chat model', '', `<button type="button" class="sx-model" data-act="pickDefModel" id="defModel" data-id="${esc(S.model)}"><span class="sx-av" aria-hidden="true">${esc((short(S.model)[0] || '?').toUpperCase())}</span>${recDot(S.model, 'chat')} ${esc(short(S.model))} <small>${esc(shortPrice(S.model))}</small><span class="sx-change">Change</span></button>`)
         + stRow('Default reasoning', '', stSeg('reasoning', [['off', 'Off'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']], S.reasoning || 'off'))
         + stRow('Fallback model', 'OpenRouter switches to it when a chat’s model fails or is down, billed at its own price. The trace marks steps it answered.', `<div class="st-fb">${modelField('pickFallback', S.fallbackModel, 'fbModel', 'None')}${S.fallbackModel ? '<button type="button" class="st-btn secondary sm" data-act="clearFallback" title="No fallback model">✕</button>' : ''}</div>`, { id: 'stRowFallback' }), '', 'stCardFallback'),
-      stCard('Routing', 'How each agent call finds a provider. The one that answered shows on each step in “Steps”.',
+      stCard('Routing on OpenRouter', 'How each agent call on OpenRouter finds a provider (subscriptions and apps on this PC choose their own). The one that answered shows on each step in “Steps”.',
         stRow('Provider order', 'Auto favours providers with reliable tool calling (OpenRouter’s Exacto). Cheapest and Fastest sort by price or speed instead.', stCards('providerSort', [['auto', '🎯', 'Auto', 'Reliable tool calling'], ['price', '💲', 'Cheapest', 'Lowest price first'], ['throughput', '⚡', 'Fastest', 'Highest throughput first']], S.providerSort || 'auto', 'compact'), { cls: 'sx-row-wide', id: 'stRowOrder' })
         + stRow('Only providers that support every feature', 'Skips providers that would silently drop tools, reasoning or other settings. If none qualifies, that reply uses the default routing.', stSwitch('requireParams', S.requireParams !== false), { id: 'stRowFeatures' })
         + stRow('Zero data retention only', 'Only providers that keep no copy of your prompts. Fewer models qualify.', stSwitch('zdrOnly', !!S.zdrOnly), { id: 'stRowZdr' })
@@ -7767,10 +7767,12 @@ async function drawKeysPanel() {
       </div>
       <p class="kx-note" id="stKeyMsg">🔒 Kept only on this computer (data/keys.json). The page never sees it again, and agent processes don't get it.</p>
     </div>`;
-  box.innerHTML = (keys.length ? '' : addForm(true))
+  // Whose keys these are: OpenRouter, with its own mark, like the subscription cards below name theirs.
+  const brand = `<header class="kx-brand">${srcLogo('openrouter', 'OpenRouter')}<b>OpenRouter</b>${stTag('warn', 'pay per use')}<small>${keys.length} key${keys.length === 1 ? '' : 's'} · chat, deciders, pictures, video, music and voice</small><span class="kx-spacer"></span><a class="sp-link" href="https://openrouter.ai/settings/keys" target="_blank" rel="noopener noreferrer">openrouter.ai</a></header>`;
+  box.innerHTML = (keys.length ? brand : addForm(true))
     + keys.map((k) => `<section class="kx-card ${k.active ? 'active' : ''}" data-key="${esc(k.id)}">
         <header class="kx-head">
-          <span class="kx-dot" aria-hidden="true"></span>
+          <span class="kx-dot" aria-hidden="true"></span>${srcLogo('openrouter', 'OpenRouter key')}
           <input class="kx-name" value="${esc(k.label)}" maxlength="60" aria-label="Key name" title="Click to rename this key" data-old="${esc(k.label)}">
           ${k.active ? '<span class="kx-badge on">Active</span>' : ''}
           <span class="kx-badge">${k.source === 'env' ? 'from .env' : 'added here'}</span>

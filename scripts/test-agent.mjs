@@ -37,7 +37,7 @@ import { sourceOf, sourceStream, sameOnOpenRouter, failureKind, noteSourceResult
 import { SECRET_FILES } from '../server/keys.js';
 import { SOURCE_IDS, SOURCE_FILE, sourceOn, sourceOffWhy, blockedLocal, setSourceOn, setSourceKey, removeSourceKey, keyFor, movedModel, sourceModels, sourceStatus } from '../server/sources.js';
 import { goModels, goEntry, goBody, goStream, goAccount, effortFor as goEffort } from '../server/opencodego.js';
-import { ccModels, ccEntry, ccStream, messagesBody, toMessages, ccAccount, planName as ccPlanName } from '../server/commandcode.js';
+import { ccModels, ccEntry, ccStream, messagesBody, toMessages, ccAccount, planName as ccPlanName, ccDecisionModels, ccDecisions } from '../server/commandcode.js';
 import { toolPrompt, renderTranscript, parseToolCalls, textFilter, notRun } from '../server/textcalls.js';
 import { localStream, localModels } from '../server/opencodelocal.js';
 import { claudeStream, claudeModels, claudeError, effortFor } from '../server/claudelocal.js';
@@ -4861,6 +4861,26 @@ test('Command Code streams the other models on the chat endpoint; its refusals s
   const down = await ccStream({ model: 'commandcode/deepseek/deepseek-v4-pro', messages: [] }, new AbortController().signal, null, null, { info, key: 'test-cc-key-0123456789', fetchFn: refuse(502, { message: 'down', code: 'upstream_unavailable' }) }).catch((x) => x);
   assert.equal(failureKind(down), 'server');
   await assert.rejects(ccStream({ model: 'commandcode/deepseek/deepseek-v4-pro', messages: [] }, new AbortController().signal, null, null, { info, fetchFn }), /no Command Code key/);
+});
+
+test('Jev on Command Code: a decider seat on the plan, asked like OpenRouter’s Decisions API, answered in the same shape', async () => {
+  const list = ccDecisionModels([{ id: 'typesafe/jev-1.14', price: [0.4, 0] }, { id: 'liquid/d1-ultra', price: [1, 0] }]);
+  assert.deepEqual(list.map((m) => [m.id, m.kind, m.source, m.plan]), [['commandcode/typesafe/jev', 'decision', 'commandcode', 'plan'], ['commandcode/typesafe/jev-1.14.0', 'decision', 'commandcode', 'plan']]);
+  assert.deepEqual([list[0].price, list[0].listPrice], [[0, 0], [0.4, 0]], 'nothing per call; OpenRouter’s Jev price is what it takes from the credits');
+  assert.ok(sourceOf('commandcode/typesafe/jev'), 'its id names its source, so the ensemble sends it there');
+  let seen = null;
+  const answers = { safe: { type: 'noul', noul: 0.43 }, pick: { type: 'choice', choice: 'run', probabilities: { run: 0.54, ask: 0.46 } } };
+  const fetchFn = async (url, init) => { seen = { url, init, body: JSON.parse(init.body) }; return { ok: true, status: 200, headers: new Headers(), json: async () => ({ model: 'typesafe/jev', answers, usage: { input_tokens: 370, output_tokens: 61 } }) }; };
+  const questions = { safe: { type: 'noul', instructions: 'Safe?' }, pick: { type: 'choice', instructions: 'Which?', criteria: { run: 'Run it', ask: 'Ask' } } };
+  const r = await ccDecisions('commandcode/typesafe/jev', 'state', questions, undefined, { key: 'test-cc-key-0123456789', fetchFn });
+  assert.equal(seen.url, 'https://api.commandcode.ai/provider/v1/systemone');
+  assert.equal(seen.init.headers.Authorization, 'Bearer test-cc-key-0123456789');
+  assert.deepEqual(seen.body, { model: 'typesafe/jev', state: 'state', questions }, 'its own model id, the state and the questions as they are');
+  assert.deepEqual([r.answers, r.usage, r.provider, r.resolved], [answers, { prompt_tokens: 370, completion_tokens: 61 }, 'Command Code', 'typesafe/jev']);
+  assert.deepEqual(sourcePriced(list[0], r.usage), { cost: 0, plan_cost: (370 * 0.4) / 1e6 });
+  const off = async () => ({ ok: false, status: 403, headers: new Headers(), text: async () => JSON.stringify({ error: { message: 'Upgrade required', code: 'upgrade_required' } }) });
+  assert.equal(failureKind(await ccDecisions('commandcode/typesafe/jev', 's', questions, undefined, { key: 'test-cc-key-0123456789', fetchFn: off }).catch((x) => x)), 'auth');
+  await assert.rejects(ccDecisions('commandcode/typesafe/jev', 's', questions, undefined, { fetchFn }), /no Command Code key/);
 });
 
 test('OpenCode Go reports what is used of its 5-hour, weekly and monthly limits, as shares with no amounts', async () => {

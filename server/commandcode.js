@@ -294,6 +294,35 @@ export async function ccStream(body, signal, onText, onThink, { info = {}, idleM
     throw e;
   } finally { signal?.removeEventListener('abort', stop); }
 }
+// ---------- decision models (Jev) ----------
+// TypeSafe's Jev answers on /systemone in the same shape as OpenRouter's Decisions API (a state and typed questions in;
+// a probability or a distribution per question out). Command Code's model list doesn't name it, so its docs do.
+export const JEV = [{ id: 'typesafe/jev', name: 'Jev (newest)' }, { id: 'typesafe/jev-1.14.0', name: 'Jev 1.14.0' }];
+/**
+ * Command Code's decision models as catalogue entries (commandcode/typesafe/jev). `orList` is OpenRouter's decision
+ * catalogue: the same Jev's price there is the list price a call takes from the plan's credits.
+ */
+export function ccDecisionModels(orList = []) {
+  const or = orList.find((m) => /^typesafe\/jev/.test(m?.id || '') && (m.price?.[0] || m.price?.[1]));
+  return JEV.map((j) => ({
+    id: `${CC_ID}/${j.id}`, realId: j.id, modelID: j.id, providerID: CC_ID, source: CC_ID, maker: 'typesafe',
+    name: j.name, kind: 'decision', ctx: 64000, maxOut: null, created: 0, in: ['text'], out: ['decisions'],
+    price: [0, 0], listPrice: or ? or.price.slice(0, 2) : [0, 0], cost: or ? { input: or.price[0], output: or.price[1] } : {}, plan: 'plan',
+    tools: false, temp: false, reasoning: false, desc: 'TypeSafe’s Jev decision model on your Command Code plan: yes/no, choice and score questions about one state.',
+  }));
+}
+/** One Decisions request to Jev on Command Code, answered like openrouter.js decisions(). */
+export async function ccDecisions(model, state, questions, signal, { key, fetchFn = fetch } = {}) {
+  if (!key) throw Object.assign(new Error('There is no Command Code key yet: add one in ⚙ Settings → API keys.'), { kind: 'auth' });
+  const s = String(model || ''), id = s.startsWith(`${CC_ID}/`) ? s.slice(CC_ID.length + 1) : s;
+  const t = Date.now();
+  const r = await fetchFn(`${BASE}/systemone`, { method: 'POST', signal, headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', 'User-Agent': 'QuorX' }, body: JSON.stringify({ model: id, state, questions }) });
+  if (!r.ok) throw await failure(r);
+  const j = await r.json();
+  if (!j || typeof j.answers !== 'object') throw Object.assign(new Error('Command Code answered a decision in a shape QuorX can’t read'), { kind: 'shape' });
+  return { answers: j.answers, usage: { prompt_tokens: Number(j.usage?.input_tokens) || 0, completion_tokens: Number(j.usage?.output_tokens) || 0 }, ms: Date.now() - t, provider: 'Command Code', resolved: j.model || id };
+}
+
 // ---------- the plan and what is left of it ----------
 // The plan's name from its id (goat_monthly, max_20x, …); Go has no API access, so a key on it never gets this far.
 export function planName(id) {

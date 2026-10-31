@@ -3,6 +3,7 @@
 // carrying every question, averaged into a soft vote. Choice options are shuffled per decider
 // (some deciders lean toward the first option) and confidence uses TypeSafe's per-type formulas.
 import { decisions } from './openrouter.js';
+import { isSourceModel, sourceDecisions } from './sources.js';
 
 export const GATE = { act: 0.8, confirm: 0.5 }; // ≥ act: settled · ≥ confirm: lean · below: uncertain
 
@@ -73,7 +74,8 @@ export async function ensemble({ voters, state, questions, gate = GATE, signal, 
   const votes = await Promise.all(voters.map(async (model, vi) => {
     const wire = Object.fromEntries(questions.map((q) => [q.id, toWire(q)]));
     try {
-      const r = await decisions(model, state, wire, signal);
+      // Jev on Command Code (commandcode/typesafe/jev) goes through its source; every other decider through OpenRouter.
+      const r = await (isSourceModel(model) ? sourceDecisions : decisions)(model, state, wire, signal);
       account?.(r.usage, model, 'decider');
       const dists = {}, tops = {};
       for (const q of questions) {

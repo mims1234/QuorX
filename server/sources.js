@@ -18,13 +18,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { HOME } from './openrouter.js';
+import { HOME, decisionModels } from './openrouter.js';
 import { renameSoon } from './fsretry.js';
 import { findOnPath, localModels, localStream, ensureLocalServer, localServer, LOCAL_ID, SETTING_REFUSAL } from './opencodelocal.js';
 import { claudeModels, claudeStream, claudeAuth, claudeRunning, CLAUDE_ID } from './claudelocal.js';
 import { grokModels, grokStream, grokRunning, GROK_ID } from './groklocal.js';
 import { goModels, goStream, goCheck, goAccount, GO_ID } from './opencodego.js';
-import { ccModels, ccStream, ccCheck, ccAccount, CC_ID } from './commandcode.js';
+import { ccModels, ccStream, ccCheck, ccAccount, ccDecisionModels, ccDecisions, CC_ID } from './commandcode.js';
 
 const DATA = path.join(HOME, 'data');
 export const SOURCE_FILE = path.join(DATA, 'sources.json');
@@ -336,6 +336,30 @@ export function sourceSkip(id, model, now = Date.now()) {
   const m = model ? modelHealth.get(`${id}|${model}`) : null;
   if (m && m.until && now < m.until) return skipWhy(id, m, now);
   return '';
+}
+
+// ---------- decision models (Command Code's Jev) ----------
+/** The decision models of the sources that are on: Jev on Command Code, priced at its list price on OpenRouter. */
+export async function sourceDecisionModels() {
+  return sourceOn(CC_ID) ? ccDecisionModels(await decisionModels().catch(() => [])) : [];
+}
+/**
+ * One Decisions request through a source (a decider on commandcode/typesafe/jev), answered like openrouter.js
+ * decisions(). On a plan it costs nothing per call; usage.plan_cost is what it took from the credits, at list price.
+ */
+export async function sourceDecisions(model, state, questions, signal) {
+  stopped(signal);
+  const s = sourceOf(model);
+  if (s?.source !== CC_ID) throw Object.assign(new Error(`${model} is not a decision model QuorX can reach`), { kind: 'request' });
+  const why = sourceOffWhy(CC_ID) || sourceSkip(CC_ID, model);
+  if (why) throw Object.assign(new Error(why), { kind: 'request' });
+  const info = (await sourceDecisionModels()).find((m) => m.id === model) || { plan: 'plan' };
+  try {
+    const r = await ccDecisions(model, state, questions, signal, { key: keyFor(CC_ID)?.key });
+    noteSourceResult(CC_ID, model, null);
+    r.usage = { ...r.usage, ...priced(info, r.usage) };
+    return r;
+  } catch (e) { if (!signal?.aborted) noteSourceResult(CC_ID, model, e); throw e; }
 }
 
 // ---------- one call ----------
