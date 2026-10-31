@@ -823,7 +823,7 @@ function renderSidebar() {
     // A project with a chat working glows; with a chat open it's the current one; the rest fade back (see last.css).
     const working = chats.some((c) => G.open.get(c.id)?.running);
     return `<div class="sb-project ${p.id === curProject ? 'current' : ''} ${working ? 'working' : ''} ${folded ? 'folded' : ''} ${p.pinned ? 'pinned' : ''}" data-p="${esc(p.id)}" style="${projStyle(p)}">
-      <div class="sb-ph" aria-expanded="${!folded}">
+      <div class="sb-ph" tabindex="0" aria-expanded="${!folded}" aria-haspopup="menu" aria-label="${esc(p.name)}: Enter folds its chats, the menu key or Shift+F10 opens its actions">
         <div class="sb-pname-wrap"><b class="sb-pname" title="${esc(p.name)} · ${esc(p.dir)}">${esc(p.name)}</b><button type="button" class="sb-fold" aria-expanded="${!folded}" title="${folded ? 'Show' : 'Hide'} this project's chats" aria-label="${folded ? 'Show' : 'Hide'} chats of ${esc(p.name)}"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg></button>${p.missing ? '<button type="button" class="sb-missing" title="The project folder was moved, renamed or deleted: click to reselect it">⚠ missing</button>' : p.needsFolder ? '<button type="button" class="sb-missing needs" title="Pick a folder for this project: its files sit inside QuorX itself and are copied to the folder you pick" aria-label="Pick a folder for this project">📁</button>' : ''}${working ? '<span class="sb-pworking" title="A chat in this project is working" aria-label="Working"></span>' : ''}<span class="sb-psp"></span><button type="button" class="sb-pin sb-picon ${p.pinned ? 'on' : ''}" aria-pressed="${!!p.pinned}" title="${p.pinned ? 'Unpin' : 'Pin to the top (up to 3)'}" aria-label="${p.pinned ? 'Unpin' : 'Pin'} ${esc(p.name)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4h6l-1 6 4 4H6l4-4z"/><path d="M12 14v6"/></svg></button><button type="button" class="sb-edit sb-picon" title="Project settings: budget, pin, archive, folder, colour" aria-label="Settings for ${esc(p.name)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg></button><button type="button" class="sb-new sb-picon" title="New chat in ${esc(p.name)}" aria-label="New chat in ${esc(p.name)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button><span class="sb-grip" draggable="true" tabindex="0" role="button" title="Drag to move this project (or focus it and press ↑ / ↓)" aria-label="Move ${esc(p.name)}: drag, or press up or down"><svg viewBox="0 0 10 16" aria-hidden="true"><circle cx="2.5" cy="3" r="1.4"/><circle cx="7.5" cy="3" r="1.4"/><circle cx="2.5" cy="8" r="1.4"/><circle cx="7.5" cy="8" r="1.4"/><circle cx="2.5" cy="13" r="1.4"/><circle cx="7.5" cy="13" r="1.4"/></svg></span></div>
         ${p.id === curProject ? projectSpendHTML(p, total, cost, share, chats) : ''}
       </div>
@@ -880,15 +880,17 @@ function renderSidebar() {
 
     // Drag and drop to reorder projects: only the ⠿ grip drags, so the header's buttons stay easy to click.
     const ph = $('.sb-ph', el), grip = $('.sb-grip', el);
-    ph.title = 'Click to fold or unfold its chats';
+    ph.title = 'Click to fold or unfold its chats; right-click for more';
     // Click the header (not its buttons) to fold the project's chats away and get the space back.
     ph.onclick = (e) => {
       if (e.target.closest('button:not(.sb-fold), .bud-pop, .sb-pstrip, .sb-grip')) return;
-      const set = new Set(G.foldedProjects || []);
-      set.has(p.id) ? set.delete(p.id) : set.add(p.id);
-      G.foldedProjects = [...set]; savePrefs();
-      el.classList.toggle('folded', set.has(p.id)); ph.setAttribute('aria-expanded', String(!set.has(p.id)));
-      const fb = $('.sb-fold', ph), shut = set.has(p.id); fb.setAttribute('aria-expanded', String(!shut)); fb.title = `${shut ? 'Show' : 'Hide'} this project's chats`; fb.setAttribute('aria-label', `${shut ? 'Show' : 'Hide'} chats of ${p.name}`);
+      toggleProjectFold(p.id);
+    };
+    // Right-click, or the menu key / Shift+F10 on the header or one of its buttons: the project's quick actions.
+    ph.oncontextmenu = (e) => { if (e.target.closest('.bud-pop, .sb-pstrip')) return; projectMenu(e, p, el); };
+    ph.onkeydown = (e) => {
+      if (e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey)) { e.preventDefault(); projectMenu({ preventDefault() {}, stopPropagation() { e.stopPropagation(); }, clientX: 0, clientY: 0, anchor: ph }, p, el); return; }
+      if (e.target === ph && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); toggleProjectFold(p.id); }
     };
     // Dragging shows a small pill with the project's name under the pointer (not a faded copy of the whole card);
     // the project stays in place as an outline, and a bright line marks where it will land.
@@ -1000,7 +1002,7 @@ async function openProjectSettings(p0, focusOn) {
   const p = projects.find((x) => x.id === p0.id) || p0;
   box.innerHTML = `
     <header class="pj-head">
-      <div class="pj-title" style="--h:${hue(p.name)}${p.color ? `;--pcx:${p.color}` : ''}"><b class="pj-name" title="The project is named after its folder; pick another folder to change it">${esc(p.name)}</b><small>Project settings</small></div>
+      <div class="pj-title" style="--h:${hue(p.name)}${p.color ? `;--pcx:${p.color}` : ''}"><b class="pj-name" title="${p.folderName && p.folderName !== p.name ? `Folder: ${esc(p.folderName)}. ` : ''}Right-click the project in the sidebar → Rename to change its name in QuorX; the folder keeps its own">${esc(p.name)}</b><small>Project settings</small></div>
       <div class="pj-head-acts">
         <label class="pj-pick pj-hpick ${p.color ? 'on' : ''}" title="Name colour: pick any colour"><input type="color" value="${esc(p.color || autoHex(p.name))}" aria-label="Pick the name colour"><span class="pj-pick-sw" style="--sw:${esc(p.color || autoHex(p.name))}"></span><code class="pj-pick-hex">${esc(p.color || 'Auto')}</code></label>
         <button type="button" class="pj-auto pj-hbtn ${p.color ? '' : 'on'}" title="Back to the automatic colour (from the name)" aria-label="Automatic name colour" ${p.color ? '' : 'hidden'}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.3-5.7"/><path d="M4 4v4h4"/></svg></button>
@@ -1397,12 +1399,53 @@ function editBudget(p, suggest, mount) {
 async function deleteProject(p) {
   if ([...G.open.values()].some((c) => c.running && c.projectId === p.id)) return uiAlert('A chat in this project is still running. Stop it first.');
   const n = G.chatStats?.[p.id]?.chats ?? G.chats.filter((c) => (c.projectId || 'scratch') === p.id).length;
-  if (!await uiConfirm(`Delete the project "${p.name}"?\n\n• Its ${n} chat${n === 1 ? '' : 's'} move to data/trash (recoverable).\n• The folder ${p.dir} and its files are NOT touched.`)) return;
+  const ans = await uiConfirm(`Delete the project "${p.name}"?\n\n• It leaves QuorX, and its ${n} chat${n === 1 ? '' : 's'} move to data/trash (recoverable until the trash is emptied).\n• The folder ${p.dir} and every file in it are never touched.${p.archived ? '' : '\n• To keep the chats and only clear it from the sidebar, archive it instead.'}`, p.archived ? {} : { alt: 'Archive instead' });
+  if (ans === 'alt') return setProjectFlag(p, { archived: true });
+  if (ans !== true) return;
   const r = await fetch(`/api/projects/${p.id}`, { method: 'DELETE' }).then((x) => x.json()).catch(() => ({}));
   if (!r.ok) return uiAlert('Could not delete that project.');
   for (const [id, c] of G.open) if (c.projectId === p.id) { releasePane(c); G.open.delete(id); G.panes = G.panes.filter((x) => x !== id); }
   if (!G.panes.length) showLanding(); else renderPanes();
   refreshSidebar();
+}
+// Rename: a name of its own in QuorX; the folder keeps its name. Empty goes back to the folder's name.
+const BUILTIN_PROJECTS = new Set(['scratch', 'schedules']);
+async function renameProject(p) {
+  const folder = p.folderName || p.name;
+  const t = await uiPrompt(`Rename "${p.name}"\nThe name in QuorX only: the folder stays "${folder}". Leave it empty to use the folder's name again.`, p.name);
+  if (t == null || t.trim() === p.name) return;
+  const r = await postJ(`/api/projects/${encodeURIComponent(p.id)}/name`, { name: t }).catch((e) => ({ error: e.message }));
+  if (r?.error) return uiAlert(`Could not rename the project: ${r.error}`);
+  await refreshSidebar();
+  for (const ch of G.open.values()) if (ch.projectId === p.id && ch.el) renderChatHead(ch);
+  const land = $('.landing'); if (land) renderLanding(land.parentElement);
+}
+// Right-click a project's header (or focus it and press the menu key or Shift+F10): its quick actions.
+// Scratch can't be renamed, archived or deleted; Schedules keeps its name.
+function projectMenu(e, p, el) {
+  const folded = el.classList.contains('folded'), builtin = BUILTIN_PROJECTS.has(p.id);
+  const pinFull = !p.pinned && G.projects.filter((x) => x.pinned && !x.archived).length >= 3;
+  popMenu(e, [
+    ['＋ New chat in this project', () => newChat(p.id)],
+    ...(builtin ? [] : [['✏️ Rename…', () => renameProject(p)]]),
+    [p.pinned ? '📌 Unpin' : '📌 Pin to the top', () => setProjectFlag(p, { pinned: !p.pinned }), pinFull ? { disabled: true, title: 'Up to 3 projects can be pinned: unpin one first' } : undefined],
+    ['⚙ Project settings…', () => openProjectSettings(p)],
+    p.missing ? ['⚠ Reselect the folder…', () => editProject(p, { reselect: true })] : ['📂 Open folder in File Explorer', () => openFolder(p.id)],
+    [folded ? '▸ Expand' : '▾ Collapse', () => toggleProjectFold(p.id)],
+    ...(p.id === 'scratch' ? [] : [null,
+      ['🗄 Archive', () => setProjectFlag(p, { archived: true }), { title: 'Out of the sidebar and the start screen, chats kept: bring it back from Archived at the bottom of the sidebar' }],
+      ['🗑 Delete project…', () => deleteProject(p), { danger: true }]]),
+  ]);
+}
+// Fold a project's chats away (or show them again): the header click, ▸ and the right-click menu.
+function toggleProjectFold(id) {
+  const set = new Set(G.foldedProjects || []);
+  set.has(id) ? set.delete(id) : set.add(id);
+  G.foldedProjects = [...set]; savePrefs();
+  const el = $(`#projectList .sb-project[data-p="${CSS.escape(id)}"]`); if (!el) return;
+  const ph = $('.sb-ph', el), shut = set.has(id), name = G.projects.find((x) => x.id === id)?.name || '';
+  el.classList.toggle('folded', shut); ph.setAttribute('aria-expanded', String(!shut));
+  const fb = $('.sb-fold', ph); fb.setAttribute('aria-expanded', String(!shut)); fb.title = `${shut ? 'Show' : 'Hide'} this project's chats`; fb.setAttribute('aria-label', `${shut ? 'Show' : 'Hide'} chats of ${name}`);
 }
 
 // ---------- opening chats into the panes ----------
@@ -4585,22 +4628,35 @@ async function openFolder(projectId, path) {
   if (r.error) uiAlert(`Could not open the folder: ${r.error}`);
 }
 // Files → right-click a file or folder: show it in File Explorer, or copy its path.
-// A small right-click menu: items are [label, action] (null for a line between groups).
+// A small right-click menu: items are [label, action, { danger, disabled, title }?] (null for a line between groups).
+// ↑ / ↓ / Home / End move between items, Esc closes and gives focus back to where it was, Tab or a click outside closes.
+// Opened from the keyboard (the menu key or Shift+F10: no pointer position), it sits under the focused element.
 function popMenu(e, items) {
   e.preventDefault(); e.stopPropagation();
   document.querySelector('.exp-menu')?.remove();
+  const back = document.activeElement;
   const m = document.createElement('div'); m.className = 'exp-menu fx-menu'; m.setAttribute('role', 'menu');
   const acts = items.filter(Boolean);
-  m.innerHTML = items.map((x) => (x ? `<button type="button" role="menuitem" data-i="${acts.indexOf(x)}">${esc(x[0])}</button>` : '<hr class="fx-sep">')).join('');
+  m.innerHTML = items.map((x) => (x ? `<button type="button" role="menuitem" data-i="${acts.indexOf(x)}" class="${x[2]?.danger ? 'danger' : ''}" ${x[2]?.disabled ? 'disabled' : ''} ${x[2]?.title ? `title="${esc(x[2].title)}"` : ''}>${esc(x[0])}</button>` : '<hr class="fx-sep" role="separator">')).join('');
   document.body.append(m);
   const r = m.getBoundingClientRect();
-  m.style.left = `${Math.min(e.clientX, innerWidth - r.width - 8)}px`; m.style.top = `${Math.min(e.clientY, innerHeight - r.height - 8)}px`;
+  let x = e.clientX, y = e.clientY;
+  if (!x && !y) { const a = (e.anchor || back)?.getBoundingClientRect?.(); if (a) { x = a.left + 12; y = a.bottom + 2; } }
+  m.style.left = `${Math.max(8, Math.min(x, innerWidth - r.width - 8))}px`; m.style.top = `${Math.max(8, Math.min(y, innerHeight - r.height - 8))}px`;
+  const btns = () => [...m.querySelectorAll('button:not(:disabled)')];
   const away = (ev) => { if (!m.contains(ev.target)) close(); };
-  const key = (ev) => { if (ev.key === 'Escape') close(); };
+  const key = (ev) => {
+    if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); close(); if (back?.isConnected) back.focus(); return; }
+    if (ev.key === 'Tab') return close();
+    const list = btns(), i = list.indexOf(document.activeElement);
+    const to = { ArrowDown: i + 1, ArrowUp: i - 1, Home: 0, End: list.length - 1 }[ev.key];
+    if (to == null || !list.length) return;
+    ev.preventDefault(); list[(to + list.length) % list.length].focus();
+  };
   const close = () => { m.remove(); removeEventListener('pointerdown', away, true); removeEventListener('keydown', key, true); };
   addEventListener('pointerdown', away, true); addEventListener('keydown', key, true);
-  m.onclick = (ev) => { const b = ev.target.closest('[data-i]'); if (!b) return; close(); acts[Number(b.dataset.i)][1](); };
-  m.querySelector('button')?.focus();
+  m.onclick = (ev) => { const b = ev.target.closest('[data-i]'); if (!b || b.disabled) return; close(); acts[Number(b.dataset.i)][1](); };
+  btns()[0]?.focus();
 }
 // Files → right-click a file or folder: add a file to the chat, show it in File Explorer, or copy its path.
 function filesMenu(e, projectId, rel, full, isFile = true) {
@@ -6513,7 +6569,7 @@ const UI_DEFAULTS = { density: 'comfortable', fontSize: 14, reduceMotion: 'syste
   showBalance: false, maskAmounts: true, blurPaths: false, usageBtn: true, notify: 'all', searchEngine: 'google', searchCustom: '' };
 const SETTINGS_NAV = [
   ['Harness', [['setup', '🧪', 'Setup check'], ['appearance', '🎨', 'Appearance'], ['privacy', '🕶', 'Privacy & display']]],
-  ['Models', [['providers', '🔌', 'Providers'], ['models', '🧠', 'Models & catalogue']]],
+  ['Models', [['providers', '🔌', 'Providers']]],
   ['Agent', [['newchats', '✨', 'New chats'], ['loop', '🔁', 'Agent loop'], ['deciders', '⚖️', 'Deciders'], ['tools', '🧰', 'Tools & media'], ['video', '🎬', 'Video'], ['safety', '🛡', 'Approvals & safety'], ['budget', '💵', 'Budget'], ['skills', '🧩', 'Skills'], ['mcp', '🧲', 'MCP servers'], ['memory', '📌', 'Memory']]],
   ['Workspace', [['projects', '📁', 'Projects'], ['code', '💻', 'Code & servers'], ['docs', '📎', 'Documents']]],
   ['Data', [['usage', '📊', 'Usage & costs'], ['data', '🗄', 'Data & storage'], ['storage', '🧹', 'Storage'], ['shortcuts', '⌨️', 'Shortcuts'], ['about', 'ℹ️', 'About']]],
@@ -6657,22 +6713,19 @@ function settingsPanels(S) {
         + stRow('Custom search address', 'Used when Custom is picked: the address of a search with %s where the words go.', `<input type="text" class="st-input sx-wide-input" data-bind="ui.searchCustom" value="${esc(U.searchCustom || '')}" placeholder="https://example.com/search?q=%s" spellcheck="false">`)),
     ]],
     providers: ['Providers', 'Where QuorX sends model calls: OpenRouter, your subscriptions, the model makers’ own APIs and the apps on this PC. Pick one to set it up; its key stays on this computer.', [
+      `<div class="pv-home">${stCard('Defaults for new chats', 'What a new chat starts with, from any provider below. Each chat can still pick any model and reasoning in its message box.', stRow('Default chat model', '', `<button type="button" class="sx-model" data-act="pickDefModel" id="defModel" data-id="${esc(S.model)}"><span class="sx-av" aria-hidden="true">${esc((short(S.model)[0] || '?').toUpperCase())}</span>${recDot(S.model, 'chat')} ${esc(short(S.model))} <small>${esc(shortPrice(S.model))}</small><span class="sx-change">Change</span></button>`)
+        + stRow('Default reasoning', '', stSeg('reasoning', [['off', 'Off'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']], S.reasoning || 'off')))}</div>`,
       '<div id="stProviders" class="pv"><div class="st-row-help">Loading the providers…</div></div>',
-      stCard('When a call fails', 'By default the reply stops and says why, and you pick another model. QuorX switches only if you choose a fallback.',
+      `<div class="pv-home">${stCard('When a call fails', 'By default the reply stops and says why, and you pick another model. QuorX switches only if you choose a fallback.',
         stRow('Fall back to', '', stCards('sourceFallback', [['off', '✋', 'Stop and tell me', 'You pick the next model'], ['same', '🔁', 'Same model on OpenRouter', 'When OpenRouter has it, else the model below'], ['model', '🎯', 'Always this model', 'The fallback model below']], S.sourceFallback || G.cfg.defaults.sourceFallback || 'off', 'compact'), { cls: 'sx-row-wide', id: 'stRowSrcFb' })
-        + stRow('Fallback model', 'Used when OpenRouter lacks the same model, and for every failed call with “Always this model”. Empty: your OpenRouter fallback model, else the default chat model. Billed at OpenRouter’s price.', `<div class="st-fb">${modelField('pickSourceFallback', S.sourceFallbackModel, 'srcFbModel', 'Default chat model')}${S.sourceFallbackModel ? '<button type="button" class="st-btn secondary sm" data-act="clearSourceFallback" title="Use the default chat model">✕</button>' : ''}</div>`)),
-    ]],
-    models: ['Models & catalogue', 'What new chats start with, from any source: OpenRouter, a subscription (⚙ Providers) or an app on this PC. The OpenRouter and Routing cards apply to OpenRouter calls only.', [
-      stCard('OpenRouter', 'The active key’s spending limit (hidden until you click 👁) and the model list.', '<div id="stModelLimit"><div class="st-row-help">Loading…</div></div>'
-        + stRow('Model lists and prices', `<span id="stCatInfo">${G.models ? `${G.models.length} models loaded` : 'Loading…'}</span>`, `<button type="button" class="st-btn secondary sm" data-act="refreshModels">↻ Refresh now</button>`), 'sx-limit'),
-      stCard('Models', 'What new chats start with, from any source; each chat can still pick any model from its message box.', stRow('Default chat model', '', `<button type="button" class="sx-model" data-act="pickDefModel" id="defModel" data-id="${esc(S.model)}"><span class="sx-av" aria-hidden="true">${esc((short(S.model)[0] || '?').toUpperCase())}</span>${recDot(S.model, 'chat')} ${esc(short(S.model))} <small>${esc(shortPrice(S.model))}</small><span class="sx-change">Change</span></button>`)
-        + stRow('Default reasoning', '', stSeg('reasoning', [['off', 'Off'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']], S.reasoning || 'off'))
-        + stRow('Fallback model', 'OpenRouter switches to it when a chat’s model fails or is down, billed at its own price. The trace marks steps it answered.', `<div class="st-fb">${modelField('pickFallback', S.fallbackModel, 'fbModel', 'None')}${S.fallbackModel ? '<button type="button" class="st-btn secondary sm" data-act="clearFallback" title="No fallback model">✕</button>' : ''}</div>`, { id: 'stRowFallback' }), '', 'stCardFallback'),
-      stCard('Routing on OpenRouter', 'How each agent call on OpenRouter finds a provider (subscriptions and apps on this PC choose their own). The one that answered shows on each step in “Steps”.',
+        + stRow('Fallback model', 'Used when OpenRouter lacks the same model, and for every failed call with “Always this model”. Empty: your OpenRouter fallback model, else the default chat model. Billed at OpenRouter’s price.', `<div class="st-fb">${modelField('pickSourceFallback', S.sourceFallbackModel, 'srcFbModel', 'Default chat model')}${S.sourceFallbackModel ? '<button type="button" class="st-btn secondary sm" data-act="clearSourceFallback" title="Use the default chat model">✕</button>' : ''}</div>`))}</div>`,
+      // OpenRouter's own settings: they go into OpenRouter's page when it is open (drawProviders moves them).
+      `<div id="pvOrHold" hidden><div id="pvOrCards">${stCard('Spending limit and models', 'The active key’s spending limit (hidden until you click 👁) and the model list.', '<div id="stModelLimit"><div class="st-row-help">Loading…</div></div>'
+        + stRow('Model lists and prices', `<span id="stCatInfo">${G.models ? `${G.models.length} models loaded` : 'Loading…'}</span>`, `<button type="button" class="st-btn secondary sm" data-act="refreshModels">↻ Refresh now</button>`), 'sx-limit')}${stCard('Fallback on OpenRouter', 'When a chat’s OpenRouter model fails or is down.', stRow('Fallback model', 'OpenRouter switches to it when a chat’s model fails or is down, billed at its own price. The trace marks steps it answered.', `<div class="st-fb">${modelField('pickFallback', S.fallbackModel, 'fbModel', 'None')}${S.fallbackModel ? '<button type="button" class="st-btn secondary sm" data-act="clearFallback" title="No fallback model">✕</button>' : ''}</div>`, { id: 'stRowFallback' }), '', 'stCardFallback')}${stCard('Routing on OpenRouter', 'How each agent call on OpenRouter finds a provider (subscriptions and apps on this PC choose their own). The one that answered shows on each step in “Steps”.',
         stRow('Provider order', 'Auto favours providers with reliable tool calling (OpenRouter’s Exacto). Cheapest and Fastest sort by price or speed instead.', stCards('providerSort', [['auto', '🎯', 'Auto', 'Reliable tool calling'], ['price', '💲', 'Cheapest', 'Lowest price first'], ['throughput', '⚡', 'Fastest', 'Highest throughput first']], S.providerSort || 'auto', 'compact'), { cls: 'sx-row-wide', id: 'stRowOrder' })
         + stRow('Only providers that support every feature', 'Skips providers that would silently drop tools, reasoning or other settings. If none qualifies, that reply uses the default routing.', stSwitch('requireParams', S.requireParams !== false), { id: 'stRowFeatures' })
         + stRow('Zero data retention only', 'Only providers that keep no copy of your prompts. Fewer models qualify.', stSwitch('zdrOnly', !!S.zdrOnly), { id: 'stRowZdr' })
-        + stRow('Blocked providers', 'OpenRouter never sends the agent’s calls to these: for every model, or only the models you pick (a provider can be fine for one model and break another). Block one that keeps breaking tool calls (the provider shows as “via …” above each reply). If only blocked providers serve a model, that reply uses them anyway, and says so.', '<div id="stBlocked"><div class="st-row-help">Loading providers…</div></div>', { cls: 'sx-row-wide', id: 'stRowBlocked' })),
+        + stRow('Blocked providers', 'OpenRouter never sends the agent’s calls to these: for every model, or only the models you pick (a provider can be fine for one model and break another). Block one that keeps breaking tool calls (the provider shows as “via …” above each reply). If only blocked providers serve a model, that reply uses them anyway, and says so.', '<div id="stBlocked"><div class="st-row-help">Loading providers…</div></div>', { cls: 'sx-row-wide', id: 'stRowBlocked' }))}</div></div>`,
     ]],
     newchats: ['New chats', 'What a fresh chat starts with. Each chat can change these in its message box.', [
       `<p class="sx-sec-help sx-mode-link">New chats start in ${S.approval === 'yolo' ? '⚡ YOLO' : '🔒 Strict'}. <button type="button" class="sp-link" data-act="openMode">Change it in 🛡 Approvals &amp; safety</button></p>`,
@@ -6915,6 +6968,8 @@ function openSettings(cat) {
   // API keys and Apps on this PC are one page now: Providers, opened on OpenRouter's keys or on the apps.
   if (cat === 'keys') { cat = 'providers'; Object.assign(pvState(), { tab: 'all', q: '', sel: 'openrouter' }); }
   if (cat === 'sources') { cat = 'providers'; Object.assign(pvState(), { tab: 'local', q: '', sel: null }); }
+  // Models & catalogue's OpenRouter settings live on OpenRouter's page; the defaults for new chats on Providers itself.
+  if (cat === 'models') { cat = 'providers'; Object.assign(pvState(), { tab: 'all', q: '', sel: 'openrouter' }); }
   if (cat) ST.cat = cat;
   $('#stSearch').value = '';
   drawSettings();
@@ -7098,6 +7153,11 @@ function drawProviders(say = null) {
   const list = groups.map((g) => { const rows = shown.filter((x) => pvKind(x) === g); return rows.length ? `${P.tab === 'all' ? `<div class="pv-gh"><b>${esc(PV_TABS.find(([k]) => k === g)[1])}</b><small>${esc(PV_NOTE[g])}</small></div>` : ''}${rows.map((x) => pvRow(x, x.id === P.sel)).join('')}` : ''; }).join('');
   const sel = all.find((x) => x.id === P.sel);
   const keep = $('.pv-search input', box) === document.activeElement;
+  // OpenRouter's own settings (built with the panel, so their controls are wired) wait in their holder while the page redraws.
+  const orCards = $('#pvOrCards'); if (orCards && $('#pvOrHold')) $('#pvOrHold').append(orCards);
+  // A chosen provider has a page of its own: the list, tabs and the page's other cards step aside until Back.
+  box.classList.toggle('has-sel', !!sel);
+  box.closest('.st-panel')?.classList.toggle('pv-in', !!sel);
   box.innerHTML = `<div class="pv-tabs" role="tablist" aria-label="Kinds of provider">${PV_TABS.map(([k, l]) => `<button type="button" class="pv-tab" role="tab" aria-selected="${P.tab === k}" data-pv-tab="${k}">${esc(l)} <span class="n">${k === 'all' ? all.length : all.filter((x) => pvKind(x) === k).length}</span></button>`).join('')}</div>
     <div class="pv-grid ${sel ? 'has-sel' : ''}">
       <div class="pv-listcol">
@@ -7111,7 +7171,7 @@ function drawProviders(say = null) {
   // The detail: OpenRouter's keys, or the source's card (key or app, options, plan, test, default model).
   const body = $('.pv-body', box);
   if (sel && body) {
-    if (sel.id === 'openrouter') { body.innerHTML = '<div id="stKeys"><div class="st-row-help">Loading keys…</div></div>'; drawKeysPanel(); }
+    if (sel.id === 'openrouter') { body.innerHTML = '<div id="stKeys"><div class="st-row-help">Loading keys…</div></div>'; drawKeysPanel(); if (orCards) body.append(orCards); }
     else drawSourceCards(body, { sources: ST.sources }, [sel], say);
   }
   box.onclick = (e) => {
@@ -7119,7 +7179,7 @@ function drawProviders(say = null) {
     const tab = t.closest('[data-pv-tab]')?.dataset.pvTab;
     if (tab) { P.tab = tab; drawProviders(); return; }
     const open = t.closest('[data-pv-open]')?.dataset.pvOpen;
-    if (open) { P.sel = open; drawProviders(); $('.pv-detail:not([hidden])', box)?.scrollIntoView({ block: 'nearest' }); return; }
+    if (open) { P.sel = open; drawProviders(); box.closest('.st-panel')?.scrollIntoView({ block: 'start' }); return; }
     if (t.closest('[data-pv-back]')) { const was = P.sel; P.sel = null; drawProviders(); $(`[data-pv-open="${CSS.escape(was)}"]`, box)?.focus(); return; }
     if (t.closest('[data-pv-clear]')) { P.q = ''; drawProviders(); }
   };
@@ -7428,7 +7488,7 @@ function resetCategory() {
   if (uiKeys) for (const k of uiKeys) U[k] = UI_DEFAULTS[k];
   if (ST.cat === 'appearance') { S.theme = null; G.theme = null; applyTheme(); }
   if (ST.cat === 'privacy') S.newsRemote = true;
-  if (ST.cat === 'models') { S.model = d.chatModel || d.setups.C.model; S.reasoning = 'off'; Object.assign(S, { providerSort: 'auto', requireParams: true, zdrOnly: false, fallbackModel: '', blockedProviders: [...(d.blockedProviders || [])] }); }
+  if (ST.cat === 'providers') { S.model = d.chatModel || d.setups.C.model; S.reasoning = 'off'; Object.assign(S, { providerSort: 'auto', requireParams: true, zdrOnly: false, fallbackModel: '', blockedProviders: [...(d.blockedProviders || [])] }); }
   if (ST.cat === 'providers') Object.assign(S, { sourceFallback: d.sourceFallback || 'off', sourceFallbackModel: '' });
   if (ST.cat === 'newchats') S.newChatTools = { ...DEFAULT_CHAT_TOOLS };
   if (ST.cat === 'loop') { S.maxSteps = d.maxSteps; S.compact = true; S.compactAt = 24000; Object.assign(S, { planFirst: d.planFirst, planSteps: d.planSteps, continueRounds: d.continueRounds, maxOutput: d.maxOutput, thinkShare: d.thinkShare, review: d.review, reviewModel: '', reviewTier: d.reviewTier, reviewSendBack: d.reviewSendBack, codeReview: d.codeReview, designLint: d.designLint, fixSteps: d.fixSteps, reviewRounds: d.reviewRounds, reviewBar: d.reviewBar, helpers: d.helpers, helperModel: '', helperSteps: d.helperSteps, helperMinFiles: d.helperMinFiles, retries: d.retries, parallel: d.parallel, verify: d.verify, verifyRounds: d.verifyRounds, askLimit: d.askLimit, trimAt: d.trimAt, buildThinking: d.buildThinking }); }
@@ -8245,7 +8305,7 @@ async function drawModelLimit() {
     if (act === 'reveal') { ST.revealLimit = !ST.revealLimit; paint(); }
     if (act === 'refresh') load();
   };
-  if (!k) { box.innerHTML = '<div class="kx-mlim"><span class="kx-mlim-name">No OpenRouter key yet.</span><span class="kx-spacer"></span><button type="button" class="st-btn ghost sm" data-lim="keys">Add one in API keys →</button></div>'; return; }
+  if (!k) { box.innerHTML = '<div class="kx-mlim"><span class="kx-mlim-name">No OpenRouter key yet.</span><span class="kx-spacer"></span><button type="button" class="st-btn ghost sm" data-lim="keys">Add a key ↑</button></div>'; return; }
   let u = null;
   const paint = () => {
     const show = ST.revealLimit, m = (x) => (show ? money(x ?? 0, 2) : '•••••');
