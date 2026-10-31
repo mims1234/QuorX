@@ -115,7 +115,6 @@ function schedDeps(script, { onNotify } = {}) {
     notify: (kind, info) => onNotify?.(kind, info),
   };
 }
-
 const ended = (kinds = ['done', 'error']) => { let res; const p = new Promise((r) => { res = r; }); return { p, on: (k, info) => { if (kinds.includes(k)) res({ k, info }); } }; };
 
 test('a scheduled chat runs like a normal chat and is saved complete, with no page open', async () => {
@@ -568,9 +567,7 @@ test('edit_video command: stills loop, clips can be cut, music loops under the v
 });
 
 const TEST_VIDEO = { id: 'test/vid-start', name: 'Test video', kind: 'video', skus: { duration_seconds_480p: 0.02, cents_per_image_input: '1' }, resolutions: ['480p'], durations: [5], aspects: ['16:9', '9:16'], frames: ['first_frame'] };
-
 const TEST_VIDEO_TEXT = { ...TEST_VIDEO, id: 'test/vid-text', frames: [] };
-
 const videoSettings = (model) => ({ mediaEnabled: true, yoloCheck: false, tools: { browser: { on: false }, image: { on: false }, music: { on: false }, speech: { on: false }, video: { on: true, pick: 'fixed', models: [model], resolution: '480p', seconds: 5 } } });
 
 test('make_video starts from a project picture with a model that takes one', async () => {
@@ -606,9 +603,7 @@ test('make_video with a start picture and a text-only model is refused before an
 });
 
 let hasFfmpeg = false;
-
 try { execFileSync('ffmpeg', ['-version'], { stdio: 'ignore' }); hasFfmpeg = true; } catch { /* not installed */ }
-
 test('edit_video joins a still, a clip and a voice-over into one mp4 in the project, through the command gate', { skip: !hasFfmpeg && 'ffmpeg is not installed' }, async () => {
   let runId; const cards = [];
   const { bodies, dir, events } = await run((body, i) => [
@@ -658,7 +653,6 @@ test('skills are listed by name, with descriptions only for the ones the request
 
 // ---------- the project's own secrets: names for the agent, values for its commands ----------
 const KEY = 'sk-test-0123456789abcdefghij', DB = 'p@ss word#42';
-
 const withEnv = (dir) => {
   fs.writeFileSync(path.join(dir, '.env'), `# keys\nOPENAI_API_KEY=${KEY}\nDB_PASS="${DB}"\nDEBUG=true\nEMPTY=\n`);
   fs.writeFileSync(path.join(dir, 'server.pem'), '-----BEGIN PRIVATE KEY-----\nMIIEvQ\n-----END PRIVATE KEY-----\n');
@@ -821,7 +815,6 @@ test('✨ Enhance rewrites a draft with the given model, sees earlier turns, and
 
 // ---------- Video Mode (server/videomode.js): a film gets a brief, a story pick and a storyboard first ----------
 const userText = (body) => { const u = body.messages.filter((m) => m.role === 'user').at(-1).content; return typeof u === 'string' ? u : u.filter((x) => x.type === 'text').map((x) => x.text).join('\n'); };
-
 const toolNames = (body) => body.tools.map((t) => t.function.name);
 
 test('Video Mode: plain words tell a film from a feature that plays video', () => {

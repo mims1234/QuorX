@@ -19,54 +19,58 @@ import { SAFETY_DEFAULTS, safetySettings, yoloOf } from '../server/safety.js';
 import { answerApproval } from '../server/agent.js';
 import { startRun, runningForChat } from '../server/runs.js';
 
-test('stop: the job host starts on Windows', { skip: !WIN }, async () => {
-  assert.equal(await jobsAvailable(), true, JSON.stringify(jobHostStatus()));
+test('stop: the job host ends what a command leaves behind, and an abort or a timeout ends the whole tree with 0 left', { skip: !WIN }, async () => {
+  { // stop: the job host starts on Windows
+    assert.equal(await jobsAvailable(), true, JSON.stringify(jobHostStatus()));
+  }
+  { // stop: a detached child a command leaves behind is ended and named
+    const before = pingsLeft();
+    const r = await runLine(tmp('sweep'), 'start /b ping -n 600 127.0.0.1 >nul & echo started', { shell: 'cmd', timeout: 20000 });
+    assert.equal(r.code, 0);
+    assert.match(r.out, /started/);
+    assert.ok(r.leftovers, 'the leftover ping is reported');
+    assert.equal(r.leftovers.left, 0);
+    assert.ok(r.leftovers.ended.some((n) => /ping/i.test(n)), r.leftovers.ended.join(','));
+    assert.equal(pingsLeft(), before, 'no ping survives');
+  }
+  { // stop: aborting a running command ends its whole tree and confirms 0 left
+    const before = pingsLeft();
+    const ac = new AbortController();
+    const p = runLine(tmp('abort'), 'start /b ping -n 600 127.0.0.1 >nul & ping -n 600 127.0.0.1 >nul', { shell: 'cmd', signal: ac.signal, timeout: 30000 });
+    await new Promise((r) => setTimeout(r, 1500));
+    ac.abort();
+    const r = await p;
+    assert.ok(r.stopped, 'reported as stopped');
+    assert.equal(r.stopped.mode, 'jobs');
+    assert.equal(r.stopped.left, 0);
+    assert.match(r.out, /0 processes left/);
+    assert.equal(pingsLeft(), before);
+  }
+  { // stop: a timeout uses the same kill path
+    const r = await runLine(tmp('timeout'), 'ping -n 600 127.0.0.1 >nul', { shell: 'cmd', timeout: 1500 });
+    assert.equal(r.timedOut, true);
+    assert.equal(r.stopped.left, 0);
+  }
 });
 
-test('stop: a detached child a command leaves behind is ended and named', { skip: !WIN }, async () => {
-  const before = pingsLeft();
-  const r = await runLine(tmp('sweep'), 'start /b ping -n 600 127.0.0.1 >nul & echo started', { shell: 'cmd', timeout: 20000 });
-  assert.equal(r.code, 0);
-  assert.match(r.out, /started/);
-  assert.ok(r.leftovers, 'the leftover ping is reported');
-  assert.equal(r.leftovers.left, 0);
-  assert.ok(r.leftovers.ended.some((n) => /ping/i.test(n)), r.leftovers.ended.join(','));
-  assert.equal(pingsLeft(), before, 'no ping survives');
+
+
+
+test('commands get no stdin, so a prompt cannot hang them, and the full log goes to a file when asked', async () => {
+  { // commands get no stdin, so a prompt cannot hang them
+    const r = await runLine(tmp('stdin'), WIN ? 'set /p X=Name? & echo got:%X%' : 'read X; echo got:$X', { shell: WIN ? 'cmd' : 'direct', timeout: 15000 });
+    assert.equal(r.timedOut, false);
+    assert.match(r.out, /got:/);
+  }
+  { // the full log is written to a file when asked
+    const dir = tmp('log');
+    const log = path.join(dir, 'logs', 'one.log');
+    const r = await runLine(dir, 'echo hello-log', { shell: WIN ? 'cmd' : 'direct', logTo: log });
+    assert.equal(r.code, 0);
+    assert.match(fs.readFileSync(log, 'utf8'), /hello-log/);
+  }
 });
 
-test('stop: aborting a running command ends its whole tree and confirms 0 left', { skip: !WIN }, async () => {
-  const before = pingsLeft();
-  const ac = new AbortController();
-  const p = runLine(tmp('abort'), 'start /b ping -n 600 127.0.0.1 >nul & ping -n 600 127.0.0.1 >nul', { shell: 'cmd', signal: ac.signal, timeout: 30000 });
-  await new Promise((r) => setTimeout(r, 1500));
-  ac.abort();
-  const r = await p;
-  assert.ok(r.stopped, 'reported as stopped');
-  assert.equal(r.stopped.mode, 'jobs');
-  assert.equal(r.stopped.left, 0);
-  assert.match(r.out, /0 processes left/);
-  assert.equal(pingsLeft(), before);
-});
-
-test('stop: a timeout uses the same kill path', { skip: !WIN }, async () => {
-  const r = await runLine(tmp('timeout'), 'ping -n 600 127.0.0.1 >nul', { shell: 'cmd', timeout: 1500 });
-  assert.equal(r.timedOut, true);
-  assert.equal(r.stopped.left, 0);
-});
-
-test('commands get no stdin, so a prompt cannot hang them', async () => {
-  const r = await runLine(tmp('stdin'), WIN ? 'set /p X=Name? & echo got:%X%' : 'read X; echo got:$X', { shell: WIN ? 'cmd' : 'direct', timeout: 15000 });
-  assert.equal(r.timedOut, false);
-  assert.match(r.out, /got:/);
-});
-
-test('the full log is written to a file when asked', async () => {
-  const dir = tmp('log');
-  const log = path.join(dir, 'logs', 'one.log');
-  const r = await runLine(dir, 'echo hello-log', { shell: WIN ? 'cmd' : 'direct', logTo: log });
-  assert.equal(r.code, 0);
-  assert.match(fs.readFileSync(log, 'utf8'), /hello-log/);
-});
 
 test('snapshot: Undo restores what a command deleted, changed and created', async () => {
   const dir = tmp('snap');
@@ -109,7 +113,6 @@ test('snapshot: a project over the size limit is skipped, and says why', async (
 
 // The async snapshot runs in a worker; it must give exactly what the sync walk gives (only `ms` differs).
 const noMs = ({ ms, ...s }) => s;
-
 function snapTree(name) {
   const dir = tmp(name);
   const w = (rel, data) => { fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true }); fs.writeFileSync(path.join(dir, rel), data); };
@@ -126,7 +129,6 @@ function snapTree(name) {
   fs.truncateSync(path.join(dir, 'huge.dat'), 21 * 1024 * 1024); // over the 20 MB per-file limit
   return dir;
 }
-
 const mutate = (dir) => {
   fs.writeFileSync(path.join(dir, 'src', 'a.js'), 'export const a = 3;');
   fs.writeFileSync(path.join(dir, 'assets', 'logo.bin'), Buffer.from([1, 2, 3, 0, 255]));
@@ -134,46 +136,48 @@ const mutate = (dir) => {
   fs.writeFileSync(path.join(dir, 'src', 'deep', 'new.txt'), 'made');
 };
 
-test('snapshot: the worker path gives the same snapshot and changes as the sync walk', async () => {
-  const dir = snapTree('snapeq');
-  // From scratch both ways (no index, no objects), then again with the index in place.
-  const fresh = await snapshotAsync(dir);
-  fs.rmSync(path.join(dir, '.quorx'), { recursive: true });
-  const freshSync = snapshot(dir);
-  assert.deepEqual(noMs(fresh), noMs(freshSync));
-  assert.equal(fresh.count, 7);
-  assert.deepEqual(fresh.skippedBig, ['huge.dat']);
-  assert.ok(!Object.keys(fresh.files).some((r) => /node_modules|dist/.test(r)), 'skipped folders stay skipped');
-  assert.deepEqual(noMs(await snapshotAsync(dir)), noMs(snapshot(dir)));
-  const before = snapshot(dir);
-  mutate(dir);
-  const sync = changesSince(dir, before);
-  const viaWorker = await changesSinceAsync(dir, before);
-  assert.deepEqual({ ...viaWorker, after: noMs(viaWorker.after) }, { ...sync, after: noMs(sync.after) });
-  assert.deepEqual([sync.added, sync.modified, sync.deleted], [['src/deep/new.txt'], ['assets/logo.bin', 'src/a.js'], ['gone/soon.txt']]);
-  assert.deepEqual(sync.after.skippedBig, ['huge.dat']);
-  // The same with the worker turned off (the fallback runs the sync walk in this thread).
-  const out = execSync(`node --input-type=module -e "const m = await import(process.env.QX_T_MOD); const s = await m.snapshotAsync(process.env.QX_T_DIR); delete s.ms; process.stdout.write(JSON.stringify(s))"`,
-    { env: { ...process.env, QX_SNAPSHOT_WORKER: '0', QX_T_MOD: pathToFileURL(path.resolve('server/snapshot.js')).href, QX_T_DIR: dir }, encoding: 'utf8' });
-  assert.deepEqual(JSON.parse(out), noMs(snapshot(dir)));
+test('snapshot: the worker path gives the same snapshot, changes and Undo as the sync walk', async () => {
+  { // snapshot: the worker path gives the same snapshot and changes as the sync walk
+    const dir = snapTree('snapeq');
+    // From scratch both ways (no index, no objects), then again with the index in place.
+    const fresh = await snapshotAsync(dir);
+    fs.rmSync(path.join(dir, '.quorx'), { recursive: true });
+    const freshSync = snapshot(dir);
+    assert.deepEqual(noMs(fresh), noMs(freshSync));
+    assert.equal(fresh.count, 7);
+    assert.deepEqual(fresh.skippedBig, ['huge.dat']);
+    assert.ok(!Object.keys(fresh.files).some((r) => /node_modules|dist/.test(r)), 'skipped folders stay skipped');
+    assert.deepEqual(noMs(await snapshotAsync(dir)), noMs(snapshot(dir)));
+    const before = snapshot(dir);
+    mutate(dir);
+    const sync = changesSince(dir, before);
+    const viaWorker = await changesSinceAsync(dir, before);
+    assert.deepEqual({ ...viaWorker, after: noMs(viaWorker.after) }, { ...sync, after: noMs(sync.after) });
+    assert.deepEqual([sync.added, sync.modified, sync.deleted], [['src/deep/new.txt'], ['assets/logo.bin', 'src/a.js'], ['gone/soon.txt']]);
+    assert.deepEqual(sync.after.skippedBig, ['huge.dat']);
+    // The same with the worker turned off (the fallback runs the sync walk in this thread).
+    const out = execSync(`node --input-type=module -e "const m = await import(process.env.QX_T_MOD); const s = await m.snapshotAsync(process.env.QX_T_DIR); delete s.ms; process.stdout.write(JSON.stringify(s))"`,
+      { env: { ...process.env, QX_SNAPSHOT_WORKER: '0', QX_T_MOD: pathToFileURL(path.resolve('server/snapshot.js')).href, QX_T_DIR: dir }, encoding: 'utf8' });
+    assert.deepEqual(JSON.parse(out), noMs(snapshot(dir)));
+  }
+  { // snapshot: Undo works the same through the worker path
+    const dir = snapTree('snapundo');
+    const orig = (rel) => fs.readFileSync(path.join(dir, rel));
+    const keep = { a: orig('src/a.js'), logo: orig('assets/logo.bin'), soon: orig('gone/soon.txt') };
+    const { snap } = await snapBeforeAsync(dir);
+    assert.ok(snap);
+    mutate(dir);
+    const ch = await commandChangesAsync(dir, 'runw', snap);
+    assert.deepEqual([ch.added, ch.modified, ch.deleted], [['src/deep/new.txt'], ['assets/logo.bin', 'src/a.js'], ['gone/soon.txt']]);
+    restoreCheckpoint(dir, 'runw');
+    assert.deepEqual(orig('src/a.js'), keep.a);
+    assert.deepEqual(orig('assets/logo.bin'), keep.logo, 'binary files come back byte for byte');
+    assert.deepEqual(orig('gone/soon.txt'), keep.soon);
+    assert.equal(fs.existsSync(path.join(dir, 'src', 'deep', 'new.txt')), false);
+    assert.equal(fs.statSync(path.join(dir, 'huge.dat')).size, 21 * 1024 * 1024, 'the big file was left alone');
+  }
 });
 
-test('snapshot: Undo works the same through the worker path', async () => {
-  const dir = snapTree('snapundo');
-  const orig = (rel) => fs.readFileSync(path.join(dir, rel));
-  const keep = { a: orig('src/a.js'), logo: orig('assets/logo.bin'), soon: orig('gone/soon.txt') };
-  const { snap } = await snapBeforeAsync(dir);
-  assert.ok(snap);
-  mutate(dir);
-  const ch = await commandChangesAsync(dir, 'runw', snap);
-  assert.deepEqual([ch.added, ch.modified, ch.deleted], [['src/deep/new.txt'], ['assets/logo.bin', 'src/a.js'], ['gone/soon.txt']]);
-  restoreCheckpoint(dir, 'runw');
-  assert.deepEqual(orig('src/a.js'), keep.a);
-  assert.deepEqual(orig('assets/logo.bin'), keep.logo, 'binary files come back byte for byte');
-  assert.deepEqual(orig('gone/soon.txt'), keep.soon);
-  assert.equal(fs.existsSync(path.join(dir, 'src', 'deep', 'new.txt')), false);
-  assert.equal(fs.statSync(path.join(dir, 'huge.dat')).size, 21 * 1024 * 1024, 'the big file was left alone');
-});
 
 // A background job (or another chat) snapshots first; a foreground command snapshots, ends and prunes; the job ends last.
 test('snapshot: overlapping commands in one project, the earlier one ending last: Undo restores both', async () => {
@@ -252,17 +256,11 @@ test('snapshot: the event loop keeps ticking while a big project is snapshotted'
 
 // ---------- the rule engine ----------
 const proj = tmp('policy');
-
 fs.writeFileSync(path.join(proj, 'a.txt'), 'x');
-
 fs.mkdirSync(path.join(proj, 'dist'));
-
 for (let i = 0; i < 30; i++) fs.writeFileSync(path.join(proj, 'dist', `f${i}.js`), '');
-
 const RULES = [{ effect: 'allow', match: 'cargo build*', by: 'button', scope: 'project' }];
-
 const ctx = (over = {}) => ({ shell: 'powershell', root: proj, rules: RULES, mode: 'strict', yolo: {}, ...over });
-
 const shortName = (p) => { try { return execSync(`cmd /c for %I in ("${p}") do @echo %~sI`).toString().trim(); } catch { return null; } };
 
 test('rules: published bypasses never come out as allowed', { skip: !WIN }, async () => {
@@ -320,35 +318,35 @@ test('rules: deletes are judged by their real target', { skip: !WIN }, async () 
   await want('Remove-Item C:\\*', 'deny');
 });
 
-test('rules: Strict asks you; YOLO lets the deciders vote only where allowed', { skip: !WIN }, async () => {
-  const run = async (line, mode, over = {}) => { const d = await decide(line, ctx({ mode, ...over })); return d.verdict === 'ask' ? `ask:${d.who}` : d.verdict; };
-  const S = [['git status', 'allow'], ['cargo build --release', 'allow'], ['cargo test', 'ask:user'], ['npm i lodash', 'ask:user'], ['git push', 'ask:user'],
-    ['python -c 1', 'ask:user'], ['format C:', 'deny'], ['foo-bar baz', 'ask:user'], ['git clean -fd', 'ask:user']];
-  for (const [l, v] of S) assert.equal(await run(l, 'strict'), v, `strict: ${l}`);
-  const Y = [['git status', 'allow'], ['cargo test', 'ask:deciders'], ['npm i lodash', 'ask:deciders'], ['npm i -g x', 'ask:user'], ['git push', 'ask:user'],
-    ['python -c 1', 'ask:deciders'], ['git clean -fd', 'ask:user'], ['format C:', 'deny'], ['foo-bar baz', 'ask:deciders']];
-  for (const [l, v] of Y) assert.equal(await run(l, 'yolo'), v, `yolo: ${l}`);
-  assert.equal(await run('git push', 'yolo', { yolo: { external: true } }), 'ask:deciders', 'the YOLO box lets deciders vote on pushes');
+test('rules: Strict asks you, YOLO lets the deciders vote only where allowed; deny > ask > allow, and only typed rules relax risky classes', { skip: !WIN }, async () => {
+  { // rules: Strict asks you; YOLO lets the deciders vote only where allowed
+    const run = async (line, mode, over = {}) => { const d = await decide(line, ctx({ mode, ...over })); return d.verdict === 'ask' ? `ask:${d.who}` : d.verdict; };
+    const S = [['git status', 'allow'], ['cargo build --release', 'allow'], ['cargo test', 'ask:user'], ['npm i lodash', 'ask:user'], ['git push', 'ask:user'],
+      ['python -c 1', 'ask:user'], ['format C:', 'deny'], ['foo-bar baz', 'ask:user'], ['git clean -fd', 'ask:user']];
+    for (const [l, v] of S) assert.equal(await run(l, 'strict'), v, `strict: ${l}`);
+    const Y = [['git status', 'allow'], ['cargo test', 'ask:deciders'], ['npm i lodash', 'ask:deciders'], ['npm i -g x', 'ask:user'], ['git push', 'ask:user'],
+      ['python -c 1', 'ask:deciders'], ['git clean -fd', 'ask:user'], ['format C:', 'deny'], ['foo-bar baz', 'ask:deciders']];
+    for (const [l, v] of Y) assert.equal(await run(l, 'yolo'), v, `yolo: ${l}`);
+    assert.equal(await run('git push', 'yolo', { yolo: { external: true } }), 'ask:deciders', 'the YOLO box lets deciders vote on pushes');
+  }
+  { // rules: deny > ask > allow, and only typed rules relax risky classes
+    const run = async (line, rules, mode = 'strict') => { const d = await decide(line, ctx({ rules, mode })); return d.verdict === 'ask' ? `ask:${d.who}` : d.verdict; };
+    assert.equal(await run('git status', [{ effect: 'deny', match: 'git status*' }]), 'deny');
+    assert.equal(await run('git status', [{ effect: 'ask', match: 'git status*' }]), 'ask:user');
+    assert.equal(await run('git push', [{ effect: 'allow', match: 'git push*', by: 'button' }]), 'ask:user', 'a button-made rule never lifts external');
+    assert.equal(await run('git push', [{ effect: 'allow', match: 'git push*', by: 'user' }]), 'allow', 'a rule you typed does');
+    assert.equal(await run('format C:', [{ effect: 'allow', match: 'format*', by: 'user' }]), 'deny', 'never stays never');
+    assert.equal(await run('python script.py', [{ effect: 'allow', match: 'python*', by: 'user' }]), 'allow');
+    assert.equal(await run('python script.py', [{ effect: 'allow', match: 'python*', by: 'user' }], 'yolo'), 'ask:deciders', 'interpreter wildcards are ignored in YOLO');
+    assert.equal(await run('cargo build; git push', RULES), 'ask:user', 'a cargo rule does not carry git push along');
+  }
 });
 
-test('rules: deny > ask > allow, and only typed rules relax risky classes', { skip: !WIN }, async () => {
-  const run = async (line, rules, mode = 'strict') => { const d = await decide(line, ctx({ rules, mode })); return d.verdict === 'ask' ? `ask:${d.who}` : d.verdict; };
-  assert.equal(await run('git status', [{ effect: 'deny', match: 'git status*' }]), 'deny');
-  assert.equal(await run('git status', [{ effect: 'ask', match: 'git status*' }]), 'ask:user');
-  assert.equal(await run('git push', [{ effect: 'allow', match: 'git push*', by: 'button' }]), 'ask:user', 'a button-made rule never lifts external');
-  assert.equal(await run('git push', [{ effect: 'allow', match: 'git push*', by: 'user' }]), 'allow', 'a rule you typed does');
-  assert.equal(await run('format C:', [{ effect: 'allow', match: 'format*', by: 'user' }]), 'deny', 'never stays never');
-  assert.equal(await run('python script.py', [{ effect: 'allow', match: 'python*', by: 'user' }]), 'allow');
-  assert.equal(await run('python script.py', [{ effect: 'allow', match: 'python*', by: 'user' }], 'yolo'), 'ask:deciders', 'interpreter wildcards are ignored in YOLO');
-  assert.equal(await run('cargo build; git push', RULES), 'ask:user', 'a cargo rule does not carry git push along');
-});
 
 // ⚡ YOLO (⚙ Approvals & safety): what runs on its own, what the deciders vote on, what pauses for you, what never runs.
 // decide() only: none of these commands runs.
 const YOLO = { checkAll: yoloOf(safetySettings({ yoloLevel: 'careful' })), checkBuilds: yoloOf(safetySettings({ yoloLevel: 'balanced' })), defaults: yoloOf(safetySettings({})) };
-
 const yrun = async (line, yolo, mode = 'yolo', rules = []) => { const d = await decide(line, ctx({ mode, rules, yolo })); return d.verdict === 'ask' ? `ask:${d.who}${d.risk ? `:${d.risk}` : ''}` : d.verdict; };
-
 test('rules: YOLO runs reads, builds and one-liners on its own, and keeps the extreme ones for you', { skip: !WIN }, async () => {
   const T = [
     // line                                              everything checked    builds checked        defaults
@@ -428,109 +426,142 @@ test('rules: each ⚡ YOLO setting moves its own kind of command, and nothing el
   assert.equal(safetySettings({ yoloLevel: 'nonsense' }).yoloCheckBuild, false);
 });
 
-test('agent file tools cannot write QuorX config or git internals', () => {
-  for (const p of ['.quorx/launch.json', '.quorx/permissions.json', '.git/hooks/pre-commit', 'sub/.git/config', '.claude/settings.json', '.vscode/tasks.json']) assert.ok(agentWriteBlocked(p), p);
-  for (const p of ['.quorx/scratch/notes.md', 'src/app.js', '.vscode/settings.json', 'quorx.md']) assert.equal(agentWriteBlocked(p), '', p);
+test('agent file tools cannot write QuorX config or git internals, and the agent is told why', async () => {
+  { // agent file tools cannot write QuorX config or git internals
+    for (const p of ['.quorx/launch.json', '.quorx/permissions.json', '.git/hooks/pre-commit', 'sub/.git/config', '.claude/settings.json', '.vscode/tasks.json']) assert.ok(agentWriteBlocked(p), p);
+    for (const p of ['.quorx/scratch/notes.md', 'src/app.js', '.vscode/settings.json', 'quorx.md']) assert.equal(agentWriteBlocked(p), '', p);
+  }
+  { // agent file tools refuse QuorX config and git hooks
+    const { bodies, dir } = await agentRun((b, i) => [reply('', [['write_file', { path: '.quorx/launch.json', content: '{}' }]]), reply('', [['write_file', { path: '.git/hooks/pre-commit', content: 'x' }]]), reply('OK.')][i]);
+    assert.match(toolOut(bodies, 1), /Refused: QuorX’s own files/);
+    assert.match(toolOut(bodies, 2), /Refused: git’s own folder/);
+    assert.equal(fs.existsSync(path.join(dir, '.git', 'hooks', 'pre-commit')), false);
+  }
 });
 
-test('toolchains suggest build rules', () => {
-  const dir = tmp('suggest');
-  fs.writeFileSync(path.join(dir, 'Cargo.toml'), '');
-  fs.writeFileSync(path.join(dir, 'app.csproj'), '');
-  const s = suggestedRules(dir, [{ match: 'cargo test*' }]).map((r) => r.match);
-  assert.ok(s.includes('cargo build*') && s.includes('dotnet build*'));
-  assert.ok(!s.includes('cargo test*'), 'rules you already have are not suggested again');
+test('toolchains: build rules are suggested, the Build Tools install asks as a whole-computer install, and Rust that can\'t link gets that line', async () => {
+  { // toolchains suggest build rules
+    const dir = tmp('suggest');
+    fs.writeFileSync(path.join(dir, 'Cargo.toml'), '');
+    fs.writeFileSync(path.join(dir, 'app.csproj'), '');
+    const s = suggestedRules(dir, [{ match: 'cargo test*' }]).map((r) => r.match);
+    assert.ok(s.includes('cargo build*') && s.includes('dotnet build*'));
+    assert.ok(!s.includes('cargo test*'), 'rules you already have are not suggested again');
+  }
+  { // the Build Tools install is an install for the whole computer, and asks
+    const d = await decide('winget install --id Microsoft.VisualStudio.2022.BuildTools -e --override "--passive --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"', ctx({ shell: 'powershell' }));
+    assert.equal(d.segments[0].cls, 'install');
+    assert.ok(d.segments[0].global, 'whole computer');
+    assert.notEqual(d.verdict, 'allow');
+  }
+  { // toolchain note: Rust that can't link gets the Build Tools line with the C++ part, and says to carry on after
+    const { toolchainNote, TOOLCHAINS } = await import('../server/toolchains.js');
+    assert.match(TOOLCHAINS.find((t) => t.id === 'msvc').wingetArgs, /Workload\.VCTools/);
+    const note = toolchainNote([
+      { id: 'rust', label: 'Rust (cargo)', found: true, works: false, version: '1.97.1', problem: 'no C linker' },
+      { id: 'go', label: 'Go', found: false, works: false },
+    ]);
+    assert.match(note, /can't build programs here/);
+    assert.match(note, /--add Microsoft\.VisualStudio\.Workload\.VCTools/);
+    assert.equal(note.match(/tell you when it is done/g)?.length, 1, 'the carry-on advice once');
+    assert.doesNotMatch(toolchainNote([{ id: 'rust', label: 'Rust (cargo)', found: true, works: true, version: '1.97.1' }]), /tell you when it is done/);
+  }
 });
 
-test('the Build Tools install is an install for the whole computer, and asks', async () => {
-  const d = await decide('winget install --id Microsoft.VisualStudio.2022.BuildTools -e --override "--passive --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"', ctx({ shell: 'powershell' }));
-  assert.equal(d.segments[0].cls, 'install');
-  assert.ok(d.segments[0].global, 'whole computer');
-  assert.notEqual(d.verdict, 'allow');
-});
 
 // ---------- commands hidden in scripts ----------
 // The real case: the agent wrote a Node script that runs whatever it is given, then ran a toolchain install through it.
 const WRAPPER = "import { spawn } from 'node:child_process';\nconst [cmd, ...args] = process.argv.slice(2);\nspawn(cmd, args, { stdio: 'inherit', shell: true }).on('exit', (c) => process.exit(c ?? 1));\n";
-
 const REAL = 'node .quorx/scratch/run.mjs rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal';
-
 const scripts = tmp('scripts');
-
 const put = (rel, text) => { fs.mkdirSync(path.dirname(path.join(scripts, rel)), { recursive: true }); fs.writeFileSync(path.join(scripts, rel), text); };
-
 put('.quorx/scratch/run.mjs', WRAPPER);
-
 put('app.js', "const name = process.argv[2] || 'world';\nconsole.log(`hello ${name}`);\n");
-
 put('wrap.py', 'import subprocess, sys\nsys.exit(subprocess.call(sys.argv[1:]))\n');
-
 put('open.ps1', "Write-Host 'opening'\nStart-Process notepad.exe\n");
-
 put('setup.ps1', "Write-Host 'setting up'\nwinget install --id Rustlang.Rustup -e\n");
-
 put('tools/main.mjs', "import { run } from './helper.mjs';\nrun(process.argv.slice(2));\n");
-
 put('tools/helper.mjs', "import { execFileSync } from 'child_process';\nexport const run = ([c, ...a]) => execFileSync(c, a);\n");
-
 const sctx = (over = {}) => ({ shell: 'powershell', root: scripts, rules: [], mode: 'strict', yolo: {}, ...over });
 
-test('scripts: a wrapper that runs its arguments is opaque, and what it runs is judged as a whole-computer install', { skip: !WIN }, async () => {
-  for (const shell of ['powershell', 'cmd']) {
-    const d = await decide(REAL, sctx({ shell }));
-    assert.equal(d.verdict, 'ask', shell);
-    assert.equal(d.who, 'user', shell);
-    const inst = d.segments.find((s) => s.cls === 'install');
-    assert.ok(inst, `${shell}: the forwarded command is a segment: ${JSON.stringify(d.segments.map((s) => [s.text, s.cls]))}`);
-    assert.equal(inst.text, 'rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal');
-    assert.ok(inst.global, 'whole computer');
-    assert.equal(inst.via, '.quorx/scratch/run.mjs');
-    assert.match(d.why, /rustup installs for the whole computer \(\.quorx\/scratch\/run\.mjs passes it on as a command\)/, 'the card leads with the install');
-    const script = d.segments.find((s) => s.program === 'node');
-    assert.equal(script.cls, 'opaque');
-    assert.match(script.why, /this script \(\.quorx\/scratch\/run\.mjs\) runs other programs, so QuorX can’t check what it runs/);
+test('scripts: wrappers that run their arguments (Node, Python, PowerShell, a helper file, a variable) are opaque; what they pass on is judged on its own', { skip: !WIN }, async () => {
+  { // scripts: a wrapper that runs its arguments is opaque, and what it runs is judged as a whole-computer install
+    for (const shell of ['powershell', 'cmd']) {
+      const d = await decide(REAL, sctx({ shell }));
+      assert.equal(d.verdict, 'ask', shell);
+      assert.equal(d.who, 'user', shell);
+      const inst = d.segments.find((s) => s.cls === 'install');
+      assert.ok(inst, `${shell}: the forwarded command is a segment: ${JSON.stringify(d.segments.map((s) => [s.text, s.cls]))}`);
+      assert.equal(inst.text, 'rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal');
+      assert.ok(inst.global, 'whole computer');
+      assert.equal(inst.via, '.quorx/scratch/run.mjs');
+      assert.match(d.why, /rustup installs for the whole computer \(\.quorx\/scratch\/run\.mjs passes it on as a command\)/, 'the card leads with the install');
+      const script = d.segments.find((s) => s.program === 'node');
+      assert.equal(script.cls, 'opaque');
+      assert.match(script.why, /this script \(\.quorx\/scratch\/run\.mjs\) runs other programs, so QuorX can’t check what it runs/);
+    }
+    // A button rule for node can't lift it, YOLO's opaque box doesn't hand the install to the deciders, and a deny rule
+    // for rustup reaches the command through the script.
+    assert.equal((await decide(REAL, sctx({ rules: [{ effect: 'allow', match: 'node*', by: 'button' }] }))).verdict, 'ask');
+    const y = await decide(REAL, sctx({ mode: 'yolo', yolo: { opaque: true } }));
+    assert.equal(y.who, 'user', 'even in YOLO');
+    assert.equal((await decide(REAL, sctx({ rules: [{ effect: 'deny', match: 'rustup*' }] }))).verdict, 'deny');
   }
-  // A button rule for node can't lift it, YOLO's opaque box doesn't hand the install to the deciders, and a deny rule
-  // for rustup reaches the command through the script.
-  assert.equal((await decide(REAL, sctx({ rules: [{ effect: 'allow', match: 'node*', by: 'button' }] }))).verdict, 'ask');
-  const y = await decide(REAL, sctx({ mode: 'yolo', yolo: { opaque: true } }));
-  assert.equal(y.who, 'user', 'even in YOLO');
-  assert.equal((await decide(REAL, sctx({ rules: [{ effect: 'deny', match: 'rustup*' }] }))).verdict, 'deny');
-});
-
-test('scripts: a plain script that runs nothing else stays a normal build', { skip: !WIN }, async () => {
-  const d = await decide('node app.js Ada', sctx());
-  assert.deepEqual(d.segments.map((s) => s.cls), ['build'], 'reading its own arguments is fine when it runs nothing');
-  assert.equal((await decide('node app.js Ada', sctx({ mode: 'yolo' }))).who, 'deciders');
-  assert.equal((await decide('node app.js Ada', sctx({ rules: [{ effect: 'allow', match: 'node app.js*', by: 'button' }] }))).verdict, 'allow', 'Always allow still covers it');
-});
-
-test('scripts: a Python subprocess wrapper is caught the same way', { skip: !WIN }, async () => {
-  for (const [line, shell] of [['python wrap.py winget install Git.Git', 'powershell'], ['py -3 wrap.py winget install Git.Git', 'cmd']]) {
-    const d = await decide(line, sctx({ shell }));
-    assert.deepEqual(d.segments.map((s) => [s.cls, s.global]), [['install', true], ['opaque', false]], line);
-    assert.equal(d.segments[0].text, 'winget install Git.Git');
-    assert.match(d.segments[1].why, /wrap\.py\) runs other programs/);
+  { // scripts: a Python subprocess wrapper is caught the same way
+    for (const [line, shell] of [['python wrap.py winget install Git.Git', 'powershell'], ['py -3 wrap.py winget install Git.Git', 'cmd']]) {
+      const d = await decide(line, sctx({ shell }));
+      assert.deepEqual(d.segments.map((s) => [s.cls, s.global]), [['install', true], ['opaque', false]], line);
+      assert.equal(d.segments[0].text, 'winget install Git.Git');
+      assert.match(d.segments[1].why, /wrap\.py\) runs other programs/);
+    }
+  }
+  { // scripts: PowerShell scripts that start programs are opaque; their installs show as commands of their own
+    const open = await decide('.\\open.ps1', sctx());
+    assert.equal(open.segments[0].cls, 'opaque');
+    assert.match(open.why, /open\.ps1\) runs other programs/);
+    assert.equal((await decide('powershell -NoProfile -ExecutionPolicy Bypass -File open.ps1', sctx())).segments.at(-1).cls, 'opaque');
+    const setup = await decide('powershell -NoProfile -File setup.ps1', sctx());
+    const inst = setup.segments.find((s) => s.cls === 'install');
+    assert.ok(inst?.global && inst.via === 'setup.ps1', JSON.stringify(setup.segments.map((s) => [s.text, s.cls])));
+    assert.match(setup.why, /winget installs for the whole computer \(inside setup\.ps1\)/);
+  }
+  { // scripts: a launcher moved into a helper file, a script the same line writes, and a script from a variable
+    const d = await decide('node tools/main.mjs rustup default stable', sctx());
+    assert.deepEqual(d.segments.map((s) => s.cls), ['install', 'opaque']);
+    assert.match((await decide('Set-Content x.js "1"; node x.js', sctx())).why, /writes x\.js and then runs it/);
+    assert.equal((await decide('node $f', sctx())).segments[0].cls, 'opaque');
   }
 });
 
-test('scripts: PowerShell scripts that start programs are opaque; their installs show as commands of their own', { skip: !WIN }, async () => {
-  const open = await decide('.\\open.ps1', sctx());
-  assert.equal(open.segments[0].cls, 'opaque');
-  assert.match(open.why, /open\.ps1\) runs other programs/);
-  assert.equal((await decide('powershell -NoProfile -ExecutionPolicy Bypass -File open.ps1', sctx())).segments.at(-1).cls, 'opaque');
-  const setup = await decide('powershell -NoProfile -File setup.ps1', sctx());
-  const inst = setup.segments.find((s) => s.cls === 'install');
-  assert.ok(inst?.global && inst.via === 'setup.ps1', JSON.stringify(setup.segments.map((s) => [s.text, s.cls])));
-  assert.match(setup.why, /winget installs for the whole computer \(inside setup\.ps1\)/);
+test('scripts: a script that runs nothing, or names its programs in plain text, is judged by them; hidden launches stay opaque', { skip: !WIN }, async () => {
+  { // scripts: a plain script that runs nothing else stays a normal build
+    const d = await decide('node app.js Ada', sctx());
+    assert.deepEqual(d.segments.map((s) => s.cls), ['build'], 'reading its own arguments is fine when it runs nothing');
+    assert.equal((await decide('node app.js Ada', sctx({ mode: 'yolo' }))).who, 'deciders');
+    assert.equal((await decide('node app.js Ada', sctx({ rules: [{ effect: 'allow', match: 'node app.js*', by: 'button' }] }))).verdict, 'allow', 'Always allow still covers it');
+  }
+  { // scripts: a script that names its programs in plain text is judged by those programs, not as opaque
+    for (const line of ['node .quorx/scratch/render.mjs', 'node .quorx/scratch/req.cjs']) {
+      const d = await decide(line, sctx());
+      assert.ok(!d.segments.some((s) => s.cls === 'opaque'), `${line}: ${JSON.stringify(d.segments.map((s) => [s.text, s.cls, s.why]))}`);
+      assert.deepEqual(d.segments.map((s) => s.cls), ['build'], line);
+    }
+    // A risky program named in the script still shows as a command of its own.
+    const push = await decide('node .quorx/scratch/push.mjs', sctx());
+    const ext = push.segments.find((s) => s.cls === 'external');
+    assert.ok(ext && ext.via === '.quorx/scratch/push.mjs', JSON.stringify(push.segments.map((s) => [s.text, s.cls])));
+    assert.equal(push.verdict, 'ask');
+  }
+  { // scripts: programs from variables, shell mode, interpreters and hidden launches keep a script opaque
+    for (const k of Object.keys(OPAQUE_SHAPES)) {
+      const d = await decide(`node .quorx/scratch/shape-${k.replace(/\W+/g, '-')}.mjs`, sctx());
+      assert.ok(d.segments.some((s) => s.cls === 'opaque'), `${k}: ${JSON.stringify(d.segments.map((s) => [s.text, s.cls]))}`);
+    }
+  }
 });
 
-test('scripts: a launcher moved into a helper file, a script the same line writes, and a script from a variable', { skip: !WIN }, async () => {
-  const d = await decide('node tools/main.mjs rustup default stable', sctx());
-  assert.deepEqual(d.segments.map((s) => s.cls), ['install', 'opaque']);
-  assert.match((await decide('Set-Content x.js "1"; node x.js', sctx())).why, /writes x\.js and then runs it/);
-  assert.equal((await decide('node $f', sctx())).segments[0].cls, 'opaque');
-});
+
+
 
 // The real case from a video run: the agent's render script runs ffmpeg and ffprobe, named in plain text.
 put('.quorx/scratch/render.mjs', [
@@ -539,11 +570,8 @@ put('.quorx/scratch/render.mjs', [
   "for (const s of SHOTS) execFileSync('ffmpeg', ['-y', '-loop', '1', '-i', s.src, '-t', String(s.dur), `clips/${s.dur}.mp4`], { stdio: 'inherit' });",
   "probe('ffprobe', ['-v', 'error', 'out.mp4']);",
 ].join('\n'));
-
 put('.quorx/scratch/req.cjs', "const cp = require('child_process');\ncp.execFileSync('ffmpeg', ['-version']);\n");
-
 put('.quorx/scratch/push.mjs', "import { execFileSync } from 'node:child_process';\nexecFileSync('git', ['push', '--force']);\n");
-
 const OPAQUE_SHAPES = {
   'from a variable': "import { execFileSync } from 'node:child_process';\nconst p = process.argv[2];\nexecFileSync(p, []);\n",
   'shell mode': "import { spawn } from 'node:child_process';\nspawn('ffmpeg', ['-i', 'a.png'], { shell: true });\n",
@@ -553,122 +581,92 @@ const OPAQUE_SHAPES = {
   'exec with a shell line': "import { execSync } from 'node:child_process';\nexecSync('ffmpeg -version');\n",
   'a dynamic import': "const cp = await import('node:child_process');\ncp.execFileSync('ffmpeg', []);\n",
 };
-
 for (const [k, v] of Object.entries(OPAQUE_SHAPES)) put(`.quorx/scratch/shape-${k.replace(/\W+/g, '-')}.mjs`, v);
 
-test('scripts: a script that names its programs in plain text is judged by those programs, not as opaque', { skip: !WIN }, async () => {
-  for (const line of ['node .quorx/scratch/render.mjs', 'node .quorx/scratch/req.cjs']) {
-    const d = await decide(line, sctx());
-    assert.ok(!d.segments.some((s) => s.cls === 'opaque'), `${line}: ${JSON.stringify(d.segments.map((s) => [s.text, s.cls, s.why]))}`);
-    assert.deepEqual(d.segments.map((s) => s.cls), ['build'], line);
-  }
-  // A risky program named in the script still shows as a command of its own.
-  const push = await decide('node .quorx/scratch/push.mjs', sctx());
-  const ext = push.segments.find((s) => s.cls === 'external');
-  assert.ok(ext && ext.via === '.quorx/scratch/push.mjs', JSON.stringify(push.segments.map((s) => [s.text, s.cls])));
-  assert.equal(push.verdict, 'ask');
-});
 
-test('scripts: programs from variables, shell mode, interpreters and hidden launches keep a script opaque', { skip: !WIN }, async () => {
-  for (const k of Object.keys(OPAQUE_SHAPES)) {
-    const d = await decide(`node .quorx/scratch/shape-${k.replace(/\W+/g, '-')}.mjs`, sctx());
-    assert.ok(d.segments.some((s) => s.cls === 'opaque'), `${k}: ${JSON.stringify(d.segments.map((s) => [s.text, s.cls]))}`);
-  }
-});
 
 // package.json scripts: npm run x runs a command line the agent can write.
 put('web/package.json', JSON.stringify({ scripts: {
   setup: 'rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal', build: 'tsc', prestart: 'node tools/main.mjs', start: 'node app.js',
   wrap: 'node ../.quorx/scratch/run.mjs', dev: 'concurrently "tsc -w" "npm:setup"', env: 'cross-env NODE_ENV=production winget install Git.Git',
   postinstall: 'choco install nodejs', a: 'npm run b', b: 'npm run a' } }));
-
 put('web/tools/main.mjs', "import { execFileSync } from 'node:child_process';\nexecFileSync(process.env.GIT || 'git', ['--version']);\n");
-
 put('web/app.js', "console.log('up')\n");
-
 const wctx = (over = {}) => sctx({ cwd: path.join(scripts, 'web'), ...over });
 
-test('scripts: package.json scripts are read, so an install hidden there shows as one', { skip: !WIN }, async () => {
-  for (const [line, shell] of [['npm run setup', 'powershell'], ['npm run setup', 'cmd'], ['yarn setup', 'powershell'], ['pnpm run setup', 'powershell'], ['bun run setup', 'powershell']]) {
-    const d = await decide(line, wctx({ shell }));
-    assert.equal(d.verdict, 'ask', line);
-    assert.equal(d.who, 'user', line);
-    const inst = d.segments.find((s) => s.cls === 'install');
-    assert.ok(inst?.global, `${line}: ${JSON.stringify(d.segments.map((s) => [s.text, s.cls]))}`);
-    assert.equal(inst.text, 'rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal');
-    assert.equal(inst.via, 'web/package.json scripts.setup');
-    assert.match(d.why, /rustup installs for the whole computer \(inside web\/package\.json scripts\.setup\)/);
+test('scripts: package.json scripts are read in turn, so an install hidden there shows as one; a package.json the line writes can\'t be read first', { skip: !WIN }, async () => {
+  { // scripts: package.json scripts are read, so an install hidden there shows as one
+    for (const [line, shell] of [['npm run setup', 'powershell'], ['npm run setup', 'cmd'], ['yarn setup', 'powershell'], ['pnpm run setup', 'powershell'], ['bun run setup', 'powershell']]) {
+      const d = await decide(line, wctx({ shell }));
+      assert.equal(d.verdict, 'ask', line);
+      assert.equal(d.who, 'user', line);
+      const inst = d.segments.find((s) => s.cls === 'install');
+      assert.ok(inst?.global, `${line}: ${JSON.stringify(d.segments.map((s) => [s.text, s.cls]))}`);
+      assert.equal(inst.text, 'rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal');
+      assert.equal(inst.via, 'web/package.json scripts.setup');
+      assert.match(d.why, /rustup installs for the whole computer \(inside web\/package\.json scripts\.setup\)/);
+    }
+    assert.equal((await decide('npm run setup', wctx({ rules: [{ effect: 'allow', match: 'npm run*', by: 'button' }] }))).verdict, 'ask', 'Always allow npm run does not cover it');
+    // Through concurrently, cross-env and the install hooks of a bare npm ci.
+    for (const [line, prog] of [['npm run dev', 'rustup'], ['npm run env', 'winget'], ['npm ci', 'choco']]) {
+      assert.ok((await decide(line, wctx())).segments.some((s) => s.cls === 'install' && s.global && s.program === prog), line);
+    }
   }
-  assert.equal((await decide('npm run setup', wctx({ rules: [{ effect: 'allow', match: 'npm run*', by: 'button' }] }))).verdict, 'ask', 'Always allow npm run does not cover it');
-  // Through concurrently, cross-env and the install hooks of a bare npm ci.
-  for (const [line, prog] of [['npm run dev', 'rustup'], ['npm run env', 'winget'], ['npm ci', 'choco']]) {
-    assert.ok((await decide(line, wctx())).segments.some((s) => s.cls === 'install' && s.global && s.program === prog), line);
+  { // scripts: a plain package script stays a build, and the scripts it runs are read in turn
+    const b = await decide('npm run build', wctx());
+    assert.deepEqual(b.segments.map((s) => s.cls), ['build'], '"build": "tsc" is a build');
+    assert.equal((await decide('npm run build', wctx({ rules: [{ effect: 'allow', match: 'npm run build*', by: 'button' }] }))).verdict, 'allow', 'Always allow still covers it');
+    const start = await decide('npm start', wctx());
+    assert.equal(start.segments.at(-1).cls, 'opaque', 'its prestart hook runs a script that runs other programs');
+    assert.match(start.why, /tools\/main\.mjs\) runs other programs/);
+    const wrap = await decide('npm run wrap -- winget install Git.Git', wctx());
+    assert.deepEqual(wrap.segments.map((s) => [s.cls, s.via]), [['install', '.quorx/scratch/run.mjs'], ['opaque', undefined]], 'arguments after -- reach the wrapper');
+    assert.match((await decide('npm run a', wctx())).why, /nested too deeply/);
+  }
+  { // scripts: a package.json the same line writes can't be read first
+    const d = await decide("Set-Content package.json '{}'; npm run setup", wctx());
+    assert.equal(d.segments.at(-1).cls, 'opaque');
+    assert.match(d.why, /writes web\/package\.json and then runs its scripts/);
   }
 });
 
-test('scripts: a plain package script stays a build, and the scripts it runs are read in turn', { skip: !WIN }, async () => {
-  const b = await decide('npm run build', wctx());
-  assert.deepEqual(b.segments.map((s) => s.cls), ['build'], '"build": "tsc" is a build');
-  assert.equal((await decide('npm run build', wctx({ rules: [{ effect: 'allow', match: 'npm run build*', by: 'button' }] }))).verdict, 'allow', 'Always allow still covers it');
-  const start = await decide('npm start', wctx());
-  assert.equal(start.segments.at(-1).cls, 'opaque', 'its prestart hook runs a script that runs other programs');
-  assert.match(start.why, /tools\/main\.mjs\) runs other programs/);
-  const wrap = await decide('npm run wrap -- winget install Git.Git', wctx());
-  assert.deepEqual(wrap.segments.map((s) => [s.cls, s.via]), [['install', '.quorx/scratch/run.mjs'], ['opaque', undefined]], 'arguments after -- reach the wrapper');
-  assert.match((await decide('npm run a', wctx())).why, /nested too deeply/);
-});
 
-test('scripts: a package.json the same line writes can\'t be read first', { skip: !WIN }, async () => {
-  const d = await decide("Set-Content package.json '{}'; npm run setup", wctx());
-  assert.equal(d.segments.at(-1).cls, 'opaque');
-  assert.match(d.why, /writes web\/package\.json and then runs its scripts/);
-});
 
-test('toolchain note: Rust that can\'t link gets the Build Tools line with the C++ part, and says to carry on after', async () => {
-  const { toolchainNote, TOOLCHAINS } = await import('../server/toolchains.js');
-  assert.match(TOOLCHAINS.find((t) => t.id === 'msvc').wingetArgs, /Workload\.VCTools/);
-  const note = toolchainNote([
-    { id: 'rust', label: 'Rust (cargo)', found: true, works: false, version: '1.97.1', problem: 'no C linker' },
-    { id: 'go', label: 'Go', found: false, works: false },
-  ]);
-  assert.match(note, /can't build programs here/);
-  assert.match(note, /--add Microsoft\.VisualStudio\.Workload\.VCTools/);
-  assert.equal(note.match(/tell you when it is done/g)?.length, 1, 'the carry-on advice once');
-  assert.doesNotMatch(toolchainNote([{ id: 'rust', label: 'Rust (cargo)', found: true, works: true, version: '1.97.1' }]), /tell you when it is done/);
-});
 
 // ---------- platform packs ----------
-test('packs: every pack loads, and every toolchain, check and debugger is still there', async () => {
-  const { PACKS, PACK_ERRORS, allToolchains, allChecks, isCheckedFile } = await import('../server/packs/index.js');
-  const { debugLanguages, debugGateLine } = await import('../server/debugger.js');
-  assert.deepEqual(PACK_ERRORS, []);
-  assert.ok(PACKS.length >= 10);
-  const ids = allToolchains().map((t) => t.id);
-  for (const id of ['rust', 'dotnet', 'go', 'cmake', 'msvc', 'gcc', 'clang', 'java', 'gradle', 'maven', 'python', 'node', 'flutter', 'adb', 'git']) assert.ok(ids.includes(id), id);
-  const checks = allChecks().map((c) => c.id);
-  for (const id of ['cmake', 'dotnet', 'go', 'jvm', 'python', 'rust', 'ts', 'android', 'flutter', 'dart', ...(WIN ? ['godot', 'unity', 'wix'] : ['godot', 'unity'])]) assert.ok(checks.includes(id), id);
-  for (const f of ['src/main.rs', 'App.xaml', 'Program.cs', 'cmd/main.go', 'src/app.tsx', 'src/main.cpp', 'include/app.hpp', 'app/main.py', 'app/src/main/java/com/qx/Main.kt', 'lib/main.dart', 'src/main/java/App.java', 'App.kt', 'build.gradle.kts']) assert.ok(isCheckedFile(f), f);
-  assert.ok(!isCheckedFile('README.md'));
-  assert.match(debugLanguages(), /^Node \(\.js, \.mjs, \.cjs\), /);
-  assert.match(debugLanguages(), /Python \(debugpy\) \(\.py, \.pyw\)/);
-  for (const l of ['Go (Delve) (.go)', 'C and C++ (lldb-dap) (.c, .cc, .cpp, .cxx)', 'Rust (lldb-dap or CodeLLDB) (.rs)', 'Godot (GDScript) (.gd, .tscn)', 'Java and Kotlin (JDK debugger) (.java, .kt)']) assert.ok(debugLanguages().includes(l), l);
-  assert.equal(debugGateLine('app.py', ['in put.txt']), `${WIN ? 'py -3' : 'python3'} app.py "in put.txt"`);
-  assert.equal(debugGateLine('app.js', ['x']), 'node app.js x');
+test('packs: every pack loads with its toolchains, checks and debuggers, and the agent gets notes for the kinds of project in its folder', async () => {
+  { // packs: every pack loads, and every toolchain, check and debugger is still there
+    const { PACKS, PACK_ERRORS, allToolchains, allChecks, isCheckedFile } = await import('../server/packs/index.js');
+    const { debugLanguages, debugGateLine } = await import('../server/debugger.js');
+    assert.deepEqual(PACK_ERRORS, []);
+    assert.ok(PACKS.length >= 10);
+    const ids = allToolchains().map((t) => t.id);
+    for (const id of ['rust', 'dotnet', 'go', 'cmake', 'msvc', 'gcc', 'clang', 'java', 'gradle', 'maven', 'python', 'node', 'flutter', 'adb', 'git']) assert.ok(ids.includes(id), id);
+    const checks = allChecks().map((c) => c.id);
+    for (const id of ['cmake', 'dotnet', 'go', 'jvm', 'python', 'rust', 'ts', 'android', 'flutter', 'dart', ...(WIN ? ['godot', 'unity', 'wix'] : ['godot', 'unity'])]) assert.ok(checks.includes(id), id);
+    for (const f of ['src/main.rs', 'App.xaml', 'Program.cs', 'cmd/main.go', 'src/app.tsx', 'src/main.cpp', 'include/app.hpp', 'app/main.py', 'app/src/main/java/com/qx/Main.kt', 'lib/main.dart', 'src/main/java/App.java', 'App.kt', 'build.gradle.kts']) assert.ok(isCheckedFile(f), f);
+    assert.ok(!isCheckedFile('README.md'));
+    assert.match(debugLanguages(), /^Node \(\.js, \.mjs, \.cjs\), /);
+    assert.match(debugLanguages(), /Python \(debugpy\) \(\.py, \.pyw\)/);
+    for (const l of ['Go (Delve) (.go)', 'C and C++ (lldb-dap) (.c, .cc, .cpp, .cxx)', 'Rust (lldb-dap or CodeLLDB) (.rs)', 'Godot (GDScript) (.gd, .tscn)', 'Java and Kotlin (JDK debugger) (.java, .kt)']) assert.ok(debugLanguages().includes(l), l);
+    assert.equal(debugGateLine('app.py', ['in put.txt']), `${WIN ? 'py -3' : 'python3'} app.py "in put.txt"`);
+    assert.equal(debugGateLine('app.js', ['x']), 'node app.js x');
+  }
+  { // packs: the agent gets notes for the kinds of project in its folder, including deep markers
+    const { packsIn, packNotes } = await import('../server/packs/index.js');
+    const dir = tmp('packs');
+    fs.writeFileSync(path.join(dir, 'Cargo.toml'), '');
+    fs.mkdirSync(path.join(dir, 'web')); fs.writeFileSync(path.join(dir, 'web', 'package.json'), '{}');
+    fs.mkdirSync(path.join(dir, 'app', 'src', 'main'), { recursive: true }); fs.writeFileSync(path.join(dir, 'app', 'src', 'main', 'AndroidManifest.xml'), '<manifest/>');
+    fs.mkdirSync(path.join(dir, 'node_modules', 'x'), { recursive: true }); fs.writeFileSync(path.join(dir, 'node_modules', 'x', 'go.mod'), '');
+    assert.deepEqual(packsIn(dir).map((p) => p.id).sort(), ['android', 'node', 'rust'], 'node_modules is never scanned');
+    const n = packNotes(dir, []);
+    assert.match(n, /- Rust: build with cargo build/);
+    assert.match(n, /- Android: build with \S*gradlew(\.bat)? assembleDebug/);
+    assert.equal(packNotes(tmp('empty'), []), '');
+  }
 });
 
-test('packs: the agent gets notes for the kinds of project in its folder, including deep markers', async () => {
-  const { packsIn, packNotes } = await import('../server/packs/index.js');
-  const dir = tmp('packs');
-  fs.writeFileSync(path.join(dir, 'Cargo.toml'), '');
-  fs.mkdirSync(path.join(dir, 'web')); fs.writeFileSync(path.join(dir, 'web', 'package.json'), '{}');
-  fs.mkdirSync(path.join(dir, 'app', 'src', 'main'), { recursive: true }); fs.writeFileSync(path.join(dir, 'app', 'src', 'main', 'AndroidManifest.xml'), '<manifest/>');
-  fs.mkdirSync(path.join(dir, 'node_modules', 'x'), { recursive: true }); fs.writeFileSync(path.join(dir, 'node_modules', 'x', 'go.mod'), '');
-  assert.deepEqual(packsIn(dir).map((p) => p.id).sort(), ['android', 'node', 'rust'], 'node_modules is never scanned');
-  const n = packNotes(dir, []);
-  assert.match(n, /- Rust: build with cargo build/);
-  assert.match(n, /- Android: build with \S*gradlew(\.bat)? assembleDebug/);
-  assert.equal(packNotes(tmp('empty'), []), '');
-});
 
 // ---------- native debuggers (Go, C/C++, Rust) ----------
 test('packs: Go, C/C++ and Rust find the program to debug and the command the rules judge', async () => {
@@ -751,32 +749,23 @@ async function withDeciders(table, fn) {
   };
   try { return await fn(bodies); } finally { globalThis.fetch = real; }
 }
-
 const judge = (over = {}) => approvalJudge({ kind: 'command', userMessages: ['build my rust app'], facts: { command: 'cargo build' }, voters: ['a', 'b', 'c'], chatModel: 'chat', sf: SAFETY_DEFAULTS, ...over });
 
-test('deciders: a clear yes approves, a clear harm declines, a split waits for you', async () => {
-  const sure = { needed: 0.95, other: 0.02 };
-  assert.equal((await withDeciders({ a: sure, b: sure, c: sure }, () => judge())).approve, true);
-  const harm = { needed: 0.9, other: 0.95 };
-  assert.equal((await withDeciders({ a: harm, b: harm, c: harm }, () => judge())).approve, false);
-  const split = { needed: 0.6, other: 0.1 };
-  assert.equal((await withDeciders({ a: split, b: split, c: split }, () => judge())).approve, null);
-});
-
-test('deciders: below quorum a vote never decides', async () => {
-  const sure = { needed: 0.99, other: 0.01 };
-  const one = await withDeciders({ a: sure }, () => judge());
-  assert.equal(one.approve, null, 'one valid vote of three is not a panel');
-  assert.match(one.reason, /valid vote/);
-  const two = await withDeciders({ a: sure, b: sure }, () => judge());
-  assert.equal(two.approve, true, 'two valid votes meet the quorum of 2');
-});
-
-test('deciders: the chat model never judges itself', async () => {
-  const sure = { needed: 0.99, other: 0.01 };
-  const r = await withDeciders({ chat: sure, a: sure }, (bodies) => judge({ voters: ['chat', 'a'] }).then((x) => ({ x, models: bodies.map((b) => b.model) })));
-  assert.equal(r.x.approve, null, 'only one independent decider is left');
-  assert.ok(!r.models.includes('chat'));
+test('deciders: a clear yes approves, a clear harm declines; a split, too few votes or only the chat model wait for you', async () => {
+  const sure = { needed: 0.95, other: 0.02 }, harm = { needed: 0.9, other: 0.95 }, split = { needed: 0.6, other: 0.1 };
+  for (const [what, table, approve, over = {}] of [
+    ['a clear yes', { a: sure, b: sure, c: sure }, true],
+    ['a clear harm', { a: harm, b: harm, c: harm }, false],
+    ['a split', { a: split, b: split, c: split }, null],
+    ['one valid vote of three (not a panel)', { a: sure }, null],
+    ['two valid votes (the quorum of 2)', { a: sure, b: sure }, true],
+    ['the chat model and one other (it never judges itself)', { chat: sure, a: sure }, null, { voters: ['chat', 'a'] }],
+  ]) {
+    const r = await withDeciders(table, (bodies) => judge(over).then((x) => ({ ...x, models: bodies.map((b) => b.model) })));
+    assert.equal(r.approve, approve, what);
+    if (approve === null && !/split/.test(what)) assert.match(r.reason, /valid vote/, what);
+    assert.ok(!r.models.includes('chat'), `${what}: the chat model is never asked`);
+  }
 });
 
 test('deciders see the user’s words and the facts, never the agent’s reasons', async () => {
@@ -790,26 +779,28 @@ test('deciders see the user’s words and the facts, never the agent’s reasons
   });
 });
 
-test('shell: a write inside the project runs at once, and Undo covers it', { skip: !WIN }, async () => {
-  const { events, bodies, dir } = await agentRun((b, i) => [reply('', [['shell', { command: 'Set-Content notes.txt "hello"' }]]), reply('Done.')][i]);
-  assert.match(toolOut(bodies, 1), /Exit code 0/);
-  assert.match(toolOut(bodies, 1), /Files it changed \(Undo covers them\): \+notes\.txt/);
-  assert.equal(fs.readFileSync(path.join(dir, 'notes.txt'), 'utf8').trim(), 'hello');
-  assert.ok(!events.some((e) => e.t === 'approval'), 'no card for an in-project write');
+test('shell: a write inside the project runs at once and Undo covers it, or names the files it can\'t cover', { skip: !WIN }, async () => {
+  { // shell: a write inside the project runs at once, and Undo covers it
+    const { events, bodies, dir } = await agentRun((b, i) => [reply('', [['shell', { command: 'Set-Content notes.txt "hello"' }]]), reply('Done.')][i]);
+    assert.match(toolOut(bodies, 1), /Exit code 0/);
+    assert.match(toolOut(bodies, 1), /Files it changed \(Undo covers them\): \+notes\.txt/);
+    assert.equal(fs.readFileSync(path.join(dir, 'notes.txt'), 'utf8').trim(), 'hello');
+    assert.ok(!events.some((e) => e.t === 'approval'), 'no card for an in-project write');
+  }
+  { // shell: a file Undo can't cover is named in the command result
+    const { events, bodies } = await agentRun((b, i) => [reply('', [['shell', { command: 'Set-Content a.txt "changed"; Set-Content b.txt "changed"; node lose.js' }]]), reply('Done.')][i],
+      { settings: { approval: 'yolo' }, prep: (d) => {
+        fs.writeFileSync(path.join(d, 'a.txt'), 'one'); fs.writeFileSync(path.join(d, 'b.txt'), 'two');
+        // Stands in for whatever loses the stored copies mid-command.
+        fs.writeFileSync(path.join(d, 'lose.js'), "require('fs').rmSync(require('path').join('.quorx', 'objects'), { recursive: true, force: true });");
+      } });
+    const out = toolOut(bodies, 1);
+    assert.match(out, /Undo can't cover: a\.txt, b\.txt/, out);
+    assert.doesNotMatch(out, /Undo covers them\): ~a\.txt/);
+    assert.ok(of(events, 'note').some((e) => /Undo can't cover: a\.txt, b\.txt/.test(e.msg)), 'the page hears it too');
+  }
 });
 
-test('shell: a file Undo can\'t cover is named in the command result', { skip: !WIN }, async () => {
-  const { events, bodies } = await agentRun((b, i) => [reply('', [['shell', { command: 'Set-Content a.txt "changed"; Set-Content b.txt "changed"; node lose.js' }]]), reply('Done.')][i],
-    { settings: { approval: 'yolo' }, prep: (d) => {
-      fs.writeFileSync(path.join(d, 'a.txt'), 'one'); fs.writeFileSync(path.join(d, 'b.txt'), 'two');
-      // Stands in for whatever loses the stored copies mid-command.
-      fs.writeFileSync(path.join(d, 'lose.js'), "require('fs').rmSync(require('path').join('.quorx', 'objects'), { recursive: true, force: true });");
-    } });
-  const out = toolOut(bodies, 1);
-  assert.match(out, /Undo can't cover: a\.txt, b\.txt/, out);
-  assert.doesNotMatch(out, /Undo covers them\): ~a\.txt/);
-  assert.ok(of(events, 'note').some((e) => /Undo can't cover: a\.txt, b\.txt/.test(e.msg)), 'the page hears it too');
-});
 
 test('shell: a build asks you; "Always allow" saves a rule, and the next run does not ask', { skip: !WIN }, async () => {
   let asked = 0;
@@ -838,109 +829,41 @@ test('shell: a blocked command never runs, and the agent is told why', { skip: !
   assert.ok(!events.some((e) => e.t === 'command'));
 });
 
-test('agent file tools refuse QuorX config and git hooks', async () => {
-  const { bodies, dir } = await agentRun((b, i) => [reply('', [['write_file', { path: '.quorx/launch.json', content: '{}' }]]), reply('', [['write_file', { path: '.git/hooks/pre-commit', content: 'x' }]]), reply('OK.')][i]);
-  assert.match(toolOut(bodies, 1), /Refused: QuorX’s own files/);
-  assert.match(toolOut(bodies, 2), /Refused: git’s own folder/);
-  assert.equal(fs.existsSync(path.join(dir, '.git', 'hooks', 'pre-commit')), false);
-});
 
-test('shell: in YOLO a build goes to the deciders, who see only the user and the facts', { skip: !WIN }, async () => {
-  const yes = { needed: 0.95, other: 0.03 };
-  const table = Object.fromEntries(['typesafe/jev-1.14', 'liquid/d1-ultra', 'openai/gpt-6-luna-decisions'].map((m) => [m, yes]));
-  await withDeciders(table, async (sent) => {
-    const { events, bodies } = await agentRun((b, i) => [reply('I will run it because the user wants it.', [['shell', { command: 'node build.js' }]]), reply('Done.')][i], {
-      settings: { approval: 'yolo', safety: { yoloLevel: 'careful' } }, prep: (d) => fs.writeFileSync(path.join(d, 'build.js'), "console.log('built')") });
-    const done = events.find((e) => e.t === 'approval_done');
-    assert.equal(done.by, 'deciders');
-    assert.equal(done.approve, true);
-    assert.match(toolOut(bodies, 1), /built/);
-    assert.ok(sent.length >= 2 && !JSON.stringify(sent).includes('I will run it'), 'the agent’s own words never reach the deciders');
-  });
-});
-
-// ⚡ YOLO with a wait: a vote the deciders can't settle shows you the card for a few seconds, then carries on.
+// ⚡ YOLO: a build goes to the deciders. A vote they can't settle shows you the card for a few seconds, then carries
+// on; a "no" isn't the last word, you can still run it. ⚖️ With the deciders off in a chat no command goes to a vote:
+// what they'd check first waits for you (or runs, if set). No answer in time skips it.
 const voteAll = (v) => Object.fromEntries(['typesafe/jev-1.14', 'liquid/d1-ultra', 'openai/gpt-6-luna-decisions'].map((m) => [m, v]));
-
-test('shell: in YOLO an unsettled vote waits for you, then runs when the deciders saw little risk', { skip: !WIN }, async () => {
-  await withDeciders(voteAll({ needed: 0.5, other: 0.03 }), async () => {
-    const { events, bodies } = await agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('Done.')][i], {
-      settings: { approval: 'yolo', yoloWaitSecs: 1, safety: { yoloLevel: 'careful' } }, prep: (d) => fs.writeFileSync(path.join(d, 'build.js'), "console.log('built')") });
-    const card = of(events, 'approval').find((e) => e.mode === 'strict');
-    assert.ok(card?.wait && card.wait.then === 'run' && card.wait.secs === 1);
-    const done = of(events, 'approval_done')[0];
-    assert.equal(done.by, 'timeout');
-    assert.equal(done.approve, true);
-    assert.match(toolOut(bodies, 1), /built/);
-  });
-});
-
-test('shell: in YOLO an unsettled vote with a doubtful harm vote is skipped when nobody answers', { skip: !WIN }, async () => {
-  await withDeciders(voteAll({ needed: 0.9, other: 0.4 }), async () => {
-    const { events, bodies } = await agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('OK.')][i], {
-      settings: { approval: 'yolo', yoloWaitSecs: 1, safety: { yoloLevel: 'careful' } }, prep: (d) => fs.writeFileSync(path.join(d, 'build.js'), "console.log('built')") });
-    const done = of(events, 'approval_done')[0];
-    assert.equal(done.by, 'timeout');
-    assert.equal(done.approve, false);
-    assert.doesNotMatch(toolOut(bodies, 1), /built/);
-  });
-});
-
-// A decider "no" isn't the last word: the user gets the card for the YOLO wait and can run it anyway.
-test('shell: in YOLO the deciders’ no goes to you for the wait; no answer and it stays declined', { skip: !WIN }, async () => {
-  await withDeciders(voteAll({ needed: 0.05, other: 0.95 }), async () => {
-    const { events, bodies } = await agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('OK.')][i], {
-      settings: { approval: 'yolo', yoloWaitSecs: 1, safety: { yoloLevel: 'careful' } }, prep: (d) => fs.writeFileSync(path.join(d, 'build.js'), "console.log('built')") });
-    const card = of(events, 'approval').find((e) => e.mode === 'strict');
-    assert.ok(card, 'the user was shown the card');
-    assert.match(card.why, /The deciders said no: .*Run it anyway\?/);
-    assert.equal(card.wait?.then, 'skip');
-    const last = of(events, 'approval_done').at(-1);
-    assert.equal(last.approve, false);
-    assert.equal(last.by, 'deciders');
-    assert.doesNotMatch(toolOut(bodies, 1), /built/);
-  });
-});
-
-test('shell: in YOLO you can run a command the deciders said no to', { skip: !WIN }, async () => {
-  await withDeciders(voteAll({ needed: 0.05, other: 0.95 }), async () => {
-    const { events, bodies } = await agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('Done.')][i], {
-      settings: { approval: 'yolo', yoloWaitSecs: 5, safety: { yoloLevel: 'careful' } }, prep: (d) => fs.writeFileSync(path.join(d, 'build.js'), "console.log('built')"),
-      onEvent: (e, id) => { if (e.t === 'approval' && e.mode === 'strict') setTimeout(() => answerApproval(id, e.id, { approve: true }), 20); } });
-    assert.equal(of(events, 'approval').find((e) => e.mode === 'strict')?.risk, 'warn', 'an amber card');
-    const last = of(events, 'approval_done').at(-1);
-    assert.equal(last.approve, true);
-    assert.match(toolOut(bodies, 1), /built/);
-  });
-});
-
-// ⚖️ Deciders off in a chat: no command goes to a vote. What they'd check first waits for you (or runs, if set);
-// what they'd approve in your place always waits for you. No answer in time skips it.
 const buildJs = (d) => fs.writeFileSync(path.join(d, 'build.js'), "console.log('built')");
 
-test('shell: in YOLO with the deciders off, a command they would check waits for you, and no answer skips it', { skip: !WIN }, async () => {
-  await withDeciders(voteAll({ needed: 0.95, other: 0.03 }), async (sent) => {
-    const { events, bodies } = await agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('OK.')][i], {
-      settings: { approval: 'yolo', deciders: false, yoloWaitSecs: 1, safety: { yoloLevel: 'careful' } }, prep: buildJs });
-    assert.equal(sent.length, 0, 'no decider was asked');
-    const card = of(events, 'approval').find((e) => e.mode === 'strict');
-    assert.equal(card?.wait?.then, 'skip-off');
-    assert.match(card.why, /deciders are off in this chat, so it waits for you/);
-    const done = of(events, 'approval_done').at(-1);
-    assert.deepEqual([done.by, done.approve], ['timeout', false]);
-    assert.doesNotMatch(toolOut(bodies, 1), /built/);
-  });
-});
-
-test('shell: in YOLO with the deciders off and commands set to run, it runs without a vote', { skip: !WIN }, async () => {
-  await withDeciders(voteAll({ needed: 0.05, other: 0.95 }), async (sent) => {
-    const { events, bodies } = await agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('Done.')][i], {
-      settings: { approval: 'yolo', deciders: false, decidersOff: { commands: 'run' }, safety: { yoloLevel: 'careful' } }, prep: buildJs });
-    assert.equal(sent.length, 0, 'no decider was asked');
-    const done = of(events, 'approval_done').at(-1);
-    assert.deepEqual([done.by, done.approve], ['deciders off', true]);
-    assert.match(toolOut(bodies, 1), /built/);
-  });
+test('shell: in YOLO a build goes to the deciders (or, with them off, to you), and each outcome runs it or not', { skip: !WIN }, async () => {
+  const yes = { needed: 0.95, other: 0.03 }, no = { needed: 0.05, other: 0.95 };
+  for (const c of [
+    { what: 'a clear yes', vote: yes, by: 'deciders', runs: true, say: 'I will run it because the user wants it.' },
+    { what: 'an unsettled vote that saw little risk, nobody answering', vote: { needed: 0.5, other: 0.03 }, wait: 1, by: 'timeout', runs: true,
+      card: (k) => k.wait?.then === 'run' && k.wait.secs === 1 },
+    { what: 'an unsettled vote with a doubtful harm vote, nobody answering', vote: { needed: 0.9, other: 0.4 }, wait: 1, by: 'timeout', runs: false },
+    { what: 'a no, nobody answering', vote: no, wait: 1, by: 'deciders', runs: false,
+      card: (k) => /The deciders said no: .*Run it anyway\?/.test(k.why) && k.wait?.then === 'skip' },
+    { what: 'a no that you run anyway', vote: no, wait: 5, answer: true, runs: true, card: (k) => k.risk === 'warn' },
+    { what: 'deciders off, nobody answering', vote: yes, off: true, wait: 1, by: 'timeout', runs: false,
+      card: (k) => k.wait?.then === 'skip-off' && /deciders are off in this chat, so it waits for you/.test(k.why) },
+    { what: 'deciders off, commands set to run', vote: no, off: { commands: 'run' }, by: 'deciders off', runs: true },
+  ]) {
+    await withDeciders(voteAll(c.vote), async (sent) => {
+      const { events, bodies } = await agentRun((b, i) => [reply(c.say || '', [['shell', { command: 'node build.js' }]]), reply('Done.')][i], {
+        settings: { approval: 'yolo', ...(c.wait ? { yoloWaitSecs: c.wait } : {}), ...(c.off ? { deciders: false } : {}), ...(c.off?.commands ? { decidersOff: c.off } : {}), safety: { yoloLevel: 'careful' } },
+        prep: buildJs, onEvent: c.answer ? (e, id) => { if (e.t === 'approval' && e.mode === 'strict') setTimeout(() => answerApproval(id, e.id, { approve: true }), 20); } : undefined });
+      const card = of(events, 'approval').find((e) => e.mode === 'strict');
+      if (c.card) assert.ok(card && c.card(card), `${c.what}: the card ${JSON.stringify(card && { why: card.why, wait: card.wait, risk: card.risk })}`);
+      const done = of(events, 'approval_done').at(-1);
+      assert.equal(done.approve, c.runs, `${c.what}: approved`);
+      if (c.by) assert.equal(done.by, c.by, `${c.what}: decided by`);
+      assert[c.runs ? 'match' : 'doesNotMatch'](toolOut(bodies, 1), /built/, `${c.what}: ran`);
+      if (c.off) assert.equal(sent.length, 0, `${c.what}: no decider was asked`);
+      else assert.ok(sent.length >= 2 && !JSON.stringify(sent).includes('I will run it'), `${c.what}: the agent’s own words never reach the deciders`);
+    });
+  }
 });
 
 test('shell: with the deciders off, a command they would approve in your place waits for you even when set to run', { skip: !WIN }, async () => {

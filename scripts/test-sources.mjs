@@ -32,9 +32,7 @@ import { ollamaModels, ollamaEntry, ollamaBody, ollamaMessages, ollamaStream, ol
 // A Go plan model as OpenCode on this PC lists it.
 const goInfo = (over = {}) => ({ id: 'opencode-local/opencode-go/glm-5.3', realId: 'opencode-go/glm-5.3', providerID: 'opencode-go', modelID: 'glm-5.3', source: 'opencode-local', kind: 'chat', format: 'opencode-local', plan: 'plan', price: [0, 0], listPrice: [1.4, 4.4], cost: { input: 1.4, output: 4.4, cache_read: 0.26 },
   tools: true, temp: true, reasoning: true, maxOut: 4000, in: ['text'], canonical: 'zhipuai/glm-5.3', ...over });
-
 const SRC_CAT = [{ id: 'test/model', maxOut: 4000 }, { id: 'z-ai/glm-5.3', maxOut: 4000, tools: true }, goInfo()];
-
 const srcReply = (text, calls, over = {}) => ({ ...reply(text, calls), provider: 'OpenCode on this PC', source: 'opencode-local', usage: { cost: 0, plan_cost: 0.002 }, ...over });
 
 // The conversation every format test converts: a system prompt, a picture, two tool calls (one with an id only some
@@ -640,7 +638,6 @@ test('OpenCode on this PC lists every text model of every provider connected the
 
 // ---------- Claude Code on this PC (claudelocal.js), against scripts/fake-claude.mjs ----------
 const FAKE_CLAUDE = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/(\w:)/, '$1')), 'fake-claude.mjs');
-
 async function viaFakeClaude(mode, body, opts = {}) {
   const log = path.join(tempDir('fake-claude-'), 'call.json');
   const keep = { mode: process.env.FAKE_CLAUDE_MODE, log: process.env.FAKE_CLAUDE_LOG, or: process.env.OPENROUTER_API_KEY };
@@ -657,9 +654,7 @@ async function viaFakeClaude(mode, body, opts = {}) {
     for (const [k, v] of [['FAKE_CLAUDE_MODE', keep.mode], ['FAKE_CLAUDE_LOG', keep.log], ['OPENROUTER_API_KEY', keep.or]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
   }
 }
-
 const PIC = 'data:image/png;base64,iVBORw0KGgo=';
-
 const CLAUDE_BODY = { model: 'claude-local/opus', reasoning: { effort: 'high' }, tools: [{ type: 'function', function: { name: 'write_file', parameters: { type: 'object', properties: {} } } }],
   messages: [{ role: 'system', content: 'Rules.' }, { role: 'user', content: [{ type: 'text', text: 'Build it' }, { type: 'image_url', image_url: { url: PIC } }] }] };
 
@@ -723,9 +718,7 @@ test('Claude Code’s models follow its own names, priced by how the user signed
 
 // ---------- Grok Build on this PC (groklocal.js), against scripts/fake-grok.mjs ----------
 const FAKE_GROK = path.join(path.dirname(FAKE_CLAUDE), 'fake-grok.mjs');
-
 const grokOpts = { find: () => 'grok.exe', start: (cmd, args, o) => spawn(process.execPath, [FAKE_GROK, ...args], o) };
-
 async function viaFakeGrok(mode, body, opts = {}) {
   const log = path.join(tempDir('fake-grok-'), 'call.json');
   const keep = { mode: process.env.FAKE_GROK_MODE, log: process.env.FAKE_GROK_LOG, or: process.env.OPENROUTER_API_KEY };
@@ -741,7 +734,6 @@ async function viaFakeGrok(mode, body, opts = {}) {
     for (const [k, v] of [['FAKE_GROK_MODE', keep.mode], ['FAKE_GROK_LOG', keep.log], ['OPENROUTER_API_KEY', keep.or]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
   }
 }
-
 const GROK_BODY = { ...CLAUDE_BODY, model: 'grok-local/grok-4.7' };
 
 test('Grok Build on this PC runs one-shot with every built-in tool removed, QuorX’s instructions in a prompt file, and its keyed calls come back', async () => {
@@ -811,14 +803,12 @@ test('Grok Build’s models come from its handshake, with effort levels and no p
 // ---------- OpenCode Go over its API, with the user's key (server/opencodego.js); OpenCode's own providers left out of the app ----------
 // Go's own list (ids only) and models.dev's entry for Go, as the two answer.
 const GO_LIVE = { object: 'list', data: [{ id: 'glm-5.3' }, { id: 'brand-new' }, { id: 'paint-1' }, { id: 'beam-free' }] };
-
 const GO_DEV = { 'opencode-go': { models: {
   'glm-5.3': { id: 'glm-5.3', name: 'GLM-5.3', tool_call: true, temperature: true, reasoning: true, reasoning_options: [{ type: 'effort', values: ['low', 'high', 'max'] }], interleaved: { field: 'reasoning_content' }, modalities: { input: ['text'], output: ['text'] }, limit: { context: 1000000, output: 131072 }, cost: { input: 1.4, output: 4.4, cache_read: 0.26 }, canonical_model_id: 'zhipuai/glm-5.3', release_date: '2026-08-14' },
   'paint-1': { id: 'paint-1', name: 'Paint', modalities: { input: ['text'], output: ['image'] }, cost: { input: 1, output: 1 } },
   'beam-free': { id: 'beam-free', name: 'Beam Free', tool_call: true, modalities: { input: ['text', 'image'], output: ['text'] }, cost: { input: 0, output: 0 } },
   'gone-model': { id: 'gone-model', name: 'Gone', modalities: { input: ['text'], output: ['text'] }, cost: { input: 1, output: 2 } },
 } } };
-
 const goFetch = async (url) => (/models\.dev/.test(url) ? GO_DEV : GO_LIVE);
 
 test('OpenCode Go lists the models Go serves now, with models.dev’s names, limits and list prices, as plan models', async () => {
@@ -899,15 +889,12 @@ const CC_LIVE = { object: 'list', data: [
   { id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro', context_length: 1000000, supported_endpoints: ['/chat/completions', '/responses'] },
   { id: 'typesafe/jev', name: 'Jev', supported_endpoints: ['/systemone'] },
 ] };
-
 const CC_DEV = { commandcode: { models: {
   'claude-opus-5-5': { id: 'claude-opus-5-5', name: 'Claude Opus 5.5', tool_call: true, temperature: false, reasoning: true, reasoning_options: [{ type: 'effort', values: ['low', 'medium', 'high', 'xhigh', 'max'] }], modalities: { input: ['text', 'image', 'pdf'], output: ['text'] }, limit: { context: 1000000, output: 128000 }, cost: { input: 4, output: 20, cache_read: 0.4, cache_write: 5 } },
   'claude-haiku-4-5-20251001': { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5', tool_call: true, temperature: true, reasoning: true, reasoning_options: [{ type: 'budget_tokens' }], modalities: { input: ['text', 'image'], output: ['text'] }, limit: { context: 200000, output: 64000 }, cost: { input: 1, output: 5 } },
   'deepseek/deepseek-v4-pro': { id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro', tool_call: true, reasoning: true, interleaved: { field: 'reasoning_content' }, modalities: { input: ['text'], output: ['text'] }, limit: { context: 1000000, output: 64000 }, cost: { input: 0.5, output: 2 } },
 } } };
-
 const ccFetch = async (url) => (/models\.dev/.test(url) ? CC_DEV : CC_LIVE);
-
 const ccSSE = (frames) => ({ ok: true, status: 200, headers: new Headers(), body: (async function* () { for (const f of frames) yield new TextEncoder().encode(`event: ${f.type || 'x'}\ndata: ${JSON.stringify(f)}\n\n`); })() });
 
 test('Command Code lists the models it serves now, as plan models, with the endpoint each answers on', async () => {
@@ -1026,13 +1013,11 @@ test('Command Code streams the other models on the chat endpoint; its refusals s
 
 // ---------- Ollama on this PC (server/ollamalocal.js) ----------
 const OL_TAGS = { models: [{ name: 'qwen3:8b', modified_at: '2026-10-01T00:00:00Z', details: { family: 'qwen3', parameter_size: '8.2B', quantization_level: 'Q4_K_M' } }, { name: 'gemma3:4b', details: { family: 'gemma3' } }, { name: 'gpt-oss:120b-cloud', remote_host: 'https://ollama.com:443', details: { family: 'gptoss' } }, { name: 'broken:1b' }] };
-
 const OL_SHOW = {
   'qwen3:8b': { capabilities: ['completion', 'tools', 'thinking'], model_info: { 'general.architecture': 'qwen3', 'qwen3.context_length': 40960 } },
   'gemma3:4b': { capabilities: ['completion', 'vision'], model_info: { 'gemma3.context_length': 131072 } },
   'gpt-oss:120b-cloud': { capabilities: ['completion', 'tools', 'thinking'], remote_host: 'https://ollama.com:443', model_info: { 'gptoss.context_length': 131072 } },
 };
-
 const olFetch = async (url, init) => { if (/api\/tags/.test(url)) return OL_TAGS; const m = JSON.parse(init.body).model; if (!OL_SHOW[m]) throw new Error('gone'); return OL_SHOW[m]; };
 
 test('Ollama on this PC lists the pulled models that call tools: free on this PC, cloud ones on the Ollama plan', async () => {
@@ -1249,7 +1234,6 @@ test('Spending adds up plan value apart from cost', () => {
 
 // ---------- 🔌 MCP servers the agent may use (server/mcpclient.js) ----------
 const MCP_ECHO = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-echo.mjs');
-
 test('MCP setup: a config, a line written for another tool, a package or an address becomes QuorX servers', () => {
   const cfg = mcpParse('Add this to your config:\n{ "mcpServers": { "github": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"], "env": { "GITHUB_TOKEN": "ghp_x" } }, "docs": { "url": "https://mcp.example.com/mcp", "headers": { "Authorization": "Bearer t" } } } }');
   assert.deepEqual(cfg.servers.map((s) => [s.name, s.type]), [['github', 'stdio'], ['docs', 'http']]);

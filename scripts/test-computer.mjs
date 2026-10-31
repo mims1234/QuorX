@@ -138,87 +138,98 @@ test('desktop open: an app the user doesn’t allow is not opened; an unknown na
   assert.match(toolOut(bodies, 3), /isn't open for this chat yet/, 'a declined app stays out of reach');
 });
 
-test('computer use: each app starts at its kind’s level; some are never used', () => {
-  assert.equal(appLevel('Calculator'), 'full');
-  assert.equal(appLevel('Brave'), 'view', 'browsers: the browser tool acts there');
-  assert.equal(appLevel('Google Chrome'), 'view');
-  assert.equal(appLevel('File Explorer'), 'view', 'it can delete files');
-  assert.equal(appLevel('Visual Studio Code'), 'click', 'commands go through shell');
-  assert.equal(appLevel('Windows Terminal'), 'click');
-  for (const n of ['Claude', 'QuorX', 'Electron', '1Password', 'Bitwarden']) assert.equal(appLevel(n), 'full', n);
-  for (const n of ['Registry Editor', 'Task Manager', 'Windows PowerShell (Admin)', 'Keychain Access', 'Disk Utility', 'GParted']) assert.equal(appLevel(n), 'never', n);
+test('computer use: each app starts at its kind’s level, an action above it asks once to raise it, and with computer use off or an app not allowed nothing is driven', async () => {
+  { // computer use: each app starts at its kind’s level; some are never used
+    assert.equal(appLevel('Calculator'), 'full');
+    assert.equal(appLevel('Brave'), 'view', 'browsers: the browser tool acts there');
+    assert.equal(appLevel('Google Chrome'), 'view');
+    assert.equal(appLevel('File Explorer'), 'view', 'it can delete files');
+    assert.equal(appLevel('Visual Studio Code'), 'click', 'commands go through shell');
+    assert.equal(appLevel('Windows Terminal'), 'click');
+    for (const n of ['Claude', 'QuorX', 'Electron', '1Password', 'Bitwarden']) assert.equal(appLevel(n), 'full', n);
+    for (const n of ['Registry Editor', 'Task Manager', 'Windows PowerShell (Admin)', 'Keychain Access', 'Disk Utility', 'GParted']) assert.equal(appLevel(n), 'never', n);
+  }
+  { // computer use: an action above an app's level asks once to raise it; yes raises it for the chat
+    const apps = [{ name: 'Calculator', appId: 'Microsoft.WindowsCalculator_8wekyb3d8bbwe!App', level: 'view' }];
+    const cards = [];
+    const { events, bodies } = await agentRun((b, i) => [
+      reply('', [['desktop', { action: 'scroll', app: 'Calculator', direction: 'down' }]]),
+      reply('', [['desktop', { action: 'keys', app: 'Calculator', keys: '1' }]]),
+      reply('OK.'),
+    ][i], { chatId: 'apps-raise', settings: { appsAccess: true }, more: { apps },
+      onEvent: (e, id) => { if (e.t === 'approval' && e.tool === 'desktop') { cards.push(e.what); setTimeout(() => answerApproval(id, e.id, { approve: /click$/.test(e.what) }), 10); } } });
+    assert.deepEqual(cards, ['Let the agent click in Calculator · view → click', 'Let the agent type and use keys in Calculator · click → full']);
+    assert.doesNotMatch(toolOut(bodies, 1), /isn't allowed/, 'raised to click, so the scroll went ahead');
+    assert.match(toolOut(bodies, 2), /look, click, scroll and drag, not type in Calculator, so keys isn't allowed/, 'declined: the level stays');
+    assert.deepEqual(events.filter((e) => e.t === 'app_allowed').map((e) => e.app.level), ['click']);
+  }
+  { // computer use: off in a chat, the user’s apps are out of reach; on, each app is held to its level
+    let cards = 0;
+    const off = await agentRun((b, i) => [reply('', [['desktop', { action: 'open', app: 'Calculator' }]]), reply('', [['desktop', { action: 'read', app: 'Calculator' }]]), reply('OK.')][i], { chatId: 'apps-off',
+      onEvent: (e, id) => { if (e.t === 'approval' && e.tool === 'computer_use') { cards++; setTimeout(() => answerApproval(id, e.id, { approve: false }), 10); } } });
+    assert.match(toolOut(off.bodies, 1), /computer use is off in this chat and the user kept it off/);
+    assert.match(toolOut(off.bodies, 2), /computer use is off in this chat/);
+    if (WIN) assert.equal(cards, 1, 'one card per reply');
+    assert.ok(!off.events.some((e) => e.t === 'control' && e.kind === 'desktop'), 'kept off: it never drives the desktop (no glow, no compact QuorX)');
+    const apps = [{ name: 'Calculator', appId: 'Microsoft.WindowsCalculator_8wekyb3d8bbwe!App', level: 'view' }, { name: 'Visual Studio Code', appId: 'Microsoft.VisualStudioCode', level: 'click' }, { name: 'Registry Editor', appId: 'regedit', level: 'full' }];
+    const on = await agentRun((b, i) => [
+      reply('', [['desktop', { action: 'type', app: 'Calculator', ref: 1, text: '12' }]]),
+      reply('', [['desktop', { action: 'keys', app: 'Visual Studio Code', keys: '^s' }]]),
+      reply('', [['desktop', { action: 'read', app: 'Registry Editor' }]]),
+      reply('OK.'),
+    ][i], { chatId: 'apps-on', settings: { appsAccess: true }, more: { apps }, onEvent: keepLevel });
+    assert.match(toolOut(on.bodies, 1), /look at only .* in Calculator, so type isn't allowed/);
+    assert.match(toolOut(on.bodies, 2), /look, click, scroll and drag, not type in Visual Studio Code, so keys isn't allowed. For a command, use shell/);
+    assert.match(toolOut(on.bodies, 3), /isn't open for this chat yet/, 'a never-used app is dropped even if the page sends it');
+    assert.match(JSON.stringify(on.bodies[0].messages.at(-1).content), /Computer use\)[\s\S]*Allowed so far: Calculator \(view\), Visual Studio Code \(click\)/);
+  }
+  { // computer use: an app the user doesn’t allow is never driven: no glow, no banner, QuorX stays as it was
+    const asked = [], seen = [];
+    const { events, bodies } = await agentRun((b, i) => [reply('', [['desktop', { action: 'open', app: 'Calculator' }]]), reply('OK.')][i], { chatId: 'apps-refused', settings: { appsAccess: true },
+      onEvent: (e, id) => { seen.push(e); if (e.t === 'approval' && e.tool === 'desktop') { asked.push(seen.some((x) => x.t === 'control' && x.kind === 'desktop')); setTimeout(() => answerApproval(id, e.id, { approve: false }), 10); } } });
+    assert.ok(!events.some((e) => e.t === 'control' && e.kind === 'desktop'), 'not before the question, nor after the no');
+    if (WIN) { assert.deepEqual(asked, [false], 'asked once, while nothing was driven'); assert.match(toolOut(bodies, 1), /The user didn't allow Calculator/); }
+  }
 });
 
 // Answers "Let the agent … in <app>" (raising an app's level) with no, so a test sees the level hold.
 const keepLevel = (e, id) => { if (e.t === 'approval' && e.tool === 'desktop' && /^Let the agent/.test(e.what || '')) setTimeout(() => answerApproval(id, e.id, { approve: false }), 10); };
 
-test('computer use: an action above an app\'s level asks once to raise it; yes raises it for the chat', async () => {
-  const apps = [{ name: 'Calculator', appId: 'Microsoft.WindowsCalculator_8wekyb3d8bbwe!App', level: 'view' }];
-  const cards = [];
-  const { events, bodies } = await agentRun((b, i) => [
-    reply('', [['desktop', { action: 'scroll', app: 'Calculator', direction: 'down' }]]),
-    reply('', [['desktop', { action: 'keys', app: 'Calculator', keys: '1' }]]),
-    reply('OK.'),
-  ][i], { chatId: 'apps-raise', settings: { appsAccess: true }, more: { apps },
-    onEvent: (e, id) => { if (e.t === 'approval' && e.tool === 'desktop') { cards.push(e.what); setTimeout(() => answerApproval(id, e.id, { approve: /click$/.test(e.what) }), 10); } } });
-  assert.deepEqual(cards, ['Let the agent click in Calculator · view → click', 'Let the agent type and use keys in Calculator · click → full']);
-  assert.doesNotMatch(toolOut(bodies, 1), /isn't allowed/, 'raised to click, so the scroll went ahead');
-  assert.match(toolOut(bodies, 2), /look, click, scroll and drag, not type in Calculator, so keys isn't allowed/, 'declined: the level stays');
-  assert.deepEqual(events.filter((e) => e.t === 'app_allowed').map((e) => e.app.level), ['click']);
+
+
+
+test('computer use: steps keep to each app’s level, stop at the first refusal and take the app from the step before; saved apps count', async () => {
+  { // computer use: the new actions keep to each app’s level, and steps stop at the first refusal
+    const apps = [{ name: 'Calculator', appId: 'Microsoft.WindowsCalculator_8wekyb3d8bbwe!App', level: 'view' }, { name: 'Paint', appId: 'Microsoft.Paint_8wekyb3d8bbwe!App', level: 'click' }];
+    const { bodies } = await agentRun((b, i) => [
+      reply('', [['desktop', { action: 'path', app: 'Calculator', points: [[1, 1], [5, 5]] }]]),
+      reply('', [['desktop', { action: 'clipboard', app: 'Paint' }]]),
+      reply('', [['desktop', { app: 'Paint', steps: [{ action: 'hold_key', key: 'shift' }, { action: 'drag', x: 1, y: 1, to_x: 5, to_y: 5 }] }]]),
+      reply('OK.'),
+    ][i], { chatId: 'apps-levels', settings: { appsAccess: true }, more: { apps }, onEvent: keepLevel });
+    assert.match(toolOut(bodies, 1), /look at only .* in Calculator, so path isn't allowed/, 'a freehand stroke needs the click level, like drag');
+    assert.match(toolOut(bodies, 2), /in Paint, so clipboard isn't allowed/);
+    assert.match(toolOut(bodies, 3), /^Ran 1 of 2 steps:\n1\. hold_key: Error: .*so hold_key isn't allowed/, 'the second step never ran');
+  }
+  { // computer use: steps take the app from the step before when only the first names it
+    const apps = [{ name: 'Calculator', appId: 'Microsoft.WindowsCalculator_8wekyb3d8bbwe!App', level: 'view' }];
+    const { bodies } = await agentRun((b, i) => [
+      reply('', [['desktop', { steps: [{ action: 'scroll', app: 'Calculator', direction: 'down' }] }]]),
+      reply('', [['desktop', { steps: [{ action: 'keys', app: 'Calculator', keys: '1' }, { action: 'type', ref: 1, text: '2' }] }]]),
+      reply('OK.'),
+    ][i], { chatId: 'apps-steps-inherit', settings: { appsAccess: true }, more: { apps }, onEvent: keepLevel });
+    assert.match(toolOut(bodies, 1), /in Calculator, so scroll isn't allowed/, 'a step\'s own app counts');
+    assert.match(toolOut(bodies, 2), /^Ran 1 of 2 steps:\n1\. keys 1: Error: .*in Calculator, so keys isn't allowed/);
+  }
+  { // computer use: the chat's saved apps count even when the page sends none
+    const { saveChat } = await import('../server/store.js');
+    const chatId = 'cmsavedapps1';
+    saveChat(chatId, { id: chatId, title: 't', projectId: 'scratch', agent: { messages: [], artifacts: {}, apps: [{ name: 'Calculator', appId: 'Microsoft.WindowsCalculator_8wekyb3d8bbwe!App', level: 'view' }] } });
+    const { bodies } = await agentRun((b, i) => [reply('', [['desktop', { action: 'type', app: 'Calculator', ref: 1, text: '1' }]]), reply('OK.')][i], { chatId, settings: { appsAccess: true }, more: { apps: [] }, onEvent: keepLevel });
+    assert.match(toolOut(bodies, 1), /look at only .* in Calculator/, 'known from the chat file, held to its level');
+  }
 });
 
-test('computer use: off in a chat, the user’s apps are out of reach; on, each app is held to its level', async () => {
-  let cards = 0;
-  const off = await agentRun((b, i) => [reply('', [['desktop', { action: 'open', app: 'Calculator' }]]), reply('', [['desktop', { action: 'read', app: 'Calculator' }]]), reply('OK.')][i], { chatId: 'apps-off',
-    onEvent: (e, id) => { if (e.t === 'approval' && e.tool === 'computer_use') { cards++; setTimeout(() => answerApproval(id, e.id, { approve: false }), 10); } } });
-  assert.match(toolOut(off.bodies, 1), /computer use is off in this chat and the user kept it off/);
-  assert.match(toolOut(off.bodies, 2), /computer use is off in this chat/);
-  if (WIN) assert.equal(cards, 1, 'one card per reply');
-  assert.ok(!off.events.some((e) => e.t === 'control' && e.kind === 'desktop'), 'kept off: it never drives the desktop (no glow, no compact QuorX)');
-  const apps = [{ name: 'Calculator', appId: 'Microsoft.WindowsCalculator_8wekyb3d8bbwe!App', level: 'view' }, { name: 'Visual Studio Code', appId: 'Microsoft.VisualStudioCode', level: 'click' }, { name: 'Registry Editor', appId: 'regedit', level: 'full' }];
-  const on = await agentRun((b, i) => [
-    reply('', [['desktop', { action: 'type', app: 'Calculator', ref: 1, text: '12' }]]),
-    reply('', [['desktop', { action: 'keys', app: 'Visual Studio Code', keys: '^s' }]]),
-    reply('', [['desktop', { action: 'read', app: 'Registry Editor' }]]),
-    reply('OK.'),
-  ][i], { chatId: 'apps-on', settings: { appsAccess: true }, more: { apps }, onEvent: keepLevel });
-  assert.match(toolOut(on.bodies, 1), /look at only .* in Calculator, so type isn't allowed/);
-  assert.match(toolOut(on.bodies, 2), /look, click, scroll and drag, not type in Visual Studio Code, so keys isn't allowed. For a command, use shell/);
-  assert.match(toolOut(on.bodies, 3), /isn't open for this chat yet/, 'a never-used app is dropped even if the page sends it');
-  assert.match(JSON.stringify(on.bodies[0].messages.at(-1).content), /Computer use\)[\s\S]*Allowed so far: Calculator \(view\), Visual Studio Code \(click\)/);
-});
-
-test('computer use: an app the user doesn’t allow is never driven: no glow, no banner, QuorX stays as it was', async () => {
-  const asked = [], seen = [];
-  const { events, bodies } = await agentRun((b, i) => [reply('', [['desktop', { action: 'open', app: 'Calculator' }]]), reply('OK.')][i], { chatId: 'apps-refused', settings: { appsAccess: true },
-    onEvent: (e, id) => { seen.push(e); if (e.t === 'approval' && e.tool === 'desktop') { asked.push(seen.some((x) => x.t === 'control' && x.kind === 'desktop')); setTimeout(() => answerApproval(id, e.id, { approve: false }), 10); } } });
-  assert.ok(!events.some((e) => e.t === 'control' && e.kind === 'desktop'), 'not before the question, nor after the no');
-  if (WIN) { assert.deepEqual(asked, [false], 'asked once, while nothing was driven'); assert.match(toolOut(bodies, 1), /The user didn't allow Calculator/); }
-});
-
-test('computer use: the new actions keep to each app’s level, and steps stop at the first refusal', async () => {
-  const apps = [{ name: 'Calculator', appId: 'Microsoft.WindowsCalculator_8wekyb3d8bbwe!App', level: 'view' }, { name: 'Paint', appId: 'Microsoft.Paint_8wekyb3d8bbwe!App', level: 'click' }];
-  const { bodies } = await agentRun((b, i) => [
-    reply('', [['desktop', { action: 'path', app: 'Calculator', points: [[1, 1], [5, 5]] }]]),
-    reply('', [['desktop', { action: 'clipboard', app: 'Paint' }]]),
-    reply('', [['desktop', { app: 'Paint', steps: [{ action: 'hold_key', key: 'shift' }, { action: 'drag', x: 1, y: 1, to_x: 5, to_y: 5 }] }]]),
-    reply('OK.'),
-  ][i], { chatId: 'apps-levels', settings: { appsAccess: true }, more: { apps }, onEvent: keepLevel });
-  assert.match(toolOut(bodies, 1), /look at only .* in Calculator, so path isn't allowed/, 'a freehand stroke needs the click level, like drag');
-  assert.match(toolOut(bodies, 2), /in Paint, so clipboard isn't allowed/);
-  assert.match(toolOut(bodies, 3), /^Ran 1 of 2 steps:\n1\. hold_key: Error: .*so hold_key isn't allowed/, 'the second step never ran');
-});
-
-test('computer use: steps take the app from the step before when only the first names it', async () => {
-  const apps = [{ name: 'Calculator', appId: 'Microsoft.WindowsCalculator_8wekyb3d8bbwe!App', level: 'view' }];
-  const { bodies } = await agentRun((b, i) => [
-    reply('', [['desktop', { steps: [{ action: 'scroll', app: 'Calculator', direction: 'down' }] }]]),
-    reply('', [['desktop', { steps: [{ action: 'keys', app: 'Calculator', keys: '1' }, { action: 'type', ref: 1, text: '2' }] }]]),
-    reply('OK.'),
-  ][i], { chatId: 'apps-steps-inherit', settings: { appsAccess: true }, more: { apps }, onEvent: keepLevel });
-  assert.match(toolOut(bodies, 1), /in Calculator, so scroll isn't allowed/, 'a step\'s own app counts');
-  assert.match(toolOut(bodies, 2), /^Ran 1 of 2 steps:\n1\. keys 1: Error: .*in Calculator, so keys isn't allowed/);
-});
 
 // ---------- Phase 5: white captures, text from pictures, app lifetime, remembered apps ----------
 test('desktop: a flat white capture is taken again from the screen; a window\'s text is read from its picture', { skip: UI_SKIP }, async () => {
@@ -313,13 +324,6 @@ test('desktop open: app names match loosely (spaces, case, version numbers)', { 
   for (const n of ['Calculator', 'calculator', 'Calcu lator', 'CALCULATOR 11.2']) assert.equal((await findApps(n))[0]?.name, 'Calculator', n);
 });
 
-test('computer use: the chat\'s saved apps count even when the page sends none', async () => {
-  const { saveChat } = await import('../server/store.js');
-  const chatId = 'cmsavedapps1';
-  saveChat(chatId, { id: chatId, title: 't', projectId: 'scratch', agent: { messages: [], artifacts: {}, apps: [{ name: 'Calculator', appId: 'Microsoft.WindowsCalculator_8wekyb3d8bbwe!App', level: 'view' }] } });
-  const { bodies } = await agentRun((b, i) => [reply('', [['desktop', { action: 'type', app: 'Calculator', ref: 1, text: '1' }]]), reply('OK.')][i], { chatId, settings: { appsAccess: true }, more: { apps: [] }, onEvent: keepLevel });
-  assert.match(toolOut(bodies, 1), /look at only .* in Calculator/, 'known from the chat file, held to its level');
-});
 
 test('computer use off: one card turns it on for the chat, and the desktop call goes ahead', { skip: !WIN }, async () => {
   const { events, bodies } = await agentRun((b, i) => [reply('', [['desktop', { action: 'type', app: 'Calculator', ref: 1, text: '1' }]]), reply('OK.')][i], { chatId: 'apps-ask-on',
@@ -363,22 +367,36 @@ test('decide: a question about the screen with no picture is refused, or takes t
   assert.match(toolOut(bodies, 1), /^Error: these questions are about what is on screen, but no picture was given/);
 });
 
-test('the screen glow is on while a reply uses the desktop; your Stop ends exactly those replies', () => {
-  const stopped = [];
-  onGlowStop((runs, how) => stopped.push([runs, how]));
-  glowOn('run-a', 'Paint a bat'); glowOn('run-b', 'Discord drop'); glowOn('run-a', 'Paint a bat');
-  assert.deepEqual(glowRuns(), ['run-a', 'run-b'], 'once per reply');
-  assert.equal(glowLabel(), 'QuorX is using computer use', 'no app named yet');
-  glowOn('run-a', 'Paint a bat', 'Paint'); glowOn('run-b', 'Discord drop', 'Discord');
-  assert.equal(glowLabel(), 'QuorX is using Paint, Discord', 'the banner names the apps in use');
-  assert.deepEqual(glowRuns(), ['run-a', 'run-b'], 'naming the app adds no reply');
-  glowOff('run-b');
-  assert.deepEqual(glowRuns(), ['run-a'], 'a reply that ends leaves it');
-  glowOn('run-c', 'VS Code');
-  assert.deepEqual(stopNow('keys'), ['run-a', 'run-c']);
-  assert.deepEqual(stopped, [[['run-a', 'run-c'], 'keys']]);
-  assert.deepEqual(glowRuns(), [], 'and the glow goes');
-  assert.deepEqual(stopNow('button'), [], 'nothing left to stop');
+test('the screen glow is on while a reply uses the desktop, makes room once per stretch, and Stop ends exactly those replies', () => {
+  { // the screen glow is on while a reply uses the desktop; your Stop ends exactly those replies
+    const stopped = [];
+    onGlowStop((runs, how) => stopped.push([runs, how]));
+    glowOn('run-a', 'Paint a bat'); glowOn('run-b', 'Discord drop'); glowOn('run-a', 'Paint a bat');
+    assert.deepEqual(glowRuns(), ['run-a', 'run-b'], 'once per reply');
+    assert.equal(glowLabel(), 'QuorX is using computer use', 'no app named yet');
+    glowOn('run-a', 'Paint a bat', 'Paint'); glowOn('run-b', 'Discord drop', 'Discord');
+    assert.equal(glowLabel(), 'QuorX is using Paint, Discord', 'the banner names the apps in use');
+    assert.deepEqual(glowRuns(), ['run-a', 'run-b'], 'naming the app adds no reply');
+    glowOff('run-b');
+    assert.deepEqual(glowRuns(), ['run-a'], 'a reply that ends leaves it');
+    glowOn('run-c', 'VS Code');
+    assert.deepEqual(stopNow('keys'), ['run-a', 'run-c']);
+    assert.deepEqual(stopped, [[['run-a', 'run-c'], 'keys']]);
+    assert.deepEqual(glowRuns(), [], 'and the glow goes');
+    assert.deepEqual(stopNow('button'), [], 'nothing left to stop');
+  }
+  { // the glow starts making room at once, once per stretch of desktop use, and ends it when the last reply ends
+    const calls = [];
+    onGlowScreen((chatId) => { calls.push(['start', chatId]); return { x: -1680, y: 32, w: 1680, h: 1050 }; }, () => calls.push(['end']));
+    glowOn('run-1', 'chat-a');
+    assert.deepEqual(calls, [['start', 'chat-a']], 'started in the same tick, so the first action waits for its screen');
+    glowOn('run-2', 'chat-b');
+    glowOff('run-1');
+    assert.deepEqual(calls, [['start', 'chat-a']], 'still in use by run-2');
+    glowOff('run-2');
+    assert.deepEqual(calls, [['start', 'chat-a'], ['end']]);
+    onGlowScreen(() => null, () => {});
+  }
 });
 
 test('computer use works on one screen: one that is not the main one (the largest), else the only one', () => {
@@ -391,39 +409,29 @@ test('computer use works on one screen: one that is not the main one (the larges
   assert.equal(pickScreen([{ bounds: { w: 0, h: 0 } }, main]), main, 'a screen with no size is skipped');
 });
 
-test('the glow starts making room at once, once per stretch of desktop use, and ends it when the last reply ends', () => {
-  const calls = [];
-  onGlowScreen((chatId) => { calls.push(['start', chatId]); return { x: -1680, y: 32, w: 1680, h: 1050 }; }, () => calls.push(['end']));
-  glowOn('run-1', 'chat-a');
-  assert.deepEqual(calls, [['start', 'chat-a']], 'started in the same tick, so the first action waits for its screen');
-  glowOn('run-2', 'chat-b');
-  glowOff('run-1');
-  assert.deepEqual(calls, [['start', 'chat-a']], 'still in use by run-2');
-  glowOff('run-2');
-  assert.deepEqual(calls, [['start', 'chat-a'], ['end']]);
-  onGlowScreen(() => null, () => {});
+
+test('the PowerShell helpers: plain ASCII requests, unasked messages (Stop pressed), and ending and restarting at once', async () => {
+  { // a helper can say things unasked (Stop pressed), and can be ended at once and started again
+    // A stand-in helper: ready, then for each request an unasked event before its answer.
+    const code = "process.stdout.write(JSON.stringify({ready:true})+String.fromCharCode(10));require('readline').createInterface({input:process.stdin}).on('line',(l)=>{const m=JSON.parse(l);process.stdout.write(JSON.stringify({event:'stop',how:'button'})+String.fromCharCode(10));if(m.op!=='hang')process.stdout.write(JSON.stringify({id:m.id,ok:true,pid:process.pid})+String.fromCharCode(10));});";
+    const events = [];
+    const h = lineHost(() => spawn(process.execPath, ['-e', code], { stdio: ['pipe', 'pipe', 'pipe'] }), { label: 'test helper', onEvent: (m) => events.push(m) });
+    const first = await h.call('show');
+    assert.equal(first.ok, true);
+    assert.deepEqual(events, [{ event: 'stop', how: 'button' }]);
+    const hanging = h.call('hang', {}, 20000);
+    while (events.length < 2) await new Promise((r) => setTimeout(r, 20)); // it got the request and is busy with it
+    assert.equal(h.kill(), true);
+    await assert.rejects(hanging, /stopped/, 'what it was doing fails at once, not at its timeout');
+    const again = await h.call('show');
+    assert.notEqual(again.pid, first.pid, 'the next call starts a new helper');
+    h.kill();
+  }
+  { // requests to the PowerShell helpers are plain ASCII, so quotes, accents and emoji arrive intact
+    const v = { text: '“Paint” is using your computer · é 🐱', n: 1 };
+    const s = asciiJson(v);
+    assert.ok(/^[ -~]*$/.test(s), s);
+    assert.deepEqual(JSON.parse(s), v);
+  }
 });
 
-test('a helper can say things unasked (Stop pressed), and can be ended at once and started again', async () => {
-  // A stand-in helper: ready, then for each request an unasked event before its answer.
-  const code = "process.stdout.write(JSON.stringify({ready:true})+String.fromCharCode(10));require('readline').createInterface({input:process.stdin}).on('line',(l)=>{const m=JSON.parse(l);process.stdout.write(JSON.stringify({event:'stop',how:'button'})+String.fromCharCode(10));if(m.op!=='hang')process.stdout.write(JSON.stringify({id:m.id,ok:true,pid:process.pid})+String.fromCharCode(10));});";
-  const events = [];
-  const h = lineHost(() => spawn(process.execPath, ['-e', code], { stdio: ['pipe', 'pipe', 'pipe'] }), { label: 'test helper', onEvent: (m) => events.push(m) });
-  const first = await h.call('show');
-  assert.equal(first.ok, true);
-  assert.deepEqual(events, [{ event: 'stop', how: 'button' }]);
-  const hanging = h.call('hang', {}, 20000);
-  while (events.length < 2) await new Promise((r) => setTimeout(r, 20)); // it got the request and is busy with it
-  assert.equal(h.kill(), true);
-  await assert.rejects(hanging, /stopped/, 'what it was doing fails at once, not at its timeout');
-  const again = await h.call('show');
-  assert.notEqual(again.pid, first.pid, 'the next call starts a new helper');
-  h.kill();
-});
-
-test('requests to the PowerShell helpers are plain ASCII, so quotes, accents and emoji arrive intact', () => {
-  const v = { text: '“Paint” is using your computer · é 🐱', n: 1 };
-  const s = asciiJson(v);
-  assert.ok(/^[ -~]*$/.test(s), s);
-  assert.deepEqual(JSON.parse(s), v);
-});

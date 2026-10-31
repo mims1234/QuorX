@@ -22,15 +22,10 @@ import { parseHierarchy, hierarchyText } from '../server/android.js';
 
 // ---------- the rule engine ----------
 const proj = tmp('policy');
-
 fs.writeFileSync(path.join(proj, 'a.txt'), 'x');
-
 fs.mkdirSync(path.join(proj, 'dist'));
-
 for (let i = 0; i < 30; i++) fs.writeFileSync(path.join(proj, 'dist', `f${i}.js`), '');
-
 const RULES = [{ effect: 'allow', match: 'cargo build*', by: 'button', scope: 'project' }];
-
 const ctx = (over = {}) => ({ shell: 'powershell', root: proj, rules: RULES, mode: 'strict', yolo: {}, ...over });
 
 // ⚡ YOLO (⚙ Approvals & safety): what runs on its own, what the deciders vote on, what pauses for you, what never runs.
@@ -40,27 +35,16 @@ const YOLO = { checkAll: yoloOf(safetySettings({ yoloLevel: 'careful' })), check
 // ---------- commands hidden in scripts ----------
 // The real case: the agent wrote a Node script that runs whatever it is given, then ran a toolchain install through it.
 const WRAPPER = "import { spawn } from 'node:child_process';\nconst [cmd, ...args] = process.argv.slice(2);\nspawn(cmd, args, { stdio: 'inherit', shell: true }).on('exit', (c) => process.exit(c ?? 1));\n";
-
 const REAL = 'node .quorx/scratch/run.mjs rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal';
-
 const scripts = tmp('scripts');
-
 const put = (rel, text) => { fs.mkdirSync(path.dirname(path.join(scripts, rel)), { recursive: true }); fs.writeFileSync(path.join(scripts, rel), text); };
-
 put('.quorx/scratch/run.mjs', WRAPPER);
-
 put('app.js', "const name = process.argv[2] || 'world';\nconsole.log(`hello ${name}`);\n");
-
 put('wrap.py', 'import subprocess, sys\nsys.exit(subprocess.call(sys.argv[1:]))\n');
-
 put('open.ps1', "Write-Host 'opening'\nStart-Process notepad.exe\n");
-
 put('setup.ps1', "Write-Host 'setting up'\nwinget install --id Rustlang.Rustup -e\n");
-
 put('tools/main.mjs', "import { run } from './helper.mjs';\nrun(process.argv.slice(2));\n");
-
 put('tools/helper.mjs', "import { execFileSync } from 'child_process';\nexport const run = ([c, ...a]) => execFileSync(c, a);\n");
-
 const sctx = (over = {}) => ({ shell: 'powershell', root: scripts, rules: [], mode: 'strict', yolo: {}, ...over });
 
 // The real case from a video run: the agent's render script runs ffmpeg and ffprobe, named in plain text.
@@ -70,11 +54,8 @@ put('.quorx/scratch/render.mjs', [
   "for (const s of SHOTS) execFileSync('ffmpeg', ['-y', '-loop', '1', '-i', s.src, '-t', String(s.dur), `clips/${s.dur}.mp4`], { stdio: 'inherit' });",
   "probe('ffprobe', ['-v', 'error', 'out.mp4']);",
 ].join('\n'));
-
 put('.quorx/scratch/req.cjs', "const cp = require('child_process');\ncp.execFileSync('ffmpeg', ['-version']);\n");
-
 put('.quorx/scratch/push.mjs', "import { execFileSync } from 'node:child_process';\nexecFileSync('git', ['push', '--force']);\n");
-
 const OPAQUE_SHAPES = {
   'from a variable': "import { execFileSync } from 'node:child_process';\nconst p = process.argv[2];\nexecFileSync(p, []);\n",
   'shell mode': "import { spawn } from 'node:child_process';\nspawn('ffmpeg', ['-i', 'a.png'], { shell: true });\n",
@@ -84,7 +65,6 @@ const OPAQUE_SHAPES = {
   'exec with a shell line': "import { execSync } from 'node:child_process';\nexecSync('ffmpeg -version');\n",
   'a dynamic import': "const cp = await import('node:child_process');\ncp.execFileSync('ffmpeg', []);\n",
 };
-
 for (const [k, v] of Object.entries(OPAQUE_SHAPES)) put(`.quorx/scratch/shape-${k.replace(/\W+/g, '-')}.mjs`, v);
 
 // package.json scripts: npm run x runs a command line the agent can write.
@@ -92,9 +72,7 @@ put('web/package.json', JSON.stringify({ scripts: {
   setup: 'rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal', build: 'tsc', prestart: 'node tools/main.mjs', start: 'node app.js',
   wrap: 'node ../.quorx/scratch/run.mjs', dev: 'concurrently "tsc -w" "npm:setup"', env: 'cross-env NODE_ENV=production winget install Git.Git',
   postinstall: 'choco install nodejs', a: 'npm run b', b: 'npm run a' } }));
-
 put('web/tools/main.mjs', "import { execFileSync } from 'node:child_process';\nexecFileSync(process.env.GIT || 'git', ['--version']);\n");
-
 put('web/app.js', "console.log('up')\n");
 
 // ---------- the hardened deciders ----------
@@ -110,7 +88,6 @@ async function withDeciders(table, fn) {
   };
   try { return await fn(bodies); } finally { globalThis.fetch = real; }
 }
-
 const judge = (over = {}) => approvalJudge({ kind: 'command', userMessages: ['build my rust app'], facts: { command: 'cargo build' }, voters: ['a', 'b', 'c'], chatModel: 'chat', sf: SAFETY_DEFAULTS, ...over });
 
 // ⚡ YOLO with a wait: a vote the deciders can't settle shows you the card for a few seconds, then carries on.
@@ -121,107 +98,113 @@ const voteAll = (v) => Object.fromEntries(['typesafe/jev-1.14', 'liquid/d1-ultra
 const buildJs = (d) => fs.writeFileSync(path.join(d, 'build.js'), "console.log('built')");
 
 // ---------- tripwire ----------
-test('tripwire: many files vanishing next to the project trips it', { skip: !WIN }, async () => {
-  const parent = tmp('tw');
-  const project = path.join(parent, 'proj'); fs.mkdirSync(project);
-  const other = path.join(parent, 'other'); fs.mkdirSync(other);
-  for (let i = 0; i < 40; i++) fs.writeFileSync(path.join(other, `f${i}.txt`), 'x');
-  let tripped = null;
-  const stop = startTripwire({ root: project, files: 25, seconds: 3, onTrip: (t) => { tripped = t; } });
-  await new Promise((r) => setTimeout(r, 300));
-  for (let i = 0; i < 40; i++) fs.rmSync(path.join(other, `f${i}.txt`));
-  await new Promise((r) => setTimeout(r, 800));
-  stop();
-  assert.ok(tripped, 'the tripwire fired');
-  assert.ok(tripped.count >= 25);
-  assert.ok(tripped.sample.every((p) => p.includes('other')));
+test('tripwire: files vanishing next to the project trip it, a moved-then-deleted folder too, and an agent command is stopped part-way', { skip: !WIN }, async () => {
+  { // tripwire: many files vanishing next to the project trips it
+    const parent = tmp('tw');
+    const project = path.join(parent, 'proj'); fs.mkdirSync(project);
+    const other = path.join(parent, 'other'); fs.mkdirSync(other);
+    for (let i = 0; i < 40; i++) fs.writeFileSync(path.join(other, `f${i}.txt`), 'x');
+    let tripped = null;
+    const stop = startTripwire({ root: project, files: 25, seconds: 3, onTrip: (t) => { tripped = t; } });
+    await new Promise((r) => setTimeout(r, 300));
+    for (let i = 0; i < 40; i++) fs.rmSync(path.join(other, `f${i}.txt`));
+    await new Promise((r) => setTimeout(r, 800));
+    stop();
+    assert.ok(tripped, 'the tripwire fired');
+    assert.ok(tripped.count >= 25);
+    assert.ok(tripped.sample.every((p) => p.includes('other')));
+  }
+  { // tripwire: moving a folder that was already there and then deleting it still trips it
+    const parent = tmp('tw4');
+    const project = path.join(parent, 'proj'); fs.mkdirSync(project);
+    const docs = path.join(parent, 'docs'); fs.mkdirSync(docs);
+    for (let i = 0; i < 40; i++) fs.writeFileSync(path.join(docs, `f${i}.txt`), 'x');
+    await new Promise((r) => setTimeout(r, 400)); // the folder is older than the watch
+    let tripped = null;
+    const stop = startTripwire({ root: project, files: 25, seconds: 3, onTrip: (t) => { tripped = t; } });
+    await new Promise((r) => setTimeout(r, 300));
+    const moved = path.join(parent, 'moved'); fs.renameSync(docs, moved);
+    await new Promise((r) => setTimeout(r, 200));
+    for (let i = 0; i < 40; i++) fs.rmSync(path.join(moved, `f${i}.txt`));
+    await new Promise((r) => setTimeout(r, 800));
+    stop();
+    assert.ok(tripped, 'the tripwire fired');
+  }
+  { // tripwire: an agent command deleting next to the project is stopped part-way
+    let sibling;
+    const { bodies, events } = await agentRun((b, i) => [reply('', [['shell', { command: 'node del.js' }]]), reply('Stopped.')][i], {
+      prep: (d) => {
+        sibling = path.join(path.dirname(d), `${path.basename(d)}-sibling`); fs.mkdirSync(sibling);
+        for (let i = 0; i < 200; i++) fs.writeFileSync(path.join(sibling, `f${i}.txt`), 'x');
+        fs.writeFileSync(path.join(d, 'del.js'), `const fs=require('fs'),p=require('path'),dir=${JSON.stringify(sibling)};let i=0;const t=setInterval(()=>{if(i>=200){clearInterval(t);return;}fs.rmSync(p.join(dir,'f'+(i++)+'.txt'))},15);`);
+        fs.mkdirSync(path.join(d, '.quorx'), { recursive: true });
+        saveRules('project', [{ effect: 'allow', match: 'node del.js*', by: 'user' }], d);
+      },
+    });
+    assert.match(toolOut(bodies, 1), /tripwire STOPPED this command/);
+    assert.ok(events.some((e) => e.t === 'tripwire'));
+    const left = fs.readdirSync(sibling).length;
+    assert.ok(left > 50, `most files survive (${left} of 200 left)`);
+  }
 });
 
-test('tripwire: deletes inside the project do not trip it', { skip: !WIN }, async () => {
-  // Its own parent folder: other test files clean up their temp folders in %TEMP% at the same time.
-  const project = path.join(tmp('tw2'), 'proj'); fs.mkdirSync(project);
-  for (let i = 0; i < 40; i++) fs.writeFileSync(path.join(project, `f${i}.txt`), 'x');
-  let tripped = null;
-  const stop = startTripwire({ root: project, files: 25, seconds: 3, onTrip: (t) => { tripped = t; } });
-  await new Promise((r) => setTimeout(r, 300));
-  for (let i = 0; i < 40; i++) fs.rmSync(path.join(project, `f${i}.txt`));
-  await new Promise((r) => setTimeout(r, 800));
-  stop();
-  assert.equal(tripped, null);
+test('tripwire: deletes inside the project, and files a command makes and then removes, do not trip it', { skip: !WIN }, async () => {
+  { // tripwire: deletes inside the project do not trip it
+    // Its own parent folder: other test files clean up their temp folders in %TEMP% at the same time.
+    const project = path.join(tmp('tw2'), 'proj'); fs.mkdirSync(project);
+    for (let i = 0; i < 40; i++) fs.writeFileSync(path.join(project, `f${i}.txt`), 'x');
+    let tripped = null;
+    const stop = startTripwire({ root: project, files: 25, seconds: 3, onTrip: (t) => { tripped = t; } });
+    await new Promise((r) => setTimeout(r, 300));
+    for (let i = 0; i < 40; i++) fs.rmSync(path.join(project, `f${i}.txt`));
+    await new Promise((r) => setTimeout(r, 800));
+    stop();
+    assert.equal(tripped, null);
+  }
+  { // tripwire: files a command makes and then removes (installer temp folders) do not trip it
+    const parent = tmp('tw3');
+    const project = path.join(parent, 'proj'); fs.mkdirSync(project);
+    let tripped = null;
+    const stop = startTripwire({ root: project, files: 25, seconds: 3, onTrip: (t) => { tripped = t; } });
+    await new Promise((r) => setTimeout(r, 300));
+    // Unpack-then-clean, the way rustup and other installers work: a temp folder full of files, slowly and all at once.
+    const unpack = path.join(parent, 'tmp-unpack'); fs.mkdirSync(unpack);
+    for (let i = 0; i < 40; i++) fs.writeFileSync(path.join(unpack, `f${i}.txt`), 'x');
+    await new Promise((r) => setTimeout(r, 300));
+    fs.rmSync(unpack, { recursive: true });
+    // And loose files made and removed at once, before the watcher's notices are handled.
+    for (let i = 0; i < 40; i++) { const f = path.join(parent, `t${i}.tmp`); fs.writeFileSync(f, 'x'); fs.rmSync(f); }
+    await new Promise((r) => setTimeout(r, 800));
+    stop();
+    assert.equal(tripped, null);
+  }
 });
 
-test('tripwire: files a command makes and then removes (installer temp folders) do not trip it', { skip: !WIN }, async () => {
-  const parent = tmp('tw3');
-  const project = path.join(parent, 'proj'); fs.mkdirSync(project);
-  let tripped = null;
-  const stop = startTripwire({ root: project, files: 25, seconds: 3, onTrip: (t) => { tripped = t; } });
-  await new Promise((r) => setTimeout(r, 300));
-  // Unpack-then-clean, the way rustup and other installers work: a temp folder full of files, slowly and all at once.
-  const unpack = path.join(parent, 'tmp-unpack'); fs.mkdirSync(unpack);
-  for (let i = 0; i < 40; i++) fs.writeFileSync(path.join(unpack, `f${i}.txt`), 'x');
-  await new Promise((r) => setTimeout(r, 300));
-  fs.rmSync(unpack, { recursive: true });
-  // And loose files made and removed at once, before the watcher's notices are handled.
-  for (let i = 0; i < 40; i++) { const f = path.join(parent, `t${i}.tmp`); fs.writeFileSync(f, 'x'); fs.rmSync(f); }
-  await new Promise((r) => setTimeout(r, 800));
-  stop();
-  assert.equal(tripped, null);
-});
 
-test('tripwire: moving a folder that was already there and then deleting it still trips it', { skip: !WIN }, async () => {
-  const parent = tmp('tw4');
-  const project = path.join(parent, 'proj'); fs.mkdirSync(project);
-  const docs = path.join(parent, 'docs'); fs.mkdirSync(docs);
-  for (let i = 0; i < 40; i++) fs.writeFileSync(path.join(docs, `f${i}.txt`), 'x');
-  await new Promise((r) => setTimeout(r, 400)); // the folder is older than the watch
-  let tripped = null;
-  const stop = startTripwire({ root: project, files: 25, seconds: 3, onTrip: (t) => { tripped = t; } });
-  await new Promise((r) => setTimeout(r, 300));
-  const moved = path.join(parent, 'moved'); fs.renameSync(docs, moved);
-  await new Promise((r) => setTimeout(r, 200));
-  for (let i = 0; i < 40; i++) fs.rmSync(path.join(moved, `f${i}.txt`));
-  await new Promise((r) => setTimeout(r, 800));
-  stop();
-  assert.ok(tripped, 'the tripwire fired');
-});
 
-test('tripwire: an agent command deleting next to the project is stopped part-way', { skip: !WIN }, async () => {
-  let sibling;
-  const { bodies, events } = await agentRun((b, i) => [reply('', [['shell', { command: 'node del.js' }]]), reply('Stopped.')][i], {
-    prep: (d) => {
-      sibling = path.join(path.dirname(d), `${path.basename(d)}-sibling`); fs.mkdirSync(sibling);
-      for (let i = 0; i < 200; i++) fs.writeFileSync(path.join(sibling, `f${i}.txt`), 'x');
-      fs.writeFileSync(path.join(d, 'del.js'), `const fs=require('fs'),p=require('path'),dir=${JSON.stringify(sibling)};let i=0;const t=setInterval(()=>{if(i>=200){clearInterval(t);return;}fs.rmSync(p.join(dir,'f'+(i++)+'.txt'))},15);`);
-      fs.mkdirSync(path.join(d, '.quorx'), { recursive: true });
-      saveRules('project', [{ effect: 'allow', match: 'node del.js*', by: 'user' }], d);
-    },
-  });
-  assert.match(toolOut(bodies, 1), /tripwire STOPPED this command/);
-  assert.ok(events.some((e) => e.t === 'tripwire'));
-  const left = fs.readdirSync(sibling).length;
-  assert.ok(left > 50, `most files survive (${left} of 200 left)`);
-});
 
 // ---------- budgets ----------
 const costly = (calls) => ({ ...reply('', calls), usage: { cost: 0.4 } });
 
-test('budget: in YOLO a reply stops at its cap, counting every call', async () => {
-  const { events } = await agentRun(() => costly([['list_files', {}]]), { settings: { approval: 'yolo', replyBudget: 1 } });
-  const done = events.find((e) => e.t === 'done');
-  assert.match(done.reply, /reached its \$1\.00 cap/);
-  assert.ok(events.filter((e) => e.t === 'llm_done' || e.t === 'tool').length < 20, 'it stopped early');
+test('budget: in YOLO a reply stops at its cap, counting every call; in Strict the cap asks and raising it carries on', async () => {
+  { // budget: in YOLO a reply stops at its cap, counting every call
+    const { events } = await agentRun(() => costly([['list_files', {}]]), { settings: { approval: 'yolo', replyBudget: 1 } });
+    const done = events.find((e) => e.t === 'done');
+    assert.match(done.reply, /reached its \$1\.00 cap/);
+    assert.ok(events.filter((e) => e.t === 'llm_done' || e.t === 'tool').length < 20, 'it stopped early');
+  }
+  { // budget: in Strict the cap asks; raising it lets the reply carry on
+    let asked = 0;
+    const { events } = await agentRun((b, i) => (i < 4 ? costly([['list_files', {}]]) : reply('Done.')), {
+      settings: { approval: 'strict', replyBudget: 1 },
+      onEvent: (e, id) => { if (e.t === 'budget_ask' && e.kind === 'reply') { asked++; setTimeout(() => raiseCap(id, e.id, 5), 10); } },
+    });
+    assert.equal(asked, 1);
+    assert.equal(events.find((e) => e.t === 'done').reply, 'Done.');
+    assert.ok(events.some((e) => e.t === 'budget_done' && e.raised && e.budget === 5));
+  }
 });
 
-test('budget: in Strict the cap asks; raising it lets the reply carry on', async () => {
-  let asked = 0;
-  const { events } = await agentRun((b, i) => (i < 4 ? costly([['list_files', {}]]) : reply('Done.')), {
-    settings: { approval: 'strict', replyBudget: 1 },
-    onEvent: (e, id) => { if (e.t === 'budget_ask' && e.kind === 'reply') { asked++; setTimeout(() => raiseCap(id, e.id, 5), 10); } },
-  });
-  assert.equal(asked, 1);
-  assert.equal(events.find((e) => e.t === 'done').reply, 'Done.');
-  assert.ok(events.some((e) => e.t === 'budget_done' && e.raised && e.budget === 5));
-});
 
 // ---------- background jobs (P1) ----------
 test('jobs: a long build moves to the background instead of being killed, and job_output follows it', { skip: !WIN }, async () => {
@@ -257,26 +240,28 @@ test('jobs: background: true returns at once and job_stop ends it', { skip: !WIN
   assert.match(toolOut(bodies, 2), /0 processes left|already/);
 });
 
-test('jobs: installs never move to the background, and say so before any card', { skip: !WIN }, async () => {
-  let cards = 0;
-  const { bodies } = await agentRun((b, i) => [reply('', [['shell', { command: 'npm install left-pad', background: true }]]), reply('OK.')][i], { settings: { approval: 'strict' },
-    onEvent: (e, id) => { if (e.t === 'approval' && e.mode === 'strict') { cards++; setTimeout(() => answerApproval(id, e.id, { approve: true }), 10); } } });
-  assert.match(toolOut(bodies, 1), /installs can’t run in the background/);
-  assert.equal(cards, 0, 'no card for a command that would be refused anyway');
+test('jobs: installs never move to the background, even hidden in a wrapper script', { skip: !WIN }, async () => {
+  { // jobs: installs never move to the background, and say so before any card
+    let cards = 0;
+    const { bodies } = await agentRun((b, i) => [reply('', [['shell', { command: 'npm install left-pad', background: true }]]), reply('OK.')][i], { settings: { approval: 'strict' },
+      onEvent: (e, id) => { if (e.t === 'approval' && e.mode === 'strict') { cards++; setTimeout(() => answerApproval(id, e.id, { approve: true }), 10); } } });
+    assert.match(toolOut(bodies, 1), /installs can’t run in the background/);
+    assert.equal(cards, 0, 'no card for a command that would be refused anyway');
+  }
+  { // jobs: an install hidden in a wrapper script never runs in the background
+    let card = null;
+    // The wrapper only prints what it was given, so nothing is installed even if this check ever failed.
+    const echo = "import { spawn } from 'node:child_process';\nconsole.log('would run', process.argv.slice(2).join(' '));\n";
+    const { bodies, events } = await agentRun((b, i) => [reply('', [['shell', { command: REAL, background: true }]]), reply('OK.')][i], {
+      prep: (d) => { fs.mkdirSync(path.join(d, '.quorx', 'scratch'), { recursive: true }); fs.writeFileSync(path.join(d, '.quorx', 'scratch', 'run.mjs'), echo); },
+      onEvent: (e, id) => { if (e.t === 'approval' && e.mode === 'strict') { card = e; setTimeout(() => answerApproval(id, e.id, { approve: true }), 10); } },
+    });
+    assert.equal(card, null, 'refused before any card');
+    assert.match(toolOut(bodies, 1), /installs can’t run in the background/);
+    assert.ok(!events.some((e) => e.t === 'command'), 'nothing ran');
+  }
 });
 
-test('jobs: an install hidden in a wrapper script never runs in the background', { skip: !WIN }, async () => {
-  let card = null;
-  // The wrapper only prints what it was given, so nothing is installed even if this check ever failed.
-  const echo = "import { spawn } from 'node:child_process';\nconsole.log('would run', process.argv.slice(2).join(' '));\n";
-  const { bodies, events } = await agentRun((b, i) => [reply('', [['shell', { command: REAL, background: true }]]), reply('OK.')][i], {
-    prep: (d) => { fs.mkdirSync(path.join(d, '.quorx', 'scratch'), { recursive: true }); fs.writeFileSync(path.join(d, '.quorx', 'scratch', 'run.mjs'), echo); },
-    onEvent: (e, id) => { if (e.t === 'approval' && e.mode === 'strict') { card = e; setTimeout(() => answerApproval(id, e.id, { approve: true }), 10); } },
-  });
-  assert.equal(card, null, 'refused before any card');
-  assert.match(toolOut(bodies, 1), /installs can’t run in the background/);
-  assert.ok(!events.some((e) => e.t === 'command'), 'nothing ran');
-});
 
 // ---------- the Running tab ----------
 test('running: a background job is listed with its chat; stopping it there ends it and tells the agent', { skip: !WIN }, async () => {
@@ -321,65 +306,71 @@ test('running: any command that outlives the time limit moves to the background,
 });
 
 // ---------- loop detection (P1) ----------
-test('loops: the same failing call is nudged once, then the reply wraps up in YOLO', async () => {
-  const { bodies, events } = await agentRun((b, i) => (i < 12 ? reply('', [['read_file', { path: 'missing.txt' }]]) : reply('Stuck: missing.txt does not exist.')), { settings: { approval: 'yolo' } });
-  const nudged = bodies.some((b) => b.messages.some((m) => m.role === 'tool' && /Doing it again won't change the result/.test(m.content)));
-  assert.ok(nudged, 'told to change approach');
-  assert.equal(events.filter((e) => e.t === 'loop').length, 2);
-  assert.ok(bodies.length <= 9, `wrapped up early (${bodies.length} calls)`);
+test('loops: the same failing call is nudged once, then wraps up in YOLO; in Strict the user can say keep going', async () => {
+  { // loops: the same failing call is nudged once, then the reply wraps up in YOLO
+    const { bodies, events } = await agentRun((b, i) => (i < 12 ? reply('', [['read_file', { path: 'missing.txt' }]]) : reply('Stuck: missing.txt does not exist.')), { settings: { approval: 'yolo' } });
+    const nudged = bodies.some((b) => b.messages.some((m) => m.role === 'tool' && /Doing it again won't change the result/.test(m.content)));
+    assert.ok(nudged, 'told to change approach');
+    assert.equal(events.filter((e) => e.t === 'loop').length, 2);
+    assert.ok(bodies.length <= 9, `wrapped up early (${bodies.length} calls)`);
+  }
+  { // loops: in Strict the user can say keep going, and it is not checked again
+    let asked = 0;
+    const { events, bodies } = await agentRun((b, i) => (i < 12 ? reply('', [['read_file', { path: 'missing.txt' }]]) : reply('Done.')), {
+      settings: { approval: 'strict' },
+      onEvent: (e, id) => { if (e.t === 'question' && /seems stuck/.test(e.question)) { asked++; setTimeout(() => answerQuestion(id, e.id, { choice: 0 }), 10); } },
+    });
+    assert.equal(asked, 1);
+    assert.equal(events.filter((e) => e.t === 'loop').length, 2);
+    assert.equal(bodies.length, 13, 'it ran to the end');
+  }
 });
 
-test('loops: in Strict the user can say keep going, and it is not checked again', async () => {
-  let asked = 0;
-  const { events, bodies } = await agentRun((b, i) => (i < 12 ? reply('', [['read_file', { path: 'missing.txt' }]]) : reply('Done.')), {
-    settings: { approval: 'strict' },
-    onEvent: (e, id) => { if (e.t === 'question' && /seems stuck/.test(e.question)) { asked++; setTimeout(() => answerQuestion(id, e.id, { choice: 0 }), 10); } },
-  });
-  assert.equal(asked, 1);
-  assert.equal(events.filter((e) => e.t === 'loop').length, 2);
-  assert.equal(bodies.length, 13, 'it ran to the end');
+
+test('loops: repeats by nature (desktop screenshots, the browser, look) are only a loop on the same failing call twice', async () => {
+  { // loops: the same desktop screenshot after each step is not a loop; the same failing desktop call twice is
+    const shots = Array.from({ length: 6 }, () => reply('', [['desktop', { action: 'windows', job: 'bg97' }]]));
+    const { events } = await agentRun((b, i) => (i < 6 ? shots[i] : reply('Done.')), { settings: { approval: 'yolo' } });
+    const loops = events.filter((e) => e.t === 'loop');
+    assert.ok(loops.length >= 1 && loops.every((e) => /same failing desktop call twice/.test(e.what)), JSON.stringify(loops));
+    const { events: ok } = await agentRun((b, i) => [reply('', [['plan', { items: [{ text: 'a', status: 'doing' }] }]]), ...Array.from({ length: 5 }, () => reply('', [['plan', { items: [{ text: 'a', status: 'doing' }] }]])), reply('Done.')][i], { settings: { approval: 'yolo' } });
+    assert.equal(ok.filter((e) => e.t === 'loop').length, 0, 'calls that succeed repeat freely');
+  }
+  { // loops: a tool that repeats by nature (the browser, look) is caught on the same failing call twice in a row
+    const { bodies, events } = await agentRun((b, i) => (i < 6 ? reply('', [['look', { target: 'desktop:bg99' }]]) : reply('Stuck.')), { settings: { approval: 'yolo' } });
+    assert.match(toolOut(bodies, 2), /made the same failing look call twice in a row/, toolOut(bodies, 2));
+    assert.ok(events.some((e) => e.t === 'loop'));
+  }
 });
 
-test('loops: the same desktop screenshot after each step is not a loop; the same failing desktop call twice is', async () => {
-  const shots = Array.from({ length: 6 }, () => reply('', [['desktop', { action: 'windows', job: 'bg97' }]]));
-  const { events } = await agentRun((b, i) => (i < 6 ? shots[i] : reply('Done.')), { settings: { approval: 'yolo' } });
-  const loops = events.filter((e) => e.t === 'loop');
-  assert.ok(loops.length >= 1 && loops.every((e) => /same failing desktop call twice/.test(e.what)), JSON.stringify(loops));
-  const { events: ok } = await agentRun((b, i) => [reply('', [['plan', { items: [{ text: 'a', status: 'doing' }] }]]), ...Array.from({ length: 5 }, () => reply('', [['plan', { items: [{ text: 'a', status: 'doing' }] }]])), reply('Done.')][i], { settings: { approval: 'yolo' } });
-  assert.equal(ok.filter((e) => e.t === 'loop').length, 0, 'calls that succeed repeat freely');
-});
-
-test('loops: a tool that repeats by nature (the browser, look) is caught on the same failing call twice in a row', async () => {
-  const { bodies, events } = await agentRun((b, i) => (i < 6 ? reply('', [['look', { target: 'desktop:bg99' }]]) : reply('Stuck.')), { settings: { approval: 'yolo' } });
-  assert.match(toolOut(bodies, 2), /made the same failing look call twice in a row/, toolOut(bodies, 2));
-  assert.ok(events.some((e) => e.t === 'loop'));
-});
 
 // ---------- the agent's terminal and desktop apps (P1) ----------
 const allow = (d, match) => { fs.mkdirSync(path.join(d, '.quorx'), { recursive: true }); saveRules('project', [{ effect: 'allow', match, by: 'user' }], d); };
 
-test('terminal: the agent answers a program’s prompts and reads its screen', { skip: !WIN }, async () => {
-  const { bodies } = await agentRun((b, i) => [
-    reply('', [['terminal', { action: 'start', command: 'py -3 ask.py', cols: 60, rows: 10 }]]),
-    // Python can take a moment to start on a busy machine: look again (as the agent would) before typing.
-    reply('', [['terminal', { action: 'read', id: 't1', wait_s: 5 }]]),
-    reply('', [['terminal', { action: 'send', id: 't1', text: 'Ada', keys: ['Enter'] }]]),
-    reply('', [['terminal', { action: 'stop', id: 't1' }]]),
-    reply('Done.'),
-  ][i], { prep: (d) => { fs.writeFileSync(path.join(d, 'ask.py'), 'name = input("Name? ")\nprint("Hello,", name)\ninput("Enter to quit")\n'); allow(d, 'py -3 ask.py*'); } });
-  assert.match(toolOut(bodies, 1), /Terminal t\d+ started/);
-  assert.match(`${toolOut(bodies, 1)}\n${toolOut(bodies, 2)}`, /Name\?/);
-  assert.match(toolOut(bodies, 3), /Hello, Ada/);
-  assert.match(toolOut(bodies, 4), /0 processes left|already ended/);
+test('terminal: the agent answers a program’s prompts and reads its screen; a bare interpreter asks', { skip: !WIN }, async () => {
+  { // terminal: the agent answers a program’s prompts and reads its screen
+    const { bodies } = await agentRun((b, i) => [
+      reply('', [['terminal', { action: 'start', command: 'py -3 ask.py', cols: 60, rows: 10 }]]),
+      // Python can take a moment to start on a busy machine: look again (as the agent would) before typing.
+      reply('', [['terminal', { action: 'read', id: 't1', wait_s: 5 }]]),
+      reply('', [['terminal', { action: 'send', id: 't1', text: 'Ada', keys: ['Enter'] }]]),
+      reply('', [['terminal', { action: 'stop', id: 't1' }]]),
+      reply('Done.'),
+    ][i], { prep: (d) => { fs.writeFileSync(path.join(d, 'ask.py'), 'name = input("Name? ")\nprint("Hello,", name)\ninput("Enter to quit")\n'); allow(d, 'py -3 ask.py*'); } });
+    assert.match(toolOut(bodies, 1), /Terminal t\d+ started/);
+    assert.match(`${toolOut(bodies, 1)}\n${toolOut(bodies, 2)}`, /Name\?/);
+    assert.match(toolOut(bodies, 3), /Hello, Ada/);
+    assert.match(toolOut(bodies, 4), /0 processes left|already ended/);
+  }
+  { // terminal: a bare interpreter is a prompt QuorX can’t check, so it asks
+    const d = await decide('python', ctx());
+    assert.equal(d.verdict, 'ask');
+    assert.equal(d.who, 'user');
+    assert.equal((await decide('node', ctx({ mode: 'yolo' }))).who, 'user', 'even in YOLO');
+    assert.equal((await decide('python app.py', ctx({ mode: 'yolo' }))).who, 'deciders', 'a script is a normal build');
+  }
 });
 
-test('terminal: a bare interpreter is a prompt QuorX can’t check, so it asks', { skip: !WIN }, async () => {
-  const d = await decide('python', ctx());
-  assert.equal(d.verdict, 'ask');
-  assert.equal(d.who, 'user');
-  assert.equal((await decide('node', ctx({ mode: 'yolo' }))).who, 'user', 'even in YOLO');
-  assert.equal((await decide('python app.py', ctx({ mode: 'yolo' }))).who, 'deciders', 'a script is a normal build');
-});
 
 test('start_server: a plain dev-server start runs as before; a package fetched and run, an install or a URL is judged like any command', { skip: !WIN }, async () => {
   const root = tmp('server');
@@ -561,12 +552,42 @@ test('packs: Go, C/C++ and Rust debug sessions launch through their adapter and 
 });
 
 // ---------- 0.2.3: read-only .NET calls and the agent's scratch scripts ----------
-test('rules: string methods in PowerShell count as reads, file and process calls do not', { skip: !WIN }, async () => {
-  const cls = async (line) => { const d = await decide(line, ctx()); return d.segments.map((s) => s.cls); };
-  assert.ok(!(await cls('Get-ChildItem -Recurse | ForEach-Object { $_.FullName.Replace("C:\\x\\", "") }')).includes('opaque'), 'FullName.Replace is a read');
-  assert.ok(!(await cls("$c = Get-Content index.html -Raw; $i = $c.IndexOf('<table'); $c.Substring($i, 400)")).includes('opaque'), 'IndexOf and Substring are reads');
-  assert.ok((await cls("Get-ChildItem | ForEach-Object { $_.Replace('a', 'b') }")).includes('opaque'), 'Replace on a file object stays opaque');
-  assert.ok((await cls("[IO.File]::WriteAllText('x.txt', 'y')")).includes('opaque'), 'a static file write stays opaque');
+test('rules: how lines are read: PowerShell string methods are reads, scratch scripts are marked, cmd /c and -Command are judged by what they run', { skip: !WIN }, async () => {
+  { // rules: string methods in PowerShell count as reads, file and process calls do not
+    const cls = async (line) => { const d = await decide(line, ctx()); return d.segments.map((s) => s.cls); };
+    assert.ok(!(await cls('Get-ChildItem -Recurse | ForEach-Object { $_.FullName.Replace("C:\\x\\", "") }')).includes('opaque'), 'FullName.Replace is a read');
+    assert.ok(!(await cls("$c = Get-Content index.html -Raw; $i = $c.IndexOf('<table'); $c.Substring($i, 400)")).includes('opaque'), 'IndexOf and Substring are reads');
+    assert.ok((await cls("Get-ChildItem | ForEach-Object { $_.Replace('a', 'b') }")).includes('opaque'), 'Replace on a file object stays opaque');
+    assert.ok((await cls("[IO.File]::WriteAllText('x.txt', 'y')")).includes('opaque'), 'a static file write stays opaque');
+  }
+  { // rules: the agent’s scratch scripts are marked in any language; other scripts are not
+    put('.quorx/scratch/calc.ps1', 'Get-ChildItem .\n');
+    put('.quorx/scratch/b.bat', '@echo off\r\necho hi\r\n');
+    put('tools/x.ps1', 'Get-ChildItem .\n');
+    const ps = await decide('powershell -NoProfile -ExecutionPolicy Bypass -File .quorx\\scratch\\calc.ps1', sctx());
+    assert.ok(ps.segments.some((s) => s.scratch === '.quorx/scratch/calc.ps1'), JSON.stringify(ps.segments.map((s) => [s.text, s.scratch])));
+    const bat = await decide('cmd /c .quorx\\scratch\\b.bat', sctx({ shell: 'cmd' }));
+    assert.ok(bat.segments.some((s) => s.scratch === '.quorx/scratch/b.bat'), JSON.stringify(bat.segments.map((s) => [s.text, s.scratch])));
+    assert.ok(!(await decide('powershell -File tools\\x.ps1', sctx())).segments.some((s) => s.scratch));
+  }
+  { // rules: cmd /c, powershell -Command and bash -c are judged by the command inside them
+    for (const shell of ['powershell', 'cmd']) {
+      const out = await decide('cmd /c copy /Y a.txt D:\\elsewhere\\b.txt', sctx({ shell, mode: 'yolo' }));
+      assert.deepEqual([out.verdict, out.who], ['ask', 'user'], shell);
+      assert.match(out.why, /writes outside the project/, `${shell}: the same card as Copy-Item gets, not “can't read”`);
+      assert.equal(out.segments[0].wrap, 'cmd /c');
+    }
+    assert.equal((await decide('cmd /c dir', sctx())).verdict, 'allow');
+    assert.equal((await decide('powershell -NoProfile -Command "Get-ChildItem ."', sctx())).verdict, 'allow');
+    assert.equal((await decide('powershell -Command "$x = 1; Remove-Item $x"', sctx())).segments[0].cls, 'opaque', 'text with variables stays unread');
+    assert.equal((await decide('powershell -EncodedCommand ZABpAHIA', sctx())).segments[0].cls, 'opaque');
+    const robo = await decide('robocopy src out *.txt /R:3 /LOG:log.txt', sctx());
+    assert.deepEqual(robo.segments[0].paths.map((p) => p.raw), ['src', 'out'], 'switches and file patterns are not folders');
+    put('.quorx/scratch/out.ps1', 'Copy-Item a.txt D:\\elsewhere\\c.txt\n');
+    const sc = await decide('powershell -NoProfile -File .quorx\\scratch\\out.ps1', sctx({ mode: 'yolo' }));
+    assert.deepEqual([sc.verdict, sc.who], ['ask', 'user'], 'a script that writes outside the project shows that write');
+    assert.ok(sc.segments.some((s) => s.via === '.quorx/scratch/out.ps1' && s.paths.some((p) => p.zone === 'outside')));
+  }
 });
 
 test('deciders: the agent\'s own scratch script is judged on harm only', async () => {
@@ -592,35 +613,7 @@ test('rules: every "Always allow" suggestion matches the command it came from; r
   assert.equal(ruleProblem('npm test*'), '');
 });
 
-test('rules: the agent’s scratch scripts are marked in any language; other scripts are not', { skip: !WIN }, async () => {
-  put('.quorx/scratch/calc.ps1', 'Get-ChildItem .\n');
-  put('.quorx/scratch/b.bat', '@echo off\r\necho hi\r\n');
-  put('tools/x.ps1', 'Get-ChildItem .\n');
-  const ps = await decide('powershell -NoProfile -ExecutionPolicy Bypass -File .quorx\\scratch\\calc.ps1', sctx());
-  assert.ok(ps.segments.some((s) => s.scratch === '.quorx/scratch/calc.ps1'), JSON.stringify(ps.segments.map((s) => [s.text, s.scratch])));
-  const bat = await decide('cmd /c .quorx\\scratch\\b.bat', sctx({ shell: 'cmd' }));
-  assert.ok(bat.segments.some((s) => s.scratch === '.quorx/scratch/b.bat'), JSON.stringify(bat.segments.map((s) => [s.text, s.scratch])));
-  assert.ok(!(await decide('powershell -File tools\\x.ps1', sctx())).segments.some((s) => s.scratch));
-});
 
-test('rules: cmd /c, powershell -Command and bash -c are judged by the command inside them', { skip: !WIN }, async () => {
-  for (const shell of ['powershell', 'cmd']) {
-    const out = await decide('cmd /c copy /Y a.txt D:\\elsewhere\\b.txt', sctx({ shell, mode: 'yolo' }));
-    assert.deepEqual([out.verdict, out.who], ['ask', 'user'], shell);
-    assert.match(out.why, /writes outside the project/, `${shell}: the same card as Copy-Item gets, not “can't read”`);
-    assert.equal(out.segments[0].wrap, 'cmd /c');
-  }
-  assert.equal((await decide('cmd /c dir', sctx())).verdict, 'allow');
-  assert.equal((await decide('powershell -NoProfile -Command "Get-ChildItem ."', sctx())).verdict, 'allow');
-  assert.equal((await decide('powershell -Command "$x = 1; Remove-Item $x"', sctx())).segments[0].cls, 'opaque', 'text with variables stays unread');
-  assert.equal((await decide('powershell -EncodedCommand ZABpAHIA', sctx())).segments[0].cls, 'opaque');
-  const robo = await decide('robocopy src out *.txt /R:3 /LOG:log.txt', sctx());
-  assert.deepEqual(robo.segments[0].paths.map((p) => p.raw), ['src', 'out'], 'switches and file patterns are not folders');
-  put('.quorx/scratch/out.ps1', 'Copy-Item a.txt D:\\elsewhere\\c.txt\n');
-  const sc = await decide('powershell -NoProfile -File .quorx\\scratch\\out.ps1', sctx({ mode: 'yolo' }));
-  assert.deepEqual([sc.verdict, sc.who], ['ask', 'user'], 'a script that writes outside the project shows that write');
-  assert.ok(sc.segments.some((s) => s.via === '.quorx/scratch/out.ps1' && s.paths.some((p) => p.zone === 'outside')));
-});
 
 test('shell: a rule that would not match its command is not saved, and you are told', { skip: !WIN }, async () => {
   const { events, dir } = await agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('Done.')][i], {
@@ -645,20 +638,22 @@ test('shell: in YOLO nobody answering never runs a read outside the project, how
   });
 });
 
-test('shell: a command that ran only because nobody answered asks again the next time', { skip: !WIN }, async () => {
-  await withDeciders(voteAll({ needed: 0.5, other: 0.03 }), async () => {
+test('shell: a command that ran because nobody answered asks again; a repeat of one you approved says so', { skip: !WIN }, async () => {
+  { // shell: a command that ran only because nobody answered asks again the next time
+    await withDeciders(voteAll({ needed: 0.5, other: 0.03 }), async () => {
+      const { events } = await agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('', [['shell', { command: 'node build.js' }]]), reply('Done.')][i], {
+        settings: { approval: 'yolo', yoloWaitSecs: 1, safety: { yoloLevel: 'careful' } }, prep: buildJs });
+      assert.equal(of(events, 'approval').filter((e) => e.mode === 'strict').length, 2, 'two cards, not one and a silent repeat');
+    });
+  }
+  { // shell: a repeat of a command you approved says so in the chat
     const { events } = await agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('', [['shell', { command: 'node build.js' }]]), reply('Done.')][i], {
-      settings: { approval: 'yolo', yoloWaitSecs: 1, safety: { yoloLevel: 'careful' } }, prep: buildJs });
-    assert.equal(of(events, 'approval').filter((e) => e.mode === 'strict').length, 2, 'two cards, not one and a silent repeat');
-  });
+      prep: buildJs, onEvent: (e, id) => { if (e.t === 'approval' && e.mode === 'strict') setTimeout(() => answerApproval(id, e.id, { approve: true }), 10); } });
+    assert.equal(of(events, 'approval').filter((e) => e.mode === 'strict').length, 1);
+    assert.ok(of(events, 'note').some((e) => /Ran without asking again: “node build\.js” was approved earlier/.test(e.msg)));
+  }
 });
 
-test('shell: a repeat of a command you approved says so in the chat', { skip: !WIN }, async () => {
-  const { events } = await agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('', [['shell', { command: 'node build.js' }]]), reply('Done.')][i], {
-    prep: buildJs, onEvent: (e, id) => { if (e.t === 'approval' && e.mode === 'strict') setTimeout(() => answerApproval(id, e.id, { approve: true }), 10); } });
-  assert.equal(of(events, 'approval').filter((e) => e.mode === 'strict').length, 1);
-  assert.ok(of(events, 'note').some((e) => /Ran without asking again: “node build\.js” was approved earlier/.test(e.msg)));
-});
 
 test('fresh eyes: a page written in parts with append_file is not “the same problem twice”', async () => {
   const { events } = await agentRun((b, i) => [
@@ -744,33 +739,46 @@ test('commands and the agent’s terminal start with no pager, editor or git pro
 });
 
 // ---------- each chat's own agent notes, and chats kept off the project ----------
-test('chat notes: a chat reads and writes its own notes; in the project it reads AGENT.md and the log too', async () => {
-  const chatId = 'cnotesin1';
-  const { bodies, dir } = await agentRun((b, i) => [reply('', [['append_file', { path: `.quorx/chats/${chatId}.md`, content: '- VRoid: right-drag turns the camera\n' }]]), reply('Done.')][i], {
-    chatId, prep: (d) => { fs.writeFileSync(path.join(d, 'AGENT.md'), '# Proj\nShared project fact ZEBRA.\n'); fs.mkdirSync(path.join(d, '.quorx', 'chats'), { recursive: true }); fs.writeFileSync(path.join(d, '.quorx', 'chats', `${chatId}.md`), 'Chat fact OTTER.\n'); } });
-  const sys = JSON.stringify(bodies[0].messages);
-  assert.match(sys, /\[Project notes: AGENT\.md\][^]*ZEBRA/);
-  assert.match(sys, /\[This chat's own notes: \.quorx\/chats\/cnotesin1\.md\][^]*OTTER/);
-  assert.match(toolOut(bodies, 1), /^(Appended|Added|Wrote)/i, toolOut(bodies, 1));
-  assert.match(fs.readFileSync(path.join(dir, '.quorx', 'chats', `${chatId}.md`), 'utf8'), /right-drag turns the camera/);
+test('chat notes: a chat keeps its own notes and reads AGENT.md and the log in the project; off the project, or asked to ignore it, it reads none', async () => {
+  { // chat notes: a chat reads and writes its own notes; in the project it reads AGENT.md and the log too
+    const chatId = 'cnotesin1';
+    const { bodies, dir } = await agentRun((b, i) => [reply('', [['append_file', { path: `.quorx/chats/${chatId}.md`, content: '- VRoid: right-drag turns the camera\n' }]]), reply('Done.')][i], {
+      chatId, prep: (d) => { fs.writeFileSync(path.join(d, 'AGENT.md'), '# Proj\nShared project fact ZEBRA.\n'); fs.mkdirSync(path.join(d, '.quorx', 'chats'), { recursive: true }); fs.writeFileSync(path.join(d, '.quorx', 'chats', `${chatId}.md`), 'Chat fact OTTER.\n'); } });
+    const sys = JSON.stringify(bodies[0].messages);
+    assert.match(sys, /\[Project notes: AGENT\.md\][^]*ZEBRA/);
+    assert.match(sys, /\[This chat's own notes: \.quorx\/chats\/cnotesin1\.md\][^]*OTTER/);
+    assert.match(toolOut(bodies, 1), /^(Appended|Added|Wrote)/i, toolOut(bodies, 1));
+    assert.match(fs.readFileSync(path.join(dir, '.quorx', 'chats', `${chatId}.md`), 'utf8'), /right-drag turns the camera/);
+  }
+  { // chat notes: a chat off the project skips its notes, design and log, and can't change AGENT.md; another chat's notes stay off limits
+    const chatId = 'cnotesoff1';
+    const { bodies, dir } = await agentRun((b, i) => [
+      reply('', [['edit_file', { path: 'AGENT.md', find: 'ZEBRA', replace: 'LION' }]]),
+      reply('', [['write_file', { path: '.quorx/chats/otherchat1.md', content: 'x' }]]),
+      reply('', [['write_file', { path: 'notes.txt', content: 'hi' }]]),
+      reply('Done.'),
+    ][i], { chatId, more: { offProject: true }, prep: (d) => { fs.writeFileSync(path.join(d, 'AGENT.md'), '# Proj\nShared project fact ZEBRA.\n'); fs.writeFileSync(path.join(d, 'DESIGN.md'), '# Look\nCORAL accents.\n'); } });
+    const sys = JSON.stringify(bodies[0].messages);
+    assert.doesNotMatch(sys, /ZEBRA|CORAL/, 'the project notes and design are not loaded');
+    assert.match(sys, /\[This chat is off the project\]/);
+    assert.match(toolOut(bodies, 1), /^Refused: this chat is off the project, so AGENT\.md/);
+    assert.match(toolOut(bodies, 2), /^Refused: QuorX’s own files/);
+    assert.match(fs.readFileSync(path.join(dir, 'AGENT.md'), 'utf8'), /ZEBRA/);
+    assert.ok(!fs.existsSync(path.join(dir, '.quorx', 'log.md')) || !/notes\.txt/.test(fs.readFileSync(path.join(dir, '.quorx', 'log.md'), 'utf8')), 'nothing in the work log');
+  }
+  { // chat notes: "ignore the context of this project" in the user's words makes it an Own chat
+    const prep = (d) => fs.writeFileSync(path.join(d, 'AGENT.md'), '# Proj\nShared project fact ZEBRA.\n');
+    const off = await agentRun((b, i) => [reply('OK.')][i], { chatId: 'offwords1', prep, more: { text: 'ignroe the context of quorx in this project for this activity ok. Open VS Code.' } });
+    assert.doesNotMatch(JSON.stringify(off.bodies[0].messages), /ZEBRA/);
+    assert.ok(off.events.some((e) => e.t === 'chat_off_project'), 'the page hears it and keeps it');
+    const off2 = await agentRun((b, i) => [reply('OK.')][i], { chatId: 'offwords3', prep, more: { text: 'ignore this project context and work on this but save in this project' } });
+    assert.ok(off2.events.some((e) => e.t === 'chat_off_project'), '"this project context" too');
+    const on = await agentRun((b, i) => [reply('OK.')][i], { chatId: 'offwords2', prep, more: { text: 'Fix the bug in this project, and read the folder outside the project too.' } });
+    assert.match(JSON.stringify(on.bodies[0].messages), /ZEBRA/);
+    assert.ok(!on.events.some((e) => e.t === 'chat_off_project'));
+  }
 });
 
-test('chat notes: a chat off the project skips its notes, design and log, and can\'t change AGENT.md; another chat\'s notes stay off limits', async () => {
-  const chatId = 'cnotesoff1';
-  const { bodies, dir } = await agentRun((b, i) => [
-    reply('', [['edit_file', { path: 'AGENT.md', find: 'ZEBRA', replace: 'LION' }]]),
-    reply('', [['write_file', { path: '.quorx/chats/otherchat1.md', content: 'x' }]]),
-    reply('', [['write_file', { path: 'notes.txt', content: 'hi' }]]),
-    reply('Done.'),
-  ][i], { chatId, more: { offProject: true }, prep: (d) => { fs.writeFileSync(path.join(d, 'AGENT.md'), '# Proj\nShared project fact ZEBRA.\n'); fs.writeFileSync(path.join(d, 'DESIGN.md'), '# Look\nCORAL accents.\n'); } });
-  const sys = JSON.stringify(bodies[0].messages);
-  assert.doesNotMatch(sys, /ZEBRA|CORAL/, 'the project notes and design are not loaded');
-  assert.match(sys, /\[This chat is off the project\]/);
-  assert.match(toolOut(bodies, 1), /^Refused: this chat is off the project, so AGENT\.md/);
-  assert.match(toolOut(bodies, 2), /^Refused: QuorX’s own files/);
-  assert.match(fs.readFileSync(path.join(dir, 'AGENT.md'), 'utf8'), /ZEBRA/);
-  assert.ok(!fs.existsSync(path.join(dir, '.quorx', 'log.md')) || !/notes\.txt/.test(fs.readFileSync(path.join(dir, '.quorx', 'log.md'), 'utf8')), 'nothing in the work log');
-});
 
 test('named in the user\'s message: a folder is read with no card; in YOLO an app is raised with no card (only the user\'s words count)', async () => {
   const outside = tmp('named-folder');
@@ -793,17 +801,6 @@ test('named in the user\'s message: a folder is read with no card; in YOLO an ap
   assert.ok(raised.events.some((e) => e.t === 'app_allowed' && e.app.level === 'full'));
 });
 
-test('chat notes: "ignore the context of this project" in the user\'s words makes it an Own chat', async () => {
-  const prep = (d) => fs.writeFileSync(path.join(d, 'AGENT.md'), '# Proj\nShared project fact ZEBRA.\n');
-  const off = await agentRun((b, i) => [reply('OK.')][i], { chatId: 'offwords1', prep, more: { text: 'ignroe the context of quorx in this project for this activity ok. Open VS Code.' } });
-  assert.doesNotMatch(JSON.stringify(off.bodies[0].messages), /ZEBRA/);
-  assert.ok(off.events.some((e) => e.t === 'chat_off_project'), 'the page hears it and keeps it');
-  const off2 = await agentRun((b, i) => [reply('OK.')][i], { chatId: 'offwords3', prep, more: { text: 'ignore this project context and work on this but save in this project' } });
-  assert.ok(off2.events.some((e) => e.t === 'chat_off_project'), '"this project context" too');
-  const on = await agentRun((b, i) => [reply('OK.')][i], { chatId: 'offwords2', prep, more: { text: 'Fix the bug in this project, and read the folder outside the project too.' } });
-  assert.match(JSON.stringify(on.bodies[0].messages), /ZEBRA/);
-  assert.ok(!on.events.some((e) => e.t === 'chat_off_project'));
-});
 
 test('a long text typed into the user\'s app is checked against their words first; the same text again goes through', async () => {
   const seen = [];
@@ -823,53 +820,64 @@ test('a long text typed into the user\'s app is checked against their words firs
 
 // Last (it starts a background job): the agent's own WinForms program, driven with the new actions in one call.
 // ---------- folders outside the project, added to a chat ----------
-test('folders: a write outside the project asks once to add its folder, then works there directly', async () => {
-  const other = tmp('added'), file = path.join(other, 'index.html');
-  let cards = 0;
-  const { events, bodies } = await agentRun((b, i) => [
-    reply('', [['write_file', { path: file, content: '<!doctype html><html><body>hi</body></html>' }]]),
-    reply('', [['edit_file', { path: file, find: 'hi', replace: 'hello' }]]),
-    reply('', [['read_file', { path: file }]]),
-    reply('Done.'),
-  ][i], { chatId: 'folders-ok', onEvent: (e, id) => { if (e.t === 'approval' && e.tool === 'folder') { cards++; assert.match(e.what, /^Read and write files in /); setTimeout(() => answerApproval(id, e.id, { approve: true }), 10); } } });
-  assert.equal(cards, 1, 'one card for the folder, none for the next changes');
-  assert.match(toolOut(bodies, 1), /Wrote .*index\.html .*\n\(Outside the project, in .*: Undo doesn't cover this change\.\)/);
-  assert.match(toolOut(bodies, 2), /Edited .*index\.html \(1 replacement\)/);
-  assert.match(toolOut(bodies, 3), /hello/);
-  assert.equal(fs.readFileSync(file, 'utf8'), '<!doctype html><html><body>hello</body></html>');
-  assert.deepEqual(of(events, 'folder_added').map((e) => e.folder), [{ path: other, access: 'write' }]);
+test('folders: a write outside the project asks once to add its folder; one not added stays out of reach; read-only asks before writing; served at /wsf/', async () => {
+  { // folders: a write outside the project asks once to add its folder, then works there directly
+    const other = tmp('added'), file = path.join(other, 'index.html');
+    let cards = 0;
+    const { events, bodies } = await agentRun((b, i) => [
+      reply('', [['write_file', { path: file, content: '<!doctype html><html><body>hi</body></html>' }]]),
+      reply('', [['edit_file', { path: file, find: 'hi', replace: 'hello' }]]),
+      reply('', [['read_file', { path: file }]]),
+      reply('Done.'),
+    ][i], { chatId: 'folders-ok', onEvent: (e, id) => { if (e.t === 'approval' && e.tool === 'folder') { cards++; assert.match(e.what, /^Read and write files in /); setTimeout(() => answerApproval(id, e.id, { approve: true }), 10); } } });
+    assert.equal(cards, 1, 'one card for the folder, none for the next changes');
+    assert.match(toolOut(bodies, 1), /Wrote .*index\.html .*\n\(Outside the project, in .*: Undo doesn't cover this change\.\)/);
+    assert.match(toolOut(bodies, 2), /Edited .*index\.html \(1 replacement\)/);
+    assert.match(toolOut(bodies, 3), /hello/);
+    assert.equal(fs.readFileSync(file, 'utf8'), '<!doctype html><html><body>hello</body></html>');
+    assert.deepEqual(of(events, 'folder_added').map((e) => e.folder), [{ path: other, access: 'write' }]);
+  }
+  { // folders: a folder the user doesn’t add stays out of reach; blocked places never get a card
+    const other = tmp('declined');
+    let cards = 0;
+    const { bodies } = await agentRun((b, i) => [
+      reply('', [['write_file', { path: path.join(other, 'a.txt'), content: 'x' }]]),
+      reply('', [['write_file', { path: path.join(os.homedir(), 'qx-should-not-exist.txt'), content: 'x' }]]),
+      reply('', [['delete_file', { path: path.join(other, 'a.txt') }]]),
+      reply('OK.'),
+    ][i], { chatId: 'folders-no', onEvent: (e, id) => { if (e.t === 'approval' && e.tool === 'folder') { cards++; setTimeout(() => answerApproval(id, e.id, { approve: false }), 10); } } });
+    assert.match(toolOut(bodies, 1), /didn't add .* to this chat/);
+    assert.equal(fs.existsSync(path.join(other, 'a.txt')), false);
+    assert.match(toolOut(bodies, 2), /^Refused: .* can't be added to this chat: your profile folder/);
+    assert.match(toolOut(bodies, 3), /^Refused: delete_file works in the project only/);
+    assert.equal(cards, 1, 'the profile folder never got a card');
+  }
+  { // folders: a read-only folder reads without a card and asks again before writing
+    const other = tmp('readonly');
+    fs.writeFileSync(path.join(other, 'notes.txt'), 'kept');
+    let cards = [];
+    const { bodies } = await agentRun((b, i) => [
+      reply('', [['read_file', { path: path.join(other, 'notes.txt') }]]),
+      reply('', [['write_file', { path: path.join(other, 'notes.txt'), content: 'changed' }]]),
+      reply('OK.'),
+    ][i], { chatId: 'folders-ro', more: { folders: [{ path: other, access: 'read' }] }, onEvent: (e, id) => { if (e.t === 'approval' && e.tool === 'folder') { cards.push(e.what); setTimeout(() => answerApproval(id, e.id, { approve: false }), 10); } } });
+    assert.match(toolOut(bodies, 1), /kept/);
+    assert.deepEqual(cards.map((w) => w.split(' files')[0]), ['Read and write']);
+    assert.equal(fs.readFileSync(path.join(other, 'notes.txt'), 'utf8'), 'kept');
+    assert.match(JSON.stringify(bodies[0].messages.at(-1).content), /Folders outside the project added to this chat .*\(read only\)/);
+  }
+  { // folders: a chat's added folders are served at /wsf/<chat>/<n>/
+    const { registerFolders, chatFolder, folderIndex } = await import('../server/workspace.js');
+    const a = tmp('wsf-a'), b = tmp('wsf-b');
+    registerFolders('chat-x', [{ path: a, access: 'read' }, { path: b, access: 'write' }]);
+    assert.equal(chatFolder('chat-x', 1), b);
+    assert.deepEqual(folderIndex('chat-x', path.join(b, 'site', 'index.html')), { i: 1, rel: 'site/index.html' });
+    assert.equal(folderIndex('chat-x', path.join(tmp('wsf-c'), 'x.html')), null);
+    assert.equal(chatFolder('other-chat', 0), null);
+  }
 });
 
-test('folders: a folder the user doesn’t add stays out of reach; blocked places never get a card', async () => {
-  const other = tmp('declined');
-  let cards = 0;
-  const { bodies } = await agentRun((b, i) => [
-    reply('', [['write_file', { path: path.join(other, 'a.txt'), content: 'x' }]]),
-    reply('', [['write_file', { path: path.join(os.homedir(), 'qx-should-not-exist.txt'), content: 'x' }]]),
-    reply('', [['delete_file', { path: path.join(other, 'a.txt') }]]),
-    reply('OK.'),
-  ][i], { chatId: 'folders-no', onEvent: (e, id) => { if (e.t === 'approval' && e.tool === 'folder') { cards++; setTimeout(() => answerApproval(id, e.id, { approve: false }), 10); } } });
-  assert.match(toolOut(bodies, 1), /didn't add .* to this chat/);
-  assert.equal(fs.existsSync(path.join(other, 'a.txt')), false);
-  assert.match(toolOut(bodies, 2), /^Refused: .* can't be added to this chat: your profile folder/);
-  assert.match(toolOut(bodies, 3), /^Refused: delete_file works in the project only/);
-  assert.equal(cards, 1, 'the profile folder never got a card');
-});
 
-test('folders: a read-only folder reads without a card and asks again before writing', async () => {
-  const other = tmp('readonly');
-  fs.writeFileSync(path.join(other, 'notes.txt'), 'kept');
-  let cards = [];
-  const { bodies } = await agentRun((b, i) => [
-    reply('', [['read_file', { path: path.join(other, 'notes.txt') }]]),
-    reply('', [['write_file', { path: path.join(other, 'notes.txt'), content: 'changed' }]]),
-    reply('OK.'),
-  ][i], { chatId: 'folders-ro', more: { folders: [{ path: other, access: 'read' }] }, onEvent: (e, id) => { if (e.t === 'approval' && e.tool === 'folder') { cards.push(e.what); setTimeout(() => answerApproval(id, e.id, { approve: false }), 10); } } });
-  assert.match(toolOut(bodies, 1), /kept/);
-  assert.deepEqual(cards.map((w) => w.split(' files')[0]), ['Read and write']);
-  assert.equal(fs.readFileSync(path.join(other, 'notes.txt'), 'utf8'), 'kept');
-  assert.match(JSON.stringify(bodies[0].messages.at(-1).content), /Folders outside the project added to this chat .*\(read only\)/);
-});
 
 test('folders: commands treat a read-and-write folder like the project', { skip: !WIN }, async () => {
   const other = tmp('cmdfolder');
@@ -881,48 +889,41 @@ test('folders: commands treat a read-and-write folder like the project', { skip:
   assert.equal(git.verdict, 'deny', 'its .git stays protected');
 });
 
-test('folders: a chat\'s added folders are served at /wsf/<chat>/<n>/', async () => {
-  const { registerFolders, chatFolder, folderIndex } = await import('../server/workspace.js');
-  const a = tmp('wsf-a'), b = tmp('wsf-b');
-  registerFolders('chat-x', [{ path: a, access: 'read' }, { path: b, access: 'write' }]);
-  assert.equal(chatFolder('chat-x', 1), b);
-  assert.deepEqual(folderIndex('chat-x', path.join(b, 'site', 'index.html')), { i: 1, rel: 'site/index.html' });
-  assert.equal(folderIndex('chat-x', path.join(tmp('wsf-c'), 'x.html')), null);
-  assert.equal(chatFolder('other-chat', 0), null);
-});
 
 // ---------- rules: on/off, ids and use counts ----------
-test('rules: a rule turned off is kept but not used; ids stay put; adding it again turns it back on', { skip: !WIN }, async () => {
-  const root = tmp('rules-onoff');
-  fs.writeFileSync(path.join(root, 'build.js'), '');
-  saveRules('project', [{ effect: 'allow', match: 'node build.js*', by: 'user' }], root);
-  const [r] = loadRules(root).filter((x) => x.scope === 'project');
-  assert.ok(r.id && r.on === true && r.hits === 0);
-  assert.equal(loadRules(root).find((x) => x.scope === 'project').id, r.id, 'the same id on every read');
-  const run = (rules) => decide('node build.js', { shell: 'powershell', root, rules, mode: 'strict', yolo: {} });
-  assert.equal((await run(loadRules(root))).verdict, 'allow');
-  updateRule('project', r.id, { on: false }, root);
-  assert.equal(loadRules(root).find((x) => x.scope === 'project').on, false);
-  assert.notEqual((await run(loadRules(root))).verdict, 'allow', 'an off rule lets nothing through');
-  addRule('project', { effect: 'allow', match: 'node build.js*', by: 'button' }, root);
-  const back = loadRules(root).filter((x) => x.scope === 'project');
-  assert.deepEqual([back.length, back[0].on, back[0].id], [1, true, r.id]);
-  assert.ok(removeRule('project', r.id, root));
-  assert.equal(loadRules(root).filter((x) => x.scope === 'project').length, 0);
-  assert.equal(updateRule('project', 'nope', { on: true }, root), null);
+test('rules: a rule turned off is kept but not used, and each command a rule lets through counts one use', { skip: !WIN }, async () => {
+  { // rules: a rule turned off is kept but not used; ids stay put; adding it again turns it back on
+    const root = tmp('rules-onoff');
+    fs.writeFileSync(path.join(root, 'build.js'), '');
+    saveRules('project', [{ effect: 'allow', match: 'node build.js*', by: 'user' }], root);
+    const [r] = loadRules(root).filter((x) => x.scope === 'project');
+    assert.ok(r.id && r.on === true && r.hits === 0);
+    assert.equal(loadRules(root).find((x) => x.scope === 'project').id, r.id, 'the same id on every read');
+    const run = (rules) => decide('node build.js', { shell: 'powershell', root, rules, mode: 'strict', yolo: {} });
+    assert.equal((await run(loadRules(root))).verdict, 'allow');
+    updateRule('project', r.id, { on: false }, root);
+    assert.equal(loadRules(root).find((x) => x.scope === 'project').on, false);
+    assert.notEqual((await run(loadRules(root))).verdict, 'allow', 'an off rule lets nothing through');
+    addRule('project', { effect: 'allow', match: 'node build.js*', by: 'button' }, root);
+    const back = loadRules(root).filter((x) => x.scope === 'project');
+    assert.deepEqual([back.length, back[0].on, back[0].id], [1, true, r.id]);
+    assert.ok(removeRule('project', r.id, root));
+    assert.equal(loadRules(root).filter((x) => x.scope === 'project').length, 0);
+    assert.equal(updateRule('project', 'nope', { on: true }, root), null);
+  }
+  { // rules: each command a rule lets through counts one use; a chat rule's use goes to the page
+    const { events, dir } = await agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('', [['shell', { command: 'node build.js --x' }]]), reply('Done.')][i], {
+      prep: (d) => { buildJs(d); saveRules('project', [{ effect: 'allow', match: 'node build.js*', by: 'user' }], d); } });
+    const r = loadRules(dir).find((x) => x.scope === 'project');
+    assert.equal(r.hits, 2);
+    assert.ok(r.lastUsed > Date.now() - 60e3);
+    assert.equal(of(events, 'rule_used').length, 0, 'saved rules count in their file');
+    const chat = await agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('Done.')][i], {
+      prep: buildJs, more: { cmdRules: [{ id: 'c1', effect: 'allow', match: 'node build.js*', by: 'button' }, { id: 'c2', effect: 'allow', match: 'node other*', by: 'button', on: false }] } });
+    assert.deepEqual(of(chat.events, 'rule_used').map((e) => e.id), ['c1']);
+  }
 });
 
-test('rules: each command a rule lets through counts one use; a chat rule\'s use goes to the page', { skip: !WIN }, async () => {
-  const { events, dir } = await agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('', [['shell', { command: 'node build.js --x' }]]), reply('Done.')][i], {
-    prep: (d) => { buildJs(d); saveRules('project', [{ effect: 'allow', match: 'node build.js*', by: 'user' }], d); } });
-  const r = loadRules(dir).find((x) => x.scope === 'project');
-  assert.equal(r.hits, 2);
-  assert.ok(r.lastUsed > Date.now() - 60e3);
-  assert.equal(of(events, 'rule_used').length, 0, 'saved rules count in their file');
-  const chat = await agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('Done.')][i], {
-    prep: buildJs, more: { cmdRules: [{ id: 'c1', effect: 'allow', match: 'node build.js*', by: 'button' }, { id: 'c2', effect: 'allow', match: 'node other*', by: 'button', on: false }] } });
-  assert.deepEqual(of(chat.events, 'rule_used').map((e) => e.id), ['c1']);
-});
 
 test('helpers: an answer that isn\'t JSON fails its call at once, and UTF-8 characters split between chunks arrive whole', async () => {
   const { lineHost } = await import('../server/jobhost.js');
