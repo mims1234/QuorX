@@ -22,7 +22,7 @@ function loadEnv(file) {
 }
 loadEnv(path.join(HOME, '.env'));
 if (HOME !== ROOT) loadEnv(path.join(ROOT, '.env'));
-// The key every call uses: the one marked active in ⚙ Settings → API keys (.env's key by default).
+// The key every call uses: the one marked active in ⚙ Settings → Providers (.env's key by default).
 export const currentKey = () => activeKey();
 export const PORT = Number(process.env.AGENT_PORT || 5188);
 // The port the harness actually listens on (it moves up if PORT is taken by another program).

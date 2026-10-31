@@ -145,9 +145,9 @@ export const sourceOn = (id) => !!load()[id]?.on && ready(id);
 export function sourceOffWhy(id) {
   const d = SOURCES[id];
   if (!d) return 'no such source';
-  if (d.needsKey && !keyFor(id)) return `${d.name} has no key yet (⚙ Settings → API keys)`;
-  if (!d.needsKey && !findOnPath(d.app)) return `${d.name} is not installed (⚙ Settings → Apps on this PC)`;
-  return sourceOn(id) ? '' : `${d.name} is switched off (⚙ Settings → ${d.needsKey ? 'API keys' : 'Apps on this PC'})`;
+  if (d.needsKey && !keyFor(id)) return `${d.name} has no key yet (⚙ Settings → Providers)`;
+  if (!d.needsKey && !findOnPath(d.app)) return `${d.name} is not installed (⚙ Settings → Providers)`;
+  return sourceOn(id) ? '' : `${d.name} is switched off (⚙ Settings → Providers)`;
 }
 // What is kept: each source's switch, the key of one that takes a key, and a maker's API's own address and routing.
 // Anything else an older version saved here goes.
@@ -216,8 +216,8 @@ export function removeSourceKey(id) {
 // OpenCode's own providers inside the OpenCode app, which QuorX doesn't offer there: its Zen provider answers only
 // OpenCode's own app, and Go runs over its API with the user's key (opencodego.js).
 const BLOCKED_LOCAL = {
-  opencode: 'OpenCode’s own provider (OpenCode Zen) doesn’t answer calls from QuorX through the OpenCode app. Pick a model of another provider you connected in OpenCode, or an OpenCode Go model (⚙ Settings → API keys).',
-  [GO_ID]: 'OpenCode Go models run with your Go key (⚙ Settings → API keys), not through the OpenCode app. Pick the same model under OpenCode Go.',
+  opencode: 'OpenCode’s own provider (OpenCode Zen) doesn’t answer calls from QuorX through the OpenCode app. Pick a model of another provider you connected in OpenCode, or an OpenCode Go model (⚙ Settings → Providers).',
+  [GO_ID]: 'OpenCode Go models run with your Go key (⚙ Settings → Providers), not through the OpenCode app. Pick the same model under OpenCode Go.',
 };
 /** Why a model of the OpenCode app isn't offered (one of OpenCode's own providers), or ''. */
 export function blockedLocal(id) {
@@ -327,7 +327,7 @@ export function sameOnOpenRouter(id, orList = [], info = sourceInfo(id)) {
   return hits.find((x) => x.split('/')[0] === v) || hits[0];
 }
 
-// ---------- OpenRouter's ids on a maker's own API (⚙ Settings → API keys → "OpenRouter's ids run here") ----------
+// ---------- OpenRouter's ids on a maker's own API (⚙ Settings → Providers → "OpenRouter's ids run here") ----------
 const ROUTE_VENDOR = Object.fromEntries(DIRECT_IDS.flatMap((id) => DIRECT[id].or.map((v) => [v, id])));
 /** The maker's API an OpenRouter id would run on when routed there (on and set to take OpenRouter's ids), or null. */
 export function routeSource(id) {

@@ -177,22 +177,23 @@ function summarise(c) {
   const all = c.agent ? msgs : Object.values(c.layouts || {}).flatMap((l) => l.flatMap((col) => col.messages || []));
   const lastBot = [...msgs].reverse().find((m) => m.role === 'assistant' && m.content);
   // Spend over time (for today / 7 days) and per model, plus calls made outside a reply (mic).
-  const spend = [], models = {};
+  // `uses`: [when, model, cost, calls] per model per reply, for each provider's usage in ⚙ Settings → Providers.
+  const spend = [], models = {}, uses = [];
   let prev = null, plan = 0;
   for (const m of msgs) {
     const r = replySpend(m, prev), cost = r?.cost || 0;
     if (m.stats) plan += planOf(m.stats, prev?.stats);
     if (m.role === 'assistant') prev = m;
     if (cost) spend.push([m.doneAt || m.at || 0, cost]);
-    for (const [model, v] of Object.entries(r?.byModel || {})) models[model] = (models[model] || 0) + (v.cost || 0);
+    for (const [model, v] of Object.entries(r?.byModel || {})) { models[model] = (models[model] || 0) + (v.cost || 0); uses.push([m.doneAt || m.at || 0, model, v.cost || 0, v.calls || 1]); }
   }
-  for (const x of c.agent?.extraUsage || []) { spend.push([x.at || 0, x.cost || 0]); models[x.model] = (models[x.model] || 0) + (x.cost || 0); }
+  for (const x of c.agent?.extraUsage || []) { spend.push([x.at || 0, x.cost || 0]); models[x.model] = (models[x.model] || 0) + (x.cost || 0); uses.push([x.at || 0, x.model, x.cost || 0, 1]); }
   return {
     id: c.id, title: String(c.title || 'New chat'), mode: c.mode, projectId: c.projectId || 'scratch', created: c.created, updated: c.updated,
     lastAt: Math.max(0, ...all.map((m) => m.doneAt || m.at || 0)) || c.lastAt || c.created || c.updated,
     agents: lay.map((col) => col.name), model: lay[0]?.setup?.model || null, preview: String(lastBot?.content || '').replace(/\s+/g, ' ').slice(0, 90),
     messages: msgs.filter((m) => m.role === 'user').length, cost: spend.reduce((n, [, v]) => n + v, 0), plan,
-    artifacts: lay.reduce((n, col) => n + Object.keys(col.artifacts || {}).length, 0), spend, models,
+    artifacts: lay.reduce((n, col) => n + Object.keys(col.artifacts || {}).length, 0), spend, models, uses,
     // Replies whose cost is saved in this file (the budget ledger counts the others itself).
     runIds: [...msgs.filter((m) => m.runId && replySpend(m)).map((m) => m.runId), ...(c.agent?.extraUsage || []).filter((x) => x.runId).map((x) => x.runId)],
   };
@@ -204,7 +205,7 @@ function summarise(c) {
 // background pass every minute catches anything the watcher missed, a few hundred files at a time, so it never holds
 // the server up. Only the very first start, with no saved index yet, reads every chat before answering.
 const INDEX = path.join(HOME, 'data', 'index', 'chats.json');
-const INDEX_V = 3; // 2: each entry also names the pictures its chat uses; 3: and its plan value
+const INDEX_V = 4; // 2: each entry also names the pictures its chat uses; 3: and its plan value; 4: and its spend per model per reply
 // The pictures a chat names (/blob/…), for what deleting it would free.
 const blobsIn = (text) => [...new Set(String(text).match(/\/blob\/[0-9a-f]{64}\.[a-z0-9]{2,5}/g) || [])].map((x) => x.slice(6));
 const keyOf = (st) => `${st.size}:${st.mtimeMs}`;
@@ -285,7 +286,7 @@ function summaries() {
 let SLIM = null, slimV = -1;
 export function listChats() {
   const all = summaries();
-  if (slimV !== indexVersion) { SLIM = all.map(({ spend: _s, models: _m, runIds: _r, ...c }) => c).sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0)); slimV = indexVersion; }
+  if (slimV !== indexVersion) { SLIM = all.map(({ spend: _s, models: _m, uses: _u, runIds: _r, ...c }) => c).sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0)); slimV = indexVersion; }
   return SLIM;
 }
 // Per project, worked out once per change: what its saved chats cost, which replies those costs come from, how many
@@ -614,6 +615,25 @@ export function costSummary({ per = 5, sort = 'cost', providerOf = null } = {}) 
   const PSORT = { cost: (a, b) => b.cost - a.cost, today: (a, b) => b.today - a.today || b.cost - a.cost, messages: (a, b) => b.messages - a.messages, name: (a, b) => a.name.localeCompare(b.name), recent: (a, b) => (b.lastAt || 0) - (a.lastAt || 0) };
   if (providerOf) total.byProvider = byProvider;
   return { total, projects: Object.values(projects).filter((p) => p.chatCount).sort(PSORT[sort] || PSORT.cost) };
+}
+/**
+ * What each provider was paid (`providerOf` names a model's): today, this month and all time, the calls, its models'
+ * totals, and the last 14 days one by one. Absurd figures (a bad record) count as nothing.
+ */
+export function providerUsage({ providerOf, now = Date.now() } = {}) {
+  const d0 = new Date(new Date(now).toDateString()).getTime(), m0 = new Date(new Date(now).getFullYear(), new Date(now).getMonth(), 1).getTime();
+  const out = {};
+  for (const c of summaries()) for (const [t, model, v, n] of c.uses || []) {
+    const cost = Number(v);
+    if (!Number.isFinite(cost) || cost < 0 || cost >= 1e6) continue;
+    const p = (out[providerOf(model)] ??= { today: 0, month: 0, all: 0, calls: 0, models: {}, days: Array(14).fill(0), last: 0 });
+    p.all += cost; p.calls += Number(n) || 1; p.models[model] = (p.models[model] || 0) + cost; p.last = Math.max(p.last, t || 0);
+    if (t >= d0) p.today += cost;
+    if (t >= m0) p.month += cost;
+    const back = Math.floor((d0 - new Date(new Date(t).toDateString()).getTime()) / 864e5);
+    if (back >= 0 && back < 14) p.days[13 - back] += cost;
+  }
+  return out;
 }
 // One page of chats: in a project, or matching a search across all projects.
 export function costChats({ project, q = '', sort = 'cost', offset = 0, limit = 20 } = {}) {

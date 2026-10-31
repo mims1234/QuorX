@@ -252,14 +252,14 @@ export async function processDoc(projectId, id, opts = {}) {
       else if (ZIP_KINDS[doc.kind]) { text = readZipDoc(doc.kind, buf); method = `${ZIP_KINDS[doc.kind]} text`; }
       else if (doc.kind === 'pdf') {
         if (opts.ocr) {
-          if (!currentKey()) throw new Error('this needs an OpenRouter key (⚙ Settings → API keys)');
+          if (!currentKey()) throw new Error('this needs an OpenRouter key (⚙ Settings → Providers)');
           const r = await parseViaOpenRouter(file, doc.name, 'mistral-ocr', await readerModel(S.readerModel, (doc.pages || 50) * 600));
           charge(r.cost, r.model, 'doc-ocr'); text = r.text; method = `OCR (mistral-ocr via ${r.model})`;
         } else {
           const local = await pdfToText(file);
           if (local) { text = local.text; pages = local.pages; method = 'pdftotext (local, free)'; }
           else {
-            if (!currentKey()) throw new Error('this needs an OpenRouter key (⚙ Settings → API keys)');
+            if (!currentKey()) throw new Error('this needs an OpenRouter key (⚙ Settings → Providers)');
           const r = await parseViaOpenRouter(file, doc.name, 'cloudflare-ai', await readerModel(S.readerModel, doc.size / 8));
             charge(r.cost, r.model, 'doc-parse'); text = r.text; method = `OpenRouter file parser via ${r.model}`;
           }
@@ -278,7 +278,7 @@ export async function processDoc(projectId, id, opts = {}) {
     // 2. Small enough to send whole: done.
     if (tokens <= Number(S.inlineDocTokens)) return update(projectId, id, { ...base, status: 'text', note: `${tokens.toLocaleString()} tokens: sent whole with your message.` });
     // No OpenRouter key: searching needs its embeddings, but the text is here, so the agent reads it in parts.
-    if (!currentKey()) return update(projectId, id, { ...base, status: 'text', note: `${tokens.toLocaleString()} tokens: the agent reads it with read_doc. Making it searchable needs an OpenRouter key (⚙ Settings → API keys).` });
+    if (!currentKey()) return update(projectId, id, { ...base, status: 'text', note: `${tokens.toLocaleString()} tokens: the agent reads it with read_doc. Making it searchable needs an OpenRouter key (⚙ Settings → Providers).` });
     // 3. Big: index it, unless that costs more than the budget and the user hasn't said yes.
     const model = String(S.embedModel || DOC_DEFAULTS.embedModel);
     const est = await estimateEmbedCost(model, tokens);
@@ -301,7 +301,7 @@ export async function processDoc(projectId, id, opts = {}) {
     fs.writeFileSync(idxFile, JSON.stringify({ model, dims: vectors[0]?.length || 0, built: Date.now(), chunks, vectors: toB64(vectors) }));
     return update(projectId, id, { ...base, cost: +((doc.cost || 0) + spent).toFixed(6), status: 'indexed', embedModel: model, chunks: chunks.length, note: `${tokens.toLocaleString()} tokens in ${chunks.length} passages: the agent searches it.` });
   } catch (e) {
-    const why = !currentKey() && /auth|401|credential/i.test(String(e.message)) ? 'this needs an OpenRouter key (⚙ Settings → API keys)' : e.message;
+    const why = !currentKey() && /auth|401|credential/i.test(String(e.message)) ? 'this needs an OpenRouter key (⚙ Settings → Providers)' : e.message;
     return update(projectId, id, { status: 'error', error: why, note: `Could not read it: ${why}`, cost: +((doc.cost || 0) + spent).toFixed(6) });
   }
 }

@@ -1,5 +1,5 @@
 // Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
-// The Grok Build on this computer as a model source ("Grok Build on this PC" in ⚙ Settings → Apps on this PC).
+// The Grok Build on this computer as a model source ("Grok Build on this PC" in ⚙ Settings → Providers).
 // Each call runs `grok` once in its one-shot mode, hidden, in an empty folder of QuorX's own, with every built-in Grok
 // tool removed (only this mode honours that: its ACP mode keeps them), web search and subagents off, and a short system
 // prompt in place of Grok's own. QuorX's instructions, its tools (as text: textcalls.js) and the conversation go in a

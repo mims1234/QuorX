@@ -11,7 +11,7 @@
 //
 // The test copy keeps its own chats, projects and keys in .uitest/home (git ignores it), and runs on port 5197, so
 // your own QuorX and its data are never touched. The cli scenario needs an OpenRouter key in that copy: set
-// OPENROUTER_API_KEY when you start the test, or add one in the window when it asks (⚙ Settings → API keys; it
+// OPENROUTER_API_KEY when you start the test, or add one in the window when it asks (⚙ Settings → Providers; it
 // waits up to 10 minutes). Screenshots and report.html go to .uitest/runs/<time>/.
 import fs from 'node:fs';
 import os from 'node:os';
@@ -258,8 +258,8 @@ async function cliScenario() {
   await step('An OpenRouter key is set in the test copy', async () => {
     if (await hasKey()) return 'A key is set.';
     await click('#settingsBtn'); await click('#stNav [data-cat="keys"]');
-    await moment('Waiting for a key: add one in ⚙ Settings → API keys', 'The test copy has no key. Add one in the window (a separate key with a small spending limit is best).');
-    log('>>> The test copy has no OpenRouter key. Add one in the QuorX window that opened (⚙ Settings → API keys). Waiting up to 10 minutes…');
+    await moment('Waiting for a key: add one in ⚙ Settings → Providers', 'The test copy has no key. Add one in the window (a separate key with a small spending limit is best).');
+    log('>>> The test copy has no OpenRouter key. Add one in the QuorX window that opened (⚙ Settings → Providers). Waiting up to 10 minutes…');
     const t0 = Date.now();
     while (!(await hasKey())) { if (Date.now() - t0 > 600e3) throw new Error('no key was added within 10 minutes'); await sleep(2000); }
     await js(`document.querySelector('#stCancel')?.click(); return true;`);

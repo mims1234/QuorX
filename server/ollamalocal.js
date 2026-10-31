@@ -1,5 +1,5 @@
 // Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
-// The Ollama on this computer as a model source ("Ollama on this PC" in ⚙ Settings → Apps on this PC): the models the
+// The Ollama on this computer as a model source ("Ollama on this PC" in ⚙ Settings → Providers): the models the
 // user pulled, run on this computer at no cost, and the Ollama cloud models they signed in for (ollama signin).
 //   - Its server is the one the Ollama app runs (http://127.0.0.1:11434, or OLLAMA_HOST). When it isn't running and
 //     a call needs it, QuorX starts `ollama serve` hidden and leaves it running, as the Ollama app would.

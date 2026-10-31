@@ -761,3 +761,95 @@
 #settings .src-opts .st-row-help { margin: 0 0 4px; }
 #settings .src-base { flex: 1 1 260px; min-width: 0; }
 #settings .src-base input { font: 12px var(--mono); }
+
+/* ⚙ Providers: tabs, a compact list (one row per provider) and the chosen one's detail. The page lays itself out by
+   its own width: list and detail side by side when wide, the detail in place of the list when narrow (Back returns),
+   rows on two lines on a phone. */
+#settings .pv { container: pv / inline-size; --pv-logo: 22px; --pv-st: 104px; --pv-mc: 56px; --pv-sp: 82px; --pv-ctl: 64px; }
+#settings .pv-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
+#settings .pv-tab { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 10px; margin-bottom: -1px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--muted); font: 600 12.5px var(--font-ui); cursor: pointer; white-space: nowrap; }
+#settings .pv-tab .n { font: 600 10.5px var(--mono); color: var(--dim); }
+#settings .pv-tab:hover { color: var(--text-bright); }
+#settings .pv-tab[aria-selected="true"] { color: var(--text-bright); border-bottom-color: var(--accent); }
+#settings .pv-tab[aria-selected="true"] .n { color: var(--accent); }
+#settings .pv-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; margin-top: 12px; align-items: start; }
+#settings .pv-pick { display: none; }
+#settings .pv-tools { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+#settings .pv-search { position: relative; flex: 0 1 280px; display: flex; align-items: center; }
+#settings .pv-search > span { position: absolute; left: 10px; color: var(--dim); pointer-events: none; }
+#settings .pv-search input { width: 100%; padding-left: 28px; }
+#settings .pv-count { margin-left: auto; font-size: 12px; color: var(--muted); }
+#settings .pv-cols, #settings .pv-row-main { display: grid; grid-template-columns: var(--pv-logo) minmax(0, auto) minmax(0, 1fr) var(--pv-st) var(--pv-mc) var(--pv-sp); column-gap: 10px; align-items: center; }
+#settings .pv-cols { grid-template-columns: minmax(0, 1fr) var(--pv-st) var(--pv-mc) var(--pv-sp) var(--pv-ctl); padding: 4px 10px; font: 700 10px var(--font-ui); letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }
+#settings .pv-cols .r { text-align: right; }
+#settings .pv-gh { display: flex; align-items: baseline; gap: 10px; margin: 14px 0 4px; padding: 0 10px; }
+#settings .pv-gh b { font: 700 10.5px var(--font-ui); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+#settings .pv-gh small { font-size: 11.5px; color: var(--dim); }
+#settings .pv-row { display: grid; grid-template-columns: minmax(0, 1fr) var(--pv-ctl); align-items: center; border-radius: 9px; }
+#settings .pv-row + .pv-row { box-shadow: 0 -1px 0 var(--line-subtle, var(--line)); }
+#settings .pv-row:hover { background: var(--panel-2); }
+#settings .pv-row.sel, #settings .pv-row.sel:hover { background: var(--accent-dim); box-shadow: inset 2px 0 0 var(--accent); }
+#settings .pv-row-main { min-height: 46px; padding: 6px 10px; border: 0; border-radius: 9px; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+#settings .pv-row-main:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+#settings .pv-row-main .src-logo, #settings .pv-row-main .mp-ava { width: 20px; height: 20px; }
+#settings .pv-nm { font-size: 13px; font-weight: 650; color: var(--text-bright); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#settings .pv-tagcell { display: flex; min-width: 0; }
+#settings .pv-mc { text-align: right; font: 600 12px var(--mono); color: var(--text); font-variant-numeric: tabular-nums; }
+#settings .pv-mc.none { color: var(--dim); }
+#settings .pv-mc .pv-unit { display: none; }
+#settings .pv-sp { text-align: right; }
+#settings .sx-money.zero { opacity: .5; }
+#settings .pv-ctl { justify-self: end; padding-right: 10px; }
+#settings .pv-keys { font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+#settings .pv-empty { padding: 24px 10px; color: var(--muted); font-size: 13px; }
+#settings .pv-detail { min-width: 0; display: grid; gap: 12px; align-content: start; }
+#settings .pv-detail .src-card { margin: 0; }
+#settings .pv-back { justify-self: start; }
+#settings .pv-sec { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; background: var(--panel); }
+#settings .pv-sec h4 { margin: 0 0 8px; font: 700 12px var(--font-ui); color: var(--text-bright); }
+#settings .pv-sec .st-row-help { margin: 6px 0 0; }
+#settings .pv-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+#settings .pv-kpi { display: grid; gap: 2px; }
+#settings .pv-kpi small { font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+#settings .pv-kpi b { font: 650 12.5px var(--mono); color: var(--text); }
+#settings .pv-spark { display: flex; align-items: flex-end; gap: 3px; height: 44px; margin-top: 12px; }
+#settings .pv-spark i { flex: 1; min-height: 2px; border-radius: 2px 2px 0 0; background: var(--sx-money, var(--amber)); opacity: .8; }
+#settings .pv-spark-axis { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--dim); margin-top: 3px; }
+#settings .pv-top { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 4px; }
+#settings .pv-top li { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; color: var(--text); }
+#settings .pv-top li span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); }
+#settings .pv-links { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 8px 0 0; }
+/* Room for both: the chosen provider beside the list, whose rows go compact (two lines) to make room; the detail stays
+   in view while the list scrolls. */
+@container pv (min-width: 760px) {
+  #settings .pv-grid.has-sel { grid-template-columns: minmax(250px, 0.8fr) minmax(360px, 1.2fr); }
+  #settings .pv-detail { position: sticky; top: 0; max-height: calc(100vh - 170px); overflow-y: auto; }
+  #settings .pv-back { display: none; }
+}
+/* Narrower: the chosen provider takes the place of the list; Back returns to it. */
+@container pv (max-width: 759px) {
+  #settings .pv-grid.has-sel .pv-listcol { display: none; }
+}
+/* Two-line rows (name and tag, then status and spend): beside a detail, and on a phone. */
+#settings .pv-grid.has-sel .pv-cols { display: none; }
+#settings .pv-grid.has-sel .pv-row-main { grid-template-columns: var(--pv-logo) minmax(0, 1fr) auto; grid-template-areas: "logo name tag" "logo st sp"; row-gap: 2px; padding: 8px 10px; }
+#settings .pv-grid.has-sel .pv-row-main > :first-child { grid-area: logo; }
+#settings .pv-grid.has-sel .pv-nm { grid-area: name; }
+#settings .pv-grid.has-sel .pv-tagcell { grid-area: tag; justify-content: end; }
+#settings .pv-grid.has-sel .pv-st { grid-area: st; }
+#settings .pv-grid.has-sel .pv-mc { display: none; }
+#settings .pv-grid.has-sel .pv-sp { grid-area: sp; }
+#settings .pv-grid.has-sel .pv-count { display: none; }
+@container pv (max-width: 560px) {
+  #settings .pv-cols { display: none; }
+  #settings .pv-row-main { grid-template-columns: var(--pv-logo) minmax(0, 1fr) auto; grid-template-areas: "logo name tag" "logo st sp"; row-gap: 2px; padding: 8px 10px; }
+  #settings .pv-row-main > :first-child { grid-area: logo; }
+  #settings .pv-nm { grid-area: name; }
+  #settings .pv-tagcell { grid-area: tag; justify-content: end; }
+  #settings .pv-st { grid-area: st; }
+  #settings .pv-mc { display: none; }
+  #settings .pv-sp { grid-area: sp; }
+  #settings .pv-search { flex: 1 1 auto; }
+  #settings .pv-count { display: none; }
+  #settings .pv-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

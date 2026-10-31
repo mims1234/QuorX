@@ -806,7 +806,7 @@ const DESIGN_NEXT = (root) => {
 // so the user (and you, in that chat) can look back at every run and change the job; each run starts fresh.
 // 🧲 Adding an MCP server to QuorX from a setup the user pasted (server/mcpclient.js). It runs a program or reaches a
 // server for them, so it always asks first, with buttons only.
-const MCP_SETUP_TOOL = { type: 'function', function: { name: 'mcp_setup', description: 'Add an MCP server to QuorX (its tools then become yours in this chat), or list the ones QuorX has. action "add" with setup: what the user gave you, as they gave it: an mcpServers JSON config, a command line such as "npx -y @scope/server" or "claude mcp add name -- npx -y pkg", or a server\'s https address; name: a short name if the setup has none. The user sees exactly what it will run and adds it with a click; it is then ticked for this chat and started, and its tools come back to you. action "list": the servers QuorX has and their tools. Setup instructions are often written for another tool (Claude Code, Codex, Cursor, VS Code, Gemini CLI…). When the user pasted such instructions without saying where they go, ask with ask_user whether to add it to QuorX (what they usually mean here) or to that tool; never edit another tool\'s own config files unless they say so. Keys a server needs go in its env or headers in the setup, never in your reply. The same goes for other setup pasted for another tool (a model provider or API key, a skill, a rule file): ask whether they mean QuorX, and if so say where it goes in QuorX (keys and providers: ⚙ Settings → API keys and Models; skills: ⚙ Settings → Skills) instead of asking for a key in the chat.', parameters: { type: 'object', required: ['action'], properties: {
+const MCP_SETUP_TOOL = { type: 'function', function: { name: 'mcp_setup', description: 'Add an MCP server to QuorX (its tools then become yours in this chat), or list the ones QuorX has. action "add" with setup: what the user gave you, as they gave it: an mcpServers JSON config, a command line such as "npx -y @scope/server" or "claude mcp add name -- npx -y pkg", or a server\'s https address; name: a short name if the setup has none. The user sees exactly what it will run and adds it with a click; it is then ticked for this chat and started, and its tools come back to you. action "list": the servers QuorX has and their tools. Setup instructions are often written for another tool (Claude Code, Codex, Cursor, VS Code, Gemini CLI…). When the user pasted such instructions without saying where they go, ask with ask_user whether to add it to QuorX (what they usually mean here) or to that tool; never edit another tool\'s own config files unless they say so. Keys a server needs go in its env or headers in the setup, never in your reply. The same goes for other setup pasted for another tool (a model provider or API key, a skill, a rule file): ask whether they mean QuorX, and if so say where it goes in QuorX (keys and providers: ⚙ Settings → Providers and Models; skills: ⚙ Settings → Skills) instead of asking for a key in the chat.', parameters: { type: 'object', required: ['action'], properties: {
   action: { type: 'string', enum: ['add', 'list'] }, setup: { type: 'string', description: 'For add: the config, command line or address, as the user gave it.' }, name: { type: 'string', description: 'For add: a short name (letters, digits, - and _) when the setup gives none.' } } } } };
 const SCHEDULE_TOOL = { type: 'function', function: { name: 'schedule', description: 'The user\'s schedules: jobs QuorX runs on its own at set times, like "every 3 minutes type /ldrop in the bot channel" or "weekdays at 9 summarise my inbox". Each run starts fresh with only its prompt (no memory of this chat), uses its own model and mode, and posts its reply in the schedule\'s chat; a schedule made here posts in THIS chat, so later the user can ask you here what the runs saw. Actions: list (every schedule, this chat\'s first, with recent runs); create (name, prompt, when; write the prompt as complete instructions for a fresh agent: where to go, what to do, what to report); update (id, then any of name, prompt, when, notify, model, approval); pause / resume / run_now / delete (id). when: {"kind":"every","minutes":15} (3 or more), {"kind":"daily","time":"09:00","days":[1,2,3,4,5]} (0 = Sunday; no days = every day) or {"kind":"once","at":"2026-10-28T18:30"} (local time). notify: always, failure (only when a run fails), needs (only when a run waits for the user) or changed (only when the result differs from last time). Creating, changing, resuming, running now and deleting ask the user first.', parameters: { type: 'object', required: ['action'], properties: {
   action: { type: 'string', enum: ['list', 'create', 'update', 'pause', 'resume', 'run_now', 'delete'] },
@@ -1031,10 +1031,10 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
     const to = o?.model ? movedModel(o.model) : null;
     if (to && to !== o.model) { emit({ t: 'note', level: 'info', msg: `${o.model} ran through the OpenCode app on this PC; Go models now run with your key, so this reply uses ${to} with your OpenCode Go key. Pick it in the chat's model button to keep it.`, at: 0 }); o.model = to; }
   }
-  // An OpenRouter model the user runs on its maker's own API (⚙ Settings → API keys) goes there for this reply.
+  // An OpenRouter model the user runs on its maker's own API (⚙ Settings → Providers) goes there for this reply.
   if (!deps.sourceStream) for (const o of [setup, carryOn]) {
     const to = o?.model ? await routeModel(o.model) : null;
-    if (to && to !== o.model) { emit({ t: 'note', level: 'info', msg: `${short(o.model)} runs on ${sourceOf(to).def.name}’s own API with your key (⚙ Settings → API keys), as ${to}.`, at: 0 }); o.model = to; }
+    if (to && to !== o.model) { emit({ t: 'note', level: 'info', msg: `${short(o.model)} runs on ${sourceOf(to).def.name}’s own API with your key (⚙ Settings → Providers), as ${to}.`, at: 0 }); o.model = to; }
   }
   // A source whose models can't use apps (sources.js noDesktop): no desktop tool in this reply, and the model says so.
   const noDesktop = sourceOf(carryOn?.model || setup.model)?.def.noDesktop || '';
@@ -1042,7 +1042,7 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   // (the deciders and checks, the enhancer, helpers, the reviewer, fresh eyes, paid media, a fallback) is off.
   const noOpenRouter = deps.noOpenRouter ?? (!deps.chatStream && !currentKey());
   if (noOpenRouter) {
-    if (!sourceOf(carryOn?.model || setup.model)) throw Object.assign(new Error(`${carryOn?.model || setup.model} runs on OpenRouter, and there is no OpenRouter key yet. Pick a model of an app on this PC or of OpenCode Go (⚙ Settings → API keys), or add an OpenRouter key in ⚙ Settings → API keys.`), { status: 400 });
+    if (!sourceOf(carryOn?.model || setup.model)) throw Object.assign(new Error(`${carryOn?.model || setup.model} runs on OpenRouter, and there is no OpenRouter key yet. Pick a model of an app on this PC or of OpenCode Go (⚙ Settings → Providers), or add an OpenRouter key in ⚙ Settings → Providers.`), { status: 400 });
     // A helper, reviewer, enhancer or fresh eyes set to a model of an app on this PC keeps working; the rest run on
     // OpenRouter and are off.
     const onApp = (m) => !!sourceOf(String(m || '').trim());
@@ -1052,7 +1052,7 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
     if (votersOn) keep.deciders = true;
     Object.assign(S, { deciders: votersOn ? S.deciders : false, enhancer: keep.enhancer ? S.enhancer : false, freshEyes: keep.freshEyes ? S.freshEyes : false, review: keep.review ? S.review : 'off', codeReview: keep.review ? S.codeReview : 'off', helpers: keep.helpers ? S.helpers : false, sourceFallback: 'off', fallbackModel: '', buildThinking: 'off' });
     const off = [...(votersOn ? [] : ['the deciders']), ...[['review', 'the reviewer'], ['enhancer', 'the prompt enhancer'], ['helpers', 'helpers'], ['freshEyes', 'fresh eyes']].filter(([k]) => !keep[k]).map(([, w]) => w), 'paid media'];
-    emit({ t: 'note', level: 'info', msg: `No OpenRouter key yet: ${off.slice(0, -1).join(', ')} and ${off.at(-1)} are off for this reply (they run on OpenRouter). Add a key in ⚙ Settings → API keys, or set them to a model tagged This PC.`, at: 0 });
+    emit({ t: 'note', level: 'info', msg: `No OpenRouter key yet: ${off.slice(0, -1).join(', ')} and ${off.at(-1)} are off for this reply (they run on OpenRouter). Add a key in ⚙ Settings → Providers, or set them to a model tagged This PC.`, at: 0 });
   }
   const blockedNames = blockedFor(S.blockedProviders, setup.model);
   const blockedSlugs = blockedNames.length ? providerSlugs(blockedNames, knownProviders()) : [];
@@ -2025,7 +2025,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       }
     }
     const to = sourceFallbackFor(sm, S, catalogue);
-    if (!to) throw Object.assign(new Error(`${why}. Pick another model in the chat's model button (or fix ${name}), then send a message to carry on. QuorX doesn't switch models by itself (⚙ Settings → Apps on this PC → When a call fails).`), { status: 400, source: s.source });
+    if (!to) throw Object.assign(new Error(`${why}. Pick another model in the chat's model button (or fix ${name}), then send a message to carry on. QuorX doesn't switch models by itself (⚙ Settings → Providers → When a call fails).`), { status: 400, source: s.source });
     const rest = !!run.sourceOff[s.source], first = rest && !run.sourceOffSaid?.[s.source];
     if (first) (run.sourceOffSaid ??= {})[s.source] = true;
     emit({ t: 'source_fallback', step: role === 'writer' ? run.stepNow ?? null : null, role, from: sm, to, source: s.source, kind, why: clip(why, 300), rest, at: at() });
@@ -2124,7 +2124,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         }
         // The key's own spending limit or credits: stop and say so, never retry or switch models to get round it.
         if ((e.status === 402 || e.status === 403) && /limit|credit|budget|guardrail|quota|insufficient/i.test(e.message)) {
-          e.message = `OpenRouter stopped this call: ${e.message}. The key's spending limit or its credits are used up, so QuorX stopped here instead of retrying. Raise the limit on openrouter.ai, or switch keys in ⚙ Settings → API keys, then send a message to carry on.`;
+          e.message = `OpenRouter stopped this call: ${e.message}. The key's spending limit or its credits are used up, so QuorX stopped here instead of retrying. Raise the limit on openrouter.ai, or switch keys in ⚙ Settings → Providers, then send a message to carry on.`;
           throw e;
         }
         if (!retryable(e) || attempt >= tries) throw e;
@@ -5433,7 +5433,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
   }
 
   async function enableMediaTool(args) {
-    if (noOpenRouter) return 'Error: paid media runs on OpenRouter, and there is no OpenRouter key yet (⚙ Settings → API keys).';
+    if (noOpenRouter) return 'Error: paid media runs on OpenRouter, and there is no OpenRouter key yet (⚙ Settings → Providers).';
     const off = mediaOff();
     const want = [...new Set((Array.isArray(args.kinds) ? args.kinds : []).map(String))].filter((k) => off.includes(k));
     if (!want.length) return off.length ? `Error: give kinds, from the paid tools that are off here: ${off.join(', ')}.` : 'Every paid tool is already on in this chat.';
