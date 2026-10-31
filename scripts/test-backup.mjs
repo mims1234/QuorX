@@ -61,42 +61,57 @@ function homeA() {
 }
 const entries = (file) => { const buf = fs.readFileSync(file), names = []; for (let i = 0; i + 46 < buf.length; i++) if (buf.readUInt32LE(i) === 0x02014b50) { const n = buf.readUInt16LE(i + 28); names.push(buf.toString('utf8', i + 46, i + 46 + n)); } return names; };
 
-test('backup calls need the app key', async () => {
-  const qx = await quorx(tempDir('qx-backup-key-'));
-  try {
-    const r = await qx.call('/api/backup/export', { dir: tempDir('qx-out-') }, '');
-    assert.equal(r.status, 401);
-    assert.equal(r.body.code, 'APP_KEY');
-  } finally { await qx.stop(); }
-});
-
-test('export leaves the API keys out unless both boxes are ticked, and logs out unless asked', async () => {
-  const a = homeA(), qx = await quorx(a.home);
-  try {
-    const out = tempDir('qx-out-');
-    const plain = (await qx.call('/api/backup/export', { dir: out, settings: { settings: { theme: 'dark' } } })).body;
-    assert.ok(!plain.error, plain.error);
-    assert.equal(plain.counts.keys, 0);
-    const names = entries(plain.file);
-    assert.ok(!names.includes('keys.json'), 'no keys by default');
-    assert.ok(!names.some((n) => n.startsWith('logs/')), 'no logs by default');
-    assert.ok(!fs.readFileSync(plain.file).includes(Buffer.from(KEY)), 'the key text is nowhere in the file');
-    assert.ok(!names.some((n) => /app-key|access\.json|key-usage/.test(n)), 'never the app key or pairing');
-    const half = (await qx.call('/api/backup/export', { dir: out, keys: true })).body;
-    assert.ok(!entries(half.file).includes('keys.json'), 'one box is not enough');
-    const both = (await qx.call('/api/backup/export', { dir: out, keys: true, keysWarned: true })).body;
-    assert.ok(!entries(both.file).includes('keys.json'), 'both boxes without the confirmation pass are not enough');
-    assert.equal((await qx.call('/api/backup/key-pass', {})).status, 403, 'only the page itself gets a pass');
-    const pass = await qx.keyPass();
-    const full = (await qx.call('/api/backup/export', { dir: out, keys: true, keysWarned: true, logs: true, keyPass: pass })).body;
-    const again = (await qx.call('/api/backup/export', { dir: out, keys: true, keysWarned: true, keyPass: pass })).body;
-    assert.ok(!entries(again.file).includes('keys.json'), 'a pass works once');
-    assert.equal(full.counts.keys, 1);
-    const fullNames = entries(full.file);
-    assert.ok(fullNames.includes('keys.json') && fullNames.includes('logs/audit.jsonl'));
-    assert.ok(!fullNames.includes('logs/bench-build-x.jsonl'), 'benchmark logs are not the user\'s own');
-    assert.notEqual(path.basename(plain.file), path.basename(full.file), 'a second backup the same day gets its own name');
-  } finally { await qx.stop(); }
+test('backup keys: the calls need the app key, export leaves API keys out unless both boxes are ticked, and keys come back only when asked', async () => {
+  { // backup calls need the app key
+    const qx = await quorx(tempDir('qx-backup-key-'));
+    try {
+      const r = await qx.call('/api/backup/export', { dir: tempDir('qx-out-') }, '');
+      assert.equal(r.status, 401);
+      assert.equal(r.body.code, 'APP_KEY');
+    } finally { await qx.stop(); }
+  }
+  { // export leaves the API keys out unless both boxes are ticked, and logs out unless asked
+    const a = homeA(), qx = await quorx(a.home);
+    try {
+      const out = tempDir('qx-out-');
+      const plain = (await qx.call('/api/backup/export', { dir: out, settings: { settings: { theme: 'dark' } } })).body;
+      assert.ok(!plain.error, plain.error);
+      assert.equal(plain.counts.keys, 0);
+      const names = entries(plain.file);
+      assert.ok(!names.includes('keys.json'), 'no keys by default');
+      assert.ok(!names.some((n) => n.startsWith('logs/')), 'no logs by default');
+      assert.ok(!fs.readFileSync(plain.file).includes(Buffer.from(KEY)), 'the key text is nowhere in the file');
+      assert.ok(!names.some((n) => /app-key|access\.json|key-usage/.test(n)), 'never the app key or pairing');
+      const half = (await qx.call('/api/backup/export', { dir: out, keys: true })).body;
+      assert.ok(!entries(half.file).includes('keys.json'), 'one box is not enough');
+      const both = (await qx.call('/api/backup/export', { dir: out, keys: true, keysWarned: true })).body;
+      assert.ok(!entries(both.file).includes('keys.json'), 'both boxes without the confirmation pass are not enough');
+      assert.equal((await qx.call('/api/backup/key-pass', {})).status, 403, 'only the page itself gets a pass');
+      const pass = await qx.keyPass();
+      const full = (await qx.call('/api/backup/export', { dir: out, keys: true, keysWarned: true, logs: true, keyPass: pass })).body;
+      const again = (await qx.call('/api/backup/export', { dir: out, keys: true, keysWarned: true, keyPass: pass })).body;
+      assert.ok(!entries(again.file).includes('keys.json'), 'a pass works once');
+      assert.equal(full.counts.keys, 1);
+      const fullNames = entries(full.file);
+      assert.ok(fullNames.includes('keys.json') && fullNames.includes('logs/audit.jsonl'));
+      assert.ok(!fullNames.includes('logs/bench-build-x.jsonl'), 'benchmark logs are not the user\'s own');
+      assert.notEqual(path.basename(plain.file), path.basename(full.file), 'a second backup the same day gets its own name');
+    } finally { await qx.stop(); }
+  }
+  { // keys come back only when the backup has them and the import asks for them
+    const a = homeA(), qa = await quorx(a.home);
+    let file;
+    try { file = (await qa.call('/api/backup/export', { dir: tempDir('qx-out-'), keys: true, keysWarned: true, keyPass: await qa.keyPass() })).body.file; } finally { await qa.stop(); }
+    const qb = await quorx(tempDir('qx-backup-b-'));
+    try {
+      assert.equal((await qb.call('/api/backup/inspect', { file })).body.keys, 1);
+      await qb.call('/api/backup/import', { file });
+      assert.equal((await qb.call('/api/keys')).body.length, 0, 'not without asking');
+      const r = (await qb.call('/api/backup/import', { file, keys: true })).body;
+      assert.equal(r.keys, 1);
+      assert.equal((await qb.call('/api/keys')).body[0].masked.endsWith(KEY.slice(-4)), true);
+    } finally { await qb.stop(); }
+  }
 });
 
 test('round trip: import on another computer asks before overwriting and re-points a missing folder', async () => {
@@ -232,25 +247,35 @@ test('your own skills and memory go in the backup and come back, keeping what is
 });
 
 // A backup with one broken part: nothing at all is written.
-test('a damaged backup is refused before anything is written', async () => {
-  const home = tempDir('qx-backup-dmg-'), qx = await quorx(home);
-  try {
-    const before = fs.readFileSync(path.join(home, 'data', 'projects.json'), 'utf8');
-    const make = (extra) => {
-      const f = path.join(tempDir('qx-out-'), 'quorx-backup-bad.zip');
-      const j = (o) => Buffer.from(JSON.stringify(o));
-      fs.writeFileSync(f, zipBuffer([{ name: 'manifest.json', data: j({ format: 'quorx-backup', version: 1 }) }, { name: 'projects.json', data: j([{ id: 'new-app', name: 'New', path: home }]) },
-        { name: 'chats/c-good.json', data: j({ id: 'c-good', title: 'fine' }) }, ...extra]));
-      return f;
-    };
-    for (const [why, extra] of [['a log named "."', [{ name: 'logs/.', data: Buffer.from('x') }]], ['a chat whose id differs from its name', [{ name: 'chats/c-two.json', data: Buffer.from('{"id":"other"}') }]], ['a chat that is not JSON', [{ name: 'chats/c-three.json', data: Buffer.from('{') }]],
-      ['a skill file that climbs out of its folder', [{ name: 'skills/evil/../../keys.json', data: Buffer.from('{}') }]], ['memory that is not a list', [{ name: 'memory.json', data: Buffer.from('{"items":5}') }]]]) {
-      const r = (await qx.call('/api/backup/import', { file: make(extra) })).body;
-      assert.match(r.error || '', /damaged.*nothing was imported/, why);
-      assert.equal(fs.readFileSync(path.join(home, 'data', 'projects.json'), 'utf8'), before, `${why}: the project list is untouched`);
-      assert.ok(!fs.existsSync(path.join(home, 'data', 'chats', 'c-good.json')), `${why}: no chat was written`);
-    }
-  } finally { await qx.stop(); }
+test('a damaged backup, or a file that is not a QuorX backup, is refused before anything is written', async () => {
+  { // a damaged backup is refused before anything is written
+    const home = tempDir('qx-backup-dmg-'), qx = await quorx(home);
+    try {
+      const before = fs.readFileSync(path.join(home, 'data', 'projects.json'), 'utf8');
+      const make = (extra) => {
+        const f = path.join(tempDir('qx-out-'), 'quorx-backup-bad.zip');
+        const j = (o) => Buffer.from(JSON.stringify(o));
+        fs.writeFileSync(f, zipBuffer([{ name: 'manifest.json', data: j({ format: 'quorx-backup', version: 1 }) }, { name: 'projects.json', data: j([{ id: 'new-app', name: 'New', path: home }]) },
+          { name: 'chats/c-good.json', data: j({ id: 'c-good', title: 'fine' }) }, ...extra]));
+        return f;
+      };
+      for (const [why, extra] of [['a log named "."', [{ name: 'logs/.', data: Buffer.from('x') }]], ['a chat whose id differs from its name', [{ name: 'chats/c-two.json', data: Buffer.from('{"id":"other"}') }]], ['a chat that is not JSON', [{ name: 'chats/c-three.json', data: Buffer.from('{') }]],
+        ['a skill file that climbs out of its folder', [{ name: 'skills/evil/../../keys.json', data: Buffer.from('{}') }]], ['memory that is not a list', [{ name: 'memory.json', data: Buffer.from('{"items":5}') }]]]) {
+        const r = (await qx.call('/api/backup/import', { file: make(extra) })).body;
+        assert.match(r.error || '', /damaged.*nothing was imported/, why);
+        assert.equal(fs.readFileSync(path.join(home, 'data', 'projects.json'), 'utf8'), before, `${why}: the project list is untouched`);
+        assert.ok(!fs.existsSync(path.join(home, 'data', 'chats', 'c-good.json')), `${why}: no chat was written`);
+      }
+    } finally { await qx.stop(); }
+  }
+  { // import refuses a file that is not a QuorX backup
+    const qx = await quorx(tempDir('qx-backup-c-'));
+    try {
+      const f = path.join(tempDir('qx-out-'), 'quorx-backup-fake.zip');
+      fs.writeFileSync(f, 'not a zip');
+      assert.match((await qx.call('/api/backup/inspect', { file: f })).body.error, /not a QuorX backup/);
+    } finally { await qx.stop(); }
+  }
 });
 
 test('imported settings keep the safety settings of this computer', () => {
@@ -264,30 +289,6 @@ test('imported settings keep the safety settings of this computer', () => {
   assert.equal(out.settings.fontSize, 16);
   assert.deepEqual(out.templates, ['t']);
   assert.equal(mergeSettings(theirs, null).settings.approval, undefined, 'with nothing saved here, the defaults apply');
-});
-
-test('keys come back only when the backup has them and the import asks for them', async () => {
-  const a = homeA(), qa = await quorx(a.home);
-  let file;
-  try { file = (await qa.call('/api/backup/export', { dir: tempDir('qx-out-'), keys: true, keysWarned: true, keyPass: await qa.keyPass() })).body.file; } finally { await qa.stop(); }
-  const qb = await quorx(tempDir('qx-backup-b-'));
-  try {
-    assert.equal((await qb.call('/api/backup/inspect', { file })).body.keys, 1);
-    await qb.call('/api/backup/import', { file });
-    assert.equal((await qb.call('/api/keys')).body.length, 0, 'not without asking');
-    const r = (await qb.call('/api/backup/import', { file, keys: true })).body;
-    assert.equal(r.keys, 1);
-    assert.equal((await qb.call('/api/keys')).body[0].masked.endsWith(KEY.slice(-4)), true);
-  } finally { await qb.stop(); }
-});
-
-test('import refuses a file that is not a QuorX backup', async () => {
-  const qx = await quorx(tempDir('qx-backup-c-'));
-  try {
-    const f = path.join(tempDir('qx-out-'), 'quorx-backup-fake.zip');
-    fs.writeFileSync(f, 'not a zip');
-    assert.match((await qx.call('/api/backup/inspect', { file: f })).body.error, /not a QuorX backup/);
-  } finally { await qx.stop(); }
 });
 
 // ---------- the ZIP itself: streamed, ZIP64 past the 32-bit limits, and the backups made before ----------
@@ -348,71 +349,70 @@ const bigText = path.join(BIG, 'big.txt'), bigVideo = path.join(BIG, 'big.mp4');
 fs.writeFileSync(bigText, crypto.randomBytes(4.5e6).toString('hex'));
 fs.writeFileSync(bigVideo, crypto.randomBytes(8.5e6));
 
-test('a backup that needs no ZIP64 is byte for byte what the old writer made, and the old reader reads it', async () => {
-  const mtime = new Date(2026, 9, 21, 12, 30, 4), j = (o) => Buffer.from(JSON.stringify(o, null, 2));
-  const small = path.join(tempDir('qx-zip-'), 'notes.md');
-  fs.writeFileSync(small, '# Notes\n' + 'a line that repeats\n'.repeat(500));
-  const items = [
-    { name: 'manifest.json', data: j({ format: 'quorx-backup', version: 1 }), mtime }, { name: 'chats/c1.json', data: j({ id: 'c1', title: 'hi', messages: ['x'.repeat(3000)] }), mtime },
-    { name: `blobs/${BLOB}`, data: Buffer.from([0x89, 0x50, 0x4e, 0x47]), mtime }, { name: 'blobs/empty.txt', data: Buffer.alloc(0), mtime },
-    { name: 'skills/s/notes.md', file: small, mtime }, { name: 'logs/big.txt', file: bigText, mtime },
-  ];
-  const file = path.join(tempDir('qx-zip-'), 'new.zip'), bytes = await zipFile(file, items);
-  const made = fs.readFileSync(file), old = oldZip(items.map((e) => ({ ...e, data: e.data || fs.readFileSync(e.file) })));
-  assert.equal(bytes, made.length);
-  assert.ok(made.equals(old), 'the same bytes as before, deflated in pieces or not');
-  assert.equal(made.indexOf(Buffer.from([0x50, 0x4b, 0x06, 0x06])), -1, 'no ZIP64 record');
-  const back = oldUnzip(made);
-  assert.ok(back.get('logs/big.txt').equals(fs.readFileSync(bigText)));
-  assert.equal(back.get('skills/s/notes.md').toString(), fs.readFileSync(small, 'utf8'));
-  assert.deepEqual(Object.keys(openZip(file)), items.map((e) => e.name), 'and the new reader too');
-});
-
-test('pictures and videos are stored as they are, everything else deflated; both read back the same', async () => {
-  const file = path.join(tempDir('qx-zip-'), 'mixed.zip');
-  await zipFile(file, [{ name: 'blobs/a.mp4', file: bigVideo }, { name: 'blobs/b.txt', file: bigText }, { name: 'blobs/c.png', data: Buffer.from('x'.repeat(5000)) }]);
-  const fd = fs.openSync(file, 'r');
-  try {
-    const z = readZip(fileSource(fd));
-    assert.equal(z.get('blobs/a.mp4').method, 0);
-    assert.equal(z.get('blobs/c.png').method, 0, 'stored by its kind, even when it would deflate');
-    assert.equal(z.get('blobs/b.txt').method, 8);
-    assert.ok(z.get('blobs/b.txt').csize < z.get('blobs/b.txt').size);
-    assert.ok(z.get('blobs/a.mp4').read().equals(fs.readFileSync(bigVideo)));
-    assert.ok(z.get('blobs/b.txt').read().equals(fs.readFileSync(bigText)));
-  } finally { fs.closeSync(fd); }
-  // A file that doesn't get smaller is stored instead, and the archive ends where it should.
-  const noise = path.join(BIG, 'noise.bin'), f2 = path.join(tempDir('qx-zip-'), 'noise.zip');
-  fs.copyFileSync(bigVideo, noise);
-  const end = await zipFile(f2, [{ name: 'blobs/n.bin', file: noise }, { name: 'z.json', data: Buffer.from('{}') }]);
-  assert.equal(fs.statSync(f2).size, end, 'nothing left past the end');
-  const back = openZip(f2);
-  assert.ok(back['blobs/n.bin'].equals(fs.readFileSync(noise)));
-  assert.equal(back['z.json'].toString(), '{}');
-});
-
-test('past 4 GB the offsets go in ZIP64 records, and the reader finds them', async () => {
-  const at = 2 ** 32 + 12345, sink = sparse(), j = Buffer.from('{"id":"c1"}');
-  const end = await writeZip(sink, [{ name: 'manifest.json', data: Buffer.from('{"format":"quorx-backup"}') }, { name: 'chats/c1.json', data: j }, { name: `blobs/${BLOB}`, data: Buffer.from([1, 2, 3]) }], { at });
-  const src = sink.source(end), last = src.read(end - 22, 22);
-  assert.equal(last.readUInt32LE(0), 0x06054b50);
-  assert.equal(last.readUInt32LE(16), 0xffffffff, 'the end record points at the ZIP64 one');
-  assert.equal(src.read(end - 42, 4).readUInt32LE(0), 0x07064b50, 'the locator is just before it');
-  const z = readZip(src);
-  assert.deepEqual([...z.keys()], ['manifest.json', 'chats/c1.json', `blobs/${BLOB}`]);
-  assert.ok(z.get('chats/c1.json').read().equals(j));
-  assert.deepEqual([...z.get(`blobs/${BLOB}`).read()], [1, 2, 3]);
-});
-
-test('sizes and entry counts past the limits get ZIP64 too (limits lowered, so nothing big is written)', async () => {
-  const file = path.join(tempDir('qx-zip-'), 'z64.zip'), names = Array.from({ length: 6 }, (_, i) => `logs/l${i}.txt`);
-  const end = await zipFile(file, [{ name: 'big.txt', file: bigText }, { name: 'big.mp4', file: bigVideo }, ...names.map((n) => ({ name: n, data: Buffer.from(n.repeat(100)) }))], { limits: { u32: 1000, u16: 4 } });
-  const buf = fs.readFileSync(file);
-  assert.equal(buf.length, end);
-  assert.equal(buf.readUInt16LE(end - 22 + 10), 0xffff, 'the count is in the ZIP64 record');
-  const back = openZip(file);
-  assert.ok(back['big.txt'].equals(fs.readFileSync(bigText)) && back['big.mp4'].equals(fs.readFileSync(bigVideo)));
-  for (const n of names) assert.equal(back[n].toString(), n.repeat(100));
+test('the ZIP writer: byte for byte the old format without ZIP64, media stored and the rest deflated, ZIP64 past 4 GB and past the count limits', async () => {
+  { // a backup that needs no ZIP64 is byte for byte what the old writer made, and the old reader reads it
+    const mtime = new Date(2026, 9, 21, 12, 30, 4), j = (o) => Buffer.from(JSON.stringify(o, null, 2));
+    const small = path.join(tempDir('qx-zip-'), 'notes.md');
+    fs.writeFileSync(small, '# Notes\n' + 'a line that repeats\n'.repeat(500));
+    const items = [
+      { name: 'manifest.json', data: j({ format: 'quorx-backup', version: 1 }), mtime }, { name: 'chats/c1.json', data: j({ id: 'c1', title: 'hi', messages: ['x'.repeat(3000)] }), mtime },
+      { name: `blobs/${BLOB}`, data: Buffer.from([0x89, 0x50, 0x4e, 0x47]), mtime }, { name: 'blobs/empty.txt', data: Buffer.alloc(0), mtime },
+      { name: 'skills/s/notes.md', file: small, mtime }, { name: 'logs/big.txt', file: bigText, mtime },
+    ];
+    const file = path.join(tempDir('qx-zip-'), 'new.zip'), bytes = await zipFile(file, items);
+    const made = fs.readFileSync(file), old = oldZip(items.map((e) => ({ ...e, data: e.data || fs.readFileSync(e.file) })));
+    assert.equal(bytes, made.length);
+    assert.ok(made.equals(old), 'the same bytes as before, deflated in pieces or not');
+    assert.equal(made.indexOf(Buffer.from([0x50, 0x4b, 0x06, 0x06])), -1, 'no ZIP64 record');
+    const back = oldUnzip(made);
+    assert.ok(back.get('logs/big.txt').equals(fs.readFileSync(bigText)));
+    assert.equal(back.get('skills/s/notes.md').toString(), fs.readFileSync(small, 'utf8'));
+    assert.deepEqual(Object.keys(openZip(file)), items.map((e) => e.name), 'and the new reader too');
+  }
+  { // pictures and videos are stored as they are, everything else deflated; both read back the same
+    const file = path.join(tempDir('qx-zip-'), 'mixed.zip');
+    await zipFile(file, [{ name: 'blobs/a.mp4', file: bigVideo }, { name: 'blobs/b.txt', file: bigText }, { name: 'blobs/c.png', data: Buffer.from('x'.repeat(5000)) }]);
+    const fd = fs.openSync(file, 'r');
+    try {
+      const z = readZip(fileSource(fd));
+      assert.equal(z.get('blobs/a.mp4').method, 0);
+      assert.equal(z.get('blobs/c.png').method, 0, 'stored by its kind, even when it would deflate');
+      assert.equal(z.get('blobs/b.txt').method, 8);
+      assert.ok(z.get('blobs/b.txt').csize < z.get('blobs/b.txt').size);
+      assert.ok(z.get('blobs/a.mp4').read().equals(fs.readFileSync(bigVideo)));
+      assert.ok(z.get('blobs/b.txt').read().equals(fs.readFileSync(bigText)));
+    } finally { fs.closeSync(fd); }
+    // A file that doesn't get smaller is stored instead, and the archive ends where it should.
+    const noise = path.join(BIG, 'noise.bin'), f2 = path.join(tempDir('qx-zip-'), 'noise.zip');
+    fs.copyFileSync(bigVideo, noise);
+    const end = await zipFile(f2, [{ name: 'blobs/n.bin', file: noise }, { name: 'z.json', data: Buffer.from('{}') }]);
+    assert.equal(fs.statSync(f2).size, end, 'nothing left past the end');
+    const back = openZip(f2);
+    assert.ok(back['blobs/n.bin'].equals(fs.readFileSync(noise)));
+    assert.equal(back['z.json'].toString(), '{}');
+  }
+  { // past 4 GB the offsets go in ZIP64 records, and the reader finds them
+    const at = 2 ** 32 + 12345, sink = sparse(), j = Buffer.from('{"id":"c1"}');
+    const end = await writeZip(sink, [{ name: 'manifest.json', data: Buffer.from('{"format":"quorx-backup"}') }, { name: 'chats/c1.json', data: j }, { name: `blobs/${BLOB}`, data: Buffer.from([1, 2, 3]) }], { at });
+    const src = sink.source(end), last = src.read(end - 22, 22);
+    assert.equal(last.readUInt32LE(0), 0x06054b50);
+    assert.equal(last.readUInt32LE(16), 0xffffffff, 'the end record points at the ZIP64 one');
+    assert.equal(src.read(end - 42, 4).readUInt32LE(0), 0x07064b50, 'the locator is just before it');
+    const z = readZip(src);
+    assert.deepEqual([...z.keys()], ['manifest.json', 'chats/c1.json', `blobs/${BLOB}`]);
+    assert.ok(z.get('chats/c1.json').read().equals(j));
+    assert.deepEqual([...z.get(`blobs/${BLOB}`).read()], [1, 2, 3]);
+  }
+  { // sizes and entry counts past the limits get ZIP64 too (limits lowered, so nothing big is written)
+    const file = path.join(tempDir('qx-zip-'), 'z64.zip'), names = Array.from({ length: 6 }, (_, i) => `logs/l${i}.txt`);
+    const end = await zipFile(file, [{ name: 'big.txt', file: bigText }, { name: 'big.mp4', file: bigVideo }, ...names.map((n) => ({ name: n, data: Buffer.from(n.repeat(100)) }))], { limits: { u32: 1000, u16: 4 } });
+    const buf = fs.readFileSync(file);
+    assert.equal(buf.length, end);
+    assert.equal(buf.readUInt16LE(end - 22 + 10), 0xffff, 'the count is in the ZIP64 record');
+    const back = openZip(file);
+    assert.ok(back['big.txt'].equals(fs.readFileSync(bigText)) && back['big.mp4'].equals(fs.readFileSync(bigVideo)));
+    for (const n of names) assert.equal(back[n].toString(), n.repeat(100));
+  }
 });
 
 test('a big export keeps the event loop free: a timer keeps ticking while it writes', async () => {

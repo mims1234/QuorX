@@ -53,9 +53,6 @@ test('stop: the job host ends what a command leaves behind, and an abort or a ti
   }
 });
 
-
-
-
 test('commands get no stdin, so a prompt cannot hang them, and the full log goes to a file when asked', async () => {
   { // commands get no stdin, so a prompt cannot hang them
     const r = await runLine(tmp('stdin'), WIN ? 'set /p X=Name? & echo got:%X%' : 'read X; echo got:$X', { shell: WIN ? 'cmd' : 'direct', timeout: 15000 });
@@ -70,7 +67,6 @@ test('commands get no stdin, so a prompt cannot hang them, and the full log goes
     assert.match(fs.readFileSync(log, 'utf8'), /hello-log/);
   }
 });
-
 
 test('snapshot: Undo restores what a command deleted, changed and created', async () => {
   const dir = tmp('snap');
@@ -177,7 +173,6 @@ test('snapshot: the worker path gives the same snapshot, changes and Undo as the
     assert.equal(fs.statSync(path.join(dir, 'huge.dat')).size, 21 * 1024 * 1024, 'the big file was left alone');
   }
 });
-
 
 // A background job (or another chat) snapshots first; a foreground command snapshots, ends and prunes; the job ends last.
 test('snapshot: overlapping commands in one project, the earlier one ending last: Undo restores both', async () => {
@@ -342,7 +337,6 @@ test('rules: Strict asks you, YOLO lets the deciders vote only where allowed; de
   }
 });
 
-
 // ⚡ YOLO (⚙ Approvals & safety): what runs on its own, what the deciders vote on, what pauses for you, what never runs.
 // decide() only: none of these commands runs.
 const YOLO = { checkAll: yoloOf(safetySettings({ yoloLevel: 'careful' })), checkBuilds: yoloOf(safetySettings({ yoloLevel: 'balanced' })), defaults: yoloOf(safetySettings({})) };
@@ -468,7 +462,6 @@ test('toolchains: build rules are suggested, the Build Tools install asks as a w
   }
 });
 
-
 // ---------- commands hidden in scripts ----------
 // The real case: the agent wrote a Node script that runs whatever it is given, then ran a toolchain install through it.
 const WRAPPER = "import { spawn } from 'node:child_process';\nconst [cmd, ...args] = process.argv.slice(2);\nspawn(cmd, args, { stdio: 'inherit', shell: true }).on('exit', (c) => process.exit(c ?? 1));\n";
@@ -560,9 +553,6 @@ test('scripts: a script that runs nothing, or names its programs in plain text, 
   }
 });
 
-
-
-
 // The real case from a video run: the agent's render script runs ffmpeg and ffprobe, named in plain text.
 put('.quorx/scratch/render.mjs', [
   "import { execFileSync, spawnSync as probe } from 'node:child_process';",
@@ -582,8 +572,6 @@ const OPAQUE_SHAPES = {
   'a dynamic import': "const cp = await import('node:child_process');\ncp.execFileSync('ffmpeg', []);\n",
 };
 for (const [k, v] of Object.entries(OPAQUE_SHAPES)) put(`.quorx/scratch/shape-${k.replace(/\W+/g, '-')}.mjs`, v);
-
-
 
 // package.json scripts: npm run x runs a command line the agent can write.
 put('web/package.json', JSON.stringify({ scripts: {
@@ -630,9 +618,6 @@ test('scripts: package.json scripts are read in turn, so an install hidden there
   }
 });
 
-
-
-
 // ---------- platform packs ----------
 test('packs: every pack loads with its toolchains, checks and debuggers, and the agent gets notes for the kinds of project in its folder', async () => {
   { // packs: every pack loads, and every toolchain, check and debugger is still there
@@ -666,7 +651,6 @@ test('packs: every pack loads with its toolchains, checks and debuggers, and the
     assert.equal(packNotes(tmp('empty'), []), '');
   }
 });
-
 
 // ---------- native debuggers (Go, C/C++, Rust) ----------
 test('packs: Go, C/C++ and Rust find the program to debug and the command the rules judge', async () => {
@@ -801,7 +785,6 @@ test('shell: a write inside the project runs at once and Undo covers it, or name
   }
 });
 
-
 test('shell: a build asks you; "Always allow" saves a rule, and the next run does not ask', { skip: !WIN }, async () => {
   let asked = 0;
   const { events, bodies, dir } = await agentRun((b, i) => [
@@ -828,7 +811,6 @@ test('shell: a blocked command never runs, and the agent is told why', { skip: !
   assert.ok(events.some((e) => e.t === 'command_blocked'));
   assert.ok(!events.some((e) => e.t === 'command'));
 });
-
 
 // ⚡ YOLO: a build goes to the deciders. A vote they can't settle shows you the card for a few seconds, then carries
 // on; a "no" isn't the last word, you can still run it. ⚖️ With the deciders off in a chat no command goes to a vote:

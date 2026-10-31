@@ -269,7 +269,6 @@ test('YOLO asks first only for a group the user turned off; with every group on 
   }
 });
 
-
 const SLOP = '<!doctype html><html><head><meta name="viewport" content="width=device-width"><style>.btn{background:#6366f1}</style></head><body><h1>Launch</h1><p>Lorem ipsum dolor sit amet.</p><button class="btn">Go</button></body></html>';
 test('the design lint adds advice after a write, once per rule, and is counted at the final check', async () => {
   const { events, bodies, done } = await run((body, i) => [
@@ -426,7 +425,6 @@ test('fresh eyes: the same problem twice gets a clean-context diagnosis; a missi
 
 const linkPage = '<!doctype html><html><head><link rel="stylesheet" href="report.css"></head><body><h1>Report</h1></body></html>';
 
-
 test('a project with DESIGN.md and tokens.css: every chat gets it, and writes are checked against its palette', async () => {
   const prep = (dir) => { fs.writeFileSync(path.join(dir, 'DESIGN.md'), '---\nname: Rustic\n---\n# Rustic\nAccent: rust. Headings in a serif.'); fs.writeFileSync(path.join(dir, 'tokens.css'), ':root{--bg:#faf7f2;--fg:#201a14;--accent:#b4441b}'); };
   const page = '<!doctype html><html><head><meta name="viewport" content="width=device-width"><link rel="stylesheet" href="tokens.css"><style>body{background:var(--bg);color:#00ff88}</style></head><body><h1>Hi</h1></body></html>';
@@ -518,7 +516,6 @@ test('the prompt enhancer reads a chat\'s first request (later ones only if set)
   }
 });
 
-
 // ---------- ⚡ YOLO waits a few seconds for the user before the deciders answer ----------
 const pickSecond = async ({ voters, questions }) => {
   const q = questions[0], keys = Object.keys(q.options);
@@ -557,7 +554,6 @@ test('YOLO with a wait: the user sees the question first and wins; no answer in 
   }
 });
 
-
 // ---------- 0.2.3: fixes found in a real build ----------
 test('a write that copies the harness trim note into a file is refused, and the file is not touched', async () => {
   const note = '[931 characters written earlier; removed from the conversation to save space. The file is on disk: read_file if you need it again.]';
@@ -576,7 +572,6 @@ test('a plan nobody starts gets a nudge to begin after 10 steps', async () => {
   const nudge = of(events, 'note').find((e) => /no item is started yet/.test(e.msg));
   assert.ok(nudge, 'the agent was told to start');
 });
-
 
 // ---------- /review: a code review of what changed (server/codereview.js) ----------
 
@@ -776,7 +771,6 @@ test('an after-write hook runs in order after matching writes, a failure goes ba
   }
 });
 
-
 // Exit code 740 is ERROR_ELEVATION_REQUIRED on Windows; cmd passes it on as it is (PowerShell would make it 1).
 test('a command that fails for want of administrator rights goes to the user, never elevated', { skip: process.platform !== 'win32' }, async () => {
   const cmdRun = (script) => run(script, { settings: { approval: 'strict', safety: { shell: 'cmd' } }, onEvent: (e, id) => { if (e.t === 'approval' && e.mode === 'strict') setTimeout(() => answerApproval(id, e.id, { approve: true }), 5); } });
@@ -836,5 +830,4 @@ test('a failing before-command hook stops the command; hook commands never take 
     assert.doesNotMatch(toolResults(bodies[1])[0], /hook/);
   }
 });
-
 

@@ -195,9 +195,6 @@ test('computer use: each app starts at its kind’s level, an action above it as
 // Answers "Let the agent … in <app>" (raising an app's level) with no, so a test sees the level hold.
 const keepLevel = (e, id) => { if (e.t === 'approval' && e.tool === 'desktop' && /^Let the agent/.test(e.what || '')) setTimeout(() => answerApproval(id, e.id, { approve: false }), 10); };
 
-
-
-
 test('computer use: steps keep to each app’s level, stop at the first refusal and take the app from the step before; saved apps count', async () => {
   { // computer use: the new actions keep to each app’s level, and steps stop at the first refusal
     const apps = [{ name: 'Calculator', appId: 'Microsoft.WindowsCalculator_8wekyb3d8bbwe!App', level: 'view' }, { name: 'Paint', appId: 'Microsoft.Paint_8wekyb3d8bbwe!App', level: 'click' }];
@@ -229,7 +226,6 @@ test('computer use: steps keep to each app’s level, stop at the first refusal 
     assert.match(toolOut(bodies, 1), /look at only .* in Calculator/, 'known from the chat file, held to its level');
   }
 });
-
 
 // ---------- Phase 5: white captures, text from pictures, app lifetime, remembered apps ----------
 test('desktop: a flat white capture is taken again from the screen; a window\'s text is read from its picture', { skip: UI_SKIP }, async () => {
@@ -324,7 +320,6 @@ test('desktop open: app names match loosely (spaces, case, version numbers)', { 
   for (const n of ['Calculator', 'calculator', 'Calcu lator', 'CALCULATOR 11.2']) assert.equal((await findApps(n))[0]?.name, 'Calculator', n);
 });
 
-
 test('computer use off: one card turns it on for the chat, and the desktop call goes ahead', { skip: !WIN }, async () => {
   const { events, bodies } = await agentRun((b, i) => [reply('', [['desktop', { action: 'type', app: 'Calculator', ref: 1, text: '1' }]]), reply('OK.')][i], { chatId: 'apps-ask-on',
     more: { apps: [{ name: 'Calculator', appId: 'Microsoft.WindowsCalculator_8wekyb3d8bbwe!App', level: 'view' }] },
@@ -408,7 +403,6 @@ test('computer use works on one screen: one that is not the main one (the larges
   assert.equal(pickScreen([]), null);
   assert.equal(pickScreen([{ bounds: { w: 0, h: 0 } }, main]), main, 'a screen with no size is skipped');
 });
-
 
 test('the PowerShell helpers: plain ASCII requests, unasked messages (Stop pressed), and ending and restarting at once', async () => {
   { // a helper can say things unasked (Stop pressed), and can be ended at once and started again

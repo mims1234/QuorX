@@ -363,7 +363,6 @@ test('a schedule can be trusted to act without asking; in Strict it waits for yo
   }
 });
 
-
 // ---------- Quoriums: saved combos of helper modules (server/quoriums.js) ----------
 
 const resetQuoriums = () => { for (const q of listQuoriums()) removeQuorium(q.id); };
@@ -416,7 +415,6 @@ test('Quoriums: built-ins (Standard as before) can be edited and reset, yours ad
     assert.ok(Q_MODULES.every((k) => c.modules[k].on === false && c.modules[k].model === ''));
   }
 });
-
 
 // ---------- memory across projects (server/memory.js) ----------
 
@@ -572,7 +570,6 @@ test('make_video and edit_video commands: a start picture is the first frame onl
   }
 });
 
-
 const TEST_VIDEO = { id: 'test/vid-start', name: 'Test video', kind: 'video', skus: { duration_seconds_480p: 0.02, cents_per_image_input: '1' }, resolutions: ['480p'], durations: [5], aspects: ['16:9', '9:16'], frames: ['first_frame'] };
 const TEST_VIDEO_TEXT = { ...TEST_VIDEO, id: 'test/vid-text', frames: [] };
 const videoSettings = (model) => ({ mediaEnabled: true, yoloCheck: false, tools: { browser: { on: false }, image: { on: false }, music: { on: false }, speech: { on: false }, video: { on: true, pick: 'fixed', models: [model], resolution: '480p', seconds: 5 } } });
@@ -609,7 +606,6 @@ test('make_video starts from a project picture with a model that takes one, and 
     assert.equal('start_image' in bodies[0].tools.find((t) => t.function.name === 'make_video').function.parameters.properties, false);
   }
 });
-
 
 let hasFfmpeg = false;
 try { execFileSync('ffmpeg', ['-version'], { stdio: 'ignore' }); hasFfmpeg = true; } catch { /* not installed */ }
@@ -1067,7 +1063,6 @@ test('a reply that finishes its plan on the very last step is not "out of steps"
   assert.equal(of(open.events, 'out_of_steps').length, 1);
 });
 
-
 // ---------- fixes from the first real v2 film (false alarms from QuorX's own checks) ----------
 test('films are reviewed as films (picture, motion, sound, rhythm, story); clips and silent, draft and test copies are not', () => {
   { // Video Mode: only finished films are reviewed as films, not the clips they are made from
@@ -1117,7 +1112,6 @@ test('a picture for the deciders is scaled down first, and sent as it is when th
   assert.ok(args.some((a) => String(a).includes("min(1280,iw)")));
   assert.match(deciderPicture(file, 'image/png', () => { throw new Error('no ffmpeg'); }), /^data:image\/png;base64,/);
 });
-
 
 // ---------- the motion test: render without scripts, switch paid tools on, pick models ----------
 test('render_film plays a page frame by frame in QuorX\'s browser and encodes it, with no command to approve', { skip: (!(await import('../server/browser.js')).browserPath() && 'no Chromium browser installed') || (!hasFfmpeg && 'ffmpeg is not installed') }, async () => {

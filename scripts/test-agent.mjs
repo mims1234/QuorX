@@ -78,8 +78,6 @@ test('model cards: every shipped card is well formed and short, reads as limits,
   }
 });
 
-
-
 test('a reply that fails part-way keeps its work and what it spent, and says so', async () => {
   { // a reply that ends part-way keeps what it spent
     const ac = new AbortController();
@@ -172,7 +170,6 @@ test('cost: a call cut off part-way (stopped, or failed and retried) counts once
   }
 });
 
-
 test('cost: OpenRouter\'s generation record gives the exact cost, looked up again until it appears; without usage the cost is estimated', async () => {
   { // cost: when OpenRouter's generation record gives the cost, that exact cost replaces the estimate
     const asked = [];
@@ -231,7 +228,6 @@ test('cost: OpenRouter\'s generation record gives the exact cost, looked up agai
   }
 });
 
-
 // The real stream reader, fed by a stubbed fetch: what it hands over when the usage never comes.
 const sse = (parts, fail) => {
   const enc = new TextEncoder();
@@ -243,9 +239,6 @@ async function withFetch(fake, fn) {
   globalThis.fetch = fake;
   try { return await fn(); } finally { globalThis.fetch = real; }
 }
-
-
-
 
 test('file tools: neighbouring reads run together in order, long files are read in windows, several edits apply all or none', async () => {
   { // neighbouring reads run together and their results keep their order
@@ -283,8 +276,6 @@ test('file tools: neighbouring reads run together in order, long files are read 
   }
 });
 
-
-
 test('an output cut off mid tool call is not run, and the agent is told to write in parts', async () => {
   const { bodies } = await run((body, i) => [reply('', [['write_file', '{"path":"a.js","content":"cons']], 'length'), reply('ok')][i]);
   assert.match(toolResults(bodies[1])[0], /cut off at the 4000-token limit.*append_file/s);
@@ -306,7 +297,6 @@ test('a long reply is trimmed, every result carries the step meter, and the wrap
     assert.equal(done.stats.stop, 'steps');
   }
 });
-
 
 test('web pages are labelled untrusted', async () => {
   const realFetch = globalThis.fetch, look = resolver.lookup;
@@ -380,8 +370,6 @@ test('plan first: writes wait for the plan (changes, then Go ahead), Stop here k
     assert.equal(of(events, 'question').length, 0);
   }
 });
-
-
 
 test('a reply cut off mid-way resumes from its last checkpoint', async () => {
   const ac = new AbortController();
@@ -574,9 +562,6 @@ test('a reply typed on an approval card is the call\'s result, for that call onl
   }
 });
 
-
-
-
 // ---------- project budgets ----------
 const costly = (text, calls = [], cost = 0.6) => ({ ...reply(text, calls), usage: { cost } });
 
@@ -628,8 +613,6 @@ test('a project reports what it has spent, and while a reply runs how much is th
   }
 });
 
-
-
 test('budget in YOLO: no call at the budget, a running reply may finish up to the allowance (a setting) and is force-stopped past it; a warning past 85%', async () => {
   { // YOLO: a project already at its budget makes no model call
     let called = 0;
@@ -665,10 +648,6 @@ test('budget in YOLO: no call at the budget, a running reply may finish up to th
   }
 });
 
-
-
-
-
 test('budget in Strict: a new reply at the budget waits on a card; raising the budget lets it start, "Wrap up" does not', async () => {
   { // strict: a new reply at the budget waits on a card; raising the budget lets it start
     let id;
@@ -701,7 +680,6 @@ test('budget in Strict: a new reply at the budget waits on a card; raising the b
   }
 });
 
-
 test('thinking gets at most half the output, and a turn that spends it all thinking is retried with less reasoning', async () => {
   { // a turn that spends the whole output thinking is retried with less reasoning, never ended silently
     const thinking = (i) => ({ ...reply('', [], 'length'), usage: { completion_tokens: 4000, cost: 0.001 } });
@@ -730,7 +708,6 @@ test('thinking gets at most half the output, and a turn that spends it all think
     assert.ok(r.bodies[1].reasoning.max_tokens <= r.bodies[0].reasoning.max_tokens, 'the retry thinks no more than before');
   }
 });
-
 
 // ---------- Phase 1: reasoning passed back, creativity, routing ----------
 const withThinking = (r, details) => ({ ...r, reasoningDetails: details, provider: 'TestProvider', model: 'test/model' });
@@ -761,7 +738,6 @@ test('the model’s reasoning goes back with its tool calls unchanged; a provide
     assert.equal(done.reply, 'Done.');
   }
 });
-
 
 test('routing: temperature only where the model takes it, providers that support every parameter, blocked providers ignored, default routing when none match', async () => {
   { // no temperature by default; Creativity sets it only where the model takes it
@@ -814,9 +790,6 @@ test('routing: temperature only where the model takes it, providers that support
     assert.equal(k.done.reply, 'ok');
   }
 });
-
-
-
 
 // ---------- Phase 2: the plan (#3) and the reviewer (#4) ----------
 // A stand-in for the headless browser: every page has a Start button, screenshots are a tiny data URL.
@@ -900,7 +873,6 @@ test('the reviewer plays the build and sends bugs back below the bar; still belo
   }
 });
 
-
 test('browser: wait lets the page run, press passes key combinations, open with no target reloads, and the agent hears whether the page made a sound', async () => {
   { // browser wait lets the page run instead of a shell sleep; press passes key combinations through
     const pressed = [];
@@ -950,8 +922,6 @@ test('browser: wait lets the page run, press passes key combinations, open with 
     assert.match(out(5), /Sound: the page started 2 sounds \(1 of 1 Web Audio context running\)/);
   }
 });
-
-
 
 test('checks: a site at the top of the project is checked when it or a file it links to changed, not for any new file beside it', async () => {
   const prep = (d) => {
@@ -1046,7 +1016,6 @@ test('helpers read in their own context, several at once, and only their reports
   }
 });
 
-
 test('helpers are offered only when on and in projects big enough to explore, and the agent reading files itself is nudged to use them once', async () => {
   { // helpers can be switched off, and then delegate is not offered
     const { bodies } = await run(() => reply('ok'), { settings: { helpers: false, helperMinFiles: 0 } });
@@ -1085,8 +1054,6 @@ test('@ context goes in the user\'s message, not the system prompt', async () =>
   assert.doesNotMatch(msgs[0].content, /Goal: an original character/, 'the system prompt stays the same turn to turn');
 });
 
-
-
 test('a generated picture is saved into the project, at the aspect ratio the agent picked or the nearest the model offers', async () => {
   { // a generated picture is saved into the project folder, and the result says where
     const PNG = 'data:image/png;base64,' + Buffer.from('fake-png-bytes').toString('base64');
@@ -1123,7 +1090,6 @@ test('a generated picture is saved into the project, at the aspect ratio the age
     assert.equal('aspect_ratio' in noRatio[0], false);
   }
 });
-
 
 // ---------- media_plan: a production plan approved once ----------
 const PLAN_PNG = 'data:image/png;base64,' + Buffer.from('plan-png').toString('base64');
@@ -1199,8 +1165,6 @@ test('a production plan is approved once (by the deciders in YOLO, on one card i
   }
 });
 
-
-
 test('a production plan over the media budget or of a kind switched off is refused; with the deciders off it waits for you, or runs within the caps', async () => {
   { // a plan over the media budget is turned down before anyone is asked, and calls are then judged one by one
     const d = planDeciders();
@@ -1253,9 +1217,6 @@ test('a production plan over the media budget or of a kind switched off is refus
 
 // ⚖️ Deciders off in a chat: no decider is asked; the plan and each paid call wait for you, and no answer skips them.
 const noDeciders = () => { const d = { calls: 0 }; d.fn = async () => { d.calls++; throw new Error('the deciders should not be asked'); }; return d; };
-
-
-
 
 test('a call fits the plan only with the same kind and model, calls left, and no dearer than planned', () => {
   const plan = { items: [{ kind: 'video', count: 1, model: 'v/a', each: 0.25, used: 0 }], total: 0.25, spent: 0 };
@@ -1346,9 +1307,6 @@ test('old harness folders (.agent, .openharness) become .quorx, retrying a locke
   }
 });
 
-
-
-
 test('a run in a project with no folder of its own is refused with a clear message', async () => {
   const { listProjects } = await import('../server/store.js');
   const legacy = listProjects().find((p) => p.needsFolder);
@@ -1383,7 +1341,6 @@ test('a note sent while the agent works reaches it at its next step, or is answe
     assert.equal(done.reply, 'Added the footer too.');
   }
 });
-
 
 test('switching a running Strict reply to YOLO approves the waiting card and stops asking', async () => {
   let runId; const asked = [];
@@ -1478,8 +1435,6 @@ test('harness checks: the gap check adds what the request leaves out, a failed s
     assert.equal(of(events, 'checks').find((e) => e.kind === 'page').clicked, 'keys: Enter');
   }
 });
-
-
 
 test('a planned build gets the longer step limit', async () => {
   const steps = [reply('', [['plan', { spec: 'A page.', items: [{ text: 'Write it', status: 'doing' }] }]])];

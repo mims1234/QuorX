@@ -282,7 +282,6 @@ test('🧩 in the user’s tab: typing the request never asked for, or outside a
   }
 });
 
-
 test('🧩 Chrome read through page scripts: opening, reading and collecting never attach the debugger; a click does; a never-open site is refused; tabs lists the chat’s group', { skip: !(await import('../server/browser.js')).browserPath() && 'no Chromium browser installed' }, async () => {
   const http = await import('node:http');
   const { extUpgrade, extKey } = await import('../server/extlink.js');

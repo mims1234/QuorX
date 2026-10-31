@@ -180,9 +180,6 @@ test('tripwire: deletes inside the project, and files a command makes and then r
   }
 });
 
-
-
-
 // ---------- budgets ----------
 const costly = (calls) => ({ ...reply('', calls), usage: { cost: 0.4 } });
 
@@ -204,7 +201,6 @@ test('budget: in YOLO a reply stops at its cap, counting every call; in Strict t
     assert.ok(events.some((e) => e.t === 'budget_done' && e.raised && e.budget === 5));
   }
 });
-
 
 // ---------- background jobs (P1) ----------
 test('jobs: a long build moves to the background instead of being killed, and job_output follows it', { skip: !WIN }, async () => {
@@ -261,7 +257,6 @@ test('jobs: installs never move to the background, even hidden in a wrapper scri
     assert.ok(!events.some((e) => e.t === 'command'), 'nothing ran');
   }
 });
-
 
 // ---------- the Running tab ----------
 test('running: a background job is listed with its chat; stopping it there ends it and tells the agent', { skip: !WIN }, async () => {
@@ -326,7 +321,6 @@ test('loops: the same failing call is nudged once, then wraps up in YOLO; in Str
   }
 });
 
-
 test('loops: repeats by nature (desktop screenshots, the browser, look) are only a loop on the same failing call twice', async () => {
   { // loops: the same desktop screenshot after each step is not a loop; the same failing desktop call twice is
     const shots = Array.from({ length: 6 }, () => reply('', [['desktop', { action: 'windows', job: 'bg97' }]]));
@@ -342,7 +336,6 @@ test('loops: repeats by nature (desktop screenshots, the browser, look) are only
     assert.ok(events.some((e) => e.t === 'loop'));
   }
 });
-
 
 // ---------- the agent's terminal and desktop apps (P1) ----------
 const allow = (d, match) => { fs.mkdirSync(path.join(d, '.quorx'), { recursive: true }); saveRules('project', [{ effect: 'allow', match, by: 'user' }], d); };
@@ -370,7 +363,6 @@ test('terminal: the agent answers a program’s prompts and reads its screen; a 
     assert.equal((await decide('python app.py', ctx({ mode: 'yolo' }))).who, 'deciders', 'a script is a normal build');
   }
 });
-
 
 test('start_server: a plain dev-server start runs as before; a package fetched and run, an install or a URL is judged like any command', { skip: !WIN }, async () => {
   const root = tmp('server');
@@ -613,8 +605,6 @@ test('rules: every "Always allow" suggestion matches the command it came from; r
   assert.equal(ruleProblem('npm test*'), '');
 });
 
-
-
 test('shell: a rule that would not match its command is not saved, and you are told', { skip: !WIN }, async () => {
   const { events, dir } = await agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('Done.')][i], {
     prep: buildJs, onEvent: (e, id) => { if (e.t === 'approval' && e.mode === 'strict') setTimeout(() => answerApproval(id, e.id, { approve: true, rule: { match: 'node Bypass*', scope: 'project' } }), 10); } });
@@ -653,7 +643,6 @@ test('shell: a command that ran because nobody answered asks again; a repeat of 
     assert.ok(of(events, 'note').some((e) => /Ran without asking again: “node build\.js” was approved earlier/.test(e.msg)));
   }
 });
-
 
 test('fresh eyes: a page written in parts with append_file is not “the same problem twice”', async () => {
   const { events } = await agentRun((b, i) => [
@@ -779,7 +768,6 @@ test('chat notes: a chat keeps its own notes and reads AGENT.md and the log in t
   }
 });
 
-
 test('named in the user\'s message: a folder is read with no card; in YOLO an app is raised with no card (only the user\'s words count)', async () => {
   const outside = tmp('named-folder');
   fs.mkdirSync(path.join(outside, 'site'));
@@ -800,7 +788,6 @@ test('named in the user\'s message: a folder is read with no card; in YOLO an ap
   assert.doesNotMatch(toolOut(raised.bodies, 1), /isn't allowed/, toolOut(raised.bodies, 1));
   assert.ok(raised.events.some((e) => e.t === 'app_allowed' && e.app.level === 'full'));
 });
-
 
 test('a long text typed into the user\'s app is checked against their words first; the same text again goes through', async () => {
   const seen = [];
@@ -877,8 +864,6 @@ test('folders: a write outside the project asks once to add its folder; one not 
   }
 });
 
-
-
 test('folders: commands treat a read-and-write folder like the project', { skip: !WIN }, async () => {
   const other = tmp('cmdfolder');
   const outside = await decide(`Set-Content "${path.join(other, 'a.txt')}" hi`, { shell: 'powershell', root: scripts, rules: [], mode: 'strict', yolo: {} });
@@ -888,7 +873,6 @@ test('folders: commands treat a read-and-write folder like the project', { skip:
   const git = await decide(`Set-Content "${path.join(other, '.git', 'config')}" x`, { shell: 'powershell', root: scripts, rules: [], mode: 'strict', yolo: {}, added: [other] });
   assert.equal(git.verdict, 'deny', 'its .git stays protected');
 });
-
 
 // ---------- rules: on/off, ids and use counts ----------
 test('rules: a rule turned off is kept but not used, and each command a rule lets through counts one use', { skip: !WIN }, async () => {
@@ -923,7 +907,6 @@ test('rules: a rule turned off is kept but not used, and each command a rule let
     assert.deepEqual(of(chat.events, 'rule_used').map((e) => e.id), ['c1']);
   }
 });
-
 
 test('helpers: an answer that isn\'t JSON fails its call at once, and UTF-8 characters split between chunks arrive whole', async () => {
   const { lineHost } = await import('../server/jobhost.js');
