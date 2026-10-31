@@ -751,6 +751,13 @@
 #settings .src-on { margin-left: 2px; }
 #settings .src-same { margin: 0; padding: 4px 18px 14px 34px; display: grid; gap: 6px; font-size: 12.5px; color: var(--muted); }
 #settings .src-same b { color: var(--text); font-weight: 600; }
-#settings :is(#stSources, #stApiSources) > :is(.st-row-help, .kx-wait) { margin: 0 18px 16px; }
+#settings :is(#stSources, #stApiSources, #stDirectSources) > :is(.st-row-help, .kx-wait) { margin: 0 18px 16px; }
 #settings .src-key { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; margin: 0 0 4px; }
 #settings .src-key .kx-input { flex: 1 1 260px; min-width: 0; }
+/* A maker's API (server/directapi.js): where OpenRouter's ids of its models run, and its address. */
+#settings .src-opts { margin: 4px 0 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-inset, var(--bg)); display: grid; gap: 6px; }
+#settings .src-opt { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; }
+#settings .src-opt-label { font: 600 12px var(--font-ui); color: var(--text); min-width: 120px; }
+#settings .src-opts .st-row-help { margin: 0 0 4px; }
+#settings .src-base { flex: 1 1 260px; min-width: 0; }
+#settings .src-base input { font: 12px var(--mono); }
