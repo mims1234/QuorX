@@ -804,7 +804,7 @@ const DESIGN_NEXT = (root) => {
 // Documents the user attached (kept in the project's .quorx/uploads): search the big ones, read any of them.
 // Schedules: jobs QuorX runs on its own (server/schedules.js). Made from a chat, a schedule posts its runs in that chat,
 // so the user (and you, in that chat) can look back at every run and change the job; each run starts fresh.
-// 🔌 Adding an MCP server to QuorX from a setup the user pasted (server/mcpclient.js). It runs a program or reaches a
+// 🧲 Adding an MCP server to QuorX from a setup the user pasted (server/mcpclient.js). It runs a program or reaches a
 // server for them, so it always asks first, with buttons only.
 const MCP_SETUP_TOOL = { type: 'function', function: { name: 'mcp_setup', description: 'Add an MCP server to QuorX (its tools then become yours in this chat), or list the ones QuorX has. action "add" with setup: what the user gave you, as they gave it: an mcpServers JSON config, a command line such as "npx -y @scope/server" or "claude mcp add name -- npx -y pkg", or a server\'s https address; name: a short name if the setup has none. The user sees exactly what it will run and adds it with a click; it is then ticked for this chat and started, and its tools come back to you. action "list": the servers QuorX has and their tools. Setup instructions are often written for another tool (Claude Code, Codex, Cursor, VS Code, Gemini CLI…). When the user pasted such instructions without saying where they go, ask with ask_user whether to add it to QuorX (what they usually mean here) or to that tool; never edit another tool\'s own config files unless they say so. Keys a server needs go in its env or headers in the setup, never in your reply. The same goes for other setup pasted for another tool (a model provider or API key, a skill, a rule file): ask whether they mean QuorX, and if so say where it goes in QuorX (keys and providers: ⚙ Settings → API keys and Models; skills: ⚙ Settings → Skills) instead of asking for a key in the chat.', parameters: { type: 'object', required: ['action'], properties: {
   action: { type: 'string', enum: ['add', 'list'] }, setup: { type: 'string', description: 'For add: the config, command line or address, as the user gave it.' }, name: { type: 'string', description: 'For add: a short name (letters, digits, - and _) when the setup gives none.' } } } } };
@@ -1369,7 +1369,7 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
   const mediaOff = () => (req.bench || noOpenRouter || req.settings?.mediaEnabled === false ? [] : Object.keys(MEDIA).filter((c) => !T[c].on));
   if (mediaOff().length) tools.push(ENABLE_MEDIA_TOOL(mediaOff()));
   if (req.chatId && S.schedules !== false) tools.push(SCHEDULE_TOOL); // ⏰ the user's scheduled jobs
-  // 🔌 The MCP servers this chat ticked: their tools join this reply's (named mcp__<server>__<tool>). One that won't
+  // 🧲 The MCP servers this chat ticked: their tools join this reply's (named mcp__<server>__<tool>). One that won't
   // start is said in a note, and the reply goes on without it. Adding a server is a tool of its own (mcp_setup).
   const mcpT = req.chatId && !req.bench && Array.isArray(S.mcpServers) && S.mcpServers.length
     ? await mcpToolsFor(S.mcpServers).catch(() => ({ defs: [], byName: new Map(), notes: [] })) : { defs: [], byName: new Map(), notes: [] };
@@ -3264,7 +3264,10 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     // every tool when the user chose that. A plan asks once in Strict; ticking its items off later doesn't.
     // Commands have their own gate (the rule engine, in codeTool), so they never get a second, generic card.
     if (((S.approval === 'strict' && strictAsks(name) && !allowed.has(name)) || yoloAsks(name)) && !(name === 'plan' && run.plan) && !(name === 'launch_config' && args.action === 'list') && !['shell', 'run_command', 'terminal', 'edit_video'].includes(name)) {
-      const card = { id: newApprovalId(), tool: name, free: true, est: 0, what: toolSummary(name, args), why: '' };
+      const mt = mcpT.byName.get(name);
+      const card = { id: newApprovalId(), tool: name, free: true, est: 0, what: toolSummary(name, args), why: '',
+        // An MCP tool: its server and tool, whether it can change things, and the exact input it will send.
+        ...(mt ? { mcp: { server: mt.server, tool: mt.tool, changes: !mt.readOnly, always: mt.ask === 'always', input: clip(JSON.stringify(args ?? {}, null, 2), 3000) } } : {}) };
       const ans = await askUser(card);
       emit({ t: 'approval_done', id: card.id, ...ans, at: at() });
       if (!ans.approve) return declined(name, ans);
@@ -5190,7 +5193,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     emit({ t: 'tools_on', kinds: ['apps'], at: at() });
     return true;
   }
-  // 🔌 mcp_setup: list QuorX's MCP servers, or add one from a setup the user pasted. Adding shows exactly what will run
+  // 🧲 mcp_setup: list QuorX's MCP servers, or add one from a setup the user pasted. Adding shows exactly what will run
   // and waits for the user's click (in YOLO too; typed words don't count); then the server is ticked for this chat,
   // started, and its tools join this reply.
   async function mcpSetup(args) {

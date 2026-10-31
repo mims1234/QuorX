@@ -5138,12 +5138,13 @@ test('MCP in a reply: the ticked server\'s tools are offered; Strict asks before
   try {
     const { bodies } = await run((body, i) => [reply('', [['mcp__echo__echo', { text: 'yo' }]]), reply('', [['mcp__echo__add_note', { note: 'n' }]]), reply('Done.')][i], {
       chatId: `mcp-${Date.now().toString(36)}`, settings: { mcpServers: ['echo'], approval: 'strict' },
-      onEvent: (e, id) => { if (e.t === 'approval' && e.mode === 'strict') { asked.push(e.what); setTimeout(() => answerApproval(id, e.id, { approve: true }), 10); } } });
+      onEvent: (e, id) => { if (e.t === 'approval' && e.mode === 'strict') { asked.push(e); setTimeout(() => answerApproval(id, e.id, { approve: true }), 10); } } });
     assert.ok(bodies[0].tools.some((t) => t.function.name === 'mcp__echo__add_note'), 'offered to the model');
     const res = toolResults(bodies.at(-1)).map(String);
     assert.match(res[0], /^echo: yo\n/);
     assert.match(res[1], /^kept 1 note\(s\)/);
-    assert.equal(asked.length, 1); assert.match(asked[0], /^Use add_note on the MCP server echo/);
+    assert.equal(asked.length, 1); assert.match(asked[0].what, /^Use add_note on the MCP server echo/);
+    assert.deepEqual({ ...asked[0].mcp, input: JSON.parse(asked[0].mcp.input) }, { server: 'echo', tool: 'add_note', changes: true, always: false, input: { note: 'n' } }, 'the card shows the server, the tool and the exact input');
   } finally { mcpStopAll(); }
 });
 

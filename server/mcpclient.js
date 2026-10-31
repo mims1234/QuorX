@@ -1,6 +1,6 @@
 // Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // QuorX as an MCP client: the agent can use the tools of MCP servers you add, a program on this computer (stdio) or a
-// server on the web (Streamable HTTP). They are kept in data/mcp.json; each chat ticks the ones it may use (the 🔌 row
+// server on the web (Streamable HTTP). They are kept in data/mcp.json; each chat ticks the ones it may use (the 🧲 row
 // in the message box's settings). A server starts the first time a chat needs it and keeps running while QuorX does.
 // Env values and headers can hold keys: the page only ever sees their names (a masked value saved back keeps the old).
 import fs from 'node:fs';

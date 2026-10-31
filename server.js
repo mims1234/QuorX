@@ -599,7 +599,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { chats });
     }
     // ---- memory: facts and preferences every chat gets (server/memory.js); the agent can only propose ----
-    // 🔌 MCP servers the agent may use (server/mcpclient.js): the list, saving it, starting one to see its tools, and
+    // 🧲 MCP servers the agent may use (server/mcpclient.js): the list, saving it, starting one to see its tools, and
     // reading a pasted setup (a config, or a line written for another tool) into servers before you add them.
     if (url.pathname === '/api/mcp' && req.method === 'GET') return json(res, 200, { servers: mcpList() });
     if (url.pathname === '/api/mcp' && req.method === 'PUT') { const b = JSON.parse(await readBody(req, 2e5) || '{}'); try { return json(res, 200, { servers: mcpSave(b.servers) }); } catch (e) { return json(res, 400, { error: e.message }); } }

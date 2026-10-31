@@ -3115,7 +3115,7 @@ function renderComposerBar(c) {
     + sec('plan', 'Plan', `<div class="lvl cq-plan" role="radiogroup" aria-label="Plan first"><span class="lvl-ico" aria-hidden="true">🗺</span>${PLAN.map(([v, w, tip]) => { const on = pv === v; return `<button type="button" class="lvl-b ${on ? 'on' : ''}" role="radio" aria-checked="${on}" data-plan="${v}" title="${esc(`Plan first: ${w}${on ? ' (now)' : ''} · all chats\n${tip}`)}">${w}</button>`; }).join('')}</div>`, 'all chats')
     + sec('money', 'Budget', `<div class="cs-caps">${CAPS.map(capLine).join('')}</div>`, 'all chats')
     + sec('mic', 'Mic', `<div class="cs-tools">${quickToolsHTML(c, { micOnly: true })}</div>`, 'all chats')
-    + sec('mcp', 'MCP', mcpRowHTML(c), 'this chat');
+    + sec('mcp', '🧲 MCP servers', mcpRowHTML(c), 'this chat');
   const chipsEl = $('.cmp-chips', rack);
   const rv = s.reasoning || 'off', cv = CREATIVITY_INFO[s.creativity] ? s.creativity : 'default', yolo = c.approval === 'yolo';
   const capNow = CAPS.map((x) => Number(x[3])), capWas = [G.cfg.defaults.replyBudget ?? 1, G.cfg.defaults.budget ?? 0.5].map(Number);
@@ -3129,6 +3129,7 @@ function renderComposerBar(c) {
     + chip('creative', '🎨', '', CREATIVITY_INFO[cv][0], 'accent', `Creativity: ${CREATIVITY_INFO[cv][0]}\nHow varied the answers are. Click to change.`)
     + chip('safety', yolo ? '⚡' : '🔒', '', yolo ? 'YOLO' : 'Strict', yolo ? 'red' : 'ok', yolo ? 'YOLO: uses its tools without asking; the deciders answer its questions. Click to change.' : 'Strict: asks you before paid media; its questions come to you. Click to change.')
     + `<button type="button" class="cq-chip cq-money" data-sec="money" aria-haspopup="dialog" aria-expanded="false" aria-label="Budget: cap $${capNow[0]} per reply, paid media $${capNow[1]}" title="Budget per reply (all chats): everything a reply calls, and its paid media. Click to change."><span class="cq-ml">cap</span><b>$${capNow[0]}</b><span class="cq-ml">· media</span><b>$${capNow[1]}</b></button>`
+    + ((G.mcp || []).some((x) => x.on) ? `<button type="button" class="cq-chip cq-mcpc" data-sec="mcp" data-state="${mcpOn(c).length ? 'changed' : 'default'}" data-tone="accent" aria-haspopup="dialog" aria-expanded="false" aria-label="MCP servers in this chat: ${mcpOn(c).length}" title="${esc(`MCP servers this chat may use: ${mcpOn(c).join(', ') || 'none'}. Click to tick them.`)}"><span class="cq-ci" aria-hidden="true">🧲</span><b>${mcpOn(c).length}</b></button>` : '')
     + `<button type="button" class="cq-chip cq-sum" data-sec="" data-state="${nCh ? 'changed' : 'default'}" data-tone="accent" aria-haspopup="dialog" aria-expanded="false" aria-label="This chat's settings, ${nCh} changed${moneyChanged ? ', a budget cap changed' : ''}" title="This chat's settings: thinking, creativity, Strict / YOLO, plan, budget"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>${nCh ? `<b>${nCh}</b>` : ''}${mdot}</button>`
     + `<button type="button" class="cq-chip cq-more" data-sec="" aria-haspopup="dialog" aria-expanded="false" aria-label="All of this chat's settings${moneyChanged ? ', a budget cap changed' : ''}" title="All of this chat's settings">⋯${mdot}</button>`;
   // 👁 🧭 Chrome, computer use and always-allowed: in a row when there is room, behind one tray button when not.
@@ -3201,8 +3202,10 @@ function renderComposerBar(c) {
   };
   const gear = $('.cs-gear', rack); if (gear && !gear.dataset.wired) { gear.dataset.wired = '1'; gear.onclick = () => openSettings(); }
   wireQuickSettings(c, quick, chipsEl, followSlot);
-  // 🔌 The MCP servers this chat may use: a tick each; Manage opens ⚙ Settings → MCP servers.
-  for (const b of quick.querySelectorAll('.cq-mcp input')) b.onchange = () => { const n = b.dataset.mcp; c.mcp = b.checked ? [...new Set([...(c.mcp || []), n])] : (c.mcp || []).filter((x) => x !== n); saveChat(c); };
+  // 🧲 The MCP servers this chat may use: a tick each; Manage opens ⚙ Settings → MCP servers.
+  for (const b of quick.querySelectorAll('.cq-mcp input')) b.onchange = () => { const n = b.dataset.mcp; c.mcp = b.checked ? [...new Set([...(c.mcp || []), n])] : (c.mcp || []).filter((x) => x !== n); saveChat(c); renderComposerBar(c); };
+  for (const b of quick.querySelectorAll('.cq-mcp-all')) b.onclick = () => { c.mcp = b.dataset.all === '1' ? (G.mcp || []).filter((s) => s.on).map((s) => s.name) : []; saveChat(c); renderComposerBar(c); };
+  const mq = $('.cq-mcp-q', quick); if (mq) mq.oninput = () => { c._mcpQ = mq.value; renderComposerBar(c); const m2 = $('.cq-mcp-q', quick); if (m2) { m2.focus(); m2.setSelectionRange(m2.value.length, m2.value.length); } };
   const mm = $('.cq-mcp-manage', quick); if (mm) mm.onclick = () => { c._cq = undefined; renderComposerBar(c); openSettings('mcp'); };
   // 👁 and 🧭 both steer the side pane, so one at a time in a chat: turning 👁 on here turns this chat's 🧭 off.
   $('.cmp-follow-b', followSlot).onclick = () => {
@@ -3223,7 +3226,7 @@ function renderComposerBar(c) {
 // 🧩 Chrome and 🖥 Computer use reach a reply that is already running (as Strict / YOLO does): off stops it from
 // using them at its next step.
 function pushAccess(c) { if (c.running?.runId) postJ(`/api/runs/${c.running.runId}/mode`, { access: { chrome: !!c.tools?.chrome, apps: !!c.tools?.apps } }).catch(() => {}); }
-// ---------- 🔌 MCP servers (server/mcpclient.js) ----------
+// ---------- 🧲 MCP servers (server/mcpclient.js) ----------
 // G.mcp: every server QuorX has (keys masked). A chat ticks the ones its agent may use (c.mcp); one deleted or turned
 // off in Settings is simply left out.
 async function loadMcp() {
@@ -3236,12 +3239,18 @@ async function loadMcp() {
   }
   return G.mcp || [];
 }
+// A server's mark: a coloured square with its first letter (its hue from its name).
+const mcpMark = (s, cls = '') => `<span class="mcp-mark ${cls}" style="--mh:${hue(s.name)}" aria-hidden="true">${esc(String(s.name)[0] || '?')}</span>`;
 const mcpOn = (c) => (c.mcp || []).filter((n) => (G.mcp || []).some((s) => s.name === n && s.on));
 function mcpRowHTML(c) {
   const list = (G.mcp || []).filter((s) => s.on);
   if (!list.length) return '<span class="cq-mcp-none">No servers yet.</span><button type="button" class="cq-mcp-manage">Add one…</button>';
-  const mine = new Set(c.mcp || []);
-  return `<span class="cq-mcp">${list.map((s) => `<label class="cq-mcp-one" title="${esc(`${s.type === 'http' ? s.url : [s.command, ...(s.args || [])].join(' ')}${s.tools?.length ? `\n${s.tools.length} tools: ${s.tools.map((t) => t.name).join(', ')}` : ''}`)}"><input type="checkbox" data-mcp="${esc(s.name)}" ${mine.has(s.name) ? 'checked' : ''}><span>${esc(s.name)}</span></label>`).join('')}</span><button type="button" class="cq-mcp-manage">Manage…</button>`;
+  const mine = new Set(c.mcp || []), q = String(c._mcpQ || '').trim().toLowerCase();
+  const shown = list.filter((s) => !q || `${s.name} ${(s.tools || []).map((t) => t.name).join(' ')}`.toLowerCase().includes(q));
+  const sub = (s) => (s.status === 'error' ? '<small class="bad">can\'t start · fix in Settings</small>' : `<small>${s.tools?.length ? `${s.tools.length} tools · ` : ''}${s.type === 'http' ? 'web' : 'program'}</small>`);
+  return `${list.length > 6 ? `<input class="cq-mcp-q" placeholder="Search servers or tools" value="${esc(c._mcpQ || '')}" aria-label="Search servers">` : ''}
+    <span class="cq-mcp">${shown.map((s) => `<label class="cq-mcp-one" title="${esc(`${s.type === 'http' ? s.url : [s.command, ...(s.args || [])].join(' ')}${s.tools?.length ? `\n${s.tools.length} tools: ${s.tools.map((t) => t.name).join(', ')}` : ''}`)}"><input type="checkbox" data-mcp="${esc(s.name)}" ${mine.has(s.name) ? 'checked' : ''}>${mcpMark(s, 'sm')}<span><b>${esc(s.name)}</b>${sub(s)}</span></label>`).join('') || '<small>No server matches.</small>'}</span>
+    <span class="cq-mcp-foot"><button type="button" class="cq-mcp-all" data-all="1">All</button><button type="button" class="cq-mcp-all" data-all="0">None</button><span class="cq-sp"></span><button type="button" class="cq-mcp-manage">Manage…</button></span>`;
 }
 // The settings popover over the message box: a chip opens its own part, ⋯ (or, in a narrow box, the one summary chip)
 // opens all of it. It stays open while you change things (each change draws the box again) and closes on a click
@@ -3987,7 +3996,9 @@ const TL_MANY = {
   decide: (n) => `Asked the deciders ${n} times`, delegate: (n) => `Sent ${n} helpers`, imagine: (n) => `Made ${n} pictures`, plan: () => 'Updated the plan',
   read_artifact: (n) => `Read ${n} pages`, edit_artifact: (n) => `Made ${n} page edits`, read_doc: (n) => `Read ${n} documents`,
 };
-const tlName = (n) => (TOOL_NAME[n] || n).replace(/^\S+\s/, '');
+// An MCP tool's name (mcp__<server>__<tool>) as its server and tool, or null.
+const mcpOfTool = (n) => { const m = /^mcp__(.+?)__(.+)$/.exec(String(n || '')); return m ? { server: m[1], tool: m[2] } : null; };
+const tlName = (n) => { const mc = mcpOfTool(n); return mc ? `${mc.server} › ${mc.tool}` : (TOOL_NAME[n] || n).replace(/^\S+\s/, ''); };
 function callsLabel(calls) {
   const groups = new Map();
   for (const x of calls) { if (!groups.has(x.e.name)) groups.set(x.e.name, []); groups.get(x.e.name).push(x); }
@@ -4050,7 +4061,9 @@ function timelineHTML(m) {
   const calls = (list, key) => list.map((x, i) => {
     const err = x.res != null && /^Error/.test(x.res);
     const ap = x.approval && m.approvals?.[x.approval], apB = ap ? approvalBadge(ap, !!m.live) : null;
-    return det(`${key}-${i}`, 'tl-call', `<span class="tl-ic">${TOOL_NAME[x.e.name]?.split(' ')[0] || '🔧'}</span><b>${esc(x.e.name)}</b><span class="tl-arg">${esc(clip(argSummary(x.e), 160))}</span>${apB ? apB.badge : ''}${x.res == null && m.live ? '<span class="tl-spin" aria-label="running"></span>' : err ? '<span class="tl-err">error</span>' : ''}`,
+    // An MCP tool: the server's mark, "server › tool", and the first line of what it gave back.
+    const mc = mcpOfTool(x.e.name), first = mc && x.res && !err ? String(x.res).split('\n').find((l) => l.trim()) : '';
+    return det(`${key}-${i}`, `tl-call${mc ? ' tl-mcp' : ''}`, `${mc ? `<span class="tl-ic">${mcpMark({ name: mc.server }, 'sm')}</span><b>${esc(mc.server)} › ${esc(mc.tool)}</b><span class="tl-arg">${first ? `<span class="tl-mcp-res">${esc(clip(first, 120))}</span>` : esc(clip(argSummary(x.e), 160))}</span>` : `<span class="tl-ic">${TOOL_NAME[x.e.name]?.split(' ')[0] || '🔧'}</span><b>${esc(x.e.name)}</b><span class="tl-arg">${esc(clip(argSummary(x.e), 160))}</span>`}${apB ? apB.badge : ''}${x.res == null && m.live ? '<span class="tl-spin" aria-label="running"></span>' : err ? '<span class="tl-err">error</span>' : ''}`,
       (apB ? apB.detail : '') + (x.res ? `<pre class="tl-out">${esc(clip(x.res, 4000))}</pre>` : '<div class="tl-out tl-none">No output.</div>'));
   }).join('');
   const groupRow = (key, icon, label, list, busy) => {
@@ -4067,7 +4080,7 @@ function timelineHTML(m) {
       const think = String(m.thinking?.[it.step] || '').trim();
       if (think) row(det(`t${it.step}`, 'tl-row tl-think', `<span class="tl-ic">💭</span><span class="tl-label">${!it.done && m.live ? 'Thinking' : 'Thought'}</span><small class="tl-words">${think.split(/\s+/).length.toLocaleString()} words</small>`, `<div class="tl-think-body" data-step="${it.step}">${open.has(`t${it.step}`) ? md(think) : ''}</div>`), `t${it.step}`, [], 1, !it.done && m.live);
       if (it.aside) other(`<div class="tl-text">${md(it.aside)}</div>`);
-      if (it.calls.length) { const busy = m.live && it.calls.some((x) => x.res == null); row(groupRow(`x${it.step}`, TOOL_NAME[it.calls[0].e.name]?.split(' ')[0] || '🔧', callsLabel(it.calls), it.calls, busy), `x${it.step}`, it.calls, 0, busy); }
+      if (it.calls.length) { const busy = m.live && it.calls.some((x) => x.res == null); row(groupRow(`x${it.step}`, mcpOfTool(it.calls[0].e.name) ? '🧲' : TOOL_NAME[it.calls[0].e.name]?.split(' ')[0] || '🔧', callsLabel(it.calls), it.calls, busy), `x${it.step}`, it.calls, 0, busy); }
       if (!it.done && m.live && !think && !it.calls.length) other('<div class="tl-row tl-wait"><span class="tl-spin"></span><span class="tl-label">Working…</span></div>');
       continue;
     }
@@ -4761,7 +4774,7 @@ function traceHTML(m) {
     else if (e.t === 'reading') row(e.at, `📝 <b>Prompt enhancer</b> ${esc(short(e.model))} read the request${e.late ? ' (too late for the first step; the deciders still use it)' : ''} · ${secs(e.ms)} · ${money(e.cost, 5)}<div class="sub" style="white-space:pre-wrap">${linkUrls(esc(e.text))}</div>`, 'note');
     else if (e.t === 'chat_off_project') row(e.at, `📝 Own chat from now on: you said “${esc(e.why || '')}”, so this chat leaves the project's notes, design and log alone. Tick Part of the project in the header to undo.`, 'note');
     else if (e.t === 'schedules_changed') row(e.at, `⏰ schedule ${esc({ create: 'created', update: 'changed', pause: 'paused', resume: 'resumed', run_now: 'run now', delete: 'deleted' }[e.action] || e.action)}<div class="sub">See ⏰ Schedules, or the ⏰ chip in this chat's header</div>`, 'ok');
-    else if (e.t === 'mcp_on') row(e.at, `🔌 Added to QuorX and ticked for this chat: ${(e.names || []).map(esc).join(', ')}`, 'note');
+    else if (e.t === 'mcp_on') row(e.at, `🧲 Added to QuorX and ticked for this chat: ${(e.names || []).map(esc).join(', ')}`, 'note');
     else if (e.t === 'tools_on') row(e.at,`🧰 Switched on for this chat: ${(e.kinds || []).map((k) => esc({ image: 'pictures', video: 'video clips', music: 'music', speech: 'voice', apps: '🖥 computer use', chrome: '🧩 Chrome' }[k] || k)).join(', ')}${Object.keys(e.models || {}).length ? ` · ${Object.entries(e.models).map(([k, mm]) => `${esc(k)}: ${esc(short(mm))}`).join(', ')}` : ''}`, 'note');
     else if (e.t === 'video_mode') row(e.at, e.on ? `🎬 <b>Video Mode</b> on${e.skills?.length ? ` · loaded ${e.skills.map(esc).join(', ')}` : ''}<div class="sub">Brief, story and storyboard come before anything is spent${e.first ? '' : ' (the brief was settled earlier in this chat)'}.</div>` : '🎬 Video Mode off: you said this is not a film', 'note');
     else if (e.t === 'reading_edit') row(e.at, e.text ? `📝 You corrected the reading<div class="sub" style="white-space:pre-wrap">${esc(e.text)}</div>` : '📝 You dropped the reading', 'note');
@@ -5039,10 +5052,11 @@ function approvalHTML(a, live = true) {
   const danger = c.risk === 'danger' && waiting ? '<div class="sc-risk" data-risk="danger">⛔ This acts in your own account. Only say yes if you want exactly this.</div>' : '';
   return `<div class="approval ${o ? 'done' : ''} ${c.free ? 'free' : ''}" ${waiting ? `data-id="${esc(c.id)}" data-tool="${esc(c.tool)}"${c.buttonsOnly ? ' data-buttons-only="1"' : ''}` : ''}${c.risk ? ` data-risk="${esc(c.risk)}"` : ''}>
     ${head}${model}${danger}
-    ${c.items ? '' : `<div class="what">${c.free ? esc(c.what) : `“${esc(c.what)}”`}</div>`}
+    ${c.mcp ? `<div class="mcp-ap"><div class="mcp-ap-head">${mcpMark({ name: c.mcp.server }, 'sm')}<span>Use <b>${esc(c.mcp.tool)}</b> on the MCP server <b>${esc(c.mcp.server)}</b></span>${c.mcp.changes ? '<span class="mcp-chg" title="The server doesn\'t mark this tool as read-only">CHANGES THINGS</span>' : ''}</div><pre>${esc(c.mcp.input)}</pre>${waiting ? `<small class="dim">${c.mcp.always ? `Asked because ${esc(c.mcp.server)} is set to Ask every time.` : 'Asked because this chat is Strict and the tool can change things.'} ⚙ Settings → MCP servers changes this.</small>` : ''}</div>`
+      : c.items ? '' : `<div class="what">${c.free ? esc(c.what) : `“${esc(c.what)}”`}</div>`}
     ${c.why ? `<div class="what">Why: ${esc(c.why)}</div>` : ''}${c.items && waiting ? '<div class="what dim">Calls that match this plan then run without asking again; anything else asks on its own.</div>' : ''}
     ${waiting ? `${waitHTML(c)}${c.buttonsOnly ? '<div class="what dim">Only these buttons switch it on: typed words don’t.</div>' : '<textarea rows="1" placeholder="Or type to tell it something else. Enter sends it, without allowing or declining."></textarea>'}
-      <div class="acts"><button type="button" class="primary reply" hidden>Send to the agent</button><button type="button" class="primary yes">${c.yes ? esc(c.yes) : c.tool === 'remember' ? 'Save to memory' : c.free ? 'Allow once' : `Approve ${money(c.est, 3)}`}</button>${c.noAlways ? '' : '<button type="button" class="always" title="Stop asking for this tool in this chat">Always allow</button>'}<button type="button" class="no">${c.no ? esc(c.no) : c.tool === 'remember' ? "Don't save" : 'Decline'}</button></div>`
+      <div class="acts"><button type="button" class="primary reply" hidden>Send to the agent</button><button type="button" class="primary yes">${c.yes ? esc(c.yes) : c.tool === 'remember' ? 'Save to memory' : c.free ? 'Allow once' : `Approve ${money(c.est, 3)}`}</button>${c.noAlways ? '' : `<button type="button" class="always" title="Stop asking for this tool in this chat">${c.mcp ? `Always allow ${esc(c.mcp.tool)} on ${esc(c.mcp.server)}` : 'Always allow'}</button>`}<button type="button" class="no">${c.no ? esc(c.no) : c.tool === 'remember' ? "Don't save" : 'Decline'}</button></div>`
       : o ? `<div class="outcome ${apState(o)}">${{ yes: '✅ ', no: '⛔ ', reply: '↩ ' }[apState(o)]}${apWho(o, c)}</div>`
       : !live ? '<div class="outcome">Not answered: the reply ended</div>' : `<div class="outcome">⚡ ${c.tool === 'shell' ? 'The deciders are voting on this command…' : 'Deciders are checking whether this is needed and worth the price…'}</div>`}
   </div>`;
@@ -6369,7 +6383,7 @@ const UI_DEFAULTS = { density: 'comfortable', fontSize: 14, reduceMotion: 'syste
 const SETTINGS_NAV = [
   ['Harness', [['setup', '🧪', 'Setup check'], ['appearance', '🎨', 'Appearance'], ['privacy', '🕶', 'Privacy & display']]],
   ['Models', [['keys', '🔑', 'API keys'], ['models', '🧠', 'Models & catalogue'], ['sources', '🔌', 'Apps on this PC']]],
-  ['Agent', [['newchats', '✨', 'New chats'], ['loop', '🔁', 'Agent loop'], ['deciders', '⚖️', 'Deciders'], ['tools', '🧰', 'Tools & media'], ['video', '🎬', 'Video'], ['safety', '🛡', 'Approvals & safety'], ['budget', '💵', 'Budget'], ['skills', '🧩', 'Skills'], ['mcp', '🔌', 'MCP servers'], ['memory', '📌', 'Memory']]],
+  ['Agent', [['newchats', '✨', 'New chats'], ['loop', '🔁', 'Agent loop'], ['deciders', '⚖️', 'Deciders'], ['tools', '🧰', 'Tools & media'], ['video', '🎬', 'Video'], ['safety', '🛡', 'Approvals & safety'], ['budget', '💵', 'Budget'], ['skills', '🧩', 'Skills'], ['mcp', '🧲', 'MCP servers'], ['memory', '📌', 'Memory']]],
   ['Workspace', [['projects', '📁', 'Projects'], ['code', '💻', 'Code & servers'], ['docs', '📎', 'Documents']]],
   ['Data', [['usage', '📊', 'Usage & costs'], ['data', '🗄', 'Data & storage'], ['storage', '🧹', 'Storage'], ['shortcuts', '⌨️', 'Shortcuts'], ['about', 'ℹ️', 'About']]],
 ];
@@ -7734,61 +7748,135 @@ async function drawMemoryPanel(msg = '') {
     $('.mem-del', li).onclick = () => save({ items: m.items.filter((x) => x.id !== id) }, '✓ Forgotten');
   }
 }
-// ⚙ Settings → MCP servers: paste a setup (a config, a command line written for any tool, or an address), see what
-// it would run, add it; then each server with its status and tools, on/off, Ask (when YOLO lets its tools run), Start
-// and Remove. Keys stay on this computer: the list only shows their names.
-const MCP_UI = { q: '', preview: null, msg: '' };
+// ⚙ Settings → MCP servers. A summary line; Your servers (search, filter chips with counts, one row per server and a
+// panel with the chosen one's details) and Suggested (servers that need no key, one click to add); Add a server (paste a
+// setup as found anywhere, see what it would run, add it). Keys stay on this computer: only their names show.
+const MCP_UI = { q: '', filters: new Set(), tab: 'mine', sel: '', adding: false, preview: null, msg: '', toolQ: '' };
+// Servers anyone can add in one click: they need no key.
+const MCP_SUGGESTED = [
+  { name: 'deepwiki', setup: 'https://mcp.deepwiki.com/mcp', what: 'Answers about any public GitHub repo, from its code' },
+  { name: 'context7', setup: 'https://mcp.context7.com/mcp', what: 'Current docs for libraries and frameworks' },
+  { name: 'mslearn', setup: 'https://learn.microsoft.com/api/mcp', what: 'Microsoft docs and code samples' },
+  { name: 'cloudflare-docs', setup: 'https://docs.mcp.cloudflare.com/mcp', what: 'Cloudflare docs search' },
+  { name: 'playwright', setup: 'npx -y @playwright/mcp@latest', what: 'A browser the agent drives (needs Node)' },
+  { name: 'thinking', setup: 'npx -y @modelcontextprotocol/server-sequential-thinking', what: 'Step-by-step thinking for hard problems (needs Node)' },
+];
+const MCP_FILTERS = [
+  ['running', 'Running', (s) => s.status === 'running'], ['stopped', 'Not started', (s) => s.status === 'stopped' || s.status === 'starting'], ['error', "Can't start", (s) => s.status === 'error'],
+  ['on', 'On', (s) => s.on], ['off', 'Off', (s) => !s.on], ['program', 'Program', (s) => s.type !== 'http'], ['web', 'Web', (s) => s.type === 'http'],
+  ['keys', 'Uses keys', (s) => Object.keys({ ...(s.env || {}), ...(s.headers || {}) }).length > 0], ['changes', 'Has tools that change things', (s) => (s.tools || []).some((t) => !t.readOnly)],
+];
+// Filters in the same group widen the match (Running or Not started); different groups narrow it.
+const MCP_GROUP = { running: 'st', stopped: 'st', error: 'st', on: 'on', off: 'on', program: 'ty', web: 'ty', keys: 'k', changes: 'c' };
+const mcpRuns = (s) => (s.type === 'http' ? s.url : [s.command, ...(s.args || [])].join(' '));
+const mcpKeys = (s) => Object.keys({ ...(s.env || {}), ...(s.headers || {}) });
+const MCP_STATUS = { running: 'Running', stopped: 'Not started', starting: 'Starting', error: "Can't start" };
+const mcpStatus = (s) => `<span class="mcp-st ${s.status}"><i></i>${MCP_STATUS[s.status] || s.status}</span>`;
 async function drawMcpPanel() {
   const el = $('#mcpPanel');
   if (!el) return;
   const list = await loadMcp();
   stRefresh?.();
-  const runs = (s) => (s.type === 'http' ? s.url : [s.command, ...(s.args || [])].join(' '));
-  const keys = (s) => Object.keys({ ...(s.env || {}), ...(s.headers || {}) });
-  const dot = (s) => `<span class="mcp-dot ${s.status}" title="${s.status === 'running' ? 'Running' : s.status === 'error' ? 'Could not start' : s.status === 'starting' ? 'Starting' : 'Not started: it starts when a chat needs it'}"></span>`;
-  const q = MCP_UI.q.trim().toLowerCase(), shown = list.filter((s) => !q || `${s.name} ${runs(s)}`.toLowerCase().includes(q));
-  const pv = MCP_UI.preview;
-  el.innerHTML = stCard('Add a server', 'Paste its setup as you found it: an <code>mcpServers</code> config, a line such as <code>npx -y @scope/server</code> or <code>claude mcp add …</code> (written for any tool: it goes into QuorX), or a server\'s https address.',
-    `<div class="mcp-add"><textarea id="mcpPaste" rows="4" spellcheck="false" placeholder='{ "mcpServers": { "github": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"] } } }'></textarea>
-      <div class="mcp-add-row"><input id="mcpName" maxlength="40" placeholder="Name (if it has none)" aria-label="Server name"><button type="button" class="kx-btn sm" id="mcpRead">Check it</button></div>
-      ${pv ? `<div class="mcp-preview"><b>This will add:</b><ul>${pv.servers.map((s) => `<li><b>${esc(s.name)}</b> <span class="mcp-kind">${s.type === 'http' ? 'web' : 'program'}</span> <code>${esc(runs(s))}</code>${keys(s).length ? ` <small>with ${keys(s).map(esc).join(', ')}</small>` : ''}</li>`).join('')}</ul>${pv.from && !/config$/.test(pv.from) ? `<p class="st-row-help">Written for ${esc(pv.from)}: this adds it to QuorX instead.</p>` : ''}<p class="st-row-help">It runs with your permissions: add only servers you trust.</p><button type="button" class="kx-btn sm primary" id="mcpAdd">Add to QuorX</button> <button type="button" class="kx-btn sm" id="mcpCancel">Cancel</button></div>` : ''}
-      <p class="mem-msg ${MCP_UI.msg.startsWith('✓') ? 'ok' : MCP_UI.msg ? 'bad' : ''}" role="status">${esc(MCP_UI.msg)}</p></div>`)
-    + stCard(`Your servers <small>${list.length}</small>`, '', (list.length > 6 ? `<input id="mcpSearch" class="mcp-search" placeholder="Search servers" value="${esc(MCP_UI.q)}" aria-label="Search servers">` : '')
-      + (shown.length ? `<ul class="mcp-list">${shown.map((s) => `<li class="mcp-item ${s.on ? '' : 'off'}" data-n="${esc(s.name)}">
-        <div class="mcp-top">${dot(s)}<b>${esc(s.name)}</b><span class="mcp-kind">${s.type === 'http' ? 'web' : 'program'}</span><code class="mcp-runs" title="${esc(runs(s))}">${esc(runs(s))}</code>
-          <label class="sx-check" title="On: chats can tick it. Off: no chat uses it."><input type="checkbox" class="mcp-on" ${s.on ? 'checked' : ''} aria-label="${esc(s.name)} on"><span class="sx-word"></span></label></div>
-        ${s.error ? `<p class="mcp-err">${esc(s.error)}</p>` : ''}
-        <div class="mcp-row">${keys(s).length ? `<small>With ${keys(s).map(esc).join(', ')} (kept here, not shown)</small>` : ''}
-          <span class="seg mcp-ask" role="radiogroup" aria-label="When its tools ask you" title="Auto: Strict asks before tools that change things; YOLO runs them. Every time: asks in YOLO too.">${[['auto', 'Auto'], ['always', 'Ask every time']].map(([v, w]) => `<button type="button" data-ask="${v}" class="${s.ask === v ? 'on' : ''}">${w}</button>`).join('')}</span>
-          <span class="cq-sp"></span><button type="button" class="kx-btn sm mcp-start">${s.status === 'running' ? 'Restart' : 'Start'}</button>${s.status === 'running' ? '<button type="button" class="kx-btn sm mcp-stop">Stop</button>' : ''}<button type="button" class="kx-btn sm danger mcp-del">Remove</button></div>
-        ${s.tools?.length ? `<details class="mcp-tools"><summary>${s.tools.length} tool${s.tools.length > 1 ? 's' : ''}</summary><ul>${s.tools.map((t) => `<li><code>${esc(t.name)}</code>${t.readOnly ? ' <span class="mcp-ro" title="The server says it only reads: Strict doesn\'t ask before it">read-only</span>' : ''}<small>${esc(t.description)}</small></li>`).join('')}</ul></details>` : ''}
-      </li>`).join('')}</ul>` : `<p class="st-row-help">${list.length ? 'No server matches.' : 'None yet. Add one above, or paste a setup into a chat and the agent adds it (you click to allow).'}</p>`));
-  const say = (m) => { MCP_UI.msg = m; drawMcpPanel(); };
-  const save = async (next, ok) => { const r = await postJ('/api/mcp', { servers: next }, 'PUT').catch((e) => ({ error: e.message })); if (r?.error) say(`Not saved: ${r.error}`); else { MCP_UI.msg = ok; drawMcpPanel(); } };
-  $('#mcpRead').onclick = async () => {
-    const r = await postJ('/api/mcp/parse', { text: $('#mcpPaste').value, name: $('#mcpName').value }).catch((e) => ({ error: e.message }));
-    if (r?.error) { MCP_UI.preview = null; say(r.error); return; }
-    MCP_UI.preview = { ...r, text: $('#mcpPaste').value, name: $('#mcpName').value }; MCP_UI.msg = ''; drawMcpPanel();
+  const U = MCP_UI, running = list.filter((s) => s.status === 'running'), bad = list.filter((s) => s.status === 'error');
+  const tools = running.reduce((n, s) => n + (s.tools?.length || 0), 0), on = list.filter((s) => s.on).length;
+  const have = new Set(list.map((s) => s.name)), sugg = MCP_SUGGESTED.filter((x) => !have.has(x.name));
+  if (!list.length && U.tab === 'mine' && !U.adding) U.tab = 'first';
+  if (list.length && U.tab === 'first') U.tab = 'mine';
+  const match = (s) => {
+    const q = U.q.trim().toLowerCase();
+    if (q && !`${s.name} ${mcpRuns(s)} ${(s.tools || []).map((t) => t.name).join(' ')}`.toLowerCase().includes(q)) return false;
+    const groups = {};
+    for (const f of U.filters) (groups[MCP_GROUP[f]] ||= []).push(f);
+    return Object.values(groups).every((fs) => fs.some((f) => MCP_FILTERS.find((x) => x[0] === f)[2](s)));
   };
-  if (pv) {
-    $('#mcpPaste').value = pv.text; $('#mcpName').value = pv.name;
-    $('#mcpCancel').onclick = () => { MCP_UI.preview = null; say(''); };
-    $('#mcpAdd').onclick = async () => {
-      const r = await postJ('/api/mcp/add', { text: pv.text, name: pv.name }).catch((e) => ({ error: e.message }));
-      if (r?.error) { say(`Not added: ${r.error}`); return; }
-      MCP_UI.preview = null; say(`✓ Added ${pv.servers.map((s) => s.name).join(', ')}. Tick it in a chat's settings (MCP) to use it there.`);
-    };
+  const shown = list.filter(match), sel = list.find((s) => s.name === U.sel) || shown[0] || null;
+  if (sel) U.sel = sel.name;
+  const pv = U.preview;
+  const addCard = `<div class="mcp-addbox">
+      <p class="st-row-help">Paste its setup as you found it: an <code>mcpServers</code> config, a line such as <code>npx -y @scope/server</code> or <code>claude mcp add …</code> (written for any tool: it goes into QuorX), or a server's https address.</p>
+      <textarea id="mcpPaste" rows="3" spellcheck="false" placeholder='{ "mcpServers": { "github": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"] } } }'></textarea>
+      <div class="mcp-add-row"><input id="mcpName" maxlength="40" placeholder="Name (if it has none)" aria-label="Server name"><button type="button" class="kx-btn sm" id="mcpRead">Check it</button>${list.length ? '<button type="button" class="kx-btn sm" id="mcpAddClose">Cancel</button>' : ''}</div>
+      ${pv ? `<div class="mcp-preview"><b>This will add:</b><ul>${pv.servers.map((s) => `<li>${mcpMark(s, 'sm')} <b>${esc(s.name)}</b> <span class="mcp-kind">${s.type === 'http' ? 'web' : 'program'}</span> <code>${esc(mcpRuns(s))}</code>${mcpKeys(s).length ? ` <small>with ${mcpKeys(s).map(esc).join(', ')}</small>` : ''}</li>`).join('')}</ul>${pv.from && !/config$/.test(pv.from) ? `<p class="st-row-help">Written for ${esc(pv.from)}: this adds it to QuorX instead.</p>` : ''}<p class="st-row-help">It runs with your permissions: add only servers you trust.</p><button type="button" class="kx-btn sm primary" id="mcpAdd">Add to QuorX</button></div>` : ''}
+    </div>`;
+  const msg = `<p class="mem-msg ${U.msg.startsWith('✓') ? 'ok' : U.msg ? 'bad' : ''}" role="status">${esc(U.msg)}</p>`;
+  const head = `<div class="mcp-sum">${list.length ? `<span class="mcp-st running"><i></i>${running.length} running</span><span>${on} of ${list.length} on</span><span>${tools} tools available</span>${bad.length ? `<button type="button" class="mcp-st error mcp-showbad"><i></i>${bad.length} can't start · Show them</button>` : ''}` : '<span>No servers yet</span>'}<span class="cq-sp"></span><button type="button" class="kx-btn sm primary" id="mcpAddOpen">+ Add a server</button></div>
+    ${list.length ? `<div class="seg mcp-tabs" role="tablist"><button type="button" data-tab="mine" class="${U.tab === 'mine' ? 'on' : ''}">Your servers <small>${list.length}</small></button><button type="button" data-tab="gal" class="${U.tab === 'gal' ? 'on' : ''}">Suggested <small>${sugg.length}</small></button></div>` : ''}`;
+  const sugCard = (x) => `<div class="mcp-sug">${mcpMark(x)}<div><b>${esc(x.name)}</b><small>${esc(x.what)}</small><code>${esc(x.setup)}</code></div><span class="mcp-kind">${/^https?:/.test(x.setup) ? 'web · no key' : 'program'}</span><button type="button" class="kx-btn sm" data-sug="${esc(x.name)}">Add</button></div>`;
+  let body = '';
+  if (U.tab === 'first') {
+    body = `<div class="mcp-first"><b>Give the agent extra tools.</b><p>An MCP server is a set of tools from a program on this PC or a site on the web: docs to read, a browser to drive, a design app to use. Add one, then tick it in a chat.</p>
+      <div class="mcp-sug-grid">${MCP_SUGGESTED.slice(0, 3).map(sugCard).join('')}</div>
+      <button type="button" class="kx-btn sm" id="mcpPasteOpen">Or paste a setup…</button></div>`;
+  } else if (U.tab === 'gal') {
+    body = sugg.length ? `<div class="mcp-sug-grid">${sugg.map(sugCard).join('')}</div>` : '<p class="st-row-help">You have every suggested server. Paste any other setup with + Add a server.</p>';
+  } else {
+    const count = (f) => list.filter((s) => MCP_FILTERS.find((x) => x[0] === f)[2](s)).length;
+    const chips = MCP_FILTERS.filter(([f]) => count(f) || U.filters.has(f)).map(([f, label]) => `<button type="button" class="mcp-chip ${U.filters.has(f) ? 'on' : ''}" data-f="${f}" aria-pressed="${U.filters.has(f)}">${label} <small>${count(f)}</small></button>`).join('');
+    const rows = shown.map((s) => `<li class="mcp-row ${s.name === U.sel ? 'sel' : ''} ${s.on ? '' : 'off'}" data-n="${esc(s.name)}" tabindex="0">
+        <label class="mcp-tick" title="On: chats can tick it. Off: no chat uses it."><input type="checkbox" class="mcp-on" ${s.on ? 'checked' : ''} aria-label="${esc(s.name)} on"></label>
+        ${mcpMark(s)}<span class="mcp-nm"><b>${esc(s.name)}</b><code>${esc(mcpRuns(s))}</code></span><span class="mcp-kind">${s.type === 'http' ? 'web' : 'program'}</span>${mcpStatus(s)}<span class="mcp-tc">${s.tools?.length ? `${s.tools.length} tool${s.tools.length > 1 ? 's' : ''}` : '–'}</span>
+        <button type="button" class="mcp-ib mcp-restart" title="${s.status === 'running' ? 'Restart' : 'Start'} ${esc(s.name)}" aria-label="${s.status === 'running' ? 'Restart' : 'Start'} ${esc(s.name)}">↻</button></li>`).join('');
+    const tq = U.toolQ.trim().toLowerCase(), tl = (sel?.tools || []).filter((t) => !tq || `${t.name} ${t.description}`.toLowerCase().includes(tq));
+    const panel = sel ? `<aside class="mcp-insp" aria-label="${esc(sel.name)}">
+        <div class="mcp-insp-head">${mcpMark(sel, 'lg')}<div><b>${esc(sel.name)}</b><small>${sel.type === 'http' ? 'Server on the web' : 'Program on this PC'}</small></div><span class="mcp-kind">${sel.type === 'http' ? 'web' : 'program'}</span></div>
+        <div class="mcp-insp-sec mcp-insp-run">${mcpStatus(sel)}${sel.tools?.length ? `<small>· ${sel.tools.length} tools</small>` : ''}<span class="cq-sp"></span><button type="button" class="kx-btn sm mcp-start">${sel.status === 'running' ? '↻ Restart' : 'Start'}</button>${sel.status === 'running' ? '<button type="button" class="kx-btn sm mcp-stop">Stop</button>' : ''}</div>
+        ${sel.error ? `<p class="mcp-err">${esc(sel.error)}</p>` : ''}
+        <div class="mcp-insp-sec"><label class="mcp-onrow"><span class="sx-check"><input type="checkbox" class="mcp-on2" ${sel.on ? 'checked' : ''}><span class="sx-word"></span></span><span><b>On</b><small>${sel.on ? 'Chats can tick it.' : 'No chat uses it.'}</small></span></label></div>
+        <div class="mcp-insp-sec"><h6>${sel.type === 'http' ? 'Address' : 'Command'}</h6><div class="mcp-addr"><code>${esc(mcpRuns(sel))}</code><button type="button" class="mcp-ib mcp-copy" title="Copy" aria-label="Copy">⧉</button></div></div>
+        <div class="mcp-insp-sec"><h6>Keys</h6>${mcpKeys(sel).length ? `<p>${mcpKeys(sel).map((k) => `<code>${esc(k)}</code>`).join(' ')} <small>kept on this computer, never shown</small></p>` : '<p><small>No keys. This server doesn\'t need any.</small></p>'}</div>
+        <div class="mcp-insp-sec"><h6>Ask before using its tools</h6><span class="seg mcp-ask" role="radiogroup" aria-label="When its tools ask you">${[['auto', 'Auto'], ['always', 'Ask every time']].map(([v, w]) => `<button type="button" data-ask="${v}" class="${sel.ask === v ? 'on' : ''}">${w}</button>`).join('')}</span><p><small>${sel.ask === 'always' ? 'Every call asks you, in YOLO too.' : 'Follows each chat\'s mode: Strict asks before tools that change things; read-only ones and YOLO don\'t ask.'}</small></p></div>
+        <div class="mcp-insp-sec mcp-insp-tools"><h6>Tools ${sel.tools?.length ? `<small>${sel.tools.length}</small>` : ''}</h6>${sel.tools?.length ? `${sel.tools.length > 6 ? `<input class="mcp-toolq" placeholder="Search its tools" value="${esc(U.toolQ)}" aria-label="Search its tools">` : ''}<ul>${tl.map((t) => `<li><code>${esc(t.name)}</code>${t.readOnly ? '<span class="mcp-ro">read-only</span>' : '<span class="mcp-chg" title="Its server doesn&#39;t mark it read-only, so Strict asks before it">not marked read-only</span>'}<small>${esc(t.description)}</small></li>`).join('') || '<li><small>No tool matches.</small></li>'}</ul>` : `<p><small>${sel.status === 'error' ? 'It didn\'t start, so its tools aren\'t known.' : 'Start it to see its tools.'}</small></p>`}</div>
+        <div class="mcp-insp-sec"><button type="button" class="kx-btn sm danger mcp-del">Remove ${esc(sel.name)}</button></div>
+      </aside>` : '';
+    body = `<input id="mcpSearch" class="mcp-search" placeholder="Search servers, commands or tools" value="${esc(U.q)}" aria-label="Search servers">
+      <div class="mcp-chips">${chips}${U.filters.size || U.q ? '<button type="button" class="mcp-chip mcp-clear">Clear</button>' : ''}</div>
+      <div class="mcp-split"><ul class="mcp-rows">${rows || `<li class="mcp-none">No server matches${U.q ? ` “${esc(U.q)}”` : ''}.</li>`}</ul>${panel}</div>`;
   }
-  const search = $('#mcpSearch'); if (search) search.oninput = () => { MCP_UI.q = search.value; drawMcpPanel().then(() => { const s2 = $('#mcpSearch'); if (s2) { s2.focus(); s2.setSelectionRange(s2.value.length, s2.value.length); } }); };
-  for (const li of el.querySelectorAll('.mcp-item')) {
-    const n = li.dataset.n, s = list.find((x) => x.name === n);
-    $('.mcp-on', li).onchange = (e) => save(list.map((x) => (x.name === n ? { ...x, on: e.target.checked } : x)), `✓ ${n} is ${e.target.checked ? 'on' : 'off'}`);
-    for (const b of li.querySelectorAll('[data-ask]')) b.onclick = () => save(list.map((x) => (x.name === n ? { ...x, ask: b.dataset.ask } : x)), `✓ ${n}: ${b.dataset.ask === 'always' ? 'asks every time' : 'asks as the mode says'}`);
-    $('.mcp-start', li).onclick = async (e) => { e.target.disabled = true; e.target.textContent = 'Starting…'; const r = await postJ('/api/mcp/test', { name: n }).catch(() => null); if (r?.servers) G.mcp = r.servers; const now = (G.mcp || []).find((x) => x.name === n); MCP_UI.msg = now?.status === 'running' ? `✓ ${n} is running: ${now.tools.length} tools` : `${n} could not start${now?.error ? `: ${now.error}` : ''}`; drawMcpPanel(); };
-    const stop = $('.mcp-stop', li); if (stop) stop.onclick = async () => { const r = await postJ('/api/mcp/stop', { name: n }).catch(() => null); if (r?.servers) G.mcp = r.servers; say(`✓ ${n} stopped (it starts again when a chat needs it)`); };
-    const del = $('.mcp-del', li);
-    del.onclick = () => { if (!del.classList.contains('sure')) { del.classList.add('sure'); del.textContent = 'Remove?'; return; } save(list.filter((x) => x.name !== n), `✓ Removed ${n}`); };
-    void s;
+  el.innerHTML = `<section class="st-card mcp-card">${head}${(U.adding || U.tab === 'first' && U.preview) ? addCard : ''}${msg}${body}</section>`;
+  // ---- wiring ----
+  const say = (m) => { U.msg = m; drawMcpPanel(); };
+  const save = async (next, ok) => { const r = await postJ('/api/mcp', { servers: next }, 'PUT').catch((e) => ({ error: e.message })); if (r?.error) say(`Not saved: ${r.error}`); else { U.msg = ok; drawMcpPanel(); } };
+  const addText = async (text, name, done) => { const r = await postJ('/api/mcp/add', { text, name }).catch((e) => ({ error: e.message })); if (r?.error) { say(`Not added: ${r.error}`); return false; } U.preview = null; U.adding = false; U.tab = 'mine'; U.sel = done; say(`✓ Added ${done}. Tick it in a chat's settings (🧲) to use it there.`); return true; };
+  $('#mcpAddOpen').onclick = () => { U.adding = !U.adding; U.preview = null; U.msg = ''; drawMcpPanel().then(() => $('#mcpPaste')?.focus()); };
+  for (const b of el.querySelectorAll('[data-tab]')) b.onclick = () => { U.tab = b.dataset.tab; drawMcpPanel(); };
+  $('.mcp-showbad', el)?.addEventListener('click', () => { U.tab = 'mine'; U.filters = new Set(['error']); drawMcpPanel(); });
+  $('#mcpPasteOpen', el)?.addEventListener('click', () => { U.adding = true; U.tab = 'mine'; drawMcpPanel().then(() => $('#mcpPaste')?.focus()); });
+  for (const b of el.querySelectorAll('[data-sug]')) b.onclick = async () => { const x = MCP_SUGGESTED.find((y) => y.name === b.dataset.sug); b.disabled = true; b.textContent = 'Adding…'; if (await addText(x.setup, x.name, x.name)) postJ('/api/mcp/test', { name: x.name }).then(() => drawMcpPanel()).catch(() => {}); };
+  if ($('#mcpRead')) {
+    if (pv) { $('#mcpPaste').value = pv.text; $('#mcpName').value = pv.name; }
+    $('#mcpRead').onclick = async () => {
+      const r = await postJ('/api/mcp/parse', { text: $('#mcpPaste').value, name: $('#mcpName').value }).catch((e) => ({ error: e.message }));
+      if (r?.error) { U.preview = null; say(r.error); return; }
+      U.preview = { ...r, text: $('#mcpPaste').value, name: $('#mcpName').value }; U.msg = ''; drawMcpPanel();
+    };
+    $('#mcpAddClose')?.addEventListener('click', () => { U.adding = false; U.preview = null; say(''); });
+    $('#mcpAdd')?.addEventListener('click', () => addText(pv.text, pv.name, pv.servers.map((s) => s.name).join(', ')));
+  }
+  const search = $('#mcpSearch');
+  if (search) search.oninput = () => { U.q = search.value; drawMcpPanel().then(() => { const s2 = $('#mcpSearch'); if (s2) { s2.focus(); s2.setSelectionRange(s2.value.length, s2.value.length); } }); };
+  for (const b of el.querySelectorAll('.mcp-chip[data-f]')) b.onclick = () => { const f = b.dataset.f; U.filters.has(f) ? U.filters.delete(f) : U.filters.add(f); drawMcpPanel(); };
+  $('.mcp-clear', el)?.addEventListener('click', () => { U.filters.clear(); U.q = ''; drawMcpPanel(); });
+  const setOn = (n, v) => save(list.map((x) => (x.name === n ? { ...x, on: v } : x)), `✓ ${n} is ${v ? 'on' : 'off'}`);
+  const start = async (n, b) => { if (b) { b.disabled = true; b.textContent = '…'; } const r = await postJ('/api/mcp/test', { name: n }).catch(() => null); const now = (r?.servers || []).find((x) => x.name === n); U.msg = now?.status === 'running' ? `✓ ${n} is running: ${now.tools.length} tools` : `${n} could not start${now?.error ? `: ${now.error}` : ''}`; drawMcpPanel(); };
+  for (const li of el.querySelectorAll('.mcp-row[data-n]')) {
+    const n = li.dataset.n;
+    li.onclick = (e) => { if (e.target.closest('label, button, input')) return; U.sel = n; U.toolQ = ''; drawMcpPanel(); };
+    li.onkeydown = (e) => { if (e.key === 'Enter' && e.target === li) { U.sel = n; drawMcpPanel(); } };
+    $('.mcp-on', li).onchange = (e) => setOn(n, e.target.checked);
+    $('.mcp-restart', li).onclick = (e) => start(n, e.currentTarget);
+  }
+  const ins = $('.mcp-insp', el);
+  if (ins && sel) {
+    const n = sel.name;
+    $('.mcp-on2', ins).onchange = (e) => setOn(n, e.target.checked);
+    $('.mcp-start', ins).onclick = (e) => start(n, e.currentTarget);
+    $('.mcp-stop', ins)?.addEventListener('click', async () => { await postJ('/api/mcp/stop', { name: n }).catch(() => null); say(`✓ ${n} stopped (it starts again when a chat needs it)`); });
+    $('.mcp-copy', ins).onclick = () => { navigator.clipboard?.writeText(mcpRuns(sel)).catch(() => {}); flashTip($('.mcp-copy', ins), 'Copied'); };
+    for (const b of ins.querySelectorAll('[data-ask]')) b.onclick = () => save(list.map((x) => (x.name === n ? { ...x, ask: b.dataset.ask } : x)), `✓ ${n}: ${b.dataset.ask === 'always' ? 'asks every time' : 'asks as the chat\'s mode says'}`);
+    const tq = $('.mcp-toolq', ins);
+    if (tq) tq.oninput = () => { U.toolQ = tq.value; drawMcpPanel().then(() => { const t2 = $('.mcp-toolq'); if (t2) { t2.focus(); t2.setSelectionRange(t2.value.length, t2.value.length); } }); };
+    const del = $('.mcp-del', ins);
+    del.onclick = () => { if (!del.classList.contains('sure')) { del.classList.add('sure'); del.textContent = `Remove ${n}? Click again`; return; } U.sel = ''; save(list.filter((x) => x.name !== n), `✓ Removed ${n}`); };
   }
 }
 // The 👁 / 🙈 button that shows or masks amounts, switched in place.
