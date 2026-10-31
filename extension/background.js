@@ -1,10 +1,10 @@
 // Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // QuorX in your everyday Chrome. It keeps one WebSocket to the QuorX on this computer and does only this:
-// a tab you give to a chat (from the popup, a right-click, or by dragging it into a chat's tab group) can be used by
-// that chat's agent, and only while the agent works. Chrome shows its own "started debugging" bar while the debugger
+// a chat with 🧩 Chrome on opens its own tabs (in one QuorX window, grouped by chat) and its agent works only in those.
+// There is no way to hand one of your own tabs over from here: you can only take a tab back or stop the agent. Chrome shows its own "started debugging" bar while the debugger
 // is attached; once you let the extension read pages (the popup), reading goes through page scripts and the bar shows
 // only while the agent clicks, types or reads network data. Cancel on the bar takes the tab back.
-// It never touches a tab you didn't give, and forgets a tab when you take it back or close it.
+// It never touches a tab it didn't open, and lets go of a tab for good when you take it back or close it.
 const VERSION = chrome.runtime.getManifest().version;
 const FORWARD = new Set(['Page.loadEventFired', 'Page.frameNavigated', 'Runtime.consoleAPICalled', 'Runtime.exceptionThrown', 'Log.entryAdded']);
 // A page's data requests (XHR, fetch) go to QuorX with only their id, method, address, status, type and size:
@@ -80,7 +80,6 @@ async function onMessage(sock, data) {
     for (const x of await req('lent').catch(() => [])) lent[x.tab] = { chatId: x.chatId };
     await setLent(lent); badgeAll();
     send({ t: 'caps', caps: await caps() });
-    refreshMenus();
     return;
   }
   if (m.t === 'denied') { state = 'denied'; pairCode = ''; lastError = m.why || 'QuorX refused the key.'; return; }
@@ -123,7 +122,8 @@ async function call(cmd, { tab, method, params, locked, url, chatId, chatTitle, 
   if (cmd === 'tab.list') {
     const gid = (await groups())[chatId];
     if (gid == null) return [];
-    return (await chrome.tabs.query({ groupId: gid }).catch(() => [])).map((x) => ({ id: x.id, title: x.title || '', url: x.url || '', active: !!x.active, lent: !!lent[x.id] }));
+    const o = await opened();
+    return (await chrome.tabs.query({ groupId: gid }).catch(() => [])).filter((x) => o[x.id] === chatId).map((x) => ({ id: x.id, title: x.title || '', url: x.url || '', active: !!x.active, lent: !!lent[x.id] }));
   }
   // The reply ended: close the tabs its agent opened (only those; a tab you gave or dragged in stays open).
   if (cmd === 'tab.closeOwn') {
@@ -135,14 +135,14 @@ async function call(cmd, { tab, method, params, locked, url, chatId, chatTitle, 
     return { closed: mine.length };
   }
   if (cmd === 'tab.adopt') {
-    const gid = (await groups())[chatId];
+    // Only a tab this chat's agent opened: one of yours dragged into the group is never taken.
     const x = await chrome.tabs.get(tab).catch(() => null);
-    if (!x || gid == null || x.groupId !== gid) throw new Error("that tab isn't in this chat's tab group");
+    if (!x || (await opened())[tab] !== chatId) throw new Error("that tab isn't one this chat opened");
     await chrome.tabs.update(tab, { active: true }).catch(() => {});
     lent[tab] = { chatId, own: true }; await setLent(lent); badge(tab);
     return { id: tab, title: x.title || '', url: x.url || '' };
   }
-  if (!lent[tab]) throw new Error('that tab was not given to QuorX');
+  if (!lent[tab]) throw new Error('that tab is not in use by QuorX');
   if (cmd === 'tab.cdp') {
     await attach(tab);
     if (method === 'Network.enable') netOn.add(tab);
@@ -218,20 +218,22 @@ chrome.debugger.onDetach.addListener(async (src, reason) => {
   else send({ t: 'event', tab: src.tabId, method: 'Extension.detached', params: {} });
 });
 chrome.tabs.onRemoved.addListener(async (tab) => { if ((await lentTabs())[tab]) takeBack(tab); });
+// A tab the agent's tab opens (a link to a new tab, a sign-in pop-up) belongs to the same chat.
+chrome.tabs.onCreated.addListener(async (t) => {
+  const o = await opened();
+  if (t.openerTabId == null || o[t.openerTabId] == null) return;
+  o[t.id] = o[t.openerTabId]; await chrome.storage.session.set({ opened: o });
+});
+// Taking a tab back is for good: it leaves the chat's group and the agent can't pick it again.
 async function takeBack(tab) {
   const lent = await lentTabs();
   delete lent[tab]; await setLent(lent); badge(tab);
+  const o = await opened();
+  if (o[tab] != null) { delete o[tab]; await chrome.storage.session.set({ opened: o }); chrome.tabs.ungroup(tab).catch(() => {}); }
   netOn.delete(tab);
   glow(tab, false);
   await detach(tab);
   await req('takeBack', { tab }).catch(() => {});
-}
-async function give(tab, chatId, extra = {}) {
-  const t = await chrome.tabs.get(tab);
-  if (!/^https?:/i.test(t.url || '')) throw new Error('Only web pages (http or https) can be given.');
-  await req('give', { tab, chatId, url: t.url, title: t.title, ...extra });
-  const lent = await lentTabs();
-  lent[tab] = { chatId }; await setLent(lent); badge(tab);
 }
 
 // ---------- a chat's tabs in one named group ----------
@@ -248,14 +250,6 @@ async function intoGroup(tab, chatId, chatTitle) {
     }
   } catch { /* a group can't be made here (a pop-up window): the tab works ungrouped */ }
 }
-// Dragging one of your tabs into a chat's group gives it to that chat.
-chrome.tabs.onUpdated.addListener(async (tab, change, info) => {
-  if (change.groupId == null || change.groupId < 0) return;
-  const g = await groups();
-  const chatId = Object.keys(g).find((c) => g[c] === change.groupId);
-  if (!chatId || (await lentTabs())[tab] || !/^https?:/i.test(info.url || '')) return;
-  give(tab, chatId).catch(() => {});
-});
 chrome.tabGroups?.onRemoved.addListener(async (grp) => { const g = await groups(); for (const c of Object.keys(g)) if (g[c] === grp.id) delete g[c]; await chrome.storage.session.set({ groups: g }); });
 
 // ---------- the agent's status on the toolbar button ----------
@@ -299,30 +293,6 @@ chrome.tabs.onUpdated.addListener(async (tab, change) => { if (change.status ===
 // The keyboard shortcut (Alt+Shift+Q by default; chrome://extensions/shortcuts) stops every reply using your Chrome.
 chrome.commands?.onCommand.addListener((c) => { if (c === 'stop-agent') req('stopAll').catch(() => {}); });
 
-// ---------- right-click: give this tab (with the selection or link) to a chat ----------
-let menuChats = [];
-async function refreshMenus() {
-  if (!chrome.contextMenus) return;
-  menuChats = state === 'on' ? (await req('chats').catch(() => [])).slice(0, 8) : [];
-  await chrome.contextMenus.removeAll();
-  const contexts = ['page', 'selection', 'link', 'image'];
-  const make = (o) => new Promise((ok) => chrome.contextMenus.create(o, () => { void chrome.runtime.lastError; ok(); }));
-  // The tab strip's own menu (Chrome 150+); older versions refuse the "tab" context, so it is tried separately.
-  await make({ id: 'qx', title: 'Give to a QuorX chat', contexts });
-  await make({ id: 'qx-tab', title: 'Give this tab to a QuorX chat', contexts: ['tab'] });
-  for (const c of menuChats) {
-    await make({ id: `qx:${c.id}`, parentId: 'qx', title: `${c.title}${c.project ? ` · ${c.project}` : ''}`.slice(0, 60), contexts });
-    await make({ id: `qxt:${c.id}`, parentId: 'qx-tab', title: `${c.title}${c.project ? ` · ${c.project}` : ''}`.slice(0, 60), contexts: ['tab'] });
-  }
-  if (!menuChats.length) await make({ id: 'qx-none', parentId: 'qx', title: state === 'on' ? 'No chats yet: start one in QuorX' : 'QuorX is not connected', enabled: false, contexts });
-}
-chrome.contextMenus?.onClicked.addListener((info, tab) => {
-  const m = /^qxt?:(.+)$/.exec(String(info.menuItemId));
-  if (!m || !tab) return;
-  const extra = { selection: String(info.selectionText || '').slice(0, 4000), link: info.linkUrl || '', image: info.srcUrl || '' };
-  give(tab.id, m[1], extra).then(() => req('focus', { chatId: m[1] }).catch(() => {}), () => {});
-});
-
 // ---------- teach by showing: record a routine in one tab ----------
 const rec = async () => (await chrome.storage.session.get('rec')).rec || null; // { tab, steps, started }
 async function recInject(tab) { await chrome.scripting.executeScript({ target: { tabId: tab }, files: ['recorder.js'] }).catch(() => {}); }
@@ -362,8 +332,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       for (let i = 0; i < 20 && state === 'connecting'; i++) await new Promise((r) => setTimeout(r, 150));
       return { state, error: lastError };
     }
-    if (msg.q === 'chats') { refreshMenus(); return req('chats'); }
-    if (msg.q === 'give') { await give(msg.tab, msg.chatId); return true; }
+    if (msg.q === 'chats') return req('chats');
     if (msg.q === 'takeBack') { await takeBack(msg.tab); return true; }
     if (msg.q === 'stop') return req('stop', { chatId: msg.chatId });
     // Stop on a tab's glow: the chat working in that tab.
@@ -393,8 +362,8 @@ chrome.permissions.onAdded?.addListener(async () => send({ t: 'caps', caps: awai
 chrome.permissions.onRemoved?.addListener(async () => send({ t: 'caps', caps: await caps() }));
 // Back on when Chrome starts, and every half minute if the link dropped (QuorX restarted, the computer slept).
 chrome.runtime.onStartup.addListener(connect);
-chrome.runtime.onInstalled.addListener(() => { connect(); refreshMenus(); });
+chrome.runtime.onInstalled.addListener(connect);
 chrome.alarms.create('quorx-link', { periodInMinutes: 0.5 });
-chrome.alarms.create('quorx-menus', { periodInMinutes: 2 });
-chrome.alarms.onAlarm.addListener((a) => { if (a.name === 'quorx-link') connect(); if (a.name === 'quorx-menus') refreshMenus(); });
+chrome.alarms.clear('quorx-menus'); // the old right-click menu's refresh
+chrome.alarms.onAlarm.addListener((a) => { if (a.name === 'quorx-link') connect(); });
 connect();

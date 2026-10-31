@@ -16,8 +16,8 @@
   /* Everything keeps to the popup's width: a long chat title in a list is cut with … instead of widening it. */
   html, body { overflow-x: hidden; }
   main { padding: 12px; display: grid; gap: 10px; grid-template-columns: minmax(0, 1fr); }
-  section, #giveForm, #recIdle { display: grid; gap: 10px; grid-template-columns: minmax(0, 1fr); min-width: 0; }
-  #giveForm, #recIdle { gap: 8px; }
+  section, #recIdle { display: grid; gap: 10px; grid-template-columns: minmax(0, 1fr); min-width: 0; }
+  #recIdle { gap: 8px; }
   label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); min-width: 0; }
   input, select { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 7px; padding: 7px 8px; font: inherit; width: 100%; min-width: 0; box-sizing: border-box; }
   select { text-overflow: ellipsis; }
@@ -62,23 +62,20 @@
       <button id="save">Connect with the key</button>
     </details>
   </section>
-  <section id="give" hidden>
+  <section id="tabView" hidden>
     <div class="tab" id="thisTab"><b id="tabTitle"></b><small id="tabUrl"></small></div>
-    <div id="giveForm">
-      <label>Give this tab to the chat<select id="chat"></select></label>
-      <p class="note">The agent in that chat can then work in this tab, signed in as you. Sending, deleting, buying and account changes ask you first in QuorX. Nothing else in your Chrome is touched. You can also right-click a page, or drag a tab into a chat's QuorX tab group.</p>
-      <button class="main" id="giveBtn">🤖 Give this tab</button>
-    </div>
+    <p class="note" id="freeNote">QuorX isn't using this tab. Chats with 🧩 Chrome on open their own tabs, in a QuorX window; they never take one of yours.</p>
     <div id="lentNote" hidden class="box">
-      <div><span class="note">Given to </span><b id="lentChat"></b></div>
+      <div><span class="note">In use by </span><b id="lentChat"></b></div>
       <div><span class="state" id="agentState">idle</span> <span class="note" id="agentWhat"></span></div>
       <div class="row"><button class="stop" id="stopBtn">■ Stop the agent</button><button id="openBtn">Open in QuorX</button></div>
       <p class="note">Shortcut: Alt+Shift+Q stops it from any tab (change it in chrome://extensions/shortcuts).</p>
       <button class="back" id="backBtn">Take back this tab</button>
+      <p class="note">Taking it back ends the agent's control: it can't use this tab again.</p>
     </div>
     <div class="box" id="scriptBox" hidden>
       <h2>Read pages without the debugging bar</h2>
-      <p class="note">Let QuorX read the pages it works on with page scripts. Chrome's “started debugging this browser” bar then shows only while the agent clicks, types or reads network data. Chrome asks you to allow reading on all sites; the agent still only touches tabs you give.</p>
+      <p class="note">Let QuorX read the pages it works on with page scripts. Chrome's “started debugging this browser” bar then shows only while the agent clicks, types or reads network data. Chrome asks you to allow reading on all sites; the agent still only touches the tabs it opened.</p>
       <button class="main" id="scriptBtn">Allow reading pages</button>
     </div>
     <div class="box" id="recBox">

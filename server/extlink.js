@@ -1,9 +1,9 @@
 // Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
-// The QuorX Chrome extension (extension/): your everyday Chrome, linked to this harness, so a tab you give to a chat
-// can be used by the agent with your own sign-ins. The link is one WebSocket (Chrome keeps an extension's service
+// The QuorX Chrome extension (extension/): your everyday Chrome, linked to this harness, so a chat can open its own tabs
+// there and its agent works in them with your own sign-ins. The link is one WebSocket (Chrome keeps an extension's service
 // worker awake while one is active). Only a Chrome extension may connect (its Origin), and only with the key you
 // paste into it from ⚙ Settings or that QuorX hands it when you press Allow; the extension itself only ever touches
-// tabs you gave. The key is pinned to the extension it went to (its ID, from the Origin): the same key under another
+// tabs a chat opened. The key is pinned to the extension it went to (its ID, from the Origin): the same key under another
 // ID is turned away. A key from before pinning has no ID yet and takes the ID of its next good connection, so an
 // extension already set up keeps working without connecting again.
 import crypto from 'node:crypto';
@@ -33,7 +33,7 @@ const pairCode = () => Array.from(crypto.randomBytes(6), (b) => 'ABCDEFGHJKLMNPQ
 
 let link = null; // { send(obj), close(code, why), at, version }
 const waiting = new Map(), subs = new Map(); // call id → { ok, no, timer }; tab → Set(fn)
-let handlers = {}; // what the extension asks of the harness: give, takeBack, closed, chats
+let handlers = {}; // what the extension asks of the harness: takeBack, stop, chats, saveRoutine
 let pairing = null; // { me, origin, id, code, browser, at, finish(allow) }: an extension asking to connect, waiting for Allow in QuorX
 export const extPairing = () => (pairing && Date.now() - pairing.at < 120000 ? { browser: pairing.browser, at: pairing.at, id: pairing.id, code: pairing.code } : null);
 /** Allow or Deny the extension that asked to connect (⚙ Settings or the notice in QuorX). */

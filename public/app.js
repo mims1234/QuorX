@@ -6843,7 +6843,7 @@ function settingsPanels(S) {
       stCard('PDFs', 'PDFs are read for free on this computer with pdftotext when it is installed (Git for Windows includes it); otherwise through OpenRouter\'s free parser. A scan with no text asks before OCR (mistral-ocr, about $2 per 1,000 pages).', ''),
     ]],
     code: ['Code & servers', 'What the agent may run on this computer, and what it keeps in each project’s .quorx folder.', [
-      stCard('🧩 Chrome extension', 'Give a tab of your everyday Chrome to a chat, so the agent can work in it with your own sign-ins (Gmail, GitHub…). It touches only tabs you give; sending, deleting, buying and account changes ask you first.', '<p class="st-ext-why" role="status" hidden>Connect the extension so this chat can use your Chrome.</p><div id="stExt"></div><p class="st-ext-howto"><a href="' + EXT_HOWTO + '" target="_blank" rel="noopener noreferrer">📖 How to connect, step by step</a> <small>the QuorX article, in your browser</small></p>', 'sx-featured', 'stExtCard'),
+      stCard('🧩 Chrome extension', 'A chat with 🧩 Chrome on opens its own tabs in your everyday Chrome and works there with your own sign-ins (Gmail, GitHub…). It touches only the tabs it opened, and you can take any of them back from the QuorX icon; sending, deleting, buying and account changes ask you first.', '<p class="st-ext-why" role="status" hidden>Connect the extension so this chat can use your Chrome.</p><div id="stExt"></div><p class="st-ext-howto"><a href="' + EXT_HOWTO + '" target="_blank" rel="noopener noreferrer">📖 How to connect, step by step</a> <small>the QuorX article, in your browser</small></p>', 'sx-featured', 'stExtCard'),
       stCard('Commands', 'The agent runs command lines in its shell. Each one is checked first: read-only commands run, others ask you (or the deciders in ⚡ YOLO), and system commands or deletes outside the project are blocked.', stRow('Rules, shell, Stop and Undo for commands', '', '<button type="button" class="st-btn secondary sm" data-act="openSafety">🛡 Approvals & safety</button>')),
       `<div class="sx-grid two">`
       + stCard('Agent folder', 'The agent keeps research scripts, downloads, undo history and deleted files in .quorx/ inside each project folder. Git ignores it, so it never ends up in your repo.', stRow('Its size, undo history and clearing', '', '<button type="button" class="st-btn secondary sm" data-act="openStorage">🧹 Storage</button>'))
@@ -7474,14 +7474,14 @@ async function drawExtPanel() {
   let shown = false;
   const paint = () => {
     box.innerHTML = `<div class="st-ext">
-      <div class="st-ext-state ${r.connected ? (r.outdated ? 'warn' : 'on') : ''}"><i></i>${r.connected ? (r.outdated ? `Connected, but the extension is an older version: reload it once in ${esc(page)} (↻ on the QuorX card)` : `Connected to your ${esc(b.name)}`) : 'Not connected'}${r.lent?.length ? ` · ${r.lent.length} tab${r.lent.length > 1 ? 's' : ''} given to chats` : ''}</div>
+      <div class="st-ext-state ${r.connected ? (r.outdated ? 'warn' : 'on') : ''}"><i></i>${r.connected ? (r.outdated ? `Connected, but the extension is an older version: reload it once in ${esc(page)} (↻ on the QuorX card)` : `Connected to your ${esc(b.name)}`) : 'Not connected'}${r.lent?.length ? ` · ${r.lent.length} tab${r.lent.length > 1 ? 's' : ''} in use by chats` : ''}</div>
       ${r.pairing ? `<div class="st-ext-pair"><b>🧩 ${esc(r.pairing.browser)} wants to connect to QuorX.</b> <span>${extPairWho(r.pairing)}</span><span class="st-ext-acts"><button type="button" class="st-btn sm primary" data-x="allow">Allow</button><button type="button" class="st-btn sm" data-x="deny">Deny</button></span></div>` : ''}
       ${b.page === null ? `<p class="st-ext-warn">Your default browser is ${esc(b.name)}, which can't run this extension. Use Chrome, Brave or Edge for it.</p>` : ''}
       <ol class="st-ext-steps">
         <li>Open <code>${esc(page)}</code> in ${esc(b.name)} <span class="st-ext-acts"><button type="button" class="st-btn sm" data-x="chrome" title="Opens the extensions page in ${esc(b.name)}">Open in ${esc(b.name)}</button><button type="button" class="st-btn sm" data-x="copyurl">Copy</button></span> and turn on <b>Developer mode</b>.</li>
         <li><b>Load unpacked</b> and pick the folder <code class="blurable">${esc(r.folder || 'extension')}</code> <span class="st-ext-acts"><button type="button" class="st-btn sm" data-x="copyfolder">Copy path</button><button type="button" class="st-btn sm" data-x="folder">Show folder</button></span></li>
         <li>Click the QuorX icon in the toolbar and press <b>Connect</b>, then <b>Allow</b> here.</li>
-        <li>In a chat, tick <b>🧩 Chrome</b> (next to Follow), or give a tab from the QuorX icon.</li>
+        <li>In a chat, tick <b>🧩 Chrome</b> (next to Follow): the chat opens its own tabs.</li>
       </ol>
       <details class="st-ext-keybox"><summary>Use a key instead</summary><div class="st-ext-key"><code class="${shown ? '' : 'masked'}">${shown ? esc(r.key) : '•'.repeat(24)}</code><button type="button" class="kx-icon" data-x="show" title="${shown ? 'Hide the key' : 'Show the key'}">${shown ? '🙈' : '👁'}</button><button type="button" class="st-btn sm" data-x="copy">Copy key</button><button type="button" class="st-btn sm danger" data-x="new" title="Make a new key: the extension disconnects until it connects again">New key</button></div></details>
     </div>`;
@@ -9876,7 +9876,7 @@ async function syncLent(c) {
   if (!r || r.error) return;
   const had = (G.lent ||= {})[c.id];
   if (!r.given && had) { delete G.lent[c.id]; renderAttachments(c); }
-  // A tab given from Chrome (the QuorX extension) appears here on its own.
+  // A Chrome tab the chat opened (the QuorX extension) appears here on its own.
   else if (r.given && had?.sid !== r.given.sid) { G.lent[c.id] = { sid: r.given.sid, url: r.given.url, title: r.given.title, chrome: r.given.ext != null }; renderAttachments(c); }
 }
 // Closing a tab that shows one of your running servers asks first: keep the server running (reopen the address any
