@@ -819,27 +819,20 @@
 #settings .pv-top li { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; color: var(--text); }
 #settings .pv-top li span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); }
 #settings .pv-links { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 8px 0 0; }
-/* Room for both: the chosen provider beside the list, whose rows go compact (two lines) to make room; the detail stays
-   in view while the list scrolls. */
-@container pv (min-width: 760px) {
-  #settings .pv-grid.has-sel { grid-template-columns: minmax(250px, 0.8fr) minmax(360px, 1.2fr); }
-  #settings .pv-detail { position: sticky; top: 0; max-height: calc(100vh - 170px); overflow-y: auto; }
-  #settings .pv-back { display: none; }
+/* A chosen provider has a page of its own: the tabs, the list and the page's other cards step aside; Back returns.
+   Wide enough, its setup sits on the left and what it cost and its links on the right. */
+#settings .pv.has-sel .pv-tabs, #settings .pv-grid.has-sel .pv-listcol { display: none; }
+#settings .st-panel.pv-in .pv-home { display: none; }
+#settings .pv-grid.has-sel { margin-top: 0; }
+#settings .pv-body { display: grid; gap: 12px; min-width: 0; }
+#settings .pv-body .st-card { margin: 0; }
+@container pv (min-width: 820px) {
+  #settings .pv-detail { grid-template-columns: minmax(0, 1.5fr) minmax(260px, 1fr); grid-template-areas: "back back" "body use" "body about" "body ."; }
+  #settings .pv-back { grid-area: back; }
+  #settings .pv-body { grid-area: body; }
+  #settings .pv-detail > .pv-sec:not(.pv-about) { grid-area: use; }
+  #settings .pv-about { grid-area: about; }
 }
-/* Narrower: the chosen provider takes the place of the list; Back returns to it. */
-@container pv (max-width: 759px) {
-  #settings .pv-grid.has-sel .pv-listcol { display: none; }
-}
-/* Two-line rows (name and tag, then status and spend): beside a detail, and on a phone. */
-#settings .pv-grid.has-sel .pv-cols { display: none; }
-#settings .pv-grid.has-sel .pv-row-main { grid-template-columns: var(--pv-logo) minmax(0, 1fr) auto; grid-template-areas: "logo name tag" "logo st sp"; row-gap: 2px; padding: 8px 10px; }
-#settings .pv-grid.has-sel .pv-row-main > :first-child { grid-area: logo; }
-#settings .pv-grid.has-sel .pv-nm { grid-area: name; }
-#settings .pv-grid.has-sel .pv-tagcell { grid-area: tag; justify-content: end; }
-#settings .pv-grid.has-sel .pv-st { grid-area: st; }
-#settings .pv-grid.has-sel .pv-mc { display: none; }
-#settings .pv-grid.has-sel .pv-sp { grid-area: sp; }
-#settings .pv-grid.has-sel .pv-count { display: none; }
 @container pv (max-width: 560px) {
   #settings .pv-cols { display: none; }
   #settings .pv-row-main { grid-template-columns: var(--pv-logo) minmax(0, 1fr) auto; grid-template-areas: "logo name tag" "logo st sp"; row-gap: 2px; padding: 8px 10px; }
