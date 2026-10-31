@@ -399,7 +399,8 @@ function closeTab(sid) {
   tabs.delete(sid);
   return true;
 }
-handle('snapshot', async (sid) => { const t = tabs.get(sid); if (!t || !t.shown) return null; return (await t.view.webContents.capturePage()).toDataURL(); });
+// A busy page can take a long time to paint its picture: none after 1.5 s (the page then just steps aside without one).
+handle('snapshot', async (sid) => { const t = tabs.get(sid); if (!t || !t.shown) return null; const img = await within(t.view.webContents.capturePage(), 1500, 'the picture').catch(() => null); return img && !img.isEmpty() ? img.toDataURL() : null; });
 // ---------- updates: the app checks a feed, you press Update, it downloads, Restart installs ----------
 // The feed is any web address holding what a build makes (latest.yml, the installer, its .blockmap),
 // e.g. a GitHub release (https://github.com/<you>/<repo>/releases/latest/download). It comes from

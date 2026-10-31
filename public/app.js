@@ -10134,7 +10134,10 @@ function deskStage(t, stage) {
 // One placement at a time: each one waits on the desktop app (a snapshot, new bounds, show), which can take longer than
 // the 150 ms check below, so calls used to overlap and could show and hide the tab out of order. A call made while one
 // runs is done once after it (forced if any of them asked).
-let deskBusy = null, deskAgain = null;
+let deskBusy = null, deskAgain = null, deskHidAt = 0;
+// Each ask has a time limit: a busy page (a long script, many videos) can take forever to give its picture, and a
+// placement waiting on it kept every later one waiting too, so the tab stayed on screen over every other pane tab.
+const deskAsk = (p, ms = 2000) => Promise.race([Promise.resolve(p).catch(() => null), new Promise((ok) => setTimeout(() => ok(null), ms))]);
 function deskPlace(force) {
   if (deskBusy) { deskAgain = (deskAgain || false) || !!force; return deskBusy; }
   deskBusy = deskPlaceNow(force).catch(() => {}).finally(() => {
@@ -10145,15 +10148,20 @@ function deskPlace(force) {
 }
 async function deskPlaceNow(force) {
   const d = G.dsk;
-  if (!DESK || !d) return;
+  if (!DESK) return;
+  // No real tab is to be seen: the app is told to hide them all, at once when we know one shows and then once a second
+  // anyway. What we think shows can be wrong (a tab put up while another was being placed), and then the agent's page
+  // stayed on top of every pane tab, and of Steps or Files, until the app restarted.
+  const hideAll = (now) => { if (now || Date.now() - deskHidAt > 1000) { window.ohDesktop.hideAll(); deskHidAt = Date.now(); } };
+  if (!d) return hideAll(false);
   const c0 = focused(), t = c0 ? browserTabs(c0).find((x) => x.sid === d.sid) : null;
   const visible = d.ph.isConnected && G.view.browser && t && paneVisible() && d.ph.getClientRects().length && document.visibilityState === 'visible';
-  if (!visible) { if (d.shown || force) { window.ohDesktop.hideAll(); d.shown = false; } if (!d.ph.isConnected) G.dsk = null; return; }
+  if (!visible) { hideAll(d.shown || force); d.shown = false; if (!d.ph.isConnected) G.dsk = null; return; }
   const err = $('.derr', d.ph);
   if (t.error) {
     // Drawn once per error, not on every check: rebuilding it each time swallowed clicks on Try again.
     if (err.hidden || d.errText !== t.error) { d.errText = t.error; err.hidden = false; err.innerHTML = `⚠ ${esc(t.error)}<br><button type="button" class="derr-retry">Try again</button>`; $('.derr-retry', err).onclick = () => { t.error = null; t.opened = null; renderPane(); }; }
-    if (d.shown) { window.ohDesktop.hideAll(); d.shown = false; }
+    hideAll(d.shown); d.shown = false;
     return;
   }
   err.hidden = true; d.errText = null;
@@ -10162,7 +10170,7 @@ async function deskPlaceNow(force) {
   const covered = deskCovered(d.ph);
   const snap = $('.dsnap', d.ph);
   if (covered) {
-    if (d.shown) { const url = await window.ohDesktop.snapshot(d.sid).catch(() => null); if (url) { snap.src = url; snap.hidden = false; } }
+    if (d.shown) { const url = await deskAsk(window.ohDesktop.snapshot(d.sid), 1500); if (url) { snap.src = url; snap.hidden = false; } }
     // Hidden when the cover starts and then once a second, not only when we think it's showing: a tab the app re-made
     // under the same name may be showing without us knowing, and would sit on top of the servers list or a dialog.
     // (Every check, about 7 times a second, was more than that needs.)
@@ -10173,8 +10181,10 @@ async function deskPlaceNow(force) {
   d.coverAt = 0;
   snap.hidden = true;
   const r = d.ph.getBoundingClientRect(), key = `${r.x},${r.y},${r.width},${r.height}`;
-  if (force || key !== d.rect) { d.rect = key; await window.ohDesktop.bounds(d.sid, { x: r.x, y: r.y, width: r.width, height: r.height }); }
-  if (force || !d.shown) { await window.ohDesktop.show(d.sid); d.shown = true; }
+  if (force || key !== d.rect) { d.rect = key; await deskAsk(window.ohDesktop.bounds(d.sid, { x: r.x, y: r.y, width: r.width, height: r.height })); }
+  // The pane may have changed while that was asked: placed and shown only if it is still to be seen.
+  if (G.dsk !== d || !d.ph.isConnected || !G.view.browser) { deskAgain = true; return; }
+  if (force || !d.shown) { await deskAsk(window.ohDesktop.show(d.sid)); d.shown = true; }
 }
 // Is anything of ours drawn over the real tab's box? The page is asked what is on top on a grid over the box, so any
 // menu, popover, dialog, scrim or notice counts, whatever it is; tips that let clicks through are checked by where they are.
