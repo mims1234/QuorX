@@ -2,6 +2,7 @@
 name: Field Notes
 description: A practical lab-notebook look with a condensed headline, mono labels and a faint grid. For tools, docs, dashboards and developer pages where clarity beats charm.
 dark: yes
+family: data
 ---
 
 # Field Notes

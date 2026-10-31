@@ -2,6 +2,7 @@
 name: Meadow
 description: Soft, friendly and rounded, with a bouncy headline face, sage greens and a coral accent. For kids, learning apps, wellness, games' menus and friendly consumer products.
 dark: yes
+family: playful
 ---
 
 # Meadow

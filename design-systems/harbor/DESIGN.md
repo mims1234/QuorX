@@ -2,6 +2,7 @@
 name: Harbor
 description: Calm coastal look with a serif headline and one signal-orange accent. For local services, clinics, studios and small businesses that want to look trustworthy.
 dark: yes
+family: corporate
 ---
 
 # Harbor

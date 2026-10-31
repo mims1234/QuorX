@@ -1020,34 +1020,25 @@ Every chat in this project reads, writes and runs programs in this folder.">${es
         ${p.missing ? '<p class="pf-warn">⚠ This folder is missing: it was moved, renamed or deleted outside QuorX. Reselect it to keep working.</p>' : p.needsFolder ? '<p class="pf-warn">📁 This project\'s files sit inside QuorX itself. Pick a folder of your own: its files are copied there, and chats can work in it again.</p>' : ''}
       </section>
       ${p.missing || p.needsFolder ? '' : '<section class="pj-sec" id="pjSpaceSec"><div class="pj-sec-head"><h4>Agent folder <small>.quorx/: the agent\'s own working files</small></h4></div><div id="pjSpace"><div class="kx-wait">Measuring…</div></div></section>'}
-      <section class="pj-sec" id="pjDesignSec">
-        <details class="pj-fold" id="pjDesignFold">
-          <summary><h4>Design system <small>how the pages and apps chats build here look</small></h4><span class="pj-fold-state" id="pjDesignState">…</span><svg class="pj-fold-chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg></summary>
-          <div id="pjDesign"><div class="kx-wait">Loading…</div></div>
-        </details>
-      </section>
-      <section class="pj-sec" id="pjHooksSec">
-        <details class="pj-fold" id="pjHooksFold">
-          <summary><h4>Hooks <small>commands QuorX runs around the agent's file writes and commands</small></h4><span class="pj-fold-state" id="pjHooksState">…</span><svg class="pj-fold-chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg></summary>
-          <div id="pjHooks"><div class="kx-wait">Loading…</div></div>
-        </details>
-      </section>
-      <section class="pj-sec" id="pjPermsSec">
-        <details class="pj-fold" id="pjPermsFold">
-          <summary><h4>Permissions <small>what runs without asking in this project and its chats</small></h4><span class="pj-fold-state" id="pjPermsState">…</span><svg class="pj-fold-chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg></summary>
-          <div id="pjPerms"><div class="kx-wait">Loading…</div></div>
-        </details>
+      <section class="pj-sec pjf-sec" id="pjFeatSec">
+        <div class="pjf-row">
+          <button type="button" class="pjf-card" data-sub="design" title="Open the design system window: a gallery to pick from, and your own"><span class="pjf-top"><svg class="pjf-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 0 18c1 0 1.6-.8 1.6-1.7 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-1 .8-1.7 1.7-1.7H16a5 5 0 0 0 5-5c0-4-4-7.2-9-7.2z"/><circle cx="7.5" cy="11" r="1.2"/><circle cx="10.5" cy="7.5" r="1.2"/><circle cx="15" cy="7.5" r="1.2"/></svg><b>Design system</b><svg class="pjf-chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg></span><span class="pjf-state" id="pjfDesign"><span class="kx-wait">…</span></span><small>How pages and apps built here look</small></button>
+          <button type="button" class="pjf-card" data-sub="hooks" title="Open the hooks window: add, test and order them"><span class="pjf-top"><svg class="pjf-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg><b>Hooks</b><svg class="pjf-chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg></span><span class="pjf-state" id="pjfHooks"><span class="kx-wait">…</span></span><small>Commands run around the agent's work</small></button>
+          <button type="button" class="pjf-card" data-sub="perms" title="Open the permissions window: rules, a tester, and each chat's own list"><span class="pjf-top"><svg class="pjf-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8.2-8 9-4.6-.8-8-4.5-8-9V6z"/><path d="M8.5 12l2.5 2.5 4.5-5"/></svg><b>Permissions</b><svg class="pjf-chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg></span><span class="pjf-state" id="pjfPerms"><span class="kx-wait">…</span></span><small>What runs without asking you</small></button>
+        </div>
       </section>
       <section class="pj-sec" id="pjBudgetSec">
-        <div class="pj-sec-head"><h4>Budget <small>for all chats together</small></h4>
-        <div class="pj-budget-mode"><button type="button" class="pj-mode ${p.budget == null ? 'on' : ''}" data-mode="none">No limit</button><button type="button" class="pj-mode ${p.budget != null ? 'on' : ''}" data-mode="set">Set a budget</button></div></div>
+        <div class="pj-sec-head"><h4>Budget <small>for all chats together</small></h4><span class="pj-bstate" id="pjBState"></span>
+        <div class="pj-budget-mode" role="radiogroup" aria-label="Budget"><button type="button" class="pj-mode ${p.budget == null ? 'on' : ''}" data-mode="none" role="radio" aria-checked="${p.budget == null}">No limit</button><button type="button" class="pj-mode ${p.budget != null ? 'on' : ''}" data-mode="set" role="radio" aria-checked="${p.budget != null}">Set a budget</button></div></div>
         <div id="pjBudget"></div>
       </section>
-      <section class="pj-sec">
-        <div class="pj-sec-head"><h4>Costs <small>per chat</small></h4><div class="pj-kpis" id="pjKpis"></div></div>
+      <section class="pj-sec" id="pjCostSec">
+        <div class="pj-sec-head"><h4>Costs <small>per chat</small></h4><button type="button" class="kx-icon pj-reveal" aria-label="Show or hide amounts"></button></div>
+        <div class="pj-kpis" id="pjKpis"></div>
+        <div class="pj-cost-filter"></div>
         <div id="pjChats" class="pj-chats"><div class="kx-wait">Loading…</div></div>
       </section>
-      ${p.id !== 'scratch' ? `<section class="pj-sec danger"><div class="pj-row"><h4>Danger zone</h4><button type="button" class="kx-btn sm pj-archive" title="Archive: out of the sidebar and the start screen; find it again under Archived at the bottom of the sidebar">${p.archived ? 'Unarchive' : 'Archive'}</button><button type="button" class="kx-btn sm pj-del">🗑 Delete project</button><span class="pj-hint">Its chats move to the trash; the folder and files are not touched.</span></div></section>` : ''}
+      ${p.id !== 'scratch' ? `<section class="pj-sec danger"><div class="pj-row"><h4>Danger zone</h4><span class="kx-spacer"></span><button type="button" class="kx-btn sm pj-archive" title="Archive: out of the sidebar and the start screen; find it again under Archived at the bottom of the sidebar">${p.archived ? 'Unarchive' : 'Archive'}</button><button type="button" class="kx-btn sm pj-del">🗑 Delete project…</button></div><p class="pj-hint">Deleting moves its chats to the trash; the folder and its files are not touched.</p></section>` : ''}
     </div>`;
   const close = () => dlg.close();
   $('.pj-close', box).onclick = close;
@@ -1089,208 +1080,729 @@ Every chat in this project reads, writes and runs programs in this folder.">${es
   // budget: "No limit" or the editor
   const mountBudget = () => editBudget(p, undefined, $('#pjBudget', box));
   const setMode = async (mode) => {
-    for (const b of box.querySelectorAll('.pj-mode')) b.classList.toggle('on', b.dataset.mode === mode);
+    for (const b of box.querySelectorAll('.pj-mode')) { b.classList.toggle('on', b.dataset.mode === mode); b.setAttribute('aria-checked', String(b.dataset.mode === mode)); }
     if (mode === 'set') { $('#pjBudget', box).hidden = false; mountBudget(); return; }
     $('#pjBudget', box).hidden = true; $('#pjBudget', box).innerHTML = '';
     if (p.budget != null) {
       const r = await fetch(`/api/projects/${p.id}/budget`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ budget: null }) }).then((x) => x.json()).catch((e) => ({ error: e.message }));
       if (r.error) { uiAlert(`Could not remove the budget: ${r.error}.`); return setMode('set'); }
-      p.budget = null; refreshSidebar();
+      p.budget = null; refreshSidebar(); bstate();
       const b = $('#pjKpis > div:nth-child(3) b', box); if (b) b.textContent = 'No limit';
     }
   };
   for (const b of box.querySelectorAll('.pj-mode')) b.onclick = () => setMode(b.dataset.mode);
   if (p.budget != null) mountBudget(); else $('#pjBudget', box).hidden = true;
-  // costs: totals and a paged list of chats
+  // Amounts are hidden (blurred) when Settings says so, until 👁 shows them for this window.
+  let shown = !uiOf(G.settings).maskAmounts;
+  const paintMask = () => { box.classList.toggle('masked', !shown); revealButton($('.pj-reveal', box), shown); };
+  $('.pj-reveal', box).onclick = () => { shown = !shown; paintMask(); };
+  paintMask();
+  // costs: totals and a paged list of chats, searchable once there are a few
   let offset = 0;
   const loadChats = async (more) => {
     const page = await fetch(`/api/costs/chats?project=${encodeURIComponent(p.id)}&sort=cost&offset=${offset}&limit=15`).then((r) => r.json()).catch(() => null);
     const list = $('#pjChats', box);
     if (!page) { list.innerHTML = '<div class="kx-wait">Could not load costs.</div>'; return; }
     if (!more) {
-      const today = page.chats.reduce((n, c) => n + c.today, 0);
-      $('#pjKpis', box).innerHTML = `<div><small>Spent</small><b>$${(p.spent || 0).toFixed(4)}</b></div><div><small>Chats</small><b class="plain">${page.total}</b></div><div><small>Budget</small><b class="plain">${p.budget != null ? `$${p.budget.toFixed(2)}` : 'No limit'}</b></div>`;
-      list.innerHTML = page.total ? `<table class="cost-table pj-table"><thead><tr><th>Chat</th><th>Msgs</th><th>Models</th><th>Today</th><th>Total</th></tr></thead><tbody></tbody></table>` : '<div class="kx-wait">No chats with spending yet.</div>';
+      $('#pjKpis', box).innerHTML = `<div><small>Spent</small><b class="pj-m">$${(p.spent || 0).toFixed(4)}</b></div><div><small>Chats</small><b class="plain">${page.total}</b></div><div><small>Budget</small><b class="plain pj-m">${p.budget != null ? `$${p.budget.toFixed(2)}` : 'No limit'}</b></div>`;
+      list.innerHTML = page.total ? `<table class="cost-table pj-table"><thead><tr><th>Chat</th><th>Msgs</th><th>Models</th><th>Today</th><th>Total</th></tr></thead><tbody></tbody></table>` : '<div class="pjx-empty sm"><b>No spending yet</b><p>Chats in this project show here once they cost something.</p></div>';
     }
     const body = $('tbody', list);
-    if (body) body.insertAdjacentHTML('beforeend', page.chats.map((c) => costRow(c)).join(''));
+    if (body) {
+      body.insertAdjacentHTML('beforeend', page.chats.map((c) => costRow(c)).join(''));
+      // What the filter reads: the title, and whether it spent anything today.
+      const rows = [...body.rows].slice(-page.chats.length);
+      page.chats.forEach((c, i) => { rows[i].dataset.lfText = String(c.title || '').toLowerCase(); rows[i].dataset.lfSeg = c.today > 0 ? 'today' : 'earlier'; });
+    }
     offset = page.offset + page.chats.length;
     list.querySelector('.cx-more')?.remove();
     if (offset < page.total) { list.insertAdjacentHTML('beforeend', `<button type="button" class="cx-more">Show more (${page.total - offset} more)</button>`); $('.cx-more', list).onclick = () => loadChats(true); }
     for (const a of list.querySelectorAll('[data-open]')) a.onclick = (e) => { e.preventDefault(); dlg.close(); showChat(a.dataset.open); if (isPhone()) setMView('chat'); };
+    if (page.total > 5) listFilter($('.pj-cost-filter', box), { key: `costs-${p.id}`, rows: () => list.querySelectorAll('tbody tr'), segLabel: (v) => (v === 'today' ? 'Spent today' : 'Earlier'), segOrder: ['today', 'earlier'], placeholder: 'Filter chats by title…', label: 'When' });
   };
   loadChats(false);
   // After a save: the Budget figure above the chat list follows.
-  $('#pjBudget', box).addEventListener('budget-saved', (e) => { const b = $('#pjKpis > div:nth-child(3) b', box); if (b) b.textContent = e.detail.budget != null ? `$${e.detail.budget.toFixed(2)}` : 'No limit'; });
-  // Folded to one row: which design system (or none); the starters and editing open from it.
-  mountDesign(p, $('#pjDesign', box));
-  mountHooks(p, $('#pjHooks', box), (n) => { const st = $('#pjHooksState', box); if (st) { st.textContent = n ? `${n} on` : 'None'; st.classList.toggle('none', !n); } });
+  // How the budget stands, as a status beside its heading.
+  const bstate = () => { const e = $('#pjBState', box); if (!e) return; if (p.budget == null) { e.innerHTML = ''; return; } const sh = p.budget > 0 ? (p.spent || 0) / p.budget : 1; e.innerHTML = `<span class="hkx-st ${sh >= 1 ? 'bad' : sh >= 0.85 ? 'warn' : 'ok'}"><i></i>${sh >= 1 ? 'Used up' : sh >= 0.85 ? 'Near the limit' : 'On track'}</span> <small>${Math.round(sh * 100)}%</small>`; };
+  bstate();
+  $('#pjBudget', box).addEventListener('budget-saved', (e) => { const b = $('#pjKpis > div:nth-child(3) b', box); if (b) b.textContent = e.detail.budget != null ? `${e.detail.budget.toFixed(2)}` : 'No limit'; bstate(); });
+  // The three feature cards: what each holds now, at a glance; a click opens its own window over this one.
+  const states = async () => {
+    const [ds, sys, hk, pr, ch] = await Promise.all([
+      p.missing || p.needsFolder ? null : fetch(`/api/projects/${p.id}/design`).then((r) => r.json()).catch(() => null),
+      fetch('/api/design-systems').then((r) => r.json()).catch(() => []),
+      p.missing || p.needsFolder ? null : fetch(`/api/projects/${p.id}/hooks`).then((r) => r.json()).catch(() => null),
+      fetch(`/api/permissions?project=${encodeURIComponent(p.id)}`).then((x) => x.json()).catch(() => null),
+      fetch(`/api/permissions/chats?project=${encodeURIComponent(p.id)}`).then((x) => x.json()).catch(() => null),
+    ]);
+    if (!box.isConnected) return;
+    const set = (id, html, none) => { const e = $(id, box); if (e) { e.innerHTML = html; e.classList.toggle('none', !!none); } };
+    const has = ds && (ds.md || ds.tokens), s = has && Array.isArray(sys) ? sys.find((x) => x.id === ds.id) : null;
+    set('#pjfDesign', p.missing || p.needsFolder ? 'Pick a folder first' : has ? `${s ? `<span class="pjf-sw">${s.swatches.map((w) => `<i style="background:${esc(w.value)}"></i>`).join('')}</span>` : ''}<b>${esc(ds.name || 'Project design system')}</b>` : `None · ${Array.isArray(sys) ? sys.length : ''} to pick from`, !has);
+    const hooks = hk?.hooks || [], on = hooks.filter((h) => h.on).length;
+    set('#pjfHooks', p.missing || p.needsFolder ? 'Pick a folder first' : hooks.length ? `<span class="hkx-st ${on ? 'ok' : ''}"><i></i>${on} on</span>${hooks.length > on ? ` <small>· ${hooks.length - on} off</small>` : ''}` : 'None', !hooks.length);
+    const rules = (pr?.project || []).filter((x) => x.on !== false).length, chatN = (ch?.chats || []).length;
+    set('#pjfPerms', rules || chatN ? `<span class="hkx-st ${rules ? 'ok' : ''}"><i></i>${rules} rule${rules === 1 ? '' : 's'}</span>${chatN ? ` <small>· ${chatN} chat${chatN === 1 ? '' : 's'} with their own</small>` : ''}` : 'None', !rules && !chatN);
+  };
+  states();
+  for (const b of box.querySelectorAll('.pjf-card')) b.onclick = () => openProjectSub(p, b.dataset.sub, { onClose: () => { states(); b.focus(); } });
   if (!dlg.open) dlg.showModal();
-  mountPerms(p, $('#pjPerms', box), (n) => { const st = $('#pjPermsState', box); if (st) { st.textContent = n ? `${n} on` : 'None'; st.classList.toggle('none', !n); } });
-  if (focusOn === 'perms') { $('#pjPermsFold', box).open = true; $('#pjPermsSec', box).scrollIntoView({ block: 'start' }); }
-  if (focusOn === 'hooks') { $('#pjHooksFold', box).open = true; $('#pjHooksSec', box).scrollIntoView({ block: 'start' }); }
   if (focusOn === 'budget') $('#pjBudgetSec', box).scrollIntoView({ block: 'start' });
   if (focusOn === 'space') $('#pjSpaceSec', box)?.scrollIntoView({ block: 'start' });
-  if (focusOn === 'design') { $('#pjDesignFold', box).open = true; $('#pjDesignSec', box).scrollIntoView({ block: 'start' }); }
+  if (PJX[focusOn]) openProjectSub(p, focusOn, { onClose: () => states() });
 }
-// Project settings → Hooks: commands QuorX runs around the agent's tool calls, in this order. Kept in QuorX's data
-// folder (never in the project), so a folder you open can't bring its own. Each still goes through the command rules.
+// ---------- ⚙ project settings → its own windows: Design system, Hooks, Permissions ----------
+// Each opens as a second, wider window over the settings; ← (or ✕, or Esc) goes back to them as they were. A window
+// with unsaved changes asks once in place before it closes.
+const PJX = {
+  design: ['Design system', 'how the pages and apps chats build here look'],
+  hooks: ['Hooks', 'commands QuorX runs itself around the agent\'s work'],
+  perms: ['Permissions', 'what chats in this project may do without asking you'],
+};
+function openProjectSub(p, kind, { onClose } = {}) {
+  const dlg = $('#projSubDlg'), box = $('#projSubBody');
+  const [title, sub] = PJX[kind];
+  dlg.className = `pj-dialog pjx-dialog pjx-${kind}`;
+  dlg.setAttribute('aria-label', `${title}: ${p.name}`);
+  box.innerHTML = `<header class="pjx-head">
+      <button type="button" class="pjx-back" title="Back to the project settings (Esc)"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3L5 8l5 5"/></svg><span style="--h:${hue(p.name)}${p.color ? `;--pcx:${p.color}` : ''}">${esc(p.name)}</span></button>
+      <div class="pjx-title"><b>${esc(title)}</b><small>${esc(sub)}</small></div>
+      <span class="pjx-dirty" hidden>● Not saved</span><span class="pjx-sum"></span>
+      <button type="button" class="mp-x pjx-close" aria-label="Close">✕</button>
+    </header>
+    <div class="pjx-body"></div>`;
+  const body = $('.pjx-body', box);
+  // dirty(): the window says when it has unsaved changes; close asks once before throwing them away.
+  // setSummary: one status line at the top right (what the window holds now), hidden while there are unsaved changes.
+  const ctl = { dirty: () => false, setDirty: (on) => { $('.pjx-dirty', box).hidden = !on; $('.pjx-sum', box).hidden = on; }, setSummary: (html) => { $('.pjx-sum', box).innerHTML = html; } };
+  const close = () => {
+    if (ctl.dirty() && !box.querySelector('.pjx-leave')) {
+      const bar = document.createElement('div'); bar.className = 'pjx-leave';
+      bar.innerHTML = '<span>You have changes that are not saved.</span><button type="button" class="kx-btn sm pjx-stay">Keep editing</button><button type="button" class="kx-btn sm danger pjx-drop">Close without saving</button>';
+      $('.pjx-head', box).after(bar);
+      $('.pjx-stay', bar).onclick = () => bar.remove();
+      $('.pjx-drop', bar).onclick = () => { ctl.dirty = () => false; dlg.close(); };
+      $('.pjx-drop', bar).focus();
+      return;
+    }
+    if (ctl.dirty()) return;
+    dlg.close();
+  };
+  $('.pjx-back', box).onclick = close;
+  $('.pjx-close', box).onclick = close;
+  dlg.oncancel = (e) => { e.preventDefault(); close(); };
+  // The close event comes a moment later: when another window was opened in the meantime, it's not this one's to clear.
+  dlg.onclose = () => { if (dlg.open) return; box.innerHTML = ''; onClose?.(); };
+  if (!dlg.open) dlg.showModal();
+  if (kind === 'design') mountDesignWindow(p, body, ctl);
+  if (kind === 'hooks') mountHooksWindow(p, body, ctl);
+  if (kind === 'perms') mountPermsWindow(p, body, ctl);
+}
+
+// ---------- Hooks window ----------
 const HOOK_WHEN = { after_write: 'After a file write', before_command: 'Before a command', after_command: 'After a command' };
 const HOOK_MATCH_HINT = { after_write: 'files, e.g. *.ts, src/** (empty: every file)', before_command: 'commands, e.g. npm *, git push* (empty: every command)', after_command: 'commands, e.g. npm test* (empty: every command)' };
-// Project settings → Permissions: this project's rules (on/off, remove), and what each of its chats allows on its own,
-// listed to see in one place (each chat changes its own list with its 🔓 button). Searchable, by where.
-async function mountPerms(p, el, onCount) {
+// One click adds a filled-in hook to start from.
+const HOOK_EXAMPLES = [
+  { label: 'Lint after a file write', hook: { event: 'after_write', match: '*.js, *.ts', command: 'npx eslint {file}', feedback: true } },
+  { label: 'Format after a file write', hook: { event: 'after_write', match: '*.js, *.ts, *.css, *.html', command: 'npx prettier --write {file}', feedback: false } },
+  { label: 'Run the tests after npm commands', hook: { event: 'after_command', match: 'npm install*', command: 'npm test', feedback: true } },
+  { label: 'Check before git push', hook: { event: 'before_command', match: 'git push*', command: 'npm test', feedback: true } },
+];
+async function mountHooksWindow(p, el, ctl) {
+  if (p.missing || p.needsFolder) { el.innerHTML = '<p class="pjx-empty">Pick a folder for this project first: hooks run in it.</p>'; return; }
+  el.innerHTML = '<div class="kx-wait">Loading…</div>';
+  const r = await fetch(`/api/projects/${p.id}/hooks`).then((x) => x.json()).catch((e) => ({ error: e.message }));
+  if (!el.isConnected) return;
+  if (r.error) { el.innerHTML = `<p class="pf-warn">Could not read the hooks: ${esc(r.error)}</p>`; return; }
+  let list = r.hooks, saved = JSON.stringify(list);
+  const tests = new Map(), files = new Map();
+  const isDirty = () => JSON.stringify(list) !== saved;
+  ctl.dirty = isDirty;
+  const examples = () => `<div class="hkx-examples">${HOOK_EXAMPLES.map((x, i) => `<button type="button" class="kx-btn sm hkx-ex" data-ex="${i}">＋ ${esc(x.label)}</button>`).join('')}</div>`;
+  const testHTML = (h) => {
+    const t = tests.get(h.id);
+    if (!t) return '';
+    if (t.busy) return '<div class="hkx-test busy"><span class="hkx-st"><i></i>Running…</span></div>';
+    if (t.error || t.ran === false) return `<div class="hkx-test bad"><span class="hkx-st bad"><i></i>Not run</span><span>${esc(t.error || t.why)}</span></div>`;
+    return `<div class="hkx-test ${t.ok ? 'ok' : 'bad'}"><div class="hkx-test-top"><span class="hkx-st ${t.ok ? 'ok' : 'bad'}"><i></i>${t.ok ? 'Passed' : t.timedOut ? 'Stopped at the time limit' : 'Failed'}</span><code>exit ${t.code ?? '—'}</code><code>${((t.ms || 0) / 1000).toFixed(1)} s</code><code class="hkx-line" title="${esc(t.line)}">${esc(t.line)}</code><button type="button" class="mp-x hkx-test-x" aria-label="Hide the test result">✕</button></div>${t.out?.trim() ? `<pre class="hkx-out">${esc(t.out.trim())}</pre>` : '<p class="pj-hint">No output.</p>'}</div>`;
+  };
+  // Each hook reads as one line of plain words; Edit opens its fields (new hooks open ready to fill in).
+  const editing = new Set();
+  const whereText = (h) => (h.event === 'after_write' ? (h.match ? 'to files matching' : 'to any file') : (h.match ? 'matching' : 'any command'));
+  const draw = () => {
+    const dirty = isDirty(), on = list.filter((h) => h.on).length;
+    ctl.setDirty(dirty);
+    ctl.setSummary(list.length ? `<span class="hkx-st ${on ? 'ok' : ''}"><i></i>${on} on${list.length > on ? ` · ${list.length - on} off` : ''}</span>` : '');
+    el.innerHTML = `<div class="pjx-intro"><b>Commands QuorX runs itself around the agent's work. The agent can't skip them.</b><span>They run on this computer, inside the project folder, from top to bottom, and still go through your command rules and Stop. In a command, <code>{file}</code> is the file just written.</span></div>
+      <div class="hkx-toolbar"><div class="pjx-filter hkx-filter"></div><button type="button" class="kx-btn sm primary hk-add">＋ Add hook</button></div>
+      ${list.length ? `<ol class="hkx-list">${list.map((h, i) => {
+        const ed = editing.has(h.id);
+        return `<li class="hkx-row ${h.on ? '' : 'off'} ${ed ? 'editing' : ''}" data-i="${i}" data-lf-text="${esc(`${HOOK_WHEN[h.event]} ${h.match} ${h.command} ${h.on ? 'on' : 'off'}`.toLowerCase())}" data-lf-seg="${esc(h.event)}">
+          <div class="hkx-sum">
+            <span class="hkx-n" title="Runs ${i + 1}${['st', 'nd', 'rd'][i] || 'th'}">${i + 1}</span>
+            <label class="sq-check" title="${h.on ? 'On: click to switch it off (it is kept)' : 'Off: kept, but it doesn\'t run. Click to switch it on'}"><input type="checkbox" class="hk-on" ${h.on ? 'checked' : ''} aria-label="On"></label>
+            <div class="hkx-what">
+              <div class="hkx-when"><b>${esc(HOOK_WHEN[h.event])}</b> <small>${whereText(h)}</small>${h.match ? ` <code>${esc(h.match)}</code>` : ''}</div>
+              ${h.command.trim() ? `<code class="hkx-cmdv" title="${esc(h.command)}">${esc(h.command)}</code>` : '<span class="pf-warn hkx-nocmd">No command yet: Edit to add one.</span>'}
+              <small class="hkx-flags">${h.feedback ? (h.event === 'before_command' ? '<span>Stops the command if it fails</span>' : '<span>Tells the agent if it fails</span>') : '<span>Runs quietly</span>'}<span>Time limit ${h.timeout} s</span></small>
+            </div>
+            <span class="hkx-acts">
+              <button type="button" class="kx-btn sm hkx-run" title="Run this hook once now in the project folder and show what it prints" ${h.command.trim() ? '' : 'disabled'}>▶ Test</button>
+              <button type="button" class="kx-btn sm hk-edit" aria-expanded="${ed}">${ed ? 'Done' : 'Edit'}</button>
+              <button type="button" class="kx-icon hk-up" title="Run earlier" aria-label="Move up" ${i ? '' : 'disabled'}>↑</button><button type="button" class="kx-icon hk-down" title="Run later" aria-label="Move down" ${i < list.length - 1 ? '' : 'disabled'}>↓</button>
+              <button type="button" class="pp-btn hk-del" title="Remove this hook" aria-label="Remove this hook">${ICO.trash}</button>
+            </span>
+          </div>
+          ${ed ? `<div class="hkx-edit">
+            <div class="hkx-top">
+              <select class="hk-event" aria-label="When this hook runs">${Object.entries(HOOK_WHEN).map(([v, l]) => `<option value="${v}" ${h.event === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+              <input class="hk-match" value="${esc(h.match)}" placeholder="${esc(HOOK_MATCH_HINT[h.event])}" aria-label="Which ${h.event === 'after_write' ? 'files' : 'commands'}" spellcheck="false">
+            </div>
+            <div class="hkx-cmd"><span class="hkx-prompt" aria-hidden="true">›</span><input class="hk-cmd" value="${esc(h.command)}" placeholder="${h.event === 'after_write' ? 'npx eslint {file}' : 'npm test'}" aria-label="Command" spellcheck="false"></div>
+            <div class="hkx-opts">
+              <label class="sq-check" title="${h.event === 'before_command' ? 'When this hook fails, the agent\'s command does not run and the agent gets the hook\'s output' : 'When this hook fails, its output goes back to the agent to fix'}"><input type="checkbox" class="hk-feedback" ${h.feedback ? 'checked' : ''}><span>${h.event === 'before_command' ? 'Stop the command if it fails' : 'Tell the agent if it fails'}</span></label>
+              <label class="hkx-time" title="The hook is stopped after this long">Time limit <input type="number" class="hk-timeout" min="1" max="600" value="${h.timeout}"> s</label>
+              <span class="kx-spacer"></span>
+              ${h.command.includes('{file}') ? `<label class="hkx-time" title="The file that stands in for {file} when you press Test">Test with <input class="hkx-file" value="${esc(files.get(h.id) || 'index.html')}" aria-label="A file to test {file} with" spellcheck="false"></label>` : ''}
+            </div>
+          </div>` : ''}
+          ${testHTML(h)}
+        </li>`;
+      }).join('')}</ol>` : `<div class="pjx-empty"><b>No hooks yet</b><p>A hook is a command that runs every time, without the agent asking: a linter after each file write, the tests before a push. Start from one of these, or add your own.</p></div>`}
+      <div class="hkx-add"><span class="pj-hint">Start from an example:</span>${examples()}</div>
+      <div class="pjx-savebar ${dirty ? 'on' : ''}"><span class="hk-state">${dirty ? 'Not saved yet' : list.length ? 'Change the order with ↑ ↓. Changes apply after you save.' : ''}</span><span class="kx-spacer"></span><button type="button" class="kx-btn sm hk-discard" ${dirty ? '' : 'disabled'}>Discard</button><button type="button" class="kx-btn sm primary hk-save" ${dirty ? '' : 'disabled'}>Save hooks</button></div>`;
+    if (list.length > 1) listFilter($('.hkx-filter', el), { key: `hooks-${p.id}`, rows: () => el.querySelectorAll('.hkx-row'), segLabel: (v) => HOOK_WHEN[v] || v, segOrder: Object.keys(HOOK_WHEN), placeholder: 'Search commands and patterns…', label: 'When' });
+    const refresh = () => { const d = isDirty(); ctl.setDirty(d); $('.hk-save', el).disabled = !d; $('.hk-discard', el).disabled = !d; $('.pjx-savebar', el).classList.toggle('on', d); $('.hk-state', el).textContent = d ? 'Not saved yet' : ''; };
+    for (const row of el.querySelectorAll('.hkx-row')) {
+      const i = Number(row.dataset.i), h = list[i];
+      const set = (k, v, redraw) => { h[k] = v; if (redraw) draw(); else refresh(); };
+      const q = (s) => $(s, row);
+      if (q('.hk-event')) {
+        q('.hk-event').onchange = (e) => set('event', e.target.value, true);
+        q('.hk-match').oninput = (e) => set('match', e.target.value);
+        q('.hk-cmd').oninput = (e) => { const had = h.command.includes('{file}'); set('command', e.target.value); q('.hkx-run').disabled = !h.command.trim(); if (had !== h.command.includes('{file}')) { const at = e.target.selectionStart; draw(); const c = el.querySelector(`.hkx-row[data-i="${i}"] .hk-cmd`); c?.focus(); c?.setSelectionRange(at, at); } };
+        q('.hk-timeout').oninput = (e) => set('timeout', Math.max(1, Math.min(600, Number(e.target.value) || 60)));
+        q('.hk-feedback').onchange = (e) => set('feedback', e.target.checked);
+        const fileIn = q('.hkx-file'); if (fileIn) fileIn.oninput = () => files.set(h.id, fileIn.value);
+      }
+      q('.hk-on').onchange = (e) => { set('on', e.target.checked, true); };
+      q('.hk-edit').onclick = () => { if (editing.has(h.id)) editing.delete(h.id); else editing.add(h.id); draw(); if (editing.has(h.id)) el.querySelector(`.hkx-row[data-i="${i}"] .hk-cmd`)?.focus(); };
+      q('.hk-up').onclick = () => { [list[i - 1], list[i]] = [list[i], list[i - 1]]; draw(); };
+      q('.hk-down').onclick = () => { [list[i + 1], list[i]] = [list[i], list[i + 1]]; draw(); };
+      q('.hk-del').onclick = (e) => {
+        const b = e.currentTarget;
+        if (!b.classList.contains('sure')) { b.classList.add('sure'); b.textContent = 'Remove?'; setTimeout(() => { if (b.isConnected) { b.classList.remove('sure'); b.innerHTML = ICO.trash; } }, 3000); return; }
+        list.splice(i, 1); editing.delete(h.id); draw();
+      };
+      q('.hkx-run').onclick = async () => {
+        tests.set(h.id, { busy: true }); draw();
+        const t = await postJ(`/api/projects/${p.id}/hooks/test`, { hook: h, file: files.get(h.id) || 'index.html', safety: G.settings.safety });
+        tests.set(h.id, t || { error: 'no answer' });
+        if (el.isConnected) draw();
+      };
+      const tx = q('.hkx-test-x'); if (tx) tx.onclick = () => { tests.delete(h.id); draw(); };
+    }
+    const add = (hook) => {
+      const h = { id: `h${Math.random().toString(16).slice(2, 10)}`, event: 'after_write', match: '', command: '', timeout: 60, feedback: true, on: true, ...hook };
+      list.push(h); editing.add(h.id); draw();
+      el.querySelector('.hkx-row:last-of-type .hk-cmd')?.focus();
+    };
+    $('.hk-add', el).onclick = () => add({});
+    for (const b of el.querySelectorAll('.hkx-ex')) b.onclick = () => add({ ...HOOK_EXAMPLES[b.dataset.ex].hook });
+    $('.hk-discard', el).onclick = () => { list = JSON.parse(saved); tests.clear(); editing.clear(); draw(); };
+    $('.hk-save', el).onclick = async () => {
+      const blank = list.findIndex((h) => !h.command.trim());
+      if (blank >= 0) { editing.add(list[blank].id); draw(); $('.hk-state', el).textContent = `Hook ${blank + 1} has no command: add one or remove it.`; el.querySelector(`.hkx-row[data-i="${blank}"] .hk-cmd`)?.focus(); return; }
+      const res = await postJ(`/api/projects/${p.id}/hooks`, { hooks: list });
+      if (!res || res.error) { $('.hk-state', el).textContent = `Not saved: ${res?.error || 'no answer'}`; return; }
+      list = res.hooks; saved = JSON.stringify(list); editing.clear(); draw();
+      $('.hk-state', el).textContent = '✓ Saved';
+    };
+  };
+  draw();
+}
+
+// ---------- Permissions window ----------
+// This project's rules (add, edit, on/off, remove, and a tester that says which rule a command meets), and what each of
+// its chats allows on its own, read-only here (each chat changes its own list with its 🔓 button).
+async function mountPermsWindow(p, el, ctl) {
+  el.innerHTML = '<div class="kx-wait">Loading…</div>';
   const [r, ch] = await Promise.all([
     fetch(`/api/permissions?project=${encodeURIComponent(p.id)}`).then((x) => x.json()).catch((e) => ({ error: e.message })),
     fetch(`/api/permissions/chats?project=${encodeURIComponent(p.id)}`).then((x) => x.json()).catch(() => ({ chats: [] })),
   ]);
   if (!el.isConnected) return;
-  if (r.error) { el.innerHTML = `<div class="st-row-help">Couldn't load them: ${esc(r.error)}</div>`; return; }
-  const chats = ch.chats || [];
+  if (r.error) { el.innerHTML = `<p class="pf-warn">Couldn't load them: ${esc(r.error)}</p>`; return; }
+  const rules = r.project || [], chats = ch.chats || [];
+  let editing = null;
+  ctl.dirty = () => !!el.querySelector('.prx-form [data-changed]');
   const chatRows = (x) => [
     ...(x.cmdRules || []).map((q, i) => permRowHTML({ kind: 'chat rule', key: q.id || `i${i}`, seg: x.id, label: q.match, effect: q.effect || 'allow', on: q.on, by: q.by, at: q.at, hits: q.hits || 0, lastUsed: q.lastUsed, toggle: false, remove: false })),
     ...(x.allowed || []).map((t) => permRowHTML({ kind: 'tool', key: t, seg: x.id, label: TOOL_NAME[t] || t, chip: 'Tool', toggle: false, remove: false })),
     ...(x.folders || []).map((f) => permRowHTML({ kind: 'folder', key: f.path, seg: x.id, label: f.path, chip: f.access === 'write' ? 'Read+write' : 'Read', toggle: false, remove: false })),
     ...(x.apps || []).map((a) => permRowHTML({ kind: 'app', key: a.appId, seg: x.id, label: a.name, chip: `🖥 ${(APP_LEVEL[a.level || 'full'] || APP_LEVEL.full)[0]}`, toggle: false, remove: false })),
   ].join('');
-  el.innerHTML = `<div class="pj-perms">
-    <div class="pj-perms-filter"></div>
-    <h5>This project <small>rules for every chat here</small></h5>
-    <div class="pr-list">${r.project?.length ? ruleRows(r.project, 'project', 'project').join('') : '<div class="st-row-help">No rules. “Always allow…” on a card, with This project, adds one.</div>'}</div>
-    ${chats.map((x) => `<h5 class="pj-perm-chat" data-chat="${esc(x.id)}">${esc(x.title)} <small>this chat only · change it there with 🔓</small> <button type="button" class="sp-link pj-perm-open" data-id="${esc(x.id)}">Open chat</button></h5><div class="pr-list">${chatRows(x)}</div>`).join('')}
-    <p class="st-row-help">Rules for every project are in ⚙ Settings → Approvals & safety. <button type="button" class="sp-link pj-perm-all">Open</button></p>
-  </div>`;
+  const effSeg = (name, v) => `<div class="st-segmented prx-eff" role="radiogroup" aria-label="What happens">${Object.entries(RULE_EFFECT).map(([k, l]) => `<button type="button" class="st-seg-btn ${v === k ? 'active' : ''}" role="radio" aria-checked="${v === k}" data-eff="${k}" data-name="${name}">${l}</button>`).join('')}</div>`;
+  const total = rules.length + chats.reduce((n, x) => n + (x.cmdRules || []).length + (x.allowed || []).length + (x.folders || []).length + (x.apps || []).length, 0);
+  el.innerHTML = `<div class="pjx-intro"><b>What chats in this project may do without asking you.</b><span>Each command the agent wants to run is checked against these rules, then the rules for every project; anything no rule covers asks you (or, in YOLO, the deciders).</span></div>
+    ${total > 6 ? '<div class="pjx-filter prx-filter"></div>' : ''}
+    <section class="prx-group"><div class="prx-group-head"><h5>This project <small>rules for every chat here</small></h5><button type="button" class="kx-btn sm prx-try-open" aria-expanded="false">›_ Try a command</button><button type="button" class="kx-btn sm primary prx-add">＋ Add rule</button></div>
+    <section class="prx-try" hidden><h5>Try a command <small>see which rule meets it and what would happen. Nothing runs.</small><button type="button" class="mp-x prx-try-x" aria-label="Close the tester">✕</button></h5>
+      <form class="prx-try-row"><input class="prx-try-in" placeholder="e.g. npm run build, git push origin main" spellcheck="false" aria-label="A command to try"><div class="st-segmented prx-mode" role="radiogroup" aria-label="As a chat in"><button type="button" class="st-seg-btn active" role="radio" aria-checked="true" data-pm="strict">Strict</button><button type="button" class="st-seg-btn" role="radio" aria-checked="false" data-pm="yolo">⚡ YOLO</button></div><button type="submit" class="kx-btn sm">Try it</button></form>
+      <div class="prx-try-out" hidden></div></section>
+      <div class="prx-form-slot"></div>
+      <div class="pr-list prx-rules">${rules.length ? ruleRows(rules, 'project', 'project').join('') : '<div class="pjx-empty sm"><b>No rules yet</b><p>“Always allow…” on a card, with This project, adds one. Or add one here: a command pattern like <code>npm run *</code> and what happens.</p></div>'}</div>
+    </section>
+    ${chats.length ? `<section class="prx-group"><h5>Per chat <small>each chat's own list · change it in that chat with 🔓</small></h5>
+      ${chats.map((x) => `<div class="prx-chat"><div class="prx-chat-head"><b title="${esc(x.title)}">${esc(x.title)}</b><button type="button" class="kx-btn sm pj-perm-open" data-id="${esc(x.id)}">Open chat</button></div><div class="pr-list">${chatRows(x)}</div></div>`).join('')}</section>` : ''}
+    <p class="pj-hint prx-foot">Rules for every project are in ⚙ Settings → Approvals & safety. <button type="button" class="sp-link pj-perm-all">Open</button></p>`;
+  const reload = () => mountPermsWindow(p, el, ctl);
   const titles = Object.fromEntries(chats.map((x) => [x.id, x.title]));
-  listFilter($('.pj-perms-filter', el), { key: `perms-${p.id}`, rows: () => el.querySelectorAll('.perm-row'), segLabel: (v) => (v === 'project' ? 'This project' : titles[v] || 'A chat'), segOrder: ['project'], placeholder: 'Filter: a command, a tool, “off”…', label: 'Where' });
-  wireRuleRows(el, p.id, () => mountPerms(p, el, onCount));
-  for (const b of el.querySelectorAll('.pj-perm-open')) b.onclick = () => { $('#projDlg')?.close?.(); showChat(b.dataset.id); };
-  $('.pj-perm-all', el).onclick = () => { $('#projDlg')?.close?.(); openSettings('safety'); };
-  onCount?.((r.project || []).filter((x) => x.on !== false).length + chats.reduce((n, x) => n + (x.cmdRules || []).filter((q) => q.on !== false).length + (x.allowed || []).length + (x.folders || []).length + (x.apps || []).length, 0));
+  const flt = $('.prx-filter', el);
+  if (flt) {
+    // Second filter: what happens (allow / ask / deny), from the rows that are there.
+    const effs = [...new Set([...el.querySelectorAll('.perm-row .pr-eff')].map((e) => e.dataset.eff))].filter((v) => RULE_EFFECT[v]);
+    let eff = 'all';
+    const extra = effs.length > 1 ? `<div class="st-segmented prx-eff-f" role="radiogroup" aria-label="What happens"><button type="button" class="st-seg-btn active" data-ef="all" role="radio" aria-checked="true">Any</button>${effs.map((v) => `<button type="button" class="st-seg-btn" data-ef="${v}" role="radio" aria-checked="false">${RULE_EFFECT[v]}</button>`).join('')}</div>` : '';
+    const applyEff = () => { for (const row of el.querySelectorAll('.perm-row')) if (eff !== 'all' && !row.hidden && $('.pr-eff', row)?.dataset.eff !== eff) row.hidden = true; for (const g of el.querySelectorAll('.prx-chat')) g.hidden = ![...g.querySelectorAll('.perm-row')].some((x) => !x.hidden); };
+    listFilter(flt, { key: `perms-${p.id}`, rows: () => el.querySelectorAll('.perm-row'), segLabel: (v) => (v === 'project' ? 'This project' : titles[v] || 'A chat'), segOrder: ['project'], placeholder: 'Filter: a command, a tool, “off”…', label: 'Where', extra, onApply: applyEff });
+    for (const b of flt.querySelectorAll('[data-ef]')) b.onclick = () => { eff = b.dataset.ef; for (const x of flt.querySelectorAll('[data-ef]')) { x.classList.toggle('active', x === b); x.setAttribute('aria-checked', String(x === b)); } $('.lf-q', flt).dispatchEvent(new Event('input')); };
+  }
+  wireRuleRows(el, p.id, reload);
+  // Edit: the project's rules get an Edit button; the row turns into the same form as Add.
+  const form = (rule) => {
+    const slot = $('.prx-form-slot', el);
+    editing = rule?.id || 'new';
+    slot.innerHTML = `<form class="prx-form"><div class="prx-form-row"><input class="prx-match" value="${esc(rule?.match || '')}" placeholder="A command pattern: npm run *, git status, python -m pytest*" spellcheck="false" aria-label="Command pattern">${effSeg('eff', rule?.effect || 'allow')}</div>
+      <p class="pj-hint"><code>*</code> stands for anything. Allow runs it without asking; Ask me always shows you a card; Deny never runs it.</p>
+      <div class="prx-form-acts"><span class="prx-form-msg"></span><span class="kx-spacer"></span><button type="button" class="kx-btn sm prx-cancel">Cancel</button><button type="submit" class="kx-btn sm primary">${rule ? 'Save rule' : 'Add rule'}</button></div></form>`;
+    const f = $('.prx-form', slot), m = $('.prx-match', f);
+    let effect = rule?.effect || 'allow';
+    const mark = () => { const ch = m.value.trim() !== (rule?.match || '') || effect !== (rule?.effect || 'allow'); if (ch) f.dataset.changed = '1'; else delete f.dataset.changed; ctl.setDirty(ch); };
+    m.oninput = mark;
+    for (const b of f.querySelectorAll('[data-eff]')) b.onclick = () => { effect = b.dataset.eff; for (const x of f.querySelectorAll('[data-eff]')) { x.classList.toggle('active', x === b); x.setAttribute('aria-checked', String(x === b)); } mark(); };
+    $('.prx-cancel', f).onclick = () => { slot.innerHTML = ''; editing = null; ctl.setDirty(false); };
+    f.onsubmit = async (e) => {
+      e.preventDefault();
+      if (!m.value.trim()) { m.focus(); return; }
+      const next = rule ? rules.map((x) => (x.id === rule.id ? { ...x, match: m.value.trim(), effect, by: 'user' } : x)) : [...rules, { match: m.value.trim(), effect, by: 'user', on: true }];
+      const res = await postJ('/api/permissions', { scope: 'project', projectId: p.id, rules: next.map(({ problem, scope, ...x }) => x) });
+      if (res.error) { $('.prx-form-msg', f).textContent = `Not saved: ${res.error}`; return; }
+      ctl.setDirty(false); reload();
+    };
+    m.focus();
+  };
+  $('.prx-add', el).onclick = () => form(null);
+  for (const row of el.querySelectorAll('.prx-rules .perm-row')) {
+    const rule = rules.find((x) => x.id === row.dataset.key);
+    if (!rule) continue;
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'pp-btn prx-edit'; b.title = 'Edit this rule'; b.setAttribute('aria-label', `Edit ${rule.match}`); b.textContent = '✎';
+    // Edit and remove share the row's last cell.
+    const del = $('.perm-del', row), acts = document.createElement('span'); acts.className = 'prx-acts';
+    del?.replaceWith(acts); acts.append(b); if (del) acts.append(del);
+    b.onclick = () => form(rule);
+  }
+  // The tester: the same check a real command gets, with this project's rules (nothing runs).
+  const tryBox = $('.prx-try', el), tryOpen = $('.prx-try-open', el);
+  const showTry = (on) => { tryBox.hidden = !on; tryOpen.setAttribute('aria-expanded', String(on)); tryOpen.classList.toggle('on', on); if (on) $('.prx-try-in', el).focus(); };
+  tryOpen.onclick = () => showTry(tryBox.hidden);
+  $('.prx-try-x', el).onclick = () => showTry(false);
+  const onRules = rules.filter((x) => x.on !== false).length;
+  ctl.setSummary(rules.length || chats.length ? `<span class="hkx-st ${onRules ? 'ok' : ''}"><i></i>${onRules} in this project${chats.length ? ` · ${chats.length} chat${chats.length === 1 ? '' : 's'} with their own` : ''}</span>` : '');
+  $('.prx-try-row', el).onsubmit = async (e) => {
+    e.preventDefault();
+    const line = $('.prx-try-in', el).value.trim(), out = $('.prx-try-out', el);
+    if (!line) return;
+    out.hidden = false; out.innerHTML = '<span class="kx-wait">Checking…</span>';
+    const t = await postJ('/api/permissions/test', { projectId: p.id, line, mode: el.querySelector('.prx-mode .active')?.dataset.pm || 'strict', safety: G.settings.safety });
+    if (t.error) { out.innerHTML = `<p class="pf-warn">${esc(t.error)}</p>`; return; }
+    const word = { allow: ['ok', 'Runs without asking'], ask: ['warn', t.who === 'deciders' ? 'The deciders are asked' : 'You are asked'], deny: ['bad', 'Never runs'] }[t.verdict] || ['warn', t.verdict];
+    out.innerHTML = `<div class="prx-verdict ${word[0]}"><span class="hkx-st ${word[0]}"><i></i>${esc(word[1])}</span><span>${esc(t.why || '')}</span></div>
+      ${(t.segments || []).length > 1 ? `<ul class="prx-segs">${t.segments.map((s) => `<li><code>${esc(s.text)}</code> <span class="pr-eff" data-eff="${esc(s.verdict)}">${esc(RULE_EFFECT[s.verdict] || s.verdict)}</span> <small>${esc(s.why || '')}</small></li>`).join('')}</ul>` : ''}`;
+  };
+  for (const b of el.querySelectorAll('[data-pm]')) b.onclick = () => { for (const x of el.querySelectorAll('[data-pm]')) { x.classList.toggle('active', x === b); x.setAttribute('aria-checked', String(x === b)); } if ($('.prx-try-in', el).value.trim()) $('.prx-try-row', el).requestSubmit(); };
+  for (const b of el.querySelectorAll('.pj-perm-open')) b.onclick = () => { $('#projSubDlg')?.close?.(); $('#projDlg')?.close?.(); showChat(b.dataset.id); };
+  $('.pj-perm-all', el).onclick = () => { $('#projSubDlg')?.close?.(); $('#projDlg')?.close?.(); openSettings('safety'); };
+  if (editing === 'new') form(null);
 }
-async function mountHooks(p, el, onCount) {
-  if (!el) return;
-  if (p.missing || p.needsFolder) { el.innerHTML = '<p class="pj-hint">Pick a folder for this project first.</p>'; return; }
-  const r = await fetch(`/api/projects/${p.id}/hooks`).then((x) => x.json()).catch((e) => ({ error: e.message }));
-  if (r.error) { el.innerHTML = `<p class="pf-warn">Could not read the hooks: ${esc(r.error)}</p>`; return; }
-  let list = r.hooks, saved = JSON.stringify(list);
-  const draw = () => {
-    const dirty = JSON.stringify(list) !== saved;
-    el.innerHTML = `<p class="pj-hint">QuorX runs these commands itself around the agent's tool calls, top to bottom; the agent can't skip or change them. Each still goes through your command rules and Stop. <code>{file}</code> is the file just written.</p>
-      ${list.length ? `<ol class="hk-list">${list.map((h, i) => `<li class="hk-row ${h.on ? '' : 'off'}" data-i="${i}">
-        <div class="hk-top">
-          <select class="hk-event" aria-label="When this hook runs">${Object.entries(HOOK_WHEN).map(([v, l]) => `<option value="${v}" ${h.event === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
-          <input class="hk-match" value="${esc(h.match)}" placeholder="${esc(HOOK_MATCH_HINT[h.event])}" aria-label="Which ${h.event === 'after_write' ? 'files' : 'commands'}" spellcheck="false">
-          <span class="hk-order"><button type="button" class="hk-up" title="Run earlier" aria-label="Move up" ${i ? '' : 'disabled'}>↑</button><button type="button" class="hk-down" title="Run later" aria-label="Move down" ${i < list.length - 1 ? '' : 'disabled'}>↓</button><button type="button" class="hk-del" title="Remove this hook" aria-label="Remove this hook">✕</button></span>
-        </div>
-        <input class="hk-cmd" value="${esc(h.command)}" placeholder="${h.event === 'after_write' ? 'npx eslint {file}' : 'npm test'}" aria-label="Command" spellcheck="false">
-        <div class="hk-opts">
-          <label class="sq-check" title="${h.event === 'before_command' ? 'When this hook fails, the agent\'s command does not run and the agent gets the hook\'s output' : 'When this hook fails, its output goes back to the agent to fix'}"><input type="checkbox" class="hk-feedback" ${h.feedback ? 'checked' : ''}><span>${h.event === 'before_command' ? 'Stop the command if it fails' : 'Tell the agent if it fails'}</span></label>
-          <label class="hk-time" title="The hook is stopped after this long">Time limit <input type="number" class="hk-timeout" min="1" max="600" value="${h.timeout}"> s</label>
-          <label class="sq-check" title="Switch this hook off without removing it"><input type="checkbox" class="hk-on" ${h.on ? 'checked' : ''}><span>On</span></label>
-        </div></li>`).join('')}</ol>` : '<p class="pj-hint hk-empty">No hooks yet. For example: after a file write, run <code>npm run lint</code>.</p>'}
-      <div class="hk-acts"><button type="button" class="kx-btn sm hk-add">+ Add hook</button><span class="hk-state">${dirty ? 'Not saved yet' : ''}</span><button type="button" class="kx-btn sm primary hk-save" ${dirty ? '' : 'disabled'}>Save hooks</button></div>`;
-    for (const row of el.querySelectorAll('.hk-row')) {
-      const i = Number(row.dataset.i), h = list[i];
-      const set = (k, v, redraw) => { h[k] = v; if (redraw) draw(); else { const dirtyNow = JSON.stringify(list) !== saved; $('.hk-save', el).disabled = !dirtyNow; $('.hk-state', el).textContent = dirtyNow ? 'Not saved yet' : ''; } };
-      $('.hk-event', row).onchange = (e) => set('event', e.target.value, true);
-      $('.hk-match', row).oninput = (e) => set('match', e.target.value);
-      $('.hk-cmd', row).oninput = (e) => set('command', e.target.value);
-      $('.hk-timeout', row).oninput = (e) => set('timeout', Math.max(1, Math.min(600, Number(e.target.value) || 60)));
-      $('.hk-feedback', row).onchange = (e) => set('feedback', e.target.checked);
-      $('.hk-on', row).onchange = (e) => { set('on', e.target.checked); row.classList.toggle('off', !e.target.checked); };
-      $('.hk-up', row).onclick = () => { [list[i - 1], list[i]] = [list[i], list[i - 1]]; draw(); };
-      $('.hk-down', row).onclick = () => { [list[i + 1], list[i]] = [list[i], list[i + 1]]; draw(); };
-      $('.hk-del', row).onclick = () => { list.splice(i, 1); draw(); };
-    }
-    $('.hk-add', el).onclick = () => { list.push({ event: 'after_write', match: '', command: '', timeout: 60, feedback: true, on: true }); draw(); el.querySelector('.hk-row:last-child .hk-cmd')?.focus(); };
-    $('.hk-save', el).onclick = async () => {
-      const res = await postJ(`/api/projects/${p.id}/hooks`, { hooks: list });
-      if (!res || res.error) { $('.hk-state', el).textContent = `Not saved: ${res?.error || 'no answer'}`; return; }
-      list = res.hooks; saved = JSON.stringify(list); draw();
-      $('.hk-state', el).textContent = '✓ Saved';
-      onCount?.(list.filter((h) => h.on).length);
+
+// ---------- Design system window: a gallery to pick from, a preview, and an editor for your own ----------
+// Built-in systems come from design-systems/ (hand-written starters and catalog.json); yours are kept in QuorX's data
+// folder. Using one writes DESIGN.md and tokens.css into the project folder (the old ones go to the project's trash):
+// every chat in the project reads them and builds with those tokens.
+const DS_FAMILY = { minimal: 'Minimal', corporate: 'Corporate', editorial: 'Editorial', playful: 'Playful', brutalist: 'Brutalist', glass: 'Glass', neon: 'Neon', retro: 'Retro', material: 'Material', swiss: 'Swiss', organic: 'Organic', luxury: 'Luxury', pastel: 'Pastel', terminal: 'Terminal', data: 'Data', accessible: 'Accessible' };
+const DS_THEME = { no: 'Light', yes: 'Light + dark', only: 'Dark' };
+const DS_COLOR = { bg: ['Background', 'the page'], surface: ['Surface', 'cards, panels, inputs'], 'surface-2': ['Surface 2', 'bands, hover, stripes'], fg: ['Text', 'body text and headings'], muted: ['Muted text', 'captions, secondary text'], line: ['Lines', 'borders and dividers'], accent: ['Accent', 'the main action'], 'accent-ink': ['On accent', 'text on the accent'], 'accent-2': ['Accent 2', 'links, highlights'], ok: ['Success', ''], warn: ['Warning', ''], bad: ['Error', ''], focus: ['Focus ring', ''] };
+const DS_RATIO = [[1.125, 'Gentle (1.125)'], [1.2, 'Calm (1.2)'], [1.25, 'Balanced (1.25)'], [1.333, 'Lively (1.333)'], [1.414, 'Bold (1.414)'], [1.5, 'Dramatic (1.5)'], [1.618, 'Huge (1.618)']];
+const DS_SHADOW = { none: 'None', soft: 'Soft', strong: 'Strong', hard: 'Hard offset' };
+const DS_BLANK = {
+  name: 'My design system', description: '', family: 'minimal', dark: 'yes',
+  colors: {
+    base: { bg: '#f7f7f5', surface: '#ffffff', 'surface-2': '#efefec', fg: '#18181a', muted: '#55555c', line: '#deded9', accent: '#1f5fd1', 'accent-ink': '#ffffff', 'accent-2': '#1f5fd1', ok: '#2a7a3b', warn: '#8a5a00', bad: '#b3261e', focus: '#1f5fd1' },
+    dark: { bg: '#121214', surface: '#1a1a1d', 'surface-2': '#222226', fg: '#ededef', muted: '#a3a3ab', line: '#2e2e33', accent: '#8fb2ff', 'accent-ink': '#0a1730', 'accent-2': '#8fb2ff', ok: '#7fcf8e', warn: '#e8b65a', bad: '#ff8a80', focus: '#8fb2ff' },
+  },
+  fonts: { display: 'Inter', body: 'Inter', mono: 'JetBrains Mono' }, type: { base: 16, ratio: 1.25, displayWeight: 700, case: 'normal' },
+  radius: 8, radiusSm: 4, space: 8, maxWidth: 1120, shadow: 'soft', border: 1,
+};
+const dsLum = (h) => { const c = [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)); return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; };
+const dsContrast = (a, b) => { if (!/^#[0-9a-f]{6}$/i.test(a || '') || !/^#[0-9a-f]{6}$/i.test(b || '')) return 0; const [x, y] = [dsLum(a), dsLum(b)].sort((m, n) => n - m); return (x + 0.05) / (y + 0.05); };
+// The same three checks the server makes (server/design.js contrastChecks).
+const dsChecks = (c) => [
+  ['Text on the background', dsContrast(c.fg, c.bg), 7, ['fg', 'bg']], ['Muted text', Math.min(dsContrast(c.muted, c.bg), dsContrast(c.muted, c.surface)), 4.5, ['muted']], ['Text on the accent', dsContrast(c['accent-ink'], c.accent), 4.5, ['accent-ink', 'accent']],
+].map(([label, ratio, need, keys]) => ({ label, ratio, need, keys, ok: ratio >= need }));
+const dsColors = (s, mode) => (mode === 'dark' && s.colors.dark ? s.colors.dark : s.colors.base);
+// A system's look as CSS custom properties on its preview box (prefixed, so it never touches QuorX's own colours).
+function dsVars(s, mode) {
+  const c = dsColors(s, mode), r = s.type?.ratio || 1.25, b = s.type?.base || 16;
+  const sh = { none: 'none', soft: '0 1px 2px rgba(0,0,0,.08), 0 6px 18px rgba(0,0,0,.08)', strong: '0 2px 4px rgba(0,0,0,.1), 0 14px 34px rgba(0,0,0,.18)', hard: `3px 3px 0 ${c.fg}` }[s.shadow] || 'none';
+  return [...Object.entries(c).map(([k, v]) => `--d-${k}:${v}`), `--d-fd:"${s.fonts.display}",system-ui,sans-serif`, `--d-fb:"${s.fonts.body}",system-ui,sans-serif`, `--d-fm:"${s.fonts.mono}",ui-monospace,monospace`,
+    `--d-r:${s.radius}px`, `--d-rs:${s.radiusSm}px`, `--d-sp:${s.space}px`, `--d-bw:${s.border}px`, `--d-sh:${sh}`, `--d-dw:${s.type?.displayWeight || 700}`, `--d-tt:${s.type?.case === 'upper' ? 'uppercase' : 'none'}`,
+    `--d-base:${b}px`, `--d-h1:${Math.round(b * r ** 4)}px`, `--d-h2:${Math.round(b * r ** 2)}px`].join(';');
+}
+// Google Fonts for the previews, loaded once when the window opens (pages the agent builds load their own via tokens.css).
+// DS_GOOGLE: each font's weights on Google Fonts (from /api/design-fonts); asking for a weight a font lacks fails the whole request.
+const dsFontsLoaded = new Set();
+let DS_GOOGLE = {};
+function dsLoadFonts(systems) {
+  const fams = [...new Set(systems.flatMap((s) => [s.fonts.display, s.fonts.body, s.fonts.mono]))].filter((f) => DS_GOOGLE[f] && !dsFontsLoaded.has(f));
+  if (!fams.length) return;
+  for (const f of fams) dsFontsLoaded.add(f);
+  for (let i = 0; i < fams.length; i += 20) {
+    const l = document.createElement('link'); l.rel = 'stylesheet';
+    l.href = `https://fonts.googleapis.com/css2?${fams.slice(i, i + 20).map((f) => `family=${encodeURIComponent(f).replace(/%20/g, '+')}:${DS_GOOGLE[f]}`).join('&')}&display=swap`;
+    document.head.appendChild(l);
+  }
+}
+// A card's small preview: colours, type, shape and three components, drawn in the system's own tokens.
+const dsMiniHTML = (s, mode) => `<div class="dsx-mini" style="${esc(dsVars(s, mode))}" aria-hidden="true">
+    <div class="dsx-mini-sw">${['bg', 'surface', 'fg', 'muted', 'accent', 'accent-2'].map((k) => `<i style="background:var(--d-${k})"></i>`).join('')}</div>
+    <div class="dsx-mini-body"><span class="dsx-aa">Aa</span><span class="dsx-mini-txt"><b>${esc(s.fonts.display)}</b><small>${esc(s.fonts.body)}</small></span></div>
+    <div class="dsx-mini-ui"><span class="dsx-btn">Button</span><span class="dsx-in">Input</span><span class="dsx-tag">Tag</span></div>
+  </div>`;
+// The detail preview: a small page in the system (nav, hero, buttons, form, cards, table, alert).
+const dsSampleHTML = (s, mode) => `<div class="dsx-sample" style="${esc(dsVars(s, mode))}">
+    <nav class="dsx-nav"><b>Northwind</b><span>Product</span><span>Pricing</span><span>Docs</span><span class="dsx-btn sm">Sign up</span></nav>
+    <section class="dsx-hero"><small class="dsx-kicker">New · spring release</small><h1>Plan the week in one calm place</h1><p>Shared lists, quiet reminders and a timeline your whole team can read at a glance.</p>
+      <div class="dsx-row"><span class="dsx-btn">Start free</span><span class="dsx-btn ghost">See how it works</span><a>Read the guide →</a></div></section>
+    <section class="dsx-cards">${[['Lists', 'Drag tasks between days and people.', 'Popular'], ['Reminders', 'Gentle nudges, never noise.', ''], ['Timeline', 'Every project on one line.', 'New']].map(([h, t, tag]) => `<div class="dsx-scard"><div class="dsx-row"><b>${h}</b>${tag ? `<span class="dsx-tag">${tag}</span>` : ''}</div><p>${t}</p></div>`).join('')}</section>
+    <section class="dsx-split">
+      <form class="dsx-form" onsubmit="return false"><label>Email<span class="dsx-in">you@example.com</span></label><label>Team size<span class="dsx-in">2–10 people</span></label><span class="dsx-btn">Create account</span></form>
+      <div><table class="dsx-table"><thead><tr><th>Plan</th><th>Seats</th><th>Price</th></tr></thead><tbody><tr><td>Starter</td><td class="n">3</td><td class="n">$0</td></tr><tr><td>Team</td><td class="n">25</td><td class="n">$48</td></tr><tr><td>Studio</td><td class="n">100</td><td class="n">$160</td></tr></tbody></table>
+      <div class="dsx-alert ok"><b>Saved.</b> Your plan changes next month.</div><div class="dsx-alert bad"><b>Card declined.</b> Try another card.</div></div>
+    </section>
+    <footer class="dsx-foot"><code>--accent ${esc(dsColors(s, mode).accent)}</code><code>radius ${s.radius}px</code><code>space ${s.space}px</code></footer>
+  </div>`;
+
+async function mountDesignWindow(p, el, ctl) {
+  if (p.missing || p.needsFolder) { el.innerHTML = '<p class="pjx-empty">Pick a folder for this project first: the design files go in it.</p>'; return; }
+  el.innerHTML = '<div class="kx-wait">Loading the gallery…</div>';
+  const st = { systems: [], cur: null, sel: null, mode: 'light', edit: null, editId: null, editFrom: null, saved: '', theme: 'any', source: 'all', fonts: [] };
+  const load = async () => {
+    const [sys, cur, fonts] = await Promise.all([
+      fetch('/api/design-systems').then((r) => r.json()).catch(() => []),
+      fetch(`/api/projects/${p.id}/design`).then((r) => r.json()).catch((e) => ({ error: e.message })),
+      st.fonts.length ? st.fonts : fetch('/api/design-fonts').then((r) => r.json()).then((j) => { DS_GOOGLE = j.google || {}; return j.fonts || []; }).catch(() => []),
+    ]);
+    st.systems = Array.isArray(sys) ? sys : []; st.cur = cur; st.fonts = fonts;
+    dsLoadFonts(st.systems.map((s) => s.spec));
+  };
+  await load();
+  if (!el.isConnected) return;
+  const curId = () => st.cur?.id || null;
+  const hasCur = () => !!(st.cur && (st.cur.md || st.cur.tokens));
+  const find = (id) => st.systems.find((s) => s.id === id);
+  ctl.dirty = () => !!st.edit && JSON.stringify(st.edit) !== st.saved;
+  const markDirty = () => { const d = ctl.dirty(); ctl.setDirty(d); const sv = $('.dse-save', el); if (sv) sv.disabled = !d && !!st.editId; };
+  const counts = () => { const mine = st.systems.filter((s) => s.source === 'custom').length; return `${st.systems.length} systems${mine ? ` · ${mine} yours` : ''}`; };
+
+  el.innerHTML = `<div class="dsx">
+      <div class="dsx-now"></div>
+      <div class="dsx-bar"><div class="pjx-filter dsx-filter"></div><span class="dsx-count">${counts()}</span><button type="button" class="kx-btn sm primary dsx-new" title="Make your own: start from a blank system">＋ New design system</button></div>
+      <div class="dsx-main"><div class="dsx-gallery" role="list" aria-label="Design systems"></div><aside class="dsx-detail" aria-live="polite"></aside></div>
+      <p class="pj-hint dsx-note">Chats in this project follow the system in use when they build pages and apps. Using one writes <code>DESIGN.md</code> and <code>tokens.css</code> into the project folder; the old ones go to the project's trash. Fonts in the previews load from Google Fonts.</p>
+    </div>`;
+
+  // The strip at the top: what this project uses now, with Edit DESIGN.md and Remove.
+  const drawNow = () => {
+    const box = $('.dsx-now', el), s = find(curId());
+    if (st.cur?.error) { box.innerHTML = `<p class="pf-warn">Could not read the design files: ${esc(st.cur.error)}</p>`; return; }
+    ctl.setSummary(hasCur() ? `<span class="hkx-st ok"><i></i>In use: ${esc(st.cur.name || 'Project design system')}</span>` : '<span class="hkx-st"><i></i>None in use</span>');
+    box.innerHTML = hasCur() ? `<div class="dsx-now-row"><span class="hkx-st ok"><i></i>In use</span>${s ? `<span class="dsx-now-sw">${s.swatches.map((w) => `<i style="background:${esc(w.value)}"></i>`).join('')}</span>` : ''}<b>${esc(st.cur.name || 'Project design system')}</b><small>${[st.cur.md ? 'DESIGN.md' : '', st.cur.tokens ? `tokens.css · ${st.cur.colors} colours` : ''].filter(Boolean).join(' · ')}${s ? '' : ' · written for this project'}</small><span class="kx-spacer"></span>${s ? '<button type="button" class="kx-btn sm dsx-show-cur">Show</button>' : ''}<button type="button" class="kx-btn sm dsx-edit-md">Edit DESIGN.md</button><button type="button" class="kx-btn sm danger dsx-remove">Remove…</button></div><div class="dsx-now-panel" hidden></div>`
+      : '<div class="dsx-now-row none"><span class="hkx-st"><i></i>None in use</span><small>Each chat picks its own look. Pick a system below to give every chat in this project the same colours, type and components.</small></div>';
+    const panel = $('.dsx-now-panel', box);
+    const sc = $('.dsx-show-cur', box); if (sc) sc.onclick = () => select(curId());
+    const em = $('.dsx-edit-md', box);
+    if (em) em.onclick = () => {
+      panel.hidden = false;
+      panel.innerHTML = `<textarea class="ds-text" spellcheck="false" aria-label="DESIGN.md">${esc(st.cur.md)}</textarea><div class="ds-acts"><span class="pj-hint">The previous version goes to the project's trash.</span><span class="kx-spacer"></span><button type="button" class="kx-btn sm ds-cancel">Cancel</button><button type="button" class="kx-btn primary sm ds-save">Save DESIGN.md</button></div>`;
+      $('.ds-text', panel).focus();
+      $('.ds-cancel', panel).onclick = () => { panel.hidden = true; panel.innerHTML = ''; };
+      $('.ds-save', panel).onclick = async () => {
+        const r = await postJ(`/api/projects/${p.id}/design`, { md: $('.ds-text', panel).value });
+        if (r?.error) return uiAlert(`Could not save DESIGN.md: ${r.error}`);
+        await load(); drawNow(); drawGallery();
+      };
+    };
+    const rm = $('.dsx-remove', box);
+    if (rm) rm.onclick = () => {
+      panel.hidden = false;
+      panel.innerHTML = `<div class="ds-confirm"><p>Remove this project's DESIGN.md and tokens.css? They move to the project's trash, and chats go back to picking their own look. Pages already built keep linking tokens.css until you change them.</p><div class="ds-acts"><span class="kx-spacer"></span><button type="button" class="kx-btn sm ds-no">Keep</button><button type="button" class="kx-btn sm danger ds-yes">Remove</button></div></div>`;
+      $('.ds-no', panel).onclick = () => { panel.hidden = true; panel.innerHTML = ''; };
+      $('.ds-yes', panel).onclick = async () => {
+        const r = await postJ(`/api/projects/${p.id}/design`, { remove: true });
+        if (r?.error) return uiAlert(`Could not remove the design files: ${r.error}`);
+        await load(); drawNow(); drawGallery(); drawDetail();
+      };
     };
   };
-  draw();
-  onCount?.(list.filter((h) => h.on).length);
-}
-// Project settings → Design system: the project's DESIGN.md + tokens.css (edit, change, remove), or a starter to use.
-// Replacing or removing moves the old files to the project's .quorx/trash, so nothing is lost.
-async function mountDesign(p, el) {
-  if (!el) return;
-  // The folded row's label follows every redraw (after Switch, Remove or Save too), not only the first.
-  const label = (name) => { const st = el.closest('details')?.querySelector('.pj-fold-state'); if (st) { st.textContent = name || 'None'; st.classList.toggle('none', !name); } };
-  if (p.missing || p.needsFolder) { label(''); el.innerHTML = '<p class="pj-hint">Pick a folder for this project first.</p>'; return; }
-  const [cur, systems] = await Promise.all([
-    fetch(`/api/projects/${p.id}/design`).then((r) => r.json()).catch(() => ({ error: 'could not load' })),
-    fetch('/api/design-systems').then((r) => r.json()).catch(() => []),
-  ]);
-  const has = !!(cur.md || cur.tokens);
-  const swatch = (s) => `<span class="ds-sw" aria-hidden="true">${s.swatches.map((w) => `<i style="background:${esc(w.value)}" title="--${esc(w.token)} ${esc(w.value)}"></i>`).join('')}</span>`;
-  const grid = (replace) => `<div class="ds-grid" role="list">${systems.map((s) => `<div class="ds-card" role="listitem">
-      ${swatch(s)}
-      <div class="ds-name"><b>${esc(s.name)}</b><span class="tag">${s.dark === 'only' ? 'dark only' : s.dark === 'yes' ? 'light + dark' : 'light'}</span></div>
-      <p class="ds-desc">${esc(s.description)}</p>
-      <p class="ds-fonts">${esc(s.fonts.display)} · ${esc(s.fonts.body)}</p>
-      <button type="button" class="kx-btn sm ds-use" data-id="${esc(s.id)}">${replace ? 'Switch to this' : 'Use this'}</button>
-    </div>`).join('')}</div>`;
-  const hint = '<p class="pj-hint">Or make one from a reference: in a chat, ask "make a design system from https://…" or attach a screenshot and ask for one.</p>';
-  if (cur.error) { label(''); el.innerHTML = `<p class="pf-warn">Could not read the design files: ${esc(cur.error)}</p>`; return; }
-  el.innerHTML = has ? `
-    <div class="ds-current">
-      <div class="ds-cur-top"><b>${esc(cur.name || 'Project design system')}</b><span class="ds-files">${[cur.md ? 'DESIGN.md' : '', cur.tokens ? `tokens.css · ${cur.colors} colours` : ''].filter(Boolean).join(' · ')}</span></div>
-      <div class="ds-acts"><button type="button" class="kx-btn sm ds-edit">Edit DESIGN.md</button><button type="button" class="kx-btn sm ds-change">Change…</button><button type="button" class="kx-btn sm ds-remove">Remove</button></div>
-      <div class="ds-panel" hidden></div>
-    </div>`
-    : `<p class="pj-hint">None yet: each chat picks its own look. Pick a starter to give every chat in this project the same colours, type and components.</p>${grid(false)}${hint}`;
-  label(has ? (cur.name || 'Project design system') : '');
-  const panel = $('.ds-panel', el);
-  const reload = () => mountDesign(p, el);
+
+  const cardHTML = (s) => {
+    const inUse = s.id === curId();
+    return `<button type="button" class="dsx-card ${st.sel === s.id ? 'sel' : ''} ${inUse ? 'inuse' : ''}" role="listitem" data-id="${esc(s.id)}" aria-pressed="${st.sel === s.id}"
+        data-lf-text="${esc(`${s.name} ${s.description} ${DS_FAMILY[s.family] || s.family} ${s.fonts.display} ${s.fonts.body} ${DS_THEME[s.dark]} ${s.source === 'custom' ? 'mine yours custom' : 'built-in'}`.toLowerCase())}" data-lf-seg="${esc(s.family)}" data-theme="${esc(s.dark)}" data-source="${esc(s.source)}">
+        ${dsMiniHTML(s.spec, s.dark === 'only' ? 'dark' : 'light')}
+        <span class="dsx-card-meta"><b>${esc(s.name)}</b>${inUse ? '<span class="hkx-st ok"><i></i>In use</span>' : ''}</span>
+        <span class="dsx-tags"><span class="tag">${esc(DS_FAMILY[s.family] || s.family)}</span><span class="tag">${esc(DS_THEME[s.dark])}</span>${s.source === 'custom' ? '<span class="tag mine">Yours</span>' : ''}${s.checks.every((c) => c.ok) ? '' : '<span class="tag warn" title="Some text is hard to read: see the contrast checks">⚠ contrast</span>'}</span>
+      </button>`;
+  };
+  // Light / dark and Built-in / Yours narrow the gallery after the shared search and style filter.
+  const extra = `<div class="st-segmented dsx-theme-f" role="radiogroup" aria-label="Light or dark">${[['any', 'Any'], ['light', 'Light'], ['dark', 'Dark']].map(([v, l]) => `<button type="button" class="st-seg-btn ${st.theme === v ? 'active' : ''}" role="radio" aria-checked="${st.theme === v}" data-th="${v}">${l}</button>`).join('')}</div>
+    <div class="st-segmented dsx-src-f" role="radiogroup" aria-label="Built-in or yours">${[['all', 'All'], ['builtin', 'Built-in'], ['custom', 'Yours']].map(([v, l]) => `<button type="button" class="st-seg-btn ${st.source === v ? 'active' : ''}" role="radio" aria-checked="${st.source === v}" data-src="${v}">${l}</button>`).join('')}</div>`;
+  const narrow = () => {
+    for (const c of el.querySelectorAll('.dsx-card')) {
+      if (c.hidden) continue;
+      const th = c.dataset.theme;
+      if (st.theme === 'light' && th === 'only') c.hidden = true;
+      if (st.theme === 'dark' && th === 'no') c.hidden = true;
+      if (st.source !== 'all' && c.dataset.source !== st.source) c.hidden = true;
+    }
+    const shown = el.querySelectorAll('.dsx-card:not([hidden])').length, none = $('.dsx-filter .lf-none', el);
+    if (none && !shown && st.systems.length) none.hidden = false;
+    $('.dsx-count', el).textContent = shown === st.systems.length ? counts() : `${shown} of ${counts()}`;
+  };
+  const drawGallery = () => {
+    const g = $('.dsx-gallery', el);
+    g.innerHTML = st.systems.map(cardHTML).join('');
+    const flt = $('.dsx-filter', el);
+    listFilter(flt, { key: `ds-gallery-${p.id}`, rows: () => el.querySelectorAll('.dsx-card'), segLabel: (v) => DS_FAMILY[v] || v, segOrder: Object.keys(DS_FAMILY), placeholder: 'Search: a name, a style, a font…', label: 'Style', extra, onApply: narrow });
+    const again = () => $('.lf-q', flt).dispatchEvent(new Event('input'));
+    for (const b of flt.querySelectorAll('[data-th]')) b.onclick = () => { st.theme = b.dataset.th; for (const x of flt.querySelectorAll('[data-th]')) { x.classList.toggle('active', x === b); x.setAttribute('aria-checked', String(x === b)); } again(); };
+    for (const b of flt.querySelectorAll('[data-src]')) b.onclick = () => { st.source = b.dataset.src; for (const x of flt.querySelectorAll('[data-src]')) { x.classList.toggle('active', x === b); x.setAttribute('aria-checked', String(x === b)); } again(); };
+    const clear = $('.lf-clear', flt); if (clear) { const prev = clear.onclick; clear.onclick = () => { st.theme = 'any'; st.source = 'all'; for (const x of flt.querySelectorAll('[data-th],[data-src]')) { const on = x.dataset.th === 'any' || x.dataset.src === 'all'; x.classList.toggle('active', on); x.setAttribute('aria-checked', String(on)); } prev?.(); }; }
+    for (const c of g.querySelectorAll('.dsx-card')) c.onclick = () => select(c.dataset.id);
+    $('.dsx-count', el).textContent = counts();
+    narrow();
+  };
+  const select = (id) => {
+    if (st.edit && ctl.dirty()) { flashTip($('.dse-save', el) || $('.dsx-detail', el), 'Save or discard your changes first'); return; }
+    st.edit = null; st.sel = id; ctl.setDirty(false);
+    const s = find(id); st.mode = s?.dark === 'only' ? 'dark' : 'light';
+    for (const c of el.querySelectorAll('.dsx-card')) { const on = c.dataset.id === id; c.classList.toggle('sel', on); c.setAttribute('aria-pressed', String(on)); }
+    el.querySelector('.dsx').classList.add('picked');
+    drawDetail();
+  };
+
   const apply = async (id, overwrite) => {
+    const box = $('.dsx-use-msg', el);
     const r = await postJ(`/api/projects/${p.id}/design`, { system: id, overwrite }).catch((e) => ({ error: e.message }));
-    if (r?.error) return uiAlert(`Could not use that design system: ${r.error}`);
+    if (r?.error) { if (box) box.innerHTML = `<p class="pf-warn">Could not use it: ${esc(r.error)}</p>`; return; }
     if (r.applied === false) {
-      // A DESIGN.md or tokens.css is already there: confirm in place before replacing it.
-      // One question at a time: a second click (or a click on another card) replaces the open one.
-      const card = el.querySelector(`.ds-use[data-id="${CSS.escape(id)}"]`)?.closest('.ds-card');
-      el.querySelectorAll('.ds-ask').forEach((a) => a.remove());
-      const ask = document.createElement('div'); ask.className = 'ds-confirm ds-ask';
-      ask.innerHTML = `<p>This project already has ${esc(r.exists.join(' and '))}. Replace ${r.exists.length > 1 ? 'them' : 'it'}? The old ${r.exists.length > 1 ? 'files go' : 'file goes'} to the project's trash.</p><div class="ds-acts"><button type="button" class="kx-btn primary sm ds-yes">Replace</button><button type="button" class="kx-btn sm ds-no">Cancel</button></div>`;
-      (card || el).appendChild(ask);
-      $('.ds-yes', ask).onclick = async (e) => { const b = e.currentTarget; b.disabled = true; await apply(id, true); b.disabled = false; };
-      $('.ds-no', ask).onclick = () => ask.remove();
+      // A DESIGN.md or tokens.css is already there: ask in place before replacing it.
+      box.innerHTML = `<div class="ds-confirm"><p>This project already has ${esc(r.exists.join(' and '))}. Replace ${r.exists.length > 1 ? 'them' : 'it'}? The old ${r.exists.length > 1 ? 'files go' : 'file goes'} to the project's trash.</p><div class="ds-acts"><span class="kx-spacer"></span><button type="button" class="kx-btn sm ds-no">Cancel</button><button type="button" class="kx-btn primary sm ds-yes">Replace</button></div></div>`;
+      $('.ds-no', box).onclick = () => { box.innerHTML = ''; };
+      $('.ds-yes', box).onclick = () => apply(id, true);
       return;
     }
-    reload();
+    await load(); drawNow(); drawGallery(); drawDetail();
+    flashTip($('.dsx-detail .hkx-st', el) || $('.dsx-now', el), `✓ Chats here now follow ${find(id)?.name || 'it'}`, 2200);
   };
-  for (const b of el.querySelectorAll('.ds-use')) b.onclick = () => apply(b.dataset.id, false);
-  if (!has) return;
-  $('.ds-edit', el).onclick = () => {
-    panel.hidden = false;
-    panel.innerHTML = `<textarea class="ds-text" spellcheck="false" aria-label="DESIGN.md">${esc(cur.md)}</textarea><div class="ds-acts"><button type="button" class="kx-btn primary sm ds-save">Save</button><button type="button" class="kx-btn sm ds-cancel">Cancel</button><span class="pj-hint">The previous version goes to the project's trash.</span></div>`;
-    const ta = $('.ds-text', panel); ta.focus();
-    $('.ds-cancel', panel).onclick = () => { panel.hidden = true; panel.innerHTML = ''; };
-    $('.ds-save', panel).onclick = async () => {
-      const r = await postJ(`/api/projects/${p.id}/design`, { md: ta.value }).catch((e) => ({ error: e.message }));
-      if (r?.error) return uiAlert(`Could not save DESIGN.md: ${r.error}`);
-      reload();
+
+  const drawDetail = () => {
+    const d = $('.dsx-detail', el);
+    if (st.edit) return drawEditor();
+    const s = find(st.sel);
+    if (!s) {
+      d.innerHTML = `<div class="dsx-pick"><b>Pick a system to preview it</b><p>Each card shows its colours, fonts and shapes. Open one to see a sample page in it, use it here, or duplicate it to make your own.</p><button type="button" class="kx-btn sm dsx-blank">Start from blank</button></div>`;
+      $('.dsx-blank', d).onclick = () => startEdit(null);
+      return;
+    }
+    const inUse = s.id === curId(), mine = s.source === 'custom';
+    const updated = inUse && mine && s.updatedAt && st.cur?.md && !st.cur.md.includes(`name: ${s.name}`);
+    d.innerHTML = `<div class="dsx-d-head"><button type="button" class="kx-icon dsx-d-back" title="Back to the gallery" aria-label="Back to the gallery">←</button><div class="dsx-d-title"><b>${esc(s.name)}</b><span class="dsx-tags"><span class="tag">${esc(DS_FAMILY[s.family] || s.family)}</span><span class="tag">${esc(DS_THEME[s.dark])}</span>${mine ? '<span class="tag mine">Yours</span>' : '<span class="tag">Built-in</span>'}</span></div>
+        ${s.dark === 'yes' ? `<div class="st-segmented dsx-mode" role="radiogroup" aria-label="Preview light or dark">${['light', 'dark'].map((m) => `<button type="button" class="st-seg-btn ${st.mode === m ? 'active' : ''}" role="radio" aria-checked="${st.mode === m}" data-mode="${m}">${m === 'light' ? 'Light' : 'Dark'}</button>`).join('')}</div>` : ''}</div>
+      <p class="dsx-d-desc">${esc(s.description || '')}</p>
+      <div class="dsx-d-acts">${inUse ? `<span class="hkx-st ok"><i></i>In use in this project</span>${mine ? '<button type="button" class="kx-btn sm dsx-use" title="Write this system\'s latest DESIGN.md and tokens.css into the project again">Update the project files</button>' : ''}` : '<button type="button" class="kx-btn sm primary dsx-use">Use in this project</button>'}
+        <button type="button" class="kx-btn sm dsx-dup" title="Make your own copy to change">⧉ Duplicate to customise</button>
+        ${mine ? '<button type="button" class="kx-btn sm dsx-edit">✎ Edit</button>' : ''}
+        <span class="kx-spacer"></span><button type="button" class="sp-link dsx-files">See the files chats get</button>${inUse ? '<button type="button" class="sp-link danger dsx-stop" title="Remove DESIGN.md and tokens.css from the project (they go to its trash)">Stop using</button>' : ''}</div>
+      ${updated ? '<p class="pj-hint">You changed this system since the project got it: Update the project files to bring them in line.</p>' : ''}
+      <div class="dsx-use-msg"></div>
+      <div class="dsx-files-box" hidden></div>
+      ${dsSampleHTML(s.spec, st.mode)}
+      <div class="dsx-checks">${s.checks.map((c) => `<span class="dsx-check ${c.ok ? 'ok' : 'bad'}" title="Needs at least ${c.need}:1">${c.ok ? '✓' : '⚠'} ${esc(c.label)} <code>${c.ratio.toFixed(1)}:1</code></span>`).join('')}</div>`;
+    $('.dsx-d-back', d).onclick = () => { st.sel = null; el.querySelector('.dsx').classList.remove('picked'); drawDetail(); for (const c of el.querySelectorAll('.dsx-card.sel')) c.classList.remove('sel'); };
+    for (const b of d.querySelectorAll('[data-mode]')) b.onclick = () => { st.mode = b.dataset.mode; drawDetail(); };
+    const use = $('.dsx-use', d); if (use) use.onclick = () => apply(s.id, inUse);
+    const stop = $('.dsx-stop', d); if (stop) stop.onclick = () => { const rm = $('.dsx-remove', el); rm?.click(); rm?.closest('.dsx-now')?.scrollIntoView({ block: 'nearest' }); };
+    $('.dsx-dup', d).onclick = () => startEdit(s, true);
+    const ed = $('.dsx-edit', d); if (ed) ed.onclick = () => startEdit(s, false);
+    $('.dsx-files', d).onclick = async () => {
+      const fb = $('.dsx-files-box', d);
+      if (!fb.hidden) { fb.hidden = true; return; }
+      fb.hidden = false; fb.innerHTML = '<div class="kx-wait">Loading…</div>';
+      const f = await fetch(`/api/design-systems/${encodeURIComponent(s.id)}`).then((r) => r.json()).catch((e) => ({ error: e.message }));
+      fb.innerHTML = f.error ? `<p class="pf-warn">${esc(f.error)}</p>` : `<div class="st-segmented dsx-file-tabs" role="tablist"><button type="button" class="st-seg-btn active" data-f="md">DESIGN.md</button><button type="button" class="st-seg-btn" data-f="tokens">tokens.css</button></div><pre class="dsx-file">${esc(f.md)}</pre>`;
+      for (const b of fb.querySelectorAll('[data-f]')) b.onclick = () => { for (const x of fb.querySelectorAll('[data-f]')) x.classList.toggle('active', x === b); $('.dsx-file', fb).textContent = b.dataset.f === 'md' ? f.md : f.tokens; };
     };
   };
-  $('.ds-change', el).onclick = () => {
-    panel.hidden = false;
-    panel.innerHTML = `${grid(true)}${hint}`;
-    for (const b of panel.querySelectorAll('.ds-use')) b.onclick = () => apply(b.dataset.id, false);
+
+  // ---------- the editor: your own system, from blank or a copy ----------
+  const startEdit = (s, copy) => {
+    if (st.edit && ctl.dirty()) { flashTip($('.dse-save', el), 'Save or discard your changes first'); return; }
+    const spec = structuredClone(s ? s.spec : DS_BLANK);
+    if (!spec.colors.dark) spec.colors.dark = structuredClone(spec.colors.base);
+    if (copy) spec.name = `${spec.name} (copy)`.slice(0, 60);
+    st.edit = spec; st.editId = s && !copy && s.source === 'custom' ? s.id : null; st.editFrom = s ? s.id : null;
+    st.saved = st.editId ? JSON.stringify(spec) : '';
+    st.mode = spec.dark === 'only' ? 'dark' : 'light';
+    el.querySelector('.dsx').classList.add('picked', 'editing');
+    drawEditor();
+    markDirty();
+    $('.dse-name', el)?.select();
   };
-  $('.ds-remove', el).onclick = () => {
-    panel.hidden = false;
-    panel.innerHTML = `<div class="ds-confirm"><p>Remove this project's DESIGN.md and tokens.css? They move to the project's trash, and chats go back to picking their own look. Pages already built keep linking tokens.css until you change them.</p><div class="ds-acts"><button type="button" class="kx-btn primary sm ds-yes">Remove</button><button type="button" class="kx-btn sm ds-no">Keep</button></div></div>`;
-    $('.ds-no', panel).onclick = () => { panel.hidden = true; panel.innerHTML = ''; };
-    $('.ds-yes', panel).onclick = async () => {
-      const r = await postJ(`/api/projects/${p.id}/design`, { remove: true }).catch((e) => ({ error: e.message }));
-      if (r?.error) return uiAlert(`Could not remove the design files: ${r.error}`);
-      reload();
+  const colorRow = (k, cols) => `<div class="dse-color" data-k="${k}"><span class="dse-cl"><b>${esc(DS_COLOR[k][0])}</b>${DS_COLOR[k][1] ? `<small>${esc(DS_COLOR[k][1])}</small>` : ''}</span>${cols.map((m) => `<label class="dse-well" title="${m === 'dark' ? 'Dark' : 'Light'} ${esc(DS_COLOR[k][0])}"><input type="color" data-m="${m}" value="${esc(st.edit.colors[m][k])}" aria-label="${m === 'dark' ? 'Dark' : st.edit.dark === 'only' ? '' : 'Light'} ${esc(DS_COLOR[k][0])}"><input type="text" class="dse-hex" data-m="${m}" value="${esc(st.edit.colors[m][k])}" maxlength="7" spellcheck="false" aria-label="${esc(DS_COLOR[k][0])} hex"></label>`).join('')}</div>`;
+  const fontSel = (k, label) => `<label class="dse-field"><span>${label}</span><select class="dse-font" data-k="${k}">${[...new Set([...st.fonts, st.edit.fonts[k]])].map((f) => `<option ${f === st.edit.fonts[k] ? 'selected' : ''}>${esc(f)}</option>`).join('')}</select><span class="dse-spec" style="font-family:'${esc(st.edit.fonts[k])}',system-ui">${k === 'mono' ? '0123 {code}' : 'The quick brown fox'}</span></label>`;
+  const drawEditor = () => {
+    const d = $('.dsx-detail', el), s = st.edit;
+    const cols = s.dark === 'yes' ? ['base', 'dark'] : ['base'];
+    if (s.dark === 'only') cols.splice(0, 1, 'base');
+    const checks = (m) => dsChecks(s.colors[m]);
+    const allChecks = cols.flatMap((m) => checks(m).map((c) => ({ ...c, m })));
+    const bad = allChecks.filter((c) => !c.ok);
+    d.innerHTML = `<div class="dse">
+      <div class="dse-head"><button type="button" class="kx-icon dse-back" title="Back" aria-label="Back">←</button><input class="dse-name" value="${esc(s.name)}" maxlength="60" aria-label="Name" spellcheck="false">${st.editId ? '<span class="tag mine">Yours</span>' : '<span class="tag">New</span>'}
+        ${bad.length ? `<span class="dse-cwarn" title="${esc(bad.map((c) => `${c.m === 'dark' ? 'Dark: ' : ''}${c.label} ${c.ratio.toFixed(1)}:1, needs ${c.need}:1`).join('\n'))}">⚠ ${bad.length} contrast ${bad.length === 1 ? 'problem' : 'problems'}</span>` : '<span class="dse-cok">✓ Readable</span>'}</div>
+      <div class="dse-split">
+        <div class="dse-form">
+          <section><h5>About</h5>
+            <label class="dse-field wide"><span>Description</span><input class="dse-desc" value="${esc(s.description)}" maxlength="300" placeholder="What it looks like and what it's for" spellcheck="false"></label>
+            <label class="dse-field"><span>Style</span><select class="dse-family">${Object.entries(DS_FAMILY).map(([v, l]) => `<option value="${v}" ${s.family === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+            <div class="dse-field"><span>Theme</span><div class="st-segmented dse-dark" role="radiogroup" aria-label="Theme">${Object.entries(DS_THEME).map(([v, l]) => `<button type="button" class="st-seg-btn ${s.dark === v ? 'active' : ''}" role="radio" aria-checked="${s.dark === v}" data-dk="${v}">${v === 'no' ? 'Light only' : v === 'only' ? 'Dark only' : l}</button>`).join('')}</div></div>
+          </section>
+          <section><h5>Colours ${cols.length > 1 ? '<small class="dse-colhead"><span>Light</span><span>Dark</span></small>' : ''}</h5>
+            <div class="dse-colors ${cols.length > 1 ? 'two' : ''}">${Object.keys(DS_COLOR).map((k) => colorRow(k, cols)).join('')}</div>
+            <div class="dsx-checks">${allChecks.map((c) => `<span class="dsx-check ${c.ok ? 'ok' : 'bad'}" title="Needs at least ${c.need}:1">${c.ok ? '✓' : '⚠'} ${c.m === 'dark' && s.dark === 'yes' ? 'Dark · ' : ''}${esc(c.label)} <code>${c.ratio.toFixed(1)}:1</code></span>`).join('')}</div>
+          </section>
+          <section><h5>Type</h5>
+            ${fontSel('display', 'Headings')}${fontSel('body', 'Body')}${fontSel('mono', 'Mono')}
+            <div class="dse-grid3">
+              <label class="dse-field"><span>Body size</span><span class="dse-num"><input type="number" class="dse-n" data-k="type.base" min="12" max="22" value="${s.type.base}"> px</span></label>
+              <label class="dse-field"><span>Size steps</span><select class="dse-ratio">${DS_RATIO.map(([v, l]) => `<option value="${v}" ${Math.abs(s.type.ratio - v) < 0.002 ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+              <label class="dse-field"><span>Heading weight</span><select class="dse-weight">${[300, 400, 500, 600, 700, 800, 900].map((w) => `<option ${s.type.displayWeight === w ? 'selected' : ''}>${w}</option>`).join('')}</select></label>
+            </div>
+            <label class="sq-check"><input type="checkbox" class="dse-upper" ${s.type.case === 'upper' ? 'checked' : ''}><span>Headings in capitals</span></label>
+          </section>
+          <section><h5>Shape and space</h5>
+            <div class="dse-grid3">
+              <label class="dse-field"><span>Corners</span><span class="dse-range"><input type="range" class="dse-n" data-k="radius" min="0" max="32" value="${s.radius}"><code>${s.radius}px</code></span></label>
+              <label class="dse-field"><span>Small corners</span><span class="dse-range"><input type="range" class="dse-n" data-k="radiusSm" min="0" max="20" value="${s.radiusSm}"><code>${s.radiusSm}px</code></span></label>
+              <label class="dse-field"><span>Borders</span><span class="dse-range"><input type="range" class="dse-n" data-k="border" min="0" max="4" value="${s.border}"><code>${s.border}px</code></span></label>
+              <label class="dse-field"><span>Spacing unit</span><span class="dse-range"><input type="range" class="dse-n" data-k="space" min="4" max="12" value="${s.space}"><code>${s.space}px</code></span></label>
+              <label class="dse-field"><span>Page width</span><span class="dse-num"><input type="number" class="dse-n" data-k="maxWidth" min="640" max="1600" step="20" value="${s.maxWidth}"> px</span></label>
+            </div>
+            <div class="dse-field"><span>Shadows</span><div class="st-segmented dse-shadow" role="radiogroup" aria-label="Shadows">${Object.entries(DS_SHADOW).map(([v, l]) => `<button type="button" class="st-seg-btn ${s.shadow === v ? 'active' : ''}" role="radio" aria-checked="${s.shadow === v}" data-sh="${v}">${l}</button>`).join('')}</div></div>
+          </section>
+        </div>
+        <div class="dse-preview">
+          ${s.dark === 'yes' ? `<div class="st-segmented dsx-mode" role="radiogroup" aria-label="Preview light or dark">${['light', 'dark'].map((m) => `<button type="button" class="st-seg-btn ${st.mode === m ? 'active' : ''}" role="radio" aria-checked="${st.mode === m}" data-mode="${m}">${m === 'light' ? 'Light' : 'Dark'}</button>`).join('')}</div>` : ''}
+          <div class="dse-live">${dsSampleHTML(s, s.dark === 'only' ? 'dark' : st.mode)}</div>
+        </div>
+      </div>
+      <div class="pjx-savebar on dse-bar"><span class="dse-msg">${st.editFrom && !st.editId ? `Copy of ${esc(find(st.editFrom)?.name || 'a system')}` : ''}</span><span class="kx-spacer"></span>
+        ${st.editId ? '<button type="button" class="kx-btn sm danger dse-del">Delete…</button><button type="button" class="kx-btn sm dse-copy">Save as copy</button>' : ''}
+        <button type="button" class="kx-btn sm dse-cancel">${st.editId ? 'Discard' : 'Cancel'}</button><button type="button" class="kx-btn sm primary dse-save">${st.editId ? 'Save' : 'Save design system'}</button></div>
+    </div>`;
+    wireEditor(d);
+    live();
+  };
+  // Live edits: the preview and the checks follow every change without redrawing the form (focus stays put).
+  const live = () => {
+    const d = $('.dsx-detail', el), s = st.edit;
+    const lv = $('.dse-live', d); if (lv) lv.innerHTML = dsSampleHTML(s, s.dark === 'only' ? 'dark' : st.mode);
+    const cols = s.dark === 'yes' ? ['base', 'dark'] : ['base'];
+    const all = cols.flatMap((m) => dsChecks(s.colors[m]).map((c) => ({ ...c, m })));
+    const bad = all.filter((c) => !c.ok);
+    const ck = $('.dse-form .dsx-checks', d); if (ck) ck.innerHTML = all.map((c) => `<span class="dsx-check ${c.ok ? 'ok' : 'bad'}" title="Needs at least ${c.need}:1">${c.ok ? '✓' : '⚠'} ${c.m === 'dark' && s.dark === 'yes' ? 'Dark · ' : ''}${esc(c.label)} <code>${c.ratio.toFixed(1)}:1</code></span>`).join('');
+    const head = $('.dse-cwarn, .dse-cok', d);
+    if (head) { head.className = bad.length ? 'dse-cwarn' : 'dse-cok'; head.textContent = bad.length ? `⚠ ${bad.length} contrast ${bad.length === 1 ? 'problem' : 'problems'}` : '✓ Readable'; }
+    // The colours behind a failing check get a red outline, next to where they're changed.
+    for (const hx of d.querySelectorAll('.dse-hex')) hx.classList.toggle('low', bad.some((c) => (c.m === hx.dataset.m || (c.m === 'base' && s.dark === 'only')) && c.keys.includes(hx.closest('.dse-color').dataset.k)));
+    markDirty();
+  };
+  const wireEditor = (d) => {
+    const s = st.edit;
+    $('.dse-back', d).onclick = () => { if (ctl.dirty()) { flashTip($('.dse-save', d), 'Save or discard your changes first'); return; } st.edit = null; el.querySelector('.dsx').classList.remove('editing'); if (!st.sel) el.querySelector('.dsx').classList.remove('picked'); ctl.setDirty(false); drawDetail(); };
+    $('.dse-name', d).oninput = (e) => { s.name = e.target.value; markDirty(); };
+    $('.dse-desc', d).oninput = (e) => { s.description = e.target.value; markDirty(); };
+    $('.dse-family', d).onchange = (e) => { s.family = e.target.value; markDirty(); };
+    for (const b of d.querySelectorAll('[data-dk]')) b.onclick = () => { s.dark = b.dataset.dk; if (s.dark === 'only') st.mode = 'dark'; else if (st.mode === 'dark' && s.dark === 'no') st.mode = 'light'; drawEditor(); markDirty(); };
+    for (const b of d.querySelectorAll('[data-mode]')) b.onclick = () => { st.mode = b.dataset.mode; for (const x of d.querySelectorAll('[data-mode]')) { x.classList.toggle('active', x === b); x.setAttribute('aria-checked', String(x === b)); } live(); };
+    for (const row of d.querySelectorAll('.dse-color')) {
+      const k = row.dataset.k;
+      for (const w of row.querySelectorAll('.dse-well')) {
+        const pick = $('input[type=color]', w), hex = $('.dse-hex', w), m = pick.dataset.m;
+        pick.oninput = () => { s.colors[m][k] = pick.value; hex.value = pick.value; hex.classList.remove('bad'); live(); };
+        hex.oninput = () => { const v = hex.value.trim().replace(/^([0-9a-f]{6})$/i, '#$1'); const ok = /^#[0-9a-f]{6}$/i.test(v); hex.classList.toggle('bad', !ok); if (ok) { s.colors[m][k] = v.toLowerCase(); pick.value = v; live(); } };
+      }
+    }
+    for (const sel of d.querySelectorAll('.dse-font')) sel.onchange = () => { s.fonts[sel.dataset.k] = sel.value; dsLoadFonts([s]); const sp = sel.parentElement.querySelector('.dse-spec'); sp.style.fontFamily = `'${sel.value}',system-ui`; live(); };
+    for (const n of d.querySelectorAll('.dse-n')) n.oninput = () => {
+      const v = Number(n.value); if (!Number.isFinite(v)) return;
+      const [a, b] = n.dataset.k.split('.');
+      if (b) s[a][b] = v; else s[a] = v;
+      const code = n.parentElement.querySelector('code'); if (code) code.textContent = `${v}px`;
+      live();
+    };
+    $('.dse-ratio', d).onchange = (e) => { s.type.ratio = Number(e.target.value); live(); };
+    $('.dse-weight', d).onchange = (e) => { s.type.displayWeight = Number(e.target.value); live(); };
+    $('.dse-upper', d).onchange = (e) => { s.type.case = e.target.checked ? 'upper' : 'normal'; live(); };
+    for (const b of d.querySelectorAll('[data-sh]')) b.onclick = () => { s.shadow = b.dataset.sh; for (const x of d.querySelectorAll('[data-sh]')) { x.classList.toggle('active', x === b); x.setAttribute('aria-checked', String(x === b)); } live(); };
+    const save = async (asCopy) => {
+      if (!s.name.trim()) { $('.dse-name', d).focus(); flashTip($('.dse-name', d), 'Give it a name'); return; }
+      const spec = { ...s, colors: { base: s.colors.base, dark: s.dark === 'yes' ? s.colors.dark : null } };
+      if (s.dark === 'only') spec.colors.base = s.colors.base;
+      const r = await postJ('/api/design-systems', { id: asCopy ? null : st.editId, spec: asCopy ? { ...spec, name: `${s.name} (copy)`.slice(0, 60) } : spec, from: st.editFrom });
+      if (r.error) { $('.dse-msg', d).textContent = `Not saved: ${r.error}`; return; }
+      st.edit = null; ctl.setDirty(false);
+      await load(); drawGallery();
+      el.querySelector('.dsx').classList.remove('editing');
+      select(r.system.id);
+      $('.dsx-card.sel', el)?.scrollIntoView({ block: 'nearest' });
+      flashTip($('.dsx-d-title b', el), '✓ Saved', 1600);
+    };
+    $('.dse-save', d).onclick = () => save(false);
+    const cp = $('.dse-copy', d); if (cp) cp.onclick = () => save(true);
+    $('.dse-cancel', d).onclick = () => { st.edit = null; ctl.setDirty(false); el.querySelector('.dsx').classList.remove('editing'); if (!st.sel) el.querySelector('.dsx').classList.remove('picked'); drawDetail(); };
+    const del = $('.dse-del', d);
+    if (del) del.onclick = () => {
+      const used = st.editId === curId();
+      $('.dse-msg', d).innerHTML = `<span class="ds-confirm inline">Delete “${esc(find(st.editId)?.name || s.name)}”?${used ? ' This project keeps its DESIGN.md and tokens.css.' : ''} <button type="button" class="kx-btn sm danger dse-del-yes">Delete</button><button type="button" class="kx-btn sm dse-del-no">Keep</button></span>`;
+      $('.dse-del-no', d).onclick = () => { $('.dse-msg', d).textContent = ''; };
+      $('.dse-del-yes', d).onclick = async () => {
+        const r = await fetch(`/api/design-systems/${encodeURIComponent(st.editId)}`, { method: 'DELETE' }).then((x) => x.json()).catch((e) => ({ error: e.message }));
+        if (r.error) { $('.dse-msg', d).textContent = `Not deleted: ${r.error}`; return; }
+        st.edit = null; st.sel = null; ctl.setDirty(false);
+        el.querySelector('.dsx').classList.remove('editing', 'picked');
+        await load(); drawGallery(); drawDetail();
+      };
     };
   };
+
+  $('.dsx-new', el).onclick = () => startEdit(null);
+  drawNow(); drawGallery();
+  // Open on the system in use, so the preview shows what chats get.
+  if (find(curId())) select(curId()); else drawDetail();
 }
 // The strip under a project's name: one box with its spend (a meter when it has a budget) and its + ⚙ 🗑 buttons.
 // The open chat's project: one line of what it has spent (of its budget), and a bar along the header's bottom edge.
@@ -7787,7 +8299,7 @@ async function drawAuditPanel() {
 // Each row carries what it is searched by (data-lf-text, lower case) and its group (data-lf-seg). The filter only hides
 // and shows rows, never redraws them, so their buttons stay wired and typing stays smooth with hundreds of rows. The
 // groups come from the rows themselves (a new source or status shows up by itself), each with how many rows match the
-// words typed; when they don't fit on one line they become a dropdown. What was picked and typed is kept per list in
+// words typed; the ones that don't fit on one line move into a More ▾ menu at its end. What was picked and typed is kept per list in
 // ST.filters, so a redraw (Check again, a save) keeps it. Ctrl+F focuses the open page's filter.
 // opts: { key, rows: () => rows, segLabel: (v) => label, segOrder: [values first, in this order], placeholder, label,
 //   extra: html after the segments, onApply: () => {} }
@@ -7800,10 +8312,19 @@ function listFilter(host, { key, rows, segLabel = (v) => v, segOrder = [], place
   const opts = [['all', 'All'], ...segs.map((v) => [v, segLabel(v)])];
   host.classList.add('lf');
   host.innerHTML = `<input type="search" class="lf-q" placeholder="${esc(placeholder)}" aria-label="${esc(placeholder)}" value="${esc(F.q)}" spellcheck="false" autocomplete="off">
-    ${segs.length > 1 ? `<div class="st-segmented lf-seg" role="radiogroup" aria-label="${esc(label)}">${opts.map(([v, l]) => `<button type="button" class="st-seg-btn ${F.seg === v ? 'active' : ''}" role="radio" aria-checked="${F.seg === v}" data-lf-v="${esc(v)}">${esc(l)} <small></small></button>`).join('')}</div>
-    <select class="st-select lf-sel" aria-label="${esc(label)}" hidden>${opts.map(([v, l]) => `<option value="${esc(v)}" ${F.seg === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>` : ''}
+    ${segs.length > 1 ? `<div class="st-segmented lf-seg" role="radiogroup" aria-label="${esc(label)}">${opts.map(([v, l]) => `<button type="button" class="st-seg-btn ${F.seg === v ? 'active' : ''}" role="radio" aria-checked="${F.seg === v}" data-lf-v="${esc(v)}">${esc(l)} <small></small></button>`).join('')}<select class="lf-more" aria-label="More: ${esc(label)}" hidden></select></div>` : ''}
     ${extra}<p class="lf-none" hidden>Nothing matches. <button type="button" class="sp-link lf-clear">Show everything</button></p>`;
-  const q = $('.lf-q', host), seg = $('.lf-seg', host), sel = $('.lf-sel', host), none = $('.lf-none', host);
+  const q = $('.lf-q', host), seg = $('.lf-seg', host), more = $('.lf-more', host), none = $('.lf-none', host);
+  let counts = { all: 0 };
+  // More ▾ lists the groups whose buttons are hidden; it reads as picked when the picked group is one of them.
+  const fillMore = () => {
+    if (!more) return;
+    const hid = [...host.querySelectorAll('[data-lf-v]')].filter((b) => b.hidden).map((b) => b.dataset.lfV);
+    more.hidden = !hid.length;
+    const inMore = hid.includes(F.seg);
+    more.classList.toggle('active', inMore);
+    more.innerHTML = `<option value="" ${inMore ? '' : 'selected'}>More ▾</option>${hid.map((v) => `<option value="${esc(v)}" ${F.seg === v ? 'selected' : ''}>${esc(opts.find(([o]) => o === v)[1])} (${counts[v] || 0})</option>`).join('')}`;
+  };
   const apply = () => {
     const words = F.q.toLowerCase().split(/\s+/).filter(Boolean), n = { all: 0 };
     let shown = 0;
@@ -7814,14 +8335,13 @@ function listFilter(host, { key, rows, segLabel = (v) => v, segOrder = [], place
       if (!r.hidden) shown++;
     }
     for (const b of host.querySelectorAll('[data-lf-v]')) $('small', b).textContent = n[b.dataset.lfV] || 0;
-    for (const o of sel?.options || []) o.textContent = `${opts.find(([v]) => v === o.value)[1]} (${n[o.value] || 0})`;
+    counts = n; fillMore();
     none.hidden = shown > 0 || !all.length;
     onApply?.();
   };
   const pick = (v) => {
     F.seg = v;
     for (const b of host.querySelectorAll('[data-lf-v]')) { const on = b.dataset.lfV === v; b.classList.toggle('active', on); b.setAttribute('aria-checked', String(on)); }
-    if (sel) sel.value = v;
     apply();
   };
   let t = 0;
@@ -7829,11 +8349,20 @@ function listFilter(host, { key, rows, segLabel = (v) => v, segOrder = [], place
   // Esc clears the words first (and only then closes Settings).
   q.onkeydown = (e) => { if (e.key === 'Escape' && q.value) { e.preventDefault(); e.stopPropagation(); q.value = F.q = ''; apply(); } };
   for (const b of host.querySelectorAll('[data-lf-v]')) b.onclick = () => pick(b.dataset.lfV);
-  if (sel) sel.onchange = () => pick(sel.value);
+  if (more) more.onchange = () => { if (more.value) pick(more.value); };
   $('.lf-clear', host).onclick = () => { q.value = F.q = ''; pick('all'); q.focus(); };
-  // Buttons while they fit on one line, a dropdown when they don't (checked again when the page is resized).
+  // Buttons while they fit on one line; from the end, the ones that don't go into More ▾ (All, then the picked one,
+  // go last). Checked again when the list is resized.
   if (seg) {
-    const fit = () => { seg.hidden = false; sel.hidden = true; if (seg.scrollWidth > seg.clientWidth + 1 || seg.offsetTop > q.offsetTop + 4) { seg.hidden = true; sel.hidden = false; } };
+    const over = () => seg.scrollWidth > seg.clientWidth + 1 || seg.offsetTop > q.offsetTop + 4;
+    const fit = () => {
+      const btns = [...seg.querySelectorAll('[data-lf-v]')];
+      for (const b of btns) b.hidden = false;
+      more.hidden = true;
+      const order = [...btns.slice(1).filter((b) => b.dataset.lfV !== F.seg).reverse(), ...btns.filter((b, i) => i && b.dataset.lfV === F.seg)];
+      for (const b of order) { if (!over()) break; b.hidden = true; more.hidden = false; }
+      fillMore();
+    };
     requestAnimationFrame(fit);
     host._lfFit?.disconnect(); host._lfFit = new ResizeObserver(() => fit()); host._lfFit.observe(host);
   }
@@ -8942,11 +9471,13 @@ async function projectSpace(p, box, note = '') {
   if (!box.isConnected) return;
   if (!r || r.error) { box.innerHTML = `<p class="sp-note">Couldn't measure: ${esc(r?.error || 'no answer from QuorX')}</p>`; return; }
   const limit = (Number(G.settings.agentSpaceMB) || 500) * 1e6, over = r.total > limit;
-  box.innerHTML = `<div class="pj-space">
-    <div class="sp-head"><b>Uses ${mbText(r.total)}</b><small>${over ? `<span class="sp-over">Over your limit of ${mbText(limit)}</span>` : `Within your limit of ${mbText(limit)}`} · never committed</small></div>
+  // One line: the size against the limit (a meter), Open and Clear beside it; what it is underneath.
+  const share = Math.min(1, r.total / limit);
+  box.innerHTML = `<div class="pj-space compact">
+    <div class="sp-line"><div class="sp-size"><span><b>${mbText(r.total)}</b> <small>of your ${mbText(limit)} limit</small>${over ? ' <span class="sp-over">over the limit</span>' : ''}</span><span class="sp-meter ${over ? 'over' : share > 0.85 ? 'near' : ''}"><i style="width:${(share * 100).toFixed(1)}%"></i></span></div>
+    <div class="sp-acts"><button type="button" class="sp-open">📂 Open .quorx</button><button type="button" class="sp-clear">🧹 Clear…</button></div></div>
     ${note ? `<p class="sp-done" role="status">${esc(note)}</p>` : ''}
-    <p class="sp-note">Not part of your git repo or your project's files. Clearing it removes the research and undo copies kept here, so the agent may need to redo some work. Your chats stay.</p>
-    <div class="sp-acts"><button type="button" class="sp-open">📂 Open .quorx</button><button type="button" class="sp-clear">🧹 Clear…</button></div></div>`;
+    <p class="sp-note">Research notes and undo copies, never committed. Clearing it never touches your project's files, and your chats stay.</p></div>`;
   $('.sp-open', box).onclick = () => openFolder(p.id, '.quorx');
   $('.sp-clear', box).onclick = () => spaceClearView({ projectId: p.id }, box, () => projectSpace(p, box), (msg) => {
     for (const c of G.open.values()) if (c.projectId === p.id) checkSpace(c, true);
