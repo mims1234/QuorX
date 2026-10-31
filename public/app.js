@@ -1583,13 +1583,13 @@ const FILTERS = [
 const providerOf = (id) => String(id).replace(/^~/, '').split('/')[0] || 'other';
 // Models of an app on this PC (⚙ Settings → Apps on this PC) or of OpenCode Go (⚙ Settings → API keys) are the source,
 // a slash, and its own id.
-const SOURCE_NAME = { 'opencode-go': 'OpenCode Go', commandcode: 'Command Code', 'opencode-local': 'OpenCode on this PC', 'claude-local': 'Claude Code on this PC', 'grok-local': 'Grok Build on this PC' };
+const SOURCE_NAME = { 'opencode-go': 'OpenCode Go', commandcode: 'Command Code', 'opencode-local': 'OpenCode on this PC', 'ollama-local': 'Ollama on this PC', 'claude-local': 'Claude Code on this PC', 'grok-local': 'Grok Build on this PC' };
 // Where in ⚙ Settings each source is set up.
 const srcWhere = (k) => (k === 'opencode-go' || k === 'commandcode' ? 'API keys' : 'Apps on this PC');
 // Each source's own logo (public/icons/brand), in the text colour (Claude's in its orange), with its name on hover.
-const SOURCE_LOGO = { openrouter: 'openrouter', 'opencode-go': 'opencode', commandcode: 'commandcode', 'opencode-local': 'opencode', 'claude-local': 'claude', 'grok-local': 'grok' };
+const SOURCE_LOGO = { openrouter: 'openrouter', 'opencode-go': 'opencode', commandcode: 'commandcode', 'opencode-local': 'opencode', 'ollama-local': 'ollama', 'claude-local': 'claude', 'grok-local': 'grok' };
 const srcLogo = (k, title = k === 'openrouter' ? 'OpenRouter' : SOURCE_NAME[k] || k) => SOURCE_LOGO[k] ? `<span class="src-logo src-logo-${SOURCE_LOGO[k]}" style="--ico:url('icons/brand/${SOURCE_LOGO[k]}.svg')" role="img" aria-label="${esc(title)}" title="${esc(title)}"></span>` : esc(title);
-const SOURCE_SHORT = { 'opencode-go': 'Go', commandcode: 'Command Code', 'opencode-local': 'This PC', 'claude-local': 'Claude Code', 'grok-local': 'Grok Build' };
+const SOURCE_SHORT = { 'opencode-go': 'Go', commandcode: 'Command Code', 'opencode-local': 'This PC', 'ollama-local': 'Ollama', 'claude-local': 'Claude Code', 'grok-local': 'Grok Build' };
 // The sources offered, as words: "OpenCode Go, Claude Code or Grok Build".
 const srcApps = () => { const t = Object.keys(SOURCE_NAME).map((k) => SOURCE_NAME[k].replace(/ on this PC$/, '')); return t.length > 1 ? `${t.slice(0, -1).join(', ')} or ${t.at(-1)}` : t[0] || ''; };
 const sourceOfId = (id) => { const s = String(id || ''), h = s.split('/')[0]; return SOURCE_NAME[h] && s.length > h.length + 1 ? h : null; };
@@ -1909,7 +1909,7 @@ async function checkPaths() {
     showPath(el, s?.kind);
     // A picture, video, PDF or Markdown file a message names is shown under it too (not one inside a shown file).
     const c = chatOfEl(el);
-    if (s?.media && c && !el.closest('.mm-md')) addMedia(el.closest('.msg'), c, el.dataset.path, s.media);
+    if (s?.media && c && !el.closest('.mm-md')) addMedia(el.closest('.msg'), c, el.dataset.path, s.media, el);
   }
   if (PATHS.queue.size && !PATHS.timer) PATHS.timer = setTimeout(checkPaths, 150);
 }
@@ -1928,51 +1928,85 @@ function showPath(el, kind) {
 const MM_SHOWN = 8, MM_MD_BYTES = 200e3, MM_PDF_INLINE = 60e6;
 const mediaSrc = (c, p, v) => `/api/media?project=${encodeURIComponent(c.projectId || '')}&chat=${encodeURIComponent(c.id)}&path=${encodeURIComponent(p)}${v ? `&v=${v}` : ''}`;
 const MM_LABEL = { image: 'Picture', video: 'Video', pdf: 'PDF', md: 'Markdown' };
+function newStrip(cls = '') {
+  const box = document.createElement('div'); box.className = `msg-media${cls}`;
+  box.innerHTML = '<div class="mm-pics"></div><div class="mm-cards"></div><button type="button" class="mm-more secondary sm" hidden></button>';
+  const more = $('.mm-more', box);
+  more.onclick = () => { box._all = true; for (const x of box.querySelectorAll('.mm-extra')) x.classList.remove('mm-extra'); more.hidden = true; };
+  return box;
+}
+// The files a message brings but never names: under it, the first MM_SHOWN shown and the rest behind "Show more".
 function mediaStrip(msgEl) {
   let box = msgEl.querySelector(':scope > .msg-media');
   if (box) return box;
-  box = document.createElement('div'); box.className = 'msg-media';
-  box.innerHTML = '<div class="mm-pics"></div><div class="mm-cards"></div><button type="button" class="mm-more secondary sm" hidden></button>';
-  box._keys = new Set();
-  const more = $('.mm-more', box);
-  more.onclick = () => { for (const x of box.querySelectorAll('.mm-extra')) x.classList.remove('mm-extra'); more.hidden = true; };
+  box = newStrip();
   // A user's message: above its time and tools. A reply: above its undo line and foot.
   const at = msgEl.classList.contains('user') ? msgEl.querySelector(':scope > .u-foot') : msgEl.querySelector(':scope > .f-undo-row') || msgEl.querySelector(':scope > .foot');
   if (at) at.before(box); else msgEl.append(box);
   return box;
 }
-// One file under a message. `p` is the path as named (or a key for a made picture); `info` is { kind, size, v, key, src }.
-function addMedia(msgEl, c, p, info) {
+// A file the text names shows right where it is named: after that paragraph, table or heading, or inside that list item.
+function mentionStrip(msgEl, at) {
+  const blk = at.closest('table') || at.closest('li, p, blockquote, pre, h1, h2, h3, h4, h5, h6');
+  // A path in folded thinking or a quoted file isn't where the reply shows it: those go under the message.
+  if (!blk || !msgEl.contains(blk) || blk.closest('.msg-media, details')) return mediaStrip(msgEl);
+  if (blk.tagName === 'LI') { let box = blk.querySelector(':scope > .mm-inline'); if (!box) blk.append(box = newStrip(' mm-inline')); return box; }
+  let box = blk.nextElementSibling;
+  if (!box?.classList.contains('mm-inline')) blk.after(box = newStrip(' mm-inline'));
+  return box;
+}
+function placeMedia(msgEl, item, at) {
+  const from = item.closest('.msg-media'), box = at ? mentionStrip(msgEl, at) : mediaStrip(msgEl);
+  if (from === box) return;
+  item.classList.remove('mm-extra');
+  if (!at && !box._all && box.querySelectorAll('.mm-pic, .mm-card').length >= MM_SHOWN) item.classList.add('mm-extra');
+  $(item._kind === 'image' ? '.mm-pics' : '.mm-cards', box).append(item);
+  for (const b of [box, from]) {
+    if (!b) continue;
+    if (!b.querySelector('.mm-pic, .mm-card')) { b.remove(); continue; }
+    const hidden = b.querySelectorAll('.mm-extra').length, more = $('.mm-more', b);
+    more.hidden = !hidden; more.textContent = `Show ${hidden} more file${hidden === 1 ? '' : 's'}`;
+  }
+}
+// One file in a message, once: where the text names it (`at`, the path in the text), else under the message.
+// `p` is the path as named (or a key for a made picture); `info` is { kind, size, v, key, src }.
+function addMedia(msgEl, c, p, info, at = null) {
   if (!msgEl || !info?.kind) return;
-  const box = mediaStrip(msgEl), key = String(info.key || p).replace(/\\/g, '/').toLowerCase();
-  if (box._keys.has(key)) return;
-  box._keys.add(key);
-  const src = info.src || mediaSrc(c, p, info.v), name = info.name || baseName(p), extra = box._keys.size > MM_SHOWN;
+  const key = String(info.key || p).replace(/\\/g, '/').toLowerCase(), all = (msgEl._mm ||= new Map()), had = all.get(key);
+  // Already shown: a mention moves it there (and back after the text redraws), keeping it open or folded.
+  if (had) { if (at ? !had._inline || !had.isConnected : !had.isConnected) { had._inline = !!at; placeMedia(msgEl, had, at); } return; }
+  const src = info.src || mediaSrc(c, p, info.v), name = info.name || baseName(p);
   const meta = [MM_LABEL[info.kind], sizeText(info.size)].filter(Boolean).join(' · ');
   const item = document.createElement(info.kind === 'image' ? 'figure' : 'div');
-  item._src = src; item._name = name; item._full = info.full ?? p; item._size = info.size; item._kind = info.kind;
-  if (extra) item.classList.add('mm-extra');
-  const head = (acts = '') => `<div class="mm-head"><span class="mm-ico" aria-hidden="true">${PV_ICON[info.kind] || '📄'}</span><b class="mm-name" title="${esc(item._full)}">${esc(name)}</b><span class="mm-info">${esc(meta)}</span><span class="mm-acts">${acts}<button type="button" class="pv-btn mm-open" title="Open it large">Open</button></span></div>`;
+  item._src = src; item._name = name; item._full = info.full ?? p; item._size = info.size; item._kind = info.kind; item._inline = !!at;
+  all.set(key, item);
+  const head = (acts = '') => `<div class="mm-head"><button type="button" class="mm-tog" aria-expanded="false" title="Show it here"><span class="mm-chev" aria-hidden="true">▸</span><span class="mm-ico" aria-hidden="true">${PV_ICON[info.kind] || '📄'}</span><b class="mm-name" title="${esc(item._full)}">${esc(name)}</b><span class="mm-info">${esc(meta)}</span></button><span class="mm-acts">${acts}<button type="button" class="pv-btn mm-open" title="Open it large">Open</button></span></div>`;
   if (info.kind === 'image') {
-    item.className = `mm-pic${extra ? ' mm-extra' : ''}`;
+    item.className = 'mm-pic';
     item.innerHTML = `<button type="button" class="mm-thumb pv-checker" title="${esc(name)} · click to see it large"><img src="${esc(src)}" alt="${esc(name)}" loading="lazy" decoding="async"${/\.svg$/i.test(p) || /\.svg$/i.test(name) ? ' class="mm-svg"' : ''}></button><figcaption title="${esc(item._full)}">${esc(name)}</figcaption>`;
-    $('.mm-thumb', item).onclick = () => { const all = [...box.querySelectorAll('.mm-pic')]; viewPictures(all.map((x) => x._src), all.indexOf(item)); };
+    // The large view steps through every picture in the message, in the order they show.
+    $('.mm-thumb', item).onclick = () => { const all = [...msgEl.querySelectorAll('.mm-pic')]; viewPictures(all.map((x) => x._src), all.indexOf(item)); };
     const img = $('img', item);
     img.onerror = () => { item.classList.add('mm-broken'); $('figcaption', item).textContent = `${name} (could not be shown)`; };
-    $('.mm-pics', box).append(item);
   } else {
-    item.className = `mm-card mm-k-${info.kind}${extra ? ' mm-extra' : ''}`;
-    if (info.kind === 'video') item.innerHTML = head() + `<video controls preload="metadata" playsinline src="${esc(src)}"></video>`;
-    else if (info.kind === 'pdf') item.innerHTML = head() + (info.size > MM_PDF_INLINE ? `<p class="mm-note">A large PDF (${esc(sizeText(info.size))}): Open shows it.</p>` : `<iframe class="mm-pdf-frame" loading="lazy" src="${esc(src)}#navpanes=0&view=FitH" title="${esc(name)}"></iframe>`);
-    else {
-      item.innerHTML = head('<span class="pv-seg mm-seg" role="group" aria-label="Show it as"><button type="button" data-m="rendered" class="on" aria-pressed="true">Rendered</button><button type="button" data-m="raw" aria-pressed="false">Raw</button></span>') + '<div class="mm-md-body"><div class="fx-empty">Loading…</div></div>';
-      loadMdCard(item);
-    }
+    // Folded to its name line so a chat stays short; ▸ shows it here, and only then does it load.
+    item.className = `mm-card mm-k-${info.kind} mm-shut`;
+    item.innerHTML = head(info.kind === 'md' ? '<span class="pv-seg mm-seg" role="group" aria-label="Show it as" hidden><button type="button" data-m="rendered" class="on" aria-pressed="true">Rendered</button><button type="button" data-m="raw" aria-pressed="false">Raw</button></span>' : '') + '<div class="mm-body" hidden></div>';
+    const tog = $('.mm-tog', item), body = $('.mm-body', item);
+    tog.onclick = () => {
+      const open = item.classList.toggle('mm-shut') === false;
+      tog.setAttribute('aria-expanded', String(open)); tog.title = open ? 'Fold it' : 'Show it here';
+      body.hidden = !open; const seg = $('.mm-seg', item); if (seg) seg.hidden = !open;
+      if (!open) { $('video', body)?.pause(); return; }
+      if (body.dataset.built) return;
+      body.dataset.built = '1';
+      if (info.kind === 'video') body.innerHTML = `<video controls preload="metadata" playsinline src="${esc(src)}"></video>`;
+      else if (info.kind === 'pdf') body.innerHTML = info.size > MM_PDF_INLINE ? `<p class="mm-note">A large PDF (${esc(sizeText(info.size))}): Open shows it.</p>` : `<iframe class="mm-pdf-frame" loading="lazy" src="${esc(src)}#navpanes=0&view=FitH" title="${esc(name)}"></iframe>`;
+      else { body.innerHTML = '<div class="mm-md-body"><div class="fx-empty">Loading…</div></div>'; loadMdCard(item); }
+    };
     $('.mm-open', item).onclick = () => openViewer((body) => { body.innerHTML = '<div class="lb-doc fview"></div>'; previewFile($('.lb-doc', body), { name, src, size: info.size, full: item._full, kind: info.kind }); });
-    $('.mm-cards', box).append(item);
   }
-  const hidden = box.querySelectorAll('.mm-extra').length, more = $('.mm-more', box);
-  more.hidden = !hidden; more.textContent = `Show ${hidden} more file${hidden === 1 ? '' : 's'}`;
+  placeMedia(msgEl, item, at);
 }
 // A Markdown card reads its file when it comes into view: up to MM_MD_BYTES, rendered or raw.
 const mmSeen = 'IntersectionObserver' in window ? new IntersectionObserver((list) => { for (const x of list) if (x.isIntersecting) { mmSeen.unobserve(x.target); x.target._load?.(); } }, { rootMargin: '400px' }) : null;
@@ -6479,19 +6513,19 @@ function settingsPanels(S) {
     ]],
     keys: ['API keys', 'QuorX uses one active OpenRouter key for every call. Add as many as you like and switch between them.', [`<div id="stKeys"><div class="st-row-help">Loading keys…</div></div>`,
       stCard('Subscriptions', 'A chat’s main model, or a Quorium module’s, can run on your OpenCode Go or Command Code subscription with its API key. Calls count against the plan’s limits or credits instead of costing per call.', '<div id="stApiSources"><div class="st-row-help">Loading…</div></div>', '', 'stSrcKeys')]],
-    models: ['Models & catalogue', 'Model lists and prices come from OpenRouter. Pick what new chats start with, and how each call finds a provider.', [
+    models: ['Models & catalogue', 'What new chats start with, from any source: OpenRouter, a subscription (⚙ API keys) or an app on this PC. The OpenRouter and Routing cards apply to OpenRouter calls only.', [
       stCard('OpenRouter', 'The active key’s spending limit (hidden until you click 👁) and the model list.', '<div id="stModelLimit"><div class="st-row-help">Loading…</div></div>'
         + stRow('Model lists and prices', `<span id="stCatInfo">${G.models ? `${G.models.length} models loaded` : 'Loading…'}</span>`, `<button type="button" class="st-btn secondary sm" data-act="refreshModels">↻ Refresh now</button>`), 'sx-limit'),
-      stCard('Models', 'What new chats start with; each chat can still pick any model from its message box.', stRow('Default chat model', '', `<button type="button" class="sx-model" data-act="pickDefModel" id="defModel" data-id="${esc(S.model)}"><span class="sx-av" aria-hidden="true">${esc((short(S.model)[0] || '?').toUpperCase())}</span>${recDot(S.model, 'chat')} ${esc(short(S.model))} <small>${esc(shortPrice(S.model))}</small><span class="sx-change">Change</span></button>`)
+      stCard('Models', 'What new chats start with, from any source; each chat can still pick any model from its message box.', stRow('Default chat model', '', `<button type="button" class="sx-model" data-act="pickDefModel" id="defModel" data-id="${esc(S.model)}"><span class="sx-av" aria-hidden="true">${esc((short(S.model)[0] || '?').toUpperCase())}</span>${recDot(S.model, 'chat')} ${esc(short(S.model))} <small>${esc(shortPrice(S.model))}</small><span class="sx-change">Change</span></button>`)
         + stRow('Default reasoning', '', stSeg('reasoning', [['off', 'Off'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']], S.reasoning || 'off'))
         + stRow('Fallback model', 'OpenRouter switches to it when a chat’s model fails or is down, billed at its own price. The trace marks steps it answered.', `<div class="st-fb">${modelField('pickFallback', S.fallbackModel, 'fbModel', 'None')}${S.fallbackModel ? '<button type="button" class="st-btn secondary sm" data-act="clearFallback" title="No fallback model">✕</button>' : ''}</div>`, { id: 'stRowFallback' }), '', 'stCardFallback'),
-      stCard('Routing', 'How each agent call finds a provider. The one that answered shows on each step in “Steps”.',
+      stCard('Routing on OpenRouter', 'How each agent call on OpenRouter finds a provider (subscriptions and apps on this PC choose their own). The one that answered shows on each step in “Steps”.',
         stRow('Provider order', 'Auto favours providers with reliable tool calling (OpenRouter’s Exacto). Cheapest and Fastest sort by price or speed instead.', stCards('providerSort', [['auto', '🎯', 'Auto', 'Reliable tool calling'], ['price', '💲', 'Cheapest', 'Lowest price first'], ['throughput', '⚡', 'Fastest', 'Highest throughput first']], S.providerSort || 'auto', 'compact'), { cls: 'sx-row-wide', id: 'stRowOrder' })
         + stRow('Only providers that support every feature', 'Skips providers that would silently drop tools, reasoning or other settings. If none qualifies, that reply uses the default routing.', stSwitch('requireParams', S.requireParams !== false), { id: 'stRowFeatures' })
         + stRow('Zero data retention only', 'Only providers that keep no copy of your prompts. Fewer models qualify.', stSwitch('zdrOnly', !!S.zdrOnly), { id: 'stRowZdr' })
         + stRow('Blocked providers', 'OpenRouter never sends the agent’s calls to these: for every model, or only the models you pick (a provider can be fine for one model and break another). Block one that keeps breaking tool calls (the provider shows as “via …” above each reply). If only blocked providers serve a model, that reply uses them anyway, and says so.', '<div id="stBlocked"><div class="st-row-help">Loading providers…</div></div>', { cls: 'sx-row-wide', id: 'stRowBlocked' })),
     ]],
-    sources: ['Apps on this PC', 'A chat’s main model can run through OpenCode, Claude Code or Grok Build on this computer, on the providers and sign-ins you set up there. OpenCode Go and Command Code run with their keys (⚙ API keys). Everything else stays on OpenRouter.', [
+    sources: ['Apps on this PC', 'A chat’s main model can run through OpenCode, Ollama, Claude Code or Grok Build on this computer, on the providers and sign-ins you set up there. OpenCode Go and Command Code run with their keys (⚙ API keys). Everything else stays on OpenRouter.', [
       stCard('Apps', '', '<div id="stSources"><div class="st-row-help">Checking the apps on this PC…</div></div>', '', 'stSrcConnect'),
       stCard('When a call fails', 'By default the reply stops and says why, and you pick another model. QuorX switches only if you choose a fallback.',
         stRow('Fall back to', '', stCards('sourceFallback', [['off', '✋', 'Stop and tell me', 'You pick the next model'], ['same', '🔁', 'Same model on OpenRouter', 'When OpenRouter has it, else the model below'], ['model', '🎯', 'Always this model', 'The fallback model below']], S.sourceFallback || G.cfg.defaults.sourceFallback || 'off', 'compact'), { cls: 'sx-row-wide', id: 'stRowSrcFb' })
@@ -6823,6 +6857,7 @@ function srcState(x) {
 const SRC_GUIDE = {
   'opencode-local': { what: 'Runs a chat through the OpenCode app on this computer, with the providers you connected in it. Each provider bills as it does in OpenCode; plans and free tiers cost nothing here. OpenCode’s own providers are left out: OpenCode Zen doesn’t answer QuorX, and Go runs with its key under API keys.', install: 'npm i -g opencode-ai' },
   'claude-local': { what: 'Runs a chat through Claude Code on this computer, on the subscription or API key you signed in with. Its own tools stay off: QuorX\'s tools and approvals do the work.', install: 'npm i -g @anthropic-ai/claude-code' },
+  'ollama-local': { what: 'Runs a chat on the models you pulled into Ollama on this computer, for nothing, and on Ollama cloud models once you sign in (ollama signin). Only models that call tools are listed. QuorX starts Ollama when a chat needs it and it isn’t running.', install: 'winget install Ollama.Ollama' },
   'grok-local': { what: 'Runs a chat through Grok Build on this computer, on the account you signed in with (grok login). Its own tools stay off: QuorX\'s tools and approvals do the work.', install: 'curl -fsSL https://x.ai/cli/install.sh | bash' },
   'opencode-go': { what: 'Runs a chat on your OpenCode Go subscription (Go, Go Plus or Go Teams) over OpenCode’s API. Each model has 5-hour, weekly and monthly limits; prices shown are what a call counts against them.' },
   commandcode: { what: 'Runs a chat on your Command Code plan over its Provider API: GPT, DeepSeek, Kimi, GLM, Qwen and the other open models, and Claude. Every plan but Go has API access; prices shown are what a call takes from your credits.' },
@@ -6841,18 +6876,34 @@ function srcInfoHTML(x, g) {
   return `<p class="src-info">${esc(x.appName || x.app)}${x.app_?.version ? ` ${esc(x.app_.version)}` : ''} · ${run}</p>`;
 }
 // The apps on this PC go in Apps on this PC; a source that takes a key (OpenCode Go) goes in API keys.
+// The cards draw at once from what the server knows; app versions and model lists (which can take a while: apps
+// start, lists load) follow, and the cards redraw with them unless you've started typing in one.
 async function drawSourcesPanel(say = null) {
   if (!$('#stSources') && !$('#stApiSources')) return;
-  const r = await fetch(`/api/sources${ST.cat === 'sources' || ST.cat === 'keys' ? '?full=1' : ''}`).then((x) => x.json()).catch((e) => ({ error: e.message }));
-  for (const [sel, local] of [['#stSources', true], ['#stApiSources', false]]) {
-    const box = $(sel); if (!box) continue;
-    if (r.error || !Array.isArray(r.sources)) { box.innerHTML = `<div class="kx-wait bad">⚠ Couldn’t read the sources (${esc(r.error || 'no answer')}).</div>`; continue; }
-    drawSourceCards(box, r, r.sources.filter((x) => !!x.local === local), say);
-  }
-  if (Array.isArray(r.sources)) { ST.sources = r.sources; stRefresh(); }
+  const get = (full) => fetch(`/api/sources${full ? '?full=1' : ''}`).then((x) => x.json()).catch((e) => ({ error: e.message }));
+  const full = ST.cat === 'sources' || ST.cat === 'keys', seq = (ST.srcSeq = (ST.srcSeq || 0) + 1);
+  const draw = (r, checking) => {
+    for (const [sel, local] of [['#stSources', true], ['#stApiSources', false]]) {
+      const box = $(sel); if (!box) continue;
+      if (r.error || !Array.isArray(r.sources)) { box.innerHTML = `<div class="kx-wait bad">⚠ Couldn’t read the sources (${esc(r.error || 'no answer')}).</div>`; continue; }
+      drawSourceCards(box, r, r.sources.filter((x) => !!x.local === local), say);
+      if (checking && local) box.insertAdjacentHTML('afterbegin', '<div class="kx-wait src-checking">Checking app versions and model lists…</div>');
+    }
+    if (Array.isArray(r.sources)) { ST.sources = r.sources; stRefresh(); }
+  };
+  const quick = await get(false);
+  if (seq !== ST.srcSeq) return;
+  draw(quick, full && !quick.error);
+  if (!full || quick.error) return;
+  const r = await get(true);
+  if (seq !== ST.srcSeq) return;
+  // Typing a key or a message showing in a card: keep the cards, only drop the "checking" line.
+  const busy = [...document.querySelectorAll('#stSources, #stApiSources')].some((b) => b.contains(document.activeElement) || [...b.querySelectorAll('[data-src-key]')].some((i) => i.value) || [...b.querySelectorAll('.src-msg, .src-test-msg')].some((m) => !m.hidden));
+  if (busy) { for (const el of document.querySelectorAll('.src-checking')) el.remove(); if (Array.isArray(r.sources)) { ST.sources = r.sources; stRefresh(); } return; }
+  say = null; draw(r, false);
 }
-// A subscription's plan and what is left of it (Command Code): the plan and the share of each window used show; the
-// dollar amounts stay masked until 👁, like the OpenRouter credits.
+// A subscription's plan and what is left of it (OpenCode Go, Command Code): the plan and the share of each window used
+// show; dollar amounts (Command Code's) stay masked until 👁, like the OpenRouter credits.
 const srcAccShown = () => !!ST.revealSrcAcc || !uiOf(ST.draft || G.settings).maskAmounts;
 async function loadSrcAcc(el, refresh = false) {
   if (!el) return;
@@ -6866,10 +6917,14 @@ function paintSrcAcc(el) {
   if (a.error) { plan.textContent = ''; grid.innerHTML = `<div class="kx-wait">${a.kind === 'auth' ? 'The key wasn’t accepted' : 'Couldn’t read the plan'} (${esc(a.error)}).</div>`; return; }
   const day = (t) => new Date(t).toLocaleDateString([], { month: 'short', day: 'numeric' });
   const until = (t) => { const s = Math.max(0, Math.round((t - Date.now()) / 1000)); return s < 3600 ? `${Math.max(1, Math.round(s / 60))}m` : s < 86400 ? `${Math.floor(s / 3600)}h ${Math.round((s % 3600) / 60)}m` : `${Math.round(s / 86400)}d`; };
-  plan.innerHTML = `${stTag('info', `${a.plan} plan`)}${a.periodEnd ? ` <small>${a.cancels ? 'ends' : 'renews'} ${esc(day(a.periodEnd))}</small>` : ''}`;
-  const w = (name, x) => (x ? `<div class="kx-metric src-win${x.exceeded ? ' over' : ''}"><span>${name}</span><b>${Math.round((x.used / x.cap) * 100)}%</b><small>${m(x.used)} of ${m(x.cap)}${x.resetAt ? ` · resets in ${until(x.resetAt)}` : ''}</small></div>` : '');
+  plan.innerHTML = `${a.plan ? stTag('info', `${a.plan} plan`) : ''}${a.periodEnd ? ` <small>${a.cancels ? 'ends' : 'renews'} ${esc(day(a.periodEnd))}</small>` : ''}`;
+  const pct = (p) => (p > 0 && p < 1 ? '<1%' : `${Math.round(p)}%`);
+  const w = (x) => `<div class="kx-metric src-win${x.over ? ' over' : ''}"><span>${esc(x.label)}</span><b>${pct(x.percent)}</b><small>${x.cap ? `${m(x.used)} of ${m(x.cap)}` : 'used'}${x.resetAt ? ` · resets in ${until(x.resetAt)}` : ''}</small></div>`;
   const c = a.credits;
-  grid.innerHTML = `<div class="kx-metric left"><span>Credits left</span><b>${m(c.left)}</b><small>${srcAccShown() ? `this month ${money(c.monthly, 2)}${c.purchased ? ` · bought ${money(c.purchased, 2)}` : ''}${c.free ? ` · free ${money(c.free, 2)}` : ''}` : 'month, bought and free'}</small></div>${w('5-hour window', a.fiveHour)}${w('Weekly window', a.weekly)}<div class="kx-checked">Checked ${new Date(a.checked).toLocaleTimeString()}</div>`;
+  const credits = c ? `<div class="kx-metric left"><span>Credits left</span><b>${m(c.left)}</b><small>${srcAccShown() ? `this month ${money(c.monthly, 2)}${c.purchased ? ` · bought ${money(c.purchased, 2)}` : ''}${c.free ? ` · free ${money(c.free, 2)}` : ''}` : 'month, bought and free'}</small></div>` : '';
+  // 👁 only where there is an amount to hide.
+  const eye = $('[data-src-act="acc-reveal"]', el); if (eye) eye.hidden = !c && !(a.windows || []).some((x) => x.cap);
+  grid.innerHTML = `${credits}${(a.windows || []).map(w).join('')}<div class="kx-checked">Checked ${new Date(a.checked).toLocaleTimeString()}</div>`;
 }
 function drawSourceCards(box, r, list, say) {
   const when = (t) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -6880,7 +6935,7 @@ function drawSourceCards(box, r, list, say) {
       <header class="src-head">
         ${SOURCE_LOGO[x.id] ? srcLogo(x.id, x.name) : `<span class="mp-ava" style="--h:${hue(x.id)}" aria-hidden="true">${esc(initials(x.name))}</span>`}
         <b class="src-name">${esc(x.name)}</b>
-        ${stTag(x.billing === 'plan' ? 'info' : x.billing === 'mixed' ? 'violet' : 'warn', x.billing === 'plan' ? 'subscription' : x.billing === 'mixed' ? 'your providers' : 'pay per use')}
+        ${stTag(x.billing === 'plan' ? 'info' : x.billing === 'mixed' ? 'violet' : x.billing === 'free' ? 'ok' : 'warn', x.billing === 'plan' ? 'subscription' : x.billing === 'mixed' ? 'your providers' : x.billing === 'free' ? 'free · on this PC' : 'pay per use')}
         ${stStatus(st.cls, st.word)}
         ${x.models ? `<span class="src-count">${x.models} models</span>` : ''}
         <span class="kx-spacer"></span>
@@ -7850,10 +7905,12 @@ async function drawKeysPanel() {
       </div>
       <p class="kx-note" id="stKeyMsg">🔒 Kept only on this computer (data/keys.json). The page never sees it again, and agent processes don't get it.</p>
     </div>`;
-  box.innerHTML = (keys.length ? '' : addForm(true))
+  // Whose keys these are: OpenRouter, with its own mark, like the subscription cards below name theirs.
+  const brand = `<header class="kx-brand">${srcLogo('openrouter', 'OpenRouter')}<b>OpenRouter</b>${stTag('warn', 'pay per use')}<small>${keys.length} key${keys.length === 1 ? '' : 's'} · chat, deciders, pictures, video, music and voice</small><span class="kx-spacer"></span><a class="sp-link" href="https://openrouter.ai/settings/keys" target="_blank" rel="noopener noreferrer">openrouter.ai</a></header>`;
+  box.innerHTML = (keys.length ? brand : addForm(true))
     + keys.map((k) => `<section class="kx-card ${k.active ? 'active' : ''}" data-key="${esc(k.id)}">
         <header class="kx-head">
-          <span class="kx-dot" aria-hidden="true"></span>
+          <span class="kx-dot" aria-hidden="true"></span>${srcLogo('openrouter', 'OpenRouter key')}
           <input class="kx-name" value="${esc(k.label)}" maxlength="60" aria-label="Key name" title="Click to rename this key" data-old="${esc(k.label)}">
           ${k.active ? '<span class="kx-badge on">Active</span>' : ''}
           <span class="kx-badge">${k.source === 'env' ? 'from .env' : 'added here'}</span>

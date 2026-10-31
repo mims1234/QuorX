@@ -16,7 +16,7 @@ import { spawn } from 'node:child_process';
 import { openDetached } from './server/userenv.js';
 import { currentKey, PORT, runtime, ROOT, HOME, chat, chatModels, decisionModels, imageModels, speechModels, musicModels, videoModels, transcribe, clearCatalogues, providerList, knownProviders } from './server/openrouter.js';
 import { listKeys, addKey, removeKey, setActive, renameKey, keyUsage, activeUsage, accountCredits, startSampling, lockDown } from './server/keys.js';
-import { sourceStatus, sourceModels, setSourceOn, setSourceKey, removeSourceKey, testSource, sourceAccount, failureKind, sourceOf, sameOnOpenRouter, chatAny } from './server/sources.js';
+import { sourceStatus, sourceModels, setSourceOn, setSourceKey, removeSourceKey, testSource, sourceAccount, sourceDecisionModels, failureKind, sourceOf, sameOnOpenRouter, chatAny } from './server/sources.js';
 import { setupCheck, runFix } from './server/setup-check.js';
 import { startSignIn, signInStatus, cancelSignIn, finishByCallback, finishWithCode, callbackPage } from './server/oauth.js';
 import { runAgent, answerApproval, answerQuestion, answerSecret, answerBudget, raiseCap, setRunApproval, setRunAccess, steerRun, setRunReading, setRunVideo, holdCard, DEFAULTS, MEDIA, briefFor, briefForChat, REVIEW_MODEL, HELPER_MODEL, REVIEW_ALT, REVIEW_STRONG, REVIEW_STRONG_ALT } from './server/agent.js';
@@ -937,7 +937,7 @@ const server = http.createServer(async (req, res) => {
       const errors = [];
       const safe = (name, p) => p.catch((e) => { errors.push(`${name}: ${e.message}`); return []; });
       // The models of the apps on this PC, when they are switched on (⚙ Settings → Apps on this PC), join the chat models.
-      const [chat, dec, img, tts, mus, vid, src] = await Promise.all([safe('chat', chatModels()), safe('decisions', decisionModels()), safe('images', imageModels()), safe('voices', speechModels()), safe('music', musicModels()), safe('video', videoModels()), safe('sources', sourceModels({ refresh }))]);
+      const [chat, dec, img, tts, mus, vid, src] = await Promise.all([safe('chat', chatModels()), safe('decisions', decisionModels().then(async (l) => [...l, ...await sourceDecisionModels().catch(() => [])])), safe('images', imageModels()), safe('voices', speechModels()), safe('music', musicModels()), safe('video', videoModels()), safe('sources', sourceModels({ refresh }))]);
       if (!chat.length && !dec.length && !src.length) return json(res, 502, { error: `Could not load the model lists from OpenRouter (${errors[0] || 'no answer'}).` });
       // Audio-capable chat models double as the "listen" (speech-to-text) category.
       const ears = chat.filter((m) => m.in.includes('audio')).map((m) => ({ ...m, kind: 'listen' }));

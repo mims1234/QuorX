@@ -160,6 +160,10 @@ dialog.mp-dialog::backdrop { background: rgba(4, 6, 6, .72); backdrop-filter: bl
    with the name on hover. Painted in the text colour; Claude's mark keeps its orange. */
 .src-logo { display: inline-block; flex: none; width: 15px; height: 15px; vertical-align: -3px; background: currentColor; -webkit-mask: var(--ico) center / contain no-repeat; mask: var(--ico) center / contain no-repeat; cursor: help; }
 .src-logo-claude { background: #d97757; }
+/* OpenRouter's own glyph colours: lime on dark, violet on light. OpenCode, Command Code and xAI are black and white. */
+.src-logo-openrouter { background: #c8ff00; }
+@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) .src-logo-openrouter { background: #7624f4; } }
+:root[data-theme="light"] .src-logo-openrouter { background: #7624f4; }
 .mp-src-seg .st-seg-btn .src-logo { width: 16px; height: 16px; cursor: inherit; }
 .mp-name .src-logo { width: 13px; height: 13px; margin-left: 4px; color: var(--muted); }
 #settings .src-head .src-logo { width: 24px; height: 24px; }

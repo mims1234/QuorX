@@ -18,13 +18,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { HOME } from './openrouter.js';
+import { HOME, decisionModels } from './openrouter.js';
 import { renameSoon } from './fsretry.js';
 import { findOnPath, localModels, localStream, ensureLocalServer, localServer, LOCAL_ID, SETTING_REFUSAL } from './opencodelocal.js';
 import { claudeModels, claudeStream, claudeAuth, claudeRunning, CLAUDE_ID } from './claudelocal.js';
 import { grokModels, grokStream, grokRunning, GROK_ID } from './groklocal.js';
-import { goModels, goStream, goCheck, GO_ID } from './opencodego.js';
-import { ccModels, ccStream, ccCheck, ccAccount, CC_ID } from './commandcode.js';
+import { goModels, goStream, goCheck, goAccount, GO_ID } from './opencodego.js';
+import { ollamaModels, ollamaStream, ensureOllama, ollamaServer, OLLAMA_ID } from './ollamalocal.js';
+import { ccModels, ccStream, ccCheck, ccAccount, ccDecisionModels, ccDecisions, CC_ID } from './commandcode.js';
 
 const DATA = path.join(HOME, 'data');
 export const SOURCE_FILE = path.join(DATA, 'sources.json');
@@ -55,6 +56,12 @@ export const SOURCES = {
     site: 'https://claude.com/product/claude-code', keyUrl: 'https://code.claude.com/docs/en/setup', docs: 'https://code.claude.com/docs/en/headless',
     keyHint: 'No key: QuorX uses the account you signed in to Claude Code with.', install: 'npm i -g @anthropic-ai/claude-code', appName: 'Claude Code',
   },
+  // Ollama on this computer (ollamalocal.js): the models pulled into it, and its cloud models once signed in.
+  [OLLAMA_ID]: {
+    id: OLLAMA_ID, name: 'Ollama on this PC', short: 'Ollama', app: 'ollama', billing: 'free', local: true,
+    site: 'https://ollama.com', keyUrl: 'https://ollama.com/download', docs: 'https://docs.ollama.com/api/chat',
+    keyHint: 'No key: QuorX uses the models you pulled into Ollama (ollama pull), and its cloud models once you sign in (ollama signin).', install: 'winget install Ollama.Ollama', appName: 'Ollama',
+  },
   // Grok Build on this computer (groklocal.js): the account it is signed in with (grok login).
   [GROK_ID]: {
     id: GROK_ID, name: 'Grok Build on this PC', short: 'Grok Build', app: 'grok', billing: 'mixed', local: true,
@@ -71,8 +78,11 @@ const APPS = {
   [CLAUDE_ID]: { list: () => claudeModels(), stream: claudeStream, check: () => claudeAuth({ refresh: true }), server: () => ({ running: claudeRunning() > 0, calls: claudeRunning(), perCall: true }) },
   // Listing Grok's models starts it and signs in, so it is the check too.
   [GROK_ID]: { list: () => grokModels(), stream: grokStream, check: async () => {}, server: () => ({ running: grokRunning() > 0, calls: grokRunning(), perCall: true }) },
+  // Ollama's server is started when it isn't running; listing its models is the check.
+  [OLLAMA_ID]: { list: () => ollamaModels(), stream: ollamaStream, check: () => ensureOllama(), server: ollamaServer },
   // Go's list is public; a call and the check need the key.
-  [GO_ID]: { list: () => goModels(), stream: (b, sg, t, th, o) => goStream(b, sg, t, th, { ...o, key: keyFor(GO_ID)?.key }), check: async () => { const k = keyFor(GO_ID)?.key; if (!k) throw Object.assign(new Error('Add your OpenCode Go key first.'), { kind: 'auth' }); await goCheck(k, await goModels()); }, server: () => ({ api: true }) },
+  [GO_ID]: { list: () => goModels(), stream: (b, sg, t, th, o) => goStream(b, sg, t, th, { ...o, key: keyFor(GO_ID)?.key }), check: async () => { const k = keyFor(GO_ID)?.key; if (!k) throw Object.assign(new Error('Add your OpenCode Go key first.'), { kind: 'auth' }); await goCheck(k, await goModels()); }, server: () => ({ api: true }),
+    account: () => goAccount(keyFor(GO_ID)?.key) },
   // Its list is public too; a call and the check need the key. Its models name the plan the key is on (GOAT plan).
   [CC_ID]: { list: async () => { const [l, a] = await Promise.all([ccModels(), sourceAccount(CC_ID).catch(() => null)]); return a?.plan ? l.map((m) => ({ ...m, planLabel: a.plan })) : l; },
     account: () => ccAccount(keyFor(CC_ID)?.key), stream: (b, sg, t, th, o) => ccStream(b, sg, t, th, { ...o, key: keyFor(CC_ID)?.key }), check: async () => { const k = keyFor(CC_ID)?.key; if (!k) throw Object.assign(new Error('Add your Command Code key first.'), { kind: 'auth' }); await ccCheck(k, await ccModels()); }, server: () => ({ api: true }) },
@@ -337,6 +347,30 @@ export function sourceSkip(id, model, now = Date.now()) {
   return '';
 }
 
+// ---------- decision models (Command Code's Jev) ----------
+/** The decision models of the sources that are on: Jev on Command Code, priced at its list price on OpenRouter. */
+export async function sourceDecisionModels() {
+  return sourceOn(CC_ID) ? ccDecisionModels(await decisionModels().catch(() => [])) : [];
+}
+/**
+ * One Decisions request through a source (a decider on commandcode/typesafe/jev), answered like openrouter.js
+ * decisions(). On a plan it costs nothing per call; usage.plan_cost is what it took from the credits, at list price.
+ */
+export async function sourceDecisions(model, state, questions, signal) {
+  stopped(signal);
+  const s = sourceOf(model);
+  if (s?.source !== CC_ID) throw Object.assign(new Error(`${model} is not a decision model QuorX can reach`), { kind: 'request' });
+  const why = sourceOffWhy(CC_ID) || sourceSkip(CC_ID, model);
+  if (why) throw Object.assign(new Error(why), { kind: 'request' });
+  const info = (await sourceDecisionModels()).find((m) => m.id === model) || { plan: 'plan' };
+  try {
+    const r = await ccDecisions(model, state, questions, signal, { key: keyFor(CC_ID)?.key });
+    noteSourceResult(CC_ID, model, null);
+    r.usage = { ...r.usage, ...priced(info, r.usage) };
+    return r;
+  } catch (e) { if (!signal?.aborted) noteSourceResult(CC_ID, model, e); throw e; }
+}
+
 // ---------- one call ----------
 /** The session id for a conversation: steady for a chat (its id hashed). */
 export const sessionFor = (key) => `ses_qx${crypto.createHash('sha256').update(String(key || 'quorx')).digest('hex').slice(0, 24)}`;
@@ -384,7 +418,7 @@ function costOf(info, u) {
   return (fresh * p('input') + read * (tier.cache_read != null || c.cache_read != null ? p('cache_read') : p('input')) + write * (tier.cache_write != null || c.cache_write != null ? p('cache_write') : p('input')) + out * p('output')) / 1e6;
 }
 
-// ---------- a subscription's plan and what is left of it (Command Code) ----------
+// ---------- a subscription's plan and what is left of it (OpenCode Go, Command Code) ----------
 const accounts = new Map(); // source → { at, p }: the last look-up, kept a minute
 /** The plan a source's key is on and what is left of it; `refresh` asks again at once. Throws for a source without one. */
 export function sourceAccount(id, { refresh = false } = {}) {

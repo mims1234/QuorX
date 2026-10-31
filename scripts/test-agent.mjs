@@ -38,12 +38,13 @@ import { planOf, costSummary } from '../server/store.js';
 import { sourceOf, sourceStream, sameOnOpenRouter, failureKind, noteSourceResult, sourceSkip, forgetSourceHealth, priced as sourcePriced, chatAny } from '../server/sources.js';
 import { SECRET_FILES } from '../server/keys.js';
 import { SOURCE_IDS, SOURCE_FILE, sourceOn, sourceOffWhy, blockedLocal, setSourceOn, setSourceKey, removeSourceKey, keyFor, movedModel, sourceModels, sourceStatus } from '../server/sources.js';
-import { goModels, goEntry, goBody, goStream, effortFor as goEffort } from '../server/opencodego.js';
-import { ccModels, ccEntry, ccStream, messagesBody, toMessages, ccAccount, planName as ccPlanName } from '../server/commandcode.js';
+import { goModels, goEntry, goBody, goStream, goAccount, effortFor as goEffort } from '../server/opencodego.js';
+import { ccModels, ccEntry, ccStream, messagesBody, toMessages, ccAccount, planName as ccPlanName, ccDecisionModels, ccDecisions } from '../server/commandcode.js';
 import { toolPrompt, renderTranscript, parseToolCalls, textFilter, notRun } from '../server/textcalls.js';
 import { localStream, localModels } from '../server/opencodelocal.js';
 import { claudeStream, claudeModels, claudeError, effortFor } from '../server/claudelocal.js';
 import { grokStream, grokModels, grokEffort, grokArgs, GROK_ENV, repeats } from '../server/groklocal.js';
+import { ollamaModels, ollamaEntry, ollamaBody, ollamaMessages, ollamaStream, ollamaBase, ctxFor } from '../server/ollamalocal.js';
 
 let n = 0;
 const reply = (text, calls = [], finishReason = 'stop') => ({ text, toolCalls: calls.map(([name, args], i) => ({ id: `c${++n}_${i}`, type: 'function', function: { name, arguments: typeof args === 'string' ? args : JSON.stringify(args) } })), usage: { cost: 0.0001 }, ms: 1, firstMs: 1, finishReason });
@@ -4865,6 +4866,120 @@ test('Command Code streams the other models on the chat endpoint; its refusals s
   await assert.rejects(ccStream({ model: 'commandcode/deepseek/deepseek-v4-pro', messages: [] }, new AbortController().signal, null, null, { info, fetchFn }), /no Command Code key/);
 });
 
+// ---------- Ollama on this PC (server/ollamalocal.js) ----------
+const OL_TAGS = { models: [{ name: 'qwen3:8b', modified_at: '2026-10-01T00:00:00Z', details: { family: 'qwen3', parameter_size: '8.2B', quantization_level: 'Q4_K_M' } }, { name: 'gemma3:4b', details: { family: 'gemma3' } }, { name: 'gpt-oss:120b-cloud', remote_host: 'https://ollama.com:443', details: { family: 'gptoss' } }, { name: 'broken:1b' }] };
+const OL_SHOW = {
+  'qwen3:8b': { capabilities: ['completion', 'tools', 'thinking'], model_info: { 'general.architecture': 'qwen3', 'qwen3.context_length': 40960 } },
+  'gemma3:4b': { capabilities: ['completion', 'vision'], model_info: { 'gemma3.context_length': 131072 } },
+  'gpt-oss:120b-cloud': { capabilities: ['completion', 'tools', 'thinking'], remote_host: 'https://ollama.com:443', model_info: { 'gptoss.context_length': 131072 } },
+};
+const olFetch = async (url, init) => { if (/api\/tags/.test(url)) return OL_TAGS; const m = JSON.parse(init.body).model; if (!OL_SHOW[m]) throw new Error('gone'); return OL_SHOW[m]; };
+
+test('Ollama on this PC lists the pulled models that call tools: free on this PC, cloud ones on the Ollama plan', async () => {
+  const list = await ollamaModels({ fetchJSON: olFetch, ensure: async () => 'http://127.0.0.1:11434' });
+  assert.deepEqual(list.map((m) => [m.id, m.plan, m.ctx]), [['ollama-local/qwen3:8b', 'free', 40960], ['ollama-local/gpt-oss:120b-cloud', 'plan', 131072]], 'a model without tools, or one that won’t say, is left out');
+  const [q, oss] = list;
+  assert.deepEqual([q.name, q.maker, q.reasoning, q.in, q.cloud], ['qwen3:8b · 8.2B', 'qwen3', true, ['text'], false]);
+  assert.deepEqual([oss.cloud, oss.planLabel, oss.efforts, oss.providerName], [true, 'Ollama', ['low', 'medium', 'high'], 'Ollama cloud']);
+  assert.ok(sourceOf('ollama-local/qwen3:8b'), 'its id names its source');
+  assert.deepEqual(ollamaEntry({ name: 'llava:7b' }, { capabilities: ['tools', 'vision'] }).in, ['text', 'image']);
+  assert.deepEqual([ollamaBase(''), ollamaBase('0.0.0.0'), ollamaBase('127.0.0.1:12000'), ollamaBase('http://box.local:11434')], ['http://127.0.0.1:11434', 'http://127.0.0.1:11434', 'http://127.0.0.1:12000', 'http://box.local:11434']);
+});
+
+test('a call to Ollama goes to /api/chat with a context size, tool calls as objects and results named by their tool', () => {
+  const info = ollamaEntry(OL_TAGS.models[0], OL_SHOW['qwen3:8b']);
+  const pic = 'data:image/png;base64,iVBORw0KGgo=';
+  const b = ollamaBody({ model: 'ollama-local/qwen3:8b', max_tokens: 4000, temperature: 0.2, stop: 'END', reasoning: { effort: 'high' }, tools: CONV.tools, provider: { order: ['x'] }, messages: [
+    { role: 'system', content: [{ type: 'text', text: 'Rules.', cache_control: { type: 'ephemeral' } }] },
+    { role: 'user', content: [{ type: 'text', text: 'Look.' }, { type: 'image_url', image_url: { url: pic } }] },
+    { role: 'assistant', content: null, tool_calls: [{ id: 'c1', type: 'function', function: { name: 'read_file', arguments: '{"path":"a.js"}' } }] },
+    { role: 'tool', tool_call_id: 'c1', content: 'file text' },
+  ] }, info);
+  assert.equal(b.model, 'qwen3:8b');
+  assert.equal(b.stream, true);
+  assert.deepEqual(b.options, { num_ctx: ctxFor(info), num_predict: 4000, temperature: 0.2, stop: ['END'] });
+  assert.equal(ctxFor(info), 32768, 'the model’s own window, up to 32K');
+  assert.equal(b.think, true);
+  assert.equal(b.provider, undefined);
+  assert.deepEqual(b.messages, [
+    { role: 'system', content: 'Rules.' },
+    { role: 'user', content: 'Look.', images: ['iVBORw0KGgo='] },
+    { role: 'assistant', content: '', tool_calls: [{ function: { name: 'read_file', arguments: { path: 'a.js' } } }] },
+    { role: 'tool', content: 'file text', tool_name: 'read_file' },
+  ]);
+  assert.equal(b.tools[0].function.name, CONV.tools[0].function.name);
+  assert.equal(ollamaBody({ model: 'x', reasoning: { enabled: false }, messages: [] }, info).think, false);
+  assert.equal(ollamaBody({ model: 'x', reasoning: { effort: 'low' }, messages: [] }, ollamaEntry(OL_TAGS.models[2], OL_SHOW['gpt-oss:120b-cloud'])).think, 'low', 'gpt-oss takes an effort level');
+  assert.equal(ollamaBody({ model: 'x', messages: [] }, { ...info, reasoning: false }).think, undefined);
+  assert.deepEqual(ollamaMessages([{ role: 'tool', tool_call_id: 'zz', content: '' }]), [{ role: 'tool', content: '(no output)' }]);
+});
+
+test('Ollama streams into the usual shape: text, thinking, tool calls with ids, usage; its refusals say what went wrong', async () => {
+  const info = ollamaEntry(OL_TAGS.models[0], OL_SHOW['qwen3:8b']);
+  const nd = (lines) => ({ ok: true, status: 200, headers: new Headers(), body: (async function* () { for (const l of lines) yield new TextEncoder().encode(`${JSON.stringify(l)}\n`); })() });
+  let seen = null;
+  const fetchFn = async (url, init) => { seen = { url, body: JSON.parse(init.body) }; return nd([
+    { model: 'qwen3:8b', message: { role: 'assistant', content: '', thinking: 'Plan it.' }, done: false },
+    { model: 'qwen3:8b', message: { role: 'assistant', content: 'Writing.' }, done: false },
+    { model: 'qwen3:8b', message: { role: 'assistant', content: '', tool_calls: [{ function: { name: 'write_file', arguments: { path: 'a.js', content: 'x' } } }] }, done: false },
+    { model: 'qwen3:8b', message: { role: 'assistant', content: '' }, done: true, done_reason: 'stop', prompt_eval_count: 1200, eval_count: 80 },
+  ]); };
+  let text = '', thought = '';
+  const r = await ollamaStream({ model: 'ollama-local/qwen3:8b', messages: [{ role: 'user', content: 'hi' }] }, new AbortController().signal, (t) => { text += t; }, (t) => { thought += t; }, { info, fetchFn, ensure: async () => 'http://127.0.0.1:11434' });
+  assert.equal(seen.url, 'http://127.0.0.1:11434/api/chat');
+  assert.deepEqual([text, thought, r.finishReason, r.provider], ['Writing.', 'Plan it.', 'tool_calls', 'Ollama']);
+  assert.equal(r.toolCalls.length, 1);
+  assert.deepEqual([r.toolCalls[0].type, r.toolCalls[0].function.name, JSON.parse(r.toolCalls[0].function.arguments)], ['function', 'write_file', { path: 'a.js', content: 'x' }]);
+  assert.ok(r.toolCalls[0].id, 'each call gets an id for its result');
+  assert.deepEqual(r.usage, { prompt_tokens: 1200, completion_tokens: 80 });
+  assert.deepEqual(sourcePriced(info, r.usage), { cost: 0 }, 'a pulled model costs nothing');
+  const refuse = (status, error) => async () => ({ ok: false, status, headers: new Headers(), text: async () => JSON.stringify({ error }) });
+  const missing = await ollamaStream({ model: 'ollama-local/nope:1b', messages: [] }, new AbortController().signal, null, null, { info, fetchFn: refuse(404, 'model "nope:1b" not found, try pulling it first'), ensure: async () => 'http://127.0.0.1:11434' }).catch((x) => x);
+  assert.equal(failureKind(missing), 'model');
+  const cloud = await ollamaStream({ model: 'ollama-local/gpt-oss:120b-cloud', messages: [] }, new AbortController().signal, null, null, { info, fetchFn: refuse(401, 'unauthorized'), ensure: async () => 'http://127.0.0.1:11434' }).catch((x) => x);
+  assert.equal(failureKind(cloud), 'auth');
+  const mid = async () => nd([{ message: { content: 'Hal' }, done: false }, { error: 'model runner has unexpectedly stopped' }]);
+  await assert.rejects(ollamaStream({ model: 'ollama-local/qwen3:8b', messages: [] }, new AbortController().signal, null, null, { info, fetchFn: mid, ensure: async () => 'http://127.0.0.1:11434' }), /runner has unexpectedly stopped/);
+});
+
+test('Jev on Command Code: a decider seat on the plan, asked like OpenRouter’s Decisions API, answered in the same shape', async () => {
+  const list = ccDecisionModels([{ id: 'typesafe/jev-1.14', price: [0.4, 0] }, { id: 'liquid/d1-ultra', price: [1, 0] }]);
+  assert.deepEqual(list.map((m) => [m.id, m.kind, m.source, m.plan]), [['commandcode/typesafe/jev', 'decision', 'commandcode', 'plan'], ['commandcode/typesafe/jev-1.14.0', 'decision', 'commandcode', 'plan']]);
+  assert.deepEqual([list[0].price, list[0].listPrice], [[0, 0], [0.4, 0]], 'nothing per call; OpenRouter’s Jev price is what it takes from the credits');
+  assert.ok(sourceOf('commandcode/typesafe/jev'), 'its id names its source, so the ensemble sends it there');
+  let seen = null;
+  const answers = { safe: { type: 'noul', noul: 0.43 }, pick: { type: 'choice', choice: 'run', probabilities: { run: 0.54, ask: 0.46 } } };
+  const fetchFn = async (url, init) => { seen = { url, init, body: JSON.parse(init.body) }; return { ok: true, status: 200, headers: new Headers(), json: async () => ({ model: 'typesafe/jev', answers, usage: { input_tokens: 370, output_tokens: 61 } }) }; };
+  const questions = { safe: { type: 'noul', instructions: 'Safe?' }, pick: { type: 'choice', instructions: 'Which?', criteria: { run: 'Run it', ask: 'Ask' } } };
+  const r = await ccDecisions('commandcode/typesafe/jev', 'state', questions, undefined, { key: 'test-cc-key-0123456789', fetchFn });
+  assert.equal(seen.url, 'https://api.commandcode.ai/provider/v1/systemone');
+  assert.equal(seen.init.headers.Authorization, 'Bearer test-cc-key-0123456789');
+  assert.deepEqual(seen.body, { model: 'typesafe/jev', state: 'state', questions }, 'its own model id, the state and the questions as they are');
+  assert.deepEqual([r.answers, r.usage, r.provider, r.resolved], [answers, { prompt_tokens: 370, completion_tokens: 61 }, 'Command Code', 'typesafe/jev']);
+  assert.deepEqual(sourcePriced(list[0], r.usage), { cost: 0, plan_cost: (370 * 0.4) / 1e6 });
+  const off = async () => ({ ok: false, status: 403, headers: new Headers(), text: async () => JSON.stringify({ error: { message: 'Upgrade required', code: 'upgrade_required' } }) });
+  assert.equal(failureKind(await ccDecisions('commandcode/typesafe/jev', 's', questions, undefined, { key: 'test-cc-key-0123456789', fetchFn: off }).catch((x) => x)), 'auth');
+  await assert.rejects(ccDecisions('commandcode/typesafe/jev', 's', questions, undefined, { fetchFn }), /no Command Code key/);
+});
+
+test('OpenCode Go reports what is used of its 5-hour, weekly and monthly limits, as shares with no amounts', async () => {
+  let seen = null;
+  const fetchFn = async (url, init) => { seen = [url, init.headers.Authorization]; return { ok: true, status: 200, headers: new Headers(), json: async () => ({ usage: {
+    rolling: { status: 'ok', percent: 0.4, resetsAt: '2026-10-31T03:45:44.622Z' }, weekly: { status: 'ok', percent: 37.5, resetsAt: '2026-11-02T00:00:00.000Z' }, monthly: { status: 'limited', percent: 140, resetsAt: 'soon' } } }) }; };
+  const a = await goAccount('test-go-key-0123456789', { fetchFn });
+  assert.deepEqual(seen, ['https://opencode.ai/inference/go/v1/usage', 'Bearer test-go-key-0123456789']);
+  assert.equal(a.plan, null, 'Go names no plan tier');
+  assert.equal(a.credits, undefined, 'and no amounts, so nothing to mask');
+  assert.deepEqual(a.windows, [
+    { label: '5-hour window', percent: 0.4, over: false, resetAt: Date.parse('2026-10-31T03:45:44.622Z') },
+    { label: 'Weekly window', percent: 37.5, over: false, resetAt: Date.parse('2026-11-02T00:00:00.000Z') },
+    { label: 'Monthly window', percent: 100, over: true, resetAt: null },
+  ], 'a share over 100 shows as 100, and a status other than ok marks the window spent');
+  const refused = async () => ({ ok: false, status: 401, headers: new Headers(), text: async () => JSON.stringify({ error: { type: 'AuthError', message: 'Invalid API key.' } }) });
+  assert.equal(failureKind(await goAccount('bad-key-0123456789ab', { fetchFn: refused }).catch((x) => x)), 'auth');
+  await assert.rejects(goAccount(''), /key first/);
+});
+
 test('Command Code reports the plan a key is on and what is left: credits and the 5-hour and weekly windows', async () => {
   const seen = [];
   const fetchFn = async (url, init) => { seen.push([url, init.headers.Authorization]); return { ok: true, status: 200, headers: new Headers(), json: async () => (/subscriptions/.test(url)
@@ -4877,6 +4992,7 @@ test('Command Code reports the plan a key is on and what is left: credits and th
   assert.deepEqual(a.credits, { monthly: 42.5, purchased: 10, free: 0, left: 52.5 }, 'a field that isn’t a number counts as 0');
   assert.deepEqual(a.fiveHour, { used: 3.2, cap: 10, exceeded: false, resetAt: 1793400000000 });
   assert.equal(a.weekly, null, 'a window with no cap isn’t shown');
+  assert.deepEqual(a.windows, [{ label: '5-hour window', percent: 32, used: 3.2, cap: 10, over: false, resetAt: 1793400000000 }], 'the panel’s windows: a share used and the amounts behind it');
   assert.deepEqual(['max_20x', 'max_10x', 'pro_monthly', 'team_pro', 'provider', '', 'go'].map(ccPlanName), ['Max 20×', 'Max 10×', 'Pro', 'Teams', 'Provider', 'Free', 'Go']);
   const refused = async () => ({ ok: false, status: 401, headers: new Headers(), text: async () => JSON.stringify({ error: { message: 'Invalid token', code: 'UNAUTHORIZED' } }) });
   const e = await ccAccount('bad-key-0123456789ab', { fetchFn: refused }).catch((x) => x);

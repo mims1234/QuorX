@@ -724,6 +724,11 @@
 #settings .src-name { font-size: 14px; }
 #settings .src-count { font: 11.5px var(--mono); color: var(--dim); }
 #settings .src-what { margin: 6px 0 4px; }
+#settings .kx-brand { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; margin: 0 0 12px; padding: 0 2px; }
+#settings .kx-brand .src-logo { width: 24px; height: 24px; }
+#settings .kx-brand b { font-size: 15px; }
+#settings .kx-brand small { color: var(--muted); font-size: 12px; }
+#settings .kx-head .src-logo { width: 16px; height: 16px; cursor: default; }
 #settings .src-acc { margin: 0 0 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-inset, var(--bg)); }
 #settings .src-acc-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px 0 14px; font-size: 12.5px; }
 #settings .src-acc-plan { display: inline-flex; align-items: center; gap: 6px; }
