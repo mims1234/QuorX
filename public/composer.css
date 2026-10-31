@@ -152,3 +152,16 @@
 .cmp-quick.one .cq-sec[data-sec="mcp"] > h6, .cmp-quick.one .cq-sec[data-sec="mcp"] > .cq-row { grid-column: 1 / -1; }
 .cmp-quick.one .cq-sec[data-sec="mcp"] > h6 { flex-direction: row; align-items: baseline; gap: 6px; font-size: 12.5px; color: var(--text); }
 .cmp-quick.one:has(.cq-sec[data-sec="mcp"]:not([hidden])) { width: 300px; }
+/* the MCP line in the full popover, and the list's search, Ticked only and count */
+.cmp-quick .cq-mcp-sum { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; }
+.cmp-quick .cq-mcp-sum b { font: 600 12px var(--mono); color: var(--text); white-space: nowrap; }
+.cmp-quick .cq-mcp-names { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-family: var(--mono); font-size: 11px; }
+.cmp-quick .cq-mcp-open { flex: none; height: 22px; padding: 0 8px; border-radius: 6px; border: 1px solid var(--accent-border); background: var(--accent-dim); color: var(--accent); font: 500 11.5px var(--font-ui); cursor: pointer; }
+.cmp-quick .cq-mcp-tools { display: flex; align-items: center; gap: 8px; }
+.cmp-quick .cq-mcp-tools .cq-mcp-q { flex: 1; min-width: 0; }
+.cmp-quick .cq-mcp-mine { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--muted); white-space: nowrap; cursor: pointer; }
+.cmp-quick .cq-mcp-mine input { accent-color: var(--accent); margin: 0; }
+.cmp-quick .cq-mcp-count { font: 400 11px var(--mono); color: var(--dim); }
+.cmp-quick .cq-mcp { max-height: min(320px, 45vh); }
+.cmp-quick .cq-mcp-foot { flex-wrap: wrap; row-gap: 4px; }
+.cmp-quick .cq-mcp-count { white-space: nowrap; }

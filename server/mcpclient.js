@@ -10,7 +10,7 @@ import { HOME } from './openrouter.js';
 import { renameSoon } from './fsretry.js';
 
 const FILE = () => path.join(HOME, 'data', 'mcp.json');
-export const MCP_MAX = 30, MASK = '••••••';
+export const MCP_MAX = 200, MASK = '••••••';
 const NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/;
 const VERSION = (() => { try { return JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version; } catch { return '0'; } })();
 const PROTOCOL = '2025-06-18';

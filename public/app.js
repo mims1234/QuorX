@@ -3204,7 +3204,10 @@ function renderComposerBar(c) {
   wireQuickSettings(c, quick, chipsEl, followSlot);
   // 🧲 The MCP servers this chat may use: a tick each; Manage opens ⚙ Settings → MCP servers.
   for (const b of quick.querySelectorAll('.cq-mcp input')) b.onchange = () => { const n = b.dataset.mcp; c.mcp = b.checked ? [...new Set([...(c.mcp || []), n])] : (c.mcp || []).filter((x) => x !== n); saveChat(c); renderComposerBar(c); };
-  for (const b of quick.querySelectorAll('.cq-mcp-all')) b.onclick = () => { c.mcp = b.dataset.all === '1' ? (G.mcp || []).filter((s) => s.on).map((s) => s.name) : []; saveChat(c); renderComposerBar(c); };
+  // All / None: the servers shown (after a search, only those); every one when nothing narrows the list.
+  for (const b of quick.querySelectorAll('.cq-mcp-all')) b.onclick = () => { const shown = [...quick.querySelectorAll('.cq-mcp input[data-mcp]')].map((i) => i.dataset.mcp); c.mcp = b.dataset.all === '1' ? [...new Set([...mcpOn(c), ...shown])] : mcpOn(c).filter((n) => !shown.includes(n)); saveChat(c); renderComposerBar(c); };
+  const mo = $('.cq-mcp-open', quick); if (mo) mo.onclick = () => { c._cq = 'mcp'; renderComposerBar(c); };
+  const mine = $('.cq-mcp-mine input', quick); if (mine) mine.onchange = () => { c._mcpMine = mine.checked; renderComposerBar(c); };
   const mq = $('.cq-mcp-q', quick); if (mq) mq.oninput = () => { c._mcpQ = mq.value; renderComposerBar(c); const m2 = $('.cq-mcp-q', quick); if (m2) { m2.focus(); m2.setSelectionRange(m2.value.length, m2.value.length); } };
   const mm = $('.cq-mcp-manage', quick); if (mm) mm.onclick = () => { c._cq = undefined; renderComposerBar(c); openSettings('mcp'); };
   // 👁 and 🧭 both steer the side pane, so one at a time in a chat: turning 👁 on here turns this chat's 🧭 off.
@@ -3242,15 +3245,25 @@ async function loadMcp() {
 // A server's mark: a coloured square with its first letter (its hue from its name).
 const mcpMark = (s, cls = '') => `<span class="mcp-mark ${cls}" style="--mh:${hue(s.name)}" aria-hidden="true">${esc(String(s.name)[0] || '?')}</span>`;
 const mcpOn = (c) => (c.mcp || []).filter((n) => (G.mcp || []).some((s) => s.name === n && s.on));
+// The MCP part of the message box settings. With every setting open (⋯) it is one line: how many of how many are
+// ticked, and Choose…, which opens the list by itself (as the 🧲 chip does). There the ticked ones come first, then
+// the rest; search and "Ticked only" narrow it; All / None act on what is shown. It scrolls, so hundreds fit.
 function mcpRowHTML(c) {
   const list = (G.mcp || []).filter((s) => s.on);
   if (!list.length) return '<span class="cq-mcp-none">No servers yet.</span><button type="button" class="cq-mcp-manage">Add one…</button>';
-  const mine = new Set(c.mcp || []), q = String(c._mcpQ || '').trim().toLowerCase();
-  const shown = list.filter((s) => !q || `${s.name} ${(s.tools || []).map((t) => t.name).join(' ')}`.toLowerCase().includes(q));
+  const mine = new Set(mcpOn(c));
+  if (c._cq !== 'mcp') {
+    const names = [...mine];
+    return `<span class="cq-mcp-sum"><b>${names.length} of ${list.length}</b>${names.length ? `<span class="cq-mcp-names">${names.slice(0, 3).map(esc).join(', ')}${names.length > 3 ? `, +${names.length - 3}` : ''}</span>` : '<span class="cq-mcp-names">none ticked</span>'}<span class="cq-sp"></span><button type="button" class="cq-mcp-open">Choose…</button></span>`;
+  }
+  const q = String(c._mcpQ || '').trim().toLowerCase();
+  const shown = list.filter((s) => (!c._mcpMine || mine.has(s.name)) && (!q || `${s.name} ${(s.tools || []).map((t) => t.name).join(' ')}`.toLowerCase().includes(q)))
+    .sort((a, b) => (mine.has(b.name) - mine.has(a.name)) || a.name.localeCompare(b.name));
   const sub = (s) => (s.status === 'error' ? '<small class="bad">can\'t start · fix in Settings</small>' : `<small>${s.tools?.length ? `${s.tools.length} tools · ` : ''}${s.type === 'http' ? 'web' : 'program'}</small>`);
-  return `${list.length > 6 ? `<input class="cq-mcp-q" placeholder="Search servers or tools" value="${esc(c._mcpQ || '')}" aria-label="Search servers">` : ''}
-    <span class="cq-mcp">${shown.map((s) => `<label class="cq-mcp-one" title="${esc(`${s.type === 'http' ? s.url : [s.command, ...(s.args || [])].join(' ')}${s.tools?.length ? `\n${s.tools.length} tools: ${s.tools.map((t) => t.name).join(', ')}` : ''}`)}"><input type="checkbox" data-mcp="${esc(s.name)}" ${mine.has(s.name) ? 'checked' : ''}>${mcpMark(s, 'sm')}<span><b>${esc(s.name)}</b>${sub(s)}</span></label>`).join('') || '<small>No server matches.</small>'}</span>
-    <span class="cq-mcp-foot"><button type="button" class="cq-mcp-all" data-all="1">All</button><button type="button" class="cq-mcp-all" data-all="0">None</button><span class="cq-sp"></span><button type="button" class="cq-mcp-manage">Manage…</button></span>`;
+  const MAX = 100; // drawn at once; the search finds the rest
+  return `${list.length > 6 ? `<span class="cq-mcp-tools"><input class="cq-mcp-q" placeholder="Search ${list.length} servers or their tools" value="${esc(c._mcpQ || '')}" aria-label="Search servers"><label class="cq-mcp-mine"><input type="checkbox" ${c._mcpMine ? 'checked' : ''}> Ticked only</label></span>` : ''}
+    <span class="cq-mcp">${shown.slice(0, MAX).map((s) => `<label class="cq-mcp-one" title="${esc(`${s.type === 'http' ? s.url : [s.command, ...(s.args || [])].join(' ')}${s.tools?.length ? `\n${s.tools.length} tools: ${s.tools.map((t) => t.name).join(', ')}` : ''}`)}"><input type="checkbox" data-mcp="${esc(s.name)}" ${mine.has(s.name) ? 'checked' : ''}>${mcpMark(s, 'sm')}<span><b>${esc(s.name)}</b>${sub(s)}</span></label>`).join('') || '<small>No server matches.</small>'}</span>
+    <span class="cq-mcp-foot"><small class="cq-mcp-count">${mine.size} ticked${shown.length < list.length || shown.length > MAX ? ` · showing ${Math.min(shown.length, MAX)} of ${list.length}` : ''}</small><span class="cq-sp"></span><button type="button" class="cq-mcp-all" data-all="1" title="Tick every server shown">All</button><button type="button" class="cq-mcp-all" data-all="0" title="Untick every server shown">None</button><button type="button" class="cq-mcp-manage">Manage…</button></span>`;
 }
 // The settings popover over the message box: a chip opens its own part, ⋯ (or, in a narrow box, the one summary chip)
 // opens all of it. It stays open while you change things (each change draws the box again) and closes on a click
