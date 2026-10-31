@@ -394,6 +394,14 @@ handle('nav', (sid, op) => {
   return true;
 });
 handle('close', (sid) => closeTab(sid));
+// The sidebar's Running list: every real tab (yours and each chat's agent tab) with its page and sound, and closing one.
+handle('tabs', (op, sid) => {
+  if (op === 'close') return closeTab(String(sid || ''));
+  return [...tabs].map(([k, t]) => {
+    const wc = t.view.webContents;
+    return { sid: k, agent: !!t.agent, chatId: t.chatId || null, url: wc.getURL(), title: wc.getTitle(), audible: wc.isCurrentlyAudible(), muted: wc.isAudioMuted(), shown: !!t.shown };
+  });
+});
 function closeTab(sid) {
   const t = tabs.get(sid); if (!t) return false;
   try { if (t.view.webContents.debugger.isAttached()) t.view.webContents.debugger.detach(); } catch { /* gone */ }

@@ -3124,6 +3124,41 @@ a.md-pathlink.md-path, .md-pathtext.md-path { color: var(--accent); }
 .msg-media .mm-seg button { background: transparent; color: var(--muted); border: 0; }
 .msg-media .mm-seg button.on { background: var(--panel-3, var(--panel-2)); color: var(--text); }
 @media (max-width: 640px) { .mm-pic { max-width: calc(50% - 4px); } .mm-thumb { --mm-h: 120px; } .mm-pdf-frame { height: 320px; } .mm-head .mm-info { display: none; } }
+
+/* Running (sidebar): everything QuorX runs, in every project. Kinds are outlined pills (tags), sound is coloured text
+   (a status), projects are their colour square and name (a link), and actions are square-cornered buttons. */
+#runningAll { width: min(860px, calc(100vw - 32px)); }
+#rlBody { display: grid; gap: 14px; padding: 4px 2px 8px; }
+#rlBody .st-segmented { display: inline-flex; padding: 3px; gap: 2px; border-radius: 9px; background: var(--surface-inset); border: 1px solid var(--border-inset, var(--line)); }
+#rlBody .st-seg-btn { height: 26px; padding: 0 10px; border-radius: 7px; border: 1px solid transparent; background: transparent; color: var(--muted); font: 600 12px var(--font-ui); cursor: pointer; white-space: nowrap; }
+#rlBody .st-seg-btn:hover { color: var(--text); }
+#rlBody .st-seg-btn.active { background: var(--panel-3); border-color: var(--line-strong); color: var(--text-bright, var(--text)); }
+#rlBody .rl-sec[hidden] { display: none; }
+#rlBody .rl-sec h4 { align-items: center; }
+#rlBody .rl-row[hidden] { display: none; }
+#rlBody .rl-none { padding: 6px 2px; font-size: 12.5px; color: var(--muted); }
+#rlBody .run-row { grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: 12px; }
+#rlBody .run-top, #rlBody .run-meta { grid-column: 1; }
+#rlBody .run-acts { grid-column: 2; grid-row: 1 / span 2; flex-wrap: nowrap; }
+#rlBody .run-kind[data-kind="agent-tab"], #rlBody .run-kind[data-kind="desktop"] { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+#rlBody .run-kind[data-kind="your-tab"] { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+#rlBody .run-kind[data-kind="chrome"], #rlBody .run-kind[data-kind="lent"] { color: var(--violet, #a78bfa); border-color: color-mix(in srgb, var(--violet, #a78bfa) 45%, transparent); }
+.rl-title { min-width: 0; flex: 1; font-size: 13px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rl-url { min-width: 0; max-width: 100%; font: 11.5px var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rl-sound { flex: none; font: 600 11.5px var(--font-ui); color: var(--muted); }
+.rl-sound.on { color: var(--ok); }
+.rl-proj { display: inline-flex; align-items: center; gap: 5px; padding: 0; border: 0; background: none; font: 600 12px var(--font-ui); color: var(--text); cursor: pointer; }
+.rl-proj::before { content: ""; width: 8px; height: 8px; border-radius: 2px; background: var(--pcx, hsl(var(--ph, 150) 55% 55%)); }
+.rl-proj:hover { text-decoration: underline; text-underline-offset: 2px; }
+.rl-stopall { margin-left: auto; height: 24px; padding: 0 10px; border-radius: 6px; font: 600 11.5px var(--font-ui); text-transform: none; letter-spacing: 0; cursor: pointer;
+  color: var(--bad); border: 1px solid color-mix(in srgb, var(--bad) 45%, transparent); background: transparent; }
+.rl-stopall:hover:not(:disabled) { background: var(--bad); color: #fff; }
+.rl-count .rl-loud { font-size: 11px; }
+.sb-rail-btn.nav-running { position: relative; }
+.sb-rail-btn.nav-running .rl-badge { position: absolute; top: 3px; right: 2px; min-width: 14px; height: 14px; padding: 0 3px; border-radius: 7px; background: var(--ok); color: var(--ok-ink, #04130a);
+  font: 700 9.5px/14px var(--mono); font-style: normal; text-align: center; }
+.sb-rail-btn.nav-running .rl-badge[hidden] { display: none; }
+@media (max-width: 600px) { #rlBody .run-row { grid-template-columns: minmax(0, 1fr); } #rlBody .run-acts { grid-column: 1; grid-row: auto; } }
 /* Who a call was paid to (a maker's API, a plan, an app, else OpenRouter): a quiet outlined tag, apart from money. */
 .tc-prov { display: inline-block; margin-left: 6px; padding: 0 6px; border: 1px solid var(--line); border-radius: 4px; font: 600 10px var(--font-ui); letter-spacing: .02em; color: var(--muted); vertical-align: 1px; white-space: nowrap; }
 .tc-provs, #costBody .cx-provs { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; margin: 6px 0; font-size: 12px; }

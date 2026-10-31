@@ -38,7 +38,7 @@ const SANDBOX_CSP = 'sandbox allow-scripts allow-forms allow-modals allow-popups
 import { listChats, sidebarChats, chatPage, chatPictureRefs, pictureRefCounts, getTrace, getChatForPage, getChat, saveChat, patchChat, settleReply, trashChat, duplicateChat, validId, listProjects, saveProject, forgetProject, setProjectColor, setProjectFlags, costSummary, costChats } from './server/store.js';
 import { ALLOWED, copyTemplate, workspaceDir, safePath, fullLocalPath,chatFolder, listFiles, listDir, listServers, stopServerWait, restartServer, serverLog, startServer, restoreCheckpoint, listCheckpoints, pruneCheckpoints, undoConflicts, changedFiles, reviewFiles, reviewDiff, undoFile, serverOverview, launchConfigs, saveLaunchConfig, removeLaunchConfig, ensureAgentDir, agentSpace } from './server/workspace.js';
 import { followTerm, runningJobs, stopJob } from './server/terminal.js';
-import { runningIn, stopRunning, stopAllIn } from './server/running.js';
+import { runningIn, runningAll, stopRunning, stopAllIn } from './server/running.js';
 import { decide as decideCommand, loadRules, saveRules, suggestedRules, ruleProblem, updateRule, removeRule } from './server/cmdpolicy.js';
 import { jobHostStatus, jobsAvailable } from './server/jobhost.js';
 import { glowOn, glowOff, glowRuns, onGlowStop, onGlowScreen, stopNow as glowStopNow } from './server/glow.js';
@@ -750,6 +750,18 @@ const server = http.createServer(async (req, res) => {
       catch (e) { return json(res, 200, { error: e.message }); }
     }
 
+    // ---- the sidebar's Running list: what runs in every project, and the chats driving your Chrome or your desktop ----
+    if (url.pathname === '/api/running/all' && req.method === 'GET') {
+      try { return json(res, 200, { items: runningAll(listProjects().map((p) => p.id)), control: controlNow() }); }
+      catch (e) { return json(res, 200, { error: e.message, items: [], control: [] }); }
+    }
+    // Stop: the chat's reply ends (its Chrome or desktop use with it). Take back: a lent Chrome tab is yours again.
+    if (url.pathname === '/api/running/control' && req.method === 'POST') {
+      const b = JSON.parse(await readBody(req, 1e4));
+      if (b.op === 'takeBack' && Number.isInteger(b.tab)) return json(res, 200, { ok: !!takeBackSid(`chrome-${b.tab}`) });
+      if (b.op === 'stop' && validId(b.chatId)) return json(res, 200, { ok: true, stopped: stopChat(b.chatId) });
+      return json(res, 400, { error: 'bad request' });
+    }
     // ---- the agent's own folder (.quorx: scratch, undo checkpoints, trash): its size, and clearing it ----
     // ---- ⟳ restart (a fresh copy of this harness takes over the port) and stop: only from this computer ----
     if ((url.pathname === '/api/harness/restart' || url.pathname === '/api/harness/stop') && req.method === 'POST') {
@@ -1174,6 +1186,19 @@ onRunEvent((r, e) => {
   // is driving the desktop only once both are, and names the app it moved to each time.
   if (e.t === 'control' && e.kind === 'desktop') glowOn(r.id, r.chatId || '', e.app || '');
 });
+// What each reply drives right now (your Chrome or your desktop, and the app), for the sidebar's Running list.
+const controlling = new Map(); // runId → { chatId, kind, app, since }
+onRunEvent((r, e) => {
+  if (e === null) { controlling.delete(r.id); return; }
+  if (e.t !== 'control') return;
+  const was = controlling.get(r.id);
+  controlling.set(r.id, { chatId: r.chatId || '', kind: e.kind, app: e.app || (was?.kind === e.kind ? was.app : ''), since: was?.kind === e.kind ? was.since : Date.now() });
+});
+const chatLabel = (chatId) => { let c = null; try { c = validId(chatId) ? getChat(chatId) : null; } catch { /* a chat gone since */ } return { chatTitle: c?.title || '', projectId: c?.projectId || '' }; };
+const controlNow = () => [
+  ...[...controlling].map(([runId, x]) => ({ runId, ...x, ...chatLabel(x.chatId) })),
+  ...lentChromeTabs().map((x) => ({ kind: 'lent', chatId: x.chatId, tab: x.tab, title: x.title || '', ...chatLabel(x.chatId) })),
+];
 onGlowScreen((chatId) => startWork(chatId).then((w) => w?.screen || null), endWork);
 onGlowStop((runs) => { stopDesktopNow(); for (const id of runs) stopRun(id); });
 // The desktop app's own system-wide stop shortcut, the same as the glow's (it works whichever window is in front).

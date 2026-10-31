@@ -8596,6 +8596,11 @@ async function boot() {
   $('#schedules').addEventListener('close', () => { SCHED.focus = null; });
   loadSchedules().then(pollSchedules);
   $('#costClose').onclick = () => $('#costs').close();
+  $('#runAllBtn').onclick = () => openRunningAll();
+  $('#railRunning').onclick = () => openRunningAll();
+  $('#rlClose').onclick = () => $('#runningAll').close();
+  $('#runningAll').addEventListener('close', () => clearInterval(RUNV.timer));
+  loadRunningAll();
   $('#themeBtn').onclick = () => { const i = THEMES.findIndex((t) => t[0] === (G.theme || null)); G.theme = THEMES[(i + 1) % THEMES.length][0]; applyTheme(); savePrefs(); };
   wirePicker();
   $('.brand')?.addEventListener('click', () => showLanding());
@@ -10002,6 +10007,156 @@ function drawRunningPane(c, r) {
     const ch = $('.run-chat', row); if (ch) ch.onclick = () => showChat(ch.dataset.chat);
   }
 }
+
+// ---------- Running (sidebar): everything QuorX runs right now, in every project ----------
+// One list to judge what is using the machine: servers and commands from every project, the real browser tabs in the
+// desktop app (yours and each chat's agent tab, with their sound), and the chats driving your Chrome or your desktop.
+// Every row names its chat or project and jumps there; each has its own Stop or Close. The sidebar row counts them.
+const RUNV = { data: null, tabs: null, timer: 0 };
+const RL_SEG = { server: 'Servers', command: 'Commands', terminal: 'Terminals', tab: 'Browser tabs', chrome: 'Chrome', desktop: 'Computer use' };
+const RL_KIND = { ...RUN_KIND, 'agent-tab': 'Agent tab', 'your-tab': 'Your tab', chrome: 'Chrome', lent: 'Lent Chrome tab', desktop: 'Computer use' };
+const rlSeg = (kind) => (kind === 'server' ? 'server' : kind === 'background' || kind === 'command' ? 'command' : 'terminal');
+async function loadRunningAll() {
+  const [d, tabs] = await Promise.all([getJ('/api/running/all'), DESK && window.ohDesktop.tabs ? window.ohDesktop.tabs('list').catch(() => null) : Promise.resolve(null)]);
+  RUNV.data = d && !d.error ? d : { items: [], control: [], error: d?.error || 'no answer' };
+  RUNV.tabs = Array.isArray(tabs) ? tabs : null; // null: not the desktop app (or an older one), so no tabs section
+  drawRunCount();
+  return RUNV.data;
+}
+function drawRunCount() {
+  const d = RUNV.data; if (!d) return;
+  const nt = RUNV.tabs?.length || 0, n = d.items.length + nt + d.control.length, loud = (RUNV.tabs || []).filter((t) => t.audible && !t.muted).length;
+  const el = $('#runCount');
+  if (el) { el.hidden = !n; el.innerHTML = `<span class="on">${n}</span>${loud ? `<span class="rl-loud" title="${loud} tab${loud > 1 ? 's' : ''} playing sound">🔊</span>` : ''}`; }
+  const parts = [[d.items.length, 'server or command', 'servers and commands'], [nt, 'browser tab', 'browser tabs'], [d.control.length, 'Chrome or computer use', 'Chrome and computer use']].filter(([k]) => k);
+  $('#runAllBtn')?.setAttribute('title', `Running: ${parts.length ? parts.map(([k, one, many]) => `${k} ${k === 1 ? one : many}`).join(', ') : 'nothing right now'}. Everything QuorX has running, in every project`);
+  const r = $('#railRunning');
+  if (r) { r.setAttribute('data-tip', n ? `Running · ${n}` : 'Running'); const b = $('.rl-badge', r); if (b) { b.hidden = !n; b.textContent = n > 99 ? '99+' : String(n); } }
+}
+const rlChat = (chatId, title) => { const h = chatId && G.chats.find((x) => x.id === chatId); return chatId ? `<button type="button" class="run-chat linkish" data-chat="${esc(chatId)}" title="Open this chat">${esc(clip(h?.title || title || 'a chat', 34))}</button>` : ''; };
+const rlProj = (pid) => { const p = pid && G.projects.find((x) => x.id === pid); return p ? `<button type="button" class="rl-proj" data-proj="${esc(p.id)}" style="${projStyle(p)}" title="Open ${esc(p.name)} on its Running tab">${esc(clip(p.name, 26))}</button>` : ''; };
+const rlMeta = (parts) => `<div class="run-meta">${parts.filter(Boolean).join('<span class="run-sep">·</span>')}</div>`;
+const rlTop = (dot, kind, text) => `<i class="tr-dot ${dot}"></i><span class="run-kind" data-kind="${esc(kind)}">${esc(RL_KIND[kind] || kind)}</span>${text}`;
+const rlRow = (key, seg, text, top, meta, acts) => `<div class="run-row rl-row" data-key="${esc(key)}" data-lf-seg="${seg}" data-lf-text="${esc(text.toLowerCase())}"><div class="run-top">${top}</div>${meta}<div class="run-acts">${acts}</div></div>`;
+const rlTime = (at, word) => `<span class="run-time" data-started="${at}" data-word="${word}">${word} ${dur(Date.now() - at)}</span>`;
+function rlRows() {
+  const d = RUNV.data, rows = { proc: [], tab: [], ctl: [] };
+  const pname = (pid) => G.projects.find((p) => p.id === pid)?.name || '';
+  const cname = (id, t) => G.chats.find((x) => x.id === id)?.title || t || '';
+  for (const x of d.items) {
+    const who = x.source === 'agent' ? '<span class="run-who agent">🤖 agent</span>' : x.source === 'you' ? '<span class="run-who you">👤 you</span>' : '';
+    const port = x.url ? `<a class="run-url" href="${esc(x.url)}" rel="noopener" data-cl="1">:${esc(String(x.url).match(/:(\d+)/)?.[1] || '')}</a>` : '';
+    const label = x.kind === 'your-term' ? `Terminal · ${x.label}` : x.label, term = x.kind === 'your-term';
+    rows.proc.push(rlRow(`p:${x.projectId}:${x.id}`, rlSeg(x.kind), `${label} ${x.detail || ''} ${RL_KIND[x.kind] || ''} ${pname(x.projectId)} ${cname(x.chatId)} ${x.source || ''}`,
+      rlTop(x.status === 'starting' ? 'busy' : 'ok', x.kind, `<code class="run-cmd" title="${esc(x.detail || x.label)}">${esc(label)}</code>`),
+      rlMeta([rlProj(x.projectId), rlChat(x.chatId), who, x.started ? rlTime(x.started, term ? 'open' : 'running') : '', port]),
+      `<button type="button" class="run-stop danger" data-stop="${esc(x.id)}" data-pid="${esc(x.projectId)}" title="${term ? 'Close this terminal tab' : 'Stop it, and everything it started'}">${term ? '✕ Close' : '■ Stop'}</button>`));
+  }
+  for (const t of RUNV.tabs || []) {
+    const lent = !t.agent && lentChatOf(t.sid), chatId = t.agent ? t.chatId : lent || null, ch = chatId && G.chats.find((x) => x.id === chatId);
+    const sound = t.audible && !t.muted ? '<span class="rl-sound on" title="Playing sound now">🔊 playing</span>' : t.muted ? `<span class="rl-sound" title="Muted">🔇 muted${t.audible ? ' (playing)' : ''}</span>` : '';
+    const blank = !t.url || t.url === 'about:blank', tchat = esc(t.agent ? t.chatId || '' : '');
+    rows.tab.push(rlRow(`t:${t.sid}`, 'tab', `${t.title} ${t.url} ${t.agent ? 'agent tab' : 'your tab'} ${t.audible && !t.muted ? 'sound playing' : ''} ${t.muted ? 'muted' : ''} ${cname(chatId)}`,
+      rlTop('ok', t.agent ? 'agent-tab' : 'your-tab', `<span class="rl-title" title="${esc(t.title || t.url)}">${esc(t.title || (blank ? 'Empty tab' : t.url))}</span>${sound}`),
+      rlMeta([blank ? '' : `<code class="rl-url" title="${esc(t.url)}">${esc(clip(t.url.replace(/^https?:\/\//, ''), 60))}</code>`, ch ? rlProj(ch.projectId) : '', chatId ? `${lent ? '<span>lent to</span> ' : ''}${rlChat(chatId)}` : '<span>yours, in no chat</span>']),
+      `<button type="button" class="rl-go" data-tab="${esc(t.sid)}" data-tchat="${tchat}" title="Show this tab in the pane's Browser tab">Go to tab</button><button type="button" class="danger rl-close" data-close="${esc(t.sid)}" data-tchat="${tchat}" title="Close this tab${t.agent ? ' (the agent opens a new one if it needs a page again)' : ''}">✕ Close</button>`));
+  }
+  for (const x of d.control) {
+    if (x.kind === 'lent') {
+      rows.ctl.push(rlRow(`l:${x.tab}`, 'chrome', `${x.title} lent chrome tab ${cname(x.chatId, x.chatTitle)} ${pname(x.projectId)}`,
+        rlTop('ok', 'lent', `<span class="rl-title" title="${esc(x.title)}">${esc(x.title || 'A tab in your Chrome')}</span>`),
+        rlMeta([rlProj(x.projectId), `<span>lent to</span> ${rlChat(x.chatId, x.chatTitle)}`]),
+        `<button type="button" class="rl-take" data-take="${x.tab}" title="Take this tab back from the agent: it stays open in your Chrome">Take back</button>`));
+      continue;
+    }
+    const desk = x.kind === 'desktop';
+    rows.ctl.push(rlRow(`c:${x.runId}`, desk ? 'desktop' : 'chrome', `${desk ? `computer use desktop ${x.app}` : 'chrome extension'} ${cname(x.chatId, x.chatTitle)} ${pname(x.projectId)}`,
+      rlTop('busy', desk ? 'desktop' : 'chrome', `<span class="rl-title">${desk ? `Using ${esc(x.app || 'your desktop')}` : 'Driving your Chrome'}</span>`),
+      rlMeta([rlProj(x.projectId), rlChat(x.chatId, x.chatTitle), x.since ? rlTime(x.since, 'for') : '']),
+      `<button type="button" class="run-stop danger" data-cstop="${esc(x.chatId)}" title="Stop this chat's reply: it lets go of ${desk ? 'your desktop' : 'your Chrome'}">■ Stop</button>`));
+  }
+  return rows;
+}
+async function openRunningAll() {
+  const dlg = $('#runningAll'), body = $('#rlBody');
+  body.innerHTML = '<div class="run-empty">Checking what runs…</div>';
+  delete body.dataset.sig;
+  if (!dlg.open) dlg.showModal();
+  await loadRunningAll(); drawRunningAll();
+  clearInterval(RUNV.timer);
+  RUNV.timer = setInterval(async () => { if (!dlg.open) { clearInterval(RUNV.timer); return; } await loadRunningAll(); drawRunningAll(); }, 2000);
+}
+function drawRunningAll() {
+  const body = $('#rlBody'), d = RUNV.data; if (!body || !d || !$('#runningAll').open) return;
+  // Rebuilt only when what runs changes; times tick in place, so a click never lands on a button just replaced.
+  const sig = JSON.stringify([d.error, d.items.map((x) => [x.projectId, x.id, x.status, x.chatId]), RUNV.tabs && RUNV.tabs.map((t) => [t.sid, t.url, t.title, t.audible, t.muted]), d.control.map((x) => [x.kind, x.runId, x.tab, x.app])]);
+  if (body.dataset.sig === sig) {
+    for (const t of body.querySelectorAll('.run-time[data-started]')) t.textContent = `${t.dataset.word} ${dur(Date.now() - Number(t.dataset.started))}`;
+    return;
+  }
+  body.dataset.sig = sig;
+  const rows = rlRows(), procN = d.items.filter((x) => x.kind !== 'your-term').length;
+  const sec = (k, title, hint, list, empty, tool = '') => `<section class="run-group rl-sec" data-sec="${k}"><h4>${esc(title)} <span class="run-n">${list.length}</span><small>${esc(hint)}</small>${tool}</h4>${list.join('') || `<div class="rl-none">${esc(empty)}</div>`}</section>`;
+  const q0 = document.activeElement?.classList.contains('lf-q') && body.contains(document.activeElement) ? document.activeElement.selectionStart : null;
+  body.innerHTML = `${d.error ? `<div class="run-empty bad">Could not list servers and commands: ${esc(d.error)}</div>` : ''}<div class="rl-filter"></div>
+    ${sec('proc', 'Servers and commands', 'in every project', rows.proc, 'No servers or commands are running.', procN > 1 ? `<button type="button" class="rl-stopall danger" title="Stop every server and command in every project (your terminal tabs stay open)">■ Stop all ${procN}</button>` : '')}
+    ${RUNV.tabs ? sec('tab', 'Browser tabs in QuorX', 'your tabs and each chat’s agent tab', rows.tab, 'No browser tabs are open.') : ''}
+    ${sec('ctl', 'Chrome and computer use', 'chats using your Chrome or your desktop', rows.ctl, 'No chat is using your Chrome or your desktop.')}`;
+  listFilter($('.rl-filter', body), { key: 'runningAll', rows: () => body.querySelectorAll('.rl-row'), segLabel: (v) => RL_SEG[v] || v, segOrder: Object.keys(RL_SEG),
+    placeholder: 'Find a command, page, chat or project', label: 'Show',
+    // A section whose rows are all filtered away steps aside (one with no rows keeps its "nothing" line).
+    onApply: () => { for (const s of body.querySelectorAll('.rl-sec')) { const r = [...s.querySelectorAll('.rl-row')]; s.hidden = r.length > 0 && r.every((x) => x.hidden); } } });
+  if (q0 != null) { const q = $('.rl-filter .lf-q', body); q.focus(); q.setSelectionRange(q0, q0); }
+  wireRunningAll(body);
+}
+function wireRunningAll(body) {
+  const again = async () => { await loadRunningAll(); drawRunningAll(); pollDev(); };
+  const leave = () => $('#runningAll').close();
+  for (const b of body.querySelectorAll('[data-chat]')) b.onclick = () => { leave(); showChat(b.dataset.chat); if (isPhone()) setMView('chat'); };
+  for (const b of body.querySelectorAll('[data-proj]')) b.onclick = async () => {
+    // The project's newest chat, with the pane on its Running tab.
+    const h = G.chats.filter((x) => x.projectId === b.dataset.proj).sort((a, z) => (z.lastAt || z.updated || 0) - (a.lastAt || a.updated || 0))[0];
+    if (!h) return uiAlert('This project has no chat to open yet.');
+    leave(); await showChat(h.id); setPaneTab('run');
+  };
+  for (const b of body.querySelectorAll('[data-stop]')) b.onclick = async () => {
+    b.disabled = true; b.textContent = 'Stopping…';
+    const res = await postJ('/api/running/stop', { projectId: b.dataset.pid, id: b.dataset.stop });
+    if (res.error) uiAlert(res.error); else if (res.left) uiAlert(`${res.left} process${res.left > 1 ? 'es' : ''} did not stop: ${(res.names || []).join(', ')}`);
+    again();
+  };
+  const all = $('.rl-stopall', body);
+  if (all) all.onclick = async () => {
+    const pids = [...new Set(RUNV.data.items.filter((x) => x.kind !== 'your-term').map((x) => x.projectId))];
+    if (!await uiConfirm(`Stop every server and command in ${pids.length === 1 ? 'this project' : `all ${pids.length} projects`}?\nYour terminal tabs stay open.`, { ok: 'Stop all', danger: true })) return;
+    all.disabled = true; all.textContent = 'Stopping…';
+    const res = await Promise.all(pids.map((projectId) => postJ('/api/running/stop-all', { projectId })));
+    const left = res.reduce((n, r) => n + (r.left || 0), 0); if (left) uiAlert(`${left} process${left > 1 ? 'es' : ''} did not stop.`);
+    again();
+  };
+  for (const b of body.querySelectorAll('[data-cstop]')) b.onclick = async () => { b.disabled = true; b.textContent = 'Stopping…'; const r = await postJ('/api/running/control', { op: 'stop', chatId: b.dataset.cstop }); if (r.error) uiAlert(r.error); again(); };
+  for (const b of body.querySelectorAll('[data-take]')) b.onclick = async () => { b.disabled = true; const r = await postJ('/api/running/control', { op: 'takeBack', tab: Number(b.dataset.take) }); if (r.error) uiAlert(r.error); again(); };
+  for (const b of body.querySelectorAll('[data-tab]')) b.onclick = async () => {
+    const sid = b.dataset.tab, chatId = b.dataset.tchat;
+    // Tabs show in a chat's pane: the agent's in its own chat, yours in the chat open now (or the newest one).
+    const goTo = chatId || (!focused() && G.chats[0]?.id);
+    if (!chatId && !focused() && !goTo) return uiAlert('Open a chat first: tabs show in its pane.');
+    leave(); if (goTo) await showChat(goTo);
+    G.bActive = sid; setPaneTab('browser');
+  };
+  for (const b of body.querySelectorAll('[data-close]')) b.onclick = async () => {
+    const sid = b.dataset.close, chatId = b.dataset.tchat;
+    if (chatId && G.open.get(chatId)?.running && !await uiConfirm('This chat’s reply is still working and may be using this tab. Close it anyway?', { ok: 'Close tab', danger: true })) return;
+    b.disabled = true;
+    // Through the pane's own close (it forgets the tab, takes a lent one back, asks about a server it shows), then the
+    // desktop's, for a tab the page no longer knows.
+    if (chatId || (G.btabs || []).some((x) => x.sid === sid)) await closeBTab({ id: chatId }, sid);
+    await window.ohDesktop.tabs('close', sid).catch(() => {});
+    again();
+  };
+}
+// The sidebar count: every 5 s while QuorX is in view (the open list refreshes itself every 2 s).
+setInterval(() => { if (document.visibilityState === 'visible' && !$('#runningAll')?.open && G.projects) loadRunningAll(); }, 5000);
 
 // ---------- ↻ retry a failed reply ----------
 // Only the newest reply, when it failed: your message before it goes again, on the chat's model as it is now.
