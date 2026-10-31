@@ -4,7 +4,7 @@
 // they run; a key pressed meanwhile can land in their windows. CI runs them with every push.
 import { spawnSync } from 'node:child_process';
 
-const r = spawnSync(process.execPath, ['--test', '--test-force-exit', '--test-name-pattern=^(desktop|stop: a window)', 'scripts/test-safety.mjs'], {
+const r = spawnSync(process.execPath, ['--test', '--test-force-exit', '--test-name-pattern=^(desktop|stop: a window)', 'scripts/test-computer.mjs'], {
   stdio: 'inherit', env: { ...process.env, QX_DESKTOP_TESTS: '1' },
 });
 process.exit(r.status ?? 1);

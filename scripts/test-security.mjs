@@ -143,24 +143,24 @@ test('the chat finds the files a reply wrote, and pictures a reply names by a lo
   assert.doesNotMatch(renderMarkdown('![x](javascript:alert(1))'), /<img|data-path/);
 });
 
-test('{PORT} is allowed in server arguments; shell characters are not', () => {
-  assert.equal(checkCommand('python', ['-m', 'http.server', '{PORT}']), 'python');
-  assert.throws(() => checkCommand('node', ['x.js', '&&', 'calc']), /not allowed/);
-  assert.throws(() => checkCommand('node&calc', []), /not allowed/);
-});
-
-test('any program can be a server; only node, npm, python and the like skip the command check', () => {
-  assert.equal(checkCommand('cargo', ['run']), 'cargo');
-  assert.equal(checkCommand('wrangler', ['dev', '--port', '{PORT}']), 'wrangler');
-  assert.equal(preApproved('npm'), true);
-  assert.equal(preApproved('cmd'), false, 'cmd /c … goes through the command check first');
-  assert.equal(preApproved('wrangler'), false);
-});
-
-test('a whole command line in command says how to split it', () => {
-  assert.throws(() => checkCommand('node hub/server.mjs', []), /use command "node" with args \["hub\/server\.mjs"\]/);
-  assert.throws(() => checkCommand('npm run dev', ['--', '--port', '{PORT}']), /use command "npm" with args \["run","dev","--","--port","\{PORT\}"\]/);
-  assert.throws(() => checkCommand('cmd /c dir', []), /use command "cmd" with args \["\/c","dir"\]/);
+test('servers: {PORT} but no shell characters in arguments, any program can be one (only node and the like skip the check), and a whole line says how to split it', () => {
+  { // {PORT} is allowed in server arguments; shell characters are not
+    assert.equal(checkCommand('python', ['-m', 'http.server', '{PORT}']), 'python');
+    assert.throws(() => checkCommand('node', ['x.js', '&&', 'calc']), /not allowed/);
+    assert.throws(() => checkCommand('node&calc', []), /not allowed/);
+  }
+  { // any program can be a server; only node, npm, python and the like skip the command check
+    assert.equal(checkCommand('cargo', ['run']), 'cargo');
+    assert.equal(checkCommand('wrangler', ['dev', '--port', '{PORT}']), 'wrangler');
+    assert.equal(preApproved('npm'), true);
+    assert.equal(preApproved('cmd'), false, 'cmd /c … goes through the command check first');
+    assert.equal(preApproved('wrangler'), false);
+  }
+  { // a whole command line in command says how to split it
+    assert.throws(() => checkCommand('node hub/server.mjs', []), /use command "node" with args \["hub\/server\.mjs"\]/);
+    assert.throws(() => checkCommand('npm run dev', ['--', '--port', '{PORT}']), /use command "npm" with args \["run","dev","--","--port","\{PORT\}"\]/);
+    assert.throws(() => checkCommand('cmd /c dir', []), /use command "cmd" with args \["\/c","dir"\]/);
+  }
 });
 
 test('the static site server answers this computer on its port', async () => {
@@ -285,99 +285,98 @@ test('/api on this computer needs the app key; the app link sets it', () => {
   assert.equal(r3.code, 401);
 });
 
-test('S1: the cookie lives at quorx.localhost only, so dev servers on localhost never get it', () => {
-  const u = (p) => new URL(p, 'http://x');
-  const at = (host, cookie) => ({ method: 'GET', headers: { host, ...(cookie ? { cookie } : {}) }, socket: { remoteAddress: '127.0.0.1', localPort: 5188 } });
-  // The same cookie sent under another name (as a browser would to any localhost port) opens nothing.
-  for (const host of ['localhost:5188', '127.0.0.1:5188']) {
+test('S1: the cookie lives at quorx.localhost only; settings move there through a one-use handoff, sign-in comes back, and the old app key is replaced once', () => {
+  { // S1: the cookie lives at quorx.localhost only, so dev servers on localhost never get it
+    const u = (p) => new URL(p, 'http://x');
+    const at = (host, cookie) => ({ method: 'GET', headers: { host, ...(cookie ? { cookie } : {}) }, socket: { remoteAddress: '127.0.0.1', localPort: 5188 } });
+    // The same cookie sent under another name (as a browser would to any localhost port) opens nothing.
+    for (const host of ['localhost:5188', '127.0.0.1:5188']) {
+      const r = res();
+      assert.equal(appGate(at(host, `qx_app_5188=${appKey}`), r, u('/api/chats')), true, host);
+      assert.equal(r.code, 401, host);
+    }
+    assert.equal(appGate(at('quorx.localhost:5188', `qx_app_5188=${appKey}`), res(), u('/api/chats')), false, 'at its own name it does');
+    assert.equal(appGate(at('quorx.localhost:5188', `qx_app=${appKey}`), res(), u('/api/chats')), true, 'the old name without a port is gone');
+    // The app link at localhost never sets a cookie there: it opens the move page, which removes the old ones.
     const r = res();
-    assert.equal(appGate(at(host, `qx_app_5188=${appKey}`), r, u('/api/chats')), true, host);
-    assert.equal(r.code, 401, host);
+    assert.equal(appGate(at('localhost:5188'), r, u(`/?k=${appKey}&chat=c1`)), true);
+    assert.equal(r.code, 200);
+    assert.deepEqual(r.headers['Set-Cookie'], ['qx_app_5188=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict', 'qx_app=; Path=/; Max-Age=0']);
+    // Other ports' old cookies at localhost go too; other sites' cookies are left alone.
+    const o = res();
+    appGate(at('localhost:5188', 'qx_app_5199=a; devapp=1; qx_app_5331=b'), o, u('/'));
+    assert.deepEqual(o.headers['Set-Cookie'].map((c) => c.split('=')[0]), ['qx_app_5188', 'qx_app', 'qx_app_5199', 'qx_app_5331']);
+    assert.match(r.body, /<meta name="qx-next" content="http:\/\/quorx\.localhost:5188\/\?chat=c1">/, 'on to the same page at its own name');
+    assert.match(r.body, /<script src="\/move\.js"/);
+    assert.doesNotMatch(r.body, new RegExp(appKey), 'the key itself is not in the page');
+    assert.match(r.headers['Content-Security-Policy'], /script-src 'self'/);
+    // A bookmark at localhost (no link): the move page with no handoff, so nothing can be handed over.
+    const b = res();
+    assert.equal(appGate(at('localhost:5188'), b, u('/')), true);
+    assert.match(b.body, /<meta name="qx-move" content="">/);
+    // Other files at localhost still load (the agent's browser opens project files there), and are not moved.
+    assert.equal(appGate(at('localhost:5188'), res(), u('/ws/p1/index.html')), false);
+    assert.equal(appGate(at('localhost:5188'), res(), u('/app.js')), false);
   }
-  assert.equal(appGate(at('quorx.localhost:5188', `qx_app_5188=${appKey}`), res(), u('/api/chats')), false, 'at its own name it does');
-  assert.equal(appGate(at('quorx.localhost:5188', `qx_app=${appKey}`), res(), u('/api/chats')), true, 'the old name without a port is gone');
-  // The app link at localhost never sets a cookie there: it opens the move page, which removes the old ones.
-  const r = res();
-  assert.equal(appGate(at('localhost:5188'), r, u(`/?k=${appKey}&chat=c1`)), true);
-  assert.equal(r.code, 200);
-  assert.deepEqual(r.headers['Set-Cookie'], ['qx_app_5188=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict', 'qx_app=; Path=/; Max-Age=0']);
-  // Other ports' old cookies at localhost go too; other sites' cookies are left alone.
-  const o = res();
-  appGate(at('localhost:5188', 'qx_app_5199=a; devapp=1; qx_app_5331=b'), o, u('/'));
-  assert.deepEqual(o.headers['Set-Cookie'].map((c) => c.split('=')[0]), ['qx_app_5188', 'qx_app', 'qx_app_5199', 'qx_app_5331']);
-  assert.match(r.body, /<meta name="qx-next" content="http:\/\/quorx\.localhost:5188\/\?chat=c1">/, 'on to the same page at its own name');
-  assert.match(r.body, /<script src="\/move\.js"/);
-  assert.doesNotMatch(r.body, new RegExp(appKey), 'the key itself is not in the page');
-  assert.match(r.headers['Content-Security-Policy'], /script-src 'self'/);
-  // A bookmark at localhost (no link): the move page with no handoff, so nothing can be handed over.
-  const b = res();
-  assert.equal(appGate(at('localhost:5188'), b, u('/')), true);
-  assert.match(b.body, /<meta name="qx-move" content="">/);
-  // Other files at localhost still load (the agent's browser opens project files there), and are not moved.
-  assert.equal(appGate(at('localhost:5188'), res(), u('/ws/p1/index.html')), false);
-  assert.equal(appGate(at('localhost:5188'), res(), u('/app.js')), false);
-});
-
-test('S1: moving settings to quorx.localhost: only the app link makes a handoff, used once, and it signs in once', () => {
-  const u = (p) => new URL(p, 'http://x');
-  const at = (host, method = 'GET', cookie) => ({ method, headers: { host, ...(cookie ? { cookie } : {}) }, socket: { remoteAddress: '127.0.0.1', localPort: 5188 } });
-  const r = res();
-  appGate(at('localhost:5188'), r, u(`/?k=${appKey}`));
-  const id = r.body.match(/name="qx-move" content="([\w-]+)"/)[1];
-  assert.equal(id.length, 24);
-  // The old page posts its settings with the handoff's id as its key; a made-up id is refused like any call.
-  assert.equal(appGate(at('localhost:5188', 'POST'), res(), u(`/api/prefs/handoff/${id}`)), false);
-  const bad = res();
-  assert.equal(appGate(at('localhost:5188', 'POST'), bad, u('/api/prefs/handoff/AAAAAAAAAAAAAAAAAAAAAAAA')), true);
-  assert.equal(bad.code, 401);
-  assert.equal(handoffPut(id, ['x']), false, 'not a list');
-  assert.equal(handoffPut(id, { 'quorx-v1': '{"theme":"dark"}', 'oh-term-font': '15', n: 3 }), true);
-  assert.equal(handoffPut(id, { 'quorx-v1': '{"theme":"light"}' }), false, 'once');
-  assert.equal(appGate(at('localhost:5188', 'POST'), res(), u(`/api/prefs/handoff/${id}`)), true, 'and then the route is closed');
-  assert.equal(handoffTake(id), null, 'not before the new page is signed in');
-  // QuorX at its own name: the handoff's id signs in once and leaves ?prefs= for the page.
-  const s = res();
-  assert.equal(appGate(at('quorx.localhost:5188'), s, u(`/?moved=${id}&chat=c1`)), true);
-  assert.equal(s.code, 302);
-  assert.match(s.headers['Set-Cookie'], new RegExp(`^qx_app_5188=${appKey};`));
-  assert.equal(s.headers.Location, `/?chat=c1&prefs=${id}`);
-  const again = res();
-  appGate(at('quorx.localhost:5188'), again, u(`/?moved=${id}`));
-  assert.equal(again.headers['Set-Cookie'], undefined, 'a second visit with it gets no cookie');
-  assert.deepEqual(handoffTake(id), { 'quorx-v1': '{"theme":"dark"}', 'oh-term-font': '15' }, 'strings only');
-  assert.equal(handoffTake(id), null, 'read once');
-  // Nothing to carry: the id still signs in, then is gone.
-  const r2 = res(); appGate(at('localhost:5188'), r2, u(`/?k=${appKey}`));
-  const id2 = r2.body.match(/name="qx-move" content="([\w-]+)"/)[1];
-  const s2 = res(); appGate(at('quorx.localhost:5188'), s2, u(`/?moved=${id2}`));
-  assert.ok(s2.headers['Set-Cookie']);
-  assert.equal(s2.headers.Location, '/');
-  assert.equal(handoffPut(id2, { a: 'b' }), false, 'too late to send settings');
-  // A made-up id: no cookie.
-  const s3 = res(); appGate(at('quorx.localhost:5188'), s3, u('/?moved=nope'));
-  assert.equal(s3.headers['Set-Cookie'], undefined);
-});
-
-test('S1: OpenRouter sign-in from quorx.localhost still comes back by itself, to localhost', () => {
-  const back = (origin) => new URL(startSignIn(origin).url).searchParams.get('callback_url');
-  assert.equal(back('http://quorx.localhost:5188'), 'http://localhost:5188/oauth/openrouter/callback');
-  assert.equal(back('http://localhost:5188'), 'http://localhost:5188/oauth/openrouter/callback');
-  assert.equal(startSignIn('http://evil.example').mode, 'code', 'another site pastes the code');
-});
-
-test('S1: the app key made before quorx.localhost is replaced once, then kept', () => {
-  const home = tempDir('qx-key-');
-  fs.mkdirSync(path.join(home, 'data'), { recursive: true });
-  const old = 'k'.repeat(43);
-  fs.writeFileSync(path.join(home, 'data', 'app-key'), old);
-  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-  const load = () => execFileSync(process.execPath, ['--input-type=module', '-e', "import('./server/access.js').then((m) => process.stdout.write(m.appKey))"], { cwd: root, env: { ...process.env, OH_HOME: home } }).toString();
-  const first = load();
-  assert.notEqual(first, old, 'the old key went to dev servers with the cookie');
-  assert.equal(fs.readFileSync(path.join(home, 'data', 'app-key'), 'utf8'), first);
-  assert.ok(fs.existsSync(path.join(home, 'data', 'app-key-host')));
-  assert.equal(load(), first, 'once: the next start keeps it');
-  fs.rmSync(home, { recursive: true, force: true });
+  { // S1: moving settings to quorx.localhost: only the app link makes a handoff, used once, and it signs in once
+    const u = (p) => new URL(p, 'http://x');
+    const at = (host, method = 'GET', cookie) => ({ method, headers: { host, ...(cookie ? { cookie } : {}) }, socket: { remoteAddress: '127.0.0.1', localPort: 5188 } });
+    const r = res();
+    appGate(at('localhost:5188'), r, u(`/?k=${appKey}`));
+    const id = r.body.match(/name="qx-move" content="([\w-]+)"/)[1];
+    assert.equal(id.length, 24);
+    // The old page posts its settings with the handoff's id as its key; a made-up id is refused like any call.
+    assert.equal(appGate(at('localhost:5188', 'POST'), res(), u(`/api/prefs/handoff/${id}`)), false);
+    const bad = res();
+    assert.equal(appGate(at('localhost:5188', 'POST'), bad, u('/api/prefs/handoff/AAAAAAAAAAAAAAAAAAAAAAAA')), true);
+    assert.equal(bad.code, 401);
+    assert.equal(handoffPut(id, ['x']), false, 'not a list');
+    assert.equal(handoffPut(id, { 'quorx-v1': '{"theme":"dark"}', 'oh-term-font': '15', n: 3 }), true);
+    assert.equal(handoffPut(id, { 'quorx-v1': '{"theme":"light"}' }), false, 'once');
+    assert.equal(appGate(at('localhost:5188', 'POST'), res(), u(`/api/prefs/handoff/${id}`)), true, 'and then the route is closed');
+    assert.equal(handoffTake(id), null, 'not before the new page is signed in');
+    // QuorX at its own name: the handoff's id signs in once and leaves ?prefs= for the page.
+    const s = res();
+    assert.equal(appGate(at('quorx.localhost:5188'), s, u(`/?moved=${id}&chat=c1`)), true);
+    assert.equal(s.code, 302);
+    assert.match(s.headers['Set-Cookie'], new RegExp(`^qx_app_5188=${appKey};`));
+    assert.equal(s.headers.Location, `/?chat=c1&prefs=${id}`);
+    const again = res();
+    appGate(at('quorx.localhost:5188'), again, u(`/?moved=${id}`));
+    assert.equal(again.headers['Set-Cookie'], undefined, 'a second visit with it gets no cookie');
+    assert.deepEqual(handoffTake(id), { 'quorx-v1': '{"theme":"dark"}', 'oh-term-font': '15' }, 'strings only');
+    assert.equal(handoffTake(id), null, 'read once');
+    // Nothing to carry: the id still signs in, then is gone.
+    const r2 = res(); appGate(at('localhost:5188'), r2, u(`/?k=${appKey}`));
+    const id2 = r2.body.match(/name="qx-move" content="([\w-]+)"/)[1];
+    const s2 = res(); appGate(at('quorx.localhost:5188'), s2, u(`/?moved=${id2}`));
+    assert.ok(s2.headers['Set-Cookie']);
+    assert.equal(s2.headers.Location, '/');
+    assert.equal(handoffPut(id2, { a: 'b' }), false, 'too late to send settings');
+    // A made-up id: no cookie.
+    const s3 = res(); appGate(at('quorx.localhost:5188'), s3, u('/?moved=nope'));
+    assert.equal(s3.headers['Set-Cookie'], undefined);
+  }
+  { // S1: OpenRouter sign-in from quorx.localhost still comes back by itself, to localhost
+    const back = (origin) => new URL(startSignIn(origin).url).searchParams.get('callback_url');
+    assert.equal(back('http://quorx.localhost:5188'), 'http://localhost:5188/oauth/openrouter/callback');
+    assert.equal(back('http://localhost:5188'), 'http://localhost:5188/oauth/openrouter/callback');
+    assert.equal(startSignIn('http://evil.example').mode, 'code', 'another site pastes the code');
+  }
+  { // S1: the app key made before quorx.localhost is replaced once, then kept
+    const home = tempDir('qx-key-');
+    fs.mkdirSync(path.join(home, 'data'), { recursive: true });
+    const old = 'k'.repeat(43);
+    fs.writeFileSync(path.join(home, 'data', 'app-key'), old);
+    const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+    const load = () => execFileSync(process.execPath, ['--input-type=module', '-e', "import('./server/access.js').then((m) => process.stdout.write(m.appKey))"], { cwd: root, env: { ...process.env, OH_HOME: home } }).toString();
+    const first = load();
+    assert.notEqual(first, old, 'the old key went to dev servers with the cookie');
+    assert.equal(fs.readFileSync(path.join(home, 'data', 'app-key'), 'utf8'), first);
+    assert.ok(fs.existsSync(path.join(home, 'data', 'app-key-host')));
+    assert.equal(load(), first, 'once: the next start keeps it');
+    fs.rmSync(home, { recursive: true, force: true });
+  }
 });
 
 test('fetch_url refuses private, loopback and link-local addresses', () => {
@@ -385,36 +384,36 @@ test('fetch_url refuses private, loopback and link-local addresses', () => {
   for (const ip of ['93.184.215.14', '1.1.1.1', '2606:4700:4700::1111']) assert.ok(!privateAddress(ip), ip);
 });
 
-test('read commands: your keys ask with a red card, outside the project asks; QuorX itself never', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qx-sec-'));
-  const v = async (line) => (await decide(line, { shell: 'bash', root, mode: 'strict', rules: [] })).verdict;
-  const fwd = (p) => p.split(path.sep).join('/');
-  const keys = await decide(`cat ${fwd(path.join(os.homedir(), '.ssh', 'id_ed25519'))}`, { shell: 'bash', root, mode: 'yolo', rules: [{ effect: 'allow', match: '*', by: 'user' }] });
-  assert.equal(`${keys.verdict}:${keys.who}:${keys.risk}`, 'ask:user:danger', 'not even YOLO with an allow-all rule reads your keys unasked');
-  assert.equal(await v(`cat ${fwd(path.join(process.env.OH_HOME, 'data', 'app-key'))}`), 'deny');
-  assert.equal(await v(`cat ${fwd(path.join(os.tmpdir(), 'elsewhere.txt'))}`), 'ask');
-  assert.equal(await v('cat README.md'), 'allow');
-  assert.equal(await v('curl http://127.0.0.1:5188/api/config'), 'deny');
-});
-
-test('key reads by other routes ask too: git diff --no-index, and a search from your home folder down', async () => {
-  const root = tempDir('qx-sec-');
-  const fwd = (p) => p.split(path.sep).join('/'), home = fwd(os.homedir());
-  const yolo = async (line) => { const d = await decide(line, { shell: 'bash', root, mode: 'yolo', rules: [] }); return `${d.verdict}:${d.who}:${d.risk}`; };
-  assert.equal(await yolo(`git diff --no-index ${home}/.ssh/id_ed25519 /dev/null`), 'ask:user:danger', 'a key compared against nothing is a key read');
-  assert.equal(await yolo(`rg -uu PRIVATE ${home}`), 'ask:user:danger', 'a search from the home folder walks into .ssh');
-  assert.equal(await yolo(`grep -rn PRIVATE ${home}`), 'ask:user:danger');
-  // Everyday work is unchanged.
-  for (const line of ['git diff', 'git diff --no-index a.txt b.txt', 'rg TODO .', 'rg TODO src', 'grep -rn TODO .', `grep TODO ${home}/notes.txt`])
-    assert.notEqual(await yolo(line), 'ask:user:danger', line);
-});
-
-test('a private key is redacted whole, not just its first line', () => {
-  const key = ['-----BEGIN OPENSSH PRIVATE KEY-----', 'b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW', 'QyNTUxOQAAACBz', '-----END OPENSSH PRIVATE KEY-----'].join('\n');
-  const r = redactSecrets(`before\n${key}\nafter`);
-  assert.equal(r.text, 'before\n[secret removed]\nafter');
-  const cut = redactSecrets(`x ${key.split('\n').slice(0, 2).join('\n')}`);
-  assert.ok(!cut.text.includes('b3BlbnNz'), 'output cut off before the END line still loses the key');
+test('key reads ask with a red card, by other routes too (git diff --no-index, a search from home), and a private key is redacted whole', async () => {
+  { // read commands: your keys ask with a red card, outside the project asks; QuorX itself never
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qx-sec-'));
+    const v = async (line) => (await decide(line, { shell: 'bash', root, mode: 'strict', rules: [] })).verdict;
+    const fwd = (p) => p.split(path.sep).join('/');
+    const keys = await decide(`cat ${fwd(path.join(os.homedir(), '.ssh', 'id_ed25519'))}`, { shell: 'bash', root, mode: 'yolo', rules: [{ effect: 'allow', match: '*', by: 'user' }] });
+    assert.equal(`${keys.verdict}:${keys.who}:${keys.risk}`, 'ask:user:danger', 'not even YOLO with an allow-all rule reads your keys unasked');
+    assert.equal(await v(`cat ${fwd(path.join(process.env.OH_HOME, 'data', 'app-key'))}`), 'deny');
+    assert.equal(await v(`cat ${fwd(path.join(os.tmpdir(), 'elsewhere.txt'))}`), 'ask');
+    assert.equal(await v('cat README.md'), 'allow');
+    assert.equal(await v('curl http://127.0.0.1:5188/api/config'), 'deny');
+  }
+  { // key reads by other routes ask too: git diff --no-index, and a search from your home folder down
+    const root = tempDir('qx-sec-');
+    const fwd = (p) => p.split(path.sep).join('/'), home = fwd(os.homedir());
+    const yolo = async (line) => { const d = await decide(line, { shell: 'bash', root, mode: 'yolo', rules: [] }); return `${d.verdict}:${d.who}:${d.risk}`; };
+    assert.equal(await yolo(`git diff --no-index ${home}/.ssh/id_ed25519 /dev/null`), 'ask:user:danger', 'a key compared against nothing is a key read');
+    assert.equal(await yolo(`rg -uu PRIVATE ${home}`), 'ask:user:danger', 'a search from the home folder walks into .ssh');
+    assert.equal(await yolo(`grep -rn PRIVATE ${home}`), 'ask:user:danger');
+    // Everyday work is unchanged.
+    for (const line of ['git diff', 'git diff --no-index a.txt b.txt', 'rg TODO .', 'rg TODO src', 'grep -rn TODO .', `grep TODO ${home}/notes.txt`])
+      assert.notEqual(await yolo(line), 'ask:user:danger', line);
+  }
+  { // a private key is redacted whole, not just its first line
+    const key = ['-----BEGIN OPENSSH PRIVATE KEY-----', 'b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW', 'QyNTUxOQAAACBz', '-----END OPENSSH PRIVATE KEY-----'].join('\n');
+    const r = redactSecrets(`before\n${key}\nafter`);
+    assert.equal(r.text, 'before\n[secret removed]\nafter');
+    const cut = redactSecrets(`x ${key.split('\n').slice(0, 2).join('\n')}`);
+    assert.ok(!cut.text.includes('b3BlbnNz'), 'output cut off before the END line still loses the key');
+  }
 });
 
 // Stop pressed before a command gets going (during a before_command hook, or while its job is being set up) must

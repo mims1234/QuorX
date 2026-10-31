@@ -1,5 +1,5 @@
 // Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
-// A stand-in for `grok` (test-agent.mjs). As `grok agent stdio` it answers the ACP handshake QuorX lists models with;
+// A stand-in for `grok` (test-sources.mjs). As `grok agent stdio` it answers the ACP handshake QuorX lists models with;
 // in one-shot mode (`--prompt-file`) it writes down how it was started and what it was sent, then streams the way
 // FAKE_GROK_MODE says. It never calls a model.
 import fs from 'node:fs';

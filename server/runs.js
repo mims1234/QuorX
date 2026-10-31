@@ -25,8 +25,9 @@ const watchers = new Set(); // fn(run, event | null) for every run: null when it
 /** Watches every run's events (the 🧩 Chrome status); returns a function that stops watching. */
 export function onRunEvent(fn) { watchers.add(fn); return () => watchers.delete(fn); }
 
-// Past either, a run's replay comes from its log on disk and memory keeps only the beginning.
-const KEEP_EVENTS = 20000, KEEP_BYTES = 32e6;
+// Past either, a run's replay comes from its log on disk and memory keeps only the beginning. (The tests lower the
+// event count with QX_KEEP_EVENTS, so passing it takes thousands of events, not tens of thousands.)
+const KEEP_EVENTS = Number(process.env.QX_KEEP_EVENTS) || 20000, KEEP_BYTES = 32e6;
 const isDelta = (o) => o.t === 'token' || o.t === 'think';
 const sameRun = (a, o) => a && a.t === o.t && a.step === o.step; // the next piece of the same step's text
 const LOG_MARK = 'replay_from_log';

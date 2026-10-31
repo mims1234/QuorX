@@ -1,5 +1,5 @@
 // Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
-// A stand-in for `claude -p --output-format stream-json` (test-agent.mjs): it writes down how it was started and what
+// A stand-in for `claude -p --output-format stream-json` (test-sources.mjs): it writes down how it was started and what
 // it was sent, then answers the way FAKE_CLAUDE_MODE says. It never calls a model.
 import fs from 'node:fs';
 

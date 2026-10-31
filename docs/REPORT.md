@@ -764,12 +764,22 @@ Python venvs and tkinter, game engines and installers), [java-and-kotlin.md](jav
 
 | File | Tests | Covers |
 |---|---|---|
-| `scripts/test-loop.mjs` | 9 | Grouping look-ups, file windows, trimming, cache marks, untrusted text, retries |
-| `scripts/test-agent.mjs` | 72 | The whole loop with a scripted model: tools, checks, budgets, approvals, resume, Undo |
-| `scripts/test-security.mjs` | 7 | Host checks, other sites and origins refused, other devices refused, paths that stay in the project, blobs, partial chat saves |
-| `scripts/test-safety.mjs` | 62 | Rule engine and bypass corpus, scripts guard, paths, Stop, snapshots, tripwire, deciders, background jobs, terminal, desktop, debugger, packs |
-| `scripts/test-posix.mjs` | 26 | bash and zsh rules, POSIX blocked paths, process groups (skipped on Windows where they need macOS or Linux) |
-| `scripts/test-news.mjs` | 4 | The News format checker |
+| `scripts/test-loop.mjs` | 18 | Grouping look-ups, file windows, trimming, cache marks, untrusted text, retries, the design lint |
+| `scripts/test-browser.mjs` | 10 | The headless browser's page operations |
+| `scripts/test-agent.mjs` | 53 | The loop with a scripted model: steps, cost, budgets, approvals in Strict and YOLO, plans, the reviewer, helpers, media plans |
+| `scripts/test-tools.mjs` | 29 | The agent's tools and checks: search and list files, steps and Stop, fresh eyes, design, the enhancer, /review, hooks |
+| `scripts/test-features.mjs` | 38 | Schedules, Quoriums, memory, secrets, servers, video tools and Video Mode |
+| `scripts/test-chrome.mjs` | 7 | A tab the user lends, the QuorX extension and its pairing |
+| `scripts/test-sources.mjs` | 34 | Model sources (OpenCode, Claude Code, Grok Build, Command Code, Ollama), text tool calls, plan value, MCP |
+| `scripts/test-direct.mjs` | 8 | Direct API providers and their price guards |
+| `scripts/test-security.mjs` | 30 | Host checks, other sites and origins refused, other devices refused, paths that stay in the project, key reads, the app key |
+| `scripts/test-safety.mjs` | 29 | Stop, snapshots, the rule engine and bypass corpus, scripts guard, deciders, shell approvals |
+| `scripts/test-guards.mjs` | 42 | Tripwire, budgets, background jobs, loops, terminal, packages, debugger, folders outside the project, chat notes |
+| `scripts/test-computer.mjs` | 20 | Computer use: the desktop tool and app levels (the window tests run with `npm run test:desktop`) |
+| `scripts/test-posix.mjs` | 19 | bash and zsh rules, POSIX blocked paths, process groups (skipped on Windows where they need macOS or Linux) |
+| `scripts/test-news.mjs` | 4 | The News format checker, routes, renderer and local views (and, imported by it, chat merge, chat cache, code view and Markdown) |
+| `scripts/test-newsremote.mjs` | 3 | News downloaded from the website |
+| `scripts/test-backup.mjs`, `test-storage.mjs`, `test-scale.mjs`, `test-integrity.mjs` | 26 | Backups, storage cleanup, the chat index at scale, damaged data |
 
 A few tests count real processes across the whole computer (`stop: …` tests count `PING.EXE`) or need a quiet
 desktop (`terminal: … prompts`, the WinForms test). On a busy PC they can fail; each passes when run alone, and they
