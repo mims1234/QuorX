@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
 import { HOME } from '../server/openrouter.js';
-import { saveProject, listProjects, readProjectsFile } from '../server/store.js';
+import { saveProject, listProjects, readProjectsFile, setProjectAlias, setProjectFlags, forgetProject } from '../server/store.js';
 import { saveUpload, listDocs, getDoc, okEntry } from '../server/docs.js';
 import { sendFile } from '../server/blobs.js';
 
@@ -48,6 +48,27 @@ test('projects: a list cut off halfway falls back to the last good copy, and the
   saveProject({ id: 'pone', path: one });
   assert.ok(Array.isArray(JSON.parse(fs.readFileSync(PROJECTS, 'utf8'))), 'the next save writes a whole list again');
   assert.ok(readProjectsFile().some((p) => p.id === 'pone'));
+});
+
+test('projects: a rename keeps the folder and its name, survives other saves, and an empty name goes back', async () => {
+  const dir = tempDir('qx-proj-r-'), folder = path.basename(dir);
+  saveProject({ id: 'pren', path: dir });
+  const get = () => listProjects().find((p) => p.id === 'pren');
+  assert.deepEqual(setProjectAlias('pren', '  My   app '), { id: 'pren', name: 'My app', folderName: folder });
+  await later();
+  assert.equal(get().name, 'My app');
+  assert.equal(get().folderName, folder);
+  assert.equal(get().dir, path.resolve(dir), 'the folder is not touched');
+  setProjectFlags('pren', { pinned: true }); setProjectFlags('pren', { pinned: false });
+  await later();
+  assert.equal(get().name, 'My app', 'other saves keep the name');
+  assert.equal(readProjectsFile().find((p) => p.id === 'pren').name, folder, 'the file keeps the folder\'s name apart');
+  setProjectAlias('pren', '');
+  await later();
+  assert.equal(get().name, folder);
+  assert.throws(() => setProjectAlias('scratch', 'x'), /built-in/);
+  assert.throws(() => setProjectAlias('nope-none', 'x'), /no such project/);
+  forgetProject('pren');
 });
 
 test('projects: with no readable copy at all it refuses, and nothing saves over the list', async () => {
