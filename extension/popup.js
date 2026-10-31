@@ -39,7 +39,9 @@ async function draw() {
     $('agentWhat').textContent = st?.state === 'needs' ? st.what : '';
     $('stopBtn').disabled = !st || st.state === 'done';
   }
-  const options = chats.map((c) => `<option value="${c.id}">${esc(c.title)}${c.project ? ` · ${esc(c.project)}` : ''}</option>`).join('') || '<option value="">No chats yet: start one in QuorX</option>';
+  // A long title is shortened (the project after it stays readable); the whole title shows on hover.
+  const short = (t) => (String(t).length > 46 ? `${String(t).slice(0, 45)}…` : String(t));
+  const options = chats.map((c) => `<option value="${c.id}" title="${esc(c.title)}">${esc(short(c.title))}${c.project ? ` · ${esc(c.project)}` : ''}</option>`).join('') || '<option value="">No chats yet: start one in QuorX</option>';
   $('chat').innerHTML = options; $('recChat').innerHTML = options;
   $('giveBtn').disabled = s.state !== 'on' || !chats.length || !/^https?:/i.test(tab?.url || '');
   if (!/^https?:/i.test(tab?.url || '')) say('Only web pages (http or https) can be given.');
