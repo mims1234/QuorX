@@ -16,7 +16,7 @@ import { spawn } from 'node:child_process';
 import { openDetached } from './server/userenv.js';
 import { currentKey, PORT, runtime, ROOT, HOME, chat, chatModels, decisionModels, imageModels, speechModels, musicModels, videoModels, transcribe, clearCatalogues, providerList, knownProviders } from './server/openrouter.js';
 import { listKeys, addKey, removeKey, setActive, renameKey, keyUsage, activeUsage, accountCredits, startSampling, lockDown } from './server/keys.js';
-import { sourceStatus, sourceModels, setSourceOn, setSourceKey, removeSourceKey, testSource, sourceAccount, sourceDecisionModels, failureKind, sourceOf, sameOnOpenRouter, chatAny } from './server/sources.js';
+import { sourceStatus, sourceModels, setSourceOn, setSourceKey, removeSourceKey, setSourceOptions, testSource, sourceAccount, sourceDecisionModels, failureKind, sourceOf, sameOnOpenRouter, chatAny, providerOfModel } from './server/sources.js';
 import { setupCheck, runFix } from './server/setup-check.js';
 import { startSignIn, signInStatus, cancelSignIn, finishByCallback, finishWithCode, callbackPage } from './server/oauth.js';
 import { runAgent, answerApproval, answerQuestion, answerSecret, answerBudget, raiseCap, setRunApproval, setRunAccess, steerRun, setRunReading, setRunVideo, holdCard, DEFAULTS, MEDIA, briefFor, briefForChat, REVIEW_MODEL, HELPER_MODEL, REVIEW_ALT, REVIEW_STRONG, REVIEW_STRONG_ALT } from './server/agent.js';
@@ -202,7 +202,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/chats' && req.method === 'GET') return json(res, 200, listChats());
     // A page of chats: a project's older ones (Show more), or a search across every project.
     if (url.pathname === '/api/chats/page' && req.method === 'GET') return json(res, 200, chatPage({ project: url.searchParams.get('project') || '', q: url.searchParams.get('q') || '', offset: url.searchParams.get('offset'), limit: url.searchParams.get('limit') }));
-    if (url.pathname === '/api/costs' && req.method === 'GET') return json(res, 200, costSummary({ per: Number(url.searchParams.get('per')) || 5, sort: url.searchParams.get('sort') || 'cost' }));
+    if (url.pathname === '/api/costs' && req.method === 'GET') return json(res, 200, costSummary({ per: Number(url.searchParams.get('per')) || 5, sort: url.searchParams.get('sort') || 'cost', providerOf: providerOfModel }));
     if (url.pathname === '/api/costs/chats' && req.method === 'GET') {
       const q = url.searchParams;
       return json(res, 200, costChats({ project: q.get('project') || '', q: q.get('q') || '', sort: q.get('sort') || 'cost', offset: q.get('offset'), limit: q.get('limit') }));
@@ -979,7 +979,7 @@ const server = http.createServer(async (req, res) => {
       catch (e) { return json(res, 200, { error: e.message, kind: failureKind(e) }); }
     }
     // A source that takes a key (OpenCode Go): POST /key saves it (the page never gets it back unmasked), DELETE removes it.
-    const srm = url.pathname.match(/^\/api\/sources\/([a-z-]+)\/(on|test|key)$/);
+    const srm = url.pathname.match(/^\/api\/sources\/([a-z-]+)\/(on|test|key|options)$/);
     if (srm) {
       try {
         const b = req.method === 'POST' ? JSON.parse(await readBody(req, 1e4) || '{}') : {};
@@ -987,6 +987,8 @@ const server = http.createServer(async (req, res) => {
         if (srm[2] === 'on' && req.method === 'POST') setSourceOn(srm[1], b.on === true);
         else if (srm[2] === 'key' && req.method === 'POST') setSourceKey(srm[1], b.key);
         else if (srm[2] === 'key' && req.method === 'DELETE') removeSourceKey(srm[1]);
+        // A maker's API: the address its calls go to, and whether OpenRouter's ids of its models run on it.
+        else if (srm[2] === 'options' && req.method === 'POST') setSourceOptions(srm[1], { ...(b.base !== undefined ? { base: String(b.base) } : {}), ...(b.route !== undefined ? { route: String(b.route) } : {}) });
         else return json(res, 405, { error: 'method not allowed' });
         await sourceModels({ all: true }).catch(() => {});
         return json(res, 200, { ok: true, sources: await sourceStatus() });

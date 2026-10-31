@@ -140,10 +140,13 @@ export async function readChatStream(r, body, t, onText, onThink) {
       if (tc.function?.name && tc.function.name !== calls[k].function.name) calls[k].function.name += tc.function.name;
       const a = tc.function?.arguments;
       if (a != null && a !== '') calls[k].function.arguments += typeof a === 'string' ? a : JSON.stringify(a);
+      // Gemini's thought signature comes with its call (directapi.js passes it back on the next step).
+      if (tc.extra_content && typeof tc.extra_content === 'object') calls[k].extra_content = tc.extra_content;
     }
     if (j.choices?.[0]?.finish_reason) finish = j.choices[0].finish_reason;
     if (finish === 'error') throw Object.assign(new Error('the stream ended with an error'), { streamStatus: null });
     if (j.usage) usage = j.usage;
+    else if (j.choices?.[0]?.usage && typeof j.choices[0].usage === 'object') usage = j.choices[0].usage; // Moonshot sends it in the choice
     // A gateway may send its cost as a frame of its own after the answer ({ "cost": "0.0012" }).
     if (j.cost != null && usage.cost == null && Number.isFinite(Number(j.cost))) usage = { ...usage, cost: Number(j.cost) };
   };

@@ -1538,12 +1538,15 @@ function listPriceOf(m) {
   return found;
 }
 const listWord = (p) => `$${p[0].toFixed(2)}/$${p[1].toFixed(2)}`;
-const shortPrice = (id) => { const m = G.byId.get(id); const lp = m && listPriceOf(m); return !m || m.kind !== 'chat' ? '' : m.plan === 'plan' ? `${planName(m)} plan${lp ? ` · ≈ ${listWord(lp)}` : ''}` : m.source && m.plan === 'free' ? 'free' : m.priceFromApp ? 'per call' : `$${m.price[0].toFixed(2)}/$${m.price[1].toFixed(2)}`; };
+const shortPrice = (id) => { const m = G.byId.get(id); const lp = m && listPriceOf(m); return !m || m.kind !== 'chat' ? '' : m.priceUnknown ? 'price unknown' : m.plan === 'plan' ? `${planName(m)} plan${lp ? ` · ≈ ${listWord(lp)}` : ''}` : m.source && m.plan === 'free' ? 'free' : m.priceFromApp ? 'per call' : `$${m.price[0].toFixed(2)}/$${m.price[1].toFixed(2)}`; };
 function priceText(m, extra = {}) {
   const lp = listPriceOf(m);
   if (m.source && m.plan === 'plan') return `${SOURCE_NAME[m.source] || m.source} plan: nothing to pay per call (your subscription's usage limits apply)${lp ? ` · list price ≈ $${lp[0].toFixed(2)} in / $${lp[1].toFixed(2)} out per M tokens${sanePrice(m.listPrice) ? '' : ' (the same model on OpenRouter)'}` : ''}`;
   if (m.source && m.priceFromApp) return `Billed per call to the API key ${SOURCE_NAME[m.source] || m.source} is signed in with; each reply shows what it cost`;
+  // A maker's API model models.dev has no sane price for: its calls count as $0, marked unknown, never a guess.
+  if (m.priceUnknown) return `Billed per call by ${SOURCE_NAME[m.source] || m.source}, at a price QuorX doesn’t know yet: its calls count as $0 here (marked unknown) rather than a guess. Check the price on the provider’s site`;
   if (m.source && m.plan === 'free') return `Free on ${SOURCE_NAME[m.source] || m.source}, if it lets apps other than its own use it (when it doesn’t, the reply stops and says so). Free models may be rate limited, and their providers may use prompts to improve them`;
+  if (m.kind === 'decision' && m.chatDecider) return `${m.name} on ${SOURCE_NAME[m.source] || m.source}, asked in plain words: $${m.price[0].toFixed(3)} in / $${m.price[1].toFixed(2)} out per M tokens`;
   if (m.kind === 'decision') return `$${m.price[0].toFixed(3)}/M in · output free`;
   if (m.kind === 'image') return m.perImage ? `$${m.perImage} per picture` : m.price[1] ? `≈ $${(m.price[1] * 15000 / 1e6).toFixed(3)} per 1K picture` : 'price unknown';
   if (m.kind === 'speech') return `$${m.price[0].toFixed(2)} per M characters · ≈ $${(m.price[0] * 500 / 1e6).toFixed(4)} per 500 chars`;
@@ -1558,6 +1561,8 @@ function videoNum(m, res = '480p') {
 }
 // One comparable number per model, for "cheapest first".
 function priceNum(m) {
+  if (m.priceUnknown) return 1e9; // unknown sorts last, never as free
+  if (m.kind === 'decision' && m.chatDecider) return m.price[0] + m.price[1];
   if (m.kind === 'decision' || m.kind === 'speech' || m.kind === 'listen') return m.price[0];
   if (m.kind === 'image') return m.perImage ?? (m.price[1] ? (m.price[1] * 15000) / 1e6 : 1e9);
   if (m.kind === 'video') return videoNum(m);
@@ -1583,17 +1588,19 @@ const FILTERS = [
 const providerOf = (id) => String(id).replace(/^~/, '').split('/')[0] || 'other';
 // Models of an app on this PC (⚙ Settings → Apps on this PC) or of OpenCode Go (⚙ Settings → API keys) are the source,
 // a slash, and its own id.
-const SOURCE_NAME = { 'opencode-go': 'OpenCode Go', commandcode: 'Command Code', 'opencode-local': 'OpenCode on this PC', 'ollama-local': 'Ollama on this PC', 'claude-local': 'Claude Code on this PC', 'grok-local': 'Grok Build on this PC' };
+// The model makers' own APIs (server/directapi.js) run with the user's key, billed per call at their prices.
+const DIRECT_NAME = { 'openai-api': 'OpenAI', 'anthropic-api': 'Anthropic', 'gemini-api': 'Google Gemini', 'moonshot-api': 'Moonshot (Kimi)', 'meta-api': 'Meta (Llama API)' };
+const SOURCE_NAME = { 'opencode-go': 'OpenCode Go', commandcode: 'Command Code', ...DIRECT_NAME, 'opencode-local': 'OpenCode on this PC', 'ollama-local': 'Ollama on this PC', 'claude-local': 'Claude Code on this PC', 'grok-local': 'Grok Build on this PC' };
 // Where in ⚙ Settings each source is set up.
-const srcWhere = (k) => (k === 'opencode-go' || k === 'commandcode' ? 'API keys' : 'Apps on this PC');
+const srcWhere = (k) => (k === 'opencode-go' || k === 'commandcode' || DIRECT_NAME[k] ? 'API keys' : 'Apps on this PC');
 // Each source's own logo (public/icons/brand), in the text colour (Claude's in its orange), with its name on hover.
 const SOURCE_LOGO = { openrouter: 'openrouter', 'opencode-go': 'opencode', commandcode: 'commandcode', 'opencode-local': 'opencode', 'ollama-local': 'ollama', 'claude-local': 'claude', 'grok-local': 'grok' };
-const srcLogo = (k, title = k === 'openrouter' ? 'OpenRouter' : SOURCE_NAME[k] || k) => SOURCE_LOGO[k] ? `<span class="src-logo src-logo-${SOURCE_LOGO[k]}" style="--ico:url('icons/brand/${SOURCE_LOGO[k]}.svg')" role="img" aria-label="${esc(title)}" title="${esc(title)}"></span>` : esc(title);
-const SOURCE_SHORT = { 'opencode-go': 'Go', commandcode: 'Command Code', 'opencode-local': 'This PC', 'ollama-local': 'Ollama', 'claude-local': 'Claude Code', 'grok-local': 'Grok Build' };
+const srcLogo = (k, title = k === 'openrouter' ? 'OpenRouter' : SOURCE_NAME[k] || k) => SOURCE_LOGO[k] ? `<span class="src-logo src-logo-${SOURCE_LOGO[k]}" style="--ico:url('icons/brand/${SOURCE_LOGO[k]}.svg')" role="img" aria-label="${esc(title)}" title="${esc(title)}"></span>` : DIRECT_NAME[k] ? `<span class="src-tag" title="${esc(title)}">${esc(SOURCE_SHORT[k])}</span>` : esc(title);
+const SOURCE_SHORT = { 'opencode-go': 'Go', commandcode: 'Command Code', 'openai-api': 'OpenAI', 'anthropic-api': 'Anthropic', 'gemini-api': 'Gemini', 'moonshot-api': 'Kimi', 'meta-api': 'Meta', 'opencode-local': 'This PC', 'ollama-local': 'Ollama', 'claude-local': 'Claude Code', 'grok-local': 'Grok Build' };
 // The sources offered, as words: "OpenCode Go, Claude Code or Grok Build".
 const srcApps = () => { const t = Object.keys(SOURCE_NAME).map((k) => SOURCE_NAME[k].replace(/ on this PC$/, '')); return t.length > 1 ? `${t.slice(0, -1).join(', ')} or ${t.at(-1)}` : t[0] || ''; };
 const sourceOfId = (id) => { const s = String(id || ''), h = s.split('/')[0]; return SOURCE_NAME[h] && s.length > h.length + 1 ? h : null; };
-const PROVIDER_NAME = (p) => ({ 'x-ai': 'xAI', openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google', 'meta-llama': 'Meta', mistralai: 'Mistral', deepseek: 'DeepSeek', qwen: 'Qwen', nvidia: 'NVIDIA', cohere: 'Cohere', inclusionai: 'inclusionAI', openrouter: 'OpenRouter', 'black-forest-labs': 'Black Forest Labs', elevenlabs: 'ElevenLabs', ...SOURCE_NAME }[p] || p.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
+const PROVIDER_NAME = (p) => ({ 'x-ai': 'xAI', openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google', 'meta-llama': 'Meta', meta: 'Meta', moonshotai: 'Moonshot AI', mistralai: 'Mistral', deepseek: 'DeepSeek', qwen: 'Qwen', nvidia: 'NVIDIA', cohere: 'Cohere', inclusionai: 'inclusionAI', openrouter: 'OpenRouter', 'black-forest-labs': 'Black Forest Labs', elevenlabs: 'ElevenLabs', ...SOURCE_NAME }[p] || p.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
 const cleanName = (m) => String(m.name || m.id).replace(/\s*\(free\)\s*$/i, '').replace(/^[^:]+:\s*/, '');
 const ctxText = (n) => (!n ? '' : n >= 1e6 ? `${+(n / 1e6).toFixed(1)}M` : `${Math.round(n / 1000)}k`);
 const agoDate = (sec) => { if (!sec) return ''; const d = (Date.now() / 1000 - sec) / 86400; return d < 1 ? 'today' : d < 30 ? `${Math.round(d)}d ago` : d < 365 ? `${Math.round(d / 30)}mo ago` : `${+(d / 365).toFixed(1)}y ago`; };
@@ -1603,8 +1610,10 @@ function priceCell(m) {
   // A Go model also shows its list price: what a call counts against the plan's limits.
   if (m.plan === 'plan') return `<span class="mp-plan">${esc(planName(m))} plan</span>${listPriceOf(m) ? `<span class="mp-plan-list" title="List price${sanePrice(m.listPrice) ? '' : ' (the same model on OpenRouter)'}: what a call counts against your plan's limits. You don't pay it per call."><span class="mp-money">≈ ${usd(listPriceOf(m)[0])}</span><small>in</small><span class="mp-money">${usd(listPriceOf(m)[1])}</span><small>out /M</small></span>` : ''}`;
   if (m.priceFromApp) return '<small>billed per call</small>';
+  if (m.priceUnknown) return '<small class="mp-unknown" title="The provider bills each call, but QuorX has no price for this model yet: its calls count as $0 here, marked unknown.">price unknown</small>';
   if (n === 0 || /:free$/.test(m.id)) return '<span class="mp-free">Free</span>';
   if (m.kind === 'chat' || m.kind === 'listen') return `<span class="mp-money">${usd(m.price[0])}</span><small>in</small><span class="mp-money">${usd(m.price[1])}</span><small>out /M</small>`;
+  if (m.kind === 'decision' && m.chatDecider) return `<span class="mp-money">${usd(m.price[0])}</span><small>in</small><span class="mp-money">${usd(m.price[1])}</span><small>out /M</small>`;
   if (m.kind === 'decision') return `<span class="mp-money">${usd(m.price[0], 3)}</span><small>/M in</small>`;
   if (m.kind === 'image') return m.perImage ? `<span class="mp-money">${usd(m.perImage, 3)}</span><small>/picture</small>` : m.price[1] ? `<span class="mp-money">≈${usd(m.price[1] * 15000 / 1e6, 3)}</span><small>/picture</small>` : '<small>price unknown</small>';
   if (m.kind === 'video') return n < 1e8 ? `<span class="mp-money">${usd(n)}</span><small>/second</small>` : '<small>price unknown</small>';
@@ -2431,6 +2440,16 @@ function cacheTag(v) {
   if (sh == null) return '';
   return `<span class="tok-cache ${sh >= 0.5 ? 'hit' : ''}" title="${esc(`${(v.cacheRead || 0).toLocaleString()} of ${v.cachedIn.toLocaleString()} tokens in were read from the provider's prompt cache${v.cacheWrite ? `; ${v.cacheWrite.toLocaleString()} written to it` : ''}. Cached tokens cost less.`)}">${pct(sh)} cached</span>`;
 }
+// Who a call to a model was paid to: the source its id names (a maker's API, a plan, an app), else OpenRouter. Two
+// models with the same name (Claude on OpenRouter and on Anthropic's API) are told apart by it.
+const provOfModel = (id) => SOURCE_NAME[sourceOfId(id)] || 'OpenRouter';
+const provTag = (id) => `<span class="tc-prov" title="Paid to ${esc(provOfModel(id))}">${esc(SOURCE_SHORT[sourceOfId(id)] || provOfModel(id))}</span>`;
+// What each provider was paid, most first, from [model id, { cost } or a number] pairs; absurd figures count as 0.
+function byProvider(pairs) {
+  const out = {};
+  for (const [id, v] of pairs) { const n = Number(v && typeof v === 'object' ? v.cost : v); if (Number.isFinite(n) && n > 0 && n < 1e6) out[provOfModel(id)] = (out[provOfModel(id)] || 0) + n; }
+  return Object.entries(out).sort((a, b) => b[1] - a[1]);
+}
 // ---------- the end of the Steps pane: what this reply cost (so far, while it runs), by model, and the chat's total ----------
 function traceCostHTML(c, m) {
   const s = m.stats || (m.live && m.liveCost != null ? { cost: m.liveCost, byModel: m.liveByModel || {}, tokensIn: m.liveTokens?.[0], tokensOut: m.liveTokens?.[1], live: true } : null);
@@ -2440,11 +2459,12 @@ function traceCostHTML(c, m) {
   const calls = models.reduce((n, [, v]) => n + (v.calls || 0), 0) || s.llmCalls || 0;
   const sumCache = (list) => list.reduce((a, [, v]) => ({ cacheRead: a.cacheRead + (v.cacheRead || 0), cachedIn: a.cachedIn + (v.cachedIn || 0), cacheWrite: a.cacheWrite + (v.cacheWrite || 0) }), { cacheRead: 0, cachedIn: 0, cacheWrite: 0 });
   const t = chatTotals(c); // every reply in the chat (this one included, live or done) and calls outside replies
-  const rows = models.map(([id, v]) => `<tr><td><span class="tc-model" title="${esc(id)}">${esc(short(id))}</span>${v.role && v.role !== 'writer' ? ` <i>${esc(v.role)}</i>` : ''}</td><td>${v.calls || 0}×</td><td>${v.tokensIn || v.tokensOut ? `<span class="tok-in">${k(v.tokensIn)} in</span> · <span class="tok-out">${k(v.tokensOut)} out</span>` : ''}</td><td class="tc-cache">${cacheTag(v)}</td><td class="tc-c">${money(v.cost || 0, 5)}</td></tr>`).join('');
+  const rows = models.map(([id, v]) => `<tr><td><span class="tc-model" title="${esc(id)}">${esc(short(id))}</span>${provTag(id)}${v.role && v.role !== 'writer' ? ` <i>${esc(v.role)}</i>` : ''}</td><td>${v.calls || 0}×</td><td>${v.tokensIn || v.tokensOut ? `<span class="tok-in">${k(v.tokensIn)} in</span> · <span class="tok-out">${k(v.tokensOut)} out</span>` : ''}</td><td class="tc-cache">${cacheTag(v)}</td><td class="tc-c">${money(v.cost || 0, 5)}</td></tr>`).join('');
   return `<div class="trace-cost">
     <div class="tc-head"><span>💲 ${s.live ? 'Spent so far' : s.partial ? 'This reply spent (it ended early)' : 'This reply cost'}</span><b>${money(m.stats ? ownCost(m, c.agent.messages) : s.cost || 0, 5)}</b></div>
     <div class="tc-sub">${calls} model call${calls === 1 ? '' : 's'}${s.tokensIn ? ` · <span class="tok-in">${k(s.tokensIn)} tokens in</span>` : ''}${s.tokensOut ? ` · <span class="tok-out">${k(s.tokensOut)} tokens out</span>` : ''}${cacheShare(sumCache(models)) != null ? ` · ${cacheTag(sumCache(models))}` : ''}${s.ms ? ` · ${secs(s.ms)}` : ''}${s.mediaSpent ? ` · media ${money(s.mediaSpent, 4)}` : ''}${planTag(s.planCost)}</div>
     ${rows ? `<table class="tc-table"><tbody>${rows}</tbody></table>` : ''}
+    ${(() => { const bp = byProvider(models); return bp.length > 1 ? `<div class="tc-provs"><span>By provider</span>${bp.map(([k, v]) => `<span class="tc-prov-sum"><span class="tc-prov">${esc(k)}</span><b>${money(v, 5)}</b></span>`).join('')}</div>` : ''; })()}
     <div class="tc-chat"><span>Whole chat so far · ${t.replies} repl${t.replies === 1 ? 'y' : 'ies'}${t.msgs ? ` · ${t.msgs} message${t.msgs === 1 ? '' : 's'}` : ''}</span><b>${money(t.cost, 4)}</b></div>
     ${t.plan ? `<div class="tc-chat tc-plan"><span>Sub value, whole chat <i>at list price, covered by your subscriptions</i></span><b>≈ ${money(t.plan, 4)}</b></div>` : ''}
   </div>`;
@@ -6305,7 +6325,7 @@ const cxModels = (models) => {
   if (!list.length) return '';
   const total = list.reduce((n, [, v]) => n + (v || 0), 0);
   // A card: the models this chat used, most expensive first, each with what it cost, then the total.
-  const tip = [`${list.length} model${list.length === 1 ? '' : 's'} used`, ...list.map(([m, v]) => `${short(m)}\t${money(v, 4)}`), ...(list.length > 1 ? [`Total\t${money(total, 4)}`] : [])].join('\n');
+  const tip = [`${list.length} model${list.length === 1 ? '' : 's'} used`, ...list.map(([m, v]) => `${short(m)} · ${provOfModel(m)}\t${money(v, 4)}`), ...(list.length > 1 ? [`Total\t${money(total, 4)}`] : [])].join('\n');
   return `<span class="cx-mi" tabindex="0" title="${esc(tip)}" aria-label="${list.length} model${list.length === 1 ? '' : 's'}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 3 8l9 5 9-5z"/><path d="m3 13 9 5 9-5"/></svg>${list.length}</span>`;
 };
 const costRow = (c, withProject, when) => `<tr><td><a href="#" data-open="${esc(c.id)}" title="${esc(c.title)}">${esc(c.title)}</a>${when && c.lastAt ? `<small class="cx-when">${ago(c.lastAt)}</small>` : ''}${withProject ? `<small class="cx-proj">${esc(G.projects.find((p) => p.id === c.projectId)?.name || c.projectId)}</small>` : ''}</td><td>${c.messages}</td><td class="cx-models">${cxModels(c.models)}</td><td class="mono">${money(c.today, 4)}</td><td class="mono cx-total">${money(c.cost, 4)}</td></tr>`;
@@ -6317,6 +6337,7 @@ async function drawCosts() {
   const max = Math.max(0.000001, ...d.projects.map((p) => p.cost));
   body.innerHTML = `
     <div class="cost-totals cx-line"><div><small>Today</small><b>${money(d.total.today, 3)}</b></div><div><small>7 days</small><b>${money(d.total.week, 3)}</b></div><div><small>All time</small><b>${money(d.total.cost, 3)}</b></div><div><small>Chats</small><b class="cx-count">${d.total.chats}</b></div>${planTotal(d.total.plan) ? `<div class="cx-plan" title="Sub value: what replies on your subscriptions (OpenCode Go, Grok Build, Claude Code) used of them, at list price. Not paid per reply: your subscriptions cover it."><small>Sub value</small><b>≈ ${money(planTotal(d.total.plan), 3)}</b></div>` : ''}</div>
+    ${(d.total.byProvider && Object.keys(d.total.byProvider).length) ? `<div class="cx-provs" title="What each provider was paid, all time: OpenRouter, and each key or plan you added (⚙ Settings → API keys)"><small>By provider</small>${Object.entries(d.total.byProvider).filter(([, v]) => Number(v) > 0 && Number(v) < 1e6).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<span class="cx-prov"><span class="tc-prov">${esc(k)}</span><b>${money(v, 3)}</b></span>`).join('')}</div>` : ''}
     <div class="cx-tools">
       <label class="mp-search cx-search"><span aria-hidden="true">⌕</span><input id="cxSearch" placeholder="Search every chat by title" aria-label="Search chats" value="${esc(COSTS.q)}"></label>
       <div class="mp-sorts" role="group" aria-label="Sort chats">${[['recent', 'Recent'], ['cost', 'Total'], ['today', 'Today'], ['messages', 'Messages'], ['name', 'Name']].map(([k, l]) => `<button type="button" class="mp-sort ${COSTS.sort === k ? 'on' : ''}" data-sort="${k}">${l}</button>`).join('')}</div>
@@ -6553,7 +6574,8 @@ function settingsPanels(S) {
         + stRow('Custom search address', 'Used when Custom is picked: the address of a search with %s where the words go.', `<input type="text" class="st-input sx-wide-input" data-bind="ui.searchCustom" value="${esc(U.searchCustom || '')}" placeholder="https://example.com/search?q=%s" spellcheck="false">`)),
     ]],
     keys: ['API keys', 'QuorX uses one active OpenRouter key for every call. Add as many as you like and switch between them.', [`<div id="stKeys"><div class="st-row-help">Loading keys…</div></div>`,
-      stCard('Subscriptions', 'A chat’s main model, or a Quorium module’s, can run on your OpenCode Go or Command Code subscription with its API key. Calls count against the plan’s limits or credits instead of costing per call.', '<div id="stApiSources"><div class="st-row-help">Loading…</div></div>', '', 'stSrcKeys')]],
+      stCard('Subscriptions', 'A chat’s main model, or a Quorium module’s, can run on your OpenCode Go or Command Code subscription with its API key. Calls count against the plan’s limits or credits instead of costing per call.', '<div id="stApiSources"><div class="st-row-help">Loading…</div></div>', '', 'stSrcKeys'),
+      stCard('Model makers’ APIs', 'Run chats, Quorium modules, helpers and deciders on OpenAI, Anthropic, Google Gemini, Moonshot (Kimi) or Meta directly, with your own key. Each call is billed by that provider at its prices, counted in Spending by provider.', '<div id="stDirectSources"><div class="st-row-help">Loading…</div></div>', '', 'stSrcDirect')]],
     models: ['Models & catalogue', 'What new chats start with, from any source: OpenRouter, a subscription (⚙ API keys) or an app on this PC. The OpenRouter and Routing cards apply to OpenRouter calls only.', [
       stCard('OpenRouter', 'The active key’s spending limit (hidden until you click 👁) and the model list.', '<div id="stModelLimit"><div class="st-row-help">Loading…</div></div>'
         + stRow('Model lists and prices', `<span id="stCatInfo">${G.models ? `${G.models.length} models loaded` : 'Loading…'}</span>`, `<button type="button" class="st-btn secondary sm" data-act="refreshModels">↻ Refresh now</button>`), 'sx-limit'),
@@ -6901,12 +6923,28 @@ const SRC_GUIDE = {
   'ollama-local': { what: 'Runs a chat on the models you pulled into Ollama on this computer, for nothing, and on Ollama cloud models once you sign in (ollama signin). Only models that call tools are listed. QuorX starts Ollama when a chat needs it and it isn’t running.', install: 'winget install Ollama.Ollama' },
   'grok-local': { what: 'Runs a chat through Grok Build on this computer, on the account you signed in with (grok login). Its own tools stay off: QuorX\'s tools and approvals do the work.', install: 'curl -fsSL https://x.ai/cli/install.sh | bash' },
   'opencode-go': { what: 'Runs a chat on your OpenCode Go subscription (Go, Go Plus or Go Teams) over OpenCode’s API. Each model has 5-hour, weekly and monthly limits; prices shown are what a call counts against them.' },
+  'openai-api': { what: 'Runs chats, helpers and deciders on OpenAI’s own API with your key, billed by OpenAI per call at its prices (input, output and cached tokens). Models that answer only on OpenAI’s Responses API (the -pro and Codex ones) are left out.' },
+  'anthropic-api': { what: 'Runs Claude on Anthropic’s own Messages API with your key, billed by Anthropic per call at its prices (input, output, cache reads and writes). Thinking, tool calls and prompt caching go over natively.' },
+  'gemini-api': { what: 'Runs Gemini on Google’s API (its OpenAI-compatible endpoint) with your key, billed by Google per call at its prices. Free-tier keys work too, within Google’s free limits.' },
+  'moonshot-api': { what: 'Runs Kimi on Moonshot AI’s own API with your key, billed by Moonshot per call at its prices. Thinking models get their reasoning back on each step, as Moonshot asks.' },
+  'meta-api': { what: 'Runs Meta’s models on Meta’s developer API with your key, billed by Meta per call. A model without a published price shows “price unknown” and counts as $0 rather than a guess.' },
   commandcode: { what: 'Runs a chat on your Command Code plan over its Provider API: GPT, DeepSeek, Kimi, GLM, Qwen and the other open models, and Claude. Every plan but Go has API access; prices shown are what a call takes from your credits.' },
 };
 // The key of a source that takes one: masked with Remove, or a box to paste it in.
 function srcKeyHTML(x) {
   if (x.key) return `<p class="src-info">Key ${esc(x.key.masked)}${x.key.from === 'env' ? ` (from the ${esc(x.env || 'its')} environment variable)` : ` <button type="button" class="kx-btn sm" data-src-act="unkey" title="Remove this key from QuorX">Remove</button>`}</p>`;
   return `<div class="src-key"><div class="kx-input"><input type="password" data-src-key autocomplete="off" spellcheck="false" placeholder="Your ${esc(x.name)} API key" aria-label="${esc(x.name)} API key"></div><button type="button" class="kx-btn sm primary" data-src-act="key">Save key</button><a class="sp-link" href="${esc(x.keyUrl)}" target="_blank" rel="noopener noreferrer">Get a key</a></div><p class="st-row-help">${esc(x.keyHint || '')} It stays on this computer; the page only sees it masked.</p>`;
+}
+// A maker's API's own options: where OpenRouter's ids of its models run, and the address its calls go to.
+function srcOptsHTML(x) {
+  const own = x.base && x.base !== x.defaultBase ? x.base : '';
+  const seg = [['openrouter', 'OpenRouter'], ['direct', `${x.short} API`]].map(([k, l]) => `<button type="button" class="st-seg-btn ${x.route === k ? 'active' : ''}" role="radio" aria-checked="${x.route === k}" data-src-route="${k}">${esc(l)}</button>`).join('');
+  return `<div class="src-opts">
+    <div class="src-opt"><span class="src-opt-label">OpenRouter’s ${esc(x.short)} models run on</span><div class="st-segmented" role="radiogroup" aria-label="Where OpenRouter’s ${esc(x.short)} models run">${seg}</div></div>
+    <p class="st-row-help">When a chat, helper or reviewer is set to the same model on OpenRouter, ${esc(x.short)} API runs it with your key instead${x.on ? '' : ' (once this is on)'}; if that call fails, the fallback settings apply. Pick models tagged ${esc(x.short)} to always use this key.</p>
+    <div class="src-opt"><span class="src-opt-label">Address</span><div class="kx-input src-base"><input data-src-base autocomplete="off" spellcheck="false" value="${esc(own)}" placeholder="${esc(x.defaultBase || '')}" aria-label="${esc(x.name)} API address"></div><button type="button" class="kx-btn sm" data-src-act="base">Save</button>${own ? '<button type="button" class="kx-btn sm" data-src-act="base-reset" title="Go back to the provider’s own address">Reset</button>' : ''}</div>
+    <p class="st-row-help">Leave empty for ${esc(x.defaultBase || 'its own address')}. A proxy or a regional endpoint that speaks the same API works too (https://, or http:// on this computer).</p>
+  </div>`;
 }
 // The app as QuorX found it: its version and its server, or how to install it.
 function srcInfoHTML(x, g) {
@@ -6920,14 +6958,15 @@ function srcInfoHTML(x, g) {
 // The cards draw at once from what the server knows; app versions and model lists (which can take a while: apps
 // start, lists load) follow, and the cards redraw with them unless you've started typing in one.
 async function drawSourcesPanel(say = null) {
-  if (!$('#stSources') && !$('#stApiSources')) return;
+  if (!$('#stSources') && !$('#stApiSources') && !$('#stDirectSources')) return;
   const get = (full) => fetch(`/api/sources${full ? '?full=1' : ''}`).then((x) => x.json()).catch((e) => ({ error: e.message }));
   const full = ST.cat === 'sources' || ST.cat === 'keys', seq = (ST.srcSeq = (ST.srcSeq || 0) + 1);
   const draw = (r, checking) => {
-    for (const [sel, local] of [['#stSources', true], ['#stApiSources', false]]) {
+    // Apps on this PC; subscriptions with a key; the makers' own APIs (pay per call).
+    for (const [sel, local, direct] of [['#stSources', true, false], ['#stApiSources', false, false], ['#stDirectSources', false, true]]) {
       const box = $(sel); if (!box) continue;
       if (r.error || !Array.isArray(r.sources)) { box.innerHTML = `<div class="kx-wait bad">⚠ Couldn’t read the sources (${esc(r.error || 'no answer')}).</div>`; continue; }
-      drawSourceCards(box, r, r.sources.filter((x) => !!x.local === local), say);
+      drawSourceCards(box, r, r.sources.filter((x) => !!x.local === local && !!x.direct === direct), say);
       if (checking && local) box.insertAdjacentHTML('afterbegin', '<div class="kx-wait src-checking">Checking app versions and model lists…</div>');
     }
     if (Array.isArray(r.sources)) { ST.sources = r.sources; stRefresh(); }
@@ -6939,7 +6978,7 @@ async function drawSourcesPanel(say = null) {
   const r = await get(true);
   if (seq !== ST.srcSeq) return;
   // Typing a key or a message showing in a card: keep the cards, only drop the "checking" line.
-  const busy = [...document.querySelectorAll('#stSources, #stApiSources')].some((b) => b.contains(document.activeElement) || [...b.querySelectorAll('[data-src-key]')].some((i) => i.value) || [...b.querySelectorAll('.src-msg, .src-test-msg')].some((m) => !m.hidden));
+  const busy = [...document.querySelectorAll('#stSources, #stApiSources, #stDirectSources')].some((b) => b.contains(document.activeElement) || [...b.querySelectorAll('[data-src-key]')].some((i) => i.value) || [...b.querySelectorAll('.src-msg, .src-test-msg')].some((m) => !m.hidden));
   if (busy) { for (const el of document.querySelectorAll('.src-checking')) el.remove(); if (Array.isArray(r.sources)) { ST.sources = r.sources; stRefresh(); } return; }
   say = null; draw(r, false);
 }
@@ -6984,6 +7023,7 @@ function drawSourceCards(box, r, list, say) {
       </header>
       <p class="st-row-help src-what">${esc(g.what || '')}</p>
       ${srcInfoHTML(x, g)}
+      ${x.direct ? srcOptsHTML(x) : ''}
       ${x.account && x.key ? `<div class="src-acc" data-src-acc><header class="src-acc-head"><b>Your plan</b><span class="src-acc-plan"></span><span class="kx-spacer"></span><button type="button" class="kx-icon" data-src-act="acc-reveal" title="${srcAccShown() ? 'Hide amounts' : 'Show amounts'}">${srcAccShown() ? '🙈' : '👁'}</button><button type="button" class="kx-icon" data-src-act="acc-refresh" title="Check again">↻</button></header><div class="kx-acc-grid src-acc-grid"><div class="kx-wait">Loading…</div></div></div>` : ''}
       <div class="src-test"><button type="button" class="kx-btn sm" data-src-act="test" ${srcReady(x) ? '' : 'disabled'}>Test the connection</button><button type="button" class="kx-btn sm" data-src-act="pick" ${x.on && srcReady(x) ? '' : 'disabled'}>Choose a model for new chats</button>${last}</div>
       <p class="kx-note src-test-msg" hidden></p><p class="kx-note src-msg" hidden></p>
@@ -7009,9 +7049,19 @@ function drawSourceCards(box, r, list, say) {
     if (cmd) { navigator.clipboard?.writeText(cmd).then(() => flashTip(e.target, 'Copied')).catch(() => uiPrompt('Copy the command', cmd, { ok: 'Done', cancel: 'Close' })); return; }
     const c = e.target.closest('.src-card'); if (!c) return;
     const id = c.dataset.src, x = r.sources.find((s) => s.id === id);
-    const act = e.target.closest('[data-src-act]')?.dataset.srcAct; if (!act) return;
+    const route = e.target.closest('[data-src-route]')?.dataset.srcRoute;
+    const act = route ? 'route' : e.target.closest('[data-src-act]')?.dataset.srcAct; if (!act) return;
     const msg = $('.src-msg', c), tmsg = $('.src-test-msg', c), btn = e.target.closest('button');
     const say = (el, t, bad) => { el.hidden = false; el.classList.toggle('bad', !!bad); el.textContent = t; };
+    if (act === 'route' || act === 'base' || act === 'base-reset') {
+      if (act === 'route' && route === x.route) return;
+      const body = act === 'route' ? { route } : { base: act === 'base' ? $('[data-src-base]', c).value.trim() : '' };
+      btn.disabled = true;
+      const res = await postJ(`/api/sources/${id}/options`, body).catch((er) => ({ error: er.message }));
+      if (res.error) { btn.disabled = false; say(msg, `⚠ ${res.error}`, true); return; }
+      redraw(res.sources, { id, where: 'src-msg', text: act === 'route' ? (route === 'direct' ? `✓ OpenRouter’s ${x.short} models now run on your ${x.name} key.` : `✓ OpenRouter’s ${x.short} models run on OpenRouter again.`) : `✓ Calls go to ${res.sources.find((y) => y.id === id)?.base || 'its own address'}. Test the connection to check it.` });
+      return;
+    }
     if (act === 'acc-reveal') { ST.revealSrcAcc = !srcAccShown(); revealButton(btn, srcAccShown()); paintSrcAcc($('[data-src-acc]', c)); return; }
     if (act === 'acc-refresh') { loadSrcAcc($('[data-src-acc]', c), true); return; }
     if (act === 'key' || act === 'unkey') {
@@ -7022,6 +7072,13 @@ function drawSourceCards(box, r, list, say) {
       const res = await fetch(`/api/sources/${id}/key`, { method: act === 'key' ? 'POST' : 'DELETE', headers: { 'Content-Type': 'application/json' }, ...(act === 'key' ? { body: JSON.stringify({ key }) } : {}) }).then((y) => y.json()).catch((er) => ({ error: er.message }));
       if (inp) inp.value = '';
       if (res.error) { btn.disabled = false; say(msg, `⚠ ${res.error}`, true); return; }
+      // A maker's API checks the key at once: listing its models costs nothing.
+      if (act === 'key' && x.direct) {
+        say(msg, `Checking the key with ${x.name}…`);
+        const t = await postJ(`/api/sources/${id}/test`, {});
+        redraw(null, { id, where: 'src-msg', bad: !t.ok, text: t.ok ? `✓ Key saved and checked: ${t.models} ${x.name} models are in the model pickers${t.priced != null && t.priced < t.models ? ` (${t.priced} with a known price)` : ''}.` : `⚠ Key saved, but ${x.name} refused it or couldn’t be reached: ${t.error}` });
+        return;
+      }
       redraw(res.sources, { id, where: 'src-msg', text: act === 'key' ? `✓ Key saved: ${x.name}’s models are in the model pickers. Test the connection to check it.` : 'Key removed.' });
       return;
     }
@@ -7029,7 +7086,7 @@ function drawSourceCards(box, r, list, say) {
       btn.disabled = true; say(tmsg, `Asking ${x.name}…`);
       const t = await postJ(`/api/sources/${id}/test`, {}).catch((er) => ({ ok: false, error: er.message }));
       btn.disabled = false;
-      say(tmsg, t.ok ? `✓ ${x.appName || x.name} answered: ${t.models} models${!t.providers.length ? '' : t.providers.length === 1 ? ` on ${t.providers[0]}` : ` from ${t.providers.length} providers (${t.providers.join(', ')})`}.` : `⚠ ${t.error}`, !t.ok);
+      say(tmsg, t.ok ? `✓ ${x.appName || x.name} answered: ${x.direct ? `the key works, ${t.models} models${t.priced != null && t.priced < t.models ? ` (${t.priced} with a known price)` : ''}` : `${t.models} models`}${!t.providers.length ? '' : t.providers.length === 1 ? ` on ${t.providers[0]}` : ` from ${t.providers.length} providers (${t.providers.join(', ')})`}.` : `⚠ ${t.error}`, !t.ok);
       const fresh = await fetch('/api/sources').then((y) => y.json()).catch(() => null);
       if (fresh?.sources) { ST.sources = fresh.sources; stRefresh(); }
       return;

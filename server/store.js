@@ -597,18 +597,22 @@ function costRows() {
   });
 }
 const SORT = { cost: (a, b) => b.cost - a.cost, today: (a, b) => b.today - a.today || b.cost - a.cost, messages: (a, b) => b.messages - a.messages, name: (a, b) => a.title.localeCompare(b.title), recent: (a, b) => (b.lastAt || 0) - (a.lastAt || 0) };
-export function costSummary({ per = 5, sort = 'cost' } = {}) {
+export function costSummary({ per = 5, sort = 'cost', providerOf = null } = {}) {
   const rows = costRows(), by = SORT[sort] || SORT.cost;
   const projects = Object.fromEntries(listProjects().map((p) => [p.id, { id: p.id, name: p.name, dir: p.dir, color: p.color || null, cost: 0, plan: 0, today: 0, week: 0, messages: 0, chatCount: 0, lastAt: 0, chats: [] }]));
   const total = { cost: 0, plan: 0, today: 0, week: 0, chats: rows.length };
+  // What each provider was paid, all time, from what each chat spent on each model (`providerOf` names a model's).
+  const byProvider = {};
   for (const r of rows) {
     const p = projects[r.projectId] || (projects[r.projectId] = { id: r.projectId, name: `${r.projectId} (removed)`, cost: 0, plan: 0, today: 0, week: 0, messages: 0, chatCount: 0, chats: [] });
     p.chats.push(r); p.chatCount++; p.lastAt = Math.max(p.lastAt || 0, r.lastAt || 0);
     for (const k of ['cost', 'plan', 'today', 'week', 'messages']) p[k] += r[k] || 0;
     for (const k of ['cost', 'plan', 'today', 'week']) total[k] += r[k] || 0;
+    if (providerOf) for (const [m, v] of Object.entries(r.models || {})) { const n = Number(v); if (!Number.isFinite(n) || n <= 0 || n > 1e6) continue; const who = providerOf(m); byProvider[who] = (byProvider[who] || 0) + n; }
   }
   for (const p of Object.values(projects)) p.chats = p.chats.sort(by).slice(0, Math.max(1, Math.min(50, per)));
   const PSORT = { cost: (a, b) => b.cost - a.cost, today: (a, b) => b.today - a.today || b.cost - a.cost, messages: (a, b) => b.messages - a.messages, name: (a, b) => a.name.localeCompare(b.name), recent: (a, b) => (b.lastAt || 0) - (a.lastAt || 0) };
+  if (providerOf) total.byProvider = byProvider;
   return { total, projects: Object.values(projects).filter((p) => p.chatCount).sort(PSORT[sort] || PSORT.cost) };
 }
 // One page of chats: in a project, or matching a search across all projects.
