@@ -3486,8 +3486,10 @@ test('extension pairing shows which extension asks and a code to match; the key 
     ws.onclose = ws.onerror = () => { x.closed = true; };
     ws.onopen = () => { ws.send(typeof first === 'string' ? first : JSON.stringify(first)); ok(x); };
   });
-  const pair = (c) => open(c, { t: 'hello', pair: true, browser: 'Chrome', version: '0.3.4' });
-  const withKey = (c, key = extKey()) => open(c, { t: 'hello', key, version: '0.3.4' });
+  // The extension in the repo's folder: an older version is asked to reload.
+  const version = JSON.parse(fs.readFileSync(new URL('../extension/manifest.json', import.meta.url), 'utf8')).version;
+  const pair = (c) => open(c, { t: 'hello', pair: true, browser: 'Chrome', version });
+  const withKey = (c, key = extKey()) => open(c, { t: 'hello', key, version });
   try {
     extKey(true);
     // The prompt names the extension's ID and a code, and the extension gets the same code to show in its popup.

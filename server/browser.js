@@ -208,7 +208,7 @@ export function slimNetworkEvent(method, p) {
   return null;
 }
 
-// A tab of your everyday Chrome that you gave to a chat, through the QuorX extension. Closing only lets go of it.
+// A tab of your everyday Chrome that a chat opened, through the QuorX extension. Closing only lets go of it.
 // When you let the extension read pages (its popup), reading, screenshots and the agent's mark go through page scripts
 // and Chrome's own capture, so the "started debugging this browser" bar shows only while the agent clicks, types or
 // reads network data. The debugger is attached on the first such command (and the extension lets go after a quiet

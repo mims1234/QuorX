@@ -808,7 +808,9 @@ const server = http.createServer(async (req, res) => {
       if (req.method === 'POST') {
         const b = JSON.parse(await readBody(req, 1e4) || '{}');
         if (!validId(b.chatId)) return json(res, 400, { error: 'bad chat id' });
-        try { return json(res, 200, { given: giveTab(b.chatId, String(b.sid || ''), b) }); } catch (e) { return json(res, 200, { error: e.message }); }
+        // A tab of the app's own browser only: a Chrome tab is never given, a chat opens its own (openChromeTab).
+        if (String(b.sid || '').startsWith('chrome-')) return json(res, 200, { error: 'a Chrome tab cannot be given' });
+        try { return json(res, 200, { given: giveTab(b.chatId, String(b.sid || ''), { url: b.url, title: b.title, desktop: b.desktop }) }); } catch (e) { return json(res, 200, { error: e.message }); }
       }
     }
     // ---- export from the pane: a page as PDF or one long PNG, or the project's files as a ZIP ----
@@ -1137,17 +1139,13 @@ server.on('upgrade', (req, socket) => {
   if (p === '/api/ext/socket' && hostAllowed(req)) return extUpgrade(req, socket);
   socket.destroy();
 });
-// What the extension's popup asks: recent chats to give a tab to, giving and taking back, stopping the agent,
-// opening a chat in QuorX, and saving a routine you recorded.
+// What the extension's popup asks: recent chats (to name the one using a tab, and to save a routine in), taking a
+// tab back, stopping the agent, opening a chat in QuorX, and saving a routine you recorded. It can't give a tab: a chat
+// works only in the Chrome tabs it opened itself (openChromeTab).
 const stopChat = (chatId) => { let n = 0; for (const r of activeRuns()) if (r.chatId === chatId && stopRun(r.runId)) n++; return n; };
 onExtRequest({
   chats: () => listChats().slice(0, 25).map((c) => ({ id: c.id, title: c.title || 'New chat', project: listProjects().find((p) => p.id === c.projectId)?.name || '' })),
   lent: () => lentChromeTabs(),
-  give: ({ tab, chatId, url: u, title, selection, link, image }) => {
-    if (!validId(chatId) || !listChats().some((c) => c.id === chatId)) throw new Error('that chat is gone');
-    if (!Number.isInteger(tab)) throw new Error('bad tab');
-    return giveTab(chatId, `chrome-${tab}`, { url: u, title, ext: tab, selection, link, image });
-  },
   stop: ({ chatId }) => ({ stopped: validId(chatId) ? stopChat(chatId) : 0 }),
   // The shortcut: every reply working in your Chrome.
   stopAll: () => ({ stopped: [...new Set(lentChromeTabs().map((x) => x.chatId))].reduce((n, c) => n + stopChat(c), 0) }),

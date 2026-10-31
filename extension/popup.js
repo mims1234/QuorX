@@ -1,5 +1,5 @@
 // Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
-// The QuorX popup: connect once, give the current tab to a chat or take it back, see and stop the agent, allow
+// The QuorX popup: connect once, see and stop the agent in this tab or take the tab back, allow
 // reading without the debugging bar, and record a routine.
 const $ = (id) => document.getElementById(id);
 const ask = (msg) => new Promise((ok, no) => chrome.runtime.sendMessage(msg, (r) => (r?.ok ? ok(r.r) : no(new Error(r?.error || chrome.runtime.lastError?.message || 'no answer')))));
@@ -20,7 +20,7 @@ async function draw() {
   const showPair = s.state === 'pairing' || !s.paired || s.state === 'denied';
   $('pairWait').hidden = s.state !== 'pairing'; $('pairBtn').disabled = s.state === 'pairing';
   $('pairCode').textContent = s.code || ''; $('pairCode').hidden = !s.code;
-  $('pair').hidden = !showPair; $('give').hidden = showPair;
+  $('pair').hidden = !showPair; $('tabView').hidden = showPair;
   $('address').value = s.address || 'http://127.0.0.1:5188';
   if (s.error && s.state !== 'on') say(s.error);
   if (showPair) return;
@@ -29,7 +29,7 @@ async function draw() {
   const lent = tab && s.lent[tab.id];
   lentChatId = lent?.chatId || null;
   if (s.state === 'on') chats = await ask({ q: 'chats' }).catch(() => []);
-  $('giveForm').hidden = !!lent; $('lentNote').hidden = !lent;
+  $('freeNote').hidden = !!lent; $('lentNote').hidden = !lent;
   $('thisTab').classList.toggle('lent', !!lent);
   if (lent) {
     $('lentChat').textContent = chats.find((c) => c.id === lent.chatId)?.title || 'a chat';
@@ -42,9 +42,7 @@ async function draw() {
   // A long title is shortened (the project after it stays readable); the whole title shows on hover.
   const short = (t) => (String(t).length > 46 ? `${String(t).slice(0, 45)}…` : String(t));
   const options = chats.map((c) => `<option value="${c.id}" title="${esc(c.title)}">${esc(short(c.title))}${c.project ? ` · ${esc(c.project)}` : ''}</option>`).join('') || '<option value="">No chats yet: start one in QuorX</option>';
-  $('chat').innerHTML = options; $('recChat').innerHTML = options;
-  $('giveBtn').disabled = s.state !== 'on' || !chats.length || !/^https?:/i.test(tab?.url || '');
-  if (!/^https?:/i.test(tab?.url || '')) say('Only web pages (http or https) can be given.');
+  $('recChat').innerHTML = options;
   $('scriptBox').hidden = !!s.script;
   // Recording
   $('recIdle').hidden = !!s.rec; $('recOn').hidden = !s.rec;
@@ -65,7 +63,6 @@ $('save').onclick = async () => {
   try { const r = await ask({ q: 'save', address: $('address').value, key: $('key').value }); $('key').value = ''; if (r.state !== 'on') say(r.error || 'Could not connect.'); } catch (e) { say(e.message); }
   $('save').disabled = false; draw();
 };
-$('giveBtn').onclick = async () => { try { await ask({ q: 'give', tab: tab.id, chatId: $('chat').value }); } catch (e) { say(e.message); } draw(); };
 $('backBtn').onclick = async () => { try { await ask({ q: 'takeBack', tab: tab.id }); } catch (e) { say(e.message); } draw(); };
 $('stopBtn').onclick = async () => { try { const r = await ask({ q: 'stop', chatId: lentChatId }); if (!r?.stopped) say('Nothing was running in that chat.'); } catch (e) { say(e.message); } draw(); };
 $('openBtn').onclick = () => ask({ q: 'open', chatId: lentChatId }).catch((e) => say(e.message));
@@ -85,5 +82,5 @@ $('recSave').onclick = async () => {
 };
 $('recDrop').onclick = async () => { await ask({ q: 'rec-stop', discard: true }).catch(() => {}); draw(); };
 $('allowOpen').onchange = (e) => ask({ q: 'allowOpen', on: e.target.checked }).catch((x) => say(x.message));
-$('repair').onclick = () => { $('pair').hidden = false; $('give').hidden = true; };
+$('repair').onclick = () => { $('pair').hidden = false; $('tabView').hidden = true; };
 draw().catch((e) => say(e.message));
