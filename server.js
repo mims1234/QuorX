@@ -26,7 +26,7 @@ import { createScheduler, loadSchedules, scheduleView, addSchedule, changeSchedu
 import { startScheduledChat } from './server/schedrun.js';
 import { loadMemory, saveMemory, memoryTokens, MEMORY_TOKENS } from './server/memory.js';
 import { listQuoriums, saveQuorium, removeQuorium } from './server/quoriums.js';
-import { listServers as mcpList, saveServers as mcpSave, addServers as mcpAdd, parseSetup as mcpParse, connect as mcpConnect, stopServer as mcpStop } from './server/mcpclient.js';
+import { listServers as mcpList, saveServers as mcpSave, addServers as mcpAdd, parseSetup as mcpParse, connect as mcpConnect, stopServer as mcpStop, foundServers as mcpFound, importFound as mcpImport } from './server/mcpclient.js';
 import { CHECKS } from './server/harness-checks.js';
 import { startRun, getRun, stopRun, follow, runStatus, activeRuns, validRunId, scorecard, readLog, runEvents, recordRun, onRunEvent } from './server/runs.js';
 import { setBudget, budgetState } from './server/budget.js';
@@ -606,6 +606,9 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/mcp/parse' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 2e5) || '{}'); try { const p = mcpParse(b.text, b.name); return json(res, 200, { from: p.from, servers: p.servers.map((x) => ({ ...x, ...(x.env ? { env: Object.fromEntries(Object.keys(x.env).map((k) => [k, '(set)'])) } : {}), ...(x.headers ? { headers: Object.fromEntries(Object.keys(x.headers).map((k) => [k, '(set)'])) } : {}) })) }); } catch (e) { return json(res, 400, { error: e.message }); } }
     if (url.pathname === '/api/mcp/add' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 2e5) || '{}'); try { return json(res, 200, { servers: mcpAdd(mcpParse(b.text, b.name).servers) }); } catch (e) { return json(res, 400, { error: e.message }); } }
     if (url.pathname === '/api/mcp/test' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e4) || '{}'); try { await mcpConnect(String(b.name || ''), { fresh: true }); } catch { /* the list says why */ } return json(res, 200, { servers: mcpList() }); }
+    // Servers already set up in Claude Code, Cursor and the like on this PC (names and key names only), and adding one.
+    if (url.pathname === '/api/mcp/found' && req.method === 'GET') return json(res, 200, { found: mcpFound() });
+    if (url.pathname === '/api/mcp/import' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e4) || '{}'); try { return json(res, 200, { servers: mcpImport(String(b.from || ''), String(b.name || '')) }); } catch (e) { return json(res, 400, { error: e.message }); } }
     if (url.pathname === '/api/mcp/stop' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e4) || '{}'); mcpStop(String(b.name || '')); return json(res, 200, { servers: mcpList() }); }
     if (url.pathname === '/api/memory' && req.method === 'GET') { const m = loadMemory(); return json(res, 200, { ...m, tokens: memoryTokens(m.items), limit: MEMORY_TOKENS }); }
     if (url.pathname === '/api/memory' && req.method === 'PUT') {

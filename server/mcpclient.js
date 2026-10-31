@@ -5,6 +5,7 @@
 // Env values and headers can hold keys: the page only ever sees their names (a masked value saved back keeps the old).
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { spawn } from 'node:child_process';
 import { HOME } from './openrouter.js';
 import { renameSoon } from './fsretry.js';
@@ -123,6 +124,44 @@ export function parseSetup(input, name = '') {
 }
 const TOOL_NAME = { claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini CLI', cursor: 'Cursor', qwen: 'Qwen Code', opencode: 'OpenCode', amp: 'Amp' };
 const hostName = (u) => { try { return new URL(u).hostname.split('.').slice(-2, -1)[0] || 'server'; } catch { return 'server'; } };
+
+// ---------- servers already set up in the user's other tools on this PC ----------
+// Claude Code (its user servers and each project's), Claude Desktop, Cursor, Windsurf, Gemini CLI and VS Code keep MCP
+// servers in their own config files. QuorX only reads them, never changes them, and the page sees no key values.
+function otherConfigs() {
+  const h = os.homedir(), app = process.env.APPDATA || path.join(h, 'AppData', 'Roaming');
+  const read = (p) => { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; } };
+  const out = [];
+  const add = (from, map) => { for (const [name, v] of Object.entries(map && typeof map === 'object' ? map : {})) if (v && typeof v === 'object') out.push({ from, name, v }); };
+  const cc = read(path.join(h, '.claude.json'));
+  if (cc) { add('Claude Code', cc.mcpServers); for (const p of Object.values(cc.projects || {})) add('Claude Code', p?.mcpServers); }
+  add('Claude Desktop', read(path.join(app, 'Claude', 'claude_desktop_config.json'))?.mcpServers);
+  add('Cursor', read(path.join(h, '.cursor', 'mcp.json'))?.mcpServers);
+  add('Windsurf', read(path.join(h, '.codeium', 'windsurf', 'mcp_config.json'))?.mcpServers);
+  add('Gemini CLI', read(path.join(h, '.gemini', 'settings.json'))?.mcpServers);
+  add('VS Code', read(path.join(app, 'Code', 'User', 'mcp.json'))?.servers);
+  return out;
+}
+const asServer = ({ name, v }) => cleanServer({ name: String(name).replace(/[^A-Za-z0-9_-]/g, '-').replace(/^-+/, '').slice(0, 40) || 'server', command: v.command, args: v.args, env: v.env, cwd: v.cwd, url: v.url || v.serverUrl || v.httpUrl, headers: v.headers });
+/** Servers set up in other tools that QuorX could add: { from, name, type, runs, keys (names only), added }. */
+export function foundServers() {
+  const mine = read(), seen = new Set(), out = [];
+  for (const x of otherConfigs()) {
+    let s; try { s = asServer(x); } catch { continue; } // e.g. a claude.ai connector: nothing QuorX can start
+    const runs = s.type === 'http' ? s.url : [s.command, ...s.args].join(' ');
+    if (seen.has(`${s.name}|${runs}`)) continue;
+    seen.add(`${s.name}|${runs}`);
+    out.push({ from: x.from, name: s.name, type: s.type, runs, keys: Object.keys({ ...(s.env || {}), ...(s.headers || {}) }),
+      added: mine.some((m) => m.name === s.name || (m.type === 'http' ? m.url : [m.command, ...m.args].join(' ')) === runs) });
+  }
+  return out;
+}
+/** Adds one server found in another tool (read again here, so its keys never pass through the page). */
+export function importFound(from, name) {
+  const x = otherConfigs().find((y) => y.from === from && asServer(y).name === name);
+  if (!x) throw new Error(`${from} has no server "${name}" any more.`);
+  return addServers([asServer(x)]);
+}
 
 // ---------- talking to a server ----------
 const clients = new Map(); // name → { state, error, tools, call(method, params, ms), close() }

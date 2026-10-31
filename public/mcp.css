@@ -101,3 +101,5 @@
 .approval .mcp-ap pre { margin: 0; max-height: 180px; overflow: auto; padding: 8px 10px; border-radius: 7px; border: 1px solid var(--line); background: var(--surface-inset, var(--bg)); font: 400 11.5px/1.5 var(--mono); color: var(--text); white-space: pre-wrap; word-break: break-word; }
 #mcpPanel .mcp-tick { display: inline-grid; place-items: center; flex: none; width: 22px; height: 22px; cursor: pointer; }
 #mcpPanel .mcp-tick input { width: 16px; height: 16px; margin: 0; accent-color: var(--ok); cursor: pointer; }
+#mcpPanel .mcp-h { margin: 4px 0 0; font: 600 11px var(--font-ui); letter-spacing: .04em; text-transform: uppercase; color: var(--dim); }
+#mcpPanel .mcp-h small { text-transform: none; letter-spacing: 0; font-weight: 400; margin-left: 6px; }

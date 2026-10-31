@@ -7771,8 +7771,9 @@ const MCP_SUGGESTED = [
   { name: 'context7', setup: 'https://mcp.context7.com/mcp', what: 'Current docs for libraries and frameworks' },
   { name: 'mslearn', setup: 'https://learn.microsoft.com/api/mcp', what: 'Microsoft docs and code samples' },
   { name: 'cloudflare-docs', setup: 'https://docs.mcp.cloudflare.com/mcp', what: 'Cloudflare docs search' },
-  { name: 'playwright', setup: 'npx -y @playwright/mcp@latest', what: 'A browser the agent drives (needs Node)' },
-  { name: 'thinking', setup: 'npx -y @modelcontextprotocol/server-sequential-thinking', what: 'Step-by-step thinking for hard problems (needs Node)' },
+  { name: 'exa', setup: 'https://mcp.exa.ai/mcp', what: 'Web search and page reading' },
+  { name: 'huggingface', setup: 'https://huggingface.co/mcp', what: 'Search Hugging Face models, datasets and Spaces' },
+  { name: 'gitmcp', setup: 'https://gitmcp.io/docs', what: 'Docs and code of any GitHub project' },
 ];
 const MCP_FILTERS = [
   ['running', 'Running', (s) => s.status === 'running'], ['stopped', 'Not started', (s) => s.status === 'stopped' || s.status === 'starting'], ['error', "Can't start", (s) => s.status === 'error'],
@@ -7793,6 +7794,8 @@ async function drawMcpPanel() {
   const U = MCP_UI, running = list.filter((s) => s.status === 'running'), bad = list.filter((s) => s.status === 'error');
   const tools = running.reduce((n, s) => n + (s.tools?.length || 0), 0), on = list.filter((s) => s.on).length;
   const have = new Set(list.map((s) => s.name)), sugg = MCP_SUGGESTED.filter((x) => !have.has(x.name));
+  // Servers already set up in Claude Code, Cursor and the like on this PC, not yet in QuorX.
+  const found = ((await fetch('/api/mcp/found').then((r) => r.json()).catch(() => null))?.found || []).filter((f) => !f.added);
   if (!list.length && U.tab === 'mine' && !U.adding) U.tab = 'first';
   if (list.length && U.tab === 'first') U.tab = 'mine';
   const match = (s) => {
@@ -7813,15 +7816,18 @@ async function drawMcpPanel() {
     </div>`;
   const msg = `<p class="mem-msg ${U.msg.startsWith('✓') ? 'ok' : U.msg ? 'bad' : ''}" role="status">${esc(U.msg)}</p>`;
   const head = `<div class="mcp-sum">${list.length ? `<span class="mcp-st running"><i></i>${running.length} running</span><span>${on} of ${list.length} on</span><span>${tools} tools available</span>${bad.length ? `<button type="button" class="mcp-st error mcp-showbad"><i></i>${bad.length} can't start · Show them</button>` : ''}` : '<span>No servers yet</span>'}<span class="cq-sp"></span><button type="button" class="kx-btn sm primary" id="mcpAddOpen">+ Add a server</button></div>
-    ${list.length ? `<div class="seg mcp-tabs" role="tablist"><button type="button" data-tab="mine" class="${U.tab === 'mine' ? 'on' : ''}">Your servers <small>${list.length}</small></button><button type="button" data-tab="gal" class="${U.tab === 'gal' ? 'on' : ''}">Suggested <small>${sugg.length}</small></button></div>` : ''}`;
+    ${list.length ? `<div class="seg mcp-tabs" role="tablist"><button type="button" data-tab="mine" class="${U.tab === 'mine' ? 'on' : ''}">Your servers <small>${list.length}</small></button><button type="button" data-tab="gal" class="${U.tab === 'gal' ? 'on' : ''}">Suggested <small>${sugg.length + found.length}</small></button></div>` : ''}`;
+  const foundCard = (f) => `<div class="mcp-sug">${mcpMark(f)}<div><b>${esc(f.name)}</b><small>Set up in ${esc(f.from)}${f.keys.length ? ` · with ${f.keys.length} setting${f.keys.length > 1 ? 's' : ''} (${f.keys.slice(0, 3).map(esc).join(', ')}${f.keys.length > 3 ? '…' : ''})` : ''}</small><code title="${esc(f.runs)}">${esc(f.runs)}</code></div><span class="mcp-kind">${f.type === 'http' ? 'web' : 'program'}</span><button type="button" class="kx-btn sm" data-found="${esc(f.from)}" data-fname="${esc(f.name)}">Add</button></div>`;
+  const foundSec = found.length ? `<h6 class="mcp-h">Found in your other tools <small>already set up on this PC: one click brings it into QuorX (yours stays as it is)</small></h6><div class="mcp-sug-grid">${found.map(foundCard).join('')}</div>` : '';
   const sugCard = (x) => `<div class="mcp-sug">${mcpMark(x)}<div><b>${esc(x.name)}</b><small>${esc(x.what)}</small><code>${esc(x.setup)}</code></div><span class="mcp-kind">${/^https?:/.test(x.setup) ? 'web · no key' : 'program'}</span><button type="button" class="kx-btn sm" data-sug="${esc(x.name)}">Add</button></div>`;
   let body = '';
   if (U.tab === 'first') {
     body = `<div class="mcp-first"><b>Give the agent extra tools.</b><p>An MCP server is a set of tools from a program on this PC or a site on the web: docs to read, a browser to drive, a design app to use. Add one, then tick it in a chat.</p>
-      <div class="mcp-sug-grid">${MCP_SUGGESTED.slice(0, 3).map(sugCard).join('')}</div>
+      ${foundSec}${found.length ? '<h6 class="mcp-h">Need no key</h6>' : ''}<div class="mcp-sug-grid">${MCP_SUGGESTED.slice(0, 3).map(sugCard).join('')}</div>
       <button type="button" class="kx-btn sm" id="mcpPasteOpen">Or paste a setup…</button></div>`;
   } else if (U.tab === 'gal') {
-    body = sugg.length ? `<div class="mcp-sug-grid">${sugg.map(sugCard).join('')}</div>` : '<p class="st-row-help">You have every suggested server. Paste any other setup with + Add a server.</p>';
+    body = foundSec + (sugg.length ? `<h6 class="mcp-h">Need no key <small>free servers on the web</small></h6><div class="mcp-sug-grid">${sugg.map(sugCard).join('')}</div>` : '')
+      + (!sugg.length && !found.length ? '<p class="st-row-help">You have every suggested server. Paste any other setup with + Add a server.</p>' : '');
   } else {
     const count = (f) => list.filter((s) => MCP_FILTERS.find((x) => x[0] === f)[2](s)).length;
     const chips = MCP_FILTERS.filter(([f]) => count(f) || U.filters.has(f)).map(([f, label]) => `<button type="button" class="mcp-chip ${U.filters.has(f) ? 'on' : ''}" data-f="${f}" aria-pressed="${U.filters.has(f)}">${label} <small>${count(f)}</small></button>`).join('');
@@ -7854,6 +7860,14 @@ async function drawMcpPanel() {
   for (const b of el.querySelectorAll('[data-tab]')) b.onclick = () => { U.tab = b.dataset.tab; drawMcpPanel(); };
   $('.mcp-showbad', el)?.addEventListener('click', () => { U.tab = 'mine'; U.filters = new Set(['error']); drawMcpPanel(); });
   $('#mcpPasteOpen', el)?.addEventListener('click', () => { U.adding = true; U.tab = 'mine'; drawMcpPanel().then(() => $('#mcpPaste')?.focus()); });
+  for (const b of el.querySelectorAll('[data-found]')) b.onclick = async () => {
+    const from = b.dataset.found, name = b.dataset.fname;
+    b.disabled = true; b.textContent = 'Adding…';
+    const r = await postJ('/api/mcp/import', { from, name }).catch((e) => ({ error: e.message }));
+    if (r?.error) { say(`Not added: ${r.error}`); return; }
+    U.tab = 'mine'; U.sel = name; say(`✓ Added ${name} from ${from}. Starting it…`);
+    postJ('/api/mcp/test', { name }).then(() => { U.msg = `✓ Added ${name} from ${from}. Tick it in a chat's settings (🧲) to use it there.`; drawMcpPanel(); }).catch(() => {});
+  };
   for (const b of el.querySelectorAll('[data-sug]')) b.onclick = async () => { const x = MCP_SUGGESTED.find((y) => y.name === b.dataset.sug); b.disabled = true; b.textContent = 'Adding…'; if (await addText(x.setup, x.name, x.name)) postJ('/api/mcp/test', { name: x.name }).then(() => drawMcpPanel()).catch(() => {}); };
   if ($('#mcpRead')) {
     if (pv) { $('#mcpPaste').value = pv.text; $('#mcpName').value = pv.name; }
