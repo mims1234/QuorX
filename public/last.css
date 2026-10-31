@@ -2915,6 +2915,12 @@ body.dev-build::before { content: ''; position: fixed; left: 0; right: 0; top: 0
 .perm-pop .pm-st.bad { color: var(--bad); background: var(--bad-dim); }
 .perm-pop .pm-act { height: 24px; padding: 0 9px; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: var(--text); font: 600 11.5px var(--font-ui); cursor: pointer; white-space: nowrap; }
 .perm-pop .pm-act:hover { background: var(--panel-2); }
+/* Which notifications: a segmented choice under the row's text. */
+.perm-pop .pm-seg { display: inline-flex; gap: 2px; margin-top: 6px; padding: 2px; border-radius: 8px; background: var(--surface-inset, var(--panel-2)); border: 1px solid var(--line); max-width: 100%; }
+.perm-pop .pm-seg button { height: 24px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font: 600 11.5px var(--font-ui); cursor: pointer; white-space: nowrap; }
+.perm-pop .pm-seg button:hover { color: var(--text); }
+.perm-pop .pm-seg button.on { background: var(--panel-3, var(--panel)); color: var(--text); box-shadow: inset 0 0 0 1px var(--line-strong); }
+.perm-pop .pm-warn { display: block; margin-top: 4px; color: var(--bad); }
 .perm-pop .pm-note { margin: 6px 2px 0; padding-top: 6px; border-top: 1px solid var(--line); }
 
 /* ---------- listening: a wave of light along the bottom of the chat while the mic is on ---------- */
