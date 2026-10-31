@@ -1507,7 +1507,7 @@ html body .chat-head .ch-acts .ch-delete:hover { color: var(--bad) !important; b
 #pane .pane-tabs > [data-tab] { height: 34px !important; padding: 0 9px !important; font-size: 12.5px !important; min-height: 0 !important; }
 #pane .pane-tabs .pt-icon { align-self: center; width: 26px !important; height: 26px !important; min-height: 0 !important; padding: 0 !important; }
 #pane .pane-tabs .pt-follow { align-self: center; font-size: 11.5px !important; gap: 5px !important; }
-.pane-tool { display: flex; align-items: center; gap: 3px; padding: 4px 6px; border-bottom: 1px solid var(--line); min-width: 0; flex: none; }
+.pane-tool { display: flex; align-items: center; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--line); min-width: 0; flex: none; }
 .pane-tool:has(> #paneUrlWrap[hidden]):has(> #appBar[hidden]) { display: none; }
 .pane-tool > #paneUrlWrap { order: 2; flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 3px; padding: 0 !important; margin: 0 !important; border: 0 !important; background: transparent !important; height: auto !important; min-height: 0 !important; }
 .pane-tool > #paneUrlWrap[hidden] { display: none !important; }
@@ -1518,14 +1518,22 @@ html body .chat-head .ch-acts .ch-delete:hover { color: var(--bad) !important; b
 .pane-tool > #appBar > .bv-real, .pane-tool > #appBar > .bv-dev, .pane-tool > #appBar > .bv-mode, .pane-tool > #appBar > * { order: 3; }
 .pane-tool > #appBar > .bv-who, .pane-tool > #appBar > .bv-lock, .pane-tool > #appBar > .bv-nav { order: 1; }
 .pane-tool > #appBar > .spacer, .pane-tool > #appBar > .dim:empty { display: none; }
-.pane-tool #paneUrl { height: 26px !important; min-height: 0 !important; padding: 0 9px !important; font: 12px var(--mono) !important; border-radius: 7px !important; flex: 1 1 auto; min-width: 0; }
-.pane-tool #artSelect { height: 26px !important; min-height: 0 !important; padding: 0 8px !important; font-size: 12.5px !important; border-radius: 7px !important; flex: 0 1 auto; min-width: 0; max-width: 100%; }
+.pane-tool #paneUrl { height: 34px !important; min-height: 0 !important; padding: 0 12px !important; font: 12.5px var(--mono) !important; border-radius: 7px !important; flex: 1 1 auto; min-width: 0; }
+.pane-tool #artSelect { height: 34px !important; min-height: 0 !important; padding: 0 8px !important; font-size: 12.5px !important; border-radius: 7px !important; flex: 0 1 auto; min-width: 0; max-width: 100%; }
 .pane-tool #paneUrlWrap.art-mode #artSelect { flex: 1 1 auto; }
 .pane-tool #paneUrlWrap.art-mode #paneUrl, .pane-tool #paneUrlWrap.art-mode #copyUrlBtn { display: none !important; }
-.pane-tool button.icon, .pane-tool .bv-nav, .pane-tool .bv-dev, .pane-tool .bv-mode { width: 26px !important; height: 26px !important; min-height: 0 !important; min-width: 0 !important; padding: 0 !important; display: inline-grid !important; place-items: center; border-radius: 7px !important; border: 1px solid transparent !important; background: transparent !important; color: var(--muted) !important; cursor: pointer; font-size: 0 !important; }
+.pane-tool button.icon, .pane-tool .bv-nav, .pane-tool .bv-dev, .pane-tool .bv-mode { width: 30px !important; height: 30px !important; min-height: 0 !important; min-width: 0 !important; padding: 0 !important; display: inline-grid !important; place-items: center; border-radius: 7px !important; border: 1px solid transparent !important; background: transparent !important; color: var(--muted) !important; cursor: pointer; font-size: 0 !important; }
 .pane-tool button.icon:hover:not(:disabled), .pane-tool .bv-nav:hover:not(:disabled), .pane-tool .bv-dev:hover, .pane-tool .bv-mode:hover { color: var(--text) !important; background: var(--panel-2) !important; border-color: var(--line) !important; }
 .pane-tool button:disabled { opacity: .35; cursor: default; }
 .pane-tool .bv-mode.on { color: var(--accent) !important; }
+/* 🔊 sound: same as the other icon buttons; muted shows amber so it's clear the tab won't be heard. */
+.pane-tool .bv-snd { order: 3; width: 30px !important; height: 30px !important; min-height: 0 !important; min-width: 0 !important; padding: 0 !important; display: inline-grid !important; place-items: center; border-radius: 7px !important; border: 1px solid transparent !important; background: transparent !important; color: var(--muted) !important; cursor: pointer; font-size: 0 !important; }
+.pane-tool .bv-snd:hover { color: var(--text) !important; background: var(--panel-2) !important; border-color: var(--line) !important; }
+.pane-tool .bv-snd.off { color: var(--warn, #d9a441) !important; }
+#paneBody .btab .bt-snd { width: 22px; height: 22px; min-height: 0; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--accent); display: inline-grid; place-items: center; cursor: pointer; flex: none; }
+#paneBody .btab .bt-snd.off { color: var(--warn, #d9a441); }
+#paneBody .btab .bt-snd:hover { background: var(--panel-3, var(--panel-2)); }
+#paneBody .btab .bt-snd svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .pane-tool svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
 .pane-tool .bv-who { width: 22px; text-align: center; font-size: 13px; cursor: help; }
 .pane-tool .bv-lock { height: 20px; padding: 0 7px; display: inline-flex; align-items: center; border-radius: 99px; font: 600 10.5px var(--font-ui); color: var(--bad); background: var(--bad-dim); }
@@ -1533,11 +1541,11 @@ html body .chat-head .ch-acts .ch-delete:hover { color: var(--bad) !important; b
 .pane-tool .bv-real::before { content: '●'; font-size: 9px; color: var(--ok); }
 .pane-tool .bv-real.loading::before { color: var(--amber, #f59e0b); animation: real-load 1s ease-in-out infinite; }
 @keyframes real-load { 50% { opacity: .3; } }
-/* browser tabs: a slim strip */
-#paneBody .btabs { min-height: 0 !important; height: 30px !important; padding: 3px 6px 0 !important; gap: 3px !important; }
-#paneBody .btab { height: 27px !important; min-height: 0 !important; padding: 0 6px 0 9px !important; font-size: 12px !important; gap: 6px !important; max-width: 180px; }
-#paneBody .btab .bt-x { width: 18px !important; height: 18px !important; min-height: 0 !important; padding: 0 !important; font-size: 13px !important; }
-#paneBody .btab-new { width: 24px !important; height: 24px !important; min-height: 0 !important; padding: 0 !important; align-self: center; }
+/* browser tabs: tall enough to hit easily */
+#paneBody .btabs { min-height: 0 !important; height: 40px !important; padding: 4px 8px 0 !important; gap: 3px !important; }
+#paneBody .btab { height: 36px !important; min-height: 0 !important; padding: 0 8px 0 12px !important; font-size: 12.5px !important; gap: 7px !important; max-width: 200px; }
+#paneBody .btab .bt-x { width: 22px !important; height: 22px !important; min-height: 0 !important; padding: 0 !important; font-size: 13px !important; }
+#paneBody .btab-new { width: 30px !important; height: 30px !important; min-height: 0 !important; padding: 0 !important; align-self: center; }
 /* cost tables: the models a chat used behind one icon (hover for each model and its cost) */
 .cost-table .cx-models { white-space: nowrap; }
 .cx-mi { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 7px; border-radius: 6px; border: 1px solid var(--line); color: var(--violet, #a78bfa); font: 600 11px var(--mono); cursor: help; }
@@ -1816,6 +1824,19 @@ img.shot:hover, img.dsnap:hover, .msg .msg-md img:hover { outline: 2px solid var
 .exp-menu button { text-align: left; padding: 7px 10px; border-radius: 6px; border: 0; background: transparent; color: var(--text); font: 500 12.5px var(--font-ui); cursor: pointer; }
 .exp-menu button:hover:not(:disabled) { background: var(--panel-3, var(--panel-2)); }
 .exp-menu button:disabled { opacity: .5; cursor: default; }
+.snd-menu { position: fixed; z-index: 400; width: 260px; display: grid; gap: 4px; padding: 10px; border-radius: 9px; border: 1px solid var(--line-strong); background: var(--panel-overlay, var(--panel)); box-shadow: 0 10px 28px rgba(0, 0, 0, .35); color: var(--text); font: 500 12.5px var(--font-ui); }
+.snd-menu .snd-h { font-weight: 650; font-size: 12px; color: var(--muted); padding: 0 2px 2px; }
+.snd-menu .snd-vol { display: grid; grid-template-columns: 18px 1fr 38px; align-items: center; gap: 8px; padding: 4px 2px 6px; }
+.snd-menu .snd-ico svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; display: block; }
+/* Not a text box: without the inputs' padding, border and focus ring, 0 and 100 sit right at the two ends. */
+.snd-menu input[type="range"] { width: 100%; min-width: 0; height: 18px; margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; accent-color: var(--accent); cursor: pointer; }
+.snd-menu input[type="range"]:focus { padding: 0; border: 0; box-shadow: none; }
+.snd-menu input[type="range"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.snd-menu .snd-pct { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+.snd-menu .snd-ck { display: flex; align-items: flex-start; gap: 8px; padding: 5px 2px; border-radius: 6px; cursor: pointer; }
+.snd-menu .snd-ck:hover { background: var(--panel-3, var(--panel-2)); }
+.snd-menu .snd-ck small { display: block; color: var(--muted); font-weight: 400; font-size: 11.5px; margin-top: 1px; }
+.snd-menu .snd-note { color: var(--muted); font-size: 11.5px; padding: 4px 2px 0; border-top: 1px solid var(--line); margin-top: 2px; }
 .exp-status { padding: 6px 10px 2px; font-size: 11.5px; color: var(--muted); }
 /* the comment view: the page's picture, a box around the element under the click, and the note popover */
 .bstage .cmtview { position: relative; height: 100%; overflow: hidden; background: var(--surface-inset, var(--bg)); cursor: crosshair; outline: none; }

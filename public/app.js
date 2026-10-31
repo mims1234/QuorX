@@ -9523,9 +9523,10 @@ function renderBrowser(c) {
     : `${t.agent ? `<span class="bv-who agent" title="${live ? "The agent's page: it is using it now, so you can only watch" : "The agent's page: it is done with it, so it is yours to use"}">🤖</span>${live ? '<span class="bv-lock" title="The agent is using this page: watch only">watching</span>' : ''}` : '<span class="bv-who you" title="Your tab">👤</span>'}
        ${!live && t.mode !== 'frame' && t.url ? `<button type="button" class="bv-nav" data-op="back" title="Back" aria-label="Back"${REAL && t.canBack === false ? ' disabled' : ''}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button><button type="button" class="bv-nav" data-op="forward" title="Forward" aria-label="Forward"${REAL && t.canForward === false ? ' disabled' : ''}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg></button>` : ''}
        ${REAL && t.url ? `<span class="bv-real ${t.loading ? 'loading' : ''}" title="A real Chromium tab in the desktop app">● real tab${t.loading ? ' · loading…' : ''}</span>` : ''}
-       <span class="spacer"></span>${!t.agent && t.url ? (() => { const to = lentChatOf(t.sid), ch = to && (G.open.get(to) || G.chats.find((x) => x.id === to)); return to ? `<span class="bv-lent" title="The agent can work in this tab in that chat">🤖 Lent to ${to === c.id ? 'this chat' : `“${esc(clip(ch?.title || 'another chat', 24))}”`}</span><button type="button" class="bv-takeback" title="Take this tab back: the agent can no longer use it">Take back</button>` : `<button type="button" class="bv-give" title="Let the agent in this chat work in this tab (signed in as you). Sending, deleting, buying and account changes always ask you first. You can also drag the tab onto a chat.">🤖 Give to agent</button>`; })() : ''}${t.url ? `<button type="button" class="bv-cmt ${t.commenting ? 'on' : ''}" aria-pressed="${!!t.commenting}" title="Comment on part of this page: click an element, say what to change, and it goes with your next message">💬 ${t.commenting ? 'Done commenting' : 'Comment'}</button><button type="button" class="bv-exp" aria-haspopup="menu" title="Export this page as a PDF or one long picture, or the project's files as a ZIP">⤓ Export</button>` : ''}${REAL && t.url && !live ? '<button type="button" class="bv-dev" title="Open DevTools for this tab" aria-label="DevTools"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8l-4 4 4 4M16 8l4 4-4 4M13.5 5l-3 14"/></svg></button>' : ''}${!DESK && !t.agent && t.url ? `<button type="button" class="bv-mode ${t.mode === 'frame' ? 'on' : ''}" title="${t.mode === 'frame' ? 'Shown in a frame. Click to open it in the harness browser instead (for sites that refuse frames)' : 'Shown in the harness browser. Click to show it in a frame (works for your own served pages)'}" aria-label="Frame or harness browser"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/></svg></button>` : ''}${downloadsHTML()}`;
+       <span class="spacer"></span>${!t.agent && t.url ? (() => { const to = lentChatOf(t.sid), ch = to && (G.open.get(to) || G.chats.find((x) => x.id === to)); return to ? `<span class="bv-lent" title="The agent can work in this tab in that chat">🤖 Lent to ${to === c.id ? 'this chat' : `“${esc(clip(ch?.title || 'another chat', 24))}”`}</span><button type="button" class="bv-takeback" title="Take this tab back: the agent can no longer use it">Take back</button>` : `<button type="button" class="bv-give" title="Let the agent in this chat work in this tab (signed in as you). Sending, deleting, buying and account changes always ask you first. You can also drag the tab onto a chat.">🤖 Give to agent</button>`; })() : ''}${t.url ? `<button type="button" class="bv-cmt ${t.commenting ? 'on' : ''}" aria-pressed="${!!t.commenting}" title="Comment on part of this page: click an element, say what to change, and it goes with your next message">💬 ${t.commenting ? 'Done commenting' : 'Comment'}</button><button type="button" class="bv-exp" aria-haspopup="menu" title="Export this page as a PDF or one long picture, or the project's files as a ZIP">⤓ Export</button>` : ''}${REAL && t.url ? sndBtnHTML(t) : ''}${REAL && t.url && !live ? '<button type="button" class="bv-dev" title="Open DevTools for this tab" aria-label="DevTools"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8l-4 4 4 4M16 8l4 4-4 4M13.5 5l-3 14"/></svg></button>' : ''}${!DESK && !t.agent && t.url ? `<button type="button" class="bv-mode ${t.mode === 'frame' ? 'on' : ''}" title="${t.mode === 'frame' ? 'Shown in a frame. Click to open it in the harness browser instead (for sites that refuse frames)' : 'Shown in the harness browser. Click to show it in a frame (works for your own served pages)'}" aria-label="Frame or harness browser"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/></svg></button>` : ''}${downloadsHTML()}`;
   for (const b of bar.querySelectorAll('.bv-nav')) b.onclick = () => (REAL ? window.ohDesktop.nav(t.sid, b.dataset.op) : ubCall(b.dataset.op));
   const dv = $('.bv-dev', bar); if (dv) dv.onclick = () => window.ohDesktop.nav(t.sid, 'devtools');
+  wireSnd(bar, t);
   const cmb = $('.bv-cmt', bar); if (cmb) cmb.onclick = () => { t.commenting = !t.commenting; renderPane(); };
   const exb = $('.bv-exp', bar); if (exb) exb.onclick = () => exportMenu(exb, c, t);
   const gv = $('.bv-give', bar); if (gv) gv.onclick = () => lendTab(c, t.sid);
@@ -9533,8 +9534,9 @@ function renderBrowser(c) {
   const ex = $('.bv-ext', bar); if (ex) ex.onclick = () => window.ohDesktop.openExternal(t.url);
   wireDownloads(bar);
   const mb = $('.bv-mode', bar); if (mb) mb.onclick = () => { t.mode = t.mode === 'frame' ? 'remote' : 'frame'; t.opened = null; renderPane(); };
-  body.innerHTML = `<div class="bwin"><div class="btabs" role="tablist" aria-label="Browser tabs">${list.map((x) => `<span class="btab ${x.sid === t?.sid ? 'on' : ''} ${x.agent ? 'agent' : ''} ${!x.agent && lentChatOf(x.sid) ? 'lent' : ''}" data-sid="${esc(x.sid)}" role="tab" ${x.agent ? '' : 'draggable="true" '}title="${esc(x.url || 'New tab')}">${x.agent ? `<i class="bt-dot ${x.locked ? 'live' : ''}"></i>🤖` : '🌐'}<span class="bt-title">${esc(x.agent ? (x.title || 'Agent') : (x.title || (x.url ? x.url.replace(/^https?:\/\//, '').slice(0, 24) : 'New tab')))}</span><button type="button" class="bt-x" data-close="${esc(x.sid)}" title="Close this tab" aria-label="Close tab">×</button></span>`).join('')}<button type="button" class="btab-new" title="New tab">＋</button></div><div class="bstage"></div></div>`;
+  body.innerHTML = `<div class="bwin"><div class="btabs" role="tablist" aria-label="Browser tabs">${list.map((x) => `<span class="btab ${x.sid === t?.sid ? 'on' : ''} ${x.agent ? 'agent' : ''} ${!x.agent && lentChatOf(x.sid) ? 'lent' : ''}" data-sid="${esc(x.sid)}" role="tab" ${x.agent ? '' : 'draggable="true" '}title="${esc(x.url || 'New tab')}">${x.agent ? `<i class="bt-dot ${x.locked ? 'live' : ''}"></i>🤖` : '🌐'}<span class="bt-title">${esc(x.agent ? (x.title || 'Agent') : (x.title || (x.url ? x.url.replace(/^https?:\/\//, '').slice(0, 24) : 'New tab')))}</span>${DESK ? sndMark(x) : ''}<button type="button" class="bt-x" data-close="${esc(x.sid)}" title="Close this tab" aria-label="Close tab">×</button></span>`).join('')}<button type="button" class="btab-new" title="New tab">＋</button></div><div class="bstage"></div></div>`;
   for (const el of body.querySelectorAll('.btab')) el.onclick = (e) => { if (e.target.closest('.bt-x')) return; G.bActive = el.dataset.sid; renderPane(); };
+  wireSndMarks();
   for (const el of body.querySelectorAll('.btab[draggable="true"]')) el.ondragstart = (e) => { e.dataTransfer.setData('application/x-quorx-tab', el.dataset.sid); e.dataTransfer.effectAllowed = 'link'; };
   // Right-click one of your tabs: give it to this chat's agent (or take it back), or close it.
   for (const el of body.querySelectorAll('.btab[draggable="true"]')) el.oncontextmenu = (e) => {
@@ -10132,7 +10134,10 @@ function deskStage(t, stage) {
 // One placement at a time: each one waits on the desktop app (a snapshot, new bounds, show), which can take longer than
 // the 150 ms check below, so calls used to overlap and could show and hide the tab out of order. A call made while one
 // runs is done once after it (forced if any of them asked).
-let deskBusy = null, deskAgain = null;
+let deskBusy = null, deskAgain = null, deskHidAt = 0;
+// Each ask has a time limit: a busy page (a long script, many videos) can take forever to give its picture, and a
+// placement waiting on it kept every later one waiting too, so the tab stayed on screen over every other pane tab.
+const deskAsk = (p, ms = 2000) => Promise.race([Promise.resolve(p).catch(() => null), new Promise((ok) => setTimeout(() => ok(null), ms))]);
 function deskPlace(force) {
   if (deskBusy) { deskAgain = (deskAgain || false) || !!force; return deskBusy; }
   deskBusy = deskPlaceNow(force).catch(() => {}).finally(() => {
@@ -10143,15 +10148,20 @@ function deskPlace(force) {
 }
 async function deskPlaceNow(force) {
   const d = G.dsk;
-  if (!DESK || !d) return;
+  if (!DESK) return;
+  // No real tab is to be seen: the app is told to hide them all, at once when we know one shows and then once a second
+  // anyway. What we think shows can be wrong (a tab put up while another was being placed), and then the agent's page
+  // stayed on top of every pane tab, and of Steps or Files, until the app restarted.
+  const hideAll = (now) => { if (now || Date.now() - deskHidAt > 1000) { window.ohDesktop.hideAll(); deskHidAt = Date.now(); } };
+  if (!d) return hideAll(false);
   const c0 = focused(), t = c0 ? browserTabs(c0).find((x) => x.sid === d.sid) : null;
   const visible = d.ph.isConnected && G.view.browser && t && paneVisible() && d.ph.getClientRects().length && document.visibilityState === 'visible';
-  if (!visible) { if (d.shown || force) { window.ohDesktop.hideAll(); d.shown = false; } if (!d.ph.isConnected) G.dsk = null; return; }
+  if (!visible) { hideAll(d.shown || force); d.shown = false; if (!d.ph.isConnected) G.dsk = null; return; }
   const err = $('.derr', d.ph);
   if (t.error) {
     // Drawn once per error, not on every check: rebuilding it each time swallowed clicks on Try again.
     if (err.hidden || d.errText !== t.error) { d.errText = t.error; err.hidden = false; err.innerHTML = `⚠ ${esc(t.error)}<br><button type="button" class="derr-retry">Try again</button>`; $('.derr-retry', err).onclick = () => { t.error = null; t.opened = null; renderPane(); }; }
-    if (d.shown) { window.ohDesktop.hideAll(); d.shown = false; }
+    hideAll(d.shown); d.shown = false;
     return;
   }
   err.hidden = true; d.errText = null;
@@ -10160,7 +10170,7 @@ async function deskPlaceNow(force) {
   const covered = deskCovered(d.ph);
   const snap = $('.dsnap', d.ph);
   if (covered) {
-    if (d.shown) { const url = await window.ohDesktop.snapshot(d.sid).catch(() => null); if (url) { snap.src = url; snap.hidden = false; } }
+    if (d.shown) { const url = await deskAsk(window.ohDesktop.snapshot(d.sid), 1500); if (url) { snap.src = url; snap.hidden = false; } }
     // Hidden when the cover starts and then once a second, not only when we think it's showing: a tab the app re-made
     // under the same name may be showing without us knowing, and would sit on top of the servers list or a dialog.
     // (Every check, about 7 times a second, was more than that needs.)
@@ -10171,8 +10181,10 @@ async function deskPlaceNow(force) {
   d.coverAt = 0;
   snap.hidden = true;
   const r = d.ph.getBoundingClientRect(), key = `${r.x},${r.y},${r.width},${r.height}`;
-  if (force || key !== d.rect) { d.rect = key; await window.ohDesktop.bounds(d.sid, { x: r.x, y: r.y, width: r.width, height: r.height }); }
-  if (force || !d.shown) { await window.ohDesktop.show(d.sid); d.shown = true; }
+  if (force || key !== d.rect) { d.rect = key; await deskAsk(window.ohDesktop.bounds(d.sid, { x: r.x, y: r.y, width: r.width, height: r.height })); }
+  // The pane may have changed while that was asked: placed and shown only if it is still to be seen.
+  if (G.dsk !== d || !d.ph.isConnected || !G.view.browser) { deskAgain = true; return; }
+  if (force || !d.shown) { await deskAsk(window.ohDesktop.show(d.sid)); d.shown = true; }
 }
 // Is anything of ours drawn over the real tab's box? The page is asked what is on top on a grid over the box, so any
 // menu, popover, dialog, scrim or notice counts, whatever it is; tips that let clicks through are checked by where they are.
@@ -10210,8 +10222,10 @@ if (DESK) {
   for (const ev of ['pointerover', 'scroll', 'transitionend', 'animationend']) document.addEventListener(ev, deskStale, true);
   window.addEventListener('resize', () => deskPlace(true));
   document.addEventListener('visibilitychange', () => deskPlace(true));
+  if (window.ohDesktop.sound) setSound('get');
   window.ohDesktop.on((ev) => {
     const c = focused();
+    if (ev.type === 'audio') { const s = (G.sound ||= { volume: 100, tabs: {} }); (s.tabs ||= {})[ev.sid] = { ...s.tabs[ev.sid], audible: ev.audible }; sndRefresh(); return; }
     if (ev.type === 'popup') { newBTab(ev.url); if (c) { G.view = { id: G.view.id, src: false, files: false, browser: true }; syncLayout(); renderPane(); } return; }
     if (ev.type === 'download') { deskDownload(ev); return; }
     if (String(ev.sid || '').startsWith('agent-')) return deskAgentEvent(ev);
@@ -10243,6 +10257,69 @@ function downloadsHTML() {
   const list = (G.downloads || []).slice(0, 3);
   if (!list.length) return '';
   return `<span class="bdl">${list.map((d, i) => `<button type="button" class="bdl-item ${d.state}" data-i="${i}" title="${esc(d.file || d.name)}">${d.state === 'completed' ? '✓' : d.state === 'progress' || d.state === 'started' ? '⬇' : '⚠'} ${esc(clip(d.name, 22))}${d.state === 'progress' && d.total ? ` ${Math.round((d.received / d.total) * 100)}%` : ''}</button>`).join('')}</span>`;
+}
+// Sound in the desktop app's browser: one volume for every tab, and mute for all of them, the agent's, or one tab.
+// The 🔊 button sits by the page it acts on; a tab making sound gets a speaker you can click to mute just that tab.
+const SND_ON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg>';
+const SND_OFF = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M17 9l5 6M22 9l-5 6"/></svg>';
+function sndMuted(t) { const s = G.sound; if (!s || !t) return false; return !!(s.muted || (t.agent && s.agentMuted) || s.tabs?.[t.sid]?.muted || s.volume === 0); }
+function sndBtnHTML(t) {
+  // A desktop app started before sound controls existed: the page is new but the app isn't, until it restarts.
+  if (!window.ohDesktop?.sound) return `<button type="button" class="bv-snd" disabled title="Restart the QuorX app to turn on volume and mute (reloading the page isn't enough)" aria-label="Sound (restart the app to use)">${SND_ON}</button>`;
+  const off = sndMuted(t);
+  return `<button type="button" class="bv-snd ${off ? 'off' : ''}" aria-haspopup="dialog" title="${off ? 'Sound is off for this tab' : `Sound: ${G.sound?.volume ?? 100}%`}. Click for volume and mute" aria-label="Sound">${off ? SND_OFF : SND_ON}</button>`;
+}
+function sndMark(x) {
+  const s = G.sound?.tabs?.[x.sid];
+  if (!s?.audible && !s?.muted) return '';
+  // Off for this tab alone, or by the bar's setting (every tab, the agent's tabs, volume 0): clicking only ever changes this tab's own mute.
+  const off = sndMuted({ sid: x.sid, agent: x.sid.startsWith('agent-') });
+  const tip = s.muted ? 'This tab is muted. Click to hear it' : off ? "Muted by the sound setting (🔊 in the bar). Click to mute this tab on its own too" : 'This tab is making sound. Click to mute it';
+  return `<button type="button" class="bt-snd ${off ? 'off' : ''}" data-snd="${esc(x.sid)}" title="${tip}" aria-label="${s.muted ? 'Unmute tab' : 'Mute tab'}">${off ? SND_OFF : SND_ON}</button>`;
+}
+async function setSound(op, arg) { try { G.sound = await window.ohDesktop.sound(op, arg); } catch { /* an older desktop app */ } sndRefresh(); }
+// Redraw only the sound bits (the tab strip and the bar's button), so a page's sound starting never redraws the pane.
+function sndRefresh() {
+  const c = focused(), t = c && G.view.browser && activeBTab(c);
+  const b = $('#appBar .bv-snd'); if (b && t) { b.outerHTML = sndBtnHTML(t); wireSnd($('#appBar'), t); }
+  for (const el of document.querySelectorAll('#paneBody .btab[data-sid]')) {
+    const now = el.querySelector('.bt-snd'), html = sndMark({ sid: el.dataset.sid });
+    if (now) now.remove();
+    if (html) el.querySelector('.bt-x')?.insertAdjacentHTML('beforebegin', html);
+  }
+  wireSndMarks();
+  const m = $('.snd-menu'); if (m && t) sndMenuFill(m, t);
+}
+function wireSnd(bar, t) { const b = $('.bv-snd', bar); if (b) b.onclick = () => sndMenu(b, t); }
+function wireSndMarks() {
+  for (const b of document.querySelectorAll('#paneBody .bt-snd')) b.onclick = (e) => { e.stopPropagation(); setSound('tab', { sid: b.dataset.snd, muted: !G.sound?.tabs?.[b.dataset.snd]?.muted }); };
+}
+function sndMenu(btn, t) {
+  const was = $('.snd-menu'); was?.remove(); if (was?.dataset.sid === t.sid) return;
+  const m = document.createElement('div'); m.className = 'snd-menu'; m.setAttribute('role', 'dialog'); m.setAttribute('aria-label', 'Sound'); m.dataset.sid = t.sid;
+  document.body.appendChild(m);
+  sndMenuFill(m, t);
+  { const r = btn.getBoundingClientRect(); m.style.top = `${r.bottom + 6}px`; m.style.left = `${Math.max(8, Math.min(r.right - 260, innerWidth - 268))}px`; }
+  const close = (e) => { if (!m.contains(e.target) && !btn.contains(e.target)) { m.remove(); document.removeEventListener('pointerdown', close, true); } };
+  setTimeout(() => document.addEventListener('pointerdown', close, true));
+  m.onkeydown = (e) => { if (e.key === 'Escape') { m.remove(); btn.focus(); } };
+}
+function sndMenuFill(m, t) {
+  const s = G.sound || { volume: 100, muted: false, agentMuted: false, tabs: {} };
+  const one = !!s.tabs?.[t.sid]?.muted;
+  // The slider is being dragged: leave it (and its number) alone.
+  if (m.contains(document.activeElement) && document.activeElement.type === 'range') { $('.snd-pct', m).textContent = `${document.activeElement.value}%`; return; }
+  m.innerHTML = `<div class="snd-h">Sound in QuorX's browser</div>
+    <label class="snd-vol"><span class="snd-ico">${s.muted || s.volume === 0 ? SND_OFF : SND_ON}</span><input type="range" min="0" max="100" step="5" value="${s.volume}" aria-label="Volume for every tab"><span class="snd-pct">${s.volume}%</span></label>
+    <label class="snd-ck"><input type="checkbox" data-k="muted" ${s.muted ? 'checked' : ''}><span>Mute every tab</span></label>
+    <label class="snd-ck"><input type="checkbox" data-k="agentMuted" ${s.agentMuted ? 'checked' : ''}><span>Mute the agent's tabs<small>Its tests stay quiet; your own tabs still play.</small></span></label>
+    <label class="snd-ck"><input type="checkbox" data-k="tab" ${one ? 'checked' : ''}><span>Mute this tab only</span></label>
+    <div class="snd-note">The volume is for every tab, yours and the agent's. Windows' own volume isn't changed.</div>`;
+  const r = $('input[type="range"]', m);
+  let timer = 0;
+  r.oninput = () => { $('.snd-pct', m).textContent = `${r.value}%`; clearTimeout(timer); timer = setTimeout(() => setSound('set', { volume: Number(r.value) }), 60); };
+  r.onchange = () => { clearTimeout(timer); setSound('set', { volume: Number(r.value) }); };
+  for (const ck of m.querySelectorAll('input[type="checkbox"]')) ck.onchange = () => (ck.dataset.k === 'tab' ? setSound('tab', { sid: t.sid, muted: ck.checked }) : setSound('set', { [ck.dataset.k]: ck.checked }));
 }
 function wireDownloads(bar) {
   for (const b of bar.querySelectorAll('.bdl-item')) b.onclick = () => { const d = G.downloads[Number(b.dataset.i)]; if (d?.file && d.state === 'completed') window.ohDesktop.showFile(d.file); };
