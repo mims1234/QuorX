@@ -708,6 +708,8 @@ dialog.pj-dialog::backdrop { background: rgba(4, 6, 6, .72); backdrop-filter: bl
 
 /* ---------- trace legend = highlight: picked kinds stay bright, the rest dims (nothing is hidden) ---------- */
 .trace-pane .step { transition: opacity .15s, filter .15s; }
+/* Steps out of view aren't laid out or painted until you scroll to them (a reply can have thousands). */
+.trace-pane .steps > .step { content-visibility: auto; contain-intrinsic-size: auto 44px; }
 .trace-pane.focusing .step { opacity: .22; filter: saturate(.3); }
 .trace-pane.focusing.f-think .step.k-think { opacity: 1; filter: none; }
 .trace-pane.focusing.f-tool .step.k-tool { opacity: 1; filter: none; }

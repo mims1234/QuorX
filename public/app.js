@@ -4654,40 +4654,87 @@ async function repairTrace(c, m) {
 }
 function closeTrace() { G.traceRun = null; G.view.trace = null; syncLayout(); renderPane(); refreshTraceButtons(); }
 function refreshTraceButtons() { for (const b of document.querySelectorAll('.trace-btn')) b.classList.remove('on'); const c = focused(); const m = c?.agent.messages.find((x) => x.runId === G.traceRun); if (m?.el) $('.trace-btn', m.el)?.classList.add('on'); }
-function renderTracePane(c, m) {
+// While a reply runs, the pane is asked to redraw on every event: at most 4 times a second, the last ask winning.
+const TRACE_EVERY = 250;
+function renderTracePane(c, m, opts = {}) {
   if (G.replay?.run === m.runId) return renderReplay(c, m);
   const body = $('#paneBody'), bar = $('#appBar');
-  bar.hidden = false;
-  bar.innerHTML = `🧭 <b>Steps</b> <span class="dim">${esc(traceSummary(m).replace(/^Steps · /, ''))}</span>${!m.live && m.runId ? '<button type="button" class="tp-replay" title="Watch this reply again, step by step, with a scrubber">⏵ Replay</button>' : ''} <button type="button" class="back" title="Close the trace">✕ Close</button>`;
-  $('.back', bar).onclick = closeTrace;
-  const rp = $('.tp-replay', bar); if (rp) rp.onclick = () => startReplay(c, m);
   // Opening a trace starts at its latest step; redrawing the same one keeps your place (and follows new steps while you're at the end).
-  const old = $('.trace-pane', body), same = !!old && old.dataset.run === m.runId;
+  const old = $('.trace-pane', body), same = !!old && old.dataset.run === m.runId && G.traceShown?.el === old;
+  clearTimeout(G.traceTimer);
+  if (same && !opts.now) {
+    const wait = TRACE_EVERY - (Date.now() - (G.traceAt || 0));
+    if (wait > 0) { G.traceTimer = setTimeout(() => { if (G.view.trace === m.runId && focused() === c) renderTracePane(c, m, { now: true }); }, wait); return; }
+  }
+  G.traceAt = Date.now();
+  // Where you are, read before anything changes (reading it after a change makes the browser lay the pane out again).
   const top = same ? old.scrollTop : 0, atEnd = !same || old.scrollHeight - old.scrollTop - old.clientHeight < 40;
-  const kinds = [...new Set((traceHTML(m).match(/data-k="(\w+)"/g) || []).map((x) => x.slice(8, -1)))];
+  const barHTML = `🧭 <b>Steps</b> <span class="dim">${esc(traceSummary(m).replace(/^Steps · /, ''))}</span>${!m.live && m.runId ? '<button type="button" class="tp-replay" title="Watch this reply again, step by step, with a scrubber">⏵ Replay</button>' : ''} <button type="button" class="back" title="Close the trace">✕ Close</button>`;
+  bar.hidden = false;
+  if (!same || G.traceShown?.bar !== barHTML || !$('.back', bar)) {
+    bar.innerHTML = barHTML;
+    $('.back', bar).onclick = closeTrace;
+    const rp = $('.tp-replay', bar); if (rp) rp.onclick = () => startReplay(c, m);
+  }
+  const { rows, kinds } = traceRows(m);
   // The legend highlights: picked kinds stay bright and everything else dims, so the order and timing stay readable.
   const F = (G.traceFocus ??= new Set());
   for (const k of [...F]) if (!kinds.includes(k)) F.delete(k);
   const legend = TRACE_KINDS.filter(([k]) => kinds.includes(k)).map(([k, label]) => `<button type="button" class="tl-chip k-${k} ${F.has(k) ? 'on' : ''}" data-k="${k}" aria-pressed="${F.has(k)}" title="Highlight these steps (the rest dims)">${label}</button>`).join('')
     + (F.size ? '<button type="button" class="tl-all">Show all</button>' : '');
-  body.innerHTML = `<div class="trace trace-pane ${F.size ? 'focusing' : ''} ${[...F].map((k) => `f-${k}`).join(' ')}" data-run="${esc(m.runId)}"><div class="tp-legend">${legend}</div><div class="tp-q">${esc(clip(c.agent.messages[c.agent.messages.indexOf(m) - 1]?.content || '', 220))}</div><div class="steps">${traceHTML(m)}</div>${traceCostHTML(c, m)}</div>`;
-  const now = $('.trace-pane', body);
-  // Opening the steps starts at the latest one and follows new ones (and pictures that load late) while you stay at
-  // the end; scrolling up stops following until you scroll back down or press ↓ Latest.
+  const cls = `trace trace-pane ${F.size ? 'focusing' : ''} ${[...F].map((k) => `f-${k}`).join(' ')}`, cost = traceCostHTML(c, m);
   const T = (G.traceFollow ||= {});
   if (!same) T[m.runId] = true; else if (atEnd) T[m.runId] = true;
+  const S = G.traceShown;
+  if (same) {
+    // The same reply again: only the rows that changed are replaced and new ones added, so what you opened stays open.
+    const list = $('.steps', old);
+    if (list.children.length === S.rows.length) {
+      const n = Math.min(rows.length, S.rows.length);
+      let changed = rows.length !== S.rows.length || old.className !== cls || S.legend !== legend || S.cost !== cost;
+      for (let i = 0; i < n; i++) {
+        if (rows[i] === S.rows[i]) continue;
+        changed = true;
+        const was = list.children[i], open = !!was.querySelector('details.think-trace[open]');
+        was.insertAdjacentHTML('afterend', rows[i]);
+        const neu = was.nextElementSibling; was.remove();
+        if (open) { const d = neu.querySelector('details.think-trace'); if (d) d.open = true; }
+      }
+      while (list.children.length > rows.length) list.lastElementChild.remove();
+      if (rows.length > n) list.insertAdjacentHTML('beforeend', rows.slice(n).join(''));
+      if (old.className !== cls) old.className = cls;
+      if (S.legend !== legend) { $('.tp-legend', old).innerHTML = legend; wireTraceLegend(c, m, old); }
+      if (S.cost !== cost) { const was = $('.trace-cost', old); if (was) was.remove(); if (cost) old.insertAdjacentHTML('beforeend', cost); }
+      G.traceShown = { el: old, rows, legend, cost, bar: barHTML };
+      // Nothing new: nothing to scroll to either.
+      if (changed && T[m.runId]) old.scrollTop = old.scrollHeight;
+      return;
+    }
+  }
+  body.innerHTML = `<div class="${cls}" data-run="${esc(m.runId)}"><div class="tp-legend">${legend}</div><div class="tp-q">${esc(clip(c.agent.messages[c.agent.messages.indexOf(m) - 1]?.content || '', 220))}</div><div class="steps">${rows.join('')}</div>${cost}</div>`;
+  const now = $('.trace-pane', body);
+  G.traceShown = { el: now, rows, legend, cost, bar: barHTML };
+  // Opening the steps starts at the latest one and follows new ones (and pictures that load late) while you stay at
+  // the end; scrolling up stops following until you scroll back down or press ↓ Latest.
   const toEnd = () => { if (T[m.runId] && now.isConnected) now.scrollTop = now.scrollHeight; };
   now.scrollTop = T[m.runId] ? now.scrollHeight : top;
   requestAnimationFrame(toEnd); setTimeout(toEnd, 250); setTimeout(toEnd, 900);
-  if ('ResizeObserver' in window) { const ro = new ResizeObserver(toEnd); for (const k of now.children) ro.observe(k); }
+  // One watcher at a time (each redraw used to add another, all kept alive).
+  G.traceRO?.disconnect();
+  if ('ResizeObserver' in window) { G.traceRO = new ResizeObserver(toEnd); for (const k of now.children) G.traceRO.observe(k); }
   const jump = document.createElement('button');
   jump.type = 'button'; jump.className = 'jump-latest tp-jump'; jump.textContent = '↓ Latest'; jump.title = 'Go to the latest step and keep following';
   jump.hidden = !!T[m.runId];
   jump.onclick = () => { T[m.runId] = true; jump.hidden = true; now.scrollTop = now.scrollHeight; };
   body.appendChild(jump);
   followScroll(now, { get: () => !!T[m.runId], set: (v) => { T[m.runId] = v; }, onChange: (v) => { jump.hidden = v; } });
-  for (const b of now.querySelectorAll('.tl-chip')) b.onclick = () => { F.has(b.dataset.k) ? F.delete(b.dataset.k) : F.add(b.dataset.k); renderTracePane(c, m); };
-  const all = $('.tl-all', now); if (all) all.onclick = () => { F.clear(); renderTracePane(c, m); };
+  wireTraceLegend(c, m, now);
+}
+// Picking a kind only changes the pane's classes (the rows stay): at once, not on the next redraw.
+function wireTraceLegend(c, m, pane) {
+  const F = (G.traceFocus ??= new Set());
+  for (const b of pane.querySelectorAll('.tl-chip')) b.onclick = () => { F.has(b.dataset.k) ? F.delete(b.dataset.k) : F.add(b.dataset.k); renderTracePane(c, m, { now: true }); };
+  const all = $('.tl-all', pane); if (all) all.onclick = () => { F.clear(); renderTracePane(c, m, { now: true }); };
 }
 // ⏵ Replay: a finished reply's steps again, from the start, one event at a time with its real timing (sped up), with a
 // scrubber. J/K or ←/→ jump to the previous/next step, Space plays and pauses, Home/End go to the ends.
@@ -4794,16 +4841,35 @@ function traceSummary(m) {
 }
 // Web addresses in escaped text (tool results, notes, screens) as Ctrl+click links to the Browser tab.
 const linkUrls = (html) => String(html).replace(/(^|[\s(>]|&quot;|&#39;|&lt;)(https?:\/\/(?:(?!&quot;|&#39;|&lt;|&gt;)[^\s<)"])+?)(?=[.,;:!?]?(?:[\s<)"]|&quot;|&#39;|&lt;|&gt;|$))/g, (_, pre, url) => `${pre}<a href="${url}" rel="noopener noreferrer" data-cl="1">${url}</a>`);
-function traceHTML(m) {
-  const out = [], rounds = {};
+// A step's row is drawn once and kept with its event, so a reply of thousands of steps isn't drawn again on every
+// update. Only a model call's row (its numbers and thinking come later) and a decider round's (its votes) are drawn
+// each time; an event that gets its pictures later (a log repaired from disk) is drawn again too.
+const TRACE_LIVE_ROWS = new Set(['llm_start', 'llm_done', 'decide_start', 'decide_vote', 'decide_done', 'media_status']);
+const traceRowCache = new WeakMap();
+// Words in a step's thinking, counted again only when its text grows.
+const thinkWordCache = new WeakMap();
+function thinkWords(m, step) {
+  const t = m.thinking?.[step] || '', per = thinkWordCache.get(m) || new Map();
+  thinkWordCache.set(m, per);
+  const hit = per.get(step);
+  if (hit?.len === t.length) return hit.n;
+  const n = t.split(/\s+/).filter(Boolean).length;
+  per.set(step, { len: t.length, n });
+  return n;
+}
+function traceHTML(m) { return traceRows(m).rows.join(''); }
+// The rows of a reply's steps, and the kind of each (for the legend).
+function traceRows(m) {
+  const out = [], kinds = [], rounds = {}, llmAt = {}, llmModel = {};
   let mediaStatus = null;
   // Each step carries its kind, so the trace can colour it and the legend can show or hide it.
-  const row = (at, what, kind = 'note') => out.push(`<div class="step k-${kind}" data-k="${kind}"><div class="when">${kind === 'res' ? '' : secs(at)}</div><div class="what">${what}</div></div>`);
-  for (const e of m.trace || []) {
-    if (e.t === 'llm_start') row(e.at, `🧠 <b>${esc(short(e.model))}</b> thinks<span class="sub" data-llm="${e.step}"></span>${m.thinking?.[e.step]?.trim() ? `<details class="think-trace"><summary>💭 Thinking · ${m.thinking[e.step].split(/\s+/).filter(Boolean).length} words</summary><div class="tt-body">${md(m.thinking[e.step])}</div></details>` : ''}`, 'think');
+  const row = (at, what, kind = 'note') => { out.push(`<div class="step k-${kind}" data-k="${kind}"><div class="when">${kind === 'res' ? '' : secs(at)}</div><div class="what">${what}</div></div>`); kinds.push(kind); };
+  const draw = (e) => {
+    // Thinking is turned into formatted text only when you open it (see the toggle listener below traceRows).
+    if (e.t === 'llm_start') { llmAt[e.step] = out.length; llmModel[e.step] = e.model; row(e.at, `🧠 <b>${esc(short(e.model))}</b> thinks<span class="sub" data-llm="${e.step}"></span>${m.thinking?.[e.step]?.trim() ? `<details class="think-trace" data-think="${e.step}"><summary>💭 Thinking · ${thinkWords(m, e.step)} words</summary><div class="tt-body"></div></details>` : ''}`, 'think'); }
     else if (e.t === 'llm_done') {
-      const i = out.findLastIndex((h) => h.includes(`data-llm="${e.step}"`));
-      if (i >= 0) out[i] = out[i].replace(`<span class="sub" data-llm="${e.step}"></span>`, `<div class="sub">${secs(e.ms)} · <span class="tok-out">${e.tokensOut} tokens out</span> · ${money(e.cost, 5)}${e.planCost ? ` · <span title="Sub value: what this call used of your ${esc(SOURCE_NAME[e.source] || '')} subscription, at list price (covered, not paid)">sub value ${money(e.planCost, 4)}</span>` : ''}${e.provider ? ` · via <span class="tr-prov" title="${e.source ? 'The account this call ran on' : 'The provider OpenRouter routed this call to'}">${esc(e.provider)}</span>` : ''}${e.model && e.model !== m.trace.find((x) => x.t === 'llm_start' && x.step === e.step)?.model ? ` · <b class="tr-fallback" title="${e.fellBackFrom ? `${esc(SOURCE_NAME[sourceOfId(e.fellBackFrom)] || 'The source')} failed, so this step ran on OpenRouter (see ⤵)` : 'The chat\'s model was unavailable, so OpenRouter used the fallback model'}">fallback ${esc(short(e.model))}</b>` : ''}${e.toolCalls.length ? ` · then ${e.toolCalls.map(esc).join(', ')}` : ''}</div>${e.aside ? `<div class="aside">💬 ${esc(e.aside)}</div>` : ''}`);
+      const i = llmAt[e.step] ?? -1;
+      if (i >= 0) out[i] = out[i].replace(`<span class="sub" data-llm="${e.step}"></span>`, `<div class="sub">${secs(e.ms)} · <span class="tok-out">${e.tokensOut} tokens out</span> · ${money(e.cost, 5)}${e.planCost ? ` · <span title="Sub value: what this call used of your ${esc(SOURCE_NAME[e.source] || '')} subscription, at list price (covered, not paid)">sub value ${money(e.planCost, 4)}</span>` : ''}${e.provider ? ` · via <span class="tr-prov" title="${e.source ? 'The account this call ran on' : 'The provider OpenRouter routed this call to'}">${esc(e.provider)}</span>` : ''}${e.model && e.model !== llmModel[e.step] ? ` · <b class="tr-fallback" title="${e.fellBackFrom ? `${esc(SOURCE_NAME[sourceOfId(e.fellBackFrom)] || 'The source')} failed, so this step ran on OpenRouter (see ⤵)` : 'The chat\'s model was unavailable, so OpenRouter used the fallback model'}">fallback ${esc(short(e.model))}</b>` : ''}${e.toolCalls.length ? ` · then ${e.toolCalls.map(esc).join(', ')}` : ''}</div>${e.aside ? `<div class="aside">💬 ${esc(e.aside)}</div>` : ''}`);
     } else if (e.t === 'tool' && e.name !== 'decide') row(e.at, `${e.by === 'reviewer' ? '🧪 <span class="tr-rv">reviewer</span> ' : e.by === 'helper' ? `🤝 <span class="tr-hp">helper ${e.helper || ''}</span> ` : ''}${TOOL_NAME[e.name]?.split(' ')[0] || '🔧'} <b>${esc(e.name)}</b><div class="sub">${esc(argSummary(e))}</div>`, e.by === 'reviewer' ? 'browser' : 'tool');
     else if (e.t === 'reading') row(e.at, `📝 <b>Prompt enhancer</b> ${esc(short(e.model))} read the request${e.late ? ' (too late for the first step; the deciders still use it)' : ''} · ${secs(e.ms)} · ${money(e.cost, 5)}<div class="sub" style="white-space:pre-wrap">${linkUrls(esc(e.text))}</div>`, 'note');
     else if (e.t === 'chat_off_project') row(e.at, `📝 Own chat from now on: you said “${esc(e.why || '')}”, so this chat leaves the project's notes, design and log alone. Tick Part of the project in the header to undo.`, 'note');
@@ -4814,7 +4880,7 @@ function traceHTML(m) {
     else if (e.t === 'reading_edit') row(e.at, e.text ? `📝 You corrected the reading<div class="sub" style="white-space:pre-wrap">${esc(e.text)}</div>` : '📝 You dropped the reading', 'note');
     else if (e.t === 'fresh_eyes_start') row(e.at, `👀 <b>Fresh eyes</b> ${esc(short(e.model))}: a problem came back, so a clean-context model takes a look<div class="sub">${(e.problems || []).map(esc).join('<br>')}</div>`, 'note');
     else if (e.t === 'fresh_eyes') row(e.at, `👀 Fresh eyes ${e.ok ? 'diagnosed it' : 'found nothing'}${e.report ? `<div class="sub" style="white-space:pre-wrap">${linkUrls(esc(e.report))}</div>` : ''}`, e.ok ? 'ok' : 'warn');
-    else if (e.t === 'helper_start' && e.fresh) continue;
+    else if (e.t === 'helper_start' && e.fresh) return;
     else if (e.t === 'helper_start') row(e.at, `🤝 <b>Helper ${e.id}</b> ${esc(short(e.model))} starts, with a clean context<div class="sub">${esc(e.task)}</div>`, 'note');
     else if (e.t === 'helper_done') row(e.at, `🤝 Helper ${e.id} ${e.ok ? 'reported back' : 'gave no report'} · ${e.steps} step${e.steps === 1 ? '' : 's'} · ${secs(e.ms)} · ${money(e.cost, 4)}${e.chars ? ` · ${e.chars} characters returned` : ''}`, e.ok ? 'ok' : 'warn');
     else if (e.t === 'steer') row(e.at, `✉ <b>You</b> while it worked: ${esc(clip(e.text, 200))}`, 'ask');
@@ -4874,10 +4940,27 @@ function traceHTML(m) {
     else if (e.t === 'budget_done') row(e.at, e.raised ? `✅ Budget raised to ${e.budget == null ? 'no limit' : money(e.budget, 2)}; carrying on` : '⛔ Wrapped up at the budget', e.raised ? 'ok' : 'warn');
     else if (e.t === 'resumed') row(e.at || 0, '<span class="warn">▶ Resumed from the last finished step</span>', 'warn');
     else if (e.t === 'interrupted') row(e.at || 0,`<span class="warn">⚠ The harness restarted while this reply was running${e.resumable ? '. It can be resumed.' : '.'}</span>`, 'warn');
+  };
+  for (const e of m.trace || []) {
+    if (TRACE_LIVE_ROWS.has(e.t)) { draw(e); continue; }
+    const hit = traceRowCache.get(e);
+    if (hit && hit.image === e.image && hit.after === e.after && hit.pages === e.pages) { if (hit.html != null) { out.push(hit.html); kinds.push(hit.kind); } continue; }
+    const n = out.length;
+    draw(e);
+    if (out.length <= n + 1) traceRowCache.set(e, { html: out.length > n ? out[n] : null, kind: kinds[n], image: e.image, after: e.after, pages: e.pages });
   }
   if (mediaStatus && m.live) row(mediaStatus.at, `⏳ ${esc(mediaStatus.tool)}: ${esc(mediaStatus.status)} · ${secs(mediaStatus.ms)}`, 'tool');
-  return out.map((h) => h.replace(/<span data-round="(\d+)"><\/span>/, (_, r) => decideCard(rounds[r]))).join('');
+  return { rows: out.map((h) => (h.includes('<span data-round="') ? h.replace(/<span data-round="(\d+)"><\/span>/, (_, r) => decideCard(rounds[r])) : h)), kinds: [...new Set(kinds)] };
 }
+// A step's thinking, formatted the first time it is opened (in the Steps pane and in Replay).
+document.addEventListener('toggle', (ev) => {
+  const d = ev.target;
+  if (!(d instanceof HTMLDetailsElement) || !d.open || !d.matches('details.think-trace[data-think]')) return;
+  const body = d.querySelector('.tt-body'), run = d.closest('[data-run]')?.dataset.run;
+  const c = focused(), m = run && c?.agent?.messages.find((x) => x.runId === run);
+  const text = m?.thinking?.[d.dataset.think] || '';
+  if (body && body.dataset.len !== String(text.length)) { body.innerHTML = md(text); body.dataset.len = String(text.length); }
+}, true);
 function argSummary(e) {
   const a = e.args || {};
   if (e.name === 'write_artifact') return `${a.id ? `replace ${a.id}` : 'new'} · "${a.title}" · ${a.markdown && !/^\(0 /.test(String(a.html)) ? `${a.markdown} of Markdown` : a.html}`;
