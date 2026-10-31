@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('ohDesktop', {
   close: (sid) => call('close', sid),
   snapshot: (sid) => call('snapshot', sid),
   sound: (op, arg) => call('sound', op, arg),
+  tabs: (op, sid) => call('tabs', op, sid),
   loginItem: (on) => call('loginItem', on),
   closeAction: (v) => call('closeAction', v),
   quit: () => call('quit'),

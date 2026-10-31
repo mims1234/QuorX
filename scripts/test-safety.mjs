@@ -2224,3 +2224,23 @@ test('requests to the PowerShell helpers are plain ASCII, so quotes, accents and
   assert.ok(/^[ -~]*$/.test(s), s);
   assert.deepEqual(JSON.parse(s), v);
 });
+
+// The sidebar's Running list: what runs in every project, each row with the project it belongs to; a project where
+// nothing runs adds nothing.
+test('running: the list for every project names each row’s project', { skip: !WIN }, async () => {
+  const { runningAll } = await import('../server/running.js');
+  const { termStart } = await import('../server/agentterm.js');
+  const root = tmp('rlall');
+  fs.writeFileSync(path.join(root, 'wait.js'), 'setTimeout(() => {}, 60000);\n');
+  saveProject({ id: 'rlall', name: 'running list', path: root });
+  const s = await termStart({ projectId: 'rlall', chatId: 'c1', cwd: root, line: 'node wait.js', shell: 'cmd' });
+  try {
+    const rows = runningAll(['rlquiet', 'rlall']);
+    const row = rows.find((x) => x.id === `aterm:${s.id}`);
+    assert.ok(row, JSON.stringify(rows));
+    assert.equal(row.projectId, 'rlall');
+    assert.equal(row.kind, 'agent-term');
+    assert.equal(row.chatId, 'c1');
+    assert.ok(!rows.some((x) => x.projectId === 'rlquiet'));
+  } finally { await termStop(s.id).catch(() => {}); forgetProject('rlall'); }
+});

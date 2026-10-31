@@ -39,6 +39,18 @@ export function runningIn(projectId) {
   return { items, elsewhere: [...counts].map(([pid, count]) => ({ projectId: pid, count })) };
 }
 
+/** Everything running in every project, for the sidebar's Running list: the rows of runningIn, each with its
+ *  projectId. Only projects where something runs are asked (the others would read their launch files for nothing). */
+export function runningAll(projectIds) {
+  const busy = new Set([...runningJobs(), ...listTerms().filter((t) => t.running), ...listServers().filter((s) => s.status !== 'stopped')].map((x) => x.projectId));
+  const items = [];
+  for (const pid of projectIds) {
+    if (!busy.has(pid) && !ptyList(pid).length) continue;
+    try { for (const x of runningIn(pid).items) items.push({ ...x, projectId: pid }); } catch { /* that project's own problem */ }
+  }
+  return items;
+}
+
 /** Stops one row. Your terminal tabs close; everything else ends with all it started. */
 export async function stopRunning(projectId, id) {
   const [kind, ...rest] = String(id || '').split(':'), key = rest.join(':');
