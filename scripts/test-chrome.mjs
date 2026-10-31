@@ -208,78 +208,80 @@ test('browser on a chat app: the inner list scrolls, collect gathers a channel i
   } finally { await tab.close().catch(() => {}); srv.close(); closeBrowser(); }
 });
 
-test('🧩 in the user’s tab: a reading request asks before typing outside a search box, and a site the request didn’t name asks before it opens', { skip: !(await import('../server/browser.js')).browserPath() && 'no Chromium browser installed' }, async () => {
-  const http = await import('node:http');
-  const { userBrowse, giveTab, takeBackTab } = await import('../server/userbrowser.js');
-  const srv = http.createServer((_q, r) => { r.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); r.end(CHAT_PAGE); });
-  await new Promise((ok) => srv.listen(0, '127.0.0.1', ok));
-  const sid = `usertab${Date.now().toString(36)}r`, chatId = `chat-${Date.now().toString(36)}r`;
-  try {
-    await userBrowse(sid, 'open', { url: `http://127.0.0.1:${srv.address().port}/chat`, w: 900, h: 600 });
-    giveTab(chatId, sid, { url: 'http://127.0.0.1/', title: 'bat-cave', desktop: false });
-    const asked = [];
-    const { bodies } = await run((body, i) => [
-      reply('', [['browser', { action: 'open', target: 'given' }]]),
-      reply('', [['browser', { action: 'type', text: 'cats', selector: 'input[type=search]' }]]),
-      reply('', [['browser', { action: 'type', text: 'hi all', selector: 'input[aria-label="Message #bat-cave"]' }]]),
-      reply('', [['browser', { action: 'open', target: 'https://example.com/' }]]),
-      reply('Done.'),
-    ][i], { chatId, text: 'check the bat-cave channel and summarise the last messages', settings: { chromeAccess: true }, onEvent: (e, runId) => { if (e.t === 'approval' && e.tool === 'browser') { asked.push(e.what); setTimeout(() => answerApproval(runId, e.id, { approve: false }), 5); } } });
-    assert.match(String(bodies[0].messages.at(-1).content), /this request only reads, so typing outside a search box asks them too/);
-    const res = toolResults(bodies.at(-1)).map(String);
-    assert.match(res[1], /typed 4 characters/); // a search box doesn't ask
-    assert.match(res[2], /The user said no to that \(type "hi all" into textbox "Message #bat-cave"\)/);
-    assert.match(res[3], /The user said no to opening example\.com in their Chrome/);
-    assert.deepEqual(asked.map((w) => w.replace(/^In your tab on \S+: /, '')), ['type "hi all" into textbox "Message #bat-cave"', 'Open example.com in your Chrome, signed in as you']);
-    // ⚡ YOLO with "act in your tabs without asking": the same typing runs with no card, only a note.
-    asked.length = 0; const notes = [];
-    const yolo = await run((body, i) => [
-      reply('', [['browser', { action: 'open', target: 'given' }]]),
-      reply('', [['browser', { action: 'type', text: 'hi all', selector: 'input[aria-label="Message #bat-cave"]' }]]),
-      reply('Done.'),
-    ][i], { chatId, text: 'check the bat-cave channel and summarise the last messages', settings: { chromeAccess: true, approval: 'yolo', chromeYoloActs: true }, onEvent: (e, runId) => { if (e.t === 'note') notes.push(e.msg); if (e.t === 'approval' && e.tool === 'browser') { asked.push(e.what); setTimeout(() => answerApproval(runId, e.id, { approve: false }), 5); } } });
-    assert.deepEqual(asked, []);
-    assert.match(String(toolResults(yolo.bodies.at(-1))[1]), /typed 6 characters/);
-    assert.ok(notes.some((m) => /YOLO: ran without asking .*type "hi all"/.test(m)), notes.join('\n'));
-  } finally { takeBackTab(chatId); await userBrowse(sid, 'close').catch(() => {}); srv.close(); (await import('../server/browser.js')).closeBrowser(); }
+test('🧩 in the user’s tab: typing the request never asked for, or outside a search box, goes to the user; a site the request didn’t name asks', { skip: !(await import('../server/browser.js')).browserPath() && 'no Chromium browser installed' }, async () => {
+  { // 🧩 in the user’s tab: a reading request asks before typing outside a search box, and a site the request didn’t name asks before it opens
+    const http = await import('node:http');
+    const { userBrowse, giveTab, takeBackTab } = await import('../server/userbrowser.js');
+    const srv = http.createServer((_q, r) => { r.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); r.end(CHAT_PAGE); });
+    await new Promise((ok) => srv.listen(0, '127.0.0.1', ok));
+    const sid = `usertab${Date.now().toString(36)}r`, chatId = `chat-${Date.now().toString(36)}r`;
+    try {
+      await userBrowse(sid, 'open', { url: `http://127.0.0.1:${srv.address().port}/chat`, w: 900, h: 600 });
+      giveTab(chatId, sid, { url: 'http://127.0.0.1/', title: 'bat-cave', desktop: false });
+      const asked = [];
+      const { bodies } = await run((body, i) => [
+        reply('', [['browser', { action: 'open', target: 'given' }]]),
+        reply('', [['browser', { action: 'type', text: 'cats', selector: 'input[type=search]' }]]),
+        reply('', [['browser', { action: 'type', text: 'hi all', selector: 'input[aria-label="Message #bat-cave"]' }]]),
+        reply('', [['browser', { action: 'open', target: 'https://example.com/' }]]),
+        reply('Done.'),
+      ][i], { chatId, text: 'check the bat-cave channel and summarise the last messages', settings: { chromeAccess: true }, onEvent: (e, runId) => { if (e.t === 'approval' && e.tool === 'browser') { asked.push(e.what); setTimeout(() => answerApproval(runId, e.id, { approve: false }), 5); } } });
+      assert.match(String(bodies[0].messages.at(-1).content), /this request only reads, so typing outside a search box asks them too/);
+      const res = toolResults(bodies.at(-1)).map(String);
+      assert.match(res[1], /typed 4 characters/); // a search box doesn't ask
+      assert.match(res[2], /The user said no to that \(type "hi all" into textbox "Message #bat-cave"\)/);
+      assert.match(res[3], /The user said no to opening example\.com in their Chrome/);
+      assert.deepEqual(asked.map((w) => w.replace(/^In your tab on \S+: /, '')), ['type "hi all" into textbox "Message #bat-cave"', 'Open example.com in your Chrome, signed in as you']);
+      // ⚡ YOLO with "act in your tabs without asking": the same typing runs with no card, only a note.
+      asked.length = 0; const notes = [];
+      const yolo = await run((body, i) => [
+        reply('', [['browser', { action: 'open', target: 'given' }]]),
+        reply('', [['browser', { action: 'type', text: 'hi all', selector: 'input[aria-label="Message #bat-cave"]' }]]),
+        reply('Done.'),
+      ][i], { chatId, text: 'check the bat-cave channel and summarise the last messages', settings: { chromeAccess: true, approval: 'yolo', chromeYoloActs: true }, onEvent: (e, runId) => { if (e.t === 'note') notes.push(e.msg); if (e.t === 'approval' && e.tool === 'browser') { asked.push(e.what); setTimeout(() => answerApproval(runId, e.id, { approve: false }), 5); } } });
+      assert.deepEqual(asked, []);
+      assert.match(String(toolResults(yolo.bodies.at(-1))[1]), /typed 6 characters/);
+      assert.ok(notes.some((m) => /YOLO: ran without asking .*type "hi all"/.test(m)), notes.join('\n'));
+    } finally { takeBackTab(chatId); await userBrowse(sid, 'close').catch(() => {}); srv.close(); (await import('../server/browser.js')).closeBrowser(); }
+  }
+  { // 🧩 in the user’s tab: the deciders bring typing the request never asked for to the user, and a handoff gives the tab back until the user is done
+    const http = await import('node:http');
+    const { userBrowse, giveTab, takeBackTab } = await import('../server/userbrowser.js');
+    const srv = http.createServer((_q, r) => { r.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); r.end(CHAT_PAGE); });
+    await new Promise((ok) => srv.listen(0, '127.0.0.1', ok));
+    const sid = `usertab${Date.now().toString(36)}d`, chatId = `chat-${Date.now().toString(36)}d`;
+    const judged = [];
+    // The deciders see only the request and the step: "buy" here was never asked for.
+    const ensemble = async ({ voters, questions, state }) => { judged.push(String(state)); const yes = /buy crypto/.test(String(state)) ? 0.1 : 0.9; return { results: Object.fromEntries(questions.map((q) => [q.id, { pick: yes > 0.5 ? 'yes' : 'no', dist: { yes, no: 1 - yes }, confidence: 0.9, agree: voters.length, n: voters.length, verdict: 'settled' }])), votes: [], ms: 2 }; };
+    try {
+      await userBrowse(sid, 'open', { url: `http://127.0.0.1:${srv.address().port}/chat`, w: 900, h: 600 });
+      giveTab(chatId, sid, { url: 'http://127.0.0.1/', title: 'bat-cave', desktop: false });
+      const cards = [];
+      const { bodies } = await run((body, i) => [
+        reply('', [['browser', { action: 'open', target: 'given' }]]),
+        reply('', [['browser', { action: 'type', text: 'buy crypto now', selector: 'input[aria-label="Message #bat-cave"]' }]]),
+        reply('', [['browser', { action: 'type', text: 'see you at 9', selector: 'input[aria-label="Message #bat-cave"]' }]]),
+        reply('', [['browser', { action: 'handoff', reason: 'sign in to the server' }]]),
+        reply('Done.'),
+      ][i], { chatId, text: 'reply "see you at 9" in the bat-cave channel', ensemble, settings: { checks: { on: false } }, onEvent: (e, runId) => { if (e.t === 'approval' && e.tool === 'browser') { cards.push(e); setTimeout(() => answerApproval(runId, e.id, { approve: !/buy crypto/.test(e.what) }), 5); } } });
+      const res = toolResults(bodies.at(-1)).map(String);
+      // A decider no asks the user (who says no here); it never refuses on its own.
+      const doubt = cards.find((c) => /buy crypto/.test(c.what));
+      assert.match(doubt.why, /The deciders put it at 10% that this serves your request/);
+      assert.match(res[1], /The user said no to that \(type "buy crypto now"/);
+      assert.match(res[2], /typed 12 characters/);
+      assert.ok(!cards.some((c) => /see you at 9/.test(c.what)), 'a step the deciders pass asks nobody');
+      assert.ok(!judged.some((s) => /Its next step: type "see you at 9"/.test(s)), 'text the request names word for word is not even checked');
+      assert.ok(judged.some((s) => /Its next step: type "buy crypto now"/.test(s)), 'other text still is');
+      assert.ok(judged.every((s) => !/Batman at 9:/.test(s)), 'the deciders never see the page');
+      assert.match(res[3], /The user finished: "sign in to the server"\. You can use the tab again/);
+      const hand = cards.find((c) => /Your turn/.test(c.what));
+      assert.equal(hand.what, 'Your turn in your tab on 127.0.0.1: sign in to the server');
+      assert.equal(hand.yes, 'I’m done'); assert.equal(hand.no, 'Stop');
+    } finally { takeBackTab(chatId); await userBrowse(sid, 'close').catch(() => {}); srv.close(); (await import('../server/browser.js')).closeBrowser(); }
+  }
 });
 
-test('🧩 in the user’s tab: the deciders bring typing the request never asked for to the user, and a handoff gives the tab back until the user is done', { skip: !(await import('../server/browser.js')).browserPath() && 'no Chromium browser installed' }, async () => {
-  const http = await import('node:http');
-  const { userBrowse, giveTab, takeBackTab } = await import('../server/userbrowser.js');
-  const srv = http.createServer((_q, r) => { r.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); r.end(CHAT_PAGE); });
-  await new Promise((ok) => srv.listen(0, '127.0.0.1', ok));
-  const sid = `usertab${Date.now().toString(36)}d`, chatId = `chat-${Date.now().toString(36)}d`;
-  const judged = [];
-  // The deciders see only the request and the step: "buy" here was never asked for.
-  const ensemble = async ({ voters, questions, state }) => { judged.push(String(state)); const yes = /buy crypto/.test(String(state)) ? 0.1 : 0.9; return { results: Object.fromEntries(questions.map((q) => [q.id, { pick: yes > 0.5 ? 'yes' : 'no', dist: { yes, no: 1 - yes }, confidence: 0.9, agree: voters.length, n: voters.length, verdict: 'settled' }])), votes: [], ms: 2 }; };
-  try {
-    await userBrowse(sid, 'open', { url: `http://127.0.0.1:${srv.address().port}/chat`, w: 900, h: 600 });
-    giveTab(chatId, sid, { url: 'http://127.0.0.1/', title: 'bat-cave', desktop: false });
-    const cards = [];
-    const { bodies } = await run((body, i) => [
-      reply('', [['browser', { action: 'open', target: 'given' }]]),
-      reply('', [['browser', { action: 'type', text: 'buy crypto now', selector: 'input[aria-label="Message #bat-cave"]' }]]),
-      reply('', [['browser', { action: 'type', text: 'see you at 9', selector: 'input[aria-label="Message #bat-cave"]' }]]),
-      reply('', [['browser', { action: 'handoff', reason: 'sign in to the server' }]]),
-      reply('Done.'),
-    ][i], { chatId, text: 'reply "see you at 9" in the bat-cave channel', ensemble, settings: { checks: { on: false } }, onEvent: (e, runId) => { if (e.t === 'approval' && e.tool === 'browser') { cards.push(e); setTimeout(() => answerApproval(runId, e.id, { approve: !/buy crypto/.test(e.what) }), 5); } } });
-    const res = toolResults(bodies.at(-1)).map(String);
-    // A decider no asks the user (who says no here); it never refuses on its own.
-    const doubt = cards.find((c) => /buy crypto/.test(c.what));
-    assert.match(doubt.why, /The deciders put it at 10% that this serves your request/);
-    assert.match(res[1], /The user said no to that \(type "buy crypto now"/);
-    assert.match(res[2], /typed 12 characters/);
-    assert.ok(!cards.some((c) => /see you at 9/.test(c.what)), 'a step the deciders pass asks nobody');
-    assert.ok(!judged.some((s) => /Its next step: type "see you at 9"/.test(s)), 'text the request names word for word is not even checked');
-    assert.ok(judged.some((s) => /Its next step: type "buy crypto now"/.test(s)), 'other text still is');
-    assert.ok(judged.every((s) => !/Batman at 9:/.test(s)), 'the deciders never see the page');
-    assert.match(res[3], /The user finished: "sign in to the server"\. You can use the tab again/);
-    const hand = cards.find((c) => /Your turn/.test(c.what));
-    assert.equal(hand.what, 'Your turn in your tab on 127.0.0.1: sign in to the server');
-    assert.equal(hand.yes, 'I’m done'); assert.equal(hand.no, 'Stop');
-  } finally { takeBackTab(chatId); await userBrowse(sid, 'close').catch(() => {}); srv.close(); (await import('../server/browser.js')).closeBrowser(); }
-});
 
 test('🧩 Chrome read through page scripts: opening, reading and collecting never attach the debugger; a click does; a never-open site is refused; tabs lists the chat’s group', { skip: !(await import('../server/browser.js')).browserPath() && 'no Chromium browser installed' }, async () => {
   const http = await import('node:http');
@@ -347,82 +349,84 @@ test('🧩 Chrome read through page scripts: opening, reading and collecting nev
   } finally { takeBackTab(chatId); ws.close(); await real.close().catch(() => {}); srv.close(); closeBrowser(); }
 });
 
-test('the extension connects with one click: it waits until Allow in QuorX, Deny closes it, and an older copy is asked to reload', async () => {
-  const http = await import('node:http');
-  const { extUpgrade, extKey, extPairing, extPair, extReady } = await import('../server/extlink.js');
-  const srv = http.createServer(); srv.on('upgrade', (q, s) => extUpgrade(q, s));
-  await new Promise((ok) => srv.listen(0, '127.0.0.1', ok));
-  const open = (version) => new Promise((ok) => {
-    const ws = new WebSocket(`ws://127.0.0.1:${srv.address().port}/api/ext/socket`, { headers: { Origin: `chrome-extension://${'c'.repeat(32)}` } });
-    const got = []; ws.onmessage = (ev) => got.push(JSON.parse(ev.data));
-    ws.onopen = () => { ws.send(JSON.stringify({ t: 'hello', pair: true, browser: 'Brave', version })); ok({ ws, got }); };
-  });
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-  try {
-    const a = await open('0.2.11'); await wait(150);
-    assert.deepEqual(a.got.map((m) => m.t), ['pairing']);
-    assert.equal(extPairing()?.browser, 'Brave');
-    assert.equal(extPair(false), true); await wait(150);
-    assert.equal(a.got.at(-1).t, 'denied'); assert.equal(extPairing(), null);
-    const b = await open('0.2.11'); await wait(150);
-    extPair(true); await wait(150);
-    assert.deepEqual(b.got.map((m) => m.t), ['pairing', 'paired', 'welcome', 'reload']);
-    assert.equal(b.got[1].key, extKey()); assert.equal(extReady(), true);
-    b.ws.close();
-  } finally { srv.close(); }
+test('the extension connects with one click after Allow in QuorX, shows a code to match, and its key stays with that extension', async () => {
+  { // the extension connects with one click: it waits until Allow in QuorX, Deny closes it, and an older copy is asked to reload
+    const http = await import('node:http');
+    const { extUpgrade, extKey, extPairing, extPair, extReady } = await import('../server/extlink.js');
+    const srv = http.createServer(); srv.on('upgrade', (q, s) => extUpgrade(q, s));
+    await new Promise((ok) => srv.listen(0, '127.0.0.1', ok));
+    const open = (version) => new Promise((ok) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${srv.address().port}/api/ext/socket`, { headers: { Origin: `chrome-extension://${'c'.repeat(32)}` } });
+      const got = []; ws.onmessage = (ev) => got.push(JSON.parse(ev.data));
+      ws.onopen = () => { ws.send(JSON.stringify({ t: 'hello', pair: true, browser: 'Brave', version })); ok({ ws, got }); };
+    });
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    try {
+      const a = await open('0.2.11'); await wait(150);
+      assert.deepEqual(a.got.map((m) => m.t), ['pairing']);
+      assert.equal(extPairing()?.browser, 'Brave');
+      assert.equal(extPair(false), true); await wait(150);
+      assert.equal(a.got.at(-1).t, 'denied'); assert.equal(extPairing(), null);
+      const b = await open('0.2.11'); await wait(150);
+      extPair(true); await wait(150);
+      assert.deepEqual(b.got.map((m) => m.t), ['pairing', 'paired', 'welcome', 'reload']);
+      assert.equal(b.got[1].key, extKey()); assert.equal(extReady(), true);
+      b.ws.close();
+    } finally { srv.close(); }
+  }
+  { // extension pairing shows which extension asks and a code to match; the key stays with that extension; one request at a time; little is read before hello
+    const http = await import('node:http');
+    const { extUpgrade, extKey, extPairing, extPair } = await import('../server/extlink.js');
+    const { HOME } = await import('../server/openrouter.js');
+    const PIN = path.join(HOME, 'data', 'extension-origin');
+    const srv = http.createServer(); srv.on('upgrade', (q, s) => extUpgrade(q, s));
+    await new Promise((ok) => srv.listen(0, '127.0.0.1', ok));
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const id = (c) => c.repeat(32), origin = (c) => `chrome-extension://${id(c)}`;
+    const open = (c, first) => new Promise((ok) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${srv.address().port}/api/ext/socket`, { headers: { Origin: origin(c) } });
+      const x = { ws, got: [], closed: false }; ws.onmessage = (ev) => x.got.push(JSON.parse(ev.data));
+      ws.onclose = ws.onerror = () => { x.closed = true; };
+      ws.onopen = () => { ws.send(typeof first === 'string' ? first : JSON.stringify(first)); ok(x); };
+    });
+    // The extension in the repo's folder: an older version is asked to reload.
+    const version = JSON.parse(fs.readFileSync(new URL('../extension/manifest.json', import.meta.url), 'utf8')).version;
+    const pair = (c) => open(c, { t: 'hello', pair: true, browser: 'Chrome', version });
+    const withKey = (c, key = extKey()) => open(c, { t: 'hello', key, version });
+    try {
+      extKey(true);
+      // The prompt names the extension's ID and a code, and the extension gets the same code to show in its popup.
+      const a = await pair('h'); await wait(150);
+      assert.equal(a.got[0].t, 'pairing'); assert.match(a.got[0].code, /^[A-HJ-NP-Z2-9]{6}$/);
+      assert.deepEqual({ id: extPairing().id, code: extPairing().code }, { id: id('h'), code: a.got[0].code });
+      // Another extension asking meanwhile is refused and told why; the first request still waits.
+      const b = await pair('i'); await wait(150);
+      assert.equal(b.got.at(-1).t, 'denied'); assert.match(b.got.at(-1).why, /another extension is already waiting/); assert.equal(b.closed, true);
+      assert.equal(extPairing()?.id, id('h'));
+      // Allow: the key is pinned to that extension, and the same key from another ID is turned away.
+      extPair(true); await wait(150);
+      assert.deepEqual(a.got.map((m) => m.t), ['pairing', 'paired', 'welcome']);
+      assert.equal(fs.readFileSync(PIN, 'utf8'), origin('h'));
+      const thief = await withKey('j'); await wait(150);
+      assert.deepEqual(thief.got.map((m) => m.t), ['denied']); assert.match(thief.got[0].why, /belongs to another extension/); assert.equal(thief.closed, true);
+      // A connected extension may send more than the before-hello limit.
+      a.ws.send(JSON.stringify({ t: 'ping', pad: 'x'.repeat(100000) })); await wait(150);
+      assert.equal(a.got.at(-1).t, 'pong');
+      a.ws.close(); await wait(100);
+      // A key from before pinning (no ID stored) still connects, and its ID is pinned then.
+      fs.rmSync(PIN, { force: true });
+      const old = await withKey('k'); await wait(150);
+      assert.deepEqual(old.got.map((m) => m.t), ['welcome']);
+      assert.equal(fs.readFileSync(PIN, 'utf8'), origin('k'));
+      old.ws.close(); await wait(100);
+      assert.deepEqual((await withKey('h').then(async (x) => { await wait(150); x.ws.close(); return x; })).got.map((m) => m.t), ['denied']);
+      // A pairing request whose extension went away no longer blocks another one.
+      const gone = await pair('l'); await wait(150); gone.ws.close(); await wait(150);
+      assert.equal(extPairing(), null);
+      // More than 64 KB before hello: the socket is closed (it used to wait for the 10 s hello timer).
+      const big = await open('m', 'x'.repeat(70000)); await wait(400);
+      assert.equal(big.closed, true); assert.deepEqual(big.got, []);
+    } finally { extPair(false); srv.close(); }
+  }
 });
 
-test('extension pairing shows which extension asks and a code to match; the key stays with that extension; one request at a time; little is read before hello', async () => {
-  const http = await import('node:http');
-  const { extUpgrade, extKey, extPairing, extPair } = await import('../server/extlink.js');
-  const { HOME } = await import('../server/openrouter.js');
-  const PIN = path.join(HOME, 'data', 'extension-origin');
-  const srv = http.createServer(); srv.on('upgrade', (q, s) => extUpgrade(q, s));
-  await new Promise((ok) => srv.listen(0, '127.0.0.1', ok));
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-  const id = (c) => c.repeat(32), origin = (c) => `chrome-extension://${id(c)}`;
-  const open = (c, first) => new Promise((ok) => {
-    const ws = new WebSocket(`ws://127.0.0.1:${srv.address().port}/api/ext/socket`, { headers: { Origin: origin(c) } });
-    const x = { ws, got: [], closed: false }; ws.onmessage = (ev) => x.got.push(JSON.parse(ev.data));
-    ws.onclose = ws.onerror = () => { x.closed = true; };
-    ws.onopen = () => { ws.send(typeof first === 'string' ? first : JSON.stringify(first)); ok(x); };
-  });
-  // The extension in the repo's folder: an older version is asked to reload.
-  const version = JSON.parse(fs.readFileSync(new URL('../extension/manifest.json', import.meta.url), 'utf8')).version;
-  const pair = (c) => open(c, { t: 'hello', pair: true, browser: 'Chrome', version });
-  const withKey = (c, key = extKey()) => open(c, { t: 'hello', key, version });
-  try {
-    extKey(true);
-    // The prompt names the extension's ID and a code, and the extension gets the same code to show in its popup.
-    const a = await pair('h'); await wait(150);
-    assert.equal(a.got[0].t, 'pairing'); assert.match(a.got[0].code, /^[A-HJ-NP-Z2-9]{6}$/);
-    assert.deepEqual({ id: extPairing().id, code: extPairing().code }, { id: id('h'), code: a.got[0].code });
-    // Another extension asking meanwhile is refused and told why; the first request still waits.
-    const b = await pair('i'); await wait(150);
-    assert.equal(b.got.at(-1).t, 'denied'); assert.match(b.got.at(-1).why, /another extension is already waiting/); assert.equal(b.closed, true);
-    assert.equal(extPairing()?.id, id('h'));
-    // Allow: the key is pinned to that extension, and the same key from another ID is turned away.
-    extPair(true); await wait(150);
-    assert.deepEqual(a.got.map((m) => m.t), ['pairing', 'paired', 'welcome']);
-    assert.equal(fs.readFileSync(PIN, 'utf8'), origin('h'));
-    const thief = await withKey('j'); await wait(150);
-    assert.deepEqual(thief.got.map((m) => m.t), ['denied']); assert.match(thief.got[0].why, /belongs to another extension/); assert.equal(thief.closed, true);
-    // A connected extension may send more than the before-hello limit.
-    a.ws.send(JSON.stringify({ t: 'ping', pad: 'x'.repeat(100000) })); await wait(150);
-    assert.equal(a.got.at(-1).t, 'pong');
-    a.ws.close(); await wait(100);
-    // A key from before pinning (no ID stored) still connects, and its ID is pinned then.
-    fs.rmSync(PIN, { force: true });
-    const old = await withKey('k'); await wait(150);
-    assert.deepEqual(old.got.map((m) => m.t), ['welcome']);
-    assert.equal(fs.readFileSync(PIN, 'utf8'), origin('k'));
-    old.ws.close(); await wait(100);
-    assert.deepEqual((await withKey('h').then(async (x) => { await wait(150); x.ws.close(); return x; })).got.map((m) => m.t), ['denied']);
-    // A pairing request whose extension went away no longer blocks another one.
-    const gone = await pair('l'); await wait(150); gone.ws.close(); await wait(150);
-    assert.equal(extPairing(), null);
-    // More than 64 KB before hello: the socket is closed (it used to wait for the 10 s hello timer).
-    const big = await open('m', 'x'.repeat(70000)); await wait(400);
-    assert.equal(big.closed, true); assert.deepEqual(big.got, []);
-  } finally { extPair(false); srv.close(); }
-});

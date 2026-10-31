@@ -74,8 +74,6 @@ test('search_files leaves out what .gitignore ignores and build output (unless a
   }
 });
 
-
-
 test('search_files over ~5k files keeps the event loop ticking', async () => {
   const dir = tempDir('quorx-search-big-');
   for (let d = 0; d < 50; d++) {
@@ -131,7 +129,6 @@ test('list_files shows the user\'s parts of .quorx, and a project inside another
   }
 });
 
-
 test('a folder that can\'t be read is listed as skipped, and list_files and search_files carry on', { skip: process.platform !== 'win32' && 'uses Windows permissions' }, async () => {
   const { listFiles, searchFiles } = await import('../server/workspace.js');
   const { execFileSync } = await import('node:child_process');
@@ -172,7 +169,6 @@ test('a plan with open items keeps the reply going past its steps, and carries i
   }
 });
 
-
 test('out of steps: a reply keeps its checkpoint and "Keep going" carries on; a scheduled run gets no card and keeps none', async () => {
   { // out of steps: the reply keeps its checkpoint, says why, and "Keep going" carries on with more steps
     let id;
@@ -206,7 +202,6 @@ test('out of steps: a reply keeps its checkpoint and "Keep going" carries on; a 
     assert.equal(loadCheckpoint(id), null, 'nothing to keep going from');
   }
 });
-
 
 test('Stop ends a reply in the middle of slow browser steps, and the rest of the batch never runs', async () => {
   let opened = 0;
@@ -249,7 +244,6 @@ test('usage: a running reply is not counted twice when its chat is saved, nor a 
     assert.equal(ownCost({ cost: 0.3412, resumed: true, byModel: { a: { cost: 0.3412 } } }, first), 0.3412);
   }
 });
-
 
 test('YOLO asks first only for a group the user turned off; with every group on it asks for nothing', async () => {
   { // YOLO asks first for a group the user turned off (here: file changes); everything else still goes ahead
@@ -433,7 +427,6 @@ test('fresh eyes: the same problem twice gets a clean-context diagnosis; a missi
 const linkPage = '<!doctype html><html><head><link rel="stylesheet" href="report.css"></head><body><h1>Report</h1></body></html>';
 
 
-
 test('a project with DESIGN.md and tokens.css: every chat gets it, and writes are checked against its palette', async () => {
   const prep = (dir) => { fs.writeFileSync(path.join(dir, 'DESIGN.md'), '---\nname: Rustic\n---\n# Rustic\nAccent: rust. Headings in a serif.'); fs.writeFileSync(path.join(dir, 'tokens.css'), ':root{--bg:#faf7f2;--fg:#201a14;--accent:#b4441b}'); };
   const page = '<!doctype html><html><head><meta name="viewport" content="width=device-width"><link rel="stylesheet" href="tokens.css"><style>body{background:var(--bg);color:#00ff88}</style></head><body><h1>Hi</h1></body></html>';
@@ -526,7 +519,6 @@ test('the prompt enhancer reads a chat\'s first request (later ones only if set)
 });
 
 
-
 // ---------- ⚡ YOLO waits a few seconds for the user before the deciders answer ----------
 const pickSecond = async ({ voters, questions }) => {
   const q = questions[0], keys = Object.keys(q.options);
@@ -564,7 +556,6 @@ test('YOLO with a wait: the user sees the question first and wins; no answer in 
     assert.match(toolResults(bodies[1])[0], /in their own words: "medium please"/);
   }
 });
-
 
 
 // ---------- 0.2.3: fixes found in a real build ----------
@@ -644,7 +635,6 @@ test('/review reads only the files the last reply changed, and asks a model with
     assert.deepEqual(seen.map((x) => (typeof x === 'object' ? 'forced' : x)), ['forced', 'auto', 'auto']);
   }
 });
-
 
 test('/review finds uncommitted changes (untracked files too), then the branch against main, and says when there is nothing', () => {
   const dir = tempDir('quorx-cr-');
@@ -749,7 +739,6 @@ test('hooks: patterns, order and the {file} placeholder, kept in the data folder
     assert.throws(() => saveHooks(dir, Array.from({ length: 21 }, () => ({ command: 'x' }))), /at most 20/);
   }
 });
-
 
 test('an after-write hook runs in order after matching writes, a failure goes back to the agent, and one that runs too long is stopped', async () => {
   { // an after-write hook runs in order after matching writes only, and a failure goes back to the agent
