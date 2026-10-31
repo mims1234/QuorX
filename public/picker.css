@@ -168,3 +168,6 @@ dialog.mp-dialog::backdrop { background: rgba(4, 6, 6, .72); backdrop-filter: bl
 .mp-name .src-logo { width: 13px; height: 13px; margin-left: 4px; color: var(--muted); }
 #settings .src-head .src-logo { width: 24px; height: 24px; }
 .kx-hero-ico .src-logo { width: 28px; height: 28px; vertical-align: middle; }
+/* A maker's own API (server/directapi.js), where it has no logo here: its short name as a quiet outlined tag. */
+.src-tag { display: inline-block; flex: none; padding: 0 5px; border: 1px solid currentColor; border-radius: 4px; font: 700 9.5px var(--font-ui); letter-spacing: .03em; line-height: 14px; vertical-align: 1px; opacity: .8; cursor: help; white-space: nowrap; }
+.mp-src-seg .st-seg-btn .src-tag { cursor: inherit; }

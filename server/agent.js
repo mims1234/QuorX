@@ -14,7 +14,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { chat, chatStream, generationCost, chatModels, imageModels, generateImage, speechModels, synthesize, composeMusic, musicModels, videoModels, generateVideo, HOME } from './openrouter.js';
 import { ensemble, GATE } from './decisions.js';
 import { runtime, knownProviders, currentKey } from './openrouter.js';
-import { sourceOf, sourceStream, sourceModels, sourceOffWhy, blockedLocal, movedModel, sourceSkip, noteSourceResult, failureKind, kindWords, sameOnOpenRouter, stripPass, chatAny, sessionFor } from './sources.js';
+import { sourceOf, sourceStream, sourceModels, sourceOffWhy, blockedLocal, movedModel, routeModel, sourceSkip, noteSourceResult, failureKind, kindWords, sameOnOpenRouter, stripPass, chatAny, sessionFor } from './sources.js';
 import { pathToFileURL } from 'node:url';
 import { rotateLog } from './storagerules.js';
 import { enhanceRequest } from './enhancer.js';
@@ -1031,6 +1031,11 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
     const to = o?.model ? movedModel(o.model) : null;
     if (to && to !== o.model) { emit({ t: 'note', level: 'info', msg: `${o.model} ran through the OpenCode app on this PC; Go models now run with your key, so this reply uses ${to} with your OpenCode Go key. Pick it in the chat's model button to keep it.`, at: 0 }); o.model = to; }
   }
+  // An OpenRouter model the user runs on its maker's own API (⚙ Settings → API keys) goes there for this reply.
+  if (!deps.sourceStream) for (const o of [setup, carryOn]) {
+    const to = o?.model ? await routeModel(o.model) : null;
+    if (to && to !== o.model) { emit({ t: 'note', level: 'info', msg: `${short(o.model)} runs on ${sourceOf(to).def.name}’s own API with your key (⚙ Settings → API keys), as ${to}.`, at: 0 }); o.model = to; }
+  }
   // A source whose models can't use apps (sources.js noDesktop): no desktop tool in this reply, and the model says so.
   const noDesktop = sourceOf(carryOn?.model || setup.model)?.def.noDesktop || '';
   // No OpenRouter key yet: only a model through an app on this PC can run, and everything that would call OpenRouter
@@ -1042,8 +1047,11 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
     // OpenRouter and are off.
     const onApp = (m) => !!sourceOf(String(m || '').trim());
     const keep = { enhancer: onApp(S.enhancerModel || S.helperModel), freshEyes: onApp(S.freshEyesModel) || (!S.freshEyesModel && S.freshEyesTier !== 'strong' && onApp(S.helperModel)), review: onApp(S.reviewModel), helpers: onApp(S.helperModel) };
-    Object.assign(S, { deciders: false, enhancer: keep.enhancer ? S.enhancer : false, freshEyes: keep.freshEyes ? S.freshEyes : false, review: keep.review ? S.review : 'off', codeReview: keep.review ? S.codeReview : 'off', helpers: keep.helpers ? S.helpers : false, sourceFallback: 'off', fallbackModel: '', buildThinking: 'off' });
-    const off = ['the deciders', ...[['review', 'the reviewer'], ['enhancer', 'the prompt enhancer'], ['helpers', 'helpers'], ['freshEyes', 'fresh eyes']].filter(([k]) => !keep[k]).map(([, w]) => w), 'paid media'];
+    // Deciders that are all models of a source (a maker's API, Jev on Command Code) keep working.
+    const votersOn = (Array.isArray(S.voters) && S.voters.length ? S.voters : DEFAULTS.voters).every(onApp);
+    if (votersOn) keep.deciders = true;
+    Object.assign(S, { deciders: votersOn ? S.deciders : false, enhancer: keep.enhancer ? S.enhancer : false, freshEyes: keep.freshEyes ? S.freshEyes : false, review: keep.review ? S.review : 'off', codeReview: keep.review ? S.codeReview : 'off', helpers: keep.helpers ? S.helpers : false, sourceFallback: 'off', fallbackModel: '', buildThinking: 'off' });
+    const off = [...(votersOn ? [] : ['the deciders']), ...[['review', 'the reviewer'], ['enhancer', 'the prompt enhancer'], ['helpers', 'helpers'], ['freshEyes', 'fresh eyes']].filter(([k]) => !keep[k]).map(([, w]) => w), 'paid media'];
     emit({ t: 'note', level: 'info', msg: `No OpenRouter key yet: ${off.slice(0, -1).join(', ')} and ${off.at(-1)} are off for this reply (they run on OpenRouter). Add a key in ⚙ Settings → API keys, or set them to a model tagged This PC.`, at: 0 });
   }
   const blockedNames = blockedFor(S.blockedProviders, setup.model);
@@ -1930,10 +1938,12 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   async function callModel(body, sig, onText, onThink, role = 'writer') {
     // A model of an app on this PC: its source first. When that fails, the same call goes to OpenRouter (viaSource
     // says which model), and the step carries on as if nothing happened, apart from a note.
-    let fell = null, unmarked = null;
+    let fell = null, unmarked = null, routed = null;
+    // An OpenRouter id the user runs on its maker's own API (a helper's, the reviewer's) goes there; `routedTo` says so.
+    if (!sourceOf(body.model) && !deps.sourceStream) { const to = await routeModel(body.model); if (to !== body.model) { routed = to; body = { ...body, model: to }; } }
     if (sourceOf(body.model)) {
       const got = await viaSource(body, sig, onText, onThink, role);
-      if (got.r) return got.r;
+      if (got.r) { if (routed) got.r.routedTo = routed; return got.r; }
       fell = body.model; body = got.body;
       // The marks were placed for the source's id: the OpenRouter model (a Claude one) gets its own.
       const mk = run.cacheMarks ? withCacheMarks(body.messages, body.model) : body.messages;
@@ -2238,7 +2248,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       try { r = await reviewerCall(body, opts.role || 'helper'); }
       catch (e) { if (signal.aborted) throw e; emit({ t: 'helper_done', step, id, ok: false, steps: used, cost: stats.cost - cost0, ms: at() - t0, at: at() }); return `Error: the helper (${short(model)}) failed: ${clip(e.message, 160)}. Do the job yourself.`; }
       used++;
-      account(r.usage, model, opts.role || 'helper');
+      account(r.usage, r.routedTo || model, opts.role || 'helper');
       if (!r.toolCalls.length) { report = String(r.text || '').trim(); break; }
       hm.push({ role: 'assistant', content: r.text || null, tool_calls: r.toolCalls });
       const results = await Promise.all(r.toolCalls.map(async (tc) => {
@@ -2638,7 +2648,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         emit({ t: 'note', level: 'warn', msg: `The reviewer (${short(model)}) failed: ${clip(e.message, 140)}. The reply goes ahead without a review.`, at: at() });
         return null;
       }
-      account(r.usage, model, 'reviewer');
+      account(r.usage, r.routedTo || model, 'reviewer');
       if (!r.toolCalls.length) { rmsgs.push({ role: 'assistant', content: r.text || 'I have tested it.' }, { role: 'user', content: 'Call submit_review now with your scores, bugs and summary.' }); continue; }
       rmsgs.push({ role: 'assistant', content: r.text || null, tool_calls: r.toolCalls });
       for (const tc of r.toolCalls) {
@@ -2859,7 +2869,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       { role: 'user', content: `${userText}\n\n[Draft replies that disagree, for reference]\n${drafts.map((d, i) => `--- draft ${i + 1} ---\n${clip(d, 2500)}`).join('\n')}` },
     ] }, signal, (t) => emit({ t: 'token', step: 0, text: t }), null, 'strong');
     stats.llmCalls++;
-    account(r.usage, model, 'strong');
+    account(r.usage, r.routedTo || model, 'strong');
     emit({ t: 'llm_done', step: 0, ms: r.ms, firstMs: r.firstMs, tokensOut: r.usage.completion_tokens || 0, cost: r.usage.cost || 0, toolCalls: [], at: at() });
     reply = r.text;
     return true;

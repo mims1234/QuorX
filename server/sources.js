@@ -3,7 +3,8 @@
 // does (deciders, media, helpers, the reviewer, every fallback). An app on this computer can run the main model with
 // the providers, plans and sign-ins the user connected there: the OpenCode app (opencodelocal.js), Claude Code
 // (claudelocal.js) and Grok Build (groklocal.js). OpenCode Go and Command Code run over their APIs with the user's own
-// key (opencodego.js, commandcode.js).
+// key (opencodego.js, commandcode.js), and so do the model makers' own APIs: OpenAI, Anthropic, Google Gemini, Moonshot
+// and Meta (directapi.js).
 //   - OpenCode's own providers inside the OpenCode app are left out (blockedLocal): its Zen provider doesn't answer
 //     calls from QuorX, and Go runs over its API. A chat still set to one is told to pick another (a Go model moves to
 //     Go over the API when a Go key is in).
@@ -26,6 +27,7 @@ import { grokModels, grokStream, grokRunning, GROK_ID } from './groklocal.js';
 import { goModels, goStream, goCheck, goAccount, GO_ID } from './opencodego.js';
 import { ollamaModels, ollamaStream, ensureOllama, ollamaServer, OLLAMA_ID } from './ollamalocal.js';
 import { ccModels, ccStream, ccCheck, ccAccount, ccDecisionModels, ccDecisions, CC_ID } from './commandcode.js';
+import { DIRECT, DIRECT_IDS, isDirect, cleanBase, directModels, directStream, directDeciders, directDecisions, deciderReal } from './directapi.js';
 
 const DATA = path.join(HOME, 'data');
 export const SOURCE_FILE = path.join(DATA, 'sources.json');
@@ -71,6 +73,11 @@ export const SOURCES = {
     // the desktop tool: the model says it can't, instead of starting and stalling.
     noDesktop: 'Grok Build models in QuorX read text only and stop short of long steps like drawing, so 🖥 Computer use is off with them. Pick a Claude Code model, or an OpenRouter model that sees pictures, to use apps on this computer.',
   },
+  // The model makers' own APIs (directapi.js), each with the user's key, billed per call at the provider's prices.
+  ...Object.fromEntries(DIRECT_IDS.map((id) => {
+    const d = DIRECT[id];
+    return [id, { id, name: d.name, short: d.short, app: null, billing: 'paid', local: false, needsKey: true, direct: true, env: d.env[0], envs: d.env, site: d.site, keyUrl: d.keyUrl, docs: d.docs, keyHint: d.keyHint, base: d.base }];
+  })),
 };
 // How QuorX reaches each app: its model list, one call, a check that costs nothing, and what its process is doing.
 const APPS = {
@@ -86,6 +93,13 @@ const APPS = {
   // Its list is public too; a call and the check need the key. Its models name the plan the key is on (GOAT plan).
   [CC_ID]: { list: async () => { const [l, a] = await Promise.all([ccModels(), sourceAccount(CC_ID).catch(() => null)]); return a?.plan ? l.map((m) => ({ ...m, planLabel: a.plan })) : l; },
     account: () => ccAccount(keyFor(CC_ID)?.key), stream: (b, sg, t, th, o) => ccStream(b, sg, t, th, { ...o, key: keyFor(CC_ID)?.key }), check: async () => { const k = keyFor(CC_ID)?.key; if (!k) throw Object.assign(new Error('Add your Command Code key first.'), { kind: 'auth' }); await ccCheck(k, await ccModels()); }, server: () => ({ api: true }) },
+  // A maker's API lists its models only with the key, so the list is the check, and costs nothing.
+  ...Object.fromEntries(DIRECT_IDS.map((id) => [id, {
+    list: () => directModels(id, { key: keyFor(id)?.key, base: baseFor(id) }),
+    stream: (b, sg, t, th, o) => directStream(id, b, sg, t, th, { ...o, key: keyFor(id)?.key, base: baseFor(id) }),
+    check: async () => { if (!keyFor(id)) throw Object.assign(new Error(`Add your ${DIRECT[id].name} key first.`), { kind: 'auth' }); },
+    server: () => ({ api: true }),
+  }])),
 };
 export const SOURCE_IDS = Object.keys(SOURCES);
 
@@ -98,6 +112,8 @@ export function sourceOf(id) {
   return Object.hasOwn(SOURCES, head) && model ? { source: head, model, def: SOURCES[head] } : null;
 }
 export const isSourceModel = (id) => !!sourceOf(id);
+/** Who a call to a model goes to, by name (the Spending view's totals): the source its id names, else OpenRouter. */
+export const providerOfModel = (id) => sourceOf(id)?.def.name || 'OpenRouter';
 const known = (id) => { if (!Object.hasOwn(SOURCES, String(id))) throw new Error('no such source'); };
 
 // ---------- which are on (data/sources.json) ----------
@@ -113,9 +129,13 @@ export function keyFor(id) {
   if (!def?.needsKey) return null;
   const k = load()[id]?.key;
   if (typeof k === 'string' && k) return { key: k, from: 'pasted' };
-  if (def.env && process.env[def.env]) return { key: process.env[def.env], from: 'env' };
+  for (const e of def.envs || [def.env]) if (e && process.env[e]) return { key: process.env[e], from: 'env', env: e };
   return null;
 }
+/** The address a maker's API is called at: the one set in ⚙ Settings, else its own. */
+export const baseFor = (id) => (SOURCES[id]?.direct ? cleanBase(load()[id]?.base) || SOURCES[id].base : null);
+/** For a maker's API: whether its models also take the place of the same models on OpenRouter ('direct'), or not ('openrouter'). */
+export const routeOf = (id) => (SOURCES[id]?.direct && load()[id]?.route === 'direct' ? 'direct' : 'openrouter');
 const mask = (k) => (k.length > 16 ? `${k.slice(0, 6)}••••••••${k.slice(-4)}` : '••••••••');
 // Whether it can run at all: an app installed on this computer, or a key for an API.
 const ready = (id) => { const d = SOURCES[id]; return !!d && (d.needsKey ? !!keyFor(id) : !!findOnPath(d.app)); };
@@ -129,8 +149,32 @@ export function sourceOffWhy(id) {
   if (!d.needsKey && !findOnPath(d.app)) return `${d.name} is not installed (⚙ Settings → Apps on this PC)`;
   return sourceOn(id) ? '' : `${d.name} is switched off (⚙ Settings → ${d.needsKey ? 'API keys' : 'Apps on this PC'})`;
 }
-// What is kept: each source's switch, and the key of one that takes a key. Anything else an older version saved here goes.
-const tidy = (all) => Object.fromEntries(Object.entries(all).filter(([k]) => Object.hasOwn(SOURCES, k)).map(([k, v]) => [k, { on: !!v?.on, ...(SOURCES[k].needsKey && typeof v?.key === 'string' && v.key ? { key: v.key, added: v.added || 0 } : {}) }]));
+// What is kept: each source's switch, the key of one that takes a key, and a maker's API's own address and routing.
+// Anything else an older version saved here goes.
+const tidy = (all) => Object.fromEntries(Object.entries(all).filter(([k]) => Object.hasOwn(SOURCES, k)).map(([k, v]) => [k, { on: !!v?.on, ...(SOURCES[k].needsKey && typeof v?.key === 'string' && v.key ? { key: v.key, added: v.added || 0 } : {}),
+  ...(SOURCES[k].direct && cleanBase(v?.base) ? { base: cleanBase(v.base) } : {}), ...(SOURCES[k].direct && v?.route === 'direct' ? { route: 'direct' } : {}) }]));
+/**
+ * A maker's API's options: `base`, the address its calls go to ('' for its own), and `route`, whether OpenRouter's ids
+ * of the same models run on it ('direct') or stay on OpenRouter ('openrouter').
+ */
+export function setSourceOptions(id, { base, route } = {}) {
+  known(id);
+  const d = SOURCES[id];
+  if (!d.direct) throw new Error(`${d.name} has no options to set.`);
+  const s = tidy(load()), cur = { ...(s[id] || { on: false }) };
+  if (base !== undefined) {
+    const b = cleanBase(base);
+    if (String(base || '').trim() && !b) throw new Error('That address isn’t one QuorX can call: it needs https:// (http:// only for this computer).');
+    if (b && b !== d.base) cur.base = b; else delete cur.base;
+  }
+  if (route !== undefined) {
+    if (!['direct', 'openrouter'].includes(route)) throw new Error('route is direct or openrouter');
+    if (route === 'direct') cur.route = 'direct'; else delete cur.route;
+  }
+  s[id] = cur;
+  save(s);
+  if (base !== undefined) { clearHealth(id); dropCatalogue(id); }
+}
 export function setSourceOn(id, on) {
   known(id);
   const d = SOURCES[id];
@@ -150,8 +194,9 @@ export function setSourceKey(id, key) {
   key = String(key || '').trim();
   if (key.length < 16 || key.length > 400 || /\s/.test(key)) throw new Error(`That does not look like a key. ${d.keyHint}`);
   if (/^sk-or-/.test(key)) throw new Error('That is an OpenRouter key: add it under OpenRouter keys instead.');
+  if (id !== 'anthropic-api' && /^sk-ant-/.test(key)) throw new Error('That is an Anthropic key: add it under Anthropic instead.');
   const s = tidy(load());
-  s[id] = { on: true, key, added: Date.now() };
+  s[id] = { ...(s[id] || {}), on: true, key, added: Date.now() };
   save(s);
   accounts.delete(id);
   clearHealth(id);
@@ -282,6 +327,32 @@ export function sameOnOpenRouter(id, orList = [], info = sourceInfo(id)) {
   return hits.find((x) => x.split('/')[0] === v) || hits[0];
 }
 
+// ---------- OpenRouter's ids on a maker's own API (⚙ Settings → API keys → "OpenRouter's ids run here") ----------
+const ROUTE_VENDOR = Object.fromEntries(DIRECT_IDS.flatMap((id) => DIRECT[id].or.map((v) => [v, id])));
+/** The maker's API an OpenRouter id would run on when routed there (on and set to take OpenRouter's ids), or null. */
+export function routeSource(id) {
+  const s = String(id || ''), i = s.indexOf('/');
+  if (i <= 0 || sourceOf(s) || s.includes(':')) return null;
+  const src = ROUTE_VENDOR[s.slice(0, i)];
+  return src && routeOf(src) === 'direct' && sourceOn(src) ? src : null;
+}
+/** The same model in a maker's API list (claude-sonnet-4.5 on OpenRouter is claude-sonnet-4-5 there), or null. */
+export function sameOnDirect(id, src, list = catalogue?.list || []) {
+  const want = norm(String(id).split('/').slice(1).join('/'));
+  const hits = list.filter((m) => m.source === src && m.kind === 'chat' && m.status !== 'deprecated' && norm(m.realId) === want);
+  return (hits.find((m) => !/-\d{8}$/.test(m.realId)) || hits[0])?.id || null;
+}
+/**
+ * The model a call for `id` runs on: an OpenRouter id goes to the same model on its maker's own API when the user
+ * chose that, and that API has it; any other id stays as it is. Loads the model lists when none are loaded yet.
+ */
+export async function routeModel(id) {
+  const src = routeSource(id);
+  if (!src) return id;
+  if (!catalogue?.ids.includes(src)) await sourceModels().catch(() => []);
+  return sameOnDirect(id, src) || id;
+}
+
 // ---------- health: what failed lately ----------
 const health = new Map(); // source → { ok, at, kind, why, until, model, scoped, fails }: its last result
 const modelHealth = new Map(); // `${source}|${model}` → the same, for failures that only one model had
@@ -321,7 +392,8 @@ export const kindWords = (k) => KIND_WORDS[k] || KIND_WORDS.unknown;
 const SOURCE_KINDS = new Set(['notinstalled', 'network']);
 export function noteSourceResult(id, model, err, { now = Date.now() } = {}) {
   if (!err) { health.set(id, { ok: true, at: now, model, fails: 0 }); if (model) modelHealth.delete(`${id}|${model}`); return; }
-  const kind = failureKind(err), scoped = !SOURCE_KINDS.has(kind);
+  // A maker's API has one key and one account for all its models: a refused key or spent credit is the whole source's.
+  const kind = failureKind(err), scoped = !SOURCE_KINDS.has(kind) && !(SOURCES[id]?.direct && (kind === 'auth' || kind === 'quota'));
   // A model-sized failure with no model named (the connection test) is shown in Settings but skips nothing.
   const key = scoped ? (model ? `${id}|${model}` : null) : id;
   const prev = (key && (scoped ? modelHealth.get(key) : (health.get(key)?.scoped ? null : health.get(key)))) || {};
@@ -348,9 +420,13 @@ export function sourceSkip(id, model, now = Date.now()) {
 }
 
 // ---------- decision models (Command Code's Jev) ----------
-/** The decision models of the sources that are on: Jev on Command Code, priced at its list price on OpenRouter. */
+/**
+ * The decision models of the sources that are on: Jev on Command Code, priced at its list price on OpenRouter, and the
+ * chat models of the makers' APIs, asked in plain words (directapi.js).
+ */
 export async function sourceDecisionModels() {
-  return sourceOn(CC_ID) ? ccDecisionModels(await decisionModels().catch(() => [])) : [];
+  const direct = DIRECT_IDS.some((id) => sourceOn(id)) ? directDeciders((await sourceModels().catch(() => [])).filter((m) => SOURCES[m.source]?.direct)) : [];
+  return [...(sourceOn(CC_ID) ? ccDecisionModels(await decisionModels().catch(() => [])) : []), ...direct];
 }
 /**
  * One Decisions request through a source (a decider on commandcode/typesafe/jev), answered like openrouter.js
@@ -359,6 +435,7 @@ export async function sourceDecisionModels() {
 export async function sourceDecisions(model, state, questions, signal) {
   stopped(signal);
   const s = sourceOf(model);
+  if (s && SOURCES[s.source].direct && deciderReal(model)) return directDecide(s.source, model, state, questions, signal);
   if (s?.source !== CC_ID) throw Object.assign(new Error(`${model} is not a decision model QuorX can reach`), { kind: 'request' });
   const why = sourceOffWhy(CC_ID) || sourceSkip(CC_ID, model);
   if (why) throw Object.assign(new Error(why), { kind: 'request' });
@@ -369,6 +446,21 @@ export async function sourceDecisions(model, state, questions, signal) {
     r.usage = { ...r.usage, ...priced(info, r.usage) };
     return r;
   } catch (e) { if (!signal?.aborted) noteSourceResult(CC_ID, model, e); throw e; }
+}
+
+// A decider on a maker's API: its chat model asked the questions, the call priced like any other.
+async function directDecide(src, model, state, questions, signal) {
+  const chatId = `${src}/${deciderReal(model)}`;
+  const why = sourceOffWhy(src) || sourceSkip(src, chatId);
+  if (why) throw Object.assign(new Error(why), { kind: 'request' });
+  const info = (await sourceModels().catch(() => [])).find((m) => m.id === chatId);
+  if (!info) throw Object.assign(new Error(`${SOURCES[src].name} doesn’t list ${deciderReal(model)} now`), { kind: 'model' });
+  try {
+    const r = await directDecisions({ ...info, chatId }, state, questions, signal, { stream: (b, sg) => APPS[src].stream(b, sg, null, null, { info, idleMs: 60e3 }) });
+    noteSourceResult(src, chatId, null);
+    r.usage = { ...r.usage, ...priced(info, r.usage) };
+    return r;
+  } catch (e) { if (!signal?.aborted) noteSourceResult(src, chatId, e); throw e; }
 }
 
 // ---------- one call ----------
@@ -402,12 +494,18 @@ export async function sourceStream(body, signal, onText, onThink, { info: given,
  * tiers too). A plan model (OpenCode Go, a Claude subscription) costs nothing per call; plan_cost is what it counted
  * against the plan's limits, at list price: the app's own figure when it gives one.
  */
+// No single call costs more than this: a figure above it (a bad price record, a misread report) counts as unknown, 0.
+export const CALL_COST_MAX = 50;
+const saneCall = (x) => Number.isFinite(x) && x >= 0 && x <= CALL_COST_MAX;
 export function priced(info, u = {}) {
   const said = u.cost !== null && u.cost !== '' && u.cost !== undefined && Number.isFinite(Number(u.cost)) ? Number(u.cost) : null;
-  if (info?.plan === 'plan') return { cost: said ?? 0, plan_cost: Number(u.plan_cost) > 0 ? Number(u.plan_cost) : costOf(info, u) };
-  if (said != null) return { cost: said };
+  if (info?.plan === 'plan') return { cost: said != null && saneCall(said) ? said : 0, plan_cost: Number(u.plan_cost) > 0 ? Number(u.plan_cost) : costOf(info, u) };
+  if (said != null) return saneCall(said) ? { cost: said } : { cost: 0, cost_unknown: true };
   if (info?.plan === 'free') return { cost: 0 };
-  return { cost: costOf(info, u), estimated_cost: true };
+  // A model whose price isn't known costs 0 here, marked unknown, rather than a guess.
+  if (info?.priceUnknown) return { cost: 0, estimated_cost: true, cost_unknown: true };
+  const c = costOf(info, u);
+  return saneCall(c) ? { cost: c, estimated_cost: true } : { cost: 0, estimated_cost: true, cost_unknown: true };
 }
 function costOf(info, u) {
   const c = info?.cost || {}, prompt = Number(u.prompt_tokens) || 0, out = Number(u.completion_tokens) || 0;
@@ -445,7 +543,8 @@ export async function sourceStatus({ versions = true } = {}) {
       id, name: def.name, short: def.short, app: def.app, billing: def.billing, site: def.site, keyUrl: def.keyUrl, docs: def.docs, keyHint: def.keyHint,
       on: !!s[id]?.on && ready(id), local: !def.needsKey, installed: ready(id), server: APPS[id].server(), install: def.install, appName: def.appName,
       ...(APPS[id].account ? { account: true } : {}),
-      ...(def.needsKey ? { needsKey: true, env: def.env, key: k ? { masked: mask(k.key), from: k.from, added: s[id]?.added || 0 } : null } : {}),
+      ...(def.needsKey ? { needsKey: true, env: k?.env || def.env, key: k ? { masked: mask(k.key), from: k.from, added: s[id]?.added || 0 } : null } : {}),
+      ...(def.direct ? { direct: true, base: baseFor(id), defaultBase: def.base, route: routeOf(id), envs: def.envs } : {}),
       app_: v ? { installed: true, version: v.version } : { installed: false },
       models: models.filter((m) => m.source === id).length, catalogueError: catalogue?.errors?.[id] || null,
       last: h ? { ok: !!h.ok, at: h.at, kind: h.kind || null, why: h.why || null, until: h.until || 0, model: h.model || null, scoped: !!h.scoped } : null,
@@ -462,7 +561,7 @@ export async function testSource(id) {
     noteSourceResult(id, null, null);
     // A passing test means it works again: models set aside after a failure are tried at once.
     dropModels(id);
-    return { ok: true, how: SOURCES[id].needsKey ? 'api' : 'local', ms: Date.now() - t, cost: 0, models: list.length, providers: [...new Set(list.map((m) => m.providerName).filter(Boolean))] };
+    return { ok: true, how: SOURCES[id].needsKey ? 'api' : 'local', ms: Date.now() - t, cost: 0, models: list.length, providers: [...new Set(list.map((m) => m.providerName).filter(Boolean))], ...(SOURCES[id].direct ? { priced: list.filter((m) => !m.priceUnknown).length } : {}) };
   } catch (e) { noteSourceResult(id, null, e); return { ok: false, kind: failureKind(e), error: String(e.message || e).slice(0, 300) }; }
 }
 
@@ -475,6 +574,9 @@ export { stripPass };
  * plus { model, fellBack, why } saying which model really answered.
  */
 export async function chatAny(body, signal, { orChat, fallback, stream = sourceStream, checkOn = stream === sourceStream } = {}) {
+  // An OpenRouter id the user runs on its maker's own API goes there (and back to OpenRouter if that fails).
+  const asked = body.model;
+  if (checkOn && !isSourceModel(body.model)) body = { ...body, model: await routeModel(body.model) };
   if (!isSourceModel(body.model)) { const r = await orChat({ ...body, messages: stripPass(body.messages) }, signal); return { ...r, model: body.model }; }
   stopped(signal);
   if (checkOn) body = { ...body, model: movedModel(body.model) };
@@ -492,7 +594,7 @@ export async function chatAny(body, signal, { orChat, fallback, stream = sourceS
       why = `${SOURCES[src].name} ${kindWords(failureKind(e))}: ${String(e.message || e).slice(0, 160)}`;
     }
   }
-  const fb = await fallback?.(body.model);
+  const fb = asked !== body.model && !isSourceModel(asked) ? asked : await fallback?.(body.model);
   if (!fb) throw Object.assign(new Error(why), { status: 400 });
   const r = await orChat({ ...body, model: fb, messages: stripPass(body.messages) }, signal);
   return { ...r, model: fb, fellBack: true, why };
