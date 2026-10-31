@@ -11,6 +11,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { loadCards, cardText, limitsLine, cardFile, CARDS_DIR, CARD_CHARS } from '../server/modelcards.js';
 import { runAgent, inPlaceEdit, deciderPicture, REVIEW_SYSTEM, FILM_KEYS, answerQuestion, answerSecret, answerApproval, answerBudget, setRunApproval, steerRun, holdCard, providerSlugs, blockedFor } from '../server/agent.js';
 import { saveProject, forgetProject, setProjectBudget } from '../server/store.js';
@@ -32,6 +33,7 @@ import { settleTempo, analyse, tempoOf, barsOf, fitPlan, pickWindows, cutsVsBeat
 import { checkHtml } from '../server/checks.js';
 import http from 'node:http';
 import { DEFAULTS, sourceFallbackFor, announcesStep, planValue, planTotal } from '../server/agent.js';
+import { parseSetup as mcpParse, saveServers as mcpSave, listServers as mcpList, connect as mcpConnect, callTool as mcpCall, toolsFor as mcpToolsFor, stopAll as mcpStopAll, MASK as MCP_MASK } from '../server/mcpclient.js';
 import { planOf, costSummary } from '../server/store.js';
 import { sourceOf, sourceStream, sameOnOpenRouter, failureKind, noteSourceResult, sourceSkip, forgetSourceHealth, priced as sourcePriced, chatAny } from '../server/sources.js';
 import { SECRET_FILES } from '../server/keys.js';
@@ -4967,4 +4969,80 @@ test('Spending adds up plan value apart from cost', () => {
   assert.equal(typeof s.total.plan, 'number');
   assert.ok(Number.isFinite(s.total.plan) && s.total.plan >= 0);
   for (const p of s.projects) assert.ok(Number.isFinite(p.plan) && p.plan >= 0);
+});
+
+// ---------- 🔌 MCP servers the agent may use (server/mcpclient.js) ----------
+const MCP_ECHO = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-echo.mjs');
+test('MCP setup: a config, a line written for another tool, a package or an address becomes QuorX servers', () => {
+  const cfg = mcpParse('Add this to your config:\n{ "mcpServers": { "github": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"], "env": { "GITHUB_TOKEN": "ghp_x" } }, "docs": { "url": "https://mcp.example.com/mcp", "headers": { "Authorization": "Bearer t" } } } }');
+  assert.deepEqual(cfg.servers.map((s) => [s.name, s.type]), [['github', 'stdio'], ['docs', 'http']]);
+  assert.equal(cfg.servers[0].env.GITHUB_TOKEN, 'ghp_x');
+  const claude = mcpParse('claude mcp add playwright -e DEBUG=1 -- npx -y @playwright/mcp@latest');
+  assert.equal(claude.from, 'Claude Code');
+  assert.deepEqual([claude.servers[0].name, claude.servers[0].command, claude.servers[0].args], ['playwright', 'npx', ['-y', '@playwright/mcp@latest']]);
+  assert.equal(claude.servers[0].env.DEBUG, '1');
+  const codex = mcpParse('codex mcp add context7 -- npx -y @upstash/context7-mcp');
+  assert.equal(codex.from, 'Codex');
+  const remote = mcpParse('claude mcp add --transport http linear https://mcp.linear.app/mcp');
+  assert.deepEqual([remote.servers[0].name, remote.servers[0].url], ['linear', 'https://mcp.linear.app/mcp']);
+  assert.equal(mcpParse('npx -y @upstash/context7-mcp').servers[0].name, 'context7-mcp');
+  assert.throws(() => mcpParse(''), /Paste a server config/);
+  assert.throws(() => mcpParse('{ "mcpServers": { "bad name!": { "url": "ftp://x" } } }'), /web address|https/);
+});
+
+test('MCP servers: saved with their keys hidden from the page; a masked value saved back keeps the key', () => {
+  mcpSave([{ name: 'echo', command: process.execPath, args: [MCP_ECHO], env: { ECHO_SUFFIX: '!', SECRET: 'abc' } }]);
+  const [s] = mcpList();
+  assert.deepEqual(s.env, { ECHO_SUFFIX: MCP_MASK, SECRET: MCP_MASK }, 'the page sees names only');
+  mcpSave([{ ...s, note: 'kept' }]);
+  const raw = JSON.parse(fs.readFileSync(path.join(process.env.OH_HOME, 'data', 'mcp.json'), 'utf8'));
+  assert.equal(raw.servers[0].env.SECRET, 'abc', 'the masked value kept the real one');
+  assert.throws(() => mcpSave([{ name: 'a', url: 'https://x.io' }, { name: 'a', url: 'https://y.io' }]), /Two servers are called "a"/);
+});
+
+test('MCP client: starts a server, lists its tools (read-only marked), calls one, and says when one fails', async () => {
+  mcpSave([{ name: 'echo', command: process.execPath, args: [MCP_ECHO], env: { ECHO_SUFFIX: '!' } }, { name: 'broken', command: process.execPath, args: ['-e', 'process.exit(3)'] }]);
+  try {
+    const c = await mcpConnect('echo');
+    assert.deepEqual(c.tools.map((t) => t.name), ['echo', 'add_note']);
+    assert.equal(await mcpCall('echo', 'echo', { text: 'hi' }), 'echo: hi!', 'its own env reached it');
+    assert.match(await mcpCall('echo', 'nope', {}), /^Error: no tool nope/);
+    const t = await mcpToolsFor(['echo', 'broken', 'not-there']);
+    assert.deepEqual(t.defs.map((d) => d.function.name), ['mcp__echo__echo', 'mcp__echo__add_note']);
+    assert.equal(t.byName.get('mcp__echo__echo').readOnly, true);
+    assert.equal(t.byName.get('mcp__echo__add_note').readOnly, false);
+    assert.equal(t.notes.length, 1); assert.match(t.notes[0], /^broken: /);
+    assert.equal(mcpList().find((x) => x.name === 'broken').status, 'error');
+  } finally { mcpStopAll(); }
+});
+
+test('MCP in a reply: the ticked server\'s tools are offered; Strict asks before one that changes things, not a read-only one', async () => {
+  mcpSave([{ name: 'echo', command: process.execPath, args: [MCP_ECHO] }]);
+  const asked = [];
+  try {
+    const { bodies } = await run((body, i) => [reply('', [['mcp__echo__echo', { text: 'yo' }]]), reply('', [['mcp__echo__add_note', { note: 'n' }]]), reply('Done.')][i], {
+      chatId: `mcp-${Date.now().toString(36)}`, settings: { mcpServers: ['echo'], approval: 'strict' },
+      onEvent: (e, id) => { if (e.t === 'approval' && e.mode === 'strict') { asked.push(e.what); setTimeout(() => answerApproval(id, e.id, { approve: true }), 10); } } });
+    assert.ok(bodies[0].tools.some((t) => t.function.name === 'mcp__echo__add_note'), 'offered to the model');
+    const res = toolResults(bodies.at(-1)).map(String);
+    assert.match(res[0], /^echo: yo\n/);
+    assert.match(res[1], /^kept 1 note\(s\)/);
+    assert.equal(asked.length, 1); assert.match(asked[0], /^Use add_note on the MCP server echo/);
+  } finally { mcpStopAll(); }
+});
+
+test('MCP setup from a chat: the card shows what will run and takes only a click; added, the tools are the agent\'s at once', async () => {
+  mcpSave([]);
+  const cards = [], events = [];
+  try {
+    const setup = JSON.stringify({ mcpServers: { echo: { command: process.execPath, args: [MCP_ECHO] } } });
+    const { bodies } = await run((body, i) => [reply('', [['mcp_setup', { action: 'add', setup }]]), reply('', [['mcp__echo__echo', { text: 'new' }]]), reply('Done.')][i], {
+      chatId: `mcps-${Date.now().toString(36)}`, settings: { approval: 'yolo' },
+      onEvent: (e, id) => { events.push(e); if (e.t === 'approval' && e.tool === 'mcp_setup') { cards.push(e); setTimeout(() => { assert.equal(answerApproval(id, e.id, { reply: 'yes add it' }), false, 'typed words don\'t answer it'); answerApproval(id, e.id, { approve: true }); }, 10); } } });
+    assert.equal(cards.length, 1, 'asked in YOLO too'); assert.equal(cards[0].buttonsOnly, true);
+    assert.match(cards[0].why, /echo: runs ".*mcp-echo\.mjs" on this computer/);
+    assert.match(String(toolResults(bodies[1])[0]), /Added echo to QuorX and ticked it for this chat\. Its tools are yours now: mcp__echo__echo/);
+    assert.match(String(toolResults(bodies.at(-1))[1]), /^echo: new\n/);
+    assert.ok(events.some((e) => e.t === 'mcp_on' && e.names.includes('echo')), 'the page hears it is ticked');
+  } finally { mcpStopAll(); }
 });

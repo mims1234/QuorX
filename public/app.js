@@ -198,7 +198,7 @@ function watchTrace(c, m, el) {
 const followsAgent = (c) => G.followAgent !== false && !c?.followSteps;
 function chatDoc(c) {
   return { id: c.id, title: c.title, projectId: c.projectId, created: c.created, approval: c.approval, paneHidden: c.paneHidden, tools: c.tools, followSteps: !!c.followSteps,
-    quorium: c.quorium || null, qModels: c.qModels || {}, ...(c.qBase != null ? { qBase: c.qBase } : {}),
+    quorium: c.quorium || null, qModels: c.qModels || {}, ...(c.qBase != null ? { qBase: c.qBase } : {}), mcp: c.mcp || [],
     agent: { ...c.agent, messages: c.agent.messages.map(stripMsg) } };
 }
 const timers = new Map();
@@ -227,7 +227,7 @@ async function mergeServerCopy(c, last) {
   const base = { ...head, agent: { ...head.agent, messages: last.msgs.map((s) => JSON.parse(s)), artifacts: Object.fromEntries(Object.entries(last.arts).map(([k, s]) => [k, JSON.parse(s)])) } };
   const mine = c.agent.messages, res = mergeChat(base, chatDoc(c), theirs, { live: (i) => isLiveMsg(c, mine[i]) });
   const next = res.ok ? res.doc : theirs;
-  for (const k of ['title', 'projectId', 'created', 'approval', 'paneHidden', 'tools', 'followSteps', 'quorium', 'qModels', 'qBase']) c[k] = next[k];
+  for (const k of ['title', 'projectId', 'created', 'approval', 'paneHidden', 'tools', 'followSteps', 'quorium', 'qModels', 'qBase', 'mcp']) c[k] = next[k];
   const { messages: _m, artifacts, ...agent } = next.agent;
   for (const k of Object.keys(c.agent)) if (!(k in agent) && k !== 'messages' && k !== 'artifacts') delete c.agent[k];
   Object.assign(c.agent, agent);
@@ -307,7 +307,8 @@ function normalise(doc) {
   return { id: doc.id, title: doc.title || 'New chat', projectId: doc.projectId || 'scratch', created: doc.created || Date.now(),
     approval: doc.approval || G.settings.approval || 'strict', paneHidden: doc.paneHidden, followSteps: !!doc.followSteps,
     tools: { ...DEFAULT_CHAT_TOOLS, ...(doc.tools || {}) },
-    quorium: typeof doc.quorium === 'string' ? doc.quorium : null, qModels: doc.qModels && typeof doc.qModels === 'object' ? doc.qModels : {}, ...(typeof doc.qBase === 'string' ? { qBase: doc.qBase } : {}),
+    mcp: Array.isArray(doc.mcp) ? doc.mcp.filter((x) => typeof x === 'string').slice(0, 30) : [],
+    quorium: typeof doc.quorium === 'string' ? doc.quorium : null, qModels: doc.qModels && typeof doc.qModels === 'object' ? doc.qModels : {}, ...(typeof doc.qBase === 'string' ? { qBase: doc.qBase }: {}),
     agent: { setup, allowed: agent.allowed || [], extraUsage: agent.extraUsage || [], summary: agent.summary, summaryAt: agent.summaryAt, ...(agent.videoMode ? { videoMode: agent.videoMode } : {}), ...(agent.videoFrom ? { videoFrom: agent.videoFrom } : {}), messages: (agent.messages || []).map((m) => ({ ...m, live: false, arts: m.arts && dedupeArts(m.arts) })), artifacts },
     ctx: [], images: [], docs: [], running: null, el: null };
 }
@@ -3079,7 +3080,8 @@ function renderComposerBar(c) {
     + sec('safety', 'Mode', permHTML('cq-perm'))
     + sec('plan', 'Plan', `<div class="lvl cq-plan" role="radiogroup" aria-label="Plan first"><span class="lvl-ico" aria-hidden="true">🗺</span>${PLAN.map(([v, w, tip]) => { const on = pv === v; return `<button type="button" class="lvl-b ${on ? 'on' : ''}" role="radio" aria-checked="${on}" data-plan="${v}" title="${esc(`Plan first: ${w}${on ? ' (now)' : ''} · all chats\n${tip}`)}">${w}</button>`; }).join('')}</div>`, 'all chats')
     + sec('money', 'Budget', `<div class="cs-caps">${CAPS.map(capLine).join('')}</div>`, 'all chats')
-    + sec('mic', 'Mic', `<div class="cs-tools">${quickToolsHTML(c, { micOnly: true })}</div>`, 'all chats');
+    + sec('mic', 'Mic', `<div class="cs-tools">${quickToolsHTML(c, { micOnly: true })}</div>`, 'all chats')
+    + sec('mcp', 'MCP', mcpRowHTML(c), 'this chat');
   const chipsEl = $('.cmp-chips', rack);
   const rv = s.reasoning || 'off', cv = CREATIVITY_INFO[s.creativity] ? s.creativity : 'default', yolo = c.approval === 'yolo';
   const capNow = CAPS.map((x) => Number(x[3])), capWas = [G.cfg.defaults.replyBudget ?? 1, G.cfg.defaults.budget ?? 0.5].map(Number);
@@ -3165,6 +3167,9 @@ function renderComposerBar(c) {
   };
   const gear = $('.cs-gear', rack); if (gear && !gear.dataset.wired) { gear.dataset.wired = '1'; gear.onclick = () => openSettings(); }
   wireQuickSettings(c, quick, chipsEl, followSlot);
+  // 🔌 The MCP servers this chat may use: a tick each; Manage opens ⚙ Settings → MCP servers.
+  for (const b of quick.querySelectorAll('.cq-mcp input')) b.onchange = () => { const n = b.dataset.mcp; c.mcp = b.checked ? [...new Set([...(c.mcp || []), n])] : (c.mcp || []).filter((x) => x !== n); saveChat(c); };
+  const mm = $('.cq-mcp-manage', quick); if (mm) mm.onclick = () => { c._cq = undefined; renderComposerBar(c); openSettings('mcp'); };
   // 👁 and 🧭 both steer the side pane, so one at a time in a chat: turning 👁 on here turns this chat's 🧭 off.
   $('.cmp-follow-b', followSlot).onclick = () => {
     if (c.followSteps) { c.followSteps = false; G.followAgent = true; saveChat(c); } else G.followAgent = G.followAgent === false;
@@ -3184,6 +3189,26 @@ function renderComposerBar(c) {
 // 🧩 Chrome and 🖥 Computer use reach a reply that is already running (as Strict / YOLO does): off stops it from
 // using them at its next step.
 function pushAccess(c) { if (c.running?.runId) postJ(`/api/runs/${c.running.runId}/mode`, { access: { chrome: !!c.tools?.chrome, apps: !!c.tools?.apps } }).catch(() => {}); }
+// ---------- 🔌 MCP servers (server/mcpclient.js) ----------
+// G.mcp: every server QuorX has (keys masked). A chat ticks the ones its agent may use (c.mcp); one deleted or turned
+// off in Settings is simply left out.
+async function loadMcp() {
+  const r = await fetch('/api/mcp').then((x) => x.json()).catch(() => null);
+  if (Array.isArray(r?.servers)) {
+    const before = JSON.stringify((G.mcp || []).map((s) => [s.name, s.on]));
+    G.mcp = r.servers;
+    // The message boxes' MCP rows follow servers added, removed or switched off.
+    if (before !== JSON.stringify(G.mcp.map((s) => [s.name, s.on]))) for (const ch of [...G.open.values(), G.homeDraft]) if (ch?.el?.root?.isConnected) renderComposerBar(ch);
+  }
+  return G.mcp || [];
+}
+const mcpOn = (c) => (c.mcp || []).filter((n) => (G.mcp || []).some((s) => s.name === n && s.on));
+function mcpRowHTML(c) {
+  const list = (G.mcp || []).filter((s) => s.on);
+  if (!list.length) return '<span class="cq-mcp-none">No servers yet.</span><button type="button" class="cq-mcp-manage">Add one…</button>';
+  const mine = new Set(c.mcp || []);
+  return `<span class="cq-mcp">${list.map((s) => `<label class="cq-mcp-one" title="${esc(`${s.type === 'http' ? s.url : [s.command, ...(s.args || [])].join(' ')}${s.tools?.length ? `\n${s.tools.length} tools: ${s.tools.map((t) => t.name).join(', ')}` : ''}`)}"><input type="checkbox" data-mcp="${esc(s.name)}" ${mine.has(s.name) ? 'checked' : ''}><span>${esc(s.name)}</span></label>`).join('')}</span><button type="button" class="cq-mcp-manage">Manage…</button>`;
+}
 // The settings popover over the message box: a chip opens its own part, ⋯ (or, in a narrow box, the one summary chip)
 // opens all of it. It stays open while you change things (each change draws the box again) and closes on a click
 // outside or Esc. The tray button, shown when the box is too narrow for the 👁 🧭 row, opens that row the same way.
@@ -4702,7 +4727,8 @@ function traceHTML(m) {
     else if (e.t === 'reading') row(e.at, `📝 <b>Prompt enhancer</b> ${esc(short(e.model))} read the request${e.late ? ' (too late for the first step; the deciders still use it)' : ''} · ${secs(e.ms)} · ${money(e.cost, 5)}<div class="sub" style="white-space:pre-wrap">${linkUrls(esc(e.text))}</div>`, 'note');
     else if (e.t === 'chat_off_project') row(e.at, `📝 Own chat from now on: you said “${esc(e.why || '')}”, so this chat leaves the project's notes, design and log alone. Tick Part of the project in the header to undo.`, 'note');
     else if (e.t === 'schedules_changed') row(e.at, `⏰ schedule ${esc({ create: 'created', update: 'changed', pause: 'paused', resume: 'resumed', run_now: 'run now', delete: 'deleted' }[e.action] || e.action)}<div class="sub">See ⏰ Schedules, or the ⏰ chip in this chat's header</div>`, 'ok');
-    else if (e.t === 'tools_on') row(e.at, `🧰 Switched on for this chat: ${(e.kinds || []).map((k) => esc({ image: 'pictures', video: 'video clips', music: 'music', speech: 'voice', apps: '🖥 computer use', chrome: '🧩 Chrome' }[k] || k)).join(', ')}${Object.keys(e.models || {}).length ? ` · ${Object.entries(e.models).map(([k, mm]) => `${esc(k)}: ${esc(short(mm))}`).join(', ')}` : ''}`, 'note');
+    else if (e.t === 'mcp_on') row(e.at, `🔌 Added to QuorX and ticked for this chat: ${(e.names || []).map(esc).join(', ')}`, 'note');
+    else if (e.t === 'tools_on') row(e.at,`🧰 Switched on for this chat: ${(e.kinds || []).map((k) => esc({ image: 'pictures', video: 'video clips', music: 'music', speech: 'voice', apps: '🖥 computer use', chrome: '🧩 Chrome' }[k] || k)).join(', ')}${Object.keys(e.models || {}).length ? ` · ${Object.entries(e.models).map(([k, mm]) => `${esc(k)}: ${esc(short(mm))}`).join(', ')}` : ''}`, 'note');
     else if (e.t === 'video_mode') row(e.at, e.on ? `🎬 <b>Video Mode</b> on${e.skills?.length ? ` · loaded ${e.skills.map(esc).join(', ')}` : ''}<div class="sub">Brief, story and storyboard come before anything is spent${e.first ? '' : ' (the brief was settled earlier in this chat)'}.</div>` : '🎬 Video Mode off: you said this is not a film', 'note');
     else if (e.t === 'reading_edit') row(e.at, e.text ? `📝 You corrected the reading<div class="sub" style="white-space:pre-wrap">${esc(e.text)}</div>` : '📝 You dropped the reading', 'note');
     else if (e.t === 'fresh_eyes_start') row(e.at, `👀 <b>Fresh eyes</b> ${esc(short(e.model))}: a problem came back, so a clean-context model takes a look<div class="sub">${(e.problems || []).map(esc).join('<br>')}</div>`, 'note');
@@ -5350,7 +5376,7 @@ async function runChat(c, text, ctx, imgs, { resumeOf, docs = [], more = 0, mode
   if (box && cut) { updateMsg(c, m); c.follow = true; c.toEnd?.(); }
   else if (box) { if (box.querySelector('.hint')) box.innerHTML = ''; if (user) box.appendChild(renderMsg(c, user)); box.appendChild(renderMsg(c, m)); c.follow = true; c.toEnd?.(); }
   const artifacts = Object.fromEntries(Object.entries(a.artifacts).map(([id, x]) => [id, x.kind === 'html' ? { kind: 'html', title: x.title, html: x.html, v: 1 } : x.kind === 'md' ? { kind: 'md', title: x.title, md: x.md || '', v: 1 } : { kind: x.kind, title: x.title, url: x.url?.startsWith('data:') ? undefined : x.url, v: 1 }]));
-  const settings = { ...G.settings, approval: c.approval, tools: chatTools(c), ...qualitySettings(c), chromeAccess: !!c.tools?.chrome, appsAccess: !!c.tools?.apps };
+  const settings = { ...G.settings, approval: c.approval, tools: chatTools(c), ...qualitySettings(c), chromeAccess: !!c.tools?.chrome, appsAccess: !!c.tools?.apps, mcpServers: mcpOn(c) };
   const body = resumeOf ? { runId: m.runId, chatId: c.id, resume: resumeOf, settings, allowed: a.allowed, cmdRules: a.cmdRules || [], apps: a.apps || [], folders: a.folders || [], reading: a.reading?.text || '', ...(more ? { continue: more, ...(model ? { model } : {}) } : {}) }
     : { runId: m.runId, chatId: c.id, projectId: c.projectId, chatTitle: c.title, setup: a.setup, settings, allowed: a.allowed, cmdRules: a.cmdRules || [], apps: a.apps || [], folders: a.folders || [], offProject: chatOffProject(c), history, summary: a.summary || '', reading: a.reading?.text || '', text, artifacts, context: ctx?.text || '', images: imgs.map((x) => x.full), docs: docs.map((d) => d.id), ...(cmts.length ? { comments: cmts } : {}), ...(a.videoMode ? { videoMode: a.videoMode } : {}), ...(a.videoMode === 'on' && a.videoFrom ? { videoFrom: a.videoFrom } : {}) };
   // Saved straight away, so a reload finds the running reply and reattaches to it.
@@ -5510,6 +5536,7 @@ async function followRun(c, m, open) {
         if (e.t === 'control') { c.driving = e.kind; markDriving(c); renderSidebar(); }
         // You switched paid tools on from the agent's card: they stay on for this chat (its 🧰 Tools menu shows them).
         if (e.t === 'schedules_changed') loadSchedules().then(() => { if ($('#schedules')?.open) drawSchedules(); renderChatHead(c); });
+        if (e.t === 'mcp_on') { c.mcp = [...new Set([...(c.mcp || []), ...(e.names || [])])]; saveChat(c); loadMcp().then(() => renderComposerBar(c)); }
         if (e.t === 'tools_on') { for (const k of e.kinds || []) if (CHAT_TOOLS.includes(k) || k === 'apps' || k === 'chrome') c.tools[k] = true; if ((e.kinds || []).some((k) => k === 'apps' || k === 'chrome')) renderComposerBar(c); saveChat(c); renderToolbars(); }
         if (e.t === 'video_mode') {
           const u = a.messages[a.messages.indexOf(m) - 1];
@@ -6308,7 +6335,7 @@ const UI_DEFAULTS = { density: 'comfortable', fontSize: 14, reduceMotion: 'syste
 const SETTINGS_NAV = [
   ['Harness', [['setup', '🧪', 'Setup check'], ['appearance', '🎨', 'Appearance'], ['privacy', '🕶', 'Privacy & display']]],
   ['Models', [['keys', '🔑', 'API keys'], ['models', '🧠', 'Models & catalogue'], ['sources', '🔌', 'Apps on this PC']]],
-  ['Agent', [['newchats', '✨', 'New chats'], ['loop', '🔁', 'Agent loop'], ['deciders', '⚖️', 'Deciders'], ['tools', '🧰', 'Tools & media'], ['video', '🎬', 'Video'], ['safety', '🛡', 'Approvals & safety'], ['budget', '💵', 'Budget'], ['skills', '🧩', 'Skills'], ['memory', '📌', 'Memory']]],
+  ['Agent', [['newchats', '✨', 'New chats'], ['loop', '🔁', 'Agent loop'], ['deciders', '⚖️', 'Deciders'], ['tools', '🧰', 'Tools & media'], ['video', '🎬', 'Video'], ['safety', '🛡', 'Approvals & safety'], ['budget', '💵', 'Budget'], ['skills', '🧩', 'Skills'], ['mcp', '🔌', 'MCP servers'], ['memory', '📌', 'Memory']]],
   ['Workspace', [['projects', '📁', 'Projects'], ['code', '💻', 'Code & servers'], ['docs', '📎', 'Documents']]],
   ['Data', [['usage', '📊', 'Usage & costs'], ['data', '🗄', 'Data & storage'], ['storage', '🧹', 'Storage'], ['shortcuts', '⌨️', 'Shortcuts'], ['about', 'ℹ️', 'About']]],
 ];
@@ -6621,6 +6648,7 @@ function settingsPanels(S) {
         + stRow('Shapes', '', stSeg('videoShapes', [['both', '16:9 + 9:16'], ['16:9', '16:9'], ['9:16', '9:16'], ['1:1', '1:1']], S.videoShapes ?? d.videoShapes)))),
     ]],
     skills: ['Skills', 'Playbooks the agent loads when a task fits. Write your own here, for all your projects or just one; agents can also save their own into a project.', ['<div id="skillPanel"></div><div class="sx-filter" id="skillFilter"></div><div id="skillList" class="st-skill-list"></div>']],
+    mcp: ['MCP servers', 'Tools from MCP servers for the agent: a program on this computer or a server on the web. Add one here, or paste its setup into a chat. Each chat ticks the ones it may use (MCP in the message box settings). Changes here save at once.', ['<div id="mcpPanel"></div>']],
     memory: ['Memory', 'A few facts and preferences about you that every chat gets, in every project. Changes here save at once.', ['<div id="memPanel"></div>']],
     projects: ['Projects', 'A project is a folder that many chats share. Changes here apply at once.', [`<div id="stProjects"></div>`]],
     docs: ['Documents', 'Files you attach with 📎. They are kept in the project folder\'s .quorx/uploads, which git ignores.', [
@@ -6754,6 +6782,7 @@ function stSummary(id, S) {
     case 'video': { const d = G.cfg.defaults || {}, live = (S.videoMode ?? d.videoMode) !== 'off', board = S.videoStoryboard !== false;
       return [live ? 'films' : 'off', on(live, 'On for films', 'Off: films build like any request') + (live ? stStatus(board ? 'ok' : 'off', board ? 'Storyboard before paid media' : 'No storyboard gate') + stStatus('info', `Up to ${S.videoAskLimit ?? d.videoAskLimit} questions`) : '')]; }
     case 'skills': { if (G.skillCount == null) return ['', '']; const off = (S.skillsOff || []).length; return [`${G.skillCount - off} on`, stStatus('ok', `${G.skillCount - off} on`) + (off ? stStatus('off', `${off} off`) : '')]; }
+    case 'mcp': { const l = G.mcp || [], on = l.filter((s) => s.on).length, bad = l.filter((s) => s.status === 'error').length; return l.length ? [`${on} on`, stStatus('ok', `${on} on`) + (bad ? stStatus('off', `${bad} not starting`) : '')] : ['', '']; }
     case 'memory': { const m = ST.mem; if (!m) return ['', '']; return [m.on ? `${m.n} notes` : 'off', on(m.on, 'On in every chat', 'Off: chats get nothing') + stStatus('info', `${m.n} note${m.n === 1 ? '' : 's'} · ${m.tokens} of ${m.limit} tokens`)]; }
     case 'projects': { const n = (G.projects || []).length; return [String(n), stStatus('info', `${n} project${n === 1 ? '' : 's'}`)]; }
     case 'code': return ['', stStatus('ok', 'Secrets protected') + stStatus('info', 'Ports 5300–5999')];
@@ -7031,6 +7060,7 @@ function wireSettings() {
   drawSourcesPanel();
   drawBlockedProviders(mark);
   drawMemoryPanel();
+  drawMcpPanel();
   drawSetupPanel();
   drawExtPanel();
   drawEmbedPick();
@@ -7649,6 +7679,63 @@ async function drawMemoryPanel(msg = '') {
     $('.mem-del', li).onclick = () => save({ items: m.items.filter((x) => x.id !== id) }, '✓ Forgotten');
   }
 }
+// ⚙ Settings → MCP servers: paste a setup (a config, a command line written for any tool, or an address), see what
+// it would run, add it; then each server with its status and tools, on/off, Ask (when YOLO lets its tools run), Start
+// and Remove. Keys stay on this computer: the list only shows their names.
+const MCP_UI = { q: '', preview: null, msg: '' };
+async function drawMcpPanel() {
+  const el = $('#mcpPanel');
+  if (!el) return;
+  const list = await loadMcp();
+  stRefresh?.();
+  const runs = (s) => (s.type === 'http' ? s.url : [s.command, ...(s.args || [])].join(' '));
+  const keys = (s) => Object.keys({ ...(s.env || {}), ...(s.headers || {}) });
+  const dot = (s) => `<span class="mcp-dot ${s.status}" title="${s.status === 'running' ? 'Running' : s.status === 'error' ? 'Could not start' : s.status === 'starting' ? 'Starting' : 'Not started: it starts when a chat needs it'}"></span>`;
+  const q = MCP_UI.q.trim().toLowerCase(), shown = list.filter((s) => !q || `${s.name} ${runs(s)}`.toLowerCase().includes(q));
+  const pv = MCP_UI.preview;
+  el.innerHTML = stCard('Add a server', 'Paste its setup as you found it: an <code>mcpServers</code> config, a line such as <code>npx -y @scope/server</code> or <code>claude mcp add …</code> (written for any tool: it goes into QuorX), or a server\'s https address.',
+    `<div class="mcp-add"><textarea id="mcpPaste" rows="4" spellcheck="false" placeholder='{ "mcpServers": { "github": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"] } } }'></textarea>
+      <div class="mcp-add-row"><input id="mcpName" maxlength="40" placeholder="Name (if it has none)" aria-label="Server name"><button type="button" class="kx-btn sm" id="mcpRead">Check it</button></div>
+      ${pv ? `<div class="mcp-preview"><b>This will add:</b><ul>${pv.servers.map((s) => `<li><b>${esc(s.name)}</b> <span class="mcp-kind">${s.type === 'http' ? 'web' : 'program'}</span> <code>${esc(runs(s))}</code>${keys(s).length ? ` <small>with ${keys(s).map(esc).join(', ')}</small>` : ''}</li>`).join('')}</ul>${pv.from && !/config$/.test(pv.from) ? `<p class="st-row-help">Written for ${esc(pv.from)}: this adds it to QuorX instead.</p>` : ''}<p class="st-row-help">It runs with your permissions: add only servers you trust.</p><button type="button" class="kx-btn sm primary" id="mcpAdd">Add to QuorX</button> <button type="button" class="kx-btn sm" id="mcpCancel">Cancel</button></div>` : ''}
+      <p class="mem-msg ${MCP_UI.msg.startsWith('✓') ? 'ok' : MCP_UI.msg ? 'bad' : ''}" role="status">${esc(MCP_UI.msg)}</p></div>`)
+    + stCard(`Your servers <small>${list.length}</small>`, '', (list.length > 6 ? `<input id="mcpSearch" class="mcp-search" placeholder="Search servers" value="${esc(MCP_UI.q)}" aria-label="Search servers">` : '')
+      + (shown.length ? `<ul class="mcp-list">${shown.map((s) => `<li class="mcp-item ${s.on ? '' : 'off'}" data-n="${esc(s.name)}">
+        <div class="mcp-top">${dot(s)}<b>${esc(s.name)}</b><span class="mcp-kind">${s.type === 'http' ? 'web' : 'program'}</span><code class="mcp-runs" title="${esc(runs(s))}">${esc(runs(s))}</code>
+          <label class="sx-check" title="On: chats can tick it. Off: no chat uses it."><input type="checkbox" class="mcp-on" ${s.on ? 'checked' : ''} aria-label="${esc(s.name)} on"><span class="sx-word"></span></label></div>
+        ${s.error ? `<p class="mcp-err">${esc(s.error)}</p>` : ''}
+        <div class="mcp-row">${keys(s).length ? `<small>With ${keys(s).map(esc).join(', ')} (kept here, not shown)</small>` : ''}
+          <span class="seg mcp-ask" role="radiogroup" aria-label="When its tools ask you" title="Auto: Strict asks before tools that change things; YOLO runs them. Every time: asks in YOLO too.">${[['auto', 'Auto'], ['always', 'Ask every time']].map(([v, w]) => `<button type="button" data-ask="${v}" class="${s.ask === v ? 'on' : ''}">${w}</button>`).join('')}</span>
+          <span class="cq-sp"></span><button type="button" class="kx-btn sm mcp-start">${s.status === 'running' ? 'Restart' : 'Start'}</button>${s.status === 'running' ? '<button type="button" class="kx-btn sm mcp-stop">Stop</button>' : ''}<button type="button" class="kx-btn sm danger mcp-del">Remove</button></div>
+        ${s.tools?.length ? `<details class="mcp-tools"><summary>${s.tools.length} tool${s.tools.length > 1 ? 's' : ''}</summary><ul>${s.tools.map((t) => `<li><code>${esc(t.name)}</code>${t.readOnly ? ' <span class="mcp-ro" title="The server says it only reads: Strict doesn\'t ask before it">read-only</span>' : ''}<small>${esc(t.description)}</small></li>`).join('')}</ul></details>` : ''}
+      </li>`).join('')}</ul>` : `<p class="st-row-help">${list.length ? 'No server matches.' : 'None yet. Add one above, or paste a setup into a chat and the agent adds it (you click to allow).'}</p>`));
+  const say = (m) => { MCP_UI.msg = m; drawMcpPanel(); };
+  const save = async (next, ok) => { const r = await postJ('/api/mcp', { servers: next }, 'PUT').catch((e) => ({ error: e.message })); if (r?.error) say(`Not saved: ${r.error}`); else { MCP_UI.msg = ok; drawMcpPanel(); } };
+  $('#mcpRead').onclick = async () => {
+    const r = await postJ('/api/mcp/parse', { text: $('#mcpPaste').value, name: $('#mcpName').value }).catch((e) => ({ error: e.message }));
+    if (r?.error) { MCP_UI.preview = null; say(r.error); return; }
+    MCP_UI.preview = { ...r, text: $('#mcpPaste').value, name: $('#mcpName').value }; MCP_UI.msg = ''; drawMcpPanel();
+  };
+  if (pv) {
+    $('#mcpPaste').value = pv.text; $('#mcpName').value = pv.name;
+    $('#mcpCancel').onclick = () => { MCP_UI.preview = null; say(''); };
+    $('#mcpAdd').onclick = async () => {
+      const r = await postJ('/api/mcp/add', { text: pv.text, name: pv.name }).catch((e) => ({ error: e.message }));
+      if (r?.error) { say(`Not added: ${r.error}`); return; }
+      MCP_UI.preview = null; say(`✓ Added ${pv.servers.map((s) => s.name).join(', ')}. Tick it in a chat's settings (MCP) to use it there.`);
+    };
+  }
+  const search = $('#mcpSearch'); if (search) search.oninput = () => { MCP_UI.q = search.value; drawMcpPanel().then(() => { const s2 = $('#mcpSearch'); if (s2) { s2.focus(); s2.setSelectionRange(s2.value.length, s2.value.length); } }); };
+  for (const li of el.querySelectorAll('.mcp-item')) {
+    const n = li.dataset.n, s = list.find((x) => x.name === n);
+    $('.mcp-on', li).onchange = (e) => save(list.map((x) => (x.name === n ? { ...x, on: e.target.checked } : x)), `✓ ${n} is ${e.target.checked ? 'on' : 'off'}`);
+    for (const b of li.querySelectorAll('[data-ask]')) b.onclick = () => save(list.map((x) => (x.name === n ? { ...x, ask: b.dataset.ask } : x)), `✓ ${n}: ${b.dataset.ask === 'always' ? 'asks every time' : 'asks as the mode says'}`);
+    $('.mcp-start', li).onclick = async (e) => { e.target.disabled = true; e.target.textContent = 'Starting…'; const r = await postJ('/api/mcp/test', { name: n }).catch(() => null); if (r?.servers) G.mcp = r.servers; const now = (G.mcp || []).find((x) => x.name === n); MCP_UI.msg = now?.status === 'running' ? `✓ ${n} is running: ${now.tools.length} tools` : `${n} could not start${now?.error ? `: ${now.error}` : ''}`; drawMcpPanel(); };
+    const stop = $('.mcp-stop', li); if (stop) stop.onclick = async () => { const r = await postJ('/api/mcp/stop', { name: n }).catch(() => null); if (r?.servers) G.mcp = r.servers; say(`✓ ${n} stopped (it starts again when a chat needs it)`); };
+    const del = $('.mcp-del', li);
+    del.onclick = () => { if (!del.classList.contains('sure')) { del.classList.add('sure'); del.textContent = 'Remove?'; return; } save(list.filter((x) => x.name !== n), `✓ Removed ${n}`); };
+    void s;
+  }
+}
 // The 👁 / 🙈 button that shows or masks amounts, switched in place.
 function revealButton(b, shown) { if (!b) return; b.title = shown ? 'Hide amounts' : 'Show amounts'; b.textContent = shown ? '🙈' : '👁'; }
 // ⚙ Models → Blocked providers: every OpenRouter provider with a ✓ box, blocked ones first, with a search and a
@@ -8110,6 +8197,7 @@ async function boot() {
   getJ('/api/storage/rules').then((r) => { if (r && !r.error) G.storageRules = r; });
   const d = G.cfg.defaults;
   G.quoriums = Array.isArray(G.cfg.quoriums) ? G.cfg.quoriums : [];
+  loadMcp();
   const saved = load();
   G.settings = { voters: d.voters, gate: d.gate, maxSteps: d.maxSteps, approval: d.approval, budget: d.budget, model: d.chatModel || d.setups.C.model, reasoning: 'off', ...(saved?.settings || {}) };
   G.settings.tools = Object.fromEntries(Object.entries(d.tools).map(([k, v]) => [k, { ...structuredClone(v), ...(saved?.settings?.tools?.[k] || {}) }]));

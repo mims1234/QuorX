@@ -130,3 +130,10 @@
   display: grid; place-items: center; font: 700 9px/1 var(--mono); background: var(--accent); color: var(--accent-ink); }
 /* the narrowest boxes: Strict / YOLO keeps its 🔒 / ⚡ and its colour; the word shows on hover */
 .composer-box.fold6 .cq-chip.cq-safety b { display: none; }
+/* 🔌 MCP in the settings popover: a tick per server this chat may use, and Manage */
+.cmp-quick .cq-mcp { display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.cmp-quick .cq-mcp-one { display: inline-flex; align-items: center; gap: 5px; font: 500 12px var(--mono); color: var(--text); cursor: pointer; }
+.cmp-quick .cq-mcp-one input { accent-color: var(--accent); width: 14px; height: 14px; margin: 0; }
+.cmp-quick .cq-mcp-none { font-size: 12px; color: var(--muted); }
+.cmp-quick .cq-mcp-manage { height: 22px; padding: 0 8px; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: var(--muted); font: 500 11.5px var(--font-ui); cursor: pointer; }
+.cmp-quick .cq-mcp-manage:hover { color: var(--text); background: var(--panel-3); }

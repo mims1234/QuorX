@@ -749,3 +749,33 @@
 #settings :is(#stSources, #stApiSources) > :is(.st-row-help, .kx-wait) { margin: 0 18px 16px; }
 #settings .src-key { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; margin: 0 0 4px; }
 #settings .src-key .kx-input { flex: 1 1 260px; min-width: 0; }
+/* ⚙ Settings → MCP servers */
+#mcpPanel .mcp-add { display: flex; flex-direction: column; gap: 8px; padding: 0 16px 14px; }
+#mcpPanel textarea { width: 100%; resize: vertical; min-height: 70px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line-strong); background: var(--surface-inset, var(--bg)); color: var(--text); font: 400 12px/1.5 var(--mono); }
+#mcpPanel .mcp-add-row { display: flex; gap: 8px; }
+#mcpPanel .mcp-add-row input, #mcpPanel .mcp-search { flex: 1; min-width: 0; height: 30px; padding: 0 10px; border-radius: 7px; border: 1px solid var(--line-strong); background: var(--surface-inset, var(--bg)); color: var(--text); font: 400 12.5px var(--font-ui); }
+#mcpPanel .mcp-search { margin: 0 16px 10px; width: calc(100% - 32px); }
+#mcpPanel .mcp-preview { padding: 10px 12px; border-radius: 8px; border: 1px solid var(--accent-border); background: var(--accent-dim); font-size: 12.5px; }
+#mcpPanel .mcp-preview ul { margin: 6px 0; padding-left: 18px; }
+#mcpPanel .mcp-preview code, #mcpPanel .mcp-runs { font: 400 11.5px var(--mono); color: var(--muted); }
+#mcpPanel .mcp-list { list-style: none; margin: 0; padding: 0 16px 14px; display: flex; flex-direction: column; gap: 8px; }
+#mcpPanel .mcp-item { padding: 10px 12px; border-radius: 9px; border: 1px solid var(--line); background: var(--panel-2); display: flex; flex-direction: column; gap: 6px; }
+#mcpPanel .mcp-item.off { opacity: .65; }
+#mcpPanel .mcp-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+#mcpPanel .mcp-top b { font: 600 13px var(--mono); color: var(--text-bright, var(--text)); }
+#mcpPanel .mcp-runs { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#mcpPanel .mcp-kind { font: 500 10px var(--mono); padding: 1px 5px; border: 1px dashed var(--line-strong); border-radius: 3px; color: var(--muted); text-transform: uppercase; }
+#mcpPanel .mcp-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--dim); }
+#mcpPanel .mcp-dot.running { background: var(--ok); box-shadow: 0 0 6px var(--ok-glow); }
+#mcpPanel .mcp-dot.error { background: var(--bad); }
+#mcpPanel .mcp-dot.starting { background: var(--amber); }
+#mcpPanel .mcp-err { margin: 0; font-size: 12px; color: var(--bad); }
+#mcpPanel .mcp-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+#mcpPanel .mcp-row small { color: var(--muted); font-size: 11.5px; }
+#mcpPanel .mcp-row .seg button { height: 24px; padding: 0 9px; font-size: 11.5px; }
+#mcpPanel .kx-btn.sure { color: var(--bad); border-color: var(--bad-border, var(--bad)); }
+#mcpPanel .mcp-tools summary { cursor: pointer; font-size: 12px; color: var(--muted); }
+#mcpPanel .mcp-tools ul { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+#mcpPanel .mcp-tools li { display: flex; flex-direction: column; gap: 1px; font-size: 12px; }
+#mcpPanel .mcp-tools li small { color: var(--muted); }
+#mcpPanel .mcp-ro { font: 500 10px var(--mono); color: var(--ok); }

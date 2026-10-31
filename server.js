@@ -26,6 +26,7 @@ import { createScheduler, loadSchedules, scheduleView, addSchedule, changeSchedu
 import { startScheduledChat } from './server/schedrun.js';
 import { loadMemory, saveMemory, memoryTokens, MEMORY_TOKENS } from './server/memory.js';
 import { listQuoriums, saveQuorium, removeQuorium } from './server/quoriums.js';
+import { listServers as mcpList, saveServers as mcpSave, addServers as mcpAdd, parseSetup as mcpParse, connect as mcpConnect, stopServer as mcpStop } from './server/mcpclient.js';
 import { CHECKS } from './server/harness-checks.js';
 import { startRun, getRun, stopRun, follow, runStatus, activeRuns, validRunId, scorecard, readLog, runEvents, recordRun, onRunEvent } from './server/runs.js';
 import { setBudget, budgetState } from './server/budget.js';
@@ -598,6 +599,14 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { chats });
     }
     // ---- memory: facts and preferences every chat gets (server/memory.js); the agent can only propose ----
+    // 🔌 MCP servers the agent may use (server/mcpclient.js): the list, saving it, starting one to see its tools, and
+    // reading a pasted setup (a config, or a line written for another tool) into servers before you add them.
+    if (url.pathname === '/api/mcp' && req.method === 'GET') return json(res, 200, { servers: mcpList() });
+    if (url.pathname === '/api/mcp' && req.method === 'PUT') { const b = JSON.parse(await readBody(req, 2e5) || '{}'); try { return json(res, 200, { servers: mcpSave(b.servers) }); } catch (e) { return json(res, 400, { error: e.message }); } }
+    if (url.pathname === '/api/mcp/parse' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 2e5) || '{}'); try { const p = mcpParse(b.text, b.name); return json(res, 200, { from: p.from, servers: p.servers.map((x) => ({ ...x, ...(x.env ? { env: Object.fromEntries(Object.keys(x.env).map((k) => [k, '(set)'])) } : {}), ...(x.headers ? { headers: Object.fromEntries(Object.keys(x.headers).map((k) => [k, '(set)'])) } : {}) })) }); } catch (e) { return json(res, 400, { error: e.message }); } }
+    if (url.pathname === '/api/mcp/add' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 2e5) || '{}'); try { return json(res, 200, { servers: mcpAdd(mcpParse(b.text, b.name).servers) }); } catch (e) { return json(res, 400, { error: e.message }); } }
+    if (url.pathname === '/api/mcp/test' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e4) || '{}'); try { await mcpConnect(String(b.name || ''), { fresh: true }); } catch { /* the list says why */ } return json(res, 200, { servers: mcpList() }); }
+    if (url.pathname === '/api/mcp/stop' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e4) || '{}'); mcpStop(String(b.name || '')); return json(res, 200, { servers: mcpList() }); }
     if (url.pathname === '/api/memory' && req.method === 'GET') { const m = loadMemory(); return json(res, 200, { ...m, tokens: memoryTokens(m.items), limit: MEMORY_TOKENS }); }
     if (url.pathname === '/api/memory' && req.method === 'PUT') {
       const b = JSON.parse(await readBody(req, 1e5) || '{}');

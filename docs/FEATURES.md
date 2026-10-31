@@ -18,6 +18,10 @@ a real browser and your real toolchains, and shows how it got every answer.
   guess first so you can see whether asking changed anything. Fixed checks ask them about every build too.
 - **It reads your request in full.** A prompt enhancer spells out what a request implies (a movie trailer implies a
   voice-over and music) and shows it under your message, where you can correct it.
+- **MCP servers.** Give the agent the tools of any MCP server: a program on your computer or a server on the web.
+  Paste its setup in ⚙ Settings → MCP servers (an `mcpServers` config, a `claude mcp add …` or `npx …` line, or an
+  address), or paste it into a chat and the agent adds it after you click to allow. Each chat ticks the servers it
+  may use. In Strict, tools that change things ask first; read-only ones don't. Keys stay on your computer.
 - **Quoriums.** A Quorium is a saved combo of the helper modules a chat uses (the prompt enhancer, reviewer, fresh
   eyes, deciders, helpers, pictures, video, music and voice), each on or off and each with its own model. Pick one
   beside the model in the message box; a coloured square stands for each module that is on. Click a square to change
