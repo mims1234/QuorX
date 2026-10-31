@@ -6569,7 +6569,7 @@ const UI_DEFAULTS = { density: 'comfortable', fontSize: 14, reduceMotion: 'syste
   showBalance: false, maskAmounts: true, blurPaths: false, usageBtn: true, notify: 'all', searchEngine: 'google', searchCustom: '' };
 const SETTINGS_NAV = [
   ['Harness', [['setup', '🧪', 'Setup check'], ['appearance', '🎨', 'Appearance'], ['privacy', '🕶', 'Privacy & display']]],
-  ['Models', [['providers', '🔌', 'Providers'], ['models', '🧠', 'Models & catalogue']]],
+  ['Models', [['providers', '🔌', 'Providers']]],
   ['Agent', [['newchats', '✨', 'New chats'], ['loop', '🔁', 'Agent loop'], ['deciders', '⚖️', 'Deciders'], ['tools', '🧰', 'Tools & media'], ['video', '🎬', 'Video'], ['safety', '🛡', 'Approvals & safety'], ['budget', '💵', 'Budget'], ['skills', '🧩', 'Skills'], ['mcp', '🧲', 'MCP servers'], ['memory', '📌', 'Memory']]],
   ['Workspace', [['projects', '📁', 'Projects'], ['code', '💻', 'Code & servers'], ['docs', '📎', 'Documents']]],
   ['Data', [['usage', '📊', 'Usage & costs'], ['data', '🗄', 'Data & storage'], ['storage', '🧹', 'Storage'], ['shortcuts', '⌨️', 'Shortcuts'], ['about', 'ℹ️', 'About']]],
@@ -6713,22 +6713,19 @@ function settingsPanels(S) {
         + stRow('Custom search address', 'Used when Custom is picked: the address of a search with %s where the words go.', `<input type="text" class="st-input sx-wide-input" data-bind="ui.searchCustom" value="${esc(U.searchCustom || '')}" placeholder="https://example.com/search?q=%s" spellcheck="false">`)),
     ]],
     providers: ['Providers', 'Where QuorX sends model calls: OpenRouter, your subscriptions, the model makers’ own APIs and the apps on this PC. Pick one to set it up; its key stays on this computer.', [
+      `<div class="pv-home">${stCard('Defaults for new chats', 'What a new chat starts with, from any provider below. Each chat can still pick any model and reasoning in its message box.', stRow('Default chat model', '', `<button type="button" class="sx-model" data-act="pickDefModel" id="defModel" data-id="${esc(S.model)}"><span class="sx-av" aria-hidden="true">${esc((short(S.model)[0] || '?').toUpperCase())}</span>${recDot(S.model, 'chat')} ${esc(short(S.model))} <small>${esc(shortPrice(S.model))}</small><span class="sx-change">Change</span></button>`)
+        + stRow('Default reasoning', '', stSeg('reasoning', [['off', 'Off'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']], S.reasoning || 'off')))}</div>`,
       '<div id="stProviders" class="pv"><div class="st-row-help">Loading the providers…</div></div>',
-      stCard('When a call fails', 'By default the reply stops and says why, and you pick another model. QuorX switches only if you choose a fallback.',
+      `<div class="pv-home">${stCard('When a call fails', 'By default the reply stops and says why, and you pick another model. QuorX switches only if you choose a fallback.',
         stRow('Fall back to', '', stCards('sourceFallback', [['off', '✋', 'Stop and tell me', 'You pick the next model'], ['same', '🔁', 'Same model on OpenRouter', 'When OpenRouter has it, else the model below'], ['model', '🎯', 'Always this model', 'The fallback model below']], S.sourceFallback || G.cfg.defaults.sourceFallback || 'off', 'compact'), { cls: 'sx-row-wide', id: 'stRowSrcFb' })
-        + stRow('Fallback model', 'Used when OpenRouter lacks the same model, and for every failed call with “Always this model”. Empty: your OpenRouter fallback model, else the default chat model. Billed at OpenRouter’s price.', `<div class="st-fb">${modelField('pickSourceFallback', S.sourceFallbackModel, 'srcFbModel', 'Default chat model')}${S.sourceFallbackModel ? '<button type="button" class="st-btn secondary sm" data-act="clearSourceFallback" title="Use the default chat model">✕</button>' : ''}</div>`)),
-    ]],
-    models: ['Models & catalogue', 'What new chats start with, from any source: OpenRouter, a subscription (⚙ Providers) or an app on this PC. The OpenRouter and Routing cards apply to OpenRouter calls only.', [
-      stCard('OpenRouter', 'The active key’s spending limit (hidden until you click 👁) and the model list.', '<div id="stModelLimit"><div class="st-row-help">Loading…</div></div>'
-        + stRow('Model lists and prices', `<span id="stCatInfo">${G.models ? `${G.models.length} models loaded` : 'Loading…'}</span>`, `<button type="button" class="st-btn secondary sm" data-act="refreshModels">↻ Refresh now</button>`), 'sx-limit'),
-      stCard('Models', 'What new chats start with, from any source; each chat can still pick any model from its message box.', stRow('Default chat model', '', `<button type="button" class="sx-model" data-act="pickDefModel" id="defModel" data-id="${esc(S.model)}"><span class="sx-av" aria-hidden="true">${esc((short(S.model)[0] || '?').toUpperCase())}</span>${recDot(S.model, 'chat')} ${esc(short(S.model))} <small>${esc(shortPrice(S.model))}</small><span class="sx-change">Change</span></button>`)
-        + stRow('Default reasoning', '', stSeg('reasoning', [['off', 'Off'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']], S.reasoning || 'off'))
-        + stRow('Fallback model', 'OpenRouter switches to it when a chat’s model fails or is down, billed at its own price. The trace marks steps it answered.', `<div class="st-fb">${modelField('pickFallback', S.fallbackModel, 'fbModel', 'None')}${S.fallbackModel ? '<button type="button" class="st-btn secondary sm" data-act="clearFallback" title="No fallback model">✕</button>' : ''}</div>`, { id: 'stRowFallback' }), '', 'stCardFallback'),
-      stCard('Routing on OpenRouter', 'How each agent call on OpenRouter finds a provider (subscriptions and apps on this PC choose their own). The one that answered shows on each step in “Steps”.',
+        + stRow('Fallback model', 'Used when OpenRouter lacks the same model, and for every failed call with “Always this model”. Empty: your OpenRouter fallback model, else the default chat model. Billed at OpenRouter’s price.', `<div class="st-fb">${modelField('pickSourceFallback', S.sourceFallbackModel, 'srcFbModel', 'Default chat model')}${S.sourceFallbackModel ? '<button type="button" class="st-btn secondary sm" data-act="clearSourceFallback" title="Use the default chat model">✕</button>' : ''}</div>`))}</div>`,
+      // OpenRouter's own settings: they go into OpenRouter's page when it is open (drawProviders moves them).
+      `<div id="pvOrHold" hidden><div id="pvOrCards">${stCard('Spending limit and models', 'The active key’s spending limit (hidden until you click 👁) and the model list.', '<div id="stModelLimit"><div class="st-row-help">Loading…</div></div>'
+        + stRow('Model lists and prices', `<span id="stCatInfo">${G.models ? `${G.models.length} models loaded` : 'Loading…'}</span>`, `<button type="button" class="st-btn secondary sm" data-act="refreshModels">↻ Refresh now</button>`), 'sx-limit')}${stCard('Fallback on OpenRouter', 'When a chat’s OpenRouter model fails or is down.', stRow('Fallback model', 'OpenRouter switches to it when a chat’s model fails or is down, billed at its own price. The trace marks steps it answered.', `<div class="st-fb">${modelField('pickFallback', S.fallbackModel, 'fbModel', 'None')}${S.fallbackModel ? '<button type="button" class="st-btn secondary sm" data-act="clearFallback" title="No fallback model">✕</button>' : ''}</div>`, { id: 'stRowFallback' }), '', 'stCardFallback')}${stCard('Routing on OpenRouter', 'How each agent call on OpenRouter finds a provider (subscriptions and apps on this PC choose their own). The one that answered shows on each step in “Steps”.',
         stRow('Provider order', 'Auto favours providers with reliable tool calling (OpenRouter’s Exacto). Cheapest and Fastest sort by price or speed instead.', stCards('providerSort', [['auto', '🎯', 'Auto', 'Reliable tool calling'], ['price', '💲', 'Cheapest', 'Lowest price first'], ['throughput', '⚡', 'Fastest', 'Highest throughput first']], S.providerSort || 'auto', 'compact'), { cls: 'sx-row-wide', id: 'stRowOrder' })
         + stRow('Only providers that support every feature', 'Skips providers that would silently drop tools, reasoning or other settings. If none qualifies, that reply uses the default routing.', stSwitch('requireParams', S.requireParams !== false), { id: 'stRowFeatures' })
         + stRow('Zero data retention only', 'Only providers that keep no copy of your prompts. Fewer models qualify.', stSwitch('zdrOnly', !!S.zdrOnly), { id: 'stRowZdr' })
-        + stRow('Blocked providers', 'OpenRouter never sends the agent’s calls to these: for every model, or only the models you pick (a provider can be fine for one model and break another). Block one that keeps breaking tool calls (the provider shows as “via …” above each reply). If only blocked providers serve a model, that reply uses them anyway, and says so.', '<div id="stBlocked"><div class="st-row-help">Loading providers…</div></div>', { cls: 'sx-row-wide', id: 'stRowBlocked' })),
+        + stRow('Blocked providers', 'OpenRouter never sends the agent’s calls to these: for every model, or only the models you pick (a provider can be fine for one model and break another). Block one that keeps breaking tool calls (the provider shows as “via …” above each reply). If only blocked providers serve a model, that reply uses them anyway, and says so.', '<div id="stBlocked"><div class="st-row-help">Loading providers…</div></div>', { cls: 'sx-row-wide', id: 'stRowBlocked' }))}</div></div>`,
     ]],
     newchats: ['New chats', 'What a fresh chat starts with. Each chat can change these in its message box.', [
       `<p class="sx-sec-help sx-mode-link">New chats start in ${S.approval === 'yolo' ? '⚡ YOLO' : '🔒 Strict'}. <button type="button" class="sp-link" data-act="openMode">Change it in 🛡 Approvals &amp; safety</button></p>`,
@@ -6971,6 +6968,8 @@ function openSettings(cat) {
   // API keys and Apps on this PC are one page now: Providers, opened on OpenRouter's keys or on the apps.
   if (cat === 'keys') { cat = 'providers'; Object.assign(pvState(), { tab: 'all', q: '', sel: 'openrouter' }); }
   if (cat === 'sources') { cat = 'providers'; Object.assign(pvState(), { tab: 'local', q: '', sel: null }); }
+  // Models & catalogue's OpenRouter settings live on OpenRouter's page; the defaults for new chats on Providers itself.
+  if (cat === 'models') { cat = 'providers'; Object.assign(pvState(), { tab: 'all', q: '', sel: 'openrouter' }); }
   if (cat) ST.cat = cat;
   $('#stSearch').value = '';
   drawSettings();
@@ -7154,6 +7153,11 @@ function drawProviders(say = null) {
   const list = groups.map((g) => { const rows = shown.filter((x) => pvKind(x) === g); return rows.length ? `${P.tab === 'all' ? `<div class="pv-gh"><b>${esc(PV_TABS.find(([k]) => k === g)[1])}</b><small>${esc(PV_NOTE[g])}</small></div>` : ''}${rows.map((x) => pvRow(x, x.id === P.sel)).join('')}` : ''; }).join('');
   const sel = all.find((x) => x.id === P.sel);
   const keep = $('.pv-search input', box) === document.activeElement;
+  // OpenRouter's own settings (built with the panel, so their controls are wired) wait in their holder while the page redraws.
+  const orCards = $('#pvOrCards'); if (orCards && $('#pvOrHold')) $('#pvOrHold').append(orCards);
+  // A chosen provider has a page of its own: the list, tabs and the page's other cards step aside until Back.
+  box.classList.toggle('has-sel', !!sel);
+  box.closest('.st-panel')?.classList.toggle('pv-in', !!sel);
   box.innerHTML = `<div class="pv-tabs" role="tablist" aria-label="Kinds of provider">${PV_TABS.map(([k, l]) => `<button type="button" class="pv-tab" role="tab" aria-selected="${P.tab === k}" data-pv-tab="${k}">${esc(l)} <span class="n">${k === 'all' ? all.length : all.filter((x) => pvKind(x) === k).length}</span></button>`).join('')}</div>
     <div class="pv-grid ${sel ? 'has-sel' : ''}">
       <div class="pv-listcol">
@@ -7167,7 +7171,7 @@ function drawProviders(say = null) {
   // The detail: OpenRouter's keys, or the source's card (key or app, options, plan, test, default model).
   const body = $('.pv-body', box);
   if (sel && body) {
-    if (sel.id === 'openrouter') { body.innerHTML = '<div id="stKeys"><div class="st-row-help">Loading keys…</div></div>'; drawKeysPanel(); }
+    if (sel.id === 'openrouter') { body.innerHTML = '<div id="stKeys"><div class="st-row-help">Loading keys…</div></div>'; drawKeysPanel(); if (orCards) body.append(orCards); }
     else drawSourceCards(body, { sources: ST.sources }, [sel], say);
   }
   box.onclick = (e) => {
@@ -7175,7 +7179,7 @@ function drawProviders(say = null) {
     const tab = t.closest('[data-pv-tab]')?.dataset.pvTab;
     if (tab) { P.tab = tab; drawProviders(); return; }
     const open = t.closest('[data-pv-open]')?.dataset.pvOpen;
-    if (open) { P.sel = open; drawProviders(); $('.pv-detail:not([hidden])', box)?.scrollIntoView({ block: 'nearest' }); return; }
+    if (open) { P.sel = open; drawProviders(); box.closest('.st-panel')?.scrollIntoView({ block: 'start' }); return; }
     if (t.closest('[data-pv-back]')) { const was = P.sel; P.sel = null; drawProviders(); $(`[data-pv-open="${CSS.escape(was)}"]`, box)?.focus(); return; }
     if (t.closest('[data-pv-clear]')) { P.q = ''; drawProviders(); }
   };
@@ -7484,7 +7488,7 @@ function resetCategory() {
   if (uiKeys) for (const k of uiKeys) U[k] = UI_DEFAULTS[k];
   if (ST.cat === 'appearance') { S.theme = null; G.theme = null; applyTheme(); }
   if (ST.cat === 'privacy') S.newsRemote = true;
-  if (ST.cat === 'models') { S.model = d.chatModel || d.setups.C.model; S.reasoning = 'off'; Object.assign(S, { providerSort: 'auto', requireParams: true, zdrOnly: false, fallbackModel: '', blockedProviders: [...(d.blockedProviders || [])] }); }
+  if (ST.cat === 'providers') { S.model = d.chatModel || d.setups.C.model; S.reasoning = 'off'; Object.assign(S, { providerSort: 'auto', requireParams: true, zdrOnly: false, fallbackModel: '', blockedProviders: [...(d.blockedProviders || [])] }); }
   if (ST.cat === 'providers') Object.assign(S, { sourceFallback: d.sourceFallback || 'off', sourceFallbackModel: '' });
   if (ST.cat === 'newchats') S.newChatTools = { ...DEFAULT_CHAT_TOOLS };
   if (ST.cat === 'loop') { S.maxSteps = d.maxSteps; S.compact = true; S.compactAt = 24000; Object.assign(S, { planFirst: d.planFirst, planSteps: d.planSteps, continueRounds: d.continueRounds, maxOutput: d.maxOutput, thinkShare: d.thinkShare, review: d.review, reviewModel: '', reviewTier: d.reviewTier, reviewSendBack: d.reviewSendBack, codeReview: d.codeReview, designLint: d.designLint, fixSteps: d.fixSteps, reviewRounds: d.reviewRounds, reviewBar: d.reviewBar, helpers: d.helpers, helperModel: '', helperSteps: d.helperSteps, helperMinFiles: d.helperMinFiles, retries: d.retries, parallel: d.parallel, verify: d.verify, verifyRounds: d.verifyRounds, askLimit: d.askLimit, trimAt: d.trimAt, buildThinking: d.buildThinking }); }
@@ -8301,7 +8305,7 @@ async function drawModelLimit() {
     if (act === 'reveal') { ST.revealLimit = !ST.revealLimit; paint(); }
     if (act === 'refresh') load();
   };
-  if (!k) { box.innerHTML = '<div class="kx-mlim"><span class="kx-mlim-name">No OpenRouter key yet.</span><span class="kx-spacer"></span><button type="button" class="st-btn ghost sm" data-lim="keys">Add one in API keys →</button></div>'; return; }
+  if (!k) { box.innerHTML = '<div class="kx-mlim"><span class="kx-mlim-name">No OpenRouter key yet.</span><span class="kx-spacer"></span><button type="button" class="st-btn ghost sm" data-lim="keys">Add a key ↑</button></div>'; return; }
   let u = null;
   const paint = () => {
     const show = ST.revealLimit, m = (x) => (show ? money(x ?? 0, 2) : '•••••');
