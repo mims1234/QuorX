@@ -1586,15 +1586,15 @@ const FILTERS = [
   ['fav', '★ Favourites', (m) => (G.favModels?.[m.kind] || []).includes(m.id)],
 ];
 const providerOf = (id) => String(id).replace(/^~/, '').split('/')[0] || 'other';
-// Models of an app on this PC (⚙ Settings → Apps on this PC) or of OpenCode Go (⚙ Settings → API keys) are the source,
+// Models of an app on this PC (⚙ Settings → Providers) or of OpenCode Go (⚙ Settings → Providers) are the source,
 // a slash, and its own id.
 // The model makers' own APIs (server/directapi.js) run with the user's key, billed per call at their prices.
 const DIRECT_NAME = { 'openai-api': 'OpenAI', 'anthropic-api': 'Anthropic', 'gemini-api': 'Google Gemini', 'moonshot-api': 'Moonshot (Kimi)', 'meta-api': 'Meta (Llama API)' };
 const SOURCE_NAME = { 'opencode-go': 'OpenCode Go', commandcode: 'Command Code', ...DIRECT_NAME, 'opencode-local': 'OpenCode on this PC', 'ollama-local': 'Ollama on this PC', 'claude-local': 'Claude Code on this PC', 'grok-local': 'Grok Build on this PC' };
 // Where in ⚙ Settings each source is set up.
-const srcWhere = (k) => (k === 'opencode-go' || k === 'commandcode' || DIRECT_NAME[k] ? 'API keys' : 'Apps on this PC');
+const srcWhere = () => 'Providers';
 // Each source's own logo (public/icons/brand), in the text colour (Claude's in its orange), with its name on hover.
-const SOURCE_LOGO = { openrouter: 'openrouter', 'opencode-go': 'opencode', commandcode: 'commandcode', 'opencode-local': 'opencode', 'ollama-local': 'ollama', 'claude-local': 'claude', 'grok-local': 'grok' };
+const SOURCE_LOGO = { openrouter: 'openrouter', 'opencode-go': 'opencode', commandcode: 'commandcode', 'opencode-local': 'opencode', 'ollama-local': 'ollama', 'claude-local': 'claude', 'grok-local': 'grok', 'openai-api': 'openai', 'anthropic-api': 'anthropic', 'gemini-api': 'gemini', 'moonshot-api': 'kimi', 'meta-api': 'meta' };
 const srcLogo = (k, title = k === 'openrouter' ? 'OpenRouter' : SOURCE_NAME[k] || k) => SOURCE_LOGO[k] ? `<span class="src-logo src-logo-${SOURCE_LOGO[k]}" style="--ico:url('icons/brand/${SOURCE_LOGO[k]}.svg')" role="img" aria-label="${esc(title)}" title="${esc(title)}"></span>` : DIRECT_NAME[k] ? `<span class="src-tag" title="${esc(title)}">${esc(SOURCE_SHORT[k])}</span>` : esc(title);
 const SOURCE_SHORT = { 'opencode-go': 'Go', commandcode: 'Command Code', 'openai-api': 'OpenAI', 'anthropic-api': 'Anthropic', 'gemini-api': 'Gemini', 'moonshot-api': 'Kimi', 'meta-api': 'Meta', 'opencode-local': 'This PC', 'ollama-local': 'Ollama', 'claude-local': 'Claude Code', 'grok-local': 'Grok Build' };
 // The sources offered, as words: "OpenCode Go, Claude Code or Grok Build".
@@ -1773,7 +1773,7 @@ function scoreBadge(id) {
 // Without an OpenRouter key, a chat model on OpenRouter can't run: it shows, locked.
 const orLocked = (id) => !G.cfg?.hasKey && PK.kind === 'chat' && !sourceOfId(id);
 // Why a row can't be picked ('' when it can): no OpenRouter key for it, or a model its app keeps for itself.
-const lockWhy = (m) => (m?.unusable ? m.unusable : orLocked(m?.id) ? 'Runs on OpenRouter: add an OpenRouter key first (⚙ Settings → API keys).' : '');
+const lockWhy = (m) => (m?.unusable ? m.unusable : orLocked(m?.id) ? 'Runs on OpenRouter: add an OpenRouter key first (⚙ Settings → Providers).' : '');
 // Everything about a model, for its row's hover: who made it, where it runs, price, limits, abilities, rating.
 function modelTip(m, caps, locked) {
   const r = rateModel(m, PK.kind), sc = G.scores?.[m.id];
@@ -6156,7 +6156,7 @@ function renderSpend() {
       ${b ? `<div class="bc-tiles">${tile('Last hour', b.windows?.h1?.value ?? 0)}${tile('Today', b.today ?? 0)}${tile('This week', b.week)}</div>
         <div class="bc-lines">${line('All time', b.usage ?? 0)}${b.remaining != null ? line('Credit left', b.remaining) : ''}${b.limit != null ? line('Key limit', b.limit) : ''}</div>`
         : `<div class="bc-wait">${G.cfg?.hasKey ? 'Loading…' : 'No OpenRouter key yet.'}</div>`}
-      <button type="button" class="bc-more">Details in ⚙ Settings → API keys</button>
+      <button type="button" class="bc-more">Details in ⚙ Settings → Providers</button>
     </div>`;
   // The card opens and closes with 💲 only (no hover), so its buttons stay put while you use them.
   el.classList.toggle('open', !!G.balanceOpen);
@@ -6420,7 +6420,7 @@ async function drawCosts() {
   const max = Math.max(0.000001, ...d.projects.map((p) => p.cost));
   body.innerHTML = `
     <div class="cost-totals cx-line"><div><small>Today</small><b>${money(d.total.today, 3)}</b></div><div><small>7 days</small><b>${money(d.total.week, 3)}</b></div><div><small>All time</small><b>${money(d.total.cost, 3)}</b></div><div><small>Chats</small><b class="cx-count">${d.total.chats}</b></div>${planTotal(d.total.plan) ? `<div class="cx-plan" title="Sub value: what replies on your subscriptions (OpenCode Go, Grok Build, Claude Code) used of them, at list price. Not paid per reply: your subscriptions cover it."><small>Sub value</small><b>≈ ${money(planTotal(d.total.plan), 3)}</b></div>` : ''}</div>
-    ${(d.total.byProvider && Object.keys(d.total.byProvider).length) ? `<div class="cx-provs" title="What each provider was paid, all time: OpenRouter, and each key or plan you added (⚙ Settings → API keys)"><small>By provider</small>${Object.entries(d.total.byProvider).filter(([, v]) => Number(v) > 0 && Number(v) < 1e6).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<span class="cx-prov"><span class="tc-prov">${esc(k)}</span><b>${money(v, 3)}</b></span>`).join('')}</div>` : ''}
+    ${(d.total.byProvider && Object.keys(d.total.byProvider).length) ? `<div class="cx-provs" title="What each provider was paid, all time: OpenRouter, and each key or plan you added (⚙ Settings → Providers)"><small>By provider</small>${Object.entries(d.total.byProvider).filter(([, v]) => Number(v) > 0 && Number(v) < 1e6).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<span class="cx-prov"><span class="tc-prov">${esc(k)}</span><b>${money(v, 3)}</b></span>`).join('')}</div>` : ''}
     <div class="cx-tools">
       <label class="mp-search cx-search"><span aria-hidden="true">⌕</span><input id="cxSearch" placeholder="Search every chat by title" aria-label="Search chats" value="${esc(COSTS.q)}"></label>
       <div class="mp-sorts" role="group" aria-label="Sort chats">${[['recent', 'Recent'], ['cost', 'Total'], ['today', 'Today'], ['messages', 'Messages'], ['name', 'Name']].map(([k, l]) => `<button type="button" class="mp-sort ${COSTS.sort === k ? 'on' : ''}" data-sort="${k}">${l}</button>`).join('')}</div>
@@ -6513,7 +6513,7 @@ const UI_DEFAULTS = { density: 'comfortable', fontSize: 14, reduceMotion: 'syste
   showBalance: false, maskAmounts: true, blurPaths: false, usageBtn: true, notify: 'all', searchEngine: 'google', searchCustom: '' };
 const SETTINGS_NAV = [
   ['Harness', [['setup', '🧪', 'Setup check'], ['appearance', '🎨', 'Appearance'], ['privacy', '🕶', 'Privacy & display']]],
-  ['Models', [['keys', '🔑', 'API keys'], ['models', '🧠', 'Models & catalogue'], ['sources', '🔌', 'Apps on this PC']]],
+  ['Models', [['providers', '🔌', 'Providers'], ['models', '🧠', 'Models & catalogue']]],
   ['Agent', [['newchats', '✨', 'New chats'], ['loop', '🔁', 'Agent loop'], ['deciders', '⚖️', 'Deciders'], ['tools', '🧰', 'Tools & media'], ['video', '🎬', 'Video'], ['safety', '🛡', 'Approvals & safety'], ['budget', '💵', 'Budget'], ['skills', '🧩', 'Skills'], ['mcp', '🧲', 'MCP servers'], ['memory', '📌', 'Memory']]],
   ['Workspace', [['projects', '📁', 'Projects'], ['code', '💻', 'Code & servers'], ['docs', '📎', 'Documents']]],
   ['Data', [['usage', '📊', 'Usage & costs'], ['data', '🗄', 'Data & storage'], ['storage', '🧹', 'Storage'], ['shortcuts', '⌨️', 'Shortcuts'], ['about', 'ℹ️', 'About']]],
@@ -6646,7 +6646,7 @@ function settingsPanels(S) {
         + stRow('Sidebar project order', 'Drag a project\'s header in the sidebar to move it.', `<button type="button" class="st-btn ghost sm" data-act="resetOrder">Reset order</button>`)),
     ]],
     privacy: ['Privacy & display', 'For streaming and screen sharing: what other people would see on your screen.', [
-      stCard('On a stream, people would see', 'What shows on your screen while you stream or share it. ⚙ Settings → API keys always has the numbers.', `<div class="sx-tiles">`
+      stCard('On a stream, people would see', 'What shows on your screen while you stream or share it. ⚙ Settings → Providers always has the numbers.', `<div class="sx-tiles">`
         + stTile('ui.showBalance', '💲', 'Show the 💲 balance button in the top bar', 'Off by default, so your OpenRouter spend never shows on a stream.', U.showBalance)
         + stTile('ui.maskAmounts', '👁', 'Hide amounts until I click 👁', 'All-time spend, key limits and account credits stay masked (•••) until you reveal them.', U.maskAmounts, `${stMoney('$12.40', 'sx-masked')} ${stTag('', 'masked')}`)
         + stTile('ui.blurPaths', '📂', 'Blur folder paths', 'Project folders in the explorer and settings are blurred until you hover them.', U.blurPaths, '<code class="sx-masked">D:\\Projects\\site</code>')
@@ -6656,10 +6656,13 @@ function settingsPanels(S) {
         stRow('Search with', '', stCards('ui.searchEngine', [...Object.entries(SEARCH_ENGINES).map(([k, [l]]) => [k, `<b class="sx-letter">${esc(l[0])}</b>`, l, '']), ['custom', '✎', 'Custom', '']], U.searchEngine || 'google', 'compact'), { cls: 'sx-row-wide' })
         + stRow('Custom search address', 'Used when Custom is picked: the address of a search with %s where the words go.', `<input type="text" class="st-input sx-wide-input" data-bind="ui.searchCustom" value="${esc(U.searchCustom || '')}" placeholder="https://example.com/search?q=%s" spellcheck="false">`)),
     ]],
-    keys: ['API keys', 'QuorX uses one active OpenRouter key for every call. Add as many as you like and switch between them.', [`<div id="stKeys"><div class="st-row-help">Loading keys…</div></div>`,
-      stCard('Subscriptions', 'A chat’s main model, or a Quorium module’s, can run on your OpenCode Go or Command Code subscription with its API key. Calls count against the plan’s limits or credits instead of costing per call.', '<div id="stApiSources"><div class="st-row-help">Loading…</div></div>', '', 'stSrcKeys'),
-      stCard('Model makers’ APIs', 'Run chats, Quorium modules, helpers and deciders on OpenAI, Anthropic, Google Gemini, Moonshot (Kimi) or Meta directly, with your own key. Each call is billed by that provider at its prices, counted in Spending by provider.', '<div id="stDirectSources"><div class="st-row-help">Loading…</div></div>', '', 'stSrcDirect')]],
-    models: ['Models & catalogue', 'What new chats start with, from any source: OpenRouter, a subscription (⚙ API keys) or an app on this PC. The OpenRouter and Routing cards apply to OpenRouter calls only.', [
+    providers: ['Providers', 'Where QuorX sends model calls: OpenRouter, your subscriptions, the model makers’ own APIs and the apps on this PC. Pick one to set it up; its key stays on this computer.', [
+      '<div id="stProviders" class="pv"><div class="st-row-help">Loading the providers…</div></div>',
+      stCard('When a call fails', 'By default the reply stops and says why, and you pick another model. QuorX switches only if you choose a fallback.',
+        stRow('Fall back to', '', stCards('sourceFallback', [['off', '✋', 'Stop and tell me', 'You pick the next model'], ['same', '🔁', 'Same model on OpenRouter', 'When OpenRouter has it, else the model below'], ['model', '🎯', 'Always this model', 'The fallback model below']], S.sourceFallback || G.cfg.defaults.sourceFallback || 'off', 'compact'), { cls: 'sx-row-wide', id: 'stRowSrcFb' })
+        + stRow('Fallback model', 'Used when OpenRouter lacks the same model, and for every failed call with “Always this model”. Empty: your OpenRouter fallback model, else the default chat model. Billed at OpenRouter’s price.', `<div class="st-fb">${modelField('pickSourceFallback', S.sourceFallbackModel, 'srcFbModel', 'Default chat model')}${S.sourceFallbackModel ? '<button type="button" class="st-btn secondary sm" data-act="clearSourceFallback" title="Use the default chat model">✕</button>' : ''}</div>`)),
+    ]],
+    models: ['Models & catalogue', 'What new chats start with, from any source: OpenRouter, a subscription (⚙ Providers) or an app on this PC. The OpenRouter and Routing cards apply to OpenRouter calls only.', [
       stCard('OpenRouter', 'The active key’s spending limit (hidden until you click 👁) and the model list.', '<div id="stModelLimit"><div class="st-row-help">Loading…</div></div>'
         + stRow('Model lists and prices', `<span id="stCatInfo">${G.models ? `${G.models.length} models loaded` : 'Loading…'}</span>`, `<button type="button" class="st-btn secondary sm" data-act="refreshModels">↻ Refresh now</button>`), 'sx-limit'),
       stCard('Models', 'What new chats start with, from any source; each chat can still pick any model from its message box.', stRow('Default chat model', '', `<button type="button" class="sx-model" data-act="pickDefModel" id="defModel" data-id="${esc(S.model)}"><span class="sx-av" aria-hidden="true">${esc((short(S.model)[0] || '?').toUpperCase())}</span>${recDot(S.model, 'chat')} ${esc(short(S.model))} <small>${esc(shortPrice(S.model))}</small><span class="sx-change">Change</span></button>`)
@@ -6670,12 +6673,6 @@ function settingsPanels(S) {
         + stRow('Only providers that support every feature', 'Skips providers that would silently drop tools, reasoning or other settings. If none qualifies, that reply uses the default routing.', stSwitch('requireParams', S.requireParams !== false), { id: 'stRowFeatures' })
         + stRow('Zero data retention only', 'Only providers that keep no copy of your prompts. Fewer models qualify.', stSwitch('zdrOnly', !!S.zdrOnly), { id: 'stRowZdr' })
         + stRow('Blocked providers', 'OpenRouter never sends the agent’s calls to these: for every model, or only the models you pick (a provider can be fine for one model and break another). Block one that keeps breaking tool calls (the provider shows as “via …” above each reply). If only blocked providers serve a model, that reply uses them anyway, and says so.', '<div id="stBlocked"><div class="st-row-help">Loading providers…</div></div>', { cls: 'sx-row-wide', id: 'stRowBlocked' })),
-    ]],
-    sources: ['Apps on this PC', 'A chat’s main model can run through OpenCode, Ollama, Claude Code or Grok Build on this computer, on the providers and sign-ins you set up there. OpenCode Go and Command Code run with their keys (⚙ API keys). Everything else stays on OpenRouter.', [
-      stCard('Apps', '', '<div id="stSources"><div class="st-row-help">Checking the apps on this PC…</div></div>', '', 'stSrcConnect'),
-      stCard('When a call fails', 'By default the reply stops and says why, and you pick another model. QuorX switches only if you choose a fallback.',
-        stRow('Fall back to', '', stCards('sourceFallback', [['off', '✋', 'Stop and tell me', 'You pick the next model'], ['same', '🔁', 'Same model on OpenRouter', 'When OpenRouter has it, else the model below'], ['model', '🎯', 'Always this model', 'The fallback model below']], S.sourceFallback || G.cfg.defaults.sourceFallback || 'off', 'compact'), { cls: 'sx-row-wide', id: 'stRowSrcFb' })
-        + stRow('Fallback model', 'Used when OpenRouter lacks the same model, and for every failed call with “Always this model”. Empty: your OpenRouter fallback model, else the default chat model. Billed at OpenRouter’s price.', `<div class="st-fb">${modelField('pickSourceFallback', S.sourceFallbackModel, 'srcFbModel', 'Default chat model')}${S.sourceFallbackModel ? '<button type="button" class="st-btn secondary sm" data-act="clearSourceFallback" title="Use the default chat model">✕</button>' : ''}</div>`)),
     ]],
     newchats: ['New chats', 'What a fresh chat starts with. Each chat can change these in its message box.', [
       `<p class="sx-sec-help sx-mode-link">New chats start in ${S.approval === 'yolo' ? '⚡ YOLO' : '🔒 Strict'}. <button type="button" class="sp-link" data-act="openMode">Change it in 🛡 Approvals &amp; safety</button></p>`,
@@ -6915,6 +6912,9 @@ function openSettings(cat) {
   ST.draft.newChatTools ??= { ...DEFAULT_CHAT_TOOLS };
   ST.draft.storage = structuredClone(G.storageRules || {});
   ST.dirty = false; ST.reveal = new Set(); ST.revealAccount = false; ST.revealLimit = false; ST.changed = new Set();
+  // API keys and Apps on this PC are one page now: Providers, opened on OpenRouter's keys or on the apps.
+  if (cat === 'keys') { cat = 'providers'; Object.assign(pvState(), { tab: 'all', q: '', sel: 'openrouter' }); }
+  if (cat === 'sources') { cat = 'providers'; Object.assign(pvState(), { tab: 'local', q: '', sel: null }); }
   if (cat) ST.cat = cat;
   $('#stSearch').value = '';
   drawSettings();
@@ -6945,11 +6945,11 @@ function stSummary(id, S) {
     case 'setup': { const r = ST.setup; if (!r) return ['', '']; return [r.missing ? `${r.missing} missing` : `${r.ok} ready`, stStatus('ok', `${r.ok} ready`) + (r.warn ? stStatus('warn', `${r.warn} optional`) : '') + (r.missing ? stStatus('bad', `${r.missing} missing`) : ''), r.missing ? 'bad' : '']; }
     case 'appearance': { const t = S.theme === 'dark' ? 'Dark' : S.theme === 'light' ? 'Light' : 'System'; return [t, stStatus('info', `${t} theme`) + stStatus('info', U.density === 'compact' ? 'Compact' : 'Comfortable') + stStatus('info', `${U.fontSize} px text`) + stStatus('info', `Motion: ${{ system: 'follows system', full: 'on', reduce: 'reduced' }[motionPref(U)]}`) + stStatus('info', `Sidebar: ${SIDE_START[U.sidebarStart] || U.sidebarStart}`) + stStatus('info', `Artifact pane: ${PANE_MODE[U.paneMode] || U.paneMode}`)]; }
     case 'privacy': return [U.maskAmounts ? 'masked' : 'visible', stStatus(U.maskAmounts ? 'ok' : 'warn', U.maskAmounts ? 'Amounts masked' : 'Amounts visible') + stStatus(U.showBalance ? 'warn' : 'off', U.showBalance ? 'Balance button shown' : 'Balance button hidden') + on(U.blurPaths, 'Paths blurred', 'Paths visible')];
-    case 'keys': { const k = ST.keys; if (!G.cfg.hasKey) return ['add one', stStatus('bad', 'No OpenRouter key yet: only models of an app on this PC or OpenCode Go run'), 'bad']; if (!k) return ['', '']; return [`${k.n} key${k.n === 1 ? '' : 's'}`, stStatus('ok', `${esc(k.active || 'A key')} is active`) + stStatus('off', `${k.n} key${k.n === 1 ? '' : 's'} on this computer`)]; }
+    case 'providers': { const l = ST.sources; if (!l) return ['', ''];
+      const live = l.filter((x) => x.on && srcReady(x)), bad = l.filter((x) => srcState(x).cls === 'warn'), nokey = l.filter((x) => x.needsKey && !x.key);
+      const or = G.cfg.hasKey ? stStatus('ok', 'OpenRouter: on') : stStatus('bad', 'No OpenRouter key: only other providers run');
+      return [`${live.length + (G.cfg.hasKey ? 1 : 0)} on`, or + stStatus(live.length ? 'ok' : 'off', `${live.length} other${live.length === 1 ? '' : 's'} on`) + (bad.length ? stStatus('bad', `${bad.length} failing`) : '') + stStatus('off', `${nokey.length} without a key`), bad.length || !G.cfg.hasKey ? 'bad' : '']; }
     case 'models': return [short(S.model), stStatus('info', `New chats: ${esc(short(S.model))}`) + (G.models ? stStatus('ok', `${G.models.length} models loaded`) : '') + stStatus('info', `${PROVIDER_SORT[S.providerSort || 'auto']} routing`) + on(S.fallbackModel, `Fallback: ${esc(short(S.fallbackModel || ''))}`, 'No fallback')];
-    case 'sources': { const l = ST.sources?.filter((x) => x.local); if (!l) return ['', ''];
-      const live = l.filter((x) => x.on && srcReady(x)), fb = S.sourceFallback || G.cfg.defaults.sourceFallback || 'off';
-      return [live.length ? `${live.length} on` : 'off', l.map((x) => { const st = srcState(x); return stStatus(st.cls, `${esc(x.name)}: ${esc(st.word)}`); }).join('') + stStatus(fb === 'off' ? 'info' : 'warn', fb === 'off' ? 'A failed call stops: you pick the model' : `Fallback: ${fb === 'model' && S.sourceFallbackModel ? esc(short(S.sourceFallbackModel)) : 'same model on OpenRouter'}`), live.some((x) => srcState(x).cls === 'bad') ? 'bad' : '']; }
     case 'newchats': { const q = QUALITY_TOOLS.filter((k) => S.newChatTools?.[k] !== false).length, p = CHAT_TOOLS.filter((k) => S.newChatTools?.[k]).length;
       return [S.approval === 'yolo' ? '⚡ YOLO' : '🔒 Strict', stStatus('info', S.approval === 'yolo' ? '⚡ YOLO: never asks' : `🔒 Strict: asks before ${S.strictAsk === 'every' ? 'every tool' : 'paid media'}`) + stStatus(q ? 'ok' : 'off', `${q} of ${QUALITY_TOOLS.length} checking tools on`) + stStatus(p ? 'warn' : 'off', p ? `${p} paid media on` : 'Paid media off')]; }
     case 'loop': return [`${S.maxSteps} steps`, stStatus('info', `${S.maxSteps} calls a reply`) + stStatus('info', `Plan first: ${PLAN_FIRST[S.planFirst || 'off']}`) + on(S.verify !== false, 'Checks on', 'Checks off') + on((S.review || 'builds') !== 'off', `Reviewer: ${S.review || 'builds'}`, 'No reviewer')];
@@ -7037,33 +7037,125 @@ function srcInfoHTML(x, g) {
   const run = sv.perCall ? (sv.calls ? `${sv.calls} call${sv.calls === 1 ? '' : 's'} running` : 'starts for each call') : sv.running ? `server running (port ${sv.port})` : 'its server starts when a chat needs it';
   return `<p class="src-info">${esc(x.appName || x.app)}${x.app_?.version ? ` ${esc(x.app_.version)}` : ''} · ${run}</p>`;
 }
-// The apps on this PC go in Apps on this PC; a source that takes a key (OpenCode Go) goes in API keys.
-// The cards draw at once from what the server knows; app versions and model lists (which can take a while: apps
-// start, lists load) follow, and the cards redraw with them unless you've started typing in one.
+// ---------- ⚙ Providers: OpenRouter, the subscriptions, the makers' own APIs and the apps on this PC, on one page ----------
+// Tabs with counts and a search over a compact list, one row per provider; picking one opens its detail (its key or
+// app, options, plan, usage and links) beside the list on a wide page, or in place of it on a narrow one (Back returns).
+const PV_TABS = [['all', 'All'], ['openrouter', 'OpenRouter'], ['plan', 'Subscriptions'], ['direct', 'Makers’ APIs'], ['local', 'On this PC']];
+const PV_NOTE = { openrouter: 'One key, many makers', plan: 'A key with plan limits', direct: 'Pay the maker per call', local: 'Your sign-ins there, no key here' };
+const pvKind = (x) => (x.id === 'openrouter' ? 'openrouter' : x.local ? 'local' : x.direct ? 'direct' : 'plan');
+const pvState = () => (ST.pv ??= { tab: 'all', q: '', sel: null });
+// OpenRouter as a row like the others: on when a key is in.
+function pvOpenRouter() {
+  const n = ST.keys?.n ?? (G.cfg.hasKey ? 1 : 0);
+  return { id: 'openrouter', name: 'OpenRouter', short: 'OpenRouter', billing: 'paid', on: !!G.cfg.hasKey, installed: !!G.cfg.hasKey, needsKey: true, keys: n,
+    models: (G.models || []).filter((m) => !m.source && m.kind === 'chat').length, site: 'https://openrouter.ai', docs: 'https://openrouter.ai/docs', keyUrl: 'https://openrouter.ai/settings/keys' };
+}
+const pvAll = () => [pvOpenRouter(), ...(ST.sources || [])];
+const pvUse = (x) => ST.pvUsage?.[x.name] || null;
+const pvBilling = (x) => stTag(x.billing === 'plan' ? 'info' : x.billing === 'mixed' ? 'violet' : x.billing === 'free' ? 'ok' : 'warn', x.billing === 'plan' ? 'subscription' : x.billing === 'mixed' ? 'your providers' : x.billing === 'free' ? 'free · on this PC' : 'pay per use');
+const pvStatus = (x) => { if (x.id === 'openrouter') return x.on ? { cls: 'ok', word: 'on' } : { cls: 'bad', word: 'no key' }; const st = srcState(x); return st.cls === 'warn' ? { cls: 'bad', word: 'failed' } : st; };
+const pvLogo = (x) => (SOURCE_LOGO[x.id] ? srcLogo(x.id, x.name) : `<span class="mp-ava" style="--h:${hue(x.id)}" aria-hidden="true">${esc(initials(x.name))}</span>`);
+const pvMoney = (v) => stMoney(money(v || 0, v > 0 && v < 0.01 ? 4 : 2), v > 0 ? '' : 'zero');
+function pvRow(x, sel) {
+  const st = pvStatus(x), u = pvUse(x);
+  const ctl = x.id === 'openrouter' ? `<span class="pv-keys">${x.keys} key${x.keys === 1 ? '' : 's'}</span>`
+    : `<label class="sx-check src-on" title="${srcReady(x) ? `Show ${esc(x.name)}’s models in the model pickers` : x.needsKey ? 'Add the key first' : `Install ${esc(x.appName || x.app)} first`}"><input type="checkbox" data-pv-on="${esc(x.id)}" ${x.on && srcReady(x) ? 'checked' : ''} ${!srcReady(x) ? 'disabled' : ''} aria-label="Use ${esc(x.name)}"><span class="sx-word"></span></label>`;
+  return `<div class="pv-row ${sel ? 'sel' : ''}" data-pv="${esc(x.id)}">
+    <button type="button" class="pv-row-main" data-pv-open="${esc(x.id)}" aria-current="${sel}">
+      ${pvLogo(x)}<span class="pv-nm">${esc(x.name)}</span><span class="pv-tagcell">${pvBilling(x)}</span>
+      <span class="pv-st">${stStatus(st.cls, esc(st.word))}</span>
+      <span class="pv-mc ${x.models ? '' : 'none'}">${x.models || '–'}<small class="pv-unit"> models</small></span>
+      <span class="pv-sp" title="Spent this month">${pvMoney(u?.month)}</span>
+    </button>
+    <span class="pv-ctl">${ctl}</span>
+  </div>`;
+}
+// What it was paid: today, this month, all time, calls, its top models and the last 14 days.
+function pvUsageHTML(x) {
+  const u = pvUse(x);
+  if (!u || !(u.all > 0 || u.calls)) return `<section class="pv-sec"><h4>Usage</h4><p class="st-row-help">Nothing spent here yet${x.billing === 'plan' ? ' beyond the plan' : ''}.</p></section>`;
+  const max = Math.max(...u.days, 1e-9);
+  const bars = u.days.map((v, i) => `<i style="height:${Math.max(v > 0 ? 8 : 2, Math.round((v / max) * 100))}%" title="${esc(new Date(Date.now() - (13 - i) * 864e5).toLocaleDateString([], { month: 'short', day: 'numeric' }))}: ${money(v, 4)}"></i>`).join('');
+  const top = Object.entries(u.models).sort((a, b) => b[1] - a[1]).slice(0, 3);
+  return `<section class="pv-sec"><h4>Usage</h4>
+    <div class="pv-kpis"><div class="pv-kpi"><small>Today</small>${pvMoney(u.today)}</div><div class="pv-kpi"><small>This month</small>${pvMoney(u.month)}</div><div class="pv-kpi"><small>All time</small>${pvMoney(u.all)}</div><div class="pv-kpi"><small>Calls</small><b>${u.calls.toLocaleString()}</b></div></div>
+    <div class="pv-spark" role="img" aria-label="Spending over the last 14 days">${bars}</div><div class="pv-spark-axis"><span>14 days ago</span><span>today</span></div>
+    ${top.length ? `<ul class="pv-top">${top.map(([id, v]) => `<li><span title="${esc(id)}">${esc(short(id))}</span>${pvMoney(v)}</li>`).join('')}</ul>` : ''}
+    ${u.last ? `<p class="st-row-help">Last used ${esc(ago(u.last))}.</p>` : ''}
+  </section>`;
+}
+const pvAbout = (x) => `<section class="pv-sec pv-about"><h4>About</h4><p class="st-row-help">${esc(SRC_GUIDE[x.id]?.what || (x.id === 'openrouter' ? 'One key reaches hundreds of models from every maker. Deciders, media, helpers and fallbacks run here unless you pick a model of another provider.' : ''))}</p>
+  <p class="pv-links">${x.site ? `<a class="sp-link" href="${esc(x.site)}" target="_blank" rel="noopener noreferrer">Website ↗</a>` : ''}${x.docs ? `<a class="sp-link" href="${esc(x.docs)}" target="_blank" rel="noopener noreferrer">Docs ↗</a>` : ''}${x.keyUrl && x.needsKey ? `<a class="sp-link" href="${esc(x.keyUrl)}" target="_blank" rel="noopener noreferrer">Console ↗</a>` : ''}</p></section>`;
+// The list (tabs, search, rows by kind) and the chosen provider's detail.
+function drawProviders(say = null) {
+  const box = $('#stProviders'); if (!box) return;
+  const P = pvState(), all = pvAll(), q = P.q.trim().toLowerCase();
+  const inTab = (x) => P.tab === 'all' || pvKind(x) === P.tab;
+  const hit = (x) => !q || [x.name, x.id, x.short, x.appName].some((s) => String(s || '').toLowerCase().includes(q)) || (q === 'llama' && x.id === 'meta-api');
+  const shown = all.filter((x) => inTab(x) && hit(x));
+  if (P.sel && !all.some((x) => x.id === P.sel)) P.sel = null;
+  const groups = P.tab === 'all' ? ['openrouter', 'plan', 'direct', 'local'] : [P.tab];
+  const list = groups.map((g) => { const rows = shown.filter((x) => pvKind(x) === g); return rows.length ? `${P.tab === 'all' ? `<div class="pv-gh"><b>${esc(PV_TABS.find(([k]) => k === g)[1])}</b><small>${esc(PV_NOTE[g])}</small></div>` : ''}${rows.map((x) => pvRow(x, x.id === P.sel)).join('')}` : ''; }).join('');
+  const sel = all.find((x) => x.id === P.sel);
+  const keep = $('.pv-search input', box) === document.activeElement;
+  box.innerHTML = `<div class="pv-tabs" role="tablist" aria-label="Kinds of provider">${PV_TABS.map(([k, l]) => `<button type="button" class="pv-tab" role="tab" aria-selected="${P.tab === k}" data-pv-tab="${k}">${esc(l)} <span class="n">${k === 'all' ? all.length : all.filter((x) => pvKind(x) === k).length}</span></button>`).join('')}</div>
+    <div class="pv-grid ${sel ? 'has-sel' : ''}">
+      <div class="pv-listcol">
+        <div class="pv-tools"><label class="pv-search"><span aria-hidden="true">⌕</span><input class="st-input" placeholder="Filter by name" aria-label="Filter providers by name" value="${esc(P.q)}"></label><span class="pv-count">${shown.length} of ${all.length}</span></div>
+        <div class="pv-cols" aria-hidden="true"><span>Provider</span><span>Status</span><span class="r">Models</span><span class="r">This month</span><span class="r">On</span></div>
+        <div class="pv-list">${list || `<div class="pv-empty">No provider matches “${esc(P.q)}”. <button type="button" class="mp-link" data-pv-clear>Clear the search</button></div>`}</div>
+      </div>
+      <div class="pv-detail" ${sel ? '' : 'hidden'}>${sel ? `<button type="button" class="kx-btn sm pv-back" data-pv-back>← Providers</button><div class="pv-body"></div>${pvUsageHTML(sel)}${pvAbout(sel)}` : ''}</div>
+    </div>`;
+  if (keep) { const i = $('.pv-search input', box); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }
+  // The detail: OpenRouter's keys, or the source's card (key or app, options, plan, test, default model).
+  const body = $('.pv-body', box);
+  if (sel && body) {
+    if (sel.id === 'openrouter') { body.innerHTML = '<div id="stKeys"><div class="st-row-help">Loading keys…</div></div>'; drawKeysPanel(); }
+    else drawSourceCards(body, { sources: ST.sources }, [sel], say);
+  }
+  box.onclick = (e) => {
+    const t = e.target;
+    const tab = t.closest('[data-pv-tab]')?.dataset.pvTab;
+    if (tab) { P.tab = tab; drawProviders(); return; }
+    const open = t.closest('[data-pv-open]')?.dataset.pvOpen;
+    if (open) { P.sel = open; drawProviders(); $('.pv-detail:not([hidden])', box)?.scrollIntoView({ block: 'nearest' }); return; }
+    if (t.closest('[data-pv-back]')) { const was = P.sel; P.sel = null; drawProviders(); $(`[data-pv-open="${CSS.escape(was)}"]`, box)?.focus(); return; }
+    if (t.closest('[data-pv-clear]')) { P.q = ''; drawProviders(); }
+  };
+  $('.pv-search input', box).oninput = (e) => { P.q = e.target.value; drawProviders(); };
+  // On and off from the list (the detail's own checkbox does the same through its card).
+  for (const cb of box.querySelectorAll('[data-pv-on]')) cb.onchange = async (e) => {
+    e.stopPropagation(); cb.disabled = true;
+    const res = await postJ(`/api/sources/${cb.dataset.pvOn}/on`, { on: cb.checked });
+    if (res.error) { cb.checked = !cb.checked; cb.disabled = false; flashTip(cb, res.error); return; }
+    if (res.sources) ST.sources = res.sources;
+    await loadModels(false); drawSourcesPanel();
+  };
+}
+// The server's view of every source (and what each provider was paid), then the page. The page draws at once from
+// what the server knows; app versions and model lists (which can take a while: apps start, lists load) follow, and it
+// redraws with them unless you've started typing in it.
 async function drawSourcesPanel(say = null) {
-  if (!$('#stSources') && !$('#stApiSources') && !$('#stDirectSources')) return;
+  const box = $('#stProviders'); if (!box) return;
   const get = (full) => fetch(`/api/sources${full ? '?full=1' : ''}`).then((x) => x.json()).catch((e) => ({ error: e.message }));
-  const full = ST.cat === 'sources' || ST.cat === 'keys', seq = (ST.srcSeq = (ST.srcSeq || 0) + 1);
-  const draw = (r, checking) => {
-    // Apps on this PC; subscriptions with a key; the makers' own APIs (pay per call).
-    for (const [sel, local, direct] of [['#stSources', true, false], ['#stApiSources', false, false], ['#stDirectSources', false, true]]) {
-      const box = $(sel); if (!box) continue;
-      if (r.error || !Array.isArray(r.sources)) { box.innerHTML = `<div class="kx-wait bad">⚠ Couldn’t read the sources (${esc(r.error || 'no answer')}).</div>`; continue; }
-      drawSourceCards(box, r, r.sources.filter((x) => !!x.local === local && !!x.direct === direct), say);
-      if (checking && local) box.insertAdjacentHTML('afterbegin', '<div class="kx-wait src-checking">Checking app versions and model lists…</div>');
-    }
-    if (Array.isArray(r.sources)) { ST.sources = r.sources; stRefresh(); }
+  const full = ST.cat === 'providers', seq = (ST.srcSeq = (ST.srcSeq || 0) + 1);
+  fetch('/api/keys').then((x) => x.json()).then((k) => { if (Array.isArray(k)) { ST.keys = { n: k.length, active: k.find((x) => x.active)?.label || '' }; } }).catch(() => {});
+  fetch('/api/costs/providers').then((x) => x.json()).then((u) => { if (u && !u.error) { ST.pvUsage = u; if (!busy()) drawProviders(); } }).catch(() => {});
+  const busy = () => (box.contains(document.activeElement) && !document.activeElement.matches('.pv-search input')) || [...box.querySelectorAll('[data-src-key], #stKeyInput')].some((i) => i.value) || [...box.querySelectorAll('.src-msg, .src-test-msg')].some((m) => !m.hidden);
+  const draw = (r) => {
+    if (r.error || !Array.isArray(r.sources)) { box.innerHTML = `<div class="kx-wait bad">⚠ Couldn’t read the providers (${esc(r.error || 'no answer')}).</div>`; return; }
+    ST.sources = r.sources; stRefresh(); drawProviders(say);
   };
   const quick = await get(false);
   if (seq !== ST.srcSeq) return;
-  draw(quick, full && !quick.error);
+  draw(quick);
   if (!full || quick.error) return;
   const r = await get(true);
   if (seq !== ST.srcSeq) return;
-  // Typing a key or a message showing in a card: keep the cards, only drop the "checking" line.
-  const busy = [...document.querySelectorAll('#stSources, #stApiSources, #stDirectSources')].some((b) => b.contains(document.activeElement) || [...b.querySelectorAll('[data-src-key]')].some((i) => i.value) || [...b.querySelectorAll('.src-msg, .src-test-msg')].some((m) => !m.hidden));
-  if (busy) { for (const el of document.querySelectorAll('.src-checking')) el.remove(); if (Array.isArray(r.sources)) { ST.sources = r.sources; stRefresh(); } return; }
-  say = null; draw(r, false);
+  // Typing a key or a message showing in the detail: keep the page, only update what the summary says.
+  if (busy()) { if (Array.isArray(r.sources)) { ST.sources = r.sources; stRefresh(); } return; }
+  say = null; draw(r);
 }
 // A subscription's plan and what is left of it (OpenCode Go, Command Code): the plan and the share of each window used
 // show; dollar amounts (Command Code's) stay masked until 👁, like the OpenRouter credits.
@@ -7234,7 +7326,7 @@ function wireSettings() {
     if (act === 'pickDefModel') { const id = await pickModel('chat', S.model, { context: 'Default for new chats' }); if (id) { S.model = id; const b = $('#defModel'); b.dataset.id = id; b.innerHTML = `<span class="sx-av" aria-hidden="true">${esc((short(id)[0] || '?').toUpperCase())}</span>${recDot(id, 'chat')} ${esc(short(id))} <small>${esc(shortPrice(id))}</small><span class="sx-change">Change</span>`; mark(); } }
     if (act === 'pickFallback') { const id = await pickModel('chat', S.fallbackModel || '', { context: 'Fallback when a chat’s model fails', openRouterOnly: true }); if (id) { S.fallbackModel = id; mark(); drawSettings(); } }
     if (act === 'clearFallback') { S.fallbackModel = ''; mark(); drawSettings(); }
-    if (act === 'openSources') { ST.cat = 'sources'; drawSettings(); $('#stMain').scrollTop = 0; }
+    if (act === 'openSources') { ST.cat = 'providers'; Object.assign(pvState(), { tab: 'local', sel: null }); drawSettings(); $('#stMain').scrollTop = 0; }
     if (act === 'pickSourceFallback') { const id = await pickModel('chat', S.sourceFallbackModel || '', { context: 'When a call through an app on this PC fails', openRouterOnly: true }); if (id) { S.sourceFallbackModel = id; mark(); drawSettings(); } }
     if (act === 'clearSourceFallback') { S.sourceFallbackModel = ''; mark(); drawSettings(); }
     if (act === 'openSafety') { ST.cat = 'safety'; drawSettings(); }
@@ -7337,7 +7429,7 @@ function resetCategory() {
   if (ST.cat === 'appearance') { S.theme = null; G.theme = null; applyTheme(); }
   if (ST.cat === 'privacy') S.newsRemote = true;
   if (ST.cat === 'models') { S.model = d.chatModel || d.setups.C.model; S.reasoning = 'off'; Object.assign(S, { providerSort: 'auto', requireParams: true, zdrOnly: false, fallbackModel: '', blockedProviders: [...(d.blockedProviders || [])] }); }
-  if (ST.cat === 'sources') Object.assign(S, { sourceFallback: d.sourceFallback || 'off', sourceFallbackModel: '' });
+  if (ST.cat === 'providers') Object.assign(S, { sourceFallback: d.sourceFallback || 'off', sourceFallbackModel: '' });
   if (ST.cat === 'newchats') S.newChatTools = { ...DEFAULT_CHAT_TOOLS };
   if (ST.cat === 'loop') { S.maxSteps = d.maxSteps; S.compact = true; S.compactAt = 24000; Object.assign(S, { planFirst: d.planFirst, planSteps: d.planSteps, continueRounds: d.continueRounds, maxOutput: d.maxOutput, thinkShare: d.thinkShare, review: d.review, reviewModel: '', reviewTier: d.reviewTier, reviewSendBack: d.reviewSendBack, codeReview: d.codeReview, designLint: d.designLint, fixSteps: d.fixSteps, reviewRounds: d.reviewRounds, reviewBar: d.reviewBar, helpers: d.helpers, helperModel: '', helperSteps: d.helperSteps, helperMinFiles: d.helperMinFiles, retries: d.retries, parallel: d.parallel, verify: d.verify, verifyRounds: d.verifyRounds, askLimit: d.askLimit, trimAt: d.trimAt, buildThinking: d.buildThinking }); }
   if (ST.cat === 'deciders') { S.voters = [...d.voters]; S.gate = { ...d.gate }; S.lookVoters = [...d.lookVoters]; S.lookEscalate = d.lookEscalate; S.checks = structuredClone(d.checks); }
@@ -8149,7 +8241,7 @@ async function drawModelLimit() {
   const k = keys.find((x) => x.active);
   box.onclick = (e) => {
     const act = e.target.closest('[data-lim]')?.dataset.lim;
-    if (act === 'keys') { ST.cat = 'keys'; drawSettings(); }
+    if (act === 'keys') { ST.cat = 'providers'; Object.assign(pvState(), { sel: 'openrouter' }); drawSettings(); }
     if (act === 'reveal') { ST.revealLimit = !ST.revealLimit; paint(); }
     if (act === 'refresh') load();
   };
@@ -8304,7 +8396,7 @@ async function keysChanged() {
   const nav = $('#stNav .st-nav-item[data-cat="keys"] .st-nav-badge'); if (nav && G.cfg.hasKey) nav.remove();
 }
 // Without a key only a chat on a model through an app on this PC can run; the other message boxes lock and point
-// to ⚙ Settings → API keys, or to a This PC model.
+// to ⚙ Settings → Providers, or to a This PC model.
 function applyKeyLock() {
   document.body.classList.toggle('no-key', !G.cfg.hasKey);
   for (const c of [...G.open.values(), G.homeDraftChat]) {
@@ -8312,7 +8404,7 @@ function applyKeyLock() {
     const ta = $('.input', c.el.root), send = $('.sendBtn', c.el.root);
     const can = !!G.cfg.hasKey || !!sourceOfId(c.agent?.setup?.model);
     ta.disabled = send.disabled = !can;
-    ta.placeholder = can ? c.placeholder || 'Ask, or ask for something to be built…  @ to add files or chats · / for commands' : `No OpenRouter key yet: pick a model of an app on this PC (${srcApps()}: marked with its logo in the model button above), or add a key in ⚙ Settings → API keys.`;
+    ta.placeholder = can ? c.placeholder || 'Ask, or ask for something to be built…  @ to add files or chats · / for commands' : `No OpenRouter key yet: pick a model of an app on this PC (${srcApps()}: marked with its logo in the model button above), or add a key in ⚙ Settings → Providers.`;
   }
 }
 async function exportChats(btn) {

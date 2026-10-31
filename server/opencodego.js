@@ -1,5 +1,5 @@
 // Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
-// OpenCode Go over its API, with the user's own key (⚙ Settings → API keys). Go is OpenCode's subscription: its models
+// OpenCode Go over its API, with the user's own key (⚙ Settings → Providers). Go is OpenCode's subscription: its models
 // cost nothing per call up to the plan's 5-hour, weekly and monthly limits (https://opencode.ai/docs/go/).
 //   - Which models Go serves today comes from its own list (GET /inference/go/v1/models, no key needed). Their names,
 //     limits and list prices come from models.dev, the catalogue OpenCode itself reads; a model models.dev doesn't
@@ -116,7 +116,7 @@ async function* quietLimit(body, ms, ac) {
  * the chat's steady session id. Throws with .status/.errorType/.kind when Go refuses (sources.js classifies it).
  */
 export async function goStream(body, signal, onText, onThink, { info = {}, idleMs = 180e3, session, key, fetchFn = fetch } = {}) {
-  if (!key) throw Object.assign(new Error('There is no OpenCode Go key yet: add one in ⚙ Settings → API keys.'), { kind: 'auth' });
+  if (!key) throw Object.assign(new Error('There is no OpenCode Go key yet: add one in ⚙ Settings → Providers.'), { kind: 'auth' });
   const ac = new AbortController();
   const stop = () => ac.abort(signal.reason instanceof Error ? signal.reason : new Error('Stopped.'));
   if (signal?.aborted) stop(); else signal?.addEventListener('abort', stop, { once: true });

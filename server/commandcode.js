@@ -1,5 +1,5 @@
 // Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
-// Command Code over its Provider API, with the user's own key (⚙ Settings → API keys). Every Command Code plan but Go
+// Command Code over its Provider API, with the user's own key (⚙ Settings → Providers). Every Command Code plan but Go
 // has API access, and a call takes from the plan's credits at the model's list price
 // (https://commandcode.ai/docs/provider).
 //   - Which models it serves today comes from its own list (GET /provider/v1/models, no key needed), which also says
@@ -259,7 +259,7 @@ async function* quietLimit(body, ms, ac) {
  * key. Throws with .status/.errorType/.kind when it refuses (sources.js classifies it).
  */
 export async function ccStream(body, signal, onText, onThink, { info = {}, idleMs = 180e3, key, fetchFn = fetch } = {}) {
-  if (!key) throw Object.assign(new Error('There is no Command Code key yet: add one in ⚙ Settings → API keys.'), { kind: 'auth' });
+  if (!key) throw Object.assign(new Error('There is no Command Code key yet: add one in ⚙ Settings → Providers.'), { kind: 'auth' });
   const ac = new AbortController();
   const stop = () => ac.abort(signal.reason instanceof Error ? signal.reason : new Error('Stopped.'));
   if (signal?.aborted) stop(); else signal?.addEventListener('abort', stop, { once: true });
@@ -313,7 +313,7 @@ export function ccDecisionModels(orList = []) {
 }
 /** One Decisions request to Jev on Command Code, answered like openrouter.js decisions(). */
 export async function ccDecisions(model, state, questions, signal, { key, fetchFn = fetch } = {}) {
-  if (!key) throw Object.assign(new Error('There is no Command Code key yet: add one in ⚙ Settings → API keys.'), { kind: 'auth' });
+  if (!key) throw Object.assign(new Error('There is no Command Code key yet: add one in ⚙ Settings → Providers.'), { kind: 'auth' });
   const s = String(model || ''), id = s.startsWith(`${CC_ID}/`) ? s.slice(CC_ID.length + 1) : s;
   const t = Date.now();
   const r = await fetchFn(`${BASE}/systemone`, { method: 'POST', signal, headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', 'User-Agent': 'QuorX' }, body: JSON.stringify({ model: id, state, questions }) });

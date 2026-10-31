@@ -35,7 +35,7 @@ import { shellRun, shellClose, shellInfo } from './server/shell.js';
 import { ptyAvailable, ptyOpen, ptyWrite, ptyResize, ptyFollow, ptyClose } from './server/pty.js';
 // Pages the agent wrote, served from this app's own address, get their own opaque origin: their requests to /api are refused.
 const SANDBOX_CSP = 'sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads';
-import { listChats, sidebarChats, chatPage, chatPictureRefs, pictureRefCounts, getTrace, getChatForPage, getChat, saveChat, patchChat, settleReply, trashChat, duplicateChat, validId, listProjects, saveProject, forgetProject, setProjectColor, setProjectFlags, costSummary, costChats } from './server/store.js';
+import { listChats, sidebarChats, chatPage, chatPictureRefs, pictureRefCounts, getTrace, getChatForPage, getChat, saveChat, patchChat, settleReply, trashChat, duplicateChat, validId, listProjects, saveProject, forgetProject, setProjectColor, setProjectFlags, costSummary, costChats, providerUsage } from './server/store.js';
 import { ALLOWED, copyTemplate, workspaceDir, safePath, fullLocalPath,chatFolder, listFiles, listDir, listServers, stopServerWait, restartServer, serverLog, startServer, restoreCheckpoint, listCheckpoints, pruneCheckpoints, undoConflicts, changedFiles, reviewFiles, reviewDiff, undoFile, serverOverview, launchConfigs, saveLaunchConfig, removeLaunchConfig, ensureAgentDir, agentSpace } from './server/workspace.js';
 import { followTerm, runningJobs, stopJob } from './server/terminal.js';
 import { runningIn, runningAll, stopRunning, stopAllIn } from './server/running.js';
@@ -84,7 +84,7 @@ function codeChanged() {
   }
   return { started: STARTED, stale: latest > STARTED + 1000 ? { since: Math.round(latest), file } : null };
 }
-if (!currentKey()) console.warn('!! No OpenRouter key yet: add one in the page (⚙ Settings → API keys) or set OPENROUTER_API_KEY in .env');
+if (!currentKey()) console.warn('!! No OpenRouter key yet: add one in the page (⚙ Settings → Providers) or set OPENROUTER_API_KEY in .env');
 startSampling();
 startSweeping();
 startStorageRules();
@@ -203,6 +203,8 @@ const server = http.createServer(async (req, res) => {
     // A page of chats: a project's older ones (Show more), or a search across every project.
     if (url.pathname === '/api/chats/page' && req.method === 'GET') return json(res, 200, chatPage({ project: url.searchParams.get('project') || '', q: url.searchParams.get('q') || '', offset: url.searchParams.get('offset'), limit: url.searchParams.get('limit') }));
     if (url.pathname === '/api/costs' && req.method === 'GET') return json(res, 200, costSummary({ per: Number(url.searchParams.get('per')) || 5, sort: url.searchParams.get('sort') || 'cost', providerOf: providerOfModel }));
+    // What each provider was paid (⚙ Settings → Providers): today, this month, all time, calls, models, 14 days.
+    if (url.pathname === '/api/costs/providers' && req.method === 'GET') return json(res, 200, providerUsage({ providerOf: providerOfModel }));
     if (url.pathname === '/api/costs/chats' && req.method === 'GET') {
       const q = url.searchParams;
       return json(res, 200, costChats({ project: q.get('project') || '', q: q.get('q') || '', sort: q.get('sort') || 'cost', offset: q.get('offset'), limit: q.get('limit') }));
@@ -503,7 +505,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/code-review' && req.method === 'POST') {
       const b = JSON.parse(await readBody(req, 1e4) || '{}');
       // A reviewer set to a model of an app on this PC needs no OpenRouter key.
-      if (!currentKey() && !sourceOf(String(b.reviewModel || ''))) return json(res, 200, { error: 'The reviewer runs on OpenRouter: add a key in ⚙ Settings → API keys, or set the reviewer to a model tagged This PC.' });
+      if (!currentKey() && !sourceOf(String(b.reviewModel || ''))) return json(res, 200, { error: 'The reviewer runs on OpenRouter: add a key in ⚙ Settings → Providers, or set the reviewer to a model tagged This PC.' });
       if (!validId(b.projectId)) return json(res, 400, { error: 'bad project id' });
       const st = budgetState(b.projectId);
       if (st.budget != null && st.left <= 0) return json(res, 200, { error: 'This project has reached its budget. Raise it in the sidebar to run a review.' });
@@ -787,7 +789,7 @@ const server = http.createServer(async (req, res) => {
       try {
         const r = await rewritePrompt({ text, earlier: Array.isArray(b.earlier) ? b.earlier.map(String).slice(-3) : [], model: String(b.model || '').trim() || HELPER_MODEL });
         return json(res, 200, r || { error: 'the model gave nothing usable' });
-      } catch (e) { return json(res, 200, { error: /auth|401|api key/i.test(e.message) ? 'add an OpenRouter key in ⚙ Settings → API keys first' : e.message }); }
+      } catch (e) { return json(res, 200, { error: /auth|401|api key/i.test(e.message) ? 'add an OpenRouter key in ⚙ Settings → Providers first' : e.message }); }
     }
     // ---- the Browser tab's "your view" for sites that refuse frames (see server/userbrowser.js) ----
     if (url.pathname === '/api/ubrowser' && req.method === 'POST') {
@@ -972,7 +974,7 @@ const server = http.createServer(async (req, res) => {
       // public (no key needed); if none of them load, the page shows why and offers a retry.
       const errors = [];
       const safe = (name, p) => p.catch((e) => { errors.push(`${name}: ${e.message}`); return []; });
-      // The models of the apps on this PC, when they are switched on (⚙ Settings → Apps on this PC), join the chat models.
+      // The models of the apps on this PC, when they are switched on (⚙ Settings → Providers), join the chat models.
       const [chat, dec, img, tts, mus, vid, src] = await Promise.all([safe('chat', chatModels()), safe('decisions', decisionModels().then(async (l) => [...l, ...await sourceDecisionModels().catch(() => [])])), safe('images', imageModels()), safe('voices', speechModels()), safe('music', musicModels()), safe('video', videoModels()), safe('sources', sourceModels({ refresh }))]);
       if (!chat.length && !dec.length && !src.length) return json(res, 502, { error: `Could not load the model lists from OpenRouter (${errors[0] || 'no answer'}).` });
       // Audio-capable chat models double as the "listen" (speech-to-text) category.
@@ -1043,7 +1045,7 @@ const server = http.createServer(async (req, res) => {
       } catch (e) { return json(res, 400, { error: e.message }); }
     }
     if (req.method === 'POST' && url.pathname === '/api/transcribe') {
-      if (!currentKey()) return json(res, 200, { error: 'Speech to text runs on OpenRouter: add a key in ⚙ Settings → API keys.' });
+      if (!currentKey()) return json(res, 200, { error: 'Speech to text runs on OpenRouter: add a key in ⚙ Settings → Providers.' });
       // The mic: a WAV recording from the page goes to an audio-capable chat model.
       const b = JSON.parse(await readBody(req, 30e6));
       const allowed = DEFAULTS.tools.listen.models;

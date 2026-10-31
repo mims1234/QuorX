@@ -1,5 +1,5 @@
 // Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
-// Model makers' own APIs, with the user's own key (⚙ Settings → API keys): OpenAI, Anthropic, Google Gemini,
+// Model makers' own APIs, with the user's own key (⚙ Settings → Providers): OpenAI, Anthropic, Google Gemini,
 // Moonshot (Kimi) and Meta. Each runs as a source next to OpenRouter (sources.js), so a model id names where a call goes:
 // openai-api/gpt-5-mini, anthropic-api/claude-sonnet-5-5, gemini-api/gemini-3.5-flash.
 //   - Which models a key can use comes from the provider's own list (it needs the key, so listing them is the free key
@@ -218,7 +218,7 @@ export function directChatBody(src, body, info = {}) {
  */
 export async function directStream(src, body, signal, onText, onThink, { info = {}, idleMs = 180e3, key, base, fetchFn = fetch } = {}) {
   const def = DIRECT[src];
-  if (!key) throw Object.assign(new Error(`There is no ${def.name} key yet: add one in ⚙ Settings → API keys.`), { kind: 'auth' });
+  if (!key) throw Object.assign(new Error(`There is no ${def.name} key yet: add one in ⚙ Settings → Providers.`), { kind: 'auth' });
   const ac = new AbortController();
   const stop = () => ac.abort(signal.reason instanceof Error ? signal.reason : new Error('Stopped.'));
   if (signal?.aborted) stop(); else signal?.addEventListener('abort', stop, { once: true });

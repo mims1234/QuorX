@@ -5,5 +5,9 @@ https://github.com/mims1234/QuorX
 This product is licensed under the Apache License, Version 2.0 (see LICENSE).
 The QuorX name and logo are trademarks of the QuorX authors and are not licensed under it (see TRADEMARKS.md).
 
+The provider marks in public/icons/brand belong to their owners and only name the service a model runs on. Several
+are drawn from Simple Icons (CC0 1.0, https://simpleicons.org) and LobeHub Icons (MIT License, Copyright (c) 2023
+LobeHub, https://github.com/lobehub/lobe-icons).
+
 If you share QuorX or a version you changed, keep this notice with it, for example:
 "Based on QuorX (https://github.com/mims1234/QuorX), licensed under the Apache License 2.0."

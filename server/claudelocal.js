@@ -1,5 +1,5 @@
 // Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
-// The Claude Code on this computer as a model source ("Claude Code on this PC" in ⚙ Settings → Apps on this PC).
+// The Claude Code on this computer as a model source ("Claude Code on this PC" in ⚙ Settings → Providers).
 // Each call runs `claude -p` once, hidden, in an empty folder of QuorX's own, with every built-in tool off (--tools ""),
 // no MCP servers, no settings files and QuorX's own system prompt in place of Claude Code's: so a call is just the
 // model, on the plan or key the user signed in to Claude Code with. QuorX's tools go over as text (textcalls.js), and

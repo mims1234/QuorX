@@ -302,4 +302,13 @@ test('the Spending view totals what each provider was paid; absurd figures count
   assert.ok(Math.abs(by.OpenRouter - 0.1) < 1e-9);
   assert.equal(by['Google Gemini'], undefined, 'a billion-dollar figure is a bad record, not spending');
   assert.equal(costSummary().total.byProvider, undefined, 'only when asked');
+  // ⚙ Settings → Providers: each provider's today, month, all time, calls, models and last 14 days.
+  const { providerUsage } = await import('../server/store.js');
+  const u = providerUsage({ providerOf: S.providerOfModel, now });
+  assert.ok(Math.abs(u.OpenAI.all - 0.55) < 1e-9 && Math.abs(u.OpenAI.today - 0.55) < 1e-9 && Math.abs(u.OpenAI.month - 0.55) < 1e-9);
+  assert.equal(u.OpenAI.calls, 3, 'calls are counted per model');
+  assert.deepEqual(Object.keys(u.OpenAI.models).sort(), ['openai-api/decider/gpt-test', 'openai-api/gpt-test']);
+  assert.equal(u.OpenAI.days.length, 14);
+  assert.ok(Math.abs(u.OpenAI.days[13] - 0.55) < 1e-9, 'today is the last day');
+  assert.equal(u['Google Gemini'], undefined, 'an absurd figure counts as nothing');
 });
