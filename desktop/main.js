@@ -242,7 +242,7 @@ const CHROME_UA = () => session.defaultSession.getUserAgent().replace(/\sElectro
 let userSession = null;
 function browseSession() {
   if (userSession) return userSession;
-  userSession = session.fromPartition('persist:browse');
+  userSession = soundPreload(session.fromPartition('persist:browse'));
   userSession.setUserAgent(CHROME_UA());
   // Downloads go to your Downloads folder; the page shows them under the address bar.
   userSession.on('will-download', (_e, item, wc) => {
@@ -262,13 +262,15 @@ function send(ev) { if (win && !win.isDestroyed()) win.webContents.send('oh-desk
 function tabFor(sid) {
   let t = tabs.get(sid);
   if (t) return t;
-  const view = new WebContentsView({ webPreferences: { session: browseSession(), sandbox: true, contextIsolation: true, nodeIntegration: false } });
+  // nodeIntegrationInSubFrames only runs the sound preload in frames too (a video embedded in a page); the tab stays sandboxed.
+  const view = new WebContentsView({ webPreferences: { session: browseSession(), sandbox: true, contextIsolation: true, nodeIntegration: false, nodeIntegrationInSubFrames: true } });
   view.setBackgroundColor('#ffffff');
   view.setVisible(false);
   win.contentView.addChildView(view);
   t = { view, shown: false };
   tabs.set(sid, t);
   wireView(sid, view);
+  applySound(t);
   return t;
 }
 function wireView(sid, view) {
@@ -284,7 +286,33 @@ function wireView(sid, view) {
   const zoomTab = (dir) => { const t = tabs.get(sid); if (!t || t.agent) return; wc.setZoomFactor(nextZoom(wc.getZoomFactor(), dir)); send({ sid, type: 'zoom', factor: wc.getZoomFactor() }); };
   wc.on('before-input-event', (e, input) => { const dir = zoomKey(input); if (dir) { e.preventDefault(); zoomTab(dir); } });
   wc.on('zoom-changed', (_e, dir) => zoomTab(dir));
+  // A tab making sound gets a speaker on it in the pane.
+  wc.on('audio-state-changed', (e) => send({ sid, type: 'audio', audible: !!e.audible }));
 }
+// Sound: one volume for every tab in QuorX's browser (yours and the agent's), and mute for all of them, the agent's
+// only, or one tab. Kept with the app's settings. Mute is Chromium's own; the volume is applied inside each page
+// (sound.js) to its audio, video and Web Audio, so it never changes Windows' own volume.
+const SOUND0 = { volume: 100, muted: false, agentMuted: false };
+let soundCfg = null;
+const sound = () => (soundCfg ||= { ...SOUND0, ...(readConfig().browserSound || {}) });
+function applySound(t) { const s = sound(); t.view.webContents.setAudioMuted(!!(s.muted || (t.agent && s.agentMuted) || t.muted)); }
+function soundState() { return { ...sound(), tabs: Object.fromEntries([...tabs].map(([k, t]) => [k, { audible: t.view.webContents.isCurrentlyAudible(), muted: !!t.muted }])) }; }
+function soundPreload(s) { s.registerPreloadScript({ type: 'frame', filePath: path.join(__dirname, 'sound.js') }); return s; }
+// The pages' own question at load (any page may ask: the answer is only the volume).
+ipcMain.on('oh-sound-get', (e) => { e.returnValue = sound().volume / 100; });
+handle('sound', (op, arg) => {
+  if (op === 'set') {
+    const cur = sound(), n = Number(arg?.volume ?? cur.volume);
+    soundCfg = { volume: Number.isFinite(n) ? Math.max(0, Math.min(100, Math.round(n))) : cur.volume, muted: !!(arg?.muted ?? cur.muted), agentMuted: !!(arg?.agentMuted ?? cur.agentMuted) };
+    writeConfig({ ...readConfig(), browserSound: soundCfg });
+    for (const t of tabs.values()) {
+      applySound(t);
+      for (const f of t.view.webContents.mainFrame.framesInSubtree) { try { f.send('oh-sound', soundCfg.volume / 100); } catch { /* frame gone */ } }
+    }
+  }
+  if (op === 'tab') { const t = tabs.get(arg?.sid); if (t) { t.muted = !!arg.muted; applySound(t); } }
+  return soundState();
+});
 // Zoom in Chrome's steps. zoomKey reads Ctrl + / − / 0 (with or without Shift, top row or keypad).
 const ZOOMS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
 function nextZoom(f, dir) {
@@ -515,7 +543,7 @@ handle('showFile', (file) => { if (file && file.startsWith(app.getPath('download
 // cover stops your clicks and its (usually wider) page is scaled to fit; when it is done, the cover
 // lifts and the page takes the pane's size, ready for you.
 let agentSession = null;
-const agentSess = () => (agentSession ||= (() => { const s = session.fromPartition('persist:agent'); s.setUserAgent(CHROME_UA()); s.setPermissionRequestHandler((_wc, perm, cb) => cb(perm === 'fullscreen')); return s; })());
+const agentSess = () => (agentSession ||= (() => { const s = soundPreload(session.fromPartition('persist:agent')); s.setUserAgent(CHROME_UA()); s.setPermissionRequestHandler((_wc, perm, cb) => cb(perm === 'fullscreen')); return s; })());
 const FORWARD = new Set(['Page.loadEventFired', 'Page.frameNavigated', 'Runtime.consoleAPICalled', 'Runtime.exceptionThrown', 'Log.entryAdded']);
 // A page's data requests (XHR, fetch) go to QuorX with only their id, method, address, status, type and size:
 // never headers, cookies or bodies (a body is read only when the agent asks for one request).
@@ -664,13 +692,14 @@ const COMMANDS = {
   async 'tab.create'({ chatId }) {
     const sid = `agent-${String(chatId).replace(/[^\w-]/g, '').slice(0, 40)}`;
     if (tabs.has(sid)) closeTab(sid);
-    const view = new WebContentsView({ webPreferences: { session: agentSess(), sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } });
+    const view = new WebContentsView({ webPreferences: { session: agentSess(), sandbox: true, contextIsolation: true, nodeIntegration: false, nodeIntegrationInSubFrames: true, backgroundThrottling: false } });
     // Dark around the agent's page when it is scaled down to fit a narrower pane (the page itself keeps a white default).
     view.setBackgroundColor('#070908');
     view.setVisible(false);
     win.contentView.addChildView(view);
     tabs.set(sid, { view, shown: false, agent: true, chatId, locked: false, emu: null, cover: null, bounds: null });
     wireView(sid, view);
+    applySound(tabs.get(sid));
     // A new page can come up in a fresh renderer that has lost the page size and scale (the agent's pages and the
     // sites it runs are on other addresses). Sent again once per page, or the page showed unscaled and cut off,
     // offset in its shrunk view, until something re-sent the size (clicking the Browser tab did).

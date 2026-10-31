@@ -30,6 +30,7 @@
     "files": [
       "main.js",
       "preload.js",
+      "sound.js",
       "icon.js",
       "storage.js",
       "assets/**/*",

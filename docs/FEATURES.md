@@ -57,6 +57,9 @@ a real browser and your real toolchains, and shows how it got every answer.
 - **Real apps, driven like a person would.** A real browser (a real tab you can take over in the desktop app),
   desktop windows through UI Automation, Android emulators, and terminal programs that ask questions. Keys and clicks
   go only to apps the agent started, never to your own windows.
+- **A quiet browser when you want one.** The 🔊 button by the address bar sets one volume for every tab in the desktop
+  app's browser and mutes every tab, only the agent's tabs (its tests stay quiet), or a single tab. A tab making sound
+  shows a speaker you can click to mute it. Windows' own volume isn't touched.
 - **Your own Chrome, when you choose.** With the QuorX extension for Chrome, Brave or Edge, tick 🧩 Chrome in a chat
   and the agent works in your own browser, signed in as you, or give it a single tab. Sending, posting or buying in your
   account asks you first (unless you turn on ⚡ YOLO's "act in your tabs without asking"), and the deciders check each
