@@ -16,12 +16,16 @@ const FILE = path.join(DATA, 'keys.json');
 const USAGE = path.join(DATA, 'key-usage.json');
 // Files the agent's file tools and the /ws file server must never read, whatever folder a project points at.
 // sources.json holds the OpenCode and Cline keys (server/sources.js); OpenCode's and Cline's own key files hold the same
-// keys and their sign-ins.
+// keys and their sign-ins. mcp.json holds MCP servers' keys and mcp-auth.json their sign-ins (mcpclient.js, mcpauth.js);
+// the other tools' MCP files QuorX offers to import from can hold keys too (QuorX reads them itself, not through these tools).
 const USER = os.homedir();
+const APPDATA = process.env.APPDATA || path.join(USER, 'AppData', 'Roaming');
 export const SECRET_FILES = [path.join(ROOT, '.env'), path.join(HOME, '.env'), FILE, USAGE, path.join(DATA, 'app-key'), path.join(DATA, 'access.json'), path.join(DATA, 'tls', 'lan-key.pem'), path.join(DATA, 'sources.json'),
   path.join(process.env.XDG_DATA_HOME || path.join(USER, '.local', 'share'), 'opencode', 'auth.json'), path.join(USER, '.cline', 'data', 'settings', 'providers.json'), path.join(USER, '.cline', 'data', 'secrets.json'),
   // Claude Code's and Grok Build's sign-ins (claudelocal.js, groklocal.js).
-  path.join(USER, '.claude', '.credentials.json'), path.join(USER, '.claude.json'), path.join(process.env.GROK_HOME || path.join(USER, '.grok'), 'auth.json')];
+  path.join(USER, '.claude', '.credentials.json'), path.join(USER, '.claude.json'), path.join(process.env.GROK_HOME || path.join(USER, '.grok'), 'auth.json'),
+  path.join(DATA, 'mcp.json'), path.join(DATA, 'mcp-auth.json'), path.join(USER, '.cursor', 'mcp.json'), path.join(APPDATA, 'Claude', 'claude_desktop_config.json'),
+  path.join(USER, '.codeium', 'windsurf', 'mcp_config.json'), path.join(USER, '.gemini', 'settings.json'), path.join(APPDATA, 'Code', 'User', 'mcp.json')];
 const BASE = 'https://openrouter.ai';
 
 // The data folder (keys, the app key, chats) and .env belong to this account only. On a second drive Windows lets

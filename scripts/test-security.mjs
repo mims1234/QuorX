@@ -67,6 +67,15 @@ test('file paths stay inside the project: links, streams and device names too', 
   } finally { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(outside, { recursive: true, force: true }); }
 });
 
+test('a project at QuorX’s own folder can’t read the MCP keys or sign-ins', () => {
+  const home = process.env.OH_HOME;
+  for (const f of ['mcp.json', 'mcp-auth.json']) {
+    assert.throws(() => safePath(home, `data/${f}`), /off limits/, f);
+    assert.throws(() => safePath(path.join(home, 'data'), f), /off limits/, f);
+  }
+  for (const f of [path.join(os.homedir(), '.cursor', 'mcp.json'), path.join(os.homedir(), '.gemini', 'settings.json')]) assert.throws(() => safePath(path.dirname(f), path.basename(f)), /off limits/, f);
+});
+
 test('a path a reply names: full ones on this computer, relative ones in the project, never a network path', () => {
   assert.equal(fullLocalPath('site/index.html'), '', 'relative: looked up in the project');
   assert.equal(fullLocalPath('\\\\server\\share\\x.txt'), null);

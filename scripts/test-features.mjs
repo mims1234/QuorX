@@ -409,6 +409,11 @@ test('Quoriums: built-ins (Standard as before) can be edited and reset, yours ad
     assert.throws(() => cleanQuorium({ name: '   ' }), /name/);
     assert.throws(() => cleanQuorium({ name: 'x', modules: { reviewer: { on: true, model: 'a b; rm -rf /' } } }), /not a model id/);
     assert.throws(() => saveQuorium({ id: '../../etc', name: 'x' }), /Unknown Quorium/);
+    try { // an empty id is a new Quorium, not one saved under ''
+      const n = saveQuorium({ id: '', name: 'Blank id' });
+      assert.match(n.id, /^q[a-z0-9]{6,20}$/);
+      assert.ok(listQuoriums().some((q) => q.id === n.id && q.name === 'Blank id'));
+    } finally { resetQuoriums(); }
     const c = cleanQuorium({ name: 'x'.repeat(500), desc: 'line\none', modules: {} });
     assert.equal(c.name.length, 60);
     assert.equal(c.desc, 'line one');

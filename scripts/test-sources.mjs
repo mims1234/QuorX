@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { answerApproval } from '../server/agent.js';
 import http from 'node:http';
 import { DEFAULTS, sourceFallbackFor, announcesStep, planValue, planTotal } from '../server/agent.js';
-import { startLogin as mcpStartLogin, finishLogin as mcpFinishLogin, signOut as mcpSignOut } from '../server/mcpauth.js';
+import { startLogin as mcpStartLogin, finishLogin as mcpFinishLogin, signOut as mcpSignOut, tokenFor as mcpTokenFor } from '../server/mcpauth.js';
 import { parseSetup as mcpParse, saveServers as mcpSave, listServers as mcpList, connect as mcpConnect, callTool as mcpCall, toolsFor as mcpToolsFor, stopAll as mcpStopAll, MASK as MCP_MASK } from '../server/mcpclient.js';
 import { planOf, costSummary } from '../server/store.js';
 import { sourceOf, sourceStream, sameOnOpenRouter, failureKind, noteSourceResult, sourceSkip, forgetSourceHealth, priced as sourcePriced, chatAny } from '../server/sources.js';
@@ -26,7 +26,7 @@ import { toolPrompt, renderTranscript, parseToolCalls, textFilter, notRun } from
 import { localStream, localModels } from '../server/opencodelocal.js';
 import { claudeStream, claudeModels, claudeError, effortFor } from '../server/claudelocal.js';
 import { grokStream, grokModels, grokEffort, grokArgs, GROK_ENV, repeats } from '../server/groklocal.js';
-import { ollamaModels, ollamaEntry, ollamaBody, ollamaMessages, ollamaStream, ollamaBase, ctxFor } from '../server/ollamalocal.js';
+import { ollamaModels, ollamaEntry, ollamaBody, ollamaMessages, ollamaStream, ollamaBase, localOllama, ctxFor } from '../server/ollamalocal.js';
 
 // ---------- Apps on this PC: the main model through OpenCode on this computer (server/sources.js) ----------
 // A Go plan model as OpenCode on this PC lists it.
@@ -1140,6 +1140,10 @@ test('Ollama lists the pulled models that call tools, takes calls on /api/chat w
     assert.ok(sourceOf('ollama-local/qwen3:8b'), 'its id names its source');
     assert.deepEqual(ollamaEntry({ name: 'llava:7b' }, { capabilities: ['tools', 'vision'] }).in, ['text', 'image']);
     assert.deepEqual([ollamaBase(''), ollamaBase('0.0.0.0'), ollamaBase('127.0.0.1:12000'), ollamaBase('http://box.local:11434')], ['http://127.0.0.1:11434', 'http://127.0.0.1:11434', 'http://127.0.0.1:12000', 'http://box.local:11434']);
+    // a URL without a port takes its scheme's; only a bare host takes 11434; IPv6 bind-all is this computer too
+    assert.deepEqual([ollamaBase('https://box.local'), ollamaBase('http://box.local'), ollamaBase('box.local'), ollamaBase('[::]'), ollamaBase('::'), ollamaBase('[::]:9000'), ollamaBase('::1')],
+      ['https://box.local:443', 'http://box.local:80', 'http://box.local:11434', 'http://127.0.0.1:11434', 'http://127.0.0.1:11434', 'http://127.0.0.1:9000', 'http://[::1]:11434']);
+    assert.deepEqual(['', '[::]', '::1', 'localhost:5000', 'https://localhost', 'box.local'].map((h) => localOllama(ollamaBase(h))), [true, true, true, true, false, false], 'ollama serve is started only for a plain-http address on this computer');
   }
   { // a call to Ollama goes to /api/chat with a context size, tool calls as objects and results named by their tool
     const info = ollamaEntry(OL_TAGS.models[0], OL_SHOW['qwen3:8b']);
@@ -1287,6 +1291,49 @@ test('MCP client: starts a server, lists its tools (read-only marked), calls one
     assert.equal(t.notes.length, 1); assert.match(t.notes[0], /^broken: /);
     assert.equal(mcpList().find((x) => x.name === 'broken').status, 'error');
   } finally { mcpStopAll(); }
+});
+
+test('MCP client: stopping a server ends the program under cmd.exe too, and one that writes endless output without a line break is stopped', async () => {
+  const pidFile = path.join(tempDir('mcp-pid'), 'pid');
+  mcpSave([{ name: 'echo', command: process.execPath, args: [MCP_ECHO], env: { ECHO_PIDFILE: pidFile } },
+    { name: 'flood', command: process.execPath, args: ['-e', "setInterval(() => process.stdout.write('x'.repeat(1e6)), 5)"] }]);
+  const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  try {
+    await mcpConnect('echo');
+    const pid = Number(fs.readFileSync(pidFile, 'utf8'));
+    assert.ok(alive(pid), 'the server runs');
+    mcpStopAll();
+    for (let i = 0; i < 50 && alive(pid); i++) await new Promise((ok) => setTimeout(ok, 100));
+    assert.equal(alive(pid), false, 'the server itself stopped, not only the shell that started it');
+    await assert.rejects(mcpConnect('flood'), /over 10 MB without a line break/);
+    assert.match(mcpList().find((x) => x.name === 'flood').error, /without a line break/);
+  } finally { mcpStopAll(); mcpSave([]); }
+});
+
+test('MCP sign-in: tool calls at once share one token renewal, and two servers renewing at once both keep theirs', async () => {
+  const file = path.join(process.env.OH_HOME, 'data', 'mcp-auth.json'), was = globalThis.fetch;
+  const entry = (n) => ({ url: `https://${n}.example/mcp`, client: { client_id: 'c' }, as: { token_endpoint: `https://${n}.example/token` }, resource: `https://${n}.example/mcp`, token: { access_token: `old-${n}`, refresh_token: `ref-${n}-1`, expires_at: Date.now() + 5000 } });
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ a: entry('a'), b: entry('b') }));
+  const calls = [], live = { a: 'ref-a-1', b: 'ref-b-1' };
+  globalThis.fetch = async (u, o) => { // a service that hands out a new refresh token each time and refuses the old one
+    const n = new URL(u).hostname[0], p = new URLSearchParams(String(o.body));
+    calls.push(n);
+    await new Promise((ok) => setTimeout(ok, 30));
+    if (p.get('refresh_token') !== live[n]) return new Response(JSON.stringify({ error: 'invalid_grant' }), { status: 400 });
+    const k = calls.filter((x) => x === n).length + 1;
+    live[n] = `ref-${n}-${k}`;
+    return new Response(JSON.stringify({ access_token: `new-${n}`, refresh_token: live[n], expires_in: 3600 }), { status: 200 });
+  };
+  try {
+    const got = await Promise.all([mcpTokenFor('a', 'https://a.example/mcp'), mcpTokenFor('a', 'https://a.example/mcp'), mcpTokenFor('b', 'https://b.example/mcp'), mcpTokenFor('a', 'https://a.example/mcp')]);
+    assert.deepEqual(got, ['new-a', 'new-a', 'new-b', 'new-a'], 'nobody was told to sign in again');
+    assert.deepEqual(calls.sort(), ['a', 'b'], 'one renewal per server');
+    const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.deepEqual([saved.a.token.access_token, saved.a.token.refresh_token, saved.b.token.access_token, saved.b.token.refresh_token], ['new-a', 'ref-a-2', 'new-b', 'ref-b-2'], 'neither renewal overwrote the other');
+    assert.equal(await mcpTokenFor('a', 'https://a.example/mcp'), 'new-a', 'the new token is used, without renewing again');
+    assert.equal(calls.length, 2);
+  } finally { globalThis.fetch = was; fs.rmSync(file, { force: true }); }
 });
 
 test('MCP in a chat: the ticked server\'s tools are offered (Strict asks before changes), and setup from a chat is a one-click card', async () => {

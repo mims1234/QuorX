@@ -80,14 +80,25 @@ export async function finishLogin({ state, code, error }) {
   } catch (e) { return { ok: false, name: f.name, message: `The sign-in did not finish: ${e.message}.` }; }
 }
 /** The token to send to a server, renewed first when it is about to run out; '' when not signed in (for that address). */
+// Tool calls run at once: they share one renewal per server, since a service that hands out a new refresh token with
+// each renewal refuses the old one the second time.
+const renewing = new Map(); // name -> the renewal under way (a promise of the token, '' when it failed)
 export async function tokenFor(name, serverUrl) {
-  const all = read(), a = all[name];
+  const a = read()[name];
   if (!a?.token?.access_token || a.url !== serverUrl) return '';
-  if (a.token.expires_at && a.token.expires_at - Date.now() < 60e3 && a.token.refresh_token) {
-    try { a.token = { refresh_token: a.token.refresh_token, ...(await tokenCall(a.as.token_endpoint, { grant_type: 'refresh_token', refresh_token: a.token.refresh_token, resource: a.resource }, a.client)) }; write(all); }
-    catch { return ''; } // renewing failed: sign in again
-  }
-  return a.token.access_token;
+  if (!(a.token.expires_at && a.token.expires_at - Date.now() < 60e3 && a.token.refresh_token)) return a.token.access_token;
+  if (!renewing.has(name)) renewing.set(name, renew(name, a).finally(() => renewing.delete(name)));
+  return renewing.get(name);
+}
+async function renew(name, a) {
+  try {
+    const token = { refresh_token: a.token.refresh_token, ...(await tokenCall(a.as.token_endpoint, { grant_type: 'refresh_token', refresh_token: a.token.refresh_token, resource: a.resource }, a.client)) };
+    const all = read(); // read again: another server may have renewed (or you signed out) meanwhile
+    if (all[name]?.url !== a.url) return '';
+    all[name] = { ...all[name], token };
+    write(all);
+    return token.access_token;
+  } catch { return ''; } // renewing failed: sign in again
 }
 /** Whether QuorX holds a sign-in for this server (for its address). */
 export const signedIn = (name, serverUrl) => { const a = read()[name]; return !!(a?.token?.access_token && a.url === serverUrl); };

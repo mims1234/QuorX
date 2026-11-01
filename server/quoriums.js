@@ -73,7 +73,7 @@ export function saveQuorium(q) {
     d.edits[q.id] = c; write(d);
     return { ...c, builtIn: true, edited: true };
   }
-  const known = q?.id && d.mine.findIndex((x) => x.id === q.id);
+  const known = q?.id ? d.mine.findIndex((x) => x.id === q.id) : -1; // an empty id is a new one
   if (q?.id && known === -1 && !/^q[a-z0-9]{6,20}$/.test(q.id)) throw new Error('Unknown Quorium.');
   const c = cleanQuorium(q, { id: q?.id || `q${Date.now().toString(36)}${crypto.randomBytes(2).toString('hex')}` });
   if (known >= 0) d.mine[known] = c;

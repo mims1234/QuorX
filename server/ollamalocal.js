@@ -11,13 +11,23 @@ import { spawn } from 'node:child_process';
 import { findOnPath } from './opencodelocal.js';
 
 export const OLLAMA_ID = 'ollama-local';
-// OLLAMA_HOST as Ollama reads it: host, host:port or a full URL.
+// OLLAMA_HOST as Ollama reads it: host, host:port or a full URL. A bare host takes port 11434; a URL without a port
+// takes its scheme's (80 or 443). A bind-all address (0.0.0.0, ::) is reached at 127.0.0.1.
 export function ollamaBase(host = process.env.OLLAMA_HOST) {
-  const h = String(host || '').trim();
+  let h = String(host || '').trim();
   if (!h) return 'http://127.0.0.1:11434';
-  const u = /^https?:\/\//i.test(h) ? h : `http://${h}`;
-  try { const x = new URL(u); return `${x.protocol}//${x.hostname === '0.0.0.0' ? '127.0.0.1' : x.hostname}:${x.port || 11434}`; } catch { return 'http://127.0.0.1:11434'; }
+  const scheme = /^https?:\/\//i.test(h);
+  if (!scheme && /^[0-9a-f]*:[0-9a-f]*:[0-9a-f:]*$/i.test(h)) h = `[${h}]`; // a bare IPv6 address: ::1
+  try {
+    const x = new URL(scheme ? h : `http://${h}`);
+    const name = x.hostname === '0.0.0.0' || x.hostname === '[::]' ? '127.0.0.1' : x.hostname;
+    return `${x.protocol}//${name}:${x.port || (!scheme ? 11434 : x.protocol === 'https:' ? 443 : 80)}`;
+  } catch { return 'http://127.0.0.1:11434'; }
 }
+// Whether the address is this computer's, so `ollama serve` can be started for it.
+export const localOllama = (base) => /^http:\/\/(127\.0\.0\.1|localhost|\[::1\])(:|$)/i.test(base);
+// The port of an ollamaBase address (URL leaves out a scheme's own port).
+const portOf = (base) => { const x = new URL(base); return Number(x.port) || (x.protocol === 'https:' ? 443 : 80); };
 // The context size a call asks for: OLLAMA_CONTEXT_LENGTH when the user set one, else the model's own up to 32K
 // (a bigger window takes more memory, and a change reloads the model).
 export const ctxFor = (info = {}) => Number(process.env.OLLAMA_CONTEXT_LENGTH) || Math.min(Number(info.ctx) || 32768, 32768);
@@ -35,7 +45,7 @@ export async function ensureOllama({ find = findOnPath, start = spawn, readyMs =
   const exe = find('ollama');
   if (!exe) throw err('Ollama is not installed on this computer (ollama.com/download), or not on PATH.', { kind: 'notinstalled' });
   // Only a local address can be started from here; one elsewhere is the user's to start.
-  if (!/^http:\/\/(127\.0\.0\.1|localhost)(:|$)/.test(base)) throw err(`Ollama at ${base} isn’t answering.`, { kind: 'network' });
+  if (!localOllama(base)) throw err(`Ollama at ${base} isn’t answering.`, { kind: 'network' });
   if (!started || started.proc.exitCode !== null) {
     const proc = start(exe, ['serve'], { windowsHide: true, detached: true, stdio: 'ignore' });
     proc.on?.('error', () => {});
@@ -49,7 +59,7 @@ export async function ensureOllama({ find = findOnPath, start = spawn, readyMs =
   throw err('Ollama’s server didn’t start. Open the Ollama app, then test again.', { kind: 'network' });
 }
 /** What Settings shows of the server: running or not, and whether QuorX started it. */
-export const ollamaServer = () => ({ running: Date.now() - seenAt < 120e3, port: new URL(ollamaBase()).port || 11434, startedHere: !!started && started.proc.exitCode === null });
+export const ollamaServer = () => ({ running: Date.now() - seenAt < 120e3, port: portOf(ollamaBase()), startedHere: !!started && started.proc.exitCode === null });
 
 async function getJSON(url, init = {}, ms = 15000) {
   const r = await fetch(url, { ...init, signal: AbortSignal.timeout(ms) });
