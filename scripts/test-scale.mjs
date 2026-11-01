@@ -1,12 +1,12 @@
 // Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // The chat index (server/store.js): the sidebar's chats per project, pages and search, and an index that follows
 // chats written here and by anyone else on the same data folder, and comes back after a restart.
-import './test-home.mjs';
+import { tempDir } from './test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -116,4 +116,61 @@ test('Older replies keep their steps in files of their own; the chat stays small
   assert.equal(store.getTrace('chatlong0', 'run-long-0'), null);
   assert.ok(fs.readdirSync(path.join(process.env.OH_HOME, 'data', 'trash', 'traces')).some((n) => n.startsWith('chatlong0-')));
   assert.ok(!(await unusedBlobs(0)).some((b) => b.name === PIC), 'still kept while the chat is in the trash');
+});
+
+// A chat with its own rules, tools, apps and folders, as the Permissions window lists them.
+const allowing = (id, projectId, at) => { const c = chat(id, projectId, at, `allows ${id}`); Object.assign(c.agent, { cmdRules: [{ id: 'r1', match: 'git *', effect: 'allow' }], allowed: ['web_search'], allowedMeta: { web_search: { at } }, apps: ['notepad'], folders: ['D:/work'] }); return c; };
+const permsWant = (c) => ({ id: c.id, title: c.title, projectId: c.projectId, cmdRules: c.agent.cmdRules, allowed: c.agent.allowed, allowedMeta: c.agent.allowedMeta, apps: c.agent.apps, folders: c.agent.folders });
+
+test('What each chat allows comes from the index: unchanged chat files are not read again', async () => {
+  store.saveChat('chatperm1', allowing('chatperm1', 'pja', 7000));
+  write(allowing('chatperm2', 'pjb', 7001));
+  assert.ok(await wait(() => store.listChats().some((c) => c.id === 'chatperm2')), 'written outside: seen');
+  const read = fs.readFileSync; let reads = 0;
+  fs.readFileSync = (p, ...a) => { if (String(p).startsWith(DIR)) reads++; return read(p, ...a); };
+  try {
+    const all = store.listChats().map((c) => [c.id, store.chatPerms(c.id)]).filter(([, p]) => p);
+    assert.deepEqual(all.map(([id]) => id).sort(), ['chatperm1', 'chatperm2']);
+    assert.deepEqual(store.chatPerms('chatperm2'), { cmdRules: [{ id: 'r1', match: 'git *', effect: 'allow' }], allowed: ['web_search'], allowedMeta: { web_search: { at: 7001 } }, apps: ['notepad'], folders: ['D:/work'] });
+    assert.equal(reads, 0, 'no chat file read');
+  } finally { fs.readFileSync = read; }
+  // Changed (here, or outside): the new lists at once, or once the watcher sees it.
+  const c = allowing('chatperm1', 'pja', 7002); c.agent.apps = []; c.agent.folders = [];
+  store.saveChat('chatperm1', c);
+  assert.deepEqual(store.chatPerms('chatperm1').apps, []);
+  const d = allowing('chatperm2', 'pjb', 7003); d.agent.cmdRules = []; d.agent.allowed = []; d.agent.apps = []; d.agent.folders = [];
+  write(d);
+  assert.ok(await wait(() => store.chatPerms('chatperm2') === null), 'allows nothing now');
+});
+
+test('GET /api/permissions/chats: the same lists as the chat files, from an older index too, and bad requests get 400', async () => {
+  const home = tempDir('qx-perms-'), dir = path.join(home, 'data', 'chats');
+  fs.mkdirSync(dir, { recursive: true });
+  const chats = [allowing('chatpa1', 'pja', 100), allowing('chatpb1', 'pjb', 200), chat('chatpa2', 'pja', 300)];
+  for (const c of chats) fs.writeFileSync(path.join(dir, `${c.id}.json`), JSON.stringify(c));
+  // An index saved before it kept each chat's lists: they are read once from the files.
+  const entries = Object.fromEntries(chats.map((c) => { const st = fs.statSync(path.join(dir, `${c.id}.json`)); return [`${c.id}.json`, { key: `${st.size}:${st.mtimeMs}`, s: { id: c.id, title: c.title, projectId: c.projectId, messages: 1, lastAt: c.updated }, blobs: [] }]; }));
+  fs.mkdirSync(path.join(home, 'data', 'index'), { recursive: true });
+  fs.writeFileSync(path.join(home, 'data', 'index', 'chats.json'), JSON.stringify({ v: 4, at: Date.now(), entries }));
+  const child = spawn(process.execPath, [path.join(ROOT, 'server.js')], { cwd: ROOT, env: { ...process.env, OH_HOME: home, AGENT_PORT: '0', AGENT_HOST: '127.0.0.1', OPENROUTER_API_KEY: '', OPENROUTER_API_KEY_BOT: '', QX_NO_JOBHOST: '1', QX_TRASH: 'delete' }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+  try {
+    let out = '';
+    const port = await new Promise((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error(`QuorX did not start:\n${out}`)), 30000);
+      child.stdout.on('data', (b) => { out += b; const m = out.match(/QuorX → http:\/\/localhost:(\d+)/); if (m) { clearTimeout(t); resolve(Number(m[1])); } });
+      child.stderr.on('data', (b) => { out += b; });
+      child.once('exit', (code) => { clearTimeout(t); reject(new Error(`QuorX exited (${code}):\n${out}`)); });
+    });
+    const key = fs.readFileSync(path.join(home, 'data', 'app-key'), 'utf8').trim();
+    const call = async (p, method = 'GET', body) => { const r = await fetch(`http://127.0.0.1:${port}${p}`, { method, headers: { 'Content-Type': 'application/json', 'x-quorx-key': key }, body }); return { status: r.status, body: await r.json() }; };
+    const all = await call('/api/permissions/chats');
+    assert.equal(all.status, 200);
+    assert.deepEqual(all.body.chats.sort((a, b) => a.id.localeCompare(b.id)), [permsWant(chats[0]), permsWant(chats[1])]);
+    assert.deepEqual((await call('/api/permissions/chats?project=pja')).body, { chats: [permsWant(chats[0])] });
+    assert.equal((await call('/api/permissions/chats?project=..')).status, 400);
+    assert.equal((await call('/api/running/control', 'POST', '')).status, 400, 'an empty body');
+    assert.equal((await call('/api/running/control', 'POST', '{"op":"nope"}')).status, 400);
+    assert.equal((await call('/api/quoriums/%E0%A4%A', 'DELETE')).status, 400, 'a malformed id');
+    assert.equal((await call('/api/quoriums/none', 'DELETE')).status, 200);
+  } finally { await new Promise((r) => { if (child.exitCode !== null) return r(); child.once('exit', r); child.kill(); }); }
 });
