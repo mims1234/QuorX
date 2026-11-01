@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('ohDesktop', {
   open: (sid, url) => call('open', sid, url),
   bounds: (sid, rect) => call('bounds', sid, rect),
   show: (sid) => call('show', sid),
+  showSet: (sids) => call('showSet', sids),
   hideAll: () => call('hideAll'),
   nav: (sid, op) => call('nav', sid, op),
   close: (sid) => call('close', sid),
