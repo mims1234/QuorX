@@ -189,10 +189,12 @@ cut from real footage, or a mix. The skills cover each route and the craft they 
 |---|---|
 | `video-direction` | The hub: picks the route; the brief, treatment, story, camera and motion rules; delivery |
 | `film-render` | The code route: the page contract, preview, frame capture in a headless browser, ffmpeg encoding |
+| `film-hyperframes` | The code route on HyperFrames: timed HTML clips with GSAP, its `check`/`snapshot`/`render` CLI, transparent overlays; pinned version, telemetry off, no global skill installs |
 | `film-from-images` | Stills (the user's or `imagine`) with camera moves and parallax |
 | `film-from-ai-clips` | `make_video` shots: a spend plan, a look line, `start_image` for a consistent cast, choosing takes, joining |
 | `film-from-footage` | Real recordings: a transcript-led paper edit, b-roll, captions, an EDL or OpenTimelineIO hand-over |
 | `motion-graphics` | 5-15 s design-led pieces from a four-part brief with checkable signature features |
+| `motion-design` | Motion recipes in numbers: eases by role, springs as functions of time, stagger and holds, title entrances, transitions with a cause, beat-grid maths |
 | `three-from-image` | 3-D props and characters in three.js code, compared with the reference after every pass |
 | `film-style` | Use, adapt or create a reusable STYLE.md, proven with a style frame and a short demo |
 | `film-sound` | Ambience, foley, score, voice with a speech-to-text check, ducking, the -14 LUFS master |

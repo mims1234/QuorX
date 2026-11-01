@@ -104,7 +104,7 @@ test('stop: a window a command opened stays open after it; a windowless leftover
     assert.ok(formOpen('QX Kept Form'), 'the form is still open');
     const p = await runLine(root, 'start /b ping -n 30 127.0.0.1 >nul & echo started', { shell: 'cmd' });
     assert.ok(p.leftovers?.ended?.some((n) => /ping/i.test(n)) && !p.leftovers.kept, JSON.stringify(p.leftovers));
-    assert.equal(pingsLeft(), 0);
+    assert.equal(await pingsLeft(30), 0);
   } finally { closeForm('QX Kept Form'); }
 });
 
