@@ -2371,7 +2371,9 @@ body.resizing iframe { pointer-events: none; }
 
 /* Sidebar: project delete, theme toggle */
 .sb-ph .sb-delp:hover { color: var(--bad); }
-#themeBtn { min-width: 30px; }
+/* The theme is picked in ⚙ Settings → Appearance (and "Switch theme" in the command palette); the sidebar has no
+   button for it. The button stays in the page, hidden, for the palette to use. */
+#themeBtn, #railTheme { display: none !important; }
 @media (max-width: 900px) {
   .resizer { display: none; }
   .sidebar { width: auto; }
