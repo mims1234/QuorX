@@ -1,0 +1,180 @@
+/* Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0 */
+/* Permissions: the one window (public/perms.js), the chat's "what applies here", and the approval cards' scope parts. */
+
+:root { --s-chat: #3cc9b0; --s-proj: #5b97ee; --s-glob: #a78bfa; }
+@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) { --s-chat: #0f8f7a; --s-proj: #2f6fd0; --s-glob: #7c5bd6; } }
+:root[data-theme="light"] { --s-chat: #0f8f7a; --s-proj: #2f6fd0; --s-glob: #7c5bd6; }
+
+/* ---------- scope markers: an icon in the scope's colour, with or without its name ---------- */
+.pmx-scope { display: inline-flex; align-items: center; gap: 4px; font: 500 12px var(--font-ui); white-space: nowrap; flex: none; vertical-align: middle; }
+.pmx-scope svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.pmx-scope[data-scope="chat"] { color: var(--s-chat); }
+.pmx-scope[data-scope="project"] { color: var(--s-proj); }
+.pmx-scope[data-scope="everywhere"] { color: var(--s-glob); }
+.pmx-scope .sr, .pmx .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* ---------- parts: buttons, segmented controls, tags, status (each looks different) ---------- */
+.pmx-btn { display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 12px; border-radius: 7px; border: 1px solid var(--line-strong); background: var(--panel-3); color: var(--text); font: 600 12.5px var(--font-ui); cursor: pointer; white-space: nowrap; transition: border-color .15s, background-color .15s; }
+.pmx-btn:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--line-strong)); }
+.pmx-btn:focus-visible, .pmx-seg button:focus-visible, .pmx-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pmx-btn.sm { height: 26px; padding: 0 9px; font-size: 12px; }
+.pmx-btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink, #031317); }
+.pmx-btn.primary:hover { filter: brightness(1.08); }
+.pmx-btn.danger { background: transparent; color: var(--muted); border-color: transparent; }
+.pmx-btn.danger:hover, .pmx-btn.danger.sure { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, transparent); background: var(--bad-dim); }
+.pmx-link { border: 0; background: none; padding: 0 4px; color: var(--accent); font: 600 12px var(--font-ui); cursor: pointer; }
+.pmx-link:hover { text-decoration: underline; }
+.pmx-seg { display: inline-flex; flex-wrap: wrap; padding: 2px; gap: 2px; border-radius: 8px; background: var(--surface-inset, var(--bg)); border: 1px solid var(--border-inset, var(--line)); }
+.pmx-seg button { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 10px; border-radius: 6px; border: 1px solid transparent; background: transparent; color: var(--muted); font: 600 12px var(--font-ui); cursor: pointer; white-space: nowrap; }
+.pmx-seg button:hover:not(:disabled) { color: var(--text); }
+.pmx-seg button[aria-pressed="true"] { background: var(--panel-3); border-color: var(--line-strong); color: var(--text-bright, var(--text)); }
+.pmx-seg button:disabled { opacity: .45; cursor: not-allowed; }
+.pmx-seg button small { font: 500 10.5px var(--mono); color: var(--dim); }
+.pmx-seg.sm button { height: 22px; padding: 0 8px; font-size: 11.5px; }
+.pmx-tag { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 4px; background: var(--panel-3); color: var(--muted); font: 500 11px var(--font-ui); white-space: nowrap; flex: none; }
+.pmx-eff { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 4px; font: 600 11px var(--font-ui); white-space: nowrap; flex: none; background: var(--ok-dim); color: var(--ok); }
+.pmx-eff[data-eff="ask"] { background: var(--amber-dim, var(--warn-dim)); color: var(--amber, var(--warn)); }
+.pmx-eff[data-eff="deny"] { background: var(--bad-dim); color: var(--bad); }
+.pmx-eff[data-eff="auto"] { background: var(--panel-3); color: var(--muted); }
+.pmx-st { display: inline-flex; align-items: center; gap: 6px; font: 600 12px var(--font-ui); color: var(--muted); white-space: nowrap; }
+.pmx-st i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.pmx-st.ok { color: var(--ok); } .pmx-st.warn { color: var(--amber, var(--warn)); } .pmx-st.bad { color: var(--bad); }
+.pmx .grow, .pmx-hd .grow, .pmx-ah .grow, .pmx-applies .grow, .pmx-sum .grow { flex: 1 1 auto; }
+
+/* ---------- the window ---------- */
+dialog.pmx-dialog { padding: 0; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--panel); color: var(--text); box-shadow: var(--shadow-dialog); width: min(960px, calc(100vw - 24px)); height: min(760px, calc(100dvh - 24px)); max-width: none; max-height: none; overflow: hidden; }
+dialog.pmx-dialog[open] { display: grid; grid-template-rows: auto minmax(0, 1fr); }
+dialog.pmx-dialog::backdrop { background: rgba(4, 6, 6, .72); backdrop-filter: blur(5px); }
+.pmx-hd { display: flex; align-items: center; gap: 10px; padding: 12px 14px 12px 18px; border-bottom: 1px solid var(--line); }
+.pmx-hd > svg { width: 22px; height: 22px; fill: none; stroke: var(--accent); stroke-width: 1.8; }
+.pmx-hd b { display: block; font-size: 15px; }
+.pmx-hd small { display: block; color: var(--muted); font-size: 12px; }
+.pmx-x { width: 30px; height: 30px; border-radius: 7px; border: 0; background: transparent; color: var(--muted); font-size: 15px; cursor: pointer; }
+.pmx-x:hover { background: var(--panel-2); color: var(--text); }
+.pmx-body { overflow: auto; min-height: 0; }
+.pmx { display: grid; align-content: start; container-type: inline-size; font-size: 12.5px; }
+.pmx-wait { padding: 24px; color: var(--muted); }
+.pmx-err { padding: 12px 18px; color: var(--bad); }
+.pmx-ctx { padding: 10px 18px; font-size: 12px; color: var(--muted); background: color-mix(in srgb, var(--accent) 6%, transparent); border-bottom: 1px solid var(--line); }
+.pmx-tools { display: flex; align-items: flex-start; gap: 8px; padding: 10px 18px 6px; }
+.pmx-lf { flex: 1; min-width: 0; }
+.pmx-filters { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 6px 14px; }
+/* The shared filter's Scope buttons, drawn like the other segmented controls here */
+.pmx .lf-seg { display: inline-flex; padding: 2px; gap: 2px; border-radius: 8px; background: var(--surface-inset, var(--bg)); border: 1px solid var(--border-inset, var(--line)); }
+.pmx .lf-seg .st-seg-btn { height: 26px; padding: 0 10px; border-radius: 6px; border: 1px solid transparent; background: transparent; color: var(--muted); font: 600 12px var(--font-ui); cursor: pointer; white-space: nowrap; }
+.pmx .lf-seg .st-seg-btn:hover { color: var(--text); }
+.pmx .lf-seg .st-seg-btn.active { background: var(--panel-3); border-color: var(--line-strong); color: var(--text-bright, var(--text)); }
+.pmx-fg { display: inline-flex; align-items: center; gap: 6px; }
+.pmx-fl { font: 600 11px var(--font-ui); color: var(--muted); }
+.pmx .lf-none { margin: 0; color: var(--muted); font-size: 12px; }
+/* The tester */
+.pmx-try { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 18px 8px; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--panel-2); }
+.pmx-try[hidden] { display: none; }
+.pmx-try-in { flex: 1 1 260px; height: 30px; padding: 0 10px; border-radius: 7px; border: 1px solid var(--line-strong); background: var(--surface-inset, var(--bg)); color: var(--text); font: 12.5px var(--mono); }
+.pmx-try-out { flex-basis: 100%; }
+.pmx-verdict { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; padding: 8px 10px; border-radius: 7px; border: 1px solid var(--line-strong); background: var(--panel); }
+.pmx-verdict.ok { border-color: color-mix(in srgb, var(--ok) 50%, transparent); }
+.pmx-verdict.warn { border-color: color-mix(in srgb, var(--amber, var(--warn)) 50%, transparent); }
+.pmx-verdict.bad { border-color: color-mix(in srgb, var(--bad) 55%, transparent); }
+.pmx-segs { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 4px; }
+.pmx-segs code, .pmx-hint code { font: 11.5px var(--mono); }
+/* Groups, with headers that stay in view */
+.pmx-group[hidden], .pmx-sub[hidden] { display: none; }
+.pmx-gh { position: sticky; top: 0; z-index: 3; display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 4px 12px 4px 18px; background: var(--panel-2); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.pmx-gh.sub { top: 36px; z-index: 2; min-height: 30px; background: var(--panel); padding-left: 34px; border-top: 0; }
+.pmx-gt { font-weight: 600; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.pmx-gh.sub .pmx-gt { font-weight: 500; font-size: 12px; }
+.pmx-gn { font: 12px var(--mono); color: var(--muted); }
+.pmx-gnote { font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+.pmx-gempty { padding: 10px 18px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line); }
+/* Rows */
+.pmx-row { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 2px 10px; align-items: center; padding: 6px 12px 6px 18px; border-bottom: 1px solid var(--line); }
+.pmx-row[hidden] { display: none; }
+.pmx-row:hover { background: color-mix(in srgb, var(--panel-2) 55%, transparent); }
+.pmx-row.busy { opacity: .55; pointer-events: none; }
+.pmx-box { padding: 0; }
+.pmx-main { display: grid; gap: 1px; min-width: 0; }
+.pmx-l1 { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.pmx-pat { font: 12.5px var(--mono); color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pmx-meta { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pmx-prob { font-size: 11.5px; color: var(--amber, var(--warn)); }
+.pmx-note { font-size: 11.5px; color: var(--muted); }
+.pmx-act { display: flex; align-items: center; gap: 4px; justify-content: flex-end; flex-wrap: wrap; }
+.pmx-row.is-off .pmx-pat, .pmx-row.is-off .pmx-eff { opacity: .5; }
+.pmx-row.is-off .pmx-pat { text-decoration: line-through; text-decoration-color: var(--dim); }
+/* Edit and Add */
+.pmx-form { display: grid; gap: 8px; padding: 12px 18px; background: var(--panel-2); border-bottom: 1px solid var(--line-strong); }
+.pmx-ft { font-weight: 600; font-size: 12px; }
+.pmx-match { height: 30px; padding: 0 10px; border-radius: 7px; border: 1px solid var(--line-strong); background: var(--surface-inset, var(--bg)); color: var(--text); font: 12.5px var(--mono); }
+.pmx-match:focus { outline: none; border-color: var(--accent); }
+.pmx-fr { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 8px; align-items: center; }
+.pmx-fr .pmx-seg { justify-self: start; }
+.pmx-hint { margin: 0; font-size: 11.5px; color: var(--muted); }
+.pmx-fa { display: flex; align-items: center; gap: 8px; }
+.pmx-fmsg { color: var(--bad); font-size: 12px; }
+/* Empty, built-in rules */
+.pmx-empty { display: grid; justify-items: center; gap: 8px; text-align: center; padding: 40px 24px; color: var(--muted); }
+.pmx-empty b { color: var(--text); font-size: 14px; }
+.pmx-empty p { margin: 0; }
+.pmx-empty ol { margin: 0; padding-left: 18px; text-align: left; display: grid; gap: 6px; max-width: 52ch; }
+.pmx-empty-acts { display: flex; gap: 8px; }
+.pmx-empty .pmx-form-slot { width: min(560px, 100%); text-align: left; }
+.pmx-builtin { border-top: 1px solid var(--line-strong); }
+.pmx-builtin > summary { cursor: pointer; display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 18px; font-weight: 600; background: var(--panel-2); }
+.pmx-builtin > summary small { font-weight: 400; color: var(--muted); }
+.pmx-builtin ul { margin: 0; padding: 0; list-style: none; }
+.pmx-builtin li { display: grid; gap: 2px; padding: 8px 18px 8px 40px; border-bottom: 1px solid var(--line); line-height: 1.45; }
+.pmx-builtin li small { color: var(--muted); font-size: 11.5px; }
+.pmx-builtin code { font: 11px var(--mono); }
+@container (max-width: 560px) {
+  .pmx-tools, .pmx-ctx { padding-left: 12px; padding-right: 12px; }
+  .pmx-tools { flex-direction: column; align-items: stretch; }
+  .pmx-row { grid-template-columns: 18px minmax(0, 1fr); padding-left: 12px; }
+  .pmx-act { grid-column: 2; justify-content: flex-start; }
+  .pmx-meta { white-space: normal; }
+  .pmx-gh { padding-left: 12px; }
+  .pmx-gh.sub { padding-left: 22px; }
+  .pmx-gnote { display: none; }
+  .pmx-fr { grid-template-columns: 1fr; }
+}
+
+/* ---------- in the chat: what applies here ---------- */
+.allowed-pop { width: 420px; }
+.allowed-pop .pmx-mode { display: grid; gap: 2px; padding: 8px 10px; border-radius: 8px; background: var(--panel-2); font-size: 12.5px; }
+.allowed-pop .pmx-mode small { color: var(--muted); font-size: 11.5px; line-height: 1.4; }
+.pmx-ah { display: flex; align-items: center; gap: 8px; margin-top: 8px; font: 600 11px var(--font-ui); color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.pmx-ah > span:first-child { flex: 1; }
+.pmx-ah .pmx-seg { text-transform: none; letter-spacing: 0; }
+.pmx-applies { margin: 4px 0 0; padding: 0; list-style: none; display: grid; }
+.pmx-applies li { display: flex; align-items: center; gap: 7px; min-height: 26px; padding: 2px 4px; border-bottom: 1px solid var(--line); min-width: 0; }
+.pmx-applies code { font: 12px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.pmx-applies small { font: 11px var(--mono); color: var(--muted); white-space: nowrap; }
+.pmx-applies .pmx-none { color: var(--muted); font-size: 12px; border: 0; }
+.pmx-why h6 { margin: 10px 0 4px; font: 600 11px var(--font-ui); color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.pmx-why ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 2px; }
+.pmx-why li { display: grid; gap: 1px; padding: 3px 4px; }
+.pmx-why code { font: 12px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pmx-why small { color: var(--muted); font-size: 11.5px; }
+.allowed-pop .ap-foot { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.pmx-legend { flex: 1; display: inline-flex; gap: 6px; align-items: center; color: var(--muted); font-size: 11px; flex-wrap: wrap; }
+
+/* ---------- ⚙ Settings: the summary ---------- */
+.pmx-sum { display: grid; gap: 10px; }
+.pmx-sum-n { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12.5px; color: var(--muted); }
+.pmx-sum-n span { display: inline-flex; align-items: center; gap: 5px; }
+.pmx-sum-n b { color: var(--text); font: 600 13px var(--mono); }
+.pmx-sum-acts { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.au-pick { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 8px; font-size: 12px; color: var(--muted); }
+
+/* ---------- approval cards: Allow always panel and scope parts ---------- */
+.shell-card .sc-k { min-width: 92px; }
+.shell-card .sc-pick button .pmx-scope { margin-right: 2px; }
+.shell-card .sc-also { font-size: 12px; color: var(--muted); line-height: 1.6; }
+.shell-card .sc-also code, .shell-card .sc-preview code { font: 11.5px var(--mono); background: var(--panel-3); padding: 1px 4px; border-radius: 4px; }
+.shell-card .sc-sum { justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 8px 10px; border: 1px dashed var(--line-strong); border-radius: 8px; }
+.shell-card .sc-preview { font: 12.5px var(--font-ui); white-space: normal; }
+.shell-card .sc-preview b { color: var(--amber, var(--warn)); }
+.shell-card .sc-warn { color: var(--amber, var(--warn)); }
+.approval .always .ap-scope { display: inline-flex; align-items: center; gap: 3px; margin-left: 4px; font-weight: 500; opacity: .9; }
+.tl .sub .pmx-scope, .tl-row .sub .pmx-scope { font-size: inherit; }
+.tl-why { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; padding: 4px 0 6px; font-size: 12px; color: var(--muted); }

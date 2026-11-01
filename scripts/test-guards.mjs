@@ -895,6 +895,17 @@ test('rules: a rule turned off is kept but not used, and each command a rule let
     assert.equal(loadRules(root).filter((x) => x.scope === 'project').length, 0);
     assert.equal(updateRule('project', 'nope', { on: true }, root), null);
   }
+  { // rules: edited in place from the permissions list (pattern and what happens), keeping its id, count, the chat it came from and its strength
+    const root = tmp('rules-edit');
+    saveRules('project', [{ effect: 'allow', match: 'npm run *', by: 'button', hits: 4, from: { chatId: 'c1', chat: 'Fix login' } }], root);
+    const [r] = loadRules(root).filter((x) => x.scope === 'project');
+    assert.deepEqual(r.from, { chatId: 'c1', chat: 'Fix login' });
+    updateRule('project', r.id, { match: 'npm run build*', effect: 'ask' }, root);
+    const e = loadRules(root).find((x) => x.scope === 'project');
+    assert.deepEqual([e.id, e.match, e.effect, e.by, e.hits, e.from.chatId], [r.id, 'npm run build*', 'ask', 'button', 4, 'c1'], 'a rule from a card stays a card rule when edited');
+    updateRule('project', r.id, { match: '   ', effect: 'maybe' }, root);
+    assert.deepEqual([loadRules(root)[0].match, loadRules(root)[0].effect], ['npm run build*', 'ask'], 'an empty pattern or unknown effect changes nothing');
+  }
   { // rules: each command a rule lets through counts one use; a chat rule's use goes to the page
     const { events, dir } = await agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('', [['shell', { command: 'node build.js --x' }]]), reply('Done.')][i], {
       prep: (d) => { buildJs(d); saveRules('project', [{ effect: 'allow', match: 'node build.js*', by: 'user' }], d); } });
@@ -905,6 +916,9 @@ test('rules: a rule turned off is kept but not used, and each command a rule let
     const chat = await agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('Done.')][i], {
       prep: buildJs, more: { cmdRules: [{ id: 'c1', effect: 'allow', match: 'node build.js*', by: 'button' }, { id: 'c2', effect: 'allow', match: 'node other*', by: 'button', on: false }] } });
     assert.deepEqual(of(chat.events, 'rule_used').map((e) => e.id), ['c1']);
+    // The command's step names the rule that let it run, so the chat can say why it didn't ask.
+    assert.deepEqual(of(events, 'command').map((e) => [e.decidedBy, e.rule]), [['rule:project', 'node build.js*'], ['rule:project', 'node build.js*']]);
+    assert.deepEqual(of(chat.events, 'command').map((e) => [e.decidedBy, e.rule]), [['rule:chat', 'node build.js*']]);
   }
 });
 

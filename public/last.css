@@ -2978,15 +2978,7 @@ body.dev-build::before { content: ''; position: fixed; left: 0; right: 0; top: 0
 .apps-pop .apps-lvl { flex: none; }
 .apps-pop .apps-lvl button { font-size: 11px; padding: 2px 7px; }
 
-/* Permission rows (Settings → Command rules, project settings → Permissions, the chat's 🔓): on/off, what, where from, uses */
-.pr-rule.perm-row { grid-template-columns: 18px 76px minmax(0, 1fr) auto auto; }
-.pr-rule.perm-row .perm-nobox { width: 18px; }
-.pr-rule.perm-row.off code, .pr-rule.perm-row.off .pr-eff { opacity: .5; text-decoration: line-through; text-decoration-color: var(--line-strong); }
-.pr-rule.perm-row .perm-del.sure { width: auto; padding: 0 8px; color: var(--bad); font: 600 11px var(--font-ui); }
 .allowed-pop { width: 380px; max-height: min(70vh, 560px); overflow: auto; }
-.allowed-pop .perm-h { margin: 10px 0 4px; font: 600 11px var(--font-ui); color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
-.allowed-pop .pr-rule.perm-row { grid-template-columns: 18px 64px minmax(0, 1fr) auto; }
-.allowed-pop .pr-rule.perm-row .pr-by { grid-column: 3 / -1; grid-row: 2; }
 .allowed-pop .ap-foot { display: flex; gap: 8px; justify-content: space-between; margin-top: 8px; }
 .chatpane .cmp-control-rack .cmp-perm-b.on { color: var(--accent); }
 .chatpane .cmp-control-rack .cmp-perm-b { position: relative; }
