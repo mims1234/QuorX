@@ -29,11 +29,13 @@ export const budgetOf = (projectId) => {
 /** Where a project stands: its budget (null = none), what is spent, and what is left. */
 export function budgetState(projectId) {
   const budget = budgetOf(projectId);
-  const { spent, running: runningCost } = projectSpend(projectId);
+  const { spent, running: runningCost, unsaved } = projectSpend(projectId);
   // running: a reply in this project is working now (the sidebar editor stays locked until it finishes);
   // runningCost: what those replies have spent so far (part of spent), so a page showing its own live figure can swap it in.
+  // unsavedCost: spent by replies no chat holds any more (deleted or rewound chats, replies stopped before saving),
+  // so the page can say why the chats' totals add up to less than what was spent.
   const running = [...live.values()].some((r) => r.project === projectId);
-  return { budget, spent, left: budget == null ? null : budget - spent, running, runningCost };
+  return { budget, spent, left: budget == null ? null : budget - spent, running, runningCost, unsavedCost: unsaved };
 }
 
 /** What every project together has spent today (local time): replies that ended today, plus replies running now. */
