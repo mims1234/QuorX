@@ -65,6 +65,13 @@ a real browser and your real toolchains, and shows how it got every answer.
   account asks you first (unless you turn on ⚡ YOLO's "act in your tabs without asking"), and the deciders check each
   step it types. The agent's tabs stay open, and the next reply carries
   on in them. Pairing the extension shows a code in both places, so you know it is yours.
+- **A harness that keeps up with you.** A file you change while the agent works is never overwritten unseen: it
+  reads it again first. Background jobs report back when they end. Projects made with other agents bring their rules
+  (AGENTS.md, CLAUDE.md and the like). Rarely used tools load only when needed, so every call is smaller. Hooks run
+  before or after file writes, commands and any tool, and when a reply starts or ends (a failing test sends it back).
+  Helpers come in roles (explore, test, draft, or your own), memory notes have a type, a why and a project, and
+  each reply that did work ends with a short wrap-up: what changed, what wasn't checked, and next steps to send with a
+  click.
 - **Long replies, a steady app.** Up to 500 steps a reply by default, with a card at the limit that asks how to carry
   on. A streaming reply keeps its finished text in place, so you can select it, and big projects, long runs and
   searches no longer hold QuorX up. Search skips what `.gitignore` ignores and build output, and says when it stops

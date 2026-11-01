@@ -21,11 +21,11 @@ import { setupCheck, runFix } from './server/setup-check.js';
 import { startSignIn, signInStatus, cancelSignIn, finishByCallback, finishWithCode, callbackPage } from './server/oauth.js';
 import { runAgent, answerApproval, answerQuestion, answerSecret, answerBudget, raiseCap, setRunApproval, setRunAccess, steerRun, setRunReading, setRunVideo, holdCard, DEFAULTS, MEDIA, briefFor, briefForChat, REVIEW_MODEL, HELPER_MODEL, REVIEW_ALT, REVIEW_STRONG, REVIEW_STRONG_ALT } from './server/agent.js';
 import { reviewCode, pickReviewer } from './server/codereview.js';
-import { loadHooks, saveHooks, HOOK_EVENTS, cleanHook, hookLine, safeHookFile } from './server/hooks.js';
+import { loadHooks, saveHooks, HOOK_EVENTS, HOOK_WHEN, cleanHook, hookLine, safeHookFile } from './server/hooks.js';
 import { projectEnv } from './server/projectsecrets.js';
 import { createScheduler, loadSchedules, scheduleView, addSchedule, changeSchedule, removeSchedule, runScheduleNow, scheduleHooks } from './server/schedules.js';
 import { startScheduledChat } from './server/schedrun.js';
-import { loadMemory, saveMemory, memoryTokens, MEMORY_TOKENS } from './server/memory.js';
+import { loadMemory, saveMemory, worstPromptTokens, MEMORY_TOKENS, MEMORY_TYPES } from './server/memory.js';
 import { listQuoriums, saveQuorium, removeQuorium } from './server/quoriums.js';
 import { listServers as mcpList, saveServers as mcpSave, addServers as mcpAdd, parseSetup as mcpParse, connect as mcpConnect, stopServer as mcpStop, foundServers as mcpFound, importFound as mcpImport } from './server/mcpclient.js';
 import { startLogin as mcpStartLogin, finishLogin as mcpFinishLogin, signOut as mcpSignOut, loginPage as mcpLoginPage } from './server/mcpauth.js';
@@ -661,10 +661,10 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/mcp/logout' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e4) || '{}'); mcpSignOut(String(b.name || '')); mcpStop(String(b.name || '')); return json(res, 200, { servers: mcpList() }); }
     if (url.pathname === '/api/mcp/stop' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e4) || '{}'); mcpStop(String(b.name || '')); return json(res, 200, { servers: mcpList() }); }
-    if (url.pathname === '/api/memory' && req.method === 'GET') { const m = loadMemory(); return json(res, 200, { ...m, tokens: memoryTokens(m.items), limit: MEMORY_TOKENS }); }
+    if (url.pathname === '/api/memory' && req.method === 'GET') { const m = loadMemory(); return json(res, 200, { ...m, tokens: worstPromptTokens(m.items), limit: MEMORY_TOKENS, types: MEMORY_TYPES }); }
     if (url.pathname === '/api/memory' && req.method === 'PUT') {
       const b = JSON.parse(await readBody(req, 1e5) || '{}');
-      try { const m = saveMemory(b); return json(res, 200, { ok: true, ...m, tokens: memoryTokens(m.items), limit: MEMORY_TOKENS }); } catch (e) { return json(res, 200, { error: e.message }); }
+      try { const m = saveMemory(b); return json(res, 200, { ok: true, ...m, tokens: worstPromptTokens(m.items), limit: MEMORY_TOKENS, types: MEMORY_TYPES }); } catch (e) { return json(res, 200, { error: e.message }); }
     }
     // ---- Quoriums: saved combos of helper modules and their models (server/quoriums.js) ----
     if (url.pathname === '/api/quoriums' && req.method === 'GET') return json(res, 200, { quoriums: listQuoriums() });
@@ -705,7 +705,7 @@ const server = http.createServer(async (req, res) => {
     const hkm = url.pathname.match(/^\/api\/projects\/([a-z0-9-]+)\/hooks$/i);
     if (hkm) {
       if (!validId(hkm[1]) || !listProjects().some((p) => p.id === hkm[1])) return json(res, 400, { error: 'unknown project' });
-      if (req.method === 'GET') return json(res, 200, { hooks: loadHooks(workspaceDir(hkm[1])), events: HOOK_EVENTS });
+      if (req.method === 'GET') return json(res, 200, { hooks: loadHooks(workspaceDir(hkm[1])), events: HOOK_EVENTS, when: HOOK_WHEN });
       if (req.method === 'POST') {
         const b = JSON.parse(await readBody(req, 1e5) || '{}');
         try { return json(res, 200, { ok: true, hooks: saveHooks(workspaceDir(hkm[1]), b.hooks) }); } catch (e) { return json(res, 200, { error: e.message }); }
@@ -723,7 +723,7 @@ const server = http.createServer(async (req, res) => {
         if (!h.command) return json(res, 200, { error: 'the hook has no command' });
         const file = String(b.file || '').trim();
         if (h.command.includes('{file}') && !safeHookFile(file)) return json(res, 200, { error: 'give a plain file path to stand in for {file}' });
-        const line = hookLine(h, { file });
+        const line = hookLine(h, { file, tool: String(b.tool || 'browser') });
         const S = safetySettings(b.safety);
         const d = await decideCommand(line, { shell: S.shell, root, rules: loadRules(root), mode: 'strict', yolo: yoloOf(S) });
         if (d.risk === 'danger' || d.verdict === 'deny') return json(res, 200, { line, ran: false, why: `hooks never run this: ${d.why}` });

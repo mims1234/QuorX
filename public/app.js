@@ -75,7 +75,7 @@ const BUCKET = {
   unclear: ['deciders unsure', 'The deciders could not settle it (low confidence).'],
   unmatched: ['guess unclear', 'The agent\'s guess did not match any option, so it can\'t be compared.'],
 };
-const TOOL_NAME = { computer_use: '🖥 Computer use', quorx_settings: '⚙ QuorX settings', folder: '📁 A folder outside the project', remember: '📌 Remember this in every chat', media_plan: '🎞 Production plan', enable_media: '🧰 Switch on paid tools', imagine: '🖼 Make a picture', make_video: '🎬 Make a video', compose_music: '🎵 Compose music', speak: '🗣 Speak aloud',
+const TOOL_NAME = { computer_use: '🖥 Computer use', quorx_settings: '⚙ QuorX settings', folder: '📁 A folder outside the project', remember: '📌 Remember this', media_plan: '🎞 Production plan', enable_media: '🧰 Switch on paid tools', imagine: '🖼 Make a picture', make_video: '🎬 Make a video', compose_music: '🎵 Compose music', speak: '🗣 Speak aloud',
   write_artifact: '📄 Write a page', edit_artifact: '✏️ Edit a page', read_artifact: '👀 Read a page', decide: '⚖️ Ask the deciders',
   list_files: '🗂 List files', read_file: '👀 Read a file', write_file: '📝 Write a file', append_file: '📝 Append to a file', edit_file: '✏️ Edit a file',
   search_docs: '🔎 Search the attached documents', read_doc: '📄 Read an attached document', list_docs: '📎 List attached documents',
@@ -1215,14 +1215,22 @@ function openProjectSub(p, kind, { onClose } = {}) {
 }
 
 // ---------- Hooks window ----------
-const HOOK_WHEN = { after_write: 'After a file write', before_command: 'Before a command', after_command: 'After a command' };
-const HOOK_MATCH_HINT = { after_write: 'files, e.g. *.ts, src/** (empty: every file)', before_command: 'commands, e.g. npm *, git push* (empty: every command)', after_command: 'commands, e.g. npm test* (empty: every command)' };
+const HOOK_WHEN = { before_write: 'Before a file is written', after_write: 'After a file is written', before_command: 'Before a command', after_command: 'After a command', before_tool: 'Before a tool', after_tool: 'After a tool', reply_start: 'When a reply starts', reply_end: 'When a reply ends' };
+// The When picker, in four groups; a "before" hook can stop what comes next, a reply-end hook can send the reply back.
+const HOOK_GROUPS = [['Files', ['before_write', 'after_write']], ['Commands', ['before_command', 'after_command']], ['Tools', ['before_tool', 'after_tool']], ['Replies', ['reply_start', 'reply_end']]];
+const HOOK_BLOCKS = new Set(['before_write', 'before_command', 'before_tool']);
+const HOOK_KIND = (e) => (/_write$/.test(e) ? 'file' : /_command$/.test(e) ? 'command' : /_tool$/.test(e) ? 'tool' : 'reply');
+const HOOK_MATCH_HINT = { before_write: 'files, e.g. migrations/**, *.lock (empty: every file)', after_write: 'files, e.g. *.ts, src/** (empty: every file)', before_command: 'commands, e.g. npm *, git push* (empty: every command)', after_command: 'commands, e.g. npm test* (empty: every command)', before_tool: 'tools, e.g. browser, fetch_url, mcp__github__* (empty: every tool)', after_tool: 'tools, e.g. browser, fetch_url (empty: every tool)' };
+const HOOK_FAIL = { before_write: 'Stop the write if it fails', before_command: 'Stop the command if it fails', before_tool: 'Stop the tool call if it fails', reply_end: 'Send the reply back if it fails', reply_start: 'Hand its output to the agent' };
 // One click adds a filled-in hook to start from.
 const HOOK_EXAMPLES = [
   { label: 'Lint after a file write', hook: { event: 'after_write', match: '*.js, *.ts', command: 'npx eslint {file}', feedback: true } },
   { label: 'Format after a file write', hook: { event: 'after_write', match: '*.js, *.ts, *.css, *.html', command: 'npx prettier --write {file}', feedback: false } },
+  { label: 'Never touch migrations/', hook: { event: 'before_write', match: 'migrations/**', command: 'node -e "process.exit(1)"', feedback: true } },
   { label: 'Run the tests after npm commands', hook: { event: 'after_command', match: 'npm install*', command: 'npm test', feedback: true } },
   { label: 'Check before git push', hook: { event: 'before_command', match: 'git push*', command: 'npm test', feedback: true } },
+  { label: 'git status when a reply starts', hook: { event: 'reply_start', command: 'git status --short', feedback: true } },
+  { label: 'Tests must pass before “done”', hook: { event: 'reply_end', command: 'npm test', feedback: true, timeout: 300 } },
 ];
 async function mountHooksWindow(p, el, ctl) {
   if (p.missing || p.needsFolder) { el.innerHTML = '<p class="pjx-empty">Pick a folder for this project first: hooks run in it.</p>'; return; }
@@ -1244,12 +1252,15 @@ async function mountHooksWindow(p, el, ctl) {
   };
   // Each hook reads as one line of plain words; Edit opens its fields (new hooks open ready to fill in).
   const editing = new Set();
-  const whereText = (h) => (h.event === 'after_write' ? (h.match ? 'to files matching' : 'to any file') : (h.match ? 'matching' : 'any command'));
+  const whereText = (h) => ({ file: h.match ? 'files matching' : 'any file', command: h.match ? 'matching' : 'any command', tool: h.match ? 'tools named' : 'any tool', reply: '' }[HOOK_KIND(h.event)]);
+  const flagText = (h) => (h.feedback ? `<span class="sx-tag ${HOOK_BLOCKS.has(h.event) ? 'hkx-blocks' : h.event === 'reply_end' ? 'hkx-sends' : ''}">${HOOK_BLOCKS.has(h.event) ? 'Can block' : h.event === 'reply_end' ? 'Sends back' : h.event === 'reply_start' ? 'Output to the agent' : 'Tells the agent'}</span>` : '<span>Runs quietly</span>');
+  // The When picker: four groups of two, the new kinds marked by what a failure does.
+  const eventPicker = (h) => `<div class="qx-ev-grid" role="radiogroup" aria-label="When this hook runs">${HOOK_GROUPS.map(([g, evs]) => `<div class="qx-ev-group"><span>${g}</span>${evs.map((v) => `<button type="button" class="qx-ev" role="radio" aria-checked="${h.event === v}" data-ev="${v}">${esc(HOOK_WHEN[v])}${HOOK_BLOCKS.has(v) ? '<span class="sx-tag hkx-blocks">Can block</span>' : v === 'reply_end' ? '<span class="sx-tag hkx-sends">Sends back</span>' : ''}</button>`).join('')}</div>`).join('')}</div>`;
   const draw = () => {
     const dirty = isDirty(), on = list.filter((h) => h.on).length;
     ctl.setDirty(dirty);
     ctl.setSummary(list.length ? `<span class="hkx-st ${on ? 'ok' : ''}"><i></i>${on} on${list.length > on ? ` · ${list.length - on} off` : ''}</span>` : '');
-    el.innerHTML = `<div class="pjx-intro"><b>Commands QuorX runs itself around the agent's work. The agent can't skip them.</b><span>They run on this computer, inside the project folder, from top to bottom, and still go through your command rules and Stop. In a command, <code>{file}</code> is the file just written.</span></div>
+    el.innerHTML = `<div class="pjx-intro"><b>Commands QuorX runs itself around the agent's work. The agent can't skip them.</b><span>They run on this computer, inside the project folder, from top to bottom, and still go through your command rules and Stop. In a command, <code>{file}</code> is the file being written and <code>{tool}</code> the tool's name.</span></div>
       <div class="hkx-toolbar"><div class="pjx-filter hkx-filter"></div><button type="button" class="kx-btn sm primary hk-add">＋ Add hook</button></div>
       ${list.length ? `<ol class="hkx-list">${list.map((h, i) => {
         const ed = editing.has(h.id);
@@ -1260,7 +1271,7 @@ async function mountHooksWindow(p, el, ctl) {
             <div class="hkx-what">
               <div class="hkx-when"><b>${esc(HOOK_WHEN[h.event])}</b> <small>${whereText(h)}</small>${h.match ? ` <code>${esc(h.match)}</code>` : ''}</div>
               ${h.command.trim() ? `<code class="hkx-cmdv" title="${esc(h.command)}">${esc(h.command)}</code>` : '<span class="pf-warn hkx-nocmd">No command yet: Edit to add one.</span>'}
-              <small class="hkx-flags">${h.feedback ? (h.event === 'before_command' ? '<span>Stops the command if it fails</span>' : '<span>Tells the agent if it fails</span>') : '<span>Runs quietly</span>'}<span>Time limit ${h.timeout} s</span></small>
+              <small class="hkx-flags">${flagText(h)}<span>Time limit ${h.timeout} s</span></small>
             </div>
             <span class="hkx-acts">
               <button type="button" class="kx-btn sm hkx-run" title="Run this hook once now in the project folder and show what it prints" ${h.command.trim() ? '' : 'disabled'}>▶ Test</button>
@@ -1270,13 +1281,13 @@ async function mountHooksWindow(p, el, ctl) {
             </span>
           </div>
           ${ed ? `<div class="hkx-edit">
-            <div class="hkx-top">
-              <select class="hk-event" aria-label="When this hook runs">${Object.entries(HOOK_WHEN).map(([v, l]) => `<option value="${v}" ${h.event === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
-              <input class="hk-match" value="${esc(h.match)}" placeholder="${esc(HOOK_MATCH_HINT[h.event])}" aria-label="Which ${h.event === 'after_write' ? 'files' : 'commands'}" spellcheck="false">
-            </div>
-            <div class="hkx-cmd"><span class="hkx-prompt" aria-hidden="true">›</span><input class="hk-cmd" value="${esc(h.command)}" placeholder="${h.event === 'after_write' ? 'npx eslint {file}' : 'npm test'}" aria-label="Command" spellcheck="false"></div>
+            ${eventPicker(h)}
+            ${HOOK_KIND(h.event) === 'reply' ? `<p class="pj-hint">${h.event === 'reply_start' ? 'Runs once before the agent starts. What it prints goes to the agent with your message.' : 'Runs when the agent gives its final reply, after a reply that changed something.'}</p>` : `<div class="hkx-top">
+              <input class="hk-match" value="${esc(h.match)}" placeholder="${esc(HOOK_MATCH_HINT[h.event])}" aria-label="Which ${HOOK_KIND(h.event)}s" spellcheck="false">
+            </div>`}
+            <div class="hkx-cmd"><span class="hkx-prompt" aria-hidden="true">›</span><input class="hk-cmd" value="${esc(h.command)}" placeholder="${HOOK_KIND(h.event) === 'file' ? 'npx eslint {file}' : HOOK_KIND(h.event) === 'tool' ? 'node log.mjs {tool}' : h.event === 'reply_start' ? 'git status --short' : 'npm test'}" aria-label="Command" spellcheck="false"></div>
             <div class="hkx-opts">
-              <label class="sq-check" title="${h.event === 'before_command' ? 'When this hook fails, the agent\'s command does not run and the agent gets the hook\'s output' : 'When this hook fails, its output goes back to the agent to fix'}"><input type="checkbox" class="hk-feedback" ${h.feedback ? 'checked' : ''}><span>${h.event === 'before_command' ? 'Stop the command if it fails' : 'Tell the agent if it fails'}</span></label>
+              <label class="sq-check" title="${HOOK_BLOCKS.has(h.event) ? 'When this hook fails, what comes next does not happen and the agent gets the hook\'s output' : h.event === 'reply_end' ? 'When this hook fails, the reply goes back to the agent to fix what it reports' : h.event === 'reply_start' ? 'What the hook prints goes to the agent' : 'When this hook fails, its output goes back to the agent to fix'}"><input type="checkbox" class="hk-feedback" ${h.feedback ? 'checked' : ''}><span>${HOOK_FAIL[h.event] || 'Tell the agent if it fails'}</span></label>
               <label class="hkx-time" title="The hook is stopped after this long">Time limit <input type="number" class="hk-timeout" min="1" max="600" value="${h.timeout}"> s</label>
               <span class="kx-spacer"></span>
               ${h.command.includes('{file}') ? `<label class="hkx-time" title="The file that stands in for {file} when you press Test">Test with <input class="hkx-file" value="${esc(files.get(h.id) || 'index.html')}" aria-label="A file to test {file} with" spellcheck="false"></label>` : ''}
@@ -1293,9 +1304,9 @@ async function mountHooksWindow(p, el, ctl) {
       const i = Number(row.dataset.i), h = list[i];
       const set = (k, v, redraw) => { h[k] = v; if (redraw) draw(); else refresh(); };
       const q = (s) => $(s, row);
-      if (q('.hk-event')) {
-        q('.hk-event').onchange = (e) => set('event', e.target.value, true);
-        q('.hk-match').oninput = (e) => set('match', e.target.value);
+      if (q('.qx-ev-grid')) {
+        for (const b of row.querySelectorAll('.qx-ev')) b.onclick = () => { if (HOOK_KIND(b.dataset.ev) !== HOOK_KIND(h.event)) h.match = ''; set('event', b.dataset.ev, true); };
+        if (q('.hk-match')) q('.hk-match').oninput = (e) => set('match', e.target.value);
         q('.hk-cmd').oninput = (e) => { const had = h.command.includes('{file}'); set('command', e.target.value); q('.hkx-run').disabled = !h.command.trim(); if (had !== h.command.includes('{file}')) { const at = e.target.selectionStart; draw(); const c = el.querySelector(`.hkx-row[data-i="${i}"] .hk-cmd`); c?.focus(); c?.setSelectionRange(at, at); } };
         q('.hk-timeout').oninput = (e) => set('timeout', Math.max(1, Math.min(600, Number(e.target.value) || 60)));
         q('.hk-feedback').onchange = (e) => set('feedback', e.target.checked);
@@ -4710,8 +4721,9 @@ function drawTimeline(c, m) {
   // (click for each call and its result), and any card that asks you something, right where it happened.
   tl.innerHTML = timelineHTML(m);
   wireTimeline(m, el);
-  $('.approvals', el).innerHTML = outOfStepsHTML(m);
+  $('.approvals', el).innerHTML = outOfStepsHTML(m) + wrapUpHTML(m);
   const oos = $('.oos-card[data-run]', el); if (oos) wireOutOfSteps(oos, c, m);
+  wireWrapUp(el, c, m);
   for (const card of el.querySelectorAll('.approval[data-id]:not(.question):not(.budget-card)')) wireApproval(card, m);
   for (const card of el.querySelectorAll('.question[data-id]')) wireQuestion(card, m);
   const bcard = $('.budget-card[data-id]', el); if (bcard) wireBudget(bcard, c, m);
@@ -5333,7 +5345,14 @@ function traceRows(m) {
     else if (e.t === 'fresh_eyes_start') row(e.at, `👀 <b>Fresh eyes</b> ${esc(short(e.model))}: a problem came back, so a clean-context model takes a look<div class="sub">${(e.problems || []).map(esc).join('<br>')}</div>`, 'note');
     else if (e.t === 'fresh_eyes') row(e.at, `👀 Fresh eyes ${e.ok ? 'diagnosed it' : 'found nothing'}${e.report ? `<div class="sub" style="white-space:pre-wrap">${linkUrls(esc(e.report))}</div>` : ''}`, e.ok ? 'ok' : 'warn');
     else if (e.t === 'helper_start' && e.fresh) return;
-    else if (e.t === 'helper_start') row(e.at, `🤝 <b>Helper ${e.id}</b> ${esc(short(e.model))} starts, with a clean context<div class="sub">${esc(e.task)}</div>`, 'note');
+    else if (e.t === 'helper_start') row(e.at, `🤝 <b>Helper ${e.id}</b>${e.roleName ? ` <span class="sx-tag">${esc(e.roleName)}</span>` : ''} ${esc(short(e.model))} starts, ${e.context === 'summary' ? 'with a summary of this chat' : 'with a clean context'}${e.can && e.can.length > 1 ? ` · may ${esc(e.can.filter((c) => c !== 'read').map((c) => ({ commands: 'run checked commands', browser: 'use the browser', scratch: 'write in scratch' }[c] || c)).join(', '))}` : ''}<div class="sub">${esc(e.task)}</div>`, 'note');
+    else if (e.t === 'guard') row(e.at, `✋ <b>${esc(e.path)}</b> not changed: it ${esc(e.why)}<div class="sub">The agent has to read it again first (⚙ Agent loop → Protect files that changed)</div>`, 'warn');
+    else if (e.t === 'job_done') row(e.at, `🔔 Background job <code>${esc(e.id)}</code> ${e.failed ? 'failed to run' : `ended · exit ${e.code ?? '–'}`}<div class="sub">${esc(e.label)} · the agent was told</div>${e.tail ? `<details class="out"><summary>last output</summary><pre>${esc(e.tail)}</pre></details>` : ''}`, e.failed || (e.code && e.code !== 0) ? 'warn' : 'ok');
+    else if (e.t === 'tools_deferred') row(e.at, `🧰 ${e.names.length} rarely used tool${e.names.length === 1 ? '' : 's'} wait until needed<div class="sub">${esc(e.names.join(', '))} · ⚙ Agent loop → Load rare tools when needed</div>`, 'note');
+    else if (e.t === 'tools_loaded') row(e.at, `🧰 Loaded <code>${esc(e.names.join(', '))}</code><div class="sub">${e.left ? `${e.left} more can load when needed` : 'Every tool is loaded now'}</div>`, 'note');
+    else if (e.t === 'notes_read') row(e.at, `📄 Read other agents' notes: ${e.files.map((f) => `<code>${esc(f.file)}</code> ${fmtBytes(f.bytes)}${f.cut ? ' (cut)' : ''}`).join(' · ')}<div class="sub">With AGENT.md · ⚙ Agent loop → Read other agents' notes</div>`, 'note');
+    else if (e.t === 'recall') row(e.at, `📌 Read the details of a memory note: “${esc(e.text)}”`, 'note');
+    else if (e.t === 'wrap_up') row(e.at, `🧾 Wrap-up${e.unchecked?.length ? ` · ${e.unchecked.length} thing${e.unchecked.length === 1 ? '' : 's'} not checked` : ''}${e.next?.length ? ` · ${e.next.length} next step${e.next.length === 1 ? '' : 's'}` : ''}`, 'note');
     else if (e.t === 'helper_done') row(e.at, `🤝 Helper ${e.id} ${e.ok ? 'reported back' : 'gave no report'} · ${e.steps} step${e.steps === 1 ? '' : 's'} · ${secs(e.ms)} · ${money(e.cost, 4)}${e.chars ? ` · ${e.chars} characters returned` : ''}`, e.ok ? 'ok' : 'warn');
     else if (e.t === 'steer') row(e.at, `✉ <b>You</b> while it worked: ${esc(clip(e.text, 200))}`, 'ask');
     else if (e.t === 'steer_delivered') row(e.at, `✓ The agent read your note${e.count > 1 ? 's' : ''} before step ${e.step + 1}`, 'note');
@@ -5363,8 +5382,8 @@ function traceRows(m) {
       const stop = e.stopped ? (e.stopped.left ? `⚠ ${e.stopped.left} process${e.stopped.left > 1 ? 'es' : ''} did not stop: ${esc((e.stopped.names || []).join(', '))}` : `■ stopped · 0 processes left${e.stopped.mode === 'basic' ? ' (basic mode)' : ''}`) : e.timedOut ? 'stopped at the time limit' : '';
       row(e.at, `⌨️ <code>${esc(e.command)}</code> → exit ${e.code ?? '–'} · ${secs(e.ms)}<div class="sub">${[by, undo, stop, e.leftovers?.ended?.length ? `ended ${e.leftovers.ended.length} process${e.leftovers.ended.length > 1 ? 'es' : ''} it left running` : '', e.leftovers?.kept?.length ? `kept open: ${esc(e.leftovers.kept.join(', '))}` : '', 'not covered: files outside the project, ignored folders (node_modules, target), pushes, installs, databases'].filter(Boolean).join(' · ')}</div>${ch && n ? `<details class="out"><summary>files</summary><pre>${esc([...ch.added.map((f) => `+ ${f}`), ...ch.modified.map((f) => `~ ${f}`), ...ch.deleted.map((f) => `- ${f}`)].join('\n'))}</pre></details>` : ''}${e.out ? `<details class="out"><summary>output</summary><pre>${esc(e.out)}</pre>${e.log ? `<div class="sub">Full log: ${esc(e.log)}</div>` : ''}</details>` : ''}`, e.code || e.stopped?.left ? 'err' : 'cmd');
     }
-    else if (e.t === 'hook') row(e.at, `🪝 hook <code>${esc(clip(e.command, 160))}</code> ${e.skipped ? 'did not run' : `→ ${e.ok ? 'ok' : e.timedOut ? 'stopped at its time limit' : `exit ${e.code ?? '–'}`} · ${secs(e.ms)}`}<div class="sub">${esc(HOOK_WHEN[e.event] || e.event)}${e.file ? `: ${esc(e.file)}` : ''}${e.skipped ? ` · ${esc(e.why || '')}` : e.told ? (e.event === 'before_command' ? ' · the command did not run; the agent sees why' : ' · the agent sees its output') : ''}</div>${e.out ? `<details class="out"${e.ok ? '' : ' open'}><summary>output</summary><pre>${esc(e.out)}</pre></details>` : ''}`, e.ok ? 'cmd' : 'err');
-    else if (e.t === 'memory_saved') row(e.at, `📌 saved to memory: “${esc(e.text)}”<div class="sub">Every chat gets it from now on · ⚙ Settings → Memory</div>`, 'ok');
+    else if (e.t === 'hook') row(e.at, `🪝 hook <code>${esc(clip(e.command, 160))}</code> ${e.skipped ? 'did not run' : `→ ${e.ok ? 'ok' : e.timedOut ? 'stopped at its time limit' : `exit ${e.code ?? '–'}`} · ${secs(e.ms)}`}<div class="sub">${esc(HOOK_WHEN[e.event] || e.event)}${e.file ? `: ${esc(e.file)}` : ''}${e.tool ? `: ${esc(e.tool)}` : ''}${e.skipped ? ` · ${esc(e.why || '')}` : e.blocked ? ` · blocked: ${{ before_write: 'the write was not made', before_command: 'the command did not run', before_tool: 'the tool call did not run' }[e.event] || 'it did not happen'}; the agent sees why` : e.sentBack ? ' · the reply went back to fix it' : e.told ? ' · the agent sees its output' : ''}</div>${e.out ? `<details class="out"${e.ok ? '' : ' open'}><summary>output</summary><pre>${esc(e.out)}</pre></details>` : ''}`, e.ok ? 'cmd' : 'err');
+    else if (e.t === 'memory_saved') row(e.at, `📌 saved to memory: “${esc(e.text)}”<div class="sub">${e.project ? `Every chat in ${esc(e.project)} gets it from now on` : 'Every chat gets it from now on'} · ⚙ Settings → Memory</div>`, 'ok');
     else if (e.t === 'tripwire') row(e.at, `🚨 tripwire stopped <code>${esc(e.command)}</code>: ${e.count} files vanished outside the project<div class="sub">${(e.sample || []).map(esc).join('<br>')}<br>Look in the Recycle Bin, or right-click the folder → Properties → Previous Versions.</div>`, 'err');
     else if (e.t === 'command_blocked') row(e.at, `⛔ blocked <code>${esc(e.command)}</code><div class="sub">${esc(e.policy?.why || '')}${e.policy?.hint ? ` · ${esc(e.policy.hint)}` : ''}</div>`, 'err');
     else if (e.t === 'cmd_rule') row(e.at, `📏 rule saved: allow <code>${esc(e.rule.match)}</code> · ${esc({ chat: 'this chat', project: 'this project', everywhere: 'everywhere' }[e.rule.scope] || e.rule.scope)}`, 'ok');
@@ -5381,7 +5400,7 @@ function traceRows(m) {
     else if (e.t === 'compacted_run') row(e.at, `🗜 Summarised the earlier part of this reply (${Math.round(e.size / 1000)}k characters left)`, 'note');
     else if (e.t === 'verify_start') row(e.at, `🔍 Checking the work before the final reply${e.files ? ` · ${e.files} changed file${e.files === 1 ? '' : 's'}` : ''}`, 'browser');
     else if (e.t === 'verify') row(e.at, `${e.ok ? '✅ Checks passed' : `<span class="warn">⚠ Checks found ${e.problems.length} problem${e.problems.length === 1 ? '' : 's'}</span>`}${e.problems.length ? `<div class="sub">${e.problems.map(esc).join('<br>')}</div>` : ''}${e.lint && (e.lint.fix || e.lint.consider) ? `<div class="sub">🎨 design lint still notes ${e.lint.fix} to fix, ${e.lint.consider} to consider (${esc(e.lint.ids.join(', '))})</div>` : ''}${e.note ? `<div class="sub">ℹ ${esc(e.note)}</div>` : ''}${(e.pages || []).map((p) => `<div class="sub">opened ${esc(p.target)} · ${p.problems ? `${p.problems} problem${p.problems === 1 ? '' : 's'}` : 'no errors'}</div>${p.image ? `<img class="shot" src="${p.image}" alt="what the check saw" loading="lazy">` : ''}`).join('')}`, e.ok ? 'ok' : 'warn');
-    else if (e.t === 'sent_back') row(e.at, `↩ ${e.by === 'reviewer' ? 'The reviewer sent it back' : 'Sent back'} to fix ${e.problems} problem${e.problems === 1 ? '' : 's'} (round ${e.round})${e.aside ? `<div class="aside">💬 ${esc(e.aside)}</div>` : ''}`, 'warn');
+    else if (e.t === 'sent_back') row(e.at, `↩ ${e.by === 'reviewer' ? 'The reviewer sent it back' : e.by === 'hook' ? 'A reply-end hook sent it back' : 'Sent back'} to fix ${e.problems} problem${e.problems === 1 ? '' : 's'} (round ${e.round})${e.aside ? `<div class="aside">💬 ${esc(e.aside)}</div>` : ''}`, 'warn');
     else if (e.t === 'question' && e.secret) row(e.at, `🔑 Asked you for <b>${esc(e.secret.name)}</b>${e.secret.why ? `<div class="sub">${esc(e.secret.why)}</div>` : ''}`, 'ask');
     else if (e.t === 'question') row(e.at, `❓ ${e.auto ? 'Asked (⚡ YOLO: the deciders answer for you)' : 'Asked you'}: <b>${esc(e.question)}</b><div class="sub">${e.questions ? e.questions.map((q, i) => `${i + 1}. ${esc(q.question)} (${q.options.map(esc).join(' · ')})`).join('<br>') : e.options.map(esc).join(' · ')}</div>`, 'ask');
     else if (e.t === 'answer' && e.secret) row(e.at, `🔑 ${esc(e.text || '')}`, e.secret.set ? 'ok' : 'warn');
@@ -5636,6 +5655,7 @@ function approvalHTML(a, live = true) {
     ${head}${model}${danger}
     ${c.mcp ? `<div class="mcp-ap"><div class="mcp-ap-head">${mcpMark({ name: c.mcp.server }, 'sm')}<span>Use <b>${esc(c.mcp.tool)}</b> on the MCP server <b>${esc(c.mcp.server)}</b></span>${c.mcp.changes ? '<span class="mcp-chg" title="The server doesn\'t mark this tool as read-only">CHANGES THINGS</span>' : ''}</div><pre>${esc(c.mcp.input)}</pre>${waiting ? `<small class="dim">${c.mcp.always ? `Asked because ${esc(c.mcp.server)} is set to Ask every time.` : 'Asked because this chat is Strict and the tool can change things.'} ⚙ Settings → MCP servers changes this.</small>` : ''}</div>`
       : c.items ? '' : `<div class="what">${c.free ? esc(c.what) : `“${esc(c.what)}”`}</div>`}
+    ${c.memo ? `<div class="what mem-memo"><span class="sx-tag mem-t-${esc(c.memo.type)}">${esc(MEM_TYPES[c.memo.type] || c.memo.type)}</span> <span class="mem-scope ${c.memo.scope ? 'proj' : ''}">${c.memo.scope ? `Only ${esc(c.memo.scope)}` : 'Every project'}</span>${c.memo.why ? `<div>Because: ${esc(c.memo.why)}</div>` : ''}${c.memo.details ? `<details><summary>Details, read only when relevant</summary><div>${esc(c.memo.details)}</div></details>` : ''}</div>` : ''}
     ${c.why ? `<div class="what">Why: ${esc(c.why)}</div>` : ''}${c.items && waiting ? '<div class="what dim">Calls that match this plan then run without asking again; anything else asks on its own.</div>' : ''}
     ${waiting ? `${waitHTML(c)}${c.buttonsOnly ? `<div class="what dim">${c.tool === 'quorx_settings' ? 'Only your click changes it: typed words don’t, and nothing answers this card for you, in YOLO too.' : 'Only these buttons switch it on: typed words don’t.'}</div>` : '<textarea rows="1" placeholder="Or reply with context: the agent reads it instead of a yes or no. Enter sends it."></textarea>'}
       <div class="acts"><button type="button" class="primary reply" hidden>Send to the agent</button><button type="button" class="primary yes">${c.yes ? esc(c.yes) : c.tool === 'remember' ? 'Save to memory' : c.free ? 'Allow once' : `Approve ${money(c.est, 3)}`}</button>${c.noAlways ? '' : `<button type="button" class="always" title="Stop asking for ${c.mcp ? `${esc(c.mcp.tool)} on ${esc(c.mcp.server)}` : 'this tool'} in this chat. A tool's “Allow always” is for this chat only; remove it any time in the chat's 🛡 Permissions.">Allow always <span class="ap-scope">${scopeMark('chat', true)}this chat</span></button>`}<button type="button" class="no">${c.no ? esc(c.no) : c.tool === 'remember' ? "Don't save" : 'Deny'}</button></div>
@@ -5695,6 +5715,27 @@ function outOfStepsHTML(m) {
         <button type="button" class="oos-fresh${rec('fresh')}" title="A cheap model writes a short handover brief (goal, files, what works, what's left, known bugs) into a new chat with a model you pick. A clean context makes every step cheaper.">✦ Fresh chat from a summary…${star('fresh')}</button>
       </div><div class="what err" hidden></div>`}
   </div>`;
+}
+// The wrap-up under a finished reply (⚙ Agent loop → End each reply with a wrap-up): a recap, what the harness didn't
+// check, and up to two next steps that send their words as your next message. It only reads: no decision waits on it.
+function wrapUpHTML(m) {
+  const w = !m.live && [...(m.trace || [])].reverse().find((x) => x.t === 'wrap_up');
+  if (!w || (!w.recap && !w.unchecked?.length && !w.next?.length)) return '';
+  return `<div class="wu" role="note" aria-label="Wrap-up">
+    <div class="wu-head">Wrap-up</div>
+    ${w.recap ? `<p class="wu-recap">${esc(w.recap)}</p>` : ''}
+    ${w.unchecked?.length ? `<div class="wu-not"><b>Not checked</b><ul>${w.unchecked.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}
+    ${w.next?.length ? `<div class="wu-next">${w.next.map((x, i) => `<button type="button" class="wu-go ${m.wuSent === i ? 'sent' : ''}" data-wu="${i}" title="Sends: ${esc(x.text)}" ${m.wuSent != null ? 'disabled' : ''}>→ ${esc(x.label)}</button>`).join('')}</div>` : ''}
+  </div>`;
+}
+function wireWrapUp(el, c, m) {
+  const w = [...(m.trace || [])].reverse().find((x) => x.t === 'wrap_up');
+  for (const b of el.querySelectorAll('.wu-go[data-wu]')) b.onclick = () => {
+    const x = w?.next?.[Number(b.dataset.wu)];
+    if (!x || c.running) return;
+    m.wuSent = Number(b.dataset.wu); drawTimeline(c, m);
+    send(c, x.text);
+  };
 }
 // A new chat in the same project, on the model picked, with the brief in its message box (you check it, then send).
 function openFreshChat(c, brief, model) {
@@ -7398,11 +7439,15 @@ function settingsPanels(S) {
         + stRow('Thinking for builds', 'When the gap check sees that a message asks for a build and the chat\'s thinking is off, the model thinks this much for that reply. Deciders find problems; thinking is what fixes them.', stSeg('buildThinking', [['off', 'Off'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']], S.buildThinking || 'low'))
         + stRow('Retries on model errors', 'Rate limits, network drops and provider errors are retried with growing waits before the reply gives up.', stStep('retries', S.retries ?? 3, 0, 6))
         + stRow('Run look-ups together', 'Several reads, searches and fetches in one step run at the same time.', stSwitch('parallel', S.parallel !== false))
-        + stRow('Questions per reply', 'How often the agent may stop to ask you a question with options (ask_user). 0 = never.', stStep('askLimit', S.askLimit ?? 4, 0, 10)), 'sx-anchor', 'stLoopWork'),
+        + stRow('Questions per reply', 'How often the agent may stop to ask you a question with options (ask_user). 0 = never.', stStep('askLimit', S.askLimit ?? 4, 0, 10))
+        + stRow('Load rare tools when needed', 'Auto: the agent starts with its everyday tools; the ticked ones below are listed by name and load the first time it asks for one, so every call is smaller. A chat with many MCP tools gets them the same way. Off: every tool on every call.', stSeg('lazyTools', [['off', 'Off'], ['auto', 'Auto']], S.lazyTools || 'auto') + lazyGroupsHTML(S), { cls: 'sx-row-wide' })
+        + stRow('Ask for a short status line', 'After this many steps of tool calls without a word to you, the agent is asked to say in one sentence what it is doing. 0 = never.', stStep('statusEvery', S.statusEvery ?? 8, 0, 50, 1, ' steps'))
+        + stRow('Protect files that changed', 'When you, another chat or another program changes a file after the agent read it, the agent must read it again before it edits or overwrites it, so your change is never lost. What its own commands change doesn\'t count.', stSwitch('guardEdits', S.guardEdits !== false)), 'sx-anchor', 'stLoopWork'),
       stCard(`${stNum(3)} Check`, 'Before the final reply.', stRow('Check the work', 'Re-checks every changed file (Node, Python, JSON, CSS, HTML) and opens what was built in the browser. Problems go back to the agent to fix.', stSwitch('verify', S.verify !== false))
         + stRow('Design lint', 'After each HTML or CSS write, points out patterns that make a page look machine-made: default indigo, purple-blue hero gradients, emoji icons, invented numbers, filler text, missing alt text or focus styles. Advice only: it never sends a build back. Free, no model call.', stSwitch('designLint', S.designLint !== false))
         + stRow('Rounds to fix problems', 'How many times the agent is sent back. After that the reply ends and shows what is left.', stStep('verifyRounds', S.verifyRounds ?? 2, 0, 5))
-        + stRow('Steps to fix', 'When the checks or the reviewer send a build back near the step limit, the reply gets this many steps to fix it, instead of ending with a to-do list.', stStep('fixSteps', S.fixSteps ?? 12, 4, 40)), 'sx-anchor', 'stLoopCheck'),
+        + stRow('Steps to fix', 'When the checks or the reviewer send a build back near the step limit, the reply gets this many steps to fix it, instead of ending with a to-do list.', stStep('fixSteps', S.fixSteps ?? 12, 4, 40))
+        + stRow('End each reply with a wrap-up', 'After a reply that did work: a short recap, what QuorX didn\'t check (checks off, no reviewer, a job still running, a hook still failing), and up to two next steps you send with a click. The recap costs one helper call, about $0.0005.', stSwitch('wrapUp', S.wrapUp !== false)), 'sx-anchor', 'stLoopCheck'),
       stCard(`${stNum(4)} Review`, 'A separate model with a fresh context tests what was built before the final reply, scores it, and sends it back with specific bugs if it falls short.',
         stRow('When to review', 'Builds: when the agent made a plan for the reply. Always: whenever it built or changed something that can be opened.', stCards('review', [['off', '⏭', 'Off', 'No second opinion'], ['builds', '🏗', 'Builds', 'When the reply had a plan'], ['always', '🔍', 'Always', 'Anything that can be opened']], S.review || 'builds', 'compact'), { cls: 'sx-row-wide' })
         + stRow('Reviewer strength', 'Cheap: gpt-6-luna, about $0.003 a review, but it fails good builds often (it agreed with the benchmark judge 43% of the time). Strong: Claude Sonnet 5.5, about $0.02 a build, agreed 100% and caused no needless rounds of fixing (gpt-6.1-sol when Sonnet is the builder). A model picked below overrides this.', stCards('reviewTier', [['cheap', '🪙', 'Cheap', '≈ $0.003 a review'], ['strong', '💎', 'Strong', '≈ $0.02 a build']], S.reviewTier || 'cheap', 'compact'), { cls: 'sx-row-wide' })
@@ -7411,14 +7456,18 @@ function settingsPanels(S) {
         + stRow('Reviewer model', 'Default: gpt-6-luna, which is cheap, sees screenshots, and comes from a different family than most builders (qwen3.7-flash if your chat already uses gpt-6-luna). Pick one that can use tools and see images.', `<div class="st-fb">${modelField('pickReviewer', S.reviewModel, 'rvModel', 'Default')}${S.reviewModel ? '<button type="button" class="st-btn secondary sm" data-act="clearReviewer" title="Use the default reviewer">✕</button>' : ''}</div>`)
         + stRow('Rounds to fix', 'How many times the builder is sent back with the reviewer’s bugs. After that, what is still open shows in the reply.', stStep('reviewRounds', S.reviewRounds ?? 1, 0, 3))
         + stRow('Pass bar', 'Every score (function, craft, design, originality, accessibility, and brand fit when the project has a DESIGN.md) must reach this, out of 5.', stStep('reviewBar', S.reviewBar ?? 3, 1, 5)), 'sx-anchor', 'stLoopReview'),
-      stCard(`${stNum(5)} Helpers`, 'For exploring big projects: the agent hands read-only jobs (find, read, summarise) to a cheaper model with its own clean context. Only the helper’s short report comes back, so the agent’s context stays small. Several run at once.',
+      stCard(`${stNum(5)} Helpers`, 'The agent hands jobs to a cheaper model with its own context: exploring a big project, running the tests, trying an idea in scratch files. Only the helper’s short report comes back, so the agent’s context stays small. Several run at once.',
         stRow('Let the agent use helpers', 'Offered only in chats with a project folder.', stSwitch('helpers', S.helpers !== false))
         + stRow('Only in projects with at least', 'Small builds never used them, and offering them costs prompt space on every step. 0 = every project.', stStep('helperMinFiles', S.helperMinFiles ?? 40, 0, 400, 10, ' files'))
         + stRow('Helper model', 'Default: qwen3.7-flash, which is very cheap, uses tools, and has a 1M-token window. Pick one that can use tools.', `<div class="st-fb">${modelField('pickHelper', S.helperModel, 'hpModel', 'Default')}${S.helperModel ? '<button type="button" class="st-btn secondary sm" data-act="clearHelper" title="Use the default helper">✕</button>' : ''}</div>`)
-        + stRow('Steps per helper', 'Model calls one helper may make before it must report.', stStep('helperSteps', S.helperSteps ?? 12, 2, 30)), 'sx-anchor', 'stLoopHelpers'),
+        + stRow('Steps per helper', 'Model calls one helper may make before it must report.', stStep('helperSteps', S.helperSteps ?? 12, 2, 30))
+        + `<div class="st-row sx-row-wide hp-roles-row"><div class="st-row-text"><div class="st-row-label">Helper roles</div><div class="st-row-help">What each kind of helper may do. Every role reads; a role may also run commands (through your rules and approvals, like the agent's own), use the browser, or write, but only in .quorx/scratch. The agent picks a role for each job; switched-off roles aren't offered.</div></div><div id="hpRoles" class="qx-roles-host"></div></div>`, 'sx-anchor', 'stLoopHelpers'),
       stCard(`${stNum(6)} Long replies and chats`, 'Keeps the context small, so long work stays cheap.', stRow('Trim after', 'Characters of conversation inside one reply before old file contents are dropped from it (they stay on disk).', stStep('trimAt', S.trimAt || 120000, 30000, 400000, 10000))
         + stRow('Summarise older turns', 'Keeps the context small: older turns become a short summary (shown in the trace as 🗜).', stSwitch('compact', S.compact !== false))
-        + stRow('Summarise after', 'Characters of history before the older part is summarised.', stStep('compactAt', S.compactAt || 24000, 8000, 120000, 4000)), 'sx-anchor', 'stLoopMemory'),
+        + stRow('Summarise after', 'Characters of history before the older part is summarised.', stStep('compactAt', S.compactAt || 24000, 8000, 120000, 4000))
+        + stRow('Read other agents\' notes', 'Projects made with other coding agents keep their rules in files like AGENTS.md or CLAUDE.md. When on, QuorX reads the ones listed here with AGENT.md, in projects that have them.', stSwitch('otherNotes', S.otherNotes !== false))
+        + `<div class="st-row sx-row-wide"><div class="st-row-text"><div class="st-row-label">Files it reads</div><div class="st-row-help">In the project folder, in this order, until the size limit.</div></div><div id="notesFiles"></div></div>`
+        + stRow('All of them together, at most', 'What goes past this is cut.', stStep('otherNotesKB', S.otherNotesKB ?? 8, 1, 64, 1, ' KB')), 'sx-anchor', 'stLoopMemory'),
     ]],
     deciders: ['Deciders', 'The fast judges the agent asks when it is unsure. It writes its own questions and guesses first.', [
       stCard('The panel', 'Up to 5 seats. More deciders agree more reliably but cost more.', '<div id="voterInputs" class="sx-seats"></div>'),
@@ -7532,7 +7581,7 @@ function settingsPanels(S) {
     ]],
     skills: ['Skills', 'Playbooks the agent loads when a task fits. Write your own here, for all your projects or just one; agents can also save their own into a project.', ['<div id="skillPanel"></div><div class="sx-filter" id="skillFilter"></div><div id="skillList" class="st-skill-list"></div>']],
     mcp: ['MCP servers', 'Tools from MCP servers for the agent: a program on this computer or a server on the web. Add one here, or paste its setup into a chat. Each chat ticks the ones it may use (MCP in the message box settings). Changes here save at once.', ['<div id="mcpPanel"></div>']],
-    memory: ['Memory', 'A few facts and preferences about you that every chat gets, in every project. Changes here save at once.', ['<div id="memPanel"></div>']],
+    memory: ['Memory', 'Facts and preferences chats get without you repeating them: about you, how to work, a project, where to find things. Changes here save at once.', ['<div id="memPanel"></div>']],
     projects: ['Projects', 'A project is a folder that many chats share. Changes here apply at once.', [`<div id="stProjects"></div>`]],
     docs: ['Documents', 'Files you attach with 📎. They are kept in the project folder\'s .quorx/uploads, which git ignores.', [
       stCard('What happens to an attachment', 'Text is read out of PDFs, Word, PowerPoint, Excel, OpenDocument, EPUB, HTML, code and plain text. Other files are saved and the agent decides whether it can read them.',
@@ -7671,7 +7720,7 @@ function stSummary(id, S) {
       return [live ? 'films' : 'off', on(live, 'On for films', 'Off: films build like any request') + (live ? stStatus(board ? 'ok' : 'off', board ? 'Storyboard before paid media' : 'No storyboard gate') + stStatus('info', `Up to ${S.videoAskLimit ?? d.videoAskLimit} questions`) : '')]; }
     case 'skills': { if (G.skillCount == null) return ['', '']; const off = (S.skillsOff || []).length; return [`${G.skillCount - off} on`, stStatus('ok', `${G.skillCount - off} on`) + (off ? stStatus('off', `${off} off`) : '')]; }
     case 'mcp': { const l = G.mcp || [], on = l.filter((s) => s.on).length, bad = l.filter((s) => s.status === 'error').length; return l.length ? [`${on} on`, stStatus('ok', `${on} on`) + (bad ? stStatus('off', `${bad} not starting`) : '')] : ['', '']; }
-    case 'memory': { const m = ST.mem; if (!m) return ['', '']; return [m.on ? `${m.n} notes` : 'off', on(m.on, 'On in every chat', 'Off: chats get nothing') + stStatus('info', `${m.n} note${m.n === 1 ? '' : 's'} · ${m.tokens} of ${m.limit} tokens`)]; }
+    case 'memory': { const m = ST.mem; if (!m) return ['', '']; return [m.on ? `${m.n} notes` : 'off', on(m.on, 'On in chats', 'Off: chats get nothing') + stStatus('info', `${m.n} note${m.n === 1 ? '' : 's'} · ${m.tokens} of ${m.limit} tokens a chat`)]; }
     case 'projects': { const n = (G.projects || []).length; return [String(n), stStatus('info', `${n} project${n === 1 ? '' : 's'}`)]; }
     case 'code': return ['', stStatus('ok', 'Secrets protected') + stStatus('info', 'Ports 5300–5999')];
     case 'docs': return ['', stStatus('info', `Whole up to ${kTok(S.inlineDocTokens ?? 15000)} tokens`) + stStatus('info', `Up to ${S.maxUploadMB ?? 100} MB a file`) + `${stMoney(usd(S.docIndexBudget ?? 0.5))} <span class="sx-state-k">indexing without asking</span>`];
@@ -8101,6 +8150,9 @@ function wireSettings() {
   drawSourcesPanel();
   drawBlockedProviders(mark);
   drawMemoryPanel();
+  wireLazyGroups(S, mark);
+  drawNotesFiles(S, mark);
+  drawRoles(S, mark);
   drawMcpPanel();
   drawSetupPanel();
   drawExtPanel();
@@ -8144,7 +8196,7 @@ function resetCategory() {
   if (ST.cat === 'providers') { S.model = d.chatModel || d.setups.C.model; S.reasoning = 'off'; Object.assign(S, { providerSort: 'auto', requireParams: true, zdrOnly: false, fallbackModel: '', blockedProviders: [...(d.blockedProviders || [])] }); }
   if (ST.cat === 'providers') Object.assign(S, { sourceFallback: d.sourceFallback || 'off', sourceFallbackModel: '' });
   if (ST.cat === 'newchats') S.newChatTools = { ...DEFAULT_CHAT_TOOLS };
-  if (ST.cat === 'loop') { S.maxSteps = d.maxSteps; S.compact = true; S.compactAt = 24000; Object.assign(S, { planFirst: d.planFirst, planSteps: d.planSteps, continueRounds: d.continueRounds, maxOutput: d.maxOutput, thinkShare: d.thinkShare, review: d.review, reviewModel: '', reviewTier: d.reviewTier, reviewSendBack: d.reviewSendBack, codeReview: d.codeReview, designLint: d.designLint, fixSteps: d.fixSteps, reviewRounds: d.reviewRounds, reviewBar: d.reviewBar, helpers: d.helpers, helperModel: '', helperSteps: d.helperSteps, helperMinFiles: d.helperMinFiles, retries: d.retries, parallel: d.parallel, verify: d.verify, verifyRounds: d.verifyRounds, askLimit: d.askLimit, trimAt: d.trimAt, buildThinking: d.buildThinking }); }
+  if (ST.cat === 'loop') { S.maxSteps = d.maxSteps; S.compact = true; S.compactAt = 24000; Object.assign(S, { planFirst: d.planFirst, planSteps: d.planSteps, continueRounds: d.continueRounds, maxOutput: d.maxOutput, thinkShare: d.thinkShare, review: d.review, reviewModel: '', reviewTier: d.reviewTier, reviewSendBack: d.reviewSendBack, codeReview: d.codeReview, designLint: d.designLint, fixSteps: d.fixSteps, reviewRounds: d.reviewRounds, reviewBar: d.reviewBar, helpers: d.helpers, helperModel: '', helperSteps: d.helperSteps, helperMinFiles: d.helperMinFiles, retries: d.retries, parallel: d.parallel, verify: d.verify, verifyRounds: d.verifyRounds, askLimit: d.askLimit, trimAt: d.trimAt, buildThinking: d.buildThinking, lazyTools: d.lazyTools, statusEvery: d.statusEvery, guardEdits: d.guardEdits, wrapUp: d.wrapUp, otherNotes: d.otherNotes, otherNotesFiles: [...(d.otherNotesFiles || [])], otherNotesKB: d.otherNotesKB, helperRoles: structuredClone(d.helperRoles || []) }); }
   if (ST.cat === 'deciders') { S.voters = [...d.voters]; S.gate = { ...d.gate }; S.lookVoters = [...d.lookVoters]; S.lookEscalate = d.lookEscalate; S.checks = structuredClone(d.checks); }
   if (ST.cat === 'tools') S.tools = structuredClone(d.tools);
   if (ST.cat === 'budget') Object.assign(S, { replyBudget: d.replyBudget, dailyBudget: d.dailyBudget, budget: d.budget, budgetGrace: d.budgetGrace });
@@ -8626,8 +8678,6 @@ function wireSignIn() {
     pollSignIn();
   };
 }
-// ⚙ Memory: a few facts and preferences about you that every chat gets. Saved at once (it lives on the server, so
-// scheduled chats and other devices get it too); the server checks the size and refuses anything like a secret.
 // ⚙ Settings → Skills: write, import, edit and trash your own skills (data/skills, every project) and this project's
 // (.quorx/skills). Switching a skill on or off is a draft change like the rest of Settings; writing one saves at once.
 const SKILL_SOURCE = { 'built-in': ['builtin', 'built-in'], mine: ['mine', 'all projects'], project: ['project', 'this project'] };
@@ -8713,6 +8763,108 @@ async function drawSkillsPanel(mark, msg = '') {
     };
   }
 }
+// ⚙ Agent loop → Load rare tools when needed: each group ticked waits in load_tools; unticked, it loads from the start.
+const LAZY_GROUPS = [
+  ['Android', ['android'], 'Emulators and adb'], ['Debugger', ['debug'], 'Breakpoints in Node and Python'], ['Desktop apps', ['desktop'], 'Windows of apps on this PC'],
+  ['Video editing', ['edit_video'], 'Joining clips with ffmpeg'], ['QuorX itself', ['quorx_settings', 'mcp_setup', 'schedule', 'launch_config'], 'Settings, MCP servers, schedules, launch configs'],
+  ['Secrets and skills', ['request_secret', 'save_skill'], 'Asking for a key, saving a skill'],
+];
+const lazyListOf = (S) => (Array.isArray(S.lazyList) ? S.lazyList : G.cfg.defaults.lazyList || LAZY_GROUPS.flatMap(([, t]) => t));
+function lazyGroupsHTML(S) {
+  const on = new Set(lazyListOf(S)), auto = (S.lazyTools || 'auto') === 'auto';
+  return `<div class="qx-lazy ${auto ? '' : 'off'}"><div class="qx-perms">${LAZY_GROUPS.map(([name, tools, what]) => `<label class="qx-perm" title="${esc(what)}: ${esc(tools.join(', '))}"><input type="checkbox" data-lazy="${esc(tools.join(','))}" ${tools.every((t) => on.has(t)) ? 'checked' : ''} ${auto ? '' : 'disabled'}>${esc(name)}</label>`).join('')}</div>
+    <small class="st-row-help">Ticked: listed by name and loaded when needed. Unticked: always loaded.</small></div>`;
+}
+function wireLazyGroups(S, mark) {
+  for (const box of document.querySelectorAll('#stMain [data-lazy]')) box.onchange = () => {
+    const list = new Set(lazyListOf(S));
+    for (const t of box.dataset.lazy.split(',')) { if (box.checked) list.add(t); else list.delete(t); }
+    S.lazyList = [...list]; ST.changed.add('lazyList'); box.closest('.st-row')?.classList.add('changed'); mark();
+  };
+  // Off greys the groups out at once (they still keep what was ticked).
+  const seg = document.querySelector('#stMain .st-segmented[data-bind="lazyTools"]');
+  if (seg) seg.addEventListener('click', () => setTimeout(() => { const auto = (S.lazyTools || 'auto') === 'auto'; const w = document.querySelector('#stMain .qx-lazy'); w?.classList.toggle('off', !auto); for (const b of w?.querySelectorAll('input') || []) b.disabled = !auto; }, 0));
+}
+
+// ⚙ Agent loop → Read other agents' notes: the file names, as chips you can remove, add to and reset.
+function drawNotesFiles(S, mark, err = '') {
+  const el = $('#notesFiles'); if (!el) return;
+  const d = G.cfg.defaults.otherNotesFiles || [];
+  const list = Array.isArray(S.otherNotesFiles) ? S.otherNotesFiles : typeof S.otherNotesFiles === 'string' ? S.otherNotesFiles.split(',').map((x) => x.trim()).filter(Boolean) : [...d];
+  const same = JSON.stringify(list) === JSON.stringify(d);
+  el.innerHTML = `<div class="qx-files">${list.map((f, i) => `<span class="qx-file">${esc(f)}<button type="button" class="qx-x" data-nf-x="${i}" title="Don't read ${esc(f)}" aria-label="Remove ${esc(f)}">✕</button></span>`).join('') || '<span class="st-row-help">None: only AGENT.md is read.</span>'}</div>
+    <div class="qx-file-add"><input class="st-input" id="nfNew" placeholder="e.g. .windsurfrules or docs/AI.md" spellcheck="false" aria-label="Another file to read"><button type="button" class="kx-btn sm" id="nfAdd">Add</button>${same ? '' : '<button type="button" class="kx-btn sm" id="nfReset" title="Back to the list QuorX comes with">Reset</button>'}${err ? `<span class="qx-err">${esc(err)}</span>` : ''}</div>`;
+  const set = (next) => { S.otherNotesFiles = next; ST.changed.add('otherNotesFiles'); el.closest('.st-row')?.classList.add('changed'); mark(); drawNotesFiles(S, mark); };
+  for (const b of el.querySelectorAll('[data-nf-x]')) b.onclick = () => set(list.filter((_, i) => i !== Number(b.dataset.nfX)));
+  const add = () => {
+    const f = $('#nfNew').value.trim().replaceAll('\\', '/').replace(/^\.\//, '');
+    if (!f) return;
+    if (!/^(?!.*\.\.)[\w.-]+(\/[\w.-]+)*$/.test(f)) return drawNotesFiles(S, mark, 'A file in the project, like CLAUDE.md or docs/AI.md');
+    if (/^agent\.md$/i.test(f)) return drawNotesFiles(S, mark, 'AGENT.md is always read');
+    if (list.some((x) => x.toLowerCase() === f.toLowerCase())) return drawNotesFiles(S, mark, 'Already in the list');
+    set([...list, f].slice(0, 12));
+  };
+  $('#nfAdd').onclick = add;
+  $('#nfNew').onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } };
+  if ($('#nfReset')) $('#nfReset').onclick = () => set([...d]);
+}
+
+// ⚙ Agent loop → Helpers → Helper roles: one row per role (allowed ✓, name and what it is for, what it may do, its model,
+// steps and what it starts with). The three that come with QuorX can be reset; your own can be removed.
+const ROLE_CAN = [['read', 'Read'], ['commands', 'Run checked commands'], ['browser', 'Use the browser'], ['scratch', 'Write in scratch only']];
+const ROLE_CTX = [['fresh', 'Clean context'], ['summary', 'This chat\'s summary']];
+function drawRoles(S, mark) {
+  const el = $('#hpRoles'); if (!el) return;
+  const d = G.cfg.defaults.helperRoles || [];
+  const roles = (S.helperRoles = Array.isArray(S.helperRoles) && S.helperRoles.length ? S.helperRoles : structuredClone(d));
+  const builtin = (r) => d.some((x) => x.id === r.id);
+  const changed = (r) => builtin(r) && JSON.stringify({ ...r, builtin: undefined }) !== JSON.stringify({ ...d.find((x) => x.id === r.id), builtin: undefined });
+  el.innerHTML = `<div class="hkx-toolbar"><div class="pjx-filter roles-filter"></div><button type="button" class="kx-btn sm primary" id="roleAdd" ${roles.length >= 12 ? 'disabled title="At most 12 roles"' : ''}>＋ Add role</button></div>
+    <ul class="qx-roles">${roles.map((r, i) => `<li class="qx-role ${r.on === false ? 'off' : ''} ${changed(r) ? 'changed' : ''}" data-i="${i}" data-lf-seg="${builtin(r) ? 'builtin' : 'yours'}" data-lf-text="${esc(`${r.name} ${r.desc} ${(r.can || []).join(' ')} ${r.model || ''}`.toLowerCase())}">
+      <div class="qx-role-top">
+        <label class="sx-check" title="${r.on === false ? 'Off: the agent isn\'t offered this role' : 'On: the agent may use this role'}"><input type="checkbox" data-r="on" ${r.on === false ? '' : 'checked'} aria-label="Allow ${esc(r.name)}"><span class="sx-word"></span></label>
+        <div class="qx-role-id">${builtin(r) ? `<div class="qx-role-name">${esc(r.name)} <span class="sx-tag">Built-in</span> <code class="qx-rid">${esc(r.id)}</code></div><input class="st-input qx-in-desc" data-r="desc" value="${esc(r.desc || '')}" maxlength="200" aria-label="What ${esc(r.name)} is for">`
+          : `<div class="qx-role-name"><input class="st-input qx-in-name" data-r="name" value="${esc(r.name)}" maxlength="40" aria-label="Role name"> <code class="qx-rid">${esc(r.id)}</code></div><input class="st-input qx-in-desc" data-r="desc" value="${esc(r.desc || '')}" maxlength="200" placeholder="What it is for, in one line" aria-label="What this role is for">`}</div>
+        <span class="qx-role-acts">${builtin(r) ? (changed(r) ? '<button type="button" class="kx-btn sm" data-r="reset" title="Back to how QuorX comes">Reset</button>' : '') : '<button type="button" class="pp-btn" data-r="del" title="Remove this role" aria-label="Remove this role">✕</button>'}</span>
+      </div>
+      <div class="qx-role-grid">
+        <div class="qx-f"><span class="qx-f-k">May</span><div class="qx-perms">${ROLE_CAN.map(([k, l]) => `<label class="qx-perm"><input type="checkbox" data-can="${k}" ${(r.can || []).includes(k) || k === 'read' ? 'checked' : ''} ${k === 'read' ? 'disabled title="Every helper reads"' : ''}>${l}</label>`).join('')}</div></div>
+        <div class="qx-f"><span class="qx-f-k">Model</span><div class="st-fb"><button type="button" class="sx-model kx-btn sm" data-r="model" title="${r.model ? esc(r.model) : 'The helper model above'}">${r.model ? `${esc(short(r.model))} <small>${esc(shortPrice(r.model))}</small>` : '<i>Helper model</i>'}</button>${r.model ? '<button type="button" class="st-btn secondary sm" data-r="clearModel" title="Use the helper model">✕</button>' : ''}</div></div>
+        <div class="qx-f"><span class="qx-f-k">Steps</span>${stStep('', r.steps || 12, 2, 60)}</div>
+        <div class="qx-f"><span class="qx-f-k">Starts with</span>${stSeg('', ROLE_CTX, r.context || 'fresh')}</div>
+      </div>
+    </li>`).join('')}</ul>`;
+  const redraw = () => { ST.changed.add('helperRoles'); el.closest('.st-row')?.classList.add('changed'); mark(); drawRoles(S, mark); };
+  if (roles.length > 3) listFilter($('.roles-filter', el), { key: 'roles', rows: () => el.querySelectorAll('.qx-role'), segLabel: (v) => ({ builtin: 'Built-in', yours: 'Yours' }[v] || v), segOrder: ['builtin', 'yours'], placeholder: 'Search roles…', label: 'Made by' });
+  for (const li of el.querySelectorAll('.qx-role')) {
+    const r = roles[Number(li.dataset.i)], q = (s) => $(s, li);
+    q('[data-r="on"]').onchange = (e) => { r.on = e.target.checked; redraw(); };
+    for (const inp of li.querySelectorAll('input.st-input[data-r]')) inp.onchange = () => { r[inp.dataset.r] = inp.value.trim() || (inp.dataset.r === 'name' ? r.id : ''); redraw(); };
+    for (const c of li.querySelectorAll('[data-can]')) c.onchange = () => { const s = new Set(r.can || ['read']); if (c.checked) s.add(c.dataset.can); else s.delete(c.dataset.can); s.add('read'); r.can = ROLE_CAN.map(([k]) => k).filter((k) => s.has(k)); redraw(); };
+    q('[data-r="model"]').onclick = async () => { const id = await pickModel('chat', r.model || '', { context: `Helper role: ${r.name}` }); if (id) { r.model = id; redraw(); } };
+    if (q('[data-r="clearModel"]')) q('[data-r="clearModel"]').onclick = () => { r.model = ''; redraw(); };
+    if (q('[data-r="reset"]')) q('[data-r="reset"]').onclick = () => { Object.assign(r, structuredClone(d.find((x) => x.id === r.id))); redraw(); };
+    if (q('[data-r="del"]')) q('[data-r="del"]').onclick = (e) => { const b = e.currentTarget; if (!b.classList.contains('sure')) { b.classList.add('sure'); b.textContent = 'Remove?'; setTimeout(() => { if (b.isConnected) { b.classList.remove('sure'); b.textContent = '✕'; } }, 3000); return; } roles.splice(roles.indexOf(r), 1); redraw(); };
+    // Its steps and what it starts with (drawn after Settings' own wiring, so wired here).
+    const st = q('.st-stepper'), sv = $('input', st);
+    const steps = (v) => { r.steps = Math.max(2, Math.min(60, Math.round(Number(v) || 12))); sv.value = r.steps; ST.changed.add('helperRoles'); li.classList.add('changed'); mark(); };
+    sv.onchange = () => steps(sv.value);
+    for (const b of st.querySelectorAll('.st-step-btn')) b.onclick = () => steps(Number(sv.value) + Number(b.dataset.d));
+    for (const b of li.querySelectorAll('.st-segmented .st-seg-btn')) b.onclick = () => { r.context = b.dataset.v; redraw(); };
+  }
+  $('#roleAdd').onclick = () => {
+    let k = roles.length + 1, id = `role${k}`;
+    while (roles.some((x) => x.id === id)) id = `role${++k}`;
+    roles.push({ id, name: 'New role', desc: '', can: ['read'], model: '', steps: 12, context: 'fresh', on: true });
+    redraw();
+    el.querySelector('.qx-role:last-child .qx-in-name')?.select();
+  };
+}
+// ⚙ Memory: facts and preferences chats get without you repeating them. Each note has a type, an optional why, longer
+// details a chat reads only when they matter (recall), and a scope: every project or one. Saved at once (it lives on
+// the server). The meter counts what one chat gets at most: every-project notes plus the fullest project's.
+const MEM_TYPES = { user: 'About you', feedback: 'How to work', project: 'Project', reference: 'Reference' };
+const memTok = (x) => Math.ceil(String(x.text || '').length / 4) + (x.why ? Math.ceil(x.why.length / 4) + 3 : 0) + 2;
 async function drawMemoryPanel(msg = '') {
   const el = $('#memPanel');
   if (!el) return;
@@ -8720,30 +8872,58 @@ async function drawMemoryPanel(msg = '') {
   if (!m || m.error) { el.innerHTML = `<p class="st-row-help">Could not load memory${m?.error ? `: ${esc(m.error)}` : ''}.</p>`; return; }
   const pct = Math.min(100, Math.round((m.tokens / m.limit) * 100));
   ST.mem = { on: m.on, n: m.items.length, tokens: m.tokens, limit: m.limit }; stRefresh();
-  el.innerHTML = stCard('Notes every chat gets', '', stRow('Use memory in every chat', `Every chat, in every project, gets the items below. They stay under ${m.limit} tokens, so even small models have room. When on, the agent may also propose an item; it is saved only if you say yes (in ⚡ YOLO too). Off: chats get nothing.`,
-    `<label class="sx-check"><input type="checkbox" id="memOn" ${m.on ? 'checked' : ''} aria-label="Use memory in every chat"><span class="sx-word"></span></label>`)
+  const pname = (id) => G.projects.find((p) => p.id === id)?.name || id;
+  const UI = (ST.memUI ??= { edit: null, adding: false });
+  const form = (x = {}) => `<div class="qx-memform" data-form="${esc(x.id || '')}">
+      <div class="qx-field"><div class="qx-lblrow"><label for="mfText">Note</label><span class="qx-cc">${String(x.text || '').length} / 200</span></div><input id="mfText" class="st-input" maxlength="200" value="${esc(x.text || '')}" placeholder="One short sentence, e.g. “I use pnpm, not npm”" spellcheck="true"></div>
+      <div class="qx-memform-grid">
+        <div class="qx-field"><label for="mfType">Type</label><select id="mfType" class="st-select">${Object.entries(MEM_TYPES).map(([k, l]) => `<option value="${k}" ${(x.type || 'user') === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+        <div class="qx-field"><label for="mfScope">Where</label><select id="mfScope" class="st-select"><option value="">Every project</option>${G.projects.filter((p) => p.id !== 'scratch').map((p) => `<option value="${esc(p.id)}" ${x.project === p.id ? 'selected' : ''}>Only ${esc(p.name)}</option>`).join('')}</select></div>
+      </div>
+      <div class="qx-field"><label for="mfWhy">Why <span class="qx-opt">optional, one line</span></label><input id="mfWhy" class="st-input" maxlength="200" value="${esc(x.why || '')}" placeholder="The reason, so the agent applies it well"></div>
+      <div class="qx-field"><div class="qx-lblrow"><label for="mfDetails">Details <span class="qx-opt">optional, read only when relevant: they don't count toward the limit</span></label><span class="qx-cc">${String(x.details || '').length} / 2000</span></div><textarea id="mfDetails" class="st-input" maxlength="2000" rows="3">${esc(x.details || '')}</textarea></div>
+      <div class="qx-edit-acts"><button type="button" class="kx-btn sm" data-mf="cancel">Cancel</button><button type="button" class="kx-btn sm primary" data-mf="save">${x.id ? 'Save note' : 'Add note'}</button></div>
+    </div>`;
+  const rowHTML = (x) => (UI.edit === x.id ? `<li>${form(x)}</li>` : `<li class="qx-memrow" data-id="${esc(x.id)}" data-lf-seg="${esc(x.type || 'user')}" data-lf-text="${esc(`${x.text} ${x.why || ''} ${x.details || ''} ${MEM_TYPES[x.type || 'user']} ${x.project ? pname(x.project) : 'every project'}`.toLowerCase())}">
+      <div class="qx-mem-main">
+        <div class="qx-mem-top"><span class="sx-tag mem-t-${esc(x.type || 'user')}">${esc(MEM_TYPES[x.type || 'user'])}</span><span class="qx-scope ${x.project ? 'proj' : ''}">${x.project ? `Only ${esc(pname(x.project))}` : 'Every project'}</span>${x.by === 'agent' ? '<span class="qx-scope" title="Proposed by the agent, approved by you">agent · approved</span>' : ''}<span class="qx-tok counted" title="What this note adds to each chat it reaches">${memTok(x)} tok</span></div>
+        <p class="qx-mem-text">${esc(x.text)}</p>
+        ${x.why ? `<p class="qx-mem-why"><i>Why:</i> ${esc(x.why)}</p>` : ''}
+        ${x.details ? `<details class="qx-more-d"><summary>Details <small>${x.details.length} characters · read only when relevant</small></summary><div>${esc(x.details)}</div></details>` : ''}
+      </div>
+      <span class="qx-mem-acts"><button type="button" class="kx-btn sm" data-me="${esc(x.id)}">Edit</button><button type="button" class="mem-del" data-md="${esc(x.id)}" title="Forget this" aria-label="Forget this">✕</button></span>
+    </li>`);
+  el.innerHTML = stCard('Notes chats get', '', stRow('Use memory in chats', `Chats get the notes below: those for every project, plus the ones for their own project. What one chat gets stays under ${m.limit} tokens, so even small models have room; details don't count, because a chat reads them only when they matter. When on, the agent may also propose a note; it is saved only if you say yes (in ⚡ YOLO too). Off: chats get nothing.`,
+    `<label class="sx-check"><input type="checkbox" id="memOn" ${m.on ? 'checked' : ''} aria-label="Use memory in chats"><span class="sx-word"></span></label>`)
     + `<div class="mem-body ${m.on ? '' : 'off'}">
-      <div class="mem-meter" title="About 4 characters a token"><span class="mem-bar"><i style="width:${pct}%"></i></span><span class="mem-count ${pct >= 90 ? 'full' : ''}">${m.tokens} / ${m.limit} tokens</span></div>
-      ${m.items.length ? `<ul class="mem-list">${m.items.map((x) => `<li class="mem-item" data-id="${esc(x.id)}"><input class="mem-text" value="${esc(x.text)}" maxlength="200" aria-label="Memory item" spellcheck="true"><span class="tag mem-by" title="${x.by === 'agent' ? 'Proposed by the agent, approved by you' : 'Added by you'}">${x.by === 'agent' ? 'agent · approved' : 'you'}</span><button type="button" class="kx-btn sm mem-save" hidden>Save</button><button type="button" class="mem-del" title="Forget this" aria-label="Forget this">✕</button></li>`).join('')}</ul>` : '<p class="st-row-help mem-empty">Nothing yet. For example: “I use pnpm, not npm”, “Prefer dark themes”, “Write commit messages in English”.</p>'}
-      <div class="mem-add"><input id="memNew" maxlength="200" placeholder="Add a fact or preference (one short sentence)" aria-label="New memory item"><button type="button" class="kx-btn sm primary" id="memAddBtn">Add</button></div>
+      <div class="mem-meter" title="The most one chat gets: every-project notes plus the fullest project's. About 4 characters a token."><span class="mem-bar"><i style="width:${pct}%"></i></span><span class="mem-count ${pct >= 90 ? 'full' : ''}">${m.tokens} / ${m.limit} tokens a chat gets at most</span></div>
+      <div class="hkx-toolbar"><div class="pjx-filter mem-filter"></div>${UI.adding ? '' : '<button type="button" class="kx-btn sm primary" id="memAddBtn">＋ Add note</button>'}</div>
+      ${UI.adding ? form({ type: 'user' }) : ''}
+      ${m.items.length ? `<ul class="qx-mem">${m.items.map(rowHTML).join('')}</ul>` : '<p class="st-row-help mem-empty">Nothing yet. For example: “I use pnpm, not npm” (how to work), “Prefer dark themes” (about you), “The API lives in server/” (this project only).</p>'}
       <p class="mem-msg ${msg.startsWith('✓') ? 'ok' : msg ? 'bad' : ''}" role="status">${esc(msg)}</p>
-      <p class="st-row-help">Never keys, tokens or passwords: anything that looks like one is refused.</p></div>`);
+      <p class="st-row-help">Never keys, tokens or passwords: anything that looks like one is refused, in details too.</p></div>`);
   const save = async (body, ok) => {
     const r = await postJ('/api/memory', body, 'PUT');
+    if (!r?.error) { UI.edit = null; UI.adding = false; }
     drawMemoryPanel(r?.error ? `Not saved: ${r.error}.` : ok);
   };
+  if (m.items.length > 3) listFilter($('.mem-filter', el), { key: 'memory', rows: () => el.querySelectorAll('.qx-memrow'), segLabel: (v) => MEM_TYPES[v] || v, segOrder: Object.keys(MEM_TYPES), placeholder: 'Search notes, why and details…', label: 'Type' });
   $('#memOn').onchange = (e) => save({ on: e.target.checked }, e.target.checked ? '✓ Memory is on' : '✓ Memory is off: chats get nothing');
-  const add = () => { const t = $('#memNew').value.trim(); if (t) save({ items: [...m.items, { text: t }] }, '✓ Added'); };
-  $('#memAddBtn').onclick = add;
-  $('#memNew').onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } };
-  for (const li of el.querySelectorAll('.mem-item')) {
-    const id = li.dataset.id, inp = $('.mem-text', li), btn = $('.mem-save', li), orig = m.items.find((x) => x.id === id).text;
-    inp.oninput = () => { btn.hidden = inp.value.trim() === orig; };
-    const commit = () => { if (inp.value.trim() !== orig) save({ items: m.items.map((x) => (x.id === id ? { ...x, text: inp.value } : x)) }, '✓ Saved'); };
-    btn.onclick = commit;
-    inp.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); commit(); } };
-    $('.mem-del', li).onclick = () => save({ items: m.items.filter((x) => x.id !== id) }, '✓ Forgotten');
+  if ($('#memAddBtn')) $('#memAddBtn').onclick = async () => { UI.adding = true; UI.edit = null; await drawMemoryPanel(); $('#mfText')?.focus(); };
+  const f = $('.qx-memform', el);
+  if (f) {
+    const id = f.dataset.form;
+    for (const [sel, max] of [['#mfText', 200], ['#mfDetails', 2000]]) { const i = $(sel, f); i.oninput = () => { const cc = i.closest('.qx-field').querySelector('.qx-cc'); cc.textContent = `${i.value.length} / ${max}`; }; }
+    $('[data-mf="cancel"]', f).onclick = () => { UI.edit = null; UI.adding = false; drawMemoryPanel(); };
+    $('[data-mf="save"]', f).onclick = () => {
+      const x = { text: $('#mfText', f).value.trim(), type: $('#mfType', f).value, project: $('#mfScope', f).value, why: $('#mfWhy', f).value.trim(), details: $('#mfDetails', f).value.trim() };
+      if (!x.text) { $('#mfText', f).focus(); return; }
+      save({ items: id ? m.items.map((y) => (y.id === id ? { ...y, ...x } : y)) : [...m.items, x] }, id ? '✓ Saved' : '✓ Added');
+    };
+    $('#mfText', f).onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); $('[data-mf="save"]', f).click(); } };
   }
+  for (const b of el.querySelectorAll('[data-me]')) b.onclick = async () => { UI.edit = b.dataset.me; UI.adding = false; await drawMemoryPanel(); $('#mfText')?.focus(); };
+  for (const b of el.querySelectorAll('[data-md]')) b.onclick = () => save({ items: m.items.filter((x) => x.id !== b.dataset.md) }, '✓ Forgotten');
 }
 // ⚙ Settings → MCP servers. A summary line; Your servers (search, filter chips with counts, one row per server and a
 // panel with the chosen one's details) and Suggested (servers that need no key, one click to add); Add a server (paste a

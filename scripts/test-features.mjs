@@ -488,7 +488,7 @@ test('every chat gets the memory in a small prompt; the agent proposes a memory 
       const full = await run(() => reply('Hi.'), { text: 'hello' });
       const grew = sys(full.bodies[0]).length - sys(off.bodies[0]).length;
       assert.ok(grew <= MEMORY_TOKENS * 4 + 600, `the prompt grew by ${grew} characters`);
-      assert.match(sys(full.bodies[0]), /\[About the user: facts and preferences they approved/);
+      assert.match(sys(full.bodies[0]), /\[Memory: facts and preferences the user approved/);
       assert.match(sys(full.bodies[0]), /- Preference 0: plain words/);
       assert.ok(tools(full.bodies[0]).includes('remember'));
       const toolDef = full.bodies[0].tools.find((t) => t.function.name === 'remember');

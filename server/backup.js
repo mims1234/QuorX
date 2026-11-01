@@ -283,8 +283,11 @@ function restore(z, json, { overwrite = false, folders = {}, skip = [], keys = f
   if (theirMemory) {
     const mine = loadMemory(), next = { on: overwrite ? theirMemory.on !== false : mine.on, items: overwrite ? [] : [...mine.items] };
     for (const x of theirMemory.items) {
-      if (!x || typeof x.text !== 'string' || checkMemory(x.text, next)) continue;
-      next.items.push({ text: x.text }); done.memory++;
+      // Its type, why, details and project come along (a project the other computer has under the same id).
+      if (!x || typeof x.text !== 'string') continue;
+      const extra = { type: x.type, why: x.why, details: x.details, project: x.project };
+      if (checkMemory(x.text, next, extra)) continue;
+      next.items.push({ text: x.text, ...extra }); done.memory++;
     }
     saveMemory(next);
   }
