@@ -26,7 +26,7 @@ import { toolPrompt, renderTranscript, parseToolCalls, textFilter, notRun } from
 import { localStream, localModels } from '../server/opencodelocal.js';
 import { claudeStream, claudeModels, claudeError, effortFor } from '../server/claudelocal.js';
 import { grokStream, grokModels, grokEffort, grokArgs, GROK_ENV, repeats } from '../server/groklocal.js';
-import { ollamaModels, ollamaEntry, ollamaBody, ollamaMessages, ollamaStream, ollamaBase, ctxFor } from '../server/ollamalocal.js';
+import { ollamaModels, ollamaEntry, ollamaBody, ollamaMessages, ollamaStream, ollamaBase, localOllama, ctxFor } from '../server/ollamalocal.js';
 
 // ---------- Apps on this PC: the main model through OpenCode on this computer (server/sources.js) ----------
 // A Go plan model as OpenCode on this PC lists it.
@@ -1140,6 +1140,10 @@ test('Ollama lists the pulled models that call tools, takes calls on /api/chat w
     assert.ok(sourceOf('ollama-local/qwen3:8b'), 'its id names its source');
     assert.deepEqual(ollamaEntry({ name: 'llava:7b' }, { capabilities: ['tools', 'vision'] }).in, ['text', 'image']);
     assert.deepEqual([ollamaBase(''), ollamaBase('0.0.0.0'), ollamaBase('127.0.0.1:12000'), ollamaBase('http://box.local:11434')], ['http://127.0.0.1:11434', 'http://127.0.0.1:11434', 'http://127.0.0.1:12000', 'http://box.local:11434']);
+    // a URL without a port takes its scheme's; only a bare host takes 11434; IPv6 bind-all is this computer too
+    assert.deepEqual([ollamaBase('https://box.local'), ollamaBase('http://box.local'), ollamaBase('box.local'), ollamaBase('[::]'), ollamaBase('::'), ollamaBase('[::]:9000'), ollamaBase('::1')],
+      ['https://box.local:443', 'http://box.local:80', 'http://box.local:11434', 'http://127.0.0.1:11434', 'http://127.0.0.1:11434', 'http://127.0.0.1:9000', 'http://[::1]:11434']);
+    assert.deepEqual(['', '[::]', '::1', 'localhost:5000', 'https://localhost', 'box.local'].map((h) => localOllama(ollamaBase(h))), [true, true, true, true, false, false], 'ollama serve is started only for a plain-http address on this computer');
   }
   { // a call to Ollama goes to /api/chat with a context size, tool calls as objects and results named by their tool
     const info = ollamaEntry(OL_TAGS.models[0], OL_SHOW['qwen3:8b']);
