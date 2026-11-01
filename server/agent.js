@@ -20,7 +20,9 @@ import { rotateLog } from './storagerules.js';
 import { enhanceRequest } from './enhancer.js';
 import { validId, listProjects, getChat } from './store.js';
 import { loadSchedules, cleanSchedule, scheduleView, addSchedule, changeSchedule, removeSchedule, runScheduleNow } from './schedules.js';
-import { toolsFor as mcpToolsFor, callTool as mcpCallTool, parseSetup as mcpParseSetup, addServers as mcpAddServers, listServers as mcpListServers, connect as mcpConnect } from './mcpclient.js';
+import { toolsFor as mcpToolsFor, callTool as mcpCallTool, parseSetup as mcpParseSetup, addServers as mcpAddServers, listServers as mcpListServers, saveServers as mcpSaveServers, connect as mcpConnect } from './mcpclient.js';
+import { SETTINGS, SETTINGS_BY_KEY, CATS as SETTING_CATS, PROJECT_KEYS, SECRET_KEY as SECRET_SETTING, KEYS_POINTER, pageValue, show, checkValue, projectRead, projectChange, designList } from './quorxsettings.js';
+import { listKeys } from './keys.js';
 import { needsAdmin, adminForAgent, adminForUser } from './elevation.js';
 import { secretKind, maskSecretText, scrubSecrets, projectEnv, setSecret, ENV_NAME, MASK } from './projectsecrets.js';
 import { searchFiles, searchNote, trashFile, checkpoint, changedFiles, copyTemplate, snapBefore, commandChanges, safePath, childEnv, realish, registerFolders, folderIndex } from './workspace.js';
@@ -808,6 +810,15 @@ const DESIGN_NEXT = (root) => {
 // server for them, so it always asks first, with buttons only.
 const MCP_SETUP_TOOL = { type: 'function', function: { name: 'mcp_setup', description: 'Add an MCP server to QuorX (its tools then become yours in this chat), or list the ones QuorX has. action "add" with setup: what the user gave you, as they gave it: an mcpServers JSON config, a command line such as "npx -y @scope/server" or "claude mcp add name -- npx -y pkg", or a server\'s https address; name: a short name if the setup has none. The user sees exactly what it will run and adds it with a click; it is then ticked for this chat and started, and its tools come back to you. action "list": the servers QuorX has and their tools. Setup instructions are often written for another tool (Claude Code, Codex, Cursor, VS Code, Gemini CLI…). When the user pasted such instructions without saying where they go, ask with ask_user whether to add it to QuorX (what they usually mean here) or to that tool; never edit another tool\'s own config files unless they say so. Keys a server needs go in its env or headers in the setup, never in your reply. The same goes for other setup pasted for another tool (a model provider or API key, a skill, a rule file): ask whether they mean QuorX, and if so say where it goes in QuorX (keys and providers: ⚙ Settings → Providers and Models; skills: ⚙ Settings → Skills) instead of asking for a key in the chat.', parameters: { type: 'object', required: ['action'], properties: {
   action: { type: 'string', enum: ['add', 'list'] }, setup: { type: 'string', description: 'For add: the config, command line or address, as the user gave it.' }, name: { type: 'string', description: 'For add: a short name (letters, digits, - and _) when the setup gives none.' } } } } };
+// ⚙ QuorX's own settings and this project's (server/quorxsettings.js). Reads are free; every change is a card the user
+// clicks (typed words don't answer it), and the deciders never approve one.
+const QUORX_SETTINGS_TOOL = { type: 'function', function: { name: 'quorx_settings', description: 'Read and change QuorX\'s own settings (⚙ Settings) and this chat\'s project settings, when the user asks: "set this project\'s budget to $20", "use the brutalist design system here", "add a hook that runs prettier after file writes", "turn off notifications", "switch new chats to Strict", "which MCP servers are on?". Actions: list (category: one of appearance, notifications, privacy, providers, newchats, loop, deciders, tools, safety, budget, video, code, mcp, schedules, keys, project; or query: words to search the labels; neither = an overview); get (key); explain (key: what it does, its values, its default); set (key, value; for project.hooks and project.rules also op: add | remove | on | off); undo (puts back the last change made in this reply, or the one with key). Keys look like ui.notify, approval, model, replyBudget, safety.snapshots, project.budget, project.design, project.hooks, mcp.<server>. Each set shows the user a card with what changes from what to what, and only their click makes it, in every mode (Always allow on that card covers ordinary settings for the rest of the chat; safety, approvals, budgets, models, permissions, hooks and deletes ask every time). A change to ⚙ Settings applies from the next reply (appearance at once); a project change applies at once. API keys and secrets are never readable or settable here: point the user to ⚙ Settings → Providers. Schedules change with the schedule tool, and new MCP servers come in with mcp_setup. Change only what the user asked for.', parameters: { type: 'object', required: ['action'], properties: {
+  action: { type: 'string', enum: ['list', 'get', 'explain', 'set', 'undo'] },
+  category: { type: 'string', description: 'For list: a ⚙ Settings category, or project' },
+  query: { type: 'string', description: 'For list: words to find settings by (e.g. "notification", "budget", "design")' },
+  key: { type: 'string', description: 'The setting, as list shows it' },
+  value: { description: 'For set: the new value (true/false, a word from its values, a number, a model id, a list of model ids; project.budget: dollars or "none"; project.design: a system id from list or "none"; a hook {event, command, match, timeout, feedback}; a rule {match, effect}; or the id of a hook or rule)' },
+  op: { type: 'string', enum: ['add', 'remove', 'on', 'off'], description: 'For set on project.hooks and project.rules' } } } } };
 const SCHEDULE_TOOL = { type: 'function', function: { name: 'schedule', description: 'The user\'s schedules: jobs QuorX runs on its own at set times, like "every 3 minutes type /ldrop in the bot channel" or "weekdays at 9 summarise my inbox". Each run starts fresh with only its prompt (no memory of this chat), uses its own model and mode, and posts its reply in the schedule\'s chat; a schedule made here posts in THIS chat, so later the user can ask you here what the runs saw. Actions: list (every schedule, this chat\'s first, with recent runs); create (name, prompt, when; write the prompt as complete instructions for a fresh agent: where to go, what to do, what to report); update (id, then any of name, prompt, when, notify, model, approval); pause / resume / run_now / delete (id). when: {"kind":"every","minutes":15} (3 or more), {"kind":"daily","time":"09:00","days":[1,2,3,4,5]} (0 = Sunday; no days = every day) or {"kind":"once","at":"2026-10-28T18:30"} (local time). notify: always, failure (only when a run fails), needs (only when a run waits for the user) or changed (only when the result differs from last time). Creating, changing, resuming, running now and deleting ask the user first.', parameters: { type: 'object', required: ['action'], properties: {
   action: { type: 'string', enum: ['list', 'create', 'update', 'pause', 'resume', 'run_now', 'delete'] },
   id: { type: 'string', description: 'The schedule, from list (update, pause, resume, run_now, delete)' },
@@ -1019,7 +1030,7 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   const carryOn = resumed && req.continue ? { steps: Math.max(5, Math.min(200, Number(req.continue) || DEFAULTS.moreSteps)), model: String(req.model || '').trim() || null, from: resumed.req?.setup?.model } : null;
   // File checkpoints (for ↶ Undo and the final check) stay under the reply that was resumed.
   const undoId = resumed ? resumed.undoId || String(req.resume) : null;
-  if (resumed) req = { ...resumed.req, runId: req.runId, chatId: req.chatId, settings: req.settings || resumed.req.settings, allowed: req.allowed || resumed.req.allowed, apps: req.apps || resumed.req.apps, folders: req.folders || resumed.req.folders, resume: undefined, ...(carryOn?.model ? { setup: { ...resumed.req.setup, model: carryOn.model } } : {}) };
+  if (resumed) req = { ...resumed.req, runId: req.runId, chatId: req.chatId, settings: req.settings || resumed.req.settings, prefs: req.prefs || resumed.req.prefs, allowed: req.allowed || resumed.req.allowed, apps: req.apps || resumed.req.apps, folders: req.folders || resumed.req.folders, resume: undefined, ...(carryOn?.model ? { setup: { ...resumed.req.setup, model: carryOn.model } } : {}) };
   // The model decides when to use the deciders: from the page, decide is always offered and never forced.
   // Forced asking and draft strategies remain only for the benchmark (req.bench).
   const setup = req.bench ? { ...DEFAULTS.setups.C, ...(req.setup || {}) }
@@ -1382,7 +1393,7 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
   const mcpT = req.chatId && !req.bench && Array.isArray(S.mcpServers) && S.mcpServers.length
     ? await mcpToolsFor(S.mcpServers).catch(() => ({ defs: [], byName: new Map(), notes: [] })) : { defs: [], byName: new Map(), notes: [] };
   tools.push(...mcpT.defs);
-  if (req.chatId && !req.bench) tools.push(MCP_SETUP_TOOL);
+  if (req.chatId && !req.bench) tools.push(MCP_SETUP_TOOL, QUORX_SETTINGS_TOOL);
   emit({ t: 'start', runId, setup, voters: S.voters, approval: S.approval, system, at: 0 });
   if (mcpT.notes.length) emit({ t: 'note', level: 'warn', msg: `MCP server${mcpT.notes.length > 1 ? 's' : ''} not available in this reply: ${mcpT.notes.join('; ')}`, at: 0 });
   if (noDesktop && S.appsAccess && req.chatId) emit({ t: 'note', level: 'warn', msg: noDesktop, at: 0 });
@@ -2891,7 +2902,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     // every one of a server set to "Ask every time". mcp_setup asks for itself (buttons only).
     const mt = mcpT.byName.get(name);
     if (mt) return mt.ask === 'always' || !mt.readOnly;
-    if (name === 'mcp_setup') return false;
+    if (name === 'mcp_setup' || name === 'quorx_settings') return false;
     if (CAT_OF[name] || name === 'ask_user' || name === 'request_secret' || name === 'media_plan' || name === 'enable_media' || name === 'storyboard') return false;
     if ((S.strictAsk || 'paid') === 'every') return true;
     return (S.strictAskHelpers === true && name === 'delegate') || (S.strictAskDeciders === true && ['decide', 'look', 'extract_design'].includes(name));
@@ -3069,6 +3080,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (name === 'music_map') return `Map the music in ${clip(args.path, 80)}`;
     if (name === 'fit_music') return `Fit ${clip(args.path, 60)} to ${args.seconds} s → ${clip(args.out, 60)}`;
     if (name === 'render_film') return `Render ${clip(args.page, 60)} → ${clip(args.out, 60)}${args.audio ? ` with ${clip(args.audio, 50)}` : ''}`;
+    if (name === 'quorx_settings') return args.action === 'set' ? `Change the setting ${args.key}${args.op ? ` (${args.op})` : ''}: ${clip(typeof args.value === 'string' ? args.value : JSON.stringify(args.value ?? ''), 160)}` : args.action === 'undo' ? `Undo the setting change${args.key ? ` to ${args.key}` : ''}` : `${args.action === 'explain' ? 'Explain' : args.action === 'get' ? 'Read' : 'List'} QuorX settings${args.key ? `: ${args.key}` : args.category ? `: ${args.category}` : args.query ? `: "${clip(args.query, 60)}"` : ''}`;
     if (name === 'enable_media') return `Ask to switch on ${Array.isArray(args.kinds) ? args.kinds.join(', ') : ''}`;
     if (name === 'storyboard') return `Show the storyboard "${clip(args.title, 60)}" (${Array.isArray(args.shots) ? args.shots.length : 0} shots)`;
     if (name === 'ask_user') return Array.isArray(args.questions) && args.questions.length ? `Ask you ${args.questions.length} questions: "${clip(args.questions[0]?.question, 80)}"…` : `Ask you: "${clip(args.question, 100)}"`;
@@ -3343,6 +3355,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (['list_docs', 'read_doc', 'search_docs'].includes(name)) return docTool(name, args);
     if (name === 'delegate') return delegate(args, step);
     if (name === 'mcp_setup') return mcpSetup(args);
+    if (name === 'quorx_settings') return quorxSettings(args);
     if (mcpT.byName.has(name)) { const mt = mcpT.byName.get(name); return mcpCallTool(mt.server, mt.tool, args); }
     if (name === 'edit_video') return editVideo(args);
     return `Error: unknown tool ${name}.`;
@@ -5236,6 +5249,101 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     for (const d of fresh.defs) if (!tools.some((t) => t.function.name === d.function.name)) tools.push(d);
     for (const [k, v] of fresh.byName) mcpT.byName.set(k, v);
     return `Added ${names.join(', ')} to QuorX and ticked ${names.length > 1 ? 'them' : 'it'} for this chat.${fresh.defs.length ? ` Its tools are yours now: ${fresh.defs.map((d) => d.function.name).join(', ')}.` : ''}${fresh.notes.length ? ` Not running yet: ${fresh.notes.join('; ')}. Tell the user what it said; they can fix it under ⚙ Settings → MCP servers.` : ''}`;
+  }
+  // ⚙ quorx_settings: QuorX's settings and this project's. Reads are free. A change is a buttons-only card that says
+  // what changes from what to what, and waits for the user's click in every mode: no countdown, no deciders, and
+  // switching the chat to ⚡ YOLO doesn't answer it. "Always allow" (the user's own click) covers ordinary settings for
+  // the rest of the chat; guarded ones (safety, approvals, budgets, models, permissions, hooks, deletes) ask every
+  // time. ⚙ Settings live in the page: the setting_changed event takes a change there.
+  async function quorxSettings(args) {
+    const act = String(args.action || 'list'), key = String(args.key || '').trim();
+    const prefs = req.prefs && typeof req.prefs === 'object' ? req.prefs : (req.settings || {});
+    if (key && (SECRET_SETTING.test(key) || /^keys?\b/i.test(key))) return KEYS_POINTER;
+    const guarded = (s) => !!s.guard || ['model', 'models', 'money'].includes(s.type) || s.cat === 'tools' || /^newChatTools\.(image|video|music|speech)$/.test(s.key);
+    const line = (s) => `${s.key} = ${show(s, pageValue(prefs, s, DEFAULTS))}  (${s.label})`;
+    const mcpLines = () => { const l = mcpListServers(); return l.length ? l.map((s) => `mcp.${s.name} = ${s.on ? 'On' : 'Off'} (${s.status}${s.tools.length ? `, ${s.tools.length} tools` : ''})${(S.mcpServers || []).includes(s.name) ? ', ticked for this chat' : ''}`).join('\n') : 'No MCP servers yet (add one with mcp_setup).'; };
+    const projLines = () => (projectId ? Object.entries(PROJECT_KEYS).map(([k, K]) => `${k} = ${projectRead(projectId, root, k, { secrets: Object.keys(projectEnv(root)) })?.replace(/\n/g, '; ')}  (${K.label})`).join('\n') : 'This chat has no project.');
+    if (act === 'list') {
+      const cat = String(args.category || '').toLowerCase().trim(), q = String(args.query || '').toLowerCase().trim();
+      if (cat === 'project') return projLines();
+      if (cat === 'mcp') return mcpLines();
+      if (cat === 'keys') return `${listKeys().map((k) => `- ${k.label || 'OpenRouter key'}${k.active ? ' (in use)' : ''}`).join('\n') || 'No OpenRouter key.'}\n${KEYS_POINTER}`;
+      if (cat === 'schedules') { const l = loadSchedules(); return `${l.length ? l.map((s) => `- ${s.name}: ${scheduleView(s).whenText}${s.paused ? ' (paused)' : ''}`).join('\n') : 'No schedules.'}\nUse the schedule tool to make or change them.`; }
+      if (cat === 'project' || cat.startsWith('design')) return designList(q);
+      const hits = SETTINGS.filter((s) => (!cat || s.cat === cat) && (!q || `${s.key} ${s.label} ${s.help || ''} ${SETTING_CATS[s.cat]}`.toLowerCase().includes(q)));
+      if (cat && !SETTING_CATS[cat]) return `Error: no category ${cat}. They are ${Object.keys(SETTING_CATS).join(', ')}, project.`;
+      if (!cat && !q) return `⚙ Settings categories (list one with category):\n${Object.entries(SETTING_CATS).map(([k, l]) => `- ${k}: ${l}`).join('\n')}\n- project: this chat's project (budget, design system, hooks, command rules, name, archive)\nOr search with query.`;
+      const pq = q ? Object.entries(PROJECT_KEYS).filter(([k, K]) => `${k} ${K.label} ${K.help}`.toLowerCase().includes(q)).map(([k, K]) => `${k}  (${K.label}, this project)`) : [];
+      return [...hits.map(line), ...pq].join('\n') || `Nothing matches "${q}". List a category instead.`;
+    }
+    const s = SETTINGS_BY_KEY.get(key), P = PROJECT_KEYS[key], mcpName = /^mcp\.(.+)$/.exec(key)?.[1];
+    const server = mcpName ? mcpListServers().find((x) => x.name === mcpName) : null;
+    if (!s && !P && !server && act !== 'undo') return `Error: no setting "${key}". Use list (with a category or query) for the keys.`;
+    if (act === 'get') return s ? `${line(s)}\nIn ⚙ Settings → ${SETTING_CATS[s.cat]}.` : server ? mcpLines().split('\n').find((l) => l.startsWith(`${key} `)) : `${key}: ${projectRead(projectId, root, key, { secrets: Object.keys(projectEnv(root)) })}`;
+    if (act === 'explain') {
+      if (server) return `${key}: whether QuorX may start the MCP server ${mcpName} (${server.type === 'http' ? server.url : server.command}). Each chat still ticks the servers it uses. Changing it always waits for the user's click.`;
+      if (P) return `${key}: ${P.label}. ${P.help}${P.readOnly ? '' : `\nNow: ${projectRead(projectId, root, key)}`}${P.guard ? '\nChanging it always waits for the user\'s click.' : ''}${key === 'project.design' ? '\nCall list with category design (and a query) to see the systems.' : ''}`;
+      const d = pageValue({}, s, DEFAULTS);
+      return `${s.key}: ${s.label} (⚙ Settings → ${SETTING_CATS[s.cat]}). ${s.help || ''}\nValues: ${s.type === 'enum' ? s.values.map(([k, l]) => `${k} (${l})`).join(', ') : s.type === 'bool' ? 'true or false' : ['int', 'num', 'money'].includes(s.type) ? `${s.min} to ${s.max}${s.unit || ''}` : s.type === 'models' ? '1 to 3 model ids' : s.type === 'model' ? `a model id${s.empty ? `, or empty for ${s.empty}` : ''}` : 'text'}\nDefault: ${show(s, d)}. Now: ${show(s, pageValue(prefs, s, DEFAULTS))}.${guarded(s) ? '\nChanging it always waits for the user\'s click.' : ''}`;
+    }
+    if (act !== 'set' && act !== 'undo') return 'Error: action is list, get, explain, set or undo.';
+    if (req.scheduledBy) return 'Refused: a scheduled run can read settings but not change them. Changes happen in a chat with the user.';
+    // The card: what changes, from what, to what. Only a click answers it.
+    const ask = async (what, why, guard) => {
+      if (!guard && allowed.has('quorx_settings')) return { approve: true, by: 'always' };
+      const card = { id: newApprovalId(), tool: 'quorx_settings', free: true, est: 0, buttonsOnly: true, noAlways: !!guard, yes: 'Change it', no: 'Keep it as it is', what,
+        why: `${why}${guard ? ' This kind of setting asks every time.' : ''}` };
+      const ans = await askUser({ ...card, mode: 'strict' });
+      emit({ t: 'approval_done', id: card.id, ...ans, at: at() });
+      return ans;
+    };
+    const changed = (x) => { emit({ t: 'setting_changed', ...x, at: at() }); return x; };
+    const undoLog = (run.settingsUndo ??= []);
+    if (act === 'undo') {
+      const i = key ? undoLog.findLastIndex((u) => u.key === key) : undoLog.length - 1;
+      if (i < 0) return `Nothing to undo${key ? ` for ${key}` : ''}: no setting was changed in this reply.`;
+      const u = undoLog[i];
+      const ans = await ask(`Undo: ${u.label} back from ${u.to} to ${u.from}`, 'Puts the setting back as it was before this reply changed it.', u.guard);
+      if (!ans.approve) return declined('quorx_settings', ans);
+      try { await u.undo(); } catch (e) { return `Error: ${e.message}.`; }
+      undoLog.splice(i, 1);
+      changed({ where: u.where, key: u.key, label: u.label, from: u.to, to: u.from, projectId: u.projectId, value: u.oldValue, undo: true });
+      return `Put back: ${u.label} is ${u.from} again.`;
+    }
+    try {
+      if (s) {
+        const value = checkValue(s, args.value), was = pageValue(prefs, s, DEFAULTS);
+        if (JSON.stringify(value) === JSON.stringify(was)) return `${s.label} is already ${show(s, was)}. Nothing changed.`;
+        const from = show(s, was), to = show(s, value), guard = guarded(s);
+        const ans = await ask(`${SETTING_CATS[s.cat]} → ${s.label}: ${from} → ${to}`, `${s.help ? `${s.help} ` : ''}Saved in ⚙ Settings like your own change; it applies from the next reply${s.cat === 'appearance' || s.cat === 'notifications' || s.cat === 'privacy' ? ' (on screen at once)' : ''}.`, guard);
+        if (!ans.approve) return declined('quorx_settings', ans);
+        changed({ where: 'quorx', key: s.key, label: s.label, from, to, value });
+        const setIn = (o, v) => { const ks = s.key.split('.'), last = ks.pop(); ks.reduce((x, k) => (x[k] ??= {}), o)[last] = v; };
+        setIn(prefs, value);
+        undoLog.push({ where: 'quorx', key: s.key, label: s.label, from, to, guard, oldValue: was, undo: () => { setIn(prefs, was); } });
+        return `Changed ${s.label} (${s.key}) from ${from} to ${to}${ans.by === 'always' ? ' (the user chose Always allow for settings in this chat)' : ''}. ⚙ Settings shows it now; it applies from the next reply. Undo with action undo, or set it back to ${JSON.stringify(was)}.`;
+      }
+      if (server) {
+        const on = checkValue({ type: 'bool', label: `mcp.${mcpName}` }, args.value);
+        if (on === server.on) return `The MCP server ${mcpName} is already ${on ? 'on' : 'off'}.`;
+        const flip = (v) => mcpSaveServers(mcpListServers().map((x) => (x.name === mcpName ? { ...x, on: v } : x)));
+        const ans = await ask(`🧲 MCP servers → ${mcpName}: ${server.on ? 'On' : 'Off'} → ${on ? 'On' : 'Off'}`, on ? `It ${server.type === 'http' ? `connects to ${server.url}` : `runs "${[server.command, ...(server.args || [])].join(' ')}" on this computer`} when a chat ticks it, with your permissions.` : 'Chats can\'t use its tools while it is off.', true);
+        if (!ans.approve) return declined('quorx_settings', ans);
+        flip(on);
+        changed({ where: 'mcp', key, label: `MCP server ${mcpName}`, from: server.on ? 'On' : 'Off', to: on ? 'On' : 'Off' });
+        undoLog.push({ where: 'mcp', key, label: `MCP server ${mcpName}`, from: server.on ? 'On' : 'Off', to: on ? 'On' : 'Off', guard: true, undo: () => flip(server.on) });
+        return `Turned the MCP server ${mcpName} ${on ? 'on' : 'off'} in QuorX.${on ? ' A chat uses it once it is ticked in that chat\'s 🧲 menu.' : ''}`;
+      }
+      const c = projectChange(projectId, root, key, args.value, args.op);
+      const guard = !!(c.guard || P.guard);
+      const ans = await ask(`📁 Project settings → ${P.label}: ${c.from} → ${c.to}`, `${c.what}. ${P.user || ''}${c.runs ? ` It runs "${c.runs}" in the project folder as you, every time it applies.` : ''}`, guard);
+      if (!ans.approve) return declined('quorx_settings', ans);
+      await c.apply();
+      if (key === 'project.hooks') run.hooks = null; // this reply's next tool calls use the new hooks
+      changed({ where: 'project', key, label: P.label, from: c.from, to: c.to, projectId });
+      undoLog.push({ where: 'project', key, label: P.label, from: c.from, to: c.to, guard, projectId, undo: async () => { await c.undo(); if (key === 'project.hooks') run.hooks = null; } });
+      return `Done: ${c.what}. Was: ${c.from}. Project settings show it now. Undo with action undo.`;
+    } catch (e) { if (signal.aborted) throw e; return `Error: ${e.message}. Nothing changed.`; }
   }
   // 🧩 Chrome off in this chat, with the extension connected: one card in the reply turns it on, as for computer use.
   // Ticking the switch while a reply runs doesn't reach that reply, so this is how a reply gets Chrome. No extension

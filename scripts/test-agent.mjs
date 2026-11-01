@@ -599,7 +599,8 @@ test('a project reports what it has spent, and while a reply runs how much is th
     setProjectBudget(id, 10);
     ledger.set(`seed-${id}`, { project: id, cost: 2.5 });
     try {
-      assert.deepEqual(budgetState(id), { budget: 10, spent: 2.5, left: 7.5, running: false, runningCost: 0 });
+      // The $2.50 is in the ledger but in no chat (as for a deleted or rewound chat): reported as unsavedCost.
+      assert.deepEqual(budgetState(id), { budget: 10, spent: 2.5, left: 7.5, running: false, runningCost: 0, unsavedCost: 2.5 });
       liveRuns.set(`live-${id}`, { project: id, cost: 0.75 });
       liveRuns.set(`other-${id}`, { project: 'elsewhere', cost: 5 });
       const s = budgetState(id);

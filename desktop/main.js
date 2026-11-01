@@ -385,6 +385,8 @@ function placeView(t) {
 // Show one tab (or none): every other tab is hidden, so dialogs and other tabs are never covered by a stale one.
 // Only views whose visibility changes are touched (setting it again on a shown view can make it flash).
 handle('show', (sid) => { for (const [k, t] of tabs) { const on = k === sid; if (t.shown === on) continue; vlog(on ? 'show' : 'hide', k); t.shown = on; t.view.setVisible(on); t.cover?.setVisible(on); } return true; });
+// Several tabs at once, one per area of a split pane (each placed in its own box): every other tab is hidden.
+handle('showSet', (sids) => { const on = new Set(Array.isArray(sids) ? sids.map(String) : []); for (const [k, t] of tabs) { const v = on.has(k); if (t.shown === v) continue; vlog(v ? 'show' : 'hide', k); t.shown = v; t.view.setVisible(v); t.cover?.setVisible(v); } return true; });
 handle('hideAll', () => { for (const [k, t] of tabs) { if (t.shown) vlog('hide (all)', k); t.shown = false; t.view.setVisible(false); t.cover?.setVisible(false); } return true; });
 handle('nav', (sid, op) => {
   const t = tabs.get(sid); if (!t) return false;
