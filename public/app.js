@@ -8022,8 +8022,11 @@ function resetCategory() {
 }
 function updateDirty() {
   const n = Math.max(ST.changed?.size || 0, document.querySelectorAll('#stMain .changed').length);
-  $('#stDirty').textContent = !ST.dirty ? 'No changes' : n > 1 ? `${n} unsaved changes` : 'Unsaved changes';
+  // Just saved: "✓ Saved" stays a moment instead of being written over by "No changes".
+  if (ST.dirty || $('#stDirty').textContent !== '✓ Saved') $('#stDirty').textContent = !ST.dirty ? 'No changes' : n > 1 ? `${n} unsaved changes` : 'Unsaved changes';
   $('.st-foot').classList.toggle('dirty', ST.dirty);
+  // Nothing unsaved: the button only closes the window.
+  const cancel = $('#stCancel'); if (cancel) { cancel.textContent = ST.dirty ? 'Cancel' : 'Close'; cancel.title = ST.dirty ? 'Close without saving these changes' : 'Close settings'; }
   // Reset names the category it resets
   const what = $('#stResetWhat'), label = SETTINGS_NAV.flatMap(([, items]) => items).find(([id]) => id === ST.cat)?.[2];
   if (what) what.textContent = label || 'category';
@@ -8094,7 +8097,18 @@ function saveSettings() {
   G.settings = S;
   savePrefs(); applyTheme(); applyUi();
   renderToolbars(); renderPanes(); renderSpend();
-  $('#settings').close();
+  // Settings stays open on the same page: what you saved is the new starting point (Cancel, Undo and the Escape
+  // check work from here), and the footer says it was saved.
+  const main = $('#stMain'), top = main?.scrollTop || 0;
+  ST.draft = structuredClone(G.settings);
+  ST.draft.theme = G.theme ?? null; ST.themeAtOpen = G.theme ?? null;
+  ST.draft.newChatTools ??= { ...DEFAULT_CHAT_TOOLS };
+  ST.draft.storage = structuredClone(G.storageRules || {});
+  ST.dirty = false; ST.changed = new Set();
+  drawSettings();
+  if (main) main.scrollTop = top;
+  const st = $('#stDirty');
+  if (st) { st.textContent = '✓ Saved'; clearTimeout(ST.savedTimer); ST.savedTimer = setTimeout(() => { if (!ST.dirty) st.textContent = 'No changes'; }, 2500); }
 }
 // The Storage page's rules live with the harness (data/storage.json), so they work while no page is open; the desktop
 // app keeps its own two in its settings, so they apply before the harness starts.
