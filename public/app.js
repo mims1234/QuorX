@@ -69,7 +69,7 @@ const BUCKET = {
   unclear: ['deciders unsure', 'The deciders could not settle it (low confidence).'],
   unmatched: ['guess unclear', 'The agent\'s guess did not match any option, so it can\'t be compared.'],
 };
-const TOOL_NAME = { computer_use: '🖥 Computer use', folder: '📁 A folder outside the project', remember: '📌 Remember this in every chat', media_plan: '🎞 Production plan', enable_media: '🧰 Switch on paid tools', imagine: '🖼 Make a picture', make_video: '🎬 Make a video', compose_music: '🎵 Compose music', speak: '🗣 Speak aloud',
+const TOOL_NAME = { computer_use: '🖥 Computer use', quorx_settings: '⚙ QuorX settings', folder: '📁 A folder outside the project', remember: '📌 Remember this in every chat', media_plan: '🎞 Production plan', enable_media: '🧰 Switch on paid tools', imagine: '🖼 Make a picture', make_video: '🎬 Make a video', compose_music: '🎵 Compose music', speak: '🗣 Speak aloud',
   write_artifact: '📄 Write a page', edit_artifact: '✏️ Edit a page', read_artifact: '👀 Read a page', decide: '⚖️ Ask the deciders',
   list_files: '🗂 List files', read_file: '👀 Read a file', write_file: '📝 Write a file', append_file: '📝 Append to a file', edit_file: '✏️ Edit a file',
   search_docs: '🔎 Search the attached documents', read_doc: '📄 Read an attached document', list_docs: '📎 List attached documents',
@@ -998,6 +998,7 @@ async function deleteChat(id) {
 // ---------- ⚙ project settings: name, folder, budget, and what each chat cost ----------
 async function openProjectSettings(p0, focusOn) {
   const dlg = $('#projDlg'), box = $('#projBody');
+  dlg.dataset.project = p0.id;
   const projects = await fetch('/api/projects').then((r) => r.json()).catch(() => G.projects);
   const p = projects.find((x) => x.id === p0.id) || p0;
   box.innerHTML = `
@@ -1162,6 +1163,7 @@ const PJX = {
 function openProjectSub(p, kind, { onClose } = {}) {
   const dlg = $('#projSubDlg'), box = $('#projSubBody');
   const [title, sub] = PJX[kind];
+  G.projSub = { p, kind, onClose };
   dlg.className = `pj-dialog pjx-dialog pjx-${kind}`;
   dlg.setAttribute('aria-label', `${title}: ${p.name}`);
   box.innerHTML = `<header class="pjx-head">
@@ -1174,7 +1176,7 @@ function openProjectSub(p, kind, { onClose } = {}) {
   const body = $('.pjx-body', box);
   // dirty(): the window says when it has unsaved changes; close asks once before throwing them away.
   // setSummary: one status line at the top right (what the window holds now), hidden while there are unsaved changes.
-  const ctl = { dirty: () => false, setDirty: (on) => { $('.pjx-dirty', box).hidden = !on; $('.pjx-sum', box).hidden = on; }, setSummary: (html) => { $('.pjx-sum', box).innerHTML = html; } };
+  const ctl = G.projSub.ctl = { dirty: () => false, setDirty: (on) => { $('.pjx-dirty', box).hidden = !on; $('.pjx-sum', box).hidden = on; }, setSummary: (html) => { $('.pjx-sum', box).innerHTML = html; } };
   const close = () => {
     if (ctl.dirty() && !box.querySelector('.pjx-leave')) {
       const bar = document.createElement('div'); bar.className = 'pjx-leave';
@@ -5442,6 +5444,7 @@ function traceRows(m) {
     else if (e.t === 'reading') row(e.at, `📝 <b>Prompt enhancer</b> ${esc(short(e.model))} read the request${e.late ? ' (too late for the first step; the deciders still use it)' : ''} · ${secs(e.ms)} · ${money(e.cost, 5)}<div class="sub" style="white-space:pre-wrap">${linkUrls(esc(e.text))}</div>`, 'note');
     else if (e.t === 'chat_off_project') row(e.at, `📝 Own chat from now on: you said “${esc(e.why || '')}”, so this chat leaves the project's notes, design and log alone. Tick Part of the project in the header to undo.`, 'note');
     else if (e.t === 'schedules_changed') row(e.at, `⏰ schedule ${esc({ create: 'created', update: 'changed', pause: 'paused', resume: 'resumed', run_now: 'run now', delete: 'deleted' }[e.action] || e.action)}<div class="sub">See ⏰ Schedules, or the ⏰ chip in this chat's header</div>`, 'ok');
+    else if (e.t === 'setting_changed') row(e.at, `⚙ ${e.undo ? 'Put back' : 'Changed'} ${e.where === 'project' ? 'project setting' : 'setting'} <b>${esc(e.label)}</b>: <s>${esc(e.from)}</s> → ${esc(e.to)}${e.undo ? '' : ' <small class="dim">(ask the agent to undo it, or change it back in Settings)</small>'}`, 'note');
     else if (e.t === 'mcp_on') row(e.at, `🧲 Added to QuorX and ticked for this chat: ${(e.names || []).map(esc).join(', ')}`, 'note');
     else if (e.t === 'tools_on') row(e.at,`🧰 Switched on for this chat: ${(e.kinds || []).map((k) => esc({ image: 'pictures', video: 'video clips', music: 'music', speech: 'voice', apps: '🖥 computer use', chrome: '🧩 Chrome' }[k] || k)).join(', ')}${Object.keys(e.models || {}).length ? ` · ${Object.entries(e.models).map(([k, mm]) => `${esc(k)}: ${esc(short(mm))}`).join(', ')}` : ''}`, 'note');
     else if (e.t === 'video_mode') row(e.at, e.on ? `🎬 <b>Video Mode</b> on${e.skills?.length ? ` · loaded ${e.skills.map(esc).join(', ')}` : ''}<div class="sub">Brief, story and storyboard come before anything is spent${e.first ? '' : ' (the brief was settled earlier in this chat)'}.</div>` : '🎬 Video Mode off: you said this is not a film', 'note');
@@ -5740,7 +5743,7 @@ function approvalHTML(a, live = true) {
     ${c.mcp ? `<div class="mcp-ap"><div class="mcp-ap-head">${mcpMark({ name: c.mcp.server }, 'sm')}<span>Use <b>${esc(c.mcp.tool)}</b> on the MCP server <b>${esc(c.mcp.server)}</b></span>${c.mcp.changes ? '<span class="mcp-chg" title="The server doesn\'t mark this tool as read-only">CHANGES THINGS</span>' : ''}</div><pre>${esc(c.mcp.input)}</pre>${waiting ? `<small class="dim">${c.mcp.always ? `Asked because ${esc(c.mcp.server)} is set to Ask every time.` : 'Asked because this chat is Strict and the tool can change things.'} ⚙ Settings → MCP servers changes this.</small>` : ''}</div>`
       : c.items ? '' : `<div class="what">${c.free ? esc(c.what) : `“${esc(c.what)}”`}</div>`}
     ${c.why ? `<div class="what">Why: ${esc(c.why)}</div>` : ''}${c.items && waiting ? '<div class="what dim">Calls that match this plan then run without asking again; anything else asks on its own.</div>' : ''}
-    ${waiting ? `${waitHTML(c)}${c.buttonsOnly ? '<div class="what dim">Only these buttons switch it on: typed words don’t.</div>' : '<textarea rows="1" placeholder="Or type to tell it something else. Enter sends it, without allowing or declining."></textarea>'}
+    ${waiting ? `${waitHTML(c)}${c.buttonsOnly ? `<div class="what dim">${c.tool === 'quorx_settings' ? 'Only your click changes it: typed words don’t, and nothing answers this card for you, in YOLO too.' : 'Only these buttons switch it on: typed words don’t.'}</div>` : '<textarea rows="1" placeholder="Or type to tell it something else. Enter sends it, without allowing or declining."></textarea>'}
       <div class="acts"><button type="button" class="primary reply" hidden>Send to the agent</button><button type="button" class="primary yes">${c.yes ? esc(c.yes) : c.tool === 'remember' ? 'Save to memory' : c.free ? 'Allow once' : `Approve ${money(c.est, 3)}`}</button>${c.noAlways ? '' : `<button type="button" class="always" title="Stop asking for this tool in this chat">${c.mcp ? `Always allow ${esc(c.mcp.tool)} on ${esc(c.mcp.server)}` : 'Always allow'}</button>`}<button type="button" class="no">${c.no ? esc(c.no) : c.tool === 'remember' ? "Don't save" : 'Decline'}</button></div>`
       : o ? `<div class="outcome ${apState(o)}">${{ yes: '✅ ', no: '⛔ ', reply: '↩ ' }[apState(o)]}${apWho(o, c)}</div>`
       : !live ? '<div class="outcome">Not answered: the reply ended</div>' : `<div class="outcome">⚡ ${c.tool === 'shell' ? 'The deciders are voting on this command…' : 'Deciders are checking whether this is needed and worth the price…'}</div>`}
@@ -6113,8 +6116,10 @@ async function runChat(c, text, ctx, imgs, { resumeOf, docs = [], more = 0, mode
   else if (box) { if (box.querySelector('.hint')) box.innerHTML = ''; if (user) box.appendChild(renderMsg(c, user)); box.appendChild(renderMsg(c, m)); c.follow = true; c.toEnd?.(); }
   const artifacts = Object.fromEntries(Object.entries(a.artifacts).map(([id, x]) => [id, x.kind === 'html' ? { kind: 'html', title: x.title, html: x.html, v: 1 } : x.kind === 'md' ? { kind: 'md', title: x.title, md: x.md || '', v: 1 } : { kind: x.kind, title: x.title, url: x.url?.startsWith('data:') ? undefined : x.url, v: 1 }]));
   const settings = { ...G.settings, approval: c.approval, tools: chatTools(c), ...qualitySettings(c), chromeAccess: !!c.tools?.chrome, appsAccess: !!c.tools?.apps, mcpServers: mcpOn(c) };
-  const body = resumeOf ? { runId: m.runId, chatId: c.id, resume: resumeOf, settings, allowed: a.allowed, cmdRules: a.cmdRules || [], apps: a.apps || [], folders: a.folders || [], reading: a.reading?.text || '', ...(more ? { continue: more, ...(model ? { model } : {}) } : {}) }
-    : { runId: m.runId, chatId: c.id, projectId: c.projectId, chatTitle: c.title, setup: a.setup, settings, allowed: a.allowed, cmdRules: a.cmdRules || [], apps: a.apps || [], folders: a.folders || [], offProject: chatOffProject(c), history, summary: a.summary || '', reading: a.reading?.text || '', text, artifacts, context: ctx?.text || '', images: imgs.map((x) => x.full), docs: docs.map((d) => d.id), ...(cmts.length ? { comments: cmts } : {}), ...(a.videoMode ? { videoMode: a.videoMode } : {}), ...(a.videoMode === 'on' && a.videoFrom ? { videoFrom: a.videoFrom } : {}) };
+  // ⚙ Settings as they are, for quorx_settings to read (settings above is this chat's view of them).
+  const prefs = { ...G.settings, theme: G.theme ?? 'system' };
+  const body = resumeOf ? { runId: m.runId, chatId: c.id, resume: resumeOf, settings, prefs, allowed: a.allowed, cmdRules: a.cmdRules || [], apps: a.apps || [], folders: a.folders || [], reading: a.reading?.text || '', ...(more ? { continue: more, ...(model ? { model } : {}) } : {}) }
+    : { runId: m.runId, chatId: c.id, projectId: c.projectId, chatTitle: c.title, setup: a.setup, settings, prefs, allowed: a.allowed, cmdRules: a.cmdRules || [], apps: a.apps || [], folders: a.folders || [], offProject: chatOffProject(c), history, summary: a.summary || '', reading: a.reading?.text || '', text, artifacts, context: ctx?.text || '', images: imgs.map((x) => x.full), docs: docs.map((d) => d.id), ...(cmts.length ? { comments: cmts } : {}), ...(a.videoMode ? { videoMode: a.videoMode } : {}), ...(a.videoMode === 'on' && a.videoFrom ? { videoFrom: a.videoFrom } : {}) };
   // Saved straight away, so a reload finds the running reply and reattaches to it.
   saveChat(c, true);
   return followRun(c, m, async (signal) => {
@@ -6282,6 +6287,7 @@ async function followRun(c, m, open) {
         if (e.t === 'control') { c.driving = e.kind; markDriving(c); renderSidebar(); }
         // You switched paid tools on from the agent's card: they stay on for this chat (its 🧰 Tools menu shows them).
         if (e.t === 'schedules_changed') loadSchedules().then(() => { if ($('#schedules')?.open) drawSchedules(); renderChatHead(c); });
+        if (e.t === 'setting_changed') settingChanged(e);
         if (e.t === 'mcp_on') { c.mcp = [...new Set([...(c.mcp || []), ...(e.names || [])])]; saveChat(c); loadMcp().then(() => renderComposerBar(c)); }
         if (e.t === 'tools_on') { for (const k of e.kinds || []) if (CHAT_TOOLS.includes(k) || k === 'apps' || k === 'chrome') c.tools[k] = true; if ((e.kinds || []).some((k) => k === 'apps' || k === 'chrome')) renderComposerBar(c); saveChat(c); renderToolbars(); }
         if (e.t === 'video_mode') {
@@ -8109,6 +8115,29 @@ const storageHelpers = () => ({ getJ, postJ, esc, ask, uiAlert, openFolder, keep
   openCat: (id) => { ST.cat = id; drawSettings(); } });
 // Cancel (or Esc) drops the draft and undoes the theme preview.
 function cancelSettings() { G.theme = ST.themeAtOpen; applyTheme(); if ($('#settings').open) $('#settings').close(); }
+// A setting the agent changed with your click (quorx_settings): ⚙ Settings save it as their own Save would, and an
+// open Settings or Project settings window shows it at once (your unsaved edits there stay).
+function settingChanged(e) {
+  if (e.where === 'quorx') {
+    if (e.key === 'theme') { G.theme = e.value === 'system' ? null : e.value; ST.themeAtOpen = G.theme; }
+    else setPath(G.settings, e.key, e.value);
+    savePrefs(); applyTheme(); applyUi(); renderToolbars(); renderPanes(); renderSpend();
+    if ($('#settings').open && ST.draft) { if (e.key === 'theme') ST.draft.theme = G.theme; else setPath(ST.draft, e.key, e.value); drawSettings(); }
+  }
+  if (e.where === 'mcp') loadMcp().then(() => { if ($('#settings').open && ST.draft) drawSettings(); });
+  if (e.where === 'project') refreshProjectWindows(e.projectId);
+}
+async function refreshProjectWindows(pid) {
+  await refreshSidebar();
+  for (const ch of G.open.values()) if (ch.projectId === pid && ch.el?.root?.isConnected) renderChatHead(ch);
+  const main = $('#projDlg'), sub = $('#projSubDlg');
+  if (!main.open || main.dataset.project !== pid) return;
+  const p = G.projects.find((x) => x.id === pid);
+  if (!p) return;
+  await openProjectSettings(p);
+  const s = G.projSub;
+  if (sub.open && s?.p.id === pid && !s.ctl?.dirty()) openProjectSub(p, s.kind, { onClose: s.onClose });
+}
 
 // Projects panel: acts at once (like the sidebar's ⚙ and 🗑).
 // Settings → Projects: one compact row per project (colour, spend vs budget, folder) with icon actions.
