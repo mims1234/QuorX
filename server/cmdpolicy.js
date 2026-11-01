@@ -1471,7 +1471,9 @@ const readRules = (f) => { try { const j = JSON.parse(fs.readFileSync(f, 'utf8')
 // on: false keeps a rule without using it (turned off in a permissions list). hits and lastUsed: how often and when it
 // last let a command run, or made one ask or stop.
 const cleanRule = (r) => ({ id: ruleId(r), effect: ['allow', 'ask', 'deny'].includes(r.effect) ? r.effect : 'ask', match: String(r.match || '').trim().replace(/\s+/g, ' ').slice(0, RULE_MAX),
-  by: r.by === 'button' ? 'button' : 'user', note: String(r.note || '').slice(0, 200), at: r.at || Date.now(), on: r.on !== false, hits: Math.max(0, Number(r.hits) || 0), lastUsed: r.lastUsed || null });
+  by: r.by === 'button' ? 'button' : 'user', note: String(r.note || '').slice(0, 200), at: r.at || Date.now(), on: r.on !== false, hits: Math.max(0, Number(r.hits) || 0), lastUsed: r.lastUsed || null,
+  // from: the chat whose card made it ({ chatId, chat: its title then }), shown in the permissions list.
+  ...(r.from?.chatId ? { from: { chatId: String(r.from.chatId).slice(0, 80), chat: String(r.from.chat || '').slice(0, 120) } } : {}) });
 
 /** Every rule that applies in a project: the project's first, then everywhere's. Each carries its scope. */
 export function loadRules(root) {
@@ -1495,12 +1497,16 @@ export function addRule(scope, rule, root) {
   return saveRules(scope, next, root);
 }
 const rulesOf = (scope, root) => (scope === 'project' ? readRules(projectFile(root)) : readRules(globalFile()));
-/** Turns one rule on or off ({ on }), by id. Returns the scope's rules, or null when there is no such rule. */
+/** Turns one rule on or off ({ on }), or edits it ({ match, effect }), by id. Returns the scope's rules, or null when there is no such rule. */
 export function updateRule(scope, id, patch, root) {
   const cur = rulesOf(scope, root);
   const r = cur.find((x) => x.id === id);
   if (!r) return null;
   if ('on' in patch) r.on = patch.on !== false;
+  // An edit from the permissions list: the pattern and what happens. A rule made with a card stays a card's rule: an
+  // edit never gives it the reach of one you type (relaxing pushes, uncheckable commands, deletes outside the project).
+  if (typeof patch.match === 'string' && patch.match.trim()) r.match = patch.match.trim();
+  if (['allow', 'ask', 'deny'].includes(patch.effect)) r.effect = patch.effect;
   return saveRules(scope, cur, root);
 }
 /** Removes one rule, by id. */

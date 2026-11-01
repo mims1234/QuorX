@@ -2889,8 +2889,9 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   // ================= tools (closures over this run) =================
 
   // YOLO, with this tool's group turned off: ask first (an "Always allow" answer stops the asking for the chat).
-  function yoloAsks(name) {
-    if (S.approval !== 'yolo' || allowed.has(name)) return false;
+  function yoloAsks(name) { return !allowed.has(name) && yoloWouldAsk(name); }
+  function yoloWouldAsk(name) {
+    if (S.approval !== 'yolo') return false;
     // An MCP server set to "Ask every time" asks in YOLO too.
     if (mcpT.byName.get(name)?.ask === 'always') return true;
     const g = YOLO_GROUP_OF[name];
@@ -3285,6 +3286,8 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     // Strict asks before paid media (inside media(), with the price), helpers or decider checks only if the user chose that, or before
     // every tool when the user chose that. A plan asks once in Strict; ticking its items off later doesn't.
     // Commands have their own gate (the rule engine, in codeTool), so they never get a second, generic card.
+    // An "Always allow" in this chat let it through: one use of that permission, counted on the page (allowed_used).
+    if (allowed.has(name) && ((S.approval === 'strict' && strictAsks(name)) || yoloWouldAsk(name))) emit({ t: 'allowed_used', tool: name, at: at() });
     if (((S.approval === 'strict' && strictAsks(name) && !allowed.has(name)) || yoloAsks(name)) && !(name === 'plan' && run.plan) && !(name === 'launch_config' && args.action === 'list') && !['shell', 'run_command', 'terminal', 'edit_video'].includes(name)) {
       const mt = mcpT.byName.get(name);
       const card = { id: newApprovalId(), tool: name, free: true, est: 0, what: toolSummary(name, args), why: '',
@@ -3556,7 +3559,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       // its tripwire, the user sees it in the pane's Running tab and can stop it there, and the agent carries on.
       const before = await runHooks('before_command', { command: line });
       if (before.blocked) return before.text.trim();
-      const out = await execCommand({ line, shell, cwd, label: alias ? [args.command, ...argv].join(' ') : line, readOnly: d.segments.every((s) => s.cls === 'read'), decidedBy: g.by,
+      const out = await execCommand({ line, shell, cwd, label: alias ? [args.command, ...argv].join(' ') : line, readOnly: d.segments.every((s) => s.cls === 'read'), decidedBy: g.by, rule: g.rule,
         background: !!args.background, backgroundable: true });
       return `${out}${before.text}${args.background ? '' : (await runHooks('after_command', { command: line })).text}`;
     }
@@ -4032,7 +4035,8 @@ ${r.text || '(no text found)'}`;
     const strictEvery = S.approval === 'strict' && (S.strictAsk || 'paid') === 'every' && !ownCard;
     const yoloAsksCommands = S.approval === 'yolo' && S.yoloAuto?.commands === false && !ownCard;
     countRuleUses(d);
-    if (d.verdict === 'allow' && !strictEvery && !yoloAsksCommands) return { ok: true, by: d.decidedBy };
+    // The rule that let it run, by its pattern, so the chat can say which one (the step's "why").
+    if (d.verdict === 'allow' && !strictEvery && !yoloAsksCommands) return { ok: true, by: d.decidedBy, rule: String(d.decidedBy || '').startsWith('rule:') ? d.segments.find((s) => s.rule && s.decidedBy === d.decidedBy)?.rule?.match : undefined };
     // The same command line approved earlier in this reply doesn't ask again, say when the agent moves it from shell
     // to its terminal or to the background. (Hooks are approved one by one: you didn't type them for this reply.)
     const sameLine = line.replace(/\s+/g, ' ').trim(), approvedLines = (run.approvedLines ??= new Set());
@@ -4114,7 +4118,7 @@ ${r.text || '(no text found)'}`;
       ans.rule = null;
     }
     if (ans.approve && ans.rule) {
-      const rule = { id: Math.random().toString(36).slice(2, 12), effect: 'allow', match: ans.rule.match, by: 'button', at: Date.now() };
+      const rule = { id: Math.random().toString(36).slice(2, 12), effect: 'allow', match: ans.rule.match, by: 'button', at: Date.now(), ...(req.chatId ? { from: { chatId: String(req.chatId), chat: String(req.chatTitle || '') } } : {}) };
       try {
         if (ans.rule.scope === 'chat') chatRules().push({ ...rule, scope: 'chat' });
         else addRule(ans.rule.scope, rule, root);
@@ -4132,7 +4136,7 @@ ${r.text || '(no text found)'}`;
 
   // background: start it and return at once (a GUI app, a watcher). backgroundable: a command that only reads, writes
   // in the project or builds may outlive the time limit by moving to the background instead of being killed.
-  async function execCommand({ line, shell, label, cwd = root, readOnly = false, decidedBy, background = false, backgroundable = false }) {
+  async function execCommand({ line, shell, label, cwd = root, readOnly = false, decidedBy, rule, background = false, backgroundable = false }) {
     const sb = readOnly ? { snap: null, why: 'read-only' } : !SF.snapshots ? { snap: null, why: 'snapshots are off' } : await snapBeforeAsync(root, { maxBytes: SF.snapshotMaxMB * 1024 * 1024 });
     const logRel = `${SCRATCH}/logs/${runId}-${run.cmdSeq = (run.cmdSeq || 0) + 1}.log`;
     // The tripwire stops the command if many files vanish outside the project while it runs.
@@ -4158,7 +4162,7 @@ ${r.text || '(no text found)'}`;
           if (sb.snap) commandChangesAsync(root, filesId, sb.snap).catch(() => { /* best effort */ });
           if (res?.stopped?.why === 'you') (run.userStops ||= []).push(`${j.id} (${clip(j.label, 80)})`);
         } });
-      emit({ t: 'command', command: label || line, background: bg.id, why, log: logRel, decidedBy, at: at() });
+      emit({ t: 'command', command: label || line, background: bg.id, why, log: logRel, decidedBy, ...(rule ? { rule } : {}), at: at() });
       aud({ kind: 'background', command: label || line, by: decidedBy, job: bg.id, why });
       notes.push(`started ${bg.id}: ${clip(label || line, 60)}`);
       return bg;
@@ -4192,7 +4196,7 @@ ${r.text || '(no text found)'}`;
     const changed = ch ? ch.added.length + ch.modified.length + ch.deleted.length : 0;
     aud({ kind: 'ran', command: label || line, by: decidedBy, code: r.code, ms: r.ms, changed, stopped: r.stopped ? r.stopped.left : undefined, timedOut: r.timedOut || undefined });
     if (changed) notes.push(`command changed ${changed} file${changed > 1 ? 's' : ''}`);
-    emit({ t: 'command', command: label || line, code: r.code, ms: r.ms, out: scrubSecrets(root, r.out.slice(-1500)), log: logRel, timedOut: r.timedOut || undefined, decidedBy,
+    emit({ t: 'command', command: label || line, code: r.code, ms: r.ms, out: scrubSecrets(root, r.out.slice(-1500)), log: logRel, timedOut: r.timedOut || undefined, decidedBy, ...(rule ? { rule } : {}),
       stopped: r.stopped ? { left: r.stopped.left, names: r.stopped.names, mode: r.stopped.mode } : undefined, leftovers: r.leftovers || undefined,
       changes: ch || undefined, snap: sb.snap ? { files: sb.snap.count, ms: sb.snap.ms } : { off: sb.why }, at: at() });
     const parts = [];

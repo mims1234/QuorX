@@ -81,8 +81,8 @@ dialog.pjx-dialog::backdrop { background: rgba(4, 6, 6, .55); backdrop-filter: b
 .hkx-row.off { opacity: .62; }
 .hkx-top { display: flex; align-items: center; gap: 8px; }
 .hkx-n { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 6px; background: var(--panel-3); font: 600 11px var(--mono); color: var(--muted); flex: none; }
-.hkx-row select, .hkx-row input:not([type=checkbox]), .prx-form input, .prx-try input { height: 30px; padding: 0 9px; border-radius: 7px; border: 1px solid var(--line-strong); background: var(--surface-inset, var(--bg)); color: var(--text); font: 12.5px var(--font-ui); min-width: 0; }
-.hkx-row select:focus, .hkx-row input:focus, .prx-form input:focus, .prx-try input:focus { outline: none; border-color: var(--accent); }
+.hkx-row select, .hkx-row input:not([type=checkbox]) { height: 30px; padding: 0 9px; border-radius: 7px; border: 1px solid var(--line-strong); background: var(--surface-inset, var(--bg)); color: var(--text); font: 12.5px var(--font-ui); min-width: 0; }
+.hkx-row select:focus, .hkx-row input:focus { outline: none; border-color: var(--accent); }
 .hkx-top .hk-event { flex: none; }
 .hkx-top .hk-match { flex: 1; font-family: var(--mono); font-size: 12px; }
 .hkx-order { display: inline-flex; gap: 2px; flex: none; }
@@ -113,29 +113,6 @@ dialog.pjx-dialog::backdrop { background: rgba(4, 6, 6, .55); backdrop-filter: b
 @container (max-width: 600px) { .hkx-top { flex-wrap: wrap; } .hkx-top .hk-match { flex-basis: 100%; order: 3; } }
 
 /* ---------- Permissions ---------- */
-.prx-try, .prx-group { display: grid; gap: 8px; }
-.prx-try { padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--panel-2); }
-.prx-try h5, .prx-group h5 { margin: 0; font: 700 11px var(--font-ui); text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
-.prx-try h5 small, .prx-group h5 small { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--dim); margin-left: 4px; }
-.prx-try-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.prx-try-in { flex: 1 1 260px; font-family: var(--mono) !important; }
-.prx-try-out { display: grid; gap: 6px; }
-.prx-verdict { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12.5px; padding: 8px 10px; border-radius: 8px; background: var(--surface-inset, var(--bg)); }
-.prx-segs { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: 12px; }
-.prx-segs small { color: var(--muted); }
-.prx-group-head { display: flex; align-items: center; gap: 8px; }
-.prx-group-head h5 { flex: 1; }
-.prx-form { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line-strong)); border-radius: 10px; background: var(--panel-2); }
-.prx-form-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-.prx-form .prx-match { flex: 1 1 260px; font-family: var(--mono) !important; }
-.prx-form-acts { display: flex; align-items: center; gap: 8px; }
-.prx-form-msg { font-size: 12px; color: var(--bad); }
-.prx-chat { display: grid; gap: 6px; padding: 8px 0; border-top: 1px solid var(--line); }
-.prx-chat-head { display: flex; align-items: center; gap: 8px; }
-.prx-chat-head b { flex: 1; min-width: 0; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.prx-edit { font-size: 13px; }
-.prx-acts { display: inline-flex; gap: 4px; justify-self: end; }
-.prx-foot { padding-top: 4px; }
 .pjx .st-segmented { display: inline-flex; padding: 2px; gap: 2px; border-radius: 8px; background: var(--surface-inset, var(--bg)); border: 1px solid var(--line-strong); flex-wrap: nowrap; max-width: 100%; }
 .pjx .st-seg-btn { height: 26px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font: 600 12px var(--font-ui); cursor: pointer; white-space: nowrap; }
 .pjx .st-seg-btn:hover { color: var(--text); }
@@ -313,11 +290,6 @@ dialog.pjx-dialog::backdrop { background: rgba(4, 6, 6, .55); backdrop-filter: b
 .hkx-edit { display: grid; gap: 8px; padding: 10px 0 0 64px; border-top: 1px dashed var(--line); }
 .hkx-row .hk-edit[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
 @container (max-width: 620px) { .hkx-sum { flex-wrap: wrap; } .hkx-acts { width: 100%; justify-content: flex-end; } .hkx-edit { padding-left: 0; } .hkx-toolbar { flex-wrap: wrap; } }
-.prx-try h5 { display: flex; align-items: center; gap: 4px; }
-.prx-try h5 small { flex: 1; }
-.prx-try-x { width: 24px !important; height: 24px !important; font-size: 12px !important; }
-.prx-try-open.on { border-color: var(--accent); color: var(--accent); }
-.prx-group-head .kx-btn + .kx-btn { margin-left: 0; }
 .dse-hex.low { border-color: var(--bad); box-shadow: 0 0 0 1px var(--bad); }
 .sp-link.danger { color: var(--bad); }
 /* Agent folder in the settings: size and meter on one line with its buttons */

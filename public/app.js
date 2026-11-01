@@ -8,6 +8,7 @@ import { mergeChat } from './chat-merge.js';
 import { backupCard, drawBackup } from './backup.js';
 import { storageCard, drawStorage, setRulesText, refreshStorageBadge, projectSizes, focusProject, fmtBytes } from './storage.js';
 import { chatsToRelease } from './chat-cache.js';
+import { initPerms, openPermissions, mountPermissions, appliesHereHTML, whyText, scopeMark, SCOPE } from './perms.js';
 
 // The side pane can be split into areas stacked top to bottom, each a copy of the same markup (its tabs, address bar and
 // body). Its ids are looked up in the area being drawn: AREA, which is the area you last used unless one is being drawn.
@@ -315,7 +316,9 @@ function normalise(doc) {
     tools: { ...DEFAULT_CHAT_TOOLS, ...(doc.tools || {}) },
     mcp: Array.isArray(doc.mcp) ? doc.mcp.filter((x) => typeof x === 'string').slice(0, 30) : [],
     quorium: typeof doc.quorium === 'string' ? doc.quorium : null, qModels: doc.qModels && typeof doc.qModels === 'object' ? doc.qModels : {}, ...(typeof doc.qBase === 'string' ? { qBase: doc.qBase }: {}),
-    agent: { setup, allowed: agent.allowed || [], extraUsage: agent.extraUsage || [], summary: agent.summary, summaryAt: agent.summaryAt, ...(agent.videoMode ? { videoMode: agent.videoMode } : {}), ...(agent.videoFrom ? { videoFrom: agent.videoFrom } : {}), messages: (agent.messages || []).map((m) => ({ ...m, live: false, arts: m.arts && dedupeArts(m.arts) })), artifacts },
+    // What this chat allows on its own (rules, tools and when they were allowed and used, apps, folders): kept on load,
+    // or the next save dropped them.
+    agent: { setup, allowed: agent.allowed || [], ...(agent.allowedMeta ? { allowedMeta: agent.allowedMeta } : {}), ...(agent.cmdRules?.length ? { cmdRules: agent.cmdRules } : {}), ...(agent.apps?.length ? { apps: agent.apps } : {}), ...(agent.folders?.length ? { folders: agent.folders } : {}), extraUsage: agent.extraUsage || [], summary: agent.summary, summaryAt: agent.summaryAt, ...(agent.videoMode ? { videoMode: agent.videoMode } : {}), ...(agent.videoFrom ? { videoFrom: agent.videoFrom } : {}), messages: (agent.messages || []).map((m) => ({ ...m, live: false, arts: m.arts && dedupeArts(m.arts) })), artifacts },
     ctx: [], images: [], docs: [], running: null, el: null };
 }
 const dedupeArts = (list) => [...new Map(list.map((a) => [a.id, { id: a.id, kind: a.kind, title: a.title }])).values()];
@@ -1338,105 +1341,15 @@ async function mountHooksWindow(p, el, ctl) {
 // ---------- Permissions window ----------
 // This project's rules (add, edit, on/off, remove, and a tester that says which rule a command meets), and what each of
 // its chats allows on its own, read-only here (each chat changes its own list with its 🔓 button).
+// Project settings → Permissions: the permissions list, opened on this project (its rules, its chats, everywhere).
 async function mountPermsWindow(p, el, ctl) {
-  el.innerHTML = '<div class="kx-wait">Loading…</div>';
-  const [r, ch] = await Promise.all([
-    fetch(`/api/permissions?project=${encodeURIComponent(p.id)}`).then((x) => x.json()).catch((e) => ({ error: e.message })),
-    fetch(`/api/permissions/chats?project=${encodeURIComponent(p.id)}`).then((x) => x.json()).catch(() => ({ chats: [] })),
-  ]);
-  if (!el.isConnected) return;
-  if (r.error) { el.innerHTML = `<p class="pf-warn">Couldn't load them: ${esc(r.error)}</p>`; return; }
-  const rules = r.project || [], chats = ch.chats || [];
-  let editing = null;
-  ctl.dirty = () => !!el.querySelector('.prx-form [data-changed]');
-  const chatRows = (x) => [
-    ...(x.cmdRules || []).map((q, i) => permRowHTML({ kind: 'chat rule', key: q.id || `i${i}`, seg: x.id, label: q.match, effect: q.effect || 'allow', on: q.on, by: q.by, at: q.at, hits: q.hits || 0, lastUsed: q.lastUsed, toggle: false, remove: false })),
-    ...(x.allowed || []).map((t) => permRowHTML({ kind: 'tool', key: t, seg: x.id, label: TOOL_NAME[t] || t, chip: 'Tool', toggle: false, remove: false })),
-    ...(x.folders || []).map((f) => permRowHTML({ kind: 'folder', key: f.path, seg: x.id, label: f.path, chip: f.access === 'write' ? 'Read+write' : 'Read', toggle: false, remove: false })),
-    ...(x.apps || []).map((a) => permRowHTML({ kind: 'app', key: a.appId, seg: x.id, label: a.name, chip: `🖥 ${(APP_LEVEL[a.level || 'full'] || APP_LEVEL.full)[0]}`, toggle: false, remove: false })),
-  ].join('');
-  const effSeg = (name, v) => `<div class="st-segmented prx-eff" role="radiogroup" aria-label="What happens">${Object.entries(RULE_EFFECT).map(([k, l]) => `<button type="button" class="st-seg-btn ${v === k ? 'active' : ''}" role="radio" aria-checked="${v === k}" data-eff="${k}" data-name="${name}">${l}</button>`).join('')}</div>`;
-  const total = rules.length + chats.reduce((n, x) => n + (x.cmdRules || []).length + (x.allowed || []).length + (x.folders || []).length + (x.apps || []).length, 0);
-  el.innerHTML = `<div class="pjx-intro"><b>What chats in this project may do without asking you.</b><span>Each command the agent wants to run is checked against these rules, then the rules for every project; anything no rule covers asks you (or, in YOLO, the deciders).</span></div>
-    ${total > 6 ? '<div class="pjx-filter prx-filter"></div>' : ''}
-    <section class="prx-group"><div class="prx-group-head"><h5>This project <small>rules for every chat here</small></h5><button type="button" class="kx-btn sm prx-try-open" aria-expanded="false">›_ Try a command</button><button type="button" class="kx-btn sm primary prx-add">＋ Add rule</button></div>
-    <section class="prx-try" hidden><h5>Try a command <small>see which rule meets it and what would happen. Nothing runs.</small><button type="button" class="mp-x prx-try-x" aria-label="Close the tester">✕</button></h5>
-      <form class="prx-try-row"><input class="prx-try-in" placeholder="e.g. npm run build, git push origin main" spellcheck="false" aria-label="A command to try"><div class="st-segmented prx-mode" role="radiogroup" aria-label="As a chat in"><button type="button" class="st-seg-btn active" role="radio" aria-checked="true" data-pm="strict">Strict</button><button type="button" class="st-seg-btn" role="radio" aria-checked="false" data-pm="yolo">⚡ YOLO</button></div><button type="submit" class="kx-btn sm">Try it</button></form>
-      <div class="prx-try-out" hidden></div></section>
-      <div class="prx-form-slot"></div>
-      <div class="pr-list prx-rules">${rules.length ? ruleRows(rules, 'project', 'project').join('') : '<div class="pjx-empty sm"><b>No rules yet</b><p>“Always allow…” on a card, with This project, adds one. Or add one here: a command pattern like <code>npm run *</code> and what happens.</p></div>'}</div>
-    </section>
-    ${chats.length ? `<section class="prx-group"><h5>Per chat <small>each chat's own list · change it in that chat with 🔓</small></h5>
-      ${chats.map((x) => `<div class="prx-chat"><div class="prx-chat-head"><b title="${esc(x.title)}">${esc(x.title)}</b><button type="button" class="kx-btn sm pj-perm-open" data-id="${esc(x.id)}">Open chat</button></div><div class="pr-list">${chatRows(x)}</div></div>`).join('')}</section>` : ''}
-    <p class="pj-hint prx-foot">Rules for every project are in ⚙ Settings → Approvals & safety. <button type="button" class="sp-link pj-perm-all">Open</button></p>`;
-  const reload = () => mountPermsWindow(p, el, ctl);
-  const titles = Object.fromEntries(chats.map((x) => [x.id, x.title]));
-  const flt = $('.prx-filter', el);
-  if (flt) {
-    // Second filter: what happens (allow / ask / deny), from the rows that are there.
-    const effs = [...new Set([...el.querySelectorAll('.perm-row .pr-eff')].map((e) => e.dataset.eff))].filter((v) => RULE_EFFECT[v]);
-    let eff = 'all';
-    const extra = effs.length > 1 ? `<div class="st-segmented prx-eff-f" role="radiogroup" aria-label="What happens"><button type="button" class="st-seg-btn active" data-ef="all" role="radio" aria-checked="true">Any</button>${effs.map((v) => `<button type="button" class="st-seg-btn" data-ef="${v}" role="radio" aria-checked="false">${RULE_EFFECT[v]}</button>`).join('')}</div>` : '';
-    const applyEff = () => { for (const row of el.querySelectorAll('.perm-row')) if (eff !== 'all' && !row.hidden && $('.pr-eff', row)?.dataset.eff !== eff) row.hidden = true; for (const g of el.querySelectorAll('.prx-chat')) g.hidden = ![...g.querySelectorAll('.perm-row')].some((x) => !x.hidden); };
-    listFilter(flt, { key: `perms-${p.id}`, rows: () => el.querySelectorAll('.perm-row'), segLabel: (v) => (v === 'project' ? 'This project' : titles[v] || 'A chat'), segOrder: ['project'], placeholder: 'Filter: a command, a tool, “off”…', label: 'Where', extra, onApply: applyEff });
-    for (const b of flt.querySelectorAll('[data-ef]')) b.onclick = () => { eff = b.dataset.ef; for (const x of flt.querySelectorAll('[data-ef]')) { x.classList.toggle('active', x === b); x.setAttribute('aria-checked', String(x === b)); } $('.lf-q', flt).dispatchEvent(new Event('input')); };
-  }
-  wireRuleRows(el, p.id, reload);
-  // Edit: the project's rules get an Edit button; the row turns into the same form as Add.
-  const form = (rule) => {
-    const slot = $('.prx-form-slot', el);
-    editing = rule?.id || 'new';
-    slot.innerHTML = `<form class="prx-form"><div class="prx-form-row"><input class="prx-match" value="${esc(rule?.match || '')}" placeholder="A command pattern: npm run *, git status, python -m pytest*" spellcheck="false" aria-label="Command pattern">${effSeg('eff', rule?.effect || 'allow')}</div>
-      <p class="pj-hint"><code>*</code> stands for anything. Allow runs it without asking; Ask me always shows you a card; Deny never runs it.</p>
-      <div class="prx-form-acts"><span class="prx-form-msg"></span><span class="kx-spacer"></span><button type="button" class="kx-btn sm prx-cancel">Cancel</button><button type="submit" class="kx-btn sm primary">${rule ? 'Save rule' : 'Add rule'}</button></div></form>`;
-    const f = $('.prx-form', slot), m = $('.prx-match', f);
-    let effect = rule?.effect || 'allow';
-    const mark = () => { const ch = m.value.trim() !== (rule?.match || '') || effect !== (rule?.effect || 'allow'); if (ch) f.dataset.changed = '1'; else delete f.dataset.changed; ctl.setDirty(ch); };
-    m.oninput = mark;
-    for (const b of f.querySelectorAll('[data-eff]')) b.onclick = () => { effect = b.dataset.eff; for (const x of f.querySelectorAll('[data-eff]')) { x.classList.toggle('active', x === b); x.setAttribute('aria-checked', String(x === b)); } mark(); };
-    $('.prx-cancel', f).onclick = () => { slot.innerHTML = ''; editing = null; ctl.setDirty(false); };
-    f.onsubmit = async (e) => {
-      e.preventDefault();
-      if (!m.value.trim()) { m.focus(); return; }
-      const next = rule ? rules.map((x) => (x.id === rule.id ? { ...x, match: m.value.trim(), effect, by: 'user' } : x)) : [...rules, { match: m.value.trim(), effect, by: 'user', on: true }];
-      const res = await postJ('/api/permissions', { scope: 'project', projectId: p.id, rules: next.map(({ problem, scope, ...x }) => x) });
-      if (res.error) { $('.prx-form-msg', f).textContent = `Not saved: ${res.error}`; return; }
-      ctl.setDirty(false); reload();
-    };
-    m.focus();
-  };
-  $('.prx-add', el).onclick = () => form(null);
-  for (const row of el.querySelectorAll('.prx-rules .perm-row')) {
-    const rule = rules.find((x) => x.id === row.dataset.key);
-    if (!rule) continue;
-    const b = document.createElement('button'); b.type = 'button'; b.className = 'pp-btn prx-edit'; b.title = 'Edit this rule'; b.setAttribute('aria-label', `Edit ${rule.match}`); b.textContent = '✎';
-    // Edit and remove share the row's last cell.
-    const del = $('.perm-del', row), acts = document.createElement('span'); acts.className = 'prx-acts';
-    del?.replaceWith(acts); acts.append(b); if (del) acts.append(del);
-    b.onclick = () => form(rule);
-  }
-  // The tester: the same check a real command gets, with this project's rules (nothing runs).
-  const tryBox = $('.prx-try', el), tryOpen = $('.prx-try-open', el);
-  const showTry = (on) => { tryBox.hidden = !on; tryOpen.setAttribute('aria-expanded', String(on)); tryOpen.classList.toggle('on', on); if (on) $('.prx-try-in', el).focus(); };
-  tryOpen.onclick = () => showTry(tryBox.hidden);
-  $('.prx-try-x', el).onclick = () => showTry(false);
-  const onRules = rules.filter((x) => x.on !== false).length;
-  ctl.setSummary(rules.length || chats.length ? `<span class="hkx-st ${onRules ? 'ok' : ''}"><i></i>${onRules} in this project${chats.length ? ` · ${chats.length} chat${chats.length === 1 ? '' : 's'} with their own` : ''}</span>` : '');
-  $('.prx-try-row', el).onsubmit = async (e) => {
-    e.preventDefault();
-    const line = $('.prx-try-in', el).value.trim(), out = $('.prx-try-out', el);
-    if (!line) return;
-    out.hidden = false; out.innerHTML = '<span class="kx-wait">Checking…</span>';
-    const t = await postJ('/api/permissions/test', { projectId: p.id, line, mode: el.querySelector('.prx-mode .active')?.dataset.pm || 'strict', safety: G.settings.safety });
-    if (t.error) { out.innerHTML = `<p class="pf-warn">${esc(t.error)}</p>`; return; }
-    const word = { allow: ['ok', 'Runs without asking'], ask: ['warn', t.who === 'deciders' ? 'The deciders are asked' : 'You are asked'], deny: ['bad', 'Never runs'] }[t.verdict] || ['warn', t.verdict];
-    out.innerHTML = `<div class="prx-verdict ${word[0]}"><span class="hkx-st ${word[0]}"><i></i>${esc(word[1])}</span><span>${esc(t.why || '')}</span></div>
-      ${(t.segments || []).length > 1 ? `<ul class="prx-segs">${t.segments.map((s) => `<li><code>${esc(s.text)}</code> <span class="pr-eff" data-eff="${esc(s.verdict)}">${esc(RULE_EFFECT[s.verdict] || s.verdict)}</span> <small>${esc(s.why || '')}</small></li>`).join('')}</ul>` : ''}`;
-  };
-  for (const b of el.querySelectorAll('[data-pm]')) b.onclick = () => { for (const x of el.querySelectorAll('[data-pm]')) { x.classList.toggle('active', x === b); x.setAttribute('aria-checked', String(x === b)); } if ($('.prx-try-in', el).value.trim()) $('.prx-try-row', el).requestSubmit(); };
-  for (const b of el.querySelectorAll('.pj-perm-open')) b.onclick = () => { $('#projSubDlg')?.close?.(); $('#projDlg')?.close?.(); showChat(b.dataset.id); };
-  $('.pj-perm-all', el).onclick = () => { $('#projSubDlg')?.close?.(); $('#projDlg')?.close?.(); openSettings('safety'); };
-  if (editing === 'new') form(null);
+  ctl.dirty = () => !!el.querySelector('.pmx-form');
+  await mountPermissions(el, { kind: 'project', projectId: p.id }, {
+    onCount: (items) => {
+      const own = items.filter((x) => x.scope === 'project' && x.on !== false).length, chats = new Set(items.filter((x) => x.scope === 'chat').map((x) => x.chatId)).size;
+      ctl.setSummary(own || chats ? `<span class="hkx-st ${own ? 'ok' : ''}"><i></i>${own} in this project${chats ? ` · ${chats} chat${chats === 1 ? '' : 's'} with their own` : ''}</span>` : '');
+    },
+  });
 }
 
 // ---------- Design system window: a gallery to pick from, a preview, and an editor for your own ----------
@@ -4334,84 +4247,31 @@ function wireAppsButton(c, slot) {
   pop.onkeydown = (e) => { if (e.key === 'Escape') { close(); btn.focus(); } };
   if (G.appsPopOpen) { G.appsPopOpen = false; open(); }
 }
-// ---------- permissions: one look for every "always allowed" thing, in Settings, project settings and the chat ----------
-// A row: an on/off box (rules), what it allows, where it came from, since when and how often it was used, and Remove
-// (which asks once, in place). kind: rule, tool, app, folder. key: what the row's handlers find it by.
-function permRowHTML(x) {
-  const meta = [x.by === 'button' ? 'from a card' : x.by === 'user' ? 'typed by you' : x.by || '', x.at ? `since ${new Date(x.at).toLocaleDateString()}` : '',
-    x.hits != null ? (x.hits ? `used ${x.hits}×${x.lastUsed ? `, last ${ago(x.lastUsed)}` : ''}` : 'not used yet') : '', x.meta || ''].filter(Boolean).join(' · ');
-  const on = x.on !== false;
-  return `<div class="pr-rule perm-row ${on ? '' : 'off'} ${x.toggle === false ? 'notoggle' : ''}" data-kind="${esc(x.kind)}" data-key="${esc(x.key)}" ${x.scope ? `data-scope="${esc(x.scope)}"` : ''} data-lf-text="${esc(`${x.label} ${x.kind} ${on ? 'on' : 'off'} ${meta}`.toLowerCase())}" ${x.seg ? `data-lf-seg="${esc(x.seg)}"` : ''}>
-    ${x.toggle === false ? '<span class="perm-nobox" aria-hidden="true"></span>' : `<input type="checkbox" class="perm-on" ${on ? 'checked' : ''} aria-label="${on ? 'On' : 'Off'}: ${esc(x.label)}" title="${on ? 'On: click to turn it off (it is kept)' : 'Off: kept, but not used. Click to turn it on'}">`}
-    <span class="pr-eff" data-eff="${esc(x.effect || 'allow')}">${esc(x.chip || RULE_EFFECT[x.effect] || 'Allow')}</span><code title="${esc(x.label)}">${esc(x.label)}</code>
-    <span class="pr-by">${esc(meta)}</span>
-    ${x.remove === false ? '<span></span>' : `<button type="button" class="pp-btn perm-del" title="${esc(x.removeTip || 'Remove')}" aria-label="Remove ${esc(x.label)}">${ICO.trash}</button>`}
-    ${x.problem ? `<div class="pr-problem">⚠ Never matches: ${esc(x.problem)}. Remove it, or add a rule that starts like the command.</div>` : ''}
-  </div>`;
-}
-// Wires a box of rows: toggle(row, on) and remove(row). Remove asks once in place (the button turns into "Remove?").
-function wirePermRows(box, { toggle, remove }) {
-  for (const cb of box.querySelectorAll('.perm-row .perm-on')) cb.onchange = () => toggle?.(cb.closest('.perm-row'), cb.checked);
-  for (const b of box.querySelectorAll('.perm-row .perm-del')) b.onclick = () => {
-    if (!b.classList.contains('sure')) { b.classList.add('sure'); b.textContent = 'Remove?'; setTimeout(() => { if (b.isConnected && b.classList.contains('sure')) { b.classList.remove('sure'); b.innerHTML = ICO.trash; } }, 3000); return; }
-    remove?.(b.closest('.perm-row'));
-  };
-}
-const permJSON = (method, body) => fetch('/api/permissions/rule', { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((x) => x.json()).catch((e) => ({ error: e.message }));
-// Project and everywhere rules as rows (Settings, project settings, the chat).
-const ruleRows = (rules, scope, seg) => rules.map((r) => permRowHTML({ kind: 'rule', key: r.id, scope, seg, label: r.match, effect: r.effect, on: r.on, by: r.by, at: r.at, hits: r.hits || 0, lastUsed: r.lastUsed, problem: r.problem }));
-const wireRuleRows = (box, projectId, after) => wirePermRows(box, {
-  toggle: async (row, on) => { const r = await permJSON('PATCH', { scope: row.dataset.scope, projectId, id: row.dataset.key, on }); if (r.error) flashTip(row, r.error); after?.(); },
-  remove: async (row) => { const r = await permJSON('DELETE', { scope: row.dataset.scope, projectId, id: row.dataset.key }); if (r.error) flashTip(row, r.error); after?.(); },
-});
-
-// 🔓 in the chat, beside 🖥: what this chat and its project let run without asking. The chat's own items change here;
-// the project's rules too. Changes apply from the next reply.
+// 🛡 in the chat, beside 🖥: what applies here (this chat, its project and everywhere), and why steps ran without asking.
+// The count is what this chat allows on its own.
 function chatAllowedCount(c) {
   const a = c.agent || {};
   return (a.allowed || []).length + (a.cmdRules || []).filter((r) => r.on !== false).length + (a.folders || []).length + (c.tools?.apps ? (a.apps || []).length : 0);
 }
 function permButtonHTML(c) {
   const n = chatAllowedCount(c);
-  return `<span class="apps-wrap perm-wrap"><button type="button" class="cmp-ico cmp-perm-b ${n ? 'on' : ''}" aria-haspopup="dialog" aria-expanded="false" aria-label="Always allowed" title="${esc(`Always allowed: ${n ? `${n} thing${n > 1 ? 's' : ''} in this chat` : 'nothing in this chat yet'}\nWhat runs without asking here: this chat's rules, tools, folders and apps, and this project's rules. Turn each off or remove it.`)}"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.5-2"/></svg>${n ? `<span class="apps-n">${n}</span>` : ''}</button><div class="allow-pop apps-pop allowed-pop" role="dialog" aria-label="Always allowed" hidden></div></span>`;
+  return `<span class="apps-wrap perm-wrap"><button type="button" class="cmp-ico cmp-perm-b ${n ? 'on' : ''}" aria-haspopup="dialog" aria-expanded="false" aria-label="Permissions in this chat" title="${esc(`Permissions: ${n ? `${n} allowed in this chat itself` : 'nothing allowed in this chat itself yet'}\nWhat applies here (this chat, its project and everywhere in QuorX), and why something ran without asking.`)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8.2-8 9-4.6-.8-8-4.5-8-9V6z"/><path d="M8.5 12l2.5 2.5 4.5-5"/></svg>${n ? `<span class="apps-n">${n}</span>` : ''}</button><div class="allow-pop apps-pop allowed-pop" role="dialog" aria-label="What applies in this chat" hidden></div></span>`;
 }
 function wirePermButton(c, slot) {
   const btn = $('.cmp-perm-b', slot), pop = $('.allowed-pop', slot);
   if (!btn) return;
-  const a = (c.agent ??= {});
+  // What applies here, merged from this chat, its project and everywhere; the full list is in the Permissions window.
   const draw = async () => {
-    const chatRows = [
-      ...(a.cmdRules || []).map((r, i) => permRowHTML({ kind: 'chatrule', key: r.id || `i${i}`, label: r.match, effect: r.effect || 'allow', on: r.on, by: r.by, at: r.at, hits: r.hits || 0, lastUsed: r.lastUsed })),
-      ...(a.allowed || []).map((t) => permRowHTML({ kind: 'tool', key: t, label: TOOL_NAME[t] || t, chip: 'Tool', toggle: false, removeTip: 'Ask again before it' })),
-      ...(a.folders || []).map((f) => permRowHTML({ kind: 'folder', key: f.path, label: f.path, chip: f.access === 'write' ? 'Read+write' : 'Read', toggle: false, meta: 'outside the project' })),
-      ...(c.tools?.apps ? (a.apps || []).map((x) => permRowHTML({ kind: 'app', key: x.appId, label: x.name, chip: `🖥 ${(APP_LEVEL[x.level || 'full'] || APP_LEVEL.full)[0]}`, toggle: false, meta: 'level in 🖥' })) : []),
-    ].join('');
-    pop.innerHTML = `<div class="ap-head">Always allowed <small>runs without asking · changes apply from the next reply</small></div>
-      <h6 class="perm-h">This chat</h6><div class="pr-list perm-list" data-where="chat">${chatRows || '<div class="apps-note">Nothing yet. “Always allow…” on a card adds it here.</div>'}</div>
-      <h6 class="perm-h">This project</h6><div class="pr-list perm-list" data-where="project"><div class="apps-note">Loading…</div></div>
-      <div class="ap-foot"><button type="button" class="ap-all perm-proj">All of this project's permissions</button><button type="button" class="ap-all perm-all">Rules everywhere</button></div>`;
-    wirePermRows($('[data-where="chat"]', pop), {
-      toggle: (row, on) => { const r = (a.cmdRules || []).find((x, i) => (x.id || `i${i}`) === row.dataset.key); if (r) { r.on = on; saveChat(c); draw(); } },
-      remove: (row) => {
-        const k = row.dataset.key;
-        if (row.dataset.kind === 'chatrule') a.cmdRules = (a.cmdRules || []).filter((x, i) => (x.id || `i${i}`) !== k);
-        else if (row.dataset.kind === 'tool') a.allowed = (a.allowed || []).filter((t) => t !== k);
-        else if (row.dataset.kind === 'folder') a.folders = (a.folders || []).filter((f) => f.path !== k);
-        else if (row.dataset.kind === 'app') a.apps = (a.apps || []).filter((x) => x.appId !== k);
-        saveChat(c); G.permPopOpen = true; renderComposerBar(c);
-      },
-    });
-    $('.perm-proj', pop).onclick = () => { close(); const p = G.projects?.find((x) => x.id === c.projectId); if (p) openProjectSettings(p, 'perms'); };
-    $('.perm-all', pop).onclick = () => { close(); openSettings('safety'); };
-    const proj = $('[data-where="project"]', pop);
-    const r = c.projectId ? await fetch(`/api/permissions?project=${encodeURIComponent(c.projectId)}`).then((x) => x.json()).catch(() => null) : null;
-    if (!proj.isConnected) return;
-    proj.innerHTML = r?.project?.length ? ruleRows(r.project, 'project').join('') : '<div class="apps-note">No rules for this project.</div>';
-    wireRuleRows(proj, c.projectId, draw);
+    pop.innerHTML = '<div class="ap-head">What applies in this chat</div><div class="apps-note">Loading…</div>';
+    const html = await appliesHereHTML(c).catch((e) => `<div class="apps-note">Couldn't load them: ${esc(e.message)}</div>`);
+    if (pop.hidden) return;
+    pop.innerHTML = html;
+    for (const b of pop.querySelectorAll('[data-tab]')) b.onclick = () => { G.appliesTab = b.dataset.tab; draw(); };
+    const m = $('.pmx-manage', pop); if (m) m.onclick = () => { close(); openPermissions({ kind: 'chat', chatId: c.id }); };
   };
   const outside = (e) => { if (!slot.contains(e.target)) close(); };
   const close = () => { pop.hidden = true; btn.setAttribute('aria-expanded', 'false'); G.permPopOpen = false; document.removeEventListener('pointerdown', outside, true); };
-  const open = () => { draw(); pop.hidden = false; btn.setAttribute('aria-expanded', 'true'); G.permPopOpen = true; document.addEventListener('pointerdown', outside, true); };
+  const open = () => { pop.hidden = false; draw(); btn.setAttribute('aria-expanded', 'true'); G.permPopOpen = true; document.addEventListener('pointerdown', outside, true); };
   btn.onclick = () => (pop.hidden ? open() : close());
   pop.onkeydown = (e) => { if (e.key === 'Escape') { close(); btn.focus(); } };
   if (G.permPopOpen) { G.permPopOpen = false; open(); }
@@ -4626,6 +4486,8 @@ function timelineItems(m) {
       }
       (blk || newBlock(-1)).calls.push({ e }); continue;
     }
+    // Who let a command run (a rule, you, the deciders, the built-in classes): shown on its call.
+    if (e.t === 'command' && e.decidedBy) { const x = [...(blk?.calls || [])].reverse().find((y) => ['shell', 'run_command', 'terminal', 'start_server'].includes(y.e.name) && !y.cmd); if (x) x.cmd = e; continue; }
     if (e.t === 'tool_result') {
       const pool = e.by === 'reviewer' ? rv?.calls : blk?.calls;
       const x = pool && [...pool].reverse().find((y) => y.e.name === e.name && y.res == null);
@@ -4657,6 +4519,12 @@ function timelineItems(m) {
   }
   return items;
 }
+// A command that ran without a card: who let it (your rule and where it lives, or the built-in classes).
+function whyLine(e) {
+  const w = whyText(e);
+  if (!w || e.decidedBy === 'you') return '';
+  return `<div class="tl-why">✓ Ran without asking: ${esc(w.who)}${w.scope ? ` in ${scopeMark(w.scope)}` : ''}</div>`;
+}
 function timelineHTML(m) {
   const open = (m.tlOpen instanceof Set ? m.tlOpen : (m.tlOpen = new Set())); // chats saved before carry it as {}
   const det = (key, cls, summary, inner) => `<details class="${cls}" data-key="${key}" ${open.has(key) ? 'open' : ''}><summary>${summary}<span class="tl-chev" aria-hidden="true">›</span></summary>${inner}</details>`;
@@ -4666,7 +4534,7 @@ function timelineHTML(m) {
     // An MCP tool: the server's mark, "server › tool", and the first line of what it gave back.
     const mc = mcpOfTool(x.e.name), first = mc && x.res && !err ? String(x.res).split('\n').find((l) => l.trim()) : '';
     return det(`${key}-${i}`, `tl-call${mc ? ' tl-mcp' : ''}`, `${mc ? `<span class="tl-ic">${mcpMark({ name: mc.server }, 'sm')}</span><b>${esc(mc.server)} › ${esc(mc.tool)}</b><span class="tl-arg">${first ? `<span class="tl-mcp-res">${esc(clip(first, 120))}</span>` : esc(clip(argSummary(x.e), 160))}</span>` : `<span class="tl-ic">${TOOL_NAME[x.e.name]?.split(' ')[0] || '🔧'}</span><b>${esc(x.e.name)}</b><span class="tl-arg">${esc(clip(argSummary(x.e), 160))}</span>`}${apB ? apB.badge : ''}${x.res == null && m.live ? '<span class="tl-spin" aria-label="running"></span>' : err ? '<span class="tl-err">error</span>' : ''}`,
-      (apB ? apB.detail : '') + (x.res ? `<pre class="tl-out">${esc(clip(x.res, 4000))}</pre>` : '<div class="tl-out tl-none">No output.</div>'));
+      (apB ? apB.detail : '') + (x.cmd && !apB ? whyLine(x.cmd) : '') + (x.res ? `<pre class="tl-out">${esc(clip(x.res, 4000))}</pre>` : '<div class="tl-out tl-none">No output.</div>'));
   }).join('');
   const groupRow = (key, icon, label, list, busy) => {
     const errs = list.filter((x) => x.res != null && /^Error/.test(x.res)).length;
@@ -5490,7 +5358,7 @@ function traceRows(m) {
     else if (e.t === 'desktop') row(e.at, `🪟 ${e.action === 'open' ? 'opened' : e.action === 'use' ? 'using the open' : 'desktop app'} ${esc(e.job)}${['open', 'use'].includes(e.action) ? '' : ` · ${esc(e.action)}`}${e.did ? `: ${esc(e.did)}` : ''}`, 'browser');
     else if (e.t === 'command') {
       const ch = e.changes, n = ch ? ch.added.length + ch.modified.length + ch.deleted.length : 0;
-      const by = !e.decidedBy ? '' : e.decidedBy === 'you' ? 'you allowed it' : e.decidedBy === 'deciders' ? 'the deciders allowed it' : e.decidedBy.startsWith('rule:') ? `your rule (${esc(e.decidedBy.slice(5))}) allowed it` : `runs without asking (${esc(e.decidedBy.replace(/^class:/, ''))})`;
+      const by = !e.decidedBy ? '' : e.decidedBy === 'you' ? 'you allowed it' : e.decidedBy === 'deciders' ? 'the deciders allowed it' : e.decidedBy.startsWith('rule:') ? `ran without asking: your rule${e.rule ? ` <code>${esc(e.rule)}</code>` : ''} in ${SCOPE[e.decidedBy.slice(5)] ? scopeMark(e.decidedBy.slice(5)) : esc(e.decidedBy.slice(5))}` : `runs without asking (${esc(e.decidedBy.replace(/^class:/, ''))})`;
       const undo = n ? `changed ${n} file${n > 1 ? 's' : ''} · Undo covers project files` : e.snap?.off && e.snap.off !== 'read-only' ? `no snapshot (${esc(e.snap.off)}): Undo can't restore what it changed` : '';
       const stop = e.stopped ? (e.stopped.left ? `⚠ ${e.stopped.left} process${e.stopped.left > 1 ? 'es' : ''} did not stop: ${esc((e.stopped.names || []).join(', '))}` : `■ stopped · 0 processes left${e.stopped.mode === 'basic' ? ' (basic mode)' : ''}`) : e.timedOut ? 'stopped at the time limit' : '';
       row(e.at, `⌨️ <code>${esc(e.command)}</code> → exit ${e.code ?? '–'} · ${secs(e.ms)}<div class="sub">${[by, undo, stop, e.leftovers?.ended?.length ? `ended ${e.leftovers.ended.length} process${e.leftovers.ended.length > 1 ? 'es' : ''} it left running` : '', e.leftovers?.kept?.length ? `kept open: ${esc(e.leftovers.kept.join(', '))}` : '', 'not covered: files outside the project, ignored folders (node_modules, target), pushes, installs, databases'].filter(Boolean).join(' · ')}</div>${ch && n ? `<details class="out"><summary>files</summary><pre>${esc([...ch.added.map((f) => `+ ${f}`), ...ch.modified.map((f) => `~ ${f}`), ...ch.deleted.map((f) => `- ${f}`)].join('\n'))}</pre></details>` : ''}${e.out ? `<details class="out"><summary>output</summary><pre>${esc(e.out)}</pre>${e.log ? `<div class="sub">Full log: ${esc(e.log)}</div>` : ''}</details>` : ''}`, e.code || e.stopped?.left ? 'err' : 'cmd');
@@ -5594,7 +5462,7 @@ function decideCard(r) {
 // An answered card: allowed, declined, or neither (you typed a reply instead, which went to the agent).
 const apState = (o, live) => (o ? (o.approve ? 'yes' : o.reply ? 'reply' : 'no') : live ? 'wait' : 'none');
 const apWho = (o, c) => (o.reply ? `Not allowed or denied: you replied “${esc(o.reply)}”`
-  : `${o.approve ? 'Allowed' : 'Declined'} by ${byName(o.by)}${o.always ? ' · always allowed from now on' : ''}${o.approve && o.model && o.model !== c.model ? ` · switched to ${esc(short(o.model))}` : ''}${o.reason ? ` · ${esc(o.reason)}` : ''}`);
+  : `${o.approve ? (o.rule || o.always ? 'Allowed always' : 'Allowed') : 'Denied'} by ${byName(o.by)}${o.rule ? ` · rule <code>${esc(o.rule.match)}</code> saved in ${esc(SCOPE[o.rule.scope]?.label || o.rule.scope)}` : o.always ? ' · from now on in this chat' : ''}${o.approve && o.model && o.model !== c.model ? ` · switched to ${esc(short(o.model))}` : ''}${o.reason ? ` · ${esc(o.reason)}` : ''}`);
 const AP_MARK = { yes: '✓', no: '⛔', reply: '↩', wait: '⚡', none: '·' };
 function approvalBadge(a, live) {
   const c = a.card, o = a.outcome;
@@ -5644,6 +5512,8 @@ document.addEventListener('focusin', (e) => {
   const card = e.target.closest('.approval');
   if (card) holdWait($('.aw[data-until]', card));
 });
+// The same match a saved rule makes (server/cmdpolicy.js ruleMatches): * stands for anything, case and spacing ignored.
+const cmdRuleMatches = (rule, text) => new RegExp(`^${String(rule).trim().replace(/\s+/g, ' ').replace(/[.+^${}()|[\]\\?]/g, '\\$&').replace(/\*/g, '.*')}$`, 'i').test(String(text || '').replace(/\s+/g, ' ').trim());
 function shellCardHTML(a) {
   const c = a.card, p = c.policy || {};
   const segs = (p.segments || []).map((s) => `<div class="sc-seg"><code>${esc(clip(s.text, 200))}</code><span class="sc-cls" data-cls="${esc(s.cls)}">${esc(CMD_CLASS[s.cls] || s.cls)}${s.global ? ' · whole computer' : ''}${s.via ? ` · run by ${esc(s.via)}` : ''}${s.wrap ? ` · inside ${esc(s.wrap)}` : ''}</span>${(s.paths || []).map((x) => `<span class="sc-path" data-zone="${esc(x.zone)}">${esc(CMD_ZONE[x.zone] || x.zone)} · ${esc(clip(x.path, 90))}</span>`).join('')}</div>`).join('');
@@ -5658,15 +5528,16 @@ function shellCardHTML(a) {
     ${(p.packages || []).length ? `<div class="sc-segs">${p.packages.map((k) => `<span class="sc-path" data-zone="${k.verdict === 'ok' ? 'inside' : k.verdict === 'missing' ? 'blocked' : 'unknown'}">📦 ${esc(k.name)} · ${esc(k.eco)} · ${k.verdict === 'ok' ? `${k.ageDays != null ? `${Math.round(k.ageDays / 365 * 10) / 10} years old` : 'exists'}${k.weekly != null ? ` · ${k.weekly.toLocaleString()}/week` : ''}` : esc(k.note)}</span>`).join('')}</div>` : ''}
     ${c.why ? `<div class="what">Why it asks: ${esc(c.why)}</div>` : ''}
     ${waitHTML(c)}
-    <textarea rows="1" placeholder="Or type to tell it something else. Enter sends it, without allowing or denying."></textarea>
-    <div class="acts"><button type="button" class="primary reply" hidden>Send to the agent</button><button type="button" class="primary yes">Run once</button>${c.noAlways ? '' : '<button type="button" class="sc-always" aria-expanded="false">Always allow…</button>'}<button type="button" class="no">Deny</button></div>
-    ${c.noAlways ? '<div class="sc-note">A button can’t make a rule for this kind of command. If you’re sure, type one yourself in ⚙ Settings → Approvals & safety.</div>'
+    <div class="acts"><button type="button" class="primary reply" hidden>Send to the agent</button><button type="button" class="primary yes">Allow once</button>${c.noAlways ? '' : '<button type="button" class="sc-always" aria-expanded="false">Allow always ▾</button>'}<button type="button" class="no">Deny</button></div>
+    ${c.noAlways ? '<div class="sc-note">No “Allow always” for this kind of command: it reaches past the project, can’t be checked, or touches your keys. If you’re sure, type a rule yourself in Permissions (⚙ Settings → Approvals & safety).</div>'
       : `<div class="sc-rule" hidden>
-        <div class="sc-row"><span class="sc-k">What</span>${seg('match', [[sug.exact, 'This exact command'], [sug.prefix, `Starting with <code>${esc(sug.prefix.replace(/\*$/, ''))}</code>`], [sug.program, `Any <code>${esc(sug.program.replace(/\*$/, ''))}</code> command`]])}</div>
-        <div class="sc-row"><span class="sc-k">Where</span>${seg('scope', [['chat', 'This chat'], ['project', 'This project'], ['everywhere', 'Everywhere']])}</div>
-        <div class="sc-row"><span class="sc-k">Rule</span><code class="sc-preview">allow ${esc(sug.exact)}</code><button type="button" class="primary sc-save">Allow and save</button></div>
-        <div class="sc-warn" hidden>“Any” lets every use of this program run without asking, including ones that run other code.</div>
+        <div class="sc-row"><span class="sc-k">What it covers</span>${seg('match', [[sug.exact, 'This exact command'], [sug.prefix, `Commands starting with <code>${esc(sug.prefix.replace(/\*$/, ''))}</code>`], [sug.program, `Any <code>${esc(sug.program.replace(/\*$/, ''))}</code> command`]])}</div>
+        <div class="sc-row"><span class="sc-k">Where</span>${seg('scope', [['chat', `${scopeMark('chat', true)}This chat`], ['project', `${scopeMark('project', true)}This project`], ['everywhere', `${scopeMark('everywhere', true)}Everywhere in QuorX`]])}</div>
+        <div class="sc-also" hidden></div>
+        <div class="sc-warn" hidden>⚠ “Any” lets every use of this program run without asking, including ones that run other code.</div>
+        <div class="sc-row sc-sum"><span class="sc-preview"></span><button type="button" class="primary sc-save">Allow and save</button></div>
       </div>`}
+    <textarea rows="1" placeholder="Or reply with context: the agent reads it instead of a yes or no. Enter sends it."></textarea>
   </div>`;
 }
 // Typing instead of Allow or Deny, in the card's box or the chat's message box: what you type goes to the agent as
@@ -5713,8 +5584,18 @@ function wireShellCard(card, m) {
   const panel = $('.sc-rule', card), btn = $('.sc-always', card);
   if (!panel || !btn) return;
   const pick = (g) => $(`.sc-pick[data-group="${g}"] button.on`, card)?.dataset.v;
+  // What the rule would mean: where it applies, how many other chats that reaches, and the earlier commands in this
+  // chat it would also have let run.
+  const chat = [...G.open.values()].find((x) => x.agent.messages.includes(m));
+  const earlier = [...new Set((chat?.agent.messages || []).flatMap((x) => (x.trace || []).filter((e) => e.t === 'command').map((e) => e.command)))];
   const show = () => {
-    $('.sc-preview', card).textContent = `allow ${pick('match')} · ${{ chat: 'in this chat', project: 'in this project', everywhere: 'everywhere' }[pick('scope')]}`;
+    const match = pick('match'), scope = pick('scope');
+    const others = scope === 'project' && chat ? G.chats.filter((x) => x.projectId === chat.projectId && x.id !== chat.id && x.messages > 0).length : 0;
+    const where = scope === 'chat' ? 'in this chat' : scope === 'project' ? `in this project${chat ? ` (${esc(G.projects?.find((p) => p.id === chat.projectId)?.name || '')})` : ''}${others ? ` · <b>${others} other chat${others === 1 ? '' : 's'} here too</b>` : ''}` : '<b>in every project and chat</b>';
+    $('.sc-preview', card).innerHTML = `Allow <code>${esc(match)}</code> ${where}`;
+    const also = earlier.filter((x) => cmdRuleMatches(match, x) && x !== card.querySelector('.sc-line')?.textContent).slice(0, 4), box = $('.sc-also', card);
+    box.hidden = !also.length;
+    box.innerHTML = also.length ? `Would also have covered, in this chat: ${also.map((x) => `<code>${esc(clip(x, 60))}</code>`).join(' ')}` : '';
     $('.sc-warn', card).hidden = $('.sc-pick[data-group="match"] button:last-child', card) !== $('.sc-pick[data-group="match"] button.on', card);
   };
   btn.onclick = () => { panel.hidden = !panel.hidden; btn.setAttribute('aria-expanded', String(!panel.hidden)); show(); };
@@ -5746,7 +5627,7 @@ function approvalHTML(a, live = true) {
     const mark = AP_MARK[state];
     const who = o ? apWho(o, c)
       : live ? (c.tool === 'shell' ? 'The deciders are voting on this command…' : 'Deciders are checking whether this is needed and worth the price…') : 'Not answered: the reply ended';
-    return `<details class="approval-line ${state}"><summary title="${esc(who)}"><span class="al-mark">${mark}</span><b>${name}</b><span class="al-what">${esc(c.what)}</span><span class="al-price">${c.free ? 'free' : money(c.est, 3)}</span></summary>
+    return `<details class="approval-line ${state}"><summary title="${esc(who.replace(/<[^>]+>/g, ''))}"><span class="al-mark">${mark}</span><b>${name}</b><span class="al-what">${esc(c.what)}</span><span class="al-price">${c.free ? 'free' : money(c.est, 3)}</span></summary>
       <div class="al-detail">${c.items ? planRows : `${c.free ? '' : `<div>${esc(short(finalModel))} · ${esc(c.detail || '')}</div>`}<div>${esc(c.what)}</div>`}${c.why ? `<div>Why: ${esc(c.why)}</div>` : ''}<div class="al-who ${state}">${who}</div></div></details>`;
   }
   // A card that acts in the user's own account (a lent tab: send, delete, buy…) is red, and says so.
@@ -5756,8 +5637,9 @@ function approvalHTML(a, live = true) {
     ${c.mcp ? `<div class="mcp-ap"><div class="mcp-ap-head">${mcpMark({ name: c.mcp.server }, 'sm')}<span>Use <b>${esc(c.mcp.tool)}</b> on the MCP server <b>${esc(c.mcp.server)}</b></span>${c.mcp.changes ? '<span class="mcp-chg" title="The server doesn\'t mark this tool as read-only">CHANGES THINGS</span>' : ''}</div><pre>${esc(c.mcp.input)}</pre>${waiting ? `<small class="dim">${c.mcp.always ? `Asked because ${esc(c.mcp.server)} is set to Ask every time.` : 'Asked because this chat is Strict and the tool can change things.'} ⚙ Settings → MCP servers changes this.</small>` : ''}</div>`
       : c.items ? '' : `<div class="what">${c.free ? esc(c.what) : `“${esc(c.what)}”`}</div>`}
     ${c.why ? `<div class="what">Why: ${esc(c.why)}</div>` : ''}${c.items && waiting ? '<div class="what dim">Calls that match this plan then run without asking again; anything else asks on its own.</div>' : ''}
-    ${waiting ? `${waitHTML(c)}${c.buttonsOnly ? `<div class="what dim">${c.tool === 'quorx_settings' ? 'Only your click changes it: typed words don’t, and nothing answers this card for you, in YOLO too.' : 'Only these buttons switch it on: typed words don’t.'}</div>` : '<textarea rows="1" placeholder="Or type to tell it something else. Enter sends it, without allowing or declining."></textarea>'}
-      <div class="acts"><button type="button" class="primary reply" hidden>Send to the agent</button><button type="button" class="primary yes">${c.yes ? esc(c.yes) : c.tool === 'remember' ? 'Save to memory' : c.free ? 'Allow once' : `Approve ${money(c.est, 3)}`}</button>${c.noAlways ? '' : `<button type="button" class="always" title="Stop asking for this tool in this chat">${c.mcp ? `Always allow ${esc(c.mcp.tool)} on ${esc(c.mcp.server)}` : 'Always allow'}</button>`}<button type="button" class="no">${c.no ? esc(c.no) : c.tool === 'remember' ? "Don't save" : 'Decline'}</button></div>`
+    ${waiting ? `${waitHTML(c)}${c.buttonsOnly ? `<div class="what dim">${c.tool === 'quorx_settings' ? 'Only your click changes it: typed words don’t, and nothing answers this card for you, in YOLO too.' : 'Only these buttons switch it on: typed words don’t.'}</div>` : '<textarea rows="1" placeholder="Or reply with context: the agent reads it instead of a yes or no. Enter sends it."></textarea>'}
+      <div class="acts"><button type="button" class="primary reply" hidden>Send to the agent</button><button type="button" class="primary yes">${c.yes ? esc(c.yes) : c.tool === 'remember' ? 'Save to memory' : c.free ? 'Allow once' : `Approve ${money(c.est, 3)}`}</button>${c.noAlways ? '' : `<button type="button" class="always" title="Stop asking for ${c.mcp ? `${esc(c.mcp.tool)} on ${esc(c.mcp.server)}` : 'this tool'} in this chat. A tool's “Allow always” is for this chat only; remove it any time in the chat's 🛡 Permissions.">Allow always <span class="ap-scope">${scopeMark('chat', true)}this chat</span></button>`}<button type="button" class="no">${c.no ? esc(c.no) : c.tool === 'remember' ? "Don't save" : 'Deny'}</button></div>
+      ${c.noAlways || c.buttonsOnly ? '' : `<div class="what dim">“Allow always” covers ${c.mcp ? `<b>${esc(c.mcp.tool)}</b> on ${esc(c.mcp.server)}` : `<b>${name}</b>`} in this chat only.</div>`}`
       : o ? `<div class="outcome ${apState(o)}">${{ yes: '✅ ', no: '⛔ ', reply: '↩ ' }[apState(o)]}${apWho(o, c)}</div>`
       : !live ? '<div class="outcome">Not answered: the reply ended</div>' : `<div class="outcome">⚡ ${c.tool === 'shell' ? 'The deciders are voting on this command…' : 'Deciders are checking whether this is needed and worth the price…'}</div>`}
   </div>`;
@@ -6273,7 +6155,8 @@ async function followRun(c, m, open) {
         if (e.t === 'server') { serverUp(c, e); continue; }
         if (e.t === 'file' && G.watch?.chat === c.id) setTimeout(reloadPreview, 300);
         if (e.t === 'mode' && c.approval !== e.approval) { c.approval = e.approval; saveChat(c); renderComposerBar(c); }
-        if (e.t === 'allow_always') { if (!a.allowed.includes(e.tool)) a.allowed.push(e.tool); renderComposerBar(c); saveChat(c); }
+        if (e.t === 'allow_always') { if (!a.allowed.includes(e.tool)) a.allowed.push(e.tool); (a.allowedMeta ??= {})[e.tool] = { at: Date.now(), hits: 0 }; renderComposerBar(c); saveChat(c); }
+        if (e.t === 'allowed_used') { const x = ((a.allowedMeta ??= {})[e.tool] ??= { hits: 0 }); x.hits = (x.hits || 0) + 1; x.lastUsed = Date.now(); saveChat(c); }
         if (e.t === 'cmd_rule' && e.rule?.scope === 'chat') { (a.cmdRules ??= []).push(e.rule); saveChat(c); }
         if (e.t === 'rule_used') { const r = (a.cmdRules || []).find((x) => (e.id && x.id === e.id) || x.match === e.match); if (r) { r.hits = (r.hits || 0) + 1; r.lastUsed = Date.now(); saveChat(c); } }
         if (e.t === 'folder_added' && e.folder?.path) { a.folders = [...(a.folders || []).filter((x) => x.path.toLowerCase() !== e.folder.path.toLowerCase()), { path: e.folder.path, access: e.folder.access }]; saveChat(c); }
@@ -7572,6 +7455,7 @@ function settingsPanels(S) {
           + stRow('In 🔒 Strict, ask before', 'Paid media: only pictures, video, music and speech. Every tool: also file edits, commands, reads, the browser and helpers, as before.', stSeg('strictAsk', [['paid', 'Paid media'], ['every', 'Every tool']], S.strictAsk || 'paid'))
           + stRow('Also ask before helpers', 'Helpers hand read-only jobs to a cheaper model. Only with “Paid media”.', stSwitch('strictAskHelpers', S.strictAskHelpers === true))
           + stRow('Also ask before decider checks', 'decide and look ask the deciders; each costs well under $0.001. Only with “Paid media”.', stSwitch('strictAskDeciders', S.strictAskDeciders === true))),
+        stCard('Permissions', 'Everything that runs without asking you: command rules, tools, apps and folders allowed in a chat, Chrome sites and MCP servers, in this chat, a project or everywhere in QuorX. Rules you type here can relax pushes, uncheckable commands and deletes outside the project; ones made with a card’s “Allow always” never do.', '<div id="stPerms"><div class="st-row-help">Loading…</div></div>'),
         stSec('⚡ YOLO'),
         `<div id="sfShort" class="sf-short">${yoloShortHTML(SF)}</div>`,
         stCard('What ⚡ YOLO does by itself', 'Ticked: YOLO goes ahead without asking. Unticked: it asks you first, as Strict does (Always allow stops the asking for that chat). Reading files, listing and searching never ask.',
@@ -7629,7 +7513,6 @@ function settingsPanels(S) {
           stRow('Debugger for Node and Python', 'Research found a debugger helps strong models most after plain debugging fails, and can make weaker ones worse from the start. “After failed tries”: it opens once the agent has hit errors or had a build sent back.', stSeg('debugger', [['earned', 'After failed tries'], ['always', 'Always'], ['off', 'Off']], S.debugger || 'earned'), { cls: 'sx-row-wide' })
           + stRow('Let the android tool use a physical phone', 'Unticked, it uses emulators only: a phone holds your real accounts and data.', stSwitch('safety.androidPhones', SF.androidPhones)))
         + `</div>`,
-        stCard('Command rules', 'Your rules, checked before the built-in classes: deny beats ask beats allow. A rule can always make a command stricter. Rules made with the “Always allow…” button never relax pushes, uncheckable commands or deletes outside the project; rules you type here can. Changes here save at once.', '<div id="stPerms"><div class="st-row-help">Loading rules…</div></div>'),
         stCard('Audit log', 'Every command the agent ran or was stopped from running, and who let it: a rule, you, the deciders, or the built-in classes. Votes are in logs/approvals.jsonl; this log is logs/audit.jsonl.', '<div id="stAudit"><div class="st-row-help">Loading…</div></div>'),
         ].join('') + '</div></details>',
       ]];
@@ -8517,61 +8400,28 @@ async function drawProjectsPanel() {
   const pd = $('#projDlg'); if (pd && !pd.dataset.refreshesPanel) { pd.dataset.refreshesPanel = '1'; pd.addEventListener('close', () => { if ($('#settings').open) drawProjectsPanel(); }); }
 }
 
-// ---------- Settings → Approvals & safety: the command rules (server/cmdpolicy.js), saved at once ----------
-const PERMS = { project: null, testShell: null };
-const RULE_EFFECT = { allow: 'Allow', ask: 'Ask me', deny: 'Deny' };
+// ---------- Settings → Approvals & safety: a summary of every permission; the list itself is the Permissions window ----------
+const PERMS = { project: null };
 async function drawPermsPanel() {
   const box = $('#stPerms'); if (!box) return;
-  const projects = G.projects || [];
-  PERMS.project ??= G.chats?.find((c) => c.id === G.panes?.[0])?.projectId || projects[0]?.id || null;
-  const r = await fetch(`/api/permissions${PERMS.project ? `?project=${encodeURIComponent(PERMS.project)}` : ''}`).then((x) => x.json()).catch((e) => ({ error: e.message }));
+  PERMS.project ??= G.chats?.find((c) => c.id === G.panes?.[0])?.projectId || G.projects?.[0]?.id || null;
+  const [r, pr, ch, mcp] = await Promise.all([getJ('/api/permissions'), getJ('/api/permissions/projects'), getJ('/api/permissions/chats'), getJ('/api/mcp')]);
   const sm = $('#stStopMode');
   if (sm && r.stop) { sm.textContent = r.stop.mode === 'jobs' ? '✓ Job Objects: every process, confirmed' : r.stop.mode === 'groups' ? '✓ Process groups: every process, confirmed' : '⚠ Basic: process tree only'; sm.title = r.stop.error || ''; }
-  if (r.error) { box.innerHTML = `<div class="st-row-help">Couldn't load the rules: ${esc(r.error)}</div>`; return; }
-  const list = (scope, rules) => (rules.length ? ruleRows(rules, scope).join('') : '<div class="st-row-help">No rules yet.</div>');
-  box.innerHTML = `<div class="pr">
-    <div class="pr-head"><label>Project <select data-pr-project>${projects.map((p) => `<option value="${esc(p.id)}" ${p.id === PERMS.project ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label></div>
-    <h5>This project</h5><div class="pr-list">${list('project', r.project)}</div>
-    <h5>Everywhere</h5><div class="pr-list">${list('everywhere', r.everywhere)}</div>
-    ${r.suggested?.length ? `<h5>Suggested for this project <small>from the files it has</small></h5><div class="pr-list">${r.suggested.map((s) => `<div class="pr-rule sug"><span class="pr-eff" data-eff="allow">Allow</span><code>${esc(s.match)}</code><span class="pr-by">${esc(s.why)}</span><button type="button" class="st-btn secondary sm" data-pr-sug="${esc(s.match)}">＋ Add</button></div>`).join('')}</div>` : ''}
-    <h5>Add a rule</h5>
-    <div class="pr-add">
-      <div class="seg" data-pr-eff>${Object.entries(RULE_EFFECT).map(([k, l], i) => `<button type="button" data-v="${k}" class="${i === 0 ? 'on' : ''}">${l}</button>`).join('')}</div>
-      <input type="text" data-pr-match placeholder="cargo build*  ·  * matches anything">
-      <div class="seg" data-pr-scope><button type="button" data-v="project" class="on">This project</button><button type="button" data-v="everywhere">Everywhere</button></div>
-      <button type="button" class="st-btn primary sm" data-pr-add>Add</button>
-    </div>
-    <h5>Test a command <small>what would happen, and why · nothing runs</small></h5>
-    <div class="pr-test"><input type="text" data-pr-line placeholder="Remove-Item dist -Recurse"><div class="seg" data-pr-mode><button type="button" data-v="strict" class="on">🔒 Strict</button><button type="button" data-v="yolo">⚡ YOLO</button></div><button type="button" class="st-btn secondary sm" data-pr-test>Test</button></div>
-    <div class="pr-result" aria-live="polite"></div>
+  if (!box.isConnected) return;
+  if (r.error) { box.innerHTML = `<div class="st-row-help">Couldn't load them: ${esc(r.error)}</div>`; return; }
+  const rules = [...(r.everywhere || []), ...(pr.projects || []).flatMap((p) => p.rules)];
+  const chats = ch.chats || [];
+  const chatN = chats.reduce((n, x) => n + (x.cmdRules || []).length + (x.allowed || []).length + (x.apps || []).length + (x.folders || []).length, 0);
+  const siteN = ['chromeSitesNever', 'chromeSitesAlways', 'chromeSitesRead'].reduce((n, k) => n + String(G.settings[k] || '').split(',').filter((x) => x.trim()).length, 0);
+  const mcpN = (mcp.servers || []).filter((x) => x.on !== false).length;
+  const cant = rules.filter((x) => x.problem).length, never = rules.filter((x) => !x.hits).length;
+  box.innerHTML = `<div class="pmx-sum">
+    <div class="pmx-sum-n"><span><b>${rules.length}</b> rule${rules.length === 1 ? '' : 's'}</span><span>${scopeMark('everywhere', true)}<b>${(r.everywhere || []).length}</b> everywhere</span><span>${scopeMark('project', true)}<b>${(pr.projects || []).length}</b> project${(pr.projects || []).length === 1 ? '' : 's'} with rules</span><span>${scopeMark('chat', true)}<b>${chatN}</b> in ${chats.length} chat${chats.length === 1 ? '' : 's'}</span><span><b>${siteN}</b> site${siteN === 1 ? '' : 's'}</span><span><b>${mcpN}</b> MCP server${mcpN === 1 ? '' : 's'}</span></div>
+    <div class="pmx-sum-acts">${cant ? `<span class="hkx-st warn"><i></i>${cant} can't match</span>` : ''}${never ? `<span class="hkx-st"><i></i>${never} never used</span>` : ''}<span class="grow"></span><button type="button" class="st-btn primary sm" data-perm-manage>Manage permissions</button></div>
   </div>`;
+  $('[data-perm-manage]', box).onclick = () => openPermissions({ kind: 'settings' });
   drawAuditPanel();
-  const rules = { project: r.project, everywhere: r.everywhere };
-  const save = async (scope, next) => {
-    const res = await fetch('/api/permissions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scope, projectId: PERMS.project, rules: next }) }).then((x) => x.json()).catch((e) => ({ error: e.message }));
-    if (res.error) $('.pr-result', box).textContent = `The rule wasn't saved: ${res.error}`; else drawPermsPanel();
-  };
-  const segVal = (sel) => $(`${sel} button.on`, box)?.dataset.v;
-  for (const g of box.querySelectorAll('.pr-add .seg, .pr-test .seg')) for (const b of g.children) b.onclick = () => { for (const x of g.children) x.classList.toggle('on', x === b); };
-  $('[data-pr-project]', box).onchange = (e) => { PERMS.project = e.target.value; drawPermsPanel(); };
-  wireRuleRows(box, PERMS.project, drawPermsPanel);
-  for (const b of box.querySelectorAll('[data-pr-sug]')) b.onclick = () => save('project', [...rules.project, { effect: 'allow', match: b.dataset.prSug, by: 'user' }]);
-  $('[data-pr-add]', box).onclick = () => {
-    const match = $('[data-pr-match]', box).value.trim();
-    if (!match) return $('[data-pr-match]', box).focus();
-    const scope = segVal('[data-pr-scope]');
-    save(scope, [...rules[scope], { effect: segVal('[data-pr-eff]'), match, by: 'user' }]);
-  };
-  $('[data-pr-test]', box).onclick = async () => {
-    const line = $('[data-pr-line]', box).value.trim(); if (!line) return;
-    const out = $('.pr-result', box);
-    out.textContent = 'Checking…';
-    const t = await fetch('/api/permissions/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: PERMS.project, line, mode: segVal('[data-pr-mode]'), safety: ST.draft?.safety || G.settings.safety }) }).then((x) => x.json()).catch((e) => ({ error: e.message }));
-    if (t.error) { out.textContent = t.error; return; }
-    const head = t.verdict === 'allow' ? '✓ Runs without asking' : t.verdict === 'deny' ? '⛔ Blocked' : t.who === 'deciders' ? '⚖ The deciders vote' : '✋ Asks you';
-    out.innerHTML = `<div class="pr-verdict" data-v="${esc(t.verdict)}"><b>${head}</b>${t.why ? ` · ${esc(t.why)}` : ''}${t.hint ? `<div class="st-row-help">${esc(t.hint)}</div>` : ''}</div>`
-      + t.segments.map((s) => `<div class="sc-seg"><code>${esc(s.text)}</code><span class="sc-cls" data-cls="${esc(s.cls)}">${esc(CMD_CLASS[s.cls] || s.cls)}</span><span class="pr-by">${esc(s.verdict)}${s.who ? ` · ${esc(s.who)}` : ''} · ${esc(s.decidedBy || '')}</span>${(s.paths || []).map((p) => `<span class="sc-path" data-zone="${esc(p.zone)}">${esc(CMD_ZONE[p.zone] || p.zone)} · ${esc(clip(p.path, 90))}${p.why ? ` (${esc(p.why)})` : ''}</span>`).join('')}</div>`).join('');
-  };
 }
 
 // The audit log for the project picked in the rules card: newest first.
@@ -8579,15 +8429,18 @@ const AUDIT_KIND = { ran: ['ran', 'ok'], background: ['background', 'ok'], appro
 async function drawAuditPanel() {
   const box = $('#stAudit'); if (!box) return;
   const rows = await fetch(`/api/audit?limit=150${PERMS.project ? `&project=${encodeURIComponent(PERMS.project)}` : ''}`).then((x) => x.json()).catch(() => []);
-  if (!rows.length) { box.innerHTML = '<div class="st-row-help">Nothing yet for this project.</div>'; return; }
+  const pick = `<label class="au-pick">Project <select data-au-project>${(G.projects || []).map((p) => `<option value="${esc(p.id)}" ${p.id === PERMS.project ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>`;
+  const wire = () => { const sel = $('[data-au-project]', box); if (sel) sel.onchange = () => { PERMS.project = sel.value; drawAuditPanel(); }; };
+  if (!rows.length) { box.innerHTML = `${pick}<div class="st-row-help">Nothing yet for this project.</div>`; wire(); return; }
   const by = (b) => (!b ? '' : b === 'you' || b === 'user' ? 'you' : b === 'deciders' ? 'the deciders' : b.startsWith('rule:') ? `your rule (${b.slice(5)})` : b.startsWith('class:') ? `built-in: ${b.slice(6)}` : b);
-  box.innerHTML = `<div class="au">${rows.map((r) => {
+  box.innerHTML = `${pick}<div class="au">${rows.map((r) => {
     const [label, tone] = AUDIT_KIND[r.kind] || [r.kind, ''];
     const when = new Date(r.ts);
     const detail = r.kind === 'ran' ? `exit ${r.code ?? '–'}${r.changed ? ` · ${r.changed} file${r.changed > 1 ? 's' : ''} changed` : ''}${r.stopped != null ? ` · stopped, ${r.stopped} left` : ''}${r.timedOut ? ' · hit the time limit' : ''}`
       : r.kind === 'rule' ? `allow ${esc(r.rule)} · ${esc(r.scope)}` : r.kind === 'tripwire' ? `${r.count} files vanished` : esc(r.why || r.reason || '');
     return `<div class="au-row"><time title="${esc(when.toLocaleString())}">${esc(when.toLocaleDateString())} ${esc(when.toLocaleTimeString())}</time><span class="au-kind" data-tone="${tone}">${label}</span><code title="${esc(r.command || r.rule || '')}">${esc(clip(r.command || r.rule || '', 140))}</code><span class="au-by">${esc(by(r.by))}${r.mode ? ` · ${r.mode === 'yolo' ? '⚡' : '🔒'}` : ''}</span><span class="au-detail">${detail}</span></div>`;
   }).join('')}</div>`;
+  wire();
 }
 
 // ---------- one filter for any long Settings list (Setup check, Skills, and later Memory, Projects, models…) ----------
@@ -12262,3 +12115,8 @@ function newsClick(e) {
   window.addEventListener('hashchange', () => { const m = /^#news(?:\/(.*))?$/.exec(location.hash); if (m) openNews(m[1] || 'updates'); });
   newsLoad().then(() => { const m = /^#news(?:\/(.*))?$/.exec(location.hash); if (m) openNews(m[1] || 'updates'); });
 })();
+
+// The permissions window and the chat's "what applies here" (public/perms.js) use the page's own helpers.
+initPerms({ esc, $, G, ST, getJ, postJ, getChat, saveChat, renderComposerBar, TOOL_NAME, listFilter, flashTip, ago, clip, savePrefs, showChat,
+  closeWindows: () => { for (const id of ['permsDlg', 'projSubDlg', 'projDlg', 'settings']) document.getElementById(id)?.close?.(); },
+  yoloAsking: () => YOLO_ROWS.filter(([k]) => G.settings.yoloAuto?.[k] === false).length });

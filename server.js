@@ -616,20 +616,32 @@ const server = http.createServer(async (req, res) => {
       if (!['project', 'everywhere'].includes(b.scope)) return json(res, 400, { error: 'scope must be project or everywhere' });
       if (b.scope === 'project' && !validId(b.projectId)) return json(res, 400, { error: 'bad project id' });
       const root = b.scope === 'project' ? workspaceDir(b.projectId) : null;
-      const rules = req.method === 'PATCH' ? updateRule(b.scope, String(b.id || ''), { on: b.on }, root) : removeRule(b.scope, String(b.id || ''), root);
+      const patch = Object.fromEntries(['on', 'match', 'effect'].filter((k) => k in b).map((k) => [k, b[k]]));
+      if (typeof patch.match === 'string' && ruleProblem(patch.match)) return json(res, 200, { error: `that pattern never matches: ${ruleProblem(patch.match)}` });
+      const rules = req.method === 'PATCH' ? updateRule(b.scope, String(b.id || ''), patch, root) : removeRule(b.scope, String(b.id || ''), root);
       return rules ? json(res, 200, { ok: true, rules }) : json(res, 404, { error: 'no such rule' });
     }
     // What each chat of a project allows on its own (its rules, tools, apps and folders), for the project's
     // Permissions section. Read only: a chat's own list changes in that chat.
+    // Without a project: every chat's (the ⚙ Settings permissions window).
     if (url.pathname === '/api/permissions/chats' && req.method === 'GET') {
       const pid = url.searchParams.get('project');
-      if (!validId(pid)) return json(res, 400, { error: 'bad project id' });
-      const chats = listChats().filter((c) => c.projectId === pid).slice(0, 300).flatMap((c) => {
+      if (pid && !validId(pid)) return json(res, 400, { error: 'bad project id' });
+      const chats = listChats().filter((c) => !pid || c.projectId === pid).slice(0, pid ? 300 : 2000).flatMap((c) => {
         const a = getChat(c.id)?.agent || {};
         const n = (a.cmdRules || []).length + (a.allowed || []).length + (a.apps || []).length + (a.folders || []).length;
-        return n ? [{ id: c.id, title: c.title || 'Untitled chat', cmdRules: a.cmdRules || [], allowed: a.allowed || [], apps: a.apps || [], folders: a.folders || [] }] : [];
+        return n ? [{ id: c.id, title: c.title || 'Untitled chat', projectId: c.projectId || 'scratch', cmdRules: a.cmdRules || [], allowed: a.allowed || [], allowedMeta: a.allowedMeta || {}, apps: a.apps || [], folders: a.folders || [] }] : [];
       });
       return json(res, 200, { chats });
+    }
+    // Every project's own rules at once, for the permissions window opened from ⚙ Settings.
+    if (url.pathname === '/api/permissions/projects' && req.method === 'GET') {
+      const projects = listProjects().flatMap((p) => {
+        let rules = [];
+        try { rules = loadRules(workspaceDir(p.id)).filter((r) => r.scope === 'project').map((r) => ({ ...r, problem: ruleProblem(r.match) || undefined })); } catch { /* folder missing */ }
+        return rules.length ? [{ id: p.id, name: p.name, rules }] : [];
+      });
+      return json(res, 200, { projects });
     }
     // ---- memory: facts and preferences every chat gets (server/memory.js); the agent can only propose ----
     // 🧲 MCP servers the agent may use (server/mcpclient.js): the list, saving it, starting one to see its tools, and
