@@ -9,7 +9,12 @@ import { backupCard, drawBackup } from './backup.js';
 import { storageCard, drawStorage, setRulesText, refreshStorageBadge, projectSizes, focusProject, fmtBytes } from './storage.js';
 import { chatsToRelease } from './chat-cache.js';
 
-const $ = (s, el = document) => el.querySelector(s);
+// The side pane can be split into areas stacked top to bottom, each a copy of the same markup (its tabs, address bar and
+// body). Its ids are looked up in the area being drawn: AREA, which is the area you last used unless one is being drawn.
+let AREA = { n: 0, el: null, st: { view: { id: null, src: false, files: false } } };
+const AREA_IDS = /^#(paneTabs|paneTool|paneUrlWrap|artSelect|paneUrl|reloadBtn|copyUrlBtn|popBtn|appBar|paneBody|termRunning|runPane|termSrv)(?![\w-])/;
+const $ = (s, el = document) => (el === document && AREA.el && AREA_IDS.test(s) ? AREA.el : el).querySelector(s);
+const $$a = (s) => (AREA.el || document).querySelectorAll(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const money = (c, d = 4) => `$${(Number(c) || 0).toFixed(d)}`;
 // How long something took, as people read it: 12.3s under a minute, then 21m 41s, 1h 2m 5s, 2d 3h 4m.
@@ -163,9 +168,10 @@ const G = {
   open: new Map(),              // chatId → loaded chat (its agent, run state and DOM)
   panes: [],                    // chat ids shown side by side (1 or 2)
   focus: 0,                     // which pane the artifact pane and mic follow
-  view: { id: null, src: false, files: false },
   sessionCost: 0, sizes: {}, theme: null, sideHidden: false, balanceShown: false,
 };
+// What the side pane shows is kept per area: its tab (view), the Steps it follows, its browser tab and real-tab box.
+for (const k of ['view', 'traceRun', 'traceShown', 'traceAt', 'traceTimer', 'bActive', 'dsk', 'paneUrl', 'watch']) Object.defineProperty(G, k, { get: () => AREA.st[k], set: (v) => { AREA.st[k] = v; }, enumerable: true });
 const focused = () => G.open.get(G.panes[G.focus]) || G.open.get(G.panes[0]);
 
 // ---------- preferences (this browser) and chats (the server) ----------
@@ -185,7 +191,7 @@ function loadTrace(c, m) {
     if (!Array.isArray(t)) return;
     m.trace = t;
     if (m.el?.isConnected) updateMsg(c, m);
-    if (G.view.trace === m.runId && focused() === c) renderPane();
+    eachArea(() => { if (G.view.trace === m.runId && focused() === c) renderPane(); });
   }).catch(() => {}));
   return traceLoads.get(m);
 }
@@ -496,7 +502,7 @@ function paletteItems(q) {
 }
 async function openProjectFile(c, rel) {
   G.view.files = true; G.view.run = false; syncLayout(); await renderFiles(c);
-  const btn = [...document.querySelectorAll('#paneBody .fl')].find((b) => b.dataset.p === rel);
+  const btn = [...$$a('#paneBody .fl')].find((b) => b.dataset.p === rel);
   if (btn) { btn.click(); btn.scrollIntoView({ block: 'nearest' }); }
   if (isPhone()) setMView('preview');
 }
@@ -666,7 +672,7 @@ function chooseSuggest(c, i, how = 'run') {
 }
 async function openNotes(c) {
   G.view.files = true; G.view.run = false; syncLayout(); await renderFiles(c);
-  const btn = [...document.querySelectorAll('#paneBody .fl')].find((b) => b.dataset.p === 'AGENT.md');
+  const btn = [...$$a('#paneBody .fl')].find((b) => b.dataset.p === 'AGENT.md');
   if (btn) btn.click(); else $('#paneBody .fview').textContent = 'No AGENT.md yet. The agent writes it when there is something worth recording.';
 }
 async function showSkills(c) {
@@ -3276,11 +3282,13 @@ function showTip(t, override) {
 // In the desktop app the Browser tab's page is a real window drawn above everything on this page, so a tip or
 // popup that would land on it moves to its left; when there is no room, the tab shows its still picture meanwhile.
 function avoidDesk(box) {
-  const d = G.dsk;
-  if (!DESK || !d?.shown || !d.ph?.isConnected) return;
-  const v = d.ph.getBoundingClientRect(), b = box.getBoundingClientRect();
-  if (!(b.left < v.right && b.right > v.left && b.top < v.bottom && b.bottom > v.top)) return;
-  if (v.left - b.width - 8 >= 6) box.style.left = `${Math.round(v.left - b.width - 8)}px`;
+  if (!DESK) return;
+  for (const d of deskAll()) {
+    if (!d.shown || !d.ph?.isConnected) continue;
+    const v = d.ph.getBoundingClientRect(), b = box.getBoundingClientRect();
+    if (!(b.left < v.right && b.right > v.left && b.top < v.bottom && b.bottom > v.top)) continue;
+    if (v.left - b.width - 8 >= 6) box.style.left = `${Math.round(v.left - b.width - 8)}px`;
+  }
 }
 function hideTip() {
   clearTimeout(TIP.timer);
@@ -4895,11 +4903,12 @@ function updateMsg(c, m, { bodyOnly = false } = {}) {
   tb.onclick = () => {
     // Picking another reply's steps while 🧭 follows the latest: following stops, so the pane stays where you put it.
     if (c.followSteps && !m.live) { c.followSteps = false; saveChat(c); renderComposerBar(c); }
+    if (focused() === c) aimArea('trace');
     if (G.traceRun === m.runId && G.view.trace === m.runId && !isPhone()) return closeTrace(); openTrace(c, m); toPreview();
   };
   // 🧭 on (this chat): the pane shows the running reply's steps as it works.
   if (c.followSteps && m.live && focused() === c && G.view.trace !== m.runId) openTrace(c, m);
-  if (G.view.trace === m.runId && focused() === c) renderTracePane(c, m);
+  eachArea(() => { if (G.view.trace === m.runId && focused() === c) renderTracePane(c, m); });
   const s = m.stats, when = m.doneAt || m.at;
   const checkTag = s?.verify ? (s.verify.ok ? '<span class="check-ok" title="Before this reply ended, the harness re-checked the changed files and opened what was built: no errors.">✓ Checked</span>'
     : `<span class="check-bad" title="${esc(s.verify.problems.join('\n'))}">⚠ ${s.verify.problems.length} problem${s.verify.problems.length === 1 ? '' : 's'} left</span>`) : '';
@@ -5224,7 +5233,7 @@ async function repairTrace(c, m) {
   if (Object.keys(thinking).length > Object.keys(m.thinking || {}).length) m.thinking = thinking;
   saveChat(c);
   if (m.el?.isConnected) updateMsg(c, m);
-  if (G.view.trace === m.runId && focused() === c) renderPane();
+  eachArea(() => { if (G.view.trace === m.runId && focused() === c) renderPane(); });
 }
 function closeTrace() { G.traceRun = null; G.view.trace = null; syncLayout(); renderPane(); refreshTraceButtons(); }
 function refreshTraceButtons() { for (const b of document.querySelectorAll('.trace-btn')) b.classList.remove('on'); const c = focused(); const m = c?.agent.messages.find((x) => x.runId === G.traceRun); if (m?.el) $('.trace-btn', m.el)?.classList.add('on'); }
@@ -5238,7 +5247,7 @@ function renderTracePane(c, m, opts = {}) {
   clearTimeout(G.traceTimer);
   if (same && !opts.now) {
     const wait = TRACE_EVERY - (Date.now() - (G.traceAt || 0));
-    if (wait > 0) { G.traceTimer = setTimeout(() => { if (G.view.trace === m.runId && focused() === c) renderTracePane(c, m, { now: true }); }, wait); return; }
+    if (wait > 0) { const a = AREA; G.traceTimer = setTimeout(() => inArea(a, () => { if (G.view.trace === m.runId && focused() === c) renderTracePane(c, m, { now: true }); }), wait); return; }
   }
   G.traceAt = Date.now();
   // Where you are, read before anything changes (reading it after a change makes the browser lay the pane out again).
@@ -6276,7 +6285,7 @@ async function followRun(c, m, open) {
           const x = m.approvals?.[e.id] || m.questions?.[e.id];
           if (x?.card?.wait) { x.card.wait.held = true; drawHeld(m, e.id, x.card); }
           m.trace.push(e);
-          if (G.view.trace === m.runId && focused() === c) renderTracePane(c, m);
+          eachArea(() => { if (G.view.trace === m.runId && focused() === c) renderTracePane(c, m); });
           continue;
         }
         if (e.t === 'approval_done' && m.approvals[e.id]) { m.approvals[e.id].outcome = e; c.waiting = false; renderSidebar(); renderChatHead(c); }
@@ -6337,7 +6346,7 @@ async function followRun(c, m, open) {
     }
     const due = raf; if (raf) { cancelAnimationFrame(raf); raf = 0; }
     updateMsg(c, m); if (due) stick();
-    syncRunState(c); saveChat(c, true); refreshSidebar(); checkSpace(c, true); refreshUndoable(c.projectId); if (G.view.browser && focused() === c) renderPane();
+    syncRunState(c); saveChat(c, true); refreshSidebar(); checkSpace(c, true); refreshUndoable(c.projectId); eachArea(() => { if (G.view.browser && focused() === c) renderPane(); });
     refreshBalance();
     // ⚙ Reviewer → "Review code changes": after a reply that changed code, a code review card (only when it finds something).
     if (G.settings.codeReview === 'auto' && m.stats && !m.error && (m.stats.changed || []).some((f) => CODE_FILE.test(f))) codeReview(c, 'reply', { auto: true, runId: m.runId });
@@ -6367,6 +6376,7 @@ function addArtifact(c, m, x) {
 const planArts = (c) => Object.values(c?.agent?.artifacts || {}).filter((a) => a.kind === 'html' || a.kind === 'md');
 // A live site or app opens in a Browser tab of its own (one per address; a restart reuses it).
 function openInBrowser(c, url) {
+  if (focused() === c) aimArea('browser');
   if (!c || !url) return;
   let origin = url; try { origin = new URL(url, location.href).origin; } catch { /* keep as is */ }
   const t = (G.btabs ||= []).find((x) => { try { return x.url && new URL(x.url, location.href).origin === origin; } catch { return false; } });
@@ -6382,6 +6392,7 @@ function serverUp(c, e) {
 function openArtifact(c, id) {
   const i = G.panes.indexOf(c.id);
   if (i >= 0 && i !== G.focus) { G.focus = i; for (const p of document.querySelectorAll('.chatpane')) p.classList.toggle('focus', Number(p.dataset.pane) === i); }
+  aimArea('art');
   G.view = { id, src: false, files: false };
   c.paneHidden = false;
   syncLayout(); renderPane();
@@ -6412,18 +6423,255 @@ function paneVisible() {
   if (mode === 'always') return true;
   return Object.keys(c.agent.artifacts).length > 0;
 }
+// ---------- the side pane split into areas ----------
+// The pane shows up to three of its tabs at once, stacked top to bottom with a bar between them to resize, like split
+// terminals: Artifacts over the Browser, Steps over the Terminal, Files next to a server's output. Each area has its own
+// tab strip, address bar and body, and keeps its own tab, artifact, browser tab, terminal views and scroll. Split with
+// the ⊟ button, by dragging a tab to the top or bottom half of an area, or by right-clicking a tab. The layout is
+// remembered per chat; on a phone-sized window only the area you used last shows.
+const PA = { list: [AREA], focus: AREA, next: 1, chat: undefined, saved: '', deskKey: '', drag: null, tpl: null };
+const PANE_MAX_AREAS = 3;
+const PANE_TAB_NAMES = { art: 'Artifact', browser: 'Browser', trace: 'Steps', term: 'Terminal', files: 'Files' };
+function inArea(a, fn) {
+  const was = AREA;
+  if (!a || a === was) return fn();
+  if (!PA.list.includes(a)) return undefined;
+  AREA = a;
+  try { return fn(); } finally { AREA = PA.list.includes(was) ? was : PA.focus; }
+}
+// Runs in each area in turn: what changes live (Steps, the Browser, the Terminal) changes in every area showing it.
+function eachArea(fn) { for (const a of [...PA.list]) inArea(a, () => fn(a)); }
+const paneSplit = () => PA.list.length > 1 && !isPhone();
+// The area you click or type in is the one the rest of the page means by "the pane".
+function paneFocus(a) {
+  // Not while an area is being drawn in the background (a focus() there isn't you moving).
+  if (!a || PA.focus === a || !PA.list.includes(a) || AREA !== PA.focus) return;
+  PA.focus = a; AREA = a;
+  paneMarkAreas(); paneSave();
+  deskPlace(true);
+}
+// Something asks the pane for one of its tabs (the agent browsing, 🧭 Steps on a reply): an area already showing it takes it.
+function aimArea(tab) {
+  if (!paneSplit() || paneTab() === tab) return;
+  const a = PA.list.find((x) => inArea(x, paneTab) === tab);
+  if (a) paneFocus(a);
+}
+function paneView(c, tab, id = G.view?.id ?? null) {
+  if (tab === 'trace') {
+    const lastRun = [...c.agent.messages].reverse().find((m) => m.role === 'assistant' && m.runId);
+    G.traceRun = G.traceRun && c.agent.messages.some((m) => m.runId === G.traceRun) ? G.traceRun : lastRun?.runId || null;
+  }
+  return { id, src: false, files: tab === 'files', term: tab === 'term', run: false, browser: tab === 'browser', trace: tab === 'trace' ? (G.traceRun || '(none)') : null };
+}
+// Area 0 is the pane's own markup, wrapped once; new areas are copies of it as it was before anything was drawn.
+function paneAreasInit() {
+  const pane = $('#pane'), el = document.createElement('section');
+  el.className = 'pane-area on'; el.dataset.area = '0';
+  pane.insertBefore(el, $('#paneTabs'));
+  el.append($('#paneTabs'), $('#paneTool'), $('#paneBody'));
+  PA.tpl = el.cloneNode(true);
+  for (const x of PA.tpl.querySelectorAll('#paneSrvBtn, #paneMaxBtn')) x.remove();
+  PA.tpl.querySelector('#paneBody').replaceChildren();
+  Object.assign(AREA, { el, grow: 1 });
+  paneWireArea(AREA);
+  matchMedia('(max-width: 900px)').addEventListener('change', () => { paneMarkAreas(); deskPlace(true); });
+}
+function paneWireArea(a) {
+  a.el.addEventListener('pointerdown', () => paneFocus(a), true);
+  a.el.addEventListener('focusin', () => paneFocus(a));
+}
+function paneAddArea(from, where = 'below') {
+  if (PA.list.length >= PANE_MAX_AREAS) return null;
+  const a = { n: PA.next++, el: PA.tpl.cloneNode(true), st: { view: { id: null, src: false, files: false } }, grow: 1 };
+  a.el.classList.remove('on'); a.el.dataset.area = String(a.n);
+  if (from) { a.grow = (from.grow || 1) / 2; from.grow = a.grow; }
+  const i = from ? PA.list.indexOf(from) + (where === 'above' ? 0 : 1) : PA.list.length;
+  // Placed by its neighbour, never by moving the others: a moved frame reloads, and a terminal loses its screen.
+  if (from) from.el[where === 'above' ? 'before' : 'after'](a.el); else PA.list.at(-1).el.after(a.el);
+  PA.list.splice(i, 0, a);
+  paneWireArea(a);
+  inArea(a, wireAreaChrome);
+  paneDividers();
+  return a;
+}
+// Splits an area: the new one shows `tab` (or a tab this one isn't showing) and becomes the one you use.
+function paneSplitTab(from, tab, where) {
+  const c = focused(); if (!c || isPhone()) return;
+  const cur = inArea(from, paneTab);
+  const a = paneAddArea(from, where);
+  if (!a) return flashTip($('[data-pa="split"]', from.el) || document.body, `At most ${PANE_MAX_AREAS} areas`);
+  tab ||= cur === 'art' ? 'browser' : 'art';
+  if (tab === 'browser') {
+    // Another of your browser tabs, when there is one: the same real page can only be in one place at a time.
+    const used = new Set(PA.list.filter((x) => x !== a && inArea(x, paneTab) === 'browser').map((x) => x.st.bActive));
+    a.st.bActive = browserTabs(c).find((t) => !used.has(t.sid))?.sid || null;
+  }
+  if (tab === 'term') {
+    // A server's output when one is running and not shown yet, else everything (Activity).
+    const t = termState(c.projectId), shown = new Set(PA.list.flatMap((x) => (x === a ? [] : (x.n ? x.st.termLay?.panes || [] : t.main.panes).map((p) => p.filter))));
+    const srv = [...t.jobs.values()].find((j) => j.server && j.status === 'running' && !shown.has(`srv:${j.server}`));
+    a.st.termTf = [srv ? `srv:${srv.server}` : 'all'];
+  }
+  PA.focus = a; AREA = a;
+  paneMarkAreas();
+  setPaneTab(tab);
+}
+function paneCloseArea(a) {
+  if (PA.list.length < 2 || !PA.list.includes(a)) return;
+  const i = PA.list.indexOf(a), n = PA.list[i ? i - 1 : 1];
+  n.grow = (n.grow || 1) + (a.grow || 1);
+  if (PA.focus === a) { PA.focus = n; AREA = n; }
+  paneDropArea(a);
+  paneMarkAreas(); paneSave();
+  deskPlace(true);
+  if (!PA.list.some((x) => x.st.view?.term)) closeTermStream();
+}
+// Takes an area away (its state too): its real browser tab is no longer placed, its timers stop.
+function paneDropArea(a) {
+  clearTimeout(a.st.traceTimer); if (a.st.watch) clearInterval(a.st.watch.timer);
+  a.st.dsk = null;
+  PA.list.splice(PA.list.indexOf(a), 1);
+  paneChromeHome(); // before the area goes: it may hold them
+  a.el.remove();
+  if (PA.focus === a) { PA.focus = PA.list[0]; AREA = PA.focus; }
+  paneDividers();
+}
+// The first area carries the pane-wide buttons (🖥 servers, ⤢ full width).
+function paneChromeHome() {
+  const tabs0 = $('#paneTabs', PA.list[0].el);
+  for (const id of ['#paneSrvBtn', '#paneMaxBtn']) { const b = document.querySelector(id); if (b && b.parentElement !== tabs0) tabs0.append(b); }
+}
+// The bars between areas resize them.
+function paneDividers() {
+  paneChromeHome();
+  for (const s of document.querySelectorAll('#pane > .pa-split')) s.remove();
+  PA.list.forEach((a, i) => {
+    if (!i) return;
+    const up = PA.list[i - 1], s = document.createElement('div');
+    s.className = 'pa-split'; s.tabIndex = 0; s.hidden = !paneSplit();
+    s.setAttribute('role', 'separator'); s.setAttribute('aria-orientation', 'horizontal'); s.setAttribute('aria-label', 'Resize the pane areas');
+    s.title = 'Drag to resize · double-click to share the space evenly';
+    a.el.before(s);
+    const set = (na, ha, hb, g) => { up.grow = (g * na) / (ha + hb); a.grow = g - up.grow; up.el.style.flexGrow = up.grow; a.el.style.flexGrow = a.grow; };
+    s.onpointerdown = (e) => {
+      e.preventDefault(); s.setPointerCapture(e.pointerId); s.classList.add('drag');
+      // Real browser tabs step aside while you drag (they'd take the pointer): a still picture stands in.
+      PA.drag = 'resize'; deskPlace(true);
+      const ha = up.el.getBoundingClientRect().height, hb = a.el.getBoundingClientRect().height, g = up.grow + a.grow, y0 = e.clientY;
+      s.onpointermove = (ev) => set(Math.max(90, Math.min(ha + hb - 90, ha + ev.clientY - y0)), ha, hb, g);
+      s.onpointerup = s.onpointercancel = () => { s.onpointermove = s.onpointerup = s.onpointercancel = null; s.classList.remove('drag'); PA.drag = null; paneSave(); deskPlace(true); };
+    };
+    s.onkeydown = (e) => {
+      if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+      e.preventDefault();
+      const ha = up.el.getBoundingClientRect().height, hb = a.el.getBoundingClientRect().height;
+      set(Math.max(90, Math.min(ha + hb - 90, ha + (e.key === 'ArrowUp' ? -24 : 24))), ha, hb, up.grow + a.grow);
+      paneSave(); deskPlace(true);
+    };
+    s.ondblclick = () => { for (const x of PA.list) x.grow = 1; paneMarkAreas(); paneSave(); deskPlace(true); };
+  });
+}
+function paneMarkAreas() {
+  const split = paneSplit();
+  $('#pane')?.classList.toggle('split', split);
+  for (const a of PA.list) {
+    a.el.classList.toggle('on', a === PA.focus);
+    a.el.hidden = !split && a !== PA.focus;
+    a.el.style.flexGrow = split ? a.grow || 1 : 1;
+    const sp = $('[data-pa="split"]', a.el), cl = $('[data-pa="close"]', a.el);
+    if (sp) { sp.hidden = isPhone(); sp.disabled = PA.list.length >= PANE_MAX_AREAS; sp.title = sp.disabled ? `Split: at most ${PANE_MAX_AREAS} areas (close one with ⊠ first)` : 'Split: show another tab below this one (or drag a tab to the top or bottom half of an area, or right-click a tab)'; }
+    if (cl) cl.hidden = !split;
+  }
+  for (const s of document.querySelectorAll('#pane > .pa-split')) s.hidden = !split;
+}
+function paneTabMenu(e, tab) {
+  const full = PA.list.length >= PANE_MAX_AREAS || isPhone(), a = AREA, name = PANE_TAB_NAMES[tab] || tab;
+  popMenu(e, [
+    [`⬓ Open ${name} below`, () => paneSplitTab(a, tab, 'below'), { disabled: full }],
+    [`⬒ Open ${name} above`, () => paneSplitTab(a, tab, 'above'), { disabled: full }],
+    ...(paneSplit() ? [null, ['⊠ Close this area', () => paneCloseArea(a), { danger: true }]] : []),
+  ]);
+}
+// Dragging a tab: each area shows a top and a bottom half to drop it on (or, with three areas, the area to show it in).
+function paneDropShow(tab) {
+  PA.drag = tab; deskPlace(true);
+  // Added just after the drag starts: covering the dragged tab while it starts would cancel the drag.
+  setTimeout(() => paneDropZones(tab));
+}
+function paneDropZones(tab) {
+  if (PA.drag !== tab || isPhone()) return;
+  const full = PA.list.length >= PANE_MAX_AREAS, name = PANE_TAB_NAMES[tab] || tab;
+  for (const a of PA.list) {
+    const box = document.createElement('div'); box.className = 'pa-drop';
+    box.innerHTML = full ? `<div data-half="here">Show ${esc(name)} here</div>` : `<div data-half="above">Open ${esc(name)} above</div><div data-half="below">Open ${esc(name)} below</div>`;
+    for (const z of box.children) {
+      z.ondragover = (e) => { if (!e.dataTransfer.types.includes('application/x-quorx-panetab')) return; e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; for (const y of document.querySelectorAll('.pa-drop .hot')) y.classList.toggle('hot', y === z); z.classList.add('hot'); };
+      z.ondragleave = () => z.classList.remove('hot');
+      z.ondrop = (e) => {
+        e.preventDefault();
+        const t = e.dataTransfer.getData('application/x-quorx-panetab'); paneDropHide();
+        if (!t) return;
+        if (z.dataset.half === 'here') { paneFocus(a); return inArea(a, () => setPaneTab(t)); }
+        paneSplitTab(a, t, z.dataset.half);
+      };
+    }
+    a.el.append(box);
+  }
+}
+function paneDropHide() { for (const x of document.querySelectorAll('.pa-drop')) x.remove(); PA.drag = null; deskPlace(true); }
+// Each chat remembers its areas: their tabs, sizes and which one you used (one area is the pane as it always was).
+const paneKey = (id) => `oh-pane-areas:${id}`;
+function paneSave() {
+  const c = focused(); if (!c || PA.chat !== c.id) return;
+  const areas = PA.list.map((a) => ({ tab: inArea(a, paneTab), grow: Math.round((a.grow || 1) * 1000) / 1000, art: a.st.view?.id || null, b: a.st.bActive || null, ...(a.n && a.st.termLay ? { tf: a.st.termLay.panes.map((p) => p.filter) } : {}) }));
+  const s = areas.length > 1 ? JSON.stringify({ areas, f: PA.list.indexOf(PA.focus) }) : '';
+  if (s === PA.saved) return;
+  PA.saved = s;
+  try { if (s) localStorage.setItem(paneKey(c.id), s); else localStorage.removeItem(paneKey(c.id)); } catch { /* this session only */ }
+}
+// Another chat in the pane: the areas of the one you left close, and this chat's own come back.
+function paneChat(c) {
+  const id = c?.id || null;
+  if (PA.chat === id || !PA.tpl) return false;
+  PA.chat = id;
+  const a0 = PA.list[0], was = PA.focus;
+  // The switch already set what the pane shows (in the area you used): the first area takes it.
+  if (was !== a0) { a0.st.view = was.st.view; a0.st.traceRun = was.st.traceRun; }
+  for (const a of PA.list.slice(1)) paneDropArea(a);
+  a0.grow = 1; PA.focus = a0; AREA = a0;
+  let s = null; try { s = JSON.parse(localStorage.getItem(paneKey(id)) || 'null'); } catch { /* none */ }
+  PA.saved = '';
+  if (c && Array.isArray(s?.areas) && s.areas.length > 1) {
+    const saved = s.areas.slice(0, PANE_MAX_AREAS);
+    for (let i = 1; i < saved.length; i++) paneAddArea(PA.list[i - 1], 'below');
+    saved.forEach((x, i) => {
+      const a = PA.list[i];
+      a.grow = Number(x.grow) || 1;
+      if (x.b) a.st.bActive = x.b;
+      if (Array.isArray(x.tf)) a.st.termTf = x.tf.map(String);
+      inArea(a, () => { G.view = paneView(c, PANE_TAB_NAMES[x.tab] ? x.tab : 'art', x.art || null); });
+    });
+    PA.focus = PA.list[Math.min(Math.max(0, Number(s.f) || 0), PA.list.length - 1)]; AREA = PA.focus;
+    PA.saved = JSON.stringify(s);
+  }
+  paneDividers(); paneMarkAreas();
+  return PA.list.length > 1;
+}
 // The pane's dropdown lists this chat's artifacts plus the one open "Steps" (if any).
 // Page artifacts are hosted by the server (/art/<chat>/<id>), so the preview is always the newest version;
 // sites and apps reload by themselves when files in the project folder change.
 function renderPane() {
   const c = focused();
+  // Another chat brings back its own areas: the others are drawn too.
+  if (paneChat(c)) for (const a of PA.list) if (a !== AREA) inArea(a, renderPane);
   const sel = $('#artSelect'), body = $('#paneBody'), bar = $('#appBar');
   bar.hidden = true;
   stopWatch();
   renderPaneTabs(c);
+  paneSave();
   if (!c) return;
   if (G.view.term) { setUrlBar(null); return renderTerm(c); }
-  closeTermStream();
+  if (!PA.list.some((a) => a.st.view?.term)) closeTermStream();
   if (G.view.files) { setUrlBar(null); return renderFiles(c); }
   if (G.view.browser) return renderBrowser(c);
   if (G.view.trace) {
@@ -9347,13 +9595,8 @@ async function boot() {
   makeResizer($('#sideResizer'), 'side', { min: 200, max: () => Math.min(520, window.innerWidth * 0.4) });
   makeResizer($('#paneResizer'), 'pane', { min: 260, max: () => Math.max(300, $('.layout').getBoundingClientRect().width - 360), fromRight: true });
 
-  $('#artSelect').onchange = (e) => {
-    const v = e.target.value;
-    G.view = { id: v, src: false, files: false, trace: null };
-    renderPane(); refreshTraceButtons();
-  };
+  paneAreasInit();
   wirePaneChrome();
-  $('#reloadBtn').onclick = () => { if (G.view.browser && G.dsk?.ph.isConnected) return window.ohDesktop.nav(G.dsk.sid, 'reload'); if (G.view.browser && $('#paneBody .ubview')) return ubCall('reload'); if (!$('#paneBody iframe')) return renderPane(); reloadPreview(); };
   $('#homeBtn').onclick = goHome; $('#railHome').onclick = goHome;
   placeChrome(); matchMedia('(max-width: 900px)').addEventListener('change', placeChrome);
   for (const [rail, real] of [['#railRestart', '#restartBtn'], ['#railTheme', '#themeBtn'], ['#railSettings', '#settingsBtn']]) { const b = $(rail); if (b) b.onclick = () => $(real)?.click(); }
@@ -9376,12 +9619,6 @@ async function boot() {
   matchMedia('(max-width: 900px)').addEventListener('change', () => { $('#sidebar').classList.remove('mobile-open'); syncLayout(); });
   $('#chatSearch').oninput = sidebarSearch;
   $('#newProjectBtn').onclick = () => editProject(null);
-  $('#popBtn').onclick = () => {
-    if (G.paneUrl && !G.paneUrl.startsWith('data:')) return DESK ? window.ohDesktop.openExternal(G.paneUrl) : window.open(G.paneUrl, '_blank', 'noopener');
-    const f = $('#paneBody iframe'), img = $('#paneBody img'), au = $('#paneBody audio'), vid = $('#paneBody video');
-    const url = f ? (f.srcdoc ? URL.createObjectURL(new Blob([f.srcdoc], { type: 'text/html' })) : f.src) : img?.src || au?.src || vid?.src;
-    if (url) window.open(url, '_blank');
-  };
   // No warning on close: running replies keep going on the server and this page reattaches on reload.
 
   await refreshSidebar();
@@ -9782,7 +10019,7 @@ function devAfter(projectId, r) {
   const running = (r.servers || []).filter((s) => s.status === 'running').length, busy = (r.jobs || []).length;
   (G.devCount ||= {})[projectId] = { running, busy };
   const fc = focused();
-  if (fc?.projectId === projectId) { renderPaneTabs(fc); if (G.view.term) drawRunning(fc, r); }
+  if (fc?.projectId === projectId) eachArea(() => { renderPaneTabs(fc); if (G.view.term) drawRunning(fc, r); });
 }
 async function pollDev() {
   if (document.hidden) return;
@@ -9805,6 +10042,7 @@ setInterval(pollDev, 3000);
 // One Terminal tab with three sections: your terminals (panes stacked top to bottom, each with its own tabs, added
 // above or below and resized by dragging the bar between them), what is Running (each with a Stop), and the Servers.
 function openTerminal(c, filter, sec = 'term') {
+  if (focused() === c) aimArea('term');
   const t = termState(c.projectId);
   if (filter) t.filter = t.terms.some((u) => u.id === filter) || filter === 'all' || filter === 'agent' ? filter : `srv:${filter}`;
   t.sec = sec; termSave(t);
@@ -9822,15 +10060,28 @@ function termState(projectId) {
     // Your terminals that the saved panes show come back (their shells start again when shown).
     const ids = [...new Set(['u1', ...panes.map((p) => p.filter).filter((f) => /^u\d+$/.test(f))])];
     G.term = { projectId, jobs: new Map(), order: [], seq: 0, cleared: 0, terms: ids.map((id) => ({ id, name: `Terminal ${id.slice(1)}`, cwd: '', hist: [], hi: 0 })),
-      nextTerm: Math.max(...ids.map((x) => Number(x.slice(1)))) + 1, panes, act: panes[0].id, nextPane: panes.length + 1, sec: ['term', 'run', 'srv'].includes(saved?.sec) ? saved.sec : 'term' };
+      nextTerm: Math.max(...ids.map((x) => Number(x.slice(1)))) + 1, main: { panes, act: panes[0].id, nextPane: panes.length + 1, sec: ['term', 'run', 'srv'].includes(saved?.sec) ? saved.sec : 'term' } };
+    // Each pane area showing the Terminal has its own panes (the first area's are the project's, remembered).
+    for (const k of ['panes', 'act', 'nextPane', 'sec']) Object.defineProperty(G.term, k, { get() { return termLay(this)[k]; }, set(v) { termLay(this)[k] = v; }, enumerable: true });
     // The active pane's tab, as the rest of the page knows it (Follow, Clear, a server's Logs).
     Object.defineProperty(G.term, 'filter', { get() { return termPane(this).filter; }, set(v) { termPane(this).filter = v; }, enumerable: true });
   }
   return G.term;
 }
+// Another area's panes: one pane showing what was picked for it (Activity, or a server), with ids of its own.
+function termLay(t) {
+  if (!AREA.n) return t.main;
+  const a = AREA.st;
+  if (a.termLay?.projectId !== t.projectId) {
+    const pre = `a${AREA.n}`, fs = (a.termTf?.length ? a.termTf : ['all']).slice(0, 6);
+    a.termLay = { projectId: t.projectId, panes: fs.map((f, i) => ({ id: `${pre}p${i + 1}`, filter: f, grow: 1 })), act: `${pre}p1`, nextPane: fs.length + 1, sec: 'term' };
+  }
+  return a.termLay;
+}
 const termPane = (t) => t.panes.find((p) => p.id === t.act) || t.panes[0];
 const tpaneEl = (p) => $(`#paneBody .tpane[data-pane="${p.id}"]`);
 function termSave(t) {
+  if (AREA.n) return paneSave();
   try { localStorage.setItem(termLayoutKey(t.projectId), JSON.stringify({ panes: t.panes.map((p) => ({ filter: p.filter, grow: Math.round(p.grow * 1000) / 1000 })), sec: t.sec })); } catch { /* storage off */ }
 }
 function closeTermStream() { if (G.term?.es) { G.term.es.close(); G.term.es = null; } }
@@ -9851,7 +10102,7 @@ function termApply(t, e) {
   else if (e.kind === 'end') {
     Object.assign(j, { status: 'done', code: e.code, ms: e.ms, error: e.error });
     const u = e.cwd && e.tab && t.terms?.find((x) => x.id === e.tab);
-    if (u) { u.dir = e.cwd; renderTermInput(t); }
+    if (u) { u.dir = e.cwd; eachArea(() => { if (G.view.term) renderTermInput(t); }); }
   }
   j.rev++;
   // A short timer, not requestAnimationFrame: frames are paused in background tabs and some embedded views.
@@ -9905,8 +10156,12 @@ function termHead(t, j) {
 // full: true redraws the active pane from scratch, 'all' every pane; otherwise only what changed is added.
 function termDraw(t, full) {
   if (G.term !== t) return;
-  for (const p of t.panes) termDrawPane(t, p, full === 'all' || (!!full && p.id === t.act));
-  termFilters(t);
+  const me = AREA;
+  eachArea((a) => {
+    if (!G.view.term) return;
+    for (const p of t.panes) termDrawPane(t, p, a === me && (full === 'all' || (!!full && p.id === t.act)));
+    termFilters(t);
+  });
 }
 function termDrawPane(t, p, full) {
   const root = tpaneEl(p), out = root && $('.term-out', root);
@@ -9981,13 +10236,13 @@ function termPick(t, p, f) {
 }
 function termActivate(t, p) {
   t.act = p.id;
-  for (const el of document.querySelectorAll('#paneBody .tpane')) el.classList.toggle('on', el.dataset.pane === p.id);
+  for (const el of $$a('#paneBody .tpane')) el.classList.toggle('on', el.dataset.pane === p.id);
   for (const q of t.panes) { const h = tpaneEl(q) && $('.term-hint', tpaneEl(q)); if (h && !$('.term-in', tpaneEl(q)).hidden) h.hidden = q !== p; }
 }
 // A new pane above or below, with a fresh terminal in it; the two share the space this one had.
 function termSplit(t, p, where) {
   if (t.panes.length >= 6) return;
-  const q = { id: `p${t.nextPane++}`, filter: termNew(t), grow: p.grow / 2 };
+  const q = { id: `${AREA.n ? `a${AREA.n}` : ''}p${t.nextPane++}`, filter: termNew(t), grow: p.grow / 2 };
   p.grow /= 2;
   t.panes.splice(t.panes.indexOf(p) + (where === 'below' ? 1 : 0), 0, q);
   t.act = q.id; termSave(t); renderPane();
@@ -10008,7 +10263,7 @@ function termPaneInput(t, p) {
   $('.term-note', root).hidden = !!u;
   const xbox = $('.term-x', root), outBox = $('.term-out', root);
   xbox.hidden = !full; outBox.hidden = full;
-  if (full) { mountXterm(t, u, xbox, p.id === t.act); return; }
+  if (full) { mountXterm(t, u, xbox, p.id === t.act && AREA === PA.focus); return; }
   if (!u) return;
   const pr = G.projects.find((x) => x.id === t.projectId);
   const dir = u.dir || pr?.dir || '';
@@ -10037,6 +10292,8 @@ async function mountXterm(t, u, box, focus = true) {
   const k = `${t.projectId}:${u.id}`;
   G.xt ||= new Map();
   let x = G.xt.get(k);
+  // One screen per terminal: an area drawn in the background leaves it where it shows, and says so.
+  if (x && x.el.parentElement !== box && x.el.isConnected && AREA !== PA.focus) { box.innerHTML = '<div class="fx-empty">This terminal shows in another area of the pane. Click here to show it here.</div>'; box.onclick = () => { box.onclick = null; renderTermInput(t); }; return; }
   if (x) { if (x.el.parentElement !== box) box.replaceChildren(x.el); requestAnimationFrame(() => { try { x.fit.fit(); } catch { /* hidden */ } if (focus) x.term.focus(); }); return; }
   // The pane can redraw while this one is still being set up: only one terminal per tab.
   if ((G.xtBusy ||= new Set()).has(k)) return;
@@ -10222,7 +10479,8 @@ function renderTerm(c) {
   }
   termFilters(t); renderTermInput(t);
   termDraw(t, 'all');
-  getJ(`/api/servers/overview?project=${encodeURIComponent(c.projectId)}`).then((r) => drawRunning(c, r));
+  const area = AREA;
+  getJ(`/api/servers/overview?project=${encodeURIComponent(c.projectId)}`).then((r) => inArea(area, () => drawRunning(c, r)));
 }
 // The section buttons count what runs and how many servers are up.
 function termSecCounts(c) {
@@ -10303,10 +10561,8 @@ function artifactUrl(c, a) {
 function setPaneTab(tab) {
   const c = focused(); if (!c) return;
   if (tab === 'run') return openTerminal(c, null, 'run');
-  const lastRun = [...c.agent.messages].reverse().find((m) => m.role === 'assistant' && m.runId);
-  if (tab === 'trace') G.traceRun = G.traceRun && c.agent.messages.some((m) => m.runId === G.traceRun) ? G.traceRun : lastRun?.runId || null;
-  if (tab === 'browser') refreshAgentTab(c).then((ch) => { if (ch && G.view.browser) renderPane(); });
-  G.view = { id: G.view.id, src: false, files: tab === 'files', term: tab === 'term', run: tab === 'run', browser: tab === 'browser', trace: tab === 'trace' ? (G.traceRun || '(none)') : null };
+  if (tab === 'browser') { const a = AREA; refreshAgentTab(c).then((ch) => inArea(a, () => { if (ch && G.view.browser) renderPane(); })); }
+  G.view = paneView(c, tab);
   c.paneHidden = false;
   syncLayout(); renderPane(); refreshTraceButtons(); toPreview();
 }
@@ -10348,8 +10604,32 @@ function wirePaneChrome() {
   setPaneHidden(wasHidden, true);
   let wasMax = false; try { wasMax = localStorage.getItem('oh-pane-max') === '1'; } catch { /* storage off */ }
   setMax(wasMax);
-  for (const b of document.querySelectorAll('#paneTabs [data-tab]')) b.onclick = () => (paneTab() === b.dataset.tab && b.dataset.tab !== 'art' ? setPaneTab('art') : setPaneTab(b.dataset.tab));
   const fa = $('#followAgent'); if (fa) fa.onchange = () => { G.followAgent = fa.checked; savePrefs(); };
+  wireAreaChrome();
+}
+// One area's tab strip and address bar (each area has its own copy; this runs in the area being wired).
+function wireAreaChrome() {
+  for (const b of $$a('#paneTabs [data-tab]')) {
+    b.onclick = () => (paneTab() === b.dataset.tab && b.dataset.tab !== 'art' ? setPaneTab('art') : setPaneTab(b.dataset.tab));
+    // Drag a tab to the top or bottom half of an area to show it there too; right-click for the same as a menu.
+    b.draggable = true;
+    b.ondragstart = (e) => { e.dataTransfer.setData('application/x-quorx-panetab', b.dataset.tab); e.dataTransfer.effectAllowed = 'copy'; paneDropShow(b.dataset.tab); };
+    b.ondragend = paneDropHide;
+    b.oncontextmenu = (e) => paneTabMenu(e, b.dataset.tab);
+  }
+  for (const b of $$a('#paneTabs [data-pa]')) b.onclick = () => (b.dataset.pa === 'split' ? paneSplitTab(AREA, null, 'below') : paneCloseArea(AREA));
+  $('#artSelect').onchange = (e) => {
+    const v = e.target.value;
+    G.view = { id: v, src: false, files: false, trace: null };
+    renderPane(); refreshTraceButtons();
+  };
+  $('#reloadBtn').onclick = () => { if (G.view.browser && G.dsk?.ph.isConnected) return window.ohDesktop.nav(G.dsk.sid, 'reload'); if (G.view.browser && $('#paneBody .ubview')) return ubCall('reload'); if (!$('#paneBody iframe')) return renderPane(); reloadPreview(); };
+  $('#popBtn').onclick = () => {
+    if (G.paneUrl && !G.paneUrl.startsWith('data:')) return DESK ? window.ohDesktop.openExternal(G.paneUrl) : window.open(G.paneUrl, '_blank', 'noopener');
+    const f = $('#paneBody iframe'), img = $('#paneBody img'), au = $('#paneBody audio'), vid = $('#paneBody video');
+    const url = f ? (f.srcdoc ? URL.createObjectURL(new Blob([f.srcdoc], { type: 'text/html' })) : f.src) : img?.src || au?.src || vid?.src;
+    if (url) window.open(url, '_blank');
+  };
   $('#copyUrlBtn').onclick = async () => {
     if (!G.paneUrl) return;
     const b = $('#copyUrlBtn');
@@ -10369,8 +10649,9 @@ function onAgentBrowse(c, m) {
   renderPaneTabs(c);
   // The agent's page appears as a browser tab; with "Follow the agent" the pane switches to it.
   refreshAgentTab(c).then(() => {
+    if (followsAgent(c)) aimArea('browser');
     if (followsAgent(c) && !(G.view.browser && G.bActive === `agent-${c.id}`)) { G.view = { id: G.view.id, src: false, files: false, browser: true }; G.bActive = `agent-${c.id}`; c.paneHidden = false; syncLayout(); renderPane(); }
-    else if (G.view.browser) renderPane();
+    else eachArea(() => { if (G.view.browser) renderPane(); });
   });
 }
 // With "Follow the agent", a command the agent runs brings up the Terminal tab on its output (the 🤖 Agent view, or
@@ -10591,13 +10872,13 @@ async function lendTab(c, sid) {
   for (const id of Object.keys(G.lent)) if (G.lent[id]?.sid === sid) { delete G.lent[id]; const o = G.open.get(id); if (o) renderAttachments(o); }
   G.lent[c.id] = { sid, url: t.url, title: t.title || '' };
   renderAttachments(c);
-  if (G.view.browser) renderPane();
+  eachArea(() => { if (G.view.browser) renderPane(); });
 }
 async function takeBackTab(chatId) {
   await fetch(`/api/given-tab?chat=${encodeURIComponent(chatId)}`, { method: 'DELETE' }).catch(() => {});
   delete (G.lent ||= {})[chatId];
   const c = G.open.get(chatId); if (c) renderAttachments(c);
-  if (G.view.browser) renderPane();
+  eachArea(() => { if (G.view.browser) renderPane(); });
 }
 // The harness forgets lent tabs when it restarts: the chip goes when the harness no longer has it.
 async function syncLent(c) {
@@ -11166,7 +11447,7 @@ function deskStage(t, stage) {
   // The pane redraws often while the agent works: the same tab keeps its box, so the real view isn't hidden,
   // shown and re-placed each time (that was the flicker). A different tab gets a fresh box.
   if (G.dsk && G.dsk.sid === t.sid && G.dsk.ph) { stage.replaceChildren(G.dsk.ph); deskPlace(false); return; }
-  stage.innerHTML = `<div class="dview" data-sid="${esc(t.sid)}"><img class="dsnap" alt="" hidden><div class="derr" hidden></div></div>`;
+  stage.innerHTML = `<div class="dview" data-sid="${esc(t.sid)}"><img class="dsnap" alt="" hidden><div class="dnote" hidden>This page shows in another area of the pane: a page can be in one place at a time. Click here to show it here.</div><div class="derr" hidden></div></div>`;
   const ph = $('.dview', stage);
   G.dsk = { sid: t.sid, ph, rect: '', shown: false, snap: false };
   deskPlace(true);
@@ -11186,45 +11467,64 @@ function deskPlace(force) {
   });
   return deskBusy;
 }
+// Every area showing the Browser places its own real tab in its own box; the app is told the whole set to show (the
+// others hidden). Your area goes first: a tab shown in two areas is real in yours and a still picture in the other.
+const deskAll = () => PA.list.map((a) => a.st.dsk).filter(Boolean);
 async function deskPlaceNow(force) {
-  const d = G.dsk;
   if (!DESK) return;
   // No real tab is to be seen: the app is told to hide them all, at once when we know one shows and then once a second
   // anyway. What we think shows can be wrong (a tab put up while another was being placed), and then the agent's page
   // stayed on top of every pane tab, and of Steps or Files, until the app restarted.
   const hideAll = (now) => { if (now || Date.now() - deskHidAt > 1000) { window.ohDesktop.hideAll(); deskHidAt = Date.now(); } };
-  if (!d) return hideAll(false);
+  const want = [], won = [];
+  for (const a of [PA.focus, ...PA.list.filter((x) => x !== PA.focus)]) {
+    const d = a.st.dsk; if (!d) continue;
+    if (await deskPlaceArea(a, d, force, want)) { want.push(d.sid); won.push(d); }
+  }
+  for (const d of deskAll()) if (!won.includes(d)) d.shown = false;
+  if (!want.length) { hideAll(PA.deskKey !== '' || force); PA.deskKey = ''; return; }
+  // Shown when the set changes, and again once a second (the same safety net as hiding: the app drops what isn't in it).
+  const key = want.join('|');
+  if (force || key !== PA.deskKey || Date.now() - deskHidAt > 1000) {
+    await deskAsk(window.ohDesktop.showSet ? window.ohDesktop.showSet(want) : window.ohDesktop.show(want[0]));
+    PA.deskKey = key; deskHidAt = Date.now();
+  }
+  for (const d of won) d.shown = true;
+}
+// One area's real tab: placed over its box and to be shown (true), or not to be seen now (a snapshot stands in).
+async function deskPlaceArea(a, d, force, taken) {
   const c0 = focused(), t = c0 ? browserTabs(c0).find((x) => x.sid === d.sid) : null;
-  const visible = d.ph.isConnected && G.view.browser && t && paneVisible() && d.ph.getClientRects().length && document.visibilityState === 'visible';
-  if (!visible) { hideAll(d.shown || force); d.shown = false; if (!d.ph.isConnected) G.dsk = null; return; }
+  const visible = d.ph.isConnected && a.st.view?.browser && t && paneVisible() && d.ph.getClientRects().length && document.visibilityState === 'visible';
+  if (!visible) { if (!d.ph.isConnected && a.st.dsk === d) a.st.dsk = null; return false; }
   const err = $('.derr', d.ph);
   if (t.error) {
     // Drawn once per error, not on every check: rebuilding it each time swallowed clicks on Try again.
-    if (err.hidden || d.errText !== t.error) { d.errText = t.error; err.hidden = false; err.innerHTML = `⚠ ${esc(t.error)}<br><button type="button" class="derr-retry">Try again</button>`; $('.derr-retry', err).onclick = () => { t.error = null; t.opened = null; renderPane(); }; }
-    hideAll(d.shown); d.shown = false;
-    return;
+    if (err.hidden || d.errText !== t.error) { d.errText = t.error; err.hidden = false; err.innerHTML = `⚠ ${esc(t.error)}<br><button type="button" class="derr-retry">Try again</button>`; $('.derr-retry', err).onclick = () => { t.error = null; t.opened = null; inArea(a, renderPane); }; }
+    return false;
   }
   err.hidden = true; d.errText = null;
-  // Something over the page (a menu, a popover, a dialog, a tip): show a snapshot and step aside until it closes.
-  // The real tab is drawn above the whole page, so anything of ours that lands on its box would be hidden under it.
-  const covered = deskCovered(d.ph);
-  const snap = $('.dsnap', d.ph);
-  if (covered) {
-    if (d.shown) { const url = await deskAsk(window.ohDesktop.snapshot(d.sid), 1500); if (url) { snap.src = url; snap.hidden = false; } }
-    // Hidden when the cover starts and then once a second, not only when we think it's showing: a tab the app re-made
-    // under the same name may be showing without us knowing, and would sit on top of the servers list or a dialog.
-    // (Every check, about 7 times a second, was more than that needs.)
-    if (d.shown || force || !d.coverAt || Date.now() - d.coverAt > 1000) { window.ohDesktop.hideAll(); d.coverAt = Date.now(); }
-    d.shown = false;
-    return;
+  const snap = $('.dsnap', d.ph), note = $('.dnote', d.ph);
+  // The same tab in another area (yours): its picture here, refreshed every few seconds.
+  const twice = taken.includes(d.sid);
+  if (note) note.hidden = !twice;
+  if (twice) {
+    if (!d.twiceAt || Date.now() - d.twiceAt > 3000) { d.twiceAt = Date.now(); const url = await deskAsk(window.ohDesktop.snapshot(d.sid), 1500); if (url) { snap.src = url; snap.hidden = false; } }
+    return false;
   }
-  d.coverAt = 0;
+  d.twiceAt = 0;
+  // Something over the page (a menu, a popover, a dialog, a tip, a tab being dragged, an area being resized): show a
+  // snapshot and step aside until it closes. The real tab is drawn above the whole page, so anything of ours that lands
+  // on its box would be hidden under it.
+  if (PA.drag || deskCovered(d.ph)) {
+    if (d.shown) { const url = await deskAsk(window.ohDesktop.snapshot(d.sid), 1500); if (url) { snap.src = url; snap.hidden = false; } }
+    return false;
+  }
   snap.hidden = true;
   const r = d.ph.getBoundingClientRect(), key = `${r.x},${r.y},${r.width},${r.height}`;
   if (force || key !== d.rect) { d.rect = key; await deskAsk(window.ohDesktop.bounds(d.sid, { x: r.x, y: r.y, width: r.width, height: r.height })); }
   // The pane may have changed while that was asked: placed and shown only if it is still to be seen.
-  if (G.dsk !== d || !d.ph.isConnected || !G.view.browser) { deskAgain = true; return; }
-  if (force || !d.shown) { await deskAsk(window.ohDesktop.show(d.sid)); d.shown = true; }
+  if (a.st.dsk !== d || !d.ph.isConnected || !a.st.view?.browser || !PA.list.includes(a)) { deskAgain = true; return false; }
+  return true;
 }
 // Is anything of ours drawn over the real tab's box? The page is asked what is on top on a grid over the box, so any
 // menu, popover, dialog, scrim or notice counts, whatever it is; tips that let clicks through are checked by where they are.
@@ -11255,7 +11555,7 @@ if (DESK) {
   setInterval(() => deskPlace(false), 150);
   // A menu opens on a click or a key: check right after it, not on the next tick, so it isn't drawn under the tab meanwhile.
   let deskSoon = 0;
-  const deskCheckSoon = () => { if (!G.dsk || deskSoon) return; deskSoon = requestAnimationFrame(() => { deskSoon = 0; deskPlace(false); }); };
+  const deskCheckSoon = () => { if (!deskAll().length || deskSoon) return; deskSoon = requestAnimationFrame(() => { deskSoon = 0; deskPlace(false); }); };
   for (const ev of ['click', 'pointerdown', 'keydown', 'focusin', 'toggle']) document.addEventListener(ev, deskCheckSoon, true);
   const deskStale = () => { deskSeen.dirty = true; };
   new MutationObserver(deskStale).observe(document.documentElement, { childList: true, subtree: true, attributes: true });
@@ -11273,13 +11573,14 @@ if (DESK) {
     if (ev.type === 'state') {
       const urlChanged = ev.url && ev.url !== t.url;
       Object.assign(t, { url: ev.url || t.url, opened: ev.url || t.opened, title: ev.title || t.title, loading: ev.loading, canBack: ev.canBack, canForward: ev.canForward });
-      const active = G.view.browser && G.dsk?.sid === t.sid;
-      const tt = $(`#paneBody .btab[data-sid="${CSS.escape(t.sid)}"] .bt-title`); if (tt) tt.textContent = t.title || t.url.replace(/^https?:\/\//, '').slice(0, 24);
-      if (active) {
+      eachArea(() => {
+        const active = G.view.browser && G.dsk?.sid === t.sid;
+        const tt = $(`#paneBody .btab[data-sid="${CSS.escape(t.sid)}"] .bt-title`); if (tt) tt.textContent = t.title || t.url.replace(/^https?:\/\//, '').slice(0, 24);
+        if (!active) return;
         if (urlChanged || document.activeElement !== $('#paneUrl')) setUrlBar(t.url);
         const real = $('#appBar .bv-real'); if (real) { real.textContent = `● real tab${t.loading ? ' · loading…' : ''}`; real.classList.toggle('loading', !!t.loading); }
-        const [b, f] = document.querySelectorAll('#appBar .bv-nav'); if (b) b.disabled = !t.canBack; if (f) f.disabled = !t.canForward;
-      }
+        const [b, f] = $$a('#appBar .bv-nav'); if (b) b.disabled = !t.canBack; if (f) f.disabled = !t.canForward;
+      });
     }
     if (ev.type === 'error') { t.error = `${ev.message} (${ev.url})`; deskPlace(true); }
   });
@@ -11320,8 +11621,9 @@ function sndMark(x) {
 async function setSound(op, arg) { try { G.sound = await window.ohDesktop.sound(op, arg); } catch { /* an older desktop app */ } sndRefresh(); }
 // Redraw only the sound bits (the tab strip and the bar's button), so a page's sound starting never redraws the pane.
 function sndRefresh() {
-  const c = focused(), t = c && G.view.browser && activeBTab(c);
-  const b = $('#appBar .bv-snd'); if (b && t) { b.outerHTML = sndBtnHTML(t); wireSnd($('#appBar'), t); }
+  const c = focused();
+  eachArea(() => { const t = c && G.view.browser && activeBTab(c), b = $('#appBar .bv-snd'); if (b && t) { b.outerHTML = sndBtnHTML(t); wireSnd($('#appBar'), t); } });
+  const t = c && G.view.browser && activeBTab(c);
   for (const el of document.querySelectorAll('#paneBody .btab[data-sid]')) {
     const now = el.querySelector('.bt-snd'), html = sndMark({ sid: el.dataset.sid });
     if (now) now.remove();
@@ -11371,18 +11673,19 @@ function deskAgentEvent(ev) {
   const a = (G.agentTab ||= {})[chatId];
   if (ev.type === 'agent-tab' || ev.type === 'agent-lock') {
     // A new agent tab (a new reply makes one under the same name) hasn't been placed or shown yet: forget the old one's place.
-    if (ev.type === 'agent-tab' && G.dsk?.sid === ev.sid) { G.dsk.rect = ''; G.dsk.shown = false; deskPlace(true); }
+    if (ev.type === 'agent-tab' && deskAll().some((d) => d.sid === ev.sid)) { for (const d of deskAll()) if (d.sid === ev.sid) { d.rect = ''; d.shown = false; } PA.deskKey = null; deskPlace(true); }
     if (a && ev.type === 'agent-lock') a.locked = ev.locked;
-    if (c?.id === chatId) refreshAgentTab(c).then(() => { if (G.view.browser) renderPane(); });
+    if (c?.id === chatId) refreshAgentTab(c).then(() => eachArea(() => { if (G.view.browser) renderPane(); }));
     return;
   }
   if (!a || ev.type !== 'state') return;
   Object.assign(a, { url: ev.url || a.url, title: ev.title || a.title, loading: ev.loading, canBack: ev.canBack, canForward: ev.canForward });
-  if (c?.id === chatId && G.view.browser && G.dsk?.sid === ev.sid) {
+  if (c?.id === chatId) eachArea(() => {
+    if (!G.view.browser || G.dsk?.sid !== ev.sid) return;
     setUrlBar(a.url);
     const tt = $(`#paneBody .btab[data-sid="${CSS.escape(ev.sid)}"] .bt-title`); if (tt) tt.textContent = a.title || 'Agent';
     const real = $('#appBar .bv-real'); if (real) { real.textContent = `● real tab${a.loading ? ' · loading…' : ''}`; real.classList.toggle('loading', !!a.loading); }
-  }
+  });
 }
 
 // ⚙ Settings → About, in the desktop app only: start at login (applied right away) and the data folder.

@@ -1598,7 +1598,7 @@ html body .sidebar .sb-project .sb-pname { font: 650 13px/18px var(--font-ui) !i
 html body .sidebar .sb-project.current .sb-pname, html body .sidebar .sb-project:hover .sb-pname { text-decoration: none !important; }
 html body .sidebar .sb-project.current .sb-pname { font-weight: 750 !important; }
 /* Files: never wider than the pane (a long code line scrolls inside the viewer instead of pushing the header buttons off-screen) */
-#pane > #paneBody { min-width: 0 !important; }
+#pane #paneBody { min-width: 0 !important; }
 #paneBody > .files { width: 100%; min-width: 0 !important; max-width: 100%; overflow: hidden; }
 #paneBody .files > .fview { min-width: 0 !important; overflow: hidden !important; }
 #paneBody .fview > .pv-body, #paneBody .fview .pv-body > * { min-width: 0; max-width: 100%; }
@@ -3184,3 +3184,21 @@ a.md-pathlink.md-path, .md-pathtext.md-path { color: var(--accent); }
 :is(.tc-prov-sum, .cx-prov) b { font: 600 12px var(--mono); color: var(--amber, #f59e0b); }
 #costBody .cx-provs { padding: 6px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel-2); margin: 0 0 8px; }
 .mp-unknown { color: var(--dim, var(--muted)); font-style: italic; }
+
+/* The side pane split into areas (app.js, PA): each a column of its own tabs, address bar and body, with a bar between. */
+.pane-area { display: flex; flex-direction: column; flex: 1 1 0; min-height: 0; min-width: 0; position: relative; }
+.pane-area[hidden] { display: none !important; }
+#pane.split .pane-area { min-height: 90px; }
+#pane.split .pane-area:not(.on) > .pane-tabs [data-tab].on { border-bottom-color: var(--line-strong); }
+#pane.split .pane-area.on > .pane-tabs { box-shadow: inset 2px 0 0 var(--accent); }
+.pa-split { flex: none; height: 7px; cursor: row-resize; background: var(--panel); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); position: relative; touch-action: none; }
+.pa-split[hidden] { display: none; }
+.pa-split::after { content: ''; position: absolute; left: 50%; top: 2px; width: 36px; height: 2px; margin-left: -18px; border-radius: 2px; background: var(--line-strong); }
+.pa-split:hover::after, .pa-split.drag::after, .pa-split:focus-visible::after { background: var(--accent); }
+.pa-btn[hidden] { display: none !important; }
+.pa-btn:disabled { opacity: .35; cursor: default; }
+.pa-drop { position: absolute; inset: 0; z-index: 40; display: flex; flex-direction: column; gap: 4px; padding: 4px; background: color-mix(in srgb, var(--bg) 55%, transparent); }
+.pa-drop > div { flex: 1; display: grid; place-items: center; border: 1.5px dashed var(--line-strong); border-radius: 8px; color: var(--muted); font: 600 12.5px var(--font-ui); }
+.pa-drop > div.hot { border-color: var(--accent); color: var(--text); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+#paneBody .dview .dnote { position: absolute; left: 8px; right: 8px; bottom: 8px; padding: 7px 10px; border-radius: 7px; background: var(--panel-2); border: 1px solid var(--line-strong); color: var(--text); font-size: 12px; text-align: center; cursor: pointer; }
+#paneBody .dview .dnote[hidden] { display: none; }
