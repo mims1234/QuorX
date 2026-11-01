@@ -1190,3 +1190,76 @@ test('the link check skips tags a script builds as text, and still finds a real 
   assert.deepEqual(problems.filter((p) => /links to/.test(p)), ['review.html: links to missing.png, which does not exist']);
 });
 
+
+// ---------- quorx_settings: QuorX's own settings and the project's, read freely, changed only with a click ----------
+test('quorx_settings: reads are free and never show a key; a change is a buttons-only card, then the page hears it', async () => {
+  const cards = [], prefs = { ui: { notify: 'all' }, model: 'deepseek/deepseek-v4.1-flash' };
+  const { bodies, events } = await run((body, i) => [
+    reply('', [['quorx_settings', { action: 'list', category: 'notifications' }], ['quorx_settings', { action: 'get', key: 'openrouter.apiKey' }], ['quorx_settings', { action: 'list', category: 'keys' }], ['quorx_settings', { action: 'get', key: 'project.folder' }], ['quorx_settings', { action: 'explain', key: 'approval' }]]),
+    reply('', [['quorx_settings', { action: 'set', key: 'ui.notify', value: 'off' }]]),
+    reply('', [['quorx_settings', { action: 'set', key: 'ui.fontSize', value: 99 }]]),
+    reply('Done.')][i], {
+    chatId: `qs-${Date.now().toString(36)}`, settings: { approval: 'strict' }, prefs,
+    prep: (dir) => fs.writeFileSync(path.join(dir, '.env'), 'STRIPE_KEY=sk_live_abcdefghijklmnop\n'),
+    onEvent: (e, id) => { if (e.t === 'approval' && e.tool === 'quorx_settings') { cards.push(e); setTimeout(() => { assert.equal(answerApproval(id, e.id, { reply: 'sure' }), false, 'typed words don\'t answer it'); answerApproval(id, e.id, { approve: true }); }, 10); } } });
+  const reads = toolResults(bodies[1]).map(String);
+  assert.match(reads[0], /^ui\.notify = Needs me or ends/);
+  assert.match(reads[1], /never shown to the agent or set by it.*⚙ Settings → Providers/);
+  assert.doesNotMatch(reads[2], /sk-|••/, 'keys: names at most');
+  assert.match(reads[3], /secrets: STRIPE_KEY \(names only/); assert.doesNotMatch(reads[3], /sk_live/);
+  assert.match(reads[4], /Values: strict \(🔒 Strict\), yolo \(⚡ YOLO\)[\s\S]*always waits for the user's click/);
+  assert.equal(cards.length, 1, 'reads never ask; the bad value never reached a card');
+  assert.equal(cards[0].buttonsOnly, true); assert.equal(cards[0].noAlways, false, 'an ordinary setting offers Always allow');
+  assert.match(cards[0].what, /Notifications → Tell me when a reply…: Needs me or ends → Off/);
+  const ch = of(events, 'setting_changed');
+  assert.deepEqual(ch.map(({ where, key, value, from, to }) => ({ where, key, value, from, to })), [{ where: 'quorx', key: 'ui.notify', value: 'off', from: 'Needs me or ends', to: 'Off' }]);
+  assert.match(String(toolResults(bodies[2]).at(-1)), /^Changed Tell me when a reply… \(ui\.notify\) from Needs me or ends to Off/);
+  assert.match(String(toolResults(bodies[3]).at(-1)), /^Error: Message text size must be from 12 to 18px\. Nothing changed\./);
+});
+
+test('quorx_settings in YOLO: nothing answers the card for the user; Always allow covers ordinary settings, never guarded ones', async () => {
+  const cards = [];
+  const { bodies, events } = await run((body, i) => [
+    reply('', [['quorx_settings', { action: 'set', key: 'theme', value: 'dark' }]]),
+    reply('', [['quorx_settings', { action: 'set', key: 'ui.density', value: 'compact' }]]),
+    reply('', [['quorx_settings', { action: 'set', key: 'approval', value: 'yolo' }]]),
+    reply('Done.')][i], {
+    chatId: `qsy-${Date.now().toString(36)}`, settings: { approval: 'yolo', yoloWaitSecs: 1 }, prefs: {},
+    onEvent: (e, id) => { if (e.t === 'approval' && e.tool === 'quorx_settings') { cards.push(e); setTimeout(() => answerApproval(id, e.id, e.what.includes('Theme') ? { approve: true, always: true } : { approve: false, reason: 'not now' }), 1300); } } });
+  assert.equal(cards.length, 2, 'the second ordinary change rode on Always allow; the guarded one asked again');
+  assert.ok(cards.every((c) => c.mode === 'strict' && !c.wait && c.buttonsOnly), 'no deciders, no clock: it waited past YOLO’s 1 s wait for the click');
+  assert.equal(cards[0].noAlways, false); assert.equal(cards[1].noAlways, true);
+  assert.match(cards[1].what, /Permission mode for new chats: 🔒 Strict → ⚡ YOLO/);
+  assert.deepEqual(of(events, 'setting_changed').map((e) => [e.key, e.value]), [['theme', 'dark'], ['ui.density', 'compact']]);
+  assert.match(String(toolResults(bodies[2]).at(-1)), /Always allow for settings in this chat/);
+  assert.match(String(toolResults(bodies[3]).at(-1)), /declined.*not now/);
+});
+
+test('quorx_settings on the project: budget, design system and hooks change through the same code as Project settings, and undo', async () => {
+  let pid = null, dir = null;
+  let seen = null;
+  const { bodies, events } = await run((body, i) => {
+    if (i === 3) seen = { budget: budgetState(pid).budget, design: fs.readFileSync(path.join(dir, 'DESIGN.md'), 'utf8') };
+    return [
+    reply('', [['quorx_settings', { action: 'set', key: 'project.budget', value: '$20' }]]),
+    reply('', [['quorx_settings', { action: 'set', key: 'project.design', value: 'brutalist' }]]),
+    reply('', [['quorx_settings', { action: 'set', key: 'project.hooks', op: 'add', value: { event: 'after_write', match: '*.js', command: 'npx prettier --write {file}' } }]]),
+    reply('', [['quorx_settings', { action: 'undo', key: 'project.budget' }]]),
+    reply('', [['quorx_settings', { action: 'get', key: 'project.hooks' }]]),
+    reply('Done.')][i];
+  }, {
+    chatId: `qsp-${Date.now().toString(36)}`, settings: { approval: 'strict' }, prep: (d) => { dir = d; },
+    onEvent: (e, id) => { pid = id; if (e.t === 'approval' && e.tool === 'quorx_settings') setTimeout(() => answerApproval(id, e.id, { approve: true }), 10); } });
+  assert.equal(seen.budget, 20); assert.match(seen.design, /^---[\s\S]*id: concrete/);
+  const ch = of(events, 'setting_changed');
+  assert.deepEqual(ch.map((e) => [e.where, e.key, e.from, e.to]), [['project', 'project.budget', '$10.00', '$20.00'], ['project', 'project.design', 'none', 'Concrete (concrete)'], ['project', 'project.hooks', '0 hooks', ch[2].to], ['project', 'project.budget', '$20.00', '$10.00']]);
+  assert.match(String(toolResults(bodies[4]).at(-1)), /^Put back: Budget is \$10\.00 again\./);
+  assert.match(String(toolResults(bodies[5]).at(-1)), /after_write \(\*\.js\) → npx prettier --write \{file\}/);
+});
+
+test('quorx_settings: a scheduled run reads but never changes', async () => {
+  const { bodies, events } = await run((body, i) => [reply('', [['quorx_settings', { action: 'set', key: 'ui.notify', value: 'off' }]]), reply('Done.')][i],
+    { chatId: `qss-${Date.now().toString(36)}`, scheduledBy: 'sched1', prefs: {} });
+  assert.match(String(toolResults(bodies[1])[0]), /^Refused: a scheduled run can read settings but not change them/);
+  assert.equal(of(events, 'approval').length, 0);
+});
