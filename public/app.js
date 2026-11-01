@@ -1105,6 +1105,10 @@ Every chat in this project reads, writes and runs programs in this folder.">${es
     if (!page) { list.innerHTML = '<div class="kx-wait">Could not load costs.</div>'; return; }
     if (!more) {
       $('#pjKpis', box).innerHTML = `<div><small>Spent</small><b class="pj-m">$${(p.spent || 0).toFixed(4)}</b></div><div><small>Chats</small><b class="plain">${page.total}</b></div><div><small>Budget</small><b class="plain pj-m">${p.budget != null ? `$${p.budget.toFixed(2)}` : 'No limit'}</b></div>`;
+      // Spent counts every reply in the project; the list below only the chats still here. Why they differ, when they do.
+      const gone = Number(p.unsavedCost) || 0, now = Number(p.runningCost) || 0;
+      $('#pjGap', box)?.remove();
+      $('#pjKpis', box).insertAdjacentHTML('afterend', gone >= 0.00005 || now >= 0.00005 ? `<p class="pj-gap" id="pjGap">ⓘ Spent is more than the chats below add up to.${gone >= 0.00005 ? ` <b class="pj-m">$${gone.toFixed(4)}</b> was spent by replies no chat here holds any more: chats that were deleted or rewound, or replies stopped before they were saved.` : ''}${now >= 0.00005 ? ` <b class="pj-m">$${now.toFixed(4)}</b> is from replies running now.` : ''} All of it still counts toward the budget.</p>` : '');
       list.innerHTML = page.total ? `<table class="cost-table pj-table"><thead><tr><th>Chat</th><th>Msgs</th><th>Models</th><th>Today</th><th>Total</th></tr></thead><tbody></tbody></table>` : '<div class="pjx-empty sm"><b>No spending yet</b><p>Chats in this project show here once they cost something.</p></div>';
     }
     const body = $('tbody', list);
