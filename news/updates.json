@@ -35,7 +35,11 @@
         { "kind": "fixed", "text": "A long build no longer ends on a third blank step: a blank answer gets its retries again after any step that made calls.", "pr": 188 },
         { "kind": "fixed", "text": "Menus and popovers over the Browser tab are never hidden behind the page.", "pr": 195 },
         { "kind": "fixed", "text": "The agent's page can't stay stuck on top of other pane tabs, and tabs left playing after a reload are closed.", "pr": 207 },
-        { "kind": "fixed", "text": "Sending to an @ chat shows your message at once, sends it once, and the model knows what \"this\" means.", "pr": 206 }
+        { "kind": "fixed", "text": "Sending to an @ chat shows your message at once, sends it once, and the model knows what \"this\" means.", "pr": 206 },
+        { "kind": "fixed", "text": "MCP servers stop fully on Windows, one that floods its output is stopped, and web sign-ins renew reliably.", "pr": 225 },
+        { "kind": "safety", "text": "MCP setup files, which can hold keys, are off limits to the agent's file tools, like your other key files.", "pr": 227 },
+        { "kind": "fixed", "text": "A new Quorium saved without an id is kept, and Ollama on another host or port is found.", "pr": 227 },
+        { "kind": "improved", "text": "The Permissions window opens fast with many chats, and bad requests get a clear error instead of a server error.", "pr": 226 }
       ]
     },
     {
