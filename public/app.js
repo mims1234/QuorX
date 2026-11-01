@@ -6262,8 +6262,8 @@ function openInBrowser(c, url) {
   if (focused() === c) aimArea('browser');
   if (!c || !url) return;
   let origin = url; try { origin = new URL(url, location.href).origin; } catch { /* keep as is */ }
-  const t = (G.btabs ||= []).find((x) => { try { return x.url && new URL(x.url, location.href).origin === origin; } catch { return false; } });
-  if (t) { Object.assign(t, { url, opened: null, shot: null }); G.bActive = t.sid; } else newBTab(url);
+  const t = projTabs(c.projectId).find((x) => { try { return x.url && new URL(x.url, location.href).origin === origin; } catch { return false; } });
+  if (t) { Object.assign(t, { url, opened: null, shot: null }); G.bActive = t.sid; } else newBTab(c.projectId, url);
   G.view = { id: G.view.id, src: false, files: false, browser: true };
   c.paneHidden = false; syncLayout(); renderPane();
 }
@@ -10431,7 +10431,7 @@ function renderPaneTabs(c) {
   tn.textContent = rn?.n || ''; tn.classList.toggle('busy', !!rn?.n); tb.classList.toggle('busy', !!dev?.busy);
   if (c && G.view.term) termSecCounts(c);
   const ag = c && G.agentTab?.[c.id];
-  const dot = $('[data-tab="browser"] .pt-dot', box); dot.className = `pt-dot ${ag?.locked ? 'live' : ag || G.btabs?.length ? 'has' : ''}`;
+  const dot = $('[data-tab="browser"] .pt-dot', box); dot.className = `pt-dot ${ag?.locked ? 'live' : ag || (c && projTabs(c.projectId).length) ? 'has' : ''}`;
   const fa = $('#followAgent'); if (fa) fa.checked = G.followAgent !== false;
 }
 // The address bar: the served address of what is open, editable to look at any address yourself.
@@ -10518,27 +10518,32 @@ function onAgentCommand(c) {
 // The Browser tab is a small browser of its own: the agent's page for this chat (live, and watch-only
 // while its reply works), and your own tabs. Pages run in the harness's headless browser and show as a
 // live picture you can click, scroll and type into; your own served pages can show in a frame instead.
+// Your tabs belong to a project: every chat in it shows them, and no chat in another project does.
+const projTabs = (pid) => ((G.btabsBy ||= {})[pid || ''] ||= []);
+const bTabProject = (sid) => Object.keys(G.btabsBy || {}).find((p) => G.btabsBy[p].some((x) => x.sid === sid));
+const findBTab = (sid) => { const p = bTabProject(sid); return p == null ? null : G.btabsBy[p].find((x) => x.sid === sid); };
+const chatProject = (id) => (G.open.get(id) || G.chats.find((x) => x.id === id))?.projectId;
 function browserTabs(c) {
   const agentSid = `agent-${c.id}`;
-  G.btabs ||= [];
   const list = [];
   // The agent's tab is its stored record itself, not a copy: a step's answer (its picture) and its state stay on it.
   if (G.agentTab?.[c.id]) list.push(Object.assign(G.agentTab[c.id], { sid: agentSid, agent: true }));
-  return list.concat(G.btabs);
+  return list.concat(projTabs(c.projectId));
 }
+// The tab in use, else the one last used in this project (coming back from another project's chat), else the first.
 function activeBTab(c) {
   const list = browserTabs(c);
-  return list.find((t) => t.sid === G.bActive) || list[0] || null;
+  return list.find((t) => t.sid === G.bActive) || list.find((t) => t.sid === G.bLastBy?.[c.projectId || '']) || list[0] || null;
 }
-function newBTab(url) {
+function newBTab(pid, url) {
   const t = { sid: `ub${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`, url: url || '', title: url ? '' : 'New tab' };
-  (G.btabs ||= []).push(t); G.bActive = t.sid;
+  projTabs(pid).push(t); G.bActive = t.sid;
   return t;
 }
 function renderBrowser(c) {
   const body = $('#paneBody'), bar = $('#appBar');
   const list = browserTabs(c), t = activeBTab(c);
-  if (t) G.bActive = t.sid;
+  if (t) { G.bActive = t.sid; (G.bLastBy ||= {})[c.projectId || ''] = t.sid; }
   setUrlBar(t?.url || '');
   bar.hidden = false;
   const live = t?.agent && t.locked;
@@ -10568,7 +10573,7 @@ function renderBrowser(c) {
     popMenu(e, [to ? ['↩ Take back from the agent', () => takeBackTab(to)] : ['🤖 Give to agent in this chat', () => lendTab(c, sid)], ['✕ Close tab', () => closeBTab(c, sid)]]);
   };
   for (const b of body.querySelectorAll('.bt-x')) b.onclick = () => closeBTab(c, b.dataset.close);
-  $('.btab-new', body).onclick = () => { newBTab(''); renderPane(); $('#paneUrl').focus(); };
+  $('.btab-new', body).onclick = () => { newBTab(c.projectId, ''); renderPane(); $('#paneUrl').focus(); };
   const stage = $('.bstage', body);
   if (!t || !t.url) return newTabPage(c, stage);
   if (t.commenting) return commentStage(c, t, stage);
@@ -10618,7 +10623,7 @@ function browserGo(url) {
   const c = focused(); if (!c) return;
   url = offAppHost(url);
   let t = activeBTab(c);
-  if (!t || t.agent) t = newBTab(url);
+  if (!t || t.agent) t = newBTab(c.projectId, url);
   Object.assign(t, { url, title: '', mode: null, opened: null, shot: null });
   G.bActive = t.sid;
   G.view = { id: G.view.id, src: false, files: false, browser: true };
@@ -10650,7 +10655,7 @@ async function openLink(url, from) {
   if (!c) return say('Open a chat first: links open in its Browser tab');
   // A new tab, or the empty tab you're on.
   const cur = G.view.browser ? activeBTab(c) : null;
-  const t = cur && !cur.agent && !cur.url ? cur : newBTab(u.href);
+  const t = cur && !cur.agent && !cur.url ? cur : newBTab(c.projectId, u.href);
   Object.assign(t, { url: u.href, title: '', mode: null, opened: null, shot: null });
   G.bActive = t.sid;
   G.view = { id: G.view.id, src: false, files: false, browser: true };
@@ -10714,7 +10719,7 @@ function termLinks(term) {
 // your sign-in on that site) in that chat; it is covered while the agent uses it, and Take back ends it at once.
 const lentChatOf = (sid) => Object.keys(G.lent ||= {}).find((id) => G.lent[id]?.sid === sid);
 async function lendTab(c, sid) {
-  const t = (G.btabs || []).find((x) => x.sid === sid);
+  const t = projTabs(c.projectId).find((x) => x.sid === sid);
   if (!t) return;
   if (!t.url) return uiAlert('Open a page in this tab first, then give it to the agent.');
   // A page shown in a frame has no browser tab of its own behind it: it moves to "your view" first.
@@ -10746,7 +10751,7 @@ async function syncLent(c) {
 // Closing a tab that shows one of your running servers asks first: keep the server running (reopen the address any
 // time) or stop it too.
 async function closeBTab(c, sid) {
-  const url = sid.startsWith('agent-') ? G.agentTab?.[c.id]?.url : (G.btabs || []).find((x) => x.sid === sid)?.url;
+  const url = sid.startsWith('agent-') ? G.agentTab?.[c.id]?.url : findBTab(sid)?.url;
   let u = null; try { u = url && new URL(url); } catch { /* not an address */ }
   if (u && /^(localhost|127\.0\.0\.1|\[::1\])$/.test(u.hostname)) {
     const all = await getJ('/api/servers');
@@ -10759,7 +10764,7 @@ async function closeBTab(c, sid) {
     }
   }
   const lentTo = lentChatOf(sid); if (lentTo) takeBackTab(lentTo);
-  if (sid.startsWith('agent-')) { delete G.agentTab[c.id]; } else { G.btabs = (G.btabs || []).filter((x) => x.sid !== sid); if (DESK) window.ohDesktop.close(sid); }
+  if (sid.startsWith('agent-')) { delete G.agentTab[c.id]; } else { const p = bTabProject(sid); if (p != null) G.btabsBy[p] = G.btabsBy[p].filter((x) => x.sid !== sid); if (DESK) window.ohDesktop.close(sid); }
   postJ('/api/ubrowser', { sid, op: 'close' }).catch(() => {});
   if (G.bActive === sid) G.bActive = null;
   renderPane();
@@ -11002,9 +11007,11 @@ function wireRunningAll(body) {
   for (const b of body.querySelectorAll('[data-take]')) b.onclick = async () => { b.disabled = true; const r = await postJ('/api/running/control', { op: 'takeBack', tab: Number(b.dataset.take) }); if (r.error) uiAlert(r.error); again(); };
   for (const b of body.querySelectorAll('[data-tab]')) b.onclick = async () => {
     const sid = b.dataset.tab, chatId = b.dataset.tchat;
-    // Tabs show in a chat's pane: the agent's in its own chat, yours in the chat open now (or the newest one).
-    const goTo = chatId || (!focused() && G.chats[0]?.id);
-    if (!chatId && !focused() && !goTo) return uiAlert('Open a chat first: tabs show in its pane.');
+    // Tabs show in a chat's pane: the agent's in its own chat, yours in the chat open now when it is in the tab's
+    // project, else that project's newest chat (or, for a tab of no project yet, the newest one).
+    const pid = chatId ? null : bTabProject(sid), f = focused();
+    const goTo = chatId || ((!f || (pid != null && f.projectId !== pid)) && (pid != null && G.chats.find((x) => x.projectId === pid) || G.chats[0])?.id);
+    if (!chatId && !f && !goTo) return uiAlert('Open a chat first: tabs show in its pane.');
     leave(); if (goTo) await showChat(goTo);
     G.bActive = sid; setPaneTab('browser');
   };
@@ -11014,7 +11021,7 @@ function wireRunningAll(body) {
     b.disabled = true;
     // Through the pane's own close (it forgets the tab, takes a lent one back, asks about a server it shows), then the
     // desktop's, for a tab the page no longer knows.
-    if (chatId || (G.btabs || []).some((x) => x.sid === sid)) await closeBTab({ id: chatId }, sid);
+    if (chatId || findBTab(sid)) await closeBTab({ id: chatId }, sid);
     await window.ohDesktop.tabs('close', sid).catch(() => {});
     again();
   };
@@ -11419,10 +11426,10 @@ if (DESK) {
   window.ohDesktop.on((ev) => {
     const c = focused();
     if (ev.type === 'audio') { const s = (G.sound ||= { volume: 100, tabs: {} }); (s.tabs ||= {})[ev.sid] = { ...s.tabs[ev.sid], audible: ev.audible }; sndRefresh(); return; }
-    if (ev.type === 'popup') { newBTab(ev.url); if (c) { G.view = { id: G.view.id, src: false, files: false, browser: true }; syncLayout(); renderPane(); } return; }
+    if (ev.type === 'popup') { const sid = String(ev.sid || ''); newBTab(sid.startsWith('agent-') ? chatProject(sid.slice(6)) : bTabProject(sid) ?? c?.projectId, ev.url); if (c) { G.view = { id: G.view.id, src: false, files: false, browser: true }; syncLayout(); renderPane(); } return; }
     if (ev.type === 'download') { deskDownload(ev); return; }
     if (String(ev.sid || '').startsWith('agent-')) return deskAgentEvent(ev);
-    const t = (G.btabs || []).find((x) => x.sid === ev.sid); if (!t) return;
+    const t = findBTab(ev.sid); if (!t) return;
     if (ev.type === 'state') {
       const urlChanged = ev.url && ev.url !== t.url;
       Object.assign(t, { url: ev.url || t.url, opened: ev.url || t.opened, title: ev.title || t.title, loading: ev.loading, canBack: ev.canBack, canForward: ev.canForward });
