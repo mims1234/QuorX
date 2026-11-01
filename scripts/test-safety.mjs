@@ -20,21 +20,22 @@ import { answerApproval } from '../server/agent.js';
 import { startRun, runningForChat } from '../server/runs.js';
 
 test('stop: the job host ends what a command leaves behind, and an abort or a timeout ends the whole tree with 0 left', { skip: !WIN }, async () => {
-  { // stop: the job host starts on Windows
+  { // stop: the job host starts on Windows (and the ping counter with it)
+    pingsLeft(600);
     assert.equal(await jobsAvailable(), true, JSON.stringify(jobHostStatus()));
   }
   { // stop: a detached child a command leaves behind is ended and named
-    const before = pingsLeft(600);
+    const before = await pingsLeft(600);
     const r = await runLine(tmp('sweep'), 'start /b ping -n 600 127.0.0.1 >nul & echo started', { shell: 'cmd', timeout: 20000 });
     assert.equal(r.code, 0);
     assert.match(r.out, /started/);
     assert.ok(r.leftovers, 'the leftover ping is reported');
     assert.equal(r.leftovers.left, 0);
     assert.ok(r.leftovers.ended.some((n) => /ping/i.test(n)), r.leftovers.ended.join(','));
-    assert.equal(pingsLeft(600), before, 'no ping survives');
+    assert.equal(await pingsLeft(600), before, 'no ping survives');
   }
   { // stop: aborting a running command ends its whole tree and confirms 0 left
-    const before = pingsLeft(600);
+    const before = await pingsLeft(600);
     const ac = new AbortController();
     const p = runLine(tmp('abort'), 'start /b ping -n 600 127.0.0.1 >nul & ping -n 600 127.0.0.1 >nul', { shell: 'cmd', signal: ac.signal, timeout: 30000 });
     await new Promise((r) => setTimeout(r, 1500));
@@ -44,7 +45,7 @@ test('stop: the job host ends what a command leaves behind, and an abort or a ti
     assert.equal(r.stopped.mode, 'jobs');
     assert.equal(r.stopped.left, 0);
     assert.match(r.out, /0 processes left/);
-    assert.equal(pingsLeft(600), before);
+    assert.equal(await pingsLeft(600), before);
   }
   { // stop: a timeout uses the same kill path
     const r = await runLine(tmp('timeout'), 'ping -n 600 127.0.0.1 >nul', { shell: 'cmd', timeout: 1500 });

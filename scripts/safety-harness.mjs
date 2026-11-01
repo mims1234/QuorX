@@ -5,7 +5,7 @@
 import { tempDir } from './test-home.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
-import { execSync, execFileSync } from 'node:child_process';
+import { execSync, spawn } from 'node:child_process';
 import { runAgent } from '../server/agent.js';
 import { listBackground, stopBackground } from '../server/bgjobs.js';
 import { listTerms, termStop } from '../server/agentterm.js';
@@ -21,9 +21,25 @@ export const formOpen = (title) => /powershell/i.test(execSync(`tasklist /FI "WI
 export const closeForm = (title) => { try { execSync(`taskkill /FI "WINDOWTITLE eq ${title}" /F`, { stdio: 'ignore' }); } catch { /* gone */ } };
 export const tmp = (name) => tempDir(`qx-${name}-`);
 // Pings still running with this -n count. Test files run at the same time and start pings of their own, so each test
-// counts only its own count (test-safety 600, test-computer 30, test-guards 8).
-export const pingsLeft = (n) => (WIN ? Number(execFileSync('powershell', ['-NoProfile', '-Command',
-  `@(Get-CimInstance Win32_Process -Filter "Name='PING.EXE'" | Where-Object { $_.CommandLine -match ' -n ${n} ' }).Count`]).toString().trim()) || 0 : 0);
+// counts only its own count (test-safety 600, test-computer 30, test-guards 8). WMI costs a PowerShell start and
+// ~300 ms a count, so one PowerShell stays up for the file and reads the command lines from ntdll (a few ms).
+const PINGS = `Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class QxLine {
+  [DllImport("ntdll.dll")] static extern int NtQueryInformationProcess(IntPtr h, int c, IntPtr b, int n, out int r);
+  public static string Of(System.Diagnostics.Process p) { IntPtr b = Marshal.AllocHGlobal(65536); int r;
+    try { return NtQueryInformationProcess(p.Handle, 60, b, 65536, out r) != 0 ? "" : Marshal.PtrToStringUni(Marshal.ReadIntPtr(b, IntPtr.Size), (ushort)Marshal.ReadInt16(b) / 2); }
+    catch { return ""; } finally { Marshal.FreeHGlobal(b); } } }'
+while ($null -ne ($n = [Console]::In.ReadLine())) { [Console]::Out.WriteLine(@([Diagnostics.Process]::GetProcessesByName('PING') | Where-Object { [QxLine]::Of($_) -match " -n $n " }).Count); [Console]::Out.Flush() }`;
+let ps;
+export const pingsLeft = (n) => (!WIN ? 0 : new Promise((done) => {
+  if (!ps) {
+    ps = spawn('powershell', ['-NoProfile', '-EncodedCommand', Buffer.from(PINGS, 'utf16le').toString('base64')], { stdio: ['pipe', 'pipe', 'ignore'] });
+    ps.unref(); ps.stdin.unref(); ps.waiting = []; let out = '';
+    ps.stdout.on('data', (d) => { out += d; let i; while ((i = out.indexOf('\n')) >= 0) { ps.waiting.shift()(Number(out.slice(0, i)) || 0); out = out.slice(i + 1); } if (!ps.waiting.length) ps.stdout.unref(); });
+    ps.on('close', () => { for (const w of ps.waiting.splice(0)) w(NaN); ps = null; }); // never a quiet 0
+  }
+  const t = setTimeout(() => ps?.kill(), 15000); // a counter that never answers (Add-Type failed) fails, not hangs
+  ps.waiting.push((v) => { clearTimeout(t); done(v); }); ps.stdout.ref(); ps.stdin.write(`${n}\n`);
+}));
 // ---------- the shell tool, end to end (scripted model, no network) ----------
 let rn = 0;
 export const reply = (text, calls = []) => ({ text, toolCalls: calls.map(([name, args], i) => ({ id: `s${++rn}_${i}`, type: 'function', function: { name, arguments: JSON.stringify(args) } })), usage: { cost: 0 }, ms: 1, firstMs: 1, finishReason: 'stop' });
