@@ -10,6 +10,7 @@ import { spawn } from 'node:child_process';
 import { HOME } from './openrouter.js';
 import { renameSoon } from './fsretry.js';
 import { tokenFor, signedIn, signOut } from './mcpauth.js';
+import { killTree } from './opencodelocal.js';
 
 const FILE = () => path.join(HOME, 'data', 'mcp.json');
 export const MCP_MAX = 200, MASK = '••••••';
@@ -17,6 +18,7 @@ const NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/;
 const VERSION = (() => { try { return JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version; } catch { return '0'; } })();
 const PROTOCOL = '2025-06-18';
 const OUT_CHARS = 30000;
+const LINE_MAX = 10e6; // a server that writes more than this without a line break is broken: it is stopped
 
 // ---------- the saved list ----------
 const text = (v, n = 2000) => String(v ?? '').replace(/[\u0000-\u0008\u000b-\u001f]/g, '').trim().slice(0, n);
@@ -177,11 +179,14 @@ function stdioClient(s) {
     : spawn(s.command, s.args, { env, cwd: s.cwd || HOME, stdio: ['pipe', 'pipe', 'pipe'] });
   const pending = new Map();
   let seq = 0, buf = '', errTail = '', dead = null;
-  const fail = (why) => { dead = why; for (const p of pending.values()) p.reject(new Error(why)); pending.clear(); };
+  const fail = (why) => { dead ||= why; for (const p of pending.values()) p.reject(new Error(dead)); pending.clear(); };
+  // On Windows the server runs under cmd.exe: killing cmd.exe alone leaves npx or node running, so the whole tree goes.
+  const stop = () => { if (child.pid && child.exitCode == null && child.signalCode == null) win ? killTree(child.pid) : child.kill(); };
   child.on('error', (e) => fail(`could not start ${s.command}: ${e.message}`));
   child.on('exit', (code) => fail(`the server stopped${code != null ? ` (exit ${code})` : ''}${errTail ? `: ${clipText(errTail.trim().split('\n').at(-1), 300)}` : ''}`));
   child.stderr.on('data', (d) => { errTail = (errTail + d).slice(-2000); });
   child.stdout.on('data', (d) => {
+    if (dead) return;
     buf += d;
     for (let i; (i = buf.indexOf('\n')) >= 0;) {
       const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
@@ -190,6 +195,8 @@ function stdioClient(s) {
       if (m.id != null && pending.has(m.id) && (m.result !== undefined || m.error)) { const p = pending.get(m.id); pending.delete(m.id); m.error ? p.reject(new Error(m.error.message || 'error')) : p.resolve(m.result); }
       else if (m.id != null && m.method) child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: m.id, error: { code: -32601, message: 'QuorX does not offer that' } })}\n`); // e.g. sampling, roots
     }
+    // What is left is one unfinished line: a server that never ends it would fill the memory.
+    if (buf.length > LINE_MAX) { buf = ''; fail(`the server wrote over ${LINE_MAX / 1e6} MB without a line break, which isn't MCP: QuorX stopped it`); stop(); }
   });
   const send = (o) => { try { child.stdin.write(`${JSON.stringify(o)}\n`); } catch { /* exited */ } };
   return {
@@ -200,7 +207,7 @@ function stdioClient(s) {
       send({ jsonrpc: '2.0', id, method, params });
     }),
     notify: (method, params) => send({ jsonrpc: '2.0', method, ...(params ? { params } : {}) }),
-    close: () => { try { child.stdin.end(); child.kill(); } catch { /* gone */ } },
+    close: () => { try { child.stdin.end(); stop(); } catch { /* gone */ } },
     alive: () => !dead,
   };
 }

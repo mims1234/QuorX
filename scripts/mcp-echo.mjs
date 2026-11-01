@@ -7,6 +7,8 @@ import readline from 'node:readline';
 const notes = [];
 const out = (o) => process.stdout.write(`${JSON.stringify(o)}\n`);
 process.stdout.write('mcp-echo starting (a log line, not JSON)\n');
+// ECHO_PIDFILE: writes its process id there and keeps running after its input closes, as some servers do.
+if (process.env.ECHO_PIDFILE) { (await import('node:fs')).writeFileSync(process.env.ECHO_PIDFILE, String(process.pid)); setInterval(() => {}, 1e3); }
 readline.createInterface({ input: process.stdin }).on('line', (line) => {
   let m; try { m = JSON.parse(line); } catch { return; }
   if (m.id == null) return; // notifications
