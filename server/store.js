@@ -138,7 +138,7 @@ export const agentsOf = (c) => (c.agent ? [c.agent] : c.layouts?.[c.mode] || c.l
 // ---------- per-chat summaries, cached ----------
 // Each chat file is parsed once; the summary is reused until the file changes (by size and mtime).
 // The sidebar and the costs view both read these, so neither re-parses every chat on every request.
-const SUMMARIES = new Map(); // file name → { key, s }
+const SUMMARIES = new Map(); // file name → { key, s, blobs, perms }
 // What a reply cost: its totals, or for one that ended without them (an error, a dropped connection, a restart),
 // the calls it made, from its steps. Those were paid for, so they count like any other.
 function replySpend(m, prev = null) {
@@ -211,15 +211,25 @@ const INDEX_V = 4; // 2: each entry also names the pictures its chat uses; 3: an
 // The pictures a chat names (/blob/…), for what deleting it would free.
 const blobsIn = (text) => [...new Set(String(text).match(/\/blob\/[0-9a-f]{64}\.[a-z0-9]{2,5}/g) || [])].map((x) => x.slice(6));
 const keyOf = (st) => `${st.size}:${st.mtimeMs}`;
+// What the chat allows on its own (its rules, tools, apps and folders), for the Permissions window; null for nothing.
+// Kept in the index entry, not the sidebar's summary. An entry saved before it had them has none (undefined) and is
+// read again: by the background pass soon after start, or at once when they are asked for first.
+function permsOf(doc) {
+  const a = doc?.agent || {}, list = (x) => (Array.isArray(x) ? x : []);
+  const p = { cmdRules: list(a.cmdRules), allowed: list(a.allowed), allowedMeta: a.allowedMeta || {}, apps: list(a.apps), folders: list(a.folders) };
+  return p.cmdRules.length + p.allowed.length + p.apps.length + p.folders.length ? p : null;
+}
+const entryOf = (key, doc, text) => ({ key, s: summarise(doc), blobs: blobsIn(text), perms: permsOf(doc) });
+const fresh = (e, key) => e?.key === key && e.perms !== undefined;
 let indexReady = false, indexVersion = 0, indexSaved = 0, reconcileAt = 0, reconciling = false, saveTimer = null;
 const dirty = new Set(); // file names the watcher saw change
 const changed = () => { indexVersion++; LIST = null; ROLLUP = null; if (!saveTimer) saveTimer = setTimeout(saveIndex, 15e3).unref?.() ?? null; };
 function readSummary(f) {
   try {
     const p = path.join(DIR, f), st = fs.statSync(p), key = keyOf(st), hit = SUMMARIES.get(f);
-    if (hit?.key === key) return;
+    if (fresh(hit, key)) return;
     const text = fs.readFileSync(p, 'utf8');
-    SUMMARIES.set(f, { key, s: summarise(JSON.parse(text)), blobs: blobsIn(text) }); changed();
+    SUMMARIES.set(f, entryOf(key, JSON.parse(text), text)); changed();
   } catch (e) { if (e.code === 'ENOENT' && SUMMARIES.delete(f)) changed(); /* else: being written right now, next time */ }
 }
 function loadIndex() {
@@ -259,9 +269,9 @@ async function reconcile() {
       await Promise.all(names.slice(i, i + 32).map(async (f) => {
         try {
           const p = path.join(DIR, f), st = await fs.promises.stat(p), key = keyOf(st);
-          if (SUMMARIES.get(f)?.key === key) return;
+          if (fresh(SUMMARIES.get(f), key)) return;
           const text = await fs.promises.readFile(p, 'utf8');
-          SUMMARIES.set(f, { key, s: summarise(JSON.parse(text)), blobs: blobsIn(text) }); changed();
+          SUMMARIES.set(f, entryOf(key, JSON.parse(text), text)); changed();
         } catch { /* being written right now: next pass */ }
       }));
       await new Promise((r) => setTimeout(r, 4)); // let requests through between batches
@@ -335,7 +345,14 @@ export function chatPage({ project = '', q = '', offset = 0, limit = 50 } = {}) 
 // A chat written by this QuorX: its entry updated at once (the watcher would also see it, a moment later).
 function indexWrite(id, doc, text) {
   const f = `${id}.json`;
-  try { SUMMARIES.set(f, { key: keyOf(fs.statSync(path.join(DIR, f))), s: summarise(doc), blobs: blobsIn(text) }); changed(); } catch { dirty.add(f); }
+  try { SUMMARIES.set(f, entryOf(keyOf(fs.statSync(path.join(DIR, f))), doc, text)); changed(); } catch { dirty.add(f); }
+}
+/** What a chat allows on its own, from the index ({ cmdRules, allowed, allowedMeta, apps, folders }, or null). */
+export function chatPerms(id) {
+  summaries();
+  const f = `${id}.json`;
+  if (SUMMARIES.get(f)?.perms === undefined) readSummary(f); // saved before the index kept them
+  return SUMMARIES.get(f)?.perms ?? null;
 }
 /** For what deleting a chat frees: its file's size and the pictures it names, from the index (null: no such chat). */
 export function chatPictureRefs(id) {

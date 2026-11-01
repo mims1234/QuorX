@@ -36,7 +36,7 @@ import { shellRun, shellClose, shellInfo } from './server/shell.js';
 import { ptyAvailable, ptyOpen, ptyWrite, ptyResize, ptyFollow, ptyClose } from './server/pty.js';
 // Pages the agent wrote, served from this app's own address, get their own opaque origin: their requests to /api are refused.
 const SANDBOX_CSP = 'sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads';
-import { listChats, sidebarChats, chatPage, chatPictureRefs, pictureRefCounts, getTrace, getChatForPage, getChat, saveChat, patchChat, settleReply, trashChat, duplicateChat, validId, listProjects, saveProject, forgetProject, setProjectColor, setProjectAlias, setProjectFlags, costSummary, costChats, providerUsage } from './server/store.js';
+import { listChats, chatPerms, sidebarChats, chatPage, chatPictureRefs, pictureRefCounts, getTrace, getChatForPage, getChat, saveChat, patchChat, settleReply, trashChat, duplicateChat, validId, listProjects, saveProject, forgetProject, setProjectColor, setProjectAlias, setProjectFlags, costSummary, costChats, providerUsage } from './server/store.js';
 import { runLine, ALLOWED, copyTemplate, workspaceDir, safePath, fullLocalPath,chatFolder, listFiles, listDir, listServers, stopServerWait, restartServer, serverLog, startServer, restoreCheckpoint, listCheckpoints, pruneCheckpoints, undoConflicts, changedFiles, reviewFiles, reviewDiff, undoFile, serverOverview, launchConfigs, saveLaunchConfig, removeLaunchConfig, ensureAgentDir, agentSpace } from './server/workspace.js';
 import { followTerm, runningJobs, stopJob } from './server/terminal.js';
 import { runningIn, runningAll, stopRunning, stopAllIn } from './server/running.js';
@@ -623,14 +623,13 @@ const server = http.createServer(async (req, res) => {
     }
     // What each chat of a project allows on its own (its rules, tools, apps and folders), for the project's
     // Permissions section. Read only: a chat's own list changes in that chat.
-    // Without a project: every chat's (the ⚙ Settings permissions window).
+    // Without a project: every chat's (the ⚙ Settings permissions window). From the chat index, so no chat file is read.
     if (url.pathname === '/api/permissions/chats' && req.method === 'GET') {
       const pid = url.searchParams.get('project');
       if (pid && !validId(pid)) return json(res, 400, { error: 'bad project id' });
       const chats = listChats().filter((c) => !pid || c.projectId === pid).slice(0, pid ? 300 : 2000).flatMap((c) => {
-        const a = getChat(c.id)?.agent || {};
-        const n = (a.cmdRules || []).length + (a.allowed || []).length + (a.apps || []).length + (a.folders || []).length;
-        return n ? [{ id: c.id, title: c.title || 'Untitled chat', projectId: c.projectId || 'scratch', cmdRules: a.cmdRules || [], allowed: a.allowed || [], allowedMeta: a.allowedMeta || {}, apps: a.apps || [], folders: a.folders || [] }] : [];
+        const p = chatPerms(c.id);
+        return p ? [{ id: c.id, title: c.title || 'Untitled chat', projectId: c.projectId || 'scratch', ...p }] : [];
       });
       return json(res, 200, { chats });
     }
@@ -674,7 +673,8 @@ const server = http.createServer(async (req, res) => {
       try { const q = saveQuorium(b); return json(res, 200, { ok: true, quorium: q, quoriums: listQuoriums() }); } catch (e) { return json(res, 200, { error: e.message }); }
     }
     if (url.pathname.startsWith('/api/quoriums/') && req.method === 'DELETE') {
-      const id = decodeURIComponent(url.pathname.slice('/api/quoriums/'.length));
+      const id = decodePath(url.pathname.slice('/api/quoriums/'.length));
+      if (id == null) return json(res, 400, { error: 'bad quorium id' });
       return json(res, 200, { ok: removeQuorium(id), quoriums: listQuoriums() });
     }
     // ---- scheduled tasks: list, add, change (pause, resume), remove, run now; and notices for the page ----
@@ -810,7 +810,7 @@ const server = http.createServer(async (req, res) => {
     }
     // Stop: the chat's reply ends (its Chrome or desktop use with it). Take back: a lent Chrome tab is yours again.
     if (url.pathname === '/api/running/control' && req.method === 'POST') {
-      const b = JSON.parse(await readBody(req, 1e4));
+      const b = JSON.parse(await readBody(req, 1e4) || '{}') || {};
       if (b.op === 'takeBack' && Number.isInteger(b.tab)) return json(res, 200, { ok: !!takeBackSid(`chrome-${b.tab}`) });
       if (b.op === 'stop' && validId(b.chatId)) return json(res, 200, { ok: true, stopped: stopChat(b.chatId) });
       return json(res, 400, { error: 'bad request' });
