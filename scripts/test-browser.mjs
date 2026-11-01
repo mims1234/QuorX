@@ -174,3 +174,41 @@ test('network events: only data requests are kept, with no headers, from full or
   assert.deepEqual({ ...list[0], at: 0 }, { id: '2', ref: 'n1', method: 'GET', url: 'https://x/api', type: 'Fetch', at: 0, status: 200, mime: 'application/json', size: 1234, done: true, failed: '' });
   assert.equal(slimNetworkEvent('Network.requestWillBeSent', { requestId: '3', type: 'Script', request: { url: 'https://x/s.js' } }), null);
 });
+
+test('Browser tabs belong to a project: a chat never shows another project’s tabs, and the agent’s tab stays with its chat', async () => {
+  const fs = await import('node:fs');
+  const page = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const cut = (from, to) => { const i = page.indexOf(from), j = page.indexOf(to, i); assert.ok(i >= 0 && j > i, from); return page.slice(i, j); };
+  const src = cut('// Your tabs belong to a project', 'function renderBrowser(c)') + cut('function openInBrowser(c, url)', '\n}\n') + '\n}\n';
+  const G = { open: new Map(), chats: [], view: { id: null }, bActive: null, agentTab: {} };
+  let shown = null;
+  const ui = new Function('G', 'location', 'focused', 'aimArea', 'syncLayout', 'renderPane', `${src}; return { browserTabs, activeBTab, newBTab, openInBrowser, findBTab, bTabProject };`)(
+    G, { href: 'http://localhost:5199/' }, () => shown, () => {}, () => {}, () => {});
+  const a1 = { id: 'a1', projectId: 'A' }, a2 = { id: 'a2', projectId: 'A' }, b1 = { id: 'b1', projectId: 'B' };
+  const sids = (c) => ui.browserTabs(c).map((t) => t.url || t.sid);
+  // Both projects start a dev server at once.
+  shown = a1; ui.openInBrowser(a1, 'http://localhost:3001/');
+  shown = b1; ui.openInBrowser(b1, 'http://localhost:3002/');
+  assert.deepEqual(sids(a1), ['http://localhost:3001/']);
+  assert.deepEqual(sids(b1), ['http://localhost:3002/']);
+  // A new chat in A sees A's tabs; the tab in use in B never shows in A.
+  assert.deepEqual(sids(a2), ['http://localhost:3001/']);
+  assert.equal(ui.activeBTab(a2).url, 'http://localhost:3001/');
+  // A restart reuses the project's tab for the same address, not the other project's.
+  shown = a1; ui.openInBrowser(a1, 'http://localhost:3001/again');
+  assert.deepEqual(sids(a1), ['http://localhost:3001/again']);
+  assert.deepEqual(sids(b1), ['http://localhost:3002/']);
+  // The same address in two projects is two tabs.
+  shown = b1; ui.openInBrowser(b1, 'http://localhost:3001/');
+  assert.equal(sids(b1).length, 2); assert.equal(sids(a1).length, 1);
+  // The agent's own tab is per chat: only its chat shows it.
+  G.agentTab.a1 = { url: 'https://example.com/' };
+  assert.deepEqual(sids(a1), ['https://example.com/', 'http://localhost:3001/again']);
+  assert.deepEqual(sids(a2), ['http://localhost:3001/again']);
+  // Tabs are found (desktop events, closing) across projects, each in its own.
+  const tb = ui.browserTabs(b1)[0];
+  assert.equal(ui.findBTab(tb.sid), tb); assert.equal(ui.bTabProject(tb.sid), 'B');
+  // Coming back to a project shows the tab last used there.
+  G.bLastBy = { A: ui.browserTabs(a2)[0].sid }; G.bActive = tb.sid;
+  assert.equal(ui.activeBTab(a2).url, 'http://localhost:3001/again');
+});
