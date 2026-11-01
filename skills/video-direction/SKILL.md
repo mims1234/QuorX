@@ -11,13 +11,14 @@ Use this first for any video request. It covers the decisions every route shares
 | Route | Picture comes from | Load | Cost |
 |---|---|---|---|
 | Code | `render(t)` on a canvas, SVG, WebGL or three.js page | `film-render` | free |
+| Code (HyperFrames) | timed HTML clips animated with GSAP, rendered by the HyperFrames CLI | `film-hyperframes` | free; installs a package from npm |
 | Moving stills | `imagine` stills (or the user's photos), each turned into a clip with `make_video` from that still | `film-from-images`, `film-from-ai-clips` | about $1 for 30 s plus the stills |
 | Images | the user's photos, screenshots or `imagine` stills, moved by a camera only | `film-from-images` | free, or paid per image; reads as a slideshow |
 | AI clips | `make_video` shots of up to 15 s, joined | `film-from-ai-clips` | paid per clip, usually the most expensive |
 | Footage | the user's recordings, screen captures or interviews, cut together | `film-from-footage` | free |
 | Mix | any of the above in one timeline, for example code titles over footage or AI clips inside a code-drawn frame | the skills for each part | sum of the parts |
 
-- Default to **code** for product, data and motion-design films: every frame can be re-rendered, and it costs nothing.
+- Default to **code** for product, data and motion-design films: every frame can be re-rendered, and it costs nothing. Use `film-render` unless the film is mostly type, UI layouts and captions, or needs transparent overlays or media on tracks; then offer **HyperFrames** and get approval for its install. Either way, load `motion-design` for the motion.
 - Use **moving stills** when the subject is photographic and video clips are on: the stills keep the look consistent and every shot moves. Plain **images** with camera moves only when clips are off or the user wants it free. **AI clips** from text only when no still is needed; **footage** when the user has real recordings.
 - Short design-led pieces (5-15 s): also load `motion-graphics`. 3D objects or characters built from a reference picture: `three-from-image`.
 - Every route also loads `film-sound` and `film-review`. Load `film-style` when the user names a look or wants a reusable one.

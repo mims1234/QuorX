@@ -1,6 +1,6 @@
 ---
 name: motion-graphics
-description: Make a short design-led motion piece (5-15 s; logo sting, product teaser, title sequence, social loop, kinetic type) in code, from a brief with testable signature features, per-second beats and an exact output spec. Load with video-direction and film-render.
+description: Make a short design-led motion piece (5-15 s; logo sting, product teaser, title sequence, social loop, kinetic type) in code, from a brief with testable signature features, per-second beats and an exact output spec. Load with video-direction, motion-design and film-render (or film-hyperframes).
 ---
 
 # Motion graphics
@@ -16,6 +16,7 @@ A short motion piece lives or dies on its first half-second, one hero moment and
 The creative seed may change if a stronger idea appears. The signature features may not.
 
 ## 2. Motion craft
+The eases, timings, title entrances and transitions with exact numbers are in `motion-design`. For a short piece in particular:
 - Hook in the first 0.5 s: something moves or appears at once.
 - Every meaningful move has anticipation, action and follow-through. Overlap the parts (a title's letters land 2-4 frames apart), and move along arcs, not straight lines, when the style allows.
 - One hero moment, timed to the strongest hit in the music.
