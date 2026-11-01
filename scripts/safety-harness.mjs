@@ -5,7 +5,7 @@
 import { tempDir } from './test-home.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 import { runAgent } from '../server/agent.js';
 import { listBackground, stopBackground } from '../server/bgjobs.js';
 import { listTerms, termStop } from '../server/agentterm.js';
@@ -20,7 +20,10 @@ export const FORM = (title) => `Add-Type -AssemblyName System.Windows.Forms\n$f 
 export const formOpen = (title) => /powershell/i.test(execSync(`tasklist /FI "WINDOWTITLE eq ${title}" /NH`).toString());
 export const closeForm = (title) => { try { execSync(`taskkill /FI "WINDOWTITLE eq ${title}" /F`, { stdio: 'ignore' }); } catch { /* gone */ } };
 export const tmp = (name) => tempDir(`qx-${name}-`);
-export const pingsLeft = () => (WIN ? (execSync('tasklist /FI "IMAGENAME eq PING.EXE" /NH').toString().match(/PING\.EXE/gi) || []).length : 0);
+// Pings still running with this -n count. Test files run at the same time and start pings of their own, so each test
+// counts only its own count (test-safety 600, test-computer 30, test-guards 8).
+export const pingsLeft = (n) => (WIN ? Number(execFileSync('powershell', ['-NoProfile', '-Command',
+  `@(Get-CimInstance Win32_Process -Filter "Name='PING.EXE'" | Where-Object { $_.CommandLine -match ' -n ${n} ' }).Count`]).toString().trim()) || 0 : 0);
 // ---------- the shell tool, end to end (scripted model, no network) ----------
 let rn = 0;
 export const reply = (text, calls = []) => ({ text, toolCalls: calls.map(([name, args], i) => ({ id: `s${++rn}_${i}`, type: 'function', function: { name, arguments: JSON.stringify(args) } })), usage: { cost: 0 }, ms: 1, firstMs: 1, finishReason: 'stop' });
