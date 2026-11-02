@@ -538,6 +538,32 @@ test('the prompt enhancer never runs on its own: a card asks first (Enhance, Sen
   }
 });
 
+test('save_skill asks where it goes: this project, all projects, or not at all; the agent suggestion is the recommended one', async () => {
+  const { HOME } = await import('../server/openrouter.js');
+  const mine = (id) => path.join(HOME, 'data', 'skills', id, 'SKILL.md');
+  for (const [choice, where, id] of [[0, 'project', 'proj-skill'], [1, 'mine', 'all-skill'], [2, null, 'no-skill']]) {
+    const { dir, events, bodies } = await run((body, i) => [reply('', [['save_skill', { name: id, description: 'how to do x', instructions: '1. do x', where: 'all' }]]), reply('Done.')][i], {
+      settings: { approval: 'strict' }, onEvent: (e, rid) => { if (e.t === 'question' && e.gate === 'skill') setTimeout(() => answerQuestion(rid, e.id, { choice }), 5); } });
+    const q = of(events, 'question').filter((e) => e.gate === 'skill');
+    assert.equal(q.length, 1);
+    assert.deepEqual(q[0].options, ['This project', 'All projects', "Don't save"]);
+    assert.equal(q[0].recommended, 1, 'the agent suggested all projects');
+    assert.equal(of(events, 'approval').filter((e) => e.tool === 'save_skill').length, 0, 'no approval card on top of it');
+    assert.equal(fs.existsSync(path.join(dir, '.quorx', 'skills', id, 'SKILL.md')), where === 'project');
+    assert.equal(fs.existsSync(mine(id)), where === 'mine');
+    if (!where) assert.match(toolResults(bodies[1]).at(-1), /chose not to save the skill/);
+    fs.rmSync(path.dirname(mine(id)), { recursive: true, force: true });
+  }
+  { // a broken save fails before anyone is asked; a scheduled run saves to the project without asking
+    const { events, bodies } = await run((body, i) => [reply('', [['save_skill', { name: 'x', description: 'y' }]]), reply('Done.')][i]);
+    assert.equal(of(events, 'question').length, 0);
+    assert.match(toolResults(bodies[1]).at(-1), /needs instructions/);
+    const s = await run((body, i) => [reply('', [['save_skill', { name: 'sched-skill', description: 'y', instructions: 'z' }]]), reply('Done.')][i], { scheduledBy: 'sched1', chatId: `sk-${Date.now().toString(36)}`, prefs: {} });
+    assert.equal(of(s.events, 'question').length, 0);
+    assert.ok(fs.existsSync(path.join(s.dir, '.quorx', 'skills', 'sched-skill', 'SKILL.md')));
+  }
+});
+
 // ---------- ⚡ YOLO waits a few seconds for the user before the deciders answer ----------
 const pickSecond = async ({ voters, questions }) => {
   const q = questions[0], keys = Object.keys(q.options);

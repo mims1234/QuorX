@@ -710,7 +710,7 @@ const PROJECT_TOOLS = [
   { type: 'function', function: { name: 'request_secret', description: 'Ask the user for a secret the project needs (an API key, a password, a token). They type it into a card in the page; QuorX saves it to the project\'s .env (and adds .env to .gitignore). You only hear that it is set, never the value: use it by its name from the environment. Your work waits for the answer.', parameters: { type: 'object', required: ['name', 'why'], properties: { name: { type: 'string', description: 'The variable name, e.g. OPENAI_API_KEY' }, why: { type: 'string', description: 'One short sentence: what it is for and where the user gets it' } } } } },
   { type: 'function', function: { name: 'delete_file', description: 'Delete a file from the project (it moves to .quorx/trash, so it can be recovered).', parameters: { type: 'object', required: ['path'], properties: { path: { type: 'string' } } } } },
   ...(TEMPLATE_LIST.length ? [{ type: 'function', function: { name: 'scaffold', description: `Copy a starter template into the project (never overwrites existing files). Templates: ${TEMPLATE_LIST.map((t) => `${t.name} (${t.description})`).join('; ')}`, parameters: { type: 'object', required: ['template'], properties: { template: { type: 'string', enum: TEMPLATE_LIST.map((t) => t.name) } } } } }] : []),
-  { type: 'function', function: { name: 'save_skill', description: 'Save what worked as a reusable skill for this project, so future chats can load it with use_skill. Use it after a task that needed several fixes to get right.', parameters: { type: 'object', required: ['name', 'description', 'instructions'], properties: { name: { type: 'string', description: 'short-kebab-name' }, description: { type: 'string', description: 'One line: when to use this skill' }, instructions: { type: 'string', description: 'The steps, rules and gotchas, in Markdown' } } } } },
+  { type: 'function', function: { name: 'save_skill', description: 'Save what worked as a reusable skill, so future chats can load it with use_skill. Use it after a task that needed several fixes to get right. The user decides where it goes: this project only, or all their projects (a card asks them; say which you suggest with where).', parameters: { type: 'object', required: ['name', 'description', 'instructions'], properties: { name: { type: 'string', description: 'short-kebab-name' }, description: { type: 'string', description: 'One line: when to use this skill' }, instructions: { type: 'string', description: 'The steps, rules and gotchas, in Markdown' }, where: { type: 'string', enum: ['project', 'all'], description: 'Your suggestion: project (only about this project, its files or setup) or all (works in any project)' } } } } },
 ];
 // Paid tools that are off in this chat: one card asks the user to switch them on (each with a model to pick), instead
 // of the agent quietly working around them (a film without the music tool got a rumbling score written in code).
@@ -3182,7 +3182,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (name === 'delete_file') return `Delete ${args.path} (moves it to .quorx/trash)`;
     if (name === 'scaffold') return `Copy the "${args.template}" starter template into the project`;
     if (name === 'remember') return `Remember in every chat: “${clip(args.text, 200)}”`;
-    if (name === 'save_skill') return `Save a project skill "${args.name}": ${clip(args.description, 80)}`;
+    if (name === 'save_skill') return `Save a skill "${args.name}": ${clip(args.description, 80)}`;
     if (name === 'use_skill') return `Load the skill "${args.name}"`;
     if (name === 'music_map') return `Map the music in ${clip(args.path, 80)}`;
     if (name === 'fit_music') return `Fit ${clip(args.path, 60)} to ${args.seconds} s → ${clip(args.out, 60)}`;
@@ -3404,7 +3404,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     // Commands have their own gate (the rule engine, in codeTool), so they never get a second, generic card.
     // An "Always allow" in this chat let it through: one use of that permission, counted on the page (allowed_used).
     if (allowed.has(name) && ((S.approval === 'strict' && strictAsks(name)) || yoloWouldAsk(name))) emit({ t: 'allowed_used', tool: name, at: at() });
-    if (((S.approval === 'strict' && strictAsks(name) && !allowed.has(name)) || yoloAsks(name)) && !(name === 'plan' && run.plan) && !(name === 'launch_config' && args.action === 'list') && !['shell', 'run_command', 'terminal', 'edit_video'].includes(name)) {
+    if (((S.approval === 'strict' && strictAsks(name) && !allowed.has(name)) || yoloAsks(name)) && !(name === 'plan' && run.plan) && !(name === 'launch_config' && args.action === 'list') && !['shell', 'run_command', 'terminal', 'edit_video', 'save_skill'].includes(name)) {
       const mt = mcpT.byName.get(name);
       const card = { id: newApprovalId(), tool: name, free: true, est: 0, what: toolSummary(name, args), why: '',
         // An MCP tool: its server and tool, whether it can change things, and the exact input it will send.
@@ -3637,7 +3637,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       notes.push(`scaffolded ${t.name}`);
       return `Copied template "${t.name}": ${r.written.join(', ') || 'nothing new'}${r.skipped.length ? `; kept your existing ${r.skipped.join(', ')}` : ''}.${t.start ? ` Start it with start_server name "${t.name}", command "${t.start.command}", args ${JSON.stringify(t.start.args || [])}.` : ''}`;
     }
-    if (name === 'save_skill') { const id = saveSkill(root, args); notes.push(`saved skill ${id}`); emit({ t: 'note', level: 'info', msg: `Saved a new project skill: ${id}`, at: at() }); return `Saved skill "${id}" in .quorx/skills/${id}. Future chats in this project will see it.`; }
+    if (name === 'save_skill') return saveSkillAsked(args);
     if (name === 'list_files') { const f = listFiles(root); return f.length ? f.map((x) => `${x.path} (${x.size} bytes)`).join('\n') : 'The project folder is empty.'; }
     if (name === 'read_file') {
       const k = secretOf(args.path);
@@ -4395,6 +4395,34 @@ ${r.text || '(no text found)'}`;
     const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p2 = path.join(d, e.name); if (e.isDirectory()) walk(p2); else if (e.name !== 'template.json') out.push(path.relative(dir, p2).replaceAll(path.sep, '/')); } };
     walk(dir);
     return out;
+  }
+
+  // ---------- save_skill: the user picks where it goes ----------
+  // One card, in Strict and YOLO alike: This project, All projects (every project, data/skills), or Don't save. The
+  // agent's suggestion is the recommended answer. A scheduled run has nobody to ask: it saves to the project.
+  async function saveSkillAsked(args) {
+    // What would make the save fail is said before anyone is asked.
+    if (!String(args.name || '').trim()) return 'Error: the skill needs a name.';
+    if (!String(args.instructions || '').trim()) return 'Error: the skill needs instructions (the steps, rules and gotchas, in Markdown).';
+    const wantAll = args.where === 'all';
+    let where = root ? 'project' : 'mine';
+    if (!req.scheduledBy) {
+      const id = `q${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+      const options = root ? ['This project', 'All projects', "Don't save"] : ['All projects', "Don't save"];
+      emit({ t: 'question', id, gate: 'skill', question: `Save the skill "${clip(String(args.name || ''), 60)}"? Where should it go?`, why: clip(String(args.description || ''), 200), options, recommended: root ? (wantAll ? 1 : 0) : 0, at: at() });
+      const ans = await new Promise((resolve, reject) => {
+        questions.set(`${runId}:${id}`, resolve);
+        signal.addEventListener('abort', () => { questions.delete(`${runId}:${id}`); reject(new Error('aborted')); }, { once: true });
+      });
+      emit({ t: 'answer', id, choice: ans.choice, text: ans.text, at: at() });
+      const pick = ans.choice == null ? null : options[ans.choice];
+      if (pick === "Don't save" || pick == null) return `The user chose not to save the skill${ans.text ? ` and said: "${clip(ans.text, 300)}"` : ''}. Carry on without it.`;
+      where = pick === 'All projects' ? 'mine' : 'project';
+    }
+    const sid = saveSkill(root, args, { where });
+    notes.push(`saved skill ${sid}`);
+    emit({ t: 'note', level: 'info', msg: `Saved a new skill for ${where === 'mine' ? 'all projects' : 'this project'}: ${sid}`, at: at() });
+    return where === 'mine' ? `Saved skill "${sid}" for all the user's projects. Future chats in any project will see it.` : `Saved skill "${sid}" in .quorx/skills/${sid}. Future chats in this project will see it.`;
   }
 
   // ---------- the prompt enhancer (server/enhancer.js) ----------

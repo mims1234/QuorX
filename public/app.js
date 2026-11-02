@@ -5951,7 +5951,7 @@ function questionHTML(q, live = true) {
   const full = questionCardHTML(q, live);
   if (!a || c.secret) return full;
   const n = c.questions?.length || 1, key = `q-${c.id}`;
-  const label = n > 1 ? `Asked you ${n} questions` : c.gate === 'plan' ? 'Plan first' : c.gate === 'enhance' ? '📝 Enhance' : c.gate === 'storyboard' ? '🎬 Storyboard' : c.auto ? 'The deciders answered' : 'Asked you';
+  const label = n > 1 ? `Asked you ${n} questions` : c.gate === 'plan' ? 'Plan first' : c.gate === 'enhance' ? '📝 Enhance' : c.gate === 'skill' ? '🧠 Skill' : c.gate === 'storyboard' ? '🎬 Storyboard' : c.auto ? 'The deciders answered' : 'Asked you';
   const said = clip(String(a.label || a.text || '').replace(/^Your answer: /, ''), 160);
   return `<details class="q-fold" data-qkey="${esc(key)}" ${G.qOpen?.has(key) ? 'open' : ''}><summary><span class="q-fold-ic" aria-hidden="true">✓</span><span class="q-fold-l">${esc(label)}${n === 1 && c.question ? `: <span class="q-fold-q">${esc(clip(c.question, 90))}</span>` : ''}</span><span class="q-fold-a">${esc(said)}</span><span class="tl-chev" aria-hidden="true">›</span></summary>${full}</details>`;
 }
@@ -5979,7 +5979,7 @@ function questionCardHTML(q, live = true) {
   if (c.questions?.length) return questionsHTML(c, a);
   if (c.secret) return secretHTML(c, a);
   return `<div class="approval question qbox ${a ? 'done' : ''}" ${a ? '' : `data-id="${esc(c.id)}" tabindex="-1"`}>
-    <div class="q-head"><span class="q-badge">${c.gate === 'plan' ? 'Plan first' : c.gate === 'enhance' ? '📝 Prompt enhancer' : c.gate === 'storyboard' ? '🎬 Storyboard' : 'Question'}</span><p class="q-text">${esc(c.question)}</p>${c.why ? `<small class="q-why">${esc(c.why)}</small>` : ''}${c.gate === 'storyboard' && c.artifact ? `<button type="button" class="secondary sm q-open-art" data-art="${esc(c.artifact)}">Open the storyboard</button>` : ''}</div>
+    <div class="q-head"><span class="q-badge">${c.gate === 'plan' ? 'Plan first' : c.gate === 'enhance' ? '📝 Prompt enhancer' : c.gate === 'skill' ? '🧠 Save a skill' : c.gate === 'storyboard' ? '🎬 Storyboard' : 'Question'}</span><p class="q-text">${esc(c.question)}</p>${c.why ? `<small class="q-why">${esc(c.why)}</small>` : ''}${c.gate === 'storyboard' && c.artifact ? `<button type="button" class="secondary sm q-open-art" data-art="${esc(c.artifact)}">Open the storyboard</button>` : ''}</div>
     ${a ? `<div class="q-opts answered">${c.options.map((o, i) => `<div class="q-opt ${i === picked ? 'picked' : 'faded'}"><span class="q-key">${i === picked ? '✓' : i + 1}</span><span class="q-label">${esc(o)}</span></div>`).join('')}
         ${a.by === 'recommended' || a.by === 'timeout' ? `<div class="q-opt picked by-deciders"><span class="q-key">⏱</span><span class="q-label">No answer in time: ${a.by === 'timeout' ? 'the storyboard stands' : 'the agent\'s recommendation stands'} (⚡ YOLO, 🎬 Video Mode)</span></div>` : ''}
         ${a.by === 'deciders' ? `<div class="q-opt ${picked == null ? 'missed' : 'picked'} by-deciders"><span class="q-key">⚖</span><span class="q-label">No answer in time: ${picked == null ? `${esc((a.text || 'the deciders could not settle it').replace(/^\w/, (x) => x.toLowerCase()))}, so the agent decides` : `the deciders picked this${a.confidence != null ? ` · ${Math.round(a.confidence * 100)}% sure` : ''}`}</span></div>`
