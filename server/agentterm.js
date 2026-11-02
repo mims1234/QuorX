@@ -7,15 +7,13 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { Screen } from './vtscreen.js';
 import { childEnv } from './workspace.js';
 import { jobsAvailable, adoptPid, killJob, closeJob } from './jobhost.js';
+import { loadPty } from './ptyload.js';
 
-const require = createRequire(import.meta.url);
-let pty = null, loadError = '';
-try { pty = require('node-pty'); } catch (e) { loadError = e.message; }
+const { pty, loadError } = loadPty();
 
 const GATE = fileURLToPath(new URL('./jobgate.cjs', import.meta.url));
 const SESS = new Map();

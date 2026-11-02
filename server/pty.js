@@ -6,13 +6,11 @@
 // Only your own windows reach these routes (other sites are refused; the agent's pages are sandboxed and its browser
 // can't open the harness itself); the agent never uses them. The shell gets your whole environment (userenv.js), as a
 // terminal you opened yourself would: colours, your tokens, programs that open the browser.
-import { createRequire } from 'node:module';
 import { shellInfo } from './shell.js';
 import { userEnv } from './userenv.js';
+import { loadPty } from './ptyload.js';
 
-const require = createRequire(import.meta.url);
-let pty = null, loadError = '';
-try { pty = require('node-pty'); } catch (e) { loadError = e.message; }
+const { pty, loadError } = loadPty();
 export const ptyAvailable = () => !!pty;
 
 const KEEP = 400_000; // characters of recent output kept per terminal, replayed when the page reconnects

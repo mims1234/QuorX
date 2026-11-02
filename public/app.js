@@ -6760,9 +6760,11 @@ function parseDelimited(text, sep) {
  * source; `full` is the path on disk (for Copy path). Pages and Markdown get Preview / Source.
  */
 async function previewFile(view, { name, src, size, full, text, kind = previewKind(name), live = true }) {
-  const head = (info, extra = '') => `<div class="pv-head"><span class="pv-ico" aria-hidden="true">${PV_ICON[kind] || '📄'}</span><b class="pv-name" title="${esc(full || name)}">${esc(name)}</b><span class="pv-info">${info}</span><span class="pv-acts">${extra}${full ? '<button type="button" class="pv-btn pv-copy" title="Copy the path">Copy path</button>' : ''}${src && !src.startsWith('data:') ? '<button type="button" class="pv-btn pv-ext" title="Open it in its own window">Open ↗</button>' : ''}</span></div>`;
+  const onDisk = /^(?:[A-Za-z]:[\\/]|\/)/.test(full || ''); // a full path on disk (some callers pass only a name)
+  const head = (info, extra = '') => `<div class="pv-head"><span class="pv-ico" aria-hidden="true">${PV_ICON[kind] || '📄'}</span><b class="pv-name" title="${esc(full || name)}">${esc(name)}</b><span class="pv-info">${info}</span><span class="pv-acts">${extra}${full ? '<button type="button" class="pv-btn pv-copy" title="Copy the path">Copy path</button>' : ''}${onDisk ? '<button type="button" class="pv-btn pv-folder" title="Show it in File Explorer">Show in folder</button>' : ''}${src && !src.startsWith('data:') ? '<button type="button" class="pv-btn pv-ext" title="Open it in its own window">Open ↗</button>' : ''}</span></div>`;
   const wire = () => {
     const cp = $('.pv-copy', view); if (cp) cp.onclick = () => navigator.clipboard?.writeText(full).then(() => flashTip(cp, 'Copied')).catch(() => flashTip(cp, 'Could not copy'));
+    const fo = $('.pv-folder', view); if (fo) fo.onclick = () => openFolder(null, full);
     const ex = $('.pv-ext', view); if (ex) ex.onclick = () => { const u = absUrl(src); if (DESK) window.ohDesktop.openExternal(u); else window.open(u, '_blank', 'noopener'); };
   };
   const label = { image: fileExt(name) === 'svg' ? 'SVG picture' : 'Picture', video: 'Video', audio: 'Audio', pdf: 'PDF', table: 'Table', font: 'Font', md: 'Markdown', html: 'HTML page', binary: 'Binary file' }[kind]
