@@ -26,6 +26,7 @@ import { setSecret, parseEnv, secretKind, scrubSecrets } from '../server/project
 import { looksLikeFilm, videoModeFor, filmFacts, factsText, finishedFilms, videoRules, recommendedRoute, recommendedMusic, VIDEO_DEFAULTS } from '../server/videomode.js';
 import { settleTempo, analyse, tempoOf, barsOf, fitPlan, pickWindows, cutsVsBeats } from '../server/musicmap.js';
 import { checkHtml } from '../server/checks.js';
+import { startServer, stopServerWait, restartServer, forgetServer, serverOverview, saveLaunchConfig, removeLaunchConfig } from '../server/workspace.js';
 
 // ---------- scheduled tasks (server/schedules.js, server/schedrun.js), on a fake clock ----------
 
@@ -1267,4 +1268,34 @@ test('quorx_settings: a scheduled run reads but never changes', async () => {
     { chatId: `qss-${Date.now().toString(36)}`, scheduledBy: 'sched1', prefs: {} });
   assert.match(String(toolResults(bodies[1])[0]), /^Refused: a scheduled run can read settings but not change them/);
   assert.equal(of(events, 'approval').length, 0);
+});
+
+// Every server in the list can be edited and deleted, saved or not: an edit writes .quorx/launch.json (and a
+// restart runs the edited command), and delete stops it, forgets it and takes it out of the file.
+test('servers: an unsaved server can be edited into the launch file, restarted with the edit, and deleted', async () => {
+  const dir = tempDir('quorx-srv-'), pid = 'srvmanage';
+  saveProject({ id: pid, name: 'servers', path: dir });
+  fs.writeFileSync(path.join(dir, 'a.js'), "require('http').createServer((q, r) => r.end('a')).listen(process.env.PORT);\n");
+  fs.writeFileSync(path.join(dir, 'b.js'), "require('http').createServer((q, r) => r.end('b')).listen(process.env.PORT);\n");
+  const file = path.join(dir, '.quorx', 'launch.json');
+  try {
+    const s = await startServer({ projectId: pid, name: 'game', cmd: 'node', args: ['a.js'], save: false });
+    assert.equal(s.status, 'running');
+    assert.deepEqual(serverOverview(pid).map((r) => [r.name, r.saved]), [['game', false]]);
+    saveLaunchConfig(pid, { name: 'game', oldName: 'game', command: 'node', args: ['b.js'] });
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).configurations.map((c) => [c.name, c.args.join(' ')]), [['game', 'b.js']]);
+    assert.deepEqual(serverOverview(pid).map((r) => [r.name, r.saved, r.status]), [['game', true, 'running']]);
+    const r = await restartServer(`${pid}/game`);
+    assert.equal(await (await fetch(r.url)).text(), 'b', 'a restart runs the edited command');
+    assert.equal(await forgetServer(pid, 'game'), true);
+    assert.equal(removeLaunchConfig(pid, 'game'), true);
+    assert.deepEqual(serverOverview(pid), []);
+    assert.equal(await forgetServer(pid, 'game'), false);
+    // A stopped server that was never saved goes too.
+    await startServer({ projectId: pid, name: 'old', cmd: 'node', args: ['a.js'], save: false });
+    await stopServerWait(`${pid}/old`, 'you');
+    assert.equal(serverOverview(pid)[0].status, 'stopped');
+    assert.equal(await forgetServer(pid, 'old'), true);
+    assert.deepEqual(serverOverview(pid), []);
+  } finally { await forgetServer(pid, 'game'); await forgetServer(pid, 'old'); forgetProject(pid); }
 });

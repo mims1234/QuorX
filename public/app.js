@@ -9783,13 +9783,13 @@ async function renderServers(c) {
       return `<div class="srv-row" data-i="${i}">
         <div class="srv-top">
           <span class="srv-dot ${cls}" title="${esc(label)}"></span><b class="srv-nm" title="${esc(s.name)}">${esc(s.name)}</b><span class="srv-state ${cls}">${esc(label)}</span>
-          ${s.from === '.claude/launch.json' ? '<span class="srv-from" title="Saved in .claude/launch.json">.claude</span>' : !s.from ? '<span class="srv-from unsaved" title="Running, but not in the launch file">not saved</span>' : ''}
+          ${s.from === '.claude/launch.json' ? '<span class="srv-from" title="Saved in .claude/launch.json">.claude</span>' : ''}
           <span class="srv-acts">
             ${live ? `<button type="button" class="srv-ib stop" data-act="stop" title="Stop it" aria-label="Stop">${SRV_ICO.stop}</button><button type="button" class="srv-ib" data-act="restart" title="Restart it" aria-label="Restart">${SRV_ICO.restart}</button>${s.url ? `<button type="button" class="srv-ib" data-act="open" title="Open it in the Browser tab" aria-label="Open in the Browser tab">${SRV_ICO.open}</button>` : ''}`
               : `<button type="button" class="srv-ib run" data-act="start" title="Run it and open it in the Browser tab" aria-label="Run">${SRV_ICO.run}</button>`}
             <button type="button" class="srv-ib" data-act="logs" title="Its output in the terminal" aria-label="Logs">${SRV_ICO.logs}</button>
             <button type="button" class="srv-ib" data-act="edit" title="Edit its command, folder or port" aria-label="Edit">${SRV_ICO.edit}</button>
-            ${s.from === '.quorx/launch.json' && !live ? `<button type="button" class="srv-ib danger" data-act="remove" title="Remove it from the launch file" aria-label="Remove">${SRV_ICO.trash}</button>` : ''}
+            ${s.from !== '.claude/launch.json' ? `<button type="button" class="srv-ib danger" data-act="remove" title="${live ? 'Stop it and delete it' : 'Delete it'} (and take it out of the launch file)" aria-label="Delete">${SRV_ICO.trash}</button>` : ''}
           </span>
         </div>
         <div class="srv-meta">
@@ -9810,7 +9810,14 @@ async function renderServers(c) {
       if (act === 'edit') return editServer(c, s);
       if (act === 'logs') { closeServers(c); return openTerminal(c, s.name); }
       if (act === 'open') { closeServers(c); return showServerInPane(c, s); }
-      if (act === 'remove') { if (!await uiConfirm(`Remove "${s.name}" from the launch file?`)) return; await postJ(`/api/launch?project=${encodeURIComponent(c.projectId)}&name=${encodeURIComponent(s.name)}`, null, 'DELETE'); return renderServers(c); }
+      if (act === 'remove') {
+        const live = s.status === 'running' || s.status === 'starting' || s.status === 'not listening';
+        if (!await uiConfirm(`${live ? 'Stop and delete' : 'Delete'} "${s.name}"? It's taken out of .quorx/launch.json too.`)) return;
+        c.srvPop.busy = true; b.disabled = true;
+        await postJ(`/api/launch?project=${encodeURIComponent(c.projectId)}&name=${encodeURIComponent(s.name)}`, null, 'DELETE');
+        if (c.srvPop) c.srvPop.busy = false;
+        renderServers(c); return pollDev();
+      }
       c.srvPop.busy = true; b.disabled = true; b.classList.add('busy'); b.title = act === 'stop' ? 'Stopping…' : 'Starting…';
       const res = act === 'stop' ? await postJ('/api/servers/stop', { key: s.key })
         : act === 'restart' ? await postJ('/api/servers/restart', { key: s.key })
@@ -9826,16 +9833,16 @@ async function renderServers(c) {
 function editServer(c, s) {
   const pop = c.srvPop.el;
   c.srvPop.editing = s;
-  const allowed = G.cfg.allowed || [];
+  const allowed = G.cfg.allowed || [], live = s.status === 'running' || s.status === 'starting' || s.status === 'not listening';
   pop.innerHTML = `<form class="srv-form">
     <div class="srv-head"><span class="srv-h-ico">${SVG_SERVER}</span><b>${s.name ? `Edit “${esc(s.name)}”` : 'New server'}</b></div>
     <label><span>Name</span><input name="name" value="${esc(s.name || '')}" placeholder="web" required></label>
     <label><span>Program</span><select name="command">${allowed.map((x) => `<option ${x === String(s.command || 'node').toLowerCase().replace(/\.(exe|cmd|bat)$/, '') ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select></label>
     <label><span>Arguments</span><input name="args" value="${esc((s.args || []).join(' '))}" placeholder="server.js   ·   -m http.server {PORT}   ·   run dev" spellcheck="false"></label>
     <label><span>Fixed port</span><input name="port" type="number" min="1" max="65535" value="${s.port || ''}" placeholder="none: a free port is given as PORT"></label>
-    <p class="srv-hint">One program with plain arguments, run in the project folder. <code>{PORT}</code> in the arguments becomes the port.${s.from === '.claude/launch.json' ? ' Saving copies it into <code>.quorx/launch.json</code>.' : ''}</p>
+    <p class="srv-hint">One program with plain arguments, run in the project folder. <code>{PORT}</code> in the arguments becomes the port. Saving writes it to <code>.quorx/launch.json</code>${live ? '; it runs the new command when it restarts' : ''}.</p>
     <p class="srv-err" role="alert" hidden></p>
-    <div class="srv-form-acts"><button type="button" class="srv-btn srv-cancel">Cancel</button><button type="submit" class="srv-btn">Save</button><button type="button" class="srv-btn start srv-saverun">Save & run</button></div>
+    <div class="srv-form-acts"><button type="button" class="srv-btn srv-cancel">Cancel</button><button type="submit" class="srv-btn">Save</button><button type="button" class="srv-btn start srv-saverun">${live ? 'Save & restart' : 'Save & run'}</button></div>
   </form>`;
   const f = $('.srv-form', pop), err = $('.srv-err', pop);
   const save = async (run) => {
