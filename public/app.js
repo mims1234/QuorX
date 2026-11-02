@@ -60,7 +60,10 @@ function stamp(t) {
   if (d.toDateString() === new Date(now - 864e5).toDateString()) return `Yesterday ${hm}`;
   return `${d.toLocaleDateString([], { day: 'numeric', month: 'short', ...(d.getFullYear() !== now.getFullYear() ? { year: 'numeric' } : {}) })} ${hm}`;
 }
-const timeTag = (t) => { const mode = G.settings?.ui?.timestamps || 'time'; return mode === 'off' ? '' : `<time datetime="${new Date(t).toISOString()}" title="${esc(new Date(t).toLocaleString())}">${mode === 'relative' ? ago(t) : stamp(t)}</time>`; };
+// Every post shows its time: a saved "off" from before reads as the time.
+const timeTag = (t) => { const mode = G.settings?.ui?.timestamps; return `<time datetime="${new Date(t).toISOString()}" title="${esc(new Date(t).toLocaleString())}">${mode === 'relative' ? ago(t) : stamp(t)}</time>`; };
+// When a reply's trace event happened (its `at` counts from the reply's start), or 0 if unknown.
+const atOf = (m, e) => (m.at && Number.isFinite(e?.at) ? m.at + e.at : 0);
 // A stable colour per title, so chats are easy to tell apart.
 const hue = (s) => [...String(s)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 7);
 const initials = (s) => (String(s).match(/[A-Za-z0-9]/g) || ['?']).slice(0, 2).join('').toUpperCase();
@@ -4334,7 +4337,7 @@ function renderMsg(c, m) {
     return el;
   }
   el.className = 'msg bot';
-  el.innerHTML = `<div class="reply-head"></div><div class="plan-slot"></div><div class="timeline"></div><details class="thinking" hidden><summary></summary><div class="think-body"></div></details><div class="body"></div><div class="approvals"></div><button type="button" class="trace-btn mt-btn" title="Open this reply's steps in the side pane" aria-label="Steps"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2 5-5 2 2-5z"/></svg></button><div class="foot"></div>`;
+  el.innerHTML = `<div class="reply-head"></div><div class="plan-slot"></div><div class="timeline"></div><details class="thinking" hidden><summary></summary><div class="think-body"></div></details><div class="ans-when"></div><div class="body"></div><div class="timeline tl-after"></div><div class="approvals"></div><button type="button" class="trace-btn mt-btn" title="Open this reply's steps in the side pane" aria-label="Steps"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2 5-5 2 2-5z"/></svg></button><div class="foot"></div>`;
   // Only your own clicks decide whether the thinking stays open; otherwise it opens while thinking and folds after.
   $('.thinking > summary', el).addEventListener('click', () => { m.thinkOpen = !$('.thinking', el).open; });
   updateMsg(c, m);
@@ -4479,15 +4482,23 @@ function callsLabel(calls) {
   return parts.slice(0, 3).map((t, i) => (i ? t[0].toLowerCase() + t.slice(1) : t)).join(', ') + (parts.length > 3 ? ` and ${parts.length - 3} more` : '');
 }
 // Walks the trace once: steps (thinking, what the agent said, its tool calls with results), reviewer and helper work,
-// and the cards and notes in between, all in the order they happened.
+// and the cards and notes in between, all in the order they happened. items.split counts the items from before the
+// answer was written: what came after it (the checks, the reviewer, your notes) is drawn under the answer.
 function timelineItems(m) {
   const tr = m.trace || [], items = [], helpers = new Map(), seenCards = new Set();
   let blk = null, rv = null;
+  const answer = answerIndex(m), lastPlan = tr.findLastIndex((e) => e.t === 'plan');
+  items.split = Infinity;
+  // Each item takes the time of the event that made it (a step: when it started).
+  let mark = 0;
+  const stampItems = (e) => { for (; mark < items.length; mark++) items[mark].at ??= atOf(m, e); };
   const newBlock = (step) => { blk = { kind: 'step', step, calls: [], aside: '', done: false }; items.push(blk); return blk; };
   for (let i = 0; i < tr.length; i++) {
     const e = tr[i];
+    stampItems(tr[i - 1]);
+    if (answer >= 0 && i === answer + 1) items.split = items.length;
     if (e.t === 'llm_start') { newBlock(e.step); continue; }
-    if (e.t === 'llm_done') { if (blk && blk.step === e.step) { blk.done = true; blk.aside = e.aside || ''; } continue; }
+    if (e.t === 'llm_done') { if (blk && blk.step === e.step) { blk.done = true; blk.aside = e.aside || ''; blk.doneAt = atOf(m, e); } continue; }
     if (e.t === 'tool') {
       if (e.by === 'reviewer') { if (!rv) { rv = { kind: 'group', key: `rv${i}`, icon: '🧪', label: 'The reviewer tested it', calls: [] }; items.push(rv); } rv.calls.push({ e }); continue; }
       if (e.by === 'helper') {
@@ -4506,8 +4517,8 @@ function timelineItems(m) {
     }
     if (e.t === 'review_start') { rv = null; items.push({ kind: 'card', pin: true, html: () => reviewRunningHTML(m, e) }); continue; }
     if (e.t === 'review') { items.push({ kind: 'card', pin: true, html: () => reviewCardHTML(m, e) }); continue; }
-    // The plan shows where it was first made (just before its Go ahead question), with its latest ticks.
-    if (e.t === 'plan') { if (!seenCards.has('plan')) { seenCards.add('plan'); items.push({ kind: 'card', pin: true, html: () => planCardHTML(m) }); } continue; }
+    // The plan shows where it last changed, with its latest ticks, so an update reads at the time it happened.
+    if (e.t === 'plan') { if (i === lastPlan) items.push({ kind: 'card', pin: true, html: () => planCardHTML(m) }); continue; }
     if (e.t === 'fresh_eyes') { items.push({ kind: 'note', text: `👀 Fresh eyes (${short(e.model)}) ${e.ok ? `on a problem that came back: ${clip((e.report || '').split('\n')[0].replace(/^Cause:\s*/i, ''), 220)}` : 'looked but found nothing'}` }); continue; }
     if (e.t === 'helper_done') { const h = helpers.get(e.id); if (h) { h.label = `Helper ${e.id} ${e.ok ? 'reported back' : 'gave no report'} · ${e.steps} step${e.steps === 1 ? '' : 's'} · ${money(e.cost, 4)}`; h.done = true; } continue; }
     if (e.t === 'approval') {
@@ -4528,7 +4539,20 @@ function timelineItems(m) {
     if (e.t === 'mode') { items.push({ kind: 'note', text: e.approval === 'yolo' ? '⚡ Switched to YOLO' : '🔒 Switched to Strict' }); continue; }
     if (e.t === 'note' && e.level === 'warn') { items.push({ kind: 'note', text: `⚠ ${e.msg}` }); continue; }
   }
+  stampItems(tr[tr.length - 1]);
   return items;
+}
+// Where in the trace the reply's text was finished: its last step that called no tools, if the text on the page is
+// still that step's (no later step started, nothing sent it back). -1 while it is still being written, or none.
+function answerIndex(m) {
+  const tr = m.trace || [];
+  if (!String(m.content || '').trim()) return -1;
+  for (let j = tr.length - 1; j >= 0; j--) {
+    const e = tr[j];
+    if (['llm_start', 'llm_retry', 'sent_back'].includes(e.t) || (e.t === 'source_fallback' && e.role === 'writer')) return -1;
+    if (e.t === 'llm_done' && !e.toolCalls?.length) return j;
+  }
+  return -1;
 }
 // A command that ran without a card: who let it (your rule and where it lives, or the built-in classes).
 function whyLine(e) {
@@ -4544,7 +4568,7 @@ function timelineHTML(m) {
     const ap = x.approval && m.approvals?.[x.approval], apB = ap ? approvalBadge(ap, !!m.live) : null;
     // An MCP tool: the server's mark, "server › tool", and the first line of what it gave back.
     const mc = mcpOfTool(x.e.name), first = mc && x.res && !err ? String(x.res).split('\n').find((l) => l.trim()) : '';
-    return det(`${key}-${i}`, `tl-call${mc ? ' tl-mcp' : ''}`, `${mc ? `<span class="tl-ic">${mcpMark({ name: mc.server }, 'sm')}</span><b>${esc(mc.server)} › ${esc(mc.tool)}</b><span class="tl-arg">${first ? `<span class="tl-mcp-res">${esc(clip(first, 120))}</span>` : esc(clip(argSummary(x.e), 160))}</span>` : `<span class="tl-ic">${TOOL_NAME[x.e.name]?.split(' ')[0] || '🔧'}</span><b>${esc(x.e.name)}</b><span class="tl-arg">${esc(clip(argSummary(x.e), 160))}</span>`}${apB ? apB.badge : ''}${x.res == null && m.live ? '<span class="tl-spin" aria-label="running"></span>' : err ? '<span class="tl-err">error</span>' : ''}`,
+    return det(`${key}-${i}`, `tl-call${mc ? ' tl-mcp' : ''}`, `${mc ? `<span class="tl-ic">${mcpMark({ name: mc.server }, 'sm')}</span><b>${esc(mc.server)} › ${esc(mc.tool)}</b><span class="tl-arg">${first ? `<span class="tl-mcp-res">${esc(clip(first, 120))}</span>` : esc(clip(argSummary(x.e), 160))}</span>` : `<span class="tl-ic">${TOOL_NAME[x.e.name]?.split(' ')[0] || '🔧'}</span><b>${esc(x.e.name)}</b><span class="tl-arg">${esc(clip(argSummary(x.e), 160))}</span>`}${apB ? apB.badge : ''}${x.res == null && m.live ? '<span class="tl-spin" aria-label="running"></span>' : err ? '<span class="tl-err">error</span>' : ''}${atOf(m, x.e) ? `<small class="tl-ct">${timeTag(atOf(m, x.e))}</small>` : ''}`,
       (apB ? apB.detail : '') + (x.cmd && !apB ? whyLine(x.cmd) : '') + (x.res ? `<pre class="tl-out">${esc(clip(x.res, 4000))}</pre>` : '<div class="tl-out tl-none">No output.</div>'));
   }).join('');
   const groupRow = (key, icon, label, list, busy) => {
@@ -4553,25 +4577,32 @@ function timelineHTML(m) {
   };
   // Each item becomes pieces: rows (a thinking line, a line of tool calls) or anything else (text, cards, notes).
   const pieces = [];
-  const row = (html, key, calls = [], think = 0, busy = false) => pieces.push({ html, row: true, key, calls, think, busy });
-  const other = (html) => { if (html) pieces.push({ html, row: false }); };
+  let at = m.at || 0; // when the item being drawn happened
+  const row = (html, key, calls = [], think = 0, busy = false) => pieces.push({ html, row: true, key, calls, think, busy, at });
+  const other = (html) => { if (html) pieces.push({ html, row: false, at }); };
+  // Every line, card and fold shows when it happened, in a column of times down the left.
+  const when = (x) => (x.at ? `<div class="tl-at"><span class="tl-t">${timeTag(x.at)}</span><div class="tl-at-body">${x.html}</div></div>` : x.html);
   const usedAtt = new Set(); // which note's attachments are drawn already (two notes can say the same thing)
   if (m.prep && m.live) other(`<div class="tl-row tl-wait"><span class="tl-spin"></span><span class="tl-label">${esc(m.prep)}</span></div>`);
-  for (const it of timelineItems(m)) {
+  const items = timelineItems(m);
+  let cut = Infinity;
+  for (const [k, it] of items.entries()) {
+    if (k === items.split) cut = pieces.length;
+    at = it.at || at;
     if (it.kind === 'step') {
       const think = String(m.thinking?.[it.step] || '').trim();
       if (think) row(det(`t${it.step}`, 'tl-row tl-think', `<span class="tl-ic">💭</span><span class="tl-label">${!it.done && m.live ? 'Thinking' : 'Thought'}</span><small class="tl-words">${think.split(/\s+/).length.toLocaleString()} words</small>`, `<div class="tl-think-body" data-step="${it.step}">${open.has(`t${it.step}`) ? md(think) : ''}</div>`), `t${it.step}`, [], 1, !it.done && m.live);
-      if (it.aside) other(`<div class="tl-text">${md(it.aside)}</div>`);
-      if (it.calls.length) { const busy = m.live && it.calls.some((x) => x.res == null); row(groupRow(`x${it.step}`, mcpOfTool(it.calls[0].e.name) ? '🧲' : TOOL_NAME[it.calls[0].e.name]?.split(' ')[0] || '🔧', callsLabel(it.calls), it.calls, busy), `x${it.step}`, it.calls, 0, busy); }
+      if (it.aside) { at = it.doneAt || at; other(`<div class="tl-text">${md(it.aside)}</div>`); }
+      if (it.calls.length) { at = atOf(m, it.calls[0].e) || at; const busy = m.live && it.calls.some((x) => x.res == null); row(groupRow(`x${it.step}`, mcpOfTool(it.calls[0].e.name) ? '🧲' : TOOL_NAME[it.calls[0].e.name]?.split(' ')[0] || '🔧', callsLabel(it.calls), it.calls, busy), `x${it.step}`, it.calls, 0, busy); }
       if (!it.done && m.live && !think && !it.calls.length) other('<div class="tl-row tl-wait"><span class="tl-spin"></span><span class="tl-label">Working…</span></div>');
       continue;
     }
     if (it.kind === 'group') { const busy = m.live && !it.done && it.calls.some((x) => x.res == null); row(groupRow(it.key, it.icon, it.label, it.calls, busy), it.key, it.calls, 0, busy); continue; }
-    if (it.kind === 'card') { const h = it.html(); if (h) pieces.push({ html: h, row: false, card: true, pin: !!it.pin }); continue; }
+    if (it.kind === 'card') { const h = it.html(); if (h) pieces.push({ html: h, row: false, card: true, pin: !!it.pin, at }); continue; }
     if (it.kind === 'steer') {
       const att = (m.steerAtt || []).find((x) => x.text === it.e.text && !usedAtt.has(x)) || null;
       if (att) usedAtt.add(att);
-      pieces.push({ row: false, card: true, html: `<div class="steer-card ${it.read ? 'read' : ''}"><span class="sc-who">You, while it worked</span><p>${esc(it.e.text)}</p>${att?.imgs?.length ? `<div class="u-imgs" data-views="${esc(JSON.stringify(att.imgViews || []))}">${att.imgs.map((u, k) => `<img src="${u}" alt="attached picture" data-k="${k}">`).join('')}</div>` : it.e.images ? `<span class="sc-att">📎 ${it.e.images} picture${it.e.images > 1 ? 's' : ''}</span>` : ''}${att?.docs?.length ? `<div class="u-docs">${att.docs.map((d) => `<button type="button" class="u-doc" data-doc="${esc(JSON.stringify(d))}" title="${esc(d.name)} · ${esc(docSize(d.size))} · click to preview">${DOC_ICON[d.kind] || '📄'} ${esc(d.name)}</button>`).join('')}</div>` : it.e.docs ? `<span class="sc-att">📎 ${it.e.docs} file${it.e.docs > 1 ? 's' : ''}</span>` : ''}<span class="sc-state">${it.read ? '✓ read by the agent' : '… it reads this at its next step'}</span></div>` });
+      pieces.push({ row: false, card: true, pin: true, at, html: `<div class="steer-card ${it.read ? 'read' : ''}"><span class="sc-who">You, while it worked</span><p>${esc(it.e.text)}</p>${att?.imgs?.length ? `<div class="u-imgs" data-views="${esc(JSON.stringify(att.imgViews || []))}">${att.imgs.map((u, k) => `<img src="${u}" alt="attached picture" data-k="${k}">`).join('')}</div>` : it.e.images ? `<span class="sc-att">📎 ${it.e.images} picture${it.e.images > 1 ? 's' : ''}</span>` : ''}${att?.docs?.length ? `<div class="u-docs">${att.docs.map((d) => `<button type="button" class="u-doc" data-doc="${esc(JSON.stringify(d))}" title="${esc(d.name)} · ${esc(docSize(d.size))} · click to preview">${DOC_ICON[d.kind] || '📄'} ${esc(d.name)}</button>`).join('')}</div>` : it.e.docs ? `<span class="sc-att">📎 ${it.e.docs} file${it.e.docs > 1 ? 's' : ''}</span>` : ''}<span class="sc-state">${it.read ? '✓ read by the agent' : '… it reads this at its next step'}</span></div>` });
       continue;
     }
     if (it.kind === 'note') other(`<div class="tl-note">${esc(clip(it.text, 220))}</div>`);
@@ -4581,15 +4612,15 @@ function timelineHTML(m) {
   const bundle = (list) => {
     const out = [];
     for (let k = 0; k < list.length;) {
-      if (!list[k].row) { out.push(list[k++].html); continue; }
+      if (!list[k].row) { out.push(when(list[k++])); continue; }
       let e = k; while (e < list.length && list[e].row) e++;
       const run = list.slice(k, e);
       if (run.length >= 4) {
         const calls = run.flatMap((x) => x.calls), thinks = run.reduce((n, x) => n + x.think, 0);
         const errs = calls.filter((x) => x.res != null && /^Error/.test(x.res)).length;
         const label = [calls.length ? callsLabel(calls) : '', thinks ? `${calls.length ? 'thought' : 'Thought'} ${thinks} time${thinks === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
-        out.push(det(`b-${run[0].key}`, 'tl-row tl-bundle', `<span class="tl-ic">🗂</span><span class="tl-label">${esc(label)}</span><small class="tl-words">${run.length} steps</small>${run.some((x) => x.busy) ? '<span class="tl-spin" aria-label="running"></span>' : ''}${errs ? `<span class="tl-err">${errs} error${errs > 1 ? 's' : ''}</span>` : ''}`, `<div class="tl-bundle-body">${run.map((x) => x.html).join('')}</div>`));
-      } else out.push(...run.map((x) => x.html));
+        out.push(when({ at: run[0].at, html: det(`b-${run[0].key}`, 'tl-row tl-bundle', `<span class="tl-ic">🗂</span><span class="tl-label">${esc(label)}</span><small class="tl-words">${run.length} steps</small>${run.some((x) => x.busy) ? '<span class="tl-spin" aria-label="running"></span>' : ''}${errs ? `<span class="tl-err">${errs} error${errs > 1 ? 's' : ''}</span>` : ''}`, `<div class="tl-bundle-body">${run.map(when).join('')}</div>`) }));
+      } else out.push(...run.map(when));
       k = e;
     }
     return out.join('');
@@ -4597,20 +4628,26 @@ function timelineHTML(m) {
   // The reply's work folds into lines you can open (the Steps pane has all of it too). The plan and each review stay
   // out, where they happened, so the work before and after them folds on its own and it all reads in order. While it
   // works, anything waiting for you and what it is doing right now stay out too.
-  const live = !!m.live, last = pieces.length - 1;
-  const stays = (x, i) => x.pin || (live && (x.card || i === last));
-  const foldLine = (seg, n, end) => {
+  const live = !!m.live;
+  const foldLine = (seg, n, end, pre) => {
     if (seg.length < 3) return bundle(seg);
     const done = seg.flatMap((x) => x.calls || []), thinks = seg.reduce((k, x) => k + (x.think || 0), 0), steps = seg.filter((x) => x.row).length;
     const errs = done.filter((x) => x.res != null && /^Error/.test(x.res)).length;
     // Says how much work it was; what kind of work shows on hover (and inside).
     const what = [done.length ? callsLabel(done) : '', thinks ? `${done.length ? 'thought' : 'Thought'} ${thinks} time${thinks === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
     const counts = [done.length ? `${done.length} tool call${done.length === 1 ? '' : 's'}` : '', thinks ? `${thinks} thought${thinks === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
-    return det(n ? `all${n}` : 'all', 'tl-row tl-bundle tl-fold', `<span class="tl-ic">🗂</span><span class="tl-label" title="${esc(what)}">${live && end ? 'Working' : 'Worked'} through ${steps} step${steps === 1 ? '' : 's'}</span><small class="tl-words">${esc(counts)}</small>${errs ? `<span class="tl-err">${errs} error${errs > 1 ? 's' : ''}</span>` : ''}`, bundle(seg));
+    return when({ at: seg[0].at, html: det(`${pre}${n ? `all${n}` : 'all'}`, 'tl-row tl-bundle tl-fold', `<span class="tl-ic">🗂</span><span class="tl-label" title="${esc(what)}">${live && end ? 'Working' : 'Worked'} through ${steps} step${steps === 1 ? '' : 's'}</span><small class="tl-words">${esc(counts)}</small>${errs ? `<span class="tl-err">${errs} error${errs > 1 ? 's' : ''}</span>` : ''}`, bundle(seg)) });
   };
-  let out = '', seg = [], n = 0;
-  pieces.forEach((x, i) => { if (stays(x, i)) { out += foldLine(seg, n++, false); seg = []; out += x.html; } else seg.push(x); });
-  return out + foldLine(seg, n, true);
+  // tail: the part that ends with what is happening now.
+  const fold = (list, pre, tail) => {
+    let out = '', seg = [], n = 0;
+    const stays = (x, i) => x.pin || (live && (x.card || (tail && i === list.length - 1)));
+    list.forEach((x, i) => { if (stays(x, i)) { out += foldLine(seg, n++, false, pre); seg = []; out += when(x); } else seg.push(x); });
+    return out + foldLine(seg, n, tail, pre);
+  };
+  // What happened before the answer was written goes above it; what came after (checks, the reviewer, your notes) under it.
+  const before = pieces.slice(0, cut), after = pieces.slice(cut), ans = (m.trace || [])[answerIndex(m)];
+  return { before: fold(before, '', !after.length), after: fold(after, 'z', true), answerAt: before.length && ans ? atOf(m, ans) : 0 };
 }
 // Open lines stay open across redraws; a thinking line draws its text only when opened.
 function wireTimeline(m, el) {
@@ -4622,15 +4659,15 @@ function wireTimeline(m, el) {
       if (body && !body.innerHTML) { body.innerHTML = md(String(m.thinking?.[body.dataset.step] || '')); enhance(body); }
     });
   }
-  enhance($('.timeline', el));
+  for (const tl of el.querySelectorAll('.timeline')) enhance(tl);
 }
 // While the model thinks: update the word counts, and the text of an open thinking line. A step whose thinking
 // has no line yet (it started after the last redraw) gets one.
 function liveThinking(m, tl, c) {
   for (const [step, text] of Object.entries(m.thinking || {})) {
     if (!String(text).trim()) continue;
-    const row = tl.querySelector(`.tl-think[data-key="t${step}"]`);
-    if (!row) { if (c) drawTimeline(c, m); else { tl.innerHTML = timelineHTML(m); wireTimeline(m, m.el); } return; }
+    const row = m.el.querySelector(`.timeline .tl-think[data-key="t${step}"]`);
+    if (!row) { if (c) drawTimeline(c, m); else { putTimeline(m); wireTimeline(m, m.el); } return; }
     const w = $('.tl-words', row); if (w) w.textContent = `${String(text).trim().split(/\s+/).length.toLocaleString()} words`;
     if (row.open) {
       const body = $('.tl-think-body', row), TAIL = 12000, t = String(text);
@@ -4716,17 +4753,24 @@ function restoreInputs(tl, saved) {
 // The timeline drawn again from the reply's state, with its cards wired.
 function drawTimeline(c, m) {
   if (offPage(m.el)) return;
-  const el = m.el, tl = $('.timeline', el), was = cardInputs(tl);
+  const el = m.el, was = cardInputs(el);
   // Everything the agent did reads in order: its thinking (folded), what it said, one line per step's tool calls
   // (click for each call and its result), and any card that asks you something, right where it happened.
-  tl.innerHTML = timelineHTML(m);
+  putTimeline(m);
   wireTimeline(m, el);
   $('.approvals', el).innerHTML = outOfStepsHTML(m) + wrapUpHTML(m);
   const oos = $('.oos-card[data-run]', el); if (oos) wireOutOfSteps(oos, c, m);
   for (const card of el.querySelectorAll('.approval[data-id]:not(.question):not(.budget-card)')) wireApproval(card, m);
   for (const card of el.querySelectorAll('.question[data-id]')) wireQuestion(card, m);
   const bcard = $('.budget-card[data-id]', el); if (bcard) wireBudget(bcard, c, m);
-  restoreInputs(tl, was);
+  restoreInputs(el, was);
+}
+// The work above the answer, the answer's time, and the work that came after it, under the answer.
+function putTimeline(m) {
+  const el = m.el, t = timelineHTML(m);
+  $('.timeline', el).innerHTML = t.before;
+  $('.tl-after', el).innerHTML = t.after;
+  $('.ans-when', el).innerHTML = t.answerAt ? `<span class="tl-t">${timeTag(t.answerAt)}</span><span>Answer</span>` : '';
 }
 // ⚡ The clock on a card stopped (you started on it): only its countdown line changes, so the rest of the card stays.
 function drawHeld(m, id, card) {
@@ -4907,7 +4951,8 @@ function replyHeadHTML(m, fallback) {
   // An OpenCode model has no OpenRouter page: its chip says where it ran instead.
   const idChip = (id, cls, tip) => `<span class="rh-id ${cls}" title="${esc(tip)}">${esc(id)}</span><button type="button" class="rh-btn rh-copy" data-copy="${esc(id)}" title="Copy ${esc(id)}" aria-label="Copy the model id">${msgIcon('copy')}</button>${sourceOfId(id) ? '' : `<button type="button" class="rh-btn rh-open" data-or="${esc(orBase(id))}" title="Open ${esc(orBase(id))} on openrouter.ai" aria-label="Open on OpenRouter"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg></button>`}`;
   const fellBack = calls.filter((e) => e.fellBackFrom).length;
-  return `${idChip(model, 'rh-model', models.length > 1 ? `Models in this reply: ${models.join(', ')}` : sourceOfId(model) ? `Runs on your ${SOURCE_NAME[sourceOfId(model)]} account` : 'The OpenRouter model id')}${models.length > 1 ? `<small class="rh-more" title="${esc(models.join('\n'))}">+${models.length - 1}</small>` : ''}`
+  const when = m.at ? `<span class="rh-when" title="Started${m.doneAt ? ' and ended' : ''}">${timeTag(m.at)}${m.doneAt ? ` – ${timeTag(m.doneAt)}` : ''}</span>` : '';
+  return when + `${idChip(model, 'rh-model', models.length > 1 ? `Models in this reply: ${models.join(', ')}` : sourceOfId(model) ? `Runs on your ${SOURCE_NAME[sourceOfId(model)]} account` : 'The OpenRouter model id')}${models.length > 1 ? `<small class="rh-more" title="${esc(models.join('\n'))}">+${models.length - 1}</small>` : ''}`
     + (fellBack ? `<span class="rh-fell" title="${fellBack} step${fellBack === 1 ? '' : 's'} of this reply went to OpenRouter because ${esc(SOURCE_NAME[sourceOfId(calls.find((e) => e.fellBackFrom).fellBackFrom)] || 'the source')} failed (see Steps)">⤵ ${fellBack} on OpenRouter</span>` : '')
     + (actual ? `<span class="rh-arrow" aria-hidden="true">→</span>${idChip(actual, 'rh-actual', `${model} picked this model to answer`)}` : '')
     + (providers.length ? `<span class="rh-via" title="The provider OpenRouter routed this reply to">via ${esc(providers.join(', '))}</span>` : '');
@@ -7372,7 +7417,7 @@ function settingsPanels(S) {
       + stCard('Text and spacing', '', stRow('Density', 'Compact fits more messages and chats on screen.', stSeg('ui.density', [['comfortable', 'Comfortable'], ['compact', 'Compact']], U.density))
         + stRow('Message text size', 'Replies, your posts and the message box.', stStep('ui.fontSize', U.fontSize, 12, 18, 1, 'px'))
         + stRow('Motion', 'Animations and transitions. “Follow system” uses Windows’ Animation effects setting (or your OS’s reduce-motion setting).', stSeg('ui.reduceMotion', [['system', 'Follow system'], ['full', 'On'], ['reduce', 'Reduced']], motionPref(U)))
-        + stRow('Message timestamps', 'Shown on every post.', stSeg('ui.timestamps', [['time', 'Time'], ['relative', 'Relative'], ['off', 'Off']], U.timestamps)))
+        + stRow('Message timestamps', 'Shown on every post, so the chat reads in time order.', stSeg('ui.timestamps', [['time', 'Time'], ['relative', 'Relative']], U.timestamps === 'off' ? 'time' : U.timestamps)))
       + `</div><div>`
       + stCard('Preview', 'A chat with these settings.', '<div data-live="preview"></div>')
       + stCard('Notifications', '', stRow('Tell me when a reply…', 'Only while QuorX is in the background. Click a notification to open that chat. Your browser asks once, the first time you send a message.', stCards('ui.notify', [['all', '🔔', 'Needs me or ends', ''], ['needs', '✋', 'Needs me', ''], ['off', '🔕', 'Off', '']], U.notify, 'compact'), { cls: 'sx-row-wide' }))
@@ -7723,7 +7768,7 @@ function stSummary(id, S) {
 }
 // Small parts of a page that draw what the draft says right now (they redraw after every change).
 const ST_LIVE = {
-  preview: (S) => { const U = uiOf(S), t = U.timestamps === 'off' ? '' : U.timestamps === 'relative' ? '<small>2 min ago</small>' : '<small>14:02</small>';
+  preview: (S) => { const U = uiOf(S), t = U.timestamps === 'relative' ? '<small>2 min ago</small>' : '<small>14:02</small>';
     return `<div class="sx-preview ${U.density === 'compact' ? 'compact' : ''}" style="--pv-size:${U.fontSize}px" aria-hidden="true"><div class="sx-pv-side"><i></i><i></i><i></i><i style="width:70%"></i><i></i></div><div class="sx-pv-chat"><div class="sx-pv-msg me">Build me a pomodoro timer${t}</div><div class="sx-pv-msg">Done: a 25/5 timer with a start button and a chime. Open it in the preview.${t}</div></div></div>`; },
   window: (S) => { const U = uiOf(S);
     return `<div class="sx-window"><button type="button" class="${U.sidebarStart === 'rail' ? 'rail' : ''}" data-jump="stRowSidebar">Sidebar<small>${SIDE_START[U.sidebarStart] || ''}</small></button><button type="button" data-jump="stRowSidebar" tabindex="-1">Chat</button><button type="button" class="${U.paneMode === 'never' ? 'dim' : ''}" data-jump="stRowPane">Artifact pane<small>${PANE_MODE[U.paneMode] || ''}</small></button></div>`; },

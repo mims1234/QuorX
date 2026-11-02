@@ -1063,6 +1063,7 @@ html body .sidebar .sb-project .sb-chat.sb-chat-item.running:is(.drv-desktop, .d
 .steer-card p { margin: 0; color: var(--text); white-space: pre-wrap; }
 .steer-card .sc-state { font: 500 11px var(--mono); color: var(--muted); }
 .steer-card.read .sc-state { color: var(--ok); }
+.steer-card .sc-who time { color: var(--muted); font-weight: 500; }
 
 /* ---------- wider screens: no full-width top bar; the title heads the sidebar, ⟳ ◐ ⚙ sit by the version ---------- */
 .sb-titlebar { display: none; }
@@ -1462,6 +1463,17 @@ dialog.ask-dlg::backdrop { background: rgba(4, 6, 6, .6); backdrop-filter: blur(
 .msg .reply-head .rh-btn svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .msg .reply-head .rh-btn.done { color: var(--ok); opacity: 1; }
 .msg .reply-head .rh-via { color: var(--muted); font-size: 11.5px; margin-left: 2px; }
+/* Every reply says when it started and ended, and when its answer was written: the chat reads in time order. */
+.msg .reply-head .rh-when { font: 500 11px var(--mono); color: var(--muted); white-space: nowrap; }
+.msg .ans-when { display: grid; grid-template-columns: 58px minmax(0, 1fr); gap: 8px; font: 500 11px var(--mono); color: var(--muted); margin: 8px 0 2px; }
+/* A column of times down the left of a reply's work: every line, card and fold says when it happened. */
+.msg .tl-at, .msg .tl-row > .tl-at { display: grid; grid-template-columns: 58px minmax(0, 1fr) !important; gap: 8px; align-items: start; min-width: 0; }
+.msg .tl-at-body { min-width: 0; }
+.msg .tl-t { font: 500 10.5px var(--mono); color: var(--muted); text-align: right; padding-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.msg .tl-at .tl-at > .tl-t { color: var(--dim); }
+.msg .tl-ct { margin-left: auto; padding-left: 8px; font: 500 10px var(--mono); color: var(--dim); white-space: nowrap; }
+.msg .ans-when:empty { display: none; }
+.msg .tl-after { margin: 10px 0 0; }
 .chatpane .cmp-act-btn.micBtn[hidden] { display: none !important; }
 /* ---------- project + ⚙ 🗑: plain icons in the text colour; hover lifts them, and 🗑 turns red ---------- */
 html body .sidebar .sb-pacts .sb-new:hover, html body .sidebar .sb-pacts .sb-edit:hover { background: var(--panel-2) !important; border-color: var(--line) !important; color: var(--text) !important; }

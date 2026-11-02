@@ -35,7 +35,7 @@ export const SETTINGS = [
   E('ui.density', 'appearance', 'Density', 'enum', { values: [['comfortable', 'Comfortable'], ['compact', 'Compact']], help: 'Compact fits more messages and chats on screen.' }),
   E('ui.fontSize', 'appearance', 'Message text size', 'int', { min: 12, max: 18, unit: 'px', help: 'Replies, your posts and the message box.' }),
   E('ui.reduceMotion', 'appearance', 'Motion', 'enum', { values: [['system', 'Follow system'], ['full', 'On'], ['reduce', 'Reduced']], help: 'Animations and transitions.' }),
-  E('ui.timestamps', 'appearance', 'Message timestamps', 'enum', { values: [['time', 'Time'], ['relative', 'Relative'], ['off', 'Off']] }),
+  E('ui.timestamps', 'appearance', 'Message timestamps', 'enum', { values: [['time', 'Time'], ['relative', 'Relative']] }),
   E('ui.sidebarStart', 'appearance', 'Sidebar when QuorX opens', 'enum', { values: [['remember', 'Remember'], ['expanded', 'Expanded'], ['rail', 'Rail']] }),
   E('ui.paneMode', 'appearance', 'Artifact pane', 'enum', { values: [['auto', 'Auto'], ['always', 'Always'], ['never', 'Only when asked']], help: 'Auto shows it only when the chat has built something.' }),
   E('ui.notify', 'notifications', 'Tell me when a reply…', 'enum', { values: [['all', 'Needs me or ends'], ['needs', 'Needs me'], ['off', 'Off']], help: 'Desktop notifications, only while QuorX is in the background. Off turns them off.' }),
