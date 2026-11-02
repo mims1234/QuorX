@@ -91,3 +91,5 @@ html:root body .msgs .msg.bot.is-error { border-left-color: var(--bad) !importan
 .mm-pic-folder { flex: none; border: 1px solid var(--line); background: transparent; border-radius: 6px; padding: 0 5px; font-size: 12px; line-height: 18px; cursor: pointer; }
 .mm-pic-folder:hover, .mm-pic-folder:focus-visible { border-color: var(--accent); background: var(--panel-2); }
 .lb-nav .lb-folder { width: auto; height: 28px; padding: 0 10px; font: 12px var(--font-ui); }
+/* The large view's ✕ sits in the top-right corner: its file bar keeps clear of it. */
+.lb-doc .pv-head { padding-right: 46px; }

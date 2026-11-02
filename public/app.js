@@ -6906,7 +6906,11 @@ function parseDelimited(text, sep) {
  */
 async function previewFile(view, { name, src, size, full, text, kind = previewKind(name), live = true }) {
   const onDisk = onDiskPath(full); // a full path on disk (some callers pass only a name)
-  const head = (info, extra = '') => `<div class="pv-head"><span class="pv-ico" aria-hidden="true">${PV_ICON[kind] || '📄'}</span><b class="pv-name" title="${esc(full || name)}">${esc(name)}</b><span class="pv-info">${info}</span><span class="pv-acts">${extra}${full ? '<button type="button" class="pv-btn pv-copy" title="Copy the path">Copy path</button>' : ''}${onDisk ? '<button type="button" class="pv-btn pv-folder" title="Show it in File Explorer">Show in folder</button>' : ''}${src && !src.startsWith('data:') ? '<button type="button" class="pv-btn pv-ext" title="Open it in its own window">Open ↗</button>' : ''}</span></div>`;
+  // Open ↗ only for a page hosted elsewhere: a file QuorX serves would just open the same view again (📂 Show in folder
+  // is how to get to the file itself).
+  const hosted = /^https?:\/\//i.test(src || '') && (() => { try { return new URL(src).origin !== location.origin; } catch { return false; } })();
+  const elsewhere = onDisk ? 'Show in folder' : hosted ? 'Open ↗' : '';
+  const head = (info, extra = '') => `<div class="pv-head"><span class="pv-ico" aria-hidden="true">${PV_ICON[kind] || '📄'}</span><b class="pv-name" title="${esc(full || name)}">${esc(name)}</b><span class="pv-info">${info}</span><span class="pv-acts">${extra}${full ? '<button type="button" class="pv-btn pv-copy" title="Copy the path">Copy path</button>' : ''}${onDisk ? '<button type="button" class="pv-btn pv-folder" title="Show it in File Explorer">Show in folder</button>' : ''}${hosted ? '<button type="button" class="pv-btn pv-ext" title="Open it in its own window">Open ↗</button>' : ''}</span></div>`;
   const wire = () => {
     const cp = $('.pv-copy', view); if (cp) cp.onclick = () => navigator.clipboard?.writeText(full).then(() => flashTip(cp, 'Copied')).catch(() => flashTip(cp, 'Could not copy'));
     const fo = $('.pv-folder', view); if (fo) fo.onclick = () => openFolder(null, full);
@@ -6938,7 +6942,7 @@ async function previewFile(view, { name, src, size, full, text, kind = previewKi
     wire();
     const el = $(kind, view);
     el.onloadedmetadata = () => { $('.pv-info', view).textContent = [meta, durText(el.duration), kind === 'video' && el.videoWidth ? `${el.videoWidth}×${el.videoHeight}` : ''].filter(Boolean).join(' · '); };
-    el.onerror = () => { $('.pv-stage', view).insertAdjacentHTML('beforeend', '<p class="pv-note">This format does not play in the app (it may need its own player). Use Open ↗.</p>'); };
+    el.onerror = () => { $('.pv-stage', view).insertAdjacentHTML('beforeend', `<p class="pv-note">This format does not play in the app (it may need its own player).${elsewhere ? ` Use ${elsewhere}.` : ''}</p>`); };
     return;
   }
   if (kind === 'pdf') { view.innerHTML = head(meta) + `<iframe class="pv-frame" src="${esc(src)}" title="${esc(name)}"></iframe>`; wire(); return; }
@@ -6946,7 +6950,7 @@ async function previewFile(view, { name, src, size, full, text, kind = previewKi
     view.innerHTML = head(meta) + '<div class="pv-doc"><div class="fx-empty">Reading…</div></div>'; wire();
     const r = await getJ(`/api/files/text?project=${encodeURIComponent(G.filesProject)}&path=${encodeURIComponent(name)}`).catch((e) => ({ error: e.message }));
     const doc = $('.pv-doc', view); if (!doc) return;
-    doc.innerHTML = r?.error ? `<div class="fx-empty">Could not read it: ${esc(r.error)}</div>` : `<p class="pv-note">The text of the document (no layout or pictures). Open ↗ shows it as it looks.</p><div class="pv-text">${esc(r.text || '(no text)')}</div>`;
+    doc.innerHTML = r?.error ? `<div class="fx-empty">Could not read it: ${esc(r.error)}</div>` : `<p class="pv-note">The text of the document (no layout or pictures).${elsewhere ? ` ${elsewhere} to see it as it looks.` : ''}</p><div class="pv-text">${esc(r.text || '(no text)')}</div>`;
     return;
   }
   if (kind === 'table') {
@@ -6966,7 +6970,7 @@ async function previewFile(view, { name, src, size, full, text, kind = previewKi
   }
   if (kind === 'md') return twoWay(async (body) => { const t = text ?? await fetch(src).then((r) => r.text()); body.innerHTML = `<div class="pv-md msg-md">${md(t)}</div>`; enhance(body); });
   if (kind === 'html') return twoWay((body) => { const u = pageUrl(src); body.innerHTML = `<iframe class="pv-frame" sandbox="${pageSandbox(u)}" src="${esc(u)}" title="${esc(name)}"></iframe>`; });
-  if (kind === 'binary') { view.innerHTML = head(meta) + `<div class="fx-empty big">${esc(name)}<br><small>A binary file: no preview. Open ↗ or open the folder to use it.</small></div>`; wire(); return; }
+  if (kind === 'binary') { view.innerHTML = head(meta) + `<div class="fx-empty big">${esc(name)}<br><small>A binary file: no preview.${elsewhere ? ` ${elsewhere} to use it.` : ''}</small></div>`; wire(); return; }
   // Text and code: the code viewer.
   const t = text ?? await fetch(src).then((r) => r.text());
   view.innerHTML = head(meta) + '<div class="pv-body"></div>'; wire();
