@@ -1271,7 +1271,9 @@ function trackCd(s, c) {
 
 // ---------- rules ----------
 export const ruleText = (s) => [s.program, ...s.args.map((a) => a.text)].join(' ').replace(/\s+/g, ' ').trim();
-const ruleRx = (m) => new RegExp(`^${String(m).trim().replace(/\s+/g, ' ').replace(/[.+^${}()|[\]\\?]/g, '\\$&').replace(/\*/g, '.*')}$`, 'i');
+// * stands for anything. A space before a closing * ends a whole word: "ffmpeg *" is ffmpeg with any arguments or
+// none, never ffmpegx.
+const ruleRx = (m) => new RegExp(`^${String(m).trim().replace(/\s+/g, ' ').replace(/[.+^${}()|[\]\\?]/g, '\\$&').replace(/ \*$/, '\0').replace(/\*/g, '.*').replace('\0', '(?: .*)?')}$`, 'i');
 const RUNNER = /^(python3?|py|node|npx|uv(\s+run)?|uvx|powershell|pwsh|cmd|bash|sh|deno|bun|ruby|perl|php)\s*\*?$/i;
 /** Rules that are ignored while YOLO is on: wildcards on interpreters and package runners each allow any code. */
 export const yoloIgnored = (rule) => RUNNER.test(String(rule.match || '').replace(/\*\s*$/, '').trim()) && /\*\s*$/.test(String(rule.match || ''));
@@ -1295,7 +1297,9 @@ const VALUE_FLAGS = { powershell: new Set(PS_HOST_VALUES), pwsh: new Set(PS_HOST
 // Options that name the script the program runs: a rule for it can cover the script's folder.
 const SCRIPT_FLAGS = new Set(['-file', '-f']);
 
-// Suggested rules for "Always allow…": this exact command, commands starting like it, or any use of the program.
+// Suggested rules for "Always allow…": this exact command, commands starting like it, or any use of the program
+// ("ffmpeg *": every command that starts with the program, whatever its arguments). runner: the program runs any code
+// it is handed (node, python, powershell…), so a yes on the card doesn't cover all of it.
 // "Starting like it" is cut from the same words the rules are matched against (ruleText), so it always matches
 // the command it was made from: everything up to the first real argument, options and their values included.
 function suggestions(s) {
@@ -1315,7 +1319,7 @@ function suggestions(s) {
     words.push(next.text);
   }
   const prefix = `${[...words, ...(anchor != null ? [anchor] : [])].join(' ').replace(/\s+/g, ' ').trim()}*`;
-  return { exact: exact.length <= RULE_MAX ? exact : prefix, prefix, program: `${s.program}*` };
+  return { exact: exact.length <= RULE_MAX ? exact : prefix, prefix, program: `${s.program} *`, ...(RUNNER.test(s.program) ? { runner: true } : {}) };
 }
 const RULE_MAX = 1000;
 /** Whether a rule's pattern matches a command's rule text (what "Always allow…" checks before it saves). */

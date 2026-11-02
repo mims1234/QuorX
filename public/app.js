@@ -5530,13 +5530,17 @@ document.addEventListener('focusin', (e) => {
   const card = e.target.closest('.approval');
   if (card) holdWait($('.aw[data-until]', card));
 });
-// The same match a saved rule makes (server/cmdpolicy.js ruleMatches): * stands for anything, case and spacing ignored.
-const cmdRuleMatches = (rule, text) => new RegExp(`^${String(rule).trim().replace(/\s+/g, ' ').replace(/[.+^${}()|[\]\\?]/g, '\\$&').replace(/\*/g, '.*')}$`, 'i').test(String(text || '').replace(/\s+/g, ' ').trim());
+// The same match a saved rule makes (server/cmdpolicy.js ruleMatches): * stands for anything, case and spacing ignored;
+// a closing " *" ends a whole word ("ffmpeg *" is ffmpeg with any arguments, never ffmpegx).
+const cmdRuleMatches = (rule, text) => new RegExp(`^${String(rule).trim().replace(/\s+/g, ' ').replace(/[.+^${}()|[\]\\?]/g, '\\$&').replace(/ \*$/, '\0').replace(/\*/g, '.*').replace('\0', '(?: .*)?')}$`, 'i').test(String(text || '').replace(/\s+/g, ' ').trim());
 function shellCardHTML(a) {
   const c = a.card, p = c.policy || {};
   const segs = (p.segments || []).map((s) => `<div class="sc-seg"><code>${esc(clip(s.text, 200))}</code><span class="sc-cls" data-cls="${esc(s.cls)}">${esc(CMD_CLASS[s.cls] || s.cls)}${s.global ? ' · whole computer' : ''}${s.via ? ` · run by ${esc(s.via)}` : ''}${s.wrap ? ` · inside ${esc(s.wrap)}` : ''}</span>${(s.paths || []).map((x) => `<span class="sc-path" data-zone="${esc(x.zone)}">${esc(CMD_ZONE[x.zone] || x.zone)} · ${esc(clip(x.path, 90))}</span>`).join('')}</div>`).join('');
   const sug = (p.segments || []).find((s) => s.verdict !== 'allow')?.suggest || p.segments?.[0]?.suggest || { exact: c.what, prefix: c.what, program: c.what };
-  const seg = (group, opts) => `<div class="seg sc-pick" data-group="${group}">${opts.map(([v, l], i) => `<button type="button" data-v="${esc(v)}" class="${i === 0 ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+  // Allowing a program covers every command that starts with it (ffmpeg -i a.mp4 b.mp3, ffmpeg -y …), but not a
+  // program that runs any code it is handed (node, python, powershell…): those stay one at a time.
+  const prog = sug.program.replace(/\s*\*$/, ''), byProgram = !c.noAlways && !sug.runner && /^\S+ \*$/.test(sug.program);
+  const seg =(group, opts) => `<div class="seg sc-pick" data-group="${group}">${opts.map(([v, l], i) => `<button type="button" data-v="${esc(v)}" class="${i === 0 ? 'on' : ''}">${l}</button>`).join('')}</div>`;
   const risk = c.risk === 'danger' ? '<div class="sc-risk" data-risk="danger">⛔ This reads your keys or sign-ins. Only say yes if you asked for exactly this.</div>'
     : c.risk === 'warn' ? '<div class="sc-risk" data-risk="warn">⚠ This reaches past the project: a deploy, a push, a whole-computer install, or files outside the project.</div>' : '';
   return `<div class="approval shell-card" data-id="${esc(c.id)}" data-tool="shell"${c.risk ? ` data-risk="${esc(c.risk)}"` : ''}>
@@ -5546,13 +5550,14 @@ function shellCardHTML(a) {
     ${(p.packages || []).length ? `<div class="sc-segs">${p.packages.map((k) => `<span class="sc-path" data-zone="${k.verdict === 'ok' ? 'inside' : k.verdict === 'missing' ? 'blocked' : 'unknown'}">📦 ${esc(k.name)} · ${esc(k.eco)} · ${k.verdict === 'ok' ? `${k.ageDays != null ? `${Math.round(k.ageDays / 365 * 10) / 10} years old` : 'exists'}${k.weekly != null ? ` · ${k.weekly.toLocaleString()}/week` : ''}` : esc(k.note)}</span>`).join('')}</div>` : ''}
     ${c.why ? `<div class="what">Why it asks: ${esc(c.why)}</div>` : ''}
     ${waitHTML(c)}
-    <div class="acts"><button type="button" class="primary reply" hidden>Send to the agent</button><button type="button" class="primary yes">Allow once</button>${c.noAlways ? '' : '<button type="button" class="sc-always" aria-expanded="false">Allow always ▾</button>'}<button type="button" class="no">Deny</button></div>
+    <div class="acts"><button type="button" class="primary reply" hidden>Send to the agent</button>${byProgram ? `<button type="button" class="primary yes" data-rule="${esc(sug.program)}" title="Every command that starts with ${esc(prog)} runs without asking in this chat, whatever its arguments">Allow every <code>${esc(prog)}</code> command</button><button type="button" class="once">Just this once</button>` : '<button type="button" class="primary yes">Allow once</button>'}${c.noAlways ? '' : '<button type="button" class="sc-always" aria-expanded="false">Allow always ▾</button>'}<button type="button" class="no">Deny</button></div>
+    ${byProgram ? `<div class="what dim sc-covers">“Allow every <b>${esc(prog)}</b> command” covers every command that starts with <code>${esc(prog)}</code> in this chat, whatever comes after it. Commands joined with &amp;&amp;, ; or | are still checked part by part, and risky ones still ask.</div>` : ''}
     ${c.noAlways ? '<div class="sc-note">No “Allow always” for this kind of command: it reaches past the project, can’t be checked, or touches your keys. If you’re sure, type a rule yourself in Permissions (⚙ Settings → Approvals & safety).</div>'
       : `<div class="sc-rule" hidden>
-        <div class="sc-row"><span class="sc-k">What it covers</span>${seg('match', [[sug.exact, 'This exact command'], [sug.prefix, `Commands starting with <code>${esc(sug.prefix.replace(/\*$/, ''))}</code>`], [sug.program, `Any <code>${esc(sug.program.replace(/\*$/, ''))}</code> command`]])}</div>
+        <div class="sc-row"><span class="sc-k">What it covers</span>${seg('match', ((o) => (byProgram ? [o[2], o[1], o[0]] : o))([[sug.exact, 'This exact command'], [sug.prefix, `Commands starting with <code>${esc(sug.prefix.replace(/\*$/, ''))}</code>`], [sug.program, `Every <code>${esc(prog)}</code> command`]]))}</div>
         <div class="sc-row"><span class="sc-k">Where</span>${seg('scope', [['chat', `${scopeMark('chat', true)}This chat`], ['project', `${scopeMark('project', true)}This project`], ['everywhere', `${scopeMark('everywhere', true)}Everywhere in QuorX`]])}</div>
         <div class="sc-also" hidden></div>
-        <div class="sc-warn" hidden>⚠ “Any” lets every use of this program run without asking, including ones that run other code.</div>
+        <div class="sc-warn" hidden>⚠ This lets every use of ${esc(prog)} run without asking, including code it is handed to run.</div>
         <div class="sc-row sc-sum"><span class="sc-preview"></span><button type="button" class="primary sc-save">Allow and save</button></div>
       </div>`}
     <textarea rows="1" placeholder="Or reply with context: the agent reads it instead of a yes or no. Enter sends it."></textarea>
@@ -5569,7 +5574,7 @@ function typingIsReply(card, send) {
     if (card.dataset.answered) return;
     const has = !!typed();
     reply.hidden = !has;
-    for (const b of card.querySelectorAll('.yes, .always, .sc-always, .sc-save')) { b.disabled = has; b.title = has ? 'Clear the text to allow it' : ''; }
+    for (const b of card.querySelectorAll('.yes, .once, .always, .sc-always, .sc-save')) { b.disabled = has; b.title = has ? 'Clear the text to allow it' : ''; }
   };
   // Sent from the card: the card's own text, or else what waits in the message box (which then empties).
   const go = () => {
@@ -5596,7 +5601,10 @@ function wireShellCard(card, m) {
     const reason = reply ? '' : $('textarea', card)?.value.trim() || '';
     await fetch('/api/approve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ runId: m.runId, id, approve, reason, ...(reply ? { reply } : {}), ...(rule ? { rule } : {}) }) }).catch(() => {});
   };
-  $('.yes', card).onclick = () => answer(true);
+  // The yes on a program (Allow every ffmpeg command) saves it for this chat; Just this once runs only this line.
+  const yes = $('.yes', card);
+  yes.onclick = () => answer(true, yes.dataset.rule ? { match: yes.dataset.rule, scope: 'chat' } : null);
+  const once = $('.once', card); if (once) once.onclick = () => answer(true);
   $('.no', card).onclick = () => answer(false);
   typingIsReply(card, (t) => answer(false, null, t));
   const panel = $('.sc-rule', card), btn = $('.sc-always', card);
@@ -5610,11 +5618,12 @@ function wireShellCard(card, m) {
     const match = pick('match'), scope = pick('scope');
     const others = scope === 'project' && chat ? G.chats.filter((x) => x.projectId === chat.projectId && x.id !== chat.id && x.messages > 0).length : 0;
     const where = scope === 'chat' ? 'in this chat' : scope === 'project' ? `in this project${chat ? ` (${esc(G.projects?.find((p) => p.id === chat.projectId)?.name || '')})` : ''}${others ? ` · <b>${others} other chat${others === 1 ? '' : 's'} here too</b>` : ''}` : '<b>in every project and chat</b>';
-    $('.sc-preview', card).innerHTML = `Allow <code>${esc(match)}</code> ${where}`;
+    $('.sc-preview', card).innerHTML = / \*$/.test(match) ? `Allow every command starting with <code>${esc(match.replace(/ \*$/, ''))}</code> ${where}` : `Allow <code>${esc(match)}</code> ${where}`;
     const also = earlier.filter((x) => cmdRuleMatches(match, x) && x !== card.querySelector('.sc-line')?.textContent).slice(0, 4), box = $('.sc-also', card);
     box.hidden = !also.length;
     box.innerHTML = also.length ? `Would also have covered, in this chat: ${also.map((x) => `<code>${esc(clip(x, 60))}</code>`).join(' ')}` : '';
-    $('.sc-warn', card).hidden = $('.sc-pick[data-group="match"] button:last-child', card) !== $('.sc-pick[data-group="match"] button.on', card);
+    // Only a program that runs code it is handed (its "every command" choice comes last) gets the warning.
+    $('.sc-warn', card).hidden = !!$('.once', card) || $('.sc-pick[data-group="match"] button:last-child', card) !== $('.sc-pick[data-group="match"] button.on', card);
   };
   btn.onclick = () => { panel.hidden = !panel.hidden; btn.setAttribute('aria-expanded', String(!panel.hidden)); show(); };
   for (const b of card.querySelectorAll('.sc-pick button')) b.onclick = () => { for (const x of b.parentElement.children) x.classList.toggle('on', x === b); show(); };
