@@ -196,6 +196,33 @@ test('the site server answers byte ranges, so a video can seek', async () => {
   }
 });
 
+test('project files (/ws/, a player page, folders a chat added) are sent with byte ranges, so their videos can seek', async () => {
+  const http = await import('node:http');
+  const { sendRanged } = await import('../server/blobs.js');
+  const dir = tempDir('quorx-test-'), file = path.join(dir, 'clip.mp4');
+  fs.writeFileSync(file, Buffer.from('0123456789'));
+  const srv = http.createServer((req, res) => sendRanged(req, res, file, { 'Content-Type': 'video/mp4' }));
+  await new Promise((ok) => srv.listen(0, '127.0.0.1', ok));
+  try {
+    const get = (h = {}) => fetch(`http://127.0.0.1:${srv.address().port}/clip.mp4`, { headers: h });
+    const full = await get();
+    assert.equal(full.status, 200);
+    assert.equal(full.headers.get('accept-ranges'), 'bytes');
+    assert.equal(full.headers.get('content-type'), 'video/mp4');
+    assert.equal(await full.text(), '0123456789');
+    const part = await get({ Range: 'bytes=2-5' });
+    assert.equal(part.status, 206);
+    assert.equal(part.headers.get('content-range'), 'bytes 2-5/10');
+    assert.equal(await part.text(), '2345');
+    assert.equal(await (await get({ Range: 'bytes=7-' })).text(), '789');
+    assert.equal(await (await get({ Range: 'bytes=-3' })).text(), '789');
+    assert.equal((await get({ Range: 'bytes=20-' })).status, 416);
+  } finally {
+    await new Promise((ok) => srv.close(ok));
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
+});
+
 test('a check that runs out of time is "couldn’t check", never a syntax error', async () => {
   const dir = tempDir('quorx-test-');
   const was = CHECK_TIMEOUTS.check;
