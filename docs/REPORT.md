@@ -107,7 +107,14 @@ flowchart TD
 | What earlier replies did | Each tool call is recorded in one line. The record and how a reply's checks ended go into the next reply's prompt as a harness record, never as the agent's own words (models copy that format and fake it otherwise). |
 | Plan first | Off by default. With "Big tasks" or "Always", the agent's first plan waits on a card: Go ahead, Stop here, or type what to change. File changes, commands and servers wait for Go ahead; reading is fine. |
 | Questions | `ask_user` sends up to 4 questions in one card, each with a recommended answer ticked. In YOLO the deciders answer them. The agent never asks you to pick a visual style: it chooses and says what it chose. |
-| Helpers | `delegate` hands a read-only job (explore, find, summarise) to a cheaper model with a clean context, `qwen/qwen3.7-flash` by default. Only its short report comes back. |
+| Helpers | `delegate` hands a job to a cheaper model with its own context, `qwen/qwen3.7-flash` by default. Only its short report comes back. Each job has a role: Explore reads, Test may also run checked commands and the browser, Draft may also write, but only in `.quorx/scratch`. Roles are edited in ⚙ Agent loop → Under the hood (what each may do, its model, steps, and whether it starts clean or with a summary of the chat), and the user can add their own. |
+| Tools when needed | Rarely used tools (Android, the debugger, desktop apps, QuorX's own settings, secrets and skills) are listed by name in `load_tools` and join the reply when the agent loads one or simply calls it. A chat with 9 or more MCP tools gets them the same way. Off, or a group unticked, in ⚙ Agent loop → Under the hood. |
+| Edit guard | A file the agent read or wrote in this reply that someone else changes (you, another chat, another program) must be read again before the agent edits or overwrites it. What the agent's own commands and hooks change doesn't count. |
+| Background jobs | A background job that ends while the reply works is reported to the agent before its next step, with its exit code and last lines, so it doesn't poll `job_output`. |
+| Status line | Off by default. When set (⚙ Agent loop → Under the hood), after that many steps of tool calls with no word to the user the agent is asked to say in one sentence what it is doing. |
+| Other agents' notes | `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.cursorrules` and `.github/copilot-instructions.md` (an editable list) are read with `AGENT.md`, 8 KB in all by default. |
+| Hooks | Commands the user sets per project (Project settings → Hooks) that QuorX runs itself: before or after a file write, a command or any other tool (matched by name), and when a reply starts or ends. A failing "before" hook stops what comes next; a reply-start hook's output goes to the agent; a failing reply-end hook sends the reply back to fix it, and stops sending it back when it fails the same way again. The user wrote them, so they run without asking, but never a red-card command. They live outside the project. |
+| Not checked | After a reply that did work, a short note under it when the harness knows something wasn't checked: checks or reviewer off, a job still running, a hook still failing. Nothing shows otherwise, and no model call is made. |
 | Routing | OpenRouter's own order by default (it favours providers with reliable tool calling); cheapest or fastest instead; only providers that support every parameter; optionally zero-data-retention providers only; an optional fallback model. |
 | Scorecard | One line per reply in `logs/runs.jsonl`: model, how it ended, steps, tools, retries, checks, cost and time. `npm run scorecard` sums it per model, and the model picker shows your own pass rate next to each model's price. |
 
@@ -131,6 +138,10 @@ chats and goes through the same rule engine as `shell`.
   agent asks before adding more.
 - **Project memory:** `AGENT.md` holds the project's notes, which every chat gets and the agent keeps current.
   `.quorx/log.md` gets one line per reply that changed something; the last 15 lines are in every chat's context.
+- **Your memory** (⚙ Settings → Memory): short notes the user approved, for every project or one. What one chat
+  gets stays under 300 tokens. The agent may propose a note with `remember`; it is saved only when the user says yes.
+  The agent also files its notes by type with a reason and longer details it reads with `recall` when they matter;
+  those don't count toward the limit and aren't shown in the panel.
 - **Artifacts are for planning:** plans, specs, research notes, reports and comparisons, as Markdown or a
   self-contained HTML page, hosted by the server at `/art/<chat>/<id>` and shown in the pane. Hosted pages run
   sandboxed and can't call QuorX's API. What the agent builds (sites, apps, games, tools) lives in the project folder
@@ -768,6 +779,7 @@ Python venvs and tkinter, game engines and installers), [java-and-kotlin.md](jav
 | `scripts/test-browser.mjs` | 10 | The headless browser's page operations |
 | `scripts/test-agent.mjs` | 53 | The loop with a scripted model: steps, cost, budgets, approvals in Strict and YOLO, plans, the reviewer, helpers, media plans |
 | `scripts/test-tools.mjs` | 29 | The agent's tools and checks: search and list files, steps and Stop, fresh eyes, design, the enhancer, /review, hooks |
+| `scripts/test-harness-plus.mjs` | 13 | The edit guard, background-job notices, other agents' notes, tools when needed, the new hook events, the status line, helper roles, typed memory and what wasn't checked |
 | `scripts/test-features.mjs` | 38 | Schedules, Quoriums, memory, secrets, servers, video tools and Video Mode |
 | `scripts/test-chrome.mjs` | 7 | A tab the user lends, the QuorX extension and its pairing |
 | `scripts/test-sources.mjs` | 34 | Model sources (OpenCode, Claude Code, Grok Build, Command Code, Ollama), text tool calls, plan value, MCP |

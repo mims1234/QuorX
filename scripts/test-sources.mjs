@@ -323,6 +323,19 @@ test('text calls: a block runs only where a call is written (line start, this ca
     assert.deepEqual([asCall.calls.length, asCall.dsml], [0, 1], 'DSML written as a call has no key: counted, never run');
     assert.equal(r(`I'll read it.
   <｜DSML｜function_calls>${D}</｜DSML｜function_calls>`).text, "I'll read it.", 'and taken out of the text, so the reply never shows it');
+    // Claude's own format (Claude Code's models fall back to it): the same rules as DeepSeek's.
+    const C = '<invoke name="ask_user">\n<parameter name="questions">[{"question":"Which?","options":["a","b"]}]</parameter>\n</invoke>';
+    const claude = r(`Before I start:\n${C}\n`);
+    assert.deepEqual([claude.calls.length, claude.dsml, claude.text], [0, 1, 'Before I start:'], 'Claude’s <invoke> ending the reply: counted to be asked for again, and out of the text');
+    assert.deepEqual(notRun(claude).nativeCalls, 1, 'so the agent asks for the call again instead of ending the reply on it');
+    assert.equal(r(`<function_calls>\n${C}\n</function_calls>`).dsml, 1, 'inside <function_calls> too');
+    const stray = r(`${C}\n_quorx_call`);
+    assert.deepEqual([stray.dsml, stray.text], [1, ''], 'a stray piece of a call tag after it (seen from Claude Code) still counts');
+    assert.equal(r(`${C}\n${C}\n</quorx_call>`).dsml, 2);
+    assert.deepEqual([r(`Claude writes ${C} sometimes.`).dsml, r(`\`\`\`\n${C}\n\`\`\``).dsml], [0, 0], 'in prose or code it is text');
+    assert.equal(r('Use <invoke name="x"> in the XML file.\nDone.').dsml, 0, 'a mention mid-reply is text');
+    const bare = parseToolCalls(C, 'c');
+    assert.deepEqual(bare.calls.map((c) => [c.function.name, JSON.parse(c.function.arguments).questions[0].options]), [['ask_user', ['a', 'b']]], 'without a key it runs, its JSON parameter read as JSON');
     assert.deepEqual(r(`It is shown in a \`<pre>\` element.\nI'll style the <pre> block.\n${B('a')}`).calls.map((c) => c.function.name), ['a'], 'a mention of <pre> doesn’t turn later calls off');
     assert.deepEqual(r(`${B('a')} ${B('b')}`).calls.map((c) => c.function.name), ['a', 'b'], 'a block right after a call on its line runs');
     assert.equal(r(`The calls would be:\n- ${B('rm')}\n\nSay yes and I will run them.`).calls.length, 0, 'a list of calls is a plan: not run');
@@ -739,6 +752,13 @@ test('Claude Code on this PC runs with its own tools off and QuorX’s prompt; o
     assert.match(call.cwd, /claude-local$/, 'it runs in QuorX’s empty folder');
     assert.deepEqual(call.input.message.content.map((c) => c.type), ['text', 'image'], 'the picture goes along');
     assert.match(call.input.message.content[0].text, /<user key="[0-9a-f]+">\nBuild it\n\[picture attached\]\n<\/user>/);
+  }
+  { // a reply stuck repeating Claude's own call format is cut off, not read for minutes, and counted to be asked again
+    const t0 = Date.now();
+    const { r, e } = await viaFakeClaude('invokeloop', CLAUDE_BODY);
+    assert.equal(e, undefined, e?.message);
+    assert.ok(Date.now() - t0 < 10e3, 'stopped soon');
+    assert.deepEqual([r.toolCalls.length, r.nativeCalls >= 8, r.text], [0, true, '']);
   }
   { // a Claude Code that starts with tools of its own, or asks for one, is stopped and never runs it
     const on = await viaFakeClaude('tools', CLAUDE_BODY);

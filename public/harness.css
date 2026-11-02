@@ -1,0 +1,92 @@
+/* Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0 */
+/* The harness upgrades (designed in OpenDesign, "QuorX harness upgrades"): rare tools loaded when needed, other agents'
+   notes, helper roles, the grouped hook events, typed memory and the wrap-up under a reply. */
+
+/* ---------- ⚙ Agent loop: rare tool groups and note files ---------- */
+#settings .qx-lazy { display: grid; gap: 6px; margin-top: 10px; transition: opacity 160ms ease-out; }
+#settings .qx-lazy.off { opacity: .5; }
+.qx-files { display: flex; flex-wrap: wrap; gap: 6px; }
+.qx-file { display: inline-flex; align-items: center; gap: 2px; height: 26px; padding: 0 2px 0 8px; border-radius: 6px; border: 1px solid var(--line-strong); background: var(--panel); font: 500 11.5px var(--mono); color: var(--text-bright); }
+#settings .qx-file .qx-x { width: 22px; height: 22px; min-height: 0; display: inline-grid; place-items: center; border: 0; border-radius: 5px; background: transparent; color: var(--dim); cursor: pointer; padding: 0; font-size: 11px; }
+#settings .qx-file .qx-x:hover { background: var(--bad-dim); color: var(--bad); }
+.qx-file-add { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+#settings .qx-file-add .st-input { width: 220px; font-family: var(--mono); }
+.qx-err { font-size: 12px; color: var(--bad); }
+
+/* A tick with its words: the whole chip is the label (never a knob). */
+.qx-perms { display: flex; flex-wrap: wrap; gap: 6px; }
+.qx-perm { display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 10px 0 6px; border-radius: 7px; border: 1px solid var(--line); background: var(--surface-inset); color: var(--muted); font-size: 12px; font-weight: 550; cursor: pointer; user-select: none; white-space: nowrap; }
+.qx-perm input { appearance: none; -webkit-appearance: none; width: 16px; height: 16px; margin: 0; border-radius: 5px; border: 1.5px solid var(--line-strong); background: var(--panel); display: inline-grid; place-content: center; cursor: pointer; flex: none; }
+.qx-perm input::after { content: '✓'; font: 800 11px/1 var(--font-ui); color: var(--ok-ink); opacity: 0; }
+.qx-perm input:checked { background: var(--ok); border-color: var(--ok); }
+.qx-perm input:checked::after { opacity: 1; }
+.qx-perm input:disabled { cursor: default; }
+.qx-perm:has(input:checked) { color: var(--text-bright); border-color: var(--ok-border); }
+.qx-perm:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
+.qx-perm:hover { border-color: var(--line-strong); }
+
+/* ---------- ⚙ Agent loop → Helpers: roles ---------- */
+#settings .hp-roles-row { display: grid; grid-template-columns: 1fr; gap: 10px; }
+.qx-roles { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 8px; }
+.qx-role { position: relative; display: grid; gap: 12px; padding: 12px 16px; border-radius: 11px; border: 1.5px solid var(--line); background: var(--panel); }
+.qx-role:has(> .qx-role-top .sx-check input:checked) { border-color: var(--ok-border); }
+.qx-role.off .qx-role-grid { opacity: .55; }
+.qx-role.changed::before { content: ''; position: absolute; left: -1.5px; top: 12px; bottom: 12px; width: 3px; border-radius: 0 3px 3px 0; background: var(--amber); }
+.qx-role-top { display: flex; align-items: flex-start; gap: 12px; }
+.qx-role-top > .sx-check { padding-top: 2px; }
+.qx-role-id { flex: 1; min-width: 0; display: grid; gap: 6px; }
+.qx-role-name { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13.5px; font-weight: 700; color: var(--text-bright); }
+.qx-rid { font: 500 11px var(--mono); color: var(--dim); }
+#settings .qx-role-id .st-input { height: 30px; }
+#settings .qx-role-id .qx-in-name { width: min(240px, 100%); font-weight: 700; }
+#settings .qx-role-id .qx-in-desc { width: 100%; max-width: 560px; }
+.qx-role-acts { display: flex; align-items: center; gap: 4px; flex: none; }
+.qx-role-grid { display: flex; flex-wrap: wrap; gap: 12px 18px; align-items: flex-start; padding-left: 32px; }
+.qx-f { display: grid; gap: 6px; min-width: 0; flex: 0 0 auto; }
+.qx-f:first-child { flex: 1 1 300px; }
+.qx-f:nth-child(2) { flex: 0 1 200px; }
+.qx-f-k { font-size: 10.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--dim); }
+#settings .qx-role .sx-model { max-width: 100%; min-height: 30px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#settings .qx-role .sx-model small { color: var(--amber); font-family: var(--mono); }
+#settings .qx-role .st-stepper input.st-step-val { width: 44px; }
+@media (max-width: 900px) { .qx-role-grid { padding-left: 0; } }
+
+/* ---------- Project settings → Hooks: the grouped When picker ---------- */
+.qx-ev-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-bottom: 10px; }
+.qx-ev-group { display: grid; gap: 4px; align-content: start; padding: 8px; border-radius: 9px; background: var(--surface-inset); border: 1px solid var(--border-inset); }
+.qx-ev-group > span { padding: 0 4px 2px; font-size: 10.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }
+.pjx .qx-ev { display: grid; gap: 4px; justify-items: start; height: auto; min-height: 0; padding: 7px 8px; border-radius: 7px; border: 1px solid transparent; background: transparent; color: var(--muted); font: 550 12px/1.35 var(--font-ui); text-align: left; cursor: pointer; }
+.pjx .qx-ev:hover { color: var(--text); background: var(--panel-2); }
+.pjx .qx-ev[aria-checked="true"] { background: var(--panel-3); border-color: var(--accent-border); color: var(--text-bright); }
+.sx-tag.hkx-blocks { color: var(--bad); background: var(--bad-dim); }
+.sx-tag.hkx-sends { color: var(--violet); background: var(--violet-dim); }
+@media (max-width: 760px) { .qx-ev-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* ---------- ⚙ Memory ---------- */
+.qx-mem { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 8px; }
+.qx-memrow { display: flex; gap: 12px; align-items: flex-start; padding: 12px 16px; border-radius: 11px; border: 1.5px solid var(--line); background: var(--panel); }
+.qx-mem-main { flex: 1; min-width: 0; display: grid; gap: 4px; }
+.qx-mem-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.qx-mem-text { margin: 0; font-size: 13.5px; font-weight: 600; color: var(--text-bright); overflow-wrap: anywhere; }
+.qx-mem-acts { display: flex; align-items: center; gap: 4px; flex: none; }
+.qx-scope { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; color: var(--muted); white-space: nowrap; }
+.qx-scope.proj, .mem-scope.proj { color: #f472b6; }
+.qx-memform { display: grid; gap: 12px; margin-top: 8px; padding: 16px; border-radius: 11px; border: 1px solid var(--accent-border); background: var(--panel-2); }
+.qx-field { display: grid; gap: 5px; }
+.qx-field label { font-size: 11.5px; font-weight: 600; color: var(--muted); }
+.qx-lblrow { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.qx-cc { font: 500 11px var(--mono); color: var(--dim); }
+#settings .qx-memform .st-input, #settings .qx-memform .st-select { width: 100%; }
+.qx-edit-acts { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+/* The remember card: where the note applies. */
+.approval .mem-memo { display: grid; gap: 4px; }
+.approval .mem-memo .mem-scope { font-size: 12px; font-weight: 600; color: var(--muted); }
+
+/* ---------- under a reply: what wasn't checked, a quiet inset note that only reads ---------- */
+.wu { margin-top: 10px; padding: 10px 14px; border-radius: 10px; background: var(--surface-inset); border: 1px solid var(--border-inset); }
+.wu-not { display: grid; gap: 6px; }
+.wu-not > b { font-size: 12px; font-weight: 700; color: var(--text); }
+.wu-not ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.wu-not li { display: flex; gap: 8px; align-items: baseline; font-size: 12.5px; line-height: 1.5; color: var(--muted); }
+.wu-not li::before { content: ''; flex: none; width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--amber); transform: translateY(-1px); }
+@media (prefers-reduced-motion: reduce) { #settings .qx-lazy { transition: none; } }

@@ -17,6 +17,8 @@ process.stdin.on('end', () => {
   if (mode === 'hang') { setInterval(() => {}, 1000); return; }
   if (mode === 'limit') { say({ type: 'result', subtype: 'success', is_error: true, result: `Claude AI usage limit reached|${Math.floor(Date.now() / 1000) + 3600}`, total_cost_usd: 0 }); return; }
   const delta = (d) => say({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: d } });
+  // Claude's own call format, repeated without end, as a real model sometimes does: QuorX has to cut it off.
+  if (mode === 'invokeloop') { setInterval(() => delta({ type: 'text_delta', text: '<invoke name="ask_user">\n</invoke>\n' }), 5); return; }
   delta({ type: 'thinking_delta', thinking: 'Plan it.' });
   delta({ type: 'text_delta', text: `Writing it.
 <quorx_call key="${key}">{"name":"write_file",` });

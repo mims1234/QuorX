@@ -813,9 +813,8 @@ test('a failing before-command hook stops the command; hook commands never take 
     assert.deepEqual(hooks.map((h) => [h.skipped || false, h.command]), [[true, 'node log.mjs {file}'], [true, 'node log.mjs {file}'], [false, 'node log.mjs fine.js']]);
     assert.ok(!of(events, 'command').some((e) => /pwned|\$\(x\)/.test(e.command)));
     assert.equal(fs.readFileSync(path.join(dir, 'hooklog.txt'), 'utf8'), 'fine.js\n');
-    // The approval card says the file name came from the agent.
-    const card = of(events, 'approval').find((e) => e.what === 'node log.mjs fine.js');
-    assert.match(card.why, /with a file name the agent chose/);
+    // The user wrote the hook, so it runs without a card, even in Strict.
+    assert.equal(of(events, 'approval').filter((e) => /node log\.mjs/.test(e.what)).length, 0);
   }
   { // hook commands go through the command policy: a blocked one never runs
     const { events, bodies } = await hookRun((body, i) => [

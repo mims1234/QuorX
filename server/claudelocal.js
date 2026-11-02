@@ -24,6 +24,7 @@ const MODELS = [
 ];
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const CONTEXT = 200000;
+const CUT_INVOKES = 8; // Claude-format calls in one reply before it is cut off (see claudeStream)
 
 const err = (msg, extra = {}) => Object.assign(new Error(msg), extra);
 const running = new Set(); // calls under way: Settings shows them, and QuorX closing stops them
@@ -148,6 +149,10 @@ export async function claudeStream(body, signal, onText, onThink, { info = {}, i
   try { proc = launch(exe, args, { cwd: DIR, env: envFor(), windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32' }, start); } catch (e) { fs.rmSync(sysFile, { force: true }); throw err(`Claude Code didn't start: ${e.message}`, { kind: 'network' }); }
   running.add(proc);
   let text = '', thinking = '', firstMs = null, seen = 0, result = null, failure = null, idle = null, outChars = 0, started = false, last = null, stderr = '';
+  // A reply that falls into Claude's own call format can repeat it until its output runs out (minutes of empty
+  // <invoke> blocks): after CUT_INVOKES of them the call is stopped and what came so far is the answer, so the agent
+  // asks again at once (textcalls.js counts them).
+  let cut = false, invokes = 0, scanAt = 0;
   const show = textFilter(onText);
   const kill = () => { if (proc.pid) killTree(proc.pid); };
   const arm = () => { clearTimeout(idle); idle = setTimeout(() => { failure ||= err(`Claude Code sent nothing for ${Math.round(idleMs / 1000)} s`, { name: 'TimeoutError', kind: 'timeout' }); kill(); }, idleMs); };
@@ -165,6 +170,9 @@ export async function claudeStream(body, signal, onText, onThink, { info = {}, i
       if (ev.type === 'content_block_delta' && ev.delta?.type === 'text_delta' && typeof ev.delta.text === 'string') {
         if (firstMs == null) firstMs = Date.now() - t;
         text += ev.delta.text; outChars += ev.delta.text.length; show(ev.delta.text);
+        for (let i; (i = text.indexOf('<invoke ', scanAt)) >= 0;) { invokes++; scanAt = i + 1; }
+        scanAt = Math.max(scanAt, text.length - 8);
+        if (invokes >= CUT_INVOKES && !cut) { cut = true; kill(); }
       } else if (ev.type === 'content_block_delta' && ev.delta?.type === 'thinking_delta' && typeof ev.delta.thinking === 'string') {
         thinking += ev.delta.thinking; outChars += ev.delta.thinking.length; onThink?.(ev.delta.thinking);
       }
@@ -192,13 +200,13 @@ export async function claudeStream(body, signal, onText, onThink, { info = {}, i
     });
     halt();
     if (failure) throw failure;
-    if (!result) throw claudeError(stderr.replace(/\s+/g, ' ').trim().slice(-300) || `Claude Code ended (exit ${exit}) before the answer was done`, { exit });
-    if (result.is_error || (result.subtype && result.subtype !== 'success')) throw claudeError(typeof result.result === 'string' && result.result ? result.result : (result.errors || []).join('; ') || result.subtype);
+    if (!result && !cut) throw claudeError(stderr.replace(/\s+/g, ' ').trim().slice(-300) || `Claude Code ended (exit ${exit}) before the answer was done`, { exit });
+    if (result && (result.is_error || (result.subtype && result.subtype !== 'success'))) throw claudeError(typeof result.result === 'string' && result.result ? result.result : (result.errors || []).join('; ') || result.subtype);
     if (!started) throw err('Claude Code answered without its start-up event, so QuorX could not check its tools were off', { kind: 'shape' });
     // No streamed text (an older Claude Code): the final message's text.
-    if (!text) text = (last?.content || []).filter((c) => c?.type === 'text').map((c) => c.text || '').join('') || String(result.result || '');
+    if (!text) text = (last?.content || []).filter((c) => c?.type === 'text').map((c) => c.text || '').join('') || String(result?.result || '');
     const parsed = parseToolCalls(text, `call_${t.toString(36)}`, key);
-    const u = result.usage || {}, said = Number(result.total_cost_usd);
+    const u = result?.usage || {}, said = Number(result?.total_cost_usd);
     const usage = {
       prompt_tokens: (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0), completion_tokens: u.output_tokens || 0,
       prompt_tokens_details: { cached_tokens: u.cache_read_input_tokens || 0, cache_write_tokens: u.cache_creation_input_tokens || 0 },
