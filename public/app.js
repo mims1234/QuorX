@@ -4467,12 +4467,13 @@ function planFoldHTML(m) {
 }
 // #4 What the separate reviewer found: scores out of 5, the bar, its bugs. One card per review round.
 const REVIEW_LABEL = { function: 'Function', craft: 'Craft', design: 'Design', originality: 'Originality', accessibility: 'Accessibility', brand: 'Brand fit', picture: 'Picture', motion: 'Motion', sound: 'Sound', rhythm: 'Rhythm', story: 'Story' };
-function reviewCardHTML(m, r) {
+// inPane: drawn in the side pane, so without its own "Open in pane" button.
+function reviewCardHTML(m, r, inPane = false) {
   const tr = m.trace || [], reviews = tr.filter((e) => e.t === 'review'), i = reviews.indexOf(r);
   const sentBack = !r.pass && (i < reviews.length - 1 || tr.some((e) => e.t === 'sent_back' && e.by === 'reviewer' && e.at >= r.at));
   const verdict = r.pass ? 'Passed' : sentBack ? 'Sent back to fix' : 'Not passed';
   return `<div class="review-card ${r.pass ? 'pass' : 'fail'}">
-      <div class="rv-head"><b>🧪 Reviewer</b><span class="rv-model" title="A separate model with a fresh context tested this">${esc(short(r.model))}</span><span class="rv-round">round ${r.round}</span><span class="rv-verdict">${verdict}</span><span class="rv-cost" title="What this review cost">${money(r.cost, 4)}</span></div>
+      <div class="rv-head"><b>🧪 Reviewer</b><span class="rv-model" title="A separate model with a fresh context tested this">${esc(short(r.model))}</span><span class="rv-round">round ${r.round}</span><span class="rv-verdict">${verdict}</span><span class="rv-cost" title="What this review cost">${money(r.cost, 4)}</span>${inPane ? '' : `<button type="button" class="pv-btn rv-pane" data-run="${esc(m.runId || '')}" data-i="${i}" title="Show this review in the side pane, to read it next to the chat">Open in pane</button>`}</div>
       <div class="rv-scores">${Object.keys(r.scores).map((k) => `<div class="rv-score ${r.scores[k] < r.bar ? 'low' : ''}"><span>${esc(REVIEW_LABEL[k] || k)}</span><span class="rv-pips" aria-label="${r.scores[k]} of 5">${[1, 2, 3, 4, 5].map((n) => `<i class="${n <= r.scores[k] ? 'on' : ''}${n === r.bar ? ' bar' : ''}"></i>`).join('')}</span><b>${r.scores[k]}/5</b></div>`).join('')}</div>
       ${r.bugs.length ? `<ul class="rv-bugs">${r.bugs.map((b) => `<li>${esc(b)}</li>`).join('')}</ul>` : ''}
       ${r.summary ? `<p class="rv-sum">${esc(r.summary)}</p>` : ''}
@@ -6520,15 +6521,24 @@ function paneFiles(c) {
   return c._paneFiles;
 }
 function savePaneFiles(c) { try { localStorage.setItem(paneFilesKey(c.id), JSON.stringify(paneFiles(c))); } catch { /* this session only */ } }
-// f: { key, name, src, kind, full, size }. Opened again, it moves to the end (the newest).
+// f: a file { key, name, src, kind, full, size }, or a card from a reply { id, name, kind: 'review', run, i }.
+// Opened again, it moves to the end (the newest).
 function openFileInPane(c, f) {
-  if (!c || !f?.src) return;
-  const id = `file:${f.key || f.src}`, list = paneFiles(c).filter((x) => x.id !== id);
-  list.push({ id, name: f.name, src: f.src, kind: f.kind || previewKind(f.name), full: f.full || '', size: f.size || 0 });
+  if (!c || !(f?.src || f?.run)) return;
+  const id = f.id || `file:${f.key || f.src}`, list = paneFiles(c).filter((x) => x.id !== id);
+  list.push(f.run ? { id, name: f.name, kind: f.kind, run: f.run, i: f.i } : { id, name: f.name, src: f.src, kind: f.kind || previewKind(f.name), full: f.full || '', size: f.size || 0 });
   c._paneFiles = list.slice(-PANE_FILES_MAX); savePaneFiles(c);
   if (G.paneHidden) setPaneHidden(false);
   openArtifact(c, id);
 }
+// A reviewer card's "Open in pane" (it sits in the chat's timeline, so one listener serves them all).
+document.addEventListener('click', (e) => {
+  const b = e.target.closest?.('.rv-pane');
+  if (!b) return;
+  const c = [...G.open.values()].find((x) => x.agent.messages.some((m) => m.runId === b.dataset.run)) || focused();
+  const m = c?.agent.messages.find((x) => x.runId === b.dataset.run), r = m?.trace?.filter((x) => x.t === 'review')[Number(b.dataset.i)];
+  if (r) openFileInPane(c, { id: `review:${b.dataset.run}:${b.dataset.i}`, name: `Reviewer · round ${r.round}${r.pass ? ' · passed' : ''}`, kind: 'review', run: b.dataset.run, i: Number(b.dataset.i) });
+});
 function closePaneFile(c, id) {
   c._paneFiles = paneFiles(c).filter((x) => x.id !== id); savePaneFiles(c);
   G.view = { id: null, src: false, files: false };
@@ -6847,7 +6857,7 @@ function renderPane() {
   const all = planArts(c).sort((a, b) => (a.updated || 0) - (b.updated || 0)), files = paneFiles(c);
   const opt = (id, label) => `<option value="${esc(id)}">${label}</option>`;
   sel.innerHTML = (all.length && files.length ? `<optgroup label="Plans and reports">${all.map((a) => opt(a.id, `${ICON[a.kind] || '📄'} ${esc(a.title)}`)).join('')}</optgroup>` : all.map((a) => opt(a.id, `${ICON[a.kind] || '📄'} ${esc(a.title)}`)).join(''))
-    + (files.length ? `<optgroup label="Files from the chat">${files.map((f) => opt(f.id, `${PV_ICON[f.kind] || '📄'} ${esc(baseName(f.name))}`)).join('')}</optgroup>` : '')
+    + (files.length ? `<optgroup label="From the chat">${files.map((f) => opt(f.id, `${PV_ICON[f.kind] || '📄'} ${esc(baseName(f.name))}`)).join('')}</optgroup>` : '')
     || '<option>No plans yet</option>';
   sel.disabled = !all.length && !files.length;
   // A file opened from the chat: the same viewer as the Files tab, with a bar to close it.
@@ -6858,6 +6868,13 @@ function renderPane() {
     bar.hidden = false;
     bar.innerHTML = '<button type="button" class="pv-btn pf-close" title="Opened from the chat: take it off this list (the file stays where it is)">✕ Close</button>';
     $('.pf-close', bar).onclick = () => closePaneFile(c, file.id);
+    if (file.run) {
+      // A card from a reply (the reviewer's): drawn from the chat as it is now.
+      const m = c.agent.messages.find((x) => x.runId === file.run), r = m?.trace?.filter((x) => x.t === 'review')[file.i];
+      setUrlBar(null, { art: true });
+      body.innerHTML = `<div class="pane-file pane-card">${m && r ? reviewCardHTML(m, r, true) : '<div class="empty">This review is no longer in the chat.</div>'}</div>`;
+      return;
+    }
     body.innerHTML = '<div class="fview pane-file"></div>';
     G.filesProject = c.projectId;
     previewFile($('.pane-file', body), { name: file.name, src: file.src, size: file.size, full: file.full, kind: file.kind });
@@ -6951,7 +6968,7 @@ const PREVIEW_KINDS = {
   binary: ['wasm', 'glb', 'zip', 'gz', 'tar', '7z', 'exe', 'dll', 'bin', 'so', 'dylib', 'class', 'jar', 'pyc'],
 };
 const previewKind = (name) => Object.keys(PREVIEW_KINDS).find((k) => PREVIEW_KINDS[k].includes(fileExt(name))) || 'text';
-const PV_ICON = { image: '🖼', video: '🎬', audio: '🎵', pdf: '📕', office: '📘', table: '📊', font: '🔤', md: '📝', html: '🌐', binary: '📦', text: '📄' };
+const PV_ICON = { image: '🖼', video: '🎬', audio: '🎵', pdf: '📕', office: '📘', table: '📊', font: '🔤', md: '📝', html: '🌐', binary: '📦', text: '📄', review: '🧪' };
 const sizeText = (b) => (b == null ? '' : b > 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} KB`);
 const durText = (s) => (Number.isFinite(s) ? `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}` : '');
 // A small CSV / TSV reader (quotes and doubled quotes), enough for a preview.

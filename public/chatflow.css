@@ -100,3 +100,6 @@ html:root body .msgs .msg.bot.is-error { border-left-color: var(--bad) !importan
 /* A file card dragged over the side pane. */
 #pane.file-drop { outline: 2px dashed var(--accent); outline-offset: -4px; }
 .mm-head[draggable="true"], .mm-thumb[draggable="true"] { cursor: grab; }
+/* A reviewer card read in the side pane. */
+#paneBody > .pane-card { padding: 14px; }
+.rv-head .rv-pane { margin-left: auto; }
