@@ -12,7 +12,8 @@ import { runLine } from '../server/workspace.js';
 import { decide, saveRules, loadRules, ruleMatches, ruleProblem, addRule, updateRule, removeRule } from '../server/cmdpolicy.js';
 import { approvalJudge } from '../server/approvals.js';
 import { SAFETY_DEFAULTS, safetySettings, yoloOf } from '../server/safety.js';
-import { answerApproval, raiseCap, answerQuestion } from '../server/agent.js';
+import { answerApproval, answerQuestion } from '../server/agent.js';
+import { setBudget } from '../server/budget.js';
 import { startTripwire } from '../server/tripwire.js';
 import { termStop } from '../server/agentterm.js';
 import { saveProject, forgetProject } from '../server/store.js';
@@ -183,22 +184,18 @@ test('tripwire: deletes inside the project, and files a command makes and then r
 // ---------- budgets ----------
 const costly = (calls) => ({ ...reply('', calls), usage: { cost: 0.4 } });
 
-test('budget: in YOLO a reply stops at its cap, counting every call; in Strict the cap asks and raising it carries on', async () => {
-  { // budget: in YOLO a reply stops at its cap, counting every call
-    const { events } = await agentRun(() => costly([['list_files', {}]]), { settings: { approval: 'yolo', replyBudget: 1 } });
-    const done = events.find((e) => e.t === 'done');
-    assert.match(done.reply, /reached its \$1\.00 cap/);
-    assert.ok(events.filter((e) => e.t === 'llm_done' || e.t === 'tool').length < 20, 'it stopped early');
-  }
-  { // budget: in Strict the cap asks; raising it lets the reply carry on
-    let asked = 0;
-    const { events } = await agentRun((b, i) => (i < 4 ? costly([['list_files', {}]]) : reply('Done.')), {
-      settings: { approval: 'strict', replyBudget: 1 },
-      onEvent: (e, id) => { if (e.t === 'budget_ask' && e.kind === 'reply') { asked++; setTimeout(() => raiseCap(id, e.id, 5), 10); } },
-    });
-    assert.equal(asked, 1);
+test('budget: no cap per reply or per day any more; in YOLO a reply stops at its chat budget, counting every call', async () => {
+  { // a reply with no chat budget set gets the default ($10): $0.40 a call runs well past the old $1 cap per reply
+    const { events } = await agentRun((b, i) => (i < 5 ? costly([['list_files', {}]]) : reply('Done.')), { chatId: `cap-${Date.now().toString(36)}`, settings: { approval: 'yolo', replyBudget: 1 } });
     assert.equal(events.find((e) => e.t === 'done').reply, 'Done.');
-    assert.ok(events.some((e) => e.t === 'budget_done' && e.raised && e.budget === 5));
+    assert.ok(!events.some((e) => e.t === 'budget_ask'));
+  }
+  { // the chat's budget counts every call and stops the reply in YOLO
+    const cid = `cb-${Date.now().toString(36)}`;
+    const { events } = await agentRun(() => costly([['list_files', {}]]), { chatId: cid, prep: () => setBudget(cid, 1), settings: { approval: 'yolo' } });
+    const done = events.find((e) => e.t === 'done');
+    assert.equal(done.stats.stop, 'budget');
+    assert.ok(events.filter((e) => e.t === 'llm_done' || e.t === 'tool').length < 20, 'it stopped early');
   }
 });
 
@@ -1002,9 +999,9 @@ test('plan first: a shell line that only reads runs before the plan; a change wa
     reply('', [['shell', { command: 'Get-ChildItem' }]]),
     reply('', [['shell', { command: 'Set-Content a.txt hi' }]]),
     reply('OK.'),
-  ][i], { settings: { planFirst: 'always' } });
+  ][i], { more: { goal: true } });
   assert.match(toolOut(bodies, 1), /Exit code 0/);
-  assert.match(toolOut(bodies, 2), /^Refused: plan first.*Commands that only read/);
+  assert.match(toolOut(bodies, 2), /^Refused: this is a \/goal, so plan comes first.*Commands that only read/);
 });
 
 test('commands: unknown cmdlets with a reading verb are reads (Get-NetTCPConnection, Measure-Object); Get-Credential isn\'t', async () => {

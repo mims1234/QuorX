@@ -13,9 +13,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { loadCards, cardText, limitsLine, cardFile, CARDS_DIR, CARD_CHARS } from '../server/modelcards.js';
 import { runAgent, answerQuestion, answerApproval, answerBudget, setRunApproval, steerRun, providerSlugs, blockedFor } from '../server/agent.js';
-import { saveProject, forgetProject, setProjectBudget } from '../server/store.js';
+import { saveProject, forgetProject } from '../server/store.js';
 import { loadCheckpoint, dropCheckpoint, saveCheckpoint, checkpointWritten, ledger } from '../server/runs.js';
-import { setBudget, projectSpend, budgetState, live as liveRuns } from '../server/budget.js';
+import { setBudget, projectSpend, chatSpend, budgetState, defaultBudget, setDefaultBudget, live as liveRuns } from '../server/budget.js';
 import { chatStream as realChatStream, generationCost } from '../server/openrouter.js';
 import { startRun, follow, getRun, readLog } from '../server/runs.js';
 import { matchPlan, usePlan } from '../server/mediaplan.js';
@@ -287,7 +287,7 @@ test('a long reply is trimmed, every result carries the step meter, and the wrap
     const { events, bodies } = await run((body, i) => (i < 6 ? reply('', [['write_file', { path: `f${i}.txt`, content: body20k }]]) : reply('ok')), { settings: { trimAt: 30000 } });
     assert.ok(of(events, 'trimmed').length >= 1);
     assert.match(JSON.stringify(bodies.at(-1).messages), /written earlier; removed/);
-    assert.match(toolResults(bodies[1])[0], /\[steps: 1 of 500 used( · project budget: \$[\d.]+ of \$[\d.]+ used)?\]$/);
+    assert.match(toolResults(bodies[1])[0], /\[steps: 1 of 500 used( · chat budget: \$[\d.]+ of \$[\d.]+ used)?\]$/);
   }
   { // the wrap-up nudge comes at 80% of the steps
     const { bodies, done } = await run((body, i) => (i < 9 ? reply('', [['list_files', {}]]) : reply('Wrapped up.')), { settings: { maxSteps: 10 } });
@@ -336,13 +336,13 @@ test('plan first: writes wait for the plan (changes, then Go ahead), Stop here k
       reply('', [['write_file', { path: 'hello.html', content: '<p style="color:blue">hi</p>\n' }]]),
       reply('Done.'),
     ][i], {
-      settings: { planFirst: 'always' },
+      goal: true,
       onEvent: (e) => {
         if (e.t === 'start') runId = e.runId;
         if (e.t === 'question' && e.gate === 'plan') setTimeout(() => answerQuestion(runId, e.id, asks++ ? { choice: 0 } : { text: 'make it blue' }), 10);
       },
     });
-    assert.match(toolResults(bodies[1])[0], /^Refused: plan first/);
+    assert.match(toolResults(bodies[1])[0], /^Refused: this is a \/goal, so plan comes first/);
     assert.match(toolResults(bodies[2]).at(-1), /wants the plan changed: "make it blue"/);
     assert.match(toolResults(bodies[3]).at(-1), /said Go ahead/);
     assert.equal(of(events, 'question').length, 2);
@@ -356,7 +356,7 @@ test('plan first: writes wait for the plan (changes, then Go ahead), Stop here k
       reply('', [['write_file', { path: 'game.js', content: 'let x = 1;\n' }]]),
       reply('Stopped at the plan.'),
     ][i], {
-      settings: { planFirst: 'big', approval: 'yolo' },
+      goal: true, settings: { approval: 'yolo' },
       onEvent: (e) => { if (e.t === 'start') runId = e.runId; if (e.t === 'question' && e.gate === 'plan') setTimeout(() => answerQuestion(runId, e.id, { choice: 1 }), 10); },
     });
     assert.match(toolResults(bodies[1]).at(-1), /said Stop here/);
@@ -364,10 +364,17 @@ test('plan first: writes wait for the plan (changes, then Go ahead), Stop here k
     assert.equal(fs.existsSync(path.join(dir, 'game.js')), false);
     assert.equal(done.reply, 'Stopped at the plan.');
   }
-  { // plan first (big): a small fix with no plan goes straight ahead
-    const { dir, events } = await run((body, i) => [reply('', [['write_file', { path: 'a.txt', content: 'fixed\n' }]]), reply('Fixed.')][i], { settings: { planFirst: 'big' } });
+  { // without /goal there is no plan: no plan tool, no plan rules, and a change goes straight ahead
+    const { dir, events, bodies } = await run((body, i) => [reply('', [['write_file', { path: 'a.txt', content: 'fixed\n' }]]), reply('Fixed.')][i]);
     assert.equal(fs.readFileSync(path.join(dir, 'a.txt'), 'utf8'), 'fixed\n');
     assert.equal(of(events, 'question').length, 0);
+    assert.ok(!bodies[0].tools.some((t) => t.function.name === 'plan'));
+    assert.doesNotMatch(bodies[0].messages[0].content, /A goal \(the user started this message with \/goal\)/);
+  }
+  { // with /goal the plan tool and its rules are there
+    const { bodies } = await run((body, i) => [reply('Nothing to do.')][i], { goal: true });
+    assert.ok(bodies[0].tools.some((t) => t.function.name === 'plan'));
+    assert.match(bodies[0].messages[0].content, /A goal \(the user started this message with \/goal\)/);
   }
 });
 
@@ -562,79 +569,77 @@ test('a reply typed on an approval card is the call\'s result, for that call onl
   }
 });
 
-// ---------- project budgets ----------
+// ---------- chat budgets: one per chat, the only money limit ----------
 const costly = (text, calls = [], cost = 0.6) => ({ ...reply(text, calls), usage: { cost } });
 
-test('a project reports what it has spent, and while a reply runs how much is that reply; a budget is never set below the spend', () => {
-  { // a project with a reply running reports what it has spent so far in dollars, next to running: true
-    const id = `tr${Date.now().toString(36)}`;
-    saveProject({ id, name: 'running spend test', path: tempDir('quorx-r-') });
-    ledger.set(`done-${id}`, { project: id, cost: 0.15 });
-    liveRuns.set(`live-${id}`, { project: id, cost: 0.004 });
+test('a chat reports what it has spent, and while a reply runs how much is that reply; a budget is never set below the spend', () => {
+  { // a chat nobody set a budget for has the default; the default can change, or be no limit
+    const id = `cd${Date.now().toString(36)}`;
+    assert.equal(budgetState(id).budget, defaultBudget());
+    assert.equal(budgetState(id).isDefault, true);
+    const was = defaultBudget();
     try {
-      const st = budgetState(id);
-      assert.equal(st.running, true);
-      assert.ok(Math.abs(st.runningCost - 0.004) < 1e-9);
-      assert.ok(Math.abs(st.spent - 0.154) < 1e-9);
-      // what the sidebar shows: the server's total without its running part, plus the page's own live figure
-      assert.ok(st.spent - st.runningCost + 0.004 > 0);
-    } finally { forgetProject(id); ledger.delete(`done-${id}`); liveRuns.delete(`live-${id}`); }
+      setDefaultBudget(25);
+      assert.equal(budgetState(id).budget, 25);
+      setDefaultBudget(null);
+      assert.equal(budgetState(id).budget, null);
+      assert.throws(() => setDefaultBudget(-1), /amount in dollars/);
+    } finally { setDefaultBudget(was); }
   }
-  { // a budget can be raised or removed, never set below what the project has spent
-    const id = `tb${Date.now().toString(36)}`;
-    saveProject({ id, name: 'budget test', path: tempDir('quorx-b-') });
-    ledger.set(`seed-${id}`, { project: id, cost: 2.5 });
+  { // a budget can be raised or removed, never set below what the chat has spent; other chats don't count
+    const id = `cb${Date.now().toString(36)}`;
+    ledger.set(`seed-${id}`, { project: 'p1', chat: id, cost: 2.5 });
+    ledger.set(`other-${id}`, { project: 'p1', chat: `${id}x`, cost: 4 });
     try {
-      assert.equal(projectSpend(id).spent, 2.5);
-      assert.throws(() => setBudget(id, 2), /already spent \$2\.5000, so its budget must be at least \$2\.50/);
+      assert.equal(chatSpend(id).spent, 2.5);
+      assert.throws(() => setBudget(id, 2), /chat has already spent \$2\.5000, so its budget must be at least \$2\.50/);
       assert.equal(setBudget(id, 2.5).budget, 2.5);
       assert.equal(setBudget(id, 10).left, 7.5);
+      assert.equal(budgetState(id).isDefault, false);
       assert.throws(() => setBudget(id, 0), /amount in dollars/);
       assert.equal(setBudget(id, null).budget, null);
-    } finally { forgetProject(id); ledger.delete(`seed-${id}`); }
+      assert.equal(projectSpend('p1').spent, 6.5); // a project still adds up what its chats spent
+    } finally { ledger.delete(`seed-${id}`); ledger.delete(`other-${id}`); }
   }
-  { // while a reply runs, the project says so and how much of what it spent is that reply
-    const id = `tr${Date.now().toString(36)}`;
-    saveProject({ id, name: 'running test', path: tempDir('quorx-b-') });
-    setProjectBudget(id, 10);
-    ledger.set(`seed-${id}`, { project: id, cost: 2.5 });
+  { // while a reply runs, the chat says so and how much of what it spent is that reply
+    const id = `cr${Date.now().toString(36)}`;
+    setBudget(id, 10);
+    ledger.set(`seed-${id}`, { project: 'p2', chat: id, cost: 2.5 });
     try {
-      // The $2.50 is in the ledger but in no chat (as for a deleted or rewound chat): reported as unsavedCost.
-      assert.deepEqual(budgetState(id), { budget: 10, spent: 2.5, left: 7.5, running: false, runningCost: 0, unsavedCost: 2.5 });
-      liveRuns.set(`live-${id}`, { project: id, cost: 0.75 });
-      liveRuns.set(`other-${id}`, { project: 'elsewhere', cost: 5 });
-      const s = budgetState(id);
-      assert.equal(s.running, true);
-      assert.equal(s.runningCost, 0.75);
-      assert.equal(s.spent, 3.25);
-      assert.equal(s.left, 6.75);
-      // The sidebar takes the running reply out and adds what it has spent by now: the rest stays as it was.
-      assert.equal(s.spent - s.runningCost, 2.5);
-    } finally { forgetProject(id); ledger.delete(`seed-${id}`); liveRuns.delete(`live-${id}`); liveRuns.delete(`other-${id}`); }
+      // The $2.50 is in the ledger but not in the chat's file (as for a rewound reply): reported as unsavedCost.
+      assert.deepEqual(budgetState(id), { budget: 10, spent: 2.5, left: 7.5, running: false, runningCost: 0, unsavedCost: 2.5, isDefault: false });
+      liveRuns.set(`live-${id}`, { project: 'p2', chat: id, cost: 0.75 });
+      liveRuns.set(`other-${id}`, { project: 'p2', chat: 'elsewhere', cost: 5 });
+      const st = budgetState(id);
+      assert.equal(st.running, true);
+      assert.equal(st.runningCost, 0.75);
+      assert.equal(st.spent, 3.25);
+      assert.equal(st.left, 6.75);
+      assert.equal(st.spent - st.runningCost, 2.5);
+    } finally { ledger.delete(`seed-${id}`); liveRuns.delete(`live-${id}`); liveRuns.delete(`other-${id}`); }
   }
 });
 
 test('budget in YOLO: no call at the budget, a running reply may finish up to the allowance (a setting) and is force-stopped past it; a warning past 85%', async () => {
-  { // YOLO: a project already at its budget makes no model call
+  { // YOLO: a chat already at its budget makes no model call
     let called = 0;
     const { done } = await run(() => { called++; return reply('hi'); }, { budget: 1, spent: 1 });
     assert.equal(called, 0);
     assert.equal(done.stats.stop, 'budget');
-    assert.match(done.reply, /budget is used up \(\$1\.000 of \$1\.00\)/);
+    assert.match(done.reply, /chat's budget is used up \(\$1\.000 of \$1\.00\)/);
   }
   { // a running reply past budget + 10% is force-stopped, and the tools of that call are not run
     const { bodies, done } = await run((body, i) => costly('', [['list_files', {}]]), { budget: 1 });
     assert.equal(bodies.length, 2); // 0.6 after the first call; 1.2 after the second is past $1.10
-    assert.match(bodies[1].messages.at(-1).content, /project budget: \$0\.600 of \$1\.00 used/);
     assert.equal(done.stats.stop, 'budget');
     assert.equal(done.stats.budgetStop, 'hard');
-    assert.match(done.reply, /went past the project budget and its 10% allowance .*stop at \$1\.10\), so it was stopped and its last 1 tool call was not run\. Done so far: List the project files/);
+    assert.match(done.reply, /went past the chat's budget and its 10% allowance .*stop at \$1\.10\), so it was stopped and its last 1 tool call was not run\. Done so far: List the project files/);
   }
-  { // a running reply may pass the budget to finish its work (up to the allowance)
+  { // a running reply may pass the budget to finish its work (up to the allowance); there is no cap per reply
     // 0.35 a call: 0.35, 0.70, 1.05 (past $1.00, under $1.10, so the reply goes on), then it finishes.
-    const { bodies, done } = await run((body, i) => (i < 3 ? costly('', [['list_files', {}]], 0.35) : costly('All done.', [], 0.35)), { budget: 1, settings: { replyBudget: 0 } }); // the project budget alone
+    const { bodies, done } = await run((body, i) => (i < 3 ? costly('', [['list_files', {}]], 0.35) : costly('All done.', [], 0.35)), { budget: 1 });
     assert.equal(bodies.length, 4);
-    assert.match(toolResults(bodies[3]).at(-1), /The project budget is used up \(\$1\.05 of \$1\.00\)\. Finish the task you are on .*stopped at \$1\.10/);
+    assert.match(toolResults(bodies[3]).at(-1), /The chat's budget is used up \(\$1\.05 of \$1\.00\)\. Finish the task you are on .*stopped at \$1\.10/);
     assert.equal(done.reply, 'All done.');
     assert.equal(done.stats.stop, 'answered');
   }
@@ -643,21 +648,26 @@ test('budget in YOLO: no call at the budget, a running reply may finish up to th
     assert.equal(bodies.length, 3); // 0.35, 0.70, 1.05: stopped after the third call
     assert.equal(done.stats.budgetStop, 'hard');
   }
-  { // the warning comes once the project passes 85%
+  { // the warning comes once the chat passes 85%
     const { bodies } = await run((body, i) => (i < 2 ? costly('', [['list_files', {}]], 0.45) : reply('done')), { budget: 1 });
-    assert.match(toolResults(bodies[2]).at(-1), /The project budget is almost used up \(\$0\.90 of \$1\.00\)/);
+    assert.match(toolResults(bodies[2]).at(-1), /The chat's budget is almost used up \(\$0\.90 of \$1\.00\)/);
+  }
+  { // a reply with no chat (a benchmark, a test) has no budget at all
+    const { bodies, done } = await run((body, i) => (i < 4 ? costly('', [['list_files', {}]], 0.6) : reply('done')));
+    assert.equal(bodies.length, 5);
+    assert.equal(done.stats.stop, 'answered');
   }
 });
 
 test('budget in Strict: a new reply at the budget waits on a card; raising the budget lets it start, "Wrap up" does not', async () => {
-  { // strict: a new reply at the budget waits on a card; raising the budget lets it start
+  { // strict: a new reply at the budget waits on a card; raising the chat's budget lets it start
     let id;
     const { events, done } = await run((body, i) => (i === 0 ? costly('', [['list_files', {}]]) : reply('Finished.')), {
       budget: 0.5, spent: 0.5, settings: { approval: 'strict' },
       onEvent: (e) => {
         if (e.t === 'start') id = e.runId;
         if (e.t === 'approval') setTimeout(() => answerApproval(id, e.id, { approve: true }), 5);
-        if (e.t === 'budget_ask') setTimeout(() => setBudget(id, 2), 20); // the project id is the run id in these tests
+        if (e.t === 'budget_ask') setTimeout(() => setBudget(e.chat, 2), 20);
       },
     });
     assert.equal(of(events, 'budget_ask').length, 1);
@@ -1166,15 +1176,15 @@ test('a production plan is approved once (by the deciders in YOLO, on one card i
   }
 });
 
-test('a production plan over the media budget or of a kind switched off is refused; with the deciders off it waits for you, or runs within the caps', async () => {
-  { // a plan over the media budget is turned down before anyone is asked, and calls are then judged one by one
+test('a production plan over the chat budget or of a kind switched off is refused; with the deciders off it waits for you, or runs within the caps', async () => {
+  { // a plan past the chat's budget is turned down before anyone is asked, and calls are then judged one by one
     const d = planDeciders();
     const { events, bodies } = await run((body, i) => [
       reply('', [['media_plan', { why: 'a lot', items: [{ kind: 'image', count: 20, what: 'frames' }] }]]),
       reply('', [['imagine', { prompt: 'one frame', why: 'x' }]]),
       reply('Done.'),
-    ][i], { settings: planSettings({ budget: 0.1 }), ensemble: d.fn, generateImage: async () => ({ images: [PLAN_PNG], usage: { cost: 0.01 }, ms: 1 }) });
-    assert.match(toolResults(bodies[1]).at(-1), /The budget check did not approve this plan.*over this reply's \$0\.1 media budget/s);
+    ][i], { budget: 0.1, settings: planSettings(), ensemble: d.fn, generateImage: async () => ({ images: [PLAN_PNG], usage: { cost: 0.01 }, ms: 1 }) });
+    assert.match(toolResults(bodies[1]).at(-1), /The budget check did not approve this plan.*past its \$0\.10 budget/s);
     assert.deepEqual(of(events, 'approval_done').map((x) => x.by), ['budget', 'deciders']);
     assert.equal(d.seen.length, 1, 'only the single call was voted on');
     assert.doesNotMatch(d.seen[0].questions[0], /production plan/);

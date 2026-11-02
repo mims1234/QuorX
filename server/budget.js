@@ -1,13 +1,19 @@
 // Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
-// Project budgets: one dollar limit shared by every chat in a project. What a project has spent is
-//   saved chat costs (what the sidebar shows)
-// + replies in the cost ledger whose cost never reached a chat file (stopped, page closed, chat deleted)
-// + replies running right now, as their cost grows.
-// A budget can be raised at any time, or removed, but never set below what is already spent.
-import { listProjects, projectChatsSpend, setProjectBudget } from './store.js';
+// Chat budgets: one dollar limit per chat, the only money limit there is. What a chat has spent is
+//   its saved cost (what the chat file holds)
+// + replies in the cost ledger whose cost never reached the chat file (stopped, page closed, rewound)
+// + its reply running right now, as its cost grows.
+// A budget can be raised at any time, or removed, but never set below what is already spent. A chat nobody set one for
+// gets the default (data/chat-budgets.json holds both, so the page saving a chat can't overwrite them).
+// A project's spend (all its chats) is still worked out here, for the sidebar and project settings.
+import fs from 'node:fs';
+import path from 'node:path';
+import { HOME } from './openrouter.js';
+import { projectChatsSpend, chatSavedSpend } from './store.js';
 import { ledger } from './runs.js';
+import { renameSoon } from './fsretry.js';
 
-export const live = new Map(); // runId → { project, cost } for replies running now
+export const live = new Map(); // runId → { project, chat, cost } for replies running now
 
 export function projectSpend(projectId) {
   const { cost, runIds } = projectChatsSpend(projectId);
@@ -17,45 +23,66 @@ export function projectSpend(projectId) {
   return { spent: cost + unsaved + running, saved: cost, unsaved, running };
 }
 
-// A project nobody has set a budget for gets the default ($10). "No limit" is stored as null and respected.
+export function chatSpend(chatId) {
+  const { cost, runIds } = chatSavedSpend(chatId);
+  let unsaved = 0, running = 0;
+  for (const [id, r] of ledger) if (r.chat === chatId && !runIds.has(id) && !live.has(id)) unsaved += r.cost;
+  for (const r of live.values()) if (r.chat === chatId) running += r.cost;
+  return { spent: cost + unsaved + running, saved: cost, unsaved, running };
+}
+
+// ---------- the budgets file ----------
 export const DEFAULT_BUDGET = 10;
-export const budgetOf = (projectId) => {
-  const p = listProjects().find((x) => x.id === projectId);
-  if (!p) return null;
-  if (!('budget' in p)) return DEFAULT_BUDGET;
-  return typeof p.budget === 'number' && p.budget >= 0 ? p.budget : null;
+const FILE = path.join(HOME, 'data', 'chat-budgets.json');
+let cache = null;
+function read() {
+  if (cache) return cache;
+  try { const j = JSON.parse(fs.readFileSync(FILE, 'utf8')); cache = { default: j.default === null || (typeof j.default === 'number' && j.default > 0) ? j.default : DEFAULT_BUDGET, chats: j.chats && typeof j.chats === 'object' ? j.chats : {} }; } catch { cache = { default: DEFAULT_BUDGET, chats: {} }; }
+  return cache;
+}
+function write(next) {
+  cache = next;
+  try { fs.mkdirSync(path.dirname(FILE), { recursive: true }); fs.writeFileSync(FILE + '.tmp', JSON.stringify(next, null, 2)); renameSoon(FILE + '.tmp', FILE); } catch { /* kept in memory until the next save */ }
+}
+/** For tests: forget what was read, so the file is read again. */
+export const resetBudgets = () => { cache = null; };
+
+/** The budget a new chat starts with (null = no limit). */
+export const defaultBudget = () => read().default;
+export function setDefaultBudget(value) {
+  const b = value === null || value === '' || value === 'none' ? null : Math.round(Number(value) * 100) / 100;
+  if (b !== null && !(Number.isFinite(b) && b > 0)) throw new Error('the budget must be an amount in dollars, like 5 or 12.50, or none');
+  write({ ...read(), default: b });
+  return b;
+}
+/** A chat's budget in dollars, or null for none. A chat nobody set one for has the default. */
+export const budgetOf = (chatId) => {
+  const s = read();
+  if (!chatId || !(chatId in s.chats)) return s.default;
+  const b = s.chats[chatId];
+  return typeof b === 'number' && b >= 0 ? b : null;
 };
 
-/** Where a project stands: its budget (null = none), what is spent, and what is left. */
-export function budgetState(projectId) {
-  const budget = budgetOf(projectId);
-  const { spent, running: runningCost, unsaved } = projectSpend(projectId);
-  // running: a reply in this project is working now (the sidebar editor stays locked until it finishes);
-  // runningCost: what those replies have spent so far (part of spent), so a page showing its own live figure can swap it in.
-  // unsavedCost: spent by replies no chat holds any more (deleted or rewound chats, replies stopped before saving),
-  // so the page can say why the chats' totals add up to less than what was spent.
-  const running = [...live.values()].some((r) => r.project === projectId);
-  return { budget, spent, left: budget == null ? null : budget - spent, running, runningCost, unsavedCost: unsaved };
+/** Where a chat stands: its budget (null = none), what is spent, and what is left. */
+export function budgetState(chatId) {
+  const budget = budgetOf(chatId);
+  const { spent, running: runningCost, unsaved } = chatSpend(chatId);
+  // running: a reply in this chat is working now; runningCost: what it has spent so far (part of spent), so a page
+  // showing its own live figure can swap it in. unsavedCost: spent by replies the chat file doesn't hold (rewound,
+  // stopped before saving).
+  const running = [...live.values()].some((r) => r.chat === chatId);
+  return { budget, spent, left: budget == null ? null : budget - spent, running, runningCost, unsavedCost: unsaved, isDefault: !(chatId in read().chats) };
 }
 
-/** What every project together has spent today (local time): replies that ended today, plus replies running now. */
-export function spentToday(now = Date.now()) {
-  const d = new Date(now); d.setHours(0, 0, 0, 0);
-  const from = d.getTime();
-  let spent = 0;
-  for (const [id, r] of ledger) if ((r.at || 0) >= from && !live.has(id)) spent += r.cost;
-  for (const r of live.values()) spent += r.cost;
-  return spent;
-}
-
-/** Sets or removes (null) a project's budget. Refuses an amount below what the project has spent. */
-export function setBudget(projectId, value) {
-  if (!listProjects().some((p) => p.id === projectId)) throw new Error('no such project');
-  if (value === null || value === '') { setProjectBudget(projectId, null); return budgetState(projectId); }
+/** Sets or removes (null) a chat's budget. Refuses an amount below what the chat has spent. */
+export function setBudget(chatId, value) {
+  if (!chatId) throw new Error('no such chat');
+  const s = read();
+  if (value === null || value === '' || value === 'none') { write({ ...s, chats: { ...s.chats, [chatId]: null } }); return budgetState(chatId); }
   const budget = Math.round(Number(value) * 100) / 100;
   if (!Number.isFinite(budget) || budget <= 0) throw new Error('the budget must be an amount in dollars, like 5 or 12.50');
-  const { spent } = projectSpend(projectId);
-  if (budget < spent) throw new Error(`this project has already spent $${spent.toFixed(4)}, so its budget must be at least $${(Math.ceil(spent * 100) / 100).toFixed(2)}`);
-  setProjectBudget(projectId, budget);
-  return budgetState(projectId);
+  const { spent } = chatSpend(chatId);
+  if (budget < spent) throw new Error(`this chat has already spent $${spent.toFixed(4)}, so its budget must be at least $${(Math.ceil(spent * 100) / 100).toFixed(2)}`);
+  write({ ...s, chats: { ...s.chats, [chatId]: budget } });
+  return budgetState(chatId);
 }

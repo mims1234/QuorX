@@ -516,6 +516,28 @@ test('the prompt enhancer reads a chat\'s first request (later ones only if set)
   }
 });
 
+test('the prompt enhancer never runs on its own: a card asks first (Enhance, Send as is, Always send as is)', async () => {
+  const good = async () => ({ message: { content: '{"goal":"A 30-second short movie","includes":["narration"],"assumptions":[]}' }, usage: { cost: 0.0001 } });
+  for (const [choice, ran, off] of [[0, true, false], [1, false, false], [2, false, true]]) {
+    let calls = 0;
+    const enhance = async (b) => { calls++; return good(b); };
+    const { events } = await run((body, i) => [reply('Done.')][i], { text: 'make a 30 sec movie about a cat', enhance, settings: { enhancerAsk: true },
+      onEvent: (e, id) => { if (e.t === 'question' && e.gate === 'enhance') setTimeout(() => answerQuestion(id, e.id, { choice }), 5); } });
+    const q = of(events, 'question').filter((e) => e.gate === 'enhance');
+    assert.equal(q.length, 1);
+    assert.deepEqual(q[0].options, ['Enhance', 'Send as is', 'Always send as is']);
+    assert.equal(calls, ran ? 1 : 0, `choice ${choice}`);
+    assert.equal(of(events, 'reading').length, ran ? 1 : 0);
+    assert.equal(of(events, 'enhancer_off').length, off ? 1 : 0);
+  }
+  { // a scheduled run has nobody to ask: it goes as written
+    let calls = 0;
+    const { events } = await run((body, i) => [reply('Done.')][i], { text: 'make a 30 sec movie about a cat', enhance: async (b) => { calls++; return good(b); }, settings: { enhancerAsk: true }, scheduledBy: 'sched1', chatId: `en-${Date.now().toString(36)}`, prefs: {} });
+    assert.equal(of(events, 'question').filter((e) => e.gate === 'enhance').length, 0);
+    assert.equal(calls, 0);
+  }
+});
+
 // ---------- ⚡ YOLO waits a few seconds for the user before the deciders answer ----------
 const pickSecond = async ({ voters, questions }) => {
   const q = questions[0], keys = Object.keys(q.options);

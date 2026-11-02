@@ -1,0 +1,63 @@
+/* Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0 */
+/* The chat as one stream, oldest at the top: plain lines (an avatar, who, when, the text), no bubbles and no boxed
+   replies. What the agent says stays where it said it; its tool work folds into lines; the files it makes show under
+   the step that made them; cards are short and open for more. Loaded last, so it wins over the older layers. */
+
+/* ---- you: a plain line, not a bubble ---- */
+html:root body .msgs .msg.user { background: transparent !important; border: 0 !important; border-radius: 0 !important; box-shadow: none !important;
+  max-width: 100% !important; margin-left: 0 !important; align-self: stretch !important; padding: 6px 12px 4px 44px !important; }
+html:root body .msgs .msg.user::before { content: "You" !important; left: 10px !important; top: 7px !important; width: 24px !important; height: 24px !important;
+  border-radius: 6px !important; font: 700 8.5px var(--font-ui) !important; box-shadow: none !important; }
+html:root body .msgs .msg.user .utext { font-size: var(--msg-size, 14px); }
+html:root body .msgs .msg.user .u-foot { justify-content: flex-start; }
+html:root body .msgs .msg.user time { text-align: left; }
+
+/* ---- the agent: a plain line too; its state is a thin edge, not a card ---- */
+html:root body .msgs .msg.bot { background: transparent !important; border: 0 !important; border-left: 2px solid transparent !important; border-radius: 0 !important;
+  box-shadow: none !important; padding: 6px 12px 6px 44px !important; }
+html:root body .msgs .msg.bot::before { left: 10px !important; top: 8px !important; width: 24px !important; height: 24px !important; border-radius: 6px !important; font-size: 9px !important; }
+html:root body .msgs .msg.bot.is-live { border-left-color: color-mix(in srgb, var(--ok) 55%, transparent) !important; box-shadow: none !important; }
+html:root body .msgs .msg.bot.is-waiting { border-left-color: var(--amber, #f59e0b) !important; box-shadow: none !important; }
+html:root body .msgs .msg.bot.is-error { border-left-color: var(--bad) !important; }
+@media (max-width: 600px) {
+  html:root body .msgs .msg.user, html:root body .msgs .msg.bot { padding-left: 38px !important; }
+  html:root body .msgs .msg.user::before, html:root body .msgs .msg.bot::before { left: 6px !important; }
+}
+
+/* ---- what the agent said between steps: a message, never folded ---- */
+.msg .timeline .tl-say { margin: 8px 0 6px; }
+
+/* ---- what you wrote while it worked: your line, where you wrote it ---- */
+.steer-card.tl-you { margin: 8px 0 6px; max-width: 100%; padding: 0 0 0 32px; position: relative; background: transparent; border: 0; border-radius: 0; }
+.steer-card.tl-you::before { content: "You"; position: absolute; left: 0; top: 1px; width: 24px; height: 24px; border-radius: 6px; display: grid; place-items: center;
+  font: 700 8.5px var(--font-ui); color: #04141a; background: var(--accent); }
+.steer-card.tl-you .sc-who { display: inline; text-transform: none; letter-spacing: 0; font: 600 12px var(--font-ui); color: var(--text); }
+.steer-card.tl-you .sc-state { margin-left: 6px; font: 400 11px var(--font-ui); }
+.steer-card.tl-you p { margin-top: 2px; }
+
+/* ---- files under the step that made them; one written again later says so ---- */
+.msg .timeline .tl-media:empty { display: none; }
+.msg .timeline .tl-media { margin: 4px 0 6px; }
+.msg .timeline .tl-media.old { display: flex; align-items: center; gap: 8px; padding: 5px 10px; border: 1px dashed var(--line); border-radius: 8px; opacity: .6; font-size: 12.5px; }
+.msg .timeline .tl-media.old small { color: var(--amber, #f59e0b); }
+
+/* ---- compact cards: a title line with a coloured edge; nothing cut off ---- */
+.msg .timeline .approval, .msg .approvals .approval { border-left-width: 3px !important; }
+.q-fold { border-left: 3px solid var(--violet, #a78bfa); }
+.q-fold.plan-fold { border-left-color: var(--accent); }
+.q-fold > summary { align-items: flex-start; }
+.q-fold-l, .q-fold-a { white-space: normal !important; overflow: hidden; text-overflow: clip !important; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
+.q-fold-l { max-width: 60% !important; }
+.q-fold[open] .q-fold-l, .q-fold[open] .q-fold-a { -webkit-line-clamp: unset; line-clamp: none; }
+.qbox .q-head { gap: 6px; }
+.qbox .q-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.qbox .q-opt .q-label { white-space: normal; overflow-wrap: anywhere; text-align: left; }
+.qbox .q-opts.q-many > .q-opt:nth-child(n+4) { display: none; }
+.qbox .q-opts.q-many.q-all > .q-opt { display: flex; }
+.qbox .q-more-opts { margin: 2px 0 0; padding: 2px 0; border: 0; background: none; color: var(--accent); font: 500 12px var(--font-ui); cursor: pointer; }
+.qbox .q-more-opts:hover { text-decoration: underline; }
+
+/* ---- a /goal's live checklist sits at the end of the reply while it works ---- */
+.msg .approvals > .plan-card { margin-top: 8px; }
+.qbox .q-why { display: block; width: 100%; color: var(--muted); font-size: 12px; }
+.msg .timeline .tl-at:has(> .tl-at-body > .tl-media:empty:only-child) { display: none; }

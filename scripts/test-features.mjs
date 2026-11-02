@@ -13,9 +13,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { runAgent, inPlaceEdit, deciderPicture, REVIEW_SYSTEM, FILM_KEYS, answerQuestion, answerSecret, answerApproval } from '../server/agent.js';
-import { saveProject, forgetProject, setProjectBudget } from '../server/store.js';
+import { saveProject, forgetProject } from '../server/store.js';
 import { ledger } from '../server/runs.js';
-import { budgetState } from '../server/budget.js';
+import { budgetState, setBudget } from '../server/budget.js';
 import { nextAfter, cleanWhen, cleanSchedule, describeWhen, createScheduler, saveSchedules as saveScheds, loadSchedules as loadScheds, GRACE_MS, endRun, PAUSE_AFTER_FAILS } from '../server/schedules.js';
 import { startScheduledChat } from '../server/schedrun.js';
 import { loadMemory, saveMemory, addMemory, checkMemory, looksSecret, memoryPrompt, memoryTokens, MEMORY_TOKENS } from '../server/memory.js';
@@ -347,14 +347,15 @@ test('a schedule can be trusted to act without asking; in Strict it waits for yo
       assert.equal(loadScheds()[0].lastRun.status, 'done');
     } finally { forgetProject(pid); saveScheds([]); }
   }
-  { // a scheduled chat does not start when its project has reached its budget
-    const dir = tempDir('quorx-sched-'), pid = `sb${Date.now().toString(36)}`;
+  { // a scheduled chat does not start when the chat it posts in has reached its budget
+    const dir = tempDir('quorx-sched-'), pid = `sb${Date.now().toString(36)}`, cid = `sbc${Date.now().toString(36)}`;
     saveProject({ id: pid, name: 'sched', path: dir });
-    setProjectBudget(pid, 0.5);
-    ledger.set(`seed-${pid}`, { project: pid, cost: 0.6 });
+    storeChat(cid, { id: cid, title: 'Costly runs', projectId: pid, created: Date.now(), agent: { setup: { model: 'test/model' }, messages: [] } });
+    setBudget(cid, 0.5);
+    ledger.set(`seed-${pid}`, { project: pid, chat: cid, cost: 0.6 });
     try {
       const notes = [];
-      const s = cleanSchedule({ name: 'Costly', prompt: 'x', projectId: pid, model: 'test/model', when: { kind: 'daily', time: '09:00', days: [] } });
+      const s = { ...cleanSchedule({ name: 'Costly', prompt: 'x', projectId: pid, model: 'test/model', when: { kind: 'daily', time: '09:00', days: [] } }), chatId: cid };
       const r = startScheduledChat(s, {}, schedDeps(() => { throw new Error('the model must not be called'); }, { onNotify: (k) => notes.push(k) }));
       assert.equal(r.status, 'skipped');
       assert.match(r.note, /budget/);
@@ -1241,11 +1242,12 @@ test('quorx_settings in YOLO: nothing answers the card for the user; Always allo
   assert.match(String(toolResults(bodies[3]).at(-1)), /declined.*not now/);
 });
 
-test('quorx_settings on the project: budget, design system and hooks change through the same code as Project settings, and undo', async () => {
-  let pid = null, dir = null;
+test('quorx_settings on the project: the chat budget, design system and hooks change through the same code as Project settings, and undo', async () => {
+  let dir = null;
   let seen = null;
+  const qcid = `qsp-${Date.now().toString(36)}`;
   const { bodies, events } = await run((body, i) => {
-    if (i === 3) seen = { budget: budgetState(pid).budget, design: fs.readFileSync(path.join(dir, 'DESIGN.md'), 'utf8') };
+    if (i === 3) seen = { budget: budgetState(qcid).budget, design: fs.readFileSync(path.join(dir, 'DESIGN.md'), 'utf8') };
     return [
     reply('', [['quorx_settings', { action: 'set', key: 'project.budget', value: '$20' }]]),
     reply('', [['quorx_settings', { action: 'set', key: 'project.design', value: 'brutalist' }]]),
@@ -1254,12 +1256,12 @@ test('quorx_settings on the project: budget, design system and hooks change thro
     reply('', [['quorx_settings', { action: 'get', key: 'project.hooks' }]]),
     reply('Done.')][i];
   }, {
-    chatId: `qsp-${Date.now().toString(36)}`, settings: { approval: 'strict' }, prep: (d) => { dir = d; },
-    onEvent: (e, id) => { pid = id; if (e.t === 'approval' && e.tool === 'quorx_settings') setTimeout(() => answerApproval(id, e.id, { approve: true }), 10); } });
+    chatId: qcid, settings: { approval: 'strict' }, prep: (d) => { dir = d; },
+    onEvent: (e, id) => { if (e.t === 'approval' && e.tool === 'quorx_settings') setTimeout(() => answerApproval(id, e.id, { approve: true }), 10); } });
   assert.equal(seen.budget, 20); assert.match(seen.design, /^---[\s\S]*id: concrete/);
   const ch = of(events, 'setting_changed');
   assert.deepEqual(ch.map((e) => [e.where, e.key, e.from, e.to]), [['project', 'project.budget', '$10.00', '$20.00'], ['project', 'project.design', 'none', 'Concrete (concrete)'], ['project', 'project.hooks', '0 hooks', ch[2].to], ['project', 'project.budget', '$20.00', '$10.00']]);
-  assert.match(String(toolResults(bodies[4]).at(-1)), /^Put back: Budget is \$10\.00 again\./);
+  assert.match(String(toolResults(bodies[4]).at(-1)), /^Put back: This chat's budget is \$10\.00 again\./);
   assert.match(String(toolResults(bodies[5]).at(-1)), /after_write \(\*\.js\) → npx prettier --write \{file\}/);
 });
 

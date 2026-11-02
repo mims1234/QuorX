@@ -704,7 +704,7 @@ A client starts it as `node <path to QuorX>/server/mcp.js`.
 |---|---|
 | `list_projects` | Your projects, with folder, spend and budget |
 | `list_files`, `read_file` | A project's files, and one text file in windows of 100k characters |
-| `start_reply` | Asks QuorX's agent to do something in a project. It is an ordinary chat in your sidebar, with the project's budget, checks and reviewer. Paid media is off and Strict is the default (`approval: "yolo"` to change it). `chat` continues a chat. |
+| `start_reply` | Asks QuorX's agent to do something in a project. It is an ordinary chat in your sidebar, with its own budget, checks and reviewer. Paid media is off and Strict is the default (`approval: "yolo"` to change it). `chat` continues a chat. |
 | `get_reply` | Waits up to `wait` seconds (default 20), then reports the reply's state (working, waiting for you, done, failed) with its last steps, checks, review, cost, changed files and answer |
 | `stop_reply` | Stops it |
 
