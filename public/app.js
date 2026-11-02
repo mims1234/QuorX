@@ -4489,12 +4489,16 @@ function timelineItems(m) {
   let blk = null, rv = null;
   const answer = answerIndex(m), lastPlan = tr.findLastIndex((e) => e.t === 'plan');
   items.split = Infinity;
+  // Each item takes the time of the event that made it (a step: when it started).
+  let mark = 0;
+  const stampItems = (e) => { for (; mark < items.length; mark++) items[mark].at ??= atOf(m, e); };
   const newBlock = (step) => { blk = { kind: 'step', step, calls: [], aside: '', done: false }; items.push(blk); return blk; };
   for (let i = 0; i < tr.length; i++) {
     const e = tr[i];
+    stampItems(tr[i - 1]);
     if (answer >= 0 && i === answer + 1) items.split = items.length;
     if (e.t === 'llm_start') { newBlock(e.step); continue; }
-    if (e.t === 'llm_done') { if (blk && blk.step === e.step) { blk.done = true; blk.aside = e.aside || ''; } continue; }
+    if (e.t === 'llm_done') { if (blk && blk.step === e.step) { blk.done = true; blk.aside = e.aside || ''; blk.doneAt = atOf(m, e); } continue; }
     if (e.t === 'tool') {
       if (e.by === 'reviewer') { if (!rv) { rv = { kind: 'group', key: `rv${i}`, icon: '🧪', label: 'The reviewer tested it', calls: [] }; items.push(rv); } rv.calls.push({ e }); continue; }
       if (e.by === 'helper') {
@@ -4535,6 +4539,7 @@ function timelineItems(m) {
     if (e.t === 'mode') { items.push({ kind: 'note', text: e.approval === 'yolo' ? '⚡ Switched to YOLO' : '🔒 Switched to Strict' }); continue; }
     if (e.t === 'note' && e.level === 'warn') { items.push({ kind: 'note', text: `⚠ ${e.msg}` }); continue; }
   }
+  stampItems(tr[tr.length - 1]);
   return items;
 }
 // Where in the trace the reply's text was finished: its last step that called no tools, if the text on the page is
@@ -4563,7 +4568,7 @@ function timelineHTML(m) {
     const ap = x.approval && m.approvals?.[x.approval], apB = ap ? approvalBadge(ap, !!m.live) : null;
     // An MCP tool: the server's mark, "server › tool", and the first line of what it gave back.
     const mc = mcpOfTool(x.e.name), first = mc && x.res && !err ? String(x.res).split('\n').find((l) => l.trim()) : '';
-    return det(`${key}-${i}`, `tl-call${mc ? ' tl-mcp' : ''}`, `${mc ? `<span class="tl-ic">${mcpMark({ name: mc.server }, 'sm')}</span><b>${esc(mc.server)} › ${esc(mc.tool)}</b><span class="tl-arg">${first ? `<span class="tl-mcp-res">${esc(clip(first, 120))}</span>` : esc(clip(argSummary(x.e), 160))}</span>` : `<span class="tl-ic">${TOOL_NAME[x.e.name]?.split(' ')[0] || '🔧'}</span><b>${esc(x.e.name)}</b><span class="tl-arg">${esc(clip(argSummary(x.e), 160))}</span>`}${apB ? apB.badge : ''}${x.res == null && m.live ? '<span class="tl-spin" aria-label="running"></span>' : err ? '<span class="tl-err">error</span>' : ''}`,
+    return det(`${key}-${i}`, `tl-call${mc ? ' tl-mcp' : ''}`, `${mc ? `<span class="tl-ic">${mcpMark({ name: mc.server }, 'sm')}</span><b>${esc(mc.server)} › ${esc(mc.tool)}</b><span class="tl-arg">${first ? `<span class="tl-mcp-res">${esc(clip(first, 120))}</span>` : esc(clip(argSummary(x.e), 160))}</span>` : `<span class="tl-ic">${TOOL_NAME[x.e.name]?.split(' ')[0] || '🔧'}</span><b>${esc(x.e.name)}</b><span class="tl-arg">${esc(clip(argSummary(x.e), 160))}</span>`}${apB ? apB.badge : ''}${x.res == null && m.live ? '<span class="tl-spin" aria-label="running"></span>' : err ? '<span class="tl-err">error</span>' : ''}${atOf(m, x.e) ? `<small class="tl-ct">${timeTag(atOf(m, x.e))}</small>` : ''}`,
       (apB ? apB.detail : '') + (x.cmd && !apB ? whyLine(x.cmd) : '') + (x.res ? `<pre class="tl-out">${esc(clip(x.res, 4000))}</pre>` : '<div class="tl-out tl-none">No output.</div>'));
   }).join('');
   const groupRow = (key, icon, label, list, busy) => {
@@ -4572,28 +4577,32 @@ function timelineHTML(m) {
   };
   // Each item becomes pieces: rows (a thinking line, a line of tool calls) or anything else (text, cards, notes).
   const pieces = [];
-  const row = (html, key, calls = [], think = 0, busy = false) => pieces.push({ html, row: true, key, calls, think, busy });
-  const other = (html) => { if (html) pieces.push({ html, row: false }); };
+  let at = m.at || 0; // when the item being drawn happened
+  const row = (html, key, calls = [], think = 0, busy = false) => pieces.push({ html, row: true, key, calls, think, busy, at });
+  const other = (html) => { if (html) pieces.push({ html, row: false, at }); };
+  // Every line, card and fold shows when it happened, in a column of times down the left.
+  const when = (x) => (x.at ? `<div class="tl-at"><span class="tl-t">${timeTag(x.at)}</span><div class="tl-at-body">${x.html}</div></div>` : x.html);
   const usedAtt = new Set(); // which note's attachments are drawn already (two notes can say the same thing)
   if (m.prep && m.live) other(`<div class="tl-row tl-wait"><span class="tl-spin"></span><span class="tl-label">${esc(m.prep)}</span></div>`);
   const items = timelineItems(m);
   let cut = Infinity;
   for (const [k, it] of items.entries()) {
     if (k === items.split) cut = pieces.length;
+    at = it.at || at;
     if (it.kind === 'step') {
       const think = String(m.thinking?.[it.step] || '').trim();
       if (think) row(det(`t${it.step}`, 'tl-row tl-think', `<span class="tl-ic">💭</span><span class="tl-label">${!it.done && m.live ? 'Thinking' : 'Thought'}</span><small class="tl-words">${think.split(/\s+/).length.toLocaleString()} words</small>`, `<div class="tl-think-body" data-step="${it.step}">${open.has(`t${it.step}`) ? md(think) : ''}</div>`), `t${it.step}`, [], 1, !it.done && m.live);
-      if (it.aside) other(`<div class="tl-text">${md(it.aside)}</div>`);
-      if (it.calls.length) { const busy = m.live && it.calls.some((x) => x.res == null); row(groupRow(`x${it.step}`, mcpOfTool(it.calls[0].e.name) ? '🧲' : TOOL_NAME[it.calls[0].e.name]?.split(' ')[0] || '🔧', callsLabel(it.calls), it.calls, busy), `x${it.step}`, it.calls, 0, busy); }
+      if (it.aside) { at = it.doneAt || at; other(`<div class="tl-text">${md(it.aside)}</div>`); }
+      if (it.calls.length) { at = atOf(m, it.calls[0].e) || at; const busy = m.live && it.calls.some((x) => x.res == null); row(groupRow(`x${it.step}`, mcpOfTool(it.calls[0].e.name) ? '🧲' : TOOL_NAME[it.calls[0].e.name]?.split(' ')[0] || '🔧', callsLabel(it.calls), it.calls, busy), `x${it.step}`, it.calls, 0, busy); }
       if (!it.done && m.live && !think && !it.calls.length) other('<div class="tl-row tl-wait"><span class="tl-spin"></span><span class="tl-label">Working…</span></div>');
       continue;
     }
     if (it.kind === 'group') { const busy = m.live && !it.done && it.calls.some((x) => x.res == null); row(groupRow(it.key, it.icon, it.label, it.calls, busy), it.key, it.calls, 0, busy); continue; }
-    if (it.kind === 'card') { const h = it.html(); if (h) pieces.push({ html: h, row: false, card: true, pin: !!it.pin }); continue; }
+    if (it.kind === 'card') { const h = it.html(); if (h) pieces.push({ html: h, row: false, card: true, pin: !!it.pin, at }); continue; }
     if (it.kind === 'steer') {
       const att = (m.steerAtt || []).find((x) => x.text === it.e.text && !usedAtt.has(x)) || null;
       if (att) usedAtt.add(att);
-      pieces.push({ row: false, card: true, pin: true, html: `<div class="steer-card ${it.read ? 'read' : ''}"><span class="sc-who">You, while it worked${atOf(m, it.e) ? ` · ${timeTag(atOf(m, it.e))}` : ''}</span><p>${esc(it.e.text)}</p>${att?.imgs?.length ? `<div class="u-imgs" data-views="${esc(JSON.stringify(att.imgViews || []))}">${att.imgs.map((u, k) => `<img src="${u}" alt="attached picture" data-k="${k}">`).join('')}</div>` : it.e.images ? `<span class="sc-att">📎 ${it.e.images} picture${it.e.images > 1 ? 's' : ''}</span>` : ''}${att?.docs?.length ? `<div class="u-docs">${att.docs.map((d) => `<button type="button" class="u-doc" data-doc="${esc(JSON.stringify(d))}" title="${esc(d.name)} · ${esc(docSize(d.size))} · click to preview">${DOC_ICON[d.kind] || '📄'} ${esc(d.name)}</button>`).join('')}</div>` : it.e.docs ? `<span class="sc-att">📎 ${it.e.docs} file${it.e.docs > 1 ? 's' : ''}</span>` : ''}<span class="sc-state">${it.read ? '✓ read by the agent' : '… it reads this at its next step'}</span></div>` });
+      pieces.push({ row: false, card: true, pin: true, at, html: `<div class="steer-card ${it.read ? 'read' : ''}"><span class="sc-who">You, while it worked</span><p>${esc(it.e.text)}</p>${att?.imgs?.length ? `<div class="u-imgs" data-views="${esc(JSON.stringify(att.imgViews || []))}">${att.imgs.map((u, k) => `<img src="${u}" alt="attached picture" data-k="${k}">`).join('')}</div>` : it.e.images ? `<span class="sc-att">📎 ${it.e.images} picture${it.e.images > 1 ? 's' : ''}</span>` : ''}${att?.docs?.length ? `<div class="u-docs">${att.docs.map((d) => `<button type="button" class="u-doc" data-doc="${esc(JSON.stringify(d))}" title="${esc(d.name)} · ${esc(docSize(d.size))} · click to preview">${DOC_ICON[d.kind] || '📄'} ${esc(d.name)}</button>`).join('')}</div>` : it.e.docs ? `<span class="sc-att">📎 ${it.e.docs} file${it.e.docs > 1 ? 's' : ''}</span>` : ''}<span class="sc-state">${it.read ? '✓ read by the agent' : '… it reads this at its next step'}</span></div>` });
       continue;
     }
     if (it.kind === 'note') other(`<div class="tl-note">${esc(clip(it.text, 220))}</div>`);
@@ -4603,15 +4612,15 @@ function timelineHTML(m) {
   const bundle = (list) => {
     const out = [];
     for (let k = 0; k < list.length;) {
-      if (!list[k].row) { out.push(list[k++].html); continue; }
+      if (!list[k].row) { out.push(when(list[k++])); continue; }
       let e = k; while (e < list.length && list[e].row) e++;
       const run = list.slice(k, e);
       if (run.length >= 4) {
         const calls = run.flatMap((x) => x.calls), thinks = run.reduce((n, x) => n + x.think, 0);
         const errs = calls.filter((x) => x.res != null && /^Error/.test(x.res)).length;
         const label = [calls.length ? callsLabel(calls) : '', thinks ? `${calls.length ? 'thought' : 'Thought'} ${thinks} time${thinks === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
-        out.push(det(`b-${run[0].key}`, 'tl-row tl-bundle', `<span class="tl-ic">🗂</span><span class="tl-label">${esc(label)}</span><small class="tl-words">${run.length} steps</small>${run.some((x) => x.busy) ? '<span class="tl-spin" aria-label="running"></span>' : ''}${errs ? `<span class="tl-err">${errs} error${errs > 1 ? 's' : ''}</span>` : ''}`, `<div class="tl-bundle-body">${run.map((x) => x.html).join('')}</div>`));
-      } else out.push(...run.map((x) => x.html));
+        out.push(when({ at: run[0].at, html: det(`b-${run[0].key}`, 'tl-row tl-bundle', `<span class="tl-ic">🗂</span><span class="tl-label">${esc(label)}</span><small class="tl-words">${run.length} steps</small>${run.some((x) => x.busy) ? '<span class="tl-spin" aria-label="running"></span>' : ''}${errs ? `<span class="tl-err">${errs} error${errs > 1 ? 's' : ''}</span>` : ''}`, `<div class="tl-bundle-body">${run.map(when).join('')}</div>`) }));
+      } else out.push(...run.map(when));
       k = e;
     }
     return out.join('');
@@ -4627,13 +4636,13 @@ function timelineHTML(m) {
     // Says how much work it was; what kind of work shows on hover (and inside).
     const what = [done.length ? callsLabel(done) : '', thinks ? `${done.length ? 'thought' : 'Thought'} ${thinks} time${thinks === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
     const counts = [done.length ? `${done.length} tool call${done.length === 1 ? '' : 's'}` : '', thinks ? `${thinks} thought${thinks === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
-    return det(`${pre}${n ? `all${n}` : 'all'}`, 'tl-row tl-bundle tl-fold', `<span class="tl-ic">🗂</span><span class="tl-label" title="${esc(what)}">${live && end ? 'Working' : 'Worked'} through ${steps} step${steps === 1 ? '' : 's'}</span><small class="tl-words">${esc(counts)}</small>${errs ? `<span class="tl-err">${errs} error${errs > 1 ? 's' : ''}</span>` : ''}`, bundle(seg));
+    return when({ at: seg[0].at, html: det(`${pre}${n ? `all${n}` : 'all'}`, 'tl-row tl-bundle tl-fold', `<span class="tl-ic">🗂</span><span class="tl-label" title="${esc(what)}">${live && end ? 'Working' : 'Worked'} through ${steps} step${steps === 1 ? '' : 's'}</span><small class="tl-words">${esc(counts)}</small>${errs ? `<span class="tl-err">${errs} error${errs > 1 ? 's' : ''}</span>` : ''}`, bundle(seg)) });
   };
   // tail: the part that ends with what is happening now.
   const fold = (list, pre, tail) => {
     let out = '', seg = [], n = 0;
     const stays = (x, i) => x.pin || (live && (x.card || (tail && i === list.length - 1)));
-    list.forEach((x, i) => { if (stays(x, i)) { out += foldLine(seg, n++, false, pre); seg = []; out += x.html; } else seg.push(x); });
+    list.forEach((x, i) => { if (stays(x, i)) { out += foldLine(seg, n++, false, pre); seg = []; out += when(x); } else seg.push(x); });
     return out + foldLine(seg, n, tail, pre);
   };
   // What happened before the answer was written goes above it; what came after (checks, the reviewer, your notes) under it.
@@ -4761,7 +4770,7 @@ function putTimeline(m) {
   const el = m.el, t = timelineHTML(m);
   $('.timeline', el).innerHTML = t.before;
   $('.tl-after', el).innerHTML = t.after;
-  $('.ans-when', el).innerHTML = t.answerAt ? `Answer · ${timeTag(t.answerAt)}` : '';
+  $('.ans-when', el).innerHTML = t.answerAt ? `<span class="tl-t">${timeTag(t.answerAt)}</span><span>Answer</span>` : '';
 }
 // ⚡ The clock on a card stopped (you started on it): only its countdown line changes, so the rest of the card stays.
 function drawHeld(m, id, card) {
