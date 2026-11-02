@@ -37,7 +37,7 @@ import { ptyAvailable, ptyOpen, ptyWrite, ptyResize, ptyFollow, ptyClose } from 
 // Pages the agent wrote, served from this app's own address, get their own opaque origin: their requests to /api are refused.
 const SANDBOX_CSP = 'sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads';
 import { listChats, chatPerms, sidebarChats, chatPage, chatPictureRefs, pictureRefCounts, getTrace, getChatForPage, getChat, saveChat, patchChat, settleReply, trashChat, duplicateChat, validId, listProjects, saveProject, forgetProject, setProjectColor, setProjectAlias, setProjectFlags, costSummary, costChats, providerUsage } from './server/store.js';
-import { runLine, ALLOWED, copyTemplate, workspaceDir, safePath, fullLocalPath,chatFolder, listFiles, listDir, listServers, stopServerWait, restartServer, serverLog, startServer, restoreCheckpoint, listCheckpoints, pruneCheckpoints, undoConflicts, changedFiles, reviewFiles, reviewDiff, undoFile, serverOverview, launchConfigs, saveLaunchConfig, removeLaunchConfig, ensureAgentDir, agentSpace } from './server/workspace.js';
+import { runLine, ALLOWED, copyTemplate, workspaceDir, safePath, fullLocalPath,chatFolder, listFiles, listDir, listServers, stopServerWait, restartServer, serverLog, startServer, restoreCheckpoint, listCheckpoints, pruneCheckpoints, undoConflicts, changedFiles, reviewFiles, reviewDiff, undoFile, serverOverview, launchConfigs, saveLaunchConfig, removeLaunchConfig, forgetServer, serverFor, ensureAgentDir, agentSpace } from './server/workspace.js';
 import { followTerm, runningJobs, stopJob } from './server/terminal.js';
 import { runningIn, runningAll, stopRunning, stopAllIn } from './server/running.js';
 import { decide as decideCommand, loadRules, saveRules, suggestedRules, ruleProblem, updateRule, removeRule } from './server/cmdpolicy.js';
@@ -588,12 +588,20 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/launch' && req.method === 'POST') {
       const b = JSON.parse(await readBody(req, 1e4));
       if (!validId(b.projectId)) return json(res, 400, { error: 'bad project id' });
-      try { return json(res, 200, { ok: true, config: saveLaunchConfig(b.projectId, b) }); } catch (e) { return json(res, 200, { error: e.message }); }
+      try {
+        const config = saveLaunchConfig(b.projectId, b);
+        // A renamed server that isn't running leaves no row under its old name.
+        if (b.oldName && b.oldName !== config.name && serverFor(b.projectId, b.oldName)?.status === 'stopped') await forgetServer(b.projectId, b.oldName, 'you');
+        return json(res, 200, { ok: true, config });
+      } catch (e) { return json(res, 200, { error: e.message }); }
     }
     if (url.pathname === '/api/launch' && req.method === 'DELETE') {
       const pid = url.searchParams.get('project');
       if (!validId(pid)) return json(res, 400, { error: 'bad project id' });
-      return json(res, 200, { ok: removeLaunchConfig(pid, url.searchParams.get('name')) });
+      // Deleting a server from the list stops it, forgets it and takes it out of the launch file, saved or not.
+      const name = url.searchParams.get('name');
+      const forgot = await forgetServer(pid, name, 'you');
+      return json(res, 200, { ok: removeLaunchConfig(pid, name) || forgot });
     }
 
     // ---- command permissions: the rules the rule engine applies, per project and everywhere ----

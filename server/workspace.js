@@ -508,7 +508,20 @@ export function stopServer(key, by = 'agent') {
   stopServerWait(key, by);
   return true;
 }
-export const restartServer = (key, source = 'you') => { const s = servers.get(key); if (!s) throw new Error('unknown server'); return startServer({ projectId: s.projectId, name: s.name, cmd: s.cmd, args: s.args, port: s.fixed, source }); };
+// A restart runs the saved command when there is one, so an edit in the launch file takes effect.
+export const restartServer = (key, source = 'you') => {
+  const s = servers.get(key); if (!s) throw new Error('unknown server');
+  const c = launchConfigs(s.projectId).find((x) => slug(x.name) === slug(s.name));
+  return startServer({ projectId: s.projectId, name: s.name, cmd: c?.command || s.cmd, args: c ? c.args : s.args, port: c ? c.port : s.fixed, source });
+};
+/** Stops a server (if it runs) and drops it from the list; true if there was one. */
+export async function forgetServer(projectId, name, by = 'you') {
+  const key = `${projectId}/${slug(name)}`;
+  if (!servers.has(key)) return false;
+  await stopServerWait(key, by);
+  servers.delete(key);
+  return true;
+}
 export const listServers = (projectId) => [...servers.values()].filter((s) => !projectId || s.projectId === projectId).map(view);
 export const serverLog = (key) => servers.get(key)?.log.slice(-200).join('\n') ?? '';
 export const serverFor = (projectId, name) => servers.get(`${projectId}/${slug(name)}`);

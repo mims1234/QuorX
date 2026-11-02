@@ -30,7 +30,6 @@
 .srv-state { font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
 .srv-state.ok { color: var(--ok); } .srv-state.busy, .srv-state.warn { color: var(--amber); } .srv-state.bad { color: var(--bad); }
 .srv-from { font-size: 10px; padding: 1px 6px; border-radius: 99px; border: 1px solid var(--line-strong); color: var(--muted); }
-.srv-from.unsaved { border-style: dashed; }
 .srv-cmd { font: 11px/1.45 var(--mono); color: var(--accent); background: var(--surface-inset, var(--bg)); border: 1px solid var(--line); border-radius: 5px; padding: 2px 6px; overflow-wrap: anywhere; justify-self: start; }
 .srv-port { color: var(--muted); }
 .srv-url { font: 11px var(--mono); color: var(--ok); text-decoration: none; justify-self: start; }
