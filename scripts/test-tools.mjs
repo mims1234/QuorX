@@ -516,6 +516,54 @@ test('the prompt enhancer reads a chat\'s first request (later ones only if set)
   }
 });
 
+test('the prompt enhancer never runs on its own: a card asks first (Enhance, Send as is, Always send as is)', async () => {
+  const good = async () => ({ message: { content: '{"goal":"A 30-second short movie","includes":["narration"],"assumptions":[]}' }, usage: { cost: 0.0001 } });
+  for (const [choice, ran, off] of [[0, true, false], [1, false, false], [2, false, true]]) {
+    let calls = 0;
+    const enhance = async (b) => { calls++; return good(b); };
+    const { events } = await run((body, i) => [reply('Done.')][i], { text: 'make a 30 sec movie about a cat', enhance, settings: { enhancerAsk: true },
+      onEvent: (e, id) => { if (e.t === 'question' && e.gate === 'enhance') setTimeout(() => answerQuestion(id, e.id, { choice }), 5); } });
+    const q = of(events, 'question').filter((e) => e.gate === 'enhance');
+    assert.equal(q.length, 1);
+    assert.deepEqual(q[0].options, ['Enhance', 'Send as is', 'Always send as is']);
+    assert.equal(calls, ran ? 1 : 0, `choice ${choice}`);
+    assert.equal(of(events, 'reading').length, ran ? 1 : 0);
+    assert.equal(of(events, 'enhancer_off').length, off ? 1 : 0);
+  }
+  { // a scheduled run has nobody to ask: it goes as written
+    let calls = 0;
+    const { events } = await run((body, i) => [reply('Done.')][i], { text: 'make a 30 sec movie about a cat', enhance: async (b) => { calls++; return good(b); }, settings: { enhancerAsk: true }, scheduledBy: 'sched1', chatId: `en-${Date.now().toString(36)}`, prefs: {} });
+    assert.equal(of(events, 'question').filter((e) => e.gate === 'enhance').length, 0);
+    assert.equal(calls, 0);
+  }
+});
+
+test('save_skill asks where it goes: this project, all projects, or not at all; the agent suggestion is the recommended one', async () => {
+  const { HOME } = await import('../server/openrouter.js');
+  const mine = (id) => path.join(HOME, 'data', 'skills', id, 'SKILL.md');
+  for (const [choice, where, id] of [[0, 'project', 'proj-skill'], [1, 'mine', 'all-skill'], [2, null, 'no-skill']]) {
+    const { dir, events, bodies } = await run((body, i) => [reply('', [['save_skill', { name: id, description: 'how to do x', instructions: '1. do x', where: 'all' }]]), reply('Done.')][i], {
+      settings: { approval: 'strict' }, onEvent: (e, rid) => { if (e.t === 'question' && e.gate === 'skill') setTimeout(() => answerQuestion(rid, e.id, { choice }), 5); } });
+    const q = of(events, 'question').filter((e) => e.gate === 'skill');
+    assert.equal(q.length, 1);
+    assert.deepEqual(q[0].options, ['This project', 'All projects', "Don't save"]);
+    assert.equal(q[0].recommended, 1, 'the agent suggested all projects');
+    assert.equal(of(events, 'approval').filter((e) => e.tool === 'save_skill').length, 0, 'no approval card on top of it');
+    assert.equal(fs.existsSync(path.join(dir, '.quorx', 'skills', id, 'SKILL.md')), where === 'project');
+    assert.equal(fs.existsSync(mine(id)), where === 'mine');
+    if (!where) assert.match(toolResults(bodies[1]).at(-1), /chose not to save the skill/);
+    fs.rmSync(path.dirname(mine(id)), { recursive: true, force: true });
+  }
+  { // a broken save fails before anyone is asked; a scheduled run saves to the project without asking
+    const { events, bodies } = await run((body, i) => [reply('', [['save_skill', { name: 'x', description: 'y' }]]), reply('Done.')][i]);
+    assert.equal(of(events, 'question').length, 0);
+    assert.match(toolResults(bodies[1]).at(-1), /needs instructions/);
+    const s = await run((body, i) => [reply('', [['save_skill', { name: 'sched-skill', description: 'y', instructions: 'z' }]]), reply('Done.')][i], { scheduledBy: 'sched1', chatId: `sk-${Date.now().toString(36)}`, prefs: {} });
+    assert.equal(of(s.events, 'question').length, 0);
+    assert.ok(fs.existsSync(path.join(s.dir, '.quorx', 'skills', 'sched-skill', 'SKILL.md')));
+  }
+});
+
 // ---------- ⚡ YOLO waits a few seconds for the user before the deciders answer ----------
 const pickSecond = async ({ voters, questions }) => {
   const q = questions[0], keys = Object.keys(q.options);

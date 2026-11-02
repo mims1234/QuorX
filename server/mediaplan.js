@@ -4,7 +4,7 @@
 // the paid calls it intends first (media_plan), the harness prices them with the same estimates the single-call
 // cards use, and the user (🔒 Strict) or the deciders (⚡ YOLO) approve the whole plan once.
 // Later calls that match it (same kind and model, within its count, and not dearer than planned) run without another
-// vote. Anything off the plan, or over its estimate, is judged on its own as before. Budget caps apply either way.
+// vote. Anything off the plan, or over its estimate, is judged on its own as before. The chat budget applies either way.
 
 const clip = (s, n) => { const t = String(s ?? ''); return t.length > n ? `${t.slice(0, n)}…` : t; };
 
@@ -46,10 +46,10 @@ export async function pricePlan(items, price) {
 export const itemLine = (x) => `${x.count} × ${NOUN[x.kind] || x.kind} with ${x.model}${x.detail ? ` (${x.detail})` : ''}, about $${(x.each * x.count).toFixed(3)}${x.what ? `: ${x.what}` : ''}`;
 
 /** What the deciders see of a plan: the harness's prices and the agent's short description of each part (data, not reasons). */
-export const planFacts = (plan, budget) => ({
+export const planFacts = (plan, left) => ({
   production_plan: plan.items.map((x) => ({ kind: x.kind, count: x.count, model: x.model, estimated_each_usd: +x.each.toFixed(4), ...(x.detail ? { detail: x.detail } : {}), ...(x.what ? { part_described_by_agent: x.what } : {}) })),
   estimated_total_usd: +plan.total.toFixed(4),
-  media_budget_for_this_reply_usd: budget,
+  ...(left != null ? { chat_budget_left_usd: +left.toFixed(4) } : {}),
 });
 
 /**

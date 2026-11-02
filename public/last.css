@@ -2448,7 +2448,6 @@ html body .sidebar .sb-list .sb-project { margin-left: 2px !important; margin-ri
 .chatpane .chat-set .tools-menu .cmp-tp-name { font-size: 13px; }
 .chatpane .chat-set .tools-menu .q-cost { font-size: 11.5px; }
 /* the caps: small $ fields */
-.chatpane .chat-set .cs-caps { gap: 8px 14px; }
 .chatpane .chat-set .cs-num { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
 .chatpane .chat-set .cs-inp { display: inline-flex; align-items: center; height: 28px; padding: 0 8px; border-radius: 7px; border: 1px solid var(--line); background: var(--surface-inset, var(--bg)); }
 .chatpane .chat-set .cs-inp:focus-within { border-color: var(--accent); }

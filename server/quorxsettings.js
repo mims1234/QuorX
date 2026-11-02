@@ -7,7 +7,7 @@
 // the agent sees their names at most, and the user adds them in ⚙ Settings → Providers.
 import fs from 'node:fs';
 import { listProjects, setProjectColor, setProjectAlias, setProjectFlags } from './store.js';
-import { setBudget, budgetState } from './budget.js';
+import { setBudget, budgetState, projectSpend } from './budget.js';
 import { listDesignSystems, projectDesign, applyDesignSystem, saveProjectDesign } from './design.js';
 import { loadHooks, saveHooks, cleanHook, HOOK_EVENTS, HOOK_MAX } from './hooks.js';
 import { loadRules, saveRules, ruleProblem } from './cmdpolicy.js';
@@ -55,7 +55,6 @@ export const SETTINGS = [
   E('approval', 'newchats', 'Permission mode for new chats', 'enum', { values: [['strict', '🔒 Strict'], ['yolo', '⚡ YOLO']], guard: true, help: 'What a new chat starts in; each chat can switch in its message box. Strict asks you before paid media; YOLO lets the deciders answer.' }),
   ...['enhancer', 'reviewer', 'freshEyes', 'deciders', 'helpers', 'image', 'video', 'music', 'speech'].map((k) => E(`newChatTools.${k}`, 'newchats', `New chats start with ${{ enhancer: 'the prompt enhancer', reviewer: 'the reviewer', freshEyes: 'fresh eyes', deciders: 'the deciders', helpers: 'helpers', image: '🖼 pictures (paid)', video: '🎬 video (paid)', music: '🎵 music (paid)', speech: '🗣 voice (paid)' }[k]}`, 'bool', { dflt: NEW_CHAT_TOOLS[k] })),
   E('maxSteps', 'loop', 'Max model calls per reply', 'int', { min: 2, max: 1000 }),
-  E('planFirst', 'loop', 'Plan first', 'enum', { values: [['off', 'Off'], ['big', 'Big tasks'], ['always', 'Always']], help: 'Big tasks: the agent shows its plan and waits for Go ahead.' }),
   E('planSteps', 'loop', 'Steps when the reply has a plan', 'int', { min: 0, max: 1000, help: '0 = the same as max model calls.' }),
   E('continueRounds', 'loop', 'Keep going while the plan is open', 'int', { min: 0, max: 20 }),
   E('maxOutput', 'loop', 'Output tokens per model call', 'int', { min: 1000, max: 256000 }),
@@ -125,10 +124,7 @@ export const SETTINGS = [
   E('chromeSitesNever', 'safety', '🧩 Chrome: sites never to open', 'text', { guard: true, help: 'Separated by commas.' }),
   E('chromeSitesAlways', 'safety', '🧩 Chrome: sites always allowed', 'text', { guard: true }),
   E('chromeSitesRead', 'safety', '🧩 Chrome: read-only sites', 'text', { guard: true }),
-  E('replyBudget', 'budget', 'Cap per reply', 'money', { min: 0, max: 100, guard: true, help: '0 = no cap. At the cap Strict asks you; YOLO stops.' }),
-  E('dailyBudget', 'budget', 'Cap per day (all projects)', 'money', { min: 0, max: 1000, guard: true, help: '0 = off.' }),
-  E('budget', 'budget', 'Paid media per reply', 'money', { min: 0, max: 20, guard: true }),
-  E('budgetGrace', 'budget', 'Allowance to finish a reply past a project budget', 'int', { min: 0, max: 100, unit: '%', guard: true }),
+  E('budgetGrace', 'budget', 'Allowance to finish a reply past a chat\'s budget', 'int', { min: 0, max: 100, unit: '%', guard: true }),
   E('videoMode', 'video', 'Video Mode', 'enum', { values: [['auto', 'On for films'], ['off', 'Off']] }),
   E('videoStoryboard', 'video', 'Storyboard before paid media', 'bool'),
   E('videoReview', 'video', 'Review the film', 'bool'),
@@ -202,7 +198,7 @@ export const PROJECT_KEYS = {
   'project.folder': { label: 'Folder', readOnly: true, help: 'Where the project\'s files are, its chats and what it spent. Change the folder in Project settings → Folder.' },
   'project.name': { label: 'Name in QuorX', user: 'The folder keeps its own name.', help: 'A name of its own in the sidebar; the folder keeps its name. Empty: the folder\'s name again.' },
   'project.color': { label: 'Name colour', user: 'The sidebar, start screen and chat headers follow.', help: 'A colour like #2f7de1, or auto (from the name).' },
-  'project.budget': { label: 'Budget', guard: true, user: 'One limit shared by every chat in this project. A new reply can’t start once it is used up.', help: 'One dollar limit shared by every chat in the project, like 20; "none" removes it. It can\'t be set below what is already spent.' },
+  'project.budget': { label: 'This chat\'s budget', guard: true, user: 'The only money limit: everything this chat calls counts. A new reply can’t start once it is used up.', help: 'This chat\'s dollar limit, like 20; "none" removes it. It can\'t be set below what the chat has already spent. (Each chat has its own; projects have none.)' },
   'project.design': { label: 'Design system', user: 'Pages and apps built in this project follow it. DESIGN.md and tokens.css go into the project root; any old ones go to the project’s trash.', help: 'How pages and apps built here look: a system id from list (a preset or one of the user\'s own), or "none" to remove it. Its DESIGN.md and tokens.css go into the project root; the old ones go to the project\'s trash.' },
   'project.hooks': { label: 'Hooks', guard: true, list: true, user: 'QuorX runs it itself around the agent’s work; the agent can’t run or change it on its own.', help: `Commands QuorX runs around the agent's work. op add with value {event: ${HOOK_EVENTS.join(' | ')}, command, match, timeout, feedback}. match: file patterns for the write events, a command pattern for the command events, tool names (* allowed) for the tool events; reply events have none. {file} in the command is the written file, {tool} the tool's name. With feedback on, a failing before_* hook stops what comes next, and a failing reply_end hook sends the reply back; reply_start's output reaches the agent. op remove / on / off with value = the hook's id.` },
   'project.rules': { label: 'Command rules', guard: true, list: true, user: 'It decides which of the agent’s commands run without asking you in this project.', help: 'Rules for the agent\'s commands in this project. op add with value {match: "npm test*", effect: allow | ask | deny}; op remove / on / off with value = the rule\'s id.' },
@@ -215,15 +211,15 @@ const hookText = (h, id = true) => `${id ? `${h.id}: ` : ''}${h.on ? '' : '[off]
 const ruleText = (r) => `${r.id}: ${r.on === false ? '[off] ' : ''}${r.effect} "${r.match}"${r.hits ? `, used ${r.hits}×` : ''}`;
 
 /** What one project setting holds now, as text. */
-export function projectRead(projectId, root, key, { secrets = [] } = {}) {
+export function projectRead(projectId, root, key, { secrets = [], chatId = null } = {}) {
   const p = projectOf(projectId);
   if (!p) return 'This chat has no project.';
-  const b = budgetState(projectId);
+  const b = budgetState(chatId), ps = projectSpend(projectId);
   switch (key) {
-    case 'project.folder': return `${p.name} (${p.id})\nfolder: ${root || p.dir || '(none)'}${p.missing ? ' (missing)' : ''}\nspent: $${b.spent.toFixed(4)} of ${b.budget == null ? 'no limit' : `$${b.budget.toFixed(2)}`}\nsecrets: ${secrets.length ? `${secrets.join(', ')} (names only; values are never shown)` : 'none'}`;
+    case 'project.folder': return `${p.name} (${p.id})\nfolder: ${root || p.dir || '(none)'}${p.missing ? ' (missing)' : ''}\nspent by all its chats: $${ps.spent.toFixed(4)}\nsecrets: ${secrets.length ? `${secrets.join(', ')} (names only; values are never shown)` : 'none'}`;
     case 'project.name': return p.name;
     case 'project.color': return p.color || 'auto';
-    case 'project.budget': return b.budget == null ? `none (spent $${b.spent.toFixed(4)})` : `$${b.budget.toFixed(2)} (spent $${b.spent.toFixed(4)}, left $${b.left.toFixed(4)})`;
+    case 'project.budget': return !chatId ? 'none (no chat)' : b.budget == null ? `none (spent $${b.spent.toFixed(4)})` : `$${b.budget.toFixed(2)} (spent $${b.spent.toFixed(4)}, left $${b.left.toFixed(4)})`;
     case 'project.design': { const d = root ? projectDesign(root) : null; return d ? `${d.name}${d.id ? ` (${d.id})` : ' (written by hand)'}` : 'none'; }
     case 'project.hooks': { const h = root ? loadHooks(root) : []; return h.length ? h.map(hookText).join('\n') : 'none'; }
     case 'project.rules': { const r = root ? loadRules(root).filter((x) => x.scope === 'project') : []; return r.length ? r.map(ruleText).join('\n') : 'none (rules for every project are in ⚙ Settings → Code & servers)'; }
@@ -245,12 +241,12 @@ export function designList(query = '') {
  * A change to one project setting, checked but not made: { what, from, to, guard, apply(), undo() }.
  * apply() and undo() call the same functions as the project routes. Throws a plain-words error.
  */
-export function projectChange(projectId, root, key, value, op) {
+export function projectChange(projectId, root, key, value, op, { chatId = null } = {}) {
   const p = projectOf(projectId), K = PROJECT_KEYS[key];
   if (!p) throw new Error('this chat has no project');
   if (!K) throw new Error(`no project setting ${key}; they are ${Object.keys(PROJECT_KEYS).join(', ')}`);
   if (K.readOnly) throw new Error(`${K.label} can't be changed here. ${K.help}`);
-  const from = projectRead(projectId, root, key);
+  const from = projectRead(projectId, root, key, { chatId });
   const words = String(value ?? '').trim();
   if (key === 'project.name') {
     return { what: `Rename the project "${p.name}" to "${words || '(its folder\'s name)'}"`, from: p.name, to: words || '(folder name)', apply: () => setProjectAlias(projectId, words), undo: () => setProjectAlias(projectId, p.name === p.folderName ? '' : p.name) };
@@ -264,10 +260,11 @@ export function projectChange(projectId, root, key, value, op) {
     const none = /^(none|no limit|off|null|unlimited)$/i.test(words);
     const n = none ? null : Math.round(Number(words.replace(/[$,\s]/g, '')) * 100) / 100;
     if (!none && !(n > 0)) throw new Error('the budget is an amount in dollars, like 20 or 12.50, or none');
-    const was = budgetState(projectId);
-    if (n != null && n < was.spent) throw new Error(`this project has already spent $${was.spent.toFixed(4)}, so its budget must be at least $${(Math.ceil(was.spent * 100) / 100).toFixed(2)}`);
-    return { what: `Set the project budget of "${p.name}" to ${n == null ? 'no limit' : `$${n.toFixed(2)}`}`, from: was.budget == null ? 'no limit' : `$${was.budget.toFixed(2)}`, to: n == null ? 'no limit' : `$${n.toFixed(2)}`, guard: true,
-      apply: () => setBudget(projectId, n), undo: () => setBudget(projectId, was.budget) };
+    if (!chatId) throw new Error('only a chat has a budget');
+    const was = budgetState(chatId);
+    if (n != null && n < was.spent) throw new Error(`this chat has already spent $${was.spent.toFixed(4)}, so its budget must be at least $${(Math.ceil(was.spent * 100) / 100).toFixed(2)}`);
+    return { what: `Set this chat's budget to ${n == null ? 'no limit' : `$${n.toFixed(2)}`}`, from: was.budget == null ? 'no limit' : `$${was.budget.toFixed(2)}`, to: n == null ? 'no limit' : `$${n.toFixed(2)}`, guard: true,
+      apply: () => setBudget(chatId, n), undo: () => setBudget(chatId, was.budget) };
   }
   if (key === 'project.archived' || key === 'project.pinned') {
     const on = /^(true|yes|on|1|archive|archived|pin|pinned)$/i.test(words) || value === true;

@@ -147,7 +147,7 @@ test('round trip: import on another computer asks before overwriting and re-poin
     const projects = (await qb.call('/api/projects')).body;
     const keep = projects.find((p) => p.id === 'keep-app'), mv = projects.find((p) => p.id === 'moved-app');
     assert.equal(keep.color, '#c0392b');
-    assert.equal(keep.budget, 5);
+    assert.equal(keep.budget, undefined, 'budgets are per chat now: an old project budget is not shown');
     assert.equal(keep.name, 'Keep App', 'the project keeps its own name');
     assert.equal(path.resolve(mv.path), path.resolve(moved), 're-pointed');
     assert.ok(!mv.missing);

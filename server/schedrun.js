@@ -19,11 +19,6 @@ export function startScheduledChat(s, { missed = false, due = null } = {}, deps)
   const project = deps.listProjects().find((p) => p.id === s.projectId);
   if (!project) throw new Error('its project no longer exists');
   if (project.missing || project.needsFolder) throw new Error('its project folder is missing');
-  const b = deps.budgetState(s.projectId);
-  if (b.budget != null && b.left <= 0) {
-    deps.notify?.('budget', { schedule: s, text: `${project.name} has reached its budget, so “${s.name}” did not run.` });
-    return { status: 'skipped', note: 'the project has reached its budget' };
-  }
   const at = deps.now(), runId = rid('r', at);
   const setup = { model: s.model, reasoning: s.reasoning || 'off' };
   const approval = s.approval === 'yolo' ? 'yolo' : 'strict'; // YOLO only when chosen for this schedule
@@ -37,6 +32,12 @@ export function startScheduledChat(s, { missed = false, due = null } = {}, deps)
   const prev = prevId && deps.getChat(prevId);
   const doc = prev && prev.projectId === s.projectId ? prev : null;
   const chatId = doc ? prevId : rid('c', at), title = doc?.title || `⏰ ${s.name}`;
+  // The chat it posts in has a budget like any chat: used up, the run is skipped until you raise it.
+  const b = deps.budgetState(chatId);
+  if (b.budget != null && b.left <= 0) {
+    deps.notify?.('budget', { schedule: s, chatId, text: `“${title}” has reached its budget, so “${s.name}” did not run.` });
+    return { status: 'skipped', note: 'its chat has reached its budget' };
+  }
   if (doc) {
     // A chat the schedule made follows its mode and tools; a chat of yours it was made from keeps its own (the run
     // still uses the schedule's).

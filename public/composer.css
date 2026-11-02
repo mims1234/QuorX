@@ -43,12 +43,18 @@
 .cq-chip[data-state="changed"][data-tone="red"] { color: var(--bad); background: var(--bad-dim); border-color: var(--bad-border); }
 .cq-chip[data-state="changed"][data-tone="ok"] { color: var(--ok); background: var(--ok-dim); border-color: var(--ok-border); }
 .cq-chip[data-state="changed"] .cq-cl { color: inherit; opacity: .7; }
-/* money: amber mono, always */
-.cq-chip.cq-money { border-style: solid; border-color: var(--amber-line); background: var(--amber-dim); color: var(--amber); font-family: var(--mono); gap: 4px; }
-.cq-chip.cq-money .cq-ml { font: 400 11px var(--font-ui); color: var(--muted); }
+/* 💵 the chat's budget: money is amber mono, always; near or at the limit it says so */
+.cmp-budget { position: relative; display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 8px; border-radius: 7px; flex: none; cursor: pointer; white-space: nowrap;
+  border: 1px solid var(--amber-line); background: var(--amber-dim); color: var(--amber); font: 600 12px var(--mono); }
+.cmp-budget:empty { display: none; }
+.cmp-budget .cb-of { font: 400 11px var(--font-ui); color: var(--muted); }
+.cmp-budget[data-state="none"] { border-style: dashed; background: transparent; }
+.cmp-budget[data-state="near"] { border-color: var(--amber); }
+.cmp-budget[data-state="full"] { color: var(--bad); background: var(--bad-dim); border-color: var(--bad-border); }
+.cmp-budget[data-state="full"] .cb-of { color: var(--bad); }
+.cmp-budget:hover { filter: brightness(1.15); }
 .cq-chip.cq-more { padding: 0 8px; font-size: 14px; letter-spacing: 1px; }
 .cq-chip.cq-sum { display: none; }
-.cq-mdot { display: none; position: absolute; top: -4px; right: -4px; width: 8px; height: 8px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 0 2px var(--panel); }
 
 /* 👁 🧭 Chrome, computer use, always allowed: a row; the tray button stands in for it when the box is narrow */
 .composer-v2 .cmp-follow-slot { display: flex; align-items: center; gap: 4px; flex: none; position: relative; }
@@ -82,16 +88,12 @@
 .cmp-quick .cq-row .lvl, .cmp-quick .cq-row .seg { flex: 0 1 auto; margin: 0 !important; }
 .cmp-quick .cq-row .lvl-ico { display: none !important; }
 .cmp-quick .cq-row .lvl-b, .cmp-quick .cq-row .seg button { height: 24px !important; padding: 0 9px !important; font-size: 12px !important; }
-.cmp-quick .cs-caps { display: flex; flex-wrap: nowrap; gap: 8px; }
-.cmp-quick .cs-caps .cs-num { display: inline-flex; flex-direction: row; align-items: center; gap: 5px; font-size: 11.5px; color: var(--muted); }
-.cmp-quick .cs-caps .cs-inp { width: 64px; height: 24px; }
-.cmp-quick .cs-caps .cs-inp input { width: 100%; min-width: 0; }
 
 /* ---- folding: app.js fitComposer adds fold1, fold2… to the box, one step at a time, until the row fits ---- */
-/* 1. The budget caps fold first (into ⋯, an amber dot when one differs from the usual); the chips' labels drop */
-.composer-box.fold1 .cq-chip.cq-money { display: none; }
-.composer-box.fold1 .cq-chip .cq-mdot { display: block; }
+/* 1. The chips' labels drop */
 .composer-box.fold1 .cq-chip .cq-cl { display: none; }
+/* (the budget keeps only what is spent from step 3 on) */
+.composer-box.fold3 .cmp-budget .cb-of { display: none; }
 /* 2. Settings at their usual value, the model's price */
 .composer-box.fold2 .cq-chip[data-state="default"]:not(.cq-more):not(.cq-sum) { display: none; }
 .composer-box.fold2 .cmp-model-slot .cmp-model-chip small { display: none; }

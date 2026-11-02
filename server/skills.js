@@ -48,8 +48,8 @@ export function readSkill(projectDir, name, disabled = []) {
 }
 
 /**
- * Write a skill where 'project' (the default, and the only place the agent's save_skill writes) or 'mine' (every
- * project). `was` is the skill being edited ({ name, where }): when it is renamed or moved, its old folder goes to the trash.
+ * Write a skill where 'project' (the default) or 'mine' (every project; the agent's save_skill asks the user which).
+ * `was` is the skill being edited ({ name, where }): when it is renamed or moved, its old folder goes to the trash.
  */
 export function saveSkill(projectDir, { name, description, instructions }, { where = 'project', by = 'saved by the agent', was = null } = {}) {
   const id = slug(name);

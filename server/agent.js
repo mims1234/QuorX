@@ -6,7 +6,7 @@
 //   - media:     imagine / make_video / compose_music / speak cost money. Each category can be switched
 //                off and holds up to 3 models: "fixed" always uses the first, "agent" lets the agent
 //                choose per call. Every paid call passes an approval gate: "strict" asks the user (who
-//                can also switch model), "yolo" lets the deciders approve; a code-owned budget cap
+//                can also switch model), "yolo" lets the deciders approve; a code-owned chat budget
 //                applies in both modes
 import fs from 'node:fs';
 import path from 'node:path';
@@ -65,7 +65,7 @@ import { groupCalls, numberedWindow, untrusted, trimTranscript, trimPageViews, c
 import { checkFile, checkHtml, CHECKED, lintFile, lintHtml, LINTED } from './checks.js';
 import { checkSettings, askDeciders, saveShot, logCheck, votesFor, MAIN_CONTROL_JS, KEY_PAGE_JS, KEY_TRIES, CHECK_DEFAULTS, LOOK_DEFAULTS } from './harness-checks.js';
 import { saveCheckpoint, loadCheckpoint, dropCheckpoint, checkpointWritten, recordRun } from './runs.js';
-import { live, budgetState, spentToday } from './budget.js';
+import { live, budgetState } from './budget.js';
 import { blobData } from './blobs.js';
 import { modelNotes } from './modelcards.js';
 import { ownAddresses } from './access.js';
@@ -109,7 +109,7 @@ export const DEFAULTS = {
   chatModel: 'deepseek/deepseek-v4.1-flash-1017', // new chats (the 1017 build did best in the build benchmark; the older v4.1 Flash is 🔴)
   voters: ['typesafe/jev-1.14', 'liquid/d1-ultra', 'openai/gpt-6-luna-decisions'],
   gate: { ...GATE },
-  maxSteps: 500,           // model calls per reply; the budget caps do the real stopping. At the limit the ⏱ card asks: keep going, another model, or a fresh chat
+  maxSteps: 500,           // model calls per reply; the chat budget does the real stopping. At the limit the ⏱ card asks: keep going, another model, or a fresh chat
   continueRounds: 0,       // when the steps run out while the plan still has open items: extra rounds of moreSteps each (0 = stop and show the ⏱ card)
   fixSteps: 12,
   freshEyes: true,         // when the same problem shows up a second time, a clean-context model diagnoses it before the next step
@@ -121,8 +121,8 @@ export const DEFAULTS = {
   enhancerWhen: 'first',   // 'first' = a chat's first request · 'every' = every new request
   enhancerModel: '',       // '' = the helper model
   enhancerWaitMs: 10000,   // the reply waits this long for it; a later reading still reaches the deciders
+  enhancerAsk: true,       // ask the user before enhancing (Enhance · Send as is · Always send as is); never on its own
   moreSteps: 30,           // "Keep going" on the out-of-steps card gives the reply this many more steps            // a build sent back to fix (by the checks or the reviewer) always has at least this many steps left to do it
-  planFirst: 'off',        // 'off' · 'big' (big tasks: the agent shows its plan and waits for Go ahead) · 'always' (before any file change or command)
   planSteps: 0,            // the step limit once a reply makes a plan (0 = same as maxSteps; 80 made builds longer, not better, in the benchmark)
   maxOutput: 64000,        // output tokens per model call (never above the model's own limit); a whole game file plus thinking fits
   thinkShare: 25,          // % of that output the model may spend thinking, so the answer and tool calls always have room
@@ -188,11 +188,8 @@ export const DEFAULTS = {
   checks: { ...CHECK_DEFAULTS }, // the harness's own questions (server/harness-checks.js): gap check, screenshot and click checks
   yoloCheck: true,         // in yolo, the deciders still vote on whether a paid call is needed and fairly priced
   decidersOff: { commands: 'ask', media: 'ask' }, // ⚡ YOLO in a chat whose ⚖️ Deciders are off: 'ask' waits for you (no answer in time skips), 'run' goes ahead without a check
-  budget: 0.5,             // hard cap in $ for media per reply, enforced by code in both modes
-  budgetGrace: 10,         // % over the project budget a running reply may spend to finish its work before it is force-stopped
+  budgetGrace: 10,         // % over the chat's budget a running reply may spend to finish its work before it is force-stopped
   safety: { ...SAFETY_DEFAULTS }, // the shell, snapshots, tripwire and decider rules (server/safety.js)
-  replyBudget: 1,          // $ cap for one reply, every model it calls counted (0 = none). Strict asks to raise it; YOLO stops
-  dailyBudget: 0,          // $ cap for today across all projects (0 = off)
   // Each category: on/off, up to 3 models, and who picks the model ('fixed' = the first one, 'agent' = the agent).
   tools: {
     artifacts: { on: true },
@@ -499,17 +496,8 @@ export function steerRun(runId, text, extra = {}) {
   ctl.steer(t || '(No message: see what the user attached or pointed at.)', { images, docs, context });
   return true;
 }
-// The project budget card (Strict): "Wrap up" ends the reply; raising the budget anywhere lets it go on.
+// The chat budget card (Strict): "Wrap up" ends the reply; raising the budget anywhere lets it go on.
 const budgetWaits = new Map();
-// A reply-cap or daily-cap card: "Raise and carry on" with the new amount (above what is spent).
-const capWaits = new Map();
-export function raiseCap(runId, id, to) {
-  const go = capWaits.get(`${runId}:${id}`);
-  const v = Math.round(Number(to) * 100) / 100;
-  if (!go || !(v > 0)) return false;
-  go(v);
-  return true;
-}
 export function answerBudget(runId, id) {
   const stop = budgetWaits.get(`${runId}:${id}`);
   if (!stop) return false;
@@ -575,14 +563,11 @@ Documents the user attached to this project (kept in .quorx/uploads): ${docs.sli
 const NOTES_RULES = `
 Project notes: keep AGENT.md in the project folder current whenever you change the project in a meaningful way. It is short Markdown with: what this project is, how to run it, a file map, decisions made, and open to-dos. Every chat in the project reads it, so keep it about the project and write it for someone with no other context. What only this chat is about (its task, what was tried, how an app behaves, its own to-dos) goes in this chat's own notes file, named under [This chat's own notes]: keep it short and update it as the work goes, so this chat can pick up later. If a task needed several attempts to get right, save the working approach with save_skill. Use search_files to find code instead of reading every file, and scaffold to start from a template when one fits.`;
 
+// Plans only for a /goal: a message that starts with /goal is a big job the user wants planned. Every other reply has
+// no plan tool and no plan; it just does the work.
 const PLAN_RULES = (reviewOn) => `
-Plans: for any build (an app, game, site, tool, or a change across several files), call plan FIRST, before writing code. Give a short spec (what you will build, and what will make it good rather than merely working: depth, polish, the details that make it feel finished), a to-do list of 3-10 items, and done_when checks a tester could verify. Aim higher than the minimum the request needs. Then work through the list and call plan again to tick items off as you finish them. Skip plan for questions, small fixes and quick one-file pages.${reviewOn ? ' When you give your final reply on a build, a separate reviewer model tests what you built against the request and your plan, and sends it back with specific bugs if it falls short.' : ''}`;
+A goal (the user started this message with /goal): call plan FIRST, before you change any file or run any command. Give a short spec (what you will build, and what will make it good rather than merely working: depth, polish, the details that make it feel finished), a to-do list of 3-10 items, and done_when checks a tester could verify. Aim higher than the minimum the request needs. The user reads it and answers Go ahead, Stop here, or asks for changes; until they say Go ahead, file changes and commands are refused (looking around first is fine). Then work through the list and call plan again to tick items off as you finish them.${reviewOn ? ' When you give your final reply on a build, a separate reviewer model tests what you built against the request and your plan, and sends it back with specific bugs if it falls short.' : ''}`;
 
-// ⚙ Agent loop → Plan first: the user reads the plan and says Go ahead before anything changes.
-const PLAN_GATE_RULES = (mode) => (mode === 'always' ? `
-Plan first (the user's setting): before you change any file or run any command, call plan. The user reads it and answers Go ahead, Stop here, or asks for changes; until they say Go ahead, file changes and commands are refused. Looking around (reading, listing, searching) is fine before the plan.`
-  : mode === 'big' ? `
-Plan first for big tasks (the user's setting): for anything bigger than a small fix (a new app, game, site or tool, or a change across several files), call plan before you change anything. The user reads it and answers Go ahead, Stop here, or asks for changes; until they say Go ahead, file changes and commands are refused. Small fixes can go straight ahead.` : '');
 
 // The reviewer's own instructions (it never sees the builder's rules or conversation).
 // A film: watched, not clicked. The harness measures what a person can't judge by eye (length, sound, cuts against the beat).
@@ -725,12 +710,12 @@ const PROJECT_TOOLS = [
   { type: 'function', function: { name: 'request_secret', description: 'Ask the user for a secret the project needs (an API key, a password, a token). They type it into a card in the page; QuorX saves it to the project\'s .env (and adds .env to .gitignore). You only hear that it is set, never the value: use it by its name from the environment. Your work waits for the answer.', parameters: { type: 'object', required: ['name', 'why'], properties: { name: { type: 'string', description: 'The variable name, e.g. OPENAI_API_KEY' }, why: { type: 'string', description: 'One short sentence: what it is for and where the user gets it' } } } } },
   { type: 'function', function: { name: 'delete_file', description: 'Delete a file from the project (it moves to .quorx/trash, so it can be recovered).', parameters: { type: 'object', required: ['path'], properties: { path: { type: 'string' } } } } },
   ...(TEMPLATE_LIST.length ? [{ type: 'function', function: { name: 'scaffold', description: `Copy a starter template into the project (never overwrites existing files). Templates: ${TEMPLATE_LIST.map((t) => `${t.name} (${t.description})`).join('; ')}`, parameters: { type: 'object', required: ['template'], properties: { template: { type: 'string', enum: TEMPLATE_LIST.map((t) => t.name) } } } } }] : []),
-  { type: 'function', function: { name: 'save_skill', description: 'Save what worked as a reusable skill for this project, so future chats can load it with use_skill. Use it after a task that needed several fixes to get right.', parameters: { type: 'object', required: ['name', 'description', 'instructions'], properties: { name: { type: 'string', description: 'short-kebab-name' }, description: { type: 'string', description: 'One line: when to use this skill' }, instructions: { type: 'string', description: 'The steps, rules and gotchas, in Markdown' } } } } },
+  { type: 'function', function: { name: 'save_skill', description: 'Save what worked as a reusable skill, so future chats can load it with use_skill. Use it after a task that needed several fixes to get right. The user decides where it goes: this project only, or all their projects (a card asks them; say which you suggest with where).', parameters: { type: 'object', required: ['name', 'description', 'instructions'], properties: { name: { type: 'string', description: 'short-kebab-name' }, description: { type: 'string', description: 'One line: when to use this skill' }, instructions: { type: 'string', description: 'The steps, rules and gotchas, in Markdown' }, where: { type: 'string', enum: ['project', 'all'], description: 'Your suggestion: project (only about this project, its files or setup) or all (works in any project)' } } } } },
 ];
 // Paid tools that are off in this chat: one card asks the user to switch them on (each with a model to pick), instead
 // of the agent quietly working around them (a film without the music tool got a rumbling score written in code).
 const MEDIA_LABEL = { image: 'pictures', video: 'video clips', music: 'music', speech: 'voice' };
-const ENABLE_MEDIA_TOOL = (off) => ({ type: 'function', function: { name: 'enable_media', description: `Ask the user to switch on paid tools that are off in this chat (${off.map((c) => MEDIA_LABEL[c]).join(', ')}) when the work clearly needs one. One card; they can pick the model for each. Switching on spends nothing: every paid call is still priced and approved, and the budget caps apply. Ask once, with the reason; if they keep it off, plan without it.`, parameters: {
+const ENABLE_MEDIA_TOOL = (off) => ({ type: 'function', function: { name: 'enable_media', description: `Ask the user to switch on paid tools that are off in this chat (${off.map((c) => MEDIA_LABEL[c]).join(', ')}) when the work clearly needs one. One card; they can pick the model for each. Switching on spends nothing: every paid call is still priced and approved, and the chat budget applies. Ask once, with the reason; if they keep it off, plan without it.`, parameters: {
   type: 'object', required: ['kinds', 'why'], properties: {
     kinds: { type: 'array', minItems: 1, maxItems: 4, items: { type: 'string', enum: off } },
     why: { type: 'string', description: 'One plain sentence: what the work gets from it' } } } } });
@@ -738,8 +723,8 @@ const SKILL_TOOL = { type: 'function', function: { name: 'use_skill', descriptio
 // One question, or up to 4 in one card (each with the answer the agent recommends), so the user can settle them in one go.
 const ASK_ITEM = {
   question: { type: 'string', description: 'One short question' },
-  options: { type: 'array', minItems: 2, maxItems: 4, items: { type: 'string' }, description: 'Short answers to pick from, the most likely first' },
-  recommended: { type: 'integer', minimum: 0, maximum: 3, description: 'Index of the option you would choose if the user accepts your defaults' },
+  options: { type: 'array', minItems: 2, maxItems: 8, items: { type: 'string' }, description: 'Answers to pick from, the most likely first. Each is shown in full, so an option may carry a short reason' },
+  recommended: { type: 'integer', minimum: 0, maximum: 7, description: 'Index of the option you would choose if the user accepts your defaults' },
 };
 const ASK_TOOL = { type: 'function', function: { name: 'ask_user', description: 'Ask the user when a choice is really theirs (what they want, not how to build it) and the answer would change what you build. Give 2-4 short options and the one you recommend; they can also answer in their own words. Several such questions: send them together in questions (up to 4), so one card settles them all. Your work waits for the answer. Never ask what you can decide or find out yourself, and never ask the user to pick a visual style, palette or font: choose one direction yourself and say what you chose.', parameters: { type: 'object', properties: {
   ...ASK_ITEM,
@@ -836,12 +821,12 @@ const MCP_SETUP_TOOL = { type: 'function', function: { name: 'mcp_setup', descri
   action: { type: 'string', enum: ['add', 'list'] }, setup: { type: 'string', description: 'For add: the config, command line or address, as the user gave it.' }, name: { type: 'string', description: 'For add: a short name (letters, digits, - and _) when the setup gives none.' } } } } };
 // ⚙ QuorX's own settings and this project's (server/quorxsettings.js). Reads are free; every change is a card the user
 // clicks (typed words don't answer it), and the deciders never approve one.
-const QUORX_SETTINGS_TOOL = { type: 'function', function: { name: 'quorx_settings', description: 'Read and change QuorX\'s own settings (⚙ Settings) and this chat\'s project settings, when the user asks: "set this project\'s budget to $20", "use the brutalist design system here", "add a hook that runs prettier after file writes", "turn off notifications", "switch new chats to Strict", "which MCP servers are on?". Actions: list (category: one of appearance, notifications, privacy, providers, newchats, loop, deciders, tools, safety, budget, video, code, mcp, schedules, keys, project; or query: words to search the labels; neither = an overview); get (key); explain (key: what it does, its values, its default); set (key, value; for project.hooks and project.rules also op: add | remove | on | off); undo (puts back the last change made in this reply, or the one with key). Keys look like ui.notify, approval, model, replyBudget, safety.snapshots, project.budget, project.design, project.hooks, mcp.<server>. Each set shows the user a card with what changes from what to what, and only their click makes it, in every mode (Always allow on that card covers ordinary settings for the rest of the chat; safety, approvals, budgets, models, permissions, hooks and deletes ask every time). A change to ⚙ Settings applies from the next reply (appearance at once); a project change applies at once. API keys and secrets are never readable or settable here: point the user to ⚙ Settings → Providers. Schedules change with the schedule tool, and new MCP servers come in with mcp_setup. Change only what the user asked for.', parameters: { type: 'object', required: ['action'], properties: {
+const QUORX_SETTINGS_TOOL = { type: 'function', function: { name: 'quorx_settings', description: 'Read and change QuorX\'s own settings (⚙ Settings) and this chat\'s project settings, when the user asks: "set this chat\'s budget to $20", "use the brutalist design system here", "add a hook that runs prettier after file writes", "turn off notifications", "switch new chats to Strict", "which MCP servers are on?". Actions: list (category: one of appearance, notifications, privacy, providers, newchats, loop, deciders, tools, safety, budget, video, code, mcp, schedules, keys, project; or query: words to search the labels; neither = an overview); get (key); explain (key: what it does, its values, its default); set (key, value; for project.hooks and project.rules also op: add | remove | on | off); undo (puts back the last change made in this reply, or the one with key). Keys look like ui.notify, approval, model, budgetGrace, safety.snapshots, project.budget, project.design, project.hooks, mcp.<server>. Each set shows the user a card with what changes from what to what, and only their click makes it, in every mode (Always allow on that card covers ordinary settings for the rest of the chat; safety, approvals, budgets, models, permissions, hooks and deletes ask every time). A change to ⚙ Settings applies from the next reply (appearance at once); a project change applies at once. API keys and secrets are never readable or settable here: point the user to ⚙ Settings → Providers. Schedules change with the schedule tool, and new MCP servers come in with mcp_setup. Change only what the user asked for.', parameters: { type: 'object', required: ['action'], properties: {
   action: { type: 'string', enum: ['list', 'get', 'explain', 'set', 'undo'] },
   category: { type: 'string', description: 'For list: a ⚙ Settings category, or project' },
   query: { type: 'string', description: 'For list: words to find settings by (e.g. "notification", "budget", "design")' },
   key: { type: 'string', description: 'The setting, as list shows it' },
-  value: { description: 'For set: the new value (true/false, a word from its values, a number, a model id, a list of model ids; project.budget: dollars or "none"; project.design: a system id from list or "none"; a hook {event, command, match, timeout, feedback}; a rule {match, effect}; or the id of a hook or rule)' },
+  value: { description: 'For set: the new value (true/false, a word from its values, a number, a model id, a list of model ids; project.budget: this chat budget in dollars or "none"; project.design: a system id from list or "none"; a hook {event, command, match, timeout, feedback}; a rule {match, effect}; or the id of a hook or rule)' },
   op: { type: 'string', enum: ['add', 'remove', 'on', 'off'], description: 'For set on project.hooks and project.rules' } } } } };
 const SCHEDULE_TOOL = { type: 'function', function: { name: 'schedule', description: 'The user\'s schedules: jobs QuorX runs on its own at set times, like "every 3 minutes type /ldrop in the bot channel" or "weekdays at 9 summarise my inbox". Each run starts fresh with only its prompt (no memory of this chat), uses its own model and mode, and posts its reply in the schedule\'s chat; a schedule made here posts in THIS chat, so later the user can ask you here what the runs saw. Actions: list (every schedule, this chat\'s first, with recent runs); create (name, prompt, when; write the prompt as complete instructions for a fresh agent: where to go, what to do, what to report); update (id, then any of name, prompt, when, notify, model, approval); pause / resume / run_now / delete (id). when: {"kind":"every","minutes":15} (3 or more), {"kind":"daily","time":"09:00","days":[1,2,3,4,5]} (0 = Sunday; no days = every day) or {"kind":"once","at":"2026-10-28T18:30"} (local time). notify: always, failure (only when a run fails), needs (only when a run waits for the user) or changed (only when the result differs from last time). Creating, changing, resuming, running now and deleting ask the user first.', parameters: { type: 'object', required: ['action'], properties: {
   action: { type: 'string', enum: ['list', 'create', 'update', 'pause', 'resume', 'run_now', 'delete'] },
@@ -859,7 +844,7 @@ const PLAN_TOOL = { type: 'function', function: { name: 'plan', description: 'Wr
   items: { type: 'array', minItems: 1, maxItems: 12, items: { type: 'object', required: ['text', 'status'], properties: { text: { type: 'string' }, status: { type: 'string', enum: ['todo', 'doing', 'done'] } } } },
   done_when: { type: 'array', maxItems: 6, items: { type: 'string' }, description: 'First call: checks a tester could verify, e.g. "Pressing Space starts a round"' } } } } };
 const DELEGATE_TOOL = { type: 'function', function: { name: 'delegate', description: 'Hand a read-only job (explore the project, find where something is handled, summarise files) to a helper on a cheaper model with its own clean context. It returns a short report; the files it reads never enter your context. Several delegate calls in one step run at the same time.', parameters: { type: 'object', required: ['task'], properties: {
-  task: { type: 'string', description: 'What to find out, precisely, and what to return (e.g. "Find where project budgets are enforced. Return the functions with path:line and how they decide to stop a reply.")' } } } } };
+  task: { type: 'string', description: 'What to find out, precisely, and what to return (e.g. "Find where chat budgets are enforced. Return the functions with path:line and how they decide to stop a reply.")' } } } } };
 export const submitReviewTool = (keys) => ({ type: 'function', function: { name: 'submit_review', description: 'Submit your review once you have tested the build.', parameters: { type: 'object', required: ['scores', 'bugs', 'summary'], properties: {
   scores: { type: 'object', required: keys, properties: Object.fromEntries(keys.map((k) => [k, { type: 'integer', minimum: 1, maximum: 5 }])) },
   bugs: { type: 'array', maxItems: 10, description: 'Only problems you reproduced yourself in this session', items: { type: 'object', required: ['did', 'saw', 'expected'], properties: {
@@ -874,8 +859,8 @@ const DOC_TOOLS = [
   { type: 'function', function: { name: 'read_doc', description: 'Read an attached document as numbered lines (any document the harness could read, big or small). Continue with offset.', parameters: { type: 'object', required: ['doc'], properties: { doc: { type: 'string', description: 'Document name or id' }, offset: { type: 'number', description: 'First line, default 1' }, limit: { type: 'number', description: 'Lines to read, default 300, max 800' } } } } },
   { type: 'function', function: { name: 'list_docs', description: 'List the documents attached to this project: name, type, size, whether they are searchable.', parameters: { type: 'object', properties: {} } } },
 ];
-const TOOLS = ({ artifacts, decide, cats, choices, code, browser, skills, ask, docs, helpers }) => [
-  PLAN_TOOL,
+const TOOLS = ({ artifacts, decide, cats, choices, code, browser, skills, ask, docs, helpers, plan }) => [
+  ...(plan ? [PLAN_TOOL] : []),
   ...(code ? [...CODE_TOOLS, ...PROJECT_TOOLS] : []),
   ...(code && helpers ? [DELEGATE_TOOL] : []),
   ...(docs ? DOC_TOOLS : []),
@@ -1060,6 +1045,8 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   const setup = req.bench ? { ...DEFAULTS.setups.C, ...(req.setup || {}) }
     : { model: req.setup?.model || DEFAULTS.chatModel, reasoning: req.setup?.reasoning || 'off', creativity: ['focused', 'creative'].includes(req.setup?.creativity) ? req.setup.creativity : 'default', decide: 'auto' };
   const S = { ...DEFAULTS, ...(req.settings || {}) };
+  // /goal: this message is a big job to plan first (the plan tool, its rules and the Go ahead gate exist only then).
+  const goal = !!req.goal;
   // A chat still set to a Go model it ran through the OpenCode app carries on with the same model over Go's
   // API, when a Go key is in (tests script the source, so only real runs move).
   if (!deps.sourceStream) for (const o of [setup, carryOn]) {
@@ -1180,7 +1167,7 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
 
   // A reply resumed after a restart is the same reply, so it carries what it had spent (and on what). "Continue"
   // after the step limit is a new reply: the one before keeps its own cost, so this one starts at zero (carrying it
-  // counted the earlier reply twice in the chat, the project budget and today's spending).
+  // counted the earlier reply twice in the chat and its budget).
   const carried = resumed && !carryOn ? resumed : null;
   const stats = { cost: carried?.cost || 0, byRole: { ...carried?.spend?.byRole }, byModel: structuredClone(carried?.spend?.byModel || {}), llmCalls: carried?.spend?.llmCalls || 0, tokensIn: carried?.spend?.tokensIn || 0, tokensOut: carried?.spend?.tokensOut || 0, decide: { calls: 0, questions: 0, theater: 0, confirmed: 0, flipped: 0, unclear: 0, unmatched: 0, skipped: 0 }, mediaSpent: carried?.spend?.mediaSpent || 0, planCost: planTotal(carried?.spend?.planCost) };
   spent.stats = stats; spent.at = () => at();
@@ -1227,10 +1214,10 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
       recordRun({ ts: new Date().toISOString(), runId: `${runId}-late${++lateFixes}`, kind: 'partial', chatId: req.chatId || null, project: projectId, model, stop: 'cut-off call', cost: +delta.toFixed(6) });
     }
   };
-  // While this reply runs, its cost counts toward the project's budget. However it ends, the ledger
-  // keeps what it cost (a stopped or failed reply never reaches a chat file with its cost).
+  // While this reply runs, its cost counts toward the chat's budget (and its project's spend). However it ends, the
+  // ledger keeps what it cost (a stopped or failed reply never reaches a chat file with its cost).
   if (projectId && !req.bench) {
-    live.set(runId, { project: projectId, cost: stats.cost, recorded: false });
+    live.set(runId, { project: projectId, chat: req.chatId || null, cost: stats.cost, recorded: false });
     cleanups.push(async () => {
       const lv = live.get(runId);
       live.delete(runId);
@@ -1305,7 +1292,7 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   const projectNote = () => (root ? `\n${chainsNote}\nProject "${project.name}" (${root}). Other chats may have worked here before you: read files before changing them.${fileList.length ? `\nFiles in the project folder now: ${compactPaths(fileList)}.` : ' The folder is empty.'}${listServers(projectId).filter((x) => x.status === 'running').length ? `
 Dev servers running in this project: ${listServers(projectId).filter((x) => x.status === 'running').map((x) => `"${x.name}" (${x.command}) at ${x.url}`).join('; ')}. Restart one with start_server and the same name instead of starting a new one.` : ''}${SCRATCH_RULES(space, spaceLimit)}${DOCS_NOTE(listDocs(projectId))}${launchConfigs(projectId).length ? `
 Saved launch configs (start one with start_server and just its name): ${launchConfigs(projectId).map((x) => `"${x.name}" = ${[x.command, ...x.args].join(' ')}${x.port ? ` on port ${x.port}` : ''}`).join('; ')}.` : ''}` : '');
-  let systemFor = (decideOn) => BASE_RULES([...arts.values()], T.artifacts.on) + (root ? CODE_RULES + NOTES_RULES : '') + PLAN_RULES(S.review !== 'off' && browserOn && !qaBench) + PLAN_GATE_RULES(root ? S.planFirst || DEFAULTS.planFirst : 'off') + (helpersOn ? helperRules(helperRoles) : '') + (browserOn ? (S.deciders === false ? BROWSER_RULES_NO_LOOK : BROWSER_RULES) : '') + (cats.length ? MEDIA_RULES(S.approval, cats, T) : '')
+  let systemFor = (decideOn) => BASE_RULES([...arts.values()], T.artifacts.on) + (root ? CODE_RULES + NOTES_RULES : '') + (goal ? PLAN_RULES(S.review !== 'off' && browserOn && !qaBench) : '') + (helpersOn ? helperRules(helperRoles) : '') + (browserOn ? (S.deciders === false ? BROWSER_RULES_NO_LOOK : BROWSER_RULES) : '') + (cats.length ? MEDIA_RULES(S.approval, cats, T) : '')
     + projectNote() + memory + (decideOn ? `\n${DECIDE_RULES}` : '');
   // Chats, files and projects the user attached with @: they go in the user's own message (see contentFor), next to
   // the words that point at them ("what do you think of this"). At the end of the system prompt a model missed them.
@@ -1410,7 +1397,7 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
   // A chat with the deciders off gets no decide and no look (the browser stays); the harness checks are off too.
   // Tool calls a model wrote as text (an app on this PC): checked against this chat's tools before they run.
   const textCalls = new WeakSet();
-  let tools = TOOLS({ artifacts: T.artifacts.on, decide: decidersOn && setup.decide !== 'off', cats, choices, code: !!root, browser: browserOn, skills: skills.length > 0, ask: askOn, docs: docsOn, helpers: helpersOn });
+  let tools = TOOLS({ artifacts: T.artifacts.on, decide: decidersOn && setup.decide !== 'off', cats, choices, code: !!root, browser: browserOn, skills: skills.length > 0, ask: askOn, docs: docsOn, helpers: helpersOn, plan: goal });
   if (!decidersOn) tools = tools.filter((t) => t.function.name !== 'look');
   if (noDesktop) tools = tools.filter((t) => t.function.name !== 'desktop');
   if (proposeMem) tools.push(REMEMBER_TOOL);
@@ -1464,10 +1451,10 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
   if (carryOn) maxSteps = resumed.step + 1 + carryOn.steps; // the steps already used, plus the new allowance
   else if (resumed) maxSteps = Math.max(maxSteps, Number(resumed.maxSteps) || 0, resumed.step + 1 + 5); // a restart keeps the reply's (extended) limit, and always leaves room to act
   const planSteps = Math.max(0, Math.min(MAX_STEPS, Number(S.planSteps ?? DEFAULTS.planSteps) || 0));
-  const planFirst = root && ['big', 'always'].includes(S.planFirst) ? S.planFirst : 'off'; // no project folder: nothing to protect
+  const planFirst = goal ? 'goal' : 'off';
   const run = { mediaPlan: null, stop: 'answered', steps: 0, retries: 0, trimmed: 0, tools: 0, lookStreak: 0, warned: false, verifyRounds: 0, questions: 0, cacheMarks: true, passReasoning: true, routing: true, plan: resumed?.plan || null, planGate: resumed?.plan ? 'approved' : null, reviewRounds: 0, reviews: [], inbox: [], linted: {}, startedAt: resumed?.startedAt || Date.now() };
   runControls.set(runId, {
-    // Switching to YOLO also approves the cards waiting right now (the budget caps still apply).
+    // Switching to YOLO also approves the cards waiting right now (the chat budget still applies).
     setApproval: (mode) => {
       if (S.approval === mode) return;
       S.approval = mode;
@@ -1586,13 +1573,14 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     const vm = videoModeFor({ settings: S, chatMode: resumed ? resumed.video ? 'on' : 'off' : req.videoMode, kind: run.readingKind, text: userText, bench: !!req.bench, root });
     if (vm.on) startVideoMode(vm.why, { quiet: !!resumed });
   }
-  // The project budget, shared by every chat in the project. A reply may not START once the budget is
-  // used up (Strict asks to raise it, YOLO stops). A reply already working may finish past it, up to
-  // budgetGrace % more, and is force-stopped beyond that.
+  // The chat's budget, the only money limit: everything the chat's replies call counts (the agent, deciders, helpers,
+  // checks, media). A reply may not START once it is used up (Strict asks to raise it, YOLO stops). A reply already
+  // working may finish past it, up to budgetGrace % more, and is force-stopped beyond that.
+  const chatId = req.bench ? null : req.chatId || null;
   const grace = Math.max(0, Number(S.budgetGrace ?? DEFAULTS.budgetGrace)) / 100;
   const pastAllowance = () => {
-    if (!projectId || req.bench) return null;
-    const bs = budgetState(projectId);
+    if (!chatId) return null;
+    const bs = budgetState(chatId);
     return bs.budget != null && bs.spent >= bs.budget * (1 + grace) ? bs : null;
   };
   // The user's reply-start hooks (Project settings → Hooks): what they print reaches the agent with the request.
@@ -1604,17 +1592,10 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   for (; !handled && step < maxSteps; step++) {
     // Stop pressed while a tool ran (a tool can finish normally after it): no further model call.
     if (signal.aborted) throw new Error('Stopped.');
-    if (projectId && !req.bench && step === firstStep && !resumed) {
-      const bs = budgetState(projectId);
+    if (chatId && step === firstStep && !resumed) {
+      const bs = budgetState(chatId);
       if (bs.budget != null && bs.spent >= bs.budget && !(await budgetReached(bs, step))) { run.stop = 'budget'; run.budgetStop = 'start'; break; }
     } else if (pastAllowance()) { run.stop = 'budget'; run.budgetStop = 'hard'; break; }
-    // This reply's own cap (every model it calls counts) and the daily cap across all projects.
-    if (!req.bench) {
-      const cap = capOf();
-      if (cap != null && stats.cost >= cap && !(await capReached('reply', step))) { run.stop = 'budget'; run.budgetStop = 'reply'; break; }
-      const day = Number(S.dailyBudget) > 0 ? Number(S.dailyBudget) : null;
-      if (day != null && spentToday() >= day && !(await capReached('day', step))) { run.stop = 'budget'; run.budgetStop = 'day'; break; }
-    }
     run.steps++;
     deliverInbox(step);
     if (run.userStops?.length) {
@@ -1877,7 +1858,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     const openItems = run.plan ? run.plan.items.filter((x) => x.status !== 'done') : [];
     const rounds = Math.max(0, Math.min(5, Number(S.continueRounds ?? DEFAULTS.continueRounds) || 0));
     if (!run.warned && maxSteps >= 10 && nearEnd(step, maxSteps) && openItems.length && (run.extended || 0) < rounds && !run.budgetOver && !run.budgetWarned) {
-      // The plan isn't finished: keep going instead of wrapping up (budget caps still apply).
+      // The plan isn't finished: keep going instead of wrapping up (the chat budget still applies).
       run.extended = (run.extended || 0) + 1;
       const add = Math.max(5, Math.min(200, Number(S.moreSteps ?? DEFAULTS.moreSteps) || 30));
       maxSteps += add;
@@ -1885,14 +1866,12 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       emit({ t: 'note', level: 'info', msg: `Steps were running out with ${openItems.length} plan item${openItems.length > 1 ? 's' : ''} left: ${add} more steps (round ${run.extended} of ${rounds}).`, at: at() });
     }
     if (!run.warned && maxSteps >= 10 && nearEnd(step, maxSteps)) { run.warned = true; signals.push(`Only ${maxSteps - step - 1} steps are left in this reply. Stop adding features: make sure what you have works, then give your final reply.`); }
-    const pb = projectId && !req.bench ? budgetState(projectId) : null;
-    if (pb?.budget != null && !run.budgetOver && pb.spent >= pb.budget) { run.budgetOver = run.budgetWarned = true; signals.push(`The project budget is used up ($${pb.spent.toFixed(2)} of $${pb.budget.toFixed(2)}). Finish the task you are on in as few steps as possible, add nothing new, then give your final reply. This reply is stopped at $${(pb.budget * (1 + grace)).toFixed(2)}.`); }
-    else if (pb?.budget != null && !run.budgetWarned && pb.spent >= pb.budget * 0.85) { run.budgetWarned = true; signals.push(`The project budget is almost used up ($${pb.spent.toFixed(2)} of $${pb.budget.toFixed(2)}). Finish what you are doing and give your final reply.`); }
-    const rc = req.bench ? null : capOf();
-    if (rc != null && !run.capWarned && stats.cost >= rc * 0.85) { run.capWarned = true; signals.push(`This reply has used $${stats.cost.toFixed(2)} of its $${rc.toFixed(2)} cap (every model counts: you, deciders, helpers, checks). Finish what you are doing and give your final reply.`); }
+    const pb = chatId ? budgetState(chatId) : null;
+    if (pb?.budget != null && !run.budgetOver && pb.spent >= pb.budget) { run.budgetOver = run.budgetWarned = true; signals.push(`The chat's budget is used up ($${pb.spent.toFixed(2)} of $${pb.budget.toFixed(2)}). Finish the task you are on in as few steps as possible, add nothing new, then give your final reply. This reply is stopped at $${(pb.budget * (1 + grace)).toFixed(2)}.`); }
+    else if (pb?.budget != null && !run.budgetWarned && pb.spent >= pb.budget * 0.85) { run.budgetWarned = true; signals.push(`The chat's budget is almost used up ($${pb.spent.toFixed(2)} of $${pb.budget.toFixed(2)}). Finish what you are doing and give your final reply.`); }
     if (signals.length) emit({ t: 'note', level: 'info', msg: `Told the agent: ${signals.join(' ')}`, at: at() });
     const lastTool = messages.at(-1);
-    if (lastTool?.role === 'tool') lastTool.content += `\n\n[${[...signals, `steps: ${step + 1} of ${maxSteps} used${run.plan ? ` · plan: ${run.plan.items.filter((x) => x.status === 'done').length} of ${run.plan.items.length} done` : ''}${pb?.budget != null ? ` · project budget: $${pb.spent.toFixed(3)} of $${pb.budget.toFixed(2)} used` : ''}${cats.length ? ` · media: $${stats.mediaSpent.toFixed(3)} of $${S.budget}` : ''}`].join(' ')}]`;
+    if (lastTool?.role === 'tool') lastTool.content += `\n\n[${[...signals, `steps: ${step + 1} of ${maxSteps} used${run.plan ? ` · plan: ${run.plan.items.filter((x) => x.status === 'done').length} of ${run.plan.items.length} done` : ''}${pb?.budget != null ? ` · chat budget: $${pb.spent.toFixed(3)} of $${pb.budget.toFixed(2)} used` : ''}${cats.length && stats.mediaSpent ? ` · media so far: $${stats.mediaSpent.toFixed(3)}` : ''}`].join(' ')}]`;
     // A model that can see gets the browser's screenshot when the page's text alone was thin, an action failed or it
     // asked (see: true). Only the newest one stays in the conversation.
     if (run.visionShot && seesImages) {
@@ -1916,18 +1895,12 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (!lastReview.pass) reply += `\n\n**Reviewer (${short(lastReview.model)}): not passed yet.** Scores: ${scoreLine(lastReview.scores)}.${lastReview.bugs.length ? ` Still open:\n${lastReview.bugs.slice(0, 6).map((x) => `- ${x}`).join('\n')}` : ''}`;
   }
   if (run.plan) stats.plan = { done: run.plan.items.filter((x) => x.status === 'done').length, of: run.plan.items.length };
-  if (run.stop === 'budget' && (run.budgetStop === 'reply' || run.budgetStop === 'day')) {
-    const why = run.budgetStop === 'reply'
-      ? `This reply reached its $${capOf().toFixed(2)} cap ($${stats.cost.toFixed(3)} spent by every model it used), so it stopped.`
-      : `Today's spending across all projects reached the $${Number(S.dailyBudget).toFixed(2)} daily cap ($${spentToday().toFixed(3)}), so the reply stopped.`;
-    reply = `${reply.trim() ? `${reply.trim()}\n\n` : ''}⚠ ${why}${journal.length ? ` Done so far: ${clip(journal.slice(-12).join('; '), 600)}.` : ''} ${run.budgetStop === 'reply' ? 'Send a message to carry on (a new reply starts with a fresh cap), or raise the cap in ⚙ Settings → Budget.' : 'Raise the daily cap in ⚙ Settings → Budget, then send a message to carry on.'}`;
-    emit({ t: 'note', level: 'warn', msg: why, at: at() });
-  } else if (run.stop === 'budget') {
-    const bs = budgetState(projectId);
+  if (run.stop === 'budget') {
+    const bs = budgetState(chatId);
     const why = run.budgetStop === 'hard'
-      ? `This reply went past the project budget and its ${Math.round(grace * 100)}% allowance for finishing work ($${bs.spent.toFixed(3)} spent; budget $${bs.budget.toFixed(2)}, stop at $${(bs.budget * (1 + grace)).toFixed(2)}), so it was stopped${run.notRun ? ` and its last ${run.notRun} tool call${run.notRun > 1 ? 's were' : ' was'} not run` : ''}.`
-      : `This project's budget is used up ($${bs.spent.toFixed(3)} of $${bs.budget.toFixed(2)}), so the reply did not start.`;
-    reply = `${reply.trim() ? `${reply.trim()}\n\n` : ''}⚠ ${why}${journal.length ? ` Done so far: ${clip(journal.slice(-12).join('; '), 600)}.` : ''} Raise the budget (the $ next to the project in the sidebar) and send a message to carry on.`;
+      ? `This reply went past the chat's budget and its ${Math.round(grace * 100)}% allowance for finishing work ($${bs.spent.toFixed(3)} spent; budget $${bs.budget.toFixed(2)}, stop at $${(bs.budget * (1 + grace)).toFixed(2)}), so it was stopped${run.notRun ? ` and its last ${run.notRun} tool call${run.notRun > 1 ? 's were' : ' was'} not run` : ''}.`
+      : `This chat's budget is used up ($${bs.spent.toFixed(3)} of $${bs.budget.toFixed(2)}), so the reply did not start.`;
+    reply = `${reply.trim() ? `${reply.trim()}\n\n` : ''}⚠ ${why}${journal.length ? ` Done so far: ${clip(journal.slice(-12).join('; '), 600)}.` : ''} Raise the chat's budget (💵 in the message box) and send a message to carry on.`;
     emit({ t: 'note', level: 'warn', msg: why, at: at() });
   }
   // One line per reply that changed something, so the next chat knows what happened here.
@@ -2013,7 +1986,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   function wantReviewSkipped() { return (S.review || DEFAULTS.review) === 'always'; }
 
   // A send-back late in a reply would otherwise end it with "left to do" and no fix (the reviewer runs last, near
-  // the step limit). So the reply gets enough steps to act on it; the budget caps still apply.
+  // the step limit). So the reply gets enough steps to act on it; the chat budget still applies.
   function roomToFix(step, why) {
     const need = Math.max(4, Math.min(40, Number(S.fixSteps ?? DEFAULTS.fixSteps) || 12));
     const left = maxSteps - step - 1;
@@ -2023,41 +1996,19 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     emit({ t: 'note', level: 'info', msg: `${why} with ${left} step${left === 1 ? '' : 's'} left, so this reply gets ${need - left} more to fix it (⚙ Agent loop → Steps to fix).`, at: at() });
   }
 
-  // A new reply at the project budget. YOLO doesn't start it. Strict shows a card and waits: raising the budget (on the card or
-  // in the sidebar) lets the reply go on, "Wrap up" ends it.
-  // The reply cap: ⚙ Budget's "Cap per reply" (0 = none), raised for this reply from its card.
-  function capOf() { const c = run.replyCap ?? (Number(S.replyBudget) > 0 ? Number(S.replyBudget) : null); return c; }
-  // A cap reached ('reply' or 'day'). Strict shows a card: raise this reply's cap (or the daily cap in ⚙) and carry
-  // on, or wrap up. YOLO stops, since nobody is there to raise it.
-  async function capReached(kind, step) {
-    if (S.approval !== 'strict') return false;
-    const id = `b${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`, key = `${runId}:${id}`;
-    const spent = kind === 'reply' ? stats.cost : spentToday(), cap = kind === 'reply' ? capOf() : Number(S.dailyBudget);
-    emit({ t: 'budget_ask', id, step, kind, spent, budget: cap, at: at() });
-    const go = await new Promise((resolve, reject) => {
-      const finish = (v) => { budgetWaits.delete(key); capWaits.delete(key); resolve(v); };
-      budgetWaits.set(key, () => finish(false));
-      capWaits.set(key, (raiseTo) => {
-        if (kind === 'reply') run.replyCap = raiseTo; else S.dailyBudget = raiseTo;
-        finish(true);
-      });
-      signal.addEventListener('abort', () => { budgetWaits.delete(key); capWaits.delete(key); reject(new Error('aborted')); }, { once: true });
-    });
-    emit({ t: 'budget_done', id, kind, raised: go, budget: kind === 'reply' ? capOf() : Number(S.dailyBudget), spent, at: at() });
-    return go;
-  }
-
+  // A new reply at the chat's budget. YOLO doesn't start it. Strict shows a card and waits: raising the budget (on the card or
+  // in the message box) lets the reply go on, "Wrap up" ends it.
   async function budgetReached(bs, step) {
     if (S.approval !== 'strict') return false;
     const id = `b${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`, key = `${runId}:${id}`;
-    emit({ t: 'budget_ask', id, step, spent: bs.spent, budget: bs.budget, project: projectId, at: at() });
+    emit({ t: 'budget_ask', id, step, spent: bs.spent, budget: bs.budget, chat: chatId, at: at() });
     const go = await new Promise((resolve, reject) => {
       const finish = (v) => { clearInterval(tick); budgetWaits.delete(key); resolve(v); };
-      const tick = setInterval(() => { const now = budgetState(projectId); if (now.budget == null || now.spent < now.budget) finish(true); }, 1000);
+      const tick = setInterval(() => { const now = budgetState(chatId); if (now.budget == null || now.spent < now.budget) finish(true); }, 1000);
       budgetWaits.set(key, () => finish(false));
       signal.addEventListener('abort', () => { clearInterval(tick); budgetWaits.delete(key); reject(new Error('aborted')); }, { once: true });
     });
-    const now = budgetState(projectId);
+    const now = budgetState(chatId);
     emit({ t: 'budget_done', id, raised: go, budget: now.budget, spent: now.spent, at: at() });
     return go;
   }
@@ -2530,8 +2481,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     }
     if (run.planGate === 'stopped') return 'Refused: the user said Stop here at the plan. Change nothing; end your reply with a short summary.';
     if (run.planGate === 'waiting' || run.planGate === 'changes') return 'Refused: the user has not said Go ahead to the plan yet. Call plan with the (changed) plan and wait for their answer.';
-    if (planFirst === 'always') return 'Refused: plan first (the user\'s setting). Call plan with your plan; the user says Go ahead before files change or commands run. Commands that only read (listing, Get-Process, git status) run without it.';
-    return null; // 'big' with no plan shown: a small fix may go ahead
+    return 'Refused: this is a /goal, so plan comes first. Call plan with your plan; the user says Go ahead before files change or commands run. Commands that only read (listing, Get-Process, git status) run without it.';
   }
 
   // ================= Video Mode (server/videomode.js) =================
@@ -3015,7 +2965,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       emit({ t: 'note', level: 'info', msg: `${why}, so D2 falls back to setup C: the agent must ask the deciders, guessing first.`, at: at() });
       setup.decide = 'force-first';
       messages[0].content = systemFor(true);
-      tools = [...TOOLS({ artifacts: T.artifacts.on, decide: true, cats, choices, code: !!root, browser: browserOn, skills: skills.length > 0, ask: askOn, docs: docsOn }), ...mcpT.defs];
+      tools = [...TOOLS({ artifacts: T.artifacts.on, decide: true, cats, choices, code: !!root, browser: browserOn, skills: skills.length > 0, ask: askOn, docs: docsOn, plan: goal }), ...mcpT.defs];
       return false;
     }
     const model = setup.strong || 'anthropic/claude-sonnet-5.5';
@@ -3232,7 +3182,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (name === 'delete_file') return `Delete ${args.path} (moves it to .quorx/trash)`;
     if (name === 'scaffold') return `Copy the "${args.template}" starter template into the project`;
     if (name === 'remember') return `Remember in every chat: “${clip(args.text, 200)}”`;
-    if (name === 'save_skill') return `Save a project skill "${args.name}": ${clip(args.description, 80)}`;
+    if (name === 'save_skill') return `Save a skill "${args.name}": ${clip(args.description, 80)}`;
     if (name === 'use_skill') return `Load the skill "${args.name}"`;
     if (name === 'music_map') return `Map the music in ${clip(args.path, 80)}`;
     if (name === 'fit_music') return `Fit ${clip(args.path, 60)} to ${args.seconds} s → ${clip(args.out, 60)}`;
@@ -3323,13 +3273,14 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     const limit = askLimitNow();
     if (run.questions >= limit) return `You have asked ${run.questions} question${run.questions === 1 ? '' : 's'} in this reply, the most the user allows. Decide yourself and say in your reply what you chose.`;
     const tidy = (x) => {
-      const question = clip(String(x?.question || '').trim(), 300);
-      const options = (Array.isArray(x?.options) ? x.options : []).map((o) => clip(String(o).trim(), 80)).filter(Boolean).slice(0, 4);
+      // Options are never cut short (the card shows each in full, and opens a long list with Show all).
+      const question = clip(String(x?.question || '').trim(), 600);
+      const options = (Array.isArray(x?.options) ? x.options : []).map((o) => clip(String(o).trim(), 500)).filter(Boolean).slice(0, 8);
       const rec = Number.isInteger(x?.recommended) && x.recommended >= 0 && x.recommended < options.length ? x.recommended : null;
       return question && options.length >= 2 ? { question, options, recommended: rec } : null;
     };
     const asked = Array.isArray(args.questions) && args.questions.length ? args.questions.map(tidy).filter(Boolean).slice(0, 4) : [tidy(args)].filter(Boolean);
-    if (!asked.length) return 'Error: ask_user needs a question and 2 to 4 short options (or questions: a list of them).';
+    if (!asked.length) return 'Error: ask_user needs a question and 2 to 8 options (or questions: a list of them).';
     const room = limit - run.questions, list = asked.slice(0, room), cut = asked.length - list.length;
     const over = cut ? `\n(${cut} more question${cut > 1 ? 's were' : ' was'} not asked: this reply may ask ${limit} in all. Decide ${cut > 1 ? 'those' : 'that one'} yourself.)` : '';
     run.questions += list.length;
@@ -3453,7 +3404,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     // Commands have their own gate (the rule engine, in codeTool), so they never get a second, generic card.
     // An "Always allow" in this chat let it through: one use of that permission, counted on the page (allowed_used).
     if (allowed.has(name) && ((S.approval === 'strict' && strictAsks(name)) || yoloWouldAsk(name))) emit({ t: 'allowed_used', tool: name, at: at() });
-    if (((S.approval === 'strict' && strictAsks(name) && !allowed.has(name)) || yoloAsks(name)) && !(name === 'plan' && run.plan) && !(name === 'launch_config' && args.action === 'list') && !['shell', 'run_command', 'terminal', 'edit_video'].includes(name)) {
+    if (((S.approval === 'strict' && strictAsks(name) && !allowed.has(name)) || yoloAsks(name)) && !(name === 'plan' && run.plan) && !(name === 'launch_config' && args.action === 'list') && !['shell', 'run_command', 'terminal', 'edit_video', 'save_skill'].includes(name)) {
       const mt = mcpT.byName.get(name);
       const card = { id: newApprovalId(), tool: name, free: true, est: 0, what: toolSummary(name, args), why: '',
         // An MCP tool: its server and tool, whether it can change things, and the exact input it will send.
@@ -3686,7 +3637,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       notes.push(`scaffolded ${t.name}`);
       return `Copied template "${t.name}": ${r.written.join(', ') || 'nothing new'}${r.skipped.length ? `; kept your existing ${r.skipped.join(', ')}` : ''}.${t.start ? ` Start it with start_server name "${t.name}", command "${t.start.command}", args ${JSON.stringify(t.start.args || [])}.` : ''}`;
     }
-    if (name === 'save_skill') { const id = saveSkill(root, args); notes.push(`saved skill ${id}`); emit({ t: 'note', level: 'info', msg: `Saved a new project skill: ${id}`, at: at() }); return `Saved skill "${id}" in .quorx/skills/${id}. Future chats in this project will see it.`; }
+    if (name === 'save_skill') return saveSkillAsked(args);
     if (name === 'list_files') { const f = listFiles(root); return f.length ? f.map((x) => `${x.path} (${x.size} bytes)`).join('\n') : 'The project folder is empty.'; }
     if (name === 'read_file') {
       const k = secretOf(args.path);
@@ -4446,11 +4397,41 @@ ${r.text || '(no text found)'}`;
     return out;
   }
 
+  // ---------- save_skill: the user picks where it goes ----------
+  // One card, in Strict and YOLO alike: This project, All projects (every project, data/skills), or Don't save. The
+  // agent's suggestion is the recommended answer. A scheduled run has nobody to ask: it saves to the project.
+  async function saveSkillAsked(args) {
+    // What would make the save fail is said before anyone is asked.
+    if (!String(args.name || '').trim()) return 'Error: the skill needs a name.';
+    if (!String(args.instructions || '').trim()) return 'Error: the skill needs instructions (the steps, rules and gotchas, in Markdown).';
+    const wantAll = args.where === 'all';
+    let where = root ? 'project' : 'mine';
+    if (!req.scheduledBy) {
+      const id = `q${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+      const options = root ? ['This project', 'All projects', "Don't save"] : ['All projects', "Don't save"];
+      emit({ t: 'question', id, gate: 'skill', question: `Save the skill "${clip(String(args.name || ''), 60)}"? Where should it go?`, why: clip(String(args.description || ''), 200), options, recommended: root ? (wantAll ? 1 : 0) : 0, at: at() });
+      const ans = await new Promise((resolve, reject) => {
+        questions.set(`${runId}:${id}`, resolve);
+        signal.addEventListener('abort', () => { questions.delete(`${runId}:${id}`); reject(new Error('aborted')); }, { once: true });
+      });
+      emit({ t: 'answer', id, choice: ans.choice, text: ans.text, at: at() });
+      const pick = ans.choice == null ? null : options[ans.choice];
+      if (pick === "Don't save" || pick == null) return `The user chose not to save the skill${ans.text ? ` and said: "${clip(ans.text, 300)}"` : ''}. Carry on without it.`;
+      where = pick === 'All projects' ? 'mine' : 'project';
+    }
+    const sid = saveSkill(root, args, { where });
+    notes.push(`saved skill ${sid}`);
+    emit({ t: 'note', level: 'info', msg: `Saved a new skill for ${where === 'mine' ? 'all projects' : 'this project'}: ${sid}`, at: at() });
+    return where === 'mine' ? `Saved skill "${sid}" for all the user's projects. Future chats in any project will see it.` : `Saved skill "${sid}" in .quorx/skills/${sid}. Future chats in this project will see it.`;
+  }
+
   // ---------- the prompt enhancer (server/enhancer.js) ----------
   // A chat's first request (or every one): a cheap model reads the user's words and spells out what they plainly
   // imply. The agent gets it as a note on the request; the approval judges read it beside the user's messages.
   // Later replies in the chat bring the reading back (req.reading), as the user last left it.
   // Resolves when the reading is in, or after enhancerWaitMs; a later reading still reaches the judges.
+  // It never runs on its own: a card asks first (Enhance · Send as is · Always send as is, which turns it off for the
+  // chat). A scheduled run has nobody to ask, so it goes as written.
   function startReading() {
     const kept = String(req.reading || '').trim();
     if (kept) run.reading = { text: clip(kept, 4000), kept: true };
@@ -4458,6 +4439,21 @@ ${r.text || '(no text found)'}`;
     const on = S.enhancer !== false && (firstTurn || S.enhancerWhen === 'every');
     // (A scripted model in tests has no enhancer behind it: it runs only when deps.enhance says so.)
     if (!on || resumed || handled || qaBench || userText.length < 12 || !(!deps.chatStream || deps.enhance)) return null;
+    if (S.enhancerAsk === false) return enhance();
+    if (req.scheduledBy) return null;
+    return (async () => {
+      const id = `q${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+      emit({ t: 'question', id, gate: 'enhance', question: 'Enhance your request first?', why: 'The prompt enhancer spells out what your words imply (format, length, checks) for the agent and the deciders. Under $0.001.', options: ['Enhance', 'Send as is', 'Always send as is'], at: at() });
+      const ans = await new Promise((resolve, reject) => {
+        questions.set(`${runId}:${id}`, resolve);
+        signal.addEventListener('abort', () => { questions.delete(`${runId}:${id}`); reject(new Error('aborted')); }, { once: true });
+      });
+      emit({ t: 'answer', id, choice: ans.choice, text: ans.text, at: at() });
+      if (ans.choice === 2) emit({ t: 'enhancer_off', at: at() });
+      return ans.choice === 0 ? enhance() : null;
+    })();
+  }
+  function enhance() {
     const model = String(S.enhancerModel || '').trim() || String(S.helperModel || '').trim() || HELPER_MODEL;
     const t0 = Date.now();
     let late = false;
@@ -5304,17 +5300,13 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     const options = await Promise.all(T[cat].models.map((m) => estimateFor(cat, m, args, T)));
     const card = { id, tool, cat, model: plan.model, est: plan.est, basis: plan.basis, detail: `${plan.detail}${cat === 'video' && args.start_image ? `, from the picture ${clip(args.start_image, 120)}` : ''}`, what, why: clip(args.why, 200), mode: S.approval,
       pickedBy: T[cat].pick === 'agent' && T[cat].models.length > 1 ? 'agent' : 'settings', options: options.map(({ model, est, basis, detail }) => ({ model, est, basis, detail })) };
-    const overBudget = (p) => stats.mediaSpent + p.est > S.budget;
-    const budgetNo = (p) => ({ approve: false, by: 'budget', reason: `This would bring media spending to about $${(stats.mediaSpent + p.est).toFixed(3)}, over this reply's $${S.budget} budget.` });
+    // The chat's budget (with its allowance for finishing work) is the only limit on paid media.
+    const pb = chatId ? budgetState(chatId) : null;
+    const cap = pb?.budget != null ? pb.budget * (1 + Math.max(0, Number(S.budgetGrace ?? DEFAULTS.budgetGrace)) / 100) : null;
+    const overBudget = (p) => cap != null && budgetState(chatId).spent + p.est > cap;
+    const budgetNo = (p) => ({ approve: false, by: 'budget', reason: `This would bring the chat to about $${(budgetState(chatId).spent + p.est).toFixed(3)}, past its $${pb.budget.toFixed(2)} budget and the allowance for finishing work ($${cap.toFixed(2)}).` });
     if (overBudget(plan)) {
       const ans = budgetNo(plan);
-      emit({ t: 'approval', ...card, at: at() }); emit({ t: 'approval_done', id, ...ans, at: at() });
-      return { ...ans, plan };
-    }
-    const pb = projectId && !req.bench ? budgetState(projectId) : null;
-    const cap = pb?.budget != null ? pb.budget * (1 + Math.max(0, Number(S.budgetGrace ?? DEFAULTS.budgetGrace)) / 100) : null;
-    if (cap != null && pb.spent + plan.est > cap) {
-      const ans = { approve: false, by: 'budget', reason: `This would bring the project to about $${(pb.spent + plan.est).toFixed(3)}, past its $${pb.budget.toFixed(2)} budget and the allowance for finishing work ($${cap.toFixed(2)}).` };
       emit({ t: 'approval', ...card, at: at() }); emit({ t: 'approval_done', id, ...ans, at: at() });
       return { ...ans, plan };
     }
@@ -5336,12 +5328,12 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     }
     const yoloAuto = S.approval === 'yolo' && (S.yoloAuto?.media !== false || allowed.has(tool));
     if (yoloAuto && S.yoloCheck === false) {
-      const ans = { approve: true, by: 'yolo', reason: 'YOLO mode without checks: approved automatically (budget cap still applies).' };
+      const ans = { approve: true, by: 'yolo', reason: 'YOLO mode without checks: approved automatically (chat budget still applies).' };
       emit({ t: 'approval', ...card, at: at() }); emit({ t: 'approval_done', id, ...ans, at: at() });
       return { ...ans, plan };
     }
     if (yoloAuto && !decidersOn && decidersOff.media === 'run') {
-      const ans = { approve: true, by: 'deciders off', reason: 'The deciders are off in this chat, and ⚙ Approvals & safety runs paid calls without a check (budget caps still apply).' };
+      const ans = { approve: true, by: 'deciders off', reason: 'The deciders are off in this chat, and ⚙ Approvals & safety runs paid calls without a check (the chat budget still applies).' };
       emit({ t: 'approval', ...card, at: at() }); emit({ t: 'approval_done', id, ...ans, at: at() });
       return { ...ans, plan };
     }
@@ -5387,7 +5379,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
   async function refreshMediaTools() {
     for (const c of cats) if (T[c].pick === 'agent' && T[c].models.length > 1 && !choices[c]) choices[c] = await Promise.all(T[c].models.map((m) => estimateFor(c, m, {}, T)));
     if (cats.includes('video') && !choices.videoStart) choices.videoStart = (await videoModels().catch(() => [])).filter((m) => T.video.models.includes(m.id) && canStartFromImage(m)).map((m) => m.id);
-    const fresh = TOOLS({ artifacts: T.artifacts.on, decide: decidersOn && setup.decide !== 'off', cats, choices, code: !!root, browser: browserOn, skills: skills.length > 0, ask: askOn, docs: docsOn, helpers: helpersOn });
+    const fresh = TOOLS({ artifacts: T.artifacts.on, decide: decidersOn && setup.decide !== 'off', cats, choices, code: !!root, browser: browserOn, skills: skills.length > 0, ask: askOn, docs: docsOn, helpers: helpersOn, plan: goal });
     const media = new Set(['media_plan', 'edit_video', ...Object.values(MEDIA).map((m) => m.tool)]);
     tools = [...tools.filter((t) => !media.has(t.function.name) && t.function.name !== 'enable_media'), ...fresh.filter((t) => media.has(t.function.name))];
     if (mediaOff().length) tools.push(ENABLE_MEDIA_TOOL(mediaOff()));
@@ -5396,7 +5388,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
   }
   // enable_media: one card to switch on paid tools that are off in this chat, each with its model to pick. Strict waits
   // for the user; ⚡ YOLO waits its usual time, then switches on (switching on spends nothing; every call is still
-  // priced and approved, and the budget caps apply).
+  // priced and approved, and the chat budget applies).
   // 🖥 Computer use off in this chat: one card per reply asks to turn it on. No answer (⚡ YOLO's wait) keeps it off:
   // using the user's own apps is theirs to switch on.
   async function askAppsOn() {
@@ -5455,7 +5447,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     const guarded = (s) => !!s.guard || ['model', 'models', 'money'].includes(s.type) || s.cat === 'tools' || /^newChatTools\.(image|video|music|speech)$/.test(s.key);
     const line = (s) => `${s.key} = ${show(s, pageValue(prefs, s, DEFAULTS))}  (${s.label})`;
     const mcpLines = () => { const l = mcpListServers(); return l.length ? l.map((s) => `mcp.${s.name} = ${s.on ? 'On' : 'Off'} (${s.status}${s.tools.length ? `, ${s.tools.length} tools` : ''})${(S.mcpServers || []).includes(s.name) ? ', ticked for this chat' : ''}`).join('\n') : 'No MCP servers yet (add one with mcp_setup).'; };
-    const projLines = () => (projectId ? Object.entries(PROJECT_KEYS).map(([k, K]) => `${k} = ${projectRead(projectId, root, k, { secrets: Object.keys(projectEnv(root)) })?.replace(/\n/g, '; ')}  (${K.label})`).join('\n') : 'This chat has no project.');
+    const projLines = () => (projectId ? Object.entries(PROJECT_KEYS).map(([k, K]) => `${k} = ${projectRead(projectId, root, k, { chatId, secrets: Object.keys(projectEnv(root)) })?.replace(/\n/g, '; ')}  (${K.label})`).join('\n') : 'This chat has no project.');
     if (act === 'list') {
       const cat = String(args.category || '').toLowerCase().trim(), q = String(args.query || '').toLowerCase().trim();
       if (cat === 'project') return projLines();
@@ -5465,17 +5457,17 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
       if (cat === 'project' || cat.startsWith('design')) return designList(q);
       const hits = SETTINGS.filter((s) => (!cat || s.cat === cat) && (!q || `${s.key} ${s.label} ${s.help || ''} ${SETTING_CATS[s.cat]}`.toLowerCase().includes(q)));
       if (cat && !SETTING_CATS[cat]) return `Error: no category ${cat}. They are ${Object.keys(SETTING_CATS).join(', ')}, project.`;
-      if (!cat && !q) return `⚙ Settings categories (list one with category):\n${Object.entries(SETTING_CATS).map(([k, l]) => `- ${k}: ${l}`).join('\n')}\n- project: this chat's project (budget, design system, hooks, command rules, name, archive)\nOr search with query.`;
+      if (!cat && !q) return `⚙ Settings categories (list one with category):\n${Object.entries(SETTING_CATS).map(([k, l]) => `- ${k}: ${l}`).join('\n')}\n- project: this chat's project (this chat's budget, design system, hooks, command rules, name, archive)\nOr search with query.`;
       const pq = q ? Object.entries(PROJECT_KEYS).filter(([k, K]) => `${k} ${K.label} ${K.help}`.toLowerCase().includes(q)).map(([k, K]) => `${k}  (${K.label}, this project)`) : [];
       return [...hits.map(line), ...pq].join('\n') || `Nothing matches "${q}". List a category instead.`;
     }
     const s = SETTINGS_BY_KEY.get(key), P = PROJECT_KEYS[key], mcpName = /^mcp\.(.+)$/.exec(key)?.[1];
     const server = mcpName ? mcpListServers().find((x) => x.name === mcpName) : null;
     if (!s && !P && !server && act !== 'undo') return `Error: no setting "${key}". Use list (with a category or query) for the keys.`;
-    if (act === 'get') return s ? `${line(s)}\nIn ⚙ Settings → ${SETTING_CATS[s.cat]}.` : server ? mcpLines().split('\n').find((l) => l.startsWith(`${key} `)) : `${key}: ${projectRead(projectId, root, key, { secrets: Object.keys(projectEnv(root)) })}`;
+    if (act === 'get') return s ? `${line(s)}\nIn ⚙ Settings → ${SETTING_CATS[s.cat]}.` : server ? mcpLines().split('\n').find((l) => l.startsWith(`${key} `)) : `${key}: ${projectRead(projectId, root, key, { chatId, secrets: Object.keys(projectEnv(root)) })}`;
     if (act === 'explain') {
       if (server) return `${key}: whether QuorX may start the MCP server ${mcpName} (${server.type === 'http' ? server.url : server.command}). Each chat still ticks the servers it uses. Changing it always waits for the user's click.`;
-      if (P) return `${key}: ${P.label}. ${P.help}${P.readOnly ? '' : `\nNow: ${projectRead(projectId, root, key)}`}${P.guard ? '\nChanging it always waits for the user\'s click.' : ''}${key === 'project.design' ? '\nCall list with category design (and a query) to see the systems.' : ''}`;
+      if (P) return `${key}: ${P.label}. ${P.help}${P.readOnly ? '' : `\nNow: ${projectRead(projectId, root, key, { chatId })}`}${P.guard ? '\nChanging it always waits for the user\'s click.' : ''}${key === 'project.design' ? '\nCall list with category design (and a query) to see the systems.' : ''}`;
       const d = pageValue({}, s, DEFAULTS);
       return `${s.key}: ${s.label} (⚙ Settings → ${SETTING_CATS[s.cat]}). ${s.help || ''}\nValues: ${s.type === 'enum' ? s.values.map(([k, l]) => `${k} (${l})`).join(', ') : s.type === 'bool' ? 'true or false' : ['int', 'num', 'money'].includes(s.type) ? `${s.min} to ${s.max}${s.unit || ''}` : s.type === 'models' ? '1 to 3 model ids' : s.type === 'model' ? `a model id${s.empty ? `, or empty for ${s.empty}` : ''}` : 'text'}\nDefault: ${show(s, d)}. Now: ${show(s, pageValue(prefs, s, DEFAULTS))}.${guarded(s) ? '\nChanging it always waits for the user\'s click.' : ''}`;
     }
@@ -5527,7 +5519,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
         undoLog.push({ where: 'mcp', key, label: `MCP server ${mcpName}`, from: server.on ? 'On' : 'Off', to: on ? 'On' : 'Off', guard: true, undo: () => flip(server.on) });
         return `Turned the MCP server ${mcpName} ${on ? 'on' : 'off'} in QuorX.${on ? ' A chat uses it once it is ticked in that chat\'s 🧲 menu.' : ''}`;
       }
-      const c = projectChange(projectId, root, key, args.value, args.op);
+      const c = projectChange(projectId, root, key, args.value, args.op, { chatId });
       const guard = !!(c.guard || P.guard);
       const ans = await ask(`📁 Project settings → ${P.label}: ${c.from} → ${c.to}`, `${c.what}. ${P.user || ''}${c.runs ? ` It runs "${c.runs}" in the project folder as you, every time it applies.` : ''}`, guard);
       if (!ans.approve) return declined('quorx_settings', ans);
@@ -5758,7 +5750,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     }
     await refreshMediaTools();
     emit({ t: 'tools_on', kinds: want, models: picked, at: at() });
-    return `Switched on for this chat: ${names}${Object.keys(picked).length ? ` (models: ${Object.entries(picked).map(([k, m]) => `${k} ${m}`).join(', ')})` : ''}. Their tools are yours now (${want.map((k) => MEDIA[k].tool).join(', ')}); list several calls in media_plan first. Each paid call is still priced and approved, and the budget caps apply.`;
+    return `Switched on for this chat: ${names}${Object.keys(picked).length ? ` (models: ${Object.entries(picked).map(([k, m]) => `${k} ${m}`).join(', ')})` : ''}. Their tools are yours now (${want.map((k) => MEDIA[k].tool).join(', ')}); list several calls in media_plan first. Each paid call is still priced and approved, and the chat budget applies.`;
   }
 
   // media_plan: the paid calls a piece of work needs, priced by the harness and approved once (server/mediaplan.js).
@@ -5775,26 +5767,24 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     for (const [i, it] of plan.items.entries()) card.items[i].options = (await Promise.all(T[it.kind].models.map((m) => estimateFor(it.kind, m, { seconds: it.seconds, text: ' '.repeat(it.chars || 0) }, T)))).map(({ model, est, detail }) => ({ model, est, detail }));
     const done = (ans) => { emit({ t: 'approval_done', id, ...ans, at: at() }); return ans; };
     const shown = () => emit({ t: 'approval', ...card, at: at() });
-    const pb = projectId && !req.bench ? budgetState(projectId) : null;
+    const pb = chatId ? budgetState(chatId) : null;
     const cap = pb?.budget != null ? pb.budget * (1 + Math.max(0, Number(S.budgetGrace ?? DEFAULTS.budgetGrace)) / 100) : null;
     let ans;
-    if (stats.mediaSpent + plan.total > S.budget) {
-      shown(); ans = done({ approve: false, by: 'budget', reason: `The plan comes to about $${plan.total.toFixed(3)}; with $${stats.mediaSpent.toFixed(3)} already spent that is over this reply's $${S.budget} media budget. Plan fewer, shorter or cheaper calls.` });
-    } else if (cap != null && pb.spent + plan.total > cap) {
-      shown(); ans = done({ approve: false, by: 'budget', reason: `The plan would bring the project to about $${(pb.spent + plan.total).toFixed(3)}, past its $${pb.budget.toFixed(2)} budget.` });
+    if (cap != null && pb.spent + plan.total > cap) {
+      shown(); ans = done({ approve: false, by: 'budget', reason: `The plan would bring the chat to about $${(pb.spent + plan.total).toFixed(3)}, past its $${pb.budget.toFixed(2)} budget. Plan fewer, shorter or cheaper calls, or ask the user to raise the chat's budget.` });
     } else if (S.approval === 'strict' && allowed.has('media_plan')) {
       shown(); ans = done({ approve: true, by: 'always allow', reason: 'You chose to always allow production plans in this conversation.' });
     } else if (S.approval === 'yolo' && (S.yoloAuto?.media !== false || allowed.has('media_plan'))) {
       shown();
-      if (S.yoloCheck === false) ans = done({ approve: true, by: 'yolo', reason: 'YOLO mode without checks: approved automatically (budget cap still applies).' });
-      else if (!decidersOn && decidersOff.media === 'run') ans = done({ approve: true, by: 'deciders off', reason: 'The deciders are off in this chat, and ⚙ Approvals & safety runs paid calls without a check (budget caps still apply).' });
+      if (S.yoloCheck === false) ans = done({ approve: true, by: 'yolo', reason: 'YOLO mode without checks: approved automatically (chat budget still applies).' });
+      else if (!decidersOn && decidersOff.media === 'run') ans = done({ approve: true, by: 'deciders off', reason: 'The deciders are off in this chat, and ⚙ Approvals & safety runs paid calls without a check (the chat budget still applies).' });
       else if (!decidersOn) {
         card.why = 'The deciders are off in this chat, so this production plan waits for you.';
         const w = offWait('this plan');
         ans = done(await askUser(card, w && { ...w, onTimeout: () => ({ ...w.onTimeout(), reason: `No answer in ${Math.round(w.ms / 1000)}s, and the deciders are off in this chat, so nobody checked this plan: each paid call is judged on its own instead.` }) }));
       } else {
         // Judged once, as a whole: the user's words, the enhancer's reading and the harness's prices; never the agent's "why".
-        const j = await approvalJudge({ kind: 'plan', userMessages: userTurns(), reading: run.reading?.text, facts: planFacts(plan, S.budget), voters: S.voters, chatModel: setup.model, gate: S.gate, signal, account, sf: SF,
+        const j = await approvalJudge({ kind: 'plan', userMessages: userTurns(), reading: run.reading?.text, facts: planFacts(plan, pb?.budget != null ? Math.max(0, pb.budget - pb.spent) : null), voters: S.voters, chatModel: setup.model, gate: S.gate, signal, account, sf: SF,
           log: { runId, chatId: req.chatId || null, project: projectId }, ...(deps.ensemble ? { ensembleFn: deps.ensemble } : {}) });
         if (j.approve !== null) ans = done({ approve: j.approve, by: 'deciders', pNeed: j.pNeed, pFair: j.pOther, reason: j.reason, votes: j.votes });
         else {
@@ -5819,11 +5809,11 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
         preferModel(it.kind, m);
       }
       plan.total = plan.items.reduce((s, x) => s + x.each * x.count, 0);
-      if (stats.mediaSpent + plan.total > S.budget) { run.mediaPlan = null; return `With the models the user picked, the plan comes to about $${plan.total.toFixed(3)}, over this reply's $${S.budget} media budget. Plan fewer or shorter calls, or ask the user to raise the budget.`; }
+      if (cap != null && budgetState(chatId).spent + plan.total > cap) { run.mediaPlan = null; return `With the models the user picked, the plan comes to about $${plan.total.toFixed(3)}, past this chat's $${pb.budget.toFixed(2)} budget. Plan fewer or shorter calls, or ask the user to raise the chat's budget.`; }
     }
     run.mediaPlan = { id, items: plan.items, total: plan.total, spent: 0, by: ans.by };
     notes.push(`production plan approved (${calls} paid calls, about $${plan.total.toFixed(3)})`);
-    return `Plan approved (about $${plan.total.toFixed(3)} for ${calls} calls):\n${plan.items.map((x) => `- ${itemLine(x)}`).join('\n')}\nCalls that match it (same kind and model, within its count, not dearer than planned) run without another approval. Anything else is checked on its own. Budget caps still apply.`;
+    return `Plan approved (about $${plan.total.toFixed(3)} for ${calls} calls):\n${plan.items.map((x) => `- ${itemLine(x)}`).join('\n')}\nCalls that match it (same kind and model, within its count, not dearer than planned) run without another approval. Anything else is checked on its own. The chat budget still applies.`;
   }
 
   async function media(name, args, step) {

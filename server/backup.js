@@ -10,6 +10,7 @@ import { writeZip, fileSink, readZip, fileSource } from './zip.js';
 import { listProjects, validId, getWholeChat } from './store.js';
 import { loadRules, saveRules } from './cmdpolicy.js';
 import { loadMemory, saveMemory, checkMemory } from './memory.js';
+import { resetBudgets } from './budget.js';
 
 const DATA = path.join(HOME, 'data');
 const LOGS = path.join(HOME, 'logs');
@@ -77,6 +78,8 @@ export async function exportBackup({ dir, settings = null, includeLogs = false, 
   const blobs = files(path.join(DATA, 'blobs'), (n) => BLOB.test(n));
   for (const n of blobs) addFile(`blobs/${n}`, path.join(DATA, 'blobs', n));
   if (fs.existsSync(path.join(DATA, 'schedules.json'))) add('schedules.json', fs.readFileSync(path.join(DATA, 'schedules.json')));
+  // Each chat's budget, and the one a new chat starts with.
+  if (fs.existsSync(path.join(DATA, 'chat-budgets.json'))) add('chat-budgets.json', fs.readFileSync(path.join(DATA, 'chat-budgets.json')));
   // Your own skills (every file in each one's folder) and memory. Project skills live in the project folders.
   const skills = ownSkills();
   for (const s of skills) for (const r of s.files) addFile(`skills/${s.name}/${r}`, path.join(DATA, 'skills', s.name, r));
@@ -267,6 +270,16 @@ function restore(z, json, { overwrite = false, folders = {}, skip = [], keys = f
     done.paused = merged.filter((s) => incoming.includes(s)).length;
     done.schedules = done.paused;
     writeAtomic(f, JSON.stringify(Array.isArray(mine) ? merged : { ...(mine && typeof mine === 'object' ? mine : { version: 1 }), schedules: merged }, null, 2));
+  }
+
+  // Chat budgets: by chat, like the chats (a chat's budget here stays unless overwrite); the default stays this computer's.
+  const budgets = json('chat-budgets.json');
+  if (budgets?.chats && typeof budgets.chats === 'object') {
+    const f = path.join(DATA, 'chat-budgets.json'), mine = readJson(f, null) || {};
+    const chats = { ...(mine.chats || {}) };
+    for (const [id, b] of Object.entries(budgets.chats)) if (validId(id) && (b === null || (typeof b === 'number' && b >= 0)) && (overwrite || !(id in chats))) chats[id] = b;
+    writeAtomic(f, JSON.stringify({ default: 'default' in mine ? mine.default : budgets.default ?? 10, chats }, null, 2));
+    resetBudgets();
   }
 
   // Your own skills: a skill that is here already is kept (with overwrite, the backup's files are written over it).

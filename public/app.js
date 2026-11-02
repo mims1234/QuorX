@@ -431,6 +431,8 @@ const ICO = {
   trash: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg>',
 };
 const COMMANDS = [
+  // A message, not an action: "/goal …" is sent as it is and the reply plans first. Picked bare, it starts the line.
+  ['goal', 'A big job: the agent shows its plan, waits for Go ahead, then works through it', (c) => { const ta = $('.input', c.el.root); if (ta) { ta.value = '/goal '; ta.selectionStart = ta.selectionEnd = ta.value.length; ta.dispatchEvent(new Event('input')); ta.focus(); } }, 'message'],
   ['model', 'Choose this chat\'s model', (c, arg) => { if (!arg) return $('.model', c.el.root).click(); const id = findModel(c, arg); if (!id) return uiAlert(`No model matches "${arg}".`); c.agent.setup.model = id; saveChat(c); renderComposerBar(c); renderChatHead(c); applyKeyLock(); }],
   ['reason', 'How much the model thinks first', (c, arg) => { if (REASON[arg]) { c.agent.setup.reasoning = arg; saveChat(c); renderComposerBar(c); } }],
   ['creativity', 'How varied the answers are', (c, arg) => { if (CREATIVITY_INFO[arg]) { c.agent.setup.creativity = arg; saveChat(c); renderComposerBar(c); } }],
@@ -457,6 +459,7 @@ const COMMANDS = [
 // What a command takes next. Tab completes the command and lists these; Tab fills one in, Enter runs it.
 // need: the command does nothing without one, so Enter on the bare command lists them instead of running it.
 const CMD_ARGS = {
+  goal: { usage: '<the job>', list: () => [] },
   model: { usage: '[model]', list: (c) => modelArgs(c) },
   fresh: { usage: '[model]', list: (c) => modelArgs(c) },
   review: { usage: '[reply|changes|branch]', list: () => [['reply', 'the files the last reply changed'], ['changes', 'uncommitted git changes'], ['branch', 'this branch against main (or name a base: branch dev)']].map(([value, hint]) => ({ value, hint })) },
@@ -482,7 +485,7 @@ function findModel(c, q) {
 function runCommand(c, line) {
   const [, name, arg = ''] = line.match(/^\/(\w+)\s*(.*)$/) || [];
   const cmd = COMMANDS.find(([k]) => k === name);
-  if (!cmd) return false;
+  if (!cmd || (cmd[3] === 'message' && arg.trim())) return false;
   cmd[2](c, arg.trim());
   return true;
 }
@@ -743,21 +746,21 @@ async function refreshSidebar() {
   folderNotices();
   if (!G.panes.length && $('#chats .landing')) renderLanding($('#chats'));
 }
-// A notice at the top of the chat when its project is close to (80%) or at its budget. It is only on
-// the page (never sent to the agent); ✕ hides it until the next threshold or a new budget.
+// A notice at the top of the chat when it is close to (80%) or at its budget. It is only on the page (never sent to
+// the agent); ✕ hides it until the next threshold or a new budget.
 function budgetNotices() {
   for (const c of G.open.values()) {
     if (!c.el) continue;
     const old = $('.budget-notice', c.el.root);
-    const p = G.projects.find((x) => x.id === c.projectId);
-    const share = p?.budget ? (p.spent || 0) / p.budget : 0;
-    const level = !p || p.budget == null ? null : share >= 1 ? 'full' : share >= 0.8 ? 'near' : null;
-    const seen = (G.budgetSeen || {})[p?.id];
-    if (!level || (seen && seen.level === level && seen.budget === p.budget)) { old?.remove(); continue; }
-    const spent = p.spent || 0, left = Math.max(0, p.budget - spent);
+    const b = c.bud, spent = chatSpent(c);
+    const share = b?.budget ? spent / b.budget : 0;
+    const level = !b || b.budget == null ? null : share >= 1 ? 'full' : share >= 0.8 ? 'near' : null;
+    const seen = (G.budgetSeen || {})[c.id];
+    if (!level || (seen && seen.level === level && seen.budget === b.budget)) { old?.remove(); continue; }
+    const left = Math.max(0, b.budget - spent);
     const html = `<div class="budget-notice ${level}" role="status">
       <span class="bn-ico">${level === 'full' ? '⛔' : '⚠️'}</span>
-      <div class="bn-text"><b>${level === 'full' ? `“${esc(p.name)}” has used its $${p.budget.toFixed(2)} budget.` : `“${esc(p.name)}” has used ${Math.round(share * 100)}% of its $${p.budget.toFixed(2)} budget.`}</b>
+      <div class="bn-text"><b>${level === 'full' ? `This chat has used its $${b.budget.toFixed(2)} budget.` : `This chat has used ${Math.round(share * 100)}% of its $${b.budget.toFixed(2)} budget.`}</b>
         <small>$${spent.toFixed(4)} spent${level === 'full' ? ' · replies pause until you raise it' : ` · $${left.toFixed(2)} left`}</small>
         <span class="bn-bar"><i style="width:${Math.min(100, share * 100).toFixed(1)}%"></i></span></div>
       <button type="button" class="bn-raise">Raise budget</button>
@@ -765,8 +768,8 @@ function budgetNotices() {
     </div>`;
     if (old) old.outerHTML = html; else $('.chat-head', c.el.root).insertAdjacentHTML('afterend', html);
     const el = $('.budget-notice', c.el.root);
-    $('.bn-raise', el).onclick = () => openProjectSettings(p, 'budget');
-    $('.bn-x', el).onclick = () => { (G.budgetSeen ??= {})[p.id] = { level, budget: p.budget }; savePrefs(); el.remove(); };
+    $('.bn-raise', el).onclick = () => editBudget(c, undefined, $('.cmp-budget', c.el.root));
+    $('.bn-x', el).onclick = () => { (G.budgetSeen ??= {})[c.id] = { level, budget: b.budget }; savePrefs(); el.remove(); };
   }
 }
 // Searching the sidebar asks the server (it finds chats the sidebar hasn't loaded); a pause in typing sends it.
@@ -830,14 +833,13 @@ function renderSidebar() {
     // replies running now as they stood when it was fetched: replies running in this page add what they have spent since.
     const liveHere = chats.reduce((s, c) => s + liveOf(G.open.get(c.id)), 0);
     const cost = p.spent != null ? p.spent + Math.max(0, liveHere - (p.runningCost || 0)) : chats.reduce((s, c) => s + (c.cost || 0), 0) + liveHere;
-    const share = p.budget ? Math.min(1, cost / p.budget) : 0;
     const folded = (G.foldedProjects || []).includes(p.id) && !q;
     // A project with a chat working glows; with a chat open it's the current one; the rest fade back (see last.css).
     const working = chats.some((c) => G.open.get(c.id)?.running);
     return `<div class="sb-project ${p.id === curProject ? 'current' : ''} ${working ? 'working' : ''} ${folded ? 'folded' : ''} ${p.pinned ? 'pinned' : ''}" data-p="${esc(p.id)}" style="${projStyle(p)}">
       <div class="sb-ph" tabindex="0" aria-expanded="${!folded}" aria-haspopup="menu" aria-label="${esc(p.name)}: Enter folds its chats, the menu key or Shift+F10 opens its actions">
-        <div class="sb-pname-wrap"><b class="sb-pname" title="${esc(p.name)} · ${esc(p.dir)}">${esc(p.name)}</b><button type="button" class="sb-fold" aria-expanded="${!folded}" title="${folded ? 'Show' : 'Hide'} this project's chats" aria-label="${folded ? 'Show' : 'Hide'} chats of ${esc(p.name)}"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg></button>${p.missing ? '<button type="button" class="sb-missing" title="The project folder was moved, renamed or deleted: click to reselect it">⚠ missing</button>' : p.needsFolder ? '<button type="button" class="sb-missing needs" title="Pick a folder for this project: its files sit inside QuorX itself and are copied to the folder you pick" aria-label="Pick a folder for this project">📁</button>' : ''}${working ? '<span class="sb-pworking" title="A chat in this project is working" aria-label="Working"></span>' : ''}<span class="sb-psp"></span><button type="button" class="sb-pin sb-picon ${p.pinned ? 'on' : ''}" aria-pressed="${!!p.pinned}" title="${p.pinned ? 'Unpin' : 'Pin to the top (up to 3)'}" aria-label="${p.pinned ? 'Unpin' : 'Pin'} ${esc(p.name)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4h6l-1 6 4 4H6l4-4z"/><path d="M12 14v6"/></svg></button><button type="button" class="sb-edit sb-picon" title="Project settings: budget, pin, archive, folder, colour" aria-label="Settings for ${esc(p.name)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg></button><button type="button" class="sb-new sb-picon" title="New chat in ${esc(p.name)}" aria-label="New chat in ${esc(p.name)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button><span class="sb-grip" draggable="true" tabindex="0" role="button" title="Drag to move this project (or focus it and press ↑ / ↓)" aria-label="Move ${esc(p.name)}: drag, or press up or down"><svg viewBox="0 0 10 16" aria-hidden="true"><circle cx="2.5" cy="3" r="1.4"/><circle cx="7.5" cy="3" r="1.4"/><circle cx="2.5" cy="8" r="1.4"/><circle cx="7.5" cy="8" r="1.4"/><circle cx="2.5" cy="13" r="1.4"/><circle cx="7.5" cy="13" r="1.4"/></svg></span></div>
-        ${p.id === curProject ? projectSpendHTML(p, total, cost, share, chats) : ''}
+        <div class="sb-pname-wrap"><b class="sb-pname" title="${esc(p.name)} · ${esc(p.dir)}">${esc(p.name)}</b><button type="button" class="sb-fold" aria-expanded="${!folded}" title="${folded ? 'Show' : 'Hide'} this project's chats" aria-label="${folded ? 'Show' : 'Hide'} chats of ${esc(p.name)}"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg></button>${p.missing ? '<button type="button" class="sb-missing" title="The project folder was moved, renamed or deleted: click to reselect it">⚠ missing</button>' : p.needsFolder ? '<button type="button" class="sb-missing needs" title="Pick a folder for this project: its files sit inside QuorX itself and are copied to the folder you pick" aria-label="Pick a folder for this project">📁</button>' : ''}${working ? '<span class="sb-pworking" title="A chat in this project is working" aria-label="Working"></span>' : ''}<span class="sb-psp"></span><button type="button" class="sb-pin sb-picon ${p.pinned ? 'on' : ''}" aria-pressed="${!!p.pinned}" title="${p.pinned ? 'Unpin' : 'Pin to the top (up to 3)'}" aria-label="${p.pinned ? 'Unpin' : 'Pin'} ${esc(p.name)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4h6l-1 6 4 4H6l4-4z"/><path d="M12 14v6"/></svg></button><button type="button" class="sb-edit sb-picon" title="Project settings: pin, archive, folder, colour" aria-label="Settings for ${esc(p.name)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg></button><button type="button" class="sb-new sb-picon" title="New chat in ${esc(p.name)}" aria-label="New chat in ${esc(p.name)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button><span class="sb-grip" draggable="true" tabindex="0" role="button" title="Drag to move this project (or focus it and press ↑ / ↓)" aria-label="Move ${esc(p.name)}: drag, or press up or down"><svg viewBox="0 0 10 16" aria-hidden="true"><circle cx="2.5" cy="3" r="1.4"/><circle cx="7.5" cy="3" r="1.4"/><circle cx="2.5" cy="8" r="1.4"/><circle cx="7.5" cy="8" r="1.4"/><circle cx="2.5" cy="13" r="1.4"/><circle cx="7.5" cy="13" r="1.4"/></svg></span></div>
+        ${p.id === curProject ? projectSpendHTML(p, total, cost, chats) : ''}
       </div>
       ${shown.map((c) => {
         const live = G.open.get(c.id);
@@ -852,7 +854,7 @@ function renderSidebar() {
         return `<div class="sb-chat sb-chat-item ${G.panes.includes(c.id) ? 'on active' : ''} ${running ? 'running' : ''} ${drv}" data-c="${esc(c.id)}" data-tip-delay="900" title="${esc(tip)}">
           <div class="sb-chat-content">
             <div class="sb-chat-topline"><span class="sb-chat-title">${esc(c.title)}</span>${schTag}${running ? '<span class="live-dot" aria-label="Running"></span>' : ''}</div>
-            ${waiting ? `<div class="sb-chat-prev"><b class="needs">${waiting === 'answer' ? 'Waiting for your answer' : waiting === 'budget' ? 'Waiting: project budget reached' : 'Waiting for your approval'}</b></div>` : running ? '<div class="sb-chat-prev"><i>Working…</i></div>' : ''}
+            ${waiting ? `<div class="sb-chat-prev"><b class="needs">${waiting === 'answer' ? 'Waiting for your answer' : waiting === 'budget' ? 'Waiting: chat budget reached' : 'Waiting for your approval'}</b></div>` : running ? '<div class="sb-chat-prev"><i>Working…</i></div>' : ''}
             <div class="sb-chat-meta"><span>${ago(c.lastAt || c.updated || Date.now())}</span>${c.model ? `<span>· ${esc(short(c.model))}</span>` : ''}${c.cost || liveOf(G.open.get(c.id)) ? `<span class="cost${liveOf(G.open.get(c.id)) ? ' live' : ''}">· $${((c.cost || 0) + liveOf(G.open.get(c.id))).toFixed(3)}</span>` : ''}</div>
           </div>
           <div class="sb-chat-acts"><button type="button" class="sb-chat-menu" title="Rename, duplicate or delete (or right-click the chat)" aria-label="Chat options" aria-haspopup="menu">${ICO.more}</button></div>
@@ -1007,7 +1009,7 @@ async function deleteChat(id) {
   if (i >= 0) { G.panes.splice(i, 1); if (!G.panes.length) showLanding(); else { G.focus = 0; renderPanes(); } }
   refreshSidebar();
 }
-// ---------- ⚙ project settings: name, folder, budget, and what each chat cost ----------
+// ---------- ⚙ project settings: name, folder, and what each chat cost ----------
 async function openProjectSettings(p0, focusOn) {
   const dlg = $('#projDlg'), box = $('#projBody');
   dlg.dataset.project = p0.id;
@@ -1039,11 +1041,6 @@ Every chat in this project reads, writes and runs programs in this folder.">${es
           <button type="button" class="pjf-card" data-sub="hooks" title="Open the hooks window: add, test and order them"><span class="pjf-top"><svg class="pjf-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg><b>Hooks</b><svg class="pjf-chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg></span><span class="pjf-state" id="pjfHooks"><span class="kx-wait">…</span></span><small>Commands run around the agent's work</small></button>
           <button type="button" class="pjf-card" data-sub="perms" title="Open the permissions window: rules, a tester, and each chat's own list"><span class="pjf-top"><svg class="pjf-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8.2-8 9-4.6-.8-8-4.5-8-9V6z"/><path d="M8.5 12l2.5 2.5 4.5-5"/></svg><b>Permissions</b><svg class="pjf-chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg></span><span class="pjf-state" id="pjfPerms"><span class="kx-wait">…</span></span><small>What runs without asking you</small></button>
         </div>
-      </section>
-      <section class="pj-sec" id="pjBudgetSec">
-        <div class="pj-sec-head"><h4>Budget <small>for all chats together</small></h4><span class="pj-bstate" id="pjBState"></span>
-        <div class="pj-budget-mode" role="radiogroup" aria-label="Budget"><button type="button" class="pj-mode ${p.budget == null ? 'on' : ''}" data-mode="none" role="radio" aria-checked="${p.budget == null}">No limit</button><button type="button" class="pj-mode ${p.budget != null ? 'on' : ''}" data-mode="set" role="radio" aria-checked="${p.budget != null}">Set a budget</button></div></div>
-        <div id="pjBudget"></div>
       </section>
       <section class="pj-sec" id="pjCostSec">
         <div class="pj-sec-head"><h4>Costs <small>per chat</small></h4><button type="button" class="kx-icon pj-reveal" aria-label="Show or hide amounts"></button></div>
@@ -1090,21 +1087,6 @@ Every chat in this project reads, writes and runs programs in this folder.">${es
   };
   const arc = $('.pj-archive', box);
   if (arc) arc.onclick = async () => { const to = !p.archived; await setProjectFlag(p, { archived: to }); dlg.close(); };
-  // budget: "No limit" or the editor
-  const mountBudget = () => editBudget(p, undefined, $('#pjBudget', box));
-  const setMode = async (mode) => {
-    for (const b of box.querySelectorAll('.pj-mode')) { b.classList.toggle('on', b.dataset.mode === mode); b.setAttribute('aria-checked', String(b.dataset.mode === mode)); }
-    if (mode === 'set') { $('#pjBudget', box).hidden = false; mountBudget(); return; }
-    $('#pjBudget', box).hidden = true; $('#pjBudget', box).innerHTML = '';
-    if (p.budget != null) {
-      const r = await fetch(`/api/projects/${p.id}/budget`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ budget: null }) }).then((x) => x.json()).catch((e) => ({ error: e.message }));
-      if (r.error) { uiAlert(`Could not remove the budget: ${r.error}.`); return setMode('set'); }
-      p.budget = null; refreshSidebar(); bstate();
-      const b = $('#pjKpis > div:nth-child(3) b', box); if (b) b.textContent = 'No limit';
-    }
-  };
-  for (const b of box.querySelectorAll('.pj-mode')) b.onclick = () => setMode(b.dataset.mode);
-  if (p.budget != null) mountBudget(); else $('#pjBudget', box).hidden = true;
   // Amounts are hidden (blurred) when Settings says so, until 👁 shows them for this window.
   let shown = !uiOf(G.settings).maskAmounts;
   const paintMask = () => { box.classList.toggle('masked', !shown); revealButton($('.pj-reveal', box), shown); };
@@ -1117,11 +1099,11 @@ Every chat in this project reads, writes and runs programs in this folder.">${es
     const list = $('#pjChats', box);
     if (!page) { list.innerHTML = '<div class="kx-wait">Could not load costs.</div>'; return; }
     if (!more) {
-      $('#pjKpis', box).innerHTML = `<div><small>Spent</small><b class="pj-m">$${(p.spent || 0).toFixed(4)}</b></div><div><small>Chats</small><b class="plain">${page.total}</b></div><div><small>Budget</small><b class="plain pj-m">${p.budget != null ? `$${p.budget.toFixed(2)}` : 'No limit'}</b></div>`;
+      $('#pjKpis', box).innerHTML = `<div><small>Spent</small><b class="pj-m">$${(p.spent || 0).toFixed(4)}</b></div><div><small>Chats</small><b class="plain">${page.total}</b></div>`;
       // Spent counts every reply in the project; the list below only the chats still here. Why they differ, when they do.
       const gone = Number(p.unsavedCost) || 0, now = Number(p.runningCost) || 0;
       $('#pjGap', box)?.remove();
-      $('#pjKpis', box).insertAdjacentHTML('afterend', gone >= 0.00005 || now >= 0.00005 ? `<p class="pj-gap" id="pjGap">ⓘ Spent is more than the chats below add up to.${gone >= 0.00005 ? ` <b class="pj-m">$${gone.toFixed(4)}</b> was spent by replies no chat here holds any more: chats that were deleted or rewound, or replies stopped before they were saved.` : ''}${now >= 0.00005 ? ` <b class="pj-m">$${now.toFixed(4)}</b> is from replies running now.` : ''} All of it still counts toward the budget.</p>` : '');
+      $('#pjKpis', box).insertAdjacentHTML('afterend', gone >= 0.00005 || now >= 0.00005 ? `<p class="pj-gap" id="pjGap">ⓘ Spent is more than the chats below add up to.${gone >= 0.00005 ? ` <b class="pj-m">$${gone.toFixed(4)}</b> was spent by replies no chat here holds any more: chats that were deleted or rewound, or replies stopped before they were saved.` : ''}${now >= 0.00005 ? ` <b class="pj-m">$${now.toFixed(4)}</b> is from replies running now.` : ''}</p>` : '');
       list.innerHTML = page.total ? `<table class="cost-table pj-table"><thead><tr><th>Chat</th><th>Msgs</th><th>Models</th><th>Today</th><th>Total</th></tr></thead><tbody></tbody></table>` : '<div class="pjx-empty sm"><b>No spending yet</b><p>Chats in this project show here once they cost something.</p></div>';
     }
     const body = $('tbody', list);
@@ -1138,11 +1120,6 @@ Every chat in this project reads, writes and runs programs in this folder.">${es
     if (page.total > 5) listFilter($('.pj-cost-filter', box), { key: `costs-${p.id}`, rows: () => list.querySelectorAll('tbody tr'), segLabel: (v) => (v === 'today' ? 'Spent today' : 'Earlier'), segOrder: ['today', 'earlier'], placeholder: 'Filter chats by title…', label: 'When' });
   };
   loadChats(false);
-  // After a save: the Budget figure above the chat list follows.
-  // How the budget stands, as a status beside its heading.
-  const bstate = () => { const e = $('#pjBState', box); if (!e) return; if (p.budget == null) { e.innerHTML = ''; return; } const sh = p.budget > 0 ? (p.spent || 0) / p.budget : 1; e.innerHTML = `<span class="hkx-st ${sh >= 1 ? 'bad' : sh >= 0.85 ? 'warn' : 'ok'}"><i></i>${sh >= 1 ? 'Used up' : sh >= 0.85 ? 'Near the limit' : 'On track'}</span> <small>${Math.round(sh * 100)}%</small>`; };
-  bstate();
-  $('#pjBudget', box).addEventListener('budget-saved', (e) => { const b = $('#pjKpis > div:nth-child(3) b', box); if (b) b.textContent = e.detail.budget != null ? `${e.detail.budget.toFixed(2)}` : 'No limit'; bstate(); });
   // The three feature cards: what each holds now, at a glance; a click opens its own window over this one.
   const states = async () => {
     const [ds, sys, hk, pr, ch] = await Promise.all([
@@ -1164,7 +1141,6 @@ Every chat in this project reads, writes and runs programs in this folder.">${es
   states();
   for (const b of box.querySelectorAll('.pjf-card')) b.onclick = () => openProjectSub(p, b.dataset.sub, { onClose: () => { states(); b.focus(); } });
   if (!dlg.open) dlg.showModal();
-  if (focusOn === 'budget') $('#pjBudgetSec', box).scrollIntoView({ block: 'start' });
   if (focusOn === 'space') $('#pjSpaceSec', box)?.scrollIntoView({ block: 'start' });
   if (PJX[focusOn]) openProjectSub(p, focusOn, { onClose: () => states() });
 }
@@ -1743,65 +1719,78 @@ async function mountDesignWindow(p, el, ctl) {
   // Open on the system in use, so the preview shows what chats get.
   if (find(curId())) select(curId()); else drawDetail();
 }
-// The strip under a project's name: one box with its spend (a meter when it has a budget) and its + ⚙ 🗑 buttons.
-// The open chat's project: one line of what it has spent (of its budget), and a bar along the header's bottom edge.
-// Read-only: clicking it opens the project's budget settings.
-function projectSpendHTML(p, n, cost, share, chats = []) {
+// The open chat's project: one line of what all its chats have spent (budgets are per chat, in each chat's message box).
+function projectSpendHTML(p, n, cost, chats = []) {
   const usd = (v) => `$${v.toFixed(v < 1 ? 3 : 2)}`;
-  const has = p.budget != null, pct = Math.round(share * 100), state = !has ? 'none' : share >= 1 ? 'full' : share >= 0.85 ? 'near' : 'ok';
-  const info = has ? `<b class="cost">${usd(cost)}</b> of $${p.budget.toFixed(p.budget < 10 ? 2 : 0)} · ${state === 'full' ? 'budget used up' : `${pct}%`} · ${n} chat${n === 1 ? '' : 's'}`
-    : `<b class="cost">${usd(cost)}</b> spent · no limit · ${n} chat${n === 1 ? '' : 's'}`;
+  const info = `<b class="cost">${usd(cost)}</b> spent · ${n} chat${n === 1 ? '' : 's'}`;
   const clean = (t) => String(t || 'Untitled').replace(/\s+/g, ' ').slice(0, 48);
   const byCost = [...chats].sort((a, b) => (b.cost || 0) - (a.cost || 0));
-  const tip = [`${p.name}${has ? ` · ${state === 'full' ? 'budget reached' : `$${Math.max(0, p.budget - cost).toFixed(2)} left of $${p.budget.toFixed(2)}`}` : ' · no budget'}`,
+  const tip = [`${p.name} · what its chats spent`,
     ...byCost.slice(0, 8).map((c) => `${clean(c.title)}\t${usd(c.cost || 0)}`),
     ...(byCost.length > 8 ? [`${byCost.length - 8} more chats\t${usd(byCost.slice(8).reduce((t, c) => t + (c.cost || 0), 0))}`] : []),
     `Total\t${usd(cost)}`].join('\n');
-  return `<span class="sb-budget sb-pinfo ${state}" data-tip-delay="900" title="${esc(tip)}">${info}</span>`;
+  return `<span class="sb-budget sb-pinfo none" data-tip-delay="900" title="${esc(tip)}">${info}</span>`;
 }
-// A project's budget covers every chat in it. Edited in a compact panel under the project:
-// − / $ / ＋, quick +$1 +$5 +$10 ×2, never below what is already spent. Spend updates live; while a chat in
-// the project is working the budget is locked (it can change once the chat finishes).
-function editBudget(p, suggest, mount) {
+// ---------- 💵 a chat's budget: the only money limit ----------
+// Everything a chat calls counts toward it (the agent, deciders, helpers, checks, paid media). The server keeps it
+// (data/chat-budgets.json), so saving the chat never overwrites it; c.bud is the page's copy: { budget, spent, runningCost }.
+async function loadChatBudget(c) {
+  if (!c?.id) return null;
+  const r = await fetch(`/api/chats/${encodeURIComponent(c.id)}/budget`).then((x) => (x.ok ? x.json() : null)).catch(() => null);
+  if (r) { c.bud = r; drawBudgetChip(c); budgetNotices(); }
+  return r;
+}
+// What it has spent so far: the server's figure, with a running reply's own live cost swapped in when it is newer.
+function chatSpent(c) {
+  const b = c.bud; if (!b) return 0;
+  const m = c.running && c.agent.messages.findLast((x) => x.role === 'assistant' && x.live);
+  return m?.liveCost != null ? Math.max(b.spent, b.spent - (b.runningCost || 0) + m.liveCost) : b.spent;
+}
+function drawBudgetChip(c) {
+  const el = c.el && $('.cmp-budget', c.el.root);
+  if (!el) return;
+  const b = c.bud, spent = chatSpent(c), has = b && b.budget != null;
+  const share = has ? (b.budget > 0 ? spent / b.budget : 1) : 0, state = !has ? 'none' : share >= 1 ? 'full' : share >= 0.85 ? 'near' : 'ok';
+  el.dataset.state = state;
+  el.innerHTML = `<span aria-hidden="true">💵</span><span class="cb-spent">$${spent.toFixed(spent < 1 ? 3 : 2)}</span><span class="cb-of">${!b ? '' : has ? `of $${b.budget.toFixed(b.budget < 10 ? 2 : 0)}` : 'no limit'}</span>`;
+  el.title = `This chat's budget${!b ? '' : has ? `: $${spent.toFixed(4)} spent of $${b.budget.toFixed(2)} ($${Math.max(0, b.budget - spent).toFixed(2)} left)` : `: no limit ($${spent.toFixed(4)} spent)`}\nEverything this chat calls counts: the agent, deciders, helpers, checks and paid media. Click to change it.`;
+  el.setAttribute('aria-label', el.title.split('\n')[0]);
+}
+// The editor: − / $ / ＋, quick +$1 +$5 +$10 ×2, never below what is already spent. It can be raised while a reply runs
+// (a reply waiting at the budget goes on as soon as it is).
+function editBudget(c, suggest, anchor) {
   return new Promise((resolve) => {
-    document.querySelector('.bud-pop:not(.inline)')?.remove();
-    const host = mount || document.querySelector(`#projectList .sb-project[data-p="${CSS.escape(p.id)}"]`);
-    if (mount) mount.innerHTML = '';
-    let spent = p.spent || 0;
+    document.querySelector('.bud-pop')?.remove();
+    let spent = chatSpent(c);
+    const cur = c.bud?.budget;
     const floor = () => Math.ceil(spent * 100) / 100;
-    // Working = a chat in this project is running here, or the server says one is (another tab, a resumed reply).
-    let serverBusy = !!p.running;
-    const busy = () => serverBusy || [...G.open.values()].some((c) => c.running && c.projectId === p.id);
-    let value = Math.max(floor(), Number(suggest ?? (p.budget != null ? p.budget : Math.max(1, Math.ceil(spent * 2)))));
+    let value = Math.max(floor(), Number(suggest ?? (cur != null ? cur : Math.max(1, Math.ceil(spent * 2)))));
     const pop = document.createElement('div');
-    pop.className = 'bud-pop';
+    pop.className = 'bud-pop floating';
     pop.setAttribute('role', 'dialog');
-    pop.setAttribute('aria-label', `Budget for ${p.name}`);
-    pop.innerHTML = `<div class="bp-row1"><b>💵 Budget</b><span class="bp-for">${esc(p.name)}</span><button type="button" class="bp-x" aria-label="Close">✕</button></div>
+    pop.setAttribute('aria-label', 'Budget for this chat');
+    pop.innerHTML = `<div class="bp-row1"><b>💵 Budget</b><span class="bp-for">this chat</span><button type="button" class="bp-x" aria-label="Close">✕</button></div>
       <div class="bp-meter"><span class="bp-spent"></span><span class="bp-bar"><i></i></span></div>
       <div class="bp-step"><button type="button" class="bp-minus" aria-label="Less">−</button><label class="bp-field"><span>$</span><input type="number" inputmode="decimal" step="0.5" aria-label="Budget in dollars"></label><button type="button" class="bp-plus" aria-label="More">＋</button></div>
       <div class="bp-quick"><button type="button" data-add="1">+$1</button><button type="button" data-add="5">+$5</button><button type="button" data-add="10">+$10</button><button type="button" data-mul="2">×2</button></div>
       <p class="bp-msg" hidden></p>
-      <div class="bp-acts">${p.budget != null ? '<button type="button" class="bp-none" title="Remove the budget (no limit)">No limit</button>' : ''}<span class="kx-spacer"></span><button type="button" class="bp-cancel">Cancel</button><button type="button" class="bp-save">Save</button></div>`;
-    (host || document.body).appendChild(pop);
-    if (!host) pop.classList.add('floating');
-    if (mount) { pop.classList.add('inline'); $('.bp-row1', pop).hidden = true; $('.bp-cancel', pop).textContent = 'Reset'; }
+      <div class="bp-acts">${cur != null ? '<button type="button" class="bp-none" title="Remove the budget (no limit)">No limit</button>' : ''}<span class="kx-spacer"></span><button type="button" class="bp-cancel">Cancel</button><button type="button" class="bp-save">Save</button></div>`;
+    document.body.appendChild(pop);
+    // Above the chip it was opened from (else in the middle of the window).
+    if (anchor?.isConnected) {
+      const r = anchor.getBoundingClientRect(), w = 280;
+      Object.assign(pop.style, { left: `${Math.max(8, Math.min(innerWidth - w - 8, r.right - w))}px`, top: 'auto', bottom: `${Math.max(8, innerHeight - r.top + 6)}px`, transform: 'none' });
+    }
     const input = $('input', pop), msg = $('.bp-msg', pop);
     const money2 = (v) => `$${v.toFixed(2)}`;
-    // Everything on screen comes from (spent, value, busy).
     const draw = () => {
-      const lock = busy();
       value = Math.max(value, floor());
       if (document.activeElement !== input) input.value = value.toFixed(2);
       input.min = floor().toFixed(2);
       const share = value > 0 ? Math.min(1, spent / value) : 1;
       $('.bp-spent', pop).innerHTML = `<b>$${spent.toFixed(4)}</b> spent of ${money2(value)} <small>· min ${money2(floor())}</small>`;
       const bar = $('.bp-bar i', pop); bar.style.width = `${(share * 100).toFixed(1)}%`; bar.className = share >= 1 ? 'full' : share >= 0.85 ? 'near' : '';
-      pop.classList.toggle('locked', lock);
-      for (const el of pop.querySelectorAll('.bp-step button, .bp-quick button, .bp-save, .bp-none, input')) el.disabled = lock;
-      if (lock) { msg.hidden = false; msg.className = 'bp-msg wait'; msg.textContent = `⏳ A chat in “${p.name}” is working. You can change the budget when it finishes.`; }
-      else if (msg.classList.contains('wait')) { msg.hidden = true; msg.className = 'bp-msg'; }
-      $('.bp-minus', pop).disabled = lock || value <= floor() + 1e-9;
+      $('.bp-minus', pop).disabled = value <= floor() + 1e-9;
     };
     const setValue = (v) => { value = Math.max(floor(), Math.round(v * 100) / 100); draw(); };
     $('.bp-minus', pop).onclick = () => setValue(value - 0.5);
@@ -1810,29 +1799,21 @@ function editBudget(p, suggest, mount) {
     $('.bp-quick [data-mul]', pop).onclick = () => setValue(value * 2);
     input.oninput = () => { const v = Number(input.value); if (v >= 0) { value = v; const under = v < floor(); msg.hidden = !under; msg.className = 'bp-msg'; if (under) msg.textContent = `Can't go below ${money2(floor())} (already spent).`; draw(); } };
     input.onblur = () => { setValue(Number(input.value) || floor()); };
-    // Live spend while the panel is open.
+    // Live spend while the panel is open (a reply may be running).
     const poll = setInterval(async () => {
       if (!pop.isConnected) return clearInterval(poll);
-      const list = await fetch('/api/projects').then((r) => r.json()).catch(() => null);
-      const q = list?.find((x) => x.id === p.id);
-      if (q) { spent = q.spent || 0; serverBusy = !!q.running; Object.assign(p, { spent, budget: q.budget, running: q.running, runningCost: q.runningCost }); }
-      draw();
+      if (await loadChatBudget(c)) { spent = chatSpent(c); draw(); }
     }, 2000);
-    const close = (v) => {
-      document.removeEventListener('pointerdown', outside, true);
-      if (mount) { resolve(v); if (v) { clearInterval(poll); editBudget(p, undefined, mount); } else { value = p.budget ?? value; msg.hidden = true; draw(); } return; }
-      clearInterval(poll); pop.remove(); resolve(v);
-    };
-    const outside = (e) => { if (!pop.contains(e.target) && !e.target.closest('.sb-budget')) close(null); };
-    if (!mount) setTimeout(() => document.addEventListener('pointerdown', outside, true), 0);
+    const close = (v) => { document.removeEventListener('pointerdown', outside, true); clearInterval(poll); pop.remove(); resolve(v); };
+    const outside = (e) => { if (!pop.contains(e.target) && !e.target.closest('.cmp-budget')) close(null); };
+    setTimeout(() => document.addEventListener('pointerdown', outside, true), 0);
     const save = async (budget) => {
-      if (busy()) return draw();
       if (budget != null && budget < floor()) { setValue(floor()); return; }
       $('.bp-save', pop).disabled = true;
-      const r = await fetch(`/api/projects/${p.id}/budget`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ budget }) }).then((x) => x.json()).catch((e) => ({ error: e.message }));
+      const r = await postJ(`/api/chats/${encodeURIComponent(c.id)}/budget`, { budget }).catch((e) => ({ error: e.message }));
       if (r.error) { msg.hidden = false; msg.className = 'bp-msg bad'; msg.textContent = `Could not set the budget: ${r.error}.`; if (r.spent != null) spent = r.spent; draw(); $('.bp-save', pop).disabled = false; return; }
-      Object.assign(p, { budget: r.budget, spent: r.spent ?? spent });
-      close(r); refreshSidebar(); mount?.dispatchEvent(new CustomEvent('budget-saved', { detail: r }));
+      c.bud = { ...c.bud, ...r }; drawBudgetChip(c); budgetNotices();
+      close(r);
     };
     $('.bp-save', pop).onclick = () => save(value);
     $('.bp-cancel', pop).onclick = () => close(null);
@@ -1844,7 +1825,7 @@ function editBudget(p, suggest, mount) {
       if (e.target === input && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); setValue(value + (e.key === 'ArrowUp' ? 0.5 : -0.5)); input.value = value.toFixed(2); }
     };
     draw();
-    if (!busy()) { input.focus(); input.select(); }
+    input.focus(); input.select();
   });
 }
 async function deleteProject(p) {
@@ -2443,8 +2424,8 @@ function mediaStrip(msgEl) {
   let box = msgEl.querySelector(':scope > .msg-media');
   if (box) return box;
   box = newStrip();
-  // A user's message: above its time and tools. A reply: above its undo line and foot.
-  const at = msgEl.classList.contains('user') ? msgEl.querySelector(':scope > .u-foot') : msgEl.querySelector(':scope > .f-undo-row') || msgEl.querySelector(':scope > .foot');
+  // A user's message: above its time and tools. A reply: right under its answer (above Review changes, undo and foot).
+  const at = msgEl.classList.contains('user') ? msgEl.querySelector(':scope > .u-foot') : msgEl.querySelector(':scope > .review-slot') || msgEl.querySelector(':scope > .f-undo-row') || msgEl.querySelector(':scope > .foot');
   if (at) at.before(box); else msgEl.append(box);
   return box;
 }
@@ -2458,8 +2439,17 @@ function mentionStrip(msgEl, at) {
   if (!box?.classList.contains('mm-inline')) blk.after(box = newStrip(' mm-inline'));
   return box;
 }
+// A file a reply wrote: in its slot under the step that made it (timelineHTML), while the reply's steps show it.
+const mediaKey = (p) => String(p || '').replace(/\\/g, '/').toLowerCase();
+// The slot names the file as the tool call did (relative, usually); the file's own key is often its full path.
+function slotStrip(msgEl, item) {
+  const keys = [item._key, item._rel].filter(Boolean);
+  const slot = [...msgEl.querySelectorAll('.timeline .tl-media:not(.old)')].find((x) => { const k = mediaKey(x.dataset.file); return keys.some((y) => y === k || y.endsWith(`/${k}`)); });
+  if (!slot) return null;
+  return slot.querySelector(':scope > .msg-media') || slot.appendChild(newStrip(' mm-inline'));
+}
 function placeMedia(msgEl, item, at) {
-  const from = item.closest('.msg-media'), box = at ? mentionStrip(msgEl, at) : mediaStrip(msgEl);
+  const from = item.closest('.msg-media'), box = at ? mentionStrip(msgEl, at) : slotStrip(msgEl, item) || mediaStrip(msgEl);
   if (from === box) return;
   item.classList.remove('mm-extra');
   if (!at && !box._all && box.querySelectorAll('.mm-pic, .mm-card').length >= MM_SHOWN) item.classList.add('mm-extra');
@@ -2481,7 +2471,7 @@ function addMedia(msgEl, c, p, info, at = null) {
   const src = info.src || mediaSrc(c, p, info.v), name = info.name || baseName(p);
   const meta = [MM_LABEL[info.kind], sizeText(info.size)].filter(Boolean).join(' · ');
   const item = document.createElement(info.kind === 'image' ? 'figure' : 'div');
-  item._src = src; item._name = name; item._full = info.full ?? p; item._size = info.size; item._kind = info.kind; item._inline = !!at;
+  item._src = src; item._name = name; item._full = info.full ?? p; item._size = info.size; item._kind = info.kind; item._inline = !!at; item._key = key; item._rel = mediaKey(p);
   all.set(key, item);
   const head = (acts = '') => `<div class="mm-head"><button type="button" class="mm-tog" aria-expanded="false" title="Show it here"><span class="mm-chev" aria-hidden="true">▸</span><span class="mm-ico" aria-hidden="true">${PV_ICON[info.kind] || '📄'}</span><b class="mm-name" title="${esc(item._full)}">${esc(name)}</b><span class="mm-info">${esc(meta)}</span></button><span class="mm-acts">${acts}<button type="button" class="pv-btn mm-open" title="Open it large">Open</button></span></div>`;
   if (info.kind === 'image') {
@@ -2548,13 +2538,19 @@ async function drawMsgMedia(c, m) {
     if ((a.kind === 'image' || a.kind === 'video') && art?.url) addMedia(el, c, `art:${a.id}`, { kind: a.kind, src: art.url, name: a.title || a.id, full: a.title || a.id });
   }
   const paths = m.role === 'user' ? (m.docs || []).filter((d) => d.rel && mediaKind(d.rel)).map((d) => d.rel) : writtenMedia(m.trace);
-  const todo = paths.filter((p) => !el._mmAsked?.has(p));
+  // A file the reply wrote again is asked about again, and shown fresh (in its new place, under the later step).
+  const writes = new Map();
+  if (m.role !== 'user') for (const e of m.trace || []) if (e.t === 'tool' && !e.by && ['write_file', 'append_file', 'edit_file'].includes(e.name)) writes.set(String(e.args?.path || ''), (writes.get(String(e.args?.path || '')) || 0) + 1);
+  const asked = (el._mmAsked ||= new Map());
+  const todo = paths.filter((p) => asked.get(p) !== (writes.get(p) || 1));
   if (!todo.length) return;
+  for (const p of todo) if (asked.has(p)) PATHS.seen.delete(pathKey(c.projectId || '', c.id, p));
   const seen = await askPaths(c.projectId || '', c.id, todo);
   for (const p of todo) {
     const info = seen.get(p)?.media;
     if (!info) continue;
-    (el._mmAsked ||= new Set()).add(p);
+    if (asked.has(p)) { const k = mediaKey(info.key || p), old = el._mm?.get(k); if (old) { const strip = old.closest('.msg-media'); old.remove(); el._mm.delete(k); if (strip && !strip.querySelector('.mm-pic, .mm-card')) strip.remove(); } }
+    asked.set(p, writes.get(p) || 1);
     const doc = m.role === 'user' && (m.docs || []).find((d) => d.rel === p);
     addMedia(el, c, p, doc ? { ...info, name: doc.name, full: doc.name } : info);
     // An attachment shown here needs no chip as well.
@@ -2608,10 +2604,8 @@ function renderLanding(box) {
     <div class="ld-hrow"><h2 class="ld-h">Projects <small>· pinned first, then latest chats</small></h2>${pager('proj', G.ldProjPage, projects.length, 'projects')}</div>
     <div class="ld-projects">${shownProjects.map((p) => {
       const mine = allRecent.filter((c) => (c.projectId || 'scratch') === p.id), n = G.chatStats?.[p.id]?.active ?? mine.length, spent = p.spent || 0;
-      const share = p.budget ? Math.min(1, spent / p.budget) : 0, state = share >= 1 ? 'full' : share >= 0.8 ? 'near' : 'ok';
       return `<div class="ld-project" style="${projStyle(p)}"><div class="ld-p-top">${p.pinned ? '<span class="ld-p-pin" title="Pinned" aria-label="Pinned"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4h6l-1 6 4 4H6l4-4z"/><path d="M12 14v6"/></svg></span>' : ''}<b>${esc(p.name)}</b>${p.github ? `<a class="ld-p-gh" href="${esc(p.github.url)}" rel="noopener noreferrer" data-cl="1" title="Open ${esc(p.github.owner)}/${esc(p.github.repo)} on GitHub" aria-label="Open on GitHub">${GH_ICO}</a>` : ''}<button type="button" class="ld-p-set" data-set="${esc(p.id)}" title="Project settings" aria-label="Settings for ${esc(p.name)}">${ICO.gear}</button><button type="button" class="ld-p-plus" data-new="${esc(p.id)}" title="New chat in ${esc(p.name)}" aria-label="New chat in ${esc(p.name)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button></div>
-        <small class="ld-p-meta">${n} chat${n === 1 ? '' : 's'} · <span class="money">$${spent.toFixed(3)}</span>${p.budget != null ? ` of $${p.budget.toFixed(2)}` : ' · no limit'}</small>
-        ${p.budget != null ? `<span class="ld-bar ${state}"><i style="width:${(share * 100).toFixed(1)}%"></i></span>` : ''}
+        <small class="ld-p-meta">${n} chat${n === 1 ? '' : 's'} · <span class="money">$${spent.toFixed(3)}</span> spent</small>
         <div class="ld-p-chats">${mine.slice(0, 3).map((c) => `<button type="button" class="ld-chat ld-pc" data-c="${esc(c.id)}" title="${esc(c.title)}"><b>${esc(c.title)}</b><small>${ago(c.lastAt || Date.now())}</small><span class="ld-cost">$${(c.cost || 0).toFixed(3)}</span></button>`).join('') || '<span class="ld-p-none">No chats yet</span>'}${n > 3 ? `<span class="ld-p-more">+${n - 3} more in the sidebar</span>` : ''}</div></div>`;
     }).join('')}</div>
     <p class="ld-tips">Tips: type <kbd>@</kbd> to add files or other chats as context, <kbd>/</kbd> for commands, and ⚙ for settings.</p>
@@ -2905,7 +2899,7 @@ function liveSpend(c, m) {
   const f = m.el && $('.foot', m.el);
   if (f && $('.f-cost.live', f)) { $('.f-cost.live', f).textContent = money(m.liveCost, 5); const d = $('.f-dur.live', f); if (d) d.textContent = `${m.liveCalls || 0} call${m.liveCalls === 1 ? '' : 's'}`; }
   else if (m.el) updateMsg(c, m);
-  renderChatHead(c);
+  renderChatHead(c); drawBudgetChip(c); budgetNotices();
   // The sidebar at most every 1.5 s (it is redrawn whole).
   const due = 1500 - (Date.now() - liveSideAt);
   if (due <= 0) { liveSideAt = Date.now(); renderSidebar(); }
@@ -3603,51 +3597,42 @@ function renderComposerBar(c) {
   renderQuoriumSlot(c);
   const permHTML = (cls = '') => `<div class="seg perm cmp-perm-switch ${cls}" title="How much permission this chat's agent asks for">
       <button type="button" data-approval="strict" class="${c.approval === 'strict' ? 'on' : ''}" title="${esc(`🔒 Strict${c.approval === 'strict' ? ' (now)' : ''}\nAsks you before paid media, and the agent's questions come to you.\nSettings → Approvals & safety says what else it asks before.`)}">🔒 Strict</button>
-      <button type="button" data-approval="yolo" class="${c.approval === 'yolo' ? 'on' : ''}" title="${esc(`⚡ YOLO${c.approval === 'yolo' ? ' (now)' : ''}\nUses its tools without asking; the deciders answer its questions.\nThe budget cap and the safety rules still apply.`)}">⚡ YOLO</button>
+      <button type="button" data-approval="yolo" class="${c.approval === 'yolo' ? 'on' : ''}" title="${esc(`⚡ YOLO${c.approval === 'yolo' ? ' (now)' : ''}\nUses its tools without asking; the deciders answer its questions.\nThe chat budget and the safety rules still apply.`)}">⚡ YOLO</button>
     </div>`;
   bar.innerHTML = `
     <div class="cs-sec"><h5>Thinking</h5><div class="cs-row">${levelsHTML(s)}</div></div>
     <div class="cs-sec"><h5>Permission</h5><div class="cs-row cs-perm">${permHTML()}</div></div>
     <div class="cs-sec"><h5>Tools <small>· hover one for what it does</small></h5><div class="cs-row cs-tools">${quickToolsHTML(c)}</div></div>`;
-  // The two caps every reply has (all chats): what all its model calls may cost, and what its paid media may cost.
-  const CAPS = [['replyBudget', 'Cap per reply', '💵', G.settings.replyBudget ?? G.cfg.defaults.replyBudget ?? 1, 0.25, 'Everything one reply calls: the agent, deciders, helpers, checks and media. At 85% the agent is told to wrap up; at the cap Strict asks you, YOLO stops. 0 = no cap.'],
-    ['budget', 'Paid media per reply', '🖼', G.settings.budget, 0.05, 'A paid picture, voice, music or video call that would go over this is stopped, in Strict and in YOLO.']];
-  const cap = ([k, label, , v, step, tip]) => `<label class="cs-num" title="${esc(tip)}"><span>${label}</span><span class="cs-inp"><i>$</i><input type="number" min="0" step="${step}" data-k="${k}" value="${esc(String(v))}" aria-label="${label} in dollars"></span></label>`;
-  glob.innerHTML = `<div class="cs-sec"><h5>Budget <small>· all chats</small></h5><div class="cs-row cs-caps">${CAPS.map(cap).join('')}</div></div>`;
+  glob.innerHTML = '';
   const quick = $('.cmp-quick', c.el.root);
   // The settings live in one popover over the message box. The chips in the footer say what each is set to and open
   // its part; ⋯ opens all of it. A setting at its usual value is quiet, a changed one lights up (the box folds the
-  // quiet ones first as it narrows, and the budget caps before everything: they change least).
-  const CAP_WORD = { replyBudget: 'reply', budget: 'media' };
-  const capLine = ([k, label, , v, step, tip]) => `<label class="cs-num" title="${esc(`${label} (all chats)\n${tip}`)}"><span>${CAP_WORD[k] || label}</span><span class="cs-inp"><i>$</i><input type="number" min="0" step="${step}" data-k="${k}" value="${esc(String(v))}" aria-label="${label} in dollars"></span></label>`;
+  // quiet ones first as it narrows). 💵 is the chat's budget: it opens its own editor.
   // One line per setting: its name on the left ("all chats" under it when it is not this chat's own), the control on the right.
   const sec = (k, title, body, note = '') => `<div class="cq-sec" data-sec="${k}"><h6>${title}${note ? `<small>${note}</small>` : ''}</h6><div class="cq-row">${body}</div></div>`;
-  const PLAN = [['off', 'Off', 'Plans and builds in one go.'], ['big', 'Big', 'For a new app, site, game or a change across several files, it shows its plan and waits for Go ahead, Stop here, or your changes.'], ['always', 'Always', 'Before any file change or command, it shows its plan and waits.']];
-  const pv = G.settings.planFirst || 'off';
   quick.innerHTML = `<div class="cq-head"><b>This chat</b><button type="button" class="cq-adv" aria-haspopup="dialog" title="All of this chat's settings: each tool's model, strength and price, Undo and Save" aria-label="Advanced settings for this chat"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg><span>Advanced</span></button><button type="button" class="cq-x" aria-label="Close" title="Close (Esc)">✕</button></div>`
     + sec('think', 'Thinking', levelsHTML(s, 'reason'))
     + sec('creative', 'Creativity', levelsHTML(s, 'creative'))
     + sec('safety', 'Mode', permHTML('cq-perm'))
-    + sec('plan', 'Plan', `<div class="lvl cq-plan" role="radiogroup" aria-label="Plan first"><span class="lvl-ico" aria-hidden="true">🗺</span>${PLAN.map(([v, w, tip]) => { const on = pv === v; return `<button type="button" class="lvl-b ${on ? 'on' : ''}" role="radio" aria-checked="${on}" data-plan="${v}" title="${esc(`Plan first: ${w}${on ? ' (now)' : ''} · all chats\n${tip}`)}">${w}</button>`; }).join('')}</div>`, 'all chats')
-    + sec('money', 'Budget', `<div class="cs-caps">${CAPS.map(capLine).join('')}</div>`, 'all chats')
     + sec('mic', 'Mic', `<div class="cs-tools">${quickToolsHTML(c, { micOnly: true })}</div>`, 'all chats')
     + sec('mcp', '🧲 MCP servers', mcpRowHTML(c), 'this chat');
   const chipsEl = $('.cmp-chips', rack);
   const rv = s.reasoning || 'off', cv = CREATIVITY_INFO[s.creativity] ? s.creativity : 'default', yolo = c.approval === 'yolo';
-  const capNow = CAPS.map((x) => Number(x[3])), capWas = [G.cfg.defaults.replyBudget ?? 1, G.cfg.defaults.budget ?? 0.5].map(Number);
-  const moneyChanged = capNow.some((v, i) => v !== capWas[i]);
-  const ch = { think: rv !== (G.settings.reasoning || 'off'), creative: cv !== 'default', safety: c.approval !== (G.settings.approval || 'strict'), plan: pv !== 'off' };
+  const ch = { think: rv !== (G.settings.reasoning || 'off'), creative: cv !== 'default', safety: c.approval !== (G.settings.approval || 'strict') };
   const nCh = Object.values(ch).filter(Boolean).length;
   const RWORD = { default: 'Auto', off: 'Off', low: 'Low', medium: 'Med', high: 'High' };
   const chip = (k, ico, label, val, tone, tip) => `<button type="button" class="cq-chip cq-${k}" data-sec="${k}" data-state="${ch[k] || k === 'safety' ? 'changed' : 'default'}" data-tone="${tone}" aria-haspopup="dialog" aria-expanded="false" aria-label="${esc(`${label || tip.split(':')[0]}: ${val}${ch[k] ? '' : ' (usual)'}`)}" title="${esc(tip)}"><span class="cq-ci" aria-hidden="true">${ico}</span>${label ? `<span class="cq-cl">${label}</span>` : ''}<b>${esc(val)}</b></button>`;
-  const mdot = moneyChanged ? '<i class="cq-mdot" aria-hidden="true"></i>' : '';
   chipsEl.innerHTML = chip('think', '🧠', 'Thinking', RWORD[rv] || rv, 'violet', `Thinking: ${REASON_INFO[rv]?.[0] || rv}\nHow much the model reasons before answering. Click to change.`)
     + chip('creative', '🎨', '', CREATIVITY_INFO[cv][0], 'accent', `Creativity: ${CREATIVITY_INFO[cv][0]}\nHow varied the answers are. Click to change.`)
     + chip('safety', yolo ? '⚡' : '🔒', '', yolo ? 'YOLO' : 'Strict', yolo ? 'red' : 'ok', yolo ? 'YOLO: uses its tools without asking; the deciders answer its questions. Click to change.' : 'Strict: asks you before paid media; its questions come to you. Click to change.')
-    + `<button type="button" class="cq-chip cq-money" data-sec="money" aria-haspopup="dialog" aria-expanded="false" aria-label="Budget: cap $${capNow[0]} per reply, paid media $${capNow[1]}" title="Budget per reply (all chats): everything a reply calls, and its paid media. Click to change."><span class="cq-ml">cap</span><b>$${capNow[0]}</b><span class="cq-ml">· media</span><b>$${capNow[1]}</b></button>`
+    + '<button type="button" class="cmp-budget" aria-haspopup="dialog"></button>'
     + ((G.mcp || []).some((x) => x.on) ? `<button type="button" class="cq-chip cq-mcpc" data-sec="mcp" data-state="${mcpOn(c).length ? 'changed' : 'default'}" data-tone="accent" aria-haspopup="dialog" aria-expanded="false" aria-label="MCP servers in this chat: ${mcpOn(c).length}" title="${esc(`MCP servers this chat may use: ${mcpOn(c).join(', ') || 'none'}. Click to tick them.`)}"><span class="cq-ci" aria-hidden="true">🧲</span><b>${mcpOn(c).length}</b></button>` : '')
-    + `<button type="button" class="cq-chip cq-sum" data-sec="" data-state="${nCh ? 'changed' : 'default'}" data-tone="accent" aria-haspopup="dialog" aria-expanded="false" aria-label="This chat's settings, ${nCh} changed${moneyChanged ? ', a budget cap changed' : ''}" title="This chat's settings: thinking, creativity, Strict / YOLO, plan, budget"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>${nCh ? `<b>${nCh}</b>` : ''}${mdot}</button>`
-    + `<button type="button" class="cq-chip cq-more" data-sec="" aria-haspopup="dialog" aria-expanded="false" aria-label="All of this chat's settings${moneyChanged ? ', a budget cap changed' : ''}" title="All of this chat's settings">⋯${mdot}</button>`;
+    + `<button type="button" class="cq-chip cq-sum" data-sec="" data-state="${nCh ? 'changed' : 'default'}" data-tone="accent" aria-haspopup="dialog" aria-expanded="false" aria-label="This chat's settings, ${nCh} changed" title="This chat's settings: thinking, creativity, Strict / YOLO"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>${nCh ? `<b>${nCh}</b>` : ''}</button>`
+    + `<button type="button" class="cq-chip cq-more" data-sec="" aria-haspopup="dialog" aria-expanded="false" aria-label="All of this chat's settings" title="All of this chat's settings">⋯</button>`;
+  const budChip = $('.cmp-budget', chipsEl);
+  budChip.onclick = () => editBudget(c, undefined, budChip);
+  drawBudgetChip(c);
+  if (!c.bud) loadChatBudget(c);
   // 👁 🧭 Chrome, computer use and always-allowed: in a row when there is room, behind one tray button when not.
   const trayOn = [followsAgent(c), c.followSteps, c.tools?.chrome, c.tools?.apps, chatAllowedCount(c) > 0].filter(Boolean).length;
   followSlot.innerHTML = `
@@ -3657,7 +3642,6 @@ function renderComposerBar(c) {
     <button type="button" class="cmp-ico cmp-chrome-b ${c.tools?.chrome ? 'on' : ''} ${extReady() ? '' : 'nosetup'}" aria-pressed="${!!c.tools?.chrome}" aria-label="Chrome extension" title="${esc(`Chrome extension: ${!extReady() ? (G.ext?.outdated ? 'needs a reload' : 'not set up') : c.tools?.chrome ? 'on for this chat' : 'off for this chat'}\n${extReady() ? 'Lets the agent use your own Chrome, signed in as you. Sending, buying and account changes ask you first.' : G.ext?.outdated ? 'The extension is an older version: reload it once in chrome://extensions.' : 'Lets the agent use your own Chrome, signed in as you.'}\n${extReady() ? `This chat only · click to turn ${c.tools?.chrome ? 'off' : 'on'}` : 'Click to set it up'}`)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 3.5a2 2 0 0 1 4 0V6h4v4h-1.5a2 2 0 0 0 0 4H18v4h-4v-1.5a2 2 0 0 0-4 0V18H6v-4h1.5a2 2 0 0 0 0-4H6V6h4z"/></svg></button>
     ${appsButtonHTML(c)}${permButtonHTML(c)}</span>`;
   for (const inp of [...glob.querySelectorAll('.cs-num input'), ...quick.querySelectorAll('.cs-num input')]) inp.onchange = () => { const v = Math.min(Number(inp.dataset.max) || Infinity, Math.max(Number(inp.dataset.min) || 0, Number(inp.value) || 0)); inp.value = String(v); G.settings[inp.dataset.k] = v; savePrefs(); };
-  for (const b of quick.querySelectorAll('[data-plan]')) b.onclick = () => { G.settings.planFirst = b.dataset.plan; savePrefs(); renderComposerBar(c); };
   // The button says what matters at a glance (YOLO in red, reasoning on) and opens the panel.
   const rName = REASON_INFO[s.reasoning]?.[0];
   $('.cmp-set-sum', setBtn).textContent = [c.approval === 'yolo' ? 'YOLO' : '', (s.reasoning || 'off') !== 'off' && rName ? rName : ''].filter(Boolean).join(' · ');
@@ -4403,7 +4387,8 @@ function drawReading(c, m) {
 function drawThinking(m, c) {
   const box = $('.thinking', m.el); if (!box) return;
   const tl = $('.timeline', m.el);
-  if (tl) { box.hidden = true; liveThinking(m, tl, c); return; }
+  // Only a running reply follows its thinking (a finished one draws a thinking line's text when it is opened).
+  if (tl) { box.hidden = true; if (m.live) liveThinking(m, tl, c); return; }
   const parts = Object.entries(m.thinking || {}).filter(([, t]) => t.trim());
   box.hidden = !parts.length;
   if (!parts.length) return;
@@ -4433,6 +4418,13 @@ function planCardHTML(m) {
     <ul class="pc-items">${p.items.map((x) => `<li class="${x.status}"><span class="pc-mark" aria-hidden="true">${mark[x.status] || '○'}</span><span>${esc(x.text)}</span>${x.status === 'doing' ? '<em>in progress</em>' : ''}</li>`).join('')}</ul>
     ${p.spec || p.doneWhen?.length ? `<details class="pc-spec"><summary>Spec${p.doneWhen?.length ? ' and done checks' : ''}</summary>${p.spec ? `<div class="pc-spec-body">${md(p.spec)}</div>` : ''}${p.doneWhen?.length ? `<div class="pc-dw"><b>Done when</b><ul>${p.doneWhen.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}</details>` : ''}
   </div>`;
+}
+// A finished reply's plan: one line (how far it got), open it for the checklist.
+function planFoldHTML(m) {
+  const p = (m.trace || []).findLast((e) => e.t === 'plan');
+  if (!p) return '';
+  const done = p.items.filter((x) => x.status === 'done').length, all = done === p.items.length, key = `plan-${m.runId || ''}`;
+  return `<details class="q-fold plan-fold" data-qkey="${esc(key)}" ${G.qOpen?.has(key) ? 'open' : ''}><summary><span class="q-fold-ic" aria-hidden="true">🗺</span><span class="q-fold-l">${all ? 'Goal done' : 'Plan'}</span><span class="q-fold-a">${done} of ${p.items.length} done</span><span class="tl-chev" aria-hidden="true">›</span></summary>${planCardHTML(m)}</details>`;
 }
 // #4 What the separate reviewer found: scores out of 5, the bar, its bugs. One card per review round.
 const REVIEW_LABEL = { function: 'Function', craft: 'Craft', design: 'Design', originality: 'Originality', accessibility: 'Accessibility', brand: 'Brand fit', picture: 'Picture', motion: 'Motion', sound: 'Sound', rhythm: 'Rhythm', story: 'Story' };
@@ -4482,12 +4474,13 @@ function callsLabel(calls) {
   return parts.slice(0, 3).map((t, i) => (i ? t[0].toLowerCase() + t.slice(1) : t)).join(', ') + (parts.length > 3 ? ` and ${parts.length - 3} more` : '');
 }
 // Walks the trace once: steps (thinking, what the agent said, its tool calls with results), reviewer and helper work,
-// and the cards and notes in between, all in the order they happened. items.split counts the items from before the
-// answer was written: what came after it (the checks, the reviewer, your notes) is drawn under the answer.
+// the files it made, and the cards and notes in between, all in the order they happened. items.split counts the items
+// from before the answer was written: what came after it (the checks, the reviewer, your notes) is drawn under the answer.
+const MEDIA_WRITERS = new Set(['write_file', 'append_file', 'edit_file']);
 function timelineItems(m) {
   const tr = m.trace || [], items = [], helpers = new Map(), seenCards = new Set();
   let blk = null, rv = null;
-  const answer = answerIndex(m), lastPlan = tr.findLastIndex((e) => e.t === 'plan');
+  const answer = answerIndex(m), firstPlan = tr.findIndex((e) => e.t === 'plan'), lastPlan = tr.findLastIndex((e) => e.t === 'plan');
   items.split = Infinity;
   // Each item takes the time of the event that made it (a step: when it started).
   let mark = 0;
@@ -4513,13 +4506,22 @@ function timelineItems(m) {
     if (e.t === 'tool_result') {
       const pool = e.by === 'reviewer' ? rv?.calls : blk?.calls;
       const x = pool && [...pool].reverse().find((y) => y.e.name === e.name && y.res == null);
-      if (x) x.res = String(e.result ?? ''); continue;
+      if (x) x.res = String(e.result ?? '');
+      // While it works, a picture, video, PDF or Markdown file it wrote shows right here, under the step that made it
+      // (once the reply has ended, its files show under the answer).
+      if (x && m.live && !e.by && MEDIA_WRITERS.has(e.name) && mediaKind(String(x.e.args?.path || '')) && !/^Error/.test(x.res)) items.push({ kind: 'media', path: String(x.e.args.path) });
+      continue;
     }
     if (e.t === 'review_start') { rv = null; items.push({ kind: 'card', pin: true, html: () => reviewRunningHTML(m, e) }); continue; }
-    if (e.t === 'review') { items.push({ kind: 'card', pin: true, html: () => reviewCardHTML(m, e) }); continue; }
-    // The plan shows where it last changed, with its latest ticks, so an update reads at the time it happened.
-    if (e.t === 'plan') { if (i === lastPlan) items.push({ kind: 'card', pin: true, html: () => planCardHTML(m) }); continue; }
-    if (e.t === 'fresh_eyes') { items.push({ kind: 'note', text: `👀 Fresh eyes (${short(e.model)}) ${e.ok ? `on a problem that came back: ${clip((e.report || '').split('\n')[0].replace(/^Cause:\s*/i, ''), 220)}` : 'looked but found nothing'}` }); continue; }
+    if (e.t === 'review') { items.push({ kind: 'card', pin: true, model: true, html: () => reviewCardHTML(m, e) }); continue; }
+    // A /goal's plan: one line where it was made. While the reply works, its live checklist sits at the end of the
+    // reply (drawTimeline); once it has ended, the last version folds into one line where it last changed.
+    if (e.t === 'plan') {
+      if (i === firstPlan && (m.live || i !== lastPlan)) items.push({ kind: 'note', pin: true, text: `🗺 Plan made · ${e.items.length} step${e.items.length === 1 ? '' : 's'}` });
+      if (i === lastPlan && !m.live) items.push({ kind: 'card', pin: true, html: () => planFoldHTML(m) });
+      continue;
+    }
+    if (e.t === 'fresh_eyes') { items.push({ kind: 'note', pin: true, model: true, text: `👀 Fresh eyes (${short(e.model)}) ${e.ok ? `on a problem that came back: ${clip((e.report || '').split('\n')[0].replace(/^Cause:\s*/i, ''), 220)}` : 'looked but found nothing'}` }); continue; }
     if (e.t === 'helper_done') { const h = helpers.get(e.id); if (h) { h.label = `Helper ${e.id} ${e.ok ? 'reported back' : 'gave no report'} · ${e.steps} step${e.steps === 1 ? '' : 's'} · ${money(e.cost, 4)}`; h.done = true; } continue; }
     if (e.t === 'approval') {
       // One card per approval: a YOLO vote that can't settle announces the same card again when it turns to you.
@@ -4533,11 +4535,12 @@ function timelineItems(m) {
       items.push({ kind: 'card', html: () => (m.approvals?.[e.id] ? approvalHTML(m.approvals[e.id], !!m.live) : '') }); continue;
     }
     // Questions stay in view where they were asked (answered ones are one line).
-    if (e.t === 'question') { items.push({ kind: 'card', pin: true, html: () => (m.questions?.[e.id] ? questionHTML(m.questions[e.id], !!m.live) : '') }); continue; }
+    if (e.t === 'question') { items.push({ kind: 'card', pin: true, q: true, html: () => (m.questions?.[e.id] ? questionHTML(m.questions[e.id], !!m.live) : '') }); continue; }
     if (e.t === 'budget_ask') { items.push({ kind: 'card', html: () => (m.budgetAsk ? budgetHTML(m.budgetAsk, !!m.live) : '') }); continue; }
     if (e.t === 'steer') { items.push({ kind: 'steer', e, read: tr.slice(i + 1).some((x) => x.t === 'steer_delivered') }); continue; }
     if (e.t === 'mode') { items.push({ kind: 'note', text: e.approval === 'yolo' ? '⚡ Switched to YOLO' : '🔒 Switched to Strict' }); continue; }
-    if (e.t === 'note' && e.level === 'warn') { items.push({ kind: 'note', text: `⚠ ${e.msg}` }); continue; }
+    // A warning the reply's own text ends with (stopped at the budget, out of steps) is said once, there.
+    if (e.t === 'note' && e.level === 'warn') { if (!m.live && String(m.content || '').includes(e.msg)) continue; items.push({ kind: 'note', text: `⚠ ${e.msg}` }); continue; }
   }
   stampItems(tr[tr.length - 1]);
   return items;
@@ -4592,20 +4595,28 @@ function timelineHTML(m) {
     if (it.kind === 'step') {
       const think = String(m.thinking?.[it.step] || '').trim();
       if (think) row(det(`t${it.step}`, 'tl-row tl-think', `<span class="tl-ic">💭</span><span class="tl-label">${!it.done && m.live ? 'Thinking' : 'Thought'}</span><small class="tl-words">${think.split(/\s+/).length.toLocaleString()} words</small>`, `<div class="tl-think-body" data-step="${it.step}">${open.has(`t${it.step}`) ? md(think) : ''}</div>`), `t${it.step}`, [], 1, !it.done && m.live);
-      if (it.aside) { at = it.doneAt || at; other(`<div class="tl-text">${md(it.aside)}</div>`); }
+      // What the agent said is a message of its own, never folded away.
+      if (it.aside) { at = it.doneAt || at; pieces.push({ html: `<div class="tl-text tl-say">${md(it.aside)}</div>`, row: false, pin: true, say: true, at }); }
       if (it.calls.length) { at = atOf(m, it.calls[0].e) || at; const busy = m.live && it.calls.some((x) => x.res == null); row(groupRow(`x${it.step}`, mcpOfTool(it.calls[0].e.name) ? '🧲' : TOOL_NAME[it.calls[0].e.name]?.split(' ')[0] || '🔧', callsLabel(it.calls), it.calls, busy), `x${it.step}`, it.calls, 0, busy); }
-      if (!it.done && m.live && !think && !it.calls.length) other('<div class="tl-row tl-wait"><span class="tl-spin"></span><span class="tl-label">Working…</span></div>');
+      if (!it.done && m.live && !think && !it.calls.length && !String(m.content || '').trim()) other('<div class="tl-row tl-wait"><span class="tl-spin"></span><span class="tl-label">Working…</span></div>');
       continue;
     }
     if (it.kind === 'group') { const busy = m.live && !it.done && it.calls.some((x) => x.res == null); row(groupRow(it.key, it.icon, it.label, it.calls, busy), it.key, it.calls, 0, busy); continue; }
-    if (it.kind === 'card') { const h = it.html(); if (h) pieces.push({ html: h, row: false, card: true, pin: !!it.pin, at }); continue; }
+    if (it.kind === 'card') { const h = it.html(); if (h) pieces.push({ html: h, row: false, card: true, pin: !!it.pin, model: !!it.model, q: !!it.q, at }); continue; }
+    if (it.kind === 'media') {
+      // A file written again later shows there; here it says so.
+      const key = mediaKey(it.path), later = items.slice(k + 1).some((x) => x.kind === 'media' && mediaKey(x.path) === key);
+      pieces.push({ row: false, pin: true, at, html: later ? `<div class="tl-media old" data-file="${esc(it.path)}"><span class="tl-ic">${PV_ICON[mediaKind(it.path)] || '📄'}</span><b>${esc(baseName(it.path))}</b><small>written again below ↓</small></div>` : `<div class="tl-media" data-file="${esc(it.path)}"></div>` });
+      continue;
+    }
     if (it.kind === 'steer') {
       const att = (m.steerAtt || []).find((x) => x.text === it.e.text && !usedAtt.has(x)) || null;
       if (att) usedAtt.add(att);
-      pieces.push({ row: false, card: true, pin: true, at, html: `<div class="steer-card ${it.read ? 'read' : ''}"><span class="sc-who">You, while it worked</span><p>${esc(it.e.text)}</p>${att?.imgs?.length ? `<div class="u-imgs" data-views="${esc(JSON.stringify(att.imgViews || []))}">${att.imgs.map((u, k) => `<img src="${u}" alt="attached picture" data-k="${k}">`).join('')}</div>` : it.e.images ? `<span class="sc-att">📎 ${it.e.images} picture${it.e.images > 1 ? 's' : ''}</span>` : ''}${att?.docs?.length ? `<div class="u-docs">${att.docs.map((d) => `<button type="button" class="u-doc" data-doc="${esc(JSON.stringify(d))}" title="${esc(d.name)} · ${esc(docSize(d.size))} · click to preview">${DOC_ICON[d.kind] || '📄'} ${esc(d.name)}</button>`).join('')}</div>` : it.e.docs ? `<span class="sc-att">📎 ${it.e.docs} file${it.e.docs > 1 ? 's' : ''}</span>` : ''}<span class="sc-state">${it.read ? '✓ read by the agent' : '… it reads this at its next step'}</span></div>` });
+      // What you wrote while it worked reads like any message of yours, where you wrote it.
+      pieces.push({ row: false, card: true, pin: true, at, html: `<div class="steer-card tl-you ${it.read ? 'read' : ''}"><span class="sc-who">You</span><p>${esc(it.e.text)}</p>${att?.imgs?.length ? `<div class="u-imgs" data-views="${esc(JSON.stringify(att.imgViews || []))}">${att.imgs.map((u, k) => `<img src="${u}" alt="attached picture" data-k="${k}">`).join('')}</div>` : it.e.images ? `<span class="sc-att">📎 ${it.e.images} picture${it.e.images > 1 ? 's' : ''}</span>` : ''}${att?.docs?.length ? `<div class="u-docs">${att.docs.map((d) => `<button type="button" class="u-doc" data-doc="${esc(JSON.stringify(d))}" title="${esc(d.name)} · ${esc(docSize(d.size))} · click to preview">${DOC_ICON[d.kind] || '📄'} ${esc(d.name)}</button>`).join('')}</div>` : it.e.docs ? `<span class="sc-att">📎 ${it.e.docs} file${it.e.docs > 1 ? 's' : ''}</span>` : ''}<span class="sc-state">${it.read ? '✓ read by the agent' : '… it reads this at its next step'}</span></div>` });
       continue;
     }
-    if (it.kind === 'note') other(`<div class="tl-note">${esc(clip(it.text, 220))}</div>`);
+    if (it.kind === 'note') { const html = `<div class="tl-note">${esc(clip(it.text, 220))}</div>`; if (it.pin) pieces.push({ html, row: false, pin: true, model: !!it.model, at }); else other(html); }
   }
   // Four or more lines in a row with nothing said between them fold into one line ("Wrote 7 files, ran 7 commands ·
   // thought 6 times"); open it to see each.
@@ -4638,28 +4649,77 @@ function timelineHTML(m) {
     const counts = [done.length ? `${done.length} tool call${done.length === 1 ? '' : 's'}` : '', thinks ? `${thinks} thought${thinks === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
     return when({ at: seg[0].at, html: det(`${pre}${n ? `all${n}` : 'all'}`, 'tl-row tl-bundle tl-fold', `<span class="tl-ic">🗂</span><span class="tl-label" title="${esc(what)}">${live && end ? 'Working' : 'Worked'} through ${steps} step${steps === 1 ? '' : 's'}</span><small class="tl-words">${esc(counts)}</small>${errs ? `<span class="tl-err">${errs} error${errs > 1 ? 's' : ''}</span>` : ''}`, bundle(seg)) });
   };
-  // tail: the part that ends with what is happening now.
-  const fold = (list, pre, tail) => {
-    let out = '', seg = [], n = 0;
+  // tail: the part that ends with what is happening now. Parts: one per line on the page, in order.
+  const foldParts = (list, pre, tail) => {
+    const out = []; let seg = [], n = 0;
     const stays = (x, i) => x.pin || (live && (x.card || (tail && i === list.length - 1)));
-    list.forEach((x, i) => { if (stays(x, i)) { out += foldLine(seg, n++, false, pre); seg = []; out += when(x); } else seg.push(x); });
-    return out + foldLine(seg, n, tail, pre);
+    list.forEach((x, i) => { if (stays(x, i)) { out.push(foldLine(seg, n++, false, pre)); seg = []; out.push(when(x)); } else seg.push(x); });
+    out.push(foldLine(seg, n, tail, pre));
+    return out.filter(Boolean);
   };
-  // What happened before the answer was written goes above it; what came after (checks, the reviewer, your notes) under it.
+  const fold = (list, pre, tail) => foldParts(list, pre, tail).join('');
+  // A finished reply: the answer is what you read. All its work folds into one line above it (open it for every step,
+  // question and message on the way); what another model said (the reviewer, fresh eyes) stays out, as its own message.
+  if (!live) {
+    const out = []; let seg = [], n = 0;
+    const flush = () => {
+      if (!seg.length) return;
+      const steps = seg.reduce((k, x) => k + (x.row ? 1 : 0), 0), calls = seg.reduce((k, x) => k + (x.calls?.length || 0), 0);
+      const qs = seg.filter((x) => x.q).length, says = seg.filter((x) => x.say).length;
+      const errs = seg.flatMap((x) => x.calls || []).filter((x) => x.res != null && /^Error/.test(x.res)).length;
+      const what = [steps ? `${steps} step${steps === 1 ? '' : 's'}` : '', calls ? `${calls} tool call${calls === 1 ? '' : 's'}` : '', qs ? `${qs} question${qs === 1 ? '' : 's'}` : '', says ? `${says} message${says === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
+      // Its steps are drawn when it is opened (wireTimeline): a long reply's work is thousands of elements.
+      const key = `done${n++}`, inner = fold(seg, `d${n}`, false);
+      (LAZY.get(m) || LAZY.set(m, {}).get(m))[key] = inner;
+      out.push(det(key, 'tl-row tl-bundle tl-done', `<span class="tl-ic">🗂</span><span class="tl-label">${n === 1 ? 'How it got here' : 'Then'}</span><small class="tl-words">${esc(what || 'details')}</small>${errs ? `<span class="tl-err">${errs} error${errs > 1 ? 's' : ''}</span>` : ''}`, `<div class="tl-done-body" data-lazy="${key}">${open.has(key) ? inner : ''}</div>`));
+      seg = [];
+    };
+    for (const x of pieces) { if (x.model) { flush(); out.push(when(x)); } else seg.push(x); }
+    flush();
+    const ans = (m.trace || [])[answerIndex(m)];
+    return { before: out, after: '', answerAt: ans ? atOf(m, ans) : 0 };
+  }
+  // While it works: what happened before the answer was written goes above it; what came after (checks, the reviewer,
+  // your notes) under it.
   const before = pieces.slice(0, cut), after = pieces.slice(cut), ans = (m.trace || [])[answerIndex(m)];
-  return { before: fold(before, '', !after.length), after: fold(after, 'z', true), answerAt: before.length && ans ? atOf(m, ans) : 0 };
+  return { before: foldParts(before, '', !after.length), after: foldParts(after, 'z', true), answerAt: before.length && ans ? atOf(m, ans) : 0 };
+}
+// Draws a list of parts into box, keeping the parts at the start that are the same as last time (a running reply only
+// grows at its end, so a redraw touches the last few lines, not the whole reply). Returns the parts drawn new.
+function setParts(box, parts) {
+  const old = box._parts || [], kids = [...box.children];
+  let k = 0;
+  if (kids.length === old.length) while (k < old.length && k < parts.length && old[k] === parts[k]) k++;
+  for (let i = kids.length - 1; i >= k; i--) kids[i].remove();
+  const fresh = [];
+  for (const html of parts.slice(k)) {
+    const part = document.createElement('div');
+    part.className = 'tl-part';
+    part.innerHTML = html;
+    box.append(part); fresh.push(part);
+  }
+  box._parts = parts;
+  return fresh;
 }
 // Open lines stay open across redraws; a thinking line draws its text only when opened.
-function wireTimeline(m, el) {
+// A finished reply's folded work, kept off the page (and out of the saved chat) until it is opened: reply → { key: html }.
+const LAZY = new WeakMap();
+function wireTimeline(m, el, roots = [...el.querySelectorAll('.timeline')]) {
   const open = (m.tlOpen instanceof Set ? m.tlOpen : (m.tlOpen = new Set())); // chats saved before carry it as {}
-  for (const d of el.querySelectorAll('.timeline details[data-key]')) {
+  for (const d of roots.flatMap((r) => [...r.querySelectorAll('details[data-key]')])) {
+    if (d._wired) continue;
+    d._wired = true;
     d.addEventListener('toggle', () => {
       if (d.open) open.add(d.dataset.key); else open.delete(d.dataset.key);
+      // A finished reply's work, drawn the first time it is opened.
+      const lazy = d.open && $(':scope > .tl-done-body[data-lazy]', d);
+      const html = lazy && !lazy.childElementCount && LAZY.get(m)?.[lazy.dataset.lazy];
+      if (html) { lazy.innerHTML = html; wireTimeline(m, el, [lazy]); }
       const body = d.open && $(':scope > .tl-think-body', d);
       if (body && !body.innerHTML) { body.innerHTML = md(String(m.thinking?.[body.dataset.step] || '')); enhance(body); }
     });
   }
-  for (const tl of el.querySelectorAll('.timeline')) enhance(tl);
+  for (const r of roots) enhance(r);
 }
 // While the model thinks: update the word counts, and the text of an open thinking line. A step whose thinking
 // has no line yet (it started after the last redraw) gets one.
@@ -4667,7 +4727,7 @@ function liveThinking(m, tl, c) {
   for (const [step, text] of Object.entries(m.thinking || {})) {
     if (!String(text).trim()) continue;
     const row = m.el.querySelector(`.timeline .tl-think[data-key="t${step}"]`);
-    if (!row) { if (c) drawTimeline(c, m); else { putTimeline(m); wireTimeline(m, m.el); } return; }
+    if (!row) { if (c) drawTimeline(c, m); else wireTimeline(m, m.el, putTimeline(m)); return; }
     const w = $('.tl-words', row); if (w) w.textContent = `${String(text).trim().split(/\s+/).length.toLocaleString()} words`;
     if (row.open) {
       const body = $('.tl-think-body', row), TAIL = 12000, t = String(text);
@@ -4756,21 +4816,26 @@ function drawTimeline(c, m) {
   const el = m.el, was = cardInputs(el);
   // Everything the agent did reads in order: its thinking (folded), what it said, one line per step's tool calls
   // (click for each call and its result), and any card that asks you something, right where it happened.
-  putTimeline(m);
-  wireTimeline(m, el);
-  $('.approvals', el).innerHTML = outOfStepsHTML(m) + wrapUpHTML(m);
+  const fresh = putTimeline(m);
+  wireTimeline(m, el, fresh);
+  // While a /goal works, its checklist sits at the end of the reply and ticks off in place.
+  $('.approvals', el).innerHTML = (m.live ? planCardHTML(m) : '') + outOfStepsHTML(m) + wrapUpHTML(m);
+  // The files it wrote go back into their slots (the timeline was drawn again).
+  for (const item of el._mm?.values() || []) if (!item._inline) { const box = slotStrip(el, item); if (box ? !box.contains(item) : !item.isConnected) placeMedia(el, item, null); }
   const oos = $('.oos-card[data-run]', el); if (oos) wireOutOfSteps(oos, c, m);
-  for (const card of el.querySelectorAll('.approval[data-id]:not(.question):not(.budget-card)')) wireApproval(card, m);
-  for (const card of el.querySelectorAll('.question[data-id]')) wireQuestion(card, m);
-  const bcard = $('.budget-card[data-id]', el); if (bcard) wireBudget(bcard, c, m);
+  // Cards drawn new are wired (a kept one keeps its wiring and what you typed in it).
+  const drawn = [...fresh, $('.approvals', el)], all = (q) => drawn.flatMap((r) => [...r.querySelectorAll(q)]);
+  for (const card of all('.approval[data-id]:not(.question):not(.budget-card)')) wireApproval(card, m);
+  for (const card of all('.question[data-id]')) wireQuestion(card, m);
+  const bcard = all('.budget-card[data-id]')[0]; if (bcard) wireBudget(bcard, c, m);
   restoreInputs(el, was);
 }
 // The work above the answer, the answer's time, and the work that came after it, under the answer.
 function putTimeline(m) {
   const el = m.el, t = timelineHTML(m);
-  $('.timeline', el).innerHTML = t.before;
-  $('.tl-after', el).innerHTML = t.after;
+  const fresh = [...setParts($('.timeline', el), t.before), ...setParts($('.tl-after', el), t.after)];
   $('.ans-when', el).innerHTML = t.answerAt ? `<span class="tl-t">${timeTag(t.answerAt)}</span><span>Answer</span>` : '';
+  return fresh;
 }
 // ⚡ The clock on a card stopped (you started on it): only its countdown line changes, so the rest of the card stays.
 function drawHeld(m, id, card) {
@@ -4782,6 +4847,19 @@ function drawHeld(m, id, card) {
 // A reply's element that is not on the page: none (its chat is off the screen), or left behind in a page drawn again.
 // A new one, still being put together (renderMsg), has no parent yet and is drawn.
 function offPage(el) { return !el || (!el.isConnected && !!el.parentNode); }
+// The reply's text under its steps. A reply that ended without words of its own (stopped at the budget, out of steps)
+// carries what it said along the way, which the steps above already show where it was said: that part isn't repeated.
+function bodyText(m) {
+  let t = String(m.content || '');
+  for (const e of m.trace || []) {
+    const a = e.t === 'llm_done' && String(e.aside || '').trim();
+    if (!a) continue;
+    const i = t.indexOf(a);
+    if (i < 0 || t.slice(0, i).trim()) break;
+    t = t.slice(i + a.length).replace(/^\s+/, '');
+  }
+  return t;
+}
 function updateMsg(c, m, { bodyOnly = false } = {}) {
   const el = m.el;
   if (offPage(el)) return; // a reply running off the screen: only its data changes, drawn when the chat is shown
@@ -4789,7 +4867,7 @@ function updateMsg(c, m, { bodyOnly = false } = {}) {
   if (m.live && !m.error && !String(m.content || '').includes('\r')) streamBody(body, String(m.content || ''));
   else {
     streamed.delete(body);
-    body.innerHTML = m.error && !stoppedByYou(m) ? `${md(m.content)}<p class="err">⚠ ${esc(m.error)}</p>${retryable(c, m) ? `<button type="button" class="err-retry" title="Send your message again on the chat's model now (change it in the model button first if you like). This failed reply leaves the chat; files stay as they are.">↻ Retry</button>` : ''}` : md(m.content) || (m.live || stoppedByYou(m) ? '' : '<p class="err">(no reply)</p>');
+    body.innerHTML = m.error && !stoppedByYou(m) ? `${md(bodyText(m))}<p class="err">⚠ ${esc(m.error)}</p>${retryable(c, m) ? `<button type="button" class="err-retry" title="Send your message again on the chat's model now (change it in the model button first if you like). This failed reply leaves the chat; files stay as they are.">↻ Retry</button>` : ''}` : md(bodyText(m)) || (m.live || stoppedByYou(m) ? '' : '<p class="err">(no reply)</p>');
     enhance(body);
     const rb = $('.err-retry', body); if (rb) rb.onclick = () => retryReply(c, m);
   }
@@ -4837,8 +4915,8 @@ function updateMsg(c, m, { bodyOnly = false } = {}) {
     : `<span class="check-bad" title="${esc(s.verify.problems.join('\n'))}">⚠ ${s.verify.problems.length} problem${s.verify.problems.length === 1 ? '' : 's'} left</span>`) : '';
   const stopTag = s?.stop === 'steps' && s.scheduled ? `<span class="stop-sched" title="A scheduled run that ended before it finished counts as failed in its schedule (three in a row pause it). The next run starts fresh, so there is nothing to keep going from.">⏰ run failed: ${s.loopEnd ? 'went in circles' : 'out of steps'}</span>`
     : s?.stop === 'steps' ? `<span title="${s.loopEnd ? 'The agent made the same failing call again after a warning, so the reply was wrapped up' : 'The reply used all its steps (⚙ Settings → Agent loop)'}">${s.loopEnd ? 'stopped: going in circles' : 'step limit reached'}</span>`
-    : s?.stop === 'budget' ? (s.budgetStop === 'hard' ? '<span title="The reply went past the project budget and its allowance for finishing work (⚙ Settings → Budget), so it was stopped">stopped past the budget</span>'
-      : '<span title="The project budget was used up, so the reply did not start; raise it with the $ next to the project in the sidebar">budget reached</span>') : '';
+    : s?.stop === 'budget' ? (s.budgetStop === 'hard' ? '<span title="The reply went past the chat\'s budget and its allowance for finishing work (⚙ Settings → Budget), so it was stopped">stopped past the budget</span>'
+      : '<span title="The chat\'s budget was used up, so the reply did not start; raise it with 💵 in the message box">budget reached</span>') : '';
   let undoRow = $('.f-undo-row', el);
   if (!undoRow) { undoRow = document.createElement('div'); undoRow.className = 'f-undo-row'; }
   $('.foot', el).before(undoRow);
@@ -5400,7 +5478,7 @@ function traceRows(m) {
     else if (e.t === 'helper_done') row(e.at, `🤝 Helper ${e.id} ${e.ok ? 'reported back' : 'gave no report'} · ${e.steps} step${e.steps === 1 ? '' : 's'} · ${secs(e.ms)} · ${money(e.cost, 4)}${e.chars ? ` · ${e.chars} characters returned` : ''}`, e.ok ? 'ok' : 'warn');
     else if (e.t === 'steer') row(e.at, `✉ <b>You</b> while it worked: ${esc(clip(e.text, 200))}`, 'ask');
     else if (e.t === 'steer_delivered') row(e.at, `✓ The agent read your note${e.count > 1 ? 's' : ''} before step ${e.step + 1}`, 'note');
-    else if (e.t === 'mode') row(e.at, `${e.approval === 'yolo' ? '⚡ Switched to YOLO: it stops asking (budget caps still apply)' : '🔒 Switched to Strict: it asks before each tool'}`, 'note');
+    else if (e.t === 'mode') row(e.at, `${e.approval === 'yolo' ? '⚡ Switched to YOLO: it stops asking (the chat\'s budget still applies)' : '🔒 Switched to Strict: it asks before each tool'}`, 'note');
     else if (e.t === 'plan') row(e.at, `🗺 <b>Plan</b> · ${e.items.filter((x) => x.status === 'done').length} of ${e.items.length} done<div class="sub">${esc(e.items.map((x) => `${x.status === 'done' ? '✓' : x.status === 'doing' ? '◐' : '○'} ${x.text}`).join('  '))}</div>`, 'note');
     else if (e.t === 'review_start') row(e.at, `🧪 <b>Reviewer</b> ${esc(short(e.model))} starts testing ${esc(e.targets.join(', '))} <span class="sub">(round ${e.round}, fresh context)</span>`, 'browser');
     else if (e.t === 'review') row(e.at, `🧪 Reviewer: <b>${e.pass ? 'passed' : 'not passed'}</b> · ${Object.entries(e.scores).map(([k, v]) => `${k} ${v}/5`).join(', ')} (bar ${e.bar}) · ${money(e.cost, 4)}${e.bugs.length ? `<div class="sub">${esc(e.bugs.join(' · '))}</div>` : ''}`, e.pass ? 'ok' : 'warn');
@@ -5451,7 +5529,7 @@ function traceRows(m) {
     else if (e.t === 'answer') row(e.at, e.by === 'deciders' ? `⚖️ The deciders answered for you: <b>${esc(e.label || e.text || '')}</b>${e.confidence != null ? ` · ${Math.round(e.confidence * 100)}% sure` : ''}` : `💬 You answered: ${esc(e.label || e.text || '')}`, 'ok');
     else if (e.t === 'checks' && e.kind === 'gap') row(e.at, `🧭 <b>Gap check</b> · ${e.build ? 'a build' : 'not a build, so nothing to ask'}${e.build ? `<div class="sub">${e.rows.filter((r) => r.label).map((r) => `<span class="chk ${r.missing ? 'miss' : 'ok'}">${r.missing ? '✗ not said' : '✓'} ${esc(r.label)}</span>`).join(' ')}</div>` : ''}<div class="sub">Fixed harness questions about your message, answered by the deciders${e.ms ? ` in ${secs(e.ms)}` : ''}.</div>`, e.rows.some((r) => r.missing) ? 'warn' : 'ok');
     else if (e.t === 'checks' && e.kind === 'page') { const bad = e.rows.filter((r) => r.fail); row(e.at, `🔎 <b>Harness checks</b> on ${esc(e.target)} (${e.when === 'verify' ? 'before the final reply' : 'after the preview'}) · ${bad.length ? `<span class="warn">${bad.length} problem${bad.length > 1 ? 's' : ''}</span>` : `${e.rows.length} passed`}<div class="sub">${e.rows.map((r) => `<span class="chk ${r.fail ? 'miss' : 'ok'}" title="${r.p == null ? 'no answer' : `${Math.round(r.p * 100)}% fine`}">${r.fail ? '✗' : '✓'} ${esc(r.fail ? r.label : r.id)}</span>`).join(' ')}</div>${e.clicked ? `<div class="sub">clicked “${esc(e.clicked)}” to see whether it responds</div>` : ''}${e.image ? `<img class="shot" src="${e.image}" alt="what the checks saw" loading="lazy">` : ''}${e.after ? `<img class="shot" src="${e.after}" alt="after the click" loading="lazy">` : ''}`, bad.length ? 'warn' : 'ok'); }
-    else if (e.t === 'budget_ask') row(e.at, `💵 The project budget is used up (${money(e.spent, 3)} of ${money(e.budget, 2)}); asked you to raise it or wrap up`, 'ask');
+    else if (e.t === 'budget_ask') row(e.at, `💵 The chat's budget is used up (${money(e.spent, 3)} of ${money(e.budget, 2)}); asked you to raise it or wrap up`, 'ask');
     else if (e.t === 'budget_done') row(e.at, e.raised ? `✅ Budget raised to ${e.budget == null ? 'no limit' : money(e.budget, 2)}; carrying on` : '⛔ Wrapped up at the budget', e.raised ? 'ok' : 'warn');
     else if (e.t === 'resumed') row(e.at || 0, '<span class="warn">▶ Resumed from the last finished step</span>', 'warn');
     else if (e.t === 'interrupted') row(e.at || 0,`<span class="warn">⚠ The harness restarted while this reply was running${e.resumable ? '. It can be resumed.' : '.'}</span>`, 'warn');
@@ -5750,7 +5828,7 @@ function wireApproval(card, m) {
   typingIsReply(card, (t) => answer(false, false, t));
 }
 
-// ---------- the project budget card (🔒 Strict, when a reply reaches the budget) ----------
+// ---------- the chat budget card (🔒 Strict, when a reply reaches the chat's budget) ----------
 // ---------- out of steps: keep going, keep going with another model, or a fresh chat from a brief ----------
 function outOfStepsHTML(m) {
   const e = (m.trace || []).find((x) => x.t === 'out_of_steps');
@@ -5842,14 +5920,10 @@ function wireOutOfSteps(card, c, m) {
 function budgetHTML(b, live = true) {
   const c = b.card, o = b.outcome, open = !o && live;
   const next = Math.ceil(Math.max(c.budget * 2, c.spent * 1.5) * 100) / 100;
-  // kind: 'reply' (this reply's cap), 'day' (today's cap across projects), or the project budget.
-  const title = c.kind === 'reply' ? 'This reply’s cap reached' : c.kind === 'day' ? 'Today’s cap reached' : 'Project budget reached';
-  const what = c.kind === 'reply' ? 'Every model this reply used counts (the agent, deciders, helpers, checks, media). Raise its cap to let it carry on, or wrap up here. Your default cap is in ⚙ Settings → Budget.'
-    : c.kind === 'day' ? 'Today’s spending across all your projects reached your daily cap. Raise it for today to let this reply carry on, or wrap up here.'
-    : 'All chats in this project together have used up its budget. Raise it to let this reply carry on, or wrap up here.';
-  return `<div class="approval budget-card ${open ? '' : 'done'}" ${open ? `data-id="${esc(c.id)}" data-kind="${esc(c.kind || 'project')}"` : ''}>
-    <h4>💵 ${title} · <span class="cost">${money(c.spent, 3)} of ${money(c.budget, 2)}</span></h4>
-    <div class="what">${what}</div>
+  // Cards from before budgets were per chat (a reply cap, a daily cap, a project budget) read the same.
+  return `<div class="approval budget-card ${open ? '' : 'done'}" ${open ? `data-id="${esc(c.id)}"` : ''}>
+    <h4>💵 Chat budget reached <span class="cost">${money(c.spent, 3)} of ${money(c.budget, 2)}</span></h4>
+    <div class="what">Everything this chat called counts (the agent, deciders, helpers, checks, media). Raise it to let this reply carry on, or wrap up here.</div>
     ${open ? `<div class="acts own-row"><label class="what">Raise to $ <input type="number" class="own raise-to" min="${(Math.ceil(c.spent * 100) / 100).toFixed(2)}" step="0.5" value="${next.toFixed(2)}" aria-label="New budget in dollars"></label></div>
       <div class="acts"><button type="button" class="primary raise">Raise and carry on</button><button type="button" class="stop-here">Wrap up</button></div><div class="what err" hidden></div>`
       : `<div class="outcome ${o?.raised ? 'yes' : 'no'}">${o ? (o.raised ? `✅ Budget raised to ${o.budget == null ? 'no limit' : money(o.budget, 2)}; the reply carried on` : '⛔ Wrapped up at the budget') : 'Not answered: the reply ended'}</div>`}
@@ -5857,20 +5931,12 @@ function budgetHTML(b, live = true) {
 }
 function wireBudget(card, c, m) {
   const err = $('.err', card), input = $('.raise-to', card);
+  // Raising the chat's budget is what the waiting reply listens for: it carries on within a second.
   $('.raise', card).onclick = async () => {
-    if (card.dataset.kind === 'reply' || card.dataset.kind === 'day') {
-      const to = Number(input.value);
-      if (!(to > Number(input.min))) { err.textContent = `Raise it above ${money(Number(input.min), 2)}.`; err.hidden = false; return; }
-      card.querySelectorAll('button, input').forEach((b) => (b.disabled = true));
-      await fetch('/api/raise-cap', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ runId: m.runId, id: card.dataset.id, to }) }).catch(() => {});
-      return;
-    }
-    const p = G.projects.find((x) => x.id === c.projectId);
-    const r = await fetch(`/api/projects/${c.projectId}/budget`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ budget: Number(input.value), fromCard: true }) }).then((x) => x.json()).catch((e) => ({ error: e.message }));
+    const r = await postJ(`/api/chats/${encodeURIComponent(c.id)}/budget`, { budget: Number(input.value) });
     if (r.error) { err.textContent = `Could not raise it: ${r.error}.`; err.hidden = false; return; }
     card.querySelectorAll('button, input').forEach((b) => (b.disabled = true));
-    if (p) Object.assign(p, { budget: r.budget, spent: r.spent });
-    refreshSidebar();
+    c.bud = { ...c.bud, ...r }; drawBudgetChip(c); budgetNotices();
   };
   $('.stop-here', card).onclick = () => {
     card.querySelectorAll('button, input').forEach((b) => (b.disabled = true));
@@ -5885,10 +5951,17 @@ function questionHTML(q, live = true) {
   const full = questionCardHTML(q, live);
   if (!a || c.secret) return full;
   const n = c.questions?.length || 1, key = `q-${c.id}`;
-  const label = n > 1 ? `Asked you ${n} questions` : c.gate === 'plan' ? 'Plan first' : c.gate === 'storyboard' ? '🎬 Storyboard' : c.auto ? 'The deciders answered' : 'Asked you';
+  const label = n > 1 ? `Asked you ${n} questions` : c.gate === 'plan' ? 'Plan first' : c.gate === 'enhance' ? '📝 Enhance' : c.gate === 'skill' ? '🧠 Skill' : c.gate === 'storyboard' ? '🎬 Storyboard' : c.auto ? 'The deciders answered' : 'Asked you';
   const said = clip(String(a.label || a.text || '').replace(/^Your answer: /, ''), 160);
   return `<details class="q-fold" data-qkey="${esc(key)}" ${G.qOpen?.has(key) ? 'open' : ''}><summary><span class="q-fold-ic" aria-hidden="true">✓</span><span class="q-fold-l">${esc(label)}${n === 1 && c.question ? `: <span class="q-fold-q">${esc(clip(c.question, 90))}</span>` : ''}</span><span class="q-fold-a">${esc(said)}</span><span class="tl-chev" aria-hidden="true">›</span></summary>${full}</details>`;
 }
+// Many options show the first three; "Show all" opens the rest (every one is still numbered, so 1–9 picks any).
+document.addEventListener('click', (e) => {
+  const b = e.target.closest?.('.q-more-opts'); if (!b) return;
+  const opts = b.previousElementSibling, all = !opts.classList.contains('q-all');
+  opts.classList.toggle('q-all', all); b.setAttribute('aria-expanded', String(all)); (G.qAll ||= new Set())[all ? 'add' : 'delete'](b.dataset.q); // kept across redraws
+  b.textContent = all ? 'Show fewer ▴' : `Show all ${opts.children.length} options ▾`;
+});
 // Folded answers stay open or closed across redraws.
 document.addEventListener('toggle', (e) => { const d = e.target; if (d.matches?.('details.q-fold')) (G.qOpen ||= new Set())[d.open ? 'add' : 'delete'](d.dataset.qkey); }, true);
 function questionCardHTML(q, live = true) {
@@ -5906,12 +5979,13 @@ function questionCardHTML(q, live = true) {
   if (c.questions?.length) return questionsHTML(c, a);
   if (c.secret) return secretHTML(c, a);
   return `<div class="approval question qbox ${a ? 'done' : ''}" ${a ? '' : `data-id="${esc(c.id)}" tabindex="-1"`}>
-    <div class="q-head"><span class="q-badge">${c.gate === 'plan' ? 'Plan first' : c.gate === 'storyboard' ? '🎬 Storyboard' : 'Question'}</span><p class="q-text">${esc(c.question)}</p>${c.gate === 'storyboard' && c.artifact ? `<button type="button" class="secondary sm q-open-art" data-art="${esc(c.artifact)}">Open the storyboard</button>` : ''}</div>
+    <div class="q-head"><span class="q-badge">${c.gate === 'plan' ? 'Plan first' : c.gate === 'enhance' ? '📝 Prompt enhancer' : c.gate === 'skill' ? '🧠 Save a skill' : c.gate === 'storyboard' ? '🎬 Storyboard' : 'Question'}</span><p class="q-text">${esc(c.question)}</p>${c.why ? `<small class="q-why">${esc(c.why)}</small>` : ''}${c.gate === 'storyboard' && c.artifact ? `<button type="button" class="secondary sm q-open-art" data-art="${esc(c.artifact)}">Open the storyboard</button>` : ''}</div>
     ${a ? `<div class="q-opts answered">${c.options.map((o, i) => `<div class="q-opt ${i === picked ? 'picked' : 'faded'}"><span class="q-key">${i === picked ? '✓' : i + 1}</span><span class="q-label">${esc(o)}</span></div>`).join('')}
         ${a.by === 'recommended' || a.by === 'timeout' ? `<div class="q-opt picked by-deciders"><span class="q-key">⏱</span><span class="q-label">No answer in time: ${a.by === 'timeout' ? 'the storyboard stands' : 'the agent\'s recommendation stands'} (⚡ YOLO, 🎬 Video Mode)</span></div>` : ''}
         ${a.by === 'deciders' ? `<div class="q-opt ${picked == null ? 'missed' : 'picked'} by-deciders"><span class="q-key">⚖</span><span class="q-label">No answer in time: ${picked == null ? `${esc((a.text || 'the deciders could not settle it').replace(/^\w/, (x) => x.toLowerCase()))}, so the agent decides` : `the deciders picked this${a.confidence != null ? ` · ${Math.round(a.confidence * 100)}% sure` : ''}`}</span></div>`
           : picked == null ? `<div class="q-opt ${missed ? 'missed' : 'picked'}"><span class="q-key">${missed ? '–' : '✓'}</span><span class="q-label">${missed ? 'Not answered: the reply ended' : `Your answer: ${esc(a.label || a.text || '')}`}</span></div>` : ''}</div>`
-      : `${waitHTML(c)}<div class="q-opts" role="group" aria-label="Answers">${c.options.map((o, i) => `<button type="button" class="opt q-opt" data-i="${i}"><span class="q-key">${i + 1}</span><span class="q-label">${esc(o)}</span></button>`).join('')}</div>
+      : `${waitHTML(c)}<div class="q-opts ${c.options.length > 4 ? `q-many${G.qAll?.has(c.id) ? ' q-all' : ''}` : ''}" role="group" aria-label="Answers">${c.options.map((o, i) => `<button type="button" class="opt q-opt" data-i="${i}"><span class="q-key">${i + 1}</span><span class="q-label">${esc(o)}</span></button>`).join('')}</div>
+      ${c.options.length > 4 ? `<button type="button" class="q-more-opts" data-q="${esc(c.id)}" aria-expanded="${!!G.qAll?.has(c.id)}">${G.qAll?.has(c.id) ? 'Show fewer ▴' : `Show all ${c.options.length} options ▾`}</button>` : ''}
       <div class="own-row q-own"><input type="text" class="own" placeholder="${c.gate === 'plan' ? 'Or say what to change in the plan' : c.gate === 'storyboard' ? 'Or say which shots to change' : 'Or answer in your own words'}" aria-label="${c.gate === 'plan' ? 'What to change in the plan' : c.gate === 'storyboard' ? 'Which shots to change' : 'Your own answer'}"><button type="button" class="send-own">Send</button></div>`}
   </div>`;
 }
@@ -6096,7 +6170,7 @@ async function runChat(c, text, ctx, imgs, { resumeOf, docs = [], more = 0, mode
   // ⚙ Settings as they are, for quorx_settings to read (settings above is this chat's view of them).
   const prefs = { ...G.settings, theme: G.theme ?? 'system' };
   const body = resumeOf ? { runId: m.runId, chatId: c.id, resume: resumeOf, settings, prefs, allowed: a.allowed, cmdRules: a.cmdRules || [], apps: a.apps || [], folders: a.folders || [], reading: a.reading?.text || '', ...(more ? { continue: more, ...(model ? { model } : {}) } : {}) }
-    : { runId: m.runId, chatId: c.id, projectId: c.projectId, chatTitle: c.title, setup: a.setup, settings, prefs, allowed: a.allowed, cmdRules: a.cmdRules || [], apps: a.apps || [], folders: a.folders || [], offProject: chatOffProject(c), history, summary: a.summary || '', reading: a.reading?.text || '', text, artifacts, context: ctx?.text || '', images: imgs.map((x) => x.full), docs: docs.map((d) => d.id), ...(cmts.length ? { comments: cmts } : {}), ...(a.videoMode ? { videoMode: a.videoMode } : {}), ...(a.videoMode === 'on' && a.videoFrom ? { videoFrom: a.videoFrom } : {}) };
+    : { runId: m.runId, chatId: c.id, projectId: c.projectId, chatTitle: c.title, setup: a.setup, settings, prefs, ...(/^\/goal\b/i.test(String(text || '').trim()) ? { goal: true } : {}), allowed: a.allowed, cmdRules: a.cmdRules || [], apps: a.apps || [], folders: a.folders || [], offProject: chatOffProject(c), history, summary: a.summary || '', reading: a.reading?.text || '', text, artifacts, context: ctx?.text || '', images: imgs.map((x) => x.full), docs: docs.map((d) => d.id), ...(cmts.length ? { comments: cmts } : {}), ...(a.videoMode ? { videoMode: a.videoMode } : {}), ...(a.videoMode === 'on' && a.videoFrom ? { videoFrom: a.videoFrom } : {}) };
   // Saved straight away, so a reload finds the running reply and reattaches to it.
   saveChat(c, true);
   return followRun(c, m, async (signal) => {
@@ -6193,15 +6267,31 @@ async function followRun(c, m, open) {
   // A run the harness doesn't know (still reading attached context, not started yet) stops here.
   c.running = { runId: m.runId, abort: () => { fetch(`/api/runs/${m.runId}/stop`, { method: 'POST' }).then((r) => r.json()).then((j) => { if (!j.ok) ac.abort(); }).catch(() => ac.abort()); } };
   syncRunState(c); renderSidebar();
-  let lastStep = -1, stepStart = 0, raf = 0, whole = false;
+  let lastStep = -1, stepStart = 0, raf = 0, whole = false, fullAt = 0, fullCost = 0, fullTimer = 0;
   // After a reload the server replays a run's events in one burst: those are old news, so no notifications for them.
   const followT0 = Date.now(), note = (...x) => { if (Date.now() - followT0 > 1500) notifyRun(c, ...x); };
   const msgsEl =() => c.el && G.panes.includes(c.id) ? $('.msgs', c.el.root) : null;
   const stick = () => { if (msgsEl()) c.toEnd?.(); };
   // At most one draw a frame: a burst of events (the replay after a reload) draws once, not once per event.
+  // A long reply's steps take longer to draw again, so they are drawn at most every three times what the last drawing
+  // took (a few ms for most replies; a fifth of a second apart for a 200-step one). The text being written still
+  // streams every frame in between.
   const redraw = (bodyOnly) => {
     if (!bodyOnly) whole = true;
-    if (!raf) raf = requestAnimationFrame(() => { raf = 0; const all = whole; whole = false; updateMsg(c, m, { bodyOnly: !all }); stick(); });
+    if (raf) return;
+    const wait = whole ? fullAt + fullCost * 3 - performance.now() : 0;
+    if (wait > 0) {
+      if (!fullTimer) fullTimer = setTimeout(() => { fullTimer = 0; redraw(false); }, wait);
+      if (bodyOnly) raf = requestAnimationFrame(() => { raf = 0; updateMsg(c, m, { bodyOnly: true }); stick(); });
+      return;
+    }
+    raf = requestAnimationFrame(() => {
+      raf = 0; const all = whole; whole = false;
+      const t = performance.now();
+      updateMsg(c, m, { bodyOnly: !all });
+      if (all) { fullAt = performance.now(); fullCost = fullAt - t; }
+      stick();
+    });
   };
   // Text streamed in a step that turned out not to be the answer moves into the trace.
   const moveAside = (e) => { if (e.step === lastStep && m.content.length > stepStart) { e.aside = m.content.slice(stepStart).trim(); m.content = m.content.slice(0, stepStart).trimEnd(); } };
@@ -6223,6 +6313,12 @@ async function followRun(c, m, open) {
         let e; try { e = JSON.parse(chunk.slice(5)); } catch { continue; }
         if (e.t === 'think') { (m.thinking ??= {})[e.step] = (m.thinking[e.step] || '') + e.text; redraw(true); continue; }
         if (e.t === 'spend') { m.liveCost = e.cost; m.liveCalls = e.calls; m.liveTokens = [e.tokensIn, e.tokensOut]; m.liveByModel = e.byModel || m.liveByModel; liveSpend(c, m); continue; }
+        // A new step: what the step before it said stays where it said it (in the steps), so the text below the steps
+        // is only ever what is being written now.
+        if (e.t === 'llm_start' && lastStep >= 0 && e.step !== lastStep && m.content.length > stepStart) {
+          const d = m.trace.findLast((x) => x.t === 'llm_done' && x.step === lastStep);
+          if (d) { d.aside = [d.aside, m.content.slice(stepStart).trim()].filter(Boolean).join('\n\n'); m.content = m.content.slice(0, stepStart).trimEnd(); }
+        }
         if (e.t === 'token') {
           if (e.step !== lastStep && m.content) m.content += '\n\n';
           if (e.step !== lastStep) stepStart = m.content.length;
@@ -6258,8 +6354,8 @@ async function followRun(c, m, open) {
         if (e.t === 'budget_ask') { m.budgetAsk = { card: e }; c.waiting = 'budget'; renderSidebar(); renderChatHead(c); note('budget'); }
         if (e.t === 'budget_done' && m.budgetAsk) { m.budgetAsk.outcome = e; c.waiting = false; refreshSidebar(); renderChatHead(c); }
         if (e.t === 'answer' && m.questions[e.id]) { const qc = m.questions[e.id].card; e.label = e.answers ? (e.defaults ? 'the recommended answers' : e.answers.map((x, i) => (x.choice != null ? qc.questions?.[i]?.options[x.choice] : x.text || '–')).join(' · ')) : e.choice != null ? qc.options[e.choice] : e.text; m.questions[e.id].answer = e; c.waiting = false; renderSidebar(); renderChatHead(c); }
-        if (e.t === 'done') { m.doneAt = Date.now(); m.content = e.reply; m.note = e.historyNote; m.stats = e.stats; G.sessionCost += e.stats.cost; renderSpend(); loadScores(); }
-        if (e.t === 'error') { m.error = e.msg; m.failed = !e.stopped; if (e.stats && !m.stats) { m.stats = { ...e.stats, partial: true }; G.sessionCost += e.stats.cost || 0; renderSpend(); } }
+        if (e.t === 'done') { m.doneAt = Date.now(); m.content = e.reply; m.note = e.historyNote; m.stats = e.stats; G.sessionCost += e.stats.cost; renderSpend(); loadScores(); setTimeout(() => loadChatBudget(c), 400); }
+        if (e.t === 'error') { setTimeout(() => loadChatBudget(c), 400); m.error = e.msg; m.failed = !e.stopped; if (e.stats && !m.stats) { m.stats = { ...e.stats, partial: true }; G.sessionCost += e.stats.cost || 0; renderSpend(); } }
         if (e.t === 'interrupted') { m.error = 'The harness restarted while this reply was running.'; m.resumable = !!e.resumable; }
         if (e.t === 'compacted') { a.summary = e.summary; a.summaryAt = e.cutoffAt; }
         if (e.t === 'control') { c.driving = e.kind; markDriving(c); renderSidebar(); }
@@ -6267,6 +6363,7 @@ async function followRun(c, m, open) {
         if (e.t === 'schedules_changed') loadSchedules().then(() => { if ($('#schedules')?.open) drawSchedules(); renderChatHead(c); });
         if (e.t === 'setting_changed') settingChanged(e);
         if (e.t === 'mcp_on') { c.mcp = [...new Set([...(c.mcp || []), ...(e.names || [])])]; saveChat(c); loadMcp().then(() => renderComposerBar(c)); }
+        if (e.t === 'enhancer_off') { c.tools.enhancer = false; saveChat(c); renderComposerBar(c); renderToolbars(); }
         if (e.t === 'tools_on') { for (const k of e.kinds || []) if (CHAT_TOOLS.includes(k) || k === 'apps' || k === 'chrome') c.tools[k] = true; if ((e.kinds || []).some((k) => k === 'apps' || k === 'chrome')) renderComposerBar(c); saveChat(c); renderToolbars(); }
         if (e.t === 'video_mode') {
           const u = a.messages[a.messages.indexOf(m) - 1];
@@ -6309,7 +6406,7 @@ async function followRun(c, m, open) {
       const tookTag = `${took ? `⏱ ${secs(took)}` : ''}${cost}`.replace(/^ · /, '');
       note(m.error ? 'error' : 'done', [tookTag, ...usedTags(m)]);
     }
-    const due = raf; if (raf) { cancelAnimationFrame(raf); raf = 0; }
+    const due = raf || fullTimer; if (raf) { cancelAnimationFrame(raf); raf = 0; } clearTimeout(fullTimer); fullTimer = 0;
     updateMsg(c, m); if (due) stick();
     syncRunState(c); saveChat(c, true); refreshSidebar(); checkSpace(c, true); refreshUndoable(c.projectId); eachArea(() => { if (G.view.browser && focused() === c) renderPane(); });
     refreshBalance();
@@ -7225,10 +7322,9 @@ async function drawCosts() {
     list.innerHTML = (shown.length ? '<div class="cx-cols" aria-hidden="true"><span>Chat</span><span>Msgs</span><span>Models</span><span>Today</span><span>Total</span></div>' : '') + (shown.map((p) => `
       <details class="cost-proj" data-p="${esc(p.id)}" open>
         <summary style="${projStyle(p)}"><b class="cx-pname">${esc(p.name)}</b><small class="cx-n">${p.chatCount} chat${p.chatCount === 1 ? '' : 's'}${p.lastAt ? ` · ${ago(p.lastAt)}` : ''}</small>${(() => {
-          // With a budget: what share of it is used (the line fills toward it). Without one: next to the biggest spender.
-          const b = G.projects.find((x) => x.id === p.id)?.budget, has = typeof b === 'number' && b > 0;
-          const share = has ? Math.min(1, p.cost / b) : p.cost / max, state = !has ? '' : share >= 1 ? 'full' : share >= 0.85 ? 'near' : 'ok';
-          return `<span class="cost-bar cx-line ${state}" title="${has ? `${money(p.cost, 3)} of the $${b.toFixed(2)} budget (${Math.round(share * 100)}%)` : `No budget · spent next to the project that spent the most (${money(p.cost, 3)} of ${money(max, 3)})`}"><i style="width:${share * 100}%"></i></span><span class="mono">${money(p.cost, 3)}</span>${has ? `<small class="cx-budget">of $${b.toFixed(b < 10 ? 2 : 0)} · ${state === 'full' ? 'used up' : `${Math.round(share * 100)}%`}</small>` : ''}`;
+          // Spent next to the project that spent the most (budgets are per chat).
+          const share = p.cost / max;
+          return `<span class="cost-bar cx-line" title="${`Spent next to the project that spent the most (${money(p.cost, 3)} of ${money(max, 3)})`}"><i style="width:${share * 100}%"></i></span><span class="mono">${money(p.cost, 3)}</span>`;
         })()}</summary>
         <table class="cost-table cx-compact"><tbody>${p.chats.map((c) => costRow(c, false, true)).join('')}</tbody></table>
         ${p.chatCount > p.chats.length ? `<button type="button" class="cx-more" data-more="${esc(p.id)}" data-offset="${p.chats.length}">Show more (${p.chatCount - p.chats.length} more)</button>` : ''}
@@ -7322,7 +7418,7 @@ const YOLO_ROWS = [
   ['servers', 'Start and stop servers', 'Dev servers and site previews from the launch file.'],
   ['browser', 'Use the browser', 'Open, click, type and look at pages in the agent\'s browser.'],
   ['web', 'Read web pages', 'Fetch the text of a public page for research.'],
-  ['media', 'Paid media', 'Pictures, video, music and voice (they cost money; the budget cap still applies).'],
+  ['media', 'Paid media', 'Pictures, video, music and voice (they cost money; the chat budget still applies).'],
   ['artifacts', 'Write plans', 'Create and edit artifacts (plans, reports).'],
   ['helpers', 'Ask helpers', 'Hand a side task to a cheaper helper model.'],
   ['deciders', 'Ask the deciders', 'Quick yes/no checks by the decider models.'],
@@ -7473,9 +7569,8 @@ function settingsPanels(S) {
     ]],
     loop: ['Agent loop', 'How long one reply may work, how its work is checked, and how long chats stay cheap. Click a stage to jump to it.', [
       '<div data-live="loopflow"></div>',
-      stCard(`${stNum(1)} Plan`, '', stRow('Plan first', 'Off: the agent plans and builds in one go. Big tasks: for a new app, site, game or a change across several files, it shows its plan and waits for Go ahead, Stop here, or your changes. Always: before any file change or command. File changes and commands are refused until you say Go ahead. Waits for you in 🔒 Strict and ⚡ YOLO alike.', stCards('planFirst', [['off', '⏩', 'Off', 'Plan and build in one go'], ['big', '🗺', 'Big tasks', 'New apps, sites, games, multi-file changes'], ['always', '✋', 'Always', 'Before any file change or command']], S.planFirst || 'off', 'compact'), { cls: 'sx-row-wide' })
-        + stRow('Steps when the reply has a plan', 'A planned build gets this many instead (checks, previews and review take steps). 0 = the same as below.', stStep('planSteps', S.planSteps ?? 0, 0, 1000))
-        + stRow('Keep going while the plan is open', 'When the steps run out and the plan still has open items, the reply gets this many extra rounds of “Keep going” steps on its own (budget caps still apply). 0 = stop at the limit and ask you.', stStep('continueRounds', S.continueRounds ?? 0, 0, 5)), 'sx-anchor', 'stLoopPlan'),
+      stCard(`${stNum(1)} Plan`, 'Only a message that starts with /goal makes a plan: the agent shows it and waits for Go ahead.', stRow('Steps when the reply has a plan', 'A planned build gets this many instead (checks, previews and review take steps). 0 = the same as below.', stStep('planSteps', S.planSteps ?? 0, 0, 1000))
+        + stRow('Keep going while the plan is open', 'When the steps run out and the plan still has open items, the reply gets this many extra rounds of “Keep going” steps on its own (the chat budget still applies). 0 = stop at the limit and ask you.', stStep('continueRounds', S.continueRounds ?? 0, 0, 5)), 'sx-anchor', 'stLoopPlan'),
       stCard(`${stNum(2)} Work`, '', stRow('Max model calls per reply', 'A page takes 6–15; a multi-file app with a server can take 40 or more. Near the end the agent is told to wrap up; at the limit you pick: keep going, another model, or a fresh chat.', stStep('maxSteps', S.maxSteps, 2, 1000))
         + stRow('Output per model call', 'Tokens one call may write (thinking included), never more than the model allows. Too little and a model can think through a whole file, then run out before writing it.', stStep('maxOutput', S.maxOutput ?? 64000, 4000, 128000, 4000, 'tokens'))
         + stRow('Thinking share', 'How much of that output reasoning may use, so the answer and tool calls always have room.', stStep('thinkShare', S.thinkShare ?? 25, 5, 60, 5, '%'))
@@ -7532,20 +7627,18 @@ function settingsPanels(S) {
       stCard('The questions, word for word', 'Every answer is logged with its screenshot, so <code>node scripts/checks.mjs</code> can score each question and try new wording on past screenshots. Untick one to stop asking it; blank wording uses the built-in one.', '<div id="checkList"></div>'),
     ]],
     tools: ['Tools & media', 'Up to 3 models per tool, and who picks the model for each call. Each chat turns tools on in its 🧰 menu.', ['<div id="catEditors" class="sx-media"></div>']],
-    budget: ['Budget', 'Limits on what a reply, a day and paid media may spend, and how far a reply may finish past its project\'s budget.', [
-      stSec('Caps on every model'),
-      `<p class="sx-sec-help">They count everything a reply calls: the agent, the deciders, helpers, screenshot checks and paid media.</p><div class="sx-caps">`
-        + stCap('replyBudget', 'Cap per reply', S.replyBudget ?? d.replyBudget ?? 1, 0, 100, 0.25, 'At 85% the agent is told to wrap up. At the cap, 🔒 Strict asks you to raise it or wrap up; ⚡ YOLO stops. 0 = no cap.')
-        + stCap('dailyBudget', 'Cap per day', S.dailyBudget ?? d.dailyBudget ?? 0, 0, 1000, 1, 'Today’s spending across all projects. A reply that reaches it stops (Strict asks first). 0 = off. A separate OpenRouter key with its own daily limit is a good second fence for ⚡ YOLO.', '<div data-live="today"></div>')
-        + stCap('budget', 'Paid media per reply', S.budget, 0, 20, 0.05, 'A paid call that would go over this is stopped, in Strict and in YOLO.')
+    budget: ['Budget', 'Each chat has one budget, the only money limit. Change a chat\'s budget with 💵 in its message box.', [
+      stSec('Chat budgets'),
+      `<p class="sx-sec-help">A chat's budget counts everything it calls: the agent, the deciders, helpers, screenshot checks and paid media. Once it is used up, 🔒 Strict asks you to raise it or wrap up; ⚡ YOLO stops.</p><div class="sx-caps">`
+        + stCap('chatBudget', 'New chats start with', S.chatBudget ?? G.cfg.chatBudget ?? 10, 0, 1000, 1, 'Each chat can change its own. 0 = no limit.', '<div data-live="today"></div>')
         + `</div>`,
-      stCard('Project budgets', 'Set a project\'s budget with the $ next to it in the sidebar, or in Workspace → Projects.', stRow('Allowance to finish a reply', 'A new reply can\'t start once the project budget is used up. A reply already working may go this far past it to finish, then it is stopped. 0% stops it right at the budget.', stStep('budgetGrace', S.budgetGrace ?? 10, 0, 100, 5, '%'))),
+      stCard('Finishing past the budget', '', stRow('Allowance to finish a reply', 'A new reply can\'t start once the chat\'s budget is used up. A reply already working may go this far past it to finish, then it is stopped. 0% stops it right at the budget.', stStep('budgetGrace', S.budgetGrace ?? 10, 0, 100, 5, '%'))),
     ]],
     safety: (() => {
       const SF = { ...(d.safety || {}), ...(S.safety || {}) };
       const M = sfModes(SF);
       return ['Approvals & safety', 'Whether new chats ask you or go ahead, what ⚡ YOLO does on its own, and what never runs. Advanced has every detail: the shell, each YOLO tick, the deciders’ vote and your command rules.', [
-        stCard('Permission mode', 'What a new chat starts in. Each chat can switch in its message box.', pad(stCards('approval', [['strict', '🔒', 'Strict', 'Asks you before paid media (pictures, video, music, speech, with the price), and the agent\'s questions come to you.'], ['yolo', '⚡', 'YOLO', 'Never asks: the deciders answer the agent\'s questions for you. The budget cap still applies.']], S.approval))
+        stCard('Permission mode', 'What a new chat starts in. Each chat can switch in its message box.', pad(stCards('approval', [['strict', '🔒', 'Strict', 'Asks you before paid media (pictures, video, music, speech, with the price), and the agent\'s questions come to you.'], ['yolo', '⚡', 'YOLO', 'Never asks: the deciders answer the agent\'s questions for you. The chat budget still applies.']], S.approval))
           + stRow('In 🔒 Strict, ask before', 'Paid media: only pictures, video, music and speech. Every tool: also file edits, commands, reads, the browser and helpers, as before.', stSeg('strictAsk', [['paid', 'Paid media'], ['every', 'Every tool']], S.strictAsk || 'paid'))
           + stRow('Also ask before helpers', 'Helpers hand read-only jobs to a cheaper model. Only with “Paid media”.', stSwitch('strictAskHelpers', S.strictAskHelpers === true))
           + stRow('Also ask before decider checks', 'decide and look ask the deciders; each costs well under $0.001. Only with “Paid media”.', stSwitch('strictAskDeciders', S.strictAskDeciders === true))),
@@ -7558,7 +7651,7 @@ function settingsPanels(S) {
           + stRow('⚡ YOLO waits for you', 'When the agent asks a question, or the deciders can\'t settle an approval, the card waits this long so you can steer. Then the deciders answer (a question of taste goes back to the agent), or the approval carries on: a command runs only if the deciders saw little risk. "Wait for me" on the card, or typing in it, stops the clock. 0 = no wait.', stStep('yoloWaitSecs', S.yoloWaitSecs ?? 15, 0, 120, 5, 's'))),
         stCard('When a chat\'s ⚖️ Deciders are off', 'Turned off in a chat\'s 🧰 menu, no decider is asked anything in that chat. What they would have approved in ⚡ YOLO goes here instead. A card that waits for you is skipped when no one answers in time.',
           stRow('Commands they would check', 'Web reads, builds, installs and unknown commands that ⚡ YOLO checks first. Commands the deciders approve in your place (pushes, changes outside the project, global installs) always wait for you.', stSeg('decidersOff.commands', [['ask', '✋ Wait for me'], ['run', 'Run without a check']], S.decidersOff?.commands || d.decidersOff?.commands || 'ask'))
-          + stRow('Paid media and plans', 'Pictures, video, music, speech and production plans. Budget caps still apply.', stSeg('decidersOff.media', [['ask', '✋ Wait for me'], ['run', 'Run without a check']], S.decidersOff?.media || d.decidersOff?.media || 'ask'))),
+          + stRow('Paid media and plans', 'Pictures, video, music, speech and production plans. The chat budget still applies.', stSeg('decidersOff.media', [['ask', '✋ Wait for me'], ['run', 'Run without a check']], S.decidersOff?.media || d.decidersOff?.media || 'ask'))),
         stCard('Your choices', '',
           stRow('When YOLO needs a decision', 'Ask me: pushes, deploys, installs for the whole computer and changes outside the project wait for you. The deciders: they vote instead, and a no or a split vote still comes to you.',
             `<div class="sf-ctrl">${stCards('', [['ask', '✋', 'Ask me', 'Those wait for you'], ['decide', '⚖️', 'Let the deciders decide', 'They vote; a no or a split vote comes to you']], M.decide, 'compact').replace('data-bind=""', 'data-sf="decide" aria-label="When YOLO needs a decision"')}<span class="sf-custom sx-tag warn" data-sf-note="decide" ${M.decide === 'mix' ? '' : 'hidden'}>Custom (see Advanced)</span></div>`, { cls: 'sx-row-wide' })
@@ -7738,7 +7831,7 @@ function drawSettings() {
 }
 // ---------- what each category has set, in a few words: the nav (short) and the line under the title ----------
 const SIDE_START = { remember: 'Remember', expanded: 'Expanded', rail: 'Rail' }, PANE_MODE = { auto: 'Auto', always: 'Always', never: 'Only when asked' };
-const PLAN_FIRST = { off: 'Off', big: 'Big tasks', always: 'Always' }, PROVIDER_SORT = { auto: 'Auto', price: 'Cheapest', throughput: 'Fastest' };
+const PROVIDER_SORT = { auto: 'Auto', price: 'Cheapest', throughput: 'Fastest' };
 const kTok = (n) => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
 function stSummary(id, S) {
   const U = uiOf(S), SF = sfOf(S), on = (x, a, b) => stStatus(x ? 'ok' : 'off', x ? a : b);
@@ -7754,12 +7847,12 @@ function stSummary(id, S) {
     case 'models': return [short(S.model), stStatus('info', `New chats: ${esc(short(S.model))}`) + (G.models ? stStatus('ok', `${G.models.length} models loaded`) : '') + stStatus('info', `${PROVIDER_SORT[S.providerSort || 'auto']} routing`) + on(S.fallbackModel, `Fallback: ${esc(short(S.fallbackModel || ''))}`, 'No fallback')];
     case 'newchats': { const q = QUALITY_TOOLS.filter((k) => S.newChatTools?.[k] !== false).length, p = CHAT_TOOLS.filter((k) => S.newChatTools?.[k]).length;
       return [S.approval === 'yolo' ? '⚡ YOLO' : '🔒 Strict', stStatus('info', S.approval === 'yolo' ? '⚡ YOLO: never asks' : `🔒 Strict: asks before ${S.strictAsk === 'every' ? 'every tool' : 'paid media'}`) + stStatus(q ? 'ok' : 'off', `${q} of ${QUALITY_TOOLS.length} checking tools on`) + stStatus(p ? 'warn' : 'off', p ? `${p} paid media on` : 'Paid media off')]; }
-    case 'loop': return [`${S.maxSteps} steps`, stStatus('info', `${S.maxSteps} calls a reply`) + stStatus('info', `Plan first: ${PLAN_FIRST[S.planFirst || 'off']}`) + on(S.verify !== false, 'Checks on', 'Checks off') + on((S.review || 'builds') !== 'off', `Reviewer: ${S.review || 'builds'}`, 'No reviewer')];
+    case 'loop': return [`${S.maxSteps} steps`, stStatus('info', `${S.maxSteps} calls a reply`) + on(S.verify !== false, 'Checks on', 'Checks off') + on((S.review || 'builds') !== 'off', `Reviewer: ${S.review || 'builds'}`, 'No reviewer')];
     case 'deciders': { const n = (S.voters || []).filter(Boolean).length, c = ['gap', 'shots', 'click'].filter((k) => S.checks?.[k] !== false).length;
       return [`${n} seats`, stStatus('info', `${n} decider${n === 1 ? '' : 's'} seated`) + stStatus('info', `Settled at ${S.gate.act}, lean at ${S.gate.confirm}`) + stStatus(c ? 'ok' : 'off', `${c} of 3 harness checks on`)]; }
     case 'tools': { const n = CATS.filter(([k]) => S.tools?.[k]?.on !== false).length; return [`${n} of ${CATS.length}`, stStatus(n ? 'ok' : 'off', `${n} of ${CATS.length} tools on`) + stStatus('info', 'Each chat turns them on in 🧰')]; }
-    case 'budget': { const r = S.replyBudget ?? G.cfg.defaults.replyBudget ?? 1, dd = S.dailyBudget ?? G.cfg.defaults.dailyBudget ?? 0;
-      return [r ? usd(r) : 'no cap', `${r ? `${stMoney(usd(r))} <span class="sx-state-k">a reply</span>` : stStatus('warn', 'No cap per reply')} ${dd ? `${stMoney(usd(dd))} <span class="sx-state-k">a day</span>` : stStatus('off', 'No daily cap')} ${stMoney(usd(S.budget))} <span class="sx-state-k">paid media a reply</span>`, 'money']; }
+    case 'budget': { const b = Number(S.chatBudget ?? G.cfg.chatBudget ?? 10);
+      return [b ? usd(b) : 'no limit', `${b ? `${stMoney(usd(b))} <span class="sx-state-k">a new chat</span>` : stStatus('warn', 'New chats have no limit')}`, 'money']; }
     case 'safety': { const M = sfModes(SF), y = YOLO_ROWS.filter(([k]) => S.yoloAuto?.[k] !== false).length; return [S.approval === 'yolo' ? '⚡ YOLO' : '🔒 Strict', stStatus('info', `New chats: ${S.approval === 'yolo' ? '⚡ YOLO' : '🔒 Strict'}`) + stStatus('ok', `${y} of ${YOLO_ROWS.length} YOLO groups on their own`) + stStatus(M.decide === 'ask' ? 'warn' : 'info', M.decide === 'ask' ? 'Pushes and installs ask you' : M.decide === 'decide' ? 'The deciders decide pushes and installs' : 'Custom: see Advanced') + stStatus(M.care === 'off' ? 'off' : 'ok', M.care === 'on' ? 'Extra care on' : M.care === 'off' ? 'Extra care off' : 'Extra care: custom') + on(SF.snapshots, 'Undo for commands on', 'Undo for commands off')]; }
     case 'video': { const d = G.cfg.defaults || {}, live = (S.videoMode ?? d.videoMode) !== 'off', board = S.videoStoryboard !== false;
       return [live ? 'films' : 'off', on(live, 'On for films', 'Off: films build like any request') + (live ? stStatus(board ? 'ok' : 'off', board ? 'Storyboard before paid media' : 'No storyboard gate') + stStatus('info', `Up to ${S.videoAskLimit ?? d.videoAskLimit} questions`) : '')]; }
@@ -7783,12 +7876,11 @@ const ST_LIVE = {
     return `<div class="sx-preview ${U.density === 'compact' ? 'compact' : ''}" style="--pv-size:${U.fontSize}px" aria-hidden="true"><div class="sx-pv-side"><i></i><i></i><i></i><i style="width:70%"></i><i></i></div><div class="sx-pv-chat"><div class="sx-pv-msg me">Build me a pomodoro timer${t}</div><div class="sx-pv-msg">Done: a 25/5 timer with a start button and a chime. Open it in the preview.${t}</div></div></div>`; },
   window: (S) => { const U = uiOf(S);
     return `<div class="sx-window"><button type="button" class="${U.sidebarStart === 'rail' ? 'rail' : ''}" data-jump="stRowSidebar">Sidebar<small>${SIDE_START[U.sidebarStart] || ''}</small></button><button type="button" data-jump="stRowSidebar" tabindex="-1">Chat</button><button type="button" class="${U.paneMode === 'never' ? 'dim' : ''}" data-jump="stRowPane">Artifact pane<small>${PANE_MODE[U.paneMode] || ''}</small></button></div>`; },
-  loopflow: (S) => stFlow([['1', 'Plan', PLAN_FIRST[S.planFirst || 'off'], 'stLoopPlan', (S.planFirst || 'off') === 'off'], ['2', 'Work', `${S.maxSteps} calls`, 'stLoopWork'], ['3', 'Check', S.verify !== false ? `on · ${S.verifyRounds ?? 2} rounds` : 'off', 'stLoopCheck', S.verify === false], ['4', 'Review', (S.review || 'builds') === 'off' ? 'off' : `${S.review || 'builds'} · ${S.reviewTier || 'cheap'}`, 'stLoopReview', S.review === 'off'], ['5', 'Helpers', S.helpers !== false ? `≥ ${S.helperMinFiles ?? 40} files` : 'off', 'stLoopHelpers', S.helpers === false], ['6', 'Long chats', S.compact !== false ? `summarise > ${kTok(S.compactAt || 24000)}` : 'trim only', 'stLoopMemory']]),
+  loopflow: (S) => stFlow([['1', 'Plan', '/goal only', 'stLoopPlan'], ['2', 'Work', `${S.maxSteps} calls`, 'stLoopWork'], ['3', 'Check', S.verify !== false ? `on · ${S.verifyRounds ?? 2} rounds` : 'off', 'stLoopCheck', S.verify === false], ['4', 'Review', (S.review || 'builds') === 'off' ? 'off' : `${S.review || 'builds'} · ${S.reviewTier || 'cheap'}`, 'stLoopReview', S.review === 'off'], ['5', 'Helpers', S.helpers !== false ? `≥ ${S.helperMinFiles ?? 40} files` : 'off', 'stLoopHelpers', S.helpers === false], ['6', 'Long chats', S.compact !== false ? `summarise > ${kTok(S.compactAt || 24000)}` : 'trim only', 'stLoopMemory']]),
   scale: (S) => { const lo = Math.max(0, Math.min(1, Number(S.gate?.confirm) || 0)), hi = Math.max(lo, Math.min(1, Number(S.gate?.act) || 0));
     return `<div class="sx-scale" aria-hidden="true"><div class="sx-scale-track"><span class="sx-z-unsure" style="flex:${lo}">unsure</span><span class="sx-z-lean" style="flex:${hi - lo}">${hi - lo >= 0.1 ? 'lean' : ''}</span><span class="sx-z-settled" style="flex:${1 - hi}">settled</span></div><div class="sx-scale-axis"><span>0</span><span>lean at ${lo.toFixed(2)}</span><span>settled at ${hi.toFixed(2)}</span><span>1</span></div></div>`; },
-  today: (S) => { const t = ST.costs?.total?.today, cap = Number(S.dailyBudget ?? G.cfg.defaults.dailyBudget ?? 0); if (t == null) return '';
-    const pct = cap ? Math.min(100, (t / cap) * 100) : 0;
-    return `${cap ? `<div class="sx-meter ${pct >= 85 ? 'bad' : pct >= 60 ? 'warn' : ''}"><i style="width:${pct}%"></i></div>` : ''}<span class="sx-cap-zero">${stMoney(`$${t.toFixed(2)}`)} spent today${cap ? ` · ${Math.round(pct)}% of the cap` : ''}</span>`; },
+  today: () => { const t = ST.costs?.total?.today; if (t == null) return '';
+    return `<span class="sx-cap-zero">${stMoney(`$${t.toFixed(2)}`)} spent today, all chats</span>`; },
   docflow: (S) => stFlow([['1', 'Attach', `up to ${S.maxUploadMB ?? 100} MB`, ''], ['2', 'Read the text', 'PDF, Word, Excel…', ''], ['3', 'Small', `≤ ${kTok(S.inlineDocTokens ?? 15000)} tokens: whole`, ''], ['4', 'Big: index', `asks above $${Number(S.docIndexBudget ?? 0.5).toFixed(2)}`, ''], ['5', 'Search', 'search_docs, read_doc', '']]),
 };
 // ---------- ⚙ Apps on this PC (server/sources.js) ----------
@@ -8242,10 +8334,10 @@ function resetCategory() {
   if (ST.cat === 'providers') { S.model = d.chatModel || d.setups.C.model; S.reasoning = 'off'; Object.assign(S, { providerSort: 'auto', requireParams: true, zdrOnly: false, fallbackModel: '', blockedProviders: [...(d.blockedProviders || [])] }); }
   if (ST.cat === 'providers') Object.assign(S, { sourceFallback: d.sourceFallback || 'off', sourceFallbackModel: '' });
   if (ST.cat === 'newchats') S.newChatTools = { ...DEFAULT_CHAT_TOOLS };
-  if (ST.cat === 'loop') { S.maxSteps = d.maxSteps; S.compact = true; S.compactAt = 24000; Object.assign(S, { planFirst: d.planFirst, planSteps: d.planSteps, continueRounds: d.continueRounds, maxOutput: d.maxOutput, thinkShare: d.thinkShare, review: d.review, reviewModel: '', reviewTier: d.reviewTier, reviewSendBack: d.reviewSendBack, codeReview: d.codeReview, designLint: d.designLint, fixSteps: d.fixSteps, reviewRounds: d.reviewRounds, reviewBar: d.reviewBar, helpers: d.helpers, helperModel: '', helperSteps: d.helperSteps, helperMinFiles: d.helperMinFiles, retries: d.retries, parallel: d.parallel, verify: d.verify, verifyRounds: d.verifyRounds, askLimit: d.askLimit, trimAt: d.trimAt, buildThinking: d.buildThinking, lazyTools: d.lazyTools, statusEvery: d.statusEvery, guardEdits: d.guardEdits, wrapUp: d.wrapUp, otherNotes: d.otherNotes, otherNotesFiles: [...(d.otherNotesFiles || [])], otherNotesKB: d.otherNotesKB, helperRoles: structuredClone(d.helperRoles || []) }); }
+  if (ST.cat === 'loop') { S.maxSteps = d.maxSteps; S.compact = true; S.compactAt = 24000; Object.assign(S, { planSteps: d.planSteps, continueRounds: d.continueRounds, maxOutput: d.maxOutput, thinkShare: d.thinkShare, review: d.review, reviewModel: '', reviewTier: d.reviewTier, reviewSendBack: d.reviewSendBack, codeReview: d.codeReview, designLint: d.designLint, fixSteps: d.fixSteps, reviewRounds: d.reviewRounds, reviewBar: d.reviewBar, helpers: d.helpers, helperModel: '', helperSteps: d.helperSteps, helperMinFiles: d.helperMinFiles, retries: d.retries, parallel: d.parallel, verify: d.verify, verifyRounds: d.verifyRounds, askLimit: d.askLimit, trimAt: d.trimAt, buildThinking: d.buildThinking, lazyTools: d.lazyTools, statusEvery: d.statusEvery, guardEdits: d.guardEdits, wrapUp: d.wrapUp, otherNotes: d.otherNotes, otherNotesFiles: [...(d.otherNotesFiles || [])], otherNotesKB: d.otherNotesKB, helperRoles: structuredClone(d.helperRoles || []) }); }
   if (ST.cat === 'deciders') { S.voters = [...d.voters]; S.gate = { ...d.gate }; S.lookVoters = [...d.lookVoters]; S.lookEscalate = d.lookEscalate; S.checks = structuredClone(d.checks); }
   if (ST.cat === 'tools') S.tools = structuredClone(d.tools);
-  if (ST.cat === 'budget') Object.assign(S, { replyBudget: d.replyBudget, dailyBudget: d.dailyBudget, budget: d.budget, budgetGrace: d.budgetGrace });
+  if (ST.cat === 'budget') Object.assign(S, { chatBudget: 10, budgetGrace: d.budgetGrace });
   if (ST.cat === 'skills') S.skillsOff = [];
   if (ST.cat === 'video') for (const k of Object.keys(d)) if (/^video[A-Z]/.test(k)) S[k] = d[k];
   if (ST.cat === 'safety') {
@@ -8275,10 +8367,9 @@ function updateDirty() {
 function drawUsagePanel() {
   const box = $('#stUsage'), c = ST.costs; if (!box || !c) return;
   const U = uiOf(ST.draft), show = !U.maskAmounts || ST.revealUsage, usd = (v) => `$${Number(v || 0).toFixed(2)}`;
-  const cap = Number(ST.draft.dailyBudget ?? G.cfg.defaults.dailyBudget ?? 0), pct = cap ? Math.min(100, (c.total.today / cap) * 100) : 0;
   const top = c.projects.filter((p) => p.cost > 0).slice(0, 8), max = Math.max(...top.map((p) => p.cost), 0.0001);
   box.innerHTML = `<div class="sx-kpis">
-      <div class="sx-kpi"><span>Today</span>${stMoney(usd(c.total.today), 'big')}<small>${cap ? `of ${usd(cap)} a day` : 'no daily cap'}</small>${cap ? `<div class="sx-meter ${pct >= 85 ? 'bad' : pct >= 60 ? 'warn' : ''}"><i style="width:${pct}%"></i></div>` : ''}</div>
+      <div class="sx-kpi"><span>Today</span>${stMoney(usd(c.total.today), 'big')}<small>all chats</small></div>
       <div class="sx-kpi"><span>This week</span>${stMoney(usd(c.total.week), 'big')}<small>last 7 days</small></div>
       <div class="sx-kpi"><span>All time <button type="button" class="sx-reveal" data-usage-reveal title="${show ? 'Hide amounts' : 'Show amounts'}">${show ? '🙈' : '👁'}</button></span>${stMoney(show ? usd(c.total.cost) : '•••••', `big ${show ? '' : 'sx-masked'}`)}<small>${c.total.chats} chat${c.total.chats === 1 ? '' : 's'}</small></div>
     </div>`
@@ -8310,7 +8401,13 @@ function saveSettings() {
   const voters = [...document.querySelectorAll('#voterInputs .m')].map((b) => b.dataset.id).filter(Boolean);
   if (voters.length) S.voters = voters;
   S.maxSteps = Math.max(2, Math.min(1000, Number(S.maxSteps) || 500));
-  S.budget = Math.max(0, Number(S.budget) || 0);
+  // A new chat's budget is kept by QuorX's server (data/chat-budgets.json), not with these settings: send a change there.
+  const chatBudget = S.chatBudget; delete S.chatBudget;
+  if (chatBudget !== undefined) {
+    const b = Number(chatBudget) > 0 ? Math.round(Number(chatBudget) * 100) / 100 : null;
+    if (b !== (G.cfg.chatBudget ?? null)) postJ('/api/chat-budget-default', { budget: b }).then((r) => { if (!r.error) G.cfg.chatBudget = r.budget; });
+  }
+  for (const k of ['replyBudget', 'dailyBudget', 'budget', 'planFirst']) delete S[k]; // limits and options QuorX no longer has
   S.skillsOff = [...document.querySelectorAll('#skillList input[data-skill]')].filter((x) => !x.checked).map((x) => x.dataset.skill);
   for (const el of document.querySelectorAll('#catEditors .cat')) {
     const k = el.dataset.cat, t = S.tools[k];
@@ -8473,7 +8570,7 @@ async function drawProjectsPanel() {
         <div class="pp-acts">
           <button type="button" class="pp-sto" data-proj-sto="${esc(pr.id)}" hidden></button>
           <button type="button" class="pp-btn open" data-proj-open="${esc(pr.id)}" title="Open the folder in File Explorer" aria-label="Open folder"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h6l2 2h10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></button>
-          <button type="button" class="pp-btn set" data-proj-set="${esc(pr.id)}" title="Project settings: name, folder, budget, costs" aria-label="Project settings">${ICO.gear}</button>
+          <button type="button" class="pp-btn set" data-proj-set="${esc(pr.id)}" title="Project settings: name, folder, costs" aria-label="Project settings">${ICO.gear}</button>
           ${pr.id !== 'scratch' ? `<button type="button" class="pp-btn del" data-proj-del="${esc(pr.id)}" title="Remove the project (its chats move to the trash)" aria-label="Remove project">${ICO.trash}</button>` : '<span class="pp-btn ghost" aria-hidden="true"></span>'}
         </div>
       </div>`;
@@ -10242,6 +10339,10 @@ function termDraw(t, full) {
     termFilters(t);
   });
 }
+// A terminal line's colour. Many programs write their ordinary progress to stderr (ffmpeg writes nearly everything
+// there, git and npm their progress, Node its warnings), so stderr alone isn't red: only a line that reads as an error.
+const ERR_LINE = /\b(error|errors|fatal|failed|failure|exception|traceback|panic|denied|not recognized|cannot find|no such file|not found|is not defined|unexpected token|segmentation fault)\b|^\s*(At line:\d|\+ CategoryInfo|\+ FullyQualifiedErrorId)/i;
+const lineKind = (l) => (l.stream === 'err' ? (ERR_LINE.test(l.text) ? 'err' : 'serr') : l.stream || 'out');
 function termDrawPane(t, p, full) {
   const root = tpaneEl(p), out = root && $('.term-out', root);
   if (!out) return;
@@ -10264,7 +10365,7 @@ function termDrawPane(t, p, full) {
     const pre = $('.tj-out', w.el);
     if (w.cut !== j.cut) { pre.textContent = ''; w.drawn = 0; w.cut = j.cut; }
     const frag = document.createDocumentFragment();
-    for (const l of j.lines.slice(w.drawn)) { const s = document.createElement('span'); s.className = `tl ${l.stream || 'out'}`; s.textContent = `${l.text}\n`; frag.appendChild(s); }
+    for (const l of j.lines.slice(w.drawn)) { const s = document.createElement('span'); s.className = `tl ${lineKind(l)}`; s.textContent = `${l.text}\n`; frag.appendChild(s); }
     w.drawn = j.lines.length; pre.appendChild(frag);
     while (pre.childElementCount > 1500) pre.firstChild.remove();
     pre.hidden = !j.lines.length;

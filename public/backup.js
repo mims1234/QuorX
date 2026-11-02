@@ -18,7 +18,7 @@ export function drawBackup(helpers) {
 // Settings that decide what the agent may do and spend: an import never changes them. A backup may be old or
 // someone else's, so this computer keeps its own approval mode, YOLO and Strict options, deciders, budgets and tools.
 export const SAFETY_KEYS = ['approval', 'strictAsk', 'strictAskHelpers', 'strictAskDeciders', 'yoloCheck', 'decidersOff', 'yoloAuto', 'yoloWaitSecs', 'voters', 'lookVoters',
-  'lookEscalate', 'gate', 'budget', 'budgetGrace', 'dailyBudget', 'replyBudget', 'safety', 'askLimit', 'zdrOnly', 'planFirst', 'tools', 'newChatTools'];
+  'lookEscalate', 'gate', 'budgetGrace', 'safety', 'askLimit', 'zdrOnly', 'tools', 'newChatTools'];
 /** The backup's saved page state with this computer's safety settings in place of its own. */
 export function mergeSettings(theirs, mine) {
   const out = { ...theirs, settings: { ...(theirs?.settings || {}) } };

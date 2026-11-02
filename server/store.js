@@ -319,6 +319,11 @@ export function projectChatsSpend(projectId) {
   const r = rollups().get(projectId);
   return { cost: r?.cost || 0, runIds: r?.runIds || new Set() };
 }
+/** What one chat's saved file says it cost, and which replies those costs come from. */
+export function chatSavedSpend(chatId) {
+  const c = chatId ? summaries().find((x) => x.id === chatId) : null;
+  return { cost: c?.cost || 0, runIds: new Set(c?.runIds || []) };
+}
 /** Per-project counts for the sidebar: { [projectId]: { chats, active, cost, lastAt } }. */
 export function projectChatStats() {
   return Object.fromEntries([...rollups()].map(([id, r]) => [id, { chats: r.chats, active: r.active, cost: r.cost, lastAt: r.lastAt }]));
@@ -367,7 +372,7 @@ export function pictureRefCounts() {
   if (refsV !== indexVersion) { REFS = new Map(); for (const e of SUMMARIES.values()) for (const b of e.blobs || []) REFS.set(b, (REFS.get(b) || 0) + 1); refsV = indexVersion; }
   return REFS;
 }
-// The project's budget in dollars, or null for none. Checks (never below what is spent) are in budget.js.
+// A budget left in projects.json by an older QuorX (budgets are per chat now): kept, but nothing reads it.
 export function setProjectBudget(id, budget) {
   const list = rawProjects();
   const p = list.find((x) => x.id === id);

@@ -19,7 +19,7 @@ import { listKeys, addKey, removeKey, setActive, renameKey, keyUsage, activeUsag
 import { sourceStatus, sourceModels, setSourceOn, setSourceKey, removeSourceKey, setSourceOptions, testSource, sourceAccount, sourceDecisionModels, failureKind, sourceOf, sameOnOpenRouter, chatAny, providerOfModel } from './server/sources.js';
 import { setupCheck, runFix } from './server/setup-check.js';
 import { startSignIn, signInStatus, cancelSignIn, finishByCallback, finishWithCode, callbackPage } from './server/oauth.js';
-import { runAgent, answerApproval, answerQuestion, answerSecret, answerBudget, raiseCap, setRunApproval, setRunAccess, steerRun, setRunReading, setRunVideo, holdCard, DEFAULTS, MEDIA, briefFor, briefForChat, REVIEW_MODEL, HELPER_MODEL, REVIEW_ALT, REVIEW_STRONG, REVIEW_STRONG_ALT } from './server/agent.js';
+import { runAgent, answerApproval, answerQuestion, answerSecret, answerBudget, setRunApproval, setRunAccess, steerRun, setRunReading, setRunVideo, holdCard, DEFAULTS, MEDIA, briefFor, briefForChat, REVIEW_MODEL, HELPER_MODEL, REVIEW_ALT, REVIEW_STRONG, REVIEW_STRONG_ALT } from './server/agent.js';
 import { reviewCode, pickReviewer } from './server/codereview.js';
 import { loadHooks, saveHooks, HOOK_EVENTS, HOOK_WHEN, cleanHook, hookLine, safeHookFile } from './server/hooks.js';
 import { projectEnv } from './server/projectsecrets.js';
@@ -31,7 +31,7 @@ import { listServers as mcpList, saveServers as mcpSave, addServers as mcpAdd, p
 import { startLogin as mcpStartLogin, finishLogin as mcpFinishLogin, signOut as mcpSignOut, loginPage as mcpLoginPage } from './server/mcpauth.js';
 import { CHECKS } from './server/harness-checks.js';
 import { startRun, getRun, stopRun, follow, runStatus, activeRuns, validRunId, scorecard, readLog, runEvents, recordRun, onRunEvent } from './server/runs.js';
-import { setBudget, budgetState } from './server/budget.js';
+import { setBudget, budgetState, projectSpend, defaultBudget, setDefaultBudget } from './server/budget.js';
 import { shellRun, shellClose, shellInfo } from './server/shell.js';
 import { ptyAvailable, ptyOpen, ptyWrite, ptyResize, ptyFollow, ptyClose } from './server/pty.js';
 // Pages the agent wrote, served from this app's own address, get their own opaque origin: their requests to /api are refused.
@@ -192,7 +192,7 @@ const server = http.createServer(async (req, res) => {
     if (hfm && req.method === 'POST') { let b = {}; try { b = JSON.parse(await readBody(req, 8e6) || '{}'); } catch { /* below */ } return handoffPut(hfm[1], b.items) ? json(res, 200, { ok: true }) : json(res, 410, { error: 'this handoff is used or expired' }); }
     if (hfm && req.method === 'GET') { const items = handoffTake(hfm[1]); return items ? json(res, 200, { items }) : json(res, 410, { error: 'this handoff is used or expired' }); }
     if (req.method === 'GET' && url.pathname === '/api/stale') return json(res, 200, codeChanged());
-    if (req.method === 'GET' && url.pathname === '/api/config') return json(res, 200, { ...codeChanged(), version: VERSION, platform: process.platform, pagePort: runtime.pagePort || null, shell: shellInfo().name, pty: ptyAvailable(), defaults: DEFAULTS, docDefaults: DOC_DEFAULTS, storageDefaults: RULE_DEFAULTS, checks: CHECKS, media: MEDIA, newsRemote: newsRemoteState().on, hasKey: !!currentKey(), browser: browserPath(), allowed: ALLOWED, quoriums: listQuoriums() });
+    if (req.method === 'GET' && url.pathname === '/api/config') return json(res, 200, { ...codeChanged(), version: VERSION, platform: process.platform, pagePort: runtime.pagePort || null, shell: shellInfo().name, pty: ptyAvailable(), defaults: DEFAULTS, docDefaults: DOC_DEFAULTS, storageDefaults: RULE_DEFAULTS, checks: CHECKS, media: MEDIA, newsRemote: newsRemoteState().on, chatBudget: defaultBudget(), hasKey: !!currentKey(), browser: browserPath(), allowed: ALLOWED, quoriums: listQuoriums() });
 
     // ---- chat history (data/chats; delete = move to data/trash) ----
     // The sidebar: each project's newest chats, the open ones by id, and every project's counts (store.js sidebarChats).
@@ -222,6 +222,19 @@ const server = http.createServer(async (req, res) => {
     // A copy of a chat, to carry on in another direction (the page opens it).
     const dupm = url.pathname.match(/^\/api\/chats\/([a-z0-9-]+)\/duplicate$/i);
     if (dupm && req.method === 'POST') { const id = duplicateChat(dupm[1]); return id ? json(res, 200, { id }) : json(res, 404, { error: 'no such chat' }); }
+    // A chat's budget, the only money limit: where it stands, and setting or removing it (never below what is spent).
+    // Raising it while a reply runs lets that reply go on (its "budget reached" card is waiting for exactly that).
+    const cbm = url.pathname.match(/^\/api\/chats\/([a-z0-9-]+)\/budget$/i);
+    if (cbm) {
+      if (!validId(cbm[1])) return json(res, 400, { error: 'bad chat id' });
+      if (req.method === 'GET') return json(res, 200, budgetState(cbm[1]));
+      if (req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e4) || '{}'); try { return json(res, 200, { ok: true, ...setBudget(cbm[1], b.budget ?? null) }); } catch (e) { return json(res, 200, { error: e.message, ...budgetState(cbm[1]) }); } }
+    }
+    // The budget a new chat starts with (⚙ Settings → Budget).
+    if (url.pathname === '/api/chat-budget-default') {
+      if (req.method === 'GET') return json(res, 200, { budget: defaultBudget() });
+      if (req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e4) || '{}'); try { return json(res, 200, { ok: true, budget: setDefaultBudget(b.budget ?? null) }); } catch (e) { return json(res, 200, { error: e.message, budget: defaultBudget() }); } }
+    }
     const cm = url.pathname.match(/^\/api\/chats\/([a-z0-9-]+)$/i);
     if (cm) {
       if (req.method === 'GET') { const c = getChatForPage(cm[1]); return c ? json(res, 200, c) : json(res, 404, { error: 'no such chat' }); }
@@ -232,9 +245,9 @@ const server = http.createServer(async (req, res) => {
     }
 
     // ---- projects (a folder shared by many chats) ----
-    // Each project with its budget (null = none) and what all its chats have spent so far.
+    // Each project with what all its chats have spent so far (budgets are per chat).
     // With its GitHub repo when its folder has one (from the folder's git settings: no network).
-    if (url.pathname === '/api/projects' && req.method === 'GET') return json(res, 200, listProjects().map((p) => { let github = null; try { github = gitHubRemote(workspaceDir(p.id)); } catch { /* folder missing */ } return { ...p, ...budgetState(p.id), ...(github ? { github } : {}) }; }));
+    if (url.pathname === '/api/projects' && req.method === 'GET') return json(res, 200, listProjects().map((p) => { let github = null; try { github = gitHubRemote(workspaceDir(p.id)); } catch { /* folder missing */ } const sp = projectSpend(p.id), { budget: _old, ...q } = p; return { ...q, spent: sp.spent, runningCost: sp.running, unsavedCost: sp.unsaved, ...(github ? { github } : {}) }; }));
     // Whether that repo is public or private, and a person's or an organization's (asked of GitHub, cached for an hour).
     const ghm = url.pathname.match(/^\/api\/projects\/([a-z0-9-]+)\/github$/i);
     if (ghm && req.method === 'GET') {
@@ -242,13 +255,6 @@ const server = http.createServer(async (req, res) => {
       let remote = null; try { remote = gitHubRemote(workspaceDir(ghm[1])); } catch { /* folder missing */ }
       if (!remote) return json(res, 200, { github: null });
       return json(res, 200, { github: { ...remote, ...(await gitHubInfo(remote.owner, remote.repo, { fresh: url.searchParams.get('fresh') === '1' })) } });
-    }
-    const bm = url.pathname.match(/^\/api\/projects\/([a-z0-9-]+)\/budget$/i);
-    if (bm && req.method === 'POST') {
-      const b = JSON.parse(await readBody(req, 1e4) || '{}');
-      // Not while a chat in the project is working, unless it is that reply's own "budget reached" card asking.
-      if (budgetState(bm[1]).running && !b.fromCard) return json(res, 200, { error: 'a chat in this project is working; change the budget when it finishes', ...budgetState(bm[1]) });
-      try { return json(res, 200, { ok: true, ...setBudget(bm[1], b.budget ?? null) }); } catch (e) { return json(res, 200, { error: e.message, ...budgetState(bm[1]) }); }
     }
     // The colour of a project's name (null: the automatic one).
     const pcm = url.pathname.match(/^\/api\/projects\/([a-z0-9-]+)\/color$/i);
@@ -520,14 +526,14 @@ const server = http.createServer(async (req, res) => {
       catch (e) { return json(res, 200, { error: e.message }); }
     }
     // /review in a chat: a reviewer model reads what changed (the last reply, uncommitted changes, or the branch)
-    // and returns bugs with file:line. Its cost goes to the project's ledger and budget like a reply's.
+    // and returns bugs with file:line. Its cost goes to the ledger and the chat's budget like a reply's.
     if (url.pathname === '/api/code-review' && req.method === 'POST') {
       const b = JSON.parse(await readBody(req, 1e4) || '{}');
       // A reviewer set to a model of an app on this PC needs no OpenRouter key.
       if (!currentKey() && !sourceOf(String(b.reviewModel || ''))) return json(res, 200, { error: 'The reviewer runs on OpenRouter: add a key in ⚙ Settings → Providers, or set the reviewer to a model tagged This PC.' });
       if (!validId(b.projectId)) return json(res, 400, { error: 'bad project id' });
-      const st = budgetState(b.projectId);
-      if (st.budget != null && st.left <= 0) return json(res, 200, { error: 'This project has reached its budget. Raise it in the sidebar to run a review.' });
+      const st = b.chatId && validId(b.chatId) ? budgetState(b.chatId) : null;
+      if (st?.budget != null && st.left <= 0) return json(res, 200, { error: 'This chat has reached its budget. Raise it with 💵 in the message box to run a review.' });
       try {
         // A chat on a model of an app on this PC is compared as its OpenRouter twin, so the model never reviews its own work.
         const orModels = await chatModels().catch(() => []);
@@ -1129,10 +1135,6 @@ const server = http.createServer(async (req, res) => {
       const b = JSON.parse(await readBody(req, 1e4));
       return json(res, 200, { ok: answerBudget(b.runId, b.id) });
     }
-    if (req.method === 'POST' && url.pathname === '/api/raise-cap') {
-      const b = JSON.parse(await readBody(req, 1e4));
-      return json(res, 200, { ok: raiseCap(b.runId, b.id, b.to) });
-    }
     // A run belongs to the server, not to the page that started it: closing or reloading the page
     // leaves it working, and the page reattaches with /api/runs/<id>/events. Stop is explicit.
     if (req.method === 'POST' && url.pathname === '/api/run') {
@@ -1320,7 +1322,7 @@ function scheduleNotice(kind, { schedule, chatId = null, text = '', cost = 0 }) 
   notices.push(n); if (notices.length > 50) notices.shift();
   if (kind === 'start') return; // only for open pages to follow the run: no notification
   if (desktopReady()) {
-    const title = { done: '✓ Scheduled chat finished', error: '✕ Scheduled chat stopped', approval: '⏸ Scheduled chat needs your approval', answer: '❓ Scheduled chat has a question', budget: '💲 Project budget reached' }[kind] || 'QuorX';
+    const title = { done: '✓ Scheduled chat finished', error: '✕ Scheduled chat stopped', approval: '⏸ Scheduled chat needs your approval', answer: '❓ Scheduled chat has a question', budget: '💲 Chat budget reached' }[kind] || 'QuorX';
     desktopCall('app.notify', { title, body: `⏰ ${schedule.name}${n.text ? `\n${n.text}` : ''}`, chatId, silent: kind === 'done' }, 5000).catch(() => {});
   }
 }

@@ -39,8 +39,8 @@ a real browser and your real toolchains, and shows how it got every answer.
   file can't be covered, the command's result names it.
 - **Stop ends everything.** Each command runs in a Windows job (a process group on macOS and Linux), so Stop ends
   every process it started and confirms "0 processes left".
-- **A tripwire and spending caps.** A command that deletes many files outside the project is stopped. A cap per
-  reply, an optional daily cap, project budgets and a media cap keep spending where you set it. A call you stop, or one
+- **A tripwire and a budget per chat.** A command that deletes many files outside the project is stopped. Each chat
+  has one budget, set from 💵 in its message box, and everything it calls counts toward it. A call you stop, or one
   that fails part-way, still counts at OpenRouter's own figure, so the totals match what you are billed.
 - **Video Mode.** A film starts with a brief, a pick of story directions and a storyboard, with the music chosen
   first, before anything is spent. The finished film is the deliverable, put together from moving shots.
