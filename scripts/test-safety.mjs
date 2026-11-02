@@ -329,12 +329,26 @@ test('rules: Strict asks you, YOLO lets the deciders vote only where allowed; de
     const run = async (line, rules, mode = 'strict') => { const d = await decide(line, ctx({ rules, mode })); return d.verdict === 'ask' ? `ask:${d.who}` : d.verdict; };
     assert.equal(await run('git status', [{ effect: 'deny', match: 'git status*' }]), 'deny');
     assert.equal(await run('git status', [{ effect: 'ask', match: 'git status*' }]), 'ask:user');
-    assert.equal(await run('git push', [{ effect: 'allow', match: 'git push*', by: 'button' }]), 'ask:user', 'a button-made rule never lifts external');
-    assert.equal(await run('git push', [{ effect: 'allow', match: 'git push*', by: 'user' }]), 'allow', 'a rule you typed does');
+    // A card's "Always allow" lifts pushes, uncheckable lines and whole-computer installs; never system changes,
+    // reading keys, or deleting outside the project (those take a rule you type, or are refused).
+    assert.equal(await run('git push', [{ effect: 'allow', match: 'git push*', by: 'button' }]), 'allow', 'a button-made rule lifts external');
+    assert.equal(await run('git push', [{ effect: 'allow', match: 'git push*', by: 'user' }]), 'allow', 'a rule you typed does too');
+    assert.equal(await run('git clean -fd', [{ effect: 'allow', match: 'git clean*', by: 'button' }]), 'allow', 'and discards');
+    assert.equal(await run('npm i -g typescript', [{ effect: 'allow', match: 'npm i -g*', by: 'button' }]), 'allow', 'and whole-computer installs');
+    assert.equal(await run('shutdown /s', [{ effect: 'allow', match: 'shutdown*', by: 'button' }]), 'deny', 'system changes stay refused');
+    const outside = path.join(os.tmpdir(), 'qx-outside', 'a.txt');
+    assert.equal(await run(`Remove-Item ${outside}`, [{ effect: 'allow', match: 'Remove-Item*', by: 'button' }]), 'ask:user', 'a delete outside the project still asks');
+    assert.equal(await run(`Remove-Item ${outside}`, [{ effect: 'allow', match: 'Remove-Item*', by: 'user' }]), 'allow', 'unless you typed the rule');
     assert.equal(await run('format C:', [{ effect: 'allow', match: 'format*', by: 'user' }]), 'deny', 'never stays never');
     assert.equal(await run('python script.py', [{ effect: 'allow', match: 'python*', by: 'user' }]), 'allow');
     assert.equal(await run('python script.py', [{ effect: 'allow', match: 'python*', by: 'user' }], 'yolo'), 'ask:deciders', 'interpreter wildcards are ignored in YOLO');
     assert.equal(await run('cargo build; git push', RULES), 'ask:user', 'a cargo rule does not carry git push along');
+  }
+  { // a PowerShell list (a\*.md,b\*.js) is several paths, each judged on its own
+    const d = await decide('Select-String -Path docs\\*.md,.quorx\\scratch\\*.mjs -Pattern "x|y" | Select-Object -First 25', ctx());
+    assert.equal(d.verdict, 'allow', 'reading two folders in the project runs');
+    assert.deepEqual(d.segments[0].paths.map((p) => [p.raw, p.zone]), [['docs\\*.md', 'inside'], ['.quorx\\scratch\\*.mjs', 'inside']]);
+    assert.equal((await decide('Remove-Item a.txt,C:\\Windows\\x.txt', ctx())).verdict, 'deny', 'a system folder in the list is still refused');
   }
 });
 

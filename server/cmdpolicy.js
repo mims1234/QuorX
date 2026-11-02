@@ -772,6 +772,11 @@ function pathsOf(s, c, ctx) {
     } else z = zoneOf(abs, ctx.root, ctx.added);
     out.push({ raw: text, resolved: abs, zone: z.zone, why: z.why, kind, redirect, wildcard: /[*?]/.test(path.basename(abs)) });
   };
+  // A PowerShell list (a\*.md,b\*.js) is several paths: each one is judged on its own, not as one path with a comma.
+  const addArg = (a, kind) => {
+    if (a.kind !== 'ArrayLiteralAst') return add(a.text, kind);
+    for (const t of a.text.match(/"[^"]*"|'[^']*'|[^,]+/g) || []) add(t.trim().replace(/^["']|["']$/g, ''), kind);
+  };
   for (const r of s.redirects || []) add(r, 'write', true);
   for (const o of c.cls === 'net' ? c.out || [] : []) add(o, 'write');
   if (c.cls === 'delete' || c.cls === 'write') {
@@ -788,7 +793,7 @@ function pathsOf(s, c, ctx) {
       // Set-Content/Add-Content/Out-File take content after the path; only the first plain argument is the path.
       if (['set-content', 'add-content', 'out-file', 'tee-object'].includes(s.program) && plain > 1) continue;
       // A move deletes its source (the first argument) and writes its destination.
-      add(a.text, c.cls === 'delete' || (MOVES.has(s.program) && plain === 1) ? 'delete' : 'write');
+      addArg(a, c.cls === 'delete' || (MOVES.has(s.program) && plain === 1) ? 'delete' : 'write');
     }
   }
   // Programs that print files: what they read is judged too (QuorX's keys and your key folders never, outside the project asks).
@@ -799,7 +804,7 @@ function pathsOf(s, c, ctx) {
       if (a.param) { if (VALUE_PARAMS.has(low(a.text))) skip = true; continue; }
       if (a.kind === 'ScriptBlockExpressionAst' || /^https?:\/\//i.test(a.text)) continue;
       if (AWKS.has(s.program) && a === s.args.find((x) => !x.param)) continue; // awk's program, not a file
-      add(a.text, 'read');
+      addArg(a, 'read');
     }
   }
   // git diff --no-index compares any two files on the computer, not the repo's: those are reads like cat's.
@@ -1443,9 +1448,11 @@ export async function decide(line, ctx) {
       else if (hits.ask && v === 'allow') { v = 'ask'; who = 'user'; by = `rule:${hits.ask.scope || 'project'}`; why = `your rule asks for “${hits.ask.match}”`; seg.rule = hits.ask; }
       else if (hits.ask) { who = 'user'; seg.rule = hits.ask; }
       else if (hits.allow && v === 'ask' && risk !== 'danger') {
-        const liftable = ['build', 'install', 'unknown', 'read', 'write', 'net'].includes(k.cls) && !k.global && !unknownPath && (!outside || readOnlyOutside);
-        const userOnly = ['opaque', 'external', 'discard'].includes(k.cls) || k.global || outside;
-        if (liftable || (userOnly && hits.allow.by === 'user' && !unknownPath)) { v = 'allow'; who = null; by = `rule:${hits.allow.scope || 'project'}`; why = `your rule allows “${hits.allow.match}”`; seg.rule = hits.allow; }
+        // Any allow rule, a card's "Always allow" too, lifts every ask but deleting or moving files outside the
+        // project or where QuorX can't tell (those take a rule you type, and never an unresolved path). Reading keys
+        // (danger) never lifts; system changes and blocked folders were refused above, before any rule.
+        const removesOutside = writes.some((p) => p.kind === 'delete' && p.zone !== 'inside');
+        if (!removesOutside || (hits.allow.by === 'user' && !unknownPath)) { v = 'allow'; who = null; by = `rule:${hits.allow.scope || 'project'}`; why = `your rule allows “${hits.allow.match}”`; seg.rule = hits.allow; }
       }
     }
     if (ctx.mode !== 'yolo' && v === 'ask') who = 'user';

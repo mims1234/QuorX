@@ -2463,6 +2463,8 @@ function placeMedia(msgEl, item, at) {
 }
 // One file in a message, once: where the text names it (`at`, the path in the text), else under the message.
 // `p` is the path as named (or a key for a made picture); `info` is { kind, size, v, key, src }.
+// A full path on this computer (C:\…, D:/… or /…), not a name or a path inside the project.
+const onDiskPath = (p) => /^(?:[A-Za-z]:[\\/]|\/)/.test(String(p || ''));
 function addMedia(msgEl, c, p, info, at = null) {
   if (!msgEl || !info?.kind) return;
   const key = String(info.key || p).replace(/\\/g, '/').toLowerCase(), all = (msgEl._mm ||= new Map()), had = all.get(key);
@@ -2472,15 +2474,20 @@ function addMedia(msgEl, c, p, info, at = null) {
   const meta = [MM_LABEL[info.kind], sizeText(info.size)].filter(Boolean).join(' · ');
   const item = document.createElement(info.kind === 'image' ? 'figure' : 'div');
   item._src = src; item._name = name; item._full = info.full ?? p; item._size = info.size; item._kind = info.kind; item._inline = !!at; item._key = key; item._rel = mediaKey(p);
+  // Where it is on this computer (the server's key is its full path): 📂 shows it in File Explorer, selected, so it
+  // can be uploaded or used elsewhere. Pictures made inside QuorX (art:) have no folder of yours.
+  item._disk = onDiskPath(info.key) ? info.key : onDiskPath(p) ? p : null;
   all.set(key, item);
-  const head = (acts = '') => `<div class="mm-head"><button type="button" class="mm-tog" aria-expanded="false" title="Show it here"><span class="mm-chev" aria-hidden="true">▸</span><span class="mm-ico" aria-hidden="true">${PV_ICON[info.kind] || '📄'}</span><b class="mm-name" title="${esc(item._full)}">${esc(name)}</b><span class="mm-info">${esc(meta)}</span></button><span class="mm-acts">${acts}<button type="button" class="pv-btn mm-open" title="Open it large">Open</button></span></div>`;
+  const folderBtn = (cls) => (item._disk ? `<button type="button" class="pv-btn ${cls}" title="Show it in File Explorer: ${esc(item._disk)}" aria-label="Show ${esc(name)} in its folder">📂 Show in folder</button>` : '');
+  const head = (acts = '') => `<div class="mm-head"><button type="button" class="mm-tog" aria-expanded="false" title="Show it here"><span class="mm-chev" aria-hidden="true">▸</span><span class="mm-ico" aria-hidden="true">${PV_ICON[info.kind] || '📄'}</span><b class="mm-name" title="${esc(item._disk || item._full)}">${esc(name)}</b><span class="mm-info">${esc(meta)}</span></button><span class="mm-acts">${acts}${folderBtn('mm-folder')}<button type="button" class="pv-btn mm-open" title="Open it large">Open</button></span></div>`;
   if (info.kind === 'image') {
     item.className = 'mm-pic';
-    item.innerHTML = `<button type="button" class="mm-thumb pv-checker" title="${esc(name)} · click to see it large"><img src="${esc(src)}" alt="${esc(name)}" loading="lazy" decoding="async"${/\.svg$/i.test(p) || /\.svg$/i.test(name) ? ' class="mm-svg"' : ''}></button><figcaption title="${esc(item._full)}">${esc(name)}</figcaption>`;
+    item.innerHTML = `<button type="button" class="mm-thumb pv-checker" title="${esc(name)} · click to see it large"><img src="${esc(src)}" alt="${esc(name)}" loading="lazy" decoding="async"${/\.svg$/i.test(p) || /\.svg$/i.test(name) ? ' class="mm-svg"' : ''}></button><figcaption title="${esc(item._disk || item._full)}"><span class="mm-cap">${esc(name)}</span>${item._disk ? `<button type="button" class="mm-pic-folder" title="Show it in File Explorer: ${esc(item._disk)}" aria-label="Show ${esc(name)} in its folder">📂</button>` : ''}</figcaption>`;
     // The large view steps through every picture in the message, in the order they show.
-    $('.mm-thumb', item).onclick = () => { const all = [...msgEl.querySelectorAll('.mm-pic')]; viewPictures(all.map((x) => x._src), all.indexOf(item)); };
+    $('.mm-thumb', item).onclick = () => { const all = [...msgEl.querySelectorAll('.mm-pic')]; viewPictures(all.map((x) => x._src), all.indexOf(item), all.map((x) => x._disk)); };
+    const pf = $('.mm-pic-folder', item); if (pf) pf.onclick = () => openFolder(null, item._disk);
     const img = $('img', item);
-    img.onerror = () => { item.classList.add('mm-broken'); $('figcaption', item).textContent = `${name} (could not be shown)`; };
+    img.onerror = () => { item.classList.add('mm-broken'); $('.mm-cap', item).textContent = `${name} (could not be shown)`; };
   } else {
     // Folded to its name line so a chat stays short; ▸ shows it here, and only then does it load.
     item.className = `mm-card mm-k-${info.kind} mm-shut`;
@@ -2497,7 +2504,8 @@ function addMedia(msgEl, c, p, info, at = null) {
       else if (info.kind === 'pdf') body.innerHTML = info.size > MM_PDF_INLINE ? `<p class="mm-note">A large PDF (${esc(sizeText(info.size))}): Open shows it.</p>` : `<iframe class="mm-pdf-frame" loading="lazy" src="${esc(src)}#navpanes=0&view=FitH" title="${esc(name)}"></iframe>`;
       else { body.innerHTML = '<div class="mm-md-body"><div class="fx-empty">Loading…</div></div>'; loadMdCard(item); }
     };
-    $('.mm-open', item).onclick = () => openViewer((body) => { body.innerHTML = '<div class="lb-doc fview"></div>'; previewFile($('.lb-doc', body), { name, src, size: info.size, full: item._full, kind: info.kind }); });
+    $('.mm-open', item).onclick = () => openViewer((body) => { body.innerHTML = '<div class="lb-doc fview"></div>'; previewFile($('.lb-doc', body), { name, src, size: info.size, full: item._disk || item._full, kind: info.kind }); });
+    const fo = $('.mm-folder', item); if (fo) fo.onclick = () => openFolder(null, item._disk);
   }
   placeMedia(msgEl, item, at);
 }
@@ -3051,12 +3059,15 @@ function openViewer(build) {
   build($('.lb-body', d), d);
   if (!d.open) d.showModal();
 }
-function viewPictures(list, start) {
+// disk: each picture's full path on this computer, when it has one (📂 Show in folder).
+function viewPictures(list, start, disk = []) {
   openViewer((body, d) => {
     let i = start;
     const draw = () => {
-      body.innerHTML = `<div class="lb-pic pv-checker"><img src="${esc(list[i])}" alt="picture ${i + 1}"></div>${list.length > 1 ? `<div class="lb-nav"><button type="button" class="lb-prev" aria-label="Previous">‹</button><span>${i + 1} of ${list.length}</span><button type="button" class="lb-next" aria-label="Next">›</button></div>` : ''}`;
+      const fold = disk[i] ? `<button type="button" class="pv-btn lb-folder" title="Show it in File Explorer: ${esc(disk[i])}">📂 Show in folder</button>` : '';
+      body.innerHTML = `<div class="lb-pic pv-checker"><img src="${esc(list[i])}" alt="picture ${i + 1}"></div>${list.length > 1 || fold ? `<div class="lb-nav">${list.length > 1 ? `<button type="button" class="lb-prev" aria-label="Previous">‹</button><span>${i + 1} of ${list.length}</span><button type="button" class="lb-next" aria-label="Next">›</button>` : ''}${fold}</div>` : ''}`;
       const go = (k) => { i = (i + k + list.length) % list.length; draw(); };
+      const fb = $('.lb-folder', body); if (fb) fb.onclick = () => openFolder(null, disk[i]);
       const pv = $('.lb-prev', body), nx = $('.lb-next', body);
       if (pv) pv.onclick = () => go(-1); if (nx) nx.onclick = () => go(1);
       d.onkeydown = (e) => { if (list.length > 1 && e.key === 'ArrowLeft') go(-1); if (list.length > 1 && e.key === 'ArrowRight') go(1); };
@@ -4408,23 +4419,40 @@ function drawThinking(m, c) {
   if (stick) body.scrollTop = body.scrollHeight;
 }
 // #3 The plan the agent made for this reply: a live checklist (newest version from the trace).
-function planCardHTML(m) {
+// While the reply runs it is one line (how far, and the step under way); "Show all" opens the checklist, and that
+// choice is remembered for every plan. Inside a finished reply's fold (full) it is always the whole list.
+const planFull = () => { try { return localStorage.getItem('qx.planFull') === '1'; } catch { return false; } };
+document.addEventListener('toggle', (e) => {
+  if (!e.target.matches?.('details.pc-compact')) return;
+  try { localStorage.setItem('qx.planFull', e.target.open ? '1' : '0'); } catch { /* the choice just isn't kept */ }
+}, true);
+function planCardHTML(m, full = false) {
   const p = (m.trace || []).findLast((e) => e.t === 'plan');
   if (!p) return '';
   const done = p.items.filter((x) => x.status === 'done').length, pct = Math.round((done / p.items.length) * 100);
   const mark = { done: '✓', doing: '◐', todo: '○' };
+  const head = `<b>🗺 Plan</b><span class="pc-count">${done} of ${p.items.length} done</span><span class="pc-bar" aria-hidden="true"><i style="width:${pct}%"></i></span>`;
+  if (!full) {
+    const now = p.items.find((x) => x.status === 'doing') || p.items.find((x) => x.status !== 'done');
+    return `<details class="plan-card pc-compact ${done === p.items.length ? 'complete' : ''}" ${planFull() ? 'open' : ''}>
+    <summary><span class="pc-head">${head}<span class="pc-more"><span class="pc-show">Show all ▾</span><span class="pc-hide">Compact ▴</span></span></span>${now ? `<span class="pc-now"><span class="pc-mark" aria-hidden="true">${mark[now.status] || '○'}</span><span>${esc(now.text)}</span></span>` : ''}</summary>
+    ${planListHTML(p, mark)}</details>`;
+  }
   return `<div class="plan-card ${done === p.items.length ? 'complete' : ''}">
-    <div class="pc-head"><b>🗺 Plan</b><span class="pc-count">${done} of ${p.items.length} done</span><span class="pc-bar" aria-hidden="true"><i style="width:${pct}%"></i></span></div>
-    <ul class="pc-items">${p.items.map((x) => `<li class="${x.status}"><span class="pc-mark" aria-hidden="true">${mark[x.status] || '○'}</span><span>${esc(x.text)}</span>${x.status === 'doing' ? '<em>in progress</em>' : ''}</li>`).join('')}</ul>
-    ${p.spec || p.doneWhen?.length ? `<details class="pc-spec"><summary>Spec${p.doneWhen?.length ? ' and done checks' : ''}</summary>${p.spec ? `<div class="pc-spec-body">${md(p.spec)}</div>` : ''}${p.doneWhen?.length ? `<div class="pc-dw"><b>Done when</b><ul>${p.doneWhen.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}</details>` : ''}
+    <div class="pc-head">${head}</div>
+    ${planListHTML(p, mark)}
   </div>`;
+}
+function planListHTML(p, mark) {
+  return `<ul class="pc-items">${p.items.map((x) => `<li class="${x.status}"><span class="pc-mark" aria-hidden="true">${mark[x.status] || '○'}</span><span>${esc(x.text)}</span>${x.status === 'doing' ? '<em>in progress</em>' : ''}</li>`).join('')}</ul>
+    ${p.spec || p.doneWhen?.length ? `<details class="pc-spec"><summary>Spec${p.doneWhen?.length ? ' and done checks' : ''}</summary>${p.spec ? `<div class="pc-spec-body">${md(p.spec)}</div>` : ''}${p.doneWhen?.length ? `<div class="pc-dw"><b>Done when</b><ul>${p.doneWhen.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}</details>` : ''}`;
 }
 // A finished reply's plan: one line (how far it got), open it for the checklist.
 function planFoldHTML(m) {
   const p = (m.trace || []).findLast((e) => e.t === 'plan');
   if (!p) return '';
   const done = p.items.filter((x) => x.status === 'done').length, all = done === p.items.length, key = `plan-${m.runId || ''}`;
-  return `<details class="q-fold plan-fold" data-qkey="${esc(key)}" ${G.qOpen?.has(key) ? 'open' : ''}><summary><span class="q-fold-ic" aria-hidden="true">🗺</span><span class="q-fold-l">${all ? 'Goal done' : 'Plan'}</span><span class="q-fold-a">${done} of ${p.items.length} done</span><span class="tl-chev" aria-hidden="true">›</span></summary>${planCardHTML(m)}</details>`;
+  return `<details class="q-fold plan-fold" data-qkey="${esc(key)}" ${G.qOpen?.has(key) ? 'open' : ''}><summary><span class="q-fold-ic" aria-hidden="true">🗺</span><span class="q-fold-l">${all ? 'Goal done' : 'Plan'}</span><span class="q-fold-a">${done} of ${p.items.length} done</span><span class="tl-chev" aria-hidden="true">›</span></summary>${planCardHTML(m, true)}</details>`;
 }
 // #4 What the separate reviewer found: scores out of 5, the bar, its bugs. One card per review round.
 const REVIEW_LABEL = { function: 'Function', craft: 'Craft', design: 'Design', originality: 'Originality', accessibility: 'Accessibility', brand: 'Brand fit', picture: 'Picture', motion: 'Motion', sound: 'Sound', rhythm: 'Rhythm', story: 'Story' };
@@ -5601,8 +5629,9 @@ function decideCard(r) {
 // Cards can only be answered while their reply runs; older ones without an answer show as closed.
 // An answered approval, shown on the tool call it was about: ✓ / ⛔ / ⚡ and the price on the row, who and why inside.
 // An answered card: allowed, declined, or neither (you typed a reply instead, which went to the agent).
-const apState = (o, live) => (o ? (o.approve ? 'yes' : o.reply ? 'reply' : 'no') : live ? 'wait' : 'none');
-const apWho = (o, c) => (o.reply ? `Not allowed or denied: you replied “${esc(o.reply)}”`
+const apState = (o, live) => (o ? (o.gone ? 'none' : o.approve ? 'yes' : o.reply ? 'reply' : 'no') : live ? 'wait' : 'none');
+const apWho = (o, c) => (o.gone ? 'Not answered: QuorX restarted, so the reply no longer waits for this card'
+  : o.reply ? `Not allowed or denied: you replied “${esc(o.reply)}”`
   : `${o.approve ? (o.rule || o.always ? 'Allowed always' : 'Allowed') : 'Denied'} by ${byName(o.by)}${o.rule ? ` · rule <code>${esc(o.rule.match)}</code> saved in ${esc(SCOPE[o.rule.scope]?.label || o.rule.scope)}` : o.always ? ' · from now on in this chat' : ''}${o.approve && o.model && o.model !== c.model ? ` · switched to ${esc(short(o.model))}` : ''}${o.reason ? ` · ${esc(o.reason)}` : ''}`);
 const AP_MARK = { yes: '✓', no: '⛔', reply: '↩', wait: '⚡', none: '·' };
 function approvalBadge(a, live) {
@@ -5675,7 +5704,7 @@ function shellCardHTML(a) {
     ${waitHTML(c)}
     <div class="acts"><button type="button" class="primary reply" hidden>Send to the agent</button>${byProgram ? `<button type="button" class="primary yes" data-rule="${esc(sug.program)}" title="Every command that starts with ${esc(prog)} runs without asking in this chat, whatever its arguments">Allow every <code>${esc(prog)}</code> command</button><button type="button" class="once">Just this once</button>` : '<button type="button" class="primary yes">Allow once</button>'}${c.noAlways ? '' : '<button type="button" class="sc-always" aria-expanded="false">Allow always ▾</button>'}<button type="button" class="no">Deny</button></div>
     ${byProgram ? `<div class="what dim sc-covers">“Allow every <b>${esc(prog)}</b> command” covers every command that starts with <code>${esc(prog)}</code> in this chat, whatever comes after it. Commands joined with &amp;&amp;, ; or | are still checked part by part, and risky ones still ask.</div>` : ''}
-    ${c.noAlways ? '<div class="sc-note">No “Allow always” for this kind of command: it reaches past the project, can’t be checked, or touches your keys. If you’re sure, type a rule yourself in Permissions (⚙ Settings → Approvals & safety).</div>'
+    ${c.noAlways ? '<div class="sc-note">No “Allow always” for this command: it reads your keys, or deletes or moves files outside the project. If you’re sure, type a rule yourself in Permissions (⚙ Settings → Approvals & safety).</div>'
       : `<div class="sc-rule" hidden>
         <div class="sc-row"><span class="sc-k">What it covers</span>${seg('match', ((o) => (byProgram ? [o[2], o[1], o[0]] : o))([[sug.exact, 'This exact command'], [sug.prefix, `Commands starting with <code>${esc(sug.prefix.replace(/\*$/, ''))}</code>`], [sug.program, `Every <code>${esc(prog)}</code> command`]]))}</div>
         <div class="sc-row"><span class="sc-k">Where</span>${seg('scope', [['chat', `${scopeMark('chat', true)}This chat`], ['project', `${scopeMark('project', true)}This project`], ['everywhere', `${scopeMark('everywhere', true)}Everywhere in QuorX`]])}</div>
@@ -5714,6 +5743,21 @@ function typingIsReply(card, send) {
   reply.onclick = go;
   sync();
 }
+// Cards and questions a reply cut off by a restart left open: nothing waits for their answer any more (a resumed
+// reply asks again if it still needs to), so they close instead of showing buttons that do nothing.
+function closeOpenCards(m) {
+  for (const x of Object.values(m.approvals || {})) if (!x.outcome) x.outcome = { approve: false, gone: true, by: 'restart' };
+  for (const q of Object.values(m.questions || {})) if (!q.answer) q.answer = { label: '(not answered: QuorX restarted)' };
+}
+// A click the server had no waiting card for (it restarted, or the card was already answered): that card closes.
+async function postApproval(m, id, body) {
+  const r = await fetch('/api/approve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ runId: m.runId, id, ...body }) }).then((x) => x.json()).catch(() => null);
+  if (!r || r.ok || body.reply) return;
+  const a = m.approvals?.[id];
+  if (a && !a.outcome) a.outcome = { approve: false, gone: true, by: 'restart' };
+  const c = [...G.open.values()].find((x) => x.agent.messages.includes(m));
+  if (c) { updateMsg(c, m); saveChat(c); }
+}
 // The approval cards of a chat still waiting on you (not questions or the budget card).
 const openApprovalCards = (root) => [...root.querySelectorAll('.msgs .approval[data-id]:not(.question):not(.budget-card):not([data-buttons-only])')].filter((x) => !x.dataset.answered);
 function wireShellCard(card, m) {
@@ -5722,7 +5766,7 @@ function wireShellCard(card, m) {
     card.dataset.answered = '1';
     card.querySelectorAll('button, textarea').forEach((b) => (b.disabled = true));
     const reason = reply ? '' : $('textarea', card)?.value.trim() || '';
-    await fetch('/api/approve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ runId: m.runId, id, approve, reason, ...(reply ? { reply } : {}), ...(rule ? { rule } : {}) }) }).catch(() => {});
+    await postApproval(m, id, { approve, reason, ...(reply ? { reply } : {}), ...(rule ? { rule } : {}) });
   };
   // The yes on a program (Allow every ffmpeg command) saves it for this chat; Just this once runs only this line.
   const yes = $('.yes', card);
@@ -5820,7 +5864,7 @@ function wireApproval(card, m) {
     card.querySelectorAll('button, select, textarea').forEach((b) => (b.disabled = true));
     const reason = reply ? '' : $('textarea', card)?.value.trim() || '';
     const models = sel ? null : Object.fromEntries(sels.map((s) => [s.dataset.key, s.value]).filter(([, v]) => v && v !== '__more'));
-    await fetch('/api/approve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ runId: m.runId, id, approve, always, reason, ...(reply ? { reply } : {}), model: sel?.value, ...(models && Object.keys(models).length ? { models } : {}) }) }).catch(() => {});
+    await postApproval(m, id, { approve, always, reason, ...(reply ? { reply } : {}), model: sel?.value, ...(models && Object.keys(models).length ? { models } : {}) });
   };
   $('.yes', card).onclick = () => answer(true);
   const always = $('.always', card); if (always) always.onclick = () => answer(true, true);
@@ -6156,6 +6200,7 @@ async function runChat(c, text, ctx, imgs, { resumeOf, docs = [], more = 0, mode
   const cut = resumeOf && !more ? a.messages.find((x) => x.role === 'assistant' && x.runId === resumeOf) : null;
   const m = cut || { role: 'assistant', content: '', at: Date.now(), trace: [], approvals: {}, questions: {}, arts: [], runId, live: true, runActive: true };
   if (cut) {
+    closeOpenCards(m);
     Object.assign(m, { runId, live: true, runActive: true, resumedFrom: [...(m.resumedFrom || []), resumeOf], error: undefined, resumable: false });
     if (m.stats?.partial) delete m.stats; // the resumed run's totals include what the cut-off part spent
     m.trace.push({ t: 'resumed', from: resumeOf, at: (m.trace.at(-1)?.at || 0) });
@@ -6204,6 +6249,7 @@ async function reattachRuns(c) {
     if (st.status === 'interrupted') {
       following.delete(m.runId); m.runActive = false; m.live = false;
       m.error = 'The harness restarted while this reply was running.'; m.resumable = !!st.resumable;
+      closeOpenCards(m);
       if (m.el) updateMsg(c, m);
       syncRunState(c); saveChat(c); continue;
     }
@@ -6213,6 +6259,8 @@ async function reattachRuns(c) {
     const kept = mark >= 0 ? m.trace.slice(0, mark + 1) : [];
     const keptSteps = new Set(kept.filter((e) => e.t === 'llm_start').map((e) => String(e.step)));
     const thinking = Object.fromEntries(Object.entries(m.thinking || {}).filter(([k]) => keptSteps.has(k)));
+    // The cards kept are from before the restart (the replay brings this run's own back): none can be answered now.
+    if (mark >= 0) closeOpenCards(m);
     Object.assign(m, { content: '', trace: kept, approvals: mark >= 0 ? m.approvals || {} : {}, questions: mark >= 0 ? m.questions || {} : {}, thinking, error: undefined, live: true, runActive: true });
     if (m.el) updateMsg(c, m);
     followRun(c, m, (signal) => fetch(`/api/runs/${m.runId}/events`, { signal }));
@@ -6356,7 +6404,7 @@ async function followRun(c, m, open) {
         if (e.t === 'answer' && m.questions[e.id]) { const qc = m.questions[e.id].card; e.label = e.answers ? (e.defaults ? 'the recommended answers' : e.answers.map((x, i) => (x.choice != null ? qc.questions?.[i]?.options[x.choice] : x.text || '–')).join(' · ')) : e.choice != null ? qc.options[e.choice] : e.text; m.questions[e.id].answer = e; c.waiting = false; renderSidebar(); renderChatHead(c); }
         if (e.t === 'done') { m.doneAt = Date.now(); m.content = e.reply; m.note = e.historyNote; m.stats = e.stats; G.sessionCost += e.stats.cost; renderSpend(); loadScores(); setTimeout(() => loadChatBudget(c), 400); }
         if (e.t === 'error') { setTimeout(() => loadChatBudget(c), 400); m.error = e.msg; m.failed = !e.stopped; if (e.stats && !m.stats) { m.stats = { ...e.stats, partial: true }; G.sessionCost += e.stats.cost || 0; renderSpend(); } }
-        if (e.t === 'interrupted') { m.error = 'The harness restarted while this reply was running.'; m.resumable = !!e.resumable; }
+        if (e.t === 'interrupted') { m.error = 'The harness restarted while this reply was running.'; m.resumable = !!e.resumable; closeOpenCards(m); }
         if (e.t === 'compacted') { a.summary = e.summary; a.summaryAt = e.cutoffAt; }
         if (e.t === 'control') { c.driving = e.kind; markDriving(c); renderSidebar(); }
         // You switched paid tools on from the agent's card: they stay on for this chat (its 🧰 Tools menu shows them).
@@ -6857,8 +6905,12 @@ function parseDelimited(text, sep) {
  * source; `full` is the path on disk (for Copy path). Pages and Markdown get Preview / Source.
  */
 async function previewFile(view, { name, src, size, full, text, kind = previewKind(name), live = true }) {
-  const onDisk = /^(?:[A-Za-z]:[\\/]|\/)/.test(full || ''); // a full path on disk (some callers pass only a name)
-  const head = (info, extra = '') => `<div class="pv-head"><span class="pv-ico" aria-hidden="true">${PV_ICON[kind] || '📄'}</span><b class="pv-name" title="${esc(full || name)}">${esc(name)}</b><span class="pv-info">${info}</span><span class="pv-acts">${extra}${full ? '<button type="button" class="pv-btn pv-copy" title="Copy the path">Copy path</button>' : ''}${onDisk ? '<button type="button" class="pv-btn pv-folder" title="Show it in File Explorer">Show in folder</button>' : ''}${src && !src.startsWith('data:') ? '<button type="button" class="pv-btn pv-ext" title="Open it in its own window">Open ↗</button>' : ''}</span></div>`;
+  const onDisk = onDiskPath(full); // a full path on disk (some callers pass only a name)
+  // Open ↗ only for a page hosted elsewhere: a file QuorX serves would just open the same view again (📂 Show in folder
+  // is how to get to the file itself).
+  const hosted = /^https?:\/\//i.test(src || '') && (() => { try { return new URL(src).origin !== location.origin; } catch { return false; } })();
+  const elsewhere = onDisk ? 'Show in folder' : hosted ? 'Open ↗' : '';
+  const head = (info, extra = '') => `<div class="pv-head"><span class="pv-ico" aria-hidden="true">${PV_ICON[kind] || '📄'}</span><b class="pv-name" title="${esc(full || name)}">${esc(name)}</b><span class="pv-info">${info}</span><span class="pv-acts">${extra}${full ? '<button type="button" class="pv-btn pv-copy" title="Copy the path">Copy path</button>' : ''}${onDisk ? '<button type="button" class="pv-btn pv-folder" title="Show it in File Explorer">Show in folder</button>' : ''}${hosted ? '<button type="button" class="pv-btn pv-ext" title="Open it in its own window">Open ↗</button>' : ''}</span></div>`;
   const wire = () => {
     const cp = $('.pv-copy', view); if (cp) cp.onclick = () => navigator.clipboard?.writeText(full).then(() => flashTip(cp, 'Copied')).catch(() => flashTip(cp, 'Could not copy'));
     const fo = $('.pv-folder', view); if (fo) fo.onclick = () => openFolder(null, full);
@@ -6890,7 +6942,7 @@ async function previewFile(view, { name, src, size, full, text, kind = previewKi
     wire();
     const el = $(kind, view);
     el.onloadedmetadata = () => { $('.pv-info', view).textContent = [meta, durText(el.duration), kind === 'video' && el.videoWidth ? `${el.videoWidth}×${el.videoHeight}` : ''].filter(Boolean).join(' · '); };
-    el.onerror = () => { $('.pv-stage', view).insertAdjacentHTML('beforeend', '<p class="pv-note">This format does not play in the app (it may need its own player). Use Open ↗.</p>'); };
+    el.onerror = () => { $('.pv-stage', view).insertAdjacentHTML('beforeend', `<p class="pv-note">This format does not play in the app (it may need its own player).${elsewhere ? ` Use ${elsewhere}.` : ''}</p>`); };
     return;
   }
   if (kind === 'pdf') { view.innerHTML = head(meta) + `<iframe class="pv-frame" src="${esc(src)}" title="${esc(name)}"></iframe>`; wire(); return; }
@@ -6898,7 +6950,7 @@ async function previewFile(view, { name, src, size, full, text, kind = previewKi
     view.innerHTML = head(meta) + '<div class="pv-doc"><div class="fx-empty">Reading…</div></div>'; wire();
     const r = await getJ(`/api/files/text?project=${encodeURIComponent(G.filesProject)}&path=${encodeURIComponent(name)}`).catch((e) => ({ error: e.message }));
     const doc = $('.pv-doc', view); if (!doc) return;
-    doc.innerHTML = r?.error ? `<div class="fx-empty">Could not read it: ${esc(r.error)}</div>` : `<p class="pv-note">The text of the document (no layout or pictures). Open ↗ shows it as it looks.</p><div class="pv-text">${esc(r.text || '(no text)')}</div>`;
+    doc.innerHTML = r?.error ? `<div class="fx-empty">Could not read it: ${esc(r.error)}</div>` : `<p class="pv-note">The text of the document (no layout or pictures).${elsewhere ? ` ${elsewhere} to see it as it looks.` : ''}</p><div class="pv-text">${esc(r.text || '(no text)')}</div>`;
     return;
   }
   if (kind === 'table') {
@@ -6918,7 +6970,7 @@ async function previewFile(view, { name, src, size, full, text, kind = previewKi
   }
   if (kind === 'md') return twoWay(async (body) => { const t = text ?? await fetch(src).then((r) => r.text()); body.innerHTML = `<div class="pv-md msg-md">${md(t)}</div>`; enhance(body); });
   if (kind === 'html') return twoWay((body) => { const u = pageUrl(src); body.innerHTML = `<iframe class="pv-frame" sandbox="${pageSandbox(u)}" src="${esc(u)}" title="${esc(name)}"></iframe>`; });
-  if (kind === 'binary') { view.innerHTML = head(meta) + `<div class="fx-empty big">${esc(name)}<br><small>A binary file: no preview. Open ↗ or open the folder to use it.</small></div>`; wire(); return; }
+  if (kind === 'binary') { view.innerHTML = head(meta) + `<div class="fx-empty big">${esc(name)}<br><small>A binary file: no preview.${elsewhere ? ` ${elsewhere} to use it.` : ''}</small></div>`; wire(); return; }
   // Text and code: the code viewer.
   const t = text ?? await fetch(src).then((r) => r.text());
   view.innerHTML = head(meta) + '<div class="pv-body"></div>'; wire();
