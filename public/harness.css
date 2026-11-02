@@ -62,56 +62,31 @@
 .sx-tag.hkx-sends { color: var(--violet); background: var(--violet-dim); }
 @media (max-width: 760px) { .qx-ev-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
-/* ---------- ⚙ Memory: typed notes ---------- */
+/* ---------- ⚙ Memory ---------- */
 .qx-mem { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 8px; }
 .qx-memrow { display: flex; gap: 12px; align-items: flex-start; padding: 12px 16px; border-radius: 11px; border: 1.5px solid var(--line); background: var(--panel); }
 .qx-mem-main { flex: 1; min-width: 0; display: grid; gap: 4px; }
 .qx-mem-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .qx-mem-text { margin: 0; font-size: 13.5px; font-weight: 600; color: var(--text-bright); overflow-wrap: anywhere; }
-.qx-mem-why { margin: 0; font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
-.qx-mem-why i { font-style: normal; font-weight: 600; color: var(--text); }
 .qx-mem-acts { display: flex; align-items: center; gap: 4px; flex: none; }
 .qx-scope { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; color: var(--muted); white-space: nowrap; }
 .qx-scope.proj, .mem-scope.proj { color: #f472b6; }
-.qx-tok { margin-left: auto; font: 600 11px var(--mono); color: var(--dim); white-space: nowrap; }
-#settings .sx-tag.mem-t-user, .approval .sx-tag.mem-t-user { color: var(--accent); background: var(--accent-dim); }
-#settings .sx-tag.mem-t-feedback, .approval .sx-tag.mem-t-feedback { color: var(--ok); background: var(--ok-dim); }
-#settings .sx-tag.mem-t-project, .approval .sx-tag.mem-t-project { color: #f472b6; background: rgba(244, 114, 182, 0.12); }
-#settings .sx-tag.mem-t-reference, .approval .sx-tag.mem-t-reference { color: var(--violet); background: var(--violet-dim); }
-.qx-more-d { margin-top: 2px; }
-.qx-more-d > summary { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; list-style: none; font-size: 12px; font-weight: 600; color: var(--accent); }
-.qx-more-d > summary::-webkit-details-marker { display: none; }
-.qx-more-d > summary::before { content: '▸'; font-size: 10px; transition: transform 160ms ease-out; }
-.qx-more-d[open] > summary::before { transform: rotate(90deg); }
-.qx-more-d > summary small { font: 500 11px var(--mono); color: var(--dim); }
-.qx-more-d > div { margin-top: 6px; padding: 10px 12px; border-radius: 8px; background: var(--surface-inset); border: 1px solid var(--border-inset); font-size: 12.5px; line-height: 1.6; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
 .qx-memform { display: grid; gap: 12px; margin-top: 8px; padding: 16px; border-radius: 11px; border: 1px solid var(--accent-border); background: var(--panel-2); }
-.qx-memform-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
 .qx-field { display: grid; gap: 5px; }
 .qx-field label { font-size: 11.5px; font-weight: 600; color: var(--muted); }
 .qx-lblrow { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
-.qx-opt { font-weight: 500; color: var(--dim); }
 .qx-cc { font: 500 11px var(--mono); color: var(--dim); }
-#settings .qx-memform textarea.st-input { height: 76px; padding: 8px 10px; resize: vertical; line-height: 1.5; }
 #settings .qx-memform .st-input, #settings .qx-memform .st-select { width: 100%; }
 .qx-edit-acts { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
-@media (max-width: 700px) { .qx-memform-grid { grid-template-columns: 1fr; } }
-/* The remember card: what kind of note, and where it applies. */
+/* The remember card: where the note applies. */
 .approval .mem-memo { display: grid; gap: 4px; }
 .approval .mem-memo .mem-scope { font-size: 12px; font-weight: 600; color: var(--muted); }
 
-/* ---------- the wrap-up under a reply: an inset well that only reads ---------- */
-.wu { display: grid; gap: 12px; margin-top: 10px; padding: 16px; border-radius: 10px; background: var(--surface-inset); border: 1px solid var(--border-inset); box-shadow: inset 0 1px 0 rgba(0, 0, 0, .25); }
-.wu-head { font-size: 11px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: var(--muted); }
-.wu-recap { margin: 0; font-size: 13.5px; line-height: 1.65; color: var(--text); max-width: 70ch; }
+/* ---------- under a reply: what wasn't checked, a quiet inset note that only reads ---------- */
+.wu { margin-top: 10px; padding: 10px 14px; border-radius: 10px; background: var(--surface-inset); border: 1px solid var(--border-inset); }
 .wu-not { display: grid; gap: 6px; }
 .wu-not > b { font-size: 12px; font-weight: 700; color: var(--text); }
 .wu-not ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
 .wu-not li { display: flex; gap: 8px; align-items: baseline; font-size: 12.5px; line-height: 1.5; color: var(--muted); }
 .wu-not li::before { content: ''; flex: none; width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--amber); transform: translateY(-1px); }
-.wu-next { display: flex; gap: 8px; flex-wrap: wrap; }
-.wu .wu-go { display: inline-flex; align-items: center; gap: 8px; min-height: 34px; height: auto; padding: 6px 12px 6px 10px; border-radius: 8px; border: 1px solid var(--accent-border); background: transparent; color: var(--text-bright); font: 600 12.5px/1.35 var(--font-ui); text-align: left; cursor: pointer; max-width: 100%; transition: background 160ms ease-out, border-color 160ms ease-out; }
-.wu .wu-go:hover { background: var(--accent-dim); border-color: var(--accent); }
-.wu .wu-go:disabled { opacity: .45; cursor: default; }
-.wu .wu-go.sent { opacity: 1; border-style: dashed; color: var(--muted); }
-@media (prefers-reduced-motion: reduce) { .qx-more-d > summary::before, .wu .wu-go, #settings .qx-lazy { transition: none; } }
+@media (prefers-reduced-motion: reduce) { #settings .qx-lazy { transition: none; } }

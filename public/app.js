@@ -1260,7 +1260,7 @@ async function mountHooksWindow(p, el, ctl) {
     const dirty = isDirty(), on = list.filter((h) => h.on).length;
     ctl.setDirty(dirty);
     ctl.setSummary(list.length ? `<span class="hkx-st ${on ? 'ok' : ''}"><i></i>${on} on${list.length > on ? ` · ${list.length - on} off` : ''}</span>` : '');
-    el.innerHTML = `<div class="pjx-intro"><b>Commands QuorX runs itself around the agent's work. The agent can't skip them.</b><span>They run on this computer, inside the project folder, from top to bottom, and still go through your command rules and Stop. In a command, <code>{file}</code> is the file being written and <code>{tool}</code> the tool's name.</span></div>
+    el.innerHTML = `<div class="pjx-intro"><b>Commands QuorX runs itself around the agent's work. The agent can't skip them.</b><span>They run on this computer, inside the project folder, from top to bottom, without asking you: you wrote them. QuorX still never runs a dangerous one, and Stop stops them. In a command, <code>{file}</code> is the file being written and <code>{tool}</code> the tool's name.</span></div>
       <div class="hkx-toolbar"><div class="pjx-filter hkx-filter"></div><button type="button" class="kx-btn sm primary hk-add">＋ Add hook</button></div>
       ${list.length ? `<ol class="hkx-list">${list.map((h, i) => {
         const ed = editing.has(h.id);
@@ -4723,7 +4723,6 @@ function drawTimeline(c, m) {
   wireTimeline(m, el);
   $('.approvals', el).innerHTML = outOfStepsHTML(m) + wrapUpHTML(m);
   const oos = $('.oos-card[data-run]', el); if (oos) wireOutOfSteps(oos, c, m);
-  wireWrapUp(el, c, m);
   for (const card of el.querySelectorAll('.approval[data-id]:not(.question):not(.budget-card)')) wireApproval(card, m);
   for (const card of el.querySelectorAll('.question[data-id]')) wireQuestion(card, m);
   const bcard = $('.budget-card[data-id]', el); if (bcard) wireBudget(bcard, c, m);
@@ -5346,11 +5345,11 @@ function traceRows(m) {
     else if (e.t === 'fresh_eyes') row(e.at, `👀 Fresh eyes ${e.ok ? 'diagnosed it' : 'found nothing'}${e.report ? `<div class="sub" style="white-space:pre-wrap">${linkUrls(esc(e.report))}</div>` : ''}`, e.ok ? 'ok' : 'warn');
     else if (e.t === 'helper_start' && e.fresh) return;
     else if (e.t === 'helper_start') row(e.at, `🤝 <b>Helper ${e.id}</b>${e.roleName ? ` <span class="sx-tag">${esc(e.roleName)}</span>` : ''} ${esc(short(e.model))} starts, ${e.context === 'summary' ? 'with a summary of this chat' : 'with a clean context'}${e.can && e.can.length > 1 ? ` · may ${esc(e.can.filter((c) => c !== 'read').map((c) => ({ commands: 'run checked commands', browser: 'use the browser', scratch: 'write in scratch' }[c] || c)).join(', '))}` : ''}<div class="sub">${esc(e.task)}</div>`, 'note');
-    else if (e.t === 'guard') row(e.at, `✋ <b>${esc(e.path)}</b> not changed: it ${esc(e.why)}<div class="sub">The agent has to read it again first (⚙ Agent loop → Protect files that changed)</div>`, 'warn');
+    else if (e.t === 'guard') row(e.at, `✋ <b>${esc(e.path)}</b> not changed: it ${esc(e.why)}<div class="sub">The agent has to read it again first (⚙ Agent loop → Under the hood → Protect files that changed)</div>`, 'warn');
     else if (e.t === 'job_done') row(e.at, `🔔 Background job <code>${esc(e.id)}</code> ${e.failed ? 'failed to run' : `ended · exit ${e.code ?? '–'}`}<div class="sub">${esc(e.label)} · the agent was told</div>${e.tail ? `<details class="out"><summary>last output</summary><pre>${esc(e.tail)}</pre></details>` : ''}`, e.failed || (e.code && e.code !== 0) ? 'warn' : 'ok');
-    else if (e.t === 'tools_deferred') row(e.at, `🧰 ${e.names.length} rarely used tool${e.names.length === 1 ? '' : 's'} wait until needed<div class="sub">${esc(e.names.join(', '))} · ⚙ Agent loop → Load rare tools when needed</div>`, 'note');
+    else if (e.t === 'tools_deferred') row(e.at, `🧰 ${e.names.length} rarely used tool${e.names.length === 1 ? '' : 's'} wait until needed<div class="sub">${esc(e.names.join(', '))} · ⚙ Agent loop → Under the hood → Load rare tools when needed</div>`, 'note');
     else if (e.t === 'tools_loaded') row(e.at, `🧰 Loaded <code>${esc(e.names.join(', '))}</code><div class="sub">${e.left ? `${e.left} more can load when needed` : 'Every tool is loaded now'}</div>`, 'note');
-    else if (e.t === 'notes_read') row(e.at, `📄 Read other agents' notes: ${e.files.map((f) => `<code>${esc(f.file)}</code> ${fmtBytes(f.bytes)}${f.cut ? ' (cut)' : ''}`).join(' · ')}<div class="sub">With AGENT.md · ⚙ Agent loop → Read other agents' notes</div>`, 'note');
+    else if (e.t === 'notes_read') row(e.at, `📄 Read other agents' notes: ${e.files.map((f) => `<code>${esc(f.file)}</code> ${fmtBytes(f.bytes)}${f.cut ? ' (cut)' : ''}`).join(' · ')}<div class="sub">With AGENT.md · ⚙ Agent loop → Under the hood → Read other agents' notes</div>`, 'note');
     else if (e.t === 'recall') row(e.at, `📌 Read the details of a memory note: “${esc(e.text)}”`, 'note');
     else if (e.t === 'wrap_up') row(e.at, `🧾 Wrap-up${e.unchecked?.length ? ` · ${e.unchecked.length} thing${e.unchecked.length === 1 ? '' : 's'} not checked` : ''}${e.next?.length ? ` · ${e.next.length} next step${e.next.length === 1 ? '' : 's'}` : ''}`, 'note');
     else if (e.t === 'helper_done') row(e.at, `🤝 Helper ${e.id} ${e.ok ? 'reported back' : 'gave no report'} · ${e.steps} step${e.steps === 1 ? '' : 's'} · ${secs(e.ms)} · ${money(e.cost, 4)}${e.chars ? ` · ${e.chars} characters returned` : ''}`, e.ok ? 'ok' : 'warn');
@@ -5655,7 +5654,7 @@ function approvalHTML(a, live = true) {
     ${head}${model}${danger}
     ${c.mcp ? `<div class="mcp-ap"><div class="mcp-ap-head">${mcpMark({ name: c.mcp.server }, 'sm')}<span>Use <b>${esc(c.mcp.tool)}</b> on the MCP server <b>${esc(c.mcp.server)}</b></span>${c.mcp.changes ? '<span class="mcp-chg" title="The server doesn\'t mark this tool as read-only">CHANGES THINGS</span>' : ''}</div><pre>${esc(c.mcp.input)}</pre>${waiting ? `<small class="dim">${c.mcp.always ? `Asked because ${esc(c.mcp.server)} is set to Ask every time.` : 'Asked because this chat is Strict and the tool can change things.'} ⚙ Settings → MCP servers changes this.</small>` : ''}</div>`
       : c.items ? '' : `<div class="what">${c.free ? esc(c.what) : `“${esc(c.what)}”`}</div>`}
-    ${c.memo ? `<div class="what mem-memo"><span class="sx-tag mem-t-${esc(c.memo.type)}">${esc(MEM_TYPES[c.memo.type] || c.memo.type)}</span> <span class="mem-scope ${c.memo.scope ? 'proj' : ''}">${c.memo.scope ? `Only ${esc(c.memo.scope)}` : 'Every project'}</span>${c.memo.why ? `<div>Because: ${esc(c.memo.why)}</div>` : ''}${c.memo.details ? `<details><summary>Details, read only when relevant</summary><div>${esc(c.memo.details)}</div></details>` : ''}</div>` : ''}
+    ${c.memo ? `<div class="what mem-memo"><span class="mem-scope ${c.memo.scope ? 'proj' : ''}">${c.memo.scope ? `Only ${esc(c.memo.scope)}` : 'Every project'}</span></div>` : ''}
     ${c.why ? `<div class="what">Why: ${esc(c.why)}</div>` : ''}${c.items && waiting ? '<div class="what dim">Calls that match this plan then run without asking again; anything else asks on its own.</div>' : ''}
     ${waiting ? `${waitHTML(c)}${c.buttonsOnly ? `<div class="what dim">${c.tool === 'quorx_settings' ? 'Only your click changes it: typed words don’t, and nothing answers this card for you, in YOLO too.' : 'Only these buttons switch it on: typed words don’t.'}</div>` : '<textarea rows="1" placeholder="Or reply with context: the agent reads it instead of a yes or no. Enter sends it."></textarea>'}
       <div class="acts"><button type="button" class="primary reply" hidden>Send to the agent</button><button type="button" class="primary yes">${c.yes ? esc(c.yes) : c.tool === 'remember' ? 'Save to memory' : c.free ? 'Allow once' : `Approve ${money(c.est, 3)}`}</button>${c.noAlways ? '' : `<button type="button" class="always" title="Stop asking for ${c.mcp ? `${esc(c.mcp.tool)} on ${esc(c.mcp.server)}` : 'this tool'} in this chat. A tool's “Allow always” is for this chat only; remove it any time in the chat's 🛡 Permissions.">Allow always <span class="ap-scope">${scopeMark('chat', true)}this chat</span></button>`}<button type="button" class="no">${c.no ? esc(c.no) : c.tool === 'remember' ? "Don't save" : 'Deny'}</button></div>
@@ -5716,26 +5715,14 @@ function outOfStepsHTML(m) {
       </div><div class="what err" hidden></div>`}
   </div>`;
 }
-// The wrap-up under a finished reply (⚙ Agent loop → End each reply with a wrap-up): a recap, what the harness didn't
-// check, and up to two next steps that send their words as your next message. It only reads: no decision waits on it.
+// Under a finished reply (⚙ Advanced → Say what wasn't checked): what the harness knows it didn't check, only when
+// there is something. It only reads: no decision waits on it.
 function wrapUpHTML(m) {
   const w = !m.live && [...(m.trace || [])].reverse().find((x) => x.t === 'wrap_up');
-  if (!w || (!w.recap && !w.unchecked?.length && !w.next?.length)) return '';
-  return `<div class="wu" role="note" aria-label="Wrap-up">
-    <div class="wu-head">Wrap-up</div>
-    ${w.recap ? `<p class="wu-recap">${esc(w.recap)}</p>` : ''}
-    ${w.unchecked?.length ? `<div class="wu-not"><b>Not checked</b><ul>${w.unchecked.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}
-    ${w.next?.length ? `<div class="wu-next">${w.next.map((x, i) => `<button type="button" class="wu-go ${m.wuSent === i ? 'sent' : ''}" data-wu="${i}" title="Sends: ${esc(x.text)}" ${m.wuSent != null ? 'disabled' : ''}>→ ${esc(x.label)}</button>`).join('')}</div>` : ''}
+  if (!w?.unchecked?.length) return '';
+  return `<div class="wu" role="note" aria-label="Not checked">
+    <div class="wu-not"><b>Not checked</b><ul>${w.unchecked.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>
   </div>`;
-}
-function wireWrapUp(el, c, m) {
-  const w = [...(m.trace || [])].reverse().find((x) => x.t === 'wrap_up');
-  for (const b of el.querySelectorAll('.wu-go[data-wu]')) b.onclick = () => {
-    const x = w?.next?.[Number(b.dataset.wu)];
-    if (!x || c.running) return;
-    m.wuSent = Number(b.dataset.wu); drawTimeline(c, m);
-    send(c, x.text);
-  };
 }
 // A new chat in the same project, on the model picked, with the brief in its message box (you check it, then send).
 function openFreshChat(c, brief, model) {
@@ -7439,15 +7426,11 @@ function settingsPanels(S) {
         + stRow('Thinking for builds', 'When the gap check sees that a message asks for a build and the chat\'s thinking is off, the model thinks this much for that reply. Deciders find problems; thinking is what fixes them.', stSeg('buildThinking', [['off', 'Off'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']], S.buildThinking || 'low'))
         + stRow('Retries on model errors', 'Rate limits, network drops and provider errors are retried with growing waits before the reply gives up.', stStep('retries', S.retries ?? 3, 0, 6))
         + stRow('Run look-ups together', 'Several reads, searches and fetches in one step run at the same time.', stSwitch('parallel', S.parallel !== false))
-        + stRow('Questions per reply', 'How often the agent may stop to ask you a question with options (ask_user). 0 = never.', stStep('askLimit', S.askLimit ?? 4, 0, 10))
-        + stRow('Load rare tools when needed', 'Auto: the agent starts with its everyday tools; the ticked ones below are listed by name and load the first time it asks for one, so every call is smaller. A chat with many MCP tools gets them the same way. Off: every tool on every call.', stSeg('lazyTools', [['off', 'Off'], ['auto', 'Auto']], S.lazyTools || 'auto') + lazyGroupsHTML(S), { cls: 'sx-row-wide' })
-        + stRow('Ask for a short status line', 'After this many steps of tool calls without a word to you, the agent is asked to say in one sentence what it is doing. 0 = never.', stStep('statusEvery', S.statusEvery ?? 8, 0, 50, 1, ' steps'))
-        + stRow('Protect files that changed', 'When you, another chat or another program changes a file after the agent read it, the agent must read it again before it edits or overwrites it, so your change is never lost. What its own commands change doesn\'t count.', stSwitch('guardEdits', S.guardEdits !== false)), 'sx-anchor', 'stLoopWork'),
+        + stRow('Questions per reply', 'How often the agent may stop to ask you a question with options (ask_user). 0 = never.', stStep('askLimit', S.askLimit ?? 4, 0, 10)), 'sx-anchor', 'stLoopWork'),
       stCard(`${stNum(3)} Check`, 'Before the final reply.', stRow('Check the work', 'Re-checks every changed file (Node, Python, JSON, CSS, HTML) and opens what was built in the browser. Problems go back to the agent to fix.', stSwitch('verify', S.verify !== false))
         + stRow('Design lint', 'After each HTML or CSS write, points out patterns that make a page look machine-made: default indigo, purple-blue hero gradients, emoji icons, invented numbers, filler text, missing alt text or focus styles. Advice only: it never sends a build back. Free, no model call.', stSwitch('designLint', S.designLint !== false))
         + stRow('Rounds to fix problems', 'How many times the agent is sent back. After that the reply ends and shows what is left.', stStep('verifyRounds', S.verifyRounds ?? 2, 0, 5))
-        + stRow('Steps to fix', 'When the checks or the reviewer send a build back near the step limit, the reply gets this many steps to fix it, instead of ending with a to-do list.', stStep('fixSteps', S.fixSteps ?? 12, 4, 40))
-        + stRow('End each reply with a wrap-up', 'After a reply that did work: a short recap, what QuorX didn\'t check (checks off, no reviewer, a job still running, a hook still failing), and up to two next steps you send with a click. The recap costs one helper call, about $0.0005.', stSwitch('wrapUp', S.wrapUp !== false)), 'sx-anchor', 'stLoopCheck'),
+        + stRow('Steps to fix', 'When the checks or the reviewer send a build back near the step limit, the reply gets this many steps to fix it, instead of ending with a to-do list.', stStep('fixSteps', S.fixSteps ?? 12, 4, 40)), 'sx-anchor', 'stLoopCheck'),
       stCard(`${stNum(4)} Review`, 'A separate model with a fresh context tests what was built before the final reply, scores it, and sends it back with specific bugs if it falls short.',
         stRow('When to review', 'Builds: when the agent made a plan for the reply. Always: whenever it built or changed something that can be opened.', stCards('review', [['off', '⏭', 'Off', 'No second opinion'], ['builds', '🏗', 'Builds', 'When the reply had a plan'], ['always', '🔍', 'Always', 'Anything that can be opened']], S.review || 'builds', 'compact'), { cls: 'sx-row-wide' })
         + stRow('Reviewer strength', 'Cheap: gpt-6-luna, about $0.003 a review, but it fails good builds often (it agreed with the benchmark judge 43% of the time). Strong: Claude Sonnet 5.5, about $0.02 a build, agreed 100% and caused no needless rounds of fixing (gpt-6.1-sol when Sonnet is the builder). A model picked below overrides this.', stCards('reviewTier', [['cheap', '🪙', 'Cheap', '≈ $0.003 a review'], ['strong', '💎', 'Strong', '≈ $0.02 a build']], S.reviewTier || 'cheap', 'compact'), { cls: 'sx-row-wide' })
@@ -7460,14 +7443,20 @@ function settingsPanels(S) {
         stRow('Let the agent use helpers', 'Offered only in chats with a project folder.', stSwitch('helpers', S.helpers !== false))
         + stRow('Only in projects with at least', 'Small builds never used them, and offering them costs prompt space on every step. 0 = every project.', stStep('helperMinFiles', S.helperMinFiles ?? 40, 0, 400, 10, ' files'))
         + stRow('Helper model', 'Default: qwen3.7-flash, which is very cheap, uses tools, and has a 1M-token window. Pick one that can use tools.', `<div class="st-fb">${modelField('pickHelper', S.helperModel, 'hpModel', 'Default')}${S.helperModel ? '<button type="button" class="st-btn secondary sm" data-act="clearHelper" title="Use the default helper">✕</button>' : ''}</div>`)
-        + stRow('Steps per helper', 'Model calls one helper may make before it must report.', stStep('helperSteps', S.helperSteps ?? 12, 2, 30))
-        + `<div class="st-row sx-row-wide hp-roles-row"><div class="st-row-text"><div class="st-row-label">Helper roles</div><div class="st-row-help">What each kind of helper may do. Every role reads; a role may also run commands (through your rules and approvals, like the agent's own), use the browser, or write, but only in .quorx/scratch. The agent picks a role for each job; switched-off roles aren't offered.</div></div><div id="hpRoles" class="qx-roles-host"></div></div>`, 'sx-anchor', 'stLoopHelpers'),
+        + stRow('Steps per helper', 'Model calls one helper may make before it must report.', stStep('helperSteps', S.helperSteps ?? 12, 2, 30)), 'sx-anchor', 'stLoopHelpers'),
       stCard(`${stNum(6)} Long replies and chats`, 'Keeps the context small, so long work stays cheap.', stRow('Trim after', 'Characters of conversation inside one reply before old file contents are dropped from it (they stay on disk).', stStep('trimAt', S.trimAt || 120000, 30000, 400000, 10000))
         + stRow('Summarise older turns', 'Keeps the context small: older turns become a short summary (shown in the trace as 🗜).', stSwitch('compact', S.compact !== false))
-        + stRow('Summarise after', 'Characters of history before the older part is summarised.', stStep('compactAt', S.compactAt || 24000, 8000, 120000, 4000))
-        + stRow('Read other agents\' notes', 'Projects made with other coding agents keep their rules in files like AGENTS.md or CLAUDE.md. When on, QuorX reads the ones listed here with AGENT.md, in projects that have them.', stSwitch('otherNotes', S.otherNotes !== false))
+        + stRow('Summarise after', 'Characters of history before the older part is summarised.', stStep('compactAt', S.compactAt || 24000, 8000, 120000, 4000)), 'sx-anchor', 'stLoopMemory'),
+      `<details class="sf-adv" id="loopAdv"><summary><span class="sf-adv-title">Under the hood</span><span class="sf-adv-sub">Rare tools, file protection, other agents\' notes, helper roles, status lines. On by default; most people never change these.</span></summary><div class="sf-adv-body">`
+      + stCard('Tools and files', '', stRow('Load rare tools when needed', 'Auto: the agent starts with its everyday tools; the ticked ones below are listed by name and load the first time it asks for one, so every call is smaller. A chat with many MCP tools gets them the same way. Off: every tool on every call.', stSeg('lazyTools', [['off', 'Off'], ['auto', 'Auto']], S.lazyTools || 'auto') + lazyGroupsHTML(S), { cls: 'sx-row-wide' })
+        + stRow('Ask for a short status line', 'After this many steps of tool calls without a word to you, the agent is asked to say in one sentence what it is doing. 0 = never.', stStep('statusEvery', S.statusEvery ?? 0, 0, 50, 1, ' steps'))
+        + stRow('Protect files that changed', 'When you, another chat or another program changes a file after the agent read it, the agent must read it again before it edits or overwrites it, so your change is never lost. What its own commands change doesn\'t count.', stSwitch('guardEdits', S.guardEdits !== false)))
+      + stCard('After each reply', '', stRow('Say what wasn\'t checked', 'After a reply that did work, a short note under it when QuorX knows something wasn\'t checked: checks off, no reviewer, a job still running, a hook still failing. Nothing shows when everything was checked. No model call.', stSwitch('wrapUp', S.wrapUp !== false)))
+      + stCard('Other agents\' notes', '', stRow('Read other agents\' notes', 'Projects made with other coding agents keep their rules in files like AGENTS.md or CLAUDE.md. When on, QuorX reads the ones listed here with AGENT.md, in projects that have them.', stSwitch('otherNotes', S.otherNotes !== false))
         + `<div class="st-row sx-row-wide"><div class="st-row-text"><div class="st-row-label">Files it reads</div><div class="st-row-help">In the project folder, in this order, until the size limit.</div></div><div id="notesFiles"></div></div>`
-        + stRow('All of them together, at most', 'What goes past this is cut.', stStep('otherNotesKB', S.otherNotesKB ?? 8, 1, 64, 1, ' KB')), 'sx-anchor', 'stLoopMemory'),
+        + stRow('All of them together, at most', 'What goes past this is cut.', stStep('otherNotesKB', S.otherNotesKB ?? 8, 1, 64, 1, ' KB')))
+      + stCard('Helpers', '', `<div class="st-row sx-row-wide hp-roles-row"><div class="st-row-text"><div class="st-row-label">Helper roles</div><div class="st-row-help">What each kind of helper may do. Every role reads; a role may also run commands (through your rules and approvals, like the agent's own), use the browser, or write, but only in .quorx/scratch. The agent picks a role for each job; switched-off roles aren't offered.</div></div><div id="hpRoles" class="qx-roles-host"></div></div>`)
+      + '</div></details>',
     ]],
     deciders: ['Deciders', 'The fast judges the agent asks when it is unsure. It writes its own questions and guesses first.', [
       stCard('The panel', 'Up to 5 seats. More deciders agree more reliably but cost more.', '<div id="voterInputs" class="sx-seats"></div>'),
@@ -8178,12 +8167,13 @@ function searchSettings(q) {
     }
     panel.classList.toggle('active', q ? any || panel.querySelector('.st-panel-title').textContent.toLowerCase().includes(q) : panel.dataset.panel === ST.cat);
   }
-  // Safety's Advanced: a search that hits inside opens it; clearing the search puts it back as you left it.
-  const adv = $('#sfAdv');
-  if (adv) {
+  // Safety's Advanced and the loop's Under the hood: a search that hits inside opens it; clearing the search puts
+  // Advanced back as you left it, and closes Under the hood.
+  for (const adv of [$('#sfAdv'), $('#loopAdv')]) {
+    if (!adv) continue;
     const hit = [...adv.querySelectorAll('.st-card')].some((c) => !c.hidden);
     adv.hidden = !!q && !hit;
-    adv.open = q ? hit : sfAdvPref();
+    adv.open = q ? hit : adv.id === 'sfAdv' && sfAdvPref();
   }
 }
 // Reset category: that category's settings go back to the defaults (still unsaved until Save).
@@ -8860,11 +8850,10 @@ function drawRoles(S, mark) {
     el.querySelector('.qx-role:last-child .qx-in-name')?.select();
   };
 }
-// ⚙ Memory: facts and preferences chats get without you repeating them. Each note has a type, an optional why, longer
-// details a chat reads only when they matter (recall), and a scope: every project or one. Saved at once (it lives on
-// the server). The meter counts what one chat gets at most: every-project notes plus the fullest project's.
-const MEM_TYPES = { user: 'About you', feedback: 'How to work', project: 'Project', reference: 'Reference' };
-const memTok = (x) => Math.ceil(String(x.text || '').length / 4) + (x.why ? Math.ceil(x.why.length / 4) + 3 : 0) + 2;
+// ⚙ Memory: facts and preferences chats get without you repeating them, for every project or one. Saved at once (it
+// lives on the server). The agent also files each note it proposes by type, with a why and longer details it reads
+// when they matter (recall); those stay with the note but aren't shown here. The meter counts what one chat gets at
+// most: every-project notes plus the fullest project's.
 async function drawMemoryPanel(msg = '') {
   const el = $('#memPanel');
   if (!el) return;
@@ -8876,47 +8865,41 @@ async function drawMemoryPanel(msg = '') {
   const UI = (ST.memUI ??= { edit: null, adding: false });
   const form = (x = {}) => `<div class="qx-memform" data-form="${esc(x.id || '')}">
       <div class="qx-field"><div class="qx-lblrow"><label for="mfText">Note</label><span class="qx-cc">${String(x.text || '').length} / 200</span></div><input id="mfText" class="st-input" maxlength="200" value="${esc(x.text || '')}" placeholder="One short sentence, e.g. “I use pnpm, not npm”" spellcheck="true"></div>
-      <div class="qx-memform-grid">
-        <div class="qx-field"><label for="mfType">Type</label><select id="mfType" class="st-select">${Object.entries(MEM_TYPES).map(([k, l]) => `<option value="${k}" ${(x.type || 'user') === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
-        <div class="qx-field"><label for="mfScope">Where</label><select id="mfScope" class="st-select"><option value="">Every project</option>${G.projects.filter((p) => p.id !== 'scratch').map((p) => `<option value="${esc(p.id)}" ${x.project === p.id ? 'selected' : ''}>Only ${esc(p.name)}</option>`).join('')}</select></div>
-      </div>
-      <div class="qx-field"><label for="mfWhy">Why <span class="qx-opt">optional, one line</span></label><input id="mfWhy" class="st-input" maxlength="200" value="${esc(x.why || '')}" placeholder="The reason, so the agent applies it well"></div>
-      <div class="qx-field"><div class="qx-lblrow"><label for="mfDetails">Details <span class="qx-opt">optional, read only when relevant: they don't count toward the limit</span></label><span class="qx-cc">${String(x.details || '').length} / 2000</span></div><textarea id="mfDetails" class="st-input" maxlength="2000" rows="3">${esc(x.details || '')}</textarea></div>
+      <div class="qx-field"><label for="mfScope">Where</label><select id="mfScope" class="st-select"><option value="">Every project</option>${G.projects.filter((p) => p.id !== 'scratch').map((p) => `<option value="${esc(p.id)}" ${x.project === p.id ? 'selected' : ''}>Only ${esc(p.name)}</option>`).join('')}</select></div>
       <div class="qx-edit-acts"><button type="button" class="kx-btn sm" data-mf="cancel">Cancel</button><button type="button" class="kx-btn sm primary" data-mf="save">${x.id ? 'Save note' : 'Add note'}</button></div>
     </div>`;
-  const rowHTML = (x) => (UI.edit === x.id ? `<li>${form(x)}</li>` : `<li class="qx-memrow" data-id="${esc(x.id)}" data-lf-seg="${esc(x.type || 'user')}" data-lf-text="${esc(`${x.text} ${x.why || ''} ${x.details || ''} ${MEM_TYPES[x.type || 'user']} ${x.project ? pname(x.project) : 'every project'}`.toLowerCase())}">
+  const rowHTML = (x) => (UI.edit === x.id ? `<li>${form(x)}</li>` : `<li class="qx-memrow" data-id="${esc(x.id)}" data-lf-text="${esc(`${x.text} ${x.project ? pname(x.project) : 'every project'}`.toLowerCase())}">
       <div class="qx-mem-main">
-        <div class="qx-mem-top"><span class="sx-tag mem-t-${esc(x.type || 'user')}">${esc(MEM_TYPES[x.type || 'user'])}</span><span class="qx-scope ${x.project ? 'proj' : ''}">${x.project ? `Only ${esc(pname(x.project))}` : 'Every project'}</span>${x.by === 'agent' ? '<span class="qx-scope" title="Proposed by the agent, approved by you">agent · approved</span>' : ''}<span class="qx-tok counted" title="What this note adds to each chat it reaches">${memTok(x)} tok</span></div>
         <p class="qx-mem-text">${esc(x.text)}</p>
-        ${x.why ? `<p class="qx-mem-why"><i>Why:</i> ${esc(x.why)}</p>` : ''}
-        ${x.details ? `<details class="qx-more-d"><summary>Details <small>${x.details.length} characters · read only when relevant</small></summary><div>${esc(x.details)}</div></details>` : ''}
+        <div class="qx-mem-top"><span class="qx-scope ${x.project ? 'proj' : ''}">${x.project ? `Only ${esc(pname(x.project))}` : 'Every project'}</span>${x.by === 'agent' ? '<span class="qx-scope" title="Proposed by the agent, approved by you">agent · approved</span>' : ''}</div>
       </div>
       <span class="qx-mem-acts"><button type="button" class="kx-btn sm" data-me="${esc(x.id)}">Edit</button><button type="button" class="mem-del" data-md="${esc(x.id)}" title="Forget this" aria-label="Forget this">✕</button></span>
     </li>`);
-  el.innerHTML = stCard('Notes chats get', '', stRow('Use memory in chats', `Chats get the notes below: those for every project, plus the ones for their own project. What one chat gets stays under ${m.limit} tokens, so even small models have room; details don't count, because a chat reads them only when they matter. When on, the agent may also propose a note; it is saved only if you say yes (in ⚡ YOLO too). Off: chats get nothing.`,
+  el.innerHTML = stCard('Notes chats get', '', stRow('Use memory in chats', `Chats get the notes below: those for every project, plus the ones for their own project. What one chat gets stays under ${m.limit} tokens, so even small models have room. When on, the agent may also propose a note; it is saved only if you say yes (in ⚡ YOLO too). Off: chats get nothing.`,
     `<label class="sx-check"><input type="checkbox" id="memOn" ${m.on ? 'checked' : ''} aria-label="Use memory in chats"><span class="sx-word"></span></label>`)
     + `<div class="mem-body ${m.on ? '' : 'off'}">
       <div class="mem-meter" title="The most one chat gets: every-project notes plus the fullest project's. About 4 characters a token."><span class="mem-bar"><i style="width:${pct}%"></i></span><span class="mem-count ${pct >= 90 ? 'full' : ''}">${m.tokens} / ${m.limit} tokens a chat gets at most</span></div>
       <div class="hkx-toolbar"><div class="pjx-filter mem-filter"></div>${UI.adding ? '' : '<button type="button" class="kx-btn sm primary" id="memAddBtn">＋ Add note</button>'}</div>
-      ${UI.adding ? form({ type: 'user' }) : ''}
-      ${m.items.length ? `<ul class="qx-mem">${m.items.map(rowHTML).join('')}</ul>` : '<p class="st-row-help mem-empty">Nothing yet. For example: “I use pnpm, not npm” (how to work), “Prefer dark themes” (about you), “The API lives in server/” (this project only).</p>'}
+      ${UI.adding ? form() : ''}
+      ${m.items.length ? `<ul class="qx-mem">${m.items.map(rowHTML).join('')}</ul>` : '<p class="st-row-help mem-empty">Nothing yet. For example: “I use pnpm, not npm”, “Prefer dark themes”, or for one project, “The API lives in server/”.</p>'}
       <p class="mem-msg ${msg.startsWith('✓') ? 'ok' : msg ? 'bad' : ''}" role="status">${esc(msg)}</p>
-      <p class="st-row-help">Never keys, tokens or passwords: anything that looks like one is refused, in details too.</p></div>`);
+      <p class="st-row-help">Never keys, tokens or passwords: anything that looks like one is refused.</p></div>`);
   const save = async (body, ok) => {
     const r = await postJ('/api/memory', body, 'PUT');
     if (!r?.error) { UI.edit = null; UI.adding = false; }
     drawMemoryPanel(r?.error ? `Not saved: ${r.error}.` : ok);
   };
-  if (m.items.length > 3) listFilter($('.mem-filter', el), { key: 'memory', rows: () => el.querySelectorAll('.qx-memrow'), segLabel: (v) => MEM_TYPES[v] || v, segOrder: Object.keys(MEM_TYPES), placeholder: 'Search notes, why and details…', label: 'Type' });
+  if (m.items.length > 3) listFilter($('.mem-filter', el), { key: 'memory', rows: () => el.querySelectorAll('.qx-memrow'), placeholder: 'Search notes…' });
   $('#memOn').onchange = (e) => save({ on: e.target.checked }, e.target.checked ? '✓ Memory is on' : '✓ Memory is off: chats get nothing');
   if ($('#memAddBtn')) $('#memAddBtn').onclick = async () => { UI.adding = true; UI.edit = null; await drawMemoryPanel(); $('#mfText')?.focus(); };
   const f = $('.qx-memform', el);
   if (f) {
     const id = f.dataset.form;
-    for (const [sel, max] of [['#mfText', 200], ['#mfDetails', 2000]]) { const i = $(sel, f); i.oninput = () => { const cc = i.closest('.qx-field').querySelector('.qx-cc'); cc.textContent = `${i.value.length} / ${max}`; }; }
+    const i = $('#mfText', f); i.oninput = () => { $('.qx-cc', f).textContent = `${i.value.length} / 200`; };
     $('[data-mf="cancel"]', f).onclick = () => { UI.edit = null; UI.adding = false; drawMemoryPanel(); };
     $('[data-mf="save"]', f).onclick = () => {
-      const x = { text: $('#mfText', f).value.trim(), type: $('#mfType', f).value, project: $('#mfScope', f).value, why: $('#mfWhy', f).value.trim(), details: $('#mfDetails', f).value.trim() };
+      // A note's type, why and details (the agent's) stay as they were.
+      const x = { text: $('#mfText', f).value.trim(), project: $('#mfScope', f).value };
       if (!x.text) { $('#mfText', f).focus(); return; }
       save({ items: id ? m.items.map((y) => (y.id === id ? { ...y, ...x } : y)) : [...m.items, x] }, id ? '✓ Saved' : '✓ Added');
     };

@@ -161,8 +161,8 @@ export const DEFAULTS = {
   otherNotesKB: 8,         // all of them together, at most this many KB
   lazyList: [...RARE_TOOLS], // which of them wait (⚙ ticks them per group); the rest always load
   lazyTools: 'auto',       // 'auto': rarely used tools are listed by name and load when the agent asks (or calls one) · 'off': every schema on every call
-  statusEvery: 8,          // steps with tool calls and no word to the user before the agent is asked for one short status line (0 = never)
-  wrapUp: true,            // after a reply that did work: a short recap, what wasn't checked and up to two next steps
+  statusEvery: 0,          // steps with tool calls and no word to the user before the agent is asked for one short status line (0 = never)
+  wrapUp: true,            // after a reply that did work: a line on what wasn't checked, when something wasn't
   verify: true,            // before the final reply: re-check changed files and open what was built
   browseReadOnly: true,    // 🧩 Chrome and lent tabs: for a request that only reads, typing outside a search box asks the user
   chromeCheck: true,       // 🧩 Chrome and lent tabs: the deciders check each typing step against the request (never the page)
@@ -1732,7 +1732,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       // Calls carrying this step's key but put in a code fence: meant as calls (only the prompt has the key), so they
       // are asked for again, on the same count. Their blocks are already out of the text.
       // The same for calls written mid-line, right after a sentence.
-      // And for calls in the model's own trained format (DeepSeek's <｜DSML｜invoke>) that end the reply: never run,
+      // And for calls in the model's own trained format (DeepSeek's <｜DSML｜invoke>, Claude's <invoke>) that end the reply: never run,
       // asked for again in QuorX's blocks.
       // And for blocks copied from how earlier calls are shown (<quorx_call ran>): written without this step's key.
       const fenced = !r.skippedCalls && (r.fencedCalls || 0) + (r.midlineCalls || 0) + (r.nativeCalls || 0) + (r.copiedCalls || 0);
@@ -1752,9 +1752,9 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         // DeepSeek's format: its blocks are already out of the text, so the model sees only its own words again, never
         // what the blocks said (they could be a page's, quoted): it decides afresh whether it meant a call.
         messages.push({ role: 'user', content: r.nativeCalls && !r.fencedCalls && !r.midlineCalls
-          ? '(Your last turn ended with blocks in a different call format (<｜DSML｜invoke …>), which this app does not read, so nothing ran. If you meant to call tools, write the calls again exactly as the instructions describe: <quorx_call> blocks with the key the instructions give, each alone on a new line. If you were quoting something, carry on without it.)'
+          ? '(Your last turn ended with blocks in a different call format (<invoke …>), which this app does not read, so nothing ran. If you meant to call tools, write the calls again exactly as the instructions describe: <quorx_call> blocks with the key the instructions give, each alone on a new line. If you were quoting something, carry on without it.)'
           : fenced
-          ? `(Your last turn put ${fenced > 1 ? `${fenced} tool calls` : 'its tool call'} ${r.fencedCalls ? 'inside a code block (```)' : r.copiedCalls ? 'in the shape the conversation shows calls that already ran (<quorx_call ran>), without this step\'s key' : r.nativeCalls ? 'in a different call format (<｜DSML｜invoke …>), which this app does not read' : 'in the middle of a line, after other text'}, so nothing ran. Write ${fenced > 1 ? 'them' : 'it'} again exactly as the instructions describe: ${r.nativeCalls ? 'as <quorx_call> blocks, ' : ''}each block alone on a new line of its own${r.fencedCalls ? ', with no ``` around it' : ''}.)`
+          ? `(Your last turn put ${fenced > 1 ? `${fenced} tool calls` : 'its tool call'} ${r.fencedCalls ? 'inside a code block (```)' : r.copiedCalls ? 'in the shape the conversation shows calls that already ran (<quorx_call ran>), without this step\'s key' : r.nativeCalls ? 'in a different call format (<invoke …>), which this app does not read' : 'in the middle of a line, after other text'}, so nothing ran. Write ${fenced > 1 ? 'them' : 'it'} again exactly as the instructions describe: ${r.nativeCalls ? 'as <quorx_call> blocks, ' : ''}each block alone on a new line of its own${r.fencedCalls ? ', with no ``` around it' : ''}.)`
           : '(Your last turn said what you would do next but contained no tool call, so nothing ran and the reply would end there. Make that call now, written exactly as the instructions describe. If you meant that as your final answer, write the final answer again in full.)' });
         continue;
       }
@@ -1810,7 +1810,10 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       // back to fix what it reports, for as many rounds as the checks get.
       if (canSend && root && !req.bench && (run.actionSteps || []).length && (!v || v.ok)) {
         const re = await runHooks('reply_end');
-        if (re.failed && (run.hookRounds || 0) < Math.max(1, Number(S.verifyRounds ?? DEFAULTS.verifyRounds))) {
+        // The same failure after a fix means the agent can't fix it (a hook checking something else): no more rounds.
+        const same = re.failed && run.hookLastOut === re.text;
+        run.hookLastOut = re.text;
+        if (re.failed && !same && (run.hookRounds || 0) < Math.max(1, Number(S.verifyRounds ?? DEFAULTS.verifyRounds))) {
           run.hookRounds = (run.hookRounds || 0) + 1;
           reply = replyBefore;
           if (r.text) { asides.push(r.text); run.answerBefore ??= r.text; }
@@ -1820,7 +1823,11 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
           messages.push({ role: 'user', content: `[${re.text.trim()}\nFix what it reports, then give your final reply. Your final reply replaces the one you just wrote, so keep its answer to the user's message and add a line on what you fixed.]` });
           continue;
         }
-        if (re.failed) run.hookFailed = clip(re.text.trim().split('\n')[0], 200);
+        if (re.failed) {
+          // What it reported, not its heading: the first line that names a problem, else its first line of output.
+          const out = re.text.trim().split('\n').slice(1).map((l) => l.trim()).filter(Boolean);
+          run.hookFailed = clip(out.find((l) => /✗|error|fail|problem|missing/i.test(l)) || out[0] || 'it exited with an error', 200);
+        }
       }
       break;
     }
@@ -1932,8 +1939,8 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   }
   stats.changed = root ? changedFiles(root, filesId) : [];
   if (root && stats.changed.length) { try { sealCheckpoint(root, filesId); } catch { /* best effort */ } }
-  // ⚙ Agent loop → End each reply with a wrap-up: after a reply that did work, a short recap, what wasn't checked
-  // (facts the harness knows) and up to two next steps the user can send with a click.
+  // ⚙ Advanced → Say what wasn't checked: after a reply that did work, a line on anything the harness knows it didn't
+  // check (checks off, no reviewer, a hook still failing, a job still running). Nothing when all was checked.
   if (S.wrapUp !== false && !req.bench && !req.scheduledBy && !handled && run.tools > 0 && ['answered', 'stalled'].includes(run.stop)) {
     try { stats.wrap = await wrapUp(); } catch (e) { if (signal.aborted) throw e; }
   }
@@ -1984,8 +1991,8 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       touched: { arts: [...touched.arts], apps: [...touched.apps], sites: [...touched.sites] } });
   }
 
-  // The wrap-up: { recap, unchecked: [..], next: [{ label, text }] }. What wasn't checked comes from the harness, never
-  // the model; the recap and next steps from a cheap helper call (about $0.0005), left out when it fails.
+  // The wrap-up: { unchecked: [..] }, only when something wasn't checked. It comes from the harness, never a model: no
+  // extra call, and nothing shows when the work was checked (the reply already says what was done).
   async function wrapUp() {
     const unchecked = [];
     const built = touched.arts.size || touched.sites.size || touched.apps.size;
@@ -1997,20 +2004,8 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (stats.verify && !stats.verify.ok) unchecked.push(`${stats.verify.problems.length} problem${stats.verify.problems.length === 1 ? '' : 's'} from the checks ${stats.verify.problems.length === 1 ? 'is' : 'are'} still open.`);
     const jobs = projectId ? listBackground(projectId).filter((j) => j.status === 'running' && (!req.chatId || j.chatId === req.chatId)) : [];
     if (jobs.length) unchecked.push(`Still running in the background: ${jobs.slice(0, 3).map((j) => `${j.id} (${clip(j.label, 50)})`).join(', ')}${jobs.length > 3 ? ` and ${jobs.length - 3} more` : ''}.`);
-    let recap = '', next = [];
-    // A scripted model in tests has nothing to say here unless the test asks for it (deps.wrapUp).
-    if (checksLive || deps.wrapUp) try {
-      const model = String(S.helperModel || '').trim() || HELPER_MODEL;
-      const r = await reviewerCall({ model, max_tokens: 500, temperature: 0.2, ...REASONING.off, messages: [
-        { role: 'system', content: 'You write the wrap-up under an AI agent\'s reply, for the user. Return only JSON: {"recap": "...", "next": [{"label": "...", "text": "..."}]}. recap: one or two short sentences on what is now true and what is left or unverified, in plain words, without repeating the reply. next: 0 to 2 next steps the user would likely want, only real follow-ups of this task: label 1-3 words (a button), text the message the user would send (one sentence, in their voice). No next step when the task is simply done.' },
-        { role: 'user', content: `The user asked: ${clip(userText, 1500)}\n\nWhat the agent did: ${clip(journal.slice(-30).join('; '), 2500)}\n\nIts reply: ${clip(reply, 3000)}${unchecked.length ? `\n\nNot checked: ${unchecked.join(' ')}` : ''}` }] }, 'helper');
-      account(r.usage, r.routedTo || model, 'helper');
-      const j = JSON.parse(String(r.text || '').replace(/^[^{]*/, '').replace(/[^}]*$/, ''));
-      recap = clip(String(j.recap || '').replace(/\s+/g, ' ').trim(), 400);
-      next = (Array.isArray(j.next) ? j.next : []).slice(0, 2).map((x) => ({ label: clip(String(x?.label || '').trim(), 28), text: clip(String(x?.text || '').replace(/\s+/g, ' ').trim(), 300) })).filter((x) => x.label && x.text);
-    } catch (e) { if (signal.aborted) throw e; }
-    if (!recap && !unchecked.length && !next.length) return null;
-    const w = { recap, unchecked, next };
+    if (!unchecked.length) return null;
+    const w = { unchecked };
     emit({ t: 'wrap_up', ...w, at: at() });
     return w;
   }
@@ -4170,6 +4165,8 @@ ${r.text || '(no text found)'}`;
         const d = await decideCommand(line, { shell: SF.shell, root, cwd: root, env: childEnv(), rules: commandRules(), added: writeFolders(), mode: S.approval, yolo: yoloOf(SF) });
         // A hook never runs what would need a red card (your key folders): it runs unasked, after every write.
         if (d.risk === 'danger') Object.assign(d, { verdict: 'deny', who: null, why: `hooks never run this: ${d.why}`, decidedBy: 'hook' });
+        // Anything else runs unasked: the user wrote it, and a hook that asks on every write is noise nobody can answer.
+        else if (d.verdict === 'ask') Object.assign(d, { verdict: 'allow', who: null, why: 'the user set it up as a hook', decidedBy: 'hook' });
         const g = await gateCommand(d, line, SF.shell, { hook: HOOK_WHEN[event], fileFromAgent: usesFile });
         if (!g.ok) {
           emit({ t: 'hook', event, command: line, file, tool, ok: false, skipped: true, why: clip(g.text, 300), at: at() });

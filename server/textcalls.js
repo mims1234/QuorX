@@ -34,7 +34,7 @@ ${block('{"name": "TOOL_NAME", "arguments": {"ARGUMENT": "VALUE"}}', key)}
 - Write several blocks in one reply to call several tools; they run in order.${key ? `\n- Every block starts with exactly ${openTag(key)} at the start of a line. A block without that key, or inside a quote or code, is not run: to show a call without running it, put it in a code block.` : ''}
 - After your tool calls, stop writing: the results come back in the next message.
 - Text outside the blocks is shown to the user; put nothing else inside a block. Inside a JSON string, write ${CLOSE} as <\\/${TAG}>.
-- Write the block as text in your reply. Native function calls don't reach QuorX: nothing would run.
+- Write the block as text in your reply. Native function calls, and other call formats such as <invoke> or <function_calls>, don't reach QuorX: nothing would run.
 - Never write a tool result yourself, and never pretend a tool ran.
 ${rule ? `- ${rule}\n` : ''}
 Tools (JSON Schema for each tool's arguments):
@@ -160,14 +160,18 @@ const LIST_ITEM = /^\s*(?:[-*+•]|\d{1,3}[.)])\s/;
 // (the bars are full-width ｜ or plain |, sometimes doubled, sometimes with spaces). It has no key, so with a key it never
 // runs: its calls that end the reply (invokes from a line start to the end, with nothing but their wrapper tags between
 // and after) are only counted, so the caller can warn; they stay text. Without a key (no transcript), they run.
+// Claude's is the same shape without the marker (<invoke name="ask_user"><parameter name="questions">[…]</parameter>
+// </invoke>, sometimes inside <function_calls>): Claude Code's models fall back to it now and then, and it is read alike.
 const BAR = '[｜|]+\\s*';
-const DSML_OPEN = new RegExp(`<${BAR}DSML${BAR}invoke\\s+name="([^"]+)"\\s*>`, 'g');
-const DSML_CLOSE = new RegExp(`<\\/${BAR}DSML${BAR}invoke\\s*>`, 'g');
-const DSML_PARAM = new RegExp(`<${BAR}DSML${BAR}parameter\\s+name="([^"]+)"(?:\\s+string="(true|false)")?[^>]*>([\\s\\S]*?)<\\/${BAR}DSML${BAR}parameter\\s*>`, 'g');
-// The wrapper around the invokes (function_calls, calls…), removed once its calls were read.
-const DSML_WRAP = new RegExp(`<\\/?${BAR}DSML${BAR}(?!invoke|parameter)\\w*\\s*>`, 'g');
+const NS = `(?:${BAR}DSML${BAR}|antml:)?`;
+const DSML_OPEN = new RegExp(`<${NS}invoke\\s+name="([^"]+)"\\s*>`, 'g');
+const DSML_CLOSE = new RegExp(`<\\/${NS}invoke\\s*>`, 'g');
+const DSML_PARAM = new RegExp(`<${NS}parameter\\s+name="([^"]+)"(?:\\s+string="(true|false)")?[^>]*>([\\s\\S]*?)<\\/${NS}parameter\\s*>`, 'g');
+// The wrapper around the invokes (function_calls, calls…), removed once its calls were read. Without DeepSeek's
+// marker only function_calls counts: any other bare tag is the model's text.
+const DSML_WRAP = new RegExp(`<\\/?(?:${BAR}DSML${BAR}(?!invoke|parameter)\\w*|(?:antml:)?function_calls)\\s*>`, 'g');
 function nativeCalls(s, idBase, calls, run) {
-  if (!/DSML/.test(s)) return { text: s, dsml: 0 };
+  if (!/DSML|<(?:antml:)?invoke\s/.test(s)) return { text: s, dsml: 0 };
   // Every invoke with its closing tag, in one pass (each opener takes the first closing tag after it).
   const closes = [...s.matchAll(DSML_CLOSE)];
   const found = [];
@@ -179,8 +183,9 @@ function nativeCalls(s, idBase, calls, run) {
     end = closes[ci].index + closes[ci][0].length;
     found.push({ a: m.index, b: end, name: m[1], body: s.slice(m.index + m[0].length, closes[ci].index) });
   }
-  // The run of invokes that ends the reply.
-  const onlyWraps = (t) => !t.replace(DSML_WRAP, '').trim();
+  // The run of invokes that ends the reply. A stray piece of a call tag between or after them (Claude's models
+  // sometimes end with "_quorx_call" or "</quorx_call>") counts as wrapping too.
+  const onlyWraps = (t) => !t.replace(DSML_WRAP, '').replace(/<?\/?_?(?:quorx_call|tool_call)\b>?/g, '').trim();
   let first = found.length;
   if (first && onlyWraps(s.slice(found[first - 1].b))) {
     first--;
@@ -345,9 +350,10 @@ export const notRun = (parsed) => {
  * Passes streamed text through to the page, but holds back anything that might be the start of a tool call, and
  * drops what is inside one: the page shows what the model says, never the raw blocks.
  */
-// Where the calls start: QuorX's own block, or a model's native format (DeepSeek's starts "<｜"). Text after the first
-// call is rare and is still in the final reply; the stream shows only what came before.
-const OPENERS = [`<${TAG}`, '<tool_call', '<｜', '<|'];
+// Where the calls start: QuorX's own block, or a model's native format (DeepSeek's starts "<｜", Claude's "<invoke" or
+// "<function_calls"). Text after the first call is rare and is still in the final reply; the stream shows only what
+// came before.
+const OPENERS = [`<${TAG}`, '<tool_call', '<｜', '<|', '<invoke ', '<function_calls>'];
 const LONGEST = Math.max(...OPENERS.map((o) => o.length));
 export function textFilter(onText) {
   let pending = '', stopped = false;

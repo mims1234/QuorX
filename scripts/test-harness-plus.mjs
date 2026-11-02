@@ -219,16 +219,18 @@ test('memory: types, why, details and project scope; the token limit counts what
   } finally { saveMemory({ on: true, items: [] }); }
 });
 
-test('the wrap-up: harness facts on what was not checked, a recap and next steps from a helper call', async () => {
-  const r = await run((body, i) => {
-    if (/You write the wrap-up/.test(body.messages[0].content)) return reply(JSON.stringify({ recap: 'The page is written; nobody has opened it yet.', next: [{ label: 'Open it', text: 'Open the page and check it works.' }, { label: '', text: 'dropped' }, { label: 'x', text: 'third' }] }));
-    return [reply('', [['write_file', { path: 'a.txt', content: 'x' }]]), reply('Wrote a.txt.')][Math.min(i, 1)];
-  }, { settings: { verify: false }, wrapUp: true });
+test('what was not checked: harness facts only, no model call, nothing when all was checked', async () => {
+  const calls = [];
+  const work = (body, i) => { calls.push(body.messages[0].content); return [reply('', [['write_file', { path: 'a.txt', content: 'x' }]]), reply('Wrote a.txt.')][Math.min(i, 1)]; };
+  const r = await run(work, { settings: { verify: false } });
   const w = r.done.stats.wrap;
-  assert.equal(w.recap, 'The page is written; nobody has opened it yet.');
-  assert.deepEqual(w.next, [{ label: 'Open it', text: 'Open the page and check it works.' }]);
+  assert.deepEqual(Object.keys(w), ['unchecked']);
   assert.ok(w.unchecked.some((x) => /checks before the final reply are off/.test(x)));
   assert.equal(of(r.events, 'wrap_up').length, 1);
-  const quiet = await run(() => reply('Just an answer.'), { wrapUp: true });
-  assert.equal(quiet.done.stats.wrap, undefined, 'no wrap-up after a reply that did no work');
+  assert.equal(calls.length, 2, 'no extra model call for it');
+  const checked = await run(work);
+  assert.ok(!checked.done.stats.wrap, 'nothing to say when the work was checked');
+  assert.equal(of(checked.events, 'wrap_up').length, 0);
+  const quiet = await run(() => reply('Just an answer.'), { settings: { verify: false } });
+  assert.equal(quiet.done.stats.wrap, undefined, 'nothing after a reply that did no work');
 });
