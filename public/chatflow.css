@@ -84,3 +84,10 @@ html:root body .msgs .msg.bot.is-error { border-left-color: var(--bad) !importan
 .pc-now > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pc-now .pc-mark { font: 700 12px var(--mono); color: var(--accent); text-align: center; }
 .pc-compact[open] .pc-now { display: none; }
+
+/* 📂 Show in folder: under a picture (its caption line) and in the large view's bar. */
+.mm-pic figcaption { display: flex; align-items: center; gap: 4px; }
+.mm-pic .mm-cap { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mm-pic-folder { flex: none; border: 1px solid var(--line); background: transparent; border-radius: 6px; padding: 0 5px; font-size: 12px; line-height: 18px; cursor: pointer; }
+.mm-pic-folder:hover, .mm-pic-folder:focus-visible { border-color: var(--accent); background: var(--panel-2); }
+.lb-nav .lb-folder { width: auto; height: 28px; padding: 0 10px; font: 12px var(--font-ui); }

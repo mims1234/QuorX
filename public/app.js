@@ -2463,6 +2463,8 @@ function placeMedia(msgEl, item, at) {
 }
 // One file in a message, once: where the text names it (`at`, the path in the text), else under the message.
 // `p` is the path as named (or a key for a made picture); `info` is { kind, size, v, key, src }.
+// A full path on this computer (C:\…, D:/… or /…), not a name or a path inside the project.
+const onDiskPath = (p) => /^(?:[A-Za-z]:[\\/]|\/)/.test(String(p || ''));
 function addMedia(msgEl, c, p, info, at = null) {
   if (!msgEl || !info?.kind) return;
   const key = String(info.key || p).replace(/\\/g, '/').toLowerCase(), all = (msgEl._mm ||= new Map()), had = all.get(key);
@@ -2472,15 +2474,20 @@ function addMedia(msgEl, c, p, info, at = null) {
   const meta = [MM_LABEL[info.kind], sizeText(info.size)].filter(Boolean).join(' · ');
   const item = document.createElement(info.kind === 'image' ? 'figure' : 'div');
   item._src = src; item._name = name; item._full = info.full ?? p; item._size = info.size; item._kind = info.kind; item._inline = !!at; item._key = key; item._rel = mediaKey(p);
+  // Where it is on this computer (the server's key is its full path): 📂 shows it in File Explorer, selected, so it
+  // can be uploaded or used elsewhere. Pictures made inside QuorX (art:) have no folder of yours.
+  item._disk = onDiskPath(info.key) ? info.key : onDiskPath(p) ? p : null;
   all.set(key, item);
-  const head = (acts = '') => `<div class="mm-head"><button type="button" class="mm-tog" aria-expanded="false" title="Show it here"><span class="mm-chev" aria-hidden="true">▸</span><span class="mm-ico" aria-hidden="true">${PV_ICON[info.kind] || '📄'}</span><b class="mm-name" title="${esc(item._full)}">${esc(name)}</b><span class="mm-info">${esc(meta)}</span></button><span class="mm-acts">${acts}<button type="button" class="pv-btn mm-open" title="Open it large">Open</button></span></div>`;
+  const folderBtn = (cls) => (item._disk ? `<button type="button" class="pv-btn ${cls}" title="Show it in File Explorer: ${esc(item._disk)}" aria-label="Show ${esc(name)} in its folder">📂 Show in folder</button>` : '');
+  const head = (acts = '') => `<div class="mm-head"><button type="button" class="mm-tog" aria-expanded="false" title="Show it here"><span class="mm-chev" aria-hidden="true">▸</span><span class="mm-ico" aria-hidden="true">${PV_ICON[info.kind] || '📄'}</span><b class="mm-name" title="${esc(item._disk || item._full)}">${esc(name)}</b><span class="mm-info">${esc(meta)}</span></button><span class="mm-acts">${acts}${folderBtn('mm-folder')}<button type="button" class="pv-btn mm-open" title="Open it large">Open</button></span></div>`;
   if (info.kind === 'image') {
     item.className = 'mm-pic';
-    item.innerHTML = `<button type="button" class="mm-thumb pv-checker" title="${esc(name)} · click to see it large"><img src="${esc(src)}" alt="${esc(name)}" loading="lazy" decoding="async"${/\.svg$/i.test(p) || /\.svg$/i.test(name) ? ' class="mm-svg"' : ''}></button><figcaption title="${esc(item._full)}">${esc(name)}</figcaption>`;
+    item.innerHTML = `<button type="button" class="mm-thumb pv-checker" title="${esc(name)} · click to see it large"><img src="${esc(src)}" alt="${esc(name)}" loading="lazy" decoding="async"${/\.svg$/i.test(p) || /\.svg$/i.test(name) ? ' class="mm-svg"' : ''}></button><figcaption title="${esc(item._disk || item._full)}"><span class="mm-cap">${esc(name)}</span>${item._disk ? `<button type="button" class="mm-pic-folder" title="Show it in File Explorer: ${esc(item._disk)}" aria-label="Show ${esc(name)} in its folder">📂</button>` : ''}</figcaption>`;
     // The large view steps through every picture in the message, in the order they show.
-    $('.mm-thumb', item).onclick = () => { const all = [...msgEl.querySelectorAll('.mm-pic')]; viewPictures(all.map((x) => x._src), all.indexOf(item)); };
+    $('.mm-thumb', item).onclick = () => { const all = [...msgEl.querySelectorAll('.mm-pic')]; viewPictures(all.map((x) => x._src), all.indexOf(item), all.map((x) => x._disk)); };
+    const pf = $('.mm-pic-folder', item); if (pf) pf.onclick = () => openFolder(null, item._disk);
     const img = $('img', item);
-    img.onerror = () => { item.classList.add('mm-broken'); $('figcaption', item).textContent = `${name} (could not be shown)`; };
+    img.onerror = () => { item.classList.add('mm-broken'); $('.mm-cap', item).textContent = `${name} (could not be shown)`; };
   } else {
     // Folded to its name line so a chat stays short; ▸ shows it here, and only then does it load.
     item.className = `mm-card mm-k-${info.kind} mm-shut`;
@@ -2497,7 +2504,8 @@ function addMedia(msgEl, c, p, info, at = null) {
       else if (info.kind === 'pdf') body.innerHTML = info.size > MM_PDF_INLINE ? `<p class="mm-note">A large PDF (${esc(sizeText(info.size))}): Open shows it.</p>` : `<iframe class="mm-pdf-frame" loading="lazy" src="${esc(src)}#navpanes=0&view=FitH" title="${esc(name)}"></iframe>`;
       else { body.innerHTML = '<div class="mm-md-body"><div class="fx-empty">Loading…</div></div>'; loadMdCard(item); }
     };
-    $('.mm-open', item).onclick = () => openViewer((body) => { body.innerHTML = '<div class="lb-doc fview"></div>'; previewFile($('.lb-doc', body), { name, src, size: info.size, full: item._full, kind: info.kind }); });
+    $('.mm-open', item).onclick = () => openViewer((body) => { body.innerHTML = '<div class="lb-doc fview"></div>'; previewFile($('.lb-doc', body), { name, src, size: info.size, full: item._disk || item._full, kind: info.kind }); });
+    const fo = $('.mm-folder', item); if (fo) fo.onclick = () => openFolder(null, item._disk);
   }
   placeMedia(msgEl, item, at);
 }
@@ -3051,12 +3059,15 @@ function openViewer(build) {
   build($('.lb-body', d), d);
   if (!d.open) d.showModal();
 }
-function viewPictures(list, start) {
+// disk: each picture's full path on this computer, when it has one (📂 Show in folder).
+function viewPictures(list, start, disk = []) {
   openViewer((body, d) => {
     let i = start;
     const draw = () => {
-      body.innerHTML = `<div class="lb-pic pv-checker"><img src="${esc(list[i])}" alt="picture ${i + 1}"></div>${list.length > 1 ? `<div class="lb-nav"><button type="button" class="lb-prev" aria-label="Previous">‹</button><span>${i + 1} of ${list.length}</span><button type="button" class="lb-next" aria-label="Next">›</button></div>` : ''}`;
+      const fold = disk[i] ? `<button type="button" class="pv-btn lb-folder" title="Show it in File Explorer: ${esc(disk[i])}">📂 Show in folder</button>` : '';
+      body.innerHTML = `<div class="lb-pic pv-checker"><img src="${esc(list[i])}" alt="picture ${i + 1}"></div>${list.length > 1 || fold ? `<div class="lb-nav">${list.length > 1 ? `<button type="button" class="lb-prev" aria-label="Previous">‹</button><span>${i + 1} of ${list.length}</span><button type="button" class="lb-next" aria-label="Next">›</button>` : ''}${fold}</div>` : ''}`;
       const go = (k) => { i = (i + k + list.length) % list.length; draw(); };
+      const fb = $('.lb-folder', body); if (fb) fb.onclick = () => openFolder(null, disk[i]);
       const pv = $('.lb-prev', body), nx = $('.lb-next', body);
       if (pv) pv.onclick = () => go(-1); if (nx) nx.onclick = () => go(1);
       d.onkeydown = (e) => { if (list.length > 1 && e.key === 'ArrowLeft') go(-1); if (list.length > 1 && e.key === 'ArrowRight') go(1); };
@@ -6894,7 +6905,7 @@ function parseDelimited(text, sep) {
  * source; `full` is the path on disk (for Copy path). Pages and Markdown get Preview / Source.
  */
 async function previewFile(view, { name, src, size, full, text, kind = previewKind(name), live = true }) {
-  const onDisk = /^(?:[A-Za-z]:[\\/]|\/)/.test(full || ''); // a full path on disk (some callers pass only a name)
+  const onDisk = onDiskPath(full); // a full path on disk (some callers pass only a name)
   const head = (info, extra = '') => `<div class="pv-head"><span class="pv-ico" aria-hidden="true">${PV_ICON[kind] || '📄'}</span><b class="pv-name" title="${esc(full || name)}">${esc(name)}</b><span class="pv-info">${info}</span><span class="pv-acts">${extra}${full ? '<button type="button" class="pv-btn pv-copy" title="Copy the path">Copy path</button>' : ''}${onDisk ? '<button type="button" class="pv-btn pv-folder" title="Show it in File Explorer">Show in folder</button>' : ''}${src && !src.startsWith('data:') ? '<button type="button" class="pv-btn pv-ext" title="Open it in its own window">Open ↗</button>' : ''}</span></div>`;
   const wire = () => {
     const cp = $('.pv-copy', view); if (cp) cp.onclick = () => navigator.clipboard?.writeText(full).then(() => flashTip(cp, 'Copied')).catch(() => flashTip(cp, 'Could not copy'));
