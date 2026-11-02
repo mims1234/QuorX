@@ -16,6 +16,23 @@ import { HOME } from './openrouter.js';
  * instead of leaving it open for as long as the server runs.
  */
 export const sendFile = (file, res, opts) => { const src = fs.createReadStream(file, opts); pipeline(src, res, () => { /* ended or cut off */ }); return src; };
+/**
+ * Sends a file with `head`, or the part a Range header asks for (206). A video or sound can only be seeked when its
+ * server answers ranges: without them the player carries on from where it was, whatever you drag the timeline to.
+ */
+export function sendRanged(req, res, file, head, size = fs.statSync(file).size) {
+  head = { ...head, 'Accept-Ranges': 'bytes' };
+  const range = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range || ''));
+  if (range && (range[1] || range[2])) {
+    const start = range[1] ? Number(range[1]) : Math.max(0, size - Number(range[2]));
+    const end = range[1] && range[2] ? Math.min(Number(range[2]), size - 1) : size - 1;
+    if (start > end || start >= size) { res.writeHead(416, { 'Content-Range': `bytes */${size}` }); return res.end(); }
+    res.writeHead(206, { ...head, 'Content-Range': `bytes ${start}-${end}/${size}`, 'Content-Length': end - start + 1 });
+    return sendFile(file, res, { start, end });
+  }
+  res.writeHead(200, { ...head, 'Content-Length': size });
+  return sendFile(file, res);
+}
 
 const DIR = path.join(HOME, 'data', 'blobs');
 const MIN = 16 * 1024; // smaller data URLs stay where they are
@@ -92,16 +109,7 @@ export function serveBlob(req, res, name) {
   const head = { 'Content-Type': type, 'Cache-Control': 'private, max-age=31536000, immutable', ETag: `"${name.slice(0, 16)}"`, 'Accept-Ranges': 'bytes',
     ...(ext === 'svg' ? { 'Content-Security-Policy': 'sandbox' } : {}), 'X-Content-Type-Options': 'nosniff' };
   if (req.headers['if-none-match'] === head.ETag) { res.writeHead(304, head); return res.end(); }
-  const range = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range || ''));
-  if (range && (range[1] || range[2])) {
-    let start = range[1] ? Number(range[1]) : Math.max(0, st.size - Number(range[2]));
-    let end = range[1] && range[2] ? Math.min(Number(range[2]), st.size - 1) : st.size - 1;
-    if (start > end || start >= st.size) { res.writeHead(416, { 'Content-Range': `bytes */${st.size}` }); return res.end(); }
-    res.writeHead(206, { ...head, 'Content-Range': `bytes ${start}-${end}/${st.size}`, 'Content-Length': end - start + 1 });
-    return sendFile(file, res, { start, end });
-  }
-  res.writeHead(200, { ...head, 'Content-Length': st.size });
-  return sendFile(file, res);
+  return sendRanged(req, res, file, head, st.size);
 }
 
 // ---------- the sweep: blobs nothing refers to any more ----------

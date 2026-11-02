@@ -61,7 +61,7 @@ import { exportBackup, findBackups, inspectBackup, importBackup } from './server
 import { artifactContent, servedArtifact, ARTIFACT_HEADERS, folderStamp } from './server/artifacts.js';
 import { gate, appGate, appLink, hostAllowed, crossSiteApi, isLoopback, handoffPut, handoffTake } from './server/access.js';
 import { gitHubRemote, gitHubInfo } from './server/github.js';
-import { serveBlob, startSweeping, chatFootprint, sendFile } from './server/blobs.js';
+import { serveBlob, startSweeping, chatFootprint, sendFile, sendRanged } from './server/blobs.js';
 import { mediaFile, serveMedia } from './server/media.js';
 import { measureStorage, clearStorage, clearProjectParts, previewProjectParts, recentClears, startStorageRules } from './server/storage.js';
 import { storageRules, saveStorageRules, rotateLog, RULE_DEFAULTS } from './server/storagerules.js';
@@ -137,8 +137,7 @@ function sendStatic(req, res, file, type, extra = {}) {
     res.writeHead(200, { ...head, 'Content-Encoding': 'gzip', Vary: 'Accept-Encoding', 'Content-Length': z.buf.length });
     return res.end(z.buf);
   }
-  res.writeHead(200, head);
-  return sendFile(file, res);
+  return sendRanged(req, res, file, head, st.size);
 }
 // A path from the address bar; a malformed %-escape is a bad request, not a server error.
 const decodePath = (s) => { try { return decodeURIComponent(s); } catch { return null; } };// Server-Sent Events for one run, from event number `from`. Closing the page only stops listening.
@@ -358,8 +357,8 @@ const server = http.createServer(async (req, res) => {
       if (req.pageOrigin && req.headers['sec-fetch-mode'] !== 'navigate' && !ref.startsWith(`${base}ws/${wm[1]}/`)) return json(res, 404, { error: 'not found' });
       const own = req.headers.origin === 'null' && ref.startsWith(`${base}ws/${wm[1]}/`);
       const type = MIME[path.extname(file).toLowerCase()] || 'application/octet-stream';
-      res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-cache', ...(/html|svg|xml/.test(type) && !req.pageOrigin ? { 'Content-Security-Policy': SANDBOX_CSP } : {}), ...(own ? { 'Access-Control-Allow-Origin': 'null' } : {}) });
-      return sendFile(file, res);
+      // Ranges, so a video or sound here can be seeked (a player page, a site's own <video>).
+      return sendRanged(req, res, file, { 'Content-Type': type, 'Cache-Control': 'no-cache', ...(/html|svg|xml/.test(type) && !req.pageOrigin ? { 'Content-Security-Policy': SANDBOX_CSP } : {}), ...(own ? { 'Access-Control-Allow-Origin': 'null' } : {}) });
     }
     // A folder outside the project that a chat added (/wsf/<chat>/<n>/<path>): its pages open in the browser like a
     // project's, sandboxed the same way, and only while the chat has it.
@@ -375,8 +374,8 @@ const server = http.createServer(async (req, res) => {
       if (req.pageOrigin && req.headers['sec-fetch-mode'] !== 'navigate' && !ref.startsWith(mine)) return json(res, 404, { error: 'not found' });
       const own = req.headers.origin === 'null' && ref.startsWith(mine);
       const type = MIME[path.extname(file).toLowerCase()] || 'application/octet-stream';
-      res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-cache', ...(/html|svg|xml/.test(type) && !req.pageOrigin ? { 'Content-Security-Policy': SANDBOX_CSP } : {}), ...(own ? { 'Access-Control-Allow-Origin': 'null' } : {}) });
-      return sendFile(file, res);
+      // Ranges, so a video or sound here can be seeked (a player page, a site's own <video>).
+      return sendRanged(req, res, file, { 'Content-Type': type, 'Cache-Control': 'no-cache', ...(/html|svg|xml/.test(type) && !req.pageOrigin ? { 'Content-Security-Policy': SANDBOX_CSP } : {}), ...(own ? { 'Access-Control-Allow-Origin': 'null' } : {}) });
     }
     // Open a project's folder in the computer's own file manager (File Explorer on Windows). With a path inside the
     // project, a folder opens and a file is shown selected in its folder (Files → right-click → Show in File Explorer).
