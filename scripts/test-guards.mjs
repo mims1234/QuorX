@@ -605,6 +605,45 @@ test('rules: every "Always allow" suggestion matches the command it came from; r
   assert.equal(ruleProblem('npm test*'), '');
 });
 
+test('rules: allowing a program covers every command that starts with it, by whole word and part by part', { skip: !WIN }, async () => {
+  const d0 = await decide('ffmpeg -i a.mp4 b.mp3', sctx());
+  assert.equal(d0.segments[0].suggest.program, 'ffmpeg *');
+  assert.ok(!d0.segments[0].suggest.runner);
+  assert.ok((await decide('node build.js', sctx())).segments[0].suggest.runner, 'a program that runs any code it is handed is marked');
+  assert.ok(ruleMatches('ffmpeg *', 'ffmpeg'), 'no arguments');
+  assert.ok(ruleMatches('ffmpeg *', 'ffmpeg -y -i a.mp4 b.mp3'));
+  assert.ok(!ruleMatches('ffmpeg *', 'ffmpegx -i a.mp4'), 'whole word only');
+  assert.ok(ruleMatches('git status*', 'git status -s'), 'a * without a space before it still matches any start');
+  const rules = [{ id: 'r1', effect: 'allow', match: 'ffmpeg *', by: 'button', scope: 'chat' }];
+  const run = (line) => decide(line, sctx({ rules }));
+  for (const line of ['ffmpeg -i a.mp4 b.mp3', 'ffmpeg -y -i in.mov -vn out.mp3', 'ffmpeg', 'C:\\tools\\ffmpeg.exe -i a.mp4 b.mp3', '& "C:\\tools\\ffmpeg.exe" -i a.mp4 b.mp3']) {
+    const d = await run(line);
+    assert.deepEqual([d.verdict, d.decidedBy], ['allow', 'rule:chat'], line);
+  }
+  assert.equal((await run('ffmpegx -i a.mp4')).verdict, 'ask', 'ffmpeg doesn\'t cover ffmpegx');
+  const chained = await run('ffmpeg -i a.mp4 b.mp3; Remove-Item sub -Recurse -Force');
+  assert.equal(chained.verdict, 'deny', 'the delete after it is judged on its own');
+  assert.equal(chained.segments[0].decidedBy, 'rule:chat');
+  const piped = await run('ffmpeg -i a.mp4 -f wav - | magick convert - out.png');
+  assert.deepEqual([piped.verdict, piped.segments[1].verdict], ['ask', 'ask'], 'the program it pipes into still asks');
+  const push = await run('ffmpeg -i a.mp4 b.mp3; git push --force');
+  assert.equal(push.verdict, 'ask', 'a push after it still asks');
+  assert.equal(push.risk, 'warn');
+});
+
+test('shell: "Allow every ffmpeg command" asks once; the next ffmpeg command with other arguments runs', { skip: !WIN }, async () => {
+  let asked = 0;
+  const { events } = await agentRun((b, i) => [
+    reply('', [['shell', { command: 'ffmpeg -i a.mp4 b.mp3' }]]),
+    reply('', [['shell', { command: 'ffmpeg -y -i a.mp4 -vn c.mp3' }]]),
+    reply('Done.'),
+  ][i], { onEvent: (e, id) => { if (e.t === 'approval' && e.mode === 'strict') { asked++; setTimeout(() => answerApproval(id, e.id, { approve: true, rule: { match: e.policy.segments[0].suggest.program, scope: 'chat' } }), 10); } } });
+  assert.equal(asked, 1, 'asked for the first ffmpeg only');
+  assert.equal(of(events, 'cmd_rule')[0]?.rule.match, 'ffmpeg *');
+  assert.equal(of(events, 'cmd_rule')[0]?.rule.scope, 'chat');
+  assert.equal(of(events, 'command').at(-1).decidedBy, 'rule:chat');
+});
+
 test('shell: a rule that would not match its command is not saved, and you are told', { skip: !WIN }, async () => {
   const { events, dir } = await agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('Done.')][i], {
     prep: buildJs, onEvent: (e, id) => { if (e.t === 'approval' && e.mode === 'strict') setTimeout(() => answerApproval(id, e.id, { approve: true, rule: { match: 'node Bypass*', scope: 'project' } }), 10); } });

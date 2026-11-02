@@ -4221,8 +4221,11 @@ ${r.text || '(no text found)'}`;
     const strictEvery = S.approval === 'strict' && (S.strictAsk || 'paid') === 'every' && !ownCard;
     const yoloAsksCommands = S.approval === 'yolo' && S.yoloAuto?.commands === false && !ownCard;
     countRuleUses(d);
+    // A line your own rules let run (each part allowed by a rule, or only reading) doesn't ask again, even when every
+    // command asks: you said yes to that program.
+    const byRules = d.segments.every((s) => s.verdict === 'allow' && (String(s.decidedBy || '').startsWith('rule:') || s.cls === 'read')) && d.segments.some((s) => String(s.decidedBy || '').startsWith('rule:'));
     // The rule that let it run, by its pattern, so the chat can say which one (the step's "why").
-    if (d.verdict === 'allow' && !strictEvery && !yoloAsksCommands) return { ok: true, by: d.decidedBy, rule: String(d.decidedBy || '').startsWith('rule:') ? d.segments.find((s) => s.rule && s.decidedBy === d.decidedBy)?.rule?.match : undefined };
+    if (d.verdict === 'allow' && (byRules || (!strictEvery && !yoloAsksCommands))) return { ok: true, by: d.decidedBy, rule: String(d.decidedBy || '').startsWith('rule:') ? d.segments.find((s) => s.rule && s.decidedBy === d.decidedBy)?.rule?.match : undefined };
     // The same command line approved earlier in this reply doesn't ask again, say when the agent moves it from shell
     // to its terminal or to the background. (Hooks are approved one by one: you didn't type them for this reply.)
     const sameLine = line.replace(/\s+/g, ' ').trim(), approvedLines = (run.approvedLines ??= new Set());
