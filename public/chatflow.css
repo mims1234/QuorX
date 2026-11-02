@@ -93,3 +93,10 @@ html:root body .msgs .msg.bot.is-error { border-left-color: var(--bad) !importan
 .lb-nav .lb-folder { width: auto; height: 28px; padding: 0 10px; font: 12px var(--font-ui); }
 /* The large view's ✕ sits in the top-right corner: its file bar keeps clear of it. */
 .lb-doc .pv-head { padding-right: 46px; }
+
+/* A file opened from the chat in the Artifact tab: the Files tab's viewer, filling the pane. */
+#paneBody > .pane-file { height: 100%; min-height: 0; overflow: auto; }
+.pane-tool > #appBar > .pf-close { order: 3; margin-left: 4px; }
+/* A file card dragged over the side pane. */
+#pane.file-drop { outline: 2px dashed var(--accent); outline-offset: -4px; }
+.mm-head[draggable="true"], .mm-thumb[draggable="true"] { cursor: grab; }

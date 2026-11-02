@@ -2463,6 +2463,8 @@ function placeMedia(msgEl, item, at) {
 }
 // One file in a message, once: where the text names it (`at`, the path in the text), else under the message.
 // `p` is the path as named (or a key for a made picture); `info` is { kind, size, v, key, src }.
+// What the side pane needs to show a file from the chat (openFileInPane).
+const paneEntry = (item) => ({ key: item._key, name: item._name, src: item._src, kind: item._kind, full: item._disk || item._full, size: item._size });
 // A full path on this computer (C:\…, D:/… or /…), not a name or a path inside the project.
 const onDiskPath = (p) => /^(?:[A-Za-z]:[\\/]|\/)/.test(String(p || ''));
 function addMedia(msgEl, c, p, info, at = null) {
@@ -2479,12 +2481,16 @@ function addMedia(msgEl, c, p, info, at = null) {
   item._disk = onDiskPath(info.key) ? info.key : onDiskPath(p) ? p : null;
   all.set(key, item);
   const folderBtn = (cls) => (item._disk ? `<button type="button" class="pv-btn ${cls}" title="Show it in File Explorer: ${esc(item._disk)}" aria-label="Show ${esc(name)} in its folder">📂 Show in folder</button>` : '');
-  const head = (acts = '') => `<div class="mm-head"><button type="button" class="mm-tog" aria-expanded="false" title="Show it here"><span class="mm-chev" aria-hidden="true">▸</span><span class="mm-ico" aria-hidden="true">${PV_ICON[info.kind] || '📄'}</span><b class="mm-name" title="${esc(item._disk || item._full)}">${esc(name)}</b><span class="mm-info">${esc(meta)}</span></button><span class="mm-acts">${acts}${folderBtn('mm-folder')}<button type="button" class="pv-btn mm-open" title="Open it large">Open</button></span></div>`;
+  const head = (acts = '') => `<div class="mm-head"><button type="button" class="mm-tog" aria-expanded="false" title="Show it here"><span class="mm-chev" aria-hidden="true">▸</span><span class="mm-ico" aria-hidden="true">${PV_ICON[info.kind] || '📄'}</span><b class="mm-name" title="${esc(item._disk || item._full)}">${esc(name)}</b><span class="mm-info">${esc(meta)}</span></button><span class="mm-acts">${acts}${folderBtn('mm-folder')}<button type="button" class="pv-btn mm-open" title="Show it in the side pane (or drag the card there)">Open</button></span></div>`;
   if (info.kind === 'image') {
     item.className = 'mm-pic';
     item.innerHTML = `<button type="button" class="mm-thumb pv-checker" title="${esc(name)} · click to see it large"><img src="${esc(src)}" alt="${esc(name)}" loading="lazy" decoding="async"${/\.svg$/i.test(p) || /\.svg$/i.test(name) ? ' class="mm-svg"' : ''}></button><figcaption title="${esc(item._disk || item._full)}"><span class="mm-cap">${esc(name)}</span>${item._disk ? `<button type="button" class="mm-pic-folder" title="Show it in File Explorer: ${esc(item._disk)}" aria-label="Show ${esc(name)} in its folder">📂</button>` : ''}</figcaption>`;
-    // The large view steps through every picture in the message, in the order they show.
-    $('.mm-thumb', item).onclick = () => { const all = [...msgEl.querySelectorAll('.mm-pic')]; viewPictures(all.map((x) => x._src), all.indexOf(item), all.map((x) => x._disk)); };
+    // A click shows it in the side pane; the pop-up that steps through every picture in the message stays on Shift+click.
+    $('.mm-thumb', item).onclick = (e) => {
+      if (!e.shiftKey) return openFileInPane(c, paneEntry(item));
+      const all = [...msgEl.querySelectorAll('.mm-pic')]; viewPictures(all.map((x) => x._src), all.indexOf(item), all.map((x) => x._disk));
+    };
+    $('.mm-thumb', item).title = `${name} · click to show it in the side pane (Shift+click: large, with the other pictures)`;
     const pf = $('.mm-pic-folder', item); if (pf) pf.onclick = () => openFolder(null, item._disk);
     const img = $('img', item);
     img.onerror = () => { item.classList.add('mm-broken'); $('.mm-cap', item).textContent = `${name} (could not be shown)`; };
@@ -2504,9 +2510,14 @@ function addMedia(msgEl, c, p, info, at = null) {
       else if (info.kind === 'pdf') body.innerHTML = info.size > MM_PDF_INLINE ? `<p class="mm-note">A large PDF (${esc(sizeText(info.size))}): Open shows it.</p>` : `<iframe class="mm-pdf-frame" loading="lazy" src="${esc(src)}#navpanes=0&view=FitH" title="${esc(name)}"></iframe>`;
       else { body.innerHTML = '<div class="mm-md-body"><div class="fx-empty">Loading…</div></div>'; loadMdCard(item); }
     };
-    $('.mm-open', item).onclick = () => openViewer((body) => { body.innerHTML = '<div class="lb-doc fview"></div>'; previewFile($('.lb-doc', body), { name, src, size: info.size, full: item._disk || item._full, kind: info.kind }); });
+    $('.mm-open', item).onclick = () => openFileInPane(c, paneEntry(item));
     const fo = $('.mm-folder', item); if (fo) fo.onclick = () => openFolder(null, item._disk);
   }
+  // Dragged onto the side pane (by its name line, or a picture by itself), it opens there. Text inside an open card
+  // stays selectable.
+  const grip = $('.mm-head', item) || $('.mm-thumb', item);
+  grip.draggable = true;
+  grip.addEventListener('dragstart', (e) => { e.dataTransfer.setData(PANE_FILE_DRAG, JSON.stringify(paneEntry(item))); e.dataTransfer.effectAllowed = 'copy'; });
   placeMedia(msgEl, item, at);
 }
 // A Markdown card reads its file when it comes into view: up to MM_MD_BYTES, rendered or raw.
@@ -6499,6 +6510,47 @@ function serverUp(c, e) {
   pollDev();
   if (focused() === c && followsAgent(c) && e.url) openInBrowser(c, e.url);
 }
+// Files opened from the chat (a card's Open, a picture, a card dragged onto the pane) show in the Artifact tab, next
+// to the plans: listed in its dropdown under "Files from the chat" until closed. Kept per chat on this computer.
+const PANE_FILES_MAX = 12;
+const paneFilesKey = (id) => `oh-pane-files:${id}`;
+function paneFiles(c) {
+  if (!c) return [];
+  if (!c._paneFiles) { try { c._paneFiles = JSON.parse(localStorage.getItem(paneFilesKey(c.id)) || '[]'); } catch { c._paneFiles = []; } }
+  return c._paneFiles;
+}
+function savePaneFiles(c) { try { localStorage.setItem(paneFilesKey(c.id), JSON.stringify(paneFiles(c))); } catch { /* this session only */ } }
+// f: { key, name, src, kind, full, size }. Opened again, it moves to the end (the newest).
+function openFileInPane(c, f) {
+  if (!c || !f?.src) return;
+  const id = `file:${f.key || f.src}`, list = paneFiles(c).filter((x) => x.id !== id);
+  list.push({ id, name: f.name, src: f.src, kind: f.kind || previewKind(f.name), full: f.full || '', size: f.size || 0 });
+  c._paneFiles = list.slice(-PANE_FILES_MAX); savePaneFiles(c);
+  if (G.paneHidden) setPaneHidden(false);
+  openArtifact(c, id);
+}
+function closePaneFile(c, id) {
+  c._paneFiles = paneFiles(c).filter((x) => x.id !== id); savePaneFiles(c);
+  G.view = { id: null, src: false, files: false };
+  renderPane();
+}
+// A file card or picture dragged from the chat onto the pane opens there (dropped on the message box it still attaches).
+const PANE_FILE_DRAG = 'application/x-quorx-panefile';
+function wirePaneFileDrop() {
+  const pane = $('#pane'); if (!pane) return;
+  const ok = (e) => e.dataTransfer?.types.includes(PANE_FILE_DRAG);
+  pane.addEventListener('dragover', (e) => { if (!ok(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; pane.classList.add('file-drop'); });
+  pane.addEventListener('dragleave', (e) => { if (!pane.contains(e.relatedTarget)) pane.classList.remove('file-drop'); });
+  pane.addEventListener('drop', (e) => {
+    pane.classList.remove('file-drop');
+    if (!ok(e)) return;
+    e.preventDefault();
+    let f = null; try { f = JSON.parse(e.dataTransfer.getData(PANE_FILE_DRAG)); } catch { return; }
+    const n = Number(e.target.closest?.('.pane-area')?.dataset.area), a = PA.list.find((x) => x.n === n);
+    if (a) paneFocus(a);
+    openFileInPane(focused(), f);
+  });
+}
 function openArtifact(c, id) {
   const i = G.panes.indexOf(c.id);
   if (i >= 0 && i !== G.focus) { G.focus = i; for (const p of document.querySelectorAll('.chatpane')) p.classList.toggle('focus', Number(p.dataset.pane) === i); }
@@ -6792,9 +6844,25 @@ function renderPane() {
     body.innerHTML = '<div class="empty">No replies in this chat yet. Every step of a reply shows here.</div>';
     return;
   }
-  const all = planArts(c).sort((a, b) => (a.updated || 0) - (b.updated || 0));
-  sel.innerHTML = all.map((a) => `<option value="${esc(a.id)}">${ICON[a.kind] || '📄'} ${esc(a.title)}</option>`).join('') || '<option>No plans yet</option>';
-  sel.disabled = !all.length;
+  const all = planArts(c).sort((a, b) => (a.updated || 0) - (b.updated || 0)), files = paneFiles(c);
+  const opt = (id, label) => `<option value="${esc(id)}">${label}</option>`;
+  sel.innerHTML = (all.length && files.length ? `<optgroup label="Plans and reports">${all.map((a) => opt(a.id, `${ICON[a.kind] || '📄'} ${esc(a.title)}`)).join('')}</optgroup>` : all.map((a) => opt(a.id, `${ICON[a.kind] || '📄'} ${esc(a.title)}`)).join(''))
+    + (files.length ? `<optgroup label="Files from the chat">${files.map((f) => opt(f.id, `${PV_ICON[f.kind] || '📄'} ${esc(baseName(f.name))}`)).join('')}</optgroup>` : '')
+    || '<option>No plans yet</option>';
+  sel.disabled = !all.length && !files.length;
+  // A file opened from the chat: the same viewer as the Files tab, with a bar to close it.
+  const file = files.find((x) => x.id === G.view.id) || (!all.length ? files.at(-1) : null);
+  if (file) {
+    sel.value = file.id;
+    setUrlBar(file.src, { art: true });
+    bar.hidden = false;
+    bar.innerHTML = '<button type="button" class="pv-btn pf-close" title="Opened from the chat: take it off this list (the file stays where it is)">✕ Close</button>';
+    $('.pf-close', bar).onclick = () => closePaneFile(c, file.id);
+    body.innerHTML = '<div class="fview pane-file"></div>';
+    G.filesProject = c.projectId;
+    previewFile($('.pane-file', body), { name: file.name, src: file.src, size: file.size, full: file.full, kind: file.kind });
+    return;
+  }
   const a = all.find((x) => x.id === G.view.id) || all.at(-1);
   if (!a) { setUrlBar(null, { art: true }); body.innerHTML = '<div class="empty">No plans in this chat yet. Plans, specs and reports the agent writes show here; what it builds runs in the Browser tab (and under 🖥 servers).</div>'; return; }
   sel.value = a.id;
@@ -10802,7 +10870,7 @@ function renderPaneTabs(c) {
   const box = $('#paneTabs'); if (!box) return;
   const t = paneTab();
   for (const b of box.querySelectorAll('[data-tab]')) { const on = b.dataset.tab === t; b.classList.toggle('on', on); b.setAttribute('aria-selected', String(on)); }
-  const n = planArts(c).length;
+  const n = planArts(c).length + paneFiles(c).length;
   $('[data-tab="art"] .pt-n', box).textContent = n || '';
   // The Terminal tab counts what runs (its Running section lists them) and turns amber while a command runs.
   const dev = c && G.devCount?.[c.projectId], rn = c && G.runCount?.[c.projectId];
@@ -10838,6 +10906,7 @@ function wirePaneChrome() {
   setMax(wasMax);
   const fa = $('#followAgent'); if (fa) fa.onchange = () => { G.followAgent = fa.checked; savePrefs(); };
   wireAreaChrome();
+  wirePaneFileDrop();
 }
 // One area's tab strip and address bar (each area has its own copy; this runs in the area being wired).
 function wireAreaChrome() {
