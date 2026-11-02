@@ -4387,7 +4387,8 @@ function drawReading(c, m) {
 function drawThinking(m, c) {
   const box = $('.thinking', m.el); if (!box) return;
   const tl = $('.timeline', m.el);
-  if (tl) { box.hidden = true; liveThinking(m, tl, c); return; }
+  // Only a running reply follows its thinking (a finished one draws a thinking line's text when it is opened).
+  if (tl) { box.hidden = true; if (m.live) liveThinking(m, tl, c); return; }
   const parts = Object.entries(m.thinking || {}).filter(([, t]) => t.trim());
   box.hidden = !parts.length;
   if (!parts.length) return;
@@ -4648,27 +4649,32 @@ function timelineHTML(m) {
     const counts = [done.length ? `${done.length} tool call${done.length === 1 ? '' : 's'}` : '', thinks ? `${thinks} thought${thinks === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
     return when({ at: seg[0].at, html: det(`${pre}${n ? `all${n}` : 'all'}`, 'tl-row tl-bundle tl-fold', `<span class="tl-ic">🗂</span><span class="tl-label" title="${esc(what)}">${live && end ? 'Working' : 'Worked'} through ${steps} step${steps === 1 ? '' : 's'}</span><small class="tl-words">${esc(counts)}</small>${errs ? `<span class="tl-err">${errs} error${errs > 1 ? 's' : ''}</span>` : ''}`, bundle(seg)) });
   };
-  // tail: the part that ends with what is happening now.
-  const fold = (list, pre, tail) => {
-    let out = '', seg = [], n = 0;
+  // tail: the part that ends with what is happening now. Parts: one per line on the page, in order.
+  const foldParts = (list, pre, tail) => {
+    const out = []; let seg = [], n = 0;
     const stays = (x, i) => x.pin || (live && (x.card || (tail && i === list.length - 1)));
-    list.forEach((x, i) => { if (stays(x, i)) { out += foldLine(seg, n++, false, pre); seg = []; out += when(x); } else seg.push(x); });
-    return out + foldLine(seg, n, tail, pre);
+    list.forEach((x, i) => { if (stays(x, i)) { out.push(foldLine(seg, n++, false, pre)); seg = []; out.push(when(x)); } else seg.push(x); });
+    out.push(foldLine(seg, n, tail, pre));
+    return out.filter(Boolean);
   };
+  const fold = (list, pre, tail) => foldParts(list, pre, tail).join('');
   // A finished reply: the answer is what you read. All its work folds into one line above it (open it for every step,
   // question and message on the way); what another model said (the reviewer, fresh eyes) stays out, as its own message.
   if (!live) {
-    let out = '', seg = [], n = 0;
+    const out = []; let seg = [], n = 0;
     const flush = () => {
       if (!seg.length) return;
       const steps = seg.reduce((k, x) => k + (x.row ? 1 : 0), 0), calls = seg.reduce((k, x) => k + (x.calls?.length || 0), 0);
       const qs = seg.filter((x) => x.q).length, says = seg.filter((x) => x.say).length;
       const errs = seg.flatMap((x) => x.calls || []).filter((x) => x.res != null && /^Error/.test(x.res)).length;
       const what = [steps ? `${steps} step${steps === 1 ? '' : 's'}` : '', calls ? `${calls} tool call${calls === 1 ? '' : 's'}` : '', qs ? `${qs} question${qs === 1 ? '' : 's'}` : '', says ? `${says} message${says === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
-      out += det(`done${n++}`, 'tl-row tl-bundle tl-done', `<span class="tl-ic">🗂</span><span class="tl-label">${n === 1 ? 'How it got here' : 'Then'}</span><small class="tl-words">${esc(what || 'details')}</small>${errs ? `<span class="tl-err">${errs} error${errs > 1 ? 's' : ''}</span>` : ''}`, `<div class="tl-done-body">${fold(seg, `d${n}`, false)}</div>`);
+      // Its steps are drawn when it is opened (wireTimeline): a long reply's work is thousands of elements.
+      const key = `done${n++}`, inner = fold(seg, `d${n}`, false);
+      (LAZY.get(m) || LAZY.set(m, {}).get(m))[key] = inner;
+      out.push(det(key, 'tl-row tl-bundle tl-done', `<span class="tl-ic">🗂</span><span class="tl-label">${n === 1 ? 'How it got here' : 'Then'}</span><small class="tl-words">${esc(what || 'details')}</small>${errs ? `<span class="tl-err">${errs} error${errs > 1 ? 's' : ''}</span>` : ''}`, `<div class="tl-done-body" data-lazy="${key}">${open.has(key) ? inner : ''}</div>`));
       seg = [];
     };
-    for (const x of pieces) { if (x.model) { flush(); out += when(x); } else seg.push(x); }
+    for (const x of pieces) { if (x.model) { flush(); out.push(when(x)); } else seg.push(x); }
     flush();
     const ans = (m.trace || [])[answerIndex(m)];
     return { before: out, after: '', answerAt: ans ? atOf(m, ans) : 0 };
@@ -4676,19 +4682,44 @@ function timelineHTML(m) {
   // While it works: what happened before the answer was written goes above it; what came after (checks, the reviewer,
   // your notes) under it.
   const before = pieces.slice(0, cut), after = pieces.slice(cut), ans = (m.trace || [])[answerIndex(m)];
-  return { before: fold(before, '', !after.length), after: fold(after, 'z', true), answerAt: before.length && ans ? atOf(m, ans) : 0 };
+  return { before: foldParts(before, '', !after.length), after: foldParts(after, 'z', true), answerAt: before.length && ans ? atOf(m, ans) : 0 };
+}
+// Draws a list of parts into box, keeping the parts at the start that are the same as last time (a running reply only
+// grows at its end, so a redraw touches the last few lines, not the whole reply). Returns the parts drawn new.
+function setParts(box, parts) {
+  const old = box._parts || [], kids = [...box.children];
+  let k = 0;
+  if (kids.length === old.length) while (k < old.length && k < parts.length && old[k] === parts[k]) k++;
+  for (let i = kids.length - 1; i >= k; i--) kids[i].remove();
+  const fresh = [];
+  for (const html of parts.slice(k)) {
+    const part = document.createElement('div');
+    part.className = 'tl-part';
+    part.innerHTML = html;
+    box.append(part); fresh.push(part);
+  }
+  box._parts = parts;
+  return fresh;
 }
 // Open lines stay open across redraws; a thinking line draws its text only when opened.
-function wireTimeline(m, el) {
+// A finished reply's folded work, kept off the page (and out of the saved chat) until it is opened: reply → { key: html }.
+const LAZY = new WeakMap();
+function wireTimeline(m, el, roots = [...el.querySelectorAll('.timeline')]) {
   const open = (m.tlOpen instanceof Set ? m.tlOpen : (m.tlOpen = new Set())); // chats saved before carry it as {}
-  for (const d of el.querySelectorAll('.timeline details[data-key]')) {
+  for (const d of roots.flatMap((r) => [...r.querySelectorAll('details[data-key]')])) {
+    if (d._wired) continue;
+    d._wired = true;
     d.addEventListener('toggle', () => {
       if (d.open) open.add(d.dataset.key); else open.delete(d.dataset.key);
+      // A finished reply's work, drawn the first time it is opened.
+      const lazy = d.open && $(':scope > .tl-done-body[data-lazy]', d);
+      const html = lazy && !lazy.childElementCount && LAZY.get(m)?.[lazy.dataset.lazy];
+      if (html) { lazy.innerHTML = html; wireTimeline(m, el, [lazy]); }
       const body = d.open && $(':scope > .tl-think-body', d);
       if (body && !body.innerHTML) { body.innerHTML = md(String(m.thinking?.[body.dataset.step] || '')); enhance(body); }
     });
   }
-  for (const tl of el.querySelectorAll('.timeline')) enhance(tl);
+  for (const r of roots) enhance(r);
 }
 // While the model thinks: update the word counts, and the text of an open thinking line. A step whose thinking
 // has no line yet (it started after the last redraw) gets one.
@@ -4696,7 +4727,7 @@ function liveThinking(m, tl, c) {
   for (const [step, text] of Object.entries(m.thinking || {})) {
     if (!String(text).trim()) continue;
     const row = m.el.querySelector(`.timeline .tl-think[data-key="t${step}"]`);
-    if (!row) { if (c) drawTimeline(c, m); else { putTimeline(m); wireTimeline(m, m.el); } return; }
+    if (!row) { if (c) drawTimeline(c, m); else wireTimeline(m, m.el, putTimeline(m)); return; }
     const w = $('.tl-words', row); if (w) w.textContent = `${String(text).trim().split(/\s+/).length.toLocaleString()} words`;
     if (row.open) {
       const body = $('.tl-think-body', row), TAIL = 12000, t = String(text);
@@ -4785,24 +4816,26 @@ function drawTimeline(c, m) {
   const el = m.el, was = cardInputs(el);
   // Everything the agent did reads in order: its thinking (folded), what it said, one line per step's tool calls
   // (click for each call and its result), and any card that asks you something, right where it happened.
-  putTimeline(m);
-  wireTimeline(m, el);
+  const fresh = putTimeline(m);
+  wireTimeline(m, el, fresh);
   // While a /goal works, its checklist sits at the end of the reply and ticks off in place.
   $('.approvals', el).innerHTML = (m.live ? planCardHTML(m) : '') + outOfStepsHTML(m) + wrapUpHTML(m);
   // The files it wrote go back into their slots (the timeline was drawn again).
   for (const item of el._mm?.values() || []) if (!item._inline) { const box = slotStrip(el, item); if (box ? !box.contains(item) : !item.isConnected) placeMedia(el, item, null); }
   const oos = $('.oos-card[data-run]', el); if (oos) wireOutOfSteps(oos, c, m);
-  for (const card of el.querySelectorAll('.approval[data-id]:not(.question):not(.budget-card)')) wireApproval(card, m);
-  for (const card of el.querySelectorAll('.question[data-id]')) wireQuestion(card, m);
-  const bcard = $('.budget-card[data-id]', el); if (bcard) wireBudget(bcard, c, m);
+  // Cards drawn new are wired (a kept one keeps its wiring and what you typed in it).
+  const drawn = [...fresh, $('.approvals', el)], all = (q) => drawn.flatMap((r) => [...r.querySelectorAll(q)]);
+  for (const card of all('.approval[data-id]:not(.question):not(.budget-card)')) wireApproval(card, m);
+  for (const card of all('.question[data-id]')) wireQuestion(card, m);
+  const bcard = all('.budget-card[data-id]')[0]; if (bcard) wireBudget(bcard, c, m);
   restoreInputs(el, was);
 }
 // The work above the answer, the answer's time, and the work that came after it, under the answer.
 function putTimeline(m) {
   const el = m.el, t = timelineHTML(m);
-  $('.timeline', el).innerHTML = t.before;
-  $('.tl-after', el).innerHTML = t.after;
+  const fresh = [...setParts($('.timeline', el), t.before), ...setParts($('.tl-after', el), t.after)];
   $('.ans-when', el).innerHTML = t.answerAt ? `<span class="tl-t">${timeTag(t.answerAt)}</span><span>Answer</span>` : '';
+  return fresh;
 }
 // ⚡ The clock on a card stopped (you started on it): only its countdown line changes, so the rest of the card stays.
 function drawHeld(m, id, card) {
@@ -6234,15 +6267,31 @@ async function followRun(c, m, open) {
   // A run the harness doesn't know (still reading attached context, not started yet) stops here.
   c.running = { runId: m.runId, abort: () => { fetch(`/api/runs/${m.runId}/stop`, { method: 'POST' }).then((r) => r.json()).then((j) => { if (!j.ok) ac.abort(); }).catch(() => ac.abort()); } };
   syncRunState(c); renderSidebar();
-  let lastStep = -1, stepStart = 0, raf = 0, whole = false;
+  let lastStep = -1, stepStart = 0, raf = 0, whole = false, fullAt = 0, fullCost = 0, fullTimer = 0;
   // After a reload the server replays a run's events in one burst: those are old news, so no notifications for them.
   const followT0 = Date.now(), note = (...x) => { if (Date.now() - followT0 > 1500) notifyRun(c, ...x); };
   const msgsEl =() => c.el && G.panes.includes(c.id) ? $('.msgs', c.el.root) : null;
   const stick = () => { if (msgsEl()) c.toEnd?.(); };
   // At most one draw a frame: a burst of events (the replay after a reload) draws once, not once per event.
+  // A long reply's steps take longer to draw again, so they are drawn at most every three times what the last drawing
+  // took (a few ms for most replies; a fifth of a second apart for a 200-step one). The text being written still
+  // streams every frame in between.
   const redraw = (bodyOnly) => {
     if (!bodyOnly) whole = true;
-    if (!raf) raf = requestAnimationFrame(() => { raf = 0; const all = whole; whole = false; updateMsg(c, m, { bodyOnly: !all }); stick(); });
+    if (raf) return;
+    const wait = whole ? fullAt + fullCost * 3 - performance.now() : 0;
+    if (wait > 0) {
+      if (!fullTimer) fullTimer = setTimeout(() => { fullTimer = 0; redraw(false); }, wait);
+      if (bodyOnly) raf = requestAnimationFrame(() => { raf = 0; updateMsg(c, m, { bodyOnly: true }); stick(); });
+      return;
+    }
+    raf = requestAnimationFrame(() => {
+      raf = 0; const all = whole; whole = false;
+      const t = performance.now();
+      updateMsg(c, m, { bodyOnly: !all });
+      if (all) { fullAt = performance.now(); fullCost = fullAt - t; }
+      stick();
+    });
   };
   // Text streamed in a step that turned out not to be the answer moves into the trace.
   const moveAside = (e) => { if (e.step === lastStep && m.content.length > stepStart) { e.aside = m.content.slice(stepStart).trim(); m.content = m.content.slice(0, stepStart).trimEnd(); } };
@@ -6357,7 +6406,7 @@ async function followRun(c, m, open) {
       const tookTag = `${took ? `⏱ ${secs(took)}` : ''}${cost}`.replace(/^ · /, '');
       note(m.error ? 'error' : 'done', [tookTag, ...usedTags(m)]);
     }
-    const due = raf; if (raf) { cancelAnimationFrame(raf); raf = 0; }
+    const due = raf || fullTimer; if (raf) { cancelAnimationFrame(raf); raf = 0; } clearTimeout(fullTimer); fullTimer = 0;
     updateMsg(c, m); if (due) stick();
     syncRunState(c); saveChat(c, true); refreshSidebar(); checkSpace(c, true); refreshUndoable(c.projectId); eachArea(() => { if (G.view.browser && focused() === c) renderPane(); });
     refreshBalance();

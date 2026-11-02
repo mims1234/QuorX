@@ -64,6 +64,10 @@ html:root body .msgs .msg.bot.is-error { border-left-color: var(--bad) !importan
 .msg .timeline .tl-at:has(> .tl-at-body > .tl-media:empty:only-child) { display: none; }
 
 /* ---- a finished reply: its work in one line above the answer; another model's message stays out ---- */
-.msg .timeline > .tl-at > .tl-at-body > .tl-done, .msg .timeline > .tl-done { margin: 2px 0 6px; }
+.msg .timeline .tl-done { margin: 2px 0 6px; }
 .msg .timeline .tl-done > summary .tl-label { font-weight: 600; }
 .msg .timeline .tl-done-body { padding: 4px 0 2px 6px; border-left: 2px solid var(--line); margin-left: 8px; }
+
+/* ---- a reply's lines are drawn in parts (app.js setParts), so a redraw keeps the lines that did not change ---- */
+.msg .timeline > .tl-part, .msg .tl-after > .tl-part { display: contents; }
+.msg .timeline > .tl-part > *, .msg .tl-after > .tl-part > * { min-width: 0; max-width: 100%; }
