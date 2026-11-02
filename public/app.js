@@ -2424,8 +2424,8 @@ function mediaStrip(msgEl) {
   let box = msgEl.querySelector(':scope > .msg-media');
   if (box) return box;
   box = newStrip();
-  // A user's message: above its time and tools. A reply: above its undo line and foot.
-  const at = msgEl.classList.contains('user') ? msgEl.querySelector(':scope > .u-foot') : msgEl.querySelector(':scope > .f-undo-row') || msgEl.querySelector(':scope > .foot');
+  // A user's message: above its time and tools. A reply: right under its answer (above Review changes, undo and foot).
+  const at = msgEl.classList.contains('user') ? msgEl.querySelector(':scope > .u-foot') : msgEl.querySelector(':scope > .review-slot') || msgEl.querySelector(':scope > .f-undo-row') || msgEl.querySelector(':scope > .foot');
   if (at) at.before(box); else msgEl.append(box);
   return box;
 }
@@ -4506,12 +4506,13 @@ function timelineItems(m) {
       const pool = e.by === 'reviewer' ? rv?.calls : blk?.calls;
       const x = pool && [...pool].reverse().find((y) => y.e.name === e.name && y.res == null);
       if (x) x.res = String(e.result ?? '');
-      // A picture, video, PDF or Markdown file it wrote shows right here, under the step that made it.
-      if (x && !e.by && MEDIA_WRITERS.has(e.name) && mediaKind(String(x.e.args?.path || '')) && !/^Error/.test(x.res)) items.push({ kind: 'media', path: String(x.e.args.path) });
+      // While it works, a picture, video, PDF or Markdown file it wrote shows right here, under the step that made it
+      // (once the reply has ended, its files show under the answer).
+      if (x && m.live && !e.by && MEDIA_WRITERS.has(e.name) && mediaKind(String(x.e.args?.path || '')) && !/^Error/.test(x.res)) items.push({ kind: 'media', path: String(x.e.args.path) });
       continue;
     }
     if (e.t === 'review_start') { rv = null; items.push({ kind: 'card', pin: true, html: () => reviewRunningHTML(m, e) }); continue; }
-    if (e.t === 'review') { items.push({ kind: 'card', pin: true, html: () => reviewCardHTML(m, e) }); continue; }
+    if (e.t === 'review') { items.push({ kind: 'card', pin: true, model: true, html: () => reviewCardHTML(m, e) }); continue; }
     // A /goal's plan: one line where it was made. While the reply works, its live checklist sits at the end of the
     // reply (drawTimeline); once it has ended, the last version folds into one line where it last changed.
     if (e.t === 'plan') {
@@ -4519,7 +4520,7 @@ function timelineItems(m) {
       if (i === lastPlan && !m.live) items.push({ kind: 'card', pin: true, html: () => planFoldHTML(m) });
       continue;
     }
-    if (e.t === 'fresh_eyes') { items.push({ kind: 'note', text: `👀 Fresh eyes (${short(e.model)}) ${e.ok ? `on a problem that came back: ${clip((e.report || '').split('\n')[0].replace(/^Cause:\s*/i, ''), 220)}` : 'looked but found nothing'}` }); continue; }
+    if (e.t === 'fresh_eyes') { items.push({ kind: 'note', pin: true, model: true, text: `👀 Fresh eyes (${short(e.model)}) ${e.ok ? `on a problem that came back: ${clip((e.report || '').split('\n')[0].replace(/^Cause:\s*/i, ''), 220)}` : 'looked but found nothing'}` }); continue; }
     if (e.t === 'helper_done') { const h = helpers.get(e.id); if (h) { h.label = `Helper ${e.id} ${e.ok ? 'reported back' : 'gave no report'} · ${e.steps} step${e.steps === 1 ? '' : 's'} · ${money(e.cost, 4)}`; h.done = true; } continue; }
     if (e.t === 'approval') {
       // One card per approval: a YOLO vote that can't settle announces the same card again when it turns to you.
@@ -4533,7 +4534,7 @@ function timelineItems(m) {
       items.push({ kind: 'card', html: () => (m.approvals?.[e.id] ? approvalHTML(m.approvals[e.id], !!m.live) : '') }); continue;
     }
     // Questions stay in view where they were asked (answered ones are one line).
-    if (e.t === 'question') { items.push({ kind: 'card', pin: true, html: () => (m.questions?.[e.id] ? questionHTML(m.questions[e.id], !!m.live) : '') }); continue; }
+    if (e.t === 'question') { items.push({ kind: 'card', pin: true, q: true, html: () => (m.questions?.[e.id] ? questionHTML(m.questions[e.id], !!m.live) : '') }); continue; }
     if (e.t === 'budget_ask') { items.push({ kind: 'card', html: () => (m.budgetAsk ? budgetHTML(m.budgetAsk, !!m.live) : '') }); continue; }
     if (e.t === 'steer') { items.push({ kind: 'steer', e, read: tr.slice(i + 1).some((x) => x.t === 'steer_delivered') }); continue; }
     if (e.t === 'mode') { items.push({ kind: 'note', text: e.approval === 'yolo' ? '⚡ Switched to YOLO' : '🔒 Switched to Strict' }); continue; }
@@ -4594,13 +4595,13 @@ function timelineHTML(m) {
       const think = String(m.thinking?.[it.step] || '').trim();
       if (think) row(det(`t${it.step}`, 'tl-row tl-think', `<span class="tl-ic">💭</span><span class="tl-label">${!it.done && m.live ? 'Thinking' : 'Thought'}</span><small class="tl-words">${think.split(/\s+/).length.toLocaleString()} words</small>`, `<div class="tl-think-body" data-step="${it.step}">${open.has(`t${it.step}`) ? md(think) : ''}</div>`), `t${it.step}`, [], 1, !it.done && m.live);
       // What the agent said is a message of its own, never folded away.
-      if (it.aside) { at = it.doneAt || at; pieces.push({ html: `<div class="tl-text tl-say">${md(it.aside)}</div>`, row: false, pin: true, at }); }
+      if (it.aside) { at = it.doneAt || at; pieces.push({ html: `<div class="tl-text tl-say">${md(it.aside)}</div>`, row: false, pin: true, say: true, at }); }
       if (it.calls.length) { at = atOf(m, it.calls[0].e) || at; const busy = m.live && it.calls.some((x) => x.res == null); row(groupRow(`x${it.step}`, mcpOfTool(it.calls[0].e.name) ? '🧲' : TOOL_NAME[it.calls[0].e.name]?.split(' ')[0] || '🔧', callsLabel(it.calls), it.calls, busy), `x${it.step}`, it.calls, 0, busy); }
       if (!it.done && m.live && !think && !it.calls.length && !String(m.content || '').trim()) other('<div class="tl-row tl-wait"><span class="tl-spin"></span><span class="tl-label">Working…</span></div>');
       continue;
     }
     if (it.kind === 'group') { const busy = m.live && !it.done && it.calls.some((x) => x.res == null); row(groupRow(it.key, it.icon, it.label, it.calls, busy), it.key, it.calls, 0, busy); continue; }
-    if (it.kind === 'card') { const h = it.html(); if (h) pieces.push({ html: h, row: false, card: true, pin: !!it.pin, at }); continue; }
+    if (it.kind === 'card') { const h = it.html(); if (h) pieces.push({ html: h, row: false, card: true, pin: !!it.pin, model: !!it.model, q: !!it.q, at }); continue; }
     if (it.kind === 'media') {
       // A file written again later shows there; here it says so.
       const key = mediaKey(it.path), later = items.slice(k + 1).some((x) => x.kind === 'media' && mediaKey(x.path) === key);
@@ -4614,7 +4615,7 @@ function timelineHTML(m) {
       pieces.push({ row: false, card: true, pin: true, at, html: `<div class="steer-card tl-you ${it.read ? 'read' : ''}"><span class="sc-who">You</span><p>${esc(it.e.text)}</p>${att?.imgs?.length ? `<div class="u-imgs" data-views="${esc(JSON.stringify(att.imgViews || []))}">${att.imgs.map((u, k) => `<img src="${u}" alt="attached picture" data-k="${k}">`).join('')}</div>` : it.e.images ? `<span class="sc-att">📎 ${it.e.images} picture${it.e.images > 1 ? 's' : ''}</span>` : ''}${att?.docs?.length ? `<div class="u-docs">${att.docs.map((d) => `<button type="button" class="u-doc" data-doc="${esc(JSON.stringify(d))}" title="${esc(d.name)} · ${esc(docSize(d.size))} · click to preview">${DOC_ICON[d.kind] || '📄'} ${esc(d.name)}</button>`).join('')}</div>` : it.e.docs ? `<span class="sc-att">📎 ${it.e.docs} file${it.e.docs > 1 ? 's' : ''}</span>` : ''}<span class="sc-state">${it.read ? '✓ read by the agent' : '… it reads this at its next step'}</span></div>` });
       continue;
     }
-    if (it.kind === 'note') { const html = `<div class="tl-note">${esc(clip(it.text, 220))}</div>`; if (it.pin) pieces.push({ html, row: false, pin: true, at }); else other(html); }
+    if (it.kind === 'note') { const html = `<div class="tl-note">${esc(clip(it.text, 220))}</div>`; if (it.pin) pieces.push({ html, row: false, pin: true, model: !!it.model, at }); else other(html); }
   }
   // Four or more lines in a row with nothing said between them fold into one line ("Wrote 7 files, ran 7 commands ·
   // thought 6 times"); open it to see each.
@@ -4654,7 +4655,26 @@ function timelineHTML(m) {
     list.forEach((x, i) => { if (stays(x, i)) { out += foldLine(seg, n++, false, pre); seg = []; out += when(x); } else seg.push(x); });
     return out + foldLine(seg, n, tail, pre);
   };
-  // What happened before the answer was written goes above it; what came after (checks, the reviewer, your notes) under it.
+  // A finished reply: the answer is what you read. All its work folds into one line above it (open it for every step,
+  // question and message on the way); what another model said (the reviewer, fresh eyes) stays out, as its own message.
+  if (!live) {
+    let out = '', seg = [], n = 0;
+    const flush = () => {
+      if (!seg.length) return;
+      const steps = seg.reduce((k, x) => k + (x.row ? 1 : 0), 0), calls = seg.reduce((k, x) => k + (x.calls?.length || 0), 0);
+      const qs = seg.filter((x) => x.q).length, says = seg.filter((x) => x.say).length;
+      const errs = seg.flatMap((x) => x.calls || []).filter((x) => x.res != null && /^Error/.test(x.res)).length;
+      const what = [steps ? `${steps} step${steps === 1 ? '' : 's'}` : '', calls ? `${calls} tool call${calls === 1 ? '' : 's'}` : '', qs ? `${qs} question${qs === 1 ? '' : 's'}` : '', says ? `${says} message${says === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
+      out += det(`done${n++}`, 'tl-row tl-bundle tl-done', `<span class="tl-ic">🗂</span><span class="tl-label">${n === 1 ? 'How it got here' : 'Then'}</span><small class="tl-words">${esc(what || 'details')}</small>${errs ? `<span class="tl-err">${errs} error${errs > 1 ? 's' : ''}</span>` : ''}`, `<div class="tl-done-body">${fold(seg, `d${n}`, false)}</div>`);
+      seg = [];
+    };
+    for (const x of pieces) { if (x.model) { flush(); out += when(x); } else seg.push(x); }
+    flush();
+    const ans = (m.trace || [])[answerIndex(m)];
+    return { before: out, after: '', answerAt: ans ? atOf(m, ans) : 0 };
+  }
+  // While it works: what happened before the answer was written goes above it; what came after (checks, the reviewer,
+  // your notes) under it.
   const before = pieces.slice(0, cut), after = pieces.slice(cut), ans = (m.trace || [])[answerIndex(m)];
   return { before: fold(before, '', !after.length), after: fold(after, 'z', true), answerAt: before.length && ans ? atOf(m, ans) : 0 };
 }
@@ -4770,7 +4790,7 @@ function drawTimeline(c, m) {
   // While a /goal works, its checklist sits at the end of the reply and ticks off in place.
   $('.approvals', el).innerHTML = (m.live ? planCardHTML(m) : '') + outOfStepsHTML(m) + wrapUpHTML(m);
   // The files it wrote go back into their slots (the timeline was drawn again).
-  for (const item of el._mm?.values() || []) if (!item._inline) { const box = slotStrip(el, item); if (box && !box.contains(item)) placeMedia(el, item, null); }
+  for (const item of el._mm?.values() || []) if (!item._inline) { const box = slotStrip(el, item); if (box ? !box.contains(item) : !item.isConnected) placeMedia(el, item, null); }
   const oos = $('.oos-card[data-run]', el); if (oos) wireOutOfSteps(oos, c, m);
   for (const card of el.querySelectorAll('.approval[data-id]:not(.question):not(.budget-card)')) wireApproval(card, m);
   for (const card of el.querySelectorAll('.question[data-id]')) wireQuestion(card, m);
