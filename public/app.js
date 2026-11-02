@@ -10339,6 +10339,10 @@ function termDraw(t, full) {
     termFilters(t);
   });
 }
+// A terminal line's colour. Many programs write their ordinary progress to stderr (ffmpeg writes nearly everything
+// there, git and npm their progress, Node its warnings), so stderr alone isn't red: only a line that reads as an error.
+const ERR_LINE = /\b(error|errors|fatal|failed|failure|exception|traceback|panic|denied|not recognized|cannot find|no such file|not found|is not defined|unexpected token|segmentation fault)\b|^\s*(At line:\d|\+ CategoryInfo|\+ FullyQualifiedErrorId)/i;
+const lineKind = (l) => (l.stream === 'err' ? (ERR_LINE.test(l.text) ? 'err' : 'serr') : l.stream || 'out');
 function termDrawPane(t, p, full) {
   const root = tpaneEl(p), out = root && $('.term-out', root);
   if (!out) return;
@@ -10361,7 +10365,7 @@ function termDrawPane(t, p, full) {
     const pre = $('.tj-out', w.el);
     if (w.cut !== j.cut) { pre.textContent = ''; w.drawn = 0; w.cut = j.cut; }
     const frag = document.createDocumentFragment();
-    for (const l of j.lines.slice(w.drawn)) { const s = document.createElement('span'); s.className = `tl ${l.stream || 'out'}`; s.textContent = `${l.text}\n`; frag.appendChild(s); }
+    for (const l of j.lines.slice(w.drawn)) { const s = document.createElement('span'); s.className = `tl ${lineKind(l)}`; s.textContent = `${l.text}\n`; frag.appendChild(s); }
     w.drawn = j.lines.length; pre.appendChild(frag);
     while (pre.childElementCount > 1500) pre.firstChild.remove();
     pre.hidden = !j.lines.length;

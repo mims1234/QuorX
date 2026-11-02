@@ -83,6 +83,8 @@
 .tj-out { margin: 2px 0 0; padding: 0 0 0 14px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); font: inherit; }
 .tj-out[hidden] { display: none; }
 .tl.err { color: color-mix(in srgb, var(--bad) 80%, var(--text)); }
+/* stderr that isn't an error (progress, warnings, ffmpeg's report): ordinary text, a shade quieter */
+.tl.serr { color: color-mix(in srgb, var(--text) 82%, var(--muted)); }
 .tl.note { color: var(--accent); font-style: italic; }
 .term-in { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-top: 1px solid var(--line); background: var(--panel); }
 .term-ps { font: 600 12px var(--mono); color: var(--ok); white-space: nowrap; max-width: 30%; overflow: hidden; text-overflow: ellipsis; }
