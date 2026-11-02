@@ -4408,23 +4408,40 @@ function drawThinking(m, c) {
   if (stick) body.scrollTop = body.scrollHeight;
 }
 // #3 The plan the agent made for this reply: a live checklist (newest version from the trace).
-function planCardHTML(m) {
+// While the reply runs it is one line (how far, and the step under way); "Show all" opens the checklist, and that
+// choice is remembered for every plan. Inside a finished reply's fold (full) it is always the whole list.
+const planFull = () => { try { return localStorage.getItem('qx.planFull') === '1'; } catch { return false; } };
+document.addEventListener('toggle', (e) => {
+  if (!e.target.matches?.('details.pc-compact')) return;
+  try { localStorage.setItem('qx.planFull', e.target.open ? '1' : '0'); } catch { /* the choice just isn't kept */ }
+}, true);
+function planCardHTML(m, full = false) {
   const p = (m.trace || []).findLast((e) => e.t === 'plan');
   if (!p) return '';
   const done = p.items.filter((x) => x.status === 'done').length, pct = Math.round((done / p.items.length) * 100);
   const mark = { done: '✓', doing: '◐', todo: '○' };
+  const head = `<b>🗺 Plan</b><span class="pc-count">${done} of ${p.items.length} done</span><span class="pc-bar" aria-hidden="true"><i style="width:${pct}%"></i></span>`;
+  if (!full) {
+    const now = p.items.find((x) => x.status === 'doing') || p.items.find((x) => x.status !== 'done');
+    return `<details class="plan-card pc-compact ${done === p.items.length ? 'complete' : ''}" ${planFull() ? 'open' : ''}>
+    <summary><span class="pc-head">${head}<span class="pc-more"><span class="pc-show">Show all ▾</span><span class="pc-hide">Compact ▴</span></span></span>${now ? `<span class="pc-now"><span class="pc-mark" aria-hidden="true">${mark[now.status] || '○'}</span><span>${esc(now.text)}</span></span>` : ''}</summary>
+    ${planListHTML(p, mark)}</details>`;
+  }
   return `<div class="plan-card ${done === p.items.length ? 'complete' : ''}">
-    <div class="pc-head"><b>🗺 Plan</b><span class="pc-count">${done} of ${p.items.length} done</span><span class="pc-bar" aria-hidden="true"><i style="width:${pct}%"></i></span></div>
-    <ul class="pc-items">${p.items.map((x) => `<li class="${x.status}"><span class="pc-mark" aria-hidden="true">${mark[x.status] || '○'}</span><span>${esc(x.text)}</span>${x.status === 'doing' ? '<em>in progress</em>' : ''}</li>`).join('')}</ul>
-    ${p.spec || p.doneWhen?.length ? `<details class="pc-spec"><summary>Spec${p.doneWhen?.length ? ' and done checks' : ''}</summary>${p.spec ? `<div class="pc-spec-body">${md(p.spec)}</div>` : ''}${p.doneWhen?.length ? `<div class="pc-dw"><b>Done when</b><ul>${p.doneWhen.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}</details>` : ''}
+    <div class="pc-head">${head}</div>
+    ${planListHTML(p, mark)}
   </div>`;
+}
+function planListHTML(p, mark) {
+  return `<ul class="pc-items">${p.items.map((x) => `<li class="${x.status}"><span class="pc-mark" aria-hidden="true">${mark[x.status] || '○'}</span><span>${esc(x.text)}</span>${x.status === 'doing' ? '<em>in progress</em>' : ''}</li>`).join('')}</ul>
+    ${p.spec || p.doneWhen?.length ? `<details class="pc-spec"><summary>Spec${p.doneWhen?.length ? ' and done checks' : ''}</summary>${p.spec ? `<div class="pc-spec-body">${md(p.spec)}</div>` : ''}${p.doneWhen?.length ? `<div class="pc-dw"><b>Done when</b><ul>${p.doneWhen.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}</details>` : ''}`;
 }
 // A finished reply's plan: one line (how far it got), open it for the checklist.
 function planFoldHTML(m) {
   const p = (m.trace || []).findLast((e) => e.t === 'plan');
   if (!p) return '';
   const done = p.items.filter((x) => x.status === 'done').length, all = done === p.items.length, key = `plan-${m.runId || ''}`;
-  return `<details class="q-fold plan-fold" data-qkey="${esc(key)}" ${G.qOpen?.has(key) ? 'open' : ''}><summary><span class="q-fold-ic" aria-hidden="true">🗺</span><span class="q-fold-l">${all ? 'Goal done' : 'Plan'}</span><span class="q-fold-a">${done} of ${p.items.length} done</span><span class="tl-chev" aria-hidden="true">›</span></summary>${planCardHTML(m)}</details>`;
+  return `<details class="q-fold plan-fold" data-qkey="${esc(key)}" ${G.qOpen?.has(key) ? 'open' : ''}><summary><span class="q-fold-ic" aria-hidden="true">🗺</span><span class="q-fold-l">${all ? 'Goal done' : 'Plan'}</span><span class="q-fold-a">${done} of ${p.items.length} done</span><span class="tl-chev" aria-hidden="true">›</span></summary>${planCardHTML(m, true)}</details>`;
 }
 // #4 What the separate reviewer found: scores out of 5, the bar, its bugs. One card per review round.
 const REVIEW_LABEL = { function: 'Function', craft: 'Craft', design: 'Design', originality: 'Originality', accessibility: 'Accessibility', brand: 'Brand fit', picture: 'Picture', motion: 'Motion', sound: 'Sound', rhythm: 'Rhythm', story: 'Story' };
@@ -5601,8 +5618,9 @@ function decideCard(r) {
 // Cards can only be answered while their reply runs; older ones without an answer show as closed.
 // An answered approval, shown on the tool call it was about: ✓ / ⛔ / ⚡ and the price on the row, who and why inside.
 // An answered card: allowed, declined, or neither (you typed a reply instead, which went to the agent).
-const apState = (o, live) => (o ? (o.approve ? 'yes' : o.reply ? 'reply' : 'no') : live ? 'wait' : 'none');
-const apWho = (o, c) => (o.reply ? `Not allowed or denied: you replied “${esc(o.reply)}”`
+const apState = (o, live) => (o ? (o.gone ? 'none' : o.approve ? 'yes' : o.reply ? 'reply' : 'no') : live ? 'wait' : 'none');
+const apWho = (o, c) => (o.gone ? 'Not answered: QuorX restarted, so the reply no longer waits for this card'
+  : o.reply ? `Not allowed or denied: you replied “${esc(o.reply)}”`
   : `${o.approve ? (o.rule || o.always ? 'Allowed always' : 'Allowed') : 'Denied'} by ${byName(o.by)}${o.rule ? ` · rule <code>${esc(o.rule.match)}</code> saved in ${esc(SCOPE[o.rule.scope]?.label || o.rule.scope)}` : o.always ? ' · from now on in this chat' : ''}${o.approve && o.model && o.model !== c.model ? ` · switched to ${esc(short(o.model))}` : ''}${o.reason ? ` · ${esc(o.reason)}` : ''}`);
 const AP_MARK = { yes: '✓', no: '⛔', reply: '↩', wait: '⚡', none: '·' };
 function approvalBadge(a, live) {
@@ -5675,7 +5693,7 @@ function shellCardHTML(a) {
     ${waitHTML(c)}
     <div class="acts"><button type="button" class="primary reply" hidden>Send to the agent</button>${byProgram ? `<button type="button" class="primary yes" data-rule="${esc(sug.program)}" title="Every command that starts with ${esc(prog)} runs without asking in this chat, whatever its arguments">Allow every <code>${esc(prog)}</code> command</button><button type="button" class="once">Just this once</button>` : '<button type="button" class="primary yes">Allow once</button>'}${c.noAlways ? '' : '<button type="button" class="sc-always" aria-expanded="false">Allow always ▾</button>'}<button type="button" class="no">Deny</button></div>
     ${byProgram ? `<div class="what dim sc-covers">“Allow every <b>${esc(prog)}</b> command” covers every command that starts with <code>${esc(prog)}</code> in this chat, whatever comes after it. Commands joined with &amp;&amp;, ; or | are still checked part by part, and risky ones still ask.</div>` : ''}
-    ${c.noAlways ? '<div class="sc-note">No “Allow always” for this kind of command: it reaches past the project, can’t be checked, or touches your keys. If you’re sure, type a rule yourself in Permissions (⚙ Settings → Approvals & safety).</div>'
+    ${c.noAlways ? '<div class="sc-note">No “Allow always” for this command: it reads your keys, or deletes or moves files outside the project. If you’re sure, type a rule yourself in Permissions (⚙ Settings → Approvals & safety).</div>'
       : `<div class="sc-rule" hidden>
         <div class="sc-row"><span class="sc-k">What it covers</span>${seg('match', ((o) => (byProgram ? [o[2], o[1], o[0]] : o))([[sug.exact, 'This exact command'], [sug.prefix, `Commands starting with <code>${esc(sug.prefix.replace(/\*$/, ''))}</code>`], [sug.program, `Every <code>${esc(prog)}</code> command`]]))}</div>
         <div class="sc-row"><span class="sc-k">Where</span>${seg('scope', [['chat', `${scopeMark('chat', true)}This chat`], ['project', `${scopeMark('project', true)}This project`], ['everywhere', `${scopeMark('everywhere', true)}Everywhere in QuorX`]])}</div>
@@ -5714,6 +5732,21 @@ function typingIsReply(card, send) {
   reply.onclick = go;
   sync();
 }
+// Cards and questions a reply cut off by a restart left open: nothing waits for their answer any more (a resumed
+// reply asks again if it still needs to), so they close instead of showing buttons that do nothing.
+function closeOpenCards(m) {
+  for (const x of Object.values(m.approvals || {})) if (!x.outcome) x.outcome = { approve: false, gone: true, by: 'restart' };
+  for (const q of Object.values(m.questions || {})) if (!q.answer) q.answer = { label: '(not answered: QuorX restarted)' };
+}
+// A click the server had no waiting card for (it restarted, or the card was already answered): that card closes.
+async function postApproval(m, id, body) {
+  const r = await fetch('/api/approve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ runId: m.runId, id, ...body }) }).then((x) => x.json()).catch(() => null);
+  if (!r || r.ok || body.reply) return;
+  const a = m.approvals?.[id];
+  if (a && !a.outcome) a.outcome = { approve: false, gone: true, by: 'restart' };
+  const c = [...G.open.values()].find((x) => x.agent.messages.includes(m));
+  if (c) { updateMsg(c, m); saveChat(c); }
+}
 // The approval cards of a chat still waiting on you (not questions or the budget card).
 const openApprovalCards = (root) => [...root.querySelectorAll('.msgs .approval[data-id]:not(.question):not(.budget-card):not([data-buttons-only])')].filter((x) => !x.dataset.answered);
 function wireShellCard(card, m) {
@@ -5722,7 +5755,7 @@ function wireShellCard(card, m) {
     card.dataset.answered = '1';
     card.querySelectorAll('button, textarea').forEach((b) => (b.disabled = true));
     const reason = reply ? '' : $('textarea', card)?.value.trim() || '';
-    await fetch('/api/approve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ runId: m.runId, id, approve, reason, ...(reply ? { reply } : {}), ...(rule ? { rule } : {}) }) }).catch(() => {});
+    await postApproval(m, id, { approve, reason, ...(reply ? { reply } : {}), ...(rule ? { rule } : {}) });
   };
   // The yes on a program (Allow every ffmpeg command) saves it for this chat; Just this once runs only this line.
   const yes = $('.yes', card);
@@ -5820,7 +5853,7 @@ function wireApproval(card, m) {
     card.querySelectorAll('button, select, textarea').forEach((b) => (b.disabled = true));
     const reason = reply ? '' : $('textarea', card)?.value.trim() || '';
     const models = sel ? null : Object.fromEntries(sels.map((s) => [s.dataset.key, s.value]).filter(([, v]) => v && v !== '__more'));
-    await fetch('/api/approve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ runId: m.runId, id, approve, always, reason, ...(reply ? { reply } : {}), model: sel?.value, ...(models && Object.keys(models).length ? { models } : {}) }) }).catch(() => {});
+    await postApproval(m, id, { approve, always, reason, ...(reply ? { reply } : {}), model: sel?.value, ...(models && Object.keys(models).length ? { models } : {}) });
   };
   $('.yes', card).onclick = () => answer(true);
   const always = $('.always', card); if (always) always.onclick = () => answer(true, true);
@@ -6156,6 +6189,7 @@ async function runChat(c, text, ctx, imgs, { resumeOf, docs = [], more = 0, mode
   const cut = resumeOf && !more ? a.messages.find((x) => x.role === 'assistant' && x.runId === resumeOf) : null;
   const m = cut || { role: 'assistant', content: '', at: Date.now(), trace: [], approvals: {}, questions: {}, arts: [], runId, live: true, runActive: true };
   if (cut) {
+    closeOpenCards(m);
     Object.assign(m, { runId, live: true, runActive: true, resumedFrom: [...(m.resumedFrom || []), resumeOf], error: undefined, resumable: false });
     if (m.stats?.partial) delete m.stats; // the resumed run's totals include what the cut-off part spent
     m.trace.push({ t: 'resumed', from: resumeOf, at: (m.trace.at(-1)?.at || 0) });
@@ -6204,6 +6238,7 @@ async function reattachRuns(c) {
     if (st.status === 'interrupted') {
       following.delete(m.runId); m.runActive = false; m.live = false;
       m.error = 'The harness restarted while this reply was running.'; m.resumable = !!st.resumable;
+      closeOpenCards(m);
       if (m.el) updateMsg(c, m);
       syncRunState(c); saveChat(c); continue;
     }
@@ -6213,6 +6248,8 @@ async function reattachRuns(c) {
     const kept = mark >= 0 ? m.trace.slice(0, mark + 1) : [];
     const keptSteps = new Set(kept.filter((e) => e.t === 'llm_start').map((e) => String(e.step)));
     const thinking = Object.fromEntries(Object.entries(m.thinking || {}).filter(([k]) => keptSteps.has(k)));
+    // The cards kept are from before the restart (the replay brings this run's own back): none can be answered now.
+    if (mark >= 0) closeOpenCards(m);
     Object.assign(m, { content: '', trace: kept, approvals: mark >= 0 ? m.approvals || {} : {}, questions: mark >= 0 ? m.questions || {} : {}, thinking, error: undefined, live: true, runActive: true });
     if (m.el) updateMsg(c, m);
     followRun(c, m, (signal) => fetch(`/api/runs/${m.runId}/events`, { signal }));
@@ -6356,7 +6393,7 @@ async function followRun(c, m, open) {
         if (e.t === 'answer' && m.questions[e.id]) { const qc = m.questions[e.id].card; e.label = e.answers ? (e.defaults ? 'the recommended answers' : e.answers.map((x, i) => (x.choice != null ? qc.questions?.[i]?.options[x.choice] : x.text || '–')).join(' · ')) : e.choice != null ? qc.options[e.choice] : e.text; m.questions[e.id].answer = e; c.waiting = false; renderSidebar(); renderChatHead(c); }
         if (e.t === 'done') { m.doneAt = Date.now(); m.content = e.reply; m.note = e.historyNote; m.stats = e.stats; G.sessionCost += e.stats.cost; renderSpend(); loadScores(); setTimeout(() => loadChatBudget(c), 400); }
         if (e.t === 'error') { setTimeout(() => loadChatBudget(c), 400); m.error = e.msg; m.failed = !e.stopped; if (e.stats && !m.stats) { m.stats = { ...e.stats, partial: true }; G.sessionCost += e.stats.cost || 0; renderSpend(); } }
-        if (e.t === 'interrupted') { m.error = 'The harness restarted while this reply was running.'; m.resumable = !!e.resumable; }
+        if (e.t === 'interrupted') { m.error = 'The harness restarted while this reply was running.'; m.resumable = !!e.resumable; closeOpenCards(m); }
         if (e.t === 'compacted') { a.summary = e.summary; a.summaryAt = e.cutoffAt; }
         if (e.t === 'control') { c.driving = e.kind; markDriving(c); renderSidebar(); }
         // You switched paid tools on from the agent's card: they stay on for this chat (its 🧰 Tools menu shows them).

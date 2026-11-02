@@ -71,3 +71,16 @@ html:root body .msgs .msg.bot.is-error { border-left-color: var(--bad) !importan
 /* ---- a reply's lines are drawn in parts (app.js setParts), so a redraw keeps the lines that did not change ---- */
 .msg .timeline > .tl-part, .msg .tl-after > .tl-part { display: contents; }
 .msg .timeline > .tl-part > *, .msg .tl-after > .tl-part > * { min-width: 0; max-width: 100%; }
+
+/* The live plan, compact: one line (count, bar, the step under way); "Show all" opens the checklist. */
+.plan-card.pc-compact { padding: 7px 12px; gap: 6px; }
+.plan-card.pc-compact > summary { list-style: none; cursor: pointer; display: grid; gap: 4px; }
+.plan-card.pc-compact > summary::-webkit-details-marker { display: none; }
+.pc-compact .pc-more { font: 500 11px var(--mono); color: var(--muted); white-space: nowrap; }
+.pc-compact .pc-hide, .pc-compact[open] .pc-show { display: none; }
+.pc-compact[open] .pc-hide { display: inline; }
+.pc-compact > summary:hover .pc-more, .pc-compact > summary:focus-visible .pc-more { color: var(--accent); }
+.pc-now { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 8px; align-items: baseline; font-size: 12.5px; color: var(--text); }
+.pc-now > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pc-now .pc-mark { font: 700 12px var(--mono); color: var(--accent); text-align: center; }
+.pc-compact[open] .pc-now { display: none; }

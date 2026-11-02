@@ -4187,8 +4187,9 @@ ${r.text || '(no text found)'}`;
     }
     let who = d.verdict === 'allow' || S.approval !== 'yolo' || yoloAsksCommands || run.cmdEscalated ? 'user' : d.who;
     const card = { id: newApprovalId(), tool: 'shell', free: true, est: 0, what: line, why: hook ? `your hook (${hook}) runs this${fileFromAgent ? ', with a file name the agent chose' : ', not the agent'}; ${d.why}` : d.why, policy, ...(d.risk ? { risk: d.risk } : {}) };
-    // Rules made by a button can't lift these, so the card doesn't offer "Always allow" for them.
-    card.noAlways = d.segments.some((s) => ['opaque', 'external', 'discard', 'never'].includes(s.cls) || s.risk === 'danger' || s.global || (s.paths || []).some((p) => p.zone === 'outside' || p.zone === 'unknown'));
+    // Rules made by a button can't lift these (reading keys; deleting or moving outside the project, or where QuorX
+    // can't tell), so the card doesn't offer "Always allow" for them. Everything else that asks can be allowed always.
+    card.noAlways = d.segments.some((s) => s.risk === 'danger' || (s.paths || []).some((p) => p.kind === 'delete' && p.zone !== 'inside'));
     let unsure = null;
     // Deciders off: a command they would only check first runs or waits for you (⚙ Approvals & safety); one they
     // would approve in your place always waits for you.
