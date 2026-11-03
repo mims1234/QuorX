@@ -157,4 +157,13 @@ html:root body .msgs .msg.bot::before { left: 10px !important; top: 8px !importa
 
 /* The chat's top and bottom edges: a message scrolled to the header or to the message box fades into it instead of
    touching it, and the first and last messages have room around them, so you can see where the chat starts and ends. */
-html:root body .msgs { -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 14px, #000 calc(100% - 14px), transparent); mask-image: linear-gradient(to bottom, transparent 0, #000 14px, #000 calc(100% - 14px), transparent); padding-top: 20px; padding-bottom: 22px; }
+html:root body .msgs { -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 14px, #000 calc(100% - 14px), transparent); mask-image: linear-gradient(to bottom, transparent 0, #000 14px, #000 calc(100% - 14px), transparent); padding-top: 20px !important; padding-bottom: 22px !important; }
+/* Compact density keeps them, a little tighter (its own rule set 8px at the top, which put the first message against the header). */
+html:root[data-density="compact"] body .msgs { padding-top: 16px !important; padding-bottom: 18px !important; }
+/* Compact density's own message paddings outrank the ones above: the same left edge for both, a little tighter. */
+html:root[data-density="compact"] body .msgs .msg.user { padding: 8px 14px 5px 46px !important; }
+html:root[data-density="compact"] body .msgs .msg.bot { padding: 5px 12px 5px 44px !important; }
+@media (max-width: 600px) {
+  html:root[data-density="compact"] body .msgs .msg.user { padding-left: 40px !important; }
+  html:root[data-density="compact"] body .msgs .msg.bot { padding-left: 38px !important; }
+}
