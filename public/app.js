@@ -2673,11 +2673,36 @@ function renderArchive(all = G.chats) {
     const chats = all.filter((c) => (c.projectId || 'scratch') === p.id && c.messages > 0).sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0));
     const hits = q ? chats.filter((c) => c.title.toLowerCase().includes(q) || String(c.preview || '').toLowerCase().includes(q)) : [];
     if (q && !p.name.toLowerCase().includes(q) && !hits.length) return '';
-    return `<div class="sb-arch-item" style="${projStyle(p)}"><div class="sb-arch-row"><b class="sb-arch-name">${esc(p.name)}</b><small>${chats.length} chat${chats.length === 1 ? '' : 's'} · <span class="cost">$${(p.spent || 0).toFixed(3)}</span></small><button type="button" class="ghost sb-unarch" data-p="${esc(p.id)}" title="Unarchive: back in the list above" aria-label="Unarchive ${esc(p.name)}"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9M12 18v-6M9.5 14.5 12 12l2.5 2.5"/></svg></button></div>
-      ${hits.slice(0, 6).map((c) => `<button type="button" class="sb-arch-chat" data-c="${esc(c.id)}" title="${esc(c.title)}">${esc(c.title)}<small>${ago(c.lastAt || c.updated || Date.now())}</small></button>`).join('')}</div>`;
+    // Like a project in the list above: a click opens its chats (a search shows the ones that match), right-click or
+    // the menu key for its actions. The name gets the room; the count and the cost give way in a narrow sidebar.
+    const open = !q && G.archOpen?.has(p.id), shown = q ? hits.slice(0, 6) : open ? chats.slice(0, 30) : [];
+    return `<div class="sb-arch-item" style="${projStyle(p)}" data-p="${esc(p.id)}"><div class="sb-arch-row" role="button" tabindex="0" aria-expanded="${!!open}" title="${esc(p.name)} · click for its chats, right-click for more"><svg class="sb-arch-fold" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg><b class="sb-arch-name">${esc(p.name)}</b><small class="sb-arch-meta"><span class="sb-arch-cnt">${chats.length} chat${chats.length === 1 ? '' : 's'}</span><span class="sb-arch-dot"> · </span><span class="cost">$${(p.spent || 0).toFixed(3)}</span></small><button type="button" class="ghost sb-unarch" data-p="${esc(p.id)}" title="Unarchive: back in the list above" aria-label="Unarchive ${esc(p.name)}"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9M12 18v-6M9.5 14.5 12 12l2.5 2.5"/></svg></button></div>
+      ${shown.map((c) => `<button type="button" class="sb-arch-chat" data-c="${esc(c.id)}" title="${esc(c.title)}"><span class="sb-arch-ct">${esc(c.title)}</span><small>${ago(c.lastAt || c.updated || Date.now())}</small></button>`).join('')}${open && !chats.length ? '<div class="sb-arch-none">No chats</div>' : ''}${open && chats.length > 30 ? `<div class="sb-arch-none">+${chats.length - 30} more: search to find one</div>` : ''}</div>`;
   }).join('') || '<div class="sb-empty">Nothing archived matches</div>';
-  for (const b of box.querySelectorAll('.sb-unarch')) b.onclick = () => setProjectFlag(G.projects.find((p) => p.id === b.dataset.p), { archived: false });
+  for (const b of box.querySelectorAll('.sb-unarch')) b.onclick = (e) => { e.stopPropagation(); setProjectFlag(G.projects.find((p) => p.id === b.dataset.p), { archived: false }); };
   for (const b of box.querySelectorAll('.sb-arch-chat')) b.onclick = () => { showChat(b.dataset.c, G.focus); closeDrawer(); if (isPhone()) setMView('chat'); };
+  for (const row of box.querySelectorAll('.sb-arch-row')) {
+    const p = G.projects.find((x) => x.id === row.closest('.sb-arch-item').dataset.p);
+    const fold = () => { const s = (G.archOpen ||= new Set()); s.has(p.id) ? s.delete(p.id) : s.add(p.id); renderArchive(all); $(`#archiveList .sb-arch-item[data-p="${CSS.escape(p.id)}"] .sb-arch-row`)?.focus(); };
+    row.onclick = fold;
+    row.oncontextmenu = (e) => archivedMenu(e, p);
+    row.onkeydown = (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fold(); }
+      if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) archivedMenu(e, p);
+    };
+  }
+}
+// Right-click an archived project (or the menu key / Shift+F10 on it): bring it back, or work with it where it is.
+function archivedMenu(e, p) {
+  if (!p) return;
+  popMenu(e, [
+    ['📤 Unarchive', () => setProjectFlag(p, { archived: false }), { title: 'Back in the list above' }],
+    ['＋ New chat (unarchives it)', async () => { await setProjectFlag(p, { archived: false }); newChat(p.id); }],
+    ['⚙ Project settings…', () => openProjectSettings(p)],
+    p.missing ? ['⚠ Reselect the folder…', () => editProject(p, { reselect: true })] : ['📂 Open folder in File Explorer', () => openFolder(p.id)],
+    null,
+    ['🗑 Delete project…', () => deleteProject(p), { danger: true }],
+  ]);
 }
 (() => {
   const head = document.getElementById('archiveHead'), find = document.getElementById('archiveSearch');
