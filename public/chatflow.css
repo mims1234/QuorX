@@ -202,3 +202,7 @@ html:root body .msgs.at-start.at-end { -webkit-mask-image: none; mask-image: non
 /* ---- timestamps glow softly in the colour of who they belong to: violet in a reply, teal in your messages ---- */
 html:root body .msgs .msg.bot :is(.rh-when, .tl-t, .ans-when > .tl-t, .tl-ct) { color: color-mix(in srgb, var(--violet, #a78bfa) 55%, var(--muted)); text-shadow: 0 0 8px color-mix(in srgb, var(--violet, #a78bfa) 45%, transparent); }
 html:root body .msgs .msg.user .u-foot > time { color: color-mix(in srgb, var(--accent) 70%, var(--muted)); text-shadow: 0 0 8px color-mix(in srgb, var(--accent) 45%, transparent); }
+
+/* A reply's cost card: a value too long for its line wraps inside the card instead of running out of it. */
+.f-pop-float .fi-row > b { white-space: normal; }
+.f-pop-float .fi-row b small { color: var(--dim); }

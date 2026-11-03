@@ -5172,7 +5172,7 @@ function replyInfoHTML(s, when) {
   return `<span class="f-info mt-btn" tabindex="0" role="button" aria-label="Reply details"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.3a2.5 2.5 0 0 1 4.8.9c0 1.7-2.4 2.2-2.4 3.6"/><circle cx="12" cy="17.2" r=".6" fill="currentColor"/></svg><span class="f-pop" role="tooltip">
     <span class="fi-total"><span>Total cost${s.partial ? ' <i>so far: the reply ended early</i>' : ''}</span><b>${money(s.cost, 5)}</b></span>
     ${when ? row('When', esc(new Date(when).toLocaleString())) : ''}
-    ${planTotal(s.planCost) ? row('Sub value', `≈ ${money(s.planCost, 4)} <i>at list price, covered by your subscription</i>`) : ''}
+    ${planTotal(s.planCost) ? row('Sub value', `≈ ${money(s.planCost, 4)}<small>at list price, covered by your subscription</small>`) : ''}
     ${row('Took', secs(s.ms))}
     ${row('Model calls', callsLine(s))}
     ${s.tokensIn || s.tokensOut ? `<span class="fi-row tok-in"><span><i class="tok-dot"></i>Tokens in</span><b>${k(s.tokensIn)}</b></span><span class="fi-row tok-out"><span><i class="tok-dot"></i>Tokens out</span><b>${k(s.tokensOut)}</b></span>` : ''}
