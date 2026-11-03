@@ -72,6 +72,7 @@ import { modelNotes } from './modelcards.js';
 import { ownAddresses } from './access.js';
 import { safeFetch } from './safefetch.js';
 import { videoBody, canStartFromImage, editCommand, ffmpegMajor } from './video.js';
+import { pickVoice, pickSpeed, imageSize, videoSize, imageExtras, videoExtras, optionsLine, offered } from './mediaopts.js';
 import { execFileSync } from 'node:child_process';
 import { mapMusic, pickWindows, fitPlan, writeFit } from './musicmap.js';
 import { VIDEO_DEFAULTS, VIDEO_SKILLS, STORYBOARD_TOOL, MUSIC_MAP_TOOL, FIT_MUSIC_TOOL, RENDER_FILM_TOOL, RENDER_SIZES, renderArgs, finishedFilms, videoModeFor, videoRules, normalizeStoryboard, storyboardHtml, loadStoryboard, saveStoryboard, filmFacts, factsText } from './videomode.js';
@@ -383,26 +384,26 @@ function videoPrice(spec, res, secs) {
 export async function estimateFor(cat, model, args, T) {
   const t = T[cat];
   if (cat === 'image') {
-    const res = t.resolution || '1K';
-    const seen = measured.get(`${model}|${res}`);
-    if (seen) return { model, est: seen, basis: 'measured', detail: `${res} picture` };
     const spec = (await imageModels().catch(() => [])).find((m) => m.id === model);
+    const { res, note } = imageSize(spec, args?.resolution, t.resolution || '1K');
+    const seen = measured.get(`${model}|${res}`);
+    if (seen) return { model, est: seen, basis: 'measured', detail: `${res} picture`, res, note };
     // Catalogue prices are per output image token: a 1K picture is ~15k tokens (Hy Image 3.5 billed
     // $0.024 at $1.60/M), scaled by pixel area for other sizes.
     const area = { 512: 0.25, 768: 0.56, '1K': 1, '1.5K': 2.25, '2K': 4, '4K': 16 }[res] ?? 1;
     const est = spec?.perImage ?? (spec?.price?.[1] ? (spec.price[1] * 15000 * area) / 1e6 : 0.04);
-    return { model, est, basis: spec?.perImage ? 'catalogue price' : 'estimated', detail: `${res} picture` };
+    return { model, est, basis: spec?.perImage ? 'catalogue price' : 'estimated', detail: `${res} picture`, res, note };
   }
   if (cat === 'video') {
     const spec = (await videoModels().catch(() => [])).find((m) => m.id === model);
-    const res = spec?.resolutions?.length && !spec.resolutions.includes(t.resolution) ? spec.resolutions[0] : t.resolution || '480p';
+    const { res, note } = videoSize(spec, args?.resolution, t.resolution || '480p');
     const want = Math.max(1, Math.round(Number(args?.seconds) || t.seconds || 5));
     const secs = spec?.durations?.length ? spec.durations.reduce((a, b) => (Math.abs(b - want) < Math.abs(a - want) ? b : a)) : want;
     const seen = measured.get(`${model}|${res}|${secs}`);
     const p = seen ? { est: seen, basis: 'measured' } : videoPrice(spec, res, secs);
     // Starting from a picture can cost extra per input picture (e.g. Grok Imagine: 1 cent).
     if (args?.start_image && !seen && spec?.skus?.cents_per_image_input) p.est += Number(spec.skus.cents_per_image_input) / 100;
-    return { model, ...p, detail: `${secs}s at ${res}`, res, secs };
+    return { model, ...p, detail: `${secs}s at ${res}`, res, secs, note };
   }
   if (cat === 'music') {
     const spec = (await musicModels().catch(() => [])).find((m) => m.id === model);
@@ -410,12 +411,24 @@ export async function estimateFor(cat, model, args, T) {
   }
   const text = clip(args?.text, 1500);
   const spec = (await speechModels().catch(() => [])).find((m) => m.id === model);
-  const voice = voiceFor(model, t, spec);
-  return { model, est: spec ? (Math.max(text.length, 200) * spec.price[0]) / 1e6 : 0.01, basis: 'estimated', detail: `${text.length || '~200'} characters${voice ? `, voice ${voice}` : ''}`, voice };
+  // The voice the call asked for when this model has it, else the one ⚙ Settings give this model.
+  const { voice, note } = pickVoice(spec, args?.voice, t.voices?.[model]);
+  const speed = pickSpeed(args?.speed);
+  return { model, est: spec ? (Math.max(text.length, 200) * spec.price[0]) / 1e6 : 0.01, basis: 'estimated', detail: `${text.length || '~200'} characters${voice ? `, voice ${voice}` : ''}${speed ? `, speed ${speed}×` : ''}`, voice, speed, note };
 }
-function voiceFor(model, t, spec) {
-  const want = t.voices?.[model];
-  return want && (!spec?.voices?.length || spec.voices.includes(want)) ? want : spec?.voices?.[0];
+
+// What each model in use takes per call (voices, sizes, seeds…), by kind, for the tools' descriptions. Only the
+// model the call would use, unless the agent may pick: then all of them.
+const MEDIA_LISTS = { image: imageModels, video: videoModels, music: musicModels, speech: speechModels };
+export async function mediaOptionLines(cats, T, deps = {}) {
+  const out = {};
+  for (const c of cats) {
+    if (!MEDIA_LISTS[c] || !T[c]?.models?.length) continue;
+    const list = deps.mediaCatalogue?.[c] || await MEDIA_LISTS[c]().catch(() => []);
+    const ids = T[c].pick === 'agent' ? T[c].models : T[c].models.slice(0, 1);
+    out[c] = ids.map((id) => optionsLine(c, list.find((m) => m.id === id))).filter(Boolean);
+  }
+  return out;
 }
 
 // A plan call's value at list price, as a number QuorX can show and add up: a missing, negative or non-number value
@@ -638,6 +651,18 @@ How to use answers:
 
 // ---------- tools ----------
 // `choices[cat]` lists the models the agent may pick from (only when the user set "agent picks").
+// Per-call options of the paid tools; lines: what each model in use takes (server/mediaopts.js optionsLine).
+const takes = (lines) => (lines?.length ? ` What the models in use take: ${lines.join(' · ')}.` : '');
+const mediaOptsParams = (cat, lines) => ({
+  image: { resolution: { type: 'string', description: `Size, e.g. 1K, 2K or 4K (bigger costs more; default from ⚙ Settings).${takes(lines)}` },
+    quality: { type: 'string', description: 'auto, low, medium, high… where the model offers it' }, output_format: { type: 'string', description: 'png, jpeg or webp, where offered' },
+    background: { type: 'string', description: 'transparent, opaque or auto, where offered (transparent for sprites and logos)' }, seed: { type: 'integer', description: 'The same seed and prompt give a similar picture again, where offered' } },
+  video: { resolution: { type: 'string', description: `480p, 720p, 1080p… (higher costs more; default from ⚙ Settings).${takes(lines)}` },
+    seed: { type: 'integer', description: 'Repeatable result, where offered' }, audio: { type: 'boolean', description: 'Sound in the clip, for models that make it (off is often cheaper)' } },
+  music: { seed: { type: 'integer', description: `Repeatable result.${takes(lines)}` } },
+  speech: { voice: { type: 'string', description: `The voice for this call (female, male, accent…): a name from the model's list. Default: the one ⚙ Settings give the model.${takes(lines)}` },
+    speed: { type: 'number', minimum: 0.5, maximum: 2, description: '1 = normal; 0.8 slower, 1.2 faster' } },
+}[cat] || {});
 const modelParam = (choice) => (choice ? { model: { type: 'string', enum: choice.map((o) => o.model), description: `Which model to use: ${choice.map((o) => `${o.model} (≈$${o.est.toFixed(3)}, ${o.detail})`).join('; ')}` } } : {});
 // The desktop tool on macOS and Linux: what differs from Windows.
 const DESKTOP_OS = process.platform === 'darwin'
@@ -905,12 +930,14 @@ const TOOLS = ({ artifacts, decide, cats, choices, code, browser, skills, ask, d
   ...(cats.includes('image') ? [{ type: 'function', function: { name: 'imagine', description: 'Generate a picture (paid; needs approval). It opens as an image artifact.', parameters: {
     type: 'object', required: ['prompt', 'why'], properties: {
       prompt: { type: 'string', description: 'Vivid visual description' }, why: { type: 'string', description: 'One plain sentence: why this picture is worth it' },
-      aspect_ratio: { type: 'string', enum: ['1:1', '16:9', '21:9', '9:16', '4:3', '3:4', '3:2', '2:3'], description: 'The shape, to fit where the picture goes: 16:9 or 21:9 for hero banners and desktop backgrounds, 9:16 for phone screens, 3:4 or 2:3 for portrait cards and posters, 1:1 square (default)' }, ...modelParam(choices.image) } } } }] : []),
+      aspect_ratio: { type: 'string', enum: ['1:1', '16:9', '21:9', '9:16', '4:3', '3:4', '3:2', '2:3'], description: 'The shape, to fit where the picture goes: 16:9 or 21:9 for hero banners and desktop backgrounds, 9:16 for phone screens, 3:4 or 2:3 for portrait cards and posters, 1:1 square (default)' },
+      ...mediaOptsParams('image', choices.opts?.image), ...modelParam(choices.image) } } } }] : []),
   ...(cats.includes('video') ? [{ type: 'function', function: { name: 'make_video', description: `Generate a short video clip (paid, usually the most expensive tool; takes 30 seconds to a few minutes; needs approval). It opens as a video artifact. For a film of several clips: make the key pictures first${choices.videoStart?.length ? ' and start each clip from one (start_image), so characters and style stay the same from shot to shot' : ''}; then join the clips, the voice-over and the music into one file${code ? ' with edit_video' : ''}.`, parameters: {
     type: 'object', required: ['prompt', 'why'], properties: {
       prompt: { type: 'string', description: 'What happens on screen: subject, action, camera, mood' }, why: { type: 'string' },
       seconds: { type: 'integer', minimum: 1, maximum: 15, description: 'Length in seconds (shorter is cheaper)' },
       aspect_ratio: { type: 'string', enum: ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'], description: '16:9 (default) for widescreen, 9:16 for phones' },
+      ...mediaOptsParams('video', choices.opts?.video),
       ...(choices.videoStart?.length ? { start_image: { type: 'string', description: `A picture to start the clip from (its first frame): a project path such as assets/generated/frame.png, artifact:<id>, or attached:1. Only these models take one: ${choices.videoStart.join(', ')}.` } } : {}),
       ...modelParam(choices.video) } } } }] : []),
   ...(code && cats.length ? [{ type: 'function', function: { name: 'edit_video', description: 'Join video clips and pictures (in order), a voice-over and music into one finished .mp4 in the project, with ffmpeg on this computer (free; it runs as a shell command, so the usual command rules and approval apply). The clips\' own sound is left out; the voice and the music run to the end of the picture.', parameters: {
@@ -922,10 +949,10 @@ const TOOLS = ({ artifacts, decide, cats, choices, code, browser, skills, ask, d
       out: { type: 'string', description: 'Where to save it, e.g. assets/edits/trailer.mp4' } } } } }] : []),
   ...(cats.includes('music') ? [{ type: 'function', function: { name: 'compose_music', description: 'Compose music (paid; needs approval). It opens as an audio artifact.', parameters: {
     type: 'object', required: ['prompt', 'why'], properties: {
-      prompt: { type: 'string', description: 'Genre, mood, instruments, tempo; lyrics for a song with words' }, why: { type: 'string' }, ...modelParam(choices.music) } } } }] : []),
+      prompt: { type: 'string', description: 'Genre, mood, instruments, tempo; lyrics for a song with words' }, why: { type: 'string' }, ...mediaOptsParams('music', choices.opts?.music), ...modelParam(choices.music) } } } }] : []),
   ...(cats.includes('speech') ? [{ type: 'function', function: { name: 'speak', description: 'Read text aloud with an AI voice (paid; needs approval). It opens as an audio artifact.', parameters: {
     type: 'object', required: ['text', 'why'], properties: {
-      text: { type: 'string', description: 'What to say (plain text, under 1500 characters)' }, why: { type: 'string' }, ...modelParam(choices.speech) } } } }] : []),
+      text: { type: 'string', description: 'What to say (plain text, under 1500 characters)' }, why: { type: 'string' }, ...mediaOptsParams('speech', choices.opts?.speech), ...modelParam(choices.speech) } } } }] : []),
 ];
 
 // Turns the agent's compact questions into decider questions, keeping its guess for comparison.
@@ -1270,6 +1297,7 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   for (const c of cats) if (T[c].pick === 'agent' && T[c].models.length > 1) choices[c] = await Promise.all(T[c].models.map((m) => estimateFor(c, m, {}, T)));
   // The video models in use that can start a clip from a picture (the catalogue lists a first-frame input).
   if (cats.includes('video')) choices.videoStart = (await videoModels().catch(() => [])).filter((m) => T.video.models.includes(m.id) && canStartFromImage(m)).map((m) => m.id);
+  choices.opts = await mediaOptionLines(cats, T, deps);
   const fileList = root ? listFiles(root, 60).map((f) => f.path) : [];
   const helpersOn = !!root && S.helpers !== false && projectSize(root) >= Math.max(0, Number(S.helperMinFiles ?? DEFAULTS.helperMinFiles) || 0);
   // The helper roles switched on (explore alone keeps the old read-only delegate). A benchmark keeps the old helper.
@@ -5408,6 +5436,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
   async function refreshMediaTools() {
     for (const c of cats) if (T[c].pick === 'agent' && T[c].models.length > 1 && !choices[c]) choices[c] = await Promise.all(T[c].models.map((m) => estimateFor(c, m, {}, T)));
     if (cats.includes('video') && !choices.videoStart) choices.videoStart = (await videoModels().catch(() => [])).filter((m) => T.video.models.includes(m.id) && canStartFromImage(m)).map((m) => m.id);
+    choices.opts = await mediaOptionLines(cats, T, deps);
     const fresh = TOOLS({ artifacts: T.artifacts.on, decide: decidersOn && setup.decide !== 'off', cats, choices, code: !!root, browser: browserOn, skills: skills.length > 0, ask: askOn, docs: docsOn, helpers: helpersOn, plan: goal });
     const media = new Set(['media_plan', 'edit_video', ...Object.values(MEDIA).map((m) => m.tool)]);
     tools = [...tools.filter((t) => !media.has(t.function.name) && t.function.name !== 'enable_media'), ...fresh.filter((t) => media.has(t.function.name))];
@@ -5469,6 +5498,16 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
   // switching the chat to ⚡ YOLO doesn't answer it. "Always allow" (the user's own click) covers ordinary settings for
   // the rest of the chat; guarded ones (safety, approvals, budgets, models, permissions, hooks, deletes) ask every
   // time. ⚙ Settings live in the page: the setting_changed event takes a change there.
+  // tools.<kind>.models / .voices / .resolution / .seconds / .pick of a paid kind, put into this reply's T. True when it did.
+  async function liveMediaSetting(key, value) {
+    const m = /^tools\.(image|video|music|speech)\.(models|voices|resolution|seconds|pick)$/.exec(key);
+    if (!m || !T[m[1]]) return false;
+    T[m[1]][m[2]] = m[2] === 'models' ? [...value] : m[2] === 'voices' ? { ...value } : value;
+    if (m[2] === 'models' || m[2] === 'pick') delete choices[m[1]];
+    if (m[2] === 'models') delete choices.videoStart;
+    if (cats.includes(m[1])) await refreshMediaTools();
+    return true;
+  }
   async function quorxSettings(args) {
     const act = String(args.action || 'list'), key = String(args.key || '').trim();
     const prefs = req.prefs && typeof req.prefs === 'object' ? req.prefs : (req.settings || {});
@@ -5498,7 +5537,10 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
       if (server) return `${key}: whether QuorX may start the MCP server ${mcpName} (${server.type === 'http' ? server.url : server.command}). Each chat still ticks the servers it uses. Changing it always waits for the user's click.`;
       if (P) return `${key}: ${P.label}. ${P.help}${P.readOnly ? '' : `\nNow: ${projectRead(projectId, root, key, { chatId })}`}${P.guard ? '\nChanging it always waits for the user\'s click.' : ''}${key === 'project.design' ? '\nCall list with category design (and a query) to see the systems.' : ''}`;
       const d = pageValue({}, s, DEFAULTS);
-      return `${s.key}: ${s.label} (⚙ Settings → ${SETTING_CATS[s.cat]}). ${s.help || ''}\nValues: ${s.type === 'enum' ? s.values.map(([k, l]) => `${k} (${l})`).join(', ') : s.type === 'bool' ? 'true or false' : ['int', 'num', 'money'].includes(s.type) ? `${s.min} to ${s.max}${s.unit || ''}` : s.type === 'models' ? '1 to 3 model ids' : s.type === 'model' ? `a model id${s.empty ? `, or empty for ${s.empty}` : ''}` : 'text'}\nDefault: ${show(s, d)}. Now: ${show(s, pageValue(prefs, s, DEFAULTS))}.${guarded(s) ? '\nChanging it always waits for the user\'s click.' : ''}`;
+      // A paid kind's setting: what each of its models takes (voices, sizes, lengths), from the OpenRouter catalogue.
+      const kind = /^tools\.(image|video|music|speech)\./.exec(s.key)?.[1];
+      const takesNow = kind ? (await mediaOptionLines([kind], { [kind]: { ...T[kind], models: prefs.tools?.[kind]?.models || T[kind].models, pick: 'agent' } }, deps))[kind] || [] : [];
+      return `${s.key}: ${s.label} (⚙ Settings → ${SETTING_CATS[s.cat]}). ${s.help || ''}${takesNow.length ? `\nThe models in use take: ${takesNow.join(' · ')}` : ''}\nValues: ${s.type === 'voices' ? '{"model id": "voice"} or a voice name for the first model' : s.type === 'enum' ? s.values.map(([k, l]) => `${k} (${l})`).join(', ') : s.type === 'bool' ? 'true or false' : ['int', 'num', 'money'].includes(s.type) ? `${s.min} to ${s.max}${s.unit || ''}` : s.type === 'models' ? '1 to 3 model ids' : s.type === 'model' ? `a model id${s.empty ? `, or empty for ${s.empty}` : ''}` : 'text'}\nDefault: ${show(s, d)}. Now: ${show(s, pageValue(prefs, s, DEFAULTS))}.${guarded(s) ? '\nChanging it always waits for the user\'s click.' : ''}`;
     }
     if (act !== 'set' && act !== 'undo') return 'Error: action is list, get, explain, set or undo.';
     if (req.scheduledBy) return 'Refused: a scheduled run can read settings but not change them. Changes happen in a chat with the user.';
@@ -5526,16 +5568,40 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     }
     try {
       if (s) {
-        const value = checkValue(s, args.value), was = pageValue(prefs, s, DEFAULTS);
+        let value = checkValue(s, args.value);
+        const was = pageValue(prefs, s, DEFAULTS);
+        if (s.type === 'voices') {
+          // A voice name alone is the first model's; each voice must be one its model has. Other models keep theirs.
+          const models = prefs.tools?.speech?.models || T.speech.models || [];
+          const list = deps.mediaCatalogue?.speech || await speechModels().catch(() => []);
+          const next = { ...(was && typeof was === 'object' ? was : {}) };
+          for (let [m, v] of Object.entries(value)) {
+            if (m === '*') m = models[0];
+            const spec = list.find((x) => x.id === m);
+            if (!spec) throw new Error(`${m} is not a speech model on OpenRouter`);
+            const hit = spec.voices?.length ? offered(spec.voices, v) : v;
+            if (!hit) throw new Error(`${m} has no voice "${v}". Its voices: ${spec.voices.join(', ')}`);
+            next[m] = hit;
+          }
+          value = next;
+        }
         if (JSON.stringify(value) === JSON.stringify(was)) return `${s.label} is already ${show(s, was)}. Nothing changed.`;
-        const from = show(s, was), to = show(s, value), guard = guarded(s);
-        const ans = await ask(`${SETTING_CATS[s.cat]} → ${s.label}: ${from} → ${to}`, `${s.help ? `${s.help} ` : ''}Saved in ⚙ Settings like your own change; it applies from the next reply${s.cat === 'appearance' || s.cat === 'notifications' || s.cat === 'privacy' ? ' (on screen at once)' : ''}.`, guard);
+        let from = show(s, was), to = show(s, value);
+        const guard = guarded(s), kindNow = /^tools\.(image|video|music|speech)\./.test(s.key);
+        // Voices: only the models whose voice changes, as "model: old → new" (the card names nothing that stays).
+        const voiceLines = s.type === 'voices' ? Object.entries(value).filter(([m, v]) => (was || {})[m] !== v).map(([m, v]) => `${short(m)}: ${(was || {})[m] || 'its first voice'} → ${v}`) : null;
+        if (voiceLines) { from = Object.entries(was || {}).filter(([m]) => value[m] !== was[m]).map(([m, v]) => `${short(m)}: ${v}`).join(', ') || 'each model\'s first voice'; to = Object.entries(value).filter(([m]) => (was || {})[m] !== value[m]).map(([m, v]) => `${short(m)}: ${v}`).join(', '); }
+        const why = s.type === 'voices' ? 'Calls that don\'t ask for a voice use this one.' : s.help ? `${s.help} ` : '';
+        const ans = await ask(voiceLines ? `${SETTING_CATS[s.cat]} → ${s.label}: ${voiceLines.join('; ')}` : `${SETTING_CATS[s.cat]} → ${s.label}: ${from} → ${to}`,
+          `${why}${why.endsWith(' ') || !why ? '' : ' '}Saved in ⚙ Settings like your own change; it applies ${kindNow ? 'from this reply\'s next call' : `from the next reply${s.cat === 'appearance' || s.cat === 'notifications' || s.cat === 'privacy' ? ' (on screen at once)' : ''}`}.`, guard);
         if (!ans.approve) return declined('quorx_settings', ans);
         changed({ where: 'quorx', key: s.key, label: s.label, from, to, value });
         const setIn = (o, v) => { const ks = s.key.split('.'), last = ks.pop(); ks.reduce((x, k) => (x[k] ??= {}), o)[last] = v; };
         setIn(prefs, value);
-        undoLog.push({ where: 'quorx', key: s.key, label: s.label, from, to, guard, oldValue: was, undo: () => { setIn(prefs, was); } });
-        return `Changed ${s.label} (${s.key}) from ${from} to ${to}${ans.by === 'always' ? ' (the user chose Always allow for settings in this chat)' : ''}. ⚙ Settings shows it now; it applies from the next reply. Undo with action undo, or set it back to ${JSON.stringify(was)}.`;
+        // A paid tool's models, voices, size or length: this reply uses the new value from its next call too.
+        const live = await liveMediaSetting(s.key, value);
+        undoLog.push({ where: 'quorx', key: s.key, label: s.label, from, to, guard, oldValue: was, undo: async () => { setIn(prefs, was); await liveMediaSetting(s.key, was); } });
+        return `Changed ${s.label} (${s.key}) from ${from} to ${to}${ans.by === 'always' ? ' (the user chose Always allow for settings in this chat)' : ''}. ⚙ Settings shows it now; it applies ${live ? 'to this reply\'s next calls as well' : 'from the next reply'}. Undo with action undo, or set it back to ${JSON.stringify(was)}.`;
       }
       if (server) {
         const on = checkValue({ type: 'bool', label: `mcp.${mcpName}` }, args.value);
@@ -5872,9 +5938,10 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     const spend = (cost, usage = {}) => { account({ ...usage, cost }, p.model, cat); stats.mediaSpent += cost; };
     if (cat === 'image') {
       const spec = (await imageModels().catch(() => [])).find((m) => m.id === p.model);
-      const pick = (k, want) => { const s = spec?.params?.[k]; return s?.type === 'enum' ? (s.values.includes(want) ? want : s.values[0]) : undefined; };
-      const body = { model: p.model, prompt: String(args.prompt || '') };
-      const res = pick('resolution', T.image.resolution); if (res) body.resolution = res;
+      // Size, format, background, quality and seed: what the call asked for, as far as this model takes it.
+      const extra = imageExtras(spec, args);
+      const body = { model: p.model, prompt: String(args.prompt || ''), ...extra.body };
+      if (spec?.params?.resolution?.type === 'enum') body.resolution = p.res;
       // The shape the agent asked for, or the model's nearest one (some models offer fewer ratios).
       let ratioNote = '';
       if (args.aspect_ratio && /^\d+(\.\d+)?:\d+(\.\d+)?$/.test(args.aspect_ratio)) {
@@ -5887,17 +5954,20 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
       const r = await (deps.generateImage || generateImage)(body, signal);
       if (!r.images[0]) throw new Error('no image returned');
       const cost = r.usage.cost ?? p.est;
-      if (r.usage.cost) measured.set(`${p.model}|${T.image.resolution || '1K'}`, r.usage.cost);
+      if (r.usage.cost) measured.set(`${p.model}|${p.res || '1K'}`, r.usage.cost);
       spend(cost, r.usage);
       const id = newId(`image ${clip(args.prompt, 30)}`);
       notes.push(`made picture ${id}`);
-      return deliverMedia(id, r.images[0], 'png', { id, kind: 'image', title: clip(args.prompt, 40), url: r.images[0], v: 1, cost, ms: r.ms, model: p.model }, `Picture made with ${p.model} ($${cost.toFixed(4)}, ${r.ms} ms).${ratioNote}${switched}`);
+      const used = [p.res && `size ${p.res}`, ...['output_format', 'background', 'quality', 'seed'].filter((k) => extra.body[k] != null).map((k) => `${k} ${extra.body[k]}`)].filter(Boolean).join(', ');
+      return deliverMedia(id, r.images[0], 'png', { id, kind: 'image', title: clip(args.prompt, 40), url: r.images[0], v: 1, cost, ms: r.ms, model: p.model }, `Picture made with ${p.model} ($${cost.toFixed(4)}, ${r.ms} ms${used ? `, ${used}` : ''}).${ratioNote}${p.note || ''}${extra.note}${switched}`);
     }
     if (cat === 'video') {
       const spec = (await videoModels().catch(() => [])).find((m) => m.id === p.model);
       const vb = videoBody({ model: p.model, prompt: args.prompt, secs: p.secs, res: p.res, spec, aspect: args.aspect_ratio, firstFrame });
       if (vb.error) return `Error: ${vb.error}. Nothing was charged.`; // the user switched to a model without picture input
-      const body = vb.body;
+      const extra = videoExtras(spec, args);
+      const body = { ...vb.body, ...extra.body };
+      vb.note = `${vb.note}${p.note || ''}${extra.note}`;
       emit({ t: 'note', level: 'info', msg: `Video job started on ${short(p.model)} (${p.detail}${firstFrame ? ', from a picture' : ''}); this usually takes 30 seconds to a few minutes.`, at: at() });
       const r = await (deps.generateVideo || generateVideo)(body, signal, (status, ms) => emit({ t: 'media_status', tool: name, status, ms, at: at() }));
       const cost = r.usage.cost ?? p.est;
@@ -5908,19 +5978,20 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
       return deliverMedia(id, r.url, 'mp4', { id, kind: 'video', title: clip(args.prompt, 40), url: r.url, v: 1, cost, ms: r.ms, model: p.model }, `Video made with ${p.model} ($${cost.toFixed(4)}, ${Math.round(r.ms / 1000)} s)${firstFrame ? `, starting from ${clip(args.start_image, 80)}` : ''}.${vb.note}${switched}`);
     }
     if (cat === 'music') {
-      const r = await composeMusic({ model: p.model, prompt: String(args.prompt || '') }, signal);
+      const seed = Number.isInteger(Number(args.seed)) && args.seed !== '' && args.seed != null ? Number(args.seed) : undefined;
+      const r = await composeMusic({ model: p.model, prompt: String(args.prompt || ''), seed }, signal);
       const cost = r.usage.cost ?? p.est;
       spend(cost, r.usage);
       const id = newId(`music ${clip(args.prompt, 30)}`);
       notes.push(`composed music ${id}`);
       return deliverMedia(id, r.url, 'mp3', { id, kind: 'audio', title: clip(args.prompt, 40), url: r.url, v: 1, cost, ms: r.ms, model: p.model }, `Music made with ${p.model} ($${cost.toFixed(4)}, ${r.ms} ms).${switched}`);
     }
-    const r = await synthesize({ model: p.model, input: clip(args.text, 1500), voice: p.voice }, signal);
+    const r = await (deps.synthesize || synthesize)({ model: p.model, input: clip(args.text, 1500), voice: p.voice, speed: p.speed }, signal);
     // The speech endpoint returns audio, not a bill, so the estimate is the cost.
     spend(p.est);
     const id = newId(`voice ${clip(args.text, 24)}`);
     notes.push(`spoke audio ${id}`);
-    return deliverMedia(id, r.url, 'mp3', { id, kind: 'audio', title: `Voice: ${clip(args.text, 34)}`, url: r.url, v: 1, cost: p.est, ms: r.ms, model: p.model }, `Speech made with ${p.model} (≈$${p.est.toFixed(4)}, ${r.ms} ms).${switched}`);
+    return deliverMedia(id, r.url, 'mp3', { id, kind: 'audio', title: `Voice: ${clip(args.text, 34)}`, url: r.url, v: 1, cost: p.est, ms: r.ms, model: p.model }, `Speech made with ${p.model} (≈$${p.est.toFixed(4)}, ${r.ms} ms${p.voice ? `, voice ${p.voice}` : ''}${p.speed ? `, speed ${p.speed}×` : ''}).${p.note || ''}${switched}`);
   }
 
   // make_video's start picture as a data URL: a project file, a picture artifact, or one the user attached.

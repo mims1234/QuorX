@@ -7,6 +7,7 @@ import { tempDir } from './test-home.mjs';
 import { reply, run, toolResults, of } from './agent-harness.mjs';
 import { videoBody, editCommand, ffmpegMajor } from '../server/video.js';
 import { primeCatalogue } from '../server/openrouter.js';
+import { pickVoice, pickSpeed, imageSize, videoSize, imageExtras, videoExtras, optionsLine } from '../server/mediaopts.js';
 import { execFileSync } from 'node:child_process';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -1197,6 +1198,57 @@ test('the link check skips tags a script builds as text, and still finds a real 
   assert.deepEqual(problems.filter((p) => /links to/.test(p)), ['review.html: links to missing.png, which does not exist']);
 });
 
+
+// ---------- per-call media options and the media settings the agent may change (with a click) ----------
+test('media options: voices, sizes, seeds and sound follow what each model\'s catalogue entry takes', () => {
+  const tts = { id: 't/voice', voices: ['george', 'alice', 'Matilda'] };
+  assert.deepEqual(pickVoice(tts, 'ALICE', 'george'), { voice: 'alice', note: '' });
+  assert.equal(pickVoice(tts, 'matilda').voice, 'Matilda', 'the catalogue\'s own spelling');
+  const miss = pickVoice(tts, 'zara', 'george');
+  assert.equal(miss.voice, 'george'); assert.match(miss.note, /has no voice "zara", so it used george\. Its voices: george, alice, Matilda/);
+  assert.equal(pickVoice(tts, '', 'nobody').voice, 'george', 'a setting the model lacks falls back to its first voice');
+  assert.equal(pickVoice({ id: 'x', voices: [] }, 'anyone').voice, 'anyone', 'no list: any name goes');
+  assert.equal(pickSpeed(1), undefined); assert.equal(pickSpeed(3), 2); assert.equal(pickSpeed('0.8'), 0.8);
+  const img = { id: 't/img', params: { resolution: { type: 'enum', values: ['1K', '2K'] }, background: { type: 'enum', values: ['auto', 'transparent'] }, seed: { type: 'boolean' } } };
+  assert.equal(imageSize(img, '2k', '1K').res, '2K');
+  assert.match(imageSize(img, '4K', '1K').note, /no 4K size, so it used 1K/);
+  const ex = imageExtras(img, { background: 'transparent', seed: 7, quality: 'high' });
+  assert.deepEqual(ex.body, { background: 'transparent', seed: 7 }); assert.match(ex.note, /doesn't take quality/);
+  const vid = { id: 't/vid', resolutions: ['480p', '720p'], seed: true, audio: false };
+  assert.equal(videoSize(vid, '720p', '480p').res, '720p'); assert.equal(videoSize(vid, '1080p', '480p').res, '480p');
+  assert.deepEqual(videoExtras(vid, { seed: 3, audio: true }).body, { seed: 3 });
+  assert.match(videoExtras(vid, { audio: true }).note, /silent clips/);
+  assert.match(optionsLine('speech', tts), /^t\/voice: voices george, alice, Matilda$/);
+});
+
+test('speak takes a voice and speed per call; quorx_settings changes the voice only with a click, and this reply uses it at once', async () => {
+  primeCatalogue('speech', [{ id: 'test/tts', name: 'Test TTS', kind: 'speech', price: [10, 0], voices: ['george', 'alice', 'matilda'] }]);
+  const cards = [], sent = [];
+  const { bodies, events } = await run((body, i) => [
+    reply('', [['quorx_settings', { action: 'explain', key: 'tools.speech.voices' }]]),
+    reply('', [['quorx_settings', { action: 'set', key: 'tools.speech.voices', value: 'zara' }]]),
+    reply('', [['quorx_settings', { action: 'set', key: 'tools.speech.voices', value: 'Alice' }]]),
+    reply('', [['speak', { text: 'Marhaba, welcome.', why: 'the intro line' }]]),
+    reply('', [['speak', { text: 'Second line.', why: 'line two', voice: 'matilda', speed: 1.2 }]]),
+    reply('Done.')][i], {
+    chatId: `mo-${Date.now().toString(36)}`, prefs: { tools: { speech: { models: ['test/tts'], voices: { 'test/tts': 'george' } } } },
+    settings: { approval: 'strict', mediaEnabled: true, videoMode: 'off', tools: { browser: { on: false }, speech: { on: true, pick: 'fixed', models: ['test/tts'], voices: { 'test/tts': 'george' } } } },
+    synthesize: async (b) => { sent.push(b); return { url: 'data:audio/mpeg;base64,AAAA', ms: 1 }; },
+    onEvent: (e, id) => { if (e.t === 'approval') { cards.push(e); setTimeout(() => answerApproval(id, e.id, { approve: true }), 10); } } });
+  assert.match(String(toolResults(bodies[1]).at(-1)), /The models in use take: test\/tts: voices george, alice, matilda[\s\S]*always waits for the user's click/);
+  assert.match(String(toolResults(bodies[2]).at(-1)), /^Error: test\/tts has no voice "zara"\. Its voices: george, alice, matilda\. Nothing changed\./);
+  const qs = cards.filter((c) => c.tool === 'quorx_settings');
+  assert.equal(qs.length, 1, 'a bad voice never reached a card'); assert.equal(qs[0].noAlways, true, 'media settings ask every time');
+  assert.match(qs[0].what, /Voice: the voice of each model: tts: george → alice$/, 'only the voice that changes');
+  assert.match(qs[0].why, /^Calls that don't ask for a voice use this one\. Saved in ⚙ Settings like your own change; it applies from this reply's next call\./);
+  assert.deepEqual(of(events, 'setting_changed').map((e) => [e.key, e.value]), [['tools.speech.voices', { 'test/tts': 'alice' }]]);
+  assert.match(String(toolResults(bodies[3]).at(-1)), /to this reply's next calls as well/);
+  assert.deepEqual(sent.map(({ voice, speed }) => ({ voice, speed })), [{ voice: 'alice', speed: undefined }, { voice: 'matilda', speed: 1.2 }]);
+  assert.match(cards.filter((c) => c.tool === 'speak')[1].detail, /voice matilda, speed 1\.2×/, 'the approval card shows the voice and speed');
+  assert.match(String(toolResults(bodies[5]).at(-1)), /voice matilda, speed 1\.2×/);
+  const speakTool = bodies[0].tools.find((t) => t.function.name === 'speak');
+  assert.match(speakTool.function.parameters.properties.voice.description, /test\/tts: voices george, alice, matilda/);
+});
 
 // ---------- quorx_settings: QuorX's own settings and the project's, read freely, changed only with a click ----------
 test('quorx_settings: reads are free and never show a key; a change is a buttons-only card, then the page hears it', async () => {
