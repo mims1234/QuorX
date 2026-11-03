@@ -303,10 +303,10 @@ function pcmToWav(pcm, rate = 24000) {
   return Buffer.concat([h, pcm]);
 }
 
-export async function synthesize({ model, input, voice, instructions }, signal) {
+export async function synthesize({ model, input, voice, instructions, speed }, signal) {
   const t = Date.now();
   const send = (format) => fetch(`${BASE}/api/v1/audio/speech`, { method: 'POST', headers: headers(), signal,
-    body: JSON.stringify({ model, input, ...(voice ? { voice } : {}), ...(instructions ? { instructions } : {}), response_format: format }) });
+    body: JSON.stringify({ model, input, ...(voice ? { voice } : {}), ...(instructions ? { instructions } : {}), ...(speed ? { speed } : {}), response_format: format }) });
   let r = await send('mp3'), format = 'mp3';
   if (!r.ok) {
     const msg = (await r.json().catch(() => ({}))).error?.message || `HTTP ${r.status}`;
@@ -321,10 +321,10 @@ export async function synthesize({ model, input, voice, instructions }, signal) 
 }
 
 // Lyria answers a streamed chat request with base64 audio chunks.
-export async function composeMusic({ model, prompt }, signal) {
+export async function composeMusic({ model, prompt, seed }, signal) {
   const t = Date.now();
   const r = await fetch(`${BASE}/api/v1/chat/completions`, { method: 'POST', headers: headers(), signal,
-    body: JSON.stringify({ model, stream: true, modalities: ['text', 'audio'], audio: { format: 'mp3' }, messages: [{ role: 'user', content: prompt }] }) });
+    body: JSON.stringify({ model, stream: true, modalities: ['text', 'audio'], audio: { format: 'mp3' }, ...(Number.isInteger(seed) ? { seed } : {}), messages: [{ role: 'user', content: prompt }] }) });
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error?.message || `HTTP ${r.status}`);
   const dec = new TextDecoder();
   let buf = '', audio = '', text = '', usage = {};
@@ -355,7 +355,7 @@ export const videoModels = () => cached('videos', async () => {
     skus: m.pricing_skus || {}, resolutions: m.supported_resolutions || [], durations: m.supported_durations || [],
     aspects: m.supported_aspect_ratios || [],
     // first_frame / last_frame: the pictures it can start (or end) a clip from; audio: whether it makes sound.
-    frames: m.supported_frame_images || [], audio: m.generate_audio === true,
+    frames: m.supported_frame_images || [], audio: m.generate_audio === true, seed: m.seed === true,
   }));
 });
 

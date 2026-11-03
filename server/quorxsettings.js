@@ -97,6 +97,11 @@ export const SETTINGS = [
     ...(['browser', 'artifacts'].includes(k) ? [] : [E(`tools.${k}.models`, 'tools', `${{ image: '🖼 Pictures', video: '🎬 Video', music: '🎵 Music', speech: '🗣 Voice', listen: '👂 Listening' }[k]}: models`, 'models', { help: 'Up to 3; the first is used unless the agent picks.' })]),
     ...(['image', 'video', 'music', 'speech'].includes(k) ? [E(`tools.${k}.pick`, 'tools', `${{ image: '🖼 Pictures', video: '🎬 Video', music: '🎵 Music', speech: '🗣 Voice' }[k]}: who picks the model`, 'enum', { values: [['fixed', 'Always the first'], ['agent', 'The agent']] })] : []),
   ]),
+  // What each call gets unless it asks for something else (speak voice, imagine resolution, make_video resolution / seconds).
+  E('tools.speech.voices', 'tools', '🗣 Voice: the voice of each model', 'voices', { help: 'A voice per speech model, as {"model id": "voice"}; a plain voice name sets it for the first model. Each model has its own list (explain shows it). A single call can still ask for another voice.' }),
+  E('tools.image.resolution', 'tools', '🖼 Pictures: size', 'enum', { values: [['512', '512'], ['768', '768'], ['1K', '1K'], ['1.5K', '1.5K'], ['2K', '2K'], ['4K', '4K']], help: 'Bigger costs more. A model without that size uses its nearest.' }),
+  E('tools.video.resolution', 'tools', '🎬 Video: resolution', 'enum', { values: [['480p', '480p'], ['720p', '720p'], ['1080p', '1080p']], help: 'Higher costs more. A model without it uses its first.' }),
+  E('tools.video.seconds', 'tools', '🎬 Video: default length', 'int', { min: 1, max: 15, unit: 's', help: 'Seconds per clip when a call gives none; models round to the lengths they offer.' }),
   E('strictAsk', 'safety', 'In 🔒 Strict, ask before', 'enum', { values: [['paid', 'Paid media'], ['every', 'Every tool']], guard: true }),
   E('strictAskHelpers', 'safety', 'In Strict, also ask before helpers', 'bool', { guard: true }),
   E('strictAskDeciders', 'safety', 'In Strict, also ask before decider checks', 'bool', { guard: true }),
@@ -151,6 +156,7 @@ export function show(s, v) {
   if (s.type === 'enum') return (s.values.find(([k]) => String(k) === String(v)) || [v, String(v)])[1];
   if (s.type === 'money') return `$${Number(v || 0).toFixed(2)}`;
   if (s.type === 'models') return (Array.isArray(v) ? v : []).join(', ') || '(none)';
+  if (s.type === 'voices') return Object.entries(v && typeof v === 'object' ? v : {}).map(([m, x]) => `${m}: ${x}`).join(', ') || "(each model's first voice)";
   if (s.type === 'model' || s.type === 'text') return v ? String(v) : s.empty || '(empty)';
   return `${v}${s.unit || ''}`;
 }
@@ -184,6 +190,15 @@ export function checkValue(s, raw) {
     const list = (Array.isArray(raw) ? raw : String(raw ?? '').split(',')).map((x) => String(x).trim()).filter(Boolean);
     if (!list.length || list.length > 3 || list.some((m) => !MODEL_ID.test(m))) throw new Error(`${s.label} is 1 to 3 model ids, like ["openai/gpt-6-luna-decisions"]`);
     return list;
+  }
+  if (s.type === 'voices') {
+    // {"model": "voice"}, "model=voice, model2=voice2", or a plain voice name ("*": the first model's, filled in by the caller).
+    let o = raw;
+    if (typeof raw === 'string') { try { o = JSON.parse(raw); } catch { o = raw.includes('=') ? Object.fromEntries(raw.split(',').map((p) => p.split('=').map((x) => x.trim()))) : { '*': raw.trim() }; } }
+    if (typeof o === 'string') o = { '*': o.trim() };
+    const out = Object.fromEntries(Object.entries(o && typeof o === 'object' && !Array.isArray(o) ? o : {}).map(([m, x]) => [String(m).trim(), String(x ?? '').trim()]).filter(([m, x]) => m && x && x.length <= 80 && (m === '*' || MODEL_ID.test(m))));
+    if (!Object.keys(out).length) throw new Error(`${s.label} is {"model id": "voice"}, like {"elevenlabs/eleven-flash-v2.5": "alice"}, or a voice name for the first model`);
+    return out;
   }
   return String(raw ?? '').replace(/[\r\n]+/g, ' ').trim().slice(0, 2000);
 }
