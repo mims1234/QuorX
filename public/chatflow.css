@@ -3,18 +3,22 @@
    replies. What the agent says stays where it said it; its tool work folds into lines; the files it makes show under
    the step that made them; cards are short and open for more. Loaded last, so it wins over the older layers. */
 
-/* ---- no bubbles: who is speaking is a glowing edge that fades into the chat ----
-   You: on the right, your colour (the accent) glowing from the right edge leftward. The agent: on the left, its colour
-   (violet, like its model name) glowing from the left edge rightward. The agent's edge turns green while it works,
-   amber while it waits for you, red when it stopped on an error. */
-html:root body .msgs .msg.user { --who: var(--accent); background: linear-gradient(to left, color-mix(in srgb, var(--who) 16%, transparent), color-mix(in srgb, var(--who) 5%, transparent) 55%, transparent) !important;
-  border: 0 !important; border-right: 2px solid color-mix(in srgb, var(--who) 75%, transparent) !important; border-radius: 0 !important; box-shadow: none !important;
-  max-width: min(78%, 720px) !important; min-width: min(46%, 320px) !important; width: fit-content !important;
-  margin-left: auto !important; margin-right: 12px !important; align-self: flex-end !important; padding: 8px 14px 6px 28px !important; text-align: right; }
+/* ---- no bubbles: every message is a full-width row laid out the same way ----
+   An edge line on the left, the text from one left edge, then a footer with the stats on the left and the buttons on
+   the right. Who speaks is its colour: your row is tinted teal across its whole width; the agent's violet (like its
+   model name) glows only from its edge, and that edge turns green while it works, amber while it waits for you, red
+   when it stopped on an error. */
+html:root body .msgs .msg.user { --who: var(--accent); background: linear-gradient(to right, color-mix(in srgb, var(--who) 16%, transparent), color-mix(in srgb, var(--who) 8%, transparent) 40%, color-mix(in srgb, var(--who) 5%, transparent)) !important;
+  border: 0 !important; border-left: 2px solid color-mix(in srgb, var(--who) 75%, transparent) !important; border-radius: 0 !important; box-shadow: none !important;
+  max-width: none !important; min-width: 0 !important; width: auto !important;
+  margin-left: 0 !important; margin-right: 0 !important; align-self: stretch !important; padding: 10px 12px 6px 44px !important; text-align: left; }
 html:root body .msgs .msg.user::before { display: none !important; }
 html:root body .msgs .msg.user .utext { font-size: var(--msg-size, 14px); }
-html:root body .msgs .msg.user .u-foot { justify-content: flex-end; }
-html:root body .msgs .msg.user time { text-align: right; }
+/* Your footer like the agent's: when on the left, the buttons on the right. */
+html:root body .msgs .msg.user .u-foot { justify-content: space-between; margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--line-subtle); }
+html:root body .msgs .msg.user .u-foot > time { order: -1; text-align: left; }
+html:root body .msgs .msg.user .u-foot > time::before { content: none !important; }
+html:root body .msgs .msg.user .u-foot > .u-tools { order: 1; margin-left: auto; }
 
 html:root body .msgs .msg.bot { --who: var(--violet, #a78bfa); background: linear-gradient(to right, color-mix(in srgb, var(--who) 9%, transparent), color-mix(in srgb, var(--who) 3%, transparent) 30%, transparent 60%) !important;
   border: 0 !important; border-left: 2px solid color-mix(in srgb, var(--who) 60%, transparent) !important; border-radius: 0 !important;
@@ -25,17 +29,17 @@ html:root body .msgs .msg.bot.is-error { --who: var(--bad); }
 html:root body .msgs .msg.bot::before { left: 10px !important; top: 8px !important; width: 24px !important; height: 24px !important; border-radius: 6px !important; font-size: 9px !important; }
 @media (max-width: 600px) {
   html:root body .msgs .msg.bot { padding-left: 38px !important; }
+  html:root body .msgs .msg.user { padding-left: 38px !important; }
   html:root body .msgs .msg.bot::before { left: 6px !important; }
-  html:root body .msgs .msg.user { max-width: 88% !important; }
 }
 
 /* ---- what the agent said between steps: a message, never folded ---- */
 .msg .timeline .tl-say { margin: 8px 0 6px; }
 
-/* ---- what you wrote while it worked: on the right too, where you wrote it ---- */
-.steer-card.tl-you { margin: 8px 0 6px auto; width: fit-content; max-width: min(78%, 640px); min-width: min(46%, 280px); padding: 7px 12px 7px 24px; border-radius: 0;
-  background: linear-gradient(to left, color-mix(in srgb, var(--accent) 16%, transparent), color-mix(in srgb, var(--accent) 5%, transparent) 55%, transparent);
-  border: 0; border-right: 2px solid color-mix(in srgb, var(--accent) 75%, transparent); text-align: right; }
+/* ---- what you wrote while it worked: your colour too, a full-width line where you wrote it ---- */
+.steer-card.tl-you { margin: 8px 0 6px; width: auto; max-width: none; padding: 7px 12px; border-radius: 0;
+  background: linear-gradient(to right, color-mix(in srgb, var(--accent) 16%, transparent), color-mix(in srgb, var(--accent) 8%, transparent) 40%, color-mix(in srgb, var(--accent) 5%, transparent));
+  border: 0; border-left: 2px solid color-mix(in srgb, var(--accent) 75%, transparent); text-align: left; }
 .steer-card.tl-you .sc-who { display: none; }
 .steer-card.tl-you p { margin: 0; }
 .steer-card.tl-you .sc-state { display: block; text-align: right; font: 400 11px var(--font-ui); }
@@ -135,3 +139,77 @@ html:root body .msgs .msg.bot::before { left: 10px !important; top: 8px !importa
 .msgs .msg.bot > .ans-when { display: flex; align-items: baseline; gap: 8px; font: 500 11px var(--mono); }
 .msgs .msg.bot > .ans-when > .tl-t { padding-top: 0; text-align: left; font-size: 11px; overflow: visible; }
 .msgs .msg.bot > .ans-when > span:last-child { color: var(--text-2, var(--muted)); }
+
+/* ---- Archived projects in the sidebar: rows like the project list's ----
+   A chevron and the name take the room (it shortens with …); as the sidebar narrows the chat count goes first, then
+   the cost. A click opens the project's chats; right-click (or the menu key) for its actions. */
+.sb-archive { container-type: inline-size; container-name: archive; }
+.sb-arch-row { cursor: pointer; }
+.sb-arch-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.sb-arch-fold { flex: none; width: 12px; height: 12px; fill: none; stroke: var(--dim); stroke-width: 2; transition: transform var(--dur-hover, .15s); }
+.sb-arch-row[aria-expanded="true"] .sb-arch-fold { transform: rotate(90deg); }
+.sb-arch-row .sb-arch-name { flex: 1 1 auto; }
+.sb-arch-row .sb-arch-meta { flex: none; white-space: nowrap; }
+.sb-arch-chat { padding-left: 26px; }
+.sb-arch-chat .sb-arch-ct { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sb-arch-none { padding: 2px 6px 4px 26px; font: 11px var(--font-ui); color: var(--dim); }
+@container archive (max-width: 300px) { .sb-arch-row .sb-arch-cnt, .sb-arch-row .sb-arch-dot { display: none; } }
+@container archive (max-width: 220px) { .sb-arch-row .sb-arch-meta { display: none; } }
+/* The list never grows wider than the sidebar (long names and chat titles shorten instead). */
+.sb-arch-list { grid-template-columns: minmax(0, 1fr); }
+.sb-arch-item, .sb-arch-row, .sb-arch-chat { min-width: 0; max-width: 100%; }
+
+/* The chat's top and bottom edges: a message scrolled to the header or to the message box fades into it instead of
+   touching it, and the first and last messages have room around them, so you can see where the chat starts and ends. */
+html:root body .msgs { -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 14px, #000 calc(100% - 14px), transparent); mask-image: linear-gradient(to bottom, transparent 0, #000 14px, #000 calc(100% - 14px), transparent); padding-top: 20px !important; padding-bottom: 22px !important; }
+/* Compact density keeps them, a little tighter (its own rule set 8px at the top, which put the first message against the header). */
+html:root[data-density="compact"] body .msgs { padding-top: 16px !important; padding-bottom: 18px !important; }
+/* Compact density's own message paddings outrank the ones above: the same left edge for both, a little tighter. */
+html:root[data-density="compact"] body .msgs .msg.user { padding: 8px 12px 5px 44px !important; }
+html:root[data-density="compact"] body .msgs .msg.bot { padding: 5px 12px 5px 44px !important; }
+@media (max-width: 600px) {
+  html:root[data-density="compact"] body .msgs .msg.user { padding-left: 38px !important; }
+  html:root[data-density="compact"] body .msgs .msg.bot { padding-left: 38px !important; }
+}
+
+/* ---- the chat's start and end glow QuorX green ----
+   At the very top (at-start) a soft green glow sits along the top of the chat; at the very end (at-end) one sits above
+   the message box. Scroll on past either and it stretches with the pull (--pull-t / --pull-b, set by edgeGlow in
+   app.js), then eases back. Drawn as the list's own background, which stays put while the messages scroll. Where a
+   glow shows, that edge's fade is off (nothing is scrolled under it). */
+@property --pull-t { syntax: '<number>'; inherits: false; initial-value: 0; }
+@property --pull-b { syntax: '<number>'; inherits: false; initial-value: 0; }
+@property --glow-t { syntax: '<number>'; inherits: false; initial-value: 0; }
+@property --glow-b { syntax: '<number>'; inherits: false; initial-value: 0; }
+html:root body .msgs {
+  --glow-t: 0; --glow-b: 0;
+  transition: --pull-t .45s cubic-bezier(.2, .8, .2, 1), --pull-b .45s cubic-bezier(.2, .8, .2, 1), --glow-t .35s ease, --glow-b .35s ease;
+  background-image:
+    linear-gradient(to right, transparent, color-mix(in srgb, var(--ok) calc((var(--glow-t) * 80 + var(--pull-t) * 20) * 1%), transparent), transparent),
+    radial-gradient(ellipse 80% calc(40px + var(--pull-t) * 110px) at 50% 0, color-mix(in srgb, var(--ok) calc((var(--glow-t) * 26 + var(--pull-t) * 30) * 1%), transparent), transparent),
+    linear-gradient(to right, transparent, color-mix(in srgb, var(--ok) calc((var(--glow-b) * 80 + var(--pull-b) * 20) * 1%), transparent), transparent),
+    radial-gradient(ellipse 80% calc(40px + var(--pull-b) * 110px) at 50% 100%, color-mix(in srgb, var(--ok) calc((var(--glow-b) * 26 + var(--pull-b) * 30) * 1%), transparent), transparent);
+  background-size: 100% 2px, 100% 100%, 100% 2px, 100% 100%;
+  background-position: top, top, bottom, bottom;
+  background-repeat: no-repeat;
+  background-attachment: scroll;
+}
+html:root body .msgs.at-start { --glow-t: 1; -webkit-mask-image: linear-gradient(to bottom, #000, #000 calc(100% - 14px), transparent); mask-image: linear-gradient(to bottom, #000, #000 calc(100% - 14px), transparent); }
+html:root body .msgs.at-end { --glow-b: 1; -webkit-mask-image: linear-gradient(to bottom, transparent, #000 14px, #000); mask-image: linear-gradient(to bottom, transparent, #000 14px, #000); }
+html:root body .msgs.at-start.at-end { -webkit-mask-image: none; mask-image: none; }
+@media (prefers-reduced-motion: reduce) { html:root body .msgs { transition: none; } }
+
+/* ---- timestamps glow softly in the colour of who they belong to: violet in a reply, teal in your messages ---- */
+html:root body .msgs .msg.bot :is(.rh-when, .tl-t, .ans-when > .tl-t, .tl-ct) { color: color-mix(in srgb, var(--violet, #a78bfa) 55%, var(--muted)); text-shadow: 0 0 8px color-mix(in srgb, var(--violet, #a78bfa) 45%, transparent); }
+html:root body .msgs .msg.user .u-foot > time { color: color-mix(in srgb, var(--accent) 70%, var(--muted)); text-shadow: 0 0 8px color-mix(in srgb, var(--accent) 45%, transparent); }
+
+/* A reply's cost card: a value too long for its line wraps inside the card instead of running out of it. */
+.f-pop-float .fi-row > b { white-space: normal; }
+.f-pop-float .fi-row b small { color: var(--dim); }
+
+/* ---- each step's time on its own small line above it: the content keeps the full width (width matters more
+   than height). This was a 58px column of times down the left of every line. ---- */
+html:root body .msg .tl-at, html:root body .msg .tl-row > .tl-at { grid-template-columns: minmax(0, 1fr) !important; gap: 1px; }
+html:root body .msg .tl-at > .tl-t { text-align: left; padding-top: 0; line-height: 1.3; }
+/* A time the step before already showed (same minute) isn't repeated (quietRepeatTimes in app.js). */
+html:root body .msg .tl-at.tl-same > .tl-t { display: none; }

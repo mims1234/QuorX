@@ -2050,15 +2050,17 @@ function priceNum(m) {
 const KIND_TITLE = { chat: 'Chat model', decision: 'Decider model', image: 'Picture model', video: 'Video model', music: 'Music model', speech: 'Voice model', listen: 'Speech-to-text model' };
 const KIND_NOTE = { chat: 'Models that can use tools (the agent needs them).', decision: 'Fast judges that answer yes/no, choice and score questions.', image: 'Text-to-picture models.', video: 'Text-to-video models.', music: 'Music models.', speech: 'Text-to-speech models.', listen: 'Chat models that accept audio (used for the mic).' };
 const SORTS = [['best', 'Recommended'], ['cheap', 'Cheapest'], ['pricey', 'Priciest'], ['new', 'Newest'], ['old', 'Oldest'], ['name', 'Name'], ['ctx', 'Largest context']];
+// Each filter has a group (what it costs, what it can do, the rest): the bar keeps a group together, with a thin line
+// between groups. The same bar serves every place a model is picked; each place's own rules decide the list.
 const FILTERS = [
-  ['free', 'Free', (m) => (priceNum(m) === 0 || /:free$/.test(m.id)) && m.plan !== 'plan'],
-  ['plan', 'On a plan', (m) => m.plan === 'plan'],
-  ['vision', '👁 Sees images', (m) => (m.in || []).includes('image') && m.kind !== 'image'],
-  ['tools', '🧰 Uses tools', (m) => !!m.tools],
-  ['reasoning', '🧠 Reasoning', (m) => !!m.reasoning],
-  ['long', '📜 Long context', (m) => (m.ctx || 0) >= 200000],
-  ['new', '✨ New (60 days)', (m) => m.created && Date.now() / 1000 - m.created < 60 * 864e2],
-  ['fav', '★ Favourites', (m) => (G.favModels?.[m.kind] || []).includes(m.id)],
+  ['free', 'Free', (m) => (priceNum(m) === 0 || /:free$/.test(m.id)) && m.plan !== 'plan', 'price'],
+  ['plan', 'On a plan', (m) => m.plan === 'plan', 'price'],
+  ['vision', '👁 Sees images', (m) => (m.in || []).includes('image') && m.kind !== 'image', 'can'],
+  ['tools', '🧰 Uses tools', (m) => !!m.tools, 'can'],
+  ['reasoning', '🧠 Reasoning', (m) => !!m.reasoning, 'can'],
+  ['long', '📜 Long context', (m) => (m.ctx || 0) >= 200000, 'can'],
+  ['new', '✨ New', (m) => m.created && Date.now() / 1000 - m.created < 60 * 864e2, 'more', 'Released in the last 60 days'],
+  ['fav', '★ Favourites', (m) => (G.favModels?.[m.kind] || []).includes(m.id), 'more'],
 ];
 const providerOf = (id) => String(id).replace(/^~/, '').split('/')[0] || 'other';
 // Models of an app on this PC (⚙ Settings → Providers) or of OpenCode Go (⚙ Settings → Providers) are the source,
@@ -2125,7 +2127,8 @@ const inSource = (m) => PK.source === 'all' || sourceKey(m) === PK.source;
 function drawPicker(full = false) {
   const all = pickerModels();
   $('#pkTitle').textContent = `Choose a ${(KIND_TITLE[PK.kind] || 'model').toLowerCase()}`;
-  $('#pkSub').textContent = [PK.context, KIND_NOTE[PK.kind]].filter(Boolean).join(' · ');
+  $('#pkSub').hidden = true;
+  $('#pkTitle').title = [PK.context, KIND_NOTE[PK.kind]].filter(Boolean).join(' · ');
   // No key yet: browsing works (the lists are public); only models through an app on this PC run.
   const banner = $('#pkBanner');
   banner.hidden = !!G.cfg?.hasKey;
@@ -2138,8 +2141,12 @@ function drawPicker(full = false) {
   cc.innerHTML = PK.current ? `<span class="mp-cur-label">Current</span>${cur ? `<b>${esc(cleanName(cur))}</b><code>${esc(cur.id)}</code><span class="mp-cur-price">${priceCell(cur)}</span>` : `<code>${esc(PK.current)}</code><span class="mp-warn">not in today's catalogue (it may have been renamed or removed)</span>`}` : '';
   if (full) {
     // Sort and filter controls (counts come from the whole list of this kind).
-    $('#pkSort').innerHTML = SORTS.map(([k, l]) => `<button type="button" class="mp-sort ${PK.sort === k ? 'on' : ''}" data-sort="${k}" aria-pressed="${PK.sort === k}">${l}</button>`).join('');
-    for (const b of document.querySelectorAll('#pkSort .mp-sort')) b.onclick = () => { PK.sort = b.dataset.sort; (G.pickerSort ??= {})[PK.kind] = PK.sort; savePrefs(); drawPicker(true); };
+    const sortName = SORTS.find(([k]) => k === PK.sort)?.[1] || 'Recommended';
+    $('#pkSort').innerHTML = `<div class="mp-prov-wrap mp-sort-wrap"><button type="button" class="mp-chip mp-sort-btn" aria-haspopup="listbox" aria-expanded="false" title="Sort the models"><span class="mp-sort-ic" aria-hidden="true">⇅</span>${esc(sortName)} <span aria-hidden="true">▾</span></button>`
+      + `<div class="mp-prov-pop mp-sort-pop" role="listbox" aria-label="Sort by" hidden>${SORTS.map(([k, l]) => `<button type="button" role="option" class="mp-sort-opt ${PK.sort === k ? 'on' : ''}" aria-selected="${PK.sort === k}" data-sort="${k}"><span>${l}</span>${PK.sort === k ? '<b aria-hidden="true">✓</b>' : ''}</button>`).join('')}</div></div>`;
+    const sbtn = $('#pkSort .mp-sort-btn'), spop = $('#pkSort .mp-sort-pop');
+    sbtn.onclick = () => { spop.hidden = !spop.hidden; sbtn.setAttribute('aria-expanded', String(!spop.hidden)); if (!spop.hidden) $('.mp-sort-opt.on', spop)?.focus(); };
+    for (const b of spop.querySelectorAll('.mp-sort-opt')) b.onclick = () => { PK.sort = b.dataset.sort; (G.pickerSort ??= {})[PK.kind] = PK.sort; savePrefs(); PK.sel = 0; drawPicker(true); $('#pkSort .mp-sort-btn')?.focus(); };
   }
   // First where the model runs (one segment per source the list has, with counts), then filters for that source only.
   const srcs = [...new Set(all.map(sourceKey))];
@@ -2151,8 +2158,8 @@ function drawPicker(full = false) {
   const sb = $('#pkSource'); if (sb) { sb.innerHTML = srcBar; sb.hidden = !srcBar; }
   $('#pkFilters').innerHTML = (sb ? '' : srcBar) + `<div class="mp-filter-row">`
     + (sub ? popBtn('mp-sub-btn', '🔌', PK.subs, `${sub.label}: ${sub.all}`, 'provider') : '')
-    + usable.map(([k, l, f]) => `<button type="button" class="mp-chip ${PK.filters.has(k) ? 'on' : ''}" data-f="${k}" aria-pressed="${PK.filters.has(k)}">${l} <small>${scoped.filter(f).length}</small></button>`).join('')
-    + popBtn('mp-prov-btn', '🏢', PK.providers, 'All makers', 'maker')
+    + usable.map(([k, l, f, g, tip], i) => `${i && usable[i - 1][3] !== g ? '<span class="mp-fsep" aria-hidden="true"></span>' : ''}<button type="button" class="mp-chip ${PK.filters.has(k) ? 'on' : ''}" data-f="${k}" aria-pressed="${PK.filters.has(k)}"${tip ? ` title="${esc(tip)}"` : ''}>${l} <small>${scoped.filter(f).length}</small></button>`).join('')
+    + (usable.length ? '<span class="mp-fsep" aria-hidden="true"></span>' : '') + popBtn('mp-prov-btn', '🏢', PK.providers, 'All makers', 'maker')
     + (PK.filters.size || PK.providers.size || PK.subs.size ? '<button type="button" class="mp-link mp-clear">Clear filters</button>' : '') + '</div>';
   for (const b of document.querySelectorAll('#pkFilters .mp-chip[data-f]')) b.onclick = () => { PK.filters.has(b.dataset.f) ? PK.filters.delete(b.dataset.f) : PK.filters.add(b.dataset.f); PK.sel = 0; drawPicker(); };
   // A new source starts with its own filters clear.
@@ -2198,8 +2205,9 @@ function drawList() {
   const RANK = { g: 0, y: 1, r: 2 };
   const by = { best: (a, b) => RANK[rateModel(a, PK.kind)?.r ?? 'y'] - RANK[rateModel(b, PK.kind)?.r ?? 'y'] || priceNum(a) - priceNum(b), cheap: (a, b) => priceNum(a) - priceNum(b), pricey: (a, b) => priceNum(b) - priceNum(a), new: (a, b) => (b.created || 0) - (a.created || 0), old: (a, b) => (a.created || 0) - (b.created || 0), name: (a, b) => cleanName(a).localeCompare(cleanName(b)), ctx: (a, b) => (b.ctx || 0) - (a.ctx || 0) }[PK.sort];
   list.sort((a, b) => by(a, b) || cleanName(a).localeCompare(cleanName(b)));
-  // Favourites and recent ones first when nothing narrows the list.
-  const plain = !q && !PK.filters.size && !PK.providers.size && !PK.subs.size;
+  // Favourites and recent ones first when nothing narrows the list and the sort is Recommended. Another sort you
+  // chose orders the whole list (★ Favourites is still a filter): pinned on top, they hid that the sort had worked.
+  const plain = !q && !PK.filters.size && !PK.providers.size && !PK.subs.size && PK.sort === 'best';
   const here = inSource;
   const favs = plain ? (G.favModels?.[PK.kind] || []).map((id) => all.find((m) => m.id === id)).filter((m) => m && here(m)) : [];
   const recent = plain ? (G.recentModels?.[PK.kind] || []).filter((id) => !favs.some((f) => f.id === id)).map((id) => all.find((m) => m.id === id)).filter((m) => m && here(m)).slice(0, 5) : [];
@@ -2325,7 +2333,9 @@ function wirePicker() {
   };
   $('#pkClose').onclick = () => PK.done?.(null);
   $('#pkRefresh').onclick = async () => { const b = $('#pkRefresh'); b.disabled = true; b.textContent = '↻ Refreshing…'; await loadModels(true); b.disabled = false; b.textContent = '↻ Refresh'; };
-  document.addEventListener('pointerdown', (e) => { const pop = $('#pkFilters .mp-prov-pop'); if (pop && !pop.hidden && !e.target.closest('.mp-prov-wrap')) pop.hidden = true; }, true);
+  document.addEventListener('pointerdown', (e) => {
+    for (const pop of document.querySelectorAll('#picker .mp-prov-pop')) if (!pop.hidden && !pop.parentElement.contains(e.target)) { pop.hidden = true; pop.previousElementSibling?.setAttribute('aria-expanded', 'false'); }
+  }, true);
 }
 
 // The model lists come from OpenRouter (public; no key needed). States: loading, ready, error.
@@ -2673,11 +2683,36 @@ function renderArchive(all = G.chats) {
     const chats = all.filter((c) => (c.projectId || 'scratch') === p.id && c.messages > 0).sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0));
     const hits = q ? chats.filter((c) => c.title.toLowerCase().includes(q) || String(c.preview || '').toLowerCase().includes(q)) : [];
     if (q && !p.name.toLowerCase().includes(q) && !hits.length) return '';
-    return `<div class="sb-arch-item" style="${projStyle(p)}"><div class="sb-arch-row"><b class="sb-arch-name">${esc(p.name)}</b><small>${chats.length} chat${chats.length === 1 ? '' : 's'} · <span class="cost">$${(p.spent || 0).toFixed(3)}</span></small><button type="button" class="ghost sb-unarch" data-p="${esc(p.id)}" title="Unarchive: back in the list above" aria-label="Unarchive ${esc(p.name)}"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9M12 18v-6M9.5 14.5 12 12l2.5 2.5"/></svg></button></div>
-      ${hits.slice(0, 6).map((c) => `<button type="button" class="sb-arch-chat" data-c="${esc(c.id)}" title="${esc(c.title)}">${esc(c.title)}<small>${ago(c.lastAt || c.updated || Date.now())}</small></button>`).join('')}</div>`;
+    // Like a project in the list above: a click opens its chats (a search shows the ones that match), right-click or
+    // the menu key for its actions. The name gets the room; the count and the cost give way in a narrow sidebar.
+    const open = !q && G.archOpen?.has(p.id), shown = q ? hits.slice(0, 6) : open ? chats.slice(0, 30) : [];
+    return `<div class="sb-arch-item" style="${projStyle(p)}" data-p="${esc(p.id)}"><div class="sb-arch-row" role="button" tabindex="0" aria-expanded="${!!open}" title="${esc(p.name)} · click for its chats, right-click for more"><svg class="sb-arch-fold" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg><b class="sb-arch-name">${esc(p.name)}</b><small class="sb-arch-meta"><span class="sb-arch-cnt">${chats.length} chat${chats.length === 1 ? '' : 's'}</span><span class="sb-arch-dot"> · </span><span class="cost">$${(p.spent || 0).toFixed(3)}</span></small><button type="button" class="ghost sb-unarch" data-p="${esc(p.id)}" title="Unarchive: back in the list above" aria-label="Unarchive ${esc(p.name)}"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9M12 18v-6M9.5 14.5 12 12l2.5 2.5"/></svg></button></div>
+      ${shown.map((c) => `<button type="button" class="sb-arch-chat" data-c="${esc(c.id)}" title="${esc(c.title)}"><span class="sb-arch-ct">${esc(c.title)}</span><small>${ago(c.lastAt || c.updated || Date.now())}</small></button>`).join('')}${open && !chats.length ? '<div class="sb-arch-none">No chats</div>' : ''}${open && chats.length > 30 ? `<div class="sb-arch-none">+${chats.length - 30} more: search to find one</div>` : ''}</div>`;
   }).join('') || '<div class="sb-empty">Nothing archived matches</div>';
-  for (const b of box.querySelectorAll('.sb-unarch')) b.onclick = () => setProjectFlag(G.projects.find((p) => p.id === b.dataset.p), { archived: false });
+  for (const b of box.querySelectorAll('.sb-unarch')) b.onclick = (e) => { e.stopPropagation(); setProjectFlag(G.projects.find((p) => p.id === b.dataset.p), { archived: false }); };
   for (const b of box.querySelectorAll('.sb-arch-chat')) b.onclick = () => { showChat(b.dataset.c, G.focus); closeDrawer(); if (isPhone()) setMView('chat'); };
+  for (const row of box.querySelectorAll('.sb-arch-row')) {
+    const p = G.projects.find((x) => x.id === row.closest('.sb-arch-item').dataset.p);
+    const fold = () => { const s = (G.archOpen ||= new Set()); s.has(p.id) ? s.delete(p.id) : s.add(p.id); renderArchive(all); $(`#archiveList .sb-arch-item[data-p="${CSS.escape(p.id)}"] .sb-arch-row`)?.focus(); };
+    row.onclick = fold;
+    row.oncontextmenu = (e) => archivedMenu(e, p);
+    row.onkeydown = (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fold(); }
+      if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) archivedMenu(e, p);
+    };
+  }
+}
+// Right-click an archived project (or the menu key / Shift+F10 on it): bring it back, or work with it where it is.
+function archivedMenu(e, p) {
+  if (!p) return;
+  popMenu(e, [
+    ['📤 Unarchive', () => setProjectFlag(p, { archived: false }), { title: 'Back in the list above' }],
+    ['＋ New chat (unarchives it)', async () => { await setProjectFlag(p, { archived: false }); newChat(p.id); }],
+    ['⚙ Project settings…', () => openProjectSettings(p)],
+    p.missing ? ['⚠ Reselect the folder…', () => editProject(p, { reselect: true })] : ['📂 Open folder in File Explorer', () => openFolder(p.id)],
+    null,
+    ['🗑 Delete project…', () => deleteProject(p), { danger: true }],
+  ]);
 }
 (() => {
   const head = document.getElementById('archiveHead'), find = document.getElementById('archiveSearch');
@@ -3298,6 +3333,7 @@ function keepAtBottom(c, msgs, root) {
   const toEnd = () => { if (!c.follow) return; msgs.scrollTop = msgs.scrollHeight; jump.hidden = true; };
   c.toEnd = toEnd;
   followScroll(msgs, { get: () => c.follow, set: (v) => { c.follow = v; }, near: 80, onChange: (v) => { jump.hidden = v; } });
+  edgeGlow(msgs);
   jump.onclick = () => { c.follow = true; toEnd(); };
   if ('ResizeObserver' in window) {
     const ro = new ResizeObserver(() => toEnd());
@@ -3325,6 +3361,29 @@ function followScroll(box, { get, set, near = 60, onChange }) {
   }, { passive: true });
   // pictures that finish loading later
   box.addEventListener('load', (e) => { if (e.target.tagName === 'IMG' && get()) box.scrollTop = box.scrollHeight; }, true);
+}
+// The chat's start and end glow green (chatflow.css) while you are at them, and the glow stretches when you scroll
+// on past them, then eases back: at-start / at-end classes, and --pull-t / --pull-b (0–1) for how far you pulled.
+function edgeGlow(box) {
+  const ends = () => {
+    const room = box.scrollHeight - box.clientHeight;
+    box.classList.toggle('at-start', box.scrollTop <= 1);
+    box.classList.toggle('at-end', room - box.scrollTop <= 1);
+  };
+  let pull = { t: 0, b: 0 }, rest = 0;
+  const show = () => { box.style.setProperty('--pull-t', pull.t.toFixed(3)); box.style.setProperty('--pull-b', pull.b.toFixed(3)); };
+  box.addEventListener('scroll', ends, { passive: true });
+  box.addEventListener('wheel', (e) => {
+    ends();
+    const up = e.deltaY < 0, k = up ? 't' : 'b';
+    if (!box.classList.contains(up ? 'at-start' : 'at-end')) return;
+    pull[k] = Math.min(1, pull[k] + Math.min(80, Math.abs(e.deltaY)) / 400);
+    show();
+    clearTimeout(rest);
+    rest = setTimeout(() => { pull = { t: 0, b: 0 }; show(); }, 160);
+  }, { passive: true });
+  if ('ResizeObserver' in window) new ResizeObserver(ends).observe(box);
+  ends();
 }
 // ---------- the chat panes ----------
 // A chat's pane: header, messages and message box. The home page's start box uses the same one for a draft chat.
@@ -4752,7 +4811,21 @@ function setParts(box, parts) {
 // Open lines stay open across redraws; a thinking line draws its text only when opened.
 // A finished reply's folded work, kept off the page (and out of the saved chat) until it is opened: reply → { key: html }.
 const LAZY = new WeakMap();
+// Each step's time is a line of its own above it (chatflow.css). Within one list of steps, a time the line before
+// already showed (the same minute, or the same "5m ago") is hidden, so a busy minute doesn't repeat it.
+function quietRepeatTimes(el) {
+  for (const list of new Set([...el.querySelectorAll('.tl-at')].map((x) => x.parentElement))) {
+    let last = '';
+    for (const at of list.children) {
+      if (!at.classList.contains('tl-at')) continue;
+      const t = at.querySelector(':scope > .tl-t')?.textContent || '';
+      at.classList.toggle('tl-same', !!t && t === last);
+      last = t;
+    }
+  }
+}
 function wireTimeline(m, el, roots = [...el.querySelectorAll('.timeline')]) {
+  quietRepeatTimes(el);
   const open = (m.tlOpen instanceof Set ? m.tlOpen : (m.tlOpen = new Set())); // chats saved before carry it as {}
   for (const d of roots.flatMap((r) => [...r.querySelectorAll('details[data-key]')])) {
     if (d._wired) continue;
@@ -4976,14 +5049,15 @@ function updateMsg(c, m, { bodyOnly = false } = {}) {
     : s ? `<span class="f-cost" title="What the reply cost">${money(s.cost, 5)}</span>${planTag(s.planCost)}${s.ms ? `<span class="f-dur" title="How long the reply took">${secs(s.ms)}</span>` : ''}${checkTag}${stopTag}` : '';
   // A reply you stopped says so in one small tag down here, not in a box above.
   if (stoppedByYou(m) && !m.live) $('.foot', el).insertAdjacentHTML('afterbegin', '<span class="f-stopped" title="You stopped this reply">■ Stopped</span>');
-  // Right side: 🧭 Steps (hover: what it cost; click: the steps, ending with the cost card), then copy and remix.
+  // Right side, always in this order: ⏰ repeat on a schedule, remix, read in the side pane (long answers), copy the
+  // Markdown, and last 🧭 Steps (hover: what it cost; click: the steps, ending with the cost card).
   const right = document.createElement('span'); right.className = 'f-right';
   $('.f-pop', tb)?.remove(); tb.classList.toggle('has-info', !!s);
   if (s) { const t = document.createElement('template'); t.innerHTML = replyInfoHTML(s, when); const pop = $('.f-pop', t.content); if (pop) tb.append(pop); }
   right.append(tb);
   $('.foot', el).append(right);
   if (s && !m.live && !m.runActive) {
-    right.insertAdjacentHTML('beforeend', `<span class="msg-tools">${bodyText(m).length > 600 ? `<button type="button" class="mt-btn mt-pane" data-open-pane="reply" data-run="${esc(m.runId || '')}" data-ref="" title="Read this answer in the side pane" aria-label="Read in the side pane">⧉</button>` : ''}<button type="button" class="mt-btn mt-copy" title="Copy this reply (Markdown)" aria-label="Copy reply">${msgIcon('copy')}</button><button type="button" class="mt-btn mt-remix" title="Remix: a new chat in this project with the conversation up to here. Files are not touched." aria-label="Remix in a new chat">${msgIcon('branch')}</button>${m.error ? '' : '<button type="button" class="mt-btn mt-repeat" title="⏰ Repeat this: a schedule that asks for this again at set times. Its runs post in this chat." aria-label="Repeat this on a schedule">⏰</button>'}</span>`);
+    right.insertAdjacentHTML('afterbegin', `<span class="msg-tools">${m.error ? '' : '<button type="button" class="mt-btn mt-repeat" title="⏰ Repeat this: a schedule that asks for this again at set times. Its runs post in this chat." aria-label="Repeat this on a schedule">⏰</button>'}<button type="button" class="mt-btn mt-remix" title="Remix: a new chat in this project with the conversation up to here. Files are not touched." aria-label="Remix in a new chat">${msgIcon('branch')}</button>${bodyText(m).length > 600 ? `<button type="button" class="mt-btn mt-pane" data-open-pane="reply" data-run="${esc(m.runId || '')}" data-ref="" title="Read this answer in the side pane" aria-label="Read in the side pane"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M14 4v16M16.5 9h2M16.5 12.5h2"/></svg></button>` : ''}<button type="button" class="mt-btn mt-copy" title="Copy this reply (Markdown)" aria-label="Copy reply">${msgIcon('copy')}</button></span>`);
     wireIconCopy($('.foot .mt-copy', el), () => m.content);
     $('.foot .mt-remix', el).onclick = () => remixFrom(c, m);
     const rep = $('.foot .mt-repeat', el); if (rep) rep.onclick = () => repeatReply(c, m);
@@ -5112,7 +5186,7 @@ function replyInfoHTML(s, when) {
   return `<span class="f-info mt-btn" tabindex="0" role="button" aria-label="Reply details"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.3a2.5 2.5 0 0 1 4.8.9c0 1.7-2.4 2.2-2.4 3.6"/><circle cx="12" cy="17.2" r=".6" fill="currentColor"/></svg><span class="f-pop" role="tooltip">
     <span class="fi-total"><span>Total cost${s.partial ? ' <i>so far: the reply ended early</i>' : ''}</span><b>${money(s.cost, 5)}</b></span>
     ${when ? row('When', esc(new Date(when).toLocaleString())) : ''}
-    ${planTotal(s.planCost) ? row('Sub value', `≈ ${money(s.planCost, 4)} <i>at list price, covered by your subscription</i>`) : ''}
+    ${planTotal(s.planCost) ? row('Sub value', `≈ ${money(s.planCost, 4)}<small>at list price, covered by your subscription</small>`) : ''}
     ${row('Took', secs(s.ms))}
     ${row('Model calls', callsLine(s))}
     ${s.tokensIn || s.tokensOut ? `<span class="fi-row tok-in"><span><i class="tok-dot"></i>Tokens in</span><b>${k(s.tokensIn)}</b></span><span class="fi-row tok-out"><span><i class="tok-dot"></i>Tokens out</span><b>${k(s.tokensOut)}</b></span>` : ''}

@@ -177,3 +177,22 @@ dialog.mp-dialog::backdrop { background: rgba(4, 6, 6, .72); backdrop-filter: bl
 /* A maker's own API (server/directapi.js), where it has no logo here: its short name as a quiet outlined tag. */
 .src-tag { display: inline-block; flex: none; padding: 0 5px; border: 1px solid currentColor; border-radius: 4px; font: 700 9.5px var(--font-ui); letter-spacing: .03em; line-height: 14px; vertical-align: 1px; opacity: .8; cursor: help; white-space: nowrap; }
 .mp-src-seg .st-seg-btn .src-tag { cursor: inherit; }
+
+/* ---- the sort: one control beside the search (the same height), a short list when opened ---- */
+.mp-tools { align-items: center; }
+#pkSort.mp-sorts { padding: 0; background: none; border: 0; flex: none; }
+.mp-sort-btn { height: 36px; padding: 0 12px; border-radius: 8px; gap: 6px; color: var(--text); background: var(--surface-inset, var(--bg)); border-color: var(--border-inset, var(--line)); }
+.mp-sort-btn[aria-expanded="true"] { border-color: var(--accent); }
+.mp-sort-ic { color: var(--dim); font-size: 13px; }
+.mp-sort-pop { left: auto; right: 0; width: 200px; padding: 4px; gap: 1px; }
+.mp-sort-opt { display: flex; align-items: center; justify-content: space-between !important; width: 100%; height: 30px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: var(--text); font: 500 12.5px var(--font-ui); text-align: left; cursor: pointer; }
+.mp-sort-opt:hover, .mp-sort-opt:focus-visible { background: var(--panel-2); outline: none; }
+.mp-sort-opt.on { color: var(--accent); }
+.mp-sort-opt b { font-weight: 700; }
+
+/* ---- filters: one aligned row, grouped (price · abilities · the rest · makers) with thin lines between ---- */
+#pkFilters .mp-filter-row { gap: 6px; row-gap: 8px; }
+.mp-fsep { width: 1px; height: 16px; background: var(--line); margin: 0 4px; flex: none; }
+#pkFilters .mp-chip { height: 28px; }
+#pkFilters .mp-clear { margin-left: auto; }
+.mp-head { padding-bottom: 6px; }
