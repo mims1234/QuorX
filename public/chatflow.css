@@ -3,14 +3,14 @@
    replies. What the agent says stays where it said it; its tool work folds into lines; the files it makes show under
    the step that made them; cards are short and open for more. Loaded last, so it wins over the older layers. */
 
-/* ---- no bubbles: who is speaking is a glowing edge that fades into the chat ----
-   You: on the right, your colour (the accent) glowing from the right edge leftward. The agent: on the left, its colour
-   (violet, like its model name) glowing from the left edge rightward. The agent's edge turns green while it works,
-   amber while it waits for you, red when it stopped on an error. */
-html:root body .msgs .msg.user { --who: var(--accent); background: linear-gradient(to left, color-mix(in srgb, var(--who) 16%, transparent), color-mix(in srgb, var(--who) 5%, transparent) 55%, transparent) !important;
+/* ---- no bubbles: every message is a full-width row, its text from the same left edge; who speaks is its colour ----
+   You: a teal tint across the whole row, strongest at its right edge, with a teal line there. The agent: violet (like
+   its model name) glowing from its left edge rightward; that edge turns green while it works, amber while it waits for
+   you, red when it stopped on an error. */
+html:root body .msgs .msg.user { --who: var(--accent); background: linear-gradient(to left, color-mix(in srgb, var(--who) 18%, transparent), color-mix(in srgb, var(--who) 7%, transparent) 45%, color-mix(in srgb, var(--who) 4%, transparent)) !important;
   border: 0 !important; border-right: 2px solid color-mix(in srgb, var(--who) 75%, transparent) !important; border-radius: 0 !important; box-shadow: none !important;
-  max-width: min(78%, 720px) !important; min-width: min(46%, 320px) !important; width: fit-content !important;
-  margin-left: auto !important; margin-right: 12px !important; align-self: flex-end !important; padding: 8px 14px 6px 28px !important; text-align: left; }
+  max-width: none !important; min-width: 0 !important; width: auto !important;
+  margin-left: 0 !important; margin-right: 0 !important; align-self: stretch !important; padding: 10px 14px 6px 46px !important; text-align: left; }
 html:root body .msgs .msg.user::before { display: none !important; }
 html:root body .msgs .msg.user .utext { font-size: var(--msg-size, 14px); }
 html:root body .msgs .msg.user .u-foot { justify-content: flex-end; }
@@ -25,16 +25,16 @@ html:root body .msgs .msg.bot.is-error { --who: var(--bad); }
 html:root body .msgs .msg.bot::before { left: 10px !important; top: 8px !important; width: 24px !important; height: 24px !important; border-radius: 6px !important; font-size: 9px !important; }
 @media (max-width: 600px) {
   html:root body .msgs .msg.bot { padding-left: 38px !important; }
+  html:root body .msgs .msg.user { padding-left: 40px !important; }
   html:root body .msgs .msg.bot::before { left: 6px !important; }
-  html:root body .msgs .msg.user { max-width: 88% !important; }
 }
 
 /* ---- what the agent said between steps: a message, never folded ---- */
 .msg .timeline .tl-say { margin: 8px 0 6px; }
 
-/* ---- what you wrote while it worked: on the right too, where you wrote it ---- */
-.steer-card.tl-you { margin: 8px 0 6px auto; width: fit-content; max-width: min(78%, 640px); min-width: min(46%, 280px); padding: 7px 12px 7px 24px; border-radius: 0;
-  background: linear-gradient(to left, color-mix(in srgb, var(--accent) 16%, transparent), color-mix(in srgb, var(--accent) 5%, transparent) 55%, transparent);
+/* ---- what you wrote while it worked: your colour too, a full-width line where you wrote it ---- */
+.steer-card.tl-you { margin: 8px 0 6px; width: auto; max-width: none; padding: 7px 12px; border-radius: 0;
+  background: linear-gradient(to left, color-mix(in srgb, var(--accent) 18%, transparent), color-mix(in srgb, var(--accent) 7%, transparent) 45%, color-mix(in srgb, var(--accent) 4%, transparent));
   border: 0; border-right: 2px solid color-mix(in srgb, var(--accent) 75%, transparent); text-align: left; }
 .steer-card.tl-you .sc-who { display: none; }
 .steer-card.tl-you p { margin: 0; }
