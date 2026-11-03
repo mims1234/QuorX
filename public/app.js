@@ -4811,7 +4811,21 @@ function setParts(box, parts) {
 // Open lines stay open across redraws; a thinking line draws its text only when opened.
 // A finished reply's folded work, kept off the page (and out of the saved chat) until it is opened: reply → { key: html }.
 const LAZY = new WeakMap();
+// Each step's time is a line of its own above it (chatflow.css). Within one list of steps, a time the line before
+// already showed (the same minute, or the same "5m ago") is hidden, so a busy minute doesn't repeat it.
+function quietRepeatTimes(el) {
+  for (const list of new Set([...el.querySelectorAll('.tl-at')].map((x) => x.parentElement))) {
+    let last = '';
+    for (const at of list.children) {
+      if (!at.classList.contains('tl-at')) continue;
+      const t = at.querySelector(':scope > .tl-t')?.textContent || '';
+      at.classList.toggle('tl-same', !!t && t === last);
+      last = t;
+    }
+  }
+}
 function wireTimeline(m, el, roots = [...el.querySelectorAll('.timeline')]) {
+  quietRepeatTimes(el);
   const open = (m.tlOpen instanceof Set ? m.tlOpen : (m.tlOpen = new Set())); // chats saved before carry it as {}
   for (const d of roots.flatMap((r) => [...r.querySelectorAll('details[data-key]')])) {
     if (d._wired) continue;

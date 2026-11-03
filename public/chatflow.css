@@ -206,3 +206,10 @@ html:root body .msgs .msg.user .u-foot > time { color: color-mix(in srgb, var(--
 /* A reply's cost card: a value too long for its line wraps inside the card instead of running out of it. */
 .f-pop-float .fi-row > b { white-space: normal; }
 .f-pop-float .fi-row b small { color: var(--dim); }
+
+/* ---- each step's time on its own small line above it: the content keeps the full width (width matters more
+   than height). This was a 58px column of times down the left of every line. ---- */
+html:root body .msg .tl-at, html:root body .msg .tl-row > .tl-at { grid-template-columns: minmax(0, 1fr) !important; gap: 1px; }
+html:root body .msg .tl-at > .tl-t { text-align: left; padding-top: 0; line-height: 1.3; }
+/* A time the step before already showed (same minute) isn't repeated (quietRepeatTimes in app.js). */
+html:root body .msg .tl-at.tl-same > .tl-t { display: none; }
