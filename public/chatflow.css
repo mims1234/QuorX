@@ -3,22 +3,26 @@
    replies. What the agent says stays where it said it; its tool work folds into lines; the files it makes show under
    the step that made them; cards are short and open for more. Loaded last, so it wins over the older layers. */
 
-/* ---- you: on the right, a quiet bubble (no avatar); the agent's lines are on the left ---- */
-html:root body .msgs .msg.user { background: color-mix(in srgb, var(--accent) 10%, var(--panel)) !important; border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent) !important;
-  border-radius: 14px 14px 4px 14px !important; box-shadow: none !important; max-width: min(78%, 720px) !important; width: fit-content !important;
-  margin-left: auto !important; margin-right: 12px !important; align-self: flex-end !important; padding: 8px 14px 6px !important; }
+/* ---- no bubbles: who is speaking is a glowing edge that fades into the chat ----
+   You: on the right, your colour (the accent) glowing from the right edge leftward. The agent: on the left, its colour
+   (violet, like its model name) glowing from the left edge rightward. The agent's edge turns green while it works,
+   amber while it waits for you, red when it stopped on an error. */
+html:root body .msgs .msg.user { --who: var(--accent); background: linear-gradient(to left, color-mix(in srgb, var(--who) 16%, transparent), color-mix(in srgb, var(--who) 5%, transparent) 55%, transparent) !important;
+  border: 0 !important; border-right: 2px solid color-mix(in srgb, var(--who) 75%, transparent) !important; border-radius: 0 !important; box-shadow: none !important;
+  max-width: min(78%, 720px) !important; min-width: min(46%, 320px) !important; width: fit-content !important;
+  margin-left: auto !important; margin-right: 12px !important; align-self: flex-end !important; padding: 8px 14px 6px 28px !important; text-align: right; }
 html:root body .msgs .msg.user::before { display: none !important; }
 html:root body .msgs .msg.user .utext { font-size: var(--msg-size, 14px); }
 html:root body .msgs .msg.user .u-foot { justify-content: flex-end; }
 html:root body .msgs .msg.user time { text-align: right; }
 
-/* ---- the agent: a plain line too; its state is a thin edge, not a card ---- */
-html:root body .msgs .msg.bot { background: transparent !important; border: 0 !important; border-left: 2px solid transparent !important; border-radius: 0 !important;
+html:root body .msgs .msg.bot { --who: var(--violet, #a78bfa); background: linear-gradient(to right, color-mix(in srgb, var(--who) 9%, transparent), color-mix(in srgb, var(--who) 3%, transparent) 30%, transparent 60%) !important;
+  border: 0 !important; border-left: 2px solid color-mix(in srgb, var(--who) 60%, transparent) !important; border-radius: 0 !important;
   box-shadow: none !important; padding: 6px 12px 6px 44px !important; }
+html:root body .msgs .msg.bot.is-live { --who: var(--ok); }
+html:root body .msgs .msg.bot.is-waiting { --who: var(--amber, #f59e0b); }
+html:root body .msgs .msg.bot.is-error { --who: var(--bad); }
 html:root body .msgs .msg.bot::before { left: 10px !important; top: 8px !important; width: 24px !important; height: 24px !important; border-radius: 6px !important; font-size: 9px !important; }
-html:root body .msgs .msg.bot.is-live { border-left-color: color-mix(in srgb, var(--ok) 55%, transparent) !important; box-shadow: none !important; }
-html:root body .msgs .msg.bot.is-waiting { border-left-color: var(--amber, #f59e0b) !important; box-shadow: none !important; }
-html:root body .msgs .msg.bot.is-error { border-left-color: var(--bad) !important; }
 @media (max-width: 600px) {
   html:root body .msgs .msg.bot { padding-left: 38px !important; }
   html:root body .msgs .msg.bot::before { left: 6px !important; }
@@ -29,8 +33,9 @@ html:root body .msgs .msg.bot.is-error { border-left-color: var(--bad) !importan
 .msg .timeline .tl-say { margin: 8px 0 6px; }
 
 /* ---- what you wrote while it worked: on the right too, where you wrote it ---- */
-.steer-card.tl-you { margin: 8px 0 6px auto; width: fit-content; max-width: min(78%, 640px); padding: 7px 12px; border-radius: 14px 14px 4px 14px;
-  background: color-mix(in srgb, var(--accent) 10%, var(--panel)); border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent); text-align: left; }
+.steer-card.tl-you { margin: 8px 0 6px auto; width: fit-content; max-width: min(78%, 640px); min-width: min(46%, 280px); padding: 7px 12px 7px 24px; border-radius: 0;
+  background: linear-gradient(to left, color-mix(in srgb, var(--accent) 16%, transparent), color-mix(in srgb, var(--accent) 5%, transparent) 55%, transparent);
+  border: 0; border-right: 2px solid color-mix(in srgb, var(--accent) 75%, transparent); text-align: right; }
 .steer-card.tl-you .sc-who { display: none; }
 .steer-card.tl-you p { margin: 0; }
 .steer-card.tl-you .sc-state { display: block; text-align: right; font: 400 11px var(--font-ui); }
@@ -115,3 +120,18 @@ html:root body .msgs .msg.bot.is-error { border-left-color: var(--bad) !importan
 #paneBody > .pane-card > .pane-reply { max-width: 760px; font-size: 14px; line-height: 1.6; }
 #paneBody > .pane-card .review-slot { margin: 0; }
 .pane-tool > #appBar > .pf-split { order: 3; margin-left: 4px; }
+
+/* A reply's parts sit 12px apart (the flex gap). Empty parts (no plan, no cards) take no room, and the margins that
+   stacked on that gap go, so a short answer isn't wrapped in air. */
+.msgs .msg.bot > .plan-slot:empty, .msgs .msg.bot > .approvals:empty { display: none; }
+.msgs .msg.bot > .reply-head { margin-bottom: 0; }
+.msgs .msg.bot > .ans-when { margin-top: 0; }
+.msgs .msg.bot > .body { padding-bottom: 2px; }
+.msgs .msg.bot > .foot { margin-top: 0; padding-top: 6px; }
+.msgs .msg.bot > .timeline { margin-bottom: 0; }
+.msgs .msg.bot > .msg-media, .msgs .msg.bot > .review-slot { margin-top: 2px; }
+.msgs .msg.bot > .f-undo-row { margin-top: 0; }
+/* "6h ago  Answer": one line from the reply's left edge, on one baseline (not the steps' right-aligned time column). */
+.msgs .msg.bot > .ans-when { display: flex; align-items: baseline; gap: 8px; font: 500 11px var(--mono); }
+.msgs .msg.bot > .ans-when > .tl-t { padding-top: 0; text-align: left; font-size: 11px; overflow: visible; }
+.msgs .msg.bot > .ans-when > span:last-child { color: var(--text-2, var(--muted)); }
