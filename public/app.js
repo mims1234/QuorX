@@ -11744,13 +11744,16 @@ function remixFrom(c, m) {
 
 // ---------- pages in the harness's browser (see server/userbrowser.js) ----------
 const sameSite = (u) => { try { const x = new URL(u); return x.origin === location.origin || /^(localhost|127\.0\.0\.1|\[::1\])$/.test(x.hostname); } catch { return false; } };
-// 💬 Comment mode: a live picture of the page (the tab's own one, or a copy of its page for frames and real tabs).
-// A click shows what is under it; a note turns it into a chip for the next message.
+// 💬 Comment mode: a live picture of the page (the tab's own one, or a copy of its page for frames).
+// In the desktop app your own tab is used as it is (real): a copy would load the page again without your sign-ins,
+// and sites with bot checks (search engines) answered that copy with a captcha. A click shows what is under it; a note
+// turns it into a chip for the next message.
 async function commentStage(c, t, stage) {
-  const sid = t.agent || (!DESK && t.mode !== 'frame') ? t.sid : `cmt-${t.sid}`.slice(0, 60);
+  const real = DESK && !t.agent && t.mode !== 'frame';
+  const sid = t.agent || real || (!DESK && t.mode !== 'frame') ? t.sid : `cmt-${t.sid}`.slice(0, 60);
   stage.innerHTML = `<div class="cmtview" tabindex="0"><img class="ub-shot" alt="The page to comment on"><div class="cmt-hl" hidden></div><div class="cmt-tip">💬 Click the part you want changed. Scroll to move around the page.</div><div class="cmt-pop" hidden></div></div>`;
   const v = $('.cmtview', stage), img = $('.ub-shot', v), hl = $('.cmt-hl', v), pop = $('.cmt-pop', v);
-  const size = () => { const r = stage.getBoundingClientRect(); return { w: Math.round(r.width), h: Math.round(r.height) }; };
+  const size = () => { const r = stage.getBoundingClientRect(); return { w: Math.round(r.width), h: Math.round(r.height), ...(real ? { real: true } : {}) }; };
   let view = { w: 1280, h: 800 };
   const show = (res) => { if (res?.shot) { img.src = res.shot; view = { w: res.w || view.w, h: res.h || view.h }; } };
   const first = await postJ('/api/ubrowser', { sid, op: sid === t.sid ? 'look' : 'open', url: t.url, ...size() });

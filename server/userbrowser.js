@@ -29,10 +29,19 @@ export function releaseAgentTab(chatId, tab) {
     if (tab.desktop) { desktopCall('tab.lock', { tab: tab.id, locked: false }).catch(() => {}); tab.clearViewport(); }
   } else if (!s || s.tab.id !== tab.id) tab.close();
 }
-async function session(sid, w, h) {
+// real: one of your own tabs in the desktop app, used as it is (💬 comment mode). A copy in the headless browser would
+// load the page again without your sign-ins, and sites with bot checks (search engines) answer that copy with a
+// captcha. Letting go only detaches from the tab; it never closes it, and a tab lent to the agent stays attached.
+async function realTab(sid) {
+  const tab = await openTab({ attachTab: sid });
+  const close = tab.close.bind(tab);
+  tab.close = async () => { await close(); if (![...given.values()].some((g) => g.sid === sid)) desktopCall('tab.detach', { tab: sid }).catch(() => {}); };
+  return tab;
+}
+async function session(sid, w, h, real = false) {
   let s = sessions.get(sid);
   if (!s && sid.startsWith('agent-')) return null; // only the agent opens its tab
-  if (!s) { s = { tab: await openTab({ own: true }), at: Date.now(), w: 1280, h: 800 }; sessions.set(sid, s); }
+  if (!s) { s = { tab: real ? await realTab(sid) : await openTab({ own: true }), at: Date.now(), w: 1280, h: 800, real }; sessions.set(sid, s); }
   s.at = Date.now();
   if (s.locked || s.tab.desktop) { s.w = s.tab.size?.width || s.w; s.h = s.tab.size?.height || s.h; return s; } // never resize under the agent, or a real tab the app sizes
   const nw = w ? clampSize(w, 360, 1600, 1280) : s.w, nh = h ? clampSize(h, 300, 1400, 800) : s.h;
@@ -48,8 +57,20 @@ async function state(s, peek = false) {
 /** One step: open a URL, click, scroll, type, press a key, go back/forward/reload, or just look again. */
 export async function userBrowse(sid, op, a = {}) {
   if (!/^[\w-]{6,60}$/.test(String(sid))) throw new Error('bad session');
-  const s = await session(sid, a.w, a.h);
+  const real = !!a.real;
+  // Your real tab is only looked at here (💬 comment mode): read, scroll and point, never click or type.
+  if (real && !['look', 'peek', 'scroll', 'inspect'].includes(op)) throw new Error('only looking and scrolling here');
+  const s = await session(sid, a.w, a.h, real);
   if (!s) return { none: true };
+  if (!s.real) return step(sid, s, op, a);
+  if (!['look', 'peek', 'scroll', 'inspect'].includes(op)) throw new Error('only looking and scrolling here');
+  // A real tab can be let go elsewhere (taken back from the agent detaches it): attach again once and retry.
+  try { return await step(sid, s, op, a); } catch {
+    sessions.delete(sid); s.tab.close().catch(() => {});
+    return step(sid, await session(sid, a.w, a.h, true), op, a);
+  }
+}
+async function step(sid, s, op, a) {
   if (s.locked && op !== 'look' && op !== 'peek' && op !== 'inspect') throw new Error('the agent is using this page right now: watch only until its reply ends');
   // 💬 Comment: what is under a point of the picture, and a cropped picture of it. Reads only; never clicks.
   if (op === 'inspect') {
