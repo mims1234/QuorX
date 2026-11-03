@@ -82,6 +82,9 @@ const PARTS = [
       const live = new Set(activeRuns().map((r) => r.runId)), dir = path.join(DATA, 'runs');
       return names(dir).filter((n) => !live.has(n.split('.')[0]) && Date.now() - mtime(path.join(dir, n)) > DAY).map((n) => path.join(dir, n));
     } },
+  { id: 'pixelfx', group: 'cache', label: 'Downloaded pixel effects', how: 'delete', safe: true,
+    help: 'Pixel art effects kept after a game first used them. A game that wants one again downloads it again.',
+    list: async () => names(path.join(DATA, 'cache', 'pixelfx')).map((n) => path.join(DATA, 'cache', 'pixelfx', n)) },
   { id: 'shots', group: 'logs', label: 'Check screenshots', how: 'delete', safe: true,
     help: 'Pictures the deciders looked at when checking pages. The newest ones are kept by themselves (Automatic cleanup).',
     list: async () => names(SHOT_DIR).map((n) => path.join(SHOT_DIR, n)) },

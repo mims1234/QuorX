@@ -3,10 +3,30 @@
 // design your own game and write it in the three hooks below (newGame, update, draw), or replace the file.
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
-const DPR = Math.min(2, devicePixelRatio || 1);
-let W = 0, H = 0; // size in CSS pixels; draw in these units
-function resize() { W = innerWidth; H = innerHeight; canvas.width = W * DPR; canvas.height = H * DPR; ctx.setTransform(DPR, 0, 0, DPR, 0, 0); }
+// The view's short side is always SHORT game units and the long side follows the window: a wide monitor sees more to
+// the sides, a phone held upright more above and below. Draw, spawn and bound everything from W and H.
+const SHORT = 540;
+let W = 960, H = 540, ZOOM = 1; // the view in game units, and CSS pixels per unit
+function resize() {
+  const dpr = Math.min(2, devicePixelRatio || 1);
+  ZOOM = Math.min(innerWidth, innerHeight) / SHORT; W = innerWidth / ZOOM; H = innerHeight / ZOOM;
+  canvas.width = Math.round(innerWidth * dpr); canvas.height = Math.round(innerHeight * dpr);
+  ctx.setTransform(ZOOM * dpr, 0, 0, ZOOM * dpr, 0, 0);
+}
 addEventListener('resize', resize); resize();
+
+// ---------- full screen: the ⛶ button and the F key ----------
+const fsButton = document.getElementById('fullscreen');
+function toggleFullscreen() {
+  const d = document, el = d.documentElement;
+  try {
+    if (d.fullscreenElement || d.webkitFullscreenElement) (d.exitFullscreen || d.webkitExitFullscreen).call(d);
+    else (el.requestFullscreen || el.webkitRequestFullscreen).call(el);
+  } catch { /* no full screen in this browser */ }
+}
+const fsLabel = () => { if (fsButton) fsButton.textContent = document.fullscreenElement || document.webkitFullscreenElement ? 'Exit full screen' : 'Full screen'; };
+fsButton?.addEventListener('click', toggleFullscreen);
+document.addEventListener('fullscreenchange', fsLabel); document.addEventListener('webkitfullscreenchange', fsLabel); fsLabel();
 
 // ---------- input ----------
 const keys = new Set();            // keys held down (lower case: 'a', 'arrowleft', ' ')
@@ -19,9 +39,10 @@ addEventListener('keydown', (e) => {
   if ([' ', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) e.preventDefault();
   if ((k === ' ' || k === 'enter') && state !== 'playing' && state !== 'paused') start();
   if (k === 'p' || k === 'escape') togglePause();
+  if (k === 'f') toggleFullscreen();
 });
 addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
-const at = (e) => { pointer.x = e.clientX; pointer.y = e.clientY; };
+const at = (e) => { pointer.x = e.clientX / ZOOM; pointer.y = e.clientY / ZOOM; }; // in game units
 canvas.addEventListener('pointerdown', (e) => { at(e); pointer.down = true; pointer.clicked = true; if (state === 'title' || state === 'over') start(); });
 addEventListener('pointermove', at);
 addEventListener('pointerup', () => { pointer.down = false; });
@@ -60,7 +81,7 @@ document.addEventListener('visibilitychange', () => { if (document.hidden && sta
 
 // ================= YOUR GAME: replace these three hooks =================
 const TITLE = 'Your game';
-const CONTROLS = 'Describe the controls here · Space or tap to start · P to pause';
+const CONTROLS = 'Describe the controls here · Space or tap to start · P to pause · F for full screen';
 function newGame() { return { score: 0 }; }               // the state of a fresh run
 function update(dt) { /* move things, handle input, score, call gameOver(game.score) */ }
 function draw() { /* draw the world for the current game */ }

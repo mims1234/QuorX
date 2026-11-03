@@ -6,11 +6,15 @@
   <title>Canvas game</title>
   <style>
     html, body { margin: 0; height: 100%; background: #0b0f0d; color: #e8eeea; font-family: system-ui, sans-serif; overflow: hidden; }
-    canvas { display: block; width: 100vw; height: 100vh; touch-action: none; }
+    html, body { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; overscroll-behavior: none; }
+    canvas { position: fixed; inset: 0; display: block; width: 100vw; height: 100vh; touch-action: none; }
+    #fullscreen { position: fixed; top: calc(12px + env(safe-area-inset-top)); right: calc(12px + env(safe-area-inset-right)); z-index: 2;
+      min-height: 44px; padding: 0 16px; border: 1px solid #2c3a33; border-radius: 10px; background: #121a16cc; color: #e8eeea; font: 600 14px system-ui, sans-serif; cursor: pointer; }
   </style>
   <script src="game.js" defer></script>
 </head>
 <body>
   <canvas id="game" aria-label="Game"></canvas>
+  <button id="fullscreen" type="button">Full screen</button>
 </body>
 </html>
