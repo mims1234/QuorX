@@ -3323,6 +3323,7 @@ function keepAtBottom(c, msgs, root) {
   const toEnd = () => { if (!c.follow) return; msgs.scrollTop = msgs.scrollHeight; jump.hidden = true; };
   c.toEnd = toEnd;
   followScroll(msgs, { get: () => c.follow, set: (v) => { c.follow = v; }, near: 80, onChange: (v) => { jump.hidden = v; } });
+  edgeGlow(msgs);
   jump.onclick = () => { c.follow = true; toEnd(); };
   if ('ResizeObserver' in window) {
     const ro = new ResizeObserver(() => toEnd());
@@ -3350,6 +3351,29 @@ function followScroll(box, { get, set, near = 60, onChange }) {
   }, { passive: true });
   // pictures that finish loading later
   box.addEventListener('load', (e) => { if (e.target.tagName === 'IMG' && get()) box.scrollTop = box.scrollHeight; }, true);
+}
+// The chat's start and end glow green (chatflow.css) while you are at them, and the glow stretches when you scroll
+// on past them, then eases back: at-start / at-end classes, and --pull-t / --pull-b (0–1) for how far you pulled.
+function edgeGlow(box) {
+  const ends = () => {
+    const room = box.scrollHeight - box.clientHeight;
+    box.classList.toggle('at-start', box.scrollTop <= 1);
+    box.classList.toggle('at-end', room - box.scrollTop <= 1);
+  };
+  let pull = { t: 0, b: 0 }, rest = 0;
+  const show = () => { box.style.setProperty('--pull-t', pull.t.toFixed(3)); box.style.setProperty('--pull-b', pull.b.toFixed(3)); };
+  box.addEventListener('scroll', ends, { passive: true });
+  box.addEventListener('wheel', (e) => {
+    ends();
+    const up = e.deltaY < 0, k = up ? 't' : 'b';
+    if (!box.classList.contains(up ? 'at-start' : 'at-end')) return;
+    pull[k] = Math.min(1, pull[k] + Math.min(80, Math.abs(e.deltaY)) / 400);
+    show();
+    clearTimeout(rest);
+    rest = setTimeout(() => { pull = { t: 0, b: 0 }; show(); }, 160);
+  }, { passive: true });
+  if ('ResizeObserver' in window) new ResizeObserver(ends).observe(box);
+  ends();
 }
 // ---------- the chat panes ----------
 // A chat's pane: header, messages and message box. The home page's start box uses the same one for a draft chat.
@@ -5001,14 +5025,15 @@ function updateMsg(c, m, { bodyOnly = false } = {}) {
     : s ? `<span class="f-cost" title="What the reply cost">${money(s.cost, 5)}</span>${planTag(s.planCost)}${s.ms ? `<span class="f-dur" title="How long the reply took">${secs(s.ms)}</span>` : ''}${checkTag}${stopTag}` : '';
   // A reply you stopped says so in one small tag down here, not in a box above.
   if (stoppedByYou(m) && !m.live) $('.foot', el).insertAdjacentHTML('afterbegin', '<span class="f-stopped" title="You stopped this reply">■ Stopped</span>');
-  // Right side: 🧭 Steps (hover: what it cost; click: the steps, ending with the cost card), then copy and remix.
+  // Right side, always in this order: ⏰ repeat on a schedule, remix, read in the side pane (long answers), copy the
+  // Markdown, and last 🧭 Steps (hover: what it cost; click: the steps, ending with the cost card).
   const right = document.createElement('span'); right.className = 'f-right';
   $('.f-pop', tb)?.remove(); tb.classList.toggle('has-info', !!s);
   if (s) { const t = document.createElement('template'); t.innerHTML = replyInfoHTML(s, when); const pop = $('.f-pop', t.content); if (pop) tb.append(pop); }
   right.append(tb);
   $('.foot', el).append(right);
   if (s && !m.live && !m.runActive) {
-    right.insertAdjacentHTML('beforeend', `<span class="msg-tools">${bodyText(m).length > 600 ? `<button type="button" class="mt-btn mt-pane" data-open-pane="reply" data-run="${esc(m.runId || '')}" data-ref="" title="Read this answer in the side pane" aria-label="Read in the side pane">⧉</button>` : ''}<button type="button" class="mt-btn mt-copy" title="Copy this reply (Markdown)" aria-label="Copy reply">${msgIcon('copy')}</button><button type="button" class="mt-btn mt-remix" title="Remix: a new chat in this project with the conversation up to here. Files are not touched." aria-label="Remix in a new chat">${msgIcon('branch')}</button>${m.error ? '' : '<button type="button" class="mt-btn mt-repeat" title="⏰ Repeat this: a schedule that asks for this again at set times. Its runs post in this chat." aria-label="Repeat this on a schedule">⏰</button>'}</span>`);
+    right.insertAdjacentHTML('afterbegin', `<span class="msg-tools">${m.error ? '' : '<button type="button" class="mt-btn mt-repeat" title="⏰ Repeat this: a schedule that asks for this again at set times. Its runs post in this chat." aria-label="Repeat this on a schedule">⏰</button>'}<button type="button" class="mt-btn mt-remix" title="Remix: a new chat in this project with the conversation up to here. Files are not touched." aria-label="Remix in a new chat">${msgIcon('branch')}</button>${bodyText(m).length > 600 ? `<button type="button" class="mt-btn mt-pane" data-open-pane="reply" data-run="${esc(m.runId || '')}" data-ref="" title="Read this answer in the side pane" aria-label="Read in the side pane"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M14 4v16M16.5 9h2M16.5 12.5h2"/></svg></button>` : ''}<button type="button" class="mt-btn mt-copy" title="Copy this reply (Markdown)" aria-label="Copy reply">${msgIcon('copy')}</button></span>`);
     wireIconCopy($('.foot .mt-copy', el), () => m.content);
     $('.foot .mt-remix', el).onclick = () => remixFrom(c, m);
     const rep = $('.foot .mt-repeat', el); if (rep) rep.onclick = () => repeatReply(c, m);
