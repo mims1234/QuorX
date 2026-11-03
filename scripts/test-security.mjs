@@ -13,7 +13,7 @@ import { privateAddress } from '../server/safefetch.js';
 import { startSignIn } from '../server/oauth.js';
 import { decide, agentWriteBlocked } from '../server/cmdpolicy.js';
 import { PassThrough } from 'node:stream';
-import { safePath, fullLocalPath, checkCommand,preApproved, searchFiles, childEnv, runLine, registerFolders } from '../server/workspace.js';
+import { safePath, fullLocalPath, isCommandLog, checkCommand,preApproved, searchFiles, childEnv, runLine, registerFolders } from '../server/workspace.js';
 import { mediaFile, serveMedia } from '../server/media.js';
 import { mediaKind, writtenMedia } from '../public/chat-media.js';
 import { renderMarkdown } from '../public/markdown.js';
@@ -36,6 +36,14 @@ test('/api refuses other sites and other origins on this computer; pages and sam
   assert.ok(!crossSiteApi(req({ site: 'same-origin' }), '/api/chats'));
   assert.ok(!crossSiteApi(req({}), '/api/chats'), 'no header: Node clients and old browsers');
   assert.ok(!crossSiteApi(req({ site: 'cross-site' }), '/ws/p1/index.html'), 'project files stay loadable by sandboxed pages');
+  assert.ok(crossSiteApi(req({ site: 'cross-site' }), '/api/command-log'), 'a page can\'t read command logs');
+});
+
+test('the side pane reads only the agent\'s command logs under .quorx', () => {
+  assert.ok(isCommandLog('.quorx/scratch/logs/rabc123-4.log'));
+  assert.ok(isCommandLog('.quorx/scratch/logs/rabc-emulator-2.log'));
+  for (const p of ['.quorx/settings.json', '.quorx/scratch/logs/../../.env', '.quorx/scratch/logs/a/b.log', '.quorx/scratch/notes.log', '.env', 'logs/x.log', '.quorx/scratch/logs/x.log.txt', '..\\.quorx\\scratch\\logs\\x.log', ''])
+    assert.ok(!isCommandLog(p), p || '(empty)');
 });
 
 test('only this computer may use QuorX: other devices are refused, with no way to pair', () => {

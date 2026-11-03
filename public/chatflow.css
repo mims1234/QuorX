@@ -93,3 +93,25 @@ html:root body .msgs .msg.bot.is-error { border-left-color: var(--bad) !importan
 .lb-nav .lb-folder { width: auto; height: 28px; padding: 0 10px; font: 12px var(--font-ui); }
 /* The large view's ✕ sits in the top-right corner: its file bar keeps clear of it. */
 .lb-doc .pv-head { padding-right: 46px; }
+
+/* A file opened from the chat in the Artifact tab: the Files tab's viewer, filling the pane. */
+#paneBody > .pane-file { height: 100%; min-height: 0; overflow: auto; }
+.pane-tool > #appBar > .pf-close { order: 3; margin-left: 4px; }
+/* A file card dragged over the side pane. */
+#pane.file-drop { outline: 2px dashed var(--accent); outline-offset: -4px; }
+.mm-head[draggable="true"], .mm-thumb[draggable="true"] { cursor: grab; }
+/* A reviewer card read in the side pane. */
+#paneBody > .pane-card { padding: 14px; }
+.rv-head .rv-pane { margin-left: auto; }
+
+/* ⧉ Open in pane: a small button on each piece of a reply (plan, changes, question, review, code review, output). */
+.to-pane { font-size: 11px; padding: 1px 7px; line-height: 18px; white-space: nowrap; }
+.pc-head .to-pane, .q-fold > summary .to-pane, .rv-card > summary .to-pane { margin-left: 6px; }
+.q-head .to-pane { align-self: flex-start; margin-top: 4px; }
+.cr-head .to-pane { margin-left: auto; }
+.tl-out-acts { display: flex; justify-content: flex-end; padding: 4px 0 2px; }
+.pane-card .q-head .to-pane, .pane-card .cr-head .to-pane { display: none; }
+/* An answer read in the pane. */
+#paneBody > .pane-card > .pane-reply { max-width: 760px; font-size: 14px; line-height: 1.6; }
+#paneBody > .pane-card .review-slot { margin: 0; }
+.pane-tool > #appBar > .pf-split { order: 3; margin-left: 4px; }

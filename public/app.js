@@ -2463,6 +2463,8 @@ function placeMedia(msgEl, item, at) {
 }
 // One file in a message, once: where the text names it (`at`, the path in the text), else under the message.
 // `p` is the path as named (or a key for a made picture); `info` is { kind, size, v, key, src }.
+// What the side pane needs to show a file from the chat (openFileInPane).
+const paneEntry = (item) => ({ key: item._key, name: item._name, src: item._src, kind: item._kind, full: item._disk || item._full, size: item._size });
 // A full path on this computer (C:\…, D:/… or /…), not a name or a path inside the project.
 const onDiskPath = (p) => /^(?:[A-Za-z]:[\\/]|\/)/.test(String(p || ''));
 function addMedia(msgEl, c, p, info, at = null) {
@@ -2479,12 +2481,16 @@ function addMedia(msgEl, c, p, info, at = null) {
   item._disk = onDiskPath(info.key) ? info.key : onDiskPath(p) ? p : null;
   all.set(key, item);
   const folderBtn = (cls) => (item._disk ? `<button type="button" class="pv-btn ${cls}" title="Show it in File Explorer: ${esc(item._disk)}" aria-label="Show ${esc(name)} in its folder">📂 Show in folder</button>` : '');
-  const head = (acts = '') => `<div class="mm-head"><button type="button" class="mm-tog" aria-expanded="false" title="Show it here"><span class="mm-chev" aria-hidden="true">▸</span><span class="mm-ico" aria-hidden="true">${PV_ICON[info.kind] || '📄'}</span><b class="mm-name" title="${esc(item._disk || item._full)}">${esc(name)}</b><span class="mm-info">${esc(meta)}</span></button><span class="mm-acts">${acts}${folderBtn('mm-folder')}<button type="button" class="pv-btn mm-open" title="Open it large">Open</button></span></div>`;
+  const head = (acts = '') => `<div class="mm-head"><button type="button" class="mm-tog" aria-expanded="false" title="Show it here"><span class="mm-chev" aria-hidden="true">▸</span><span class="mm-ico" aria-hidden="true">${PV_ICON[info.kind] || '📄'}</span><b class="mm-name" title="${esc(item._disk || item._full)}">${esc(name)}</b><span class="mm-info">${esc(meta)}</span></button><span class="mm-acts">${acts}${folderBtn('mm-folder')}<button type="button" class="pv-btn mm-open" title="Show it in the side pane (or drag the card there)">Open</button></span></div>`;
   if (info.kind === 'image') {
     item.className = 'mm-pic';
     item.innerHTML = `<button type="button" class="mm-thumb pv-checker" title="${esc(name)} · click to see it large"><img src="${esc(src)}" alt="${esc(name)}" loading="lazy" decoding="async"${/\.svg$/i.test(p) || /\.svg$/i.test(name) ? ' class="mm-svg"' : ''}></button><figcaption title="${esc(item._disk || item._full)}"><span class="mm-cap">${esc(name)}</span>${item._disk ? `<button type="button" class="mm-pic-folder" title="Show it in File Explorer: ${esc(item._disk)}" aria-label="Show ${esc(name)} in its folder">📂</button>` : ''}</figcaption>`;
-    // The large view steps through every picture in the message, in the order they show.
-    $('.mm-thumb', item).onclick = () => { const all = [...msgEl.querySelectorAll('.mm-pic')]; viewPictures(all.map((x) => x._src), all.indexOf(item), all.map((x) => x._disk)); };
+    // A click shows it in the side pane; the pop-up that steps through every picture in the message stays on Shift+click.
+    $('.mm-thumb', item).onclick = (e) => {
+      if (!e.shiftKey) return openFileInPane(c, paneEntry(item));
+      const all = [...msgEl.querySelectorAll('.mm-pic')]; viewPictures(all.map((x) => x._src), all.indexOf(item), all.map((x) => x._disk));
+    };
+    $('.mm-thumb', item).title = `${name} · click to show it in the side pane (Shift+click: large, with the other pictures)`;
     const pf = $('.mm-pic-folder', item); if (pf) pf.onclick = () => openFolder(null, item._disk);
     const img = $('img', item);
     img.onerror = () => { item.classList.add('mm-broken'); $('.mm-cap', item).textContent = `${name} (could not be shown)`; };
@@ -2504,9 +2510,14 @@ function addMedia(msgEl, c, p, info, at = null) {
       else if (info.kind === 'pdf') body.innerHTML = info.size > MM_PDF_INLINE ? `<p class="mm-note">A large PDF (${esc(sizeText(info.size))}): Open shows it.</p>` : `<iframe class="mm-pdf-frame" loading="lazy" src="${esc(src)}#navpanes=0&view=FitH" title="${esc(name)}"></iframe>`;
       else { body.innerHTML = '<div class="mm-md-body"><div class="fx-empty">Loading…</div></div>'; loadMdCard(item); }
     };
-    $('.mm-open', item).onclick = () => openViewer((body) => { body.innerHTML = '<div class="lb-doc fview"></div>'; previewFile($('.lb-doc', body), { name, src, size: info.size, full: item._disk || item._full, kind: info.kind }); });
+    $('.mm-open', item).onclick = () => openFileInPane(c, paneEntry(item));
     const fo = $('.mm-folder', item); if (fo) fo.onclick = () => openFolder(null, item._disk);
   }
+  // Dragged onto the side pane (by its name line, or a picture by itself), it opens there. Text inside an open card
+  // stays selectable.
+  const grip = $('.mm-head', item) || $('.mm-thumb', item);
+  grip.draggable = true;
+  grip.addEventListener('dragstart', (e) => { e.dataTransfer.setData(PANE_FILE_DRAG, JSON.stringify(paneEntry(item))); e.dataTransfer.effectAllowed = 'copy'; });
   placeMedia(msgEl, item, at);
 }
 // A Markdown card reads its file when it comes into view: up to MM_MD_BYTES, rendered or raw.
@@ -3919,9 +3930,9 @@ async function codeReview(c, arg = '', { auto = false, runId = '' } = {}) {
   saveChat(c);
 }
 const SEV_INFO = { breaks: 'Breaks: a crash, a wrong result or lost data', annoying: 'Annoying: wrong in some cases, or an error a user will hit', minor: 'Minor: worth a look' };
-function codeReviewHTML(m) {
+function codeReviewHTML(m, inPane = false) {
   const n = m.files?.length || 0;
-  const head = `<div class="cr-head"><b>🔎 Code review</b>${m.label ? `<span class="cr-scope">${esc(m.label)} · ${n} file${n === 1 ? '' : 's'}</span>` : ''}${m.auto ? '<span class="cr-auto" title="Run after a reply that changed code (⚙ Settings → Agent loop → Reviewer)">auto</span>' : ''}${m.model ? `<span class="cr-by" title="${esc(m.model)}">${esc(short(m.model))}${m.ms ? ` · ${secs(m.ms)}` : ''}</span>` : ''}${m.cost ? `<span class="cost cr-cost" title="What this review cost">${money(m.cost, 4)}</span>` : ''}</div>`;
+  const head = `<div class="cr-head"><b>🔎 Code review</b>${m.label ? `<span class="cr-scope">${esc(m.label)} · ${n} file${n === 1 ? '' : 's'}</span>` : ''}${m.auto ? '<span class="cr-auto" title="Run after a reply that changed code (⚙ Settings → Agent loop → Reviewer)">auto</span>' : ''}${m.model ? `<span class="cr-by" title="${esc(m.model)}">${esc(short(m.model))}${m.ms ? ` · ${secs(m.ms)}` : ''}</span>` : ''}${m.cost ? `<span class="cost cr-cost" title="What this review cost">${money(m.cost, 4)}</span>` : ''}${inPane || m.pending ? '' : paneBtn('codereview', '', m.at, 'these findings', 'Pane')}</div>`;
   if (m.pending) return `<div class="cr-card">${head}<div class="cr-wait">Reading the changes…</div></div>`;
   if (m.error) return `<div class="cr-card">${head}<div class="cr-${m.empty ? 'none' : 'err'}">${esc(m.error)}</div></div>`;
   const notes = [m.secretFiles?.length ? `Not sent to the reviewer: ${m.secretFiles.slice(0, 4).join(', ')}${m.secretFiles.length > 4 ? ` +${m.secretFiles.length - 4}` : ''} (looks like a secrets file).` : '', m.redacted ? `${m.redacted} key${m.redacted > 1 ? 's or tokens were' : ' or token was'} removed from the code before it was sent.` : '', m.cut ? 'The diff was cut to fit the reviewer\'s context.' : '', m.skipped ? `${m.skipped} generated or lock file${m.skipped > 1 ? 's' : ''} skipped.` : '', m.dropped ? `${m.dropped} finding${m.dropped > 1 ? 's' : ''} about files that did not change ${m.dropped > 1 ? 'were' : 'was'} dropped.` : ''].filter(Boolean).join(' ');
@@ -3938,12 +3949,13 @@ function crFixText(m, picked) {
   return `Please fix these bugs found by a code review of ${m.label}:\n${picked.map((x) => `- ${x.file}${x.line ? `:${x.line}` : ''} [${x.severity}] ${x.title ? `${x.title}: ` : ''}${x.why}${x.fix ? ` Fix: ${x.fix}` : ''}`).join('\n')}\nCheck each one in the code first; if one is not a real bug, say so instead of changing it.`;
 }
 function wireCodeReview(c, m, el) {
-  $('.uc-x', el).onclick = () => { c.agent.messages = c.agent.messages.filter((x) => x !== m); el.remove(); saveChat(c); };
+  const x = $('.uc-x', el); if (x) x.onclick = () => { c.agent.messages = c.agent.messages.filter((y) => y !== m); el.remove(); saveChat(c); };
   for (const b of el.querySelectorAll('.cr-loc')) b.onclick = () => openProjectFile(c, m.findings[Number(b.dataset.i)].file);
   for (const cb of el.querySelectorAll('.cr-pick input')) cb.onchange = () => {
     m.findings[Number(cb.dataset.i)].pick = cb.checked; saveChat(c);
     const n = m.findings.filter((x) => x.pick).length, send = $('.cr-send', el);
     if (send) { send.disabled = !n; send.textContent = `Send ${n} to the agent to fix`; }
+    redrawCodeReview(c, m, el);
   };
   const send = $('.cr-send', el);
   if (send) send.onclick = () => {
@@ -3951,9 +3963,15 @@ function wireCodeReview(c, m, el) {
     const picked = m.findings.filter((x) => x.pick);
     if (!picked.length) return;
     m.sent = true; saveChat(c);
-    el.replaceWith(renderMsg(c, m));
+    redrawCodeReview(c, m);
     runChat(c, crFixText(m, picked), null, []);
   };
+}
+// A code review shows in the chat and may also be open in the side pane: a change in one is drawn in the other
+// (`from`, the copy you changed, is left as it is).
+function redrawCodeReview(c, m, from = null) {
+  if (m.el?.isConnected && m.el !== from) m.el.replaceWith(renderMsg(c, m));
+  eachArea(() => { if (G.view?.id === `codereview::${m.at}` && !$('#paneBody')?.contains(from)) renderPane(); });
 }
 // Reasoning effort: a menu in the app's own style (not the system dropdown), aware of what the model supports.
 const REASON_INFO = { off: ['Off', 'Answers straight away. Fastest and cheapest.'], low: ['Low', 'A little thinking before answering.'], medium: ['Medium', 'Thinks through multi-step work.'], high: ['High', 'Thinks longest. Slowest and costs the most.'], default: ['Model default', 'Whatever the model does by default.'] };
@@ -4435,7 +4453,7 @@ function planCardHTML(m, full = false) {
   if (!full) {
     const now = p.items.find((x) => x.status === 'doing') || p.items.find((x) => x.status !== 'done');
     return `<details class="plan-card pc-compact ${done === p.items.length ? 'complete' : ''}" ${planFull() ? 'open' : ''}>
-    <summary><span class="pc-head">${head}<span class="pc-more"><span class="pc-show">Show all ▾</span><span class="pc-hide">Compact ▴</span></span></span>${now ? `<span class="pc-now"><span class="pc-mark" aria-hidden="true">${mark[now.status] || '○'}</span><span>${esc(now.text)}</span></span>` : ''}</summary>
+    <summary><span class="pc-head">${head}<span class="pc-more"><span class="pc-show">Show all ▾</span><span class="pc-hide">Compact ▴</span></span>${paneBtn('plan', m.runId, '', 'the plan', 'Pane')}</span>${now ? `<span class="pc-now"><span class="pc-mark" aria-hidden="true">${mark[now.status] || '○'}</span><span>${esc(now.text)}</span></span>` : ''}</summary>
     ${planListHTML(p, mark)}</details>`;
   }
   return `<div class="plan-card ${done === p.items.length ? 'complete' : ''}">
@@ -4452,16 +4470,17 @@ function planFoldHTML(m) {
   const p = (m.trace || []).findLast((e) => e.t === 'plan');
   if (!p) return '';
   const done = p.items.filter((x) => x.status === 'done').length, all = done === p.items.length, key = `plan-${m.runId || ''}`;
-  return `<details class="q-fold plan-fold" data-qkey="${esc(key)}" ${G.qOpen?.has(key) ? 'open' : ''}><summary><span class="q-fold-ic" aria-hidden="true">🗺</span><span class="q-fold-l">${all ? 'Goal done' : 'Plan'}</span><span class="q-fold-a">${done} of ${p.items.length} done</span><span class="tl-chev" aria-hidden="true">›</span></summary>${planCardHTML(m, true)}</details>`;
+  return `<details class="q-fold plan-fold" data-qkey="${esc(key)}" ${G.qOpen?.has(key) ? 'open' : ''}><summary><span class="q-fold-ic" aria-hidden="true">🗺</span><span class="q-fold-l">${all ? 'Goal done' : 'Plan'}</span><span class="q-fold-a">${done} of ${p.items.length} done</span>${paneBtn('plan', m.runId, '', 'the plan', 'Pane')}<span class="tl-chev" aria-hidden="true">›</span></summary>${planCardHTML(m, true)}</details>`;
 }
 // #4 What the separate reviewer found: scores out of 5, the bar, its bugs. One card per review round.
 const REVIEW_LABEL = { function: 'Function', craft: 'Craft', design: 'Design', originality: 'Originality', accessibility: 'Accessibility', brand: 'Brand fit', picture: 'Picture', motion: 'Motion', sound: 'Sound', rhythm: 'Rhythm', story: 'Story' };
-function reviewCardHTML(m, r) {
+// inPane: drawn in the side pane, so without its own "Open in pane" button.
+function reviewCardHTML(m, r, inPane = false) {
   const tr = m.trace || [], reviews = tr.filter((e) => e.t === 'review'), i = reviews.indexOf(r);
   const sentBack = !r.pass && (i < reviews.length - 1 || tr.some((e) => e.t === 'sent_back' && e.by === 'reviewer' && e.at >= r.at));
   const verdict = r.pass ? 'Passed' : sentBack ? 'Sent back to fix' : 'Not passed';
   return `<div class="review-card ${r.pass ? 'pass' : 'fail'}">
-      <div class="rv-head"><b>🧪 Reviewer</b><span class="rv-model" title="A separate model with a fresh context tested this">${esc(short(r.model))}</span><span class="rv-round">round ${r.round}</span><span class="rv-verdict">${verdict}</span><span class="rv-cost" title="What this review cost">${money(r.cost, 4)}</span></div>
+      <div class="rv-head"><b>🧪 Reviewer</b><span class="rv-model" title="A separate model with a fresh context tested this">${esc(short(r.model))}</span><span class="rv-round">round ${r.round}</span><span class="rv-verdict">${verdict}</span><span class="rv-cost" title="What this review cost">${money(r.cost, 4)}</span>${inPane ? '' : paneBtn('review', m.runId, i, 'this review')}</div>
       <div class="rv-scores">${Object.keys(r.scores).map((k) => `<div class="rv-score ${r.scores[k] < r.bar ? 'low' : ''}"><span>${esc(REVIEW_LABEL[k] || k)}</span><span class="rv-pips" aria-label="${r.scores[k]} of 5">${[1, 2, 3, 4, 5].map((n) => `<i class="${n <= r.scores[k] ? 'on' : ''}${n === r.bar ? ' bar' : ''}"></i>`).join('')}</span><b>${r.scores[k]}/5</b></div>`).join('')}</div>
       ${r.bugs.length ? `<ul class="rv-bugs">${r.bugs.map((b) => `<li>${esc(b)}</li>`).join('')}</ul>` : ''}
       ${r.summary ? `<p class="rv-sum">${esc(r.summary)}</p>` : ''}
@@ -4600,7 +4619,8 @@ function timelineHTML(m) {
     // An MCP tool: the server's mark, "server › tool", and the first line of what it gave back.
     const mc = mcpOfTool(x.e.name), first = mc && x.res && !err ? String(x.res).split('\n').find((l) => l.trim()) : '';
     return det(`${key}-${i}`, `tl-call${mc ? ' tl-mcp' : ''}`, `${mc ? `<span class="tl-ic">${mcpMark({ name: mc.server }, 'sm')}</span><b>${esc(mc.server)} › ${esc(mc.tool)}</b><span class="tl-arg">${first ? `<span class="tl-mcp-res">${esc(clip(first, 120))}</span>` : esc(clip(argSummary(x.e), 160))}</span>` : `<span class="tl-ic">${TOOL_NAME[x.e.name]?.split(' ')[0] || '🔧'}</span><b>${esc(x.e.name)}</b><span class="tl-arg">${esc(clip(argSummary(x.e), 160))}</span>`}${apB ? apB.badge : ''}${x.res == null && m.live ? '<span class="tl-spin" aria-label="running"></span>' : err ? '<span class="tl-err">error</span>' : ''}${atOf(m, x.e) ? `<small class="tl-ct">${timeTag(atOf(m, x.e))}</small>` : ''}`,
-      (apB ? apB.detail : '') + (x.cmd && !apB ? whyLine(x.cmd) : '') + (x.res ? `<pre class="tl-out">${esc(clip(x.res, 4000))}</pre>` : '<div class="tl-out tl-none">No output.</div>'));
+      (apB ? apB.detail : '') + (x.cmd && !apB ? whyLine(x.cmd) : '') + (x.res ? `<pre class="tl-out">${esc(clip(x.res, 4000))}</pre>` : '<div class="tl-out tl-none">No output.</div>')
+      + (x.cmd?.log ? `<div class="tl-out-acts"><button type="button" class="pv-btn to-pane" data-open-pane="output" data-run="" data-ref="${esc(x.cmd.log)}" data-name="${esc(x.cmd.command || '')}" title="Show this command's whole output in the side pane">⧉ Full output in pane</button></div>` : ''));
   }).join('');
   const groupRow = (key, icon, label, list, busy) => {
     const errs = list.filter((x) => x.res != null && /^Error/.test(x.res)).length;
@@ -4963,7 +4983,7 @@ function updateMsg(c, m, { bodyOnly = false } = {}) {
   right.append(tb);
   $('.foot', el).append(right);
   if (s && !m.live && !m.runActive) {
-    right.insertAdjacentHTML('beforeend', `<span class="msg-tools"><button type="button" class="mt-btn mt-copy" title="Copy this reply (Markdown)" aria-label="Copy reply">${msgIcon('copy')}</button><button type="button" class="mt-btn mt-remix" title="Remix: a new chat in this project with the conversation up to here. Files are not touched." aria-label="Remix in a new chat">${msgIcon('branch')}</button>${m.error ? '' : '<button type="button" class="mt-btn mt-repeat" title="⏰ Repeat this: a schedule that asks for this again at set times. Its runs post in this chat." aria-label="Repeat this on a schedule">⏰</button>'}</span>`);
+    right.insertAdjacentHTML('beforeend', `<span class="msg-tools">${bodyText(m).length > 600 ? `<button type="button" class="mt-btn mt-pane" data-open-pane="reply" data-run="${esc(m.runId || '')}" data-ref="" title="Read this answer in the side pane" aria-label="Read in the side pane">⧉</button>` : ''}<button type="button" class="mt-btn mt-copy" title="Copy this reply (Markdown)" aria-label="Copy reply">${msgIcon('copy')}</button><button type="button" class="mt-btn mt-remix" title="Remix: a new chat in this project with the conversation up to here. Files are not touched." aria-label="Remix in a new chat">${msgIcon('branch')}</button>${m.error ? '' : '<button type="button" class="mt-btn mt-repeat" title="⏰ Repeat this: a schedule that asks for this again at set times. Its runs post in this chat." aria-label="Repeat this on a schedule">⏰</button>'}</span>`);
     wireIconCopy($('.foot .mt-copy', el), () => m.content);
     $('.foot .mt-remix', el).onclick = () => remixFrom(c, m);
     const rep = $('.foot .mt-repeat', el); if (rep) rep.onclick = () => repeatReply(c, m);
@@ -4985,7 +5005,7 @@ function drawReviewCard(c, m, el) {
   const key = `${m.runId}:${left}`;
   if (slot.dataset.key === key) return; // keeps it open, with its diffs, while the reply redraws
   slot.dataset.key = key;
-  slot.innerHTML = `<details class="rv-card"><summary><span class="rv-title">Review changes</span><span class="rv-count">${left} file${left === 1 ? '' : 's'}</span><span class="rv-tot"></span></summary><div class="rv-list"><div class="rv-wait">Loading…</div></div></details>`;
+  slot.innerHTML = `<details class="rv-card"><summary><span class="rv-title">Review changes</span><span class="rv-count">${left} file${left === 1 ? '' : 's'}</span><span class="rv-tot"></span>${paneBtn('changes', m.runId, '', 'these changes', 'Pane')}</summary><div class="rv-list"><div class="rv-wait">Loading…</div></div></details>`;
   const det = $('details', slot);
   det.addEventListener('toggle', () => {
     (G.reviewOpen ||= new Set())[det.open ? 'add' : 'delete'](m.runId);
@@ -5997,7 +6017,7 @@ function questionHTML(q, live = true) {
   const n = c.questions?.length || 1, key = `q-${c.id}`;
   const label = n > 1 ? `Asked you ${n} questions` : c.gate === 'plan' ? 'Plan first' : c.gate === 'enhance' ? '📝 Enhance' : c.gate === 'skill' ? '🧠 Skill' : c.gate === 'storyboard' ? '🎬 Storyboard' : c.auto ? 'The deciders answered' : 'Asked you';
   const said = clip(String(a.label || a.text || '').replace(/^Your answer: /, ''), 160);
-  return `<details class="q-fold" data-qkey="${esc(key)}" ${G.qOpen?.has(key) ? 'open' : ''}><summary><span class="q-fold-ic" aria-hidden="true">✓</span><span class="q-fold-l">${esc(label)}${n === 1 && c.question ? `: <span class="q-fold-q">${esc(clip(c.question, 90))}</span>` : ''}</span><span class="q-fold-a">${esc(said)}</span><span class="tl-chev" aria-hidden="true">›</span></summary>${full}</details>`;
+  return `<details class="q-fold" data-qkey="${esc(key)}" ${G.qOpen?.has(key) ? 'open' : ''}><summary><span class="q-fold-ic" aria-hidden="true">✓</span><span class="q-fold-l">${esc(label)}${n === 1 && c.question ? `: <span class="q-fold-q">${esc(clip(c.question, 90))}</span>` : ''}</span><span class="q-fold-a">${esc(said)}</span>${n === 1 ? paneBtn('question', '', c.id, 'this question and all its options', 'Pane') : ''}<span class="tl-chev" aria-hidden="true">›</span></summary>${full}</details>`;
 }
 // Many options show the first three; "Show all" opens the rest (every one is still numbered, so 1–9 picks any).
 document.addEventListener('click', (e) => {
@@ -6008,7 +6028,8 @@ document.addEventListener('click', (e) => {
 });
 // Folded answers stay open or closed across redraws.
 document.addEventListener('toggle', (e) => { const d = e.target; if (d.matches?.('details.q-fold')) (G.qOpen ||= new Set())[d.open ? 'add' : 'delete'](d.dataset.qkey); }, true);
-function questionCardHTML(q, live = true) {
+// inPane: drawn in the side pane, so without its own "Open in pane" button.
+function questionCardHTML(q, live = true, inPane = false) {
   const c = q.card, a = q.answer || (live ? null : { label: '(not answered: the reply ended)' });
   const picked = a && a.choice != null ? Number(a.choice) : null, missed = a && /^\(not answered/.test(a.label || '');
   // The question reads first, on the left; each answer is its own full-width row, numbered (press 1–9 to pick).
@@ -6023,7 +6044,7 @@ function questionCardHTML(q, live = true) {
   if (c.questions?.length) return questionsHTML(c, a);
   if (c.secret) return secretHTML(c, a);
   return `<div class="approval question qbox ${a ? 'done' : ''}" ${a ? '' : `data-id="${esc(c.id)}" tabindex="-1"`}>
-    <div class="q-head"><span class="q-badge">${c.gate === 'plan' ? 'Plan first' : c.gate === 'enhance' ? '📝 Prompt enhancer' : c.gate === 'skill' ? '🧠 Save a skill' : c.gate === 'storyboard' ? '🎬 Storyboard' : 'Question'}</span><p class="q-text">${esc(c.question)}</p>${c.why ? `<small class="q-why">${esc(c.why)}</small>` : ''}${c.gate === 'storyboard' && c.artifact ? `<button type="button" class="secondary sm q-open-art" data-art="${esc(c.artifact)}">Open the storyboard</button>` : ''}</div>
+    <div class="q-head"><span class="q-badge">${c.gate === 'plan' ? 'Plan first' : c.gate === 'enhance' ? '📝 Prompt enhancer' : c.gate === 'skill' ? '🧠 Save a skill' : c.gate === 'storyboard' ? '🎬 Storyboard' : 'Question'}</span><p class="q-text">${esc(c.question)}</p>${c.why ? `<small class="q-why">${esc(c.why)}</small>` : ''}${inPane || c.secret || a ? '' : paneBtn('question', '', c.id, 'this question and all its options', 'Pane')}${c.gate === 'storyboard' && c.artifact ? `<button type="button" class="secondary sm q-open-art" data-art="${esc(c.artifact)}">Open the storyboard</button>` : ''}</div>
     ${a ? `<div class="q-opts answered">${c.options.map((o, i) => `<div class="q-opt ${i === picked ? 'picked' : 'faded'}"><span class="q-key">${i === picked ? '✓' : i + 1}</span><span class="q-label">${esc(o)}</span></div>`).join('')}
         ${a.by === 'recommended' || a.by === 'timeout' ? `<div class="q-opt picked by-deciders"><span class="q-key">⏱</span><span class="q-label">No answer in time: ${a.by === 'timeout' ? 'the storyboard stands' : 'the agent\'s recommendation stands'} (⚡ YOLO, 🎬 Video Mode)</span></div>` : ''}
         ${a.by === 'deciders' ? `<div class="q-opt ${picked == null ? 'missed' : 'picked'} by-deciders"><span class="q-key">⚖</span><span class="q-label">No answer in time: ${picked == null ? `${esc((a.text || 'the deciders could not settle it').replace(/^\w/, (x) => x.toLowerCase()))}, so the agent decides` : `the deciders picked this${a.confidence != null ? ` · ${Math.round(a.confidence * 100)}% sure` : ''}`}</span></div>`
@@ -6499,6 +6520,107 @@ function serverUp(c, e) {
   pollDev();
   if (focused() === c && followsAgent(c) && e.url) openInBrowser(c, e.url);
 }
+// Files opened from the chat (a card's Open, a picture, a card dragged onto the pane) show in the Artifact tab, next
+// to the plans: listed in its dropdown under "Files from the chat" until closed. Kept per chat on this computer.
+const PANE_FILES_MAX = 12;
+const paneFilesKey = (id) => `oh-pane-files:${id}`;
+function paneFiles(c) {
+  if (!c) return [];
+  if (!c._paneFiles) { try { c._paneFiles = JSON.parse(localStorage.getItem(paneFilesKey(c.id)) || '[]'); } catch { c._paneFiles = []; } }
+  return c._paneFiles;
+}
+function savePaneFiles(c) { try { localStorage.setItem(paneFilesKey(c.id), JSON.stringify(paneFiles(c))); } catch { /* this session only */ } }
+// f: a file { key, name, label?, src, kind, full, size }, or a piece of a reply { id, name, kind, run, ref } (PANE_CARDS).
+// Opened again, it moves to the end (the newest).
+function openFileInPane(c, f) {
+  if (!c || !(f?.src || f?.kind in PANE_CARDS)) return;
+  const id = f.id || `file:${f.key || f.src}`, list = paneFiles(c).filter((x) => x.id !== id);
+  list.push(f.kind in PANE_CARDS ? { id, name: f.name, kind: f.kind, run: f.run, ref: f.ref } : { id, name: f.name, ...(f.label ? { label: f.label } : {}), src: f.src, kind: f.kind || previewKind(f.name), full: f.full || '', size: f.size || 0 });
+  c._paneFiles = list.slice(-PANE_FILES_MAX); savePaneFiles(c);
+  if (G.paneHidden) setPaneHidden(false);
+  openArtifact(c, id);
+}
+// Pieces of a reply the pane can show, drawn from the chat as it is now (so a live plan or answer keeps up):
+// html(c, m, f) gives the card (empty when it is gone), wire(c, m, el) makes its buttons work there, name(m, f) is its
+// line in the dropdown. A piece is found by its reply (run) and which one (ref).
+const PANE_CARDS = {
+  review: { name: (m, f) => { const r = m.trace?.filter((x) => x.t === 'review')[Number(f.ref)]; return `Reviewer · round ${r?.round ?? Number(f.ref) + 1}${r?.pass ? ' · passed' : ''}`; },
+    html: (c, m, f) => { const r = m.trace?.filter((x) => x.t === 'review')[Number(f.ref)]; return r ? reviewCardHTML(m, r, true) : ''; } },
+  plan: { name: (m) => { const p = m.trace?.findLast((e) => e.t === 'plan'); return p ? `Plan · ${p.items.filter((x) => x.status === 'done').length} of ${p.items.length} done` : 'Plan'; },
+    html: (c, m) => planCardHTML(m, true) },
+  reply: { name: (m) => `Answer · ${clip(bodyText(m).replace(/[#*_`>]/g, '').trim().split('\n')[0] || 'reply', 40)}`,
+    html: (c, m) => { const t = bodyText(m); return t.trim() ? `<div class="pane-reply">${md(t)}</div>` : ''; } },
+  question: { name: (m, f) => `Question · ${clip(m.questions?.[f.ref]?.card.question || '', 40)}`,
+    html: (c, m, f) => (m.questions?.[f.ref] ? questionCardHTML(m.questions[f.ref], !!m.live, true) : ''),
+    wire: (c, m, el) => { const q = $('.qbox[data-id]', el); if (q) wireQuestion(q, m); } },
+  changes: { name: (m) => { const n = (m.stats?.changed?.length || 0) - (m.undoneFiles?.length || 0); return `Changes · ${n} file${n === 1 ? '' : 's'}`; },
+    html: (c, m) => (m.stats?.changed?.length ? `<div class="review-slot pane-changes"><details class="rv-card" open><summary><span class="rv-title">Review changes</span><span class="rv-count">${(m.stats.changed.length - (m.undoneFiles?.length || 0))} files</span><span class="rv-tot"></span></summary><div class="rv-list"><div class="rv-wait">Loading…</div></div></details></div>` : ''),
+    wire: (c, m, el) => { const slot = $('.pane-changes', el); if (slot) loadReview(c, m, slot); } },
+  codereview: { name: (m) => `Code review${m.label ? ` · ${clip(m.label, 30)}` : ''}`,
+    html: (c, m) => codeReviewHTML(m, true), wire: (c, m, el) => wireCodeReview(c, m, el) },
+};
+// The reply (or code review card) a pane piece belongs to. A question is found by its own id, wherever it is.
+function paneMsg(c, f) {
+  const ms = c?.agent.messages || [];
+  if (f.kind === 'codereview') return ms.find((x) => x.role === 'codereview' && String(x.at) === String(f.ref));
+  if (f.kind === 'question' && !f.run) return ms.find((x) => x.questions?.[f.ref]);
+  return ms.find((x) => x.runId === f.run);
+}
+// The "Open in pane" button on a piece of a reply (one listener serves them all, wherever they are drawn).
+const paneBtn = (kind, run, ref = '', what = 'it', label = 'Open in pane') => `<button type="button" class="pv-btn to-pane" data-open-pane="${kind}" data-run="${esc(run || '')}" data-ref="${esc(String(ref))}" title="Show ${what} in the side pane, to read it next to the chat">⧉ ${label}</button>`;
+document.addEventListener('click', (e) => {
+  const b = e.target.closest?.('button[data-open-pane]');
+  if (!b) return;
+  e.preventDefault(); e.stopPropagation(); // a button inside a fold's summary doesn't fold it
+  const f = { kind: b.dataset.openPane, run: b.dataset.run, ref: b.dataset.ref };
+  const c = [...G.open.values()].find((x) => paneMsg(x, f)) || focused();
+  if (!c) return;
+  // A command's full output: its log file in the project.
+  if (f.kind === 'output') return openFileInPane(c, { key: f.ref, name: f.ref, label: `Output · ${clip(b.dataset.name || '', 40)}`, src: `/api/command-log?project=${encodeURIComponent(c.projectId)}&path=${encodeURIComponent(f.ref)}`, kind: 'text' });
+  const m = paneMsg(c, f), card = PANE_CARDS[f.kind];
+  if (m && card) openFileInPane(c, { id: `${f.kind}:${f.run}:${f.ref}`, kind: f.kind, run: f.run, ref: f.ref, name: card.name(m, f) });
+});
+// A piece of a reply in the pane. While its reply runs (or a code review reads), it is drawn again when it changes.
+function drawPaneCard(c, f, body) {
+  const card = PANE_CARDS[f.kind], box = document.createElement('div');
+  box.className = 'pane-file pane-card';
+  body.replaceChildren(box);
+  let last = null;
+  const draw = () => {
+    const m = paneMsg(c, f), html = (m && card.html(c, m, f)) || '<div class="empty">This is no longer in the chat.</div>';
+    if (html === last) return m;
+    last = html; box.innerHTML = html;
+    if (m) card.wire?.(c, m, box);
+    return m;
+  };
+  const m = draw();
+  clearInterval(AREA.st.cardTimer);
+  if (m && (m.live || m.pending)) {
+    const t = AREA.st.cardTimer = setInterval(() => { const x = box.isConnected && draw(); if (!x || !(x.live || x.pending)) { clearInterval(t); if (box.isConnected) draw(); } }, 1000);
+  }
+}
+function closePaneFile(c, id) {
+  c._paneFiles = paneFiles(c).filter((x) => x.id !== id); savePaneFiles(c);
+  G.view = { id: null, src: false, files: false };
+  renderPane();
+}
+// A file card or picture dragged from the chat onto the pane opens there (dropped on the message box it still attaches).
+const PANE_FILE_DRAG = 'application/x-quorx-panefile';
+function wirePaneFileDrop() {
+  const pane = $('#pane'); if (!pane) return;
+  const ok = (e) => e.dataTransfer?.types.includes(PANE_FILE_DRAG);
+  pane.addEventListener('dragover', (e) => { if (!ok(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; pane.classList.add('file-drop'); });
+  pane.addEventListener('dragleave', (e) => { if (!pane.contains(e.relatedTarget)) pane.classList.remove('file-drop'); });
+  pane.addEventListener('drop', (e) => {
+    pane.classList.remove('file-drop');
+    if (!ok(e)) return;
+    e.preventDefault();
+    let f = null; try { f = JSON.parse(e.dataTransfer.getData(PANE_FILE_DRAG)); } catch { return; }
+    const n = Number(e.target.closest?.('.pane-area')?.dataset.area), a = PA.list.find((x) => x.n === n);
+    if (a) paneFocus(a);
+    openFileInPane(focused(), f);
+  });
+}
 function openArtifact(c, id) {
   const i = G.panes.indexOf(c.id);
   if (i >= 0 && i !== G.focus) { G.focus = i; for (const p of document.querySelectorAll('.chatpane')) p.classList.toggle('focus', Number(p.dataset.pane) === i); }
@@ -6776,7 +6898,7 @@ function renderPane() {
   if (paneChat(c)) for (const a of PA.list) if (a !== AREA) inArea(a, renderPane);
   const sel = $('#artSelect'), body = $('#paneBody'), bar = $('#appBar');
   bar.hidden = true;
-  stopWatch();
+  stopWatch(); clearInterval(AREA.st.cardTimer);
   renderPaneTabs(c);
   paneSave();
   if (!c) return;
@@ -6792,9 +6914,29 @@ function renderPane() {
     body.innerHTML = '<div class="empty">No replies in this chat yet. Every step of a reply shows here.</div>';
     return;
   }
-  const all = planArts(c).sort((a, b) => (a.updated || 0) - (b.updated || 0));
-  sel.innerHTML = all.map((a) => `<option value="${esc(a.id)}">${ICON[a.kind] || '📄'} ${esc(a.title)}</option>`).join('') || '<option>No plans yet</option>';
-  sel.disabled = !all.length;
+  const all = planArts(c).sort((a, b) => (a.updated || 0) - (b.updated || 0)), files = paneFiles(c);
+  const opt = (id, label) => `<option value="${esc(id)}">${label}</option>`;
+  sel.innerHTML = (all.length && files.length ? `<optgroup label="Plans and reports">${all.map((a) => opt(a.id, `${ICON[a.kind] || '📄'} ${esc(a.title)}`)).join('')}</optgroup>` : all.map((a) => opt(a.id, `${ICON[a.kind] || '📄'} ${esc(a.title)}`)).join(''))
+    + (files.length ? `<optgroup label="From the chat">${files.map((f) => { const pm = f.kind in PANE_CARDS && paneMsg(c, f); return opt(f.id, `${PV_ICON[f.kind] || '📄'} ${esc(f.label || (pm ? PANE_CARDS[f.kind].name(pm, f) : f.kind in PANE_CARDS ? f.name : baseName(f.name)))}`); }).join('')}</optgroup>` : '')
+    || '<option>No plans yet</option>';
+  sel.disabled = !all.length && !files.length;
+  // A file opened from the chat: the same viewer as the Files tab, with a bar to close it.
+  const file = files.find((x) => x.id === G.view.id) || (!all.length ? files.at(-1) : null);
+  if (file) {
+    sel.value = file.id;
+    setUrlBar(file.src, { art: true });
+    bar.hidden = false;
+    const others = [...all, ...files].filter((x) => x.id !== file.id);
+    bar.innerHTML = `${others.length && !isPhone() ? `<button type="button" class="pv-btn pf-split" title="Compare: show another item from this list below this one" ${PA.list.length >= PANE_MAX_AREAS ? 'disabled' : ''}>⬓ Compare</button>` : ''}<button type="button" class="pv-btn pf-close" title="Opened from the chat: take it off this list (the file stays where it is)">✕ Close</button>`;
+    $('.pf-close', bar).onclick = () => closePaneFile(c, file.id);
+    const sp = $('.pf-split', bar);
+    if (sp) sp.onclick = () => { const other = others.at(-1).id; paneSplitTab(AREA, 'art', 'below'); G.view = { id: other, src: false, files: false }; renderPane(); };
+    if (file.kind in PANE_CARDS) { setUrlBar(null, { art: true }); return drawPaneCard(c, file, body); }
+    body.innerHTML = '<div class="fview pane-file"></div>';
+    G.filesProject = c.projectId;
+    previewFile($('.pane-file', body), { name: file.name, src: file.src, size: file.size, full: file.full, kind: file.kind });
+    return;
+  }
   const a = all.find((x) => x.id === G.view.id) || all.at(-1);
   if (!a) { setUrlBar(null, { art: true }); body.innerHTML = '<div class="empty">No plans in this chat yet. Plans, specs and reports the agent writes show here; what it builds runs in the Browser tab (and under 🖥 servers).</div>'; return; }
   sel.value = a.id;
@@ -6883,7 +7025,7 @@ const PREVIEW_KINDS = {
   binary: ['wasm', 'glb', 'zip', 'gz', 'tar', '7z', 'exe', 'dll', 'bin', 'so', 'dylib', 'class', 'jar', 'pyc'],
 };
 const previewKind = (name) => Object.keys(PREVIEW_KINDS).find((k) => PREVIEW_KINDS[k].includes(fileExt(name))) || 'text';
-const PV_ICON = { image: '🖼', video: '🎬', audio: '🎵', pdf: '📕', office: '📘', table: '📊', font: '🔤', md: '📝', html: '🌐', binary: '📦', text: '📄' };
+const PV_ICON = { image: '🖼', video: '🎬', audio: '🎵', pdf: '📕', office: '📘', table: '📊', font: '🔤', md: '📝', html: '🌐', binary: '📦', text: '📄', review: '🧪', plan: '🗺', reply: '💬', question: '❓', changes: '±', codereview: '🔎' };
 const sizeText = (b) => (b == null ? '' : b > 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} KB`);
 const durText = (s) => (Number.isFinite(s) ? `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}` : '');
 // A small CSV / TSV reader (quotes and doubled quotes), enough for a preview.
@@ -10802,7 +10944,7 @@ function renderPaneTabs(c) {
   const box = $('#paneTabs'); if (!box) return;
   const t = paneTab();
   for (const b of box.querySelectorAll('[data-tab]')) { const on = b.dataset.tab === t; b.classList.toggle('on', on); b.setAttribute('aria-selected', String(on)); }
-  const n = planArts(c).length;
+  const n = planArts(c).length + paneFiles(c).length;
   $('[data-tab="art"] .pt-n', box).textContent = n || '';
   // The Terminal tab counts what runs (its Running section lists them) and turns amber while a command runs.
   const dev = c && G.devCount?.[c.projectId], rn = c && G.runCount?.[c.projectId];
@@ -10838,6 +10980,7 @@ function wirePaneChrome() {
   setMax(wasMax);
   const fa = $('#followAgent'); if (fa) fa.onchange = () => { G.followAgent = fa.checked; savePrefs(); };
   wireAreaChrome();
+  wirePaneFileDrop();
 }
 // One area's tab strip and address bar (each area has its own copy; this runs in the area being wired).
 function wireAreaChrome() {
