@@ -121,8 +121,8 @@ flowchart TD
 The agent's tools, as the server defines them: files (`list_files`, `read_file`, `write_file`, `append_file`,
 `edit_file`, `delete_file`, `search_files`), `shell`, `terminal`, `job_output`, `job_stop`, `start_server`,
 `stop_server`, `preview_site`, `browser`, `look`, `desktop`, `android`, `debug`, `fetch_url`, `plan`, `ask_user`,
-`decide`, `delegate`, `use_skill`, `save_skill`, `scaffold`, `write_artifact`, `edit_artifact`, `read_artifact`,
-documents (`list_docs`, `search_docs`, `read_doc`), and paid media (`imagine`, `make_video`, `compose_music`, `speak`).
+`decide`, `delegate`, `use_skill`, `save_skill`, `scaffold`, `pixel_fx` (only when a request asks for pixel effects),
+`write_artifact`, `edit_artifact`, `read_artifact`, documents (`list_docs`, `search_docs`, `read_doc`), and paid media (`imagine`, `make_video`, `compose_music`, `speak`).
 The reviewer has its own `submit_review`. The old `run_command` (one allow-listed program) still works for older
 chats and goes through the same rule engine as `shell`.
 
@@ -153,7 +153,8 @@ chats and goes through the same rule engine as `shell`.
 - **Skills and templates:** built-in playbooks in `skills/` (`web-app`, `design-craft`, `design-system`, `node-server`,
   `canvas-game`, `ui-review`, `debug-loop`, `decide-well`, and ten video skills led by `video-direction`) load with `use_skill`; the agent can save its own after a
   task that took several tries. `scaffold` copies a starter from `templates/` (static site, Node server, canvas game,
-  Python server) without overwriting anything.
+  Python server) without overwriting anything. A game whose request asks for pixel effects gets `pixel_fx`: 244
+  animated pixel art effects from pixelfx (MIT), each downloaded from one pinned commit and checked against its hash.
 - **Documents:** attach files of any kind. Text, code, PDF, Word, PowerPoint, Excel, OpenDocument, EPUB and HTML are
   read. Small ones go into the message whole; big ones are embedded once and searched with `search_docs` and
   `read_doc`. Indexing over $0.50 waits for your OK.

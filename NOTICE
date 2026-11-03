@@ -9,5 +9,11 @@ The provider marks in public/icons/brand belong to their owners and only name th
 are drawn from Simple Icons (CC0 1.0, https://simpleicons.org) and LobeHub Icons (MIT License, Copyright (c) 2023
 LobeHub, https://github.com/lobehub/lobe-icons).
 
+The pixel art effects games can use (skills/canvas-game/pixelfx) are pixelfx by Patch (MIT License, Copyright (c) 2026
+Patch, https://github.com/patch-gg/pixelfx). QuorX ships its list of effects and downloads an effect when a game first
+uses it, with the licence beside it. Parts of pixelfx adapt Sprite Fusion's pixel art VFX by Hugo Duprez (MIT License,
+Copyright (c) 2026 Hugo Duprez, https://www.spritefusion.com/pixel-art-vfx) and Hollow Crown by rehan-remade (MIT
+License, Copyright (c) 2026 rehan-remade, https://github.com/rehan-remade/hollow-crown).
+
 If you share QuorX or a version you changed, keep this notice with it, for example:
 "Based on QuorX (https://github.com/mims1234/QuorX), licensed under the Apache License 2.0."
