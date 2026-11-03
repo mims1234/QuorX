@@ -2050,15 +2050,17 @@ function priceNum(m) {
 const KIND_TITLE = { chat: 'Chat model', decision: 'Decider model', image: 'Picture model', video: 'Video model', music: 'Music model', speech: 'Voice model', listen: 'Speech-to-text model' };
 const KIND_NOTE = { chat: 'Models that can use tools (the agent needs them).', decision: 'Fast judges that answer yes/no, choice and score questions.', image: 'Text-to-picture models.', video: 'Text-to-video models.', music: 'Music models.', speech: 'Text-to-speech models.', listen: 'Chat models that accept audio (used for the mic).' };
 const SORTS = [['best', 'Recommended'], ['cheap', 'Cheapest'], ['pricey', 'Priciest'], ['new', 'Newest'], ['old', 'Oldest'], ['name', 'Name'], ['ctx', 'Largest context']];
+// Each filter has a group (what it costs, what it can do, the rest): the bar keeps a group together, with a thin line
+// between groups. The same bar serves every place a model is picked; each place's own rules decide the list.
 const FILTERS = [
-  ['free', 'Free', (m) => (priceNum(m) === 0 || /:free$/.test(m.id)) && m.plan !== 'plan'],
-  ['plan', 'On a plan', (m) => m.plan === 'plan'],
-  ['vision', '👁 Sees images', (m) => (m.in || []).includes('image') && m.kind !== 'image'],
-  ['tools', '🧰 Uses tools', (m) => !!m.tools],
-  ['reasoning', '🧠 Reasoning', (m) => !!m.reasoning],
-  ['long', '📜 Long context', (m) => (m.ctx || 0) >= 200000],
-  ['new', '✨ New (60 days)', (m) => m.created && Date.now() / 1000 - m.created < 60 * 864e2],
-  ['fav', '★ Favourites', (m) => (G.favModels?.[m.kind] || []).includes(m.id)],
+  ['free', 'Free', (m) => (priceNum(m) === 0 || /:free$/.test(m.id)) && m.plan !== 'plan', 'price'],
+  ['plan', 'On a plan', (m) => m.plan === 'plan', 'price'],
+  ['vision', '👁 Sees images', (m) => (m.in || []).includes('image') && m.kind !== 'image', 'can'],
+  ['tools', '🧰 Uses tools', (m) => !!m.tools, 'can'],
+  ['reasoning', '🧠 Reasoning', (m) => !!m.reasoning, 'can'],
+  ['long', '📜 Long context', (m) => (m.ctx || 0) >= 200000, 'can'],
+  ['new', '✨ New', (m) => m.created && Date.now() / 1000 - m.created < 60 * 864e2, 'more', 'Released in the last 60 days'],
+  ['fav', '★ Favourites', (m) => (G.favModels?.[m.kind] || []).includes(m.id), 'more'],
 ];
 const providerOf = (id) => String(id).replace(/^~/, '').split('/')[0] || 'other';
 // Models of an app on this PC (⚙ Settings → Providers) or of OpenCode Go (⚙ Settings → Providers) are the source,
@@ -2125,7 +2127,8 @@ const inSource = (m) => PK.source === 'all' || sourceKey(m) === PK.source;
 function drawPicker(full = false) {
   const all = pickerModels();
   $('#pkTitle').textContent = `Choose a ${(KIND_TITLE[PK.kind] || 'model').toLowerCase()}`;
-  $('#pkSub').textContent = [PK.context, KIND_NOTE[PK.kind]].filter(Boolean).join(' · ');
+  $('#pkSub').hidden = true;
+  $('#pkTitle').title = [PK.context, KIND_NOTE[PK.kind]].filter(Boolean).join(' · ');
   // No key yet: browsing works (the lists are public); only models through an app on this PC run.
   const banner = $('#pkBanner');
   banner.hidden = !!G.cfg?.hasKey;
@@ -2138,8 +2141,12 @@ function drawPicker(full = false) {
   cc.innerHTML = PK.current ? `<span class="mp-cur-label">Current</span>${cur ? `<b>${esc(cleanName(cur))}</b><code>${esc(cur.id)}</code><span class="mp-cur-price">${priceCell(cur)}</span>` : `<code>${esc(PK.current)}</code><span class="mp-warn">not in today's catalogue (it may have been renamed or removed)</span>`}` : '';
   if (full) {
     // Sort and filter controls (counts come from the whole list of this kind).
-    $('#pkSort').innerHTML = SORTS.map(([k, l]) => `<button type="button" class="mp-sort ${PK.sort === k ? 'on' : ''}" data-sort="${k}" aria-pressed="${PK.sort === k}">${l}</button>`).join('');
-    for (const b of document.querySelectorAll('#pkSort .mp-sort')) b.onclick = () => { PK.sort = b.dataset.sort; (G.pickerSort ??= {})[PK.kind] = PK.sort; savePrefs(); drawPicker(true); };
+    const sortName = SORTS.find(([k]) => k === PK.sort)?.[1] || 'Recommended';
+    $('#pkSort').innerHTML = `<div class="mp-prov-wrap mp-sort-wrap"><button type="button" class="mp-chip mp-sort-btn" aria-haspopup="listbox" aria-expanded="false" title="Sort the models"><span class="mp-sort-ic" aria-hidden="true">⇅</span>${esc(sortName)} <span aria-hidden="true">▾</span></button>`
+      + `<div class="mp-prov-pop mp-sort-pop" role="listbox" aria-label="Sort by" hidden>${SORTS.map(([k, l]) => `<button type="button" role="option" class="mp-sort-opt ${PK.sort === k ? 'on' : ''}" aria-selected="${PK.sort === k}" data-sort="${k}"><span>${l}</span>${PK.sort === k ? '<b aria-hidden="true">✓</b>' : ''}</button>`).join('')}</div></div>`;
+    const sbtn = $('#pkSort .mp-sort-btn'), spop = $('#pkSort .mp-sort-pop');
+    sbtn.onclick = () => { spop.hidden = !spop.hidden; sbtn.setAttribute('aria-expanded', String(!spop.hidden)); if (!spop.hidden) $('.mp-sort-opt.on', spop)?.focus(); };
+    for (const b of spop.querySelectorAll('.mp-sort-opt')) b.onclick = () => { PK.sort = b.dataset.sort; (G.pickerSort ??= {})[PK.kind] = PK.sort; savePrefs(); PK.sel = 0; drawPicker(true); $('#pkSort .mp-sort-btn')?.focus(); };
   }
   // First where the model runs (one segment per source the list has, with counts), then filters for that source only.
   const srcs = [...new Set(all.map(sourceKey))];
@@ -2151,8 +2158,8 @@ function drawPicker(full = false) {
   const sb = $('#pkSource'); if (sb) { sb.innerHTML = srcBar; sb.hidden = !srcBar; }
   $('#pkFilters').innerHTML = (sb ? '' : srcBar) + `<div class="mp-filter-row">`
     + (sub ? popBtn('mp-sub-btn', '🔌', PK.subs, `${sub.label}: ${sub.all}`, 'provider') : '')
-    + usable.map(([k, l, f]) => `<button type="button" class="mp-chip ${PK.filters.has(k) ? 'on' : ''}" data-f="${k}" aria-pressed="${PK.filters.has(k)}">${l} <small>${scoped.filter(f).length}</small></button>`).join('')
-    + popBtn('mp-prov-btn', '🏢', PK.providers, 'All makers', 'maker')
+    + usable.map(([k, l, f, g, tip], i) => `${i && usable[i - 1][3] !== g ? '<span class="mp-fsep" aria-hidden="true"></span>' : ''}<button type="button" class="mp-chip ${PK.filters.has(k) ? 'on' : ''}" data-f="${k}" aria-pressed="${PK.filters.has(k)}"${tip ? ` title="${esc(tip)}"` : ''}>${l} <small>${scoped.filter(f).length}</small></button>`).join('')
+    + (usable.length ? '<span class="mp-fsep" aria-hidden="true"></span>' : '') + popBtn('mp-prov-btn', '🏢', PK.providers, 'All makers', 'maker')
     + (PK.filters.size || PK.providers.size || PK.subs.size ? '<button type="button" class="mp-link mp-clear">Clear filters</button>' : '') + '</div>';
   for (const b of document.querySelectorAll('#pkFilters .mp-chip[data-f]')) b.onclick = () => { PK.filters.has(b.dataset.f) ? PK.filters.delete(b.dataset.f) : PK.filters.add(b.dataset.f); PK.sel = 0; drawPicker(); };
   // A new source starts with its own filters clear.
@@ -2198,8 +2205,9 @@ function drawList() {
   const RANK = { g: 0, y: 1, r: 2 };
   const by = { best: (a, b) => RANK[rateModel(a, PK.kind)?.r ?? 'y'] - RANK[rateModel(b, PK.kind)?.r ?? 'y'] || priceNum(a) - priceNum(b), cheap: (a, b) => priceNum(a) - priceNum(b), pricey: (a, b) => priceNum(b) - priceNum(a), new: (a, b) => (b.created || 0) - (a.created || 0), old: (a, b) => (a.created || 0) - (b.created || 0), name: (a, b) => cleanName(a).localeCompare(cleanName(b)), ctx: (a, b) => (b.ctx || 0) - (a.ctx || 0) }[PK.sort];
   list.sort((a, b) => by(a, b) || cleanName(a).localeCompare(cleanName(b)));
-  // Favourites and recent ones first when nothing narrows the list.
-  const plain = !q && !PK.filters.size && !PK.providers.size && !PK.subs.size;
+  // Favourites and recent ones first when nothing narrows the list and the sort is Recommended. Another sort you
+  // chose orders the whole list (★ Favourites is still a filter): pinned on top, they hid that the sort had worked.
+  const plain = !q && !PK.filters.size && !PK.providers.size && !PK.subs.size && PK.sort === 'best';
   const here = inSource;
   const favs = plain ? (G.favModels?.[PK.kind] || []).map((id) => all.find((m) => m.id === id)).filter((m) => m && here(m)) : [];
   const recent = plain ? (G.recentModels?.[PK.kind] || []).filter((id) => !favs.some((f) => f.id === id)).map((id) => all.find((m) => m.id === id)).filter((m) => m && here(m)).slice(0, 5) : [];
@@ -2325,7 +2333,9 @@ function wirePicker() {
   };
   $('#pkClose').onclick = () => PK.done?.(null);
   $('#pkRefresh').onclick = async () => { const b = $('#pkRefresh'); b.disabled = true; b.textContent = '↻ Refreshing…'; await loadModels(true); b.disabled = false; b.textContent = '↻ Refresh'; };
-  document.addEventListener('pointerdown', (e) => { const pop = $('#pkFilters .mp-prov-pop'); if (pop && !pop.hidden && !e.target.closest('.mp-prov-wrap')) pop.hidden = true; }, true);
+  document.addEventListener('pointerdown', (e) => {
+    for (const pop of document.querySelectorAll('#picker .mp-prov-pop')) if (!pop.hidden && !pop.parentElement.contains(e.target)) { pop.hidden = true; pop.previousElementSibling?.setAttribute('aria-expanded', 'false'); }
+  }, true);
 }
 
 // The model lists come from OpenRouter (public; no key needed). States: loading, ready, error.
