@@ -37,7 +37,7 @@ import { ptyAvailable, ptyOpen, ptyWrite, ptyResize, ptyFollow, ptyClose } from 
 // Pages the agent wrote, served from this app's own address, get their own opaque origin: their requests to /api are refused.
 const SANDBOX_CSP = 'sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads';
 import { listChats, chatPerms, sidebarChats, chatPage, chatPictureRefs, pictureRefCounts, getTrace, getChatForPage, getChat, saveChat, patchChat, settleReply, trashChat, duplicateChat, validId, listProjects, saveProject, forgetProject, setProjectColor, setProjectAlias, setProjectFlags, costSummary, costChats, providerUsage } from './server/store.js';
-import { runLine, ALLOWED, copyTemplate, workspaceDir, safePath, fullLocalPath,chatFolder, listFiles, listDir, listServers, stopServerWait, restartServer, serverLog, startServer, restoreCheckpoint, listCheckpoints, pruneCheckpoints, undoConflicts, changedFiles, reviewFiles, reviewDiff, undoFile, serverOverview, launchConfigs, saveLaunchConfig, removeLaunchConfig, forgetServer, serverFor, ensureAgentDir, agentSpace } from './server/workspace.js';
+import { runLine, ALLOWED, copyTemplate, workspaceDir, safePath, fullLocalPath, isCommandLog, chatFolder, listFiles, listDir, listServers, stopServerWait, restartServer, serverLog, startServer, restoreCheckpoint, listCheckpoints, pruneCheckpoints, undoConflicts, changedFiles, reviewFiles, reviewDiff, undoFile, serverOverview, launchConfigs, saveLaunchConfig, removeLaunchConfig, forgetServer, serverFor, ensureAgentDir, agentSpace } from './server/workspace.js';
 import { followTerm, runningJobs, stopJob } from './server/terminal.js';
 import { runningIn, runningAll, stopRunning, stopAllIn } from './server/running.js';
 import { decide as decideCommand, loadRules, saveRules, suggestedRules, ruleProblem, updateRule, removeRule } from './server/cmdpolicy.js';
@@ -417,6 +417,20 @@ const server = http.createServer(async (req, res) => {
       if (!validId(pid) || !listProjects().some((p) => p.id === pid)) return json(res, 404, { error: 'not found' });
       const mf = mediaFile(workspaceDir(pid), validId(cid) ? cid : '', url.searchParams.get('path'));
       return mf ? serveMedia(req, res, mf) : json(res, 404, { error: 'not found' });
+    }
+    // A command's whole output, for the side pane: only the agent's own command logs (.quorx/scratch/logs/*.log), which
+    // /ws/ never serves (dot folders stay off the pages address). The last 2 MB of a longer one.
+    if (url.pathname === '/api/command-log' && req.method === 'GET') {
+      const pid = url.searchParams.get('project'), rel = String(url.searchParams.get('path') || '');
+      if (!validId(pid) || !listProjects().some((p) => p.id === pid)) return json(res, 400, { error: 'unknown project' });
+      if (!isCommandLog(rel)) return json(res, 404, { error: 'not found' });
+      try {
+        const file = safePath(workspaceDir(pid), rel), size = fs.statSync(file).size, from = Math.max(0, size - 2e6);
+        const buf = Buffer.alloc(size - from), fd = fs.openSync(file, 'r');
+        try { fs.readSync(fd, buf, 0, buf.length, from); } finally { fs.closeSync(fd); }
+        res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-cache' });
+        return res.end(from ? `[… the first ${Math.round(from / 1e6)} MB are cut]\n${buf.toString('utf8')}` : buf);
+      } catch { return json(res, 404, { error: 'not found' }); }
     }
     if (url.pathname === '/api/files/text' && req.method === 'GET') {
       const pid = url.searchParams.get('project');

@@ -91,6 +91,9 @@ function hardLinkedSecret(p) {
 /** A path a reply names: the full path when it is one on this computer (C:\…, C:/…, file:///…), '' when it is
  *  relative (to the project), null for a network path (\\server\…, file://server/…): looking one up can send the
  *  computer's sign-in to that server, so those are never touched. */
+/** Whether a project path is one of the agent's own command logs (.quorx/scratch/logs/<name>.log): the only files
+ * under .quorx that /api/command-log hands to the app's side pane. */
+export const isCommandLog = (rel) => /^\.quorx\/scratch\/logs\/[\w.-]+\.log$/.test(String(rel || '')) && !String(rel).includes('..');
 export function fullLocalPath(p) {
   let s = String(p || '').trim();
   if (/^file:/i.test(s)) { try { s = fileURLToPath(s); } catch { return null; } }
