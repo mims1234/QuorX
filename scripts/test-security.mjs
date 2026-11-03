@@ -20,6 +20,7 @@ import { renderMarkdown } from '../public/markdown.js';
 import { userEnv, mergePath } from '../server/userenv.js';
 import { needsAdmin, adminForAgent } from '../server/elevation.js';
 import { externalize, blobData } from '../server/blobs.js';
+import { userBrowse } from '../server/userbrowser.js';
 import { redactSecrets } from '../server/secrets.js';
 
 const req = ({ host = 'localhost:5188', ip = '127.0.0.1', site, cookie, headers = {} } = {}) => ({ headers: { host, ...(site ? { 'sec-fetch-site': site } : {}), ...(cookie ? { cookie } : {}), ...headers }, socket: { remoteAddress: ip } });
@@ -627,4 +628,10 @@ test('the DEV look can only appear in a git checkout run unpackaged, never in an
   const pkg = JSON.parse(fs.readFileSync(path.join(root, 'desktop', 'package.json'), 'utf8'));
   const filters = JSON.stringify(pkg.build?.extraResources || []) + JSON.stringify(pkg.build?.files || []);
   assert.doesNotMatch(filters, /\.git(?!hub|ignore|attributes)/, 'the desktop build must not package .git');
+});
+
+test('comment mode only looks at your real desktop tab: no clicking, typing, opening or reloading there', async () => {
+  for (const op of ['click', 'type', 'key', 'open', 'reload', 'back', 'close']) {
+    await assert.rejects(userBrowse('mytab01', op, { real: true }), /only looking and scrolling/, op);
+  }
 });
