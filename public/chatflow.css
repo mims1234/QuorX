@@ -10,7 +10,7 @@
 html:root body .msgs .msg.user { --who: var(--accent); background: linear-gradient(to left, color-mix(in srgb, var(--who) 16%, transparent), color-mix(in srgb, var(--who) 5%, transparent) 55%, transparent) !important;
   border: 0 !important; border-right: 2px solid color-mix(in srgb, var(--who) 75%, transparent) !important; border-radius: 0 !important; box-shadow: none !important;
   max-width: min(78%, 720px) !important; min-width: min(46%, 320px) !important; width: fit-content !important;
-  margin-left: auto !important; margin-right: 12px !important; align-self: flex-end !important; padding: 8px 14px 6px 28px !important; text-align: right; }
+  margin-left: auto !important; margin-right: 12px !important; align-self: flex-end !important; padding: 8px 14px 6px 28px !important; text-align: left; }
 html:root body .msgs .msg.user::before { display: none !important; }
 html:root body .msgs .msg.user .utext { font-size: var(--msg-size, 14px); }
 html:root body .msgs .msg.user .u-foot { justify-content: flex-end; }
@@ -35,7 +35,7 @@ html:root body .msgs .msg.bot::before { left: 10px !important; top: 8px !importa
 /* ---- what you wrote while it worked: on the right too, where you wrote it ---- */
 .steer-card.tl-you { margin: 8px 0 6px auto; width: fit-content; max-width: min(78%, 640px); min-width: min(46%, 280px); padding: 7px 12px 7px 24px; border-radius: 0;
   background: linear-gradient(to left, color-mix(in srgb, var(--accent) 16%, transparent), color-mix(in srgb, var(--accent) 5%, transparent) 55%, transparent);
-  border: 0; border-right: 2px solid color-mix(in srgb, var(--accent) 75%, transparent); text-align: right; }
+  border: 0; border-right: 2px solid color-mix(in srgb, var(--accent) 75%, transparent); text-align: left; }
 .steer-card.tl-you .sc-who { display: none; }
 .steer-card.tl-you p { margin: 0; }
 .steer-card.tl-you .sc-state { display: block; text-align: right; font: 400 11px var(--font-ui); }
