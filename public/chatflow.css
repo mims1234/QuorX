@@ -3,21 +3,26 @@
    replies. What the agent says stays where it said it; its tool work folds into lines; the files it makes show under
    the step that made them; cards are short and open for more. Loaded last, so it wins over the older layers. */
 
-/* ---- no bubbles: every message is a full-width row, its text from the same left edge; who speaks is its colour ----
-   You: a teal tint across the whole row, strongest at its right edge, with a teal line there. The agent: violet (like
-   its model name) glowing from its left edge rightward; that edge turns green while it works, amber while it waits for
-   you, red when it stopped on an error. */
-html:root body .msgs .msg.user { --who: var(--accent); background: linear-gradient(to left, color-mix(in srgb, var(--who) 18%, transparent), color-mix(in srgb, var(--who) 7%, transparent) 45%, color-mix(in srgb, var(--who) 4%, transparent)) !important;
-  border: 0 !important; border-right: 2px solid color-mix(in srgb, var(--who) 75%, transparent) !important; border-radius: 0 !important; box-shadow: none !important;
+/* ---- no bubbles: every message is a full-width row laid out the same way ----
+   An edge line on the left, the text from one left edge, then a footer with the stats on the left and the buttons on
+   the right. Who speaks is its colour: your row is tinted teal across its whole width; the agent's violet (like its
+   model name) glows only from its edge, and that edge turns green while it works, amber while it waits for you, red
+   when it stopped on an error. Each edge line fades in at its start and out at its end through QuorX's own green. */
+html:root body .msgs .msg { --edge: linear-gradient(to bottom, transparent, color-mix(in srgb, var(--ok) 70%, transparent) 10%, color-mix(in srgb, var(--who) 80%, transparent) 30%, color-mix(in srgb, var(--who) 80%, transparent) 70%, color-mix(in srgb, var(--ok) 70%, transparent) 90%, transparent); }
+html:root body .msgs .msg.user { --who: var(--accent); background: linear-gradient(to right, color-mix(in srgb, var(--who) 16%, transparent), color-mix(in srgb, var(--who) 8%, transparent) 40%, color-mix(in srgb, var(--who) 5%, transparent)) !important;
+  border: 0 !important; border-left: 2px solid transparent !important; border-image: var(--edge) 1 !important; border-radius: 0 !important; box-shadow: none !important;
   max-width: none !important; min-width: 0 !important; width: auto !important;
-  margin-left: 0 !important; margin-right: 0 !important; align-self: stretch !important; padding: 10px 14px 6px 46px !important; text-align: left; }
+  margin-left: 0 !important; margin-right: 0 !important; align-self: stretch !important; padding: 10px 12px 6px 44px !important; text-align: left; }
 html:root body .msgs .msg.user::before { display: none !important; }
 html:root body .msgs .msg.user .utext { font-size: var(--msg-size, 14px); }
-html:root body .msgs .msg.user .u-foot { justify-content: flex-end; }
-html:root body .msgs .msg.user time { text-align: right; }
+/* Your footer like the agent's: when on the left, the buttons on the right. */
+html:root body .msgs .msg.user .u-foot { justify-content: space-between; }
+html:root body .msgs .msg.user .u-foot > time { order: -1; text-align: left; }
+html:root body .msgs .msg.user .u-foot > time::before { content: none !important; }
+html:root body .msgs .msg.user .u-foot > .u-tools { order: 1; margin-left: auto; }
 
 html:root body .msgs .msg.bot { --who: var(--violet, #a78bfa); background: linear-gradient(to right, color-mix(in srgb, var(--who) 9%, transparent), color-mix(in srgb, var(--who) 3%, transparent) 30%, transparent 60%) !important;
-  border: 0 !important; border-left: 2px solid color-mix(in srgb, var(--who) 60%, transparent) !important; border-radius: 0 !important;
+  border: 0 !important; border-left: 2px solid transparent !important; border-image: var(--edge) 1 !important; border-radius: 0 !important;
   box-shadow: none !important; padding: 6px 12px 6px 44px !important; }
 html:root body .msgs .msg.bot.is-live { --who: var(--ok); }
 html:root body .msgs .msg.bot.is-waiting { --who: var(--amber, #f59e0b); }
@@ -25,7 +30,7 @@ html:root body .msgs .msg.bot.is-error { --who: var(--bad); }
 html:root body .msgs .msg.bot::before { left: 10px !important; top: 8px !important; width: 24px !important; height: 24px !important; border-radius: 6px !important; font-size: 9px !important; }
 @media (max-width: 600px) {
   html:root body .msgs .msg.bot { padding-left: 38px !important; }
-  html:root body .msgs .msg.user { padding-left: 40px !important; }
+  html:root body .msgs .msg.user { padding-left: 38px !important; }
   html:root body .msgs .msg.bot::before { left: 6px !important; }
 }
 
@@ -34,8 +39,8 @@ html:root body .msgs .msg.bot::before { left: 10px !important; top: 8px !importa
 
 /* ---- what you wrote while it worked: your colour too, a full-width line where you wrote it ---- */
 .steer-card.tl-you { margin: 8px 0 6px; width: auto; max-width: none; padding: 7px 12px; border-radius: 0;
-  background: linear-gradient(to left, color-mix(in srgb, var(--accent) 18%, transparent), color-mix(in srgb, var(--accent) 7%, transparent) 45%, color-mix(in srgb, var(--accent) 4%, transparent));
-  border: 0; border-right: 2px solid color-mix(in srgb, var(--accent) 75%, transparent); text-align: left; }
+  background: linear-gradient(to right, color-mix(in srgb, var(--accent) 16%, transparent), color-mix(in srgb, var(--accent) 8%, transparent) 40%, color-mix(in srgb, var(--accent) 5%, transparent));
+  border: 0; border-left: 2px solid transparent; border-image: linear-gradient(to bottom, transparent, color-mix(in srgb, var(--ok) 70%, transparent) 15%, color-mix(in srgb, var(--accent) 80%, transparent) 35%, color-mix(in srgb, var(--accent) 80%, transparent) 65%, color-mix(in srgb, var(--ok) 70%, transparent) 85%, transparent) 1; text-align: left; }
 .steer-card.tl-you .sc-who { display: none; }
 .steer-card.tl-you p { margin: 0; }
 .steer-card.tl-you .sc-state { display: block; text-align: right; font: 400 11px var(--font-ui); }
@@ -161,9 +166,9 @@ html:root body .msgs { -webkit-mask-image: linear-gradient(to bottom, transparen
 /* Compact density keeps them, a little tighter (its own rule set 8px at the top, which put the first message against the header). */
 html:root[data-density="compact"] body .msgs { padding-top: 16px !important; padding-bottom: 18px !important; }
 /* Compact density's own message paddings outrank the ones above: the same left edge for both, a little tighter. */
-html:root[data-density="compact"] body .msgs .msg.user { padding: 8px 14px 5px 46px !important; }
+html:root[data-density="compact"] body .msgs .msg.user { padding: 8px 12px 5px 44px !important; }
 html:root[data-density="compact"] body .msgs .msg.bot { padding: 5px 12px 5px 44px !important; }
 @media (max-width: 600px) {
-  html:root[data-density="compact"] body .msgs .msg.user { padding-left: 40px !important; }
+  html:root[data-density="compact"] body .msgs .msg.user { padding-left: 38px !important; }
   html:root[data-density="compact"] body .msgs .msg.bot { padding-left: 38px !important; }
 }
