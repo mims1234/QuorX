@@ -164,6 +164,7 @@ dialog.mp-dialog::backdrop { background: rgba(4, 6, 6, .72); backdrop-filter: bl
    mark is its cream on dark and near-black on light; OpenAI and Kimi are black and white. */
 .src-logo-gemini, .src-logo-meta { background: var(--ico) center / contain no-repeat; -webkit-mask: none; mask: none; }
 .src-logo-anthropic { background: #f0eee6; }
+.src-logo-refuseless { background: #c8102e; } /* Refuseless's red, the same on light and dark */
 @media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) .src-logo-anthropic { background: #191919; } }
 :root[data-theme="light"] .src-logo-anthropic { background: #191919; }
 /* OpenRouter's own glyph colours: lime on dark, violet on light. OpenCode, Command Code and xAI are black and white. */
