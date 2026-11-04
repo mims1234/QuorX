@@ -3205,3 +3205,38 @@ a.md-pathlink.md-path, .md-pathtext.md-path { color: var(--accent); }
 .pa-drop > div.hot { border-color: var(--accent); color: var(--text); background: color-mix(in srgb, var(--accent) 14%, transparent); }
 #paneBody .dview .dnote { position: absolute; left: 8px; right: 8px; bottom: 8px; padding: 7px 10px; border-radius: 7px; background: var(--panel-2); border: 1px solid var(--line-strong); color: var(--text); font-size: 12px; text-align: center; cursor: pointer; }
 #paneBody .dview .dnote[hidden] { display: none; }
+
+/* ---------- chat row status: fixed colours, apart from the project colours ----------
+   Project colours stay on the project headers. A chat row shows one state at a time (app.js picks it): waiting for
+   you (amber), using your Chrome (violet) or your desktop (teal, like the glow round that screen), working (green, with
+   a shine across it), stopped with an error (red), finished while you were elsewhere (blue). Each state also has its
+   own words under the title and its own motion or mark, so colour is never the only cue. The chat on screen adds a
+   neutral ring and glow on top, so it stands apart from every state colour. */
+:root { --st-run: #3ccf91; --st-wait: #f5a524; --st-error: #ff6b5e; --st-done: #5b9bff; --st-sel: #e8ecf3; --st-ring-w: 1px; --st-glow: 0 0 14px -3px; }
+:root[data-theme="light"] { --st-run: #047857; --st-wait: #b45309; --st-error: #c62828; --st-done: #1d4ed8; --st-sel: #1f2937; --st-ring-w: 1.5px; --st-glow: 0 2px 12px -3px; --drv-desktop: #0e7490; --drv-chrome: #6d28d9; }
+@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) { --st-run: #047857; --st-wait: #b45309; --st-error: #c62828; --st-done: #1d4ed8; --st-sel: #1f2937; --st-ring-w: 1.5px; --st-glow: 0 2px 12px -3px; --drv-desktop: #0e7490; --drv-chrome: #6d28d9; } }
+html body #projectList .sb-project .sb-chat.sb-chat-item { --st: transparent; --st-ring: 0 0 0 0 transparent; position: relative; border-left-color: var(--line-strong) !important; }
+html body #projectList .sb-project .sb-chat.sb-chat-item.st-run { --st: var(--st-run); }
+html body #projectList .sb-project .sb-chat.sb-chat-item.st-wait { --st: var(--st-wait); }
+html body #projectList .sb-project .sb-chat.sb-chat-item.st-drive { --st: var(--drv); }
+html body #projectList .sb-project .sb-chat.sb-chat-item.st-error { --st: var(--st-error); }
+html body #projectList .sb-project .sb-chat.sb-chat-item.st-done { --st: var(--st-done); }
+html body #projectList .sb-project .sb-chat.sb-chat-item:is(.st-run, .st-wait, .st-drive, .st-error, .st-done) { border-left-color: transparent !important; background: color-mix(in srgb, var(--st) 11%, transparent) !important; box-shadow: inset 3px 0 0 var(--st), var(--st-ring) !important; }
+html body #projectList .sb-project .sb-chat.sb-chat-item:is(.st-run, .st-wait, .st-drive, .st-error, .st-done):hover { background: color-mix(in srgb, var(--st) 17%, transparent) !important; }
+/* The chat on screen: one fixed neutral ring and glow; with no state of its own its bar is that colour too. */
+html body #projectList .sb-project .sb-chat.sb-chat-item.active { --st-ring: 0 0 0 var(--st-ring-w) color-mix(in srgb, var(--st-sel) 75%, transparent), var(--st-glow) color-mix(in srgb, var(--st-sel) 65%, transparent); border-radius: 7px; border-left-color: transparent !important; background: color-mix(in srgb, var(--st-sel) 8%, transparent) !important; box-shadow: inset 3px 0 0 var(--st-sel), var(--st-ring) !important; }
+html body #projectList .sb-project .sb-chat.sb-chat-item.active:is(.st-run, .st-wait, .st-drive, .st-error, .st-done) { background: color-mix(in srgb, var(--st) 11%, transparent) !important; box-shadow: inset 3px 0 0 var(--st), var(--st-ring) !important; }
+html body #projectList .sb-project .sb-chat.sb-chat-item.active::before { display: none !important; }
+html body #projectList .sb-project .sb-chat.sb-chat-item.active .sb-chat-title { font-weight: 650; }
+/* Working, not on screen: a soft shine sweeps across the row. */
+html body #projectList .sb-project .sb-chat.sb-chat-item.st-run:not(.active) { background: linear-gradient(105deg, transparent 35%, color-mix(in srgb, var(--st) 26%, transparent) 50%, transparent 65%) no-repeat, color-mix(in srgb, var(--st) 10%, transparent) !important; background-size: 260% 100%, 100% 100% !important; animation: st-shine 2.6s ease-in-out infinite; }
+@keyframes st-shine { 0% { background-position: 130% 0, 0 0; } 70%, 100% { background-position: -30% 0, 0 0; } }
+/* Using your Chrome or desktop keeps its breathing glow (above); waiting for you is still, so it reads as paused on you. */
+html body #projectList .sb-project .sb-chat.sb-chat-item .live-dot { background: var(--st, var(--st-run)) !important; box-shadow: 0 0 6px var(--st, var(--st-run)); }
+html body #projectList .sb-project .sb-chat.sb-chat-item.st-wait .live-dot { animation: none !important; }
+html body #projectList .sb-project .sb-chat.sb-chat-item .sb-chat-prev :is(.st-say, .needs) { color: var(--st) !important; background: none !important; padding: 0 !important; font-style: normal; font-weight: 600; }
+/* Ended off screen: a round dot for finished, a diamond for an error, until you open the chat. */
+.sb-chat-topline .st-mark { flex: none; width: 7px; height: 7px; margin-left: 4px; border-radius: 50%; background: var(--st); }
+.sb-chat-item.st-error .sb-chat-topline .st-mark { border-radius: 1px; transform: rotate(45deg); }
+html.reduce-motion body #projectList .sb-project .sb-chat.sb-chat-item.st-run:not(.active) { animation: none; background: color-mix(in srgb, var(--st) 13%, transparent) !important; }
+html.reduce-motion body #projectList .sb-project .sb-chat.sb-chat-item .live-dot { animation: none !important; }

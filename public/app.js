@@ -851,10 +851,18 @@ function renderSidebar() {
         const tip = [c.title || 'Untitled', ...(c.model ? [`Model\t${short(c.model)}`] : []), `Last message\t${new Date(c.lastAt || c.updated || Date.now()).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`, ...(c.messages ? [`Messages\t${c.messages}`] : []), ...(running ? [`Now\t${waiting ? 'waiting for you' : 'working'}`] : []), `Spent\t$${spent.toFixed(3)}`].join('\n');
         // Driving your Chrome or your desktop: the chat glows in that kind's colour (last.css, .drv-chrome / .drv-desktop).
         const drv = running && live.driving ? `drv-${live.driving}` : '';
-        return `<div class="sb-chat sb-chat-item ${G.panes.includes(c.id) ? 'on active' : ''} ${running ? 'running' : ''} ${drv}" data-c="${esc(c.id)}" data-tip-delay="900" title="${esc(tip)}">
+        // Each state has its own fixed colour, apart from the project colours (last.css, "chat row status"): one at a time,
+        // waiting for you first. The chat on screen adds its own ring and glow on top of whichever it is.
+        const ended = !running && G.unseen?.get(c.id);
+        const st = waiting ? 'st-wait' : drv ? 'st-drive' : running ? 'st-run' : ended ? `st-${ended}` : '';
+        const prev = waiting ? `<b class="needs">${waiting === 'answer' ? 'Waiting for your answer' : waiting === 'budget' ? 'Waiting: chat budget reached' : 'Waiting for your approval'}</b>`
+          : drv ? `<i class="st-say">${live.driving === 'chrome' ? 'Using your Chrome…' : 'Using your desktop…'}</i>`
+          : running ? '<i class="st-say">Working…</i>'
+          : ended === 'error' ? '<b class="st-say">Stopped with an error</b>' : ended ? '<b class="st-say">Finished: not seen yet</b>' : '';
+        return `<div class="sb-chat sb-chat-item ${G.panes.includes(c.id) ? 'on active' : ''} ${running ? 'running' : ''} ${drv} ${st}" data-c="${esc(c.id)}" data-tip-delay="900" title="${esc(tip)}">
           <div class="sb-chat-content">
-            <div class="sb-chat-topline"><span class="sb-chat-title">${esc(c.title)}</span>${schTag}${running ? '<span class="live-dot" aria-label="Running"></span>' : ''}</div>
-            ${waiting ? `<div class="sb-chat-prev"><b class="needs">${waiting === 'answer' ? 'Waiting for your answer' : waiting === 'budget' ? 'Waiting: chat budget reached' : 'Waiting for your approval'}</b></div>` : running ? '<div class="sb-chat-prev"><i>Working…</i></div>' : ''}
+            <div class="sb-chat-topline"><span class="sb-chat-title">${esc(c.title)}</span>${schTag}${running ? '<span class="live-dot" aria-label="Running"></span>' : ended ? `<span class="st-mark" aria-label="${ended === 'error' ? 'Stopped with an error' : 'Finished, not seen yet'}"></span>` : ''}</div>
+            ${prev ? `<div class="sb-chat-prev">${prev}</div>` : ''}
             <div class="sb-chat-meta"><span>${ago(c.lastAt || c.updated || Date.now())}</span>${c.model ? `<span>· ${esc(short(c.model))}</span>` : ''}${c.cost || liveOf(G.open.get(c.id)) ? `<span class="cost${liveOf(G.open.get(c.id)) ? ' live' : ''}">· $${((c.cost || 0) + liveOf(G.open.get(c.id))).toFixed(3)}</span>` : ''}</div>
           </div>
           <div class="sb-chat-acts"><button type="button" class="sb-chat-menu" title="Rename, duplicate or delete (or right-click the chat)" aria-label="Chat options" aria-haspopup="menu">${ICO.more}</button></div>
@@ -1885,7 +1893,7 @@ async function showChat(id, pane = G.focus) {
   const c = await getChat(id);
   if (!c) return uiAlert('Could not open that chat.');
   // One chat on screen at a time (others keep running in the background).
-  G.panes = [id]; G.focus = 0;
+  G.panes = [id]; G.focus = 0; G.unseen?.delete(id); // seen now: its "finished" or "stopped with an error" mark goes
   G.view = { id: null, src: false, files: false }; G.traceRun = null;
   withTransition(() => { renderPanes(); savePrefs(); renderSidebar(); });
 }
@@ -6555,6 +6563,9 @@ async function followRun(c, m, open) {
       const cost = m.stats && !uiOf(G.settings).maskAmounts ? ` · ${money(m.stats.cost, 3)}` : '';
       const tookTag = `${took ? `⏱ ${secs(took)}` : ''}${cost}`.replace(/^ · /, '');
       note(m.error ? 'error' : 'done', [tookTag, ...usedTags(m)]);
+      // A reply that ended off screen marks its sidebar row until you open the chat (last.css, .st-done / .st-error).
+      const how = m.failed ? 'error' : m.error ? '' : 'done'; // a reply stopped on purpose gets no mark
+      if (how && !G.panes.includes(c.id)) (G.unseen ??= new Map()).set(c.id, how);
     }
     const due = raf || fullTimer; if (raf) { cancelAnimationFrame(raf); raf = 0; } clearTimeout(fullTimer); fullTimer = 0;
     updateMsg(c, m); if (due) stick();
