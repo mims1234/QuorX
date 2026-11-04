@@ -16,7 +16,7 @@ import { jobsAvailable, jobHostStatus } from '../server/jobhost.js';
 import { decide, agentWriteBlocked, suggestedRules, loadRules } from '../server/cmdpolicy.js';
 import { approvalJudge } from '../server/approvals.js';
 import { SAFETY_DEFAULTS, safetySettings, yoloOf } from '../server/safety.js';
-import { answerApproval } from '../server/agent.js';
+import { answerApproval, answerQuestion } from '../server/agent.js';
 import { startRun, runningForChat } from '../server/runs.js';
 
 test('stop: the job host ends what a command leaves behind, and an abort or a timeout ends the whole tree with 0 left', { skip: !WIN }, async () => {
@@ -837,8 +837,8 @@ test('shell: in YOLO a build goes to the deciders (or, with them off, to you), a
   const yes = { needed: 0.95, other: 0.03 }, no = { needed: 0.05, other: 0.95 };
   for (const c of [
     { what: 'a clear yes', vote: yes, by: 'deciders', runs: true, say: 'I will run it because the user wants it.' },
-    { what: 'an unsettled vote that saw little risk, nobody answering', vote: { needed: 0.5, other: 0.03 }, wait: 1, by: 'timeout', runs: true,
-      card: (k) => k.wait?.then === 'run' && k.wait.secs === 1 },
+    // A build YOLO only checks first is judged on harm alone: "the user didn't name this step" is no reason to skip it.
+    { what: 'a "not asked for" vote that saw little risk', vote: { needed: 0.05, other: 0.03 }, by: 'deciders', runs: true, harmOnly: true },
     { what: 'an unsettled vote with a doubtful harm vote, nobody answering', vote: { needed: 0.9, other: 0.4 }, wait: 1, by: 'timeout', runs: false },
     { what: 'a no, nobody answering', vote: no, wait: 1, by: 'deciders', runs: false,
       card: (k) => /The deciders said no: .*Run it anyway\?/.test(k.why) && k.wait?.then === 'skip' },
@@ -857,10 +857,85 @@ test('shell: in YOLO a build goes to the deciders (or, with them off, to you), a
       assert.equal(done.approve, c.runs, `${c.what}: approved`);
       if (c.by) assert.equal(done.by, c.by, `${c.what}: decided by`);
       assert[c.runs ? 'match' : 'doesNotMatch'](toolOut(bodies, 1), /built/, `${c.what}: ran`);
+      if (c.harmOnly) assert.ok(sent.length && sent.every((b) => Object.keys(b.questions).join() === 'other'), `${c.what}: only the harm question is asked`);
       if (c.off) assert.equal(sent.length, 0, `${c.what}: no decider was asked`);
       else assert.ok(sent.length >= 2 && !JSON.stringify(sent).includes('I will run it'), `${c.what}: the agent’s own words never reach the deciders`);
     });
   }
+});
+
+// From a video chat: the user ran a render from its card, and the next reply's identical render went to a vote, timed
+// out and was skipped. A line the user ran from a card runs again later in the chat; one nobody answered does not.
+test('shell: in YOLO a build the user ran from a card runs again in the next reply of the chat without a vote', { skip: !WIN }, async () => {
+  await withDeciders(voteAll({ needed: 0.9, other: 0.4 }), async (sent) => {
+    const chatId = `c${Date.now().toString(36)}`, settings = { approval: 'yolo', yoloWaitSecs: 5, safety: { yoloLevel: 'careful' } };
+    const first = await agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('Done.')][i], {
+      chatId, settings, prep: buildJs, onEvent: (e, id) => { if (e.t === 'approval' && e.mode === 'strict') setTimeout(() => answerApproval(id, e.id, { approve: true }), 20); } });
+    assert.equal(of(first.events, 'approval_done').at(-1).by, 'user');
+    const votes = sent.length;
+    const second = await agentRun((b, i) => [reply('', [['shell', { command: 'node  build.js' }]]), reply('Done.')][i], { chatId, settings, prep: buildJs });
+    assert.equal(of(second.events, 'approval').length, 0, 'no card the second time');
+    assert.equal(sent.length, votes, 'no vote the second time');
+    assert.match(toolOut(second.bodies, 1), /built/);
+    assert.ok(of(second.events, 'note').some((e) => /you approved .* earlier in this chat/.test(e.msg)));
+    // Another chat, or a line nobody answered, still goes to the vote.
+    const other = await agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('Done.')][i], { chatId: `${chatId}x`, settings: { ...settings, yoloWaitSecs: 1 }, prep: buildJs });
+    assert.equal(of(other.events, 'approval_done').at(-1).approve, false, 'a new chat checks it again');
+  });
+});
+
+// From a research chat: the user picked "Approve the AI voice" in the agent's question, and the deciders turned the
+// next voice calls down as "the request doesn't seem to need it". The user's answers are part of what they asked.
+test('deciders: the user\'s answers to the agent\'s questions reach them as the user\'s words; a default nobody chose does not', { skip: !WIN }, async () => {
+  await withDeciders(voteAll({ needed: 0.95, other: 0.03 }), async (sent) => {
+    const { events } = await agentRun((b, i) => [
+      reply('', [['ask_user', { question: 'Run the risky part?', options: ['Yes, run the build script', 'No'] }]]),
+      reply('', [['shell', { command: 'node build.js' }]]),
+      reply('Done.'),
+    ][i], { chatId: `a${Date.now().toString(36)}`, settings: { approval: 'yolo', yoloWaitSecs: 5, safety: { yoloLevel: 'careful', yoloCheckBuild: true } }, prep: buildJs,
+      onEvent: (e, id) => { if (e.t === 'question') setTimeout(() => answerQuestion(id, e.id, { choice: 0 }), 20); } });
+    assert.equal(of(events, 'approval_done').at(-1).by, 'deciders');
+    const said = JSON.stringify(sent.at(-1));
+    assert.match(said, /The user's answer to the agent's question \\"Run the risky part\?\\"\] Yes, run the build script/, said.slice(0, 600));
+  });
+  await withDeciders(voteAll({ needed: 0.95, other: 0.03 }), async (sent) => {
+    await agentRun((b, i) => [
+      reply('', [['ask_user', { question: 'Run the risky part?', options: ['Yes, run the build script', 'No'] }]]),
+      reply('', [['shell', { command: 'node build.js' }]]),
+      reply('Done.'),
+    ][i], { chatId: `b${Date.now().toString(36)}`, settings: { approval: 'yolo', safety: { yoloLevel: 'careful', yoloCheckBuild: true } }, prep: buildJs });
+    assert.ok(sent.length && !JSON.stringify(sent).includes("The user's answer"), 'the deciders answered that question themselves: not the user\'s words');
+  });
+});
+
+// From a video chat: frames saved in .quorx/scratch opened as a 404 page (dot folders are never served), and the
+// judges "settled" checks such as "is the text cut off? no" on that empty page.
+test('look: a picture in the project is judged from the file; a missing one, or a page that didn\'t load, is not judged', { skip: !WIN }, async () => {
+  const real = globalThis.fetch, seen = [];
+  globalThis.fetch = async (url, init) => {
+    if (!String(url).includes('/decisions')) return real(url, init);
+    const b = JSON.parse(init.body); seen.push(b);
+    return new Response(JSON.stringify({ answers: Object.fromEntries(Object.keys(b.questions).map((k) => [k, { noul: 0.9 }])), usage: { cost: 0 } }));
+  };
+  // A 1×1 PNG.
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+  const checks = [{ ask: 'The frame shows text', my_guess: 'yes', my_confidence: 0.7 }];
+  try {
+    const { bodies } = await agentRun((b, i) => [
+      reply('', [['look', { target: 'site:.quorx/scratch/f12.png', checks }]]),
+      reply('', [['look', { target: 'site:.quorx/scratch/gone.png', checks }]]),
+      reply('', [['look', { target: 'file:.git/x.png', checks }]]),
+      reply('Done.'),
+    ][i], { settings: { approval: 'yolo' }, prep: (d) => { fs.mkdirSync(path.join(d, '.quorx', 'scratch'), { recursive: true }); fs.writeFileSync(path.join(d, '.quorx', 'scratch', 'f12.png'), png); } });
+    const outs = bodies.slice(1).map((b) => b.messages.filter((m) => m.role === 'tool').at(-1).content);
+    assert.match(outs[0], /"page":"file:\.quorx\/scratch\/f12\.png"/, outs[0]);
+    assert.match(outs[0], /"status":"settled"/);
+    assert.equal(seen.length > 0 && JSON.stringify(seen).includes('data:image/png;base64,'), true, 'the judges got the file itself');
+    const n = seen.length;
+    assert.match(outs[1], /^Error: \.quorx\/scratch\/gone\.png doesn't exist/);
+    assert.match(outs[2], /^Error: \.git\/x\.png is in a dot folder/);
+    assert.equal(seen.length, n, 'nothing was judged for them');
+  } finally { globalThis.fetch = real; }
 });
 
 test('shell: with the deciders off, a command they would approve in your place waits for you even when set to run', { skip: !WIN }, async () => {

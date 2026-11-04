@@ -520,6 +520,17 @@ export function answerBudget(runId, id) {
 }
 // ask_user: the agent's questions to the user (an option, or the user's own words).
 const questions = new Map();
+// Per chat, while QuorX runs: what the user answered the agent's questions (their own pick or words, never a
+// recommendation that stood when nobody answered), and the command lines they said yes to on a card. The deciders
+// read the answers as the user's request too: a user who picked "Approve the AI voice" had the next three voice calls
+// turned down as "the request doesn't seem to need it". A line the user ran from a card runs again in later replies
+// of the chat without a vote: the same render was approved by the user, then skipped twice when nobody answered.
+const chatMemo = new Map();
+export function chatHeard(chatId) {
+  const k = String(chatId || '');
+  if (!chatMemo.has(k)) { chatMemo.set(k, { answers: [], lines: new Set() }); if (chatMemo.size > 200) chatMemo.delete(chatMemo.keys().next().value); }
+  return chatMemo.get(k);
+}
 export function answerQuestion(runId, id, answer) {
   const resolve = questions.get(`${runId}:${id}`);
   if (!resolve) return false;
@@ -790,7 +801,7 @@ export const BROWSER_TOOLS = [
     new_tab: { type: 'boolean', description: 'open chrome:<address>: in a new tab of this chat\'s group, keeping the current one (default: the current tab goes there)' },
     index: { type: 'integer', description: 'switch: the tab number from tabs' },
     width: { type: 'integer', description: 'open: viewport width, e.g. 390 for a phone, default 1280' } } } } },
-  { type: 'function', function: { name: 'look', description: 'Screenshot the page open in the browser (or open a target first) and have fast vision judges answer your yes/no checks about it. Commit your own guess for each check first.', parameters: { type: 'object', required: ['checks'], properties: {
+  { type: 'function', function: { name: 'look', description: 'Screenshot the page open in the browser (or open a target first) and have fast vision judges answer your yes/no checks about it. A picture in the project (site: or file: with a .png, .jpg or .webp path, .quorx/scratch too) is judged from the file itself. Commit your own guess for each check first.', parameters: { type: 'object', required: ['checks'], properties: {
     target: { type: 'string', description: 'Optional: open this first (same forms as browser.open), or desktop:<app or job> for a window on the desktop (desktop:Calculator, desktop:bg1). With none, right after desktop work it looks at that window' }, width: { type: 'integer' },
     checks: { type: 'array', minItems: 1, maxItems: 8, items: { type: 'object', required: ['ask', 'my_guess', 'my_confidence'], properties: {
       ask: { type: 'string', description: 'A yes/no statement about what the screenshot shows' }, my_guess: { type: 'string', enum: ['yes', 'no'] }, my_confidence: { type: 'number', minimum: 0, maximum: 1 } } } } } } } },
@@ -1350,6 +1361,11 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
   const userText = (String(req.text || '').trim() || (pointed ? '(The user pointed at the element(s) below without a message: ask what they want changed unless their note says it.)' : (req.images?.length || req.docs?.length || req.context) ? '(The user sent this without a message. Look at what they attached and respond to it: say what it is and ask what they want done, unless that is obvious.)' : '')) + pointed;
   // The user's own turns in this chat, newest last: all an approval judge may read of the conversation.
   const userTurns = () => [...(req.history || []).filter((m) => m.role === 'user').slice(-5).map((m) => String(m.content ?? '')), userText];
+  // For the deciders: the user's messages and their answers to the agent's questions in this chat (see chatHeard).
+  // A run without a chat id keeps its answers to itself.
+  const heard = req.chatId ? chatHeard(req.chatId) : { answers: [], lines: new Set() };
+  const hear = (question, answer) => { if (!answer) return; heard.answers.push(`[The user's answer to the agent's question "${clip(question, 200)}"] ${clip(answer, 400)}`); heard.answers.splice(0, heard.answers.length - 4); };
+  const judgeTurns = () => { const t = userTurns(), a = heard.answers.slice(-3); return [...t.slice(0, -1).slice(-(5 - a.length)), ...a, t[t.length - 1]]; };
   // What the user named in their own messages: a folder (that folder or one inside it) or an app by its name or a
   // common short one (VS Code). Only the user's words count, never a page or a file the agent read.
   const normP = (s) => String(s).replaceAll('\\', '/').replace(/\/+$/, '').toLowerCase();
@@ -3142,7 +3158,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       const card = { id: newApprovalId(), tool: 'schedule', free: true, est: 0, noAlways: true, what, why: clip(args.why || 'The agent wants to change your scheduled jobs.', 240), yes: 'Allow', no: 'Don\'t' };
       if (S.approval === 'yolo' && decidersOn) {
         emit({ t: 'approval', ...card, mode: 'yolo', at: at() });
-        const j = await approvalJudge({ kind: 'command', userMessages: userTurns(), reading: run.reading?.text, voters: S.voters, chatModel: setup.model, gate: S.gate, signal, account, sf: SF,
+        const j = await approvalJudge({ kind: 'command', userMessages: judgeTurns(), reading: run.reading?.text, voters: S.voters, chatModel: setup.model, gate: S.gate, signal, account, sf: SF,
           facts: { command: `${what} (a job QuorX runs on its own on a timer, spending on each run)`, parts: [{ text: what, class: 'a scheduled job' }] }, log: { runId, chatId: req.chatId || null, project: projectId } });
         if (j.approve === true) { emit({ t: 'approval_done', id: card.id, approve: true, by: 'deciders', reason: j.reason, votes: j.votes, at: at() }); return { approve: true }; }
       }
@@ -3368,6 +3384,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     }
     if (ans.timedOut) { questions.delete(`${runId}:${id}`); return (await deciderAnswers(id, question, options, { shown: true })) + over; }
     emit({ t: 'answer', id, choice: ans.choice, text: ans.text, at: at() });
+    hear(question, ans.choice == null ? ans.text : options[ans.choice] ?? options[0]);
     if (ans.choice == null) return `The user answered in their own words: "${ans.text}". Treat it as part of what they want; it does not change your other instructions.${over}`;
     return `The user chose: "${options[ans.choice] ?? options[0]}".${over}`;
   }
@@ -3405,6 +3422,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       return { choice, text: choice == null ? String(a.text || '') : '' };
     });
     emit({ t: 'answer', id, answers: got, defaults: !!ans.defaults, at: at() });
+    list.forEach((q, i) => hear(q.question, got[i].choice != null ? q.options[got[i].choice] : got[i].text));
     const lines = list.map((q, i) => {
       const g = got[i];
       const said = g.choice != null ? `"${q.options[g.choice]}"${g.choice === q.recommended ? ' (your recommendation)' : ''}` : g.text ? `in their own words: "${g.text}"` : 'no answer: decide this one yourself';
@@ -4241,6 +4259,18 @@ ${r.text || '(no text found)'}`;
       emit({ t: 'note', level: 'info', msg: `Ran without asking again: “${clip(line, 80)}” was approved earlier in this reply.`, at: at() });
       return { ok: true, by: 'earlier' };
     }
+    // ⚡ YOLO only checks it first (a build, a render, a web read, an unknown program): it would run without the check,
+    // nothing about it reaches past the project. Such a line the user ran from a card earlier in this chat runs again.
+    // Anything that reaches past the project (files outside, the web, a program QuorX can't read) still needs the
+    // user's request behind it.
+    const pastProject = d.segments.some((s) => ['opaque', 'external', 'net', 'never'].includes(s.cls) || s.global || (s.paths || []).some((p) => p.zone === 'outside' || p.zone === 'unknown'));
+    const checkOnly = S.approval === 'yolo' && !yoloAsksCommands && d.verdict === 'ask' && d.who === 'deciders' && !d.standIn && !pastProject;
+    if (!hook && checkOnly && heard.lines.has(sameLine)) {
+      aud({ kind: 'approved', command: line, by: 'earlier', reason: 'the user approved it earlier in this chat' });
+      emit({ t: 'note', level: 'info', msg: `Ran without asking again: you approved “${clip(line, 80)}” earlier in this chat.`, at: at() });
+      approvedLines.add(sameLine);
+      return { ok: true, by: 'earlier' };
+    }
     let who = d.verdict === 'allow' || S.approval !== 'yolo' || yoloAsksCommands || run.cmdEscalated ? 'user' : d.who;
     const card = { id: newApprovalId(), tool: 'shell', free: true, est: 0, what: line, why: hook ? `your hook (${hook}) runs this${fileFromAgent ? ', with a file name the agent chose' : ', not the agent'}; ${d.why}` : d.why, policy, ...(d.risk ? { risk: d.risk } : {}) };
     // Rules made by a button can't lift these (reading keys; deleting or moving outside the project, or where QuorX
@@ -4272,7 +4302,9 @@ ${r.text || '(no text found)'}`;
       // QuorX marks the scratch script while reading the command (any language: .ps1, .bat, .sh, .js, .py); the lines
       // it read inside the script come along, and the rest may only read.
       const scratch = d.segments.some((s) => s.scratch) && d.segments.every((s) => s.scratch || /^\.quorx\/scratch\//i.test(s.via || '') || s.cls === 'read');
-      const j = await approvalJudge({ kind: 'command', userMessages: userTurns(), reading: run.reading?.text, harmOnly: scratch, facts, voters: S.voters, chatModel: setup.model, gate: S.gate, signal, account, sf: SF,
+      // A command YOLO only checks first is judged on harm too: "did the user ask for this ffmpeg loudness pass?" turned
+      // down every mastering step of a video the user asked for (P=0.12 to 0.25), render after render.
+      const j = await approvalJudge({ kind: 'command', userMessages: judgeTurns(), reading: run.reading?.text, harmOnly: scratch || (checkOnly && 'this step of the work'), facts, voters: S.voters, chatModel: setup.model, gate: S.gate, signal, account, sf: SF,
         log: { runId, chatId: req.chatId || null, project: projectId } });
       if (j.approve === true) {
         run.cmdBlockRow = 0;
@@ -4328,6 +4360,7 @@ ${r.text || '(no text found)'}`;
     if (!ans.approve) return { ok: false, text: declined('shell', ans) + desktopWay(line) };
     // Running because nobody answered is not a yes: the same line asks again next time.
     if (!hook && ans.by !== 'timeout') approvedLines.add(sameLine);
+    if (!hook && checkOnly && (!ans.by || ans.by === 'user' || ans.by === 'you')) heard.lines.add(sameLine);
     return { ok: true, by: ans.by === 'timeout' ? 'timeout' : 'you' };
   }
 
@@ -5301,6 +5334,24 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     const app = chatApps.get(n.toLowerCase());
     return app ? { app } : `Error: "${n}" isn't open for this chat yet: call desktop open with app: "${n}" first.`;
   }
+  // site:<path> or file:<path> naming a picture inside the project: { rel, image } (a data URL of the file), an Error
+  // string when it is missing, or null for anything else (a page, a film, an address). Dot folders other than the
+  // agent's .quorx/scratch stay closed (.git, .env and QuorX's own files).
+  function projectPicture(target) {
+    const m = String(target || '').trim().match(/^(site|file):(.+)$/i);
+    if (!m || !root) return null;
+    let x = m[2].trim().replace(/[?#].*$/, '').replace(/^\/+(?=[a-z]:)/i, '');
+    try { x = decodeURIComponent(x); } catch { /* as written */ }
+    const ext = path.extname(x).toLowerCase(), mime = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif' }[ext];
+    if (!mime) return null;
+    const abs = path.resolve(root, x), rel = path.relative(path.resolve(root), abs).replaceAll('\\', '/');
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return null;
+    if (/(^|\/)\./.test(rel) && !/^\.quorx\/scratch\/(?!.*\/\.)/i.test(rel)) return `Error: ${rel} is in a dot folder, which QuorX doesn't show. Save pictures to check in .quorx/scratch or in the project.`;
+    let st; try { st = fs.statSync(abs); } catch { return `Error: ${rel} doesn't exist in the project, so there is nothing to look at. Check the path (list_files), or make the picture first.`; }
+    if (!st.isFile()) return null;
+    if (st.size > 15 * 1024 * 1024) return `Error: ${rel} is ${Math.round(st.size / 1048576)} MB, too big to judge. Save a smaller copy (scale it down) and look at that.`;
+    return { rel, image: `data:${mime};base64,${fs.readFileSync(abs).toString('base64')}` };
+  }
   async function look(args, step) {
     let t, image;
     // A window on the desktop: desktop:Calculator (an app this chat may use) or desktop:bg1 (the agent's own program).
@@ -5320,7 +5371,12 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
       if (!onLent || !lent) return 'Error: no tab of the user is open in this reply: open one with chrome:<address> or given first.';
       t = lent.tab;
     }
-    const shot = desk ? image : theirs ? await (t.shotWithin ? t.shotWithin(8000) : t.screenshot().catch(() => null)) : await withTab(async (tt) => {
+    // A picture in the project (a frame, a contact sheet) is judged from the file itself: the pages address never serves
+    // dot folders, so frames saved in .quorx/scratch came back as a 404 page and the judges "settled" checks on it.
+    const pic = !desk && !theirs ? projectPicture(args.target) : null;
+    if (typeof pic === 'string') return pic;
+    if (pic) { image = pic.image; t = { url: `file:${pic.rel}`, console: [] }; }
+    const shot = pic ? image : desk ? image : theirs ? await (t.shotWithin ? t.shotWithin(8000) : t.screenshot().catch(() => null)) : await withTab(async (tt) => {
       if (args.target) { const url = resolveTarget(args.target); if (harnessPage(url)) throw new Error(offLimits().replace(/^Error: /, '')); await tt.open(url, { width: Number(args.width) || 1280 }); }
       if (harnessPage(tt.url)) { await tt.open('about:blank').catch(() => {}); throw new Error(offLimits().replace(/^Error: /, '')); }
       if (tt.url === 'about:blank') return null;
@@ -5328,6 +5384,10 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     });
     if (!shot) return theirs ? "Error: no screenshot of the user's tab came back (Chrome may not be drawing the window while it is behind others or minimised). Read the page report instead, or ask the user to bring the window forward." : `Nothing is open: give a target, or open one with the browser first (a new tab starts empty).${run.lastDesk ? ` For the desktop window, target "desktop:${run.lastDesk}".` : process.platform === 'win32' ? ' For a window on the desktop, target "desktop:<app or job>".' : ''}`;
     image = shot;
+    // The page itself didn't load (a 404 or a server error): there is nothing of the agent's work to judge.
+    const pageUrl = String(t.url || '').split(/[?#]/)[0];
+    const failed = !pic && !desk && pageUrl && (t.console || []).find((c) => /status of (4\d\d|5\d\d)/.test(c) && String(c).includes(pageUrl));
+    if (failed) return `Error: ${t.url} didn't load (${clip(String(failed).match(/status of \d+[^)]*\)?/)?.[0] || 'an error', 60)}), so nothing was judged. Check the path${/\/\.[^/]/.test(pageUrl) ? ': files in dot folders such as .quorx are never served as pages' : ''}; a picture in the project can be judged with target "file:<path>".`;
     const round = ++stats.decide.calls;
     const questions = normalizeQuestions((Array.isArray(args.checks) ? args.checks : []).map((c) => ({ ...c, type: 'noul' })), round);
     if (!questions.length) return 'Error: no valid checks. Each needs ask, my_guess (yes/no) and my_confidence.';
@@ -5401,7 +5461,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     } else if (yoloAuto) {
       emit({ t: 'approval', ...card, at: at() });
       // The judge sees the user's own words and the harness's facts; not the agent's "why" (agent-written text).
-      const j = await approvalJudge({ kind: 'media', userMessages: userTurns(), reading: run.reading?.text, facts: { tool, model: plan.model, estimated_cost_usd: +plan.est.toFixed(4), prompt_written_by_agent: what },
+      const j = await approvalJudge({ kind: 'media', userMessages: judgeTurns(), reading: run.reading?.text, facts: { tool, model: plan.model, estimated_cost_usd: +plan.est.toFixed(4), prompt_written_by_agent: what },
         voters: S.voters, chatModel: setup.model, gate: S.gate, signal, account, sf: SF, log: { runId, chatId: req.chatId || null, project: projectId }, ...(deps.ensemble ? { ensembleFn: deps.ensemble } : {}) });
       if (j.approve !== null) {
         const ans = { approve: j.approve, by: 'deciders', pNeed: j.pNeed, pFair: j.pOther, reason: j.reason, votes: j.votes };
@@ -5701,7 +5761,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     }
     if (!ans && !write && S.approval === 'yolo' && decidersOn) {
       emit({ t: 'approval', ...card, mode: 'yolo', at: at() });
-      const j = await approvalJudge({ kind: 'command', userMessages: userTurns(), reading: run.reading?.text, voters: S.voters, chatModel: setup.model, gate: S.gate, signal, account, sf: SF,
+      const j = await approvalJudge({ kind: 'command', userMessages: judgeTurns(), reading: run.reading?.text, voters: S.voters, chatModel: setup.model, gate: S.gate, signal, account, sf: SF,
         facts: { command: `read files in the folder ${dir} (outside the project)`, parts: [{ text: dir, class: 'a folder outside the project, read only' }] }, log: { runId, chatId: req.chatId || null, project: projectId } });
       if (j.approve === true) { ans = { approve: true, by: 'deciders', reason: j.reason }; emit({ t: 'approval_done', id: card.id, ...ans, votes: j.votes, at: at() }); }
       else card.why = `${card.why} ${j.reason}`;
@@ -5790,7 +5850,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     if (userNamedApp(app.name)) { emit({ t: 'note', level: 'info', msg: `Using ${app.name} at ${app.level} in this chat: you named it in your message. Change it under the 🖥 button.`, at: at() }); return { approve: true, by: 'user' }; }
     if (S.approval === 'yolo' && decidersOn) {
       emit({ t: 'approval', ...card, mode: 'yolo', at: at() });
-      const j = await approvalJudge({ kind: 'command', userMessages: userTurns(), reading: run.reading?.text, voters: S.voters, chatModel: setup.model, gate: S.gate, signal, account, sf: SF,
+      const j = await approvalJudge({ kind: 'command', userMessages: judgeTurns(), reading: run.reading?.text, voters: S.voters, chatModel: setup.model, gate: S.gate, signal, account, sf: SF,
         facts: { command: `${open ? 'use the app' : 'open the app'} "${app.name}" on the user's computer, then read and click in its windows`, parts: [{ text: app.name, class: 'an installed app on the user’s computer' }] },
         log: { runId, chatId: req.chatId || null, project: projectId } });
       if (j.approve === true) { emit({ t: 'approval_done', id: card.id, approve: true, by: 'deciders', reason: j.reason, votes: j.votes, at: at() }); return { approve: true }; }
@@ -5812,7 +5872,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     if (S.approval === 'yolo' && userNamedApp(app.name)) { emit({ t: 'note', level: 'info', msg: `YOLO: ${app.name} is now at ${need} in this chat (the agent needed to ${act.replace(/_/g, ' ')}, and you named the app in your message). Change it under the 🖥 button.`, at: at() }); return { approve: true, by: 'user' }; }
     if (S.approval === 'yolo' && decidersOn) {
       emit({ t: 'approval', ...card, mode: 'yolo', at: at() });
-      const j = await approvalJudge({ kind: 'command', userMessages: userTurns(), reading: run.reading?.text, voters: S.voters, chatModel: setup.model, gate: S.gate, signal, account, sf: SF,
+      const j = await approvalJudge({ kind: 'command', userMessages: judgeTurns(), reading: run.reading?.text, voters: S.voters, chatModel: setup.model, gate: S.gate, signal, account, sf: SF,
         facts: { command: `${need === 'full' ? 'type text and press keys' : 'click'} in the app "${app.name}" on the user's computer (it now may only ${LEVEL_WORDS[app.level]})`, parts: [{ text: app.name, class: 'an installed app on the user’s computer' }] },
         log: { runId, chatId: req.chatId || null, project: projectId } });
       if (j.approve === true) { emit({ t: 'approval_done', id: card.id, approve: true, by: 'deciders', reason: j.reason, votes: j.votes, at: at() }); return { approve: true }; }
@@ -5879,7 +5939,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
         ans = done(await askUser(card, w && { ...w, onTimeout: () => ({ ...w.onTimeout(), reason: `No answer in ${Math.round(w.ms / 1000)}s, and the deciders are off in this chat, so nobody checked this plan: each paid call is judged on its own instead.` }) }));
       } else {
         // Judged once, as a whole: the user's words, the enhancer's reading and the harness's prices; never the agent's "why".
-        const j = await approvalJudge({ kind: 'plan', userMessages: userTurns(), reading: run.reading?.text, facts: planFacts(plan, pb?.budget != null ? Math.max(0, pb.budget - pb.spent) : null), voters: S.voters, chatModel: setup.model, gate: S.gate, signal, account, sf: SF,
+        const j = await approvalJudge({ kind: 'plan', userMessages: judgeTurns(), reading: run.reading?.text, facts: planFacts(plan, pb?.budget != null ? Math.max(0, pb.budget - pb.spent) : null), voters: S.voters, chatModel: setup.model, gate: S.gate, signal, account, sf: SF,
           log: { runId, chatId: req.chatId || null, project: projectId }, ...(deps.ensemble ? { ensembleFn: deps.ensemble } : {}) });
         if (j.approve !== null) ans = done({ approve: j.approve, by: 'deciders', pNeed: j.pNeed, pFair: j.pOther, reason: j.reason, votes: j.votes });
         else {

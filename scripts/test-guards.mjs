@@ -665,8 +665,8 @@ test('shell: in YOLO nobody answering never runs a read outside the project, how
 });
 
 test('shell: a command that ran because nobody answered asks again; a repeat of one you approved says so', { skip: !WIN }, async () => {
-  { // shell: a command that ran only because nobody answered asks again the next time
-    await withDeciders(voteAll({ needed: 0.5, other: 0.03 }), async () => {
+  { // shell: a command that ran only because nobody answered asks again the next time (one decider answers: no quorum)
+    await withDeciders({ 'typesafe/jev-1.14': { needed: 0.5, other: 0.03 } }, async () => {
       const { events } = await agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('', [['shell', { command: 'node build.js' }]]), reply('Done.')][i], {
         settings: { approval: 'yolo', yoloWaitSecs: 1, safety: { yoloLevel: 'careful' } }, prep: buildJs });
       assert.equal(of(events, 'approval').filter((e) => e.mode === 'strict').length, 2, 'two cards, not one and a silent repeat');
