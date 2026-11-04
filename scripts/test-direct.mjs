@@ -74,20 +74,24 @@ const server = http.createServer((req, res) => {
       ...toolFrames(null).slice(0, 2),
       { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '"content":"hi"}' } }] }, finish_reason: 'tool_calls', usage: { prompt_tokens: 4000, completion_tokens: 400, cached_tokens: 3000 } }] },
     ]);
+    // Refuseless: no prices anywhere, a context length on each model, and a balance at /credits
+    if (req.url === '/refuse/v1/models') return json(200, { object: 'list', data: [{ id: 'glm-test-abliterated', object: 'model', created: 1770000000, owned_by: 'refuseless', abliterated: true, context_length: 1048576 }, { id: 'embed-test' }] });
+    if (req.url === '/refuse/v1/credits') return json(200, { object: 'credits', balance: 10, reserved: 0.25, available: 9.75, key_limit: null, unit: 'usd', updated_at: 1793900000 });
+    if (req.url === '/refuse/v1/chat/completions') return sse(res, [{ id: 'r1', choices: [{ delta: { reasoning_content: 'Fine.' } }] }, ...toolFrames({ prompt_tokens: 500, completion_tokens: 50 })]);
     json(404, { error: { message: `no route ${req.url}` } });
   });
 });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const BASE = `http://127.0.0.1:${server.address().port}`;
 process.env.QX_MODELS_DEV = `${BASE}/models.dev`;
-for (const k of ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'MOONSHOT_API_KEY', 'META_MODEL_API_KEY', 'LLAMA_API_KEY']) delete process.env[k];
+for (const k of ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'MOONSHOT_API_KEY', 'META_MODEL_API_KEY', 'LLAMA_API_KEY', 'REFUSELESS_API_KEY']) delete process.env[k];
 test.after(() => server.close());
 
 const D = await import('../server/directapi.js');
 const S = await import('../server/sources.js');
 const { costSummary } = await import('../server/store.js');
 const { ensemble } = await import('../server/decisions.js');
-const BASES = { 'openai-api': `${BASE}/openai/v1`, 'anthropic-api': `${BASE}/anthropic/v1`, 'gemini-api': `${BASE}/gemini/v1beta/openai`, 'moonshot-api': `${BASE}/moon/v1` };
+const BASES = { 'openai-api': `${BASE}/openai/v1`, 'anthropic-api': `${BASE}/anthropic/v1`, 'gemini-api': `${BASE}/gemini/v1beta/openai`, 'moonshot-api': `${BASE}/moon/v1`, 'refuseless-api': `${BASE}/refuse/v1` };
 const sig = () => new AbortController().signal;
 const write = (msg) => [{ role: 'user', content: 'Write a.txt' }, ...(msg ? [msg] : [])];
 const TOOLS = [{ type: 'function', function: { name: 'write_file', description: 'Write a file', parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } } } } }];
@@ -192,6 +196,36 @@ test('Gemini’s thought signatures go back on their tool calls; Kimi’s reason
   assert.deepEqual(k.passBack, { reasoning_content: 'Think first.' });
   assert.deepEqual([k.usage.prompt_tokens, k.usage.prompt_tokens_details.cached_tokens], [4000, 3000]);
   assert.ok(Math.abs(S.priced(ki, k.usage).cost - (1000 * 0.6 + 3000 * 0.15 + 400 * 2.5) / 1e6) < 1e-12);
+});
+
+test('Refuseless: its models with no price (unknown, not $0 guessed), a call with tools, its balance, and no OpenRouter switch', async () => {
+  const key = 'rl-test-key-0123456789';
+  const list = await D.directModels('refuseless-api', { key, base: BASES['refuseless-api'] });
+  assert.deepEqual(list.map((m) => m.id), ['refuseless-api/glm-test-abliterated'], 'the embedding model is left out');
+  const [m] = list;
+  assert.deepEqual([m.ctx, m.priceUnknown, m.price, m.tools, m.wire], [1048576, true, [0, 0], true, 'chat']);
+  const r = await D.directStream('refuseless-api', { model: m.id, tools: TOOLS, reasoning: { effort: 'high' }, messages: write() }, sig(), null, null, { info: m, key, base: BASES['refuseless-api'] });
+  const req = seen.findLast((x) => x.url === '/refuse/v1/chat/completions');
+  assert.equal(req.headers.authorization, `Bearer ${key}`);
+  assert.equal(req.body.model, 'glm-test-abliterated');
+  assert.equal(req.body.reasoning_effort, undefined, 'no effort it might reject: Refuseless picks its own default');
+  assert.deepEqual([r.provider, r.thinking, r.toolCalls[0].function.name], ['Refuseless', 'Fine.', 'write_file']);
+  const a = await D.directAccount('refuseless-api', { key, base: BASES['refuseless-api'] });
+  assert.deepEqual([a.credits.left, a.credits.balance, a.credits.reserved, a.credits.limit], [9.75, 10, 0.25, null]);
+  assert.deepEqual(a.credits.detail, [['balance', 10], ['held by running calls', 0.25]]);
+  await assert.rejects(D.directAccount('openai-api', { key }), /doesn’t report a balance/);
+  await assert.rejects(D.directAccount('refuseless-api', { key: 'bad-key-0123456789', base: BASES['refuseless-api'] }), (e) => e.kind === 'auth');
+
+  fs.mkdirSync(path.dirname(S.SOURCE_FILE), { recursive: true });
+  fs.writeFileSync(S.SOURCE_FILE, '{}');
+  try {
+    S.setSourceOptions('refuseless-api', { base: BASES['refuseless-api'] });
+    S.setSourceKey('refuseless-api', key);
+    const st = (await S.sourceStatus({ versions: false })).find((x) => x.id === 'refuseless-api');
+    assert.deepEqual([st.name, st.direct, st.routable, st.account, st.billing], ['Refuseless', true, false, true, 'paid']);
+    assert.equal((await S.sourceAccount('refuseless-api', { refresh: true })).credits.left, 9.75);
+    assert.equal(S.routeSource('zhipu/glm-4.6'), null, 'OpenRouter’s ids never run here');
+  } finally { fs.writeFileSync(S.SOURCE_FILE, '{}'); }
 });
 
 test('in Settings: a key, its own address, on and off, and OpenRouter’s ids routed to the maker’s API', async () => {

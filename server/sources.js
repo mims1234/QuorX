@@ -27,7 +27,7 @@ import { grokModels, grokStream, grokRunning, GROK_ID } from './groklocal.js';
 import { goModels, goStream, goCheck, goAccount, GO_ID } from './opencodego.js';
 import { ollamaModels, ollamaStream, ensureOllama, ollamaServer, OLLAMA_ID } from './ollamalocal.js';
 import { ccModels, ccStream, ccCheck, ccAccount, ccDecisionModels, ccDecisions, CC_ID } from './commandcode.js';
-import { DIRECT, DIRECT_IDS, isDirect, cleanBase, directModels, directStream, directDeciders, directDecisions, deciderReal } from './directapi.js';
+import { DIRECT, DIRECT_IDS, isDirect, cleanBase, directModels, directStream, directAccount, directDeciders, directDecisions, deciderReal } from './directapi.js';
 
 const DATA = path.join(HOME, 'data');
 export const SOURCE_FILE = path.join(DATA, 'sources.json');
@@ -76,7 +76,7 @@ export const SOURCES = {
   // The model makers' own APIs (directapi.js), each with the user's key, billed per call at the provider's prices.
   ...Object.fromEntries(DIRECT_IDS.map((id) => {
     const d = DIRECT[id];
-    return [id, { id, name: d.name, short: d.short, app: null, billing: 'paid', local: false, needsKey: true, direct: true, env: d.env[0], envs: d.env, site: d.site, keyUrl: d.keyUrl, docs: d.docs, keyHint: d.keyHint, base: d.base }];
+    return [id, { id, name: d.name, short: d.short, app: null, billing: 'paid', local: false, needsKey: true, direct: true, routable: d.or.length > 0, env: d.env[0], envs: d.env, site: d.site, keyUrl: d.keyUrl, docs: d.docs, keyHint: d.keyHint, base: d.base }];
   })),
 };
 // How QuorX reaches each app: its model list, one call, a check that costs nothing, and what its process is doing.
@@ -99,6 +99,7 @@ const APPS = {
     stream: (b, sg, t, th, o) => directStream(id, b, sg, t, th, { ...o, key: keyFor(id)?.key, base: baseFor(id) }),
     check: async () => { if (!keyFor(id)) throw Object.assign(new Error(`Add your ${DIRECT[id].name} key first.`), { kind: 'auth' }); },
     server: () => ({ api: true }),
+    ...(DIRECT[id].credits ? { account: () => directAccount(id, { key: keyFor(id)?.key, base: baseFor(id) }) } : {}),
   }])),
 };
 export const SOURCE_IDS = Object.keys(SOURCES);
@@ -516,7 +517,7 @@ function costOf(info, u) {
   return (fresh * p('input') + read * (tier.cache_read != null || c.cache_read != null ? p('cache_read') : p('input')) + write * (tier.cache_write != null || c.cache_write != null ? p('cache_write') : p('input')) + out * p('output')) / 1e6;
 }
 
-// ---------- a subscription's plan and what is left of it (OpenCode Go, Command Code) ----------
+// ---------- a subscription's plan and what is left of it (OpenCode Go, Command Code), or a key's balance (Refuseless) ----------
 const accounts = new Map(); // source → { at, p }: the last look-up, kept a minute
 /** The plan a source's key is on and what is left of it; `refresh` asks again at once. Throws for a source without one. */
 export function sourceAccount(id, { refresh = false } = {}) {
@@ -544,7 +545,7 @@ export async function sourceStatus({ versions = true } = {}) {
       on: !!s[id]?.on && ready(id), local: !def.needsKey, installed: ready(id), server: APPS[id].server(), install: def.install, appName: def.appName,
       ...(APPS[id].account ? { account: true } : {}),
       ...(def.needsKey ? { needsKey: true, env: k?.env || def.env, key: k ? { masked: mask(k.key), from: k.from, added: s[id]?.added || 0 } : null } : {}),
-      ...(def.direct ? { direct: true, base: baseFor(id), defaultBase: def.base, route: routeOf(id), envs: def.envs } : {}),
+      ...(def.direct ? { direct: true, base: baseFor(id), defaultBase: def.base, route: routeOf(id), routable: def.routable, envs: def.envs } : {}),
       app_: v ? { installed: true, version: v.version } : { installed: false },
       models: models.filter((m) => m.source === id).length, catalogueError: catalogue?.errors?.[id] || null,
       last: h ? { ok: !!h.ok, at: h.at, kind: h.kind || null, why: h.why || null, until: h.until || 0, model: h.model || null, scoped: !!h.scoped } : null,

@@ -2066,14 +2066,14 @@ const providerOf = (id) => String(id).replace(/^~/, '').split('/')[0] || 'other'
 // Models of an app on this PC (⚙ Settings → Providers) or of OpenCode Go (⚙ Settings → Providers) are the source,
 // a slash, and its own id.
 // The model makers' own APIs (server/directapi.js) run with the user's key, billed per call at their prices.
-const DIRECT_NAME = { 'openai-api': 'OpenAI', 'anthropic-api': 'Anthropic', 'gemini-api': 'Google Gemini', 'moonshot-api': 'Moonshot (Kimi)', 'meta-api': 'Meta (Llama API)' };
+const DIRECT_NAME = { 'openai-api': 'OpenAI', 'anthropic-api': 'Anthropic', 'gemini-api': 'Google Gemini', 'moonshot-api': 'Moonshot (Kimi)', 'meta-api': 'Meta (Llama API)', 'refuseless-api': 'Refuseless' };
 const SOURCE_NAME = { 'opencode-go': 'OpenCode Go', commandcode: 'Command Code', ...DIRECT_NAME, 'opencode-local': 'OpenCode on this PC', 'ollama-local': 'Ollama on this PC', 'claude-local': 'Claude Code on this PC', 'grok-local': 'Grok Build on this PC' };
 // Where in ⚙ Settings each source is set up.
 const srcWhere = () => 'Providers';
 // Each source's own logo (public/icons/brand), in the text colour (Claude's in its orange), with its name on hover.
-const SOURCE_LOGO = { openrouter: 'openrouter', 'opencode-go': 'opencode', commandcode: 'commandcode', 'opencode-local': 'opencode', 'ollama-local': 'ollama', 'claude-local': 'claude', 'grok-local': 'grok', 'openai-api': 'openai', 'anthropic-api': 'anthropic', 'gemini-api': 'gemini', 'moonshot-api': 'kimi', 'meta-api': 'meta' };
+const SOURCE_LOGO = { openrouter: 'openrouter', 'opencode-go': 'opencode', commandcode: 'commandcode', 'opencode-local': 'opencode', 'ollama-local': 'ollama', 'claude-local': 'claude', 'grok-local': 'grok', 'openai-api': 'openai', 'anthropic-api': 'anthropic', 'gemini-api': 'gemini', 'moonshot-api': 'kimi', 'meta-api': 'meta', 'refuseless-api': 'refuseless' };
 const srcLogo = (k, title = k === 'openrouter' ? 'OpenRouter' : SOURCE_NAME[k] || k) => SOURCE_LOGO[k] ? `<span class="src-logo src-logo-${SOURCE_LOGO[k]}" style="--ico:url('icons/brand/${SOURCE_LOGO[k]}.svg')" role="img" aria-label="${esc(title)}" title="${esc(title)}"></span>` : DIRECT_NAME[k] ? `<span class="src-tag" title="${esc(title)}">${esc(SOURCE_SHORT[k])}</span>` : esc(title);
-const SOURCE_SHORT = { 'opencode-go': 'Go', commandcode: 'Command Code', 'openai-api': 'OpenAI', 'anthropic-api': 'Anthropic', 'gemini-api': 'Gemini', 'moonshot-api': 'Kimi', 'meta-api': 'Meta', 'opencode-local': 'This PC', 'ollama-local': 'Ollama', 'claude-local': 'Claude Code', 'grok-local': 'Grok Build' };
+const SOURCE_SHORT = { 'opencode-go': 'Go', commandcode: 'Command Code', 'openai-api': 'OpenAI', 'anthropic-api': 'Anthropic', 'gemini-api': 'Gemini', 'moonshot-api': 'Kimi', 'meta-api': 'Meta', 'refuseless-api': 'Refuseless', 'opencode-local': 'This PC', 'ollama-local': 'Ollama', 'claude-local': 'Claude Code', 'grok-local': 'Grok Build' };
 // The sources offered, as words: "OpenCode Go, Claude Code or Grok Build".
 const srcApps = () => { const t = Object.keys(SOURCE_NAME).map((k) => SOURCE_NAME[k].replace(/ on this PC$/, '')); return t.length > 1 ? `${t.slice(0, -1).join(', ')} or ${t.at(-1)}` : t[0] || ''; };
 const sourceOfId = (id) => { const s = String(id || ''), h = s.split('/')[0]; return SOURCE_NAME[h] && s.length > h.length + 1 ? h : null; };
@@ -8180,6 +8180,7 @@ const SRC_GUIDE = {
   'gemini-api': { what: 'Runs Gemini on Google’s API (its OpenAI-compatible endpoint) with your key, billed by Google per call at its prices. Free-tier keys work too, within Google’s free limits.' },
   'moonshot-api': { what: 'Runs Kimi on Moonshot AI’s own API with your key, billed by Moonshot per call at its prices. Thinking models get their reasoning back on each step, as Moonshot asks.' },
   'meta-api': { what: 'Runs Meta’s models on Meta’s developer API with your key, billed by Meta per call. A model without a published price shows “price unknown” and counts as $0 rather than a guess.' },
+  'refuseless-api': { what: 'Runs open-weight models with their refusals removed (GLM and others) on Refuseless’s API with your key, paid from your Refuseless credits. Its API publishes no prices, so its models show “price unknown” and count as $0 here; the balance below is what is left.' },
   commandcode: { what: 'Runs a chat on your Command Code plan over its Provider API: GPT, DeepSeek, Kimi, GLM, Qwen and the other open models, and Claude. Every plan but Go has API access; prices shown are what a call takes from your credits.' },
 };
 // The key of a source that takes one: masked with Remove, or a box to paste it in.
@@ -8191,9 +8192,10 @@ function srcKeyHTML(x) {
 function srcOptsHTML(x) {
   const own = x.base && x.base !== x.defaultBase ? x.base : '';
   const seg = [['openrouter', 'OpenRouter'], ['direct', `${x.short} API`]].map(([k, l]) => `<button type="button" class="st-seg-btn ${x.route === k ? 'active' : ''}" role="radio" aria-checked="${x.route === k}" data-src-route="${k}">${esc(l)}</button>`).join('');
+  // A provider whose models OpenRouter doesn't carry (Refuseless) has no switch to offer.
   return `<div class="src-opts">
-    <div class="src-opt"><span class="src-opt-label">OpenRouter’s ${esc(x.short)} models run on</span><div class="st-segmented" role="radiogroup" aria-label="Where OpenRouter’s ${esc(x.short)} models run">${seg}</div></div>
-    <p class="st-row-help">When a chat, helper or reviewer is set to the same model on OpenRouter, ${esc(x.short)} API runs it with your key instead${x.on ? '' : ' (once this is on)'}; if that call fails, the fallback settings apply. Pick models tagged ${esc(x.short)} to always use this key.</p>
+    ${x.routable === false ? '' : `<div class="src-opt"><span class="src-opt-label">OpenRouter’s ${esc(x.short)} models run on</span><div class="st-segmented" role="radiogroup" aria-label="Where OpenRouter’s ${esc(x.short)} models run">${seg}</div></div>
+    <p class="st-row-help">When a chat, helper or reviewer is set to the same model on OpenRouter, ${esc(x.short)} API runs it with your key instead${x.on ? '' : ' (once this is on)'}; if that call fails, the fallback settings apply. Pick models tagged ${esc(x.short)} to always use this key.</p>`}
     <div class="src-opt"><span class="src-opt-label">Address</span><div class="kx-input src-base"><input data-src-base autocomplete="off" spellcheck="false" value="${esc(own)}" placeholder="${esc(x.defaultBase || '')}" aria-label="${esc(x.name)} API address"></div><button type="button" class="kx-btn sm" data-src-act="base">Save</button>${own ? '<button type="button" class="kx-btn sm" data-src-act="base-reset" title="Go back to the provider’s own address">Reset</button>' : ''}</div>
     <p class="st-row-help">Leave empty for ${esc(x.defaultBase || 'its own address')}. A proxy or a regional endpoint that speaks the same API works too (https://, or http:// on this computer).</p>
   </div>`;
@@ -8343,14 +8345,16 @@ async function loadSrcAcc(el, refresh = false) {
 function paintSrcAcc(el) {
   const a = el?.acc; if (!a) return;
   const grid = $('.src-acc-grid', el), plan = $('.src-acc-plan', el), m = (v) => (srcAccShown() ? money(v ?? 0, 2) : '•••••');
-  if (a.error) { plan.textContent = ''; grid.innerHTML = `<div class="kx-wait">${a.kind === 'auth' ? 'The key wasn’t accepted' : 'Couldn’t read the plan'} (${esc(a.error)}).</div>`; return; }
+  if (a.error) { plan.textContent = ''; grid.innerHTML = `<div class="kx-wait">${a.kind === 'auth' ? 'The key wasn’t accepted' : `Couldn’t read the ${el.dataset.what || 'plan'}`} (${esc(a.error)}).</div>`; return; }
   const day = (t) => new Date(t).toLocaleDateString([], { month: 'short', day: 'numeric' });
   const until = (t) => { const s = Math.max(0, Math.round((t - Date.now()) / 1000)); return s < 3600 ? `${Math.max(1, Math.round(s / 60))}m` : s < 86400 ? `${Math.floor(s / 3600)}h ${Math.round((s % 3600) / 60)}m` : `${Math.round(s / 86400)}d`; };
   plan.innerHTML = `${a.plan ? stTag('info', `${a.plan} plan`) : ''}${a.periodEnd ? ` <small>${a.cancels ? 'ends' : 'renews'} ${esc(day(a.periodEnd))}</small>` : ''}`;
   const pct = (p) => (p > 0 && p < 1 ? '<1%' : `${Math.round(p)}%`);
   const w = (x) => `<div class="kx-metric src-win${x.over ? ' over' : ''}"><span>${esc(x.label)}</span><b>${pct(x.percent)}</b><small>${x.cap ? `${m(x.used)} of ${m(x.cap)}` : 'used'}${x.resetAt ? ` · resets in ${until(x.resetAt)}` : ''}</small></div>`;
   const c = a.credits;
-  const credits = c ? `<div class="kx-metric left"><span>Credits left</span><b>${m(c.left)}</b><small>${srcAccShown() ? `this month ${money(c.monthly, 2)}${c.purchased ? ` · bought ${money(c.purchased, 2)}` : ''}${c.free ? ` · free ${money(c.free, 2)}` : ''}` : 'month, bought and free'}</small></div>` : '';
+  // A key's balance (Refuseless) names its own parts; a plan's credits are month, bought and free.
+  const parts = Array.isArray(c?.detail) ? (srcAccShown() ? c.detail.map(([l, v]) => `${esc(l)} ${money(v, 2)}`).join(' · ') : c.detail.map(([l]) => esc(l)).join(', ')) : null;
+  const credits = c ? `<div class="kx-metric left"><span>Credits left</span><b>${m(c.left)}</b><small>${parts !== null ? parts : srcAccShown() ? `this month ${money(c.monthly, 2)}${c.purchased ? ` · bought ${money(c.purchased, 2)}` : ''}${c.free ? ` · free ${money(c.free, 2)}` : ''}` : 'month, bought and free'}</small></div>` : '';
   // 👁 only where there is an amount to hide.
   const eye = $('[data-src-act="acc-reveal"]', el); if (eye) eye.hidden = !c && !(a.windows || []).some((x) => x.cap);
   grid.innerHTML = `${credits}${(a.windows || []).map(w).join('')}<div class="kx-checked">Checked ${new Date(a.checked).toLocaleTimeString()}</div>`;
@@ -8373,7 +8377,7 @@ function drawSourceCards(box, r, list, say) {
       <p class="st-row-help src-what">${esc(g.what || '')}</p>
       ${srcInfoHTML(x, g)}
       ${x.direct ? srcOptsHTML(x) : ''}
-      ${x.account && x.key ? `<div class="src-acc" data-src-acc><header class="src-acc-head"><b>Your plan</b><span class="src-acc-plan"></span><span class="kx-spacer"></span><button type="button" class="kx-icon" data-src-act="acc-reveal" title="${srcAccShown() ? 'Hide amounts' : 'Show amounts'}">${srcAccShown() ? '🙈' : '👁'}</button><button type="button" class="kx-icon" data-src-act="acc-refresh" title="Check again">↻</button></header><div class="kx-acc-grid src-acc-grid"><div class="kx-wait">Loading…</div></div></div>` : ''}
+      ${x.account && x.key ? `<div class="src-acc" data-src-acc data-what="${x.billing === 'paid' ? 'balance' : 'plan'}"><header class="src-acc-head"><b>${x.billing === 'paid' ? 'Your balance' : 'Your plan'}</b><span class="src-acc-plan"></span><span class="kx-spacer"></span><button type="button" class="kx-icon" data-src-act="acc-reveal" title="${srcAccShown() ? 'Hide amounts' : 'Show amounts'}">${srcAccShown() ? '🙈' : '👁'}</button><button type="button" class="kx-icon" data-src-act="acc-refresh" title="Check again">↻</button></header><div class="kx-acc-grid src-acc-grid"><div class="kx-wait">Loading…</div></div></div>` : ''}
       <div class="src-test"><button type="button" class="kx-btn sm" data-src-act="test" ${srcReady(x) ? '' : 'disabled'}>Test the connection</button><button type="button" class="kx-btn sm" data-src-act="pick" ${x.on && srcReady(x) ? '' : 'disabled'}>Choose a model for new chats</button>${last}</div>
       <p class="kx-note src-test-msg" hidden></p><p class="kx-note src-msg" hidden></p>
       ${x.catalogueError ? `<p class="kx-wait warn">⚠ Its model list didn’t load (${esc(x.catalogueError)})${x.models ? '; the last good list is used' : ''}.</p>` : ''}
