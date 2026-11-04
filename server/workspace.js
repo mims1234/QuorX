@@ -289,7 +289,7 @@ export const lineOf = (cmd, args) => [checkCommand(cmd, args), ...args.map((a) =
 // cmd or bash. Without the job host the process still runs, with proc.qxJob unset ("basic" Stop).
 const GATE = fileURLToPath(new URL('./jobgate.cjs', import.meta.url));
 async function launch(root, line, { shell = 'direct', env, memoryMB = 0, signal } = {}) {
-  const proc = spawn(process.execPath, [GATE, shell, line], { cwd: root, env: childEnv(env), windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], detached: startDetached });
+  const proc = spawn(process.execPath, [GATE, shell, line], { cwd: root, env: { ...childEnv(env), QX_GATE_PARENT: String(process.pid) }, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], detached: startDetached });
   proc.stdin.on('error', () => { /* the gate is gone */ });
   if (proc.pid) {
     const job = `c${proc.pid}x${Date.now().toString(36)}`;

@@ -630,6 +630,9 @@ test('rules: allowing a program covers every command that starts with it, by who
 
 test('shell: "Allow every ffmpeg command" asks once; the next ffmpeg command with other arguments runs', { skip: !WIN }, async () => {
   let asked = 0;
+  // QuorX's built-in "ffmpeg *" rule is off here, so the card asks as it does for any other program.
+  loadRules(null); updateRule('everywhere', 'builtin-ffmpeg', { on: false });
+  try {
   const { events } = await agentRun((b, i) => [
     reply('', [['shell', { command: 'ffmpeg -i a.mp4 b.mp3' }]]),
     reply('', [['shell', { command: 'ffmpeg -y -i a.mp4 -vn c.mp3' }]]),
@@ -639,6 +642,7 @@ test('shell: "Allow every ffmpeg command" asks once; the next ffmpeg command wit
   assert.equal(of(events, 'cmd_rule')[0]?.rule.match, 'ffmpeg *');
   assert.equal(of(events, 'cmd_rule')[0]?.rule.scope, 'chat');
   assert.equal(of(events, 'command').at(-1).decidedBy, 'rule:chat');
+  } finally { updateRule('everywhere', 'builtin-ffmpeg', { on: true }); }
 });
 
 test('shell: a rule that would not match its command is not saved, and you are told', { skip: !WIN }, async () => {
@@ -665,8 +669,8 @@ test('shell: in YOLO nobody answering never runs a read outside the project, how
 });
 
 test('shell: a command that ran because nobody answered asks again; a repeat of one you approved says so', { skip: !WIN }, async () => {
-  { // shell: a command that ran only because nobody answered asks again the next time
-    await withDeciders(voteAll({ needed: 0.5, other: 0.03 }), async () => {
+  { // shell: a command that ran only because nobody answered asks again the next time (one decider answers: no quorum)
+    await withDeciders({ 'typesafe/jev-1.14': { needed: 0.5, other: 0.03 } }, async () => {
       const { events } = await agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('', [['shell', { command: 'node build.js' }]]), reply('Done.')][i], {
         settings: { approval: 'yolo', yoloWaitSecs: 1, safety: { yoloLevel: 'careful' } }, prep: buildJs });
       assert.equal(of(events, 'approval').filter((e) => e.mode === 'strict').length, 2, 'two cards, not one and a silent repeat');

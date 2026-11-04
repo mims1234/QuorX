@@ -258,6 +258,8 @@ const sleeper = (name, extra = '') => `perl -e '$0="${name}"; ${extra} sleep 600
 const hasPerl = (() => { try { execFileSync('perl', ['-v']); return true; } catch { return false; } })();
 // Every process whose command line holds the marker: the sleeper, and the shell and gate that started it.
 const named = (name) => { try { return execFileSync('ps', ['-A', '-o', 'args='], { encoding: 'utf8' }).split('\n').filter((l) => l.includes(name)).length; } catch { return 0; } };
+// The sleeper alone: perl renamed itself to exactly the marker.
+const sleeping = (name) => { try { return execFileSync('ps', ['-A', '-o', 'args='], { encoding: 'utf8' }).split('\n').some((l) => l.trim() === name); } catch { return false; } };
 
 test('stop: the process-group host is on, off Windows', { skip: !POSIX && 'needs macOS or Linux' }, async () => {
   const { jobsAvailable, jobHostStatus } = await import('../server/jobhost.js');
@@ -303,13 +305,27 @@ test('stop: a timeout uses the same kill path', { skip: !POSIX ? 'needs macOS or
 test('stop: if QuorX is killed, the gate ends its own group', { skip: !POSIX ? 'needs macOS or Linux' : !hasPerl && 'needs perl' }, async () => {
   const m = marker();
   const gate = path.resolve('server/jobgate.cjs');
-  // A stand-in for QuorX: starts the gate detached (as workspace.js does), says go, then is killed outright.
-  const host = spawn(process.execPath, ['-e', `const c = require('child_process').spawn(process.execPath, [${JSON.stringify(gate)}, 'bash', ${JSON.stringify(sleeper(m))}], { detached: true, stdio: ['pipe', 'ignore', 'ignore'] }); c.stdin.end('go\\n'); setInterval(() => {}, 1000);`], { stdio: 'ignore' });
-  for (let t = 0; t < 50 && !named(m); t++) await new Promise((r) => setTimeout(r, 100));
-  assert.ok(named(m) >= 1, 'the command runs');
+  // A stand-in for QuorX: starts the gate detached with its own pid (as workspace.js does), says go, then is killed.
+  const host = spawn(process.execPath, ['-e', `const c = require('child_process').spawn(process.execPath, [${JSON.stringify(gate)}, 'bash', ${JSON.stringify(sleeper(m))}], { detached: true, stdio: ['pipe', 'ignore', 'ignore'], env: { ...process.env, QX_GATE_PARENT: String(process.pid) } }); c.stdin.end('go\\n'); setInterval(() => {}, 1000);`], { stdio: 'ignore' });
+  // The sleeper itself, not just the gate (whose command line holds the marker too).
+  for (let t = 0; t < 50 && !sleeping(m); t++) await new Promise((r) => setTimeout(r, 100));
+  assert.ok(sleeping(m), 'the command runs');
   host.kill('SIGKILL');
   for (let t = 0; t < 50 && named(m); t++) await new Promise((r) => setTimeout(r, 100));
   assert.equal(named(m), 0, 'it ended with its gate');
+});
+
+// From CI: QuorX was killed while the gate's Node was still starting, so the gate took its new parent for QuorX,
+// never saw a change, and ran the command with nobody to end it. Here QuorX exits the moment it starts the gate.
+test('stop: if QuorX is gone before the gate starts, the command never runs', { skip: !POSIX ? 'needs macOS or Linux' : !hasPerl && 'needs perl' }, async () => {
+  const m = marker();
+  const gate = path.resolve('server/jobgate.cjs');
+  const host = spawn(process.execPath, ['-e', `const c = require('child_process').spawn(process.execPath, [${JSON.stringify(gate)}, 'bash', ${JSON.stringify(sleeper(m))}], { detached: true, stdio: ['pipe', 'ignore', 'ignore'], env: { ...process.env, QX_GATE_PARENT: String(process.pid) } }); c.stdin.write('go\\n'); process.exit(0);`], { stdio: 'ignore' });
+  await new Promise((r) => host.on('exit', r));
+  let seen = false;
+  for (let t = 0; t < 30; t++) { seen ||= sleeping(m); await new Promise((r) => setTimeout(r, 100)); }
+  assert.equal(seen, false, 'the command never started');
+  assert.equal(named(m), 0, 'and the gate is gone');
 });
 
 test('stop: a stdio debug adapter behind dapbridge ends with the session’s group', { skip: !POSIX ? 'needs macOS or Linux' : !hasPerl && 'needs perl' }, async () => {

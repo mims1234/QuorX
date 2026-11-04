@@ -27,14 +27,17 @@ function launch() {
 
 // There is no job that closes with QuorX on macOS and Linux: if QuorX goes away (killed, crashed), this gate is
 // handed to another parent, and it ends its whole group, which holds everything the command started.
-if (!WIN) {
-  const parent = process.ppid;
-  setInterval(() => {
-    if (process.ppid === parent) return;
-    try { process.kill(-process.pid, 'SIGKILL'); } catch { /* not a group leader (basic mode) */ }
-    process.exit(1);
-  }, 1000).unref();
-}
+// QuorX passes its own pid (QX_GATE_PARENT): reading process.ppid here missed a QuorX killed while this gate's Node
+// was still starting, since by then the gate already had its new parent, never saw a change and ran the command anyway.
+const watched = Number(process.env.QX_GATE_PARENT) || 0;
+delete process.env.QX_GATE_PARENT;
+const parent = watched || process.ppid;
+const orphaned = () => {
+  if (WIN || process.ppid === parent) return false;
+  try { process.kill(-process.pid, 'SIGKILL'); } catch { /* not a group leader (basic mode) */ }
+  process.exit(1);
+};
+if (!WIN) { orphaned(); setInterval(orphaned, 1000).unref(); }
 
 // In a terminal (agentterm.js) stdin is the keyboard, so the go signal is a file instead, and the program keeps the
 // terminal for its input and output.
@@ -44,6 +47,7 @@ if (process.env.QX_GO_FILE) {
   const wait = setInterval(() => {
     if (!fs.existsSync(file) && Date.now() - t0 < 15000) return;
     clearInterval(wait);
+    orphaned();
     try { fs.rmSync(file, { force: true }); } catch { /* agentterm.js removes it when the program ends */ }
     const env = { ...process.env };
     delete env.QX_GO_FILE;
@@ -61,6 +65,7 @@ let started = false;
 const go = () => {
   if (started) return;
   started = true;
+  orphaned(); // QuorX went away while the gate waited for its go: run nothing
   process.stdin.removeAllListeners();
   process.stdin.destroy();
   const child = launch();

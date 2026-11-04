@@ -30,8 +30,9 @@ export const independentVoters = (voters, chatModel) => (voters || []).filter((m
  * part's kind, count, model and price, and the total).
  * Resolves to { approve: true | false | null, reason, pNeed, pOther, votes, voters }. null = ask the user.
  */
-// harmOnly (commands): a helper script the agent wrote in its own scratch folder is a step toward the request, never
-// something the user asks for by name, so only the harm question is voted on.
+// harmOnly (commands): a helper script the agent wrote in its own scratch folder, or a command ⚡ YOLO only checks first
+// (a build, a render, a web read: it would run without the check), is a step toward the request, never something the
+// user asks for by name, so only the harm question is voted on. A string names what it is for the reasons.
 export async function approvalJudge({ kind, userMessages, reading, harmOnly = false, facts, voters, chatModel, gate, signal, account, sf, log = {}, ensembleFn = ensemble }) {
   const panel = independentVoters(voters, chatModel);
   const quorum = Math.max(1, Number(sf?.quorum) || 2);
@@ -70,6 +71,7 @@ export async function approvalJudge({ kind, userMessages, reading, harmOnly = fa
   }
   const ro = d.results.other;
   // A scratch helper script counts as asked for: it serves the request (only its harm is in question).
+  const what = typeof harmOnly === 'string' ? harmOnly : "the agent's scratch script";
   const rn = harmOnly ? { verdict: 'settled', n: ro.n, dist: { yes: 1 } } : d.results.needed;
   const pNeed = rn.n ? rn.dist.yes : null, pOther = ro.n ? ro.dist.yes : null;
   const votes = d.votes.map((v, i) => ({ model: panel[i], needed: v?.dists?.needed?.yes ?? null, other: v?.dists?.other?.yes ?? null, ok: !!v }));
@@ -82,9 +84,9 @@ export async function approvalJudge({ kind, userMessages, reading, harmOnly = fa
     else reason = `The deciders couldn't agree (needed P=${pNeed.toFixed(2)}, fair price P=${pOther.toFixed(2)}), so it waits for you.`;
   } else {
     const needOk = pNeed >= (sf?.neededMin ?? 0.7), harmOk = pOther <= (sf?.harmMax ?? 0.2);
-    if (sure(rn) && sure(ro) && needOk && harmOk) { approve = true; reason = harmOnly ? `Deciders approved the agent's scratch script: could do harm P=${pOther.toFixed(2)}.` : `Deciders approved: asked for P=${pNeed.toFixed(2)}, could do harm P=${pOther.toFixed(2)}.`; }
+    if (sure(rn) && sure(ro) && needOk && harmOk) { approve = true; reason = harmOnly ? `Deciders approved ${what}: could do harm P=${pOther.toFixed(2)}.` : `Deciders approved: asked for P=${pNeed.toFixed(2)}, could do harm P=${pOther.toFixed(2)}.`; }
     else if ((sure(rn) && pNeed < 0.3) || (sure(ro) && pOther > 0.5)) { approve = false; reason = `Deciders declined: ${pOther > 0.5 ? `it could do harm (P=${pOther.toFixed(2)})` : `the user's messages don't ask for it (P=${pNeed.toFixed(2)})`}.`; }
-    else reason = harmOnly ? `The deciders weren't sure the agent's scratch script is harmless (harm P=${pOther.toFixed(2)}), so it waits for you.` : `The deciders weren't sure enough (asked for P=${pNeed.toFixed(2)}, harm P=${pOther.toFixed(2)}), so it waits for you.`;
+    else reason = harmOnly ? `The deciders weren't sure ${what} is harmless (harm P=${pOther.toFixed(2)}), so it waits for you.` : `The deciders weren't sure enough (asked for P=${pNeed.toFixed(2)}, harm P=${pOther.toFixed(2)}), so it waits for you.`;
   }
   logApproval({ kind, ...log, facts, ...(reading ? { reading: clip(reading, 600) } : {}), voters: votes, quorum, verdicts: [rn.verdict, ro.verdict], ...(harmOnly ? { harmOnly: true } : {}), pNeed, pOther, final: approve === true ? 'approved' : approve === false ? 'declined' : 'user', reason });
   return { approve, reason, pNeed, pOther, votes, voters: panel };

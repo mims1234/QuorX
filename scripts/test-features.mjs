@@ -635,8 +635,9 @@ test('edit_video joins a still, a clip and a voice-over into one mp4 in the proj
   assert.match(result, /^Saved the finished film as assets\/edits\/teaser\.mp4 \([\d.]+ MB, 1280×720, 2 clips, voice-over\)/, result);
   assert.ok(fs.statSync(path.join(dir, 'assets', 'edits', 'teaser.mp4')).size > 1000);
   assert.ok(fs.existsSync(path.join(dir, '.quorx', 'edits', 'teaser.filter')));
-  assert.equal(cards.length, 1, 'the ffmpeg line went through the command approval');
-  assert.match(JSON.stringify(cards[0]), /ffmpeg/);
+  // The ffmpeg line still goes through the command gate; QuorX's built-in "ffmpeg *" rule lets it run without a card.
+  assert.equal(cards.length, 0, 'no card: the built-in ffmpeg rule covers it');
+  assert.ok(of(events, 'command').some((e) => /^ffmpeg /.test(e.command) && e.decidedBy === 'rule:everywhere'), 'the gate let it run by the built-in rule');
   assert.ok(of(events, 'file').some((e) => e.path === 'assets/edits/teaser.mp4'));
 });
 

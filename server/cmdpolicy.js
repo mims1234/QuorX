@@ -1486,17 +1486,40 @@ const cleanRule = (r) => ({ id: ruleId(r), effect: ['allow', 'ask', 'deny'].incl
   // from: the chat whose card made it ({ chatId, chat: its title then }), shown in the permissions list.
   ...(r.from?.chatId ? { from: { chatId: String(r.from.chatId).slice(0, 80), chat: String(r.from.chat || '').slice(0, 120) } } : {}) });
 
+// Built-in rules: put in everywhere's list once, as if you had clicked "Allow always" on their card. They show in
+// Permissions like any rule; turning one off or deleting it sticks (seeded remembers it was added). ffmpeg and ffprobe
+// make and measure the sound and pictures of every film: in a YOLO video chat each render, loudness pass and contact
+// sheet went to a vote, and the votes timed out and skipped them.
+export const BUILT_IN_RULES = [
+  { key: 'media-tools-1', rules: [
+    { id: 'builtin-ffmpeg', effect: 'allow', match: 'ffmpeg *', by: 'button', note: 'Built into QuorX: ffmpeg makes and edits video and sound. Turn it off or delete it to be asked again.' },
+    { id: 'builtin-ffprobe', effect: 'allow', match: 'ffprobe *', by: 'button', note: 'Built into QuorX: ffprobe reads how long a video or sound is. Turn it off or delete it to be asked again.' },
+  ] },
+];
+const readSeeded = (f) => { try { const s = JSON.parse(fs.readFileSync(f, 'utf8')).seeded; return Array.isArray(s) ? s.map(String) : []; } catch { return []; } };
+function seedBuiltIns() {
+  const f = globalFile(), seeded = readSeeded(f), due = BUILT_IN_RULES.filter((b) => !seeded.includes(b.key));
+  if (!due.length) return;
+  const cur = readRules(f);
+  const add = due.flatMap((b) => b.rules).filter((r) => !cur.some((x) => x.match === r.match && x.effect === r.effect));
+  try { writeRules(f, [...cur, ...add.map((r) => ({ ...r, at: Date.now() }))], [...seeded, ...due.map((b) => b.key)]); } catch { /* read-only data folder: they ask as before */ }
+}
+function writeRules(f, rules, seeded) {
+  const list = (Array.isArray(rules) ? rules : []).map(cleanRule).filter((r) => r.match);
+  fs.mkdirSync(path.dirname(f), { recursive: true });
+  fs.writeFileSync(f, JSON.stringify({ version: 1, rules: list, ...(seeded.length ? { seeded } : {}) }, null, 2));
+  return list;
+}
+
 /** Every rule that applies in a project: the project's first, then everywhere's. Each carries its scope. */
 export function loadRules(root) {
+  seedBuiltIns();
   return [...(root ? readRules(projectFile(root)).map((r) => ({ ...r, scope: 'project' })) : []), ...readRules(globalFile()).map((r) => ({ ...r, scope: 'everywhere' }))];
 }
 /** Replaces the rules of one scope ('project' needs root). */
 export function saveRules(scope, rules, root) {
   const f = scope === 'project' ? projectFile(root) : globalFile();
-  const list = (Array.isArray(rules) ? rules : []).map(cleanRule).filter((r) => r.match);
-  fs.mkdirSync(path.dirname(f), { recursive: true });
-  fs.writeFileSync(f, JSON.stringify({ version: 1, rules: list }, null, 2));
-  return list;
+  return writeRules(f, rules, scope === 'project' ? [] : readSeeded(f));
 }
 /** Adds one rule (from "Always allow…" or the panel). The same rule again is turned back on, keeping its count. */
 export function addRule(scope, rule, root) {
