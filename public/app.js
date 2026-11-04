@@ -5629,6 +5629,7 @@ function traceRows(m) {
     else if (e.t === 'hook') row(e.at, `🪝 hook <code>${esc(clip(e.command, 160))}</code> ${e.skipped ? 'did not run' : `→ ${e.ok ? 'ok' : e.timedOut ? 'stopped at its time limit' : `exit ${e.code ?? '–'}`} · ${secs(e.ms)}`}<div class="sub">${esc(HOOK_WHEN[e.event] || e.event)}${e.file ? `: ${esc(e.file)}` : ''}${e.tool ? `: ${esc(e.tool)}` : ''}${e.skipped ? ` · ${esc(e.why || '')}` : e.blocked ? ` · blocked: ${{ before_write: 'the write was not made', before_command: 'the command did not run', before_tool: 'the tool call did not run' }[e.event] || 'it did not happen'}; the agent sees why` : e.sentBack ? ' · the reply went back to fix it' : e.told ? ' · the agent sees its output' : ''}</div>${e.out ? `<details class="out"${e.ok ? '' : ' open'}><summary>output</summary><pre>${esc(e.out)}</pre></details>` : ''}`, e.ok ? 'cmd' : 'err');
     else if (e.t === 'memory_saved') row(e.at, `📌 saved to memory: “${esc(e.text)}”<div class="sub">${e.project ? `Every chat in ${esc(e.project)} gets it from now on` : 'Every chat gets it from now on'} · ⚙ Settings → Memory</div>`, 'ok');
     else if (e.t === 'tripwire') row(e.at, `🚨 tripwire stopped <code>${esc(e.command)}</code>: ${e.count} files vanished outside the project<div class="sub">${(e.sample || []).map(esc).join('<br>')}<br>Look in the Recycle Bin, or right-click the folder → Properties → Previous Versions.</div>`, 'err');
+    else if (e.t === 'command_blocked' && e.policy?.decidedBy === 'syntax') row(e.at, `↩ not run, sent back to fix <code>${esc(e.command)}</code><div class="sub">${esc(e.policy.why || '')}</div>`, 'note');
     else if (e.t === 'command_blocked') row(e.at, `⛔ blocked <code>${esc(e.command)}</code><div class="sub">${esc(e.policy?.why || '')}${e.policy?.hint ? ` · ${esc(e.policy.hint)}` : ''}</div>`, 'err');
     else if (e.t === 'cmd_rule') row(e.at, `📏 rule saved: allow <code>${esc(e.rule.match)}</code> · ${esc({ chat: 'this chat', project: 'this project', everywhere: 'everywhere' }[e.rule.scope] || e.rule.scope)}`, 'ok');
     else if (e.t === 'file') row(e.at, `${e.deleted ? '🗑' : '📝'} ${esc(e.path)}${e.deleted ? ' · moved to trash' : e.bytes != null ? ` · ${e.bytes} bytes` : ' · edited'}`, 'file');
@@ -5786,7 +5787,13 @@ function shellCardHTML(a) {
   // Allowing a program covers every command that starts with it (ffmpeg -i a.mp4 b.mp3, ffmpeg -y …), but not a
   // program that runs any code it is handed (node, python, powershell…): those stay one at a time.
   const prog = sug.program.replace(/\s*\*$/, ''), byProgram = !c.noAlways && !sug.runner && /^\S+ \*$/.test(sug.program);
-  const seg =(group, opts) => `<div class="seg sc-pick" data-group="${group}">${opts.map(([v, l], i) => `<button type="button" data-v="${esc(v)}" class="${i === 0 ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+  const seg =(group, opts) => `<div class="seg sc-pick" data-group="${group}">${opts.map(([v, l, every], i) => `<button type="button" data-v="${esc(v)}" class="${i === 0 ? 'on' : ''}"${every ? ' data-every="1"' : ''}>${l}</button>`).join('')}</div>`;
+  // What a rule can cover: only the choices that differ. A line QuorX couldn't split into commands has no program
+  // or prefix of its own (each choice was the whole line again), so it offers just this exact command.
+  const covers = [[sug.exact, 'This exact command']];
+  if (sug.prefix && sug.prefix !== sug.exact && /\*$/.test(sug.prefix)) covers.push([sug.prefix, `Commands starting with <code>${esc(clip(sug.prefix.replace(/\*$/, ''), 60))}</code>`]);
+  if (/^\S+ \*$/.test(sug.program || '')) covers.push([sug.program, `Every <code>${esc(prog)}</code> command`, true]);
+  if (byProgram) covers.reverse();
   const risk = c.risk === 'danger' ? '<div class="sc-risk" data-risk="danger">⛔ This reads your keys or sign-ins. Only say yes if you asked for exactly this.</div>'
     : c.risk === 'warn' ? '<div class="sc-risk" data-risk="warn">⚠ This reaches past the project: a deploy, a push, a whole-computer install, or files outside the project.</div>' : '';
   return `<div class="approval shell-card" data-id="${esc(c.id)}" data-tool="shell"${c.risk ? ` data-risk="${esc(c.risk)}"` : ''}>
@@ -5800,7 +5807,7 @@ function shellCardHTML(a) {
     ${byProgram ? `<div class="what dim sc-covers">“Allow every <b>${esc(prog)}</b> command” covers every command that starts with <code>${esc(prog)}</code> in this chat, whatever comes after it. Commands joined with &amp;&amp;, ; or | are still checked part by part, and risky ones still ask.</div>` : ''}
     ${c.noAlways ? '<div class="sc-note">No “Allow always” for this command: it reads your keys, or deletes or moves files outside the project. If you’re sure, type a rule yourself in Permissions (⚙ Settings → Approvals & safety).</div>'
       : `<div class="sc-rule" hidden>
-        <div class="sc-row"><span class="sc-k">What it covers</span>${seg('match', ((o) => (byProgram ? [o[2], o[1], o[0]] : o))([[sug.exact, 'This exact command'], [sug.prefix, `Commands starting with <code>${esc(sug.prefix.replace(/\*$/, ''))}</code>`], [sug.program, `Every <code>${esc(prog)}</code> command`]]))}</div>
+        <div class="sc-row"><span class="sc-k">What it covers</span>${seg('match', covers)}</div>
         <div class="sc-row"><span class="sc-k">Where</span>${seg('scope', [['chat', `${scopeMark('chat', true)}This chat`], ['project', `${scopeMark('project', true)}This project`], ['everywhere', `${scopeMark('everywhere', true)}Everywhere in QuorX`]])}</div>
         <div class="sc-also" hidden></div>
         <div class="sc-warn" hidden>⚠ This lets every use of ${esc(prog)} run without asking, including code it is handed to run.</div>
@@ -5879,12 +5886,12 @@ function wireShellCard(card, m) {
     const match = pick('match'), scope = pick('scope');
     const others = scope === 'project' && chat ? G.chats.filter((x) => x.projectId === chat.projectId && x.id !== chat.id && x.messages > 0).length : 0;
     const where = scope === 'chat' ? 'in this chat' : scope === 'project' ? `in this project${chat ? ` (${esc(G.projects?.find((p) => p.id === chat.projectId)?.name || '')})` : ''}${others ? ` · <b>${others} other chat${others === 1 ? '' : 's'} here too</b>` : ''}` : '<b>in every project and chat</b>';
-    $('.sc-preview', card).innerHTML = / \*$/.test(match) ? `Allow every command starting with <code>${esc(match.replace(/ \*$/, ''))}</code> ${where}` : `Allow <code>${esc(match)}</code> ${where}`;
+    $('.sc-preview', card).innerHTML = / \*$/.test(match) ? `Allow every command starting with <code>${esc(clip(match.replace(/ \*$/, ''), 80))}</code> ${where}` : `Allow <code>${esc(clip(match, 120))}</code> ${where}`;
     const also = earlier.filter((x) => cmdRuleMatches(match, x) && x !== card.querySelector('.sc-line')?.textContent).slice(0, 4), box = $('.sc-also', card);
     box.hidden = !also.length;
     box.innerHTML = also.length ? `Would also have covered, in this chat: ${also.map((x) => `<code>${esc(clip(x, 60))}</code>`).join(' ')}` : '';
     // Only a program that runs code it is handed (its "every command" choice comes last) gets the warning.
-    $('.sc-warn', card).hidden = !!$('.once', card) || $('.sc-pick[data-group="match"] button:last-child', card) !== $('.sc-pick[data-group="match"] button.on', card);
+    $('.sc-warn', card).hidden = !!$('.once', card) || !$('.sc-pick[data-group="match"] button.on', card)?.dataset.every;
   };
   btn.onclick = () => { panel.hidden = !panel.hidden; btn.setAttribute('aria-expanded', String(!panel.hidden)); show(); };
   for (const b of card.querySelectorAll('.sc-pick button')) b.onclick = () => { for (const x of b.parentElement.children) x.classList.toggle('on', x === b); show(); };

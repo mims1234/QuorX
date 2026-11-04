@@ -284,7 +284,7 @@ function splitBash(line, zsh = false) {
 async function splitPowerShell(line) {
   let r;
   try { r = await parsePowerShell(line); } catch (e) { return { segs: [], opaque: `PowerShell's parser isn't available (${e.message})` }; }
-  if (r.errors.length) return { segs: [], opaque: `PowerShell can't parse it: ${r.errors[0]}` };
+  if (r.errors.length) return { segs: [], opaque: `PowerShell can't parse it: ${r.errors[0]}`, syntax: String(r.errors[0]) };
   const segs = r.commands.map((c) => {
     const resolved = c.resolved || c.name;
     const args = [];
@@ -1375,6 +1375,13 @@ export async function decide(line, ctx) {
   if (!text) return { verdict: 'deny', who: null, why: 'empty command', decidedBy: 'code', segments: [] };
   const split = shell === 'powershell' || shell === 'pwsh' ? await splitPowerShell(text) : shell === 'bash' || shell === 'zsh' ? splitBash(text, shell === 'zsh') : splitCmd(text);
   const segments = [];
+  // A line PowerShell can't parse would fail as it is: it goes back to the agent to fix, never to a card (a user was
+  // asked to approve an ffmpeg filter whose unquoted eq(n\,330) was a syntax error).
+  if (split.syntax) {
+    const brackets = /[(),;{}]/.test(text);
+    return { verdict: 'deny', who: null, why: `PowerShell can't parse it (${split.syntax})`, decidedBy: 'syntax', segments: [{ text, program: '', cls: 'opaque', why: split.opaque, verdict: 'deny', who: null, decidedBy: 'syntax', paths: [] }],
+      hint: brackets ? "In PowerShell, ( ) , ; and { } inside an argument are code: put such an argument in single quotes, e.g. -vf 'select=eq(n\\,330),scale=540:-1'." : 'Fix the line and run it again.' };
+  }
   if (split.opaque || !split.segs.length) {
     const why = split.opaque || 'QuorX could not find a command in it';
     segments.push({ text, program: '', cls: 'opaque', why, verdict: 'ask', who: 'user', decidedBy: 'class:opaque', paths: [] });
