@@ -1,6 +1,27 @@
 {
   "versions": [
     {
+      "version": "0.2.17",
+      "date": "2026-11-05",
+      "title": "The Node security fix, smoother YOLO builds, and chat status colours",
+      "items": [
+        { "kind": "safety", "text": "The desktop app runs on Electron 44.10.2, which brings the October 2026 Node security fix.", "pr": 251 },
+        { "kind": "fixed", "text": "In YOLO, renders, ffmpeg steps and project scripts are checked for harm only, so a video's final steps no longer get skipped.", "pr": 247 },
+        { "kind": "fixed", "text": "A command you approved on a card runs again later in the chat without another vote.", "pr": 247 },
+        { "kind": "fixed", "text": "Your answers to the agent's questions count as your request when the deciders vote.", "pr": 247 },
+        { "kind": "improved", "text": "ffmpeg and ffprobe run without asking, as built-in rules you can turn off or delete in Permissions.", "pr": 247 },
+        { "kind": "fixed", "text": "Visual checks look at the picture file itself, and a page that didn't load is never judged.", "pr": 247 },
+        { "kind": "fixed", "text": "A command PowerShell can't parse goes back to the agent with how to quote it, not to a card you can't usefully approve.", "pr": 250 },
+        { "kind": "fixed", "text": "The command card's Allow always panel stays inside the card with long commands.", "pr": 250 },
+        { "kind": "improved", "text": "Sidebar chats show their state in their own colours: working, waiting for you, using Chrome or the desktop, finished or stopped.", "pr": 249 },
+        { "kind": "new", "text": "Refuseless is a new provider under Makers' APIs, with its balance in Settings.", "pr": 248 },
+        { "kind": "new", "text": "The agent can pick a voice and speed for spoken audio, and a size, quality, seed or sound for pictures, clips and music.", "pr": 246 },
+        { "kind": "new", "text": "The agent can change the default voice, picture size, video resolution and clip length, always with your click first.", "pr": 246 },
+        { "kind": "new", "text": "Games can use 244 animated pixel art effects, such as explosions, spells and weather, when you ask for pixel effects.", "pr": 245 },
+        { "kind": "improved", "text": "Canvas games fill any screen, from wide monitors to upright phones, with a full-screen button.", "pr": 245 }
+      ]
+    },
+    {
       "version": "0.2.16",
       "date": "2026-11-03",
       "title": "A chat that reads in time order, one budget per chat, and a smarter agent loop",
