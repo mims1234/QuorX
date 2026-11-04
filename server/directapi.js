@@ -1,6 +1,6 @@
 // Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Model makers' own APIs, with the user's own key (⚙ Settings → Providers): OpenAI, Anthropic, Google Gemini,
-// Moonshot (Kimi) and Meta. Each runs as a source next to OpenRouter (sources.js), so a model id names where a call goes:
+// Moonshot (Kimi) and Meta, and Refuseless (open-weight models without refusals). Each runs as a source next to OpenRouter (sources.js), so a model id names where a call goes:
 // openai-api/gpt-5-mini, anthropic-api/claude-sonnet-5-5, gemini-api/gemini-3.5-flash.
 //   - Which models a key can use comes from the provider's own list (it needs the key, so listing them is the free key
 //     check too). Names, limits and prices come from models.dev's entry for that provider; a model models.dev doesn't
@@ -46,6 +46,13 @@ export const DIRECT = {
     name: 'Meta (Llama API)', short: 'Meta', wire: 'chat', base: 'https://api.meta.ai/v1', dev: 'meta', maker: 'meta', or: ['meta-llama', 'meta'],
     env: ['META_MODEL_API_KEY', 'LLAMA_API_KEY'], site: 'https://dev.meta.ai', keyUrl: 'https://dev.meta.ai', docs: 'https://dev.meta.ai/docs',
     keyHint: 'An API key from Meta’s developer platform. For the older Llama API, set the address to https://api.llama.com/compat/v1.',
+  },
+  // Not a maker: open-weight models (GLM and others) served with their refusals removed. No other source has the same
+  // models, so OpenRouter's ids never run here. Its list names no prices; its balance comes from /credits.
+  'refuseless-api': {
+    name: 'Refuseless', short: 'Refuseless', wire: 'chat', base: 'https://api.refuseless.com/v1', dev: 'refuseless', maker: 'refuseless', or: [],
+    env: ['REFUSELESS_API_KEY'], site: 'https://refuseless.com', keyUrl: 'https://refuseless.com', docs: 'https://docs.refuseless.com/introduction',
+    keyHint: 'An API key from the Refuseless console.', credits: true,
   },
 };
 export const DIRECT_IDS = Object.keys(DIRECT);
@@ -169,6 +176,26 @@ export async function directModels(src, { key, base, fetchFn = fetch, fetchJSON 
   return out;
 }
 
+// ---------- the balance (a provider with `credits`) ----------
+const usd = (x) => (Number.isFinite(Number(x)) && Number(x) >= 0 ? Math.round(Number(x) * 1e6) / 1e6 : 0);
+/**
+ * What is left on a key, in the shape the ⚙ Providers plan panel reads (sources.js sourceAccount): Refuseless's
+ * GET /credits, which costs nothing. `available` is what a new call can use (the balance less what running calls hold,
+ * capped by the key's own limit).
+ */
+export async function directAccount(src, { key, base, fetchFn = fetch } = {}) {
+  const def = DIRECT[src];
+  if (!def?.credits) throw Object.assign(new Error(`${def?.name || src} doesn’t report a balance`), { status: 404 });
+  if (!key) throw Object.assign(new Error(`Add your ${def.name} key first.`), { kind: 'auth' });
+  const j = await getJSON(`${base || def.base}/credits`, { headers: authHeaders(src, key), fetchFn, ms: 15000 });
+  const limit = j?.key_limit === null || j?.key_limit === undefined ? null : usd(j.key_limit);
+  return {
+    credits: { left: usd(j?.available), balance: usd(j?.balance), reserved: usd(j?.reserved), limit,
+      detail: [['balance', usd(j?.balance)], ...(usd(j?.reserved) ? [['held by running calls', usd(j?.reserved)]] : []), ...(limit !== null ? [['key limit', limit]] : [])] },
+    windows: [], checked: Date.now(),
+  };
+}
+
 // ---------- one call ----------
 function authHeaders(src, key) {
   if (src === 'anthropic-api') return { 'x-api-key': key, 'anthropic-version': '2023-06-01' };
@@ -183,7 +210,9 @@ export async function failure(r, where = '') {
   let j = null; try { j = JSON.parse(t); } catch { /* not JSON */ }
   if (Array.isArray(j)) j = j[0];
   const e = j?.error && typeof j.error === 'object' ? j.error : {};
-  const msg = String(e.message || j?.message || t.replace(/\s+/g, ' ').trim().slice(0, 300) || `HTTP ${r.status}`).slice(0, 400);
+  // A web page instead of JSON (a gateway or firewall in front of the API) says nothing worth showing.
+  const page = /^\s*<(!doctype|html)/i.test(t);
+  const msg = String(e.message || j?.message || (page ? '' : t.replace(/\s+/g, ' ').trim().slice(0, 300)) || `HTTP ${r.status}${page ? ' (it answered with a web page, not the API)' : ''}`).slice(0, 400);
   const errorType = [e.code, e.type, e.status].find((x) => typeof x === 'string') || undefined;
   const kind = CODE_KIND[String(errorType || '').toLowerCase()]
     || (/api key not valid|incorrect api key|invalid (credential|api[ _-]?key|x-api-key|authentication)|unauthori[sz]ed/i.test(msg) ? 'auth'
