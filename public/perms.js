@@ -73,7 +73,7 @@ async function gather(door) {
 function rowHTML(x) {
   const { esc } = H;
   const src = x.kind === 'site' ? SITE_HELP[x.site] : x.kind === 'mcp' ? (x.ask === 'always' ? 'Every call asks you, in ⚡ YOLO too.' : 'Strict asks before tools that change things; read-only ones and YOLO don’t ask.')
-    : [x.by === 'button' ? (x.from?.chat ? `from a card in “${x.from.chat}”` : x.scope === 'chat' ? 'from a card in this chat' : 'from a card') : x.by === 'user' ? 'typed by you' : '',
+    : [/^builtin-/.test(x.id || '') ? 'built into QuorX' : x.by === 'button' ? (x.from?.chat ? `from a card in “${x.from.chat}”` : x.scope === 'chat' ? 'from a card in this chat' : 'from a card') : x.by === 'user' ? 'typed by you' : '',
       fmtDay(x.at), usedText(x), x.kind === 'app' ? 'computer use' : x.kind === 'folder' ? 'outside the project' : ''].filter(Boolean).join(' · ');
   const state = [x.on === false ? 'off' : 'on', x.kind === 'rule' && !x.hits ? 'never' : '', x.problem ? 'cant' : ''].filter(Boolean).join(' ');
   const text = `${x.label} ${KIND[x.kind]} ${EFFECT[x.effect] || ''} ${src} ${x.chatTitle || ''} ${x.projectName || ''} ${x.on === false ? 'off' : ''}`.toLowerCase();

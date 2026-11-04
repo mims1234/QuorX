@@ -630,6 +630,9 @@ test('rules: allowing a program covers every command that starts with it, by who
 
 test('shell: "Allow every ffmpeg command" asks once; the next ffmpeg command with other arguments runs', { skip: !WIN }, async () => {
   let asked = 0;
+  // QuorX's built-in "ffmpeg *" rule is off here, so the card asks as it does for any other program.
+  loadRules(null); updateRule('everywhere', 'builtin-ffmpeg', { on: false });
+  try {
   const { events } = await agentRun((b, i) => [
     reply('', [['shell', { command: 'ffmpeg -i a.mp4 b.mp3' }]]),
     reply('', [['shell', { command: 'ffmpeg -y -i a.mp4 -vn c.mp3' }]]),
@@ -639,6 +642,7 @@ test('shell: "Allow every ffmpeg command" asks once; the next ffmpeg command wit
   assert.equal(of(events, 'cmd_rule')[0]?.rule.match, 'ffmpeg *');
   assert.equal(of(events, 'cmd_rule')[0]?.rule.scope, 'chat');
   assert.equal(of(events, 'command').at(-1).decidedBy, 'rule:chat');
+  } finally { updateRule('everywhere', 'builtin-ffmpeg', { on: true }); }
 });
 
 test('shell: a rule that would not match its command is not saved, and you are told', { skip: !WIN }, async () => {

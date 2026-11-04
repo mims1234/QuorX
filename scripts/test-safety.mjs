@@ -13,7 +13,7 @@ import { pathToFileURL } from 'node:url';
 import { runLine, snapBefore, commandChanges, snapBeforeAsync, commandChangesAsync, restoreCheckpoint, reviewFiles, agentSpace } from '../server/workspace.js';
 import { snapshot, changesSince, snapshotAsync, changesSinceAsync } from '../server/snapshot.js';
 import { jobsAvailable, jobHostStatus } from '../server/jobhost.js';
-import { decide, agentWriteBlocked, suggestedRules, loadRules } from '../server/cmdpolicy.js';
+import { decide, agentWriteBlocked, suggestedRules, loadRules, removeRule, updateRule } from '../server/cmdpolicy.js';
 import { approvalJudge } from '../server/approvals.js';
 import { SAFETY_DEFAULTS, safetySettings, yoloOf } from '../server/safety.js';
 import { answerApproval, answerQuestion } from '../server/agent.js';
@@ -862,6 +862,26 @@ test('shell: in YOLO a build goes to the deciders (or, with them off, to you), a
       else assert.ok(sent.length >= 2 && !JSON.stringify(sent).includes('I will run it'), `${c.what}: the agent’s own words never reach the deciders`);
     });
   }
+});
+
+// ffmpeg and ffprobe come as "Allow always, everywhere" rules: in a YOLO video chat every render, loudness pass and
+// contact sheet went to a vote that timed out and skipped it. They are ordinary rules: off or deleted, they stay so.
+test('rules: ffmpeg and ffprobe are built-in allow rules everywhere; turning one off or deleting it sticks', async () => {
+  const rules = loadRules(null), ff = rules.find((r) => r.id === 'builtin-ffmpeg'), fp = rules.find((r) => r.id === 'builtin-ffprobe');
+  assert.deepEqual([ff?.match, ff?.effect, ff?.scope, ff?.by, ff?.on], ['ffmpeg *', 'allow', 'everywhere', 'button', true]);
+  assert.equal(fp?.match, 'ffprobe *');
+  const careful = yoloOf(safetySettings({ yoloLevel: 'careful' }));
+  const line = 'ffmpeg -hide_banner -nostats -y -i raw.mp4 -af loudnorm=I=-14 -c:v copy short.mp4';
+  assert.equal((await decide(line, sctx({ mode: 'yolo', yolo: careful }))).who, 'deciders', 'without the rule it goes to a vote');
+  const d = await decide(line, sctx({ mode: 'yolo', yolo: careful, rules: loadRules(null) }));
+  assert.equal(d.verdict, 'allow', 'with it, it runs');
+  assert.equal((await decide('ffmpegx -i a.mp4', sctx({ mode: 'yolo', yolo: careful, rules: loadRules(null) }))).verdict, 'ask', 'never another program');
+  updateRule('everywhere', 'builtin-ffprobe', { on: false });
+  removeRule('everywhere', 'builtin-ffmpeg');
+  const after = loadRules(null);
+  assert.equal(after.some((r) => r.id === 'builtin-ffmpeg'), false, 'a deleted built-in rule does not come back');
+  assert.equal(after.find((r) => r.id === 'builtin-ffprobe')?.on, false, 'a built-in rule turned off stays off');
+  updateRule('everywhere', 'builtin-ffprobe', { on: true });
 });
 
 // From a video chat: the user ran a render from its card, and the next reply's identical render went to a vote, timed
