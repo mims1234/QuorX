@@ -39,7 +39,7 @@ export async function termStart({ projectId, chatId = null, cwd, line, shell = '
   const goFile = path.join(os.tmpdir(), `qx-go-${process.pid}-${Date.now().toString(36)}-${seq}`);
   // useConptyDll: node-pty's bundled ConPTY, whose kill needs no console-list helper (that helper fails once the
   // console is gone), so a finished session can always be released.
-  const term = pty.spawn(process.execPath, [GATE, shell, line], { name: 'xterm-256color', cols, rows, cwd, useConptyDll: process.platform === 'win32', env: { ...childEnv(env), QX_GO_FILE: goFile, TERM: 'xterm-256color' } });
+  const term = pty.spawn(process.execPath, [GATE, shell, line], { name: 'xterm-256color', cols, rows, cwd, useConptyDll: process.platform === 'win32', env: { ...childEnv(env), QX_GO_FILE: goFile, QX_GATE_PARENT: String(process.pid), TERM: 'xterm-256color' } });
   const s = { id, projectId, chatId, label: line, term, screen: new Screen(cols, rows, (r) => { try { term.write(r); } catch { /* closed */ } }), raw: '', last: Date.now(), exited: false, code: null, job: null, started: Date.now() };
   term.onData((d) => { s.screen.write(d); s.raw = (s.raw + d).slice(-60000); s.last = Date.now(); });
   term.onExit(({ exitCode }) => {
