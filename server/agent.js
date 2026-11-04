@@ -4241,6 +4241,8 @@ ${r.text || '(no text found)'}`;
     if (d.verdict === 'deny') {
       emit({ t: 'command_blocked', command: line, policy, at: at() });
       aud({ kind: 'blocked', command: line, why: d.why, by: d.decidedBy });
+      // A syntax error is the agent's to fix: nothing ran, and the corrected line is checked as usual.
+      if (d.decidedBy === 'syntax') return { ok: false, text: `Not run: ${d.why}, so it would fail as written. ${d.hint || ''} Then run the fixed line.`.replace(/\s+Then/, ' Then') };
       return { ok: false, text: `Blocked by QuorX: ${d.why}.${d.hint ? ` ${d.hint}` : ''} Don't retry it in another form; find another way, or ask the user.` };
     }
     const strictEvery = S.approval === 'strict' && (S.strictAsk || 'paid') === 'every' && !ownCard;

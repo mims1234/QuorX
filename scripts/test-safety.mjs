@@ -820,6 +820,23 @@ test('shell: a build asks you; "Always allow" saves a rule, and the next run doe
   assert.match(toolOut(bodies, 2), /Exit code 0/);
 });
 
+// From a video chat: an ffmpeg filter with unquoted eq(n\,330) is a PowerShell syntax error, and the user got a card
+// asking to approve a line that could only fail. It goes back to the agent with how to quote it; no card.
+test('shell: a line PowerShell can\'t parse goes back to the agent to fix, never to a card', { skip: !WIN }, async () => {
+  const bad = 'ffmpeg -hide_banner -y -i a.mp4 -vf select=eq(n\\,330)+eq(n\\,630),scale=540:-1,tile=2x1 -frames:v 1 .quorx/scratch/key.jpg';
+  const d = await decide(bad, sctx({ mode: 'yolo' }));
+  assert.deepEqual([d.verdict, d.decidedBy], ['deny', 'syntax']);
+  assert.match(d.hint, /single quotes, e\.g\. -vf 'select=eq\(n\\,330\)/);
+  const good = "ffmpeg -hide_banner -y -i a.mp4 -vf 'select=eq(n\\,330)+eq(n\\,630),scale=540:-1,tile=2x1' -frames:v 1 .quorx/scratch/key.jpg";
+  assert.notEqual((await decide(good, sctx({ mode: 'yolo' }))).decidedBy, 'syntax', 'quoted, it parses');
+  const { events, bodies } = await agentRun((b, i) => [reply('', [['shell', { command: bad }]]), reply('OK.')][i], { settings: { approval: 'yolo', yoloWaitSecs: 5 } });
+  const out = toolOut(bodies, 1);
+  assert.match(out, /^Not run: PowerShell can't parse it \(.+\), so it would fail as written\. In PowerShell, .* Then run the fixed line\./, out);
+  assert.doesNotMatch(out, /Don't retry it/);
+  assert.equal(of(events, 'approval').length, 0, 'no card');
+  assert.ok(!events.some((e) => e.t === 'command'));
+});
+
 test('shell: a blocked command never runs, and the agent is told why', { skip: !WIN }, async () => {
   const { events, bodies } = await agentRun((b, i) => [reply('', [['shell', { command: 'Remove-Item ~ -Recurse -Force' }]]), reply('OK.')][i]);
   assert.match(toolOut(bodies, 1), /Blocked by QuorX: it would delete or move your profile folder/);
