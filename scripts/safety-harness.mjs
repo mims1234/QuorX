@@ -42,6 +42,23 @@ export const pingsLeft = (n) => (!WIN ? 0 : new Promise((done) => {
 }));
 // ---------- the shell tool, end to end (scripted model, no network) ----------
 let rn = 0;
+// A reply that waits on something nothing will ever finish (a card no one answers, a promise with no timer) lets the
+// event loop run dry, and node --test then fails that test and cancels the rest of the file with only "Promise
+// resolution is still pending". So each run still going at that point is written out: what the model was told last,
+// the cards still open and the last events, which is where it stopped.
+const RUNNING = new Map(); // run id → { events, bodies, t0 }
+process.on('beforeExit', () => {
+  for (const [id, r] of RUNNING) {
+    const done = new Set(r.events.filter((e) => e.t === 'approval_done').map((e) => e.id));
+    const open = r.events.filter((e) => e.t === 'approval' && !done.has(e.id));
+    const last = r.events.slice(-15).map((e) => `  ${JSON.stringify(e).slice(0, 240)}`);
+    const tools = r.bodies.at(-1)?.messages?.filter((m) => m.role === 'tool').slice(-1).map((m) => String(m.content).slice(0, 400)) || [];
+    console.error([`\n[stuck reply ${id}] ${((Date.now() - r.t0) / 1000).toFixed(1)} s in, after ${r.bodies.length} model call(s); nothing left that would end it.`,
+      `cards still open: ${open.length ? open.map((e) => `${e.tool}: ${String(e.what || '').slice(0, 120)}`).join(' | ') : 'none'}`,
+      `last tool result the model saw: ${tools[0] ?? '(none)'}`, 'last events:', ...last].join('\n'));
+  }
+  RUNNING.clear(); // once: the runner may let the loop run dry again
+});
 export const reply = (text, calls = []) => ({ text, toolCalls: calls.map(([name, args], i) => ({ id: `s${++rn}_${i}`, type: 'function', function: { name, arguments: JSON.stringify(args) } })), usage: { cost: 0 }, ms: 1, firstMs: 1, finishReason: 'stop' });
 export async function agentRun(script, { settings = {}, prep, onEvent, chatId, more = {}, ensemble } = {}) {
   const id = `sh${Date.now().toString(36)}${(rn++).toString(36)}`;
@@ -52,11 +69,13 @@ export async function agentRun(script, { settings = {}, prep, onEvent, chatId, m
   const events = [], bodies = [];
   let i = 0;
   const chatStream = async (body) => { bodies.push(structuredClone(body)); return script(body, i++); };
+  RUNNING.set(id, { events, bodies, t0: Date.now() });
   try {
     await runAgent({ runId: id, projectId: id, ...(chatId ? { chatId } : {}), ...more, text: more.text ?? 'build my app', setup: { model: 'test/model' }, settings: { approval: 'strict', mediaEnabled: false, verify: false, review: 'off', checks: { gap: false, shots: false, click: false }, tools: { browser: { on: false } }, ...settings } },
       (e) => { events.push(e); onEvent?.(e, id); }, new AbortController().signal, { chatStream, catalogue: [{ id: 'test/model', maxOut: 4000 }], quiet: true, ...(ensemble ? { ensemble } : {}) });
     return { events, bodies, dir, id };
   } finally {
+    RUNNING.delete(id);
     // Background jobs a test started (an app it opened) end with the test, so a failed test can't hang the run.
     for (const j of listBackground(id)) if (j.status === 'running') await stopBackground(j.id).catch(() => {});
     for (const s of listTerms(id)) if (s.running) await termStop(s.id).catch(() => {});
