@@ -193,15 +193,24 @@ function loadKatex() {
   });
   return loading;
 }
+// A code block's Copy button works wherever the block is drawn (a reply, a streaming reply, thinking, a preview),
+// so the click is handled once for the whole page instead of wiring each button after each render.
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch {}
+  const ta = Object.assign(document.createElement('textarea'), { value: text });
+  ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0';
+  document.body.appendChild(ta); ta.select();
+  let ok = false; try { ok = document.execCommand('copy'); } catch {}
+  ta.remove(); return ok;
+}
+if (typeof document !== 'undefined') document.addEventListener('click', async (e) => {
+  const b = e.target.closest?.('.md-copy'); if (!b) return;
+  e.preventDefault(); e.stopPropagation();
+  const code = b.closest('.md-code')?.querySelector('code')?.textContent || '';
+  b.textContent = (await copyText(code)) ? 'Copied ✓' : 'Copy failed';
+  clearTimeout(b._t); b._t = setTimeout(() => (b.textContent = 'Copy'), 1400);
+}, true);
 export async function enhance(root) {
-  for (const b of root.querySelectorAll('.md-copy:not([data-wired])')) {
-    b.dataset.wired = '1';
-    b.onclick = async () => {
-      const code = b.closest('.md-code')?.querySelector('code')?.textContent || '';
-      try { await navigator.clipboard.writeText(code); b.textContent = 'Copied ✓'; } catch { b.textContent = 'Copy failed'; }
-      setTimeout(() => (b.textContent = 'Copy'), 1400);
-    };
-  }
   const maths = [...root.querySelectorAll('.md-math:not([data-done])')];
   if (!maths.length) return;
   const k = await loadKatex();
