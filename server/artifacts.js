@@ -65,10 +65,17 @@ p{margin:.6em 0}blockquote{margin:.8em 0;padding:.2em 1em;border-left:3px solid 
 .md-table{overflow-x:auto;margin:.8em 0;border:1px solid var(--line);border-radius:8px}table{border-collapse:collapse;width:100%;font-size:.93em}
 th,td{padding:7px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{background:var(--panel)}tr:last-child td{border-bottom:0}
 hr{border:0;border-top:1px solid var(--line);margin:1.6em 0}.md-task{display:inline-block;width:1em;margin-right:.4em}li{margin:.2em 0}`;
+// A code block's Copy button. The page runs sandboxed (an opaque origin, usually in a frame), where the clipboard
+// API is refused, so it falls back to copying a selection, which a click is allowed to do.
+const COPY_SCRIPT = `document.addEventListener('click',function(e){var b=e.target.closest&&e.target.closest('.md-copy');if(!b)return;
+var t=b.closest('.md-code').querySelector('code').innerText;
+function show(ok){b.textContent=ok?'Copied':'Copy failed';clearTimeout(b._t);b._t=setTimeout(function(){b.textContent='Copy'},1400)}
+function old(){var a=document.createElement('textarea');a.value=t;a.style.cssText='position:fixed;left:-9999px;top:0;opacity:0';document.body.appendChild(a);a.select();var ok=false;try{ok=document.execCommand('copy')}catch(_){}a.remove();return ok}
+if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(t).then(function(){show(true)},function(){show(old())});else show(old())});`;
 function markdownPage(title, md) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(title || 'Document')}</title><style>${DOC_CSS}</style></head>
 <body><main>${renderMarkdown(md)}</main>
-<script>document.addEventListener('click',function(e){var b=e.target.closest('.md-copy');if(!b)return;var c=b.closest('.md-code').querySelector('code');navigator.clipboard&&navigator.clipboard.writeText(c.innerText).then(function(){b.textContent='Copied';setTimeout(function(){b.textContent='Copy'},1200)})});</script></body></html>`;
+<script>${COPY_SCRIPT}</script></body></html>`;
 }
 /** A full page for a Markdown text (the browser tool opens documents this way too). */
 export const markdownHtml = (title, md) => markdownPage(title, md);
