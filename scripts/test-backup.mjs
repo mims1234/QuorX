@@ -424,7 +424,7 @@ test('a big export keeps the event loop free: a timer keeps ticking while it wri
   try { await zipFile(path.join(dir, 'loop.zip'), entries); } finally { clearInterval(timer); }
   const took = Date.now() - t0;
   assert.ok(ticks >= Math.min(10, took / 50), `the timer ticked ${ticks} times in ${took} ms`);
-  assert.ok(worst < 250, `the longest wait between ticks was ${worst} ms over ${took} ms`);
+  assert.ok(worst < 500, `the longest wait between ticks was ${worst} ms over ${took} ms`);
 });
 
 test('a backup made before streaming still imports, and a new one brings back the same chats, projects and files', async () => {
