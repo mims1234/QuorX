@@ -7,6 +7,9 @@ import { tempDir } from './test-home.mjs';
 import { reply, run, toolResults, of } from './agent-harness.mjs';
 import { videoBody, editCommand, ffmpegMajor } from '../server/video.js';
 import { primeCatalogue } from '../server/openrouter.js';
+import { stepMedia, madeMedia, mediaKind as chatMediaKind } from '../public/chat-media.js';
+import { mediaKind as serverMediaKind } from '../server/media.js';
+import { resultMedia } from '../server/mcpclient.js';
 import { pickVoice, pickSpeed, imageSize, videoSize, imageExtras, videoExtras, optionsLine } from '../server/mediaopts.js';
 import { execFileSync } from 'node:child_process';
 import test from 'node:test';
@@ -613,6 +616,48 @@ test('make_video starts from a project picture with a model that takes one, and 
     assert.equal(of(events, 'approval').length, 0);
     assert.equal('start_image' in bodies[0].tools.find((t) => t.function.name === 'make_video').function.parameters.properties, false);
   }
+});
+
+test('media a tool makes shows under its own step as it lands, and only the result text goes back to the model', async () => {
+  primeCatalogue('videos', [TEST_VIDEO, TEST_VIDEO_TEXT]);
+  const PNG = 'data:image/png;base64,' + Buffer.from('made-png').toString('base64');
+  const MP4 = `data:video/mp4;base64,${Buffer.from('made-mp4').toString('base64')}`;
+  const settings = videoSettings('test/vid-start');
+  settings.tools.image = { on: true, pick: 'fixed', models: ['test/img'], resolution: '1K' };
+  const { bodies, events, dir } = await run((body, i) => [
+    reply('', [['imagine', { prompt: 'a lighthouse at dusk', why: 'key frame' }]]),
+    reply('', [['make_video', { prompt: 'the beam sweeps the sea', why: 'shot 1' }]]),
+    reply('Done.'),
+  ][i], { settings, generateImage: async () => ({ images: [PNG], usage: { cost: 0.01 }, ms: 5 }), generateVideo: async () => ({ url: MP4, usage: { cost: 0.1 }, ms: 5 }) });
+  const results = of(events, 'tool_result');
+  const pic = results.find((e) => e.name === 'imagine'), clip = results.find((e) => e.name === 'make_video');
+  // Each call's own result carries what it made, in the project, with its kind.
+  assert.equal(pic.media.length, 1); assert.equal(pic.media[0].kind, 'image'); assert.match(pic.media[0].path, /^assets\/generated\/[\w-]+\.png$/);
+  assert.equal(clip.media.length, 1); assert.equal(clip.media[0].kind, 'video'); assert.match(clip.media[0].path, /^assets\/generated\/[\w-]+\.mp4$/);
+  assert.equal(fs.readFileSync(path.join(dir, pic.media[0].path), 'utf8'), 'made-png');
+  assert.equal(fs.readFileSync(path.join(dir, clip.media[0].path), 'utf8'), 'made-mp4');
+  // The step that made it is the step it shows under: the event comes right after that call, before the next step.
+  assert.ok(events.indexOf(pic) < events.findIndex((e) => e.t === 'tool' && e.name === 'make_video'));
+  // Nothing of the media itself goes to the model: no data, only the result text it already got.
+  for (const b of bodies) assert.doesNotMatch(JSON.stringify(b.messages), /base64|made-png|made-mp4/);
+  // Calls that make nothing carry no media.
+  assert.ok(results.filter((e) => !['imagine', 'make_video'].includes(e.name)).every((e) => !('media' in e)));
+  // The chat finds each piece and the tool that made it (public/chat-media.js); the reviewer's and helpers' don't count.
+  assert.deepEqual(stepMedia(pic), [{ key: pic.media[0].path, path: pic.media[0].path, kind: 'image', tool: 'imagine' }]);
+  assert.deepEqual(madeMedia([...events, { t: 'tool_result', name: 'speak', by: 'helper', media: [{ path: 'x.mp3', kind: 'audio' }] }]).map((x) => `${x.tool} ${x.kind}`), ['imagine image', 'make_video video']);
+  assert.deepEqual(stepMedia({ t: 'tool_result', name: 'speak', media: [{ art: 'voice_hi', kind: 'audio', name: 'Voice: hi' }] }), [{ key: 'art:voice_hi', art: 'voice_hi', kind: 'audio', tool: 'speak', name: 'Voice: hi' }]);
+  assert.equal(stepMedia({ t: 'tool_result', name: 'fit_music', media: [{ path: 'score.flac' }] })[0].kind, 'audio');
+  assert.equal(stepMedia({ t: 'tool_result', name: 'x', media: [{ path: 'notes.bin' }] })[0].kind, 'file');
+  // Sound files show in the chat too (GET /api/media serves them).
+  for (const f of ['v.mp3', 'v.wav', 'v.ogg', 'v.m4a', 'v.flac']) { assert.equal(chatMediaKind(f), 'audio', f); assert.equal(serverMediaKind(f), 'audio', f); }
+});
+
+test("an MCP tool's pictures and sounds go to the chat, and the agent gets a short line in their place", () => {
+  const png = Buffer.from('mcp-png').toString('base64');
+  assert.deepEqual(resultMedia({ type: 'image', data: png, mimeType: 'image/png' }), { kind: 'image', mime: 'image/png', data: png });
+  assert.equal(resultMedia({ type: 'audio', data: png, mimeType: 'audio/mpeg' }).kind, 'audio');
+  assert.equal(resultMedia({ type: 'resource', resource: { uri: 'x://clip', blob: png, mimeType: 'video/mp4' } }).kind, 'video');
+  for (const x of [{ type: 'text', text: 'hi' }, { type: 'image', mimeType: 'image/png' }, { type: 'resource', resource: { blob: png, mimeType: 'application/zip' } }, null]) assert.equal(resultMedia(x), null);
 });
 
 let hasFfmpeg = false;

@@ -293,13 +293,24 @@ export async function toolsFor(names = []) {
   return { defs, byName, notes };
 }
 /** Runs one tool → the text the agent gets (an error starts with "Error:"). */
-export async function callTool(server, tool, args, { ms = 180000 } = {}) {
+// A picture, sound or video in a tool's result ({ type: 'image' | 'audio', data, mimeType }, or a resource blob of
+// such a type): { kind, mime, data (base64) }, or null.
+export function resultMedia(x) {
+  const src = x?.type === 'image' || x?.type === 'audio' ? x : x?.type === 'resource' && x.resource?.blob ? { data: x.resource.blob, mimeType: x.resource.mimeType } : null;
+  const mime = String(src?.mimeType || '').toLowerCase(), kind = mime.match(/^(image|audio|video)\//)?.[1];
+  return kind && typeof src.data === 'string' && src.data ? { kind, mime, data: src.data } : null;
+}
+const NOUN = { image: 'a picture', audio: 'a sound', video: 'a video' };
+/** Runs one tool → the text the agent gets (an error starts with "Error:"). Pictures, sounds and videos in the result
+ *  go to `onMedia` (the chat shows them to the user); the agent gets a short line in their place, not the media. */
+export async function callTool(server, tool, args, { ms = 180000, onMedia = null } = {}) {
   let c;
   try { c = await connect(server); } catch (e) { return `Error: the MCP server ${server} isn't running: ${e.message}`; }
   let r;
   try { r = await c.io.call('tools/call', { name: tool, arguments: args && typeof args === 'object' ? args : {} }, ms); }
   catch (e) { return `Error: ${server} ${tool} failed: ${e.message}`; }
-  const parts = (r?.content || []).map((x) => (x?.type === 'text' ? x.text : x?.type === 'resource' ? x.resource?.text || `(a resource: ${x.resource?.uri || ''})` : x?.type === 'image' ? '(a picture, not shown)' : x?.type ? `(${x.type})` : '')).filter(Boolean);
+  const media = (x) => { const m = resultMedia(x); if (!m) return null; const shown = onMedia ? onMedia(m) !== false : false; return `(${NOUN[m.kind]}${shown ? ', shown to the user in the chat' : ', not shown'})`; };
+  const parts = (r?.content || []).map((x) => media(x) || (x?.type === 'text' ? x.text : x?.type === 'resource' ? x.resource?.text || `(a resource: ${x.resource?.uri || ''})` : x?.type === 'image' ? '(a picture, not shown)' : x?.type ? `(${x.type})` : '')).filter(Boolean);
   if (!parts.length && r?.structuredContent) parts.push(JSON.stringify(r.structuredContent));
   const out = clipText(parts.join('\n\n') || '(no output)', OUT_CHARS);
   return r?.isError ? `Error: ${out}` : out;
