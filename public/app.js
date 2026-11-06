@@ -1948,9 +1948,9 @@ function priceOf(id, extra = {}) {
   if (!m) return id ? (G.byId.size ? 'not in the catalogue' : 'loading prices…') : '';
   return priceText(m, extra);
 }
-// ---------- 🟢 🟡 🔴: how each model did in QuorX's own tests ----------
-// 🟢 recommended (it did well in our benchmarks) · 🟡 fine or untested here · 🔴 avoid (it did badly, or can't work in the harness).
-// Only measured results earn green or red by name; everything else is judged from plain catalogue facts, or left 🟡.
+// ---------- How each model did in QuorX's own tests (shown on hover over the logo of where it runs) ----------
+// g recommended (it did well in our benchmarks) · y fine or untested here · r avoid (it did badly, or can't work in the harness; marked red).
+// Only measured results earn green or red by name; everything else is judged from plain catalogue facts, or left y.
 const RATED = {
   'deepseek/deepseek-v4.1-flash-1017': ['g', 'Build benchmark: harness builds averaged 18.7 of 20 and all passed, for about $0.05 a build.'],
   'anthropic/claude-haiku-5.5': ['g', 'Build benchmark: strong even in one shot (18.3 of 20), 19.2 through the harness, all passed; about $0.04 a build.'],
@@ -1970,7 +1970,6 @@ const RATED = {
   'liquid/d1-ultra': ['y', 'In the default decider panel, but the slowest of the three (about 1 s).'],
   'tencent/hy-image-v3.5-preview': ['g', 'Made 100+ pictures in your ANI★VERSE build without trouble.'],
 };
-const REC_ICON = { g: '🟢', y: '🟡', r: '🔴' };
 const REC_WORD = { g: 'Recommended', y: 'OK or untested', r: 'Avoid' };
 function rateModel(idOrModel, kind) {
   const m = typeof idOrModel === 'string' ? G.byId?.get(idOrModel) : idOrModel;
@@ -1988,10 +1987,19 @@ function rateModel(idOrModel, kind) {
   if (k === 'decision') return { r: 'y', why: (m?.in || []).includes('image') ? 'Not tested here yet. Reads images, so it can do screenshot checks.' : 'Not tested here yet. Text only: it can\'t do screenshot checks.' };
   return { r: 'y', why: 'Not tested in QuorX yet.' };
 }
-// The dot, with its reason on hover.
+// Where a model runs, as that service's logo (OpenRouter, an app on this PC, a plan or a direct API key), with how
+// QuorX rates the model on hover; a model to avoid also gets a small red mark. Before the catalogue loads, a model
+// is placed by its id ("claude-local/opus" runs on Claude Code); anything else runs on OpenRouter.
 function recDot(id, kind) {
+  if (!id) return '';
+  const m = G.byId?.get(id), pre = String(id).split('/')[0];
+  const src = m ? sourceKey(m) : SOURCE_NAME[pre] ? pre : 'openrouter';
+  const where = src === 'openrouter' ? 'OpenRouter' : SOURCE_NAME[src] || src;
   const r = rateModel(id, kind);
-  return r ? `<span class="rec rec-${r.r}" title="${esc(`${REC_WORD[r.r]}: ${r.why}`)}" aria-label="${REC_WORD[r.r]}">${REC_ICON[r.r]}</span>` : '';
+  const title = `Runs on ${where}${r ? `\n${REC_WORD[r.r]}: ${r.why}` : ''}`;
+  const face = SOURCE_LOGO[src] ? `<span class="src-logo src-logo-${SOURCE_LOGO[src]}" style="--ico:url('icons/brand/${SOURCE_LOGO[src]}.svg')"></span>`
+    : `<span class="mk-ava" style="--h:${hue(src)}">${esc((where.match(/[A-Za-z0-9]/) || ['?'])[0].toUpperCase())}</span>`;
+  return `<span class="rec mk ${r ? `rec-${r.r}` : ''}" role="img" title="${esc(title)}" aria-label="${esc(`${where}${r ? `, ${REC_WORD[r.r]}` : ''}`)}">${face}</span>`;
 }
 // Whose plan pays: OpenCode Go, the subscription an app names (Claude Max), else the source's own.
 const planName = (m) => (m.providerID === 'opencode-go' || m.source === 'opencode-go' ? 'Go' : m.planLabel || SOURCE_SHORT[m.source] || '');
@@ -3700,7 +3708,7 @@ function renderComposerBar(c) {
   const rack = bar.closest('.cmp-control-rack'), slot = $('.cmp-model-slot', rack), glob = $('.cs-glob', rack), setBtn = $('.cmp-set-btn', rack), panel = $('.chat-set', rack), followSlot = $('.cmp-follow-slot', rack), scrim = $('.cs-scrim', rack);
   // A model on OpenCode says whose account it runs on.
   const srcId = sourceOfId(s.model);
-  slot.innerHTML = `<button type="button" class="mbtn model cmp-model-chip" title="Model for this chat${srcId ? `, on your ${esc(SOURCE_NAME[srcId])} account` : ''}: ${esc(priceOf(s.model))} (click to pick any model)">${recDot(s.model, 'chat')} ${esc(short(s.model))}${srcId ? ` <span class="mp-src">${esc(SOURCE_SHORT[srcId])}</span>` : ''} <small>${esc(shortPrice(s.model))}</small></button>`;
+  slot.innerHTML = `<button type="button" class="mbtn model cmp-model-chip" title="Model for this chat${srcId ? `, on your ${esc(SOURCE_NAME[srcId])} account` : ''}: ${esc(priceOf(s.model))} (click to pick any model)">${recDot(s.model, 'chat')} ${esc(short(s.model))} <small>${esc(shortPrice(s.model))}</small></button>`;
   renderQuoriumSlot(c);
   const permHTML = (cls = '') => `<div class="seg perm cmp-perm-switch ${cls}" title="How much permission this chat's agent asks for">
       <button type="button" data-approval="strict" class="${c.approval === 'strict' ? 'on' : ''}" title="${esc(`🔒 Strict${c.approval === 'strict' ? ' (now)' : ''}\nAsks you before paid media, and the agent's questions come to you.\nSettings → Approvals & safety says what else it asks before.`)}">🔒 Strict</button>
@@ -6015,7 +6023,7 @@ function outOfStepsHTML(m) {
     ${used ? `<div class="outcome yes">${used === 'more' ? '▶ Kept going with more steps' : used === 'fresh' ? '✦ Opened a fresh chat from a brief' : `⇄ Kept going with ${esc(short(used.slice(6)))}`}</div>`
       : `<div class="acts oos-acts">
         <button type="button" class="oos-more${rec('more')}" title="Same model, same context: carries on from where it stopped">▶ Keep going <small>+${e.more} steps · ≈ ${money(e.estimate, 3)}</small>${star('more')}</button>
-        <button type="button" class="oos-model${rec('model')}" title="Same context with a model you pick (🟢 = did well in our tests)">⇄ Another model…${star('model')}</button>
+        <button type="button" class="oos-model${rec('model')}" title="Same context with a model you pick">⇄ Another model…${star('model')}</button>
         <button type="button" class="oos-fresh${rec('fresh')}" title="A cheap model writes a short handover brief (goal, files, what works, what's left, known bugs) into a new chat with a model you pick. A clean context makes every step cheaper.">✦ Fresh chat from a summary…${star('fresh')}</button>
       </div><div class="what err" hidden></div>`}
   </div>`;

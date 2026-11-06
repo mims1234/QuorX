@@ -3247,3 +3247,9 @@ html body #projectList .sb-project .sb-chat.sb-chat-item .sb-chat-prev :is(.st-s
 .sb-chat-item.st-error .sb-chat-topline .st-mark { border-radius: 1px; transform: rotate(45deg); }
 html.reduce-motion body #projectList .sb-project .sb-chat.sb-chat-item.st-run:not(.active) { animation: none; background: color-mix(in srgb, var(--st) 13%, transparent) !important; }
 html.reduce-motion body #projectList .sb-project .sb-chat.sb-chat-item .live-dot { animation: none !important; }
+
+/* Where a model runs, as that service's logo (public/icons/brand), where the rating dot used to be. The rating is on hover;
+   a model to avoid keeps a small red mark in the corner. */
+.rec.mk { position: relative; display: inline-flex; flex: none; width: 15px; height: 15px; vertical-align: -3px; font-size: 0; line-height: 0; cursor: help; }
+.mk-ava { display: grid; place-items: center; width: 100%; height: 100%; border-radius: 4px; font: 700 9px/1 var(--mono); color: hsl(var(--h) 80% 82%); background: hsl(var(--h) 40% 24%); }
+.rec.mk.rec-r::after { content: ''; position: absolute; right: -2px; bottom: -2px; width: 6px; height: 6px; border-radius: 50%; background: var(--bad); box-shadow: 0 0 0 1.5px var(--panel); }
