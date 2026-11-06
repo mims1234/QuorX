@@ -5,7 +5,7 @@
 // - Things (files, money, media, keys…) are the coloured icons in public/icons/*.svg (manifest.js).
 // - Actions and chrome (close, reload, copy, pane, menu…) are line icons in public/icons/line/*.svg, painted in the
 //   button's own colour through a CSS mask, so they follow hover, disabled and the theme.
-// - Colour-coded marks (🟢🟡🔴 ratings, 📘📕📙📗 document kinds) stay emoji: their colour is the meaning.
+// - Colour-coded marks (📘📕📙📗 document kinds) stay emoji: their colour is the meaning.
 // Every icon-only button also gets a spoken name: its title, else the icon's name.
 import { SLUG } from './icons/manifest.js';
 
