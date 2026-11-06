@@ -6,7 +6,7 @@
 // logs, attached documents and their search index, keys and settings are never cleared from here.
 // Cleanup on its own only ever clears inside QuorX's own data folder. Project folders (their .quorx included) are
 // measured and shown here; the one way in is the 🧹 popover in a chat header, where you tick parts and confirm
-// (clearProjectParts).
+// (clearProjectParts), and ⚙ Project settings → Agent folder → Delete everything, for the whole .quorx (clearProjectAll).
 // The desktop app's own caches (Electron) are measured and cleared by desktop/main.js; the page shows both together.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -269,6 +269,47 @@ export async function clearProjectParts(projectId, parts, { keep = 10 } = {}) {
     logClear({ auto: false, id: `proj:${p.id}:${part}`, bytes: s.bytes, files: s.files, wentTo: done.wentTo, skipped: done.skipped.length });
   }
   return { results };
+}
+
+// ---------- ⚙ Project settings → Agent folder → Delete everything: the whole .quorx, after you confirm ----------
+// For starting a project afresh, without the agent's notes, skills, plans or undo as context. Every entry goes to the
+// Recycle Bin (none is deleted for good). Its .gitignore stays, so git still skips the folder; links are left as they
+// are (never followed). Project settings (hooks, permissions, budgets) live in QuorX's own data folder and stay.
+const KEEP_ALL = new Set(['.gitignore']);
+function projectAllEntries(root) {
+  const base = path.join(root, AGENT_DIR), out = [], links = [];
+  for (const n of names(base)) {
+    if (KEEP_ALL.has(n)) continue;
+    const p = path.join(base, n);
+    let st; try { st = fs.lstatSync(p); } catch { continue; }
+    (st.isSymbolicLink() ? links : out).push({ name: n, path: p, dir: st.isDirectory() });
+  }
+  return { out, links };
+}
+/** Everything that would go, entry by entry, before you confirm: → { items: [{ name, dir, bytes, files }], bytes, files, links, busy } */
+export async function previewProjectAll(projectId) {
+  const p = listProjects().find((x) => x.id === projectId);
+  const root = p && projectRoot(p);
+  if (!root) return { error: 'the project\'s folder is not on this computer' };
+  const { out, links } = projectAllEntries(root);
+  const items = await Promise.all(out.map(async (e) => ({ name: e.name, dir: e.dir, ...await sizeOf(e.path) })));
+  items.sort((a, b) => b.bytes - a.bytes || a.name.localeCompare(b.name));
+  return { items, bytes: items.reduce((a, x) => a + x.bytes, 0), files: items.reduce((a, x) => a + x.files, 0), links: links.map((x) => x.name), busy: busyProjects().has(p.id) };
+}
+/** → { bytes, files, removed, wentTo, skipped: [{ path, error }] } or { error, busy? } */
+export async function clearProjectAll(projectId) {
+  const p = listProjects().find((x) => x.id === projectId);
+  if (!p) return { error: 'no such project' };
+  const root = projectRoot(p);
+  if (!root) return { error: 'the project\'s folder is not on this computer' };
+  if (busyProjects().has(p.id)) return { error: 'a reply is running in this project: wait for it to end, or stop it', busy: true };
+  const paths = projectAllEntries(root).out.map((e) => e.path);
+  const s = await sumOf(paths);
+  const done = await removePaths(paths, 'recycle');
+  let bytes = s.bytes;
+  if (done.skipped.length) bytes = Math.max(0, bytes - (await sumOf(done.skipped.map((x) => x.path))).bytes);
+  logClear({ auto: false, id: `proj:${p.id}:all`, bytes, files: s.files, wentTo: done.wentTo, skipped: done.skipped.length });
+  return { bytes, files: s.files, removed: done.removed, wentTo: done.wentTo, skipped: done.skipped };
 }
 
 // Deletes, or sends to the Recycle Bin, one path at a time; locked ones are left and listed.

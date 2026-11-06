@@ -63,7 +63,7 @@ import { gate, appGate, appLink, hostAllowed, crossSiteApi, isLoopback, handoffP
 import { gitHubRemote, gitHubInfo } from './server/github.js';
 import { serveBlob, startSweeping, chatFootprint, sendFile, sendRanged } from './server/blobs.js';
 import { mediaFile, serveMedia } from './server/media.js';
-import { measureStorage, clearStorage, clearProjectParts, previewProjectParts, recentClears, startStorageRules } from './server/storage.js';
+import { measureStorage, clearStorage, clearProjectParts, previewProjectParts, clearProjectAll, previewProjectAll, recentClears, startStorageRules } from './server/storage.js';
 import { storageRules, saveStorageRules, rotateLog, RULE_DEFAULTS } from './server/storagerules.js';
 import { listDesignSystems, readDesignSystem, projectDesign, applyDesignSystem, saveProjectDesign, saveCustomSystem, deleteCustomSystem, specMarkdown, specTokens, contrastChecks, cleanSpec, FONTS as DESIGN_FONTS, FAMILIES as DESIGN_FAMILIES } from './server/design.js';
 import { newsRoute } from './server/news.js';
@@ -990,6 +990,20 @@ const server = http.createServer(async (req, res) => {
       const b = JSON.parse(await readBody(req, 1e4) || '{}');
       if (!validId(b.projectId)) return json(res, 400, { error: 'bad project id' });
       const r = await clearProjectParts(b.projectId, Array.isArray(b.parts) ? b.parts : [], { keep: Number(b.keep) || 10 });
+      return json(res, r.busy ? 409 : 200, r);
+    }
+    // ⚙ Project settings → Agent folder → Delete everything: the whole .quorx to the Recycle Bin, after you confirm.
+    if (url.pathname === '/api/agent-space/clear-all' && req.method === 'GET') {
+      const pid = url.searchParams.get('project');
+      if (!validId(pid)) return json(res, 400, { error: 'bad project id' });
+      return json(res, 200, await previewProjectAll(pid));
+    }
+    if (url.pathname === '/api/agent-space/clear-all' && req.method === 'POST') {
+      const b = JSON.parse(await readBody(req, 1e4) || '{}');
+      if (!validId(b.projectId)) return json(res, 400, { error: 'bad project id' });
+      if (b.confirm !== true) return json(res, 400, { error: 'not confirmed' });
+      const r = await clearProjectAll(b.projectId);
+      if (!r.error) { try { ensureAgentDir(workspaceDir(b.projectId)); } catch { /* made again on next use */ } }
       return json(res, r.busy ? 409 : 200, r);
     }
 

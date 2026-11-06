@@ -154,6 +154,32 @@ test('🧹 in a chat header: shows what each part would free, clears only the ti
   } finally { await q.stop(); }
 });
 
+test('Project settings → Delete everything: the whole .quorx goes after you confirm, its .gitignore and your files stay', async () => {
+  const h = makeHome();
+  write(path.join(h.q, '.gitignore'), '*\n');
+  write(path.join(h.q, 'chats', 'c1.md'), '# chat notes');
+  write(path.join(h.proj, 'index.html'), '<p>mine</p>');
+  const q = await quorx(h.home);
+  try {
+    const pre = (await q.call('/api/agent-space/clear-all?project=p01')).body;
+    const names = pre.items.map((x) => x.name);
+    for (const n of ['scratch', 'trash', 'checkpoints', 'objects', 'snapindex.json', 'uploads', 'log.md', 'chats']) assert.ok(names.includes(n), `${n} is listed`);
+    assert.ok(!names.includes('.gitignore'), 'the .gitignore is not offered');
+    assert.equal(pre.items[0].name, 'scratch', 'biggest first');
+    assert.ok(pre.bytes >= 2e6); assert.equal(pre.busy, false);
+    assert.match((await q.call('/api/agent-space/clear-all', { projectId: 'p01' })).body.error, /not confirmed/);
+    assert.ok(fs.existsSync(path.join(h.q, 'log.md')), 'nothing goes without the confirm');
+    const r = (await q.call('/api/agent-space/clear-all', { projectId: 'p01', confirm: true })).body;
+    assert.ok(!r.error && !r.skipped.length, JSON.stringify(r));
+    assert.ok(r.bytes >= 2e6);
+    assert.deepEqual(fs.readdirSync(h.q).sort(), ['.gitignore', 'scratch'], 'only the .gitignore stays, and an empty scratch is made again');
+    assert.deepEqual(fs.readdirSync(path.join(h.q, 'scratch')), []);
+    assert.ok(fs.existsSync(path.join(h.proj, 'index.html')), 'the project\'s own files stay');
+    assert.ok((await q.call('/api/storage/log')).body.some((x) => x.id === 'proj:p01:all' && !x.auto), 'logged as yours');
+    assert.match((await q.call('/api/agent-space/clear-all', { projectId: 'p02', confirm: true })).body.error, /not on this computer/);
+  } finally { await q.stop(); }
+});
+
 test('Compact chats moves pictures out of chat files', async () => {
   const h = makeHome();
   const png = `data:image/png;base64,${crypto.randomBytes(30000).toString('base64')}`;
