@@ -1,5 +1,5 @@
 // Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
-// Files shown inline in a chat: pictures, videos, PDFs and Markdown that a reply wrote or named, and files you
+// Files shown inline in a chat: pictures, videos, sounds, PDFs and Markdown that a reply wrote or named, and files you
 // attached. GET /api/media serves one, only from the chat's project folder (attachments in .quorx/uploads and the
 // agent's .quorx/scratch included) or a folder the chat added, through the same checks as the agent's own file tools.
 // Other dot folders (.git, .env and the like) and every other kind of file are refused.
@@ -10,11 +10,12 @@ import { sendFile } from './blobs.js';
 
 export const MEDIA_TYPES = {
   png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml',
-  mp4: 'video/mp4', webm: 'video/webm', pdf: 'application/pdf', md: 'text/markdown; charset=utf-8', markdown: 'text/markdown; charset=utf-8',
+  mp4: 'video/mp4', webm: 'video/webm', mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', m4a: 'audio/mp4', aac: 'audio/aac', flac: 'audio/flac',
+  pdf: 'application/pdf', md: 'text/markdown; charset=utf-8', markdown: 'text/markdown; charset=utf-8',
 };
 export const mediaKind = (name) => {
   const ext = String(name || '').match(/\.([a-z0-9]+)$/i)?.[1]?.toLowerCase() || '';
-  return !MEDIA_TYPES[ext] ? '' : /^image\//.test(MEDIA_TYPES[ext]) ? 'image' : /^video\//.test(MEDIA_TYPES[ext]) ? 'video' : ext === 'pdf' ? 'pdf' : 'md';
+  return !MEDIA_TYPES[ext] ? '' : /^image\//.test(MEDIA_TYPES[ext]) ? 'image' : /^video\//.test(MEDIA_TYPES[ext]) ? 'video' : /^audio\//.test(MEDIA_TYPES[ext]) ? 'audio' : ext === 'pdf' ? 'pdf' : 'md';
 };
 // Inside a dot folder only the attachments and the agent's scratch space are shown.
 const DOT_OK = /^\.quorx\/(uploads|scratch)\/[^/]/i;

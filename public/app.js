@@ -411,7 +411,7 @@ async function contextText(list) {
 // them. Picking one attaches it as context for the next message. / lists the chat commands.
 import { langOf, mountCode } from './code.js';
 import { renderMarkdown, enhance as enhanceMd, stableCut } from './markdown.js';
-import { mediaKind, writtenMedia } from './chat-media.js';
+import { mediaKind, writtenMedia, stepMedia, madeMedia } from './chat-media.js';
 
 // The message box's buttons: icons only, coloured by what they do.
 const CMP_ICO = {
@@ -2429,7 +2429,9 @@ function showPath(el, kind) {
 // they come into view, and a big Markdown file shows its first part only.
 const MM_SHOWN = 8, MM_MD_BYTES = 200e3, MM_PDF_INLINE = 60e6;
 const mediaSrc = (c, p, v) => `/api/media?project=${encodeURIComponent(c.projectId || '')}&chat=${encodeURIComponent(c.id)}&path=${encodeURIComponent(p)}${v ? `&v=${v}` : ''}`;
-const MM_LABEL = { image: 'Picture', video: 'Video', pdf: 'PDF', md: 'Markdown' };
+const MM_LABEL = { image: 'Picture', video: 'Video', audio: 'Audio', pdf: 'PDF', md: 'Markdown', file: 'File' };
+// The tool that made a piece of media, on its picture or card: which call produced which result.
+const madeByHTML = (tool) => (tool ? `<span class="mm-by" title="Made by this step's ${esc(tool)} call">${esc(TOOL_NAME[tool] || `🧩 ${tool}`)}</span>` : '');
 function newStrip(cls = '') {
   const box = document.createElement('div'); box.className = `msg-media${cls}`;
   box.innerHTML = '<div class="mm-pics"></div><div class="mm-cards"></div><button type="button" class="mm-more secondary sm" hidden></button>';
@@ -2497,12 +2499,13 @@ function addMedia(msgEl, c, p, info, at = null) {
   // Where it is on this computer (the server's key is its full path): 📂 shows it in File Explorer, selected, so it
   // can be uploaded or used elsewhere. Pictures made inside QuorX (art:) have no folder of yours.
   item._disk = onDiskPath(info.key) ? info.key : onDiskPath(p) ? p : null;
+  item._tool = info.tool || '';
   all.set(key, item);
   const folderBtn = (cls) => (item._disk ? `<button type="button" class="pv-btn ${cls}" title="Show it in File Explorer: ${esc(item._disk)}" aria-label="Show ${esc(name)} in its folder">📂 Show in folder</button>` : '');
-  const head = (acts = '') => `<div class="mm-head"><button type="button" class="mm-tog" aria-expanded="false" title="Show it here"><span class="mm-chev" aria-hidden="true">▸</span><span class="mm-ico" aria-hidden="true">${PV_ICON[info.kind] || '📄'}</span><b class="mm-name" title="${esc(item._disk || item._full)}">${esc(name)}</b><span class="mm-info">${esc(meta)}</span></button><span class="mm-acts">${acts}${folderBtn('mm-folder')}<button type="button" class="pv-btn mm-open" title="Show it in the side pane (or drag the card there)">Open</button></span></div>`;
+  const head = (acts = '') => `<div class="mm-head"><button type="button" class="mm-tog" aria-expanded="false" title="Show it here"><span class="mm-chev" aria-hidden="true">▸</span><span class="mm-ico" aria-hidden="true">${PV_ICON[info.kind] || '📄'}</span><b class="mm-name" title="${esc(item._disk || item._full)}">${esc(name)}</b><span class="mm-info">${esc(meta)}</span></button>${madeByHTML(info.tool)}<span class="mm-acts">${acts}${folderBtn('mm-folder')}${info.kind === 'file' ? '' : '<button type="button" class="pv-btn mm-open" title="Show it in the side pane (or drag the card there)">Open</button>'}</span></div>`;
   if (info.kind === 'image') {
     item.className = 'mm-pic';
-    item.innerHTML = `<button type="button" class="mm-thumb pv-checker" title="${esc(name)} · click to see it large"><img src="${esc(src)}" alt="${esc(name)}" loading="lazy" decoding="async"${/\.svg$/i.test(p) || /\.svg$/i.test(name) ? ' class="mm-svg"' : ''}></button><figcaption title="${esc(item._disk || item._full)}"><span class="mm-cap">${esc(name)}</span>${item._disk ? `<button type="button" class="mm-pic-folder" title="Show it in File Explorer: ${esc(item._disk)}" aria-label="Show ${esc(name)} in its folder">📂</button>` : ''}</figcaption>`;
+    item.innerHTML = `<button type="button" class="mm-thumb pv-checker" title="${esc(name)} · click to see it large"><img src="${esc(src)}" alt="${esc(name)}" loading="lazy" decoding="async"${/\.svg$/i.test(p) || /\.svg$/i.test(name) ? ' class="mm-svg"' : ''}></button><figcaption title="${esc(item._disk || item._full)}"><span class="mm-cap">${esc(name)}</span>${madeByHTML(info.tool)}${item._disk ? `<button type="button" class="mm-pic-folder" title="Show it in File Explorer: ${esc(item._disk)}" aria-label="Show ${esc(name)} in its folder">📂</button>` : ''}</figcaption>`;
     // A click shows it in the side pane; the pop-up that steps through every picture in the message stays on Shift+click.
     $('.mm-thumb', item).onclick = (e) => {
       if (!e.shiftKey) return openFileInPane(c, paneEntry(item));
@@ -2521,15 +2524,20 @@ function addMedia(msgEl, c, p, info, at = null) {
       const open = item.classList.toggle('mm-shut') === false;
       tog.setAttribute('aria-expanded', String(open)); tog.title = open ? 'Fold it' : 'Show it here';
       body.hidden = !open; const seg = $('.mm-seg', item); if (seg) seg.hidden = !open;
-      if (!open) { $('video', body)?.pause(); return; }
+      if (!open) { $('video, audio', body)?.pause(); return; }
       if (body.dataset.built) return;
       body.dataset.built = '1';
       if (info.kind === 'video') body.innerHTML = `<video controls preload="metadata" playsinline src="${esc(src)}"></video>`;
+      else if (info.kind === 'audio') body.innerHTML = `<audio controls preload="metadata" src="${esc(src)}"></audio>`;
       else if (info.kind === 'pdf') body.innerHTML = info.size > MM_PDF_INLINE ? `<p class="mm-note">A large PDF (${esc(sizeText(info.size))}): Open shows it.</p>` : `<iframe class="mm-pdf-frame" loading="lazy" src="${esc(src)}#navpanes=0&view=FitH" title="${esc(name)}"></iframe>`;
       else { body.innerHTML = '<div class="mm-md-body"><div class="fx-empty">Loading…</div></div>'; loadMdCard(item); }
     };
-    $('.mm-open', item).onclick = () => openFileInPane(c, paneEntry(item));
+    const op = $('.mm-open', item); if (op) op.onclick = () => openFileInPane(c, paneEntry(item));
     const fo = $('.mm-folder', item); if (fo) fo.onclick = () => openFolder(null, item._disk);
+    // A file of a kind the chat can't play is a name card only.
+    if (info.kind === 'file') { item.classList.add('mm-plain'); tog.onclick = null; tog.disabled = true; }
+    // A clip or a sound a tool just made shows its player straight away.
+    else if (info.tool && (info.kind === 'video' || info.kind === 'audio')) tog.onclick();
   }
   // Dragged onto the side pane (by its name line, or a picture by itself), it opens there. Text inside an open card
   // stays selectable.
@@ -2570,11 +2578,18 @@ function loadMdCard(item) {
 async function drawMsgMedia(c, m) {
   const el = m.el;
   if (!el || !c) return;
+  // Media the reply's tools made, each labelled with its tool: an artifact straight away, a file once the server has
+  // said it is there (below, with the files it wrote).
+  const made = m.role === 'user' ? [] : madeMedia(m.trace), madeBy = new Map(made.filter((x) => x.path).map((x) => [x.path, x]));
+  for (const x of made) {
+    const art = x.art && c.agent.artifacts?.[x.art];
+    if (art?.url) addMedia(el, c, x.key, { kind: x.kind, src: art.url, name: x.name || art.title || x.art, full: x.name || art.title || x.art, tool: x.tool });
+  }
   for (const a of m.arts || []) {
     const art = c.agent.artifacts?.[a.id];
-    if ((a.kind === 'image' || a.kind === 'video') && art?.url) addMedia(el, c, `art:${a.id}`, { kind: a.kind, src: art.url, name: a.title || a.id, full: a.title || a.id });
+    if (['image', 'video', 'audio'].includes(a.kind) && art?.url) addMedia(el, c, `art:${a.id}`, { kind: a.kind, src: art.url, name: a.title || a.id, full: a.title || a.id });
   }
-  const paths = m.role === 'user' ? (m.docs || []).filter((d) => d.rel && mediaKind(d.rel)).map((d) => d.rel) : writtenMedia(m.trace);
+  const paths = m.role === 'user' ? (m.docs || []).filter((d) => d.rel && mediaKind(d.rel)).map((d) => d.rel) : [...new Set([...writtenMedia(m.trace), ...madeBy.keys()])];
   // A file the reply wrote again is asked about again, and shown fresh (in its new place, under the later step).
   const writes = new Map();
   if (m.role !== 'user') for (const e of m.trace || []) if (e.t === 'tool' && !e.by && ['write_file', 'append_file', 'edit_file'].includes(e.name)) writes.set(String(e.args?.path || ''), (writes.get(String(e.args?.path || '')) || 0) + 1);
@@ -2584,8 +2599,11 @@ async function drawMsgMedia(c, m) {
   for (const p of todo) if (asked.has(p)) PATHS.seen.delete(pathKey(c.projectId || '', c.id, p));
   const seen = await askPaths(c.projectId || '', c.id, todo);
   for (const p of todo) {
-    const info = seen.get(p)?.media;
+    const by = madeBy.get(p);
+    // A made file the chat can't play (or that is gone) still shows as a name card under its step.
+    let info = seen.get(p)?.media || (by && seen.get(p)?.kind === 'file' ? { kind: 'file', key: p } : null);
     if (!info) continue;
+    if (by) info = { ...info, tool: by.tool, ...(by.name ? { name: by.name } : {}) };
     if (asked.has(p)) { const k = mediaKey(info.key || p), old = el._mm?.get(k); if (old) { const strip = old.closest('.msg-media'); old.remove(); el._mm.delete(k); if (strip && !strip.querySelector('.mm-pic, .mm-card')) strip.remove(); } }
     asked.set(p, writes.get(p) || 1);
     const doc = m.role === 'user' && (m.docs || []).find((d) => d.rel === p);
@@ -4624,6 +4642,8 @@ function timelineItems(m) {
       // While it works, a picture, video, PDF or Markdown file it wrote shows right here, under the step that made it
       // (once the reply has ended, its files show under the answer).
       if (x && m.live && !e.by && MEDIA_WRITERS.has(e.name) && mediaKind(String(x.e.args?.path || '')) && !/^Error/.test(x.res)) items.push({ kind: 'media', path: String(x.e.args.path) });
+      // So does every picture, clip, voice, piece of music or film a tool made, labelled with that tool.
+      if (m.live) for (const y of stepMedia(e)) items.push({ kind: 'media', path: y.key, made: y });
       continue;
     }
     if (e.t === 'review_start') { rv = null; items.push({ kind: 'card', pin: true, html: () => reviewRunningHTML(m, e) }); continue; }
@@ -4721,7 +4741,7 @@ function timelineHTML(m) {
     if (it.kind === 'media') {
       // A file written again later shows there; here it says so.
       const key = mediaKey(it.path), later = items.slice(k + 1).some((x) => x.kind === 'media' && mediaKey(x.path) === key);
-      pieces.push({ row: false, pin: true, at, html: later ? `<div class="tl-media old" data-file="${esc(it.path)}"><span class="tl-ic">${PV_ICON[mediaKind(it.path)] || '📄'}</span><b>${esc(baseName(it.path))}</b><small>written again below ↓</small></div>` : `<div class="tl-media" data-file="${esc(it.path)}"></div>` });
+      pieces.push({ row: false, pin: true, at, html: later ? `<div class="tl-media old" data-file="${esc(it.path)}"><span class="tl-ic">${PV_ICON[it.made?.kind || mediaKind(it.path)] || '📄'}</span><b>${esc(it.made?.name || baseName(it.path))}</b><small>${it.made ? 'made again below ↓' : 'written again below ↓'}</small></div>` : `<div class="tl-media" data-file="${esc(it.path)}"></div>` });
       continue;
     }
     if (it.kind === 'steer') {

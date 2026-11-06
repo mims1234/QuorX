@@ -444,6 +444,10 @@ const buttonsOnly = new Set(); // runId:id of the cards above that typed words c
 // The tool call an approval card belongs to (calls in one step can run side by side), so a reply typed on its card
 // becomes that call's result.
 const toolCallCtx = new AsyncLocalStorage();
+// Media a tool call made (a picture, a clip, a voice, music, a film): shown in the chat under that call's step, as soon
+// as it lands. It travels on the call's tool_result event only; what the model hears back is the result text.
+// `m` is { path } (in the project) or { art } (an artifact id), with its kind: image, video or audio.
+const madeMedia = (m) => { const c = toolCallCtx.getStore(); if (c && m && (m.path || m.art)) (c.media ||= []).push(m); };
 export function answerApproval(runId, id, answer) {
   const resolve = pending.get(`${runId}:${id}`);
   if (!resolve) return false;
@@ -2273,7 +2277,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     let args = {}, broken = false;
     try { args = JSON.parse(tc.function.arguments || '{}'); } catch { broken = true; }
     const name = tc.function.name;
-    let result;
+    let result, made = null;
     // A tool still waiting in load_tools, called by name: it loads and runs.
     if (!broken && deferred.has(name)) loadTools([name]);
     if (broken) {
@@ -2286,6 +2290,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       emit({ t: 'note', level: 'warn', msg: `The model asked for ${clip(name, 40)}, which this chat doesn't offer; not run.`, at: at() });
     } else {
       const ctx = {};
+      made = ctx;
       // The user's tool hooks (Project settings → Hooks): before one can stop the call, after one is told on failure.
       // Commands and file writes have hooks of their own, so they don't run these twice for the same thing.
       const toolHooks = !TOOL_HOOK_SKIP.has(name);
@@ -2305,7 +2310,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     result = scrubSecrets(root, String(result ?? ''));
     const first = result.split('\n')[0];
     journal.push(`${clip(toolSummary(name, broken ? {} : args), 110)}${/^Error|declined/.test(first) ? ` → ${clip(first, 90)}` : name === 'run_command' || name === 'shell' ? ` → ${clip(first, 40)}` : ''}${/\nCheck found/.test(result) ? ' (check found problems)' : ''}`);
-    emit({ t: 'tool_result', step, id: tc.id, name, result: clip(result, 600), at: at() });
+    emit({ t: 'tool_result', step, id: tc.id, name, result: clip(result, 600), ...(made?.media?.length ? { media: made.media } : {}), at: at() });
     if (/^\s*Error/.test(String(result))) (run.errSteps ||= []).push(step);
     // Attempts: what changes the work. A problem only counts as "back" if one happened since it was last seen.
     if (['write_file', 'edit_file', 'append_file', 'delete_file', 'write_artifact', 'edit_artifact', 'run_command', 'shell', 'terminal', 'start_server'].includes(name)) {
@@ -2714,6 +2719,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       const code = await closed;
       if (code !== 0 || !fs.existsSync(out)) return `Error: ffmpeg could not encode the frames: ${clip(errText.trim(), 500)}`;
       notes.push(`rendered ${outRel} (${frames} frames)`);
+      madeMedia({ path: outRel.replace(/\\/g, '/'), kind: 'video' });
       return `Rendered ${outRel}: ${seconds} s, ${frames} frames at ${fps} fps, ${W}×${H}${audio ? `, with ${args.audio}` : ', no sound'}, in ${Math.round((Date.now() - t0) / 1000)} s. Check it: a contact sheet and look, and music_map for the beat.`;
     } catch (e) {
       if (signal.aborted) throw e;
@@ -2742,6 +2748,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     const plan = fitPlan(m, Number(args.seconds), { keepEnding: args.keep_ending !== false });
     try { fs.mkdirSync(path.dirname(out), { recursive: true }); await writeFit(file, out, plan); } catch (e) { return `Error: could not write ${outRel} (${clip(e.message, 200)}).`; }
     notes.push(`fitted ${rel} to ${plan.seconds} s → ${outRel}`);
+    madeMedia({ path: outRel.replace(/\\/g, '/'), kind: 'audio' });
     const fitted = await mapMusic(out, { bpm: m.bpm }).catch(() => null);
     return `Wrote ${outRel}: ${plan.seconds} s (asked ${args.seconds} s; lengths come in whole bars of ${m.bar.toFixed(3)} s), ${plan.method}. ${head}.${fitted ? `\nIts bar lines (s): ${fitted.bars.join(', ')}\nCut the pictures on these.` : ''}`;
   }
@@ -3524,7 +3531,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (name === 'delegate') return delegate(args, step);
     if (name === 'mcp_setup') return mcpSetup(args);
     if (name === 'quorx_settings') return quorxSettings(args);
-    if (mcpT.byName.has(name)) { const mt = mcpT.byName.get(name); return mcpCallTool(mt.server, mt.tool, args); }
+    if (mcpT.byName.has(name)) { const mt = mcpT.byName.get(name); return mcpCallTool(mt.server, mt.tool, args, { onMedia: (m) => keepToolMedia(name, m) }); }
     if (name === 'edit_video') return editVideo(args);
     return `Error: unknown tool ${name}.`;
   }
@@ -6087,14 +6094,42 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     const result = await codeTool('shell', { command: e.line });
     if (!fs.existsSync(outFull) || !fs.statSync(outFull).size) return `${result}\n\nThe edit did not produce ${out}. The filter graph is in ${filterRel}; read the error above, fix the inputs, and call edit_video again.`;
     emit({ t: 'file', path: out, at: at() });
+    madeMedia({ path: out, kind: 'video' });
     notes.push(`edited film ${out}`);
     return `Saved the finished film as ${out} (${(fs.statSync(outFull).size / 1048576).toFixed(1)} MB, ${e.width}×${e.height}, ${clips.length} clips${args.voice ? ', voice-over' : ''}${args.music ? ', music' : ''}); the user sees it under Files. To check it, open site:${out} in the browser.\n${clip(result, 600)}`;
+  }
+
+  // A picture, sound or video an MCP tool returned: kept for the chat to show under its step (in the agent's scratch
+  // space, or as an artifact without a project folder). The agent's result says only that the user sees it.
+  const TOOL_MEDIA_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp', 'image/svg+xml': 'svg', 'video/mp4': 'mp4', 'video/webm': 'webm', 'audio/mpeg': 'mp3', 'audio/mp3': 'mp3', 'audio/wav': 'wav', 'audio/x-wav': 'wav', 'audio/wave': 'wav', 'audio/ogg': 'ogg', 'audio/mp4': 'm4a', 'audio/aac': 'aac', 'audio/flac': 'flac', 'audio/webm': 'webm' };
+  let toolMediaN = 0;
+  function keepToolMedia(tool, m) {
+    const ext = TOOL_MEDIA_EXT[m.mime];
+    if (!ext) return false;
+    const buf = Buffer.from(m.data, 'base64');
+    if (!buf.length || buf.length > 100e6) return false;
+    const name = `${slug(tool).slice(0, 30) || 'tool'}-${Date.now().toString(36)}-${++toolMediaN}`;
+    if (root) {
+      try {
+        const rel = `.quorx/scratch/made/${name}.${ext}`;
+        fs.mkdirSync(path.join(root, '.quorx', 'scratch', 'made'), { recursive: true });
+        fs.writeFileSync(path.join(root, rel), buf);
+        madeMedia({ path: rel, kind: m.kind });
+        return true;
+      } catch { /* the folder can't be written: an artifact instead, below */ }
+    }
+    if (buf.length > 8e6) return false;
+    const id = newId(`${tool} ${m.kind}`);
+    saveArtifact({ id, kind: m.kind, title: `${tool} ${m.kind}`, url: `data:${m.mime};base64,${m.data}`, v: 1 });
+    madeMedia({ art: id, kind: m.kind, name: `${tool} ${m.kind}` });
+    return true;
   }
 
   // With a project folder, made media is a file there (the user sees it under Files), not an artifact.
   // Without one, or if the file can't be written, it is an artifact as before.
   async function deliverMedia(id, src, ext, art, made) {
     const f = await mediaFile(id, src, ext);
+    madeMedia(f?.rel ? { path: f.rel, kind: art.kind } : { art: id, kind: art.kind, name: art.title });
     if (f?.rel) {
       const pic = art.kind === 'image';
       return `${made} Saved in the project folder as ${f.rel} (${f.kb} KB); the user sees it under Files. In this project's pages use src="${f.rel}" (relative to the page); in a page artifact use src="/ws/${projectId}/${f.rel}". To look at it yourself, open site:${f.rel} in the browser${pic ? `, or give the deciders "file:${f.rel}"` : ''}.`;
