@@ -143,6 +143,11 @@ dialog.pf-dialog::backdrop { background: rgba(4, 6, 6, .72); backdrop-filter: bl
 .sp-open:hover { background: var(--accent); color: var(--accent-ink, #031317); }
 .sp-clear { border: 1px solid color-mix(in srgb, var(--amber, #f59e0b) 55%, transparent); background: transparent; color: var(--amber, #f59e0b); }
 .sp-clear:hover { background: color-mix(in srgb, var(--amber, #f59e0b) 18%, transparent); }
+.sp-wipe { border: 1px solid var(--bad-border, var(--bad)); background: transparent; color: var(--bad); }
+.sp-wipe:hover { background: var(--bad-dim, color-mix(in srgb, var(--bad) 14%, transparent)); }
+.sp-wipe-list { max-height: 220px; overflow-y: auto; }
+.sp-wipe-list code { font: 11.5px var(--mono); color: var(--text); }
+.sp-confirm { grid-template-columns: auto minmax(0, 1fr); align-items: center; padding: 6px 8px; }
 .sp-go { border: 1px solid var(--bad); background: var(--bad); color: #fff; }
 .sp-go:disabled { opacity: .45; cursor: not-allowed; }
 .sp-link { border: 0; padding: 0; background: none; color: var(--accent); font: inherit; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }

@@ -10218,13 +10218,51 @@ async function projectSpace(p, box, note = '') {
   const share = Math.min(1, r.total / limit);
   box.innerHTML = `<div class="pj-space compact">
     <div class="sp-line"><div class="sp-size"><span><b>${mbText(r.total)}</b> <small>of your ${mbText(limit)} limit</small>${over ? ' <span class="sp-over">over the limit</span>' : ''}</span><span class="sp-meter ${over ? 'over' : share > 0.85 ? 'near' : ''}"><i style="width:${(share * 100).toFixed(1)}%"></i></span></div>
-    <div class="sp-acts"><button type="button" class="sp-open">📂 Open .quorx</button><button type="button" class="sp-clear">🧹 Clear…</button></div></div>
+    <div class="sp-acts"><button type="button" class="sp-open">📂 Open .quorx</button><button type="button" class="sp-clear">🧹 Clear…</button><button type="button" class="sp-wipe" title="Remove everything in .quorx, so the agent starts this project without its notes, skills, plans or undo">🗑 Delete everything…</button></div></div>
     ${note ? `<p class="sp-done" role="status">${esc(note)}</p>` : ''}
     <p class="sp-note">Research notes and undo copies, never committed. Clearing it never touches your project's files, and your chats stay.</p></div>`;
   $('.sp-open', box).onclick = () => openFolder(p.id, '.quorx');
+  $('.sp-wipe', box).onclick = () => spaceWipeView(p, box);
   $('.sp-clear', box).onclick = () => spaceClearView({ projectId: p.id }, box, () => projectSpace(p, box), (msg) => {
     for (const c of G.open.values()) if (c.projectId === p.id) checkSpace(c, true);
     projectSpace(p, box, msg);
+  });
+}
+// ⚙ Project settings → Agent folder → Delete everything…: every entry in .quorx with its size and what it held, a
+// tick that you understand, then all of it to the Recycle Bin. Only here, never in the chat header's 🧹.
+const WIPE_WHAT = {
+  scratch: 'research scripts, downloads, scrapes', checkpoints: 'undo copies for ↶ Undo', trash: 'files the agent deleted or replaced',
+  objects: 'command snapshots', 'snapindex.json': 'command snapshots', chats: 'each chat\'s own notes', 'log.md': 'the project\'s notes',
+  'plan.md': 'the current plan', 'plan.json': 'the current plan', skills: 'skills made for this project', 'launch.json': 'saved servers',
+  'serve.mjs': 'the page server', uploads: 'documents you attached', index: 'document search index (costs money to make again)',
+  collected: 'lists collected from web pages', edits: 'picture edits', video: 'video storyboards and music',
+};
+function spaceWipeView(p, box) {
+  const back = () => projectSpace(p, box);
+  box.innerHTML = '<div class="pj-space compact"><div class="sp-head"><b>Delete everything in the agent\'s folder</b><small>Measuring what is in .quorx/…</small></div></div>';
+  getJ(`/api/agent-space/clear-all?project=${encodeURIComponent(p.id)}`).then((r) => {
+    if (!box.isConnected) return;
+    if (!r || r.error) { box.innerHTML = `<div class="pj-space compact"><div class="sp-head"><b>Couldn't measure</b><small>${esc(r?.error || 'no answer from QuorX')}</small></div><div class="sp-acts"><button type="button" class="ghost sp-back">Back</button></div></div>`; $('.sp-back', box).onclick = back; return; }
+    const rows = r.items.map((x) => `<div class="sp-row"><span><code>${esc(x.name)}${x.dir ? '/' : ''}</code>${WIPE_WHAT[x.name] ? ` · ${esc(WIPE_WHAT[x.name])}` : ''}</span><b>${mbText(x.bytes)}</b></div>`).join('');
+    box.innerHTML = `<div class="pj-space compact"><div class="sp-head"><b>Delete everything in the agent's folder</b><small>All of <code>.quorx/</code> in “${esc(p.name)}”: ${mbText(r.bytes)} in ${r.files.toLocaleString()} file${r.files === 1 ? '' : 's'}</small></div>
+      ${r.items.length ? `<div class="sp-parts sp-wipe-list">${rows}</div>` : '<p class="sp-note">The agent\'s folder is already empty.</p>'}
+      ${r.busy ? '<p class="sp-warn">A reply is running in this project. Wait for it to end, or stop it, then delete.</p>' : ''}
+      ${r.items.length ? `<p class="sp-warn">⚠ The agent starts this project afresh: its notes, each chat's notes, plans, skills made here, saved servers, undo history and attached documents all go${r.items.some((x) => x.name === 'index') ? ', and the document search index costs money to make again' : ''}. Chats can no longer undo their replies. Everything goes to the Windows Recycle Bin, so you can restore it from there until it is emptied. Your project's own files, your chats, and this project's hooks, permissions and budget stay.${r.links.length ? ` Links in it (${esc(r.links.join(', '))}) are left as they are.` : ''}</p>
+      <label class="sp-pick sp-confirm"><span class="sq-check"><input type="checkbox" class="sp-sure"></span><span class="sp-pick-text"><b>I understand the agent loses all of this</b></span></label>` : ''}
+      <div class="sp-acts"><button type="button" class="ghost sp-back">Back</button>${r.items.length ? `<button type="button" class="sp-go danger" disabled>Delete ${mbText(r.bytes)}</button>` : ''}</div></div>`;
+    $('.sp-back', box).onclick = back;
+    const go = $('.sp-go', box), sure = $('.sp-sure', box);
+    if (!go) return;
+    sure.onchange = () => { go.disabled = !sure.checked || r.busy; };
+    go.onclick = async () => {
+      if (!sure.checked) return;
+      go.disabled = true; go.textContent = 'Deleting…';
+      const res = await postJ('/api/agent-space/clear-all', { projectId: p.id, confirm: true });
+      if (!res || res.error) { go.textContent = 'Not deleted'; return uiAlert(`Not deleted: ${res?.error || 'no answer from QuorX'}`); }
+      const left = res.skipped?.length || 0;
+      for (const c of G.open.values()) if (c.projectId === p.id) checkSpace(c, true);
+      projectSpace(p, box, `${res.wentTo === 'recycle' ? `Moved ${mbText(res.bytes)} to the Recycle Bin` : `Deleted ${mbText(res.bytes)}`}. The agent's folder starts afresh.${left ? ` ${left} item${left === 1 ? ' was' : 's were'} in use and stayed: ${res.skipped.map((x) => x.path.split(/[\\/]/).pop()).join(', ')}.` : ''}`);
+    };
   });
 }
 function spaceClearView(c, pop, back, done) {

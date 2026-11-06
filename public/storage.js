@@ -96,7 +96,13 @@ function paint() {
   badge();
   if (V.focus) { const el = box.querySelector(`[data-fold="${CSS.escape(V.focus)}"].sto-proj`); V.focus = null; if (el) { el.scrollIntoView({ block: 'start' }); el.classList.add('sto-flash'); } }
 }
-const labelOf = (id) => V.items?.find((x) => x.id === id)?.label || { 'trash-retention': 'Trash past its days' }[id] || id;
+const labelOf = (id) => {
+  const known = V.items?.find((x) => x.id === id)?.label || { 'trash-retention': 'Trash past its days' }[id];
+  if (known) return known;
+  const all = /^proj:(.+):all$/.exec(id || '');
+  if (all) return `All of .quorx in ${V.items?.find((x) => x.project?.id === all[1])?.project.name || 'a project'}`;
+  return id;
+};
 
 function sizeCell(it) {
   const files = it.id === 'compact' ? `${pl(it.files, 'picture')} in ${pl(it.count, 'chat')}` : it.id === 'chats' ? pl(it.files, 'chat') : pl(it.files, 'file');
