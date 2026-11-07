@@ -1,0 +1,13 @@
+/* Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0 */
+/* The performance readout (perf.js): a small box in the bottom-left corner, above everything, out of the way. */
+.qx-perf { position: fixed; left: 12px; bottom: 12px; z-index: 9000; width: 330px; box-sizing: border-box; max-width: calc(100vw - 24px); padding: 10px 12px; border-radius: 10px;
+  background: var(--panel-overlay, var(--panel)); border: 1px solid var(--line-strong, var(--line)); box-shadow: 0 8px 28px rgba(0, 0, 0, .35);
+  font: 12px/1.45 var(--font-ui); color: var(--text); pointer-events: auto; }
+.qx-perf .qp-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; font-weight: 650; color: var(--text-bright, var(--text)); }
+.qx-perf .qp-copy { font: 600 11px var(--font-ui); color: var(--muted); background: transparent; border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px; cursor: pointer; }
+.qx-perf .qp-copy:hover { color: var(--text); border-color: var(--line-strong, var(--line)); }
+.qx-perf .qp-row { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; padding: 2px 0; }
+.qx-perf .qp-row span { color: var(--muted); white-space: nowrap; }
+.qx-perf .qp-row b { min-width: 0; overflow-wrap: anywhere; font: 500 11.5px var(--mono); font-variant-numeric: tabular-nums; text-align: right; color: var(--text); }
+.qx-perf .qp-row.warn b { color: var(--warn); }
+.qx-perf .qp-row.bad b { color: var(--bad); }

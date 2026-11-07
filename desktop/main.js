@@ -130,6 +130,7 @@ function createWindow() {
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false },
   });
   win.once('ready-to-show', () => { if (!HIDDEN) win.show(); });
+  countWebglWarnings(win.webContents);
   // The zoom you left QuorX at; Ctrl+wheel on the app goes through the same steps (the page handles the keys).
   win.webContents.on('did-finish-load', () => { const z = Number(readConfig().zoom); if (z >= 0.5 && z <= 2) win.webContents.setZoomFactor(z); });
   // The page (re)loaded (Restart harness, Ctrl+R): it starts with no tabs of yours, so the ones it had are gone from
@@ -278,6 +279,7 @@ function tabFor(sid) {
 }
 function wireView(sid, view) {
   const wc = view.webContents;
+  countWebglWarnings(wc);
   const info = () => send({ sid, type: 'state', url: wc.getURL(), title: wc.getTitle(), loading: wc.isLoading(), canBack: wc.navigationHistory.canGoBack(), canForward: wc.navigationHistory.canGoForward() });
   for (const ev of ['did-navigate', 'did-navigate-in-page', 'page-title-updated', 'did-start-loading', 'did-stop-loading']) wc.on(ev, info);
   wc.on('did-fail-load', (_e, code, desc, url, main) => { if (main && code !== -3) send({ sid, type: 'error', url, message: desc }); });
@@ -513,6 +515,37 @@ handle('closeAction', (v) => (v === undefined ? closeAction() : setCloseAction(v
 handle('quit', () => { setImmediate(quitApp); return true; });
 handle('info', () => ({ version: app.getVersion(), packaged: app.isPackaged, dev: DEV, store: STORE, home: HOME || ROOT, origin, ownsServer: !!server }));
 handle('openHome', () => { shell.openPath(HOME || ROOT); return true; });
+// The performance readout (⚙ Settings → Appearance → Under the hood) and the perf UI test: every process QuorX runs
+// with its memory and CPU, and each browser tab (yours and the agent's) with whether it is on screen. Memory in MB.
+handle('perf', () => {
+  const mb = (kb) => Math.round((kb || 0) / 1024);
+  const metrics = app.getAppMetrics();
+  const byPid = new Map(metrics.map((m) => [m.pid, m]));
+  const procs = metrics.map((m) => ({ pid: m.pid, type: m.type, name: m.serviceName || m.name || '', mb: mb(m.memory?.workingSetSize), privateMb: mb(m.memory?.privateBytes), cpu: Math.round((m.cpu?.percentCPUUsage || 0) * 10) / 10 }));
+  const appPid = win && !win.isDestroyed() ? win.webContents.getOSProcessId() : 0;
+  const tabList = [...tabs].map(([sid, t]) => {
+    const wc = t.view?.webContents, pid = wc && !wc.isDestroyed() ? wc.getOSProcessId() : 0;
+    return { sid, agent: !!t.agent, shown: !!t.shown, pid, mb: mb(byPid.get(pid)?.memory?.workingSetSize), throttled: !t.agent };
+  });
+  const sum = (l) => l.reduce((s, p) => s + p.mb, 0);
+  return {
+    at: Date.now(),
+    totalMb: sum(procs),
+    appMb: mb(byPid.get(appPid)?.memory?.workingSetSize),
+    gpuMb: sum(procs.filter((p) => p.type === 'GPU')),
+    tabsMb: sum(tabList.filter((t) => t.pid && t.pid !== appPid)),
+    procs, tabs: tabList, webglLost: PERF.webglLost,
+  };
+});
+// Chromium's "too many WebGL contexts" and lost-context warnings, from the app window and every tab: the readout
+// counts them, since past ~16 live 3D views the oldest preview silently goes blank.
+const PERF = { webglLost: 0 };
+function countWebglWarnings(wc) {
+  wc.on('console-message', (e, ...rest) => {
+    const msg = String(e?.message ?? rest[1] ?? '');
+    if (/Too many active WebGL contexts|CONTEXT_LOST_WEBGL|WebGL context was lost/i.test(msg)) PERF.webglLost++;
+  });
+}
 // QuorX's own zoom (the page sends Ctrl + / − / 0 here unless they were for the terminal). Remembered between starts.
 handle('zoom', (dir) => {
   if (!win) return 1;

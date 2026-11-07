@@ -7,6 +7,8 @@
 //   npm run test:ui -- --scenario cli       the agent builds a Rust command-line program
 //   npm run test:ui -- --scenario running   the Running tab: what runs, who started it, Stop and Stop all
 //   npm run test:ui -- --scenario news      News: the dot, What's new, the sample article, Play on a flow, a compare
+//   npm run test:ui -- --scenario perf      heavy chats one after another, with the performance readout's numbers
+//                                           (only when asked: not part of "all"; --chats N, default 8)
 //   add --keep to leave the app open afterwards
 //
 // The test copy keeps its own chats, projects and keys in .uitest/home (git ignores it), and runs on port 5197, so
@@ -16,6 +18,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { detectToolchains } from '../server/toolchains.js';
@@ -501,6 +504,117 @@ async function newsScenario() {
   });
 }
 
+// ---------- scenario: perf (heavy chats, no key needed) ----------
+// Fills the test copy with chats like the ones people make (pictures, screenshots in the steps, a 3D page built as
+// an artifact), opens them one after another through the sidebar, and reads the performance readout after each.
+// Nothing calls a model. Numbers go to perf.json next to the report; the readout is switched on through Settings.
+function pngFile(w, h, px) {
+  const raw = Buffer.alloc((w * 3 + 1) * h);
+  for (let y = 0, o = 0; y < h; y++) { raw[o++] = 0; for (let x = 0; x < w; x++) { const c = px(x, y); raw[o++] = c[0]; raw[o++] = c[1]; raw[o++] = c[2]; } }
+  const chunk = (type, data) => { const len = Buffer.alloc(4); len.writeUInt32BE(data.length); const td = Buffer.concat([Buffer.from(type), data]); const crc = Buffer.alloc(4); crc.writeUInt32BE(zlib.crc32(td)); return Buffer.concat([len, td, crc]); };
+  const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr[8] = 8; ihdr[9] = 2;
+  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw, { level: 1 })), chunk('IEND', Buffer.alloc(0))]);
+}
+// A page that keeps a WebGL view busy, like a 3D app the agent built.
+const SCENE = `<!doctype html><meta charset="utf-8"><title>3D scene</title><style>html,body{margin:0;height:100%;background:#0b1110}canvas{width:100%;height:100%;display:block}</style><canvas id="c"></canvas><script>
+const c=document.getElementById('c'),g=c.getContext('webgl');const vs='attribute vec2 p;uniform float t;void main(){float s=sin(t),k=cos(t);gl_Position=vec4(p.x*k-p.y*s,p.x*s+p.y*k,0.,1.);}',fs='precision mediump float;uniform float t;void main(){gl_FragColor=vec4(.2+.5*sin(t),.7,.8,1.);}';
+const sh=(k,s)=>{const o=g.createShader(k);g.shaderSource(o,s);g.compileShader(o);return o};const pr=g.createProgram();g.attachShader(pr,sh(g.VERTEX_SHADER,vs));g.attachShader(pr,sh(g.FRAGMENT_SHADER,fs));g.linkProgram(pr);g.useProgram(pr);
+g.bindBuffer(g.ARRAY_BUFFER,g.createBuffer());g.bufferData(g.ARRAY_BUFFER,new Float32Array([0,.7,-.6,-.5,.6,-.5]),g.STATIC_DRAW);const l=g.getAttribLocation(pr,'p');g.enableVertexAttribArray(l);g.vertexAttribPointer(l,2,g.FLOAT,false,0,0);const u=g.getUniformLocation(pr,'t');
+(function f(ts){c.width=c.clientWidth;c.height=c.clientHeight;g.viewport(0,0,c.width,c.height);g.uniform1f(u,ts/700);g.drawArrays(g.TRIANGLES,0,3);requestAnimationFrame(f)})(0);
+</script>`;
+
+async function perfScenario() {
+  const N = Math.max(1, Math.min(16, Number(arg('chats', 8)) || 8)), PICS = 20, SHOTS = 25, PER_MSG = 5;
+  const rows = [];
+  const read = async (label, extra = {}) => {
+    const s = await js('return await window.qxPerf.sample();');
+    const r = { label, ...extra, totalMb: s.shell?.totalMb ?? null, appMb: s.shell?.appMb ?? null, gpuMb: s.shell?.gpuMb ?? null, tabs: s.shell?.tabs.length ?? null, tabsMb: s.shell?.tabsMb ?? null,
+      heapMb: s.page.heapMb, chats: s.chats.open, elements: s.page.elements, images: s.page.images, imagesMb: s.page.imagesMb, frames: s.page.frames, webglLost: s.shell?.webglLost ?? null, timers: s.page.timers, longTasks: s.page.longTasks, longestMs: s.page.longestMs };
+    rows.push(r);
+    return `all ${r.totalMb ?? '–'} MB · window ${r.appMb ?? '–'} MB · GPU ${r.gpuMb ?? '–'} MB · ${r.tabs ?? 0} tabs ${r.tabsMb ?? 0} MB · JS ${r.heapMb} MB · ${r.chats} chats loaded · ${r.elements} parts · ${r.images} pictures ${r.imagesMb} MB · timers ${r.timers} · stutters ${r.longTasks} (longest ${r.longestMs} ms)`;
+  };
+  let proj = null;
+  const ids = [];
+  await step('QuorX opens', async () => {
+    await waitFor(`document.querySelector('#settingsBtn') && document.querySelector('#projectList') && window.qxPerf`, 30000, 'the app');
+    // A fresh test copy greets with the tour: skipped, as a person who knows QuorX would.
+    await sleep(800);
+    const skipped = await js(`const b = document.querySelector('[data-tr="skip"]'); if (b) b.click(); localStorage.setItem('qx-tour-seen', String(Date.now())); return !!b;`);
+    return skipped ? 'Loaded; skipped the welcome tour' : 'Loaded';
+  });
+  await step('Settings → Appearance → Under the hood: turn on the performance readout', async () => {
+    await click('#settingsBtn');
+    await waitFor(`document.querySelector('#settings')?.open`, 5000, 'the settings dialog');
+    await click('#stNav [data-cat="appearance"]');
+    await js(`const d = document.querySelector('#appearanceAdv'); d.open = true; d.scrollIntoView({ block: 'center' }); return true;`);
+    await js(`const i = document.querySelector('input[data-bind="ui.perfReadout"]'); if (!i.checked) i.click(); return true;`);
+    await sleep(300);
+    await moment('The switch, ticked', 'Under the hood → Performance readout');
+    await click('#saveSettings');
+    await waitFor(`document.querySelector('.qx-perf .qp-row')`, 8000, 'the readout box');
+    return 'The readout shows in the bottom-left corner';
+  });
+  await step('Baseline: QuorX with no chat open', () => read('start'));
+  await step(`${N} heavy chats in a project of the test's own`, async () => {
+    proj = await testProject('perf');
+    const pics = path.join(proj.dir, 'pics');
+    fs.mkdirSync(pics, { recursive: true });
+    for (let i = 1; i <= PICS; i++) fs.writeFileSync(path.join(pics, `render-${String(i).padStart(2, '0')}.png`), pngFile(1024, 1024, (x, y) => [(x + i * 23) & 255, (y + i * 41) & 255, ((x >> 3) ^ (y >> 3) ^ i) & 255]));
+    for (let n = 1; n <= N; n++) {
+      const id = `perf${Date.now().toString(36)}${n}`;
+      const at = Date.now() - (N - n) * 60e3;
+      const shots = Array.from({ length: SHOTS }, (_, k) => ({ t: 'screenshot', action: 'browser', target: `http://localhost:5173/#view${k}`, url: `http://localhost:5173/#view${k}`, at: at + k * 1000,
+        image: `data:image/png;base64,${pngFile(1280, 720, (x, y) => [((x >> 5) * 9 + n * 30 + k) & 255, ((y >> 5) * 13 + k * 7) & 255, (n * 50) & 255]).toString('base64')}` }));
+      const messages = [{ role: 'user', content: `Make me a set of product renders and a 3D viewer for them (heavy chat ${n}).` }];
+      for (let m = 0; m < PICS / PER_MSG; m++) {
+        const names = Array.from({ length: PER_MSG }, (_, k) => `\`pics/render-${String(m * PER_MSG + k + 1).padStart(2, '0')}.png\``).join(', ');
+        messages.push({ role: 'assistant', runId: `${id}r${m}`, content: `Here are renders ${m * PER_MSG + 1} to ${m * PER_MSG + PER_MSG}: ${names}. The 3D viewer is in the pane.`, trace: m === 0 ? shots : [], doneAt: at + 60e3 + m });
+        if (m < PICS / PER_MSG - 1) messages.push({ role: 'user', content: 'Next ones, please.' });
+      }
+      const doc = { id, title: `Heavy chat ${n}`, projectId: proj.id, created: at, agent: { setup: {}, messages, artifacts: { scene: { id: 'scene', kind: 'html', title: '3D viewer', html: SCENE, updated: at } } } };
+      // Saved by the page itself (the server only takes chats from QuorX's own page).
+      const status = await js(`const r = await fetch(${q(`/api/chats/${id}`)}, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: ${q(JSON.stringify(doc))} }); return r.status;`);
+      if (status !== 200) throw new Error(`saving chat ${n}: ${status}`);
+      ids.push(id);
+    }
+    await js('location.reload(); return true;').catch(() => {});
+    await sleep(1500);
+    await waitFor(`document.querySelector(${q(`.sb-chat[data-c="${ids[0]}"]`)}) && window.qxPerf`, 20000, 'the chats in the sidebar');
+    await js(`window.qxPerf.showReadout(true); return true;`); // after a reload the setting brings it back; this makes sure
+    return `${N} chats × ${PICS} pictures (1024×1024), ${SHOTS} screenshots (1280×720) and a WebGL 3D viewer each`;
+  });
+  await step('Baseline after the reload', () => read('reloaded'));
+  const switchMs = [];
+  // Clicks the chat in the sidebar and times, inside the page, until its own messages are drawn (frame by frame).
+  const openTimed = (id, n) => js(`const el = document.querySelector(${q(`.sb-chat[data-c="${id}"]`)}); if (!el) throw new Error('the chat is not in the sidebar');
+    const shown = () => [...document.querySelectorAll('.chatpane.focus .msg')].length >= 8 && (document.querySelector('.chatpane.focus .msg.user')?.textContent || '').includes(${q(`(heavy chat ${n})`)});
+    const frame = () => new Promise((r) => requestAnimationFrame(r)); const t0 = performance.now(); el.click();
+    while (!shown()) { if (performance.now() - t0 > 20000) throw new Error('the chat did not show within 20 s'); await frame(); }
+    await frame(); return Math.round(performance.now() - t0);`);
+  for (let n = 1; n <= N; n++) {
+    const id = ids[n - 1];
+    await step(`Open heavy chat ${n} and look through it`, async () => {
+      switchMs.push(await openTimed(id, n));
+      // Scroll through it so pictures and steps load as a person reading it would make them.
+      await js(`const s = [...document.querySelectorAll('.chatpane .msgs, .chatpane .messages, .chatpane .scroll')].find((e) => e.scrollHeight > e.clientHeight) || document.scrollingElement; for (let y = 0; y <= s.scrollHeight; y += 400) { s.scrollTop = y; await new Promise((r) => setTimeout(r, 60)); } return true;`);
+      await waitFor(`[...document.images].filter((i) => i.closest('.chatpane') && !i.complete).length === 0`, 20000, 'its pictures').catch(() => {});
+      // The 3D viewer opened in a browser tab of its own, as the agent does with an app it built (desktop app only).
+      await js(`if (window.ohDesktop?.open) await window.ohDesktop.open('perf-${n}', location.origin + '/art/${id}/scene'); return true;`).catch(() => {});
+      await sleep(1500);
+      return `opened in ${switchMs.at(-1)} ms · ${await read(`chat ${n}`, { switchMs: switchMs.at(-1) })}`;
+    });
+  }
+  await step('Back through every chat again', async () => {
+    const back = [];
+    for (const [i, id] of ids.entries()) { back.push(await openTimed(id, i + 1)); await sleep(250); }
+    const avg = Math.round(back.reduce((s, v) => s + v, 0) / back.length);
+    return `switching back: average ${avg} ms, slowest ${Math.max(...back)} ms · ${await read('switched back', { switchMs: avg })}`;
+  });
+  await step('One minute later, nothing touched', async () => { await sleep(60e3); return read('idle 1 min'); });
+  fs.writeFileSync(path.join(OUT, 'perf.json'), JSON.stringify({ chats: N, pictures: PICS, screenshots: SHOTS, at: STAMP, rows }, null, 2));
+  log(`perf numbers: ${path.join(OUT, 'perf.json')}`);
+}
+
 // ---------- run ----------
 let failed = false;
 try {
@@ -510,6 +624,7 @@ try {
   if (SCENARIO === 'all' || SCENARIO === 'news') await newsScenario();
   if (SCENARIO === 'all' || SCENARIO === 'cli') await cliScenario();
   if (SCENARIO === 'all' || SCENARIO === 'running') await runningScenario();
+  if (SCENARIO === 'perf') await perfScenario();
 } catch (e) {
   failed = true;
   steps.push({ title: 'The test could not run', ok: false, note: e.message, img: null, ms: 0 });
