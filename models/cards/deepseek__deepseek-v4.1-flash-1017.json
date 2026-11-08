@@ -2,16 +2,22 @@
   "id": "deepseek/deepseek-v4.1-flash-1017",
   "name": "DeepSeek: DeepSeek V4.1 Flash 1017",
   "kind": "chat",
-  "refreshed": "2026-10-20",
+  "refreshed": "2026-11-08",
   "limits": {
     "context": 1048576,
-    "max_output": 393216,
+    "max_output": 943718,
     "tools": true,
     "images_in": true,
     "reasoning": true,
+    "reasoning_levels": [
+      "max",
+      "high",
+      "low",
+      "none"
+    ],
     "price_per_m": [
-      0.15,
-      0.6
+      0.006,
+      0.5
     ]
   },
   "quirks": [

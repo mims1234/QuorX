@@ -2,13 +2,21 @@
   "id": "openai/gpt-6.1-sol",
   "name": "OpenAI: GPT-6.1 Sol",
   "kind": "chat",
-  "refreshed": "2026-10-20",
+  "refreshed": "2026-11-08",
   "limits": {
     "context": 1050000,
     "max_output": 128000,
     "tools": true,
     "images_in": true,
     "reasoning": true,
+    "reasoning_always_on": true,
+    "reasoning_levels": [
+      "max",
+      "xhigh",
+      "high",
+      "medium",
+      "low"
+    ],
     "price_per_m": [
       2,
       10

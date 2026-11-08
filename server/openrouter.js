@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { activeKey } from './keys.js';
 import { errorCode, retryAfterSecs } from './errors.js';
+import { reasoningFacts, fitReasoning, summariseEndpoints, fitToolChoice, keepWithinChoice, endpointsOf, noteRefusedChoice, refusedChoicesOf, toolChoiceKind } from './modelfacts.js';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // Where chats, projects, keys, logs and .env live: the app folder itself, unless OH_HOME points elsewhere
@@ -49,21 +50,59 @@ async function postJSON(url, body, signal) {
   return { j, ms: Date.now() - t };
 }
 
-// Some models refuse `reasoning: {enabled: false}` (reasoning is mandatory). Retry those with the
-// lightest reasoning instead, and remember the model so later calls skip the failed attempt.
+// Every call is built to fit its model and the providers that may serve it (server/modelfacts.js): reasoning a
+// model can't turn off is never sent as "off", an effort it doesn't list becomes the nearest one it does, and a
+// tool_choice some allowed provider refuses goes out as "auto", with the answer then kept within what was asked.
+// What the model list doesn't say is learned from refusals: a model that refuses "off" or a tool_choice value is
+// remembered, so later calls skip the failed attempt.
 const mustReason = new Set();
-const adapt = (body) => (mustReason.has(body.model) && body.reasoning?.enabled === false ? { ...body, reasoning: { effort: 'low', exclude: true } } : body);
-async function withReasoningFallback(body, fn) {
-  try { return await fn(adapt(body)); }
-  catch (e) {
-    if (errorCode(e) !== 'REASONING_REQUIRED' || mustReason.has(body.model)) throw e;
-    mustReason.add(body.model);
-    return fn(adapt(body));
+const factsById = () => {
+  const list = cache.chat?.v;
+  if (!list) return null;
+  if (factsById.of !== list) { factsById.of = list; factsById.map = new Map(list.map((m) => [m.id, m])); }
+  return factsById.map;
+};
+const fetchEndpoints = async (id) => {
+  const path = factsById()?.get(id)?.details || `/api/v1/models/${id}/endpoints`;
+  const r = await fetch(`${BASE}${path}`, { signal: AbortSignal.timeout(8000) });
+  if (!r.ok) return null;
+  return (await r.json())?.data?.endpoints || null;
+};
+async function fitRequest(body) {
+  const info = factsById()?.get(body.model);
+  let out = fitReasoning(body, mustReason.has(body.model) ? { ...(info?.think || {}), mandatory: true } : info?.think);
+  if (toolChoiceKind(body.tool_choice) && body.tools?.length) {
+    const eps = await endpointsOf(body.model, fetchEndpoints);
+    const summary = eps ? summariseEndpoints(eps, { ignore: body.provider?.ignore || [] }) : null;
+    const fit = fitToolChoice(body.tool_choice, summary, refusedChoicesOf(body.model));
+    if (fit.was) out = { ...out, tool_choice: fit.tool_choice };
+    return { sent: out, was: fit.was };
+  }
+  return { sent: out, was: null };
+}
+const keepAnswer = (r, asked, was) => {
+  if (!was || !r) return r;
+  if (Array.isArray(r.toolCalls)) r.toolCalls = keepWithinChoice(r.toolCalls, asked, was);
+  if (Array.isArray(r.message?.tool_calls)) r.message.tool_calls = keepWithinChoice(r.message.tool_calls, asked, was);
+  return r;
+};
+async function withModelFacts(body, fn) {
+  for (let again = 0; ; again++) {
+    const { sent, was } = await fitRequest(body);
+    try { return keepAnswer(await fn(sent), body.tool_choice, was); }
+    catch (e) {
+      if (again) throw e;
+      const code = errorCode(e);
+      if (code === 'REASONING_REQUIRED' && !mustReason.has(body.model)) { mustReason.add(body.model); continue; }
+      const kind = toolChoiceKind(sent.tool_choice);
+      if (code === 'BAD_REQUEST' && kind && /tool[_ ]choice/i.test(e.message || '')) { noteRefusedChoice(body.model, kind); continue; }
+      throw e;
+    }
   }
 }
 
 export function chat(body, signal) {
-  return withReasoningFallback(body, (b) => chatOnce(b, signal));
+  return withModelFacts(body, (b) => chatOnce(b, signal));
 }
 async function chatOnce(body, signal) {
   const { j, ms } = await postJSON(`${BASE}/api/v1/chat/completions`, body, signal);
@@ -74,7 +113,7 @@ async function chatOnce(body, signal) {
 // assembled and returned, so one function serves both "speak" and "call a tool" steps.
 // Reasoning ("thinking") deltas, when the model sends them, go to onThink the same way.
 export function chatStream(body, signal, onText, onThink) {
-  return withReasoningFallback(body, (b) => chatStreamOnce(b, signal, onText, onThink));
+  return withModelFacts(body, (b) => chatStreamOnce(b, signal, onText, onThink));
 }
 async function chatStreamOnce(body, signal, onText, onThink) {
   const t = Date.now();
@@ -216,6 +255,9 @@ const slim = (m, kind) => ({
   tools: (m.supported_parameters || []).includes('tools'),
   temp: (m.supported_parameters || []).includes('temperature'),
   reasoning: (m.supported_parameters || []).some((x) => x === 'reasoning' || x === 'include_reasoning'),
+  // What reasoning it accepts (can it be turned off, which levels) and where its per-provider limits are (modelfacts.js).
+  ...(reasoningFacts(m) ? { think: reasoningFacts(m) } : {}),
+  ...(m.links?.details ? { details: m.links.details } : {}),
   maxOut: m.top_provider?.max_completion_tokens || null,
   desc: String(m.description || '').replace(/\s+/g, ' ').slice(0, 220),
 });

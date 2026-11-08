@@ -42,6 +42,7 @@ export function limitsLine(c) {
     if (l.max_output) parts.push(`${Math.round(l.max_output / 1000)}k max output`);
     if (l.tools != null) parts.push(l.tools ? 'tool calls' : 'no tool calls');
     if (l.images_in != null) parts.push(l.images_in ? 'reads images' : 'text only');
+    if (l.reasoning_always_on) parts.push("reasoning can't be turned off");
   } else if (k === 'video') {
     if (l.durations?.length) parts.push(`${range(l.durations)} s`);
     if (l.resolutions?.length) parts.push(l.resolutions.join('/'));
