@@ -184,6 +184,30 @@ export function compactTranscript(messages, firstOwn, summary, keep = 10) {
   return true;
 }
 
+// ---------- how much conversation fits ----------
+// About 3.5 characters a token for the mix of prose, code and JSON a transcript holds: estimates, not counts.
+export const CHARS_PER_TOKEN = 3.5;
+/**
+ * Character budgets for one model's window (tokens) and the output reserved for its answer: the trigger is the
+ * smaller of 80% of the window and the window minus the output and some headroom, so a full answer always fits.
+ * `trim` and `compact` never go above today's fixed sizes (`trimAt`, twice that), because on big windows trimming is
+ * about cost, not room; `history` is when earlier turns get summarised. Null when the window isn't known.
+ */
+export function contextBudget(windowTokens, maxOut = 16000, { trimAt = 120000 } = {}) {
+  const W = Number(windowTokens) || 0;
+  if (W <= 0) return null;
+  const headroom = Math.min(65536, Math.round(W * 0.1));
+  let T = Math.floor(Math.min(W * 0.8, W - (Number(maxOut) || 0) - headroom));
+  if (T <= 0) T = Math.floor(W * 0.5);
+  const fit = Math.round(T * CHARS_PER_TOKEN);
+  return {
+    tokens: T,
+    compact: Math.min(trimAt * 2, fit),
+    trim: Math.max(8000, Math.min(trimAt, Math.round(fit / 2))),
+    history: Math.max(8000, Math.min(60000, Math.round(fit * 0.1))),
+  };
+}
+
 // ---------- prompt caching ----------
 /** Anthropic models cache only what is marked: the system prompt and the newest user or tool message. */
 export function withCacheMarks(messages, model) {

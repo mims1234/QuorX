@@ -242,6 +242,12 @@ const cache = {};
 export function clearCatalogues() { for (const k of Object.keys(cache)) delete cache[k]; }
 // Tests put a catalogue in place of the network's (videos, images, speech, music) so prices and parameters are known.
 export function primeCatalogue(key, list) { cache[key] = { v: list, at: Date.now() }; }
+/** The context and output cap every provider allowed for this model offers (the smallest of each), or null. */
+export async function routeLimits(model, ignore = []) {
+  const eps = await endpointsOf(model, fetchEndpoints);
+  const sum = eps ? summariseEndpoints(eps, { ignore }) : null;
+  return sum ? { context: sum.context, maxOut: sum.maxOut, providers: sum.providers } : null;
+}
 async function cached(key, fn) {
   const c = cache[key];
   if (c && Date.now() - c.at < 3600e3) return c.v;
