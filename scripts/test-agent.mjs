@@ -1608,3 +1608,9 @@ test('results that fit are left exactly as they are', async () => {
   const { bodies } = await run((body, i) => [reply('', [['write_file', { path: 'a.txt', content: 'hello' }]]), reply('Done.')][i]);
   assert.doesNotMatch(toolResults(bodies[1]).at(-1), /characters cut here/);
 });
+
+test('loading rare tools adds no tool-change note (the model asked for them)', async () => {
+  const { bodies } = await run((body, i) => [reply('', [['load_tools', { names: ['android'] }]]), reply('Done.')][i]);
+  assert.ok(bodies[1].tools.some((t) => t.function?.name === 'android'), 'loaded');
+  assert.doesNotMatch(JSON.stringify(bodies[1].messages), /Your tools changed/);
+});

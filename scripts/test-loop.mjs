@@ -587,3 +587,11 @@ test('result caps follow the budget, and previews keep the start and the end', a
   assert.deepEqual([p.head.length, p.tail.length, p.cut, p.total], [75, 20, 105, 200]);
   assert.ok(p.head.startsWith('a') && p.tail.endsWith('c'));
 });
+
+test('a tool change note names what came and went, and leaves out what the model loaded itself', async () => {
+  const { toolChangeNote } = await import('../server/loop.js');
+  assert.equal(toolChangeNote(null, ['a']), '', 'nothing on the first step');
+  assert.equal(toolChangeNote(['a', 'b'], ['a', 'b']), '');
+  assert.equal(toolChangeNote(['a', 'b'], ['a', 'c', 'mcp_x']), '[Your tools changed: now available: c, mcp_x; no longer available: b.]');
+  assert.equal(toolChangeNote(['a', 'load_tools'], ['a', 'android'], new Set(['android', 'load_tools'])), '');
+});
