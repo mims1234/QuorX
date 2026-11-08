@@ -8,7 +8,7 @@
 //   npm run test:ui -- --scenario running   the Running tab: what runs, who started it, Stop and Stop all
 //   npm run test:ui -- --scenario news      News: the dot, What's new, the sample article, Play on a flow, a compare
 //   npm run test:ui -- --scenario perf      heavy chats one after another, with the performance readout's numbers
-//                                           (only when asked: not part of "all"; --chats N, default 8; --turns N adds
+//                                           (only when asked: not part of "all"; --chats N, default 8; --pic-size N for picture size; --turns N adds
 //                                           N earlier rounds of long replies to each chat, default 0)
 //   npm run test:ui -- --scenario tabs      hidden browser tabs go to sleep and wake where they were (only when asked)
 //   npm run test:ui -- --scenario preview   a 3D preview in the pane: what it costs shown, hidden and left (only when asked)
@@ -719,6 +719,7 @@ async function previewScenario() {
 async function perfScenario() {
   const N = Math.max(1, Math.min(16, Number(arg('chats', 8)) || 8)), PICS = 20, SHOTS = 25, PER_MSG = 5;
   const TURNS = Math.max(0, Math.min(500, Number(arg('turns', 0)) || 0));
+  const PIC = Math.max(256, Math.min(4096, Number(arg('pic-size', 1024)) || 1024)); // --pic-size: the pictures' width and height in px
   // A long reply like the agent writes: a heading, a list, a code block and a table.
   const longReply = (n, k) => `## Step ${k + 1} of the build\n\nI went through the scene setup and changed how the lights are placed. Here is what changed and why, so the next renders match.\n\n`
     + `- The key light moved up and to the left\n- The fill light is softer\n- Shadows use a larger map\n\n`
@@ -740,7 +741,7 @@ async function perfScenario() {
     proj = await testProject('perf');
     const pics = path.join(proj.dir, 'pics');
     fs.mkdirSync(pics, { recursive: true });
-    for (let i = 1; i <= PICS; i++) fs.writeFileSync(path.join(pics, `render-${String(i).padStart(2, '0')}.png`), pngFile(1024, 1024, (x, y) => [(x + i * 23) & 255, (y + i * 41) & 255, ((x >> 3) ^ (y >> 3) ^ i) & 255]));
+    for (let i = 1; i <= PICS; i++) fs.writeFileSync(path.join(pics, `render-${String(i).padStart(2, '0')}.png`), pngFile(PIC, PIC, (x, y) => [(x + i * 23) & 255, (y + i * 41) & 255, ((x >> 3) ^ (y >> 3) ^ i) & 255]));
     for (let n = 1; n <= N; n++) {
       const id = `perf${Date.now().toString(36)}${n}`;
       const at = Date.now() - (N - n) * 60e3;
@@ -763,7 +764,7 @@ async function perfScenario() {
     await sleep(1500);
     await waitFor(`document.querySelector(${q(`.sb-chat[data-c="${ids[0]}"]`)}) && window.qxPerf`, 20000, 'the chats in the sidebar');
     await js(`window.qxPerf.showReadout(true); return true;`); // after a reload the setting brings it back; this makes sure
-    return `${N} chats × ${PICS} pictures (1024×1024), ${SHOTS} screenshots (1280×720) and a WebGL 3D viewer each`;
+    return `${N} chats × ${PICS} pictures (${PIC}×${PIC}), ${SHOTS} screenshots (1280×720) and a WebGL 3D viewer each`;
   });
   await step('Baseline after the reload', () => read('reloaded'));
   const switchMs = [];
@@ -802,6 +803,23 @@ async function perfScenario() {
     return `all ${r.drawn} messages drawn in ${r.ms} ms while scrolling up; slowest frame ${r.worstFrame} ms · ${await read('scrolled to the start')}`;
   });
   await step('One minute later, nothing touched', async () => { await sleep(60e3); return read('idle 1 min'); });
+  // What the page really holds, against garbage not yet collected: memory read again after a full collection.
+  await step('After a garbage collection', async () => {
+    await send('HeapProfiler.enable').catch(() => {});
+    await send('HeapProfiler.collectGarbage').catch(() => {});
+    await sleep(3000);
+    const dc = await send('Memory.getDOMCounters').catch(() => null);
+    return `${await read('after GC')} · DOM nodes alive ${dc?.nodes ?? '–'} (in the page ${await js('return document.getElementsByTagName("*").length')}) · listeners ${dc?.jsEventListeners ?? '–'}`;
+  });
+  // The same, with a chat open that has only its newest messages drawn: how much of the window is the drawn chat.
+  await step('Another chat open (newest messages only), then a collection', async () => {
+    await openTimed(ids[0], 1);
+    await sleep(1500);
+    await send('HeapProfiler.collectGarbage').catch(() => {});
+    await sleep(3000);
+    const dc = await send('Memory.getDOMCounters').catch(() => null);
+    return `${await read('other chat, after GC')} · DOM nodes alive ${dc?.nodes ?? '–'} (in the page ${await js('return document.getElementsByTagName("*").length')}) · listeners ${dc?.jsEventListeners ?? '–'}`;
+  });
   fs.writeFileSync(path.join(OUT, 'perf.json'), JSON.stringify({ chats: N, turns: TURNS, pictures: PICS, screenshots: SHOTS, at: STAMP, rows }, null, 2));
   log(`perf numbers: ${path.join(OUT, 'perf.json')}`);
 }
