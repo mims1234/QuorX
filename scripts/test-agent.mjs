@@ -1539,3 +1539,4 @@ test('edit_artifact takes several edits at once (all or none), like edit_file', 
   assert.match(last.md, /FIRST/); assert.match(last.md, /SECOND/);
   assert.doesNotMatch(last.md, /^x$/m, 'the failed batch changed nothing');
 });
+

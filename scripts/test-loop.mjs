@@ -544,3 +544,19 @@ test('tool arguments: checked against the schema, with clearly meant values take
   assert.deepEqual(checkArgs({ type: 'object', properties: { v: { anyOf: [{ type: 'string' }, { type: 'array' }] } } }, { v: 3 }), ['`v` doesn\'t match any of the allowed forms']);
   assert.deepEqual(checkArgs({ type: 'object', properties: { v: { $ref: '#/x', format: 'uri' } } }, { v: 3 }), [], 'unknown keywords never block a call');
 });
+
+test('tool calls and results always pair up: missing results added, stray ones dropped', async () => {
+  const { pairToolCalls } = await import('../server/loop.js');
+  const call = (id) => ({ id, type: 'function', function: { name: 'read_file', arguments: '{}' } });
+  const msgs = [
+    { role: 'system', content: 's' }, { role: 'user', content: 'u' },
+    { role: 'assistant', content: null, tool_calls: [call('a'), call('b'), call('c')] },
+    { role: 'tool', tool_call_id: 'a', content: 'A' },
+    { role: 'user', content: 'screenshot' },
+    { role: 'tool', tool_call_id: 'zz', content: 'stray' },
+    { role: 'assistant', content: null, tool_calls: [call('d')] },
+  ];
+  assert.deepEqual(pairToolCalls(msgs, 'Not run.'), { added: 3, dropped: 1 });
+  assert.deepEqual(msgs.map((m) => m.role === 'tool' ? `tool:${m.tool_call_id}:${m.content}` : m.role), ['system', 'user', 'assistant', 'tool:a:A', 'tool:b:Not run.', 'tool:c:Not run.', 'user', 'assistant', 'tool:d:Not run.']);
+  assert.deepEqual(pairToolCalls(msgs), { added: 0, dropped: 0 }, 'a paired transcript is left as it is');
+});
