@@ -510,3 +510,37 @@ test('the installer ships every top-level folder the server reads', () => {
     }
   }
 });
+
+test('tool arguments: safe JSON slips are repaired, unsafe ones are not', async () => {
+  const { repairArgs } = await import('../server/toolargs.js');
+  assert.deepEqual(repairArgs('{"path":"a.txt"}'), { args: { path: 'a.txt' }, fixes: [] });
+  assert.deepEqual(repairArgs('').args, {});
+  assert.deepEqual(repairArgs('"{\\"path\\":\\"a\\"}"'), { args: { path: 'a' }, fixes: ['arguments were a JSON string'] });
+  assert.deepEqual(repairArgs('```json\n{"path":"a"}\n```').args, { path: 'a' });
+  assert.deepEqual(repairArgs('{"paths":["a","b",],}').args, { paths: ['a', 'b'] });
+  assert.deepEqual(repairArgs('{"path":"a, }","x":1,}').args, { path: 'a, }', x: 1 }, 'commas inside strings stay');
+  assert.deepEqual(repairArgs('{"path":"a","edits":[{"find":"x","replace":"y"}]'), { args: { path: 'a', edits: [{ find: 'x', replace: 'y' }] }, fixes: ['1 closing bracket added'] });
+  assert.deepEqual(repairArgs('{"a":{"b":[1,2').args, { a: { b: [1, 2] } }, 'several brackets closed in order');
+  assert.equal(repairArgs('{"path":"a","content":"half a fi'), null, 'never closes an unfinished string');
+  assert.equal(repairArgs('{"path":"a","content":'), null);
+  assert.equal(repairArgs('{"path":"a"', { cutOff: true }), null, 'a call cut off at the output limit is never repaired');
+  assert.equal(repairArgs('[1,2]'), null, 'arguments must be an object');
+  assert.equal(repairArgs('not json'), null);
+});
+
+test('tool arguments: checked against the schema, with clearly meant values taken as meant', async () => {
+  const { checkArgs } = await import('../server/toolargs.js');
+  const schema = { type: 'object', required: ['path', 'content'], properties: { path: { type: 'string' }, offset: { type: 'number' }, append: { type: 'boolean' }, tags: { type: 'array', items: { type: 'string' } }, mode: { type: 'string', enum: ['a', 'b'] },
+    edits: { type: 'array', maxItems: 2, items: { type: 'object', required: ['find'], properties: { find: { type: 'string' } } } } } };
+  assert.deepEqual(checkArgs(schema, { path: 'a', content: 'x' }), []);
+  assert.deepEqual(checkArgs(schema, { content: 'x' }), ['`path` is missing']);
+  const meant = { path: 'a', content: 'x', offset: '10', append: 'true', tags: 'one' };
+  assert.deepEqual(checkArgs(schema, meant), []);
+  assert.deepEqual(meant, { path: 'a', content: 'x', offset: 10, append: true, tags: ['one'] });
+  assert.deepEqual(checkArgs(schema, { path: 'a', content: 'x', offset: 'ten' }), ['`offset` must be a number, got "ten"']);
+  assert.deepEqual(checkArgs(schema, { path: 'a', content: 'x', edits: [{ find: 'q' }, {}, { find: 'r' }] }), ['`edits` can have at most 2 items, got 3', '`edits[1].find` is missing']);
+  assert.deepEqual(checkArgs(schema, { path: 'a', content: 'x', mode: 'zzz', extra: 1 }), [], 'enum values and extra fields are left to the tool');
+  assert.deepEqual(checkArgs({ type: 'object', additionalProperties: false, properties: { a: { type: 'string' } } }, { b: 1 }), ['`b` is not an argument of this tool']);
+  assert.deepEqual(checkArgs({ type: 'object', properties: { v: { anyOf: [{ type: 'string' }, { type: 'array' }] } } }, { v: 3 }), ['`v` doesn\'t match any of the allowed forms']);
+  assert.deepEqual(checkArgs({ type: 'object', properties: { v: { $ref: '#/x', format: 'uri' } } }, { v: 3 }), [], 'unknown keywords never block a call');
+});
