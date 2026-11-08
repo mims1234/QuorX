@@ -230,6 +230,21 @@ export function toolChangeNote(before, now, told = new Set()) {
   return `[Your tools changed: ${[added.length ? `now available: ${added.join(', ')}` : '', removed.length ? `no longer available: ${removed.join(', ')}` : ''].filter(Boolean).join('; ')}.]`;
 }
 
+/**
+ * What a tool call is about, read from its arguments while they are still streaming: the first finished value of the
+ * field that names it (a path, a title, a command…), wherever it sits in the arguments, since models don't all write
+ * them in schema order. '' until one has arrived whole.
+ */
+const ABOUT_KEYS = ['path', 'title', 'command', 'name', 'url', 'query', 'id', 'action', 'description'];
+export function prepAbout(argsText) {
+  const s = String(argsText || '');
+  for (const k of ABOUT_KEYS) {
+    const m = s.match(new RegExp(`"${k}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`));
+    if (m) { try { return JSON.parse(`"${m[1]}"`).slice(0, 120); } catch { return m[1].slice(0, 120); } }
+  }
+  return '';
+}
+
 // ---------- prompt caching ----------
 /** Anthropic models cache only what is marked: the system prompt and the newest user or tool message. */
 export function withCacheMarks(messages, model) {

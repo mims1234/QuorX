@@ -1614,3 +1614,16 @@ test('loading rare tools adds no tool-change note (the model asked for them)', a
   assert.ok(bodies[1].tools.some((t) => t.function?.name === 'android'), 'loaded');
   assert.doesNotMatch(JSON.stringify(bodies[1].messages), /Your tools changed/);
 });
+
+test('the stream reader reports each tool call as it streams in, for the preparing row', async () => {
+  const { readChatStream } = await import('../server/openrouter.js');
+  const sse = ['{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"write_file","arguments":""}}]}}]}',
+    '{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"path\\":\\"a.txt\\","}}]}}]}',
+    '{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"content\\":\\"hi\\"}"}}]}}]}',
+    '{"choices":[{"delta":{},"finish_reason":"tool_calls"}],"usage":{}}'].map((j) => `data: ${j}\n\n`).join('') + 'data: [DONE]\n\n';
+  const seen = [];
+  const r = await readChatStream(new Response(sse), { model: 'm' }, Date.now(), null, null, (k, c) => seen.push([k, c.function.name, c.function.arguments]));
+  assert.deepEqual(seen.map((s) => s[1]), ['write_file', 'write_file', 'write_file']);
+  assert.equal(seen.at(-1)[2], '{"path":"a.txt","content":"hi"}');
+  assert.equal(r.toolCalls[0].function.name, 'write_file');
+});

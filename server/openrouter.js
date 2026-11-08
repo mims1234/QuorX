@@ -112,10 +112,12 @@ async function chatOnce(body, signal) {
 // Streams a chat completion. Text deltas go to onText as they arrive; tool-call deltas are
 // assembled and returned, so one function serves both "speak" and "call a tool" steps.
 // Reasoning ("thinking") deltas, when the model sends them, go to onThink the same way.
-export function chatStream(body, signal, onText, onThink) {
-  return withModelFacts(body, (b) => chatStreamOnce(b, signal, onText, onThink));
+// onCall(index, call) hears each tool call as it streams in (name, then its arguments growing), for the page to show it
+// before the call is complete.
+export function chatStream(body, signal, onText, onThink, onCall) {
+  return withModelFacts(body, (b) => chatStreamOnce(b, signal, onText, onThink, onCall));
 }
-async function chatStreamOnce(body, signal, onText, onThink) {
+async function chatStreamOnce(body, signal, onText, onThink, onCall) {
   const t = Date.now();
   const r = await fetch(`${BASE}/api/v1/chat/completions`, {
     method: 'POST', headers: headers(), signal,
@@ -129,12 +131,12 @@ async function chatStreamOnce(body, signal, onText, onThink) {
     e.retryAfter = retryAfterSecs(r.headers.get('retry-after')); // seconds the provider asked to wait, or 0
     throw e;
   }
-  return readChatStream(r, body, t, onText, onThink);
+  return readChatStream(r, body, t, onText, onThink, onCall);
 }
 
 // Reads an OpenAI-style chat completion stream (OpenRouter's, or any gateway that speaks the same format: see
 // sources.js). `seen` counts the chunks that parsed, so a caller can tell a stream of nothing from a short answer.
-export async function readChatStream(r, body, t, onText, onThink) {
+export async function readChatStream(r, body, t, onText, onThink, onCall) {
   const dec = new TextDecoder();
   let buf = '', text = '', thinking = '', usage = {}, firstMs = null, finish = null, provider = null, model = null, genId = null, seen = 0;
   const calls = [];
@@ -183,6 +185,7 @@ export async function readChatStream(r, body, t, onText, onThink) {
       if (a != null && a !== '') calls[k].function.arguments += typeof a === 'string' ? a : JSON.stringify(a);
       // Gemini's thought signature comes with its call (directapi.js passes it back on the next step).
       if (tc.extra_content && typeof tc.extra_content === 'object') calls[k].extra_content = tc.extra_content;
+      if (onCall && calls[k].function.name) { try { onCall(k, calls[k]); } catch { /* the page's view only */ } }
     }
     if (j.choices?.[0]?.finish_reason) finish = j.choices[0].finish_reason;
     if (finish === 'error') throw Object.assign(new Error('the stream ended with an error'), { streamStatus: null });

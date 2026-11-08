@@ -55,6 +55,8 @@ export function startRun({ runId, chatId, onEnd }, work) {
     r.events.push(isDelta(o) ? { ...o } : o); // a copy: later pieces are added to it, not to what followers got
   };
   const emit = (o) => {
+    // A tool call still streaming in is for the pages watching now: never kept for replay or written to the log.
+    if (o.t === 'call_prep') { for (const l of r.listeners) l(o); return; }
     // Screenshots and made media go to the page, the replay buffer and the log as /blob addresses, not base64.
     if (!isDelta(o)) o = externalize(o);
     if (o.t === 'done' || o.t === 'error') r.end = o;
