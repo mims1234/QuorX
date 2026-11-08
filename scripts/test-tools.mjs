@@ -878,3 +878,23 @@ test('a failing before-command hook stops the command; hook commands never take 
   }
 });
 
+
+// Models write tool arguments roughly in schema order (2026-11-09: DeepSeek V4.1 Flash, Qwen 3.8 Omni Flash and
+// Claude Haiku 5.5 wrote path/title first in 48 of 48 calls; Gemini 3.8 Flash in about 5 of 8, putting another field
+// first only when it sorts earlier by name, which no wording changed). Short identifying fields stay first, so a
+// streaming card can name the file or artifact before its long content arrives.
+test('long-field tools list their short identifying fields first', async () => {
+  const LONG = { write_file: ['content'], append_file: ['content'], edit_file: ['find', 'replace', 'edits'], write_artifact: ['html', 'markdown'], edit_artifact: ['find', 'replace', 'edits'], save_skill: ['instructions'] };
+  const SHORT = { write_file: 'path', append_file: 'path', edit_file: 'path', write_artifact: 'title', edit_artifact: 'id', save_skill: 'name' };
+  const { bodies } = await run(() => reply('Done.'));
+  const defs = new Map(bodies[0].tools.map((t) => [t.function?.name, t.function?.parameters]));
+  for (const must of ['write_file', 'append_file', 'edit_file']) assert.ok(defs.has(must), `${must} is offered`);
+  for (const [name, long] of Object.entries(LONG)) {
+    const p = defs.get(name);
+    if (!p) continue;
+    const keys = Object.keys(p.properties), short = SHORT[name];
+    for (const l of long) if (keys.includes(l)) assert.ok(keys.indexOf(short) < keys.indexOf(l), `${name}: ${short} before ${l} in properties`);
+    const req = p.required || [];
+    for (const l of long) if (req.includes(l) && req.includes(short)) assert.ok(req.indexOf(short) < req.indexOf(l), `${name}: ${short} before ${l} in required`);
+  }
+});
