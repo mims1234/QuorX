@@ -218,6 +218,18 @@ export function previewOf(text, cap) {
   return { head: s.slice(0, head), tail: s.slice(s.length - tail), cut: s.length - head - tail, total: s.length };
 }
 
+/**
+ * A short note for the model when its tools changed between two steps, or '' when they didn't (or only in ways it
+ * already knows: `told` names tools it loaded itself). Names only: the new definitions are in the request anyway.
+ */
+export function toolChangeNote(before, now, told = new Set()) {
+  if (!before) return '';
+  const was = new Set(before), is = new Set(now);
+  const added = now.filter((n) => !was.has(n) && !told.has(n)), removed = before.filter((n) => !is.has(n) && !told.has(n));
+  if (!added.length && !removed.length) return '';
+  return `[Your tools changed: ${[added.length ? `now available: ${added.join(', ')}` : '', removed.length ? `no longer available: ${removed.join(', ')}` : ''].filter(Boolean).join('; ')}.]`;
+}
+
 // ---------- prompt caching ----------
 /** Anthropic models cache only what is marked: the system prompt and the newest user or tool message. */
 export function withCacheMarks(messages, model) {

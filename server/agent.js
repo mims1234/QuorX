@@ -64,7 +64,7 @@ import { setLiveArtifact, markdownHtml } from './artifacts.js';
 import { listDocs, docText, readDoc, searchDocs, DOC_DEFAULTS } from './docs.js';
 import { errorCode } from './errors.js';
 import { repairArgs, checkArgs } from './toolargs.js';
-import { groupCalls, numberedWindow, untrusted, trimTranscript, trimPageViews, compactTranscript, transcriptChars, withCacheMarks, retryable, retryWait, pairToolCalls, contextBudget, resultCap, previewOf, LOOK_TOOLS } from './loop.js';
+import { groupCalls, numberedWindow, untrusted, trimTranscript, trimPageViews, compactTranscript, transcriptChars, withCacheMarks, retryable, retryWait, pairToolCalls, contextBudget, resultCap, previewOf, toolChangeNote, LOOK_TOOLS } from './loop.js';
 import { checkFile, checkHtml, CHECKED, lintFile, lintHtml, LINTED } from './checks.js';
 import { checkSettings, askDeciders, saveShot, logCheck, votesFor, MAIN_CONTROL_JS, KEY_PAGE_JS, KEY_TRIES, CHECK_DEFAULTS, LOOK_DEFAULTS } from './harness-checks.js';
 import { saveCheckpoint, loadCheckpoint, dropCheckpoint, checkpointWritten, recordRun } from './runs.js';
@@ -1489,10 +1489,13 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
   const deferred = lazy.deferred;
   if (deferred.size) { tools = [...lazy.active, loadToolsDef(deferred)]; }
   /** Moves deferred tools into this reply's tools (at the end, so the start of each call stays the same). */
+  // Tool changes the model already knows about (it loaded them): the between-steps note leaves these out.
+  const toldTools = new Set();
   const loadTools = (names) => {
     const got = [];
     for (const n of names) { const d = deferred.get(String(n)); if (d) { deferred.delete(String(n)); tools.push(d); got.push(d.function.name); } }
     if (!got.length) return got;
+    for (const n of [...got, 'load_tools']) toldTools.add(n);
     const i = tools.findIndex((t) => t.function.name === 'load_tools');
     if (i >= 0) { if (deferred.size) tools[i] = loadToolsDef(deferred); else tools.splice(i, 1); }
     emit({ t: 'tools_loaded', names: got, left: deferred.size, at: at() });
@@ -1690,6 +1693,18 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (transcriptChars(messages) > compactAt && compactTranscript(messages, firstOwn, progressSummary(), 10)) emit({ t: 'compacted_run', step, size: transcriptChars(messages), at: at() });
     const forceDecide = step === 0 && setup.decide === 'force-first';
     let toolChoice = last ? 'none' : forceDecide ? { type: 'function', function: { name: 'decide' } } : 'auto';
+    // Tools that came or went since the last step (an MCP server, a paid tool switched on), unless the model loaded them
+    // itself: one note, riding on the newest tool result so it costs no turn and the cached start stays the same.
+    {
+      const names = tools.map((t) => t.function?.name).filter(Boolean);
+      const note = toolChangeNote(run.toolNames, names, toldTools);
+      const last = messages.at(-1);
+      if (note && (last?.role === 'tool' || last?.role === 'user') && typeof last.content === 'string') {
+        last.content += `\n\n${note}`;
+        emit({ t: 'note', level: 'info', msg: note.slice(1, -1), at: at() });
+      }
+      run.toolNames = names; toldTools.clear();
+    }
     // Every tool call goes out with its result (a resumed checkpoint or a trimmed transcript can lack one).
     { const p = pairToolCalls(messages); if (p.added || p.dropped) emit({ t: 'note', level: 'info', msg: `Paired tool calls and results before the model call (${p.added} not-run result${p.added === 1 ? '' : 's'} added, ${p.dropped} stray dropped).`, at: at() }); }
     const body = { model: setup.model, messages, tools, tool_choice: toolChoice, max_tokens: maxOut, ...samplingFor(setup.model, modelInfo, setup.creativity, reasonNow), ...reasoningFor(reasonNow, maxOut, S.thinkShare), ...(run.routing === 'blocked' ? { provider: { ignore: blockedSlugs } } : run.routing ? routingFor(S, setup.model, blockedSlugs) : {}) };
