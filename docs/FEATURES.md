@@ -14,6 +14,11 @@ a real browser and your real toolchains, and shows how it got every answer.
 - **A card for each model.** Recommended and default models carry a short card: limits and quirks, prompting tips
   from the provider's docs (with the links), and QuorX's own benchmark results. Hover "card" in the model picker to
   read it. The agent gets the cards of the models it is using, a few lines each.
+- **Fits each model, recovers when it slips.** Requests are built from what the model and the providers allowed to
+  serve it accept (reasoning that can't be turned off, the reasoning levels it lists, the tool settings every provider
+  takes, its real context and output limits), from OpenRouter's public model data. A conversation too long for the
+  model is trimmed and tried again; a rate limit waits as long as the provider asks, and the reply says so; tool calls
+  with small JSON slips are repaired, and ones that don't fit the tool are sent back with each wrong field named.
 - **A quorum of deciders.** The agent can ask fast models yes/no and multiple-choice questions, writing its own
   guess first so you can see whether asking changed anything. Fixed checks ask them about every build too.
 - **It reads your request in full.** A prompt enhancer spells out what a request implies (a movie trailer implies a
