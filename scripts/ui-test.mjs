@@ -9,6 +9,7 @@
 //   npm run test:ui -- --scenario news      News: the dot, What's new, the sample article, Play on a flow, a compare
 //   npm run test:ui -- --scenario perf      heavy chats one after another, with the performance readout's numbers
 //                                           (only when asked: not part of "all"; --chats N, default 8)
+//   npm run test:ui -- --scenario tabs      hidden browser tabs go to sleep and wake where they were (only when asked)
 //   add --keep to leave the app open afterwards
 //
 // The test copy keeps its own chats, projects and keys in .uitest/home (git ignores it), and runs on port 5197, so
@@ -50,7 +51,7 @@ async function launch() {
   const exe = path.join(ROOT, 'desktop', 'node_modules', 'electron', 'dist', WIN ? 'electron.exe' : 'electron');
   if (!fs.existsSync(exe)) throw new Error('Electron is not installed here: run npm run desktop:setup first');
   if (!(await free(PORT))) throw new Error(`port ${PORT} is already in use (another test copy still open?). Close it, or set QX_UITEST_PORT`);
-  const env = { ...process.env, OH_USER_DATA: USERDATA, OH_HOME: HOME, AGENT_PORT: String(PORT) };
+  const env = { ...process.env, OH_USER_DATA: USERDATA, OH_HOME: HOME, AGENT_PORT: String(PORT), ...(SCENARIO === 'tabs' && !process.env.QX_TAB_SLEEP_MS ? { QX_TAB_SLEEP_MS: '15000' } : {}) };
   delete env.ELECTRON_RUN_AS_NODE;
   const logFile = fs.openSync(path.join(OUT, 'app.log'), 'a');
   appProc = spawn(exe, [path.join(ROOT, 'desktop'), `--remote-debugging-port=${CDP}`], { env, stdio: ['ignore', logFile, logFile], windowsHide: false });
@@ -523,18 +524,8 @@ g.bindBuffer(g.ARRAY_BUFFER,g.createBuffer());g.bufferData(g.ARRAY_BUFFER,new Fl
 (function f(ts){c.width=c.clientWidth;c.height=c.clientHeight;g.viewport(0,0,c.width,c.height);g.uniform1f(u,ts/700);g.drawArrays(g.TRIANGLES,0,3);requestAnimationFrame(f)})(0);
 </script>`;
 
-async function perfScenario() {
-  const N = Math.max(1, Math.min(16, Number(arg('chats', 8)) || 8)), PICS = 20, SHOTS = 25, PER_MSG = 5;
-  const rows = [];
-  const read = async (label, extra = {}) => {
-    const s = await js('return await window.qxPerf.sample();');
-    const r = { label, ...extra, totalMb: s.shell?.totalMb ?? null, appMb: s.shell?.appMb ?? null, gpuMb: s.shell?.gpuMb ?? null, tabs: s.shell?.tabs.length ?? null, tabsMb: s.shell?.tabsMb ?? null,
-      heapMb: s.page.heapMb, chats: s.chats.open, elements: s.page.elements, images: s.page.images, imagesMb: s.page.imagesMb, frames: s.page.frames, webglLost: s.shell?.webglLost ?? null, timers: s.page.timers, longTasks: s.page.longTasks, longestMs: s.page.longestMs };
-    rows.push(r);
-    return `all ${r.totalMb ?? '–'} MB · window ${r.appMb ?? '–'} MB · GPU ${r.gpuMb ?? '–'} MB · ${r.tabs ?? 0} tabs ${r.tabsMb ?? 0} MB · JS ${r.heapMb} MB · ${r.chats} chats loaded · ${r.elements} parts · ${r.images} pictures ${r.imagesMb} MB · timers ${r.timers} · stutters ${r.longTasks} (longest ${r.longestMs} ms)`;
-  };
-  let proj = null;
-  const ids = [];
+// QuorX opens (the welcome tour skipped), and the performance readout is switched on through Settings.
+async function openWithReadout() {
   await step('QuorX opens', async () => {
     await waitFor(`document.querySelector('#settingsBtn') && document.querySelector('#projectList') && window.qxPerf`, 30000, 'the app');
     // A fresh test copy greets with the tour: skipped, as a person who knows QuorX would.
@@ -554,6 +545,110 @@ async function perfScenario() {
     await waitFor(`document.querySelector('.qx-perf .qp-row')`, 8000, 'the readout box');
     return 'The readout shows in the bottom-left corner';
   });
+}
+// Runs a script in one of the desktop app's own browser tabs (found by its address) through DevTools.
+async function inTab(urlPart, expr) {
+  const target = (await (await fetch(`http://127.0.0.1:${CDP}/json/list`)).json()).find((t) => t.type === 'page' && t.url.includes(urlPart));
+  if (!target) return undefined;
+  const sock = new WebSocket(target.webSocketDebuggerUrl);
+  await new Promise((r, j) => { sock.onopen = r; sock.onerror = () => j(new Error('could not reach the tab')); });
+  const out = await new Promise((r) => { sock.onmessage = (ev) => { const m = JSON.parse(ev.data); if (m.id === 1) r(m.result?.result?.value); }; sock.send(JSON.stringify({ id: 1, method: 'Runtime.evaluate', params: { expression: expr, returnByValue: true } })); setTimeout(() => r(undefined), 5000); });
+  sock.close();
+  return out;
+}
+
+// A picture of one real tab, added to the report like a step's screenshot.
+async function tabShot(urlPart, title, note = '') {
+  const target = (await (await fetch(`http://127.0.0.1:${CDP}/json/list`)).json()).find((t) => t.type === 'page' && t.url.includes(urlPart));
+  if (!target) return;
+  const sock = new WebSocket(target.webSocketDebuggerUrl);
+  await new Promise((r, j) => { sock.onopen = r; sock.onerror = () => j(new Error('could not reach the tab')); });
+  const data = await new Promise((r) => { sock.onmessage = (ev) => { const m = JSON.parse(ev.data); if (m.id === 1) r(m.result?.data); }; sock.send(JSON.stringify({ id: 1, method: 'Page.captureScreenshot', params: { format: 'png' } })); setTimeout(() => r(null), 5000); });
+  sock.close();
+  if (!data) return;
+  const file = `${String(++shotN).padStart(2, '0')}-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 50)}.png`;
+  fs.writeFileSync(path.join(OUT, file), Buffer.from(data, 'base64'));
+  steps.push({ title, ok: true, note, img: file, ms: 0, moment: true });
+}
+
+// ---------- scenario: tabs (hidden browser tabs go to sleep and come back) ----------
+// The test copy runs with QX_TAB_SLEEP_MS=15000 (see launch), so a hidden tab sleeps after 15 s instead of 5 minutes.
+async function tabsScenario() {
+  const N = 5;
+  let chat = null;
+  const tabsNow = async () => { const s = await js('return await window.qxPerf.sample();'); const t = s.shell?.tabs || []; return { awake: t.filter((x) => !x.agent && !x.asleep).length, asleep: t.filter((x) => x.asleep).length, mb: s.shell?.tabsMb ?? 0, total: s.shell?.totalMb ?? 0 }; };
+  const line = (x) => `${x.awake} awake · ${x.asleep} asleep · tabs ${x.mb} MB · all of QuorX ${x.total} MB`;
+  await openWithReadout();
+  await step('A chat with a long page and a 3D page as artifacts', async () => {
+    const proj = await testProject('tabs');
+    const id = `tabs${Date.now().toString(36)}`;
+    const long = `<!doctype html><meta charset="utf-8"><title>Long page</title><body style="font:16px system-ui;margin:40px">${Array.from({ length: 300 }, (_, i) => `<p id="p${i}">Paragraph ${i + 1}: a long page to scroll through.</p>`).join('')}</body>`;
+    const doc = { id, title: 'Tabs that sleep', projectId: proj.id, created: Date.now(), agent: { setup: {}, messages: [{ role: 'user', content: 'Show me some pages.' }, { role: 'assistant', runId: `${id}r`, content: 'Here they are, in the pane.', doneAt: Date.now() }],
+      artifacts: { long: { id: 'long', kind: 'html', title: 'Long page', html: long, updated: Date.now() }, scene: { id: 'scene', kind: 'html', title: '3D viewer', html: SCENE, updated: Date.now() } } } };
+    const status = await js(`const r = await fetch(${q(`/api/chats/${id}`)}, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: ${q(JSON.stringify(doc))} }); return r.status;`);
+    if (status !== 200) throw new Error(`saving the chat: ${status}`);
+    await js('location.reload(); return true;').catch(() => {});
+    await sleep(1500);
+    await waitFor(`document.querySelector(${q(`.sb-chat[data-c="${id}"]`)})`, 20000, 'the chat in the sidebar');
+    await click(`.sb-chat[data-c="${id}"]`);
+    await waitFor(`document.querySelector('[data-tab="browser"]')`, 10000, 'the pane');
+    chat = id;
+    return 'Opened';
+  });
+  const urls = Array.from({ length: N }, (_, i) => (i === 0 ? `/art/${chat}/long` : `/art/${chat}/scene?tab=${i + 1}`));
+  await step(`Browser tab: open ${N} pages, one tab each (the first is long, the rest 3D)`, async () => {
+    await click('[data-tab="browser"]');
+    for (const u of urls) {
+      await waitFor(`document.querySelector('.btab-new')`, 10000, 'the + button');
+      await click('.btab-new');
+      await js(`const f = document.querySelector('#paneUrl'); f.value = location.origin + ${q(u)}; f.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); return true;`);
+      await sleep(1500);
+    }
+    return `${await js(`return document.querySelectorAll('.btab:not(.agent)').length`)} tabs · ${line(await tabsNow())}`;
+  });
+  await step('Scroll the long page halfway down', async () => {
+    await js(`[...document.querySelectorAll('.btab:not(.agent)')][0].click(); return true;`);
+    await sleep(1500);
+    await inTab(urls[0], 'scrollTo(0, 3000); 1');
+    await sleep(500);
+    return `scrolled to ${await inTab(urls[0], 'scrollY')} px`;
+  });
+  await step('Look at the last tab and wait: the hidden ones go to sleep', async () => {
+    await js(`[...document.querySelectorAll('.btab:not(.agent)')].at(-1).click(); return true;`);
+    const before = await tabsNow();
+    const t0 = Date.now();
+    let now = before;
+    while (Date.now() - t0 < 60e3) { await sleep(2000); now = await tabsNow(); if (now.asleep >= N - 1) break; }
+    if (now.asleep < N - 1) throw new Error(`only ${now.asleep} asleep after a minute: ${line(now)}`);
+    return `before: ${line(before)} → after ${Math.round((Date.now() - t0) / 1000)} s: ${line(now)}`;
+  });
+  await step('Back to the long page: it wakes where it was', async () => {
+    const t0 = Date.now();
+    await js(`[...document.querySelectorAll('.btab:not(.agent)')][0].click(); return true;`);
+    let y;
+    for (let i = 0; i < 40 && !(y > 0); i++) { await sleep(250); y = await inTab(urls[0], 'document.readyState === "complete" ? scrollY : 0').catch(() => undefined); }
+    await sleep(600);
+    const now = await tabsNow();
+    // A window screenshot can't show a real tab (it draws in a view of its own): the tab's own picture goes in too.
+    await tabShot(urls[0], 'The long page, awake again (its own picture)', `scrolled to ${y} px`);
+    if (!(Math.abs((y ?? 0) - 3000) < 50)) throw new Error(`the page came back at ${y} px, not 3000`);
+    return `back at ${y} px in ${Date.now() - t0} ms · ${line(now)}`;
+  });
+}
+
+async function perfScenario() {
+  const N = Math.max(1, Math.min(16, Number(arg('chats', 8)) || 8)), PICS = 20, SHOTS = 25, PER_MSG = 5;
+  const rows = [];
+  const read = async (label, extra = {}) => {
+    const s = await js('return await window.qxPerf.sample();');
+    const r = { label, ...extra, totalMb: s.shell?.totalMb ?? null, appMb: s.shell?.appMb ?? null, gpuMb: s.shell?.gpuMb ?? null, tabs: s.shell ? s.shell.tabs.filter((t) => !t.asleep).length : null, asleep: s.shell ? s.shell.tabs.filter((t) => t.asleep).length : null, tabsMb: s.shell?.tabsMb ?? null,
+      heapMb: s.page.heapMb, chats: s.chats.open, elements: s.page.elements, images: s.page.images, imagesMb: s.page.imagesMb, frames: s.page.frames, webglLost: s.shell?.webglLost ?? null, timers: s.page.timers, longTasks: s.page.longTasks, longestMs: s.page.longestMs };
+    rows.push(r);
+    return `all ${r.totalMb ?? '–'} MB · window ${r.appMb ?? '–'} MB · GPU ${r.gpuMb ?? '–'} MB · ${r.tabs ?? 0} tabs awake${r.asleep ? ` (${r.asleep} asleep)` : ""} ${r.tabsMb ?? 0} MB · JS ${r.heapMb} MB · ${r.chats} chats loaded · ${r.elements} parts · ${r.images} pictures ${r.imagesMb} MB · timers ${r.timers} · stutters ${r.longTasks} (longest ${r.longestMs} ms)`;
+  };
+  let proj = null;
+  const ids = [];
+  await openWithReadout();
   await step('Baseline: QuorX with no chat open', () => read('start'));
   await step(`${N} heavy chats in a project of the test's own`, async () => {
     proj = await testProject('perf');
@@ -625,6 +720,7 @@ try {
   if (SCENARIO === 'all' || SCENARIO === 'cli') await cliScenario();
   if (SCENARIO === 'all' || SCENARIO === 'running') await runningScenario();
   if (SCENARIO === 'perf') await perfScenario();
+  if (SCENARIO === 'tabs') await tabsScenario();
 } catch (e) {
   failed = true;
   steps.push({ title: 'The test could not run', ok: false, note: e.message, img: null, ms: 0 });

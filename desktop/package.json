@@ -33,6 +33,7 @@
       "sound.js",
       "icon.js",
       "storage.js",
+      "tab-sleep.js",
       "assets/**/*",
       "package.json"
     ],

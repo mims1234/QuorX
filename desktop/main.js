@@ -14,6 +14,7 @@ const { spawn } = require('node:child_process');
 const crypto = require('node:crypto');
 const { pngIcon } = require('./icon.js');
 const { createStorage, cleanAtStart } = require('./storage.js');
+const { pickSleepers, sleepOptions } = require('./tab-sleep.js');
 const PKG = require('./package.json');
 
 // The harness's code: the repo while developing, the copy bundled in the installer once installed.
@@ -135,7 +136,7 @@ function createWindow() {
   win.webContents.on('did-finish-load', () => { const z = Number(readConfig().zoom); if (z >= 0.5 && z <= 2) win.webContents.setZoomFactor(z); });
   // The page (re)loaded (Restart harness, Ctrl+R): it starts with no tabs of yours, so the ones it had are gone from
   // its tab strip but kept running unseen, sound and all. Closed, except one lent to an agent that may still be using it.
-  win.webContents.on('did-start-navigation', (e) => { if (!e.isMainFrame || e.isSameDocument) return; for (const [k, t] of [...tabs]) if (!t.agent && !t.onDbg) closeTab(k); });
+  win.webContents.on('did-start-navigation', (e) => { if (!e.isMainFrame || e.isSameDocument) return; for (const [k, t] of [...tabs]) if (!t.agent && !t.onDbg) closeTab(k); sleeping.clear(); });
   // Zoom keys and Ctrl+wheel in the app go to the page, which knows what you're on: an artifact or a page preview
   // (inside a frame, which the page never hears keys from), the terminal, or QuorX itself (it calls back 'zoom').
   win.webContents.on('before-input-event', (e, input) => { const dir = zoomKey(input); if (dir) { e.preventDefault(); send({ type: 'zoom-key', dir }); } });
@@ -271,11 +272,85 @@ function tabFor(sid) {
   view.setBackgroundColor('#ffffff');
   view.setVisible(false);
   win.contentView.addChildView(view);
-  t = { view, shown: false };
+  t = { view, shown: false, hiddenAt: Date.now() };
   tabs.set(sid, t);
   wireView(sid, view);
   applySound(t);
   return t;
+}
+
+// ---------- sleeping tabs (tab-sleep.js decides which) ----------
+// A sleeping tab is closed and kept here as what it takes to bring it back. The page still lists it as open: the next
+// time it asks to place, show or reload that tab, wake() opens it again behind its still picture.
+const sleeping = new Map(); // sid → { url, title, zoom, muted, scroll, still, bounds, at }
+const SLEEP_OPTS = sleepOptions();
+// Whether a page has typing in it not yet sent (a form half filled): such a tab stays awake.
+const DIRTY_JS = `(() => { try { return [...document.querySelectorAll('input, textarea')].some((e) => !/^(hidden|submit|button|checkbox|radio|file|range|color)$/i.test(e.type || '') && e.value !== e.defaultValue)
+  || [...document.querySelectorAll('[contenteditable=""], [contenteditable="true"]')].some((e) => e.textContent.trim().length > 0 && e === document.activeElement); } catch { return false; } })()`;
+async function sleepTab(sid) {
+  const t = tabs.get(sid); if (!t || t.agent || t.shown) return false;
+  const wc = t.view.webContents;
+  const scroll = await within(wc.executeJavaScript('[scrollX, scrollY]', true), 800, 'the scroll').catch(() => null);
+  const info = { url: wc.getURL(), title: wc.getTitle(), zoom: wc.getZoomFactor(), muted: !!t.muted, scroll: Array.isArray(scroll) ? scroll : null,
+    still: t.still || null, bounds: t.bounds || null, at: Date.now() };
+  if (!/^https?:/i.test(info.url)) return false; // nothing to come back to
+  closeTab(sid);
+  sleeping.set(sid, info);
+  vlog('sleep', sid, info.url);
+  send({ sid, type: 'sleep' });
+  return true;
+}
+// Opens a sleeping tab again where it was: its still picture covers the view until the page has loaded and scrolled.
+function wake(sid) {
+  const info = sleeping.get(sid); if (!info) return false;
+  sleeping.delete(sid);
+  const t = tabFor(sid);
+  t.muted = info.muted; applySound(t);
+  const wc = t.view.webContents;
+  if (info.still) {
+    t.cover = new WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true } });
+    t.cover.setBackgroundColor('#ffffff');
+    // The picture goes in by script: as part of the address it could pass Chromium's limit for one.
+    const cw = t.cover.webContents, still = JSON.stringify(info.still);
+    cw.loadURL('data:text/html,<html style="margin:0;background:%23fff;overflow:hidden"><body style="margin:0"></body></html>')
+      .then(() => cw.executeJavaScript(`{ const i = new Image(); i.alt = ''; i.style.cssText = 'display:block;width:100%'; i.src = ${still}; document.body.appendChild(i); }`, true)).catch(() => {});
+    win.contentView.addChildView(t.cover);
+    t.cover.setVisible(false);
+  }
+  if (info.bounds) { t.bounds = info.bounds; t.cover?.setBounds(info.bounds); placeView(t); }
+  const uncover = () => { if (!t.cover || tabs.get(sid) !== t) return; win.contentView.removeChildView(t.cover); t.cover.webContents.close(); t.cover = null; };
+  wc.once('did-finish-load', async () => {
+    if (info.zoom && info.zoom !== 1) wc.setZoomFactor(info.zoom);
+    if (info.scroll && (info.scroll[0] || info.scroll[1])) await within(wc.executeJavaScript(`scrollTo(${Number(info.scroll[0]) || 0}, ${Number(info.scroll[1]) || 0})`, true), 800, 'the scroll').catch(() => {});
+    setTimeout(uncover, 120);
+  });
+  setTimeout(uncover, 15000); // a page that never finishes loading still shows itself in the end
+  wc.loadURL(info.url).catch(() => {});
+  vlog('wake', sid, info.url);
+  send({ sid, type: 'wake' });
+  return true;
+}
+// Every 10 s: a fresh still of each of your tabs on screen (what a sleeping tab shows while it wakes), the agent's
+// tabs throttled while no reply is driving them, and the tabs tab-sleep.js picks put to sleep.
+let sleepBusy = false;
+async function sleepTick() {
+  if (sleepBusy || !win || win.isDestroyed()) return;
+  sleepBusy = true;
+  try {
+    const list = [];
+    for (const [sid, t] of tabs) {
+      const wc = t.view.webContents;
+      if (wc.isDestroyed()) continue;
+      if (t.agent) { const busy = !!t.shown || Date.now() - (t.usedAt || 0) < 60e3; if (t.throttled !== !busy) { t.throttled = !busy; wc.setBackgroundThrottling(!busy); } continue; }
+      if (t.shown && !wc.isLoading()) {
+        const img = await within(wc.capturePage(), 1500, 'the picture').catch(() => null);
+        if (img && !img.isEmpty()) { const s = img.getSize(); t.still = `data:image/jpeg;base64,${(s.width > 1280 ? img.resize({ width: 1280 }) : img).toJPEG(72).toString('base64')}`; }
+      }
+      const dirty = t.shown ? false : await within(wc.executeJavaScript(DIRTY_JS, true), 800, 'the form check').catch(() => false);
+      list.push({ sid, agent: false, shown: !!t.shown, hiddenAt: t.hiddenAt ?? null, audible: wc.isCurrentlyAudible(), dirty: !!dirty, debugged: !!t.onDbg || wc.debugger.isAttached() });
+    }
+    for (const sid of pickSleepers(list, SLEEP_OPTS)) await sleepTab(sid);
+  } catch (e) { vlog('sleep tick failed', e?.message || e); } finally { sleepBusy = false; }
 }
 function wireView(sid, view) {
   const wc = view.webContents;
@@ -336,8 +411,9 @@ function zoomKey(input) {
 // Only the app's own page may drive tabs.
 const fromApp = (e) => { try { return new URL(e.senderFrame.url).origin === appOrigin(); } catch { return false; } };
 function handle(name, fn) { ipcMain.handle(`oh:${name}`, (e, ...a) => { if (!fromApp(e)) throw new Error('not allowed'); return fn(...a); }); }
-handle('open', (sid, url) => { if (!/^https?:\/\//i.test(String(url))) throw new Error('only http and https addresses'); tabFor(sid).view.webContents.loadURL(url).catch(() => {}); return true; });
+handle('open', (sid, url) => { if (!/^https?:\/\//i.test(String(url))) throw new Error('only http and https addresses'); sleeping.delete(sid); tabFor(sid).view.webContents.loadURL(url).catch(() => {}); return true; });
 handle('bounds', (sid, r) => {
+  if (sleeping.has(sid)) { sleeping.get(sid).bounds = null; wake(sid); } // placed again: it is about to be seen
   const t = tabs.get(sid); if (!t) return false;
   // The page measures in its own pixels, which zooming QuorX scales; views are placed in the window's.
   const z = win?.webContents.getZoomFactor() || 1;
@@ -386,11 +462,15 @@ function placeView(t) {
 }
 // Show one tab (or none): every other tab is hidden, so dialogs and other tabs are never covered by a stale one.
 // Only views whose visibility changes are touched (setting it again on a shown view can make it flash).
-handle('show', (sid) => { for (const [k, t] of tabs) { const on = k === sid; if (t.shown === on) continue; vlog(on ? 'show' : 'hide', k); t.shown = on; t.view.setVisible(on); t.cover?.setVisible(on); } return true; });
+// A tab hidden is timed from then (tab-sleep.js); shown, it is awake for good until hidden again.
+function setShown(k, t, on, why = '') { vlog(on ? 'show' : `hide${why}`, k); t.shown = on; t.hiddenAt = on ? null : Date.now(); t.view.setVisible(on); t.cover?.setVisible(on); }
+handle('show', (sid) => { wake(sid); for (const [k, t] of tabs) { const on = k === sid; if (t.shown === on) continue; setShown(k, t, on); } return true; });
 // Several tabs at once, one per area of a split pane (each placed in its own box): every other tab is hidden.
-handle('showSet', (sids) => { const on = new Set(Array.isArray(sids) ? sids.map(String) : []); for (const [k, t] of tabs) { const v = on.has(k); if (t.shown === v) continue; vlog(v ? 'show' : 'hide', k); t.shown = v; t.view.setVisible(v); t.cover?.setVisible(v); } return true; });
-handle('hideAll', () => { for (const [k, t] of tabs) { if (t.shown) vlog('hide (all)', k); t.shown = false; t.view.setVisible(false); t.cover?.setVisible(false); } return true; });
+handle('showSet', (sids) => { const on = new Set(Array.isArray(sids) ? sids.map(String) : []); for (const s of on) wake(s); for (const [k, t] of tabs) { const v = on.has(k); if (t.shown === v) continue; setShown(k, t, v); } return true; });
+// Hidden again even when we think it is (the page's safety net); only a tab that was shown starts its hidden time now.
+handle('hideAll', () => { for (const [k, t] of tabs) { if (t.shown) setShown(k, t, false, ' (all)'); else { t.view.setVisible(false); t.cover?.setVisible(false); } } return true; });
 handle('nav', (sid, op) => {
+  if (sleeping.has(sid)) return op === 'reload' ? wake(sid) : false;
   const t = tabs.get(sid); if (!t) return false;
   const wc = t.view.webContents, h = wc.navigationHistory;
   if (op === 'back' && h.canGoBack()) h.goBack(); else if (op === 'forward' && h.canGoForward()) h.goForward(); else if (op === 'reload') wc.reload(); else if (op === 'stop') wc.stop();
@@ -404,10 +484,11 @@ handle('tabs', (op, sid) => {
   return [...tabs].map(([k, t]) => {
     const wc = t.view.webContents;
     return { sid: k, agent: !!t.agent, chatId: t.chatId || null, url: wc.getURL(), title: wc.getTitle(), audible: wc.isCurrentlyAudible(), muted: wc.isAudioMuted(), shown: !!t.shown };
-  });
+  }).concat([...sleeping].map(([k, s]) => ({ sid: k, agent: false, chatId: null, url: s.url, title: s.title, audible: false, muted: s.muted, shown: false, asleep: true })));
 });
 function closeTab(sid) {
-  const t = tabs.get(sid); if (!t) return false;
+  const asleep = sleeping.delete(sid);
+  const t = tabs.get(sid); if (!t) return asleep;
   try { if (t.view.webContents.debugger.isAttached()) t.view.webContents.debugger.detach(); } catch { /* gone */ }
   if (win && !win.isDestroyed()) { win.contentView.removeChildView(t.view); if (t.cover) win.contentView.removeChildView(t.cover); }
   t.view.webContents.close(); t.cover?.webContents.close();
@@ -525,8 +606,8 @@ handle('perf', () => {
   const appPid = win && !win.isDestroyed() ? win.webContents.getOSProcessId() : 0;
   const tabList = [...tabs].map(([sid, t]) => {
     const wc = t.view?.webContents, pid = wc && !wc.isDestroyed() ? wc.getOSProcessId() : 0;
-    return { sid, agent: !!t.agent, shown: !!t.shown, pid, mb: mb(byPid.get(pid)?.memory?.workingSetSize), throttled: !t.agent };
-  });
+    return { sid, agent: !!t.agent, shown: !!t.shown, pid, mb: mb(byPid.get(pid)?.memory?.workingSetSize), throttled: !t.agent || !!t.throttled };
+  }).concat([...sleeping.keys()].map((sid) => ({ sid, agent: false, shown: false, pid: 0, mb: 0, throttled: true, asleep: true })));
   const sum = (l) => l.reduce((s, p) => s + p.mb, 0);
   return {
     at: Date.now(),
@@ -761,6 +842,8 @@ const COMMANDS = {
   },
   async 'tab.cdp'({ tab, method, params = {} }) {
     const t = tabs.get(tab); if (!t) throw new Error('that tab is gone');
+    t.usedAt = Date.now(); // a reply is driving it: not throttled (sleepTick)
+    if (t.throttled) { t.throttled = false; t.view.webContents.setBackgroundThrottling(false); }
     if (method === 'Emulation.setDeviceMetricsOverride') {
       t.emu = { ...params }; delete t.emu.scale;
       // The agent sets its page size on every page it opens; the same size again changes nothing.
@@ -864,6 +947,7 @@ app.whenReady().then(async () => {
   createWindow();
   createTray();
   linkLoop();
+  setInterval(sleepTick, Math.min(10e3, Math.max(1000, (SLEEP_OPTS.after ?? 10e3) / 2)));
   // Installed update downloads go a little after start (⚙ Settings → Storage → Automatic cleanup).
   if (readConfig().storage?.updateCleanup !== false) setTimeout(() => getStorage().clear([{ id: 'desk:updates' }]).catch(() => {}), 30000);
   // Check for updates a little after start, then every 6 hours.

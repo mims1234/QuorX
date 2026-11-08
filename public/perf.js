@@ -71,12 +71,13 @@ const fmt = (mb) => (mb == null ? '–' : mb >= 1000 ? `${(mb / 1000).toFixed(1)
 function draw(s) {
   if (!box) return;
   const p = s.page, sh = s.shell, c = s.chats;
-  const yours = sh ? sh.tabs.filter((t) => !t.agent) : [], agents = sh ? sh.tabs.filter((t) => t.agent) : [];
+  const yours = sh ? sh.tabs.filter((t) => !t.agent && !t.asleep) : [], agents = sh ? sh.tabs.filter((t) => t.agent) : [];
+  const asleep = sh ? sh.tabs.filter((t) => t.asleep).length : 0;
   const rows = [
     sh && ['All of QuorX', fmt(sh.totalMb), sh.totalMb > 2000 ? 'bad' : sh.totalMb > 1000 ? 'warn' : ''],
     sh && ['This window', fmt(sh.appMb)],
     sh && ['Graphics (GPU)', fmt(sh.gpuMb)],
-    sh && ['Browser tabs', `${yours.length} yours · ${agents.length} agent · ${fmt(sh.tabsMb)}`, sh.tabs.length > 6 ? 'warn' : ''],
+    sh && ['Browser tabs', `${yours.length} yours · ${agents.length} agent${asleep ? ` · ${asleep} asleep` : ''} · ${fmt(sh.tabsMb)}`, yours.length + agents.length > 6 ? 'warn' : ''],
     ['JS memory', fmt(p.heapMb)],
     ['Chats loaded', c.open == null ? '–' : `${c.open} (${c.visible || 0} on screen, ${c.busy || 0} busy)`, c.open > 6 ? 'warn' : ''],
     ['Page parts', p.elements.toLocaleString(), p.elements > 60000 ? 'warn' : ''],
