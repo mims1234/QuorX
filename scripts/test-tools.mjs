@@ -557,7 +557,7 @@ test('save_skill asks where it goes: this project, all projects, or not at all; 
   { // a broken save fails before anyone is asked; a scheduled run saves to the project without asking
     const { events, bodies } = await run((body, i) => [reply('', [['save_skill', { name: 'x', description: 'y' }]]), reply('Done.')][i]);
     assert.equal(of(events, 'question').length, 0);
-    assert.match(toolResults(bodies[1]).at(-1), /needs instructions/);
+    assert.match(toolResults(bodies[1]).at(-1), /needs instructions|`instructions` is missing/);
     const s = await run((body, i) => [reply('', [['save_skill', { name: 'sched-skill', description: 'y', instructions: 'z' }]]), reply('Done.')][i], { scheduledBy: 'sched1', chatId: `sk-${Date.now().toString(36)}`, prefs: {} });
     assert.equal(of(s.events, 'question').length, 0);
     assert.ok(fs.existsSync(path.join(s.dir, '.quorx', 'skills', 'sched-skill', 'SKILL.md')));
