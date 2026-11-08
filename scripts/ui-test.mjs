@@ -8,7 +8,8 @@
 //   npm run test:ui -- --scenario running   the Running tab: what runs, who started it, Stop and Stop all
 //   npm run test:ui -- --scenario news      News: the dot, What's new, the sample article, Play on a flow, a compare
 //   npm run test:ui -- --scenario perf      heavy chats one after another, with the performance readout's numbers
-//                                           (only when asked: not part of "all"; --chats N, default 8)
+//                                           (only when asked: not part of "all"; --chats N, default 8; --turns N adds
+//                                           N earlier rounds of long replies to each chat, default 0)
 //   npm run test:ui -- --scenario tabs      hidden browser tabs go to sleep and wake where they were (only when asked)
 //   add --keep to leave the app open afterwards
 //
@@ -638,6 +639,12 @@ async function tabsScenario() {
 
 async function perfScenario() {
   const N = Math.max(1, Math.min(16, Number(arg('chats', 8)) || 8)), PICS = 20, SHOTS = 25, PER_MSG = 5;
+  const TURNS = Math.max(0, Math.min(500, Number(arg('turns', 0)) || 0));
+  // A long reply like the agent writes: a heading, a list, a code block and a table.
+  const longReply = (n, k) => `## Step ${k + 1} of the build\n\nI went through the scene setup and changed how the lights are placed. Here is what changed and why, so the next renders match.\n\n`
+    + `- The key light moved up and to the left\n- The fill light is softer\n- Shadows use a larger map\n\n`
+    + '```js\n' + Array.from({ length: 24 }, (_, i) => `const light${i} = new DirectionalLight(0xffffff, ${(i / 24).toFixed(2)}); light${i}.position.set(${i}, ${n}, ${k});`).join('\n') + '\n```\n\n'
+    + `| Light | Before | After |\n|---|---|---|\n${Array.from({ length: 6 }, (_, i) => `| light${i} | ${i * 10}% | ${i * 12}% |`).join('\n')}\n\nNext I will render the product shots.`;
   const rows = [];
   const read = async (label, extra = {}) => {
     const s = await js('return await window.qxPerf.sample();');
@@ -661,6 +668,7 @@ async function perfScenario() {
       const shots = Array.from({ length: SHOTS }, (_, k) => ({ t: 'screenshot', action: 'browser', target: `http://localhost:5173/#view${k}`, url: `http://localhost:5173/#view${k}`, at: at + k * 1000,
         image: `data:image/png;base64,${pngFile(1280, 720, (x, y) => [((x >> 5) * 9 + n * 30 + k) & 255, ((y >> 5) * 13 + k * 7) & 255, (n * 50) & 255]).toString('base64')}` }));
       const messages = [{ role: 'user', content: `Make me a set of product renders and a 3D viewer for them (heavy chat ${n}).` }];
+      for (let k = 0; k < TURNS; k++) messages.push({ role: 'assistant', runId: `${id}h${k}`, content: longReply(n, k), doneAt: at + k }, { role: 'user', content: `Looks good, carry on with step ${k + 2}.` });
       for (let m = 0; m < PICS / PER_MSG; m++) {
         const names = Array.from({ length: PER_MSG }, (_, k) => `\`pics/render-${String(m * PER_MSG + k + 1).padStart(2, '0')}.png\``).join(', ');
         messages.push({ role: 'assistant', runId: `${id}r${m}`, content: `Here are renders ${m * PER_MSG + 1} to ${m * PER_MSG + PER_MSG}: ${names}. The 3D viewer is in the pane.`, trace: m === 0 ? shots : [], doneAt: at + 60e3 + m });
@@ -682,7 +690,7 @@ async function perfScenario() {
   const switchMs = [];
   // Clicks the chat in the sidebar and times, inside the page, until its own messages are drawn (frame by frame).
   const openTimed = (id, n) => js(`const el = document.querySelector(${q(`.sb-chat[data-c="${id}"]`)}); if (!el) throw new Error('the chat is not in the sidebar');
-    const shown = () => [...document.querySelectorAll('.chatpane.focus .msg')].length >= 8 && (document.querySelector('.chatpane.focus .msg.user')?.textContent || '').includes(${q(`(heavy chat ${n})`)});
+    const shown = () => document.querySelector('.chatpane.focus .ch-name')?.value === ${q(`Heavy chat ${n}`)} && document.querySelectorAll('.chatpane.focus .msg').length >= 8;
     const frame = () => new Promise((r) => requestAnimationFrame(r)); const t0 = performance.now(); el.click();
     while (!shown()) { if (performance.now() - t0 > 20000) throw new Error('the chat did not show within 20 s'); await frame(); }
     await frame(); return Math.round(performance.now() - t0);`);
@@ -690,9 +698,11 @@ async function perfScenario() {
     const id = ids[n - 1];
     await step(`Open heavy chat ${n} and look through it`, async () => {
       switchMs.push(await openTimed(id, n));
-      // Scroll through it so pictures and steps load as a person reading it would make them.
-      await js(`const s = [...document.querySelectorAll('.chatpane .msgs, .chatpane .messages, .chatpane .scroll')].find((e) => e.scrollHeight > e.clientHeight) || document.scrollingElement; for (let y = 0; y <= s.scrollHeight; y += 400) { s.scrollTop = y; await new Promise((r) => setTimeout(r, 60)); } return true;`);
-      await waitFor(`[...document.images].filter((i) => i.closest('.chatpane') && !i.complete).length === 0`, 20000, 'its pictures').catch(() => {});
+      // Read back up through the newest part, a screen at a time, then return to the end: pictures and steps load as
+      // they would for a person (at most 30 screens, so a very long chat doesn't take minutes).
+      await js(`const s = document.querySelector('.chatpane.focus .msgs'); if (!s) return false; for (let k = 0; k < 30 && s.scrollTop > 0; k++) { s.scrollTop -= s.clientHeight; await new Promise((r) => setTimeout(r, 80)); } s.scrollTop = s.scrollHeight; return true;`);
+      // Only the pictures in view: ones further up load lazily, when scrolled to, and would never finish here.
+      await waitFor(`(() => { const s = document.querySelector('.chatpane.focus .msgs'); if (!s) return true; const b = s.getBoundingClientRect(); return [...s.querySelectorAll('img')].filter((i) => { const r = i.getBoundingClientRect(); return r.bottom > b.top && r.top < b.bottom && !i.complete; }).length === 0; })()`, 20000, 'its pictures').catch(() => {});
       // The 3D viewer opened in a browser tab of its own, as the agent does with an app it built (desktop app only).
       await js(`if (window.ohDesktop?.open) await window.ohDesktop.open('perf-${n}', location.origin + '/art/${id}/scene'); return true;`).catch(() => {});
       await sleep(1500);
@@ -705,8 +715,15 @@ async function perfScenario() {
     const avg = Math.round(back.reduce((s, v) => s + v, 0) / back.length);
     return `switching back: average ${avg} ms, slowest ${Math.max(...back)} ms · ${await read('switched back', { switchMs: avg })}`;
   });
+  if (TURNS) await step('Scroll all the way to the start of the last chat', async () => {
+    const r = await js(`const s = document.querySelector('.chatpane.focus .msgs'); const t0 = performance.now(); let worst = 0, last = performance.now();
+      while (performance.now() - t0 < 30000) { s.scrollTop = 0; await new Promise((ok) => requestAnimationFrame(ok)); const now = performance.now(); worst = Math.max(worst, now - last); last = now; if (!s.querySelector('.msgs-older') && s.scrollTop === 0) break; }
+      return { ms: Math.round(performance.now() - t0), worstFrame: Math.round(worst), drawn: s.querySelectorAll('.msg').length, left: !!s.querySelector('.msgs-older') };`);
+    if (r.left) throw new Error(`earlier messages still not drawn after ${r.ms} ms`);
+    return `all ${r.drawn} messages drawn in ${r.ms} ms while scrolling up; slowest frame ${r.worstFrame} ms · ${await read('scrolled to the start')}`;
+  });
   await step('One minute later, nothing touched', async () => { await sleep(60e3); return read('idle 1 min'); });
-  fs.writeFileSync(path.join(OUT, 'perf.json'), JSON.stringify({ chats: N, pictures: PICS, screenshots: SHOTS, at: STAMP, rows }, null, 2));
+  fs.writeFileSync(path.join(OUT, 'perf.json'), JSON.stringify({ chats: N, turns: TURNS, pictures: PICS, screenshots: SHOTS, at: STAMP, rows }, null, 2));
   log(`perf numbers: ${path.join(OUT, 'perf.json')}`);
 }
 

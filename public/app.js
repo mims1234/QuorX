@@ -3497,6 +3497,43 @@ function paneHTML(c) {
 }
 // A chat off the screen lets go of its page: its observers stop and its elements can be freed. A reply running in
 // the background keeps updating the chat itself (its text and steps), and showing it again draws the latest state.
+// A chat's messages, newest first: the last FIRST_MSGS are drawn at once, and earlier ones only as you scroll up
+// towards them, a little at a time (DRAW_SLICE ms per frame). A long reply with code and tables takes ~17 ms to draw,
+// so a chat of 100 of them froze the window for almost 2 s on every switch. → the watcher to stop when the chat leaves
+// the screen, or null when everything is drawn.
+const FIRST_MSGS = 30, DRAW_SLICE = 12;
+function drawMessages(c, msgs, root) {
+  const all = c.agent.messages, start = Math.max(0, all.length - FIRST_MSGS);
+  for (const m of all.slice(start)) msgs.appendChild(renderMsg(c, m));
+  if (!start || !('IntersectionObserver' in window)) { for (const m of all.slice(0, start).reverse()) msgs.prepend(renderMsg(c, m)); return null; }
+  let oldest = all[start];
+  const more = document.createElement('div');
+  more.className = 'msgs-older';
+  const label = (n) => { more.textContent = `${n} earlier message${n === 1 ? '' : 's'}: scroll up to see them`; };
+  label(start);
+  msgs.prepend(more);
+  let busy = false;
+  const near = () => more.getBoundingClientRect().bottom > msgs.getBoundingClientRect().top - 1500;
+  const step = () => {
+    // Messages can change under us (one removed, the list replaced): carry on from the oldest one drawn.
+    const list = c.agent.messages, at = list.indexOf(oldest);
+    if (c.el?.root !== root || !more.isConnected || at < 0) { busy = false; more.remove(); io.disconnect(); return; }
+    const t0 = performance.now(), batch = [];
+    let i = at;
+    while (i > 0 && performance.now() - t0 < DRAW_SLICE) batch.unshift(renderMsg(c, list[--i]));
+    oldest = list[i];
+    // Drawn above where you are reading: the view stays on the same message unless it is following the end.
+    const fromEnd = msgs.scrollHeight - msgs.scrollTop;
+    more.after(...batch);
+    if (!c.follow) msgs.scrollTop = msgs.scrollHeight - fromEnd;
+    if (i <= 0) { busy = false; more.remove(); io.disconnect(); return; }
+    label(i);
+    if (near()) requestAnimationFrame(step); else busy = false;
+  };
+  const io = new IntersectionObserver((es) => { if (!busy && es.some((e) => e.isIntersecting)) { busy = true; requestAnimationFrame(step); } }, { root: msgs, rootMargin: '1500px 0px 0px 0px' });
+  io.observe(more);
+  return io;
+}
 function releasePane(c) {
   for (const o of c.watchers || []) o.disconnect();
   for (const m of c.agent.messages) { if (m.el) traceSeen?.unobserve(m.el); m.el = null; }
@@ -3553,8 +3590,9 @@ function renderPanes() {
     renderChatHead(c); renderComposerBar(c); renderAttachments(c); syncRunState(c); markDriving(c);
     const msgs = $('.msgs', root);
     if (!c.agent.messages.length) msgs.innerHTML = `<div class="hint"><b>${esc(c.title)}</b><br>${esc(short(c.agent.setup.model))} · ${c.approval === 'strict' ? '🔒 Strict: asks before each tool it uses' : '⚡ YOLO: uses its tools without asking'}<br>The agent decides by itself when to ask the deciders.</div>`;
-    for (const m of c.agent.messages) msgs.appendChild(renderMsg(c, m));
+    const older = drawMessages(c, msgs, root);
     keepAtBottom(c, msgs, root);
+    if (older) (c.watchers ||= []).push(older);
     c.shownAt = Date.now();
   });
   renderToolbars(); syncLayout(); renderPane(); applyKeyLock(); budgetNotices(); folderNotices();
@@ -3930,15 +3968,25 @@ function wireQuickSettings(c, quick, chips, followSlot) {
 // The footer row folds one step at a time until it fits (composer.css says what each step hides): measured, not a
 // fixed width, as a long Quorium or model name, or many changed settings, need more room than a short one.
 const FOLDS = 6;
+// Each try is a layout of the whole page, so the step found is kept for that width and those controls: switching chats
+// (a fresh row with the same width and buttons) uses it without measuring again.
+const FIT_STEP = new Map();
 function fitComposer(box) {
   const rack = box && $('.cmp-control-rack', box);
   if (!rack || !box.isConnected || !box.offsetWidth) return;
-  // A badge may stick out a few px. The model may shrink, but not below a readable name: until the last step (the
-  // buttons on their own line), a model squeezed under 110px counts as not fitting.
-  const model = $('.cmp-model-chip', rack);
-  const fits = (n) => rack.scrollWidth <= rack.clientWidth + 6 && (n >= FOLDS || !model || model.clientWidth >= Math.min(model.scrollWidth, 110));
-  let n = 0;
-  for (; n <= FOLDS; n++) { for (let i = 1; i <= FOLDS; i++) box.classList.toggle(`fold${i}`, i <= n); if (fits(n)) break; }
+  const fold = (n) => { for (let i = 1; i <= FOLDS; i++) box.classList.toggle(`fold${i}`, i <= n); };
+  const key = `${box.offsetWidth}|${rack.textContent}`;
+  if (FIT_STEP.has(key)) fold(FIT_STEP.get(key));
+  else {
+    // A badge may stick out a few px. The model may shrink, but not below a readable name: until the last step (the
+    // buttons on their own line), a model squeezed under 110px counts as not fitting.
+    const model = $('.cmp-model-chip', rack);
+    const fits = (n) => rack.scrollWidth <= rack.clientWidth + 6 && (n >= FOLDS || !model || model.clientWidth >= Math.min(model.scrollWidth, 110));
+    let n = 0;
+    for (; n <= FOLDS; n++) { fold(n); if (fits(n)) break; }
+    if (FIT_STEP.size > 200) FIT_STEP.clear();
+    FIT_STEP.set(key, Math.min(n, FOLDS));
+  }
   if (!box._fitRO) { box._fitRO = new ResizeObserver(() => fitComposer(box)); box._fitRO.observe(box); }
 }
 // ---------- usage (per chat): every model this chat paid for, grouped by kind of call ----------
