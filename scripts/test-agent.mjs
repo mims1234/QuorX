@@ -1576,3 +1576,35 @@ test('the output cap follows the providers the chat may use', async () => {
   const { bodies } = await run(() => reply('Done.'), { routeLimits: async () => ({ context: 65536, maxOut: 2048 }) });
   assert.equal(bodies[0].max_tokens, 2048);
 });
+
+test('a tool result over the cap keeps its start and end, and the whole of it is saved for read_file', async () => {
+  const md = 'START-' + 'z'.repeat(30000) + '-END';
+  const { bodies, dir, events } = await run((body, i) => {
+    if (i === 0) return reply('', [['write_artifact', { title: 'Big notes', markdown: md }]]);
+    if (i === 1) { const id = String(toolResults(body).at(-1)).match(/`([\w-]+)`/)?.[1]; return reply('', [['read_artifact', { id }]]); }
+    return reply('Done.');
+  }, { routeLimits: async () => ({ context: 16000, maxOut: 2000 }) });
+  const out = toolResults(bodies[2]).at(-1);
+  assert.ok(out.length < 12000, `capped (${out.length})`);
+  assert.match(out, /START-/);
+  assert.match(out, /-END/);
+  const rel = out.match(/saved at (\S+\.txt)/)?.[1];
+  assert.ok(rel, out.slice(0, 300));
+  assert.ok(fs.readFileSync(path.join(dir, rel), 'utf8').includes('z'.repeat(30000)), 'the whole result is in the file');
+  assert.ok(of(events, 'note').some((e) => /read_artifact result was \d+k characters/.test(e.msg)));
+});
+
+test('a long read is shortened with how to read on, not saved again', async () => {
+  const { bodies } = await run((body, i) => [reply('', [['read_file', { path: 'long.txt' }]]), reply('Done.')][i], {
+    routeLimits: async () => ({ context: 16000, maxOut: 2000 }),
+    prep: (d) => fs.writeFileSync(path.join(d, 'long.txt'), Array.from({ length: 300 }, (_, i) => `line ${i} ${'q'.repeat(80)}`).join('\n')),
+  });
+  const out = toolResults(bodies[1]).at(-1);
+  assert.match(out, /Read the rest with a smaller limit and an offset/);
+  assert.doesNotMatch(out, /saved at/);
+});
+
+test('results that fit are left exactly as they are', async () => {
+  const { bodies } = await run((body, i) => [reply('', [['write_file', { path: 'a.txt', content: 'hello' }]]), reply('Done.')][i]);
+  assert.doesNotMatch(toolResults(bodies[1]).at(-1), /characters cut here/);
+});

@@ -64,7 +64,7 @@ import { setLiveArtifact, markdownHtml } from './artifacts.js';
 import { listDocs, docText, readDoc, searchDocs, DOC_DEFAULTS } from './docs.js';
 import { errorCode } from './errors.js';
 import { repairArgs, checkArgs } from './toolargs.js';
-import { groupCalls, numberedWindow, untrusted, trimTranscript, trimPageViews, compactTranscript, transcriptChars, withCacheMarks, retryable, retryWait, pairToolCalls, contextBudget, LOOK_TOOLS } from './loop.js';
+import { groupCalls, numberedWindow, untrusted, trimTranscript, trimPageViews, compactTranscript, transcriptChars, withCacheMarks, retryable, retryWait, pairToolCalls, contextBudget, resultCap, previewOf, LOOK_TOOLS } from './loop.js';
 import { checkFile, checkHtml, CHECKED, lintFile, lintHtml, LINTED } from './checks.js';
 import { checkSettings, askDeciders, saveShot, logCheck, votesFor, MAIN_CONTROL_JS, KEY_PAGE_JS, KEY_TRIES, CHECK_DEFAULTS, LOOK_DEFAULTS } from './harness-checks.js';
 import { saveCheckpoint, loadCheckpoint, dropCheckpoint, checkpointWritten, recordRun } from './runs.js';
@@ -1515,6 +1515,8 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
   const budget = contextBudget(routeLim?.context || modelInfo?.ctx, maxOut, { trimAt: Math.max(30000, Number(S.trimAt) || DEFAULTS.trimAt) });
   const trimAt = req.settings?.trimAt != null ? Math.max(30000, Number(req.settings.trimAt) || DEFAULTS.trimAt) : budget?.trim ?? DEFAULTS.trimAt;
   const compactAt = req.settings?.trimAt != null ? trimAt * 2 : budget?.compact ?? trimAt * 2;
+  const maxResult = resultCap(budget); // the most one tool result puts in the conversation (capResult)
+  let spills = 0;
   let maxSteps = Math.max(2, Math.min(MAX_STEPS, Number(S.maxSteps) || DEFAULTS.maxSteps));
   if (carryOn) maxSteps = resumed.step + 1 + carryOn.steps; // the steps already used, plus the new allowance
   else if (resumed) maxSteps = Math.max(maxSteps, Number(resumed.maxSteps) || 0, resumed.step + 1 + 5); // a restart keeps the reply's (extended) limit, and always leaves room to act
@@ -2305,6 +2307,26 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     }
   }
 
+  // One shared cap on what a tool result puts in the conversation, sized to the model's window. A bigger result keeps
+  // its start and end; the whole of it is saved in the agent's own folder for read_file. (read_file itself pages, so a
+  // long read is only shortened, with how to read on.)
+  function capResult(name, text, step) {
+    const p = previewOf(text, maxResult);
+    if (!p) return text;
+    let where = '';
+    if (name === 'read_file') where = 'Read the rest with a smaller limit and an offset.';
+    else if (root) {
+      try {
+        const rel = `${SCRATCH}/results/step${step}-${name.replace(/[^\w.-]/g, '_')}-${++spills}.txt`;
+        fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+        fs.writeFileSync(path.join(root, rel), text);
+        where = `The whole result is saved at ${rel}: read_file it (with offset) for the part cut here.`;
+      } catch { where = 'It could not be saved, so the part cut here is gone; run the tool again more narrowly if you need it.'; }
+    } else where = 'Run the tool again more narrowly if you need the part cut here.';
+    emit({ t: 'note', level: 'info', msg: `The ${name} result was ${Math.round(p.total / 1000)}k characters; ${Math.round(maxResult / 1000)}k went into the conversation.`, at: at() });
+    return `${p.head}\n\n[… ${p.cut.toLocaleString('en')} characters cut here, of ${p.total.toLocaleString('en')}. ${where}]\n\n${p.tail}`;
+  }
+
   // One tool call: parse its arguments, run it, record a journal line. Errors become results.
   async function callTool(tc, step, finishReason) {
     // Arguments as models send them: small JSON slips are repaired (never a call cut off at the output limit), then
@@ -2351,6 +2373,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (CHANGES_FILES.has(name)) guard.restamp();
     // Nothing secret goes back to the model: the values in the project's .env files, and anything shaped like a key.
     result = scrubSecrets(root, String(result ?? ''));
+    result = capResult(name, result, step);
     const first = result.split('\n')[0];
     journal.push(`${clip(toolSummary(name, broken ? {} : args), 110)}${/^Error|declined/.test(first) ? ` → ${clip(first, 90)}` : name === 'run_command' || name === 'shell' ? ` → ${clip(first, 40)}` : ''}${/\nCheck found/.test(result) ? ' (check found problems)' : ''}`);
     emit({ t: 'tool_result', step, id: tc.id, name, result: clip(result, 600), ...(made?.media?.length ? { media: made.media } : {}), at: at() });

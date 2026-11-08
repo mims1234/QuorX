@@ -208,6 +208,16 @@ export function contextBudget(windowTokens, maxOut = 16000, { trimAt = 120000 } 
   };
 }
 
+/** How big one tool result may be in the conversation: about 15% of the model's budget, between 8k and 60k characters. */
+export const resultCap = (budget) => Math.max(8000, Math.min(60000, budget ? Math.round(budget.tokens * CHARS_PER_TOKEN * 0.15) : 40000));
+/** The start and end of a text over `cap` characters, with how much was cut between them; null when it fits. */
+export function previewOf(text, cap) {
+  const s = String(text ?? '');
+  if (s.length <= cap) return null;
+  const head = Math.floor(cap * 0.75), tail = Math.floor(cap * 0.2);
+  return { head: s.slice(0, head), tail: s.slice(s.length - tail), cut: s.length - head - tail, total: s.length };
+}
+
 // ---------- prompt caching ----------
 /** Anthropic models cache only what is marked: the system prompt and the newest user or tool message. */
 export function withCacheMarks(messages, model) {
