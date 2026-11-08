@@ -11,6 +11,15 @@ safety layer, macOS and Linux paths, and the News format. On Windows some of the
 Linux. A few tests count real processes or wait on a terminal; on a busy PC, rerun a failing `stop: …` or
 `terminal: …prompts` test alone.
 
+Part of it plays back recorded chats: real replies from several models, saved in `scripts/fixtures/replay`, drive
+the agent loop with no key and no network, and each must take the same steps and end with the same answer as when it
+was recorded. When a loop change is meant to alter those steps, record the chat again (each one costs a fraction of a
+cent):
+
+```bash
+OPENROUTER_API_KEY=… node scripts/record-chat.mjs --name hello-py --model deepseek/deepseek-v4.1-flash --text "Make hello.py …" --file numbers.txt=3
+```
+
 ```bash
 npm run test:desktop
 ```

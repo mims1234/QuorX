@@ -1,0 +1,182 @@
+{
+ "version": 1,
+ "name": "qwen-notes",
+ "model": "qwen/qwen3.8-omni-flash",
+ "recorded": "2026-11-08",
+ "text": "Read todo.md, mark the second item done, and add a new item: buy milk.",
+ "files": {
+  "todo.md": "# Todo\n- [ ] call mum\n- [ ] water plants\n- [ ] pay rent"
+ },
+ "calls": [
+  {
+   "request": {
+    "tools": [
+     "list_files",
+     "read_file",
+     "write_file",
+     "append_file",
+     "edit_file",
+     "shell",
+     "job_output",
+     "job_stop",
+     "terminal",
+     "start_server",
+     "stop_server",
+     "preview_site",
+     "search_files",
+     "delete_file",
+     "scaffold",
+     "ask_user",
+     "use_skill",
+     "write_artifact",
+     "read_artifact",
+     "edit_artifact",
+     "decide",
+     "remember",
+     "load_tools"
+    ],
+    "tool_choice": "auto",
+    "roles": [
+     "system",
+     "user"
+    ]
+   },
+   "answer": {
+    "text": "",
+    "toolCalls": [
+     {
+      "id": "call_ef79c2705ea9493aa50c1aa6",
+      "type": "function",
+      "function": {
+       "name": "read_file",
+       "arguments": "{\"path\": \"todo.md\"}"
+      }
+     }
+    ],
+    "finishReason": "tool_calls",
+    "usage": {
+     "cost": 0.0011594088,
+     "prompt_tokens": 7726,
+     "completion_tokens": 26
+    },
+    "ms": 1,
+    "firstMs": 1
+   }
+  },
+  {
+   "request": {
+    "tools": [
+     "list_files",
+     "read_file",
+     "write_file",
+     "append_file",
+     "edit_file",
+     "shell",
+     "job_output",
+     "job_stop",
+     "terminal",
+     "start_server",
+     "stop_server",
+     "preview_site",
+     "search_files",
+     "delete_file",
+     "scaffold",
+     "ask_user",
+     "use_skill",
+     "write_artifact",
+     "read_artifact",
+     "edit_artifact",
+     "decide",
+     "remember",
+     "load_tools"
+    ],
+    "tool_choice": "auto",
+    "roles": [
+     "system",
+     "user",
+     "assistant",
+     "tool"
+    ]
+   },
+   "answer": {
+    "text": "",
+    "toolCalls": [
+     {
+      "id": "call_59d3274086244c61aa062407",
+      "type": "function",
+      "function": {
+       "name": "edit_file",
+       "arguments": "{\"path\": \"todo.md\", \"edits\": \n[{\"find\": \"- [ ] water plants\", \"replace\": \"- [x] water plants\"}, {\"find\": \"- [ ] pay rent\", \"replace\": \"- [ ] pay rent\\n- [ ] buy milk\"}]\n\n}"
+      }
+     }
+    ],
+    "finishReason": "tool_calls",
+    "usage": {
+     "cost": 0.00024796332,
+     "prompt_tokens": 7810,
+     "completion_tokens": 84
+    },
+    "ms": 1,
+    "firstMs": 1
+   }
+  },
+  {
+   "request": {
+    "tools": [
+     "list_files",
+     "read_file",
+     "write_file",
+     "append_file",
+     "edit_file",
+     "shell",
+     "job_output",
+     "job_stop",
+     "terminal",
+     "start_server",
+     "stop_server",
+     "preview_site",
+     "search_files",
+     "delete_file",
+     "scaffold",
+     "ask_user",
+     "use_skill",
+     "write_artifact",
+     "read_artifact",
+     "edit_artifact",
+     "decide",
+     "remember",
+     "load_tools"
+    ],
+    "tool_choice": "auto",
+    "roles": [
+     "system",
+     "user",
+     "assistant",
+     "tool",
+     "assistant",
+     "tool"
+    ]
+   },
+   "answer": {
+    "text": "Done — `todo.md` now has \"water plants\" marked `[x]` and \"buy milk\" added as a new item.",
+    "toolCalls": [],
+    "finishReason": "stop",
+    "usage": {
+     "cost": 0.00024093432,
+     "prompt_tokens": 7935,
+     "completion_tokens": 29
+    },
+    "ms": 1,
+    "firstMs": 1
+   }
+  }
+ ],
+ "outcome": {
+  "tools": [
+   "read_file",
+   "edit_file"
+  ],
+  "stop": "answered",
+  "reply": "Done — `todo.md` now has \"water plants\" marked `[x]` and \"buy milk\" added as a new item."
+ }
+}
