@@ -1,6 +1,22 @@
 {
   "versions": [
     {
+      "version": "0.3.0",
+      "date": "2026-11-08",
+      "title": "Smooth with many heavy chats: sleeping tabs, fast long chats, and a memory leak fixed",
+      "items": [
+        { "kind": "fixed", "text": "Chats you switch away from no longer stay in memory, so QuorX stays light after many chats.", "pr": 274 },
+        { "kind": "improved", "text": "Browser tabs you aren't looking at go to sleep to save memory, and wake where you left them.", "pr": 271 },
+        { "kind": "improved", "text": "Long chats open in a fraction of a second instead of freezing the window; older messages load as you scroll up.", "pr": 272 },
+        { "kind": "improved", "text": "QuorX does less in the background while its window is minimised.", "pr": 275 },
+        { "kind": "new", "text": "A performance readout (Settings → Appearance → Under the hood) shows QuorX's memory, browser tabs, processor use and stutters.", "pr": 269 },
+        { "kind": "new", "text": "Pictures, clips, sounds and music a tool makes show in the chat under its own step as soon as they land.", "pr": 256 },
+        { "kind": "new", "text": "Project settings can delete everything in the agent's folder, to the Recycle Bin, after you confirm.", "pr": 255 },
+        { "kind": "improved", "text": "Model chips show the logo of where a model runs.", "pr": 258 },
+        { "kind": "fixed", "text": "Copy buttons on code blocks work everywhere, including live thinking and document pages.", "pr": 252 }
+      ]
+    },
+    {
       "version": "0.2.17",
       "date": "2026-11-05",
       "title": "The Node security fix, smoother YOLO builds, and chat status colours",
