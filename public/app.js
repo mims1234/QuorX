@@ -2557,7 +2557,8 @@ function addMedia(msgEl, c, p, info, at = null) {
   placeMedia(msgEl, item, at);
 }
 // A Markdown card reads its file when it comes into view: up to MM_MD_BYTES, rendered or raw.
-const mmSeen = 'IntersectionObserver' in window ? new IntersectionObserver((list) => { for (const x of list) if (x.isIntersecting) { mmSeen.unobserve(x.target); x.target._load?.(); } }, { rootMargin: '400px' }) : null;
+// Cards waiting to come into view carry .mm-wait, so a chat leaving the screen can stop watching them (releasePane).
+const mmSeen = 'IntersectionObserver' in window ? new IntersectionObserver((list) => { for (const x of list) if (x.isIntersecting) { mmSeen.unobserve(x.target); x.target.classList.remove('mm-wait'); x.target._load?.(); } }, { rootMargin: '400px' }) : null;
 function loadMdCard(item) {
   const body = $('.mm-md-body', item);
   const draw = () => {
@@ -2581,7 +2582,7 @@ function loadMdCard(item) {
     } catch (e) { body.innerHTML = `<div class="fx-empty">Could not read it: ${esc(e.message)}</div>`; }
   };
   draw();
-  if (mmSeen) mmSeen.observe(item); else item._load();
+  if (mmSeen) { item.classList.add('mm-wait'); mmSeen.observe(item); } else item._load();
 }
 // The files a message brings with it: pictures and videos a reply made, files its tools wrote, and your attachments.
 // (Paths named in the text come through checkPaths.)
@@ -3418,7 +3419,7 @@ function edgeGlow(box) {
     clearTimeout(rest);
     rest = setTimeout(() => { pull = { t: 0, b: 0 }; show(); }, 160);
   }, { passive: true });
-  if ('ResizeObserver' in window) new ResizeObserver(ends).observe(box);
+  if ('ResizeObserver' in window) { box._edgeRO = new ResizeObserver(ends); box._edgeRO.observe(box); } // stopped in releasePane
   ends();
 }
 // ---------- the chat panes ----------
@@ -3534,8 +3535,16 @@ function drawMessages(c, msgs, root) {
   io.observe(more);
   return io;
 }
+// Everything that watches the chat's page is stopped: an observer still watching one element of it keeps the whole
+// chat's page alive after it left the screen (8 long chats left ~660,000 elements in memory with 5,000 on screen).
 function releasePane(c) {
   for (const o of c.watchers || []) o.disconnect();
+  const root = c.el?.root;
+  if (root) {
+    for (const el of root.querySelectorAll('.msgs, .composer-box')) { el._edgeRO?.disconnect(); el._fitRO?.disconnect(); el._fitRO = null; }
+    if (mmSeen) for (const el of root.querySelectorAll('.mm-wait')) mmSeen.unobserve(el);
+    for (const el of root.querySelectorAll('[data-wired]')) el._ac?.abort();
+  }
   for (const m of c.agent.messages) { if (m.el) traceSeen?.unobserve(m.el); m.el = null; }
   c.watchers = null; c.toEnd = null; c.el = null; c.suggest = null;
 }
@@ -3952,18 +3961,21 @@ function wireQuickSettings(c, quick, chips, followSlot) {
   place(); tray();
   if (quick.dataset.wired) return;
   quick.dataset.wired = '1';
-  // One pair of listeners per message box; they read the chat it shows now (the Home box changes chats).
+  // One pair of listeners per message box; they read the chat it shows now (the Home box changes chats). Removed with
+  // the box (releasePane aborts quick._ac): left on the page, they kept every chat ever shown in memory, page and all.
+  quick._ac = new AbortController();
+  const signal = quick._ac.signal;
   document.addEventListener('pointerdown', (e) => {
     const ch = quick._c, t = e.target;
     if (!ch || !quick.isConnected || t.closest?.('dialog, .oh-tip, .chat-set, .allow-pop')) return;
     if (ch._cq != null && !quick.contains(t) && !t.closest?.('.cq-chip')) { ch._cq = undefined; renderComposerBar(ch); }
     else if (ch._tray && !followSlot.contains(t)) { ch._tray = false; renderComposerBar(ch); }
-  }, true);
+  }, { capture: true, signal });
   document.addEventListener('keydown', (e) => {
     const ch = quick._c;
     if (e.key !== 'Escape' || !ch || !quick.isConnected || document.querySelector('dialog[open]') || (ch._cq == null && !ch._tray)) return;
     e.stopPropagation(); ch._cq = undefined; ch._tray = false; renderComposerBar(ch);
-  }, true);
+  }, { capture: true, signal });
 }
 // The footer row folds one step at a time until it fits (composer.css says what each step hides): measured, not a
 // fixed width, as a long Quorium or model name, or many changed settings, need more room than a short one.
