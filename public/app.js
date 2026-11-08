@@ -4753,6 +4753,9 @@ function timelineItems(m) {
 }
 // Where in the trace the reply's text was finished: its last step that called no tools, if the text on the page is
 // still that step's (no later step started, nothing sent it back). -1 while it is still being written, or none.
+// Why a model call is being retried, in words, from the error code the server sent (server/errors.js).
+const RETRY_WHY = { RATE_LIMITED: 'The provider is rate limiting', PROVIDER_DOWN: 'The provider didn’t answer' };
+const retryWhy = (e) => `${RETRY_WHY[e?.code] || 'The model call failed'}${e?.provider ? ` (${e.provider})` : ''}`;
 function answerIndex(m) {
   const tr = m.trace || [];
   if (!String(m.content || '').trim()) return -1;
@@ -4805,7 +4808,13 @@ function timelineHTML(m) {
       // What the agent said is a message of its own, never folded away.
       if (it.aside) { at = it.doneAt || at; pieces.push({ html: `<div class="tl-text tl-say">${md(it.aside)}</div>`, row: false, pin: true, say: true, at }); }
       if (it.calls.length) { at = atOf(m, it.calls[0].e) || at; const busy = m.live && it.calls.some((x) => x.res == null); row(groupRow(`x${it.step}`, mcpOfTool(it.calls[0].e.name) ? '🧲' : TOOL_NAME[it.calls[0].e.name]?.split(' ')[0] || '🔧', callsLabel(it.calls), it.calls, busy), `x${it.step}`, it.calls, 0, busy); }
-      if (!it.done && m.live && !think && !it.calls.length && !String(m.content || '').trim()) other('<div class="tl-row tl-wait"><span class="tl-spin"></span><span class="tl-label">Working…</span></div>');
+      if (!it.done && m.live && !think && !it.calls.length && !String(m.content || '').trim()) {
+        // Waiting to retry a failed model call: say so, so a long wait doesn't look like a frozen reply.
+        const last = (m.trace || []).at(-1);
+        other(last?.t === 'llm_retry'
+          ? `<div class="tl-row tl-wait"><span class="tl-spin"></span><span class="tl-label">${esc(retryWhy(last))}: trying again in ${secs(last.wait)} (${last.attempt} of ${last.of})</span></div>`
+          : '<div class="tl-row tl-wait"><span class="tl-spin"></span><span class="tl-label">Working…</span></div>');
+      }
       continue;
     }
     if (it.kind === 'group') { const busy = m.live && !it.done && it.calls.some((x) => x.res == null); row(groupRow(it.key, it.icon, it.label, it.calls, busy), it.key, it.calls, 0, busy); continue; }
@@ -5735,7 +5744,7 @@ function traceRows(m) {
     else if (e.t === 'file') row(e.at, `${e.deleted ? '🗑' : '📝'} ${esc(e.path)}${e.deleted ? ' · moved to trash' : e.bytes != null ? ` · ${e.bytes} bytes` : ' · edited'}`, 'file');
     else if (e.t === 'compacted') row(e.at, `🗜 Earlier turns summarised to keep the context small<details class="out"><summary>summary</summary><pre>${esc(e.summary)}</pre></details>`, 'note');
     else if (e.t === 'note') row(e.at, `<span class="${e.level === 'info' ? '' : 'warn'}">${e.level === 'info' ? 'ℹ' : '⚠'} ${esc(e.msg)}</span>`, e.level === 'info' ? 'note' : 'warn');
-    else if (e.t === 'llm_retry') row(e.at, `<span class="warn">↻ The model call failed (${esc(e.msg)}); retry ${e.attempt} of ${e.of} after ${secs(e.wait)}</span>`, 'warn');
+    else if (e.t === 'llm_retry') row(e.at, `<span class="warn">↻ ${esc(retryWhy(e))} (${esc(e.msg)}); retry ${e.attempt} of ${e.of} after ${secs(e.wait)}${e.asked ? ', as the provider asked' : ''}</span>`, 'warn');
     // An OpenCode call that failed (or a source skipped for the rest of the reply): OpenRouter answered.
     else if (e.t === 'source_fallback') row(e.at, `<span class="warn">⤵ ${e.kind === 'skipped' ? `${esc(SOURCE_NAME[e.source] || e.source)} skipped` : esc(e.why)} → <code>${esc(e.to)}</code> on OpenRouter${e.role && e.role !== 'writer' ? ` (${esc(e.role)})` : ''}</span>${e.kind === 'skipped' ? `<div class="sub">${esc(e.why)}</div>` : e.rest ? '<div class="sub">The rest of this reply stays on OpenRouter. Every chat skips that model for a while (Test the connection tries it again at once).</div>' : ''}${e.aside ? `<div class="aside">💬 ${esc(e.aside)}</div>` : ''}`, 'warn');
     else if (e.t === 'parallel') row(e.at, `⇉ ${e.names.length} look-ups at the same time: ${esc(e.names.join(', '))}`, 'tool');

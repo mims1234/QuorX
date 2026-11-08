@@ -172,3 +172,12 @@ export function withCacheMarks(messages, model) {
 // Whether a failed model call is worth sending again after a wait: rate limits, outages and unknown failures are;
 // refused requests, spent credit and an overlong conversation are not (errors.js decides which is which).
 export const retryable = (e) => retryableCode(errorCode(e));
+
+// How long to wait before retry number `attempt` (0 = the first): what the provider asked for in Retry-After, up to a
+// minute, else 1 s, 2 s, 4 s… Both get a little jitter, so chats that failed together don't all retry at the same moment.
+export const RETRY_WAIT_CAP = 60000;
+export function retryWait(e, attempt = 0, rand = Math.random) {
+  const asked = Number(e?.retryAfter) || 0;
+  if (asked > 0) return Math.min(RETRY_WAIT_CAP, Math.round(asked * 1000 + rand() * 500));
+  return Math.min(RETRY_WAIT_CAP, Math.round(1000 * 2 ** attempt * (0.8 + rand() * 0.4)));
+}
