@@ -548,6 +548,17 @@ async function openWithReadout() {
     return 'The readout shows in the bottom-left corner';
   });
 }
+// Minimises the test copy's window or brings it back ('minimized' | 'normal'). Electron's DevTools has no window
+// commands, so Windows does it, on the window of the process this test started and no other. Throws when the page
+// doesn't see it, so a step never measures a window that wasn't really minimised.
+async function windowState(state) {
+  if (!WIN || !appProc) throw new Error('minimising is only done on Windows, on the test copy');
+  const ps = `$sig = '[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);'; Add-Type -MemberDefinition $sig -Name W -Namespace QxTest; `
+    + `$p = Get-Process -Id ${Number(appProc.pid)} -ErrorAction Stop; if ($p.MainWindowHandle -eq 0) { exit 2 }; [QxTest.W]::ShowWindow($p.MainWindowHandle, ${state === 'minimized' ? 6 : 9}) | Out-Null`;
+  const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], { windowsHide: true, encoding: 'utf8' });
+  if (r.status !== 0) throw new Error(`could not ${state === 'minimized' ? 'minimise' : 'restore'} the test window (${r.status}): ${String(r.stderr).trim().slice(0, 200)}`);
+  await waitFor(state === 'minimized' ? 'document.hidden' : '!document.hidden', 5000, `the page to see the window ${state === 'minimized' ? 'minimised' : 'back'}`);
+}
 // Runs a script in one of the desktop app's own browser tabs, or a preview frame (found by its address), through DevTools.
 async function inTab(urlPart, expr, type = 'page') {
   const target = (await (await fetch(`http://127.0.0.1:${CDP}/json/list`)).json()).find((t) => t.type === type && t.url.includes(urlPart));
@@ -636,6 +647,15 @@ async function tabsScenario() {
     if (!(Math.abs((y ?? 0) - 3000) < 50)) throw new Error(`the page came back at ${y} px, not 3000`);
     return `back at ${y} px in ${Date.now() - t0} ms · ${line(now)}`;
   });
+  await step('Minimise the window and bring it back: the page shows again', async () => {
+    await windowState('minimized');
+    await sleep(3000);
+    await windowState('normal');
+    let shown = false;
+    for (let i = 0; i < 20 && !shown; i++) { await sleep(250); shown = await js(`const s = await window.qxPerf.sample(); return !!s.shell?.tabs.some((t) => t.shown && !t.asleep);`); }
+    if (!shown) throw new Error('no tab on screen after the window came back');
+    return 'the long page is on screen again';
+  });
 }
 
 // A heavier 3D page, closer to a real scene: a full-window shader marching rays through spheres every frame.
@@ -708,10 +728,8 @@ async function previewScenario() {
     return measure('other chat');
   });
   await step('Window minimised', async () => {
-    await send('Browser.getWindowForTarget').then(({ windowId }) => send('Browser.setWindowBounds', { windowId, bounds: { windowState: 'minimized' } })).catch(() => {});
-    const r = await measure('minimised');
-    await send('Browser.getWindowForTarget').then(({ windowId }) => send('Browser.setWindowBounds', { windowId, bounds: { windowState: 'normal' } })).catch(() => {});
-    return r;
+    await windowState('minimized');
+    try { return `${await measure('minimised')} · page hidden: ${await js('return document.hidden')}`; } finally { await windowState('normal'); }
   });
   fs.writeFileSync(path.join(OUT, 'preview.json'), JSON.stringify({ at: STAMP, rows }, null, 2));
 }

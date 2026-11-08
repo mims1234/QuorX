@@ -90,7 +90,7 @@ function draw(s) {
   ].filter(Boolean);
   box.querySelector('.qp-rows').innerHTML = rows.map(([k, v, tone]) => `<div class="qp-row ${tone || ''}"><span>${k}</span><b>${v}</b></div>`).join('');
 }
-async function refresh() { try { draw(await sample()); } catch { /* next tick */ } }
+async function refresh() { if (document.hidden) return; try { draw(await sample()); } catch { /* next tick */ } }
 /** Shows or hides the box; while hidden nothing runs. */
 export function showReadout(on) {
   if (!on) { if (tick) realClear(tick); tick = null; box?.remove(); box = null; return; }
