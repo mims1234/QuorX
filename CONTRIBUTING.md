@@ -49,6 +49,20 @@ message, so make it say what changed.
 
 Please don't edit `news/updates.json` or the version numbers: they're written when a release is made.
 
+## Keep new work off Electron
+
+The desktop app is a shell around QuorX's page and server, and it should stay swappable. So:
+
+- **New features go through the server or the desktop bridge,** never straight into Electron. The server (`server.js`,
+  `server/`) doesn't use Electron at all; keep it that way.
+- **The page reaches the desktop app only through `window.ohDesktop`,** and checks `window.ohDesktop?.available` first,
+  so QuorX still works opened in a normal browser.
+- **A new bridge call or event goes into [docs/desktop-bridge.md](docs/desktop-bridge.md) in the same pull request.**
+  `npm test` fails until it does (`scripts/test-bridge.mjs`).
+- **Take most care with real browser tabs and window tricks** (placing views over the page, the agent's tabs, the
+  small watch window). They are the parts most tied to Electron; keep their logic in small, plain modules like
+  `desktop/tab-sleep.js` where you can.
+
 ## Pack test reports
 
 Platform packs teach QuorX a toolchain (Android, .NET, Go, Rust and more). If you have a toolchain installed, you can
