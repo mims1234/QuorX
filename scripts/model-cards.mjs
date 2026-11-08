@@ -29,7 +29,7 @@ const enumOf = (p) => (p?.type === 'enum' ? p.values.filter((v) => !/^(auto|matc
 
 /** The catalogue facts a card keeps, per kind. */
 export function limitsFrom(kind, m) {
-  if (kind === 'chat' || kind === 'decision') return { context: m.ctx || null, max_output: m.maxOut || null, tools: !!m.tools, images_in: (m.in || []).includes('image'), reasoning: !!m.reasoning, price_per_m: m.price.map((x) => +x.toFixed(4)) };
+  if (kind === 'chat' || kind === 'decision') return { context: m.ctx || null, max_output: m.maxOut || null, tools: !!m.tools, images_in: (m.in || []).includes('image'), reasoning: !!m.reasoning, ...(m.think?.mandatory ? { reasoning_always_on: true } : {}), ...(m.think?.efforts?.length ? { reasoning_levels: m.think.efforts } : {}), price_per_m: m.price.map((x) => +x.toFixed(4)) };
   if (kind === 'video') return { durations: [...(m.durations || [])].sort((a, b) => a - b), resolutions: m.resolutions || [], aspects: m.aspects || [], frames: m.frames || [], audio: !!m.audio, skus: m.skus || {} };
   if (kind === 'image') return { aspects: enumOf(m.params?.aspect_ratio) || [], resolutions: enumOf(m.params?.resolution) || [], images_in: (m.in || []).includes('image'), per_image: m.perImage, price_per_m_image_tokens: +(m.price?.[1] || 0).toFixed(4) };
   if (kind === 'speech') return { voices: (m.voices || []).length, voice_examples: (m.voices || []).slice(0, 4), price_per_m_chars: +(m.price?.[0] || 0).toFixed(4) };

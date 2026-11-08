@@ -2,13 +2,21 @@
   "id": "anthropic/claude-opus-5.5",
   "name": "Anthropic: Claude Opus 5.5",
   "kind": "chat",
-  "refreshed": "2026-10-20",
+  "refreshed": "2026-11-08",
   "limits": {
     "context": 1000000,
     "max_output": 128000,
     "tools": true,
     "images_in": true,
     "reasoning": true,
+    "reasoning_always_on": true,
+    "reasoning_levels": [
+      "max",
+      "xhigh",
+      "high",
+      "medium",
+      "low"
+    ],
     "price_per_m": [
       4,
       20

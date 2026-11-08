@@ -2,13 +2,21 @@
   "id": "anthropic/claude-haiku-5.5",
   "name": "Anthropic: Claude Haiku 5.5",
   "kind": "chat",
-  "refreshed": "2026-10-20",
+  "refreshed": "2026-11-08",
   "limits": {
     "context": 1000000,
     "max_output": 128000,
     "tools": true,
     "images_in": true,
     "reasoning": true,
+    "reasoning_levels": [
+      "max",
+      "xhigh",
+      "high",
+      "medium",
+      "low",
+      "none"
+    ],
     "price_per_m": [
       0.1,
       0.5
