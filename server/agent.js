@@ -64,7 +64,7 @@ import { setLiveArtifact, markdownHtml } from './artifacts.js';
 import { listDocs, docText, readDoc, searchDocs, DOC_DEFAULTS } from './docs.js';
 import { errorCode } from './errors.js';
 import { repairArgs, checkArgs } from './toolargs.js';
-import { groupCalls, numberedWindow, untrusted, trimTranscript, trimPageViews, compactTranscript, transcriptChars, withCacheMarks, retryable, retryWait, LOOK_TOOLS } from './loop.js';
+import { groupCalls, numberedWindow, untrusted, trimTranscript, trimPageViews, compactTranscript, transcriptChars, withCacheMarks, retryable, retryWait, pairToolCalls, LOOK_TOOLS } from './loop.js';
 import { checkFile, checkHtml, CHECKED, lintFile, lintHtml, LINTED } from './checks.js';
 import { checkSettings, askDeciders, saveShot, logCheck, votesFor, MAIN_CONTROL_JS, KEY_PAGE_JS, KEY_TRIES, CHECK_DEFAULTS, LOOK_DEFAULTS } from './harness-checks.js';
 import { saveCheckpoint, loadCheckpoint, dropCheckpoint, checkpointWritten, recordRun } from './runs.js';
@@ -1675,6 +1675,8 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (transcriptChars(messages) > trimAt * 2 && compactTranscript(messages, firstOwn, progressSummary(), 10)) emit({ t: 'compacted_run', step, size: transcriptChars(messages), at: at() });
     const forceDecide = step === 0 && setup.decide === 'force-first';
     let toolChoice = last ? 'none' : forceDecide ? { type: 'function', function: { name: 'decide' } } : 'auto';
+    // Every tool call goes out with its result (a resumed checkpoint or a trimmed transcript can lack one).
+    { const p = pairToolCalls(messages); if (p.added || p.dropped) emit({ t: 'note', level: 'info', msg: `Paired tool calls and results before the model call (${p.added} not-run result${p.added === 1 ? '' : 's'} added, ${p.dropped} stray dropped).`, at: at() }); }
     const body = { model: setup.model, messages, tools, tool_choice: toolChoice, max_tokens: maxOut, ...samplingFor(setup.model, modelInfo, setup.creativity, reasonNow), ...reasoningFor(reasonNow, maxOut, S.thinkShare), ...(run.routing === 'blocked' ? { provider: { ignore: blockedSlugs } } : run.routing ? routingFor(S, setup.model, blockedSlugs) : {}) };
     emit({ t: 'llm_start', step, model: setup.model, forced: forceDecide, at: at() });
     run.stepNow = step;
@@ -1881,14 +1883,14 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     let ran = 0;
     for (const group of groupCalls(r.toolCalls, S.parallel !== false)) {
       // Stop takes effect before the next call, not only at the next model call (one answer can hold many calls).
-      if (signal.aborted) throw new Error('Stopped.');
+      if (signal.aborted) { pairToolCalls(messages, 'Not run: the user stopped the reply before this call.'); throw new Error('Stopped.'); }
       if (ran && pastAllowance()) break;
       if (group.length > 1) emit({ t: 'parallel', step, names: group.map((c) => c.function.name), at: at() });
       const results = await Promise.all(group.map((tc) => callTool(tc, step, r.finishReason)));
       group.forEach((tc, i) => messages.push({ role: 'tool', tool_call_id: tc.id, content: results[i] }));
       ran += group.length;
     }
-    if (ran < r.toolCalls.length) { run.stop = 'budget'; run.budgetStop = 'hard'; run.notRun = r.toolCalls.length - ran; break; }
+    if (ran < r.toolCalls.length) { pairToolCalls(messages, 'Not run: the reply’s budget ran out before this call.'); run.stop = 'budget'; run.budgetStop = 'hard'; run.notRun = r.toolCalls.length - ran; break; }
     // Signals for the model ride on the newest tool result, so they cost no extra turn.
     // Browsing the user's own tab is the job itself ("read my feed"), not looking around before a change.
     const browsing = run.lentUsed; run.lentUsed = false;

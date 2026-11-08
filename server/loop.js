@@ -143,6 +143,35 @@ export function trimPageViews(messages, { keep = 2, batch = 6, over = 1500, done
 }
 
 /**
+ * Makes every tool call in a transcript have its result, in place. A call left without one (the reply was stopped or
+ * ran out of budget between calls, or a checkpoint was taken then) gets a short "not run" result right after the
+ * calls it belongs to; a result whose call isn't there (trimmed away) is dropped. Most providers refuse a request
+ * where the two don't pair up. Returns how many results it added and dropped.
+ */
+export function pairToolCalls(messages, why = 'Not run: the reply stopped before this call.') {
+  let added = 0, dropped = 0;
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i];
+    if (m?.role === 'tool') {
+      // A result must follow, possibly after other results, the assistant message that made its call.
+      let j = i - 1;
+      while (j >= 0 && messages[j]?.role === 'tool') j--;
+      const owner = messages[j];
+      if (!(owner?.role === 'assistant' && (owner.tool_calls || []).some((c) => c?.id === m.tool_call_id))) { messages.splice(i, 1); i--; dropped++; }
+      continue;
+    }
+    if (m?.role !== 'assistant' || !m.tool_calls?.length) continue;
+    let end = i + 1;
+    const have = new Set();
+    while (end < messages.length && messages[end]?.role === 'tool') have.add(messages[end++].tool_call_id);
+    const missing = m.tool_calls.filter((c) => c?.id && !have.has(c.id));
+    if (missing.length) { messages.splice(end, 0, ...missing.map((c) => ({ role: 'tool', tool_call_id: c.id, content: why }))); added += missing.length; }
+    i = end + missing.length - 1;
+  }
+  return { added, dropped };
+}
+
+/**
  * When trimming is not enough: keep the system prompt and everything up to this reply's request,
  * replace the middle of the reply with a summary the harness writes from its journal, and keep the
  * last `keep` messages (starting on an assistant turn, so no tool result loses its call).
