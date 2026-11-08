@@ -3313,7 +3313,7 @@ function hideTip() {
 // A tip never outlives its target: a click hides it, and so does the target being removed or hidden under the pointer
 // (a window closing, a list redrawn), which sends no pointer event of its own.
 document.addEventListener('pointerdown', () => hideTip(), true);
-setInterval(() => { const t = TIP.target; if (TIP.el?.classList.contains('on') && !TIP.el.classList.contains('flash') && (!t || !t.isConnected || !t.getClientRects().length)) hideTip(); }, 300); // a flash ("Copied") goes by itself
+setInterval(() => { const t = TIP.target; if (document.hidden) return; if (TIP.el?.classList.contains('on') && !TIP.el.classList.contains('flash') && (!t || !t.isConnected || !t.getClientRects().length)) hideTip(); }, 300); // a flash ("Copied") goes by itself
 document.addEventListener('pointerover', (e) => {
   if (e.pointerType === 'touch') return;
   // A link's tip in the terminal stays while the pointer moves along the link (the terminal's rows are many elements).
@@ -5857,6 +5857,7 @@ function waitHTML(card) {
 }
 // One clock for every countdown on the page; "Wait for me", or starting to type in the card, stops it.
 setInterval(() => {
+  if (document.hidden) return; // nobody to see it; it catches up when the window shows again
   for (const el of document.querySelectorAll('.aw[data-until]')) {
     const ms = Number(el.dataset.until) - Date.now(), n = $('.aw-n', el), bar = $('.aw-bar i', el);
     if (n) n.textContent = String(Math.max(0, Math.ceil(ms / 1000)));
@@ -7472,6 +7473,7 @@ function countdown(at) {
 // Every second: each countdown on the page ([data-cd] = the time it counts to). One that reaches 0 asks the server
 // a few seconds later, so the run that just started shows up as running without waiting for the 30 s poll.
 setInterval(() => {
+  if (document.hidden) return; // caught up when the window shows again (the 30 s poll still finds new runs meanwhile)
   let due = false;
   for (const el of document.querySelectorAll('[data-cd]')) {
     const t = countdown(Number(el.dataset.cd));
@@ -12167,7 +12169,9 @@ function deskHit(ph, v) {
   return false;
 }
 if (DESK) {
-  setInterval(() => deskPlace(false), 150);
+  // Not while the window is minimised or covered: the real tabs go with it, and placing them would only send messages.
+  setInterval(() => { if (!document.hidden) deskPlace(false); }, 150);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) deskPlace(true); });
   // A menu opens on a click or a key: check right after it, not on the next tick, so it isn't drawn under the tab meanwhile.
   let deskSoon = 0;
   const deskCheckSoon = () => { if (!deskAll().length || deskSoon) return; deskSoon = requestAnimationFrame(() => { deskSoon = 0; deskPlace(false); }); };
