@@ -2,6 +2,7 @@
 // Pure helpers for the agent loop: reading files in windows, grouping look-ups to run side by side,
 // trimming a long transcript, prompt-cache marks and labelling outside text. Kept free of I/O so the
 // tests in scripts/test-loop.mjs can exercise them directly.
+import { errorCode, retryableCode } from './errors.js';
 
 // Tools that only read: neighbouring calls of these run together (writes always run alone, in order,
 // so a read never races the write before it).
@@ -168,4 +169,6 @@ export function withCacheMarks(messages, model) {
 
 // ---------- errors worth retrying ----------
 // Bad requests stay bad; everything else (network, rate limits, provider hiccups, cut streams) may pass.
-export const retryable = (e) => !(e?.status >= 400 && e.status < 500 && e.status !== 408 && e.status !== 429) && !/context length|maximum context|too many tokens|invalid|not a valid model|no endpoints/i.test(e?.message || '');
+// Whether a failed model call is worth sending again after a wait: rate limits, outages and unknown failures are;
+// refused requests, spent credit and an overlong conversation are not (errors.js decides which is which).
+export const retryable = (e) => retryableCode(errorCode(e));

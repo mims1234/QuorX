@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { groupCalls, numberedWindow, untrusted, looksLikeInstruction, trimTranscript, trimPageViews, compactTranscript, transcriptChars, withCacheMarks, retryable } from '../server/loop.js';
+import { errorCode, retryableCode, withCode, CODES } from '../server/errors.js';
 import { checkFile, checkHtml, lintHtml, lintCss, lintFile, CHECK_TIMEOUTS } from '../server/checks.js';
 import { listDesignSystems, readDesignSystem, tokenColors, projectDesign, applyDesignSystem, saveProjectDesign, saveCustomSystem, deleteCustomSystem, designSpec, cleanSpec, contrastChecks } from '../server/design.js';
 
@@ -128,6 +129,48 @@ test('retries: server errors and rate limits yes, bad requests no', () => {
   assert.ok(retryable(new Error('fetch failed')));
   assert.ok(!retryable(Object.assign(new Error('bad'), { status: 400 })));
   assert.ok(!retryable(new Error('This model maximum context length is 128000 tokens')));
+});
+
+test('error codes: real provider wordings map to one code each', () => {
+  const E = (message, more = {}) => Object.assign(new Error(message), more);
+  const cases = [
+    [E("This endpoint's maximum context length is 131072 tokens. However, you requested about 140211 tokens.", { status: 400 }), 'CONTEXT_OVERFLOW'],
+    [E('prompt is too long: 210433 tokens > 200000 maximum', { status: 400 }), 'CONTEXT_OVERFLOW'],
+    [E('Input is too long for requested model.', { status: 400 }), 'CONTEXT_OVERFLOW'],
+    [E('Rate limit exceeded: limit_rpm/deepseek', { status: 429 }), 'RATE_LIMITED'],
+    [E('Insufficient credits. Add more using https://openrouter.ai/settings/credits', { status: 402 }), 'SPEND_LIMIT'],
+    [E('Key limit exceeded (total limit)', { status: 403 }), 'SPEND_LIMIT'],
+    [E('No endpoints found matching your data policy (Zero data retention)', { status: 404 }), 'NO_PROVIDER'],
+    [E('No endpoints found that support all the parameters (require_parameters)', { status: 404 }), 'NO_PROVIDER'],
+    [E('Reasoning is mandatory for this endpoint and cannot be disabled.', { status: 400 }), 'REASONING_REQUIRED'],
+    [E('messages.3.content.0: Invalid `signature` in `thinking` block', { status: 400 }), 'REASONING_REFUSED'],
+    [E('Provider returned error', { status: 502 }), 'PROVIDER_DOWN'],
+    [E('fetch failed', { cause: { code: 'ECONNRESET' } }), 'PROVIDER_DOWN'],
+    [E('No auth credentials found', { status: 401 }), 'AUTH'],
+    [E('deepseek/nope is not a valid model ID', { status: 400 }), 'BAD_REQUEST'],
+    [E('The model `x/y` does not exist', { status: 404 }), 'MODEL_UNKNOWN'],
+    [Object.assign(new Error('This operation was aborted'), { name: 'AbortError' }), 'ABORTED'],
+    [E('something odd'), 'UNKNOWN'],
+  ];
+  for (const [e, code] of cases) assert.equal(errorCode(e), code, e.message);
+  assert.deepEqual(cases.filter(([e]) => retryableCode(errorCode(e))).map(([, c]) => c), ['RATE_LIMITED', 'PROVIDER_DOWN', 'PROVIDER_DOWN', 'UNKNOWN']);
+});
+
+test('error codes: a code an error carries wins, and Node codes are left alone', () => {
+  assert.equal(errorCode(Object.assign(new Error('x'), { qxCode: 'INVALID_ARGS' })), 'INVALID_ARGS');
+  assert.equal(errorCode(Object.assign(new Error('x'), { code: 'TOOL_TIMEOUT' })), 'TOOL_TIMEOUT');
+  const net = Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' });
+  assert.equal(errorCode(net), 'PROVIDER_DOWN');
+  withCode(net);
+  assert.equal(net.code, 'ECONNRESET');
+  assert.equal(net.qxCode, 'PROVIDER_DOWN');
+  assert.ok(Object.keys(CODES).every((k) => /^[A-Z_]+$/.test(k) && CODES[k]));
+});
+
+test('error codes: the agent loop no longer matches provider wording itself', () => {
+  const loopSrc = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'server', 'agent.js'), 'utf8');
+  assert.doesNotMatch(loopSrc, /no endpoints\|no allowed providers/);
+  assert.doesNotMatch(loopSrc, /\/limit\|credit\|budget\|guardrail/);
 });
 
 test('file checks use real parsers', async () => {

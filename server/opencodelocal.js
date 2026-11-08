@@ -12,6 +12,7 @@ import net from 'node:net';
 import crypto from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { HOME } from './openrouter.js';
+import { SETTING_REFUSAL } from './errors.js';
 import { toolPrompt, renderTranscript, parseToolCalls, textFilter, callKey, notRun } from './textcalls.js';
 
 export const LOCAL_ID = 'opencode-local';
@@ -137,9 +138,8 @@ export async function ensureLocalServer({ start = spawn, find = findOnPath, read
 
 const call = (s, method, p, body, signal) => fetch(s.base + p, { method, headers: { ...(s.auth ? { Authorization: s.auth } : {}), 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}), signal });
 
-// A refusal a setting in the user's account there causes ("This Go model requires Global regions. Select Global in your
-// workspace's Privacy settings"): theirs to change, never an outage.
-export const SETTING_REFUSAL = /requires? [\w-]+ regions?|(privacy|data[- ]policy|region) settings?|not available in your (region|country)|select [\w-]+ in your (workspace|account|organi[sz]ation)/i;
+// A refusal a setting in the user's account causes: defined in errors.js, which every source shares.
+export { SETTING_REFUSAL };
 export const FREE_OWN_APP = 'OpenCode keeps its free models for its own app: they don’t answer calls from QuorX. Pick a paid or plan model, or connect a provider in OpenCode.';
 /** Every model of every provider connected in OpenCode, as catalogue entries (opencode-local/<provider>/<model>). */
 export async function localModels({ server } = {}) {

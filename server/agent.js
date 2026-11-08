@@ -62,6 +62,7 @@ import { adoptAgentTab, releaseAgentTab, borrowTab, givenTab, openChromeTab, cha
 import { extReady } from './extlink.js';
 import { setLiveArtifact, markdownHtml } from './artifacts.js';
 import { listDocs, docText, readDoc, searchDocs, DOC_DEFAULTS } from './docs.js';
+import { errorCode } from './errors.js';
 import { groupCalls, numberedWindow, untrusted, trimTranscript, trimPageViews, compactTranscript, transcriptChars, withCacheMarks, retryable, LOOK_TOOLS } from './loop.js';
 import { checkFile, checkHtml, CHECKED, lintFile, lintHtml, LINTED } from './checks.js';
 import { checkSettings, askDeciders, saveShot, logCheck, votesFor, MAIN_CONTROL_JS, KEY_PAGE_JS, KEY_TRIES, CHECK_DEFAULTS, LOOK_DEFAULTS } from './harness-checks.js';
@@ -1692,7 +1693,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       if (signal.aborted) throw e;
       // Nothing done yet: report the error as before. After real work, keep it and say what happened.
       if (run.steps === 1 && !resumed) throw e;
-      run.stop = 'model_error'; run.modelError = clip(e.message, 300);
+      run.stop = 'model_error'; run.modelError = clip(e.message, 300); run.modelCode = errorCode(e);
       reply += `${reply ? '\n\n' : ''}⚠ The model stopped responding (${clip(e.message, 160)}). Everything done so far is kept; send a message to carry on.`;
       emit({ t: 'note', level: 'warn', msg: `${short(setup.model)} kept failing: ${clip(e.message, 160)}. The reply ends here; the work so far is kept.`, at: at() });
       break;
@@ -1972,7 +1973,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   }
   if (filesId !== runId) stats.undoId = filesId;
   stats.ms = at();
-  Object.assign(stats, { steps: run.steps, stop: run.stop, ...(run.loopEnd ? { loopEnd: true } : {}), ...(run.modelError ? { modelError: run.modelError } : {}), ...(req.scheduledBy ? { scheduled: true } : {}), budgetStop: run.budgetStop, retries: run.retries, trimmed: run.trimmed, tools: run.tools, questions: run.questions, resumed: !!resumed, looksFirst: run.looksFirst || 0, firstWrite: run.firstWrite ?? null });
+  Object.assign(stats, { steps: run.steps, stop: run.stop, ...(run.loopEnd ? { loopEnd: true } : {}), ...(run.modelError ? { modelError: run.modelError, modelCode: run.modelCode } : {}), ...(req.scheduledBy ? { scheduled: true } : {}), budgetStop: run.budgetStop, retries: run.retries, trimmed: run.trimmed, tools: run.tools, questions: run.questions, resumed: !!resumed, looksFirst: run.looksFirst || 0, firstWrite: run.firstWrite ?? null });
   // The next reply sees what this one did and how its checks ended (the page adds this to history).
   const did = journal.length ? `What I did: ${clip(journal.join('; '), 900)}.` : '';
   const checkNote = stats.verify ? (stats.verify.ok ? 'Checks passed.' : `Checks still found ${stats.verify.problems.length} problem(s): ${clip(stats.verify.problems.join('; '), 300)}.`) : '';
@@ -2090,7 +2091,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       try { r = await streamModel(body, sig, onText, onThink); }
       catch (e) {
         // The routing filters can leave a fallback model with no provider: it goes with OpenRouter's default routing.
-        if (fell && body.provider && !sig.aborted && /no endpoints|no allowed providers|require_parameters|zdr|data policy/i.test(e?.message || '')) {
+        if (fell && body.provider && !sig.aborted && errorCode(e) === 'NO_PROVIDER') {
           const { provider: _p, models: _m, ...rest } = body;
           body = rest;
         } else if (unmarked && e?.status === 400 && !sig.aborted) {
@@ -2232,7 +2233,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       catch (e) {
         if (signal.aborted) throw e;
         // The provider refused the reasoning passed back: strip it from this reply and carry on without it.
-        if (e.status === 400 && run.passReasoning !== false && body.messages.some((m) => m.reasoning_details) && (/reasoning|signature|thinking/i.test(e.message) || !run.cacheMarks)) {
+        if (e.status === 400 && run.passReasoning !== false && body.messages.some((m) => m.reasoning_details) && (errorCode(e) === 'REASONING_REFUSED' || !run.cacheMarks)) {
           run.passReasoning = false; attempt--;
           for (const m of body.messages) delete m.reasoning_details;
           emit({ t: 'note', level: 'warn', msg: `The provider refused the reasoning passed back between steps (${clip(e.message, 100)}); continuing without it.`, at: at() });
@@ -2246,7 +2247,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         }
         // No provider matched the routing filters (e.g. none supports every parameter): drop them for this reply.
         // Blocked providers stay blocked as long as another provider is left: the other filters go first.
-        if (body.provider && /no endpoints|no allowed providers|require_parameters|zdr|data policy/i.test(e.message)) {
+        if (body.provider && errorCode(e) === 'NO_PROVIDER') {
           attempt--;
           const { provider, models, ...rest } = body;
           if (run.routing === true && blockedSlugs.length && Object.keys(provider).length > 1) {
@@ -2259,14 +2260,14 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
           continue;
         }
         // The key's own spending limit or credits: stop and say so, never retry or switch models to get round it.
-        if ((e.status === 402 || e.status === 403) && /limit|credit|budget|guardrail|quota|insufficient/i.test(e.message)) {
+        if (errorCode(e) === 'SPEND_LIMIT') {
           e.message = `OpenRouter stopped this call: ${e.message}. The key's spending limit or its credits are used up, so QuorX stopped here instead of retrying. Raise the limit on openrouter.ai, or switch keys in ⚙ Settings → Providers, then send a message to carry on.`;
           throw e;
         }
         if (!retryable(e) || attempt >= tries) throw e;
         run.retries++;
         const wait = 1000 * 2 ** attempt;
-        emit({ t: 'llm_retry', step, attempt: attempt + 1, of: tries, wait, msg: clip(e.message, 160), at: at() });
+        emit({ t: 'llm_retry', step, attempt: attempt + 1, of: tries, wait, code: errorCode(e), msg: clip(e.message, 160), at: at() });
         await sleep(wait, signal);
       }
     }
