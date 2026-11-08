@@ -1,0 +1,244 @@
+{
+ "version": 1,
+ "name": "flash-hello-py",
+ "model": "deepseek/deepseek-v4.1-flash",
+ "recorded": "2026-11-08",
+ "text": "Make hello.py that prints the sum of the numbers in numbers.txt, run it, and tell me the result.",
+ "files": {
+  "numbers.txt": "3\n4\n5"
+ },
+ "calls": [
+  {
+   "request": {
+    "tools": [
+     "list_files",
+     "read_file",
+     "write_file",
+     "append_file",
+     "edit_file",
+     "shell",
+     "job_output",
+     "job_stop",
+     "terminal",
+     "start_server",
+     "stop_server",
+     "preview_site",
+     "search_files",
+     "delete_file",
+     "scaffold",
+     "ask_user",
+     "use_skill",
+     "write_artifact",
+     "read_artifact",
+     "edit_artifact",
+     "decide",
+     "remember",
+     "load_tools"
+    ],
+    "tool_choice": "auto",
+    "roles": [
+     "system",
+     "user"
+    ]
+   },
+   "answer": {
+    "text": "",
+    "toolCalls": [
+     {
+      "id": "chatcmpl-tool-802f05dbd4efae2a",
+      "type": "function",
+      "function": {
+       "name": "read_file",
+       "arguments": "{\"path\": \"numbers.txt\"}"
+      }
+     }
+    ],
+    "finishReason": "tool_calls",
+    "usage": {
+     "cost": 0.0022079079,
+     "prompt_tokens": 7529,
+     "completion_tokens": 39
+    },
+    "ms": 1,
+    "firstMs": 1
+   }
+  },
+  {
+   "request": {
+    "tools": [
+     "list_files",
+     "read_file",
+     "write_file",
+     "append_file",
+     "edit_file",
+     "shell",
+     "job_output",
+     "job_stop",
+     "terminal",
+     "start_server",
+     "stop_server",
+     "preview_site",
+     "search_files",
+     "delete_file",
+     "scaffold",
+     "ask_user",
+     "use_skill",
+     "write_artifact",
+     "read_artifact",
+     "edit_artifact",
+     "decide",
+     "remember",
+     "load_tools"
+    ],
+    "tool_choice": "auto",
+    "roles": [
+     "system",
+     "user",
+     "assistant",
+     "tool"
+    ]
+   },
+   "answer": {
+    "text": "\n\n",
+    "toolCalls": [
+     {
+      "id": "call-a7b8920d-90aa-4d73-a791-fa4e615bb146",
+      "type": "function",
+      "function": {
+       "name": "write_file",
+       "arguments": "{\"path\":\"hello.py\",\"content\":\"\\\"\\\"\\\"Print the sum of the numbers in numbers.txt.\\\"\\\"\\\"\\n\\nfrom pathlib import Path\\n\\nDATA = Path(__file__).with_name(\\\"numbers.txt\\\")\\n\\n\\ndef main() -> None:\\n    total = 0\\n    for line in DATA.read_text(encoding=\\\"utf-8\\\").splitlines():\\n        line = line.strip()\\n        if not line:\\n            continue\\n        total += float(line) if (\\\".\\\" in line or \\\"e\\\" in line.lower()) else int(line)\\n    print(total)\\n\\n\\nif __name__ == \\\"__main__\\\":\\n    main()\\n\"}"
+      }
+     }
+    ],
+    "finishReason": "tool_calls",
+    "usage": {
+     "cost": 0.0010850697,
+     "prompt_tokens": 7601,
+     "completion_tokens": 166
+    },
+    "ms": 1,
+    "firstMs": 1
+   }
+  },
+  {
+   "request": {
+    "tools": [
+     "list_files",
+     "read_file",
+     "write_file",
+     "append_file",
+     "edit_file",
+     "shell",
+     "job_output",
+     "job_stop",
+     "terminal",
+     "start_server",
+     "stop_server",
+     "preview_site",
+     "search_files",
+     "delete_file",
+     "scaffold",
+     "ask_user",
+     "use_skill",
+     "write_artifact",
+     "read_artifact",
+     "edit_artifact",
+     "decide",
+     "remember",
+     "load_tools"
+    ],
+    "tool_choice": "auto",
+    "roles": [
+     "system",
+     "user",
+     "assistant",
+     "tool",
+     "assistant",
+     "tool"
+    ]
+   },
+   "answer": {
+    "text": "",
+    "toolCalls": [
+     {
+      "id": "call_00_rx5h6sbqgbywfgddr1j4qys6",
+      "type": "function",
+      "function": {
+       "name": "shell",
+       "arguments": "{\"command\": \"python hello.py\"}"
+      }
+     }
+    ],
+    "finishReason": "tool_calls",
+    "usage": {
+     "cost": 0.0010622502,
+     "prompt_tokens": 7796,
+     "completion_tokens": 38
+    },
+    "ms": 1,
+    "firstMs": 1
+   }
+  },
+  {
+   "request": {
+    "tools": [
+     "list_files",
+     "read_file",
+     "write_file",
+     "append_file",
+     "edit_file",
+     "shell",
+     "job_output",
+     "job_stop",
+     "terminal",
+     "start_server",
+     "stop_server",
+     "preview_site",
+     "search_files",
+     "delete_file",
+     "scaffold",
+     "ask_user",
+     "use_skill",
+     "write_artifact",
+     "read_artifact",
+     "edit_artifact",
+     "decide",
+     "remember",
+     "load_tools"
+    ],
+    "tool_choice": "auto",
+    "roles": [
+     "system",
+     "user",
+     "assistant",
+     "tool",
+     "assistant",
+     "tool",
+     "assistant",
+     "tool"
+    ]
+   },
+   "answer": {
+    "text": "Done — `hello.py` reads `numbers.txt` (3, 4, 5), sums them, and prints the result.\n\nOutput: **12**",
+    "toolCalls": [],
+    "finishReason": "stop",
+    "usage": {
+     "cost": 0.0001494207,
+     "prompt_tokens": 7898,
+     "completion_tokens": 33
+    },
+    "ms": 1,
+    "firstMs": 1
+   }
+  }
+ ],
+ "outcome": {
+  "tools": [
+   "read_file",
+   "write_file",
+   "shell"
+  ],
+  "stop": "answered",
+  "reply": "Done — `hello.py` reads `numbers.txt` (3, 4, 5), sums them, and prints the result.\n\nOutput: **12**"
+ }
+}
