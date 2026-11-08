@@ -6404,8 +6404,9 @@ async function send(c, text) {
 async function runChat(c, text, ctx, imgs, { resumeOf, docs = [], more = 0, model = '', comments = [] } = {}) {
   const cmts = comments.map(({ selector, tag, text: t, section, rect, url, note, crop }) => ({ selector, tag, text: t, section, rect, url, note, crop: !!crop }));
   const a = c.agent;
-  // After a compaction only the turns since the summary are sent, together with the summary.
-  const history = a.messages.filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.error && (!a.summaryAt || (m.at || 0) >= a.summaryAt)).map((m) => ({ role: m.role, at: m.at, content: m.role === 'assistant' ? `${m.content}${m.note || ''}` : `${m.cmts?.length ? `[pointed at on the page: ${m.cmts.map((x) => `${x.tag} "${x.text}" (${x.selector})${x.note ? `: ${x.note}` : ''}`).join('; ')}] ` : ''}${m.ctx?.length ? `[attached context: ${m.ctx.join(', ')}] ` : ''}${m.docs?.length ? `[attached files: ${m.docs.map((d) => d.name).join(', ')}; read them with read_doc / search_docs] ` : ''}${m.content}` }));
+  // After a compaction only the turns since the summary are sent, together with the summary. A reply the user stopped
+  // goes too, with the text they saw and a note that it stops there, so "go on" or "expand your second point" work.
+  const history = a.messages.filter((m) => (m.role === 'user' || m.role === 'assistant') && (!m.error || (stoppedByYou(m) && String(m.content || '').trim())) && (!a.summaryAt || (m.at || 0) >= a.summaryAt)).map((m) => ({ role: m.role, at: m.at, content: m.role === 'assistant' ? `${m.content}${m.note || ''}${m.error ? '\n\n[The user stopped this reply here.]' : ''}` : `${m.cmts?.length ? `[pointed at on the page: ${m.cmts.map((x) => `${x.tag} "${x.text}" (${x.selector})${x.note ? `: ${x.note}` : ''}`).join('; ')}] ` : ''}${m.ctx?.length ? `[attached context: ${m.ctx.join(', ')}] ` : ''}${m.docs?.length ? `[attached files: ${m.docs.map((d) => d.name).join(', ')}; read them with read_doc / search_docs] ` : ''}${m.content}` }));
   const runId = `r${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
   // Resuming after a restart carries on in the reply that was cut off (its steps so far stay above the new ones);
   // "Keep going" after running out of steps is a reply of its own.
