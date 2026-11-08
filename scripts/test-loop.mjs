@@ -576,3 +576,14 @@ test('context budgets follow the window: small windows trim earlier, big ones ke
   assert.equal(big.tokens, Math.floor(1048576 * 0.8));
   assert.ok(contextBudget(8192, 8000).tokens > 0, 'an output cap as big as the window still leaves a budget');
 });
+
+test('result caps follow the budget, and previews keep the start and the end', async () => {
+  const { resultCap, previewOf, contextBudget } = await import('../server/loop.js');
+  assert.equal(resultCap(null), 40000);
+  assert.equal(resultCap(contextBudget(16000, 2000)), 8000);
+  assert.equal(resultCap(contextBudget(1048576, 64000)), 60000);
+  assert.equal(previewOf('short', 100), null);
+  const p = previewOf('a'.repeat(50) + 'b'.repeat(100) + 'c'.repeat(50), 100);
+  assert.deepEqual([p.head.length, p.tail.length, p.cut, p.total], [75, 20, 105, 200]);
+  assert.ok(p.head.startsWith('a') && p.tail.endsWith('c'));
+});
