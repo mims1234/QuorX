@@ -13,3 +13,4 @@
 
 - [ ] `npm test` passes
 - [ ] Tried in the app (say how):
+- [ ] Touches `desktop/`? New features go through the server or `window.ohDesktop`, and new bridge calls are in `docs/desktop-bridge.md` (see CONTRIBUTING.md)
