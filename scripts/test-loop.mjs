@@ -6,8 +6,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { groupCalls, numberedWindow, untrusted, looksLikeInstruction, trimTranscript, trimPageViews, compactTranscript, transcriptChars, withCacheMarks, retryable } from '../server/loop.js';
-import { errorCode, retryableCode, withCode, CODES } from '../server/errors.js';
+import { groupCalls, numberedWindow, untrusted, looksLikeInstruction, trimTranscript, trimPageViews, compactTranscript, transcriptChars, withCacheMarks, retryable, retryWait, RETRY_WAIT_CAP } from '../server/loop.js';
+import { errorCode, retryableCode, withCode, CODES, retryAfterSecs } from '../server/errors.js';
 import { checkFile, checkHtml, lintHtml, lintCss, lintFile, CHECK_TIMEOUTS } from '../server/checks.js';
 import { listDesignSystems, readDesignSystem, tokenColors, projectDesign, applyDesignSystem, saveProjectDesign, saveCustomSystem, deleteCustomSystem, designSpec, cleanSpec, contrastChecks } from '../server/design.js';
 
@@ -171,6 +171,18 @@ test('error codes: the agent loop no longer matches provider wording itself', ()
   const loopSrc = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'server', 'agent.js'), 'utf8');
   assert.doesNotMatch(loopSrc, /no endpoints\|no allowed providers/);
   assert.doesNotMatch(loopSrc, /\/limit\|credit\|budget\|guardrail/);
+});
+
+test('retry waits: what Retry-After asks for (capped), else growing backoff with jitter', () => {
+  assert.equal(retryAfterSecs('7'), 7);
+  assert.equal(retryAfterSecs(''), 0);
+  assert.equal(retryAfterSecs('soon'), 0);
+  assert.equal(retryAfterSecs(new Date(Date.UTC(2026, 0, 1, 0, 0, 30)).toUTCString(), Date.UTC(2026, 0, 1)), 30);
+  assert.equal(retryWait({ retryAfter: 5 }, 0, () => 0), 5000);
+  assert.equal(retryWait({ retryAfter: 600 }, 0, () => 0), RETRY_WAIT_CAP);
+  assert.deepEqual([0, 1, 2].map((a) => retryWait({}, a, () => 0.5)), [1000, 2000, 4000]);
+  const spread = new Set(Array.from({ length: 20 }, () => retryWait({}, 1)));
+  assert.ok(spread.size > 1 && [...spread].every((w) => w >= 1600 && w <= 2400), 'jitter stays within 20%');
 });
 
 test('file checks use real parsers', async () => {

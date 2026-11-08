@@ -132,6 +132,29 @@ test('a failed model call is retried', async () => {
   assert.equal(done.stats.retries, 1);
 });
 
+test('a rate limit waits as long as the provider asked, and the retry says why', async () => {
+  const t0 = Date.now();
+  const { events, done } = await run((body, i) => {
+    if (i === 0) throw Object.assign(new Error('Rate limit exceeded'), { status: 429, retryAfter: 1, provider: 'SomeHost' });
+    return reply('Hello.');
+  });
+  const [r] = of(events, 'llm_retry');
+  assert.equal(r.code, 'RATE_LIMITED');
+  assert.equal(r.asked, 1);
+  assert.equal(r.provider, 'SomeHost');
+  assert.ok(r.wait >= 1000 && r.wait <= 1500, `wait ${r.wait}`);
+  assert.ok(Date.now() - t0 >= 1000, 'it really waited');
+  assert.equal(done.reply, 'Hello.');
+});
+
+test('spent credit stops at once instead of retrying', async () => {
+  let calls = 0;
+  const { events, done } = await run((body, i) => { calls++; if (i === 0) return reply('', [['write_file', { path: 'a.txt', content: 'a' }]]); throw Object.assign(new Error('Insufficient credits'), { status: 402 }); });
+  assert.equal(of(events, 'llm_retry').length, 0);
+  assert.equal(calls, 2);
+  assert.equal(done.stats.modelCode, 'SPEND_LIMIT');
+});
+
 // ---------- calls cut off before their usage arrived: still billed, so still counted ----------
 const priced = [{ id: 'test/model', maxOut: 4000, price: [2, 10] }];
 const cutOff = (msg, partial) => Object.assign(new Error(msg), { partial: { id: null, model: 'test/model', outChars: 0, ms: 5, ...partial } });

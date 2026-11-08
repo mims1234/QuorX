@@ -63,7 +63,7 @@ import { extReady } from './extlink.js';
 import { setLiveArtifact, markdownHtml } from './artifacts.js';
 import { listDocs, docText, readDoc, searchDocs, DOC_DEFAULTS } from './docs.js';
 import { errorCode } from './errors.js';
-import { groupCalls, numberedWindow, untrusted, trimTranscript, trimPageViews, compactTranscript, transcriptChars, withCacheMarks, retryable, LOOK_TOOLS } from './loop.js';
+import { groupCalls, numberedWindow, untrusted, trimTranscript, trimPageViews, compactTranscript, transcriptChars, withCacheMarks, retryable, retryWait, LOOK_TOOLS } from './loop.js';
 import { checkFile, checkHtml, CHECKED, lintFile, lintHtml, LINTED } from './checks.js';
 import { checkSettings, askDeciders, saveShot, logCheck, votesFor, MAIN_CONTROL_JS, KEY_PAGE_JS, KEY_TRIES, CHECK_DEFAULTS, LOOK_DEFAULTS } from './harness-checks.js';
 import { saveCheckpoint, loadCheckpoint, dropCheckpoint, checkpointWritten, recordRun } from './runs.js';
@@ -2266,8 +2266,8 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         }
         if (!retryable(e) || attempt >= tries) throw e;
         run.retries++;
-        const wait = 1000 * 2 ** attempt;
-        emit({ t: 'llm_retry', step, attempt: attempt + 1, of: tries, wait, code: errorCode(e), msg: clip(e.message, 160), at: at() });
+        const wait = retryWait(e, attempt);
+        emit({ t: 'llm_retry', step, attempt: attempt + 1, of: tries, wait, code: errorCode(e), ...(e.retryAfter ? { asked: e.retryAfter } : {}), ...(e.provider ? { provider: String(e.provider).slice(0, 60) } : {}), msg: clip(e.message, 160), at: at() });
         await sleep(wait, signal);
       }
     }

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { activeKey } from './keys.js';
-import { errorCode } from './errors.js';
+import { errorCode, retryAfterSecs } from './errors.js';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // Where chats, projects, keys, logs and .env live: the app folder itself, unless OH_HOME points elsewhere
@@ -87,6 +87,7 @@ async function chatStreamOnce(body, signal, onText, onThink) {
     const e = new Error(j.error?.message || `HTTP ${r.status}`);
     e.status = r.status; // the loop retries rate limits and server errors, not bad requests (errors.js)
     if (j.error?.metadata?.provider_name) e.provider = j.error.metadata.provider_name; // which provider refused it
+    e.retryAfter = retryAfterSecs(r.headers.get('retry-after')); // seconds the provider asked to wait, or 0
     throw e;
   }
   return readChatStream(r, body, t, onText, onThink);

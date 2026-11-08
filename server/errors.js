@@ -88,3 +88,12 @@ export function withCode(e, code = errorCode(e)) {
   if (e && typeof e === 'object' && !CODES[e.qxCode]) { try { e.qxCode = code; } catch { /* frozen */ } }
   return e;
 }
+
+/** Seconds a Retry-After header asks for (a number of seconds or an HTTP date), or 0. */
+export function retryAfterSecs(value, now = Date.now()) {
+  const v = String(value ?? '').trim();
+  if (!v) return 0;
+  if (/^\d+(\.\d+)?$/.test(v)) return Math.max(0, Number(v));
+  const t = Date.parse(v);
+  return Number.isFinite(t) ? Math.max(0, Math.ceil((t - now) / 1000)) : 0;
+}
