@@ -11,7 +11,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { chat, chatStream, generationCost, chatModels, imageModels, generateImage, speechModels, synthesize, composeMusic, musicModels, videoModels, generateVideo, HOME } from './openrouter.js';
+import { chat, chatStream, routeLimits, generationCost, chatModels, imageModels, generateImage, speechModels, synthesize, composeMusic, musicModels, videoModels, generateVideo, HOME } from './openrouter.js';
 import { ensemble, GATE } from './decisions.js';
 import { runtime, knownProviders, currentKey } from './openrouter.js';
 import { sourceOf, sourceStream, sourceModels, sourceOffWhy, blockedLocal, movedModel, routeModel, sourceSkip, noteSourceResult, failureKind, kindWords, sameOnOpenRouter, stripPass, chatAny, sessionFor } from './sources.js';
@@ -64,7 +64,7 @@ import { setLiveArtifact, markdownHtml } from './artifacts.js';
 import { listDocs, docText, readDoc, searchDocs, DOC_DEFAULTS } from './docs.js';
 import { errorCode } from './errors.js';
 import { repairArgs, checkArgs } from './toolargs.js';
-import { groupCalls, numberedWindow, untrusted, trimTranscript, trimPageViews, compactTranscript, transcriptChars, withCacheMarks, retryable, retryWait, pairToolCalls, LOOK_TOOLS } from './loop.js';
+import { groupCalls, numberedWindow, untrusted, trimTranscript, trimPageViews, compactTranscript, transcriptChars, withCacheMarks, retryable, retryWait, pairToolCalls, contextBudget, LOOK_TOOLS } from './loop.js';
 import { checkFile, checkHtml, CHECKED, lintFile, lintHtml, LINTED } from './checks.js';
 import { checkSettings, askDeciders, saveShot, logCheck, votesFor, MAIN_CONTROL_JS, KEY_PAGE_JS, KEY_TRIES, CHECK_DEFAULTS, LOOK_DEFAULTS } from './harness-checks.js';
 import { saveCheckpoint, loadCheckpoint, dropCheckpoint, checkpointWritten, recordRun } from './runs.js';
@@ -1123,6 +1123,10 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   }
   const blockedNames = blockedFor(S.blockedProviders, setup.model);
   const blockedSlugs = blockedNames.length ? providerSlugs(blockedNames, knownProviders()) : [];
+  // The window and output cap of the providers this chat may use (the smallest of each, from OpenRouter's endpoint
+  // list): conversation budgets and the output cap follow the model actually serving the chat.
+  const limitsP = sourceOf(setup.model) || (deps.chatStream && !deps.routeLimits) ? Promise.resolve(null)
+    : Promise.resolve((deps.routeLimits || ((m) => routeLimits(m, blockedSlugs)))(setup.model)).catch(() => null);
   const SF = safetySettings(req.settings?.safety);
   // The Q&A benchmark skips the build gates (verify, reviewer); the build benchmark (bench: 'build') keeps them.
   const qaBench = !!req.bench && req.bench !== 'build';
@@ -1289,7 +1293,10 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
     if (m.role === 'assistant') content = content.replace(/\n\n\[((?:What I did|Checks)[\s\S]*?)\]\s*$/, (_, rec) => { records.push(rec); return ''; });
     return { role: m.role === 'assistant' ? 'assistant' : 'user', content: clipKeepEnd(content, 4000), at: m.at };
   });
-  if (!resumed && S.compact !== false && history.reduce((n, m) => n + m.content.length, 0) > Math.max(8000, Number(S.compactAt) || 24000) && history.length > 10) {
+  // Earlier turns are summarised once they pass a size that follows the model's window, unless the user set one.
+  const historyAt = req.settings?.compactAt != null ? Math.max(8000, Number(req.settings.compactAt) || 24000)
+    : contextBudget((await limitsP)?.context || (await getCatalogue()).find((m) => m.id === setup.model)?.ctx)?.history ?? 24000;
+  if (!resumed && S.compact !== false && history.reduce((n, m) => n + m.content.length, 0) > historyAt && history.length > 10) {
     const keep = history.slice(-8), old = history.slice(0, -8);
     try {
       // A chat on an app on this PC summarises there too; when that fails, OpenRouter's fallback model does it.
@@ -1386,7 +1393,9 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
   const modelInfo = catalogue.find((m) => m.id === setup.model);
   // The builder as OpenRouter names it, so a source copy of the reviewer model never reviews its own work.
   const builder = () => (sourceOf(setup.model) ? sameOnOpenRouter(setup.model, catalogue.filter((m) => !sourceOf(m.id)), modelInfo) || setup.model : setup.model);
-  const maxOut = outFor(setup.model);
+  let maxOut = outFor(setup.model);
+  const routeLim = await limitsP;
+  if (routeLim?.maxOut) maxOut = Math.max(1024, Math.min(maxOut, routeLim.maxOut));
   // Images the user attached (data URLs). The chat model sees them if it can; the deciders always can, via decide.
   const attachedImages = (Array.isArray(req.images) ? req.images : []).filter((u) => /^data:image\//.test(String(u))).slice(0, 4);
   const seesImages = (modelInfo?.in || []).includes('image');
@@ -1501,7 +1510,11 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
   const touched = { arts: new Set(resumed?.touched?.arts), apps: new Set(resumed?.touched?.apps), sites: new Set(resumed?.touched?.sites) };
   const firstOwn = resumed ? resumed.firstOwn : messages.length; // where this reply's own turns begin
   const trimmedOnce = new WeakSet();
-  const trimAt = Math.max(30000, Number(S.trimAt) || DEFAULTS.trimAt);
+  // How much of this reply's work stays in the conversation before old file bodies are trimmed and the middle is
+  // summarised: today's sizes, or less on a model whose window is smaller (a setting the user changed wins).
+  const budget = contextBudget(routeLim?.context || modelInfo?.ctx, maxOut, { trimAt: Math.max(30000, Number(S.trimAt) || DEFAULTS.trimAt) });
+  const trimAt = req.settings?.trimAt != null ? Math.max(30000, Number(req.settings.trimAt) || DEFAULTS.trimAt) : budget?.trim ?? DEFAULTS.trimAt;
+  const compactAt = req.settings?.trimAt != null ? trimAt * 2 : budget?.compact ?? trimAt * 2;
   let maxSteps = Math.max(2, Math.min(MAX_STEPS, Number(S.maxSteps) || DEFAULTS.maxSteps));
   if (carryOn) maxSteps = resumed.step + 1 + carryOn.steps; // the steps already used, plus the new allowance
   else if (resumed) maxSteps = Math.max(maxSteps, Number(resumed.maxSteps) || 0, resumed.step + 1 + 5); // a restart keeps the reply's (extended) limit, and always leaves room to act
@@ -1672,7 +1685,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     const views = trimPageViews(messages, { done: trimmedOnce, names: ['browser', 'desktop'] }); // desktop too: a window read after every step filled the model's context in the VRoid and Paint replies
     if (views) { run.trimmed += views; emit({ t: 'trimmed', step, saved: views, size: transcriptChars(messages), at: at() }); }
     if (saved) { run.trimmed += saved; run.trimEvents = (run.trimEvents || 0) + 1; emit({ t: 'trimmed', step, saved, size: transcriptChars(messages), at: at() }); }
-    if (transcriptChars(messages) > trimAt * 2 && compactTranscript(messages, firstOwn, progressSummary(), 10)) emit({ t: 'compacted_run', step, size: transcriptChars(messages), at: at() });
+    if (transcriptChars(messages) > compactAt && compactTranscript(messages, firstOwn, progressSummary(), 10)) emit({ t: 'compacted_run', step, size: transcriptChars(messages), at: at() });
     const forceDecide = step === 0 && setup.decide === 'force-first';
     let toolChoice = last ? 'none' : forceDecide ? { type: 'function', function: { name: 'decide' } } : 'auto';
     // Every tool call goes out with its result (a resumed checkpoint or a trimmed transcript can lack one).
@@ -2260,6 +2273,22 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
             run.routing = false; body = rest;
             emit({ t: 'note', level: 'warn', msg: `No provider matched the routing settings (${clip(e.message, 100)})${blockedSlugs.length ? `, and only blocked providers serve ${short(setup.model)}` : ''}; this reply uses OpenRouter's default routing.`, at: at() });
           }
+          continue;
+        }
+        // Too long for the model: trim old file bodies and results, summarise the middle of this reply (never splitting
+        // a call from its result), and try once more. A second overflow ends the reply with what to do about it.
+        if (errorCode(e) === 'CONTEXT_OVERFLOW' && body.messages === messages) {
+          const tooLong = () => { e.message = `${e.message}. The conversation is too long for ${short(setup.model)} even after trimming it. Start a fresh chat from a brief, or switch to a model with a bigger window.`; return e; };
+          if (run.overflowRetried) throw tooLong();
+          run.overflowRetried = true; attempt--;
+          const before = transcriptChars(messages);
+          // Only the newest step is kept whole here (normal trimming keeps three).
+          trimTranscript(messages, { at: 0, to: Math.round(before / 3), fresh: 1, done: trimmedOnce });
+          if (transcriptChars(messages) > before * 0.6) compactTranscript(messages, firstOwn, progressSummary(), 6);
+          pairToolCalls(messages);
+          const after = transcriptChars(messages);
+          if (after >= before) throw tooLong();
+          emit({ t: 'note', level: 'warn', code: 'CONTEXT_OVERFLOW', msg: `The conversation was too long for ${short(setup.model)} (${clip(e.message, 100)}); trimmed it from ${Math.round(before / 1000)}k to ${Math.round(after / 1000)}k characters and tried again.`, at: at() });
           continue;
         }
         // The key's own spending limit or credits: stop and say so, never retry or switch models to get round it.

@@ -1540,3 +1540,39 @@ test('edit_artifact takes several edits at once (all or none), like edit_file', 
   assert.doesNotMatch(last.md, /^x$/m, 'the failed batch changed nothing');
 });
 
+
+test('context overflow: the conversation is trimmed once and the call tried again', async () => {
+  const big = 'x'.repeat(30000);
+  const overflow = () => Object.assign(new Error("This endpoint's maximum context length is 32768 tokens. However, you requested about 40000 tokens."), { status: 400 });
+  const { events, bodies, done } = await run((body, i) => {
+    if (i === 0) return reply('', [['write_file', { path: 'big.txt', content: big }]]);
+    if (i === 1) return reply('', [['read_file', { path: 'big.txt' }]]);
+    if (i === 2) return reply('', [['list_files', {}]]);
+    if (i === 3) throw overflow();
+    return reply('Done.');
+  });
+  const note = of(events, 'note').find((e) => e.code === 'CONTEXT_OVERFLOW');
+  assert.ok(note, 'the trim is noted');
+  assert.equal(done.reply, 'Done.');
+  const size = (b) => JSON.stringify(b.messages).length;
+  assert.ok(size(bodies[4]) < size(bodies[3]) / 2, `the retry is much smaller (${size(bodies[3])} → ${size(bodies[4])})`);
+  const { pairToolCalls } = await import('../server/loop.js');
+  assert.deepEqual(pairToolCalls(structuredClone(bodies[4].messages)), { added: 0, dropped: 0 }, 'calls and results still pair up');
+});
+
+test('context overflow twice: the reply ends and says what to do', async () => {
+  const overflow = () => Object.assign(new Error('prompt is too long: 210000 tokens > 200000 maximum'), { status: 400 });
+  const { done } = await run((body, i) => {
+    if (i === 0) return reply('', [['write_file', { path: 'a.txt', content: 'y'.repeat(30000) }]]);
+    if (i === 1) return reply('', [['read_file', { path: 'a.txt' }]]);
+    throw overflow();
+  });
+  assert.equal(done.stats.stop, 'model_error');
+  assert.equal(done.stats.modelCode, 'CONTEXT_OVERFLOW');
+  assert.match(done.stats.modelError, /too long for .* even after trimming/);
+});
+
+test('the output cap follows the providers the chat may use', async () => {
+  const { bodies } = await run(() => reply('Done.'), { routeLimits: async () => ({ context: 65536, maxOut: 2048 }) });
+  assert.equal(bodies[0].max_tokens, 2048);
+});

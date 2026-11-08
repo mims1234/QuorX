@@ -560,3 +560,19 @@ test('tool calls and results always pair up: missing results added, stray ones d
   assert.deepEqual(msgs.map((m) => m.role === 'tool' ? `tool:${m.tool_call_id}:${m.content}` : m.role), ['system', 'user', 'assistant', 'tool:a:A', 'tool:b:Not run.', 'tool:c:Not run.', 'user', 'assistant', 'tool:d:Not run.']);
   assert.deepEqual(pairToolCalls(msgs), { added: 0, dropped: 0 }, 'a paired transcript is left as it is');
 });
+
+test('context budgets follow the window: small windows trim earlier, big ones keep today\'s cost-minded sizes', async () => {
+  const { contextBudget } = await import('../server/loop.js');
+  assert.equal(contextBudget(null), null);
+  const small = contextBudget(32768, 4000);
+  assert.equal(small.tokens, 32768 - 4000 - 3277, 'window − output − 10% headroom, under 80% of the window');
+  assert.ok(small.compact < 240000 && small.compact === Math.round(small.tokens * 3.5));
+  assert.equal(small.trim, Math.round(small.compact / 2));
+  assert.equal(small.history, Math.round(small.compact * 0.1));
+  const mid = contextBudget(131072, 16000);
+  assert.ok(mid.trim === 120000 && mid.compact === 240000, 'a 128k window still fits today\'s sizes');
+  const big = contextBudget(1048576, 64000);
+  assert.deepEqual([big.trim, big.compact, big.history], [120000, 240000, 60000]);
+  assert.equal(big.tokens, Math.floor(1048576 * 0.8));
+  assert.ok(contextBudget(8192, 8000).tokens > 0, 'an output cap as big as the window still leaves a budget');
+});
