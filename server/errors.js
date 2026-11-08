@@ -51,6 +51,7 @@ export const CODES = Object.freeze({
   BAD_RESPONSE: 'The answer could not be read',
   BAD_REQUEST: 'The provider refused the request as sent',
   INVALID_ARGS: 'A tool call had arguments that do not fit the tool',
+  OUTPUT_CUT: 'The answer was cut off at the output limit',
   TOOL_TIMEOUT: 'A tool ran out of time',
   UNKNOWN: 'Anything else',
 });

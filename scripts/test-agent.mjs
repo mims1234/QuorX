@@ -122,6 +122,18 @@ test('after the allowed rounds, the reply ends and says what is left', async () 
   assert.match(done.historyNote, /Checks still found 1 problem/);
 });
 
+test('tool arguments: a fixable slip runs, a missing field is named and nothing runs', async () => {
+  const slip = { id: 'c-slip', type: 'function', function: { name: 'write_file', arguments: '{"path":"a.txt","content":"hi",}' } };
+  const missing = { id: 'c-miss', type: 'function', function: { name: 'write_file', arguments: '{"content":"no path"}' } };
+  const { bodies, dir, events } = await run((body, i) => [{ ...reply(''), toolCalls: [slip] }, { ...reply(''), toolCalls: [missing] }, reply('Done.')][i]);
+  assert.equal(fs.readFileSync(path.join(dir, 'a.txt'), 'utf8'), 'hi');
+  assert.ok(of(events, 'note').some((e) => /Repaired the write_file arguments \(trailing comma removed\)/.test(e.msg)));
+  const out = toolResults(bodies[2]).at(-1);
+  assert.match(out, /^Error: the arguments for write_file don't fit the tool, so nothing was run:\n- `path` is missing/);
+  assert.ok(of(events, 'note').some((e) => e.code === 'INVALID_ARGS'));
+  assert.equal(of(events, 'tool').filter((e) => e.name === 'write_file').length, 1, 'the bad call never reached the tool');
+});
+
 test('a failed model call is retried', async () => {
   const { events, done } = await run((body, i) => {
     if (i === 0) throw Object.assign(new Error('Provider returned error'), { status: 502 });

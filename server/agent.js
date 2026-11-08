@@ -63,6 +63,7 @@ import { extReady } from './extlink.js';
 import { setLiveArtifact, markdownHtml } from './artifacts.js';
 import { listDocs, docText, readDoc, searchDocs, DOC_DEFAULTS } from './docs.js';
 import { errorCode } from './errors.js';
+import { repairArgs, checkArgs } from './toolargs.js';
 import { groupCalls, numberedWindow, untrusted, trimTranscript, trimPageViews, compactTranscript, transcriptChars, withCacheMarks, retryable, retryWait, LOOK_TOOLS } from './loop.js';
 import { checkFile, checkHtml, CHECKED, lintFile, lintHtml, LINTED } from './checks.js';
 import { checkSettings, askDeciders, saveShot, logCheck, votesFor, MAIN_CONTROL_JS, KEY_PAGE_JS, KEY_TRIES, CHECK_DEFAULTS, LOOK_DEFAULTS } from './harness-checks.js';
@@ -2275,17 +2276,27 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
 
   // One tool call: parse its arguments, run it, record a journal line. Errors become results.
   async function callTool(tc, step, finishReason) {
-    let args = {}, broken = false;
-    try { args = JSON.parse(tc.function.arguments || '{}'); } catch { broken = true; }
+    // Arguments as models send them: small JSON slips are repaired (never a call cut off at the output limit), then
+    // checked against the tool's schema before anything runs (server/toolargs.js).
+    const got = repairArgs(tc.function.arguments, { cutOff: finishReason === 'length' });
+    let args = got?.args || {}, broken = !got;
     const name = tc.function.name;
-    let result, made = null;
+    let result, made = null, problems = [];
+    if (got?.fixes.length) emit({ t: 'note', level: 'info', msg: `Repaired the ${name} arguments (${got.fixes.join(', ')}).`, at: at() });
     // A tool still waiting in load_tools, called by name: it loads and runs.
     if (!broken && deferred.has(name)) loadTools([name]);
+    const def = !broken && (tools.find((t) => t.function?.name === name) || deferred.get(name));
+    if (def?.function?.parameters) problems = checkArgs(def.function.parameters, args);
     if (broken) {
+      let why = '';
+      try { JSON.parse(tc.function.arguments || '{}'); } catch (e) { why = clip(String(e.message || ''), 120); }
       result = finishReason === 'length'
         ? `Your output was cut off at the ${maxOut}-token limit, so this ${name} call was NOT run and nothing was written. Write large files in parts: write_file the first ~300 lines, then append_file the rest in chunks of about 300 lines.`
-        : `Error: the arguments for ${name} were not valid JSON, so nothing was run. Try again with smaller arguments.`;
-      emit({ t: 'note', level: 'warn', msg: finishReason === 'length' ? `Output hit the ${maxOut}-token limit; the ${name} call was cut off and not run. The agent was told to write in parts.` : `Malformed ${name} arguments; not run.`, raw: clip(String(tc.function.arguments || ''), 400), at: at() });
+        : `Error: the arguments for ${name} were not valid JSON${why ? ` (${why})` : ''}, so nothing was run. Send the call again with valid JSON; write long content in parts.`;
+      emit({ t: 'note', level: 'warn', code: finishReason === 'length' ? 'OUTPUT_CUT' : 'INVALID_ARGS', msg: finishReason === 'length' ? `Output hit the ${maxOut}-token limit; the ${name} call was cut off and not run. The agent was told to write in parts.` : `Malformed ${name} arguments; not run.`, raw: clip(String(tc.function.arguments || ''), 400), at: at() });
+    } else if (problems.length) {
+      result = `Error: the arguments for ${name} don't fit the tool, so nothing was run:\n${problems.map((p) => `- ${p}`).join('\n')}\nCall ${name} again with these fixed.`;
+      emit({ t: 'note', level: 'warn', code: 'INVALID_ARGS', msg: `${name} arguments didn't fit the tool (${clip(problems.join('; '), 160)}); not run, the agent was told what to fix.`, at: at() });
     } else if (textCalls.has(tc) && !tools.some((t) => t.function?.name === name)) {
       result = `Error: ${name} is not one of your tools in this chat, so nothing was run. Your tools: ${tools.map((t) => t.function?.name).filter(Boolean).join(', ')}.`;
       emit({ t: 'note', level: 'warn', msg: `The model asked for ${clip(name, 40)}, which this chat doesn't offer; not run.`, at: at() });
