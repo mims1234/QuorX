@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { activeKey } from './keys.js';
+import { errorCode } from './errors.js';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // Where chats, projects, keys, logs and .env live: the app folder itself, unless OH_HOME points elsewhere
@@ -51,12 +52,11 @@ async function postJSON(url, body, signal) {
 // Some models refuse `reasoning: {enabled: false}` (reasoning is mandatory). Retry those with the
 // lightest reasoning instead, and remember the model so later calls skip the failed attempt.
 const mustReason = new Set();
-const REASONING_REQUIRED = /reasoning is mandatory|cannot be disabled/i;
 const adapt = (body) => (mustReason.has(body.model) && body.reasoning?.enabled === false ? { ...body, reasoning: { effort: 'low', exclude: true } } : body);
 async function withReasoningFallback(body, fn) {
   try { return await fn(adapt(body)); }
   catch (e) {
-    if (!REASONING_REQUIRED.test(e.message) || mustReason.has(body.model)) throw e;
+    if (errorCode(e) !== 'REASONING_REQUIRED' || mustReason.has(body.model)) throw e;
     mustReason.add(body.model);
     return fn(adapt(body));
   }
@@ -85,7 +85,8 @@ async function chatStreamOnce(body, signal, onText, onThink) {
   if (!r.ok) {
     const j = await r.json().catch(() => ({}));
     const e = new Error(j.error?.message || `HTTP ${r.status}`);
-    e.status = r.status; // the loop retries rate limits and server errors, not bad requests
+    e.status = r.status; // the loop retries rate limits and server errors, not bad requests (errors.js)
+    if (j.error?.metadata?.provider_name) e.provider = j.error.metadata.provider_name; // which provider refused it
     throw e;
   }
   return readChatStream(r, body, t, onText, onThink);

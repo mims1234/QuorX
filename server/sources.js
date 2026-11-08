@@ -21,7 +21,8 @@ import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { HOME, decisionModels } from './openrouter.js';
 import { renameSoon } from './fsretry.js';
-import { findOnPath, localModels, localStream, ensureLocalServer, localServer, LOCAL_ID, SETTING_REFUSAL } from './opencodelocal.js';
+import { findOnPath, localModels, localStream, ensureLocalServer, localServer, LOCAL_ID } from './opencodelocal.js';
+import { failureKind } from './errors.js';
 import { claudeModels, claudeStream, claudeAuth, claudeRunning, CLAUDE_ID } from './claudelocal.js';
 import { grokModels, grokStream, grokRunning, GROK_ID } from './groklocal.js';
 import { goModels, goStream, goCheck, goAccount, GO_ID } from './opencodego.js';
@@ -361,31 +362,8 @@ const dropModels = (id) => { for (const k of [...modelHealth.keys()]) if (k.star
 const clearHealth = (id) => { health.delete(id); dropModels(id); };
 // Tests start each case clean.
 export const forgetSourceHealth = (id) => (id ? clearHealth(id) : (health.clear(), modelHealth.clear()));
-/** How a failed call failed: auth, quota, rate, model, server, network, timeout, shape, request, free, notinstalled. */
-export function failureKind(e) {
-  if (e?.kind) return e.kind;
-  const s = Number(e?.status || e?.streamStatus) || 0, msg = String(e?.message || ''), ty = String(e?.errorType || '');
-  // A free model its provider keeps for its own app: only that model is set aside.
-  if (/FreeUsageLimitError/i.test(ty) || /free (usage )?limit reached|free model usage is not supported|free models are only available|free tier[^.]{0,40}(only|not available)/i.test(msg)) return 'free';
-  // Refused by a setting in the user's account there ("This Go model requires Global regions. Select Global in your
-  // workspace's Privacy settings"): theirs to change, whatever status it came with, and not an outage.
-  if (SETTING_REFUSAL.test(msg)) return 'setting';
-  // The provider's own error names say it outright (OpenCode passes them on).
-  if (/AuthError|invalid_api_key|unauthori[sz]ed/i.test(ty)) return 'auth';
-  if (/CreditsError|MonthlyLimitError|UserLimitError|GoUsageLimitError|insufficient_credits/i.test(ty)) return 'quota';
-  if (/RateLimitError|rate_limit/i.test(ty)) return 'rate';
-  if (/ModelError|model_not_found/i.test(ty)) return 'model';
-  if (/RegionError|DataPolicyError|context_length/i.test(ty)) return 'request';
-  if (s === 401 || (s === 403 && /auth|key|token|unauthori[sz]ed|forbidden|signature|expired|invalid/i.test(msg))) return 'auth';
-  if (s === 402 || ([403, 429].includes(s) && /credit|balance|funds|quota|insufficient|billing|subscri|usage limit|plan limit|limit reached|exceeded your|budget exceeded/i.test(msg))) return 'quota';
-  if (s === 429) return 'rate';
-  if (s >= 500 || s === 408) return 'server';
-  if (s === 404 || /model[^.]{0,40}(not found|does not exist|unknown|not supported|unavailable|deprecated|disabled)|no such model|invalid model/i.test(msg)) return 'model';
-  if (s >= 400) return 'request';
-  if (e?.name === 'TimeoutError') return 'timeout';
-  if (/fetch failed|ECONN|ENOTFOUND|EAI_AGAIN|socket|network|terminated|other side closed|UND_ERR/i.test(msg + String(e?.cause?.code || '') + String(e?.cause?.message || ''))) return 'network';
-  return 'unknown';
-}
+// How a failed call failed lives in errors.js, shared with the agent loop.
+export { failureKind };
 const KIND_WORDS = { notinstalled: 'is not installed on this computer', free: 'keeps that free model for its own app right now', auth: 'refused its key', quota: 'is out of credit or plan usage', rate: 'is rate limiting', model: 'does not have that model now', server: 'had a server error', network: 'could not be reached', timeout: 'did not answer in time', shape: 'answered in a shape QuorX can\'t read', request: 'refused the request', setting: 'refused it because of a setting in your account there', unknown: 'failed' };
 export const kindWords = (k) => KIND_WORDS[k] || KIND_WORDS.unknown;
 // Each model of an app runs on its own provider, so a refused key, a spent plan or an outage is that model's: it is
