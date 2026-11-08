@@ -32,5 +32,6 @@ contextBridge.exposeInMainWorld('ohDesktop', {
   zoom: (dir) => call('zoom', dir),
   openExternal: (url) => call('openExternal', url),
   showFile: (file) => call('showFile', file),
+  perf: () => call('perf'),
   on: (fn) => { listeners.add(fn); return () => listeners.delete(fn); },
 });

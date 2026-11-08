@@ -3,6 +3,8 @@
 // run, so chats work in parallel. Every run streams events from /api/run; approvals are answered
 // through /api/approve. Chats live on the server; preferences stay in this browser. Plain JS.
 
+// First, so it counts the timers and 3D views everything after it makes.
+import { setChatStats, showReadout } from './perf.js';
 import { startTour, maybeStartTour } from './tour.js';
 import { mergeChat } from './chat-merge.js';
 import { backupCard, drawBackup } from './backup.js';
@@ -3505,6 +3507,8 @@ function releasePane(c) {
 const chatBusy = (c) => !!(c.running || c.waiting || c.srvPop?.editing || c.srvPop?.busy || timers.has(c.id) || saving.has(c.id) || unsaved.has(c.id)
   || c.ctx?.length || c.images?.length || c.docs?.length || c.comments?.length
   || c.agent.messages.some((m) => m.live || m.runActive || m.pending || following.has(m.runId)));
+// The performance readout's count of chats in the page.
+setChatStats(() => { const l = [...G.open.values()]; return { open: l.length, visible: l.filter((c) => G.panes.includes(c.id)).length, busy: l.filter(chatBusy).length }; });
 // Opened chats past the limit (chat-cache.js) leave the page, the least recently shown first; opening one again loads
 // it from the server (getChat), as the first time.
 function releaseColdChats() {
@@ -7713,7 +7717,7 @@ function wireCatEditor(el) {
 }
 // ---------- settings page: categories on the left, that category's settings on the right ----------
 const UI_DEFAULTS = { density: 'comfortable', fontSize: 14, reduceMotion: 'system', timestamps: 'time', paneMode: 'auto', sidebarStart: 'remember',
-  showBalance: false, maskAmounts: true, blurPaths: false, usageBtn: true, notify: 'all', searchEngine: 'google', searchCustom: '' };
+  showBalance: false, maskAmounts: true, blurPaths: false, usageBtn: true, notify: 'all', searchEngine: 'google', searchCustom: '', perfReadout: false };
 const SETTINGS_NAV = [
   ['Harness', [['setup', '🧪', 'Setup check'], ['appearance', '🎨', 'Appearance'], ['privacy', '🕶', 'Privacy & display']]],
   ['Models', [['providers', '🔌', 'Providers']]],
@@ -7847,6 +7851,9 @@ function settingsPanels(S) {
         + stRow('Sidebar when QuorX opens', '“Remember” keeps it as you last left it.', stSeg('ui.sidebarStart', [['remember', 'Remember'], ['expanded', 'Expanded'], ['rail', 'Rail']], U.sidebarStart), { id: 'stRowSidebar' })
         + stRow('Artifact pane', 'Auto shows it only when the chat has built something. ◧ in a chat\'s header still toggles it.', stSeg('ui.paneMode', [['auto', 'Auto'], ['always', 'Always'], ['never', 'Only when asked']], U.paneMode), { id: 'stRowPane' })
         + stRow('Sidebar project order', 'Drag a project\'s header in the sidebar to move it.', `<button type="button" class="st-btn ghost sm" data-act="resetOrder">Reset order</button>`)),
+      `<details class="sf-adv" id="appearanceAdv"><summary><span class="sf-adv-title">Under the hood</span><span class="sf-adv-sub">For finding what makes QuorX slow. Most people never need this.</span></summary><div class="sf-adv-body">`
+        + stCard('Performance', '', stRow('Performance readout', 'A small box in the bottom-left corner: QuorX\'s memory, browser tabs, chats loaded, pictures, 3D views, timers and stutters. Copy puts the numbers on the clipboard for a bug report.', stSwitch('ui.perfReadout', U.perfReadout)))
+        + '</div></details>',
     ]],
     privacy: ['Privacy & display', 'For streaming and screen sharing: what other people would see on your screen.', [
       stCard('On a stream, people would see', 'What shows on your screen while you stream or share it. ⚙ Settings → Providers always has the numbers.', `<div class="sx-tiles">`
@@ -8635,7 +8642,7 @@ function searchSettings(q) {
   }
   // Safety's Advanced and the loop's Under the hood: a search that hits inside opens it; clearing the search puts
   // Advanced back as you left it, and closes Under the hood.
-  for (const adv of [$('#sfAdv'), $('#loopAdv')]) {
+  for (const adv of [$('#sfAdv'), $('#loopAdv'), $('#appearanceAdv')]) {
     if (!adv) continue;
     const hit = [...adv.querySelectorAll('.st-card')].some((c) => !c.hidden);
     adv.hidden = !!q && !hit;
@@ -8645,7 +8652,7 @@ function searchSettings(q) {
 // Reset category: that category's settings go back to the defaults (still unsaved until Save).
 function resetCategory() {
   const S = ST.draft, d = G.cfg.defaults, U = (S.ui ??= {});
-  const uiKeys = { appearance: ['density', 'fontSize', 'reduceMotion', 'timestamps', 'notify', 'sidebarStart', 'paneMode'], privacy: ['showBalance', 'maskAmounts', 'blurPaths', 'searchEngine', 'searchCustom'], usage: ['usageBtn'] }[ST.cat];
+  const uiKeys = { appearance: ['density', 'fontSize', 'reduceMotion', 'timestamps', 'notify', 'sidebarStart', 'paneMode', 'perfReadout'], privacy: ['showBalance', 'maskAmounts', 'blurPaths', 'searchEngine', 'searchCustom'], usage: ['usageBtn'] }[ST.cat];
   if (uiKeys) for (const k of uiKeys) U[k] = UI_DEFAULTS[k];
   if (ST.cat === 'appearance') { S.theme = null; G.theme = null; applyTheme(); }
   if (ST.cat === 'privacy') S.newsRemote = true;
@@ -9804,6 +9811,7 @@ function applyUi() {
   root.classList.toggle('blur-paths', !!U.blurPaths);
   root.classList.toggle('no-usage-btn', !U.usageBtn);
   $('#spend').hidden = !U.showBalance;
+  showReadout(!!U.perfReadout);
 }
 
 // ---------- mic: record, convert to 16 kHz WAV, transcribe into that chat's message box ----------
