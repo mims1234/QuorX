@@ -612,6 +612,9 @@ handle('perf', () => {
   return {
     at: Date.now(),
     totalMb: sum(procs),
+    // Processor use of all of QuorX's processes since the last reading (100 = one core busy), and the GPU process's.
+    cpu: Math.round(procs.reduce((s, p) => s + p.cpu, 0)),
+    gpuCpu: Math.round(procs.filter((p) => p.type === 'GPU').reduce((s, p) => s + p.cpu, 0)),
     appMb: mb(byPid.get(appPid)?.memory?.workingSetSize),
     gpuMb: sum(procs.filter((p) => p.type === 'GPU')),
     tabsMb: sum(tabList.filter((t) => t.pid && t.pid !== appPid)),

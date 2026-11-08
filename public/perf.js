@@ -76,7 +76,8 @@ function draw(s) {
   const rows = [
     sh && ['All of QuorX', fmt(sh.totalMb), sh.totalMb > 2000 ? 'bad' : sh.totalMb > 1000 ? 'warn' : ''],
     sh && ['This window', fmt(sh.appMb)],
-    sh && ['Graphics (GPU)', fmt(sh.gpuMb)],
+    sh && ['Graphics (GPU)', `${fmt(sh.gpuMb)}${sh.gpuCpu != null ? ` · ${sh.gpuCpu}% busy` : ''}`],
+    sh && sh.cpu != null && ['Processor', `${sh.cpu}% (100% = one core)`, sh.cpu > 100 ? 'bad' : sh.cpu > 40 ? 'warn' : ''],
     sh && ['Browser tabs', `${yours.length} yours · ${agents.length} agent${asleep ? ` · ${asleep} asleep` : ''} · ${fmt(sh.tabsMb)}`, yours.length + agents.length > 6 ? 'warn' : ''],
     ['JS memory', fmt(p.heapMb)],
     ['Chats loaded', c.open == null ? '–' : `${c.open} (${c.visible || 0} on screen, ${c.busy || 0} busy)`, c.open > 6 ? 'warn' : ''],
