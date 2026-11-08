@@ -11,6 +11,7 @@
 //                                           (only when asked: not part of "all"; --chats N, default 8; --turns N adds
 //                                           N earlier rounds of long replies to each chat, default 0)
 //   npm run test:ui -- --scenario tabs      hidden browser tabs go to sleep and wake where they were (only when asked)
+//   npm run test:ui -- --scenario preview   a 3D preview in the pane: what it costs shown, hidden and left (only when asked)
 //   add --keep to leave the app open afterwards
 //
 // The test copy keeps its own chats, projects and keys in .uitest/home (git ignores it), and runs on port 5197, so
@@ -547,9 +548,9 @@ async function openWithReadout() {
     return 'The readout shows in the bottom-left corner';
   });
 }
-// Runs a script in one of the desktop app's own browser tabs (found by its address) through DevTools.
-async function inTab(urlPart, expr) {
-  const target = (await (await fetch(`http://127.0.0.1:${CDP}/json/list`)).json()).find((t) => t.type === 'page' && t.url.includes(urlPart));
+// Runs a script in one of the desktop app's own browser tabs, or a preview frame (found by its address), through DevTools.
+async function inTab(urlPart, expr, type = 'page') {
+  const target = (await (await fetch(`http://127.0.0.1:${CDP}/json/list`)).json()).find((t) => t.type === type && t.url.includes(urlPart));
   if (!target) return undefined;
   const sock = new WebSocket(target.webSocketDebuggerUrl);
   await new Promise((r, j) => { sock.onopen = r; sock.onerror = () => j(new Error('could not reach the tab')); });
@@ -635,6 +636,84 @@ async function tabsScenario() {
     if (!(Math.abs((y ?? 0) - 3000) < 50)) throw new Error(`the page came back at ${y} px, not 3000`);
     return `back at ${y} px in ${Date.now() - t0} ms · ${line(now)}`;
   });
+}
+
+// A heavier 3D page, closer to a real scene: a full-window shader marching rays through spheres every frame.
+const HEAVY_SCENE = `<!doctype html><meta charset="utf-8"><title>3D scene (heavy)</title><style>html,body{margin:0;height:100%;background:#000}canvas{width:100%;height:100%;display:block}</style><canvas id="c"></canvas><script>
+const c=document.getElementById('c'),g=c.getContext('webgl');
+const vs='attribute vec2 p;void main(){gl_Position=vec4(p,0.,1.);}';
+const fs='precision highp float;uniform float t;uniform vec2 r;float m(vec3 q){vec3 k=mod(q,2.)-1.;return length(k)-.4+.1*sin(q.x*3.+t);}void main(){vec2 u=(gl_FragCoord.xy-.5*r)/r.y;vec3 o=vec3(0.,0.,t),d=normalize(vec3(u,1.));float s=0.;for(int i=0;i<160;i++){float h=m(o+d*s);if(h<.001)break;s+=h;}gl_FragColor=vec4(vec3(1./(1.+s*s*.02)),1.);}';
+const sh=(k,s)=>{const o=g.createShader(k);g.shaderSource(o,s);g.compileShader(o);return o};const pr=g.createProgram();g.attachShader(pr,sh(g.VERTEX_SHADER,vs));g.attachShader(pr,sh(g.FRAGMENT_SHADER,fs));g.linkProgram(pr);g.useProgram(pr);
+g.bindBuffer(g.ARRAY_BUFFER,g.createBuffer());g.bufferData(g.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),g.STATIC_DRAW);const l=g.getAttribLocation(pr,'p');g.enableVertexAttribArray(l);g.vertexAttribPointer(l,2,g.FLOAT,false,0,0);
+const ut=g.getUniformLocation(pr,'t'),ur=g.getUniformLocation(pr,'r');window.frames_drawn=0;
+(function f(ts){c.width=c.clientWidth;c.height=c.clientHeight;g.viewport(0,0,c.width,c.height);g.uniform1f(ut,ts/1000);g.uniform2f(ur,c.width,c.height);g.drawArrays(g.TRIANGLE_STRIP,0,4);window.frames_drawn++;requestAnimationFrame(f)})(0);
+</script>`;
+
+// ---------- scenario: preview (a 3D artifact in the pane) ----------
+// The processor and graphics a running 3D preview costs while it is on screen, with the pane hidden, on another pane
+// tab, and with another chat open. Each reading covers 3 seconds.
+async function previewScenario() {
+  const ids = {};
+  const rows = [];
+  // Frames the preview itself drew (the heavy scene counts them): -1 when no preview frame exists.
+  const drawn = async () => { const v = await inTab('/art/', 'window.frames_drawn', 'iframe').catch(() => undefined); return typeof v === 'number' ? v : -1; };
+  const measure = async (label) => {
+    await js('await window.ohDesktop?.perf?.(); return true;'); // starts the 3 s window for the processor numbers
+    const f0 = await drawn();
+    await sleep(3000);
+    const f1 = await drawn();
+    const s = await js('return await window.qxPerf.sample();');
+    const r = { label, cpu: s.shell?.cpu, gpuCpu: s.shell?.gpuCpu, gpuMb: s.shell?.gpuMb, totalMb: s.shell?.totalMb, frames: s.page.frames, framesShown: s.page.framesShown, previewFps: f0 < 0 || f1 < 0 ? null : Math.round((f1 - f0) / 3) };
+    rows.push(r);
+    return `preview ${r.previewFps == null ? 'gone' : `drawing ${r.previewFps} frames/s`} · processor ${r.cpu}% · GPU ${r.gpuCpu}% busy, ${r.gpuMb} MB · all of QuorX ${r.totalMb} MB · frames ${r.frames} (${r.framesShown} on screen)`;
+  };
+  await openWithReadout();
+  await step('Two chats: one with a 3D viewer built, one without', async () => {
+    const proj = await testProject('preview');
+    for (const [k, title, arts] of [['scene', 'Has a 3D viewer', { scene: { id: 'scene', kind: 'html', title: '3D viewer', html: HEAVY_SCENE, updated: Date.now() } }], ['plain', 'Just talk', {}]]) {
+      const id = `pv${k}${Date.now().toString(36)}`;
+      const doc = { id, title, projectId: proj.id, created: Date.now(), agent: { setup: {}, messages: [{ role: 'user', content: `Hello (${k})` }, { role: 'assistant', runId: `${id}r`, content: 'Hi.', doneAt: Date.now() }], artifacts: arts } };
+      const status = await js(`const r = await fetch(${q(`/api/chats/${id}`)}, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: ${q(JSON.stringify(doc))} }); return r.status;`);
+      if (status !== 200) throw new Error(`saving ${title}: ${status}`);
+      ids[k] = id;
+    }
+    await js('location.reload(); return true;').catch(() => {});
+    await sleep(1500);
+    await waitFor(`document.querySelector(${q(`.sb-chat[data-c="${ids.scene}"]`)})`, 20000, 'the chats in the sidebar');
+    return 'Saved';
+  });
+  await step('Nothing open yet', () => measure('no chat'));
+  await step('The 3D viewer on screen in the pane', async () => {
+    await click(`.sb-chat[data-c="${ids.scene}"]`);
+    await waitFor(`document.querySelector('#paneBody iframe')`, 15000, 'the preview');
+    await sleep(2000);
+    return measure('preview on screen');
+  });
+  await step('Pane hidden with ◧', async () => {
+    await click('.chatpane.focus .ch-panel');
+    await waitFor(`document.querySelector('.layout').classList.contains('pane-hidden')`, 5000, 'the pane to hide');
+    return measure('pane hidden');
+  });
+  await step('Pane back, on the Steps tab', async () => {
+    await click('.chatpane.focus .ch-panel');
+    await click('[data-tab="trace"]');
+    await sleep(800);
+    return measure('steps tab');
+  });
+  await step('Back on the preview, then the other chat', async () => {
+    await click('[data-tab="art"]');
+    await sleep(1500);
+    await click(`.sb-chat[data-c="${ids.plain}"]`);
+    await sleep(1500);
+    return measure('other chat');
+  });
+  await step('Window minimised', async () => {
+    await send('Browser.getWindowForTarget').then(({ windowId }) => send('Browser.setWindowBounds', { windowId, bounds: { windowState: 'minimized' } })).catch(() => {});
+    const r = await measure('minimised');
+    await send('Browser.getWindowForTarget').then(({ windowId }) => send('Browser.setWindowBounds', { windowId, bounds: { windowState: 'normal' } })).catch(() => {});
+    return r;
+  });
+  fs.writeFileSync(path.join(OUT, 'preview.json'), JSON.stringify({ at: STAMP, rows }, null, 2));
 }
 
 async function perfScenario() {
@@ -738,6 +817,7 @@ try {
   if (SCENARIO === 'all' || SCENARIO === 'running') await runningScenario();
   if (SCENARIO === 'perf') await perfScenario();
   if (SCENARIO === 'tabs') await tabsScenario();
+  if (SCENARIO === 'preview') await previewScenario();
 } catch (e) {
   failed = true;
   steps.push({ title: 'The test could not run', ok: false, note: e.message, img: null, ms: 0 });
