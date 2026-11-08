@@ -4808,7 +4808,14 @@ function timelineHTML(m) {
       // What the agent said is a message of its own, never folded away.
       if (it.aside) { at = it.doneAt || at; pieces.push({ html: `<div class="tl-text tl-say">${md(it.aside)}</div>`, row: false, pin: true, say: true, at }); }
       if (it.calls.length) { at = atOf(m, it.calls[0].e) || at; const busy = m.live && it.calls.some((x) => x.res == null); row(groupRow(`x${it.step}`, mcpOfTool(it.calls[0].e.name) ? '🧲' : TOOL_NAME[it.calls[0].e.name]?.split(' ')[0] || '🔧', callsLabel(it.calls), it.calls, busy), `x${it.step}`, it.calls, 0, busy); }
-      if (!it.done && m.live && !think && !it.calls.length && !String(m.content || '').trim()) {
+      // Tool calls still streaming in: a preparing row each, with what it is about and how much is written so far,
+      // until the call is whole and its own card takes over.
+      const preps = m.live && !it.calls.length ? Object.values(m.callPrep?.[it.step] || {}) : [];
+      for (const p of preps) {
+        const label = TOOL_NAME[p.name] || (mcpOfTool(p.name) ? `🧲 ${p.name}` : `🔧 ${p.name}`);
+        other(`<div class="tl-row tl-wait tl-prep"><span class="tl-spin"></span><span class="tl-label">${esc(label)}${p.about ? ` · <code>${esc(p.about)}</code>` : ''}</span><small class="tl-words">${p.chars >= 1000 ? `${(p.chars / 1000).toFixed(1)}k` : p.chars} characters so far</small></div>`);
+      }
+      if (!preps.length && !it.done && m.live && !think && !it.calls.length && !String(m.content || '').trim()) {
         // Waiting to retry a failed model call: say so, so a long wait doesn't look like a frozen reply.
         const last = (m.trace || []).at(-1);
         other(last?.t === 'llm_retry'
@@ -5452,7 +5459,7 @@ function openTrace(c, m) {
 // the page's save mid-reply (an app allowed after the first step left 7 of 265). QuorX's own log of the run has them
 // all: they replace the short list once, and the chat is saved with them.
 const repaired = new WeakSet();
-const NOT_STEPS = new Set(['run', 'start', 'think', 'spend', 'token', 'artifact', 'server']);
+const NOT_STEPS = new Set(['run', 'start', 'think', 'spend', 'token', 'artifact', 'server', 'call_prep']);
 async function repairTrace(c, m) {
   if (repaired.has(m) || !m?.runId || m.live || m.runActive || m.traceRef || !(m.stats || m.error)) return;
   repaired.add(m);
@@ -6573,6 +6580,13 @@ async function followRun(c, m, open) {
         if (!chunk.startsWith('data:')) continue;
         let e; try { e = JSON.parse(chunk.slice(5)); } catch { continue; }
         if (e.t === 'think') { (m.thinking ??= {})[e.step] = (m.thinking[e.step] || '') + e.text; redraw(true); continue; }
+        // A tool call still streaming in: shown live only, never saved with the chat (the real call replaces it).
+        if (e.t === 'call_prep') {
+          if (!Object.prototype.hasOwnProperty.call(m, 'callPrep')) Object.defineProperty(m, 'callPrep', { value: {}, writable: true, enumerable: false, configurable: true });
+          (m.callPrep[e.step] ??= {})[e.i] = e; redraw(false); continue;
+        }
+        if (m.callPrep && e.t === 'tool') delete m.callPrep[e.step];
+        if (m.callPrep && ['llm_start', 'done', 'error', 'llm_retry'].includes(e.t)) m.callPrep = {};
         if (e.t === 'spend') { m.liveCost = e.cost; m.liveCalls = e.calls; m.liveTokens = [e.tokensIn, e.tokensOut]; m.liveByModel = e.byModel || m.liveByModel; liveSpend(c, m); continue; }
         // A new step: what the step before it said stays where it said it (in the steps), so the text below the steps
         // is only ever what is being written now.

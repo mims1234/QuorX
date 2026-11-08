@@ -595,3 +595,13 @@ test('a tool change note names what came and went, and leaves out what the model
   assert.equal(toolChangeNote(['a', 'b'], ['a', 'c', 'mcp_x']), '[Your tools changed: now available: c, mcp_x; no longer available: b.]');
   assert.equal(toolChangeNote(['a', 'load_tools'], ['a', 'android'], new Set(['android', 'load_tools'])), '');
 });
+
+test('a streaming tool call says what it is about once that field has arrived whole, wherever it sits', async () => {
+  const { prepAbout } = await import('../server/loop.js');
+  assert.equal(prepAbout('{"path":"src/ap'), '', 'not until the value is finished');
+  assert.equal(prepAbout('{"path":"src/app.js","content":"<html'), 'src/app.js');
+  assert.equal(prepAbout('{"content":"lots of text","path":"notes/a.md"'), 'notes/a.md', 'a field that comes after the content still counts');
+  assert.equal(prepAbout('{"markdown":"x","title":"Launch plan"'), 'Launch plan');
+  assert.equal(prepAbout('{"command":"npm test -- \\"a b\\""}'), 'npm test -- "a b"');
+  assert.equal(prepAbout(''), '');
+});

@@ -64,7 +64,7 @@ import { setLiveArtifact, markdownHtml } from './artifacts.js';
 import { listDocs, docText, readDoc, searchDocs, DOC_DEFAULTS } from './docs.js';
 import { errorCode } from './errors.js';
 import { repairArgs, checkArgs } from './toolargs.js';
-import { groupCalls, numberedWindow, untrusted, trimTranscript, trimPageViews, compactTranscript, transcriptChars, withCacheMarks, retryable, retryWait, pairToolCalls, contextBudget, resultCap, previewOf, toolChangeNote, LOOK_TOOLS } from './loop.js';
+import { groupCalls, numberedWindow, untrusted, trimTranscript, trimPageViews, compactTranscript, transcriptChars, withCacheMarks, retryable, retryWait, pairToolCalls, contextBudget, resultCap, previewOf, toolChangeNote, prepAbout, LOOK_TOOLS } from './loop.js';
 import { checkFile, checkHtml, CHECKED, lintFile, lintHtml, LINTED } from './checks.js';
 import { checkSettings, askDeciders, saveShot, logCheck, votesFor, MAIN_CONTROL_JS, KEY_PAGE_JS, KEY_TRIES, CHECK_DEFAULTS, LOOK_DEFAULTS } from './harness-checks.js';
 import { saveCheckpoint, loadCheckpoint, dropCheckpoint, checkpointWritten, recordRun } from './runs.js';
@@ -2105,7 +2105,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   // connection that is then retried) would cost nothing here while the provider still bills it. Such a call is counted
   // once, at an estimate, the moment it ends (so the caps see it), and corrected to OpenRouter's own figure when the
   // generation record turns up a few seconds later.
-  async function callModel(body, sig, onText, onThink, role = 'writer') {
+  async function callModel(body, sig, onText, onThink, role = 'writer', onCall = null) {
     // A model of an app on this PC: its source first. When that fails, the same call goes to OpenRouter (viaSource
     // says which model), and the step carries on as if nothing happened, apart from a note.
     let fell = null, unmarked = null, routed = null;
@@ -2121,7 +2121,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     } else if (body.messages?.some((m) => m?.qx_pass)) body = { ...body, messages: stripPass(body.messages) };
     try {
       let r;
-      try { r = await streamModel(body, sig, onText, onThink); }
+      try { r = await streamModel(body, sig, onText, onThink, onCall); }
       catch (e) {
         // The routing filters can leave a fallback model with no provider: it goes with OpenRouter's default routing.
         if (fell && body.provider && !sig.aborted && errorCode(e) === 'NO_PROVIDER') {
@@ -2132,7 +2132,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
           run.cacheMarks = false; body = unmarked;
           emit({ t: 'note', level: 'warn', msg: `Prompt-cache marks were refused (${clip(e.message, 100)}); continuing without them.`, at: at() });
         } else throw e;
-        r = await streamModel(body, sig, onText, onThink);
+        r = await streamModel(body, sig, onText, onThink, onCall);
       }
       // The stream ended without its usage: the caller accounts r.usage as usual, so the estimate goes there.
       if (r?.partial && !Object.keys(r.usage || {}).length) r.usage = partialUsage(r.partial, body, role);
@@ -2259,10 +2259,19 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   async function modelCall(body, step, onText) {
     // The model's thinking streams to the page as its own event (shown in the reply and the trace).
     const onThink = (d) => emit({ t: 'think', step, text: d });
+    // Each tool call as it streams in: the page shows a preparing row (what it is about, how much is written so far)
+    // before the call is whole. Four updates a second per call at most.
+    const prepAt = new Map();
+    const onCall = (i, c) => {
+      const now = Date.now();
+      if (now - (prepAt.get(i) || 0) < 250) return;
+      prepAt.set(i, now);
+      emit({ t: 'call_prep', step, i, name: c.function.name, chars: c.function.arguments.length, about: prepAbout(c.function.arguments), at: at() });
+    };
     const tries = Math.max(0, Math.min(6, Number(S.retries ?? DEFAULTS.retries)));
     for (let attempt = 0; ; attempt++) {
       const marked = run.cacheMarks ? withCacheMarks(body.messages, body.model) : body.messages;
-      try { return await callModel(marked === body.messages ? body : { ...body, messages: marked }, signal, onText, onThink, 'writer'); }
+      try { return await callModel(marked === body.messages ? body : { ...body, messages: marked }, signal, onText, onThink, 'writer', onCall); }
       catch (e) {
         if (signal.aborted) throw e;
         // The provider refused the reasoning passed back: strip it from this reply and carry on without it.
