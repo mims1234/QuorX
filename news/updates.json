@@ -1,6 +1,23 @@
 {
   "versions": [
     {
+      "version": "0.2.19",
+      "date": "2026-11-09",
+      "title": "Fits every model: requests built to fit, recovery when a call slips, and a Continue button",
+      "items": [
+        { "kind": "new", "text": "Tool cards appear while a call is still being written, naming the file and how much is done, with every provider.", "pr": 304 },
+        { "kind": "new", "text": "A ▶ Continue button on a reply you stopped carries on from where it stopped.", "pr": 305 },
+        { "kind": "fixed", "text": "After you stop a reply, the next message includes the text you saw, so \"go on\" continues instead of starting over.", "pr": 298 },
+        { "kind": "fixed", "text": "Stopping a reply between tool calls no longer makes the next message fail on strict providers.", "pr": 297 },
+        { "kind": "improved", "text": "Requests fit each model and its providers: reasoning that can't be turned off, the levels it accepts, the tool settings each takes.", "pr": 299 },
+        { "kind": "improved", "text": "A conversation too long for the model is trimmed and tried again instead of ending the reply.", "pr": 300 },
+        { "kind": "improved", "text": "When a provider is rate limiting, QuorX waits as long as it asks, and the reply says how long instead of looking stuck.", "pr": 294 },
+        { "kind": "improved", "text": "Tool calls with small slips are repaired, and ones that don't fit the tool go back with each wrong field named.", "pr": 295 },
+        { "kind": "improved", "text": "A very large tool result keeps its start and end in the conversation; the whole of it is saved for the agent to read.", "pr": 301 },
+        { "kind": "improved", "text": "The agent is told when its tools change mid-reply, such as an MCP server dropping out.", "pr": 302 }
+      ]
+    },
+    {
       "version": "0.2.18",
       "date": "2026-11-08",
       "title": "Smooth with many heavy chats: sleeping tabs, fast long chats, and a memory leak fixed",
