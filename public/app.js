@@ -5164,7 +5164,13 @@ function updateMsg(c, m, { bodyOnly = false } = {}) {
     : !s && m.live && m.liveCost != null ? liveFootHTML(m)
     : s ? `<span class="f-cost" title="What the reply cost">${money(s.cost, 5)}</span>${planTag(s.planCost)}${s.ms ? `<span class="f-dur" title="How long the reply took">${secs(s.ms)}</span>` : ''}${checkTag}${stopTag}` : '';
   // A reply you stopped says so in one small tag down here, not in a box above.
-  if (stoppedByYou(m) && !m.live) $('.foot', el).insertAdjacentHTML('afterbegin', '<span class="f-stopped" title="You stopped this reply">■ Stopped</span>');
+  if (stoppedByYou(m) && !m.live) {
+    // The chat's last reply, stopped: ▶ Continue carries on from where it stopped (the next message gets what was
+    // already written, and a note that it stopped there).
+    const last = c.agent.messages.at(-1) === m;
+    $('.foot', el).insertAdjacentHTML('afterbegin', `<span class="f-stopped" title="You stopped this reply">■ Stopped</span>${last ? '<button type="button" class="continue-btn" title="Carry on from where you stopped it">▶ Continue</button>' : ''}`);
+    const cb = $('.continue-btn', el); if (cb) cb.onclick = () => continueReply(c, m);
+  }
   // Right side, always in this order: ⏰ repeat on a schedule, remix, read in the side pane (long answers), copy the
   // Markdown, and last 🧭 Steps (hover: what it cost; click: the steps, ending with the cost card).
   const right = document.createElement('span'); right.className = 'f-right';
@@ -6396,6 +6402,8 @@ async function send(c, text) {
   if (c.running || (!text && !c.images.length && !(c.docs || []).some((d) => d.id && !d.busy) && !c.ctx.length && !c.comments?.length)) return;
   c.enhUndo = []; renderEnhUndo(c);
   askNotifyPermission();
+  // A new message: the stopped reply above is no longer the last, so its ▶ Continue goes.
+  c.el?.root?.querySelectorAll('.continue-btn').forEach((b) => b.remove());
   // The message shows and the chat is busy at once; the @ context's text (a brief of an attached chat takes a model
   // call) is gathered in the reply as its first step. Awaited here, the box kept its chips meanwhile and sent twice.
   const ctxItems = c.ctx.splice(0);
@@ -11812,6 +11820,15 @@ setInterval(() => { if (document.visibilityState === 'visible' && !$('#runningAl
 function retryable(c, m) {
   const msgs = c.agent?.messages || [];
   return !c.running && m.failed && !m.resumable && !m.runActive && !m.live && msgs[msgs.length - 1] === m && msgs[msgs.length - 2]?.role === 'user';
+}
+// ▶ Continue on a reply you stopped: a short message asking it to carry on. The stopped reply's text goes with it in
+// the history, so it picks up where it was instead of starting again.
+function continueReply(c, m) {
+  if (c.agent.messages.at(-1) !== m || !stoppedByYou(m)) { m.el?.querySelector('.continue-btn')?.remove(); return; }
+  if (c.running) return;
+  const ta = c.el && $('.input', c.el.root);
+  if (String(ta?.value || '').trim() || c.images?.length || c.docs?.length || c.ctx?.length || c.comments?.length) return uiAlert('Send or clear what’s in the message box first, then Continue.');
+  send(c, 'Go on from where you stopped.');
 }
 async function retryReply(c, m) {
   if (!retryable(c, m)) return;
