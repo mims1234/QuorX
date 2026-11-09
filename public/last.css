@@ -2552,6 +2552,9 @@ html body .sidebar .sb-project .sb-chat.sb-chat-item.active { --cc: var(--pcx, v
 html body .sidebar .sb-project .sb-chat.sb-chat-item.active::before { display: block !important; content: ''; position: absolute; left: -2px; top: 0; bottom: 0; height: auto !important; transform: none !important; width: 3px; border-radius: 2px; background: var(--cc); box-shadow: 0 0 8px 0 var(--cc), 0 0 2px var(--cc); pointer-events: none; } /* over the row's own 2px guide line, the full row tall */
 /* a reply you stopped: a small tag in its footer instead of a red box */
 .msg .foot .f-stopped { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 8px; border-radius: 6px; font: 600 11px var(--font-ui); color: var(--bad); background: var(--bad-dim); border: 1px solid color-mix(in srgb, var(--bad) 35%, transparent); }
+/* ▶ Continue beside a stopped reply: a real button (the Stopped mark next to it is a tag). */
+.msg .foot .continue-btn { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 10px; border-radius: 6px; font: 600 11.5px var(--font-ui); color: var(--text); background: var(--panel); border: 1px solid var(--line-strong, var(--line)); cursor: pointer; }
+.msg .foot .continue-btn:hover { border-color: var(--accent); color: var(--accent); }
 .sidebar .sb-pinfo { cursor: default !important; } .sidebar .sb-pinfo:hover { background: transparent !important; }
 /* Advanced open: its list has the same switches, so the icon row steps aside; a tool that is on is lit green */
 .chatpane .chat-set:has(.cs-adv[open]) .cs-sec:has(> .cs-tools) { display: none; }
