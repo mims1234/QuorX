@@ -129,7 +129,7 @@ const EOS = /<\|eos\|>/g;
  * One call through the Grok Build on this computer, read into openrouter.js chatStream's result shape. Throws with
  * .status/.kind when Grok or its account refuses (sources.js classifies it). `start` and `find` are for tests.
  */
-export async function grokStream(body, signal, onText, onThink, { info = {}, idleMs = 180e3, start = spawn, find = findOnPath } = {}) {
+export async function grokStream(body, signal, onText, onThink, { info = {}, idleMs = 180e3, start = spawn, find = findOnPath, onCall } = {}) {
   const model = String(body.model || '').slice(GROK_ID.length + 1);
   if (!model) throw err(`${body.model} names no Grok model`, { kind: 'request' });
   const halt = () => { if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error('Stopped.'); };
@@ -147,7 +147,7 @@ export async function grokStream(body, signal, onText, onThink, { info = {}, idl
   try { proc = launch(exe, grokArgs({ model, effort: grokEffort(body.reasoning, info.variants), file }), { cwd: DIR, env: { ...envFor(), ...GROK_ENV }, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' }, start); } catch (e) { fs.rmSync(file, { force: true }); throw err(`Grok Build didn't start: ${e.message}`, { kind: 'network' }); }
   running.add(proc);
   let text = '', thinking = '', firstMs = null, seen = 0, result = null, failure = null, idle = null, outChars = 0, started = false, stderr = '', loopCheck = 8e3;
-  const show = textFilter(onText);
+  const show = textFilter(onText, onCall);
   const kill = () => { if (proc.pid) killTree(proc.pid); };
   const arm = () => { clearTimeout(idle); idle = setTimeout(() => { failure ||= err(`Grok Build sent nothing for ${Math.round(idleMs / 1000)} s`, { name: 'TimeoutError', kind: 'timeout' }); kill(); }, idleMs); };
   signal?.addEventListener('abort', kill, { once: true });

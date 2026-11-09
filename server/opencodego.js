@@ -115,7 +115,7 @@ async function* quietLimit(body, ms, ac) {
  * One streamed call to Go, read into openrouter.js chatStream's result shape. `key` is the user's Go key; `session`
  * the chat's steady session id. Throws with .status/.errorType/.kind when Go refuses (sources.js classifies it).
  */
-export async function goStream(body, signal, onText, onThink, { info = {}, idleMs = 180e3, session, key, fetchFn = fetch } = {}) {
+export async function goStream(body, signal, onText, onThink, { info = {}, idleMs = 180e3, session, key, fetchFn = fetch, onCall } = {}) {
   if (!key) throw Object.assign(new Error('There is no OpenCode Go key yet: add one in ⚙ Settings → Providers.'), { kind: 'auth' });
   const ac = new AbortController();
   const stop = () => ac.abort(signal.reason instanceof Error ? signal.reason : new Error('Stopped.'));
@@ -129,7 +129,7 @@ export async function goStream(body, signal, onText, onThink, { info = {}, idleM
       body: JSON.stringify(req),
     });
     if (!r.ok) throw await failure(r);
-    const out = await readChatStream({ body: quietLimit(r.body, idleMs, ac) }, body, t, onText, onThink);
+    const out = await readChatStream({ body: quietLimit(r.body, idleMs, ac) }, body, t, onText, onThink, onCall);
     if (!out.seen) throw Object.assign(new Error('OpenCode Go answered with an empty stream'), { kind: 'shape' });
     out.provider = 'OpenCode Go';
     out.model = body.model;

@@ -186,7 +186,9 @@ export function messagesBody(body, info = {}) {
 }
 const FINISH = { end_turn: 'stop', stop_sequence: 'stop', tool_use: 'tool_calls', max_tokens: 'length', refusal: 'content_filter', pause_turn: 'stop' };
 /** A Messages stream read into openrouter.js chatStream's result shape, with the thinking blocks to pass back. */
-export async function readMessagesStream(r, body, t, onText, onThink) {
+// onCall(index, call) hears each tool call as it streams in, like readChatStream's.
+export async function readMessagesStream(r, body, t, onText, onThink, onCall) {
+  const heard = (i) => { if (onCall && calls[i]?.function.name) { try { onCall(i, calls[i]); } catch { /* the page's view only */ } } };
   const dec = new TextDecoder();
   let buf = '', text = '', thinking = '', firstMs = null, finish = null, model = null, genId = null, seen = 0, refusal = null;
   const u = {}, blocks = [], calls = [];
@@ -203,7 +205,7 @@ export async function readMessagesStream(r, body, t, onText, onThink) {
     const i = j.index;
     if (j.type === 'content_block_start') {
       const b = j.content_block || {};
-      if (b.type === 'tool_use') calls[i] = { id: b.id || '', type: 'function', function: { name: b.name || '', arguments: '' } };
+      if (b.type === 'tool_use') { calls[i] = { id: b.id || '', type: 'function', function: { name: b.name || '', arguments: '' } }; heard(i); }
       else if (b.type === 'thinking') blocks[i] = { type: 'thinking', thinking: b.thinking || '', signature: b.signature || '' };
       else if (b.type === 'redacted_thinking') blocks[i] = { type: 'redacted_thinking', data: b.data || '' };
       return;
@@ -213,7 +215,7 @@ export async function readMessagesStream(r, body, t, onText, onThink) {
     if (d.type === 'text_delta' && d.text) { if (firstMs == null) firstMs = Date.now() - t; text += d.text; onText?.(d.text); }
     else if (d.type === 'thinking_delta' && d.thinking) { thinking += d.thinking; onThink?.(d.thinking); if (blocks[i]) blocks[i].thinking += d.thinking; }
     else if (d.type === 'signature_delta' && blocks[i]) blocks[i].signature += d.signature || '';
-    else if (d.type === 'input_json_delta' && calls[i]) calls[i].function.arguments += d.partial_json || '';
+    else if (d.type === 'input_json_delta' && calls[i]) { calls[i].function.arguments += d.partial_json || ''; heard(i); }
   };
   try {
     for await (const chunk of r.body) {
@@ -258,7 +260,7 @@ async function* quietLimit(body, ms, ac) {
  * One streamed call to Command Code, read into openrouter.js chatStream's result shape. `key` is the user's Command Code
  * key. Throws with .status/.errorType/.kind when it refuses (sources.js classifies it).
  */
-export async function ccStream(body, signal, onText, onThink, { info = {}, idleMs = 180e3, key, fetchFn = fetch } = {}) {
+export async function ccStream(body, signal, onText, onThink, { info = {}, idleMs = 180e3, key, fetchFn = fetch, onCall } = {}) {
   if (!key) throw Object.assign(new Error('There is no Command Code key yet: add one in ⚙ Settings → Providers.'), { kind: 'auth' });
   const ac = new AbortController();
   const stop = () => ac.abort(signal.reason instanceof Error ? signal.reason : new Error('Stopped.'));
@@ -279,7 +281,7 @@ export async function ccStream(body, signal, onText, onThink, { info = {}, idleM
     }
     if (!r.ok) throw await failure(r);
     const src = { body: quietLimit(r.body, idleMs, ac) };
-    const out = claude ? await readMessagesStream(src, body, t, onText, onThink) : await readChatStream(src, body, t, onText, onThink);
+    const out = claude ? await readMessagesStream(src, body, t, onText, onThink, onCall) : await readChatStream(src, body, t, onText, onThink, onCall);
     if (!out.seen) throw Object.assign(new Error('Command Code answered with an empty stream'), { kind: 'shape' });
     out.provider = 'Command Code';
     out.model = body.model;

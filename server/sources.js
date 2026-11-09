@@ -453,7 +453,8 @@ const stopped = (signal) => { if (signal?.aborted) throw signal.reason instanceo
  * call's cost in usage.cost). Throws an Error with .status/.kind on any failure; never falls back by itself (the
  * agent decides that).
  */
-export async function sourceStream(body, signal, onText, onThink, { info: given, idleMs = 180e3 } = {}) {
+// onCall(index, call) hears each tool call as it streams in, from every source that can tell (the page's preparing row).
+export async function sourceStream(body, signal, onText, onThink, { info: given, idleMs = 180e3, onCall } = {}) {
   stopped(signal);
   const s = sourceOf(body.model);
   if (!s) throw Object.assign(new Error(`${body.model} is not a source model`), { kind: 'request' });
@@ -463,7 +464,7 @@ export async function sourceStream(body, signal, onText, onThink, { info: given,
   const info = given || sourceInfo(body.model) || { plan: 'paid' };
   // A model its app keeps for itself (OpenCode's own free ones): refused here, before a call goes out.
   if (info.unusable) throw Object.assign(new Error(info.unusable), { kind: 'free' });
-  const out = await APPS[s.source].stream(body, signal, onText, onThink, { info, idleMs });
+  const out = await APPS[s.source].stream(body, signal, onText, onThink, { info, idleMs, ...(onCall ? { onCall } : {}) });
   out.usage = { ...(out.usage || {}), ...(Object.keys(out.usage || {}).length ? priced(info, out.usage) : {}) };
   out.source = s.source;
   return out;
