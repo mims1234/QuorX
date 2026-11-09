@@ -118,7 +118,7 @@ export function claudeError(text, { exit } = {}) {
  * One call through the Claude Code on this computer, read into openrouter.js chatStream's result shape. Throws with
  * .status/.kind when Claude Code or its account refuses (sources.js classifies it). `start` and `find` are for tests.
  */
-export async function claudeStream(body, signal, onText, onThink, { info = {}, idleMs = 180e3, start = spawn, find = findOnPath } = {}) {
+export async function claudeStream(body, signal, onText, onThink, { info = {}, idleMs = 180e3, start = spawn, find = findOnPath, onCall } = {}) {
   const alias = String(body.model || '').slice(CLAUDE_ID.length + 1);
   if (!alias) throw err(`${body.model} names no Claude Code model`, { kind: 'request' });
   const halt = () => { if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error('Stopped.'); };
@@ -153,7 +153,7 @@ export async function claudeStream(body, signal, onText, onThink, { info = {}, i
   // <invoke> blocks): after CUT_INVOKES of them the call is stopped and what came so far is the answer, so the agent
   // asks again at once (textcalls.js counts them).
   let cut = false, invokes = 0, scanAt = 0;
-  const show = textFilter(onText);
+  const show = textFilter(onText, onCall);
   const kill = () => { if (proc.pid) killTree(proc.pid); };
   const arm = () => { clearTimeout(idle); idle = setTimeout(() => { failure ||= err(`Claude Code sent nothing for ${Math.round(idleMs / 1000)} s`, { name: 'TimeoutError', kind: 'timeout' }); kill(); }, idleMs); };
   const stop = () => kill();

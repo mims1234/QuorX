@@ -2112,7 +2112,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     // An OpenRouter id the user runs on its maker's own API (a helper's, the reviewer's) goes there; `routedTo` says so.
     if (!sourceOf(body.model) && !deps.sourceStream) { const to = await routeModel(body.model); if (to !== body.model) { routed = to; body = { ...body, model: to }; } }
     if (sourceOf(body.model)) {
-      const got = await viaSource(body, sig, onText, onThink, role);
+      const got = await viaSource(body, sig, onText, onThink, role, onCall);
       if (got.r) { if (routed) got.r.routedTo = routed; return got.r; }
       fell = body.model; body = got.body;
       // The marks were placed for the source's id: the OpenRouter model (a Claude one) gets its own.
@@ -2147,7 +2147,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   // One call to the source a model id names. Returns { r } with its answer, or { body } for OpenRouter: the same call
   // for the fallback model. Throws only when the settings say not to fall back (or on Stop). A source that refused
   // its key or ran out of usage, or failed twice in this reply, is skipped for the rest of the reply.
-  async function viaSource(body, sig, onText, onThink, role) {
+  async function viaSource(body, sig, onText, onThink, role, onCall = null) {
     if (sig.aborted) throw new Error('Stopped.');
     const sm = body.model, s = sourceOf(sm), name = s.def.name;
     run.sourceFails ??= {}; run.sourceOff ??= {};
@@ -2158,7 +2158,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     for (let again = true; !why && again;) {
       again = false;
       try {
-        const r = await fromSource(body, sig, onText, onThink, { session: sourceSession() });
+        const r = await fromSource(body, sig, onText, onThink, { session: sourceSession(), ...(onCall ? { onCall } : {}) });
         if (!r || typeof r !== 'object' || !Array.isArray(r.toolCalls)) throw Object.assign(new Error(`${name} gave QuorX nothing it could read`), { kind: 'shape' });
         // An answer that ended without its usage (a gateway that left the last chunk out) counts at an estimate.
         if (r.partial && !Object.keys(r.usage || {}).length) r.usage = sourcePartial(r.partial, body);
@@ -2266,7 +2266,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       const now = Date.now();
       if (now - (prepAt.get(i) || 0) < 250) return;
       prepAt.set(i, now);
-      emit({ t: 'call_prep', step, i, name: c.function.name, chars: c.function.arguments.length, about: prepAbout(c.function.arguments), at: at() });
+      emit({ t: 'call_prep', step, i, name: c.function.name, chars: c.chars ?? c.function.arguments.length, about: prepAbout(c.function.arguments), at: at() });
     };
     const tries = Math.max(0, Math.min(6, Number(S.retries ?? DEFAULTS.retries)));
     for (let attempt = 0; ; attempt++) {

@@ -142,7 +142,8 @@ async function failure(r) {
 }
 const FINISH = { stop: 'stop', length: 'length', load: 'stop', unload: 'stop' };
 /** An /api/chat stream (one JSON object per line) read into openrouter.js chatStream's result shape. */
-export async function readOllamaStream(r, body, t, onText, onThink) {
+// onCall(index, call): Ollama sends each tool call whole, so the page's preparing row shows it once, as it lands.
+export async function readOllamaStream(r, body, t, onText, onThink, onCall) {
   const dec = new TextDecoder();
   let buf = '', text = '', thinking = '', firstMs = null, finish = null, model = null, seen = 0;
   const calls = [], usage = {};
@@ -159,6 +160,7 @@ export async function readOllamaStream(r, body, t, onText, onThink) {
       if (!c?.function?.name) continue;
       const a = c.function.arguments;
       calls.push({ id: c.id || `call_${calls.length}_${Date.now().toString(36)}`, type: 'function', function: { name: c.function.name, arguments: typeof a === 'string' ? a : JSON.stringify(a ?? {}) } });
+      if (onCall) { try { onCall(calls.length - 1, calls.at(-1)); } catch { /* the page's view only */ } }
     }
     if (j.done) {
       finish = calls.length ? 'tool_calls' : FINISH[j.done_reason] || j.done_reason || 'stop';
@@ -183,7 +185,7 @@ async function* quietLimit(body, ms, ac) {
   try { for await (const c of body) { arm(); yield c; } } finally { clearTimeout(timer); }
 }
 /** One streamed call to Ollama, read into openrouter.js chatStream's result shape. Throws with .status/.kind. */
-export async function ollamaStream(body, signal, onText, onThink, { info = {}, idleMs = 300e3, ensure = ensureOllama, fetchFn = fetch } = {}) {
+export async function ollamaStream(body, signal, onText, onThink, { info = {}, idleMs = 300e3, ensure = ensureOllama, fetchFn = fetch, onCall } = {}) {
   const base = await ensure();
   const ac = new AbortController();
   const stop = () => ac.abort(signal.reason instanceof Error ? signal.reason : new Error('Stopped.'));
@@ -192,7 +194,7 @@ export async function ollamaStream(body, signal, onText, onThink, { info = {}, i
   try {
     const r = await fetchFn(`${base}/api/chat`, { method: 'POST', signal: ac.signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(ollamaBody(body, info)) });
     if (!r.ok) throw await failure(r);
-    const out = await readOllamaStream({ body: quietLimit(r.body, idleMs, ac) }, body, t, onText, onThink);
+    const out = await readOllamaStream({ body: quietLimit(r.body, idleMs, ac) }, body, t, onText, onThink, onCall);
     if (!out.seen) throw Object.assign(new Error('Ollama answered with an empty stream'), { kind: 'shape' });
     out.provider = info.cloud ? 'Ollama cloud' : 'Ollama';
     out.model = body.model;

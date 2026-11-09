@@ -214,7 +214,7 @@ export async function localStream(body, signal, onText, onThink, opts = {}) {
     return r;
   }
 }
-async function localOnce(body, signal, onText, onThink, { info = {}, idleMs = 180e3, server, reminder = '' } = {}) {
+async function localOnce(body, signal, onText, onThink, { info = {}, idleMs = 180e3, server, reminder = '', onCall } = {}) {
   const rest = String(body.model || '').slice(LOCAL_ID.length + 1);
   const cut = rest.indexOf('/');
   if (cut <= 0) throw err(`${body.model} names no OpenCode provider`, { kind: 'request' });
@@ -256,7 +256,7 @@ async function localOnce(body, signal, onText, onThink, { info = {}, idleMs = 18
     const kinds = new Map(), finalText = new Map(), order = [], mine = new Set();
     let thinking = '', firstMs = null, done = false, seen = 0, lastInfo = null, failure = null, idle = null, native = null;
     const costs = new Map(); // every assistant message's final cost: a call OpenCode made on its own is counted too
-    const show = textFilter(onText);
+    const show = textFilter(onText, onCall);
     const arm = () => { clearTimeout(idle); idle = setTimeout(() => { failure ||= err(`OpenCode sent nothing for ${Math.round(idleMs / 1000)} s`, { name: 'TimeoutError', kind: 'timeout' }); ac.abort(); }, idleMs); };
     arm();
     const dec = new TextDecoder();

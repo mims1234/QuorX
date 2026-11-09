@@ -355,18 +355,56 @@ export const notRun = (parsed) => {
 // came before.
 const OPENERS = [`<${TAG}`, '<tool_call', '<｜', '<|', '<invoke ', '<function_calls>'];
 const LONGEST = Math.max(...OPENERS.map((o) => o.length));
-export function textFilter(onText) {
+// `onCall(index, call)`, when given, hears each call block as it streams in (callWatcher), for the page's preparing row.
+export function textFilter(onText, onCall) {
   let pending = '', stopped = false;
+  const watch = callWatcher(onCall);
   return (d) => {
-    if (!onText || !d || stopped) return;
+    if (!d || (!onText && !watch)) return;
+    if (stopped) { watch?.(d); return; }
     pending += d;
     const at = Math.min(...OPENERS.map((o) => { const i = pending.indexOf(o); return i < 0 ? Infinity : i; }));
-    if (at !== Infinity) { stopped = true; if (at) onText(pending.slice(0, at)); pending = ''; return; }
+    if (at !== Infinity) { stopped = true; if (at) onText?.(pending.slice(0, at)); watch?.(pending.slice(at)); pending = ''; return; }
     // Keep back a tail that could be the start of an opener.
     let keep = 0;
     for (let k = Math.min(LONGEST - 1, pending.length); k > 0 && !keep; k--) if (OPENERS.some((o) => o.startsWith(pending.slice(-k)))) keep = k;
     const out = pending.slice(0, pending.length - keep);
     pending = pending.slice(pending.length - keep);
-    if (out) onText(out);
+    if (out) onText?.(out);
+  };
+}
+
+/**
+ * Follows tool calls written as text while they stream: QuorX's own blocks (`<quorx_call …>{"name": …, "arguments":
+ * {…}}`), `<tool_call>` JSON, and `<invoke name="…">` with `<parameter>` tags. For the newest block it reports the
+ * tool's name and its arguments so far, shaped like a native call, so the page's preparing row works for every source.
+ * Only the newest block is read again on each piece, so a long call stays cheap. Null when nobody listens.
+ */
+const BLOCK_START = new RegExp(`<(?:${TAG}|tool_call)\\b[^>]*>|<invoke\\s+name\\s*=\\s*["']([^"']+)["'][^>]*>`, 'g');
+export function callWatcher(onCall) {
+  if (!onCall) return null;
+  let raw = '', starts = [], scanned = 0;
+  return (d) => {
+    raw += d;
+    BLOCK_START.lastIndex = Math.max(0, scanned - 120);
+    for (let m; (m = BLOCK_START.exec(raw));) if (!starts.some((s) => s.at === m.index)) starts.push({ at: m.index, end: m.index + m[0].length, invoke: m[1] || null });
+    scanned = raw.length;
+    const k = starts.length - 1;
+    if (k < 0) return;
+    const b = starts[k];
+    const body = raw.slice(b.end);
+    let name = b.invoke, args = '';
+    if (name) {
+      // XML parameters, rewritten as the JSON the preparing row reads (finished values only).
+      const params = [...body.matchAll(/<parameter\s+name\s*=\s*["']([^"']+)["']\s*>([\s\S]*?)<\/parameter>/g)];
+      args = JSON.stringify(Object.fromEntries(params.map((p) => [p[1], p[2]])));
+    } else {
+      name = (body.match(/"name"\s*:\s*"((?:[^"\\]|\\.)*)"/) || [])[1] || '';
+      const a = body.search(/"arguments"\s*:/);
+      args = a < 0 ? '' : body.slice(a).replace(/^"arguments"\s*:\s*/, '');
+    }
+    if (!name) return;
+    // `chars`: how much of the call has arrived, which for XML is more than the finished values in `arguments`.
+    try { onCall(k, { id: `text_${k}`, type: 'function', function: { name, arguments: args }, chars: body.length }); } catch { /* the page's view only */ }
   };
 }

@@ -245,7 +245,7 @@ export function directChatBody(src, body, info = {}) {
  * One streamed call to a provider, read into openrouter.js chatStream's result shape. Throws with
  * .status/.errorType/.kind when it refuses (sources.js classifies it).
  */
-export async function directStream(src, body, signal, onText, onThink, { info = {}, idleMs = 180e3, key, base, fetchFn = fetch } = {}) {
+export async function directStream(src, body, signal, onText, onThink, { info = {}, idleMs = 180e3, key, base, fetchFn = fetch, onCall } = {}) {
   const def = DIRECT[src];
   if (!key) throw Object.assign(new Error(`There is no ${def.name} key yet: add one in ⚙ Settings → Providers.`), { kind: 'auth' });
   const ac = new AbortController();
@@ -266,7 +266,7 @@ export async function directStream(src, body, signal, onText, onThink, { info = 
     }
     if (!r.ok) throw await failure(r, b);
     const s = { body: quietLimit(r.body, idleMs, ac, def.name) };
-    const out = messages ? await readMessagesStream(s, body, t, onText, onThink) : await readChatStream(s, body, t, onText, onThink);
+    const out = messages ? await readMessagesStream(s, body, t, onText, onThink, onCall) : await readChatStream(s, body, t, onText, onThink, onCall);
     if (!out.seen) throw Object.assign(new Error(`${def.name} answered with an empty stream`), { kind: 'shape' });
     out.provider = def.name;
     out.model = body.model;
