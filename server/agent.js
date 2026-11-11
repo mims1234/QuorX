@@ -1063,6 +1063,27 @@ const DEFER_OPT = /\b(you (decide|pick|choose)|surprise me|your (call|choice)|up
 const PARTIAL = 'If the rest of this file (append_file) or the files it links to are still to come, carry on; otherwise fix this now.';
 // Long chat messages keep their start and their end (the end carries what was done and checked).
 const clipKeepEnd = (s, n) => { s = String(s ?? ''); return s.length > n ? `${s.slice(0, Math.round(n * 0.6))}\n…\n${s.slice(-Math.round(n * 0.4))}` : s; };
+
+// ---------- long chats: older turns become one summary ----------
+// The same summary is written when a reply starts on a long chat and when you press Compact by the context meter
+// (compactChat): one prompt, one rule for what is kept (the last COMPACT_KEEP turns, word for word).
+export const COMPACT_KEEP = 8;
+// The page's turns as the model sees them. The harness's record of what an earlier reply did ("[What I did: …]") is
+// taken out into `records` (it goes in the system prompt instead), and long turns keep their start and end.
+function historyTurns(list, records = []) {
+  return (list || []).map((m) => {
+    let content = String(m.content ?? '');
+    if (m.role === 'assistant') content = content.replace(/\n\n\[((?:What I did|Checks)[\s\S]*?)\]\s*$/, (_, rec) => { records.push(rec); return ''; });
+    return { role: m.role === 'assistant' ? 'assistant' : 'user', content: clipKeepEnd(content, 4000), at: m.at };
+  });
+}
+// `call(body, signal)` answers with { message, usage, model }. → { summary, usage, model }.
+export async function summariseTurns({ model, old, summary }, call, signal) {
+  const sum = await call({ model, max_tokens: 900, temperature: 0.2, ...REASONING.off, messages: [
+    { role: 'system', content: 'Summarise this conversation between a user and an AI agent for the agent to continue it. Keep: the goal, decisions, what was built (files, servers, artifacts), open problems and the user\'s preferences. Under 350 words, plain bullet points.' },
+    { role: 'user', content: `${summary ? `Earlier summary:\n${summary}\n\n` : ''}${old.map((m) => `${m.role === 'user' ? 'User' : 'Agent'}: ${m.content}`).join('\n\n').slice(-60000)}` }] }, signal);
+  return { summary: String(sum.message?.content || '').trim(), usage: sum.usage || {}, model: sum.model || model };
+}
 const sleep = (ms, signal) => new Promise((resolve, reject) => { const t = setTimeout(resolve, ms); signal?.addEventListener('abort', () => { clearTimeout(t); reject(new Error('aborted')); }, { once: true }); });
 
 async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
@@ -1288,24 +1309,17 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   // taken out of the reply here and given to the model as a harness record in the system prompt: left
   // in the agent's own words, models copy its format and write "[What I did: …]" instead of calling tools.
   const records = [];
-  let history = (req.history || []).map((m) => {
-    let content = String(m.content ?? '');
-    if (m.role === 'assistant') content = content.replace(/\n\n\[((?:What I did|Checks)[\s\S]*?)\]\s*$/, (_, rec) => { records.push(rec); return ''; });
-    return { role: m.role === 'assistant' ? 'assistant' : 'user', content: clipKeepEnd(content, 4000), at: m.at };
-  });
+  let history = historyTurns(req.history, records);
   // Earlier turns are summarised once they pass a size that follows the model's window, unless the user set one.
   const historyAt = req.settings?.compactAt != null ? Math.max(8000, Number(req.settings.compactAt) || 24000)
     : contextBudget((await limitsP)?.context || (await getCatalogue()).find((m) => m.id === setup.model)?.ctx)?.history ?? 24000;
   if (!resumed && S.compact !== false && history.reduce((n, m) => n + m.content.length, 0) > historyAt && history.length > 10) {
-    const keep = history.slice(-8), old = history.slice(0, -8);
+    const keep = history.slice(-COMPACT_KEEP), old = history.slice(0, -COMPACT_KEEP);
     try {
       // A chat on an app on this PC summarises there too; when that fails, OpenRouter's fallback model does it.
-      const sum = await chatAny({ model: setup.model, max_tokens: 900, temperature: 0.2, ...REASONING.off, messages: [
-        { role: 'system', content: 'Summarise this conversation between a user and an AI agent for the agent to continue it. Keep: the goal, decisions, what was built (files, servers, artifacts), open problems and the user\'s preferences. Under 350 words, plain bullet points.' },
-        { role: 'user', content: `${req.summary ? `Earlier summary:\n${req.summary}\n\n` : ''}${old.map((m) => `${m.role === 'user' ? 'User' : 'Agent'}: ${m.content}`).join('\n\n').slice(-60000)}` }] }, signal,
-      sourceChatOpts());
-      account(sum.usage, sum.model || setup.model, 'summary');
-      req.summary = String(sum.message.content || '').trim();
+      const sum = await summariseTurns({ model: setup.model, old, summary: req.summary }, (b, sg) => chatAny(b, sg, sourceChatOpts()), signal);
+      account(sum.usage, sum.model, 'summary');
+      req.summary = sum.summary;
       history = keep;
       emit({ t: 'compacted', summary: req.summary, cutoffAt: keep[0]?.at || Date.now(), at: 0 });
     } catch (e) { if (signal.aborted) throw e; history = history.slice(-30); }
@@ -1753,7 +1767,9 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     const served = r.servedBy || (fb && r.model && r.model.startsWith(fb) && !r.model.startsWith(setup.model) ? fb : setup.model);
     if (served !== setup.model && !r.servedBy) emit({ t: 'note', level: 'warn', msg: `${short(setup.model)} was unavailable, so OpenRouter answered with the fallback model ${short(served)}.`, at: at() });
     account(r.usage, served, 'writer');
-    emit({ t: 'llm_done', step, ms: r.ms, firstMs: r.firstMs, tokensOut: r.usage.completion_tokens || 0, cost: r.usage.cost || 0, toolCalls: r.toolCalls.map((c) => c.function.name), provider: r.provider || null, model: served, actual: r.model || null,
+    // What this call sent and got back, for the context meter: tokens in, and the cache's share where the source says.
+    const ctxIn = Number(r.usage.prompt_tokens) || 0, { read: ctxRead, write: ctxWrite } = cacheTokens(r.usage);
+    emit({ t: 'llm_done', step, ms: r.ms, firstMs: r.firstMs, tokensOut: r.usage.completion_tokens || 0, ...(ctxIn ? { tokensIn: ctxIn, ...(ctxRead != null ? { cacheRead: ctxRead, cacheWrite: ctxWrite || 0 } : {}) } : {}), cost: r.usage.cost || 0, toolCalls: r.toolCalls.map((c) => c.function.name), provider: r.provider || null, model: served, actual: r.model || null,
       ...(r.source ? { source: r.source } : {}), ...(r.servedBy ? { fellBackFrom: setup.model } : {}), ...(planValue(r.usage.plan_cost) ? { planCost: planValue(r.usage.plan_cost) } : {}), at: at() });
     // Nothing came back (no text, no tool call): usually all of the output went on thinking. Never end
     // a reply silently on that: tell the model to act, think less, and try again (twice at most).
@@ -6255,6 +6271,29 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
       return { error: clip(e.message, 100) };
     }
   }
+}
+
+// ---------- Compact, by the context meter: the long-chat summary, asked for now ----------
+// Reads the chat as saved (the page saves it first), summarises the turns since the last summary except the last
+// COMPACT_KEEP with the chat's own model, the way a reply on a long chat would, and hands the summary back. The page
+// applies it (summary + summaryAt) and saves, so a reply running elsewhere never has its chat rewritten under it.
+// `call` replaces the model call in tests.
+export async function compactChat(chatId, { settings = {} } = {}, call) {
+  const doc = getChat(String(chatId));
+  if (!doc) throw new Error('No such chat.');
+  const a = doc.agent || {}, model = a.setup?.model || DEFAULTS.chatModel;
+  // The turns a reply would send (runChat in the page): since the last summary, stopped replies with what they said.
+  const turns = (a.messages || []).filter((m) => (m.role === 'user' || m.role === 'assistant') && (!m.error || (m.error === 'Stopped.' && String(m.content || '').trim())) && (!a.summaryAt || (m.at || 0) >= a.summaryAt))
+    .map((m) => ({ role: m.role, at: m.at, content: m.role === 'assistant' ? `${m.content || ''}${m.note || ''}` : String(m.content || '') }));
+  const history = historyTurns(turns);
+  if (history.length <= COMPACT_KEEP) throw Object.assign(new Error(`Nothing to compact yet: the last ${COMPACT_KEEP} messages are always kept as they are.`), { nothing: true });
+  const keep = history.slice(-COMPACT_KEEP), old = history.slice(0, -COMPACT_KEEP);
+  const S = { ...DEFAULTS, ...Object.fromEntries(Object.entries(settings).filter(([, v]) => v != null && v !== '')) };
+  call ||= (b, sg) => chatAny(b, sg, { orChat: chat, fallback: async (id) => sourceFallbackFor(id, S, [...await chatModels().catch(() => []), ...await sourceModels().catch(() => [])]) });
+  const r = await summariseTurns({ model, old, summary: a.summary }, call);
+  if (!r.summary) throw new Error('The model sent back an empty summary; nothing was changed.');
+  const chars = (list) => list.reduce((n, m) => n + m.content.length, 0);
+  return { summary: r.summary, cutoffAt: keep[0]?.at || Date.now(), turns: old.length, kept: keep.length, oldChars: chars(old) + String(a.summary || '').length, model: r.model, cost: Number(r.usage?.cost) || 0 };
 }
 
 // ---------- the handover brief (the out-of-steps card's "Fresh chat") ----------
