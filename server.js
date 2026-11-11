@@ -35,6 +35,7 @@ import { setBudget, budgetState, projectSpend, defaultBudget, setDefaultBudget }
 import { shellRun, shellClose, shellInfo } from './server/shell.js';
 import { ptyAvailable, ptyOpen, ptyWrite, ptyResize, ptyFollow, ptyClose, ptyList } from './server/pty.js';
 import { gitInfo, createWorktree, worktreeOf, worktreeStatus, removeWorktree, staleWorktrees } from './server/worktrees.js';
+import { ghStatus, listPulls, checkLog } from './server/pulls.js';
 // Pages the agent wrote, served from this app's own address, get their own opaque origin: their requests to /api are refused.
 const SANDBOX_CSP = 'sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads';
 import { listChats, chatPerms, sidebarChats, chatPage, chatPictureRefs, pictureRefCounts, getTrace, getChatForPage, getChat, saveChat, patchChat, settleReply, trashChat, duplicateChat, validId, knownFolder, listProjects, saveProject, forgetProject, setProjectColor, setProjectAlias, setProjectFlags, costSummary, costChats, providerUsage } from './server/store.js';
@@ -658,6 +659,23 @@ const server = http.createServer(async (req, res) => {
         };
         try { return json(res, 200, await removeWorktree(space, { discard: q.get('discard') === '1', beforeRemove })); } catch (e) { return json(res, 200, { error: e.message }); }
       }
+    }
+
+    // ---- the Pull requests tab (server/pulls.js): read only, through the GitHub command line ----
+    // GET ?project=&chat=&state=open|merged|closed|all → { repo, branch, gh, prs }; /log ?project=&run=&job= → { tail }.
+    if (url.pathname === '/api/pulls' || url.pathname === '/api/pulls/log') {
+      const q = url.searchParams, pid = q.get('project');
+      if (!validId(pid) || !listProjects().some((p) => p.id === pid)) return json(res, 400, { error: 'unknown project' });
+      let dir, remote = null;
+      try { dir = workspaceDir(pid); remote = gitHubRemote(dir); } catch (e) { return json(res, 200, { error: e.message }); }
+      const repo = remote ? `${remote.owner}/${remote.repo}` : null;
+      if (url.pathname === '/api/pulls/log') return json(res, 200, repo ? await checkLog({ cwd: dir, repo, runId: q.get('run'), jobId: q.get('job') }) : { error: 'no GitHub repository' });
+      // This chat's branch: its own worktree's, else the project folder's current one.
+      const wt = q.get('chat') ? worktreeOf(q.get('chat')) : null;
+      const branch = wt?.projectId === pid ? wt.branch : (gitInfo(dir).branch || '');
+      if (!repo) return json(res, 200, { repo: null, branch, gh: await ghStatus(), prs: [] });
+      try { return json(res, 200, { repo, branch, ...(await listPulls({ cwd: dir, repo, state: q.get('state') || 'open', branch })) }); }
+      catch (e) { return json(res, 200, { repo, branch, gh: await ghStatus(), prs: [], error: e.message }); }
     }
 
     // ---- command permissions: the rules the rule engine applies, per project and everywhere ----
